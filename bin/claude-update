@@ -11,34 +11,63 @@ set -euo pipefail
 VERSIONS_DIR="$HOME/.claude-versions"
 CURRENT_LINK="$VERSIONS_DIR/current"
 
+KEEP_COUNT="${CLAUDE_VERSIONS_KEEP:-2}"
+
+atomic_symlink() {
+  local target="$1" link="$2"
+  local tmp="${link}.tmp_$$"
+  ln -s "$target" "$tmp"
+  mv -f "$tmp" "$link"
+}
+
 cleanup_old_versions() {
-  echo "Cleaning up old versions (keeping current + 1 previous)..."
+  echo "Cleaning up old versions (keeping current + $KEEP_COUNT previous)..."
 
-  CURRENT=$(basename "$(readlink "$CURRENT_LINK" 2>/dev/null)" || echo "")
+  local current_target
+  current_target=$(readlink "$CURRENT_LINK" 2>/dev/null | xargs basename 2>/dev/null || echo "")
 
-  # Get all versions sorted (newest first)
-  VERSIONS=()
-  while IFS= read -r dir; do
+  local versions=()
+  for dir in "$VERSIONS_DIR"/*/; do
     [[ -d "$dir" ]] || continue
-    VERSION=$(basename "$dir")
-    [[ "$VERSION" == "current" ]] && continue
-    VERSIONS+=("$VERSION")
-  done < <(ls -dt "$VERSIONS_DIR"/*/ 2>/dev/null)
+    local v
+    v=$(basename "$dir")
+    [[ "$v" == "current" || "$v" == .* ]] && continue
+    versions+=("$v")
+  done
 
-  # Keep first 2 (current should be first after update)
-  KEEP=2
-  COUNT=0
-  for VERSION in "${VERSIONS[@]}"; do
-    COUNT=$((COUNT + 1))
-    if [[ $COUNT -gt $KEEP ]]; then
-      echo "  Removing $VERSION..."
-      rm -rf "$VERSIONS_DIR/$VERSION"
-    else
-      echo "  Keeping $VERSION"
+  # Sort by semver descending
+  IFS=$'\n' versions=($(printf '%s\n' "${versions[@]}" | sort -t. -k1,1rn -k2,2rn -k3,3rn))
+  unset IFS
+
+  # Build keep set
+  local -A keep_set
+  keep_set["$current_target"]=1
+  local kept=0
+  for v in "${versions[@]}"; do
+    [[ "$v" == "$current_target" ]] && continue
+    if [[ $kept -lt $KEEP_COUNT ]]; then
+      keep_set["$v"]=1
+      kept=$((kept + 1))
     fi
   done
 
-  echo "✓ Cleanup complete"
+  local deleted=0
+  for v in "${versions[@]}"; do
+    if [[ -n "${keep_set[$v]:-}" ]]; then
+      echo "  Keeping $v"
+    else
+      # Process guard
+      if pgrep -f "claude-versions/$v" >/dev/null 2>&1; then
+        echo "  Skipping $v (in use by running session)"
+        continue
+      fi
+      echo "  Removing $v..."
+      rm -rf "$VERSIONS_DIR/$v" 2>/dev/null || echo "  ⚠ Could not fully remove $v"
+      deleted=$((deleted + 1))
+    fi
+  done
+
+  echo "✓ Cleanup complete ($deleted removed)"
 }
 
 install_version() {
@@ -47,7 +76,7 @@ install_version() {
 
   if [[ -d "$VERSION_DIR" ]]; then
     echo "Version $VERSION already installed"
-    ln -sfn "$VERSION_DIR" "$CURRENT_LINK"
+    atomic_symlink "$VERSION_DIR" "$CURRENT_LINK"
     echo "✓ Switched to $VERSION"
     return
   fi
@@ -56,7 +85,14 @@ install_version() {
   mkdir -p "$VERSION_DIR"
   npm install --prefix "$VERSION_DIR" @anthropic-ai/claude-code@"$VERSION"
 
-  ln -sfn "$VERSION_DIR" "$CURRENT_LINK"
+  # Post-install validation
+  if [[ ! -x "$VERSION_DIR/node_modules/.bin/claude" ]]; then
+    echo "✗ Install failed (binary missing)"
+    rm -rf "$VERSION_DIR"
+    return 1
+  fi
+
+  atomic_symlink "$VERSION_DIR" "$CURRENT_LINK"
   echo "✓ Installed and switched to $VERSION"
 }
 
