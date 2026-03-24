@@ -1,0 +1,82 @@
+#!/bin/bash
+# Manually update/manage Claude Code versions
+#
+# Usage:
+#   claude-update              # Update to latest
+#   claude-update 2.1.8        # Install specific version
+#   claude-update --cleanup    # Remove old versions (keep current + 1 previous)
+
+set -euo pipefail
+
+VERSIONS_DIR="$HOME/.claude-versions"
+CURRENT_LINK="$VERSIONS_DIR/current"
+
+cleanup_old_versions() {
+  echo "Cleaning up old versions (keeping current + 1 previous)..."
+
+  CURRENT=$(basename "$(readlink "$CURRENT_LINK" 2>/dev/null)" || echo "")
+
+  # Get all versions sorted (newest first)
+  VERSIONS=()
+  while IFS= read -r dir; do
+    [[ -d "$dir" ]] || continue
+    VERSION=$(basename "$dir")
+    [[ "$VERSION" == "current" ]] && continue
+    VERSIONS+=("$VERSION")
+  done < <(ls -dt "$VERSIONS_DIR"/*/ 2>/dev/null)
+
+  # Keep first 2 (current should be first after update)
+  KEEP=2
+  COUNT=0
+  for VERSION in "${VERSIONS[@]}"; do
+    COUNT=$((COUNT + 1))
+    if [[ $COUNT -gt $KEEP ]]; then
+      echo "  Removing $VERSION..."
+      rm -rf "$VERSIONS_DIR/$VERSION"
+    else
+      echo "  Keeping $VERSION"
+    fi
+  done
+
+  echo "✓ Cleanup complete"
+}
+
+install_version() {
+  local VERSION="$1"
+  local VERSION_DIR="$VERSIONS_DIR/$VERSION"
+
+  if [[ -d "$VERSION_DIR" ]]; then
+    echo "Version $VERSION already installed"
+    ln -sfn "$VERSION_DIR" "$CURRENT_LINK"
+    echo "✓ Switched to $VERSION"
+    return
+  fi
+
+  echo "Installing Claude Code $VERSION..."
+  mkdir -p "$VERSION_DIR"
+  npm install --prefix "$VERSION_DIR" @anthropic-ai/claude-code@"$VERSION"
+
+  ln -sfn "$VERSION_DIR" "$CURRENT_LINK"
+  echo "✓ Installed and switched to $VERSION"
+}
+
+# Main
+mkdir -p "$VERSIONS_DIR"
+
+if [[ "${1:-}" == "--cleanup" ]]; then
+  cleanup_old_versions
+  exit 0
+fi
+
+VERSION="${1:-latest}"
+
+if [[ "$VERSION" == "latest" ]]; then
+  VERSION=$(npm view @anthropic-ai/claude-code version)
+  echo "Latest version: $VERSION"
+fi
+
+CURRENT=$(basename "$(readlink "$CURRENT_LINK" 2>/dev/null)" || echo "none")
+echo "Current version: $CURRENT"
+echo ""
+
+install_version "$VERSION"

@@ -1,0 +1,159 @@
+{
+  "env": {
+    "MCP_TIMEOUT": "30000",
+    "MCP_TOOL_TIMEOUT": "60000",
+    "CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION": "true",
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+  },
+  "includeCoAuthoredBy": false,
+  "effortLevel": "high",
+  "teammateMode": "tmux",
+  "worktree": {
+    "symlinkDirectories": [
+      "node_modules",
+      ".cache"
+    ]
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "~/.claude/statusline.sh"
+  },
+  "permissions": {
+    "allow": [
+      "Read",
+      "Glob",
+      "Grep",
+      "WebSearch",
+      "Edit",
+      "MultiEdit",
+      "Write",
+      "Bash(ls:*)",
+      "Bash(git status:*)",
+      "Bash(git log:*)",
+      "Bash(git diff:*)",
+      "Bash(git add:*)",
+      "Bash(pnpm:*)",
+      "...see ~/.claude/settings.json for full list..."
+    ],
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.local)",
+      "Read(./.env.local.*)",
+      "Read(./.env.production)",
+      "Read(./.env.staging)",
+      "Read(./secrets/**)",
+      "Read(./**/*.key)",
+      "Read(./**/*.pem)",
+      "Read(./credentials.json)",
+      "Read(./**/*credentials*)",
+      "Read(./**/*secret*)",
+      "Bash(sudo:*)",
+      "Bash(su:*)",
+      "Bash(eval:*)",
+      "Bash(exec:*)",
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(git clean:*)",
+      "Bash(wget:*)",
+      "Bash(dd:*)",
+      "Bash(mkfs:*)",
+      "Bash(chmod 777:*)",
+      "Bash(chmod -R 777:*)",
+      "Bash(unlink:*)"
+    ],
+    "ask": [
+      "Bash(rm:*)",
+      "Bash(curl:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(git checkout:*)",
+      "Bash(git merge:*)",
+      "Bash(git rebase:*)",
+      "Bash(git reset:*)",
+      "Bash(npm install:*)",
+      "Bash(pnpm add:*)",
+      "Bash(fly deploy:*)",
+      "Bash(gh pr create:*)",
+      "...see ~/.claude/settings.json for full list..."
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [{ "type": "command", "command": "~/.claude/hooks/validate-bash.sh", "timeout": 10 }]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [{ "type": "command", "command": "~/.claude/hooks/backup-before-write.sh", "timeout": 10 }]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          { "type": "command", "command": "~/.claude/hooks/post-file-edit.sh", "timeout": 30 },
+          { "type": "command", "command": "~/.claude/hooks/plan-index-update.sh", "timeout": 5 },
+          { "type": "command", "command": "~/.claude/hooks/validate-plan-structure.sh", "timeout": 10 },
+          { "type": "command", "command": "~/.claude/hooks/plan-version-commit.sh", "timeout": 10 }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [{ "type": "command", "command": "~/.claude/hooks/log-bash.sh", "timeout": 5 }]
+      },
+      {
+        "matcher": "TaskCreate|TaskUpdate",
+        "hooks": [{ "type": "command", "command": "~/.claude/hooks/task-mutation-index.sh", "timeout": 5 }]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": "~/.claude/hooks/session-start.sh", "timeout": 10 },
+          { "type": "command", "command": "~/.claude/hooks/setup-plan-symlinks.sh", "timeout": 5 },
+          { "type": "command", "command": "~/.claude/hooks/setup-task-symlinks.sh", "timeout": 5 }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [{ "type": "command", "command": "~/.claude/hooks/session-end.sh", "timeout": 10 }]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [{ "type": "command", "command": "~/.claude/hooks/notify.sh complete", "timeout": 5 }]
+      }
+    ],
+    "TeammateIdle": [
+      {
+        "hooks": [{ "type": "command", "command": "~/.claude/hooks/teammate-auto-shutdown.sh", "timeout": 5 }]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "permission_prompt",
+        "hooks": [{ "type": "command", "command": "~/.claude/hooks/notify.sh permission", "timeout": 5 }]
+      },
+      {
+        "matcher": "elicitation_dialog",
+        "hooks": [{ "type": "command", "command": "~/.claude/hooks/notify.sh elicitation", "timeout": 5 }]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "matcher": "Bash",
+        "hooks": [{ "type": "command", "command": "~/.claude/hooks/notify.sh permission", "timeout": 5 }]
+      },
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [{ "type": "command", "command": "~/.claude/hooks/notify.sh question", "timeout": 5 }]
+      },
+      {
+        "matcher": "ExitPlanMode",
+        "hooks": [{ "type": "command", "command": "~/.claude/hooks/notify.sh plan", "timeout": 5 }]
+      }
+    ]
+  }
+}

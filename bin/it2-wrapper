@@ -1,0 +1,17 @@
+#!/bin/bash
+# it2 wrapper — injects --profile Claude-Teammate on session split commands
+# so teammate panes close without prompting.
+#
+# Claude Code calls: it2 session split [-v] [-s SESSION_ID]
+# This wrapper adds: -p Claude-Teammate
+#
+# Real binary: /Users/chrisren/Library/Python/3.11/bin/it2
+
+REAL_IT2="/Users/chrisren/Library/Python/3.11/bin/it2"
+
+if [[ "$1" == "session" && "$2" == "split" ]]; then
+  # Inject --profile before remaining args
+  exec "$REAL_IT2" session split -p "Claude-Teammate" "${@:3}"
+fi
+
+exec "$REAL_IT2" "$@"
