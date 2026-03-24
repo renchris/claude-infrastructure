@@ -49,9 +49,9 @@ Built and battle-tested across 1,348+ sessions from January–March 2026.
 
 ```
 ~/.claude-versions/
-├── 2.1.79/           # Old version (still works for any running session)
+├── 2.1.80/           # Previous version (rollback target)
 ├── 2.1.81/           # Current version
-└── current -> 2.1.81 # Atomic symlink (ln -sfn)
+└── current -> 2.1.81 # Atomic symlink (rename(2), NOT ln -sfn)
 ```
 
 The `claude` shell function calls `claude-latest` instead of the binary directly:
@@ -59,38 +59,80 @@ The `claude` shell function calls `claude-latest` instead of the binary directly
 ```bash
 # ~/.zshrc
 claude() {
-    CLAUDE_CODE_TASK_LIST_ID="$(basename "$(pwd)")" claude-latest "$@"
+    CLAUDE_CODE_TASK_LIST_ID="$(basename "$(pwd)")" claude-latest --permission-mode auto "$@"
 }
 ```
 
 `claude-latest` (see [`bin/claude-latest`](bin/claude-latest)):
-1. Checks npm for the latest version (10-minute cache to avoid excessive lookups)
-2. Installs new versions to their own directory (`npm install --prefix`)
-3. Updates the `current` symlink atomically (`ln -sfn` is atomic on macOS)
-4. Sets `DISABLE_AUTOUPDATER=1` to prevent Claude's built-in updater from conflicting
-5. Execs the binary from the `current` symlink
+1. Rotates log if >500 lines
+2. Checks npm for the latest version (10-minute cache)
+3. Cleans stale versions BEFORE install (disk-full resilience)
+4. Installs to isolated directory with `mkdir` lock (concurrent-safe)
+5. Validates post-install (binary exists + executable)
+6. Swaps symlink atomically via `rename(2)` (not `ln -sfn`)
+7. Validates pre-exec with auto-recovery to any working version
+8. Sets `DISABLE_AUTOUPDATER=1`, execs into Claude
 
-**Result**: Updates happen transparently between commands. Old sessions are never disrupted. 44 versions installed over 2+ months with zero conflicts.
+### Hardened Architecture (10-Agent Research Synthesis)
+
+Built from deep research across Homebrew, Nix, Docker, git maintenance, 6 Node version managers, 6 language toolchain managers, POSIX unlink semantics, and race condition analysis.
+
+**Atomic symlink swap**: `ln -sfn` is NOT atomic (two syscalls: `unlink` + `symlink` with ENOENT window). The correct pattern:
+
+```bash
+ln -s "$new_version" "${current}.tmp_$$"
+mv -f "${current}.tmp_$$" "$current"  # rename(2) is POSIX atomic
+```
+
+**Auto-GC** (dual trigger, git gc --auto model):
+
+```
+┌─ claude-latest ─────────────────────────┐
+│  if version_count > threshold (4):      │
+│    background cleanup (non-blocking)    │──► cleanup_stale_versions()
+└─────────────────────────────────────────┘        │
+                                                   ├─ GC root: current symlink target (NEVER deleted)
+┌─ session-end.sh ────────────────────────┐        ├─ Keep: KEEP_COUNT most recent non-current
+│  Secondary trigger on session exit      │──►     ├─ Process guard: pgrep before delete
+│  (background, non-blocking)             │        └─ mkdir lock (concurrent-safe)
+└─────────────────────────────────────────┘
+```
+
+**Safety layers**:
+
+| Layer | Mechanism |
+|-------|-----------|
+| Never delete current | GC root = readlink(current), always excluded |
+| Process guard | `pgrep -f "claude-versions/$v"` skips in-use versions |
+| Concurrent install lock | `mkdir` atomic lock + PID-based stale detection |
+| Pre-exec recovery | If current is broken, scan for ANY working version |
+| Post-install validation | Binary must exist + be executable, else rollback |
+| Disk-full resilience | Clean BEFORE install, not after |
+
+**Unix safety**: Running processes survive `rm -rf` via vnode references (POSIX inode semantics). The kernel keeps mapped files alive until the last fd closes. `require()` reads-and-closes, but the Node.js binary stays `mmap`'d as a text segment.
 
 ### Version Management Commands
 
 | Command | Purpose |
 |---------|---------|
-| `claude` | Auto-updates + launches (via `claude-latest`) |
+| `claude` | Auto-updates + GC + launches (via `claude-latest`) |
+| `claude-default` | Launch without auto mode |
 | `claude-update` | Install latest or specific version |
 | `claude-update 2.1.75` | Pin to a specific version |
-| `claude-update --cleanup` | Remove old versions (keep current + 1 previous) |
+| `claude-update --cleanup` | Manual cleanup (keep current + N previous) |
 | `claude-versions` | Show all installed versions with disk usage |
 | `CLAUDE_SKIP_UPDATE=1 claude` | Skip update check for this invocation |
+| `CLAUDE_VERSIONS_KEEP=3 claude` | Keep 3 previous versions (default: 2) |
 
 ### Shell Aliases
 
 ```bash
-claude()      # Main entrypoint — auto-update + task list persistence
-claude-plan   # Plan mode with "ultrathink" system prompt
-claude2       # Second isolated instance (CLAUDE_CONFIG_DIR=~/.claude-secondary)
-claude-which  # Show active config directory
-claude-sync-mcp  # Sync MCP config to secondary instance
+claude()          # Main — auto-update + auto mode + task list persistence
+claude-default    # Launch without auto mode (escape hatch)
+claude-plan       # Plan mode with "ultrathink" system prompt
+claude2           # Second isolated instance (CLAUDE_CONFIG_DIR=~/.claude-secondary)
+claude-which      # Show active config directory
+claude-sync-mcp   # Sync MCP config to secondary instance
 ```
 
 ## Hook System
@@ -372,26 +414,41 @@ Both are low-priority background processes. Install via `launchctl load ~/Librar
 
 ## Installation
 
-This repo is a reference snapshot — not an installer. To use these scripts:
+```bash
+# Preview what will be installed
+./install.sh --dry-run
 
-1. **Update system**: Copy `bin/claude-latest`, `bin/claude-update`, `bin/claude-versions` to `~/bin/` and add the `claude()` function to `~/.zshrc`
+# Install everything (idempotent — safe to re-run)
+./install.sh
+```
 
-2. **Hooks**: Copy `hooks/` to `~/.claude/hooks/` and register in `~/.claude/settings.json` under the `hooks` key
+The installer symlinks hooks, copies bin tools, loads LaunchAgents, and validates settings.json. See [`install.sh`](install.sh) for details.
 
-3. **Scripts**: Copy `scripts/` to `~/.claude/scripts/` and symlink `restore-file` to `~/bin/`
+**Manual setup** (if not using the installer):
 
+1. **Bin tools**: Copy `bin/claude-latest`, `bin/claude-update`, `bin/claude-versions` to `~/bin/`
+2. **Shell function**: Add the `claude()` function from [`settings-templates/zshrc-snippet.sh`](settings-templates/zshrc-snippet.sh) to `~/.zshrc`
+3. **Hooks**: Symlink `hooks/` to `~/.claude/hooks/` and register in `settings.json`
 4. **LaunchAgents**: Copy `launchd/` plists to `~/Library/LaunchAgents/` and load with `launchctl`
+5. **Status line**: Copy `statusline.sh` to `~/.claude/` and configure in `settings.json`
 
-5. **Status line**: Copy `statusline.sh` to `~/.claude/` and set in settings.json:
-   ```json
-   { "statusLine": { "type": "command", "command": "~/.claude/statusline.sh" } }
-   ```
+## Syncing
+
+After modifying hooks or scripts in `~/.claude/` directly, sync changes back to the repo:
+
+```bash
+./sync.sh            # Copy changed files into repo
+./sync.sh --diff     # Preview only
+./sync.sh --commit   # Copy + auto-commit
+```
 
 ## Stats
 
-- **3,308 lines** of custom infrastructure across 29 scripts
+- **5,600+ lines** of custom infrastructure across 51 files
 - **22 hooks** across 8 lifecycle events
-- **44 versions** managed concurrently (Jan–Mar 2026)
+- **Auto-GC** with dual triggers (threshold + SessionEnd)
+- **Atomic symlink swap** via POSIX `rename(2)`
+- **31 auto-mode soft_deny rules** (27 default + 3 project-specific)
 - **1,348+ sessions** indexed and searchable
 - **940+ sessions** in FTS5 database (<5ms search)
 - **19 deny rules**, **45 ask rules**, **340+ allow rules**
