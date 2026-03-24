@@ -1,23 +1,28 @@
 #!/bin/bash
-# Claude Code Latest Version Wrapper (Homebrew-style versioned installations)
+# Claude Code Latest Version Wrapper — Hardened Edition
 #
-# SOLUTION: Instead of updating in-place (which fails with ENOTEMPTY when
-# sessions are running), install each version to its own directory.
+# Homebrew-style versioned installations with automatic GC.
+# Each version lives in its own directory. A symlink points to the active one.
+# Running sessions keep their loaded binaries via Unix vnode references.
+#
+# Architecture (informed by 10-agent deep research, Mar 2026):
+#   - Atomic symlink swap via rename(2), not ln -sfn (POSIX atomic guarantee)
+#   - Auto-cleanup when version count exceeds threshold (git gc --auto model)
+#   - Process guard via pgrep before deletion (Docker reference-counting model)
+#   - Pre-exec validation with auto-recovery (Nix GC roots model)
+#   - mkdir atomic lock for concurrent install protection
+#   - Clean BEFORE install for disk-full resilience
 #
 # Structure:
-#   ~/.claude-versions/2.1.7/     ← version-specific installation
-#   ~/.claude-versions/2.1.8/     ← new version (parallel install, no conflicts)
-#   ~/.claude-versions/current    ← symlink to latest
-#
-# This works because:
-#   - Old sessions keep their loaded binaries (untouched in old directory)
-#   - New sessions follow symlink to new version
-#   - No rename/delete of in-use files = no ENOTEMPTY
+#   ~/.claude-versions/2.1.81/   ← version-specific installation
+#   ~/.claude-versions/2.1.82/   ← new version (parallel install, no conflicts)
+#   ~/.claude-versions/current   ← symlink to active version
 #
 # Usage:
-#   claude                       # Aliased to this
+#   claude                       # Auto-updates + launches
 #   claude --continue            # Continue session
 #   CLAUDE_SKIP_UPDATE=1 claude  # Skip update check
+#   CLAUDE_VERSIONS_KEEP=3 claude  # Keep 3 previous (default: 2)
 
 set -euo pipefail
 
@@ -26,19 +31,123 @@ CURRENT_LINK="$VERSIONS_DIR/current"
 LOG_FILE="$HOME/.claude/.update-versions.log"
 CACHE_FILE="$HOME/.claude/.npm-version-cache"
 CACHE_TTL=600  # 10 minutes
+KEEP_COUNT="${CLAUDE_VERSIONS_KEEP:-2}"  # previous versions to retain (+ current)
+GC_THRESHOLD=$(( KEEP_COUNT + 2 ))      # trigger cleanup when exceeded
 
-mkdir -p "$VERSIONS_DIR"
+mkdir -p "$VERSIONS_DIR" "$HOME/.claude"
+
+log() {
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
+}
+
+# --- Version Detection ---
 
 get_installed_version() {
-  if [[ -L "$CURRENT_LINK" && -d "$CURRENT_LINK" ]]; then
-    local pkg="$CURRENT_LINK/node_modules/@anthropic-ai/claude-code/package.json"
-    if [[ -f "$pkg" ]]; then
-      grep -o '"version": "[^"]*"' "$pkg" | cut -d'"' -f4
-      return
+  if [[ -L "$CURRENT_LINK" ]]; then
+    local target
+    target=$(readlink "$CURRENT_LINK" 2>/dev/null || echo "")
+    if [[ -n "$target" && -d "$target" ]]; then
+      local pkg="$target/node_modules/@anthropic-ai/claude-code/package.json"
+      if [[ -f "$pkg" ]]; then
+        grep -o '"version": "[^"]*"' "$pkg" | cut -d'"' -f4
+        return
+      fi
     fi
   fi
   echo "0.0.0"
 }
+
+# --- Atomic Symlink Swap (POSIX rename guarantee) ---
+# ln -sfn is NOT atomic (unlink + symlink = two syscalls with ENOENT window).
+# The correct pattern: create temp symlink, then rename(2) over the target.
+
+atomic_symlink() {
+  local target="$1" link="$2"
+  local tmp="${link}.tmp_$$"
+  ln -s "$target" "$tmp"
+  mv -f "$tmp" "$link"  # rename(2) is atomic per POSIX
+}
+
+# --- Garbage Collection (Nix roots + git gc --auto threshold) ---
+# GC root = what current points to (never deleted).
+# Keep KEEP_COUNT most recent non-current versions for rollback.
+# Process guard: skip any version with a running Claude session.
+
+cleanup_stale_versions() {
+  local current_target
+  current_target=$(readlink "$CURRENT_LINK" 2>/dev/null | xargs basename 2>/dev/null || echo "")
+
+  # Collect all version directories (exclude 'current' symlink and dotfiles)
+  local versions=()
+  for dir in "$VERSIONS_DIR"/*/; do
+    [[ -d "$dir" ]] || continue
+    local v
+    v=$(basename "$dir")
+    [[ "$v" == "current" || "$v" == .* ]] && continue
+    versions+=("$v")
+  done
+
+  # Need more than threshold to trigger cleanup
+  [[ ${#versions[@]} -le $GC_THRESHOLD ]] && return 0
+
+  # Acquire cleanup lock (mkdir is atomic — no flock needed)
+  local lock_dir="$VERSIONS_DIR/.cleanup_lock"
+  if ! mkdir "$lock_dir" 2>/dev/null; then
+    # Another cleanup is running — check for stale lock
+    local lock_pid
+    lock_pid=$(cat "$lock_dir/pid" 2>/dev/null || echo "")
+    if [[ -n "$lock_pid" ]] && kill -0 "$lock_pid" 2>/dev/null; then
+      return 0  # Active cleanup, skip
+    fi
+    # Stale lock — reclaim
+    rm -rf "$lock_dir"
+    mkdir "$lock_dir" 2>/dev/null || return 0
+  fi
+  echo $$ > "$lock_dir/pid"
+
+  # Sort by semver descending (newest first)
+  local sorted
+  IFS=$'\n' sorted=($(printf '%s\n' "${versions[@]}" | sort -t. -k1,1rn -k2,2rn -k3,3rn))
+  unset IFS
+
+  # Build keep set: current + KEEP_COUNT most recent non-current
+  local -A keep_set
+  keep_set["$current_target"]=1
+  local kept=0
+  for v in "${sorted[@]}"; do
+    [[ "$v" == "$current_target" ]] && continue
+    if [[ $kept -lt $KEEP_COUNT ]]; then
+      keep_set["$v"]=1
+      kept=$((kept + 1))
+    fi
+  done
+
+  # Delete everything not in keep set (with process guard)
+  local deleted=0
+  for v in "${sorted[@]}"; do
+    [[ -n "${keep_set[$v]:-}" ]] && continue
+
+    # Process guard: skip if any Claude session is using this version
+    if pgrep -f "claude-versions/$v" >/dev/null 2>&1; then
+      log "GC skip $v (in use by running session)"
+      continue
+    fi
+
+    rm -rf "$VERSIONS_DIR/$v" 2>/dev/null && {
+      deleted=$((deleted + 1))
+      log "GC removed $v"
+    } || {
+      log "GC failed $v (permission error, skipping)"
+    }
+  done
+
+  # Release lock
+  rm -rf "$lock_dir"
+
+  [[ $deleted -gt 0 ]] && log "GC complete: removed $deleted version(s), keeping ${!keep_set[*]}"
+}
+
+# --- Update ---
 
 update_if_needed() {
   [[ "${CLAUDE_SKIP_UPDATE:-}" == "1" ]] && return 0
@@ -47,7 +156,7 @@ update_if_needed() {
 
   installed=$(get_installed_version)
 
-  # Check cache
+  # Check cache (avoid excessive npm registry lookups)
   now=$(date +%s)
   if [[ -f "$CACHE_FILE" ]]; then
     cached_time=$(head -1 "$CACHE_FILE" 2>/dev/null || echo 0)
@@ -59,42 +168,127 @@ update_if_needed() {
     fi
   fi
 
-  # Check npm for latest version
+  # Query npm registry (3s timeout)
   available=$(timeout 3 npm view @anthropic-ai/claude-code version 2>/dev/null || echo "$installed")
   echo -e "$now\n$available" > "$CACHE_FILE"
 
-  # Install new version if needed (to its own directory - no conflicts!)
-  if [[ "$installed" != "$available" ]]; then
-    local version_dir="$VERSIONS_DIR/$available"
+  # Nothing to do if up to date
+  [[ "$installed" == "$available" ]] && return 0
 
-    if [[ -d "$version_dir" ]]; then
-      # Version already installed, just update symlink
-      echo "Switching to Claude Code $available"
-    else
-      # Install to new version directory (never overwrites running version)
-      echo "Installing Claude Code $available..."
-      npm install --prefix "$version_dir" @anthropic-ai/claude-code@"$available" >> "$LOG_FILE" 2>&1
+  local version_dir="$VERSIONS_DIR/$available"
 
-      if [[ $? -ne 0 ]]; then
-        echo "✗ Install failed, using $installed"
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Install $available failed" >> "$LOG_FILE"
-        return 1
+  if [[ -d "$version_dir" && -x "$version_dir/node_modules/.bin/claude" ]]; then
+    # Version already installed and valid — just switch
+    echo "Switching to Claude Code $available"
+    atomic_symlink "$version_dir" "$CURRENT_LINK"
+    echo "✓ Now using $available"
+    log "Switched to $available (already installed)"
+    return 0
+  fi
+
+  # Cleanup stale versions BEFORE install (free disk space — disk-full resilience)
+  cleanup_stale_versions
+
+  # Acquire install lock (prevent concurrent npm install to same directory)
+  local install_lock="$VERSIONS_DIR/.installing-$available"
+  if ! mkdir "$install_lock" 2>/dev/null; then
+    local lock_pid
+    lock_pid=$(cat "$install_lock/pid" 2>/dev/null || echo "")
+    if [[ -n "$lock_pid" ]] && kill -0 "$lock_pid" 2>/dev/null; then
+      echo "Another terminal is installing $available, waiting..."
+      local waited=0
+      while [[ -d "$install_lock" && $waited -lt 60 ]]; do
+        sleep 2
+        waited=$((waited + 2))
+      done
+      # Check if it succeeded
+      if [[ -x "$version_dir/node_modules/.bin/claude" ]]; then
+        atomic_symlink "$version_dir" "$CURRENT_LINK"
+        echo "✓ Now using $available"
+        return 0
       fi
     fi
+    # Stale lock — reclaim
+    rm -rf "$install_lock"
+    mkdir "$install_lock" 2>/dev/null || true
+  fi
+  echo $$ > "$install_lock/pid"
 
-    # Update symlink atomically (ln -sfn is atomic on macOS)
-    ln -sfn "$version_dir" "$CURRENT_LINK"
-    echo "✓ Now using $available"
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Switched to $available" >> "$LOG_FILE"
-    echo ""
+  # Install to isolated directory
+  echo "Installing Claude Code $available..."
+  if ! npm install --prefix "$version_dir" @anthropic-ai/claude-code@"$available" >> "$LOG_FILE" 2>&1; then
+    echo "✗ Install failed, using $installed"
+    log "Install $available FAILED (npm exit $?)"
+    rm -rf "$version_dir" "$install_lock"
+    return 1
+  fi
+
+  # Post-install validation
+  if [[ ! -x "$version_dir/node_modules/.bin/claude" ]]; then
+    echo "✗ Install incomplete (binary missing), using $installed"
+    log "Install $available FAILED (binary missing after npm install)"
+    rm -rf "$version_dir" "$install_lock"
+    return 1
+  fi
+
+  # Atomic symlink swap
+  atomic_symlink "$version_dir" "$CURRENT_LINK"
+  echo "✓ Now using $available"
+  log "Installed and switched to $available"
+
+  # Release install lock
+  rm -rf "$install_lock"
+
+  # Background cleanup after successful install (non-blocking)
+  cleanup_stale_versions &
+  disown 2>/dev/null || true
+}
+
+# --- Pre-Exec Validation & Recovery ---
+
+validate_or_recover() {
+  local claude_bin="$CURRENT_LINK/node_modules/.bin/claude"
+
+  # Happy path: current symlink is valid
+  if [[ -x "$claude_bin" ]]; then
+    return 0
+  fi
+
+  echo "Current version is corrupted or missing. Recovering..."
+  log "RECOVERY: current symlink target invalid"
+
+  # Scan for any working version (newest first)
+  for dir in $(ls -dt "$VERSIONS_DIR"/*/ 2>/dev/null); do
+    local v
+    v=$(basename "$dir")
+    [[ "$v" == "current" || "$v" == .* ]] && continue
+    if [[ -x "$dir/node_modules/.bin/claude" ]]; then
+      atomic_symlink "$dir" "$CURRENT_LINK"
+      echo "✓ Recovered: switched to $v"
+      log "RECOVERY: switched to $v"
+      return 0
+    fi
+  done
+
+  echo "FATAL: No working Claude Code version found."
+  echo "Run: npm install -g @anthropic-ai/claude-code"
+  log "RECOVERY FAILED: no working version found"
+  exit 1
+}
+
+# --- Log Rotation ---
+
+rotate_log() {
+  if [[ -f "$LOG_FILE" ]] && [[ $(wc -l < "$LOG_FILE" 2>/dev/null || echo 0) -gt 500 ]]; then
+    tail -200 "$LOG_FILE" > "$LOG_FILE.tmp" && mv "$LOG_FILE.tmp" "$LOG_FILE"
   fi
 }
 
-# Update first, then start
+# --- Main ---
+
+rotate_log
 update_if_needed
+validate_or_recover
 
-# Disable Claude's built-in auto-updater (we handle updates above)
 export DISABLE_AUTOUPDATER=1
-
-# Execute claude from current version
 exec "$CURRENT_LINK/node_modules/.bin/claude" "$@"
