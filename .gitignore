@@ -1,0 +1,13 @@
+# OS
+.DS_Store
+
+# Secrets (never commit actual env/tokens)
+.env
+.env.local
+*.key
+*.pem
+
+# Claude runtime state
+*.log
+*.db
+*.lock

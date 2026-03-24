@@ -1,0 +1,100 @@
+#!/bin/bash
+# Claude Code Latest Version Wrapper (Homebrew-style versioned installations)
+#
+# SOLUTION: Instead of updating in-place (which fails with ENOTEMPTY when
+# sessions are running), install each version to its own directory.
+#
+# Structure:
+#   ~/.claude-versions/2.1.7/     ← version-specific installation
+#   ~/.claude-versions/2.1.8/     ← new version (parallel install, no conflicts)
+#   ~/.claude-versions/current    ← symlink to latest
+#
+# This works because:
+#   - Old sessions keep their loaded binaries (untouched in old directory)
+#   - New sessions follow symlink to new version
+#   - No rename/delete of in-use files = no ENOTEMPTY
+#
+# Usage:
+#   claude                       # Aliased to this
+#   claude --continue            # Continue session
+#   CLAUDE_SKIP_UPDATE=1 claude  # Skip update check
+
+set -euo pipefail
+
+VERSIONS_DIR="$HOME/.claude-versions"
+CURRENT_LINK="$VERSIONS_DIR/current"
+LOG_FILE="$HOME/.claude/.update-versions.log"
+CACHE_FILE="$HOME/.claude/.npm-version-cache"
+CACHE_TTL=600  # 10 minutes
+
+mkdir -p "$VERSIONS_DIR"
+
+get_installed_version() {
+  if [[ -L "$CURRENT_LINK" && -d "$CURRENT_LINK" ]]; then
+    local pkg="$CURRENT_LINK/node_modules/@anthropic-ai/claude-code/package.json"
+    if [[ -f "$pkg" ]]; then
+      grep -o '"version": "[^"]*"' "$pkg" | cut -d'"' -f4
+      return
+    fi
+  fi
+  echo "0.0.0"
+}
+
+update_if_needed() {
+  [[ "${CLAUDE_SKIP_UPDATE:-}" == "1" ]] && return 0
+
+  local installed available now cached_version cached_time cache_age
+
+  installed=$(get_installed_version)
+
+  # Check cache
+  now=$(date +%s)
+  if [[ -f "$CACHE_FILE" ]]; then
+    cached_time=$(head -1 "$CACHE_FILE" 2>/dev/null || echo 0)
+    cached_version=$(tail -1 "$CACHE_FILE" 2>/dev/null || echo "")
+    cache_age=$((now - cached_time))
+
+    if [[ "$cache_age" -lt "$CACHE_TTL" && "$cached_version" == "$installed" ]]; then
+      return 0
+    fi
+  fi
+
+  # Check npm for latest version
+  available=$(timeout 3 npm view @anthropic-ai/claude-code version 2>/dev/null || echo "$installed")
+  echo -e "$now\n$available" > "$CACHE_FILE"
+
+  # Install new version if needed (to its own directory - no conflicts!)
+  if [[ "$installed" != "$available" ]]; then
+    local version_dir="$VERSIONS_DIR/$available"
+
+    if [[ -d "$version_dir" ]]; then
+      # Version already installed, just update symlink
+      echo "Switching to Claude Code $available"
+    else
+      # Install to new version directory (never overwrites running version)
+      echo "Installing Claude Code $available..."
+      npm install --prefix "$version_dir" @anthropic-ai/claude-code@"$available" >> "$LOG_FILE" 2>&1
+
+      if [[ $? -ne 0 ]]; then
+        echo "✗ Install failed, using $installed"
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Install $available failed" >> "$LOG_FILE"
+        return 1
+      fi
+    fi
+
+    # Update symlink atomically (ln -sfn is atomic on macOS)
+    ln -sfn "$version_dir" "$CURRENT_LINK"
+    echo "✓ Now using $available"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Switched to $available" >> "$LOG_FILE"
+    echo ""
+  fi
+}
+
+# Update first, then start
+update_if_needed
+
+# Disable Claude's built-in auto-updater (we handle updates above)
+export DISABLE_AUTOUPDATER=1
+
+# Execute claude from current version
+exec "$CURRENT_LINK/node_modules/.bin/claude" "$@"

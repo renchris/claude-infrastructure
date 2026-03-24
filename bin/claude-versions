@@ -1,0 +1,50 @@
+#!/bin/bash
+# Show Claude Code versions (versioned installation)
+#
+# Structure:
+#   ~/.claude-versions/2.1.7/   ← installed version
+#   ~/.claude-versions/2.1.8/   ← installed version
+#   ~/.claude-versions/current  ← symlink to active version
+
+set -euo pipefail
+
+VERSIONS_DIR="$HOME/.claude-versions"
+
+echo "Claude Code Versions"
+echo "===================="
+echo ""
+
+# Current (active) version
+if [[ -L "$VERSIONS_DIR/current" ]]; then
+  CURRENT=$(basename "$(readlink "$VERSIONS_DIR/current")")
+  echo "Active:    $CURRENT  ← current symlink"
+else
+  echo "Active:    (not set)"
+fi
+
+# Installed versions
+echo ""
+echo "Installed:"
+for dir in "$VERSIONS_DIR"/*/; do
+  [[ -d "$dir" ]] || continue
+  VERSION=$(basename "$dir")
+  [[ "$VERSION" == "current" ]] && continue
+
+  SIZE=$(du -sh "$dir" 2>/dev/null | cut -f1)
+  if [[ "$VERSION" == "$CURRENT" ]]; then
+    echo "  $VERSION  ($SIZE) ✓"
+  else
+    echo "  $VERSION  ($SIZE)"
+  fi
+done
+
+# Latest on npm
+echo ""
+LATEST=$(npm view @anthropic-ai/claude-code version 2>/dev/null || echo "unknown")
+echo "Latest:    $LATEST  (npm)"
+
+# Suggestions
+echo ""
+if [[ "$CURRENT" != "$LATEST" && "$LATEST" != "unknown" ]]; then
+  echo "→ Run 'claude' to auto-update to $LATEST"
+fi
