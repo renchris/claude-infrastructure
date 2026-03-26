@@ -65,7 +65,9 @@ atomic_symlink() {
   local target="$1" link="$2"
   local tmp="${link}.tmp_$$"
   ln -s "$target" "$tmp"
-  mv -f "$tmp" "$link"  # rename(2) is atomic per POSIX
+  # macOS mv follows symlink-to-directory destinations (moves INTO dir instead
+  # of replacing). perl rename() calls raw rename(2) without following symlinks.
+  perl -e 'rename($ARGV[0], $ARGV[1]) or die "rename: $!"' "$tmp" "$link"
 }
 
 # --- Garbage Collection (Nix roots + git gc --auto threshold) ---
