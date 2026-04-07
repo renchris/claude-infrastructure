@@ -113,13 +113,12 @@ cleanup_stale_versions() {
   unset IFS
 
   # Build keep set: current + KEEP_COUNT most recent non-current
-  local -A keep_set
-  keep_set["$current_target"]=1
+  local keep_set="|${current_target}|"
   local kept=0
   for v in "${sorted[@]}"; do
     [[ "$v" == "$current_target" ]] && continue
     if [[ $kept -lt $KEEP_COUNT ]]; then
-      keep_set["$v"]=1
+      keep_set="${keep_set}${v}|"
       kept=$((kept + 1))
     fi
   done
@@ -127,7 +126,7 @@ cleanup_stale_versions() {
   # Delete everything not in keep set (with process guard)
   local deleted=0
   for v in "${sorted[@]}"; do
-    [[ -n "${keep_set[$v]:-}" ]] && continue
+    [[ "$keep_set" == *"|${v}|"* ]] && continue
 
     # Process guard: skip if any Claude session is using this version
     if pgrep -f "claude-versions/$v" >/dev/null 2>&1; then
@@ -146,7 +145,7 @@ cleanup_stale_versions() {
   # Release lock
   rm -rf "$lock_dir"
 
-  [[ $deleted -gt 0 ]] && log "GC complete: removed $deleted version(s), keeping ${!keep_set[*]}"
+  [[ $deleted -gt 0 ]] && log "GC complete: removed $deleted version(s), keeping ${keep_set//|/ }"
 }
 
 # --- Update ---
