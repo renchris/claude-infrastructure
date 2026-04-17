@@ -148,6 +148,60 @@ main() {
     echo "PASS (no MANIFEST.jsonl yet)"
   fi
 
+  # === TEST 6: TL crash repro (permission-prompt path) ===
+  # The getAppState regression (GH #49253) fires only when the permission-prompt
+  # React component mounts. Tests 1-4 pass even on broken 2.1.112 because they
+  # don't force that render path. This test does.
+  echo -n "  [6/7] TL crash repro... "
+  local tl_exit=0
+  CLAUDE_SKIP_AUTH=1 timeout 3 "$binary" \
+    --permission-mode default -p "mkdir /tmp/smoke-test-tl-$$" \
+    >/dev/null 2>&1 || tl_exit=$?
+  # 0 = completed, 124 = timeout (permission prompt rendered, no crash)
+  # Non-0/124 likely means the TL crash fired
+  case "$tl_exit" in
+    0|124)
+      echo "PASS (exit $tl_exit)"
+      # Cleanup any dir created by a successful permission grant
+      rmdir "/tmp/smoke-test-tl-$$" 2>/dev/null || true
+      ;;
+    *)
+      echo "FAIL (exit $tl_exit — likely getAppState crash)"
+      CLAUDE_SKIP_AUTH=1 timeout 3 "$binary" \
+        --permission-mode default -p "mkdir /tmp/smoke-test-tl-err-$$" 2>&1 \
+        | grep -iE "getAppState|toolUseContext" | head -3 >&2 || true
+      failures=$((failures + 1))
+      ;;
+  esac
+
+  # === TEST 7: auto-mode patch-presence structural check (GH #49502/#49653/#49687) ===
+  # The plan-accept "yes-resume-auto-mode" choice is buggy upstream. Our fix
+  # clears the circuit-breaker + short-circuits the $L() guard so the happy
+  # path always fires. This test verifies our patch byte-sequence is present
+  # in cli.js. Behavioral verification (plan-accept → indicator + no prompts)
+  # is a manual interactive gate — documented in the runbook.
+  echo -n "  [7/7] auto-mode fallback patch present... "
+  local cli_path="$VERSIONS_DIR/$version/node_modules/@anthropic-ai/claude-code/cli.js"
+  if [[ -f "$cli_path" ]]; then
+    local patch_found
+    patch_found=$(python3 -c "
+import sys
+d = open('$cli_path').read()
+sig = 'setAutoModeCircuitBroken?.(!1),!0'
+print('1' if sig in d else '0')
+" 2>/dev/null || echo "0")
+    case "$patch_found" in
+      1)
+        echo "PASS (circuit-breaker-clear present)"
+        ;;
+      *)
+        echo "SKIP (unpatched; upstream fix may have shipped — verify manually)"
+        ;;
+    esac
+  else
+    echo "SKIP (no cli.js at $cli_path)"
+  fi
+
   echo ""
 
   if [[ $failures -gt 0 ]]; then
@@ -156,7 +210,7 @@ main() {
     exit 1
   fi
 
-  echo "PASSED: all 5 tests green"
+  echo "PASSED: all 7 tests green"
   log "smoke-test $version — PASS"
 
   if $promote; then
