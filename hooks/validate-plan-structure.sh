@@ -1,8 +1,8 @@
 #!/bin/bash
-# PostToolUse hook — minimal Phase 0 guard for plan files
-# Non-blocking (exit 0 always). Warns only if Phase 0 / Agent Team Orchestration is missing.
-# Per d6 tradeoff analysis: minimal validation only. Full structural checks deferred
-# until empirical failure pattern emerges (zero incidents since PreToolUse added).
+# PostToolUse hook — Phase 0 / Agent Teams guard for plan files
+# Non-blocking (exit 0 always). Warns strongly if Phase 0 / Agent Team Orchestration
+# is missing from implementation plans. Agent Teams are the DEFAULT for all
+# implementation work (user expects 9/10 sessions to use Agent Teams).
 
 set -uo pipefail
 
@@ -27,17 +27,23 @@ esac
 [ "$IS_PLAN" = false ] && exit 0
 
 # === PHASE 0 CHECK ===
-# Only warn if file has 3+ sections (structured multi-phase plan, not a simple doc)
+# Warn if file has 2+ sections (any structured plan with multiple tasks)
 SECTION_COUNT=$(grep -c "^## \|^### " "$FILE" 2>/dev/null || echo "0")
-[ "$SECTION_COUNT" -lt 3 ] && exit 0
+[ "$SECTION_COUNT" -lt 2 ] && exit 0
 
-if ! grep -qEi "Phase 0|Agent Team Orchestration|Team Orchestration|Pre-Flight Checklist" "$FILE" 2>/dev/null; then
+# Check if this looks like an implementation plan (has phases, tasks, or implementation keywords)
+IS_IMPL=false
+if grep -qEi "Phase [1-9]|Implementation|Wave [1-9]|Task [1-9]|Sprint|Milestone" "$FILE" 2>/dev/null; then
+  IS_IMPL=true
+fi
+
+if [ "$IS_IMPL" = true ] && ! grep -qEi "Phase 0|Agent Team Orchestration|Team Orchestration|Pre-Flight Checklist|Team Roster" "$FILE" 2>/dev/null; then
   BASENAME=$(basename "$FILE")
   cat <<EOF
 {
   "hookSpecificOutput": {
     "hookEventName": "PostToolUse",
-    "additionalContext": "PLAN VALIDATION [${BASENAME}]: No Phase 0 / Agent Team Orchestration section found. Per CLAUDE.md Plan Document Conventions, the first upcoming section must cover: team size, roles, task dependencies, worktree assignments, spawn wave order."
+    "additionalContext": "⚠️ AGENT TEAMS REQUIRED [${BASENAME}]: This implementation plan has NO Phase 0 / Agent Team Orchestration. Per CLAUDE.md: Agent Teams are the DEFAULT for all implementation work (9/10 sessions). Add Phase 0 as the FIRST section with: team roster, task dependency graph, worktree assignments, spawn wave order. Only omit for purely research/exploration plans with no code changes. Use the plan-update skill 'Phase 0' template."
   }
 }
 EOF
