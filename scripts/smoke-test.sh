@@ -180,19 +180,27 @@ main() {
   # path always fires. This test verifies our patch byte-sequence is present
   # in cli.js. Behavioral verification (plan-accept → indicator + no prompts)
   # is a manual interactive gate — documented in the runbook.
-  echo -n "  [7/7] auto-mode fallback patch present... "
+  echo -n "  [7/7] auto-mode triple-patch present... "
   local cli_path="$VERSIONS_DIR/$version/node_modules/@anthropic-ai/claude-code/cli.js"
   if [[ -f "$cli_path" ]]; then
-    local patch_found
-    patch_found=$(python3 -c "
-import sys
+    local patches_found
+    patches_found=$(python3 -c "
 d = open('$cli_path').read()
-sig = 'setAutoModeCircuitBroken?.(!1),!0'
-print('1' if sig in d else '0')
-" 2>/dev/null || echo "0")
-    case "$patch_found" in
-      1)
-        echo "PASS (circuit-breaker-clear present)"
+# Patch 2: plan-accept circuit-breaker clear + short-circuit
+p2 = 'setAutoModeCircuitBroken?.(!1),!0' in d
+# Patch 3: yK8 neutralized (old conditional gone, static clear present)
+p3 = ('DG?.setAutoModeCircuitBroken(z===' not in d) and ('DG?.setAutoModeCircuitBroken(!1)' in d)
+print(f'{int(p2)}{int(p3)}')
+" 2>/dev/null || echo "00")
+    case "$patches_found" in
+      11)
+        echo "PASS (patches 2 + 3 present — plan-accept clear + yK8 neutralized)"
+        ;;
+      10)
+        echo "PARTIAL (patch 2 present, patch 3 missing — shift+tab may still lose auto mode)"
+        ;;
+      01)
+        echo "PARTIAL (patch 3 present, patch 2 missing — plan-accept fallback still buggy)"
         ;;
       *)
         echo "SKIP (unpatched; upstream fix may have shipped — verify manually)"
