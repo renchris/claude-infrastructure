@@ -59,6 +59,14 @@ for lib in "$HOME"/.claude/hooks/lib/*.sh; do
   sync_file "$lib" "$REPO_DIR/hooks/lib/$name"
 done
 
+# Commands
+echo "Commands:"
+for cmd in "$HOME"/.claude/commands/*.md; do
+  [[ -f "$cmd" ]] || continue
+  name=$(basename "$cmd")
+  sync_file "$cmd" "$REPO_DIR/commands/$name"
+done
+
 # Bin tools
 echo "Bin tools:"
 for tool in claude-latest claude-update claude-versions browsermcp-wrapper.sh; do

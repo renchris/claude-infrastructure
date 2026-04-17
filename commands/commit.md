@@ -1,5 +1,3 @@
-<!-- markdownlint-configure-file { "MD003": false, "MD013": false, "MD022": false, "MD041": false } -->
-
 ---
 description: Atomic task-specific git commit with fixup/autosquash
 disable-model-invocation: true
