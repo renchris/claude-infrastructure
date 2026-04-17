@@ -23,15 +23,28 @@ auto_mode_allowlist:
 # Hardcoded by Anthropic in cli.js — not user-configurable (as of 2.1.112).
 classifier_model: claude-sonnet-4-6
 
-# Role → model mapping. Docs, team briefs, and scripts reference role aliases
-# via claude-bump-models. When a role's optimal model changes, update the alias
-# here + run `claude-bump-models --apply`.
+# Role → model mapping. Universal Opus 4.7 for all teammates on Max plan (auto-mode
+# allowlist is opus-4-7 ONLY; Sonnet/older Opus silently demote). Docs, team briefs,
+# and scripts reference role aliases via claude-bump-models — when a role's optimal
+# model changes, update the alias here + run `claude-bump-models --apply`.
 roles:
   default_teammate: claude-opus-4-7         # code-writing + auto mode
-  teammate_mechanical: claude-sonnet-4-6    # acceptEdits or bypassPermissions
-  teammate_research: claude-sonnet-4-6      # read-only + acceptEdits
-  classifier: claude-sonnet-4-6             # hardcoded by Anthropic
+  teammate_mechanical: claude-opus-4-7      # same model; effort differentiates (see effort_defaults)
+  teammate_research: claude-opus-4-7        # same model; effort differentiates (see effort_defaults)
+  classifier: claude-sonnet-4-6             # hardcoded by Anthropic (not user-configurable)
   eval_judge: claude-opus-4-7               # highest-quality judge
+
+# Reasoning effort per role profile. Universal Opus 4.7 means model-eligibility
+# constraints are out; effort is the only tuning axis. Lead judges mundane-ness
+# during Phase 0 and opts into `xhigh` by exporting `CLAUDE_CODE_EFFORT_LEVEL=xhigh`
+# in the fresh terminal tab BEFORE launching `claude`. Default shell export stays
+# `max` (~/.zshrc line 69). Per-teammate effort is NOT supported by the Agent tool
+# (GH #25591) — effort is team-run level, inherited from the lead's env var at spawn.
+# Rule doc: memory/feedback-agent-team-models.md (2026-04-17 revision).
+effort_defaults:
+  default: max                              # implementer, reviewer, doctor, lead, researcher
+  mundane: xhigh                            # opt-in: rename sweep, mechanical edit, reformat
+  frontier: max                             # novel algorithm, security audit (= default tier)
 
 # Upcoming retirement dates (from Anthropic model-deprecations page).
 # Bump this list + re-run claude-lint-models when Anthropic announces changes.
