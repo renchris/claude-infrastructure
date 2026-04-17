@@ -176,6 +176,45 @@ update_if_needed() {
   # Nothing to do if up to date
   [[ "$installed" == "$available" ]] && return 0
 
+  # MANIFEST allow-list gate: default-deny auto-install of any version not
+  # explicitly marked stable/candidate. Upgrades to opt-in instead of opt-out.
+  #
+  # Rationale: on 2026-04-17, Anthropic shipped 2.1.113 with the same
+  # getAppState regression as 2.1.111/2.1.112 unpatched. An opt-out skip-list
+  # would miss future broken versions since they haven't been catalogued yet.
+  # Default-deny forces explicit review of every new version via smoke-test
+  # before promoting to MANIFEST.
+  #
+  # To allow auto-upgrade to a new version:
+  #   ~/.claude/scripts/smoke-test.sh <version>          # verify
+  #   # then append to MANIFEST:
+  #   echo '{"version":"X.Y.Z","status":"stable","date_added":"...","notes":"..."}' \
+  #     >> ~/.claude-versions/MANIFEST.jsonl
+  #
+  # Override for one-off install: CLAUDE_SKIP_UPDATE=1 claude-update X.Y.Z
+  local manifest="$VERSIONS_DIR/MANIFEST.jsonl"
+  if [[ -f "$manifest" ]]; then
+    local mstatus
+    mstatus=$(grep -E "\"version\":\"${available//./\\.}\"" "$manifest" 2>/dev/null \
+      | tail -1 | sed -nE 's/.*"status":"([^"]+)".*/\1/p' || true)
+    case "$mstatus" in
+      stable|candidate)
+        # Explicitly allowed — proceed with auto-install
+        ;;
+      skip)
+        log "REFUSED auto-install of $available (MANIFEST status=skip); staying on $installed"
+        return 0
+        ;;
+      *)
+        # Unknown version — default-deny
+        log "REFUSED auto-install of $available (no MANIFEST entry or unrecognized status='$mstatus'); staying on $installed. To allow: smoke-test and add a stable/candidate entry to MANIFEST.jsonl."
+        echo "[claude-latest] $available available but not in MANIFEST allow-list. Staying on $installed." >&2
+        echo "[claude-latest] To upgrade: ~/.claude/scripts/smoke-test.sh $available && add stable entry to ~/.claude-versions/MANIFEST.jsonl" >&2
+        return 0
+        ;;
+    esac
+  fi
+
   local version_dir="$VERSIONS_DIR/$available"
 
   if [[ -d "$version_dir" && -x "$version_dir/node_modules/.bin/claude" ]]; then
