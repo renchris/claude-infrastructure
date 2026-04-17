@@ -42,6 +42,24 @@ if [[ ! -L "$VERSIONS_DIR/current" ]]; then
 fi
 
 current_target=$(readlink "$VERSIONS_DIR/current")
+current_version=$(basename "$current_target")
+
+# MANIFEST skip gate: if the currently-pointed version is flagged as skip,
+# treat it as broken even if `--version` responds. Catches regressions that
+# pass surface-level health checks but crash at runtime (e.g., 2.1.111/2.1.112
+# getAppState). Fails forward to the rollback path below. A subsequent
+# `candidate` or `stable` entry overrides an earlier `skip` (last line wins).
+manifest="$VERSIONS_DIR/MANIFEST.jsonl"
+manifest_skip=0
+if [[ -f "$manifest" ]]; then
+  status_flag=$(grep -E "\"version\":\"${current_version//./\\.}\"" "$manifest" 2>/dev/null \
+    | tail -1 | sed -nE 's/.*"status":"([^"]+)".*/\1/p' || true)
+  if [[ "$status_flag" == "skip" ]]; then
+    manifest_skip=1
+    log "current version $current_version is MANIFEST-flagged skip — forcing rollback"
+    echo "[pre-session-validate] WARNING: $current_version is on MANIFEST skip-list" >&2
+  fi
+fi
 
 find_binary() {
   local ver_dir="$1"
@@ -55,8 +73,9 @@ find_binary() {
 
 current_binary="$(find_binary "$current_target" || echo '')"
 
-# Sanity-check: binary exists and responds to --version
-if [[ -n "$current_binary" ]] && CLAUDE_SKIP_AUTH=1 timeout 2 "$current_binary" --version >/dev/null 2>&1; then
+# Sanity-check: binary exists, responds to --version, AND isn't MANIFEST-skip
+if [[ -n "$current_binary" ]] && [[ "$manifest_skip" == 0 ]] \
+   && CLAUDE_SKIP_AUTH=1 timeout 2 "$current_binary" --version >/dev/null 2>&1; then
   # Healthy — exit silently
   exit 0
 fi
@@ -71,6 +90,15 @@ for candidate in $(ls -1 "$VERSIONS_DIR" 2>/dev/null | grep -E '^[0-9]+\.[0-9]+'
   candidate_path="$VERSIONS_DIR/$candidate"
   # Skip the current broken target
   [[ "$candidate_path" == "$current_target" ]] && continue
+  # Skip MANIFEST-flagged (last line wins; candidate/stable overrides earlier skip)
+  if [[ -f "$manifest" ]]; then
+    cand_status=$(grep -E "\"version\":\"${candidate//./\\.}\"" "$manifest" 2>/dev/null \
+      | tail -1 | sed -nE 's/.*"status":"([^"]+)".*/\1/p' || true)
+    if [[ "$cand_status" == "skip" ]]; then
+      log "fallback skip $candidate (MANIFEST status=skip)"
+      continue
+    fi
+  fi
   # Must have a working binary
   candidate_binary="$(find_binary "$candidate_path" || echo '')"
   [[ -n "$candidate_binary" ]] || continue
