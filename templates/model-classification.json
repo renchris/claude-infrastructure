@@ -1,0 +1,42 @@
+{
+  "_doc": "Classification of files for claude-bump-models. UPDATE paths get the sweep; PRESERVE paths are skipped (historical claims, research attributions, deprecated-plan records). Globs relative to claude-bump-models' configured roots.",
+  "_last_updated": "2026-04-17",
+  "roots": [
+    "/Users/chrisren/.claude",
+    "/Users/chrisren/Development/reso-management-app",
+    "/Users/chrisren/Development/claude-infrastructure"
+  ],
+  "update": [
+    "**/.claude/team-briefs/*/manifest.yaml",
+    "**/.claude/team-briefs/*/*.md",
+    "**/.claude/team-briefs/SCHEMA.md",
+    "**/memory/feedback-agent-team-models.md",
+    "**/memory/auto-mode-setup.md",
+    "**/memory/MEMORY.md",
+    "Development/reso-management-app/docs/plans/**/*.md",
+    "Development/reso-management-app/docs/research/LUXURY_DESIGN_EVALUATION_RUBRIC.md",
+    "Development/reso-management-app/docs/research/DIGITAL_DOOR_COVER_PLATFORM.md",
+    "Development/claude-infrastructure/README.md",
+    "Development/claude-infrastructure/agents/*.md"
+  ],
+  "preserve": [
+    "Development/reso-management-app/docs/research/AUTONOMOUS_VISUAL_DESIGN_ARCHITECTURE.md",
+    "**/memory/feedback-agent-team-models.md",
+    "**/memory/feedback-claude-code-2.1.111-112-regression.md",
+    "**/plan-history/**",
+    "**/backups/**",
+    "**/logs/**",
+    "**/*.jsonl",
+    "**/*.bak",
+    "**/projects/**/subagents/**",
+    "**/tool-results/**"
+  ],
+  "_preserve_rationale": {
+    "AUTONOMOUS_VISUAL_DESIGN_ARCHITECTURE.md": "Design Arena Feb 2026 ranking claims are historical facts; rewriting falsifies research record",
+    "feedback-agent-team-models.md": "Rule intentionally documents deprecated models (opus-4-6, sonnet-4-6) so future agents recognize which models are banned from Max-plan auto mode — sweeping these refs would strip the pedagogical content",
+    "feedback-claude-code-2.1.111-112-regression.md": "Incident memory references specific version histories that must not be rewritten",
+    "plan-history": "git-backed point-in-time snapshots; preserve as-is",
+    "backups": "recovery artifacts from backup-before-write hook",
+    "logs / jsonl / tool-results": "session transcripts + telemetry; read-only history"
+  }
+}
