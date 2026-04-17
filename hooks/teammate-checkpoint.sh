@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=SC2329,SC1083
 # teammate-checkpoint.sh — PostToolUse + Stop hook.
 #
 # Creates a lightweight checkpoint every N tool uses so a teammate's
@@ -79,18 +80,38 @@ MEMBER=$(basename "$CWD" | sed 's/^worktree-[^-]*-//')
 TIMESTAMP=$(date -u +%Y%m%dT%H%M%SZ)
 MSG="checkpoint: ${EVENT} count=${COUNT} ts=${TIMESTAMP}"
 
-# git stash create — produces a stash SHA without touching working tree
-STASH_SHA=$(git -C "$CWD" stash create "$MSG" 2>/dev/null || echo "")
-
-if [[ -z "$STASH_SHA" ]]; then
-  log "stash create returned empty for $CWD — nothing to checkpoint"
+# Snapshot BOTH tracked modifications AND untracked files (respecting .gitignore)
+# via a temp index — zero impact on the teammate's working tree or real index.
+# (git stash create alone misses untracked files; new files a teammate writes
+# would be lost on a crash, defeating the point.)
+HEAD_SHA=$(git -C "$CWD" rev-parse HEAD 2>/dev/null || echo "")
+if [[ -z "$HEAD_SHA" ]]; then
+  log "no HEAD for $CWD — skipping checkpoint"
   exit 0
 fi
 
-# Record under refs/checkpoints/<member>/<timestamp> so reflog can list them
+TMP_INDEX=$(mktemp)
+# If anything fails, drop the temp index — we never touch the real one
+cleanup_index() { rm -f "$TMP_INDEX"; }
+trap cleanup_index EXIT
+
+CHECKPOINT_SHA=$(
+  GIT_INDEX_FILE="$TMP_INDEX" git -C "$CWD" read-tree HEAD 2>/dev/null &&
+  GIT_INDEX_FILE="$TMP_INDEX" git -C "$CWD" add -A 2>/dev/null &&
+  TREE=$(GIT_INDEX_FILE="$TMP_INDEX" git -C "$CWD" write-tree 2>/dev/null) &&
+  [[ -n "$TREE" && "$TREE" != "$(git -C "$CWD" rev-parse HEAD^{tree} 2>/dev/null)" ]] &&
+  git -C "$CWD" commit-tree "$TREE" -p "$HEAD_SHA" -m "$MSG" 2>/dev/null
+) || CHECKPOINT_SHA=""
+
+if [[ -z "$CHECKPOINT_SHA" ]]; then
+  log "no checkpoint needed for $CWD — tree matches HEAD"
+  exit 0
+fi
+
+# Record under refs/checkpoints/<member>/<timestamp> so `git reflog` can list them
 REF="refs/checkpoints/$MEMBER/$TIMESTAMP"
-if git -C "$CWD" update-ref "$REF" "$STASH_SHA" 2>/dev/null; then
-  log "checkpoint $CWD $MEMBER $EVENT count=$COUNT sha=$STASH_SHA ref=$REF"
+if git -C "$CWD" update-ref "$REF" "$CHECKPOINT_SHA" 2>/dev/null; then
+  log "checkpoint $CWD $MEMBER $EVENT count=$COUNT sha=$CHECKPOINT_SHA ref=$REF"
 else
   log "WARN: update-ref failed for $REF"
 fi
