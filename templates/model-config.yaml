@@ -1,0 +1,45 @@
+# Single source of truth for Claude model versions + role assignments.
+# Updated whenever Anthropic ships a new model or allowlist changes.
+# Pair with claude-bump-models + claude-lint-models (see ~/bin/ + ~/.claude/scripts/).
+#
+# Last updated: 2026-04-17
+
+versions:
+  opus_latest: claude-opus-4-7
+  opus_prior: claude-opus-4-6
+  sonnet_latest: claude-sonnet-4-6
+  sonnet_prior: claude-sonnet-4-5
+  haiku_latest: claude-haiku-4-5
+
+# Auto-mode model allowlist, derived from decompile of Dk6(G5()) in cli.js 2.1.112.
+# Server-side truth may shift — verify via `claude auto-mode config` after each
+# Anthropic release. tengu_auto_mode_config.allowModels (Statsig) overrides this.
+auto_mode_allowlist:
+  firstParty: [claude-opus-4-7, claude-opus-4-6, claude-sonnet-4-6]
+  anthropicAws: [claude-opus-4-7, claude-opus-4-6, claude-sonnet-4-6]
+  non_firstParty_max: [claude-opus-4-7]     # STRICTER — our account
+  non_firstParty_non_max: [claude-opus-4-7, claude-opus-4-6, claude-sonnet-4-6]
+
+# Hardcoded by Anthropic in cli.js — not user-configurable (as of 2.1.112).
+classifier_model: claude-sonnet-4-6
+
+# Role → model mapping. Docs, team briefs, and scripts reference role aliases
+# via claude-bump-models. When a role's optimal model changes, update the alias
+# here + run `claude-bump-models --apply`.
+roles:
+  default_teammate: claude-opus-4-7         # code-writing + auto mode
+  teammate_mechanical: claude-sonnet-4-6    # acceptEdits or bypassPermissions
+  teammate_research: claude-sonnet-4-6      # read-only + acceptEdits
+  classifier: claude-sonnet-4-6             # hardcoded by Anthropic
+  eval_judge: claude-opus-4-7               # highest-quality judge
+
+# Upcoming retirement dates (from Anthropic model-deprecations page).
+# Bump this list + re-run claude-lint-models when Anthropic announces changes.
+deprecations:
+  claude-3-haiku: "2026-04-20"              # 3 days out — urgent if referenced
+  claude-opus-4: "2026-06-15"               # undated 4.0 variants
+  claude-sonnet-4: "2026-06-15"
+
+# Roadmap note: when Opus 4.8 / Sonnet 5 / Haiku 5 ships, update versions map
+# above + run `claude-bump-models --apply`. Expect ~2-week lag before new model
+# enters Max-plan auto-mode allowlist (pattern observed with 4.7 in 2.1.111).

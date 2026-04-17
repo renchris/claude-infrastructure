@@ -1,0 +1,158 @@
+#!/usr/bin/env bash
+# claude-bump-models — sweep model-version references per config + classification.
+#
+# Reads current versions from ~/.claude/model-config.yaml and rewrites prior
+# literals (e.g. claude-opus-4-6) to latest (claude-opus-4-7). Skips
+# PRESERVE-classified files.
+#
+# Usage:
+#   claude-bump-models                # dry-run (default)
+#   claude-bump-models --apply        # execute rewrites
+#   claude-bump-models --check        # exit 1 if changes pending (CI)
+#   claude-bump-models --from-to OLD NEW   # one-off override
+#
+# macOS bash 3.2 compatible (no readarray).
+
+set -uo pipefail
+
+readonly CONFIG="$HOME/.claude/model-config.yaml"
+readonly CLASSIFICATION="$HOME/.claude/model-classification.json"
+readonly LOG_FILE="$HOME/.claude/logs/model-bump.log"
+
+MODE="dry-run"
+OLD_LITERAL=""
+NEW_LITERAL=""
+
+usage() {
+  cat >&2 <<EOF
+Usage: $(basename "$0") [--apply | --check | --from-to OLD NEW]
+Config:         $CONFIG
+Classification: $CLASSIFICATION
+Log:            $LOG_FILE
+EOF
+  exit 2
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --apply)   MODE="apply"; shift ;;
+    --check)   MODE="check"; shift ;;
+    --from-to) OLD_LITERAL="$2"; NEW_LITERAL="$3"; shift 3 ;;
+    -h|--help) usage ;;
+    *) echo "Unknown arg: $1" >&2; usage ;;
+  esac
+done
+
+mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
+log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG_FILE"; }
+
+command -v yq >/dev/null 2>&1 || { echo "ERROR: yq not installed (brew install yq)" >&2; exit 2; }
+command -v jq >/dev/null 2>&1 || { echo "ERROR: jq not installed" >&2; exit 2; }
+[[ -f "$CONFIG" ]] || { echo "ERROR: missing $CONFIG" >&2; exit 2; }
+[[ -f "$CLASSIFICATION" ]] || { echo "ERROR: missing $CLASSIFICATION" >&2; exit 2; }
+
+# --- Build bump pairs ---
+BUMP_PAIRS_FILE=$(mktemp); trap "rm -f $BUMP_PAIRS_FILE" EXIT
+if [[ -n "$OLD_LITERAL" && -n "$NEW_LITERAL" ]]; then
+  echo "$OLD_LITERAL|$NEW_LITERAL" > "$BUMP_PAIRS_FILE"
+else
+  for family in opus sonnet haiku; do
+    prior=$(yq -r ".versions.${family}_prior // \"\"" "$CONFIG" 2>/dev/null)
+    latest=$(yq -r ".versions.${family}_latest // \"\"" "$CONFIG" 2>/dev/null)
+    if [[ -n "$prior" && -n "$latest" && "$prior" != "$latest" ]]; then
+      echo "$prior|$latest" >> "$BUMP_PAIRS_FILE"
+    fi
+  done
+fi
+
+pair_count=$(wc -l < "$BUMP_PAIRS_FILE" | tr -d ' ')
+[[ "$pair_count" -gt 0 ]] || { echo "No bump pairs to process."; exit 0; }
+
+echo "=== Bump pairs ==="
+cat "$BUMP_PAIRS_FILE"
+echo ""
+
+# --- Collect target files ---
+UPDATE_FILES=$(mktemp)
+PRESERVE_FILES=$(mktemp)
+trap 'rm -f "$BUMP_PAIRS_FILE" "$UPDATE_FILES" "$PRESERVE_FILES"' EXIT
+
+# Read roots + globs via jq + process substitution (bash 3.2 ok)
+while IFS= read -r root; do
+  [[ -d "$root" ]] || continue
+  while IFS= read -r glob; do
+    # Support both "**/..." (anywhere) and absolute-style ("a/b/*.md") globs.
+    # For **/pattern, use find -path "*/pattern".
+    # For a/b/*.md, use find -path "$root/a/b/*.md".
+    if [[ "$glob" == "**"* ]]; then
+      subpath="${glob#**/}"
+      find "$root" -type f -path "*/$subpath" 2>/dev/null || true
+    else
+      find "$root" -type f -path "$root/$glob" 2>/dev/null || true
+    fi
+  done < <(jq -r '.update[]' "$CLASSIFICATION")
+done < <(jq -r '.roots[]' "$CLASSIFICATION") | sort -u > "$UPDATE_FILES"
+
+while IFS= read -r root; do
+  [[ -d "$root" ]] || continue
+  while IFS= read -r glob; do
+    if [[ "$glob" == "**"* ]]; then
+      subpath="${glob#**/}"
+      find "$root" -type f -path "*/$subpath" 2>/dev/null || true
+    else
+      find "$root" -type f -path "$root/$glob" 2>/dev/null || true
+    fi
+  done < <(jq -r '.preserve[]' "$CLASSIFICATION")
+done < <(jq -r '.roots[]' "$CLASSIFICATION") | sort -u > "$PRESERVE_FILES"
+
+# Subtract
+comm -23 "$UPDATE_FILES" "$PRESERVE_FILES" > "${UPDATE_FILES}.filtered"
+
+target_count=$(wc -l < "${UPDATE_FILES}.filtered" | tr -d ' ')
+[[ "$target_count" -gt 0 ]] || { echo "No targets matched $CLASSIFICATION."; exit 0; }
+
+echo "=== $target_count target file(s) ==="
+echo ""
+
+# --- Process ---
+PENDING=0
+APPLIED=0
+while IFS= read -r file; do
+  [[ -f "$file" ]] || continue
+  while IFS= read -r pair; do
+    OLD="${pair%%|*}"
+    NEW="${pair##*|}"
+    if grep -qF "$OLD" "$file" 2>/dev/null; then
+      if [[ "$MODE" == "apply" ]]; then
+        sed -i.bump-bak "s|$OLD|$NEW|g" "$file" && rm -f "${file}.bump-bak"
+        log "APPLIED $OLD → $NEW in $file"
+        echo "  APPLIED: $file   ($OLD → $NEW)"
+        APPLIED=$((APPLIED + 1))
+      else
+        echo "  PENDING: $file   ($OLD → $NEW)"
+        PENDING=$((PENDING + 1))
+      fi
+    fi
+  done < "$BUMP_PAIRS_FILE"
+done < "${UPDATE_FILES}.filtered"
+
+rm -f "${UPDATE_FILES}.filtered"
+
+echo ""
+case "$MODE" in
+  dry-run)
+    echo "Dry-run complete. $PENDING rewrite(s) would apply."
+    echo "Run with --apply to execute, or --check for CI exit code."
+    ;;
+  apply)
+    echo "Apply complete. $APPLIED file(s) rewritten."
+    log "bump complete ($APPLIED files)"
+    ;;
+  check)
+    if [[ "$PENDING" -gt 0 ]]; then
+      echo "❌ $PENDING file(s) contain stale model references."
+      exit 1
+    fi
+    echo "✅ No stale model references."
+    ;;
+esac
