@@ -342,7 +342,7 @@ Settings: `teammateMode: "tmux"` in `settings.json` enables iTerm2 native panes.
 
 ## Auto Mode
 
-**Status**: Research preview (March 24, 2026). Requires Team plan + Opus 4.6 or Sonnet 4.6.
+**Status**: GA for Max plan (Claude Code 2.1.111, 2026-04-16). Max-plan allowlist: `claude-opus-4-7` only. Non-Max accounts (firstParty/anthropicAws) also accept opus-4-6 and sonnet-4-6. Classifier uses `claude-sonnet-4-6` (hardcoded). Teammates configured with non-allowlisted models silently demote to acceptEdits — update team manifests to opus-4-7 for Max users.
 
 ### Enabling
 
