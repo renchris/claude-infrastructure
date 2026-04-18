@@ -344,6 +344,8 @@ Settings: `teammateMode: "tmux"` in `settings.json` enables iTerm2 native panes.
 
 **Status**: GA for Max plan (Claude Code 2.1.111, 2026-04-16). Max-plan allowlist: `claude-opus-4-7` only. Non-Max accounts (firstParty/anthropicAws) also accept opus-4-6 and sonnet-4-6. Classifier uses `claude-sonnet-4-6` (hardcoded). Teammates configured with non-allowlisted models silently demote to acceptEdits — update team manifests to opus-4-7 for Max users.
 
+**Recommended version**: **2.1.114+** (Bun SEA native binary, ~204MB; ships fix for GH #49253 getAppState crash as duplicate of #49865). The triple-patch on 2.1.112 (local `cli.js` edits at bytes 12,194,998 / 12,184,944 / 9,959,756) is obsolete on 2.1.114 — SEA distributions have no `cli.js` to patch. Legacy 2.1.112 retained on disk as rollback fallback until 2026-05-02.
+
 ### Enabling
 
 ```bash
@@ -385,6 +387,8 @@ Custom rules go in `settings.json` under `autoMode.allow` and `autoMode.soft_den
 - `defaultMode: "auto"` in settings.json has a bug (GitHub #33587) — doesn't persist
 - Auto mode reduces permission prompt frequency, meaning fewer audio notifications
 - Unknown CLI flags are silently ignored — if a future version removes `--permission-mode auto`, sessions start normally in default mode
+- **getAppState crash (GH #49253)** on permission-prompt render in 2.1.111/2.1.112 — FIXED upstream in 2.1.114 (duplicate of #49865)
+- **Plan-accept "use auto mode" silent demote (GH #49502/#49653/#49687)** — status TBD on 2.1.114 (code restructured; no public fix confirmation yet; interactive plan-accept flow should be tested after upgrade)
 
 ## Permissions Model
 
