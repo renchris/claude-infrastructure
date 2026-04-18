@@ -17,8 +17,33 @@ TEAM_NAME=$(echo "$INPUT" | jq -r '.tool_input.team_name // empty')
 RUN_BG=$(echo "$INPUT" | jq -r '.tool_input.run_in_background // false')
 PROMPT=$(echo "$INPUT" | jq -r '.tool_input.prompt // empty')
 SUBAGENT_TYPE=$(echo "$INPUT" | jq -r '.tool_input.subagent_type // empty')
+MODEL=$(echo "$INPUT" | jq -r '.tool_input.model // empty')
 
-# If team_name is set, this is already an Agent Team — allow silently
+# Teammate spawns (team_name set) MUST use claude-opus-4-7 on Max plan.
+# Max-plan auto-mode allowlist is claude-opus-4-7 ONLY — Sonnet 4.6 and older
+# Opus silent-demote to acceptEdits and break team parallelism. Blocks the
+# 2026-04-17 failure mode where a lead followed a stale plan that hardcoded
+# Sonnet for "mechanical" teammates. Rule: memory/feedback-agent-team-models.md.
+if [ -n "$TEAM_NAME" ] && [ -n "$MODEL" ]; then
+  case "$MODEL" in
+    claude-opus-4-7|claude-opus-4-7\[*|opus)
+      : ;;  # allowed — current Opus 4.7, [1m] variant, or alias
+    *)
+      cat <<EOF
+{
+  "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "Teammate spawn rejected: model='$MODEL' is not on the Max-plan auto-mode allowlist. Use model='claude-opus-4-7' (or 'opus' alias) for all teammates. Anything else silent-demotes to acceptEdits and breaks team parallelism. Rule: memory/feedback-agent-team-models.md — universal Opus 4.7 on Max plan."
+  }
+}
+EOF
+      exit 0
+      ;;
+  esac
+fi
+
+# If team_name is set (with valid or absent model), this is an Agent Team — allow silently
 [ -n "$TEAM_NAME" ] && exit 0
 
 # If this is a known read-only subagent type, allow silently
