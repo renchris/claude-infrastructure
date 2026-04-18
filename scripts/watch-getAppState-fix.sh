@@ -1,17 +1,26 @@
 #!/bin/bash
 # watch-getAppState-fix.sh — daily poll for upstream Claude Code fixes.
 #
-# Tracks TWO regression clusters we've locally patched:
+# STATUS (2026-04-18): OBSOLETE FOR PRIMARY TRIGGER.
+# GH #49253 fixed upstream in Claude Code 2.1.114 (duplicate of #49865).
+# Local symlink flipped to 2.1.114 on 2026-04-18; triple-patch on 2.1.112
+# retained as rollback fallback.
+# The launchd job was unloaded 2026-04-18:
+#   launchctl unload ~/Library/LaunchAgents/com.chrisren.watch-getAppState-fix.plist
+# The secondary cluster (#49502/#49653/#49687 plan-accept demote) is still
+# open upstream but no longer gated on the getAppState crash. If you want to
+# keep watching them, re-enable with `launchctl load` — the signals still work.
+# Safe to delete after 2026-05-02 if no regression recurs.
+#
+# Historical purpose: tracked TWO regression clusters we locally patched:
 #   1. TL / getAppState crash (GH #49253) — bytes 12194998 in 2.1.112 cli.js
+#      — FIXED upstream in 2.1.114
 #   2. Plan-accept "use auto mode" silent fallback (GH #49502/#49653/#49687)
-#      — bytes 12184944 in 2.1.112 cli.js
+#      — bytes 12184944 in 2.1.112 cli.js — status TBD on 2.1.114
 #
 # Signals: member comments on any watched issue, issue close-as-completed,
 # new non-skip npm version, merged PRs matching regression keywords, release
 # notes matching keywords. Notifies via macOS notification + `say`.
-#
-# Invoked by launchd daily at 09:07 local
-# (~/Library/LaunchAgents/com.chrisren.watch-getAppState-fix.plist).
 #
 # Manual invoke: ~/.claude/scripts/watch-getAppState-fix.sh
 
