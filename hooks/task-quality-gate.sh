@@ -26,6 +26,32 @@ log() {
 
 log "Quality gate for task: $TASK_SUBJECT (teammate: $TEAMMATE_NAME, team: $TEAM_NAME)"
 
+# Phase 0 verification gate — forcing function for the 2026-04-17 routines-v1
+# incident where Phase 0 was marked complete with zero worktrees. If the
+# task subject contains "Phase 0", run verify-team.sh against the team and
+# block completion if it fails.
+if [[ "$TASK_SUBJECT" == *"Phase 0"* ]]; then
+  PROJECT_DIR="$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null || echo "")"
+  VERIFY_SCRIPT="$PROJECT_DIR/scripts/team/verify-team.sh"
+  # Fallback to canonical location if we're not in the project root
+  [[ -x "$VERIFY_SCRIPT" ]] || VERIFY_SCRIPT="$HOME/Development/reso-management-app/scripts/team/verify-team.sh"
+  if [[ -x "$VERIFY_SCRIPT" ]]; then
+    log "Phase 0 task detected — running verify-team.sh for $TEAM_NAME"
+    VERIFY_OUTPUT=$("$VERIFY_SCRIPT" "$TEAM_NAME" 2>&1 || true)
+    VERIFY_EXIT=$?
+    if [ "$VERIFY_EXIT" -ne 0 ]; then
+      log "PHASE 0 VERIFY FAILED for $TEAM_NAME (exit $VERIFY_EXIT) — blocking task"
+      echo "QUALITY GATE FAILED: Phase 0 verification failed for team $TEAM_NAME. Fix worktrees / settings / branches before marking Phase 0 task complete:" >&2
+      echo "" >&2
+      echo "$VERIFY_OUTPUT" | tail -40 >&2
+      exit 2
+    fi
+    log "Phase 0 verify passed for $TEAM_NAME"
+  else
+    log "verify-team.sh not found — skipping Phase 0 gate for $TEAM_NAME"
+  fi
+fi
+
 # Find the teammate's working directory by checking recent worktrees
 # Look for worktrees that match the teammate name
 WORKTREE_PATH=""
