@@ -1,14 +1,27 @@
 #!/bin/bash
-# shellcheck disable=SC2329,SC1083
-# teammate-checkpoint.sh — PostToolUse + Stop hook.
+# shellcheck disable=SC2329,SC1083,SC2155
+# teammate-checkpoint.sh — PostToolUse + Stop + TeammateIdle hook.
 #
-# Creates a lightweight checkpoint every N tool uses so a teammate's
-# in-progress work survives a lead crash. Uses `git stash create` which
-# produces a stash object without committing and without modifying the
-# working tree — zero impact on normal flow.
+# Creates a lightweight checkpoint of teammate work using git plumbing
+# (read-tree + add -A + write-tree + commit-tree) — zero impact on the
+# working tree or real index, and bypasses pre-commit hooks entirely
+# (never invokes `git commit`). Captures tracked modifications AND
+# untracked files (honoring .gitignore).
 #
-# Only fires when $CLAUDE_CWD resembles a teammate worktree
-# (/tmp/worktree-*). On the lead, this hook exits 0 immediately.
+# Fires on:
+#   - PostToolUse: every N tool uses (default 10)
+#   - Stop:        always (end of turn)
+#   - TeammateIdle: always (on idle transition — invoked synchronously by
+#                   teammate-auto-shutdown.sh before it reaps the worktree)
+#
+# Worktree conventions supported:
+#   - /tmp/worktree-<team>-<member>   (legacy, from 15-agent research)
+#   - /tmp/wt-<team>-<member>         (newer, per ui-sh-100p-v2 plan)
+#   - /tmp/worktree-<member>          (single-segment fallback)
+#
+# Output refs (per worktree):
+#   - refs/checkpoints/<member>/<YYYYMMDDTHHMMSSZ>   — timestamped, append-only
+#   - refs/wip/<member>/LAST                         — fast-forward alias to latest
 #
 # Kill switch: export TEAMMATE_CHECKPOINT_DISABLED=1
 # Tuning:      export TEAMMATE_CHECKPOINT_EVERY=<N>  (default 10)
@@ -35,14 +48,21 @@ SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // "unknown"' 2>/dev/null || ech
 EVENT=$(echo "$INPUT" | jq -r '.hook_event_name // "?"' 2>/dev/null || echo '?')
 CWD=$(echo "$INPUT" | jq -r '.cwd // empty' 2>/dev/null || echo '')
 [[ -z "$CWD" ]] && CWD="$PWD"
+# Prefer names from payload — Claude Code provides these for TeammateIdle;
+# teammate-auto-shutdown.sh also populates them in its synthetic payload.
+PAYLOAD_TEAM=$(echo "$INPUT" | jq -r '.team_name // empty' 2>/dev/null || echo '')
+PAYLOAD_MEMBER=$(echo "$INPUT" | jq -r '.teammate_name // empty' 2>/dev/null || echo '')
 
-# Only act in a teammate worktree
+# Normalize /private/tmp → /tmp (macOS realpath quirk)
+CWD="${CWD#/private}"
+
+# Only act in a teammate worktree — support all three naming conventions
 case "$CWD" in
-  /tmp/worktree-*) ;;
+  /tmp/worktree-*|/tmp/wt-*) ;;
   *) exit 0 ;;
 esac
 
-# Skip mid-rebase/merge
+# Skip mid-rebase/merge — avoid corrupting in-flight git operations
 if [[ -d "$CWD/.git/rebase-merge" || -d "$CWD/.git/rebase-apply" || -f "$CWD/.git/MERGE_HEAD" ]]; then
   log "skip $CWD: rebase/merge in progress"
   exit 0
@@ -53,29 +73,56 @@ COUNTER_FILE="$WATCHDOG_DIR/cp-$SESSION_ID.count"
 COUNT=0
 [[ -f "$COUNTER_FILE" ]] && COUNT=$(cat "$COUNTER_FILE" 2>/dev/null || echo 0)
 
-# Always checkpoint on Stop; otherwise every EVERY tool uses
+# Always checkpoint on Stop + TeammateIdle; otherwise every EVERY tool uses
 SHOULD_SNAPSHOT=false
-if [[ "$EVENT" == "Stop" ]]; then
-  SHOULD_SNAPSHOT=true
-else
-  COUNT=$((COUNT + 1))
-  echo "$COUNT" > "$COUNTER_FILE"
-  if (( COUNT % EVERY == 0 )); then
+case "$EVENT" in
+  Stop|TeammateIdle)
     SHOULD_SNAPSHOT=true
-  fi
-fi
+    ;;
+  *)
+    COUNT=$((COUNT + 1))
+    echo "$COUNT" > "$COUNTER_FILE"
+    if (( COUNT % EVERY == 0 )); then
+      SHOULD_SNAPSHOT=true
+    fi
+    ;;
+esac
 
 $SHOULD_SNAPSHOT || exit 0
 
 # Only snapshot if there's something to snapshot
 if ! git -C "$CWD" status --porcelain 2>/dev/null | grep -q .; then
+  log "no checkpoint needed for $CWD — tree clean"
   exit 0
 fi
 
-# Derive member name from worktree path convention /tmp/worktree-<team>-<member>
-# Fallback: last path segment
-MEMBER=$(basename "$CWD" | sed 's/^worktree-[^-]*-//')
-[[ -z "$MEMBER" ]] && MEMBER=$(basename "$CWD")
+# Derive member name. Preference order:
+#   1. PAYLOAD_MEMBER from hook JSON (Claude Code native events + our synthetic payload)
+#   2. Strip PAYLOAD_TEAM prefix from the basename ("wt-<team>-<member>" → "<member>")
+#   3. Parse from basename using convention
+#
+# Conventions for step 3:
+#   /tmp/worktree-<team>-<member>  — legacy ("worktree-" prefix, team slug)
+#   /tmp/wt-<team>-<member>        — newer ("wt-" prefix, team slug like "ui-sh-v2")
+#   /tmp/worktree-<member>         — single-segment (no team prefix)
+BASENAME=$(basename "$CWD")
+if [[ -n "$PAYLOAD_MEMBER" ]]; then
+  MEMBER="$PAYLOAD_MEMBER"
+elif [[ -n "$PAYLOAD_TEAM" ]]; then
+  # Strip either "wt-<team>-" or "worktree-<team>-" prefix
+  MEMBER="$BASENAME"
+  MEMBER="${MEMBER#wt-$PAYLOAD_TEAM-}"
+  MEMBER="${MEMBER#worktree-$PAYLOAD_TEAM-}"
+else
+  # Last-resort fallback: strip prefix + assume single-segment member.
+  # For multi-segment conventions, the caller should pass PAYLOAD_TEAM.
+  case "$BASENAME" in
+    wt-*) MEMBER="${BASENAME#wt-}" ;;
+    worktree-*) MEMBER="${BASENAME#worktree-}" ;;
+    *) MEMBER="$BASENAME" ;;
+  esac
+fi
+[[ -z "$MEMBER" ]] && MEMBER="$BASENAME"
 
 TIMESTAMP=$(date -u +%Y%m%dT%H%M%SZ)
 MSG="checkpoint: ${EVENT} count=${COUNT} ts=${TIMESTAMP}"
@@ -109,11 +156,16 @@ if [[ -z "$CHECKPOINT_SHA" ]]; then
 fi
 
 # Record under refs/checkpoints/<member>/<timestamp> so `git reflog` can list them
-REF="refs/checkpoints/$MEMBER/$TIMESTAMP"
-if git -C "$CWD" update-ref "$REF" "$CHECKPOINT_SHA" 2>/dev/null; then
-  log "checkpoint $CWD $MEMBER $EVENT count=$COUNT sha=$CHECKPOINT_SHA ref=$REF"
+TS_REF="refs/checkpoints/$MEMBER/$TIMESTAMP"
+LAST_REF="refs/wip/$MEMBER/LAST"
+
+if git -C "$CWD" update-ref "$TS_REF" "$CHECKPOINT_SHA" 2>/dev/null; then
+  log "checkpoint $CWD $MEMBER $EVENT count=$COUNT sha=$CHECKPOINT_SHA ref=$TS_REF"
+  # Fast-forward the LAST alias too (O(1) "give me the latest" for respawn)
+  git -C "$CWD" update-ref "$LAST_REF" "$CHECKPOINT_SHA" 2>/dev/null \
+    && log "  → fast-forwarded $LAST_REF"
 else
-  log "WARN: update-ref failed for $REF"
+  log "WARN: update-ref failed for $TS_REF"
 fi
 
 exit 0
