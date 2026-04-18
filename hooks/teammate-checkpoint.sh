@@ -24,7 +24,11 @@
 #   - refs/wip/<member>/LAST                         — fast-forward alias to latest
 #
 # Kill switch: export TEAMMATE_CHECKPOINT_DISABLED=1
-# Tuning:      export TEAMMATE_CHECKPOINT_EVERY=<N>  (default 10)
+# Tuning:      export TEAMMATE_CHECKPOINT_EVERY=<N>  (default 5 — tightened
+#              from 10 on 2026-04-18 after Wave 2 context-exhaustion incident:
+#              teammates can crash before hitting 10 PostToolUse events, so
+#              the safety-net trigger needs to fire sooner. Per-fixture commit
+#              cadence in the brief template remains the primary defense.)
 
 set -uo pipefail
 
@@ -32,7 +36,7 @@ if [[ "${TEAMMATE_CHECKPOINT_DISABLED:-0}" == "1" ]]; then
   exit 0
 fi
 
-readonly EVERY="${TEAMMATE_CHECKPOINT_EVERY:-10}"
+readonly EVERY="${TEAMMATE_CHECKPOINT_EVERY:-5}"
 readonly WATCHDOG_DIR="$HOME/.claude/watchdog"
 readonly LOG_FILE="$HOME/.claude/logs/teammate-checkpoint.log"
 
