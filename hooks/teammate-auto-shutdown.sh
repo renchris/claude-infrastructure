@@ -42,18 +42,51 @@ TEAMMATE_NAME=$(echo "$INPUT" | jq -r '.teammate_name // "unknown"' 2>/dev/null)
 TEAM_NAME=$(echo "$INPUT" | jq -r '.team_name // "unknown"' 2>/dev/null)
 SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // "unknown"' 2>/dev/null)
 
-# Resolve the worktree — support both naming conventions.
-# Prefer the one that actually exists on disk.
+# Resolve the worktree. Conventions + edge cases:
+#   /tmp/wt-<team>-<member>        newer
+#   /tmp/worktree-<team>-<member>  legacy
+#   /tmp/worktree-<member>         single-segment
+# AND: the team slug in the worktree path may differ from team_name (e.g.,
+# plan branches named 'feat/ui-sh-v2' while team_name is 'ui-sh-100p-v2'),
+# AND: the member name may be auto-incremented (quality-keeper → quality-keeper-2).
+#
+# Strategy: try exact matches first, then fall back to a glob-based search.
 WORKTREE=""
-for candidate in \
-  "/tmp/wt-${TEAM_NAME}-${TEAMMATE_NAME}" \
-  "/tmp/worktree-${TEAM_NAME}-${TEAMMATE_NAME}" \
-  "/tmp/worktree-${TEAMMATE_NAME}"; do
-  if [[ -d "$candidate" ]]; then
-    WORKTREE="$candidate"
-    break
-  fi
+
+# Build candidate member names: full, and with trailing "-N" stripped.
+MEMBER_CANDIDATES=("$TEAMMATE_NAME")
+if [[ "$TEAMMATE_NAME" =~ ^(.+)-[0-9]+$ ]]; then
+  MEMBER_CANDIDATES+=("${BASH_REMATCH[1]}")
+fi
+
+# Exact-match attempt against the team_name slug
+for m in "${MEMBER_CANDIDATES[@]}"; do
+  for candidate in \
+    "/tmp/wt-${TEAM_NAME}-${m}" \
+    "/tmp/worktree-${TEAM_NAME}-${m}" \
+    "/tmp/worktree-${m}"; do
+    if [[ -d "$candidate" ]]; then
+      WORKTREE="$candidate"
+      break 2
+    fi
+  done
 done
+
+# Glob fallback: match any /tmp/wt-*-<member> or /tmp/worktree-*-<member>.
+# This catches the case where the team slug in the path != team_name
+# (e.g., /tmp/wt-ui-sh-v2-quality-keeper vs team_name=ui-sh-100p-v2).
+if [[ -z "$WORKTREE" ]]; then
+  shopt -s nullglob
+  for m in "${MEMBER_CANDIDATES[@]}"; do
+    for candidate in /tmp/wt-*-"${m}" /tmp/worktree-*-"${m}"; do
+      if [[ -d "$candidate" ]]; then
+        WORKTREE="$candidate"
+        break 2
+      fi
+    done
+  done
+  shopt -u nullglob
+fi
 
 # Rule 4 — cooperative busy marker
 if [[ -n "$WORKTREE" && -f "$WORKTREE/.teammate-busy" ]]; then
