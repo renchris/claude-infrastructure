@@ -60,10 +60,18 @@ PAYLOAD_MEMBER=$(echo "$INPUT" | jq -r '.teammate_name // empty' 2>/dev/null || 
 # Normalize /private/tmp → /tmp (macOS realpath quirk)
 CWD="${CWD#/private}"
 
-# Only act in a teammate worktree — support all three naming conventions
+# Only act in a worktree or repo we manage. Gate on git-common-dir (discovery
+# §4 #4) so the checkpoint covers the repo ROOT + ~/Development/.worktrees, not
+# just /tmp/wt-* — otherwise solo-root and Track-R worktree sessions are a
+# permanent recovery blind spot. The clean-tree skip below prevents over-firing.
 case "$CWD" in
-  /tmp/worktree-*|/tmp/wt-*) ;;
-  *) exit 0 ;;
+  /tmp/worktree-*|/tmp/wt-*) ;;                 # legacy + current teammate paths
+  "$HOME"/Development/.worktrees/*) ;;          # Track R worktrees (branch-named)
+  *)
+    # Any other dir: act only if it is inside a git working tree (root or
+    # linked worktree). --git-common-dir resolves for both; fails elsewhere.
+    git -C "$CWD" rev-parse --git-common-dir >/dev/null 2>&1 || exit 0
+    ;;
 esac
 
 # Skip mid-rebase/merge — avoid corrupting in-flight git operations
