@@ -59,18 +59,69 @@ if [[ "$TEAMMATE_NAME" =~ ^(.+)-[0-9]+$ ]]; then
   MEMBER_CANDIDATES+=("${BASH_REMATCH[1]}")
 fi
 
-# Exact-match attempt against the team_name slug
-for m in "${MEMBER_CANDIDATES[@]}"; do
-  for candidate in \
-    "/tmp/wt-${TEAM_NAME}-${m}" \
-    "/tmp/worktree-${TEAM_NAME}-${m}" \
-    "/tmp/worktree-${m}"; do
-    if [[ -d "$candidate" ]]; then
-      WORKTREE="$candidate"
-      break 2
-    fi
+# (#16) Resolve member→worktree from the team MANIFEST first — the legacy
+# /tmp globs below cannot match branch-named worktrees like
+# ~/Development/.worktrees/wt-journal-gate, so a Track-R teammate would be
+# reaped with WORKTREE="" → no checkpoint → lost work (re-gate N1).
+PAYLOAD_CWD=$(echo "$INPUT" | jq -r '.cwd // empty' 2>/dev/null || echo '')
+PAYLOAD_CWD="${PAYLOAD_CWD#/private}"
+
+# Primary: the team manifest, located via the SHARED git-common-dir (resolves
+# to the same main repo root from a teammate worktree OR the lead root — the
+# untracked .claude/team-briefs/ lives only in that root).
+resolve_from_manifest() {
+  local seed="$1" common root manifest count i name wt m
+  [[ -n "$seed" && -e "$seed" ]] || return 1
+  command -v yq >/dev/null 2>&1 || return 1
+  common=$(git -C "$seed" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || return 1
+  root="${common%/.git}"
+  manifest="$root/.claude/team-briefs/$TEAM_NAME/manifest.yaml"
+  [[ -f "$manifest" ]] || return 1
+  count=$(yq eval '.members | length' "$manifest" 2>/dev/null) || return 1
+  [[ "$count" =~ ^[0-9]+$ ]] || return 1
+  for (( i=0; i<count; i++ )); do
+    name=$(yq eval ".members[$i].name" "$manifest" 2>/dev/null)
+    for m in "${MEMBER_CANDIDATES[@]}"; do
+      if [[ "$name" == "$m" ]]; then
+        wt=$(yq eval ".members[$i].worktree" "$manifest" 2>/dev/null)
+        wt="${wt/#\~/$HOME}"
+        if [[ -n "$wt" && -d "$wt" ]]; then printf '%s\n' "$wt"; return 0; fi
+      fi
+    done
   done
-done
+  return 1
+}
+if MANIFEST_WT=$(resolve_from_manifest "$PAYLOAD_CWD"); then
+  WORKTREE="$MANIFEST_WT"
+fi
+
+# Fallback: a global TSV (<member>\t<worktree>) persisted by create-team.sh —
+# keyed only by team, so it needs no project path from the payload.
+if [[ -z "$WORKTREE" ]]; then
+  TSV="$HOME/.claude/teams/$TEAM_NAME/worktrees.tsv"
+  if [[ -f "$TSV" ]]; then
+    for m in "${MEMBER_CANDIDATES[@]}"; do
+      cand=$(awk -F'\t' -v want="$m" '$1==want{print $2; exit}' "$TSV" 2>/dev/null || echo '')
+      cand="${cand/#\~/$HOME}"
+      if [[ -n "$cand" && -d "$cand" ]]; then WORKTREE="$cand"; break; fi
+    done
+  fi
+fi
+
+# Legacy /tmp exact-match attempt (only if manifest/TSV didn't resolve)
+if [[ -z "$WORKTREE" ]]; then
+  for m in "${MEMBER_CANDIDATES[@]}"; do
+    for candidate in \
+      "/tmp/wt-${TEAM_NAME}-${m}" \
+      "/tmp/worktree-${TEAM_NAME}-${m}" \
+      "/tmp/worktree-${m}"; do
+      if [[ -d "$candidate" ]]; then
+        WORKTREE="$candidate"
+        break 2
+      fi
+    done
+  done
+fi
 
 # Glob fallback: match any /tmp/wt-*-<member> or /tmp/worktree-*-<member>.
 # This catches the case where the team slug in the path != team_name
