@@ -220,6 +220,56 @@ print(f'{int(p2)}{int(p3)}')
     echo "SKIP (no cli.js at $cli_path and no claude.exe at $exe_path — install may be incomplete)"
   fi
 
+  # === TEST 8: upstream blocker-issue gate (2.1.116+ hold cluster) ===
+  # We're holding at 2.1.114 until GH #52251 (tmux+Opus subagent SendMessage/
+  # TaskCreate failure) AND #52522 (Opus 4.7 auto-compact 5x token burn) close.
+  # #51798 (PreToolUse allow + dangerouslyDisableSandbox) is preferred but
+  # tolerable (config workaround exists).
+  #
+  # Logic: if we're testing 2.1.115+ and the GH blockers are still open, WARN
+  # (don't fail — maybe this version fixes them, but humans should confirm).
+  # If blockers are closed, report that cleanly so the upgrade path is obvious.
+  echo -n "  [8/8] upstream blocker-issue gate... "
+  local major_minor_patch="${version#v}"
+  local patch_num="${major_minor_patch##*.}"
+  local should_check=0
+  # Only check for 2.1.115+ (blockers were introduced 2.1.116 onward)
+  if [[ "$major_minor_patch" =~ ^2\.1\.([0-9]+)$ ]] && [[ "${BASH_REMATCH[1]}" -ge 115 ]]; then
+    should_check=1
+  fi
+
+  if [[ "$should_check" == 1 ]]; then
+    if command -v gh >/dev/null 2>&1; then
+      # A blocker is RESOLVED only if closed with state_reason=completed (a real fix).
+      # state=open => unresolved. state=closed/not_planned (won't-fix/stale/duplicate) =>
+      # ALSO unresolved: the behavior was never fixed, so promoting may re-expose it.
+      # (2026-06-02: #52251 and #52522 are both closed:not_planned — closed, but NOT fixed.)
+      local blocker_unresolved=0
+      local blocker_summary=""
+      for issue in 52251 52522; do
+        local sr state reason
+        sr=$(timeout 8 gh api "repos/anthropics/claude-code/issues/$issue" \
+          --jq '.state + ":" + (.state_reason // "none")' 2>/dev/null || echo "unknown:none")
+        state="${sr%%:*}"; reason="${sr##*:}"
+        blocker_summary="$blocker_summary #$issue:$sr"
+        if [[ "$state" != "closed" || "$reason" != "completed" ]]; then
+          blocker_unresolved=$((blocker_unresolved + 1))
+        fi
+      done
+      if [[ "$blocker_unresolved" -gt 0 ]]; then
+        echo "WARN ($blocker_unresolved/2 blockers unresolved —$blocker_summary )"
+        echo "    'closed:not_planned' = won't-fix/stale, NOT a fix — behavior may persist in $version" >&2
+        echo "    Review https://github.com/anthropics/claude-code/issues/52251 and #52522 before --promote" >&2
+      else
+        echo "PASS (both blockers closed:completed —$blocker_summary — genuinely fixed)"
+      fi
+    else
+      echo "SKIP (gh CLI not installed — cannot check blockers)"
+    fi
+  else
+    echo "SKIP (version $version pre-dates 2.1.116 hold cluster)"
+  fi
+
   echo ""
 
   if [[ $failures -gt 0 ]]; then
@@ -228,7 +278,7 @@ print(f'{int(p2)}{int(p3)}')
     exit 1
   fi
 
-  echo "PASSED: all 7 tests green"
+  echo "PASSED: all 8 tests green"
   log "smoke-test $version — PASS"
 
   if $promote; then
