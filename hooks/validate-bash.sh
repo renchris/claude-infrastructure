@@ -155,37 +155,9 @@ if [[ -n "$RM_OCCURRENCES" ]]; then
   done <<<"$RM_OCCURRENCES"
 fi
 
-# ── Layer-3 concurrency guard for irreversible git ops (#9) ──────────
-# Deny git push|commit|merge|rebase from the reso PRIMARY worktree when another
-# LIVE writer holds the repo writer-lock — defense-in-depth with
-# concurrent-writer-guard.sh (#3); a push here is a production deploy. No-op in
-# a linked worktree or outside the reso primary. Honors CLAUDE_ISOLATION_SKIP=1
-# AND CLAUDE_ISOLATION_MODE — #9 SOAKS in lockstep with #3 (mode=log, the default,
-# → log-only, NEVER blocks; only mode=deny actually denies). A per-commit block
-# during the observe-only soak defeats Phase 3's "never block real work yet" intent
-# (a 2nd writer's local commit is reversible; the release-script pipefail+ancestor
-# gate is the real push protection regardless). [post-ship fix 2026-06-02: #9 was
-# hard-denying while #3 soaked — a soak-asymmetry that blocked a concurrent session.]
-if [[ "${CLAUDE_ISOLATION_SKIP:-0}" != "1" ]] \
-   && echo "$CMD" | grep -qE 'git([[:space:]]+-[^[:space:]]+)*[[:space:]]+(push|merge|rebase|commit)\b'; then
-  _vb_top=$(git rev-parse --show-toplevel 2>/dev/null || echo '')
-  if [[ "$(basename "${_vb_top:-/}")" == "${RESO_GUARD_REPO_NAME:-reso-management-app}" && -d "${_vb_top}/.git" ]]; then
-    _vb_lock="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)/reso-writer.lock"
-    _vb_sid=$(echo "$INPUT" | jq -r '.session_id // "unknown"' 2>/dev/null || echo unknown)
-    if command -v python3 >/dev/null 2>&1 && [[ -f "$_vb_lock" ]]; then
-      case "$(python3 "$HOME/.claude/hooks/reso-writer-lock.py" check "$_vb_lock" "$_vb_sid" 2>/dev/null || echo error)" in
-        other*)
-          if [[ "${CLAUDE_ISOLATION_MODE:-log}" == "deny" ]]; then
-            deny "git push/commit/merge/rebase blocked — another live writer holds this repo's writer-lock and this is the primary worktree. Isolate via scripts/new-worktree.sh, or wait for the other session. Override: CLAUDE_ISOLATION_SKIP=1."
-          else
-            mkdir -p ~/.claude/logs
-            echo "[$(date '+%Y-%m-%d %H:%M:%S')] #9 WOULD-DENY (soak, mode=log) git-write from 2nd writer (lock held by another) — ALLOWED" >> ~/.claude/logs/concurrent-writer-guard.log
-          fi
-          ;;
-      esac
-    fi
-  fi
-fi
+# (Layer-3 #9 writer-lock guard removed 2026-06-03 — always-worktree isolation makes it a
+# no-op; the reso-writer-lock.py + concurrent-writer-guard.sh stack was deleted. See the
+# parallel-sessions-simple plan / memory parallel-sessions-simple-2026-06-03.)
 
 # Log command for audit
 mkdir -p ~/.claude/logs
