@@ -9,10 +9,11 @@
 # (single-denier — no mutual freeze). No-op in a linked worktree (already
 # isolated). Discovery §4 DETECT-CONCURRENCY; plan #3.
 #
-# Modes (CLAUDE_ISOLATION_MODE): "deny" (enforcing — DEFAULT, post-soak) |
-#   "log" (soak — never blocks; set explicitly to re-soak). Kill switch: CLAUDE_ISOLATION_SKIP=1.
-# Default is "deny" so enforcement survives even if ~/.claude/settings.json env is ever
-# regenerated without CLAUDE_ISOLATION_MODE (durable-by-default, convergence 2026-06-02).
+# Modes (CLAUDE_ISOLATION_MODE): "deny" (enforcing — set explicitly to block) |
+#   "log" (soak — never blocks; this is the default). Kill switch: CLAUDE_ISOLATION_SKIP=1.
+# Default is "log" (checkpoint-only, never blocks). Soak verdict 2026-06-03: hard-deny blocked
+# more real work than the recoverable index-sweep it prevented; worktree isolation + refs/wip
+# checkpoints already cover that. Set CLAUDE_ISOLATION_MODE=deny to re-enable blocking.
 # Scope: only the repo whose toplevel basename == $RESO_GUARD_REPO_NAME
 #   (default reso-management-app) — avoids global side-effects.
 
@@ -20,7 +21,7 @@ set -uo pipefail
 
 [[ "${CLAUDE_ISOLATION_SKIP:-0}" == "1" ]] && exit 0
 
-MODE="${CLAUDE_ISOLATION_MODE:-deny}"
+MODE="${CLAUDE_ISOLATION_MODE:-log}"
 REPO_NAME="${RESO_GUARD_REPO_NAME:-reso-management-app}"
 LOCK_HELPER="$HOME/.claude/hooks/reso-writer-lock.py"
 RUN_DIR="$HOME/.claude/run"
