@@ -1,22 +1,34 @@
 #!/bin/bash
 # TeammateIdle hook — graceful auto-shutdown with work preservation.
-# Fires when a teammate goes idle after finishing its turn.
+# Fires (LEAD-side) when a teammate goes idle after finishing its turn.
 #
-# 100th-percentile design (Apr 18 2026) — 5 rules:
+# Design — checkpoint-first, defer-until-quiesced, then close the EXACT pane:
 #   1. CHECKPOINT FIRST via teammate-checkpoint.sh (synthetic TeammateIdle
 #      payload). Preserves tracked + untracked work to refs/checkpoints/<m>/<ts>
 #      and refs/wip/<m>/LAST. Uses git plumbing — bypasses pre-commit hooks.
 #   2. FALLBACK to /tmp/<team>-<member>-<ts>.patch if the checkpoint fails
 #      for any reason (corrupt repo, permission issue). Hook still exits 0.
 #   3. DEFER on dirty tree — if git status shows uncommitted work, skip the
-#      kill this cycle. TeammateIdle fires 3-4× per teammate; we wait until
-#      the teammate actually quiesces. Max defers: 3 (backstop against
-#      infinite loops). After that, reap but checkpoint first.
-#   4. COOPERATIVE MARKER — if /tmp/<worktree>/.teammate-busy exists, defer
+#      reap this cycle. TeammateIdle fires 3-4× per teammate; we wait until
+#      the teammate actually quiesces (this IS the final-idle gate). Max
+#      defers: 3 (backstop). After that, reap but checkpoint first.
+#   4. COOPERATIVE MARKER — if <worktree>/.teammate-busy exists, defer
 #      unconditionally. Teammate writes it before multi-turn work.
-#   5. ONLY THEN reap — remove the worktree and TERM the parent claude.
+#   5. CLOSE THE EXACT PANE, then remove the worktree. The pane id is read
+#      from the team config.json member field `tmuxPaneId` (an iTerm2 session
+#      UUID under the it2 backend, or a tmux %N id) and closed with the SAME
+#      primitive CC 2.1.161 uses natively: `it2 session close -f -s <id>`
+#      (the -f force flag is present in 2.1.161 — GH #24385 is fixed) or
+#      `tmux kill-pane -t <id>`.
 #
-# Uses JSON {"continue": false} with exit 0 to stop the teammate cleanly.
+# WHY NOT `kill -TERM $PPID` (the retired mechanism): a TeammateIdle hook runs
+# on the LEAD as  lead-claude → /bin/sh -c → bash, so $PPID is the /bin/sh shim,
+# already dead by the time the backgrounded kill fired — the signal then hit a
+# PID-RECYCLED process (intermittently the lead or an unrelated shell). That is
+# exactly the observed "closes too early / inconsistent" regression. Targeting
+# the recorded pane id is deterministic and hits only the teammate's pane.
+#
+# Uses JSON {"continue": false} with exit 0 to stop the teammate's turn.
 #
 # Kill switch: export TEAMMATE_SHUTDOWN_DISABLED=1
 # Tuning:      export TEAMMATE_MAX_DEFERS=<N>   (default 3)
@@ -35,6 +47,25 @@ readonly WATCHDOG_DIR="$HOME/.claude/watchdog"
 mkdir -p "$LOG_DIR" "$WATCHDOG_DIR" 2>/dev/null || true
 log() {
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG_DIR/teammate-lifecycle.log" 2>/dev/null || true
+}
+
+# --- Pane-close primitives (CC 2.1.161 native lifecycle) -----------------------
+# Resolve the it2 CLI. The ~/.claude/bin/it2 PATH shim only rewrites `session
+# split` (to inject the Claude-Teammate no-prompt profile); `session close` and
+# `session list` pass straight through, so calling the shim here is safe.
+_it2_bin() { command -v it2 2>/dev/null || echo "$HOME/Library/Python/3.11/bin/it2"; }
+
+# Close one teammate pane by its recorded id. Idempotent: closing an
+# already-gone pane just returns non-zero (swallowed). iTerm2 session UUIDs are
+# never recycled, so a stale id can only no-op — it can never hit the wrong pane.
+close_pane() {
+  local pane="$1"
+  [[ -n "$pane" ]] || return 1
+  if [[ "$pane" =~ ^%[0-9]+$ ]]; then
+    tmux kill-pane -t "$pane" 2>/dev/null            # tmux backend: synchronous, no prompt
+  else
+    "$(_it2_bin)" session close -f -s "$pane" 2>/dev/null  # iTerm2 backend: -f force, no prompt
+  fi
 }
 
 INPUT=$(cat)
@@ -204,25 +235,53 @@ if [[ -n "$WORKTREE" ]]; then
   fi
 fi
 
-# Rule 5 — remove the worktree and reap the process
-if [[ -n "$WORKTREE" ]]; then
-  # Find the main repo so `git worktree remove` can be invoked from it
-  MAIN_REPO=$(git -C "$WORKTREE" rev-parse --git-common-dir 2>/dev/null | sed 's|/\.git$||')
-  if [[ -n "$MAIN_REPO" && -d "$MAIN_REPO" ]]; then
-    if git -C "$MAIN_REPO" worktree remove "$WORKTREE" --force 2>/dev/null; then
-      log "  ✓ worktree removed: $WORKTREE"
-    else
-      log "  ! worktree remove failed for $WORKTREE (likely manual cleanup needed)"
-    fi
+# Rule 5 — close the teammate's pane, then remove its worktree.
+# Resolve the pane id + canonical member name from the team config.json. The
+# member name may be auto-incremented, so match against MEMBER_CANDIDATES.
+PANEID=""
+MEMBER_NAME="$TEAMMATE_NAME"
+CONFIG="$HOME/.claude/teams/$TEAM_NAME/config.json"
+if [[ -f "$CONFIG" ]]; then
+  RESOLVED=$(jq -r --args \
+    '.members[]? | select(.name as $n | $ARGS.positional | index($n)) | "\(.name)\t\(.tmuxPaneId // "")"' \
+    "${MEMBER_CANDIDATES[@]}" < "$CONFIG" 2>/dev/null | head -1)
+  if [[ -n "$RESOLVED" && "$RESOLVED" == *$'\t'* ]]; then
+    MEMBER_NAME="${RESOLVED%%$'\t'*}"
+    PANEID="${RESOLVED#*$'\t'}"
+    [[ -z "$MEMBER_NAME" ]] && MEMBER_NAME="$TEAMMATE_NAME"
   fi
 fi
 
-# Stop the teammate — JSON on stdout with exit 0
-echo '{"continue": false, "stopReason": "Idle teammate auto-shutdown (work preserved in refs/wip/LAST + /tmp/*.patch)"}'
+# Forensic confirmation of the retired `kill -TERM $PPID` bug (logs only; no kill
+# fires). On the next real team run, grep teammate-lifecycle.log for "PPID-forensic"
+# to confirm $PPID was the dead/recycled /bin/sh shim, never the teammate pane.
+log "  PPID-forensic: \$PPID=$PPID cmd=[$(ps -p "$PPID" -o command= 2>/dev/null | tr -d '\n' || echo 'dead/recycled')] pane=[$PANEID] member=$MEMBER_NAME"
 
-# {"continue": false} stops the current turn but does NOT terminate the process.
-# Schedule a delayed kill so Claude Code can flush the JSON response first.
-# The 3-second delay is load-bearing — shorter races the response flush.
-(sleep 3 && kill -TERM $PPID 2>/dev/null) &
+# Stop the teammate's current turn — JSON on stdout with exit 0.
+echo '{"continue": false, "stopReason": "Idle teammate auto-shutdown (work preserved in refs/wip/LAST + /tmp/*.patch; pane closed via it2/tmux)"}'
+
+# Detached close so the hook itself returns within its 5s timeout. Ordering:
+#   brief grace for CC to flush the {"continue":false} response → close the EXACT
+#   pane → remove the worktree. Work is already checkpointed above, so removing
+#   the worktree here cannot lose work.
+(
+  sleep 3
+  if [[ -n "$PANEID" ]]; then
+    if close_pane "$PANEID"; then
+      log "  ✓ closed pane $PANEID ($MEMBER_NAME)"
+    else
+      log "  ~ close_pane non-zero for $PANEID ($MEMBER_NAME) — likely already gone"
+    fi
+  else
+    log "  ! no pane id resolved for $MEMBER_NAME — left for CC session-end cleanup"
+  fi
+  if [[ -n "$WORKTREE" ]]; then
+    MAIN_REPO=$(git -C "$WORKTREE" rev-parse --git-common-dir 2>/dev/null | sed 's|/\.git$||')
+    if [[ -n "$MAIN_REPO" && -d "$MAIN_REPO" ]]; then
+      git -C "$MAIN_REPO" worktree remove "$WORKTREE" --force 2>/dev/null \
+        && log "  ✓ worktree removed: $WORKTREE"
+    fi
+  fi
+) >/dev/null 2>&1 &
 
 exit 0
