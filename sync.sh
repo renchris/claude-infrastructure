@@ -88,6 +88,10 @@ sync_file "$HOME/.claude/statusline.sh" "$REPO_DIR/statusline.sh"
 [[ -f "$HOME/.claude/statusline-debug.sh" ]] && \
   sync_file "$HOME/.claude/statusline-debug.sh" "$REPO_DIR/statusline-debug.sh"
 
+# Global instructions
+echo "Global instructions:"
+sync_file "$HOME/.claude/CLAUDE.md" "$REPO_DIR/CLAUDE.md"
+
 # LaunchAgents
 echo "LaunchAgents:"
 for plist in "$HOME"/Library/LaunchAgents/com.claude.*.plist; do
