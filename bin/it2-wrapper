@@ -1,17 +1,95 @@
 #!/bin/bash
-# it2 wrapper — injects --profile Claude-Teammate on session split commands
-# so teammate panes close without prompting.
+# it2 wrapper — two surgical interceptions for Claude Code teammate panes;
+# every other invocation passes through to the real it2 CLI verbatim.
 #
-# Claude Code calls: it2 session split [-v] [-s SESSION_ID]
-# This wrapper adds: -p Claude-Teammate
+#   1. `session split …` → inject `-p Claude-Teammate` (never-prompt dynamic
+#      profile) so teammate panes close cleanly from the UI (⌘W).
+#      Claude Code calls: it2 session split [-v] [-s SESSION_ID]
+#
+#   2. `session close -f -s <id>` → bypass the it2 CLI and close via the
+#      python iterm2 API with force=True. it2 0.2.3's `-f` only skips its own
+#      click.confirm — it calls Session.async_close() with the default
+#      force=False, and iTerm2's NON-forced API close pops the "running job"
+#      confirmation modal REGARDLESS of the pane's never-prompt profile.
+#      force=True is the only reliable suppressor (proven 2026-06-09; memory:
+#      it2-session-close-force-modal-2026-06-09). This choke point fixes both
+#      teammate-auto-shutdown.sh close_pane() AND Claude Code's native
+#      ITermBackend killPane — both spawn PATH-resolved `it2`.
+#      Non-forced / no-id close shapes keep the real CLI's interactive
+#      semantics and fall through.
 #
 # Real binary: /Users/chrisren/Library/Python/3.11/bin/it2
 
 REAL_IT2="/Users/chrisren/Library/Python/3.11/bin/it2"
+PYTHON_BIN="/Library/Frameworks/Python.framework/Versions/3.11/bin/python3.11"
 
 if [[ "$1" == "session" && "$2" == "split" ]]; then
   # Inject --profile before remaining args
   exec "$REAL_IT2" session split -p "Claude-Teammate" "${@:3}"
+fi
+
+if [[ "$1" == "session" && "$2" == "close" ]]; then
+  # Scan for -f/--force and -s/--session <id>. Intercept ONLY the forced,
+  # explicit-id shape (what the auto-shutdown hook and CC's native killPane
+  # send). An explicitly EMPTY id falls through to the real CLI (which errors)
+  # rather than ever resolving to the active session — a forced close must
+  # never be able to hit the wrong pane.
+  FORCE=0
+  SID=""
+  args=("${@:3}")
+  i=0
+  while (( i < ${#args[@]} )); do
+    case "${args[$i]}" in
+      -f|--force) FORCE=1 ;;
+      -s|--session) i=$((i+1)); SID="${args[$i]:-}" ;;
+      --session=*) SID="${args[$i]#--session=}" ;;
+    esac
+    i=$((i+1))
+  done
+  if (( FORCE )) && [[ -n "$SID" && "$SID" != "active" ]]; then
+    exec "$PYTHON_BIN" - "$SID" <<'PY'
+import asyncio
+import sys
+
+import iterm2
+
+sid = sys.argv[1]
+rc = 0
+
+
+async def main(connection):
+    global rc
+
+    async def _close():
+        app = await iterm2.async_get_app(connection)
+        s = app.get_session_by_id(sid)
+        if s is None:
+            print(f"Error: Session '{sid}' not found", file=sys.stderr)
+            return 3
+        try:
+            await s.async_close(force=True)
+        except iterm2.RPCException as e:
+            print(f"iTerm2 API error: {e}", file=sys.stderr)
+            return 3
+        print("Session closed")
+        return 0
+
+    try:
+        rc = await asyncio.wait_for(_close(), timeout=20)
+    except asyncio.TimeoutError:
+        print("Error: forced close timed out after 20s (iTerm2 unresponsive)", file=sys.stderr)
+        rc = 4
+
+
+try:
+    iterm2.run_until_complete(main)
+except Exception as e:
+    print(f"Connection error: {e}", file=sys.stderr)
+    print("Make sure iTerm2 is running and Python API is enabled.", file=sys.stderr)
+    sys.exit(2)
+sys.exit(rc)
+PY
+  fi
 fi
 
 exec "$REAL_IT2" "$@"
