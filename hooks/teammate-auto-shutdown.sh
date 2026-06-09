@@ -16,10 +16,12 @@
 #      unconditionally. Teammate writes it before multi-turn work.
 #   5. CLOSE THE EXACT PANE, then remove the worktree. The pane id is read
 #      from the team config.json member field `tmuxPaneId` (an iTerm2 session
-#      UUID under the it2 backend, or a tmux %N id) and closed with the SAME
-#      primitive CC 2.1.161 uses natively: `it2 session close -f -s <id>`
-#      (the -f force flag is present in 2.1.161 — GH #24385 is fixed) or
-#      `tmux kill-pane -t <id>`.
+#      UUID under the it2 backend, or a tmux %N id) and closed with
+#      `it2 session close -f -s <id>` — which the ~/.claude/bin/it2 shim
+#      reroutes to a python iterm2 close with force=True (it2 0.2.3 never
+#      propagates -f to the API, and iTerm2's non-forced close prompts on
+#      running-job panes REGARDLESS of the never-prompt profile; memory:
+#      it2-session-close-force-modal-2026-06-09) — or `tmux kill-pane -t <id>`.
 #
 # WHY NOT `kill -TERM $PPID` (the retired mechanism): a TeammateIdle hook runs
 # on the LEAD as  lead-claude → /bin/sh -c → bash, so $PPID is the /bin/sh shim,
@@ -49,22 +51,28 @@ log() {
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG_DIR/teammate-lifecycle.log" 2>/dev/null || true
 }
 
-# --- Pane-close primitives (CC 2.1.161 native lifecycle) -----------------------
-# Resolve the it2 CLI. The ~/.claude/bin/it2 PATH shim only rewrites `session
-# split` (to inject the Claude-Teammate no-prompt profile); `session close` and
-# `session list` pass straight through, so calling the shim here is safe.
-_it2_bin() { command -v it2 2>/dev/null || echo "$HOME/Library/Python/3.11/bin/it2"; }
+# --- Pane-close primitives ------------------------------------------------------
+# Resolve the it2 CLI. Calling the SHIM (~/.claude/bin/it2, first in PATH) here
+# is REQUIRED, not incidental: it rewrites `session split` (injects the
+# Claude-Teammate no-prompt profile) AND `session close -f -s <id>` (reroutes
+# to a python iterm2 force=True close). The real CLI's `close -f` does NOT
+# propagate force to the API and pops iTerm2's running-job confirmation modal
+# on every live teammate pane (memory: it2-session-close-force-modal-2026-06-09).
+_it2_bin() { command -v it2 2>/dev/null || echo "$HOME/.claude/bin/it2"; }
 
 # Close one teammate pane by its recorded id. Idempotent: closing an
-# already-gone pane just returns non-zero (swallowed). iTerm2 session UUIDs are
-# never recycled, so a stale id can only no-op — it can never hit the wrong pane.
+# already-gone pane fails with "not found" (the caller logs it as such).
+# iTerm2 session UUIDs are never recycled, so a stale id can only no-op — it
+# can never hit the wrong pane. Stderr is captured into CLOSE_ERR so the
+# caller can tell "already gone" from a real failure (RPC error, timeout).
+CLOSE_ERR=""
 close_pane() {
   local pane="$1"
   [[ -n "$pane" ]] || return 1
   if [[ "$pane" =~ ^%[0-9]+$ ]]; then
-    tmux kill-pane -t "$pane" 2>/dev/null            # tmux backend: synchronous, no prompt
+    CLOSE_ERR=$(tmux kill-pane -t "$pane" 2>&1 >/dev/null)   # tmux backend: synchronous, no prompt
   else
-    "$(_it2_bin)" session close -f -s "$pane" 2>/dev/null  # iTerm2 backend: -f force, no prompt
+    CLOSE_ERR=$("$(_it2_bin)" session close -f -s "$pane" 2>&1 >/dev/null)  # shim → python force=True
   fi
 }
 
@@ -267,10 +275,15 @@ echo '{"continue": false, "stopReason": "Idle teammate auto-shutdown (work prese
 (
   sleep 3
   if [[ -n "$PANEID" ]]; then
-    if close_pane "$PANEID"; then
+    close_pane "$PANEID"
+    CP_RC=$?
+    CP_ERR="${CLOSE_ERR//$'\n'/ ; }"
+    if (( CP_RC == 0 )); then
       log "  ✓ closed pane $PANEID ($MEMBER_NAME)"
+    elif [[ "$CP_ERR" == *"not found"* || "$CP_ERR" == *"find pane"* ]]; then
+      log "  ~ pane $PANEID ($MEMBER_NAME) already gone (${CP_ERR:-not found})"
     else
-      log "  ~ close_pane non-zero for $PANEID ($MEMBER_NAME) — likely already gone"
+      log "  ✗ pane close FAILED (rc=$CP_RC) for $PANEID ($MEMBER_NAME): ${CP_ERR:-<no stderr>}"
     fi
   else
     log "  ! no pane id resolved for $MEMBER_NAME — left for CC session-end cleanup"
