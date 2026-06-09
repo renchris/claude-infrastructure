@@ -37,13 +37,19 @@ if [ -n "$TEAM_NAME" ] && [ -n "$MODEL" ]; then
   ALLOWED_FLAT=$(echo "$ALLOWED" | tr '\n' ' ')
   MODEL_BASE="${MODEL%%\[*}"                        # strip [1m]-style suffixes
   ALLOW_OK=0
-  if [ "$MODEL" = "opus" ]; then
-    ALLOW_OK=1   # family alias — resolves to the current allowlisted Opus
-  else
-    for m in $ALLOWED; do
-      [ "$MODEL_BASE" = "$m" ] && ALLOW_OK=1
-    done
-  fi
+  case "$MODEL_BASE" in
+    *-*)  # full model ID — must match an allowlisted ID exactly
+      for m in $ALLOWED; do
+        [ "$MODEL_BASE" = "$m" ] && ALLOW_OK=1
+      done
+      ;;
+    *)    # bare family alias (opus, fable, …) — allowed iff the allowlist
+          # contains a model of that family (alias resolves to it)
+      for m in $ALLOWED; do
+        case "$m" in claude-"$MODEL_BASE"-*) ALLOW_OK=1 ;; esac
+      done
+      ;;
+  esac
   if [ "$ALLOW_OK" -ne 1 ]; then
     cat <<EOF
 {
