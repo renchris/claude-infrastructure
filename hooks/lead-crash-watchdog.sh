@@ -72,10 +72,14 @@ log "registered session=$SESSION_ID pid=$LEAD_PID"
 
   handle_crash() {
     local pid="$1" sid="$2"
-    local affected_teams=()
+    local affected_team_dirs=()
 
-    # Which teams had this session as lead?
-    for team_config in "$HOME/.claude/teams"/*/config.json; do
+    # Which teams had this session as lead? Scan BOTH team roots — CC writes
+    # $CLAUDE_CONFIG_DIR/teams/<team>/, so *2-launcher leads (claude-next2 /
+    # claude-fable2) keep their team state only under ~/.claude-secondary/teams
+    # (memory: teammate-shutdown-secondary-config-dir-2026-06-09). The dir each
+    # config was FOUND in is carried through — never re-derived from a root.
+    for team_config in "$HOME/.claude/teams"/*/config.json "$HOME/.claude-secondary/teams"/*/config.json; do
       [[ -f "$team_config" ]] || continue
       local team_dir
       team_dir=$(dirname "$team_config")
@@ -85,32 +89,35 @@ log "registered session=$SESSION_ID pid=$LEAD_PID"
       local lead_sid
       lead_sid=$(jq -r '.leadSessionId // empty' "$team_config" 2>/dev/null)
       if [[ "$lead_sid" == "$sid" ]]; then
-        affected_teams+=("$team_name")
+        affected_team_dirs+=("$team_dir")
       fi
     done
 
-    if [[ ${#affected_teams[@]} -eq 0 ]]; then
+    if [[ ${#affected_team_dirs[@]} -eq 0 ]]; then
       echo "[watchdog $sid] crash — no teams affected (lead had no active team)"
       rm -f "$WATCHDOG_DIR/$sid.pid" "$WATCHDOG_DIR/$sid.id"
       return 0
     fi
 
-    echo "[watchdog $sid] crash affects ${#affected_teams[@]} team(s): ${affected_teams[*]}"
+    echo "[watchdog $sid] crash affects ${#affected_team_dirs[@]} team(s): ${affected_team_dirs[*]}"
 
-    for team_name in "${affected_teams[@]}"; do
-      write_crash_report "$team_name" "$pid" "$sid"
-      send_shutdown_requests "$team_name" "$sid"
+    for team_dir in "${affected_team_dirs[@]}"; do
+      write_crash_report "$team_dir" "$pid" "$sid"
+      send_shutdown_requests "$team_dir" "$sid"
     done
 
-    osascript -e "display notification \"Lead crashed. ${#affected_teams[@]} team(s) affected. See CRASH_REPORT.md\" with title \"Claude Code Watchdog\" sound name \"Basso\"" 2>/dev/null || true
+    osascript -e "display notification \"Lead crashed. ${#affected_team_dirs[@]} team(s) affected. See CRASH_REPORT.md\" with title \"Claude Code Watchdog\" sound name \"Basso\"" 2>/dev/null || true
     printf '\a' >/dev/tty 2>/dev/null || true
 
     rm -f "$WATCHDOG_DIR/$sid.pid" "$WATCHDOG_DIR/$sid.id"
   }
 
   write_crash_report() {
-    local team_name="$1" pid="$2" sid="$3"
-    local team_dir="$HOME/.claude/teams/$team_name"
+    local team_dir="$1" pid="$2" sid="$3"
+    local team_name
+    team_name=$(basename "$team_dir")
+    local team_root
+    team_root=$(dirname "$team_dir")
     local report="$team_dir/CRASH_REPORT.md"
 
     {
@@ -139,7 +146,7 @@ log "registered session=$SESSION_ID pid=$LEAD_PID"
       echo "## Recovery"
       echo ""
       echo "1. Start a new claude session. Do NOT \`claude --resume\`."
-      echo "2. Archive this team dir: \`mv ~/.claude/teams/$team_name ~/.claude/teams/_archive/$team_name-\$(date +%s)\`"
+      echo "2. Archive this team dir: \`mv $team_dir $team_root/_archive/$team_name-\$(date +%s)\`"
       echo "3. Run \`scripts/team/respawn-team.sh $team_name\` (if team-briefs/$team_name/ exists) to get the paste block."
       echo "4. Check teammate worktrees for uncommitted work: \`git reflog refs/checkpoints/<member>/\` (if teammate-checkpoint.sh was active)."
       echo ""
@@ -149,8 +156,7 @@ log "registered session=$SESSION_ID pid=$LEAD_PID"
   }
 
   send_shutdown_requests() {
-    local team_name="$1" sid="$2"
-    local team_dir="$HOME/.claude/teams/$team_name"
+    local team_dir="$1" sid="$2"
 
     for inbox in "$team_dir/inboxes"/*.json; do
       [[ -f "$inbox" ]] || continue
