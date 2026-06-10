@@ -16,7 +16,11 @@
 #      unconditionally. Teammate writes it before multi-turn work.
 #   5. CLOSE THE EXACT PANE, then remove the worktree. The pane id is read
 #      from the team config.json member field `tmuxPaneId` (an iTerm2 session
-#      UUID under the it2 backend, or a tmux %N id) and closed with
+#      UUID under the it2 backend, or a tmux %N id), looked up across ALL
+#      team roots — CC writes $CLAUDE_CONFIG_DIR/teams/<team>/, so a team led
+#      from a *2 launcher (claude-next2 / claude-fable2 → ~/.claude-secondary)
+#      lives ONLY under ~/.claude-secondary/teams (memory:
+#      teammate-shutdown-secondary-config-dir-2026-06-09) — and closed with
 #      `it2 session close -f -s <id>` — which the ~/.claude/bin/it2 shim
 #      reroutes to a python iterm2 close with force=True (it2 0.2.3 never
 #      propagates -f to the API, and iTerm2's non-forced close prompts on
@@ -45,6 +49,14 @@ readonly MAX_DEFERS="${TEAMMATE_MAX_DEFERS:-3}"
 readonly HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly LOG_DIR="$HOME/.claude/logs"
 readonly WATCHDOG_DIR="$HOME/.claude/watchdog"
+
+# Team-state roots. CC writes $CLAUDE_CONFIG_DIR/teams/<team>/ — the *2 launchers
+# (claude-next2 / claude-fable2 / cc-next2) run on ~/.claude-secondary, whose
+# teams/ is a REAL isolated dir; ~/.claude-next/teams is a symlink into
+# ~/.claude/teams, so these two roots cover every launcher (same pair as
+# verify-team.sh). Order is a tie-break only — pane resolution prefers whichever
+# root recorded a non-empty tmuxPaneId for this member.
+readonly TEAM_ROOTS=("$HOME/.claude-secondary/teams" "$HOME/.claude/teams")
 
 mkdir -p "$LOG_DIR" "$WATCHDOG_DIR" 2>/dev/null || true
 log() {
@@ -135,16 +147,19 @@ if MANIFEST_WT=$(resolve_from_manifest "$PAYLOAD_CWD"); then
 fi
 
 # Fallback: a global TSV (<member>\t<worktree>) persisted by create-team.sh —
-# keyed only by team, so it needs no project path from the payload.
+# keyed only by team, so it needs no project path from the payload. Scan every
+# team root: create-team.sh writes under ~/.claude/teams, but a secondary-led
+# team's state may exist only under ~/.claude-secondary/teams.
 if [[ -z "$WORKTREE" ]]; then
-  TSV="$HOME/.claude/teams/$TEAM_NAME/worktrees.tsv"
-  if [[ -f "$TSV" ]]; then
+  for _root in "${TEAM_ROOTS[@]}"; do
+    TSV="$_root/$TEAM_NAME/worktrees.tsv"
+    [[ -f "$TSV" ]] || continue
     for m in "${MEMBER_CANDIDATES[@]}"; do
       cand=$(awk -F'\t' -v want="$m" '$1==want{print $2; exit}' "$TSV" 2>/dev/null || echo '')
       cand="${cand/#\~/$HOME}"
-      if [[ -n "$cand" && -d "$cand" ]]; then WORKTREE="$cand"; break; fi
+      if [[ -n "$cand" && -d "$cand" ]]; then WORKTREE="$cand"; break 2; fi
     done
-  fi
+  done
 fi
 
 # Legacy /tmp exact-match attempt (only if manifest/TSV didn't resolve)
@@ -244,12 +259,17 @@ if [[ -n "$WORKTREE" ]]; then
 fi
 
 # Rule 5 — close the teammate's pane, then remove its worktree.
-# Resolve the pane id + canonical member name from the team config.json. The
+# Resolve the pane id + canonical member name from the team config.json across
+# TEAM_ROOTS — a secondary-led team's config lives ONLY under
+# ~/.claude-secondary/teams (the tier0 lingering-pane bug, 2026-06-09). The
 # member name may be auto-incremented, so match against MEMBER_CANDIDATES.
+# Prefer the root whose config recorded a non-empty tmuxPaneId: a stale
+# same-named team dir in the other root must never shadow the live one.
 PANEID=""
 MEMBER_NAME="$TEAMMATE_NAME"
-CONFIG="$HOME/.claude/teams/$TEAM_NAME/config.json"
-if [[ -f "$CONFIG" ]]; then
+for _root in "${TEAM_ROOTS[@]}"; do
+  CONFIG="$_root/$TEAM_NAME/config.json"
+  [[ -f "$CONFIG" ]] || continue
   RESOLVED=$(jq -r --args \
     '.members[]? | select(.name as $n | $ARGS.positional | index($n)) | "\(.name)\t\(.tmuxPaneId // "")"' \
     "${MEMBER_CANDIDATES[@]}" < "$CONFIG" 2>/dev/null | head -1)
@@ -257,8 +277,9 @@ if [[ -f "$CONFIG" ]]; then
     MEMBER_NAME="${RESOLVED%%$'\t'*}"
     PANEID="${RESOLVED#*$'\t'}"
     [[ -z "$MEMBER_NAME" ]] && MEMBER_NAME="$TEAMMATE_NAME"
+    [[ -n "$PANEID" ]] && break
   fi
-fi
+done
 
 # Forensic confirmation of the retired `kill -TERM $PPID` bug (logs only; no kill
 # fires). On the next real team run, grep teammate-lifecycle.log for "PPID-forensic"
