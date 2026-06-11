@@ -50,13 +50,13 @@ readonly HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly LOG_DIR="$HOME/.claude/logs"
 readonly WATCHDOG_DIR="$HOME/.claude/watchdog"
 
-# Team-state roots. CC writes $CLAUDE_CONFIG_DIR/teams/<team>/ — the *2 launchers
-# (claude-next2 / claude-fable2 / cc-next2) run on ~/.claude-secondary, whose
-# teams/ is a REAL isolated dir; ~/.claude-next/teams is a symlink into
-# ~/.claude/teams, so these two roots cover every launcher (same pair as
-# verify-team.sh). Order is a tie-break only — pane resolution prefers whichever
-# root recorded a non-empty tmuxPaneId for this member.
-readonly TEAM_ROOTS=("$HOME/.claude-secondary/teams" "$HOME/.claude/teams")
+# Team-state roots. CC writes $CLAUDE_CONFIG_DIR/teams/<team>/ — the *2/*3 launchers
+# (claude-next2 / claude-fable2 / cc-next2 on ~/.claude-secondary; claude-next3 /
+# claude-fable3 / cc-next3 on ~/.claude-tertiary) run on a REAL isolated teams/ dir;
+# ~/.claude-next/teams is a symlink into ~/.claude/teams, so these roots cover every
+# launcher (same set as verify-team.sh). Order is a tie-break only — pane resolution
+# prefers whichever root recorded a non-empty tmuxPaneId for this member.
+readonly TEAM_ROOTS=("$HOME/.claude-secondary/teams" "$HOME/.claude-tertiary/teams" "$HOME/.claude/teams")
 
 mkdir -p "$LOG_DIR" "$WATCHDOG_DIR" 2>/dev/null || true
 log() {
