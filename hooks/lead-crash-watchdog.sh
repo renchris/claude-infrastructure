@@ -74,12 +74,13 @@ log "registered session=$SESSION_ID pid=$LEAD_PID"
     local pid="$1" sid="$2"
     local affected_team_dirs=()
 
-    # Which teams had this session as lead? Scan BOTH team roots — CC writes
-    # $CLAUDE_CONFIG_DIR/teams/<team>/, so *2-launcher leads (claude-next2 /
-    # claude-fable2) keep their team state only under ~/.claude-secondary/teams
+    # Which teams had this session as lead? Scan ALL team roots — CC writes
+    # $CLAUDE_CONFIG_DIR/teams/<team>/, so *2/*3-launcher leads (claude-next2 /
+    # claude-fable2 → ~/.claude-secondary; claude-next3 / claude-fable3 →
+    # ~/.claude-tertiary) keep their team state only under that account's teams/
     # (memory: teammate-shutdown-secondary-config-dir-2026-06-09). The dir each
     # config was FOUND in is carried through — never re-derived from a root.
-    for team_config in "$HOME/.claude/teams"/*/config.json "$HOME/.claude-secondary/teams"/*/config.json; do
+    for team_config in "$HOME/.claude/teams"/*/config.json "$HOME/.claude-secondary/teams"/*/config.json "$HOME/.claude-tertiary/teams"/*/config.json; do
       [[ -f "$team_config" ]] || continue
       local team_dir
       team_dir=$(dirname "$team_config")
