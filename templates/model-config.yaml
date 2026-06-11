@@ -36,10 +36,13 @@ roles:
 
 # Reasoning effort per role profile. Universal Opus 4.7 means model-eligibility
 # constraints are out; effort is the only tuning axis. Lead judges mundane-ness
-# during Phase 0 and opts into `xhigh` by exporting `CLAUDE_CODE_EFFORT_LEVEL=xhigh`
-# in the fresh terminal tab BEFORE launching `claude`. Default shell export stays
-# `max` (~/.zshrc line 69). Per-teammate effort is NOT supported by the Agent tool
-# (GH #25591) — effort is team-run level, inherited from the lead's env var at spawn.
+# during Phase 0 and opts into `xhigh` via `claude --effort xhigh` (or the claude-x
+# wrapper). Effort defaults ride the launchers' injected `--effort` flag
+# (zshrc CLAUDE_DEFAULT_EFFORT, default max) + settings.json "effortLevel" floor —
+# NEVER `export CLAUDE_CODE_EFFORT_LEVEL`: the env var is re-read every turn,
+# outranks /effort for the whole session, and cannot be unset from inside
+# (2026-06-11 redesign). Per-teammate effort is NOT supported by the Agent tool
+# (GH #25591) — teammate panes resolve the settings floor.
 # Rule doc: memory/feedback-agent-team-models.md (2026-04-17 revision).
 effort_defaults:
   default: max                              # implementer, reviewer, doctor, lead, researcher

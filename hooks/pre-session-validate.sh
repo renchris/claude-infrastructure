@@ -36,6 +36,40 @@ log() {
 # Consume stdin (SessionStart hook receives JSON but we don't need it)
 cat >/dev/null 2>&1 || true
 
+# === SETTINGS MODEL PORTABILITY GUARD (2026-06-11) ===
+# `/model <X>` "saved as default" writes "model" into ~/.claude/settings.json,
+# which is SYMLINKED into every CLAUDE_CONFIG_DIR (next/secondary/tertiary) — so
+# a window-bound frontier model (fable / claude-fable-5) saved from an eval-track
+# session poisons the STABLE track: 2.1.114 can't resolve it and every plain
+# `claude` launch dies with "There's an issue with the selected model".
+# Frontier sessions never need the saved default (claude-fable pins --model
+# explicitly), so stripping it is always safe. Self-heal + warn. Observed live
+# 2026-06-11 (a /model fable save broke stable-track probes). On new frontier
+# tiers, extend the case pattern via the /model-upgrade skill.
+SETTINGS_FILE="$HOME/.claude/settings.json"
+if [[ -f "$SETTINGS_FILE" ]] && command -v python3 >/dev/null 2>&1; then
+  saved_model=$(python3 -c "import json;print(json.load(open('$SETTINGS_FILE')).get('model',''))" 2>/dev/null || echo '')
+  case "$saved_model" in
+    fable|claude-fable*)
+      cp "$SETTINGS_FILE" "$SETTINGS_FILE.bak-model-guard-$(date +%s)" 2>/dev/null || true
+      python3 - "$SETTINGS_FILE" <<'PYEOF' 2>>"$LOG_FILE" || true
+import json, os, sys, tempfile
+p = sys.argv[1]
+with open(p) as f:
+    d = json.load(f)
+d.pop('model', None)
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(p), prefix='.settings-model-guard-')
+with os.fdopen(fd, 'w') as f:
+    json.dump(d, f, indent=2, ensure_ascii=False)
+    f.write('\n')
+os.replace(tmp, p)
+PYEOF
+      log "model guard: stripped non-portable saved model '$saved_model' from settings.json"
+      echo "[pre-session-validate] stripped saved default model '$saved_model' from shared settings.json (window-bound frontier model would break the stable track; frontier launchers pin --model explicitly)." >&2
+      ;;
+  esac
+fi
+
 if [[ ! -L "$VERSIONS_DIR/current" ]]; then
   log "no current symlink at $VERSIONS_DIR/current — nothing to validate"
   exit 0
