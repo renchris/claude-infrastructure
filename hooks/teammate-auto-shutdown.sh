@@ -50,13 +50,30 @@ readonly HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly LOG_DIR="$HOME/.claude/logs"
 readonly WATCHDOG_DIR="$HOME/.claude/watchdog"
 
-# Team-state roots. CC writes $CLAUDE_CONFIG_DIR/teams/<team>/ — the *2/*3 launchers
-# (claude-next2 / claude-fable2 / cc-next2 on ~/.claude-secondary; claude-next3 /
-# claude-fable3 / cc-next3 on ~/.claude-tertiary) run on a REAL isolated teams/ dir;
-# ~/.claude-next/teams is a symlink into ~/.claude/teams, so these roots cover every
-# launcher (same set as verify-team.sh). Order is a tie-break only — pane resolution
-# prefers whichever root recorded a non-empty tmuxPaneId for this member.
-readonly TEAM_ROOTS=("$HOME/.claude-secondary/teams" "$HOME/.claude-tertiary/teams" "$HOME/.claude/teams")
+# Team-state roots. CC writes $CLAUDE_CONFIG_DIR/teams/<team>/config.json with
+# each member's tmuxPaneId — including on the 2.1.183 IMPLICIT-team model (teams
+# named `session-<id>`; verified 2026-06-28). The *2/*3/*4 launchers each run a
+# DIFFERENT, REAL config dir (claude-next2 → ~/.claude-secondary, next3 →
+# ~/.claude-tertiary, next4 → ~/.claude-quaternary, …), so a team led from any of
+# them records its pane ids ONLY under THAT dir's teams/. Scan the CURRENT
+# session's config dir first, then EVERY ~/.claude*/teams root.
+#
+# The old hardcoded three {secondary, tertiary, .claude} silently dropped panes
+# for teams led from an unlisted dir — e.g. ~/.claude-quaternary (the vihard
+# session), the exact source of the original "no pane id resolved → pane stays
+# open on 2.1.183" report. (The earlier RCA "implicit-team writes no config" was
+# wrong: the config existed, just under an unscanned root.) Order is a tie-break
+# only — the resolver below prefers whichever root recorded a non-empty
+# tmuxPaneId, so extra/duplicate roots (e.g. the ~/.claude-next → ~/.claude
+# symlink) are harmless.
+_team_roots=()
+[[ -n "${CLAUDE_CONFIG_DIR:-}" && -d "${CLAUDE_CONFIG_DIR}/teams" ]] && _team_roots+=("${CLAUDE_CONFIG_DIR}/teams")
+shopt -s nullglob
+_team_roots+=("$HOME"/.claude*/teams)
+shopt -u nullglob
+[[ ${#_team_roots[@]} -eq 0 ]] && _team_roots+=("$HOME/.claude/teams")
+readonly TEAM_ROOTS=("${_team_roots[@]}")
+unset _team_roots
 
 mkdir -p "$LOG_DIR" "$WATCHDOG_DIR" 2>/dev/null || true
 log() {
@@ -86,6 +103,112 @@ close_pane() {
   else
     CLOSE_ERR=$("$(_it2_bin)" session close -f -s "$pane" 2>&1 >/dev/null)  # shim → python force=True
   fi
+}
+
+# Close + log one pane (shared by the config-resolved AND implicit-team paths).
+close_and_log() {
+  local pane="$1" who="$2"
+  close_pane "$pane"
+  local rc=$?
+  local err="${CLOSE_ERR//$'\n'/ ; }"
+  if (( rc == 0 )); then
+    log "  ✓ closed pane $pane ($who)"
+  elif [[ "$err" == *"not found"* || "$err" == *"find pane"* ]]; then
+    log "  ~ pane $pane ($who) already gone (${err:-not found})"
+  else
+    log "  ✗ pane close FAILED (rc=$rc) for $pane ($who): ${err:-<no stderr>}"
+  fi
+}
+
+# --- Implicit-team (CC 2.1.178+) pane resolution — DEFENSE IN DEPTH -------------
+# PRIMARY resolution is still the config.json/tmuxPaneId loop below — which now
+# works on the 2.1.183 implicit-team model too, because TEAM_ROOTS scans every
+# ~/.claude*/teams root (the missing-root bug, fixed above). This block is the
+# BACKSTOP for the residual cases where the config loop still yields PANEID="":
+# a config-WRITE RACE (a teammate that idles before CC has written its pane id),
+# or a future config dir that doesn't match ~/.claude*. It is independent of the
+# config bookkeeping entirely.
+#
+# The lever: on the implicit-team model the TeammateIdle hook runs as a
+# descendant of the IDLE TEAMMATE'S OWN claude.exe, so $PPID is
+# `claude.exe --agent-id <member>@session-<id> ...` (verified empirically — the
+# "PPID-forensic" log line below). We resolve THAT process's iTerm2 pane id and
+# close it the same way. Two methods, both validated 2026-06-28 against a live
+# pane (lead pane 28EBFC93… ↔ ITERM_SESSION_ID env AND tty ttys031):
+#   A) ITERM_SESSION_ID from the process env (`ps eww`) — instant; used in-body.
+#   B) controlling tty → iTerm2 session whose `tty` var matches — used in the
+#      unbounded detached close (it does an iTerm2 API round-trip).
+# SAFETY (load-bearing): only ever resolve from a process whose command contains
+# `--agent-id <THIS teammate>@`. Never the lead (no --agent-id), never another
+# teammate. No match → empty → old behavior (leave for CC session-end cleanup).
+# A forced close must never be able to hit the wrong pane.
+readonly PANE_PYTHON_BIN="/Library/Frameworks/Python.framework/Versions/3.11/bin/python3.11"
+
+# Walk up from $PPID (bounded) to the claude.exe whose --agent-id matches this
+# teammate (any MEMBER_CANDIDATES form). Echoes the pid; empty on no match.
+_find_teammate_pid() {
+  local pid="$PPID" depth=0 cmd m
+  while [[ -n "$pid" && "$pid" =~ ^[0-9]+$ && "$pid" -gt 1 && $depth -lt 6 ]]; do
+    cmd=$(ps -p "$pid" -o command= 2>/dev/null)
+    if [[ "$cmd" == *"claude.exe"* ]]; then
+      for m in "${MEMBER_CANDIDATES[@]}"; do
+        if [[ -n "$m" && "$cmd" == *"--agent-id ${m}@"* ]]; then
+          printf '%s\n' "$pid"; return 0
+        fi
+      done
+    fi
+    pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
+    depth=$((depth + 1))
+  done
+  return 1
+}
+
+# iTerm2 session UUID from a pid via its ITERM_SESSION_ID env var
+# (shape `<window><tab><pane>:<UUID>`). Echoes UUID; empty on failure.
+_pane_from_env() {
+  local pid="$1" line sid
+  [[ -n "$pid" ]] || return 1
+  line=$(ps eww -p "$pid" 2>/dev/null | tr ' ' '\n' | grep -m1 '^ITERM_SESSION_ID=')
+  sid="${line##*:}"
+  [[ "$sid" =~ ^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$ ]] \
+    && printf '%s\n' "$sid"
+}
+
+# iTerm2 session UUID from a pid via its controlling tty (API enumeration).
+# Echoes UUID; empty on failure. Bounded 3s so even a detached call can't wedge.
+_pane_from_tty() {
+  local pid="$1" tty
+  [[ -n "$pid" ]] || return 1
+  [[ -x "$PANE_PYTHON_BIN" ]] || return 1
+  tty=$(ps -o tty= -p "$pid" 2>/dev/null | tr -d ' ')
+  [[ -n "$tty" && "$tty" != "??" ]] || return 1
+  "$PANE_PYTHON_BIN" - "/dev/$tty" <<'PY' 2>/dev/null
+import asyncio, sys
+try:
+    import iterm2
+except Exception:
+    sys.exit(0)
+want = sys.argv[1]
+async def main(connection):
+    async def _find():
+        app = await iterm2.async_get_app(connection)
+        for w in app.terminal_windows:
+            for t in w.tabs:
+                for s in t.all_sessions:
+                    if str(await s.async_get_variable("tty")) == want:
+                        return s.session_id
+        return None
+    try:
+        sid = await asyncio.wait_for(_find(), timeout=3)
+    except asyncio.TimeoutError:
+        sid = None
+    if sid:
+        print(sid)
+try:
+    iterm2.run_until_complete(main)
+except Exception:
+    pass
+PY
 }
 
 INPUT=$(cat)
@@ -281,9 +404,26 @@ for _root in "${TEAM_ROOTS[@]}"; do
   fi
 done
 
-# Forensic confirmation of the retired `kill -TERM $PPID` bug (logs only; no kill
-# fires). On the next real team run, grep teammate-lifecycle.log for "PPID-forensic"
-# to confirm $PPID was the dead/recycled /bin/sh shim, never the teammate pane.
+# Implicit-team (CC 2.1.178+) fallback — env-method, instant: if the config
+# lookup found no pane id, resolve from the idle teammate's OWN claude.exe
+# ($PPID on this model). Safety-gated to a process whose --agent-id matches this
+# teammate (see helpers). The slower tty-method runs later in the unbounded
+# detached close, so we keep this in-body path instant (5s hook budget).
+TEAMMATE_PID=""
+if [[ -z "$PANEID" ]]; then
+  TEAMMATE_PID=$(_find_teammate_pid || true)
+  if [[ -n "$TEAMMATE_PID" ]]; then
+    PANEID=$(_pane_from_env "$TEAMMATE_PID" || true)
+    [[ -n "$PANEID" ]] \
+      && log "  ↳ implicit-team: pane $PANEID for $MEMBER_NAME via env (teammate pid $TEAMMATE_PID)"
+  fi
+fi
+
+# PPID-forensic (logs only; no kill). On the classic 2.1.114 LEAD-side model
+# $PPID was the dead/recycled /bin/sh shim (the retired `kill -TERM $PPID` bug);
+# on the 2.1.183 implicit-team model $PPID is the idle teammate's own claude.exe
+# (`--agent-id <member>@session-<id>`) — which is exactly what the implicit-team
+# resolver above keys off. Grep teammate-lifecycle.log for "PPID-forensic".
 log "  PPID-forensic: \$PPID=$PPID cmd=[$(ps -p "$PPID" -o command= 2>/dev/null | tr -d '\n' || echo 'dead/recycled')] pane=[$PANEID] member=$MEMBER_NAME"
 
 # Stop the teammate's current turn — JSON on stdout with exit 0.
@@ -296,18 +436,19 @@ echo '{"continue": false, "stopReason": "Idle teammate auto-shutdown (work prese
 (
   sleep 3
   if [[ -n "$PANEID" ]]; then
-    close_pane "$PANEID"
-    CP_RC=$?
-    CP_ERR="${CLOSE_ERR//$'\n'/ ; }"
-    if (( CP_RC == 0 )); then
-      log "  ✓ closed pane $PANEID ($MEMBER_NAME)"
-    elif [[ "$CP_ERR" == *"not found"* || "$CP_ERR" == *"find pane"* ]]; then
-      log "  ~ pane $PANEID ($MEMBER_NAME) already gone (${CP_ERR:-not found})"
-    else
-      log "  ✗ pane close FAILED (rc=$CP_RC) for $PANEID ($MEMBER_NAME): ${CP_ERR:-<no stderr>}"
-    fi
+    close_and_log "$PANEID" "$MEMBER_NAME"
   else
-    log "  ! no pane id resolved for $MEMBER_NAME — left for CC session-end cleanup"
+    # Implicit-team tty-method fallback (unbounded here — no 5s hook limit), in
+    # case the in-body env-method missed (e.g. ITERM_SESSION_ID absent). Still
+    # safety-gated via _find_teammate_pid's --agent-id match.
+    [[ -z "$TEAMMATE_PID" ]] && TEAMMATE_PID=$(_find_teammate_pid || true)
+    LATE_PANE=$(_pane_from_tty "$TEAMMATE_PID" || true)
+    if [[ -n "$LATE_PANE" ]]; then
+      log "  ↳ implicit-team: pane $LATE_PANE for $MEMBER_NAME via tty (teammate pid $TEAMMATE_PID)"
+      close_and_log "$LATE_PANE" "$MEMBER_NAME"
+    else
+      log "  ! no pane id resolved for $MEMBER_NAME — left for CC session-end cleanup"
+    fi
   fi
   if [[ -n "$WORKTREE" ]]; then
     MAIN_REPO=$(git -C "$WORKTREE" rev-parse --git-common-dir 2>/dev/null | sed 's|/\.git$||')
