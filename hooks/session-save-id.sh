@@ -1,8 +1,8 @@
 #!/bin/bash
 # SessionEnd hook — saves session ID for instant resume.
-# Writes to:
-#   1. ~/.claude/.last-session              (global, any-project quick resume)
-#   2. ~/.claude/projects/<hash>/.last-session-id  (per-project resume)
+# Writes to (per-account root = ${CLAUDE_CONFIG_DIR:-~/.claude}):
+#   1. <config-dir>/.last-session              (global, any-project quick resume)
+#   2. <config-dir>/projects/<hash>/.last-session-id  (per-project resume)
 # Performance target: <10ms (two atomic writes, no subprocesses beyond jq).
 set -euo pipefail
 
@@ -20,7 +20,7 @@ REASON=$(echo "$INPUT" | jq -r '.reason // empty' 2>/dev/null)
 [ "$REASON" = "clear" ] && exit 0
 
 # 1. Global last-session file
-GLOBAL_FILE="$HOME/.claude/.last-session"
+GLOBAL_FILE="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.last-session"
 printf '%s\n' "$SESSION_ID" > "$GLOBAL_FILE"
 
 # 2. Per-project last-session-id
@@ -29,7 +29,7 @@ if [ -n "$TRANSCRIPT_PATH" ]; then
   PROJECT_DIR=$(dirname "$TRANSCRIPT_PATH")
 elif [ -n "$CWD" ]; then
   encoded=$(echo "$CWD" | sed 's|/|-|g')
-  PROJECT_DIR="$HOME/.claude/projects/$encoded"
+  PROJECT_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/$encoded"
 fi
 
 if [ -n "$PROJECT_DIR" ] && [ -d "$PROJECT_DIR" ]; then

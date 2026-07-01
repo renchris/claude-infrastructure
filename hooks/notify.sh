@@ -10,7 +10,8 @@ SCREENREADER_SOUNDS="/System/Library/PrivateFrameworks/ScreenReader.framework/Ve
 LOG_FILE="/tmp/claude-notify.log"
 
 # Debounce: prevent duplicate notifications within 2 seconds
-DEBOUNCE_FILE="/tmp/claude-notify-${EVENT_TYPE}.lock"
+_ACCT="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"; _ACCT="${_ACCT##*/}"
+DEBOUNCE_FILE="/tmp/claude-notify-${_ACCT}-${EVENT_TYPE}.lock"
 if [[ -f "$DEBOUNCE_FILE" ]]; then
     LAST_NOTIFY=$(stat -f %m "$DEBOUNCE_FILE" 2>/dev/null || echo 0)
     NOW=$(date +%s)
