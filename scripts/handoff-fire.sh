@@ -36,11 +36,13 @@
 #   --base REF          Base ref for --worktree (default origin/main; fetched first).
 #   --in-place          Prefix CLAUDE_ISOLATION_SKIP=1 (launch in cwd even at the reso primary
 #                       root, where claude-next otherwise auto-creates a fresh worktree).
-#   --split-right       DEFAULT. Split the CURRENT pane, new pane to the side — the ⌘D
-#                       experience: same view, same profile. (AppleScript "split vertically")
-#   --split-down        Split the current pane, new pane below (⌘⇧D). ("split horizontally")
-#   --tab               New tab in current window (background — not in the current view).
-#   --window            New iTerm2 window.
+#   --split-right       DEFAULT. Split the FIRING pane — THIS session's own pane, located via
+#                       $ITERM_SESSION_ID — new pane to the side: the ⌘D experience (same view,
+#                       same profile) IN THE OPERATOR'S WINDOW. NOT iTerm2's app-frontmost window
+#                       (which, with several windows open, is some OTHER window at fire time).
+#   --split-down        Split the firing pane, new pane below (⌘⇧D). ("split horizontally")
+#   --tab               New background tab in the FIRING pane's window (not in the current view).
+#   --window            New iTerm2 window (fresh window — no firing-pane anchoring, by design).
 #   --probe             Liveness-probe the account headlessly before firing (haiku, or fable-5
 #                       when --model fable). auto: walk the ranked list to the first passing
 #                       account. Explicit account: hard-fail with the rejection class.
@@ -480,11 +482,106 @@ else
 fi
 
 # ---- spawn the surface -----------------------------------------------------------------------
-# Escaping (load-bearing, in this order): backslashes first, then double-quotes.
-# The typed line stays short + single-line; the multi-line prompt travels via $(cat file).
+# Anchor new surfaces to the FIRING session — the pane THIS script was launched from — NOT
+# iTerm2's app-frontmost window. Root cause of the "fires land in another window" bug: the old
+# spawn targeted `current session of current window`, i.e. whichever window was key at fire time.
+# The firing agent triggers this from a Bash-tool subprocess that iTerm2's frontmost is unrelated
+# to (empirically, with 11 windows open, `current window` was a DIFFERENT window than the firing
+# pane's). $ITERM_SESSION_ID is inherited into that subprocess (verified) and its UUID matches
+# iTerm2's `id of session`, so searching every window for it (exactly as as_write/as_tty already
+# do for recycle/self-close, and mirroring the teammate `it2 session split -s <lead>` pattern)
+# lands --split-right/--split-down/--tab in the OPERATOR'S window — the true ⌘D experience.
+# --session-id overrides the env-derived anchor (headless/testing).
+_itsid="${ITERM_SESSION_ID:-}"
+FIRING_SID="${SESSION_ID:-${_itsid##*:}}"
+
+# ESC is for the FRONTMOST FALLBACK path only — that path embeds the command inside an AppleScript
+# string literal via -e "…write text \"$ESC\"", so backslashes then double-quotes must be escaped
+# (load-bearing order). The targeted path (as_split/as_tab) passes $CMD RAW through osascript argv,
+# which reaches `write text` verbatim with no string-literal parsing — no escaping needed.
 ESC="$(printf '%s' "$CMD" | sed 's/\\/\\\\/g; s/"/\\"/g')"
 
-spawn() { case "$SURFACE" in
+# Targeted split: find the firing session in ANY window, ⌘D-split it (same profile), type the raw
+# command into the new pane, raise its window + focus the new pane. Echoes "OK <id>" on success or
+# "NOTFOUND" when the anchor session is gone (→ caller falls back). Captures the split's returned
+# session DIRECTLY — never re-enumerates windows after the mutation (that throws iTerm2 -1719).
+as_split() { # $1=session-uuid  $2=raw-command-text  $3=vertically|horizontally
+  osascript - "$1" "$2" "$3" <<'AS'
+on run argv
+  set sid to item 1 of argv
+  set theText to item 2 of argv
+  set splitDir to item 3 of argv
+  tell application "iTerm2"
+    activate
+    set found to missing value
+    set foundWin to missing value
+    repeat with w in windows
+      repeat with t in tabs of w
+        repeat with s in sessions of t
+          if id of s is sid then
+            set found to s
+            set foundWin to w
+            exit repeat
+          end if
+        end repeat
+        if found is not missing value then exit repeat
+      end repeat
+      if found is not missing value then exit repeat
+    end repeat
+    if found is missing value then return "NOTFOUND"
+    if splitDir is "horizontally" then
+      tell found to set newSess to (split horizontally with same profile)
+    else
+      tell found to set newSess to (split vertically with same profile)
+    end if
+    tell newSess to write text theText
+    tell foundWin to select
+    tell newSess to select
+    return "OK " & (id of newSess)
+  end tell
+end run
+AS
+}
+
+# Targeted tab: create a background tab in the firing session's WINDOW (not the frontmost window),
+# type the raw command into it, raise that window. Same NOTFOUND/OK contract as as_split.
+as_tab() { # $1=session-uuid  $2=raw-command-text
+  osascript - "$1" "$2" <<'AS'
+on run argv
+  set sid to item 1 of argv
+  set theText to item 2 of argv
+  tell application "iTerm2"
+    activate
+    set foundWin to missing value
+    repeat with w in windows
+      repeat with t in tabs of w
+        repeat with s in sessions of t
+          if id of s is sid then
+            set foundWin to w
+            exit repeat
+          end if
+        end repeat
+        if foundWin is not missing value then exit repeat
+      end repeat
+      if foundWin is not missing value then exit repeat
+    end repeat
+    if foundWin is missing value then return "NOTFOUND"
+    tell foundWin
+      set newTab to (create tab with default profile)
+      set newSess to current session of newTab
+    end tell
+    tell newSess to write text theText
+    tell foundWin to select
+    return "OK " & (id of newSess)
+  end tell
+end run
+AS
+}
+
+# Frontmost fallback = the ORIGINAL behavior verbatim (targets iTerm2's app-frontmost window).
+# Reached ONLY when no firing anchor exists (script run outside an iTerm2 shell / zero windows) or
+# the anchor session can't be located — a fire in some window beats no fire. Uses $ESC (embedded).
+spawn_frontmost() { case "$SURFACE" in
   tab)  # fire.sh recipe + zero-window fallback (fresh window IS the surface then)
     osascript -e 'tell application "iTerm2"' \
               -e 'activate' \
@@ -519,6 +616,31 @@ spawn() { case "$SURFACE" in
               -e "tell current session of newWin to write text \"$ESC\"" \
               -e 'end tell' >/dev/null ;;
 esac; }
+
+# Dispatcher: anchor split/tab to the FIRING window when we can; else the frontmost fallback.
+spawn() {
+  # A brand-new --window has no firing-window ambiguity; with no anchor we can't target at all.
+  if [ "$SURFACE" = "window" ]; then spawn_frontmost; return; fi
+  if [ -z "$FIRING_SID" ]; then
+    echo "⚠ no \$ITERM_SESSION_ID/--session-id to anchor to — using app-frontmost window (surface may land in another window)" >&2
+    spawn_frontmost; return
+  fi
+  local out=""
+  case "$SURFACE" in
+    split-right)  out="$(as_split "$FIRING_SID" "$CMD" vertically   2>/dev/null)" || out="ERR($?)" ;;
+    split-down)   out="$(as_split "$FIRING_SID" "$CMD" horizontally 2>/dev/null)" || out="ERR($?)" ;;
+    tab)          out="$(as_tab   "$FIRING_SID" "$CMD"              2>/dev/null)" || out="ERR($?)" ;;
+  esac
+  case "$out" in
+    OK\ *) : ;;                                    # landed in the firing window — done
+    NOTFOUND)
+      echo "⚠ firing session $FIRING_SID not found in iTerm2 — falling back to app-frontmost window" >&2
+      spawn_frontmost ;;
+    *)
+      echo "⚠ targeted spawn failed ($out) — falling back to app-frontmost window" >&2
+      spawn_frontmost ;;
+  esac
+}
 
 # Recycle executor: /exit foreground (held built-in — queues behind the calling turn, runs at
 # turn end; keystrokes MUST be foreground, detached AppleEvents fail silently), then a detached
@@ -572,6 +694,14 @@ if [ "$DRY" = 1 ]; then
     echo "chain:    arm watcher → FOREGROUND /exit (interrupts any in-flight turn, exits in seconds — emit report/fallback BEFORE firing) → detached ps-poll ≤600s (CR nudges @60/150/300s) → it2-typed relaunch into the shell"
   else
     echo "surface:  $SURFACE"
+    case "$SURFACE" in
+      split-right|split-down|tab)
+        if [ -n "$FIRING_SID" ]; then
+          echo "anchor:   firing session $FIRING_SID — surface lands in ITS window (⌘D-style)"
+        else
+          echo "anchor:   (no \$ITERM_SESSION_ID/--session-id — app-frontmost window; may land elsewhere)"
+        fi ;;
+    esac
   fi
   if [ "$PROBE" = 1 ]; then
     pm="claude-haiku-4-5"; [ "$FABLE_EFFECTIVE" = 1 ] && pm="claude-fable-5"
