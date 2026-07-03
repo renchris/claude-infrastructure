@@ -44,26 +44,34 @@
 #   --probe             Liveness-probe the account headlessly before firing (haiku, or fable-5
 #                       when --model fable). auto: walk the ranked list to the first passing
 #                       account. Explicit account: hard-fail with the rejection class.
-#   --recycle           RECYCLE the CURRENT session instead of spawning: queue keystrokes into
-#                       this pane ($ITERM_SESSION_ID, or --session-id UUID) — /clear, then
-#                       /model + /effort ONLY if given (typed /model+/effort also mutate the
-#                       account's saved defaults — skip when not re-tiering), then the payload
-#                       FLATTENED TO ONE LINE (typed newlines submit). The lines queue while the
-#                       calling turn finishes, then execute in order (empirically verified,
-#                       2.1.183). A detached watchdog nudges a swallowed Enter (observed ~1-in-6
-#                       around turn-end redraws). Single-track Mode-A only: same account, same
-#                       worktree; wipes the visible transcript. Excludes --worktree/--cwd/
-#                       --account/surface flags.
+#   --recycle           RECYCLE the CURRENT session's pane ($ITERM_SESSION_ID, or --session-id
+#                       UUID): EXIT + RELAUNCH — never /clear + queued payload. CC's queue is
+#                       type-asymmetric (2026-07-03 catnav incident): built-in slash commands
+#                       hold until the calling turn ends, but PLAIN TEXT is steered INTO the
+#                       still-running turn at the next tool-result boundary — and this script's
+#                       own Bash call guarantees that boundary, so a queued payload ran inline
+#                       in the OLD context while /clear stayed armed behind it. Instead: arm a
+#                       detached watcher, then type /exit (which INTERRUPTS any in-flight turn
+#                       and exits in seconds — E2E'd; put report + fallback BEFORE the fire);
+#                       the watcher ps-polls the pane's tty until claude exits and types
+#                       `cd <cwd> && <launcher> [flags] "$(cat F)"` into the plain SHELL via the
+#                       it2 python-API CLI (AppleEvent-free; verified detached). Payload arrives
+#                       VERBATIM (multi-line safe — no flatten); model/effort ride as launcher
+#                       FLAGS (typed /model+/effort mutated saved defaults); old transcript
+#                       stays resumable via --resume. Account defaults to THIS session's
+#                       (CLAUDE_CONFIG_DIR-derived); --account/--launcher/--model/--effort/
+#                       --extra/--probe all compose. Excludes --worktree/--cwd/surface flags.
 #   --session-id UUID   Recycle/self-close target pane (default: $ITERM_SESSION_ID's UUID).
 #
 # Subcommand:
 #   self-close [--session-id UUID] [--allow-dirty]
 #                       Close the CURRENT session end-to-end once its work is done — the Agent
-#                       Teams assignee pattern for peer sessions. Detached watcher: (1) types
-#                       /exit into the pane (queues behind the calling turn; graceful — SessionEnd
-#                       hooks run, transcript stays resumable via --resume), (2) polls the pane's
-#                       tty until the claude process is gone (nudges a swallowed Enter once),
-#                       (3) closes the pane via the ~/.claude/bin/it2 shim (modal-free force
+#                       Teams assignee pattern for peer sessions. Arms the watcher FIRST, then
+#                       types /exit (INTERRUPTS any in-flight turn and exits in seconds — E2E
+#                       2026-07-03; graceful: SessionEnd hooks run, transcript stays resumable
+#                       via --resume). Watcher: (1) polls the pane's tty until the claude
+#                       process is gone (one it2 CR nudge at 60s submits a stranded /exit),
+#                       (2) closes the pane via the ~/.claude/bin/it2 shim (modal-free force
 #                       close; the window follows automatically when it was the last pane).
 #                       CC still alive after ~2min → teammate-style force-close anyway (logged).
 #                       Guard: refuses on a DIRTY git tree in cwd unless --allow-dirty. NEVER
@@ -84,7 +92,7 @@ MODEL_CONFIG="$HOME/.claude/model-config.yaml"
 
 PROMPT_FILE="" ACCOUNT="auto" LAUNCHER="" MODEL="" EFFORT="" CWD="" WORKTREE=""
 REPO="$DEFAULT_REPO" WTROOT="$HOME/Development/.worktrees" BASE="origin/main"
-SURFACE="split-right" PROBE=0 DRY=0 IN_PLACE=0 EXTRA="" RECYCLE=0 SESSION_ID=""
+SURFACE="split-right" SURFACE_EXPLICIT=0 PROBE=0 DRY=0 IN_PLACE=0 EXTRA="" RECYCLE=0 SESSION_ID=""
 
 # Print the header comment up to (excluding) the first non-comment sentinel — growth-proof range.
 usage() { sed -n '2,/^set -euo pipefail/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
@@ -149,6 +157,9 @@ if [ "${1:-}" = "__selfclose" ]; then
     while [ "$waited" -lt 180 ]; do
       sleep 5; waited=$((waited+5))
       cc_alive || break                            # ps on a known tty is reliable — no flake class
+      # One CR nudge at 60s (it2 python API — proven detached): submits a stranded /exit whose
+      # Enter a redraw swallowed; a no-op on an empty composer. MUST be \r — Ink ignores \n.
+      [ "$waited" = 60 ] && "$HOME/.claude/bin/it2" session send -s "$SID" $'\r' >/dev/null 2>&1 || true
     done
     cc_alive && echo "⚠ CC still alive after ${waited}s — teammate-style force-close" >&2
   fi
@@ -156,14 +167,36 @@ if [ "${1:-}" = "__selfclose" ]; then
   exit 0
 fi
 
-# Internal: recycle watchdog (spawned detached by --recycle). Bare-Enter nudges are no-ops on an
-# empty input box and submit a stranded payload whose Enter got swallowed by a turn-end redraw.
-if [ "${1:-}" = "__nudge" ]; then
-  NSID="${2:?__nudge needs a session id}"
-  for _ in 1 2 3; do
-    osascript -e 'delay 15' >/dev/null 2>&1
-    as_write "$NSID" "" >/dev/null 2>&1 || true
+# Internal: recycle watcher (spawned detached by --recycle). ONLY AppleEvent-free work, same
+# constraint as __selfclose: ps-based tty polling + it2 python-API writes (both proven detached).
+# Waits for the typed /exit to land (claude process gone from the tty), then types the relaunch
+# command into the plain shell. CR nudges via it2 submit a stranded /exit whose Enter a turn-end
+# redraw swallowed (~1-in-6) — a no-op on an empty composer, a bare newline in a shell. MUST be
+# \r not \n: CC's Ink TUI only binds Enter to CR (verified 2026-07-03 — \n was a no-op on an Ink
+# prompt, \r activated it); zsh accepts either.
+if [ "${1:-}" = "__recycle" ]; then
+  RSID="${2:?__recycle needs a session id}"
+  TTY_PATH="${3:?__recycle needs the pane tty}"
+  CMDFILE="${4:?__recycle needs the command file}"
+  IT2="$HOME/.claude/bin/it2"
+  cc_alive() { ps -o comm= -t "$(basename "$TTY_PATH")" 2>/dev/null | grep -qE 'node|claude'; }
+  waited=0
+  while [ "$waited" -lt 600 ] && cc_alive; do
+    sleep 3; waited=$((waited+3))
+    case "$waited" in 60|150|300) "$IT2" session send -s "$RSID" $'\r' >/dev/null 2>&1 || true ;; esac
   done
+  if cc_alive; then
+    echo "!! CC still alive after ${waited}s — giving up. Relaunch manually: $(cat "$CMDFILE")" >&2
+    exit 1
+  fi
+  sleep 2                                        # shell-prompt settle after claude exits
+  ok=0
+  for _ in 1 2; do
+    if "$IT2" session run -s "$RSID" "$(cat "$CMDFILE")" >/dev/null 2>&1; then ok=1; break; fi
+    sleep 3
+  done
+  [ "$ok" = 1 ] || { echo "!! it2 relaunch write failed twice — run manually in the pane: $(cat "$CMDFILE")" >&2; exit 1; }
+  echo "→ relaunched in $RSID: $(cat "$CMDFILE")"
   exit 0
 fi
 
@@ -191,31 +224,38 @@ if [ "${1:-}" = "self-close" ]; then
   if [ "$SC_DRY" = 1 ]; then
     echo "── dry run (self-close) ─────────────────────────"
     echo "pane:  $SC_SID"
-    echo "chain: FOREGROUND /exit + anti-strand Enter (queue behind this turn) → detached ps-poll ≤180s → it2 force-close pane"
+    echo "chain: arm watcher → FOREGROUND /exit (interrupts any in-flight turn, exits in seconds) → detached ps-poll ≤180s (CR nudge @60s) → it2 force-close pane"
     exit 0
   fi
-  # Keystrokes FOREGROUND (detached osascript AppleEvents fail silently — see __selfclose header):
-  # /exit queues behind the calling turn; the bare Enter 1.5s later submits it if the newline got
-  # swallowed (no-op on an empty box). tty is captured here and handed to the watcher.
+  # Keystrokes FOREGROUND (detached osascript AppleEvents fail silently — see __selfclose header).
+  # ORDER IS LOAD-BEARING: watcher FIRST, /exit LAST — a typed /exit INTERRUPTS the in-flight
+  # turn and exits within seconds (E2E 2026-07-03; it does NOT enqueue-to-turn-end like /clear),
+  # so in own-pane use the interrupt can kill this Bash tool at /exit+ε. Arm before typing.
   SC_TTY="$(as_tty "$SC_SID")"
+  SC_LOG="/tmp/handoff-selfclose-$SC_SID-$(date +%s).log"
   if [ -n "$SC_TTY" ] && ! ps -o comm= -t "$(basename "$SC_TTY")" 2>/dev/null | grep -qE 'node|claude'; then
     # No CC on the pane (shell-only, or still launching): typing /exit would hit the SHELL and
     # vanish (observed). Nothing to exit gracefully — the watcher closes the pane directly.
     echo "→ no CC on $SC_TTY — skipping /exit, closing pane directly" >&2
+    nohup "$0" __selfclose "$SC_SID" "$SC_TTY" >"$SC_LOG" 2>&1 &
+    disown 2>/dev/null || true
   else
+    nohup "$0" __selfclose "$SC_SID" "$SC_TTY" >"$SC_LOG" 2>&1 &
+    SC_WATCHER=$!
+    disown 2>/dev/null || true
+    echo "→ self-close armed for $SC_SID: watcher (ps-poll + shim close) detached (log: $SC_LOG)"
     wrote=0
     for _ in 1 2 3; do
       if as_write "$SC_SID" "/exit" 2>/dev/null; then wrote=1; break; fi
       osascript -e 'delay 2' >/dev/null 2>&1
     done
-    [ "$wrote" = 1 ] || { echo "!! could not type /exit into $SC_SID — is the pane gone?" >&2; exit 1; }
+    # /exit untypeable → un-arm: otherwise the watcher force-closes a healthy session at 180s.
+    [ "$wrote" = 1 ] || { kill "$SC_WATCHER" 2>/dev/null; echo "!! could not type /exit into $SC_SID — watcher disarmed" >&2; exit 1; }
+    # Anti-strand best-effort (may not run if the interrupt kills us first — the watcher's CR
+    # nudge at 60s covers a stranded /exit).
     osascript -e 'delay 1.5' >/dev/null 2>&1
     as_write "$SC_SID" "" 2>/dev/null || true
   fi
-  SC_LOG="/tmp/handoff-selfclose-$SC_SID-$(date +%s).log"
-  nohup "$0" __selfclose "$SC_SID" "$SC_TTY" >"$SC_LOG" 2>&1 &
-  disown 2>/dev/null || true
-  echo "→ self-close armed for $SC_SID: /exit queued behind this turn; watcher (ps-poll + shim close) detached (log: $SC_LOG)"
   exit 0
 fi
 
@@ -232,10 +272,10 @@ while [ $# -gt 0 ]; do case "$1" in
   --wtroot)      WTROOT="${2:?--wtroot needs a value}"; shift 2 ;;
   --base)        BASE="${2:?--base needs a value}"; shift 2 ;;
   --in-place)    IN_PLACE=1; shift ;;
-  --tab)         SURFACE="tab"; shift ;;
-  --split-right) SURFACE="split-right"; shift ;;
-  --split-down)  SURFACE="split-down"; shift ;;
-  --window)      SURFACE="window"; shift ;;
+  --tab)         SURFACE="tab"; SURFACE_EXPLICIT=1; shift ;;
+  --split-right) SURFACE="split-right"; SURFACE_EXPLICIT=1; shift ;;
+  --split-down)  SURFACE="split-down"; SURFACE_EXPLICIT=1; shift ;;
+  --window)      SURFACE="window"; SURFACE_EXPLICIT=1; shift ;;
   --probe)       PROBE=1; shift ;;
   --recycle)     RECYCLE=1; shift ;;
   --session-id)  SESSION_ID="${2:?--session-id needs a value}"; shift 2 ;;
@@ -258,67 +298,6 @@ case "$MODEL" in
   opus)  MODEL="claude-opus-4-8" ;;
 esac
 
-# ---- recycle mode: /clear + retier + payload typed into the CURRENT pane ---------------------
-# Keystrokes QUEUE while the calling turn finishes, then execute in order (verified on 2.1.183:
-# queued /clear runs, later-queued lines survive it, /model+/effort apply). The payload must be
-# ONE typed line — every newline is an Enter — so it is flattened. A detached watchdog re-sends
-# Enter if the submission newline gets swallowed by a turn-end redraw (observed ~1-in-6).
-if [ "$RECYCLE" = 1 ]; then
-  [ -n "$WORKTREE$CWD" ] && { echo "!! --recycle excludes --worktree/--cwd (same pane = same dir)" >&2; exit 1; }
-  ITSID="${ITERM_SESSION_ID:-}"
-  SID="${SESSION_ID:-${ITSID##*:}}"
-  [ -n "$SID" ] || { echo "!! --recycle needs \$ITERM_SESSION_ID or --session-id" >&2; exit 1; }
-  PAYLOAD="$(tr '\n' ' ' < "$PROMPT_FILE" | sed 's/  */ /g; s/ $//')"
-  if [ "$DRY" = 1 ]; then
-    echo "── dry run (recycle) ────────────────────────────"
-    echo "pane:     $SID"
-    echo "queue:    /clear${MODEL:+ → /model $MODEL}${EFFORT:+ → /effort $EFFORT} → payload (1 line, $(printf '%s' "$PAYLOAD" | wc -c | tr -d ' ') chars)"
-    echo "payload:  $(printf '%.120s' "$PAYLOAD")…"
-    exit 0
-  fi
-  # ONE osascript: find the session once, hold the reference, type the whole sequence through it.
-  # (Per-write re-enumeration was observed to fail transiently on the Nth lookup.)
-  osascript - "$SID" "$PAYLOAD" "$MODEL" "$EFFORT" <<'AS'
-on run argv
-  set theId to item 1 of argv
-  set thePayload to item 2 of argv
-  set theModel to item 3 of argv
-  set theEffort to item 4 of argv
-  tell application "iTerm2"
-    set theS to missing value
-    repeat with w in windows
-      repeat with t in tabs of w
-        repeat with s in sessions of t
-          if id of s is theId then set theS to s
-        end repeat
-      end repeat
-    end repeat
-    if theS is missing value then error "session not found: " & theId
-    tell theS to write text "/clear"
-    delay 0.4
-    if theModel is not "" then
-      tell theS to write text ("/model " & theModel)
-      delay 0.4
-    end if
-    if theEffort is not "" then
-      tell theS to write text ("/effort " & theEffort)
-      delay 0.4
-    end if
-    tell theS to write text thePayload
-    -- anti-strand: a bare Enter is a no-op on an empty box, a submit on a swallowed newline
-    delay 1.5
-    tell theS to write text ""
-  end tell
-end run
-AS
-  # Detached watchdog (self-reexec): three bare-Enter nudges at ~15s intervals. A bare Enter on
-  # an empty CC input box is a NO-OP; on a stranded (Enter-swallowed) payload it submits it.
-  nohup "$0" __nudge "$SID" >/tmp/handoff-recycle-watchdog.log 2>&1 &
-  disown 2>/dev/null || true
-  echo "→ recycling session $SID: queued /clear${MODEL:+ + /model $MODEL}${EFFORT:+ + /effort $EFFORT} + payload; watchdog armed (log: /tmp/handoff-recycle-watchdog.log)"
-  exit 0
-fi
-
 # ---- account maps + activity proxy ---------------------------------------------------------
 cfg_dir() { case "$1" in
   next)  echo "$HOME/.claude-next" ;;
@@ -326,6 +305,41 @@ cfg_dir() { case "$1" in
   next3) echo "$HOME/.claude-tertiary" ;;
   next4) echo "$HOME/.claude-quaternary" ;;
   *) return 1 ;; esac; }
+
+env_account() { # reverse of cfg_dir: THIS session's account from its own CLAUDE_CONFIG_DIR
+  case "${CLAUDE_CONFIG_DIR:-}" in
+    "$HOME/.claude-next")       echo next ;;
+    "$HOME/.claude-secondary")  echo next2 ;;
+    "$HOME/.claude-tertiary")   echo next3 ;;
+    "$HOME/.claude-quaternary") echo next4 ;;
+    *) return 1 ;; esac; }
+
+# ---- recycle mode pre-pass: exit + relaunch in the CURRENT pane ------------------------------
+# WHY exit+relaunch, not /clear + queued payload (the 2026-07-03 catnav incident): CC's message
+# queue is TYPE-ASYMMETRIC — built-in slash commands hold until the calling turn ends, but plain
+# text is STEERED into the still-running turn at the next tool-result boundary (delivered as a
+# queued_command attachment). The old design typed /clear + payload from inside this script's
+# own Bash call, so that call's result boundary deterministically injected the payload INLINE
+# (the model kept working in the OLD context) while /clear stayed queued behind it, armed to
+# wipe everything at turn end. The Jul-2 verification missed this because its busy turn was
+# pure text generation — no tool boundary, so nothing steered. The only queue semantic this
+# design still relies on is /exit (a built-in) holding to turn end — the exact behavior the
+# incident re-confirmed and self-close's E2E proved. Everything after the exit is queue-free.
+# The relaunch composes through the normal account/launcher/flag machinery below; SID + account
+# defaulting happen here, execution happens in recycle_fire at the bottom.
+SID=""
+if [ "$RECYCLE" = 1 ]; then
+  [ -n "$WORKTREE$CWD" ] && { echo "!! --recycle excludes --worktree/--cwd (same pane = same dir)" >&2; exit 1; }
+  [ "$SURFACE_EXPLICIT" = 1 ] && { echo "!! --recycle excludes surface flags (same pane by definition)" >&2; exit 1; }
+  ITSID="${ITERM_SESSION_ID:-}"
+  SID="${SESSION_ID:-${ITSID##*:}}"
+  [ -n "$SID" ] || { echo "!! --recycle needs \$ITERM_SESSION_ID or --session-id" >&2; exit 1; }
+  IN_PLACE=1                                     # relaunch stays in this pane's dir by definition
+  if [ -z "$LAUNCHER" ] && [ "$ACCOUNT" = "auto" ]; then
+    ACCOUNT="$(env_account)" \
+      || { echo "!! --recycle: can't derive this session's account from CLAUDE_CONFIG_DIR='${CLAUDE_CONFIG_DIR:-}' — pass --account or --launcher" >&2; exit 1; }
+  fi
+fi
 
 # Account 1 (.claude-next) mirrors projects/ back into ~/.claude — read activity there.
 proj_dir() { case "$1" in next) echo "$HOME/.claude/projects" ;; *) echo "$(cfg_dir "$1")/projects" ;; esac; }
@@ -427,7 +441,12 @@ PREFIX=""
 # Paths are typed into an interactive zsh line — %q-quote them so spaces/metachars can't split
 # or execute (conventional slugs pass through unchanged).
 QP="$(printf %q "$PROMPT_FILE")"
-if [ -n "$WORKTREE" ]; then
+if [ "$RECYCLE" = 1 ]; then
+  # Same pane, same dir: $PWD is the session's working dir (the harness re-pins the Bash tool
+  # cwd to it). PREFIX carries CLAUDE_ISOLATION_SKIP=1 (IN_PLACE forced in the pre-pass) so a
+  # repo-root relaunch can't auto-create a fresh worktree out from under the continuation.
+  CMD="cd $(printf %q "$PWD") && ${PREFIX}${LAUNCHER}${ARGS} \"\$(cat $QP)\""
+elif [ -n "$WORKTREE" ]; then
   WT="$WTROOT/$WORKTREE"
   WT_SETUP="cold"                    # cold | pool | existing — decides whether the pane installs
   POOL="$REPO/scripts/worktree-pool.sh"
@@ -501,12 +520,59 @@ spawn() { case "$SURFACE" in
               -e 'end tell' >/dev/null ;;
 esac; }
 
+# Recycle executor: /exit foreground (held built-in — queues behind the calling turn, runs at
+# turn end; keystrokes MUST be foreground, detached AppleEvents fail silently), then a detached
+# watcher (__recycle) that ps-polls until claude exits and it2-types the relaunch into the shell.
+recycle_fire() {
+  local tty cmdfile log ts wrote
+  ts="$(date +%s)"
+  cmdfile="/tmp/handoff-recycle-cmd-$SID-$ts.sh"
+  log="/tmp/handoff-recycle-$SID-$ts.log"
+  printf '%s\n' "$CMD" > "$cmdfile"
+  tty="$(as_tty "$SID")"
+  [ -n "$tty" ] || { echo "!! recycle: session $SID not found in iTerm2" >&2; exit 1; }
+  if ! ps -o comm= -t "$(basename "$tty")" 2>/dev/null | grep -qE 'node|claude'; then
+    # No CC on the pane (shell-only): nothing to /exit — type the relaunch right now.
+    "$HOME/.claude/bin/it2" session run -s "$SID" "$CMD" \
+      || { echo "!! recycle: it2 write into $SID failed — run manually: $CMD" >&2; exit 1; }
+    echo "→ recycled (no CC was running): typed relaunch into $SID"
+    return 0
+  fi
+  # ORDER IS LOAD-BEARING: watcher FIRST, /exit LAST. A typed /exit INTERRUPTS the in-flight
+  # turn and exits within seconds (E2E 2026-07-03 — twice: the busy turn died with no output
+  # persisted; /exit does NOT enqueue-to-turn-end the way /clear does). When this script runs
+  # in its OWN pane, that interrupt can kill this very Bash tool at /exit+ε — so everything
+  # that must survive (watcher, user-facing fallback line) happens BEFORE the /exit keystroke.
+  nohup "$0" __recycle "$SID" "$tty" "$cmdfile" >"$log" 2>&1 &
+  WATCHER_PID=$!
+  disown 2>/dev/null || true
+  echo "→ recycle armed for $SID: watcher relaunches $LAUNCHER once claude exits (log: $log)"
+  echo "  manual fallback if no relaunch appears: $CMD"
+  wrote=0
+  for _ in 1 2 3; do
+    if as_write "$SID" "/exit" 2>/dev/null; then wrote=1; break; fi
+    osascript -e 'delay 2' >/dev/null 2>&1
+  done
+  # /exit untypeable → un-arm: a live watcher would eventually type the relaunch into a still-
+  # running CC session's composer.
+  [ "$wrote" = 1 ] || { kill "$WATCHER_PID" 2>/dev/null; echo "!! recycle: could not type /exit into $SID — watcher disarmed" >&2; exit 1; }
+  # Anti-strand best-effort: may never run if the interrupt kills us first — the watcher's CR
+  # nudges (@60/150/300s) cover a stranded /exit either way.
+  osascript -e 'delay 1.5' >/dev/null 2>&1
+  as_write "$SID" "" 2>/dev/null || true
+}
+
 if [ "$DRY" = 1 ]; then
   echo "── dry run ──────────────────────────────────────"
   [ -n "$RANKED" ] && { echo "account ranking (5h-activity asc):"; printf '%s\n' "$RANKED" | while read -r a c; do echo "  $a  activity=$c"; done; }
   echo "account:  ${CHOSEN:-auto}"
   echo "launcher: $LAUNCHER"
-  echo "surface:  $SURFACE"
+  if [ "$RECYCLE" = 1 ]; then
+    echo "surface:  (recycle — this pane: $SID)"
+    echo "chain:    arm watcher → FOREGROUND /exit (interrupts any in-flight turn, exits in seconds — emit report/fallback BEFORE firing) → detached ps-poll ≤600s (CR nudges @60/150/300s) → it2-typed relaunch into the shell"
+  else
+    echo "surface:  $SURFACE"
+  fi
   if [ "$PROBE" = 1 ]; then
     pm="claude-haiku-4-5"; [ "$FABLE_EFFECTIVE" = 1 ] && pm="claude-fable-5"
     if [ "$EXPLICIT_LAUNCHER" = 1 ]; then echo "probe:    SKIPPED (explicit --launcher gives no account to probe)"
@@ -521,6 +587,8 @@ if [ "$DRY" = 1 ]; then
     esac
   fi
   echo "command:  $CMD"
+elif [ "$RECYCLE" = 1 ]; then
+  recycle_fire
 else
   spawn
   DEST="${CWD:-$REPO (self-routing)}"; [ -n "$WORKTREE" ] && DEST="$WT ($WT_SETUP)"
