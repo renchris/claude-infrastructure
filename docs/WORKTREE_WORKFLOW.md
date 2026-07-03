@@ -40,11 +40,16 @@ divergence, stale litter). The rule (SSOT: `CLAUDE.md` § Concurrent Sessions, s
 Three traps make naive automation fail, and the tooling encodes all three
 (memory `reference-parallel-session-launch-playbook`, paid for on 2026-07-02):
 
-- **`claude -w` is broken** where a `WorktreeCreate` hook prints human text (CC aborts:
-  "no successful output"). Use the two-step: `scripts/new-worktree.sh <branch> <path>` → `cd` →
-  launch. `handoff-fire.sh --worktree <slug>` automates the fast, race-prone `git worktree add`
-  serially in the spawner and leaves the ~16-19s `pnpm install` to run INSIDE the pane, so N
-  parallel setups overlap — wall-clock ≈ one setup, not N.
+- **Worktree acquisition prefers the WARM POOL, colds-build as fallback.** Where the repo ships
+  `scripts/worktree-pool.sh` (reso does, since 2026-07-02 eve), `handoff-fire.sh --worktree <slug>`
+  CLAIMS a pre-provisioned slot (~3s: node_modules, codegen, `.env.local`, seeded DB all pre-built;
+  claims are slot-locked and never run `git worktree add`, keeping the historical parallel-add races
+  off the hot path). Cold fallback (no pool / custom `--base` for frozen fork refs): the spawner runs
+  the fast, race-prone `git worktree add` serially and leaves the ~16-19s `pnpm install` to run
+  INSIDE the pane, so N parallel setups overlap — wall-clock ≈ one setup, not N. (Historical note:
+  `claude -w` was broken by the repo's `WorktreeCreate` hook printing human text — FIXED 2026-07-02,
+  the hook now prints a plain path and claims from the pool; the explicit-path flow here remains
+  preferred because the spawner needs the path to compose the typed command.)
 - **Launchers are zsh functions/aliases** (`claude-next`, `-next2/3/4`, `claude-fable*`) carrying
   per-account `CLAUDE_CONFIG_DIR` isolation — they resolve ONLY in an interactive shell. So the
   spawner types the command into a fresh iTerm2 surface via osascript `write text`; it never execs.
@@ -103,4 +108,5 @@ account-agnostic, zero rework.
 | Per-account launchers | `~/.zshrc` (`claude-next*`, `claude-fable*`; not synced — contains account wiring) |
 | Model/effort/window SSOT | `~/.claude/model-config.yaml` (not synced) |
 | Per-repo worktree setup | `<repo>/scripts/new-worktree.sh` (repo-specific, e.g. reso) |
+| Warm worktree pool (fast path) | `<repo>/scripts/worktree-pool.sh` — `claim <branch>` prints a provisioned path (repo-specific, reso) |
 | Launch traps provenance | memory `reference-parallel-session-launch-playbook` |
