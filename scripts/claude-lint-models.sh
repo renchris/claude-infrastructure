@@ -29,6 +29,21 @@ trap 'rm -f "$STALE_LITERALS_FILE"' EXIT
 yq -r '.versions | to_entries | .[] | select(.key | test("_prior$")) | .value' "$CONFIG" >> "$STALE_LITERALS_FILE" 2>/dev/null || true
 yq -r '.deprecations | keys[]' "$CONFIG" >> "$STALE_LITERALS_FILE" 2>/dev/null || true
 
+# Frontier access-window expiry check (self-closing downgrade reminder).
+# If the window has lapsed but active is still true, the config — and every doc
+# conditioned on it — is stale. Fails --all mode so CI/cron goes red.
+EXPIRED_WINDOW=0
+fa_active=$(yq -r '.frontier_access.active // false' "$CONFIG" 2>/dev/null)
+fa_end=$(yq -r '.frontier_access.end // ""' "$CONFIG" 2>/dev/null)
+fa_model=$(yq -r '.frontier_access.model // "frontier"' "$CONFIG" 2>/dev/null)
+if [[ "$fa_active" == "true" && -n "$fa_end" ]]; then
+  if [[ "$(date +%Y-%m-%d)" > "$fa_end" ]]; then
+    EXPIRED_WINDOW=1
+    echo "⚠️  frontier_access: $fa_model window ended $fa_end but active: true."
+    echo "    Run the downgrade: see ~/.claude/skills/model-upgrade/SKILL.md § Downgrade."
+  fi
+fi
+
 # Dedupe + strip blanks
 sort -u "$STALE_LITERALS_FILE" | grep -v '^$' > "${STALE_LITERALS_FILE}.clean"
 mv "${STALE_LITERALS_FILE}.clean" "$STALE_LITERALS_FILE"
@@ -92,9 +107,10 @@ elif [[ "$1" == "--all" ]]; then
       fi
     done < <(jq -r '.update[]' "$CLASSIFICATION")
   done < <(jq -r '.roots[]' "$CLASSIFICATION")
-  if [[ $fail_count -gt 0 ]]; then
+  if [[ $fail_count -gt 0 || $EXPIRED_WINDOW -eq 1 ]]; then
     echo ""
-    echo "❌ $fail_count file(s) with stale refs. Fix: claude-bump-models --apply"
+    [[ $fail_count -gt 0 ]] && echo "❌ $fail_count file(s) with stale refs. Fix: claude-bump-models --apply"
+    [[ $EXPIRED_WINDOW -eq 1 ]] && echo "❌ frontier_access window expired — run the downgrade (model-upgrade skill)."
     exit 1
   fi
   echo "✅ All UPDATE-classified files clean."
