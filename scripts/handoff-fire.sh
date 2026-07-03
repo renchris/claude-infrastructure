@@ -24,10 +24,13 @@
 #   --effort E          low|medium|high|xhigh|max → appended `--effort E` (last-wins over the
 #                       launcher-injected default: claude-next=max, claude-fable=high).
 #   --cwd PATH          Launch in an EXISTING directory (worktree, repo, or anywhere).
-#   --worktree BRANCH   Create <wtroot>/BRANCH off --base serially HERE (race-safe), copy
-#                       .env.local, then in-surface: CI=true pnpm install && launch. (fire.sh
-#                       pattern: the slow install overlaps across surfaces, the racy
-#                       `git worktree add` stays serial in the spawner.)
+#   --worktree BRANCH   Get a worktree for BRANCH. Fast path: when <repo>/scripts/worktree-pool.sh
+#                       exists AND --base is origin/main, CLAIM a warm pre-provisioned pool slot
+#                       (~3s; node_modules/codegen/.env.local/DB already built; claim is
+#                       slot-locked, race-free). Fallback (no pool / custom --base / claim fail):
+#                       create <wtroot>/BRANCH off --base serially HERE (race-safe), copy
+#                       .env.local, then in-surface: CI=true pnpm install && launch (fire.sh
+#                       pattern — installs overlap across surfaces).
 #   --repo PATH         Repo root for --worktree (default $HOME/Development/reso-management-app).
 #   --wtroot PATH       Worktree parent dir (default $HOME/Development/.worktrees).
 #   --base REF          Base ref for --worktree (default origin/main; fetched first).
@@ -209,12 +212,29 @@ PREFIX=""
 QP="$(printf %q "$PROMPT_FILE")"
 if [ -n "$WORKTREE" ]; then
   WT="$WTROOT/$WORKTREE"
-  if [ "$DRY" = 0 ] && [ ! -d "$WT" ]; then
+  WT_SETUP="cold"                    # cold | pool | existing — decides whether the pane installs
+  POOL="$REPO/scripts/worktree-pool.sh"
+  POOL_ELIGIBLE=0
+  [ -x "$POOL" ] && [ "$BASE" = "origin/main" ] && POOL_ELIGIBLE=1   # pool slots sit AT origin/main;
+                                                                     # a custom --base (frozen fork ref) needs the cold path
+  if [ -d "$WT" ]; then
+    WT_SETUP="existing"
+  elif [ "$DRY" = 1 ]; then
+    [ "$POOL_ELIGIBLE" = 1 ] && WT_SETUP="pool"
+  elif [ "$POOL_ELIGIBLE" = 1 ] && claimed="$("$POOL" claim "$WORKTREE" 2>/dev/null)" \
+       && [ -n "$claimed" ] && [ -d "$claimed" ]; then
+    WT="$claimed"; WT_SETUP="pool"   # fully provisioned — no in-pane install needed
+  fi
+  if [ "$WT_SETUP" = "cold" ] && [ "$DRY" = 0 ]; then
     git -C "$REPO" fetch origin -q || echo "⚠ fetch failed — basing off last-fetched $BASE" >&2
     ( cd "$REPO" && git worktree add "$WT" -b "$WORKTREE" "$BASE" >/dev/null )
     [ -f "$REPO/.env.local" ] && { cp "$REPO/.env.local" "$WT/.env.local"; chmod 600 "$WT/.env.local"; }
   fi
-  CMD="cd $(printf %q "$WT") && CI=true pnpm install --frozen-lockfile && ${PREFIX}${LAUNCHER}${ARGS} \"\$(cat $QP)\""
+  if [ "$WT_SETUP" = "cold" ]; then
+    CMD="cd $(printf %q "$WT") && CI=true pnpm install --frozen-lockfile && ${PREFIX}${LAUNCHER}${ARGS} \"\$(cat $QP)\""
+  else
+    CMD="cd $(printf %q "$WT") && ${PREFIX}${LAUNCHER}${ARGS} \"\$(cat $QP)\""
+  fi
 elif [ -n "$CWD" ]; then
   CMD="cd $(printf %q "$CWD") && ${PREFIX}${LAUNCHER}${ARGS} \"\$(cat $QP)\""
 else
@@ -276,10 +296,16 @@ if [ "$DRY" = 1 ]; then
     elif [ -n "$NAMES" ]; then echo "probe:    SKIPPED in dry-run (would probe $pm walking: $(printf '%s' "$NAMES" | tr '\n' ' '))"
     else echo "probe:    SKIPPED in dry-run (would probe $pm on $CHOSEN)"; fi
   fi
-  [ -n "$WORKTREE" ] && echo "worktree: $WTROOT/$WORKTREE  (off $BASE, created at fire time)"
+  if [ -n "$WORKTREE" ]; then
+    case "$WT_SETUP" in
+      pool)     echo "worktree: POOL CLAIM at fire time (scripts/worktree-pool.sh claim $WORKTREE — path printed by claim; no in-pane install)" ;;
+      existing) echo "worktree: $WT  (exists — reused as-is)" ;;
+      *)        echo "worktree: $WT  (cold: off $BASE, created at fire time + in-pane install)" ;;
+    esac
+  fi
   echo "command:  $CMD"
 else
   spawn
-  DEST="${CWD:-$REPO (self-routing)}"; [ -n "$WORKTREE" ] && DEST="$WTROOT/$WORKTREE"
+  DEST="${CWD:-$REPO (self-routing)}"; [ -n "$WORKTREE" ] && DEST="$WT ($WT_SETUP)"
   echo "→ fired: $LAUNCHER @ $DEST  (surface: $SURFACE, account: $CHOSEN, prompt: $PROMPT_FILE)"
 fi

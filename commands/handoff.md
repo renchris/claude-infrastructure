@@ -199,9 +199,11 @@ so overrides always stick. The script WARNS (does not block) when `frontier_acce
 hard gate is the API rejection — hence ALWAYS pair Fable with `--probe` (rejection signature: ~600ms,
 "model may not exist or you may not have access" → script walks to the next account or fails loud).
 
-**4 · Location.** Existing worktree → `--cwd <abs-path>`. Fresh track → `--worktree <slug>` (spawner does
-the racy `git worktree add` serially + copies `.env.local`; the ~16-19s `pnpm install` runs IN the new
-pane so parallel fires overlap). Read-only in the repo root → `--cwd <repo> --in-place`
+**4 · Location.** Existing worktree → `--cwd <abs-path>`. Fresh track → `--worktree <slug>` — fast path
+CLAIMS a warm pool slot when `<repo>/scripts/worktree-pool.sh` exists and base is origin/main (~3s,
+fully provisioned, no in-pane install; slot-locked, race-free); cold fallback does the racy
+`git worktree add` serially + copies `.env.local` with the ~16-19s `pnpm install` running IN the new
+pane so parallel fires overlap. Read-only in the repo root → `--cwd <repo> --in-place`
 (`CLAUDE_ISOLATION_SKIP=1`). Nothing given → repo root + launcher self-routing (`_cc_route_check`
 auto-creates a `cc-<ts>` worktree). **Mode C/B fork:** `--worktree <slug> --base handoff/<slug>` (the
 spawner creates the branch AT the frozen ref) and DROP the payload's Step-0 `git checkout -b` line —
