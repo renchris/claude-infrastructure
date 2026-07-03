@@ -92,10 +92,19 @@ Surfaces: `--split-right` default (⌘D — same view, same profile, like a team
   Workflows (prompt-level keyword); a skill-backed slash command (`/goal …`) must be the payload's
   very FIRST line — the CLI never parses it; the receiving model dispatches a leading `/x` via its
   Skill tool.
+- **The emptied main session retires ITSELF** (`handoff-fire.sh self-close`): once a pane-spawn wave
+  is away and exhaustively nothing remains open, it types `/exit` + an anti-strand Enter into its own
+  pane foreground (queued behind the closing turn), and a detached watcher ps-polls the tty until CC
+  exits, then closes the pane via the it2 shim — graceful-first (SessionEnd hooks, resumable
+  transcript; 9s measured), teammate-style force only at the 180s ceiling. Constraint baked in:
+  detached osascript AppleEvents to iTerm2 fail silently (3/3 observed) — keystrokes are foreground-
+  only; the watcher uses only ps + the shim's websocket API. Dirty-tree and no-CC-on-tty guards.
+  Never after `--recycle`.
 - **Prior art**: this is the session-level analog of the Agent-Teams teammate lifecycle
   (`it2 session split -s <lead>` → `tmuxPaneId` in team config → shimmed force-close +
   checkpoint-first idle reaping). Fired sessions differ deliberately: they are PEERS on their own
-  accounts, human-torn-down, never hook-reaped.
+  accounts — self-retired via the graceful self-close above once fully handed off (or human-closed),
+  never reaped by an idle hook.
 
 ## Merge-back and teardown
 

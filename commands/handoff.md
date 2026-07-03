@@ -151,6 +151,15 @@ two `─` rules are the canonical VISIBLE boundary; the fence is the invisible m
    resolved. "paste only" / "hold fire" / "no fire" always suppresses; an explicit "fire" overrides a
    hold. The inline paste (step 5) is always emitted as the manual fallback.
 
+7. **Retire this session (pane-spawn fires only — § Autonomous fire item 7):** when every track went
+   to OTHER sessions and the main chat holds exhaustively nothing further — no open discussion,
+   question, loose end, or decision — this session is redundantly idle: emit the final per-track
+   report, then AS THE VERY LAST ACTION run `~/.claude/scripts/handoff-fire.sh self-close`. The
+   queued `/exit` executes when this turn ends (graceful — SessionEnd hooks run, transcript stays
+   resumable), then the detached watcher closes the iTerm2 pane (window follows when it's the last
+   pane) — the Agent-Teams-assignee close, generalized. NEVER after `--recycle` (the pane IS the
+   continuation), never with anything open, never with a dirty tree (the script refuses).
+
 ## Autonomous fire — end-to-end launch (DEFAULT when nothing is open; "hold fire"/"paste only" suppresses)
 
 Completes the flow the paste block leaves manual: opens a fresh **iTerm2 surface**, `cd`s to the right
@@ -272,14 +281,30 @@ One handoff = the WHOLE wave: N tracks → fire all N, never just the first. One
 invoked serially (keeps worktree adds race-safe). Report a per-track table (launcher@destination,
 surface, prompt path) after firing. All existing bridge guardrails still apply to each payload.
 
+**7 · Self-close — retire the emptied main session (Step 7's mechanism).** Once a pane-spawn wave is
+away and the readiness gate holds exhaustively nothing (no discussions, questions, loose ends,
+decisions), the main session closes ITSELF: `handoff-fire.sh self-close` types `/exit` + an anti-strand
+Enter into its own pane FOREGROUND (they queue behind the closing turn — same verified queue mechanics
+as recycle), then a detached watcher ps-polls the pane's tty until the claude process exits and closes
+the pane via the `~/.claude/bin/it2` shim (window follows when it was the last pane). Graceful-first:
+`/exit` runs SessionEnd hooks and leaves the transcript resumable (`--resume` / claude-search); the
+watcher force-closes teammate-style only at its 180s ceiling (logged to
+`/tmp/handoff-selfclose-<sid>-<ts>.log`). Empirical E2E: graceful close in 9s. Hard-won constraints
+baked into the script: ALL keystrokes are typed foreground — detached osascript AppleEvents to iTerm2
+fail silently (3/3 observed); the watcher does only AppleEvent-free work (ps + the shim's python
+websocket API, both proven detached). Guards: dirty git tree refuses (`--allow-dirty` to override);
+a pane with no CC on its tty skips `/exit` and just closes (mis-arm/launch-latency protection); emit
+the final report BEFORE arming — it stays on screen until the close. NEVER pair with `--recycle`.
+
 **Prior art (why this shape):** it is the session-level analog of Agent Teams' teammate lifecycle — CC
 spawns each teammate pane via `it2 session split -s <lead>` (the `~/.claude/bin/it2` shim injects the
 `Claude-Teammate` profile), records the pane's session UUID at `teams/<team>/config.json →
 members[].tmuxPaneId`, and closes it via `it2 session close -f -s <id>` (shim-rerouted to python
 `async_close(force=True)`), with idle-close owned by the TeammateIdle hook (`teammate-auto-shutdown.sh`,
 checkpoint-first). The fire flow differs deliberately: its sessions are PEERS on their own accounts —
-opened with the human-facing default profile so the zsh launchers resolve, torn down by the human, never
-by a hook.
+opened with the human-facing default profile so the zsh launchers resolve, and retired by the session
+ITSELF via § item 7's graceful self-close once its work is fully handed off (or by the human), never by
+an idle hook.
 
 ## Guardrails
 
