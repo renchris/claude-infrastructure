@@ -114,12 +114,21 @@ if $IS_GLOBAL; then
 fi
 
 # --- Scripts ---
+# Primary ~/.claude → SYMLINK (same as hooks/commands above) so edits to the live
+# scripts land in the repo directly and can't silently drift out of version control —
+# the failure mode observed 2026-07-03, when handoff-fire.sh drifted +198 lines in the
+# deployment and was one `install.sh` (copy_file clobber) away from being lost.
+# Alt config dirs → COPY, to stay independent of the primary (copy_file's rationale).
 echo ""
 echo "Scripts → $CONFIG_DIR/scripts/"
 ensure_real_dir "$CONFIG_DIR/scripts"
 for script in "$REPO_DIR"/scripts/*.sh; do
   [[ -f "$script" ]] || continue
-  copy_file "$script" "$CONFIG_DIR/scripts/$(basename "$script")"
+  if $IS_GLOBAL; then
+    link_file "$script" "$CONFIG_DIR/scripts/$(basename "$script")"
+  else
+    copy_file "$script" "$CONFIG_DIR/scripts/$(basename "$script")"
+  fi
 done
 
 # Convenience symlink (global only)
