@@ -145,9 +145,11 @@ two `─` rules are the canonical VISIBLE boundary; the fence is the invisible m
    readiness gate: any open discussion, unanswered question, or decision the user must make before the
    new session starts (STOP-ASK surfaces, unfrozen scope, a doc the payload references that doesn't
    exist yet)? If NONE → fire autonomously: write each track's payload to `/tmp/fire-<slug>.txt` and
-   spawn via `~/.claude/scripts/handoff-fire.sh` — every track, not just the first. If ANY → name them,
-   HOLD fire, and fire once resolved. "paste only" / "hold fire" / "no fire" always suppresses; an
-   explicit "fire" overrides a hold. The inline paste (step 5) is always emitted as the manual fallback.
+   spawn via `~/.claude/scripts/handoff-fire.sh` — every track, not just the first. A SINGLE Mode-A
+   track fires as `--recycle` (this pane `/clear`s and continues — § Autonomous fire item 4); multi-track,
+   forks, and account switches spawn panes. If ANY open item → name them, HOLD fire, and fire once
+   resolved. "paste only" / "hold fire" / "no fire" always suppresses; an explicit "fire" overrides a
+   hold. The inline paste (step 5) is always emitted as the manual fallback.
 
 ## Autonomous fire — end-to-end launch (DEFAULT when nothing is open; "hold fire"/"paste only" suppresses)
 
@@ -208,9 +210,17 @@ pane so parallel fires overlap. Read-only in the repo root → `--cwd <repo> --i
 auto-creates a `cc-<ts>` worktree). **Mode C/B fork:** `--worktree <slug> --base handoff/<slug>` (the
 spawner creates the branch AT the frozen ref) and DROP the payload's Step-0 `git checkout -b` line —
 the branch already exists; keep only the rebase/verify lines. `--wtroot` relocates the worktree parent
-if the bridge promised `/tmp/wt-<slug>`. **Mode A fire:** `--cwd <THIS session's worktree>` — the fired
-session replaces the manual `/clear`+paste; close THIS session once the new pane takes over (the brief
-two-sessions-one-worktree overlap is harmless — the old session only reads from there on its way out).
+if the bridge promised `/tmp/wt-<slug>`. **Mode A fire (single track) → RECYCLE this session, not a new
+pane:** `--recycle` queues keystrokes into THIS pane (`/clear`, then `/model`/`/effort` ONLY when
+re-tiering — typed re-tiers also mutate the account's saved defaults — then the payload); the lines
+queue while the closing turn finishes and execute in order (empirically verified on 2.1.183: a queued
+`/clear` runs and later-queued lines survive it; a detached watchdog re-Enters a swallowed submission,
+observed ~1-in-6 at turn-end redraws). Same worktree, same account, zero new panes — the streamlined
+`/clear`+re-prompt the manual flow always was. Constraints: the payload is FLATTENED TO ONE LINE (typed
+newlines submit — compose Mode-A recycle payloads short), the visible transcript is wiped (the bridge
+file + payload survive), and it's same-account by construction (need a different account or a parallel
+fork → spawn a pane instead: `--cwd <this worktree>`, close this session after handover). Re-verify
+queue semantics on CC version bumps.
 
 **5 · Surface.** Default = `--split-right`: splits the CURRENT pane like ⌘D (same view, same profile) —
 the new session appears right next to where the user is looking, exactly like an Agent Teams teammate

@@ -78,6 +78,13 @@ Surfaces: `--split-right` default (⌘D — same view, same profile, like a team
 - **Fire is the default close of `/handoff`**, gated by READINESS not permission: no open
   discussion/question/decision → it fires; anything open → it names the blocker, holds, fires after.
   "paste only" / "hold fire" always suppresses; the paste block remains the manual fallback.
+- **A single same-worktree continuation RECYCLES the current session** (`--recycle`): keystrokes
+  queued into the session's own pane — `/clear`, optional `/model`+`/effort` (only when re-tiering;
+  typed re-tiers mutate the account's saved defaults), then the one-line-flattened payload — execute
+  in order after the closing turn ends (verified on CC 2.1.183: a queued `/clear` runs and
+  later-queued lines survive it; a detached bare-Enter watchdog covers the ~1-in-6 swallowed-submit
+  flake). Zero new panes, same account/worktree; the visible transcript is wiped by design.
+  Multi-track waves, forks, and account switches spawn panes instead.
 - **Waves are first-class**: N handoff tracks → N sessions, one script call each, fired serially
   (installs overlap in-pane). Account spread is the LEAD's job for waves — auto-ranking can't see
   sessions that haven't started yet, so rank once and assign round-robin, ≤2 tracks per account.
