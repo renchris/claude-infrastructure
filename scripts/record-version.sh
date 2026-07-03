@@ -64,6 +64,20 @@ main() {
   printf '{"version":"%s","status":"%s","date_added":"%s","notes":"%s"}\n' \
     "$version" "$status" "$ts" "$escaped_notes" >> "$MANIFEST_FILE"
 
+  # --- Auto-archive (Phase B; idempotent; background; non-fatal) ---
+  # Fires archive-version.sh for candidate/stable statuses. Sentinel at
+  # ~/.claude-versions/<version>/.archived-current prevents re-upload; gh
+  # release `--clobber` allows asset refresh on the same tag.
+  # Env: CLAUDE_ARCHIVE_REPO=renchris/claude-code-archive (~/.zshenv).
+  if [[ "$status" == "candidate" || "$status" == "stable" ]]; then
+    archive_script="$HOME/Development/claude-code-archive/scripts/archive-version.sh"
+    if [[ -x "$archive_script" ]]; then
+      "$archive_script" "$version" "$status" \
+        >> "$HOME/.claude/logs/archive-version.log" 2>&1 &
+      disown 2>/dev/null || true
+    fi
+  fi
+
   echo "recorded: $version [$status] @ $ts"
   [[ -n "$notes" ]] && echo "  notes: $notes"
 }
