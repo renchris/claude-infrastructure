@@ -224,16 +224,21 @@ No orphaned panes — teammates terminate immediately when they finish work.
    unconditionally. Teammate writes it before multi-turn work, removes on done.
 5. **Only then reap** — close the EXACT pane, then `git worktree remove`. The
    pane id comes from the team `config.json` member field `tmuxPaneId` (iTerm2
-   session UUID, or tmux `%N`) and is closed with the SAME primitive CC 2.1.161
-   uses natively: `it2 session close -f -s <id>` / `tmux kill-pane -t <id>`.
+   session UUID, or tmux `%N`) and is closed with `it2 session close -f -s <id>`
+   / `tmux kill-pane -t <id>`.
    **The old `kill -TERM $PPID` was the "closes too early / inconsistent" bug**:
    a TeammateIdle hook runs LEAD-side as `lead-claude → /bin/sh -c → bash`, so
    `$PPID` is the already-dead `/bin/sh` shim — the backgrounded kill hit a
    PID-RECYCLED process (the lead or an unrelated shell). Targeting the recorded
-   pane id is deterministic. CC's native `it2 session close` regained its `-f`
-   force flag by 2.1.161 (GH #24385 fixed), so the close needs no GUI prompt; the
-   `Claude-Teammate` no-prompt profile + `~/.claude/bin/it2` split-shim remain as
-   belt-and-suspenders. See memory `teammate-pane-close-2.1.161.md`.
+   pane id is deterministic. **⚠️ 2026-06-09 correction**: the it2 CLI's `-f`
+   never propagates force to the API (it only skips its own TTY confirm), and
+   iTerm2's non-forced API close prompts on running-job panes REGARDLESS of the
+   never-prompt profile — so the `~/.claude/bin/it2` shim now intercepts
+   `session close -f -s <id>` too and closes via python `async_close(force=True)`
+   (the only reliable no-modal close; the `Claude-Teammate` profile covers ⌘W
+   only). Fixes the hook AND CC's native `killPane` at one choke point. See
+   memories `it2-session-close-force-modal-2026-06-09.md` +
+   `teammate-pane-close-2.1.161.md` (corrected in place).
 
 **Respawn recovers uncommitted work**: `scripts/team/respawn-team.sh <team>`
 emits Step 0 — Checkpoints section showing each member's
@@ -256,7 +261,7 @@ New teammates resume from the checkpoint before starting new work.
 - The `isActive` flag in `~/.claude/teams/<team>/config.json` is harness-owned
   and write-once-at-spawn — NEVER trust it as "alive now". Use pull-based checks instead.
 
-**If teammate hangs**: GitHub #31788 — `TeamDelete` can block permanently. Kill pane, manually remove `~/.claude/teams/<team-name>`. Checkpoint refs survive in the worktree's `.git/` — run `git for-each-ref refs/wip/<member>/LAST` to recover.
+**If teammate hangs**: (stable 2.1.114) GitHub #31788 — `TeamDelete` can block permanently. Kill pane, manually remove `~/.claude/teams/<team-name>`. Checkpoint refs survive in the worktree's `.git/` — run `git for-each-ref refs/wip/<member>/LAST` to recover. On the 2.1.183 implicit-team model there is no `TeamDelete` — send `shutdown_request`; if it hangs, kill the pane + `git worktree remove`.
 
 **Known limitations**: No session resumption with in-process teammates, context compaction can break coordination, one team per session.
 
@@ -333,8 +338,11 @@ For explicit invocation: describe what you want ("review my component for perfor
 ## Agent Teams Reinforcement (All Projects)
 
 **Agent Teams are the DEFAULT for all implementation work.** This applies globally.
-Code-writing tasks with 2+ files MUST use `TeamCreate` + `team_name` + worktree isolation.
-Background subagents are for research/exploration only — never for code changes.
+Code-writing tasks with 2+ files MUST use Agent Teams (`team_name` + worktree isolation). Spawn
+API is runtime-specific (see `rules/agent-teams.md` § Runtime assumption): classic `TeamCreate`
+on stable 2.1.114; on the 2.1.183 implicit-team model there is no `TeamCreate` — spawn via
+`Agent({ name, team_name, model: opus|fable-5 })`. Background subagents (no `team_name`) are for
+research/exploration only — never for code changes.
 
 **Split during planning, not after crash.** If any teammate's deliverable >500 LOC,
 SPLIT into 2-3 teammates in Phase 0. **Brief body ≤150 lines** (tightened from 200
@@ -374,6 +382,56 @@ sampling at 15-20%, partial-failure protocol, and synthesis bottleneck rules.
 
 ---
 
+## Frontier Tier Routing (All Projects)
+
+**Default model = Opus 4.8 @ effort max** (`roles.lead_default` in
+`~/.claude/model-config.yaml`). The frontier tier (currently Fable 5) is
+**opt-in only**: its value is exclusively the delta above the default tier —
+unknown unknowns the default tier is *blind to* — never already-identified
+problems or routine work. Standing agent duties, every session:
+
+1. **Never select or propose the frontier model for identified/routine work** —
+   including subagent spawns outside the SSOT's conditional slots
+   (`research_adversarial` / `workflow_judge` / `eval_judge` / `teammate_frontier`).
+2. **Capture frontier holes proactively (agent-initiated).** The moment work hits
+   a qualifying wall — behavior unexplained after a real investigation, an
+   adversarial verify that cannot decide, or a never-derivation-swept seam
+   between ≥2 subsystems — invoke `/frontier-hole` yourself. Never grind on
+   inline; never `/model`-switch the lead session.
+3. **Escalate to the frontier tier autonomously, bounded** (user policy
+   2026-06-09: the human NEVER model-switches or starts frontier sessions —
+   if the agent doesn't escalate, nobody does). Two triggers, both
+   agent-initiated via `/frontier-run`:
+   - **Blocking wall** — the current task cannot proceed correctly without the
+     answer: escalate NOW. ≤2 fresh-context `frontier-derivation` panelists on
+     that one hole (`model: "fable"`), then continue the task with the verdict.
+   - **Batch at wrap-up** — main task complete, OPEN holes ≥ 2, window active:
+     run the panel, write the report, update ledger statuses.
+   Hard bounds (non-negotiable): the per-session spawn cap in
+   `frontier_discovery_budget` is hook-enforced — a blocked spawn means PARK,
+   never retry; mark each hole `IN-PANEL` in the ledger BEFORE spawning
+   (concurrent-session lock); the lead itself never runs on the frontier model.
+4. **Feed the supply side — discovery must not wait for walls.** Standing
+   default-tier sources, outputs routed to the ledger (anti-capture filter
+   applies): (a) wrap-up scan — did this session expose an unswept seam or a
+   generator candidate (a solution dissolving ≥3 *named* worklist items)?
+   (b) telemetry-residue sweep — periodically mine sub-alarm production deltas
+   (rum-compare / Loki / Logs Insights); an unexplained delta is by
+   construction an undiscovered problem; (c) exogenous triggers — dep bumps,
+   platform shifts, calendar load events open seams regardless of code churn.
+   Panels emit falsifiable runtime predictions; the lead runs the cheap probes
+   — a missed prediction means the system MODEL is wrong: open a hole on that.
+5. **Long-horizon campaigns** (generator-class unsolved problems) go through
+   `/frontier-campaign`: Fable as bounded ARCHITECT/JUDGE over default-tier
+   implementer teammates with lead acks between phases — never an autonomous
+   Fable implementation monolith. One concurrent campaign (SSOT).
+
+SSOT for window/roles/effort/budgets: `~/.claude/model-config.yaml`. Ledger
+(holes + seam registry + campaign candidates): per-project
+`docs/research/FRONTIER_HOLES.md`.
+
+---
+
 ## Concurrent Sessions — Worktree Isolation (All Projects)
 
 Multiple Claude Code sessions on ONE checkout share the git index → a bare
@@ -391,3 +449,93 @@ Multiple Claude Code sessions on ONE checkout share the git index → a bare
 **Merge back:** rebase-onto-default + `--ff-only`, serialized, **smallest-diff first**; **`git rerere` enabled globally** (auto-resolves repeated same-hunk conflicts across branches). Worktrees do NOT prevent same-hunk, JSON-array-append (migration journals/checksums), lockfile, or *semantic* conflicts → designate a **single owner per shared file**, **serialize migration-generating sessions**, and gate every merge with `typecheck` + `lint`.
 
 **Caveats:** prefer manual `claude -w` over the Agent tool's `isolation: "worktree"` — parallel *automated* worktree creation has had `.git/config.lock` races + a data-loss bug (GH #34645, #48927; manual `-w` is unaffected). Never run `git restore .` / `git checkout -- .` in the main tree while linked worktrees hold staged work (shadows their edits). jj workspaces are architecturally better but blocked on stock CC (GH #27466) — revisit later.
+
+---
+
+## Session Close Protocol (All Projects)
+
+🚨 Drive in-scope work to a finished, verified, committed state **without stopping to ask**;
+surface everything else; end every *write* turn with one un-fakeable state readout — replacing
+the manual "are we complete / loose-ends / handoff?" close. **Mechanism = this rule + a `/wrap`
+command. NO Stop hook** (a Stop hook can't see scope and can't reach the model except by
+*blocking* — an infinite-loop anti-pattern; an advisory `additionalContext` Stop hook is inert).
+The agent runs the git/gate reads itself, so the ledger reports facts, not self-report.
+
+**Freeze the DoD at intake.** The first time a task will write tracked files, restate the user's
+ask as one line — **`Scope (frozen): …`** (in the plan, else inline). Close-time completeness is
+then a *diff against that contract*, never a fresh re-judgment — the brake on scope-metastasis.
+Unreconstructable scope is itself a STOP-ASK, never a guess.
+
+**Disposition by end-state** (a turn is usually several at once → judge per task, not per turn):
+
+| End-state | Action |
+|---|---|
+| Read-only / advisory / research (no tracked writes) | **No ledger, no auto-continue.** Answer and yield. |
+| In-scope: unwritten / unverified / uncommitted | **Auto-continue:** finish → run gate → commit (atomic, explicit paths). ≥2 code tasks → Agent Teams. |
+| In-scope: gate ran **red** | **Auto-debug** the root cause (cap ~2 cycles → commit partial + report). Never blind-retry, never bypass the hook. |
+| Committed, **not pushed/landed** | **Terminal-valid** — a neutral fact, *not* a loose end. Offer ship/land as the user's call. |
+| Needs a **decision** (destructive migration / auth / nav pattern / timeout) or **info** | **STOP-ASK** (overrides auto-continue); commit in-progress work first. |
+| Out-of-scope discovery | **Name + backlog** (durable write), never pursue — unless security / data-integrity, then **stop-surface now**. |
+| Genuinely complete | **Assert plainly, no hedge.** |
+| Context / budget exhausted, work remains | **`/handoff`** — never fake completion. |
+
+**Auto-continue is permitted IFF all four hold** — else surface/ask, do not continue:
+**G1** inside the frozen DoD (not an adjacency, not unobserved-problem hardening) ·
+**G2** touches no escalation surface (auth/session, destructive migration, navigation pattern, DB timeout) ·
+**G3** the action is local — edit / run-gate / commit; **never push / deploy / ship / land** (that is always the user's explicit call) ·
+**G4** the commit is task-clean (explicit paths; never sweep unrelated / parked / other-session changes).
+Honor explicit pauses ("stop here", "come back to this") as terminal-valid parked WIP.
+
+**"Done this turn" — assert with zero hedge IFF:** scope-complete vs the frozen DoD · statically
+green (the repo's commit-time gate passed on the closing commit; "n/a", never a false ✓, for
+docs/SQL-only commits) · behaviorally green (the repo's test/build/visual gates **run this turn**,
+not recalled — re-run after any rebase/merge/cherry-pick) · no pending decision. Otherwise **hedge
+with the clearing verb** ("implemented but UNVERIFIED — running tests"; "blocked on your decision:
+DROP X"), never "probably fine".
+
+**The readout** — emit at every write-turn close; **suppress on read-only turns**. Default = **ONE
+line**: the governing state (Pyramid, answer-first), from live reads not memory. Pick the worst-open
+rung (priority **⛔ > 📤 > 🔧 > 📦 > ✅**); each is exactly one disposition row above (the map stays MECE):
+
+| State | = disposition row | One-line readout |
+|---|---|---|
+| ⛔ **Blocked** | needs a **decision** (destructive migration / auth / nav / timeout) or **info** | `⛔ Blocked — need your call: <decision>.` |
+| 📤 **Handoff** | context/budget exhausted, work remains | `📤 Out of context — /handoff.` |
+| 🔧 **Loose ends** | unwritten / unverified / uncommitted, or a gate ran **red** | `🔧 Loose ends — continuing.` |
+| 📦 **Parked** | committed, **not pushed/landed** (`trunk..HEAD > 0`) | `📦 Done, but only on a branch — /ship to land it (else lost).` |
+| ✅ **Live** | genuinely complete AND on trunk (`trunk..HEAD = 0`, clean) | `✅ Complete & live on trunk — nothing to do.` |
+| _E0_ read-only (no tracked writes) | — | **no readout** — answer and yield |
+
+`📦` vs `✅` (*committed ≠ landed*) is the load-bearing split — it surfaces the branch-stranded risk.
+The line's verb = the `→ Next` below; only ⛔/📦 wait on the user, the rest auto-continue. Mixed turn →
+show the worst-open rung only.
+
+**Opt-in detail** (`/wrap --full` / on request) appends the dense per-field ledger — never the default:
+
+```text
+SESSION LEDGER  (live git/gate reads · base = origin trunk)
+Scope (frozen): <DoD>          Remainder: <none | …>
+Done&verified:  tsc <✓|n/a> · lint <✓|n/a> · test <0|NOT-RUN> · build <0|n/a> [+ repo gates]
+Committed:      <N> — NOT pushed   (<short shas>)
+Landed/shipped: <trunk..HEAD count>   (>0 ⇒ committed, parked — your call)
+Blocked on you: <decision/info | none>
+Out of scope:   <named → file | none>
+→ Next:         <ONE verb: continue · commit · run-gate · STOP-ASK · /handoff · "Complete in full">
+```
+
+**Auto-continue actuation (🔧 only).** On the 🔧 state — and ONLY 🔧 — arm the continuation hook so a
+turn-close re-prompts you instead of stopping with work left: `~/.claude/hooks/session-continue.sh set
+"<the ONE next step>"`. **Clear it** (`~/.claude/hooks/session-continue.sh clear`) the instant the state
+becomes ✅ / 📦 / ⛔ / 📤, on a read-only turn, or when the kill-switch fires — those MUST stop. A Stop
+hook actuates it (`decision:block` feeds the step back as your next turn); a hard cap
+(`CLAUDE_CONTINUE_MAX`, default 8) bounds runaway. Scope-judgment stays with YOU (only you see the frozen
+DoD) — the hook is a dumb actuator. This is the *cross-turn* arm of auto-continue; *within* a turn you
+just keep working (don't stop on 🔧 in the first place).
+
+The single `→ Next` verb may be **auto-fired** for continue / commit / run-gate / handoff; ship and
+land are only ever **offered**, never the default verb (no editorializing toward pushing — push is
+the user's call). Per-project gate names, escalation greps, and the trunk live in the project
+`CLAUDE.md` "Session Close" section; `/wrap` computes the ledger from live git/gate reads.
+
+**Kill-switch:** any per-prompt "…and stop", "no auto-continue", or "just do X" suspends
+auto-continue for that turn — surface and yield instead.
