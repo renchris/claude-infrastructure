@@ -54,7 +54,20 @@
 #                       around turn-end redraws). Single-track Mode-A only: same account, same
 #                       worktree; wipes the visible transcript. Excludes --worktree/--cwd/
 #                       --account/surface flags.
-#   --session-id UUID   Recycle target pane (default: $ITERM_SESSION_ID's UUID).
+#   --session-id UUID   Recycle/self-close target pane (default: $ITERM_SESSION_ID's UUID).
+#
+# Subcommand:
+#   self-close [--session-id UUID] [--allow-dirty]
+#                       Close the CURRENT session end-to-end once its work is done — the Agent
+#                       Teams assignee pattern for peer sessions. Detached watcher: (1) types
+#                       /exit into the pane (queues behind the calling turn; graceful — SessionEnd
+#                       hooks run, transcript stays resumable via --resume), (2) polls the pane's
+#                       tty until the claude process is gone (nudges a swallowed Enter once),
+#                       (3) closes the pane via the ~/.claude/bin/it2 shim (modal-free force
+#                       close; the window follows automatically when it was the last pane).
+#                       CC still alive after ~2min → teammate-style force-close anyway (logged).
+#                       Guard: refuses on a DIRTY git tree in cwd unless --allow-dirty. NEVER
+#                       pair with --recycle (the recycled pane IS the continuation).
 #   --extra "ARGS"      Extra CLI args typed before the prompt (e.g. --extra "--permission-mode plan").
 #   --dry-run           Print the ranked accounts + composed command + surface; execute nothing.
 #
@@ -76,29 +89,133 @@ SURFACE="split-right" PROBE=0 DRY=0 IN_PLACE=0 EXTRA="" RECYCLE=0 SESSION_ID=""
 # Print the header comment up to (excluding) the first non-comment sentinel — growth-proof range.
 usage() { sed -n '2,/^set -euo pipefail/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
-# Internal: recycle watchdog (spawned detached by --recycle). Bare-Enter nudges are no-ops on an
-# empty input box and submit a stranded payload whose Enter got swallowed by a turn-end redraw.
-if [ "${1:-}" = "__nudge" ]; then
-  NSID="${2:?__nudge needs a session id}"
-  for _ in 1 2 3; do
-    osascript -e 'delay 15' >/dev/null 2>&1
-    osascript - "$NSID" <<'AS' >/dev/null 2>&1
+# Shared single-lookup writer: find the session once, type one line into it.
+as_write() { # $1=session-uuid $2=text
+  osascript - "$1" "$2" <<'AS'
 on run argv
   tell application "iTerm2"
     repeat with w in windows
       repeat with t in tabs of w
         repeat with s in sessions of t
           if id of s is (item 1 of argv) then
-            tell s to write text ""
+            tell s to write text (item 2 of argv)
             return
           end if
         end repeat
       end repeat
     end repeat
   end tell
+  error "session not found: " & (item 1 of argv)
 end run
 AS
+}
+
+as_tty() { # $1=session-uuid → the pane's tty path (empty when the session is gone)
+  osascript - "$1" <<'AS' 2>/dev/null
+on run argv
+  tell application "iTerm2"
+    repeat with w in windows
+      repeat with t in tabs of w
+        repeat with s in sessions of t
+          if id of s is (item 1 of argv) then return tty of s
+        end repeat
+      end repeat
+    end repeat
+  end tell
+  return ""
+end run
+AS
+}
+
+# Internal: self-close watcher (spawned detached by `self-close`; survives CC's exit via nohup).
+# ARCHITECTURAL CONSTRAINT: osascript AppleEvents to iTerm2 fail unreliably from detached/orphaned
+# contexts (empirically: 3 detached runs, 3 silent write/lookup failures; foreground never failed).
+# So ALL keystrokes happen FOREGROUND at arm time (they queue behind the calling turn), and this
+# watcher does ONLY AppleEvent-free work: ps-based tty polling + the it2 shim close (python
+# websocket API — proven reliable detached). `sleep` here is plain sleep: no AppleEvents needed.
+if [ "${1:-}" = "__selfclose" ]; then
+  SID="${2:?__selfclose needs a session id}"
+  TTY_PATH="${3:-}"                                # acquired foreground at arm time — trustworthy
+  cc_alive() { ps -o comm= -t "$(basename "$TTY_PATH")" 2>/dev/null | grep -qE 'node|claude'; }
+  if [ -z "$TTY_PATH" ]; then
+    # Truly blind (no tty handed over): NEVER instant-close on a blind read — fixed grace lets
+    # the queued /exit land after the calling turn ends, then close teammate-style.
+    echo "⚠ no tty handed over — fixed 90s grace, then close" >&2
+    sleep 90
+  elif ! cc_alive; then
+    : # CC already exited before our first look (fast graceful exit, or shell-only pane) → close now
+  else
+    waited=0
+    while [ "$waited" -lt 180 ]; do
+      sleep 5; waited=$((waited+5))
+      cc_alive || break                            # ps on a known tty is reliable — no flake class
+    done
+    cc_alive && echo "⚠ CC still alive after ${waited}s — teammate-style force-close" >&2
+  fi
+  "$HOME/.claude/bin/it2" session close -f -s "$SID"
+  exit 0
+fi
+
+# Internal: recycle watchdog (spawned detached by --recycle). Bare-Enter nudges are no-ops on an
+# empty input box and submit a stranded payload whose Enter got swallowed by a turn-end redraw.
+if [ "${1:-}" = "__nudge" ]; then
+  NSID="${2:?__nudge needs a session id}"
+  for _ in 1 2 3; do
+    osascript -e 'delay 15' >/dev/null 2>&1
+    as_write "$NSID" "" >/dev/null 2>&1 || true
   done
+  exit 0
+fi
+
+# self-close — arm the detached watcher that retires this session once the calling turn ends.
+if [ "${1:-}" = "self-close" ]; then
+  shift
+  SC_SID="" SC_ALLOW_DIRTY=0 SC_DRY=0
+  while [ $# -gt 0 ]; do case "$1" in
+    --session-id)  SC_SID="${2:?--session-id needs a value}"; shift 2 ;;
+    --allow-dirty) SC_ALLOW_DIRTY=1; shift ;;
+    --dry-run)     SC_DRY=1; shift ;;
+    *) echo "!! unknown self-close arg: $1" >&2; exit 1 ;;
+  esac; done
+  ITSID="${ITERM_SESSION_ID:-}"
+  SC_SID="${SC_SID:-${ITSID##*:}}"
+  [ -n "$SC_SID" ] || { echo "!! self-close needs \$ITERM_SESSION_ID or --session-id" >&2; exit 1; }
+  # A session about to evaporate must not hold un-persisted work. (Committed-not-pushed is fine —
+  # commits survive the pane; uncommitted edits do too, but silently, which is how work gets lost.)
+  if [ "$SC_ALLOW_DIRTY" = 0 ] && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    if [ -n "$(git status --porcelain 2>/dev/null | head -1)" ]; then
+      echo "!! refusing self-close: dirty git tree in $(pwd) — commit/stash first, or --allow-dirty" >&2
+      exit 1
+    fi
+  fi
+  if [ "$SC_DRY" = 1 ]; then
+    echo "── dry run (self-close) ─────────────────────────"
+    echo "pane:  $SC_SID"
+    echo "chain: FOREGROUND /exit + anti-strand Enter (queue behind this turn) → detached ps-poll ≤180s → it2 force-close pane"
+    exit 0
+  fi
+  # Keystrokes FOREGROUND (detached osascript AppleEvents fail silently — see __selfclose header):
+  # /exit queues behind the calling turn; the bare Enter 1.5s later submits it if the newline got
+  # swallowed (no-op on an empty box). tty is captured here and handed to the watcher.
+  SC_TTY="$(as_tty "$SC_SID")"
+  if [ -n "$SC_TTY" ] && ! ps -o comm= -t "$(basename "$SC_TTY")" 2>/dev/null | grep -qE 'node|claude'; then
+    # No CC on the pane (shell-only, or still launching): typing /exit would hit the SHELL and
+    # vanish (observed). Nothing to exit gracefully — the watcher closes the pane directly.
+    echo "→ no CC on $SC_TTY — skipping /exit, closing pane directly" >&2
+  else
+    wrote=0
+    for _ in 1 2 3; do
+      if as_write "$SC_SID" "/exit" 2>/dev/null; then wrote=1; break; fi
+      osascript -e 'delay 2' >/dev/null 2>&1
+    done
+    [ "$wrote" = 1 ] || { echo "!! could not type /exit into $SC_SID — is the pane gone?" >&2; exit 1; }
+    osascript -e 'delay 1.5' >/dev/null 2>&1
+    as_write "$SC_SID" "" 2>/dev/null || true
+  fi
+  SC_LOG="/tmp/handoff-selfclose-$SC_SID-$(date +%s).log"
+  nohup "$0" __selfclose "$SC_SID" "$SC_TTY" >"$SC_LOG" 2>&1 &
+  disown 2>/dev/null || true
+  echo "→ self-close armed for $SC_SID: /exit queued behind this turn; watcher (ps-poll + shim close) detached (log: $SC_LOG)"
   exit 0
 fi
 
@@ -148,7 +265,8 @@ esac
 # Enter if the submission newline gets swallowed by a turn-end redraw (observed ~1-in-6).
 if [ "$RECYCLE" = 1 ]; then
   [ -n "$WORKTREE$CWD" ] && { echo "!! --recycle excludes --worktree/--cwd (same pane = same dir)" >&2; exit 1; }
-  SID="${SESSION_ID:-${ITERM_SESSION_ID##*:}}"
+  ITSID="${ITERM_SESSION_ID:-}"
+  SID="${SESSION_ID:-${ITSID##*:}}"
   [ -n "$SID" ] || { echo "!! --recycle needs \$ITERM_SESSION_ID or --session-id" >&2; exit 1; }
   PAYLOAD="$(tr '\n' ' ' < "$PROMPT_FILE" | sed 's/  */ /g; s/ $//')"
   if [ "$DRY" = 1 ]; then
@@ -187,6 +305,9 @@ on run argv
       delay 0.4
     end if
     tell theS to write text thePayload
+    -- anti-strand: a bare Enter is a no-op on an empty box, a submit on a swallowed newline
+    delay 1.5
+    tell theS to write text ""
   end tell
 end run
 AS
