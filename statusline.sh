@@ -23,6 +23,7 @@
 
 GRAY='\033[38;5;245m'
 MUTED_RED='\033[38;5;167m'
+NEXT_ACCENT='\033[38;5;75m'
 RESET='\033[0m'
 
 # Approximate offset to convert INPUT-only % to effective %
@@ -31,24 +32,118 @@ BUFFER_OFFSET=48
 
 INPUT=$(cat)
 OUTPUT=""
+# Left-anchored parallel-instance glyph (set below). Prepended at the final echo so
+# it sits at the START of the line and survives narrow-terminal ellipsis truncation.
+GLYPH_PREFIX=""
 
-# Directory + Commit ID
+# Directory + Commit ID + branch.
+#
+# MECE de-duplication: worktrees are named `wt-<branch>` (scripts/new-worktree.sh),
+# so the directory ALREADY encodes the branch. Printing the branch as a separate
+# segment then repeats the same identifier (dir `wt-cc-002950-92749` + branch
+# `cc-002950-92749`) — a Pyramid/MECE violation. When the dir is the branch's
+# worktree folder, show it ONCE (dirty marker folded onto the dir) and drop the
+# duplicate branch segment. Non-worktree checkouts keep the original
+# `DIR (COMMIT)  BRANCH*` format, where dir (repo) and branch are distinct signals.
 DIR=$(basename "$(pwd)")
 COMMIT=$(git rev-parse --short HEAD 2>/dev/null)
-if [ -n "$COMMIT" ]; then
-    OUTPUT="${DIR} (${COMMIT})"
+BRANCH=$(git branch --show-current 2>/dev/null)
+
+DIRTY=""
+if ! git diff --quiet 2>/dev/null || ! git diff --cached --quiet 2>/dev/null; then
+    DIRTY="*"
+fi
+
+# A feature branch carries signal; main/master/detached does not.
+SHOW_BRANCH=""
+if [ -n "$BRANCH" ] && [ "$BRANCH" != "main" ] && [ "$BRANCH" != "master" ]; then
+    SHOW_BRANCH=1
+fi
+
+# Redundant when the dir is the branch's worktree folder (`wt-<branch>`) or is
+# named exactly for the branch.
+REDUNDANT=""
+if [ -n "$SHOW_BRANCH" ] && { [ "$DIR" = "wt-${BRANCH}" ] || [ "$DIR" = "$BRANCH" ]; }; then
+    REDUNDANT=1
+fi
+
+if [ -n "$REDUNDANT" ]; then
+    OUTPUT="${DIR}${DIRTY}"
 else
     OUTPUT="${DIR}"
 fi
 
-# Git branch (only if not on main)
-BRANCH=$(git branch --show-current 2>/dev/null)
-if [ -n "$BRANCH" ] && [ "$BRANCH" != "main" ] && [ "$BRANCH" != "master" ]; then
-    DIRTY=""
-    if ! git diff --quiet 2>/dev/null || ! git diff --cached --quiet 2>/dev/null; then
-        DIRTY="*"
-    fi
+if [ -n "$COMMIT" ]; then
+    OUTPUT="${OUTPUT} (${COMMIT})"
+fi
+
+if [ -n "$SHOW_BRANCH" ] && [ -z "$REDUNDANT" ]; then
     OUTPUT="${OUTPUT}  ${BRANCH}${DIRTY}"
+fi
+
+# Effort level (payload .effort.level — present on 2.1.170+ when the model
+# supports effort; silently absent on older tracks). Live observability for
+# the launcher-injected default and in-session /effort changes.
+if [ -n "$INPUT" ] && command -v jq &>/dev/null; then
+    EFFORT=$(echo "$INPUT" | jq -r '.effort.level // empty' 2>/dev/null)
+    if [ -n "$EFFORT" ]; then
+        # ` · ` separator (matches the effort↔context% delimiter) so all three
+        # top-level groups — location, effort, context% — read as uniform, MECE
+        # segments instead of mixing a double-space here with a middot there.
+        OUTPUT="${OUTPUT} · ${EFFORT}"
+    fi
+fi
+
+# Parallel-instance indicator — which claude-next<n> launcher this session is,
+# as a circled glyph ①..⑳ (stable claude/cc shows nothing). LEFT-anchored: rendered
+# as GLYPH_PREFIX at the very start of the line (prepended at the final echo) so the
+# number is always visible even when a narrow terminal truncates the line with an
+# ellipsis — the old right-end placement was the first thing to get clipped.
+#
+# n is resolved in priority order, so FUTURE instances need ≤1 line of upkeep:
+#   1. $CLAUDE_INSTANCE_N — explicit, naming-independent escape hatch. Set it in
+#      a new alias (e.g. claude-next5='… CLAUDE_INSTANCE_N=5 claude-next') and
+#      ANY config-dir name works with ZERO edits here.
+#   2. The config-dir Latin-ordinal map below (the existing ~/.zshrc convention):
+#      claude-next→.claude-next(1), -next2→.claude-secondary(2),
+#      -next3→.claude-tertiary(3), -next4→.claude-quaternary(4), then
+#      quinary(5)/senary(6)/septenary(7)/octonary(8)/nonary(9)/denary(10).
+#      Adding the 11th+ instance = add one case line (or just use route 1).
+# Config dir comes from payload .transcript_path (its prefix before /projects/),
+# with $CLAUDE_CONFIG_DIR as fallback.
+if [ -n "$INPUT" ] && command -v jq &>/dev/null; then
+    NIDX=""
+    # Route 1: explicit override — accepted only if numeric (else ignored, so a
+    # malformed value falls through to the dir map rather than blanking the glyph).
+    if [ -n "${CLAUDE_INSTANCE_N:-}" ] && [ "${CLAUDE_INSTANCE_N}" -ge 1 ] 2>/dev/null; then
+        NIDX="$CLAUDE_INSTANCE_N"
+    fi
+    if [ -z "$NIDX" ]; then
+        TPATH=$(echo "$INPUT" | jq -r '.transcript_path // empty' 2>/dev/null)
+        CFG="${TPATH%%/projects/*}"
+        if [ -z "$CFG" ] || [ "$CFG" = "$TPATH" ]; then CFG="$CLAUDE_CONFIG_DIR"; fi
+        case "$CFG" in
+            */.claude-next)       NIDX=1 ;;
+            */.claude-secondary)  NIDX=2 ;;
+            */.claude-tertiary)   NIDX=3 ;;
+            */.claude-quaternary) NIDX=4 ;;
+            */.claude-quinary)    NIDX=5 ;;
+            */.claude-senary)     NIDX=6 ;;
+            */.claude-septenary)  NIDX=7 ;;
+            */.claude-octonary)   NIDX=8 ;;
+            */.claude-nonary)     NIDX=9 ;;
+            */.claude-denary)     NIDX=10 ;;
+        esac
+    fi
+    # n -> circled glyph (①..⑳ are contiguous U+2460..U+2473); plain (n) beyond.
+    if [ -n "$NIDX" ] && [ "$NIDX" -ge 1 ] 2>/dev/null; then
+        GLYPHS=(① ② ③ ④ ⑤ ⑥ ⑦ ⑧ ⑨ ⑩ ⑪ ⑫ ⑬ ⑭ ⑮ ⑯ ⑰ ⑱ ⑲ ⑳)
+        if [ "$NIDX" -le 20 ]; then NGLYPH="${GLYPHS[$((NIDX-1))]}"; else NGLYPH="($NIDX)"; fi
+        # Accent the instance and pin it to the LEFT edge (prepended at the final
+        # echo). RESET after the glyph so the following segment keeps its own color
+        # (default in the no-context path, or the GRAY the context-% block prepends).
+        GLYPH_PREFIX="${NEXT_ACCENT}${NGLYPH}${RESET}  "
+    fi
 fi
 
 # Context % - Using remaining_percentage (per-conversation INPUT only)
@@ -77,4 +172,4 @@ if [ -n "$INPUT" ] && command -v jq &>/dev/null; then
     fi
 fi
 
-echo -e "$OUTPUT"
+echo -e "${GLYPH_PREFIX}${OUTPUT}${RESET}"
