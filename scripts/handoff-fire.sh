@@ -44,6 +44,17 @@
 #   --probe             Liveness-probe the account headlessly before firing (haiku, or fable-5
 #                       when --model fable). auto: walk the ranked list to the first passing
 #                       account. Explicit account: hard-fail with the rejection class.
+#   --recycle           RECYCLE the CURRENT session instead of spawning: queue keystrokes into
+#                       this pane ($ITERM_SESSION_ID, or --session-id UUID) — /clear, then
+#                       /model + /effort ONLY if given (typed /model+/effort also mutate the
+#                       account's saved defaults — skip when not re-tiering), then the payload
+#                       FLATTENED TO ONE LINE (typed newlines submit). The lines queue while the
+#                       calling turn finishes, then execute in order (empirically verified,
+#                       2.1.183). A detached watchdog nudges a swallowed Enter (observed ~1-in-6
+#                       around turn-end redraws). Single-track Mode-A only: same account, same
+#                       worktree; wipes the visible transcript. Excludes --worktree/--cwd/
+#                       --account/surface flags.
+#   --session-id UUID   Recycle target pane (default: $ITERM_SESSION_ID's UUID).
 #   --extra "ARGS"      Extra CLI args typed before the prompt (e.g. --extra "--permission-mode plan").
 #   --dry-run           Print the ranked accounts + composed command + surface; execute nothing.
 #
@@ -60,10 +71,36 @@ MODEL_CONFIG="$HOME/.claude/model-config.yaml"
 
 PROMPT_FILE="" ACCOUNT="auto" LAUNCHER="" MODEL="" EFFORT="" CWD="" WORKTREE=""
 REPO="$DEFAULT_REPO" WTROOT="$HOME/Development/.worktrees" BASE="origin/main"
-SURFACE="split-right" PROBE=0 DRY=0 IN_PLACE=0 EXTRA=""
+SURFACE="split-right" PROBE=0 DRY=0 IN_PLACE=0 EXTRA="" RECYCLE=0 SESSION_ID=""
 
 # Print the header comment up to (excluding) the first non-comment sentinel — growth-proof range.
 usage() { sed -n '2,/^set -euo pipefail/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+
+# Internal: recycle watchdog (spawned detached by --recycle). Bare-Enter nudges are no-ops on an
+# empty input box and submit a stranded payload whose Enter got swallowed by a turn-end redraw.
+if [ "${1:-}" = "__nudge" ]; then
+  NSID="${2:?__nudge needs a session id}"
+  for _ in 1 2 3; do
+    osascript -e 'delay 15' >/dev/null 2>&1
+    osascript - "$NSID" <<'AS' >/dev/null 2>&1
+on run argv
+  tell application "iTerm2"
+    repeat with w in windows
+      repeat with t in tabs of w
+        repeat with s in sessions of t
+          if id of s is (item 1 of argv) then
+            tell s to write text ""
+            return
+          end if
+        end repeat
+      end repeat
+    end repeat
+  end tell
+end run
+AS
+  done
+  exit 0
+fi
 
 EXPLICIT_LAUNCHER=0
 while [ $# -gt 0 ]; do case "$1" in
@@ -83,6 +120,8 @@ while [ $# -gt 0 ]; do case "$1" in
   --split-down)  SURFACE="split-down"; shift ;;
   --window)      SURFACE="window"; shift ;;
   --probe)       PROBE=1; shift ;;
+  --recycle)     RECYCLE=1; shift ;;
+  --session-id)  SESSION_ID="${2:?--session-id needs a value}"; shift 2 ;;
   --extra)       EXTRA="${2:?--extra needs a value}"; shift 2 ;;
   --dry-run)     DRY=1; shift ;;
   -h|--help)     usage ;;
@@ -101,6 +140,63 @@ case "$MODEL" in
   fable) MODEL="claude-fable-5" ;;
   opus)  MODEL="claude-opus-4-8" ;;
 esac
+
+# ---- recycle mode: /clear + retier + payload typed into the CURRENT pane ---------------------
+# Keystrokes QUEUE while the calling turn finishes, then execute in order (verified on 2.1.183:
+# queued /clear runs, later-queued lines survive it, /model+/effort apply). The payload must be
+# ONE typed line — every newline is an Enter — so it is flattened. A detached watchdog re-sends
+# Enter if the submission newline gets swallowed by a turn-end redraw (observed ~1-in-6).
+if [ "$RECYCLE" = 1 ]; then
+  [ -n "$WORKTREE$CWD" ] && { echo "!! --recycle excludes --worktree/--cwd (same pane = same dir)" >&2; exit 1; }
+  SID="${SESSION_ID:-${ITERM_SESSION_ID##*:}}"
+  [ -n "$SID" ] || { echo "!! --recycle needs \$ITERM_SESSION_ID or --session-id" >&2; exit 1; }
+  PAYLOAD="$(tr '\n' ' ' < "$PROMPT_FILE" | sed 's/  */ /g; s/ $//')"
+  if [ "$DRY" = 1 ]; then
+    echo "── dry run (recycle) ────────────────────────────"
+    echo "pane:     $SID"
+    echo "queue:    /clear${MODEL:+ → /model $MODEL}${EFFORT:+ → /effort $EFFORT} → payload (1 line, $(printf '%s' "$PAYLOAD" | wc -c | tr -d ' ') chars)"
+    echo "payload:  $(printf '%.120s' "$PAYLOAD")…"
+    exit 0
+  fi
+  # ONE osascript: find the session once, hold the reference, type the whole sequence through it.
+  # (Per-write re-enumeration was observed to fail transiently on the Nth lookup.)
+  osascript - "$SID" "$PAYLOAD" "$MODEL" "$EFFORT" <<'AS'
+on run argv
+  set theId to item 1 of argv
+  set thePayload to item 2 of argv
+  set theModel to item 3 of argv
+  set theEffort to item 4 of argv
+  tell application "iTerm2"
+    set theS to missing value
+    repeat with w in windows
+      repeat with t in tabs of w
+        repeat with s in sessions of t
+          if id of s is theId then set theS to s
+        end repeat
+      end repeat
+    end repeat
+    if theS is missing value then error "session not found: " & theId
+    tell theS to write text "/clear"
+    delay 0.4
+    if theModel is not "" then
+      tell theS to write text ("/model " & theModel)
+      delay 0.4
+    end if
+    if theEffort is not "" then
+      tell theS to write text ("/effort " & theEffort)
+      delay 0.4
+    end if
+    tell theS to write text thePayload
+  end tell
+end run
+AS
+  # Detached watchdog (self-reexec): three bare-Enter nudges at ~15s intervals. A bare Enter on
+  # an empty CC input box is a NO-OP; on a stranded (Enter-swallowed) payload it submits it.
+  nohup "$0" __nudge "$SID" >/tmp/handoff-recycle-watchdog.log 2>&1 &
+  disown 2>/dev/null || true
+  echo "→ recycling session $SID: queued /clear${MODEL:+ + /model $MODEL}${EFFORT:+ + /effort $EFFORT} + payload; watchdog armed (log: /tmp/handoff-recycle-watchdog.log)"
+  exit 0
+fi
 
 # ---- account maps + activity proxy ---------------------------------------------------------
 cfg_dir() { case "$1" in
