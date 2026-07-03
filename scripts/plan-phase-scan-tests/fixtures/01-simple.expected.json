@@ -1,0 +1,10 @@
+{
+  "total_lines": 13,
+  "summary": {"sections": 4, "done": 1, "in_progress": 0, "pending": 3, "superseded": 0, "phase_0": 0},
+  "sections": [
+    {"start_line": 1, "end_line": 2, "level": 1, "status": "PENDING", "status_source": "heading", "is_phase_0": false, "title": "Simple Plan"},
+    {"start_line": 3, "end_line": 6, "level": 2, "status": "DONE", "status_source": "heading", "is_phase_0": false, "commit_hashes": ["abc1234"], "title": "Phase 1: Foundation — DONE (`abc1234`, Mar 15 2026)"},
+    {"start_line": 7, "end_line": 10, "level": 2, "status": "PENDING", "status_source": "heading", "is_phase_0": false, "title": "Phase 2: Build"},
+    {"start_line": 11, "end_line": 13, "level": 2, "status": "PENDING", "status_source": "heading", "is_phase_0": false, "title": "Phase 3: Ship"}
+  ]
+}
