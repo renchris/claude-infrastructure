@@ -146,7 +146,7 @@ two `─` rules are the canonical VISIBLE boundary; the fence is the invisible m
    new session starts (STOP-ASK surfaces, unfrozen scope, a doc the payload references that doesn't
    exist yet)? If NONE → fire autonomously: write each track's payload to `/tmp/fire-<slug>.txt` and
    spawn via `~/.claude/scripts/handoff-fire.sh` — every track, not just the first. A SINGLE Mode-A
-   track fires as `--recycle` (this pane `/clear`s and continues — § Autonomous fire item 4); multi-track,
+   track fires as `--recycle` (this pane exits + relaunches with the payload — § Autonomous fire item 4); multi-track,
    forks, and account switches spawn panes. If ANY open item → name them, HOLD fire, and fire once
    resolved. "paste only" / "hold fire" / "no fire" always suppresses; an explicit "fire" overrides a
    hold. The inline paste (step 5) is always emitted as the manual fallback.
@@ -219,17 +219,24 @@ pane so parallel fires overlap. Read-only in the repo root → `--cwd <repo> --i
 auto-creates a `cc-<ts>` worktree). **Mode C/B fork:** `--worktree <slug> --base handoff/<slug>` (the
 spawner creates the branch AT the frozen ref) and DROP the payload's Step-0 `git checkout -b` line —
 the branch already exists; keep only the rebase/verify lines. `--wtroot` relocates the worktree parent
-if the bridge promised `/tmp/wt-<slug>`. **Mode A fire (single track) → RECYCLE this session, not a new
-pane:** `--recycle` queues keystrokes into THIS pane (`/clear`, then `/model`/`/effort` ONLY when
-re-tiering — typed re-tiers also mutate the account's saved defaults — then the payload); the lines
-queue while the closing turn finishes and execute in order (empirically verified on 2.1.183: a queued
-`/clear` runs and later-queued lines survive it; a detached watchdog re-Enters a swallowed submission,
-observed ~1-in-6 at turn-end redraws). Same worktree, same account, zero new panes — the streamlined
-`/clear`+re-prompt the manual flow always was. Constraints: the payload is FLATTENED TO ONE LINE (typed
-newlines submit — compose Mode-A recycle payloads short), the visible transcript is wiped (the bridge
-file + payload survive), and it's same-account by construction (need a different account or a parallel
-fork → spawn a pane instead: `--cwd <this worktree>`, close this session after handover). Re-verify
-queue semantics on CC version bumps.
+if the bridge promised `/tmp/wt-<slug>`. **Mode A fire (single track) → RECYCLE this pane, not a new
+pane:** `--recycle` = **EXIT + RELAUNCH**, never `/clear`+queued-payload (rebuilt 2026-07-03 after the
+catnav incident). CC's queue is TYPE-ASYMMETRIC: plain text typed mid-turn is STEERED into the
+still-running turn at the next tool-result boundary (arrives as a `queued_command` attachment) — and the
+fire script's own Bash call guarantees that boundary — while `/clear` holds until turn end. So the old
+design deterministically ran the payload INLINE in the old context with `/clear` armed behind it to wipe
+everything. (The Jul-2 probe that "verified" queue ordering used a pure text-generation busy turn — no
+tool boundary, so nothing steered.) The rebuilt flow: arm a detached watcher → type `/exit` — a THIRD
+semantics: it INTERRUPTS any in-flight turn and exits in seconds (E2E'd) → the watcher ps-polls the tty
+until claude is gone, then types `cd <cwd> && CLAUDE_ISOLATION_SKIP=1 <launcher> [flags] "$(cat
+/tmp/fire-<slug>.txt)"` into the plain shell via the it2 python-API CLI (AppleEvent-free,
+detached-proven; Enter = `\r`, Ink ignores `\n`). Consequences: the fire call is the turn's LAST action —
+emit the report + manual-fallback line BEFORE it (the interrupt can kill the Bash tool's own output); the
+payload travels VERBATIM (multi-line fine — no flatten); model/effort ride as launcher FLAGS (typed
+`/model`/`/effort` mutated the account's saved defaults — gone); account defaults to THIS session's
+(CLAUDE_CONFIG_DIR-derived), `--account`/`--launcher` override, so cross-account recycle works; the old
+transcript stays resumable via `--resume`. E2E 3× on 2.1.183 incl. a mid-turn fire. Re-verify the
+steering + `/exit`-interrupt semantics on CC version bumps.
 
 **5 · Surface.** Default = `--split-right`: splits the CURRENT pane like ⌘D (same view, same profile) —
 the new session appears right next to where the user is looking, exactly like an Agent Teams teammate
@@ -260,9 +267,12 @@ and like a wave there is no track cap (practical ceiling ≈ 4 accounts × 2 con
   ascending — `--account next4`, `--account next3`, `--account next`, `--account next2`, wrap — ≤2
   tracks per account. If a track rate-limits mid-flight, `/exit` and relaunch the SAME worktree on
   another account (no rework; the worktree is account-agnostic).
-- **Surfaces at wave scale:** consecutive `--split-right` calls all split the pane you fired from
-  (teammate-grid style) — comfortable to ~3-4 panes; beyond that give each track `--tab`, or park the
-  whole wave in its own window (first track `--window`, rest `--tab`).
+- **Surfaces at wave scale:** every surface (`--split-right`/`--split-down`/`--tab`) anchors to the
+  pane you fired from (via `$ITERM_SESSION_ID`), so the whole wave lands in YOUR window. Consecutive
+  `--split-right` calls build a teammate-grid there — comfortable to ~3-4 panes; beyond that give each
+  overflow track `--tab` (background tabs in the same window). (The old "first `--window`, rest `--tab`"
+  trick to park a wave elsewhere no longer holds — `--tab` follows the firing pane now, not the
+  last-created window; give each track its own `--window` if you want them out of your working window.)
 - Per-track model/effort still applies row-by-row from the §3 table — a wave can mix Opus tracks and
   a probed Fable track freely.
 
@@ -283,9 +293,9 @@ surface, prompt path) after firing. All existing bridge guardrails still apply t
 
 **7 · Self-close — retire the emptied main session (Step 7's mechanism).** Once a pane-spawn wave is
 away and the readiness gate holds exhaustively nothing (no discussions, questions, loose ends,
-decisions), the main session closes ITSELF: `handoff-fire.sh self-close` types `/exit` + an anti-strand
-Enter into its own pane FOREGROUND (they queue behind the closing turn — same verified queue mechanics
-as recycle), then a detached watcher ps-polls the pane's tty until the claude process exits and closes
+decisions), the main session closes ITSELF: `handoff-fire.sh self-close` arms its detached watcher FIRST,
+then types `/exit` into its own pane FOREGROUND (a typed `/exit` INTERRUPTS any in-flight turn and exits
+in seconds — so everything that must survive precedes it); the watcher ps-polls the pane's tty until the claude process exits and closes
 the pane via the `~/.claude/bin/it2` shim (window follows when it was the last pane). Graceful-first:
 `/exit` runs SessionEnd hooks and leaves the transcript resumable (`--resume` / claude-search); the
 watcher force-closes teammate-style only at its 180s ceiling (logged to
