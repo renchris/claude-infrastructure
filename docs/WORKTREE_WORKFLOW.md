@@ -106,13 +106,70 @@ Surfaces: `--split-right` default (⌘D — same view, same profile, like a team
   accounts — self-retired via the graceful self-close above once fully handed off (or human-closed),
   never reaped by an idle hook.
 
-## Merge-back and teardown
+## 5 · `/ship` lands the work on the trunk — serialized, migration-safe, one gate
 
-Rebase onto the default branch + `--ff-only`, serialized, smallest-diff first; `git rerere` enabled
-globally. Worktrees do NOT prevent semantic/lockfile/migration-journal conflicts — single owner per
-shared file, serialize migration-generating sessions, gate every merge with the repo's typecheck +
-lint. Rate-limited session? `/exit`, relaunch the SAME worktree on another account — worktrees are
-account-agnostic, zero rework.
+The mirror image of launch. Once a worktree's work is committed, `/ship` reconciles it onto
+`origin/main` — the SOLE trunk, since auto-deploy ships from it — and pushes `HEAD:main`, with the
+whole fetch→reconcile→gate→push folded into ONE machine-wide-locked child so the trunk cannot move
+underneath the push. That fold collapses the old CAS-replay storm (N unserialized landers racing a
+hot trunk, each re-running the gate) to a no-op: exactly one gate runs machine-wide per landing.
+
+```mermaid
+flowchart TD
+    P["worktree-pool.sh claim a branch<br/>(~3s warm slot at origin/main)"] -.commit work.-> S
+    S["/ship — on a session branch"] --> L{"land-lock.sh<br/>machine-wide mutex"}
+    L -->|held| Lq["queue: poll every 2s"] --> L
+    L -->|acquired| R["ship-reconcile.sh:<br/>git fetch origin main"]
+    R --> M{"did origin/main<br/>add a migration?"}
+    M -->|no| Rb["git rebase origin/main"]
+    M -->|yes| Rc["reset --hard origin/main<br/>+ cherry-pick my range<br/>+ renumber my migration idx"]
+    Rb --> G{"DROP TABLE/COLUMN<br/>or hand-DML in range?"}
+    Rc --> G
+    G -->|yes| X["STOP-ASK<br/>restore preship backup"]
+    G -->|clean| T["rm -rf .next<br/>pnpm typecheck"]
+    T --> Pu["CI=true git push origin HEAD:main"]
+    Pu --> H["pre-push hook:<br/>test:unit + design:gate"]
+    H --> D["origin/main advances →<br/>Path F LAX+SIN + Amplify Oregon"]
+    D --> Rel["release lock ·<br/>drop preship backup"]
+```
+
+**One lock, one pusher** (`scripts/land-lock.sh`) — a machine-wide `mkdir` mutex
+(`~/.reso/landing.lock.d`, pid-alive + 1200 s TTL reap) means at most one gate+push runs on the box
+at a time; since only this machine pushes `origin/main`, trunk advancement is serialized and
+non-fast-forwards can't happen. Kill switch `LAND_SERIALIZE=off`; every landing appends
+`{ts,branch,wait_s,hold_s,exit}` to `~/.reso/land.log`.
+
+**Migration-aware reconcile** (`scripts/ship-reconcile.sh`) is the load-bearing subtlety, and the
+reason a naive rebase is unsafe: if `origin/main` added no migration a linear `git rebase` suffices,
+but if it DID, a rebase would silently drop the concurrent migration through the `_journal.json`
+`merge=union` driver (a production regression). So reconcile instead `reset --hard origin/main` +
+cherry-picks the session's range, and the ported idx auto-resolver renumbers this branch's migration
+to the next free index via `pnpm generate`. `rerere` is disabled whenever the range touches
+`drizzle/` so a stale cached resolution can't be staged into a migration. Three guards STOP-ASK
+rather than guess — a hand-written `-- lint:allow-dml` migration in the colliding set, a regenerated
+delta containing `DROP `, or a DDL body that differs beyond its index/journal. This is the automated
+form of the durable rule: **single owner per shared file, serialize migration-generating sessions.**
+
+**One inline gate, the rest at the hook**: the wrapped pipeline runs `pnpm typecheck` only;
+`test:unit` + `design:gate` (Playwright VRT + axe) live in the `pre-push` hook
+(`core.hooksPath=scripts/hooks`), and the push carries `CI=true` so the gate gets CI's retry
+tolerance (2 retries) instead of failing on the first timing-flake — NOT a `--no-verify` bypass; a
+real regression still fails all three attempts.
+
+**Warm pool feeds the front** (`scripts/worktree-pool.sh`): 10 pre-provisioned slots at
+`~/Development/.worktrees/wt-pool-N` sit on `pool/slot-N` at `origin/main` with `node_modules`,
+styled-system codegen, `.env.local`, and a seeded `sqlite.db` already built; `claim <branch>`
+`git switch -C`es a slot in ~3 s (no `git worktree add` on the hot path — that races, GH #34645), and
+a launchd job replenishes on a `WatchPaths` wake touched by every SessionStart / SessionEnd / claim.
+
+**Retired local-`main` layer**: `/land`, `/deploy`, `pnpm land`, `land-to-main.sh`, `merge-to-main.sh`
+are gone. Auto-deploy ships `origin/main`; concurrent sessions advance it with `HEAD:main` pushes that
+never move local `main`, so landing on local `main` first just rebuilt work. Local `main` is now a
+lagging ff-mirror; `origin/main` is the only push target.
+
+**Teardown**: a rate-limited session `/exit`s and relaunches the SAME worktree on another account
+(worktrees are account-agnostic, zero rework); `pnpm worktree:gc` prunes landed `backup/*` + `cc-*` +
+stale teammate checkpoint refs (self-debounced ≤ 1×/day, pool slots skipped).
 
 ## Artifact map
 
@@ -125,4 +182,6 @@ account-agnostic, zero rework.
 | Model/effort/window SSOT | `~/.claude/model-config.yaml` (not synced) |
 | Per-repo worktree setup | `<repo>/scripts/new-worktree.sh` (repo-specific, e.g. reso) |
 | Warm worktree pool (fast path) | `<repo>/scripts/worktree-pool.sh` — `claim <branch>` prints a provisioned path (repo-specific, reso) |
+| Trunk landing (`/ship`) | `<repo>/.claude/commands/ship.md` + `scripts/ship-reconcile.sh` + `scripts/land-lock.sh` (repo-specific, reso) |
+| Landing serializer log | `~/.reso/landing.lock.d` (machine-wide mutex) · `~/.reso/land.log` (per-landing JSON) |
 | Launch traps provenance | memory `reference-parallel-session-launch-playbook` |
