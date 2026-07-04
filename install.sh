@@ -138,6 +138,23 @@ if $IS_GLOBAL && [[ ! -L "$HOME/bin/restore-file" ]]; then
   installed=$((installed + 1))
 fi
 
+# --- Skills ---
+# Same symlink model as hooks/commands: version each repo skill dir and deploy it live.
+# Only touches skill NAMES present in the repo — other ~/.claude/skills are left untouched.
+if [[ -d "$REPO_DIR/skills" ]]; then
+  echo ""
+  echo "Skills → $CONFIG_DIR/skills/"
+  for skilldir in "$REPO_DIR"/skills/*/; do
+    [[ -d "$skilldir" ]] || continue
+    name="$(basename "$skilldir")"
+    ensure_real_dir "$CONFIG_DIR/skills/$name"
+    for f in "$skilldir"*; do
+      [[ -f "$f" ]] || continue
+      link_file "$f" "$CONFIG_DIR/skills/$name/$(basename "$f")"
+    done
+  done
+fi
+
 # --- Status line ---
 echo ""
 echo "Status line → $CONFIG_DIR/"
