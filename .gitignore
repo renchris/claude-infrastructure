@@ -12,3 +12,12 @@
 *.db
 *.lock
 .claude-tasks
+
+# Claude project config — global gitignore ignores all of .claude/; un-ignore it
+# here so committed project-local commands (.claude/commands/) are tracked, then
+# re-ignore the volatile local state.
+!.claude/
+.claude/settings.local.json
+.claude/worktrees/
+.claude/tmp/
+.claude/logs/
