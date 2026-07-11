@@ -72,6 +72,13 @@ taxonomy must not drift apart (single table, referenced twice).
 ## Tasks
 - T1 (lead): rewrite `commands/handoff.md` step 7 → § Post-fire disposition; wire step 6/§ 8
   cross-refs. The wording must pass the zero-ambiguity gate (below).
+- T1c (lead — SCOPE ADDENDUM, user-authorized 2026-07-11 via wt-pool-4, spec at
+  `/tmp/handoff-disposition-addendum.md`): autonomous fires STOP opening Cursor (step 4 —
+  Cursor-open survives ONLY on a HELD fire, when the human will actually copy-paste); artifact
+  paths (`/tmp/<slug>-resume.md`, `/tmp/fire-<slug>.txt`) instead emitted in chat as CLICKABLE
+  refs — encoded form = bare absolute path on its own line (empirical basis in status log);
+  step 6 fire report carries per-track bridge + fire-file paths in that form. Steps 3 and 5
+  unchanged. Taxonomy and all frozen semantics untouched.
 - T2 (teammate): `scripts/handoff-disposition.sh` + `tests/handoff-disposition.bats`
   (shellcheck -S warning green; macOS bash-3.2 safe — no mapfile/assoc arrays).
 - T3 (lead, after merge): E2E demo both paths in a scratch fire: one fire that ends
@@ -107,3 +114,16 @@ taxonomy must not drift apart (single table, referenced twice).
 ## Status log
 - 2026-07-11 02:2x — plan created + committed on `handoff-disposition` by wt-pool-4 (next4);
   fired to next3 as Fable 5 @ high. Nothing implemented yet.
+- 2026-07-11 — T1 landed on branch (`1a76fb1`): step 7 → § Post-fire disposition (closed taxonomy
+  table, worst-first clause order R-DECIDE≻R-USER≻R-PING≻R-WORK≻R-DIRTY, helper wiring, kill-
+  switches, no-Stop-hook rationale); step 6 readiness gate now references the same taxonomy table
+  (single table, two read points); § 8 gained the "--notify-back ARMS R-PING" cross-ref; fire
+  report gained the notify-back? column. `--recycle` clarification (within frozen semantics): the
+  recycle IS the close — CLOSE line goes in the pre-fire report, self-close never called.
+- 2026-07-11 — T1c (scope addendum) applied: step 4 Cursor-open now HELD-fire-only; autonomous
+  fires emit bare-absolute-path-on-own-line artifact refs. **Clickable-form finding (reusable):**
+  bare abs path wins — the CC TUI linkifies bare file paths (its own harness guidance treats
+  `file:line` refs as clickable) AND iTerm2 semantic history Cmd+click works on bare paths in any
+  output; markdown `[x](file://…)` adds no clickability (CC's OSC-8 hyperlink emission exists —
+  15 `]8;;` sites in the 2.1.183 binary — but file:// OSC-8 opening is terminal-policy-dependent)
+  and the label hides the path. Preference rule from the addendum: bare path when both work.
