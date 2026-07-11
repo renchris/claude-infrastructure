@@ -1,0 +1,601 @@
+#!/usr/bin/env python3
+"""claude-accounts — cross-account Claude Max usage dashboard, auth-state prober + work router.
+
+Successor to ~/.reso/bin/reso-quota (2026-07-04), promoted into claude-infrastructure with the
+2026-07-10 research fixes. Reads the account map from ~/.claude/accounts.json (SSOT — launchers,
+config dirs, emails, Dia profiles) and, per account: auth state from the macOS Keychain, live
+limits from api.anthropic.com/api/oauth/usage, live session concurrency from ps. Routes work with
+the adversarially-verified scorer (use-it-or-lose-it x Fable-sub-cap coupling x 5h-safety x
+rate-spread), with the Fable window read LIVE from ~/.claude/model-config.yaml frontier_access
+(never a hardcoded date — the reso-quota JUL7 bug: the operator extended the window Jul-9 and the
+hardcode silently killed all Fable routing).
+
+Auth policy (rotation-safe by construction):
+  - NEVER mints or persists tokens itself. Staleness is read from the keychain payload's
+    expiresAt (no network needed).
+  - Healing a stale/expired token is delegated to the official binary: headless
+    `CLAUDE_CODE_OAUTH_REFRESH_TOKEN=... claude auth login`, which performs the refresh grant AND
+    persists whatever (possibly rotated) tokens come back to the same keychain item. Heal runs
+    ONLY when the account has zero live sessions (no rotation race with a running CC) and under a
+    per-account lock. reso-quota's refresh-and-discard pattern is retired: refresh tokens MAY
+    rotate (GH anthropics/claude-code#54443, unanswered) and a discarded rotation = logged out.
+  - "logged-out" is only declared after a fresh keychain re-read (no item, or the binary's heal
+    reports an invalid refresh token).
+
+Usage:
+  claude-accounts                     human table + route hints
+  claude-accounts --json              machine-readable (rows + window + scores; tokens redacted)
+  claude-accounts --route general|fable   best account name (reason on stderr when 'none')
+  claude-accounts --rank general|fable    ranked "name score" lines for wave spread (handoff)
+  claude-accounts --relogin-info NAME     JSON identity block for the account-relogin skill
+  claude-accounts --fresh             bypass the shared cache
+  claude-accounts --no-heal           never run the headless heal (pure read-only)
+
+Shared cache: /tmp/claude-accounts-cache.json (default TTL 90s, flock single-flight) so N
+concurrent callers (handoff waves, statuslines, sessions) produce one endpoint sweep, not N —
+both oauth endpoints rate-limit under load.
+"""
+import fcntl
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+import unicodedata
+import urllib.error
+import urllib.request
+from datetime import datetime, timedelta, timezone
+from hashlib import sha256
+
+HOME = os.path.expanduser("~")
+CFG_PATH = os.environ.get("CLAUDE_ACCOUNTS_JSON", os.path.join(HOME, ".claude", "accounts.json"))
+LOG_PATH = os.path.join(HOME, ".claude", "logs", "claude-accounts.log")
+
+
+def log_event(msg):
+    try:
+        os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
+        with open(LOG_PATH, "a") as f:
+            f.write(f"{datetime.now(timezone.utc).isoformat()} {msg}\n")
+    except OSError:
+        pass
+
+
+def load_cfg():
+    try:
+        with open(CFG_PATH) as f:
+            cfg = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        sys.exit(f"claude-accounts: cannot read SSOT {CFG_PATH}: {e}")
+    for a in cfg["accounts"]:
+        a["config_dir"] = os.path.expanduser(a["config_dir"])
+    for k in ("claude_bin", "model_config_ssot", "dia_local_state"):
+        cfg[k] = os.path.expanduser(cfg[k])
+    return cfg
+
+
+# ---- keychain -------------------------------------------------------------------------------
+
+def keychain_service(config_dir):
+    # CC 2.1.183: service = "Claude Code-credentials-" + sha256(NFC(config_dir))[:8] when
+    # CLAUDE_CONFIG_DIR is set (all 4 accounts are); bare ~/.claude default gets no suffix.
+    h = sha256(unicodedata.normalize("NFC", config_dir).encode()).hexdigest()[:8]
+    return f"Claude Code-credentials-{h}"
+
+
+def read_creds(config_dir, kc_account):
+    """-> (payload dict | None, state) — state in {present, no-keychain-item, keychain-error}."""
+    try:
+        p = subprocess.run(
+            ["/usr/bin/security", "find-generic-password", "-s", keychain_service(config_dir),
+             "-a", kc_account, "-w"],
+            capture_output=True, text=True, timeout=10)
+    except subprocess.TimeoutExpired:
+        return None, "keychain-error"
+    if p.returncode == 44:                       # errSecItemNotFound
+        return None, "no-keychain-item"
+    if p.returncode != 0:                        # locked keychain / ACL / other
+        return None, "keychain-error"
+    try:
+        return json.loads(p.stdout).get("claudeAiOauth", {}) or None, "present"
+    except json.JSONDecodeError:
+        return None, "keychain-error"
+
+
+# ---- frontier window (SSOT read — never hardcode) --------------------------------------------
+
+def frontier_window(cfg):
+    """Parse frontier_access.{active,end} from model-config.yaml without PyYAML.
+    Returns {active: bool|None, end: str|None, deadline: dt|None}. active None = UNKNOWN
+    (parse failure) — callers must treat unknown as un-routable, never as open or closed."""
+    win = {"active": None, "end": None, "deadline": None}
+    try:
+        text = open(cfg["model_config_ssot"]).read()
+    except OSError:
+        return win
+    m = re.search(r"^frontier_access:\n((?:[ \t]+.*\n|\n)*?)(?=^\S|\Z)", text, re.M)
+    if not m:
+        return win
+    block = m.group(1)
+    ma = re.search(r"^\s*active:\s*(true|false)\b", block, re.M)
+    me = re.search(r"^\s*end:\s*\"?(\d{4}-\d{2}-\d{2})\"?", block, re.M)
+    if ma:
+        win["active"] = ma.group(1) == "true"
+    if me:
+        win["end"] = me.group(1)
+        end = datetime.strptime(me.group(1), "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        if cfg["frontier"].get("end_date_inclusive", True):
+            end += timedelta(days=1)             # available THROUGH the end date
+        win["deadline"] = end
+    return win
+
+
+# ---- live concurrency (all claude sessions, not just --resume) --------------------------------
+
+ENV_TOK = re.compile(r"^[A-Z_][A-Z0-9_]*=")
+
+
+def concurrency(cfg):
+    """Live interactive-session count per account. Counts processes whose argv[0] is the claude
+    binary (excludes expect wrappers and node/MCP children that inherit the env), attributed via
+    the CLAUDE_CONFIG_DIR env var that every launcher sets (ps -E appends env). Bare `claude`
+    (env CLAUDE_CONFIG_DIR absent or ~/.claude) counts toward 'next' — .claude mirrors
+    .claude-next. Headless one-shots (-p/--print) are skipped."""
+    counts = {a["name"]: 0 for a in cfg["accounts"]}
+    by_dir = {a["config_dir"]: a["name"] for a in cfg["accounts"]}
+    mirror_next = next((a["name"] for a in cfg["accounts"] if a["config_dir"].endswith(".claude-next")), None)
+    by_dir[os.path.join(HOME, ".claude")] = mirror_next
+    try:
+        out = subprocess.run(["ps", "-wwEo", "command="], capture_output=True, text=True,
+                             timeout=10).stdout
+    except (subprocess.TimeoutExpired, OSError):
+        return counts
+    for line in out.splitlines():
+        toks = line.split()
+        if not toks:
+            continue
+        t0 = toks[0]
+        if not (t0 == "claude" or t0.endswith("/claude") or "cli.js" in t0):
+            continue
+        argv = []
+        for t in toks[1:]:
+            if ENV_TOK.match(t):
+                break
+            argv.append(t)
+        if "-p" in argv or "--print" in argv or "--version" in argv:
+            continue
+        mcfg = re.search(r"CLAUDE_CONFIG_DIR=(\S+)", line)
+        d = os.path.expanduser(mcfg.group(1)) if mcfg else os.path.join(HOME, ".claude")
+        name = by_dir.get(d.rstrip("/"))
+        if name:
+            counts[name] += 1
+    return counts
+
+
+# ---- usage endpoint (urllib in-process: no tokens in argv/ps) ---------------------------------
+
+def _ssl_ctx():
+    # python.org framework builds ship no CA bundle (CERTIFICATE_VERIFY_FAILED) — prefer
+    # certifi, then the macOS system bundle, then whatever the default context finds.
+    import ssl
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        pass
+    if os.path.exists("/etc/ssl/cert.pem"):
+        return ssl.create_default_context(cafile="/etc/ssl/cert.pem")
+    return ssl.create_default_context()
+
+
+SSL_CTX = None
+
+
+def fetch_usage(cfg, token, retries=2):
+    global SSL_CTX
+    if SSL_CTX is None:
+        SSL_CTX = _ssl_ctx()
+    req = urllib.request.Request(
+        cfg["usage_endpoint"],
+        headers={"Authorization": f"Bearer {token}",
+                 "anthropic-beta": "oauth-2025-04-20",
+                 "User-Agent": cfg.get("user_agent", "claude-cli")})
+    for attempt in range(retries + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=12, context=SSL_CTX) as r:
+                return r.status, json.loads(r.read().decode())
+        except urllib.error.HTTPError as e:
+            body = {}
+            try:
+                body = json.loads(e.read().decode())
+            except Exception:
+                pass
+            if e.code == 429 and attempt < retries:
+                time.sleep(1.5 * (attempt + 1))
+                continue
+            return e.code, body
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError):
+            if attempt < retries:
+                time.sleep(1.0)
+                continue
+            return None, None
+    return None, None
+
+
+# ---- heal (delegated to the official binary; rotation-safe) -----------------------------------
+
+def heal(cfg, acct, refresh_token, k_live):
+    """Headless re-auth via `claude auth login` with the refresh token in env. The binary does
+    the refresh grant AND persists the (possibly rotated) tokens to the same keychain item.
+    Gated: only when the account has ZERO live sessions (no rotation race with a running CC) and
+    under a per-account lock. Returns (ok, detail)."""
+    if k_live > 0:
+        return False, f"skipped: {k_live} live session(s) — CC owns the token lifecycle"
+    if not refresh_token:
+        return False, "skipped: no refresh token in keychain"
+    cbin = cfg["claude_bin"]
+    if not os.path.exists(cbin):
+        return False, f"skipped: claude binary missing at {cbin}"
+    lock_path = f"/tmp/claude-accounts-heal-{acct['name']}.lock"
+    with open(lock_path, "w") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return False, "skipped: another heal in flight"
+        env = os.environ.copy()
+        env["CLAUDE_CONFIG_DIR"] = acct["config_dir"]
+        env["CLAUDE_CODE_OAUTH_REFRESH_TOKEN"] = refresh_token
+        env["CLAUDE_CODE_OAUTH_SCOPES"] = cfg["oauth_scopes"]
+        try:
+            p = subprocess.run([cbin, "auth", "login"], env=env, capture_output=True,
+                               text=True, timeout=90)
+        except subprocess.TimeoutExpired:
+            log_event(f"heal {acct['name']}: TIMEOUT")
+            return False, "heal timed out"
+        ok = p.returncode == 0 and "Login successful" in (p.stdout + p.stderr)
+        detail = (p.stdout + p.stderr).strip().splitlines()[-1] if (p.stdout or p.stderr) else f"rc={p.returncode}"
+        log_event(f"heal {acct['name']}: {'OK' if ok else 'FAIL'} — {detail}")
+        return ok, detail
+
+
+# ---- collection ------------------------------------------------------------------------------
+
+def hrs_until(iso):
+    if not iso:
+        return None
+    try:
+        return (datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+                - datetime.now(timezone.utc)).total_seconds() / 3600.0
+    except ValueError:
+        return None
+
+
+def pick(u, kind, scope_name=None):
+    for lm in (u.get("limits") or []):
+        if lm.get("kind") != kind:
+            continue
+        if scope_name and ((lm.get("scope") or {}).get("model") or {}).get("display_name") != scope_name:
+            continue
+        return lm.get("percent"), lm.get("resets_at")
+    return None, None
+
+
+def collect(cfg, no_heal=False):
+    kc = cfg["keychain_account"]
+    counts = concurrency(cfg)
+    rows = []
+    for acct in cfg["accounts"]:
+        name = acct["name"]
+        row = {"acct": name, "email": acct["email"], "dia_profile": acct["dia_profile"],
+               "launcher": acct["launcher"], "k": counts.get(name, 0), "auth": None}
+        creds, kstate = read_creds(acct["config_dir"], kc)
+        if kstate != "present":
+            row["auth"] = "logged-out" if kstate == "no-keychain-item" else "keychain-error"
+            row["error"] = row["auth"]
+            rows.append(row)
+            continue
+        token = creds.get("accessToken")
+        expires_ms = creds.get("expiresAt") or 0
+        stale = expires_ms / 1000.0 <= time.time() + 60
+        row["auth"] = "stale" if stale else "ok"
+        if stale and not no_heal:
+            ok, detail = heal(cfg, acct, creds.get("refreshToken"), row["k"])
+            if ok:
+                creds, kstate = read_creds(acct["config_dir"], kc)
+                token = (creds or {}).get("accessToken")
+                row["auth"] = "healed"
+            elif "invalid" in detail.lower() or "revoked" in detail.lower():
+                row["auth"] = "logged-out"
+                row["error"] = "logged-out"
+                rows.append(row)
+                continue
+            else:
+                row["heal_note"] = detail
+        status, u = fetch_usage(cfg, token) if token else (None, None)
+        if status == 401:
+            # CC may have rotated the token between our read and the call — one fresh re-read.
+            creds, kstate = read_creds(acct["config_dir"], kc)
+            token = (creds or {}).get("accessToken")
+            status, u = fetch_usage(cfg, token) if token else (None, None)
+            if status == 401:
+                if row["auth"] == "stale":
+                    row["error"] = "stale (expired token; heal skipped/failed — see heal_note)"
+                else:
+                    row["auth"] = "token-invalid"
+                    row["error"] = "token-invalid (revoked? run /accounts relogin check)"
+                rows.append(row)
+                continue
+        if status == 429:
+            row["error"] = "rate-limited"
+            rows.append(row)
+            continue
+        if not u or "limits" not in u:
+            row["error"] = f"no data (http {status})"
+            rows.append(row)
+            continue
+        sp, sr = pick(u, "session")
+        wp, wr = pick(u, "weekly_all")
+        fp, fr = pick(u, "weekly_scoped", cfg["frontier"]["scoped_display_name"])
+        eu = u.get("extra_usage") or {}
+        row.update({
+            "session_pct": sp, "session_reset_h": hrs_until(sr),
+            "weekly_pct": wp, "weekly_reset_h": hrs_until(wr), "weekly_reset_at": wr,
+            "fable_pct": fp, "fable_reset_h": hrs_until(fr), "fable_reset_at": fr,
+            "credits_on": bool(eu.get("is_enabled")), "credits_used": eu.get("used_credits") or 0.0,
+        })
+        rows.append(row)
+    return rows
+
+
+# ---- router (verified scoring math, 2026-07-04; audit fixes 2026-07-10) -----------------------
+
+def clamp(x, lo, hi):
+    return max(lo, min(hi, x))
+
+
+def _soft(r, R):
+    su = (r.get("session_pct") or 0) / 100.0
+    wu = (r.get("weekly_pct") or 0) / 100.0
+    SF = clamp((R["S_CUT"] - su) / (R["S_CUT"] - R["S_SOFT"]), R["SF_FLOOR"], 1.0)
+    KF = clamp(1 - r.get("k", 0) / R["KMAX"], R["KFLOOR"], 1.0)
+    CF = (1.0 if wu < 0.90 else 0.5) if r.get("credits_on") else 1.0
+    return SF * KF * CF
+
+
+def _excluded(r, R):
+    if "error" in r:
+        return r["error"]
+    if r.get("session_pct") is None:
+        return "no-session-data"
+    su = r["session_pct"] / 100.0
+    sr = r.get("session_reset_h")
+    if su >= R["S_CUT"] and (sr is None or sr >= R["EPS_H"]):
+        return "5h-cutoff"
+    if r.get("k", 0) >= R["KMAX"]:
+        return "kmax-concurrency"
+    return None
+
+
+def score_general(r, cfg):
+    R = cfg["router"]
+    reason = _excluded(r, R)
+    if reason:
+        return None, reason
+    if r.get("weekly_pct") is None:
+        return None, "no-weekly-data"          # missing data is NOT headroom
+    wtgt = 0.98 if r.get("credits_on") else 1.00
+    w_rem = max(0.0, wtgt - r["weekly_pct"] / 100.0)
+    if w_rem <= R["WEEKLY_FLOOR"]:
+        return None, "weekly-exhausted"
+    T = max((r.get("weekly_reset_h") or R["EPS_H"]) - R["MARGIN_H"], R["EPS_H"])
+    return (w_rem / T) * _soft(r, R), None
+
+
+def score_fable(r, cfg, win):
+    R, F = cfg["router"], cfg["frontier"]
+    reason = _excluded(r, R)
+    if reason:
+        return None, reason
+    if win["active"] is None:
+        return None, "window-unknown"           # SSOT unreadable: fail loud, not open/closed
+    if not win["active"]:
+        return None, "window-inactive"
+    if r.get("fable_pct") is None:
+        return None, "no-fable-limit"           # missing scoped limit = no entitlement, not 100% headroom
+    if r.get("weekly_pct") is None:
+        return None, "no-weekly-data"
+    h_deadline = None
+    if win["deadline"] is not None:
+        h_deadline = (win["deadline"] - datetime.now(timezone.utc)).total_seconds() / 3600.0 \
+            - F["deadline_margin_h"]
+        if h_deadline <= 0 and not F.get("credits_authorized"):
+            return None, "window-ended"
+        if h_deadline <= 0:
+            h_deadline = None                   # credits mode: no window pressure, CF deprioritizes
+    w_rem = max(0.0, (0.98 if r.get("credits_on") else 1.00) - r["weekly_pct"] / 100.0)
+    f_eff = min(F["coupling"] * max(0.0, 1 - r["fable_pct"] / 100.0), w_rem)
+    if f_eff <= R["FABLE_FLOOR"]:
+        return None, "fable-exhausted"
+    T_fable = max((r.get("fable_reset_h") or R["EPS_H"]) - R["MARGIN_H"], R["EPS_H"])
+    H = max(min(T_fable, h_deadline), R["EPS_H"]) if h_deadline is not None else max(T_fable, R["EPS_H"])
+    JB = R["JB_BONUS"] if (h_deadline is not None and T_fable > h_deadline) else 1.00
+    return (f_eff / H) * JB * _soft(r, R), None
+
+
+def ranked(rows, cfg, win, kind):
+    out = []
+    reasons = {}
+    for r in rows:
+        s, why = score_fable(r, cfg, win) if kind == "fable" else score_general(r, cfg)
+        if s is not None and s > 0:
+            out.append((s, r))
+        else:
+            reasons[r["acct"]] = why or "zero-score"
+    out.sort(key=lambda x: x[0], reverse=True)
+    return out, reasons
+
+
+# ---- shared cache (single-flight) -------------------------------------------------------------
+
+def cache_read(cfg):
+    try:
+        with open(cfg["cache_file"]) as f:
+            c = json.load(f)
+        if time.time() - c.get("ts", 0) <= cfg.get("cache_ttl_s", 90):
+            return c
+    except (OSError, json.JSONDecodeError):
+        pass
+    return None
+
+
+def cache_write(cfg, payload):
+    tmp = cfg["cache_file"] + f".{os.getpid()}.tmp"
+    try:
+        with open(tmp, "w") as f:
+            json.dump(payload, f)
+        os.replace(tmp, cfg["cache_file"])
+    except OSError:
+        pass
+
+
+def get_data(cfg, fresh=False, no_heal=False):
+    if not fresh:
+        c = cache_read(cfg)
+        if c:
+            return c["rows"], c["window"], True
+    lock_path = cfg["cache_file"] + ".lock"
+    with open(lock_path, "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)         # single-flight: first caller sweeps, rest reuse
+        if not fresh:
+            c = cache_read(cfg)
+            if c:
+                return c["rows"], c["window"], True
+        win = frontier_window(cfg)
+        rows = collect(cfg, no_heal=no_heal)
+        wj = {"active": win["active"], "end": win["end"],
+              "deadline": win["deadline"].isoformat() if win["deadline"] else None}
+        cache_write(cfg, {"ts": time.time(), "rows": rows, "window": wj})
+        return rows, wj, False
+
+
+def win_from_json(wj):
+    d = None
+    if wj.get("deadline"):
+        d = datetime.fromisoformat(wj["deadline"])
+    return {"active": wj.get("active"), "end": wj.get("end"), "deadline": d}
+
+
+# ---- output ----------------------------------------------------------------------------------
+
+def bar(p):
+    if p is None:
+        return "     ?     "
+    n = int(round(p / 10))
+    return f"{'█' * n}{'░' * (10 - n)} {p:>3.0f}%"
+
+
+def fmt_h(h):
+    if h is None:
+        return "?"
+    if h < 1:
+        return f"{int(h * 60)}m"
+    if h < 48:
+        return f"{h:.1f}h"
+    return f"{h / 24:.1f}d"
+
+
+def main():
+    args = sys.argv[1:]
+    if "-h" in args or "--help" in args:
+        print(__doc__)
+        return
+    cfg = load_cfg()
+    fresh = "--fresh" in args
+    no_heal = "--no-heal" in args
+
+    if "--relogin-info" in args:
+        name = args[args.index("--relogin-info") + 1]
+        acct = next((a for a in cfg["accounts"] if a["name"] == name), None)
+        if not acct:
+            sys.exit(f"unknown account: {name} ({'|'.join(a['name'] for a in cfg['accounts'])})")
+        dia_dir = None
+        try:
+            ls = json.load(open(cfg["dia_local_state"]))
+            dia_dir = {v.get("name"): k for k, v in ls["profile"]["info_cache"].items()}.get(acct["dia_profile"])
+        except (OSError, KeyError, json.JSONDecodeError):
+            pass
+        creds, kstate = read_creds(acct["config_dir"], cfg["keychain_account"])
+        print(json.dumps({**{k: v for k, v in acct.items()}, "dia_profile_dir": dia_dir,
+                          "keychain_service": keychain_service(acct["config_dir"]),
+                          "keychain_state": kstate, "claude_bin": cfg["claude_bin"],
+                          "oauth_scopes": cfg["oauth_scopes"],
+                          "has_refresh_token": bool(creds and creds.get("refreshToken"))}, indent=2))
+        return
+
+    rows, wj, cached = get_data(cfg, fresh=fresh, no_heal=no_heal)
+    win = win_from_json(wj)
+
+    if "--json" in args:
+        for r in rows:
+            g, gr = score_general(r, cfg)
+            f, fr_ = score_fable(r, cfg, win)
+            r["score_general"], r["score_fable"] = g, f
+            r["route_reasons"] = {"general": gr, "fable": fr_}
+        print(json.dumps({"window": wj, "cached": cached, "rows": rows}, indent=2))
+        return
+
+    if "--route" in args or "--rank" in args:
+        flag = "--route" if "--route" in args else "--rank"
+        kind = "fable" if "fable" in args else "general"
+        cand, reasons = ranked(rows, cfg, win, kind)
+        if not cand:
+            print("none")
+            print(f"claude-accounts: no routable account for {kind}: "
+                  + "; ".join(f"{a}={w}" for a, w in reasons.items()), file=sys.stderr)
+            sys.exit(2)
+        if flag == "--route":
+            print(cand[0][1]["acct"])
+        else:
+            for s, r in cand:
+                print(f"{r['acct']} {s:.6f}")
+        return
+
+    # human table
+    src = "cache" if cached else "live"
+    print(f"\n  Claude Max — all accounts   ({datetime.now().strftime('%a %H:%M')}, {src})\n")
+    print(f"  {'acct':<6} {'auth':<11} {'k':<2} {'5h-session':<16} {'weekly ALL':<16} "
+          f"{'weekly FABLE':<16} {'reset':<7} credits")
+    print(f"  {'-'*6} {'-'*11} {'-'*2} {'-'*16} {'-'*16} {'-'*16} {'-'*7} -------")
+    for r in rows:
+        if "error" in r:
+            print(f"  {r['acct']:<6} {r.get('auth') or '?':<11} {r.get('k', 0):<2} "
+                  f"{r['error']}  ({r['email']} · Dia: {r['dia_profile']})")
+            continue
+        cr = f"on {r['credits_used']:.0f}" if r.get("credits_on") else "off"
+        print(f"  {r['acct']:<6} {r.get('auth') or '?':<11} {r.get('k', 0):<2} "
+              f"{bar(r['session_pct']):<16} {bar(r['weekly_pct']):<16} "
+              f"{bar(r['fable_pct']):<16} {fmt_h(r.get('weekly_reset_h')):<7} {cr}")
+    g, _ = ranked(rows, cfg, win, "general")
+    f, fre = ranked(rows, cfg, win, "fable")
+    if win["active"] is None:
+        wline = "UNKNOWN (model-config.yaml unreadable)"
+    elif not win["active"]:
+        wline = "inactive"
+    else:
+        left = f" ({fmt_h((win['deadline'] - datetime.now(timezone.utc)).total_seconds() / 3600.0)} left)" \
+            if win["deadline"] else ""
+        wline = f"active through {win['end']}{left}"
+    print(f"\n  Fable window: {wline}")
+    print(f"  → GENERAL work → {g[0][1]['acct'] if g else 'none'}    "
+          f"→ FABLE work → {f[0][1]['acct'] if f else 'none'}"
+          + ("" if f else f"   ({'; '.join(f'{a}={w}' for a, w in fre.items())})"))
+    for r in rows:
+        if r.get("auth") in ("logged-out", "token-invalid", "keychain-error"):
+            print(f"  ⚠ {r['acct']} needs re-login → {r['email']} · Dia profile '{r['dia_profile']}'"
+                  f" — run: claude-accounts --relogin-info {r['acct']}  (skill: account-relogin)")
+    print()
+
+
+if __name__ == "__main__":
+    main()

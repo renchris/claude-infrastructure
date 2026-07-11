@@ -1,0 +1,75 @@
+{
+  "_what": "SSOT for the 4 Claude Max accounts: identity map (launcher -> config dir -> email -> mailbox -> Dia profile) + router/endpoint config. Consumed by bin/claude-accounts, /accounts, scripts/handoff-fire.sh, skills/account-relogin. Deployed as a symlink at ~/.claude/accounts.json (install.sh); the knowledge-layer mirror shares it into every account config dir.",
+  "_secrets": "NO tokens live here, ever. OAuth tokens stay in the macOS Keychain (item 'Claude Code-credentials-<sha256(config-dir)[:8]>', account = keychain_account). Emails are fine: this repo is private.",
+  "_order": "accounts[] order = operator spend priority (next > next4 > next3 > next2, resume-sessions REFERENCE.md operator policy 2026-07-04).",
+  "keychain_account": "chrisren",
+  "oauth_client_id": "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
+  "oauth_scopes": "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload",
+  "usage_endpoint": "https://api.anthropic.com/api/oauth/usage",
+  "token_endpoint": "https://platform.claude.com/v1/oauth/token",
+  "user_agent": "claude-cli/2.1.183",
+  "claude_bin": "~/.claude-183/node_modules/.bin/claude",
+  "model_config_ssot": "~/.claude/model-config.yaml",
+  "dia_local_state": "~/Library/Application Support/Dia/User Data/Local State",
+  "cache_file": "/tmp/claude-accounts-cache.json",
+  "cache_ttl_s": 90,
+  "frontier": {
+    "_": "Window end/active are READ LIVE from model_config_ssot frontier_access (never hardcode a date — the reso-quota JUL7 lesson). coupling = fable_cap/weekly_cap per SSOT '<=50% of weekly usage limits'. end_date_inclusive: SSOT 'end:' means available THROUGH that date. credits_authorized: keep scoring Fable past the window deadline (deprioritized by CF) instead of hard-excluding — flip only on explicit operator authorization.",
+    "scoped_display_name": "Fable",
+    "coupling": 0.5,
+    "deadline_margin_h": 2.0,
+    "end_date_inclusive": true,
+    "credits_authorized": false
+  },
+  "router": {
+    "_": "Verified scoring constants (design->judge->5 adversarial verifiers, 2026-07-04; see resume-sessions REFERENCE.md section 6). KMAX raised 4 -> 8 on 2026-07-10: the old counter only saw --resume sessions (k<=1); the fixed counter sees ALL live sessions (observed 5-6 on primary accounts as deliberate operator practice), so KMAX=4 would have hard-excluded the priority accounts.",
+    "S_CUT": 0.85,
+    "S_SOFT": 0.5,
+    "SF_FLOOR": 0.05,
+    "KMAX": 8,
+    "KFLOOR": 0.1,
+    "MARGIN_H": 0.5,
+    "EPS_H": 0.25,
+    "WEEKLY_FLOOR": 0.005,
+    "FABLE_FLOOR": 0.02,
+    "JB_BONUS": 1.25
+  },
+  "accounts": [
+    {
+      "name": "next",
+      "config_dir": "~/.claude-next",
+      "launcher": "claude-next",
+      "fable_launcher": "claude-fable",
+      "email": "ichris96+claude@hotmail.com",
+      "mailbox": "ichris96@hotmail.com",
+      "dia_profile": "Personaly"
+    },
+    {
+      "name": "next4",
+      "config_dir": "~/.claude-quaternary",
+      "launcher": "claude-next4",
+      "fable_launcher": "claude-fable4",
+      "email": "chris.claudecode@outlook.com",
+      "mailbox": "chris.claudecode@outlook.com",
+      "dia_profile": "Claude4"
+    },
+    {
+      "name": "next3",
+      "config_dir": "~/.claude-tertiary",
+      "launcher": "claude-next3",
+      "fable_launcher": "claude-fable3",
+      "email": "ren.chris+claude@outlook.com",
+      "mailbox": "ren.chris@outlook.com",
+      "dia_profile": "Claude3"
+    },
+    {
+      "name": "next2",
+      "config_dir": "~/.claude-secondary",
+      "launcher": "claude-next2",
+      "fable_launcher": "claude-fable2",
+      "email": "chris.swe+claude@outlook.com",
+      "mailbox": "chris.swe@outlook.com",
+      "dia_profile": "Claude2"
+    }
+  ]
+}
