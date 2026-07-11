@@ -134,8 +134,15 @@ two `─` rules are the canonical VISIBLE boundary; the fence is the invisible m
    - A pointer to the durable plan's resume section (§ Resumption / Phase N / RESUME STATE /
      status log — whatever the plan uses). Do NOT duplicate the plan's content.
 
-4. **Open it in Cursor:** `cursor /tmp/<plan-slug>-resume.md` (fall back to printing the path if the
-   `cursor` CLI isn't available).
+4. **Surface the artifacts — Cursor ONLY on a held fire:** when the fire is HELD ("paste only" /
+   "hold fire" / the readiness gate holds — i.e., the human will actually copy-paste), open the
+   bridge: `cursor /tmp/<slug>-resume.md` (print the path if the `cursor` CLI is absent). On an
+   **autonomous fire (the DEFAULT), NEVER open Cursor** — that step existed only for the manual
+   copy-paste era. Instead emit every artifact path (the bridge and each `/tmp/fire-<slug>.txt`) as
+   a **bare absolute path on its own line** in chat — the clickable form (the CC TUI linkifies bare
+   file paths, and iTerm2 semantic history Cmd+click works on them regardless; verified 2026-07-11).
+   Do NOT wrap paths in markdown `[label](file://…)` links — no clickability gain, and the label
+   hides the path.
 
 5. **Emit the paste payload inline** in your reply — bracketed by the same two labeled `─` rule lines
    (§ Paste block) — so the user can copy it straight from chat without opening the file, with the copy
@@ -316,8 +323,9 @@ it, then fire. "paste only" / "hold fire" / "no fire" always wins; an explicit "
 One handoff = the WHOLE wave: N tracks → fire all N, never just the first. One script call per track,
 invoked serially (keeps worktree adds race-safe). Report a per-track table (launcher@destination,
 surface, prompt path, **notify-back?** — yes+UUID when `--notify-back` armed R-PING, else no) after
-firing, then emit the disposition (§ Post-fire disposition). All existing bridge guardrails still
-apply to each payload.
+firing, followed by each track's bridge + fire-file paths as bare absolute paths on their own lines
+(the clickable form — step 4), then emit the disposition (§ Post-fire disposition). All existing
+bridge guardrails still apply to each payload.
 
 **7 · Self-close — retire the emptied main session (the CLOSE arm of § Post-fire disposition).**
 Invoked ONLY off a `🔚 DISPOSITION: CLOSE` emission — a pane-spawn wave is away and no taxonomy
