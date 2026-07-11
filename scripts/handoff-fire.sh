@@ -12,9 +12,12 @@
 #   --prompt-file F     REQUIRED. File whose content is auto-submitted as the session's first
 #                       message via `launcher "$(cat F)"`. Content arrives VERBATIM — command
 #                       substitution output is never re-expanded (only trailing newlines strip).
-#   --account A         next|next2|next3|next4|auto (default auto). auto = static hint order
-#                       next2>next3>next4>next, re-ranked ascending by trailing-5h transcript
-#                       activity per config dir (the free draw-proxy; corrects a stale hint).
+#   --account A         next|next2|next3|next4|auto (default auto). auto = live-limit ranking
+#                       via `claude-accounts --rank` (5h/weekly/Fable headroom + resets + live
+#                       session spread; fable ranking when --model fable). Degrades to the
+#                       trailing-5h transcript-activity proxy ONLY when live limits are
+#                       unreadable; halts (never fires blind) when limits say NO account is
+#                       routable. Static hint orders are retired — they went stale in 48h.
 #   --launcher L        Explicit launcher name (e.g. claude-fable3). Overrides --account/--model
 #                       launcher composition; still gets --effort/--model/--extra args appended.
 #   --model M           opus|claude-opus-4-8 (launcher default) | fable|claude-fable-5 | other.
@@ -348,14 +351,36 @@ proj_dir() { case "$1" in next) echo "$HOME/.claude/projects" ;; *) echo "$(cfg_
 
 activity() { find "$(proj_dir "$1")" -name '*.jsonl' -mmin -300 2>/dev/null | wc -l | tr -d ' '; }
 
-# Static hint order (favor next2, spread, next1 LAST — out_of_credits), re-ranked ascending by
-# live 5h activity; tie-break = the explicit hint-index key (-k2,2n). Emits "account count" lines
-# so callers reuse the counts without re-running the find traversals.
+# Account ranking. PRIMARY = claude-accounts --rank (live limits: weekly/Fable headroom ×
+# reset urgency × 5h-safety × live-session spread; shared 90s cache so waves don't stampede
+# the endpoint). Kind follows the model (fable fires rank on the Fable sub-cap). FALLBACK =
+# ascending trailing-5h transcript activity, ONLY when live limits are unreadable (tool
+# missing / endpoint down = rank exit 3). Rank exit 2 = data fine but NO account routable by
+# policy (exhausted/cutoff/window) → return 1: the caller HALTS rather than firing blind.
+# Never a static account order (two static lists contradicted each other within 48h).
+# Output: line 1 = "# <source label>", then "account score" lines best-first.
 ranked_accounts() {
+  local kind=general out rc
+  [ "$MODEL" = "claude-fable-5" ] && kind=fable
+  if command -v claude-accounts >/dev/null 2>&1; then
+    out="$(claude-accounts --rank "$kind" 2>/tmp/handoff-rank-err.$$)"; rc=$?
+    if [ "$rc" = 0 ] && [ -n "$out" ]; then
+      rm -f "/tmp/handoff-rank-err.$$"
+      printf '# live-limits (%s)\n%s\n' "$kind" "$out"; return 0
+    fi
+    if [ "$rc" = 2 ]; then
+      echo "✗ claude-accounts: NO account routable for $kind — $(cat "/tmp/handoff-rank-err.$$" 2>/dev/null)" >&2
+      rm -f "/tmp/handoff-rank-err.$$"; return 1
+    fi
+    rm -f "/tmp/handoff-rank-err.$$"    # exit 3 / other: live limits unreadable → degrade
+  fi
   local i=0 a
-  for a in next2 next3 next4 next; do
-    printf '%s %s %s\n' "$(activity "$a")" "$i" "$a"; i=$((i+1))
-  done | sort -s -k1,1n -k2,2n | awk '{print $3, $1}'
+  {
+    printf '# activity-proxy (DEGRADED: live limits unavailable)\n'
+    for a in next2 next3 next4 next; do
+      printf '%s %s %s\n' "$(activity "$a")" "$i" "$a"; i=$((i+1))
+    done | sort -s -k1,1n -k2,2n | awk '{print $3, $1}'
+  }
 }
 
 launcher_for() { # $1=account — compose launcher name from account + model
@@ -400,7 +425,10 @@ elif [ "$ACCOUNT" != "auto" ]; then
   fi
   LAUNCHER="$(launcher_for "$ACCOUNT")"
 else
-  RANKED="$(ranked_accounts)"                                  # "account count" per line, sorted
+  RANKED_ALL="$(ranked_accounts)" \
+    || { echo "✗ halting fire: no routable account (see claude-accounts reasons above)" >&2; exit 1; }
+  RANK_SRC="$(printf '%s\n' "$RANKED_ALL" | sed -n '1s/^# //p')"
+  RANKED="$(printf '%s\n' "$RANKED_ALL" | tail -n +2)"         # "account score|count" best-first
   NAMES="$(printf '%s\n' "$RANKED" | awk '{print $1}')"
   if [ "$PROBE" = 1 ] && [ "$DRY" = 0 ]; then
     for a in $NAMES; do
@@ -419,7 +447,9 @@ fi
 case "$LAUNCHER" in claude-fable*) FABLE_EFFECTIVE=1 ;; *) FABLE_EFFECTIVE=0 ;; esac
 [ "$MODEL" = "claude-fable-5" ] && FABLE_EFFECTIVE=1
 if [ "$FABLE_EFFECTIVE" = 1 ] && [ -f "$MODEL_CONFIG" ]; then
-  active="$(awk '/^frontier_access:/{f=1} f && /active:/{print $2; exit}' "$MODEL_CONFIG")"
+  # match ONLY the real key (indented `active: <val>`), never a comment that mentions
+  # `active:false` — the Jul-9 window-extension comment did exactly that and false-warned.
+  active="$(awk '/^frontier_access:/{f=1} f && /^[[:space:]]+active:[[:space:]]/{print $2; exit} f && /^[^[:space:]#]/ && !/^frontier_access:/{exit}' "$MODEL_CONFIG")"
   [ "$active" = "true" ] || echo "⚠️  frontier_access.active != true in $MODEL_CONFIG — Fable will likely reject ('model may not exist or you may not have access'). Use --probe, or flip the SSOT first." >&2
 fi
 
@@ -686,7 +716,7 @@ recycle_fire() {
 
 if [ "$DRY" = 1 ]; then
   echo "── dry run ──────────────────────────────────────"
-  [ -n "$RANKED" ] && { echo "account ranking (5h-activity asc):"; printf '%s\n' "$RANKED" | while read -r a c; do echo "  $a  activity=$c"; done; }
+  [ -n "$RANKED" ] && { echo "account ranking (${RANK_SRC:-unknown source}):"; printf '%s\n' "$RANKED" | while read -r a c; do echo "  $a  $c"; done; }
   echo "account:  ${CHOSEN:-auto}"
   echo "launcher: $LAUNCHER"
   if [ "$RECYCLE" = 1 ]; then

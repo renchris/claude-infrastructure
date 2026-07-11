@@ -553,7 +553,10 @@ def main():
             print("none")
             print(f"claude-accounts: no routable account for {kind}: "
                   + "; ".join(f"{a}={w}" for a, w in reasons.items()), file=sys.stderr)
-            sys.exit(2)
+            # exit 3 = every account errored (data unavailable — callers may degrade to a
+            # proxy); exit 2 = data was fine, no account routable by POLICY (exhausted /
+            # window / cutoff — callers must NOT fire blind).
+            sys.exit(3 if all("error" in r for r in rows) else 2)
         if flag == "--route":
             print(cand[0][1]["acct"])
         else:
