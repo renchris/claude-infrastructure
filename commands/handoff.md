@@ -198,12 +198,15 @@ shell (verified) — metacharacters and newlines arrive literally; only trailing
   > if `wc -c` on the fire file is near 4000, move detail into the referenced doc BEFORE firing.
 - Omit both for a plain continuation prompt.
 
-**2 · Account → launcher.** Explicit user choice wins. Else `--account auto`: static hint order
-`next2 > next3 > next4 > next` (next1 last — `out_of_credits`), re-ranked ascending by trailing-5h
-transcript activity per config dir — the free draw-proxy that corrects a stale hint (measured
-2026-07-02: next2 had 23 live sessions while next3 had 5). Keep ≤2 concurrent sessions per account;
-if a fired session rate-limits, relaunch the SAME worktree on another `claude-nextN` (no rework).
-Account = launcher suffix only; the worktree is account-agnostic.
+**2 · Account → launcher.** Explicit user choice wins. Else `--account auto` ranks by **live
+limits**: `claude-accounts --rank general|fable` (fable when `--model fable`) — real 5h/weekly/
+Fable headroom, reset urgency, and live session spread from the oauth usage endpoint, shared-cached
+90s so waves don't stampede it (SSOT: `~/.claude/accounts.json`; dashboard: `/accounts`). If the
+rank says NO account is routable (policy: exhausted/cutoff/window), the fire HALTS — never fire
+blind. Only when live limits are UNREADABLE (tool/endpoint down) does it degrade to the trailing-5h
+transcript-activity proxy. Static hint orders are retired — two of them contradicted each other
+within 48h. If a fired session rate-limits, relaunch the SAME worktree on another `claude-nextN`
+(no rework). Account = launcher suffix only; the worktree is account-agnostic.
 
 **3 · Model + effort.** Pick per the SSOT ladders (`~/.claude/model-config.yaml` `effort_defaults` +
 `roles`) — Opus and Fable run DIFFERENT ladders; never carry one model's effort habit onto the other:
@@ -284,12 +287,12 @@ and like a wave there is no track cap (practical ceiling ≈ 4 accounts × 2 con
 - One `/tmp/fire-<slug>.txt` + one script call per track, invoked back-to-back serially. Serial calls
   are NOT a bottleneck: each call only does the racy `git worktree add` (fast, race-safe when serial);
   the ~16-19s `pnpm install`s run INSIDE the panes and overlap — wall-clock ≈ one setup, not N.
-- **Account spread is the lead's job, not `--account auto`'s:** auto ranks per call and cannot see
-  sessions that haven't STARTED yet, so a rapid wave on auto would pile every track onto the same
-  least-busy account. Rank once (any `--dry-run` prints it), then assign explicitly round-robin
-  ascending — `--account next4`, `--account next3`, `--account next`, `--account next2`, wrap — ≤2
-  tracks per account. If a track rate-limits mid-flight, `/exit` and relaunch the SAME worktree on
-  another account (no rework; the worktree is account-agnostic).
+- **Account spread is the lead's job, not `--account auto`'s:** auto ranks per call from a 90s
+  shared cache and cannot see tracks that haven't STARTED yet, so a rapid wave on auto would pile
+  every track onto the same top-ranked account. Rank once — `claude-accounts --rank general` (or
+  any `--dry-run` prints it) — then assign explicitly round-robin down that ranking, ≤2 tracks per
+  account. If a track rate-limits mid-flight, `/exit` and relaunch the SAME worktree on another
+  account (no rework; the worktree is account-agnostic).
 - **Surfaces at wave scale:** every surface (`--split-right`/`--split-down`/`--tab`) anchors to the
   pane you fired from (via `$ITERM_SESSION_ID`), so the whole wave lands in YOUR window. Consecutive
   `--split-right` calls build a teammate-grid there — comfortable to ~3-4 panes; beyond that give each
