@@ -184,6 +184,18 @@ shell (verified) — metacharacters and newlines arrive literally; only trailing
   re-verify on CC bumps), equivalent in effect for command-file skills. When `/goal` leads a fired
   payload, put the `[locate]` self-locate line immediately AFTER it — in fire mode the spawner's `cd`
   already does the locating, and the header stays intact for the manual-paste fallback.
+  > **🚨 4000-CHARACTER GOAL CAP — a `/goal` payload consumes the ENTIRE payload (every line, not just
+  > the first) as the goal condition, and the goal condition is hard-capped at 4000 chars.** A longer
+  > payload is REJECTED at the fired session ("Goal condition is limited to 4000 characters (got N)")
+  > and the session gets NO task — a silent dead fire (observed 2026-07-10: a 4901-char inlined brief
+  > was rejected). **Fix — keep the goal SHORT by REFERENCING a durable doc, never inlining the brief:**
+  > `/goal <one-line objective> — full brief at <path>` where `<path>` is a committed plan/research doc
+  > (`docs/plans/*.md`) or a `/tmp/<slug>-brief.md` the fired session reads (same machine ⇒ `/tmp` is
+  > reachable; a committed doc is more durable). The detail lives in the doc; the goal just names the
+  > objective + the pointer + the 3-6 HARD constraints — keep the whole payload well under 4000. If a
+  > brief genuinely can't be shortened AND you don't need the persistent Stop-hook goal, **OMIT `/goal`
+  > and send the brief as a plain prompt** (no char cap — but no goal-condition). Budget the payload:
+  > if `wc -c` on the fire file is near 4000, move detail into the referenced doc BEFORE firing.
 - Omit both for a plain continuation prompt.
 
 **2 · Account → launcher.** Explicit user choice wins. Else `--account auto`: static hint order
