@@ -125,3 +125,35 @@ stop-on-issue verbatim).
     hatch). Reap only: dead pid (immediate) or empty pid past 5s grace / TTL.
   - Worktrees: `lh-t1` (infra-hardening: T1a/T1b + bats) + `lh-t2` (ship-docs: T1c + T2), both off
     `ship-hardening` @ b191f94. One parallel wave; lead merges → gates → dogfood-lands.
+- 2026-07-11 (session 2) — **COMPLETE. Landed on `main` (dogfooded).** All 4 acceptance gates green.
+  - **Deliverables (all on origin/main):** `scripts/land-lock.sh` + `scripts/stranded-sweep.sh`
+    (+ `tests/land-lock.bats` 7 · `tests/stranded-sweep.bats` 4 = 11/11 bats, shellcheck `-S warning`
+    clean); `.claude/commands/ship.md` (heavy infra flow); `commands/ship.md` (light global +
+    T2a/T2b); `CLAUDE.md` §concurrent-writers; `.gitignore` un-ignore of `.claude/` (so the
+    project-local command is trackable without `git add -f`).
+  - **Gates:** (1) race sim — bats #10 + a standalone faithful 2-clone repro (sibling lands feature,
+    drops stray; count reads 0 SILENT; sweep flags ONLY the stray, not the landed feature). (2)
+    synthetic stranded — bats #9. (3) shellcheck+bats green; live-holder-past-TTL respected — bats #5.
+    (4) dogfood land — landed via `land-lock.sh -- bash -c '<fetch→rebase→gate→push>'` then
+    content-verify + sweep; `~/.claude/land.log` has 2 clean landings (exit 0, repo-keyed).
+  - **Landed SHAs:** `553c0df` (decisions) · `981c8ac` (scripts+tests) · `5a06905` (docs) ·
+    `9bdb31e` (sweep-framing fix). f0f4013→9bdb31e, pure fast-forward.
+  - **Dogfood finding → fix (`9bdb31e`):** the post-land sweep flagged 5 commits on peer sessions'
+    live branches (`handoff-disposition`/`hd-helper`) — correct machine-wide behavior, but my step-7
+    wording ("STOP and recover") was a footgun (would cherry-pick peer WIP onto main). Reframed
+    `.claude/commands/ship.md` step 7 + the script's exit-1 summary as **REVIEW-not-blind-recover**:
+    recover only YOUR dropped work; leave peer WIP. **Key learning:** stranded-sweep is a machine-wide
+    REVIEW trigger (exit 1 = "verify each"), NOT a binary land-pass/fail — on a multi-session box
+    exit 1 is the normal state whenever any peer has unlanded WIP.
+  - **`~/.claude` sync (constraint 6):** `~/.claude/commands/ship.md` synced as a REAL file =
+    repo `commands/ship.md` (byte-identical). **Symlink flip DEFERRED** (not "keep-in-sync" as end
+    state): the shared checkout `~/Development/claude-infrastructure` is at f0f4013 (behind, read-only
+    to this effort) so it lacks `commands/ship.md` → a symlink would dangle and break `/ship`
+    globally. **Follow-up (once the shared checkout pulls main):**
+    `ln -sf /Users/chrisren/Development/claude-infrastructure/commands/ship.md /Users/chrisren/.claude/commands/ship.md`
+    (matches `handoff.md`). The infra heavy flow lives at `.claude/commands/ship.md` (project-local
+    override, does NOT symlink out).
+  - **T3 (reso optional):** NOT done — time-boxed out per plan ("skip if time-boxed"); the global
+    `/ship` T2b already gives reso's sessions the content-verify + `git cherry` sweep guidance.
+  - Teammates `infra-hardening` + `ship-docs` delivered clean, no crashes, no scope creep beyond the
+    necessary `.gitignore` change. Worktrees `lh-t1`/`lh-t2` + backup refs cleaned up post-land.
