@@ -92,5 +92,26 @@ exec expect -c '
     timeout {}
     eof { exit }
   }
+  if {$injected} {
+    # VERIFY the submit. A leading-/ prompt opens the slash-command autocomplete,
+    # which can swallow the first CR (menu-select, not submit) — the prompt then
+    # sits in the composer forever (observed 2026-07-11, ingest prompt stranded).
+    # "esc to interrupt" renders only while a turn is actually running: the
+    # un-fakeable submitted signal. Re-send CR until seen (an extra CR on an empty
+    # composer is a no-op; on an open menu it closes/accepts it).
+    set timeout 6
+    set submitted 0
+    for {set i 0} {$i < 5 && !$submitted} {incr i} {
+      expect {
+        -re {esc to interrupt} { set submitted 1 }
+        timeout { send "\r" }
+        eof { exit }
+      }
+    }
+    if {!$submitted} {
+      send_user "\nlr-fire-resume: WARNING — prompt may not have submitted; press Enter in the pane.\n"
+    }
+    set timeout 300
+  }
   interact
 '

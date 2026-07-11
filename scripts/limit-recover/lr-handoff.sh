@@ -135,12 +135,39 @@ EOF
 chmod +x "$LAUNCHER"
 
 if [[ $LAUNCH -eq 1 && $PRINT_ONLY -ne 1 ]]; then
-  osascript >/dev/null 2>&1 <<OSA || { echo "lr-handoff: iTerm2 launch failed — run manually: $LAUNCHER" >&2; }
+  # Split a pane to the RIGHT of the invoking pane (⌘D equivalent) so the recovered
+  # session lands beside its recovery operator. New window ONLY when there is no
+  # invoking pane (headless/cron) or the split fails. Validated live 2026-07-11.
+  OWN_PANE="${ITERM_SESSION_ID##*:}"
+  FIRED=""
+  if [[ -n "${ITERM_SESSION_ID:-}" ]]; then
+    FIRED=$(osascript 2>/dev/null <<OSA || true
+tell application "iTerm2"
+  repeat with w in windows
+    repeat with t in tabs of w
+      repeat with s in sessions of t
+        if id of s is "$OWN_PANE" then
+          tell s to split vertically with default profile command "/bin/bash $LAUNCHER"
+          return "split"
+        end if
+      end repeat
+    end repeat
+  end repeat
+  return ""
+end tell
+OSA
+)
+  fi
+  if [[ "$FIRED" == "split" ]]; then
+    echo "lr-handoff: fired split pane (right of invoking pane) on '$TARGET' (manual fallback: $LAUNCHER)" >&2
+  else
+    osascript >/dev/null 2>&1 <<OSA || { echo "lr-handoff: iTerm2 launch failed — run manually: $LAUNCHER" >&2; }
 tell application "iTerm2"
   create window with default profile command "/bin/bash $LAUNCHER"
 end tell
 OSA
-  echo "lr-handoff: fired new iTerm2 window on '$TARGET' (manual fallback: $LAUNCHER)" >&2
+    echo "lr-handoff: no invoking pane / split failed — fired new iTerm2 window on '$TARGET' (manual fallback: $LAUNCHER)" >&2
+  fi
 else
   command -v cursor >/dev/null 2>&1 && cursor "$LAUNCHER" >/dev/null 2>&1 || true
   echo "lr-handoff: launch script ready (not fired): $LAUNCHER" >&2
