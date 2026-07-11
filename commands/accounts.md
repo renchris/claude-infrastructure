@@ -20,7 +20,26 @@ One entrypoint over the 4-account fleet. The mechanism is `~/bin/claude-accounts
    claude-accounts --json     # when you need fields (auth, k, percents, resets, scores, reasons)
    ```
 
-2. **Interpret** — report to the user, answer-first:
+2. **Render the canonical readout — EXACTLY this structure, every invocation.** The CLI table
+   is the DATA SOURCE, not the chat format; never improvise columns (user directive 2026-07-11:
+   the readout must always answer "when does the 5h limit expire" and "when does the weekly
+   limit expire" at a glance). Compute from `claude-accounts --json` → `.rows[]`; absolutes in
+   LOCAL time as `EEE HH:MM` + coarse relative in parens — weekly from `weekly_reset_at`
+   (ISO, UTC), 5-hour from now + `session_reset_h` (no absolute field exists for it):
+
+   | account | live | 5h used | 5h resets | weekly used | Fable used | weekly resets |
+   |---|---|---|---|---|---|---|
+   | next4 ← you | 6 | 8% | Sat 07:21 (in 4.7h) | 25% | 22% | Sat 02:00 (in 23.4h) |
+
+   - Column set is FIXED — both reset columns present in EVERY row, absolute first.
+   - ONE weekly-resets column: the weekly and weekly-Fable buckets reset at the same instant
+     (`weekly_reset_at` == `fable_reset_at`); if they ever diverge, footnote it — never add a column.
+   - Mark the invoking session's account `← you` (derive from `$CLAUDE_CONFIG_DIR`).
+   - Flags are bullets BELOW the table (▲ ≥85% cutoff · **100% LIMITED** · Fable exhausted ·
+     `auth` ≠ ok), never extra columns. Row order = the CLI's own order.
+   - Close with the router footer verbatim (➤ general → X · ➤ fable → Y) + the Fable window line.
+
+3. **Interpret** — report to the user, answer-first:
    - **Routing**: the footer's `→ GENERAL work → X / → FABLE work → Y` is the
      adversarially-verified router (use-it-or-lose-it × Fable-sub-cap coupling ×
      5h-safety × concurrency-spread). For wave spread across several sessions use
@@ -36,7 +55,7 @@ One entrypoint over the 4-account fleet. The mechanism is `~/bin/claude-accounts
      never fall back to a remembered static account order (both historical static
      lists went stale within 48h — endpoint data is the only SSOT).
 
-3. **Logged-out account?** The table prints its email + Dia profile. Get the full
+4. **Logged-out account?** The table prints its email + Dia profile. Get the full
    identity block and invoke the re-login runbook:
 
    ```bash
@@ -47,7 +66,7 @@ One entrypoint over the 4-account fleet. The mechanism is `~/bin/claude-accounts
    covers the headless refresh-token path (no browser) and the browser-assisted
    OAuth path via the account's Dia profile, including the email-code fallback.
 
-4. **Routing-only asks** (`/accounts route fable`, "which account for X"): run
+5. **Routing-only asks** (`/accounts route fable`, "which account for X"): run
    `claude-accounts --route <kind>` and answer with the account + one line of why
    (its weekly %, reset, k from the table).
 
