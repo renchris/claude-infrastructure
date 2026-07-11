@@ -1,0 +1,135 @@
+#!/bin/bash
+# cc-notify — ping ANY live Claude Code session (any account) by friendly name or
+# pane UUID. The general primitive of the two-way session-comms feature.
+#
+#   cc-notify <target> "<message>"   target = friendly-name | pane-UUID | --self
+#   cc-notify --self                 print THIS session's pane UUID and exit
+#   cc-notify --list [--json]        list sessions (delegates to cc-sessions)
+#
+# Options:
+#   --from <name>     attribution written to the mailbox line (default: own
+#                     registered name, else the account)
+#   --mailbox-only    record to the mailbox but skip composer injection
+#   -h, --help        this help
+#
+# Delivery (two-way transport):
+#   1. it2 `session send -s <uuid> "<message>"`  — types the text, and
+#   2. it2 `session send -s <uuid> $'\r'`         — submits it (CARRIAGE RETURN,
+#      NOT newline: Claude Code's Ink composer binds Enter to \r only).
+#   The text lands in the target's composer as a real user message — waking an
+#   idle session or queuing into a busy one.
+#   ALWAYS also appends ~/.claude/mailbox/<uuid>.md ("<ISO> [<from>] <message>")
+#   as the durable fallback: a closed/recycled pane makes it2 exit non-zero, and
+#   cc-notify then reports "mailbox only" and still exits 0 — never a hard fail.
+#
+# Resolution order: friendly name (exact, via the cc-registry) -> raw pane UUID
+#   passthrough -> --self. Names never look like a UUID, so there is no ambiguity.
+#
+# Env overrides (tests): CC_REGISTRY_DIR, CC_MAILBOX_DIR, IT2_BIN.
+# bash 3.2-safe. Exit 0 = delivered or mailboxed; 2 = usage; 3 = unresolvable target.
+set -uo pipefail
+
+MAILBOX_DIR="${CC_MAILBOX_DIR:-$HOME/.claude/mailbox}"
+IT2="${IT2_BIN:-$HOME/.claude/bin/it2}"
+
+usage() { sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; }
+
+# cc-sessions lives beside cc-notify (same bin/). Prefer the sibling (deterministic
+# for tests + symlinked deploys), then PATH, then the canonical ~/.claude/bin.
+_sd="$(cd "$(dirname "$0")" 2>/dev/null && pwd || true)"
+CCS=""
+if   [ -n "$_sd" ] && [ -x "$_sd/cc-sessions" ]; then CCS="$_sd/cc-sessions"
+elif command -v cc-sessions >/dev/null 2>&1;     then CCS="$(command -v cc-sessions)"
+elif [ -x "$HOME/.claude/bin/cc-sessions" ];      then CCS="$HOME/.claude/bin/cc-sessions"
+fi
+
+command -v jq >/dev/null 2>&1 || { echo "cc-notify: jq required" >&2; exit 1; }
+
+# --- parse args ---
+FROM=""; MAILBOX_ONLY=0; TARGET=""; MSG=""; HAVE_TARGET=0; HAVE_MSG=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --list)         shift; if [ -n "$CCS" ]; then exec "$CCS" "$@"; else echo "cc-notify: cc-sessions not found" >&2; exit 1; fi ;;
+    --self)         TARGET="__self__"; HAVE_TARGET=1; shift ;;
+    --mailbox-only) MAILBOX_ONLY=1; shift ;;
+    --from)         FROM="${2:-}"; shift; [ $# -gt 0 ] && shift ;;
+    --from=*)       FROM="${1#--from=}"; shift ;;
+    -h|--help)      usage; exit 0 ;;
+    --*)            echo "cc-notify: unknown option '$1'" >&2; usage >&2; exit 2 ;;
+    *)
+      if   [ "$HAVE_TARGET" = 0 ]; then TARGET="$1"; HAVE_TARGET=1; shift
+      elif [ "$HAVE_MSG" = 0 ];    then MSG="$1"; HAVE_MSG=1; shift
+      else echo "cc-notify: too many arguments" >&2; usage >&2; exit 2; fi
+      ;;
+  esac
+done
+
+[ "$HAVE_TARGET" = 1 ] || { echo "cc-notify: no target given" >&2; usage >&2; exit 2; }
+
+# --- resolve target -> pane UUID ---
+own_uuid="${ITERM_SESSION_ID:-}"; own_uuid="${own_uuid##*:}"
+resolve() {
+  local t="$1" u=""
+  if [ "$t" = "__self__" ]; then
+    [ -n "$own_uuid" ] || return 1
+    echo "$own_uuid"; return 0
+  fi
+  # exact friendly-name match (registry, via cc-sessions --json)
+  if [ -n "$CCS" ]; then
+    u="$("$CCS" --json 2>/dev/null | jq -r --arg n "$t" 'map(select(.name==$n)) | .[0].paneUUID // empty' 2>/dev/null)"
+    [ -n "$u" ] && { echo "$u"; return 0; }
+  fi
+  # raw UUID passthrough
+  if [[ "$t" =~ ^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$ ]]; then
+    echo "$t"; return 0
+  fi
+  return 1
+}
+
+if ! uuid="$(resolve "$TARGET")"; then
+  if [ "$TARGET" = "__self__" ]; then
+    echo "cc-notify: --self needs \$ITERM_SESSION_ID (not in an iTerm2 pane)" >&2
+  else
+    echo "cc-notify: cannot resolve target '$TARGET' — not a live session name or a pane UUID" >&2
+    echo "  try: cc-notify --list" >&2
+  fi
+  exit 3
+fi
+
+# `cc-notify --self` with no message = just print own UUID (utility).
+if [ "$HAVE_MSG" = 0 ]; then
+  if [ "$TARGET" = "__self__" ]; then echo "$uuid"; exit 0; fi
+  echo "cc-notify: no message given" >&2; usage >&2; exit 2
+fi
+
+# --- attribution (default: own registered name, else account) ---
+if [ -z "$FROM" ]; then
+  rdir="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"
+  if [ -n "$own_uuid" ] && [ -f "$rdir/$own_uuid.json" ]; then
+    FROM="$(jq -r '.name // empty' "$rdir/$own_uuid.json" 2>/dev/null)"
+  fi
+  [ -z "$FROM" ] && FROM="$(basename "${CLAUDE_CONFIG_DIR:-$HOME/.claude}" | sed 's/^\.//')"
+fi
+
+# --- ALWAYS record the mailbox (durable fallback) ---
+mailbox_write() {
+  mkdir -p "$MAILBOX_DIR" 2>/dev/null || return 1
+  printf '%s [%s] %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$FROM" "$MSG" >> "$MAILBOX_DIR/$uuid.md"
+}
+mailbox_write || echo "cc-notify: warning — could not write mailbox $MAILBOX_DIR/$uuid.md" >&2
+
+# --- inject into the composer (unless --mailbox-only) ---
+if [ "$MAILBOX_ONLY" = 1 ]; then
+  echo "cc-notify: [$uuid] recorded to mailbox (injection skipped: --mailbox-only)" >&2
+  exit 0
+fi
+
+# text, then CR submit (\r — Ink composer submits on CR, never \n)
+if "$IT2" session send -s "$uuid" "$MSG" 2>/dev/null \
+   && "$IT2" session send -s "$uuid" "$(printf '\r')" 2>/dev/null; then
+  echo "cc-notify: delivered to $uuid (composer + mailbox)" >&2
+  exit 0
+else
+  echo "cc-notify: pane $uuid unreachable (closed/recycled) — delivered to mailbox only" >&2
+  exit 0
+fi
