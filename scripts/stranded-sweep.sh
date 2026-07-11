@@ -80,7 +80,8 @@ EOF
 done
 
 if [[ "${found}" -gt 0 ]]; then
-  echo "✗ stranded-sweep: ${found} stranded commit(s) found across ${branch_count} branch(es)." >&2
+  echo "✗ stranded-sweep: ${found} commit(s) with content not on ${REMOTE_TRUNK}, across ${branch_count} branch(es)." >&2
+  echo "  REVIEW each: recover only commits YOUR session just had a land drop; a peer session's unlanded WIP is expected — never cherry-pick it onto the trunk." >&2
   exit 1
 fi
 echo "✓ stranded-sweep: 0 stranded across ${branch_count} branch(es)"

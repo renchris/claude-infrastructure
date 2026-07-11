@@ -47,8 +47,11 @@ scripts/land-lock.sh -- bash -c '<pipeline>'
 - A bare `git rev-list --count origin/main..HEAD == 0` proves **nothing** after a sibling rebase — it read 0 in the 2026-07-11 incident while the files were absent from `main`. Content-verify is the real landing proof.
 
 ## 7. Post-land stranded sweep
-- Run `scripts/stranded-sweep.sh`. **Exit 1** means a sibling commit was rebase-dropped from `main` — **STOP** and recover per the recipe it prints before declaring done.
-- Exit 0 → no stranded commits; proceed to report.
+- Run `scripts/stranded-sweep.sh`. It sweeps **every local branch** (machine-wide) for commits whose content is not on `main` — this is what catches a sibling's rebase-drop of *your* commit even when it landed from a branch you do not own (the 2026-07-11 incident).
+- **Exit 1 is a REVIEW prompt, not an automatic failure.** For each commit listed, decide:
+  - it is **your** just-landed work that a rebase dropped → recover it via the printed recipe before declaring done;
+  - it is **another session's live feature branch** (unlanded WIP — expected on a multi-session box) → leave it. **Never** cherry-pick a peer session's WIP onto `main` — that is the very cross-session interference this flow exists to prevent.
+- Exit 0 → nothing unlanded on any branch; proceed to report.
 
 ## 8. Report
 - The landing lock releases automatically (its `EXIT` trap) — no manual unlock.
