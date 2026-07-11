@@ -401,6 +401,41 @@ launcher_for() { # $1=account — compose launcher name from account + model
   if [ "$MODEL" = "claude-fable-5" ]; then echo "claude-fable${suffix}"; else echo "claude-next${suffix}"; fi
 }
 
+# ---- fire autonomy: pre-trust the launch dir -------------------------------------------------
+# Claude Code shows a workspace-TRUST dialog on first launch in an untrusted directory — a gate
+# SEPARATE from --permission-mode auto, so a fired peer would STALL there forever (never runs,
+# never pings back on a --notify-back handoff). Fix: mark the launch dir trusted in the TARGET
+# account's config BEFORE spawning, so the session skips the dialog and runs headless. Surgical —
+# sets ONLY hasTrustDialogAccepted (tool prompts still apply; this is NOT --dangerously-skip-
+# permissions). Idempotent + race-avoidant: skips the write entirely when the dir is already trusted.
+config_dir_for_launcher() { # $1=launcher name → the account's config dir (by trailing digit)
+  case "$1" in
+    *2) echo "$HOME/.claude-secondary" ;;
+    *3) echo "$HOME/.claude-tertiary" ;;
+    *4) echo "$HOME/.claude-quaternary" ;;
+    *)  echo "$HOME/.claude" ;;
+  esac
+}
+pre_trust() { # $1=launch dir  $2=config dir
+  local dir="$1" cfg="$2/.claude.json" tmp rdir
+  [ -n "$dir" ] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  [ -f "$cfg" ] || return 0
+  # Canonicalize: Claude Code keys trust by the RESOLVED physical path (node process.cwd()),
+  # so on macOS `cd /tmp/x` is trusted as /private/tmp/x (/tmp → /private/tmp symlink), and any
+  # symlinked worktree parent likewise. Trust the resolved path so the entry actually matches.
+  rdir="$(cd "$dir" 2>/dev/null && pwd -P)" && [ -n "$rdir" ] && dir="$rdir"
+  [ "$(jq -r --arg d "$dir" '.projects[$d].hasTrustDialogAccepted // false' "$cfg" 2>/dev/null)" = "true" ] && return 0
+  tmp="$cfg.nb-trust.$$"
+  if jq --arg d "$dir" '.projects[$d] = ((.projects[$d] // {}) + {hasTrustDialogAccepted:true, hasCompletedProjectOnboarding:true})' \
+        "$cfg" > "$tmp" 2>/dev/null && [ -s "$tmp" ]; then
+    mv -f "$tmp" "$cfg" 2>/dev/null || rm -f "$tmp"
+    echo "→ pre-trusted $dir in $(basename "$2") (fired session skips the workspace-trust dialog)" >&2
+  else
+    rm -f "$tmp" 2>/dev/null
+  fi
+}
+
 # ---- liveness probe (headless, same binary the launchers exec) ------------------------------
 # One probe per decision; writes a tiny session into the account's projects dir (cwd /tmp).
 # perl alarm survives exec → SIGALRM kills a hung probe (macOS has no GNU timeout).
@@ -554,6 +589,15 @@ else
   # Land in the repo root and let the launcher self-route (_cc_route_check auto-creates a fresh
   # cc-<ts> worktree there; --in-place launches in the root itself).
   CMD="cd $(printf %q "$REPO") && ${PREFIX}${LAUNCHER}${ARGS} \"\$(cat $QP)\""
+fi
+
+# The dir the fired session lands in — pre-trusted below so it never stalls at the trust dialog.
+# Recycle reuses the CURRENT pane's dir (already trusted — the running session proves it), so it
+# needs no pre-trust and is excluded from the spawn path.
+if   [ "$RECYCLE" = 1 ]; then LAUNCH_DIR="$PWD"
+elif [ -n "$WORKTREE" ]; then LAUNCH_DIR="$WT"
+elif [ -n "$CWD" ];      then LAUNCH_DIR="$CWD"
+else                          LAUNCH_DIR="$REPO"
 fi
 
 # ---- spawn the surface -----------------------------------------------------------------------
@@ -792,10 +836,12 @@ if [ "$DRY" = 1 ]; then
     esac
   fi
   [ -n "$NOTIFY_BACK" ] && echo "notify-back: originator $BACK_SID — fired prompt carries the cc-notify ping recipe (copy: $PROMPT_FILE)"
+  [ "$RECYCLE" = 1 ] || echo "pre-trust: $LAUNCH_DIR → $(basename "$(config_dir_for_launcher "$LAUNCHER")") (fired session skips the workspace-trust dialog)"
   echo "command:  $CMD"
 elif [ "$RECYCLE" = 1 ]; then
   recycle_fire
 else
+  pre_trust "$LAUNCH_DIR" "$(config_dir_for_launcher "$LAUNCHER")"
   spawn
   DEST="${CWD:-$REPO (self-routing)}"; [ -n "$WORKTREE" ] && DEST="$WT ($WT_SETUP)"
   echo "→ fired: $LAUNCHER @ $DEST  (surface: $SURFACE, account: $CHOSEN, prompt: $PROMPT_FILE)"
