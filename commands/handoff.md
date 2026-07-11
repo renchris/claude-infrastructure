@@ -246,11 +246,22 @@ the account ranking + the exact command it would type. Occasional flags: `--extr
 plan"`, `--launcher` for an explicit tier (e.g. `claude-fable-x`; note it skips the probe),
 `--repo`/`--wtroot`/`--base` for non-default placement — full list in the script header.
 
+> **Split-right is the STICKY default — do NOT preemptively downgrade to `--tab`.** The window is
+> comfortable at **3-4 side panes** (⌘D-style), so a 2nd or 3rd concurrent handoff still fires
+> `--split-right`, NOT `--tab`. Reach for `--tab` ONLY when (a) the firing window already holds ~4+
+> panes, or (b) the user explicitly asks for a tab/background. One split + one tab is WORSE — the
+> "why did it open in a tab?" inconsistency (user-flagged 2026-07-10) — than a slightly busier pane
+> row; visible side-by-side is the whole point. If you catch yourself picking `--tab` to "avoid
+> crowding" at 2-3 panes, that IS the anti-pattern — choose `--split-right`. The model (surface is
+> the agent's judgment call, not the user's) never inherits a prior fire's `--tab`.
+
 ```bash
 # typical: fresh track, auto account, Opus@max, split pane in the current view (⌘D-style default)
 ~/.claude/scripts/handoff-fire.sh --prompt-file /tmp/fire-<slug>.txt --worktree <slug>
-# fable follow-up, probed, in a background tab instead
-~/.claude/scripts/handoff-fire.sh --prompt-file /tmp/fire-<slug>.txt --cwd <wt> --model fable --probe --tab
+# a 2nd/3rd concurrent handoff STILL splits (do NOT switch to --tab here) — ⌘D again, e.g. below:
+~/.claude/scripts/handoff-fire.sh --prompt-file /tmp/fire-<slug>.txt --cwd <wt> --model fable --probe --split-down
+# --tab is for OVERFLOW ONLY (window already ~4+ panes) or an explicit user "put it in a tab"
+~/.claude/scripts/handoff-fire.sh --prompt-file /tmp/fire-<slug>.txt --worktree <slug> --tab
 ```
 
 **6 · Waves — N parallel handoffs (THE high-value case).** A fire request covers EVERY track in the
