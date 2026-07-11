@@ -114,6 +114,32 @@ taxonomy must not drift apart (single table, referenced twice).
 ## Status log
 - 2026-07-11 02:2x — plan created + committed on `handoff-disposition` by wt-pool-4 (next4);
   fired to next3 as Fable 5 @ high. Nothing implemented yet.
+- 2026-07-11 02:3x — T2 DONE (disposition-helper teammate, worktree `/tmp/wt-hd-helper`,
+  cherry-picked + autosquashed → `6f607da`): helper + 14 bats tests, `shellcheck -S warning`
+  green. Lead post-merge correction (folded into the same commit): `await_ping_running` is now
+  **UUID-scoped** — `pgrep -f "cc-await-ping.*<uuid>"` when a uuid resolves, bare match only as
+  no-uuid fallback. **Why:** the global match would let ANY other session's watcher hold THIS
+  session mechanically open forever (permanent false exit-1 — disqualifying for the contract);
+  § 8 now instructs launching `cc-await-ping <own-uuid>` explicitly so watchers attribute.
+  Helper-attribution fix only — taxonomy untouched (C4 respected).
+- 2026-07-11 02:3x — T3 E2E DONE, both paths observed live (one scratch fire covered both):
+  - **CLOSE path** — probe (claude-next4 @ `/tmp/hd-e2e`, fired `--split-right --notify-back`):
+    ran the helper → exit 0 → pinged → emitted verbatim `🔚 DISPOSITION: CLOSE — nothing remains
+    in this session.` → `handoff-fire.sh self-close`; watcher log
+    `/tmp/handoff-selfclose-63DA98A7-…log` ends `Session closed`; pane + process gone in <90s
+    (≤180s ceiling met, graceful).
+  - **OPEN — R-PING path** — the firing session held `⏳ DISPOSITION: OPEN — R-PING: awaiting
+    completion ping from hd-e2e…`; helper pre-ping: exit 1 with
+    `{"mailbox_pending":["2400A4AC-…"]}` (un-fakeable catch of the unprocessed ping); the ping
+    landed on ALL THREE channels — composer injection, mailbox line
+    `2026-07-11T02:32:42 [claude-quaternary] HANDOFF-PING fire-hd-e2e: complete`, and
+    `cc-await-ping <uuid>` exit 0 (event-driven wake) — then process + `--ack` → helper exit 0 →
+    R-PING discharged.
+  - Degradation observed as designed: `cc-sessions` registry was empty during the E2E →
+    `fired_peers_alive=[]`; discharge rode the mailbox/watcher channels. Not a defect.
+- 2026-07-11 02:3x — acceptance gate 1 (zero-ambiguity) self-audit: PASS — the OPEN template
+  structurally forces code + instance + discharge + next action; taxonomy closed with banned
+  "just in case"; § explicitly declares a missing part or a lineless post-fire turn a violation.
 - 2026-07-11 — T1 landed on branch (`1a76fb1`): step 7 → § Post-fire disposition (closed taxonomy
   table, worst-first clause order R-DECIDE≻R-USER≻R-PING≻R-WORK≻R-DIRTY, helper wiring, kill-
   switches, no-Stop-hook rationale); step 6 readiness gate now references the same taxonomy table
