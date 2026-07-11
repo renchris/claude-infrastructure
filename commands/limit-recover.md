@@ -124,8 +124,12 @@ conversational context; new turns land in the target account's store).
    ```
    This audits + salvages into a bundle, copies the transcript + session dir (workflow journals
    included) + task list into the target account under the SAME uuid, sha-verifies, writes the
-   split-brain lock + source tombstone, and opens an iTerm2 window that resumes the session on
-   the target account and auto-submits `/limit-recover ingest <bundle>`. `--print-only` writes
+   split-brain lock + source tombstone, and fires the resume in a **split pane to the RIGHT of
+   the invoking pane** (⌘D-style; a new iTerm2 window only when no invoking pane exists or the
+   split fails), auto-submitting `/limit-recover ingest <bundle>` with a **verified submit** —
+   the fire script re-sends CR until the running-turn indicator ("esc to interrupt") appears,
+   because a leading-`/` prompt's autocomplete menu can eat the first CR (composer submits on
+   `\r` only; observed stranded 2026-07-11). `--print-only` writes
    `/tmp/lr-launch-<sid8>.sh` instead (manual fallback is always printed).
 4. **This session is now DONE.** Emit the handoff report (target account, bundle path, gaps
    handed over). Do not dispatch further delegated work here — the target session owns recovery
