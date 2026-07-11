@@ -67,6 +67,12 @@
 #                       (CLAUDE_CONFIG_DIR-derived); --account/--launcher/--model/--effort/
 #                       --extra/--probe all compose. Excludes --worktree/--cwd/surface flags.
 #   --session-id UUID   Recycle/self-close target pane (default: $ITERM_SESSION_ID's UUID).
+#   --notify-back [UUID] Two-way sugar: append a back-channel trailer to a COPY of the prompt
+#                       (never the caller's file) telling the fired session to ping the
+#                       ORIGINATOR via `cc-notify <UUID> "HANDOFF-PING <slug>: <status>"` on
+#                       completion / decision gate / blocker. UUID defaults to THIS firing pane
+#                       ($ITERM_SESSION_ID / --session-id). Pair with `cc-await-ping` on the
+#                       originator for a modal-safe wake. See docs/plans/TWO_WAY_SESSION_COMMS_PLAN.md.
 #
 # Subcommand:
 #   self-close [--session-id UUID] [--allow-dirty]
@@ -98,6 +104,7 @@ MODEL_CONFIG="$HOME/.claude/model-config.yaml"
 PROMPT_FILE="" ACCOUNT="auto" LAUNCHER="" MODEL="" EFFORT="" CWD="" WORKTREE=""
 REPO="$DEFAULT_REPO" WTROOT="$HOME/Development/.worktrees" BASE="origin/main"
 SURFACE="split-right" SURFACE_EXPLICIT=0 PROBE=0 DRY=0 IN_PLACE=0 EXTRA="" RECYCLE=0 SESSION_ID=""
+NOTIFY_BACK=""
 
 # Print the header comment up to (excluding) the first non-comment sentinel — growth-proof range.
 usage() { sed -n '2,/^set -euo pipefail/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
@@ -284,6 +291,7 @@ while [ $# -gt 0 ]; do case "$1" in
   --probe)       PROBE=1; shift ;;
   --recycle)     RECYCLE=1; shift ;;
   --session-id)  SESSION_ID="${2:?--session-id needs a value}"; shift 2 ;;
+  --notify-back) NOTIFY_BACK="${2:-}"; case "$NOTIFY_BACK" in ""|--*) NOTIFY_BACK="__self__"; shift ;; *) shift 2 ;; esac ;;
   --extra)       EXTRA="${2:?--extra needs a value}"; shift 2 ;;
   --dry-run)     DRY=1; shift ;;
   -h|--help)     usage ;;
@@ -475,6 +483,37 @@ fi
 
 PREFIX=""
 [ "$IN_PLACE" = 1 ] && PREFIX="CLAUDE_ISOLATION_SKIP=1 "
+
+# ---- --notify-back: back-channel trailer (two-way session comms) ------------------------------
+# Append to a COPY of the prompt (NEVER the caller's file) a recipe telling the fired session to
+# ping the ORIGINATOR's pane via cc-notify on completion / decision gate / blocker. Done BEFORE QP
+# below so the copy is what gets quoted + read by the fired launcher. BACK_SID mirrors FIRING_SID's
+# definition (derived later for the spawn anchor); computed inline here to keep this self-contained.
+if [ -n "$NOTIFY_BACK" ]; then
+  BACK_SID="$NOTIFY_BACK"
+  if [ "$BACK_SID" = "__self__" ]; then
+    _nb_it="${ITERM_SESSION_ID:-}"
+    BACK_SID="${SESSION_ID:-${_nb_it##*:}}"
+  fi
+  [ -n "$BACK_SID" ] || { echo "!! --notify-back: no \$ITERM_SESSION_ID and no UUID given" >&2; exit 1; }
+  [ -f "$PROMPT_FILE" ] || { echo "!! --notify-back: prompt file not found: $PROMPT_FILE" >&2; exit 1; }
+  NB_SLUG="$(basename "${PROMPT_FILE%.*}")"
+  PF_NB="$(mktemp "${TMPDIR:-/tmp}/handoff-prompt-nb-XXXXXX")" || { echo "!! --notify-back: mktemp failed" >&2; exit 1; }
+  cp "$PROMPT_FILE" "$PF_NB" || { echo "!! --notify-back: could not copy prompt" >&2; exit 1; }
+  # shellcheck disable=SC2016  # $HOME (and \r/\n) below are LITERAL guidance for the fired reader, not shell expansions
+  {
+    printf '\n'
+    printf '## BACK-CHANNEL — ping the originator (%s)\n' "$BACK_SID"
+    printf '%s\n' 'On completion, at a decision gate, or on a blocker, ping the session that fired this handoff:'
+    printf '  cc-notify %s "HANDOFF-PING %s: <one-line status>"\n' "$BACK_SID" "$NB_SLUG"
+    printf '%s\n' '(cc-notify is on PATH at $HOME/.claude/bin/cc-notify — it types the line into the'
+    printf '%s\n' "originator's composer via the it2 transport (\\r submit, not \\n) AND records"
+    printf '%s%s.md as the durable fallback,\n' '$HOME/.claude/mailbox/' "$BACK_SID"
+    printf '%s\n' 'so the ping survives a closed/recycled pane. If the originator armed cc-await-ping,'
+    printf '%s\n' 'the mailbox write alone wakes it; the composer injection is the interrupt path.)'
+  } >> "$PF_NB"
+  PROMPT_FILE="$PF_NB"
+fi
 
 # Paths are typed into an interactive zsh line — %q-quote them so spaces/metachars can't split
 # or execute (conventional slugs pass through unchanged).
@@ -752,6 +791,7 @@ if [ "$DRY" = 1 ]; then
       *)        echo "worktree: $WT  (cold: off $BASE, created at fire time + in-pane install)" ;;
     esac
   fi
+  [ -n "$NOTIFY_BACK" ] && echo "notify-back: originator $BACK_SID — fired prompt carries the cc-notify ping recipe (copy: $PROMPT_FILE)"
   echo "command:  $CMD"
 elif [ "$RECYCLE" = 1 ]; then
   recycle_fire

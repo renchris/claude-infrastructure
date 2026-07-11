@@ -1,0 +1,62 @@
+#!/bin/bash
+# cc-await-ping — block until a NEW line lands in this session's mailbox, print it,
+# and exit. The modal-safe PULL complement to cc-notify's push.
+#
+# Launch it via Bash(run_in_background) before going idle after a `--notify-back`
+# handoff: when the fired peer pings (a mailbox write), this exits and the harness's
+# task-completion notification re-invokes you — even if the peer's composer injection
+# mislanded because you were at a permission/modal prompt. The mailbox write is the
+# wake; the injection is the interrupt. Both paths, one loop closed.
+#
+#   cc-await-ping [<uuid>]          default uuid = own pane ($ITERM_SESSION_ID)
+#
+# Options:
+#   --timeout <s>   give up after S seconds (default 1800; exit 2)
+#   --interval <s>  poll cadence in seconds (default 15)
+#   -h, --help
+#
+# Exit: 0 = new line(s) arrived (printed to stdout); 2 = timed out; 3 = no uuid.
+# Env overrides (tests): CC_MAILBOX_DIR.
+set -uo pipefail
+
+MAILBOX_DIR="${CC_MAILBOX_DIR:-$HOME/.claude/mailbox}"
+TIMEOUT=1800
+INTERVAL=15
+UUID=""
+
+usage() { sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; }
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --timeout)  TIMEOUT="${2:?--timeout needs a value}"; shift 2 ;;
+    --interval) INTERVAL="${2:?--interval needs a value}"; shift 2 ;;
+    -h|--help)  usage; exit 0 ;;
+    --*)        echo "cc-await-ping: unknown option '$1'" >&2; usage >&2; exit 2 ;;
+    *)          if [ -z "$UUID" ]; then UUID="$1"; shift; else echo "cc-await-ping: too many arguments" >&2; exit 2; fi ;;
+  esac
+done
+
+if [ -z "$UUID" ]; then
+  _it="${ITERM_SESSION_ID:-}"; UUID="${_it##*:}"
+fi
+[ -n "$UUID" ] || { echo "cc-await-ping: no uuid given and no \$ITERM_SESSION_ID" >&2; exit 3; }
+
+MBOX="$MAILBOX_DIR/$UUID.md"
+linecount() { [ -f "$MBOX" ] && wc -l < "$MBOX" | tr -d ' ' || echo 0; }
+
+baseline="$(linecount)"
+echo "cc-await-ping: watching $MBOX from line $baseline (timeout ${TIMEOUT}s, every ${INTERVAL}s)" >&2
+
+elapsed=0
+while [ "$elapsed" -lt "$TIMEOUT" ]; do
+  cur="$(linecount)"
+  if [ "$cur" -gt "$baseline" ]; then
+    tail -n +"$((baseline + 1))" "$MBOX"   # the new line(s) only
+    exit 0
+  fi
+  sleep "$INTERVAL"
+  elapsed=$((elapsed + INTERVAL))
+done
+
+echo "cc-await-ping: timed out after ${TIMEOUT}s — no new ping in $MBOX" >&2
+exit 2
