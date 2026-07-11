@@ -628,12 +628,15 @@ def render_table(rows, cfg, win, cached, prev=None):
           + " " * max(2, W - 2 - len(title) - len(stamp)) + c(stamp, GRAY))
     print()
     cell = 15                                   # bar(10) + space + pct(4)
-    # the 5h header self-documents the ┆ tick: "5h session ┆85%" (router cutoff)
+    # the 5h header self-documents the ┆ tick: "5h session ┆85%" (router cutoff);
+    # ↻5h heads the per-row 5-hour-window reset countdown — it was invisible until a
+    # window silently rolled 81%→0% between sweeps (2026-07-11 feedback).
     cutlbl = f"{int(cfg['router']['S_CUT'] * 100)}%"
     h5 = c("5h session ", GRAY) + c("┆", RED, dim=True) + c(cutlbl, GRAY, dim=True)
-    h5 += " " * (cell - 12 - len(cutlbl))
+    h5 += " " * (cell - 12 - len(cutlbl))                 # pad "5h session ┆85%" to the cell
+    h5 += " " + c(f"{'↻5h':>5}", GRAY)                    # 5h-reset sub-column (matches the row width)
     print("  " + c(f"{'account':<8}   {'live':>4}  ", GRAY) + h5 + "  "
-          + c(f"{'weekly all':<{cell}}  {'weekly Fable':<{cell}}  {'reset':>6}", GRAY))
+          + c(f"{'weekly all':<{cell}}  {'weekly Fable':<{cell}}  {'↻week':>6}", GRAY))
     alerts = []
     for r in rows:
         a = r.get("auth")
@@ -646,8 +649,13 @@ def render_table(rows, cfg, win, cached, prev=None):
                   + c(msg, RED if a in ("logged-out", "token-invalid") else AMBER)
                   + c(f"  ({r['email']})", GRAY, dim=True))
         else:
+            srh = r.get("session_reset_h")
+            # the 5h reset sits WITH the 5h usage: a high 5h% + soon reset = capacity relief
+            # incoming. Amber when <1h (a rollover is imminent), else a quiet gray.
+            s5r_rgb = AMBER if (srh is not None and srh < 1) else GRAY
+            s5reset = c(f"{('↻' + fmt_h(srh)):>5}", s5r_rgb, dim=(srh is None or srh >= 1))
             cells = "  ".join([
-                bar(r.get("session_pct"), cut=cfg["router"]["S_CUT"]) + " " + pct(r.get("session_pct")),
+                bar(r.get("session_pct"), cut=cfg["router"]["S_CUT"]) + " " + pct(r.get("session_pct")) + " " + s5reset,
                 bar(r.get("weekly_pct")) + " " + pct(r.get("weekly_pct")),
                 bar(r.get("fable_pct")) + " " + pct(r.get("fable_pct"))])
             wrh = r.get("weekly_reset_h")
@@ -683,9 +691,13 @@ def render_table(rows, cfg, win, cached, prev=None):
         chips = []
         for r in rows:
             p = prev["rows"].get(r["acct"]) or {}
-            for f, tag in (("weekly_pct", "weekly"), ("fable_pct", "Fable")):
+            for f, tag in (("session_pct", "5h"), ("weekly_pct", "weekly"), ("fable_pct", "Fable")):
                 a, b = p.get(f), r.get(f)
                 if a is not None and b is not None and abs(b - a) >= 0.5:
+                    # 5h moves fast — only surface it when the window ROLLED OVER (negative
+                    # delta = reset). Its growth is noise; weekly/Fable show both directions.
+                    if f == "session_pct" and b >= a:
+                        continue
                     chips.append(c(f"{r['acct']} {b - a:+.0f}% {tag}", GRAY))
         if chips:
             since = datetime.fromtimestamp(prev["ts"]).strftime("%H:%M")
