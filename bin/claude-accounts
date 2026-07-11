@@ -489,25 +489,41 @@ def cache_write(cfg, payload):
         pass
 
 
+def _prev_snapshot(cfg):
+    """Last sweep's percents (TTL-ignored, cfg-key-checked) — feeds the burn-delta display."""
+    try:
+        with open(cfg["cache_file"]) as f:
+            old = json.load(f)
+        if old.get("cfg_key") != _cfg_key(cfg):
+            return None
+        return {"ts": old.get("ts"),
+                "rows": {r["acct"]: {k: r.get(k) for k in
+                                     ("session_pct", "weekly_pct", "fable_pct")}
+                         for r in old.get("rows", [])}}
+    except (OSError, json.JSONDecodeError, KeyError):
+        return None
+
+
 def get_data(cfg, fresh=False, no_heal=False):
     if not fresh:
         c = cache_read(cfg, want_heal=not no_heal)
         if c:
-            return c["rows"], c["window"], True
+            return c["rows"], c["window"], True, c.get("prev")
     lock_path = cfg["cache_file"] + ".lock"
     with open(lock_path, "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)         # single-flight: first caller sweeps, rest reuse
         if not fresh:
             c = cache_read(cfg, want_heal=not no_heal)
             if c:
-                return c["rows"], c["window"], True
+                return c["rows"], c["window"], True, c.get("prev")
+        prev = _prev_snapshot(cfg)
         win = frontier_window(cfg)
         rows = collect(cfg, no_heal=no_heal)
         wj = {"active": win["active"], "end": win["end"],
               "deadline": win["deadline"].isoformat() if win["deadline"] else None}
         cache_write(cfg, {"ts": time.time(), "cfg_key": _cfg_key(cfg), "no_heal": no_heal,
-                          "rows": rows, "window": wj})
-        return rows, wj, False
+                          "rows": rows, "window": wj, "prev": prev})
+        return rows, wj, False, prev
 
 
 def win_from_json(wj):
@@ -560,14 +576,22 @@ def usage_rgb(p):
 EIGHTHS = "▏▎▍▌▋▊▉█"
 
 
-def bar(p, width=10):
-    """0-100 used% → `████▌·····` at 1/8-cell resolution, colored by severity."""
+def bar(p, width=10, cut=None):
+    """0-100 used% → `████▌···┆·` at 1/8-cell resolution, colored by severity.
+    cut (0..1) draws a boundary tick in the track where the router's hard cutoff sits —
+    the bar shows the DECISION LINE, not just magnitude (5h column: S_CUT)."""
     if p is None:
         return c("·" * width, GRAY, dim=True)
     q = max(0.0, min(100.0, p)) / 100.0 * width
     full, sub = int(q), int((q - int(q)) * 8)
     fill = "█" * full + (EIGHTHS[sub - 1] if sub else "")
-    return c(fill, usage_rgb(p)) + c("·" * (width - len(fill)), GRAY, dim=True)
+    track = ["·"] * (width - len(fill))
+    out = c(fill, usage_rgb(p))
+    ci = int(width * cut) - len(fill) if cut is not None else -1
+    if 0 <= ci < len(track):
+        return (out + c("".join(track[:ci]), GRAY, dim=True) + c("┆", RED, dim=True)
+                + c("".join(track[ci + 1:]), GRAY, dim=True))
+    return out + c("".join(track), GRAY, dim=True)
 
 
 def pct(p):
@@ -594,7 +618,7 @@ AUTH_GLYPH = {
 }
 
 
-def render_table(rows, cfg, win, cached):
+def render_table(rows, cfg, win, cached, prev=None):
     W = 82                                     # visible width budget (right-aligned header meta)
     src = "cached" if cached else "live"
     stamp = f"{src} · {datetime.now().strftime('%a %H:%M')}"
@@ -604,9 +628,12 @@ def render_table(rows, cfg, win, cached):
           + " " * max(2, W - 2 - len(title) - len(stamp)) + c(stamp, GRAY))
     print()
     cell = 15                                   # bar(10) + space + pct(4)
-    print("  " + c(f"{'account':<8}   {'live':>4}  {'5h session':<{cell}}  "
-                   f"{'weekly all':<{cell}}  {'weekly Fable':<{cell}}  {'reset':>6}",
-                   GRAY))
+    # the 5h header self-documents the ┆ tick: "5h session ┆85%" (router cutoff)
+    cutlbl = f"{int(cfg['router']['S_CUT'] * 100)}%"
+    h5 = c("5h session ", GRAY) + c("┆", RED, dim=True) + c(cutlbl, GRAY, dim=True)
+    h5 += " " * (cell - 12 - len(cutlbl))
+    print("  " + c(f"{'account':<8}   {'live':>4}  ", GRAY) + h5 + "  "
+          + c(f"{'weekly all':<{cell}}  {'weekly Fable':<{cell}}  {'reset':>6}", GRAY))
     alerts = []
     for r in rows:
         a = r.get("auth")
@@ -619,11 +646,14 @@ def render_table(rows, cfg, win, cached):
                   + c(msg, RED if a in ("logged-out", "token-invalid") else AMBER)
                   + c(f"  ({r['email']})", GRAY, dim=True))
         else:
-            cells = "  ".join(
-                bar(r.get(f)) + " " + pct(r.get(f))
-                for f in ("session_pct", "weekly_pct", "fable_pct"))
+            cells = "  ".join([
+                bar(r.get("session_pct"), cut=cfg["router"]["S_CUT"]) + " " + pct(r.get("session_pct")),
+                bar(r.get("weekly_pct")) + " " + pct(r.get("weekly_pct")),
+                bar(r.get("fable_pct")) + " " + pct(r.get("fable_pct"))])
+            wrh = r.get("weekly_reset_h")
+            reset_rgb = AMBER if (wrh is not None and wrh < 6) else GRAY   # imminent = act on it
             print(f"  {name} {c(glyph, grgb)} {k}  {cells}  "
-                  + c(f"{fmt_h(r.get('weekly_reset_h')):>6}", GRAY))
+                  + c(f"{fmt_h(wrh):>6}", reset_rgb))
         # conditional detail — only states that need action surface below the table
         if a in ("logged-out", "token-invalid", "keychain-error"):
             alerts.append(c("○ ", RED) + c(f"{r['acct']} {a}", RED, bold=True)
@@ -647,6 +677,21 @@ def render_table(rows, cfg, win, cached):
         print()
         for a in alerts:
             print("  " + a)
+    # burn since last sweep — the snapshot becomes an instrument (Δ<0.5% stays silent;
+    # a NEGATIVE delta means that limit reset in between)
+    if prev and prev.get("ts") and prev.get("rows"):
+        chips = []
+        for r in rows:
+            p = prev["rows"].get(r["acct"]) or {}
+            for f, tag in (("weekly_pct", "weekly"), ("fable_pct", "Fable")):
+                a, b = p.get(f), r.get(f)
+                if a is not None and b is not None and abs(b - a) >= 0.5:
+                    chips.append(c(f"{r['acct']} {b - a:+.0f}% {tag}", GRAY))
+        if chips:
+            since = datetime.fromtimestamp(prev["ts"]).strftime("%H:%M")
+            print()
+            print("  " + c("Δ ", PERI) + c(f"since {since}  ", GRAY, dim=True)
+                  + c(" · ", GRAY, dim=True).join(chips))
     print()
     if win["active"] is None:
         wline = c("◌ ", RED) + c("Fable window UNKNOWN", RED, bold=True) \
@@ -665,14 +710,26 @@ def render_table(rows, cfg, win, cached):
     g, gre = ranked(rows, cfg, win, "general")
     f, fre = ranked(rows, cfg, win, "fable")
 
-    def target(lst, reasons):
-        if lst:
-            return c(lst[0][1]["acct"], CLAY, bold=True)
-        return c("none", RED, bold=True) \
-            + c(" (" + " · ".join(f"{a} {w}" for a, w in reasons.items()) + ")", GRAY, dim=True)
+    def route_line(label, lst, reasons, why_fields):
+        head = c("➤ ", CLAY) + f"{label:<7} → "
+        if not lst:
+            return head + c("none", RED, bold=True) \
+                + c("  " + " · ".join(f"{a} {w}" for a, w in reasons.items()), GRAY, dim=True)
+        row = lst[0][1]
+        why = " · ".join(w for w in (why_fields(row),) if w)
+        return head + c(f"{row['acct']:<6}", CLAY, bold=True) + c(f" {why}", GRAY)
 
-    print("  " + c("➤ ", CLAY) + "general → " + target(g, gre)
-          + "      " + c("➤ ", CLAY) + "fable → " + target(f, fre))
+    def fable_why(r):
+        # Lead with the REASON. An imminent reset is a use-it-or-lose-it pick — naming it
+        # first stops the "but that account is at 74%?!" first-read contradiction.
+        frh = r.get("fable_reset_h")
+        if frh is not None and frh < 24:
+            return f"resets in {fmt_h(frh)} — use it or lose it · Fable {r['fable_pct']:.0f}%"
+        return f"Fable {r['fable_pct']:.0f}% ↻ {fmt_h(frh)} · weekly {r['weekly_pct']:.0f}%"
+
+    print("  " + route_line("general", g, gre, lambda r:
+          f"5h {r['session_pct']:.0f}% · weekly {r['weekly_pct']:.0f}% ↻ {fmt_h(r.get('weekly_reset_h'))}"))
+    print("  " + route_line("fable", f, fre, fable_why))
     if cached:
         print("  " + c(f"cache ≤{cfg.get('cache_ttl_s', 90)}s old · --fresh for a live sweep",
                        GRAY, dim=True))
@@ -709,7 +766,7 @@ def main():
                           "has_refresh_token": bool(creds and creds.get("refreshToken"))}, indent=2))
         return
 
-    rows, wj, cached = get_data(cfg, fresh=fresh, no_heal=no_heal)
+    rows, wj, cached, prev = get_data(cfg, fresh=fresh, no_heal=no_heal)
     win = win_from_json(wj)
 
     if "--json" in args:
@@ -743,7 +800,7 @@ def main():
     # human table
     global COLOR
     COLOR = _color_on(args)
-    render_table(rows, cfg, win, cached)
+    render_table(rows, cfg, win, cached, prev)
 
 
 if __name__ == "__main__":
