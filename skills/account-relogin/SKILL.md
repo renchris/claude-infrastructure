@@ -47,12 +47,18 @@ The flow: run login headless with pipes, open its printed URL in the RIGHT Dia
 profile, click Authorize there, feed the code back. No TUI pane scraping.
 
 1. **Start login as a subprocess with pipes** (stdout gives the URL; stdin takes
-   the code):
+   the code). ⚠ Fifo semantics: the login's stdin `open()` BLOCKS until a writer
+   opens the fifo — launching it with no held writer deadlocks it before exec (it
+   never prints the URL). Hold a silent writer open first:
 
    ```bash
+   mkfifo /tmp/relogin-<acct>.in
+   sleep 600 > /tmp/relogin-<acct>.in &      # held-open writer: unblocks stdin, sends NOTHING
    CLAUDE_CONFIG_DIR=$CFG $BIN auth login --claudeai --email $EMAIL \
-     > /tmp/relogin-<acct>.out 2>&1 < /tmp/relogin-<acct>.in &   # mkfifo the .in first
-   grep -o 'https://[^ ]*oauth[^ ]*' /tmp/relogin-<acct>.out     # the MANUAL-redirect URL
+     < /tmp/relogin-<acct>.in > /tmp/relogin-<acct>.out 2>&1 &
+   for i in $(seq 30); do                    # URL takes seconds to print — poll, don't one-shot
+     grep -o 'https://[^ ]*oauth[^ ]*' /tmp/relogin-<acct>.out && break; sleep 1
+   done                                       # no URL after ~30s = fail loud, kill the login
    ```
 
    Notes: `--email` pre-fills login_hint. The CLI ALSO auto-opens the
@@ -82,8 +88,10 @@ profile, click Authorize there, feed the code back. No TUI pane scraping.
 3. **Complete.** If the profile's claude.ai session is warm, Authorize → the
    localhost callback finishes the CLI login automatically. If the CLI is on the
    paste path, the callback page shows a `code#state` blob — scrape it
-   (`Runtime.evaluate document.body.innerText`) and write it + newline to the
-   fifo (`/tmp/relogin-<acct>.in`).
+   (`Runtime.evaluate document.body.innerText`) and feed it:
+   `printf '%s\n' '<code>#<state>' > /tmp/relogin-<acct>.in` (a fresh writer; the
+   held `sleep` writer keeps the fifo from EOF-ing in between). Then kill the
+   `sleep` and clean up both /tmp files.
 
 4. **Verify + teardown**: `claude-accounts --fresh` shows `ok`; `$BIN auth status`
    (with `CLAUDE_CONFIG_DIR=$CFG`) shows the email. Human unchecks the

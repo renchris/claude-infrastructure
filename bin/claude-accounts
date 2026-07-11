@@ -21,6 +21,11 @@ Auth policy (rotation-safe by construction):
     rotate (GH anthropics/claude-code#54443, unanswered) and a discarded rotation = logged out.
   - "logged-out" is only declared after a fresh keychain re-read (no item, or the binary's heal
     reports an invalid refresh token).
+  - Token-exposure note (decided trade-off): access tokens travel only in-process (urllib
+    header — never curl argv). The ONE exception is the heal child's env
+    (CLAUDE_CODE_OAUTH_REFRESH_TOKEN), visible to same-user `ps -E` for the <=90s heal — the
+    official binary's only headless-auth contract, and equivalent exposure to the same user's
+    existing keychain read access.
 
 Usage:
   claude-accounts                     human table + route hints
@@ -158,15 +163,15 @@ def concurrency(cfg):
         t0 = toks[0]
         if not (t0 == "claude" or t0.endswith("/claude") or "cli.js" in t0):
             continue
-        argv = []
-        for t in toks[1:]:
-            if ENV_TOK.match(t):
-                break
-            argv.append(t)
-        if "-p" in argv or "--print" in argv or "--version" in argv:
+        # Headless one-shot flags sit in the first few argv slots (`claude -p "…"`); scanning
+        # the whole line would false-match a '-p' or '--print' inside a PROMPT argument.
+        head = [t for t in toks[1:7] if t.startswith("-")]
+        if "-p" in head or "--print" in head or "--version" in head:
             continue
-        mcfg = re.search(r"CLAUDE_CONFIG_DIR=(\S+)", line)
-        d = os.path.expanduser(mcfg.group(1)) if mcfg else os.path.join(HOME, ".claude")
+        # ps -E appends env AFTER argv, so the LAST CLAUDE_CONFIG_DIR= match is the real env
+        # var — a first-match search could hit prompt text that merely mentions it.
+        cfgs = re.findall(r"CLAUDE_CONFIG_DIR=(\S+)", line)
+        d = os.path.expanduser(cfgs[-1]) if cfgs else os.path.join(HOME, ".claude")
         name = by_dir.get(d.rstrip("/"))
         if name:
             counts[name] += 1
@@ -253,8 +258,9 @@ def heal(cfg, acct, refresh_token, k_live):
         except subprocess.TimeoutExpired:
             log_event(f"heal {acct['name']}: TIMEOUT")
             return False, "heal timed out"
-        ok = p.returncode == 0 and "Login successful" in (p.stdout + p.stderr)
-        detail = (p.stdout + p.stderr).strip().splitlines()[-1] if (p.stdout or p.stderr) else f"rc={p.returncode}"
+        out = (p.stdout + p.stderr).strip()
+        ok = p.returncode == 0 and "Login successful" in out
+        detail = out.splitlines()[-1] if out else f"rc={p.returncode}"
         log_event(f"heal {acct['name']}: {'OK' if ok else 'FAIL'} — {detail}")
         return ok, detail
 
@@ -265,9 +271,11 @@ def hrs_until(iso):
     if not iso:
         return None
     try:
-        return (datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
-                - datetime.now(timezone.utc)).total_seconds() / 3600.0
-    except ValueError:
+        dt = datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return (dt - datetime.now(timezone.utc)).total_seconds() / 3600.0
+    except (ValueError, TypeError):
         return None
 
 
@@ -295,8 +303,9 @@ def collect(cfg, no_heal=False):
             row["error"] = row["auth"]
             rows.append(row)
             continue
-        token = creds.get("accessToken")
-        expires_ms = creds.get("expiresAt") or 0
+        # (creds or {}): a valid keychain item can carry an empty/absent claudeAiOauth blob
+        token = (creds or {}).get("accessToken")
+        expires_ms = (creds or {}).get("expiresAt") or 0
         stale = expires_ms / 1000.0 <= time.time() + 60
         row["auth"] = "stale" if stale else "ok"
         if stale and not no_heal:
@@ -320,7 +329,8 @@ def collect(cfg, no_heal=False):
             status, u = fetch_usage(cfg, token) if token else (None, None)
             if status == 401:
                 if row["auth"] == "stale":
-                    row["error"] = "stale (expired token; heal skipped/failed — see heal_note)"
+                    row["error"] = ("stale (expired token; --no-heal)" if no_heal
+                                    else "stale (expired token; heal skipped/failed — see heal_note)")
                 else:
                     row["auth"] = "token-invalid"
                     row["error"] = "token-invalid (revoked? run /accounts relogin check)"
@@ -438,12 +448,30 @@ def ranked(rows, cfg, win, kind):
 
 # ---- shared cache (single-flight) -------------------------------------------------------------
 
-def cache_read(cfg):
+def _cfg_key(cfg):
+    # Cache entries are keyed to the config identity so a scratch/test CLAUDE_ACCOUNTS_JSON
+    # sharing the default cache_file can neither poison real routing nor read real rows.
+    ident = os.path.realpath(CFG_PATH) + "|" + ",".join(sorted(a["name"] for a in cfg["accounts"]))
+    return sha256(ident.encode()).hexdigest()[:12]
+
+
+BAD_AUTH = ("stale", "logged-out", "token-invalid", "keychain-error")
+
+
+def cache_read(cfg, want_heal=False):
     try:
         with open(cfg["cache_file"]) as f:
             c = json.load(f)
-        if time.time() - c.get("ts", 0) <= cfg.get("cache_ttl_s", 90):
-            return c
+        if c.get("cfg_key") != _cfg_key(cfg):
+            return None
+        if time.time() - c.get("ts", 0) > cfg.get("cache_ttl_s", 90):
+            return None
+        # A no-heal sweep that saw auth trouble must not satisfy a heal-enabled caller —
+        # that would defer the heal for the whole TTL and mislabel the state.
+        if want_heal and c.get("no_heal") and any(
+                (r.get("auth") in BAD_AUTH or "error" in r) for r in c.get("rows", [])):
+            return None
+        return c
     except (OSError, json.JSONDecodeError):
         pass
     return None
@@ -461,21 +489,22 @@ def cache_write(cfg, payload):
 
 def get_data(cfg, fresh=False, no_heal=False):
     if not fresh:
-        c = cache_read(cfg)
+        c = cache_read(cfg, want_heal=not no_heal)
         if c:
             return c["rows"], c["window"], True
     lock_path = cfg["cache_file"] + ".lock"
     with open(lock_path, "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)         # single-flight: first caller sweeps, rest reuse
         if not fresh:
-            c = cache_read(cfg)
+            c = cache_read(cfg, want_heal=not no_heal)
             if c:
                 return c["rows"], c["window"], True
         win = frontier_window(cfg)
         rows = collect(cfg, no_heal=no_heal)
         wj = {"active": win["active"], "end": win["end"],
               "deadline": win["deadline"].isoformat() if win["deadline"] else None}
-        cache_write(cfg, {"ts": time.time(), "rows": rows, "window": wj})
+        cache_write(cfg, {"ts": time.time(), "cfg_key": _cfg_key(cfg), "no_heal": no_heal,
+                          "rows": rows, "window": wj})
         return rows, wj, False
 
 
@@ -515,6 +544,8 @@ def main():
     no_heal = "--no-heal" in args
 
     if "--relogin-info" in args:
+        if args.index("--relogin-info") + 1 >= len(args):
+            sys.exit("claude-accounts: --relogin-info requires an account name")
         name = args[args.index("--relogin-info") + 1]
         acct = next((a for a in cfg["accounts"] if a["name"] == name), None)
         if not acct:

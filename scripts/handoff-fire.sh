@@ -372,12 +372,16 @@ ranked_accounts() {
       echo "✗ claude-accounts: NO account routable for $kind — $(cat "/tmp/handoff-rank-err.$$" 2>/dev/null)" >&2
       rm -f "/tmp/handoff-rank-err.$$"; return 1
     fi
-    rm -f "/tmp/handoff-rank-err.$$"    # exit 3 / other: live limits unreadable → degrade
+    # exit 3 / other: live limits unreadable → degrade, but surface WHY first
+    [ -s "/tmp/handoff-rank-err.$$" ] && echo "⚠ rank degraded (rc=$rc): $(cat "/tmp/handoff-rank-err.$$")" >&2
+    rm -f "/tmp/handoff-rank-err.$$"
   fi
+  # Tie-break order = the SSOT operator spend priority (accounts.json _order), NOT the retired
+  # next2-first hint — on an idle machine (all-zero activity) the order IS the ranking.
   local i=0 a
   {
     printf '# activity-proxy (DEGRADED: live limits unavailable)\n'
-    for a in next2 next3 next4 next; do
+    for a in next next4 next3 next2; do
       printf '%s %s %s\n' "$(activity "$a")" "$i" "$a"; i=$((i+1))
     done | sort -s -k1,1n -k2,2n | awk '{print $3, $1}'
   }
@@ -435,7 +439,7 @@ else
       if reason="$(probe_account "$a")"; then CHOSEN="$a"; break
       else echo "→ probe rejected $a: $reason (walking on)" >&2; fi
     done
-    [ -n "$CHOSEN" ] || { echo "✗ all 4 accounts failed the probe — stop and report, don't queue." >&2; exit 1; }
+    [ -n "$CHOSEN" ] || { echo "✗ all $(printf '%s\n' "$NAMES" | grep -c .) ranked accounts failed the probe (others excluded by rank policy) — stop and report, don't queue." >&2; exit 1; }
   else
     CHOSEN="$(printf '%s\n' "$NAMES" | head -1)"
   fi
@@ -449,7 +453,9 @@ case "$LAUNCHER" in claude-fable*) FABLE_EFFECTIVE=1 ;; *) FABLE_EFFECTIVE=0 ;; 
 if [ "$FABLE_EFFECTIVE" = 1 ] && [ -f "$MODEL_CONFIG" ]; then
   # match ONLY the real key (indented `active: <val>`), never a comment that mentions
   # `active:false` — the Jul-9 window-extension comment did exactly that and false-warned.
-  active="$(awk '/^frontier_access:/{f=1} f && /^[[:space:]]+active:[[:space:]]/{print $2; exit} f && /^[^[:space:]#]/ && !/^frontier_access:/{exit}' "$MODEL_CONFIG")"
+  # exactly-2-space indent = a DIRECT child of frontier_access (a deeper-nested sub-map's
+  # own `active:` key must not match)
+  active="$(awk '/^frontier_access:/{f=1} f && /^  active:[[:space:]]/{print $2; exit} f && /^[^[:space:]#]/ && !/^frontier_access:/{exit}' "$MODEL_CONFIG")"
   [ "$active" = "true" ] || echo "⚠️  frontier_access.active != true in $MODEL_CONFIG — Fable will likely reject ('model may not exist or you may not have access'). Use --probe, or flip the SSOT first." >&2
 fi
 

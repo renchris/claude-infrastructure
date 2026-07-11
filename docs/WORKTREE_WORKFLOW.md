@@ -62,11 +62,14 @@ Surfaces: `--split-right` default (⌘D — same view, same profile, like a team
 
 ## 3 · Routing decides WHO runs it — account by live load, model+effort by SSOT ladder
 
-- **Account** (4 isolated accounts = 4 quota pools): explicit choice wins; else static hint order
-  `next2>next3>next4>next` re-ranked by the free draw-proxy — trailing-5h transcript count per
-  config dir — because static hints go stale in the dangerous direction (measured: the favored
-  account had 23 live sessions while another had 5). `--probe` adds a headless liveness check that
-  walks the ranking and classifies rejections (rate-limited / auth-expired / model-unavailable).
+- **Account** (4 isolated accounts = 4 quota pools): explicit choice wins; else LIVE-LIMIT ranking
+  via `claude-accounts --rank general|fable` (real 5h/weekly/Fable headroom + resets + live session
+  spread, 90s shared cache; SSOT `~/.claude/accounts.json`, dashboard `/accounts`). Rank exit 2
+  (data fine, NO account routable by policy) HALTS the fire — never fire blind; only unreadable
+  limits (exit 3) degrade to the trailing-5h transcript-activity proxy. Static hint orders are
+  retired — they went stale in the dangerous direction within 48h. `--probe` adds a headless
+  liveness check that walks the ranking and classifies rejections (rate-limited / auth-expired /
+  model-unavailable).
 - **Model + effort** (SSOT: `~/.claude/model-config.yaml`): Opus 4.8 @ **max** is the default lead
   ladder (xhigh is a certified regression on grounding-heavy work); Fable 5 runs a DIFFERENT ladder —
   **high** default, xhigh capability-sensitive, medium routine, never max (over-deliberates, burns
