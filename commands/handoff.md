@@ -142,23 +142,23 @@ two `─` rules are the canonical VISIBLE boundary; the fence is the invisible m
    boundary visible and no leading/trailing padding between the rules.
 
 6. **Fire it (DEFAULT when nothing is open — § Autonomous fire):** after emitting the paste, run the
-   readiness gate: any open discussion, unanswered question, or decision the user must make before the
-   new session starts (STOP-ASK surfaces, unfrozen scope, a doc the payload references that doesn't
-   exist yet)? If NONE → fire autonomously: write each track's payload to `/tmp/fire-<slug>.txt` and
+   readiness gate — it is the § Post-fire disposition taxonomy read PRE-fire: any live R-USER (open
+   discussion, unanswered question), R-DECIDE (a decision the user must make before the new session
+   starts — STOP-ASK surfaces, unfrozen scope), or R-WORK blocker (a doc the payload references that
+   doesn't exist yet)? If NONE → fire autonomously: write each track's payload to `/tmp/fire-<slug>.txt` and
    spawn via `~/.claude/scripts/handoff-fire.sh` — every track, not just the first. A SINGLE Mode-A
    track fires as `--recycle` (this pane exits + relaunches with the payload — § Autonomous fire item 4); multi-track,
    forks, and account switches spawn panes. If ANY open item → name them, HOLD fire, and fire once
    resolved. "paste only" / "hold fire" / "no fire" always suppresses; an explicit "fire" overrides a
    hold. The inline paste (step 5) is always emitted as the manual fallback.
 
-7. **Retire this session (pane-spawn fires only — § Autonomous fire item 7):** when every track went
-   to OTHER sessions and the main chat holds exhaustively nothing further — no open discussion,
-   question, loose end, or decision — this session is redundantly idle: emit the final per-track
-   report, then AS THE VERY LAST ACTION run `~/.claude/scripts/handoff-fire.sh self-close`. The
-   queued `/exit` executes when this turn ends (graceful — SessionEnd hooks run, transcript stays
-   resumable), then the detached watcher closes the iTerm2 pane (window follows when it's the last
-   pane) — the Agent-Teams-assignee close, generalized. NEVER after `--recycle` (the pane IS the
-   continuation), never with anything open, never with a dirty tree (the script refuses).
+7. **Disposition (EVERY fire, then EVERY turn until close — § Post-fire disposition):** after the
+   per-track fire report, run `~/.claude/scripts/handoff-disposition.sh` (un-fakeable mechanical
+   reads), add the R-USER/R-DECIDE judgment only you can make, and END THE TURN with exactly ONE
+   disposition line: `🔚 DISPOSITION: CLOSE …` → self-close as the turn's last action (§ Autonomous
+   fire item 7), or `⏳ DISPOSITION: OPEN — <R-CODE>: …` drawn from the CLOSED taxonomy. Re-evaluate
+   and re-emit at the end of every subsequent turn until the session closes. A post-fire session is
+   NEVER silently open: no disposition line = a contract violation, not a default-open.
 
 ## Autonomous fire — end-to-end launch (DEFAULT when nothing is open; "hold fire"/"paste only" suppresses)
 
@@ -315,11 +315,14 @@ open discussion/question/decision remains; HOLD (paste-only) when any does — n
 it, then fire. "paste only" / "hold fire" / "no fire" always wins; an explicit "fire" overrides a hold.
 One handoff = the WHOLE wave: N tracks → fire all N, never just the first. One script call per track,
 invoked serially (keeps worktree adds race-safe). Report a per-track table (launcher@destination,
-surface, prompt path) after firing. All existing bridge guardrails still apply to each payload.
+surface, prompt path, **notify-back?** — yes+UUID when `--notify-back` armed R-PING, else no) after
+firing, then emit the disposition (§ Post-fire disposition). All existing bridge guardrails still
+apply to each payload.
 
-**7 · Self-close — retire the emptied main session (Step 7's mechanism).** Once a pane-spawn wave is
-away and the readiness gate holds exhaustively nothing (no discussions, questions, loose ends,
-decisions), the main session closes ITSELF: `handoff-fire.sh self-close` arms its detached watcher FIRST,
+**7 · Self-close — retire the emptied main session (the CLOSE arm of § Post-fire disposition).**
+Invoked ONLY off a `🔚 DISPOSITION: CLOSE` emission — a pane-spawn wave is away and no taxonomy
+reason holds (never bare judgment; the helper ran first). The main session then closes ITSELF:
+`handoff-fire.sh self-close` arms its detached watcher FIRST,
 then types `/exit` into its own pane FOREGROUND (a typed `/exit` INTERRUPTS any in-flight turn and exits
 in seconds — so everything that must survive precedes it); the watcher ps-polls the pane's tty until the claude process exits and closes
 the pane via the `~/.claude/bin/it2` shim (window follows when it was the last pane). Graceful-first:
@@ -349,7 +352,15 @@ the caller's file) telling the fired session to ping the ORIGINATOR on completio
 via `cc-notify <UUID> "HANDOFF-PING <slug>: <status>"`. UUID defaults to THIS firing pane
 (`$ITERM_SESSION_ID`, or `--session-id`). Reuses the SAME it2 pane-injection transport handoff-fire already
 uses downward — run in reverse (research: `docs/research/HANDOFF_BACKCHANNEL_2026-07-10.md`; plan:
-`docs/plans/TWO_WAY_SESSION_COMMS_PLAN.md`). The three companion CLIs (in `~/.claude/bin/`, on PATH):
+`docs/plans/TWO_WAY_SESSION_COMMS_PLAN.md`).
+
+**`--notify-back` ARMS R-PING** (§ Post-fire disposition): from the moment such a track fires, every
+disposition emission MUST carry an `R-PING: awaiting <before|during|after> ping from <slug>` clause
+until the ping lands — and the firing session pairs it with a background `cc-await-ping <own-uuid>`
+so the discharge is event-driven (its `--timeout` is the fallback wake), never a poll-and-hope.
+Pass the UUID EXPLICITLY even though it defaults: the disposition helper attributes the watcher to
+this session by matching the uuid on the process cmdline — a bare watcher is invisible to it. The
+three companion CLIs (in `~/.claude/bin/`, on PATH):
 
 - **`cc-notify <name|uuid|--self> "<msg>"`** — the general any-session→any-session primitive. Resolves a
   friendly name (via the session registry / `cc-sessions`) or a raw pane UUID, types the message into the
@@ -365,6 +376,69 @@ uses downward — run in reverse (research: `docs/research/HANDOFF_BACKCHANNEL_2
   entries (pane gone or owning process dead). Sessions register on `SessionStart` (predating sessions
   register on next restart); the registry is account-agnostic (`~/.claude/cc-registry/`), so cross-account
   pings resolve.
+
+## Post-fire disposition — close, or explicitly open (Step 7's contract)
+
+A fire delegates the WORK; it does not settle the fate of the session that fired. This contract does.
+**After EVERY fire (any mode, every track), and at the end of EVERY subsequent turn until the session
+closes, end the turn with exactly ONE of:**
+
+- `🔚 DISPOSITION: CLOSE — nothing remains in this session.`
+  → then `~/.claude/scripts/handoff-fire.sh self-close` AS THE TURN'S LAST ACTION (§ Autonomous fire
+  item 7; its dirty-tree guard still applies). Sole exception: after a `--recycle` fire the recycle
+  itself IS the close — the CLOSE line goes in the pre-fire report and self-close is NEVER called
+  (the pane is the continuation).
+- `⏳ DISPOSITION: OPEN — <R-CODE>: <specific instance> → closes when <discharge condition> → then <single next action>.`
+  One clause per LIVE reason; several live reasons = several clauses in the same emission,
+  worst-first: **R-DECIDE ≻ R-USER ≻ R-PING ≻ R-WORK ≻ R-DIRTY** (user-blocking first, then
+  event-driven waits, then own work, then hygiene).
+
+The format is itself the test: a reader must be able to answer *"why is this session open, what ends
+that, and what happens then?"* from the emission ALONE. An OPEN line missing any of its four parts —
+code, specific instance, discharge condition, next action — violates the contract; so does a
+post-fire turn that ends with neither line. A post-fire session is never silently open.
+
+**Run the helper first — mechanical reasons are read, never self-reported.** Before every emission:
+
+```bash
+~/.claude/scripts/handoff-disposition.sh [--session <uuid>] [--tasklist <id>] <fired-slug…>
+# stdout: {"dirty":…,"mailbox_pending":[…],"await_ping_running":…,"fired_peers_alive":[…],"open_tasks":…}
+```
+
+Exit 1 = mechanical reasons exist → the matching clauses (R-DIRTY / R-PING / R-WORK) are MANDATORY
+in the OPEN emission. Exit 0 = close-eligible pending the two judgment reasons only the model can
+read from the conversation: R-USER and R-DECIDE. The model judges those two; the script settles the
+rest. A pending mailbox line means an unprocessed ping: process it, `--ack`, re-run, then emit.
+
+### Closed reason taxonomy — the ONLY reasons a session may stay open
+
+| Code | Holds the session open when | Discharges when | Then |
+|---|---|---|---|
+| **R-PING** | awaiting a back-channel from fired session(s) `<slug…>` — *before* (about to fire more tracks), *during* (decision-gate / blocker pings), or *after* (completion ping) the peer's run. Armed by `--notify-back` (§ item 8); pair with a background `cc-await-ping` so discharge is event-driven, its `--timeout` the fallback wake | the ping lands — or the timeout fires: check fired-pane liveness via `cc-sessions`; a DEAD peer escalates to R-DECIDE (the user rules on the lost track) | process the ping → re-emit disposition |
+| **R-USER** | the user is mid-conversation / a reply is plausibly incoming — their LAST message is unanswered, or they said "stay open" | their message is handled and no new reason opened; or they say "close it" / go idle after an offered close | re-emit |
+| **R-DECIDE** | a NAMED open decision / STOP-ASK only the user can rule on | the user rules | act on the ruling → re-emit |
+| **R-WORK** | NAMED current or follow-on work THIS session owns (not delegated to a fired track) | the work is done, verified, committed | re-emit |
+| **R-DIRTY** | uncommitted in-scope changes in this worktree (self-close would refuse anyway) | a task-clean commit | re-emit |
+
+No other reason exists. "Just in case", "might be useful", "the user may want something" — BANNED:
+if no row fits, the session closes. Every discharge ends in *re-emit* — the contract is a loop whose
+only exit is CLOSE. The taxonomy is CLOSED: a candidate 6th reason is a PROPOSAL in the plan's status
+log (`docs/plans/HANDOFF_DISPOSITION_PLAN.md`), never a silent addition here. This table is also the
+readiness gate of step 6, read pre-fire — one table, two read points, so gate and taxonomy cannot drift.
+
+Worked example (two live reasons, worst-first):
+
+> `⏳ DISPOSITION: OPEN — R-USER: your question on E2E scope is unanswered → closes when answered with nothing new opened → then re-emit. · R-PING: awaiting completion ping from ship-hardening (cc-await-ping running, 1800s fallback) → closes when the ping lands → then process it + re-emit.`
+
+**Kill-switches (the user's words override everything above):**
+
+- "close now" → CLOSE this turn: commit first if R-DIRTY; `--allow-dirty` only on explicit user say-so.
+- "stay open" → a standing `R-USER: user said "stay open" → closes when they release it → then re-emit`
+  clause until they release it.
+
+**No Stop hook enforces this** — same rationale as the Session Close Protocol: an advisory hook is
+inert, a blocking hook is an infinite-loop anti-pattern. The contract is command discipline (this
+section) plus the deterministic helper; the un-fakeable part lives in the script.
 
 ## Guardrails
 
