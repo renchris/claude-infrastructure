@@ -32,8 +32,10 @@ One entrypoint over the 4-account fleet. The mechanism is `~/bin/claude-accounts
    | next4 ← you | 6 | 8% | Sat 07:21 (in 4.7h) | 25% | 22% | Sat 02:00 (in 23.4h) |
 
    - Column set is FIXED — both reset columns present in EVERY row, absolute first.
-   - ONE weekly-resets column: the weekly and weekly-Fable buckets reset at the same instant
-     (`weekly_reset_at` == `fable_reset_at`); if they ever diverge, footnote it — never add a column.
+   - ONE weekly-resets column: the weekly and weekly-Fable buckets reset at the same instant —
+     compare `weekly_reset_at`/`fable_reset_at` at MINUTE precision (the CLI stamps them
+     microseconds apart; exact string compare false-diverges). Genuinely different minutes →
+     footnote it — never add a column. Null resets (window idle / fresh) render as `—`.
    - Mark the invoking session's account `← you` (derive from `$CLAUDE_CONFIG_DIR`).
    - Flags are bullets BELOW the table (▲ ≥85% cutoff · **100% LIMITED** · Fable exhausted ·
      `auth` ≠ ok), never extra columns. Row order = the CLI's own order.
