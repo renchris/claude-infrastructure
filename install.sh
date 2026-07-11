@@ -174,6 +174,22 @@ if [[ -f "$REPO_DIR/bin/it2-wrapper" ]]; then
   copy_file "$REPO_DIR/bin/it2-wrapper" "$CONFIG_DIR/bin/it2"
 fi
 
+# --- Cross-session comms tools (global only) → ~/.claude/bin/ ---
+# cc-notify / cc-sessions / cc-await-ping — the two-way session-comms CLIs.
+# SYMLINKED (like scripts/) so live edits land in the repo and can't drift out of
+# version control. ~/.claude/bin is on PATH and holds it2, beside which these sit —
+# the /handoff --notify-back back-channel trailer references $HOME/.claude/bin/cc-notify
+# by absolute path, so this location is load-bearing.
+if $IS_GLOBAL; then
+  echo ""
+  echo "Comms tools → $CONFIG_DIR/bin/"
+  mkdir -p "$CONFIG_DIR/bin"
+  for tool in "$REPO_DIR"/bin/cc-*; do
+    [[ -f "$tool" ]] || continue
+    link_file "$tool" "$CONFIG_DIR/bin/$(basename "$tool")"
+  done
+fi
+
 # --- LaunchAgents (global only) ---
 if $IS_GLOBAL; then
   echo ""

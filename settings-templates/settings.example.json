@@ -112,13 +112,17 @@
         "hooks": [
           { "type": "command", "command": "~/.claude/hooks/session-start.sh", "timeout": 10 },
           { "type": "command", "command": "~/.claude/hooks/setup-plan-symlinks.sh", "timeout": 5 },
-          { "type": "command", "command": "~/.claude/hooks/setup-task-symlinks.sh", "timeout": 5 }
+          { "type": "command", "command": "~/.claude/hooks/setup-task-symlinks.sh", "timeout": 5 },
+          { "type": "command", "command": "~/.claude/hooks/session-register.sh", "timeout": 5 }
         ]
       }
     ],
     "SessionEnd": [
       {
-        "hooks": [{ "type": "command", "command": "~/.claude/hooks/session-end.sh", "timeout": 10 }]
+        "hooks": [
+          { "type": "command", "command": "~/.claude/hooks/session-end.sh", "timeout": 10 },
+          { "type": "command", "command": "~/.claude/hooks/session-deregister.sh", "timeout": 5 }
+        ]
       }
     ],
     "Stop": [
