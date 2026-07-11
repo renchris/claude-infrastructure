@@ -69,7 +69,7 @@ done
 
 # Bin tools
 echo "Bin tools:"
-for tool in claude-latest claude-update claude-versions browsermcp-wrapper.sh; do
+for tool in claude-latest claude-update claude-versions browsermcp-wrapper.sh claude-accounts; do
   [[ -f "$HOME/bin/$tool" ]] || continue
   sync_file "$HOME/bin/$tool" "$REPO_DIR/bin/$tool"
 done

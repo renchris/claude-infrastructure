@@ -107,10 +107,16 @@ if $IS_GLOBAL; then
   echo ""
   echo "Bin tools → ~/bin/"
   mkdir -p "$HOME/bin"
-  for tool in claude-latest claude-update claude-versions browsermcp-wrapper.sh; do
+  for tool in claude-latest claude-update claude-versions browsermcp-wrapper.sh claude-accounts; do
     [[ -f "$REPO_DIR/bin/$tool" ]] || continue
     copy_file "$REPO_DIR/bin/$tool" "$HOME/bin/$tool"
   done
+
+  # Accounts SSOT — symlink (repo = source of truth; the knowledge-layer mirror
+  # shares ~/.claude/accounts.json into every alt config dir automatically).
+  echo ""
+  echo "Accounts SSOT → $CONFIG_DIR/accounts.json"
+  link_file "$REPO_DIR/accounts.json" "$CONFIG_DIR/accounts.json"
 fi
 
 # --- Scripts ---
