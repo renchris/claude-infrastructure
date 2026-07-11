@@ -104,3 +104,24 @@ stop-on-issue verbatim).
 ## Status log
 - 2026-07-11 02:1x — plan created + committed on `ship-hardening` by the incident session
   (wt-pool-4, next4); handed off via /handoff fire. Nothing implemented yet.
+- 2026-07-11 (session 2) — implementation started. Recon + decisions:
+  - **Runtime** = CC 2.1.183 (claude-next / implicit-team model — spawn teammates via `Agent`
+    with `name`+`model:opus`, no `TeamCreate`). Trunk = `origin/main`. bats 1.13.0 + shellcheck
+    0.11.0 present. `tests/*.bats` convention confirmed (5 existing).
+  - **File-placement decision (T1c/T2, resolves the "commands/ship.md" ambiguity):** repo-root
+    `commands/` is the GLOBAL backing store (`handoff.md` is symlinked repo→`~/.claude`). Putting
+    the heavy flow there would replace the LIGHT global `/ship` for every project (violates root
+    cause D). So: **heavy infra flow → NEW `.claude/commands/ship.md`** (project-local override,
+    active only in infra — matches global `/ship` line 52's own documented pattern + reso
+    precedent). **Light global `/ship` → NEW repo `commands/ship.md`** (= current `~/.claude`
+    content + T2a/T2b); lead flips `~/.claude/commands/ship.md`→symlink post-land (matching
+    handoff.md). Chose "symlink" over "keep in sync" per T2's "pick one".
+  - **land-lock generalization (T1a):** repo-keyed lock `/tmp/land-lock-<repohash>/lock.d`
+    (shasum of `git rev-parse --show-toplevel`), telemetry → `~/.claude/land.log`. Test hooks:
+    `LAND_LOCK_DIR` + `LAND_LOG` overrides.
+  - **land-lock reap-rule divergence from reso (gate 3):** a LIVE holder pid is **never** reaped,
+    even past TTL (reso reaps live-past-TTL for load reasons; infra must not — the incident's cost,
+    a silently-dropped commit, outweighs a wedged-lock wait; `LAND_SERIALIZE=off` is the escape
+    hatch). Reap only: dead pid (immediate) or empty pid past 5s grace / TTL.
+  - Worktrees: `lh-t1` (infra-hardening: T1a/T1b + bats) + `lh-t2` (ship-docs: T1c + T2), both off
+    `ship-hardening` @ b191f94. One parallel wave; lead merges → gates → dogfood-lands.
