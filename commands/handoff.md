@@ -342,6 +342,30 @@ opened with the human-facing default profile so the zsh launchers resolve, and r
 ITSELF via § item 7's graceful self-close once its work is fully handed off (or by the human), never by
 an idle hook.
 
+**8 · Two-way — back-channel ping (`--notify-back`, opt-in).** Fire is one-way by default (fire-and-forget:
+the fired peer is an independent OS process, usually on another account, with no return address). Add
+`--notify-back [UUID]` to close the loop: it appends a back-channel trailer to a COPY of the prompt (NEVER
+the caller's file) telling the fired session to ping the ORIGINATOR on completion / decision gate / blocker
+via `cc-notify <UUID> "HANDOFF-PING <slug>: <status>"`. UUID defaults to THIS firing pane
+(`$ITERM_SESSION_ID`, or `--session-id`). Reuses the SAME it2 pane-injection transport handoff-fire already
+uses downward — run in reverse (research: `docs/research/HANDOFF_BACKCHANNEL_2026-07-10.md`; plan:
+`docs/plans/TWO_WAY_SESSION_COMMS_PLAN.md`). The three companion CLIs (in `~/.claude/bin/`, on PATH):
+
+- **`cc-notify <name|uuid|--self> "<msg>"`** — the general any-session→any-session primitive. Resolves a
+  friendly name (via the session registry / `cc-sessions`) or a raw pane UUID, types the message into the
+  target's composer, and submits with **`\r` — NOT `\n`** (Claude Code's Ink composer binds Enter to CR
+  only; a `\n` is a no-op submit). Lands as a real user message: WAKES an idle session, QUEUES into a busy
+  one. ALWAYS also records `~/.claude/mailbox/<uuid>.md` — so a closed/recycled pane degrades to
+  mailbox-only (exit 0), never a hard fail. `--mailbox-only` skips injection; `--from <name>` attributes.
+- **`cc-await-ping [<uuid>]`** — the modal-safe PULL complement. Launch via `Bash(run_in_background)`
+  before going idle after a `--notify-back` fire; it blocks on your mailbox and exits when a ping lands, so
+  the harness's task-completion notification re-invokes you even if the peer's composer injection mislanded
+  because you were at a permission/modal prompt. Bounded `--timeout` (default 1800s).
+- **`cc-sessions [--json|--names]`** — lists live sessions (name→pane UUID) for addressing; sweeps stale
+  entries (pane gone or owning process dead). Sessions register on `SessionStart` (predating sessions
+  register on next restart); the registry is account-agnostic (`~/.claude/cc-registry/`), so cross-account
+  pings resolve.
+
 ## Guardrails
 
 - NEVER write the bridge into a tracked/repo path or commit it. Stateless → `/tmp` only.
