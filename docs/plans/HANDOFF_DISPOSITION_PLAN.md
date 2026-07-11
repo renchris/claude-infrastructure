@@ -140,6 +140,12 @@ taxonomy must not drift apart (single table, referenced twice).
 - 2026-07-11 02:3x — acceptance gate 1 (zero-ambiguity) self-audit: PASS — the OPEN template
   structurally forces code + instance + discharge + next action; taxonomy closed with banned
   "just in case"; § explicitly declares a missing part or a lineless post-fire turn a violation.
+- 2026-07-11 02:4x — LANDING PARKED (gate 4 pending): ship-hardening's locked flow IS on
+  origin/main (C2 preferred path available); branch rebased onto it, gates re-run green
+  (shellcheck + 14/14 bats). The `git push origin HEAD:main` was DENIED by the permission
+  classifier (push-to-main needs the user's live call — correctly, per Git Safety). Land recipe
+  written to `/tmp/handoff-disposition-land.sh` (lock-wrapped push + content-verify +
+  `git cherry` stranded sweep). Branch tip ready; user authorizes → land → gate 4 closes.
 - 2026-07-11 — T1 landed on branch (`1a76fb1`): step 7 → § Post-fire disposition (closed taxonomy
   table, worst-first clause order R-DECIDE≻R-USER≻R-PING≻R-WORK≻R-DIRTY, helper wiring, kill-
   switches, no-Stop-hook rationale); step 6 readiness gate now references the same taxonomy table
