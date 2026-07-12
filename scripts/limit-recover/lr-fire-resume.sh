@@ -85,7 +85,21 @@ exec expect -c '
     stty rows $rows columns $cols < $spawn_out(slave,name)
   } WINCH
   expect {
-    -re {Resume from summary|substantial portion of your usage} { send "\r"; exp_continue }
+    -re {Resume from summary \(recommended\)} {
+      # Large-session resume fix (2026-07-11): on a 400k-token session the summary
+      # prompt HEADER (the "substantial portion of your usage" line) streams several
+      # seconds before Ink mounts the SelectInput and enables raw mode, so a CR fired
+      # the instant that header appeared (the old trigger) was swallowed and the menu
+      # hung — observed on 4 monster sessions 2026-07-11. Trigger instead on option 1
+      # text, which renders only once SelectInput is mounting, then settle for raw
+      # mode and tap CR a few times spaced out. Extra taps land on the now-empty
+      # composer (a no-op); the menu-specific trigger keeps this from firing on the
+      # trust/fullscreen prompts (handled below), and it leaves the post-load
+      # shortcuts signal un-consumed so --prompt injection still fires downstream.
+      # RE-CHECK the "(recommended)" wording on any CC bump.
+      for {set k 0} {$k < 3} {incr k} { sleep 2; send "\r" }
+      exp_continue
+    }
     -re {you created or one you trust|Quick safety check} { sleep 1; send "1"; send "\r"; exp_continue }
     # informational overage NOTICE (Enter dismisses either way — safe). Opt-in upsells
     # (extra-usage/remote-control/passes) are declined at the SOURCE via lr-preseed-env.sh
