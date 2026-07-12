@@ -55,6 +55,13 @@ cd "$WT"
 # Clear crashed-session mouse-reporting garbage.
 printf '\033[?1000l\033[?1002l\033[?1003l\033[?1006l\033[?1015l'
 
+# Resolve the human-in-the-loop startup blockers AT THE SOURCE before spawning the TUI:
+#   - the iTerm2 clear-scrollback GUI modal (a sheet ABOVE the PTY — expect cannot answer it)
+#   - the folder-trust arrow-menu (pre-accepted in the target account's config)
+# so the expect block below only has to fast-path benign, in-PTY prompts. Fail-open.
+_LR_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+"$_LR_DIR/lr-preseed-env.sh" "$cfg" "$WT" || true
+
 BIN="$HOME/.claude-183/node_modules/.bin/claude"
 [[ -x "$BIN" ]] || BIN="$HOME/.claude-183/node_modules/@anthropic-ai/claude-code/bin/claude.exe"
 
@@ -78,12 +85,21 @@ exec expect -c '
     stty rows $rows columns $cols < $spawn_out(slave,name)
   } WINCH
   expect {
-    -re {Resume from summary} { send "\r"; exp_continue }
-    -re {substantial portion of your usage} { send "\r"; exp_continue }
+    -re {Resume from summary|substantial portion of your usage} { send "\r"; exp_continue }
+    -re {you created or one you trust|Quick safety check} { sleep 1; send "1"; send "\r"; exp_continue }
+    # informational overage NOTICE (Enter dismisses either way — safe). Opt-in upsells
+    # (extra-usage/remote-control/passes) are declined at the SOURCE via lr-preseed-env.sh
+    # raising their *SeenCount gates — never blindly answered here (Enter could enable them).
+    -re {spent .* on the Anthropic API this session} { send "\r"; exp_continue }
+    # fullscreen upsell: Down+CR selects "Not now" (option 2). Order verified for CC 2.1.183 —
+    # RE-CHECK on any CC bump (a reordered menu would select "Yes, try it" and restart the session).
+    -re {new fullscreen renderer|Try the new fullscreen} { sleep 1; send "\033\[B"; send "\r"; exp_continue }
     -re {shift.tab to cycle|auto mode on|\? for shortcuts} {
       if {$prompt ne "" && !$injected} {
         set injected 1
         sleep 2
+        send "\025"
+        sleep 1
         send -- $prompt
         sleep 1
         send "\r"
