@@ -121,6 +121,13 @@ if [[ $NO_TRANSPLANT -ne 1 ]]; then
   echo "lr-handoff: transplant ok -> $(jq -r '.target_transcript' "$BUNDLE/transplant.json")" >&2
 fi
 
+# --- pre-seed the resume environment (as EARLY as possible) ----------------
+# Set the iTerm2 clear-scrollback pref + target-account folder-trust NOW, before the
+# osascript opens the pane, so iTerm2's async cross-process pref-read has SECONDS to
+# land before the new pane's TUI emits CSI 3 J — closing the write-then-launch race
+# (lr-fire-resume.sh re-runs it too; idempotent, fail-open).
+"$LR/lr-preseed-env.sh" "$TCFG" "${WT_TOP:-$CWD}" || true
+
 # --- launch ----------------------------------------------------------------
 FIRE_MODEL=""; [[ "$MODEL" == "fable" ]] && FIRE_MODEL="--model claude-fable-5 --effort high"
 LAUNCHER="/tmp/lr-launch-${SID:0:8}.sh"

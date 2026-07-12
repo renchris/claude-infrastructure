@@ -240,6 +240,19 @@ if [[ $warnings -eq 0 ]]; then
   echo "  ✓ All checks passed"
 fi
 
+# --- macOS: pre-establish the iTerm2 clear-scrollback pref -------------------
+# So an autonomous /limit-recover resume never blocks on the "control sequence attempted
+# to clear scrollback history" GUI modal (a sheet above the PTY that expect cannot answer).
+# Setting it at SETUP (not just per-resume) closes the cold-machine first-resume race where
+# iTerm2, launched before the pref was ever written, hasn't yet processed the change.
+# See scripts/limit-recover/lr-preseed-env.sh.
+if [[ "$(uname)" == "Darwin" ]] && command -v defaults >/dev/null 2>&1; then
+  if [[ "$(defaults read com.googlecode.iterm2 PreventEscapeSequenceFromClearingHistory 2>/dev/null)" != "1" ]]; then
+    defaults write com.googlecode.iterm2 PreventEscapeSequenceFromClearingHistory -bool true 2>/dev/null \
+      && echo "  ✓ iTerm2 clear-scrollback modal suppressed (autonomous-resume prereq)"
+  fi
+fi
+
 # --- Summary ---
 echo ""
 echo "Done: $installed installed, $skipped already up-to-date"

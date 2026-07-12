@@ -12,8 +12,22 @@ the model reconciles from its CONTEXT (which contains pre-kill narrative and loo
 of from DISK, satisfices on the units it happens to remember, and smooths gaps into the conclusion.
 This command replaces that with a deterministic audit → forced re-run → re-audit fixpoint. Scripts:
 `~/.claude/scripts/limit-recover/` (`lr-audit.py`, `lr-transplant.sh`, `lr-handoff.sh`,
-`lr-fire-resume.sh`). Artifacts: `~/.reso/limit-recover/<sid>/`. Invoking this command IS the
-authorization to call the Workflow tool for resume/re-run of the session's own workflow runs.
+`lr-fire-resume.sh`, `lr-preseed-env.sh`). Artifacts: `~/.reso/limit-recover/<sid>/`. Invoking this
+command IS the authorization to call the Workflow tool for resume/re-run of the session's own workflow runs.
+
+**Autonomous resume is prompt-free at the SOURCE (no human in the loop).** `lr-fire-resume.sh` calls
+`lr-preseed-env.sh <target-cfg> <worktree>` before spawning the TUI, which removes the two startup
+blockers `expect` structurally CANNOT answer (both live OUTSIDE the PTY): (1) the iTerm2 GUI modal
+*"A control sequence attempted to clear scrollback history. Allow this?"* — a sheet above the terminal
+that froze every keystroke (the 2026-07-11 stranded-ingest bug) — suppressed globally + live via the
+iTerm2 default `PreventEscapeSequenceFromClearingHistory=true`; (2) the *"Is this a project you trust?"*
+folder-trust menu — pre-accepted in the target account's `.claude.json` (`hasTrustDialogAccepted`). The
+fullscreen-renderer upsell + terminal-query gibberish stay handled by `lr-fire-resume.sh`'s `expect`
+layer (both ARE in the PTY). The trust write is guarded by Claude's own `.claude.json.lock` (never clobbers
+a concurrent same-account write; skips → expect fallback if the lock is busy), and lr-handoff.sh runs the
+preseed BEFORE opening the pane so the iTerm2 pref lands seconds ahead of the resumed TUI. **One-time
+machine setup (NOT per-resume):** grant osascript the "control iTerm2" Automation permission (macOS prompts
+once; already granted here). Full detail + preconditions: `resume-sessions/REFERENCE.md § 4a`.
 
 ## Iron rules (bind every mode; quote back any you are about to break and STOP)
 
