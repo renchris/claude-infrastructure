@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Install:  cp this to ~/Library/LaunchAgents/  &&  launchctl load -w ~/Library/LaunchAgents/com.reso.lr-reset-poller.plist
+     Default = NOTIFY-ONLY (safe): it detects limit-parked sessions + macOS-notifies once, spawns nothing.
+     To ENABLE unattended auto-resume AFTER reviewing ~/.reso/limit-recover/poller.log, add the
+     EnvironmentVariables block below (LR_POLLER_AUTOFIRE=1) and `launchctl unload && load` it.
+     Kill switch: set LR_POLLER_DISABLED=1 (or unload). -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.reso.lr-reset-poller</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/chrisren/.claude/scripts/limit-recover/lr-reset-poller.sh</string>
+  </array>
+  <key>StartInterval</key><integer>600</integer>
+  <key>RunAtLoad</key><true/>
+  <key>StandardOutPath</key><string>/Users/chrisren/.reso/limit-recover/poller.launchd.out</string>
+  <key>StandardErrorPath</key><string>/Users/chrisren/.reso/limit-recover/poller.launchd.err</string>
+  <!-- Auto-resume is OFF by default. To enable, uncomment:
+  <key>EnvironmentVariables</key>
+  <dict><key>LR_POLLER_AUTOFIRE</key><string>1</string></dict>
+  -->
+</dict>
+</plist>
