@@ -147,7 +147,39 @@ end run
 AS
 }
 
-# Internal: self-close watcher (spawned detached by `self-close`; survives CC's exit via nohup).
+# Detached-watcher spawner. nohup+disown is NOT enough: when the typed /exit interrupts the
+# in-flight Bash tool call running this script, CC reaps the tool call's entire process GROUP
+# with SIGKILL — a nohup'd child shares that pgid (and its PPID is this script while the script
+# still runs), so the watcher dies instantly: 0-byte log, no error, no relaunch, stranded pane.
+# Observed 2× 2026-07-13 (both same-pane recycles, 10:29 + 15:07); reproduced synthetically the
+# same day (group SIGKILL kills the nohup sibling; a start_new_session child survives). The
+# 2026-07-12 successes merely WON the race — the script returned before CC processed /exit, so
+# the watcher had already reparented to launchd. setsid gives the watcher its OWN session+pgid
+# and PPID 1 immediately: immune to group kill and parent-tree walk alike, no race to win.
+detach() { # $1=logfile  $2...=command  → prints watcher pid on stdout
+  /usr/bin/python3 - "$@" <<'PY'
+import subprocess, sys
+log = open(sys.argv[1], 'ab', 0)
+p = subprocess.Popen(sys.argv[2:], start_new_session=True,
+                     stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
+print(p.pid)
+PY
+}
+
+# Arm handshake: a watcher's FIRST act is writing an "→ armed:" heartbeat to its log; /exit is
+# typed ONLY after that line exists. A watcher that cannot even write its log must never be
+# trusted as the sole continuation path. (Healthy write lands in ms; 5s ceiling.)
+await_armed() { # $1=logfile → 0 once armed, 1 on timeout
+  local n=0
+  while [ "$n" -lt 25 ]; do
+    grep -q '^→ armed:' "$1" 2>/dev/null && return 0
+    /bin/sleep 0.2; n=$((n+1))
+  done
+  return 1
+}
+
+# Internal: self-close watcher (spawned via detach() = setsid; nohup alone dies with the tool
+# call's process group when /exit interrupts the calling turn — see detach() header).
 # ARCHITECTURAL CONSTRAINT: osascript AppleEvents to iTerm2 fail unreliably from detached/orphaned
 # contexts (empirically: 3 detached runs, 3 silent write/lookup failures; foreground never failed).
 # So ALL keystrokes happen FOREGROUND at arm time (they queue behind the calling turn), and this
@@ -156,6 +188,7 @@ AS
 if [ "${1:-}" = "__selfclose" ]; then
   SID="${2:?__selfclose needs a session id}"
   TTY_PATH="${3:-}"                                # acquired foreground at arm time — trustworthy
+  echo "→ armed: __selfclose pid=$$ sid=$SID tty=${TTY_PATH:-none}"
   cc_alive() { ps -o comm= -t "$(basename "$TTY_PATH")" 2>/dev/null | grep -qE 'node|claude'; }
   if [ -z "$TTY_PATH" ]; then
     # Truly blind (no tty handed over): NEVER instant-close on a blind read — fixed grace lets
@@ -191,6 +224,7 @@ if [ "${1:-}" = "__recycle" ]; then
   TTY_PATH="${3:?__recycle needs the pane tty}"
   CMDFILE="${4:?__recycle needs the command file}"
   IT2="$HOME/.claude/bin/it2"
+  echo "→ armed: __recycle pid=$$ pgid=$(ps -o pgid= -p $$ | tr -d ' ') sid=$RSID tty=$TTY_PATH"
   cc_alive() { ps -o comm= -t "$(basename "$TTY_PATH")" 2>/dev/null | grep -qE 'node|claude'; }
   waited=0
   while [ "$waited" -lt 600 ] && cc_alive; do
@@ -201,6 +235,7 @@ if [ "${1:-}" = "__recycle" ]; then
     echo "!! CC still alive after ${waited}s — giving up. Relaunch manually: $(cat "$CMDFILE")" >&2
     exit 1
   fi
+  echo "→ claude exited after ${waited}s — typing relaunch"
   sleep 2                                        # shell-prompt settle after claude exits
   ok=0
   for _ in 1 2; do
@@ -208,8 +243,26 @@ if [ "${1:-}" = "__recycle" ]; then
     sleep 3
   done
   [ "$ok" = 1 ] || { echo "!! it2 relaunch write failed twice — run manually in the pane: $(cat "$CMDFILE")" >&2; exit 1; }
-  echo "→ relaunched in $RSID: $(cat "$CMDFILE")"
-  exit 0
+  echo "→ relaunch typed into $RSID: $(cat "$CMDFILE")"
+  # Confirm the successor actually STARTS — a mistyped launcher, missing shell function, or
+  # auth bounce otherwise dies silently and strands the pane at a prompt. One guarded retype
+  # (skipped if claude appeared meanwhile — a late first launch must not get a second prompt
+  # typed into its composer), then scream INTO THE PANE via it2 (the one write path proven
+  # reliable detached) so a human at the pane sees the fallback even without the log.
+  up=0
+  for _ in $(seq 1 15); do sleep 3; if cc_alive; then up=1; break; fi; done
+  if [ "$up" = 0 ] && ! cc_alive; then
+    echo "⚠ no claude on $TTY_PATH 45s after relaunch — retyping once"
+    "$IT2" session run -s "$RSID" "$(cat "$CMDFILE")" >/dev/null 2>&1 || true
+    for _ in $(seq 1 15); do sleep 3; if cc_alive; then up=1; break; fi; done
+  fi
+  if [ "$up" = 1 ] || cc_alive; then
+    echo "→ relaunched + CONFIRMED in $RSID (claude process on tty)"
+    exit 0
+  fi
+  "$IT2" session run -s "$RSID" "# HANDOFF RELAUNCH FAILED — run manually: $(cat "$CMDFILE")" >/dev/null 2>&1 || true
+  echo "!! relaunch typed but no claude process appeared within 90s — fallback comment typed into pane" >&2
+  exit 1
 fi
 
 # self-close — arm the detached watcher that retires this session once the calling turn ends.
@@ -249,13 +302,15 @@ if [ "${1:-}" = "self-close" ]; then
     # No CC on the pane (shell-only, or still launching): typing /exit would hit the SHELL and
     # vanish (observed). Nothing to exit gracefully — the watcher closes the pane directly.
     echo "→ no CC on $SC_TTY — skipping /exit, closing pane directly" >&2
-    nohup "$0" __selfclose "$SC_SID" "$SC_TTY" >"$SC_LOG" 2>&1 &
-    disown 2>/dev/null || true
+    detach "$SC_LOG" "$0" __selfclose "$SC_SID" "$SC_TTY" >/dev/null
   else
-    nohup "$0" __selfclose "$SC_SID" "$SC_TTY" >"$SC_LOG" 2>&1 &
-    SC_WATCHER=$!
-    disown 2>/dev/null || true
-    echo "→ self-close armed for $SC_SID: watcher (ps-poll + shim close) detached (log: $SC_LOG)"
+    SC_WATCHER="$(detach "$SC_LOG" "$0" __selfclose "$SC_SID" "$SC_TTY")"
+    if ! await_armed "$SC_LOG"; then
+      kill "$SC_WATCHER" 2>/dev/null || true
+      echo "!! self-close ABORTED: watcher heartbeat never appeared ($SC_LOG) — /exit NOT typed, session stays alive" >&2
+      exit 1
+    fi
+    echo "→ self-close armed for $SC_SID: watcher pid $SC_WATCHER session-detached, heartbeat verified (log: $SC_LOG)"
     wrote=0
     for _ in 1 2 3; do
       if as_write "$SC_SID" "/exit" 2>/dev/null; then wrote=1; break; fi
@@ -779,15 +834,21 @@ recycle_fire() {
     echo "→ recycled (no CC was running): typed relaunch into $SID"
     return 0
   fi
-  # ORDER IS LOAD-BEARING: watcher FIRST, /exit LAST. A typed /exit INTERRUPTS the in-flight
-  # turn and exits within seconds (E2E 2026-07-03 — twice: the busy turn died with no output
-  # persisted; /exit does NOT enqueue-to-turn-end the way /clear does). When this script runs
-  # in its OWN pane, that interrupt can kill this very Bash tool at /exit+ε — so everything
-  # that must survive (watcher, user-facing fallback line) happens BEFORE the /exit keystroke.
-  nohup "$0" __recycle "$SID" "$tty" "$cmdfile" >"$log" 2>&1 &
-  WATCHER_PID=$!
-  disown 2>/dev/null || true
-  echo "→ recycle armed for $SID: watcher relaunches $LAUNCHER once claude exits (log: $log)"
+  # ORDER IS LOAD-BEARING: watcher FIRST (heartbeat-verified), /exit LAST. A typed /exit
+  # INTERRUPTS the in-flight turn and exits within seconds (E2E 2026-07-03 — twice: the busy
+  # turn died with no output persisted; /exit does NOT enqueue-to-turn-end the way /clear does).
+  # When this script runs in its OWN pane, that interrupt kills this very Bash tool at /exit+ε
+  # AND SIGKILLs its whole process group — which is why the watcher must be session-detached
+  # (detach(), not nohup: 2× 2026-07-13 the nohup watcher died in that reap → 0-byte log, no
+  # relaunch, stranded pane). Everything that must survive happens BEFORE the /exit keystroke,
+  # and /exit is only typed once the watcher has proven itself alive (await_armed).
+  WATCHER_PID="$(detach "$log" "$0" __recycle "$SID" "$tty" "$cmdfile")"
+  if ! await_armed "$log"; then
+    kill "$WATCHER_PID" 2>/dev/null || true
+    echo "!! recycle ABORTED: watcher heartbeat never appeared ($log) — /exit NOT typed, session stays alive. Run manually: $CMD" >&2
+    exit 1
+  fi
+  echo "→ recycle armed for $SID: watcher pid $WATCHER_PID (session-detached, heartbeat verified) relaunches $LAUNCHER once claude exits (log: $log)"
   echo "  manual fallback if no relaunch appears: $CMD"
   wrote=0
   for _ in 1 2 3; do
@@ -810,7 +871,7 @@ if [ "$DRY" = 1 ]; then
   echo "launcher: $LAUNCHER"
   if [ "$RECYCLE" = 1 ]; then
     echo "surface:  (recycle — this pane: $SID)"
-    echo "chain:    arm watcher → FOREGROUND /exit (interrupts any in-flight turn, exits in seconds — emit report/fallback BEFORE firing) → detached ps-poll ≤600s (CR nudges @60/150/300s) → it2-typed relaunch into the shell"
+    echo "chain:    arm watcher (setsid-detached, heartbeat-verified) → FOREGROUND /exit (interrupts any in-flight turn, exits in seconds — emit report/fallback BEFORE firing) → detached ps-poll ≤600s (CR nudges @60/150/300s) → it2-typed relaunch into the shell → confirm claude on tty (guarded retype, pane-visible fallback on failure)"
   else
     echo "surface:  $SURFACE"
     case "$SURFACE" in
