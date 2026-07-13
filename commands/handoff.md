@@ -252,12 +252,19 @@ tool boundary, so nothing steered.) The rebuilt flow: arm a detached watcher →
 semantics: it INTERRUPTS any in-flight turn and exits in seconds (E2E'd) → the watcher ps-polls the tty
 until claude is gone, then types `cd <cwd> && CLAUDE_ISOLATION_SKIP=1 <launcher> [flags] "$(cat
 /tmp/fire-<slug>.txt)"` into the plain shell via the it2 python-API CLI (AppleEvent-free,
-detached-proven; Enter = `\r`, Ink ignores `\n`). Consequences: the fire call is the turn's LAST action —
-emit the report + manual-fallback line BEFORE it (the interrupt can kill the Bash tool's own output); the
-payload travels VERBATIM (multi-line fine — no flatten); model/effort ride as launcher FLAGS (typed
-`/model`/`/effort` mutated the account's saved defaults — gone); account defaults to THIS session's
-(CLAUDE_CONFIG_DIR-derived), `--account`/`--launcher` override, so cross-account recycle works; the old
-transcript stays resumable via `--resume`. E2E 3× on 2.1.183 incl. a mid-turn fire. Re-verify the
+detached-proven; Enter = `\r`, Ink ignores `\n`). ⚠ Hardened 2026-07-13 after 2 same-day stranded
+panes: "detached" MUST mean **setsid** (`detach()` in the script — own session+pgid, PPID 1), because
+the `/exit` interrupt SIGKILLs the in-flight Bash tool's whole process GROUP and a nohup'd watcher dies
+with it (0-byte log, no relaunch — the Jul-12 successes had only won the return-before-interrupt race).
+The script now also gates `/exit` on the watcher's armed-heartbeat line (no heartbeat → abort, session
+stays alive) and post-confirms a claude process on the tty after relaunch (guarded retype once, then a
+pane-visible `# HANDOFF RELAUNCH FAILED — run manually: …` comment). Consequences: the fire call is the
+turn's LAST action — emit the report + manual-fallback line BEFORE it (the interrupt can kill the Bash
+tool's own output); the payload travels VERBATIM (multi-line fine — no flatten); model/effort ride as
+launcher FLAGS (typed `/model`/`/effort` mutated the account's saved defaults — gone); account defaults
+to THIS session's (CLAUDE_CONFIG_DIR-derived), `--account`/`--launcher` override, so cross-account
+recycle works; the old transcript stays resumable via `--resume`. E2E 3× on 2.1.183 incl. a mid-turn
+fire; group-kill repro + fixed-chain E2E (fake pane, real script) on 2.1.207, 2026-07-13. Re-verify the
 steering + `/exit`-interrupt semantics on CC version bumps.
 
 **5 · Surface.** Default = `--split-right`: splits the CURRENT pane like ⌘D (same view, same profile) —
