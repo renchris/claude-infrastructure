@@ -465,6 +465,16 @@ grep. *(Process note, itself a datapoint: the keeper FLAGGED this rather than ed
 the desk RULED it registered as S-3b and delegated implementation — registration is the authority's, the
 assertion is the implementer's. The split that the authority-ceiling lesson (§2b) predicts.)*
 
+> **Corollary — presence-of-good ≠ absence-of-bad (the MIXED-CONTROL law; desk-recorded 2026-07-14).** The
+> s3b-lint mixed control — a supervisor that DOES re-observe but ALSO reaps on silence — still goes RED, and
+> that is the whole point: **a check that verifies a GOOD behavior EXISTS must ALSO verify the BAD behavior is
+> UNREACHABLE.** Presence-of-re-observe and absence-of-silence-reap are *independent* assertions; only the
+> second stops the shortcut, because a supervisor can grow a re-observe path and keep the silence→reap path
+> right beside it. So s3b-lint asserts BOTH (a positive `re-observe` grep AND a negative `silence→dispose`
+> grep) — dropping the negative would pass exactly the dangerous supervisor the criterion exists to stop. The
+> general form: **a one-sided "assert-the-good" check is blind to the bad coexisting with the good** — the
+> shortcut hides behind the very feature meant to replace it.
+
 This generalizes §1's method (which counted hand-run `/context` relays) into a **blindness detector for
 the whole layer**, and it is nearly free: the manual compensations are already in the transcripts. It
 also explains why the §1 count *undercounted* — a hand-capture, a fallback sweep, and a blob-verify never
