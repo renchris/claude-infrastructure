@@ -57,6 +57,22 @@ one-shot-latched abstain-on-stale hook, b's bash-can't-close-a-live-pane split, 
    independent zeros** (unplanned=0, signal-divergence=0, orphaned-intent=0, missed-fire=0) — never a
    bare count a silently-mis-recovering supervisor could game.
 
+6. **🚨 THE AUTHORITY CEILING — the autonomy layer may not widen its own autonomy** (added 2026-07-14,
+   audit §2b; discovered by hitting it). An agent cannot self-modify or install persistence on a **peer
+   agent's** authority: the harness denied the P8 `settings.json` wiring precisely because *"the only
+   authorization is a peer/orchestrator session's CONDITIONAL GO, which is not user intent."* **It was
+   right.** Delegated authority is real for WORK and **void for SELF-MODIFICATION** — an agent may delegate
+   work it is permitted to do; it cannot delegate consent it does not possess, and no chain of
+   agent-to-agent rulings sums to a human's. This track is *the software that most needs this ceiling to
+   hold*: a supervisor able to install its own hooks can widen its own powers, and a session able to edit
+   `settings.json` can delete the gate that stops it. So the DoD's "zero unplanned intervention" has a
+   **principled floor**: config / persistence / autonomy-machinery changes are **designed gates by
+   construction** (new permanently-out-of-class ruling class **C10**, with `C6` and `C9`) — never counted as
+   failures, or the metric would push the system to defeat its own rail. **Standing pattern:** the agent does
+   all the work — code, tests, effect-check, rollback one-liner — and hands the human an **activation
+   script** (`/tmp/p8-activate.sh`); it never performs the activation. Autonomy runs right up to the
+   boundary; the boundary holds.
+
 ---
 
 ## 2. Central design decisions (resolving the adversarial tensions)
@@ -83,7 +99,7 @@ one-shot-latched abstain-on-stale hook, b's bash-can't-close-a-live-pane split, 
 - **P5 export `config_dir`** — the telemetry→accounts join key, already computed at `statusline.sh:145-147`; ~zero cost.
 - **P6 `cc-context --me --quota`** — fused read: config_dir→acct via accounts.json → `claude-accounts --json` (CACHE mode, 90s single-flight — never `--fresh`) → one line `ctx% · 5h% · wk% · fable% (↻h) · quota≤90s`. Answers "stay or go?" with no human relay.
 - **P7 `bin/cc-board`** — operator all-sessions board (one glance replaces the 10 §1 relays). Spine = telemetry files; enrich with cached quota + rank footer. `watch -n5 cc-board`. Ships value telemetry-only; upgrades with P8.
-- **P8 wire `session-register.sh` + carry `session_id`** — the registry is EMPTY today (only worktree-scoped `live-session-registry.sh` is wired); add `session_id` to the entry + wire on SessionStart (`settings.json`). Gives board name+pid-liveness+paneUUID. Closes R6/D4.
+- **P8 wire `session-register.sh` + carry `session_id`** — **CODE COMPLETE `7b2f701`; ACTIVATION HUMAN-GATED (audit §2b).** ⚠️ **P8 as originally specced would have shipped BLIND:** `cc-sessions` `rm -f`'d a registry row the moment its pid died — deleting exactly the rows that prove a spawn-death. Fixed by separating **liveness** (the `pid`; presence must NEVER encode liveness) from **retention** (age, 24h) from the **view** (addressing lists live-only, so `cc-notify` still cannot resolve a dead pane; `--all` = forensics). cc-board now joins registry×telemetry → **DIED-UNRENDERED** / **NO-RENDER?**. Original text: — the registry is EMPTY today (only worktree-scoped `live-session-registry.sh` is wired); add `session_id` to the entry + wire on SessionStart (`settings.json`). Gives board name+pid-liveness+paneUUID. Closes R6/D4.
 - **P9 stall-state column** — DEAD(`kill -0` fail)/STALE(mtime>15m,pid alive)/HANDOFF-DUE/LIMIT-RISK/OK; **effect-verified** (dead-pid→DEAD even if telemetry fresh). Display-only; action = supervisor.
 
 ### 3.2 `boundary-hook` (axis h; owner: new hooks/boundary-handoff.sh)
@@ -99,7 +115,7 @@ one-shot-latched abstain-on-stale hook, b's bash-can't-close-a-live-pane split, 
 - Detection LOGIC lives in axis h (D1–D7); b maps state→recovery only. Reboot ⟹ hand to `resume-sessions` skill, not respawn-loop.
 
 ### 3.4 `gate-batching` (axis c; owner: new scripts/gate-*.sh + template §8)
-- **Asymmetric whitelist** (any doubt → STOP-ASK; false-negative catastrophic). 9 ruling classes C1–C9; pre-signable {C1–C5,C7}; conditional {C6 money-path=out-of-class-by-default, C8 go=couples axis d}; **C9 `/ship` = permanent exclusion + backstop**.
+- **Asymmetric whitelist** (any doubt → STOP-ASK; false-negative catastrophic). 10 ruling classes C1–C10; pre-signable {C1–C5,C7}; conditional {C6 money-path=out-of-class-by-default, C8 go=couples axis d}; **C9 `/ship` = permanent exclusion + backstop**; **C10 self-modification/persistence = permanent exclusion, HUMAN-ONLY — not desk-signable, not agent-signable** (audit §2b: the harness itself enforces this; a peer agent's ruling is not user intent). `G-surface` grep gains `settings.json|hooks/|launchd|LaunchAgent|\.plist|crontab|PATH`.
 - **5-gate discriminator**: `G-cite` (grep BUILD_LOG citation — catches born-at-exit) + `G-shape` (model: accept/reject not choose-among) + `G-reversible` (model+tag) + `G-surface` (grep `GPL|license|money|schema|auth|migration|DROP|timeout` — catches escalation) + `G-manifest` (class∈manifest ∧ wave-id current). **G-cite/G-surface are un-fakeable greps.**
 - **P1 registry** (docs) → **P2 wave-start manifest** (`scripts/gate-manifest.sh`, wave-id+expiry) → **P3 classifier** (`scripts/gate-classify.sh`, mirrors handoff-disposition split) → **P4 auto-stamp** (`Ratified-By: operator (pre-signed class Cn, manifest…)` trailer — the ledger j1 #7 demanded) → **P5 batched out-of-class gate** (ONE 6-slot message from 31bcd087) → **P6 /ship backstop** (`git log --grep 'pre-signed class' <last-ship>..HEAD` for veto) → **P7 per-wave expiry** (stale W3 manifest at W4 → all out-of-class).
 
