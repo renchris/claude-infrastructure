@@ -80,14 +80,97 @@ SH
   grep -q "session send -s $RAW <CR>" "$IT2_LOG"
 }
 
-@test "the submit uses \\r (CR), never \\n — exactly two calls, second is <CR>" {
+@test "the submit uses \\r (CR), never \\n — text call then <CR>, then the verify capture" {
   use_full_stub
   run bash "$NOTIFY" peer "msg"
   [ "$status" -eq 0 ]
-  [ "$(wc -l < "$IT2_LOG" | tr -d ' ')" -eq 2 ]
-  run tail -n1 "$IT2_LOG"
+  # hardened sequence: send text -> send <CR> -> session capture (verify)
+  [ "$(grep -c 'session send' "$IT2_LOG")" -eq 2 ]
+  run sed -n '2p' "$IT2_LOG"
   [[ "$output" == *"<CR>"* ]]
   [[ "$output" != *"msg"* ]]   # the CR call carries no text
+  grep -q "session capture -s $UUID" "$IT2_LOG"
+}
+
+# --- submit-verification hardening (2026-07-13): confirm the effect, never the keystroke ---
+
+# A capture-aware stub: `session capture -s <uuid> -o <file>` copies the Nth fixture
+# from $CAPTURE_FIXTURES_DIR/cap.N (N = capture call count) so tests can script the
+# composer's state over retries. Missing fixture -> no file (capture unavailable).
+use_capture_stub() {
+  export CAPTURE_FIXTURES_DIR="$BATS_TEST_TMPDIR/caps"
+  mkdir -p "$CAPTURE_FIXTURES_DIR"
+  cat > "$IT2_BIN" <<SH
+#!/bin/bash
+if [ "\$1 \$2 \$3" = "session list --json" ]; then
+  echo '[{"id":"$UUID"}]'; exit 0
+fi
+if [ "\$1 \$2" = "session capture" ]; then
+  cnt_f="$BATS_TEST_TMPDIR/capcount"; n=\$(cat "\$cnt_f" 2>/dev/null || echo 0); n=\$((n+1)); echo "\$n" > "\$cnt_f"
+  printf 'session capture -s %s (call %s)
+' "\$4" "\$n" >> "$IT2_LOG"
+  src="$CAPTURE_FIXTURES_DIR/cap.\$n"
+  # sticky: past the last scripted fixture, keep serving the highest one
+  while [ ! -f "\$src" ] && [ "\$n" -gt 1 ]; do n=\$((n-1)); src="$CAPTURE_FIXTURES_DIR/cap.\$n"; done
+  [ -f "\$src" ] || exit 0
+  # -o <file> is arg 6 (capture -s <uuid> -o <file>)
+  cp "\$src" "\$6"; exit 0
+fi
+out=""
+for a in "\$@"; do
+  if [ "\$a" = "\$(printf '\r')" ]; then out="\$out<CR> "; else out="\$out\$a "; fi
+done
+printf '%s
+' "\$out" >> "$IT2_LOG"
+exit 0
+SH
+}
+
+stranded_pane() { printf 'transcript noise\n\u276f %s and more of it typed here\n' "$1"; }
+clear_pane()    { printf '%s (queued above)\n\u276f Press up to edit queued messages\n' "$1"; }
+
+@test "verify: clean submit on first capture -> exit 0, VERIFIED, no extra CR" {
+  use_capture_stub
+  printf 'countermand text (queued above)
+\342\235\257 Press up to edit queued messages
+' > "$CAPTURE_FIXTURES_DIR/cap.1"
+  run bash "$NOTIFY" peer "countermand text"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"VERIFIED"* ]]
+  [ "$(grep -c '<CR>' "$IT2_LOG")" -eq 1 ]
+}
+
+@test "verify: stranded once -> one CR retry -> VERIFIED exit 0" {
+  use_capture_stub
+  printf 'noise
+\342\235\257 countermand text still sitting here
+' > "$CAPTURE_FIXTURES_DIR/cap.1"
+  printf 'countermand text (queued above)
+\342\235\257 Press up to edit queued messages
+' > "$CAPTURE_FIXTURES_DIR/cap.2"
+  run bash "$NOTIFY" peer "countermand text"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"VERIFIED"* ]]
+  [ "$(grep -c '<CR>' "$IT2_LOG")" -eq 2 ]   # initial + 1 retry
+}
+
+@test "verify: stranded forever -> exit 4, STRANDED reported, mailbox still holds it" {
+  use_capture_stub
+  printf 'noise
+\342\235\257 countermand text still sitting here
+' > "$CAPTURE_FIXTURES_DIR/cap.1"
+  run bash "$NOTIFY" peer "countermand text"
+  [ "$status" -eq 4 ]
+  [[ "$output" == *"STRANDED"* ]]
+  [ "$(grep -c '<CR>' "$IT2_LOG")" -eq 3 ]   # initial + 2 retries
+  grep -q "countermand text" "$CC_MAILBOX_DIR/$UUID.md"
+}
+
+@test "verify: capture unavailable -> graceful UNVERIFIED, exit 0" {
+  use_capture_stub   # no fixtures written -> capture produces no file
+  run bash "$NOTIFY" peer "some message"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"UNVERIFIED"* ]]
 }
 
 @test "ALWAYS writes the mailbox on success (composer + mailbox)" {

@@ -18,6 +18,10 @@
 #      NOT newline: Claude Code's Ink composer binds Enter to \r only).
 #   The text lands in the target's composer as a real user message — waking an
 #   idle session or queuing into a busy one.
+#   3. VERIFIED (2026-07-13 hardening): the pane is captured and the submit is
+#      confirmed — a message still sitting at the composer '❯' gets up to 2 CR
+#      retries; a strand is reported LOUDLY (exit 4), never as "delivered"
+#      (an Ink redraw swallows the submit ~1-in-6; a strand sat 20 min once).
 #   ALWAYS also appends ~/.claude/mailbox/<uuid>.md ("<ISO> [<from>] <message>")
 #   as the durable fallback: a closed/recycled pane makes it2 exit non-zero, and
 #   cc-notify then reports "mailbox only" and still exits 0 — never a hard fail.
@@ -26,7 +30,8 @@
 #   passthrough -> --self. Names never look like a UUID, so there is no ambiguity.
 #
 # Env overrides (tests): CC_REGISTRY_DIR, CC_MAILBOX_DIR, IT2_BIN.
-# bash 3.2-safe. Exit 0 = delivered or mailboxed; 2 = usage; 3 = unresolvable target.
+# bash 3.2-safe. Exit 0 = delivered(+verified/unverifiable) or mailboxed; 2 = usage;
+# 3 = unresolvable target; 4 = typed but STRANDED unsubmitted after retries (mailboxed).
 set -uo pipefail
 
 MAILBOX_DIR="${CC_MAILBOX_DIR:-$HOME/.claude/mailbox}"
@@ -125,11 +130,50 @@ if [ "$MAILBOX_ONLY" = 1 ]; then
 fi
 
 # text, then CR submit (\r — Ink composer submits on CR, never \n)
-if "$IT2" session send -s "$uuid" "$MSG" 2>/dev/null \
-   && "$IT2" session send -s "$uuid" "$(printf '\r')" 2>/dev/null; then
-  echo "cc-notify: delivered to $uuid (composer + mailbox)" >&2
-  exit 0
-else
+if ! { "$IT2" session send -s "$uuid" "$MSG" 2>/dev/null \
+       && "$IT2" session send -s "$uuid" "$(printf '\r')" 2>/dev/null; }; then
   echo "cc-notify: pane $uuid unreachable (closed/recycled) — delivered to mailbox only" >&2
   exit 0
 fi
+
+# --- verify the SUBMIT, never trust the keystroke (hardened 2026-07-13) ----------------------
+# An Ink redraw swallows the submitting newline ~1-in-6 (the handoff-fire as_write finding);
+# a stranded message then sits at the composer '❯' indefinitely — observed 20 minutes on a
+# live countermand the same day this was added. Same confirm-the-effect pattern as the
+# handoff-fire relaunch fix: capture the pane, and while the message head still sits AT/AFTER
+# the last composer prompt, re-send CR (2 retries), then fail LOUD — the mailbox already holds
+# the message, but a strand must never be reported as "delivered".
+# Exit codes: 0 = delivered (verified, or pane text unreadable — degrade gracefully);
+#             4 = typed but STRANDED in the composer after retries (mailbox recorded).
+_cap="$(mktemp "${TMPDIR:-/tmp}/cc-notify-cap.XXXXXX")"
+trap 'rm -f "$_cap"' EXIT
+_head="$(printf '%s' "$MSG" | head -1 | cut -c1-40)"
+composer_stranded() { # 0 = stranded, 1 = clear/submitted, 2 = unreadable
+  "$IT2" session capture -s "$uuid" -o "$_cap" >/dev/null 2>&1 || return 2
+  [ -s "$_cap" ] || return 2
+  # last composer-prompt line; the message head appearing ON or AFTER it = stranded.
+  last_prompt="$(grep -n '❯' "$_cap" 2>/dev/null | tail -1 | cut -d: -f1)"
+  [ -n "$last_prompt" ] || return 2
+  hit="$(grep -nF "$_head" "$_cap" 2>/dev/null | tail -1 | cut -d: -f1)"
+  [ -n "$hit" ] && [ "$hit" -ge "$last_prompt" ] && return 0
+  return 1
+}
+_attempt=0
+while :; do
+  composer_stranded; _st=$?
+  if [ "$_st" = 1 ]; then
+    echo "cc-notify: delivered to $uuid (composer + mailbox; submit VERIFIED)" >&2
+    exit 0
+  fi
+  if [ "$_st" = 2 ]; then
+    echo "cc-notify: delivered to $uuid (composer + mailbox; submit UNVERIFIED — pane capture unavailable)" >&2
+    exit 0
+  fi
+  _attempt=$((_attempt + 1))
+  if [ "$_attempt" -gt 2 ]; then
+    echo "cc-notify: STRANDED — message typed into $uuid but the composer never submitted after $_attempt CR retries; mailbox holds it. Submit manually (press Enter in that pane) or re-run." >&2
+    exit 4
+  fi
+  sleep 1
+  "$IT2" session send -s "$uuid" "$(printf '\r')" 2>/dev/null || true
+done
