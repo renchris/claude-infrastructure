@@ -360,3 +360,16 @@ incidents, account lockouts, iTerm2 restart)?
   the both-teammates-closed E4 boundary is reached → **WATCH = W5 lead placement** (Fable-if-open-&-<96% else
   Opus@max). Verify discipline held (D8/stall clean; E4 carried the 91→92 live-read correction). Session: 10
   commits + this entry, parked 50. Self 37% ctx/next3 — ample, tracking demand-vs-headroom per the E2 rule.
+- 2026-07-14 ~08:3x (track, next3 keeper #2) — **═ W4 EXIT DECLARED `b242789` — E4/W5 WATCH CLOSED ═.**
+  Verified read-only: all four exit criteria MET, **11/11 merged (3,562/3), 73 min BEFORE the Fable window
+  edge** (early-verify re-sequencing bought the promised margin). **W5 DISPOSITION:** placement = **Opus 4.8 @
+  max** (E4 window-edge recompute as designed), account re-ranked at fire = **fresh next3**, E3-fence-held on
+  operator ratification of `53e23fb`; **no Fable cliff ever hit** (next4 peaked ~94%, live next3 fable 12% —
+  desk relay said ~11%, 1pt-stale). **THE MISSION SENTENCE (desk):** *"the program never blocked on the
+  sleeping operator, and nothing out-of-class was desk-signed"* → the DoD's two halves for W4 (§1 relays→0, §3
+  rescues→0; authority ceiling held). **Scorecard → audit §6 (`52f3f68`):** 6 leads · 6 clean successions (2
+  cross-account) · 2 pages (1 void-by-effects — the re-observe arm; 1 hard-E2) · 1 D8 breaker · 49-finding
+  verify (2 criticals fixed) · 9 rehearsal ship-blockers. Also banked this session: the **mixed-control law**
+  (§3i, `05e4364`, desk-recorded: presence-of-good ≠ absence-of-bad). **WATCH now CLOSED — prove-on-W4
+  essentially complete from the keeper's seat; the operator's ratification is the final gate.** Session: 13
+  commits + this entry, parked 53. Self ~40% ctx/next3 — ample; holding for operator wake / W5-ratification.
