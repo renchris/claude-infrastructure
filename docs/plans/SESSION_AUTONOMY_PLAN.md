@@ -178,6 +178,39 @@ incidents, account lockouts, iTerm2 restart)?
   (briefs/corpus use the 8-char prefix; `cc-notify` takes only {name | FULL uuid}, and the name registry is
   EMPTY — **P8 un-wired**) → two gaps composed to break a succession's most important send; failed LOUD, not
   silent. → §8 E5 now mandates FULL uuids; queued: prefix-expansion in `cc-notify` + land P8.
+- 2026-07-14 ~07:xx (track, next4) — **INVARIANT 7 + THE BLIND-CHECK LAW + THE UN-HOLD BAR** (`1eebe07`,
+  `f738c9c`, `68d7dcb`, `d4e0eac`). **`cc-bind`'s own gate was blind** — the ack bound to an **ID, not the
+  ruling's TEXT**, so a ruling rewritten after the ack still PASSED (proven). The tell: the orchestrator
+  **hand-verified the blob** — *the audit's own second-class relay reappearing inside the tool built to end
+  it, within hours.* Fixed: `Acked-Ruling: <id>@<content-sha>`; gate fails LOUD on amended-since-ack, FAILS
+  CLOSED on an unhashed ack, and matches the trailer EXACTLY (an ack for `P8-GO-2` satisfied a `P8-GO` gate
+  via substring). selftest 8/8. **Proven live on the desk's own AMENDMENT 1** (which VOIDED condition 4 —
+  *"not because timing changed but because the CLASS was mis-signed"*; **precedent, now desk law: an authority
+  that discovers it over-signed VOIDS THE CLASS, never re-times the request**). **→ §3i THE BLIND-CHECK LAW
+  (the keeper): a check that cannot OBSERVE the thing it guards is indistinguishable from NO CHECK — it exits
+  0, its suite is green, the system looks healthy. You cannot find one by reading it (4 instances, 3 shipped
+  with passing tests). BUT ITS EXTERNAL SIGNATURE IS UNMISSABLE: A HUMAN QUIETLY STARTS DOING ITS JOB BY HAND.
+  ⇒ AUDIT WHAT THE HUMAN *DOES*, NOT WHAT THEY *SAY* — every manual verification is a bug report against an
+  automation, filed by someone who didn't know they were filing it.** (This is why §1 UNDERCOUNTED.)
+  **→ INVARIANT 7 (ONE ARTIFACT, ONE ROLE):** an artifact that is BOTH the evidence of a failure AND subject
+  to a lifecycle serving another goal will have its evidence destroyed by that goal, silently, *at the moment
+  the failure occurs* — the destructive role wins because it is the one with a POLICY. **The conflicting pair
+  was DIFFERENT every time** (telemetry: stall-evidence vs HYGIENE · registry: spawn-death vs ADDRESSING ·
+  ruling: what-was-authorized vs AMENDABILITY), which is why a reader watching for a repeat of the last bug
+  missed all three. Fix shape: split the roles; **deletion keys on AGE, never on the failure-state**; a view
+  may HIDE, never DELETE; an attestation binds by CONTENT, never by name. **Mechanical corollary (desk-adopted
+  as a SHIP-GATE): a check must log its ABSTENTIONS** — D9 is only visible in the outcome DISTRIBUTION; alarm
+  on `abstained==100%` over N≥10. *That one rule would have caught `cc-notify` in hours, not a day.*
+  **→ THE UN-HOLD BAR is now MECHANICAL** (desk sharpening: *"a pre-mortem nobody can watch fire is itself a
+  check that cannot observe what it guards"*): `scripts/premortem-gate.sh` — B-1/B-2/B-3 + S-1..S-4 as
+  ASSERTIONS. **RED today by design (2 met · 5 NOT BUILT); its redness IS "not ready", and turning it green IS
+  the definition of ready.** Not wired to pre-commit (an always-red gate teaches people to ignore it).
+  **S-1 enforced TODAY** per the desk's suggestion: `scripts/reaper-horizon-lint.sh` — *no reaper's horizon may
+  be shorter than the supervisor's slowest sweep ×10* — greps the SOURCE, green now, RED on the simulated
+  "tidy up /tmp" change, and FAILS CLOSED on an undeclared reaper. **Safe-by-luck → safe-by-construction,
+  before the supervisor exists.** (It was itself reading COMMENTS AS CODE until fixed — a `grep -rn` hit is
+  `file:line:content`, so `grep -v '^#'` never matches.) **NEXT LEAD: read `premortem-gate.sh` output first —
+  it tells you exactly what the runtime phase still owes.**
 - 2026-07-14 ~06:xx (track, next4) — **P8 CODE COMPLETE (`7b2f701`) · ACTIVATION HUMAN-GATED · and THE
   AUTHORITY CEILING (audit §2b) — the hardest constraint on this whole track, found by hitting it.**
   Orchestrator gave a CONDITIONAL GO (5 binding conditions) under "desk authority". Wiring the SessionStart
