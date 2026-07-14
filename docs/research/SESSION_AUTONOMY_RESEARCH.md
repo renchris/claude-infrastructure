@@ -204,6 +204,19 @@ one-shot-latched abstain-on-stale hook, b's bash-can't-close-a-live-pane split, 
   record *that it looked and found nothing*, or a silently-crashed daemon is indistinguishable from a quiet
   system. **This is the "who watches the watcher" question, answered mechanically:** the watcher's own
   heartbeat is an outcome record, and its absence is the alarm.
+- **The PAGE-RESOLUTION protocol — proven load-bearing by the FIRST live stall-page cycle (2026-07-14; full
+  evidence in audit §3h).** A lead ran all four D10 signals dark 69–75 min, was paged with a 15-min deadline,
+  the deadline expired with NO REPLY — and the **mandatory effect RE-READ found it alive + productive**
+  (rehearsal + ship-blocker debug, `532abfa`). Reply-or-kill alone would have killed a healthy lead: the
+  *"reaping on age kills a healthy long turn"* prediction, nearly live. **Two spec rules:** (1) **a page
+  deadline triggers RE-OBSERVATION, never action** — `silence + fresh effects = VOID`, `silence + dark effects
+  = disposition`; (2) **reply-compliance is NOT liveness** — a busy lead ignores pages, so it must never gate
+  the recovery decision; only the effect re-read does.
+  > ⚠️ **Premortem-gate S-3 GAP (flagged for the desk, bar owner — NOT modified by me; the criteria are
+  > desk-registered).** S-3's assertion (`grep -qE 'MODAL'`) proves the supervisor *pages* but would PASS one
+  > that pages **then reaps on deadline-silence** — the near-miss itself. A pre-mortem that can *watch this
+  > fire* needs the re-observe protocol as a RED-provable S-3 sub-assertion (supervisor source carries a
+  > deadline→re-read token; silence-alone never reaches a disposition branch).
 
 ### 3.4 `gate-batching` (axis c; owner: new scripts/gate-*.sh + template §8)
 - **Asymmetric whitelist** (any doubt → STOP-ASK; false-negative catastrophic). 10 ruling classes C1–C10; pre-signable {C1–C5,C7}; conditional {C6 money-path=out-of-class-by-default, C8 go=couples axis d}; **C9 `/ship` = permanent exclusion + backstop**; **C10 self-modification/persistence = permanent exclusion, HUMAN-ONLY — not desk-signable, not agent-signable** (audit §2b: the harness itself enforces this; a peer agent's ruling is not user intent). `G-surface` grep gains `settings.json|hooks/|launchd|LaunchAgent|\.plist|crontab|PATH`.
