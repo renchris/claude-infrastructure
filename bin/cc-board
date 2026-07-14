@@ -1,0 +1,59 @@
+#!/bin/bash
+# cc-board — operator all-sessions glance view (SESSION_AUTONOMY §3.1 P7, axis a).
+#
+# ONE screen replaces the hand-run /context + /accounts relays that drove W0-W3 (audit
+# §1): every live session's context fill × its account's 5h/weekly/Fable headroom × a
+# stall state, plus the best next account to place work. Read-only; joins the atomic
+# telemetry (statusline export) with the 90s-cached claude-accounts feed. `watch -n5 cc-board`.
+#
+# States (display-only — ACTION belongs to the supervisor, ruling #1 page-only):
+#   OK · DUE (ctx ≥ handoff threshold, default 73%) · LIMIT (account 5h≥85% or weekly≥90%)
+#   · STALE (telemetry age >15m). STALE is the interim liveness proxy — true DEAD needs the
+#   registry pid wire (P8); until then an age>15m row may be a dead pane OR a live long-turn,
+#   so STALE means "verify before trusting", never "reap" (the fixtures-b2 lesson).
+set -u
+TDIR="${CC_TELEMETRY_DIR:-/tmp/cc-telemetry}"
+HANDOFF_T="${CC_BOARD_HANDOFF_PCT:-73}"
+STALE_S="${CC_BOARD_STALE_S:-900}"
+[ -d "$TDIR" ] || { echo "no telemetry ($TDIR absent — statusline exports each turn boundary)" >&2; exit 3; }
+
+# config_dir → account name (statusline suffix convention; accounts rows carry no config_dir)
+map_acct() { case "$1" in
+  */.claude-next)       echo next  ;;  */.claude-secondary)  echo next2 ;;
+  */.claude-tertiary)   echo next3 ;;  */.claude-quaternary) echo next4 ;;  *) echo "" ;;
+esac ; }
+
+# ONE cached accounts read (never --fresh: 90s single-flight); joined per row below.
+ACCTS_JSON=""
+command -v claude-accounts >/dev/null 2>&1 && ACCTS_JSON=$(claude-accounts --json 2>/dev/null)
+qrow() {  # $1=acct → "5h<TAB>wk<TAB>fable"  (or "?\t?\t?")
+  local r=""
+  [ -n "$ACCTS_JSON" ] && [ -n "$1" ] && r=$(printf '%s' "$ACCTS_JSON" | jq -r --arg a "$1" \
+    '(.rows//[])[]|select(.acct==$a)|[.session_pct,.weekly_pct,.fable_pct]|@tsv' 2>/dev/null | head -1)
+  [ -n "$r" ] && printf '%s' "$r" || printf '?\t?\t?'
+}
+
+now=$(date +%s)
+printf "%-9s %-5s %-5s %-6s %-4s %-4s %-6s %-7s %s\n" SESSION AGE CTX ACCT 5h WK FABLE STATE CWD
+for f in $(ls -t "$TDIR"/*.json 2>/dev/null); do
+  IFS=$'\t' read -r sid ts used cfg cwd < <(jq -r \
+    '[(.session_id//"?"),(.ts//0),((.used_pct//0)|floor),(.config_dir//""),(.cwd//"?")]|@tsv' "$f" 2>/dev/null) || continue
+  [ -n "$sid" ] || continue
+  age=$((now - ts))
+  if   [ "$age" -lt 120 ];  then astr="${age}s"
+  elif [ "$age" -lt 7200 ]; then astr="$((age/60))m"
+  else                           astr="$((age/3600))h" ; fi
+  acct=$(map_acct "$cfg")
+  IFS=$'\t' read -r a5 awk_ afb < <(qrow "$acct")
+  state=OK
+  [ "$used" -ge "$HANDOFF_T" ] 2>/dev/null && state=DUE
+  { [ "$awk_" != "?" ] && [ "$awk_" -ge 90 ] 2>/dev/null; } && state=LIMIT
+  { [ "$a5"  != "?" ] && [ "$a5"  -ge 85 ] 2>/dev/null; } && state=LIMIT
+  [ "$age" -gt "$STALE_S" ] && state=STALE
+  printf "%-9s %-5s %-5s %-6s %-4s %-4s %-6s %-7s %s\n" \
+    "${sid:0:8}" "$astr" "${used}%" "${acct:-?}" "${a5}%" "${awk_}%" "${afb}%" "$state" "$cwd"
+done
+if [ -n "$ACCTS_JSON" ]; then
+  nxt=$(claude-accounts --rank general 2>/dev/null | head -3 | awk '{printf "%s ", $1}')
+  [ -n "$nxt" ] && echo "── place next → ${nxt}──"
+fi
