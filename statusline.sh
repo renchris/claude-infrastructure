@@ -37,6 +37,24 @@ RESERVED_TOKENS=97000
 
 INPUT=$(cat)
 OUTPUT=""
+
+# --- Telemetry export (session self-knowledge; SESSION_AUTONOMY_PLAN 2026-07-14) ----
+# Persist the payload's context/identity fields so the SESSION ITSELF (and peers /
+# supervisors / the orchestrator) can read live context % programmatically — /context
+# is TUI-only, and the operator was hand-running /context + /accounts to tell sessions
+# when to hand off. The statusline renders at every turn boundary, so the file is
+# always fresh. Reader: ~/.claude/bin/cc-context. Best-effort: never blocks rendering.
+if [ -n "$INPUT" ] && command -v jq &>/dev/null; then
+    TDIR=/tmp/cc-telemetry
+    mkdir -p "$TDIR" 2>/dev/null
+    echo "$INPUT" | jq -c '{ts: (now|floor), session_id, cwd,
+        model: .model.id, effort: .effort.level,
+        window: .context_window.context_window_size,
+        used_pct: .context_window.used_percentage,
+        remaining_pct: .context_window.remaining_percentage,
+        input_tokens: .context_window.total_input_tokens,
+        exceeds_200k: .exceeds_200k_tokens}' > "$TDIR/$(echo "$INPUT" | jq -r '.session_id // "unknown"').json" 2>/dev/null || true
+fi
 # Left-anchored parallel-instance glyph (set below). Prepended at the final echo so
 # it sits at the START of the line and survives narrow-terminal ellipsis truncation.
 GLYPH_PREFIX=""
