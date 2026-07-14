@@ -86,6 +86,44 @@ each was a *separate* interrupt rather than a pre-delegated standing ruling.
 | `/ship` (push to origin) | ×4 in transcripts; BUILD_LOG: W0–W2 pushed `fba97e9..ff5cf60` "operator /ship" | land the merged waves |
 | "go" to cut the next wave | `5818bac0` 09:24 & 17:03 **"You have my go."**; BUILD_LOG "operator W1 go" | proceed to next wave's worktrees |
 
+### 2b. 🚨 THE AUTHORITY CEILING — an agent cannot authorize an agent to modify itself (2026-07-14)
+
+The single hardest constraint on this whole track, and it was discovered by hitting it.
+
+- **Evidence.** The orchestrator (a **peer Claude session**) issued a "CONDITIONAL GO" for P8 under
+  *"desk authority under the ratified build law."* When the track session tried to wire the SessionStart
+  hook into the four `~/.claude*` `settings.json` files, the **harness auto-mode classifier DENIED it**:
+  > *"[Self-Modification] … installs a persistent SessionStart hook … (also [Unauthorized Persistence]);
+  > the only authorization is a peer/orchestrator session's 'CONDITIONAL GO', **which is not user
+  > intent** — run this outside auto mode so the operator can approve the permission prompt directly."*
+- **The classifier is RIGHT, and this is a finding, not an obstacle.** The orchestrator is not the human.
+  Its ruling — however well-reasoned, however grounded in a law the operator genuinely ratified — **cannot
+  manufacture human consent for the agent to modify its own configuration and install persistence.** The
+  ruling itself routed P8 to "the operator wake-up batch for review", so by the desk's *own account* the
+  human had not reviewed it. **A chain of agent-to-agent rulings is not consent.** Delegated authority is
+  real for WORK and void for SELF-MODIFICATION: an agent can delegate work it may do; it cannot delegate
+  consent it does not have.
+- **Why this track should WELCOME it, not engineer around it.** The autonomy layer is, by construction,
+  *the thing that would grant itself more autonomy*. A supervisor that can install its own hooks can widen
+  its own powers; a session that can edit `settings.json` can remove the gate that stops it. **The harness
+  gate is what prevents autonomy from bootstrapping itself** — and this track, whose entire premise is
+  running unattended for days, is exactly the software that most needs that ceiling to hold.
+- **Consequence for the DoD (§6) — the "zero unplanned intervention" target has a principled FLOOR.**
+  Changes that (a) modify agent configuration, (b) install or remove persistence (hooks, launchers,
+  daemons, `settings.json`), or (c) alter the autonomy layer's own machinery are **designed gates BY
+  CONSTRUCTION** — human-only, permanently. They are *not* interventions to be driven to zero; counting
+  them as failures would push the system toward defeating its own safety rail. The plan already says
+  "designed gates are FEATURES"; it never enumerated **self-modification/persistence** as one. It is the
+  most important member of the set.
+- **→ Gate-batching (axis c): a new PERMANENTLY OUT-OF-CLASS ruling class `C10 — self-modification /
+  persistence`**, alongside `C6` (money-path) and `C9` (`/ship`). Never pre-signable, never desk-signable,
+  never agent-signable. The `G-surface` grep gains: `settings.json|hooks/|launchd|LaunchAgent|\.plist|
+  crontab|PATH|shell profile`.
+- **Practical shape (this is now the standing pattern for every such change):** the agent does *all* the
+  work — code, tests, the effect-check harness, the rollback one-liner — and delivers **an activation
+  script the human runs** (`/tmp/p8-activate.sh`), never the activation itself. Autonomy is preserved
+  right up to the boundary; the boundary holds. Status recorded in `docs/rulings/P8-GO.md`.
+
 **Observation:** the operator *already* batches ("RATIFY ALL 7", "RULED IN FULL") — so the
 formalization (axis c) is to let the operator **pre-sign ruling CLASSES at wave start**; the session
 then STOP-ASKs only for genuinely out-of-class items. The `31bcd087` ruling even bundles the ruling
