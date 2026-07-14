@@ -15,6 +15,9 @@
 #   cc-context --cwd <path>    sessions whose cwd matches path (self-resolution:
 #                              freshest row for your cwd is almost always you)
 #   cc-context --json          every record as JSON lines (for scripts)
+#   cc-context --me            THIS session's own row (self-resolve via $CLAUDE_CODE_SESSION_ID)
+#   cc-context --me --quota    own fill FUSED with account 5h/weekly/Fable headroom — "stay or go?"
+#   cc-context <id> --quota    a session's row + its account headroom
 #
 # Freshness: ts is stamped at export; rows older than ~15m usually mean the session
 # is idle or closed — cross-check liveness (cc-sessions / ps on the pane tty) before
@@ -22,33 +25,90 @@
 # figures against the REAL window size (window field) — the honest numbers, not the
 # statusline's offset-adjusted display.
 set -u
-TDIR=/tmp/cc-telemetry
+TDIR="${CC_TELEMETRY_DIR:-/tmp/cc-telemetry}"   # override for E2E isolation
 [ -d "$TDIR" ] || { echo "no telemetry yet ($TDIR absent — statusline exports on each turn boundary)" >&2; exit 3; }
 
-MODE="table" FILTER="" CWD_FILTER=""
-case "${1:-}" in
-  --json) MODE="json" ;;
-  --cwd)  MODE="cwd"; CWD_FILTER="${2:?--cwd needs a path}" ;;
-  "")     ;;
-  -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
-  *)      MODE="one"; FILTER="$1" ;;
-esac
+MODE="table" FILTER="" CWD_FILTER="" QUOTA=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --json)    MODE="json" ;;
+    --cwd)     MODE="cwd"; CWD_FILTER="${2:?--cwd needs a path}"; shift ;;
+    --me)      MODE="me" ;;                        # self-resolve (P4): my own row, no guessing
+    --quota)   QUOTA=1 ;;                          # fuse account headroom (P6): "stay or go?"
+    -h|--help) sed -n '2,23p' "$0"; exit 0 ;;
+    --*)       echo "cc-context: unknown flag '$1'" >&2; exit 2 ;;
+    *)         MODE="one"; FILTER="$1" ;;
+  esac
+  shift
+done
 
-rows() { # newest first
-  ls -t "$TDIR"/*.json 2>/dev/null
+rows() { ls -t "$TDIR"/*.json 2>/dev/null; }   # newest first
+
+# config_dir → account name (statusline suffix convention; rows carry no config_dir)
+map_acct() {
+  case "$1" in
+    */.claude-next)       echo "next" ;;
+    */.claude-secondary)  echo "next2" ;;
+    */.claude-tertiary)   echo "next3" ;;
+    */.claude-quaternary) echo "next4" ;;
+    *) echo "" ;;
+  esac
 }
 
+# bound /tmp growth (P3): never delete our OWN file; 6h horizon — a live long-turn
+# re-renders within seconds, so a 6h-old file is definitively dead (avoids the
+# fixtures-b2 ">1h past red-100%" false-negative a 15m delete would cause).
+sweep() {
+  local self="${CLAUDE_CODE_SESSION_ID:-__none__}"
+  find "$TDIR" -name '*.json' -type f -mmin +360 ! -name "$self.json" -delete 2>/dev/null || true
+}
+
+# self-resolution (P4): the telemetry file for THIS session. CLAUDE_CODE_SESSION_ID ==
+# the telemetry filename for the REAL session even from inside the Bash tool (verified:
+# the lead's own Bash env carries its own id AND CHILD_SESSION=1 — so CHILD_SESSION does
+# NOT mean "wrong session" and must NOT gate this). Fallback: freshest row for $PWD. (The
+# boundary hook self-IDs off the Stop-hook stdin .session_id per axis h, not this CLI.)
+resolve_me() {
+  local sid="${CLAUDE_CODE_SESSION_ID:-}" f
+  if [ -n "$sid" ] && [ -f "$TDIR/$sid.json" ]; then echo "$TDIR/$sid.json"; return 0; fi
+  for f in $(rows); do
+    case "$(jq -r '.cwd // ""' "$f" 2>/dev/null)" in "$PWD") echo "$f"; return 0 ;; esac
+  done
+  return 1
+}
+
+# emit one record (+ age_s, + fused quota when --quota). Quota degrades to
+# {"quota":"n/a"} when the account can't be mapped/read — never a hard fail.
+emit_one() {
+  local f="$1" rec cfg acct q qq
+  rec=$(jq --arg age "$(( $(date +%s) - $(jq -r '.ts // 0' "$f" 2>/dev/null) ))" '. + {age_s: ($age|tonumber)}' "$f" 2>/dev/null) || return 1
+  if [ -n "$QUOTA" ]; then
+    cfg=$(printf '%s' "$rec" | jq -r '.config_dir // empty')
+    acct=$(map_acct "$cfg")
+    q='"n/a"'
+    if [ -n "$acct" ] && command -v claude-accounts >/dev/null 2>&1; then
+      qq=$(claude-accounts --json 2>/dev/null | jq -c --arg a "$acct" \
+        '(.rows//[])[]|select(.acct==$a)|{acct,session_pct,weekly_pct,fable_pct,session_reset_h,weekly_reset_h}' 2>/dev/null)
+      [ -n "$qq" ] && q="$qq"
+    fi
+    printf '%s' "$rec" | jq --argjson q "$q" '. + {quota:$q}'
+  else
+    printf '%s\n' "$rec"
+  fi
+}
+
+sweep
 case "$MODE" in
   json)
     for f in $(rows); do cat "$f"; echo; done
     ;;
+  me)
+    f=$(resolve_me) || { echo "cc-context --me: cannot self-resolve (CLAUDE_CODE_SESSION_ID unset / no telemetry / in a subagent)" >&2; exit 4; }
+    emit_one "$f"
+    ;;
   one)
     for f in $(rows); do
-      base="$(basename "$f" .json)"
-      case "$base" in "$FILTER"*)
-        jq --arg age "$(( $(date +%s) - $(jq -r '.ts // 0' "$f") ))" '. + {age_s: ($age|tonumber)}' "$f"
-        exit 0 ;;
-      esac
+      case "$(basename "$f" .json)" in "$FILTER"*) emit_one "$f"; exit 0 ;; esac
     done
     echo "no telemetry for session prefix '$FILTER'" >&2; exit 4
     ;;
