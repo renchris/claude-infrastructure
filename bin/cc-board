@@ -8,9 +8,12 @@
 #
 # States (display-only — ACTION belongs to the supervisor, ruling #1 page-only):
 #   OK · DUE (ctx ≥ handoff threshold, default 73%) · LIMIT (account 5h≥85% or weekly≥90%)
-#   · STALE (telemetry age >15m). STALE is the interim liveness proxy — true DEAD needs the
-#   registry pid wire (P8); until then an age>15m row may be a dead pane OR a live long-turn,
-#   so STALE means "verify before trusting", never "reap" (the fixtures-b2 lesson).
+#   · DEAD (the owning claude pid is GONE — effect-verified, P9) · STALL? (pid ALIVE but telemetry
+#   age >15m: either genuinely hung OR healthy inside one long operation — AGE CANNOT TELL THEM
+#   APART, since both render zero times. So STALL? is a CANDIDATE: page / lead-check, NEVER reap.
+#   The fixtures-b2 lesson: a teammate ran >1h past red-100% and completed.) · STALE (age >15m,
+#   pid unknown — a legacy row from before the pid export; treat as STALL? and verify by hand).
+#   Proven 2026-07-14: a respawn sat nominally-RUNNING 1h25m with 78m-stale telemetry.
 set -u
 TDIR="${CC_TELEMETRY_DIR:-/tmp/cc-telemetry}"
 HANDOFF_T="${CC_BOARD_HANDOFF_PCT:-73}"
@@ -36,8 +39,13 @@ qrow() {  # $1=acct → "5h<TAB>wk<TAB>fable"  (or "?\t?\t?")
 now=$(date +%s)
 printf "%-9s %-5s %-5s %-6s %-4s %-4s %-6s %-7s %s\n" SESSION AGE CTX ACCT 5h WK FABLE STATE CWD
 for f in $(ls -t "$TDIR"/*.json 2>/dev/null); do
-  IFS=$'\t' read -r sid ts used cfg cwd < <(jq -r \
-    '[(.session_id//"?"),(.ts//0),((.used_pct//0)|floor),(.config_dir//""),(.cwd//"?")]|@tsv' "$f" 2>/dev/null) || continue
+  # \037 (unit separator), NOT @tsv: tab is IFS-WHITESPACE, so `IFS=$'\t' read` collapses runs of
+  # tabs and a single empty field (an empty config_dir) shifts every later field left — which would
+  # slide a PATH into $pid, fail `kill -0`, and render a LIVE session as DEAD. Non-whitespace IFS
+  # delimits exactly once per occurrence, so empty fields survive.
+  IFS=$'\037' read -r sid ts used cfg cwd pid < <(jq -r \
+    '[(.session_id//"?"),(.ts//0),((.used_pct//0)|floor),(.config_dir//""),(.cwd//"?"),(.pid//"")]|map(tostring)|join("\u001f")' "$f" 2>/dev/null) || continue
+  case "$pid" in ''|*[!0-9]*) pid="" ;; esac   # only a real numeric pid ever reaches kill -0
   [ -n "$sid" ] || continue
   age=$((now - ts))
   if   [ "$age" -lt 120 ];  then astr="${age}s"
@@ -49,7 +57,13 @@ for f in $(ls -t "$TDIR"/*.json 2>/dev/null); do
   [ "$used" -ge "$HANDOFF_T" ] 2>/dev/null && state=DUE
   { [ "$awk_" != "?" ] && [ "$awk_" -ge 90 ] 2>/dev/null; } && state=LIMIT
   { [ "$a5"  != "?" ] && [ "$a5"  -ge 85 ] 2>/dev/null; } && state=LIMIT
-  [ "$age" -gt "$STALE_S" ] && state=STALE
+  # liveness LAST — it outranks every other state (a DEAD row's ctx/quota is meaningless).
+  # Effect-verified (invariant 1): trust `kill -0`, never telemetry freshness.
+  if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then
+    state=DEAD
+  elif [ "$age" -gt "$STALE_S" ]; then
+    if [ -n "$pid" ]; then state="STALL?"; else state=STALE; fi
+  fi
   printf "%-9s %-5s %-5s %-6s %-4s %-4s %-6s %-7s %s\n" \
     "${sid:0:8}" "$astr" "${used}%" "${acct:-?}" "${a5}%" "${awk_}%" "${afb}%" "$state" "$cwd"
 done

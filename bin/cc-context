@@ -55,12 +55,33 @@ map_acct() {
   esac
 }
 
-# bound /tmp growth (P3): never delete our OWN file; 6h horizon — a live long-turn
-# re-renders within seconds, so a 6h-old file is definitively dead (avoids the
-# fixtures-b2 ">1h past red-100%" false-negative a 15m delete would cause).
+# bound /tmp growth (P3) — but NEVER at the cost of hiding a stall.
+#
+# The old rule deleted on AGE alone (-mmin +360), justified by "a live long-turn re-renders
+# within seconds, so a 6h-old file is definitively dead." That premise is FALSE (falsified
+# 2026-07-14): a session inside one long operation — or genuinely hung — renders ZERO times, so
+# its telemetry goes arbitrarily stale WHILE ALIVE (a respawn sat RUNNING 1h25m at 78m stale).
+# Deleting that row made the session VANISH from cc-board — and ABSENCE IS SILENT where STALE is
+# LOUD. A stall past 6h (an overnight stall — routine for the days-long autonomy target) became
+# invisible exactly when it mattered most: the fail-silent-open the design law bans, inside the
+# stall detector itself.
+#
+# New rule: never delete a file we cannot PROVE is dead. A telemetry row is ~400 bytes — hoarding
+# them is free; losing a stall is not.
 sweep() {
-  local self="${CLAUDE_CODE_SESSION_ID:-__none__}"
-  find "$TDIR" -name '*.json' -type f -mmin +360 ! -name "$self.json" -delete 2>/dev/null || true
+  local self="${CLAUDE_CODE_SESSION_ID:-__none__}" f pid
+  for f in "$TDIR"/*.json; do
+    [ -f "$f" ] || continue
+    case "$f" in */"$self".json) continue ;; esac
+    pid=$(jq -r '.pid // empty' "$f" 2>/dev/null)
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+      continue                                    # ALIVE (however stale) -> never reap
+    elif [ -n "$pid" ]; then
+      find "$f" -mmin +360 -delete 2>/dev/null || true    # provably DEAD -> reap after 6h
+    else
+      find "$f" -mmin +10080 -delete 2>/dev/null || true  # pid unknown (legacy) -> 7d hygiene only
+    fi
+  done
 }
 
 # self-resolution (P4): the telemetry file for THIS session. CLAUDE_CODE_SESSION_ID ==
