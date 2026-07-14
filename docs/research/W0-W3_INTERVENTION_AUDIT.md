@@ -488,7 +488,13 @@ assertion is the implementer's. The split that the authority-ceiling lesson (§2
 > is that gravitational. And the red was **test-rot**: session-registry tests 67/68 assert the *pre-P8-fix*
 > `rm -f`-on-dead behavior that `7b2f701` deliberately removed (dead rows now RETAINED 24h for forensics,
 > filtered from the addressing view) — the criteria-rot law in TEST form: the code was fixed, the tests kept
-> asserting the old contract, and the gate went red on correct code.
+> asserting the old contract, and the gate went red on correct code. **The suite IS part of the spine
+> (desk-recorded):** a test that pins the OLD behavior converts a correct fix into a RED gate — so a test suite
+> that lags its own law is a spine that has rotted, exactly like a detector whose telemetry spine deletes its
+> own evidence (§3h). "Checks rot toward their spine" and "criteria rot toward their grep" have a third
+> sibling: **the fix rots away from its own suite** unless the suite is updated in the same breath as the law.
+> The unpiped-witness rule is what CATCHES it (a red gate is only visible if `$?` is read unpiped) — the trap
+> has now bitten two independent desks, so it is load-bearing, not incidental.
 
 This generalizes §1's method (which counted hand-run `/context` relays) into a **blindness detector for
 the whole layer**, and it is nearly free: the manual compensations are already in the transcripts. It
