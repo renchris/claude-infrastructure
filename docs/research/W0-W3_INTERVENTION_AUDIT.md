@@ -259,6 +259,60 @@ The four instances in §3f share one root ("a send reports success but does not 
 
 ---
 
+### 3h. STALL — telemetry-age is a working detector, and its blind spots are structural (W4, 2026-07-14)
+
+- **Evidence (orchestrator fallback-sweep):** `stage-runners` respawn #3 sat **nominally RUNNING for
+  1h25m** while its telemetry export was **78m stale at 16% ctx**. Caught by the 1h-timeout fallback
+  sweep + cc-board's STALE column — **the manual-mode proof of exactly the supervisor detector the
+  runtime phase would automate** (axis b/h).
+- **Detector shape (→ D10):** `task-state RUNNING × telemetry-age > 30m` = **stall CANDIDATE → page /
+  lead-check**. Never an auto-action.
+- **Why "candidate, never act" is FORCED — not merely prudent.** The mechanism is subtler than "no turn
+  boundary = no render": the statusline renders on **UI updates**, so a session doing many *short* steps
+  stays fresh (verified: a live lead read **2s** stale while mid-turn, deep in a tool chain). But a
+  session inside **ONE long operation** renders **zero** times — and so does a **hung** one. **Age cannot
+  distinguish them, by construction**, because they emit the identical signal (nothing). So ratified
+  ruling #1 (page, never auto-recover) is not just policy here — it is the *information content of the
+  signal*. Any actor that reaps on age alone WILL eventually kill a healthy long turn (the fixtures-b2
+  case: >1h past red-100%, completed fine).
+- **The effect-verified discriminator** (what age is only a proxy for): a healthy long turn emits **work
+  products** — new commits, file mtimes in its worktree, CPU delta, live child processes. A hung session
+  emits none. *Age is the cheap proxy; work-product delta is the effect.* Refines the detector from
+  "stale" to "stale AND producing nothing".
+- **🚨 The detector was FAIL-SILENT past 6h — FIXED `93720eb`.** Two comments asserted a false premise and
+  **the sweep ACTED on it**: `cc-context` deleted telemetry on **age alone** (`-mmin +360`), justified by
+  *"a live long-turn re-renders within seconds, so a 6h-old file is definitively dead."* Falsified by this
+  very datapoint. So a session stalled past 6h had its row **deleted while alive** — and it did not go
+  STALE on cc-board, it **VANISHED**. **Absence is SILENT where STALE is LOUD.** An overnight stall
+  (routine for a days-long-autonomy target) became invisible *exactly when it mattered most* — the
+  fail-silent-open the design law bans, sitting inside the stall detector itself. Fix: the statusline now
+  exports the owning **`pid`** (process-ancestry walk — a bare `$PPID` is the known shell-shim trap;
+  recipe from `hooks/session-register.sh:43-47`), and the sweep **never deletes what it cannot prove is
+  dead**. cc-board now separates **DEAD** (pid gone, effect-verified) from **STALL?** (pid ALIVE + stale =
+  the candidate) from **STALE** (pid unknown) — a distinction its own header admitted it could not make.
+- **Structural blind spot (OPEN — the case for P8):** cc-board's **spine is the telemetry files**
+  (`ls -t $TDIR/*.json`). A pane that **never rendered** — i.e. one that dies AT SPAWN (**D8 trigger 1**,
+  GO-deafness) — has no telemetry file, so it has **no row at all**. Not STALE: **ABSENT**, and absence is
+  silent. → **The spine of a detector determines its blind spot.** A telemetry-spined board can only see
+  sessions that once rendered. **P8** (wire `session-register.sh` at SessionStart) supplies a spine that
+  exists *before the first render*, turning two silent absences into loud rows: *registry row + no
+  telemetry ever* = **never-rendered** (the spawn-death detector, currently invisible); *registry row +
+  swept telemetry* = still visible. P8 is now implicated in **three** distinct failures — the empty
+  name-registry that hard-failed a successor's announce (§3g), this never-rendered blindness, and the
+  pane-uuid↔session-id mapping the supervisor needs to close a pane. **It is the highest-leverage open
+  Wave-A residual.**
+- **Recovery-loop gap (→ D8 needs a CIRCUIT BREAKER).** `stage-runners` failed **3-for-3 against ONE
+  slot** — **heterogeneous modes** (stall · stall · die-mid-work) — while **10 other spawns worked**. The
+  diagnostic signature is the inverse of what a naive detector looks for: **the failure MODE varies, the
+  TARGET does not.** A detector keyed on the symptom sees three unrelated events; the correlation lives on
+  the **slot**. ⇒ *the slot is the variable, not the infrastructure.* D8's recovery ("respawn-with-rulings-
+  in-brief, never nudge") has **no stopping rule**, so the third respawn walked back into the same hole —
+  **the recovery loop itself became the failure mode.** j1's risk register has a circuit breaker for the
+  API-storm case (#4) but **none for per-slot repeated failure**. **Fix: a per-slot respawn budget (≤2),
+  then STOP + escalate.** The W4 lead reached this independently under fire — ruling **LEAD-SERIAL
+  takeover** (the lead absorbs the slot's work itself), which is exactly the right escape hatch: stop
+  feeding the hole, change the strategy.
+
 ## 4. The boundary rule — verbatim, and why it needed a human
 
 From doc_classifier `docs/BUILD_LOG.md:30-37` ("When to clear / hand off"):
@@ -367,7 +421,8 @@ falsifies negative claims ("tool can't do Z") *and* positive ones ("it works, I 
 | D5 | `shutdown_request` decorative → zombie panes hours later | teardown via **TaskStop by name**; confirm pane gone | TaskStop; force-close pane |
 | D6 | `lr-audit` re-flags superseded slots from stale transcript residue | reconcile flag vs `workflows/wf_<id>.json` journal + recovery ledger | ledger-append re-confirmation; skip re-run |
 | D7 | `team_name` required though schema says "deprecated; ignored" (spawn blocked 4/5 without) | always pass `team_name:"session-<id>"`; assert before spawn | (workaround is the fix) |
-| D8 | **silent teammate pane-death** (GO-deaf — pane dies at spawn OR mid-queue; 3 live W4 instances §3f) | **TWO trigger points:** (1) spawn-boundary GO effect-verified (first commit/ack), unanswered→act; (2) task-boundary liveness = atomic `ps` + expected check-in commit, mid-work death→act | respawn-with-rulings-in-brief (never nudge); rebase onto last-good commit, resume from failed task |
+| D8 | **silent teammate pane-death** (GO-deaf — pane dies at spawn OR mid-queue; 3 live W4 instances §3f) | **TWO trigger points:** (1) spawn-boundary GO effect-verified (first commit/ack), unanswered→act; (2) task-boundary liveness = atomic `ps` + expected check-in commit, mid-work death→act | respawn-with-rulings-in-brief (never nudge); rebase onto last-good commit, resume from failed task. **⚠️ CIRCUIT BREAKER (added 2026-07-14, §3h): a per-slot respawn BUDGET (≤2), then STOP + escalate.** D8 had no stopping rule, and `stage-runners` failed 3-for-3 against ONE slot (modes: stall·stall·die) while 10 siblings worked — the recovery loop became the failure. Key the breaker on the **TARGET** (the slot), never the symptom: the mode varies, the slot does not. Escape hatch = LEAD-SERIAL takeover (the W4 lead's own ruling under fire). |
+| D10 | **STALL — a live session that has stopped emitting** (§3h: a respawn sat RUNNING 1h25m at 78m-stale telemetry) | `task-state RUNNING × telemetry-age > 30m` = **CANDIDATE**. ⚠️ **Age can NEVER confirm a stall**: a hung session and a healthy session inside ONE long operation both render **zero** times — identical signal, by construction (a session doing many *short* steps stays fresh: a live lead measured 2s while mid-turn). So the effect-verified form is **stale AND emitting no work-products** (no new commits / no worktree file mtimes / no CPU delta / no live children). Liveness itself = `kill -0 <pid>` (`93720eb`), never telemetry freshness. | **PAGE / lead-check — never reap.** Ruling #1 is *forced here by the signal's information content*, not merely chosen: any actor reaping on age alone will eventually kill a healthy long turn (fixtures-b2 ran >1h past red-100% and completed). |
 | D9 | **an always-degrading VERIFIER — a check that can only ever abstain** (§3g: `cc-notify` returned "UNVERIFIED" on 100% of sends for ~24h; the strand branch was unreachable code) | **Outcome-distribution monitor, not a unit test.** A verifier whose *positive* AND *negative* branches never fire across N real invocations is inert by construction — no code review needed, the distribution IS the evidence. Concretely: `[AUTONOMY:verify:*]` outcome counted in the IDL (axis k P1); alarm on `verified==0 ∧ failed==0 ∧ abstained==N` for N≥10. The general rule: **an abstain/degrade path that is 100% of outcomes is a BUG, never a graceful degrade.** | fail LOUD (a verifier that cannot verify must not exit 0 silently); live effect-check before any "FIXED" is recorded; red-against-the-bug proof in the suite |
 
 ⚠️ **Build-time reconciliation flag (D2):** this audit's sources (BUILD_LOG + `agent-teammate-spawn-2-1-183`)

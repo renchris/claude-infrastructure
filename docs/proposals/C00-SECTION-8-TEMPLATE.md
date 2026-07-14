@@ -63,6 +63,17 @@ the whole wave**; resolve empirically with the `ps` grep on the first spawn, nev
 | `boundary_recycle` | ~60% | hand to a successor lead AT the next committed+green boundary |
 | `hard_handoff` | ~73% | ceiling — fires before the ~83.5% auto-compaction trigger |
 
+> **The thresholds are a CEILING, not the only trigger — ANTICIPATORY RECYCLE (added 2026-07-14).**
+> Observed: W4 lead #2 recycled **deliberately at 49%** — well below `boundary_recycle=60` — to take a
+> clean window into a 100–200K lead-serial build. *"A below-threshold boundary recycle the E2 rule
+> permits but does not predict."* The rule as written is **reactive** (fill ≥ T → hand off); the real
+> decision variable is **headroom vs. DEMAND**: `used_pct + projected_cost(next unit of work)` against the
+> ceiling — and for a *lead-serial* build the lead's own burn (reading, editing, tool output, iteration)
+> dwarfs the artifact size. On a 1M window the binding constraint is **rot, not fill** (axis g), so a lead
+> facing judgment-dense work SHOULD recycle early at a green boundary even while comfortably under
+> threshold. **Declare both:** the ceiling (never exceed) AND the anticipatory trigger (recycle when the
+> next unit of work will not fit *comfortably*, not merely when it will not fit).
+
 **Window-relative % only — never fixed tokens** (47% of 1M ≠ 47% of 200K; a fixed threshold throws
 away ~85% of a 1M window — audit §3b). §8 **declares** the numbers; the advisory boundary hook
 (axis h) **consumes** them at `(a) committed+green ∧ (b) log-head==HEAD ∧ (c) used_pct≥threshold`,
@@ -104,10 +115,19 @@ Binding corrections (must land before a merge gate) go via a **durable ruling fi
 mailbox is unreliable; auto-compaction wipes a composer instruction). Prefer **respawn-at-boundary
 with the ruling in the brief** over mid-stream correction.
 
-**Addressing (never cache a pane uuid across a succession):** resolve the CURRENT role-holder at
-SEND-TIME — role→pane indirection via a succession-maintained roles file (`role=<pane>` rewritten on
-each self-close) or the newest self-close-log `successor=` chain. A predecessor's pane is dead
-post-self-close; a cached uuid sends into the void. `cc-notify`'s LOUD-on-strand (mailbox-only +
+**Addressing (resolve the role at SEND-TIME; never cache a pane uuid):** role→pane indirection via a
+succession-maintained roles file (`role=<pane>` rewritten on each self-close) or the newest
+self-close-log `successor=` chain.
+
+> **Why caching fails even when it "works" — the TWO succession shapes (observed 2026-07-14).**
+> `handoff-fire.sh --recycle` (in-place continuation) **PRESERVES** the pane uuid; `self-close
+> --successor <uuid>` **CHANGES** it. Both are "a succession" and the *role* is continuous across
+> either — so **a sender cannot tell from the role whether the address survived.** A cached uuid is
+> therefore right half the time and silently wrong the other half, which is worse than reliably wrong.
+> This is the argument for role tokens: not "uuids go stale" (they only *sometimes* do), but **"you
+> cannot know which case you are in without resolving."** Resolve at send-time, always.
+
+A predecessor's pane is dead post-self-close; a cached uuid sends into the void. `cc-notify`'s LOUD-on-strand (mailbox-only +
 "unreachable", never false-delivered) is the effect-verified backstop when a stale address is used.
 
 > 🚨 **Write pane UUIDs in FULL — an abbreviated id does not resolve.** Every succession brief, ruling,
