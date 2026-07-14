@@ -374,6 +374,18 @@ The four instances in §3f share one root ("a send reports success but does not 
   fails. **(c) The breaker escape is now E4-aware:** the pre-declared path is **lead-serial if the Fable reserve
   holds, else a next3 successor** (per the E4 routing rule) — the escape hatch's *choice* is a quota decision,
   not only a strategy one.
+- **✅ THE FIRST LIVE LEAD STALL-PAGE CYCLE — and the re-read arm was load-bearing (2026-07-14, ship-blockers
+  `532abfa`).** Ruling #1 (page, never reap) + the effect-verified discriminator ran end-to-end for the first
+  time: a lead went **all four D10 signals dark 69–75 min** (no render/commit/write/children at frozen ctx) →
+  **paged with a 15-min reply deadline** → **deadline expired with NO REPLY** → and the **MANDATORY effect
+  RE-READ at the deadline found the lead ALIVE + productive** (new commit, active edits, ctx moving — the dark
+  hour was a rehearsal run + ship-blocker debugging). **A reply-or-kill deadline ALONE would have killed a
+  healthy wave lead mid-work** — this section's own *"age reaps a healthy long turn"* prediction (the
+  fixtures-b2 case), **nearly live, stopped only by the re-read**. Two rules bank into the supervisor spec
+  (blueprint §3.3): **(1) a page deadline is a trigger for RE-OBSERVATION, never for action** — `silence +
+  fresh effects = VOID`, `silence + dark effects = disposition`; **(2) reply-compliance is NOT a liveness
+  signal** — a busy lead ignores pages, so the page's *answer* must never gate the recovery decision, only the
+  effect re-read. D10's "candidate, never reap" is now **proven, not just argued**.
 
 ### 3i. 🔑 THE BLIND-CHECK LAW — *every manual verification is a bug report against an automation*
 
