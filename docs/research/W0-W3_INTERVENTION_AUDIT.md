@@ -135,6 +135,27 @@ Trigger → detector → recovery is the Build contract (axis h).
   out-of-scope discovery** feeding the plan-template's "self-driving convergence" pattern (axis e),
   not a core detector.
 
+### 3f. GO-deafness at the spawn boundary — **W4 LIVE** (2026-07-14 ~01:3x, relayed via orchestrator `99261468`)
+- **Evidence:** during the live W4 wave, two teammate panes (**B19b** + **web-core**) were
+  **GO-deaf at their spawn boundary** — the lead's spawn-time GO never landed / was never acted on;
+  the teammates sat deaf. The W4 lead **respawned both** and sharpened its rule to *"spawn-boundary GO
+  unanswered = respawn, never nudge."*
+- **Trigger:** the lead→teammate downward channel is unreliable at the **SPAWN boundary** too — a
+  startup variant of the mid-stream unreliability (R6). A GO that reports sent but never binds.
+- **Status: LIVE-VALIDATED design.** This is the **third comms-reliability instance in ~24h**, all
+  ONE root — *a downward/cross-session send reports success but does not bind*:
+  1. **composer-strand** — raw `osascript write text` submit newline redraw-swallowed ~1-in-6; a live
+     countermand sat stranded 20 min → **FIXED** `98a3dd9` (cc-notify submit-verify, exit 4 on strand).
+  2. **shutdown_request zombies** — 3 panes "shut down" alive hours later → teardown = `TaskStop`
+     (in-session) / `it2 session close` (supervisor) **+ confirm-gone** (D5).
+  3. **GO-deafness at spawn** (this) → **respawn-with-GO-in-the-brief, never nudge.**
+- **Detector + recovery (feeds axis f / blueprint §3.5, R6):** effect-verify the GO (the teammate's
+  first commit or an explicit ack); unanswered within N → **respawn with the GO baked into the fresh
+  ≤150-line brief** (briefs are files → survive the unreliable channel + auto-compaction), never a
+  mid-stream nudge (a nudge rides the same channel that just failed). The W4 lead reached axis f's
+  "respawn-at-boundary over mid-stream correction" independently, under live fire — strong external
+  validation of the meta-lesson "verify the EFFECT, never the send" (§7).
+
 ---
 
 ## 4. The boundary rule — verbatim, and why it needed a human
@@ -169,7 +190,7 @@ From doc_classifier `docs/BUILD_LOG.md:30-37` ("When to clear / hand off"):
 | R3 | Handoff/succession mechanical bugs | 3/3 closed-without-opening; 2.3× gauge false-relief | FIXED (`dd40eca`,`9918ff5`,`7674496`,`1b8d671`) | i (E2E so regressions self-announce) |
 | R4 | **No session-orchestration LAYER in the plan template** | lead account/model/context/succession improvised live | open | e (C00 §8 template + filled W4/W5) |
 | R5 | Designed gates unbatched | each ratification/ship/go a separate interrupt | open | c (pre-delegated ruling classes) |
-| R6 | Downward comms unreliable mid-stream; liveness lies | lead→teammate mailbox 3 strikes; idle-hook+ps both lied; shutdown_request decorative (3 zombies) | partial (cc-notify submit-verify `98a3dd9`) | b/f (pull-based liveness, TaskStop teardown, respawn-at-boundary), supervisor |
+| R6 | Downward comms unreliable mid-stream; liveness lies | **3 comms-reliability instances/24h** (§3f): composer-strand (FIXED `98a3dd9`) · shutdown_request zombies · **GO-deafness at spawn (W4 live)**; plus idle-hook+ps both lied | partial (cc-notify submit-verify `98a3dd9`); design LIVE-VALIDATED | b/f (pull-based liveness, effect-verified GO, respawn-at-boundary-with-GO-in-brief, TaskStop/it2 teardown), supervisor |
 
 **R4 is the structural one the operator named directly:** *"is there room for improvement on how we
 create our multi-layer end-to-end implementation plans, and not just single Agent Team plans which
