@@ -178,6 +178,45 @@ incidents, account lockouts, iTerm2 restart)?
   (briefs/corpus use the 8-char prefix; `cc-notify` takes only {name | FULL uuid}, and the name registry is
   EMPTY — **P8 un-wired**) → two gaps composed to break a succession's most important send; failed LOUD, not
   silent. → §8 E5 now mandates FULL uuids; queued: prefix-expansion in `cc-notify` + land P8.
+- 2026-07-14 ~05:xx (track, next4) — **THE STALL DETECTOR WAS FAIL-SILENT PAST 6h (`93720eb`).** The
+  orchestrator's datapoint (a respawn sat nominally-RUNNING **1h25m** with **78m-stale** telemetry —
+  telemetry-age working as a stall detector, manual-mode proof of the supervisor detector) **falsified a
+  premise that two comments asserted and one ACTED on**: `cc-context` deleted telemetry on **age alone**
+  (`-mmin +360`) because *"a live long-turn re-renders within seconds ⇒ a 6h-old file is definitively
+  dead."* False. So a session stalled past 6h had its row **deleted while alive** — it did not go STALE on
+  cc-board, it **VANISHED**. **Absence is SILENT where STALE is LOUD**: an overnight stall (routine for the
+  days-long target) went invisible exactly when it mattered most — fail-silent-open **inside the stall
+  detector itself**. Fixed: statusline exports the owning **`pid`** (process-ancestry walk; bare `$PPID` is
+  the shell-shim trap — recipe from `session-register.sh:43-47`; memoized off the prior row so the walk is
+  once-per-session, not per-render); the sweep **never deletes what it cannot prove dead**; cc-board now
+  splits **DEAD** (pid gone, effect-verified) / **STALL?** (pid ALIVE + stale = the candidate) / **STALE**
+  (pid unknown). Effect-checked live (payload `pid=18724`, `kill -0` OK, `ps` confirms it IS the claude
+  process); telemetry-e2e **16/16**. **T6 rewrote its own expectation** — the old test asserted "7h → swept",
+  *encoding the falsified premise*; it was not bent to pass, the policy it tested was wrong. It now carries
+  the **anti-trigger** that would have caught this (live-but-stale MUST be preserved). Also fixed a latent
+  field-shift my own change made dangerous: `IFS=$'\t' read` **collapses runs of tabs**, so one empty field
+  (empty `config_dir`) shifted every later field left — sliding a PATH into `$pid` → `kill -0` fails → a
+  **LIVE session renders DEAD**. Now `\037`-delimited + numeric-guarded. **→ D10** (stall): age can NEVER
+  confirm a stall — a hung session and a healthy session inside ONE long operation both render **zero**
+  times (a live lead measured **2s** while mid-turn, so "no turn boundary = no render" was too coarse:
+  renders track UI updates). **Ruling #1 (page, never reap) is therefore FORCED by the signal's information
+  content, not merely chosen.** The effect-verified form = *stale AND emitting no work-products*.
+  **→ D8 gains a CIRCUIT BREAKER:** `stage-runners` failed **3-for-3 on ONE slot** (modes: stall·stall·die)
+  while **10 siblings worked** — the mode varies, the TARGET does not ⇒ *the slot is the variable, not the
+  infra*; D8 had **no stopping rule**, so the recovery loop became the failure. Per-slot respawn budget ≤2,
+  then STOP + escalate (the W4 lead's **LEAD-SERIAL takeover** is the right escape hatch, reached under
+  fire). **→ E2 gains an ANTICIPATORY RECYCLE:** W4 lead #2 recycled **deliberately at 49%** (below
+  `boundary_recycle=60`) for a clean window into a 100–200K lead-serial build — the rule is **reactive**
+  (fill ≥ T) but the real variable is **headroom vs. DEMAND**; thresholds are a CEILING, not the only
+  trigger. **→ E5 addressing sharpened:** `--recycle` **preserves** the pane uuid, `self-close --successor`
+  **changes** it — both are "a succession", so **a sender cannot know from the role whether the address
+  survived**. That, not staleness, is the real argument for role tokens. **OPEN — highest-leverage residual
+  is P8:** cc-board's spine is the telemetry files, so a pane that **never rendered** (dies at spawn — D8
+  trigger 1) has **no row at all** (ABSENT, not STALE — silent). *The spine of a detector determines its
+  blind spot.* P8 supplies a spine that exists before the first render; it is now implicated in **three**
+  failures (empty name-registry → the exit-3 announce; never-rendered blindness; the pane↔sid mapping a
+  supervisor needs). **Needs your go — it wires a global SessionStart hook (blast radius: every live
+  session).**
 - 2026-07-14 ~04:3x (track, next4) — **BIND WAS PROSE, NOT MACHINERY (`5c881c2`) + pane-id discipline
   (`38199af`).** Orchestrator adopted BIND for load-bearing rulings and was **one step from routing a live
   operator ruling through its "fail-closed merge gate" — which did not exist**: `Acked-Ruling` appeared only
