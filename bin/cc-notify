@@ -151,10 +151,20 @@ _head="$(printf '%s' "$MSG" | head -1 | cut -c1-40)"
 composer_stranded() { # 0 = stranded, 1 = clear/submitted, 2 = unreadable
   "$IT2" session capture -s "$uuid" -o "$_cap" >/dev/null 2>&1 || return 2
   [ -s "$_cap" ] || return 2
+  # LC_ALL=C IS LOAD-BEARING (with -a). An it2 screen capture pads empty cells with NUL bytes
+  # (~177 in a 4.5KB screen), so it is a BINARY file. BSD /usr/bin/grep then:
+  #   plain            -> no match (binary suppression)
+  #   -a, UTF-8 locale -> STILL no match: the NULs break its multibyte decode, so the
+  #                       multibyte '❯' (U+276F, e2 9d af) is never found
+  #   LC_ALL=C -a      -> matches (pure byte compare)  <-- the only combination that works
+  # Both probes below silently returned empty before this, so composer_stranded() always hit
+  # `return 2` and EVERY send reported "UNVERIFIED": the strand path never ran once. Beware
+  # testing this at an interactive prompt where `grep` may be a function/alias (ugrep, GNU) —
+  # those DO match, which is exactly what hid this bug. Keep LC_ALL=C.
   # last composer-prompt line; the message head appearing ON or AFTER it = stranded.
-  last_prompt="$(grep -n '❯' "$_cap" 2>/dev/null | tail -1 | cut -d: -f1)"
+  last_prompt="$(LC_ALL=C grep -an '❯' "$_cap" 2>/dev/null | tail -1 | cut -d: -f1)"
   [ -n "$last_prompt" ] || return 2
-  hit="$(grep -nF "$_head" "$_cap" 2>/dev/null | tail -1 | cut -d: -f1)"
+  hit="$(LC_ALL=C grep -anF "$_head" "$_cap" 2>/dev/null | tail -1 | cut -d: -f1)"
   [ -n "$hit" ] && [ "$hit" -ge "$last_prompt" ] && return 0
   return 1
 }
@@ -166,7 +176,7 @@ while :; do
     exit 0
   fi
   if [ "$_st" = 2 ]; then
-    echo "cc-notify: delivered to $uuid (composer + mailbox; submit UNVERIFIED — pane capture unavailable)" >&2
+    echo "cc-notify: delivered to $uuid (composer + mailbox; submit UNVERIFIED — pane text unreadable: no capture, or no composer prompt on screen)" >&2
     exit 0
   fi
   _attempt=$((_attempt + 1))
