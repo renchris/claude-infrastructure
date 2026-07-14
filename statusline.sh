@@ -42,8 +42,12 @@ OUTPUT=""
 # Persist the payload's context/identity fields so the SESSION ITSELF (and peers /
 # supervisors / the orchestrator) can read live context % programmatically — /context
 # is TUI-only, and the operator was hand-running /context + /accounts to tell sessions
-# when to hand off. The statusline renders at every turn boundary, so the file is
-# always fresh. Reader: ~/.claude/bin/cc-context. Best-effort: never blocks rendering.
+# when to hand off. Reader: ~/.claude/bin/cc-context. Best-effort: never blocks rendering.
+# ⚠️ The file is NOT "always fresh" (this comment used to claim it was, and a sweep ACTED on
+# that claim). The statusline renders on UI updates, so a session doing many short steps stays
+# fresh — but a session inside ONE long operation, or genuinely hung, renders ZERO times and its
+# telemetry goes arbitrarily stale WHILE ALIVE (observed: a live respawn at 78m stale). Hence the
+# `pid` field below: AGE alone can never distinguish a stall from a healthy long turn.
 # Telemetry-v2 (SESSION_AUTONOMY §3.1): ATOMIC write (.tmp+rename, so a concurrent
 # cc-context/cc-board reader never catches a half-written file) · sid computed ONCE and
 # SKIP-on-empty (a transient parse miss must not collide N sessions on unknown.json) ·
@@ -58,9 +62,27 @@ if [ -n "$INPUT" ] && command -v jq &>/dev/null; then
         _tp=$(echo "$INPUT" | jq -r '.transcript_path // empty' 2>/dev/null)
         _cfg="${_tp%%/projects/*}"
         if [ -z "$_cfg" ] || [ "$_cfg" = "$_tp" ]; then _cfg="${CLAUDE_CONFIG_DIR:-}"; fi
+        # pid (P9/P3) — the OWNING claude process, so a reader can `kill -0` it. WITHOUT this,
+        # telemetry AGE is the only liveness signal, and age cannot tell a stalled session from a
+        # healthy one inside a single long operation: BOTH render zero times (proved 2026-07-14 —
+        # a respawn sat RUNNING 1h25m with 78m-stale telemetry). A bare $PPID is the known trap
+        # (the statusline runs under a shell shim), so walk the ancestry to the real `claude`
+        # process — the proven recipe from hooks/session-register.sh:43-47. MEMOIZED: reuse the
+        # prior file's pid while it is still alive, so the ps-walk runs once per session and not
+        # on every render (this is a hot path).
+        _pid=$(jq -r '.pid // empty' "$TDIR/${_sid}.json" 2>/dev/null)
+        if [ -z "$_pid" ] || ! kill -0 "$_pid" 2>/dev/null; then
+            _walk="$PPID"; _pid=""; _i=0
+            while [ -n "$_walk" ] && [ "$_walk" -gt 1 ] 2>/dev/null && [ "$_i" -lt 10 ]; do
+                _c=$(ps -o comm= -p "$_walk" 2>/dev/null | sed 's|.*/||')
+                case "$_c" in claude|claude.exe|claude-*) _pid="$_walk"; break ;; esac
+                _walk=$(ps -o ppid= -p "$_walk" 2>/dev/null | tr -d ' '); _i=$((_i+1))
+            done
+        fi
         _tmp="$TDIR/.${_sid}.$$.tmp"
-        if echo "$INPUT" | jq -c --arg cfg "$_cfg" '{ts: (now|floor), session_id, cwd,
+        if echo "$INPUT" | jq -c --arg cfg "$_cfg" --arg pid "$_pid" '{ts: (now|floor), session_id, cwd,
             config_dir: $cfg, model: .model.id, effort: .effort.level,
+            pid: (if $pid == "" then null else ($pid|tonumber) end),
             window: .context_window.context_window_size,
             used_pct: .context_window.used_percentage,
             remaining_pct: .context_window.remaining_percentage,

@@ -34,8 +34,10 @@ for i in $(seq 150); do jq . /tmp/cc-telemetry/s1.json >/dev/null 2>&1 || e=$((e
 rm -f /tmp/cc-telemetry/s1.json
 
 # --- cc-context / cc-board in the isolated sandbox ---
-mk(){ jq -nc --arg ts "$1" --arg sid "$2" --arg cwd "$3" --arg cfg "$4" --argjson up "$5" \
-  '{ts:($ts|tonumber),session_id:$sid,cwd:$cwd,config_dir:$cfg,model:"claude-opus-4-8",effort:"max",window:1000000,used_pct:$up,remaining_pct:(100-$up),input_tokens:($up*10000)}' > "$SB/$2.json"; }
+# $6 = optional pid (P9). Fixtures must carry the fields production actually emits (harness law L1).
+mk(){ jq -nc --arg ts "$1" --arg sid "$2" --arg cwd "$3" --arg cfg "$4" --argjson up "$5" --arg pid "${6:-}" \
+  '{ts:($ts|tonumber),session_id:$sid,cwd:$cwd,config_dir:$cfg,model:"claude-opus-4-8",effort:"max",window:1000000,used_pct:$up,remaining_pct:(100-$up),input_tokens:($up*10000),
+    pid:(if $pid=="" then null else ($pid|tonumber) end)}' > "$SB/$2.json"; }
 mk "$now" self "$PWD" "/Users/chrisren/.claude-secondary" 52
 mk "$now" other /tmp/o "/weird/path" 9
 mk 1      stale /tmp/s "/Users/chrisren/.claude-next" 40
@@ -48,16 +50,39 @@ echo "T5 cc-context --quota: fusion + graceful degrade (P6)"
 CLAUDE_CODE_SESSION_ID=self bash "$CC" --me --quota 2>/dev/null | jq -e '(.quota.acct=="next2") or (.quota=="n/a")' >/dev/null && ok "quota fused or n/a" || no "quota"
 CLAUDE_CODE_SESSION_ID=other bash "$CC" other --quota 2>/dev/null | jq -e '.quota=="n/a"' >/dev/null && ok "unmappable → n/a (anti-trigger)" || no "degrade"
 
-echo "T6 cc-context sweep: bounds growth, protects own (P3)"
-touch -t "$(date -v-7H +%Y%m%d%H%M 2>/dev/null || date -d '7 hours ago' +%Y%m%d%H%M)" "$SB/stale.json"
-touch -t "$(date -v-7H +%Y%m%d%H%M 2>/dev/null || date -d '7 hours ago' +%Y%m%d%H%M)" "$SB/self.json"
+echo "T6 cc-context sweep: reaps only the PROVABLY DEAD; never hides a stall (P3/P9)"
+# The sweep used to delete on AGE alone, justified by "a live long-turn re-renders within seconds".
+# FALSIFIED 2026-07-14: a session in one long operation — or hung — renders ZERO times and goes
+# arbitrarily stale WHILE ALIVE (a respawn sat RUNNING 1h25m at 78m stale). Deleting that row made
+# the stall VANISH from cc-board, and ABSENCE IS SILENT where STALE is LOUD. New rule: never delete
+# what we cannot PROVE is dead. The live-but-stale case below is the ANTI-TRIGGER that would have
+# caught the old policy — a suite that only proved "stale gets swept" passed the fail-silent hole.
+sleep 300 & LIVEPID=$!
+mk 1 stalledlive /tmp/sl "/Users/chrisren/.claude-next" 16 "$LIVEPID"   # ALIVE, ancient telemetry
+mk 1 deadpane    /tmp/dp "/Users/chrisren/.claude-next" 16 "999999"     # pid gone
+H7="$(date -v-7H +%Y%m%d%H%M 2>/dev/null || date -d '7 hours ago' +%Y%m%d%H%M)"
+touch -t "$H7" "$SB/stale.json" "$SB/self.json" "$SB/stalledlive.json" "$SB/deadpane.json"
 CLAUDE_CODE_SESSION_ID=self bash "$CC" >/dev/null 2>&1
-{ [ ! -f "$SB/stale.json" ] && [ -f "$SB/self.json" ]; } && ok "stale swept, own protected (anti-trigger)" || no "sweep"
+[ -f "$SB/stalledlive.json" ] && ok "live-but-stale PRESERVED (the stall stays visible — ANTI-TRIGGER)" || no "sweep hid a live stall"
+[ ! -f "$SB/deadpane.json" ]  && ok "provably-dead pid reaped after 6h"                                 || no "dead not reaped"
+[ -f "$SB/self.json" ]        && ok "own row protected"                                                 || no "own row swept"
+[ -f "$SB/stale.json" ]       && ok "pid-unknown row kept (7d hygiene only — never silently dropped)"   || no "legacy row silently dropped"
+kill $LIVEPID 2>/dev/null
 
 echo "T7 cc-board: states + rank footer (P7)"
 mk "$now" duerow /w2 "/Users/chrisren/.claude-next" 80   # DUE (ctx≥73)
 b=$(bash "$BOARD" 2>/dev/null)
 echo "$b" | grep -q 'duerow.*DUE'      && ok "DUE state"      || no "DUE"
+# liveness states (P9) — DEAD is effect-verified (kill -0), STALL? is a CANDIDATE, never an action.
+# STALL? and DEAD must be DISTINCT: age alone conflates a hung session with a healthy long turn
+# (both render zero times), so a board that calls them the same thing cannot be paged off safely.
+sleep 300 & BLIVE=$!
+mk 1 bdead /w3 "/Users/chrisren/.claude-next" 10 "999999"
+mk 1 bhang /w4 "/Users/chrisren/.claude-next" 10 "$BLIVE"
+b2=$(bash "$BOARD" 2>/dev/null)
+echo "$b2" | grep -q 'bdead.*DEAD'   && ok "DEAD (pid gone — effect-verified)"        || no "DEAD"
+echo "$b2" | grep -q 'bhang.*STALL?' && ok "STALL? (pid ALIVE + stale = candidate)"   || no "STALL?"
+kill $BLIVE 2>/dev/null
 echo "$b" | grep -q 'self.*next2.*OK'  && ok "OK state + join" || no "OK"
 echo "$b" | grep -q 'place next →'     && ok "rank footer"    || no "footer"
 
