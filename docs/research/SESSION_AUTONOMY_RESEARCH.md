@@ -22,7 +22,7 @@ one-shot-latched abstain-on-stale hook, b's bash-can't-close-a-live-pane split, 
 
 ---
 
-## 1. The converged architecture — 5 invariants (every axis obeys these)
+## 1. The converged architecture — 7 invariants (every axis obeys these)
 
 1. **Verify the EFFECT, never the report/keystroke/spawn/config** (audit §7, restated by a, b, d, f,
    h, k independently). Concretely: dead-pid → DEAD even if telemetry looks fresh (a/P9); pane-gone
@@ -40,7 +40,10 @@ one-shot-latched abstain-on-stale hook, b's bash-can't-close-a-live-pane split, 
    the real bug, else it is decoration. Full statement + the four harness laws: §3.10. **Corollary for this
    track: a detector that has never fired in production is UNPROVEN, not "quiet"** — which binds the boundary
    hook (h) and the supervisor (b) directly.
-2. **Fail-loud / fail-abstain, never fail-silent-open** (j1's root pattern).
+2. **Fail-loud / fail-abstain, never fail-silent-open** (j1's root pattern). Telemetry export is
+   atomic (a/P1) and a stale/missing row on a *live* session is a LOUD fault, not silence (a/P3, j1
+   #6); the boundary hook ABSTAINS on stale telemetry (h); the gate classifier defaults any doubt to
+   STOP-ASK (c's asymmetric whitelist).
    **→ THE BLIND-CHECK LAW (audit §3i, 4 instances in one night):** *a check that cannot observe the thing
    it guards is indistinguishable from no check at all* — it exits 0, its suite is green, and the system
    looks healthy. You cannot find one by reading it (all four looked correct; three shipped with passing
@@ -52,10 +55,7 @@ one-shot-latched abstain-on-stale hook, b's bash-can't-close-a-live-pane split, 
    built to replace the untrustworthy channel of instance #1 — **reproduced #1's pathology within hours**.
    This is what happens whenever a detector's EVIDENCE and its HYGIENE are served by the same mechanism.
    **Assume it is present in the next primitive: the boundary hook (h) and the supervisor (b) are both
-   checks.** Telemetry export is
-   atomic (a/P1) and a stale/missing row on a *live* session is a LOUD fault, not silence (a/P3, j1
-   #6); the boundary hook ABSTAINS on stale telemetry (h); the gate classifier defaults any doubt to
-   STOP-ASK (c's asymmetric whitelist).
+   checks** — pre-mortems for each are written into §3.2 and §3.3.
 3. **Advisory, never blocking; boundary-gated, never mid-slot** (BUILD_LOG W2-rule-3; audit §4). No
    blocking Stop hook (banned). The boundary hook fires only at (a)∧(b)∧(c), one-shot-latched, and
    defers to `session-continue` when loose-ends are armed (h). "red-100% = warning not death" —
@@ -84,6 +84,45 @@ one-shot-latched abstain-on-stale hook, b's bash-can't-close-a-live-pane split, 
    all the work — code, tests, effect-check, rollback one-liner — and hands the human an **activation
    script** (`/tmp/p8-activate.sh`); it never performs the activation. Autonomy runs right up to the
    boundary; the boundary holds.
+
+7. **🔑 ONE ARTIFACT, ONE ROLE — the evidence invariant** (pinned at the desk's request, 2026-07-14;
+   audit §3i's corollary, sharpened). The desk's phrasing was *"evidence and hygiene served by one
+   mechanism reproduce the pathology."* True, but the general form is one step up, and it predicts more:
+
+   > **An artifact that is BOTH (a) the evidence of a failure AND (b) subject to a lifecycle serving some
+   > other goal — hygiene, addressing, amendability — will have its evidence destroyed by that other goal,
+   > SILENTLY, and precisely at the moment the failure occurs.** The two roles have contradictory lifecycle
+   > requirements, and the destructive one always wins by default because it is the one with a *policy*.
+
+   Every instance is this, and the conflicting pair is different each time — which is why it kept slipping
+   past a reader looking for a repeat of the last bug:
+
+   | artifact | role A — evidence | role B — the policy that destroyed it |
+   |---|---|---|
+   | telemetry file | proves a session STALLED | **hygiene** — bound `/tmp` growth (deleted on age) |
+   | registry row | proves a pane DIED AT SPAWN | **addressing** — don't resolve a name onto a dead pane (deleted on deadness) |
+   | ruling file | proves WHAT WAS AUTHORIZED | **amendability** — a ruling must be correctable (mutated after the ack) |
+
+   **The resolution is always the same shape: split the roles, and forbid the destructive one from acting on
+   the failure-state itself.** Deletion keys on **AGE** (retention), never on the failure (deadness,
+   staleness, closure). A view may **HIDE**, never **DELETE**. An attestation binds by **CONTENT**, never by
+   name. Concretely landed: telemetry — liveness(pid) ≠ retention(age) (`93720eb`); registry — liveness(pid)
+   ≠ view(addressing filters) ≠ retention(age), *presence must never encode liveness* (`7b2f701`); ruling —
+   identity(id) ≠ content(hash) (`1eebe07`).
+
+   **Pre-ship design question (the desk's adopted review criterion — apply to EVERY primitive):**
+   > *For every artifact this primitive reads or writes: **is it evidence of something?** And is any other
+   > policy permitted to delete, hide, or mutate it? If so, that policy will erase the evidence exactly when
+   > it matters — because "when it matters" IS the failure state the policy keys on.*
+   > And its twin: ***what is this check structurally unable to see, and who would end up checking that by
+   > hand?*** (audit §3i: the hand-check is the blind-check's only external signature.)
+
+   **MECHANICAL COROLLARY — a check must log its ABSTENTIONS, not only its firings.** D9 (an inert verifier)
+   is *only* detectable from the outcome DISTRIBUTION, so every check must emit `{fired | passed | abstained
+   | failed}` per invocation to the IDL (axis k P1). **Alarm: `abstained == 100%` over N≥10 real invocations
+   ⇒ the check is inert by construction.** That single rule would have caught `cc-notify` in hours instead of
+   a day — it abstained on *every* send and nothing was counting. Without it, "correctly quiet" and
+   "structurally blind" are the same observation.
 
 ---
 
@@ -120,11 +159,51 @@ one-shot-latched abstain-on-stale hook, b's bash-can't-close-a-live-pane split, 
 - **Injection**: PRIMARY `additionalContext` **probe-gated**; FALLBACK proven `{decision:"block",reason}` + latch + `systemMessage` for human visibility. (D-C)
 - **Build deps**: B2 `.git/gate-green=<sha>` marker (new /ship + commit step — doesn't exist); B3 stale-sweep (axis a owns); B1 additionalContext probe.
 
+**🔍 BLIND-CHECK PRE-MORTEM (invariant 7 + the desk's review criterion, applied BEFORE the build).**
+*What is this check structurally unable to see, and who would end up checking that by hand?*
+- **B-1 — it cannot see a session that never STOPS.** The hook fires on the **Stop** event. A session hung
+  mid-turn never reaches Stop, so **the boundary hook NEVER RUNS for exactly the sessions most likely to be
+  past their boundary.** Same shape as "no render ⇒ no telemetry" (§3h): the trigger and the failure are
+  the same event. *Who checks by hand?* The operator, glancing at cc-board for DUE rows — i.e. **§1's relay
+  survives** unless the SUPERVISOR covers this case (past-threshold ∧ not-Stopping). **The hook cannot be
+  the only boundary mechanism; it is a refinement, never the carrier** (which invariant 4 already said for a
+  different reason — this is a second, independent proof of it).
+- **B-2 — the one-shot latch silences itself in the dangerous state.** The latch is keyed
+  `hash(configdir|cwd)-<HEADsha>`. A session that receives the advisory, **ignores it, and keeps working
+  without committing** leaves HEAD unchanged ⇒ the latch holds ⇒ **the hook never re-advises.** But
+  "past boundary and not committing" is precisely the state the advisory exists for. → the latch needs a
+  **second re-arm dimension** (a `used_pct` delta of ~+10, or a time-based re-arm), or it will go quiet
+  exactly when it should get louder.
+- **B-3 — it must log ABSTENTIONS, not only fires** (invariant 7's mechanical corollary). The hook abstains
+  on stale telemetry, on a dirty tree, on a live-teammate check. If those abstentions are unlogged, **"it
+  didn't fire" is indistinguishable from "it never evaluated"** — the D9 shape, in the primitive whose whole
+  job is to fire. Emit `{fired|abstained:<reason>}` to the IDL every invocation; alarm on 100% abstain.
+
 ### 3.3 `supervisor` (axis b; owner: new scripts/lead-supervisor.sh + launchd plist)
 - **Topology C**: launchd `KeepAlive`+`RunAtLoad` daemon, `while :; sweep; sleep 30`; **reuses** `lead-crash-watchdog.sh`'s registrar half (strip its per-session detached loop to registrar-only). Backstop tier = existing `team-orphan-reaper` 600s. Mutual re-bootstrap (every SessionStart re-arms the daemon; daemon re-arms sessions) closes the LaunchAgent-booted-out hole.
 - **Recovery decision table — PAGE-biased per ruling #1** (detect + preserve + page; the operator/a delegated live session recovers): DEAD→checkpoint-preserve-to `refs/wip/LAST` **then PAGE** (not auto-respawn); STALL→`cc-notify` *advice* to the live session (its own model acts; never force-close); LIMIT-predicted→`cc-notify` advice + PAGE; LIMIT-actual (dead)→checkpoint + PAGE; MODAL-teammate→auto-deny stale `permission_request` (the one bounded auto-act — extends team-orphan-reaper, effect-verified); **MODAL-lead→PAGE** (ruling #2). The only auto-*acts* left are the safe/effect-verified ones (checkpoint-preserve, stale-perm-deny); every *recovery* (respawn/close) is paged.
 - **Crash-path checkpoint gate** (the real gap): the graceful path checkpoints-before-remove; the crash path (`team-orphan-reaper archive`) does NOT — add `teammate-checkpoint.sh` on DEAD-lead per member worktree BEFORE any archive/remove (closes D1/D3).
 - Detection LOGIC lives in axis h (D1–D7); b maps state→recovery only. Reboot ⟹ hand to `resume-sessions` skill, not respawn-loop.
+
+**🔍 BLIND-CHECK PRE-MORTEM (invariant 7 + the desk's review criterion).**
+- **S-1 — the REAPER/SWEEP RACE, and it is a real build constraint, not a nicety.** The supervisor polls
+  every 5–10 min. **Any evidence whose lifetime is shorter than the poll interval is INVISIBLE to it** — it
+  will sweep, find nothing, and report health. → **RULE: no reaper's horizon may be shorter than the
+  supervisor's sweep interval × a safety factor (≥10×).** Today's horizons are safe by luck, not by design
+  (telemetry 6h/7d, registry 24h vs a ~5min sweep). **State it, and gate it:** a future "tidy up /tmp" change
+  that drops a horizon to 5 minutes would silently blind the supervisor, and every test would still pass.
+- **S-2 — the supervisor's correctness DEPENDS on invariant 7 holding upstream.** It reads telemetry and the
+  registry — the two artifacts whose reapers were *just* found erasing evidence (`93720eb`, `7b2f701`). A
+  supervisor built on a spine that deletes its own evidence is a detector that reports "all clear" into a
+  fire. This dependency is now explicit: **do not build b until a's and P8's evidence separation is landed and
+  proven** (it is).
+- **S-3 — it cannot see in-session state at all** (bash, out-of-session): modals, composer, mid-turn
+  reasoning. Already ruled (MODAL-lead → PAGE), but now *named as a structural blindness* rather than a
+  policy choice — the difference matters, because a structural blindness cannot be fixed by a better rule.
+- **S-4 — it must log ABSTENTIONS** (same corollary as B-3). A supervisor sweep that finds nothing must
+  record *that it looked and found nothing*, or a silently-crashed daemon is indistinguishable from a quiet
+  system. **This is the "who watches the watcher" question, answered mechanically:** the watcher's own
+  heartbeat is an outcome record, and its absence is the alarm.
 
 ### 3.4 `gate-batching` (axis c; owner: new scripts/gate-*.sh + template §8)
 - **Asymmetric whitelist** (any doubt → STOP-ASK; false-negative catastrophic). 10 ruling classes C1–C10; pre-signable {C1–C5,C7}; conditional {C6 money-path=out-of-class-by-default, C8 go=couples axis d}; **C9 `/ship` = permanent exclusion + backstop**; **C10 self-modification/persistence = permanent exclusion, HUMAN-ONLY — not desk-signable, not agent-signable** (audit §2b: the harness itself enforces this; a peer agent's ruling is not user intent). `G-surface` grep gains `settings.json|hooks/|launchd|LaunchAgent|\.plist|crontab|PATH`.
