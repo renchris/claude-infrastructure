@@ -74,6 +74,16 @@ the whole wave**; resolve empirically with the `ps` grep on the first spawn, nev
 > threshold. **Declare both:** the ceiling (never exceed) AND the anticipatory trigger (recycle when the
 > next unit of work will not fit *comfortably*, not merely when it will not fit).
 
+> **NEVER SPAWN AT YOUR OWN E2 BOUNDARY (added 2026-07-14 — E2 #3, `8c59b1e`, verified).** At
+> `boundary_recycle`, recycle FIRST and let the **successor** spawn any pending child — do not spawn-then-
+> recycle. `self-close --successor` SIGKILLs the lead's process-group children (§8.5 mechanism), so a
+> just-spawned child can die with the departing lead. Observed clean: W4 lead #3 at **60%** announced a B22
+> spawn; the desk paged the order-inversion; the lead **TaskStopped the spawn seconds in (zero loss)**,
+> committed the brief to disk, stamped E2 #3, recycled on the rails → the **successor** spawned B22 from the
+> committed brief. The order is load-bearing, not stylistic: spawn-then-recycle destroys the child;
+> recycle-then-spawn is clean. (Contrast E2 #2 `63445a8` — anticipatory recycle at **49%**; E2 #3 —
+> at-threshold at **60%**. Both are E2 successions; the spawn-order rule is independent of which trigger fired.)
+
 **Window-relative % only — never fixed tokens** (47% of 1M ≠ 47% of 200K; a fixed threshold throws
 away ~85% of a 1M window — audit §3b). §8 **declares** the numbers; the advisory boundary hook
 (axis h) **consumes** them at `(a) committed+green ∧ (b) log-head==HEAD ∧ (c) used_pct≥threshold`,
@@ -126,6 +136,13 @@ self-close-log `successor=` chain.
 > therefore right half the time and silently wrong the other half, which is worse than reliably wrong.
 > This is the argument for role tokens: not "uuids go stale" (they only *sometimes* do), but **"you
 > cannot know which case you are in without resolving."** Resolve at send-time, always.
+
+> **Succession SIGKILLs the lead's PROCESS-GROUP children — the mechanism behind §8.2's "never spawn at your
+> boundary" (verified 2026-07-14).** `handoff-fire.sh:946` SIGKILLs the whole process group on self-close: a
+> child sharing the pgid dies with the lead; a `start_new_session`/setsid child survives (`:167-170`). Because
+> the lead cannot be certain which kind it spawned, the §8.2 rule is stated **unconditionally** (recycle
+> first). *The desk's field shorthand "succession kills child panes" is imprecise — only pgid-sharing children
+> die — but the recycle-first ordering is safe under either outcome, so the rule needs no mechanism caveat.*
 
 A predecessor's pane is dead post-self-close; a cached uuid sends into the void. `cc-notify`'s LOUD-on-strand (mailbox-only +
 "unreachable", never false-delivered) is the effect-verified backstop when a stale address is used.
