@@ -10,6 +10,16 @@ argument-hint: "[plan path or topic — optional] [paste-only|hold-fire to suppr
 Prepare a disposable hand-off so the user can `/clear` and resume in a fresh context with **zero
 state loss**. The DURABLE state lives in the repo plan; this emits only a stateless POINTER to it.
 
+> **Typed/verbal parity (2026-07-13):** a typed `/handoff` injects this whole spec; a VERBAL or
+> relayed handoff/succession intent ("hand off", "relieve", "you may self-close", "recycle the
+> session") MUST be executed the same way — invoke this skill via the Skill tool and run its
+> scripts; never improvise the fire/close chain from memory (the `handoff-intent-nudge.sh`
+> UserPromptSubmit hook injects this reminder whenever such phrases appear). All three 2026-07-13
+> "the handoff closed our session without opening the new one" reports arrived via verbal intent:
+> two were a since-fixed watcher bug (nohup → setsid, `dd40eca`), the third a PERFECT succession
+> rendered invisible by an undeclared, unfocused, unannounced close (§ Autonomous fire item 7's
+> succession statement now makes that state unrepresentable).
+
 **Core rule (`feedback-session-handoff-via-plan-not-prompt-files`):** a stateless bridge →
 **`/tmp` or inline chat, NEVER committed** to the repo. It's regenerable from the durable plan,
 so losing it (reboot / `/tmp` prune) costs nothing, and committing it just adds stale clutter.
@@ -337,18 +347,45 @@ bridge guardrails still apply to each payload.
 **7 · Self-close — retire the emptied main session (the CLOSE arm of § Post-fire disposition).**
 Invoked ONLY off a `🔚 DISPOSITION: CLOSE` emission — a pane-spawn wave is away and no taxonomy
 reason holds (never bare judgment; the helper ran first). The main session then closes ITSELF:
-`handoff-fire.sh self-close` arms its detached watcher FIRST,
+`handoff-fire.sh self-close --successor <pane-uuid>` (or `--terminal` when truly nothing continues)
+arms its detached watcher FIRST,
 then types `/exit` into its own pane FOREGROUND (a typed `/exit` INTERRUPTS any in-flight turn and exits
 in seconds — so everything that must survive precedes it); the watcher ps-polls the pane's tty until the claude process exits and closes
 the pane via the `~/.claude/bin/it2` shim (window follows when it was the last pane). Graceful-first:
 `/exit` runs SessionEnd hooks and leaves the transcript resumable (`--resume` / claude-search); the
 watcher force-closes teammate-style only at its 180s ceiling (logged to
-`/tmp/handoff-selfclose-<sid>-<ts>.log`). Empirical E2E: graceful close in 9s. Hard-won constraints
+`/tmp/handoff-selfclose-<sid>-<ts>.log`). Empirical E2E: graceful close in 9s; the full succession
+chain (verify → announce → close → focus) E2E'd 9/9 on 2026-07-13 (`scripts/handoff-selfclose-e2e.sh`).
+
+> **🚨 SUCCESSION STATEMENT — mandatory (2026-07-13, the third "where did my session go" incident).**
+> A pane close is operator-visible surface: a close with no declared continuation reads as "the
+> handoff killed our session" even when the succession actually SUCCEEDED (the 23:03 incident — the
+> successor was alive one pane over; the announce died with the closing pane and nothing moved the
+> operator's focus). Bare `self-close` now exits 2. Declare succession explicitly:
+> - `--successor <pane-uuid>` — the live continuation's pane. The script (1) VERIFIES it alive
+>   (pane resolvable + claude on its tty) BEFORE typing `/exit` — abort 3 otherwise; (2) ANNOUNCES
+>   the succession INTO the successor via `cc-notify` (visible line in the SURVIVING transcript +
+>   mailbox record — the report emitted in the dying pane dies with the pane); (3) FOCUSES the
+>   successor after the close so the operator's view lands on the continuation, never a void.
+> - `--terminal` — end-of-line: nothing continues this session's work. Say so explicitly.
+> - Dirty tree on a SHARED checkout: when the dirt is the successor's own in-flight work (the
+>   23:02 case — the coordinator's cwd showed the exit-lead's uncommitted severance), pass
+>   `--dirty-owner successor` (requires a verified-alive `--successor`; the close loses nothing
+>   because the owner survives). `--allow-dirty` remains the blunt, potentially-lossy override.
+> - **Remote relief** (retiring ANOTHER session's pane): prefer `cc-notify` instructing THAT
+>   session to run its own `self-close --successor …` (its SessionEnd hooks + disposition stay
+>   honest). Direct `self-close --session-id <their-pane>` is the fallback for an unresponsive
+>   session and carries the SAME succession-statement obligation. Never raw `it2 session close` /
+>   hand-typed `/exit` for teardown — those leave no announce, no focus, no log.
+
+Hard-won constraints
 baked into the script: ALL keystrokes are typed foreground — detached osascript AppleEvents to iTerm2
 fail silently (3/3 observed); the watcher does only AppleEvent-free work (ps + the shim's python
-websocket API, both proven detached). Guards: dirty git tree refuses (`--allow-dirty` to override);
+websocket API, both proven detached — `session focus` rides the same proven transport). Guards: no
+succession statement exits 2; dead/missing successor aborts 3; dirty git tree refuses (see above);
 a pane with no CC on its tty skips `/exit` and just closes (mis-arm/launch-latency protection); emit
-the final report BEFORE arming — it stays on screen until the close. NEVER pair with `--recycle`.
+the final report BEFORE arming — it stays on screen until the close (and the successor's transcript
+carries the announce after it). NEVER pair with `--recycle`.
 
 **Prior art (why this shape):** it is the session-level analog of Agent Teams' teammate lifecycle — CC
 spawns each teammate pane via `it2 session split -s <lead>` (the `~/.claude/bin/it2` shim injects the
@@ -404,10 +441,11 @@ A fire delegates the WORK; it does not settle the fate of the session that fired
 closes, end the turn with exactly ONE of:**
 
 - `🔚 DISPOSITION: CLOSE — nothing remains in this session.`
-  → then `~/.claude/scripts/handoff-fire.sh self-close` AS THE TURN'S LAST ACTION (§ Autonomous fire
-  item 7; its dirty-tree guard still applies). Sole exception: after a `--recycle` fire the recycle
-  itself IS the close — the CLOSE line goes in the pre-fire report and self-close is NEVER called
-  (the pane is the continuation).
+  → then `~/.claude/scripts/handoff-fire.sh self-close --successor <pane-uuid>|--terminal` AS THE
+  TURN'S LAST ACTION (§ Autonomous fire item 7; its dirty-tree guard still applies, and the
+  succession statement is MANDATORY — bare self-close exits 2). Sole exception: after a `--recycle`
+  fire the recycle itself IS the close — the CLOSE line goes in the pre-fire report and self-close
+  is NEVER called (the pane is the continuation).
 - `⏳ DISPOSITION: OPEN — <R-CODE>: <specific instance> → closes when <discharge condition> → then <single next action>.`
   One clause per LIVE reason; several live reasons = several clauses in the same emission,
   worst-first: **R-DECIDE ≻ R-USER ≻ R-PING ≻ R-WORK ≻ R-DIRTY** (user-blocking first, then
