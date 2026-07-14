@@ -53,18 +53,34 @@ cmd_issue() {
     echo
     echo "Bind this ruling by committing the work that honours it with the trailer:"
     echo
-    echo "    $TRAILER: $id"
+    echo "    \$(cc-bind ack $id)     # -> $TRAILER: $id@<content-sha>"
+    echo
+    echo "The trailer binds to this file's CONTENT, not just its id: if the ruling is AMENDED after"
+    echo "the ack, the gate FAILS LOUD (the work was authorized against different text) and the"
+    echo "amended ruling must be re-reviewed and re-acked."
     echo
     echo "The merge gate (\`cc-bind gate $id\`) FAILS CLOSED until that trailer appears in the range."
   } > "$f" || die "cannot write $f"
   echo "cc-bind: ruling $id issued -> $f"
-  echo "  ack with:  git commit --trailer '$TRAILER: $id' ..."
+  echo "  ack with:  git commit --trailer \"\$(cc-bind ack $id)\" ..."
   echo "  gate with: cc-bind gate $id <base>..<head>"
 }
 
+# The ack binds to the ruling's CONTENT, not merely its id. Without the hash, a ruling could be
+# rewritten AFTER work acked it and the gate would still say PASS — the ledger would attest that the
+# work honoured text that no longer exists. Observed for real: an amendment (voiding a condition)
+# landed post-ack and the gate passed blind, while the orchestrator compensated BY HAND ("ruling blob
+# verified verbatim") — a human hand-verifying a blind automation, which is the exact pathology this
+# whole tool exists to end (audit §1, §3g).
+ruling_sha() { git hash-object "$(ruling_file "$1")" 2>/dev/null | cut -c1-12; }
+
 cmd_ack() {
   local id="${1:-}"; [ -n "$id" ] || die "ack needs a ruling id"
-  echo "$TRAILER: $id"
+  local f; f="$(ruling_file "$id")"
+  [ -f "$f" ] || die "no ruling file at $f — issue it first"
+  local sha; sha="$(ruling_sha "$id")"
+  [ -n "$sha" ] || die "cannot hash $f"
+  echo "$TRAILER: $id@$sha"
 }
 
 cmd_gate() {
@@ -87,12 +103,33 @@ cmd_gate() {
   git rev-list "$range" >/dev/null 2>&1 || gate_fail "indeterminate: unresolvable range '$range'"
 
   # (3) DELIVERY half — absence-of-ack IS the detector. -F: the id is a literal, never a regex.
-  if git log -F --grep="$TRAILER: $id" --format=%H "$range" 2>/dev/null | grep -q .; then
-    local shas; shas="$(git log -F --grep="$TRAILER: $id" --format='%h' "$range" | tr '\n' ' ')"
-    echo "cc-bind: ✅ GATE PASS — ruling $id acked in $range (${shas% })"
-    exit 0
+  # Candidates by substring, then an EXACT trailer match: a bare -F substring would let an ack for
+  # "P8-GO-2" satisfy a gate for "P8-GO" (prefix collision).
+  local c acked_line="" acked_commit=""
+  for c in $(git log -F --grep="$TRAILER: $id" --format=%H "$range" 2>/dev/null); do
+    while IFS= read -r l; do
+      l="${l%"${l##*[![:space:]]}"}"                       # rstrip
+      case "$l" in
+        "$TRAILER: $id"|"$TRAILER: $id@"*) acked_line="$l"; acked_commit="$c" ;;
+      esac
+    done <<EOF
+$(git log -1 --format=%B "$c" 2>/dev/null | grep -F "$TRAILER: $id")
+EOF
+    [ -n "$acked_line" ] && break
+  done
+  [ -n "$acked_line" ] || gate_fail "ruling $id is UNACKED in $range. DO NOT MERGE. The work that honours it must carry the trailer '$TRAILER: $id@<sha>' (cc-bind ack $id)."
+
+  # (4) CONTENT half — the ack must name WHICH TEXT it acked, and that text must still be the ruling.
+  local cur acked; cur="$(ruling_sha "$id")"
+  case "$acked_line" in
+    *@*) acked="${acked_line##*@}" ;;
+    *)   gate_fail "ruling $id is acked in ${acked_commit:0:8} but WITHOUT a content hash — it cannot prove WHICH text was authorized, and a ruling amended after the ack would pass unnoticed. Re-ack: git commit --trailer \"\$(cc-bind ack $id)\"" ;;
+  esac
+  if [ "$acked" != "$cur" ]; then
+    gate_fail "ruling $id was AMENDED AFTER IT WAS ACKED — ${acked_commit:0:8} acked text @$acked, but $(ruling_file "$id") is now @$cur. The work was authorized against DIFFERENT TEXT. Re-review the ruling and re-ack."
   fi
-  gate_fail "ruling $id is UNACKED in $range. DO NOT MERGE. The work that honours it must carry the trailer '$TRAILER: $id' (cc-bind ack $id)."
+  echo "cc-bind: ✅ GATE PASS — ruling $id acked in ${acked_commit:0:8}, content verified (@$cur)"
+  exit 0
 }
 
 # --- D9 self-test: the gate must be SEEN to fire RED, not merely to exist -----------------------
@@ -127,15 +164,40 @@ cmd_selftest() {
   check "issued but UNACKED -> FAIL CLOSED (the D9 red)" 1 "$SELF" gate R-001 HEAD~1..HEAD
   # NEGATIVE 3: an unresolvable range must FAIL CLOSED, never silently pass.
   check "unresolvable range -> FAIL CLOSED (indeterminate)" 1 "$SELF" gate R-001 not-a-ref..HEAD
-  # POSITIVE control: once acked, the gate must PASS (else it is a check that can only ever fail,
-  # which is just as useless as one that can only ever pass).
-  ( cd "$tmp" && echo work > work.txt && git add work.txt \
-      && git commit -qm "do the work
+  # NEGATIVE 4: an ack with NO content hash cannot prove WHICH text it authorized -> indeterminate.
+  ( cd "$tmp" && echo w1 > w1.txt && git add w1.txt \
+      && git commit -qm "work, bare ack
 
 Acked-Ruling: R-001" ) >/dev/null 2>&1
-  check "acked in range -> GATE PASS (positive control)" 0 "$SELF" gate R-001 HEAD~1..HEAD
-  # NEGATIVE 4: the ack must not leak across ranges — a range excluding the ack must FAIL.
-  check "ack OUTSIDE the range -> FAIL CLOSED" 1 "$SELF" gate R-001 HEAD..HEAD
+  check "ack WITHOUT a content hash -> FAIL CLOSED" 1 "$SELF" gate R-001 HEAD~1..HEAD
+
+  # POSITIVE control: a hashed ack, ruling unchanged -> PASS. (A check that can only ever fail is
+  # exactly as useless as one that can only ever pass.)
+  ( cd "$tmp" && ack=$(CC_RULINGS_DIR=docs/rulings "$SELF" ack R-001) \
+      && echo w2 > w2.txt && git add w2.txt \
+      && git commit -qm "do the work
+
+$ack" ) >/dev/null 2>&1
+  check "hashed ack, ruling unchanged -> GATE PASS (positive control)" 0 "$SELF" gate R-001 HEAD~1..HEAD
+
+  # NEGATIVE 5 (the marquee): the ruling is AMENDED after the ack. The gate MUST notice — otherwise
+  # the ledger attests that the work honoured text that no longer exists, and a human ends up
+  # verifying the blob by hand (which is exactly what happened, 2026-07-14).
+  ( cd "$tmp" && printf '\nAMENDED: condition 4 voided\n' >> docs/rulings/R-001.md \
+      && git add -A && git commit -qm "amend the ruling" ) >/dev/null 2>&1
+  check "ruling AMENDED after the ack -> FAIL CLOSED (loud)" 1 "$SELF" gate R-001 HEAD~2..HEAD
+
+  # NEGATIVE 6: prefix collision — an ack for R-001-2 must NOT satisfy a gate for R-001. A bare
+  # substring match would let it (found while writing this).
+  ( cd "$tmp" && CC_RULINGS_DIR=docs/rulings "$SELF" issue R-002 "other ruling" >/dev/null 2>&1
+    ack2=$(CC_RULINGS_DIR=docs/rulings "$SELF" ack R-002) \
+      && echo w3 > w3.txt && git add -A && git commit -qm "other work
+
+$ack2" ) >/dev/null 2>&1
+  check "ack for a DIFFERENT ruling does not satisfy this gate" 1 "$SELF" gate R-001 HEAD~1..HEAD
+
+  # NEGATIVE 7: the ack must not leak across ranges — a range excluding it must FAIL.
+  check "ack OUTSIDE the range -> FAIL CLOSED" 1 "$SELF" gate R-002 HEAD..HEAD
 
   echo "cc-bind selftest: $pass passed, $fail failed"
   [ "$fail" -eq 0 ] || exit 1
