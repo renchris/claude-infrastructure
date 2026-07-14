@@ -475,6 +475,21 @@ assertion is the implementer's. The split that the authority-ceiling lesson (§2
 > general form: **a one-sided "assert-the-good" check is blind to the bad coexisting with the good** — the
 > shortcut hides behind the very feature meant to replace it.
 
+> **Two more, one family — the law pointed at the DESK, and at my OWN ship gate (2026-07-14).** **(i) Notify on
+> operator-blocked quiescence** (operator-prompted ~16:3x): when the system transitions to OPERATOR-BLOCKED
+> (every autonomous path exhausted, genuinely waiting on a human), it MUST push-notify that human. **A system
+> silently waiting on a person it never notified is the Blind-Check law aimed at the desk itself** — from inside
+> it looks healthy (correctly parked), and the one actor who must act has no signal they are the blocker; a
+> passive disposition is a RECORD, not an operator-facing SIGNAL (same gap as STALE-not-LOUD, §3h). This is
+> exactly what the zero-HITL DoD's "push-notify early-vetoer" mechanizes (blueprint §5). **(ii) The pipe-mask
+> trap, live on my OWN ship gate:** running the operator-authorized /ship, my gate check read `rc=$?` after
+> `bats … | tail` → I nearly filed a FALSE GREEN and pushed 53 commits over a RED gate. Re-ran UNPIPED → true
+> exit 1. **Instance #5 of witness-must-be-unpiped, sprung on the very session that catalogued it** — the idiom
+> is that gravitational. And the red was **test-rot**: session-registry tests 67/68 assert the *pre-P8-fix*
+> `rm -f`-on-dead behavior that `7b2f701` deliberately removed (dead rows now RETAINED 24h for forensics,
+> filtered from the addressing view) — the criteria-rot law in TEST form: the code was fixed, the tests kept
+> asserting the old contract, and the gate went red on correct code.
+
 This generalizes §1's method (which counted hand-run `/context` relays) into a **blindness detector for
 the whole layer**, and it is nearly free: the manual compensations are already in the transcripts. It
 also explains why the §1 count *undercounted* — a hand-capture, a fallback sweep, and a blob-verify never

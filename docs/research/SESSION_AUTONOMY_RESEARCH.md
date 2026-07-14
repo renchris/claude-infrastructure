@@ -405,6 +405,26 @@ live *or* dead session). (2) unknown modal = **PAGE**. (3) C6 money-path = **per
 (4) build order = **docs-first → prove-on-W4 → runtime-only-to-residual**. (5) **`CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=90`**
 on the autonomy launcher. → Boundary-hook + supervisor design UNBLOCKED under these laws.
 
+**RULED 2026-07-14 ~16:4x · THE ZERO-HITL DoD (operator, live — the ruling this track was built to earn).**
+Ruling (1)'s "park-until-gate → the supervisor PAGES" is now SUPERSEDED for implementation phases, which run
+**ZERO-HITL end-to-end across days and waves**: former STOP-ASKs become **agent-ruled defaults + async review
+queues + push-notify (EARLY-VETO, not approval)**; wave exits **never fence on ratification**; **ship never
+gates progress** (autonomous at green exits for non-CI-cost repos). The **ONLY** remaining stops:
+**C10/harness-constitutional · permission-system blocks · genuinely-external info** — and even these are
+**fail-loud + async, NOT fences**. **The operator's WHY (empirical, verbatim class):** *every W0–W4 parked gate
+was ruled EXACTLY as the lead recommended* — the asking was pure overhead; the lead's recommendation carried all
+the signal, and fencing on the human's echo of it bought nothing. **Design-law shift:** the blueprint DoD framing
+moves from **batched + legible + park-until-gate → zero-touch + async-review** (the human is a PUSH-notified
+early-vetoer over an async queue, never a synchronous gate). **Two directives (→ audit):** **(D1)** re-derive the
+W0–W4 operator-touchpoint ledger UNDER THIS LAW — which touches would have been eliminated, and what is the
+residual TRULY-needed set (expected ~empty); *that residual IS the future design surface.* **(D2)** the runtime
+phase RISES in priority — multi-day UNWATCHED runs NEED the boundary-hook + page-only supervisor (nobody is
+watching the board) — but the entry bar is **UNCHANGED**: RED-provable premortem-gate GREEN + C10-gated
+activation. **The elegant closure:** ruling #1 (supervisor PAGES, never auto-recovers) is not weakened but
+RE-GROUNDED — under zero-HITL the page IS the async push-notify to the early-vetoer, and the supervisor is the
+mechanism that makes an unwatched multi-day run safe. That is why D2 raises its priority: the human left the
+loop, so the page-only watcher is now load-bearing, not insurance.
+
 _The rulings as originally surfaced (now discharged):_
 
 1. **DoD framing** — is the target literally "zero human intervention for days," or j2's reframe
