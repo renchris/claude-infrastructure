@@ -5,6 +5,17 @@
 # Isolated via CC_REGISTRY_DIR / CC_MAILBOX_DIR (temp) and IT2_BIN (a stub that
 # LOGS each call, rendering a bare CR arg as the token <CR>, and can be forced to
 # fail via IT2_STUB_FAIL=1 to simulate a closed/recycled pane).
+#
+# THREE harness rules, each learned from a real escape (2026-07-14). This suite was
+# 15/15 GREEN for a day while the verifier it certifies was INERT in production:
+#   1. `|| false` on EVERY [[ ]] — bats does NOT trap a bare [[ ]] failure mid-body
+#      (it is a bash keyword, exempt from the errexit path; `[ ]` and `grep -q` DO
+#      trap). A non-final [[ ]] assertion without `|| false` can NEVER fail a test.
+#   2. Assert on "submit VERIFIED", never "VERIFIED" — *"VERIFIED"* also matches
+#      "UNVERIFIED", so the loose glob passed on the degraded result it should catch.
+#   3. Capture fixtures are NUL-padded to BINARY by the stub (see use_capture_stub) —
+#      a real it2 capture is binary, and BSD grep's behaviour on it is what broke.
+#      A plain-text fixture tests a file production never produces.
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
@@ -87,8 +98,8 @@ SH
   # hardened sequence: send text -> send <CR> -> session capture (verify)
   [ "$(grep -c 'session send' "$IT2_LOG")" -eq 2 ]
   run sed -n '2p' "$IT2_LOG"
-  [[ "$output" == *"<CR>"* ]]
-  [[ "$output" != *"msg"* ]]   # the CR call carries no text
+  [[ "$output" == *"<CR>"* ]] || false
+  [[ "$output" != *"msg"* ]] || false   # the CR call carries no text
   grep -q "session capture -s $UUID" "$IT2_LOG"
 }
 
@@ -114,7 +125,11 @@ if [ "\$1 \$2" = "session capture" ]; then
   while [ ! -f "\$src" ] && [ "\$n" -gt 1 ]; do n=\$((n-1)); src="$CAPTURE_FIXTURES_DIR/cap.\$n"; done
   [ -f "\$src" ] || exit 0
   # -o <file> is arg 6 (capture -s <uuid> -o <file>)
-  cp "\$src" "\$6"; exit 0
+  # NUL-pad every line-end: iTerm2 pads empty screen cells with NUL, so a REAL capture is a
+  # BINARY file (~177 NULs in a 4.5KB screen) and grep needs -a to read it. Text-only fixtures
+  # are what let the unfixed verifier "pass" here for a day while it was inert in production.
+  # Keep the fixture byte-faithful or this suite certifies a phantom. Line structure preserved.
+  python3 -c 'import sys;d=open(sys.argv[1],"rb").read();open(sys.argv[2],"wb").write(d.replace(chr(10).encode(),bytes([0,0,10])))' "\$src" "\$6"; exit 0
 fi
 out=""
 for a in "\$@"; do
@@ -126,9 +141,6 @@ exit 0
 SH
 }
 
-stranded_pane() { printf 'transcript noise\n\u276f %s and more of it typed here\n' "$1"; }
-clear_pane()    { printf '%s (queued above)\n\u276f Press up to edit queued messages\n' "$1"; }
-
 @test "verify: clean submit on first capture -> exit 0, VERIFIED, no extra CR" {
   use_capture_stub
   printf 'countermand text (queued above)
@@ -136,7 +148,7 @@ clear_pane()    { printf '%s (queued above)\n\u276f Press up to edit queued mess
 ' > "$CAPTURE_FIXTURES_DIR/cap.1"
   run bash "$NOTIFY" peer "countermand text"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"VERIFIED"* ]]
+  [[ "$output" == *"submit VERIFIED"* ]] || false   # NOT *VERIFIED* — that substring also matches "UNVERIFIED" (phantom green)
   [ "$(grep -c '<CR>' "$IT2_LOG")" -eq 1 ]
 }
 
@@ -150,7 +162,7 @@ clear_pane()    { printf '%s (queued above)\n\u276f Press up to edit queued mess
 ' > "$CAPTURE_FIXTURES_DIR/cap.2"
   run bash "$NOTIFY" peer "countermand text"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"VERIFIED"* ]]
+  [[ "$output" == *"submit VERIFIED"* ]] || false   # NOT *VERIFIED* — that substring also matches "UNVERIFIED" (phantom green)
   [ "$(grep -c '<CR>' "$IT2_LOG")" -eq 2 ]   # initial + 1 retry
 }
 
@@ -161,7 +173,7 @@ clear_pane()    { printf '%s (queued above)\n\u276f Press up to edit queued mess
 ' > "$CAPTURE_FIXTURES_DIR/cap.1"
   run bash "$NOTIFY" peer "countermand text"
   [ "$status" -eq 4 ]
-  [[ "$output" == *"STRANDED"* ]]
+  [[ "$output" == *"STRANDED"* ]] || false
   [ "$(grep -c '<CR>' "$IT2_LOG")" -eq 3 ]   # initial + 2 retries
   grep -q "countermand text" "$CC_MAILBOX_DIR/$UUID.md"
 }
@@ -170,7 +182,7 @@ clear_pane()    { printf '%s (queued above)\n\u276f Press up to edit queued mess
   use_capture_stub   # no fixtures written -> capture produces no file
   run bash "$NOTIFY" peer "some message"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"UNVERIFIED"* ]]
+  [[ "$output" == *"UNVERIFIED"* ]] || false
 }
 
 @test "ALWAYS writes the mailbox on success (composer + mailbox)" {
@@ -188,7 +200,7 @@ clear_pane()    { printf '%s (queued above)\n\u276f Press up to edit queued mess
   [ "$status" -eq 0 ]
   [ -f "$CC_MAILBOX_DIR/$UUID.md" ]
   grep -q "into the void" "$CC_MAILBOX_DIR/$UUID.md"
-  [[ "$output" == *"mailbox only"* ]]
+  [[ "$output" == *"mailbox only"* ]] || false
 }
 
 @test "--mailbox-only records but skips injection (it2 send never called)" {
