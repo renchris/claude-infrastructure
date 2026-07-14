@@ -1,0 +1,151 @@
+#!/bin/bash
+# cc-bind — the BIND tier of the two-tier ruling channel.
+#
+#   NOTIFY (cc-notify) = best-effort delivery. Its "verification" is only as trustworthy as the
+#                        last time you SAW it fire — and for ~24h it never did (audit §3g).
+#   BIND   (this tool) = durable ruling file + `Acked-Ruling:` commit trailer + fail-closed gate.
+#                        ABSENCE-OF-ACK IS THE DETECTOR — the one delivery signal that needs no
+#                        verifier of its own, because it is evidence-of-absence in git, not a
+#                        report from a channel that might be lying.
+#
+#   cc-bind issue <id> "<ruling text>"   write the durable ruling file (survives compaction)
+#   cc-bind ack   <id>                   print the commit trailer to ack with
+#   cc-bind gate  <id> [<range>]         FAIL-CLOSED: exit 1 unless <id> is acked in <range>
+#   cc-bind selftest                     D9 proof: gate fires RED on a missing ack, GREEN on a
+#                                        present one, in a throwaway repo (no side effects)
+#
+# 🚨 THE ONE INVARIANT: this gate NEVER exits 0 on "cannot determine". An indeterminate check
+# that passes is indistinguishable from a working one — that is the D9 bug this whole tool
+# exists because of (cc-notify's verifier could ONLY abstain, exited 0 every time, and a
+# 1-in-6 strand went unwatched for a day). Every unknown below is a LOUD non-zero exit.
+#
+# Exit: 0 = acked (gate PASSES) · 1 = unacked OR indeterminate (gate FAILS CLOSED) · 2 = usage
+set -uo pipefail
+
+RULINGS_DIR="${CC_RULINGS_DIR:-docs/rulings}"
+TRAILER="Acked-Ruling"
+# absolute self-path: the selftest cd's into a throwaway repo, and a relative $0 dies there (127)
+SELF="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/$(basename "$0")"
+
+usage() { sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-2}"; }
+die()   { echo "cc-bind: $*" >&2; exit 2; }
+# every fail-closed exit routes through here, so "indeterminate" can never be silently a pass
+gate_fail() { echo "cc-bind: ⛔ GATE FAIL — $*" >&2; exit 1; }
+
+ruling_file() { echo "$RULINGS_DIR/$1.md"; }
+
+cmd_issue() {
+  local id="${1:-}"; shift || true
+  [ -n "$id" ] || die "issue needs a ruling id"
+  local text="$*"; [ -n "$text" ] || die "issue needs ruling text"
+  local f; f="$(ruling_file "$id")"
+  [ -e "$f" ] && die "ruling $id already exists at $f (rulings are immutable; issue a new id)"
+  mkdir -p "$RULINGS_DIR" || die "cannot create $RULINGS_DIR"
+  {
+    echo "# RULING $id"
+    echo
+    echo "- **issued:** $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "- **status:** OPEN — unacked"
+    echo
+    echo "$text"
+    echo
+    echo "## Ack"
+    echo
+    echo "Bind this ruling by committing the work that honours it with the trailer:"
+    echo
+    echo "    $TRAILER: $id"
+    echo
+    echo "The merge gate (\`cc-bind gate $id\`) FAILS CLOSED until that trailer appears in the range."
+  } > "$f" || die "cannot write $f"
+  echo "cc-bind: ruling $id issued -> $f"
+  echo "  ack with:  git commit --trailer '$TRAILER: $id' ..."
+  echo "  gate with: cc-bind gate $id <base>..<head>"
+}
+
+cmd_ack() {
+  local id="${1:-}"; [ -n "$id" ] || die "ack needs a ruling id"
+  echo "$TRAILER: $id"
+}
+
+cmd_gate() {
+  local id="${1:-}" range="${2:-}"
+  [ -n "$id" ] || die "gate needs a ruling id"
+  git rev-parse --git-dir >/dev/null 2>&1 || gate_fail "indeterminate: not inside a git repo (cwd=$PWD)"
+
+  # (1) DURABILITY half — a ruling you never issued cannot be gated. Missing file = indeterminate.
+  local f; f="$(ruling_file "$id")"
+  [ -f "$f" ] || gate_fail "indeterminate: no durable ruling file at $f — issue it first (cc-bind issue $id ...). A trailer without a durable ruling is only half the protocol."
+
+  # (2) RANGE — an unresolvable range is indeterminate, never a pass.
+  if [ -z "$range" ]; then
+    local base
+    base="$(git merge-base HEAD origin/main 2>/dev/null)" \
+      || base="$(git merge-base HEAD main 2>/dev/null)" || true
+    [ -n "$base" ] || gate_fail "indeterminate: cannot resolve a default base (no origin/main or main) — pass an explicit <base>..<head>"
+    range="$base..HEAD"
+  fi
+  git rev-list "$range" >/dev/null 2>&1 || gate_fail "indeterminate: unresolvable range '$range'"
+
+  # (3) DELIVERY half — absence-of-ack IS the detector. -F: the id is a literal, never a regex.
+  if git log -F --grep="$TRAILER: $id" --format=%H "$range" 2>/dev/null | grep -q .; then
+    local shas; shas="$(git log -F --grep="$TRAILER: $id" --format='%h' "$range" | tr '\n' ' ')"
+    echo "cc-bind: ✅ GATE PASS — ruling $id acked in $range (${shas% })"
+    exit 0
+  fi
+  gate_fail "ruling $id is UNACKED in $range. DO NOT MERGE. The work that honours it must carry the trailer '$TRAILER: $id' (cc-bind ack $id)."
+}
+
+# --- D9 self-test: the gate must be SEEN to fire RED, not merely to exist -----------------------
+# Deploy DoD clause 2: a "FIXED" claim about CHECKING code is not a fix until the check is seen
+# to FIRE. Runs entirely in a throwaway repo — zero side effects on the caller's tree.
+cmd_selftest() {
+  local rc pass=0 fail=0
+  # NB: the scratch dir is a GLOBAL, not a `local` — an EXIT trap runs outside the function's
+  # scope, so a `local tmp` is unbound there under `set -u` and the cleanup silently never runs.
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/cc-bind-selftest.XXXXXX")" || die "cannot mktemp"
+  trap 'rm -rf "${tmp:-}"' EXIT
+  (
+    cd "$tmp" || exit 1
+    git init -q .; git config user.email t@t; git config user.name t
+    echo seed > seed.txt; git add seed.txt; git commit -qm "seed"
+  ) || die "selftest: could not build the throwaway repo"
+
+  check() { # <label> <expected-rc> <cmd...>
+    local label="$1" want="$2"; shift 2
+    ( cd "$tmp" && CC_RULINGS_DIR=docs/rulings "$@" ) >/dev/null 2>&1; rc=$?
+    if [ "$rc" = "$want" ]; then printf '  ok   %-52s (exit %s)\n' "$label" "$rc"; pass=$((pass+1))
+    else printf '  FAIL %-52s (exit %s, wanted %s)\n' "$label" "$rc" "$want"; fail=$((fail+1)); fi
+  }
+
+  echo "cc-bind selftest — the gate must FIRE, not merely exist:"
+  # NEGATIVE 1 (the D9 proof): a ruling that was never issued must NOT pass.
+  check "gate on a never-issued ruling -> FAIL CLOSED" 1 "$SELF" gate NEVER-ISSUED-0000
+  # issue a ruling, leave it unacked
+  ( cd "$tmp" && CC_RULINGS_DIR=docs/rulings "$SELF" issue R-001 "test ruling" ) >/dev/null 2>&1
+  ( cd "$tmp" && git add -A && git commit -qm "issue R-001" ) >/dev/null 2>&1
+  # NEGATIVE 2 (the marquee): issued but UNACKED must FAIL — this is the strand-equivalent.
+  check "issued but UNACKED -> FAIL CLOSED (the D9 red)" 1 "$SELF" gate R-001 HEAD~1..HEAD
+  # NEGATIVE 3: an unresolvable range must FAIL CLOSED, never silently pass.
+  check "unresolvable range -> FAIL CLOSED (indeterminate)" 1 "$SELF" gate R-001 not-a-ref..HEAD
+  # POSITIVE control: once acked, the gate must PASS (else it is a check that can only ever fail,
+  # which is just as useless as one that can only ever pass).
+  ( cd "$tmp" && echo work > work.txt && git add work.txt \
+      && git commit -qm "do the work
+
+Acked-Ruling: R-001" ) >/dev/null 2>&1
+  check "acked in range -> GATE PASS (positive control)" 0 "$SELF" gate R-001 HEAD~1..HEAD
+  # NEGATIVE 4: the ack must not leak across ranges — a range excluding the ack must FAIL.
+  check "ack OUTSIDE the range -> FAIL CLOSED" 1 "$SELF" gate R-001 HEAD..HEAD
+
+  echo "cc-bind selftest: $pass passed, $fail failed"
+  [ "$fail" -eq 0 ] || exit 1
+}
+
+case "${1:-}" in
+  issue)    shift; cmd_issue "$@" ;;
+  ack)      shift; cmd_ack "$@" ;;
+  gate)     shift; cmd_gate "$@" ;;
+  selftest) shift; cmd_selftest ;;
+  -h|--help|"") usage 0 ;;
+  *)        die "unknown command '$1' (issue|ack|gate|selftest)" ;;
+esac
