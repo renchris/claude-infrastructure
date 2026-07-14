@@ -44,16 +44,33 @@ OUTPUT=""
 # is TUI-only, and the operator was hand-running /context + /accounts to tell sessions
 # when to hand off. The statusline renders at every turn boundary, so the file is
 # always fresh. Reader: ~/.claude/bin/cc-context. Best-effort: never blocks rendering.
+# Telemetry-v2 (SESSION_AUTONOMY §3.1): ATOMIC write (.tmp+rename, so a concurrent
+# cc-context/cc-board reader never catches a half-written file) · sid computed ONCE and
+# SKIP-on-empty (a transient parse miss must not collide N sessions on unknown.json) ·
+# carry config_dir (transcript prefix before /projects/) as the cc-context×claude-accounts
+# quota-join key. Fail-safe: on jq failure the PRIOR good file survives (old `>` truncated
+# it to empty). Best-effort throughout: never blocks rendering.
 if [ -n "$INPUT" ] && command -v jq &>/dev/null; then
     TDIR=/tmp/cc-telemetry
     mkdir -p "$TDIR" 2>/dev/null
-    echo "$INPUT" | jq -c '{ts: (now|floor), session_id, cwd,
-        model: .model.id, effort: .effort.level,
-        window: .context_window.context_window_size,
-        used_pct: .context_window.used_percentage,
-        remaining_pct: .context_window.remaining_percentage,
-        input_tokens: .context_window.total_input_tokens,
-        exceeds_200k: .exceeds_200k_tokens}' > "$TDIR/$(echo "$INPUT" | jq -r '.session_id // "unknown"').json" 2>/dev/null || true
+    _sid=$(echo "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
+    if [ -n "$_sid" ]; then
+        _tp=$(echo "$INPUT" | jq -r '.transcript_path // empty' 2>/dev/null)
+        _cfg="${_tp%%/projects/*}"
+        if [ -z "$_cfg" ] || [ "$_cfg" = "$_tp" ]; then _cfg="${CLAUDE_CONFIG_DIR:-}"; fi
+        _tmp="$TDIR/.${_sid}.$$.tmp"
+        if echo "$INPUT" | jq -c --arg cfg "$_cfg" '{ts: (now|floor), session_id, cwd,
+            config_dir: $cfg, model: .model.id, effort: .effort.level,
+            window: .context_window.context_window_size,
+            used_pct: .context_window.used_percentage,
+            remaining_pct: .context_window.remaining_percentage,
+            input_tokens: .context_window.total_input_tokens,
+            exceeds_200k: .exceeds_200k_tokens}' > "$_tmp" 2>/dev/null; then
+            mv -f "$_tmp" "$TDIR/${_sid}.json" 2>/dev/null || rm -f "$_tmp" 2>/dev/null
+        else
+            rm -f "$_tmp" 2>/dev/null
+        fi
+    fi
 fi
 # Left-anchored parallel-instance glyph (set below). Prepended at the final echo so
 # it sits at the START of the line and survives narrow-terminal ellipsis truncation.
