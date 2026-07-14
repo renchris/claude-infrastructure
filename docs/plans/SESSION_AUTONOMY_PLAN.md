@@ -104,3 +104,15 @@ incidents, account lockouts, iTerm2 restart)?
 
 - 2026-07-14 00:3x — plan created by the orchestrator session (a28944df, doc_classifier pane
   99261468); telemetry v1 + cc-context landed (`74d267f`); deep track fired on next2 (Opus @ max).
+- 2026-07-14 (track, next2) — **evidence audit DONE**: `docs/research/W0-W3_INTERVENTION_AUDIT.md`
+  committed `3279340`. Deterministic extraction over 31 doc_classifier transcripts (read-only)
+  quantified the operator burden: **10 hand-run `/context`+`/accounts` relays**, the 2.3×-gauge
+  false-relief (163b5ffa at 47%-read-as-95%), designed gates (`/ship`×4, "go"×2, "RATIFY ALL 7"),
+  the 3/3 handoff-closed-without-opening (FIXED). Root causes R1-R6 → Build axes; OPEN detectors
+  D1-D7 → supervisor spec; boundary rule verbatim; operator success criteria captured. Memory +
+  BUILD_LOG distilled (2 read-only subagents). **Wave-2 design research FIRED** — decomposition-critic
+  REVISED 11→**14 axes** (partitioned b/h [where-watcher-lives vs detection-semantics]; +3 non-obvious:
+  **k** post-hoc auditability/verifiable-trust, **l** cross-session runtime contention, **m**
+  autonomy-layer self-cost). 12 Opus workers (a-m) + 2 Fable adversarial (j1 red-team, j2
+  hostile-reviewer), all read-only background. d→e dependency explicit; h owns the boundary hook.
+  Quota wide open (all accounts <0.2%). Originator pinged (99261468). Awaiting returns → converge.
