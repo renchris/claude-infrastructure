@@ -134,3 +134,10 @@ incidents, account lockouts, iTerm2 restart)?
   → prove-on-W4 → runtime-only-to-residual. **5 operator decisions surfaced (blueprint §5)** — batched
   gate pinged to 99261468. Proceeding on the ruling-independent safe primitive (telemetry-v2);
   HOLDING boundary-hook + supervisor for the DoD/build-order ruling (blueprint §5 #1/#4).
+- 2026-07-14 ~02:0x (track, next2) — **OPERATOR RATIFIED ALL 5** (relayed via `99261468`): (1) DoD =
+  park-until-gate → **supervisor PAGES, never auto-recovers** (detect + checkpoint-preserve + page;
+  operator/delegated-live-session recovers); (2) unknown modal = PAGE; (3) C6 money-path permanently
+  out-of-class; (4) **docs-first → prove-on-W4 → runtime-only-to-residual**; (5)
+  `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=90` on the autonomy launcher. Blueprint §5 stamped; supervisor spec
+  → page-only (D-B, §3.3). Boundary-hook + supervisor UNBLOCKED. Also logged **W4 GO-deafness**, the
+  3rd comms-reliability instance in 24h (`e8b6a88`). → Continuing telemetry-v2 (Wave-A safe primitive).

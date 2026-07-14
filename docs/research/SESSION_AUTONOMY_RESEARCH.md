@@ -53,7 +53,7 @@ one-shot-latched abstain-on-stale hook, b's bash-can't-close-a-live-pane split, 
 | # | Decision | Rationale (axis) |
 |---|---|---|
 | D-A | **Build order: docs-first.** Wave A = telemetry-v2 (a) + plan-template §8 (e) + gate-batching (c) + auditability floor (k P1/P2/P6) + E2E harness (i) — all near-zero new failure surface. Then **run doc_classifier W4 on them** as the free experiment. Wave B (boundary hook h) and Wave C (supervisor b) build only to the extent W4's residual justifies. | j2 (invert order; W4 is the experiment), matches PLAN spawn-wave W-a/W-b/W-c |
-| D-B | **Default = park-at-boundary-and-page; auto-ACT only on effect-verified DEAD panes.** The supervisor is bash → it *cannot* call in-session tools, so it physically cannot improvise a close on a live pane (b). Live panes get DELEGATED advice via `cc-notify` (their own model executes the rail); only dead panes get DIRECT shell rails. | b (DIRECT/DELEGATED split), j2 (never auto-recover) |
+| D-B | **RULED (#1): the supervisor PAGES, never auto-recovers.** It DETECTS + CHECKPOINTS-to-preserve (safe, pure insurance) + PAGES; the operator or a delegated *live* session performs any respawn. It is bash → cannot call in-session tools, so it physically cannot improvise a close on a live pane (b); live panes get DELEGATED advice via `cc-notify`. No auto-spawn/auto-close of a live *or* dead session — a confirmed-DEAD lead is checkpointed + paged, not auto-respawned (revisit only if a W4 residual proves it safe+needed). | b (DIRECT/DELEGATED split), j2, **operator ruling #1** |
 | D-C | **Boundary-hook injection lands on the PROVEN `decision:block`+one-shot-latch fallback; `additionalContext` is probe-gated.** The advisory-vs-block distinction the plan assumed is source-contradicted on 2.1.207 — verify before relying (h/B1). The latch (keyed on configdir\|cwd + HEAD-sha) is what makes block advisory-not-looping. | h, m (guard #1) |
 | D-D | **Supervisor = launchd `KeepAlive` daemon (5–10min sweep) + the existing 30s crash daemon; NEVER a standing Claude session.** launchd terminates the who-watches-the-watcher regress (RunAtLoad+KeepAlive); a standing session burns ~144 turns/day and recursively needs its own handoff. | b, m (cadence table) |
 | D-E | **Teardown reconciliation: in-session lead teardown = `TaskStop` (the fire's rule, a harness tool the lead has); out-of-session supervisor teardown = `it2 session close` + confirm-gone.** `TaskStop` has no shell entrypoint, so the supervisor uses the proven `close_pane` and VERIFIES the pane is gone (D5). Both honor "teardown ≠ shutdown_request" (decorative). | f, b, D5 |
@@ -83,7 +83,7 @@ one-shot-latched abstain-on-stale hook, b's bash-can't-close-a-live-pane split, 
 
 ### 3.3 `supervisor` (axis b; owner: new scripts/lead-supervisor.sh + launchd plist)
 - **Topology C**: launchd `KeepAlive`+`RunAtLoad` daemon, `while :; sweep; sleep 30`; **reuses** `lead-crash-watchdog.sh`'s registrar half (strip its per-session detached loop to registrar-only). Backstop tier = existing `team-orphan-reaper` 600s. Mutual re-bootstrap (every SessionStart re-arms the daemon; daemon re-arms sessions) closes the LaunchAgent-booted-out hole.
-- **Recovery decision table** (each state → DIRECT-shell-on-dead / DELEGATED-inject-into-live): DEAD→checkpoint-then-respawn-from `refs/wip/LAST`; STALL→`cc-notify` advice (never force-close live); LIMIT-predicted→delegate; LIMIT-actual→respawn DIFFERENT account; MODAL-teammate→auto-deny (extend team-orphan-reaper); **MODAL-lead→PAGE** (§5 operator ruling).
+- **Recovery decision table — PAGE-biased per ruling #1** (detect + preserve + page; the operator/a delegated live session recovers): DEAD→checkpoint-preserve-to `refs/wip/LAST` **then PAGE** (not auto-respawn); STALL→`cc-notify` *advice* to the live session (its own model acts; never force-close); LIMIT-predicted→`cc-notify` advice + PAGE; LIMIT-actual (dead)→checkpoint + PAGE; MODAL-teammate→auto-deny stale `permission_request` (the one bounded auto-act — extends team-orphan-reaper, effect-verified); **MODAL-lead→PAGE** (ruling #2). The only auto-*acts* left are the safe/effect-verified ones (checkpoint-preserve, stale-perm-deny); every *recovery* (respawn/close) is paged.
 - **Crash-path checkpoint gate** (the real gap): the graceful path checkpoints-before-remove; the crash path (`team-orphan-reaper archive`) does NOT — add `teammate-checkpoint.sh` on DEAD-lead per member worktree BEFORE any archive/remove (closes D1/D3).
 - Detection LOGIC lives in axis h (D1–D7); b maps state→recovery only. Reboot ⟹ hand to `resume-sessions` skill, not respawn-loop.
 
@@ -157,7 +157,16 @@ account next"`).
 
 ---
 
-## 5. Operator decisions required (genuine rulings — the batched gate for THIS track)
+## 5. Operator decisions — **RULED 2026-07-14 ~02:0x · RATIFY ALL 5** (relayed via `99261468`)
+
+**Ruling stamp (all 5 ratified):** (1) DoD = **batched + legible + park-until-gate → the supervisor
+PAGES, never auto-recovers** (stronger than the rec below: it detects + checkpoints-to-preserve +
+PAGES; the operator or a delegated *live* session performs any respawn — no auto-spawn/auto-close of a
+live *or* dead session). (2) unknown modal = **PAGE**. (3) C6 money-path = **permanently out-of-class**.
+(4) build order = **docs-first → prove-on-W4 → runtime-only-to-residual**. (5) **`CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=90`**
+on the autonomy launcher. → Boundary-hook + supervisor design UNBLOCKED under these laws.
+
+_The rulings as originally surfaced (now discharged):_
 
 1. **DoD framing** — is the target literally "zero human intervention for days," or j2's reframe
    "**batched, legible, park-until-gate**" (the operator already batches — "RATIFY ALL 7")? This
