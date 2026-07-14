@@ -96,6 +96,14 @@ one-shot-latched abstain-on-stale hook, b's bash-can't-close-a-live-pane split, 
 - **The reliable downward channel already exists, unused for lead↔teammate**: `cc-notify` submit-verified injection targets any pane by raw UUID = teammate `tmuxPaneId`. Both shipping recovery paths (crash-watchdog shutdown_request + orphan-reaper permission_response) write the DECORATIVE inbox → **reroute both onto cc-notify-to-pane**.
 - **Two-tier: NOTIFY (best-effort cc-notify) vs BIND (durable ruling file + commit-trailer `Acked-Ruling:<id>` + fail-closed merge gate)** — absence-of-ack IS the delivery-failure detector. **Respawn-at-boundary over mid-stream correction** (auto-compaction wipes composer; briefs survive as files).
 - Extend `handoff-disposition.sh --teammates` (lead's R-PING mechanical); TEAM-PING recipe in brief template; **mailbox GC** (new — unbounded today). Teardown = `it2 session close`+confirm-gone (D-E).
+- **Cross-epoch addressing (W4 datapoint, 2026-07-14):** a pane UUID is **epoch-specific** — a session's
+  pane dies on self-close; its successor gets a NEW uuid. **Never cache a pane uuid across a
+  succession.** Resolve the CURRENT role-holder at **SEND-TIME** via **role→pane indirection** — a roles
+  file updated by succession events (`role=<pane>` rewritten on each self-close), or follow the newest
+  self-close-log `successor=` chain. Safety nets that WORKED live: `cc-notify` went LOUD (mailbox-only +
+  "unreachable", never false-delivered — `98a3dd9`), and the self-close log's `successor=` gave the
+  authoritative re-address. Effect-verification CAUGHT the stale address; role-indirection PREVENTS it.
+  Feeds §8 E5 (addressing) + R6.
 
 ### 3.6 `auditability` (axis k; owner: new bin/cc-idl, cc-truth, cc-audit)
 - Three lie-classes: **T1 signal-lie** (freeze reported+truth at decision time), **T2 ledger-lie** (independent-observer + tamper-evident chain + transcript reconciliation), **T3 should-have-fired** (coverage check over telemetry series, not decisions-taken).

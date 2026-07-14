@@ -90,6 +90,12 @@ Binding corrections (must land before a merge gate) go via a **durable ruling fi
 mailbox is unreliable; auto-compaction wipes a composer instruction). Prefer **respawn-at-boundary
 with the ruling in the brief** over mid-stream correction.
 
+**Addressing (never cache a pane uuid across a succession):** resolve the CURRENT role-holder at
+SEND-TIME — role→pane indirection via a succession-maintained roles file (`role=<pane>` rewritten on
+each self-close) or the newest self-close-log `successor=` chain. A predecessor's pane is dead
+post-self-close; a cached uuid sends into the void. `cc-notify`'s LOUD-on-strand (mailbox-only +
+"unreachable", never false-delivered) is the effect-verified backstop when a stale address is used.
+
 ## §8.6 — E6 · Gate-batching manifest
 
 The operator **pre-signs ruling CLASSES at wave START** (formalizing "RATIFY ALL 7"). In-class →
@@ -118,6 +124,14 @@ Run before cutting each wave's lead — a missing box HALTS the cut (ship as
 - [ ] **E6 manifest signed** — operator pre-signed the in-class ruling set for this wave
 - [ ] **E7 worktree isolated** — this lead on its own worktree/branch
 - [ ] **E1 effort verified** — `ps | grep -- --effort` matches declared (D2 arbiter)
+- [ ] **Dispatch/seam completeness** — every registered stage / surface / handler names BOTH its
+  implementation slot AND the slot that lands its **runtime registration** (the dispatch wiring), not
+  just implementation. The **plan-layer analog of the single-owner file table**: single-owner prevents
+  file-ownership gaps; this prevents runtime-registration gaps. (W4 finding, 2026-07-14: S1–S6 stage
+  *runners* were built but never dispatch-registered — the stage slots closed before the dispatch
+  surface existed; the gap survived spec-freeze + 4 waves, caught only at the W4 driver plate-bank,
+  fixed by an operator-approved R6 +1 spawn. A registered-but-unwired surface is invisible to an
+  implementation-ownership table — only a completeness sweep over the dispatch surface catches it.)
 
 ## §8.9 — E9 · Telemetry binding + self-cost
 
