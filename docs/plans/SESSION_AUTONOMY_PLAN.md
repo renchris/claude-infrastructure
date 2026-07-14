@@ -178,6 +178,33 @@ incidents, account lockouts, iTerm2 restart)?
   (briefs/corpus use the 8-char prefix; `cc-notify` takes only {name | FULL uuid}, and the name registry is
   EMPTY — **P8 un-wired**) → two gaps composed to break a succession's most important send; failed LOUD, not
   silent. → §8 E5 now mandates FULL uuids; queued: prefix-expansion in `cc-notify` + land P8.
+- 2026-07-14 ~04:3x (track, next4) — **BIND WAS PROSE, NOT MACHINERY (`5c881c2`) + pane-id discipline
+  (`38199af`).** Orchestrator adopted BIND for load-bearing rulings and was **one step from routing a live
+  operator ruling through its "fail-closed merge gate" — which did not exist**: `Acked-Ruling` appeared only
+  in *this track's own design docs*; `team-ruling.sh`/`merge-gate.sh` absent; **zero git hooks**. The gate
+  could not fail closed because it could not fail at all. Paged → orchestrator STOPPED (*"one step from
+  D9-one-layer-up"*), then **D9-proved the interim manual gate both ways** before trusting it (negative
+  `GATE FAIL` fired; positive control exercised) — the law applied downstream by another actor within the
+  hour. **New failure class (audit §3g #5): PROSE MISTAKEN FOR MACHINERY.** §3g's verifier was code that
+  *couldn't fire*; this was a capability that existed **only as a prescription in a document read as a report
+  of the system** — and the better the doc, the more convincingly it reads as shipped. This track wrote the
+  doc *and* nearly consumed its own prescription as fact. → **R7 broadened**; blueprint §3.5 now carries a
+  "read this as a SPEC, not a report — anything without a commit sha is UNBUILT" banner. **Built (authorized
+  by orchestrator under ratified law #4; NOT the held runtime directive): `bin/cc-bind`** — issue/ack/gate/
+  selftest, deployed + symlinked. Its one invariant is §3g's direct lesson: **never exit 0 on "cannot
+  determine"** (no repo / no ruling file / bad range all exit LOUD — an indeterminate gate that passes IS the
+  bug). Shipped only after being SEEN to fire: **4 RED + 1 GREEN control**; `bind-gate-e2e.sh` tests the
+  **deployed** tool and asserts the selftest's check COUNT (*a suite that runs zero checks also reports zero
+  failures*). **Pane-id provenance (orchestrator's root-cause credit): the truncation entered at
+  DOC-AUTHORING time** — "orchestrator pane 99261468" <!-- pane-id-lint:allow: quoting the bad form --> was
+  written into the plan/proposal and every brief copied it. **The corpus IS the copy-source** → the rule
+  belongs in the doc TEMPLATES, and it cannot be prose (the author knew the full uuid and truncated anyway).
+  → `scripts/pane-id-lint.sh` (GREEN now; **RED with 14 landmines** at `82ad3cb`; it caught my own violation
+  mid-edit). **The durable rule — two shapes:** operational address → **ROLE token** (`<orchestrator>`,
+  resolved at send-time, survives the recycle); historical reference → **FULL uuid** (a past fact).
+  *Truncated is strictly worse than stale*: stale-full fails LOUD + mailboxes; truncated hard-fails exit 3,
+  unresolvable and unmailboxable. W4/W5 proposal converted to role tokens so it survives the orchestrator's
+  imminent recycle.
 - 2026-07-14 (prove-on-W4, orchestrator 1st hour) — **✅ VALUE CONFIRMED IN PRODUCTION.** cc-board
   caught the live W4 lead at **63% > §8 `boundary_recycle=60`** → succession advisory fired on the rails
   (the operator's hand-catch, now automated — audit §1 → 0). STALE renders correctly for closed

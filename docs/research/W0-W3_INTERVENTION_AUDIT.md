@@ -227,6 +227,30 @@ The four instances in §3f share one root ("a send reports success but does not 
   effect-check (a real send that prints `VERIFIED`); **(ii) the test fixture** — a synthetic fixture IS a
   report; it must carry the real artifact's **bytes**, captured from the real tool; **(iii) the green
   suite** — green is a report, and its teeth are the effect (prove red against the real bug).
+- **Instance #5 — PROSE MISTAKEN FOR MACHINERY (same D9 family, different mechanism; caught 2026-07-14,
+  fixed `5c881c2`).** Immediately after adopting BIND as the trustworthy tier for load-bearing rulings, the
+  orchestrator prepared to route a live operator ruling through its **"fail-closed merge gate"** — which
+  **did not exist**. `Acked-Ruling` appeared *only in the two design docs* (this track's own blueprint §3.5
+  and the §8 template); `scripts/team-ruling.sh` / `merge-gate.sh` were **absent**, and the repo has **zero
+  active git hooks**. The gate could not fail closed because it could not fail at all. Verified by grep
+  before the ruling was sent; the orchestrator STOPPED (*"I was one step from D9-one-layer-up"*).
+  - **The distinct lesson:** §3g's verifier was code that *could not fire*; this was **a capability that
+    existed only as a prescription in a document a reader mistook for a report of the system**. A design doc
+    describes what SHOULD exist; nothing in it distinguishes "specified" from "shipped." **The existence of a
+    check in a DOC is not evidence of its existence in the SYSTEM** — and the more carefully the doc is
+    written, the more convincingly it reads as shipped. (This track wrote the doc *and* nearly consumed its
+    own prescription as fact — a self-inflicted case, which is why it belongs here.)
+  - **Same detector, though:** run it and watch it fire. The orchestrator then D9-proved the interim manual
+    gate **both ways** before trusting it (negative: `GATE FAIL` fired on `RULING-NEVER-ACKED-0000`; positive
+    control: the pass path exercised on a real `Ratified-By` trailer) — the law being applied downstream, by
+    a different actor, within the hour.
+  - **Fix: `bin/cc-bind` (`5c881c2`)** — `issue` (durable ruling file) · `ack` (the `Acked-Ruling:` trailer) ·
+    `gate` (**fail-closed**: exit 1 unless the id is acked in the range) · `selftest` (the D9 proof). Its one
+    invariant is the direct lesson of §3g: **it never exits 0 on "cannot determine"** — not-a-git-repo, no
+    durable ruling file, an unresolvable range all exit LOUD, because an indeterminate gate that passes *is*
+    the bug. Shipped only after being SEEN to fire: 4 RED (never-issued · issued-but-UNACKED · unresolvable
+    range · ack-outside-range) + 1 GREEN positive control. Its E2E exercises the **deployed** tool and asserts
+    the selftest's check COUNT — *a suite that runs zero checks also reports zero failures.*
 - **Adjacent trap that hid it during debugging** (durable, cost ~20 min): at an interactive prompt
   `grep` may be a **shell function/alias** (here → `ugrep`), which **does** match the ❯ in a NUL-bearing
   file. Every "it works standalone" check was therefore testing a *different binary* than the `#!/bin/bash`
@@ -268,7 +292,7 @@ From doc_classifier `docs/BUILD_LOG.md:30-37` ("When to clear / hand off"):
 | R4 | **No session-orchestration LAYER in the plan template** | lead account/model/context/succession improvised live | open | e (C00 §8 template + filled W4/W5) |
 | R5 | Designed gates unbatched | each ratification/ship/go a separate interrupt | open | c (pre-delegated ruling classes) |
 | R6 | Downward comms unreliable mid-stream; liveness lies | **4 comms-reliability instances/24h** (§3f, §3g): composer-strand · shutdown_request zombies · **GO-deafness at spawn (W4 live)** · **the submit-VERIFIER itself was inert (§3g)**; plus idle-hook+ps both lied | partial → **corrected**: `98a3dd9` was **INERT** (never detected a strand; every send read "UNVERIFIED"); actually FIXED `3b12107` (`LC_ALL=C grep`), effect-checked live | b/f (pull-based liveness, effect-verified GO, respawn-at-boundary-with-GO-in-brief, TaskStop/it2 teardown), supervisor |
-| R7 | **A "FIXED" claim trusted without an effect-check; a green suite trusted as evidence** | `98a3dd9` recorded as the strand fix in the audit + project memory for ~24h while unreachable; its 15/15 suite passed over an inert primitive (3 compounding harness defects, §3g) | **OPEN** (discipline + axis-i harness laws; D9) | i (binary fixtures from the real tool, trapping assertions, red-against-the-bug proof), k (independent-observer) |
+| R7 | **A capability believed on the strength of a REPORT rather than a firing** — a "FIXED" claim, a green suite, or **a design doc read as a description of the system** | (a) `98a3dd9` recorded as the strand fix for ~24h while unreachable, its 15/15 suite green over an inert primitive (§3g); (b) BIND's "fail-closed merge gate" existed **only in this track's own design docs** — zero scripts, zero git hooks — and the orchestrator was one step from routing a live operator ruling through it (§3g #5) | **OPEN** (discipline + axis-i harness laws; **D9**). Partial: `5c881c2` ships the BIND gate for real, D9-proven | i (binary fixtures from the real tool, trapping assertions, red-against-the-bug proof), k (independent-observer), f (cc-bind) |
 
 **R4 is the structural one the operator named directly:** *"is there room for improvement on how we
 create our multi-layer end-to-end implementation plans, and not just single Agent Team plans which
