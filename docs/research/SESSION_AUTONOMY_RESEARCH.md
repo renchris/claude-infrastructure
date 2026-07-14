@@ -103,7 +103,12 @@ one-shot-latched abstain-on-stale hook, b's bash-can't-close-a-live-pane split, 
 - **5-gate discriminator**: `G-cite` (grep BUILD_LOG citation — catches born-at-exit) + `G-shape` (model: accept/reject not choose-among) + `G-reversible` (model+tag) + `G-surface` (grep `GPL|license|money|schema|auth|migration|DROP|timeout` — catches escalation) + `G-manifest` (class∈manifest ∧ wave-id current). **G-cite/G-surface are un-fakeable greps.**
 - **P1 registry** (docs) → **P2 wave-start manifest** (`scripts/gate-manifest.sh`, wave-id+expiry) → **P3 classifier** (`scripts/gate-classify.sh`, mirrors handoff-disposition split) → **P4 auto-stamp** (`Ratified-By: operator (pre-signed class Cn, manifest…)` trailer — the ledger j1 #7 demanded) → **P5 batched out-of-class gate** (ONE 6-slot message from 31bcd087) → **P6 /ship backstop** (`git log --grep 'pre-signed class' <last-ship>..HEAD` for veto) → **P7 per-wave expiry** (stale W3 manifest at W4 → all out-of-class).
 
-### 3.5 `comms-hardening` (axis f; owner: new scripts/team-ruling.sh, merge-gate, team-teardown)
+### 3.5 `comms-hardening` (axis f; owner: **`bin/cc-bind` — BUILT `5c881c2`** · merge-gate = `cc-bind gate` · team-teardown still unbuilt)
+> ⚠️ **Read this section as a SPEC, not as a report of what exists.** On 2026-07-14 the BIND "fail-closed
+> merge gate" described below was believed shipped and was **prose only** — no script, no hook — and a live
+> operator ruling was about to ride it (audit §3g #5). Anything here without a commit sha is UNBUILT.
+> BUILT: `cc-bind` (issue/ack/gate/selftest, `5c881c2`). UNBUILT: mailbox GC, `team-teardown`,
+> `handoff-disposition.sh --teammates`.
 - **The reliable downward channel already exists, unused for lead↔teammate**: `cc-notify` submit-verified injection targets any pane by raw UUID = teammate `tmuxPaneId`. Both shipping recovery paths (crash-watchdog shutdown_request + orphan-reaper permission_response) write the DECORATIVE inbox → **reroute both onto cc-notify-to-pane**.
 - **Two-tier: NOTIFY (best-effort cc-notify) vs BIND (durable ruling file + commit-trailer `Acked-Ruling:<id>` + fail-closed merge gate)** — absence-of-ack IS the delivery-failure detector. **Respawn-at-boundary over mid-stream correction** (auto-compaction wipes composer; briefs survive as files).
 - Extend `handoff-disposition.sh --teammates` (lead's R-PING mechanical); TEAM-PING recipe in brief template; **mailbox GC** (new — unbounded today). Teardown = `it2 session close`+confirm-gone (D-E).
