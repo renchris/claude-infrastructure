@@ -112,6 +112,18 @@ re-run the scheduler for the *next* spawn iff (a) a model window crosses `window
 or (b) any account crosses its headroom floor. **Manual mode:** rank once (`claude-accounts --rank`),
 assign explicitly round-robin ≤2/account, re-check before each new wave.
 
+> **E4 routing datapoints (added 2026-07-14 — desk E4 ruling; live-verified next4 Fable **92%** via `cc-board`;
+> the relay's 91% was `1336049`'s commit-time snapshot — route from the LIVE read, never a doc):**
+> - **No succession while child panes live.** The pane-kill hazard (§8.2/§8.5 — `self-close` SIGKILLs the
+>   lead's process group) generalizes from **spawn-order to ROUTING-order**: recycling while teammates are live
+>   **kills them and forfeits the quota already spent on them**, so pane-kill *dominates quota guarantees*.
+>   Defer the succession decision to the **both-teammates-closed boundary**.
+> - **Numeric succession rule** at that boundary: **Fable-quota ≥96% OR >2 Fable-heavy turns remaining →
+>   succeed to a fresh account** (next3, confirmed fresh via a LIVE `claude-accounts --rank`).
+> - **Cliff protocol** (Fable quota → 100%): **STOP + disk-truth audit + `limit-recover`** — **NEVER silently
+>   down-tier the gate.** A silent Fable→Opus drop mid-verify is invisible quality degradation (the fail-loud
+>   law applied to routing); a tier change must be announced + ruled, never absorbed.
+
 ## §8.5 — E5 · Back-channel topology
 
 | Edge | Primitive | Notes |
