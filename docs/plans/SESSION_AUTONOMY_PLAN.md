@@ -1,0 +1,106 @@
+# SESSION AUTONOMY — platform-scale orchestration without unplanned human intervention
+
+**Scope (frozen 2026-07-14):** make the multi-wave, multi-session build pattern
+(doc_classifier-class: N waves × M teammate-slots × 4 accounts × model windows) run for DAYS with
+the human touching ONLY designed gates (ratifications, /ship, wave-exit sign-offs) — zero
+unplanned prods, restores, stall rescues, or manual /context + /accounts relays. Operator mandate:
+100x research/planning effort for 1% implementation improvement; PERFECTION over speed; W4-W5 of
+doc_classifier are live now and benefit immediately, then this becomes the standing pattern.
+
+## Phase 0 — Agent Team Orchestration (shape now; the track lead FINALIZES at research-convergence)
+
+Research phase = background subagents ONLY (read-only fan-out per `~/.claude/rules/research-subagents.md`).
+Build phase = **Agent Teams** (the global default). The roster below is the SHAPE — finalize names,
+≤150-line briefs, pre-greped line ranges, and spawn waves as the FIRST act of the build phase, per
+the pre-spawn checklist in `~/.claude/rules/agent-teams.md`.
+
+- **Roster shape (≤6 live):** `telemetry-v2` (statusline export + cc-context hardening) ·
+  `boundary-hook` (advisory Stop-hook) · `supervisor` (watchdog extension + failure detectors) ·
+  `e2e-harness` (per-primitive synthetic-pane suites) · `template-author` (C00 §8 template + filled
+  W4/W5 instance — docs only). Lead lands glue and reviews merges serially.
+- **Dependency graph:** telemetry-v2 → boundary-hook → supervisor (detectors consume telemetry);
+  e2e-harness runs parallel to all (consumes each primitive as it lands); template-author independent.
+- **Worktrees:** `/tmp/wt-sa-<member>` off this repo's live branch; single-owner per file:
+  `statusline.sh` + `bin/cc-context` = telemetry-v2 · `hooks/**` = boundary-hook ·
+  `scripts/lead-*` = supervisor · `scripts/*-e2e.sh` = e2e-harness · `docs/**` = template-author.
+- **Spawn waves:** W-a = telemetry-v2 + template-author + e2e-harness · W-b = boundary-hook (after
+  telemetry-v2 merges) · W-c = supervisor (after boundary-hook merges).
+
+## Why now (operator observation, 2026-07-14 ~00:30)
+
+W0-W3 (~24h) completed with far more human-in-the-loop than the 100th-percentile bar allows: the
+operator hand-ran `/context` and `/accounts` between pause-points to tell sessions when to stay /
+recycle / hand off, prodded stalled sessions, and manually restored work. Root causes split into
+(a) five now-fixed mechanical bugs (see Evidence 2), (b) the missing self-telemetry loop (fixed
+tonight, v1 — Evidence 2 last item), (c) NO session-orchestration layer in the plan template
+(C00 specifies the teammate layer rigorously; the session/lead layer was improvised live), and
+(d) designed gates arriving unbatched. This track closes (b) hardening + (c) + (d) and builds the
+supervisor that makes (a)-class regressions self-announcing.
+
+## Evidence base (read FIRST, in order)
+
+1. doc_classifier project memory (`~/.claude-quaternary/projects/-Users-chrisren-Development-doc-classifier/memory/`):
+   `handoff-succession-legibility`, `handoff-recycle-watcher-race`, `statusline-context-gauge-1m`,
+   `agent-teammate-spawn-2-1-183`, `lr-audit-stale-residue`, `feedback-handoff-paste-one-sentence`.
+2. Tonight's fixes in THIS repo: `dd40eca` (setsid watchers), `98a3dd9` (cc-notify submit-verify),
+   `9918ff5` (self-close succession contract + `scripts/handoff-selfclose-e2e.sh`), `7674496`
+   (statusline context gauge window-aware — a 2.3× lie drove a premature lead relief), `74d267f`
+   (statusline telemetry export + `bin/cc-context` — the /context gap, v1).
+3. doc_classifier `docs/BUILD_LOG.md`: § "When to clear / hand off" (the boundary rule this track
+   makes machine-checkable), § Model routing, the W2/W3 MAILBOX POSTSCRIPT teardown lessons, wave
+   exit records. READ-ONLY repo — see Constraints.
+4. **W0-W3 operator-intervention audit** (the ground truth this track optimizes): mine
+   `~/.claude-quaternary/projects/-Users-chrisren-Development-doc-classifier/*.jsonl` (2026-07-13
+   01:44 → 2026-07-14 00:12; ~15 sessions) and classify EVERY human/operator message:
+   designed-gate ruling · unplanned rescue · manual relay ( /context, /accounts, pane reads) ·
+   conversation. Quantify per class; each unplanned-rescue class gets a detector+recovery in Build.
+5. This repo: `docs/plans/TWO_WAY_SESSION_COMMS_PLAN.md`, `docs/research/HANDOFF_BACKCHANNEL_2026-07-10.md`,
+   `commands/handoff.md` (the succession rails — current as of tonight), `hooks/` + `~/.claude/hooks/`
+   (lead-crash-watchdog.sh runs today; teammate lifecycle hooks are prior art).
+
+## Research phase (decompose per `~/.claude/rules/research-subagents.md`; expect N≈10-12; quota-aware — check `claude-accounts --rank` before waves)
+
+Minimum axes: (a) **telemetry loop hardening** — atomic writes, stale-file sweep, self-resolution
+(session→own id), per-account quota join (cc-context × claude-accounts in one read); (b)
+**supervisor topology** — extend lead-crash-watchdog vs cron/Monitor vs standing orchestrator
+session: stall/dead/limit/modal detection + SANCTIONED recovery only (succession rails), and who
+watches the watcher; (c) **designed-gate batching** — formalize tonight's "ratify all" as
+pre-delegated standing rulings: operator pre-signs ruling CLASSES at wave start; STOP-ASK only
+out-of-class; (d) **quota-aware wave scheduling** — wave DAG × account headroom × model-window
+edges (Fable close mid-wave) → lead/teammate placement plans; (e) **plan-template layer** — draft
+the C00-class "§8 session-orchestration layer" template: per-wave lead account/model/effort,
+context budget, succession triggers (telemetry thresholds AT committed boundaries), back-channel
+topology, telemetry contract, gate batching; PLUS a filled W4/W5 instance as a PROPOSAL;
+(f) **2-way comms** — ack semantics, mailbox sweep discipline, ping taxonomies (the R-PING loop);
+(g) **lead context-budget engineering** — what W0-W3 leads actually spent context on (audit the
+transcripts); read-order compression; ledger-first discipline; when 1M windows change the math;
+(h) **failure taxonomy → detectors** — every W0-W3 unplanned-rescue class from Evidence 4 gets a
+mechanical detector and either auto-recovery or a loud page; (i) **validation harness** — an E2E
+per autonomy primitive (synthetic panes, like handoff-selfclose-e2e.sh); (j) **adversarial** —
+where does days-long autonomy still break (auto-compaction mid-wave, CC version bumps, API
+incidents, account lockouts, iTerm2 restart)?
+
+## Build phase (after research converges; commits LOCAL to this repo)
+
+- Telemetry v2 per (a); boundary hook: advisory Stop-hook that, when a session's OWN telemetry
+  crosses its plan-declared threshold AND the repo sits at a committed/green boundary, injects
+  "execute the /handoff rails now" (ADVISORY — blocking Stop hooks are a banned anti-pattern).
+- Supervisor per (b) with detectors from (h); recovery strictly via the succession rails.
+- Plan-template §8 + the filled W4/W5 instance → `docs/proposals/` in THIS repo (hand to the
+  operator/orchestrator; NEVER write doc_classifier).
+- E2E per primitive; all green before any is declared done.
+
+## Constraints (HARD)
+
+- **NEVER write `/Users/chrisren/Development/doc_classifier`** — its W4 lead owns it. Evidence
+  mining there is read-only.
+- **NEVER push** any repo; commits stay local. Operator ships explicitly.
+- Succession/teardown ONLY via `handoff-fire.sh` rails (succession statement mandatory — bare
+  self-close exits 2); cross-session sends ONLY via `cc-notify`; teardown of teammates = TaskStop.
+- Designed operator gates are FEATURES: the target is zero UNPLANNED intervention, with designed
+  gates batched and crisp — never silently absorbed.
+
+## Status log
+
+- 2026-07-14 00:3x — plan created by the orchestrator session (a28944df, doc_classifier pane
+  99261468); telemetry v1 + cc-context landed (`74d267f`); deep track fired on next2 (Opus @ max).
