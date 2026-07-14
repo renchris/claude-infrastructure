@@ -449,6 +449,22 @@ sitting **inside a program's own exit criterion**. Two ways it extends the law:
   of it** — the adjudication is a report, and it was wrong exactly where the lead was least sure. ⇒ **Verify from
   the uncertainty, not around it**: a lead's flagged doubt is the highest-yield seed for an adversarial axis.
 
+**The assertion rots toward its grep — review criteria are not exempt (2026-07-14, S-3 → S-3b; `ce3c9e8`).**
+The sharpest turn of the law yet, because the victim was a *criterion*, not a check. premortem-gate's **S-3** —
+a rule **proven by a live incident** (the D10 stall-page cycle, §3h) and **already registered by the desk** —
+still PASSED a supervisor that pages then reaps on deadline-silence, because its ASSERTION was `grep -qE 'MODAL'`:
+it proved the supervisor *pages*, not that the page *re-observes*. The desk's naming is the durable law:
+**review criteria rot toward their GREP the same way checks rot toward their SPINE — the incident→assertion
+translation is where fidelity is lost.** A criterion can be correct in prose, registered, and incident-backed,
+and STILL under-specify the protocol in the one place that executes. The fix has the same shape as every other
+row here — make the assertion *observe the actual property*: S-3b (`s3b-lint.sh`) reds a silence-reaps straw
+supervisor, so it can watch the real failure fire, not a proxy token. And it had to guard *itself* against the
+same rot: s3b-lint strips comments (or a `# never reap on silence` remark reads as code — reaper-horizon-lint's
+own shipped bug) and **declares its proxy limits** — a check built to catch grep-rot must not rot toward its own
+grep. *(Process note, itself a datapoint: the keeper FLAGGED this rather than editing the desk-registered gate;
+the desk RULED it registered as S-3b and delegated implementation — registration is the authority's, the
+assertion is the implementer's. The split that the authority-ceiling lesson (§2b) predicts.)*
+
 This generalizes §1's method (which counted hand-run `/context` relays) into a **blindness detector for
 the whole layer**, and it is nearly free: the manual compensations are already in the transcripts. It
 also explains why the §1 count *undercounted* — a hand-capture, a fallback sweep, and a blob-verify never
