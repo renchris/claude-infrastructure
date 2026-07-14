@@ -82,6 +82,13 @@ incidents, account lockouts, iTerm2 restart)?
 
 ## Build phase (after research converges; commits LOCAL to this repo)
 
+> **CONVERGED — see `docs/research/SESSION_AUTONOMY_RESEARCH.md`:** §3 per-primitive buildable spec ·
+> §4 revised **docs-first Phase 0** (Wave A safe primitives → prove-on-W4 → Wave B/C runtime) · §5 the
+> 5 operator decisions · §6 risk register · §7 build blockers. The original bullets below are the
+> pre-research shape; the blueprint supersedes sequencing — **template-author is DONE (proposals
+> `da141f3`); supervisor + boundary-hook are HELD pending the operator DoD/build-order ruling; the
+> ruling-independent telemetry-v2 proceeds first.**
+
 - Telemetry v2 per (a); boundary hook: advisory Stop-hook that, when a session's OWN telemetry
   crosses its plan-declared threshold AND the repo sits at a committed/green boundary, injects
   "execute the /handoff rails now" (ADVISORY — blocking Stop hooks are a banned anti-pattern).
@@ -116,3 +123,14 @@ incidents, account lockouts, iTerm2 restart)?
   autonomy-layer self-cost). 12 Opus workers (a-m) + 2 Fable adversarial (j1 red-team, j2
   hostile-reviewer), all read-only background. d→e dependency explicit; h owns the boundary hook.
   Quota wide open (all accounts <0.2%). Originator pinged (99261468). Awaiting returns → converge.
+- 2026-07-14 (track, next2) — **RESEARCH CONVERGED (14/14) + PROPOSALS DELIVERED.** Blueprint
+  `581b75a` (`docs/research/SESSION_AUTONOMY_RESEARCH.md`: 5 architecture invariants, 7 design
+  decisions, per-primitive spec, revised docs-first Phase 0, j1 risk register, 6 build blockers).
+  Proposals `da141f3` (`docs/proposals/C00-SECTION-8-TEMPLATE.md` + `W4-W5-SESSION-ORCHESTRATION.md`
+  — **applicable to live W4/W5 NOW**, manual-mode). **Frontier adversarial finding (j1+j2):** naive
+  autonomous actors keyed off the audit's own lying D1-D7 signals can CAUSE a W0-class incident; the
+  supervisor has the least evidence of need (post-fixes, n=1 unplanned residual). **Design law:**
+  fail-loud · park-and-page · effect-verified · plan-time-schedule primary. **Build law:** docs-first
+  → prove-on-W4 → runtime-only-to-residual. **5 operator decisions surfaced (blueprint §5)** — batched
+  gate pinged to 99261468. Proceeding on the ruling-independent safe primitive (telemetry-v2);
+  HOLDING boundary-hook + supervisor for the DoD/build-order ruling (blueprint §5 #1/#4).
