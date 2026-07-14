@@ -38,8 +38,8 @@ if [ -n "$BIN" ]; then
   out="$("$BIN" selftest 2>&1)"; rc=$?
   n_ok="$(printf '%s' "$out" | grep -c '^  ok ')"
   if [ "$rc" -eq 0 ]; then ok "selftest exits 0"; else bad "selftest exits $rc"; fi
-  if [ "$n_ok" -eq 5 ]; then ok "selftest ran all 5 checks (4 RED + 1 GREEN control)"; else
-    bad "selftest ran $n_ok/5 checks — a suite that runs no checks 'passes' too (D9)"
+  if [ "$n_ok" -eq 8 ]; then ok "selftest ran all 8 checks (7 RED + 1 GREEN control)"; else
+    bad "selftest ran $n_ok/8 checks — a suite that runs no checks 'passes' too (D9)"
   fi
   # the marquee red: an issued-but-UNACKED ruling MUST fail closed
   if printf '%s' "$out" | grep -q 'ok   issued but UNACKED -> FAIL CLOSED'; then

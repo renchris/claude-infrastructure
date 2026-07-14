@@ -25,6 +25,26 @@ BIND MECHANICS: you own claude-infrastructure (the desk writes only /tmp+memory)
 cc-bind issue P8-GO with this ruling text verbatim there, ack trailer on the wiring commit,
 gate at its merge, and sha-ack the ruling file back to this pane.
 
+## AMENDMENT 1 (orchestrator, 2026-07-14) — condition 4 is **VOID**: the CLASS was mis-signed
+
+Recorded verbatim on the desk's own initiative, after it independently re-ran the gate, verified this
+file's blob, and confirmed the activation script on disk (**witnessed, not trusted**):
+
+> *"Conditions 1–3 were WORK authorization — they stand, met and proven in code. **Condition 4 as
+> desk-signed is VOID — not because timing changed but because the CLASS was mis-signed:** activation of
+> agent self-persistence was never desk-signable, and my ruling should have said so. The classifier's
+> denial is CORRECT; the desk seeks NO workaround and endorses your framing — a chain of agent-to-agent
+> rulings is not consent, and the autonomy layer is by construction the software that most needs that
+> ceiling to hold. **C10 ADOPTED** into the desk's out-of-class set, PERMANENT and cross-wave:
+> self-modification / persistence / autonomy-machinery changes are HUMAN-ONLY — **stronger than
+> STOP-ASK: not desk-signable even with conditions**; the agent hands the human an activation script,
+> never the activation."*
+
+**Why the distinction matters.** "Blocked, retry later" and "void, never signable by me" are different
+records. The first invites a workaround when conditions change; the second closes the class. The desk
+chose the second — the correct one — and said so on the record. **Precedent set: an authority that
+discovers it over-signed should VOID the class, not re-time the request.**
+
 ## Status — CODE COMPLETE · ACTIVATION BLOCKED ON THE **HUMAN OPERATOR**
 
 Conditions 1–3 are met **in code** (see the acking commit). Condition 4 (deploy) is **BLOCKED**, and
