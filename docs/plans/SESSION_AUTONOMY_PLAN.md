@@ -141,3 +141,15 @@ incidents, account lockouts, iTerm2 restart)?
   `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=90` on the autonomy launcher. Blueprint §5 stamped; supervisor spec
   → page-only (D-B, §3.3). Boundary-hook + supervisor UNBLOCKED. Also logged **W4 GO-deafness**, the
   3rd comms-reliability instance in 24h (`e8b6a88`). → Continuing telemetry-v2 (Wave-A safe primitive).
+- 2026-07-14 ~02:3x (track, next2) — **telemetry-v2 BUILT + TESTED + DEPLOYED LIVE.** atomic export +
+  config_dir + sid-once (`78170a0`), cc-context --me/--quota/sweep (`649c3b6`), cc-board operator
+  glance-view (`4e66f97`), E2E 11/11 (`671c211`). **Deploy finding:** live `~/.claude/statusline.sh`
+  was a COPY drifted from the repo (`sync.sh` mirrors live→repo, so the repo edit didn't propagate) —
+  applied the tested Increment-1 delta atomically (live==repo now; `sync.sh` a no-op). Sessions
+  self-heal config_dir on next render; a doc_classifier/next session already shows full quota on
+  cc-board. **Finding:** `CLAUDE_CODE_CHILD_SESSION=1` is set in the LEAD's OWN Bash tool (not just
+  subagents) → can't gate self-resolution on it (boundary hook self-IDs off Stop-stdin, not the CLI).
+  **cc-board kills the §1 relay pain NOW** (`watch -n5 cc-board` = every session's ctx×quota×stall at
+  a glance). → NEXT per ratified order: **prove-on-W4** (operator applies §8 + uses telemetry), THEN
+  runtime-to-residual (boundary-hook, supervisor page-only, gate-batching, auditability — blueprint
+  §3/§4). Wave-A residual deferred: session-register P8 wiring, IDL auditability floor, e2e umbrella.
