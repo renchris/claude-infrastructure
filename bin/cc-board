@@ -67,6 +67,34 @@ for f in $(ls -t "$TDIR"/*.json 2>/dev/null); do
   printf "%-9s %-5s %-5s %-6s %-4s %-4s %-6s %-7s %s\n" \
     "${sid:0:8}" "$astr" "${used}%" "${acct:-?}" "${a5}%" "${awk_}%" "${afb}%" "$state" "$cwd"
 done
+# --- P8 JOIN: registry x telemetry -> make the SILENT ABSENCE loud -----------------------------
+# cc-board's spine is the telemetry FILES, so a pane that never rendered has no row at all: ABSENT,
+# not STALE — and absence is silent. The registry (SessionStart hook) exists BEFORE the first render,
+# so joining it on session_id surfaces exactly the sessions the telemetry spine cannot see:
+#   registered + no telemetry + pid DEAD   -> DIED-UNRENDERED  (spawn death — D8 trigger 1)
+#   registered + no telemetry + pid ALIVE  -> NO-RENDER?       (up, but never rendered: hung/GO-deaf)
+# GRACE: a session that registered seconds ago has simply not rendered YET — flagging it would be a
+# false positive on every single startup, which is how a detector earns being ignored.
+REG_DIR="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"
+GRACE_S="${CC_BOARD_GRACE_S:-120}"
+if [ -d "$REG_DIR" ]; then
+  for rf in "$REG_DIR"/*.json; do
+    [ -e "$rf" ] || continue
+    IFS=$'\037' read -r rsid rname rpid rstart rcwd < <(jq -r \
+      '[(.session_id//""),(.name//"?"),(.pid//""),((.startedAt//0)/1000|floor),(.cwd//"?")]|map(tostring)|join("\u001f")' \
+      "$rf" 2>/dev/null) || continue
+    [ -n "$rsid" ] || continue                       # legacy row (pre-join-key) — cannot join
+    [ -f "$TDIR/$rsid.json" ] && continue            # it HAS rendered -> already a row above
+    case "$rpid" in ''|*[!0-9]*) rpid="" ;; esac
+    ragen=$(( now - ${rstart:-0} ))
+    [ "${rstart:-0}" -gt 0 ] && [ "$ragen" -lt "$GRACE_S" ] && continue   # still starting up
+    if [ -n "$rpid" ] && ! kill -0 "$rpid" 2>/dev/null; then rstate="DIED-UNRENDERED"; else rstate="NO-RENDER?"; fi
+    if   [ "$ragen" -lt 7200 ]; then rastr="$((ragen/60))m"; else rastr="$((ragen/3600))h"; fi
+    printf "%-9s %-5s %-5s %-6s %-4s %-4s %-6s %-7s %s\n" \
+      "${rsid:0:8}" "$rastr" "--" "?" "?%" "?%" "?%" "$rstate" "$rcwd ($rname)"
+  done
+fi
+
 if [ -n "$ACCTS_JSON" ]; then
   nxt=$(claude-accounts --rank general 2>/dev/null | head -3 | awk '{printf "%s ", $1}')
   [ -n "$nxt" ] && echo "── place next → ${nxt}──"
