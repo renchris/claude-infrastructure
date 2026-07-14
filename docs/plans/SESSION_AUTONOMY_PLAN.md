@@ -317,9 +317,9 @@ incidents, account lockouts, iTerm2 restart)?
   Keep parked (no push); awaiting the W4 succession outcome.
 - 2026-07-14 ~07:4x (track, **next3 keeper-successor #2**; predecessor next4 self-closed at its §8 boundary
   ~60%, **recycle-in-place** → pane uuid `8BD76049-AC98-4C4F-B191-0FFFBE2E4CCD` preserved, new session, the
-  predecessor row reads **DEAD** pid-verified — the tri-state detector on its own author) — **PROVE-ON-W4: two
-  routine datapoint-relays VERIFIED then CAPTURED (verify, never transcribe — both were subtly imprecise on
-  inspection).** Witnessed all 3 instruments UNPIPED before trusting (premortem-gate exit 1 · cc-bind selftest
+  predecessor row reads **DEAD** pid-verified — the tri-state detector on its own author) — **PROVE-ON-W4: three
+  routine datapoint-relays VERIFIED then CAPTURED (verify, never transcribe — two of the three were subtly
+  imprecise on inspection; the third verified clean).** Witnessed all 3 instruments UNPIPED before trusting (premortem-gate exit 1 · cc-bind selftest
   **8/8** content-sha era, not the stale 5/5 · reaper-horizon-lint clean). Live-read correction parked
   **39≠38** → desk fixed the **CLASS** (the wake-up batch now embeds `git rev-list --count`; a cached count is
   a tiny Invariant-7 instance). **Captured LOCAL:** (1) `0675864` — **D8 breaker + LEAD-SERIAL escape hatch
@@ -331,6 +331,12 @@ incidents, account lockouts, iTerm2 restart)?
   BOUNDARY"** + §8.5 **pgid-SIGKILL mechanism** (`handoff-fire.sh:946`; setsid survives, so the field shorthand
   "kills child panes" is imprecise but recycle-first is safe either way) + D8 **budget PERSISTS across
   succession** + D10 **residual: the effect-probe discriminates IDLE but NOT mid-turn hangs → empirical
-  confirmation of premortem-gate S-3**. **OPEN watch:** E4/W5 (17:00 PDT Fable-close → W5 lead likely
+  confirmation of premortem-gate S-3**. (3) `f8512e8` — **blind-check law at SCALE**: `wf_b776d7c1` (12-axis
+  adversarial verify) returned **49 CONFIRMED on a 3,162/2-GREEN tree** → §3i **instance #6** (an ARMED gate
+  with DEAD trigger globs — the FIRST blind-check with no human-by-hand signature, so it needs the mechanical
+  legs: ship-gate `abstained==100%` alarm + periodic adversarial derivation against the ARTIFACT) + D9 arm-time
+  glob-nonempty detector + E6 verify-findings disposition (closed-slot respawn = roster = operator-only). Bonus:
+  a B07 axis seeded from the lead's *uncertainty* partially REFUTED the lead's own adjudication — verify FROM
+  the doubt. **OPEN watch:** E4/W5 (17:00 PDT Fable-close → W5 lead likely
   Opus@max). Runtime phase still **HELD** (premortem-gate RED by design — 5 NOT BUILT). Self ample headroom on
   next3.
