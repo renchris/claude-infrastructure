@@ -69,9 +69,11 @@ fi
 
 if [ ! -f "$SUP" ]; then
   todo "S-3" "NOT BUILT — Criterion: the supervisor cannot see in-session state AT ALL (bash, out-of-session): modals, composer, mid-turn reasoning. This is STRUCTURAL blindness, not a policy choice — a structural blindness cannot be fixed by a better rule. It must PAGE (ruling #2), and must declare the blindness rather than paper over it."
+  todo "S-3b" "NOT BUILT — Criterion (desk-registered 2026-07-14 after the FIRST live stall-page cycle, audit §3h): the supervisor's page path MUST encode deadline→RE-OBSERVATION — the disposition branch reachable ONLY through a fresh effects-dark re-read, NEVER from deadline-silence alone (reply-compliance is not a liveness signal; a busy lead ignores pages). RED-provable NOW: scripts/s3b-lint.sh reds a silence-reaps straw-supervisor (./scripts/s3b-lint.sh --selftest ⇒ 3/3)."
   todo "S-4" "NOT BUILT — Criterion: the supervisor MUST log every sweep (a heartbeat outcome record). A silently-crashed daemon is otherwise indistinguishable from a quiet system. This answers 'who watches the watcher' mechanically: THE WATCHER'S HEARTBEAT IS AN OUTCOME RECORD, AND ITS ABSENCE IS THE ALARM."
 else
   grep -qE 'MODAL|modal' "$SUP" && ok "S-3" "in-session blindness declared; modal ⇒ PAGE" || bad "S-3" "structural in-session blindness not declared"
+  ./scripts/s3b-lint.sh "$SUP" >/dev/null 2>&1 && ok "S-3b" "page-deadline gates on a re-observe re-read, not silence (scripts/s3b-lint.sh)" || bad "S-3b" "disposition reachable from deadline-silence alone — it would reap a healthy long turn (scripts/s3b-lint.sh)"
   grep -qE 'heartbeat|sweep_log|IDL|idl' "$SUP" && ok "S-4" "sweeps emit a heartbeat/outcome record" || bad "S-4" "no sweep heartbeat — a crashed daemon looks like a quiet system"
 fi
 
