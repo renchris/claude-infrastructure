@@ -377,12 +377,17 @@ Pass the UUID EXPLICITLY even though it defaults: the disposition helper attribu
 this session by matching the uuid on the process cmdline — a bare watcher is invisible to it. The
 three companion CLIs (in `~/.claude/bin/`, on PATH):
 
-- **`cc-notify <name|uuid|--self> "<msg>"`** — the general any-session→any-session primitive. Resolves a
-  friendly name (via the session registry / `cc-sessions`) or a raw pane UUID, types the message into the
-  target's composer, and submits with **`\r` — NOT `\n`** (Claude Code's Ink composer binds Enter to CR
-  only; a `\n` is a no-op submit). Lands as a real user message: WAKES an idle session, QUEUES into a busy
-  one. ALWAYS also records `~/.claude/mailbox/<uuid>.md` — so a closed/recycled pane degrades to
-  mailbox-only (exit 0), never a hard fail. `--mailbox-only` skips injection; `--from <name>` attributes.
+- **`cc-notify <name|uuid|--self> "<msg>"`** — the general any-session→any-session primitive, and the
+  ONLY sanctioned send path (⚠ never raw `osascript write text` for cross-session sends — its submit
+  newline is redraw-swallowed ~1-in-6 and nothing notices; a live countermand sat stranded 20 min on
+  2026-07-13). Resolves a friendly name (via the session registry / `cc-sessions`) or a raw pane UUID,
+  types the message into the target's composer, submits with **`\r` — NOT `\n`** (Claude Code's Ink
+  composer binds Enter to CR only; a `\n` is a no-op submit), then **VERIFIES the submit** (hardened
+  2026-07-13, same confirm-the-effect pattern as the recycle watcher): captures the pane, and while the
+  message still sits at the composer `❯`, re-sends CR (2 retries) — a persistent strand exits **4** with
+  a loud message, never a false "delivered". Lands as a real user message: WAKES an idle session, QUEUES
+  into a busy one. ALWAYS also records `~/.claude/mailbox/<uuid>.md` — so a closed/recycled pane degrades
+  to mailbox-only (exit 0), never a hard fail. `--mailbox-only` skips injection; `--from <name>` attributes.
 - **`cc-await-ping [<uuid>]`** — the modal-safe PULL complement. Launch via `Bash(run_in_background)`
   before going idle after a `--notify-back` fire; it blocks on your mailbox and exits when a ping lands, so
   the harness's task-completion notification re-invokes you even if the peer's composer injection mislanded
