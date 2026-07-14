@@ -340,3 +340,23 @@ incidents, account lockouts, iTerm2 restart)?
   the doubt. **OPEN watch:** E4/W5 (17:00 PDT Fable-close → W5 lead likely
   Opus@max). Runtime phase still **HELD** (premortem-gate RED by design — 5 NOT BUILT). Self ample headroom on
   next3.
+- 2026-07-14 ~08:xx (track, next3 keeper #2, cont.) — **RELAYS 4-6, S-3b DELIVERED, W4 COMPLETE (11/11).**
+  (4) `5c048ef` **E4/quota**: no-succession-while-children-live (pane-kill dominates quota — the routing-order
+  generalization of the spawn-order rule) · numeric succession (Fable ≥96% OR >2 Fable-heavy turns → next3) ·
+  cliff protocol (stop+disk-truth+`limit-recover`, NEVER silent down-tier) · **F1-F8 de-escalation** (frontier
+  judgment ONCE at ruling time, execution de-escalated) · fixed a baked stale-LIVE quota line → live-read
+  pointer. (5) `ce8ae4a` **D8 B22 spawn-2 silent-GO**: spawn-boundary GO = fresh respawn ALWAYS (message-resume
+  dead, structural per D4) · **as the budget shrinks, the scope should too** · breaker escape is E4-aware.
+  (6) `7d25d7e` **FIRST LIVE stall-page cycle** — 4 D10 signals dark 69–75min → page → deadline NO REPLY →
+  mandatory RE-READ found the lead ALIVE+productive; reply-or-kill alone would have killed a healthy lead.
+  Rules: page-deadline = RE-OBSERVE not act · reply≠liveness. **→ I FLAGGED (not touched) that premortem-gate
+  S-3's `grep MODAL` would PASS a reap-on-silence supervisor; the DESK RULED it registered as S-3b + delegated
+  implementation to me** (registration=authority's, assertion=implementer's — the §2b authority-ceiling split).
+  (7) `ce3c9e8` **S-3b BUILT** — `scripts/s3b-lint.sh` (RED-provable; `--selftest` 3/3, effect-checked incl. a
+  mixed control) + premortem-gate S-3b wired (now **2 met · 6 NOT BUILT**); witnessed END-TO-END (a silence-reaps
+  straw supervisor goes S-3b RED, then removed + restored clean). (8) `00ed04a` **§3i law**: *review criteria
+  rot toward their GREP as checks rot toward their SPINE — the incident→assertion translation is where fidelity
+  is lost* (self-demonstrated: s3b-lint guards its own grep-rot). **W4 now 11/11 slots CLOSED** (`945ee0e`) →
+  the both-teammates-closed E4 boundary is reached → **WATCH = W5 lead placement** (Fable-if-open-&-<96% else
+  Opus@max). Verify discipline held (D8/stall clean; E4 carried the 91→92 live-read correction). Session: 10
+  commits + this entry, parked 50. Self 37% ctx/next3 — ample, tracking demand-vs-headroom per the E2 rule.
