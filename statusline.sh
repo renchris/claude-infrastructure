@@ -9,10 +9,15 @@
 #   than this statusline predicts
 # - The warning % and statusline % may diverge in output-heavy sessions
 #
-# Offset approximation (48%) accounts for:
-# - Output token buffer: ~32% (64k/200k)
-# - Auto-compact buffer: ~6.5% (13k/200k)
-# - Warning threshold: ~10% (20k/200k)
+# Offset approximation accounts for (absolute tokens, scaled to the REAL window size):
+# - Output token buffer: ~64k
+# - Auto-compact buffer: ~13k
+# - Warning threshold:   ~20k
+# ≈97k reserved → 48 points on a 200k window, ~9 points on a 1M window. The offset was
+# previously the FIXED constant 48 (200k-era) — on 1M-window models it overstated usage
+# ~2.3×: 37%-real rendered "86%", and a 47%-real lead was relieved as "95% context"
+# (2026-07-13, doc_classifier W3). Window size now read from payload
+# .context_window.context_window_size (present ≥2.1.207; fallback 200k).
 #
 # See: docs/reference/CLAUDE_CODE_CONTEXT_CALCULATION.md
 #
@@ -26,9 +31,9 @@ MUTED_RED='\033[38;5;167m'
 NEXT_ACCENT='\033[38;5;75m'
 RESET='\033[0m'
 
-# Approximate offset to convert INPUT-only % to effective %
-# This is an approximation - see docs for exact formula limitations
-BUFFER_OFFSET=48
+# Reserved-space tokens converted to an offset % against the LIVE window size in the
+# context-% block below (97k = 64k output + 13k auto-compact + 20k warning).
+RESERVED_TOKENS=97000
 
 INPUT=$(cat)
 OUTPUT=""
@@ -149,10 +154,15 @@ fi
 # Context % - Using remaining_percentage (per-conversation INPUT only)
 if [ -n "$INPUT" ] && command -v jq &>/dev/null; then
     REMAINING=$(echo "$INPUT" | jq -r '.context_window.remaining_percentage // empty' 2>/dev/null)
+    WINDOW=$(echo "$INPUT" | jq -r '.context_window.context_window_size // empty' 2>/dev/null)
 
     if [ -n "$REMAINING" ] && [ "$REMAINING" != "null" ]; then
-        # Apply offset to approximate effective remaining
-        # (accounts for output buffer + auto-compact buffer)
+        REMAINING="${REMAINING%%.*}"   # tolerate float payloads
+        # Scale the reserved-space buffers to the REAL window: 48 points on 200k
+        # (bit-identical to the old fixed constant), ~9 on 1M. Unknown window → 200k.
+        WINDOW="${WINDOW%%.*}"
+        { [ -n "$WINDOW" ] && [ "$WINDOW" -gt 0 ] 2>/dev/null; } || WINDOW=200000
+        BUFFER_OFFSET=$(( RESERVED_TOKENS * 100 / WINDOW ))
         EFFECTIVE_REMAINING=$((REMAINING - BUFFER_OFFSET))
         [ "$EFFECTIVE_REMAINING" -lt 0 ] && EFFECTIVE_REMAINING=0
         [ "$EFFECTIVE_REMAINING" -gt 100 ] && EFFECTIVE_REMAINING=100
