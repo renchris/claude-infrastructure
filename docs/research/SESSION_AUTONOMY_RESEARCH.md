@@ -40,7 +40,19 @@ one-shot-latched abstain-on-stale hook, b's bash-can't-close-a-live-pane split, 
    the real bug, else it is decoration. Full statement + the four harness laws: §3.10. **Corollary for this
    track: a detector that has never fired in production is UNPROVEN, not "quiet"** — which binds the boundary
    hook (h) and the supervisor (b) directly.
-2. **Fail-loud / fail-abstain, never fail-silent-open** (j1's root pattern). Telemetry export is
+2. **Fail-loud / fail-abstain, never fail-silent-open** (j1's root pattern).
+   **→ THE BLIND-CHECK LAW (audit §3i, 4 instances in one night):** *a check that cannot observe the thing
+   it guards is indistinguishable from no check at all* — it exits 0, its suite is green, and the system
+   looks healthy. You cannot find one by reading it (all four looked correct; three shipped with passing
+   tests). **But it has an unmissable external signature: a human quietly starts doing its job by hand.**
+   So the detector is nearly free — **audit what the human DOES, not what they SAY: every manual
+   verification is a bug report against an automation, filed by someone who did not know they were filing
+   it.** (§1's relay count *undercounted* for exactly this reason: a hand pane-capture, a fallback sweep,
+   and a blob-verify never look like "an intervention".) **Corollary, and it bit the fixer:** `cc-bind` —
+   built to replace the untrustworthy channel of instance #1 — **reproduced #1's pathology within hours**.
+   This is what happens whenever a detector's EVIDENCE and its HYGIENE are served by the same mechanism.
+   **Assume it is present in the next primitive: the boundary hook (h) and the supervisor (b) are both
+   checks.** Telemetry export is
    atomic (a/P1) and a stale/missing row on a *live* session is a LOUD fault, not silence (a/P3, j1
    #6); the boundary hook ABSTAINS on stale telemetry (h); the gate classifier defaults any doubt to
    STOP-ASK (c's asymmetric whitelist).
