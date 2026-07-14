@@ -28,14 +28,19 @@ usage() {
   sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
 }
 
-MODE=table
-case "${1:-}" in
-  --json)     MODE=json ;;
-  --names)    MODE=names ;;
-  -h|--help)  usage; exit 0 ;;
-  '')         ;;
-  *)          echo "cc-sessions: unknown option '$1'" >&2; usage >&2; exit 2 ;;
-esac
+MODE=table; ALL=0
+# --all = the FORENSIC view (live + retained-dead rows). The default stays the ADDRESSING view
+# (live only), so cc-notify can never resolve a friendly name onto a dead pane.
+for a in "$@"; do
+  case "$a" in
+    --json)     MODE=json ;;
+    --names)    MODE=names ;;
+    --all)      ALL=1 ;;
+    -h|--help)  usage; exit 0 ;;
+    '')         ;;
+    *)          echo "cc-sessions: unknown option '$a'" >&2; usage >&2; exit 2 ;;
+  esac
+done
 
 command -v jq >/dev/null 2>&1 || { echo "cc-sessions: jq required" >&2; exit 1; }
 
@@ -54,21 +59,50 @@ if pl=$("$IT2" session list --json 2>/dev/null) && [ -n "$pl" ]; then
   if [ -n "$lp" ]; then live_panes="$lp"; have_panes=1; fi
 fi
 
+# PRESENCE MUST NOT ENCODE LIVENESS (P8, 2026-07-14). This loop used to `rm -f` a row the moment
+# its pid died or its pane vanished — i.e. it DELETED EXACTLY THE ROWS THAT PROVE HOW A SESSION
+# DIED. A pane that comes up and dies at spawn (D8 trigger 1) would register, die, and have its
+# evidence erased on the next read: the spawn-death detector P8 exists to provide would report
+# nothing, and the blind spot would persist while LOOKING fixed. Same class as cc-context deleting
+# a live stall's telemetry (93720eb) and cc-notify's verifier that could only abstain (3b12107):
+# a reaper keyed on DEADNESS erases the forensics.
+#
+# Cleanup and forensics want opposite things from one record, so they are now separated:
+#   LIVENESS  -> the `pid` field (kill -0). Readers decide; presence says nothing.
+#   VIEW      -> this lister still emits LIVE rows only, so cc-notify never resolves a name to a
+#                dead pane (addressing semantics UNCHANGED — that path is load-bearing for W4).
+#   RETENTION -> deletion is now an AGE decision, never a liveness one: corrupt rows go
+#                immediately; dead rows are kept for CC_REG_RETAIN_H (default 24h) so a
+#                spawn-death is still investigable, then reaped for hygiene.
+# `cc-sessions --all` exposes the dead rows (cc-board joins them against telemetry).
+RETAIN_S=$(( ${CC_REG_RETAIN_H:-24} * 3600 ))
 now=$(date +%s)
 live=()
+dead=()
 for f in "$REG_DIR"/*.json; do
   [ -e "$f" ] || continue
   uuid=$(jq -r '.paneUUID // empty' "$f" 2>/dev/null)
-  if [ -z "$uuid" ]; then rm -f "$f" 2>/dev/null; continue; fi   # corrupt → sweep
+  if [ -z "$uuid" ]; then rm -f "$f" 2>/dev/null; continue; fi   # corrupt → sweep (not a liveness call)
   pid=$(jq -r '.pid // empty' "$f" 2>/dev/null)
 
   stale=0
   if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then stale=1; fi
   if [ "$have_panes" = 1 ] && ! printf '%s\n' "$live_panes" | grep -qxF "$uuid"; then stale=1; fi
 
-  if [ "$stale" = 1 ]; then rm -f "$f" 2>/dev/null; continue; fi
+  if [ "$stale" = 1 ]; then
+    # RETENTION, not liveness: keep the evidence for the investigation window, then reap.
+    started=$(jq -r '.startedAt // 0' "$f" 2>/dev/null); started=$(( ${started:-0} / 1000 ))
+    if [ "$started" -gt 0 ] && [ $(( now - started )) -gt "$RETAIN_S" ]; then
+      rm -f "$f" 2>/dev/null
+    else
+      dead+=("$f")
+    fi
+    continue
+  fi
   live+=("$f")
 done
+# --all → live + retained-dead (the forensic view). Default → live only (addressing view).
+if [ "${ALL:-0}" = 1 ]; then live+=("${dead[@]+"${dead[@]}"}"); fi
 
 if [ "${#live[@]}" -eq 0 ]; then
   case "$MODE" in
