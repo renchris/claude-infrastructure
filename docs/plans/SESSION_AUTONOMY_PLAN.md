@@ -153,3 +153,10 @@ incidents, account lockouts, iTerm2 restart)?
   a glance). → NEXT per ratified order: **prove-on-W4** (operator applies §8 + uses telemetry), THEN
   runtime-to-residual (boundary-hook, supervisor page-only, gate-batching, auditability — blueprint
   §3/§4). Wave-A residual deferred: session-register P8 wiring, IDL auditability floor, e2e umbrella.
+- 2026-07-14 (prove-on-W4, orchestrator 1st hour) — **✅ VALUE CONFIRMED IN PRODUCTION.** cc-board
+  caught the live W4 lead at **63% > §8 `boundary_recycle=60`** → succession advisory fired on the rails
+  (the operator's hand-catch, now automated — audit §1 → 0). STALE renders correctly for closed
+  teammate panes. **Deploy gap:** cc-board committed but un-symlinked into `~/.claude/bin` — found by
+  the orchestrator's effect-check, fixed; added **Deploy DoD** (blueprint §4: every bin/statusline/hook
+  ends with `which <tool> && <tool> runs`). All 3 telemetry tools verified live (symlinks → repo).
+  Keep parked (no push); awaiting the W4 succession outcome.

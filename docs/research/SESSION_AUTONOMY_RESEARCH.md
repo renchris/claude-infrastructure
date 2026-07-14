@@ -155,6 +155,23 @@ account next"`).
 
 **Dependency spine:** telemetry-v2 → boundary-hook → supervisor (detectors consume telemetry); gate-batching + template + auditability-floor + e2e run parallel to Wave A; comms-hardening (f) slots with supervisor (reroutes its recovery channel). Worktrees per-member off this branch; single-owner-per-file (§3). Teammate teardown = `TaskStop`.
 
+**Deploy DoD (from prove-on-W4, 2026-07-14):** a repo commit ≠ a live tool. Every `bin/*` /
+`statusline` / hook deliverable ENDS with an EFFECT-CHECK — `which <tool>` resolves AND the live target
+carries the change AND `<tool>` runs. Deploy models differ: `bin/*` are SYMLINKED repo→`~/.claude/bin`
+(edits auto-live; a NEW file needs `ln -s` created — `cc-board` was committed but un-symlinked, caught
+by the orchestrator's effect-check); `statusline.sh` is a COPY captured live→repo by `sync.sh` (edits
+need an atomic cp to `~/.claude/statusline.sh`). "Verify the EFFECT, never the report" (§1 invariant 1)
+applied to DEPLOYMENT — same class as the statusline copy-drift. Add the effect-check to every build
+teammate's DoD.
+
+**✅ Proof-of-value (prove-on-W4, 2026-07-14 first hour):** within minutes of deploy, `cc-board` caught
+the live W4 lead at **63% — past the §8 E2 `boundary_recycle=60`** (from the filled W4/W5 instance) — and
+the succession advisory fired on the rails. **This is the exact catch the operator used to make by
+hand** (audit §1 — the manual `/context` relay → 0). STALE rows render correctly for closed teammate
+panes (the interim age-based liveness proxy works pending the P8 registry-pid wire). The telemetry-v2
+thesis + the §8 E2 threshold are **validated in production** — the strongest possible evidence for the
+docs-first→prove-on-W4 order the operator ratified.
+
 ---
 
 ## 5. Operator decisions — **RULED 2026-07-14 ~02:0x · RATIFY ALL 5** (relayed via `99261468`)
