@@ -75,7 +75,8 @@
 #                       originator for a modal-safe wake. See docs/plans/TWO_WAY_SESSION_COMMS_PLAN.md.
 #
 # Subcommand:
-#   self-close [--session-id UUID] [--allow-dirty]
+#   self-close (--successor UUID | --terminal) [--session-id UUID] [--no-notify]
+#              [--dirty-owner successor] [--allow-dirty] [--dry-run]
 #                       Close the CURRENT session end-to-end once its work is done — the Agent
 #                       Teams assignee pattern for peer sessions. Arms the watcher FIRST, then
 #                       types /exit (INTERRUPTS any in-flight turn and exits in seconds — E2E
@@ -83,10 +84,24 @@
 #                       via --resume). Watcher: (1) polls the pane's tty until the claude
 #                       process is gone (one it2 CR nudge at 60s submits a stranded /exit),
 #                       (2) closes the pane via the ~/.claude/bin/it2 shim (modal-free force
-#                       close; the window follows automatically when it was the last pane).
+#                       close; the window follows automatically when it was the last pane),
+#                       (3) with --successor: FOCUSES the successor pane so the operator's
+#                       view lands ON the continuation, never on an empty gap.
 #                       CC still alive after ~2min → teammate-style force-close anyway (logged).
-#                       Guard: refuses on a DIRTY git tree in cwd unless --allow-dirty. NEVER
-#                       pair with --recycle (the recycled pane IS the continuation).
+#                       SUCCESSION CONTRACT (2026-07-13, third "where did my session go"
+#                       incident): a pane close is operator-visible surface — the caller MUST
+#                       declare what continues the work. --successor <pane-uuid> is verified
+#                       ALIVE (pane resolvable + claude on its tty) BEFORE /exit is typed and
+#                       the succession is announced INTO the successor via cc-notify (the
+#                       report emitted in the dying pane dies with it; the surviving
+#                       transcript is where the operator will look). --terminal declares
+#                       end-of-line (nothing continues). Bare self-close exits 2.
+#                       Guard: refuses on a DIRTY git tree in cwd (exit 1). On a SHARED
+#                       checkout where the dirt is a live successor's in-flight work, pass
+#                       --dirty-owner successor (requires --successor; asserts the close
+#                       loses nothing because the owner survives). --allow-dirty stays the
+#                       blunt override (un-persisted work may be lost). NEVER pair with
+#                       --recycle (the recycled pane IS the continuation).
 #   --extra "ARGS"      Extra CLI args typed before the prompt (e.g. --extra "--permission-mode plan").
 #   --dry-run           Print the ranked accounts + composed command + surface; execute nothing.
 #
@@ -188,7 +203,8 @@ await_armed() { # $1=logfile → 0 once armed, 1 on timeout
 if [ "${1:-}" = "__selfclose" ]; then
   SID="${2:?__selfclose needs a session id}"
   TTY_PATH="${3:-}"                                # acquired foreground at arm time — trustworthy
-  echo "→ armed: __selfclose pid=$$ sid=$SID tty=${TTY_PATH:-none}"
+  SUCCESSOR="${4:-}"                               # verified-alive pane to focus after the close
+  echo "→ armed: __selfclose pid=$$ sid=$SID tty=${TTY_PATH:-none} successor=${SUCCESSOR:-none}"
   cc_alive() { ps -o comm= -t "$(basename "$TTY_PATH")" 2>/dev/null | grep -qE 'node|claude'; }
   if [ -z "$TTY_PATH" ]; then
     # Truly blind (no tty handed over): NEVER instant-close on a blind read — fixed grace lets
@@ -209,6 +225,16 @@ if [ "${1:-}" = "__selfclose" ]; then
     cc_alive && echo "⚠ CC still alive after ${waited}s — teammate-style force-close" >&2
   fi
   "$HOME/.claude/bin/it2" session close -f -s "$SID"
+  if [ -n "$SUCCESSOR" ]; then
+    # Succession legibility: land the operator's view ON the continuation. it2 python-API CLI
+    # only (AppleEvent-free — proven detached); best-effort: the announce already sits in the
+    # successor's transcript/mailbox even if this focus fails.
+    if "$HOME/.claude/bin/it2" session focus "$SUCCESSOR" >/dev/null 2>&1; then
+      echo "→ focus handed to successor $SUCCESSOR"
+    else
+      echo "⚠ focus hand-over to $SUCCESSOR failed (pane gone or it2 error) — succession is announced in its transcript/mailbox"
+    fi
+  fi
   exit 0
 fi
 
@@ -268,9 +294,13 @@ fi
 # self-close — arm the detached watcher that retires this session once the calling turn ends.
 if [ "${1:-}" = "self-close" ]; then
   shift
-  SC_SID="" SC_ALLOW_DIRTY=0 SC_DRY=0
+  SC_SID="" SC_ALLOW_DIRTY=0 SC_DRY=0 SC_SUCCESSOR="" SC_TERMINAL=0 SC_NO_NOTIFY=0 SC_DIRTY_OWNER=""
   while [ $# -gt 0 ]; do case "$1" in
     --session-id)  SC_SID="${2:?--session-id needs a value}"; shift 2 ;;
+    --successor)   SC_SUCCESSOR="${2:?--successor needs a pane uuid}"; shift 2 ;;
+    --terminal)    SC_TERMINAL=1; shift ;;
+    --no-notify)   SC_NO_NOTIFY=1; shift ;;
+    --dirty-owner) SC_DIRTY_OWNER="${2:?--dirty-owner needs a value (successor)}"; shift 2 ;;
     --allow-dirty) SC_ALLOW_DIRTY=1; shift ;;
     --dry-run)     SC_DRY=1; shift ;;
     *) echo "!! unknown self-close arg: $1" >&2; exit 1 ;;
@@ -278,39 +308,114 @@ if [ "${1:-}" = "self-close" ]; then
   ITSID="${ITERM_SESSION_ID:-}"
   SC_SID="${SC_SID:-${ITSID##*:}}"
   [ -n "$SC_SID" ] || { echo "!! self-close needs \$ITERM_SESSION_ID or --session-id" >&2; exit 1; }
+  # SUCCESSION STATEMENT (mandatory). A pane close is operator-visible surface: 3× on 2026-07-13
+  # a close with no declared continuation read as "the handoff killed our session" — twice a real
+  # stranding (pre-setsid recycle watcher), once a PERFECT succession whose successor was simply
+  # invisible (the announce died with the closing pane; no focus hand-over). The caller must say
+  # what continues the work; "I just close" is not a state this tool accepts.
+  if [ -n "$SC_SUCCESSOR" ] && [ "$SC_TERMINAL" = 1 ]; then
+    echo "!! self-close: --successor and --terminal are mutually exclusive" >&2; exit 2
+  fi
+  if [ -z "$SC_SUCCESSOR" ] && [ "$SC_TERMINAL" = 0 ]; then
+    cat >&2 <<'USAGE'
+!! self-close REFUSED: no succession statement.
+!!   --successor <pane-uuid>  the live continuation session's pane — verified alive, announced
+!!                            (cc-notify into ITS transcript + mailbox), focused after the close
+!!   --terminal               end-of-line: nothing continues this session's work
+!! (memory: handoff-succession-legibility, 2026-07-13)
+USAGE
+    exit 2
+  fi
+  if [ -n "$SC_DIRTY_OWNER" ] && { [ "$SC_DIRTY_OWNER" != "successor" ] || [ -z "$SC_SUCCESSOR" ]; }; then
+    echo "!! self-close: --dirty-owner takes exactly 'successor' and requires --successor" >&2; exit 2
+  fi
+  if [ "$SC_SUCCESSOR" = "$SC_SID" ]; then
+    echo "!! self-close: successor must be a DIFFERENT pane than the one closing (use --recycle for in-place continuation)" >&2; exit 2
+  fi
+  # Successor liveness gate — BEFORE any side effect: pane resolvable AND a claude on its tty.
+  # The irreversible step is gated on positive proof the survivor is alive (same rule as the
+  # recycle watcher's armed-heartbeat: verify the EFFECT, never the intention).
+  SUC_TTY=""
+  if [ -n "$SC_SUCCESSOR" ]; then
+    SUC_TTY="$(as_tty "$SC_SUCCESSOR")"
+    if [ -z "$SUC_TTY" ]; then
+      echo "!! self-close ABORTED: successor pane $SC_SUCCESSOR not found in iTerm2 — the continuation is NOT there; fix the uuid, or --terminal if truly nothing continues" >&2
+      exit 3
+    fi
+    if ! ps -o comm= -t "$(basename "$SUC_TTY")" 2>/dev/null | grep -qE 'node|claude'; then
+      echo "!! self-close ABORTED: no live claude on successor pane $SC_SUCCESSOR ($SUC_TTY) — refusing to close a session whose continuation is not running" >&2
+      exit 3
+    fi
+    echo "→ successor verified alive: $SC_SUCCESSOR (tty $SUC_TTY)"
+  fi
   # A session about to evaporate must not hold un-persisted work. (Committed-not-pushed is fine —
   # commits survive the pane; uncommitted edits do too, but silently, which is how work gets lost.)
+  # SHARED-CHECKOUT REALITY (23:02 2026-07-13): the dirt in cwd may be a LIVE successor's
+  # in-flight work, not this session's — --dirty-owner successor asserts exactly that (owner
+  # verified alive above), keeping --allow-dirty for the genuinely lossy override.
   if [ "$SC_ALLOW_DIRTY" = 0 ] && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     if [ -n "$(git status --porcelain 2>/dev/null | head -1)" ]; then
-      echo "!! refusing self-close: dirty git tree in $(pwd) — commit/stash first, or --allow-dirty" >&2
-      exit 1
+      if [ "$SC_DIRTY_OWNER" = "successor" ]; then
+        echo "→ dirty tree in $(pwd) asserted owned by successor $SC_SUCCESSOR (verified alive) — the close loses nothing; proceeding"
+      else
+        cat >&2 <<MSG
+!! refusing self-close: dirty git tree in $(pwd) — commit/stash first, or:
+!!   --dirty-owner successor  the dirt is the SUCCESSOR's in-flight work on this shared checkout
+!!                            (requires --successor; verified-alive owner survives the close)
+!!   --allow-dirty            blunt override — un-persisted work may be lost
+MSG
+        exit 1
+      fi
     fi
   fi
+  SC_LOG="/tmp/handoff-selfclose-$SC_SID-$(date +%s).log"
   if [ "$SC_DRY" = 1 ]; then
     echo "── dry run (self-close) ─────────────────────────"
-    echo "pane:  $SC_SID"
-    echo "chain: arm watcher → FOREGROUND /exit (interrupts any in-flight turn, exits in seconds) → detached ps-poll ≤180s (CR nudge @60s) → it2 force-close pane"
+    echo "pane:      $SC_SID"
+    if [ -n "$SC_SUCCESSOR" ]; then
+      echo "successor: $SC_SUCCESSOR (tty $SUC_TTY — claude VERIFIED alive)"
+      echo "chain:     announce succession into successor (cc-notify) → arm watcher → FOREGROUND /exit (interrupts any in-flight turn, exits in seconds) → detached ps-poll ≤180s (CR nudge @60s) → it2 force-close pane → FOCUS successor"
+    else
+      echo "successor: none (--terminal: end-of-line, nothing continues this session's work)"
+      echo "chain:     arm watcher → FOREGROUND /exit (interrupts any in-flight turn, exits in seconds) → detached ps-poll ≤180s (CR nudge @60s) → it2 force-close pane"
+    fi
     exit 0
+  fi
+  # Succession announce — INTO the survivor, BEFORE the close chain starts. The report emitted
+  # in the closing pane dies with the pane (observed 23:03 2026-07-13); the successor's
+  # transcript + mailbox are where the operator/its model will actually look. Composer inject
+  # is visible and queues safely into a busy session; failure degrades loudly but does NOT
+  # abort the close (mailbox record + post-close focus still carry the succession).
+  if [ -n "$SC_SUCCESSOR" ] && [ "$SC_NO_NOTIFY" = 0 ]; then
+    if [ -x "$HOME/.claude/bin/cc-notify" ]; then
+      if "$HOME/.claude/bin/cc-notify" "$SC_SUCCESSOR" "HANDOFF-SUCCESSION: predecessor pane $SC_SID is self-closing now ($(date '+%H:%M:%S')) — you are the active continuation of its work; the operator's view will be focused here. Close log: $SC_LOG" >/dev/null 2>&1; then
+        echo "→ succession announced into $SC_SUCCESSOR (composer + mailbox)"
+      else
+        echo "⚠ cc-notify to successor did not verify (strand/closed?) — mailbox record + post-close focus still carry the succession" >&2
+      fi
+    else
+      echo "⚠ cc-notify unavailable — succession carried by post-close focus only" >&2
+    fi
   fi
   # Keystrokes FOREGROUND (detached osascript AppleEvents fail silently — see __selfclose header).
   # ORDER IS LOAD-BEARING: watcher FIRST, /exit LAST — a typed /exit INTERRUPTS the in-flight
   # turn and exits within seconds (E2E 2026-07-03; it does NOT enqueue-to-turn-end like /clear),
   # so in own-pane use the interrupt can kill this Bash tool at /exit+ε. Arm before typing.
   SC_TTY="$(as_tty "$SC_SID")"
-  SC_LOG="/tmp/handoff-selfclose-$SC_SID-$(date +%s).log"
   if [ -n "$SC_TTY" ] && ! ps -o comm= -t "$(basename "$SC_TTY")" 2>/dev/null | grep -qE 'node|claude'; then
     # No CC on the pane (shell-only, or still launching): typing /exit would hit the SHELL and
     # vanish (observed). Nothing to exit gracefully — the watcher closes the pane directly.
     echo "→ no CC on $SC_TTY — skipping /exit, closing pane directly" >&2
-    detach "$SC_LOG" "$0" __selfclose "$SC_SID" "$SC_TTY" >/dev/null
+    detach "$SC_LOG" "$0" __selfclose "$SC_SID" "$SC_TTY" "$SC_SUCCESSOR" >/dev/null
   else
-    SC_WATCHER="$(detach "$SC_LOG" "$0" __selfclose "$SC_SID" "$SC_TTY")"
+    SC_WATCHER="$(detach "$SC_LOG" "$0" __selfclose "$SC_SID" "$SC_TTY" "$SC_SUCCESSOR")"
     if ! await_armed "$SC_LOG"; then
       kill "$SC_WATCHER" 2>/dev/null || true
       echo "!! self-close ABORTED: watcher heartbeat never appeared ($SC_LOG) — /exit NOT typed, session stays alive" >&2
       exit 1
     fi
     echo "→ self-close armed for $SC_SID: watcher pid $SC_WATCHER session-detached, heartbeat verified (log: $SC_LOG)"
+    [ -n "$SC_SUCCESSOR" ] && echo "→ post-close: operator focus hands to successor $SC_SUCCESSOR" || echo "→ post-close: terminal (nothing continues this session's work)"
     wrote=0
     for _ in 1 2 3; do
       if as_write "$SC_SID" "/exit" 2>/dev/null; then wrote=1; break; fi
