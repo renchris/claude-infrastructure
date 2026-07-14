@@ -424,7 +424,7 @@ _The rulings as originally surfaced (now discharged):_
 - **D2** per-member effort INERT vs settable — `ps -eo command \| grep -- --agent-name` on the FIRST build spawn is the arbiter, regardless of doc. Set LEAD effort correctly meanwhile. (audit D2; h/b/d/g/i/m all flag it)
 - **team_name** required despite "deprecated" — always pass `session-<id>`; assert pre-spawn. (D7)
 - **CLAUDE_CODE_SESSION_ID** == telemetry filename verified on 2.1.207; verify 2.1.114/2.1.183; P4 degrades to cwd-heuristic if absent. (a)
-- **next3** logged-out/exhausted NOW — the "4 accounts" premise is already false; account-lease + pre-wave gate assume 3/4. (d, j1 #5)
+- ~~**next3** logged-out/exhausted NOW — the "4 accounts" premise is already false~~ → **STALE WITHIN HOURS (2026-07-14): next3 has fully RESET (5h 0% · weekly 0% · Fable 0%) and now ranks FIRST for both general and fable.** Kept, not deleted, as a worked example of **doc-rot**: this line would have misrouted this session's own successor *away* from the best available account. **Never route from a doc — route from the live read (`claude-accounts --rank general|fable`).** Same law as everything else tonight: verify the effect, never the report. The account-lease + pre-wave gate still stand on their own merits. (d, j1 #5)
 
 ---
 

@@ -363,6 +363,24 @@ the same way: a human was quietly doing the check by hand.**
 | 2 | `cc-context` telemetry sweep (§3h) | deleted a live stall's row on AGE → the stall VANISHED | operator ran a **1h fallback sweep** to catch stalls |
 | 3 | `cc-sessions` registry reaper (P8) | deleted a dead pane's row → the **spawn-death evidence erased** | (would have been) manual pane forensics |
 | 4 | `cc-bind` merge gate (this) | ack bound to an **ID, not the ruling's TEXT** → a ruling rewritten post-ack still PASSED | orchestrator **"verified the ruling blob verbatim"** by hand |
+| 5 | **the WITNESS itself** — reading a gate's verdict | **`$?` after a PIPE is the LAST command's status, not the gate's.** `gate \| tail` ⇒ `$?` = `tail`'s = **0**. A red gate witnesses as GREEN. | *both parties, independently, within one hour* |
+
+**Instance #5 is the sharpest, and it is self-referential: THE BLIND-CHECK LAW CAUGHT ITS OWN AUDITORS.**
+The orchestrator piped `premortem-gate` through `tail` and read `tail`'s exit code as the gate's — *"on a
+red-in-prose gate that read would have filed a FALSE GREEN witness."* **This session made the identical
+error the same hour** (`cc-bind gate … | sed …; echo "exit=$?"` printed `exit=0` for a gate that had
+failed with 1). Two independent actors, same trap, same night ⇒ **not an individual error — a structural
+one.** And it fails in the **false-GREEN** direction, because `tail`/`sed`/`grep` almost always exit 0.
+
+**Why it is structural, not careless:** the very idiom you reach for to report a gate *compactly*
+(`gate 2>&1 | tail -1`) is the one that **destroys the verdict**. The formatting step silently becomes the
+thing being measured. It is invariant 7 in the reporting layer — the artifact (the exit code) is consumed
+by a policy (pretty-printing) that does not know it is evidence.
+
+> **RULE — AN EXIT-CODE WITNESS MUST BE UNPIPED.** Run the gate bare, capture `$?` **immediately**, and
+> only then format: `gate >/dev/null 2>&1; rc=$?` — or `${PIPESTATUS[0]}`, or `set -o pipefail`. **And
+> witness BOTH text and exit code:** a gate whose prose says "clean" while it exits non-zero (or the
+> reverse) is itself a bug. Reading only the text, or only a piped `$?`, is half a witness.
 
 **The law.** *A check that cannot observe the thing it guards is indistinguishable from no check at all.*
 Its failure is **silent by construction** — it exits 0, its suite is green, and the system looks healthy.
