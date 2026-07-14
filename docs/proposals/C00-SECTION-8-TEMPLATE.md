@@ -178,6 +178,15 @@ money-path = out-of-class by default, C8 next-wave-go}; **C9 `/ship` = permanent
 backstop.** 5-gate discriminator (`G-cite`, `G-shape`, `G-reversible`, `G-surface`, `G-manifest`;
 `G-cite`/`G-surface` are un-fakeable greps). See `SESSION_AUTONOMY_RESEARCH.md` §3.4 (axis c).
 
+> **Verify-wave findings disposition (added 2026-07-14 — `wf_b776d7c1` → ledger `6d10343`).** When an
+> adversarial verify wave returns findings on an **already-CLOSED (merged) slot**, the FIX splits by class:
+> **(a) respawn-to-fix on a closed slot = a ROSTER change = out-of-class = operator-only** — park as a
+> wake-time override (a new teammate on a merged slot is not a pre-signed class). **(b) the in-class subset
+> executes NOW under an INTEGRITY BAR:** security / data-integrity findings *on served surfaces* are
+> fixed-or-proven-unreachable immediately; purely functional gaps **defer IFF they fail LOUD** (a silent
+> functional gap is not deferrable). Observed: 61 findings / 49 confirmed → TIER-1/2 lead fixes now, reviewapp
+> fix-branch parked for desk R-DECIDE, remainder queued post-window.
+
 ## §8.7 — E7 · Lead-session isolation
 
 Each **concurrent LEAD session** (wave-lead, orchestrator, overlapping successor) runs on its OWN
