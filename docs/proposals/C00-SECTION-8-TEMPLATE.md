@@ -83,7 +83,7 @@ assign explicitly round-robin ≤2/account, re-check before each new wave.
 |---|---|---|
 | teammate → wave-lead | mailbox, **pull-verified** | `cc-sessions` liveness before trusting; teammate→lead is the reliable direction |
 | wave-lead → orchestrator | `cc-notify <orch-uuid>` + **R-PING armed** (`--notify-back`) | on wave-exit; pair with background `cc-await-ping` |
-| orchestrator → wave-lead | `cc-notify` (the ONLY sanctioned send) | never raw osascript; submit-verified (exit 4 = strand) |
+| orchestrator → wave-lead | `cc-notify` (the ONLY sanctioned send) | never raw osascript; submit-verified (exit 4 = strand) — **verifier fixed `3b12107`; it was INERT before, see below** |
 
 Binding corrections (must land before a merge gate) go via a **durable ruling file + commit-sha ack**
 (`Acked-Ruling:<id>`), fail-closed at the merge gate — never a best-effort `SendMessage` (downward
@@ -95,6 +95,27 @@ SEND-TIME — role→pane indirection via a succession-maintained roles file (`r
 each self-close) or the newest self-close-log `successor=` chain. A predecessor's pane is dead
 post-self-close; a cached uuid sends into the void. `cc-notify`'s LOUD-on-strand (mailbox-only +
 "unreachable", never false-delivered) is the effect-verified backstop when a stale address is used.
+
+> 🚨 **Write pane UUIDs in FULL — an abbreviated id does not resolve.** Every succession brief, ruling,
+> and status log MUST carry the complete uuid (`99261468-A46A-498A-AE9B-F39473E5E7AE`), never the 8-char
+> prefix (`99261468`) that iTerm2's UI, this corpus, and human shorthand all default to. `cc-notify`
+> resolves **only** {registered friendly name | FULL uuid} → a prefix hard-fails **exit 3**, and the
+> friendly-name fallback does not exist yet (the session registry is EMPTY until **P8** is wired). On
+> 2026-07-14 this broke a successor's *mandated first action* — the announcement that tells the
+> orchestrator where the role now lives — i.e. the one send a succession cannot afford to lose. It failed
+> LOUD (never false-delivered), and the recovery is a 30-second prefix-expand against `it2 session list`,
+> but the failure is 100% avoidable: **full uuid, always.** (Queued fixes: teach `cc-notify` to expand a
+> unique prefix — the abbreviated form is the human form, so pretending otherwise guarantees recurrence —
+> and land P8 so names work at all.)
+
+> ⚠️ **Trust boundary between the two tiers (audit §3g).** `cc-notify`'s submit-verifier was **inert for
+> ~24h** (an it2 capture is binary; BSD grep needed `LC_ALL=C` to read it) — every send in every session
+> reported `submit UNVERIFIED` while the ~1-in-6 composer strand went unwatched, and the orchestrator was
+> quietly **hand-capturing panes after each ruling** to compensate. Fixed + effect-checked (`3b12107`), but
+> the design lesson stands: **NOTIFY is best-effort and its "verification" is only as trustworthy as the
+> last time you saw it FIRE.** Load-bearing rulings ride **BIND** (durable ruling file + `Acked-Ruling:`
+> trailer + fail-closed merge gate), whose failure detector is **absence-of-ack** — the one signal that
+> needs no verifier of its own.
 
 ## §8.6 — E6 · Gate-batching manifest
 

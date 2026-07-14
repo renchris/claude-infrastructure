@@ -29,6 +29,17 @@ one-shot-latched abstain-on-stale hook, b's bash-can't-close-a-live-pane split, 
    asserted via `it2 session list`, not "shutdown_request sent" (D5); ack = a commit-sha in the
    branch, not a delivered `SendMessage` (f); the boundary number = payload `used_percentage`, never
    the statusline display offset (h; the §3b 2.3×-lie fix, `1b8d671`).
+   **→ EXTENDED 2026-07-14 (audit §3g — the law's blind spot, paid for in production): it must also be
+   applied to the VERIFICATION APPARATUS ITSELF.** `cc-notify`'s submit-verifier was inert for ~24h while
+   its 15/15 suite stayed green and the audit recorded it as FIXED. Three more surfaces are in scope:
+   **(i) the verifier** — an always-abstaining check is indistinguishable from a passing one (both exit 0);
+   only a real invocation whose OUTCOME you inspect settles it (→ detector **D9**: a verifier whose positive
+   *and* negative branches never fire across N real calls is inert **by construction**; an abstain path that
+   is 100% of outcomes is a BUG, never a graceful degrade). **(ii) the test fixture** — a synthetic fixture
+   IS a report; it must carry the real artifact's **bytes**. **(iii) the green suite** — prove it RED against
+   the real bug, else it is decoration. Full statement + the four harness laws: §3.10. **Corollary for this
+   track: a detector that has never fired in production is UNPROVEN, not "quiet"** — which binds the boundary
+   hook (h) and the supervisor (b) directly.
 2. **Fail-loud / fail-abstain, never fail-silent-open** (j1's root pattern). Telemetry export is
    atomic (a/P1) and a stale/missing row on a *live* session is a LOUD fault, not silence (a/P3, j1
    #6); the boundary hook ABSTAINS on stale telemetry (h); the gate classifier defaults any doubt to
@@ -104,6 +115,28 @@ one-shot-latched abstain-on-stale hook, b's bash-can't-close-a-live-pane split, 
   "unreachable", never false-delivered — `98a3dd9`), and the self-close log's `successor=` gave the
   authoritative re-address. Effect-verification CAUGHT the stale address; role-indirection PREVENTS it.
   Feeds §8 E5 (addressing) + R6.
+- **⚠️ THE VERIFIER WAS INERT (audit §3g; FIXED `3b12107`, effect-checked live).** The `98a3dd9`
+  submit-verify above **never executed its strand branch**: an it2 capture is BINARY (NUL-padded cells)
+  and BSD `/usr/bin/grep` needs **`LC_ALL=C`** to byte-match the multibyte `❯` past the NULs (`-a` alone
+  does NOT suffice — the UTF-8 locale still misses it). Every send for ~24h, in every session, reported
+  `submit UNVERIFIED` + exit 0; the ~1-in-6 Ink strand was unwatched, and the **orchestrator was
+  hand-capturing panes after each ruling** to compensate. **Consequence for this section's two-tier
+  design: NOTIFY's "best-effort" tier was, in fact, *unverified* effort** — which is exactly why **BIND**
+  (durable ruling file + `Acked-Ruling:` commit trailer + fail-closed merge gate) must carry every
+  load-bearing ruling. **Absence-of-ack is the only delivery-failure detector that does not itself need a
+  verifier.** Do not let a green NOTIFY tier tempt the design back toward trusting the send.
+- **Successor-announcement addressing failure (2026-07-14, this session's own startup — dogfooded).** The
+  successor's mandated FIRST action (announce its pane so the orchestrator re-addresses to it) **hard-failed,
+  exit 3**: the brief carried the pane id as an **8-char prefix** (`99261468`) — the form the plan corpus,
+  the audit and iTerm2's own UI all use — but `cc-notify` resolves **only** {registered friendly name |
+  FULL uuid}. The name fallback was unavailable too: the registry is **EMPTY** (`cc-notify --list` →
+  "(no sessions registered)") because **P8 is the un-wired Wave-A residual**. Two independent gaps composed
+  to break the single most important startup action of a succession. **It failed LOUD** (exit 3 + "try
+  --list"), never false-delivered — the fail-loud law holding under fire. **Two fixes, both cheap:**
+  (1) `cc-notify` should accept a **unique uuid PREFIX** (expand against `it2 session list`; ambiguous or
+  no-match → fail loud) — because the abbreviated form *is* the human/brief form and pretending otherwise
+  guarantees recurrence; (2) **land P8** so the friendly-name path exists at all. Until both: a succession
+  brief MUST carry the **full** uuid. Feeds §8 E5 + P8.
 
 ### 3.6 `auditability` (axis k; owner: new bin/cc-idl, cc-truth, cc-audit)
 - Three lie-classes: **T1 signal-lie** (freeze reported+truth at decision time), **T2 ledger-lie** (independent-observer + tamper-evident chain + transcript reconciliation), **T3 should-have-fired** (coverage check over telemetry series, not decisions-taken).
@@ -121,6 +154,29 @@ one-shot-latched abstain-on-stale hook, b's bash-can't-close-a-live-pane split, 
 ### 3.10 `e2e-harness` (axis i; owner: new scripts/*-e2e.sh + autonomy-e2e.sh)
 - 4 reuse patterns already in-repo: **P1** live-pane+fake-binary+assert-effect (`handoff-selfclose-e2e.sh`; **symlink** the platform binary, never copy — macOS AMFI; NOT CI-able, needs `$ITERM_SESSION_ID`); **P2** sandbox-HOME+synthetic-stdin (`test-overwrite-guard.sh`; CI-safe); **P3** fixture-corpus+assert-invariants (`plan-phase-scan-tests`; CI-safe); **P4** verify-before-promote firewall (`smoke-test.sh`).
 - **Every primitive needs a NEGATIVE/anti-trigger fixture** — both marquee rescues (§3b, §3c) were OVER-firing; "a suite that only proves firing would have passed the 2.3×-gauge build." Umbrella `scripts/autonomy-e2e.sh` (P4); CI runs P2/P3, P1 pane suites **SKIP-loud** on headless. Wire as pre-commit/pre-`/ship` gate → regressions self-announce.
+
+#### The four harness laws — **paid for in production** (audit §3g, 2026-07-14; `3b12107`)
+
+`cc-notify`'s submit-verifier shipped with an 89-line bats suite at **15/15 green** and was **inert from
+birth** — the strand branch was unreachable code for ~24h across every session. Three *independent*
+harness defects each sufficed to hide it, and none is specific to that file. These are now **gates on
+every primitive's suite**, not advice:
+
+| # | Law | The escape it closes |
+|---|---|---|
+| **L1** | **Fixtures must carry the REAL artifact's BYTES** — generate them from the real tool and commit them; never hand-`printf` a plausible reconstruction. | Fixtures were plain TEXT; a real `it2 session capture` is **binary** (iTerm2 NUL-pads empty cells). The suite tested a file production never emits, so it could not see that BSD `grep` needs `LC_ALL=C` to byte-match `❯` past the NULs. |
+| **L2** | **Assert on a string the FAILURE mode cannot satisfy** — check substrings for accidental containment. | `*"VERIFIED"*` **also matches `"UNVERIFIED"`**: the assertion passed on the precise degraded result it existed to catch. (Now `"submit VERIFIED"`.) |
+| **L3** | **Every assertion must actually TRAP** — in bats, a bare mid-body `[[ ]]` is **exempt from errexit** (bash keyword; `[ ]` and `grep -q` do trap), so a non-final `[[ ]]` can NEVER fail its test. Suffix `|| false`, or use `[ ]`/`grep -q`. | 7 of 7 `[[ ]]` assertions in the file were dead. Verified empirically on bats 1.13.0 — assume it of any bats suite until proven otherwise. |
+| **L4** | **Prove the suite RED against the real bug** (bidirectional proof), and **effect-check the primitive live** before recording "FIXED". Green is a *report*; its teeth are the *effect*. | The suite was green over unreachable code, and the audit + project memory recorded `98a3dd9` as the strand FIX for ~24h. The live check (`cc-notify` printing `submit VERIFIED` for the first time) is what actually settled it. |
+
+**L4 is the load-bearing one for THIS track**: the layer's whole value proposition is *detectors*, and a
+detector's failure mode is to abstain forever while exiting 0 — indistinguishable from success unless you
+watch real outcomes (→ detector **D9**, audit §7). Applies with full force to the boundary hook (h) and the
+supervisor (b): **a detector that has never fired in production is UNPROVEN, not "quiet".**
+
+**Tool-identity corollary (cost ~20 min of misdiagnosis):** a manual repro at an interactive prompt may not
+run the binary the script runs — `grep` here resolved to a shell function → `ugrep`, which *does* match
+where `/usr/bin/grep` does not. `type X` / absolute-path before trusting any repro, positive or negative.
 
 ### 3.11 `plan-template §8` (axis e; owner: template-author → docs/proposals/)
 **Structural finding:** `doc_classifier/docs/specs/C00-orchestration.md` runs §0–§7 and STOPS — every one
@@ -171,6 +227,17 @@ by the orchestrator's effect-check); `statusline.sh` is a COPY captured live→r
 need an atomic cp to `~/.claude/statusline.sh`). "Verify the EFFECT, never the report" (§1 invariant 1)
 applied to DEPLOYMENT — same class as the statusline copy-drift. Add the effect-check to every build
 teammate's DoD.
+
+**Deploy DoD — clause 2 (added 2026-07-14, audit §3g): a "FIXED" claim about *checking* code is not a fix
+until the check is seen to FIRE.** `cc-notify` was symlinked, live, and running — it passed clause 1
+(`which` resolves, tool runs, exit 0) **while its verifier was unreachable code**. Deployment liveness ≠
+functional liveness. So for any deliverable whose job is to DETECT / VERIFY / GATE (boundary hook,
+supervisor detectors, gate classifier, `cc-notify`, the E2E umbrella itself), the DoD additionally requires:
+**(a) a live invocation whose OUTCOME is inspected** — the positive branch observed firing in production,
+not merely "no error" (for `cc-notify`: an actual `submit VERIFIED`); **(b) the suite proven RED against the
+real bug** (bidirectional proof); **(c) fixtures built from the real tool's bytes** (§3.10 L1–L4). **Nothing
+is recorded as FIXED** — in the audit, in memory, or in a status log — **on the strength of a green suite
+alone**; the ~24h of false confidence here traces to exactly that.
 
 **✅ Proof-of-value (prove-on-W4, 2026-07-14 first hour):** within minutes of deploy, `cc-board` caught
 the live W4 lead at **63% — past the §8 E2 `boundary_recycle=60`** (from the filled W4/W5 instance) — and
