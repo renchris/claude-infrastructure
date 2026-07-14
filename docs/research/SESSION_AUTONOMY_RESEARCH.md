@@ -172,6 +172,14 @@ panes (the interim age-based liveness proxy works pending the P8 registry-pid wi
 thesis + the §8 E2 threshold are **validated in production** — the strongest possible evidence for the
 docs-first→prove-on-W4 order the operator ratified.
 
+**Update (W4 succession epoch):** GO-deaf **instance #3** (driver pane, silent mid-queue death, caught
+by the lead's task-boundary liveness check — post-dating the spawn-boundary rule) → **pane-death is now
+detector `D8` with TWO trigger points** (spawn-boundary GO + task-boundary check-in; audit §3f + §7).
+And the **first mid-wave LEAD succession ran clean** (`fire-w4-lead → fire-w4-lead-2`, ruling handed via
+ledger stamp, back-channel held) — the §8 *session-layer* succession (E3/E5/E6) validated in production.
+Two more confirmations that docs-first surfaces the right residual (D8's second trigger, and the
+session-succession working) before any runtime primitive is built.
+
 ---
 
 ## 5. Operator decisions — **RULED 2026-07-14 ~02:0x · RATIFY ALL 5** (relayed via `99261468`)

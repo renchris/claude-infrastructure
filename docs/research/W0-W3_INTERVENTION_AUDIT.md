@@ -155,6 +155,20 @@ Trigger → detector → recovery is the Build contract (axis h).
   mid-stream nudge (a nudge rides the same channel that just failed). The W4 lead reached axis f's
   "respawn-at-boundary over mid-stream correction" independently, under live fire — strong external
   validation of the meta-lesson "verify the EFFECT, never the send" (§7).
+- **Instance #3 (W4 succession epoch, 2026-07-14):** the **DRIVER teammate pane died SILENTLY
+  mid-queue** — *post-dating* the sharpened spawn-boundary rule, so this was NOT a spawn-GO miss; it was
+  caught by the lead's **task-boundary liveness check** (mid-work), which the spawn-boundary rule alone
+  would have missed. Recovery: lead rebased the branch onto `a90513e` and **respawned from task 5 with
+  the accumulated rulings banked in-brief** (respawn-at-boundary, again). → **Detector generalization
+  (orchestrator directive): silent pane-death is a D-detector — `D8` — with TWO trigger points: (1)
+  spawn-boundary GO unanswered [#1 B19b, #2 web-core], (2) task-boundary check-in / mid-work pane-death
+  [#3 driver].** Both effect-verify liveness (atomic `ps` + the expected commit); both recover by
+  respawn-with-rulings-in-brief, never a nudge. Three GO-deaf instances now — the detection surface is
+  spawn AND every task boundary, not spawn alone.
+- **✅ Proof-of-value (same epoch): the first mid-wave LEAD succession completed CLEAN**
+  (`fire-w4-lead → fire-w4-lead-2`) — the ruling handed across the boundary via a **ledger stamp** (§8
+  E6 gate-batching + E3 write-fence) and back-channel continuity held (§8 E5). The §8 *session-layer*
+  succession — not just the teammate layer — is validated in production.
 
 ---
 
@@ -250,6 +264,7 @@ built on effect-verification, not status-reports.
 | D5 | `shutdown_request` decorative → zombie panes hours later | teardown via **TaskStop by name**; confirm pane gone | TaskStop; force-close pane |
 | D6 | `lr-audit` re-flags superseded slots from stale transcript residue | reconcile flag vs `workflows/wf_<id>.json` journal + recovery ledger | ledger-append re-confirmation; skip re-run |
 | D7 | `team_name` required though schema says "deprecated; ignored" (spawn blocked 4/5 without) | always pass `team_name:"session-<id>"`; assert before spawn | (workaround is the fix) |
+| D8 | **silent teammate pane-death** (GO-deaf — pane dies at spawn OR mid-queue; 3 live W4 instances §3f) | **TWO trigger points:** (1) spawn-boundary GO effect-verified (first commit/ack), unanswered→act; (2) task-boundary liveness = atomic `ps` + expected check-in commit, mid-work death→act | respawn-with-rulings-in-brief (never nudge); rebase onto last-good commit, resume from failed task |
 
 ⚠️ **Build-time reconciliation flag (D2):** this audit's sources (BUILD_LOG + `agent-teammate-spawn-2-1-183`)
 say per-member teammate effort is **INERT** on 2.1.183 (Agent forwards the lead's `--effort`), while
