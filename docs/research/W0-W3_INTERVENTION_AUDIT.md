@@ -351,6 +351,41 @@ The four instances in §3f share one root ("a send reports success but does not 
   takeover** (the lead absorbs the slot's work itself), which is exactly the right escape hatch: stop
   feeding the hole, change the strategy.
 
+### 3i. 🔑 THE BLIND-CHECK LAW — *every manual verification is a bug report against an automation*
+
+Four independent instances in one night, in four different tools, three of them written by this track.
+They are one bug wearing four costumes, and — this is the useful part — **they all announced themselves
+the same way: a human was quietly doing the check by hand.**
+
+| # | The check | How it was blind | The human doing it by hand |
+|---|---|---|---|
+| 1 | `cc-notify` submit-verifier (§3g) | could only ABSTAIN (binary capture, no `LC_ALL=C`) → never once fired | orchestrator **hand-captured the pane** after every ruling |
+| 2 | `cc-context` telemetry sweep (§3h) | deleted a live stall's row on AGE → the stall VANISHED | operator ran a **1h fallback sweep** to catch stalls |
+| 3 | `cc-sessions` registry reaper (P8) | deleted a dead pane's row → the **spawn-death evidence erased** | (would have been) manual pane forensics |
+| 4 | `cc-bind` merge gate (this) | ack bound to an **ID, not the ruling's TEXT** → a ruling rewritten post-ack still PASSED | orchestrator **"verified the ruling blob verbatim"** by hand |
+
+**The law.** *A check that cannot observe the thing it guards is indistinguishable from no check at all.*
+Its failure is **silent by construction** — it exits 0, its suite is green, and the system looks healthy.
+
+**The detector for it — and this is the generative bit.** You cannot find a blind check by reading it;
+every one of these looked correct, and three shipped with passing tests. But a blind check has an
+unmissable external signature: **somebody starts doing its job manually.** So:
+
+> **AUDIT WHAT THE HUMAN *DOES*, NOT WHAT THEY *SAY*. Every manual verification in the log is a bug
+> report against an automation that should have done it — filed by someone who did not know they were
+> filing it.**
+
+This generalizes §1's method (which counted hand-run `/context` relays) into a **blindness detector for
+the whole layer**, and it is nearly free: the manual compensations are already in the transcripts. It
+also explains why the §1 count *undercounted* — a hand-capture, a fallback sweep, and a blob-verify never
+look like "an intervention", so a grep for `/context` misses all three.
+
+**Corollary — the recursion is real, and it bites the fixer.** #4 is `cc-bind`: the tool built to replace
+#1's untrustworthy channel **reproduced #1's exact pathology within hours**, and the tell was again a
+human hand-verifying. The pattern is not a property of any one tool; it is what happens whenever a
+detector's *evidence* and a detector's *hygiene* are served by the same mechanism. Assume it is present in
+the next primitive too — **the boundary hook and the supervisor are next, and both are checks.**
+
 ## 4. The boundary rule — verbatim, and why it needed a human
 
 From doc_classifier `docs/BUILD_LOG.md:30-37` ("When to clear / hand off"):
