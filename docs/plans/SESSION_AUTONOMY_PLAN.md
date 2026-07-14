@@ -373,3 +373,24 @@ incidents, account lockouts, iTerm2 restart)?
   (§3i, `05e4364`, desk-recorded: presence-of-good ≠ absence-of-bad). **WATCH now CLOSED — prove-on-W4
   essentially complete from the keeper's seat; the operator's ratification is the final gate.** Session: 13
   commits + this entry, parked 53. Self ~40% ctx/next3 — ample; holding for operator wake / W5-ratification.
+- 2026-07-14 ~16:5x (track, next3 keeper #2 → **RECYCLING at 52%, anticipatory**) — **OPERATOR WOKE: ZERO-HITL
+  DoD RULED + /SHIP AUTHORIZED (blocked by stale tests, root-caused) + P8 BY OPERATOR HAND.** Rulings: (1) **/ship
+  AUTHORIZED** for claude-infra; (2) **P8 activation by OPERATOR HAND** (`/tmp/p8-activate.sh` — C10 end-to-end;
+  I never run it); (3) rule → §3i notify-on-operator-blocked; (4) **THE ZERO-HITL DoD** (blueprint §5, `fea9200`)
+  — implementation runs zero-HITL; STOP-ASKs → agent-ruled defaults + async queues + push-notify (early-veto);
+  ship never gates (autonomous at GREEN exits); only stops = C10/permission/external-info; **WHY: every W0–W4
+  parked gate ruled EXACTLY as the lead recommended.** **SHIP ATTEMPTED** (authorized + autonomous-per-new-law)
+  from a detached worktree (ff-able, clean) → **BLOCKED by a RED gate**: `bats tests/` 2 failures. **Nearly
+  filed a FALSE GREEN via the pipe-mask trap** (`rc=$?` after `bats|tail`) → re-ran UNPIPED → true exit 1
+  (§3i (ii), `fea9200`). **ROOT-CAUSED (confirmed):** session-registry tests **67/68 are STALE** — they assert
+  the pre-P8-fix `rm -f`-on-dead behavior `7b2f701` deliberately removed (dead rows now RETAINED 24h + filtered
+  from the addressing view; `--all` = forensic). No push; worktree removed; parked **54**.
+  **→ HANDED TO SUCCESSOR (fresh headroom):** **(a) FIX stale tests 67/68** (assert: dead-pid/gone-pane entry
+  → absent from default `--names` view BUT file RETAINED until `CC_REG_RETAIN_H`=24h; `--all` shows it) → gate
+  GREEN → **SHIP** (operator-authorized, ff-able onto `origin/main`@`c4a6c78`; land from a DETACHED worktree —
+  `git worktree add --detach /tmp/wt-ship HEAD` — NEVER the shared checkout, step-2 guard; land-lock + content-
+  verify + stranded-sweep; ack desk with landed count). **(b) D1** re-derive the W0–W4 operator-touchpoint
+  ledger under the zero-HITL law (residual truly-needed set ~empty = the future design surface). **(c) D2**
+  runtime phase RISES (boundary-hook + page-only supervisor for unwatched multi-day runs; entry bar UNCHANGED =
+  premortem-gate GREEN + C10-gated activation). **(d)** integrate the DoD framing shift throughout the blueprint.
+  Session: 15 commits + this entry, parked 55. Recycle-in-place → pane uuid PRESERVED.
