@@ -17,6 +17,20 @@ pre-batched operator gates. Closes root cause **R4** (`docs/research/W0-W3_INTER
 throughout: validate against `ps`/`git`/live telemetry, **never a config file or a status report**
 (audit §7 — every config, effort file, mailbox, and `isActive` flag lies on 2.1.183).
 
+> 🚨 **Doc-authoring rule — PANE IDS (learned the hard way, 2026-07-14).** This template, the plan, and
+> every filled instance are the **copy-source** for the briefs a wave spawns. A truncated pane id written
+> here propagates into every downstream brief and breaks the succession that copies it. Two shapes, and
+> never a third:
+>
+> | Use | Write | Why |
+> |---|---|---|
+> | **operational** (a send target) | a **ROLE token** — `<orchestrator>`, `<wave-lead>` — resolved at SEND-TIME | panes are epoch-specific; any uuid written here is stale the moment that session recycles |
+> | **historical** (a status-log fact) | the **FULL uuid**, marked as a past fact | full-but-stale fails LOUD and recoverably (mailbox fallback); **truncated fails exit 3 — unresolvable, unmailboxable** |
+>
+> Enforced by `scripts/pane-id-lint.sh` (an 8-char prefix is a hard error; declare a genuine
+> non-pane id or an intentional counter-example with a `pane-id-lint:allow` marker). It is a grep and
+> not a paragraph on purpose: the author who introduced the original truncation **knew** the full uuid.
+
 ---
 
 ## §8.0 — Indexing
@@ -82,7 +96,7 @@ assign explicitly round-robin ≤2/account, re-check before each new wave.
 | Edge | Primitive | Notes |
 |---|---|---|
 | teammate → wave-lead | mailbox, **pull-verified** | `cc-sessions` liveness before trusting; teammate→lead is the reliable direction |
-| wave-lead → orchestrator | `cc-notify <orch-uuid>` + **R-PING armed** (`--notify-back`) | on wave-exit; pair with background `cc-await-ping` |
+| wave-lead → orchestrator | `cc-notify <orchestrator>` (ROLE — resolve at send-time) + **R-PING armed** (`--notify-back`) | on wave-exit; pair with background `cc-await-ping`. Never a cached uuid: the role outlives the pane |
 | orchestrator → wave-lead | `cc-notify` (the ONLY sanctioned send) | never raw osascript; submit-verified (exit 4 = strand) — **verifier fixed `3b12107`; it was INERT before, see below** |
 
 Binding corrections (must land before a merge gate) go via a **durable ruling file + commit-sha ack**
@@ -98,7 +112,8 @@ post-self-close; a cached uuid sends into the void. `cc-notify`'s LOUD-on-strand
 
 > 🚨 **Write pane UUIDs in FULL — an abbreviated id does not resolve.** Every succession brief, ruling,
 > and status log MUST carry the complete uuid (`99261468-A46A-498A-AE9B-F39473E5E7AE`), never the 8-char
-> prefix (`99261468`) that iTerm2's UI, this corpus, and human shorthand all default to. `cc-notify`
+> prefix (`99261468`) <!-- pane-id-lint:allow: quoting the bad form to teach it --> that iTerm2's UI,
+> this corpus, and human shorthand all default to. `cc-notify`
 > resolves **only** {registered friendly name | FULL uuid} → a prefix hard-fails **exit 3**, and the
 > friendly-name fallback does not exist yet (the session registry is EMPTY until **P8** is wired). On
 > 2026-07-14 this broke a successor's *mandated first action* — the announcement that tells the
