@@ -1,0 +1,76 @@
+#!/bin/bash
+# cc-context — live context telemetry for Claude Code sessions, readable by the
+# sessions THEMSELVES (and peers / supervisors / orchestrators).
+#
+# WHY (2026-07-14, SESSION_AUTONOMY_PLAN): /context is TUI-only — a session cannot
+# query its own context fill mid-turn, so the operator was hand-running /context +
+# /accounts between pause-points to tell sessions when to stay vs recycle vs hand off.
+# The statusline receives the full payload at every turn boundary; statusline.sh now
+# exports it to /tmp/cc-telemetry/<session_id>.json. This CLI is the read side: the
+# BUILD_LOG "when to clear / hand off" boundary rule becomes machine-checkable.
+#
+# Usage:
+#   cc-context                 table of all exported sessions, freshest first
+#   cc-context <id-prefix>     one session's full JSON (prefix match)
+#   cc-context --cwd <path>    sessions whose cwd matches path (self-resolution:
+#                              freshest row for your cwd is almost always you)
+#   cc-context --json          every record as JSON lines (for scripts)
+#
+# Freshness: ts is stamped at export; rows older than ~15m usually mean the session
+# is idle or closed — cross-check liveness (cc-sessions / ps on the pane tty) before
+# acting on a stale row. used_pct/remaining_pct are the payload's own INPUT-based
+# figures against the REAL window size (window field) — the honest numbers, not the
+# statusline's offset-adjusted display.
+set -u
+TDIR=/tmp/cc-telemetry
+[ -d "$TDIR" ] || { echo "no telemetry yet ($TDIR absent — statusline exports on each turn boundary)" >&2; exit 3; }
+
+MODE="table" FILTER="" CWD_FILTER=""
+case "${1:-}" in
+  --json) MODE="json" ;;
+  --cwd)  MODE="cwd"; CWD_FILTER="${2:?--cwd needs a path}" ;;
+  "")     ;;
+  -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
+  *)      MODE="one"; FILTER="$1" ;;
+esac
+
+rows() { # newest first
+  ls -t "$TDIR"/*.json 2>/dev/null
+}
+
+case "$MODE" in
+  json)
+    for f in $(rows); do cat "$f"; echo; done
+    ;;
+  one)
+    for f in $(rows); do
+      base="$(basename "$f" .json)"
+      case "$base" in "$FILTER"*)
+        jq --arg age "$(( $(date +%s) - $(jq -r '.ts // 0' "$f") ))" '. + {age_s: ($age|tonumber)}' "$f"
+        exit 0 ;;
+      esac
+    done
+    echo "no telemetry for session prefix '$FILTER'" >&2; exit 4
+    ;;
+  cwd|table)
+    now=$(date +%s)
+    printf "%-10s %-6s %-9s %-9s %-8s %-7s %s\n" "session" "age" "used%" "window" "model" "effort" "cwd"
+    for f in $(rows); do
+      line=$(jq -r --arg now "$now" '[
+        (.session_id // "?")[0:8],
+        (($now|tonumber) - (.ts // 0)),
+        ((.used_pct // "?")|tostring) + "%",
+        ((.window // 0) / 1000 | floor | tostring) + "k",
+        ((.model // "?") | sub("^claude-"; "")),
+        (.effort // "?"),
+        (.cwd // "?")
+      ] | @tsv' "$f" 2>/dev/null) || continue
+      IFS=$'\t' read -r sid age used win model effort cwd <<<"$line"
+      [ "$MODE" = "cwd" ] && case "$cwd" in *"$CWD_FILTER"*) ;; *) continue ;; esac
+      if   [ "$age" -lt 120 ];  then agestr="${age}s"
+      elif [ "$age" -lt 7200 ]; then agestr="$((age/60))m"
+      else                            agestr="$((age/3600))h"; fi
+      printf "%-10s %-6s %-9s %-9s %-8s %-7s %s\n" "$sid" "$agestr" "$used" "$win" "$model" "$effort" "$cwd"
+    done
+    ;;
+esac
