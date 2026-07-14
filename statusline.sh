@@ -169,12 +169,21 @@ if [ -n "$INPUT" ] && command -v jq &>/dev/null; then
     fi
 fi
 
-# Context % - Using remaining_percentage (per-conversation INPUT only)
+# Context % — EXACT /context parity when the payload exposes used_percentage (CC ≥2.1.207).
+# Verified 2026-07-14: payload used_percentage=45 vs transcript last-usage occupancy
+# 444,452 tok = 44.4% of the 1M window (0.6-pt delta = integer rounding + one turn of
+# drift). The GH #17959 / #12520 "statusline cannot reproduce /context" limitation is
+# SUPERSEDED by context_window.{used_percentage, current_usage, context_window_size}.
+# Fallback for older payloads: the window-aware reserved-space ESTIMATE (margins, not
+# precision — the exact effective-context params were never exposed in that era).
 if [ -n "$INPUT" ] && command -v jq &>/dev/null; then
+    USED=$(echo "$INPUT" | jq -r '.context_window.used_percentage // empty' 2>/dev/null)
     REMAINING=$(echo "$INPUT" | jq -r '.context_window.remaining_percentage // empty' 2>/dev/null)
     WINDOW=$(echo "$INPUT" | jq -r '.context_window.context_window_size // empty' 2>/dev/null)
 
-    if [ -n "$REMAINING" ] && [ "$REMAINING" != "null" ]; then
+    if [ -n "$USED" ] && [ "$USED" != "null" ]; then
+        PCT="${USED%%.*}"                              # /context-parity display
+    elif [ -n "$REMAINING" ] && [ "$REMAINING" != "null" ]; then
         REMAINING="${REMAINING%%.*}"   # tolerate float payloads
         # Scale the reserved-space buffers to the REAL window: 48 points on 200k
         # (bit-identical to the old fixed constant), ~9 on 1M. Unknown window → 200k.
