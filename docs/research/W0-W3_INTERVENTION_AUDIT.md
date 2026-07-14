@@ -13,7 +13,9 @@ teammate panes whose only external-string turns are their own `<teammate-message
 burden therefore concentrates in the leads. Window per plan: **2026-07-13 01:44 → 2026-07-14 00:12
 PST** (= UTC 07-13 ~08:44 → 07-14 ~07:12); leads in-window: `5818bac0` (W0/W1, Fable), `163b5ffa`
 (W2/W3), `31bcd087` (W3-exit), `a28944df` (the orchestrator that wrote the plan + fired this track,
-pane 99261468). Two earlier leads (`89369003` 07-11 port-readiness; `f2ba5c7b` 07-09) are tagged
+pane `99261468-A46A-498A-AE9B-F39473E5E7AE` — the 2026-07-14 epoch; a historical fact, NOT a send target, since that pane
+recycles). Two earlier leads (`89369003` <!-- pane-id-lint:allow: session id, not a pane --> 07-11
+port-readiness; `f2ba5c7b` 07-09) are tagged
 **pre-window** and mined only for the limit-recover / workflow-supervision classes.
 
 **Corpus tally (all 31 files, external-string turns):** 94 teammate→lead relays · 30 raw "operator"
@@ -129,7 +131,7 @@ Trigger → detector → recovery is the Build contract (axis h).
   a non-decision nor barrels past a real gate. Detector: idle-at-non-boundary (supervisor, axis b/h).
 
 ### 3d. Usage-limit kills mid-workflow (pre-window, 07-11, but recurring-class)
-- **Evidence:** `89369003` ran `/limit-recover` ×2 (21:00, 22:15 — the second ingesting a salvage
+- **Evidence:** `89369003` <!-- pane-id-lint:allow: session id, not a pane --> ran `/limit-recover` ×2 (21:00, 22:15 — the second ingesting a salvage
   bundle) after limit interruptions during Dynamic-Workflow convergence.
 - **Trigger:** 5-hour / weekly / Fable-scoped limit hit mid-run; slots died partial.
 - **Status:** `/limit-recover` skill exists (disk-truth audit + transplant/salvage). Build's
@@ -137,14 +139,14 @@ Trigger → detector → recovery is the Build contract (axis h).
   and routes recovery through the sanctioned rails, so the operator isn't the one noticing the kill.
 
 ### 3e. Workflow-convergence babysitting (pre-window, 07-11)
-- **Evidence:** `89369003` — repeated operator prods *"Check workflow wf_… ; if slots failed on
+- **Evidence:** `89369003` <!-- pane-id-lint:allow: session id, not a pane --> — repeated operator prods *"Check workflow wf_… ; if slots failed on
   limits, resume with resumeFromRunId until 100% executed; loop until converged=true."*
 - **Trigger:** no self-driving convergence loop; the operator manually re-checked and re-launched.
 - **Status:** largely Dynamic-Workflow-internal (adjacent to core scope). Note as a **named
   out-of-scope discovery** feeding the plan-template's "self-driving convergence" pattern (axis e),
   not a core detector.
 
-### 3f. GO-deafness at the spawn boundary — **W4 LIVE** (2026-07-14 ~01:3x, relayed via orchestrator `99261468`)
+### 3f. GO-deafness at the spawn boundary — **W4 LIVE** (2026-07-14 ~01:3x, relayed via the orchestrator)
 - **Evidence:** during the live W4 wave, two teammate panes (**B19b** + **web-core**) were
   **GO-deaf at their spawn boundary** — the lead's spawn-time GO never landed / was never acted on;
   the teammates sat deaf. The W4 lead **respawned both** and sharpened its rule to *"spawn-boundary GO

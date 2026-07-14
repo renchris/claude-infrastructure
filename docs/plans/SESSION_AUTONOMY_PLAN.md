@@ -110,7 +110,7 @@ incidents, account lockouts, iTerm2 restart)?
 ## Status log
 
 - 2026-07-14 00:3x — plan created by the orchestrator session (a28944df, doc_classifier pane
-  99261468); telemetry v1 + cc-context landed (`74d267f`); deep track fired on next2 (Opus @ max).
+  `99261468-A46A-498A-AE9B-F39473E5E7AE`); telemetry v1 + cc-context landed (`74d267f`); deep track fired on next2 (Opus @ max).
 - 2026-07-14 (track, next2) — **evidence audit DONE**: `docs/research/W0-W3_INTERVENTION_AUDIT.md`
   committed `3279340`. Deterministic extraction over 31 doc_classifier transcripts (read-only)
   quantified the operator burden: **10 hand-run `/context`+`/accounts` relays**, the 2.3×-gauge
@@ -122,7 +122,7 @@ incidents, account lockouts, iTerm2 restart)?
   **k** post-hoc auditability/verifiable-trust, **l** cross-session runtime contention, **m**
   autonomy-layer self-cost). 12 Opus workers (a-m) + 2 Fable adversarial (j1 red-team, j2
   hostile-reviewer), all read-only background. d→e dependency explicit; h owns the boundary hook.
-  Quota wide open (all accounts <0.2%). Originator pinged (99261468). Awaiting returns → converge.
+  Quota wide open (all accounts <0.2%). Originator pinged (the orchestrator). Awaiting returns → converge.
 - 2026-07-14 (track, next2) — **RESEARCH CONVERGED (14/14) + PROPOSALS DELIVERED.** Blueprint
   `581b75a` (`docs/research/SESSION_AUTONOMY_RESEARCH.md`: 5 architecture invariants, 7 design
   decisions, per-primitive spec, revised docs-first Phase 0, j1 risk register, 6 build blockers).
@@ -132,9 +132,9 @@ incidents, account lockouts, iTerm2 restart)?
   supervisor has the least evidence of need (post-fixes, n=1 unplanned residual). **Design law:**
   fail-loud · park-and-page · effect-verified · plan-time-schedule primary. **Build law:** docs-first
   → prove-on-W4 → runtime-only-to-residual. **5 operator decisions surfaced (blueprint §5)** — batched
-  gate pinged to 99261468. Proceeding on the ruling-independent safe primitive (telemetry-v2);
+  gate pinged to the orchestrator. Proceeding on the ruling-independent safe primitive (telemetry-v2);
   HOLDING boundary-hook + supervisor for the DoD/build-order ruling (blueprint §5 #1/#4).
-- 2026-07-14 ~02:0x (track, next2) — **OPERATOR RATIFIED ALL 5** (relayed via `99261468`): (1) DoD =
+- 2026-07-14 ~02:0x (track, next2) — **OPERATOR RATIFIED ALL 5** (relayed via the orchestrator): (1) DoD =
   park-until-gate → **supervisor PAGES, never auto-recovers** (detect + checkpoint-preserve + page;
   operator/delegated-live-session recovers); (2) unknown modal = PAGE; (3) C6 money-path permanently
   out-of-class; (4) **docs-first → prove-on-W4 → runtime-only-to-residual**; (5)

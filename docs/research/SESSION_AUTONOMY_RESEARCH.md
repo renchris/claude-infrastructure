@@ -127,7 +127,7 @@ one-shot-latched abstain-on-stale hook, b's bash-can't-close-a-live-pane split, 
   verifier.** Do not let a green NOTIFY tier tempt the design back toward trusting the send.
 - **Successor-announcement addressing failure (2026-07-14, this session's own startup — dogfooded).** The
   successor's mandated FIRST action (announce its pane so the orchestrator re-addresses to it) **hard-failed,
-  exit 3**: the brief carried the pane id as an **8-char prefix** (`99261468`) — the form the plan corpus,
+  exit 3**: the brief carried the pane id as an **8-char prefix** (`99261468`) <!-- pane-id-lint:allow: quoting the bad form to teach it --> — the form the plan corpus,
   the audit and iTerm2's own UI all use — but `cc-notify` resolves **only** {registered friendly name |
   FULL uuid}. The name fallback was unavailable too: the registry is **EMPTY** (`cc-notify --list` →
   "(no sessions registered)") because **P8 is the un-wired Wave-A residual**. Two independent gaps composed
@@ -137,6 +137,19 @@ one-shot-latched abstain-on-stale hook, b's bash-can't-close-a-live-pane split, 
   no-match → fail loud) — because the abbreviated form *is* the human/brief form and pretending otherwise
   guarantees recurrence; (2) **land P8** so the friendly-name path exists at all. Until both: a succession
   brief MUST carry the **full** uuid. Feeds §8 E5 + P8.
+  - **PROVENANCE (orchestrator's own root-cause credit, 2026-07-14): the truncation entered at
+    DOC-AUTHORING time, not brief-writing time.** The orchestrator wrote `orchestrator pane 99261468` <!-- pane-id-lint:allow: quoting the bad form to teach it -->
+    into the plan and the W4/W5 proposal; every downstream brief then faithfully copied it. **The corpus
+    IS the copy-source** — so the rule belongs in the DOC TEMPLATES, not merely in a brief checklist, and
+    a prose rule cannot carry it (the author *knew* the full uuid and truncated anyway, for readability).
+    Hence `scripts/pane-id-lint.sh` — mechanical, per this repo's own law that prose rules get violated
+    and un-fakeable greps do not. It caught 9 live landmines across 5 files on its first run.
+  - **The two shapes (this is the durable rule, and it dissolves BOTH failure modes):** an **operational
+    address** → a **ROLE token** (`<orchestrator>`), resolved at SEND-TIME, because any uuid in a doc goes
+    stale the moment that session recycles; a **historical reference** → the **FULL uuid**, stamped as a
+    past fact. A stale-but-full uuid degrades GRACEFULLY (loud "unreachable" + mailbox fallback,
+    recoverable); a TRUNCATED uuid hard-fails **exit 3** — unresolvable, and it cannot even be mailboxed.
+    **Truncated is strictly worse than stale.**
 
 ### 3.6 `auditability` (axis k; owner: new bin/cc-idl, cc-truth, cc-audit)
 - Three lie-classes: **T1 signal-lie** (freeze reported+truth at decision time), **T2 ledger-lie** (independent-observer + tamper-evident chain + transcript reconciliation), **T3 should-have-fired** (coverage check over telemetry series, not decisions-taken).
@@ -196,7 +209,7 @@ account next"`).
 - **E8 session-spawn-readiness checklist** — the session-layer analog of C00 §7 (`scripts/session-spawn-readiness.sh`): E3 fence cleared · E4 placement fresh · E2 threshold declared · E5 UUIDs registered · E6 manifest signed · E7 worktree isolated → a missing box HALTS the wave cut.
 - **E9 telemetry binding + self-cost** — the `cc-context × claude-accounts` join (a) + the layer's own footprint ceiling (m).
 
-**Deliverables (docs/proposals/, NEVER doc_classifier):** `C00-SECTION-8-TEMPLATE.md` (blank E1–E9 + the E8 checklist) + `W4-W5-SESSION-ORCHESTRATION.md` (filled: W4 = next/Fable@xhigh, succession ≥60% at green boundary, `spawn base 3bb2e08` write-fence, 10 teammates→W4-lead→orchestrator `99261468` R-PING; W5 = maybe Opus@max if the Fable window closed, single lead). **Index per-wave with a succession sub-row** (a lead spans waves; a wave spans leads — keep both).
+**Deliverables (docs/proposals/, NEVER doc_classifier):** `C00-SECTION-8-TEMPLATE.md` (blank E1–E9 + the E8 checklist) + `W4-W5-SESSION-ORCHESTRATION.md` (filled: W4 = next/Fable@xhigh, succession ≥60% at green boundary, `spawn base 3bb2e08` write-fence, 10 teammates→W4-lead→`<orchestrator>` (role, resolved at send-time) R-PING; W5 = maybe Opus@max if the Fable window closed, single lead). **Index per-wave with a succession sub-row** (a lead spans waves; a wave spans leads — keep both).
 
 ---
 
@@ -257,7 +270,7 @@ session-succession working) before any runtime primitive is built.
 
 ---
 
-## 5. Operator decisions — **RULED 2026-07-14 ~02:0x · RATIFY ALL 5** (relayed via `99261468`)
+## 5. Operator decisions — **RULED 2026-07-14 ~02:0x · RATIFY ALL 5** (relayed via the orchestrator)
 
 **Ruling stamp (all 5 ratified):** (1) DoD = **batched + legible + park-until-gate → the supervisor
 PAGES, never auto-recovers** (stronger than the rec below: it detects + checkpoints-to-preserve +
