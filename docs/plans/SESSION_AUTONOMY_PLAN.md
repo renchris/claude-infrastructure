@@ -153,6 +153,31 @@ incidents, account lockouts, iTerm2 restart)?
   a glance). → NEXT per ratified order: **prove-on-W4** (operator applies §8 + uses telemetry), THEN
   runtime-to-residual (boundary-hook, supervisor page-only, gate-batching, auditability — blueprint
   §3/§4). Wave-A residual deferred: session-register P8 wiring, IDL auditability floor, e2e umbrella.
+- 2026-07-14 ~04:0x (track, **next4 successor**; predecessor self-closed at its §8 boundary — 60% ctx /
+  87% weekly — and the succession rails ran clean end-to-end) — **THE VERIFIER WAS INERT (`3b12107`).**
+  Found by dogfooding: the successor's own mandated startup `cc-notify` printed `submit UNVERIFIED`.
+  Root cause: an it2 screen capture is **BINARY** (iTerm2 NUL-pads cells; ~177 NULs / 4.5KB) and BSD
+  `/usr/bin/grep` needs **`LC_ALL=C`** to byte-match the multibyte `❯` past the NULs (**`-a` alone is NOT
+  enough** — the UTF-8 locale still misses it). So `98a3dd9`'s strand-detector — the audit's recorded FIX
+  for the composer-strand class — **never executed once**: every send, in every session, for ~24h reported
+  `UNVERIFIED` + exit 0, and the ~1-in-6 Ink strand went **unwatched**. Orchestrator corroborated
+  independently (*"a dozen+ sends... I mis-attributed it to a sandbox limitation — retracted"*) and had been
+  **hand-capturing panes after each ruling** to compensate — **a human silently serving as the compensating
+  control for a blind automation** = a NEW manual-relay class, invisible to a transcript grep (audit §1).
+  **Effect-checked live: a real send now prints `submit VERIFIED`** (that branch's first-ever execution).
+  **The suite was 15/15 GREEN over unreachable code** via 3 compounding harness defects → the **four harness
+  laws** (blueprint §3.10 L1–L4): fixtures must carry the REAL artifact's BYTES · assert a string the FAILURE
+  cannot satisfy (`*"VERIFIED"*` also matches `"UNVERIFIED"`) · every assertion must TRAP (**bats does not
+  trap a bare mid-body `[[ ]]`** — 7/7 were dead) · **prove the suite RED against the real bug + effect-check
+  live before recording "FIXED"**. Suite hardened: 15/15 on the fix, **3 RED** on the as-shipped binary.
+  **Captured:** audit §3g (+ D9 detector, R6 corrected, R7 opened, §7 law extended to the verifier/fixture/
+  green-suite), blueprint §1/§3.5/§3.10/§4 (**Deploy DoD clause 2**: a "FIXED" claim about *checking* code
+  is not a fix until the check is seen to FIRE), template §8 E5. **Standing consequence for the build:
+  a detector that has never fired in production is UNPROVEN, not "quiet"** — binds boundary-hook (h) +
+  supervisor (b) directly. Also: successor announcement hard-failed **exit 3** on an **abbreviated pane id**
+  (briefs/corpus use the 8-char prefix; `cc-notify` takes only {name | FULL uuid}, and the name registry is
+  EMPTY — **P8 un-wired**) → two gaps composed to break a succession's most important send; failed LOUD, not
+  silent. → §8 E5 now mandates FULL uuids; queued: prefix-expansion in `cc-notify` + land P8.
 - 2026-07-14 (prove-on-W4, orchestrator 1st hour) — **✅ VALUE CONFIRMED IN PRODUCTION.** cc-board
   caught the live W4 lead at **63% > §8 `boundary_recycle=60`** → succession advisory fired on the rails
   (the operator's hand-catch, now automated — audit §1 → 0). STALE renders correctly for closed

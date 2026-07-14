@@ -53,6 +53,15 @@ Plus two **derived** relays that are the same pain in a different shape:
 - `163b5ffa` 05:55:51 — **forced relief on a relayed context number** (see §3b): *"You are at 95%
   context: do NOT take further work … you may self-close."*
 
+**A SECOND manual-relay class, found 2026-07-14 (§3g) — invisible to the count above.** The
+orchestrator was **hand-capturing the target pane after every load-bearing ruling delivery** to confirm
+it actually landed, because `cc-notify`'s own submit-verifier was inert and reported `UNVERIFIED` on
+every send. That is the same pathology as the table (a human supplying a signal the machine should
+supply), but it never appears as a `/context`/`/accounts` turn, so a transcript-grep for relays
+**undercounts the burden**. Generalized: **wherever an automation's self-check is blind, a human silently
+becomes the compensating control** — and that labour is only visible by auditing what the human *did*,
+not what they *typed*. Drive to zero alongside the 10 rows above.
+
 **Root cause R1 + R2.** `/context` is TUI-only — a session cannot query its own fill mid-turn — and
 the BUILD_LOG boundary rule's decisive condition is **qualitative** (see §4), so a human had to read
 the number and make the stay/recycle/handoff call *for* the session. **Status:** the READ side is
@@ -170,6 +179,58 @@ Trigger → detector → recovery is the Build contract (axis h).
   E6 gate-batching + E3 write-fence) and back-channel continuity held (§8 E5). The §8 *session-layer*
   succession — not just the teammate layer — is validated in production.
 
+### 3g. **The VERIFIER itself lied** — instance #4, and the one that indicts the family (2026-07-14, next4 successor)
+
+The four instances in §3f share one root ("a send reports success but does not bind"). #4 is the
+**meta** case: the *detector built to catch #1* was **itself inert from birth**, so the class it
+"closed" was never actually being watched. Found by dogfooding — the successor's own mandated startup
+`cc-notify` printed `submit UNVERIFIED`.
+
+- **Evidence:** `98a3dd9` (2026-07-13) added submit-verification to `cc-notify` — capture the target
+  pane, re-send CR up to 2×, `exit 4` LOUD on a strand. **It never ran once.** An it2 screen capture is
+  **BINARY** (iTerm2 NUL-pads empty cells; ~177 NULs in a 4.5 KB screen). BSD `/usr/bin/grep` on it:
+  | invocation | result |
+  |---|---|
+  | `grep '❯'` (as shipped) | no match — binary suppression |
+  | `grep -a '❯'`, UTF-8 locale | **STILL no match** — the NULs break the multibyte decode, so the multibyte `❯` (U+276F) is never found |
+  | `LC_ALL=C grep -a '❯'` | **matches** (pure byte compare) — the only working combination |
+  So `composer_stranded()` always fell to `return 2` ("unreadable") → **every send reported
+  `submit UNVERIFIED` and exited 0**; the retry/`exit 4` path was unreachable code.
+- **Blast radius (independently corroborated by the orchestrator, same night):** *"every cc-notify I
+  sent tonight (a dozen+) printed 'submit UNVERIFIED — pane capture unavailable'; I mis-attributed that
+  to a sandbox limitation — retracted."* The ~1-in-6 Ink-redraw strand was **undetected across every
+  session for ~24h** — a stranded ruling would have read as delivered.
+- **The compensating control was a HUMAN — i.e. §1's pain in a new guise.** The orchestrator was
+  **manually pane-capturing after every load-bearing ruling delivery** ("confirm-the-effect" by hand),
+  so rulings were covered — but **every routine datapoint send ran unprotected**. Hand-verifying a blind
+  automation is a *new unplanned-intervention class*: **manual effect-verification of a lying primitive**
+  (add to §1's burden-to-zero set; it is invisible to a `/context`-style relay count).
+- **Status: FIXED** — `3b12107` (`LC_ALL=C grep -an`, both probes). **Effect-checked in production:** a
+  real cross-session send now prints `submit VERIFIED` (that path's first-ever execution). **The R6 row's
+  "partial — FIXED `98a3dd9`" claim was FALSE for ~24h and is corrected in §5.**
+- **Why 15/15 tests stayed green over an inert primitive — THREE compounding harness defects**, each
+  alone sufficient to hide it (this is the axis-i lesson, generalized):
+  1. **Unrepresentative fixture.** Fixtures were hand-`printf`'d **plain text**; production's artifact is
+     **binary**. The suite tested a file production never emits. → Stub now **NUL-pads every fixture**.
+  2. **Phantom-green assertion.** `[[ "$output" == *"VERIFIED"* ]]` **also matches `"UNVERIFIED"`** — the
+     assertion passed on the exact degraded result it existed to catch. → Now asserts `"submit VERIFIED"`.
+  3. **Inert assertion form.** **bats does not trap a bare mid-body `[[ ]]`** (a bash keyword, exempt from
+     the errexit path; `[ ]` and `grep -q` *do* trap) — so **every non-final `[[ ]]` assertion in the file
+     could never fail a test**. → All 7 now carry `|| false`.
+  **Bidirectional proof** (the standard every primitive's suite must now meet): fixed binary + hardened
+  suite = **15/15 green**; as-shipped binary + hardened suite = **3 RED**. A suite that cannot go red
+  against the bug it claims to guard is decoration.
+- **Meta-lesson (extends §7's law).** *Verify the EFFECT* now reaches three surfaces it did not before:
+  **(i) the verifier itself** — a "FIXED" claim about verification code is worthless without a live
+  effect-check (a real send that prints `VERIFIED`); **(ii) the test fixture** — a synthetic fixture IS a
+  report; it must carry the real artifact's **bytes**, captured from the real tool; **(iii) the green
+  suite** — green is a report, and its teeth are the effect (prove red against the real bug).
+- **Adjacent trap that hid it during debugging** (durable, cost ~20 min): at an interactive prompt
+  `grep` may be a **shell function/alias** (here → `ugrep`), which **does** match the ❯ in a NUL-bearing
+  file. Every "it works standalone" check was therefore testing a *different binary* than the `#!/bin/bash`
+  script invokes (`/usr/bin/grep`). Same class as the `claude --version` shell-function trap — verify tool
+  identity (`type grep`, absolute path) before trusting a manual repro *or* a negative/positive claim.
+
 ---
 
 ## 4. The boundary rule — verbatim, and why it needed a human
@@ -204,7 +265,8 @@ From doc_classifier `docs/BUILD_LOG.md:30-37` ("When to clear / hand off"):
 | R3 | Handoff/succession mechanical bugs | 3/3 closed-without-opening; 2.3× gauge false-relief | FIXED (`dd40eca`,`9918ff5`,`7674496`,`1b8d671`) | i (E2E so regressions self-announce) |
 | R4 | **No session-orchestration LAYER in the plan template** | lead account/model/context/succession improvised live | open | e (C00 §8 template + filled W4/W5) |
 | R5 | Designed gates unbatched | each ratification/ship/go a separate interrupt | open | c (pre-delegated ruling classes) |
-| R6 | Downward comms unreliable mid-stream; liveness lies | **3 comms-reliability instances/24h** (§3f): composer-strand (FIXED `98a3dd9`) · shutdown_request zombies · **GO-deafness at spawn (W4 live)**; plus idle-hook+ps both lied | partial (cc-notify submit-verify `98a3dd9`); design LIVE-VALIDATED | b/f (pull-based liveness, effect-verified GO, respawn-at-boundary-with-GO-in-brief, TaskStop/it2 teardown), supervisor |
+| R6 | Downward comms unreliable mid-stream; liveness lies | **4 comms-reliability instances/24h** (§3f, §3g): composer-strand · shutdown_request zombies · **GO-deafness at spawn (W4 live)** · **the submit-VERIFIER itself was inert (§3g)**; plus idle-hook+ps both lied | partial → **corrected**: `98a3dd9` was **INERT** (never detected a strand; every send read "UNVERIFIED"); actually FIXED `3b12107` (`LC_ALL=C grep`), effect-checked live | b/f (pull-based liveness, effect-verified GO, respawn-at-boundary-with-GO-in-brief, TaskStop/it2 teardown), supervisor |
+| R7 | **A "FIXED" claim trusted without an effect-check; a green suite trusted as evidence** | `98a3dd9` recorded as the strand fix in the audit + project memory for ~24h while unreachable; its 15/15 suite passed over an inert primitive (3 compounding harness defects, §3g) | **OPEN** (discipline + axis-i harness laws; D9) | i (binary fixtures from the real tool, trapping assertions, red-against-the-bug proof), k (independent-observer) |
 
 **R4 is the structural one the operator named directly:** *"is there room for improvement on how we
 create our multi-layer end-to-end implementation plans, and not just single Agent Team plans which
@@ -253,6 +315,21 @@ survivor heartbeat), a composer newline (not a cleared `❯`), the effort file (
 (not atomic ps+git), `shutdown_request` (not TaskStop). The supervisor and boundary hook must be
 built on effect-verification, not status-reports.
 
+**Extended 2026-07-14 (§3g) — the law had a blind spot that cost ~24h of false confidence: it was
+applied to the *system under test* but never to the *verification apparatus itself*.** Three more
+surfaces are now in scope, and each was a live escape:
+
+| Surface | The lie | The effect-check that catches it |
+|---|---|---|
+| **The verifier** | a checker that always abstains looks identical to a checker that always passes (both exit 0) | run it for real and watch the OUTCOME — `cc-notify` must actually print `submit VERIFIED` (D9's distribution monitor generalizes this) |
+| **The test fixture** | a synthetic fixture IS a report: hand-`printf`'d text stood in for a binary NUL-padded capture, so the suite tested a file production never emits | fixtures must carry the **real artifact's bytes**, captured from the real tool — not a plausible reconstruction of them |
+| **The green suite** | green is a report; 15/15 passed over unreachable code | **prove it RED against the real bug** — a suite that cannot fail on the defect it guards is decoration |
+
+**And the tool-identity corollary:** a manual repro at an interactive prompt may not run the binary the
+script runs (`grep` here was a shell function → `ugrep`, which *does* match where `/usr/bin/grep` does
+not). Verify tool identity (`type X`, absolute path) before trusting a repro — this cuts BOTH ways: it
+falsifies negative claims ("tool can't do Z") *and* positive ones ("it works, I just ran it").
+
 ### The OPEN mechanical detectors → supervisor sensor suite (feeds axis b/h)
 
 | # | OPEN defect (source) | Deterministic detector (already named) | Recovery |
@@ -265,6 +342,7 @@ built on effect-verification, not status-reports.
 | D6 | `lr-audit` re-flags superseded slots from stale transcript residue | reconcile flag vs `workflows/wf_<id>.json` journal + recovery ledger | ledger-append re-confirmation; skip re-run |
 | D7 | `team_name` required though schema says "deprecated; ignored" (spawn blocked 4/5 without) | always pass `team_name:"session-<id>"`; assert before spawn | (workaround is the fix) |
 | D8 | **silent teammate pane-death** (GO-deaf — pane dies at spawn OR mid-queue; 3 live W4 instances §3f) | **TWO trigger points:** (1) spawn-boundary GO effect-verified (first commit/ack), unanswered→act; (2) task-boundary liveness = atomic `ps` + expected check-in commit, mid-work death→act | respawn-with-rulings-in-brief (never nudge); rebase onto last-good commit, resume from failed task |
+| D9 | **an always-degrading VERIFIER — a check that can only ever abstain** (§3g: `cc-notify` returned "UNVERIFIED" on 100% of sends for ~24h; the strand branch was unreachable code) | **Outcome-distribution monitor, not a unit test.** A verifier whose *positive* AND *negative* branches never fire across N real invocations is inert by construction — no code review needed, the distribution IS the evidence. Concretely: `[AUTONOMY:verify:*]` outcome counted in the IDL (axis k P1); alarm on `verified==0 ∧ failed==0 ∧ abstained==N` for N≥10. The general rule: **an abstain/degrade path that is 100% of outcomes is a BUG, never a graceful degrade.** | fail LOUD (a verifier that cannot verify must not exit 0 silently); live effect-check before any "FIXED" is recorded; red-against-the-bug proof in the suite |
 
 ⚠️ **Build-time reconciliation flag (D2):** this audit's sources (BUILD_LOG + `agent-teammate-spawn-2-1-183`)
 say per-member teammate effort is **INERT** on 2.1.183 (Agent forwards the lead's `--effort`), while
