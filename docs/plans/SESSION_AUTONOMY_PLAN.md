@@ -394,3 +394,24 @@ incidents, account lockouts, iTerm2 restart)?
   runtime phase RISES (boundary-hook + page-only supervisor for unwatched multi-day runs; entry bar UNCHANGED =
   premortem-gate GREEN + C10-gated activation). **(d)** integrate the DoD framing shift throughout the blueprint.
   Session: 15 commits + this entry, parked 55. Recycle-in-place → pane uuid PRESERVED.
+- 2026-07-14 ~17:xx (track, **next3 successor #3**; recycle-in-place, pane uuid PRESERVED) — **TASK 1 + TASK 2
+  DONE: STALE TESTS FIXED → GATE GREEN → 57 COMMITS LANDED (wire-witnessed).** **(1) `817448d`** — tests 67/68
+  rewritten to the P8 retain-dead contract (VIEW live-only / RETENTION age-24h / FORENSIC `--all`) + a THIRD test
+  pinning the age-reap boundary (retention was otherwise unobserved — blind-check law: the check must see the full
+  contract). Proven **RED against `7b2f701^`** (immediate-rm-f, no `--all`) and GREEN against current — so they
+  DISCRIMINATE the change, not vacuously green (desk: *"a fixed test that never failed against the old behavior
+  proves nothing"*). Suite **78/78** (was 77). **(2) SHIP LANDED** — `c4a6c78..817448d`, 57 commits ff onto
+  origin/main from a detached `/tmp/wt-ship` under `land-lock`. **WIRE-WITNESSED** (the program's 2nd push, same
+  discipline as the 1st): `git ls-remote origin main = 817448dc…` + sha-identity + `git diff 817448d origin/main`
+  = 0 lines + ls-tree spot-check. Gate GREEN **inside the lock** (bats 78/78, shellcheck-error 0, bash -n clean).
+  Stranded-sweep **0/7**. **LINT-SCOPE RULING (zero-HITL agent-default; DESK CONCURS, logged async):** the ship
+  gate blocks on shellcheck **ERRORS** + syntax + bats; the **64 note / 6 warning** findings (idiomatic
+  `assert && ok || bad`, `ps -t` by tty, ls-for-time-sort of UUID files, unused loop counters, **1 confirmed
+  false-positive SC2154** — `reset_at_utc` is python-emitted-then-eval'd) are **non-blocking** — landing an
+  authorized stack ≠ a lint refactor of 12 E2E-green scripts (scope-metastasis + regression risk). The SC2154
+  triage-to-confirmation shows it was real triage, not a wave-through. **→ BACKLOG (named, not fixed): land-lock
+  keys `REPO_ROOT` via `git rev-parse --show-toplevel`, so a detached worktree gets a DIFFERENT lock key than the
+  main checkout** — two worktrees could both hold the "lock" concurrently. Non-ff push rejection is the TRUE
+  correctness guard (the lock is only an optimization); **when fixed, key on the REMOTE url, not the worktree
+  root** (desk refinement — serializes all landings to a remote regardless of local checkout). **NEXT: D1**
+  touchpoint re-derive under zero-HITL, then **D2** runtime phase. Parked after this entry: 2 (status + D1 pending).
