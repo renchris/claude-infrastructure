@@ -60,8 +60,13 @@ else
   ./scripts/payload-lint.sh --selftest >/dev/null 2>&1 && ok "F3" "payload-lint --selftest GREEN — a back-channel-less successor payload lints RED (the incident root, closed)" || bad "F3" "payload-lint --selftest not green"
 fi
 
-# ── F4 — event-adaptive contract deadlines ────────────────────────────────────────────────────────────
-todo "F4" "NOT BUILT — EVENT-ADAPTIVE deadlines: the desk's wait-contract / reconciler sweep TIGHTENS to ~900s during EXIT SEQUENCES (the 50-min window was tuning, not architecture). RED-provable: with an exit-sequence flag set, the effective deadline/sweep cadence is ~900s (not the 3600s hourly default); without it, the default. (Extends L2/L4 — the deadline is an INPUT, not a constant.)"
+# ── F4 — event-adaptive contract deadlines: scripts/exit-deadline.sh resolves the tightened deadline. ──
+DEADLINE=scripts/exit-deadline.sh
+if [ ! -f "$DEADLINE" ]; then
+  todo "F4" "NOT BUILT — EVENT-ADAPTIVE deadlines: the desk's wait-contract / reconciler sweep TIGHTENS to ~900s during EXIT SEQUENCES (the 50-min window was tuning, not architecture). RED-provable: with an exit-sequence flag set, the effective deadline/sweep cadence is ~900s (not the 3600s hourly default); without it, the default. (Extends L2/L4 — the deadline is an INPUT, not a constant.)"
+else
+  ./scripts/exit-deadline.sh --selftest >/dev/null 2>&1 && ok "F4" "exit-deadline --selftest GREEN — the wait/sweep deadline TIGHTENS 3600→900 under an exit-sequence flag (env or file); per-layer pairs honored; the deadline is an INPUT, not a constant (extends L2/L4; live machinery calls it at ACTIVATION)" || bad "F4" "exit-deadline --selftest not green"
+fi
 
 # ── F5 — completion-push ──────────────────────────────────────────────────────────────────────────────
 todo "F5" "NOT BUILT — COMPLETION-PUSH: program-terminal detection → an OPERATOR push. The rule existed but was STARVED of input; F1 (cc-announce) feeds it. RED-provable: a program-terminal completion event → a push/announce fires (a record exists), verified via cc-announce; the terminal event is never silent. Wire into the exit recipe at ACTIVATION (C10)."
