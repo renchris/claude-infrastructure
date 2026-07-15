@@ -507,9 +507,21 @@ unable to see, and who ends up checking it by hand?"*
     (`on_timeout_note:"never reap"` → GREEN) and the hostile 'cleanup' → RED.
   - **Deploy: C10-queued** — symlink `cc-wait`/`wait-contract-lint.sh` into `~/.claude/bin` + wire `--sweep`
     into the supervisor/boundary loop = operator activation (consolidated activation script at build end).
-- **L3 — effect-bound progress heartbeats** (`bin/cc-run`): heartbeat per unit of **real output** (not
-  wall-clock) → closes D10 long-op-vs-hang at the source. Must DECLARE the residual blindness (silent-compute
-  + looping-output ops) and route their liveness to L1(pid)/L2(heartbeat-expectation=none).
+- **L3 — effect-bound progress heartbeats — DONE (2026-07-14, successor #4; THE FINAL LAYER)** — gate rows
+  L3-a/L3-blind ✅; with this the WHOLE `wait-safety-gate` turns GREEN (13 met · 0 failed · 0 NOT BUILT).
+  RED-proven (`selftest` 4/4), shellcheck clean. `bin/cc-run --label <l> [--heartbeat-file <f>] [--expect
+  output|silent] -- <cmd…>`: runs <cmd>, streams its merged output, and touches a heartbeat file per LINE
+  of REAL OUTPUT (mtime = last-output time) — NOT a wall-clock timer. A producing op stays fresh, a hung
+  op goes stale → the D10 identity (both render zero over a window) is broken at the source. +
+  `tests/cc-run.bats` (6). Beat/meta → `~/.claude/cc-run/` (`CC_RUN_HEARTBEAT_DIR`).
+  - **Criteria (RED-proven):** L3-a keyed-on-output — the DISCRIMINATOR: `echo x; sleep 2` → beat age ≈2s
+    (STALE, froze at output); `sleep 2; echo x` → beat age ≈0 (FRESH). Same 2s wall-clock, opposite
+    beat-age ⇒ the beat tracks OUTPUT, not the clock (a wall-clock beat would read both fresh). L3-blind
+    DECLARED + ROUTED: a silent-but-alive op is indistinguishable from a hang by output alone, and a
+    looping-output op beats without progress — output-heartbeats close the silent-HANG class ONLY.
+    `--expect silent` sets `heartbeat_expectation=none` (liveness → L1/pid, no false-page); livelock's
+    backstop is the L2 deadline. Exit code propagates through the pipe (PIPESTATUS).
+  - **Deploy: C10-queued** — symlink `cc-run` + wire a monitor that watches beat-mtime freshness = operator.
 - **L4 — three-way anti-entropy reconciler — DONE (2026-07-14, successor #4)** — gate rows a/b/c/blind ✅,
   RED-proven (`--selftest` 5/5), full regression + shellcheck green. `scripts/lead-reconciler.sh`
   (`--once`/`--selftest`): reconciles THREE independent rosters keyed by pid — harness tasks (harness API)
@@ -536,20 +548,17 @@ unable to see, and who ends up checking it by hand?"*
 **Sequence (my judgment, per desk):** L2 first (the keeper — the contract schema+lint is what every other
 layer references) → L1 (feeds contracts a death-event) → L4 (backstops with divergence) → L3 (heartbeats).
 Build to `wait-safety-gate.sh` turning green; RED-prove each criterion against its naive/absent form; the
-desk registers criteria as drafted (early-veto, never a gate). **NEXT (the LAST layer):** build **L3** —
-`bin/cc-run`, an effect-bound progress-heartbeat command wrapper. It touches a heartbeat per unit of REAL
-OUTPUT (not wall-clock): a producing long op stays fresh, a hung op goes stale → the D10 identity (both
-render zero over a window) is broken AT THE SOURCE, killing BOTH false-page and silent-stall classes.
-Criteria (gate lines 102-103): **L3-a** heartbeat keyed on real output — gate greps
-`per.?(unit|line|byte).*output|output.*heartbeat|read.*&&.*touch`, so the wrapper must touch the beat as it
-reads output lines/bytes, NOT on a timer (a timer cannot discriminate a long op from a hang). **L3-blind**
-DECLARE the residual: a SILENT-but-alive op (pure compute, no I/O) is indistinguishable from a hang by
-output alone, and a LOOPING-output op beats without real progress — so output-heartbeats close the silent-
-HANG class, NOT silent-compute or livelock; gate greps `no.?output|silent|heartbeat.?expectation|compute`.
-Route the residual: a silent op's liveness falls back to L1 (pid) and its L2 contract sets
-`heartbeat_expectation=none` so it does not false-page; the livelock's backstop is still the deadline
-(named, not hidden). Design: a wrapper that runs `<cmd>`, streams its output, and on each output unit
-`touch`es a heartbeat file (mtime = freshness) + optionally updates the member's L3 telemetry; give it a
-`--selftest` RED-proving output→beat vs a silent op→stale, and a bats. This is the FINAL layer — when its
-gate rows go ✅ the whole `wait-safety-gate` turns GREEN (un-hold defensible). Criteria are already
-registered — read `./scripts/wait-safety-gate.sh` first (now **11 met · 0 failed · 2 NOT BUILT**: only L3).
+desk registers criteria as drafted (early-veto, never a gate).
+
+**✅ BUILD COMPLETE (2026-07-14, successor #4) — `wait-safety-gate`: 13 met · 0 failed · 0 NOT BUILT ⇒
+"every registered wait-safety criterion is mechanically satisfied; un-hold is defensible."** All five
+layers L0..L4 built + RED-proven + landed (L2 `304eade`, L1 `1a0436e`, L4 `2c2766e`, L3 in-flight);
+each was landed via the detached-worktree + land-lock + content-verify rails, full regression + shellcheck
+green at every boundary. The composition rule holds: every declared blindness has a covering layer
+(L3 silent-op → L1 pid; L1 unregistered-pid → P8 registry + L2 RED; L2 dead-waiter → L4 divergence; L4
+coherent-wrong → three independent sources) — five PARTIAL detectors compose into one COMPLETE one.
+**Remaining = ACTIVATION ONLY, which is C10 (human-only):** the agent BUILT + TESTED and hands the operator
+one consolidated activation script (`docs/NEVER-WAIT-ACTIVATION.md` + `/tmp/never-wait-activate.sh`) —
+symlink the four tools into `~/.claude/bin` (`cc-wait`, `cc-deathwatch-kqueue`, `cc-run`, and the two
+lead-*.sh) and wire the runtime loops (deathwatch `--watch` against the P8 registry; reconciler + wait-
+contract `--sweep` on the supervisor sweep; the beat-freshness monitor). The agent NEVER activates.

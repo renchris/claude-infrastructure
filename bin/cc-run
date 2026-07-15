@@ -1,0 +1,131 @@
+#!/bin/bash
+# cc-run — L3 of the never-wait-on-the-dead build: an effect-bound progress-heartbeat command wrapper.
+#
+# It runs <cmd> and touches a heartbeat file per unit of REAL OUTPUT (a line), NOT on a wall-clock timer.
+# So a PRODUCING long op keeps its heartbeat fresh, while a HUNG op's heartbeat goes stale — which breaks
+# the D10 identity AT THE SOURCE: without this, a long-running op and a hang both render zero-over-a-window
+# and are indistinguishable, so a monitor must EITHER false-page the long op OR miss the hang. An output-
+# keyed heartbeat discriminates them: freshness = "produced output recently", staleness = "silent".
+#
+#   cc-run --label <l> [--heartbeat-file <f>] [--expect output|silent] -- <cmd> [args…]
+#   cc-run selftest
+#     --expect output  (default) the op is expected to emit output; its heartbeat_expectation IS the beat
+#     --expect silent            the op is expected to be I/O-SILENT (pure compute) — see the blindness below
+#
+# ── DECLARED BLINDNESS (L3-blind) ──────────────────────────────────────────────────────────────────────
+# Output alone CANNOT tell a SILENT-but-alive op (pure compute, no I/O) from a hang, and a LOOPING-OUTPUT op
+# beats without making real progress. So output-heartbeats close the silent-HANG class ONLY — NOT the
+# silent-compute class, NOT livelock. The residual is ROUTED, not hidden:
+#   • a silent op runs under `--expect silent`: cc-run records heartbeat_expectation=none, so a monitor does
+#     NOT false-page it on a stale beat — its LIVENESS falls back to L1 (the pid death-watcher).
+#   • livelock (looping output, no progress) is not caught by ANY heartbeat; its backstop is the L2 wait
+#     contract's DEADLINE → re-observe (named, not hidden).
+#
+# Env overrides (tests): CC_RUN_HEARTBEAT_DIR. Exit: propagates <cmd>'s exit code · 2 = usage.
+set -uo pipefail
+
+HEARTBEAT_DIR="${CC_RUN_HEARTBEAT_DIR:-$HOME/.claude/cc-run}"
+
+usage() { sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; }
+die()   { echo "cc-run: $*" >&2; exit 2; }
+iso()   { date -u +%Y-%m-%dT%H:%M:%SZ; }
+
+cmd_run() {
+  local label="" beat="" expect="output"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --label)          label="${2:?}"; shift 2 ;;
+      --heartbeat-file) beat="${2:?}"; shift 2 ;;
+      --expect)         expect="${2:?}"; shift 2 ;;
+      --)               shift; break ;;
+      -h|--help)        usage; exit 0 ;;
+      *)                die "unknown argument '$1' (did you forget '--' before the command?)" ;;
+    esac
+  done
+  [ $# -gt 0 ] || die "no command given after '--'"
+  [ -n "$label" ] || label="cmd-$$"
+  case "$expect" in output|silent) ;; *) die "--expect must be 'output' or 'silent' (got '$expect')" ;; esac
+
+  mkdir -p "$HEARTBEAT_DIR" 2>/dev/null || true
+  [ -n "$beat" ] || beat="$HEARTBEAT_DIR/$label.beat"
+  local meta="$HEARTBEAT_DIR/$label.meta"
+
+  # heartbeat_expectation: for a silent op it is 'none' (route liveness to L1/pid — do NOT expect a beat);
+  # for an output op it is the beat file (a monitor watches its mtime freshness).
+  local hb_expect="$beat"; [ "$expect" = "silent" ] && hb_expect="none"
+  jq -n --arg label "$label" --arg expect "$expect" --arg hbe "$hb_expect" --arg beat "$beat" \
+        --arg started "$(iso)" \
+     '{kind:"cc-run", label:$label, expect:$expect, heartbeat_expectation:$hbe, beat:$beat,
+       started:$started, status:"RUNNING"}' > "$meta" 2>/dev/null || true
+
+  # ARM: an initial beat marks "started". Thereafter the beat is touched per LINE of real OUTPUT (not
+  # wall-clock), so its mtime always == the time of the last output the op produced.
+  : > "$beat" 2>/dev/null || true
+
+  # Run <cmd>; stream its merged output, touching the heartbeat on each output line. PIPESTATUS[0]
+  # preserves the command's real exit code across the pipe.
+  set -o pipefail
+  "$@" 2>&1 | while IFS= read -r line; do
+    printf '%s\n' "$line"
+    touch "$beat" 2>/dev/null || true   # heartbeat per unit of real output — the effect, not the clock
+  done
+  local rc=${PIPESTATUS[0]}
+
+  if [ -f "$meta" ]; then
+    local tmp; tmp="$(mktemp "${TMPDIR:-/tmp}/cc-run-meta.XXXXXX")" 2>/dev/null || tmp=""
+    if [ -n "$tmp" ] && jq --arg rc "$rc" --arg ended "$(iso)" \
+         '.status="DONE" | .exit=($rc|tonumber) | .ended=$ended' "$meta" > "$tmp" 2>/dev/null; then
+      mv "$tmp" "$meta"
+    else [ -n "$tmp" ] && rm -f "$tmp"; fi
+  fi
+  exit "$rc"
+}
+
+# ── selftest: SEE the output-keyed heartbeat discriminate producing from silent. Every assertion TRAPS. ─
+selftest() {
+  local d SELF pass=0 fail=0
+  d="$(mktemp -d "${TMPDIR:-/tmp}/cc-run-selftest.XXXXXX")" || die "mktemp"
+  trap 'rm -rf "$d"' EXIT
+  SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+  export CC_RUN_HEARTBEAT_DIR="$d/hb"
+  age_of() { local now mt; now="$(date +%s)"; mt="$(stat -f %m "$1" 2>/dev/null || echo 0)"; echo "$((now - mt))"; }
+
+  echo "cc-run selftest — the heartbeat must track OUTPUT, not the wall clock:"
+
+  # Test A — output THEN 2s of silence: the beat froze at the output; at end its age ≈ 2s (STALE). A
+  # wall-clock beat would read age 0. So age≥1 proves the beat did NOT tick during the silent tail.
+  env CC_RUN_HEARTBEAT_DIR="$d/hb" "$SELF" --label a -- bash -c 'echo x; sleep 2' >/dev/null 2>&1
+  local ageA; ageA="$(age_of "$d/hb/a.beat")"
+  if [ "$ageA" -ge 1 ]; then printf '  ok   %-58s (age %ss)\n' "L3-a output-then-silence → beat STALE (keyed on output)" "$ageA"; pass=$((pass+1))
+  else printf '  FAIL %-58s (age %ss, wanted ≥1)\n' "L3-a beat did not freeze during silence (wall-clock?)" "$ageA"; fail=$((fail+1)); fi
+
+  # Test B — 2s of silence THEN output: the beat advanced WITH the output; at end its age ≈ 0 (FRESH).
+  # Same 2s wall-clock as A, opposite beat-age → the beat tracks OUTPUT timing, not the clock.
+  env CC_RUN_HEARTBEAT_DIR="$d/hb" "$SELF" --label b -- bash -c 'sleep 2; echo x' >/dev/null 2>&1
+  local ageB; ageB="$(age_of "$d/hb/b.beat")"
+  if [ "$ageB" -lt 1 ]; then printf '  ok   %-58s (age %ss)\n' "L3-a silence-then-output → beat FRESH (advanced with output)" "$ageB"; pass=$((pass+1))
+  else printf '  FAIL %-58s (age %ss, wanted <1)\n' "L3-a beat failed to advance on output" "$ageB"; fail=$((fail+1)); fi
+
+  # Test C — L3-blind routing: a silent op runs --expect silent → heartbeat_expectation=none, so a monitor
+  # will NOT false-page it (its liveness routes to L1/pid, not to this beat).
+  env CC_RUN_HEARTBEAT_DIR="$d/hb" "$SELF" --label s --expect silent -- sleep 0 >/dev/null 2>&1
+  if [ "$(jq -r '.heartbeat_expectation' "$d/hb/s.meta" 2>/dev/null)" = "none" ]; then
+    printf '  ok   %-58s\n' "L3-blind --expect silent → heartbeat_expectation=none (routed to L1)"; pass=$((pass+1))
+  else printf '  FAIL %-58s\n' "L3-blind silent op did not route to heartbeat_expectation=none"; fail=$((fail+1)); fi
+
+  # Test D — the command's real exit code propagates through the pipe (PIPESTATUS).
+  env CC_RUN_HEARTBEAT_DIR="$d/hb" "$SELF" --label e -- bash -c 'echo hi; exit 7' >/dev/null 2>&1; local rcD=$?
+  if [ "$rcD" -eq 7 ]; then printf '  ok   %-58s\n' "exit code propagates through the heartbeat pipe (rc 7)"; pass=$((pass+1))
+  else printf '  FAIL %-58s (rc %s, wanted 7)\n' "exit code lost across the pipe" "$rcD"; fail=$((fail+1)); fi
+
+  echo "cc-run selftest: $pass passed, $fail failed"
+  [ "$fail" -eq 0 ] || exit 1
+  echo "cc-run selftest: GREEN — output-keyed heartbeat discriminates producing from silent; blindness routed."
+  exit 0
+}
+
+case "${1:-}" in
+  selftest)     selftest ;;
+  -h|--help|"") usage; exit 0 ;;
+  *)            cmd_run "$@" ;;
+esac
