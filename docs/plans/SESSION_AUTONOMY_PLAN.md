@@ -435,3 +435,41 @@ incidents, account lockouts, iTerm2 restart)?
   hook abstains without (fail-safe). Full regression GREEN: bats 78, all 5 e2e, all lints, premortem 8/8. Built
   INLINE as the context-holder (law-laden depth-coordination — an under-contextualized teammate would grep-satisfy
   but law-violate, the exact failure premortem-gate catches). Parked after this: 7 (to ship autonomous-at-green).
+
+## Never-wait-on-the-dead — operator-directed build (2026-07-14, L0..L4; incident IS the spec)
+
+**Frozen scope:** a 100th-percentile *never-wait-on-the-dead* runtime. **Incident-as-spec:** a W5 corpus
+teammate died out-of-band and went **UNDETECTED 77 min**; the wave-lead's event-driven wait was **UNOWNED**
+(existed only in its context); the harness fired nothing (task notifications cover *clean completion*, not
+*pane death* — its task table still LISTED the dead teammate = a three-way divergence). Five layers, each
+behind **RED-provable pre-mortems REGISTERED BEFORE build** (`scripts/wait-safety-gate.sh` = the un-hold
+bar, `43de6d6`; 1 met · 14 NOT BUILT, RED by design), activation **C10-queued** (agent builds+tests+hands
+an activation script, never activates). The verbatim per-layer pre-mortem: *"what is this structurally
+unable to see, and who ends up checking it by hand?"*
+
+- **L0 — DONE** = p8 (spawn-death row DIED-UNRENDERED) + d2 (boundary-hook + PAGE-only supervisor DEAD
+  detection). This incident is L0's live case study. GAP L0 leaves: DEAD is caught at **poll latency**
+  (≤1 sweep) and the WAIT it blocked is still unowned → L1 makes it event-instant, L2 owns the wait.
+- **L1 — kqueue `EVFILT_PROC` death-watcher** (`scripts/lead-deathwatch.sh`): death-event into the WAITER's
+  mailbox at exit-instant + auto forensics checkpoint of orphaned WIP. Criteria: **capture-BEFORE-notify**
+  (Invariant 7), **{pid,start-time}** recycling guard, checkpoint(mechanical)+PAGE(never respawn). Blind to
+  an unregistered pid → hard dep on the P8 registry + L2's unregistered-waitee RED.
+- **L2 — WAIT CONTRACTS (THE KEEPER)** (`scripts/wait-contract-lint.sh` + a contract schema): every wait
+  writes a disk contract `{waiter,waitee,expected-signal,heartbeat-expectation,deadline,on-timeout-action}`;
+  **uncontracted waits lint RED** (no unowned waits by construction — BIND applied to waiting); deadline +
+  on-timeout mandatory; the watchdog enforces contracts **independent of the waiter's liveness** (a
+  dead-waiter open contract is a divergence → PAGE); on-timeout gates on the **S-3b effect re-read**, never
+  silence.
+- **L3 — effect-bound progress heartbeats** (`bin/cc-run`): heartbeat per unit of **real output** (not
+  wall-clock) → closes D10 long-op-vs-hang at the source. Must DECLARE the residual blindness (silent-compute
+  + looping-output ops) and route their liveness to L1(pid)/L2(heartbeat-expectation=none).
+- **L4 — three-way anti-entropy reconciler** (`scripts/lead-reconciler.sh`): harness tasks × cc-registry ×
+  disk; **persistent pairwise divergence IS the alarm** (names the pair); grace window (anti-cry-wolf); own
+  heartbeat (who-watches-the-watcher); declares the coherent-wrong blindness (mitigated by 3 independent
+  sources).
+
+**Sequence (my judgment, per desk):** L2 first (the keeper — the contract schema+lint is what every other
+layer references) → L1 (feeds contracts a death-event) → L4 (backstops with divergence) → L3 (heartbeats).
+Build to `wait-safety-gate.sh` turning green; RED-prove each criterion against its naive/absent form; the
+desk registers criteria as drafted (early-veto, never a gate). **NEXT SESSION (fresh headroom):** build L2.
+Criteria are already registered in the gate — read `./scripts/wait-safety-gate.sh` output first.
