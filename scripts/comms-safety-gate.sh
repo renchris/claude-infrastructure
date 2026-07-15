@@ -39,8 +39,19 @@ else
   ./bin/cc-announce --selftest >/dev/null 2>&1 && ok "F1" "cc-announce --selftest GREEN — resolve→verified→retry→LOUD-alarm-on-failure (never silent degrade)" || bad "F1" "cc-announce --selftest not green"
 fi
 
-# ── F2 — channel-ladder law (E5 addition) ─────────────────────────────────────────────────────────────
-todo "F2" "NOT BUILT — CHANNEL-LADDER LAW (audit E5 addition): SendMessage = TEAMMATE-scope ONLY; the failure ladder is cc-notify(full-uuid) → mailbox-only → alarm; a TERMINAL event REQUIRES an active VERIFIED announce (disk-truth is a RELOAD, not a WAKE). RED-provable: cc-announce implements the ladder (proven in F1 --selftest) AND the law is documented in docs/research/W0-W3_INTERVENTION_AUDIT.md §8.5 E5 AND a terminal-announce via SendMessage lints RED (F3/a lint). When F1 is green + the law is documented, mark F2 met."
+# ── F2 — channel-ladder law (E5 addition): met when F1 IMPLEMENTS the ladder (VERIFIED-or-alarm) + F3/a
+#         lints a SendMessage terminal-announce RED + §8.5 E5 DOCUMENTS the law. ─────────────────────────
+AUDIT=docs/research/W0-W3_INTERVENTION_AUDIT.md
+f2_f1=0; [ -f "$ANNOUNCE" ]     && ./bin/cc-announce --selftest    >/dev/null 2>&1 && f2_f1=1
+f2_f3=0; [ -f "$PAYLOAD_LINT" ] && ./scripts/payload-lint.sh --selftest >/dev/null 2>&1 && f2_f3=1
+f2_e5=0; [ -f "$AUDIT" ] && grep -q '### 8.5' "$AUDIT" && grep -qiE 'channel.?ladder' "$AUDIT" && f2_e5=1
+if [ "$f2_f1" = 1 ] && [ "$f2_f3" = 1 ] && [ "$f2_e5" = 1 ]; then
+  ok "F2" "channel-ladder law: F1 cc-announce implements the ladder (VERIFIED-or-alarm) · F3/a lints a SendMessage terminal-announce RED · §8.5 E5 documents it (a TERMINAL event REQUIRES a VERIFIED announce; disk-truth is a RELOAD not a WAKE)"
+elif [ "$f2_f1" = 0 ] || [ "$f2_f3" = 0 ]; then
+  todo "F2" "NOT BUILT — channel-ladder law depends on F1 (ladder impl) + F3/a (SendMessage lint) + §8.5 E5 doc. Now: F1:$f2_f1 F3/a:$f2_f3 E5-doc:$f2_e5. SendMessage = TEAMMATE-scope ONLY; ladder cc-notify(full-uuid) → mailbox-only → alarm; a TERMINAL event REQUIRES an active VERIFIED announce (disk-truth is a RELOAD, not a WAKE)."
+else
+  bad "F2" "channel-ladder law: F1 + F3/a green but §8.5 E5 not documented in $AUDIT — document the law, then F2 goes green."
+fi
 
 # ── F3 — successor-fire payload lint (the ROOT of this incident) ──────────────────────────────────────
 if [ ! -f "$PAYLOAD_LINT" ]; then

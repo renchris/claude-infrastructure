@@ -678,6 +678,49 @@ Directly implied by §1–§7, in dependency order:
 6. **E2E per primitive** (axis i) — so every FIXED item (§3a/§3b) and every new primitive
    self-announces on regression.
 
+### 8.5 The session-layer channel & directive law (E5) — never let completion go silent
+
+*Added 2026-07-15 (W5 incident-as-spec; scripts/comms-safety-gate.sh F2). The forward references to
+"§8.5 E5" elsewhere in this audit — the three-directive-strength corollary (§7), the §8-item-5
+back-channel-topology, the W4 "back-channel continuity held (§8 E5)" note (§3f) — resolve here.*
+
+**The incident.** W5 lead #3's TERMINAL announce (a ship) used `SendMessage`. `SendMessage` is
+TEAMMATE-scope ONLY — the desk is NOT a teammate, so the target was UNRESOLVABLE — and the send SILENTLY
+degraded to passive disk-truth (a mailbox write). The desk learned of the ship 50 min late FROM THE
+OPERATOR; its own L2 wait-contract re-observe fired 2 min after, so the mechanism worked — it was merely
+hourly-tuned. The root was upstream: the successor-fire payload had DROPPED the back-channel block.
+
+**The law is two orthogonal ladders — delivery, and processing.**
+
+1. **Channel ladder (delivery — which channel, best-first).** For any cross-session announce:
+   - **cc-announce → cc-notify (FULL uuid), VERIFIED** — a confirmed composer WAKE. The ONLY acceptable
+     rung for a TERMINAL event.
+   - **mailbox-only** — a durable disk write when the pane is closed/recycled. This is a RELOAD signal, not
+     a WAKE: read only when someone reloads. A terminal event that reaches only this rung is NOT delivered.
+   - **alarm** — when neither a wake nor a durable delivery is confirmed, fail LOUD (a record + non-zero),
+     never silent.
+
+   `SendMessage` for a non-teammate sits BELOW this ladder entirely — unresolvable, silently degrading:
+   the exact W5 bug. **A TERMINAL event REQUIRES an active VERIFIED announce; disk-truth is a RELOAD, not a
+   WAKE.** `cc-announce` (F1) IMPLEMENTS the ladder — it trusts only `submit VERIFIED`, retries once, and
+   writes a LOUD alarm on any lesser outcome (mailbox-only / stranded / unresolvable). `payload-lint`
+   (F3/a) makes a successor-fire payload that would announce a terminal event via `SendMessage` lint RED,
+   and a payload missing the back-channel block (a cc-notify line + the desk FULL uuid) lint RED — a full
+   uuid, never an 8-char prefix (a prefix hard-fails `cc-notify` exit 3).
+
+2. **Directive-strength ladder (processing — which directive is ACTED on, strongest-first).** Orthogonal to
+   delivery; established at §7 (DELIVERY ≠ PROCESSING — a VERIFIED submit proves the keystroke LANDED, never
+   that the session processed it):
+   - **in-brief (binding)** — a ruling in the spawn brief; the receiver cannot start without reading it.
+   - **merge-gate-enforced (binding)** — bound to a work-product (an `Acked-Ruling` content-sha at the merge
+     gate); enforcement, not a nudge.
+   - **mid-stream message (best-effort)** — best-effort EVEN WHEN the submit VERIFIES, because no
+     sender-side check can prove receiver processing (the structural S-3 blindness, one level below the
+     channel).
+
+**Scope of `SendMessage`.** Legitimate ONLY for a live teammate in the sender's own team. For the desk /
+orchestrator / operator / any cross-session peer, the channel is `cc-notify` (FULL uuid) via `cc-announce`.
+
 ---
 
 ## 9. The W0–W4 touchpoint ledger, re-derived under the ZERO-HITL DoD (D1)
