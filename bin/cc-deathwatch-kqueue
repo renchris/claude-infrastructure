@@ -1,0 +1,115 @@
+#!/usr/bin/env python3
+# cc-deathwatch-kqueue — the event-INSTANT death mechanism for L1 (never-wait-on-the-dead).
+#
+# bash cannot call kqueue; this is the small scripting helper the death-watcher needs. It arms a
+# kqueue EVFILT_PROC / NOTE_EXIT on each REGISTERED {pid, start-time} and streams a DEATH line the
+# INSTANT that process exits — an event, not a poll (verified: fires at child-exit within ~1ms).
+#
+# The {pid, start-time} recycling guard runs at ARM time (L1-c): a pid whose CURRENT start-time no
+# longer matches the registered one — or that is already gone (ESRCH) — is a RECYCLED or DEAD
+# registration. The registered process is already gone, so we emit DEATH immediately rather than arm
+# a watch on a STRANGER that happens to hold the same pid number (the classic bare-pid false-liveness
+# hole: a bare-pid watcher would report that recycled pid ALIVE and miss the real death).
+#
+#   cc-deathwatch-kqueue [--timeout S] [<watch-file>]
+#     watch-file lines (TAB-separated):  pid <TAB> start <TAB> label <TAB> waiter  [<TAB> worktree…]
+#     (default: read the list from stdin; '#' and blank lines ignored; extra fields ignored)
+#
+# Emits one line per death:   DEATH <TAB> label <TAB> pid <TAB> reason <TAB> waiter
+#     reason = exit     (observed via kqueue NOTE_EXIT — the live path)
+#            | recycled ({pid,start} mismatch — the registered process is already gone)
+#            | gone     (pid not present at arm time — ESRCH)
+#
+# Exit: 0 = every watched process observed dead (or --timeout elapsed with a partial report) · 2 = usage.
+import sys, os, select, subprocess, time
+
+
+def pid_start(pid):
+    """Current start-time of <pid> via `ps -o lstart=`, or None if the pid is gone (ESRCH shape)."""
+    try:
+        out = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)],
+                             capture_output=True, text=True)
+        s = out.stdout.strip()
+        return s if s else None
+    except Exception:
+        return None
+
+
+def emit(label, pid, reason, waiter):
+    sys.stdout.write("DEATH\t%s\t%s\t%s\t%s\n" % (label, pid, reason, waiter))
+    sys.stdout.flush()
+
+
+def main():
+    args = sys.argv[1:]
+    timeout = None
+    watch_file = None
+    i = 0
+    while i < len(args):
+        if args[i] == "--timeout":
+            timeout = float(args[i + 1]); i += 2
+        elif args[i] in ("-h", "--help"):
+            sys.stdout.write(__doc__ if __doc__ else ""); return 0
+        else:
+            watch_file = args[i]; i += 1
+
+    src = open(watch_file) if watch_file else sys.stdin
+    entries = []
+    for line in src:
+        line = line.rstrip("\n")
+        if not line or line.lstrip().startswith("#"):
+            continue
+        p = line.split("\t")
+        try:
+            pid = int(p[0].strip())
+        except (ValueError, IndexError):
+            continue
+        start = p[1].strip() if len(p) > 1 else ""
+        label = p[2].strip() if len(p) > 2 else str(pid)
+        waiter = p[3].strip() if len(p) > 3 else ""
+        entries.append((pid, start, label, waiter))
+    if watch_file:
+        src.close()
+
+    kq = select.kqueue()
+    armed = {}  # pid -> (label, waiter)
+    for pid, start, label, waiter in entries:
+        cur = pid_start(pid)
+        if cur is None:
+            emit(label, pid, "gone", waiter)          # ESRCH at arm time — already gone
+            continue
+        if start and cur != start:
+            emit(label, pid, "recycled", waiter)       # {pid,start} guard: NOT the same process
+            continue
+        try:
+            ev = select.kevent(pid, filter=select.KQ_FILTER_PROC,
+                               flags=select.KQ_EV_ADD | select.KQ_EV_ENABLE,
+                               fflags=select.KQ_NOTE_EXIT)
+            kq.control([ev], 0, 0)
+            armed[pid] = (label, waiter)
+        except OSError:
+            emit(label, pid, "gone", waiter)           # died in the window between guard and arm
+            continue
+
+    deadline = (time.time() + timeout) if timeout is not None else None
+    while armed:
+        wait = None
+        if deadline is not None:
+            wait = deadline - time.time()
+            if wait <= 0:
+                break
+        res = kq.control(None, len(armed), wait)
+        if not res:
+            if deadline is not None:
+                break
+            continue
+        for e in res:
+            if e.fflags & select.KQ_NOTE_EXIT:
+                pid = e.ident
+                label, waiter = armed.pop(pid, (str(pid), ""))
+                emit(label, pid, "exit", waiter)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
