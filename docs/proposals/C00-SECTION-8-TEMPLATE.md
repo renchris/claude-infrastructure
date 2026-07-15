@@ -137,6 +137,21 @@ Binding corrections (must land before a merge gate) go via a **durable ruling fi
 mailbox is unreliable; auto-compaction wipes a composer instruction). Prefer **respawn-at-boundary
 with the ruling in the brief** over mid-stream correction.
 
+**Directive strength — three tiers (W5 `430abb2`): a directive binds by its ENFORCEMENT LOCUS, never
+by its delivery.**
+
+| Strength | Mechanism | Binding? |
+|---|---|---|
+| **In-brief** | the ruling IS the teammate's task at spawn (survives auto-compaction as a file) | **Binding** |
+| **Merge-gate-enforced** | `Acked-Ruling:<id>@<sha>` fails the merge CLOSED without the ack | **Binding** |
+| **Mid-stream message** | `cc-notify` into a live composer | **Best-effort — even when the submit VERIFIES** |
+
+The third tier is best-effort *even after the verifier fix* (`3b12107`) because **DELIVERY ≠ PROCESSING**:
+on W5 a mid-work directive to a live teammate did not take though the submit VERIFIED — the verifier
+proves the keystroke landed, not that the session acted on it (audit §7). A live session can merge its
+own work without ever processing a delivered nudge. **So a correction that MUST bind goes in-brief
+(respawn-at-boundary) or through the merge gate; a mid-stream message is advisory only.**
+
 **Addressing (resolve the role at SEND-TIME; never cache a pane uuid):** role→pane indirection via a
 succession-maintained roles file (`role=<pane>` rewritten on each self-close) or the newest
 self-close-log `successor=` chain.
