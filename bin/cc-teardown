@@ -124,7 +124,7 @@ EOF
     [ -n "${q:-}" ] || continue
     case "$marked" in *" $q "*) continue ;; esac
     base="${c##*/}"
-    case "$base" in -zsh|zsh|-bash|bash|-sh|sh|login|tmux|screen) continue ;; esac
+    case "$base" in -zsh|zsh|-bash|bash|-sh|sh|login|tmux|screen|gitstatusd*|caffeinate) continue ;; esac
     fp=$((fp+1))
   done <<EOF
 $tbl
