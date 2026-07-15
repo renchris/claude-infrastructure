@@ -90,21 +90,57 @@ deadpid() { sleep 1 & local p=$!; kill "$p" 2>/dev/null; wait "$p" 2>/dev/null |
   [ "$output" = "alpha" ]
 }
 
-@test "cc-sessions: sweeps an entry whose pid is dead (authoritative, even if pane present)" {
+# --- P8 (7b2f701): PRESENCE MUST NOT ENCODE LIVENESS -------------------------------------
+# A dead-pid / gone-pane entry is no longer rm -f'd on read (that deleted exactly the rows
+# that prove a spawn-death). The three roles are split:
+#   VIEW      -> the default lister emits LIVE rows only, so a dead pane is ABSENT from the
+#                addressing view (--names/--json/table) and cc-notify can never resolve onto it.
+#   RETENTION -> the FILE is kept for CC_REG_RETAIN_H (default 24h) so the spawn-death stays
+#                investigable, THEN reaped for hygiene on AGE — never on the liveness signal.
+#   FORENSIC  -> `cc-sessions --all` re-includes the retained-dead rows.
+# These pin that contract; each goes RED against the pre-7b2f701 immediate-rm-f binary.
+
+@test "cc-sessions: a dead-pid entry is hidden from addressing but RETAINED for forensics (even if pane present)" {
   dead="$(deadpid)"
-  export IT2_STUB_PANES="BBBBBBBB-0000-0000-0000-000000000000"   # pane still listed
+  export IT2_STUB_PANES="BBBBBBBB-0000-0000-0000-000000000000"   # pane still listed — pid death is authoritative
   mkentry "BBBBBBBB-0000-0000-0000-000000000000" "ghost" "$dead"
+  # addressing view (default): the dead entry is absent, so a name can't resolve onto a dead pane
   run bash "$CCS" --names
   [ "$status" -eq 0 ]
-  [ ! -f "$CC_REGISTRY_DIR/BBBBBBBB-0000-0000-0000-000000000000.json" ]
+  [ "$output" = "" ]
+  # retention: its file survives (age < CC_REG_RETAIN_H) so the spawn-death stays investigable
+  [ -f "$CC_REGISTRY_DIR/BBBBBBBB-0000-0000-0000-000000000000.json" ]
+  # forensic view: --all re-includes it
+  run bash "$CCS" --all --names
+  [ "$status" -eq 0 ]
+  [ "$output" = "ghost" ]
 }
 
-@test "cc-sessions: sweeps an entry whose pane is gone (pid alive, pane absent)" {
-  export IT2_STUB_PANES="OTHER-UUID"   # our uuid NOT in the list
+@test "cc-sessions: a gone-pane entry (pid alive) is hidden from addressing but RETAINED" {
+  export IT2_STUB_PANES="OTHER-UUID"   # our uuid NOT in the list — pane-absence marks it non-live
   mkentry "CCCCCCCC-0000-0000-0000-000000000000" "detached" "$$"
   run bash "$CCS" --names
   [ "$status" -eq 0 ]
-  [ ! -f "$CC_REGISTRY_DIR/CCCCCCCC-0000-0000-0000-000000000000.json" ]
+  [ "$output" = "" ]
+  [ -f "$CC_REGISTRY_DIR/CCCCCCCC-0000-0000-0000-000000000000.json" ]
+  run bash "$CCS" --all --names
+  [ "$status" -eq 0 ]
+  [ "$output" = "detached" ]
+}
+
+@test "cc-sessions: a dead entry OLDER than CC_REG_RETAIN_H is reaped (retention keys on AGE, not liveness)" {
+  dead="$(deadpid)"
+  export IT2_STUB_PANES="EEEEEEEE-0000-0000-0000-000000000000"   # pane present; pid dead → stale
+  # startedAt = 2h ago; shrink the retention window to 1h → past the window → reaped even from --all
+  started_ms=$(( ($(date +%s) - 7200) * 1000 ))
+  mkdir -p "$CC_REGISTRY_DIR"
+  printf '{"paneUUID":"EEEEEEEE-0000-0000-0000-000000000000","name":"oldghost","cwd":"/tmp","account":"next","pid":%s,"startedAt":%s}' \
+    "$dead" "$started_ms" > "$CC_REGISTRY_DIR/EEEEEEEE-0000-0000-0000-000000000000.json"
+  export CC_REG_RETAIN_H=1
+  run bash "$CCS" --all --names
+  [ "$status" -eq 0 ]
+  [ "$output" = "" ]
+  [ ! -f "$CC_REGISTRY_DIR/EEEEEEEE-0000-0000-0000-000000000000.json" ]
 }
 
 @test "cc-sessions: does NOT sweep on it2 outage when pid is alive (fail-safe)" {
