@@ -602,9 +602,17 @@ P8-registration.
   a detector that cannot be audited. RED-provable: after a reap OR a defer an outcome record exists on disk;
   the current silent hook produces none.
 
-**When built:** register a `reaper-safety-gate.sh` (RED-by-design until built — the `wait-safety-gate`
-pattern) carrying R-a/R-b/R-c; build the hook change behind it; hand the operator an activation script (the
-hook is live machinery — never edit it in place). **Composition check:** R-a's birth-grace blindness (a
-genuinely-hung just-born teammate WITHIN the grace window) → covered by the L2 wait-contract DEADLINE (the
-lead's wait on that teammate carries its own timeout → re-observe) and by L1 at exit-instant if it dies. So
-the grace window cannot hide a real early hang — another layer holds it.
+**REGISTERED (2026-07-14, desk GO ruling):** `scripts/reaper-safety-gate.sh` carries R-a/R-b/R-c, RED-by-
+design (`0 met · 0 failed · 4 NOT BUILT`, exit 1) until `scripts/reap-guard.sh` is built — the
+`wait-safety-gate` register-first pattern; seen firing RED against the absent form before the build.
+**NEXT (fresh-context successor — build authorized, GO):** build `scripts/reap-guard.sh` — a STANDALONE
+`decide REAP|DEFER` module (birth-grace age check + effect-read of work-products-since-spawn + an outcome
+record per decision) with a `--selftest` RED-proving R-a/b/c; the gate calls the selftest. Turn the gate
+GREEN, then hand the operator an activation script (`docs/REAPER-SAFETY-ACTIVATION.md` +
+`/tmp/reaper-safety-activate.sh`) that wires the hook to CALL the guard — **NEVER edit
+`~/.claude/hooks/teammate-auto-shutdown.sh` in place** (the build-vs-activation split keeps the C10 line).
+**Composition check (desk record):** R-a's birth-grace blindness (a genuinely-hung just-born teammate
+WITHIN the grace window) → covered by the L2 wait-contract DEADLINE (the lead's wait on that teammate
+carries its own timeout → re-observe) and by L1 at exit-instant if it dies. So the grace window cannot hide
+a real early hang — another layer holds it. R-c is the deepest of the three (desk underline): a silent
+reaper is the D9 shape with a body count.
