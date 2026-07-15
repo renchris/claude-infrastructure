@@ -507,6 +507,18 @@ human hand-verifying. The pattern is not a property of any one tool; it is what 
 detector's *evidence* and a detector's *hygiene* are served by the same mechanism. Assume it is present in
 the next primitive too — **the boundary hook and the supervisor are next, and both are checks.**
 
+**BANKED — the pre-mortem method's crowning proof (2026-07-14, D2 supervisor build).** The prediction
+above landed, and the RED-provable discipline caught it *before a single live session was watched*. The
+supervisor's S-3b assertion is enforced by a test that must go **RED against a silence-reaps straw**.
+Building it surfaced a BSD-`find` portability bug (`-newermt @epoch` unsupported on macOS) that made
+*every* effects re-read return DARK — i.e. **the supervisor was about to silence-reap every healthy long
+turn, the EXACT failure S-3b exists to prevent, found at build time by the RED-proof harness with no live
+session and no human in the loop.** That is the one-sentence argument for RED-provable criteria over prose
+criteria: *a criterion you can watch fire RED catches the failure while it is still a diff; a criterion you
+can only read passes green over the bug.* §3i's earlier instances were caught after the fact by their
+human-by-hand signature (a hand-capture, a fallback sweep, a blob-verify); a RED-provable pre-mortem needs
+neither the human nor the fact — it is the blind-check law's mechanical antidote, not just its detector.
+
 ## 4. The boundary rule — verbatim, and why it needed a human
 
 From doc_classifier `docs/BUILD_LOG.md:30-37` ("When to clear / hand off"):
@@ -707,9 +719,19 @@ maximally cheap to the human — never to remove it**:
 - **D-iv — at the residual, the supervisor PAGES, never acts** (ruling #1) — forced here by the same
   information-content argument as D10: an out-of-session actor cannot hold the consent a residual stop
   needs, so it can only surface, never decide.
+- **D-v — the async review/activation QUEUE must itself be ABSENCE-IS-LOUD** (desk effect-check,
+  2026-07-14): P8 sat un-activated **~90 min after the operator's *verbal* stated intent** — no
+  `session-register` in any `settings.json`. **Verbal human intent decays exactly like a lost GO (§3f):**
+  an intent stated aloud but not executed is indistinguishable, to any later reader, from one never
+  stated. So D-i's ready artifact is only half the mechanism — if the queue cannot make a *non-activation*
+  LOUD (re-page an un-run activation past its window; the activation script carries an effect-check so
+  "activated" is *verified*, never assumed), the hand-off silently becomes a stall. This is the
+  blind-check law (§3i) turned on the activation queue itself: the thing that hands residual stops to the
+  human must watch whether the human actually acted, or the residual floor leaks back into a silent gap.
 
 **D1 verdict:** under the zero-HITL law the W0–W4 operator burden collapses to the **R-1..R-4 floor**
 (self-modification consent, money-path, permission-ceiling, un-pre-signed intent) — everything else
 (T1–T8) is eliminated or reclassified to an async signal, and W4 already ran with the operator asleep
-for the wave. The residual is not a defect to close; it is the **contract for D-i..D-iv** — the surface
-where future design makes the *unavoidable* human touches rare, batched, ready, and never blocking.
+for the wave. The residual is not a defect to close; it is the **contract for D-i..D-v** — the surface
+where future design makes the *unavoidable* human touches rare, batched, ready, effect-verified, and
+never blocking.
