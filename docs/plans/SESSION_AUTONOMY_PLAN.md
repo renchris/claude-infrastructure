@@ -415,3 +415,23 @@ incidents, account lockouts, iTerm2 restart)?
   correctness guard (the lock is only an optimization); **when fixed, key on the REMOTE url, not the worktree
   root** (desk refinement — serializes all landings to a remote regardless of local checkout). **NEXT: D1**
   touchpoint re-derive under zero-HITL, then **D2** runtime phase. Parked after this entry: 2 (status + D1 pending).
+- 2026-07-14 ~18:xx (track, next3 successor #3, cont.) — **D1 DONE + D2 RUNTIME PHASE BUILT → premortem-gate
+  GREEN (8/8) → un-hold defensible.** **D1 (`7dc63c0`):** audit §9 re-derives every W0–W4 touch under zero-HITL —
+  T1–T8 eliminated/reclassified (proven: autonomous ship this session; effect-verified GO), residual = the
+  **R-1..R-4 floor** (C10 self-mod, C6 money-path, permission-ceiling, un-pre-signed intent) which by §2b must NOT
+  be driven to zero (it is the safety rail) → the design surface is D-i..D-iv (pre-stage each stop as a one-action
+  artifact, broaden pre-signed classes, self-declare, supervisor pages-not-acts). **D2 (`928f7e6`, `9296371`,
+  `722735e`, deploy `<this>`):** (a) **S-2 precondition** — telemetry-e2e T7-OK was NON-HERMETIC (grepped a live
+  next2 quota → RED at next2@93% weekly though cc-board was correct); stubbed the quota feed → 16/16 deterministic
+  → S-2 green. (b) **boundary hook** `hooks/boundary-handoff.sh` — advisory latched-`decision:block` at
+  committed+green boundary; B-2 used_pct re-arm (RED-proven vs a HEAD-sha-only latch), B-3 IDL abstention log;
+  16/16 e2e. (c) **supervisor** `scripts/lead-supervisor.sh` — PAGE-only (ruling #1); B-1 past-threshold∧not-Stopping,
+  S-3 declares modal blindness, **S-3b deadline→re-observe** (fresh⇒VOID/dark⇒escalate, never silence — RED-proven
+  vs a silence-reap straw), S-4 heartbeat; 10/10 e2e. **Portability bug the e2e CAUGHT: BSD `find -newermt @epoch`
+  fails → every re-read read DARK ⇒ the supervisor would have silence-reaped every healthy long turn** (the exact
+  §3h failure S-3b exists to prevent) → switched to portable `-newer <ref>`. **C10 activation handed off, NEVER run**
+  (`docs/D2-RUNTIME-ACTIVATION.md` + `/tmp/d2-activate.sh` — backup+jq-merge+launchctl+effect-check+rollback; the
+  D-i one-action-artifact pattern from D1). **Named residual (safe-inert):** the `.git/gate-green` marker-writer the
+  hook abstains without (fail-safe). Full regression GREEN: bats 78, all 5 e2e, all lints, premortem 8/8. Built
+  INLINE as the context-holder (law-laden depth-coordination — an under-contextualized teammate would grep-satisfy
+  but law-violate, the exact failure premortem-gate catches). Parked after this: 7 (to ship autonomous-at-green).
