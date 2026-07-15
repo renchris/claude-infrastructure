@@ -603,6 +603,22 @@ survivor heartbeat), a composer newline (not a cleared `❯`), the effort file (
 (not atomic ps+git), `shutdown_request` (not TaskStop). The supervisor and boundary hook must be
 built on effect-verification, not status-reports.
 
+**Sharpened 2026-07-14 (W5, E1-write `430abb2`, desk-routed) — DELIVERY ≠ PROCESSING; the law cuts
+one level below the channel.** A mid-work directive to a live teammate **did not take even in the
+post-fix VERIFIED-submit era** (`3b12107`): the submit-verifier proves the keystroke LANDED and
+SUBMITTED (delivery); it **cannot** prove the session ACTED on it (processing). This is *not* §3f
+GO-deafness — the pane did not die; the teammate was alive and merged its own work, it simply never
+processed the mid-stream directive. So a **VERIFIED send does not satisfy "verify the EFFECT"**: the
+only proof of processing is a resulting work-product, and the only ENFORCEMENT locus is the merge gate
+(`Acked-Ruling` content-sha, where the W5 lead correctly bound the correction — enforcement, not a
+nudge). The fix (`3b12107`) closed the *channel*-lie; it cannot close the *processing* gap, because no
+sender-side check can — **the keeper's exact analog of the supervisor's S-3 structural blindness
+(blueprint §3.3):** an out-of-session watcher cannot see in-session state; a sender cannot see
+receiver processing. Both are STRUCTURAL limits, not fixable by a better check, and both take the same
+remedy — *declare the blindness and bind the guarantee to an EFFECT* (the merge gate; a work-product),
+never to the send/observe act itself. **Corollary → §8.5 E5's three directive strengths:** in-brief (binding) >
+merge-gate-enforced (binding) > mid-stream message (best-effort, **even when the submit VERIFIES**).
+
 **Extended 2026-07-14 (§3g) — the law had a blind spot that cost ~24h of false confidence: it was
 applied to the *system under test* but never to the *verification apparatus itself*.** Three more
 surfaces are now in scope, and each was a live escape:
