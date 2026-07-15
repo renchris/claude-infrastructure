@@ -619,3 +619,45 @@ PRESERVES the hook's existing dirty-tree + `.teammate-busy` defers (ADDS safety,
   R-c is the deepest of the three (desk underline): a silent reaper is the D9 shape with a body count.
 - **Deploy: C10-queued** — `docs/REAPER-SAFETY-ACTIVATION.md` + `/tmp/reaper-safety-activate.sh` (deployed
   verification + the hook-wiring snippet the operator inserts). The agent NEVER edits the live hook in place.
+
+---
+
+## Never-let-completion-go-silent (comms edition) — F1..F5 (REGISTERED 2026-07-15, desk directive)
+
+**Status: REGISTERED, build authorized (operator-directed, 100th-percentile).** `scripts/comms-safety-gate.sh`
+carries F1..F5 RED-by-design (`0 met · 0 failed · 5 NOT BUILT`, exit 1 — seen firing RED). Register-first
+per the standing discipline; successor #4 recycled here (~63% ctx) — the 5-artifact build wants fresh
+headroom. **NEXT (fresh-context successor — build authorized):** build F1..F5 to turn the gate green.
+
+**Incident-as-spec:** W5 lead #3's TERMINAL announce used `SendMessage` (teammate-scope only — the desk is
+NOT a teammate → unresolvable target); it SILENTLY degraded to disk-truth; the desk learned of the ship
+50 min late FROM THE OPERATOR (its L2 re-observe fired 2 min after — it worked, just hourly-tuned). Root:
+the successor-fire payload DROPPED the back-channel block (F3). Lesson = delivery≠processing INVERTED:
+disk-truth is a RELOAD signal, not a WAKE — a TERMINAL event demands an ACTIVE VERIFIED announce.
+
+**The five fixes (RED-provable; full criteria in the gate):**
+- **F1 `bin/cc-announce`** — role-token → RESOLVE (registry / self-close chain) → cc-notify VERIFIED → retry
+  ONCE → on failure a LOUD alarm record (never a silent degrade). `--selftest`: unresolvable → alarm +
+  non-zero (never silent); resolvable → verified. Reuse cc-notify's VERIFIED-submit path + the alarm-record
+  shape from L1-e/L4. This is the mechanical announce the exit/ship recipes CALL (not "remembered").
+- **F2 channel-ladder law (E5 addition)** — SendMessage = teammate-scope ONLY; ladder cc-notify(full-uuid)
+  → mailbox-only → alarm; TERMINAL events REQUIRE an active VERIFIED announce. Document in
+  `docs/research/W0-W3_INTERVENTION_AUDIT.md §8.5 E5`; cc-announce implements the ladder; met when F1 green +
+  law documented + a terminal-SendMessage lints RED.
+- **F3 `scripts/payload-lint.sh`** — a successor-fire payload (`/tmp/fire-*.txt` / handoff prompt) missing
+  the BACK-CHANNEL BLOCK (a cc-notify line + the desk full-uuid) lints RED — **the incident's ROOT**.
+  `--selftest`: missing block → RED; present → GREEN; missing file → LOUD (exit 2). Mirror s3b-lint's
+  strip-comments + fixture discipline.
+- **F4 event-adaptive deadlines** — the wait-contract / reconciler sweep TIGHTENS to ~900s during EXIT
+  SEQUENCES (an exit-sequence flag → 900s, else the 3600s default). Extends L2/L4 — the deadline is an
+  INPUT, not a constant. RED-provable via the flag toggling the effective cadence.
+- **F5 completion-push** — program-terminal detection → an OPERATOR push (the rule existed, STARVED of
+  input; F1 feeds it). RED-provable: a terminal completion → a push fires (record exists), verified via
+  cc-announce. Wire into the exit recipe at ACTIVATION (C10).
+
+**Discipline (unchanged):** RED-prove each F against its naive/absent form BEFORE counting; ship each at a
+green boundary via the land-lock rails (backup SEPARATE from the worktree — the `git add`+`-f` hook
+false-positives when both are in one command); content-verify by blob; NEVER edit the live exit/ship recipe
+machinery in place — hand the operator an activation script (`docs/COMMS-SAFETY-ACTIVATION.md` +
+`/tmp/comms-safety-activate.sh`). This is the last mile of the never-stuck charter: never wait on the dead,
+never reap the living, **never let completion go silent.**
