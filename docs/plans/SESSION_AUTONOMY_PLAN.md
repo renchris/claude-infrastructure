@@ -454,12 +454,37 @@ unable to see, and who ends up checking it by hand?"*
   mailbox at exit-instant + auto forensics checkpoint of orphaned WIP. Criteria: **capture-BEFORE-notify**
   (Invariant 7), **{pid,start-time}** recycling guard, checkpoint(mechanical)+PAGE(never respawn). Blind to
   an unregistered pid → hard dep on the P8 registry + L2's unregistered-waitee RED.
-- **L2 — WAIT CONTRACTS (THE KEEPER)** (`scripts/wait-contract-lint.sh` + a contract schema): every wait
-  writes a disk contract `{waiter,waitee,expected-signal,heartbeat-expectation,deadline,on-timeout-action}`;
-  **uncontracted waits lint RED** (no unowned waits by construction — BIND applied to waiting); deadline +
-  on-timeout mandatory; the watchdog enforces contracts **independent of the waiter's liveness** (a
-  dead-waiter open contract is a divergence → PAGE); on-timeout gates on the **S-3b effect re-read**, never
-  silence.
+- **L2 — WAIT CONTRACTS (THE KEEPER) — DONE (2026-07-14, successor #4)** — gate row ✅, RED-proven, full
+  regression green. Artifacts: `bin/cc-wait` (producer — writes the disk contract BEFORE blocking, fail-
+  closes at the producer on a missing deadline/on-timeout and on a non-allowlisted action; on timeout
+  dispatches the STRUCTURED action (page, exit 5) — never a reap; selftest 8/8) + `scripts/wait-contract-
+  lint.sh` (auditor — L2-a uncontracted-`cc-await-ping`/poll → RED, L2-b missing deadline|on-timeout →
+  RED, L2-c `--sweep` watchdog pages a dead-waiter OPEN contract INDEPENDENT of waiter liveness via
+  `{pid,start-time}` (recycled pid = not the same waiter), L2-d on_timeout_action outside the allowlist
+  {reobserve,page,escalate} → RED; `--selftest` 13/13) + `tests/{cc-wait,wait-contract-lint}.bats` (16).
+  Contract schema on disk: `~/.claude/wait-contracts/<id>.json` `{id,waiter,waiter_pid,waiter_start,
+  waitee,expected_signal,heartbeat_expectation,deadline,deadline_s,on_timeout_action(enum),
+  on_timeout_note(free-text,guard-ignored),issued,status}` (`CC_WAIT_CONTRACTS_DIR` test override).
+  - **Key learnings:** (1) fail-closed AT THE PRODUCER, not only in the lint — cc-wait REFUSES a bad wait
+    (the desk hit this live: an unknown-arg REFUSAL exit 2 resolved a false-red in one step *because* it
+    refuses loudly instead of doing-something-plausible; the fail-closed parser IS part of witnessability).
+    (2) desk-folded sweep semantics vs page-fatigue: THREE OPEN states (dead-waiter / live-past-deadline /
+    live-in-window), **page-once + escalate-at-3**, marker (`paged_state`/`page_count`) written ON the
+    contract so a persistent divergence is never re-cried every sweep — the receiver-attention/wolf-cry
+    blindness DECLARED + covered (composition rule). Selftest proves page-once is the *marker's* doing
+    (clear it → re-pages). (3) SATISFIED-but-unclosed = hygiene flag, not alarm. (4) strip whole-line
+    comments before grepping (the reaper-horizon comment-as-code bug). (5) L2-a's grep is non-shim because
+    `cc-wait` is the real contracted form the desk's own hourly listener migrates to.
+    (6) **L2.1 allowlist hardening** (desk live datapoint): the desk migrated its listener and cc-wait
+    REFUSED its first attempt because a prose on-timeout `(re-observe, never reap)` substring-matched
+    'reap'. A prose ACTION field is the "criteria rot toward their grep" trap from BOTH directions — a
+    hostile 'cleanup' evades a denylist, an innocent 'never reap' trips it. Fix: `on_timeout_action` is a
+    STRUCTURED enum from a closed ALLOWLIST `{reobserve,page,escalate}` (a disposition is not IN the set,
+    so unexpressible) + a guard-ignored free-text `on_timeout_note`. Check a FIELD, never prose; the
+    timeout handler dispatches on the enum with NO `eval`. Both selftests prove the note-ignored positive
+    (`on_timeout_note:"never reap"` → GREEN) and the hostile 'cleanup' → RED.
+  - **Deploy: C10-queued** — symlink `cc-wait`/`wait-contract-lint.sh` into `~/.claude/bin` + wire `--sweep`
+    into the supervisor/boundary loop = operator activation (consolidated activation script at build end).
 - **L3 — effect-bound progress heartbeats** (`bin/cc-run`): heartbeat per unit of **real output** (not
   wall-clock) → closes D10 long-op-vs-hang at the source. Must DECLARE the residual blindness (silent-compute
   + looping-output ops) and route their liveness to L1(pid)/L2(heartbeat-expectation=none).
@@ -471,5 +496,11 @@ unable to see, and who ends up checking it by hand?"*
 **Sequence (my judgment, per desk):** L2 first (the keeper — the contract schema+lint is what every other
 layer references) → L1 (feeds contracts a death-event) → L4 (backstops with divergence) → L3 (heartbeats).
 Build to `wait-safety-gate.sh` turning green; RED-prove each criterion against its naive/absent form; the
-desk registers criteria as drafted (early-veto, never a gate). **NEXT SESSION (fresh headroom):** build L2.
-Criteria are already registered in the gate — read `./scripts/wait-safety-gate.sh` output first.
+desk registers criteria as drafted (early-veto, never a gate). **NEXT:** build L1 (kqueue `EVFILT_PROC`
+death-watcher `scripts/lead-deathwatch.sh` — needs a real compiled/scripting kqueue helper; bash cannot;
+design it early). L1-a's gate check flips green the moment `scripts/lead-deathwatch.sh` exists AND
+`wait-contract-lint.sh` is present (the L2 tie — now satisfied). L1 criteria: capture-BEFORE-notify (Inv7,
+RED-provable: kill the notify, the checkpoint survives) · `{pid,start-time}` recycling guard (reuse
+cc-wait's `pid_start`/`waiter_alive` idea) · checkpoint(mechanical)+PAGE(never respawn). Then L4
+(reconciler backstop) → L3 (`bin/cc-run` effect-heartbeats). Criteria are already registered in the gate —
+read `./scripts/wait-safety-gate.sh` output first.

@@ -1,0 +1,239 @@
+#!/bin/bash
+# cc-wait — the CONTRACTED wait primitive (L2 of the never-wait-on-the-dead build). BIND applied to
+# waiting: a wait is not a thing that lives only in a context, it is a DURABLE contract on disk that
+# outlives its author — so a wait can never again be UNOWNED (the 77-min-strand incident: the wave
+# lead's event-driven wait existed only in its context; when the context was gone nobody was waiting).
+#
+#   NOTIFY (cc-notify)      = best-effort push.
+#   AWAIT  (cc-await-ping)  = bare pull — but ad-hoc, owned by nobody, invisible to any watcher.
+#   WAIT   (this tool)      = a disk contract {waiter, waitee, expected-signal, heartbeat-expectation,
+#                             deadline, on-timeout-action} written BEFORE the block starts, then the
+#                             block, then a mechanical close. An OPEN contract whose waiter is dead is a
+#                             DIVERGENCE the watchdog (wait-contract-lint --sweep) pages on — INDEPENDENT
+#                             of the waiter's liveness, because the contract is on disk, not in a context.
+#
+#   cc-wait --waitee <id> --signal <s> --deadline <secs> --on-timeout <reobserve|page|escalate>
+#           [--note <free text>] [--heartbeat none|<s>] [--waiter <uuid>] [--interval <s>]
+#                                                   block until the waitee's ping lands or the deadline
+#   cc-wait selftest                                RED-provable proof: contract-before-wait, fail-closed
+#                                                   on a missing deadline/on-timeout, allowlist on-timeout
+#
+# 🚨 TWO FAIL-CLOSED INVARIANTS (L2-b + L2-d, enforced HERE at the producer, not merely linted):
+#   (b) a wait with NO deadline or NO on-timeout-action is REFUSED (exit 2) — an infinite wait is an
+#       orphan-in-waiting; there is no such thing as a contract without both.
+#   (d) the on-timeout-action is a STRUCTURED enum from a closed allowlist {reobserve, page, escalate} —
+#       a disposition (reap/kill/close) is not IN the set, so it cannot be expressed (allowlist, not a
+#       denylist substring scan that a hostile 'cleanup' evades or an innocent 'never reap' trips). The
+#       deadline RE-OBSERVES the effect / pages / escalates, never a disposition from silence (§3h: a
+#       busy waitee that ignores a page is still alive). Human context goes in --note; the guard ignores it.
+#
+# Exit: 0 = the expected signal landed (contract SATISFIED) · 2 = usage / fail-closed refusal ·
+#       3 = no waiter uuid · 5 = deadline reached (contract TIMED_OUT; re-observe emitted, NOT a reap).
+# Env overrides (tests): CC_WAIT_CONTRACTS_DIR, CC_MAILBOX_DIR, CC_AWAIT_BIN.
+set -uo pipefail
+
+CONTRACTS_DIR="${CC_WAIT_CONTRACTS_DIR:-$HOME/.claude/wait-contracts}"
+
+usage() { sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'; }
+die()   { echo "cc-wait: $*" >&2; exit 2; }
+
+# L2-d — the on-timeout action is a STRUCTURED enum from a CLOSED ALLOWLIST, never free prose. A denylist
+# substring guard is the "criteria rot toward their grep" trap from BOTH directions: a hostile 'cleanup'
+# evades it, an innocent 'never reap' trips it (the desk hit the latter live migrating its listener). An
+# allowlist closes both: a disposition (reap/kill) simply is NOT in the set, so it cannot be expressed;
+# and the guard checks a FIELD, never prose — human context goes in --note, which the guard IGNORES.
+#   reobserve = page the waiter to RE-READ the waitee's effect (the S-3b default)
+#   page      = page the waiter to check in
+#   escalate  = page the escalation target (owner/desk) — the wait needs a human owner
+ONTIMEOUT_ALLOW='reobserve page escalate'
+is_allowed_action() { case " $ONTIMEOUT_ALLOW " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
+
+# page = the durable divergence/timeout record (cc-notify's mailbox write survives a closed pane). A test
+# stub via CC_WAIT_PAGE_CMD captures the call. NEVER a disposition — only ever a directive to a human.
+page() { local cmd="${CC_WAIT_PAGE_CMD:-cc-notify}"; "$cmd" "$1" "$2" >/dev/null 2>&1 || "$cmd" "$1" "$2" || true; }
+
+# walk up to the durable claude-ancestor pid (the live-session-registry lesson: $PPID is the /bin/sh
+# hook shim, not the session) so the waiter identity is the SESSION, not a transient shell.
+claude_ancestor_pid() {
+  local pid="$PPID" c i=0
+  while [ -n "$pid" ] && [ "$pid" -gt 1 ] 2>/dev/null && [ "$i" -lt 12 ]; do
+    c=$(ps -o comm= -p "$pid" 2>/dev/null); c="${c##*/}"
+    case "$c" in claude|claude.exe|claude-*) echo "$pid"; return 0 ;; esac
+    pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' '); i=$((i + 1))
+  done
+  echo "$PPID"   # fallback: still a live descendant anchor
+}
+# {pid,start-time} identity — pid ALONE is a false-liveness hole (the OS recycles pids); the start-time
+# pins WHICH process (L1-c / L2-c recycling guard). ps lstart is stable across a process's life.
+pid_start() { ps -o lstart= -p "$1" 2>/dev/null | sed 's/^ *//;s/ *$//'; }
+
+cmd_wait() {
+  local waitee="" signal="" deadline="" ontimeout="" heartbeat="none" waiter="" interval=15 note=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --waitee)     waitee="${2:?}"; shift 2 ;;
+      --signal)     signal="${2:?}"; shift 2 ;;
+      --deadline)   deadline="${2:?}"; shift 2 ;;
+      --on-timeout) ontimeout="${2:?}"; shift 2 ;;
+      --note)       note="${2:?}"; shift 2 ;;
+      --heartbeat)  heartbeat="${2:?}"; shift 2 ;;
+      --waiter)     waiter="${2:?}"; shift 2 ;;
+      --interval)   interval="${2:?}"; shift 2 ;;
+      -h|--help)    usage; exit 0 ;;
+      *)            die "unknown argument '$1'" ;;
+    esac
+  done
+
+  # --- FAIL-CLOSED at the producer (L2-b): no deadline or no on-timeout = REFUSED. ------------------
+  [ -n "$deadline" ]  || die "REFUSED — a wait with no --deadline is an infinite wait, an orphan-in-waiting (L2-b). Every wait names when it gives up."
+  [ -n "$ontimeout" ] || die "REFUSED — a wait with no --on-timeout is a wait that does nothing when it expires (L2-b). Name the re-observation."
+  case "$deadline" in ''|*[!0-9]*) die "REFUSED — --deadline must be seconds (got '$deadline')" ;; esac
+  [ "$deadline" -gt 0 ] || die "REFUSED — --deadline must be > 0 (an instant timeout is not a wait)"
+  [ -n "$signal" ] || die "REFUSED — a wait with no --signal cannot know what it is waiting FOR"
+
+  # --- FAIL-CLOSED at the producer (L2-d): the on-timeout MUST be one of the allowed structured actions.
+  # This is an ALLOWLIST, not a denylist substring scan — a disposition (reap/kill/close) is not in the
+  # set, so it cannot be expressed at all, and no innocent prose ('never reap') can trip a field check.
+  if ! is_allowed_action "$ontimeout"; then
+    die "REFUSED — --on-timeout '$ontimeout' is not an allowed action. It is a STRUCTURED enum from {$ONTIMEOUT_ALLOW}: a deadline RE-OBSERVES the effect, pages, or escalates — it NEVER disposes on silence (S-3b/L2-d; a busy waitee that ignores its deadline is still alive). Put human context in --note (the guard ignores it)."
+  fi
+
+  [ -n "$waiter" ] || { local it="${ITERM_SESSION_ID:-}"; waiter="${it##*:}"; }
+  [ -n "$waiter" ] || { echo "cc-wait: no --waiter and no \$ITERM_SESSION_ID" >&2; exit 3; }
+
+  local wpid wstart id now
+  wpid="$(claude_ancestor_pid)"; wstart="$(pid_start "$wpid")"
+  now="$(date +%s)"
+  id="$(printf '%s' "${waiter}-${waitee}-${now}-$$" | tr -c 'A-Za-z0-9' '-')"
+  mkdir -p "$CONTRACTS_DIR" || die "cannot create $CONTRACTS_DIR"
+  local cf="$CONTRACTS_DIR/$id.json"
+
+  # ── CONTRACT-BEFORE-WAIT (the L2 analog of capture-before-notify, Invariant 7) ───────────────────
+  # The durable record is written and fsynced to disk BEFORE the block begins. If this session dies the
+  # instant after, the contract still exists on disk for the watchdog to find — the wait is OWNED from
+  # the very first moment, never a thing that existed only in a now-gone context.
+  jq -n \
+    --arg id "$id" --arg waiter "$waiter" --arg wpid "$wpid" --arg wstart "$wstart" \
+    --arg waitee "$waitee" --arg signal "$signal" --arg hb "$heartbeat" \
+    --arg deadline "$((now + deadline))" --arg deadline_s "$deadline" \
+    --arg ot "$ontimeout" --arg note "$note" --arg issued "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{id:$id, waiter:$waiter, waiter_pid:($wpid|tonumber), waiter_start:$wstart,
+      waitee:$waitee, expected_signal:$signal, heartbeat_expectation:$hb,
+      deadline:($deadline|tonumber), deadline_s:($deadline_s|tonumber),
+      on_timeout_action:$ot, on_timeout_note:$note, issued:$issued, status:"OPEN"}' > "$cf" || die "cannot write contract $cf"
+  command -v sync >/dev/null 2>&1 && sync 2>/dev/null || true
+  echo "cc-wait: contract $id OPEN -> $cf (waiter=$waiter pid=$wpid, deadline ${deadline}s, waitee=$waitee)" >&2
+
+  # ── the block itself: delegate to the tested cc-await-ping loop, deadline = the contract deadline ──
+  local await="${CC_AWAIT_BIN:-}"
+  if [ -z "$await" ]; then
+    local sd; sd="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
+    if   [ -x "$sd/cc-await-ping" ]; then await="$sd/cc-await-ping"
+    elif command -v cc-await-ping >/dev/null 2>&1; then await="$(command -v cc-await-ping)"
+    else await="$HOME/.claude/bin/cc-await-ping"; fi
+  fi
+  local rc=0
+  "$await" --timeout "$deadline" --interval "$interval" "$waiter"; rc=$?
+
+  if [ "$rc" -eq 0 ]; then
+    close_contract "$cf" SATISFIED
+    echo "cc-wait: contract $id SATISFIED — the expected signal landed." >&2
+    exit 0
+  fi
+
+  # ── deadline reached (cc-await-ping exit 2): dispatch the STRUCTURED action — a PAGE, never a reap.
+  # No eval of prose: the enum decides who gets paged with what re-observe directive; --note is inert
+  # human context. There is no code path here that disposes of the waitee (S-3b/L2-d).
+  close_contract "$cf" TIMED_OUT
+  echo "cc-wait: contract $id TIMED_OUT after ${deadline}s — action=$ontimeout, RE-OBSERVING not reaping (S-3b/L2-d)." >&2
+  case "$ontimeout" in
+    reobserve) page "$waiter"                      "⏰ wait-contract $id past deadline — RE-OBSERVE the waitee ($waitee) effect NOW; you may have missed your own wake. NOT reaped (S-3b). note: ${note:-none}" ;;
+    page)      page "$waiter"                      "⏰ wait-contract $id past deadline — check the waitee ($waitee). note: ${note:-none}" ;;
+    escalate)  page "${CC_WAIT_PAGE_TARGET:-$waiter}" "⛔ wait-contract $id past deadline — ESCALATING: the waitee ($waitee) is unresponsive and this wait needs a human owner (re-observe + decide; recovery is PAGED, never auto). note: ${note:-none}" ;;
+  esac
+  exit 5
+}
+
+close_contract() { # <contract-file> <status>
+  local cf="$1" st="$2" tmp
+  [ -f "$cf" ] || return 0
+  tmp="$(mktemp "${TMPDIR:-/tmp}/cc-wait-close.XXXXXX")" || return 1
+  if jq --arg st "$st" --arg closed "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+       '.status=$st | .closed=$closed' "$cf" > "$tmp" 2>/dev/null; then mv "$tmp" "$cf"; else rm -f "$tmp"; fi
+}
+
+# ── selftest: the contract must be SEEN to exist before the wait, the fail-closed refusals SEEN to fire.
+cmd_selftest() {
+  local pass=0 fail=0 rc
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/cc-wait-selftest.XXXXXX")" || die "cannot mktemp"
+  trap 'rm -rf "${tmp:-}"' EXIT
+  export CC_WAIT_CONTRACTS_DIR="$tmp/contracts" CC_MAILBOX_DIR="$tmp/mbox"
+  # a stub await that returns 2 (timeout) instantly — so the selftest never actually blocks.
+  cat > "$tmp/await-timeout" <<'STUB'
+#!/bin/bash
+exit 2
+STUB
+  # a stub await that returns 0 (signal) instantly.
+  cat > "$tmp/await-signal" <<'STUB'
+#!/bin/bash
+exit 0
+STUB
+  chmod +x "$tmp/await-timeout" "$tmp/await-signal"
+  printf '#!/bin/bash\nexit 0\n' > "$tmp/nopage"; chmod +x "$tmp/nopage"   # swallow the timeout page
+  local SELF; SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+
+  check() { # <label> <expected-rc> <cmd...>
+    local label="$1" want="$2"; shift 2
+    "$@" >/dev/null 2>&1; rc=$?
+    if [ "$rc" = "$want" ]; then printf '  ok   %-56s (exit %s)\n' "$label" "$rc"; pass=$((pass+1))
+    else printf '  FAIL %-56s (exit %s, wanted %s)\n' "$label" "$rc" "$want"; fail=$((fail+1)); fi
+  }
+
+  echo "cc-wait selftest — contract-before-wait + fail-closed allowlist refusals must FIRE:"
+  # L2-b: no deadline -> REFUSED (fail-closed).
+  check "no --deadline -> REFUSED (L2-b)" 2 \
+    env CC_AWAIT_BIN="$tmp/await-timeout" "$SELF" --waiter W --waitee X --signal ping --on-timeout reobserve
+  # L2-b: no on-timeout -> REFUSED.
+  check "no --on-timeout -> REFUSED (L2-b)" 2 \
+    env CC_AWAIT_BIN="$tmp/await-timeout" "$SELF" --waiter W --waitee X --signal ping --deadline 30
+  # L2-d marquee: a reap action is NOT in the allowlist -> REFUSED (a disposition cannot be expressed).
+  check "reap on-timeout -> REFUSED (L2-d marquee)" 2 \
+    env CC_AWAIT_BIN="$tmp/await-timeout" "$SELF" --waiter W --waitee X --signal ping --deadline 30 --on-timeout reap
+  # L2-d hostile direction: a non-obvious disposition word ('cleanup') a DENYLIST would miss -> REFUSED
+  # anyway, because an allowlist rejects everything not explicitly safe.
+  check "cleanup on-timeout -> REFUSED (allowlist beats denylist)" 2 \
+    env CC_AWAIT_BIN="$tmp/await-timeout" "$SELF" --waiter W --waitee X --signal ping --deadline 30 --on-timeout cleanup
+
+  # POSITIVE control 1: a well-formed wait whose signal lands -> exit 0, contract SATISFIED.
+  check "well-formed wait, signal lands -> SATISFIED (exit 0)" 0 \
+    env CC_AWAIT_BIN="$tmp/await-signal" "$SELF" --waiter W --waitee X --signal ping --deadline 30 --on-timeout reobserve
+  # L2-d innocent direction (the desk's LIVE case): --note 'never reap' is FREE TEXT the guard IGNORES;
+  # the action field is a valid enum, so it is ALLOWED — a denylist would have tripped on the word 'reap'.
+  check "note 'never reap' + reobserve -> ALLOWED (field, not prose)" 0 \
+    env CC_AWAIT_BIN="$tmp/await-signal" "$SELF" --waiter W --waitee X --signal ping --deadline 30 --on-timeout reobserve --note 'never reap this, seriously'
+  # POSITIVE control 2: a well-formed wait that times out -> exit 5 (structured page, NOT a reap).
+  check "well-formed wait, deadline -> TIMED_OUT (exit 5, paged)" 5 \
+    env CC_AWAIT_BIN="$tmp/await-timeout" CC_WAIT_PAGE_CMD="$tmp/nopage" "$SELF" --waiter W --waitee X --signal ping --deadline 30 --on-timeout reobserve
+
+  # CONTRACT-BEFORE-WAIT: prove the contract file is written BEFORE the block. Use an await stub that
+  # asserts the contract already exists on disk at the moment the block begins (exit 0 iff present).
+  cat > "$tmp/await-assert" <<ASSERT
+#!/bin/bash
+# the block has begun; the contract MUST already be on disk (contract-before-wait). Exit 0 if so.
+ls "$tmp/contracts"/*.json >/dev/null 2>&1 && exit 0 || exit 2
+ASSERT
+  chmod +x "$tmp/await-assert"
+  rm -f "$tmp/contracts"/*.json 2>/dev/null
+  check "contract exists on disk BEFORE the block begins" 0 \
+    env CC_AWAIT_BIN="$tmp/await-assert" "$SELF" --waiter W --waitee X --signal ping --deadline 30 --on-timeout reobserve
+
+  echo "cc-wait selftest: $pass passed, $fail failed"
+  [ "$fail" -eq 0 ] || exit 1
+}
+
+case "${1:-}" in
+  selftest)      shift; cmd_selftest ;;
+  -h|--help|"")  usage; exit 0 ;;
+  --*)           cmd_wait "$@" ;;
+  *)             die "unknown command '$1' (use --waitee ... | selftest)" ;;
+esac
