@@ -68,8 +68,13 @@ else
   ./scripts/exit-deadline.sh --selftest >/dev/null 2>&1 && ok "F4" "exit-deadline --selftest GREEN — the wait/sweep deadline TIGHTENS 3600→900 under an exit-sequence flag (env or file); per-layer pairs honored; the deadline is an INPUT, not a constant (extends L2/L4; live machinery calls it at ACTIVATION)" || bad "F4" "exit-deadline --selftest not green"
 fi
 
-# ── F5 — completion-push ──────────────────────────────────────────────────────────────────────────────
-todo "F5" "NOT BUILT — COMPLETION-PUSH: program-terminal detection → an OPERATOR push. The rule existed but was STARVED of input; F1 (cc-announce) feeds it. RED-provable: a program-terminal completion event → a push/announce fires (a record exists), verified via cc-announce; the terminal event is never silent. Wire into the exit recipe at ACTIVATION (C10)."
+# ── F5 — completion-push: scripts/completion-push.sh pushes a program-terminal completion via cc-announce.
+PUSH=scripts/completion-push.sh
+if [ ! -f "$PUSH" ]; then
+  todo "F5" "NOT BUILT — COMPLETION-PUSH: program-terminal detection → an OPERATOR push. The rule existed but was STARVED of input; F1 (cc-announce) feeds it. RED-provable: a program-terminal completion event → a push/announce fires (a record exists), verified via cc-announce; the terminal event is never silent. Wire into the exit recipe at ACTIVATION (C10)."
+else
+  ./scripts/completion-push.sh --selftest >/dev/null 2>&1 && ok "F5" "completion-push --selftest GREEN — a program-terminal completion → an OPERATOR push via cc-announce (F1); a record captures BEFORE the push and both outcomes record (deliverable→VERIFIED 0, undeliverable→LOUD 5); the terminal event is never silent. Wire into the exit recipe at ACTIVATION (C10)" || bad "F5" "completion-push --selftest not green"
+fi
 
 echo
 printf 'comms-safety-gate: %d met · %d failed · %d NOT BUILT\n' "$PASS" "$FAIL" "$TODO"
