@@ -510,22 +510,46 @@ unable to see, and who ends up checking it by hand?"*
 - **L3 — effect-bound progress heartbeats** (`bin/cc-run`): heartbeat per unit of **real output** (not
   wall-clock) → closes D10 long-op-vs-hang at the source. Must DECLARE the residual blindness (silent-compute
   + looping-output ops) and route their liveness to L1(pid)/L2(heartbeat-expectation=none).
-- **L4 — three-way anti-entropy reconciler** (`scripts/lead-reconciler.sh`): harness tasks × cc-registry ×
-  disk; **persistent pairwise divergence IS the alarm** (names the pair); grace window (anti-cry-wolf); own
-  heartbeat (who-watches-the-watcher); declares the coherent-wrong blindness (mitigated by 3 independent
-  sources).
+- **L4 — three-way anti-entropy reconciler — DONE (2026-07-14, successor #4)** — gate rows a/b/c/blind ✅,
+  RED-proven (`--selftest` 5/5), full regression + shellcheck green. `scripts/lead-reconciler.sh`
+  (`--once`/`--selftest`): reconciles THREE independent rosters keyed by pid — harness tasks (harness API)
+  × cc-registry (pid kill-0) × disk telemetry (deathwatch mtime); readers overridable via
+  `CC_RECON_ROSTER_*`. A pid alive in one roster but absent from another = a pairwise divergence;
+  PERSISTENT (past the grace window) → PAGE that NAMES the pair (the incident: tasks listed a registry-
+  dead pid). + `tests/lead-reconciler.bats` (5). State/heartbeat → `~/.claude/reconciler/` (`CC_RECON_DIR`).
+  - **Criteria (all RED-proven):** L4-a divergence alarm names the pair. L4-b grace window — a just-
+    appeared divergence is state-tracked but SILENT within grace; the SAME divergence alarms once it
+    persists past `CC_RECON_GRACE_S` (default 60), proven by backdating first_seen (grace is real, not
+    luck); an alarm-once marker prevents wolf-cry. L4-c reconciler writes its OWN heartbeat each run (S-4,
+    like L1-e). L4-blind coherent-wrong (all three agree on a wrong state) is invisible → DECLARED +
+    mitigated (not closed) by three INDEPENDENT sources. Gate folds the behavioral selftest into L4-a.
+  - **Key learnings:** (1) a new file touching `CC_REGISTRY_DIR` + having `rm -f` trips reaper-horizon-lint
+    §3 (UNDECLARED reaper on evidence) → cascades premortem→L0 RED. Fix = declare it in the lint's
+    `$DECLARED` with justification (its rm -f clears RESOLVED divergence-state — a lifecycle op like
+    clear_page, not an age-reaper on the spine; no `-mmin`/`RETAIN_H`). **The layers compose — a new
+    lead-*.sh is auto-audited by the existing lints; that cascade is the system working, not a bug.**
+    (2) grace = persist-before-alarm; test it deterministically by backdating the state file's first_seen,
+    never by sleeping.
+  - **Deploy: C10-queued** — symlink + wire the real `CC_RECON_ROSTER_TASKS` (harness task-table reader) +
+    schedule `--once` on the supervisor sweep = operator activation.
 
 **Sequence (my judgment, per desk):** L2 first (the keeper — the contract schema+lint is what every other
 layer references) → L1 (feeds contracts a death-event) → L4 (backstops with divergence) → L3 (heartbeats).
 Build to `wait-safety-gate.sh` turning green; RED-prove each criterion against its naive/absent form; the
-desk registers criteria as drafted (early-veto, never a gate). **NEXT:** build **L4** (three-way anti-
-entropy reconciler `scripts/lead-reconciler.sh`): reconcile harness tasks × cc-registry × disk telemetry;
-persistent pairwise divergence IS the alarm (name the pair — the incident: tasks listed a registry-dead
-pid). Criteria (gate lines 98-108): L4-a divergence alarm names the pair · L4-b grace window (a transient
-spawned-not-yet-registered / dying-not-yet-swept transition must NOT alarm — anti-cry-wolf, reuse L2's
-page-once discipline) · L4-c reconciler emits its OWN heartbeat (S-4 — its absence is the alarm, same shape
-as L1-e) · L4-blind DECLARE coherent-wrong (all-three-agree-wrong) → mitigated by 3 INDEPENDENT sources
-(harness API / pid kill-0 / disk mtime). L4 backstops L2-c (dead-waiter) and L1 (unregistered pid). Then
-**L3** (`bin/cc-run` effect-heartbeats — heartbeat per unit of REAL output, closing D10; DECLARE the
-silent-compute/looping-output blindness → route to L1(pid)/L2(heartbeat-expectation=none)). Criteria are
-already registered — read `./scripts/wait-safety-gate.sh` output first (now 7 met · 6 NOT BUILT).
+desk registers criteria as drafted (early-veto, never a gate). **NEXT (the LAST layer):** build **L3** —
+`bin/cc-run`, an effect-bound progress-heartbeat command wrapper. It touches a heartbeat per unit of REAL
+OUTPUT (not wall-clock): a producing long op stays fresh, a hung op goes stale → the D10 identity (both
+render zero over a window) is broken AT THE SOURCE, killing BOTH false-page and silent-stall classes.
+Criteria (gate lines 102-103): **L3-a** heartbeat keyed on real output — gate greps
+`per.?(unit|line|byte).*output|output.*heartbeat|read.*&&.*touch`, so the wrapper must touch the beat as it
+reads output lines/bytes, NOT on a timer (a timer cannot discriminate a long op from a hang). **L3-blind**
+DECLARE the residual: a SILENT-but-alive op (pure compute, no I/O) is indistinguishable from a hang by
+output alone, and a LOOPING-output op beats without real progress — so output-heartbeats close the silent-
+HANG class, NOT silent-compute or livelock; gate greps `no.?output|silent|heartbeat.?expectation|compute`.
+Route the residual: a silent op's liveness falls back to L1 (pid) and its L2 contract sets
+`heartbeat_expectation=none` so it does not false-page; the livelock's backstop is still the deadline
+(named, not hidden). Design: a wrapper that runs `<cmd>`, streams its output, and on each output unit
+`touch`es a heartbeat file (mtime = freshness) + optionally updates the member's L3 telemetry; give it a
+`--selftest` RED-proving output→beat vs a silent op→stale, and a bats. This is the FINAL layer — when its
+gate rows go ✅ the whole `wait-safety-gate` turns GREEN (un-hold defensible). Criteria are already
+registered — read `./scripts/wait-safety-gate.sh` first (now **11 met · 0 failed · 2 NOT BUILT**: only L3).

@@ -1,4 +1,6 @@
 #!/bin/bash
+# shellcheck disable=SC2086  # file-wide: $DECLARED is INTENTIONALLY word-split (it is a space-separated
+# list of files passed as multiple args to grep -r); quoting it would make grep treat the list as one path.
 # reaper-horizon-lint — converts S-1 from "safe by luck" into "safe by construction".
 #
 # THE CONSTRAINT (blueprint §3.3 S-1): a supervisor polls on an interval. **Any evidence whose lifetime
@@ -38,7 +40,12 @@ EVIDENCE_GREP='cc-telemetry|cc-registry|CC_TELEMETRY_DIR|CC_REGISTRY_DIR'
 # resolved/voided), NOT an age-horizon reaper on the telemetry/registry spine. It declares no `-mmin`/
 # `RETAIN_H` horizon, so sections 1/2 find nothing to bound. Declared here = reviewed; if it ever grows a
 # real age-reaper on evidence, sections 1/2 will then bound it (this is why declaring keeps the protection).
-DECLARED='bin/cc-context bin/cc-board bin/cc-sessions bin/cc-notify hooks/session-register.sh hooks/session-deregister.sh statusline.sh scripts/lead-supervisor.sh'
+# scripts/lead-reconciler.sh (L4) references CC_REGISTRY_DIR (an INDEPENDENT liveness roster) and has an
+# `rm -f`, so section-3 flags it — but its only rm -f is clearing a DIVERGENCE-STATE file when that
+# divergence RESOLVES (a state LIFECYCLE op, the exact analog of clear_page) + a jq temp; NOT an age-horizon
+# reaper on the telemetry/registry spine. Its durable evidence (the reconciler heartbeat + the PAGE) is
+# never deleted. It declares no `-mmin`/`RETAIN_H`, so sections 1/2 find nothing to bound. Declared = reviewed.
+DECLARED='bin/cc-context bin/cc-board bin/cc-sessions bin/cc-notify hooks/session-register.sh hooks/session-deregister.sh statusline.sh scripts/lead-supervisor.sh scripts/lead-reconciler.sh'
 
 viol=0
 say(){ printf '  %s\n' "$1"; }
