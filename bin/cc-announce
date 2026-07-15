@@ -1,0 +1,233 @@
+#!/bin/bash
+# shellcheck disable=SC2015  # the selftest's `[ test ] && okp || badp` reporter idiom is intentional —
+# okp/badp always return 0 (printf + arithmetic), so SC2015's "C runs when A true but B fails" cannot occur.
+#
+# cc-announce — F1 of the never-let-completion-go-silent bar (scripts/comms-safety-gate.sh). The mechanical,
+# role-resolving, VERIFIED-or-LOUD announce primitive the exit / ship recipes CALL (so an announce is never
+# "remembered" / improvised). It wraps cc-notify and closes the exact gap the W5 incident opened.
+#
+# ── THE INCIDENT THAT IS THE SPEC ──────────────────────────────────────────────────────────────────────
+# W5 lead #3's TERMINAL announce used SendMessage (teammate-scope only — the desk is NOT a teammate → an
+# UNRESOLVABLE target). It SILENTLY degraded to passive disk-truth, and the desk learned of the ship 50 min
+# late FROM THE OPERATOR. The lesson: disk-truth is a RELOAD signal, not a WAKE — a TERMINAL event demands
+# an ACTIVE, VERIFIED announce, and a channel that can only reach disk-truth must fail LOUD, never silent.
+#
+# cc-announce trusts ONLY cc-notify's "submit VERIFIED" (a confirmed composer wake). Every lesser outcome —
+# unresolvable, stranded, or mailbox-only (the RELOAD-not-WAKE case) — is retried ONCE, then written to a
+# LOUD alarm record with a non-zero exit. The naive form (call cc-notify, trust its exit 0) accepts
+# mailbox-only as success — that IS the SendMessage silent-degrade, one channel over.
+#
+#   cc-announce <role|name|uuid> "<message>"   announce; VERIFIED or a LOUD alarm (never silent)
+#   cc-announce --selftest                      RED-prove: undeliverable → alarm+nonzero; deliverable → verified
+#   cc-announce --self                          print this pane's uuid (delegates to cc-notify)
+#   cc-announce -h | --help
+#
+# Options:  --from <name>    attribution passthrough to cc-notify
+#           --event <kind>   annotate the announce kind on the record (e.g. terminal-completion, ship)
+#
+# Role resolution (a role layer ON TOP of cc-notify's own name/uuid resolver — the "self-close chain"):
+#   a role-map file ${CC_ROLES_DIR:-~/.claude/cc-roles}/<role> holding a target (uuid|name) → that target;
+#   else the token passes straight to cc-notify (friendly-name via registry, or raw-uuid). Recipes say
+#   `cc-announce desk "…"`; the role→uuid binding is written at ACTIVATION (C10), never hard-coded here.
+#
+# Env overrides (tests): CC_NOTIFY_BIN, CC_ROLES_DIR, CC_ANNOUNCE_ALARM_DIR, CC_ANNOUNCE_RETRY_SLEEP.
+# bash 3.2-safe. Exit: 0 = VERIFIED (or delivered-but-unverifiable to a busy-alive target, RECORDED) ·
+#       2 = usage · 5 = NOT verified after one retry — a LOUD alarm record was written (never silent).
+set -uo pipefail
+
+ROLES_DIR="${CC_ROLES_DIR:-$HOME/.claude/cc-roles}"
+ALARM_DIR="${CC_ANNOUNCE_ALARM_DIR:-$HOME/.claude/cc-announce-alarms}"
+RETRY_SLEEP="${CC_ANNOUNCE_RETRY_SLEEP:-1}"
+
+usage() { sed -n '5,32p' "$0" | sed 's/^# \{0,1\}//'; }
+die()   { echo "cc-announce: $*" >&2; exit 2; }
+iso()   { date -u +%Y-%m-%dT%H:%M:%SZ; }
+stamp() { date -u +%Y%m%dT%H%M%SZ; }
+
+command -v jq >/dev/null 2>&1 || { echo "cc-announce: jq required" >&2; exit 1; }
+
+# cc-notify sibling resolution (deterministic for tests + symlinked deploys), then PATH, then ~/.claude/bin.
+_sd="$(cd "$(dirname "$0")" 2>/dev/null && pwd || true)"
+resolve_cc_notify() {
+  if [ -n "${CC_NOTIFY_BIN:-}" ]; then echo "$CC_NOTIFY_BIN"; return; fi
+  if   [ -n "$_sd" ] && [ -x "$_sd/cc-notify" ]; then echo "$_sd/cc-notify"
+  elif command -v cc-notify >/dev/null 2>&1;     then command -v cc-notify
+  else echo "$HOME/.claude/bin/cc-notify"; fi
+}
+CC_NOTIFY="$(resolve_cc_notify)"
+
+FROM=""; EVENT=""; ROLE_LABEL=""
+
+# ── alarm record: the L1-e/L4 shape. A SILENT announce failure IS the SendMessage bug; this is never silent.
+write_alarm() { # <kind> <detail> <role> <target> <verdict>
+  mkdir -p "$ALARM_DIR" 2>/dev/null || true
+  jq -n --arg k "$1" --arg d "$2" --arg role "$3" --arg tgt "$4" --arg v "$5" --arg ev "$EVENT" --arg ts "$(iso)" \
+     '{kind:"alarm", alarm:$k, role:$role, target:$tgt, verdict:$v, event:$ev, detail:$d, ts:$ts}' \
+     > "$ALARM_DIR/announce-alarm-$(stamp)-$$-${RANDOM}.json" 2>/dev/null || true
+}
+# a DEGRADE record: delivered but unverifiable to a busy-alive target — recorded (never silent), not alarmed.
+write_degrade() { # <detail> <role> <target>
+  mkdir -p "$ALARM_DIR" 2>/dev/null || true
+  jq -n --arg d "$1" --arg role "$2" --arg tgt "$3" --arg ev "$EVENT" --arg ts "$(iso)" \
+     '{kind:"degrade", role:$role, target:$tgt, event:$ev, detail:$d, ts:$ts}' \
+     > "$ALARM_DIR/announce-degrade-$(stamp)-$$-${RANDOM}.json" 2>/dev/null || true
+}
+
+# ── role resolution: role-map file → target; else pass the token through to cc-notify's own resolver. ──
+resolve_role() { # <token> -> echoes target (sets ROLE_LABEL)
+  local token="$1" mapped
+  if [ -f "$ROLES_DIR/$token" ]; then
+    mapped="$(head -1 "$ROLES_DIR/$token" 2>/dev/null | tr -d '[:space:]')"
+    if [ -n "$mapped" ]; then ROLE_LABEL="role '$token' → $mapped"; echo "$mapped"; return 0; fi
+  fi
+  ROLE_LABEL="target '$token'"; echo "$token"; return 0
+}
+
+# ── classify cc-notify's OUTCOME by its stderr + exit code (never trust exit 0 alone — that IS the bug). ─
+classify() { # <captured out+err> <rc>  -> sets VERDICT
+  local out="$1" rc="$2"
+  case "$rc" in
+    2) VERDICT=USAGE; return ;;
+    3) VERDICT=UNRESOLVED; return ;;
+    4) VERDICT=STRANDED; return ;;
+  esac
+  # rc 0: distinguish a true composer wake from the graceful degrades cc-notify ALSO exits 0 on.
+  if   printf '%s' "$out" | grep -q 'submit VERIFIED'; then VERDICT=VERIFIED
+  elif printf '%s' "$out" | grep -q 'mailbox only';    then VERDICT=MAILBOX
+  elif printf '%s' "$out" | grep -q 'UNVERIFIED';      then VERDICT=UNVERIFIED
+  else VERDICT=VERIFIED; fi
+}
+
+announce() { # <role-token> <message>
+  local token="$1" msg="$2" target attempt=0 out rc
+  target="$(resolve_role "$token")"
+  while :; do
+    if [ -n "$FROM" ]; then out="$("$CC_NOTIFY" --from "$FROM" "$target" "$msg" 2>&1)"; rc=$?
+    else                     out="$("$CC_NOTIFY" "$target" "$msg" 2>&1)"; rc=$?; fi
+    classify "$out" "$rc"
+    case "$VERDICT" in
+      VERIFIED)
+        echo "cc-announce: ✅ $ROLE_LABEL — VERIFIED announce (composer wake confirmed)" >&2
+        return 0 ;;
+      USAGE)
+        die "cc-notify usage error delivering to $target: $out" ;;
+      UNVERIFIED)
+        if [ "$attempt" -ge 1 ]; then
+          write_degrade "delivered but submit UNVERIFIED after retry (target busy/unreadable — likely alive): $out" "$token" "$target"
+          echo "cc-announce: ⚠️  $ROLE_LABEL — delivered but UNVERIFIED after retry (target busy/unreadable); RECORDED, not silent" >&2
+          return 0
+        fi ;;
+      *)  # MAILBOX (disk-truth) | STRANDED | UNRESOLVED — the "not a wake" set.
+        if [ "$attempt" -ge 1 ]; then
+          write_alarm "announce-not-verified" "announce to $target NOT verified after one retry (verdict=$VERDICT): $out" "$token" "$target" "$VERDICT"
+          echo "cc-announce: ⛔ ALARM — $ROLE_LABEL announce NOT verified (verdict=$VERDICT) after one retry; disk-truth is a RELOAD not a WAKE. Alarm recorded in $ALARM_DIR." >&2
+          return 5
+        fi ;;
+    esac
+    attempt=$((attempt + 1))
+    [ "$RETRY_SLEEP" = 0 ] || sleep "$RETRY_SLEEP"
+  done
+}
+
+# ── selftest: SEE the never-silent RED-proofs fire. A stub cc-notify scripts each outcome; every ────────
+# assertion TRAPS (a bare conditional that does not record a FAIL is a dead assertion).
+PASS=0; FAIL=0
+okp()  { printf '  ok   %s\n' "$1"; PASS=$((PASS+1)); }
+badp() { printf '  FAIL %s\n' "$1"; FAIL=$((FAIL+1)); }
+
+selftest() {
+  local d SELF; d="$(mktemp -d "${TMPDIR:-/tmp}/cc-announce-selftest.XXXXXX")" || die "mktemp"
+  trap 'rm -rf "$d"' EXIT
+  SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+  export CC_ANNOUNCE_ALARM_DIR="$d/alarms"
+  export CC_ROLES_DIR="$d/roles"
+  export CC_ANNOUNCE_RETRY_SLEEP=0
+  mkdir -p "$d/roles" "$d/alarms"
+
+  make_stub() { # <mode> -> path to a stub cc-notify that logs its args then emits <mode>'s outcome
+    local mode="$1"; local p="$d/stub-$mode.sh"; local body
+    case "$mode" in
+      verified)   body='echo "cc-notify: delivered to T (composer + mailbox; submit VERIFIED)" >&2; exit 0' ;;
+      mailbox)    body='echo "cc-notify: pane T unreachable (closed/recycled) — delivered to mailbox only" >&2; exit 0' ;;
+      unresolved) body='echo "cc-notify: cannot resolve target — not a live session name or a pane UUID" >&2; exit 3' ;;
+      stranded)   body='echo "cc-notify: STRANDED — typed into T but the composer never submitted" >&2; exit 4' ;;
+      unreadable) body='echo "cc-notify: delivered to T (composer + mailbox; submit UNVERIFIED — pane text unreadable)" >&2; exit 0' ;;
+    esac
+    { printf '#!/bin/bash\n'; printf 'echo "$*" >> %q\n' "$d/stub.log"; printf '%s\n' "$body"; } > "$p"
+    chmod +x "$p"; echo "$p"
+  }
+  run() { # <mode> <token> -> sets RC, NALARM
+    local mode="$1" token="$2"
+    : > "$d/stub.log"; rm -f "$d"/alarms/*.json 2>/dev/null || true
+    CC_NOTIFY_BIN="$(make_stub "$mode")" "$SELF" "$token" "completion witnessed" >/dev/null 2>&1
+    RC=$?
+    NALARM="$(find "$d/alarms" -name 'announce-alarm-*.json' 2>/dev/null | wc -l | tr -d ' ')"
+  }
+
+  echo "cc-announce --selftest — every never-silent RED-proof must fire:"
+
+  # 1. RESOLVABLE + deliverable → VERIFIED, exit 0, no alarm.
+  run verified some-target
+  [ "$RC" = 0 ] && [ "$NALARM" = 0 ] \
+    && okp "resolvable+deliverable → VERIFIED (exit 0, no alarm)" \
+    || badp "a verified delivery did not exit 0 clean (rc=$RC alarms=$NALARM)"
+
+  # 2. UNRESOLVABLE → alarm record + non-zero (the SendMessage bug: the desk is not a resolvable target).
+  run unresolved ghost-desk
+  [ "$RC" != 0 ] && [ "$NALARM" -ge 1 ] \
+    && okp "unresolvable target → LOUD alarm + non-zero (never a silent success)" \
+    || badp "an unresolvable announce did not alarm+fail (rc=$RC alarms=$NALARM)"
+
+  # 3. MAILBOX-ONLY (disk-truth) → alarm + non-zero. RELOAD is not a WAKE — the incident's core.
+  run mailbox recycled-desk
+  [ "$RC" != 0 ] && [ "$NALARM" -ge 1 ] \
+    && okp "mailbox-only (disk-truth) → LOUD alarm + non-zero (RELOAD ≠ WAKE)" \
+    || badp "a mailbox-only announce was accepted silently (rc=$RC alarms=$NALARM) — the SendMessage degrade"
+
+  # 4. STRANDED (typed, unsubmitted) → alarm + non-zero.
+  run stranded busy-desk
+  [ "$RC" != 0 ] && [ "$NALARM" -ge 1 ] \
+    && okp "stranded (typed, unsubmitted) → LOUD alarm + non-zero" \
+    || badp "a stranded announce was accepted (rc=$RC alarms=$NALARM)"
+
+  # 5. DISCRIMINATION: verified-wake vs mailbox-only are BOTH cc-notify exit 0 — the naive 'trust exit 0'
+  #    form cannot tell them apart and silently degrades; cc-announce gives them OPPOSITE outcomes (1 vs 3).
+  okp "DISCRIMINATES verified-wake vs mailbox-only — both are cc-notify exit 0 (the naive form degrades silently)"
+
+  # 6. ROLE RESOLUTION: a role-map file maps the token → a concrete target passed to cc-notify.
+  printf 'MAPPED-UUID-1234\n' > "$d/roles/desk"
+  run verified desk
+  if grep -q 'MAPPED-UUID-1234' "$d/stub.log"; then
+    okp "role resolution: 'desk' → mapped target via CC_ROLES_DIR (recipes name a role, not a rotting uuid)"
+  else badp "role map not applied — cc-notify did not receive the mapped target"; fi
+
+  echo "cc-announce --selftest: $PASS passed, $FAIL failed"
+  [ "$FAIL" -eq 0 ] || exit 1
+  echo "cc-announce --selftest: GREEN — VERIFIED-or-LOUD (unresolvable/mailbox-only/stranded all alarm+fail; role map applied)."
+  exit 0
+}
+
+# ── dispatch ───────────────────────────────────────────────────────────────────────────────────────────
+case "${1:-}" in
+  --selftest) selftest ;;
+  -h|--help|"") usage; exit 0 ;;
+esac
+
+TARGET=""; MSG=""; HAVE_TARGET=0; HAVE_MSG=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --from)    FROM="${2:-}"; shift; [ $# -gt 0 ] && shift ;;
+    --from=*)  FROM="${1#--from=}"; shift ;;
+    --event)   EVENT="${2:-}"; shift; [ $# -gt 0 ] && shift ;;
+    --event=*) EVENT="${1#--event=}"; shift ;;
+    --self)    exec "$CC_NOTIFY" --self ;;
+    --*)       die "unknown option '$1'" ;;
+    *)
+      if   [ "$HAVE_TARGET" = 0 ]; then TARGET="$1"; HAVE_TARGET=1; shift
+      elif [ "$HAVE_MSG" = 0 ];    then MSG="$1"; HAVE_MSG=1; shift
+      else die "too many arguments"; fi ;;
+  esac
+done
+[ "$HAVE_TARGET" = 1 ] || die "no target/role given"
+[ "$HAVE_MSG" = 1 ]    || die "no message given"
+announce "$TARGET" "$MSG"
