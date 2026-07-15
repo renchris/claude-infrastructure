@@ -562,3 +562,49 @@ one consolidated activation script (`docs/NEVER-WAIT-ACTIVATION.md` + `/tmp/neve
 symlink the four tools into `~/.claude/bin` (`cc-wait`, `cc-deathwatch-kqueue`, `cc-run`, and the two
 lead-*.sh) and wire the runtime loops (deathwatch `--watch` against the P8 registry; reconciler + wait-
 contract `--sweep` on the supervisor sweep; the beat-freshness monitor). The agent NEVER activates.
+
+---
+
+## Reaper-birth-grace — design candidate (W5 live incident, QUEUED 2026-07-14 · taxonomy-keeper)
+
+**Status: QUEUED, NOT built.** Registered here (register-criteria-first — the `43de6d6` discipline) so it is
+build-ready the moment the operator green-lights it. **Not urgent** — a workaround holds for W5 (pre-created
+`.teammate-busy` marker + commit-early, now in-brief discipline); zero loss. Build + RED-prove when directed;
+activation is C10 (the `TeammateIdle` hook is LIVE machinery — the agent builds+tests+hands an activation
+script, never edits the live hook in place).
+
+**Incident-as-spec:** the `TeammateIdle` auto-shutdown hook (`~/.claude/hooks/teammate-auto-shutdown.sh`)
+prematurely reaped a HEALTHY teammate ~3-4 min after spawn. A clean tree + no `.teammate-busy` marker read as
+"idle" to the hook's heuristics — but **a JUST-BORN worker is indistinguishable from a FINISHED one by
+tree-state alone.** Caught by the lead's effect-sweep (~3-4 min later), NOT by any harness signal. (An
+ACTIVATED L1 deathwatch would have fired at the reap-instant — the 2nd live activation case; L1 DETECTS the
+erroneous reap faster, the birth-grace below PREVENTS it — both matter, they compose.)
+
+**Taxonomy:** Invariant-7 REAPER family, new member — a reaper keyed on IDLENESS-AT-A-GLANCE. Sibling to
+`reaper-horizon-lint` S-1 (a reaper's evidence horizon must outlive the sweep). The existing hook has DEFER
+rules (dirty tree · `.teammate-busy` marker · `TEAMMATE_MAX_DEFERS`) but **NO GRACE WINDOW AT BIRTH** — the
+exact shape of the hole P8's NO-RENDER? grace closed for registration (a just-rendered-nothing pane is not
+dead; a just-born teammate is not finished). Same grace-window discipline as L4-b (anti-cry-wolf) and
+P8-registration.
+
+**RED-provable criteria (draft — prove RED against the current hook BEFORE counting):**
+- **R-a  BIRTH GRACE (age-keyed):** never reap within N min of spawn — the hook reads the teammate's
+  spawn/registration timestamp. RED-provable: a teammate spawned < N min ago, clean tree, no marker → the
+  reaper must DEFER; the current bare-idleness heuristic REAPS it. Fixture: spawn-time < N min → assert defer.
+- **R-b  EFFECT-READ predicate (not tree-cleanliness alone):** the reap predicate reads WORK PRODUCTS since
+  spawn (commits on the teammate branch, checkpoint refs, file mtimes). A clean tree with NO products yet =
+  just-born (defer); a clean tree AFTER products = finished (reapable). RED-provable: two clean-tree
+  fixtures — {no products since spawn} → DEFER vs {products then clean} → REAP — a tree-only heuristic
+  cannot tell them apart; the effect-read + age must.
+- **R-c  REAPER ABSTENTION LAW (no silent reap):** the hook emits an outcome record `{reaped|deferred|
+  grace-held}` per decision — it currently reaps SILENTLY, and the abstention law (§9 · premortem "every
+  check ships emitting {fired|passed|abstained|failed}") applies to REAPERS most of all: a silent reaper is
+  a detector that cannot be audited. RED-provable: after a reap OR a defer an outcome record exists on disk;
+  the current silent hook produces none.
+
+**When built:** register a `reaper-safety-gate.sh` (RED-by-design until built — the `wait-safety-gate`
+pattern) carrying R-a/R-b/R-c; build the hook change behind it; hand the operator an activation script (the
+hook is live machinery — never edit it in place). **Composition check:** R-a's birth-grace blindness (a
+genuinely-hung just-born teammate WITHIN the grace window) → covered by the L2 wait-contract DEADLINE (the
+lead's wait on that teammate carries its own timeout → re-observe) and by L1 at exit-instant if it dies. So
+the grace window cannot hide a real early hang — another layer holds it.
