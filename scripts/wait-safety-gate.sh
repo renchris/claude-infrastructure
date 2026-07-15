@@ -113,7 +113,13 @@ if [ ! -f "$RECONCILER" ]; then
 else
   grep -qiE 'grace|transient' "$RECONCILER" && ok "L4-b" "grace window (anti-cry-wolf)" || bad "L4-b" "no grace window — every spawn/teardown transition would false-alarm"
   grep -qiE 'heartbeat|sweep_log|idl' "$RECONCILER" && ok "L4-c" "reconciler heartbeat (who-watches-the-watcher)" || bad "L4-c" "no reconciler heartbeat — a crashed reconciler looks like a quiet system"
-  grep -qiE 'diverg|mismatch|pair' "$RECONCILER" && ok "L4-a" "pairwise divergence alarm, pair named" || bad "L4-a" "no divergence detection"
+  # L4-a folds in the behavioral SEE-it-fire (like L1/L2): the selftest RED-proves divergence-names-pair,
+  # grace transient-vs-persist, and the own heartbeat against the naive form.
+  if grep -qiE 'diverg|mismatch|pair' "$RECONCILER" && ./scripts/lead-reconciler.sh --selftest >/dev/null 2>&1; then
+    ok "L4-a" "pairwise divergence alarm names the pair AND lead-reconciler --selftest GREEN (grace transient-vs-persist + own heartbeat all fire RED-provably)"
+  else
+    bad "L4-a" "no divergence detection, or the lead-reconciler selftest does not fire green"
+  fi
   grep -qiE 'agree.*wrong|coherent|independent.?source|blind' "$RECONCILER" && ok "L4-blind" "coherent-wrong blindness declared" || bad "L4-blind" "the all-three-agree-wrong blind spot is undeclared"
 fi
 
