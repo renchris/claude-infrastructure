@@ -49,12 +49,13 @@ elif [ ! -f "$SUITE" ]; then
   todo "LR-f" "NOT PROVEN — RUNAWAY CAP: more ready rows than MAX_PER_RUN → only MAX_PER_RUN fire this tick, CAP logged, the rest deferred to the next tick (a detector false-positive cannot spawn unbounded sessions)."
   todo "LR-g" "NOT PROVEN — KILL-SWITCH: LR_POLLER_DISABLED=1 → exit 0 immediately, zero ledger writes, zero fires."
   todo "LR-h" "NOT PROVEN — OUTCOME RECORDS (abstention law): every decision path logs {PARKED|READY|WAIT|RESUMED|CAP} to poller.log — a silent decision is a reaper-shaped detector that cannot be audited."
+  todo "LR-i" "NOT PROVEN — RECURRENCE: the resumed/ marker is EVENT-keyed, never sid-keyed-forever. A session resumed once MUST re-park on its NEXT limit event (newer reset ⇒ REPARK); the same event never double-fires. The naive sid-keyed skip is fatal for multi-day runs (a 5h limit recurs every window)."
 else
   if command -v bats >/dev/null 2>&1; then
     if bats "$SUITE" >/dev/null 2>&1; then
-      ok "LR-a..h" "$SUITE GREEN — detect+ledger, no-fire-before-reset, headroom guard, notify-only default + notify-once, autofire idempotency, runaway cap, kill-switch, outcome records all proven (fixtures = real transcript bytes; stubs for claude-accounts/osascript)"
+      ok "LR-a..i" "$SUITE GREEN — detect+ledger, no-fire-before-reset, headroom guard, notify-only default + notify-once, autofire idempotency, runaway cap, kill-switch, outcome records, event-keyed recurrence all proven (fixtures = real transcript bytes; stubs for claude-accounts/osascript; suite RED-proven against the as-shipped poller: LR-c blind headroom + LR-i forever-skip both fired)"
     else
-      bad "LR-a..h" "$SUITE RED — a registered limit-reset criterion fails (run: bats $SUITE)"
+      bad "LR-a..i" "$SUITE RED — a registered limit-reset criterion fails (run: bats $SUITE)"
     fi
   else
     bad "LR-*" "bats unavailable — the proof cannot run (install bats-core)"

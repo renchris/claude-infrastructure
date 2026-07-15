@@ -1,5 +1,26 @@
 # Limit-reset auto-resume poller — design (build-ready, NOT yet installed)
 
+> **STATUS: BUILT + PROVEN — activation C10-queued (2026-07-15, Track-B B1-d).**
+> `scripts/limit-reset-safety-gate.sh` GREEN (LR-a..LR-i, registered RED-first); proofs in
+> `tests/lr-reset-poller.bats` (10/10), suite RED-proven against the as-shipped poller. The poller
+> had run ONE live notify-only cycle 2026-07-12 (PARKED 6802c9b8 → READY notified — poller.log),
+> satisfying the "eyeball one cycle" precondition below. **Two real bugs found by the proofs and fixed:**
+> 1. **Blind headroom guard (§3i instance):** `account_has_headroom` captured the accounts JSON into
+>    `$j` but ran `python3 - <<PY` whose `sys.stdin.read()` was EMPTY (stdin consumed as program text)
+>    → the except branch exited 0 on EVERY call — the guard never once observed a quota; the poller
+>    WOULD have resumed into capped accounts. Caught by LR-c firing RED. JSON now piped in.
+> 2. **Sid-keyed forever-skip:** `resumed/<sid>.json` blocked ALL future parking of that sid — a
+>    session resumed once could never re-park on its NEXT limit (fatal for multi-day endurance, where
+>    the 5h limit recurs every window). Now EVENT-keyed (LR-i): a newer reset REPARKs; the same event
+>    never double-fires.
+>
+> **THE DECISION (resolved, zero-HITL agent-default):** notify-first-then-flip was the proposed default;
+> the notify-only live cycle has RUN (2026-07-12). The flip to auto-fire is an ACTIVATION, hence C10:
+> the operator installs the plist + sets `LR_POLLER_AUTOFIRE=1` via the consolidated `/tmp/wiring-all.sh`
+> bundle (hand-steps printed, never agent-run). Recency window stays 48h; limit types: session/weekly
+> proven; fable-scoped message shape is a DECLARED blindness (no real capture exists — covered by the
+> weekly prefix if it matches, else by the supervisor stall page; fixture-ize on first real capture).
+
 **Gap (from the 2026-07-11 investigation):** a Claude session that hits a 5-hour / weekly /
 Fable-weekly limit stays **idle forever** — nothing watches reset times and re-fires it. The
 `resume-sessions` keepalive only nudges idle panes of *running* sessions; `lr-audit.py` parses

@@ -34,11 +34,15 @@ acct_of_cfg() { case "$1" in
   *.claude-tertiary) echo next3 ;; *.claude-quaternary) echo next4 ;; *) echo "" ;;
 esac; }
 
-# account headroom: session_pct AND weekly_pct < 100 (never resume into a still-capped acct)
+# account headroom: session_pct AND weekly_pct < 100 (never resume into a still-capped acct).
+# ⚠️ Blind-check fix (2026-07-15, caught by LR-c): the original captured the JSON into $j but ran
+# `python3 - <<PY`, whose sys.stdin.read() is EMPTY (stdin was already consumed as the program text)
+# → the except branch exited 0 on EVERY call — the guard never once observed a quota (§3i: a check
+# that cannot observe what it guards is indistinguishable from no check). The JSON is now PIPED in.
 account_has_headroom() {
   local acct="$1" j
   j=$("$HOME/bin/claude-accounts" --json 2>/dev/null) || return 0   # unreadable ⇒ don't block
-  python3 - "$acct" <<PY 2>/dev/null
+  printf '%s' "$j" | python3 -c '
 import json,sys
 acct=sys.argv[1]
 try: rows=json.loads(sys.stdin.read()).get("rows",[])
@@ -46,8 +50,7 @@ except Exception: sys.exit(0)
 for r in rows:
     if r.get("acct")==acct:
         sys.exit(0 if (r.get("session_pct",0)<100 and r.get("weekly_pct",0)<100) else 1)
-sys.exit(0)
-PY
+sys.exit(0)' "$acct" 2>/dev/null
 }
 
 fired=0
@@ -61,7 +64,6 @@ for cfg in "$HOME"/.claude-next "$HOME"/.claude-secondary "$HOME"/.claude-tertia
     # cheap pre-filter: a genuine limit line near the tail (isApiErrorMessage confirmed by lr-audit)
     tail -c 20000 "$tx" 2>/dev/null | grep -qE "You've hit your (session|weekly) limit" || continue
     pgrep -f "resume $sid" >/dev/null 2>&1 && continue        # already running
-    [[ -f "$RESUMED/$sid.json" ]] && continue                # already handled this cycle
     # cwd from the transcript itself (avoids lossy slug-decoding)
     cwd=$(python3 -c "
 import json,sys
@@ -83,6 +85,17 @@ es=[e for e in es if e.get('kind') in ('session','weekly','fable') and e.get('re
 if es: e=es[-1]; print(e['kind'], e['resets_at_utc'])
 " "$aj" 2>/dev/null); rm -f "$aj"
     [[ -n "${reset:-}" ]] || continue                        # no genuine reset-bearing limit
+    # RECURRENCE (LR-i, 2026-07-15): the resumed/ marker is EVENT-keyed, never sid-keyed-forever.
+    # The original `[[ -f $RESUMED/$sid.json ]] && continue` (pre-parse, sid-keyed) meant a session
+    # resumed ONCE could never re-park on its NEXT limit — fatal for multi-day runs, which hit a
+    # 5h limit every window. Skip only when THIS event's reset is not newer than the handled one
+    # (ISO-8601 UTC compares lexicographically); a newer event clears the marker and re-parks.
+    if [[ -f "$RESUMED/$sid.json" ]]; then
+      prev=$(jq -r '.reset_at_utc // ""' "$RESUMED/$sid.json" 2>/dev/null || echo "")
+      if [[ -n "$prev" && ! "$reset" > "$prev" ]]; then continue; fi
+      rm -f "$RESUMED/$sid.json"
+      log "REPARK $sid — new limit event (resets $reset > handled ${prev:-unknown})"
+    fi
     if [[ ! -f "$PARKED/$sid.json" ]]; then
       printf '{"sid":"%s","acct":"%s","cfg":"%s","cwd":"%s","kind":"%s","reset_at_utc":"%s","parked_at":"%s"}\n' \
         "$sid" "$acct" "$cfg" "$cwd" "$kind" "$reset" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$PARKED/$sid.json"
