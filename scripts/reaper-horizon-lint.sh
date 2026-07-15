@@ -33,7 +33,12 @@ MIN_HORIZON_S=$(( SUPERVISOR_SWEEP_MAX_S * SAFETY ))
 # not supervisor-observed evidence. A lint that flagged it would false-positive on every run, and a
 # detector that cries wolf is a detector that gets ignored (the same reason cc-board has a grace window).
 EVIDENCE_GREP='cc-telemetry|cc-registry|CC_TELEMETRY_DIR|CC_REGISTRY_DIR'
-DECLARED='bin/cc-context bin/cc-board bin/cc-sessions bin/cc-notify hooks/session-register.sh hooks/session-deregister.sh statusline.sh'
+# scripts/lead-supervisor.sh READS telemetry (evidence) and has an `rm -f`, so section-3 flags it — but
+# its only rm -f is `clear_page` on its OWN page files (a page LIFECYCLE op: a page is removed when it is
+# resolved/voided), NOT an age-horizon reaper on the telemetry/registry spine. It declares no `-mmin`/
+# `RETAIN_H` horizon, so sections 1/2 find nothing to bound. Declared here = reviewed; if it ever grows a
+# real age-reaper on evidence, sections 1/2 will then bound it (this is why declaring keeps the protection).
+DECLARED='bin/cc-context bin/cc-board bin/cc-sessions bin/cc-notify hooks/session-register.sh hooks/session-deregister.sh statusline.sh scripts/lead-supervisor.sh'
 
 viol=0
 say(){ printf '  %s\n' "$1"; }
