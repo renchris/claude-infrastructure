@@ -602,17 +602,20 @@ P8-registration.
   a detector that cannot be audited. RED-provable: after a reap OR a defer an outcome record exists on disk;
   the current silent hook produces none.
 
-**REGISTERED (2026-07-14, desk GO ruling):** `scripts/reaper-safety-gate.sh` carries R-a/R-b/R-c, RED-by-
-design (`0 met · 0 failed · 4 NOT BUILT`, exit 1) until `scripts/reap-guard.sh` is built — the
-`wait-safety-gate` register-first pattern; seen firing RED against the absent form before the build.
-**NEXT (fresh-context successor — build authorized, GO):** build `scripts/reap-guard.sh` — a STANDALONE
-`decide REAP|DEFER` module (birth-grace age check + effect-read of work-products-since-spawn + an outcome
-record per decision) with a `--selftest` RED-proving R-a/b/c; the gate calls the selftest. Turn the gate
-GREEN, then hand the operator an activation script (`docs/REAPER-SAFETY-ACTIVATION.md` +
-`/tmp/reaper-safety-activate.sh`) that wires the hook to CALL the guard — **NEVER edit
-`~/.claude/hooks/teammate-auto-shutdown.sh` in place** (the build-vs-activation split keeps the C10 line).
-**Composition check (desk record):** R-a's birth-grace blindness (a genuinely-hung just-born teammate
-WITHIN the grace window) → covered by the L2 wait-contract DEADLINE (the lead's wait on that teammate
-carries its own timeout → re-observe) and by L1 at exit-instant if it dies. So the grace window cannot hide
-a real early hang — another layer holds it. R-c is the deepest of the three (desk underline): a silent
-reaper is the D9 shape with a body count.
+**DONE (2026-07-14, successor #4; desk GO) — `reaper-safety-gate`: 1 met · 0 failed · 0 NOT BUILT (GREEN).**
+Registered `scripts/reaper-safety-gate.sh` FIRST (RED, `b3b7af2` — seen firing RED against the
+absent form, the never-wait `43de6d6` register-first discipline), then built `scripts/reap-guard.sh` (a STANDALONE `decide --worktree --spawn-time --member
+[--grace-s]` module → exit 0=REAP / 10=DEFER; `--selftest` 6/6) + `tests/reap-guard.bats` (6). RED-proven:
+R-a birth grace (young clean-tree → DEFER); R-b effect-read — the DISCRIMINATOR: same clean-tree state,
+`{no products since spawn}` → DEFER vs `{a commit newer than spawn}` → REAP (a tree-only heuristic — the
+current hook — cannot tell them apart; proven with backdated `GIT_COMMITTER_DATE` fixtures); R-c every
+decision writes an outcome record to `~/.claude/reap-guard/` (`CC_REAP_RECORDS_DIR`) — no silent reap. It
+PRESERVES the hook's existing dirty-tree + `.teammate-busy` defers (ADDS safety, removes none).
+- **Key learning:** R-b's work-products signal is durable (commits since spawn / wip refs), NOT raw file
+  mtimes — a clean tree's committed-file mtimes are checkout-time noise; uncommitted files are the dirty-
+  tree defer. Backdate the commit (`GIT_COMMITTER_DATE=@<epoch>`) below spawn to fixture the no-products case.
+- **Composition (desk record):** R-a's birth-grace blindness (a genuinely-hung just-born WITHIN the window)
+  → covered by the L2 wait-contract DEADLINE + L1 exit-instant; the grace cannot hide a real early hang.
+  R-c is the deepest of the three (desk underline): a silent reaper is the D9 shape with a body count.
+- **Deploy: C10-queued** — `docs/REAPER-SAFETY-ACTIVATION.md` + `/tmp/reaper-safety-activate.sh` (deployed
+  verification + the hook-wiring snippet the operator inserts). The agent NEVER edits the live hook in place.
