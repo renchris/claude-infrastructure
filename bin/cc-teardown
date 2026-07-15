@@ -1,0 +1,434 @@
+#!/bin/bash
+# shellcheck disable=SC2015  # file-wide: the selftest's `[ test ] && okp || badp` reporter idiom is
+# intentional — okp/badp always return 0 (printf + arithmetic), so SC2015's "C runs when A true but B
+# fails" cannot occur.
+#
+# cc-teardown — reliable, effect-verified, safety-gated teardown of a DONE Claude Code session.
+#
+# The orchestrator desk must autonomously + reliably close a FINISHED session: kill the claude process
+# AND close its iTerm2 pane AND VERIFY both actually happened. Every primitive already exists — this is a
+# COMPOSITION with a fail-closed safety gate and a re-observed effect-verify (the anti-keystroke-faith fix:
+# a close that returns 0 is NOT a closed pane; we re-list and assert absence). It NEVER trusts a keystroke
+# or an exit code as proof; only a re-observation counts.
+#
+#   cc-teardown <pane-uuid|name> --done-evidence <text>
+#       exit 0  = torn down + BOTH legs effect-verified (or idempotent already-gone)
+#       exit 10 = DEFER  (work-unsafe: dirty | committed-not-pushed | tty-busy | tty-indeterminate)
+#       exit 2  = REFUSE (fail-closed: unknown target | self | --self literal | no done-evidence)
+#       exit 5  = FAIL LOUD (acted, but effect-verify says the pane/process SURVIVED — never a false success)
+#   cc-teardown --selftest        (RED-proves every branch with mock panes/pids + temp git; no real session)
+#
+# THE SIX STEPS (brief-verbatim):
+#   1. RESOLVE via cc-sessions --all --json. Refuse --self + unknown ids (fail-closed exit 2).
+#   2. SAFETY GATE — delegate work-safe + positive-done to cc-teardown-safety-gate.sh (the standalone
+#      decision module); ADD the runtime-only (c) tty-exclusivity guard here (no foreign live process on
+#      the pane tty beyond the target claude tree). ALL hold else DEFER+record (exit 10) / REFUSE (exit 2).
+#   3. ACT both legs: kill -TERM <pid> → confirm dead (escalate KILL) → it2 session close -f -s <paneUUID>.
+#   4. EFFECT-VERIFY both legs, RE-OBSERVED: process gone AND pane absent from a FRESH it2 list. Success
+#      ONLY if both verified; a surviving pane → FAIL LOUD (exit 5), never a false success.
+#   5. RECORD every branch (teardown | defer | refuse | fail | already-gone) to ~/.claude/cc-teardown/.
+#   6. IDEMPOTENT: already-gone pane + dead pid ⇒ success.
+#
+# 🚨 C10: cc-teardown is invoked BY A LIVE DESK SESSION (delegated work). It is NEVER wired into any hook /
+# daemon / settings.json / launchd (that would fire it with no live model = C10 = human-only). The
+# /tmp/cc-teardown-activate.sh runbook is the operator's OPTIONAL persistent layer — never self-activated.
+#
+# Env (overridable for tests): CC_TEARDOWN_SESSIONS_BIN, IT2_BIN, CC_TEARDOWN_GATE_BIN, CC_TEARDOWN_PS_BIN,
+#   CC_TEARDOWN_RECORDS_DIR, CC_TEARDOWN_SELF_UUID, CC_TEARDOWN_TERM_GRACE_S.
+set -uo pipefail
+
+# Resolve $0 THROUGH symlinks (no readlink -f on macOS) so a `~/.claude/bin/cc-teardown` symlink still finds
+# its cc-teardown-safety-gate.sh + cc-sessions siblings in the repo bin/ — deploy only this one file.
+_src="${BASH_SOURCE[0]:-$0}"
+while [ -L "$_src" ]; do
+  _dir="$(cd -P "$(dirname "$_src")" && pwd)"; _src="$(readlink "$_src")"
+  case "$_src" in /*) ;; *) _src="$_dir/$_src" ;; esac
+done
+HERE="$(cd -P "$(dirname "$_src")" && pwd)"
+CC_SESSIONS="${CC_TEARDOWN_SESSIONS_BIN:-$HERE/cc-sessions}"
+IT2="${IT2_BIN:-$HOME/.claude/bin/it2}"
+GATE="${CC_TEARDOWN_GATE_BIN:-$HERE/cc-teardown-safety-gate.sh}"
+PS_BIN="${CC_TEARDOWN_PS_BIN:-ps}"
+RECORDS_DIR="${CC_TEARDOWN_RECORDS_DIR:-$HOME/.claude/cc-teardown}"
+TERM_GRACE_S="${CC_TEARDOWN_TERM_GRACE_S:-5}"
+_sid="${CC_TEARDOWN_SELF_UUID:-${ITERM_SESSION_ID:-}}"
+SELF_UUID="${_sid##*:}"   # ITERM_SESSION_ID = "wNtMpK:<UUID>" → <UUID>; an injected bare UUID passes through
+
+command -v jq >/dev/null 2>&1 || { echo "cc-teardown: jq required" >&2; exit 2; }
+
+# resolved-handle globals (populated by resolve / parse)
+TARGET=""; paneUUID=""; pid=""; cwd=""; sname=""; done_ev=""; git_state=""
+
+iso()  { date -u +%Y-%m-%dT%H:%M:%SZ; }
+say()  { echo "cc-teardown: $*" >&2; }
+die()  { say "$*"; exit 2; }
+usage() {
+  cat >&2 <<'U'
+cc-teardown <pane-uuid|name> --done-evidence <text>
+  0 torn-down+verified · 10 DEFER · 2 REFUSE · 5 FAIL(pane survived)
+cc-teardown --selftest
+U
+}
+
+# R-c analog — NO silent teardown: every decision branch writes one outcome record.
+record() { # <decision> <reason_kind> <reason> <both_legs_verified 0|1>
+  mkdir -p "$RECORDS_DIR" 2>/dev/null || true
+  local ts; ts="$(date -u +%Y%m%dT%H%M%SZ)-$$-${RANDOM}"
+  jq -n \
+    --arg decision "$1" --arg rk "$2" --arg reason "$3" --arg blv "${4:-0}" \
+    --arg pane "$paneUUID" --arg pid "$pid" --arg cwd "$cwd" --arg name "$sname" \
+    --arg target "$TARGET" --arg ev "$done_ev" --arg gs "$git_state" --arg at "$(iso)" \
+    '{kind:"cc-teardown", decision:$decision, reason_kind:$rk, reason:$reason,
+      paneUUID:(if $pane=="" then null else $pane end),
+      pid:(if $pid=="" then null else ($pid|tonumber? // null) end),
+      name:(if $name=="" then null else $name end),
+      cwd:(if $cwd=="" then null else $cwd end), target:$target,
+      done_evidence:$ev, git_state:(if $gs=="" then null else $gs end),
+      both_legs_verified:($blv=="1"), at:$at}' \
+    > "$RECORDS_DIR/${ts}.json" 2>/dev/null || true
+}
+
+pid_alive()  { [ -n "${1:-}" ] && kill -0 "$1" 2>/dev/null; }
+pid_lstart() { "$PS_BIN" -o lstart= -p "$1" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//'; }
+
+# pane_present <uuid> → rc 0 present · 1 absent · 2 list-unreadable (fail-safe: never assume absent).
+pane_present() {
+  local uuid="$1" lst ids
+  lst="$("$IT2" session list --json 2>/dev/null)" || return 2
+  [ -n "$lst" ] || return 2
+  ids="$(printf '%s' "$lst" | jq -r 'if type=="array" then (.[].id // empty) else empty end' 2>/dev/null)" || return 2
+  printf '%s\n' "$ids" | grep -qxF "$uuid" && return 0
+  return 1
+}
+
+# tty_foreign <pid> → count of FOREIGN live processes sharing the pane tty (not in the target tree, not an
+# interactive shell). -1 = tty undeterminable (fail-closed). Descendants of <pid> and login shells are OK.
+tty_foreign() {
+  local p="$1" tty tbl marked changed q pp c base fp=0
+  tty="$("$PS_BIN" -o tty= -p "$p" 2>/dev/null | tr -d ' ')"
+  { [ -z "$tty" ] || [ "$tty" = "??" ]; } && { echo -1; return; }
+  tbl="$("$PS_BIN" -t "$tty" -o pid=,ppid=,comm= 2>/dev/null)"
+  marked=" $p "
+  changed=1
+  while [ "$changed" = 1 ]; do          # transitively mark the target's descendant tree within this tty
+    changed=0
+    while read -r q pp c; do
+      [ -n "${q:-}" ] || continue
+      case "$marked" in *" $q "*) continue ;; esac
+      case "$marked" in *" $pp "*) marked="$marked$q "; changed=1 ;; esac
+    done <<EOF
+$tbl
+EOF
+  done
+  while read -r q pp c; do               # anything left that is not an interactive shell is foreign
+    [ -n "${q:-}" ] || continue
+    case "$marked" in *" $q "*) continue ;; esac
+    base="${c##*/}"
+    case "$base" in -zsh|zsh|-bash|bash|-sh|sh|login|tmux|screen) continue ;; esac
+    fp=$((fp+1))
+  done <<EOF
+$tbl
+EOF
+  echo "$fp"
+}
+
+resolve() { # <target> → sets paneUUID/pid/cwd/sname; rc1 = unknown. Matches paneUUID first, then name.
+  local t="$1" obj
+  obj="$("$CC_SESSIONS" --all --json 2>/dev/null | jq -c --arg t "$t" \
+     '(map(select(.paneUUID==$t)) + map(select(.name==$t))) | .[0] // empty' 2>/dev/null)"
+  [ -n "$obj" ] || return 1
+  paneUUID="$(printf '%s' "$obj" | jq -r '.paneUUID // empty')"
+  pid="$(printf '%s'      "$obj" | jq -r '.pid // empty')"
+  cwd="$(printf '%s'      "$obj" | jq -r '.cwd // empty')"
+  sname="$(printf '%s'    "$obj" | jq -r '.name // empty')"
+  [ -n "$paneUUID" ] || return 1
+  return 0
+}
+
+main() {
+  local args=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --done-evidence|--done) [ $# -ge 2 ] && { done_ev="$2"; shift 2; } || shift ;;
+      --self) TARGET="--self"
+              record REFUSE self-literal "'--self' is never a valid teardown target — refusing self-teardown" 0
+              say "REFUSE — '--self' is not a valid target (exit 2)"; exit 2 ;;
+      -h|--help) usage; exit 0 ;;
+      --*) die "unknown option '$1'" ;;
+      *) args+=("$1"); shift ;;
+    esac
+  done
+  [ "${#args[@]}" -ge 1 ] || die "usage: cc-teardown <pane-uuid|name> --done-evidence <text>"
+  TARGET="${args[0]}"
+
+  # ── 1. RESOLVE (fail-closed on unknown) ────────────────────────────────────────────────────────────
+  if ! resolve "$TARGET"; then
+    paneUUID=""; pid=""; cwd=""; sname=""
+    record REFUSE unknown-target "target '$TARGET' resolves to no live-or-retained session (cc-sessions --all)" 0
+    say "REFUSE — unknown target '$TARGET' (exit 2)"; exit 2
+  fi
+
+  # SELF-GUARD — never tear down the invoking session's own pane.
+  if [ -n "$SELF_UUID" ] && [ "$paneUUID" = "$SELF_UUID" ]; then
+    record REFUSE self "target is the INVOKING session's own pane ($SELF_UUID) — refusing self-teardown" 0
+    say "REFUSE — refusing to tear down the invoking session itself (exit 2)"; exit 2
+  fi
+
+  # ── 6. IDEMPOTENT short-circuit: dead pid AND already-absent pane ⇒ success (nothing to do) ─────────
+  if ! pid_alive "$pid"; then
+    pane_present "$paneUUID"; local pp0=$?
+    if [ "$pp0" = 1 ]; then
+      record ALREADY-GONE idempotent "pid $pid already dead AND pane $paneUUID already absent — nothing to do" 1
+      say "OK — already gone (pid dead + pane absent); idempotent success (exit 0)"; exit 0
+    fi
+  fi
+
+  # ── 2. SAFETY GATE — (a) work-safe + (b) positive-done via the standalone module ────────────────────
+  local gate_out grc gdec grk greason
+  gate_out="$("$GATE" decide --cwd "$cwd" --done-evidence "$done_ev" 2>/dev/null)"; grc=$?
+  git_state="$(printf '%s' "$gate_out" | jq -r '.git_state // empty' 2>/dev/null)"
+  if [ "$grc" != 0 ]; then
+    gdec="$(printf '%s'    "$gate_out" | jq -r '.decision // empty'    2>/dev/null)"
+    [ -n "$gdec" ] || { [ "$grc" = 2 ] && gdec=REFUSE || gdec=DEFER; }
+    grk="$(printf '%s'     "$gate_out" | jq -r '.reason_kind // "gate"' 2>/dev/null)"
+    greason="$(printf '%s' "$gate_out" | jq -r '.reason // "safety gate blocked teardown"' 2>/dev/null)"
+    record "$gdec" "$grk" "$greason" 0
+    say "$gdec — $greason (exit $grc)"; exit "$grc"
+  fi
+
+  # ── 2c. tty-exclusivity — runtime-only guard, meaningful ONLY while the target is LIVE ──────────────
+  if pid_alive "$pid"; then
+    local fc; fc="$(tty_foreign "$pid")"
+    if [ "$fc" = -1 ]; then
+      record DEFER tty-indeterminate "cannot resolve the pane tty for pid $pid — cannot prove tty-exclusive; fail-closed" 0
+      say "DEFER — pane tty indeterminate (exit 10)"; exit 10
+    fi
+    if [ "${fc:-0}" -gt 0 ] 2>/dev/null; then
+      record DEFER tty-busy "$fc foreign live process(es) on the pane tty beyond the target claude tree — refusing collateral close" 0
+      say "DEFER — $fc foreign process(es) share the pane tty (exit 10)"; exit 10
+    fi
+  fi
+
+  # ── 3. ACT both legs ───────────────────────────────────────────────────────────────────────────────
+  local lstart_before; lstart_before="$(pid_lstart "$pid")"
+
+  # leg 1 — process: TERM, poll, escalate KILL, confirm dead (lstart pin beats pid-recycling).
+  if pid_alive "$pid"; then
+    kill -TERM "$pid" 2>/dev/null || true
+    for _ in $(seq 1 $((TERM_GRACE_S * 5))); do pid_alive "$pid" || break; sleep 0.2; done
+    if pid_alive "$pid"; then
+      kill -KILL "$pid" 2>/dev/null || true
+      for _ in $(seq 1 15); do pid_alive "$pid" || break; sleep 0.2; done
+    fi
+  fi
+
+  # leg 2 — pane: forced no-modal close (0 closed · 3 not-found/idempotent · 4 timeout · other = error).
+  local close_rc; "$IT2" session close -f -s "$paneUUID" >/dev/null 2>&1; close_rc=$?
+
+  # ── 4. EFFECT-VERIFY both legs, RE-OBSERVED (never trust the keystroke/exit code) ──────────────────
+  local proc_gone=0 pane_gone=0 lstart_now
+  if ! pid_alive "$pid"; then
+    proc_gone=1
+  else
+    lstart_now="$(pid_lstart "$pid")"
+    [ -n "$lstart_before" ] && [ -n "$lstart_now" ] && [ "$lstart_now" != "$lstart_before" ] && proc_gone=1  # recycled ⇒ original gone
+  fi
+  pane_present "$paneUUID"; local ppv=$?
+  [ "$ppv" = 1 ] && pane_gone=1
+
+  if [ "$proc_gone" = 1 ] && [ "$pane_gone" = 1 ]; then
+    record TEARDOWN "done" "both legs effect-verified (re-observed): process gone AND pane absent; close_rc=$close_rc" 1
+    say "OK — torn down + effect-verified: process gone AND pane absent (exit 0)"; exit 0
+  fi
+  # ── 5(fail). LOUD — acted but a leg SURVIVED. Never a false success. ───────────────────────────────
+  record FAILED not-verified "effect-verify FAILED (re-observed): proc_gone=$proc_gone pane_gone=$pane_gone close_rc=$close_rc — LOUD, never a false success" 0
+  say "FAIL — teardown NOT verified: proc_gone=$proc_gone pane_gone=$pane_gone close_rc=$close_rc (exit 5)"; exit 5
+}
+
+# ── selftest: SEE every branch fire. Mock cc-sessions/it2/ps + temp git repos + REAL killable sleeps. ──
+PASS=0; FAIL=0
+okp()  { printf '  ok   %-66s\n' "$1"; PASS=$((PASS+1)); }
+badp() { printf '  FAIL %-66s\n' "$1"; FAIL=$((FAIL+1)); }
+
+selftest() {
+  local d SELF GATE_SELF P U rc blv present_after
+  d="$(mktemp -d "${TMPDIR:-/tmp}/ccteardown.XXXXXX")" || die "mktemp"
+  # shellcheck disable=SC2064,SC2046
+  trap "rm -rf '$d'; kill \$(jobs -p) 2>/dev/null || true" EXIT
+  SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+  GATE_SELF="$(cd "$(dirname "$0")" && pwd)/cc-teardown-safety-gate.sh"
+  mkdir -p "$d/bin" "$d/state" "$d/rec"
+  U="AAAA1111-2222-3333-4444-555566667777"
+  P=""
+
+  mkrepo() { # <dir> — clean shipped repo (origin/main == HEAD), no network
+    local r="$1"; mkdir -p "$r"
+    git -C "$r" init -q; git -C "$r" config user.email t@t; git -C "$r" config user.name t
+    echo a > "$r/f"; git -C "$r" add f; git -C "$r" commit -qm c1
+    git -C "$r" update-ref refs/remotes/origin/main HEAD
+    git -C "$r" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
+  }
+
+  # mock cc-sessions — prints $d/state/sessions.json (valid JSON always; '[]' if empty/missing)
+  cat > "$d/bin/cc-sessions" <<EOF
+#!/bin/bash
+[ -s "$d/state/sessions.json" ] && cat "$d/state/sessions.json" || echo '[]'
+EOF
+  # mock it2 — session list reads the panes file; session close removes the uuid iff IT2_CLOSE_REMOVES=1
+  cat > "$d/bin/it2" <<'EOF'
+#!/bin/bash
+PF="${IT2_PANES_FILE:?}"
+if [ "$1" = session ] && [ "$2" = list ]; then
+  jq -n --slurpfile a "$PF" '$a[0] | map({id: .})'; exit 0
+fi
+if [ "$1" = session ] && [ "$2" = close ]; then
+  shift 2; sid=""
+  while [ $# -gt 0 ]; do case "$1" in -s|--session) sid="${2:-}"; shift 2 ;; *) shift ;; esac; done
+  if [ "${IT2_CLOSE_REMOVES:-1}" = 1 ] && [ -n "$sid" ]; then
+    jq --arg u "$sid" 'map(select(. != $u))' "$PF" > "$PF.t" && mv "$PF.t" "$PF"
+  fi
+  exit "${IT2_CLOSE_RC:-0}"
+fi
+exit 0
+EOF
+  chmod +x "$d/bin/cc-sessions" "$d/bin/it2"
+
+  # mock ps — real lstart passthrough; tty faked to a fixed line; tty process-table read from <table-file>
+  make_ps() { # <dest> <table-file>
+    cat > "$1" <<EOF
+#!/bin/bash
+case "\$*" in
+  *"-o tty="*) echo "ttys900" ;;
+  *"-t "*)     cat "$2" 2>/dev/null ;;
+  *)           exec /bin/ps "\$@" ;;
+esac
+EOF
+    chmod +x "$1"
+  }
+  printf '99999 1 -zsh\n'               > "$d/state/tty_clean"     # only an interactive shell → exclusive
+  printf '99999 1 -zsh\n88888 1 vim\n'  > "$d/state/tty_foreign"  # a foreign vim → tty-busy
+  make_ps "$d/bin/ps_clean"   "$d/state/tty_clean"
+  make_ps "$d/bin/ps_foreign" "$d/state/tty_foreign"
+
+  # atomic writes (temp + mv) so a reader NEVER sees a half-written / truncated file; numeric-safe pid.
+  set_session() { printf '[{"paneUUID":"%s","name":"test-sess","pid":%s,"cwd":"%s","session_id":"s","startedAt":0}]\n' \
+    "$U" "${1:-0}" "$2" > "$d/state/sessions.json.t" && mv "$d/state/sessions.json.t" "$d/state/sessions.json"; }
+  set_panes() { printf '%s' "$1" > "$d/state/panes.json.t" && mv "$d/state/panes.json.t" "$d/state/panes.json"; }
+  spawn()     { /bin/sleep 300 & P=$!; }
+  reap()      { [ -n "${P:-}" ] && { kill "$P" 2>/dev/null; wait "$P" 2>/dev/null; }; P=""; }
+
+  run_td() { # <ps-mock> -- then the cc-teardown argv; extra env via IT2_CLOSE_* set by caller
+    local psbin="$1"; shift
+    CC_TEARDOWN_SESSIONS_BIN="$d/bin/cc-sessions" IT2_BIN="$d/bin/it2" \
+    CC_TEARDOWN_GATE_BIN="$GATE_SELF" CC_TEARDOWN_PS_BIN="$psbin" \
+    CC_TEARDOWN_RECORDS_DIR="$d/rec" CC_TEARDOWN_SELF_UUID="SELF-0000" \
+    IT2_PANES_FILE="$d/state/panes.json" CC_TEARDOWN_TERM_GRACE_S=2 \
+    "$@"
+  }
+  # each scenario rm's records first + every cc-teardown run writes exactly one → find gives that record.
+  last_record()   { find "$d/rec" -name '*.json' 2>/dev/null | head -1; }
+  last_decision() { local f; f="$(last_record)"; [ -n "$f" ] && jq -r '.decision' "$f"; }
+  last_blv()      { local f; f="$(last_record)"; [ -n "$f" ] && jq -r '.both_legs_verified' "$f"; }
+
+  echo "cc-teardown --selftest — every teardown RED-proof must fire (mock panes/pids + temp git; NO real session):"
+
+  # 1. clean+shipped + done-evidence + pane closes → TEARDOWN, BOTH legs effect-verified (exit 0)
+  rm -f "$d/rec"/*.json; mkrepo "$d/r1"; spawn; set_session "$P" "$d/r1"; set_panes "[\"$U\"]"
+  rc=0; IT2_CLOSE_REMOVES=1 IT2_CLOSE_RC=0 run_td "$d/bin/ps_clean" "$SELF" "$U" --done-evidence "shipped d283997" >/dev/null 2>&1 || rc=$?
+  blv="$(last_blv)"
+  [ "$rc" = 0 ] && [ "$(last_decision)" = TEARDOWN ] && [ "$blv" = true ] \
+    && okp "clean+shipped + done → TEARDOWN, BOTH legs effect-verified (exit 0)" \
+    || badp "clean+shipped teardown failed (rc=$rc dec=$(last_decision) blv=$blv; want 0/TEARDOWN/true)"
+  reap
+
+  # 2. pane SURVIVES the close → FAIL LOUD (exit 5), never a false success  [the anti-keystroke-faith proof]
+  rm -f "$d/rec"/*.json; mkrepo "$d/r2"; spawn; set_session "$P" "$d/r2"; set_panes "[\"$U\"]"
+  rc=0; IT2_CLOSE_REMOVES=0 IT2_CLOSE_RC=0 run_td "$d/bin/ps_clean" "$SELF" "$U" --done-evidence "x" >/dev/null 2>&1 || rc=$?
+  [ "$rc" = 5 ] && [ "$(last_decision)" = FAILED ] \
+    && okp "pane SURVIVES close → FAIL LOUD (exit 5), never a false success" \
+    || badp "a surviving pane was not caught (rc=$rc dec=$(last_decision); want 5/FAILED)"
+  reap
+
+  # 3. dirty tree → DEFER (exit 10), pane left intact
+  rm -f "$d/rec"/*.json; mkrepo "$d/r3"; echo change >> "$d/r3/f"; spawn; set_session "$P" "$d/r3"; set_panes "[\"$U\"]"
+  rc=0; run_td "$d/bin/ps_clean" "$SELF" "$U" --done-evidence "x" >/dev/null 2>&1 || rc=$?
+  [ "$rc" = 10 ] && [ "$(last_decision)" = DEFER ] \
+    && okp "dirty tree → DEFER (exit 10)" \
+    || badp "dirty tree not deferred (rc=$rc dec=$(last_decision); want 10/DEFER)"
+  present_after="$(jq -r --arg u "$U" 'index($u)!=null' "$d/state/panes.json" 2>/dev/null)"
+  [ "$present_after" = true ] && okp "DEFER left the pane intact (a deferred close has NO side effect)" \
+    || badp "DEFER still closed the pane (panes.json lost $U)"
+  reap
+
+  # 4. committed-not-pushed → DEFER (exit 10)
+  rm -f "$d/rec"/*.json; mkrepo "$d/r4"; echo more >> "$d/r4/f"; git -C "$d/r4" commit -aqm c2
+  spawn; set_session "$P" "$d/r4"; set_panes "[\"$U\"]"
+  rc=0; run_td "$d/bin/ps_clean" "$SELF" "$U" --done-evidence "x" >/dev/null 2>&1 || rc=$?
+  [ "$rc" = 10 ] && [ "$(last_decision)" = DEFER ] \
+    && okp "committed-not-pushed → DEFER (exit 10)" \
+    || badp "unpushed not deferred (rc=$rc dec=$(last_decision); want 10/DEFER)"
+  reap
+
+  # 5. missing done-evidence → REFUSE (exit 2)
+  rm -f "$d/rec"/*.json; mkrepo "$d/r5"; spawn; set_session "$P" "$d/r5"; set_panes "[\"$U\"]"
+  rc=0; run_td "$d/bin/ps_clean" "$SELF" "$U" >/dev/null 2>&1 || rc=$?
+  [ "$rc" = 2 ] && [ "$(last_decision)" = REFUSE ] \
+    && okp "missing done-evidence → REFUSE (exit 2) — done never inferred" \
+    || badp "missing done-evidence not refused (rc=$rc dec=$(last_decision); want 2/REFUSE)"
+  reap
+
+  # 6. unknown target → REFUSE (exit 2)
+  rm -f "$d/rec"/*.json; set_session 99999 "$d/r5"; set_panes "[]"
+  rc=0; run_td "$d/bin/ps_clean" "$SELF" "NOPE-0000" --done-evidence "x" >/dev/null 2>&1 || rc=$?
+  [ "$rc" = 2 ] && [ "$(last_decision)" = REFUSE ] \
+    && okp "unknown target → REFUSE (exit 2)" \
+    || badp "unknown target not refused (rc=$rc dec=$(last_decision); want 2/REFUSE)"
+
+  # 7. self target (resolved UUID == self) → REFUSE (exit 2)
+  rm -f "$d/rec"/*.json
+  jq -n '[{paneUUID:"SELF-0000",name:"me",pid:99999,cwd:"/tmp",session_id:"s",startedAt:0}]' > "$d/state/sessions.json"
+  set_panes '["SELF-0000"]'
+  rc=0; run_td "$d/bin/ps_clean" "$SELF" "SELF-0000" --done-evidence "x" >/dev/null 2>&1 || rc=$?
+  [ "$rc" = 2 ] && [ "$(last_decision)" = REFUSE ] \
+    && okp "self target → REFUSE (exit 2) — never self-teardown" \
+    || badp "self not refused (rc=$rc dec=$(last_decision); want 2/REFUSE)"
+
+  # 8. --self literal → REFUSE (exit 2)
+  rm -f "$d/rec"/*.json
+  rc=0; run_td "$d/bin/ps_clean" "$SELF" --self --done-evidence "x" >/dev/null 2>&1 || rc=$?
+  [ "$rc" = 2 ] && [ "$(last_decision)" = REFUSE ] \
+    && okp "'--self' literal → REFUSE (exit 2)" \
+    || badp "--self literal not refused (rc=$rc dec=$(last_decision); want 2/REFUSE)"
+
+  # 9. IDEMPOTENT: dead pid + absent pane → success (exit 0). A fixed pid > kern.maxproc is guaranteed
+  #    unassigned (kill -0 → ESRCH → dead) — deterministic, with no spawn/kill/wait pid-reuse race.
+  rm -f "$d/rec"/*.json; mkrepo "$d/r9"
+  set_session 4000000 "$d/r9"; set_panes "[]"
+  rc=0; run_td "$d/bin/ps_clean" "$SELF" "$U" --done-evidence "x" >/dev/null 2>&1 || rc=$?
+  [ "$rc" = 0 ] && [ "$(last_decision)" = ALREADY-GONE ] \
+    && okp "idempotent: dead pid + absent pane → success (exit 0)" \
+    || badp "idempotent path failed (rc=$rc dec=$(last_decision); want 0/ALREADY-GONE)"
+
+  # 10. tty-busy: a foreign process on the pane tty → DEFER (exit 10)
+  rm -f "$d/rec"/*.json; mkrepo "$d/r10"; spawn; set_session "$P" "$d/r10"; set_panes "[\"$U\"]"
+  rc=0; run_td "$d/bin/ps_foreign" "$SELF" "$U" --done-evidence "x" >/dev/null 2>&1 || rc=$?
+  [ "$rc" = 10 ] && [ "$(last_decision)" = DEFER ] \
+    && okp "foreign process on pane tty → DEFER (exit 10) — no collateral close" \
+    || badp "tty-busy not deferred (rc=$rc dec=$(last_decision); want 10/DEFER)"
+  reap
+
+  # 11. NO-SILENT-RECORD: the just-run branch wrote an auditable outcome record
+  [ -n "$(last_decision)" ] && okp "no-silent-record: every decision branch writes an outcome record" \
+    || badp "a decision was SILENT (no record) — an unauditable teardown"
+
+  echo "cc-teardown --selftest: $PASS passed, $FAIL failed"
+  [ "$FAIL" -eq 0 ] || exit 1
+  echo "cc-teardown --selftest: GREEN — teardown(both-legs-verified), pane-survives→FAIL-LOUD(5), dirty/unpushed/tty-busy→DEFER(10), missing-done/unknown/self/--self→REFUSE(2), idempotent(0), no-silent-record all fire."
+  exit 0
+}
+
+case "${1:-}" in
+  --selftest)   selftest ;;
+  -h|--help|"") usage; exit 0 ;;
+  *)            main "$@" ;;
+esac
