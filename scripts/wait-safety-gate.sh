@@ -1,4 +1,6 @@
 #!/bin/bash
+# shellcheck disable=SC2015  # file-wide: the `<check> && ok || bad` reporter idiom is intentional —
+# ok/bad/todo always return 0 (printf + arithmetic), so SC2015's "C runs when A true but B fails" cannot occur.
 # wait-safety-gate — the RUNTIME un-hold bar for the NEVER-WAIT-ON-THE-DEAD build (operator-directed
 # 2026-07-14; five layers L0..L4). Sibling of premortem-gate.sh, same discipline: the desk registers
 # B/S-style criteria as RED-PROVABLE assertions BEFORE the build, and turning this green IS "ready".
@@ -65,11 +67,19 @@ if [ ! -f "$DEATHWATCH" ]; then
   todo "L1-b" "NOT BUILT — CAPTURE-BEFORE-NOTIFY (Invariant 7): the forensics checkpoint of orphaned WIP must be written BEFORE the death-event mailbox notify, so the evidence survives even if the notify path fails. RED-provable: kill the notify, the checkpoint still exists."
   todo "L1-c" "NOT BUILT — PID-RECYCLING guard: watch {pid, start-time}, not pid alone — the OS reuses pids, and a stale registration on a recycled pid would fire a FALSE death-event. RED-provable vs a start-time-mismatch fixture."
   todo "L1-d" "NOT BUILT — death ⇒ checkpoint (MECHANICAL) + PAGE (never auto-respawn) — capture is automatic, recovery is paged (ruling #1 + Invariant 7)."
+  todo "L1-e" "NOT BUILT — the WATCHER's own death is LOUD (S-4 / who-watches-the-watcher, desk-registered 2026-07-14): the watch loop writes a heartbeat record each cycle (its ABSENCE is the supervisor's alarm) AND detects an abnormal kqueue-helper exit (SIGKILL/OOM) → a watcher-died alarm + re-arm. RED-provable: kill -9 the helper mid-block → an alarm record appears within one cycle. A silently-dead death-watcher is indistinguishable from a healthy quiet fleet — the D9 shape one meta-level up."
 else
   grep -qiE 'checkpoint.*(before|prior).*notif|capture.?before.?notif' "$DEATHWATCH" && ok "L1-b" "capture-before-notify present" || bad "L1-b" "notify may precede the checkpoint — evidence can be lost on a failed capture (Invariant 7)"
   grep -qiE 'start.?time|starttime|lstart|etimes' "$DEATHWATCH" && ok "L1-c" "pid+start-time recycling guard present" || bad "L1-c" "keys on pid alone — a recycled pid fires a false death"
   grep -qiE 'page|paged' "$DEATHWATCH" && grep -qvE 'respawn|auto.?recover' "$DEATHWATCH" && ok "L1-d" "death → checkpoint + PAGE (no auto-respawn)" || bad "L1-d" "auto-recovery present or paging absent — recovery must be paged"
   [ -f "$WCLINT" ] && ok "L1-a" "wait-contract lint present to RED an unregistered waitee (L2)" || bad "L1-a" "no L2 lint — an unregistered waited-on pid is invisible to the watcher"
+  # L1-e — the watcher's own death is LOUD. Its OWN RED lives in the behavioral selftest (kill -9 the
+  # helper → a watcher-died alarm), which ALSO exercises b/c/d against a REAL kqueue exit (SEE it fire).
+  if grep -qiE 'heartbeat' "$DEATHWATCH" && grep -qiE 're-?arm|watcher.?died|alarm|abnormal' "$DEATHWATCH" && ./scripts/lead-deathwatch.sh --selftest >/dev/null 2>&1; then
+    ok "L1-e" "watcher own-death LOUD — heartbeat + helper-death alarm/re-arm present AND lead-deathwatch --selftest GREEN (real kqueue exit + SIGKILL-helper→alarm; every L1 RED-proof fires)"
+  else
+    bad "L1-e" "watcher own-death not proven — heartbeat/alarm mechanism absent, or the selftest does not fire green"
+  fi
 fi
 
 echo

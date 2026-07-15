@@ -450,10 +450,32 @@ unable to see, and who ends up checking it by hand?"*
 - **L0 — DONE** = p8 (spawn-death row DIED-UNRENDERED) + d2 (boundary-hook + PAGE-only supervisor DEAD
   detection). This incident is L0's live case study. GAP L0 leaves: DEAD is caught at **poll latency**
   (≤1 sweep) and the WAIT it blocked is still unowned → L1 makes it event-instant, L2 owns the wait.
-- **L1 — kqueue `EVFILT_PROC` death-watcher** (`scripts/lead-deathwatch.sh`): death-event into the WAITER's
-  mailbox at exit-instant + auto forensics checkpoint of orphaned WIP. Criteria: **capture-BEFORE-notify**
-  (Invariant 7), **{pid,start-time}** recycling guard, checkpoint(mechanical)+PAGE(never respawn). Blind to
-  an unregistered pid → hard dep on the P8 registry + L2's unregistered-waitee RED.
+- **L1 — kqueue `EVFILT_PROC` death-watcher — DONE (2026-07-14, successor #4)** — gate rows a–e ✅, RED-
+  proven, full regression + shellcheck green. Mechanism VERIFIED by probe: python3 `select.kqueue`
+  EVFILT_PROC/NOTE_EXIT fires event-INSTANT at child-exit (not polling); `ps lstart` = start-time; arming a
+  dead pid raises ESRCH. Artifacts: `bin/cc-deathwatch-kqueue` (Python helper — arms kqueue per registered
+  {pid,start}; the {pid,start} GUARD at ARM time emits DEATH(recycled|gone) on a mismatch/ESRCH rather than
+  watch a stranger holding the recycled pid; streams `DEATH⇥label⇥pid⇥reason⇥waiter`) +
+  `scripts/lead-deathwatch.sh` (orchestrator `--once`/`--watch`/`--selftest`: per death → CAPTURE-before-
+  NOTIFY: git-checkpoint orphaned worktree WIP into `refs/deathwatch/<label>/<ts>` via a temp-index
+  plumbing (tracked+untracked, no working-tree touch, no hooks) + a forensics JSON record, both to disk
+  BEFORE the PAGE; never respawns) + `tests/lead-deathwatch.bats` (5). Records/heartbeat/alarms →
+  `~/.claude/deathwatch/` (`CC_DEATH_RECORDS_DIR` override).
+  - **Criteria (all RED-proven):** L1-a unregistered-pid blindness DECLARED → covered by P8 registry + L2
+    unregistered-waitee RED (composition). L1-b capture-before-notify (stub the page to FAIL → the record
+    survives). L1-c {pid,start} guard (live pid + wrong start → DEATH(recycled); dead pid → DEATH(gone);
+    the arm-window race rides the ESRCH path). L1-d death → checkpoint + PAGE, ZERO respawn (exactly one
+    page, says NOT respawned). **L1-e (desk-registered mid-build)** the WATCHER's own death is LOUD (S-4):
+    heartbeat record each cycle (absence=alarm) + abnormal-helper-exit detection → watcher-died ALARM +
+    re-arm (SIGKILL the helper mid-block → alarm + rc 3). Gate wires L1-e to the behavioral selftest.
+  - **Key learnings:** (1) the selftest MUST drive fresh subprocess `--once` calls (not in-process
+    functions) so each resolves `CC_DEATH_RECORDS_DIR` at its OWN top-level — the cc-wait pattern; an
+    in-process call inherits the already-resolved global (this was 0/7 until fixed). (2) `ps lstart` string
+    equality IS the recycling identity; the arm-window race self-heals — `select.kevent` ADD on a dead pid
+    raises ESRCH → 'gone'. (3) capture WIP with a TEMP `GIT_INDEX_FILE` (read-tree+add-A+write-tree+commit-
+    tree) — tracked+untracked, zero working-tree impact (teammate-checkpoint pattern).
+  - **Deploy: C10-queued** — symlink both + wire `--watch` (or `--once` per supervisor sweep) against the
+    P8 registry watch-list = operator activation.
 - **L2 — WAIT CONTRACTS (THE KEEPER) — DONE (2026-07-14, successor #4)** — gate row ✅, RED-proven, full
   regression green. Artifacts: `bin/cc-wait` (producer — writes the disk contract BEFORE blocking, fail-
   closes at the producer on a missing deadline/on-timeout and on a non-allowlisted action; on timeout
@@ -496,11 +518,14 @@ unable to see, and who ends up checking it by hand?"*
 **Sequence (my judgment, per desk):** L2 first (the keeper — the contract schema+lint is what every other
 layer references) → L1 (feeds contracts a death-event) → L4 (backstops with divergence) → L3 (heartbeats).
 Build to `wait-safety-gate.sh` turning green; RED-prove each criterion against its naive/absent form; the
-desk registers criteria as drafted (early-veto, never a gate). **NEXT:** build L1 (kqueue `EVFILT_PROC`
-death-watcher `scripts/lead-deathwatch.sh` — needs a real compiled/scripting kqueue helper; bash cannot;
-design it early). L1-a's gate check flips green the moment `scripts/lead-deathwatch.sh` exists AND
-`wait-contract-lint.sh` is present (the L2 tie — now satisfied). L1 criteria: capture-BEFORE-notify (Inv7,
-RED-provable: kill the notify, the checkpoint survives) · `{pid,start-time}` recycling guard (reuse
-cc-wait's `pid_start`/`waiter_alive` idea) · checkpoint(mechanical)+PAGE(never respawn). Then L4
-(reconciler backstop) → L3 (`bin/cc-run` effect-heartbeats). Criteria are already registered in the gate —
-read `./scripts/wait-safety-gate.sh` output first.
+desk registers criteria as drafted (early-veto, never a gate). **NEXT:** build **L4** (three-way anti-
+entropy reconciler `scripts/lead-reconciler.sh`): reconcile harness tasks × cc-registry × disk telemetry;
+persistent pairwise divergence IS the alarm (name the pair — the incident: tasks listed a registry-dead
+pid). Criteria (gate lines 98-108): L4-a divergence alarm names the pair · L4-b grace window (a transient
+spawned-not-yet-registered / dying-not-yet-swept transition must NOT alarm — anti-cry-wolf, reuse L2's
+page-once discipline) · L4-c reconciler emits its OWN heartbeat (S-4 — its absence is the alarm, same shape
+as L1-e) · L4-blind DECLARE coherent-wrong (all-three-agree-wrong) → mitigated by 3 INDEPENDENT sources
+(harness API / pid kill-0 / disk mtime). L4 backstops L2-c (dead-waiter) and L1 (unregistered pid). Then
+**L3** (`bin/cc-run` effect-heartbeats — heartbeat per unit of REAL output, closing D10; DECLARE the
+silent-compute/looping-output blindness → route to L1(pid)/L2(heartbeat-expectation=none)). Criteria are
+already registered — read `./scripts/wait-safety-gate.sh` output first (now 7 met · 6 NOT BUILT).
