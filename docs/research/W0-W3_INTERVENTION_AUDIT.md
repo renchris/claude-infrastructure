@@ -649,3 +649,67 @@ Directly implied by §1–§7, in dependency order:
    topology, gate batching. PLUS a filled W4/W5 instance. Closes R4 — the structural gap.
 6. **E2E per primitive** (axis i) — so every FIXED item (§3a/§3b) and every new primitive
    self-announces on regression.
+
+---
+
+## 9. The W0–W4 touchpoint ledger, re-derived under the ZERO-HITL DoD (D1)
+
+The operator ruled the **zero-HITL DoD** on 2026-07-14 (blueprint §5, `fea9200`; queue item D1). Every
+W0–W4 operator touch catalogued above (§1 relays, §2 gates, §3 rescues, §6 pages) is re-derived here
+against that law to answer two questions the operator posed: **(a) which touches does the law
+ELIMINATE, and by what mechanism; (b) what is the RESIDUAL truly-needed set** — which the plan
+hypothesized "~empty," and which this derivation shows is small, specific, and *by construction
+irreducible* — **that residual IS the future design surface.**
+
+**The law (verbatim intent).** Former STOP-ASKs → **agent-ruled defaults + async review queue +
+push-notify (EARLY-VETO, not approval)**; **ship never gates** (autonomous at GREEN exits); the ONLY
+legitimate stops = **C10/harness-constitutional · permission-system blocks · genuinely-external info**
+(fail-loud + async, never a silent fence). **WHY the operator ruled it (empirical):** *every* W0–W4
+parked gate was ruled **EXACTLY as the lead recommended** (§6), so the ask was pure latency — the
+approval carried zero information the lead did not already hold.
+
+### 9.1 The ledger — every W0–W4 touch × its zero-HITL disposition
+
+| # | Touchpoint (source) | Count | Zero-HITL disposition | Mechanism / status |
+|---|---|---|---|---|
+| T1 | `/context`+`/accounts` telemetry relays (§1) | 10 | **ELIMINATED** | telemetry loop `cc-board`/`cc-context`+quota-join — **PROVEN on W4** (operator slept the wave; §6) |
+| T2 | pane hand-capture after each ruling (§1/§3g) | ~dozen | **ELIMINATED** | fixed submit-verifier (`3b12107`) + **D9** `abstained==100%` alarm — the compensating human is retired |
+| T3 | 1h fallback stall sweep (§1/§3h) | standing | **ELIMINATED → async PAGE** | **D10** STALL? tri-state detector (page-only) — a human *poll* becomes a machine *page* |
+| T4 | wave-exit ratifications — "RATIFY ALL 7", "RULED IN FULL" (§2) | 4 waves | **ELIMINATED as interrupts** | pre-signed ruling **CLASSES** at wave start (gate-batching, axis c); STOP-ASK only out-of-class → R-4 |
+| T5 | `/ship` to origin (§2) | 4 | **ELIMINATED (C9 dissolved)** | **autonomous-at-green** — PROVEN this session (`817448d`, 57 commits, wire-witnessed) |
+| T6 | "go" to cut the next wave (§2) | 2 | **ELIMINATED** | agent-ruled default + **D8** effect-verified GO + push-notify early-veto |
+| T7 | the §3a–3i unplanned rescues (9 classes) | — | **ELIMINATED as human rescues** | each is now a self-announcing detector (E2E / D8 / D9 / D10 / limit-recover) that pages a delegated-live-session — the operator no longer has to *notice then rescue* |
+| T8 | W4 desk PAGES (§6) | 2 | **RECLASSIFIED — not a touch to eliminate** | a PAGE **is** the designed fail-loud+async signal; it routes async and never BLOCKS the program (1 void-by-effects, 1 hard-E2 complied) |
+| **R-1** | **C10 self-modification/persistence** — P8 activation, hooks/`settings.json`/launchd/`.plist`/PATH, autonomy-machinery (§2b) | — | **RESIDUAL — human-only BY CONSTRUCTION** | the harness auto-mode classifier **enforces** it (the agent *cannot* in auto mode); the agent does all work + hands an activation script (`/tmp/p8-activate.sh`), never activates |
+| **R-2** | **C6 money-path** (§2b) | — | **RESIDUAL — permanently out-of-class** | never pre-signable/desk-signable/agent-signable |
+| **R-3** | **permission-system blocks** (§2b) | — | **RESIDUAL — the ceiling holding** | where the classifier denies (correctly), the agent parks + fail-loud + hands the ready artifact — *not a bug* |
+| **R-4** | **genuinely-external info** — operator intent on a class *not yet pre-signed*; external credentials/state | — | **RESIDUAL — shrinks with the class vocabulary** | fail-loud + async surface (push-notify early-veto), never a silent pause (§3c) or silent proceed (§2b) |
+
+### 9.2 The residual IS the design surface (and must NOT be driven to zero)
+
+The residual is **R-1..R-4** — *not* empty. The critical finding, forced by §2b (**the authority
+ceiling**): the residual **must not be driven to zero**. It is the safety rail that stops the autonomy
+layer from bootstrapping its own powers; counting C10/C6/permission as "failures to eliminate" would
+push the system toward *defeating its own ceiling*. The zero-HITL target therefore applies to **T1–T8
+(driven to zero — and W4 proved it)**, while **R-1..R-4 are FEATURES held at a principled floor.**
+
+So "the residual IS the design surface" resolves to **four build directions that make the floor
+maximally cheap to the human — never to remove it**:
+
+- **D-i — pre-stage every residual stop as a ready, one-action artifact.** The agent stages the
+  activation script / decision packet so the human's move is a single *ratify-and-run at their
+  convenience*, never a blocking mid-wave interrupt. `/tmp/p8-activate.sh` is the template (§2b).
+- **D-ii — broaden the pre-signed ruling CLASSES** (gate-batching, axis c) so fewer items fall
+  out-of-class into R-4. R-4 shrinks as the class vocabulary matures; the R-1/R-2/R-3 floor is fixed.
+- **D-iii — every residual stop must SELF-DECLARE:** fail-loud + push-notify + park — never a silent
+  pause (§3c over-caution) and never a silent proceed (§2b). This is exactly the zero-HITL
+  "push-notify early-vetoer," and it is the one mechanism the residual set *requires* to exist.
+- **D-iv — at the residual, the supervisor PAGES, never acts** (ruling #1) — forced here by the same
+  information-content argument as D10: an out-of-session actor cannot hold the consent a residual stop
+  needs, so it can only surface, never decide.
+
+**D1 verdict:** under the zero-HITL law the W0–W4 operator burden collapses to the **R-1..R-4 floor**
+(self-modification consent, money-path, permission-ceiling, un-pre-signed intent) — everything else
+(T1–T8) is eliminated or reclassified to an async signal, and W4 already ran with the operator asleep
+for the wave. The residual is not a defect to close; it is the **contract for D-i..D-iv** — the surface
+where future design makes the *unavoidable* human touches rare, batched, ready, and never blocking.
