@@ -70,8 +70,23 @@ CLAUDE_CODE_SESSION_ID=self bash "$CC" >/dev/null 2>&1
 kill $LIVEPID 2>/dev/null
 
 echo "T7 cc-board: states + rank footer (P7)"
+# HERMETIC quota stub — cc-board's OK↔LIMIT state is a join over the account's LIVE 5h/weekly/Fable
+# quota (`claude-accounts --json`). A test that reaches the real feed is NON-DETERMINISTIC: it RED on
+# next2@93% weekly (2026-07-14) while cc-board was correct (weekly≥90% ⇒ LIMIT, per the header rule).
+# Stub low quota so each row's state is a function of the FIXTURE (ctx + pid), not the operator's usage.
+# (Same testability principle as cc-sessions' IT2_BIN; cc-board resolves claude-accounts via PATH.)
+QSTUB=$(mktemp -d)
+cat > "$QSTUB/claude-accounts" <<'SH'
+#!/bin/bash
+case "$*" in
+  *--rank*) printf 'next\nnext3\nnext4\nnext2\n' ;;
+  *)        printf '%s\n' '{"rows":[{"acct":"next","session_pct":5,"weekly_pct":10,"fable_pct":10},{"acct":"next2","session_pct":5,"weekly_pct":10,"fable_pct":10},{"acct":"next3","session_pct":5,"weekly_pct":10,"fable_pct":10},{"acct":"next4","session_pct":5,"weekly_pct":10,"fable_pct":10}]}' ;;
+esac
+SH
+chmod +x "$QSTUB/claude-accounts"
+board(){ PATH="$QSTUB:$PATH" bash "$BOARD" 2>/dev/null; }
 mk "$now" duerow /w2 "/Users/chrisren/.claude-next" 80   # DUE (ctx≥73)
-b=$(bash "$BOARD" 2>/dev/null)
+b=$(board)
 echo "$b" | grep -q 'duerow.*DUE'      && ok "DUE state"      || no "DUE"
 # liveness states (P9) — DEAD is effect-verified (kill -0), STALL? is a CANDIDATE, never an action.
 # STALL? and DEAD must be DISTINCT: age alone conflates a hung session with a healthy long turn
@@ -79,12 +94,13 @@ echo "$b" | grep -q 'duerow.*DUE'      && ok "DUE state"      || no "DUE"
 sleep 300 & BLIVE=$!
 mk 1 bdead /w3 "/Users/chrisren/.claude-next" 10 "999999"
 mk 1 bhang /w4 "/Users/chrisren/.claude-next" 10 "$BLIVE"
-b2=$(bash "$BOARD" 2>/dev/null)
+b2=$(board)
 echo "$b2" | grep -q 'bdead.*DEAD'   && ok "DEAD (pid gone — effect-verified)"        || no "DEAD"
 echo "$b2" | grep -q 'bhang.*STALL?' && ok "STALL? (pid ALIVE + stale = candidate)"   || no "STALL?"
 kill $BLIVE 2>/dev/null
 echo "$b" | grep -q 'self.*next2.*OK'  && ok "OK state + join" || no "OK"
 echo "$b" | grep -q 'place next →'     && ok "rank footer"    || no "footer"
+rm -rf "$QSTUB"
 
 rm -rf "$SB"
 echo ""
