@@ -624,10 +624,16 @@ PRESERVES the hook's existing dirty-tree + `.teammate-busy` defers (ADDS safety,
 
 ## Never-let-completion-go-silent (comms edition) — F1..F5 (REGISTERED 2026-07-15, desk directive)
 
-**Status: REGISTERED, build authorized (operator-directed, 100th-percentile).** `scripts/comms-safety-gate.sh`
-carries F1..F5 RED-by-design (`0 met · 0 failed · 5 NOT BUILT`, exit 1 — seen firing RED). Register-first
-per the standing discipline; successor #4 recycled here (~63% ctx) — the 5-artifact build wants fresh
-headroom. **NEXT (fresh-context successor — build authorized):** build F1..F5 to turn the gate green.
+**Status: DONE — F1..F5 BUILT, RED-proven, and LANDED (successor #5, 2026-07-15).** `scripts/comms-safety-gate.sh`
+is GREEN on trunk (`5 met · 0 failed · 0 NOT BUILT` — *completion cannot go silent*). Landed: **F1 `08dad8c`**
+(cc-announce), then **F3/F2/F4/F5 + C10 doc `2c1fe92`** (payload-lint, §8.5 E5 channel-ladder law, exit-deadline,
+completion-push, COMMS-SAFETY-ACTIVATION.md). Full regression green (wait+reaper+comms gates 0; 146/146 bats;
+shellcheck clean; each F RED-proven against its naive/absent form before counting). Activation (wiring the live
+exit/ship recipes) is **C10 human-only** — `docs/COMMS-SAFETY-ACTIVATION.md` + `/tmp/comms-safety-activate.sh`,
+folded into the consolidated `/tmp/wiring-all.sh` bundle (operator GO). **Key learning:** cc-announce trusts ONLY
+cc-notify's `submit VERIFIED` — mailbox-only is a RELOAD not a WAKE, so it alarms; the naive 'trust cc-notify's
+exit 0' form IS the W5 SendMessage degrade, one channel over (RED-proven live). *(Historical build context — the
+RED-by-design registration and per-F design — preserved below.)*
 
 **Incident-as-spec:** W5 lead #3's TERMINAL announce used `SendMessage` (teammate-scope only — the desk is
 NOT a teammate → unresolvable target); it SILENTLY degraded to disk-truth; the desk learned of the ship
