@@ -22,6 +22,18 @@
 # Each criterion below is RED-provable: a test that fails against the naive/absent form. C10 activation
 # (kqueue daemon, launchd, settings) is human-only — the agent builds + tests + hands an activation script.
 #
+# ── THE COMPOSITION RULE (desk-elevated 2026-07-14; the coherence principle of the whole build) ────
+# Every layer DECLARES its structural blindness AND names the layer that covers it. That composition is
+# what turns five PARTIAL detectors into one COMPLETE one — no layer is complete alone, and the design
+# is only sound if every declared blind spot is another layer's covered case: L3 silent-op → L1 pid;
+# L1 unregistered-pid → P8 registry + L2 RED; L2 dead-waiter → L4 divergence; L4 coherent-wrong → three
+# INDEPENDENT sources. A blindness declared WITHOUT a covering route is an open hole, not a closed one.
+#
+# ── DESK REGISTRATION (2026-07-14): all 14 criteria REGISTERED, NO VETO. Criteria change ONLY by desk
+# ruling. Three endorsed as load-bearing: L2-c (watchdog enforces INDEPENDENT of waiter liveness — the
+# dead-waiter-with-open-contract case nobody designs for; tonight's incident inverted) · L1-c ({pid,
+# start-time} guard — bare-pid identity is a classic false-liveness hole) · the composition rule above.
+#
 # ⚠️ RED TODAY BY DESIGN (L1..L4 unbuilt). Redness IS "not ready"; green IS the definition of ready.
 # Exit: 0 = every registered criterion met · 1 = not ready (with reasons).
 set -uo pipefail
