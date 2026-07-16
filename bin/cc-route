@@ -1,0 +1,251 @@
+#!/bin/bash
+# cc-route — MODEL/EFFORT AUTO-ROUTING (B1-b): slot descriptor → spawn plan {model, account, LEAD
+# effort}, from LIVE reads only. Replaces the manual routing table (BUILD_LOG § Model routing) whose
+# copies caused two silent-failure incidents (frontier-window-ssot-discipline: a hardcoded JUL7 window;
+# a comment-matching awk).
+#
+#   cc-route <slot> [--json]        slot ∈ lead | judgment-dense | transcription | adversarial
+#   cc-route selftest
+#
+# LIVE SOURCES (never re-derived, never hardcoded):
+#   · account + window + quota  → `claude-accounts --route fable|general` (exit 0 ok · 2 policy-none ·
+#     3 data-unavailable — the reference frontier_window() lives THERE; 90s cache keeps calls cheap)
+#   · model ids                 → ~/.claude/model-config.yaml, KEY-ANCHORED value-bounded parses of
+#     frontier_access.model + roles.lead_default; parse failure = exit 3 LOUD (never default)
+#
+# SLOT TABLE (effort provenance: model-config effort_defaults + agent-teams §Per-Teammate-Effort — the
+# emitted effort is the LEAD's; teammate effort INHERITS the lead on CC 2.1.183, no per-member surface):
+#   lead            lead_default model  @ max    (effort_defaults.default)
+#   transcription   lead_default model  @ high   (mechanical/routine ladder; roadmap a-stubs precedent)
+#   judgment-dense  frontier model      @ xhigh  (Fable ladder: xhigh = capability-sensitive)
+#                   → fallback lead_default @ max (Opus ladder: default max) — reason-carrying
+#   adversarial     frontier model      @ xhigh  (effort_defaults.verify_judge — holds on BOTH tiers)
+#                   → fallback lead_default @ xhigh — reason-carrying
+#
+# 🚨 THE TWO EDGES (RED-proven in selftest):
+#   · FRONTIER-WINDOW EDGE — fable route 'none' (window closed / no entitlement / exhausted) → an
+#     EXPLICIT Opus fallback carrying the reason; the fable id NEVER appears in a fallback plan. Every
+#     call is a fresh live read, so a mid-wave Fable-close routes the fallback on the very next spawn.
+#   · QUOTA CLIFF — general route 'none' (every account capped) → exit 4, NO plan, "run /limit-recover".
+#     A cliff is a STOP, never a silent down-tier, never a blind fire.
+#
+# Exit: 0 = plan emitted (stdout: one-line JSON) · 2 = usage/unknown slot · 3 = fire-blind refusal
+#       (quota data unavailable OR SSOT unparseable) · 4 = QUOTA CLIFF (stop + /limit-recover).
+# Env (tests): CC_ROUTE_ACCOUNTS_BIN, CC_MODEL_CONFIG, CC_ROUTE_RECORDS_DIR.
+set -uo pipefail
+
+MODEL_CONFIG="${CC_MODEL_CONFIG:-$HOME/.claude/model-config.yaml}"
+RECORDS_DIR="${CC_ROUTE_RECORDS_DIR:-$HOME/.claude/route}"
+
+usage() { sed -n '2,35p' "$0" | sed 's/^# \{0,1\}//'; }
+die()   { echo "cc-route: $*" >&2; exit 2; }
+
+accounts_bin() {
+  if [ -n "${CC_ROUTE_ACCOUNTS_BIN:-}" ]; then echo "$CC_ROUTE_ACCOUNTS_BIN"
+  elif command -v claude-accounts >/dev/null 2>&1; then command -v claude-accounts
+  elif [ -x "$HOME/bin/claude-accounts" ]; then echo "$HOME/bin/claude-accounts"
+  else echo ""; fi
+}
+
+# RT-f (abstention law): every plan / fallback / stop / refusal is recorded.
+record() { # <slot> <outcome> <detail>
+  mkdir -p "$RECORDS_DIR" 2>/dev/null || return 0
+  jq -cn --arg slot "$1" --arg oc "$2" --arg d "$3" --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+     '{ts:$ts, slot:$slot, outcome:$oc, detail:$d}' >> "$RECORDS_DIR/route.jsonl" 2>/dev/null || true
+}
+
+# RT-e: KEY-ANCHORED, value-bounded SSOT parse (the frontier-window-ssot-discipline recipe): the key
+# must open a line INSIDE its block at 2-space indent; the value is the bare token (field 2), so a
+# trailing comment or a comment LINE mentioning the key can never match. Parse failure returns empty —
+# the caller fails LOUD (exit 3): an unreadable SSOT means route-UNKNOWN, never a default.
+ssot_model() { # <block> <key>  e.g. ssot_model frontier_access model
+  [ -f "$MODEL_CONFIG" ] || return 1
+  local v
+  v="$(awk -v blk="^$1:" -v key="$2" '
+      $0 ~ blk {f=1; next}
+      /^[^ #]/ {f=0}
+      f && $1 == key":" {print $2; exit}
+    ' "$MODEL_CONFIG" 2>/dev/null)"
+  case "$v" in claude-*) echo "$v"; return 0 ;; *) return 1 ;; esac
+}
+
+# route via claude-accounts; stdout = account name. rc semantics per the reference contract.
+route_account() { # <fable|general> ; sets ROUTE_ACCT / ROUTE_REASON, returns rc
+  local kind="$1" bin out rc
+  bin="$(accounts_bin)"
+  [ -n "$bin" ] || { ROUTE_REASON="claude-accounts unavailable"; return 3; }
+  out="$("$bin" --route "$kind" 2>"${TMPDIR:-/tmp}/cc-route-err.$$")"; rc=$?
+  ROUTE_REASON="$(tr '\n' ' ' < "${TMPDIR:-/tmp}/cc-route-err.$$" 2>/dev/null | sed 's/  */ /g;s/ $//')"
+  rm -f "${TMPDIR:-/tmp}/cc-route-err.$$"
+  ROUTE_ACCT="$out"
+  return "$rc"
+}
+
+emit_plan() { # <slot> <model> <acct> <effort> <reason>
+  local slot="$1" model="$2" acct="$3" effort="$4" reason="$5"
+  record "$slot" plan "model=$model acct=$acct effort=$effort reason=$reason"
+  jq -cn --arg slot "$slot" --arg model "$model" --arg acct "$acct" --arg eff "$effort" \
+         --arg reason "$reason" --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+     '{slot:$slot, model:$model, account:$acct, lead_effort:$eff, reason:$reason, source:"cc-route", ts:$ts}'
+  echo "cc-route: $slot → $model @ $effort on $acct (${reason:-live-read})" >&2
+}
+
+cmd_route() {
+  local slot="$1"
+  case "$slot" in lead|judgment-dense|transcription|adversarial) ;; *) die "unknown slot '$slot' (lead | judgment-dense | transcription | adversarial)" ;; esac
+
+  # RT-e: SSOT model ids, fail-loud.
+  local lead_model frontier_model
+  if ! lead_model="$(ssot_model roles lead_default)"; then
+    record "$slot" refused "SSOT unparseable: roles.lead_default ($MODEL_CONFIG)"
+    echo "cc-route: REFUSING TO ROUTE — cannot parse roles.lead_default from $MODEL_CONFIG (RT-e). An unreadable SSOT is route-UNKNOWN; fix the SSOT, never guess a model." >&2
+    exit 3
+  fi
+
+  case "$slot" in
+    lead|transcription)
+      local eff; [ "$slot" = lead ] && eff=max || eff=high
+      if route_account general; then
+        emit_plan "$slot" "$lead_model" "$ROUTE_ACCT" "$eff" "general route"
+      else
+        general_stop "$slot" "$?"
+      fi
+      ;;
+    judgment-dense|adversarial)
+      if ! frontier_model="$(ssot_model frontier_access model)"; then
+        record "$slot" refused "SSOT unparseable: frontier_access.model ($MODEL_CONFIG)"
+        echo "cc-route: REFUSING TO ROUTE — cannot parse frontier_access.model from $MODEL_CONFIG (RT-e)." >&2
+        exit 3
+      fi
+      local rc=0; route_account fable || rc=$?
+      if [ "$rc" -eq 0 ]; then
+        # xhigh on Fable: the Fable ladder's capability-sensitive tier (judgment-dense waves) and the
+        # certified verify_judge tier (adversarial) coincide.
+        emit_plan "$slot" "$frontier_model" "$ROUTE_ACCT" "xhigh" "frontier window open"
+      elif [ "$rc" -eq 2 ]; then
+        # RT-b FRONTIER-WINDOW EDGE: the SSOT-designed degrade — EXPLICIT, reason-carrying, never silent.
+        local fb_reason="frontier unavailable (${ROUTE_REASON:-window closed / exhausted}) → designed Opus fallback"
+        local fb_eff; [ "$slot" = adversarial ] && fb_eff=xhigh || fb_eff=max
+        if route_account general; then
+          record "$slot" fallback "$fb_reason"
+          emit_plan "$slot" "$lead_model" "$ROUTE_ACCT" "$fb_eff" "$fb_reason"
+        else
+          general_stop "$slot" "$?"
+        fi
+      else
+        record "$slot" refused "fable quota data unavailable (${ROUTE_REASON:-})"
+        echo "cc-route: REFUSING TO ROUTE — fable quota data unavailable (RT-d): ${ROUTE_REASON:-no detail}. Routing on unknown quota is firing blind." >&2
+        exit 3
+      fi
+      ;;
+  esac
+}
+
+general_stop() { # <slot> <rc from route_account general>
+  local slot="$1" rc="$2"
+  if [ "$rc" -eq 2 ]; then
+    # RT-c QUOTA CLIFF: policy-none on the GENERAL route = every account capped. A cliff is a STOP.
+    record "$slot" cliff-stop "general route policy-none (${ROUTE_REASON:-all capped})"
+    echo "cc-route: ⛔ QUOTA CLIFF (RT-c) — no account has headroom (${ROUTE_REASON:-policy-none}). STOP: run /limit-recover (disk-truth audit, re-run or transplant). NEVER silent down-tier, never fire blind. No plan emitted." >&2
+    exit 4
+  fi
+  record "$slot" refused "general quota data unavailable (${ROUTE_REASON:-})"
+  echo "cc-route: REFUSING TO ROUTE — quota data unavailable (RT-d): ${ROUTE_REASON:-no detail}. Routing on unknown quota is firing blind." >&2
+  exit 3
+}
+
+# ── selftest: every RT RED-proof must be SEEN to fire (stubbed accounts-bin + temp SSOT) ────────────
+selftest() {
+  local pass=0 fail=0 rc tmp SELF
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/cc-route-selftest.XXXXXX")" || die "cannot mktemp"
+  trap 'rm -rf "${tmp:-}"' EXIT
+  export CC_ROUTE_RECORDS_DIR="$tmp/records"
+  SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+
+  # SSOT fixture — real key shapes, including the COMMENT LANDMINE that broke handoff-fire's awk
+  # (a comment line mentioning `model: claude-trap-9` must never match a key-anchored parse).
+  cat > "$tmp/model-config.yaml" <<'YAML'
+# frontier_access window notes: model: claude-trap-9 active:false (COMMENT — a loose grep matches this)
+frontier_access:
+  model: claude-fable-5                     # trailing comment
+  active: true
+roles:
+  lead_default: claude-opus-4-8             # trailing comment
+YAML
+  export CC_MODEL_CONFIG="$tmp/model-config.yaml"
+
+  # accounts stub: env-driven rc/name/reason per kind.
+  cat > "$tmp/accounts-stub" <<'STUB'
+#!/bin/bash
+if [ "${1:-}" = "--route" ]; then
+  case "$2" in
+    fable)   rc="${STUB_FABLE_RC:-0}";   name="${STUB_FABLE_ACCT:-next4}";  reason="${STUB_FABLE_REASON:-fable window closed}" ;;
+    general) rc="${STUB_GENERAL_RC:-0}"; name="${STUB_GENERAL_ACCT:-next3}"; reason="${STUB_GENERAL_REASON:-all accounts capped}" ;;
+  esac
+  if [ "$rc" = 0 ]; then echo "$name"; exit 0; fi
+  echo "$reason" >&2; exit "$rc"
+fi
+exit 2
+STUB
+  chmod +x "$tmp/accounts-stub"
+  export CC_ROUTE_ACCOUNTS_BIN="$tmp/accounts-stub"
+
+  check() { # <label> <expected-rc> <cmd...>
+    local label="$1" want="$2"; shift 2
+    "$@" >/dev/null 2>&1; rc=$?
+    if [ "$rc" = "$want" ]; then printf '  ok   %-64s (exit %s)\n' "$label" "$rc"; pass=$((pass+1))
+    else printf '  FAIL %-64s (exit %s, wanted %s)\n' "$label" "$rc" "$want"; fail=$((fail+1)); fi
+  }
+
+  echo "cc-route selftest — every RT-a..f RED-proof must fire:"
+
+  # RT-a: each slot yields a complete plan.
+  check "RT-a lead -> plan (exit 0)" 0 "$SELF" lead
+  check "RT-a transcription plan carries effort=high" 0 \
+    bash -c "'$SELF' transcription 2>/dev/null | jq -e 'select(.lead_effort==\"high\" and .model==\"claude-opus-4-8\" and .account==\"next3\")'"
+  check "RT-a judgment-dense (window open) -> fable @ xhigh on next4" 0 \
+    bash -c "'$SELF' judgment-dense 2>/dev/null | jq -e 'select(.model==\"claude-fable-5\" and .lead_effort==\"xhigh\" and .account==\"next4\")'"
+  check "unknown slot -> usage refusal (2)" 2 "$SELF" chief-vibes-officer
+
+  # RT-b FRONTIER-WINDOW EDGE: fable none → explicit reason-carrying Opus fallback; fable id ABSENT.
+  check "RT-b fable-close -> Opus fallback plan (exit 0)" 0 \
+    env STUB_FABLE_RC=2 "$SELF" judgment-dense
+  check "RT-b fallback carries reason + NEVER the fable id" 0 \
+    bash -c "env STUB_FABLE_RC=2 '$SELF' judgment-dense 2>/dev/null | jq -e 'select(.model==\"claude-opus-4-8\" and (.reason|test(\"fallback\")) and (.reason|test(\"window closed\")))' | grep -vq fable-5"
+  check "RT-b adversarial fallback keeps xhigh (verify_judge holds on both tiers)" 0 \
+    bash -c "env STUB_FABLE_RC=2 '$SELF' adversarial 2>/dev/null | jq -e 'select(.model==\"claude-opus-4-8\" and .lead_effort==\"xhigh\")'"
+
+  # RT-c QUOTA CLIFF: general none → exit 4, NO plan on stdout, limit-recover directive on stderr.
+  check "RT-c cliff -> exit 4" 4 env STUB_GENERAL_RC=2 "$SELF" lead
+  check "RT-c cliff emits NO plan + names /limit-recover" 0 \
+    bash -c "out=\$(env STUB_GENERAL_RC=2 '$SELF' lead 2>'$tmp/err'); [ -z \"\$out\" ] && grep -q limit-recover '$tmp/err'"
+  check "RT-c cliff on the FALLBACK leg too (fable none + general none)" 4 \
+    env STUB_FABLE_RC=2 STUB_GENERAL_RC=2 "$SELF" judgment-dense
+
+  # RT-d DATA-UNAVAILABLE: exit 3, no plan (never fire blind).
+  check "RT-d general data-unavailable -> exit 3" 3 env STUB_GENERAL_RC=3 "$SELF" lead
+  check "RT-d fable data-unavailable -> exit 3 (no silent fallback on UNKNOWN)" 3 \
+    env STUB_FABLE_RC=3 "$SELF" judgment-dense
+
+  # RT-e SSOT DISCIPLINE: parse failure → exit 3 LOUD; the comment landmine never matches.
+  check "RT-e missing SSOT file -> exit 3 (never guess)" 3 \
+    env CC_MODEL_CONFIG="$tmp/nowhere.yaml" "$SELF" lead
+  printf 'roles:\n  # lead_default: claude-trap-9 (comment only)\n' > "$tmp/broken.yaml"
+  check "RT-e comment-only key -> exit 3 (key-anchored parse, no comment match)" 3 \
+    env CC_MODEL_CONFIG="$tmp/broken.yaml" "$SELF" lead
+
+  # RT-f OUTCOME RECORDS: plans, fallbacks, cliff-stops, refusals all recorded.
+  check "RT-f records carry plan+fallback+cliff-stop+refused outcomes" 0 \
+    bash -c "grep -q '\"outcome\":\"plan\"' '$tmp/records/route.jsonl' && grep -q '\"outcome\":\"fallback\"' '$tmp/records/route.jsonl' && grep -q '\"outcome\":\"cliff-stop\"' '$tmp/records/route.jsonl' && grep -q '\"outcome\":\"refused\"' '$tmp/records/route.jsonl'"
+
+  echo "cc-route selftest: $pass passed, $fail failed"
+  [ "$fail" -eq 0 ] || exit 1
+}
+
+command -v jq >/dev/null 2>&1 || { echo "cc-route: jq required" >&2; exit 2; }
+case "${1:-}" in
+  selftest)       selftest ;;
+  -h|--help|"")   usage; exit 0 ;;
+  --*)            die "unknown flag '$1' (usage: cc-route <slot>)" ;;
+  *)              slot="$1"; shift; [ "${1:-}" = "--json" ] && shift; [ $# -eq 0 ] || die "unexpected arguments: $*"; cmd_route "$slot" ;;
+esac
