@@ -667,3 +667,54 @@ false-positives when both are in one command); content-verify by blob; NEVER edi
 machinery in place — hand the operator an activation script (`docs/COMMS-SAFETY-ACTIVATION.md` +
 `/tmp/comms-safety-activate.sh`). This is the last mile of the never-stuck charter: never wait on the dead,
 never reap the living, **never let completion go silent.**
+
+---
+
+## Track-B platform gaps B1-a..d + B2 bundle — DONE (2026-07-15, trackb lead; Phase 1 + Phase-2 assembly of TWO_TRACK_PROGRAM_ROADMAP)
+
+All four gaps built INLINE (law-laden; the premortem-gate lesson), each register-criteria-FIRST (gate
+seen RED before the build), RED-proven against its naive/absent form, committed at green boundaries.
+
+- **B1-d limit-reset poller** (`cea8a61` RED-bar, `2a07619` proofs) — `limit-reset-safety-gate` GREEN
+  (LR-a..i; `tests/lr-reset-poller.bats` 10/10, RED-proven against the as-shipped poller). **Two real
+  bugs found by the proofs:** (1) blind headroom guard — `python3 - <<PY` consumed stdin as program text
+  so `sys.stdin.read()` was empty → except-branch exit 0 EVERY call; the guard never observed a quota
+  (§3i instance, found by LR-c firing). (2) sid-keyed-forever `resumed/` marker — a session resumed
+  once could never re-park on its NEXT limit (fatal for multi-day; now EVENT-keyed, LR-i). LR-blind
+  declared: fable-scoped message shape uncaptured → covered by weekly prefix else supervisor page.
+- **B1-a cc-respawn** (`331e9d2` RED-bar, `4e32d54` build) — `respawn-safety-gate` GREEN (RS-a..f;
+  selftest 16/16, bats 8/8). Spawn-boundary GO = RESPAWN is now machinery: prepare fail-closes without
+  a --go ruling/worktree; checkpoint-BEFORE-stop (refs/respawn/<m>/<ts> + refs/wip/<m>/LAST, WIP proven
+  captured); verify-stopped by {pid,start} (live→5 LOUD); verify-spawned by --agent-name effect-read;
+  the mailbox is structurally inexpressible (bats-pinned: no send-to-target path). TaskStop/Agent-spawn
+  stay lead/harness steps; the tool is the protocol around them. RS-blind (lead-death between stop and
+  spawn) declared with covers.
+- **B1-b cc-route** (`d1a5428` RED-bar, `e274203` build) — `route-safety-gate` GREEN (RT-a..f; selftest
+  15/15, bats 7/7). Slot → {model, account, LEAD effort} from live reads only: accounts/window DELEGATED
+  to `claude-accounts --route` (0/2/3 contract); model ids key-anchored from model-config.yaml (comment
+  landmines proven non-matching; parse fail = exit 3 LOUD). Frontier edge → EXPLICIT reason-carrying
+  Opus fallback (fable id proven absent; adversarial keeps xhigh per certified verify_judge). Quota
+  cliff → exit 4, EMPTY stdout, /limit-recover directive — proven on direct AND fallback legs.
+  Effect-checked live: judgment-dense → fable-5@xhigh/next3; lead → opus@max/next4.
+- **B1-c never-stuck-gate** (`c88ba53`) — THE SYSTEMATIC INVARIANT as one audit: LEG 1 all seven sibling
+  bars live + fail-closed (absent ≠ passing — selftest 4/4 + live mutation RED-proof); LEG 2 the four
+  states (progress | owned-wait | designed-gate | terminated) each with guardians; LEG 3 the corpus
+  failure taxonomy → covers (incl. the three new gaps); LEG 4 read-only ACTIVE/C10-PEND inventory
+  (build-complete ≠ activation-complete, Invariant 6). Ran 21 met · 0 failed. NS-blind-1 (voluntary
+  session-continue arming → F4 sweep + D10 page) + NS-blind-2 (idle-with-backlog is SEMANTIC — prose
+  DoDs; → async-queue-as-worklist law + F5 push; a machine-readable DoD registry would close it fully)
+  declared per the composition rule.
+- **B2 wiring-all v2 ASSEMBLED, NEVER RUN** — tracked master `docs/activation/wiring-all.sh`, delivered
+  `/tmp/wiring-all.sh`. Idempotent + self-testing: §1 verifies never-stuck-gate + every tool selftest
+  read-only and REFUSES on red; §2 symlinks (bin set + limit-recover mirror→repo, killing the
+  statusline-class drift for the poller) + cc-roles map; §3 effect-checks its own work; §4 PRINTS the
+  eight templates (poller launchd + ruled AUTOFIRE flip · never-stuck onto the supervisor sweep ·
+  `Bash(cc-teardown:*)` permission hand-step · L1..L4 loops · reap-guard snippet · F3/F4/F5 recipes ·
+  fresh-machine D2/P8 · rollback). The C10 line holds: it never loads launchd / starts a daemon / edits
+  a hook or the live supervisor (launchd runs the REPO path for lead-supervisor.sh — that file is live
+  machinery; its never-stuck sweep line is template ②, the operator's edit).
+- **Key learnings:** the `python3 - <<PY` + `sys.stdin.read()` combination is a blind-check GENERATOR
+  (the program eats the stdin the check meant to read) — grep for it when auditing guards. A recurring
+  limit needs an EVENT-keyed idempotency marker; sid-keyed markers break on the second occurrence of
+  anything. bash exec-optimizes a bare `-c 'sleep N'` (argv vanishes) — fixture processes need a
+  compound body to stay visible to ps.
