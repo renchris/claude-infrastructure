@@ -1,0 +1,269 @@
+#!/bin/bash
+# cc-respawn — RESPAWN-AS-PROTOCOL (B1-a): the deterministic, effect-verified primitive for the proven
+# rule "spawn-boundary GO = RESPAWN, never a message" (agent-teammate-spawn-2-1-183 §5e). On CC 2.1.183
+# NO mid-stream lead→teammate message has ever demonstrably been processed (W3 7/7 stalled post-
+# instruction; W4 two panes dark after a spawn-2 GO; sha-ack'd conditions shipped violated). The only
+# reliable delivery channel is the SPAWN BRIEF — so a course-change is a respawn, and this tool makes
+# that a protocol instead of prose:
+#
+#   PHASE 1 (this tool)   prepare        checkpoint the target's WIP (Invariant 7: BEFORE the stop) +
+#                                        compose the successor brief with the GO/ruling BAKED IN
+#   PHASE 2 (lead/harness) TaskStop      the lead stops the target — a harness tool, not this script
+#   PHASE 3 (this tool)   verify-stopped effect-read the target is DEAD ({pid,start} identity) —
+#                                        NEVER trust the TaskStop tool result
+#   PHASE 4 (lead/harness) Agent spawn   the lead spawns the successor with the composed brief
+#   PHASE 5 (this tool)   verify-spawned effect-read the successor process EXISTS (--agent-name)
+#
+#   cc-respawn prepare --member <name> --worktree <dir> --go <ruling-text>
+#              [--branch <br>] [--desk-uuid <full-uuid>] [--brief-out <file>]
+#   cc-respawn verify-stopped --pid <pid> [--start <ps-lstart-string>] | --member <name>
+#   cc-respawn verify-spawned --member <name>
+#   cc-respawn selftest
+#
+# 🚨 FAIL-CLOSED INVARIANTS (RS-a/RS-d, enforced at the producer):
+#   · no --go ruling → REFUSED (a respawn exists to DELIVER a ruling; an empty one is a bare restart)
+#   · no --worktree  → REFUSED (the successor must inherit branch + checkpoint — continuity is the point)
+#   · there is NO send-to-target code path in this tool — the GO cannot be expressed as a message.
+#
+# Exit: 0 = ok/verified · 2 = usage / fail-closed refusal · 5 = verify FAILED LOUD (target still alive /
+#       successor missing). Records: ~/.claude/respawn/ (CC_RESPAWN_RECORDS_DIR). Refs: refs/respawn/
+#       <member>/<ts> + refs/wip/<member>/LAST (the respawn-team.sh recovery convention).
+set -uo pipefail
+
+RECORDS_DIR="${CC_RESPAWN_RECORDS_DIR:-$HOME/.claude/respawn}"
+
+usage() { sed -n '2,36p' "$0" | sed 's/^# \{0,1\}//'; }
+die()   { echo "cc-respawn: $*" >&2; exit 2; }
+
+# Every decision path writes an outcome record (RS-e, the abstention law): a silent respawn protocol
+# cannot be audited. Records append-only; retention is nobody's job here (no reaper in this tool).
+record() { # <phase> <outcome> <member> <detail>
+  mkdir -p "$RECORDS_DIR" 2>/dev/null || return 0
+  jq -cn --arg ph "$1" --arg oc "$2" --arg m "$3" --arg d "$4" \
+        --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        '{ts:$ts, phase:$ph, outcome:$oc, member:$m, detail:$d}' \
+        >> "$RECORDS_DIR/$3.jsonl" 2>/dev/null || true
+}
+
+pid_start() { ps -o lstart= -p "$1" 2>/dev/null | sed 's/^ *//;s/ *$//'; }
+
+# ── PHASE 1: prepare — checkpoint-BEFORE-stop + brief-compose (fail-closed) ─────────────────────────
+cmd_prepare() {
+  local member="" worktree="" go="" branch="" desk="" brief_out=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --member)    member="${2:?}"; shift 2 ;;
+      --worktree)  worktree="${2:?}"; shift 2 ;;
+      --go)        go="${2:?}"; shift 2 ;;
+      --branch)    branch="${2:?}"; shift 2 ;;
+      --desk-uuid) desk="${2:?}"; shift 2 ;;
+      --brief-out) brief_out="${2:?}"; shift 2 ;;
+      -h|--help)   usage; exit 0 ;;
+      *)           die "unknown argument '$1'" ;;
+    esac
+  done
+  [ -n "$member" ] || die "REFUSED — --member is required (whose successor is this?)"
+  # RS-a: a respawn with no ruling is a bare restart wearing a protocol's name. The GO is the payload.
+  if [ -z "$go" ]; then
+    record prepare refused "${member:-unknown}" "no --go ruling (RS-a fail-closed)"
+    die "REFUSED — a respawn DELIVERS a ruling; there is no --go text (RS-a). The mailbox is not a fallback: no mid-stream lead→teammate message has ever demonstrably been processed on this runtime."
+  fi
+  # RS-d: continuity is the point — no worktree means the successor cannot inherit branch/WIP.
+  if [ -z "$worktree" ] || [ ! -d "$worktree" ]; then
+    record prepare refused "$member" "missing/absent --worktree '$worktree' (RS-d fail-closed)"
+    die "REFUSED — --worktree must exist (RS-d): the successor inherits the branch + checkpoint ref; without a worktree there is no continuity to deliver."
+  fi
+  git -C "$worktree" rev-parse --git-dir >/dev/null 2>&1 || {
+    record prepare refused "$member" "worktree is not a git repo (RS-d)"
+    die "REFUSED — '$worktree' is not a git worktree (RS-d)."
+  }
+  [ -n "$branch" ] || branch="$(git -C "$worktree" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
+
+  # ── RS-b: CHECKPOINT-BEFORE-STOP (Invariant 7). Temp-index plumbing (lead-deathwatch/teammate-
+  # checkpoint recipe): tracked+untracked, zero working-tree touch, no hooks. Written and ref'd BEFORE
+  # any stop directive leaves this tool — if the stop never happens, the ref still exists (harmless).
+  local ts idx parent tree commit ref
+  ts="$(date -u +%Y%m%dT%H%M%SZ)"
+  idx="$(mktemp "${TMPDIR:-/tmp}/cc-respawn-idx.XXXXXX")" || die "cannot mktemp"
+  parent="$(git -C "$worktree" rev-parse HEAD 2>/dev/null)" || { rm -f "$idx"; record prepare refused "$member" "worktree has no HEAD"; die "REFUSED — worktree has no HEAD commit."; }
+  if GIT_INDEX_FILE="$idx" git -C "$worktree" read-tree HEAD 2>/dev/null \
+     && GIT_INDEX_FILE="$idx" git -C "$worktree" add -A 2>/dev/null \
+     && tree="$(GIT_INDEX_FILE="$idx" git -C "$worktree" write-tree 2>/dev/null)" \
+     && commit="$(git -C "$worktree" commit-tree "$tree" -p "$parent" -m "respawn checkpoint $member $ts" 2>/dev/null)"; then
+    ref="refs/respawn/$member/$ts"
+    git -C "$worktree" update-ref "$ref" "$commit" 2>/dev/null || true
+    git -C "$worktree" update-ref "refs/wip/$member/LAST" "$commit" 2>/dev/null || true
+  else
+    rm -f "$idx"
+    record prepare refused "$member" "checkpoint plumbing failed (RS-b) — NOT proceeding to a stop without capture"
+    die "REFUSED — checkpoint failed (RS-b): a stop without a prior capture can destroy WIP. Fix the worktree first."
+  fi
+  rm -f "$idx"
+
+  # ── compose the successor brief: GO block (RS-a) + continuity block (RS-d) + back-channel (F3).
+  [ -n "$brief_out" ] || brief_out="${TMPDIR:-/tmp}/respawn-brief-$member-$ts.md"
+  {
+    printf '# RESPAWN BRIEF — %s successor (%s)\n\n' "$member" "$ts"
+    printf '## GO / RULING (spawn-boundary delivery — the only channel proven to work)\n%s\n\n' "$go"
+    printf '## CONTINUITY (recover BEFORE new work)\n'
+    printf -- '- Worktree: %s\n- Branch: %s\n- Checkpoint ref: %s (also refs/wip/%s/LAST)\n' "$worktree" "$branch" "$ref" "$member"
+    printf -- '- Recover: `git -C %s diff HEAD %s` to inspect; `git -C %s cherry-pick -n %s` or `git -C %s checkout %s -- <paths>` to restore WIP.\n' "$worktree" "$commit" "$worktree" "$commit" "$worktree" "$commit"
+    printf -- '- Predecessor checkpointed at %s; its uncommitted work lives ONLY in the ref above.\n\n' "$ts"
+    if [ -n "$desk" ]; then
+      printf '## BACK-CHANNEL (mandatory)\nOn completion / decision-gate / blocker: cc-notify %s "HANDOFF-PING %s: <one-line status>"\n\n' "$desk" "$member"
+    fi
+    printf '## DISCIPLINE\nIf you encounter an issue: commit current work, send a 1-paragraph problem report to lead, mark task in-progress with note, go idle. DO NOT debug. Lead decides whether to fix-in-place, abandon, or spawn a debug subagent.\n'
+  } > "$brief_out" || { record prepare refused "$member" "cannot write brief $brief_out"; die "cannot write brief $brief_out"; }
+
+  record prepare prepared "$member" "ref=$ref commit=$commit brief=$brief_out"
+  cat <<EOT
+cc-respawn: PREPARED $member (checkpoint $ref, brief $brief_out)
+NEXT STEPS (the two harness tools are the LEAD's — this tool verifies each effect):
+  1. TaskStop the '$member' teammate (harness tool; by name).
+  2. cc-respawn verify-stopped --member $member         # MUST exit 0 before spawning
+  3. Agent-spawn the successor: team_name set, brief = $brief_out (the GO rides the spawn).
+  4. cc-respawn verify-spawned --member $member         # MUST exit 0 before relying on delivery
+EOT
+  echo "$brief_out"
+}
+
+# ── PHASE 3: verify-stopped — effect-read, never trust the tool result (RS-c) ──────────────────────
+cmd_verify_stopped() {
+  local pid="" start="" member=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --pid)    pid="${2:?}"; shift 2 ;;
+      --start)  start="${2:?}"; shift 2 ;;
+      --member) member="${2:?}"; shift 2 ;;
+      *)        die "unknown argument '$1'" ;;
+    esac
+  done
+  if [ -n "$member" ] && [ -z "$pid" ]; then
+    # the memory-verified discovery method: the teammate pane's claude process carries --agent-name.
+    pid="$(ps -eo pid=,command= | grep -F -- "--agent-name $member" | grep -v grep | awk '{print $1; exit}')"
+    if [ -z "$pid" ]; then
+      record verify-stopped stop-verified "$member" "no --agent-name $member process found"
+      echo "cc-respawn: verify-stopped OK — no '$member' teammate process exists."
+      exit 0
+    fi
+  fi
+  [ -n "$pid" ] || die "verify-stopped needs --pid <pid> or --member <name>"
+  if kill -0 "$pid" 2>/dev/null; then
+    # {pid,start} identity (the L1-c/L2-c recycling guard): a live pid with a DIFFERENT start time is a
+    # stranger holding the recycled number — the original IS stopped.
+    if [ -n "$start" ] && [ "$(pid_start "$pid")" != "$start" ]; then
+      record verify-stopped stop-verified "${member:-pid-$pid}" "pid $pid recycled (start mismatch) — original gone"
+      echo "cc-respawn: verify-stopped OK — pid $pid is a recycled stranger; the original is gone."
+      exit 0
+    fi
+    record verify-stopped stop-failed "${member:-pid-$pid}" "pid $pid STILL ALIVE — do NOT spawn a successor"
+    echo "cc-respawn: verify-stopped FAILED LOUD — pid $pid is STILL ALIVE (RS-c). A successor spawned now would race its predecessor in the same worktree. Re-run TaskStop and re-verify; never proceed on a claimed stop." >&2
+    exit 5
+  fi
+  record verify-stopped stop-verified "${member:-pid-$pid}" "pid $pid dead"
+  echo "cc-respawn: verify-stopped OK — pid $pid is dead."
+  exit 0
+}
+
+# ── PHASE 5: verify-spawned — the respawn is not DELIVERED until the successor is SEEN (RS-f) ──────
+cmd_verify_spawned() {
+  local member=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --member) member="${2:?}"; shift 2 ;;
+      *)        die "unknown argument '$1'" ;;
+    esac
+  done
+  [ -n "$member" ] || die "verify-spawned needs --member <name>"
+  local pid
+  pid="$(ps -eo pid=,command= | grep -F -- "--agent-name $member" | grep -v grep | awk '{print $1; exit}')"
+  if [ -n "$pid" ]; then
+    record verify-spawned spawn-verified "$member" "pid $pid"
+    echo "cc-respawn: verify-spawned OK — '$member' successor live (pid $pid). The GO is delivered: it is IN the brief the process was born with."
+    exit 0
+  fi
+  record verify-spawned spawn-missing "$member" "no --agent-name $member process"
+  echo "cc-respawn: verify-spawned FAILED LOUD — no '$member' process is running (RS-f). The respawn is NOT delivered; the ruling exists only in the brief file. Spawn (or re-spawn) before relying on it." >&2
+  exit 5
+}
+
+# ── selftest: every RS RED-proof must be SEEN to fire ───────────────────────────────────────────────
+selftest() {
+  local pass=0 fail=0 rc tmp SELF
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/cc-respawn-selftest.XXXXXX")" || die "cannot mktemp"
+  trap 'rm -rf "${tmp:-}"; kill "${SLEEP_PID:-0}" 2>/dev/null' EXIT
+  export CC_RESPAWN_RECORDS_DIR="$tmp/records"
+  SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+
+  check() { # <label> <expected-rc> <cmd...>
+    local label="$1" want="$2"; shift 2
+    "$@" >/dev/null 2>&1; rc=$?
+    if [ "$rc" = "$want" ]; then printf '  ok   %-62s (exit %s)\n' "$label" "$rc"; pass=$((pass+1))
+    else printf '  FAIL %-62s (exit %s, wanted %s)\n' "$label" "$rc" "$want"; fail=$((fail+1)); fi
+  }
+
+  echo "cc-respawn selftest — every RS-a..f RED-proof must fire:"
+
+  # fixture worktree with uncommitted WIP
+  local wt="$tmp/wt"
+  mkdir -p "$wt"; git -C "$wt" init -q; git -C "$wt" config user.email t@t; git -C "$wt" config user.name t
+  echo seed > "$wt/a.txt"; git -C "$wt" add a.txt; git -C "$wt" commit -qm seed
+  echo "UNCOMMITTED-WIP-SENTINEL" > "$wt/wip.txt"
+
+  # RS-a: no --go → REFUSED (fail-closed at the producer).
+  check "RS-a no --go ruling -> REFUSED" 2 "$SELF" prepare --member tm-x --worktree "$wt"
+  # RS-d: no/absent worktree → REFUSED.
+  check "RS-d absent --worktree -> REFUSED" 2 "$SELF" prepare --member tm-x --go "GO: proceed" --worktree "$tmp/nowhere"
+  # RS-a/b/d positive: prepare succeeds, brief contains the GO + continuity, ref captured the WIP.
+  check "prepare well-formed -> 0" 0 "$SELF" prepare --member tm-x --worktree "$wt" --go "GO: apply RULING-42 then continue" --brief-out "$tmp/brief.md"
+  # RS-a: the GO text is IN the brief (content, not a claim).
+  check "RS-a GO text verbatim in brief" 0 grep -q "RULING-42" "$tmp/brief.md"
+  # RS-d: all four continuity fields present.
+  check "RS-d continuity: worktree+branch+ref+recipe in brief" 0 \
+    bash -c "grep -q 'Worktree: ' '$tmp/brief.md' && grep -q 'Branch: ' '$tmp/brief.md' && grep -q 'refs/respawn/tm-x/' '$tmp/brief.md' && grep -q 'cherry-pick' '$tmp/brief.md'"
+  # RS-b: the checkpoint ref exists and CONTAINS the uncommitted WIP (capture-before-stop is real).
+  check "RS-b checkpoint ref holds the uncommitted WIP blob" 0 \
+    bash -c "git -C '$wt' show \"\$(git -C '$wt' for-each-ref --format='%(refname)' 'refs/respawn/tm-x/*' | head -1)\":wip.txt | grep -q UNCOMMITTED-WIP-SENTINEL"
+  # RS-b: refs/wip/<member>/LAST alias written (the respawn-team recovery convention).
+  check "RS-b refs/wip/tm-x/LAST alias exists" 0 git -C "$wt" rev-parse --verify -q refs/wip/tm-x/LAST
+  # RS-b: the working tree was NOT touched (plumbing, no hooks, no index mutation).
+  check "RS-b working tree untouched (wip.txt still uncommitted)" 0 \
+    bash -c "git -C '$wt' status --porcelain | grep -q 'wip.txt'"
+
+  # RS-c: a LIVE pid with matching start → verify-stopped FAILS LOUD (5).
+  sleep 300 & SLEEP_PID=$!
+  local sstart; sstart="$(ps -o lstart= -p "$SLEEP_PID" | sed 's/^ *//;s/ *$//')"
+  check "RS-c live pid (start match) -> FAIL LOUD (5)" 5 "$SELF" verify-stopped --pid "$SLEEP_PID" --start "$sstart"
+  # RS-c: live pid + WRONG start = recycled stranger → the original is gone → 0.
+  check "RS-c recycled pid (start mismatch) -> stopped (0)" 0 "$SELF" verify-stopped --pid "$SLEEP_PID" --start "Thu Jan  1 00:00:00 1970"
+  kill "$SLEEP_PID" 2>/dev/null; wait "$SLEEP_PID" 2>/dev/null
+  # RS-c: dead pid → 0.
+  check "RS-c dead pid -> stopped (0)" 0 "$SELF" verify-stopped --pid "$SLEEP_PID"
+
+  # RS-f: no successor process → FAIL LOUD (5); a fake --agent-name process → 0.
+  check "RS-f successor absent -> FAIL LOUD (5)" 5 "$SELF" verify-spawned --member tm-never-spawned-zz
+  # `; true` prevents bash's implicit-exec optimization (a bare -c 'sleep 5' execs sleep, dropping argv)
+  bash -c 'sleep 5; true' fake-claude --agent-name tm-selftest-succ & local FAKE=$!
+  check "RS-f successor present (--agent-name visible) -> 0" 0 "$SELF" verify-spawned --member tm-selftest-succ
+  kill "$FAKE" 2>/dev/null; wait "$FAKE" 2>/dev/null
+
+  # RS-e: every path above left an outcome record; refusals + failures included (no silent path).
+  check "RS-e outcome records exist for tm-x (prepared + refused)" 0 \
+    bash -c "grep -q '\"outcome\":\"prepared\"' '$tmp/records/tm-x.jsonl' && grep -q '\"outcome\":\"refused\"' '$tmp/records/tm-x.jsonl'"
+  check "RS-e stop-failed recorded on the live-pid loud failure" 0 \
+    bash -c "grep -q '\"outcome\":\"stop-failed\"' '$tmp/records/'*.jsonl"
+  check "RS-e spawn-missing recorded on the absent-successor loud failure" 0 \
+    bash -c "grep -q '\"outcome\":\"spawn-missing\"' '$tmp/records/tm-never-spawned-zz.jsonl'"
+
+  echo "cc-respawn selftest: $pass passed, $fail failed"
+  [ "$fail" -eq 0 ] || exit 1
+}
+
+case "${1:-}" in
+  prepare)         shift; cmd_prepare "$@" ;;
+  verify-stopped)  shift; cmd_verify_stopped "$@" ;;
+  verify-spawned)  shift; cmd_verify_spawned "$@" ;;
+  selftest)        selftest ;;
+  -h|--help|"")    usage; exit 0 ;;
+  *)               die "unknown command '$1' (prepare | verify-stopped | verify-spawned | selftest)" ;;
+esac
