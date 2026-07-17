@@ -32,6 +32,7 @@ set -uo pipefail
 SESSIONS_BIN="${CC_CLASSIFY_SESSIONS_BIN:-cc-sessions}"
 PS_BIN="${CC_CLASSIFY_PS_BIN:-/bin/ps}"
 IDLE_S="${CC_CLASSIFY_IDLE_S:-300}"                 # < this since last assistant turn ⇒ active
+COORD_HANG_DEAD_REAP_S="${CC_CLASSIFY_COORD_HANG_DEAD_REAP_S:-7200}"  # a coordination-hang idle past this WITH a live co-cwd owner ⇒ abandoned zombie (reapable)
 NOW="${CC_CLASSIFY_NOW:-$(date +%s)}"
 PROJECT_ROOTS="${CC_CLASSIFY_PROJECT_ROOTS:-$HOME/.claude/projects $HOME/.claude-secondary/projects $HOME/.claude-tertiary/projects $HOME/.claude-quaternary/projects}"
 GIT_BIN="${CC_CLASSIFY_GIT_BIN:-git}"
@@ -100,6 +101,27 @@ find_successor() { # <this-sid> <this-cwd> <since-epoch> <all-json> → candidat
           | select((.session_id // .sessionId // "") != $sid)
           | select($since==0 or (.startedAt // 0) >= $since)
           | {paneUUID, pid: ((.pid // "")|tostring)}' 2>/dev/null | head -20
+}
+
+cocwd_live() { # <sid> <cwd> <all-json> → 0 if a DISTINCT LIVE session shares this cwd. That live
+  # session OWNS the shared working tree (its uncommitted work, not the target's), so reaping the
+  # idle target strands nothing — its committed work persists in git, its WIP is checkpointed by
+  # cc-teardown (git-plumbing snapshot, zero working-tree impact), and the live owner keeps the tree.
+  local sid="$1" cwd="$2" all="$3" cand spid
+  while IFS= read -r cand; do
+    [ -z "$cand" ] && continue
+    spid="$(printf '%s' "$cand" | jq -r '.pid // ""' 2>/dev/null)"
+    alive "$spid" && return 0
+  done < <(find_successor "$sid" "$cwd" 0 "$all")
+  return 1
+}
+
+ahead_zero() { # <cwd> → 0 if HEAD is NOT ahead of trunk (this session's commits are landed on trunk)
+  local cwd="$1" ahead
+  [ -d "$cwd" ] || return 1
+  "$GIT_BIN" -C "$cwd" rev-parse --git-dir >/dev/null 2>&1 || return 1
+  ahead="$("$GIT_BIN" -C "$cwd" rev-list --count "$TRUNK"..HEAD 2>/dev/null)" || return 1
+  [ "${ahead:-1}" = 0 ]
 }
 
 is_worktree_session() { # <cwd> → 0 if the cwd is a teammate/worktree path
@@ -216,6 +238,14 @@ classify_entry() { # <entry-json> <all-sessions-json>
     if team_live_member "$tc"; then
       CAUSE=owned-wait; DETAIL="idle ${IDLE}s, lead of a team with ≥1 live member — healthy wait"; return 0
     fi
+    # Gap A (2026-07-17): a coordination-hang whose partner is DEAD, idle past the dead-reap horizon,
+    # WHILE a live co-cwd session owns the shared tree, is an abandoned zombie — reapable. Committed
+    # work persists in git; WIP is checkpointed by cc-teardown; the live owner keeps the working tree.
+    # The 13h doc_classifier wave-2 lead was exactly this (dead fix-w6 partner + live endgame lead in
+    # the same cwd). LIVE coordination (team_live_member above) never reaches here.
+    if [ "$IDLE" -ge "$COORD_HANG_DEAD_REAP_S" ] && cocwd_live "$sid" "$cwd" "$all"; then
+      CAUSE=coordination-abandoned; DETAIL="idle ${IDLE}s (> ${COORD_HANG_DEAD_REAP_S}s horizon), team partner dead, a LIVE co-cwd session owns the tree — abandoned zombie, reapable"; return 0
+    fi
     CAUSE=coordination-hang; DETAIL="idle ${IDLE}s, lead of a team but NO live member — stuck (surface, never reap)"; return 0
   fi
 
@@ -224,6 +254,16 @@ classify_entry() { # <entry-json> <all-sessions-json>
   #    silence. Reapable — the reaper re-verifies landed + settle window and checkpoints WIP first.
   if [ "$LANDED" = yes ]; then
     CAUSE=finished; DETAIL="idle ${IDLE}s, no live teammates, work landed (clean & 0 ahead of $TRUNK) — done, reapable"; return 0
+  fi
+
+  # Gap B (2026-07-17): a solo idle session whose OWN commits are landed (0 ahead of trunk) but whose
+  # cwd tree is dirty, WITH a live co-cwd session that owns that dirt, is very likely finished — the
+  # dirt is the sibling's, not ours (session-4 the reaper-session: landed to main, yet the shared
+  # checkout carried an unrelated `M validate-bash.sh`). SURFACE it (a dirty tree could still hold our
+  # OWN WIP, so NOT auto-reaped — the desk/operator confirm-closes) so it never lingers silently.
+  if [ "$LANDED" = no ] && ahead_zero "$cwd" && cocwd_live "$sid" "$cwd" "$all"; then
+    CAUSE=finished-shared-review; DETAIL="idle ${IDLE}s, own commits landed (0 ahead of $TRUNK), tree dirty but a LIVE co-cwd sibling owns it — likely finished, surface for confirm-close (not auto-reaped)"
+    return 0
   fi
 
   # 8. default: idle + alive but work NOT landed (or a solo/implicit team). NEVER reap — the operator
