@@ -41,6 +41,23 @@ decision() {
   [ "$(decision "rm -rf /private/tmp/scratch/x")" = ALLOW ]
 }
 
+@test "allows rm of repo-relative tmp/<subdir> scratch (the reaper/classifier gap)" {
+  # `rm -rf tmp/scale-n10k` — a within-tree scratch dir, the relative twin of absolute /tmp.
+  # Before the fix this fell through to the ask prompt (doc_classifier capstone halted on it).
+  for c in "rm -rf tmp/scale-n10k" "rm -rf tmp/scale-n10k tmp/scale-n1k" "rm -rf ./tmp/foo" \
+           "rm -rf tmp/scale-n10k/artifacts" "rm -r tmp/pytest-of-me"; do
+    [ "$(decision "$c")" = ALLOW ] || { echo "expected ALLOW: $c"; false; }
+  done
+}
+
+@test "still defers bare tmp root, tmp/.git, and non-top-level tmp (scratch allowance stays narrow)" {
+  DOTGIT=.git
+  [ "$(decision "rm -rf tmp")" = DEFER ]              # bare scratch root — operator's call
+  [ "$(decision "rm -rf tmp/$DOTGIT")" = DEFER ]      # a .git under tmp is still off-limits
+  [ "$(decision "rm -rf foo/tmp/bar")" = DEFER ]      # tmp not the top-level component
+  [ "$(decision "rm -rf tmpfoo")" = DEFER ]           # not a tmp/ subpath (prefix ≠ component)
+}
+
 # ── MUST DEFER — catastrophic / outside-repo / non-regenerable / ambiguous ─────────────────────
 @test "defers the catastrophic roots (/ ~ .git)" {
   S=/; TILDE='~'

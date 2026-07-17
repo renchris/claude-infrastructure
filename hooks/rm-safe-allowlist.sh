@@ -68,14 +68,21 @@ is_safe_target() { # <raw-target> → 0 safe · 1 not-safe
   # Component scan: reject empty / .git components; require >=1 component to be a regenerable name.
   # NB: scope IFS='/' to the `read` ALONE — a function-wide `local IFS=/` would also break the
   # space-splitting of $SAFE_NAMES in the inner loop below (the target would never match).
-  local parts=() p hit=0
+  local parts=() p hit=0 ncomp=0
   IFS='/' read -r -a parts <<< "$t"
   for p in "${parts[@]}"; do
     [[ -z "$p" ]] && continue                      # leading-/ produces an empty first field
     [[ "$p" == ".git" ]] && return 1               # never touch a git dir, even nested
+    ncomp=$((ncomp+1))
     local n
     for n in $SAFE_NAMES; do [[ "$p" == "$n" ]] && { hit=1; break; }; done
   done
+  # Repo-relative scratch: a top-level `tmp/<subdir>` is a within-tree regenerable scratch dir — the
+  # relative twin of the absolute /tmp handled above (`rm -rf tmp/scale-n10k`). Allow a SUBPATH under
+  # it, never the bare `tmp` root (that could hold more than scratch → operator's call). `.git` is
+  # already rejected in the loop, so `tmp/.git` never reaches here; and `tmp` must be the FIRST
+  # component — a nested `foo/tmp` is not obviously scratch → defer.
+  if [[ "$hit" != 1 && "${parts[0]:-}" == tmp && "$ncomp" -ge 2 ]]; then hit=1; fi
   [[ "$hit" == 1 ]] && return 0
   return 1
 }
