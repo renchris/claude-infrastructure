@@ -92,11 +92,20 @@ pid_alive()  { [ -n "${1:-}" ] && kill -0 "$1" 2>/dev/null; }
 pid_lstart() { "$PS_BIN" -o lstart= -p "$1" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//'; }
 
 # pane_present <uuid> → rc 0 present · 1 absent · 2 list-unreadable (fail-safe: never assume absent).
+# The real it2 CLI walks ONLY app.windows and returns a VALID but EMPTY array `[]` at exit 0
+# when that model is blind — detached desk / different GUI login / restoration-pending / buried
+# sessions (the "it2 ls returned 0" incident, L3-L4-AUTONOMY-ROADMAP.md:20-22). A machine running
+# cc-teardown always holds >=1 pane (the invoking one), so ZERO enumerated == blind enumerator,
+# NOT "no panes exist" — return 2 (indeterminate), never 1 (absent). Otherwise a spurious 0-list
+# would read as a false ALREADY-GONE (line ~180) or a false TEARDOWN-verified success (line ~239).
 pane_present() {
-  local uuid="$1" lst ids
+  local uuid="$1" lst n ids
   lst="$("$IT2" session list --json 2>/dev/null)" || return 2
   [ -n "$lst" ] || return 2
-  ids="$(printf '%s' "$lst" | jq -r 'if type=="array" then (.[].id // empty) else empty end' 2>/dev/null)" || return 2
+  n="$(printf '%s' "$lst" | jq -r 'if type=="array" then length else -1 end' 2>/dev/null)" || return 2
+  { [ -z "$n" ] || [ "$n" = -1 ]; } && return 2   # non-array / unparseable ⇒ unreadable
+  [ "$n" -eq 0 ] && return 2                        # zero enumerated ⇒ blind enumerator ⇒ indeterminate
+  ids="$(printf '%s' "$lst" | jq -r '.[].id // empty' 2>/dev/null)" || return 2
   printf '%s\n' "$ids" | grep -qxF "$uuid" && return 0
   return 1
 }
@@ -279,7 +288,14 @@ EOF
 #!/bin/bash
 PF="${IT2_PANES_FILE:?}"
 if [ "$1" = session ] && [ "$2" = list ]; then
-  jq -n --slurpfile a "$PF" '$a[0] | map({id: .})'; exit 0
+  # IT2_BLIND=1 simulates a blind app.windows enumerator (detached desk / restoration-pending):
+  # a VALID but EMPTY [] at exit 0 — the "it2 ls returned 0" incident shape.
+  if [ "${IT2_BLIND:-0}" = 1 ]; then echo '[]'; exit 0; fi
+  # Reality: cc-teardown always runs FROM a live pane, so the desk's own pane is ALWAYS enumerated.
+  # Append a persistent non-target desk pane so an emptied panes-file lists as [desk] (target
+  # genuinely absent → rc 1), NOT [] (blind → rc 2). Without this the mock is a fictional
+  # single-pane world that no real desk is ever in.
+  jq -n --slurpfile a "$PF" '($a[0] + ["DESK-PANE-PERSIST-0000"]) | unique | map({id: .})'; exit 0
 fi
 if [ "$1" = session ] && [ "$2" = close ]; then
   shift 2; sid=""
@@ -415,6 +431,16 @@ EOF
   [ "$rc" = 10 ] && [ "$(last_decision)" = DEFER ] \
     && okp "foreign process on pane tty → DEFER (exit 10) — no collateral close" \
     || badp "tty-busy not deferred (rc=$rc dec=$(last_decision); want 10/DEFER)"
+  reap
+
+  # 12. BLIND ENUMERATOR: live pane, but it2 returns a 0-list ([]) → pane_present INDETERMINATE →
+  #     verify can never read false-gone → FAIL LOUD (exit 5). RED-proof of the app.windows-blind fix:
+  #     before it, a spurious [] read as "pane absent" ⇒ a FALSE TEARDOWN success on a live pane.
+  rm -f "$d/rec"/*.json; mkrepo "$d/r12"; spawn; set_session "$P" "$d/r12"; set_panes "[\"$U\"]"
+  rc=0; IT2_BLIND=1 run_td "$d/bin/ps_clean" "$SELF" "$U" --done-evidence "x" >/dev/null 2>&1 || rc=$?
+  [ "$rc" = 5 ] && [ "$(last_decision)" = FAILED ] \
+    && okp "blind enumerator (0-list) → INDETERMINATE, never a false teardown; FAIL LOUD (exit 5)" \
+    || badp "blind enumerator produced a false result (rc=$rc dec=$(last_decision); want 5/FAILED)"
   reap
 
   # 11. NO-SILENT-RECORD: the just-run branch wrote an auditable outcome record

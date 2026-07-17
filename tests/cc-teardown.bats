@@ -9,11 +9,11 @@ setup() {
   export CC_TEARDOWN_SELF_UUID="none"   # deterministic self-guard in a headless test
 }
 
-@test "selftest passes and runs all 12 checks (a zero-check suite must not 'pass')" {
+@test "selftest passes and runs all 13 checks (a zero-check suite must not 'pass')" {
   run "$T" --selftest
   [ "$status" -eq 0 ]
   n_ok="$(printf '%s' "$output" | grep -c '^  ok ')"
-  [ "$n_ok" -eq 12 ]
+  [ "$n_ok" -eq 13 ]
 }
 
 @test "no target → usage (exit 0), no teardown attempted" {
