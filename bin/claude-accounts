@@ -291,7 +291,7 @@ def pick(u, kind, scope_name=None):
     return None, None
 
 
-def collect(cfg, no_heal=False):
+def collect(cfg, no_heal=False, prev=None):
     kc = cfg["keychain_account"]
     counts = concurrency(cfg)
     rows = []
@@ -339,7 +339,19 @@ def collect(cfg, no_heal=False):
                 rows.append(row)
                 continue
         if status == 429:
-            row["error"] = "rate-limited"
+            # A 429 from the oauth/usage endpoint is ALWAYS a transient POLL-THROTTLE
+            # (concurrent callers racing the 90s single-flight cache) — NEVER a usage cap.
+            # A real weekly/5h/Fable cap returns HTTP 200 with percent≈100; status+endpoint
+            # alone is the discriminator. Labeling this "rate-limited" made a downstream
+            # session-classifier read a transient poll failure as a hard cap (false-limit
+            # misdiagnosis 2026-07-16). Flag it distinctly + fall back to last-good percents.
+            row["poll_throttled"] = True
+            pr = (prev or {}).get("rows", {}).get(name)
+            if pr and pr.get("weekly_pct") is not None:
+                row.update({k: v for k, v in pr.items() if v is not None})
+                row["error"] = "poll throttled ↻ (cached usage)"
+            else:
+                row["error"] = "poll throttled ↻"
             rows.append(row)
             continue
         if not u or "limits" not in u:
@@ -518,7 +530,7 @@ def get_data(cfg, fresh=False, no_heal=False):
                 return c["rows"], c["window"], True, c.get("prev")
         prev = _prev_snapshot(cfg)
         win = frontier_window(cfg)
-        rows = collect(cfg, no_heal=no_heal)
+        rows = collect(cfg, no_heal=no_heal, prev=prev)
         wj = {"active": win["active"], "end": win["end"],
               "deadline": win["deadline"].isoformat() if win["deadline"] else None}
         cache_write(cfg, {"ts": time.time(), "cfg_key": _cfg_key(cfg), "no_heal": no_heal,
