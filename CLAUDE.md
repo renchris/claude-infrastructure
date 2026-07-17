@@ -114,7 +114,7 @@ Plan/design/roadmap docs accumulate decisions across sessions → INTEGRATE neve
 
 ## Browser Automation
 
-Browser automation — navigate / click / fill / screenshot / extract, or "No such tool available" for browser tools → the **browsermcp** skill: the `mcp__browsermcp__*` tool list + navigate→snapshot→ref→click workflow, wrapper + Chrome-extension setup, `.mcp.json` config, the troubleshooting decision tree, the `agent-browser` CLI fallback, and the auto-triggering `react-best-practices` / `vercel-design-guidelines` knowledge skills. Auto-loads on any browser-automation task.
+Browser automation — navigate / click / fill / screenshot / extract — uses **BrowserMCP, not Playwright**. Setup/tools/troubleshooting (or on "No such tool available" for browser tools) → the **browsermcp** skill: the `mcp__browsermcp__*` tool list + navigate→snapshot→ref→click workflow, wrapper + Chrome-extension setup, `.mcp.json` config, the troubleshooting decision tree, the `agent-browser` CLI fallback, and the auto-triggering `react-best-practices` / `vercel-design-guidelines` knowledge skills. Auto-loads on any browser-automation task.
 
 ---
 
@@ -139,6 +139,8 @@ crashes teammates (GH #49593) — preventive splitting is the only reliable path
 4. "Stop on issue, message lead" clause verbatim
 5. Multi-phase = explicit checkpoint or split into separate teammates
 6. No "investigate" / "explore" / "audit" language
+
+**Teammate ops (agent actions — not hook-enforced):** max **6 concurrent** teammates; tear down each with a structured `shutdown_request` — plain-text broadcasts do NOT close panes (→ orphaned panes + worktrees).
 
 Full decision table, runtime detection, the 5-rule brief discipline, sizing, per-teammate
 effort + model-pinning, **teammate lifecycle / graceful-shutdown / crash recovery** (previously
