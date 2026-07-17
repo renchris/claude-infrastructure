@@ -140,7 +140,7 @@ fi
 # rm -rf on non-safe targets. Per-clause extraction avoids the compound-command
 # escape hatch (e.g., `rm -rf src && rm -rf node_modules` used to silently pass
 # because one clause matched a safe target).
-SAFE_RM_TARGETS='(node_modules|\.next|dist|__pycache__|\.cache|build|\.turbo|coverage|test-results|out|\.vercel)'
+SAFE_RM_TARGETS='(node_modules|\.next|dist|__pycache__|\.cache|build|\.turbo|coverage|test-results|out|\.vercel|artifacts|\.pytest_cache|target|\.tox|htmlcov|\.ruff_cache|\.mypy_cache)'
 RM_OCCURRENCES=$(echo "$CMD" | grep -oE 'rm[[:space:]]+-(r|rf|fr)[[:space:]]+[^[:space:];&|]+' || true)
 if [[ -n "$RM_OCCURRENCES" ]]; then
   while IFS= read -r occurrence; do
