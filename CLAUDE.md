@@ -448,8 +448,6 @@ Multiple Claude Code sessions on ONE checkout share the git index → a bare
 
 **Merge back:** rebase-onto-default + `--ff-only`, serialized, **smallest-diff first**; **`git rerere` enabled globally** (auto-resolves repeated same-hunk conflicts across branches). Worktrees do NOT prevent same-hunk, JSON-array-append (migration journals/checksums), lockfile, or *semantic* conflicts → designate a **single owner per shared file**, **serialize migration-generating sessions**, and gate every merge with `typecheck` + `lint`.
 
-**Never commit or land in the shared checkout.** `~/Development/claude-infrastructure` is the symlink source for `~/.claude` and frequently sits on another session's feature branch. Committing there risks (a) landing onto a branch you did not create, and (b) a concurrent `/ship` of that branch rebase-dropping your commit — incident 2026-07-11: `dfacccd` (limit-recover skill, 5 new files) silently dropped by a sibling land of `feat/two-way-session-comms`; `git rev-list origin/main..HEAD` read 0 ('looks landed') while the files were absent from main. Always work in a dedicated worktree, commit on your OWN branch, and land via the project-local `/ship` (`.claude/commands/ship.md`: lock → re-fetch tip → rebase → gate → push → **content-verify** → **stranded-sweep**). Verify landings by CONTENT (`git ls-tree origin/main -- <paths>`), never by count.
-
 **Caveats:** prefer manual `claude -w` over the Agent tool's `isolation: "worktree"` — parallel *automated* worktree creation has had `.git/config.lock` races + a data-loss bug (GH #34645, #48927; manual `-w` is unaffected). Never run `git restore .` / `git checkout -- .` in the main tree while linked worktrees hold staged work (shadows their edits). jj workspaces are architecturally better but blocked on stock CC (GH #27466) — revisit later.
 
 ---
@@ -541,3 +539,24 @@ the user's call). Per-project gate names, escalation greps, and the trunk live i
 
 **Kill-switch:** any per-prompt "…and stop", "no auto-continue", or "just do X" suspends
 auto-continue for that turn — surface and yield instead.
+
+---
+
+## Manual-Command Delivery (All Projects)
+
+When you need the USER to run something themselves — anything you can't or shouldn't run: interactive
+logins (`gcloud auth login`), `sudo`, a safety-classifier-blocked action, a force-push / destructive op
+they must own, or any command needing their terminal/credentials — do NOT scatter copy-paste commands
+inline in chat. TUI line-wrapping, smart quotes, and markdown fences corrupt them on paste (heredocs and
+anything with quotes/URLs especially). Instead, EVERY time:
+
+1. Write ALL of it to one `/tmp/<topic>-<purpose>.sh` — plain shell, one clean block per step, each
+   preceded by a `# comment` (what it does, why, required vs optional, expected output).
+2. Open it: `cursor /tmp/<topic>-<purpose>.sh` (print the path if the `cursor` CLI is absent).
+3. In chat, give a SHORT walk-through that POINTS at the file (step names + effect + expected output) —
+   never restate the commands inline.
+
+Standing pattern for every manual hand-off, in all sessions and repositories. `/tmp` only —
+regenerable, disposable, never committed. **Why:** copy-paste fidelity — a wrapped/smart-quoted heredoc
+pasted from chat silently breaks; a file opened in Cursor is exact. The inline chat carries the
+*walk-through*, the file carries the *commands*.
