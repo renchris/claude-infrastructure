@@ -73,6 +73,12 @@
 #                       completion / decision gate / blocker. UUID defaults to THIS firing pane
 #                       ($ITERM_SESSION_ID / --session-id). Pair with `cc-await-ping` on the
 #                       originator for a modal-safe wake. See docs/plans/TWO_WAY_SESSION_COMMS_PLAN.md.
+#   --self-retire       DEFAULT for non-recycle fires. Append a SELF-RETIRE directive to the prompt
+#   --no-self-retire    copy: the fired PEER drives its trivial pre-authorized tail, then runs
+#                       `self-close --terminal` on its OWN pane instead of idling. --notify-back
+#                       SIGNALS done; it does NOT CLOSE (the 2026-07-17 idle-fleet incident: five
+#                       peers pinged then idled on a deferred "heads-up"). Auto-OFF for --recycle
+#                       (the recycled pane IS the continuation). --no-self-retire opts out.
 #
 # Subcommand:
 #   self-close (--successor UUID | --terminal) [--session-id UUID] [--no-notify]
@@ -119,7 +125,7 @@ MODEL_CONFIG="$HOME/.claude/model-config.yaml"
 PROMPT_FILE="" ACCOUNT="auto" LAUNCHER="" MODEL="" EFFORT="" CWD="" WORKTREE=""
 REPO="$DEFAULT_REPO" WTROOT="$HOME/Development/.worktrees" BASE="origin/main"
 SURFACE="split-right" SURFACE_EXPLICIT=0 PROBE=0 DRY=0 IN_PLACE=0 EXTRA="" RECYCLE=0 SESSION_ID=""
-NOTIFY_BACK=""
+NOTIFY_BACK="" SELF_RETIRE=1
 
 # Print the header comment up to (excluding) the first non-comment sentinel — growth-proof range.
 usage() { sed -n '2,/^set -euo pipefail/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
@@ -452,6 +458,8 @@ while [ $# -gt 0 ]; do case "$1" in
   --recycle)     RECYCLE=1; shift ;;
   --session-id)  SESSION_ID="${2:?--session-id needs a value}"; shift 2 ;;
   --notify-back) NOTIFY_BACK="${2:-}"; case "$NOTIFY_BACK" in ""|--*) NOTIFY_BACK="__self__"; shift ;; *) shift 2 ;; esac ;;
+  --self-retire)    SELF_RETIRE=1; shift ;;
+  --no-self-retire) SELF_RETIRE=0; shift ;;
   --extra)       EXTRA="${2:?--extra needs a value}"; shift 2 ;;
   --dry-run)     DRY=1; shift ;;
   -h|--help)     usage ;;
@@ -679,34 +687,58 @@ fi
 PREFIX=""
 [ "$IN_PLACE" = 1 ] && PREFIX="CLAUDE_ISOLATION_SKIP=1 "
 
-# ---- --notify-back: back-channel trailer (two-way session comms) ------------------------------
-# Append to a COPY of the prompt (NEVER the caller's file) a recipe telling the fired session to
-# ping the ORIGINATOR's pane via cc-notify on completion / decision gate / blocker. Done BEFORE QP
-# below so the copy is what gets quoted + read by the fired launcher. BACK_SID mirrors FIRING_SID's
-# definition (derived later for the spawn anchor); computed inline here to keep this self-contained.
-if [ -n "$NOTIFY_BACK" ]; then
-  BACK_SID="$NOTIFY_BACK"
-  if [ "$BACK_SID" = "__self__" ]; then
-    _nb_it="${ITERM_SESSION_ID:-}"
-    BACK_SID="${SESSION_ID:-${_nb_it##*:}}"
+# ---- prompt trailers: back-channel ping (--notify-back) + self-retire (default) ---------------
+# Append to a COPY of the prompt (NEVER the caller's file): (a) if --notify-back, a recipe telling
+# the fired session to ping the ORIGINATOR via cc-notify on completion / decision gate / blocker;
+# (b) unless --no-self-retire or --recycle, a SELF-RETIRE directive so a fired PEER drives its
+# trivial pre-authorized tail then self-closes its OWN pane instead of idling — because --notify-back
+# SIGNALS done but does NOT CLOSE (five peers pinged then idled on a deferred "heads-up", 2026-07-17).
+# Done BEFORE QP so the copy is what the fired launcher reads. --recycle is the continuation, never
+# self-retires. BACK_SID mirrors FIRING_SID (the spawn anchor), computed inline to stay self-contained.
+WANT_SELF_RETIRE=0
+[ "$SELF_RETIRE" = 1 ] && [ "$RECYCLE" = 0 ] && WANT_SELF_RETIRE=1
+if [ -n "$NOTIFY_BACK" ] || [ "$WANT_SELF_RETIRE" = 1 ]; then
+  [ -f "$PROMPT_FILE" ] || { echo "!! prompt trailer: prompt file not found: $PROMPT_FILE" >&2; exit 1; }
+  PF_NB="$(mktemp "${TMPDIR:-/tmp}/handoff-prompt-nb-XXXXXX")" || { echo "!! prompt trailer: mktemp failed" >&2; exit 1; }
+  cp "$PROMPT_FILE" "$PF_NB" || { echo "!! prompt trailer: could not copy prompt" >&2; exit 1; }
+  if [ -n "$NOTIFY_BACK" ]; then
+    BACK_SID="$NOTIFY_BACK"
+    if [ "$BACK_SID" = "__self__" ]; then
+      _nb_it="${ITERM_SESSION_ID:-}"
+      BACK_SID="${SESSION_ID:-${_nb_it##*:}}"
+    fi
+    [ -n "$BACK_SID" ] || { echo "!! --notify-back: no \$ITERM_SESSION_ID and no UUID given" >&2; exit 1; }
+    NB_SLUG="$(basename "${PROMPT_FILE%.*}")"
+    # shellcheck disable=SC2016  # $HOME (and \r/\n) below are LITERAL guidance for the fired reader, not shell expansions
+    {
+      printf '\n'
+      printf '## BACK-CHANNEL — ping the originator (%s)\n' "$BACK_SID"
+      printf '%s\n' 'On completion, at a decision gate, or on a blocker, ping the session that fired this handoff:'
+      printf '  cc-notify %s "HANDOFF-PING %s: <one-line status>"\n' "$BACK_SID" "$NB_SLUG"
+      printf '%s\n' '(cc-notify is on PATH at $HOME/.claude/bin/cc-notify — it types the line into the'
+      printf '%s\n' "originator's composer via the it2 transport (\\r submit, not \\n) AND records"
+      printf '%s%s.md as the durable fallback,\n' '$HOME/.claude/mailbox/' "$BACK_SID"
+      printf '%s\n' 'so the ping survives a closed/recycled pane. If the originator armed cc-await-ping,'
+      printf '%s\n' 'the mailbox write alone wakes it; the composer injection is the interrupt path.)'
+    } >> "$PF_NB"
   fi
-  [ -n "$BACK_SID" ] || { echo "!! --notify-back: no \$ITERM_SESSION_ID and no UUID given" >&2; exit 1; }
-  [ -f "$PROMPT_FILE" ] || { echo "!! --notify-back: prompt file not found: $PROMPT_FILE" >&2; exit 1; }
-  NB_SLUG="$(basename "${PROMPT_FILE%.*}")"
-  PF_NB="$(mktemp "${TMPDIR:-/tmp}/handoff-prompt-nb-XXXXXX")" || { echo "!! --notify-back: mktemp failed" >&2; exit 1; }
-  cp "$PROMPT_FILE" "$PF_NB" || { echo "!! --notify-back: could not copy prompt" >&2; exit 1; }
-  # shellcheck disable=SC2016  # $HOME (and \r/\n) below are LITERAL guidance for the fired reader, not shell expansions
-  {
-    printf '\n'
-    printf '## BACK-CHANNEL — ping the originator (%s)\n' "$BACK_SID"
-    printf '%s\n' 'On completion, at a decision gate, or on a blocker, ping the session that fired this handoff:'
-    printf '  cc-notify %s "HANDOFF-PING %s: <one-line status>"\n' "$BACK_SID" "$NB_SLUG"
-    printf '%s\n' '(cc-notify is on PATH at $HOME/.claude/bin/cc-notify — it types the line into the'
-    printf '%s\n' "originator's composer via the it2 transport (\\r submit, not \\n) AND records"
-    printf '%s%s.md as the durable fallback,\n' '$HOME/.claude/mailbox/' "$BACK_SID"
-    printf '%s\n' 'so the ping survives a closed/recycled pane. If the originator armed cc-await-ping,'
-    printf '%s\n' 'the mailbox write alone wakes it; the composer injection is the interrupt path.)'
-  } >> "$PF_NB"
+  if [ "$WANT_SELF_RETIRE" = 1 ]; then
+    # shellcheck disable=SC2016  # $HOME below is LITERAL guidance for the fired reader, not a shell expansion
+    {
+      printf '\n'
+      printf '## ON COMPLETION — SELF-RETIRE (do NOT idle)\n'
+      printf '%s\n' 'You are a fired PEER session: the desk drives you to DONE and you CLOSE YOURSELF — you are'
+      printf '%s\n' 'NOT an idle human-in-the-loop pane. When your work is finished (and you have pinged back if'
+      printf '%s\n' 'asked to):'
+      printf '%s\n' '  1. DRIVE any trivial, pre-authorized remaining step to a clean terminal state (push / ff /'
+      printf '%s\n' '     land per the standing values). NEVER finish on a "say the word" / "heads-up" and sit'
+      printf '%s\n' '     idle — that is the deference defect. A step that is GENUINELY the operator'"'"'s call is'
+      printf '%s\n' '     surfaced in your ping, not a reason to idle.'
+      printf '%s\n' '  2. Then retire your OWN pane (work must be committed/clean — self-close refuses a dirty tree):'
+      printf '%s\n' '       $HOME/.claude/scripts/handoff-fire.sh self-close --terminal'
+      printf '%s\n' 'Report, finish the trivial tail, close. Do not wait idle for input that is not coming.'
+    } >> "$PF_NB"
+  fi
   PROMPT_FILE="$PF_NB"
 fi
 
