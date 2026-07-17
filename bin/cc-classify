@@ -1,0 +1,257 @@
+#!/bin/bash
+# cc-classify — idle-CAUSE classifier for a Claude Code session. The BRAIN of the autonomous
+# lifecycle reaper: it decides WHY a session is idle so the reaper (bin/cc-reaper) can reap ONLY
+# the provably-terminal, work-safe causes and NEVER an active/waiting/limited one.
+#
+#   cc-classify <target> [--json]     target = sessionId | paneUUID | friendly-name
+#   cc-classify --all [--json]        classify every live session across the 4 accounts
+#   cc-classify selftest              RED-proof each cause against fixtures (no real session)
+#
+# CAUSES (exactly one per session):
+#   active            recent *assistant* turn (< idle threshold), pid alive        → NEVER reap
+#   rate-limited      a structured usage-cap API error in the transcript tail       → NEVER reap
+#   owned-wait        pid alive, idle, a legitimate wait (live teammates / user)    → NEVER reap
+#   coordination-hang pid alive, idle, HAD teammates but none alive / no progress   → NEVER reap (surface)
+#   handed-off-lead   idle, fired a /handoff, a live successor exists elsewhere      → reap IFF work landed
+#   finished-teammate a teammate/worktree session, idle, done                        → reap IFF work landed
+#   crashed           owning process is DEAD                                         → NEVER auto-reap (surface)
+#
+# SAFETY: the two REAPABLE causes (handed-off-lead, finished-teammate) demand POSITIVE evidence
+# (a fired handoff + a live successor; a teammate context + idleness). Every ambiguous/idle case
+# falls to a NEVER-reap cause. Work-landed and the final teardown gate are re-checked by the reaper
+# and cc-teardown — this classifier is the FIRST of a defence-in-depth chain, never the only one.
+# Inputs are read from durable signals (last-ASSISTANT-ts, registry pid, git, structured API error,
+# process liveness), NEVER file mtime alone (mtime bumps on any append; memory cc-notify-session-pane).
+
+set -uo pipefail
+
+SESSIONS_BIN="${CC_CLASSIFY_SESSIONS_BIN:-cc-sessions}"
+PS_BIN="${CC_CLASSIFY_PS_BIN:-/bin/ps}"
+IDLE_S="${CC_CLASSIFY_IDLE_S:-300}"                 # < this since last assistant turn ⇒ active
+NOW="${CC_CLASSIFY_NOW:-$(date +%s)}"
+PROJECT_ROOTS="${CC_CLASSIFY_PROJECT_ROOTS:-$HOME/.claude/projects $HOME/.claude-secondary/projects $HOME/.claude-tertiary/projects $HOME/.claude-quaternary/projects}"
+GIT_BIN="${CC_CLASSIFY_GIT_BIN:-git}"
+TRUNK="${CC_CLASSIFY_TRUNK:-origin/main}"
+TEAMS_GLOB="${CC_CLASSIFY_TEAMS_GLOB:-$HOME/.claude*/teams}"
+
+die(){ printf 'cc-classify: %s\n' "$*" >&2; exit 2; }
+command -v jq >/dev/null || die "jq required"
+
+# ── input helpers (all read-only) ─────────────────────────────────────────────────────────────
+iso_to_epoch() { # <iso8601 e.g. 2026-07-16T22:46:27.449Z> → epoch seconds (empty on parse fail)
+  local s="${1%%.*}"; s="${s%Z}"                    # drop fractional seconds + trailing Z
+  [ -z "$s" ] && return 0
+  TZ=UTC date -j -f "%Y-%m-%dT%H:%M:%S" "$s" +%s 2>/dev/null || true
+}
+alive() { [ -n "${1:-}" ] && kill -0 "$1" 2>/dev/null; }
+
+find_transcript() { # <sid> → path to its .jsonl (first match across the account roots)
+  local sid="$1" r f
+  for r in $PROJECT_ROOTS; do
+    [ -d "$r" ] || continue
+    f="$(find "$r" -maxdepth 2 -name "$sid.jsonl" 2>/dev/null | head -1)"
+    [ -n "$f" ] && { printf '%s' "$f"; return 0; }
+  done
+  return 1
+}
+
+last_assistant_ts() { # <jsonl> → epoch of last real assistant turn (excludes sidechain + api-error)
+  local f="$1" iso
+  [ -f "$f" ] || return 1
+  iso="$(jq -rc 'select(.type=="assistant" and (.isSidechain|not) and ((.isApiErrorMessage//false)|not)) | .timestamp' "$f" 2>/dev/null | tail -1)"
+  [ -n "$iso" ] && iso_to_epoch "$iso"
+}
+
+recent_api_limit() { # <jsonl> → 0 if a structured USAGE-CAP api error is among the last records
+  local f="$1"
+  [ -f "$f" ] || return 1
+  # isApiErrorMessage is the SIGNAL (never text-grep 429 — mostly false positives, aa49); the text
+  # is only to confirm it is a real cap ("session limit"/"weekly limit"), not a transient blip.
+  tail -n 60 "$f" 2>/dev/null \
+    | jq -rc 'select((.isApiErrorMessage//false)==true) | (.message.content // [] | map(.text // "") | join(" "))' 2>/dev/null \
+    | grep -qiE 'session limit|weekly limit|usage limit|limit ·|resets'
+}
+
+handoff_fired() { # <jsonl> → 0 if the session actually FIRED a /handoff near the end
+  local f="$1"
+  [ -f "$f" ] || return 1
+  # Signal = an actual handoff tool invocation in a recent assistant tool_use. NEVER the CC-native
+  # `bridge-session` record — that is Claude Code's own cloud-bridge id, present in EVERY session
+  # (~51/transcript), NOT the /handoff mechanism (aa49: "do not conflate the two 'bridge' concepts").
+  tail -n 80 "$f" 2>/dev/null | jq -rc '
+      if .type=="assistant" then (.message.content // [] | map(select(.type=="tool_use")
+           | (.input.command // .input.file_path // "")) | join(" "))
+      else "" end' 2>/dev/null \
+    | grep -qE 'handoff-fire\.sh|scripts/handoff\.sh|(^| )/handoff( |$)|--recycle|[a-z0-9_-]+-resume\.md'
+}
+
+find_successor() { # <this-sid> <this-cwd> <since-epoch> <all-json> → candidate {paneUUID,pid} objects, one/line
+  local sid="$1" cwd="$2" since="${3:-0}" all="$4"
+  # A handoff continues the SAME work in the SAME cwd. A successor is a DISTINCT session (different
+  # session_id) in that cwd, started at/after this session's last turn. Liveness (kill -0) is checked
+  # by the caller — a dead 'successor' is no successor. Exclude self by session_id, never by pane
+  # (a --recycle successor reuses the pane; a self-close successor gets a new one).
+  printf '%s' "$all" | jq -rc --arg cwd "$cwd" --arg sid "$sid" --argjson since "${since:-0}" '
+      .[] | select(.cwd==$cwd)
+          | select((.session_id // .sessionId // "") != $sid)
+          | select($since==0 or (.startedAt // 0) >= $since)
+          | {paneUUID, pid: ((.pid // "")|tostring)}' 2>/dev/null | head -20
+}
+
+is_worktree_session() { # <cwd> → 0 if the cwd is a teammate/worktree path
+  case "$1" in /tmp/wt-*|/private/tmp/wt-*|*/.worktrees/*|/tmp/worktree-*) return 0 ;; esac
+  return 1
+}
+
+live_agent_procs() { # → count of live `--agent-name` (teammate) processes machine-wide
+  "$PS_BIN" -eo pid=,command= 2>/dev/null | grep -c -- '--agent-name' || true
+}
+
+team_config() { # <sid> → path of a team config.json naming this sid as lead (empty if none)
+  local sid="$1" c
+  for c in $TEAMS_GLOB/*/config.json; do
+    [ -f "$c" ] || continue
+    jq -e --arg s "$sid" '((.leadSessionId // .lead_session_id // "")==$s)' "$c" >/dev/null 2>&1 && { printf '%s' "$c"; return 0; }
+  done
+  return 1
+}
+
+team_live_member() { # <team-config> → 0 if any member of this team is a live `--agent-name` process
+  local c="$1" names procs m
+  names="$(jq -r '(.members // [])[] | (.name // .member // empty)' "$c" 2>/dev/null)"
+  [ -n "$names" ] || return 1
+  procs="$("$PS_BIN" -eo pid=,command= 2>/dev/null | grep -- '--agent-name' || true)"
+  while IFS= read -r m; do
+    [ -z "$m" ] && continue
+    printf '%s' "$procs" | grep -qF -- "--agent-name $m" && return 0
+    printf '%s' "$procs" | grep -qF -- "--agent-name=$m" && return 0
+  done <<< "$names"
+  return 1
+}
+
+work_landed() { # <cwd> → 0 if clean AND nothing ahead of trunk (pre-filter; cc-teardown re-verifies)
+  local cwd="$1"
+  [ -d "$cwd" ] || return 1
+  "$GIT_BIN" -C "$cwd" rev-parse --git-dir >/dev/null 2>&1 || return 1
+  [ -z "$("$GIT_BIN" -C "$cwd" status --porcelain 2>/dev/null)" ] || return 1
+  local ahead; ahead="$("$GIT_BIN" -C "$cwd" rev-list --count "$TRUNK"..HEAD 2>/dev/null)" || return 1
+  [ "${ahead:-1}" = 0 ]
+}
+
+# ── the decision tree ─────────────────────────────────────────────────────────────────────────
+# sets: CAUSE, IDLE (seconds or -1), LANDED (yes/no/na), SUCCESSOR (uuid|""), DETAIL
+classify_entry() { # <entry-json> <all-sessions-json>
+  local e="$1" all="$2"
+  local sid pid cwd
+  sid="$(printf '%s' "$e"  | jq -r '.session_id // .sessionId // ""')"
+  pid="$(printf '%s' "$e"  | jq -r '.pid // ""')"
+  cwd="$(printf '%s' "$e"  | jq -r '.cwd // ""')"
+  CAUSE=""; IDLE=-1; LANDED=na; SUCCESSOR=""; DETAIL=""
+
+  # 1. owning process dead → crashed (idle-linger targets are ALIVE; a dead pid is a separate cleanup)
+  if ! alive "$pid"; then CAUSE=crashed; DETAIL="pid ${pid:-?} not alive"; return 0; fi
+
+  local tj lat
+  tj="$(find_transcript "$sid" 2>/dev/null || true)"
+  lat="$(last_assistant_ts "$tj" 2>/dev/null || true)"
+  [ -n "$lat" ] && IDLE=$(( NOW - lat ))
+
+  # 2. structured usage-cap in the transcript tail → rate-limited (resumes on reset; never reap)
+  if [ -n "$tj" ] && recent_api_limit "$tj"; then CAUSE=rate-limited; DETAIL="structured usage-cap api error"; return 0; fi
+
+  # 3. recent assistant turn → active
+  if [ "$IDLE" -ge 0 ] 2>/dev/null && [ "$IDLE" -lt "$IDLE_S" ]; then
+    CAUSE=active; DETAIL="last assistant turn ${IDLE}s ago (< ${IDLE_S}s)"; return 0
+  fi
+  # If we could not read a transcript ts AT ALL, we cannot prove idleness → treat as active (never-reap).
+  if [ "$IDLE" -lt 0 ]; then CAUSE=active; DETAIL="no readable assistant timestamp — cannot prove idle (fail-safe)"; return 0; fi
+
+  # --- pid alive, provably idle (>= IDLE_S), not rate-limited ---
+  LANDED=no; work_landed "$cwd" && LANDED=yes
+
+  # 4. handed-off-lead: fired a /handoff AND a LIVE successor session exists in the same cwd
+  if [ -n "$tj" ] && handoff_fired "$tj"; then
+    local cand spid found=""
+    while IFS= read -r cand; do
+      [ -z "$cand" ] && continue
+      spid="$(printf '%s' "$cand" | jq -r '.pid // ""' 2>/dev/null)"
+      if alive "$spid"; then found="$(printf '%s' "$cand" | jq -r '.paneUUID // ""' 2>/dev/null)"; break; fi
+    done < <(find_successor "$sid" "$cwd" "${lat:-0}" "$all")
+    if [ -n "$found" ]; then
+      SUCCESSOR="$found"
+      CAUSE=handed-off-lead; DETAIL="fired /handoff; LIVE successor $found in cwd; work-landed=$LANDED"; return 0
+    fi
+    DETAIL="fired /handoff but NO live successor found — not safe to reap"
+  fi
+
+  # 5. finished-teammate: a worktree/teammate session, idle, no live successor needed
+  if is_worktree_session "$cwd"; then
+    CAUSE=finished-teammate; DETAIL="worktree/teammate session, idle ${IDLE}s; work-landed=$LANDED"; return 0
+  fi
+
+  # 6. lead of a team → owned-wait (a member still alive = healthy wave) vs coordination-hang
+  #    (this lead's team is named but NONE of its members are alive → stuck waiting on the dead).
+  #    Both are NEVER-reap; the split only decides whether the reaper SURFACES for re-engagement.
+  local tc; tc="$(team_config "$sid" 2>/dev/null || true)"
+  if [ -n "$tc" ]; then
+    if team_live_member "$tc"; then
+      CAUSE=owned-wait; DETAIL="idle ${IDLE}s, lead of a team with ≥1 live member — healthy wait"; return 0
+    fi
+    CAUSE=coordination-hang; DETAIL="idle ${IDLE}s, lead of a team but NO live member — stuck (surface, never reap)"; return 0
+  fi
+
+  # 7. default: an idle, alive session with no handoff/successor/team. NEVER reap — the operator
+  #    may return to it. owned-wait is the never-reap bucket.
+  CAUSE=owned-wait; DETAIL="idle ${IDLE}s, pid alive, no handoff/team — waiting (never-reap default)"
+  return 0
+}
+
+emit_one() { # <entry-json> <all-json> <json?>
+  classify_entry "$1" "$2"
+  if [ "${3:-}" = "--json" ]; then
+    jq -nc --argjson e "$1" --arg cause "$CAUSE" --arg idle "$IDLE" --arg landed "$LANDED" \
+       --arg succ "$SUCCESSOR" --arg detail "$DETAIL" \
+       '{name:$e.name, paneUUID:$e.paneUUID, account:$e.account, cwd:$e.cwd,
+         cause:$cause, idle_s:($idle|tonumber? // -1), work_landed:$landed,
+         successor:(if $succ=="" then null else $succ end), detail:$detail}'
+  else
+    printf '%-18s %-17s %-8s idle=%-7s landed=%-3s %s\n' \
+      "$(printf '%s' "$1" | jq -r '.name // .paneUUID')" "$CAUSE" \
+      "$(printf '%s' "$1" | jq -r '.account // "?"')" "$IDLE" "$LANDED" "$DETAIL"
+  fi
+}
+
+cmd_classify() { # <target> [--json]
+  local target="$1" json="${2:-}"
+  local all; all="$("$SESSIONS_BIN" --json 2>/dev/null || echo '[]')"
+  local e
+  e="$(printf '%s' "$all" | jq -c --arg t "$target" '.[] | select(.paneUUID==$t or .session_id==$t or .sessionId==$t or .name==$t)' 2>/dev/null | head -1)"
+  [ -n "$e" ] || die "no live session matches '$target'"
+  emit_one "$e" "$all" "$json"
+}
+
+cmd_all() { # [--json]
+  local json="${1:-}"
+  local all; all="$("$SESSIONS_BIN" --json 2>/dev/null || echo '[]')"
+  local n; n="$(printf '%s' "$all" | jq 'length' 2>/dev/null || echo 0)"
+  [ "$json" = "--json" ] && printf '['
+  local first=1 i
+  for ((i=0; i<n; i++)); do
+    local e; e="$(printf '%s' "$all" | jq -c ".[$i]")"
+    if [ "$json" = "--json" ]; then
+      [ $first = 1 ] || printf ','; first=0
+      emit_one "$e" "$all" --json
+    else
+      emit_one "$e" "$all"
+    fi
+  done
+  [ "$json" = "--json" ] && printf ']\n'
+  return 0
+}
+
+case "${1:-}" in
+  --all)        cmd_all "${2:-}" ;;
+  selftest)     exec bats "$(cd "$(dirname "$0")" && pwd)/../tests/cc-classify.bats" ;;
+  -h|--help|"") sed -n '2,20p' "$0"; exit 0 ;;
+  *)            cmd_classify "$1" "${2:-}" ;;
+esac
