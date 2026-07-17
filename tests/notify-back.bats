@@ -16,6 +16,9 @@ setup() {
 # extract the "copy: <path>)" the dry-run prints on its notify-back line
 copy_of() { printf '%s\n' "$1" | sed -n 's/.*copy: \([^)]*\)).*/\1/p'; }
 
+# extract the prompt path the composed `command:` line reads via "$(cat <path>)"
+cmd_prompt_of() { printf '%s\n' "$1" | sed -n 's/.*cat \([^)]*\)).*/\1/p'; }
+
 @test "--notify-back <uuid>: trailer copy carries the cc-notify ping recipe with that UUID" {
   run env ITERM_SESSION_ID="w1t0p0:AAAAAAAA-0000-0000-0000-000000000001" \
     bash "$HF" --prompt-file "$PF" --launcher claude-test \
@@ -71,10 +74,30 @@ copy_of() { printf '%s\n' "$1" | sed -n 's/.*copy: \([^)]*\)).*/\1/p'; }
   grep -q 'r submit, not' "$copy"               # "(\r submit, not \n)"
 }
 
-@test "without --notify-back: no trailer, original prompt used as-is" {
+@test "--no-self-retire (no --notify-back): no trailer, original prompt used as-is" {
   run env ITERM_SESSION_ID="w1t0p0:AAAAAAAA-0000-0000-0000-000000000004" \
-    bash "$HF" --prompt-file "$PF" --launcher claude-test --dry-run
+    bash "$HF" --prompt-file "$PF" --launcher claude-test --no-self-retire --dry-run
   [ "$status" -eq 0 ]
   ! printf '%s\n' "$output" | grep -q 'notify-back:'
   printf '%s\n' "$output" | grep -qF "cat $PF"  # command reads the original prompt directly
+}
+
+@test "default (no --notify-back): self-retire trailer added, a COPY is used not the original" {
+  run env ITERM_SESSION_ID="w1t0p0:AAAAAAAA-0000-0000-0000-000000000005" \
+    bash "$HF" --prompt-file "$PF" --launcher claude-test --dry-run
+  [ "$status" -eq 0 ]
+  ! printf '%s\n' "$output" | grep -q 'notify-back:'          # no back-channel (no --notify-back)
+  ! printf '%s\n' "$output" | grep -qF "cat $PF"              # NOT the original — self-retire wrapped it
+  copy="$(cmd_prompt_of "$output")"
+  [ -n "$copy" ]; [ -f "$copy" ]
+  [ "$copy" != "$PF" ]                                        # a distinct copy, never the caller's file
+  grep -q 'SELF-RETIRE' "$copy"                               # the self-retire directive is present
+  grep -q 'ORIGINAL PROMPT BODY' "$copy"                      # original body preserved first
+}
+
+@test "--recycle: self-retire auto-excluded (the recycled pane IS the continuation)" {
+  run env ITERM_SESSION_ID="w1t0p0:AAAAAAAA-0000-0000-0000-000000000006" \
+    bash "$HF" --prompt-file "$PF" --launcher claude-test --recycle --dry-run
+  [ "$status" -eq 0 ]
+  ! printf '%s\n' "$output" | grep -q 'handoff-prompt-nb'     # no trailer copy made — original used as-is
 }
