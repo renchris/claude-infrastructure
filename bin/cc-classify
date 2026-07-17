@@ -11,14 +11,18 @@
 #   active            recent *assistant* turn (< idle threshold), pid alive        → NEVER reap
 #   rate-limited      a structured usage-cap API error in the transcript tail       → NEVER reap
 #   owned-wait        pid alive, idle, a legitimate wait (live teammates / user)    → NEVER reap
-#   coordination-hang pid alive, idle, HAD teammates but none alive / no progress   → NEVER reap (surface)
+#   coordination-hang pid alive, idle, had REAL teammates but none alive / no prog  → NEVER reap (surface)
 #   handed-off-lead   idle, fired a /handoff, a live successor exists elsewhere      → reap IFF work landed
 #   finished-teammate a teammate/worktree session, idle, done                        → reap IFF work landed
+#   finished          idle past threshold, NO live teammates, work LANDED (committed + on trunk) → reap
 #   crashed           owning process is DEAD                                         → NEVER auto-reap (surface)
 #
-# SAFETY: the two REAPABLE causes (handed-off-lead, finished-teammate) demand POSITIVE evidence
-# (a fired handoff + a live successor; a teammate context + idleness). Every ambiguous/idle case
-# falls to a NEVER-reap cause. Work-landed and the final teardown gate are re-checked by the reaper
+# SAFETY: the three REAPABLE causes (handed-off-lead, finished-teammate, finished) demand POSITIVE
+# evidence (a fired handoff + a live successor; a teammate context + idleness; work durably landed +
+# idle). Every ambiguous/idle case falls to a NEVER-reap cause. The implicit-team model (CC 2.1.178+)
+# writes a team config for EVERY session — a config alone is NOT a coordination context; only a member
+# beyond the in-process `team-lead` placeholder is (else every idle solo session read as coordination-hang
+# and nothing could ever be `finished`). Work-landed and the final teardown gate are re-checked by the reaper
 # and cc-teardown — this classifier is the FIRST of a defence-in-depth chain, never the only one.
 # Inputs are read from durable signals (last-ASSISTANT-ts, registry pid, git, structured API error,
 # process liveness), NEVER file mtime alone (mtime bumps on any append; memory cc-notify-session-pane).
@@ -109,6 +113,8 @@ live_agent_procs() { # → count of live `--agent-name` (teammate) processes mac
 
 team_config() { # <sid> → path of a team config.json naming this sid as lead (empty if none)
   local sid="$1" c
+  # shellcheck disable=SC2231  # $TEAMS_GLOB is INTENTIONALLY unquoted: it word-splits across the 4
+  # account roots AND expands the `.claude*` glob — quoting would defeat both. (Cf. reaper-horizon-lint SC2086.)
   for c in $TEAMS_GLOB/*/config.json; do
     [ -f "$c" ] || continue
     jq -e --arg s "$sid" '((.leadSessionId // .lead_session_id // "")==$s)' "$c" >/dev/null 2>&1 && { printf '%s' "$c"; return 0; }
@@ -127,6 +133,16 @@ team_live_member() { # <team-config> → 0 if any member of this team is a live 
     printf '%s' "$procs" | grep -qF -- "--agent-name=$m" && return 0
   done <<< "$names"
   return 1
+}
+
+team_has_real_members() { # <team-config> → 0 if the team ACTUALLY spawned a teammate (≥1 member that is
+  # NOT the in-process `team-lead` placeholder). The implicit-team model (CC 2.1.178+) writes a
+  # teams/session-<sid8>/config.json for EVERY session — solo ones too — carrying a single phantom
+  # member {name:team-lead, agentType:team-lead, backendType:in-process}: the lead itself, not a
+  # teammate. Without this gate every idle solo session matched team_config and fell to coordination-hang.
+  local c="$1" n
+  n="$(jq -r '[(.members // [])[] | select(((.agentType // "") != "team-lead") and ((.name // "") != "team-lead"))] | length' "$c" 2>/dev/null)"
+  [ -n "$n" ] && [ "$n" -gt 0 ]
 }
 
 work_landed() { # <cwd> → 0 if clean AND nothing ahead of trunk (pre-filter; cc-teardown re-verifies)
@@ -189,20 +205,30 @@ classify_entry() { # <entry-json> <all-sessions-json>
     CAUSE=finished-teammate; DETAIL="worktree/teammate session, idle ${IDLE}s; work-landed=$LANDED"; return 0
   fi
 
-  # 6. lead of a team → owned-wait (a member still alive = healthy wave) vs coordination-hang
-  #    (this lead's team is named but NONE of its members are alive → stuck waiting on the dead).
-  #    Both are NEVER-reap; the split only decides whether the reaper SURFACES for re-engagement.
+  # 6. REAL team coordination — ONLY when the team actually spawned a teammate (a member beyond the
+  #    in-process `team-lead` placeholder; see team_has_real_members). A live member ⇒ owned-wait
+  #    (healthy wave); had real members but none alive now ⇒ coordination-hang (stuck, surface).
+  #    Both NEVER-reap; the split only decides whether the reaper SURFACES for re-engagement. Without
+  #    the real-members gate the implicit-team config (every session has one) collapsed ALL idle solo
+  #    sessions to coordination-hang — the "defaulting, not discriminating" bug this fix closes.
   local tc; tc="$(team_config "$sid" 2>/dev/null || true)"
-  if [ -n "$tc" ]; then
+  if [ -n "$tc" ] && team_has_real_members "$tc"; then
     if team_live_member "$tc"; then
       CAUSE=owned-wait; DETAIL="idle ${IDLE}s, lead of a team with ≥1 live member — healthy wait"; return 0
     fi
     CAUSE=coordination-hang; DETAIL="idle ${IDLE}s, lead of a team but NO live member — stuck (surface, never reap)"; return 0
   fi
 
-  # 7. default: an idle, alive session with no handoff/successor/team. NEVER reap — the operator
-  #    may return to it. owned-wait is the never-reap bucket.
-  CAUSE=owned-wait; DETAIL="idle ${IDLE}s, pid alive, no handoff/team — waiting (never-reap default)"
+  # 7. finished: idle past threshold, no live teammates, and work is LANDED (clean tree AND nothing
+  #    ahead of trunk). POSITIVE, durable done-evidence (committed + on trunk), never inferred from
+  #    silence. Reapable — the reaper re-verifies landed + settle window and checkpoints WIP first.
+  if [ "$LANDED" = yes ]; then
+    CAUSE=finished; DETAIL="idle ${IDLE}s, no live teammates, work landed (clean & 0 ahead of $TRUNK) — done, reapable"; return 0
+  fi
+
+  # 8. default: idle + alive but work NOT landed (or a solo/implicit team). NEVER reap — the operator
+  #    may return, and an unlanded tree must never be stranded. owned-wait is the never-reap bucket.
+  CAUSE=owned-wait; DETAIL="idle ${IDLE}s, pid alive, work not landed / no real team — waiting (never-reap default)"
   return 0
 }
 

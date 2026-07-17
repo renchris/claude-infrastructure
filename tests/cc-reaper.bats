@@ -119,6 +119,28 @@ td_called() { [ -f "$D/td-calls" ]; }
   td_called; grep -q PANE-T "$D/td-calls"
 }
 
+@test "finished + landed + idle>settle + --reap → teardown called (new reapable cause)" {
+  mock_classify finished "$D/clean" 999 yes PANE-F
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  td_called; grep -q PANE-F "$D/td-calls"
+}
+
+@test "finished + work NOT landed → DEFER, no teardown (idle alone never reaps)" {
+  mock_classify finished "$D/clean" 999 no
+  run "$R" sweep --reap
+  ! td_called
+  echo "$output" | grep -q 'NOT landed'
+}
+
+@test "finished DRY-RUN surfaces WOULD-REAP, never tears down" {
+  mock_classify finished "$D/clean" 999 yes PANE-F
+  run "$R" sweep
+  [ "$status" -eq 0 ]
+  ! td_called
+  echo "$output" | grep -q WOULD-REAP
+}
+
 @test "post-classify RACE: classify says landed but cwd is dirty at act-time → ABORT, WIP checkpointed, no teardown" {
   mock_classify handed-off-lead "$D/dirty" 999 yes
   run "$R" sweep --reap

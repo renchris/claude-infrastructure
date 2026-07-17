@@ -1,6 +1,6 @@
 #!/bin/bash
 # cc-reaper — the autonomous SAFE session reaper (the standing loop's one sweep). It classifies
-# every live session across the 4 accounts and reaps ONLY the two provably-terminal, work-safe
+# every live session across the 4 accounts and reaps ONLY the three provably-terminal, work-safe
 # causes, checkpoint-first, through the effect-verified cc-teardown actuator. The end of the
 # north star: an idle handed-off lead never lingers holding a pane, and NOTHING else is ever killed.
 #
@@ -9,7 +9,8 @@
 #   cc-reaper selftest         RED-proof the disposition + the never-reap guarantees (no real session)
 #
 # SAFETY (defence-in-depth — a reap requires ALL of these, independently):
-#   1. cc-classify labels the session handed-off-lead (successor live) OR finished-teammate.
+#   1. cc-classify labels the session handed-off-lead (successor live) OR finished-teammate OR
+#      finished (idle past settle + no live teammates + work landed).
 #   2. work is LANDED (clean tree AND nothing ahead of origin/trunk) — re-verified here, post-classify.
 #   3. it has been idle >= the SETTLE window (the primary --recycle / TeammateIdle self-close had its
 #      chance first; the reaper is the BACKSTOP, never the first mover).
@@ -33,7 +34,7 @@ GIT_BIN="${CC_REAPER_GIT_BIN:-git}"
 TRUNK="${CC_REAPER_TRUNK:-origin/main}"
 SETTLE_S="${CC_REAPER_SETTLE_S:-600}"                 # backstop delay: give self-close 10 min first
 LOG_FILE="${CC_REAPER_LOG:-$HOME/.claude/logs/cc-reaper.log}"
-REAPABLE_RE='^(handed-off-lead|finished-teammate)$'
+REAPABLE_RE='^(handed-off-lead|finished-teammate|finished)$'
 
 command -v jq >/dev/null || { echo "cc-reaper: jq required" >&2; exit 2; }
 mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
