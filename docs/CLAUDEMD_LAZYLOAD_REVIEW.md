@@ -1,6 +1,6 @@
 # Global Knowledge-Layer Lazy-Load Restructure — Operator Review
 
-**Branch:** `feat/claudemd-lazyload`  ·  **Status:** committed, NOT deployed, NOT shipped — awaiting your approval of the resident-core diff.
+**Branch:** `feat/claudemd-lazyload`  ·  **Status:** APPROVED (ship option b) — all 5 fast-follows applied (FF1-FF5, commit `a0f80ff`); shipping to trunk + deploying to live.
 
 ## TL;DR
 
@@ -87,7 +87,14 @@ and disambiguate collisions with existing skills (plan-update, agent-browser).
 (`description: >-`) so the `": "` in "Triggers:/Rules:/SSOT:" parses under strict YAML — else a strict
 loader would silently skip the skills. (Matches your `resume-sessions` pattern.)
 
-## OPEN DECISIONS FOR YOU (flagged, not acted on)
+## FAST-FOLLOWS — operator-approved, ALL APPLIED (FF1-FF5, commit `a0f80ff`)
+
+✅ All five items below were approved and implemented. Resolutions: (1) Deploy path → **FF5** (install.sh
+now deploys CLAUDE.md + rules/, repo = source of truth). (2) 'Never land' para → **FF3** (relocated to
+`.claude/CLAUDE.md`, project-only, out of the global core). (3) coding-standards for teammates → **FF1**
+(6 conventions embedded in the agent-teams brief checklist). (4) research pre-cognition → **FF2** (new
+UserPromptSubmit hook, decompose-before-count before the spawn). (5) RESEARCH-*.md gitignore → **FF4**
+(targeted negation in `~/.gitignore_global`). Original flags, for the record:
 
 1. **Deploy path.** `install.sh` deploys hooks/commands/skills (symlink) but **not** CLAUDE.md or
    rules/ (both hand-maintained live). Post-approval deploy therefore needs an explicit CLAUDE.md copy
