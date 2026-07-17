@@ -111,6 +111,7 @@ Before calling `Agent` for a teammate spawn, lead verifies:
 - [ ] "Stop on issue, message lead" clause present verbatim
 - [ ] Multi-phase has explicit checkpoint between phases (or split into separate teammates)
 - [ ] Brief avoids: "investigate", "explore", "research more", "audit comprehensively"
+- [ ] **Code-writing teammate?** Embed the 6 coding conventions verbatim in the brief — teammates run heads-down on the brief and rarely load the `coding-standards` skill, so name them inline: TS strict-mode + explicit return types on exported functions; interfaces-for-object-shapes / types-for-unions; named exports (not default); Server Components by default (add `'use client'` only when needed); NO render-functions (extract a named component); Python type-hints + mypy-strict + ruff + Pydantic v2.
 
 If any box is unchecked, **rewrite the brief before spawning**. The pre-spawn cost is
 low; the recovery cost (lead context burned salvaging a crashed teammate) is high.
