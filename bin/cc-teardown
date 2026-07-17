@@ -29,9 +29,12 @@
 #   5. RECORD every branch (teardown | defer | refuse | fail | already-gone) to ~/.claude/cc-teardown/.
 #   6. IDEMPOTENT: already-gone pane + dead pid ⇒ success.
 #
-# 🚨 C10: cc-teardown is invoked BY A LIVE DESK SESSION (delegated work). It is NEVER wired into any hook /
-# daemon / settings.json / launchd (that would fire it with no live model = C10 = human-only). The
-# /tmp/cc-teardown-activate.sh runbook is the operator's OPTIONAL persistent layer — never self-activated.
+# 🚨 C10: cc-teardown is invoked BY A LIVE DESK SESSION (delegated work) OR by bin/cc-reaper — the one
+# sanctioned PRE-GATED autonomous caller (it reaps ONLY cause∈{handed-off-lead,finished-teammate} that is
+# work-landed + idle≥settle, checkpoint-first, and cc-teardown STILL re-runs its own gate = double-gate).
+# It is NEVER wired RAW into any hook / settings.json / launchd (that would fire it with no gate in front =
+# C10). cc-reaper's OWN launchd standing loop is itself a C10 operator step (docs/AUTONOMOUS-REAPER-
+# ACTIVATION.md). The /tmp/cc-teardown-activate.sh runbook is the operator's OPTIONAL layer — never self-activated.
 #
 # Env (overridable for tests): CC_TEARDOWN_SESSIONS_BIN, IT2_BIN, CC_TEARDOWN_GATE_BIN, CC_TEARDOWN_PS_BIN,
 #   CC_TEARDOWN_RECORDS_DIR, CC_TEARDOWN_SELF_UUID, CC_TEARDOWN_TERM_GRACE_S.

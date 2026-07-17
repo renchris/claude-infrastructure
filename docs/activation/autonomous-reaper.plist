@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- com.chrisren.cc-reaper — the autonomous SAFE session reaper's standing loop.
+     C10 (human-only) activation: `launchctl load` this (see docs/AUTONOMOUS-REAPER-ACTIVATION.md).
+     WHY launchd (not a hook, not the desk loop): a hook dies with its session and cannot run when
+     NO session is alive — exactly when an orphaned pane needs reaping; the desk loop stops when the
+     desk is closed/recycled and cannot reap the desk itself. launchd is OS-level, session-independent,
+     survives logout, and fires on a fixed interval regardless of who is watching. It runs `cc-reaper
+     sweep --reap`, which is DRY-safe by construction (every reap is quadruple-gated + effect-verified).
+     A LOGIN shell (zsh -lc) is used so ~/.claude/bin (cc-*) + git/jq/it2 are on PATH. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>            <string>com.chrisren.cc-reaper</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>-lc</string>
+    <string>cc-reaper sweep --reap</string>
+  </array>
+  <key>StartInterval</key>    <integer>300</integer>
+  <key>RunAtLoad</key>        <false/>
+  <key>ProcessType</key>      <string>Background</string>
+  <key>Nice</key>             <integer>5</integer>
+  <key>StandardOutPath</key>  <string>/Users/chrisren/.claude/logs/cc-reaper.out.log</string>
+  <key>StandardErrorPath</key><string>/Users/chrisren/.claude/logs/cc-reaper.err.log</string>
+</dict>
+</plist>
