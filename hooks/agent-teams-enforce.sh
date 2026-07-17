@@ -64,8 +64,18 @@ EOF
   fi
 fi
 
-# If team_name is set (with valid or absent model), this is an Agent Team — allow silently
-[ -n "$TEAM_NAME" ] && exit 0
+# Emit an allow + advisory skill-pointer (same pattern as the impl-nudge below). The resident
+# CLAUDE.md invariants carry the CORE discipline; these pointers ensure the full-detail skill
+# loads at the actual spawn point. Additive/advisory only — never denies.
+emit_allow_ctx() {
+  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","additionalContext":"%s"}}\n' "$1"
+}
+
+# If team_name is set (with valid or absent model), this is an Agent Team — allow + point to skill.
+if [ -n "$TEAM_NAME" ]; then
+  emit_allow_ctx "AGENT-TEAMS SKILL: spawning a teammate. If not already loaded, invoke the agent-teams skill for the full brief discipline (150-line brief cap, pre-grep line ranges, verbatim stop-on-issue clause, phase checkpoints), runtime detection, per-teammate effort + model-pinning, lifecycle + graceful-shutdown, and crash recovery. The resident CLAUDE.md invariant carries the core; the skill carries the detail."
+  exit 0
+fi
 
 # If this is a known read-only subagent type, allow silently
 case "$SUBAGENT_TYPE" in
@@ -80,6 +90,7 @@ esac
 # Discriminator is the EXPLICIT marker, not the topic.
 RESEARCH_MARKERS='READ[- ]ONLY RESEARCH|RESEARCH[- ]ONLY|NO (FILES|CODE)( WILL BE)? (WRITTEN|MODIFIED|CREATED)|WRITES? NOTHING (TO|ON) DISK|Tool budget:[[:space:]]*(Read|Glob|Grep|WebFetch|WebSearch|,|[[:space:]])+|Tool use limited to:[[:space:]]*(Read|Glob|Grep|WebFetch|WebSearch|,|[[:space:]])'
 if echo "$PROMPT" | grep -qEi "$RESEARCH_MARKERS"; then
+  emit_allow_ctx "RESEARCH-SUBAGENTS SKILL: fanning out research subagents. If composing a WAVE, invoke the research-subagents skill for the decomposition discipline (decompose before counting, default N=10, question-type + named-entity gates, 6-field briefs, adversarial-sampling floor, OASIS stop). The resident CLAUDE.md invariant carries the core."
   exit 0
 fi
 
@@ -93,6 +104,7 @@ RESEARCH_COUNT=$(echo "$PROMPT" | grep -oEi "$RESEARCH_KEYWORDS" 2>/dev/null | w
 
 # If clearly research-oriented (more research keywords than implementation), allow silently
 if [ "$RESEARCH_COUNT" -gt "$IMPL_COUNT" ] && [ "$IMPL_COUNT" -le 1 ]; then
+  emit_allow_ctx "RESEARCH-SUBAGENTS SKILL: research-oriented subagent spawn. If composing a research WAVE, invoke the research-subagents skill for the decomposition discipline (decompose before counting, default N=10, adversarial-sampling floor, OASIS stop, synthesis-bottleneck rules). The resident CLAUDE.md invariant carries the core."
   exit 0
 fi
 

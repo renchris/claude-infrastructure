@@ -1,5 +1,5 @@
 ---
-description: Breadth-first multi-axis research via parallel subagents. Renders decomposition table, classifies question-type, audits named entities, fires wave with adversarial sampling. Default N=10. Applies ~/.claude/rules/research-subagents.md verbatim. Use for "how to improve X", "research the design space of Y", "all angles on Z". For depth-first root-cause debugging, use /investigate instead.
+description: Breadth-first multi-axis research via parallel subagents. Renders decomposition table, classifies question-type, audits named entities, fires wave with adversarial sampling. Default N=10. Invokes + applies the research-subagents skill verbatim. Use for "how to improve X", "research the design space of Y", "all angles on Z". For depth-first root-cause debugging, use /investigate instead.
 argument-hint: <topic to research>
 ---
 
@@ -7,7 +7,7 @@ argument-hint: <topic to research>
 
 **Topic**: $ARGUMENTS
 
-Apply `~/.claude/rules/research-subagents.md` verbatim. Render each of the five mandatory pre-spawn artifacts below BEFORE spawning anything. If the topic resolves as Task-Category B (depth-first multi-hop reasoning over a single subsystem), stop and surface to user — single-agent wins there; this command is wrong.
+First invoke the **research-subagents** skill (via the Skill tool) to load the full discipline, then apply it verbatim. Render each of the five mandatory pre-spawn artifacts below BEFORE spawning anything. If the topic resolves as Task-Category B (depth-first multi-hop reasoning over a single subsystem), stop and surface to user — single-agent wins there; this command is wrong.
 
 ---
 
