@@ -39,6 +39,17 @@ add() { jq --arg p "$1" --arg pid "$2" --arg cwd "$3" --arg sid "$4" --argjson s
 tx() { local sid="$1" ago="$2"; local ts; ts="$(TZ=UTC date -j -f %s "$((NOW-ago))" +%Y-%m-%dT%H:%M:%S 2>/dev/null).000Z"
        printf '{"type":"assistant","isSidechain":false,"timestamp":"%s","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}\n' "$ts" > "$D/proj/slug/$sid.jsonl"; }
 cause() { "$C" "$1" --json 2>/dev/null | jq -r '.cause'; }
+# a real git repo whose HEAD == origin/main (work LANDED). `dirty` arg (any value) leaves the tree dirty.
+mkrepo() { local r="$1" dirty="${2:-}"; mkdir -p "$r"; git -C "$r" init -q
+           git -C "$r" config user.email t@t; git -C "$r" config user.name t
+           echo a > "$r/f"; git -C "$r" add f; git -C "$r" commit -qm c1
+           git -C "$r" update-ref refs/remotes/origin/main HEAD
+           [ -n "$dirty" ] && echo change >> "$r/f"; return 0; }
+# write an implicit-team config (only the in-process `team-lead` placeholder — CC 2.1.178+ writes one
+# for EVERY session, solo ones too). args: sid
+solo_team_cfg() { mkdir -p "$D/teams/session-$1"
+  printf '{"leadSessionId":"%s","members":[{"name":"team-lead","agentType":"team-lead","backendType":"in-process"}]}\n' "$1" \
+    > "$D/teams/session-$1/config.json"; }
 
 @test "active — recent assistant turn (< idle threshold)" {
   reg PANE-A "$LIVE" /repo sidA; tx sidA 30
@@ -80,6 +91,30 @@ cause() { "$C" "$1" --json 2>/dev/null | jq -r '.cause'; }
 @test "finished-teammate — an idle worktree session" {
   reg PANE-A "$LIVE" /tmp/wt-feature-x sidA; tx sidA 9000
   [ "$(cause PANE-A)" = finished-teammate ]
+}
+
+@test "finished — idle solo session (implicit team only) + work LANDED → reapable" {
+  # the done-lifecycle session: idle, only the phantom team-lead member, tree clean & on trunk.
+  mkrepo "$D/landed"; reg PANE-A "$LIVE" "$D/landed" sidDone; tx sidDone 9000; solo_team_cfg sidDone
+  [ "$(cause PANE-A)" = finished ]
+}
+
+@test "finished REQUIRES landed — idle solo session on a DIRTY tree stays owned-wait (never-reap)" {
+  # same session but with uncommitted work: must NOT be reapable, and must NOT be coordination-hang.
+  mkrepo "$D/wip" dirty; reg PANE-A "$LIVE" "$D/wip" sidWip; tx sidWip 9000; solo_team_cfg sidWip
+  c="$(cause PANE-A)"
+  [ "$c" = owned-wait ]
+  [ "$c" != coordination-hang ]
+}
+
+@test "implicit solo team is NOT coordination-hang — regression for the uniform-coordination-hang bug" {
+  # the exact production shape: every session has a teams/session-<sid>/config.json with only team-lead.
+  # Ahead-of-trunk (not landed) so 'finished' can't apply — isolates the team-branch decision alone.
+  mkrepo "$D/ahead"; echo b > "$D/ahead/g"; git -C "$D/ahead" add g; git -C "$D/ahead" commit -qm c2
+  reg PANE-A "$LIVE" "$D/ahead" sidAhead; tx sidAhead 9000; solo_team_cfg sidAhead
+  c="$(cause PANE-A)"
+  [ "$c" != coordination-hang ]
+  [ "$c" = owned-wait ]
 }
 
 @test "owned-wait — idle lead of a team with a LIVE member" {
