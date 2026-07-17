@@ -30,7 +30,10 @@ age_of() { local now mt; now="$(date +%s)"; mt="$(stat -f %m "$1" 2>/dev/null ||
 
 @test "L3-a: silence then output → the heartbeat is FRESH (advanced with the output)" {
   "$RUN" --label b -- bash -c 'sleep 2; echo x' >/dev/null 2>&1
-  [ "$(age_of "$CC_RUN_HEARTBEAT_DIR/b.beat")" -lt 1 ]
+  # age_of is INTEGER seconds; the beat-write→check gap can straddle a second boundary under
+  # suite load, reading age 1 for a beat that is really ~0s old (flake). <2 tolerates that one
+  # boundary while still failing a start-keyed/stale beat (age ≈ the 2s command duration).
+  [ "$(age_of "$CC_RUN_HEARTBEAT_DIR/b.beat")" -lt 2 ]
 }
 
 @test "L3-blind: --expect silent records heartbeat_expectation=none (routes liveness to L1/pid)" {
