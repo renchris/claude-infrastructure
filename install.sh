@@ -161,6 +161,35 @@ if [[ -d "$REPO_DIR/skills" ]]; then
   done
 fi
 
+# --- Global instructions (CLAUDE.md + rules/) — repo is the source of truth ---
+# The lean resident knowledge layer. CLAUDE.md is COPIED as a real file (CC reads ~/.claude/CLAUDE.md
+# as user memory; a symlink into the repo would break across branch switches). rules/ is kept in sync:
+# stale live rule files no longer tracked in the repo are removed (agent-teams.md + research-subagents.md
+# were relocated to skills). PROJECT-only memory stays in the repo at .claude/CLAUDE.md and is NEVER
+# deployed globally — ~/.claude/CLAUDE.md remains the pure global core.
+echo ""
+echo "Global instructions → $CONFIG_DIR/CLAUDE.md + rules/"
+if ! diff -q "$REPO_DIR/CLAUDE.md" "$CONFIG_DIR/CLAUDE.md" >/dev/null 2>&1; then
+  [[ -L "$CONFIG_DIR/CLAUDE.md" ]] && run rm "$CONFIG_DIR/CLAUDE.md"
+  run cp "$REPO_DIR/CLAUDE.md" "$CONFIG_DIR/CLAUDE.md"
+  echo "  ✓ CLAUDE.md ($(wc -l < "$REPO_DIR/CLAUDE.md" | tr -d ' ') lines)"
+  installed=$((installed + 1))
+else
+  skipped=$((skipped + 1))
+fi
+ensure_real_dir "$CONFIG_DIR/rules"
+for live in "$CONFIG_DIR"/rules/*.md; do
+  [[ -f "$live" ]] || continue
+  base="$(basename "$live")"
+  [[ -f "$REPO_DIR/rules/$base" ]] || { run rm -f "$live"; echo "  ✓ removed stale rule $base (relocated to a skill)"; installed=$((installed + 1)); }
+done
+if [[ -d "$REPO_DIR/rules" ]]; then
+  for rf in "$REPO_DIR"/rules/*.md; do
+    [[ -f "$rf" ]] || continue
+    copy_file "$rf" "$CONFIG_DIR/rules/$(basename "$rf")"
+  done
+fi
+
 # --- Status line ---
 echo ""
 echo "Status line → $CONFIG_DIR/"
