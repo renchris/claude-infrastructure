@@ -107,7 +107,7 @@ if $IS_GLOBAL; then
   echo ""
   echo "Bin tools → ~/bin/"
   mkdir -p "$HOME/bin"
-  for tool in claude-latest claude-update claude-versions browsermcp-wrapper.sh claude-accounts; do
+  for tool in claude-latest claude-update claude-versions browsermcp-wrapper.sh claude-accounts claude-kimi; do
     [[ -f "$REPO_DIR/bin/$tool" ]] || continue
     copy_file "$REPO_DIR/bin/$tool" "$HOME/bin/$tool"
   done
