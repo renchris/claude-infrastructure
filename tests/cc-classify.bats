@@ -142,3 +142,31 @@ solo_team_cfg() { mkdir -p "$D/teams/session-$1"
   reg PANE-A "$LIVE" /repo sidNoTx    # no tx file written
   [ "$(cause PANE-A)" = active ]
 }
+
+# ── Gap A (2026-07-17): dead-partner coordination-hang past the horizon + a live co-cwd owner ──────
+@test "coordination-abandoned — dead partner, idle past horizon, LIVE co-cwd owner → reapable (Gap A)" {
+  export CC_CLASSIFY_PS_BIN="$D/bin/ps-none"          # partner (worker-dead) NOT alive
+  export CC_CLASSIFY_COORD_HANG_DEAD_REAP_S=7200
+  mkdir -p "$D/teams/teamZ"
+  reg PANE-A "$LIVE" /shared sidZombie; tx sidZombie 50000   # idle 50000s >> 7200 horizon
+  printf '{"leadSessionId":"sidZombie","members":[{"name":"worker-dead"}]}\n' > "$D/teams/teamZ/config.json"
+  add PANE-LIVE "$LIVE" /shared sidOwner 999999900   # a LIVE distinct session owns the shared cwd
+  [ "$(cause PANE-A)" = coordination-abandoned ]
+}
+
+@test "coordination-hang STAYS never-reap under the horizon even with a live co-cwd owner (Gap A safety)" {
+  export CC_CLASSIFY_PS_BIN="$D/bin/ps-none"
+  export CC_CLASSIFY_COORD_HANG_DEAD_REAP_S=7200
+  mkdir -p "$D/teams/teamH"
+  reg PANE-A "$LIVE" /shared sidRecent; tx sidRecent 1000    # idle 1000s < 7200 horizon
+  printf '{"leadSessionId":"sidRecent","members":[{"name":"worker-x"}]}\n' > "$D/teams/teamH/config.json"
+  add PANE-LIVE "$LIVE" /shared sidOwner 999999900
+  [ "$(cause PANE-A)" = coordination-hang ]
+}
+
+# ── Gap B (2026-07-17): done solo session, dirty shared cwd owned by a live sibling → surface only ─
+@test "finished-shared-review — landed solo, dirty shared cwd owned by a live sibling → surfaced NOT reaped (Gap B)" {
+  mkrepo "$D/shared2" dirty; reg PANE-A "$LIVE" "$D/shared2" sidDone2; tx sidDone2 9000; solo_team_cfg sidDone2
+  add PANE-LIVE "$LIVE" "$D/shared2" sidSibling 999999900   # live sibling owns the unrelated dirt
+  [ "$(cause PANE-A)" = finished-shared-review ]
+}
