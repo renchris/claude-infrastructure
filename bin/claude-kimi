@@ -1,0 +1,287 @@
+#!/usr/bin/env bash
+# shellcheck disable=SC2015  # file-wide: the selftest's `[ test ] && ok || bad` reporter idiom is
+#                              intentional — ok()/bad() always end in printf (return 0), so the `|| C`
+#                              branch never runs spuriously. Same convention as scripts/*-gate.sh.
+# claude-kimi — isolated, metered Kimi K3 launcher for Claude Code.
+#
+# WHY THIS EXISTS (tokenomics verdict 2026-07-17, memory project-tokenomics-plan-swap-verdict):
+#   Keep all 4 Claude Max plans; do NOT swap a slot. The ONE net-positive ADD is a METERED
+#   Kimi K3 key for (a) the narrow frontend-design gap where K3 was measured to beat Fable 5
+#   (Frontend Code Arena, Tom's Hardware 2026-07-17) and (b) an Anthropic-outage / limit hedge.
+#   Metered = pay-per-token, ~$0 when idle. This launcher makes adding the key the ONLY step.
+#
+# HOW IT PLUGS IN (verified against primary sources, not the tweet):
+#   Kimi's API exposes an Anthropic-Messages-API-compatible endpoint, so Claude Code (Anthropic-
+#   native) talks to it directly via ANTHROPIC_BASE_URL + ANTHROPIC_AUTH_TOKEN — NO proxy, NO
+#   separate CLI. The METERED path is the Moonshot Open Platform:
+#       ANTHROPIC_BASE_URL = https://api.moonshot.ai/anthropic   (pay-per-token, ~$0 idle)
+#   The api.kimi.com/coding endpoint the handoff named is the Kimi Code *subscription* console
+#   (Andante/Moderato/Allegretto+ membership = flat monthly, NOT ~$0 idle) — override to it only
+#   if you deliberately buy a membership instead (see KIMI_BASE_URL / KIMI_MODEL below).
+#
+# ISOLATION (must never touch the 4 Max launchers):
+#   * Uses its OWN config dir OUTSIDE the ~/.claude-* namespace ($HOME/.config/claude-kimi) so the
+#     knowledge-layer mirror (config-mirror-assert.sh, which captures any $HOME/.claude-*) can NEVER
+#     symlink the Max hooks/statusline/frontier machinery into it or seed a Max account's identity.
+#   * Auth is a bearer TOKEN (ANTHROPIC_AUTH_TOKEN), never the macOS-Keychain OAuth the Max accounts
+#     use — so it cannot read, refresh, or corrupt any Max account's credentials.
+#   * A standalone script, NOT a zsh function — it never goes through _cc_route_check / _cc_sync_account.
+#
+# COST MODEL (metered, Moonshot K3 as of 2026-07-16): $3.00 / MTok input (cache-miss),
+#   $0.30 / MTok cache-hit, $15.00 / MTok output. No idle/subscription cost. Your key, your spend.
+#
+# USAGE:
+#   claude-kimi [claude-args...]   Launch a Kimi K3 session (interactive by default — no forced
+#                                  --permission-mode auto: metered $ + un-burned-in agentic behaviour.
+#                                  Pass --permission-mode auto yourself once you trust it).
+#   claude-kimi status             Show whether the key is wired + the resolved endpoint/model/cost.
+#   claude-kimi set-key            Read a key from STDIN (not argv → no shell-history leak) and store
+#                                  it 0600 at the key file.
+#   claude-kimi selftest           Run internal RED-proof checks (isolation, no-key notice, contract).
+#   claude-kimi help               This help.
+#
+# ACTIVATION (turnkey — the ONLY step the operator must do): provide a key one of two ways —
+#   1. export KIMI_API_KEY=sk-...            (ephemeral, per-shell)
+#   2. claude-kimi set-key                   (persistent, stored 0600 at the key file)
+#   Get a metered key at https://platform.moonshot.ai/  (console → API keys). ~$0 until you use it.
+#
+# OVERRIDES (all optional — sensible metered defaults):
+#   KIMI_API_KEY        the key (takes precedence over the key file)
+#   KIMI_KEY_FILE       key-file path                 (default $HOME/.config/kimi/key)
+#   KIMI_BASE_URL       Anthropic-compatible endpoint (default https://api.moonshot.ai/anthropic)
+#   KIMI_MODEL          model id                      (default kimi-k3[1m]; try kimi-k3 if [1m] is
+#                                                      tier-gated on your account/region)
+#   KIMI_EFFORT         seed effort                   (default max; may be a no-op on K3, which
+#                                                      thinks deeply by default)
+#   CLAUDE_KIMI_CONFIG_DIR   isolated config dir      (default $HOME/.config/claude-kimi)
+#   CLAUDE_KIMI_CLAUDE_BIN   claude binary to exec    (default: resolve pinned track, then PATH)
+#   CLAUDE_KIMI_DRYRUN=1     print the resolved env contract + argv instead of exec'ing (for tests)
+
+set -euo pipefail
+
+# --- resolvable defaults (all overridable via env) --------------------------------------------
+KIMI_BASE_URL="${KIMI_BASE_URL:-https://api.moonshot.ai/anthropic}"
+KIMI_MODEL="${KIMI_MODEL:-kimi-k3[1m]}"           # single-source; NEVER unquoted (the [1m] globs)
+KIMI_EFFORT="${KIMI_EFFORT:-max}"
+KIMI_KEY_FILE="${KIMI_KEY_FILE:-$HOME/.config/kimi/key}"
+KIMI_CONFIG_DIR="${CLAUDE_KIMI_CONFIG_DIR:-$HOME/.config/claude-kimi}"
+KIMI_PRICE="metered — \$3.00/MTok in (cache-miss) · \$0.30/MTok cache-hit · \$15.00/MTok out · ~\$0 idle"
+KEY_URL="https://platform.moonshot.ai/"
+
+# --- key resolution: env var wins, else the 0600 key file -------------------------------------
+_resolve_key() {
+  if [ -n "${KIMI_API_KEY:-}" ]; then printf '%s' "$KIMI_API_KEY"; return 0; fi
+  if [ -f "$KIMI_KEY_FILE" ]; then
+    # strip trailing newline/whitespace; a key file must not silently carry a stray \n
+    tr -d '[:space:]' < "$KIMI_KEY_FILE"
+    return 0
+  fi
+  return 1
+}
+
+# --- the env contract, as KEY=VALUE lines (single source for dryrun, selftest, and exec) -------
+# Emitted with the RESOLVED key redacted; the exec path re-derives the real key.
+_emit_contract() {
+  cat <<EOF
+ANTHROPIC_BASE_URL=$KIMI_BASE_URL
+ANTHROPIC_AUTH_TOKEN=<key-present>
+ANTHROPIC_MODEL=$KIMI_MODEL
+ANTHROPIC_DEFAULT_OPUS_MODEL=$KIMI_MODEL
+ANTHROPIC_DEFAULT_SONNET_MODEL=$KIMI_MODEL
+ANTHROPIC_DEFAULT_HAIKU_MODEL=$KIMI_MODEL
+ANTHROPIC_DEFAULT_FABLE_MODEL=$KIMI_MODEL
+CLAUDE_CODE_SUBAGENT_MODEL=$KIMI_MODEL
+CLAUDE_CODE_MAX_CONTEXT_TOKENS=1048576
+CLAUDE_CODE_AUTO_COMPACT_WINDOW=1048576
+ENABLE_TOOL_SEARCH=false
+CLAUDE_CONFIG_DIR=$KIMI_CONFIG_DIR
+DISABLE_AUTOUPDATER=1
+EOF
+}
+
+# --- locate the claude binary (pinned track first, then PATH) ----------------------------------
+_resolve_bin() {
+  if [ -n "${CLAUDE_KIMI_CLAUDE_BIN:-}" ]; then printf '%s' "$CLAUDE_KIMI_CLAUDE_BIN"; return 0; fi
+  local pinned="$HOME/.claude-183/node_modules/.bin/claude"
+  if [ -x "$pinned" ]; then printf '%s' "$pinned"; return 0; fi
+  if command -v claude-latest >/dev/null 2>&1; then command -v claude-latest; return 0; fi
+  if command -v claude >/dev/null 2>&1; then command -v claude; return 0; fi
+  return 1
+}
+
+# Seed a minimal, isolated settings.json into the Kimi config dir IF absent (never clobbers operator
+# edits). Embedded (not read from a repo-relative file) so it survives deployment to ~/bin, where a
+# ../settings-templates path would not resolve. Kept in sync with settings-templates/kimi-settings.example.json.
+_seed_settings() {
+  local dst="$1"
+  [ -e "$dst" ] && return 0
+  cat > "$dst" <<'JSON'
+{
+  "_comment": "ISOLATED Kimi K3 metered session — self-contained, loads NO ~/.claude Max hook or statusline (that one assumes Anthropic OAuth quota). Edit freely; claude-kimi never overwrites this. Docs: docs/KIMI_METERED_INTEGRATION.md",
+  "includeCoAuthoredBy": false,
+  "effortLevel": "xhigh",
+  "statusLine": {
+    "type": "command",
+    "command": "printf '🌙 Kimi K3 · metered (your $, ~$3/$15 per MTok) · isolated from the 4 Max accounts'"
+  },
+  "permissions": {
+    "deny": ["Read(./.env)", "Read(./.env.local)", "Read(**/*.key)", "Read(**/*.pem)"]
+  }
+}
+JSON
+}
+
+_activation_notice() {
+  cat >&2 <<EOF
+claude-kimi — NOT yet activated (no Kimi key found). ~\$0 idle; nothing has run or cost anything.
+
+To activate (the ONLY step — the key is your metered spend):
+  1. Get a metered key:  $KEY_URL   (console → API keys)
+  2. Provide it, either:
+       export KIMI_API_KEY=sk-...          # this shell only
+     or
+       claude-kimi set-key                 # persistent, stored 0600 at $KIMI_KEY_FILE
+  3. Run:  claude-kimi                      # a Kimi K3 session, isolated from your 4 Max accounts
+
+Cost: $KIMI_PRICE
+Docs: docs/KIMI_METERED_INTEGRATION.md
+EOF
+}
+
+_cmd_status() {
+  local key_state endpoint_kind
+  if _resolve_key >/dev/null 2>&1; then key_state="WIRED ✓ (key found)"; else key_state="not wired (no key — ~\$0 idle)"; fi
+  case "$KIMI_BASE_URL" in
+    *moonshot.ai/anthropic*|*platform.kimi*) endpoint_kind="metered pay-per-token (Moonshot Open Platform)" ;;
+    *kimi.com/coding*)                       endpoint_kind="SUBSCRIPTION console (flat monthly — NOT ~\$0 idle)" ;;
+    *)                                       endpoint_kind="custom" ;;
+  esac
+  cat <<EOF
+claude-kimi status
+  key:         $key_state
+  key sources: \$KIMI_API_KEY (env)  >  $KIMI_KEY_FILE (file, 0600)
+  endpoint:    $KIMI_BASE_URL
+               ($endpoint_kind)
+  model:       $KIMI_MODEL
+  config dir:  $KIMI_CONFIG_DIR   (isolated — outside the ~/.claude-* Max mirror namespace)
+  auth:        ANTHROPIC_AUTH_TOKEN (bearer) — never the Max accounts' Keychain OAuth
+  cost:        $KIMI_PRICE
+EOF
+}
+
+_cmd_set_key() {
+  local dir; dir="$(dirname "$KIMI_KEY_FILE")"
+  mkdir -p "$dir"; chmod 700 "$dir" 2>/dev/null || true
+  printf 'Paste your Kimi metered key (from %s), then press Enter:\n' "$KEY_URL" >&2
+  local key=""
+  IFS= read -r key || true
+  key="$(printf '%s' "$key" | tr -d '[:space:]')"
+  if [ -z "$key" ]; then echo "✗ no key read from STDIN — nothing written." >&2; return 1; fi
+  ( umask 077; printf '%s\n' "$key" > "$KIMI_KEY_FILE" )
+  chmod 600 "$KIMI_KEY_FILE"
+  echo "✓ key stored 0600 at $KIMI_KEY_FILE — run 'claude-kimi' to launch." >&2
+}
+
+_cmd_selftest() {
+  local fails=0 n=0
+  ok()  { n=$((n+1)); printf '  ok %d - %s\n' "$n" "$1"; }
+  bad() { n=$((n+1)); fails=$((fails+1)); printf '  NOT ok %d - %s\n' "$n" "$1"; }
+  local tmp; tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' RETURN
+
+  # ST-a: no key → _resolve_key fails (and the launch path shows the activation notice).
+  ( unset KIMI_API_KEY; KIMI_KEY_FILE="$tmp/none"; _resolve_key >/dev/null 2>&1 ) \
+    && bad "no-key → _resolve_key must fail" || ok "no-key → _resolve_key fails (activation-notice path)"
+
+  # ST-b: key file resolves, whitespace-stripped (call _resolve_key directly in a subshell so it
+  #        reads the overridden globals — the real resolver, not a re-implementation).
+  printf '  sk-abc123  \n' > "$tmp/key"
+  local got; got="$( unset KIMI_API_KEY; KIMI_KEY_FILE="$tmp/key"; _resolve_key )"
+  [ "$got" = "sk-abc123" ] && ok "key-file resolves, whitespace-stripped" || bad "key-file resolve got '$got'"
+
+  # ST-c: env var wins over the file.
+  local envk; envk="$( KIMI_API_KEY='env-wins' KIMI_KEY_FILE="$tmp/key"; _resolve_key )"
+  [ "$envk" = "env-wins" ] && ok "env KIMI_API_KEY precedes the key file" || bad "env precedence got '$envk'"
+
+  # ST-d: ISOLATION — the config dir must be OUTSIDE the ~/.claude-* Max mirror namespace and must
+  #        never be one of the five Max config dirs. This is the load-bearing safety invariant.
+  case "$KIMI_CONFIG_DIR" in
+    "$HOME/.claude"|"$HOME/.claude-next"|"$HOME/.claude-secondary"|"$HOME/.claude-tertiary"|"$HOME/.claude-quaternary")
+      bad "config dir '$KIMI_CONFIG_DIR' IS a Max account dir — isolation broken" ;;
+    "$HOME"/.claude-*)
+      bad "config dir '$KIMI_CONFIG_DIR' matches \$HOME/.claude-* → mirror would inherit Max hooks" ;;
+    *)
+      ok "config dir is isolated (outside \$HOME/.claude-* mirror namespace)" ;;
+  esac
+
+  # ST-e: the emitted contract carries the metered endpoint, the isolated config dir, AUTH_TOKEN
+  #        (not API_KEY), ToolSearch off, and the model string EXACTLY (glob-safe — [1m] intact).
+  # NOTE: the model value (kimi-k3[1m]) is regex/glob-hostile — [1m] is a regex character class.
+  # Any check (or shell handling) of it MUST be fixed-string (grep -F) / quoted. This is the very
+  # property the launcher protects by single-quoting the value everywhere.
+  local c; c="$(_emit_contract)"
+  printf '%s\n' "$c" | grep -Fqx "ANTHROPIC_MODEL=$KIMI_MODEL"         && ok "contract model string exact (glob/regex-safe)" || bad "contract model string mangled"
+  printf '%s\n' "$c" | grep -q  "^ANTHROPIC_AUTH_TOKEN="              && ok "contract uses ANTHROPIC_AUTH_TOKEN" || bad "contract missing AUTH_TOKEN"
+  printf '%s\n' "$c" | grep -q  "^ANTHROPIC_API_KEY="                 && bad "contract must NOT set ANTHROPIC_API_KEY (conflicts w/ AUTH_TOKEN)" || ok "contract omits conflicting ANTHROPIC_API_KEY"
+  printf '%s\n' "$c" | grep -qx "ENABLE_TOOL_SEARCH=false"            && ok "ToolSearch disabled (Kimi unsupported)" || bad "ENABLE_TOOL_SEARCH not false"
+  printf '%s\n' "$c" | grep -Fqx "CLAUDE_CONFIG_DIR=$KIMI_CONFIG_DIR" && ok "contract pins the isolated config dir" || bad "contract config-dir wrong"
+
+  # ST-f: no hardcoded Anthropic model id leaks into Kimi routing (would silently bill Anthropic
+  #        rates against a Kimi endpoint / route a real Anthropic call). Comments stripped first.
+  if sed 's/[[:space:]]*#.*$//' "$0" | grep -qE 'claude-(opus|sonnet|haiku|fable)-[0-9]'; then
+    bad "an Anthropic model id appears in CODE (should route only via \$KIMI_MODEL)"
+  else
+    ok "no Anthropic model id hardcoded in routing code"
+  fi
+
+  # ST-g: the embedded settings seed is valid JSON and loads NO Max statusline (isolation).
+  local seed; seed="$(_seed_settings "$tmp/seed.json"; cat "$tmp/seed.json")"
+  if command -v jq >/dev/null 2>&1; then
+    printf '%s' "$seed" | jq -e . >/dev/null 2>&1 && ok "embedded settings seed is valid JSON" || bad "embedded settings seed is invalid JSON"
+  else
+    ok "embedded settings seed written (jq absent — skipped strict JSON parse)"
+  fi
+  printf '%s' "$seed" | grep -q 'claude/statusline.sh' && bad "seed loads the Max statusline (isolation leak)" || ok "seed loads no Max statusline (isolated)"
+
+  printf '%s\n' "selftest: $((n - fails))/$n checks passed"
+  [ "$fails" -eq 0 ]
+}
+
+# --- dispatch ----------------------------------------------------------------------------------
+case "${1:-}" in
+  status|--status)   _cmd_status; exit 0 ;;
+  set-key|--set-key) _cmd_set_key; exit $? ;;
+  selftest)          _cmd_selftest; exit $? ;;
+  help|--help|-h)
+    sed -n '2,60p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+esac
+
+# --- launch path -------------------------------------------------------------------------------
+KEY="$(_resolve_key)" || { _activation_notice; exit 0; }   # no key → turnkey notice, ~$0, exit 0
+
+CLAUDE_BIN="$(_resolve_bin)" || { echo "✗ claude binary not found (set CLAUDE_KIMI_CLAUDE_BIN)." >&2; exit 1; }
+mkdir -p "$KIMI_CONFIG_DIR"
+_seed_settings "$KIMI_CONFIG_DIR/settings.json"   # once; never clobbers operator edits
+
+if [ "${CLAUDE_KIMI_DRYRUN:-0}" = "1" ]; then
+  echo "# claude-kimi DRYRUN — would exec: $CLAUDE_BIN --effort $KIMI_EFFORT $*"
+  _emit_contract
+  exit 0
+fi
+
+# Export the verified metered contract, drop any conflicting inherited API key, and hand off.
+export ANTHROPIC_BASE_URL="$KIMI_BASE_URL"
+export ANTHROPIC_AUTH_TOKEN="$KEY"
+export ANTHROPIC_MODEL="$KIMI_MODEL"
+export ANTHROPIC_DEFAULT_OPUS_MODEL="$KIMI_MODEL"
+export ANTHROPIC_DEFAULT_SONNET_MODEL="$KIMI_MODEL"
+export ANTHROPIC_DEFAULT_HAIKU_MODEL="$KIMI_MODEL"
+export ANTHROPIC_DEFAULT_FABLE_MODEL="$KIMI_MODEL"
+export CLAUDE_CODE_SUBAGENT_MODEL="$KIMI_MODEL"
+export CLAUDE_CODE_MAX_CONTEXT_TOKENS=1048576
+export CLAUDE_CODE_AUTO_COMPACT_WINDOW=1048576
+export ENABLE_TOOL_SEARCH=false
+export CLAUDE_CONFIG_DIR="$KIMI_CONFIG_DIR"
+export DISABLE_AUTOUPDATER=1
+unset ANTHROPIC_API_KEY 2>/dev/null || true       # Moonshot guide: remove to avoid AUTH_TOKEN conflict
+
+exec "$CLAUDE_BIN" --effort "$KIMI_EFFORT" "$@"
