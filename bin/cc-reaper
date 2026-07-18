@@ -45,14 +45,23 @@ mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
 log(){ printf '[%s] %s\n' "$(date '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null)" "$*" >> "$LOG_FILE" 2>/dev/null || true; }
 say(){ printf '%s\n' "$*"; }
 
-# clean AND nothing ahead of trunk — the load-bearing work-landed re-check (post-classify race guard).
+# clean AND the branch's content is on trunk — the load-bearing work-landed re-check (post-classify race
+# guard). P0-17 landed-by-CONTENT (a18 L-10): a squash/cherry-pick land (different sha, same content)
+# leaves HEAD "N ahead" by COUNT though the work is durably on trunk; a count check DEFERred it forever.
 work_landed() {
   local cwd="$1"
   [ -d "$cwd" ] || return 1
   "$GIT_BIN" -C "$cwd" rev-parse --git-dir >/dev/null 2>&1 || return 1
   [ -z "$("$GIT_BIN" -C "$cwd" status --porcelain 2>/dev/null)" ] || return 1
   local ahead; ahead="$("$GIT_BIN" -C "$cwd" rev-list --count "$TRUNK"..HEAD 2>/dev/null)" || return 1
-  [ "${ahead:-1}" = 0 ]
+  [ "${ahead:-1}" = 0 ] && return 0                              # fast path: 0 ahead by COUNT → landed
+  # content path: `git cherry` patch-id equivalence ('+' = genuinely unlanded); tree-diff-0 = squash backstop.
+  local cherry_out
+  if cherry_out="$("$GIT_BIN" -C "$cwd" cherry "$TRUNK" HEAD 2>/dev/null)"; then
+    printf '%s\n' "$cherry_out" | grep -q '^+' || return 0
+  fi
+  "$GIT_BIN" -C "$cwd" diff --quiet "$TRUNK" HEAD 2>/dev/null && return 0
+  return 1
 }
 
 checkpoint_first() { # <cwd> <name> <sid> — snapshot WIP to refs/wip/<name>/LAST (proven plumbing)
