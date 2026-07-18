@@ -195,3 +195,27 @@ solo_team_cfg() { mkdir -p "$D/teams/session-$1"
   add PANE-B "$LIVE" /work sidB 999999900000
   [ "$(cause PANE-A)" != handed-off-lead ]
 }
+
+# ── P0-13 task 2: in-flight tool guard (a18 L-13) ───────────────────────────────────────────────
+@test "in-flight tool guard: a trailing unmatched tool_use (long tool call) → active, not finished (a18 L-13)" {
+  # a solo session mid-way through ONE long Bash call (12-min build/test): the transcript's LAST record
+  # is the assistant tool_use, timestamped at call START (20 min ago), no tool_result yet. Clean+landed.
+  # IDLE crosses 300s mid-call ⇒ old code reads `finished`; a running tool means NOT idle ⇒ active.
+  mkrepo "$D/build"; reg PANE-A "$LIVE" "$D/build" sidBuild
+  ts="$(TZ=UTC date -j -f %s "$((NOW-1200))" +%Y-%m-%dT%H:%M:%S 2>/dev/null).000Z"
+  printf '{"type":"assistant","isSidechain":false,"timestamp":"%s","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_build","name":"Bash","input":{"command":"pnpm -s test"}}]}}\n' "$ts" > "$D/proj/slug/sidBuild.jsonl"
+  [ "$(cause PANE-A)" = active ]
+}
+
+@test "in-flight guard does NOT fire once the tool_result has landed (matched tool_use → finished)" {
+  # same tool call but its tool_result HAS landed (user record) and a final text turn closed the turn →
+  # not in-flight → the normal finished path applies (clean+landed solo).
+  mkrepo "$D/done"; reg PANE-A "$LIVE" "$D/done" sidDone3; solo_team_cfg sidDone3
+  ts="$(TZ=UTC date -j -f %s "$((NOW-9000))" +%Y-%m-%dT%H:%M:%S 2>/dev/null).000Z"
+  {
+    printf '{"type":"assistant","isSidechain":false,"timestamp":"%s","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_x","name":"Bash","input":{"command":"pnpm -s test"}}]}}\n' "$ts"
+    printf '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_x","content":"ok"}]}}\n'
+    printf '{"type":"assistant","isSidechain":false,"timestamp":"%s","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}\n' "$ts"
+  } > "$D/proj/slug/sidDone3.jsonl"
+  [ "$(cause PANE-A)" = finished ]
+}

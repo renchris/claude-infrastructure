@@ -102,6 +102,27 @@ handoff_fired() { # <jsonl> → 0 if the session actually FIRED a SELF-/handoff 
         END { exit(found ? 0 : 1) }'
 }
 
+tool_in_flight() { # <jsonl> → 0 if a tool is RUNNING: the transcript's LAST record is an assistant
+  # tool_use whose id has no matching tool_result anywhere (a18 L-13). "idle" must mean no-new-assistant
+  # AND no-tool-in-flight; a single long Bash/build/test call otherwise leaves the last record an
+  # assistant tool_use timestamped at call START, so IDLE crosses 300s mid-call and reads `finished`.
+  # In a real transcript a finished turn's last record is an assistant TEXT turn or a `user` tool_result
+  # (never a bare trailing tool_use) — so this fires ONLY for a genuine mid-call state.
+  local f="$1" last_rec tu_id
+  [ -f "$f" ] || return 1
+  last_rec="$(tail -n 1 "$f" 2>/dev/null)"
+  [ -n "$last_rec" ] || return 1
+  # last record must be an assistant message carrying at least one tool_use block
+  printf '%s' "$last_rec" | jq -e '.type=="assistant" and ((.message.content // []) | map(select(.type=="tool_use")) | length > 0)' >/dev/null 2>&1 || return 1
+  tu_id="$(printf '%s' "$last_rec" | jq -r '(.message.content // []) | map(select(.type=="tool_use")) | last | .id // empty' 2>/dev/null)"
+  if [ -n "$tu_id" ]; then
+    # a matching tool_result (a `user` record block) anywhere ⇒ the tool returned ⇒ not in-flight
+    jq -rc 'select(.type=="user") | (.message.content // []) | if type=="array" then .[] else empty end | select(.type=="tool_result") | .tool_use_id // empty' "$f" 2>/dev/null \
+      | grep -qxF "$tu_id" && return 1
+  fi
+  return 0   # trailing tool_use with no (matching) result → a tool is running
+}
+
 find_successor() { # <this-sid> <this-cwd> <since-epoch-SECONDS> <all-json> → candidate {paneUUID,pid} objects, one/line
   local sid="$1" cwd="$2" since="${3:-0}" all="$4"
   # A handoff continues the SAME work in the SAME cwd. A successor is a DISTINCT session (different
@@ -235,6 +256,15 @@ classify_entry() { # <entry-json> <all-sessions-json>
       CAUSE=handed-off-lead; DETAIL="fired /handoff; LIVE successor $found in cwd; work-landed=$LANDED"; return 0
     fi
     DETAIL="fired /handoff but NO live successor found — not safe to reap"
+  fi
+
+  # 4.5 in-flight tool → active (a18 L-13). A single long tool call (12-min build/test) leaves the
+  #     transcript's LAST record an assistant tool_use timestamped at call START; IDLE crosses 300s
+  #     mid-call and the session otherwise reads `finished`/`finished-teammate`. A running tool ⇒ NOT
+  #     idle ⇒ never-reap. Checked BEFORE the finished/finished-teammate branches (after handed-off-lead,
+  #     whose own last record is the handoff tool_use with its tool_result already landed).
+  if [ -n "$tj" ] && tool_in_flight "$tj"; then
+    CAUSE=active; DETAIL="in-flight tool call (unmatched trailing tool_use) — running, not idle (never-reap)"; return 0
   fi
 
   # 5. finished-teammate: a worktree/teammate session, idle, no live successor needed
