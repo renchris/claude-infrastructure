@@ -155,3 +155,27 @@ td_called() { [ -f "$D/td-calls" ]; }
   [ "$status" -eq 0 ]
   echo "$output" | grep -q 'NOT reaped'
 }
+
+@test "identity pin (a17 S-4): classify-time pid+lstart are forwarded to cc-teardown as --expect-*" {
+  # cc-classify emits pid+lstart; cc-reaper must thread them to cc-teardown so a classify→act recycle
+  # is caught. A mock classify supplies both; the teardown call must carry --expect-pid/--expect-lstart.
+  cat > "$D/bin/classify" <<EOF
+#!/bin/bash
+jq -nc '[{name:"t",paneUUID:"PANE-A",account:"next",cwd:"$D/clean",cause:"finished",idle_s:999,work_landed:"yes",pid:4242,lstart:"Fri Jul 18 10:00:00 2026",successor:"PANE-SUCC",detail:"x"}]'
+EOF
+  chmod +x "$D/bin/classify"; export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  td_called
+  grep -q -- '--expect-pid' "$D/td-calls"
+  grep -q -- '4242' "$D/td-calls"
+  grep -q -- '--expect-lstart' "$D/td-calls"
+}
+
+@test "identity pin: no pid/lstart from classify → no --expect-* args (back-compat, no crash)" {
+  mock_classify finished "$D/clean" 999 yes PANE-A   # legacy classify JSON: no pid/lstart fields
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  td_called
+  ! grep -q -- '--expect-pid' "$D/td-calls"
+}
