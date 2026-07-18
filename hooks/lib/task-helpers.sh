@@ -1,27 +1,72 @@
 #!/bin/bash
 # Shared functions for task list hooks.
 # Source: . "$(dirname "$0")/lib/task-helpers.sh"
+# Env overrides (tests): CC_TASKS_DIR, CC_TASKS_INDEX.
 
-TASKS_DIR="$HOME/.claude/tasks"
+TASKS_DIR="${CC_TASKS_DIR:-$HOME/.claude/tasks}"
+TASKS_INDEX="${CC_TASKS_INDEX:-$HOME/.claude/tasks-index.json}"
 
-# Find the active task list (most recently modified dir with task .json files).
+# Find the active task list for a project (G-P14-7). When a project is known,
+# ONLY lists the tasks-index maps to THAT project are eligible — a globally
+# most-recent FOREIGN list can never surface. Unmapped (UUID/foreign) lists and a
+# missing index ⇒ no match (never a global fallback). With no project (legacy /
+# non-project context), falls back to global-most-recent.
+#   Args: $1 = project dir (default $CLAUDE_PROJECT_DIR), $2 = index (default $TASKS_INDEX)
 # Prints the task list ID (directory basename), or empty string if none found.
 find_active_list() {
+    local proj="${1:-${CLAUDE_PROJECT_DIR:-}}"
+    local index="${2:-$TASKS_INDEX}"
     local best="" best_time=0
     for dir in "$TASKS_DIR"/*/; do
         [ ! -d "$dir" ] && continue
+        local listid
+        listid=$(basename "$dir")
+        # Project scoping: skip lists not mapped to this project.
+        if [ -n "$proj" ]; then
+            local mapped=""
+            [ -f "$index" ] && mapped=$(jq -r --arg k "$listid" '.taskLists[$k].project // ""' "$index" 2>/dev/null)
+            [ "$mapped" = "$proj" ] || continue
+        fi
         # Any numeric .json files? (task files are 1.json, 2.json, etc.)
         local latest
+        # SC2012: filenames are controlled (numeric N.json) → ls -t is the simplest
+        # portable mtime sort; find has no BSD-portable -printf mtime ordering.
+        # shellcheck disable=SC2012
         latest=$(ls -t "$dir"/[0-9]*.json 2>/dev/null | head -1)
         [ -z "$latest" ] && continue
         local mtime
         mtime=$(stat -f %m "$latest" 2>/dev/null || echo "0")
         if [ "$mtime" -gt "$best_time" ]; then
             best_time=$mtime
-            best=$(basename "$dir")
+            best=$listid
         fi
     done
     echo "$best"
+}
+
+# Roll up EVERY project's open task lists (pending + in_progress > 0), one line
+# each: "<projectName> | <N> open | <listid> | <projectPath>". Unmapped lists are
+# labelled (unmapped) — never silently dropped. This is the desk's cross-project
+# "what task work is open everywhere?" verb.
+#   Args: $1 = index (default $TASKS_INDEX)
+all_open_rollup() {
+    local index="${1:-$TASKS_INDEX}" dir listid open proj pn
+    for dir in "$TASKS_DIR"/*/; do
+        [ ! -d "$dir" ] && continue
+        listid=$(basename "$dir")
+        open=$(cat "$dir"/[0-9]*.json 2>/dev/null \
+                 | jq -s '[.[] | select(.status=="pending" or .status=="in_progress")] | length' 2>/dev/null)
+        case "$open" in ''|*[!0-9]*) open=0 ;; esac
+        [ "$open" -gt 0 ] || continue
+        proj=""; pn=""
+        if [ -f "$index" ]; then
+            proj=$(jq -r --arg k "$listid" '.taskLists[$k].project // ""' "$index" 2>/dev/null)
+            pn=$(jq -r --arg k "$listid" '.taskLists[$k].projectName // ""' "$index" 2>/dev/null)
+        fi
+        [ -n "$pn" ]   || pn="(unmapped)"
+        [ -n "$proj" ] || proj="(unmapped)"
+        printf '%-24s | %3d open | %s | %s\n' "$pn" "$open" "$listid" "$proj"
+    done
 }
 
 # Regenerate _summary.json for a task list directory.
@@ -117,3 +162,12 @@ generate_tasks_md() {
         echo "*Source: \`~/.claude/tasks/${list_id}/\` · JSON: \`.claude-tasks/_current/_summary.json\`*"
     } > "$output"
 }
+
+# ── CLI entrypoint — runs ONLY when executed directly, never when sourced. ───────
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+    case "${1:-}" in
+        --all-open) all_open_rollup "${2:-$TASKS_INDEX}" ;;
+        --active)   find_active_list "${2:-${CLAUDE_PROJECT_DIR:-}}" "${3:-$TASKS_INDEX}" ;;
+        *) echo "usage: task-helpers.sh --all-open [index] | --active [project] [index]" >&2; exit 2 ;;
+    esac
+fi

@@ -76,3 +76,20 @@ gated. `open`/`in-progress`/`UNKNOWN` are what `--list-open` (§3) treats as ope
 `complete`/`superseded` drop out.
 
 ---
+
+## 5. Project-scoped tasks + `--all-open` rollup (Task 5 / G-P14-7)
+
+**No new wiring** — `setup-task-symlinks.sh` (SessionStart) now resolves the active list
+via `find_active_list "$PROJECT_DIR"`, so a foreign project's list can no longer surface as
+this project's `TASKS.md`. For the cross-project "what task work is open everywhere?" view:
+
+```bash
+~/.claude/hooks/lib/task-helpers.sh --all-open
+# <projectName> | <N> open | <listid> | <projectPath>   (unmapped lists shown, never dropped)
+```
+
+Scoping keys on the `tasks-index.json` project map, which `setup-task-symlinks.sh` maintains
+from `CLAUDE_CODE_TASK_LIST_ID`. An unmapped UUID list won't surface as active (by design —
+foreign-suppression) but is still visible in `--all-open` as `(unmapped)`.
+
+---
