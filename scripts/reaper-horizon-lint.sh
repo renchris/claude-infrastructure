@@ -45,7 +45,13 @@ EVIDENCE_GREP='cc-telemetry|cc-registry|CC_TELEMETRY_DIR|CC_REGISTRY_DIR'
 # divergence RESOLVES (a state LIFECYCLE op, the exact analog of clear_page) + a jq temp; NOT an age-horizon
 # reaper on the telemetry/registry spine. Its durable evidence (the reconciler heartbeat + the PAGE) is
 # never deleted. It declares no `-mmin`/`RETAIN_H`, so sections 1/2 find nothing to bound. Declared = reviewed.
-DECLARED='bin/cc-context bin/cc-board bin/cc-sessions bin/cc-notify hooks/session-register.sh hooks/session-deregister.sh statusline.sh scripts/lead-supervisor.sh scripts/lead-reconciler.sh'
+# hooks/waiting-recycle.sh rm's ONLY its own arm/cooldown/kill SENTINELS on re-arm/disarm/unkill — state
+# lifecycle (clear_page analog); every fire/abstain decision is durably logged to the IDL, which is the
+# evidence and is never touched. No -mmin/RETAIN_H. Declared = reviewed (2026-07-18 desk wave).
+# scripts/handoff-fire.sh rm's ONLY atomic-write TEMP files (mv-or-rm on registry/role writes) + its own
+# transient rank-stderr capture consumed in-function — scaffolding, never evidence; fire outcomes live in
+# the fired session's transcript + registry row + IDL. No -mmin/RETAIN_H. Declared = reviewed (2026-07-18).
+DECLARED='bin/cc-context bin/cc-board bin/cc-sessions bin/cc-notify hooks/session-register.sh hooks/session-deregister.sh statusline.sh scripts/lead-supervisor.sh scripts/lead-reconciler.sh hooks/waiting-recycle.sh scripts/handoff-fire.sh'
 
 viol=0
 say(){ printf '  %s\n' "$1"; }
