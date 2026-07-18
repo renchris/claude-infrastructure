@@ -317,6 +317,29 @@ refresh_roles_for() { # $1=roles-dir $2=old-pane $3=new-pane → repoint every r
   return 0
 }
 
+# ---- P0-16 /goal >4000-char guard (a19 D-11) -------------------------------------------------
+# A /goal payload line whose condition exceeds the harness's 4000-char cap is a SILENT dead fire —
+# the successor spawns task-less and idles believing nothing to do (observed 2026-07-10). Hard-fail
+# PRE-fire, naming the size and the pointer-form fix.
+check_goal_length() { # $1=prompt-file → 0 ok, 1 (loud) if a /goal line body exceeds the cap
+  local pf="$1" limit="${GOAL_MAX_CHARS:-4000}" line body chars bytes
+  [ -f "$pf" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      /goal|/goal\ *)
+        body="${line#/goal}"; body="${body# }"
+        chars=${#body}
+        if [ "$chars" -gt "$limit" ]; then
+          bytes=$(printf '%s' "$body" | wc -c | tr -d ' ')
+          echo "!! /goal condition is ${chars} chars (${bytes} bytes) — the harness HARD-CAPS /goal at ${limit} chars; over-cap is a SILENT dead fire (the pane spawns task-less and idles). a19 D-11 / observed 2026-07-10." >&2
+          echo "   Fix: use the POINTER form — '/goal read <plan/brief path> § \"Definition of Done\" and satisfy every item' — keeping the literal condition <=${limit} chars." >&2
+          return 1
+        fi ;;
+    esac
+  done < "$pf"
+  return 0
+}
+
 # Internal: self-close watcher (spawned via detach() = setsid; nohup alone dies with the tool
 # call's process group when /exit interrupts the calling turn — see detach() header).
 # ARCHITECTURAL CONSTRAINT: osascript AppleEvents to iTerm2 fail unreliably from detached/orphaned
@@ -593,6 +616,8 @@ esac; done
 
 [ -n "$PROMPT_FILE" ] || { echo "!! --prompt-file is required" >&2; usage 1; }
 [ -f "$PROMPT_FILE" ] || { echo "!! missing prompt file: $PROMPT_FILE" >&2; exit 1; }
+# P0-16: reject an over-cap /goal payload BEFORE any side effect (covers every fire mode).
+check_goal_length "$PROMPT_FILE" || exit 1
 [ -n "$CWD" ] && [ -n "$WORKTREE" ] && { echo "!! --cwd and --worktree are mutually exclusive" >&2; exit 1; }
 if [ -n "$WORKTREE" ] && ! git check-ref-format --branch "$WORKTREE" >/dev/null 2>&1; then
   echo "!! invalid branch name for --worktree: $WORKTREE" >&2; exit 1
