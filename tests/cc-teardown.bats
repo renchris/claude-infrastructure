@@ -9,11 +9,27 @@ setup() {
   export CC_TEARDOWN_SELF_UUID="none"   # deterministic self-guard in a headless test
 }
 
-@test "selftest passes and runs all 13 checks (a zero-check suite must not 'pass')" {
+@test "selftest passes and runs all 15 checks (a zero-check suite must not 'pass')" {
   run "$T" --selftest
   [ "$status" -eq 0 ]
   n_ok="$(printf '%s' "$output" | grep -c '^  ok ')"
-  [ "$n_ok" -eq 13 ]
+  [ "$n_ok" -eq 15 ]
+}
+
+@test "identity-pin: --expect-pid mismatch (pane recycled) → REFUSE (exit 2), records identity-pin (a17 S-4)" {
+  # a live registry row whose pid differs from cc-reaper's classify-time pin → recycle → REFUSE, never kill.
+  printf '#!/bin/bash\necho "[{\\"paneUUID\\":\\"U9\\",\\"name\\":\\"t\\",\\"pid\\":'"$$"',\\"cwd\\":\\"/tmp\\",\\"session_id\\":\\"s\\"}]"\n' > "$BATS_TEST_TMPDIR/cc-sessions"
+  printf '#!/bin/bash\n[ "$1" = session ] && [ "$2" = list ] && { echo "[{\\"id\\":\\"U9\\"},{\\"id\\":\\"DESK\\"}]"; exit 0; }\nexit 0\n' > "$BATS_TEST_TMPDIR/it2"
+  printf '#!/bin/bash\necho "{\\"decision\\":\\"OK\\",\\"git_state\\":\\"clean\\"}"; exit 0\n' > "$BATS_TEST_TMPDIR/gate"
+  chmod +x "$BATS_TEST_TMPDIR/cc-sessions" "$BATS_TEST_TMPDIR/it2" "$BATS_TEST_TMPDIR/gate"
+  CC_TEARDOWN_SESSIONS_BIN="$BATS_TEST_TMPDIR/cc-sessions" IT2_BIN="$BATS_TEST_TMPDIR/it2" \
+  CC_TEARDOWN_GATE_BIN="$BATS_TEST_TMPDIR/gate" CC_TEARDOWN_SELF_UUID="none" \
+  run "$T" U9 --done-evidence "x" --expect-pid 4000000
+  [ "$status" -eq 2 ]
+  rec="$(find "$CC_TEARDOWN_RECORDS_DIR" -name '*.json' 2>/dev/null | head -1)"
+  [ -n "$rec" ]
+  [ "$(jq -r '.decision' "$rec")" = "REFUSE" ]
+  [ "$(jq -r '.reason_kind' "$rec")" = "identity-pin" ]
 }
 
 @test "no target → usage (exit 0), no teardown attempted" {

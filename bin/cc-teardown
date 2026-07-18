@@ -61,6 +61,7 @@ command -v jq >/dev/null 2>&1 || { echo "cc-teardown: jq required" >&2; exit 2; 
 
 # resolved-handle globals (populated by resolve / parse)
 TARGET=""; paneUUID=""; pid=""; cwd=""; sname=""; done_ev=""; git_state=""
+EXPECT_PID=""; EXPECT_LSTART=""   # classify-time identity pin (a17 S-4); empty = no pin (back-compat)
 
 iso()  { date -u +%Y-%m-%dT%H:%M:%SZ; }
 say()  { echo "cc-teardown: $*" >&2; }
@@ -162,6 +163,8 @@ main() {
   while [ $# -gt 0 ]; do
     case "$1" in
       --done-evidence|--done) [ $# -ge 2 ] && { done_ev="$2"; shift 2; } || shift ;;
+      --expect-pid)    [ $# -ge 2 ] && { EXPECT_PID="$2"; shift 2; } || shift ;;
+      --expect-lstart) [ $# -ge 2 ] && { EXPECT_LSTART="$2"; shift 2; } || shift ;;
       --self) TARGET="--self"
               record REFUSE self-literal "'--self' is never a valid teardown target — refusing self-teardown" 0
               say "REFUSE — '--self' is not a valid target (exit 2)"; exit 2 ;;
@@ -184,6 +187,22 @@ main() {
   if [ -n "$SELF_UUID" ] && [ "$paneUUID" = "$SELF_UUID" ]; then
     record REFUSE self "target is the INVOKING session's own pane ($SELF_UUID) — refusing self-teardown" 0
     say "REFUSE — refusing to tear down the invoking session itself (exit 2)"; exit 2
+  fi
+
+  # ── 1b. IDENTITY PIN (a17 S-4) — refuse if the pane RECYCLED between classify and act ──────────────
+  # cc-reaper classifies the fleet ONCE, then acts per-candidate later; in that window a pane can
+  # /handoff --recycle in place — session-register OVERWRITES the per-pane row with the successor's
+  # pid/sid. resolve() above re-read the pane FRESH and took whatever pid the row now holds, so without
+  # this pin cc-teardown would kill the freshly-booted successor (both legs would even "verify"). When
+  # cc-reaper passed the classify-time {pid,lstart}, REFUSE loudly on any mismatch — a dead expected pid
+  # (empty now-lstart) is NOT a recycle (that is the idempotent path below), only a DIFFERENT live one is.
+  if [ -n "$EXPECT_PID" ] || [ -n "$EXPECT_LSTART" ]; then
+    local now_lstart; now_lstart="$(pid_lstart "$pid")"
+    if { [ -n "$EXPECT_PID" ] && [ "$pid" != "$EXPECT_PID" ]; } || \
+       { [ -n "$EXPECT_LSTART" ] && [ -n "$now_lstart" ] && [ "$now_lstart" != "$EXPECT_LSTART" ]; }; then
+      record REFUSE identity-pin "pane recycled between classify and act — expected pid=$EXPECT_PID lstart='$EXPECT_LSTART', pane now holds pid=$pid lstart='$now_lstart'; refusing to kill the successor" 0
+      say "REFUSE - identity-pin mismatch (pane recycled: pid ${EXPECT_PID}->${pid}) - never killing a stranger (exit 2)"; exit 2
+    fi
   fi
 
   # ── 6. IDEMPOTENT short-circuit: dead pid AND already-absent pane ⇒ success (nothing to do) ─────────
@@ -446,13 +465,26 @@ EOF
     || badp "blind enumerator produced a false result (rc=$rc dec=$(last_decision); want 5/FAILED)"
   reap
 
+  # 13. IDENTITY PIN (a17 S-4): the pane RECYCLED between classify and act — the registry now resolves a
+  #     DIFFERENT live pid than cc-reaper pinned at classify-time. cc-teardown must REFUSE (exit 2) and
+  #     leave the (successor) process ALIVE — never a collateral kill of the freshly-booted successor.
+  rm -f "$d/rec"/*.json; mkrepo "$d/r13"; spawn; set_session "$P" "$d/r13"; set_panes "[\"$U\"]"
+  rc=0; run_td "$d/bin/ps_clean" "$SELF" "$U" --done-evidence "x" --expect-pid 4000000 >/dev/null 2>&1 || rc=$?
+  [ "$rc" = 2 ] && [ "$(last_decision)" = REFUSE ] \
+    && okp "identity-pin mismatch (pane recycled: pid differs) → REFUSE (exit 2), never the successor" \
+    || badp "identity-pin mismatch not refused (rc=$rc dec=$(last_decision); want 2/REFUSE)"
+  kill -0 "$P" 2>/dev/null \
+    && okp "identity-pin REFUSE left the pinned process ALIVE (no collateral kill of the successor)" \
+    || badp "identity-pin REFUSE still killed the process — collateral kill"
+  reap
+
   # 11. NO-SILENT-RECORD: the just-run branch wrote an auditable outcome record
   [ -n "$(last_decision)" ] && okp "no-silent-record: every decision branch writes an outcome record" \
     || badp "a decision was SILENT (no record) — an unauditable teardown"
 
   echo "cc-teardown --selftest: $PASS passed, $FAIL failed"
   [ "$FAIL" -eq 0 ] || exit 1
-  echo "cc-teardown --selftest: GREEN — teardown(both-legs-verified), pane-survives→FAIL-LOUD(5), dirty/unpushed/tty-busy→DEFER(10), missing-done/unknown/self/--self→REFUSE(2), idempotent(0), no-silent-record all fire."
+  echo "cc-teardown --selftest: GREEN — teardown(both-legs-verified), pane-survives→FAIL-LOUD(5), dirty/unpushed/tty-busy→DEFER(10), missing-done/unknown/self/--self/identity-pin-recycle→REFUSE(2), idempotent(0), no-silent-record all fire."
   exit 0
 }
 

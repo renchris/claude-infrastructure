@@ -88,7 +88,7 @@ sweep() {
   local n; n="$(printf '%s' "$cj" | jq 'length' 2>/dev/null || echo 0)"
   local reaped=0 candidates=0 i
   for ((i=0; i<n; i++)); do
-    local o cause name pane cwd idle landed
+    local o cause name pane cwd idle landed xpid xlstart
     o="$(printf '%s' "$cj" | jq -c ".[$i]")"
     cause="$(printf '%s' "$o" | jq -r '.cause // "?"')"
     name="$(printf '%s'  "$o" | jq -r '.name // .paneUUID // "?"')"
@@ -96,6 +96,8 @@ sweep() {
     cwd="$(printf '%s'   "$o" | jq -r '.cwd // ""')"
     idle="$(printf '%s'  "$o" | jq -r '.idle_s // -1')"
     landed="$(printf '%s' "$o" | jq -r '.work_landed // "no"')"
+    xpid="$(printf '%s'  "$o" | jq -r '.pid // ""')"        # classify-time identity pin (a17 S-4)
+    xlstart="$(printf '%s' "$o" | jq -r '.lstart // ""')"
 
     # ── disposition (never-reap is the default; a reap needs every gate) ──
     if ! [[ "$cause" =~ $REAPABLE_RE ]]; then
@@ -121,7 +123,12 @@ sweep() {
     local succ ev trc
     succ="$(printf '%s' "$o" | jq -r '.successor // "none"')"
     ev="cc-reaper: cause=$cause successor=$succ work-landed(clean & 0 ahead of $TRUNK) idle=${idle}s — positive done-evidence, not inferred from silence"
-    "$TEARDOWN_BIN" "$pane" --done-evidence "$ev"; trc=$?
+    # identity pin (a17 S-4): pass classify-time {pid,lstart} so cc-teardown REFUSES if the pane recycled
+    # in the classify→act window (successor booted in the same pane). Only pin when classify supplied it.
+    local expect_args=()
+    { [ -n "$xpid" ] && [ "$xpid" != null ]; } && expect_args+=(--expect-pid "$xpid")
+    { [ -n "$xlstart" ] && [ "$xlstart" != null ]; } && expect_args+=(--expect-lstart "$xlstart")
+    "$TEARDOWN_BIN" "$pane" --done-evidence "$ev" "${expect_args[@]+"${expect_args[@]}"}"; trc=$?
     if [ "$trc" = 0 ]; then
       reaped=$((reaped+1)); say "    torn down + effect-verified (cc-teardown exit 0)"; log "reaped $name [$cause] pane=$pane"
       worktree_cleanup "$cwd"
