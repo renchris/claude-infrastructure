@@ -77,29 +77,44 @@ recent_api_limit() { # <jsonl> → 0 if a structured USAGE-CAP api error is amon
     | grep -qiE 'session limit|weekly limit|usage limit|limit ·|resets'
 }
 
-handoff_fired() { # <jsonl> → 0 if the session actually FIRED a /handoff near the end
+handoff_fired() { # <jsonl> → 0 if the session actually FIRED a SELF-/handoff near the end
   local f="$1"
   [ -f "$f" ] || return 1
-  # Signal = an actual handoff tool invocation in a recent assistant tool_use. NEVER the CC-native
-  # `bridge-session` record — that is Claude Code's own cloud-bridge id, present in EVERY session
-  # (~51/transcript), NOT the /handoff mechanism (aa49: "do not conflate the two 'bridge' concepts").
+  # SELF-scoped tell (a18 L-3): a Bash tool_use that INVOKES the handoff mechanism AND is a self-op
+  # (--recycle / self-close), or a bare /handoff — and does NOT target ELSEWHERE (--cwd / --worktree,
+  # i.e. a third-party fire spawning some OTHER session). It is NEVER a mere Read of a *-resume.md
+  # payload (reading a resume doc is not "I handed MYSELF off"), and NEVER the CC-native
+  # `bridge-session` record (aa49). Reads carry .input.file_path, not .input.command — restricting to
+  # .input.command drops them; the per-command awk keeps the --cwd/--worktree exclusion SCOPED to the
+  # same command (a session may BOTH self-recycle AND third-party-fire in one tail window).
   tail -n 80 "$f" 2>/dev/null | jq -rc '
-      if .type=="assistant" then (.message.content // [] | map(select(.type=="tool_use")
-           | (.input.command // .input.file_path // "")) | join(" "))
-      else "" end' 2>/dev/null \
-    | grep -qE 'handoff-fire\.sh|scripts/handoff\.sh|(^| )/handoff( |$)|--recycle|[a-z0-9_-]+-resume\.md'
+      if .type=="assistant"
+      then (.message.content // [] | map(select(.type=="tool_use") | (.input.command // empty)) | .[])
+      else empty end' 2>/dev/null \
+    | awk '
+        /(^|[ =])--cwd([ =]|$)/ || /(^|[ =])--worktree([ =]|$)/ { next }   # third-party fire → skip
+        {
+          mech   = ($0 ~ /handoff-fire\.sh/) || ($0 ~ /scripts\/handoff\.sh/)
+          selfop = ($0 ~ /(^|[ ])--recycle([ ]|$)/) || ($0 ~ /(^|[ ])self-close([ ]|$)/)
+          bare   = ($0 ~ /(^| )\/handoff( |$)/)
+          if ((mech && selfop) || bare) { found = 1; exit }
+        }
+        END { exit(found ? 0 : 1) }'
 }
 
-find_successor() { # <this-sid> <this-cwd> <since-epoch> <all-json> → candidate {paneUUID,pid} objects, one/line
+find_successor() { # <this-sid> <this-cwd> <since-epoch-SECONDS> <all-json> → candidate {paneUUID,pid} objects, one/line
   local sid="$1" cwd="$2" since="${3:-0}" all="$4"
   # A handoff continues the SAME work in the SAME cwd. A successor is a DISTINCT session (different
   # session_id) in that cwd, started at/after this session's last turn. Liveness (kill -0) is checked
   # by the caller — a dead 'successor' is no successor. Exclude self by session_id, never by pane
   # (a --recycle successor reuses the pane; a self-close successor gets a new one).
+  # UNIT FIX (a18 L-3): registry startedAt is epoch-MILLISECONDS (session-register.sh:69 `date +%s*1000`)
+  # while $since is epoch-SECONDS (a last-assistant ts). The old `startedAt >= since` was ms>=s — VACUOUS
+  # (always true), so even a sibling started long BEFORE the "handoff" counted. Compare startedAt/1000.
   printf '%s' "$all" | jq -rc --arg cwd "$cwd" --arg sid "$sid" --argjson since "${since:-0}" '
       .[] | select(.cwd==$cwd)
           | select((.session_id // .sessionId // "") != $sid)
-          | select($since==0 or (.startedAt // 0) >= $since)
+          | select($since==0 or ((.startedAt // 0) / 1000) >= $since)
           | {paneUUID, pid: ((.pid // "")|tostring)}' 2>/dev/null | head -20
 }
 
