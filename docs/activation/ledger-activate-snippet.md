@@ -33,3 +33,12 @@ The PostToolUse indexer half needs no new wiring — it is the existing
 `*/.claude-plans/*.md` in addition to `~/.claude/plans`.
 
 ---
+
+## 2. Truthful SessionStart plan counts (Task 2 / G-P14-1)
+
+**No new wiring** — `setup-plan-symlinks.sh` is already a SessionStart hook. It now emits
+`Plans: <open>/<total> open for <project> · <total> all` from real disk + index reads
+(was the "Plans: 0" lie). For the count to be trustworthy the index must be fresh, so keep
+the §1 reconcile line ahead of it in the SessionStart array.
+
+---

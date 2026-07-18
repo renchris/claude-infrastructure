@@ -108,3 +108,42 @@ drive() { printf '{"tool_input":{"file_path":"%s"},"cwd":"%s"}' "$1" "${2:-$PROJ
   run jq -r '.plans | length' "$CC_PLAN_INDEX"
   [ "$output" = "0" ]
 }
+
+# ── Task 2: setup-plan-symlinks.sh truthful SessionStart counts ──────────────────
+SYMHOOK() { echo "$REPO/hooks/setup-plan-symlinks.sh"; }
+# Run the SessionStart hook with cwd=project; echo its additionalContext string.
+sym_ctx() {
+  local proj="$1"
+  env CLAUDE_PROJECT_DIR="$proj" CC_PLAN_INDEX="$CC_PLAN_INDEX" CC_PLANS_DIR="$CC_PLANS_DIR" \
+    bash -c "cd '$proj' && bash '$(SYMHOOK)'" | jq -r '.hookSpecificOutput.additionalContext'
+}
+
+@test "count: claude-infra-like project with 5 docs/plans reports 5, not 0" {
+  proj="$BATS_TEST_TMPDIR/infra"; mkdir -p "$proj/docs/plans"
+  for n in 1 2 3 4 5; do echo "# Plan $n" > "$proj/docs/plans/plan$n.md"; done
+  echo '{"version":1,"plans":{}}' > "$CC_PLAN_INDEX"
+  run sym_ctx "$proj"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qE 'Plans: 5/5'          # status-less plans count as open
+  ! echo "$output" | grep -qE 'Plans: 0'
+}
+
+@test "count: complete/superseded plans are not counted as open" {
+  proj="$BATS_TEST_TMPDIR/mix"; mkdir -p "$proj/docs/plans"
+  printf -- '---\nstatus: complete\n---\n# Done\n'      > "$proj/docs/plans/done.md"
+  printf -- '---\nstatus: superseded\n---\n# Old\n'      > "$proj/docs/plans/old.md"
+  printf -- '---\nstatus: open\n---\n# Live\n'           > "$proj/docs/plans/live.md"
+  echo '{"version":1,"plans":{}}' > "$CC_PLAN_INDEX"
+  run sym_ctx "$proj"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qE 'Plans: 1/3'          # 1 open of 3 total
+}
+
+@test "count: all-projects total comes from the index" {
+  proj="$BATS_TEST_TMPDIR/acc"; mkdir -p "$proj/docs/plans"
+  echo "# P" > "$proj/docs/plans/p.md"
+  printf '{"version":1,"plans":{"/a/docs/plans/x.md":{"project":"/a","namespace":"docs-plans"},"/b/docs/plans/y.md":{"project":"/b","namespace":"docs-plans"},"/c/docs/plans/z.md":{"project":"/c","namespace":"docs-plans"}}}\n' > "$CC_PLAN_INDEX"
+  run sym_ctx "$proj"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qE '3 all'               # index length = 3
+}
