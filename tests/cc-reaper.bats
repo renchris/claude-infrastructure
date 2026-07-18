@@ -12,8 +12,17 @@ setup() {
   mkrepo() { local r="$1"; mkdir -p "$r"; git -C "$r" init -q; git -C "$r" config user.email t@t; git -C "$r" config user.name t
              echo a > "$r/f"; git -C "$r" add f; git -C "$r" commit -qm c1
              git -C "$r" update-ref refs/remotes/origin/main HEAD; }
+  # squash-landed: clean tree, HEAD 1 ahead by COUNT, but content already on origin/main (different sha)
+  mksquashland() { local r="$1"; mkdir -p "$r"; git -C "$r" init -q
+             git -C "$r" config user.email t@t; git -C "$r" config user.name t
+             echo base > "$r/f"; git -C "$r" add f; git -C "$r" commit -qm base
+             echo feature >> "$r/f"; git -C "$r" add f; git -C "$r" commit -qm landed
+             git -C "$r" update-ref refs/remotes/origin/main HEAD
+             git -C "$r" reset -q --hard HEAD~1; echo feature >> "$r/f"; git -C "$r" add f
+             GIT_AUTHOR_DATE="@1000000500" GIT_COMMITTER_DATE="@1000000500" git -C "$r" commit -qm featureX; }
   mkrepo "$D/clean"
   mkrepo "$D/dirty"; echo change >> "$D/dirty/f"      # dirty tree
+  mksquashland "$D/squash"                             # clean + content-landed but count>0 ahead
   # mock teardown: record argv + ordering; rc from TEARDOWN_RC
   cat > "$D/bin/teardown" <<EOF
 #!/bin/bash
@@ -178,4 +187,14 @@ EOF
   [ "$status" -eq 0 ]
   td_called
   ! grep -q -- '--expect-pid' "$D/td-calls"
+}
+
+@test "landed-by-content (P0-17): cc-reaper's re-check reaps a squash-landed repo (content on trunk, count>0)" {
+  # classify says finished+landed; the cwd is squash-landed (count>0). The COUNT-based re-check ABORTed
+  # (permanent DEFER); the CONTENT-based re-check sees the work on trunk and reaps.
+  mock_classify finished "$D/squash" 999 yes PANE-A
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  td_called
+  grep -q PANE-A "$D/td-calls"
 }

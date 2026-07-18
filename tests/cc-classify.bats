@@ -48,6 +48,19 @@ mkrepo() { local r="$1" dirty="${2:-}"; mkdir -p "$r"; git -C "$r" init -q
            echo a > "$r/f"; git -C "$r" add f; git -C "$r" commit -qm c1
            git -C "$r" update-ref refs/remotes/origin/main HEAD
            [ -n "$dirty" ] && echo change >> "$r/f"; return 0; }
+# a squash-landed repo: clean tree, HEAD 1 commit AHEAD of origin/main by COUNT, but its content is
+# ALREADY on trunk under a DIFFERENT sha (the squash/cherry-pick land). rev-list count says "ahead"
+# while the work is durably landed — the L-10 permanent-DEFER trap.
+mksquashland() { local r="$1"; mkdir -p "$r"; git -C "$r" init -q
+           git -C "$r" config user.email t@t; git -C "$r" config user.name t
+           echo base > "$r/f"; git -C "$r" add f; git -C "$r" commit -qm base
+           echo feature >> "$r/f"; git -C "$r" add f; git -C "$r" commit -qm landed-on-trunk
+           git -C "$r" update-ref refs/remotes/origin/main HEAD    # trunk = base+feature (commit L)
+           git -C "$r" reset -q --hard HEAD~1                      # back to base
+           echo feature >> "$r/f"; git -C "$r" add f
+           GIT_AUTHOR_DATE="@1000000500" GIT_COMMITTER_DATE="@1000000500" \
+             git -C "$r" commit -qm featureX   # identical CONTENT to trunk, different sha (count=1 ahead)
+           return 0; }
 # write an implicit-team config (only the in-process `team-lead` placeholder — CC 2.1.178+ writes one
 # for EVERY session, solo ones too). args: sid
 solo_team_cfg() { mkdir -p "$D/teams/session-$1"
@@ -248,4 +261,30 @@ solo_team_cfg() { mkdir -p "$D/teams/session-$1"
   c="$(cause PANE-A)"
   [ "$c" = owned-wait ]
   [ "$c" != finished ]
+}
+
+# ── P0-17: landed-by-content + monthly-spend cap-grep (a18 L-10 / L-14) ──────────────────────────
+@test "landed-by-content: a squash-landed repo (content on trunk, count>0) → finished, not owned-wait (a18 L-10)" {
+  # rev-list count says 1 ahead, but the branch content is durably on trunk (squash-land). Count-based
+  # work_landed reads not-landed → owned-wait forever; content-based reads landed → finished (reapable).
+  mksquashland "$D/squash"; reg PANE-A "$LIVE" "$D/squash" sidSq; tx sidSq 9000; solo_team_cfg sidSq
+  [ "$(cause PANE-A)" = finished ]
+}
+
+@test "landed-by-content does NOT mislabel a genuinely-ahead branch (real WIP stays owned-wait)" {
+  # a real commit NOT on trunk (different content) → cherry shows '+' + tree-diff non-empty → not landed.
+  mkrepo "$D/ahead2"; echo genuinely-new > "$D/ahead2/newfile"; git -C "$D/ahead2" add newfile
+  git -C "$D/ahead2" commit -qm real-wip
+  reg PANE-A "$LIVE" "$D/ahead2" sidAhead2; tx sidAhead2 9000; solo_team_cfg sidAhead2
+  c="$(cause PANE-A)"
+  [ "$c" = owned-wait ]
+  [ "$c" != finished ]
+}
+
+@test "rate-limited: a monthly-spend-cap API error classifies rate-limited, not finished (a18 L-14)" {
+  # the real I-LIVE-1 error text — a BILLING-plane cap the old cap-grep missed entirely, so a
+  # spend-capped clean+landed session read `finished` (reapable). Must be rate-limited (never-reap).
+  mkrepo "$D/capped"; reg PANE-A "$LIVE" "$D/capped" sidCap; tx sidCap 9000; solo_team_cfg sidCap
+  printf '{"type":"assistant","isApiErrorMessage":true,"message":{"role":"assistant","content":[{"type":"text","text":"You'\''ve hit your monthly spend limit"}]}}\n' >> "$D/proj/slug/sidCap.jsonl"
+  [ "$(cause PANE-A)" = rate-limited ]
 }

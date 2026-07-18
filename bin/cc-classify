@@ -78,9 +78,11 @@ recent_api_limit() { # <jsonl> → 0 if a structured USAGE-CAP api error is amon
   [ -f "$f" ] || return 1
   # isApiErrorMessage is the SIGNAL (never text-grep 429 — mostly false positives, aa49); the text
   # is only to confirm it is a real cap ("session limit"/"weekly limit"), not a transient blip.
+  # a18 L-14: a MONTHLY spend cap is a BILLING-plane error ("You've hit your monthly spend limit") the
+  # old set missed entirely, so a spend-capped clean+landed session read `finished` and was reapable.
   tail -n 60 "$f" 2>/dev/null \
     | jq -rc 'select((.isApiErrorMessage//false)==true) | (.message.content // [] | map(.text // "") | join(" "))' 2>/dev/null \
-    | grep -qiE 'session limit|weekly limit|usage limit|limit ·|resets'
+    | grep -qiE 'session limit|weekly limit|usage limit|limit ·|resets|monthly spend limit|spend limit|billing'
 }
 
 handoff_fired() { # <jsonl> → 0 if the session actually FIRED a SELF-/handoff near the end
@@ -237,13 +239,26 @@ is_desk_role() { # <sid> <pane> <name> → 0 if the desk-role file resolves to t
   [ "$t" = "$pane" ] || [ "$t" = "$sid" ] || [ "$t" = "$name" ]
 }
 
-work_landed() { # <cwd> → 0 if clean AND nothing ahead of trunk (pre-filter; cc-teardown re-verifies)
+work_landed() { # <cwd> → 0 if clean AND the branch's content is on trunk (P0-17 landed-by-CONTENT).
+  # a18 L-10: landed was a rev-list COUNT — a squash/cherry-pick land (different sha, same content)
+  # left HEAD "N ahead" though the work was durably on trunk, so a finished session DEFERred every 300s
+  # forever. The repo's own landing-safety memory ("verify by CONTENT, never by count", incident
+  # dfacccd) already names this. Now: clean + (0-ahead fast path OR patch-id-equivalent OR tree-diff-0).
   local cwd="$1"
   [ -d "$cwd" ] || return 1
   "$GIT_BIN" -C "$cwd" rev-parse --git-dir >/dev/null 2>&1 || return 1
   [ -z "$("$GIT_BIN" -C "$cwd" status --porcelain 2>/dev/null)" ] || return 1
   local ahead; ahead="$("$GIT_BIN" -C "$cwd" rev-list --count "$TRUNK"..HEAD 2>/dev/null)" || return 1
-  [ "${ahead:-1}" = 0 ]
+  [ "${ahead:-1}" = 0 ] && return 0                              # fast path: 0 ahead by COUNT → landed
+  # content path (squash/cherry-pick-tolerant): `git cherry` marks each HEAD commit '-' when a patch-id
+  # equivalent is already on trunk, '+' when genuinely unlanded. Zero '+' ⇒ every ahead commit landed.
+  local cherry_out
+  if cherry_out="$("$GIT_BIN" -C "$cwd" cherry "$TRUNK" HEAD 2>/dev/null)"; then
+    printf '%s\n' "$cherry_out" | grep -q '^+' || return 0
+  fi
+  # multi-commit-squash backstop: HEAD's tree already equals trunk's (net content landed).
+  "$GIT_BIN" -C "$cwd" diff --quiet "$TRUNK" HEAD 2>/dev/null && return 0
+  return 1
 }
 
 # ── the decision tree ─────────────────────────────────────────────────────────────────────────
