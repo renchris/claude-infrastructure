@@ -1,6 +1,6 @@
 ---
 name: limit-recover
-description: Recover perfectly from a usage-limit interruption (5-hour / weekly / model-scoped Fable) — disk-truth audit of every Dynamic Workflow slot, subagent, and task; re-run everything not provably COMPLETE (accepting partial results is banned); or continue with zero loss on another of the 4 accounts via validated transcript transplant + salvage bundle. Use when: a session was killed by "You've hit your session/weekly limit", when resuming after a limit ("continue, we hit our limit"), when workflow/subagent results came back null/partial/empty, or when the reset is too far away and work should continue NOW on another account.
+description: Recover perfectly from a usage-limit interruption (5-hour / weekly / model-scoped Fable / monthly-spend cap) — disk-truth audit of every Dynamic Workflow slot, subagent, task, AND Agent-Team assignee session; re-run everything not provably COMPLETE (accepting partial results is banned); or continue with zero loss on another of the 4 accounts via validated transcript transplant + salvage bundle. Use when: a session was killed by "You've hit your session/weekly limit", when teammates died mid-wave ("Teammate @x failed - You've hit your monthly spend limit"), when resuming after a limit ("continue, we hit our limit"), when workflow/subagent results came back null/partial/empty, or when the reset is too far away and work should continue NOW on another account.
 allowed-tools: Bash, Read, Write, Edit, Grep, Glob, Agent, Workflow, TaskList, TaskCreate, TaskUpdate, AskUserQuestion
 argument-hint: "[audit | handoff [next|next2|next3|next4|auto] [opus|fable] | ingest <bundle-dir>] — bare = full same-session recovery"
 ---
@@ -95,6 +95,12 @@ model that was interrupted.
    user already told you to continue autonomously** (e.g. a /goal), fire the handoff yourself.
    If ONLY `fable_pct` ≥ 100 (model-scoped): re-run fable-tagged slots on the house fallback
    `claude-opus-4-8` and mark each `(tier-fallback)` in the report.
+   **`monthly_spend` limit events have NO reset** (extra-usage credits cap, not plan quota —
+   incident 2026-07-18: teammates 429'd on the cap while the lead kept working). Decision rule:
+   read `credits_on`/`credits_used` + `session_pct`/`weekly_pct` from `claude-accounts --json` —
+   plan-quota headroom present → re-runs proceed on the SAME account (they bill plan quota; the
+   cap only blocks credit-billed overflow); no plan headroom either → handoff to another account,
+   or the user raises the cap at claude.ai/settings/usage (their call — surface both).
 2. **Zero-spend first**: consume every COMPLETE_UNDELIVERED / COMPLETE_SALVAGED unit from disk.
    Then VACUOUS_SUSPECT reviews. Only then paid re-runs.
 3. **Workflow re-runs**: ledger-append, then `Workflow({scriptPath: <audit's scriptPath>,
@@ -108,12 +114,42 @@ model that was interrupted.
    that call (changed conditional / `.filter(Boolean)` tail): hand-author a continuation script
    seeded with the salvaged COMPLETE results (`salvage/<runId>/slots.json`) that runs ONLY the
    missing slots, run it as a fresh Workflow, re-audit again.
-6. **Teams**: if the audit lists team dirs / `refs/wip` checkpoints, surface them and point at
-   `scripts/team/respawn-team.sh <team>` — do not silently re-implement teammate work.
+6. **Teams**: the audit now classifies every assignee session of every team this session LEADS
+   (per-member verdict table + `salvage/teams/<team>/<member>.json`). Execute § Teams below —
+   never re-implement teammate work the disk already holds, never respawn over a RUNNING member.
 7. **Report** (final message): per-unit table of actions taken (re-run / read-from-disk /
    salvaged / tier-fallback), re-spend estimate, and the closing line — either
    `RECOVERY COMPLETE — gaps: 0 (fixpoint)` or `RECOVERY PARTIAL — named gaps: …` with each gap's
    blocker. Never the second dressed as the first.
+
+## Teams — assignee-session recovery (implicit-team model, lead executes)
+
+Assignee sessions are FULL Claude Code sessions (own transcripts, own panes) killed by the same
+limits. Ground rule (incident 2026-07-18, team `session-44f5331d`): **the lead's "Teammate
+failed" notification is NOT ground truth** — all 4 "failed" teammates had retried past the 429,
+finished, and written their reports; only the handshake died ("SendMessage isn't available in
+this subagent context" is a known teammate failure mode — the report then exits as final text).
+The audit's per-member verdict comes from un-fakeable evidence, in rank order: brief-declared
+output paths written during the member's tenure (mtime ≥ joinedAt, size > 0) → worktree commits /
+`refs/wip/<member>` checkpoints → transcript terminal state → (never) lead-side perception.
+
+Execute the member table top-to-bottom — each verdict has ONE action:
+
+| Member verdict | Action (no re-judging) |
+|---|---|
+| COMPLETE | consume the deliverable from disk |
+| COMPLETE_UNDELIVERED | **READ deliverable(s) from disk — zero re-spend.** Never respawn |
+| RUNNING | wait (active < 5 min ago). NEVER respawn over a live member |
+| PARTIAL / NULL / INTERRUPTED | respawn: `Agent({name, subagent_type, model, prompt})` with the VERBATIM brief from `salvage/teams/<team>/<member>.json` `.respawn_call` — never paraphrase from memory; list `partial_output_seeds` paths in a PREFIX line if seeding helps. Max 6 concurrent (agent-teams skill discipline) |
+| VACUOUS_SUSPECT | read output vs brief; vacuous → respawn as above |
+| UNVERIFIABLE | surface as a named gap — never infer |
+
+Constraints: teammates bill the LEAD's account — a spend-capped account with plan-quota headroom
+still respawns fine (step 1 decision rule). Whole-team handoff: `lr-handoff.sh` moves the LEAD
+only; after ingest, respawn gap members on the target from their salvage briefs (teammate
+in-flight context does not transplant; their disk deliverables survive and are re-read in place).
+Course-change respawns (new ruling, not limit recovery) go through `bin/cc-respawn` instead.
+The reset poller deliberately SKIPs teammate transcripts (lead-owned recovery, this section).
 
 ## Mode: audit
 
@@ -179,3 +215,6 @@ You are the TARGET session (same uuid, new account). Trust nothing until verifie
 | "Server is temporarily limiting requests" | that is a 529, NOT your usage limit — re-run with stagger, don't wait for reset |
 | Worktree files reverted underneath you | branch was `pool/*` — refresher reset it; recover via reflog, rename branch first |
 | Agent output discusses limits/interrupts | detector requires the `isApiErrorMessage` envelope / structural markers — text alone is not evidence |
+| Lead saw "Teammate @x failed" | NOT ground truth — teammates retry past 429s and finish; trust the deliverable-path stat in the member table (all 4 "failed" members had reports on disk, 2026-07-18) |
+| Teammate transcript: "SendMessage isn't available" | known handshake failure — the report exits as final text + disk file; read it there, never re-run |
+| Teammate limit-parked but pane alive | lead nudges via SendMessage once headroom returns; the reset poller intentionally skips teammate sessions |

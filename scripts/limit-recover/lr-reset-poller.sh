@@ -63,6 +63,17 @@ for cfg in "$HOME"/.claude-next "$HOME"/.claude-secondary "$HOME"/.claude-tertia
     sid=$(basename "$tx" .jsonl)
     # cheap pre-filter: a genuine limit line near the tail (isApiErrorMessage confirmed by lr-audit)
     tail -c 20000 "$tx" 2>/dev/null | grep -qE "You've hit your (session|weekly) limit" || continue
+    # teammate sessions (implicit-team assignees carry "agentName" on their early
+    # records; leads never do) are recovered by their LEAD via the team-aware
+    # lr-audit — a bare --resume here would detach them from team semantics
+    # (inbox/agentName wiring) and duplicate the lead's respawn.
+    if head -c 8000 "$tx" 2>/dev/null | grep -q '"agentName"'; then
+      if [[ ! -f "$STATE/teammate-skip/$sid" ]]; then
+        mkdir -p "$STATE/teammate-skip"; : > "$STATE/teammate-skip/$sid"
+        log "SKIP  $sid — teammate session (lead-owned recovery)"
+      fi
+      continue
+    fi
     pgrep -f "resume $sid" >/dev/null 2>&1 && continue        # already running
     # cwd from the transcript itself (avoids lossy slug-decoding)
     cwd=$(python3 -c "
