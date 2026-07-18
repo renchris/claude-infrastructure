@@ -23,39 +23,25 @@ Arguments: `$ARGUMENTS`
 - Unrelated or foreign changes present → **STOP**, do not sweep them in. Save them (`git diff > /tmp/stash.patch`), commit only the task, restore after.
 - Already clean → continue.
 
-## 4. Safety backup (before any history rewrite)
-- `git branch -f ship/backup-<shortsha> HEAD`. This is the rollback point if the reconcile or push goes wrong — it stays intact on any fail-closed stop below.
-
-## 5. Locked pipeline (reconcile + gate + push as ONE child under the landing lock)
-Run the whole reconcile-gate-push as a single child process **under the landing lock** so `origin/main` cannot move between your rebase and your push:
+## 4. Land via `scripts/ship-land.sh` (the whole fail-closed pipeline, as code)
+The reconcile → gate → push → content-verify → stranded-sweep flow is **no longer prose you hand-execute** — it is one fail-closed script, so a paraphrase or an early stop can never skip the content-verify that caught the 2026-07-11 incident (G-P9-2). Steps 1-3 above (preflight read, shared-checkout guard, in-scope commit) are still yours to do first; then land with:
 
 ```
-scripts/land-lock.sh -- bash -c '<pipeline>'
+scripts/ship-land.sh [--trunk <branch>] [--dry-run]
 ```
 
-`<pipeline>` (in order, fail-closed at every step):
-- **Re-fetch the tip at the LAST moment** — `git fetch origin main` *inside* the lock so any sibling commits that landed while you were gating ride along in your rebase base.
-- `git rebase origin/main` — keeps history linear. Any conflict that does not auto-resolve → **STOP** fail-closed (leave the rebase in progress, backup intact); never force past a conflict.
-- **GATE** (prove green before landing): `shellcheck` on changed `*.sh`, `bats tests/` if present, `bash -n` on changed shell scripts, and `python -m py_compile` on changed `*.py` where present. Any gate failure → **STOP**, report which gate failed, do not push. Never `--no-verify`.
-- `git push origin HEAD:main` — fast-forward land. **Never force-push `main`.** A non-fast-forward rejection means a sibling beat you inside the window → **STOP** fail-closed and re-run `/ship` (re-acquires the lock, re-fetches, re-rebases).
+What it does, in order — it stops **LOUD at the first failure** with the backup ref intact:
+1. **Preflight** — refuses **in code** to land from the shared checkout on a non-session branch (exit 4; the prose guard of step 2 is now also enforced), refuses a dirty tree (exit 2), then **escalation-scans** the landing range: a destructive-SQL / credential pattern **PARKS** a class-B decision packet under `~/.claude/autonomy/decisions/` and exits 3 — such changes are **never auto-landed**. (auth/session/navigation code is escalation-worthy too, but is *not* in the default scan for this repo — its normal churn is saturated with those words; extend `SHIP_LAND_ESC_RE` for app repos.) Then it writes the `ship/backup-<sha>` rollback ref.
+2. **Locked child** — `scripts/land-lock.sh`, the machine-wide-per-repo mutex now keyed on the **shared git dir** so every worktree of this repo serializes (was per-worktree `--show-toplevel`, G-P9-1). Inside the lock: last-moment `git fetch` → `git rebase origin/<trunk>` (conflict ⇒ exit 5, rebase left in progress, never forced) → **GATE** `shellcheck` + `bats tests/` + `bash -n` + `py_compile` on changed shell/python **including extensionless python by shebang** (fixes the `*.py` glob miss); red ⇒ exit 6, no push; never `--no-verify` → `git push origin HEAD:<trunk>`, never force `main`; a non-fast-forward rejection means a sibling beat you inside the window ⇒ exit 7, re-run `/ship`.
+3. **Content-verify** — `scripts/land-verify.sh` asserts, for **every changed path**, that it is present on the trunk **AND** `git diff` against what you shipped is empty. A bare `git rev-list --count origin/<trunk>..HEAD == 0` proves **nothing** after a sibling rebase — it read 0 in the 2026-07-11 incident while the files were absent from `main`. Content-verify is the real landing proof; a failure ⇒ exit 8 with the backup ref intact.
+4. **Stranded-sweep** — `scripts/stranded-sweep.sh` sweeps **every local branch** for commits whose content never reached the trunk (this is what catches a sibling's rebase-drop of *your* commit even when it landed from a branch you do not own). **Exit 1 is a REVIEW verdict, never an automatic failure and never an auto-recover**: recover ONLY your **own** just-dropped work via the printed recipe; a peer session's live feature branch (unlanded WIP — expected on a multi-session box) you **leave** — **never** cherry-pick a peer's WIP onto the trunk (the very cross-session interference this flow exists to prevent). `stranded-sweep.sh --mine <session-id>` narrows the sweep to your own drops for a decidable pass/fail.
+5. **Self-attesting `land.log`** — each landing appends `{verify, sweep, esc_scan, sid}` so the audit trail can prove a given land was content-verified.
 
-## 6. Content-verify (never count-only — count is what missed the incident)
-- After the push: `git fetch origin main`.
-- For **every changed path in the landed range**, assert BOTH:
-  - `git ls-tree origin/main -- <paths>` shows the paths present on the landed trunk, AND
-  - `git diff HEAD origin/main -- <paths>` is **empty** (trunk content matches what you shipped).
-- A bare `git rev-list --count origin/main..HEAD == 0` proves **nothing** after a sibling rebase — it read 0 in the 2026-07-11 incident while the files were absent from `main`. Content-verify is the real landing proof.
+`--dry-run` runs everything up to and including the gate, then stops before the push and prints the reconciled plan. `--trunk <branch>` overrides the auto-detected trunk.
 
-## 7. Post-land stranded sweep
-- Run `scripts/stranded-sweep.sh`. It sweeps **every local branch** (machine-wide) for commits whose content is not on `main` — this is what catches a sibling's rebase-drop of *your* commit even when it landed from a branch you do not own (the 2026-07-11 incident).
-- **Exit 1 is a REVIEW prompt, not an automatic failure.** For each commit listed, decide:
-  - it is **your** just-landed work that a rebase dropped → recover it via the printed recipe before declaring done;
-  - it is **another session's live feature branch** (unlanded WIP — expected on a multi-session box) → leave it. **Never** cherry-pick a peer session's WIP onto `main` — that is the very cross-session interference this flow exists to prevent.
-- Exit 0 → nothing unlanded on any branch; proceed to report.
-
-## 8. Report
+## 5. Report
 - The landing lock releases automatically (its `EXIT` trap) — no manual unlock.
-- Emit: landed SHA, gate results, content-verify ✓ (paths asserted present + diff-empty), and the stranded-sweep result. Only then is the 📦 → ✅ transition earned.
+- On **exit 0**, `ship-land.sh` has already emitted the landed SHA, gate result, content-verify ✓ (paths present + diff-empty), and the stranded-sweep verdict — only then is the 📦 → ✅ transition earned. On any **non-zero** exit, surface the code and its meaning (2 dirty · 3 escalation-parked · 4 shared-checkout · 5 rebase-conflict · 6 gate-red · 7 non-ff · 8 verify-failed) and **STOP** — each is a fail-closed state above, backup ref intact.
 
 ## Why locked + content-verified
 On 2026-07-11 a concurrent land in claude-infrastructure silently dropped commit
@@ -63,7 +49,9 @@ On 2026-07-11 a concurrent land in claude-infrastructure silently dropped commit
 rebase-land of `feat/two-way-session-comms` moved `origin/main` between this
 session's rebase and push, and the post-land check used only
 `git rev-list origin/main..HEAD`, which read **0** — so the land "looked" complete
-while the files never reached trunk. The lock (step 5) closes the rebase→push race;
-the last-moment re-fetch lets mid-flight sibling commits ride along instead of being
-clobbered; the **content-verify** (step 6) and **stranded-sweep** (step 7) catch what
-a count check structurally cannot.
+while the files never reached trunk. The lock closes the rebase→push race; the
+last-moment re-fetch lets mid-flight sibling commits ride along instead of being
+clobbered; the **content-verify** and **stranded-sweep** catch what a count check
+structurally cannot. All four are now enforced in code inside `scripts/ship-land.sh`
+(step 4) rather than left to prose — a model can no longer skip the check that caught
+this incident.
