@@ -27,7 +27,7 @@
 #
 # Exit: 0 = ok/verified · 2 = usage / fail-closed refusal · 5 = verify FAILED LOUD (target still alive /
 #       successor missing). Records: ~/.claude/respawn/ (CC_RESPAWN_RECORDS_DIR). Refs: refs/respawn/
-#       <member>/<ts> + refs/wip/<member>/LAST (the respawn-team.sh recovery convention).
+#       <member>/<ts> + refs/wip/<member>/LAST (the refs/wip checkpoint-recovery convention).
 set -uo pipefail
 
 RECORDS_DIR="${CC_RESPAWN_RECORDS_DIR:-$HOME/.claude/respawn}"
@@ -224,7 +224,7 @@ selftest() {
   # RS-b: the checkpoint ref exists and CONTAINS the uncommitted WIP (capture-before-stop is real).
   check "RS-b checkpoint ref holds the uncommitted WIP blob" 0 \
     bash -c "git -C '$wt' show \"\$(git -C '$wt' for-each-ref --format='%(refname)' 'refs/respawn/tm-x/*' | head -1)\":wip.txt | grep -q UNCOMMITTED-WIP-SENTINEL"
-  # RS-b: refs/wip/<member>/LAST alias written (the respawn-team recovery convention).
+  # RS-b: refs/wip/<member>/LAST alias written (the refs/wip checkpoint-recovery convention).
   check "RS-b refs/wip/tm-x/LAST alias exists" 0 git -C "$wt" rev-parse --verify -q refs/wip/tm-x/LAST
   # RS-b: the working tree was NOT touched (plumbing, no hooks, no index mutation).
   check "RS-b working tree untouched (wip.txt still uncommitted)" 0 \
