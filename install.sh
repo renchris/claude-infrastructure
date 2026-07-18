@@ -14,11 +14,13 @@ set -euo pipefail
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 CONFIG_DIR="$HOME/.claude"
 DRY_RUN=false
+WIRE_HOOKS=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run)    DRY_RUN=true; shift ;;
     --config-dir) CONFIG_DIR="$2"; shift 2 ;;
+    --wire-hooks) WIRE_HOOKS=true; shift ;;   # additively merge the settings.example.json hook/deny/ask roster
     *)            echo "Unknown option: $1" >&2; exit 1 ;;
   esac
 done
@@ -243,10 +245,80 @@ if $IS_GLOBAL; then
   mkdir -p "$HOME/.claude-versions"
 fi
 
+# --- Settings hooks (merge-wire + post-install assert) ---
+# The FULL live hook roster lives in settings-templates/settings.example.json (G-P6-7): the
+# anti-premature-done Stop hooks (session-continue, anti-deference, teammate-checkpoint, boundary-handoff)
+# MUST survive a settings reset. This ADDITIVELY merges the template's .hooks (adds missing EVENTS only —
+# never clobbers a populated event) + unions .permissions.deny/.ask into $CONFIG_DIR/settings.json.
+# --wire-hooks opts in; a config with NO .hooks is auto-wired (fresh install). A read-only ASSERT always
+# reports template hooks not present in the target. (Merging settings.json is the OPERATOR's hand via
+# this installer — never an agent Write; the C10 ceiling holds.)
+warnings=0
+echo ""
+echo "Settings hooks → $CONFIG_DIR/settings.json"
+TEMPLATE="$REPO_DIR/settings-templates/settings.example.json"
+target_settings="$CONFIG_DIR/settings.json"
+if ! command -v jq >/dev/null 2>&1; then
+  echo "  ⚠ jq not found — skipping settings merge/assert"
+  warnings=$((warnings + 1))
+elif [[ ! -f "$TEMPLATE" ]]; then
+  echo "  ⚠ template missing: $TEMPLATE"
+  warnings=$((warnings + 1))
+else
+  # clean template = strip every _-prefixed annotation key (recursively) so no _comment/_stagedHooks leak in
+  clean_tmpl="$(jq 'walk(if type=="object" then with_entries(select(.key|startswith("_")|not)) else . end)' "$TEMPLATE")"
+  do_merge=false
+  if [[ ! -f "$target_settings" ]]; then do_merge=true
+  elif $WIRE_HOOKS; then do_merge=true
+  elif ! jq -e '.hooks' "$target_settings" >/dev/null 2>&1; then do_merge=true   # fresh/reset config → auto-wire
+  fi
+
+  if $do_merge; then
+    if $DRY_RUN; then
+      echo "  [dry-run] would merge-wire hooks + deny/ask union into $target_settings"
+    else
+      base="$clean_tmpl"; [[ -f "$target_settings" ]] && base="$(cat "$target_settings")"
+      [[ -f "$target_settings" ]] && cp "$target_settings" "$target_settings.pre-wire.bak"
+      if printf '%s' "$base" | jq --argjson t "$clean_tmpl" '
+            .hooks = ($t.hooks + (.hooks // {}))                                    # add missing events; keep present
+            | .permissions = (.permissions // {})
+            | .permissions.deny = (((.permissions.deny // []) + ($t.permissions.deny // [])) | unique)
+            | .permissions.ask  = (((.permissions.ask  // []) + ($t.permissions.ask  // [])) | unique)
+          ' > "$target_settings.tmp" && mv "$target_settings.tmp" "$target_settings"; then
+        # Merge is ADDITIVE + order-preserving: it wires missing EVENTS in full and unions deny/ask,
+        # but never reorders a populated event (the Stop FM1 chain order is load-bearing). Any remaining
+        # WITHIN-event gaps are order-sensitive and reported by the assert below for manual placement.
+        echo "  ✓ merged: missing hook events + deny/ask union (backup .pre-wire.bak; within-event gaps, if any, listed below)"
+        installed=$((installed + 1))
+      else
+        rm -f "$target_settings.tmp"
+        echo "  ⚠ jq merge failed — settings.json left unchanged"
+        warnings=$((warnings + 1))
+      fi
+    fi
+  else
+    echo "  · assert-only ($(basename "$target_settings") already has hooks; pass --wire-hooks to merge)"
+  fi
+
+  # post-install ASSERT (read-only): which template hooks are NOT wired in the target (by basename+args)
+  if [[ -f "$target_settings" ]]; then
+    norm='s#\|[^ ]*/#|#'
+    tmpl_h="$(printf '%s' "$clean_tmpl" | jq -r '.hooks|to_entries[]|.key as $e|(.value//[])[]?|(.hooks//[])[]?|"\($e)|\(.command)"' 2>/dev/null | sed -E "$norm" | sort -u)"
+    live_h="$(jq -r '.hooks|to_entries[]|.key as $e|(.value//[])[]?|(.hooks//[])[]?|"\($e)|\(.command)"' "$target_settings" 2>/dev/null | sed -E "$norm" | sort -u)"
+    missing_h="$(comm -23 <(printf '%s\n' "$tmpl_h") <(printf '%s\n' "$live_h"))"
+    if [[ -n "$missing_h" ]]; then
+      echo "  ⚠ template hooks NOT wired in $(basename "$target_settings") (run with --wire-hooks to add):"
+      printf '%s\n' "$missing_h" | sed 's/^/      /'
+      warnings=$((warnings + 1))
+    else
+      echo "  ✓ all template hooks present in $(basename "$target_settings")"
+    fi
+  fi
+fi
+
 # --- Validation ---
 echo ""
 echo "Validating..."
-warnings=0
 
 if ! grep -q "statusline" "$CONFIG_DIR/settings.json" 2>/dev/null; then
   echo "  ⚠ settings.json missing statusLine config"
