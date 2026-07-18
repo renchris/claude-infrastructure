@@ -38,6 +38,8 @@ PROJECT_ROOTS="${CC_CLASSIFY_PROJECT_ROOTS:-$HOME/.claude/projects $HOME/.claude
 GIT_BIN="${CC_CLASSIFY_GIT_BIN:-git}"
 TRUNK="${CC_CLASSIFY_TRUNK:-origin/main}"
 TEAMS_GLOB="${CC_CLASSIFY_TEAMS_GLOB:-$HOME/.claude*/teams}"
+WAIT_CONTRACTS_DIR="${CC_CLASSIFY_WAIT_CONTRACTS_DIR:-$HOME/.claude/wait-contracts}"   # L2 wait system (a17 S-3)
+DESK_ROLE_FILE="${CC_CLASSIFY_DESK_ROLE_FILE:-$HOME/.claude/cc-roles/desk}"            # desk-role never-reap (a17 S-3)
 
 die(){ printf 'cc-classify: %s\n' "$*" >&2; exit 2; }
 command -v jq >/dev/null || die "jq required"
@@ -203,6 +205,34 @@ team_has_real_members() { # <team-config> → 0 if the team ACTUALLY spawned a t
   [ -n "$n" ] && [ "$n" -gt 0 ]
 }
 
+open_wait_contract() { # <sid> <pane> → 0 if an OPEN wait-contract names this session as waiter (a17 S-3)
+  # The L2 wait system (bin/cc-wait) writes a durable {waiter,waitee,...,status:"OPEN"} contract on disk
+  # BEFORE a block. The classifier never read it, so a conscientious desk that went clean+landed and
+  # waited on fired peers read `finished` and was executed. An OPEN contract naming this sid/pane as
+  # waiter is POSITIVE wait evidence → never-reap. A CLOSED contract confers nothing (never weakens).
+  local sid="$1" pane="$2" c w st
+  [ -d "$WAIT_CONTRACTS_DIR" ] || return 1
+  for c in "$WAIT_CONTRACTS_DIR"/*.json; do
+    [ -f "$c" ] || continue
+    st="$(jq -r '.status // ""' "$c" 2>/dev/null)"
+    [ "$st" = OPEN ] || continue
+    w="$(jq -r '.waiter // ""' "$c" 2>/dev/null)"
+    [ -n "$w" ] || continue
+    { [ "$w" = "$sid" ] || [ "$w" = "$pane" ]; } && return 0
+  done
+  return 1
+}
+
+is_desk_role() { # <sid> <pane> <name> → 0 if the desk-role file resolves to this session (a17 S-3)
+  # cc-roles/<role> holds a single target (uuid|name). If the desk role points at this pane/sid/name,
+  # this IS the orchestrator desk — never-reap, unconditionally (a dead desk has no respawner).
+  local sid="$1" pane="$2" name="$3" t
+  [ -f "$DESK_ROLE_FILE" ] || return 1
+  t="$(head -1 "$DESK_ROLE_FILE" 2>/dev/null | tr -d '[:space:]')"
+  [ -n "$t" ] || return 1
+  [ "$t" = "$pane" ] || [ "$t" = "$sid" ] || [ "$t" = "$name" ]
+}
+
 work_landed() { # <cwd> → 0 if clean AND nothing ahead of trunk (pre-filter; cc-teardown re-verifies)
   local cwd="$1"
   [ -d "$cwd" ] || return 1
@@ -216,10 +246,12 @@ work_landed() { # <cwd> → 0 if clean AND nothing ahead of trunk (pre-filter; c
 # sets: CAUSE, IDLE (seconds or -1), LANDED (yes/no/na), SUCCESSOR (uuid|""), DETAIL
 classify_entry() { # <entry-json> <all-sessions-json>
   local e="$1" all="$2"
-  local sid pid cwd
+  local sid pid cwd pane name
   sid="$(printf '%s' "$e"  | jq -r '.session_id // .sessionId // ""')"
   pid="$(printf '%s' "$e"  | jq -r '.pid // ""')"
   cwd="$(printf '%s' "$e"  | jq -r '.cwd // ""')"
+  pane="$(printf '%s' "$e" | jq -r '.paneUUID // ""')"
+  name="$(printf '%s' "$e" | jq -r '.name // ""')"
   CAUSE=""; IDLE=-1; LANDED=na; SUCCESSOR=""; DETAIL=""
 
   # 1. owning process dead → crashed (idle-linger targets are ALIVE; a dead pid is a separate cleanup)
@@ -265,6 +297,18 @@ classify_entry() { # <entry-json> <all-sessions-json>
   #     whose own last record is the handoff tool_use with its tool_result already landed).
   if [ -n "$tj" ] && tool_in_flight "$tj"; then
     CAUSE=active; DETAIL="in-flight tool call (unmatched trailing tool_use) — running, not idle (never-reap)"; return 0
+  fi
+
+  # 4.6 wait-contract / desk-role → owned-wait (never-reap). a17 S-3: the classifier's only wait evidence
+  #     was team-config members; it never read the L2 wait system, so a desk that went clean+landed and
+  #     waited >10 min on fired peers read `finished` and the launchd reaper EXECUTED it. Read BOTH now,
+  #     BEFORE any reapable idle cause: an OPEN wait-contract naming this session as waiter, or the desk
+  #     role resolving to it, is positive wait evidence — never-reap (a dead desk has no respawner).
+  if open_wait_contract "$sid" "$pane"; then
+    CAUSE=owned-wait; DETAIL="idle ${IDLE}s, an OPEN wait-contract names this session as waiter — owned wait (never-reap)"; return 0
+  fi
+  if is_desk_role "$sid" "$pane" "$name"; then
+    CAUSE=owned-wait; DETAIL="idle ${IDLE}s, the desk-role file resolves to this session — desk-role (never-reap)"; return 0
   fi
 
   # 5. finished-teammate: a worktree/teammate session, idle, no live successor needed
