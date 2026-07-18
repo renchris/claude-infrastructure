@@ -167,6 +167,40 @@ mkuser_tx_string() {
   run actuate sidA "$tx"; printf '%s' "$output" | grep -q "continuation 2/8"
 }
 
+# ── (G-P6-6b) BOUNDARY COMPOSE-GUARD via the shared sentinel-path SSOT ─────────────
+@test "(G-P6-6b) boundary computes the IDENTICAL sentinel path session-continue writes" {
+  local armed; armed="$( cd "$CWD" && CLAUDE_CODE_SESSION_ID=x bash "$HOOK" set "x" )"
+  local sc_path="${armed#armed → }"                        # path session-continue actually wrote
+  local lib_path; lib_path="$( . "$REPO/hooks/lib/continue-sentinel.sh"; continue_sentinel_for "$CWD" )"
+  [ -n "$sc_path" ]; [ "$sc_path" = "$lib_path" ]          # boundary's guard uses lib_path → must match
+}
+
+@test "(G-P6-6b) an armed session-continue sentinel SUPPRESSES boundary-handoff (double-inject killed)" {
+  local BHOOK="$REPO/hooks/boundary-handoff.sh"
+  local BWT="$BATS_TEST_TMPDIR/brepo"; mkdir -p "$BWT"
+  git -C "$BWT" init -q; git -C "$BWT" config user.email t@t; git -C "$BWT" config user.name t
+  echo x > "$BWT/f"; git -C "$BWT" add f; git -C "$BWT" commit -qm init
+  local HEAD GITDIR; HEAD="$(git -C "$BWT" rev-parse HEAD)"
+  GITDIR="$(git -C "$BWT" rev-parse --git-common-dir)"; case "$GITDIR" in /*) ;; *) GITDIR="$BWT/$GITDIR";; esac
+  printf '%s' "$HEAD" > "$GITDIR/gate-green"               # committed + green tree (fire-eligible)
+  export CC_TELEMETRY_DIR="$BATS_TEST_TMPDIR/tel"; mkdir -p "$CC_TELEMETRY_DIR"
+  export CC_IDL="$BATS_TEST_TMPDIR/bidl.jsonl"
+  export CC_BOUNDARY_LATCH_DIR="$BATS_TEST_TMPDIR/latch"
+  unset CC_CONTINUE_SENTINEL                               # force boundary to compute via the shared lib
+  local BSID="bsid-1"
+  jq -nc --arg sid "$BSID" --arg cwd "$BWT" --arg cfg "$CLAUDE_CONFIG_DIR" --argjson ts "$(date +%s)" \
+     '{ts:$ts,session_id:$sid,cwd:$cwd,config_dir:$cfg,used_pct:90,pid:1}' > "$CC_TELEMETRY_DIR/$BSID.json"
+  bfire() { printf '{"session_id":"%s"}' "$BSID" | bash "$BHOOK" 2>/dev/null; }
+
+  run bfire                                                # CONTROL: no sentinel ⇒ boundary FIRES
+  printf '%s' "$output" | grep -q '"decision":"block"'
+  ( cd "$BWT" && CLAUDE_CODE_SESSION_ID=y bash "$HOOK" set "loose ends" >/dev/null )   # arm for SAME cwd
+  rm -rf "$CC_BOUNDARY_LATCH_DIR"                          # drop the control fire's latch (discriminating)
+  run bfire                                                # TREATMENT: armed ⇒ boundary ABSTAINS
+  [ -z "$output" ]                                         # no double-inject
+  tail -1 "$CC_IDL" | grep -q 'continue-hook-armed'        # abstained for the RIGHT reason (not 'latched')
+}
+
 # ── FAIL-SAFE (a Stop hook must never block on an error) ──────────────────────────
 @test "fail-safe: garbage stdin ⇒ exit 0, no block" {
   arm "step" sidA

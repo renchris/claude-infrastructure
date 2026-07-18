@@ -35,18 +35,26 @@
 # NOTE: deliberately NO `set -e` — a Stop hook that exits 2 *blocks the stop*, so an
 # accidental non-zero exit could force a false continuation. Every actuation path ends `exit 0`.
 
-state_dir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/state"
-mkdir -p "$state_dir" 2>/dev/null
+# ── Shared sentinel-path SSOT (G-P6-6b / a19 I-1) ─────────────────────────────────
+# The sentinel PATH formula lives in hooks/lib/continue-sentinel.sh so boundary-handoff's
+# compose-guard computes the IDENTICAL path (it used to hardcode a path this hook never writes →
+# a dead no-op guard). Resolve the lib next to this script (works for the repo AND a symlinked
+# ~/.claude/hooks/ install), then fall back to the config-dir / ~/.claude hooks/lib.
+_scd="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
+_lib="$_scd/lib/continue-sentinel.sh"
+[ -f "$_lib" ] || _lib="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/continue-sentinel.sh"
+[ -f "$_lib" ] || _lib="$HOME/.claude/hooks/lib/continue-sentinel.sh"
+# shellcheck source=lib/continue-sentinel.sh
+if ! . "$_lib" 2>/dev/null; then
+  # Fail LOUD but SAFE: a missing path-SSOT is a misconfig, not a runtime state. A Stop hook must
+  # never block on error (→ exit 0 allow); a CLI mode signals the failure to the agent (→ exit 2).
+  printf 'session-continue: FATAL — cannot source %s (continuation loop inert).\n' "$_lib" >&2
+  case "${1:-}" in set|clear|status) exit 2 ;; *) exit 0 ;; esac
+fi
+mkdir -p "$(continue_state_dir)" 2>/dev/null
 
-# Sentinel path for a given working dir (stable hash → one file per worktree).
-# NOTE (Task 2 / G-P6-6b): this formula is the SSOT for the sentinel path — boundary-handoff's
-# compose-guard must compute the IDENTICAL path. Task 2 extracts it into hooks/lib/ so both hooks
-# share one definition; until then keep this and the boundary guard byte-for-byte in agreement.
-sentinel_for() {
-  local h
-  h=$(printf '%s|%s' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}" "$1" | shasum 2>/dev/null | cut -c1-16)
-  printf '%s/continue-%s' "$state_dir" "$h"
-}
+# thin local alias → the shared SSOT (keeps the body below unchanged)
+sentinel_for() { continue_sentinel_for "$1"; }
 
 # ---- Agent CLI mode -------------------------------------------------------------
 case "${1:-}" in

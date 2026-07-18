@@ -24,6 +24,19 @@
 #
 # Env seams (tests): CC_TELEMETRY_DIR · CC_IDL · CC_BOUNDARY_T · CC_BOUNDARY_REARM_DELTA ·
 #                    CC_BOUNDARY_LATCH_DIR · CC_BOUNDARY_LOGFILE · CC_CONTINUE_SENTINEL
+#
+# ── CC_BOUNDARY_DIRS_NOTE (G-P6-5b / a19 live table) — REGISTER ON ALL FOUR CONFIG DIRS ──
+# The desk runs on .claude-secondary / -tertiary, which today carry NO boundary hook at all; it
+# lives only on ~/.claude, in a SEPARATE matcher-null Stop object via a hardcoded abs path → 0 IDL
+# records in prod (empirically never evaluates). Move it into the SAME Stop array as session-continue
+# + anti-deference (obj-1), path ~/.claude/hooks/…, in every dir. Non-interactive apply (per dir):
+#   for d in ~/.claude ~/.claude-secondary ~/.claude-tertiary ~/.claude-quaternary; do
+#     f="$d/settings.json"
+#     jq '(.hooks.Stop[0].hooks) |= (if any(.[]; .command|test("boundary-handoff")) then .
+#          else . + [{type:"command",command:"~/.claude/hooks/boundary-handoff.sh",timeout:10}] end)' \
+#        "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+#   done
+# Full wiring + rollback: docs/activation/fm1b-activate-snippet.md (wiring is the operator's — C10).
 set -uo pipefail
 
 T="${CC_BOUNDARY_T:-73}"                          # fire threshold, used_pct (≤73; autocompact at 90, D-F)
@@ -32,6 +45,15 @@ REARM_DELTA="${CC_BOUNDARY_REARM_DELTA:-10}"       # B-2 second re-arm dimension
 IDL="${CC_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
 LATCH_DIR="${CC_BOUNDARY_LATCH_DIR:-$HOME/.claude/autonomy/boundary-latch}"
 TEL_DIR="${CC_TELEMETRY_DIR:-/tmp/cc-telemetry}"
+
+# Shared sentinel-path SSOT — lets the compose-guard below check session-continue's REAL path
+# (G-P6-6b). Resolve next to this script (repo + symlinked ~/.claude/hooks/ install), then fall back.
+_bscd="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
+_blib="$_bscd/lib/continue-sentinel.sh"
+[ -f "$_blib" ] || _blib="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/continue-sentinel.sh"
+[ -f "$_blib" ] || _blib="$HOME/.claude/hooks/lib/continue-sentinel.sh"
+# shellcheck source=lib/continue-sentinel.sh
+[ -f "$_blib" ] && . "$_blib" 2>/dev/null || true
 
 stdin_json="$(cat 2>/dev/null || true)"
 sid="$(printf '%s' "$stdin_json" | jq -r '.session_id // empty' 2>/dev/null || true)"
@@ -47,10 +69,6 @@ abstain() { log_idl abstained "$1"; exit 0; }     # abstained = evaluated but di
 
 command -v jq >/dev/null 2>&1 || { log_idl abstained "no-jq"; exit 0; }
 [ -n "$sid" ] || abstain "no-session-id"
-
-# Compose-guard: if the Session-Close continue hook is armed, it owns the next turn — don't double-inject.
-sentinel="${CC_CONTINUE_SENTINEL:-$HOME/.claude/hooks/.session-continue-armed}"
-[ -f "$sentinel" ] && abstain "continue-hook-armed"
 
 tel="$TEL_DIR/$sid.json"
 [ -f "$tel" ] || abstain "no-telemetry"
@@ -68,6 +86,22 @@ case "$used" in ''|*[!0-9]*) used=0 ;; esac
 # ── repo resolution (session's cwd; --git-common-dir so linked worktrees resolve the shared gitdir) ──
 cwd="$(jq -r '.cwd // empty' "$tel" 2>/dev/null || true)"
 { [ -n "$cwd" ] && [ -d "$cwd" ]; } || abstain "no-cwd"
+
+# ── Compose-guard (G-P6-6b / a19 I-1): if session-continue's 🔧 loop is armed for THIS cwd, it owns
+#    the next turn — yield, don't double-inject. Check its REAL sentinel path (test override
+#    CC_CONTINUE_SENTINEL wins; else the shared SSOT hooks/lib/continue-sentinel.sh). The old guard
+#    hardcoded ~/.claude/hooks/.session-continue-armed — a path session-continue never writes → the
+#    guard was a dead no-op that let both hooks block one Stop. Placed after cwd resolution so it can
+#    compute the cwd-keyed path; still BEFORE the latch/fire, so an armed session is never advised. ──
+if [ -n "${CC_CONTINUE_SENTINEL:-}" ]; then
+  sc_sentinel="$CC_CONTINUE_SENTINEL"
+elif command -v continue_sentinel_for >/dev/null 2>&1; then
+  sc_sentinel="$(continue_sentinel_for "$cwd")"
+else
+  sc_sentinel=""     # sentinel lib unavailable → cannot compute; skip (logged), never wrongly suppress
+fi
+{ [ -n "$sc_sentinel" ] && [ -f "$sc_sentinel" ]; } && abstain "continue-hook-armed"
+
 head="$(git -C "$cwd" rev-parse HEAD 2>/dev/null || true)"
 [ -n "$head" ] || abstain "not-a-repo"
 gitdir="$(git -C "$cwd" rev-parse --git-common-dir 2>/dev/null || true)"
