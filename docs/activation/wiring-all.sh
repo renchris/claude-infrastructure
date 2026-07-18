@@ -1,11 +1,15 @@
 #!/bin/bash
-# wiring-all.sh v2 — THE consolidated C10 activation bundle. RUN BY THE HUMAN'S HAND, NEVER THE AGENT.
+# shellcheck disable=SC2015  # file-wide: the `cmd && ✓echo || {✗echo; FAILS++}` verify-reporter idiom
+# wiring-all.sh v3 — THE consolidated C10 activation bundle. RUN BY THE HUMAN'S HAND, NEVER THE AGENT.
 #
-# Supersedes v1 (never-wait L1..L4 · reaper birth-grace · comms F1..F5) and ADDS the Track-B gaps:
-#   B1-a cc-respawn (spawn-boundary GO as machinery)      B1-b cc-route (live-read model/effort routing)
-#   B1-d lr-reset-poller (limit-park re-fire; install + the ruled AUTOFIRE flip)
-#   B1-c never-stuck-gate (the systematic invariant — wire it onto the supervisor sweep)
-# plus the cc-teardown permission hand-step and D2/P8 effect-checks.
+# v1 → never-wait L1..L4 · reaper birth-grace · comms F1..F5.
+# v2 → Track-B gaps: B1-a cc-respawn · B1-b cc-route · B1-d lr-reset-poller (AUTOFIRE) ·
+#      B1-c never-stuck-gate onto the supervisor sweep · cc-teardown permission · D2/P8 effect-checks.
+# v3 → the DESK-EXISTENCE program (Program A): P0-14 desk-invariant (the missing organ — an
+#      API-budget-independent launchd observer that re-prompts/re-fires a stunned/absent desk) ·
+#      P0-18 nightly-regression (standing test signal) · full-hook-roster template + settings-drift
+#      assert · activation-watch (absence-is-loud re-page) · boundary-4-dir + CC_PAGE_TO/Pushover ·
+#      gate-green producer verify · Kimi key. Templates ⑨–⑭ below; ①–⑧ carry forward unchanged.
 #
 # WHAT THIS SCRIPT DOES (idempotent · self-testing · re-runnable):
 #   1. VERIFIES every gate + selftest read-only — refuses to proceed on any red (a green gate is the go).
@@ -23,7 +27,7 @@ REPO="${REPO:-$HOME/Development/claude-infrastructure}"
 BIN="$HOME/.claude/bin"
 DESK_UUID="${DESK_UUID:-1EB2C679-625D-4740-9355-A8DB4D21F2D4}"   # trackb-era desk pane; rebind on a NON-in-place restart
 FAILS=0
-echo "== wiring-all v2 ==  repo=$REPO  bindir=$BIN  ($(git -C "$REPO" log --oneline -1 2>/dev/null || echo 'git state unreadable'))"
+echo "== wiring-all v3 ==  repo=$REPO  bindir=$BIN  ($(git -C "$REPO" log --oneline -1 2>/dev/null || echo 'git state unreadable'))"
 [ -d "$REPO/scripts" ] || { echo "✗ repo not found at $REPO — set REPO=<path> and re-run"; exit 1; }
 mkdir -p "$BIN"
 
@@ -47,6 +51,18 @@ done
 "$REPO/bin/cc-route"   selftest    >/dev/null 2>&1 && echo "  ✓ cc-route (RT-a..f)" || { echo "  ✗ cc-route"; FAILS=$((FAILS+1)); }
 "$REPO/bin/cc-teardown" --selftest >/dev/null 2>&1 && echo "  ✓ cc-teardown" || { echo "  ✗ cc-teardown"; FAILS=$((FAILS+1)); }
 command -v bats >/dev/null 2>&1 && bats "$REPO/tests/lr-reset-poller.bats" >/dev/null 2>&1 && echo "  ✓ lr-reset-poller (LR-a..i)" || { echo "  ✗ lr-reset-poller bats"; FAILS=$((FAILS+1)); }
+echo "== 1/4 verify: desk-existence program (v3 — P0-14/18 + template drift) =="
+for pair in "scripts/desk-invariant.sh|P0-14" "scripts/nightly-regression.sh|P0-18" "scripts/settings-drift-assert.sh|drift-assert"; do
+  s="${pair%%|*}"; tag="${pair##*|}"
+  "$REPO/$s" --selftest >/dev/null 2>&1 && echo "  ✓ ${s##*/} ($tag)" || { echo "  ✗ ${s##*/} ($tag)"; FAILS=$((FAILS+1)); }
+done
+if command -v bats >/dev/null 2>&1; then
+  bats "$REPO/tests/desk-invariant.bats" "$REPO/tests/settings-drift.bats" "$REPO/tests/activation-watch.bats" >/dev/null 2>&1 \
+    && echo "  ✓ desk-invariant + settings-drift + activation-watch bats" || { echo "  ✗ desk-existence bats"; FAILS=$((FAILS+1)); }
+else echo "  · bats not installed — skipped the desk-existence bats"; fi
+"$REPO/hooks/activation-watch.sh" --selftest >/dev/null 2>&1 && echo "  ✓ activation-watch (D-v)" || { echo "  ✗ activation-watch"; FAILS=$((FAILS+1)); }
+command -v plutil >/dev/null 2>&1 && plutil -lint "$REPO"/launchd/*.plist >/dev/null 2>&1 \
+  && echo "  ✓ launchd/*.plist all parse (plutil -lint)" || echo "  · plutil skipped/failed — run plutil -lint $REPO/launchd/*.plist"
 
 if [ "$FAILS" -gt 0 ]; then
   echo
@@ -73,6 +89,13 @@ for f in "$REPO"/scripts/limit-recover/*; do
   ln -sf "$f" "$HOME/.claude/scripts/limit-recover/$(basename "$f")"
 done
 echo "  ✓ limit-recover mirror → repo symlinks (plist path resolves to the PROVEN poller)"
+# v3 desk-existence program: the launchd/SessionStart-run scripts its plists reference must resolve
+# into the repo (install.sh symlinks all scripts/*.sh + hooks/*.sh; wiring-all guarantees these ones).
+mkdir -p "$HOME/.claude/scripts" "$HOME/.claude/hooks"
+for s in desk-invariant.sh nightly-regression.sh settings-drift-assert.sh; do
+  ln -sf "$REPO/scripts/$s" "$HOME/.claude/scripts/$s" && echo "  linked scripts/$s"
+done
+ln -sf "$REPO/hooks/activation-watch.sh" "$HOME/.claude/hooks/activation-watch.sh" && echo "  linked hooks/activation-watch.sh"
 
 # ══ SECTION 3 — EFFECT-CHECK OUR OWN WORK (Deploy DoD: every deploy ends with 'it resolves + runs') ═══
 echo
@@ -89,6 +112,18 @@ launchctl list 2>/dev/null | grep -q com.reso.lr-reset-poller \
   && echo "  ✓ lr-reset-poller launchd ACTIVE" || echo "  · lr-reset-poller NOT loaded — install per template ① below"
 "$BIN/cc-sessions" --names >/dev/null 2>&1 \
   && echo "  ✓ P8 session registry answers" || echo "  · P8 registry quiet — see /tmp/p8-activate.sh for a fresh machine"
+for s in desk-invariant.sh nightly-regression.sh settings-drift-assert.sh; do
+  if [ -x "$HOME/.claude/scripts/$s" ] && readlink "$HOME/.claude/scripts/$s" | grep -q "$REPO"; then echo "  ✓ scripts/$s live → repo"
+  else echo "  ✗ scripts/$s symlink broken/foreign"; FAILS=$((FAILS+1)); fi
+done
+launchctl list 2>/dev/null | grep -q com.claude.desk-invariant \
+  && echo "  ✓ desk-invariant launchd ACTIVE (P0-14)" || echo "  · desk-invariant NOT loaded — install per template ⑨ below"
+launchctl list 2>/dev/null | grep -q com.claude.nightly-regression \
+  && echo "  ✓ nightly-regression launchd ACTIVE (P0-18)" || echo "  · nightly-regression NOT loaded — install per template ⑩ below"
+# desk-existence liveness snapshot (read-only; the invariant itself will page/re-fire when loaded)
+if [ -f "$HOME/.claude/cc-roles/desk" ]; then
+  echo "  · desk role → $(cat "$HOME/.claude/cc-roles/desk" 2>/dev/null) (desk-invariant asserts engagement once loaded)"
+else echo "  · cc-roles/desk absent — desk-invariant will fire a replacement from the canned brief (budgeted)"; fi
 [ "$FAILS" -gt 0 ] && { echo "⛔ effect-check failed — fix before installing the templates"; exit 1; }
 
 # ══ SECTION 4 — TEMPLATES (adapt + install YOURSELF; NOTHING below is auto-applied) ═══════════════════
@@ -141,12 +176,71 @@ tail -5 ~/.reso/limit-recover/poller.log        # eyeball the first tick
 # D2 supervisor + boundary-hook: docs/D2-RUNTIME-ACTIVATION.md (/tmp/d2-activate.sh pattern)
 # P8 session-register SessionStart hook: /tmp/p8-activate.sh pattern (4 config dirs)
 
+════ ⑨ DESK-EXISTENCE INVARIANT (P0-14 — the missing organ) ════════════════════════════════════════════
+# The API-budget-independent launchd observer: asserts a registered desk exists AND took a turn <=45m
+# (or holds a fresh owned wait-contract); else OS-pages + re-prompts a stunned desk / fires a BUDGETED
+# replacement (<=2/6h). It NEVER kills or edits a session. Load it (300s sweep, RunAtLoad):
+cp "$REPO/launchd/com.claude.desk-invariant.plist" ~/Library/LaunchAgents/
+launchctl bootstrap gui/\$(id -u) ~/Library/LaunchAgents/com.claude.desk-invariant.plist
+# Prereqs it reads: ~/.claude/cc-roles/desk (a live desk pane UUID — set in §2) + the P8 cc-registry.
+# Tunables (plist env): DESK_INVARIANT_STALE_MIN=45 · RESPAWN_MAX=2 · RESPAWN_WINDOW_S=21600 · DEDUP_WINDOW_S=3600.
+# NOTE: the replacement-fire uses handoff-fire --as-role (fm2-stack P0-15). Until that lands, confirm the
+# fire argv or override DESK_INVARIANT_FIRE_BIN. Dry-check: "$REPO/scripts/desk-invariant.sh" --selftest
+# kill-switch: launchctl bootout gui/\$(id -u)/com.claude.desk-invariant
+
+════ ⑩ NIGHTLY REGRESSION SIGNAL (P0-18) ═══════════════════════════════════════════════════════════════
+# Runs bats + gate/lint selftests + plutil -lint nightly (04:00); PAGES on red (autonomy/pages/ + osascript);
+# always logs one line to ~/.claude/autonomy/regression.log. p12: nothing runs the tests between lands.
+cp "$REPO/launchd/com.claude.nightly-regression.plist" ~/Library/LaunchAgents/
+launchctl bootstrap gui/\$(id -u) ~/Library/LaunchAgents/com.claude.nightly-regression.plist
+# eyeball one run now:  "$REPO/scripts/nightly-regression.sh" --run ; tail -3 ~/.claude/autonomy/regression.log
+# kill-switch: launchctl bootout gui/\$(id -u)/com.claude.nightly-regression
+
+════ ⑪ HOOK ROSTER: template merge + boundary-4-dir + activation-watch (G-P6-7 / G-P6-5b / D-v) ═════════
+# settings-templates/settings.example.json carries the FULL portable hook roster. Wire it per config dir
+# (ADDITIVE event merge + deny/ask union; each writes a .pre-wire.bak; a read-only assert reports gaps):
+for d in ~/.claude ~/.claude-next ~/.claude-secondary ~/.claude-tertiary ~/.claude-quaternary; do
+  "$REPO/install.sh" --config-dir "\$d" --wire-hooks
+done
+# boundary-handoff is ORDER-sensitive in the Stop chain — the merge won't reorder a populated Stop. If the
+# assert still flags it, add per dir by hand (obj-2):
+#   settings.json .hooks.Stop += [ { "hooks":[ {"type":"command","command":"~/.claude/hooks/boundary-handoff.sh"} ] } ]
+# activation-watch is wired by --wire-hooks (SessionStart). completion-assert + DoD re-inject (dod-persist)
+# are fm1-stack P0-3/T-P6-7 — add hooks/completion-assert.sh into Stop obj-1 (before anti-deference) once it lands.
+
+════ ⑫ SETTINGS-DRIFT ASSERT on SessionStart (T-P10-4) ═════════════════════════════════════════════════
+# Surface a deny/ask/hook rule that silently dropped out of one of the 5 config dirs (memory: next4 drifted).
+# Add to EACH dir's SessionStart (advisory — the assert exits 1 on drift; SessionStart hooks don't block):
+#   .hooks.SessionStart += [ { "hooks":[ {"type":"command","command":"~/.claude/scripts/settings-drift-assert.sh","timeout":8} ] } ]
+# check anytime:  "$REPO/scripts/settings-drift-assert.sh"     (exit 1 + named lines on any drift)
+
+════ ⑬ PAGE DELIVERY: CC_PAGE_TO + Pushover (P0-7 / G-P10-6 — the page channel is DISCONNECTED today) ═══
+# lead-supervisor sets CC_PAGE_TO="" → every page is a dead-letter; push-critical is INERT (no token). Arm
+# BOTH so desk-invariant / nightly / supervisor pages actually reach you:
+#   1. /usr/libexec/PlistBuddy -c 'Set :EnvironmentVariables:CC_PAGE_TO desk' \\
+#        ~/Library/LaunchAgents/com.claude.lead-supervisor.plist   (role-indirected via cc-roles/desk)
+#      then: launchctl kickstart -k gui/\$(id -u)/com.claude.lead-supervisor
+#   2. ~/.zshenv:  export PUSHOVER_TOKEN=... ; export PUSHOVER_USER=...
+# verify once:  printf '{"message":"wiring-all test"}' | ~/.claude/hooks/push-critical.sh   (expect a phone buzz)
+
+════ ⑭ GATE-GREEN PRODUCER (verify) + KIMI HEDGE KEY ═══════════════════════════════════════════════════
+# boundary-handoff fires only when .git/gate-green==HEAD. landing's ship-land.sh is the PRODUCER — verify a
+# green /ship writes it:  git rev-parse HEAD ; cat "\$(git rev-parse --git-common-dir)/gate-green"  (must match)
+# Kimi metered hedge (cliff-fallback for a capped account):
+#   ~/.zshenv:  export MOONSHOT_API_KEY=...   (endpoint api.moonshot.ai/anthropic — metered, NOT the /coding flat plan)
+
 ════ ⑧ ROLLBACK (mirror of every step above) ═══════════════════════════════════════════════════════════
 # launchctl unload ~/Library/LaunchAgents/com.reso.lr-reset-poller.plist && rm <plist>
 # remove the never-stuck line from lead-supervisor.sh sweep() + kickstart
 # /permissions → remove Bash(cc-teardown:*) etc.
 # rm ~/.claude/bin/{cc-respawn,cc-route} (+ any of the others); restore ~/.claude/scripts/limit-recover
 #   from the repo by plain copy if symlinks are unwanted; remove the reap-guard/F3/F4/F5 insertions.
+# v3 (⑨–⑭):
+#   launchctl bootout gui/\$(id -u)/com.claude.desk-invariant     && rm ~/Library/LaunchAgents/com.claude.desk-invariant.plist
+#   launchctl bootout gui/\$(id -u)/com.claude.nightly-regression && rm ~/Library/LaunchAgents/com.claude.nightly-regression.plist
+#   restore each settings.json from its .pre-wire.bak; remove the settings-drift SessionStart line;
+#     unset CC_PAGE_TO / PUSHOVER_* / MOONSHOT_API_KEY; rm the ~/.claude/scripts/{desk-invariant,
+#     nightly-regression,settings-drift-assert}.sh + ~/.claude/hooks/activation-watch.sh symlinks.
 TEMPLATES
 
 echo "== done: VERIFIED green + symlinks/role-map applied + effect-checked; every template printed above =="
