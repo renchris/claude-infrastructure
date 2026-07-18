@@ -13,6 +13,41 @@ setup() {
   export ANTIDEF_STATE_DIR="$BATS_TEST_TMPDIR/state"
   export ANTIDEF_IDL="$BATS_TEST_TMPDIR/idl.jsonl"
   export ANTIDEF_MAX=3
+  export WRAP_TRUNK="origin/main"
+}
+
+# ── git fixtures for the P0-4 (b)/(c) ledger-aware paths (bare origin + working clone) ──
+mkrepo_landed() {   # clean, HEAD == origin/main (nothing to drive)
+  local o="$BATS_TEST_TMPDIR/o-$1.git" w="$BATS_TEST_TMPDIR/w-$1"
+  git init -q --bare "$o"; git clone -q "$o" "$w"
+  ( cd "$w"; git config user.email t@e.com; git config user.name t; git checkout -q -b main
+    echo base > base.txt; git add base.txt; git commit -q -m base; git push -q -u origin main ) >/dev/null 2>&1
+  printf '%s' "$w"
+}
+mkrepo_unlanded() { # clean tree, one commit ahead of origin/main ⇒ push/land is DRIVABLE
+  local w; w="$(mkrepo_landed "$1")"
+  ( cd "$w"; echo x > x.txt; git add x.txt; git commit -q -m "unlanded verified work" ) >/dev/null 2>&1
+  printf '%s' "$w"
+}
+mkrepo_dirty() {    # uncommitted changes ⇒ NOT drivable (carve-out preserved)
+  local w; w="$(mkrepo_landed "$1")"
+  ( cd "$w"; echo dirt >> base.txt ) >/dev/null 2>&1
+  printf '%s' "$w"
+}
+# transcript with the real deference text buried under a tool_use-only turn, a sidechain turn,
+# and a metadata tail (the G-P11-1 343c6e77 shape) — extractor must WALK BACK to the main text.
+mkfix_tail() {
+  local text="$1" path="$BATS_TEST_TMPDIR/txt-${BATS_TEST_NUMBER}-$RANDOM.jsonl"
+  {
+    jq -nc --arg t "$text" '{type:"assistant",message:{content:[{type:"text",text:$t}]}}'
+    jq -nc '{type:"assistant",message:{content:[{type:"tool_use",name:"Bash",input:{}}]}}'
+    jq -nc '{type:"assistant",isSidechain:true,message:{content:[{type:"text",text:"subagent chatter"}]}}'
+    jq -nc '{type:"system",subtype:"mode",mode:"acceptEdits"}'
+  } > "$path"
+  printf '%s' "$path"
+}
+runhook_at() { # $1=transcript $2=cwd $3=sid  — drive the hook with a real git cwd
+  printf '{"session_id":"%s","transcript_path":"%s","cwd":"%s"}' "${3:-sid-$RANDOM}" "$1" "$2" | bash "$HOOK"
 }
 
 # Build a transcript whose LAST assistant message carries $1 as text; echo its path.
@@ -166,4 +201,62 @@ fired()  { echo "$1" | grep -q '"decision":"block"'; }   # hook stdout ⇒ did i
   echo "$output" | grep -q "Anti-deference"
   echo "$output" | grep -q "DRIVE it now"
   echo "$output" | grep -qi "want me to"
+}
+
+# ══ P0-4 (a): main-agent-scoped extraction — walk back past tool_use/sidechain/metadata tail ══
+@test "P0-4a: fires on a deference tell buried under a tool_use/sidechain/metadata tail" {
+  # current tail-1 extraction grabs the metadata/sidechain tail → abstains no-assistant-text (RED)
+  run runhook_at "$(mkfix_tail "The rest is drafted. Want me to wire it in?")" "/tmp/adf"
+  [ "$status" -eq 0 ]; fired "$output"
+}
+@test "P0-4a: a sidechain-only final text does not mask the main agent's deference" {
+  local tx="$BATS_TEST_TMPDIR/side.jsonl"
+  jq -nc '{type:"assistant",message:{content:[{type:"text",text:"Shall I proceed with the wiring?"}]}}'  > "$tx"
+  jq -nc '{type:"assistant",isSidechain:true,message:{content:[{type:"text",text:"(subagent) inspecting files"}]}}' >> "$tx"
+  run runhook_at "$tx" "/tmp/adf"
+  [ "$status" -eq 0 ]; fired "$output"
+}
+
+# ══ P0-4 (b): ship/land carve-out is CONDITIONAL — drivable (clean ∧ own commits) ⇒ FIRE ══
+@test "P0-4b: 'Pushing to main is your call' FIRES over clean+own-commits (ship not genuine)" {
+  local w; w="$(mkrepo_unlanded pb)"
+  # current blanket carve-out abstains genuine-blocker (RED); narrowed version fires
+  run runhook_at "$(mkfix "Committed on the branch. Pushing to main is your call — say the word to land.")" "$w" "pb-s"
+  [ "$status" -eq 0 ]; fired "$output"
+}
+@test "P0-4b: verbatim 'say the word (/ship or push)' FIRES over clean+own-commits" {
+  local w; w="$(mkrepo_unlanded pbv)"
+  run runhook_at "$(mkfix "📦 Done, but only on a branch. Say the word (/ship or push) to land it.")" "$w" "pbv-s"
+  [ "$status" -eq 0 ]; fired "$output"
+}
+@test "P0-4b: carve-out PRESERVED when NOT drivable (dirty tree) — 'pushing is your call' abstains" {
+  local w; w="$(mkrepo_dirty pbd)"
+  run runhook_at "$(mkfix "Pushing to main is your call — do you want me to open a PR?")" "$w" "pbd-s"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+}
+@test "P0-4b: a true value-fork 'your call' with NO ship verb stays genuine (abstains)" {
+  local w; w="$(mkrepo_unlanded pbf)"
+  run runhook_at "$(mkfix "Session cookies vs JWT for the token store — your call. Want me to sketch both?")" "$w" "pbf-s"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+}
+
+# ══ P0-4 (c): confident false-DONE assertions fire ONLY when the live ledger contradicts ══
+@test "P0-4c: 'Complete — nothing to do' FIRES over committed-but-unlanded work" {
+  local w; w="$(mkrepo_unlanded pc)"
+  # current TELLS has no done-assertion → abstains no-tell (RED); (c) fires on ledger contradiction
+  run runhook_at "$(mkfix "Complete — nothing to do.")" "$w" "pc-s"
+  [ "$status" -eq 0 ]; fired "$output"
+}
+@test "P0-4c: 'Everything requested is done' FIRES over a frozen-DoD remainder" {
+  local w; w="$(mkrepo_landed pcr)"
+  local dod="$BATS_TEST_TMPDIR/dod-pcr.md"; printf -- '- [x] a\n- [ ] b\n' > "$dod"
+  export WRAP_DOD_FILE="$dod"
+  run runhook_at "$(mkfix "Everything requested is done.")" "$w" "pcr-s"
+  [ "$status" -eq 0 ]; fired "$output"
+}
+@test "P0-4c: an HONEST 'Complete — nothing to do' over a clean+landed tree stays SILENT" {
+  local w; w="$(mkrepo_landed pcc)"
+  export WRAP_DOD_FILE="$BATS_TEST_TMPDIR/none.md"
+  run runhook_at "$(mkfix "Complete — nothing to do.")" "$w" "pcc-s"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
 }

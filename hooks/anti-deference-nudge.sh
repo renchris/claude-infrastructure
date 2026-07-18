@@ -9,18 +9,24 @@
 # slipping, so this is the STRUCTURAL fix: a Stop hook that reads the last assistant message,
 # detects the tell, and blocks the stop with a corrective nudge — DRIVE it, don't defer.
 #
-# ── WHAT IT STRUCTURALLY CANNOT SEE / THE THREE-GENUINE CARVE-OUT ──
-#   The hook must NEVER fire on a LEGITIMATE surface. Three asks are genuine and pre-authorized
-#   to STOP the model (Session Close Protocol ⛔ / G2-G3): (1) external-info only the operator
-#   has (credentials, which-account, no-access); (2) a value-fork the standing values do not
-#   settle (which-do-you-prefer, your-call); (3) a C10 permission the model cannot self-execute
-#   (push/land/deploy, sudo, interactive login, destructive migration, force-push). So the fire
-#   predicate is  has_tell AND NOT has_genuine  — a tell that CO-OCCURS with any genuine marker
-#   abstains. Bias is deliberately toward FALSE-NEGATIVE (miss a soft defer) over FALSE-POSITIVE
-#   (nag a real blocker): a nagging hook trains the model to route around it. Both regexes were
-#   corpus-validated (tests/anti-deference-nudge.bats + scratchpad probe): 15 positives fire,
-#   16 negatives — clean answers, genuine-STOP-ASK-with-tell, and substring traps ("should i
-#   download", "want to", "otherwise the code…") — stay silent.
+# ── FIRE PREDICATE + THE GENUINE CARVE-OUT (P0-4 triple fix) ──
+#   Fire = ( deference_tell  OR  (done_assertion AND live-ledger-contradiction) )
+#          AND NOT hard_genuine  AND NOT (ship_hold AND NOT drivable).
+#   The hook must NEVER fire on a LEGITIMATE surface. Genuine, pre-authorized-to-STOP asks (⛔ /
+#   G2-G3): (1) external-info only the operator has (credentials, which-account, no-access);
+#   (2) an unsettled value-fork (which-do-you-prefer; a bare "your call" with NO ship verb);
+#   (3) a C10 the model cannot self-execute (sudo, interactive login, destructive migration).
+#   NOT genuine (2026-07-17 strengthening, G-P11-2): push·land·ship·deploy of CLEAN committed
+#   work is DRIVABLE — the desk drives the land, it does not park-and-ask. So ship/land is
+#   carved out ONLY when the live ledger shows the tree is DIRTY or nothing is unlanded (a real
+#   hold); when clean ∧ own-commits-ahead, "say the word (/ship or push)" FIRES. A confident
+#   tell-free false-done ("complete — nothing to do") FIRES only when the ledger contradicts it,
+#   so an HONEST completion stays silent (a blanket done-matcher would nag every clean close).
+#   Bias stays toward FALSE-NEGATIVE (miss a soft defer) over FALSE-POSITIVE (nag a real blocker):
+#   a nagging hook trains the model to route around it. Corpus-validated in
+#   tests/anti-deference-nudge.bats (31 assertions: every listed tell fires; clean answers,
+#   genuine-STOP-ASK-with-tell, non-drivable ship-holds, honest completes, and the substring traps
+#   "should i download"/"want to"/"otherwise the code…" stay silent).
 #
 # ── SAFETY (a runaway blocking hook is worse than the disease — RED-proofed) ──
 #   L  ONE-SHOT LATCH-SET: the hash of every FIRED message is appended to a per-session set; a
@@ -40,7 +46,7 @@
 #      and "never evaluated" are distinguishable (boundary-handoff B-3 discipline). Alarm on
 #      abstained==100% over a long window would mean the tells stopped matching reality.
 #
-# Env seams (tests): ANTIDEF_STATE_DIR · ANTIDEF_IDL · ANTIDEF_MAX
+# Env seams (tests): ANTIDEF_STATE_DIR · ANTIDEF_IDL · ANTIDEF_MAX · WRAP_LEDGER_BIN (ledger path)
 set -uo pipefail
 
 STATE_DIR="${ANTIDEF_STATE_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/state/anti-deference}"
@@ -69,23 +75,85 @@ CWD="$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null || true)"
 case "$TP" in "~"*) TP="$HOME${TP#\~}" ;; esac      # expand a leading ~ if present
 [ -f "$TP" ] || abstain "transcript-missing"
 
-# ── Extract the LAST assistant message's text (streaming: keep only the last matching line,
-#    never slurp a large transcript into memory). tool_use-only / empty last turn → abstain. ──
-MSG="$(jq -c 'select(.type=="assistant")' "$TP" 2>/dev/null | tail -1 \
-        | jq -r '[.message.content[]? | select(.type=="text") | .text] | join("\n")' 2>/dev/null || true)"
+# ── (P0-4a) Extract the LAST MAIN-agent text: skip sidechain (subagent) records, and walk back
+#    past a tool_use-only / metadata tail to the last assistant record that carries text (the
+#    G-P11-1 343c6e77 shape defeated the old tail-1 → 74% no-assistant-text blind rate). Streaming
+#    (no slurp); per-record compact-JSON keeps multi-line text on one line for tail -1. ──
+LASTJSON="$(jq -c 'select(.type=="assistant" and (.isSidechain != true))
+                   | ([.message.content[]? | select(.type=="text") | .text] | join("\n"))
+                   | select(. != "")' "$TP" 2>/dev/null | tail -1 || true)"
+MSG="$(printf '%s' "$LASTJSON" | jq -r '. // empty' 2>/dev/null || true)"
 [ -n "$MSG" ] || abstain "no-assistant-text"
 
-# ── High-confidence deference tells on DRIVABLE work (corpus-validated; boundaries guard the
-#    substring traps: "should i (do)" won't match "should i download"; the "otherwise" tell
-#    requires a first-person hold, so "otherwise the code…" stays silent). ──
+# ── (A) Deference tells on DRIVABLE work (corpus-validated; boundaries guard the substring traps:
+#    "should i (do)" won't match "should i download"; the "otherwise" tell requires a first-person
+#    hold, so "otherwise the code…" stays silent). ──
 TELLS='say the word|on your word|want me to|shall i|should i (proceed|do|go)([^a-z0-9]|$)|let me know if you|holding for your|otherwise (i.?ll|i will|i.?d) (hold|wait|leave|hang|pause|stand)|your steer|do you want me to|awaiting your|i can [a-z]+ (it|this)( (next|now))?[[:space:]]*[—–-]+[[:space:]]*otherwise[[:space:]]+i'
+# ── (P0-4c) Confident DONE-assertions (NARROW: only the "nothing-to-do"-class). Fires ONLY when
+#    the live ledger contradicts the claim, so an HONEST completion stays silent (G-P11-3 / a19 D-1). ──
+DONE_TELLS='nothing (left|more|else)?[a-z ]{0,12}to do|everything [a-z ]{0,20}(is|was) done|everything (requested|else|you asked)[a-z ,]{0,20}(is|was)? ?done|complete[ ,—–-]+nothing|(we.?re|we are|all)[ ,]*done[ ,.—–-]+nothing|that.?s everything'
 
-printf '%s' "$MSG" | grep -iqE "$TELLS" || abstain "no-tell"
+has_tell=0; printf '%s' "$MSG" | grep -iqE "$TELLS"      && has_tell=1
+has_done=0; printf '%s' "$MSG" | grep -iqE "$DONE_TELLS" && has_done=1
+{ [ "$has_tell" -eq 1 ] || [ "$has_done" -eq 1 ]; } || abstain "no-tell"
 
-# ── The three-genuine carve-out: a tell co-occurring with a REAL blocker is legitimate. ──
-GENUINE='your (credential|password|api.?key|secret|token|login|cookie)|need (your|the)[^.]{0,40}(credential|password|secret|token|key|access|permission|approval)|only you (can|have|know)|(don.?t|do not|no) [a-z ]{0,20}access|which account|you.?ll need to (provide|give|share|tell|run|log ?in)|i (don.?t|do not) have (access|the |your |permission)|can you (provide|share|tell me|give me|confirm which)|which (do you|would you|of (these|the)|option|approach|one)|(would|do) you prefer|your call|up to you|how would you like|which direction|your approval|requires? (your|sudo|approval|authentication)|run (this|it|the [a-z ]{0,20}) ?yourself|sudo|interactive login|auth login|pushing to (main|origin)|push (is|remains)[^.]{0,20}your call|won.?t push|will not push|not push(ing)? (to|without)|force.?push|destructive migration|drop table|delete[^.]{0,20}production|navigation pattern|(db|database) timeout'
+# ── (P0-4b) Genuine carve-out, SPLIT so ship/land is CONDITIONAL, not blanket (G-P11-2 / I-3:
+#    a blanket push/land carve-out trains the model to bolt a genuine-marker on to silence the hook).
+#   HARD_CORE : credential/sudo/destructive-migration/external-info/value-fork — ALWAYS genuine.
+#   SOFTCALL  : "your call"/"up to you"/"your approval" — genuine as a value-fork ONLY with NO ship
+#               verb present; attached to a ship verb it is a (conditional) ship-hold, not genuine.
+#   PUSHHOLD / ship-hold: push·land·ship·deploy of CLEAN committed work is DRIVABLE — NOT genuine —
+#               when git is clean ∧ own commits are ahead of trunk (the 2026-07-17 strengthening). ──
+HARD_CORE='your (credential|password|api.?key|secret|token|login|cookie)|need (your|the)[^.]{0,40}(credential|password|secret|token|key|access|permission|approval)|only you (can|have|know)|(don.?t|do not|no) [a-z ]{0,20}access|which account|you.?ll need to (provide|give|share|tell|run|log ?in)|i (don.?t|do not) have (access|the |your |permission)|can you (provide|share|tell me|give me|confirm which)|which (do you|would you|of (these|the)|option|approach|one)|(would|do) you prefer|how would you like|which direction|requires? (your|sudo|approval|authentication)|run (this|it|the [a-z ]{0,20}) ?yourself|(^|[^a-z])sudo([^a-z]|$)|interactive login|auth login|destructive migration|drop table|delete[^.]{0,20}production|navigation pattern|(db|database) timeout'
+SOFTCALL='your call|up to you|your approval'
+PUSHHOLD='pushing to (main|origin)|push (is|remains)[^.]{0,20}your call|won.?t push|will not push|not push(ing)? (to|without)|force.?push'
+SHIPVERB='(^|[^a-z])(push|ship|land|deploy|merge)|pull request|open (a )?pr'
 
-printf '%s' "$MSG" | grep -iqE "$GENUINE" && abstain "genuine-blocker"
+has_soft=0;     printf '%s' "$MSG" | grep -iqE "$SOFTCALL" && has_soft=1
+has_shipv=0;    printf '%s' "$MSG" | grep -iqE "$SHIPVERB" && has_shipv=1
+has_pushhold=0; printf '%s' "$MSG" | grep -iqE "$PUSHHOLD" && has_pushhold=1
+
+hard=0
+printf '%s' "$MSG" | grep -iqE "$HARD_CORE" && hard=1
+{ [ "$has_soft" -eq 1 ] && [ "$has_shipv" -eq 0 ]; } && hard=1     # "your call" fork with NO ship verb → genuine
+[ "$hard" -eq 1 ] && abstain "genuine-blocker"
+
+ship_hold=0
+{ [ "$has_pushhold" -eq 1 ] || { [ "$has_soft" -eq 1 ] && [ "$has_shipv" -eq 1 ]; }; } && ship_hold=1
+
+# ── Live ledger — read ONLY when a ship-hold or a done-assertion needs a ground-truth check.
+#    drivable = clean ∧ own commits ahead (push/land is the desk's job); contradiction = the FM1
+#    remainder (dirty ∨ unlanded ∨ DoD-remainder). Any read failure → drivable/contradiction stay 0. ──
+drivable=0; contradiction=0
+if [ "$ship_hold" -eq 1 ] || [ "$has_done" -eq 1 ]; then
+  WRAP="${WRAP_LEDGER_BIN:-}"
+  if [ -z "$WRAP" ]; then
+    for cand in "$(dirname "$0")/../scripts/wrap-ledger.sh" "$CFG/scripts/wrap-ledger.sh" "$HOME/.claude/scripts/wrap-ledger.sh"; do
+      [ -f "$cand" ] && { WRAP="$cand"; break; }
+    done
+  fi
+  if [ -n "$WRAP" ] && [ -f "$WRAP" ]; then
+    LED="$( cd "$CWD" 2>/dev/null && bash "$WRAP" --machine 2>/dev/null || true )"
+    lf() { printf '%s' "$LED" | grep -E "^$1=" | head -1 | cut -d= -f2- || true; }
+    ld_dirty="$(lf DIRTY)"; ld_unl="$(lf UNLANDED)"; ld_rem="$(lf REMAINDER)"
+    case "$ld_dirty" in ''|*[!0-9]*) ld_dirty=0 ;; esac
+    case "$ld_unl"   in ''|*[!0-9]*) ld_unl=0 ;; esac
+    case "$ld_rem"   in ''|*[!0-9]*) ld_rem=0 ;; esac
+    { [ "$ld_dirty" -eq 0 ] && [ "$ld_unl" -eq 1 ]; } && drivable=1
+    { [ "$ld_dirty" -eq 1 ] || [ "$ld_unl" -eq 1 ] || [ "$ld_rem" -gt 0 ]; } && contradiction=1
+  fi
+fi
+
+# ── Decide fire (deference vs false-done), else abstain with a distinct, logged reason. ──
+FIRE_KIND=""
+if [ "$has_tell" -eq 1 ]; then
+  { [ "$ship_hold" -eq 1 ] && [ "$drivable" -eq 0 ]; } && abstain "genuine-ship-hold"
+  FIRE_KIND="deference"
+elif [ "$has_done" -eq 1 ]; then
+  [ "$contradiction" -eq 1 ] || abstain "done-ledger-clean"
+  FIRE_KIND="false-done"
+fi
+[ -n "$FIRE_KIND" ] || abstain "no-fire"
 
 # ── Latch-set + hard cap (RED-proofed L + C). ──
 mkdir -p "$STATE_DIR" 2>/dev/null || true
@@ -105,10 +173,17 @@ N="$(grep -c . "$FIRED" 2>/dev/null || echo 0)"; case "$N" in ''|*[!0-9]*) N=0 ;
 
 # ── FIRE: record the hash (re-arm baseline + cap increment), log, block with the corrective. ──
 printf '%s\n' "$HASH" >> "$FIRED" 2>/dev/null || true
-TELL="$(printf '%s' "$MSG" | grep -ioE "$TELLS" 2>/dev/null | head -1 | tr -d '\n')"
-log_idl fired "deference-tell" "\"tell\":\"${TELL//\"/}\",\"count\":$((N+1)),\"max\":${MAX}"
+if [ "$FIRE_KIND" = "false-done" ]; then
+  TRIGGER="$(printf '%s' "$MSG" | grep -ioE "$DONE_TELLS" 2>/dev/null | head -1 | tr -d '\n')"
+else
+  TRIGGER="$(printf '%s' "$MSG" | grep -ioE "$TELLS" 2>/dev/null | head -1 | tr -d '\n')"
+fi
+log_idl fired "$FIRE_KIND" "\"tell\":\"${TRIGGER//\"/}\",\"count\":$((N+1)),\"max\":${MAX}"
 
-reason="Anti-deference: you presented drivable work as a question/hold (matched: \"${TELL}\"). If it's drivable + pre-authorized, DRIVE it now — only surface the genuine three (external-info the operator alone has / a value-fork the standing values don't settle / a C10 permission you can't self-execute like push·land·deploy·sudo·destructive-migration). Re-answer by DOING it, or by naming the ONE specific irreducible blocker. (anti-deference nudge $((N+1))/${MAX})"
+detail=""
+{ [ "$ship_hold" -eq 1 ] && [ "$drivable" -eq 1 ]; } && detail=" Ship/land of clean committed work is DRIVABLE — /ship it, don't park it."
+[ "$FIRE_KIND" = "false-done" ] && detail=" The LIVE ledger contradicts 'done' (uncommitted / unlanded / DoD-remainder) — it is NOT done."
+reason="Anti-deference: you presented drivable / complete-looking work as a question / hold / false-done (matched: \"${TRIGGER}\").${detail} If it's drivable + pre-authorized, DRIVE it now — only surface the genuine three (external-info the operator alone has / an unsettled value-fork / a C10 you can't self-execute like sudo·credential·destructive-migration; push·land·deploy of verified work is NOT one). Re-answer by DOING it, or by naming the ONE specific irreducible blocker. (anti-deference nudge $((N+1))/${MAX})"
 
 jq -nc --arg r "$reason" '{decision:"block",reason:$r}'
 exit 0
