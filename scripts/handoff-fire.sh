@@ -132,11 +132,12 @@ MODEL_CONFIG="$HOME/.claude/model-config.yaml"
 # Cross-account comms substrate (FIXED $HOME/.claude — cross-account addressing, never
 # $CLAUDE_CONFIG_DIR). Env-overridable for tests.
 REG_DIR="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"
+CC_ROLES_DIR="${CC_ROLES_DIR:-$HOME/.claude/cc-roles}"
 
 PROMPT_FILE="" ACCOUNT="auto" LAUNCHER="" MODEL="" EFFORT="" CWD="" WORKTREE=""
 REPO="$DEFAULT_REPO" WTROOT="$HOME/Development/.worktrees" BASE="origin/main"
 SURFACE="split-right" SURFACE_EXPLICIT=0 SURFACE_REASON="" PROBE=0 DRY=0 IN_PLACE=0 EXTRA="" RECYCLE=0 SESSION_ID=""
-NOTIFY_BACK="" SELF_RETIRE=1
+NOTIFY_BACK="" SELF_RETIRE=1 AS_ROLE=""
 SPAWNED_PANE="" ENGAGE_VERIFY=0 FIRE_MARKER=""
 
 # Print the header comment up to (excluding) the first non-comment sentinel — growth-proof range.
@@ -285,6 +286,34 @@ ensure_registration() { # $1=regdir $2=pane $3=name $4=cwd $5=cmd → best-effor
   else
     rm -f "$tmp" 2>/dev/null
   fi
+  return 0
+}
+
+# ---- P0-15 role indirection (SO-1 ping-to-dead-pane break) ------------------------------------
+# A role file names the CURRENT pane for a logical role (e.g. "operator"); role-addressed pings
+# follow it, so a recycle/self-close that moves the desk to a new pane never strands a pending
+# ping on yesterday's pane. handoff-fire keeps the mapping current: --as-role writes the FIRED
+# pane at every fire; recycle/self-close scan+repoint any role still naming the OLD pane.
+write_role() { # $1=roles-dir $2=role $3=pane
+  local dir="$1" role="$2" pane="$3" tmp
+  [ -n "$dir" ] && [ -n "$role" ] && [ -n "$pane" ] || return 0
+  mkdir -p "$dir" 2>/dev/null || return 0
+  tmp="$dir/.$role.$$"
+  if printf '%s\n' "$pane" > "$tmp" 2>/dev/null; then
+    mv -f "$tmp" "$dir/$role" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+  else
+    rm -f "$tmp" 2>/dev/null
+  fi
+  return 0
+}
+refresh_roles_for() { # $1=roles-dir $2=old-pane $3=new-pane → repoint every role naming OLD to NEW
+  local dir="$1" old="$2" new="$3" f cur
+  [ -d "$dir" ] && [ -n "$old" ] && [ -n "$new" ] || return 0
+  for f in "$dir"/*; do
+    [ -f "$f" ] || continue
+    cur="$(head -n1 "$f" 2>/dev/null | tr -d '[:space:]')"
+    [ "$cur" = "$old" ] && write_role "$dir" "$(basename "$f")" "$new"
+  done
   return 0
 }
 
@@ -469,6 +498,7 @@ MSG
     echo "pane:      $SC_SID"
     if [ -n "$SC_SUCCESSOR" ]; then
       echo "successor: $SC_SUCCESSOR (tty $SUC_TTY — claude VERIFIED alive)"
+      echo "roles:     repoint any cc-roles/* naming $SC_SID → $SC_SUCCESSOR (P0-15)"
       echo "chain:     announce succession into successor (cc-notify) → arm watcher → FOREGROUND /exit (interrupts any in-flight turn, exits in seconds) → detached ps-poll ≤180s (CR nudge @60s) → it2 force-close pane → FOCUS successor"
     else
       echo "successor: none (--terminal: end-of-line, nothing continues this session's work)"
@@ -476,6 +506,10 @@ MSG
     fi
     exit 0
   fi
+  # P0-15: the pane is about to close — repoint every role still naming it to the (verified-alive)
+  # successor, so a role-addressed ping lands on the continuation, never on the dead pane (SO-1).
+  # A --terminal close has no successor → refresh_roles_for no-ops (nothing continues).
+  refresh_roles_for "$CC_ROLES_DIR" "$SC_SID" "$SC_SUCCESSOR"
   # Succession announce — INTO the survivor, BEFORE the close chain starts. The report emitted
   # in the closing pane dies with the pane (observed 23:03 2026-07-13); the successor's
   # transcript + mailbox are where the operator/its model will actually look. Composer inject
@@ -550,6 +584,7 @@ while [ $# -gt 0 ]; do case "$1" in
   --notify-back) NOTIFY_BACK="${2:-}"; case "$NOTIFY_BACK" in ""|--*) NOTIFY_BACK="__self__"; shift ;; *) shift 2 ;; esac ;;
   --self-retire)    SELF_RETIRE=1; shift ;;
   --no-self-retire) SELF_RETIRE=0; shift ;;
+  --as-role)     AS_ROLE="${2:?--as-role needs a value}"; shift 2 ;;
   --extra)       EXTRA="${2:?--extra needs a value}"; shift 2 ;;
   --dry-run)     DRY=1; shift ;;
   -h|--help)     usage ;;
@@ -1156,10 +1191,15 @@ if [ "$DRY" = 1 ]; then
   if [ "$RECYCLE" = 0 ]; then
     echo "engagement: post-spawn transcript/registry-birth verify (P0-11) → re-send once on miss → FIRE FAILED (never a false '→ fired')"
     echo "registry:  provisional row if no P8 SessionStart row appears ≤${FIRE_REG_TIMEOUT:-30}s (P0-12)"
+    [ -n "$AS_ROLE" ] && echo "role:      --as-role $AS_ROLE → $CC_ROLES_DIR/$AS_ROLE = <fired pane> (P0-15)"
   fi
   [ "$RECYCLE" = 1 ] || echo "pre-trust: $LAUNCH_DIR → $(basename "$(config_dir_for_launcher "$LAUNCHER")") (fired session skips the workspace-trust dialog)"
   echo "command:  $CMD"
 elif [ "$RECYCLE" = 1 ]; then
+  # P0-15: the recycled pane IS the continuation (same UUID) — keep any role naming it current,
+  # and honor --as-role. refresh is a no-op when nothing named this pane.
+  refresh_roles_for "$CC_ROLES_DIR" "$SID" "$SID"
+  [ -n "$AS_ROLE" ] && write_role "$CC_ROLES_DIR" "$AS_ROLE" "$SID"
   recycle_fire
 else
   pre_trust "$LAUNCH_DIR" "$(config_dir_for_launcher "$LAUNCHER")"
@@ -1173,6 +1213,8 @@ else
       # P0-12: guarantee a registry row so the reaper/board can see the fired pane.
       FIRE_NAME="$(basename "$LAUNCH_DIR")-${SPAWNED_PANE%%-*}"
       ensure_registration "$REG_DIR" "$SPAWNED_PANE" "$FIRE_NAME" "$LAUNCH_DIR" "$CMD"
+      # P0-15: publish the fired pane under its role so role-addressed pings reach it.
+      if [ -n "$AS_ROLE" ] && [ -n "$SPAWNED_PANE" ]; then write_role "$CC_ROLES_DIR" "$AS_ROLE" "$SPAWNED_PANE"; fi
     else
       echo "!! FIRE FAILED — never engaged: $LAUNCHER at ${SPAWNED_PANE:-<pane?>} did not ingest the brief within the engagement window (re-sent once). The pane is live but TASK-LESS — recover with a WARM re-fire (--cwd <existing-worktree>); do NOT trust this as a working session (INC-4 / cold-worktree-fire-autosubmit-race)." >&2
       exit 1
