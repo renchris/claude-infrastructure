@@ -1,0 +1,217 @@
+#!/bin/bash
+# cc-decide — the unattended DECISION-QUEUE packet tool (P15 §3.2). A STOP-ASK
+# boundary with no human present writes ONE durable decision packet here instead of
+# idling in-session context; the packet SURVIVES a recycle, is push-notified for
+# early-veto, and (class-B) fires its default at a deadline. The packet is EVIDENCE:
+# its status is a VIEW/hygiene concern — an OPEN packet is NEVER deleted on age
+# (inv7); only terminal packets (vetoed|actioned|expired-actioned) age-compact.
+#
+# Store: one JSON file per decision at ${CC_DECISIONS_DIR:-~/.claude/autonomy/decisions}/<id>.json
+# id = 12-hex of class+session_sid+what_plain (content-keyed → re-`open` is idempotent
+#      while the packet is still on disk; a genuinely new decision has new content → new id).
+#
+# THE THREE CLASSES (gate-classify.sh routes every boundary to exactly one):
+#   A  AUTO-DECIDE + audit trail — the agent already ruled + ACTED; the packet is the trail.
+#   B  QUEUE-FOR-REVIEW — a value-fork/external-info the values don't settle, AFTER route-around
+#      failed: carries a default_if_no_veto + veto_deadline; the default FIRES at the deadline
+#      (async early-veto, never a sync approval).
+#   C  HARD-BLOCK (human-only) — C10 self-mod / C6 money-path / permission denial: WAITS, has NO
+#      default (the ceiling holds); carries a staged one-action artifact + rollback one-liner.
+#
+# Verbs:
+#   open  --class A|B|C --what <plain-english, NO codenames>
+#         [--option "label::outcome" ...] [--recommendation r] [--default d] [--deadline ISO]
+#         [--session-sid s] [--session-pane u] [--staged-artifact p] [--route-around r] [--id id]
+#           → fail-closed: B needs default+deadline; C must NOT carry a default; what_plain required.
+#             Echoes the id.
+#   veto   <id> [--by who]                 open → vetoed   (operator killed the default)
+#   action <id> [--evidence ref]           open → actioned (the decision was carried out)
+#   list   [--open | --all | --class X | --expiring]     (default --open)
+#   expire-sweep    class-B past veto_deadline & open ⇒ expired-actioned, and REPORT the fired
+#                   default line ("fired\t<id>\t<default>") to stdout for the CALLER to act on.
+#                   The sweep itself EXECUTES nothing and DELETES nothing (inv7).
+#
+# Env (tests): CC_DECISIONS_DIR · CC_IDL (audit trail) · CC_NOW (ISO override for expiry compare).
+# BSD+GNU portable, no eval, fail-loud. Exit 0 ok · 2 usage/schema-refusal · 3 unknown id.
+set -uo pipefail
+
+DECISIONS_DIR="${CC_DECISIONS_DIR:-$HOME/.claude/autonomy/decisions}"
+IDL="${CC_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
+
+usage() { sed -n '2,/^set -uo/p' "$0" | sed 's/^# \{0,1\}//; /^set -uo/d'; }
+
+now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+
+# mk_id <class> <sid> <what> → 12-hex content key (US-separated, collision-safe).
+mk_id() { printf '%s\037%s\037%s' "$1" "$2" "$3" | shasum -a 256 | cut -c1-12; }
+
+ensure_dir() { mkdir -p "$DECISIONS_DIR" 2>/dev/null || true; }
+
+# Best-effort audit line; NEVER fails the command.
+log_idl() { # <verb> <id> <class> <status>
+  mkdir -p "$(dirname "$IDL")" 2>/dev/null || true
+  printf '{"ts":"%s","tool":"cc-decide","verb":"%s","id":"%s","class":"%s","status":"%s"}\n' \
+    "$(now_iso)" "$1" "$2" "$3" "$4" >> "$IDL" 2>/dev/null || true
+}
+
+cmd_open() {
+  local class="" what="" rec="" def="" deadline="" sid="" pane="" staged="" route="" id=""
+  local options=()
+  while [ $# -gt 0 ]; do
+    local key="$1"; shift
+    case "$key" in
+      --class)           class="${1:-}";    [ $# -gt 0 ] && shift ;;
+      --what)            what="${1:-}";      [ $# -gt 0 ] && shift ;;
+      --option)          options+=("${1:-}"); [ $# -gt 0 ] && shift ;;
+      --recommendation)  rec="${1:-}";       [ $# -gt 0 ] && shift ;;
+      --default)         def="${1:-}";       [ $# -gt 0 ] && shift ;;
+      --deadline)        deadline="${1:-}";  [ $# -gt 0 ] && shift ;;
+      --session-sid)     sid="${1:-}";       [ $# -gt 0 ] && shift ;;
+      --session-pane)    pane="${1:-}";      [ $# -gt 0 ] && shift ;;
+      --staged-artifact) staged="${1:-}";    [ $# -gt 0 ] && shift ;;
+      --route-around)    route="${1:-}";     [ $# -gt 0 ] && shift ;;
+      --id)              id="${1:-}";        [ $# -gt 0 ] && shift ;;
+      *) printf 'cc-decide open: unknown arg %s\n' "$key" >&2; return 2 ;;
+    esac
+  done
+
+  # ── fail-closed schema gate (asymmetric: a malformed packet is REFUSED, never half-written) ──
+  case "$class" in
+    A|B|C) : ;;
+    *) echo "cc-decide open: --class must be A|B|C (got '${class}')" >&2; return 2 ;;
+  esac
+  [ -n "$what" ] || { echo "cc-decide open: --what (plain-english, no codenames) is required" >&2; return 2; }
+  if [ "$class" = "B" ]; then
+    [ -n "$def" ]      || { echo "cc-decide open: class-B REQUIRES --default (default_if_no_veto)" >&2; return 2; }
+    [ -n "$deadline" ] || { echo "cc-decide open: class-B REQUIRES --deadline (veto_deadline)" >&2; return 2; }
+  fi
+  if [ "$class" = "C" ] && [ -n "$def" ]; then
+    echo "cc-decide open: class-C must NOT carry a --default (C waits, never defaults)" >&2; return 2
+  fi
+
+  ensure_dir
+  [ -n "$id" ] || id="$(mk_id "$class" "$sid" "$what")"
+  local file="$DECISIONS_DIR/$id.json"
+  # Idempotent + inv7: an existing packet is EVIDENCE — never overwrite it, just echo the id.
+  if [ -f "$file" ]; then echo "$id"; return 0; fi
+
+  # Build the options array (bash 3.2-safe: guard the empty-array expansion under set -u).
+  local opts_json="[]" o label outcome
+  if [ "${#options[@]}" -gt 0 ]; then
+    for o in "${options[@]}"; do
+      label="${o%%::*}"; outcome="${o#*::}"
+      [ "$outcome" = "$o" ] && outcome=""     # no '::' separator → outcome empty
+      opts_json="$(printf '%s' "$opts_json" | jq -c --arg l "$label" --arg o "$outcome" \
+        '. + [{label:$l, outcome_in_operator_terms:$o}]')" || { echo "cc-decide open: options build failed" >&2; return 2; }
+    done
+  fi
+
+  local tmp="$file.tmp.$$"
+  if jq -n --arg id "$id" --arg created "$(now_iso)" --arg class "$class" \
+        --arg sid "$sid" --arg pane "$pane" --arg what "$what" \
+        --argjson options "$opts_json" --arg rec "$rec" --arg def "$def" \
+        --arg deadline "$deadline" --arg staged "$staged" --arg route "$route" \
+    '{id:$id, created:$created, class:$class, session_sid:$sid, session_pane_uuid:$pane,
+      what_plain:$what, options:$options, recommendation:$rec,
+      default_if_no_veto:$def, veto_deadline:$deadline,
+      staged_artifact_path:$staged, route_around_taken:$route, status:"open"}' \
+    > "$tmp" 2>/dev/null && mv "$tmp" "$file"; then :; else
+    rm -f "$tmp" 2>/dev/null || true; echo "cc-decide open: write failed" >&2; return 2
+  fi
+
+  log_idl open "$id" "$class" open
+  echo "$id"
+}
+
+# Shared open→terminal transition (status is a VIEW update; content preserved, file NEVER deleted).
+cmd_transition() {
+  local verb="$1"; shift
+  local id="${1:-}"; [ $# -gt 0 ] && shift
+  local by="" evidence=""
+  while [ $# -gt 0 ]; do
+    local key="$1"; shift
+    case "$key" in
+      --by)       by="${1:-}";       [ $# -gt 0 ] && shift ;;
+      --evidence) evidence="${1:-}"; [ $# -gt 0 ] && shift ;;
+      *) printf 'cc-decide %s: unknown arg %s\n' "$verb" "$key" >&2; return 2 ;;
+    esac
+  done
+  [ -n "$id" ] || { printf 'cc-decide %s: <id> is required\n' "$verb" >&2; return 2; }
+  local file="$DECISIONS_DIR/$id.json"
+  [ -f "$file" ] || { printf 'cc-decide %s: unknown id %s\n' "$verb" "$id" >&2; return 3; }
+  local newstatus; [ "$verb" = "veto" ] && newstatus="vetoed" || newstatus="actioned"
+  local tmp="$file.tmp.$$"
+  if jq --arg s "$newstatus" --arg ev "$evidence" --arg by "$by" --arg ts "$(now_iso)" \
+     '.status=$s | .resolved=$ts
+      | (if $ev != "" then .evidence=$ev  else . end)
+      | (if $by != "" then .resolved_by=$by else . end)' \
+     "$file" > "$tmp" 2>/dev/null && mv "$tmp" "$file"; then :; else
+    rm -f "$tmp" 2>/dev/null || true; printf 'cc-decide %s: update failed\n' "$verb" >&2; return 2
+  fi
+  log_idl "$verb" "$id" "$(jq -r '.class' "$file" 2>/dev/null || echo '?')" "$newstatus"
+  echo "$id"
+}
+
+cmd_list() {
+  local mode="open" classf=""
+  while [ $# -gt 0 ]; do
+    local key="$1"; shift
+    case "$key" in
+      --open)     mode="open" ;;
+      --all)      mode="all" ;;
+      --expiring) mode="expiring" ;;
+      --class)    classf="${1:-}"; [ $# -gt 0 ] && shift ;;
+      *) printf 'cc-decide list: unknown arg %s\n' "$key" >&2; return 2 ;;
+    esac
+  done
+  [ -d "$DECISIONS_DIR" ] || return 0
+  local f
+  for f in "$DECISIONS_DIR"/*.json; do
+    [ -e "$f" ] || continue
+    jq -r --arg mode "$mode" --arg classf "$classf" '
+      select($classf == "" or .class == $classf)
+      | select(
+          $mode == "all"
+          or ($mode == "open"     and .status == "open")
+          or ($mode == "expiring" and .status == "open" and .class == "B" and .veto_deadline != "")
+        )
+      | [.status, .class, .id, (.veto_deadline // ""), .what_plain] | @tsv
+    ' "$f" 2>/dev/null
+  done | sort | while IFS=$'\t' read -r st cl id dl what; do
+      printf '%-16s | %s | %s | %-20s | %s\n' "$st" "$cl" "$id" "$dl" "$what"
+    done
+}
+
+# expire-sweep: REPORT (never execute) each fired class-B default; transition it to
+# expired-actioned. Deletes nothing. A class-C packet has no deadline ⇒ never fires.
+cmd_expire_sweep() {
+  [ -d "$DECISIONS_DIR" ] || return 0
+  local now="${CC_NOW:-$(now_iso)}" f info id def tmp
+  for f in "$DECISIONS_DIR"/*.json; do
+    [ -e "$f" ] || continue
+    info="$(jq -r --arg now "$now" '
+      if (.class == "B" and .status == "open" and .veto_deadline != "" and .veto_deadline < $now)
+      then "\(.id)\t\(.default_if_no_veto)" else empty end' "$f" 2>/dev/null || true)"
+    [ -n "$info" ] || continue
+    id="${info%%$'\t'*}"; def="${info#*$'\t'}"
+    tmp="$f.tmp.$$"
+    if jq --arg ts "$now" '.status="expired-actioned" | .resolved=$ts' "$f" > "$tmp" 2>/dev/null \
+      && mv "$tmp" "$f"; then :; else
+      rm -f "$tmp" 2>/dev/null || true; continue
+    fi
+    log_idl expire-sweep "$id" B expired-actioned
+    printf 'fired\t%s\t%s\n' "$id" "$def"
+  done
+}
+
+command -v jq >/dev/null 2>&1 || { echo "cc-decide: jq is required" >&2; exit 1; }
+
+case "${1:-}" in
+  open)         shift; cmd_open "$@" ;;
+  veto)         shift; cmd_transition veto "$@" ;;
+  action)       shift; cmd_transition action "$@" ;;
+  list)         shift; cmd_list "$@" ;;
+  expire-sweep) shift; cmd_expire_sweep "$@" ;;
+  ""|-h|--help|help) usage ;;
+  *) printf 'cc-decide: unknown verb %s\n\n' "$1" >&2; usage >&2; exit 2 ;;
+esac
