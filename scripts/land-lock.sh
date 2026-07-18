@@ -8,7 +8,16 @@
 # The lock is held ONLY across the wrapped command (gate+push, seconds-to-minutes),
 # never a whole session — implementation parallelism is unaffected.
 #
-# The lock dir is /tmp/land-lock-<hash(repo_root)>/lock.d (override LAND_LOCK_DIR).
+# LOCK KEY (correctness core): the mutex is keyed on the SHARED git dir
+# (`git rev-parse --path-format=absolute --git-common-dir`, normalized to the repo
+# root), NOT the per-worktree `--show-toplevel`. `--show-toplevel` diverges across
+# worktrees (each worktree is its own toplevel) so two worktrees of ONE repo would
+# get two different lock dirs and land CONCURRENTLY — the exact topology the desk
+# runs (every session in its own worktree). `--git-common-dir` is shared across all
+# worktrees of a repo, so they all collide on one mutex. (Fixes G-P9-1.)
+#
+# The lock dir is /tmp/land-lock-<hash(shared-git-dir)>/lock.d (override LAND_LOCK_DIR).
+# Introspect the resolved dir without landing:  scripts/land-lock.sh --print-lock-dir
 # pid-liveness is MEANINGFUL because THIS process runs <cmd> as a child and waits: the
 # pid written into the lock is alive for the entire hold, so a crashed holder is reaped
 # by the kill -0 check.
@@ -24,10 +33,29 @@
 # code, not an -e abort).
 set -uo pipefail
 
-REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-HASH="$(printf '%s' "${REPO_ROOT}" | shasum | cut -c1-12)"
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"   # telemetry: which checkout/worktree landed
+# LOCK KEY — the SHARED git dir, so every worktree of one repo collides on ONE mutex.
+# `--git-common-dir` (absolute) resolves to the main repo's `.git` from every worktree;
+# normalize by stripping a per-worktree `/worktrees/<n>` gitdir suffix (defensive — some
+# git versions return the per-worktree gitdir) then the trailing `/.git`, leaving the
+# canonical repo root. Fall back to the toplevel for a non-repo / ancient git.
+LOCK_KEY="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+if [[ -n "${LOCK_KEY}" ]]; then
+  LOCK_KEY="${LOCK_KEY%/worktrees/*}"
+  LOCK_KEY="${LOCK_KEY%/.git}"
+else
+  LOCK_KEY="${REPO_ROOT}"
+fi
+HASH="$(printf '%s' "${LOCK_KEY}" | shasum | cut -c1-12)"
 LOCK_PARENT="${LAND_LOCK_DIR:-/tmp/land-lock-${HASH}}"
 LOCK="${LOCK_PARENT}/lock.d"
+
+# Introspection: print the resolved lock dir this repo/worktree maps to, then exit.
+# Pure read (runs before any mkdir) so it never litters /tmp. Works in any serialize mode.
+if [[ "${1:-}" = "--print-lock-dir" ]]; then
+  printf '%s\n' "${LOCK_PARENT}"
+  exit 0
+fi
 LOG="${LAND_LOG:-${HOME}/.claude/land.log}"
 TTL="${LAND_LOCK_TTL:-1200}"        # empty/wedged-holder reap age (s)
 WAIT_MAX="${LAND_LOCK_WAIT:-3600}"  # max seconds to queue for the lock before giving up
