@@ -57,3 +57,22 @@ Terminal plans (`complete`/`superseded`) are excluded; status-less plans surface
 `UNKNOWN` (never hidden — anti-FM1). Freshness rides on the §1 reconcile.
 
 ---
+
+## 4. Plan `status:` frontmatter schema (Task 4 / G-P14-6)
+
+**No new wiring** — `validate-plan-structure.sh` is already a PostToolUse hook. Every
+hand-authored plan (docs/plans, .claude-plans, AGENT_TEAM…) should open with:
+
+```yaml
+---
+status: open          # open | in-progress | complete | superseded
+---
+```
+
+The lint now **fails (exit 2)** a *new* authored plan missing a valid `status:` (untracked
+in git, else mtime-fresh), and **warns only** for pre-existing plans (never retro-breaks the
+corpus). The ExitPlanMode global sink (`~/.claude/plans`) is machine-authored and never
+gated. `open`/`in-progress`/`UNKNOWN` are what `--list-open` (§3) treats as open work;
+`complete`/`superseded` drop out.
+
+---
