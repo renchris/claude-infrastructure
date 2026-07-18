@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.claude.desk-invariant — P0-14 the desk-existence + engagement invariant (SO-6).
+  The wake path MUST be API-budget-independent: this is a launchd job, outside the model/API failure
+  domain it watches, so it still fires when a spend cap stuns every session. 300s sweep.
+  PATH prepends ~/.claude/bin (the 36f9d64 lesson: launchd's default PATH lacks it, so cc-* + jq must be
+  put on PATH explicitly) — set inside the bash -c so $HOME expands at runtime (portable, no hardcoded home).
+  C10: OPERATOR loads this (launchctl bootstrap); the agent never loads it. Kill-switch: launchctl bootout.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.claude.desk-invariant</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"; export DESK_INVARIANT_BRIEF="$HOME/Development/claude-infrastructure/docs/templates/desk-boot-brief.md"; exec "$HOME/.claude/scripts/desk-invariant.sh" --once</string>
+    </array>
+
+    <key>StartInterval</key>
+    <integer>300</integer>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>LowPriorityIO</key>
+    <true/>
+
+    <key>Nice</key>
+    <integer>5</integer>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/claude-desk-invariant.stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/tmp/claude-desk-invariant.stderr.log</string>
+</dict>
+</plist>
