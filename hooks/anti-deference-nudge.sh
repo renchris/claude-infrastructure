@@ -65,6 +65,33 @@ log_idl() { # $1=disposition $2=reason $3=extra-json(optional)
 }
 abstain() { log_idl abstained "$1"; exit 0; }   # evaluated-but-did-not-fire (LOGGED, not silent)
 
+# ── (P15 T-P15-5) open_packet_B — the genuine-3 → durable-packet exit. A fork/external-info
+#    genuine stop must leave a DURABLE, push-notified class-B decision packet, NEVER a bare idle
+#    (G-P15-4). Best-effort: resolves cc-decide (env → beside-hook → CFG → ~/.claude/bin → PATH);
+#    cc-decide absent OR failing ⇒ silent skip so the hook stays exit-0 (safe degrade). Echoes the
+#    packet id on success. Uses MSG/SID/CFG at CALL time (all set by the genuine branch below). ──
+open_packet_B() {
+  local decide="${ANTIDEF_DECIDE_BIN:-}" cand vh deadline what
+  if [ -z "$decide" ]; then
+    for cand in "$(dirname "$0")/../bin/cc-decide" "$CFG/bin/cc-decide" "$HOME/.claude/bin/cc-decide"; do
+      [ -x "$cand" ] && { decide="$cand"; break; }
+    done
+    [ -z "$decide" ] && command -v cc-decide >/dev/null 2>&1 && decide="$(command -v cc-decide)"
+  fi
+  [ -n "$decide" ] && [ -x "$decide" ] || return 0
+  vh="${ANTIDEF_VETO_HOURS:-12}"
+  deadline="$(date -u -v"+${vh}H" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+            || date -u -d "+${vh} hours" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true)"
+  [ -n "$deadline" ] || return 0
+  what="$(printf '%s' "$MSG" | tr '\n' ' ' | cut -c1-240)"
+  "$decide" open --class B --what "$what" \
+    --default "park this decision to the backlog and continue other work" \
+    --deadline "$deadline" --session-sid "${SID:-}" \
+    --recommendation "route around it; surface ONLY this fork for the operator's early-veto (anti-deference genuine-3)" \
+    --route-around "anti-deference genuine-3: durable class-B packet opened instead of a bare idle" \
+    2>/dev/null || return 0
+}
+
 command -v jq >/dev/null 2>&1 || { SID="?"; abstain "no-jq"; }
 
 SID="$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null || true)"
@@ -108,6 +135,13 @@ HARD_CORE='your (credential|password|api.?key|secret|token|login|cookie)|need (y
 SOFTCALL='your call|up to you|your approval'
 PUSHHOLD='pushing to (main|origin)|push (is|remains)[^.]{0,20}your call|won.?t push|will not push|not push(ing)? (to|without)|force.?push'
 SHIPVERB='(^|[^a-z])(push|ship|land|deploy|merge)|pull request|open (a )?pr'
+# CLASS_C_GENUINE — the C10/authority-ceiling subset of HARD_CORE (credential/sudo/destructive/
+# permission/login/external-access). These are class C — they WAIT and need a staged one-action
+# artifact the hook cannot produce, so open_packet_B must NOT fire for them. The COMPLEMENT of this
+# within HARD_CORE (which-account / which-prefer / how-would-you-like / can-you-provide) is the
+# fork/external-info set → class B (T-P15-5). Credential CONTEXT (your/need <cred>), never a bare
+# noun, so a design fork like "JWT vs cookies for the token store" stays class-B.
+CLASS_C_GENUINE='your (credential|password|api.?key|secret|token|login|cookie)|need (your|the)[^.]{0,40}(credential|password|secret|token|key|access|permission|approval)|only you (can|have|know)|(don.?t|do not|no) [a-z ]{0,20}access|i (don.?t|do not) have (access|the |your |permission)|you.?ll need to (provide|give|share|tell|run|log ?in)|requires? (your|sudo|approval|authentication)|run (this|it|the [a-z ]{0,20}) ?yourself|(^|[^a-z])sudo([^a-z]|$)|interactive login|auth login|destructive migration|drop table|delete[^.]{0,20}production|navigation pattern|(db|database) timeout'
 
 has_soft=0;     printf '%s' "$MSG" | grep -iqE "$SOFTCALL" && has_soft=1
 has_shipv=0;    printf '%s' "$MSG" | grep -iqE "$SHIPVERB" && has_shipv=1
@@ -116,7 +150,20 @@ has_pushhold=0; printf '%s' "$MSG" | grep -iqE "$PUSHHOLD" && has_pushhold=1
 hard=0
 printf '%s' "$MSG" | grep -iqE "$HARD_CORE" && hard=1
 { [ "$has_soft" -eq 1 ] && [ "$has_shipv" -eq 0 ]; } && hard=1     # "your call" fork with NO ship verb → genuine
-[ "$hard" -eq 1 ] && abstain "genuine-blocker"
+if [ "$hard" -eq 1 ]; then
+  # (P15 T-P15-5) Genuine-3 → durable packet. A fork/external-info genuine stop leaves a durable,
+  # push-notified class-B packet — never a bare idle. Credential/sudo/destructive/permission
+  # reasons are class C (they need a staged one-action artifact the hook cannot produce) → NO
+  # packet here; those are opened by the code path that actually hits the C10 wall. The abstain
+  # disposition + empty stdout are UNCHANGED (still a legitimate STOP-ASK — the hook never blocks).
+  gb_extra=""
+  if ! printf '%s' "$MSG" | grep -iqE "$CLASS_C_GENUINE"; then
+    gb_pid="$(open_packet_B || true)"
+    [ -n "$gb_pid" ] && gb_extra="\"packet\":\"${gb_pid}\",\"packet_class\":\"B\""
+  fi
+  log_idl abstained "genuine-blocker" "$gb_extra"
+  exit 0
+fi
 
 ship_hold=0
 { [ "$has_pushhold" -eq 1 ] || { [ "$has_soft" -eq 1 ] && [ "$has_shipv" -eq 1 ]; }; } && ship_hold=1

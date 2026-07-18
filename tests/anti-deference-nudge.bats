@@ -14,6 +14,10 @@ setup() {
   export ANTIDEF_IDL="$BATS_TEST_TMPDIR/idl.jsonl"
   export ANTIDEF_MAX=3
   export WRAP_TRUNK="origin/main"
+  # T-P15-5: sandbox the decision-packet side effect so the genuine-3 → packet exit writes to a
+  # per-test dir (never the real ~/.claude/autonomy/decisions or the 165MB live IDL).
+  export CC_DECISIONS_DIR="$BATS_TEST_TMPDIR/decisions"
+  export CC_IDL="$BATS_TEST_TMPDIR/cc-idl.jsonl"
 }
 
 # ── git fixtures for the P0-4 (b)/(c) ledger-aware paths (bare origin + working clone) ──
@@ -259,4 +263,34 @@ fired()  { echo "$1" | grep -q '"decision":"block"'; }   # hook stdout ⇒ did i
   export WRAP_DOD_FILE="$BATS_TEST_TMPDIR/none.md"
   run runhook_at "$(mkfix "Complete — nothing to do.")" "$w" "pcc-s"
   [ "$status" -eq 0 ]; [ -z "$output" ]
+}
+
+# ══ T-P15-5: genuine-3 → durable class-B decision packet (never a bare idle) ══════════════════
+@test "T-P15-5: a genuine fork/external-info stop opens a durable class-B packet (still abstains)" {
+  run runhook "$(mkfix "Which account should I use for this run — default to next2? Want me to proceed?")" "pkt-sess"
+  [ "$status" -eq 0 ]; [ -z "$output" ]                       # the hook still ABSTAINS (never blocks a genuine ask)
+  run bash -c "ls '$CC_DECISIONS_DIR'/*.json 2>/dev/null | head -1"
+  [ -n "$output" ]                                             # a durable packet was written
+  f="$output"
+  [ "$(jq -r '.class'  "$f")" = B ]
+  [ "$(jq -r '.status' "$f")" = open ]
+  [ -n "$(jq -r '.default_if_no_veto' "$f")" ]                 # class-B carries a default …
+  [ -n "$(jq -r '.veto_deadline' "$f")" ]                      # … and a veto deadline
+  grep -q '"packet":' "$ANTIDEF_IDL"                           # the IDL records the opened packet
+}
+
+@test "T-P15-5: degrade-silent — cc-decide absent ⇒ hook exits 0 silent, no packet, no crash" {
+  export ANTIDEF_DECIDE_BIN="$BATS_TEST_TMPDIR/no-such-cc-decide"
+  run runhook "$(mkfix "which do you prefer — approach one or two? Want me to sketch both?")" "deg-sess"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  run bash -c "ls '$CC_DECISIONS_DIR'/*.json 2>/dev/null"
+  [ -z "$output" ]                                             # nothing written when cc-decide is unresolvable
+  grep -q '"disposition":"abstained"' "$ANTIDEF_IDL"           # still the abstain path
+}
+
+@test "T-P15-5: a class-C credential blocker does NOT open a packet (C needs a staged artifact)" {
+  run runhook "$(mkfix "I need your Google client secret first — want me to scaffold the rest?")" "cred-sess"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  run bash -c "ls '$CC_DECISIONS_DIR'/*.json 2>/dev/null"
+  [ -z "$output" ]                                             # credential ⇒ class C ⇒ hook opens no packet
 }
