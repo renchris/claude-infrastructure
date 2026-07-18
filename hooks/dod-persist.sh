@@ -10,6 +10,10 @@
 #   PreCompact   : extract the newest `Scope (frozen):` line from the transcript (mechanical grep, NO
 #                  model call) and APPEND it (timestamped, INTEGRATE-never-overwrite) to the durable
 #                  file IF ABSENT-or-stale → the contract survives the 90% auto-compact summarizer.
+#                  ALSO captures every DISTINCT `Scope (grown): +<item>` line (Follow-On Gate F1-F4
+#                  PASS growth, CLAUDE.md Session Close Protocol) — gate-passed scope growth survives
+#                  compaction/recycle exactly like the frozen baseline, so a successor never mistakes
+#                  authorized grown work for out-of-scope drift.
 #   set "<scope>": CLI for the desk playbook / /handoff capture to freeze a scope explicitly.
 #   path [cwd]   : print the resolved durable-DoD path (debug / playbook / tests).
 #
@@ -48,6 +52,16 @@ extract_scope() {  # $1 = transcript path
     | grep -aoE 'Scope \(frozen\):.*' | tail -1
 }
 
+# ── all DISTINCT "Scope (grown): …" lines in a transcript (Follow-On Gate growth; many per session) ──
+extract_grown() {  # $1 = transcript path
+  jq -r 'select(.type=="assistant" or .type=="user")
+         | .message.content
+         | if type=="string" then .
+           elif type=="array" then ([.[]?|select(.type=="text")|.text]|join("\n"))
+           else empty end' "$1" 2>/dev/null \
+    | grep -aoE 'Scope \(grown\):.*' | awk '!seen[$0]++'
+}
+
 # ── append (INTEGRATE, timestamped) — never overwrite prior captures ──
 persist_dod() {  # $1=file  $2=scope  $3=cwd  $4=source-label
   local ts; ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '?')"
@@ -67,7 +81,7 @@ case "${1:-}" in
   set)
     scope="${2:-}"
     [ -n "$scope" ] || { printf 'usage: dod-persist.sh set "<Scope (frozen): DoD>"\n' >&2; exit 2; }
-    case "$scope" in *"Scope (frozen):"*) ;; *) scope="Scope (frozen): $scope" ;; esac
+    case "$scope" in *"Scope (frozen):"*|*"Scope (grown):"*) ;; *) scope="Scope (frozen): $scope" ;; esac
     f="$(dod_file_for "$PWD")"
     if [ -f "$f" ] && [ "$scope" = "$(last_recorded_scope "$f")" ]; then
       printf 'unchanged → %s\n' "$f"; exit 0
@@ -92,7 +106,7 @@ case "$event" in
     [ -f "$f" ] || exit 0                        # no durable DoD → nothing to re-inject
     content="$(cat "$f" 2>/dev/null || true)"
     [ -n "$content" ] || exit 0
-    framed="Durable frozen DoD for this worktree — re-injected across recycle/compaction as the completeness baseline (a19 HOP A). Every 'Scope (frozen):' line below is binding; do NOT narrow scope or declare done until it is met.
+    framed="Durable frozen DoD for this worktree — re-injected across recycle/compaction as the completeness baseline (a19 HOP A). Every 'Scope (frozen):' line below is binding, and every 'Scope (grown): +<item>' line extends it (Follow-On Gate F1-F4 PASS — already authorized, do NOT re-ask); do NOT narrow scope or declare done until ALL of it is met.
 
 $content"
     jq -nc --arg c "$framed" '{hookSpecificOutput:{hookEventName:"SessionStart",additionalContext:$c}}' 2>/dev/null || true
@@ -102,11 +116,21 @@ $content"
     case "$tp" in "~"*) tp="$HOME${tp#\~}" ;; esac
     trigger="$(printf '%s' "$input" | jq -r '.trigger // "auto"' 2>/dev/null || echo auto)"
     { [ -n "$tp" ] && [ -f "$tp" ]; } || exit 0
-    scope="$(extract_scope "$tp")"
-    [ -n "$scope" ] || exit 0                    # no frozen scope stated → nothing to persist
     f="$(dod_file_for "$cwd")"
-    if [ -f "$f" ] && [ "$scope" = "$(last_recorded_scope "$f")" ]; then exit 0; fi   # fresh → skip
-    persist_dod "$f" "$scope" "$cwd" "PreCompact:${trigger}"
+    scope="$(extract_scope "$tp")"
+    if [ -n "$scope" ]; then
+      if ! { [ -f "$f" ] && [ "$scope" = "$(last_recorded_scope "$f")" ]; }; then   # stale/absent only
+        persist_dod "$f" "$scope" "$cwd" "PreCompact:${trigger}"
+      fi
+    fi
+    # Follow-On Gate growth: each DISTINCT grown line appends exactly once (INTEGRATE)
+    while IFS= read -r g; do
+      [ -n "$g" ] || continue
+      [ -f "$f" ] && grep -qF -- "$g" "$f" 2>/dev/null && continue
+      persist_dod "$f" "$g" "$cwd" "PreCompact:${trigger}:grown"
+    done <<GROWN_EOF
+$(extract_grown "$tp")
+GROWN_EOF
     exit 0 ;;
   *)
     exit 0 ;;
