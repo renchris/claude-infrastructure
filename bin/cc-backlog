@@ -1,0 +1,211 @@
+#!/bin/bash
+# cc-backlog — durable, append-only work-ledger for the desk mission (Program D).
+#
+# The ledger is EVIDENCE (one-artifact-one-role): every status change is an
+# APPEND-ONLY record; the current status of an item is the FOLD of its record
+# trail (last transition wins). Nothing is ever rewritten in place EXCEPT the
+# `compact` verb, which may drop ONLY terminal (done) items that have aged past a
+# threshold — open work is never touched. Malformed lines are reported, never
+# silently dropped.
+#
+# Store: JSONL at ${CC_BACKLOG_FILE:-~/.claude/autonomy/backlog.jsonl}
+# IDs are event-keyed (hash of project+title+source) → re-`add` is idempotent.
+#
+# Verbs:
+#   add    --title T [--project P] [--dod-ref R] [--source S]   → echoes the id
+#   list   [--open | --all | --project P]                       (default: --open)
+#   claim  <id> --by <sid>
+#   done   <id> --evidence <ref>
+#   reopen <id>
+#   compact [--older-than-days N]                               (default N=30)
+set -uo pipefail
+
+BACKLOG="${CC_BACKLOG_FILE:-$HOME/.claude/autonomy/backlog.jsonl}"
+
+usage() {
+  sed -n '2,/^set -uo/p' "$0" | sed 's/^# \{0,1\}//; /^set -uo/d'
+}
+
+now_iso()  { date -u +%Y-%m-%dT%H:%M:%SZ; }
+
+# cutoff_iso <days-ago> → an ISO-8601 UTC timestamp N days in the past (BSD + GNU).
+cutoff_iso() {
+  local d="$1"
+  date -u -v-"${d}"d +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+    || date -u -d "-${d} days" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null
+}
+
+# mk_id <project> <title> <source> → 12-hex event key (US-separated, collision-safe).
+mk_id() { printf '%s\037%s\037%s' "$1" "$2" "$3" | shasum -a 256 | cut -c1-12; }
+
+ensure_file() {
+  mkdir -p "$(dirname "$BACKLOG")" 2>/dev/null || true
+  [ -f "$BACKLOG" ] || : > "$BACKLOG"
+}
+
+# Emit only well-formed records (must have id+event) to stdout; REPORT malformed
+# lines to stderr (fail-loud). Never removes them from the file.
+valid_records() {
+  [ -f "$BACKLOG" ] || return 0
+  local n=0 bad=0 line
+  while IFS= read -r line || [ -n "$line" ]; do
+    n=$((n + 1))
+    [ -z "$line" ] && continue
+    if printf '%s' "$line" | jq -e 'has("id") and has("event")' >/dev/null 2>&1; then
+      printf '%s\n' "$line"
+    else
+      printf 'cc-backlog: malformed line %d skipped (still in file)\n' "$n" >&2
+      bad=$((bad + 1))
+    fi
+  done < "$BACKLOG"
+  [ "$bad" -eq 0 ] || printf 'cc-backlog: %d malformed line(s) reported above\n' "$bad" >&2
+  return 0
+}
+
+# Fold the trail → a JSON ARRAY of one object per id (latest status + carried meta).
+fold() {
+  valid_records | jq -s '
+    reduce .[] as $r ({};
+      .[$r.id] = ((.[$r.id] // {}) as $p | {
+        id:       $r.id,
+        project:  ($r.project  // $p.project  // ""),
+        title:    ($r.title    // $p.title    // ""),
+        dodRef:   ($r.dodRef   // $p.dodRef   // ""),
+        source:   ($r.source   // $p.source   // ""),
+        by:       ($r.by       // $p.by       // ""),
+        evidence: ($r.evidence // $p.evidence // ""),
+        status: (
+          if   $r.event == "done"   then "done"
+          elif $r.event == "claim"  then "claimed"
+          elif $r.event == "reopen" then "open"
+          else ($p.status // "open") end),
+        lastTs:   ($r.ts // $p.lastTs // "")
+      })
+    ) | [ .[] ]'
+}
+
+has_id() {
+  [ -f "$BACKLOG" ] || return 1
+  valid_records 2>/dev/null | jq -e -s --arg id "$1" 'any(.[]; .id == $id)' >/dev/null 2>&1
+}
+
+cmd_add() {
+  local project="" title="" dod="" source=""
+  while [ $# -gt 0 ]; do
+    local key="$1"; shift
+    case "$key" in
+      --project) project="${1:-}"; [ $# -gt 0 ] && shift ;;
+      --title)   title="${1:-}";   [ $# -gt 0 ] && shift ;;
+      --dod-ref) dod="${1:-}";     [ $# -gt 0 ] && shift ;;
+      --source)  source="${1:-}";  [ $# -gt 0 ] && shift ;;
+      *) printf 'cc-backlog add: unknown arg %s\n' "$key" >&2; return 2 ;;
+    esac
+  done
+  [ -n "$title" ] || { echo "cc-backlog add: --title is required" >&2; return 2; }
+  [ -n "$project" ] || project="$(pwd)"
+  ensure_file
+  local id; id=$(mk_id "$project" "$title" "$source")
+  if has_id "$id"; then echo "$id"; return 0; fi   # idempotent: no duplicate add
+  jq -nc --arg id "$id" --arg ts "$(now_iso)" --arg project "$project" \
+     --arg title "$title" --arg dod "$dod" --arg source "$source" \
+     '{id:$id, ts:$ts, event:"add", project:$project, title:$title, dodRef:$dod, source:$source}' \
+     >> "$BACKLOG"
+  echo "$id"
+}
+
+cmd_transition() {
+  local event="$1"; shift
+  local id="${1:-}"; [ $# -gt 0 ] && shift
+  local by="" evidence=""
+  while [ $# -gt 0 ]; do
+    local key="$1"; shift
+    case "$key" in
+      --by)       by="${1:-}";       [ $# -gt 0 ] && shift ;;
+      --evidence) evidence="${1:-}"; [ $# -gt 0 ] && shift ;;
+      *) printf 'cc-backlog %s: unknown arg %s\n' "$event" "$key" >&2; return 2 ;;
+    esac
+  done
+  [ -n "$id" ] || { printf 'cc-backlog %s: <id> is required\n' "$event" >&2; return 2; }
+  ensure_file
+  has_id "$id" || { printf 'cc-backlog %s: unknown id %s\n' "$event" "$id" >&2; return 3; }
+  jq -nc --arg id "$id" --arg ts "$(now_iso)" --arg event "$event" \
+     --arg by "$by" --arg evidence "$evidence" \
+     '{id:$id, ts:$ts, event:$event}
+      + (if $by != ""       then {by:$by}             else {} end)
+      + (if $evidence != "" then {evidence:$evidence} else {} end)' \
+     >> "$BACKLOG"
+  echo "$id"
+}
+
+cmd_list() {
+  local mode="open" projfilter=""
+  while [ $# -gt 0 ]; do
+    local key="$1"; shift
+    case "$key" in
+      --open) mode="open" ;;
+      --all)  mode="all" ;;
+      --project) projfilter="${1:-}"; [ $# -gt 0 ] && shift ;;
+      *) printf 'cc-backlog list: unknown arg %s\n' "$key" >&2; return 2 ;;
+    esac
+  done
+  fold | jq -r --arg mode "$mode" --arg proj "$projfilter" '
+    sort_by(.project, .title) | .[]
+    | select($mode == "all" or .status != "done")
+    | select($proj == "" or .project == $proj)
+    | [.status, .id, .project, .title] | @tsv
+  ' | while IFS=$'\t' read -r st id proj title; do
+      printf '%-8s | %s | %-28s | %s\n' "$st" "$id" "$proj" "$title"
+    done
+}
+
+cmd_compact() {
+  local days="30"
+  while [ $# -gt 0 ]; do
+    local key="$1"; shift
+    case "$key" in
+      --older-than-days) days="${1:-30}"; [ $# -gt 0 ] && shift ;;
+      *) printf 'cc-backlog compact: unknown arg %s\n' "$key" >&2; return 2 ;;
+    esac
+  done
+  ensure_file
+  local cutoff; cutoff=$(cutoff_iso "$days")
+  [ -n "$cutoff" ] || { echo "cc-backlog compact: could not compute cutoff" >&2; return 2; }
+  # Drop set: terminal (done) items whose last event is older than the cutoff.
+  local drop; drop=$(fold | jq -r --arg c "$cutoff" \
+    '.[] | select(.status == "done" and .lastTs != "" and .lastTs < $c) | .id')
+  if [ -z "$drop" ]; then
+    printf 'cc-backlog compact: nothing aged out (cutoff %s)\n' "$cutoff" >&2
+    return 0
+  fi
+  local tmp n=0 kept=0 dropped=0 malformed=0 line lid
+  tmp=$(mktemp)
+  while IFS= read -r line || [ -n "$line" ]; do
+    n=$((n + 1)); [ -z "$line" ] && continue
+    lid=$(printf '%s' "$line" | jq -r 'if (has("id") and has("event")) then .id else "__BAD__" end' 2>/dev/null || echo "__BAD__")
+    if [ "$lid" = "__BAD__" ]; then
+      printf '%s\n' "$line" >> "$tmp"; malformed=$((malformed + 1))   # preserve, never drop
+      printf 'cc-backlog compact: preserved malformed line %d\n' "$n" >&2
+      continue
+    fi
+    if printf '%s\n' "$drop" | grep -qxF -- "$lid"; then
+      dropped=$((dropped + 1)); continue
+    fi
+    printf '%s\n' "$line" >> "$tmp"; kept=$((kept + 1))
+  done < "$BACKLOG"
+  mv "$tmp" "$BACKLOG"
+  printf 'cc-backlog compact: kept %d, dropped %d aged-terminal, preserved %d malformed\n' \
+    "$kept" "$dropped" "$malformed" >&2
+}
+
+command -v jq >/dev/null 2>&1 || { echo "cc-backlog: jq is required" >&2; exit 1; }
+
+case "${1:-}" in
+  add)     shift; cmd_add "$@" ;;
+  list)    shift; cmd_list "$@" ;;
+  claim)   shift; cmd_transition claim "$@" ;;
+  done)    shift; cmd_transition "done" "$@" ;;
+  reopen)  shift; cmd_transition reopen "$@" ;;
+  compact) shift; cmd_compact "$@" ;;
+  ""|-h|--help|help) usage ;;
+  *) printf 'cc-backlog: unknown verb %s\n\n' "$1" >&2; usage >&2; exit 2 ;;
+esac

@@ -93,3 +93,39 @@ from `CLAUDE_CODE_TASK_LIST_ID`. An unmapped UUID list won't surface as active (
 foreign-suppression) but is still visible in `--all-open` as `(unmapped)`.
 
 ---
+
+## 6. `cc-backlog` — durable append-only work-ledger (Task 6)
+
+On-demand CLI at `bin/cc-backlog` (install to `~/.claude/bin/`). Backing store:
+`${CC_BACKLOG_FILE:-~/.claude/autonomy/backlog.jsonl}` (created on first `add`). **No wiring
+required** — the desk calls it directly to record and query durable work:
+
+```bash
+cc-backlog add --title "wire the reconcile hook" --project ~/Development/foo \
+                --dod-ref docs/plans/FOO.md#p0-5 --source p14   # → echoes an event-keyed id
+cc-backlog list --open            # what work is open (default)
+cc-backlog list --all             # incl. done
+cc-backlog claim  <id> --by <session-id>
+cc-backlog done   <id> --evidence commit:<sha>
+cc-backlog reopen <id>
+```
+
+IDs are event-keyed (hash of project+title+source) so a re-`add` of the same work is
+idempotent. Status transitions are **append-only** evidence records; current status is the
+fold of the trail. The only in-place rewrite is `compact`, which drops **only** terminal
+(`done`) items older than a threshold — open work is never touched, malformed lines are
+preserved:
+
+```bash
+cc-backlog compact --older-than-days 30
+```
+
+Optional launchd/cron for periodic compaction (operator's call — keep age generous so the
+audit trail stays useful):
+
+```bash
+# weekly, low priority
+0 4 * * 0  ~/.claude/bin/cc-backlog compact --older-than-days 60
+```
+
+---
