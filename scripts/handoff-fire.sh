@@ -129,11 +129,15 @@ set -euo pipefail
 BIN="$HOME/.claude-183/node_modules/.bin/claude"
 DEFAULT_REPO="$HOME/Development/reso-management-app"
 MODEL_CONFIG="$HOME/.claude/model-config.yaml"
+# Cross-account comms substrate (FIXED $HOME/.claude — cross-account addressing, never
+# $CLAUDE_CONFIG_DIR). Env-overridable for tests.
+REG_DIR="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"
 
 PROMPT_FILE="" ACCOUNT="auto" LAUNCHER="" MODEL="" EFFORT="" CWD="" WORKTREE=""
 REPO="$DEFAULT_REPO" WTROOT="$HOME/Development/.worktrees" BASE="origin/main"
 SURFACE="split-right" SURFACE_EXPLICIT=0 SURFACE_REASON="" PROBE=0 DRY=0 IN_PLACE=0 EXTRA="" RECYCLE=0 SESSION_ID=""
 NOTIFY_BACK="" SELF_RETIRE=1
+SPAWNED_PANE="" ENGAGE_VERIFY=0 FIRE_MARKER=""
 
 # Print the header comment up to (excluding) the first non-comment sentinel — growth-proof range.
 usage() { sed -n '2,/^set -euo pipefail/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
@@ -205,6 +209,83 @@ await_armed() { # $1=logfile → 0 once armed, 1 on timeout
     /bin/sleep 0.2; n=$((n+1))
   done
   return 1
+}
+
+# ---- P0-11 engagement verification (FM2 / INC-4 cold-fire auto-submit race) -------------------
+# A non-recycle fire types the launch command + focuses, then historically printed "→ fired"
+# UNCONDITIONALLY. But a cold --worktree fire can race CC boot: the auto-submit keystroke is lost
+# and the pane sits at an empty composer forever — 0 commits, no ping, LOOKS fired
+# (cold-worktree-fire-autosubmit-race, INC-4 2026-07-17). Prove ENGAGEMENT before the success
+# line by transcript-birth — the fired prompt carries a unique marker; when a JSONL under the
+# target account's projects dir contains it, the session actually ingested the brief. A cc-registry
+# row for the fired pane bearing a session_id is an equivalent positive. The marker is globally
+# unique and is NEVER echoed to this session's own stream, so only the FIRED session's transcript
+# can hold it (this session merely wrote it into a launch-time file the launcher `cat`s at exec).
+engagement_seen() { # $1=projects-dir $2=marker $3=registry-dir $4=fired-pane → 0 engaged / 1 not
+  local pdir="$1" marker="$2" regdir="$3" pane="$4" hit rsid
+  # (a) transcript-birth: a JSONL under the target account's projects dir carrying the marker.
+  if [ -n "$marker" ] && [ -d "$pdir" ]; then
+    hit="$(find "$pdir" -name '*.jsonl' -type f -exec grep -lF -- "$marker" {} + 2>/dev/null | head -1)"
+    [ -n "$hit" ] && return 0
+  fi
+  # (b) a cc-registry row for the fired pane bearing a (non-null) session_id — CC registered.
+  if [ -n "$pane" ] && [ -n "$regdir" ] && [ -f "$regdir/$pane.json" ] && command -v jq >/dev/null 2>&1; then
+    rsid="$(jq -r '.session_id // empty' "$regdir/$pane.json" 2>/dev/null)"
+    [ -n "$rsid" ] && return 0
+  fi
+  return 1
+}
+
+# Poll for engagement ≤timeout; on a miss re-type the prompt ONCE into the fired pane (the exact
+# INC-4 recovery), re-poll ≤retry, then return 1 (caller FAILS LOUD — never a false "→ fired").
+# All windows are env-overridable so tests run in seconds.
+verify_engagement() { # $1=projects $2=marker $3=regdir $4=pane $5=it2-bin $6=resend-text → 0/1
+  local pdir="$1" marker="$2" regdir="$3" pane="$4" it2="$5" resend="$6"
+  local timeout="${FIRE_ENGAGE_TIMEOUT:-120}" retry="${FIRE_ENGAGE_RETRY:-60}" interval="${FIRE_ENGAGE_INTERVAL:-3}"
+  local t=0
+  while [ "$t" -lt "$timeout" ]; do
+    engagement_seen "$pdir" "$marker" "$regdir" "$pane" && return 0
+    /bin/sleep "$interval"; t=$((t + interval))
+  done
+  echo "⚠ fired session not engaged after ${timeout}s — re-typing the prompt once (INC-4 recovery)" >&2
+  if [ -n "$pane" ] && [ -n "$it2" ] && [ -n "$resend" ]; then
+    "$it2" session run -s "$pane" "$resend" >/dev/null 2>&1 || true
+  fi
+  t=0
+  while [ "$t" -lt "$retry" ]; do
+    engagement_seen "$pdir" "$marker" "$regdir" "$pane" && return 0
+    /bin/sleep "$interval"; t=$((t + interval))
+  done
+  return 1
+}
+
+# ---- P0-12 registration guarantee ------------------------------------------------------------
+# After engagement, guarantee the fired pane is VISIBLE in the cross-account registry so the
+# reaper/board can see it (a never-registered pane is invisible to the whole classify/reap stack —
+# a18 L-2). Poll ≤timeout for the SessionStart P8 row; if none appears, write a PROVISIONAL row
+# the P8 register() overwrites atomically on its next run. No pid (that is P8's authoritative
+# liveness field) — presence must not encode liveness (session-register P8 rule).
+ensure_registration() { # $1=regdir $2=pane $3=name $4=cwd $5=cmd → best-effort, always 0
+  local regdir="$1" pane="$2" name="$3" cwd="$4" cmd="$5" tmp t=0
+  local timeout="${FIRE_REG_TIMEOUT:-30}" interval="${FIRE_REG_INTERVAL:-3}"
+  [ -n "$pane" ] && [ -n "$regdir" ] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  [ -f "$regdir/$pane.json" ] && return 0
+  while [ "$t" -lt "$timeout" ]; do
+    /bin/sleep "$interval"; t=$((t + interval))
+    [ -f "$regdir/$pane.json" ] && return 0
+  done
+  mkdir -p "$regdir" 2>/dev/null || return 0
+  tmp="$regdir/.$pane.prov.$$"
+  if jq -n --arg paneUUID "$pane" --arg name "$name" --arg cwd "$cwd" --arg cmd "$cmd" \
+        '{paneUUID:$paneUUID, name:$name, cwd:$cwd, cmd:$cmd, provisional:true}' > "$tmp" 2>/dev/null \
+     && [ -s "$tmp" ]; then
+    mv -f "$tmp" "$regdir/$pane.json" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+    echo "→ provisional registry row written for $pane (SessionStart P8 register replaces it)" >&2
+  else
+    rm -f "$tmp" 2>/dev/null
+  fi
+  return 0
 }
 
 # Internal: self-close watcher (spawned via detach() = setsid; nohup alone dies with the tool
@@ -706,7 +787,12 @@ PREFIX=""
 # self-retires. BACK_SID mirrors FIRING_SID (the spawn anchor), computed inline to stay self-contained.
 WANT_SELF_RETIRE=0
 [ "$SELF_RETIRE" = 1 ] && [ "$RECYCLE" = 0 ] && WANT_SELF_RETIRE=1
-if [ -n "$NOTIFY_BACK" ] || [ "$WANT_SELF_RETIRE" = 1 ]; then
+# P0-11 engagement verify is active for every REAL (non-dry) non-recycle fire — it needs the
+# marker embedded in a COPY of the prompt (never the caller's file), so a copy is made even when
+# no trailer is requested (--no-self-retire without --notify-back). Dry runs make no copy (nothing
+# fires), preserving the "original used as-is" contract the notify-back tests assert.
+[ "$RECYCLE" = 0 ] && [ "$DRY" = 0 ] && ENGAGE_VERIFY=1
+if [ -n "$NOTIFY_BACK" ] || [ "$WANT_SELF_RETIRE" = 1 ] || [ "$ENGAGE_VERIFY" = 1 ]; then
   [ -f "$PROMPT_FILE" ] || { echo "!! prompt trailer: prompt file not found: $PROMPT_FILE" >&2; exit 1; }
   PF_NB="$(mktemp "${TMPDIR:-/tmp}/handoff-prompt-nb-XXXXXX")" || { echo "!! prompt trailer: mktemp failed" >&2; exit 1; }
   cp "$PROMPT_FILE" "$PF_NB" || { echo "!! prompt trailer: could not copy prompt" >&2; exit 1; }
@@ -747,6 +833,13 @@ if [ -n "$NOTIFY_BACK" ] || [ "$WANT_SELF_RETIRE" = 1 ]; then
       printf '%s\n' '       $HOME/.claude/scripts/handoff-fire.sh self-close --terminal'
       printf '%s\n' 'Report, finish the trivial tail, close. Do not wait idle for input that is not coming.'
     } >> "$PF_NB"
+  fi
+  if [ "$ENGAGE_VERIFY" = 1 ]; then
+    # A globally-unique engagement marker — embedded ONLY in this launch-time copy, NEVER echoed
+    # to this session's own stream, so only the FIRED session's transcript can carry it. Its
+    # appearance under the target account's projects dir proves the brief was ingested (P0-11).
+    FIRE_MARKER="${FIRE_ENGAGE_MARKER:-HANDOFF-ENGAGE-$$-$(date +%s)-${RANDOM:-0}}"
+    printf '\n<!-- handoff-fire engagement marker: %s (ignore) -->\n' "$FIRE_MARKER" >> "$PF_NB"
   fi
   PROMPT_FILE="$PF_NB"
 fi
@@ -836,6 +929,7 @@ FIRING_SID="${SESSION_ID:-${_itsid##*:}}"
 IT2_SHIM="$HOME/.claude/bin/it2"
 REAL_IT2="$(sed -n 's/^REAL_IT2="\(.*\)"$/\1/p' "$IT2_SHIM" 2>/dev/null | head -1)"
 [ -n "$REAL_IT2" ] && [ -x "$REAL_IT2" ] || REAL_IT2="$IT2_SHIM"
+[ -n "${IT2_BIN:-}" ] && REAL_IT2="$IT2_BIN"   # test seam (same convention as cc-sessions)
 
 # ESC is for the FRONTMOST/WINDOW path only — that path embeds the command inside an AppleScript
 # string literal via -e "…write text \"$ESC\"", so backslashes then double-quotes must be escaped
@@ -946,15 +1040,16 @@ spawn() {
              echo "   Nothing was launched. Re-fire from a live pane, or pass --window for a deliberate fresh window." >&2
              return 1; }
       it2_land "$newid" || return 1
+      SPAWNED_PANE="$newid"                          # the fired pane — engagement verify + registry
       ;;
     tab)
       local out
       out="$(as_tab "$FIRING_SID" "$CMD" 2>/dev/null)" || out="ERR($?)"
-      case "$out" in OK\ *) return 0 ;; esac
+      case "$out" in OK\ *) SPAWNED_PANE="${out#OK }"; return 0 ;; esac
       /bin/sleep 0.8                                # settle + retry once, then fail loud
       out="$(as_tab "$FIRING_SID" "$CMD" 2>/dev/null)" || out="ERR($?)"
       case "$out" in
-        OK\ *) : ;;
+        OK\ *) SPAWNED_PANE="${out#OK }" ;;
         *) echo "!! firing window for $FIRING_SID not found ($out) — NOT firing a tab into a random window." >&2
            echo "   Nothing was launched. Re-fire from a live pane, or use --window for a deliberate fresh window." >&2
            return 1 ;;
@@ -1058,6 +1153,10 @@ if [ "$DRY" = 1 ]; then
     esac
   fi
   [ -n "$NOTIFY_BACK" ] && echo "notify-back: originator $BACK_SID — fired prompt carries the cc-notify ping recipe (copy: $PROMPT_FILE)"
+  if [ "$RECYCLE" = 0 ]; then
+    echo "engagement: post-spawn transcript/registry-birth verify (P0-11) → re-send once on miss → FIRE FAILED (never a false '→ fired')"
+    echo "registry:  provisional row if no P8 SessionStart row appears ≤${FIRE_REG_TIMEOUT:-30}s (P0-12)"
+  fi
   [ "$RECYCLE" = 1 ] || echo "pre-trust: $LAUNCH_DIR → $(basename "$(config_dir_for_launcher "$LAUNCHER")") (fired session skips the workspace-trust dialog)"
   echo "command:  $CMD"
 elif [ "$RECYCLE" = 1 ]; then
@@ -1065,6 +1164,20 @@ elif [ "$RECYCLE" = 1 ]; then
 else
   pre_trust "$LAUNCH_DIR" "$(config_dir_for_launcher "$LAUNCHER")"
   spawn
+  # P0-11: prove the fired session ingested the brief before claiming success. A cold fire that
+  # raced CC boot sits at an empty composer (INC-4) — re-send once, then FAIL LOUD.
+  if [ "$ENGAGE_VERIFY" = 1 ]; then
+    PROJ_DIR="$(config_dir_for_launcher "$LAUNCHER")/projects"
+    if verify_engagement "$PROJ_DIR" "$FIRE_MARKER" "$REG_DIR" "$SPAWNED_PANE" "$REAL_IT2" "$(cat "$PROMPT_FILE")"; then
+      echo "→ engagement confirmed for the fired session (transcript/registry birth)" >&2
+      # P0-12: guarantee a registry row so the reaper/board can see the fired pane.
+      FIRE_NAME="$(basename "$LAUNCH_DIR")-${SPAWNED_PANE%%-*}"
+      ensure_registration "$REG_DIR" "$SPAWNED_PANE" "$FIRE_NAME" "$LAUNCH_DIR" "$CMD"
+    else
+      echo "!! FIRE FAILED — never engaged: $LAUNCHER at ${SPAWNED_PANE:-<pane?>} did not ingest the brief within the engagement window (re-sent once). The pane is live but TASK-LESS — recover with a WARM re-fire (--cwd <existing-worktree>); do NOT trust this as a working session (INC-4 / cold-worktree-fire-autosubmit-race)." >&2
+      exit 1
+    fi
+  fi
   DEST="${CWD:-$REPO (self-routing)}"; [ -n "$WORKTREE" ] && DEST="$WT ($WT_SETUP)"
   RSUM=""; [ -n "$SURFACE_REASON" ] && RSUM=", reason: $SURFACE_REASON"
   echo "→ fired: $LAUNCHER @ $DEST  (surface: $SURFACE, account: $CHOSEN, prompt: $PROMPT_FILE$RSUM)"
