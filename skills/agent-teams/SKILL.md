@@ -156,7 +156,7 @@ subagent spawned `model: "fable"` ran as **Opus 4.8** and hung ~35 min in "Hatch
 with zero output; re-spawning the identical brief as a teammate (`team_name` +
 `model: "fable"`) is the fix.
 
-⚠️ This **corrects** `~/.claude/rules/research-subagents.md`, which reads as if
+⚠️ This **corrects** the **research-subagents** skill (`~/.claude/skills/research-subagents/SKILL.md`; the old `~/.claude/rules/` location no longer exists), which reads as if
 `model: "fable"` on a bare `deep-research` subagent runs on Fable. That holds (if ever)
 ONLY on the claude-next eval track — NOT universally. On any other track, route
 non-session-model work through an assignee, or hand off to the desk's external
@@ -226,10 +226,18 @@ No orphaned panes — teammates terminate immediately when they finish work.
    memories `it2-session-close-force-modal-2026-06-09.md` +
    `teammate-pane-close-2.1.161.md` (corrected in place).
 
-**Respawn recovers uncommitted work**: `scripts/team/respawn-team.sh <team>`
-emits Step 0 — Checkpoints section showing each member's
-`refs/wip/<member>/LAST` SHA + cherry-pick / reset --soft / diff HEAD recipes.
-New teammates resume from the checkpoint before starting new work.
+**Respawn recovers uncommitted work** — two real tools (`scripts/team/respawn-team.sh`
+NEVER existed; ghost pointer removed 2026-07-18):
+- **Limit/crash respawn**: the team-aware `lr-audit.py` (`/limit-recover` § Teams) emits
+  per-member verdicts + `salvage/teams/<team>/<member>.json` carrying the VERBATIM brief
+  and exact `Agent()` respawn args. Deliverables already on disk are READ (zero re-spend);
+  only true gaps (PARTIAL/NULL/INTERRUPTED) respawn — never over a RUNNING member.
+- **Course-change respawn** (new ruling, target alive): `bin/cc-respawn` — checkpoints
+  the target's WIP FIRST, composes the successor brief with the GO baked in, and
+  effect-verifies both the stop and the successor spawn.
+- **Checkpoint recovery recipes**: `git for-each-ref refs/wip/<member>/LAST` in the member
+  worktree, then cherry-pick / `reset --soft` / `diff HEAD` as needed. New teammates
+  resume from the checkpoint before starting new work.
 
 **Subagents vs Teammates (Agent Teams = Default):**
 - **Teammates** (`team_name` set): **DEFAULT for all implementation.** Persist until shutdown. Max **6 concurrent**. Use for ANY task that writes code.
@@ -242,10 +250,16 @@ New teammates resume from the checkpoint before starting new work.
 4. Clean worktrees: `git worktree remove /tmp/worktree-<name>` (or `/tmp/wt-<team>-<name>`)
 
 **Liveness detection (pull-based, race-free):**
-- `verify-team.sh <team> --strict-liveness` checks iTerm2 pane presence via
-  osascript on `tmuxPaneId` and cross-references `~/.claude/logs/teammate-lifecycle.log`.
-- The `isActive` flag in `~/.claude/teams/<team>/config.json` is harness-owned
-  and write-once-at-spawn — NEVER trust it as "alive now". Use pull-based checks instead.
+- No packaged checker exists (`verify-team.sh` was a ghost pointer, removed 2026-07-18).
+  Pull-check directly: iTerm2 pane presence via the it2 API / osascript on the member's
+  `tmuxPaneId` (from `~/.claude/teams/<team>/config.json`), cross-referenced with
+  `~/.claude/logs/teammate-lifecycle.log` and the member transcript's last-record age.
+- The `isActive` flag in `~/.claude/teams/<team>/config.json` is harness-MAINTAINED, not
+  write-once: observed on CC 2.1.207 (2026-07-18, team `session-44f5331d`) flipping to
+  `false` exactly on the members whose turn died on a 429 while finished-idle members
+  stayed `true`. Read `false` as "harness saw this member fail" evidence — but NEVER read
+  `true` as "alive now" (pull-based checks stay authoritative; the team-aware lr-audit
+  uses it only to demote RUNNING→PARTIAL).
 
 **If teammate hangs**: (stable 2.1.114) GitHub #31788 — `TeamDelete` can block permanently. Kill pane, manually remove `~/.claude/teams/<team-name>`. Checkpoint refs survive in the worktree's `.git/` — run `git for-each-ref refs/wip/<member>/LAST` to recover. On the 2.1.183 implicit-team model there is no `TeamDelete` — send `shutdown_request`; if it hangs, kill the pane + `git worktree remove`.
 
