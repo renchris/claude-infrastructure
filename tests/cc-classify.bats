@@ -70,14 +70,14 @@ solo_team_cfg() { mkdir -p "$D/teams/session-$1"
 @test "handed-off-lead — idle + fired /handoff + a LIVE successor in the same cwd" {
   reg PANE-A "$LIVE" /work sidA 500
   printf '{"type":"assistant","isSidechain":false,"timestamp":"2001-09-08T00:00:00.000Z","message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{"command":"~/.claude/scripts/handoff-fire.sh --recycle"}}]}}\n' >> "$D/proj/slug/sidA.jsonl"
-  add PANE-B "$LIVE" /work sidB 999999900   # successor: same cwd, alive pid, newer
+  add PANE-B "$LIVE" /work sidB 999999900000   # successor: same cwd, alive pid, newer (epoch-ms)
   [ "$(cause PANE-A)" = handed-off-lead ]
 }
 
 @test "handed-off-lead REFUSED when the successor is DEAD (no live successor → never this cause)" {
   reg PANE-A "$LIVE" /work sidA 500
   printf '{"type":"assistant","isSidechain":false,"timestamp":"2001-09-08T00:00:00.000Z","message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{"command":"handoff-fire.sh --recycle"}}]}}\n' >> "$D/proj/slug/sidA.jsonl"
-  add PANE-B "$DEAD" /work sidB 999999900   # a DEAD 'successor' is no successor
+  add PANE-B "$DEAD" /work sidB 999999900000   # a DEAD 'successor' is no successor (epoch-ms, passes time-gate)
   [ "$(cause PANE-A)" != handed-off-lead ]
 }
 
@@ -167,6 +167,31 @@ solo_team_cfg() { mkdir -p "$D/teams/session-$1"
 # ── Gap B (2026-07-17): done solo session, dirty shared cwd owned by a live sibling → surface only ─
 @test "finished-shared-review — landed solo, dirty shared cwd owned by a live sibling → surfaced NOT reaped (Gap B)" {
   mkrepo "$D/shared2" dirty; reg PANE-A "$LIVE" "$D/shared2" sidDone2; tx sidDone2 9000; solo_team_cfg sidDone2
-  add PANE-LIVE "$LIVE" "$D/shared2" sidSibling 999999900   # live sibling owns the unrelated dirt
+  add PANE-LIVE "$LIVE" "$D/shared2" sidSibling 999999900000   # live sibling owns the unrelated dirt (epoch-ms)
   [ "$(cause PANE-A)" = finished-shared-review ]
+}
+
+# ── P0-13 task 1: ms/s unit fix + self-scoped handoff tell (a18 L-3) ────────────────────────────
+# lat for these fixtures = epoch of 2001-09-08T00:00:00Z = 999907200s. Registry startedAt is epoch-MS
+# (session-register.sh:69 `date +%s * 1000`), so a REAL successor started after lat carries ~1e12; the
+# time gate must compare startedAt/1000 >= lat, never the vacuous ms>=s that always held.
+@test "successor time-gate (ms/s fix): a co-cwd sibling started BEFORE the last turn is NOT a successor (a18 L-3)" {
+  reg PANE-A "$LIVE" /work sidA 500
+  printf '{"type":"assistant","isSidechain":false,"timestamp":"2001-09-08T00:00:00.000Z","message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{"command":"~/.claude/scripts/handoff-fire.sh --recycle"}}]}}\n' >> "$D/proj/slug/sidA.jsonl"
+  add PANE-B "$LIVE" /work sidB 999000000000   # epoch-ms: 999000000s < lat 999907200s → started BEFORE the last turn
+  [ "$(cause PANE-A)" != handed-off-lead ]
+}
+
+@test "self-scope: a bare Read of a *-resume.md payload does NOT mark handed-off-lead (a18 L-3)" {
+  reg PANE-A "$LIVE" /work sidA 500
+  printf '{"type":"assistant","isSidechain":false,"timestamp":"2001-09-08T00:00:00.000Z","message":{"role":"assistant","content":[{"type":"tool_use","name":"Read","input":{"file_path":"/tmp/other-slug-resume.md"}}]}}\n' >> "$D/proj/slug/sidA.jsonl"
+  add PANE-B "$LIVE" /work sidB 999999900000   # a live co-cwd sibling
+  [ "$(cause PANE-A)" != handed-off-lead ]
+}
+
+@test "self-scope: a third-party fire (--worktree elsewhere) does NOT mark handed-off-lead (a18 L-3)" {
+  reg PANE-A "$LIVE" /work sidA 500
+  printf '{"type":"assistant","isSidechain":false,"timestamp":"2001-09-08T00:00:00.000Z","message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{"command":"~/.claude/scripts/handoff-fire.sh --worktree feat/other-thing --account next2"}}]}}\n' >> "$D/proj/slug/sidA.jsonl"
+  add PANE-B "$LIVE" /work sidB 999999900000
+  [ "$(cause PANE-A)" != handed-off-lead ]
 }
