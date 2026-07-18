@@ -83,6 +83,17 @@ cls() { bash "$GC" "$@" | awk '{print $1}'; }
   [ "$c" = B ]
 }
 
+# ── T-P15-7: the limit-recover CC_UNATTENDED doc's verbatim decision texts route B ─────────────
+@test "T-P15-7: limit-recover monthly-spend packet text (verbatim from the doc) → B" {
+  [ "$(cls 'monthly spend cap reached on next2 — no reset time')" = B ]
+}
+@test "T-P15-7: limit-recover 5h/weekly wait-vs-switch text (verbatim from the doc) → B" {
+  [ "$(cls 'hit a 5h/weekly limit on next; reset 2026-07-19T03:00:00Z. Wait for reset, or continue cross-account?')" = B ]
+}
+@test "T-P15-7: a spend-cap RAISE (money commitment) stays C, never auto-signed" {
+  [ "$(cls 'raise the spend cap on the billing account')" = C ]
+}
+
 # ── stdin path + single-class guarantee ────────────────────────────────────────
 @test "reads from stdin when no args" {
   run bash -c "echo 'edit settings.json' | bash '$GC'"

@@ -93,6 +93,9 @@ model that was interrupted.
    STOP and present — reset time (from the audit), wait cost, and the exact escape hatch
    `/limit-recover handoff auto`. Waiting vs switching accounts is the user's call; **only if the
    user already told you to continue autonomously** (e.g. a /goal), fire the handoff yourself.
+   **Unattended (`CC_UNATTENDED=1`): do NOT present — the blocking prompt becomes an idle strand
+   with no human to answer it; route the decision to a class-B packet + default instead (see
+   [Unattended mode](#unattended-mode-cc_unattended1) below).**
    If ONLY `fable_pct` ≥ 100 (model-scoped): re-run fable-tagged slots on the house fallback
    `claude-opus-4-8` and mark each `(tier-fallback)` in the report.
    **`monthly_spend` limit events have NO reset** (extra-usage credits cap, not plan quota —
@@ -150,6 +153,55 @@ only; after ingest, respawn gap members on the target from their salvage briefs 
 in-flight context does not transplant; their disk deliverables survive and are re-read in place).
 Course-change respawns (new ruling, not limit recovery) go through `bin/cc-respawn` instead.
 The reset poller deliberately SKIPs teammate transcripts (lead-owned recovery, this section).
+
+## Unattended mode (`CC_UNATTENDED=1`)
+
+`/limit-recover` fires at a limit event — which, on the 24×7 desk, happens exactly when no human
+is watching. A blocking `AskUserQuestion` there is the P15 strand: the turn halts on a click nobody
+makes (gate #13, p15 §1). Under `CC_UNATTENDED=1`, EVERY wait-vs-switch elicitation in
+**Mode: recover** step 1 is REPLACED by a durable decision packet + its default — never a block.
+The interactive path (no `CC_UNATTENDED`) is UNCHANGED: wait-vs-switch stays the user's call and
+`AskUserQuestion` still elicits. This only swaps the *blocking* elicitation for a *durable packet +
+default*, honoring the anti-deference rule (surface the ONE fork, keep everything else moving).
+
+Route every limit decision through `scripts/gate-classify.sh "<the limit text>"` first — both cases
+below classify **B** (a value-fork the standing values settle toward continuation), never A, never a
+C money-path. Then:
+
+- **5-hour / weekly limit (reset time known)** → open a class-B packet and PROCEED on the default
+  immediately (the deadline is the operator's early-veto window — a veto before it flips back to
+  wait; `CC_UNATTENDED_VETO_HOURS`, default 1):
+
+  ```
+  cc-decide open --class B \
+    --what "hit a 5h/weekly limit on <acct>; reset <ISO>. Wait for reset, or continue cross-account?" \
+    --option "wait::idle until <ISO>, then resume on <acct>" \
+    --option "switch::continue NOW on <other-acct> (quota-plane isolation)" \
+    --recommendation "switch — cross-account continuation keeps the mission moving (operator decision #3)" \
+    --default "continue cross-account via /limit-recover handoff auto" \
+    --deadline "<now + CC_UNATTENDED_VETO_HOURS>"
+  ```
+
+  then fire `/limit-recover handoff auto` on that default. This IS operator **decision #3**'s
+  default-if-no-veto: cross-account continuation (quota-plane isolation); Kimi engages only on an
+  operator key.
+
+- **Monthly-spend cap (NO reset time)** → there is nothing to wait for, and raising the cap is a C6
+  money-path the desk must never sign. `gate-classify.sh` routes the monthly-spend text to **B** (a
+  spend-LIMIT event, not a money COMMITMENT → never C). Open a class-B packet whose default is
+  **park-to-backlog + continue other work** — never a silent park, never an inline cap raise:
+
+  ```
+  cc-decide open --class B \
+    --what "monthly spend cap reached on <acct> — no reset time" \
+    --recommendation "park this account's remaining work to the backlog and continue other mission work on another account" \
+    --default "cc-backlog add the parked unit, then continue other mission work cross-account" \
+    --deadline "<now + CC_UNATTENDED_VETO_HOURS>"
+  ```
+
+  `autonomy-sweep.sh` actuates the fired default (append-to-backlog) at the deadline, and `cc-digest`
+  surfaces it next morning. A cap RAISE stays a class-C, operator-only decision (staged artifact,
+  never auto-signed).
 
 ## Mode: audit
 
