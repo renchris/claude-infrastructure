@@ -20,13 +20,28 @@
 # keyed by config-dir + cwd hash, so it never gets committed and concurrent sessions —
 # including different accounts (each with its own CLAUDE_CONFIG_DIR) — don't collide.
 #
+# HARDENING (a19 D-7/D-8, a17 S-12) beyond the base actuator:
+#   (a) KILL-SWITCH — actuation reads the transcript's last genuine user message; an operator
+#       "…and stop" / "no auto-continue" / "just do X" / explicit-pause phrase clears the sentinel
+#       and allows the stop. Operator stop ALWAYS wins over a stale sentinel (was D-8: the actuator
+#       parsed no phrase, so a stale sentinel forced work when told to stop).
+#   (b) SID-BIND — `set` records the arming session's id in a `.sid` sidecar; actuation clears AND
+#       ignores a sentinel whose sid ≠ the actuating session's (kills S-12 cross-succession
+#       inheritance: a recycled successor in the same cwd inheriting the predecessor's sentinel).
+#   (c) CAP RE-ARM — a fresh `set` resets `.count`; the block reason instructs re-`set` each 🔧 turn
+#       (that reset is how a faithful long grind avoids the cap — D-7). At the cap the hook does NOT
+#       give up silently: it emits a final systemMessage naming the re-arm lever, then allows the stop.
+#
 # NOTE: deliberately NO `set -e` — a Stop hook that exits 2 *blocks the stop*, so an
-# accidental non-zero exit could force a false continuation. Every path ends `exit 0`.
+# accidental non-zero exit could force a false continuation. Every actuation path ends `exit 0`.
 
 state_dir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/state"
 mkdir -p "$state_dir" 2>/dev/null
 
 # Sentinel path for a given working dir (stable hash → one file per worktree).
+# NOTE (Task 2 / G-P6-6b): this formula is the SSOT for the sentinel path — boundary-handoff's
+# compose-guard must compute the IDENTICAL path. Task 2 extracts it into hooks/lib/ so both hooks
+# share one definition; until then keep this and the boundary guard byte-for-byte in agreement.
 sentinel_for() {
   local h
   h=$(printf '%s|%s' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}" "$1" | shasum 2>/dev/null | cut -c1-16)
@@ -38,17 +53,23 @@ case "${1:-}" in
   set)
     f=$(sentinel_for "$PWD")
     printf '%s' "${2:-Continue the in-scope work.}" > "$f"
-    rm -f "${f}.count" 2>/dev/null   # fresh chain → reset the loop counter
+    rm -f "${f}.count" 2>/dev/null   # fresh chain → reset the loop counter (D-7 re-arm lever)
+    # (b) sid-bind: stamp the arming session so a same-cwd successor can't inherit this sentinel.
+    # Empty sid ⇒ write no bind (actuation then skips the sid check — conservative, never a wrong clear).
+    csid="${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
+    if [ -n "$csid" ]; then printf '%s' "$csid" > "${f}.sid"; else rm -f "${f}.sid" 2>/dev/null; fi
     echo "armed → $f"
     exit 0 ;;
   clear)
     f=$(sentinel_for "$PWD")
-    rm -f "$f" "${f}.count" 2>/dev/null
+    rm -f "$f" "${f}.count" "${f}.sid" 2>/dev/null
     echo "cleared"
     exit 0 ;;
   status)
     f=$(sentinel_for "$PWD")
-    if [ -f "$f" ]; then echo "ARMED ($(cat "${f}.count" 2>/dev/null || echo 0) continuations): $(cat "$f")"; else echo "inactive"; fi
+    if [ -f "$f" ]; then
+      echo "ARMED ($(cat "${f}.count" 2>/dev/null || echo 0) continuations, sid=$(cat "${f}.sid" 2>/dev/null || echo '?')): $(cat "$f")"
+    else echo "inactive"; fi
     exit 0 ;;
 esac
 
@@ -60,25 +81,67 @@ f=$(sentinel_for "$cwd")
 
 # No sentinel → the agent did NOT request continuation → allow the stop.
 if [ ! -f "$f" ]; then
-  rm -f "${f}.count" 2>/dev/null
+  rm -f "${f}.count" "${f}.sid" 2>/dev/null
   exit 0
 fi
 
-# Hard loop cap (guards a stuck gate / non-progressing agent).
+# ── (a) KILL-SWITCH — operator stop ALWAYS wins over a stale sentinel (I-2 / D-8) ──
+# Read the LAST genuine user message (string content, or array-of-text; tool_result-only records
+# carry no text and are skipped). A kill phrase ⇒ clear + allow. Bias to DETECT: a false positive
+# merely allows one stop the model re-arms on its next 🔧 turn; a false negative is the D-8 bug
+# (forcing work when told to stop). No transcript path ⇒ skip (can't read) and fall through.
+tp=$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null)
+case "$tp" in "~"*) tp="$HOME${tp#\~}" ;; esac
+if [ -n "$tp" ] && [ -f "$tp" ]; then
+  last_user=$(jq -r 'select(.type=="user")
+                     | .message.content
+                     | if type=="string" then .
+                       elif type=="array" then ([.[]?|select(.type=="text")|.text]|join("\n"))
+                       else empty end
+                     | select(. != "")' "$tp" 2>/dev/null | tail -1)
+  # Kill phrases (resident CLAUDE.md kill-switch + explicit-pause list):
+  #   …and [then] stop · no auto-continue · just do X · stop here · come back to this · bare stop/halt
+  if [ -n "$last_user" ] && printf '%s' "$last_user" | grep -iqE \
+      '(^|[^[:alnum:]])and( then)? stop([^[:alnum:]]|$)|no[ _-]?auto[ _-]?continue|(^|[^[:alnum:]])just do [^[:space:]]|(^|[^[:alnum:]])stop here([^[:alnum:]]|$)|come back to this|^[[:space:]]*(stop|halt)[[:space:].!]*$'; then
+    rm -f "$f" "${f}.count" "${f}.sid" 2>/dev/null
+    printf 'session-continue: kill-switch phrase in last user message — cleared sentinel, allowing stop.\n' >&2
+    exit 0
+  fi
+fi
+
+# ── (b) SID-BIND — a same-cwd successor must not inherit a predecessor's sentinel (S-12) ──
+# Clear + allow when the stored arming-sid differs from the actuating session's sid. Acts ONLY when
+# BOTH sids are known (a missing sid = no evidence = never a wrong clear).
+cur_sid=$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null)
+[ -n "$cur_sid" ] || cur_sid="${CLAUDE_CODE_SESSION_ID:-}"
+stored_sid=$(cat "${f}.sid" 2>/dev/null || true)
+if [ -n "$stored_sid" ] && [ -n "$cur_sid" ] && [ "$stored_sid" != "$cur_sid" ]; then
+  rm -f "$f" "${f}.count" "${f}.sid" 2>/dev/null
+  printf 'session-continue: sentinel sid=%s ≠ session sid=%s (inherited across succession) — cleared, allowing stop.\n' "$stored_sid" "$cur_sid" >&2
+  exit 0
+fi
+
+# ── (c) CAP — hard loop cap (guards a stuck gate / non-progressing agent), with a NAMED re-arm ──
 MAX="${CLAUDE_CONTINUE_MAX:-8}"
 n=$(cat "${f}.count" 2>/dev/null); [ -n "$n" ] || n=0
+case "$n" in ''|*[!0-9]*) n=0 ;; esac
 if [ "$n" -ge "$MAX" ]; then
-  rm -f "$f" "${f}.count" 2>/dev/null
-  printf 'session-continue: hit cap (%s continuations) — allowing stop, sentinel cleared.\n' "$MAX" >&2
-  exit 0   # non-2 exit → does NOT block; just surfaces the note
+  step=$(cat "$f" 2>/dev/null)
+  rm -f "$f" "${f}.count" "${f}.sid" 2>/dev/null
+  # NOT a silent give-up (D-7): name the re-arm lever, then ALLOW the stop (non-blocking).
+  capmsg="session-continue: hit the continuation cap (${MAX}); allowing this stop. If in-scope work genuinely remains, re-arm with \`session-continue.sh set \"<next step>\"\` (a fresh set zeroes .count). Last step was: ${step}"
+  printf '%s\n' "$capmsg" >&2
+  jq -nc --arg m "$capmsg" '{systemMessage:$m}' 2>/dev/null || true
+  exit 0   # non-2 exit → does NOT block; the cap is a backstop, not a wedge
 fi
-printf '%s' $((n + 1)) > "${f}.count"
+n=$((n + 1))
+printf '%s' "$n" > "${f}.count"
 
 step=$(cat "$f")
 reason="🔧 Loose ends remain — do NOT stop yet. Next: ${step}
 
-When this is done (state ✅/📦), blocked on the user (⛔), or out of context (📤), run \`~/.claude/hooks/session-continue.sh clear\` so the session can close. (continuation ${n}/${MAX} of $((n + 1)))"
+Re-arm each 🔧 turn: run \`~/.claude/hooks/session-continue.sh set \"<next step>\"\` to refresh the step AND reset the continuation counter (a fresh set zeroes .count — this is how a long grind stays under the ${MAX}-cap). When done (✅/📦), blocked on the user (⛔), or out of context (📤), run \`~/.claude/hooks/session-continue.sh clear\` so the session can close. (continuation ${n}/${MAX})"
 
 # decision:block blocks the stop; reason is fed back to the model as the next turn.
-jq -n --arg r "$reason" '{decision:"block", reason:$r}'
+jq -nc --arg r "$reason" '{decision:"block",reason:$r}'
 exit 0
