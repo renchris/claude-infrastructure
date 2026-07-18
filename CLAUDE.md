@@ -216,16 +216,32 @@ Unreconstructable scope is itself a STOP-ASK, never a guess.
 | In-scope: gate ran **red** | **Auto-debug** the root cause (cap ~2 cycles → commit partial + report). Never blind-retry, never bypass the hook. |
 | Committed, **not pushed/landed** | **Terminal-valid** — a neutral fact, *not* a loose end. Offer ship/land as the user's call. |
 | Needs a **decision** (destructive migration / auth / nav pattern / timeout) or **info** | **STOP-ASK** (overrides auto-continue); commit in-progress work first. |
-| Out-of-scope discovery | **Name + backlog** (durable write), never pursue — unless security / data-integrity, then **stop-surface now**. |
+| Out-of-scope discovery | **Triage via the Follow-On Gate (F1-F4 below)**: PASS → **pursue now, no re-ask** (append `Scope (grown): +<item>` where the DoD lives — growth is auditable, never silent); any FAIL → name + backlog. Security / data-integrity → **stop-surface now**. |
 | Genuinely complete | **Assert plainly, no hedge.** |
 | Context / budget exhausted, work remains | **`/handoff`** — never fake completion. |
 
 **Auto-continue is permitted IFF all four hold** — else surface/ask, do not continue:
-**G1** inside the frozen DoD (not an adjacency, not unobserved-problem hardening) ·
+**G1** inside the frozen-or-grown DoD (adjacencies enter ONLY via the Follow-On Gate's F1-F4 — never silently) ·
 **G2** touches no escalation surface (auth/session, destructive migration, navigation pattern, DB timeout) ·
 **G3** the action is local — edit / run-gate / commit; **never push / deploy / ship / land** (that is always the user's explicit call) ·
 **G4** the commit is task-clean (explicit paths; never sweep unrelated / parked / other-session changes).
 Honor explicit pauses ("stop here", "come back to this") as terminal-valid parked WIP.
+
+**Follow-On Gate — "net-positive → just do it, don't ask" (operator standing directive
+2026-07-18).** Identified follow-on/optional work is pursued WITHOUT re-affirmation IFF ALL
+FOUR hold: **F1 net-positive** under the operator's standing values (100th-percentile
+completeness; nothing left on the table; time-zero) with no downside a reasonable operator
+would weigh · **F2 well-researched** — grounded in THIS session's disk-truth investigation
+(or an equally verified source), never speculation; unverified → verify first or backlog ·
+**F3 same safety envelope** — G2 escalation surfaces and G4 task-cleanliness still bind, and
+shipping stays inside the repo's sanctioned flow (G3; a repo may grant standing-land in its
+project CLAUDE.md) · **F4 bounded** — each item gets the full finish→gate→commit discipline;
+runaway bound = `CLAUDE_CONTINUE_MAX` + the kill-switch. On PASS: append
+`Scope (grown): +<item>` and execute. On FAIL: name + backlog (STOP-ASK only for a genuine
+fork/escalation). Asking the user to re-affirm an F1-F4 PASS is itself a defect
+(deference-fishing); so is laundering a FAIL through as a PASS (scope-metastasis). The
+kill-switch ("just do X", "…and stop") suspends the gate for that turn, like all
+auto-continue.
 
 **"Done this turn" — assert with zero hedge IFF:** scope-complete vs the frozen DoD · statically
 green (the repo's commit-time gate passed on the closing commit; "n/a", never a false ✓, for
