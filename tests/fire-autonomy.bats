@@ -10,6 +10,26 @@ setup() {
   HF="$REPO/scripts/handoff-fire.sh"
   eval "$(sed -n '/^config_dir_for_launcher() {/,/^}/p' "$HF")"
   eval "$(sed -n '/^pre_trust() {/,/^}/p' "$HF")"
+  eval "$(sed -n '/^write_role() {/,/^}/p' "$HF")"
+  eval "$(sed -n '/^refresh_roles_for() {/,/^}/p' "$HF")"
+}
+
+# A minimal side-effect-free fire harness (HOME isolates config/projects/registry/roles; IT2_BIN
+# stubs the it2 transport; the shim must EXIST so the REAL_IT2 sed|head probe doesn't abort under
+# pipefail). Shared by the --as-role E2E and the /goal-guard tests below.
+_fire_harness() {
+  HOMEDIR="$BATS_TEST_TMPDIR/home"
+  mkdir -p "$HOMEDIR/.claude/projects/p" "$HOMEDIR/.claude/cc-registry" "$HOMEDIR/.claude/bin" "$BATS_TEST_TMPDIR/bin"
+  PANE="FAKEPANE-0000-0000-0000-000000000001"
+  cat > "$BATS_TEST_TMPDIR/bin/it2" <<STUB
+#!/bin/bash
+case "\$*" in
+  *"session split"*) echo "Created new pane: $PANE" ;;
+  *) : ;;
+esac
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/it2"
+  cp "$BATS_TEST_TMPDIR/bin/it2" "$HOMEDIR/.claude/bin/it2"
 }
 
 @test "pre_trust: marks an untrusted dir trusted (hasTrustDialogAccepted:true)" {
@@ -95,4 +115,51 @@ setup() {
   run bash "$HF" --prompt-file "$BATS_TEST_TMPDIR/p.txt" --cwd /tmp/somedir --in-place --account next4 --dry-run
   [ "$status" -eq 0 ]
   printf '%s\n' "$output" | grep -qF 'pre-trust: /tmp/somedir → .claude-quaternary'
+}
+
+# ---- P0-15 role indirection (SO-1 ping-to-dead-pane break) -----------------------------------
+
+@test "write_role: writes the pane uuid to cc-roles/<role>" {
+  dir="$BATS_TEST_TMPDIR/roles"
+  write_role "$dir" operator PANE-NEW-0001
+  [ "$(cat "$dir/operator")" = "PANE-NEW-0001" ]
+}
+
+@test "write_role: empty pane arg is a no-op (no file created)" {
+  dir="$BATS_TEST_TMPDIR/roles2"
+  write_role "$dir" operator ""
+  [ ! -e "$dir/operator" ]
+}
+
+@test "refresh_roles_for: repoints a role naming the OLD pane to the successor (self-close)" {
+  dir="$BATS_TEST_TMPDIR/roles3"; mkdir -p "$dir"
+  printf 'OLD-PANE\n' > "$dir/operator"
+  refresh_roles_for "$dir" OLD-PANE SUCCESSOR-PANE
+  [ "$(cat "$dir/operator")" = "SUCCESSOR-PANE" ]
+}
+
+@test "refresh_roles_for: post-recycle role file still points at the (same-pane) successor" {
+  dir="$BATS_TEST_TMPDIR/roles4"; mkdir -p "$dir"
+  printf 'SID-PANE\n' > "$dir/operator"      # recycle keeps the pane: old == new == SID
+  refresh_roles_for "$dir" SID-PANE SID-PANE
+  [ "$(cat "$dir/operator")" = "SID-PANE" ]
+}
+
+@test "refresh_roles_for: a role NOT naming the old pane is left untouched" {
+  dir="$BATS_TEST_TMPDIR/roles5"; mkdir -p "$dir"
+  printf 'SOMEONE-ELSE\n' > "$dir/monitor"
+  refresh_roles_for "$dir" OLD-PANE SUCCESSOR-PANE
+  [ "$(cat "$dir/monitor")" = "SOMEONE-ELSE" ]
+}
+
+@test "E2E: --as-role writes cc-roles/<role> = the FIRED pane on an engaged fire" {
+  _fire_harness
+  printf '{"type":"user","message":{"role":"user","content":"brief ROLE-MARK ok"}}\n' > "$HOMEDIR/.claude/projects/p/s.jsonl"
+  printf 'BRIEF\n' > "$BATS_TEST_TMPDIR/brief.md"
+  run env HOME="$HOMEDIR" IT2_BIN="$BATS_TEST_TMPDIR/bin/it2" TMPDIR="$BATS_TEST_TMPDIR" \
+    FIRE_ENGAGE_TIMEOUT=5 FIRE_ENGAGE_INTERVAL=1 FIRE_REG_TIMEOUT=0 FIRE_ENGAGE_MARKER=ROLE-MARK \
+    bash "$HF" --prompt-file "$BATS_TEST_TMPDIR/brief.md" --launcher claude-test --split-right \
+      --session-id FIRING-0000 --cwd "$BATS_TEST_TMPDIR" --no-self-retire --as-role operator
+  [ "$status" -eq 0 ]
+  [ "$(cat "$HOMEDIR/.claude/cc-roles/operator")" = "$PANE" ]
 }
