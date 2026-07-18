@@ -77,3 +77,49 @@ setup() {
   [ "$status" -eq 0 ]
   echo "$output" | grep -q "0 stranded"
 }
+
+# --- --mine <sid> (T-P9-4): ownership-decidable sweep. Two stranded branches with
+# distinct Session-Id trailers; --mine attributes the drop, default mode is unchanged.
+seed_two_owned_strands() {
+  git checkout -q -b featA main
+  echo aaa > fileA.txt && git add fileA.txt
+  git commit -q -m "$(printf 'add fileA\n\nSession-Id: SID-A\n')"
+  git checkout -q -b featB main
+  echo bbb > fileB.txt && git add fileB.txt
+  git commit -q -m "$(printf 'add fileB\n\nSession-Id: SID-B\n')"
+}
+
+@test "--mine: reports only own-session drop, silent on peer → exit 1, own file only" {
+  seed_two_owned_strands
+  run bash "$SWEEP" --mine SID-A main
+  [ "$status" -eq 1 ]
+  echo "$output" | grep -q "fileA.txt"
+  ! echo "$output" | grep -q "fileB.txt"
+  echo "$output" | grep -q "SID-A"
+}
+
+@test "--mine: only a peer is stranded → exit 0 (decidable pass)" {
+  git checkout -q -b featB main
+  echo bbb > fileB.txt && git add fileB.txt
+  git commit -q -m "$(printf 'add fileB\n\nSession-Id: SID-B\n')"
+
+  run bash "$SWEEP" --mine SID-A main
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "0 own-session"
+}
+
+@test "default mode unchanged: both stranded reported → exit 1" {
+  seed_two_owned_strands
+  run bash "$SWEEP" main
+  [ "$status" -eq 1 ]
+  echo "$output" | grep -q "fileA.txt"
+  echo "$output" | grep -q "fileB.txt"
+}
+
+@test "--mine accepts trunk in any arg order (--mine SID then trunk)" {
+  seed_two_owned_strands
+  run bash "$SWEEP" --mine=SID-B main
+  [ "$status" -eq 1 ]
+  echo "$output" | grep -q "fileB.txt"
+  ! echo "$output" | grep -q "fileA.txt"
+}
