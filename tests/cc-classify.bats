@@ -26,6 +26,9 @@ EOF
   export CC_CLASSIFY_PROJECT_ROOTS="$D/proj"
   export CC_CLASSIFY_TEAMS_GLOB="$D/teams"
   export CC_CLASSIFY_PS_BIN="$D/bin/ps-none"
+  # hermetic wait-system inputs: absent by default (per-test opt-in), never the real machine state
+  export CC_CLASSIFY_WAIT_CONTRACTS_DIR="$D/wait-contracts"
+  export CC_CLASSIFY_DESK_ROLE_FILE="$D/cc-roles-desk"
 }
 
 # write a single-session registry; args: paneUUID pid cwd sid [startedAt]
@@ -218,4 +221,31 @@ solo_team_cfg() { mkdir -p "$D/teams/session-$1"
     printf '{"type":"assistant","isSidechain":false,"timestamp":"%s","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}\n' "$ts"
   } > "$D/proj/slug/sidDone3.jsonl"
   [ "$(cause PANE-A)" = finished ]
+}
+
+# ── P0-13 task 3: wait-contract + desk-role never-reap (a17 S-3) ─────────────────────────────────
+@test "wait-contract never-reap: an OPEN wait-contract naming this session → owned-wait, not finished (a17 S-3)" {
+  # the S-3 desk: clean+landed solo, idle >10min, waiting on fired peers — but an OPEN wait-contract
+  # names it as waiter. The classifier must READ the L2 wait system: positive wait evidence → never-reap.
+  mkrepo "$D/desk"; reg PANE-A "$LIVE" "$D/desk" sidDesk; tx sidDesk 9000; solo_team_cfg sidDesk
+  mkdir -p "$D/wait-contracts"
+  printf '{"id":"c1","waiter":"sidDesk","waitee":"peer","status":"OPEN"}\n' > "$D/wait-contracts/c1.json"
+  c="$(cause PANE-A)"
+  [ "$c" = owned-wait ]
+  [ "$c" != finished ]
+}
+
+@test "wait-contract: a CLOSED contract confers no protection (landed solo still finished — never weakens)" {
+  mkrepo "$D/desk2"; reg PANE-A "$LIVE" "$D/desk2" sidDesk2; tx sidDesk2 9000; solo_team_cfg sidDesk2
+  mkdir -p "$D/wait-contracts"
+  printf '{"id":"c2","waiter":"sidDesk2","waitee":"peer","status":"SATISFIED"}\n' > "$D/wait-contracts/c2.json"
+  [ "$(cause PANE-A)" = finished ]
+}
+
+@test "desk-role never-reap: the desk-role file resolving to this pane → owned-wait, not finished (a17 S-3)" {
+  mkrepo "$D/desk3"; reg PANE-A "$LIVE" "$D/desk3" sidDesk3; tx sidDesk3 9000; solo_team_cfg sidDesk3
+  printf 'PANE-A\n' > "$D/cc-roles-desk"
+  c="$(cause PANE-A)"
+  [ "$c" = owned-wait ]
+  [ "$c" != finished ]
 }
