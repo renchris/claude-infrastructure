@@ -184,6 +184,26 @@ that wires their subjects — no gate goes green on capability alone again. Full
   agents + the permission classifier; desk stunned ~11h; lr-audit blind to named agents).
   Evidence corpus copied to docs/research/desk-audit-2026-07-18/. Next: integrate adversarial
   returns → OASIS close → fire Phase-0 W-a.
+- 2026-07-18 ~23:0xZ — **PHASE 0 WAVES W-a + W-b COMPLETE — all 7 teammates DONE, merged, gates
+  green.** Programs delivered (agent-buildable halves of P0-1..18): fm1-stack `91bc922` (wrap-ledger
+  f5997c1 · completion-assert 2dc88bd · anti-def triple 9aa901d — 58 bats) · ledger `9ededdf`
+  (index+counts+list-open+status-lint+task-scoping+cc-backlog — 47 bats) · wiring-author `108e079`
+  (desk-invariant 18-branch RED-proven · nightly-regression · 12-event template+drift-assert ·
+  activation-watch · wiring-all v3 — 20 bats + 6 plists lint-clean) · fm2-stack `a103e7f`
+  (engagement-verify · registration · role-writer · goal-guard · disposition-hardening ·
+  desk-assert — 81 tests) · landing `cf0218b` (lock re-key by git-common-dir · land-verify ·
+  ship-land.sh pipeline w/ gate-green producer · thin ship.md · sweep --mine — 32 bats, faithful
+  2026-07-11 repro exits 8) · reap-safety `8fe4cb9` (ms/s+self-scope · in-flight-tool guard ·
+  wait-contract+desk-role never-reap · classify→act identity pin · landed-by-content ·
+  monthly-spend cap-grep — 58 checks; + C-locale unicode-adjacency fix, repo sweep clean) ·
+  fm1b-continuity (kill-switch-aware+sid-bound continue 7215f4e · compose-guard SSOT fee0b10 ·
+  dod-persist 5c6f117 — 374-green exit) · lead glue (cc-await-ping --role `3856580` ·
+  autonomy-sweep plist · wiring-all symlink coverage). Wave learnings: SendMessage RESUMES a
+  mid-loop-dead teammate with context intact but is a NO-OP on a completed one (read its transcript
+  instead); one silent mid-loop death (I-LIVE-2) cost 40 min wall, zero work; per-task checkpoint
+  notes + single-owner files produced 0 merge conflicts across 7 branches; RED-first held in every
+  commit. Operator concurrently issued the Follow-On Gate (F1-F4) + THIS-repo standing-land
+  authorization — the land below runs under it.
 - 2026-07-18 ~22:2xZ — adversarial returns integrated (addendum P0-13..18); OASIS closed
   (three-angle convergence, sublinear tail; out-of-scope-named: prompt-injection hardening,
   multi-machine). W-a fired (5 teammates) + W-b reap-safety. fm1-stack DONE + merged `91bc922`
