@@ -8,7 +8,7 @@
     <array>
         <string>/bin/bash</string>
         <string>-c</string>
-        <string>~/.claude/bin/session-index-backfill.sh --quiet 2>&1 | head -50 >> ~/.claude/logs/backfill-scheduled.log</string>
+        <string>~/.claude/bin/session-index-backfill.sh --quiet 2>&amp;1 | head -50 >> ~/.claude/logs/backfill-scheduled.log</string>
     </array>
     <key>StartCalendarInterval</key>
     <dict>

@@ -8,7 +8,7 @@
     <array>
         <string>/bin/bash</string>
         <string>-c</string>
-        <string>~/.claude/hooks/session-index-sweep.sh 2>&1 | head -20 >> ~/.claude/logs/sweep-daemon.log</string>
+        <string>~/.claude/hooks/session-index-sweep.sh 2>&amp;1 | head -20 >> ~/.claude/logs/sweep-daemon.log</string>
     </array>
     <key>StartInterval</key>
     <integer>60</integer>

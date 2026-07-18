@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.claude.nightly-regression — P0-18 the standing regression signal.
+  Runs bats tests/ + gate/lint selftests + plutil -lint nightly; PAGES on red (autonomy/pages/ +
+  osascript) so a deliberately-broken detector pages by morning. p12: nothing runs the tests between
+  lands (never-stuck regressed 21·0→19·2 unwatched). Nightly at 04:00 (after the 03:00 backfill).
+  PATH prepends ~/.claude/bin AND /opt/homebrew/bin (bats/shellcheck live there; jq/plutil too) via
+  the bash -c so $HOME expands at runtime. C10: OPERATOR loads it. Kill-switch: launchctl bootout.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.claude.nightly-regression</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"; exec "$HOME/Development/claude-infrastructure/scripts/nightly-regression.sh" --run</string>
+    </array>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>4</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>LowPriorityIO</key>
+    <true/>
+
+    <key>Nice</key>
+    <integer>10</integer>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/claude-nightly-regression.stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/tmp/claude-nightly-regression.stderr.log</string>
+</dict>
+</plist>
