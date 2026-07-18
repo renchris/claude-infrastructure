@@ -42,3 +42,18 @@ The PostToolUse indexer half needs no new wiring — it is the existing
 the §1 reconcile line ahead of it in the SessionStart array.
 
 ---
+
+## 3. `find-plan.sh --list-open` — the "what is ALL open work?" verb (Task 3 / G-P14-4)
+
+On-demand CLI, **no wiring**. Point the desk at it whenever it needs the cross-project
+open-work list (index ∪ disk, deduped):
+
+```bash
+~/.claude/scripts/find-plan.sh --list-open
+# STATUS       | project              | path                        | title
+```
+
+Terminal plans (`complete`/`superseded`) are excluded; status-less plans surface as
+`UNKNOWN` (never hidden — anti-FM1). Freshness rides on the §1 reconcile.
+
+---
