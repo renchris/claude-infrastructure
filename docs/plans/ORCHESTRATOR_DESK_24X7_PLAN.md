@@ -125,6 +125,29 @@ docs remain SSOT for design law: `docs/L3-L4-AUTONOMY-ROADMAP.md`,
   plist lint + malformed-& fix (T-P16-6) · obsolete watcher removal (T-P10-7) · lr-fire-resume
   binary SSOT (T-P8-8).
 
+## Adversarial addendum (a17/a18/a19 + p12 integrated 2026-07-18; extends the P0 ledger)
+
+| # | Fix | From | Acceptance (RED-provable) |
+|---|---|---|---|
+| P0-13 | **Reap-safety triple**: (a) fix the ms/s unit bug in `find_successor` (`startedAt` epoch-ms vs seconds — time gate vacuous) + scope the handoff tell to SELF-handoffs; (b) "idle" requires no-assistant-record AND no-in-flight-tool (unmatched trailing tool_use / claude-child CPU); (c) pin {sid,pid,lstart} at classify-time and re-verify at teardown-time (recycle race); (d) classify reads wait-contracts + fired-peer evidence before `finished`; (e) desk-role sessions never-reap | a18 L-3/L-13, a17 S-3/S-4 | RED fixtures: co-cwd sibling no longer fakes a successor; a 12-min tool call in a clean cwd stays `active`; a recycle between classify and act aborts the reap; a desk with open wait-contracts is `owned-wait` |
+| P0-14 | **Desk-existence + engagement invariant** (the missing organ — A17 capstone): launchd-side, API-budget-independent check "a registered desk session exists AND took an assistant turn ≤N min (or holds a fresh owned-wait contract); else re-prompt the stunned desk (OS-level, no model turn) / fire one from a canned brief"; includes fleet-wide transcript-tail cap/billing-error sweep + OS-level page (SO-6: the wake path must not share the API failure domain) | a17 S-0/S-1/S-12, a18 L-14/SO-6 | kill the desk (or stun it) in a probe → invariant re-engages/re-creates it ≤2 sweeps with zero human action; spend-cap text triggers the OS-level page |
+| P0-15 | **Role indirection + write-only-dirs consumer**: handoff-fire writes `cc-roles/<role>` at EVERY fire/recycle/self-close; `cc-await-ping --role` follows the file; ONE sweep (supervisor tick) drains `autonomy/pages/` + `cc-announce-alarms/` + `completion-push/` → cc-notify to the desk ROLE + statusline badge | a18 SO-1/SO-5, a17 S-7/S-8/D-2 | post-recycle completion push reaches the NEW desk pane (e2e); a synthetic alarm file becomes a desk wake ≤1 sweep; zero write-only dirs remain (every record dir has a named consumer) |
+| P0-16 | **Goal/continue hardening**: `handoff-fire` hard-gates /goal payloads >4000 chars (fail-loud pre-fire); session-continue gains kill-switch awareness + cap re-arm mechanics; /goal gets a durable-checklist companion file the evaluator can be pointed at (defeats tool-blindness); anti-deference fix (P0-4) adds scope-based fire using the /wrap ledger, not phrase-list-only (I-3: phrase lists train evasion) | a19 D-7/D-8/D-10/D-11/I-2/I-3 | over-cap goal refuses to fire (loud); "…and stop" wins over a stale sentinel (fixture); a false "all green" fails the checklist companion; the 6 tell-free deference closes (a19 §KQ1) all FIRE via the scope check |
+| P0-17 | **Landed-by-content**: cc-classify/cc-reaper `work_landed` uses content (git cherry/patch-id vs trunk) not rev-list count (squash-land ⇒ permanent DEFER loop today); extend cc-classify:77 cap-grep to monthly-spend/billing text | a18 L-10/L-14, p11 INC-5 class | squash-landed fixture reaps (content present, count>0); monthly-spend transcript classifies rate-limited-class (parked, packet opened), not owned-wait |
+| P0-18 | **Standing regression signal**: nightly launchd job runs `bats tests/` + all gate scripts + lints + `plutil -lint` and PAGES on red via P0-15's consumer (p12: nothing runs tests between lands; never-stuck regressed 21·0→19·2 unwatched); fix /ship `*.py` glob (extensionless python) | p12, G-P4-1 | a deliberately-broken detector pages by morning; never-stuck-gate red = page ≤24h |
+
+Also folded: boundary-handoff must be registered on ALL FOUR config dirs (desk runs on
+.claude-secondary which lacks it entirely — a19 live table) alongside P0-1's gate-green producer;
+handoff-disposition gains a completeness axis (delegated-deliverable vs brief, a19 §4); the
+compose-guard sentinel path mismatch (I-1) is fixed as part of P0-3's hook work.
+
+**Phase 0 roster delta:** new teammate `reap-safety` (owns `bin/cc-classify`, `bin/cc-reaper`,
+`bin/cc-teardown`, `scripts/reap-guard.sh`, `hooks/teammate-auto-shutdown.sh` insert-prep) —
+carries P0-13/17. Spawns in W-b (after a W-a slot frees; ≤6 concurrent held). `wiring-author`
+additionally owns P0-14 (desk-invariant script + plist template + activation entry) and P0-18
+(nightly regression job template). `fm1-stack` picks up P0-16's hook halves; `fm2-stack` picks up
+P0-15's handoff-fire role-writes; `escalation` owns the consumer sweep half of P0-15.
+
 ## Operator decision points (class-B packets at first need; none block the W-a build)
 
 1. **Reboot posture** (P0-10): auto-login+FileVault-off vs LaunchDaemons vs manual-morning-resume.
