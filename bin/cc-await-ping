@@ -11,23 +11,30 @@
 #   cc-await-ping [<uuid>]          default uuid = own pane ($ITERM_SESSION_ID)
 #
 # Options:
+#   --role <name>   watch the ROLE's mailbox (~/.claude/cc-roles/<name>), re-resolved
+#                   EVERY poll cycle — follows a recycle that re-points the role file.
+#                   On a mid-wait switch the new mailbox baselines at 0 (never miss the
+#                   ping; a rare replay-wake is benign). Mutually exclusive with <uuid>.
 #   --timeout <s>   give up after S seconds (default 1800; exit 2)
 #   --interval <s>  poll cadence in seconds (default 15)
 #   -h, --help
 #
-# Exit: 0 = new line(s) arrived (printed to stdout); 2 = timed out; 3 = no uuid.
-# Env overrides (tests): CC_MAILBOX_DIR.
+# Exit: 0 = new line(s) arrived (printed to stdout); 2 = timed out; 3 = no uuid/role.
+# Env overrides (tests): CC_MAILBOX_DIR, CC_ROLES_DIR.
 set -uo pipefail
 
 MAILBOX_DIR="${CC_MAILBOX_DIR:-$HOME/.claude/mailbox}"
+ROLES_DIR="${CC_ROLES_DIR:-$HOME/.claude/cc-roles}"
 TIMEOUT=1800
 INTERVAL=15
 UUID=""
+ROLE=""
 
-usage() { sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
+    --role)     ROLE="${2:?--role needs a value}"; shift 2 ;;
     --timeout)  TIMEOUT="${2:?--timeout needs a value}"; shift 2 ;;
     --interval) INTERVAL="${2:?--interval needs a value}"; shift 2 ;;
     -h|--help)  usage; exit 0 ;;
@@ -36,12 +43,28 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-if [ -z "$UUID" ]; then
+if [ -n "$ROLE" ] && [ -n "$UUID" ]; then
+  echo "cc-await-ping: --role and <uuid> are mutually exclusive" >&2; exit 2
+fi
+
+resolve_uuid() {
+  # role mode: re-read the role file each call (follows recycles); else the fixed uuid.
+  if [ -n "$ROLE" ]; then
+    local rf="$ROLES_DIR/$ROLE"
+    [ -f "$rf" ] || { echo ""; return; }
+    tr -d '[:space:]' < "$rf"
+  else
+    echo "$UUID"
+  fi
+}
+
+if [ -z "$ROLE" ] && [ -z "$UUID" ]; then
   _it="${ITERM_SESSION_ID:-}"; UUID="${_it##*:}"
 fi
-[ -n "$UUID" ] || { echo "cc-await-ping: no uuid given and no \$ITERM_SESSION_ID" >&2; exit 3; }
+CUR_UUID="$(resolve_uuid)"
+[ -n "$CUR_UUID" ] || { echo "cc-await-ping: no uuid given and no \$ITERM_SESSION_ID (or role file '$ROLES_DIR/$ROLE' missing)" >&2; exit 3; }
 
-MBOX="$MAILBOX_DIR/$UUID.md"
+MBOX="$MAILBOX_DIR/$CUR_UUID.md"
 linecount() { [ -f "$MBOX" ] && wc -l < "$MBOX" | tr -d ' ' || echo 0; }
 
 baseline="$(linecount)"
@@ -49,6 +72,11 @@ echo "cc-await-ping: watching $MBOX from line $baseline (timeout ${TIMEOUT}s, ev
 
 elapsed=0
 while [ "$elapsed" -lt "$TIMEOUT" ]; do
+  next_uuid="$(resolve_uuid)"
+  if [ -n "$next_uuid" ] && [ "$next_uuid" != "$CUR_UUID" ]; then
+    CUR_UUID="$next_uuid"; MBOX="$MAILBOX_DIR/$CUR_UUID.md"; baseline=0
+    echo "cc-await-ping: role re-pointed → now watching $MBOX from line 0" >&2
+  fi
   cur="$(linecount)"
   if [ "$cur" -gt "$baseline" ]; then
     tail -n +"$((baseline + 1))" "$MBOX"   # the new line(s) only

@@ -60,3 +60,35 @@ setup() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"appeared later"* ]]
 }
+
+# --- lead-glue: --role mode (SO-1 closer) ---
+
+@test "role: --role resolves the role file and fires on a new mailbox line" {
+  export CC_ROLES_DIR="$BATS_TEST_TMPDIR/roles"; mkdir -p "$CC_ROLES_DIR"
+  echo "ROLE-UUID-1" > "$CC_ROLES_DIR/desk"
+  printf 'old\n' > "$CC_MAILBOX_DIR/ROLE-UUID-1.md"
+  ( sleep 1; printf 'PING role\n' >> "$CC_MAILBOX_DIR/ROLE-UUID-1.md" ) &
+  run "$AWAIT" --role desk --timeout 10 --interval 1
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PING role"* ]]
+}
+
+@test "role: re-pointed role file mid-wait is followed (new mailbox, baseline 0)" {
+  export CC_ROLES_DIR="$BATS_TEST_TMPDIR/roles"; mkdir -p "$CC_ROLES_DIR"
+  echo "ROLE-UUID-A" > "$CC_ROLES_DIR/desk"
+  printf 'stale\n' > "$CC_MAILBOX_DIR/ROLE-UUID-A.md"
+  ( sleep 2; echo "ROLE-UUID-B" > "$CC_ROLES_DIR/desk"; sleep 1; printf 'PING successor\n' >> "$CC_MAILBOX_DIR/ROLE-UUID-B.md" ) &
+  run "$AWAIT" --role desk --timeout 15 --interval 1
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PING successor"* ]]
+}
+
+@test "role: missing role file exits 3 loud" {
+  run "$AWAIT" --role nosuchrole --timeout 3 --interval 1
+  [ "$status" -eq 3 ]
+}
+
+@test "role: --role plus positional uuid is refused" {
+  run "$AWAIT" --role desk SOME-UUID --timeout 3 --interval 1
+  [ "$status" -eq 2 ]
+}
