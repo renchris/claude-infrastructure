@@ -6,7 +6,10 @@
      desk is closed/recycled and cannot reap the desk itself. launchd is OS-level, session-independent,
      survives logout, and fires on a fixed interval regardless of who is watching. It runs `cc-reaper
      sweep --reap`, which is DRY-safe by construction (every reap is quadruple-gated + effect-verified).
-     A LOGIN shell (zsh -lc) is used so ~/.claude/bin (cc-*) + git/jq/it2 are on PATH. -->
+     A LOGIN shell (zsh -lc) sources .zprofile/.zshenv (git/jq/it2 via homebrew) but NOT .zshrc — which
+     is where ~/.claude/bin (the cc-* tools) is added — because -lc is login-but-NON-interactive. So the
+     command must prepend ~/.claude/bin itself, else cc-reaper exits 127 under launchd (fixed 2026-07-17;
+     the job had silently no-op'd since install because the symlink dir was never on the launchd PATH). -->
 <plist version="1.0">
 <dict>
   <key>Label</key>            <string>com.chrisren.cc-reaper</string>
@@ -14,7 +17,7 @@
   <array>
     <string>/bin/zsh</string>
     <string>-lc</string>
-    <string>cc-reaper sweep --reap</string>
+    <string>export PATH="$HOME/.claude/bin:$PATH"; cc-reaper sweep --reap</string>
   </array>
   <key>StartInterval</key>    <integer>300</integer>
   <key>RunAtLoad</key>        <false/>
