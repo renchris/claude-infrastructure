@@ -1,0 +1,134 @@
+#!/bin/bash
+# cc-digest — the batched morning-review surface (P15 §3.4, T-P15-6). Reads the escalation
+# substrate and emits ONE legible markdown digest to stdout AND to
+# ${CC_DIGESTS_DIR:-~/.claude/autonomy/digests}/<date>.md. This is the DESIGNED operator touch:
+# batched, never an interrupt. Sections:
+#   Landed          land.log tail — what shipped unattended
+#   Backlog         cc-backlog open items
+#   Decisions       open packets (awaiting early-veto) + class-B defaults fired in the last 24h
+#   Pages           total page stamps + how many the sweep has surfaced (.seen)
+#   Inert-check     the D9 monitor: any hook that abstained 100% over N>=10 recent evals is INERT
+#                   (its check stopped observing what it guards) → an ALARM line (inv7 :120-125).
+#
+# Env (tests): CC_LAND_LOG · CC_BACKLOG_FILE/CC_BACKLOG_BIN · CC_DECISIONS_DIR · CC_PAGES_DIR
+#   · CC_SWEEP_SEEN_DIR · CC_IDL · CC_DIGESTS_DIR · CC_DIGEST_DATE · CC_DIGEST_IDL_TAIL (default
+#   5000 — the IDL is append-only + large, so the D9 read is BOUNDED, never a full slurp).
+# BSD+GNU portable, no eval, fail-loud. Exit 0.
+set -uo pipefail
+
+LAND_LOG="${CC_LAND_LOG:-$HOME/.claude/land.log}"
+DECISIONS_DIR="${CC_DECISIONS_DIR:-$HOME/.claude/autonomy/decisions}"
+PAGES_DIR="${CC_PAGES_DIR:-$HOME/.claude/autonomy/pages}"
+SEEN_DIR="${CC_SWEEP_SEEN_DIR:-$HOME/.claude/autonomy/sweep-seen}"
+IDL="${CC_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
+DIGESTS_DIR="${CC_DIGESTS_DIR:-$HOME/.claude/autonomy/digests}"
+IDL_TAIL="${CC_DIGEST_IDL_TAIL:-5000}"
+LAND_TAIL="${CC_DIGEST_LAND_TAIL:-10}"
+
+usage() { sed -n '2,/^set -uo/p' "$0" | sed 's/^# \{0,1\}//; /^set -uo/d'; }
+case "${1:-}" in -h|--help) usage; exit 0 ;; esac
+
+command -v jq >/dev/null 2>&1 || { echo "cc-digest: jq required" >&2; exit 1; }
+
+DATE="${CC_DIGEST_DATE:-$(date -u +%Y-%m-%d 2>/dev/null || echo unknown)}"
+NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '')"
+CUTOFF_24H="$(date -u -v-24H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+            || date -u -d '-24 hours' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '')"
+
+# cc-backlog: env override → beside → ~/.claude/bin → PATH.
+resolve_bin() { local o="$1" n="$2" c
+  if [ -n "$o" ]; then [ -x "$o" ] && printf '%s' "$o"; return 0; fi
+  for c in "$(dirname "$0")/$n" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/bin/$n" "$HOME/.claude/bin/$n"; do
+    [ -x "$c" ] && { printf '%s' "$c"; return 0; }
+  done
+  command -v "$n" >/dev/null 2>&1 && printf '%s' "$(command -v "$n")"; return 0
+}
+BACKLOG="$(resolve_bin "${CC_BACKLOG_BIN:-}" cc-backlog)"
+
+emit() {
+  printf '# Desk digest — %s\n\n' "$DATE"
+
+  printf '## Landed (recent)\n\n'
+  if [ -f "$LAND_LOG" ] && [ -s "$LAND_LOG" ]; then
+    tail -n "$LAND_TAIL" "$LAND_LOG" | sed 's/^/    /'      # 4-space indent = markdown code block
+  else
+    printf '_no landings recorded_\n'
+  fi
+  printf '\n'
+
+  printf '## Backlog (open)\n\n'
+  local bl=""
+  [ -n "$BACKLOG" ] && bl="$("$BACKLOG" list --open 2>/dev/null || true)"
+  if [ -n "$bl" ]; then printf '%s\n' "$bl" | sed 's/^/    /'; else printf '_no open backlog items_\n'; fi
+  printf '\n'
+
+  printf '## Decisions\n\n'
+  printf '### Open — awaiting early-veto\n\n'
+  local anyopen=0 f st cls id what dl def res
+  if [ -d "$DECISIONS_DIR" ]; then
+    for f in "$DECISIONS_DIR"/*.json; do
+      [ -e "$f" ] || continue
+      st="$(jq -r '.status // ""' "$f" 2>/dev/null || echo "")"
+      [ "$st" = "open" ] || continue
+      cls="$(jq -r '.class // "?"' "$f" 2>/dev/null)"; id="$(jq -r '.id // "?"' "$f" 2>/dev/null)"
+      what="$(jq -r '.what_plain // ""' "$f" 2>/dev/null)"; dl="$(jq -r '.veto_deadline // ""' "$f" 2>/dev/null)"
+      printf -- '- [%s] %s — %s%s\n' "$cls" "$id" "$what" "${dl:+ (veto by $dl)}"
+      anyopen=1
+    done
+  fi
+  [ "$anyopen" -eq 0 ] && printf '_none open_\n'
+  printf '\n### Class-B defaults fired (last 24h)\n\n'
+  local anyfired=0
+  if [ -d "$DECISIONS_DIR" ]; then
+    for f in "$DECISIONS_DIR"/*.json; do
+      [ -e "$f" ] || continue
+      st="$(jq -r '.status // ""' "$f" 2>/dev/null || echo "")"
+      [ "$st" = "expired-actioned" ] || continue
+      res="$(jq -r '.resolved // ""' "$f" 2>/dev/null)"
+      { [ -n "$CUTOFF_24H" ] && [ -n "$res" ] && [ "$res" \< "$CUTOFF_24H" ]; } && continue
+      id="$(jq -r '.id // "?"' "$f" 2>/dev/null)"; what="$(jq -r '.what_plain // ""' "$f" 2>/dev/null)"
+      def="$(jq -r '.default_if_no_veto // ""' "$f" 2>/dev/null)"
+      printf -- '- %s — %s → default fired: %s\n' "$id" "$what" "$def"
+      anyfired=1
+    done
+  fi
+  [ "$anyfired" -eq 0 ] && printf '_none in the last 24h_\n'
+  printf '\n'
+
+  printf '## Pages\n\n'
+  local total=0 surfaced=0 key
+  if [ -d "$PAGES_DIR" ]; then
+    for f in "$PAGES_DIR"/*.page; do
+      [ -e "$f" ] || continue
+      total=$((total + 1))
+      key="$(printf '%s' "$f" | shasum -a 256 | cut -c1-32)"
+      [ -f "$SEEN_DIR/$key" ] && surfaced=$((surfaced + 1))
+    done
+  fi
+  printf -- '- %d page stamp(s) total; %d surfaced by the sweep, %d pending\n\n' \
+    "$total" "$surfaced" "$((total - surfaced))"
+
+  printf '## Inert-check alarms (D9)\n\n'
+  # BOUNDED read: tail the append-only IDL, then group by hook. A hook with >=10 recent evals that
+  # abstained on ALL of them is INERT — its tells stopped matching reality (inv7). ALARM per such hook.
+  local alarms=""
+  if [ -f "$IDL" ]; then
+    alarms="$(tail -n "$IDL_TAIL" "$IDL" 2>/dev/null | jq -rs '
+      map(select(type=="object" and .hook and .disposition))
+      | group_by(.hook)
+      | map({hook: .[0].hook, total: length,
+             abstained: (map(select(.disposition=="abstained")) | length)})
+      | .[] | select(.total >= 10 and .abstained == .total)
+      | "ALARM: hook \(.hook) abstained \(.abstained)/\(.total) (100%) — INERT check: its tells stopped matching reality"
+    ' 2>/dev/null || true)"
+  fi
+  if [ -n "$alarms" ]; then printf '%s\n' "$alarms"; else printf '_no inert checks — all guards fired at least once in-window_\n'; fi
+  printf '\n_generated %s_\n' "$NOW"
+}
+
+tmp="$(mktemp 2>/dev/null || echo "/tmp/cc-digest.$$")"
+emit > "$tmp" 2>/dev/null || emit > "$tmp"
+cat "$tmp"
+if mkdir -p "$DIGESTS_DIR" 2>/dev/null; then cp "$tmp" "$DIGESTS_DIR/$DATE.md" 2>/dev/null || true; fi
+rm -f "$tmp" 2>/dev/null || true
+exit 0
