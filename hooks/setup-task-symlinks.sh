@@ -92,10 +92,10 @@ for dir in "$TASKS_DIR"/*/; do
 done
 
 # ── Active task list detection ──────────────────────────────────────
-# Find the most recently modified task list with actual tasks.
-# This handles Claude Code creating UUID directories instead of using
-# CLAUDE_CODE_TASK_LIST_ID.
-ACTIVE_ID=$(find_active_list)
+# Find the most recently modified task list MAPPED TO THIS PROJECT (G-P14-7).
+# Project-scoped so a foreign project's list can never surface as this project's
+# active list; the current session's own list is self-indexed above.
+ACTIVE_ID=$(find_active_list "$PROJECT_DIR" "$INDEX")
 
 # Update _current symlink to point to the active list (UUID or named)
 CURRENT_LINK="$FILTERED_DIR/_current"
