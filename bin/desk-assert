@@ -1,0 +1,104 @@
+#!/bin/bash
+# desk-assert — mechanical FM2 grounding check: refuse a state/causal claim about a watched
+# session unless it is backed by the grounding TRIAD. This is the read-transcript-before-
+# asserting-why house rule made executable (p11 FM2 signature; INC-1/2/3, all discipline-only):
+#   (1) TRANSCRIPT — the sid's JSONL has a readable last "type":"assistant" turn (WHY, not an
+#                    mtime bump on a metadata entry).
+#   (2) PANE       — the sid resolves to its CURRENT pane via `cc-sessions --json` sessionId
+#                    match (pane identity != session identity after an in-place recycle — INC-1).
+#   (3) HEAD       — HEAD diffed against a FIXED --witnessed-ref, never a recomputed BASE (INC-2).
+#
+# Usage:
+#   desk-assert <sid> [--witnessed-ref <ref>] [--cwd <repo>]
+#
+# Output:
+#   GROUNDED sid=<sid> pane=<uuid> last_turn=<n>s ago head_delta=<n|n/a>   (exit 0)
+#   UNGROUNDED: <missing legs>                                             (exit 1)
+#
+# --witnessed-ref is OPTIONAL — legs 1+2 are always required; the HEAD leg is checked only when a
+# ref is given (a caller making a HEAD claim MUST pass the fixed ref it witnessed), and then the
+# ref must resolve or the HEAD leg fails. Without it, head_delta is reported n/a.
+#
+# Env overrides (tests):
+#   CC_SESSIONS_BIN      (default ~/.claude/bin/cc-sessions)
+#   DESK_ASSERT_PROJECTS (space-separated projects roots to search for <sid>.jsonl;
+#                         default: the five ~/.claude*/projects dirs)
+#   DESK_ASSERT_NOW      (epoch seconds "now"; default `date +%s`)
+set -uo pipefail
+
+SESSIONS_BIN="${CC_SESSIONS_BIN:-$HOME/.claude/bin/cc-sessions}"
+NOW="${DESK_ASSERT_NOW:-$(date +%s)}"
+
+usage() { sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'; }
+
+iso_to_epoch() { # $1=ISO8601 (e.g. 2026-07-10T06:36:13.805Z) → epoch seconds (empty on failure)
+  local ts="$1"
+  ts="${ts%.*}"; ts="${ts%Z}"            # strip fractional seconds + trailing Z
+  date -j -u -f "%Y-%m-%dT%H:%M:%S" "$ts" +%s 2>/dev/null || date -u -d "$1" +%s 2>/dev/null
+}
+
+SID="" REF="" CWD="$PWD"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --witnessed-ref) REF="${2:?--witnessed-ref needs a value}"; shift 2 ;;
+    --cwd)           CWD="${2:?--cwd needs a value}"; shift 2 ;;
+    -h|--help)       usage; exit 0 ;;
+    --*)             echo "desk-assert: unknown option '$1'" >&2; usage >&2; exit 2 ;;
+    *)               if [ -z "$SID" ]; then SID="$1"; else echo "desk-assert: unexpected arg '$1'" >&2; exit 2; fi; shift ;;
+  esac
+done
+[ -n "$SID" ] || { echo "desk-assert: <sid> required" >&2; usage >&2; exit 2; }
+command -v jq >/dev/null 2>&1 || { echo "desk-assert: jq required" >&2; exit 2; }
+
+missing=""
+add_missing() { missing="${missing:+$missing, }$1"; }
+
+# --- leg 1: TRANSCRIPT — last assistant-turn ts from the sid's JSONL --------------------------
+if [ -n "${DESK_ASSERT_PROJECTS:-}" ]; then
+  # shellcheck disable=SC2206  # intentional word-split of a space-separated roots list
+  roots=($DESK_ASSERT_PROJECTS)
+else
+  roots=("$HOME/.claude/projects" "$HOME/.claude-secondary/projects" "$HOME/.claude-tertiary/projects" \
+         "$HOME/.claude-quaternary/projects" "$HOME/.claude-next/projects")
+fi
+jsonl=""
+for r in "${roots[@]}"; do
+  [ -d "$r" ] || continue
+  jsonl="$(find "$r" -name "$SID.jsonl" -type f 2>/dev/null | head -1)"
+  [ -n "$jsonl" ] && break
+done
+last_turn="n/a"; last_ts=""
+[ -n "$jsonl" ] && last_ts="$(grep '"type":"assistant"' "$jsonl" 2>/dev/null | tail -1 | jq -r '.timestamp // empty' 2>/dev/null)"
+if [ -z "$last_ts" ]; then
+  add_missing "transcript(no readable assistant turn for $SID)"
+else
+  ep="$(iso_to_epoch "$last_ts")"
+  [ -n "$ep" ] && last_turn=$(( NOW - ep ))
+fi
+
+# --- leg 2: PANE — resolve sid -> current pane via cc-sessions --json -------------------------
+pane=""
+if rows="$("$SESSIONS_BIN" --json 2>/dev/null)" && [ -n "$rows" ]; then
+  pane="$(printf '%s' "$rows" | jq -r --arg s "$SID" '.[] | select(.session_id == $s) | .paneUUID' 2>/dev/null | head -1)"
+fi
+[ -n "$pane" ] || add_missing "pane(no cc-sessions row for $SID)"
+
+# --- leg 3: HEAD — diff vs the FIXED witnessed ref (only when --witnessed-ref given) ----------
+head_delta="n/a"
+if [ -n "$REF" ]; then
+  if git -C "$CWD" rev-parse --verify --quiet "$REF" >/dev/null 2>&1; then
+    head_delta="$(git -C "$CWD" rev-list --count "$REF..HEAD" 2>/dev/null)"
+    [ -n "$head_delta" ] || { head_delta="n/a"; add_missing "head(rev-list failed for $REF..HEAD)"; }
+  else
+    add_missing "head(--witnessed-ref '$REF' not resolvable in $CWD)"
+  fi
+fi
+
+# --- verdict ----------------------------------------------------------------------------------
+if [ -n "$missing" ]; then
+  echo "UNGROUNDED: $missing"
+  exit 1
+fi
+if [ "$last_turn" = "n/a" ]; then lt_disp="last_turn=n/a"; else lt_disp="last_turn=${last_turn}s ago"; fi
+echo "GROUNDED sid=$SID pane=$pane $lt_disp head_delta=$head_delta"
+exit 0
