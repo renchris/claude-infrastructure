@@ -135,3 +135,84 @@ mkstub() { printf '#!/bin/bash\n%s\n' "$2" > "$1"; chmod +x "$1"; }
   run bash "$HD" --bogus
   [ "$status" -eq 2 ]
 }
+
+# ---- disposition hardening (G-P1-7 fail-closed + word-boundary + a19 §4 completeness) --------
+
+@test "13 cc-sessions present but ERRORS (rc!=0) -> R-REGISTRY-INDETERMINATE, exit 1" {
+  stub="$BATS_TEST_TMPDIR/cc-sessions-err"; mkstub "$stub" 'exit 2'
+  export CC_SESSIONS_BIN="$stub"
+  run bash "$HD" --cwd "$CLEAN" --session UUID-ERR ship
+  [ "$status" -eq 1 ]
+  echo "$output" | head -n1 | jq -e '.registry_indeterminate == true'
+  echo "$output" | grep -q 'R-REGISTRY-INDETERMINATE'
+}
+
+@test "13b cc-sessions rc0 empty output -> genuinely empty, NOT indeterminate, exit 0" {
+  stub="$BATS_TEST_TMPDIR/cc-sessions-empty"; mkstub "$stub" 'exit 0'
+  export CC_SESSIONS_BIN="$stub"
+  run bash "$HD" --cwd "$CLEAN" --session UUID-EMPTY ship
+  [ "$status" -eq 0 ]
+  echo "$output" | head -n1 | jq -e '.registry_indeterminate == false and .fired_peers_alive == []'
+}
+
+@test "13c cc-sessions absent (rc127) stays unavailable -> NOT indeterminate, exit 0" {
+  export CC_SESSIONS_BIN=/nonexistent
+  run bash "$HD" --cwd "$CLEAN" --session UUID-ABS ship
+  [ "$status" -eq 0 ]
+  echo "$output" | head -n1 | jq -e '.registry_indeterminate == false'
+}
+
+@test "14 word-boundary slug: 'ship' hits 'ship-hardening' NOT 'relationship-tracker'" {
+  stub="$BATS_TEST_TMPDIR/cc-sessions-wb"
+  mkstub "$stub" 'printf "relationship-tracker\nship-hardening\n"'
+  export CC_SESSIONS_BIN="$stub"
+  run bash "$HD" --cwd "$CLEAN" --session UUID-WB ship
+  [ "$status" -eq 1 ]
+  echo "$output" | head -n1 | jq -e '.fired_peers_alive == ["ship-hardening"]'
+}
+
+@test "14b word-boundary: a slug that is only a substring -> no match, close-eligible (exit 0)" {
+  stub="$BATS_TEST_TMPDIR/cc-sessions-wb2"; mkstub "$stub" 'printf "relationship-tracker\n"'
+  export CC_SESSIONS_BIN="$stub"
+  run bash "$HD" --cwd "$CLEAN" --session UUID-WB2 ship
+  [ "$status" -eq 0 ]
+  echo "$output" | head -n1 | jq -e '.fired_peers_alive == []'
+}
+
+@test "15 deliverable_missing: --deliverable absent -> exit 1, path listed" {
+  run bash "$HD" --cwd "$CLEAN" --session UUID-D --deliverable "$BATS_TEST_TMPDIR/nope.md"
+  [ "$status" -eq 1 ]
+  echo "$output" | head -n1 | jq -e '.deliverables_missing | index("'"$BATS_TEST_TMPDIR"'/nope.md") != null'
+  echo "$output" | grep -q 'deliverables-missing'
+}
+
+@test "15b --deliverable present + non-empty -> not missing, exit 0" {
+  printf 'content\n' > "$BATS_TEST_TMPDIR/out.md"
+  run bash "$HD" --cwd "$CLEAN" --session UUID-D2 --deliverable "$BATS_TEST_TMPDIR/out.md"
+  [ "$status" -eq 0 ]
+  echo "$output" | head -n1 | jq -e '.deliverables_missing == []'
+}
+
+@test "15c --deliverable present but EMPTY (zero-length) -> missing, exit 1" {
+  : > "$BATS_TEST_TMPDIR/empty.md"
+  run bash "$HD" --cwd "$CLEAN" --session UUID-D3 --deliverable "$BATS_TEST_TMPDIR/empty.md"
+  [ "$status" -eq 1 ]
+  echo "$output" | head -n1 | jq -e '.deliverables_missing | length == 1'
+}
+
+@test "16 --payload DELIVERABLE: extraction -> missing declared path opens (exit 1)" {
+  payload="$BATS_TEST_TMPDIR/payload.md"
+  printf 'some brief\nDELIVERABLE: %s/report.md\nmore\n' "$BATS_TEST_TMPDIR" > "$payload"
+  run bash "$HD" --cwd "$CLEAN" --session UUID-PL --payload "$payload"
+  [ "$status" -eq 1 ]
+  echo "$output" | head -n1 | jq -e '.deliverables_missing | length == 1'
+}
+
+@test "16b --payload DELIVERABLE: present -> close-eligible (exit 0)" {
+  printf 'x\n' > "$BATS_TEST_TMPDIR/report.md"
+  payload="$BATS_TEST_TMPDIR/payload2.md"
+  printf 'DELIVERABLE: %s/report.md\n' "$BATS_TEST_TMPDIR" > "$payload"
+  run bash "$HD" --cwd "$CLEAN" --session UUID-PL2 --payload "$payload"
+  [ "$status" -eq 0 ]
+  echo "$output" | head -n1 | jq -e '.deliverables_missing == []'
+}
