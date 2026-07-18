@@ -286,9 +286,33 @@ else
             | .permissions.ask  = (((.permissions.ask  // []) + ($t.permissions.ask  // [])) | unique)
           ' > "$target_settings.tmp" && mv "$target_settings.tmp" "$target_settings"; then
         # Merge is ADDITIVE + order-preserving: it wires missing EVENTS in full and unions deny/ask,
-        # but never reorders a populated event (the Stop FM1 chain order is load-bearing). Any remaining
-        # WITHIN-event gaps are order-sensitive and reported by the assert below for manual placement.
-        echo "  ✓ merged: missing hook events + deny/ask union (backup .pre-wire.bak; within-event gaps, if any, listed below)"
+        # but never reorders a populated event (the Stop FM1 chain order is load-bearing).
+        echo "  ✓ merged: missing hook events + deny/ask union (backup .pre-wire.bak)"
+        # WITHIN-EVENT UNION (append-only, never reorders): for every template (event, matcher, command)
+        # missing from the target event, append the hook to the FIRST object with the SAME matcher
+        # (matcher-null → first matcher-less object, i.e. the obj-1 chain tail); no matching object →
+        # append the template's object shape. This is the mechanical form of the activation snippets'
+        # per-dir jq — placement semantics per fm1b-activate-snippet §3-5.
+        if printf '%s' "$(cat "$target_settings")" | jq --argjson t "$clean_tmpl" '
+              def add1($m; $h):
+                (map((.matcher // null) == $m) | index(true)) as $i
+                | if $i == null
+                  then . + [ (if $m == null then {hooks:[$h]} else {matcher:$m, hooks:[$h]} end) ]
+                  else .[$i].hooks += [$h] end;
+              .hooks |= (reduce ($t.hooks | to_entries[]) as $ev (. // {};
+                .[$ev.key] = ((.[$ev.key] // []) as $cur
+                  | reduce [ $ev.value[]? as $o | ($o.hooks[]?) as $h
+                             | {m: ($o.matcher // null), h: $h} ][] as $x ($cur;
+                      if any(.[]?; (.hooks // []) | any(.command == $x.h.command)) then .
+                      else add1($x.m; $x.h) end))))
+            ' > "$target_settings.tmp2" && jq -e '.hooks' "$target_settings.tmp2" >/dev/null 2>&1; then
+          mv "$target_settings.tmp2" "$target_settings"
+          echo "  ✓ within-event union: every template hook command present in its event (append-at-tail)"
+        else
+          rm -f "$target_settings.tmp2"
+          echo "  ⚠ within-event union failed — event-level merge kept; gaps listed by the assert below"
+          warnings=$((warnings + 1))
+        fi
         installed=$((installed + 1))
       else
         rm -f "$target_settings.tmp"
