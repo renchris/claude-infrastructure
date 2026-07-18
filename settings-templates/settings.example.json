@@ -99,26 +99,65 @@
       {
         "matcher": "Bash",
         "hooks": [
-          { "type": "command", "command": "~/.claude/hooks/curl-gate.py", "timeout": 5 },
-          { "type": "command", "command": "~/.claude/hooks/validate-bash.sh", "timeout": 10 },
-          { "type": "command", "command": "~/.claude/hooks/git-worktree-guard.sh", "timeout": 10 },
-          { "type": "command", "command": "~/.claude/hooks/keychain-guard.sh" },
-          { "type": "command", "command": "~/.claude/hooks/rm-safe-allowlist.sh", "timeout": 5 }
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/curl-gate.py",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/validate-bash.sh",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/git-worktree-guard.sh",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/keychain-guard.sh"
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/rm-safe-allowlist.sh",
+            "timeout": 5
+          }
         ]
       },
       {
         "matcher": "Write|Edit|MultiEdit",
         "hooks": [
-          { "type": "command", "command": "~/.claude/hooks/backup-before-write.sh", "timeout": 10 },
-          { "type": "command", "command": "~/.claude/hooks/check-edit-boundary.sh", "timeout": 10 },
-          { "type": "command", "command": "~/.claude/hooks/plan-agent-teams-default.sh", "timeout": 5 }
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/backup-before-write.sh",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/check-edit-boundary.sh",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/plan-agent-teams-default.sh",
+            "timeout": 5
+          }
         ]
       },
       {
         "matcher": "Agent",
         "hooks": [
-          { "type": "command", "command": "~/.claude/hooks/agent-teams-enforce.sh", "timeout": 5 },
-          { "type": "command", "command": "~/.claude/hooks/frontier-spawn-gate.sh", "timeout": 5 }
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/agent-teams-enforce.sh",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/frontier-spawn-gate.sh",
+            "timeout": 5
+          }
         ]
       }
     ],
@@ -126,141 +165,432 @@
       {
         "matcher": "Write|Edit|MultiEdit",
         "hooks": [
-          { "type": "command", "command": "~/.claude/hooks/post-file-edit.sh", "timeout": 30 },
-          { "type": "command", "command": "~/.claude/hooks/plan-index-update.sh", "timeout": 5 },
-          { "type": "command", "command": "~/.claude/hooks/validate-plan-structure.sh", "timeout": 10 },
-          { "type": "command", "command": "~/.claude/hooks/plan-version-commit.sh", "timeout": 10 }
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/post-file-edit.sh",
+            "timeout": 30
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/plan-index-update.sh",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/validate-plan-structure.sh",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/plan-version-commit.sh",
+            "timeout": 10
+          }
         ]
       },
       {
         "matcher": "Bash",
         "hooks": [
-          { "type": "command", "command": "~/.claude/hooks/log-bash.sh", "timeout": 5 },
-          { "type": "command", "command": "~/.claude/hooks/waiting-recycle.sh" }
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/log-bash.sh",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/waiting-recycle.sh"
+          }
         ]
       },
       {
         "matcher": "TaskCreate|TaskUpdate",
         "hooks": [
-          { "type": "command", "command": "~/.claude/hooks/task-mutation-index.sh", "timeout": 5 }
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/task-mutation-index.sh",
+            "timeout": 5
+          }
         ]
       },
       {
         "matcher": "",
         "hooks": [
-          { "type": "command", "command": "~/.claude/hooks/teammate-checkpoint.sh", "timeout": 10 }
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/teammate-checkpoint.sh",
+            "timeout": 10
+          }
         ]
       },
       {
         "matcher": "ExitPlanMode",
         "hooks": [
-          { "type": "command", "command": "~/.claude/hooks/plan-pin-session.sh", "timeout": 5 }
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/plan-pin-session.sh",
+            "timeout": 5
+          }
         ]
       }
     ],
     "SessionStart": [
       {
         "hooks": [
-          { "type": "command", "command": "~/.claude/hooks/session-start.sh", "timeout": 10 },
-          { "type": "command", "command": "~/.claude/hooks/setup-plan-symlinks.sh", "timeout": 5 },
-          { "type": "command", "command": "~/.claude/hooks/setup-task-symlinks.sh", "timeout": 5 },
-          { "type": "command", "command": "~/.claude/hooks/pre-session-validate.sh", "timeout": 10 },
-          { "type": "command", "command": "~/.claude/hooks/lead-crash-watchdog.sh", "timeout": 10 },
-          { "type": "command", "command": "~/.claude/hooks/session-register.sh", "timeout": 5 }
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/session-start.sh",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/setup-plan-symlinks.sh",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/setup-task-symlinks.sh",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/pre-session-validate.sh",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/lead-crash-watchdog.sh",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/session-register.sh",
+            "timeout": 5
+          }
         ]
       },
       {
         "hooks": [
-          { "type": "command", "command": "~/.claude/hooks/session-index-start.sh", "timeout": 5 }
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/session-index-start.sh",
+            "timeout": 5
+          }
         ]
       },
       {
         "hooks": [
-          { "type": "command", "command": "~/.claude/hooks/config-mirror-assert.sh", "timeout": 8 }
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/config-mirror-assert.sh",
+            "timeout": 8
+          }
         ]
       },
       {
         "hooks": [
-          { "type": "command", "command": "~/.claude/hooks/frontier-status.sh", "timeout": 5 }
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/frontier-status.sh",
+            "timeout": 5
+          }
         ]
       },
       {
         "hooks": [
-          { "type": "command", "command": "~/.claude/hooks/live-session-registry.sh", "timeout": 5 }
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/live-session-registry.sh",
+            "timeout": 5
+          }
         ]
       },
       {
         "_comment": "STAGED (P0-14 activation queue): re-page an un-run pending-activation script. Wire via install.sh once hooks/activation-watch.sh is deployed.",
         "hooks": [
-          { "type": "command", "command": "~/.claude/hooks/activation-watch.sh", "timeout": 5 }
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/activation-watch.sh",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/dod-persist.sh",
+            "timeout": 5
+          }
         ]
       }
     ],
     "SessionEnd": [
-      { "hooks": [ { "type": "command", "command": "~/.claude/hooks/session-end.sh", "timeout": 10 } ] },
-      { "hooks": [ { "type": "command", "command": "~/.claude/hooks/session-index-end.sh", "timeout": 10 } ] },
-      { "hooks": [ { "type": "command", "command": "~/.claude/hooks/session-save-id.sh", "timeout": 5 } ] },
-      { "hooks": [ { "type": "command", "command": "~/.claude/hooks/harvest-skill-end.sh", "timeout": 10 } ] },
-      { "hooks": [ { "type": "command", "command": "~/.claude/hooks/live-session-registry.sh", "timeout": 5 } ] }
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/session-end.sh",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/session-index-end.sh",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/session-save-id.sh",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/harvest-skill-end.sh",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/live-session-registry.sh",
+            "timeout": 5
+          }
+        ]
+      }
     ],
     "Stop": [
       {
         "_comment": "obj-1 — the anti-premature-done + notify chain (order matters). session-continue + anti-deference-nudge are the FM1 stack; they MUST be reproduced on every account.",
         "hooks": [
-          { "type": "command", "command": "~/.claude/hooks/notify.sh complete", "timeout": 5 },
-          { "type": "command", "command": "~/.claude/hooks/cache-expiry-tracker.sh", "timeout": 5 },
-          { "type": "command", "command": "~/.claude/hooks/teammate-checkpoint.sh", "timeout": 10 },
-          { "type": "command", "command": "~/.claude/hooks/session-continue.sh", "timeout": 5 },
-          { "type": "command", "command": "~/.claude/hooks/anti-deference-nudge.sh", "timeout": 5 }
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/notify.sh complete",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/cache-expiry-tracker.sh",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/teammate-checkpoint.sh",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/session-continue.sh",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/anti-deference-nudge.sh",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/completion-assert.sh",
+            "timeout": 5
+          }
         ]
       },
       {
         "_comment": "obj-2 — boundary-handoff (state-preservation advisory at the context boundary). Live wires this only on ~/.claude via a machine-absolute path (G-P6-5b); the fix moves it here on ALL config dirs with a portable ~/.claude path.",
         "hooks": [
-          { "type": "command", "command": "~/.claude/hooks/boundary-handoff.sh", "timeout": 5 }
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/boundary-handoff.sh",
+            "timeout": 5
+          }
         ]
       }
     ],
     "UserPromptSubmit": [
       {
         "hooks": [
-          { "type": "command", "command": "~/.claude/hooks/cache-expiry-warning.sh", "timeout": 5 },
-          { "type": "command", "command": "~/.claude/hooks/memory-nudge.sh", "timeout": 5 },
-          { "type": "command", "command": "~/.claude/hooks/handoff-intent-nudge.sh", "timeout": 5 },
-          { "type": "command", "command": "~/.claude/hooks/research-precognition-nudge.sh", "timeout": 5 }
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/cache-expiry-warning.sh",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/memory-nudge.sh",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/handoff-intent-nudge.sh",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/research-precognition-nudge.sh",
+            "timeout": 5
+          }
         ]
       }
     ],
     "Notification": [
-      { "matcher": "permission_prompt", "hooks": [ { "type": "command", "command": "~/.claude/hooks/notify.sh permission", "timeout": 5 } ] },
-      { "matcher": "elicitation_dialog", "hooks": [ { "type": "command", "command": "~/.claude/hooks/notify.sh elicitation", "timeout": 5 } ] },
-      { "matcher": "permission_prompt", "hooks": [ { "type": "command", "command": "~/.claude/hooks/push-critical.sh", "timeout": 6 } ] },
-      { "matcher": "elicitation_dialog", "hooks": [ { "type": "command", "command": "~/.claude/hooks/push-critical.sh", "timeout": 6 } ] },
-      { "matcher": "idle_prompt", "hooks": [ { "type": "command", "command": "~/.claude/hooks/push-critical.sh", "timeout": 6 } ] }
+      {
+        "matcher": "permission_prompt",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/notify.sh permission",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "elicitation_dialog",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/notify.sh elicitation",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "permission_prompt",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/push-critical.sh",
+            "timeout": 6
+          }
+        ]
+      },
+      {
+        "matcher": "elicitation_dialog",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/push-critical.sh",
+            "timeout": 6
+          }
+        ]
+      },
+      {
+        "matcher": "idle_prompt",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/push-critical.sh",
+            "timeout": 6
+          }
+        ]
+      }
     ],
     "PermissionRequest": [
-      { "matcher": "Bash", "hooks": [ { "type": "command", "command": "~/.claude/hooks/notify.sh permission", "timeout": 5 } ] },
-      { "matcher": "AskUserQuestion", "hooks": [ { "type": "command", "command": "~/.claude/hooks/notify.sh question", "timeout": 5 } ] },
-      { "matcher": "ExitPlanMode", "hooks": [ { "type": "command", "command": "~/.claude/hooks/notify.sh plan", "timeout": 5 } ] }
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/notify.sh permission",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/notify.sh question",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "ExitPlanMode",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/notify.sh plan",
+            "timeout": 5
+          }
+        ]
+      }
     ],
     "TeammateIdle": [
-      { "hooks": [ { "type": "command", "command": "~/.claude/hooks/teammate-auto-shutdown.sh", "timeout": 5 } ] }
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/teammate-auto-shutdown.sh",
+            "timeout": 5
+          }
+        ]
+      }
     ],
     "WorktreeCreate": [
-      { "hooks": [ { "type": "command", "command": "~/.claude/hooks/worktree-setup.sh", "timeout": 180 } ] }
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/worktree-setup.sh",
+            "timeout": 180
+          }
+        ]
+      }
     ],
     "TaskCompleted": [
-      { "hooks": [ { "type": "command", "command": "~/.claude/hooks/task-quality-gate.sh", "timeout": 120 } ] }
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/task-quality-gate.sh",
+            "timeout": 120
+          }
+        ]
+      }
     ],
     "PreCompact": [
-      { "matcher": "auto", "hooks": [ { "type": "command", "command": "date '+[%Y-%m-%d %H:%M:%S] Auto-compact triggered' >> ~/.claude/logs/sessions.log", "timeout": 5 } ] },
-      { "matcher": "manual", "hooks": [ { "type": "command", "command": "date '+[%Y-%m-%d %H:%M:%S] Manual compact triggered' >> ~/.claude/logs/sessions.log", "timeout": 5 } ] }
-    ]
-  },
-  "_stagedHooks": {
-    "_comment": "STAGED — not yet live; documented so the roster is complete. install.sh does NOT wire _-prefixed keys. completion-assert is fm1-stack's P0-3 Stop hook: when the last assistant text asserts complete/done, corroborate vs the machine ledger (clean tree ∧ gate-green ∧ trunk..HEAD accounted ∧ scope_remainder=none) else block-once. Add into the Stop obj-1 array (before anti-deference-nudge) once hooks/completion-assert.sh lands.",
-    "Stop": [
-      { "type": "command", "command": "~/.claude/hooks/completion-assert.sh", "timeout": 5 }
+      {
+        "matcher": "auto",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "date '+[%Y-%m-%d %H:%M:%S] Auto-compact triggered' >> ~/.claude/logs/sessions.log",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/dod-persist.sh",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "manual",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "date '+[%Y-%m-%d %H:%M:%S] Manual compact triggered' >> ~/.claude/logs/sessions.log",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/dod-persist.sh",
+            "timeout": 10
+          }
+        ]
+      }
     ]
   }
 }
