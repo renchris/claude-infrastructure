@@ -1,11 +1,20 @@
 #!/usr/bin/env python3
 """lr-audit — disk-truth audit of a Claude Code session's delegated work.
 
-Classifies every Dynamic Workflow agent slot and bare subagent from on-disk
-artifacts (journal.jsonl, agent-*.jsonl, run summary JSON, lead transcript) so
-a recovering session re-runs exactly what is incomplete and never "bridges"
-gaps from memory. Verdicts are mechanical; semantic judgment (vacuous-suspect
-review) is left to the invoking model.
+Classifies every Dynamic Workflow agent slot, bare subagent, AND team assignee
+session (implicit-team teammates) from on-disk artifacts (journal.jsonl,
+agent-*.jsonl, run summary JSON, lead transcript, teams/<t>/config.json,
+teammate transcripts, brief-declared deliverable paths) so a recovering session
+re-runs exactly what is incomplete and never "bridges" gaps from memory.
+Verdicts are mechanical; semantic judgment (vacuous-suspect review) is left to
+the invoking model.
+
+Teammate ground rule (incident 2026-07-18, team session-44f5331d): the lead's
+"Teammate failed" notification is NOT ground truth — teammates retry past a
+429, finish, and their SendMessage/report handshake to the lead fails anyway
+("SendMessage isn't available in this subagent context"). The ONLY dependable
+completion evidence is the deliverable on disk: brief-declared output paths
+written during the member's tenure, worktree commits, or wip checkpoint refs.
 
 Verdicts (per unit):
   COMPLETE             journaled result / clean final assistant turn, above floors
@@ -18,6 +27,8 @@ Verdicts (per unit):
   NULL                 killed at/near spawn (limit / 529 / api error) -> re-run
   INTERRUPTED          TaskStop / user interrupt -> re-run unless salvaged
   UNVERIFIABLE         artifacts missing/contradictory -> surface, never guess
+  RUNNING              (teammates only) recent activity, no terminal state ->
+                       wait; never respawn over a live member
 
 Exit codes: 0 = no gaps, 1 = gaps present, 2 = usage/artifact error.
 """
@@ -71,6 +82,14 @@ MONTHS = {
 }
 
 GAP_VERDICTS = {"PARTIAL", "NULL", "INTERRUPTED", "UNVERIFIABLE", "VACUOUS_SUSPECT"}
+
+# Teammate (assignee-session) audit -----------------------------------------
+TEAM_ACTIVE_WINDOW_S = 300  # last transcript activity newer than this = RUNNING
+# Absolute file paths (with an extension) declared inside a teammate brief —
+# the mechanical deliverable contract ("Write the FULL report ... to /…/x.md").
+PROMPT_PATH_RE = re.compile(
+    r"(?<![\w@.~-])(/(?:[\w.@+~-]+/)+[\w.@+~-]+\.[A-Za-z0-9]{1,8})"
+)
 
 
 def jline(line):
@@ -582,6 +601,413 @@ def audit_tasks(config_dir, task_list_id):
     }
 
 
+def scan_teammate_jsonl(path):
+    """Single pass over a TEAMMATE session transcript (a full CC session, not a
+    subagent jsonl): limit events, interrupt marker, final-turn state, activity."""
+    st = {
+        "lines": 0,
+        "tool_uses": 0,
+        "prompt_head": "",
+        "model": None,
+        "final_text": None,
+        "end_turn": False,
+        "interrupted": False,
+        "limit_events": [],
+        "api_errors": 0,
+        "last_api_error_text": None,
+        "sendmessage_calls": 0,
+        "last_sendmessage_summary": None,
+        "first_ts": None,
+        "last_ts": None,
+        "last_kind": None,
+        "cwd": None,
+    }
+    last_model = None
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            for raw in f:
+                if not raw.strip():
+                    continue
+                st["lines"] += 1
+                obj = jline(raw)
+                if not obj:
+                    continue
+                ts = obj.get("timestamp")
+                if ts:
+                    st["last_ts"] = ts
+                    st["first_ts"] = st["first_ts"] or ts
+                if not st["cwd"] and obj.get("cwd"):
+                    st["cwd"] = obj.get("cwd")
+                typ = obj.get("type")
+                msg = obj.get("message") or {}
+                if typ == "user":
+                    st["last_kind"] = "user"
+                    if not st["prompt_head"]:
+                        head = text_of(msg)
+                        if head:
+                            st["prompt_head"] = head[:400]
+                    for it in content_items(msg):
+                        if it.get("type") == "text" and it.get(
+                            "text", ""
+                        ).strip().startswith("[Request interrupted by user"):
+                            st["interrupted"] = True
+                elif typ == "assistant":
+                    if obj.get("isApiErrorMessage"):
+                        text = text_of(msg)
+                        st["api_errors"] += 1
+                        st["last_api_error_text"] = text[:200]
+                        st["last_kind"] = "api_error"
+                        if obj.get("error") == "rate_limit":
+                            kind = classify_limit_text(text)
+                            if kind not in ("server_529", "other_api_error"):
+                                st["limit_events"].append(
+                                    {
+                                        "kind": kind,
+                                        "timestamp": ts,
+                                        "resets_at_utc": parse_reset(text, ts or ""),
+                                        "text": text[:160],
+                                    }
+                                )
+                        continue
+                    mdl = msg.get("model")
+                    if mdl and mdl != "<synthetic>":
+                        last_model = mdl
+                    kinds = {it.get("type") for it in content_items(msg)}
+                    for it in content_items(msg):
+                        if it.get("type") == "tool_use":
+                            st["tool_uses"] += 1
+                            if it.get("name") == "SendMessage":
+                                st["sendmessage_calls"] += 1
+                                inp = it.get("input") or {}
+                                st["last_sendmessage_summary"] = (
+                                    inp.get("summary") or str(inp.get("message"))[:120]
+                                )
+                    ftxt = text_of(msg)
+                    if ftxt:
+                        st["final_text"] = ftxt
+                        st["end_turn"] = msg.get("stop_reason") == "end_turn"
+                    if "tool_use" in kinds:
+                        st["last_kind"] = "assistant_tool_use"
+                        st["end_turn"] = False
+                    elif ftxt:
+                        st["last_kind"] = "assistant_text"
+    except OSError as e:
+        st["read_error"] = str(e)
+    st["model"] = last_model
+    return st
+
+
+def resolve_member_transcripts(config_dir, team_name, member, lead_sid):
+    """Map a team member -> its session transcript(s). Teammate records carry
+    teamName + agentName on every message line (verified 2.1.207); the member
+    entry in config.json does NOT carry a sessionId, so this scan IS the link.
+    Returns paths sorted oldest->newest (last = current; earlier = respawns)."""
+    cwd = member.get("cwd") or ""
+    slug = re.sub(r"[^A-Za-z0-9]", "-", cwd)
+    proj = os.path.join(config_dir, "projects", slug)
+    joined_s = (member.get("joinedAt") or 0) / 1000.0
+    hits = []
+    for p in glob.glob(os.path.join(proj, "*.jsonl")):
+        if os.path.basename(p).startswith(lead_sid or "\x00") or p.endswith(
+            ".handed-off"
+        ):
+            continue
+        try:
+            if os.path.getmtime(p) < joined_s - 120:
+                continue  # last write predates this member's join — cannot be it
+        except OSError:
+            continue
+        try:
+            with open(p, encoding="utf-8", errors="replace") as f:
+                for i, raw in enumerate(f):
+                    if i > 14:
+                        break
+                    obj = jline(raw)
+                    if not obj:
+                        continue
+                    if obj.get("teamName") == team_name and obj.get("agentName"):
+                        if obj.get("agentName") == member.get("name"):
+                            hits.append(p)
+                        break
+        except OSError:
+            continue
+    hits.sort(key=os.path.getmtime)
+    return hits
+
+
+def member_deliverables(member):
+    """Stat every absolute file path declared in the member's brief. A path
+    written during the member's tenure (mtime >= joinedAt - 60s, size > 0) is
+    un-fakeable deliverable evidence — reads don't move mtime."""
+    joined_s = (member.get("joinedAt") or 0) / 1000.0
+    out = []
+    for path in list(dict.fromkeys(PROMPT_PATH_RE.findall(member.get("prompt") or "")))[
+        :16
+    ]:
+        d = {"path": path, "exists": os.path.isfile(path)}
+        if d["exists"]:
+            try:
+                stt = os.stat(path)
+                d["size"] = stt.st_size
+                d["mtime_utc"] = (
+                    datetime.fromtimestamp(stt.st_mtime, timezone.utc)
+                    .isoformat()
+                    .replace("+00:00", "Z")
+                )
+                d["written_during_tenure"] = (
+                    stt.st_mtime >= joined_s - 60 and stt.st_size > 0
+                )
+            except OSError:
+                d["exists"] = False
+        out.append(d)
+    return out
+
+
+def member_git_evidence(member, lead_cwd):
+    """Worktree evidence for code teammates. Only applicable when the member's
+    cwd is DISTINCT from the lead's — in a shared checkout the lead's own
+    commits would false-positive. wip refs are member-keyed, so always safe."""
+    cwd = member.get("cwd") or ""
+    distinct = bool(cwd) and os.path.realpath(cwd) != os.path.realpath(lead_cwd or "")
+    ev = {"applicable": distinct, "commits": [], "dirty": None, "wip_refs": []}
+    if not os.path.isdir(cwd):
+        return ev
+
+    def _git(*a):
+        try:
+            r = subprocess.run(
+                ["git", "-C", cwd, *a],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+            return r.stdout
+        except (OSError, subprocess.SubprocessError):
+            return ""
+
+    name = member.get("name") or ""
+    ev["wip_refs"] = [
+        ln
+        for ln in _git(
+            "for-each-ref",
+            "--format=%(refname) %(objectname:short)",
+            f"refs/wip/{name}",
+        ).splitlines()
+        if ln.strip()
+    ]
+    if not distinct:
+        return ev
+    joined_iso = datetime.fromtimestamp(
+        (member.get("joinedAt") or 0) / 1000.0, timezone.utc
+    ).isoformat()
+    ev["commits"] = [
+        ln
+        for ln in _git(
+            "log", "--oneline", "-n", "8", f"--since={joined_iso}"
+        ).splitlines()
+        if ln.strip()
+    ]
+    ev["dirty"] = len(
+        [ln for ln in _git("status", "--porcelain").splitlines() if ln.strip()]
+    )
+    return ev
+
+
+def member_verdict(st, deliverables, git_ev, now_utc):
+    """Mechanical verdict for one teammate. Deliverable-on-disk evidence
+    outranks transcript tail state, which outranks lead-side perception."""
+    declared = bool(deliverables)
+    written = [d["path"] for d in deliverables if d.get("written_during_tenure")]
+    delivered = (
+        bool(written) or bool(git_ev.get("commits")) or bool(git_ev.get("wip_refs"))
+    )
+    clean = bool(
+        st["end_turn"] and st["last_kind"] == "assistant_text" and st["final_text"]
+    )
+    limited = bool(st["limit_events"])
+    evid = []
+    if written:
+        evid.append("deliverables written during tenure: " + ", ".join(written[:4]))
+    if git_ev.get("commits"):
+        evid.append(f"{len(git_ev['commits'])} worktree commit(s) since join")
+    if git_ev.get("wip_refs"):
+        evid.append("wip checkpoint ref present")
+    if limited:
+        e = st["limit_events"][-1]
+        evid.append(
+            f"limit[{e['kind']}] at {e['timestamp']} resets "
+            f"{e.get('resets_at_utc') or 'NONE (spend cap — /usage-credits or account rotation)'}"
+        )
+    if st["lines"] <= 5:
+        evid.append(f"killed at spawn ({st['lines']} records)")
+        return "NULL", evid
+    if delivered and clean and not limited:
+        if st["lines"] < 8 or st["tool_uses"] < 2:
+            evid.append(f"floors: lines={st['lines']} tool_uses={st['tool_uses']}")
+            return "VACUOUS_SUSPECT", evid
+        return "COMPLETE", evid
+    if delivered:
+        evid.append(
+            "finished on disk; delivery/handshake to lead unproven -> READ from disk"
+        )
+        return "COMPLETE_UNDELIVERED", evid
+    if st["interrupted"]:
+        evid.append("interrupted (TaskStop / user)")
+        return "INTERRUPTED", evid
+    if clean:
+        if declared:
+            evid.append(
+                "clean final turn but NONE of the brief-declared output paths were written"
+            )
+            return "VACUOUS_SUSPECT", evid
+        if st["lines"] < 8 or st["tool_uses"] < 2:
+            evid.append(f"floors: lines={st['lines']} tool_uses={st['tool_uses']}")
+            return "VACUOUS_SUSPECT", evid
+        return "COMPLETE", evid
+    if st["last_kind"] == "api_error":
+        evid.append(f"died on api error: {(st['last_api_error_text'] or '')[:100]}")
+        return ("NULL" if st["lines"] <= 12 else "PARTIAL"), evid
+    age = None
+    if st["last_ts"]:
+        try:
+            age = (
+                now_utc - datetime.fromisoformat(st["last_ts"].replace("Z", "+00:00"))
+            ).total_seconds()
+        except ValueError:
+            age = None
+    if age is not None and age < TEAM_ACTIVE_WINDOW_S:
+        evid.append(f"active {int(age)}s ago")
+        return "RUNNING", evid
+    evid.append(
+        f"substantive but unfinished (lines={st['lines']} tool_uses={st['tool_uses']}, "
+        f"last activity {int(age) if age is not None else '?'}s ago)"
+    )
+    return "PARTIAL", evid
+
+
+def audit_led_teams(config_dir, sid, cwd, force_team=None):
+    """Per-member audit of every team this session LEADS. Assignee sessions are
+    full CC sessions; recovery is the lead's job (the reset poller deliberately
+    skips teammate transcripts). Returns one dict per led team."""
+    teams = []
+    tdir = os.path.join(config_dir, "teams")
+    if not os.path.isdir(tdir):
+        return teams
+    now_utc = datetime.now(timezone.utc)
+    for name in sorted(os.listdir(tdir)):
+        cfg_path = os.path.join(tdir, name, "config.json")
+        if not os.path.isfile(cfg_path):
+            continue
+        try:
+            with open(cfg_path, encoding="utf-8") as f:
+                cfg = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            continue
+        if force_team:
+            if cfg.get("name") != force_team and name != force_team:
+                continue
+        elif not sid or cfg.get("leadSessionId") != sid:
+            continue
+        team = {
+            "name": cfg.get("name") or name,
+            "config_path": cfg_path,
+            "leadSessionId": cfg.get("leadSessionId"),
+            "members": [],
+        }
+        for m in cfg.get("members", []):
+            if m.get("agentType") == "team-lead":
+                continue
+            paths = resolve_member_transcripts(
+                config_dir, team["name"], m, sid or cfg.get("leadSessionId")
+            )
+            dl = member_deliverables(m)
+            git_ev = member_git_evidence(m, cwd)
+            entry = {
+                "name": m.get("name"),
+                "agentType": m.get("agentType"),
+                "model": m.get("model"),
+                "cwd": m.get("cwd"),
+                "tmuxPaneId": m.get("tmuxPaneId"),
+                "isActive": m.get("isActive"),
+                "joinedAt": m.get("joinedAt"),
+                "prompt_head": (m.get("prompt") or "")[:200],
+                "_prompt_full": m.get("prompt"),
+                "transcript": paths[-1] if paths else None,
+                "prior_transcripts": paths[:-1],
+                "deliverables": dl,
+                "git": git_ev,
+            }
+            if not paths:
+                entry["verdict"] = "UNVERIFIABLE"
+                entry["evidence"] = [
+                    "no session transcript matched teamName+agentName under this account"
+                ]
+            else:
+                st = scan_teammate_jsonl(paths[-1])
+                v, evid = member_verdict(st, dl, git_ev, now_utc)
+                if entry["isActive"] is False and v == "RUNNING":
+                    v, evid = (
+                        "PARTIAL",
+                        evid + ["config isActive=false — harness marked it dead"],
+                    )
+                entry.update(
+                    {
+                        "verdict": v,
+                        "evidence": evid,
+                        "limit_events": st["limit_events"],
+                        "last_ts": st["last_ts"],
+                        "lines": st["lines"],
+                        "tool_uses": st["tool_uses"],
+                        "sendmessage_calls": st["sendmessage_calls"],
+                        "final_text_head": (st["final_text"] or "")[:200] or None,
+                    }
+                )
+            team["members"].append(entry)
+        counts = {}
+        for e in team["members"]:
+            counts[e["verdict"]] = counts.get(e["verdict"], 0) + 1
+        team["member_counts"] = counts
+        teams.append(team)
+    return teams
+
+
+def write_team_salvage(doc, out_dir):
+    """One respawn-ready JSON per member: the VERBATIM original brief + exact
+    Agent() args. Re-fire = Agent({name, subagent_type, model, prompt}) — no
+    paraphrasing from memory, ever."""
+    for team in (doc.get("teams") or {}).get("led", []):
+        tdir = os.path.join(out_dir, "teams", team["name"])
+        os.makedirs(tdir, exist_ok=True)
+        for m in team["members"]:
+            with open(
+                os.path.join(tdir, f"{m['name']}.json"), "w", encoding="utf-8"
+            ) as f:
+                json.dump(
+                    {
+                        "member": m["name"],
+                        "team": team["name"],
+                        "verdict": m.get("verdict"),
+                        "transcript": m.get("transcript"),
+                        "evidence": m.get("evidence"),
+                        "deliverables": m.get("deliverables"),
+                        "partial_output_seeds": [
+                            d["path"]
+                            for d in (m.get("deliverables") or [])
+                            if d.get("exists")
+                        ],
+                        "respawn_call": {
+                            "name": m["name"],
+                            "subagent_type": m.get("agentType"),
+                            "model": m.get("model"),
+                            "prompt": m.get("_prompt_full"),
+                        },
+                    },
+                    f,
+                    indent=1,
+                )
+
+
 def audit_teams(config_dir, cwd):
     info = {"teams": [], "wip_refs": []}
     tdir = os.path.join(config_dir, "teams")
@@ -790,11 +1216,49 @@ def render_md(doc):
         for x in t["open"]:
             L.append(f"- [{x['status']}] {x['id']}: {x['subject']}")
     tm = doc.get("teams") or {}
-    if tm.get("teams") or tm.get("wip_refs"):
-        L.append("\n## Teams / checkpoints")
-        if tm.get("teams"):
+    for team in tm.get("led", []):
+        L.append(
+            f"\n## Team `{team['name']}` — assignee sessions (this session is LEAD; "
+            "lead-side 'failed' notifications are NOT ground truth)"
+        )
+        L.append(
+            "| member | verdict | limit | last activity (UTC) | deliverables | action |"
+        )
+        L.append("|---|---|---|---|---|---|")
+        for m in team["members"]:
+            lim = m.get("limit_events") or []
+            if lim:
+                last = lim[-1]
+                limtxt = f"{last['kind']}→{last.get('resets_at_utc') or 'no-reset'}"
+            else:
+                limtxt = "-"
+            dl = m.get("deliverables") or []
+            w = sum(1 for d in dl if d.get("written_during_tenure"))
+            act = {
+                "COMPLETE": "consume",
+                "COMPLETE_UNDELIVERED": "READ from disk",
+                "RUNNING": "wait",
+                "PARTIAL": "respawn (salvage brief)",
+                "NULL": "respawn (salvage brief)",
+                "INTERRUPTED": "respawn unless salvaged",
+                "VACUOUS_SUSPECT": "review vs brief",
+                "UNVERIFIABLE": "surface",
+            }.get(m["verdict"], "?")
             L.append(
-                f"- team dirs: {', '.join(tm['teams'])} (respawn: `scripts/team/respawn-team.sh <team>`)"
+                f"| {m['name']} | **{m['verdict']}** | {limtxt} | {m.get('last_ts') or '?'} "
+                f"| {w}/{len(dl)} written | {act} |"
+            )
+        L.append(
+            f"- respawn calls (VERBATIM briefs): `salvage/teams/{team['name']}/<member>.json` "
+            "→ `.respawn_call` — spawn via Agent(); course-change respawns: `bin/cc-respawn`"
+        )
+    if tm.get("other_team_dirs") or tm.get("wip_refs"):
+        L.append("\n## Other team dirs / checkpoints")
+        if tm.get("other_team_dirs"):
+            extra = " …" if len(tm["other_team_dirs"]) > 12 else ""
+            L.append(
+                f"- team dirs not led by this session: "
+                f"{', '.join(tm['other_team_dirs'][:12])}{extra}"
             )
         for ref in tm.get("wip_refs", []):
             L.append(f"- `{ref}`")
@@ -819,6 +1283,7 @@ ACTION = {
     "TAINTED_COMPLETE": "run 'completed' over gap slots — treat final result as CONTAMINATED until slots re-run",
     "INCOMPLETE": "resume via Workflow({scriptPath, resumeFromRunId}); re-audit after",
     "SUPERSEDED": "NONE — slot re-issued and completed under another agentId",
+    "RUNNING": "NONE — teammate still active (age < 5 min); wait, never respawn over a live member",
 }
 
 
@@ -831,6 +1296,10 @@ def main():
     ap.add_argument("--session", default=os.environ.get("CLAUDE_CODE_SESSION_ID"))
     ap.add_argument("--cwd", default=os.getcwd())
     ap.add_argument("--task-list", default=os.environ.get("CLAUDE_CODE_TASK_LIST_ID"))
+    ap.add_argument(
+        "--team",
+        help="audit this team's members even if leadSessionId != --session",
+    )
     ap.add_argument("--json", dest="json_out")
     ap.add_argument("--md", dest="md_out")
     ap.add_argument("--salvage-dir")
@@ -870,6 +1339,15 @@ def main():
 
     subagents = [s for s in audit_bare_subagents(session_dir, lead)]
 
+    led_teams = audit_led_teams(config_dir, sid, args.cwd, force_team=args.team)
+    led_names = {t["name"] for t in led_teams}
+    legacy_teams = audit_teams(config_dir, args.cwd)
+    teams_doc = {
+        "led": led_teams,
+        "other_team_dirs": [t for t in legacy_teams["teams"] if t not in led_names],
+        "wip_refs": legacy_teams["wip_refs"],
+    }
+
     gap_units = []
     for r in workflows:
         if r["run_verdict"] in ("TAINTED_COMPLETE", "INCOMPLETE"):
@@ -908,6 +1386,32 @@ def main():
                 }
             )
 
+    for team in led_teams:
+        for m in team["members"]:
+            v = m["verdict"]
+            if v not in GAP_VERDICTS and v != "COMPLETE_UNDELIVERED":
+                continue
+            unit = f"team {team['name']}/{m['name']}"
+            if v == "COMPLETE_UNDELIVERED":
+                written = [
+                    d["path"]
+                    for d in (m.get("deliverables") or [])
+                    if d.get("written_during_tenure")
+                ] or [
+                    d["path"] for d in (m.get("deliverables") or []) if d.get("exists")
+                ]
+                act = "READ deliverable(s) from disk (zero re-spend): " + (
+                    ", ".join(written[:3]) or "see salvage"
+                )
+            elif v in ("PARTIAL", "NULL", "INTERRUPTED"):
+                act = (
+                    "RESPAWN via Agent() with the salvaged VERBATIM brief — "
+                    f"salvage/teams/{team['name']}/{m['name']}.json .respawn_call"
+                )
+            else:
+                act = ACTION.get(v, "?")
+            gap_units.append({"unit": unit, "verdict": v, "action": act})
+
     hard_gaps = [
         g
         for g in gap_units
@@ -934,7 +1438,7 @@ def main():
         "workflows": workflows,
         "subagents": subagents,
         "tasks": audit_tasks(config_dir, args.task_list),
-        "teams": audit_teams(config_dir, args.cwd),
+        "teams": teams_doc,
         "gap_units": gap_units,
         "counts": {
             "workflows": len(workflows),
@@ -949,8 +1453,14 @@ def main():
     }
 
     if args.salvage_dir:
-        write_salvage(doc, os.path.abspath(os.path.expanduser(args.salvage_dir)))
-        doc["salvage_dir"] = os.path.abspath(os.path.expanduser(args.salvage_dir))
+        sdir = os.path.abspath(os.path.expanduser(args.salvage_dir))
+        write_salvage(doc, sdir)
+        write_team_salvage(doc, sdir)
+        doc["salvage_dir"] = sdir
+    # full member briefs live only in the salvage respawn files — strip from doc
+    for team in led_teams:
+        for m in team["members"]:
+            m.pop("_prompt_full", None)
 
     md = render_md(doc)
     if args.json_out:

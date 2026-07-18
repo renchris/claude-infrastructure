@@ -58,3 +58,14 @@ makes an unattended `lr-fire-resume` prompt-free. Validated 4/4 cross-account re
 ## Files (to build)
 `scripts/limit-recover/lr-reset-poller.sh` · `~/Library/LaunchAgents/com.reso.lr-reset-poller.plist`
 · wire the kill-switch + log rotation into `install.sh`.
+
+## 2026-07-18 addendum — teammate sessions are SKIPped (lead-owned recovery)
+
+Incident (team `session-44f5331d`): an Agent-Team wave's assignee sessions 429'd on the
+monthly-spend cap mid-wave. Assignee transcripts match the poller's limit pre-filter, but a bare
+`--resume` of a teammate would detach it from team semantics (inbox/agentName wiring) and duplicate
+the lead's respawn. The poller now skips any transcript whose head carries `"agentName"` (teammate
+marker; leads never have it), logs `SKIP <sid> — teammate session (lead-owned recovery)` once
+(marker: `~/.reso/limit-recover/teammate-skip/<sid>`), and leaves recovery to the team-aware
+`lr-audit.py` (per-member verdicts + `salvage/teams/<team>/<member>.json` verbatim respawn briefs
+— see `/limit-recover` § Teams). Regression: `tests/lr-team-audit.bats` test 3; LR-a..LR-i stay GREEN.
