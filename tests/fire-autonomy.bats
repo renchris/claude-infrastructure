@@ -12,6 +12,7 @@ setup() {
   eval "$(sed -n '/^pre_trust() {/,/^}/p' "$HF")"
   eval "$(sed -n '/^write_role() {/,/^}/p' "$HF")"
   eval "$(sed -n '/^refresh_roles_for() {/,/^}/p' "$HF")"
+  eval "$(sed -n '/^check_goal_length() {/,/^}/p' "$HF")"
 }
 
 # A minimal side-effect-free fire harness (HOME isolates config/projects/registry/roles; IT2_BIN
@@ -162,4 +163,53 @@ STUB
       --session-id FIRING-0000 --cwd "$BATS_TEST_TMPDIR" --no-self-retire --as-role operator
   [ "$status" -eq 0 ]
   [ "$(cat "$HOMEDIR/.claude/cc-roles/operator")" = "$PANE" ]
+}
+
+# ---- P0-16 /goal >4000-char guard (a19 D-11) ------------------------------------------------
+# (GOAL_MAX_CHARS shrinks the 4000 cap so fixtures stay tiny.)
+
+@test "check_goal_length: a /goal body over the cap fails loud (exit 1, names the size + pointer fix)" {
+  printf '/goal %s\n' "$(head -c 30 </dev/zero | tr '\0' x)" > "$BATS_TEST_TMPDIR/g.md"
+  GOAL_MAX_CHARS=20
+  run check_goal_length "$BATS_TEST_TMPDIR/g.md"
+  [ "$status" -eq 1 ]
+  printf '%s\n' "$output" | grep -qE '/goal condition is [0-9]+ chars'
+  printf '%s\n' "$output" | grep -q 'POINTER form'
+}
+
+@test "check_goal_length: /goal body exactly at the cap passes (0)" {
+  printf '/goal %s\n' "$(head -c 20 </dev/zero | tr '\0' x)" > "$BATS_TEST_TMPDIR/g.md"
+  GOAL_MAX_CHARS=20
+  run check_goal_length "$BATS_TEST_TMPDIR/g.md"
+  [ "$status" -eq 0 ]
+}
+
+@test "check_goal_length: no /goal line -> ok (0)" {
+  printf 'a normal brief\nmore lines\n' > "$BATS_TEST_TMPDIR/g.md"
+  GOAL_MAX_CHARS=20
+  run check_goal_length "$BATS_TEST_TMPDIR/g.md"
+  [ "$status" -eq 0 ]
+}
+
+@test "check_goal_length: a long NON-/goal line does not trip the guard" {
+  printf 'DELIVERABLE: %s\n' "$(head -c 50 </dev/zero | tr '\0' x)" > "$BATS_TEST_TMPDIR/g.md"
+  GOAL_MAX_CHARS=20
+  run check_goal_length "$BATS_TEST_TMPDIR/g.md"
+  [ "$status" -eq 0 ]
+}
+
+@test "E2E: over-cap /goal is rejected PRE-fire (--dry-run), non-zero, no command printed" {
+  printf '/goal %s\n' "$(head -c 30 </dev/zero | tr '\0' x)" > "$BATS_TEST_TMPDIR/g.md"
+  run env GOAL_MAX_CHARS=20 bash "$HF" --prompt-file "$BATS_TEST_TMPDIR/g.md" \
+    --launcher claude-test --cwd "$BATS_TEST_TMPDIR" --dry-run
+  [ "$status" -ne 0 ]
+  printf '%s\n' "$output" | grep -q 'HARD-CAPS /goal'
+  ! printf '%s\n' "$output" | grep -q 'command:'
+}
+
+@test "E2E: an under-cap /goal passes the guard (--dry-run exit 0)" {
+  printf '/goal do the thing\n\nbrief body\n' > "$BATS_TEST_TMPDIR/g.md"
+  run env GOAL_MAX_CHARS=4000 bash "$HF" --prompt-file "$BATS_TEST_TMPDIR/g.md" \
+    --launcher claude-test --cwd "$BATS_TEST_TMPDIR" --dry-run
+  [ "$status" -eq 0 ]
 }
