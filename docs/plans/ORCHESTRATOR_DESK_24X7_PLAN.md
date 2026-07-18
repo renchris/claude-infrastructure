@@ -153,8 +153,21 @@ P0-15's handoff-fire role-writes; `escalation` owns the consumer sweep half of P
 1. **Reboot posture** (P0-10): auto-login+FileVault-off vs LaunchDaemons vs manual-morning-resume.
 2. **Pushover credentials** (P0-7) — one-time secret.
 3. **Monthly-spend policy** (I-LIVE-1): cap raise vs cross-account overflow vs Kimi hedge key.
+   Default-if-no-veto (per drive-by-default): cross-account continuation (quota-plane isolation);
+   Kimi engages only on operator key.
 4. **Ask-narrowing scope** (T-P15-4): sanction the ship-rail-only push allow (after U2 probe).
 5. **wiring-all v3 run** — the consolidated one-shot activation (supersedes ①–⑥ backlog).
+6. **Ruling-#1 scope vs the acting desk-invariant** (red-team V1): ruling #1 (2026-07-14,
+   operator-ratified) says the supervisor PAGES, never auto-recovers — because naive actors keyed
+   off lying signals CAUSE incidents. P0-14's desk-invariant ACTS (bounded re-prompt/respawn,
+   budget ≤2/6h, OS-level channel, conservative predicates). It is built as code + plist template
+   only; loading the plist IS the ratification moment (C10 already gates it). Options: (a) ratify
+   the invariant as a NEW organ outside ruling #1's supervisor scope (recommended — the 11h stun
+   is the empirical cost of pure-page); (b) page-only mode (`DESK_INVARIANT_ACT=0`); (c) reject.
+
+**Sequencing law (red-team V3):** reap-safety (P0-13) MUST land before ship-land.sh is activated
+for autonomous use — auto-landing creates clean+landed states that remove the accidental
+dirty-tree shield which alone prevents wrongful reaps of working sessions today.
 
 ## Verification discipline
 
@@ -171,3 +184,16 @@ that wires their subjects — no gate goes green on capability alone again. Full
   agents + the permission classifier; desk stunned ~11h; lr-audit blind to named agents).
   Evidence corpus copied to docs/research/desk-audit-2026-07-18/. Next: integrate adversarial
   returns → OASIS close → fire Phase-0 W-a.
+- 2026-07-18 ~22:2xZ — adversarial returns integrated (addendum P0-13..18); OASIS closed
+  (three-angle convergence, sublinear tail; out-of-scope-named: prompt-injection hardening,
+  multi-machine). W-a fired (5 teammates) + W-b reap-safety. fm1-stack DONE + merged `91bc922`
+  (58/58: wrap-ledger f5997c1 · completion-assert 2dc88bd · anti-def triple 9aa901d). Red-team
+  verdict integrated (pre-addendum read → V1/V3 stale = independent convergence on P0-14/P0-13;
+  REAL catches: V4 gate-green producer unassigned → assigned to landing's ship-land.sh green
+  path + blockedBy edge landing→fm1-consumers; V1-core → operator decision #6; V3 corollary →
+  the sequencing law above; V2 residual → decision #3's default-if-no-veto). Incidents: I-LIVE-2
+  landing teammate died silently mid-loop (tool_result, no error record, no notification — the
+  reconciler-class divergence live) → resumed by SendMessage with the gate-green addendum;
+  result-delivery gap 3rd instance (rt-synthesis completed, final payload never delivered,
+  completed-agent resume no-op — verdict recovered by transcript read; feeds P0-15's consumer
+  design: harness notification channels are themselves a lossy layer).
