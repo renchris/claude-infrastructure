@@ -299,8 +299,9 @@ plan"`, `--launcher` for an explicit tier (e.g. `claude-fable-x`; note it skips 
 ~/.claude/scripts/handoff-fire.sh --prompt-file /tmp/fire-<slug>.txt --worktree <slug>
 # a 2nd/3rd concurrent handoff STILL splits (do NOT switch to --tab here) — ⌘D again, e.g. below:
 ~/.claude/scripts/handoff-fire.sh --prompt-file /tmp/fire-<slug>.txt --cwd <wt> --model fable --probe --split-down
-# --tab is for OVERFLOW ONLY (window already ~4+ panes) or an explicit user "put it in a tab"
-~/.claude/scripts/handoff-fire.sh --prompt-file /tmp/fire-<slug>.txt --worktree <slug> --tab
+# --tab is for OVERFLOW ONLY (window already ~4+ panes) or an explicit user "put it in a tab" —
+# a non-default surface, so record WHY with --surface-reason (silences the split-right advisory)
+~/.claude/scripts/handoff-fire.sh --prompt-file /tmp/fire-<slug>.txt --worktree <slug> --tab --surface-reason "overflow: window already ~4+ panes"
 ```
 
 **6 · Waves — N parallel handoffs (THE high-value case).** A fire request covers EVERY track in the
@@ -330,7 +331,7 @@ and like a wave there is no track cap (practical ceiling ≈ 4 accounts × 2 con
 # 3-track wave: rank once, spread explicitly, splits for the first two, tab for the third
 ~/.claude/scripts/handoff-fire.sh --prompt-file /tmp/fire-sec.txt   --worktree wsfa-sec   --account next4
 ~/.claude/scripts/handoff-fire.sh --prompt-file /tmp/fire-money.txt --worktree wsfa-money --account next3
-~/.claude/scripts/handoff-fire.sh --prompt-file /tmp/fire-fable.txt --worktree wsfa-fable --account next2 --model fable --probe --tab
+~/.claude/scripts/handoff-fire.sh --prompt-file /tmp/fire-fable.txt --worktree wsfa-fable --account next2 --model fable --probe --tab --surface-reason "overflow: 3rd track"
 ```
 
 **Fire guardrails:** the gate is READINESS, not an explicit ask — firing is the default close of
