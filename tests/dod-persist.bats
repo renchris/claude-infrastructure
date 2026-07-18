@@ -136,3 +136,63 @@ pjson() { jq -nc --arg c "$CWD" --arg t "$1" '{hook_event_name:"PreCompact",cwd:
   run run_hook "$(sjson PostToolUse)"
   [ "$status" -eq 0 ]; [ -z "$output" ]
 }
+
+# ── Follow-On Gate growth: Scope (grown) lines survive compaction like the baseline ──
+mktx_grown() {  # $1 frozen  $2 grown1  [$3 grown2]
+  local path="$BATS_TEST_TMPDIR/txg-${BATS_TEST_NUMBER}-$RANDOM.jsonl"
+  {
+    jq -nc --arg s "$1" '{type:"assistant",message:{content:[{type:"text",text:("Scope (frozen): " + $s)}]}}'
+    jq -nc --arg g "$2" '{type:"assistant",message:{content:[{type:"text",text:("Scope (grown): " + $g)}]}}'
+    if [ -n "${3:-}" ]; then
+      jq -nc --arg g "$3" '{type:"assistant",message:{content:[{type:"text",text:("Scope (grown): " + $g)}]}}'
+    fi
+  } > "$path"
+  printf '%s' "$path"
+}
+
+@test "PreCompact: grown lines captured alongside frozen (gate-passed growth survives compaction)" {
+  local tx; tx="$(mktx_grown 'base task' '+ghost-pointer sweep' '+policy encode')"
+  run run_hook "$(pjson "$tx")"
+  [ "$status" -eq 0 ]
+  local f; f="$(dod_path)"
+  grep -q 'Scope (frozen): base task' "$f"
+  grep -q 'Scope (grown): +ghost-pointer sweep' "$f"
+  grep -q 'Scope (grown): +policy encode' "$f"
+}
+
+@test "PreCompact: grown dedup — re-compaction appends nothing; a NEW grown item still lands" {
+  local tx; tx="$(mktx_grown 'base task' '+itemA')"
+  run_hook "$(pjson "$tx")" >/dev/null
+  local f n1; f="$(dod_path)"; n1=$(grep -c 'Scope (grown): +itemA' "$f")
+  [ "$n1" -eq 1 ]
+  run_hook "$(pjson "$tx")" >/dev/null
+  [ "$(grep -c 'Scope (grown): +itemA' "$f")" -eq "$n1" ]
+  local tx2; tx2="$(mktx_grown 'base task' '+itemA' '+itemB')"
+  run_hook "$(pjson "$tx2")" >/dev/null
+  [ "$(grep -c 'Scope (grown): +itemA' "$f")" -eq "$n1" ]
+  grep -q 'Scope (grown): +itemB' "$f"
+}
+
+@test "PreCompact: grown-only transcript (no frozen line) still persists the growth" {
+  local path="$BATS_TEST_TMPDIR/txg-only-$RANDOM.jsonl"
+  jq -nc '{type:"assistant",message:{content:[{type:"text",text:"Scope (grown): +solo growth"}]}}' > "$path"
+  run run_hook "$(pjson "$path")"
+  [ "$status" -eq 0 ]
+  grep -q 'Scope (grown): +solo growth' "$(dod_path)"
+}
+
+@test "set: a grown line is accepted verbatim, never double-prefixed as frozen" {
+  ( cd "$CWD" && bash "$HOOK" set "Scope (grown): +extra thing" )
+  local f; f="$(dod_path)"
+  grep -q '^Scope (grown): +extra thing' "$f"
+  ! grep -q 'Scope (frozen): Scope (grown)' "$f"
+}
+
+@test "SessionStart: framing declares grown lines binding + pre-authorized" {
+  local f; f="$(dod_path)"; mkdir -p "$(dirname "$f")"
+  printf 'Scope (frozen): base\nScope (grown): +x\n' > "$f"
+  run run_hook "$(sjson SessionStart)"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q "Scope (grown)"
+  printf '%s' "$output" | grep -q 'do NOT re-ask'
+}
