@@ -56,7 +56,7 @@ REAPABLE_RE='^(handed-off-lead|finished-teammate|finished|coordination-abandoned
 
 command -v jq >/dev/null || { echo "cc-reaper: jq required" >&2; exit 2; }
 mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
-log(){ printf '[%s] %s\n' "$(date '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null)" "$*" >> "$LOG_FILE" 2>/dev/null || true; }
+log(){ printf '[%s] %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null)" "$*" >> "$LOG_FILE" 2>/dev/null || true; }  # -u: true UTC — a bare `date` stamps LOCAL time under the Z suffix, reading TZ-offset hours stale to any freshness check (false 'reaper DORMANT'); matches utc() + cc-reconcile/cc-teardown
 say(){ printf '%s\n' "$*"; }
 
 # ── surface-cause desk paging (T-P3-3) + enumerated≈live-panes self-check (P0-12b) config ──

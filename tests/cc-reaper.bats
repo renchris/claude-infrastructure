@@ -391,3 +391,28 @@ EOF
   [ "$status" -eq 0 ]
   ! reconciled
 }
+
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+# log() timestamps — TRUE UTC, never local-time mislabeled with a Z (cc-backlog 6d898339d690)
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+@test "log() stamps true UTC, not local time mislabeled Z (cc-backlog 6d898339d690)" {
+  # Regression: log() used a bare \`date\` (LOCAL time) under a literal Z (UTC marker), so
+  # cc-reaper.log read TZ-offset hours stale to any freshness check → a false 'reaper DORMANT /
+  # no sweep since HH:MMZ' page while the reaper was in fact sweeping every ~5 min. Force a fixed
+  # non-UTC zone; the emitted [..Z] stamp, parsed AS UTC, must land inside the sweep's real UTC
+  # window — a local-as-Z value is a full 5h out and fails.
+  export TZ='Etc/GMT-5'                              # UTC+5, DST-free (POSIX offset sign is inverted)
+  mock_classify active "$D/clean" 999 yes
+  local before after ts epoch
+  before=$(date -u +%s)
+  run "$R" sweep --reap
+  after=$(date -u +%s)
+  [ "$status" -eq 0 ]
+  ts=$(grep 'sweep start' "$D/reaper.log" | tail -1 | sed -E 's/^\[([0-9T:-]+)Z\].*/\1/')
+  [ -n "$ts" ]
+  epoch=$(date -j -u -f "%Y-%m-%dT%H:%M:%S" "$ts" +%s)   # -u: interpret the stamp AS UTC (TZ-independent)
+  [ -n "$epoch" ]
+  [ "$epoch" -ge "$((before - 120))" ]               # the 5h (18000s) mislabel dwarfs the ±120s slack
+  [ "$epoch" -le "$((after + 120))" ]
+}
