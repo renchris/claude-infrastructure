@@ -1,0 +1,251 @@
+#!/bin/bash
+# cc-audit — the machine-GATE half of the auditability floor (axis k, P7/D9). Reads the IDL
+# (${CC_IDL:-~/.claude/autonomy/idl.jsonl}) and answers two questions with an EXIT CODE (so a
+# gate/sweep/nightly can branch on it), where cc-digest only PRINTS a human morning surface:
+#
+#   abstain            The D9 distribution monitor. Per hook, over a recency window, count the
+#                      {abstained | non-abstained} disposition split and ALARM when a hook
+#                      abstained on ALL of its recent evals (>=N, default 10) and fired NONE —
+#                      the inert-verifier signature that hid the cc-notify strand for ~24h
+#                      (§1 inv1-extended, D9). Exit 6 if any hook alarms. The alarm predicate is
+#                      IDENTICAL to cc-digest's Inert-check (same actor-exclusion grep, same
+#                      recency horizon, same fire-exonerates rule) — kept in lockstep so the
+#                      machine gate and the human digest can never disagree.
+#
+#   wave [--since ISO] The FOUR ZEROS (§1 invariant 5 — the paired, un-gameable success metric),
+#                      each computed over the wave window with an explicit BASIS and a verdict:
+#                        unplanned          distinct sids the supervisor ESCALATED to a human
+#                                           (kind=page_escalate) — autonomy could not self-close.
+#                        signal-divergence  reported-vs-truth snapshots past δ (kind=snapshot;
+#                                           the P2 dual-snapshot detector — separate task).
+#                        orphaned-intent    distinct sids the independent observer found DARK
+#                                           (page state STALL?/ESCALATED: pid alive, no effect —
+#                                           papering-over, §3.6 P3).
+#                        missed-fire        should-have-fired replays (kind=replay; the P5
+#                                           should-have-fired detector — separate task).
+#                      A verdict of PASS needs count==0 AND basis>0. A zero whose source wrote
+#                      NOTHING in the window is UNPROVEN, never a green 0 — the exact
+#                      inert-detector trap this layer exists to kill, applied to itself. Exit
+#                      0 = all PASS · 1 = a zero FAILED · 4 = INCOMPLETE (a zero UNPROVEN, none
+#                      failed). signal-divergence and missed-fire read UNPROVEN until P2/P5 land;
+#                      their record shapes are fixed here so they light up automatically then.
+#
+# Robustness: an UNPARSEABLE IDL line (a writer that didn't JSON-encode, backlog 666c6a64c45e)
+# is SKIPPED per-line (`jq -Rrn '[inputs|fromjson?]'`), never allowed to abort the slurp and
+# silently zero the audit; every invocation first prints a loud stderr WARNING with the count of
+# skipped lines. Verdicts are over the parseable records — fail-loud, never fail-silent-open.
+#
+# Env (tests): CC_IDL · CC_AUDIT_MIN (10) · CC_AUDIT_HORIZON_H (168=7d, abstain window) ·
+#   CC_AUDIT_WAVE_HORIZON_H (24, wave window) · CC_AUDIT_IDL_TAIL (5000, scan budget) ·
+#   CC_AUDIT_DELTA (5, signal-divergence δ points) · CC_NOW (ISO override) · --json (abstain).
+# Deps: jq. BSD+GNU portable, no eval, fail-loud. Exit 0 ok · 2 usage · 1 wave-FAIL · 4 wave-INCOMPLETE · 6 abstain-ALARM.
+set -uo pipefail
+
+IDL="${CC_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
+MIN="${CC_AUDIT_MIN:-10}"
+ABSTAIN_H="${CC_AUDIT_HORIZON_H:-168}"
+WAVE_H="${CC_AUDIT_WAVE_HORIZON_H:-24}"
+TAIL="${CC_AUDIT_IDL_TAIL:-5000}"
+DELTA="${CC_AUDIT_DELTA:-5}"
+
+usage() { sed -n '2,/^set -uo/p' "$0" | sed 's/^# \{0,1\}//; /^set -uo/d'; }
+
+now_iso() { echo "${CC_NOW:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"; }
+
+# cutoff <hours-back> → ISO-Z (BSD `date -v` then GNU `date -d`). Anchored on CC_NOW when set
+# (tests inject a fixed now); otherwise the real clock. ISO-Z is fixed-width UTC, so a jq string
+# `>=` compare on it IS a correct time compare.
+cutoff() {
+  local h="$1"
+  if [ -n "${CC_NOW:-}" ]; then
+    date -u -v-"${h}"H -j -f %Y-%m-%dT%H:%M:%SZ "$CC_NOW" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+      || date -u -d "$CC_NOW - ${h} hours" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo ''
+  else
+    date -u -v-"${h}"H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+      || date -u -d "-${h} hours" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo ''
+  fi
+}
+
+# warn_malformed — surface unparseable IDL lines LOUDLY before any metric runs. A single
+# malformed line (e.g. an unescaped quote in a `reason`, backlog 666c6a64c45e) makes a naive
+# `jq -s` slurp ABORT the whole batch → empty rows → the alarm silently goes GREEN: the exact
+# inert-verifier trap this tool exists to kill, turned on the auditor's own input (§1 inv2, the
+# Blind-Check Law). The metric scans skip bad lines robustly (`fromjson?`); this reports how many
+# were skipped so corrupt evidence is never hidden. Counts over the same TAIL scan budget.
+warn_malformed() {
+  [ -f "$IDL" ] || return 0
+  local bad
+  bad="$(tail -n "$TAIL" "$IDL" 2>/dev/null \
+    | jq -Rn '[inputs | select(length>0) | (try (fromjson|empty) catch .)] | length' 2>/dev/null || echo 0)"
+  case "$bad" in ''|*[!0-9]*) bad=0 ;; esac
+  if [ "$bad" -gt 0 ]; then
+    printf 'WARNING: %d unparseable IDL line(s) in the last %s scanned — SKIPPED for this audit (corrupt evidence: a writer is not JSON-encoding). Verdict is over the parseable records only.\n' \
+      "$bad" "$TAIL" >&2
+  fi
+}
+
+# ── abstain: the D9 inert-verifier monitor (machine gate) ───────────────────────────────────
+cmd_abstain() {
+  local json=0
+  # Key-first shift (never `shift 2`): a flag given as the LAST arg with no value would make
+  # `shift 2` a no-op on $#=1 and spin the loop forever (reviewer BUG A). Shifting the key first
+  # guarantees $# strictly decreases every iteration.
+  while [ $# -gt 0 ]; do
+    local key="$1"; shift
+    case "$key" in
+      --json) json=1 ;;
+      -n) MIN="${1:-}"; [ $# -gt 0 ] && shift ;;
+      *) echo "cc-audit abstain: unknown arg $key" >&2; return 2 ;;
+    esac
+  done
+  # A non-numeric -n would reach `jq --argjson n <x>` and CRASH the pass → empty rows → a SILENTLY
+  # suppressed alarm (reviewer BUG C — the inert-detector failure this tool exists to catch). Reject
+  # empty / non-digit / leading-zero fail-loud instead.
+  case "$MIN" in ''|*[!0-9]*|0*) echo "cc-audit abstain: -n must be a positive integer (got '${MIN}')" >&2; return 2 ;; esac
+  local cut; cut="$(cutoff "$ABSTAIN_H")"
+  [ -f "$IDL" ] || { echo "cc-audit abstain: no IDL at $IDL" >&2; return 2; }
+  warn_malformed
+
+  # Rows: hook \t total(window) \t abstained \t nonabstained \t alarm(0|1) \t last_fired.
+  # Predicate lockstep with cc-digest: window abstained/nonabstained by $cut; last_fired over ALL
+  # records (a fire in-horizon exonerates); alarm = enough recent evals AND every one abstained.
+  # `-Rrn '[inputs|fromjson?]'` parses line-by-line and SKIPS unparseable lines (a poison line can
+  # no longer abort the slurp → no silent-green); warn_malformed already reported the skip count.
+  local rows
+  rows="$(grep -F '"disposition"' "$IDL" 2>/dev/null | grep -F '"hook"' | tail -n "$TAIL" \
+    | jq -Rrn --arg cutoff "$cut" --argjson n "$MIN" '[inputs | fromjson?]
+      | map(select(type=="object" and .hook and .disposition and .ts))
+      | group_by(.hook)
+      | map({hook: .[0].hook,
+             total:        (map(select(.ts >= $cutoff)) | length),
+             abstained:    (map(select(.ts >= $cutoff and .disposition=="abstained")) | length),
+             nonabstained: (map(select(.ts >= $cutoff and .disposition!="abstained")) | length),
+             last_fired:   (map(select(.disposition!="abstained")) | if length>0 then max_by(.ts).ts else "never" end)})
+      | .[]
+      | [ .hook, (.total|tostring), (.abstained|tostring), (.nonabstained|tostring),
+          (if (.total >= $n and .nonabstained == 0) then "1" else "0" end), .last_fired ] | @tsv
+    ' 2>/dev/null || true)"
+
+  if [ "$json" -eq 1 ]; then
+    if [ -z "$rows" ]; then echo "[]"; else
+      printf '%s\n' "$rows" | jq -Rs 'split("\n") | map(select(length>0) | split("\t")
+        | {hook:.[0], total:(.[1]|tonumber), abstained:(.[2]|tonumber),
+           nonabstained:(.[3]|tonumber), alarm:(.[4]=="1"), last_fired:.[5]})'
+    fi
+  fi
+
+  local alarms=0
+  if [ -n "$rows" ]; then
+    while IFS=$'\t' read -r hook total abst nonabst alarm last; do
+      [ -n "$hook" ] || continue
+      if [ "$alarm" = "1" ]; then
+        alarms=$((alarms + 1))
+        [ "$json" -eq 1 ] || printf 'ALARM: hook %s abstained %s/%s (100%%) in the recency window, never fired — INERT (last fired: %s)\n' \
+          "$hook" "$abst" "$total" "$last" >&2
+      elif [ "$json" -eq 0 ]; then
+        printf '  ok   %-22s total=%-3s abstained=%-3s nonabstained=%-3s (last fired: %s)\n' \
+          "$hook" "$total" "$abst" "$nonabst" "$last"
+      fi
+    done <<< "$rows"
+  fi
+
+  if [ "$alarms" -gt 0 ]; then
+    [ "$json" -eq 1 ] || printf '%d hook(s) INERT (abstained==100%% over >=%s evals) — a self-check stopped observing what it guards\n' "$alarms" "$MIN" >&2
+    return 6
+  fi
+  [ "$json" -eq 1 ] || echo "no inert hooks — every guard fired in-horizon or has too few recent evals"
+  return 0
+}
+
+# verdict <count> <basis> → prints PASS|FAIL|UNPROVEN
+verdict() {
+  local count="$1" basis="$2"
+  if   [ "$count" -gt 0 ]; then echo FAIL
+  elif [ "$basis" -eq 0 ]; then echo UNPROVEN
+  else echo PASS
+  fi
+}
+
+# ── wave: the four independent zeros (§1 invariant 5) ────────────────────────────────────────
+cmd_wave() {
+  local since=""
+  while [ $# -gt 0 ]; do
+    local key="$1"; shift                       # key-first shift (never `shift 2` — reviewer BUG B hang)
+    case "$key" in
+      --since)
+        since="${1:-}"; [ $# -gt 0 ] && shift
+        [ -n "$since" ] || { echo "cc-audit wave: --since requires an ISO-8601 UTC timestamp (e.g. 2026-07-19T00:00:00Z)" >&2; return 2; } ;;
+      *) echo "cc-audit wave: unknown arg $key" >&2; return 2 ;;
+    esac
+  done
+  [ -f "$IDL" ] || { echo "cc-audit wave: no IDL at $IDL" >&2; return 2; }
+  warn_malformed
+  local cut; cut="${since:-$(cutoff "$WAVE_H")}"
+
+  # (1) supervisor kind-records → unplanned + orphaned-intent (+ the observer-activity basis).
+  # `-Rrn '[inputs|fromjson?]'` skips unparseable lines so one poison record cannot zero a zero.
+  local sup
+  sup="$(grep -F '"kind"' "$IDL" 2>/dev/null | tail -n "$TAIL" \
+    | jq -Rrn --arg cutoff "$cut" '[inputs | fromjson?]
+        | map(select(type=="object" and .kind and .ts and .ts >= $cutoff))
+        | { sup_basis:  (map(select(.kind=="page" or .kind=="page_escalate" or .kind=="heartbeat" or .kind=="checkpoint")) | length),
+            unplanned:  (map(select(.kind=="page_escalate") | .sid) | map(select(. != null)) | unique | length),
+            orphaned:   (map(select(.kind=="page" and (.state=="STALL?" or .state=="ESCALATED")) | .sid) | map(select(. != null)) | unique | length) }
+        | "\(.sup_basis)\t\(.unplanned)\t\(.orphaned)"' 2>/dev/null || echo '0	0	0')"
+  local sup_basis unplanned orphaned
+  IFS=$'\t' read -r sup_basis unplanned orphaned <<< "${sup:-0	0	0}"
+  sup_basis="${sup_basis:-0}"; unplanned="${unplanned:-0}"; orphaned="${orphaned:-0}"
+
+  # (2) signal-divergence — reported-vs-truth snapshots past δ (P2 dual-snapshot; UNPROVEN today).
+  local div
+  div="$(grep -F '"snapshot"' "$IDL" 2>/dev/null | tail -n "$TAIL" \
+    | jq -Rrn --arg cutoff "$cut" --argjson thr "$DELTA" '[inputs | fromjson?]
+        | map(select(type=="object" and .kind=="snapshot" and .ts and .ts >= $cutoff and (.reported_pct != null) and (.truth_pct != null)))
+        | { basis: length,
+            count: (map(select((.reported_pct - .truth_pct) as $d | (if $d < 0 then -$d else $d end) > $thr)) | length) }
+        | "\(.basis)\t\(.count)"' 2>/dev/null || echo '0	0')"
+  local div_basis div_count
+  IFS=$'\t' read -r div_basis div_count <<< "${div:-0	0}"
+  div_basis="${div_basis:-0}"; div_count="${div_count:-0}"
+
+  # (3) missed-fire — should-have-fired replays (P5 should-have-fired detector; UNPROVEN today).
+  local mf
+  mf="$(grep -F '"replay"' "$IDL" 2>/dev/null | tail -n "$TAIL" \
+    | jq -Rrn --arg cutoff "$cut" '[inputs | fromjson?]
+        | map(select(type=="object" and .kind=="replay" and .ts and .ts >= $cutoff))
+        | { basis: length, count: (map(select(.should_fire == true and .fired == false)) | length) }
+        | "\(.basis)\t\(.count)"' 2>/dev/null || echo '0	0')"
+  local mf_basis mf_count
+  IFS=$'\t' read -r mf_basis mf_count <<< "${mf:-0	0}"
+  mf_basis="${mf_basis:-0}"; mf_count="${mf_count:-0}"
+
+  local v_un v_div v_orph v_mf
+  v_un="$(verdict "$unplanned" "$sup_basis")"
+  v_div="$(verdict "$div_count" "$div_basis")"
+  v_orph="$(verdict "$orphaned" "$sup_basis")"
+  v_mf="$(verdict "$mf_count" "$mf_basis")"
+
+  printf 'FOUR ZEROS (wave since %s)\n' "$cut"
+  printf '  %-18s %3s   basis=%-4s %s\n' "unplanned"         "$unplanned" "$sup_basis" "$v_un"
+  printf '  %-18s %3s   basis=%-4s %s\n' "signal-divergence" "$div_count" "$div_basis" "$v_div"
+  printf '  %-18s %3s   basis=%-4s %s\n' "orphaned-intent"   "$orphaned"  "$sup_basis" "$v_orph"
+  printf '  %-18s %3s   basis=%-4s %s\n' "missed-fire"       "$mf_count"  "$mf_basis"  "$v_mf"
+
+  # Roll up: any FAIL → FAIL(1); else any UNPROVEN → INCOMPLETE(4); else PASS(0).
+  local rc=0 wave=PASS
+  case "$v_un$v_div$v_orph$v_mf" in
+    *FAIL*)     wave=FAIL; rc=1 ;;
+    *UNPROVEN*) wave=INCOMPLETE; rc=4 ;;
+  esac
+  printf 'WAVE: %s\n' "$wave"
+  return "$rc"
+}
+
+command -v jq >/dev/null 2>&1 || { echo "cc-audit: jq is required" >&2; exit 1; }
+
+case "${1:-}" in
+  abstain|--abstain) shift; cmd_abstain "$@" ;;
+  wave|--wave)       shift; cmd_wave "$@" ;;
+  ""|-h|--help|help) usage ;;
+  *) printf 'cc-audit: unknown verb %s\n\n' "$1" >&2; usage >&2; exit 2 ;;
+esac
