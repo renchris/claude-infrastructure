@@ -56,7 +56,18 @@ EVIDENCE_GREP='cc-telemetry|cc-registry|CC_TELEMETRY_DIR|CC_REGISTRY_DIR'
 # the surface set — a page LIFECYCLE op (the clear_page analog, T-P3-3), NOT an age-horizon reaper on the
 # telemetry/registry spine. The registry itself is never read or deleted here (the self-check counts live
 # panes via `ps`, independent of the registry). No -mmin/RETAIN_H. Declared = reviewed (2026-07-19 desk wave).
-DECLARED='bin/cc-context bin/cc-board bin/cc-sessions bin/cc-notify bin/cc-reaper hooks/session-register.sh hooks/session-deregister.sh statusline.sh scripts/lead-supervisor.sh scripts/lead-reconciler.sh hooks/waiting-recycle.sh scripts/handoff-fire.sh'
+# bin/cc-value READS CC_TELEMETRY_DIR (evidence) to compute the value ledger and has an `rm -f`, so
+# section-3 flags it — but its only rm -f is the mv-or-rm on its OWN atomic-write cache temp `$tmpc`
+# (`mktemp "${CACHE_FILE}.XXXXXX"` → `mv -f $tmpc $CACHE_FILE || rm -f $tmpc`, the handoff-fire scaffold
+# analog). $CACHE_FILE is a TTL-rebuilt DERIVED value cache, not supervisor-observed evidence; the
+# telemetry it reads is never deleted. No -mmin/RETAIN_H, so sections 1/2 find nothing to bound.
+# Declared = reviewed (2026-07-19 desk wave).
+# bin/cc-reconcile READS CC_REGISTRY_DIR (an INDEPENDENT liveness roster) + live pids to BACKFILL missing
+# rows and has an `rm -f`, so section-3 flags it — but its only rm -f is the mv-or-rm on its atomic-write
+# temp `$tmp` (`$REG_DIR/.$pane.$$.tmp`, schema byte-identical to session-register.sh:75-81), removed on a
+# failed mv/jq. It only ever CREATES registry rows (via mv); it never age-reaps the registry — durable
+# evidence is never deleted. No -mmin/RETAIN_H, so sections 1/2 find nothing to bound. Declared = reviewed (2026-07-19 desk wave).
+DECLARED='bin/cc-context bin/cc-board bin/cc-sessions bin/cc-notify bin/cc-reaper bin/cc-value bin/cc-reconcile hooks/session-register.sh hooks/session-deregister.sh statusline.sh scripts/lead-supervisor.sh scripts/lead-reconciler.sh hooks/waiting-recycle.sh scripts/handoff-fire.sh'
 
 viol=0
 say(){ printf '  %s\n' "$1"; }
