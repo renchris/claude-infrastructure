@@ -72,8 +72,47 @@ emit_allow_ctx() {
 }
 
 # If team_name is set (with valid or absent model), this is an Agent Team — allow + point to skill.
+#
+# G-P13-4 — brief-count guard. The teammate brief IS the `prompt`. An oversized brief burns the
+# teammate's context before any work and drives the GH #49593 /compact crash → wave stall (FM2).
+# The Agent-Teams discipline caps a brief at 150 lines (tightened from 200 after the tp-assignee
+# crash 2026-05-03); ~250 lines is the empirically-observed crash size (a 21-agent synthesis dumped
+# inline). Graduated response, both thresholds env-overridable:
+#   >  WARN (150) → allow, but INJECT a hard warning naming the split rule. Near-misses over 150 are
+#                   common and can be legitimate, so warn — don't block.
+#   >= DENY (250) → deny. No legitimate brief is this large; blocking forces the split and prevents a
+#                   near-certain crash (the exact FM2 wave-stall the guard exists to stop).
+# Line count via `grep -c ''` — exact even when the prompt has no trailing newline (wc -l undercounts
+# that case by one). Dynamic reasons are jq-built, never raw %s-interpolated (malformed-JSON class).
 if [ -n "$TEAM_NAME" ]; then
-  emit_allow_ctx "AGENT-TEAMS SKILL: spawning a teammate. If not already loaded, invoke the agent-teams skill for the full brief discipline (150-line brief cap, pre-grep line ranges, verbatim stop-on-issue clause, phase checkpoints), runtime detection, per-teammate effort + model-pinning, lifecycle + graceful-shutdown, and crash recovery. The resident CLAUDE.md invariant carries the core; the skill carries the detail."
+  BRIEF_WARN="${AGENT_TEAMS_BRIEF_WARN_LINES:-150}"
+  BRIEF_DENY="${AGENT_TEAMS_BRIEF_DENY_LINES:-250}"
+  BRIEF_LINES=$(printf '%s' "$PROMPT" | grep -c '' || true)
+  SKILL_PTR="AGENT-TEAMS SKILL: spawning a teammate. If not already loaded, invoke the agent-teams skill for the full brief discipline (150-line brief cap, pre-grep line ranges, verbatim stop-on-issue clause, phase checkpoints), runtime detection, per-teammate effort + model-pinning, lifecycle + graceful-shutdown, and crash recovery. The resident CLAUDE.md invariant carries the core; the skill carries the detail."
+
+  if [ "$BRIEF_LINES" -ge "$BRIEF_DENY" ]; then
+    jq -n --arg n "$BRIEF_LINES" --arg warn "$BRIEF_WARN" --arg deny "$BRIEF_DENY" '{
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: ("Teammate brief is \($n) lines — at/over the \($deny)-line hard cap. An oversized brief burns the teammate context before any work and drives the GH #49593 /compact crash → wave stall (the tp-assignee 2026-05-03 failure mode). SPLIT into 2-3 teammates along domain boundaries (target ≤\($warn) lines each; pre-grep line ranges instead of pasting file bodies; defer visual verification to a separate Explore subagent), then re-spawn. Env override: AGENT_TEAMS_BRIEF_DENY_LINES. Rule: agent-teams skill § Brief Discipline.")
+      }
+    }'
+    exit 0
+  fi
+
+  if [ "$BRIEF_LINES" -gt "$BRIEF_WARN" ]; then
+    jq -n --arg n "$BRIEF_LINES" --arg warn "$BRIEF_WARN" --arg ptr "$SKILL_PTR" '{
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "allow",
+        additionalContext: ("BRIEF OVER CAP: this teammate brief is \($n) lines, over the \($warn)-line Agent-Teams cap. Oversized briefs risk the GH #49593 /compact crash → wave stall. Prefer splitting into 2-3 teammates by domain (≤\($warn) lines each), pre-greping line ranges instead of pasting file bodies, and deferring visual verification to a separate Explore subagent. " + $ptr)
+      }
+    }'
+    exit 0
+  fi
+
+  emit_allow_ctx "$SKILL_PTR"
   exit 0
 fi
 

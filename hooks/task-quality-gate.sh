@@ -53,15 +53,20 @@ if [[ "$TASK_SUBJECT" == *"Phase 0"* ]]; then
 fi
 
 # Find the teammate's working directory by checking recent worktrees
-# Look for worktrees that match the teammate name
-WORKTREE_PATH=""
-while IFS= read -r line; do
-  WT_PATH=$(echo "$line" | awk '{print $1}')
-  if echo "$WT_PATH" | grep -qi "$TEAMMATE_NAME" 2>/dev/null; then
-    WORKTREE_PATH="$WT_PATH"
-    break
-  fi
-done < <(git worktree list 2>/dev/null)
+# Look for worktrees that match the teammate name.
+# Test seam: TASK_QUALITY_GATE_WORKTREE_OVERRIDE injects the path directly (the git-worktree-list
+# search below is CWD-relative and can't be exercised hermetically). Path-only — it changes WHICH
+# directory is gated, never authorization.
+WORKTREE_PATH="${TASK_QUALITY_GATE_WORKTREE_OVERRIDE:-}"
+if [ -z "$WORKTREE_PATH" ]; then
+  while IFS= read -r line; do
+    WT_PATH=$(echo "$line" | awk '{print $1}')
+    if echo "$WT_PATH" | grep -qi "$TEAMMATE_NAME" 2>/dev/null; then
+      WORKTREE_PATH="$WT_PATH"
+      break
+    fi
+  done < <(git worktree list 2>/dev/null)
+fi
 
 # Also check /tmp/worktree-* paths
 if [ -z "$WORKTREE_PATH" ]; then
@@ -80,6 +85,127 @@ if [ -z "$WORKTREE_PATH" ] || [ ! -d "$WORKTREE_PATH" ]; then
 fi
 
 log "Found worktree: $WORKTREE_PATH"
+
+# --- G-P6-10: repo-aware completion gate --------------------------------------------------------
+# The TypeScript typecheck below is INERT for claude-infrastructure's OWN work: shell scripts, no
+# node_modules, so the check at the tsc path just skips — infra self-work had no completion gate.
+# Detect the worktree's repo and, when it is the infra repo (or any node_modules-less shell repo),
+# run the shell analog to tsc: shellcheck + `bash -n` on the CHANGED shell files, plus the bats
+# tests bound to them. Mirrors scripts/ship-land.sh's gate tooling (shellcheck + bash -n + bats).
+
+is_shell_file() {  # $1=path → 0 if shell (*.sh/*.bash or a shell shebang), else 1
+  case "$1" in *.sh|*.bash) return 0 ;; esac
+  [ -f "$1" ] || return 1
+  local first=""
+  IFS= read -r first < "$1" 2>/dev/null || true
+  case "$first" in '#!'*sh*) return 0 ;; esac
+  return 1
+}
+
+infra_repo() {  # 0 if $WORKTREE_PATH is the infra repo (or a node_modules-less shell repo)
+  case "${TASK_QUALITY_GATE_FORCE_INFRA:-}" in 1|true|yes) return 0 ;; esac
+  local common="" main=""
+  common=$(git -C "$WORKTREE_PATH" rev-parse --git-common-dir 2>/dev/null) || common=""
+  if [ -n "$common" ]; then
+    case "$common" in /*) ;; *) common="$WORKTREE_PATH/$common" ;; esac   # --git-common-dir may be relative
+    main=$(cd "$common/.." 2>/dev/null && pwd) || main=""
+    case "$main" in */claude-infrastructure) return 0 ;; esac
+  fi
+  # Fallback: no package.json but a shell surface (tests/*.bats OR hooks/*.sh) present.
+  if [ ! -f "$WORKTREE_PATH/package.json" ] && \
+     { ls "$WORKTREE_PATH"/tests/*.bats >/dev/null 2>&1 || ls "$WORKTREE_PATH"/hooks/*.sh >/dev/null 2>&1; }; then
+    return 0
+  fi
+  return 1
+}
+
+run_infra_gate() {  # runs from $WORKTREE_PATH; exits 0 (pass/skip) or 2 (fail)
+  local trunk="${TASK_QUALITY_GATE_TRUNK:-origin/main}"
+  cd "$WORKTREE_PATH" || { log "infra gate: cd failed — allowing"; exit 0; }
+
+  # Changed = committed-vs-trunk (when trunk resolves) + staged + unstaged + untracked, deletions
+  # EXCLUDED (--diff-filter=d) so a removed .sh is never handed to shellcheck (the ship-land
+  # deletion-bug class: backlog b452d75bfd84 / 1bc4a75a4f7f). The `-e` guard below re-checks.
+  local list=""; list="$(mktemp "${TMPDIR:-/tmp}/tqg-changed.XXXXXX")"
+  {
+    if git rev-parse --verify -q "$trunk" >/dev/null 2>&1; then
+      git diff --name-only --diff-filter=d "$trunk"...HEAD 2>/dev/null
+    fi
+    git diff --name-only --diff-filter=d 2>/dev/null
+    git diff --name-only --diff-filter=d --cached 2>/dev/null
+    git ls-files --others --exclude-standard 2>/dev/null
+  } | LC_ALL=C sort -u > "$list"
+
+  local shellfiles=() batsfiles=() p base
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    [ -e "$p" ] || continue                    # skip deletions / vanished paths (belt-and-suspenders)
+    is_shell_file "$p" && shellfiles+=("$p")
+    case "$p" in tests/*.bats) batsfiles+=("$p") ;; esac
+  done < "$list"
+  rm -f "$list"
+
+  # Map each changed script → its sibling bats (tests/<name>.bats), so changing a hook runs its test.
+  if [ "${#shellfiles[@]}" -gt 0 ]; then
+    for p in "${shellfiles[@]}"; do
+      base="$(basename "$p")"; base="${base%.sh}"; base="${base%.bash}"
+      [ -f "tests/$base.bats" ] && batsfiles+=("tests/$base.bats")
+    done
+  fi
+
+  if [ "${#shellfiles[@]}" -eq 0 ] && [ "${#batsfiles[@]}" -eq 0 ]; then
+    log "infra gate: no changed shell/bats files — allowing"
+    exit 0
+  fi
+
+  local rc=0 summary="" out="" bexit=0
+  if [ "${#shellfiles[@]}" -gt 0 ]; then
+    log "infra gate: shellcheck + bash -n on ${#shellfiles[@]} shell file(s)"
+    if ! out="$(shellcheck "${shellfiles[@]}" 2>&1)"; then
+      rc=1; summary="${summary}"$'\n'"[shellcheck]"$'\n'"${out}"
+    fi
+    for p in "${shellfiles[@]}"; do
+      if ! out="$(bash -n "$p" 2>&1)"; then
+        rc=1; summary="${summary}"$'\n'"[bash -n ${p}]"$'\n'"${out}"
+      fi
+    done
+  fi
+
+  if [ "${#batsfiles[@]}" -gt 0 ]; then
+    local uniq="" runbats=()
+    uniq="$(printf '%s\n' "${batsfiles[@]}" | LC_ALL=C sort -u)"
+    while IFS= read -r p; do [ -n "$p" ] && [ -f "$p" ] && runbats+=("$p"); done <<< "$uniq"
+    if [ "${#runbats[@]}" -gt 0 ]; then
+      log "infra gate: bats on ${#runbats[@]} test file(s)"
+      if command -v timeout >/dev/null 2>&1; then
+        out="$(timeout 120 bats "${runbats[@]}" 2>&1)"; bexit=$?
+      else
+        out="$(bats "${runbats[@]}" 2>&1)"; bexit=$?
+      fi
+      if [ "$bexit" -eq 124 ]; then
+        log "infra gate: bats timed out (120s) — not blocking on timeout (mirrors the tsc timeout policy)"
+      elif [ "$bexit" -ne 0 ]; then
+        rc=1; summary="${summary}"$'\n'"[bats]"$'\n'"$(printf '%s' "$out" | tail -30)"
+      fi
+    fi
+  fi
+
+  if [ "$rc" -ne 0 ]; then
+    log "INFRA GATE FAILED in $WORKTREE_PATH"
+    {
+      echo "QUALITY GATE FAILED: infra checks failed in $WORKTREE_PATH (shellcheck / bash -n / bats). Fix before marking the task complete:"
+      printf '%s\n' "$summary" | tail -60
+    } >&2
+    exit 2
+  fi
+  log "INFRA GATE PASSED in $WORKTREE_PATH"
+  exit 0
+}
+
+if infra_repo; then
+  run_infra_gate                               # exits 0 (pass/skip) or 2 (fail) — never falls through
+fi
+# Not infra → fall through to the TypeScript typecheck path (reso-management-app).
 
 # Run typecheck in the worktree
 TYPECHECK_OUTPUT=""
