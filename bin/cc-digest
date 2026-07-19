@@ -13,12 +13,20 @@
 #                   a fire inside the recency horizon exonerates, so a rarely-firing healthy guard is
 #                   not falsely flagged after a record-flood night (fix e7d326caa6a7, inv7).
 #
+# Push wiring (T-P15-6 delivery): `cc-digest push [--no-phone] [--no-desk] [--role <r>]` also DELIVERS the
+#   digest instead of only leaving it on disk — a QUIET, batched, never-interrupt phone push (push-send.sh,
+#   priority -1, a counts SUMMARY; the full digest stays on disk within Pushover's 1024-char cap) + a light
+#   desk-ROLE wake (cc-announce → points at the on-disk digest; it never injects KBs of markdown into a live
+#   composer — that would BE the interrupt this surface avoids). Bare `cc-digest` (no subcommand) is
+#   unchanged: emit to stdout + disk only.
+#
 # Env (tests): CC_LAND_LOG · CC_BACKLOG_FILE/CC_BACKLOG_BIN · CC_DECISIONS_DIR · CC_PAGES_DIR
 #   · CC_SWEEP_SEEN_DIR · CC_IDL · CC_DIGESTS_DIR · CC_DIGEST_DATE · CC_DIGEST_IDL_TAIL (default
 #   5000 — max hook-eval records scanned; the D9 read greps the append-only IDL down to just its
 #   hook-eval records FIRST, so it stays BOUNDED, never a full slurp) · CC_DIGEST_INERT_HORIZON_H
 #   (default 168 = 7d, the last-fired recency window) · CC_DIGEST_INERT_MIN (default 10 evals).
-# BSD+GNU portable, no eval, fail-loud. Exit 0.
+#   Push: CC_PUSH_SEND_BIN · CC_ANNOUNCE_BIN · CC_DIGEST_ROLE (default desk).
+# BSD+GNU portable, no eval, fail-loud. Exit 0 (emit) · 2 (usage) · 5 (push: a requested delivery leg FAILED).
 set -uo pipefail
 
 LAND_LOG="${CC_LAND_LOG:-$HOME/.claude/land.log}"
@@ -31,7 +39,23 @@ IDL_TAIL="${CC_DIGEST_IDL_TAIL:-5000}"
 LAND_TAIL="${CC_DIGEST_LAND_TAIL:-10}"
 
 usage() { sed -n '2,/^set -uo/p' "$0" | sed 's/^# \{0,1\}//; /^set -uo/d'; }
-case "${1:-}" in -h|--help) usage; exit 0 ;; esac
+# Arg parse: bare (no subcommand) = emit-only (unchanged). `push`/`--push` = emit THEN deliver.
+DO_PUSH=0; PUSH_PHONE=1; PUSH_DESK=1; PUSH_ROLE="${CC_DIGEST_ROLE:-desk}"
+case "${1:-}" in
+  -h|--help) usage; exit 0 ;;
+  push|--push)
+    DO_PUSH=1; shift
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --no-phone) PUSH_PHONE=0; shift ;;
+        --no-desk)  PUSH_DESK=0; shift ;;
+        --role)     PUSH_ROLE="${2:?--role needs a value}"; shift 2 ;;
+        *)          echo "cc-digest: unknown push arg '$1' (use --no-phone|--no-desk|--role <r>)" >&2; exit 2 ;;
+      esac
+    done ;;
+  "") ;;
+  *)  echo "cc-digest: unknown command '$1' (use 'push' or --help)" >&2; exit 2 ;;
+esac
 
 command -v jq >/dev/null 2>&1 || { echo "cc-digest: jq required" >&2; exit 1; }
 
@@ -55,6 +79,17 @@ resolve_bin() { local o="$1" n="$2" c
   command -v "$n" >/dev/null 2>&1 && printf '%s' "$(command -v "$n")"; return 0
 }
 BACKLOG="$(resolve_bin "${CC_BACKLOG_BIN:-}" cc-backlog)"
+
+# push-send.sh lives in scripts/ (not bin/), so it needs a scripts-aware resolver; cc-announce is in bin/.
+resolve_script() { local o="$1" n="$2" c
+  if [ -n "$o" ]; then [ -x "$o" ] && printf '%s' "$o"; return 0; fi
+  for c in "$(dirname "$0")/../scripts/$n" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/$n" "$HOME/.claude/scripts/$n"; do
+    [ -x "$c" ] && { printf '%s' "$c"; return 0; }
+  done
+  command -v "$n" >/dev/null 2>&1 && printf '%s' "$(command -v "$n")"; return 0
+}
+PUSH_SEND="$(resolve_script "${CC_PUSH_SEND_BIN:-}" push-send.sh)"
+ANNOUNCE="$(resolve_bin "${CC_ANNOUNCE_BIN:-}" cc-announce)"
 
 emit() {
   printf '# Desk digest — %s\n\n' "$DATE"
@@ -150,9 +185,71 @@ emit() {
   printf '\n_generated %s_\n' "$NOW"
 }
 
+# ── push wiring (T-P15-6 delivery) ─────────────────────────────────────────────────────────────────────
+# Counts for the phone SUMMARY. The 4 list counts read the SAME sources emit() uses; the INERT count is
+# derived from the ALREADY-GENERATED digest ($1) — emit()'s authoritative ALARM lines — NEVER a second copy
+# of the D9 predicate (which e7d326caa6a7 changed), so the summary can never drift from the digest.
+# Order: landed backlog decisions_open pages_pending inert_alarms.
+compute_counts() { # <digest_file>
+  local dfile="$1" landed=0 backlog=0 dopen=0 ptot=0 psurf=0 inert=0 f st key
+  if [ -f "$LAND_LOG" ] && [ -s "$LAND_LOG" ]; then
+    landed="$(tail -n "$LAND_TAIL" "$LAND_LOG" 2>/dev/null | grep -c .)"; landed="${landed:-0}"
+  fi
+  if [ -n "$BACKLOG" ]; then
+    backlog="$("$BACKLOG" list --open 2>/dev/null | grep -c .)"; backlog="${backlog:-0}"
+  fi
+  if [ -d "$DECISIONS_DIR" ]; then
+    for f in "$DECISIONS_DIR"/*.json; do [ -e "$f" ] || continue
+      st="$(jq -r '.status // ""' "$f" 2>/dev/null || echo "")"; [ "$st" = open ] && dopen=$((dopen + 1)); done
+  fi
+  if [ -d "$PAGES_DIR" ]; then
+    for f in "$PAGES_DIR"/*.page; do [ -e "$f" ] || continue
+      ptot=$((ptot + 1)); key="$(printf '%s' "$f" | shasum -a 256 | cut -c1-32)"
+      [ -f "$SEEN_DIR/$key" ] && psurf=$((psurf + 1)); done
+  fi
+  inert="$(grep -c '^ALARM:' "$dfile" 2>/dev/null)"; inert="${inert:-0}"
+  printf '%s %s %s %s %s' "$landed" "$backlog" "$dopen" "$((ptot - psurf))" "$inert"
+}
+
+# Deliver the digest: a quiet phone summary + a light desk-role wake. NEVER silent — a leg that SHOULD work
+# (creds/role present) but fails is LOUD (return 5); INERT phone (no creds yet) is a NOTE, not a failure.
+deliver_push() { # <digest_file>
+  local dfile="$1" counts landed backlog dopen ppend inert summary saved rc worst=0
+  counts="$(compute_counts "$dfile")"
+  read -r landed backlog dopen ppend inert <<< "$counts"
+  saved="$DIGESTS_DIR/$DATE.md"
+  summary="Desk digest $DATE — ${landed} landed · ${backlog} backlog · ${dopen} decision(s) awaiting veto · ${ppend} page(s) pending · ${inert} inert alarm(s). Full: $saved"
+
+  if [ "$PUSH_PHONE" = 1 ]; then
+    if [ -n "$PUSH_SEND" ] && [ -x "$PUSH_SEND" ]; then
+      "$PUSH_SEND" send --title "Desk digest — $DATE" --message "$summary" --priority -1 --from cc-digest >/dev/null 2>&1; rc=$?
+      case "$rc" in
+        0) echo "cc-digest: ✅ phone push delivered (quiet summary; full digest on disk)" >&2 ;;
+        3) echo "cc-digest: ⚠ phone push INERT — PUSHOVER creds unset (P0-7 operator step); digest is on disk" >&2 ;;
+        *) echo "cc-digest: ⛔ phone push FAILED (push-send rc=$rc)" >&2; worst=5 ;;
+      esac
+    else
+      echo "cc-digest: ⚠ phone push skipped — push-send.sh not found" >&2
+    fi
+  fi
+
+  if [ "$PUSH_DESK" = 1 ]; then
+    if [ -n "$ANNOUNCE" ] && [ -x "$ANNOUNCE" ]; then
+      "$ANNOUNCE" --from cc-digest --event digest "$PUSH_ROLE" "Morning digest ready — $summary" >/dev/null 2>&1; rc=$?
+      if [ "$rc" = 0 ]; then echo "cc-digest: ✅ desk-role wake delivered ($PUSH_ROLE)" >&2
+      else echo "cc-digest: ⛔ desk-role wake NOT verified ($PUSH_ROLE, cc-announce rc=$rc)" >&2; worst=5; fi
+    else
+      echo "cc-digest: ⚠ desk-role wake skipped — cc-announce not found" >&2
+    fi
+  fi
+  return "$worst"
+}
+
 tmp="$(mktemp 2>/dev/null || echo "/tmp/cc-digest.$$")"
 emit > "$tmp" 2>/dev/null || emit > "$tmp"
 cat "$tmp"
 if mkdir -p "$DIGESTS_DIR" 2>/dev/null; then cp "$tmp" "$DIGESTS_DIR/$DATE.md" 2>/dev/null || true; fi
+push_rc=0
+[ "$DO_PUSH" = 1 ] && { deliver_push "$tmp"; push_rc=$?; }
 rm -f "$tmp" 2>/dev/null || true
-exit 0
+exit "$push_rc"

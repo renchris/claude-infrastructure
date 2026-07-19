@@ -39,6 +39,8 @@ cc-decide expire-sweep          # REPORT fired class-B defaults (autonomy-sweep 
 > channel if the push reaches an away phone. That needs `PUSHOVER_TOKEN`/`PUSHOVER_USER` in
 > `~/.zshenv` and `CC_PAGE_TO` (a desk role) for the supervisor. Until then a packet is
 > loud-to-disk / silent-to-away-human. This snippet does not wire push — see the P0-7 operator step.
+> Once armed, **effect-check the channel end-to-end with the `delivery-verify` probe (§6)** — it fires
+> a synthetic DEAD page to your phone and returns a machine verdict (✅ delivered / ⛔ not-wired).
 
 ---
 
@@ -100,17 +102,27 @@ preferred: it is API-budget-independent and survives a supervisor stall (SO-6 wa
 ## 3. `cc-digest` — the daily morning surface
 
 One batched markdown digest to stdout + `${CC_DIGESTS_DIR:-~/.claude/autonomy/digests}/<date>.md`.
-Run it once a morning (never an interrupt). Cron or a `StartCalendarInterval` launchd job:
+Run it once a morning (never an interrupt). The **`push` subcommand** (P0-7 delivery, T-P15-6) also
+DELIVERS it: a quiet, batched, never-interrupt phone push (`push-send.sh`, priority -1, a counts
+SUMMARY — the full digest stays on disk) + a light desk-ROLE wake (`cc-announce` → points at the
+on-disk digest; it never injects the KB-scale markdown into a live composer). Cron or a
+`StartCalendarInterval` launchd job:
 
 ```bash
-# cron — 07:30 local, emit + push the digest to the desk role
-30 7 * * *  /bin/zsh -lc 'export PATH="$HOME/.claude/bin:$PATH"; cc-digest | cc-notify "$(cat ~/.claude/cc-roles/desk 2>/dev/null)" "$(cat)" >/dev/null 2>&1 || cc-digest >/dev/null'
+# cron — 07:30 local: emit + DELIVER (quiet phone summary + desk-role wake; full digest on disk)
+30 7 * * *  /bin/zsh -lc 'export PATH="$HOME/.claude/bin:$PATH"; cc-digest push >/dev/null 2>>"$HOME/.claude/logs/cc-digest.err.log"'
 ```
 
-Or on demand any time: `cc-digest`. The IDL read is bounded (`CC_DIGEST_IDL_TAIL`, default 5000) so
-it never slurps the multi-hundred-MB live IDL. The **D9 inert-check alarm** (a hook that abstained
-100% over N≥10 recent evals) rides in the digest's last section — the standing regression signal
-that a guard has gone blind.
+`cc-digest push` exits **0** when every requested leg delivered (or the phone is INERT — creds not yet
+armed, a NOTE not a failure) and **5** when a leg that should work FAILS (so the cron's stderr log is a
+standing signal). Bare `cc-digest` (no subcommand) is unchanged: emit to stdout + disk only. The phone
+leg needs Pushover armed (§1 delivery dependency) + `push-send.sh` symlinked under `~/.claude/scripts`
+(see §6); the desk leg needs `cc-roles/desk`. Options: `--no-phone` / `--no-desk` / `--role <r>`.
+
+Or on demand any time: `cc-digest` (emit) / `cc-digest push` (emit + deliver). The IDL read is bounded
+(`CC_DIGEST_IDL_TAIL`, default 5000) so it never slurps the multi-hundred-MB live IDL. The **D9
+inert-check alarm** (a hook that abstained 100% over N≥10 recent evals) rides in the digest's last
+section — the standing regression signal that a guard has gone blind.
 
 ---
 
@@ -144,6 +156,33 @@ export CC_UNATTENDED_VETO_HOURS=1     # optional; the early-veto window for the 
 ```
 
 Interactive sessions (no `CC_UNATTENDED`) are unchanged: wait-vs-switch stays the user's call.
+
+---
+
+## 6. `delivery-verify` — the phone-page probe (P0-7, effect-check once)
+
+`push-send.sh` is the callable, VERIFIED phone (Pushover) sender — the missing primitive P0-7 needs (the
+only prior code reaching the phone was `hooks/push-critical.sh`, a Notification hook that fires
+`curl … >/dev/null || true`, swallowing the response). `delivery-verify.sh` drives it as a PROBE so "the
+page reaches the phone" is a machine verdict, not a hope. Both live in `scripts/`, so — like `cc-digest`'s
+sibling-resolve — they need a symlink under `~/.claude/scripts` (C10 operator step; `$REPO` = this repo):
+
+```bash
+ln -sf "$REPO/scripts/push-send.sh"       ~/.claude/scripts/push-send.sh
+ln -sf "$REPO/scripts/delivery-verify.sh" ~/.claude/scripts/delivery-verify.sh
+
+# after arming Pushover (§1), fire the probe — accepted → ✅ (exit 0), unarmed → ⛔ not-wired (exit 3),
+# rejected → ⛔ (exit 5). Clearly SYNTHETIC/labelled; never mistaken for a real incident:
+~/.claude/scripts/delivery-verify.sh              # phone leg only (the P0-7 core)
+~/.claude/scripts/delivery-verify.sh --receipt    # + poll Pushover's receipt until a device confirms delivery
+~/.claude/scripts/delivery-verify.sh --desk       # + also wake the desk role in-terminal (cc-announce)
+```
+
+`--receipt` sends an emergency (priority-2) page and polls the receipt API for true device delivery — the
+strongest programmatic proof. Without it the probe verifies Pushover ACCEPTED the page (`status:1`) and
+you effect-check the buzz once. `push-send.sh send --title T --message M` is the primitive for any other
+caller (a supervisor page relay, a class-B packet push); it trusts ONLY `status:1` + HTTP 200 and NEVER
+logs the token/user. Each probe run appends a verdict line to `~/.claude/autonomy/delivery-probe.log`.
 
 ---
 ```
