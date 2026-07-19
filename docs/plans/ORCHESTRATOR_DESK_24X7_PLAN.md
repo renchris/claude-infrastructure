@@ -440,3 +440,21 @@ that wires their subjects — no gate goes green on capability alone again. Full
   idiom. **Discovery filed** (`179006d15e09`): `tests/handoff-fire-completion-push.bats:51`
   (`--successor <dead pane>` liveness gate) is a SEPARATE load-sensitive shared-gate flake — failed once
   in the full suite under load, passes in isolation → new mission-ledger item for a future wave (not this scope).
+
+- 2026-07-19 (desk peer session, Opus@max, /goal-driven — cc-backlog `ae0025d4bacc`) — **Part B1
+  permission auto-allow hook wiring PROPOSED (C10 operator-gated).** Resolves the desk-audit latent gap
+  (`desk-anti-hitl-2026-07-19.md:30`): the two committed allow-hooks referenced in **zero** `settings.json`
+  (re-grepped this session — `ship-rail=0 smart-bash=0` in all 5 dirs; both are symlinked-but-unregistered
+  via `install.sh:89-91`). **Verdict: WIRE `ship-rail-push-allow.sh`, KEEP INERT `smart-bash-allowlist.sh`.**
+  Ship-rail's activator already exists (`docs/activation/ship-rail-push-activate.sh`, `9d2bf16`,
+  Operator decision #4) — re-validated this session against a scratchpad **copy** of live
+  `~/.claude/settings.json` (jq transform valid, appends as an additional Bash hook, everything outside
+  `.hooks.PreToolUse` byte-identical; live files never touched — C10). Smart-bash is **not armed**, mirroring
+  the rm-safe precedent (`L3-L4-AUTONOMY-ROADMAP.md:82-86`: "scoped a NEW rm-only hook instead of activating
+  the broader one … allow is opt-in to a whitelist, never opt-out"): it is a pattern-matcher over
+  worker-authored command strings (the Part B thesis's forbidden weak boundary, `:4`) and carries concrete
+  fail-open defects (its `sed`/`chmod` `(?!…)` absolute-path guards are invalid ERE → `grep -qE` errors →
+  the reject branch never fires → `sed -i … /etc/hosts` would slip; reso-hardcoded deny lists; last-token-only
+  `sed` target). Each smart-bash shape maps to a scoped hook (`rm`→`rm-safe-allowlist` live; land-push→`ship-rail`;
+  the rest → new tight hooks *iff* a strand is observed) — never the broad one. Full proposal +
+  operator runbook: `docs/PART-B1-PERMISSION-HOOK-WIRING.md`. No `--apply` shipped for smart-bash by design.
