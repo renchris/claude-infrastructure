@@ -128,6 +128,11 @@ two `─` rules are the canonical VISIBLE boundary; the fence is the invisible m
    - One live status line if relevant (typecheck / lint / build / deploy, or the plan's latest
      status-log entry).
    - The single concrete NEXT step you and the user were about to take.
+   - **Freeze the mission/DoD for the successor (T-P4-4):** run
+     `~/.claude/hooks/dod-persist.sh set "<the current \`Scope (frozen): …\` line>"` so the durable
+     worktree-keyed DoD file is fresh. A `--recycle` is an exit+relaunch, NOT a PreCompact, so the
+     successor's SessionStart re-injection carries nothing unless this capture runs. If no
+     `Scope (frozen):` line was stated this session, derive it from the plan / `/goal` and set it.
 
 3. **Write the bridge to `/tmp/<slug>-resume.md`** (UNIQUE `<slug>` per handoff — topic, not "the
    plan" — so several never clobber; ≤ ~30 lines, a POINTER not a copy):

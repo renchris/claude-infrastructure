@@ -206,6 +206,11 @@ fi
 log_idl fired "waiting-recycle" "\"trigger\":\"$( [ "$over_threshold" = 1 ] && echo threshold || echo behavioral)\",\"used_pct\":${used},\"rot\":${rot},\"count\":$((N+1)),\"max\":${MAX}"
 
 adv="⟳ MONITORING AUTO-RECYCLE — you are at a quiet monitoring boundary (${trig}). A watching desk accrues low-value context that rots your recall of the load-bearing orchestration state. RECYCLE NOW via your existing self-recycle path: run /handoff — it captures the live state (fired sessions, pending pings, wave/merge state, decisions) into the payload and fires handoff-fire.sh --recycle so the SUCCESSOR PANE IS THE CONTINUATION and this bloated context is discarded. Do it as this turn's next action. IF instead you actually hold in-hand write-work or a genuine open decision (you should not — the tree is clean and no blocker was detected), do NOT recycle: surface it. Kill-switch: \`waiting-recycle.sh clear\` (this desk) / \`waiting-recycle.sh kill\` (global). (auto-recycle advisory $((N+1))/${MAX})"
+# ── carry the mission/DoD line so a recycle never loses purpose (T-P4-4; empty = none recorded) ──
+dod_carry="$("${DOD_PERSIST:-$(dirname "$0")/dod-persist.sh}" get 2>/dev/null || true)"
+[ -n "$dod_carry" ] && adv="${adv}
+
+⟳ MISSION TO CARRY: ${dod_carry} — restate this verbatim as the successor's \`Scope (frozen):\` line in your /handoff payload so the recycle keeps its purpose (never drop or narrow it)."
 sysmsg="⟳ waiting-recycle: desk at a quiet boundary (${trig}) — advising /handoff self-recycle ($((N+1))/${MAX})."
 
 jq -nc --arg a "$adv" --arg s "$sysmsg" \

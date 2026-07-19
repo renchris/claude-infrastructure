@@ -91,6 +91,10 @@ case "${1:-}" in
     exit 0 ;;
   path)
     dod_file_for "${2:-$PWD}"; printf '\n'; exit 0 ;;
+  get)
+    # Print the current frozen DoD line for a cwd — SSOT read for the /handoff + waiting-recycle
+    # DoD-carry (T-P4-4). Empty output (exit 0) = no DoD recorded yet; callers degrade gracefully.
+    last_recorded_scope "$(dod_file_for "${2:-$PWD}")"; exit 0 ;;
 esac
 
 # ── Hook modes (JSON on stdin; dispatch by hook_event_name) ──
