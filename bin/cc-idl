@@ -1,0 +1,197 @@
+#!/bin/bash
+# cc-idl — tamper-evident hash-chain over the append-only autonomy IDL (axis k, P1/P9).
+#
+# The IDL (${CC_IDL:-~/.claude/autonomy/idl.jsonl}) is the auditability substrate: every
+# autonomy decision appends one JSON line. It is EVIDENCE (inv7) — but plain JSONL is
+# silently editable: a bug, or an agent papering over a failure, can delete or rewrite a
+# past record and nothing notices (lie-class T2, ledger-lie). cc-idl makes that DETECTABLE
+# with a hash chain kept in a SIDECAR (${CC_IDL_CHAIN:-<idl>.chain}) so the ~14 existing
+# writers stay UNCHANGED (C10-safe: no live hook is edited). Each link seals one IDL line
+# against all prior lines:
+#     link[i] = sha256_hex( link[i-1] || "\n" || bytes(idl_line[i]) )    link[0] = 64×"0"
+# Tampering with line i changes link[i] and every link after it → `verify` reports the FIRST
+# divergence. `seal` is APPEND-ONLY and MONOTONIC — it copies already-sealed links VERBATIM
+# and only appends links for new lines — so an attacker who edits a past line CANNOT launder
+# it by re-running `seal` (the sealed prefix is immutable). The one residual erase — delete
+# the chain file, then re-`seal` from genesis — is what `head` exists to witness: an
+# independent observer (P3 supervisor) snapshots the head and a changed head is the tell.
+#
+# Verbs:
+#   seal                 Extend the chain to cover every \n-terminated IDL line not yet sealed
+#                        (a mid-write trailing partial line is left for the next seal).
+#                        Idempotent; append-only; atomic (tmp+mv under an mkdir lock). Prints
+#                        "sealed <n_new> new · head <seq> <hash8>". First seal over a
+#                        pre-existing file is GENESIS — LOUD ("genesis: …"): pre-genesis
+#                        history is unwitnessed by construction.
+#   verify               Recompute the chain from the IDL and compare to the sidecar. Lock-free
+#                        (checks only the immutable sealed prefix; unsealed tail is ignored).
+#                        Exit 0 = intact · 7 = TAMPER (prints the first divergent line and/or a
+#                        truncation report: idl shorter than the chain = sealed records deleted).
+#   append '<json>'      Canonical writer: validate + compact the record (jq -c, single line
+#                        guaranteed), atomically append it to the IDL AND seal it, under the
+#                        lock. New autonomy code SHOULD call this; legacy writers stay covered
+#                        by a periodic `seal`. Echoes the sealed head.
+#   head                 Print the current sealed head "<seq>\t<hash>" — the witnessable anchor.
+#
+# Env (tests): CC_IDL · CC_IDL_CHAIN · CC_IDL_GENESIS · CC_IDL_LOCK · CC_IDL_LOCK_WAIT (10s) ·
+#   CC_IDL_LOCK_TTL (60s stale-reap).
+# Deps: perl (Digest::SHA, a core module — batched hash: full 5.6k-line chain ≈ 20ms) · jq
+#   (append only). BSD+GNU portable, no eval, fail-loud. Exit 0 ok · 2 usage · 5 io/lock · 7 tamper.
+set -uo pipefail
+
+IDL="${CC_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
+CHAIN="${CC_IDL_CHAIN:-$IDL.chain}"
+GENESIS="${CC_IDL_GENESIS:-0000000000000000000000000000000000000000000000000000000000000000}"
+LOCKDIR="${CC_IDL_LOCK:-$CHAIN.lock.d}"
+LOCK_WAIT="${CC_IDL_LOCK_WAIT:-10}"
+LOCK_TTL="${CC_IDL_LOCK_TTL:-60}"
+
+usage() { sed -n '2,/^set -uo/p' "$0" | sed 's/^# \{0,1\}//; /^set -uo/d'; }
+
+# Portable mtime (BSD then GNU).
+mtime() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null; }
+
+# chain_extend <start_seq> <prev_hash>  — stdin: idl lines; stdout: "<seq>\t<hash>" per line.
+# The ONE hash primitive: seal and verify both route through here, so they cannot drift.
+chain_extend() {
+  perl -MDigest::SHA=sha256_hex -e '
+    my ($seq, $prev) = @ARGV;
+    while (my $line = <STDIN>) { chomp $line; $prev = sha256_hex($prev . "\n" . $line);
+      printf("%d\t%s\n", $seq, $prev); $seq++; }
+  ' "$1" "$2"
+}
+
+# ── mkdir mutex (macOS has no flock); seal/append hold it, verify does not ──────────────────
+acquire_lock() {
+  local waited=0
+  while ! mkdir "$LOCKDIR" 2>/dev/null; do
+    if [ -d "$LOCKDIR" ]; then
+      local age; age="$(( $(date +%s) - $(mtime "$LOCKDIR" 2>/dev/null || echo 0) ))"
+      if [ "$age" -gt "$LOCK_TTL" ]; then rm -rf "$LOCKDIR" 2>/dev/null || true; continue; fi
+    fi
+    [ "$waited" -ge "$LOCK_WAIT" ] && return 1
+    sleep 1; waited=$((waited + 1))
+  done
+  return 0
+}
+release_lock() { rmdir "$LOCKDIR" 2>/dev/null || rm -rf "$LOCKDIR" 2>/dev/null || true; }
+
+# line count of \n-terminated lines only (wc -l ignores a mid-write trailing partial line).
+nlines() { if [ -f "$1" ]; then wc -l < "$1" | tr -d ' '; else echo 0; fi; }
+
+# ── seal (the append-only chain extender) ───────────────────────────────────────────────────
+_seal_locked() {
+  local sealed=0 head="$GENESIS" genesis=0
+  if [ -s "$CHAIN" ]; then
+    sealed="$(nlines "$CHAIN")"
+    head="$(tail -n1 "$CHAIN" | cut -f2)"
+  else
+    genesis=1
+  fi
+  local idl_complete; idl_complete="$(nlines "$IDL")"
+  local new=$(( idl_complete - sealed ))
+  if [ "$new" -le 0 ]; then
+    printf 'sealed 0 new · head %s %s\n' "$sealed" "$(printf '%s' "$head" | cut -c1-8)"
+    return 0
+  fi
+
+  local links tmp="$CHAIN.tmp.$$"
+  links="$(head -n "$idl_complete" "$IDL" | tail -n "+$((sealed + 1))" | chain_extend "$((sealed + 1))" "$head")"
+  [ -n "$links" ] || { echo "cc-idl seal: hash step produced nothing (perl/Digest::SHA missing?)" >&2; return 5; }
+  # Copy the sealed prefix VERBATIM (never recomputed → anti-launder), then append the new links,
+  # then atomic mv. Each step is checked: a failed copy of the sealed prefix must ABORT, never
+  # silently ship a truncated chain (which would erase the very tamper-evidence we exist for).
+  fail_write() { rm -f "$tmp" 2>/dev/null || true; echo "cc-idl seal: $1" >&2; return 5; }
+  if [ -s "$CHAIN" ]; then cp "$CHAIN" "$tmp" 2>/dev/null || { fail_write "could not copy sealed prefix"; return 5; }; fi
+  printf '%s\n' "$links" >> "$tmp" 2>/dev/null || { fail_write "could not append new links"; return 5; }
+  mv "$tmp" "$CHAIN" 2>/dev/null || { fail_write "atomic replace failed"; return 5; }
+
+  local newhead; newhead="$(tail -n1 "$CHAIN" | cut -f2)"
+  [ "$genesis" -eq 1 ] && printf 'genesis: sealed %d pre-existing line(s) — tamper-evidence begins now (pre-genesis history unwitnessed)\n' "$new"
+  printf 'sealed %d new · head %s %s\n' "$new" "$(nlines "$CHAIN")" "$(printf '%s' "$newhead" | cut -c1-8)"
+  return 0
+}
+
+cmd_seal() {
+  mkdir -p "$(dirname "$CHAIN")" 2>/dev/null || true
+  acquire_lock || { echo "cc-idl seal: could not acquire lock $LOCKDIR within ${LOCK_WAIT}s" >&2; return 5; }
+  _seal_locked; local rc=$?
+  release_lock
+  return "$rc"
+}
+
+# ── verify (lock-free tamper check over the immutable sealed prefix) ─────────────────────────
+cmd_verify() {
+  if [ ! -s "$CHAIN" ]; then
+    echo "cc-idl verify: no chain sealed yet (run 'cc-idl seal')" >&2; return 2
+  fi
+  local sealed idl_complete
+  sealed="$(nlines "$CHAIN")"
+  idl_complete="$(nlines "$IDL")"
+
+  if [ "$idl_complete" -lt "$sealed" ]; then
+    printf 'TAMPER: idl.jsonl has %d line(s) but the chain sealed %d — %d sealed record(s) DELETED/TRUNCATED\n' \
+      "$idl_complete" "$sealed" "$(( sealed - idl_complete ))" >&2
+    return 7
+  fi
+
+  local tmp_re tmp_st; tmp_re="$(mktemp)"; tmp_st="$(mktemp)"
+  # shellcheck disable=SC2064
+  trap "rm -f '$tmp_re' '$tmp_st' 2>/dev/null || true" RETURN
+  head -n "$sealed" "$IDL" | chain_extend 1 "$GENESIS" > "$tmp_re"
+  head -n "$sealed" "$CHAIN" > "$tmp_st"
+
+  # First line whose stored hash (col 2) differs from the recomputed hash (col 4).
+  local bad
+  bad="$(paste "$tmp_st" "$tmp_re" | awk -F'\t' 'NF>=4 && $2!=$4 { print NR; exit }')"
+  if [ -n "$bad" ]; then
+    local stored recomp
+    stored="$(sed -n "${bad}p" "$tmp_st" | cut -f2)"
+    recomp="$(sed -n "${bad}p" "$tmp_re" | cut -f2)"
+    printf 'TAMPER: chain diverges at line %d — sealed record altered/reordered since it was sealed\n' "$bad" >&2
+    printf '  stored     %s\n  recomputed %s\n' "$stored" "$recomp" >&2
+    return 7
+  fi
+
+  local tail_unsealed=$(( idl_complete - sealed ))
+  if [ "$tail_unsealed" -gt 0 ]; then
+    printf 'OK: %d sealed line(s) intact · %d unsealed tail line(s) (run seal to cover)\n' "$sealed" "$tail_unsealed"
+  else
+    printf 'OK: %d sealed line(s) intact · head %s\n' "$sealed" "$(tail -n1 "$CHAIN" | cut -f2 | cut -c1-8)"
+  fi
+  return 0
+}
+
+# ── append (canonical write-and-seal) ───────────────────────────────────────────────────────
+cmd_append() {
+  local raw="${1:-}"
+  [ -n "$raw" ] || { echo "cc-idl append: a single JSON record argument is required" >&2; return 2; }
+  local line
+  line="$(printf '%s' "$raw" | jq -c . 2>/dev/null)" \
+    || { echo "cc-idl append: argument is not valid JSON" >&2; return 2; }
+  mkdir -p "$(dirname "$IDL")" 2>/dev/null || true
+  acquire_lock || { echo "cc-idl append: could not acquire lock $LOCKDIR within ${LOCK_WAIT}s" >&2; return 5; }
+  printf '%s\n' "$line" >> "$IDL" 2>/dev/null || { release_lock; echo "cc-idl append: IDL write failed" >&2; return 5; }
+  _seal_locked >/dev/null; local rc=$?
+  release_lock
+  [ "$rc" -eq 0 ] || { echo "cc-idl append: appended to IDL but seal failed (run 'cc-idl seal')" >&2; return 5; }
+  tail -n1 "$CHAIN" | cut -f2
+  return 0
+}
+
+cmd_head() {
+  [ -s "$CHAIN" ] || { echo "cc-idl head: no chain sealed yet" >&2; return 2; }
+  tail -n1 "$CHAIN"
+}
+
+command -v perl >/dev/null 2>&1 || { echo "cc-idl: perl (with Digest::SHA) is required" >&2; exit 1; }
+
+case "${1:-}" in
+  seal)    shift; cmd_seal "$@" ;;
+  verify)  shift; cmd_verify "$@" ;;
+  append)  command -v jq >/dev/null 2>&1 || { echo "cc-idl: jq is required for append" >&2; exit 1; }
+           shift; cmd_append "$@" ;;
+  head)    shift; cmd_head "$@" ;;
+  ""|-h|--help|help) usage ;;
+  *) printf 'cc-idl: unknown verb %s\n\n' "$1" >&2; usage >&2; exit 2 ;;
+esac
