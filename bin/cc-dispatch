@@ -171,7 +171,14 @@ dispatch() { # <dry|run>
       while IFS= read -r a; do fire_args+=("$a"); done \
         < <(printf '%s' "$p" | jq -r '.fire_line[]')
     elif [ "$ftype" = string ]; then
-      fire_args=( "$(printf '%s' "$p" | jq -r '.fire_line')" )
+      # the real planner (cc-wave-plan) emits ONE flat string that INCLUDES the spawn program
+      # itself — word-split it (read -ra, no eval) and drop the leading program token, else the
+      # whole line lands as argv[1]: handoff-fire errors and the --prompt-file scan sees nothing
+      # (found live 2026-07-19: 7/7 spawns died while the argv-array selftests stayed green)
+      read -ra fire_args <<< "$(printf '%s' "$p" | jq -r '.fire_line')"
+      case "${fire_args[0]:-}" in
+        *handoff-fire.sh|*"$(basename "$spawn")") fire_args=("${fire_args[@]:1}") ;;
+      esac
     fi
     if [ "${#fire_args[@]}" -eq 0 ]; then
       FAILED=$((FAILED + 1)); idl failed "$id: empty/invalid fire_line"; continue
@@ -288,6 +295,14 @@ STUB
   t "(c) summary fired=1"                   test "$(last '.fired')" = 1
   t "(c) brief composed at the fire_line path (id + title)" grep -q 'cc-backlog item i1' /tmp/f1.txt
   t "(c) brief carries the ship rail"       grep -q 'project-local /ship' /tmp/f1.txt
+
+  # (c2) STRING fire_line (the real wave-plan shape, program-prefixed) → split argv, program
+  # token dropped, brief still composed.
+  reset; seed_items '[{"id":"i1","project":"a","status":"open","title":"t1"}]'
+  seed_plan '[{"id":"i1","account":"next3","fire_line":"~/.claude/scripts/handoff-fire.sh --prompt-file /tmp/f1.txt --account next3"}]'
+  "$SELF" --once >/dev/null 2>&1
+  t "(c2) string fire_line → spawn got SPLIT argv (no program token)" grep -q -- '^--prompt-file /tmp/f1.txt --account next3$' "$tmp/spawn.log"
+  t "(c2) string fire_line → brief composed" grep -q 'cc-backlog item i1' /tmp/f1.txt
 
   # (d) spawn non-zero → item reopened + IDL failed.
   reset; seed_items '[{"id":"i1","project":"a","status":"open","title":"t1"}]'
