@@ -37,6 +37,7 @@ SWEEP="${SUPERVISOR_SWEEP:-30}"
 T="${CC_SUP_T:-73}"                                    # past-threshold (used_pct) — the B-1 boundary
 STALL_S="${CC_SUP_STALL_S:-1800}"                      # telemetry age past which a live pid is a STALL? candidate
 DEADLINE_S="${CC_SUP_PAGE_DEADLINE_S:-900}"            # page deadline before the re-observe (15m default)
+TRUNK="${CC_SUP_TRUNK:-origin/main}"                   # trunk for the clean-completion landed-check (cf. cc-classify CC_CLASSIFY_TRUNK)
 TEL_DIR="${CC_TELEMETRY_DIR:-/tmp/cc-telemetry}"
 IDL="${CC_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
 SUPLOG="${CC_SUPERVISOR_LOG:-$HOME/.claude/autonomy/supervisor.log}"
@@ -145,6 +146,42 @@ checkpoint_preserve(){ # $1=sid $2=cwd
   idl checkpoint "\"sid\":\"$1\",\"cwd\":\"$cwd\",\"why\":\"dead-lead-preserve\""
 }
 
+# ── CLEAN-COMPLETION detection (item 9b183d78c723): is a dead worker's worktree shipped+clean? ──
+# 0 IFF clean tree AND the branch's content is landed on trunk — mirrors cc-classify / cc-reaper
+# work_landed and cc-teardown-safety-gate G-a (the codebase-canonical shipped+clean gate). P0-17
+# landed-by-CONTENT (incident dfacccd): a squash/cherry-pick land (different sha, same content) leaves
+# HEAD "N ahead" by COUNT though the work is durably on trunk, so a bare count check would strand a
+# finished session forever. A missing / non-git / unresolved-trunk worktree returns 1 — we cannot PROVE
+# it clean, so the caller PAGES (the safe direction); work is never silently reaped unless verified landed.
+work_landed(){ # $1=cwd → 0 clean+landed, 1 otherwise
+  local cwd="$1"
+  [ -n "$cwd" ] && [ -d "$cwd" ] || return 1
+  git -C "$cwd" rev-parse --git-dir >/dev/null 2>&1 || return 1
+  [ -z "$(git -C "$cwd" status --porcelain 2>/dev/null)" ] || return 1
+  local ahead; ahead="$(git -C "$cwd" rev-list --count "$TRUNK"..HEAD 2>/dev/null)" || return 1
+  [ "${ahead:-1}" = 0 ] && return 0                                 # fast path: 0 ahead by COUNT → landed
+  # content path (squash/cherry-pick-tolerant): `git cherry` marks a HEAD commit '+' only when NO patch-id
+  # equivalent is on trunk; zero '+' ⇒ every ahead commit is durably landed. tree-diff-0 = squash backstop.
+  local cherry_out
+  if cherry_out="$(git -C "$cwd" cherry "$TRUNK" HEAD 2>/dev/null)"; then
+    printf '%s\n' "$cherry_out" | grep -q '^+' || return 0
+  fi
+  git -C "$cwd" diff --quiet "$TRUNK" HEAD 2>/dev/null && return 0
+  return 1
+}
+
+# ── auto-reap a clean completion — the clean lifecycle end of a dispatched worker, NEVER a page. ──
+# A dead worker whose worktree is shipped+clean left NOTHING stranded; the DEAD page exists to surface
+# LOST/unlanded work, so this is a normal exit, not an incident. Reap = drop the telemetry row + clear any
+# standing page/notify marker (autonomy/pages/<sid>.{page,notified}); recorded to the IDL (S-4 auditable —
+# the reap is an outcome record, never a silent deletion).
+reap_clean(){ # $1=sid $2=cwd
+  idl reap "\"sid\":\"$1\",\"cwd\":\"$2\",\"why\":\"clean-completion-shipped-clean-worktree\""
+  rm -f "$TEL_DIR/$1.json" 2>/dev/null || true
+  clear_page "$1"
+  printf '%s  reap sid=%s (clean+landed — dispatched-worker lifecycle end)\n' "$(utc)" "$1" >> "$SUPLOG" 2>/dev/null || true
+}
+
 # ── classify one telemetry row and route to a PAGE (never an action) ──
 assess(){ # $1=telemetry-json-file → prints 1 if it produced a finding, else 0
   local f="$1" sid used ts cwd pid age
@@ -155,8 +192,13 @@ assess(){ # $1=telemetry-json-file → prints 1 if it produced a finding, else 0
   pid="$(jq -r '.pid // empty' "$f" 2>/dev/null)"
   age=$(( $(now) - ts ))
 
-  # DEAD — pid gone (effect-verified). Checkpoint-preserve, then PAGE. NEVER auto-respawn.
+  # DEAD — pid gone (effect-verified). CLEAN COMPLETION vs STRANDED death (item 9b183d78c723).
   if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then
+    # A dead worker whose worktree is shipped+clean (clean tree AND content landed on trunk) finished its
+    # dispatched item and exited — a normal lifecycle end, ~68% of dead-pid rows (13/19, 2026-07-19) and the
+    # dominant source of desk wake-toil. Auto-reap and NEVER page. Only an UNFINISHED/stranded death (dirty
+    # tree, unlanded commits, or a cwd we cannot prove clean) is checkpoint-preserved + PAGED, as before.
+    if work_landed "$cwd"; then reap_clean "$sid" "$cwd"; echo 0; return; fi
     checkpoint_preserve "$sid" "$cwd"; page "$sid" DEAD "owning pid $pid gone; worktree checkpoint-preserved"; echo 1; return
   fi
   # STALL? — pid ALIVE but telemetry stale: a CANDIDATE, never an action. Page with the deadline→re-observe

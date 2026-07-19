@@ -42,6 +42,13 @@ once(){ bash "$SUP" --once >/dev/null 2>&1; }
 idl_has(){ grep -q "$1" "$CC_IDL" 2>/dev/null; }
 reset(){ : > "$CC_IDL"; rm -f "$CC_SUPERVISOR_PAGEDIR"/*.page 2>/dev/null; }
 paged(){ [ -f "$CC_SUPERVISOR_PAGEDIR/$1.page" ]; }
+tel_exists(){ [ -f "$CC_TELEMETRY_DIR/$1.json" ]; }              # T11-T13: a clean-completion reap drops the row
+mkrepo_landed(){ # $1=dir — a shipped+clean repo: clean tree, HEAD == origin/main (0 ahead, no network)
+  local r="$1"; rm -rf "$r"; mkdir -p "$r"
+  git -C "$r" init -q; git -C "$r" config user.email t@t; git -C "$r" config user.name t
+  echo x > "$r/f"; git -C "$r" add f; git -C "$r" commit -qm init
+  git -C "$r" update-ref refs/remotes/origin/main HEAD          # fabricate the landed trunk (no remote)
+}
 
 echo "T1 DEAD — pid gone ⇒ checkpoint-preserve + PAGE (never auto-respawn)"
 reset; rm -f "$CC_TELEMETRY_DIR"/*.json; mktel dead 40 2 999999 "$REPO"
@@ -125,6 +132,38 @@ CC_NOTIFY_CAPTURE="$SBX/notify.log" CC_PAGE_TO_FILE="$SBX/desk-role" CC_NOTIFY_B
 printf '%s' "$(( $(date +%s) - 3 ))" > "$CC_SUPERVISOR_PAGEDIR/hang10.page"
 CC_NOTIFY_CAPTURE="$SBX/notify.log" CC_PAGE_TO_FILE="$SBX/desk-role" CC_NOTIFY_BIN="$SBX/bin/cc-notify" bash "$SUP" --once >/dev/null 2>&1
 [ "$(wc -l < "$SBX/notify.log")" -eq 2 ] && ok "escalated is sticky (STALL?/ESCALATED oscillation quiet)" || no "oscillation leaked notifies (lines=$(wc -l < "$SBX/notify.log"))"
+
+echo "T11 CLEAN COMPLETION — DEAD pid + shipped-clean worktree ⇒ AUTO-REAP (telemetry+page gone), NEVER page"
+# the fix (item 9b183d78c723): a dead worker that landed its work leaves NOTHING stranded — reap it as a
+# clean lifecycle end instead of DEAD-paging the desk every 30s sweep (~68% of dead-pid rows, the toil).
+reset; rm -f "$CC_TELEMETRY_DIR"/*.json
+LREPO="$SBX/landed"; mkrepo_landed "$LREPO"
+mktel donesid 40 2 999999 "$LREPO"                              # pid gone ⇒ DEAD; worktree shipped+clean ⇒ clean completion
+once
+tel_exists donesid && no "telemetry NOT reaped (clean completion still pending)" || ok "telemetry row reaped (clean lifecycle end)"
+paged donesid      && no "clean completion was PAGED (the bug this fixes)"        || ok "clean completion not paged"
+idl_has '"kind":"reap"'                 && ok "reap recorded in IDL (S-4 auditable outcome, not a silent delete)" || no "reap not recorded in IDL"
+idl_has '"kind":"page".*"state":"DEAD"' && no "a DEAD page was emitted for a clean completion"                    || ok "no DEAD page for a clean completion"
+idl_has '"kind":"checkpoint"'           && no "checkpoint-preserved a clean completion (nothing to preserve)"     || ok "no checkpoint on a clean completion"
+
+echo "T12 STRANDED (dirty) — DEAD pid + UNCOMMITTED work ⇒ PAGE + checkpoint, NOT reaped (no silent loss)"
+reset; rm -f "$CC_TELEMETRY_DIR"/*.json
+DREPO="$SBX/dirty"; mkrepo_landed "$DREPO"; echo wip > "$DREPO/uncommitted"   # dirty tree ⇒ stranded
+mktel dirtysid 40 2 999999 "$DREPO"
+once
+paged dirtysid      && ok "stranded (dirty) death PAGED"                     || no "dirty death not paged — stranded work unsurfaced"
+tel_exists dirtysid && ok "dirty telemetry NOT reaped (stranded ⇒ surfaced)" || no "dirty telemetry WRONGLY reaped (silent stranded-work loss)"
+idl_has '"kind":"reap"' && no "a dirty/stranded death was reaped (must never happen)" || ok "no reap for a dirty/stranded death"
+
+echo "T13 STRANDED (unlanded) — DEAD pid + committed-but-UNLANDED commits ⇒ PAGE, NOT reaped"
+reset; rm -f "$CC_TELEMETRY_DIR"/*.json
+UREPO="$SBX/unlanded"; mkrepo_landed "$UREPO"
+echo more > "$UREPO/g"; git -C "$UREPO" add g; git -C "$UREPO" commit -qm ahead   # clean tree, 1 commit ahead of origin/main
+mktel unlandsid 40 2 999999 "$UREPO"
+once
+paged unlandsid      && ok "stranded (unlanded) death PAGED"                     || no "unlanded death not paged — committed work stranded"
+tel_exists unlandsid && ok "unlanded telemetry NOT reaped"                       || no "unlanded telemetry WRONGLY reaped (silent loss of unlanded commits)"
+idl_has '"kind":"reap"' && no "an unlanded death was reaped (must never happen)" || ok "no reap for an unlanded death"
 
 echo ""
 echo "supervisor-e2e: $P passed, $F failed"
