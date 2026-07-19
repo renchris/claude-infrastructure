@@ -1,8 +1,17 @@
+---
+status: complete
+---
+
 # Two-Way Session Comms — Implementation Plan
 
 **Created**: 2026-07-10 · **Repo**: `claude-infrastructure` · **Research**:
 [`docs/research/HANDOFF_BACKCHANNEL_2026-07-10.md`](../research/HANDOFF_BACKCHANNEL_2026-07-10.md)
 (verdict: YES, live-proven; the it2 pane-injection transport already exists — this is the *plumbing*).
+
+**Status**: ✅ **COMPLETE — landed on `origin/main`, verified green** (2026-07-18). All four components
+shipped via clean commits (NOT the stale `feat/two-way-session-comms` branch — see Status log for SHAs
+and the do-not-land warning). Re-verified this session: `bats` **38/38 pass**, `shellcheck` **clean**.
+Nothing left to build.
 
 **Scope (frozen)**: build a clean, performant, general **any-session → any-session message primitive**,
 with `/handoff`'s `--notify-back` as its first consumer. A session (fired, teammate, or standalone)
@@ -144,8 +153,44 @@ spawn-after-merge), never parallel — the deps forbid it. Either way: commit pe
 - **2026-07-10** — Plan created from the live-proven research. NEXT: fresh-context session runs
   Step 0 → Phase 1 (registry) → Phase 2 (cc-notify) → Phase 3 (--notify-back + docs + tests),
   commits per phase on `feat/two-way-session-comms`, stops for the user's `/ship`.
+- **2026-07-18** — ✅ **DONE — all four components landed on `origin/main` and re-verified green.**
+  Shipped via **clean, comms-scoped commits** (a subsequent session split the work out of the
+  plan's `feat/two-way-session-comms` branch, which had accreted unrelated `accounts`/`limit-recover`
+  work, and landed only the comms slice):
+  - **Phase 1** — session registry + `session-register.sh` / `session-deregister.sh` + `cc-sessions`
+    lister: `827f164`, evolved by the P8 registry-forensics ruling `7b2f701` (see deviation below).
+  - **Phase 2** — `cc-notify` general any-session→any-session primitive over the it2 transport:
+    `3c232d3`, hardened by `98a3dd9` + `3b12107` (submit-VERIFY: the injected line is confirmed to
+    have actually submitted — strand detection, CR retry, `exit 4` on a stranded composer — closing
+    the "verifier could only abstain" hole).
+  - **Phase 3** — `handoff-fire.sh --notify-back` + `cc-await-ping` + `commands/handoff.md` §8
+    ("Two-way — back-channel ping"): `7acef7e`, extended by `5d2eb36` (`cc-await-ping --role`
+    per-cycle re-resolve + `wiring-all` bin symlinks).
+  - **Verification (this session, `origin/main`)**: `bats tests/{cc-notify,notify-back,session-registry}.bats`
+    → **38/38 pass**; `shellcheck` on all delivered bins + hooks + `handoff-fire.sh` → **clean**
+    (only info-level SC2009 suggestions). Data dirs (`~/.claude/sessions`, `~/.claude/mailbox`, the
+    live `cc-registry`) live outside the repo; `~/.claude/bin/{cc-notify,cc-sessions,cc-await-ping}`
+    symlinks are in place.
+  - **Deviation from Phase 1 (by design, not a gap)**: the plan said "register **both** hooks in the
+    settings template." Only `session-register.sh` is template-wired (`settings.example.json:265`);
+    `session-deregister.sh` exists + is tested but is intentionally **not** template-wired. The P8
+    ruling (`7b2f701`, "a reaper keyed on deadness erases the forensics") made registry retention an
+    **age** decision (`CC_REG_RETAIN_H`, 24h), not an end/liveness one — so you wire *register*
+    (accrue evidence) but not *deregister* (don't erase a dead session's row on exit), and the
+    self-healing age-sweep in `cc-sessions` keeps addressing correct (a dead pane is hidden from
+    resolution, retained for forensics). Full activation of the registration spine is deliberately
+    operator-gated per `docs/rulings/P8-GO.md`.
+  - **Follow-on already built ON TOP** (separate items, not this plan): the `comms-safety F1–F5`
+    layer — `cc-announce` VERIFIED-or-LOUD primitive, channel-ladder law, back-channel payload-lint
+    (`08dad8c` → `01b20eb`) — is the hardened application layer over this primitive.
+  - **⚠️ Do NOT land `feat/two-way-session-comms`.** It is **stale/superseded** — `origin/main` is
+    strictly newer (landing the branch would REVERT the submit-verify + P8 hardening, e.g. −60 lines
+    of `cc-notify`), and the branch also carries unrelated `accounts`/`limit-recover`/`hooks` commits
+    out of this plan's scope. cc-backlog `9775f356eb03` closed with the landed SHAs as evidence.
 
 ## Resume
-Fresh session: `cd claude-infrastructure`, `git switch -c feat/two-way-session-comms`, read the
-research doc + this plan's Design + Phase you're on. Build T1→T2→T3 in order; gate each
-(shellcheck + bats); commit per phase; do not push.
+**Nothing to resume — this plan is COMPLETE and landed on `origin/main`** (see the 2026-07-18 Status
+log entry for SHAs + verification). Do NOT rebuild, and do NOT land the stale
+`feat/two-way-session-comms` branch (superseded — it would revert the hardening). To re-verify:
+`bats tests/{cc-notify,notify-back,session-registry}.bats` + `shellcheck bin/cc-notify bin/cc-sessions
+bin/cc-await-ping hooks/session-register.sh hooks/session-deregister.sh`.
