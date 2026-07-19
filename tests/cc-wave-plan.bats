@@ -11,14 +11,15 @@ setup() {
   mkdir -p "$C/bin"
 
   # accounts stub — --rank general (STUB_RANK space-list; set-but-empty = cliff) · --json (window
-  # deadline = now + STUB_WIN_MIN minutes; default 600 = wide open).
+  # deadline = now + STUB_WIN_MIN minutes, default 600 = wide open; rows = STUB_ROWS JSON array,
+  # default [] = every account idle → live-load seed 0 → pure round-robin).
   cat > "$C/bin/claude-accounts" <<'STUB'
 #!/bin/bash
 case "${1:-}" in
   --rank) i=0; for n in ${STUB_RANK-next next4 next3 next2}; do printf '%s 0.%03d\n' "$n" $((900-i)); i=$((i+1)); done ;;
   --json) m="${STUB_WIN_MIN:-600}"
     dl="$(date -u -v+"${m}"M +%Y-%m-%dT%H:%M:%S+00:00 2>/dev/null || date -u -d "+${m} minutes" +%Y-%m-%dT%H:%M:%S+00:00)"
-    printf '{"window":{"active":true,"deadline":"%s"},"rows":[]}\n' "$dl" ;;
+    printf '{"window":{"active":true,"deadline":"%s"},"rows":%s}\n' "$dl" "${STUB_ROWS:-[]}" ;;
   *) exit 2 ;;
 esac
 STUB
@@ -48,11 +49,11 @@ STUB
 }
 
 # ── (a) selftest contract ─────────────────────────────────────────────────────────────────────────────
-@test "selftest passes and runs all 20 checks (a zero-check suite must not 'pass')" {
+@test "selftest passes and runs all 23 checks (a zero-check suite must not 'pass')" {
   run "$WP" selftest
   [ "$status" -eq 0 ]
   n_ok="$(printf '%s' "$output" | grep -c '^  ok ')"
-  [ "$n_ok" -eq 20 ]
+  [ "$n_ok" -eq 23 ]
   ! printf '%s' "$output" | grep -q '^  FAIL'
 }
 
@@ -70,11 +71,22 @@ STUB
   echo "$output" | jq -e '.[0].fire_line|test("handoff-fire.sh") and test("/tmp/fire-a.txt")'
 }
 
-@test "cap: 3 items, MAX=2, 2 accounts → item3 spills to the 2nd account" {
+@test "spread: 3 items, MAX=2, 2 idle accounts → round-robin A,B,A (per-wave cap retained)" {
+  # Greedy best-first would have put items 1+2 on acctA then spilled 3 to acctB (A,A,B); spread-aware
+  # placement round-robins (A,B,A) while the ≤MAX_PER_ACCT cap still bounds A at 2.
   export STUB_RANK='acctA acctB' CC_WAVE_MAX_PER_ACCT=2
   run "$WP" --items '[{"id":"1","slot":"lead"},{"id":"2","slot":"lead"},{"id":"3","slot":"lead"}]' --json
   [ "$status" -eq 0 ]
-  echo "$output" | jq -e '(.[0].account=="acctA") and (.[1].account=="acctA") and (.[2].account=="acctB")'
+  echo "$output" | jq -e '(.[0].account=="acctA") and (.[1].account=="acctB") and (.[2].account=="acctA")'
+}
+
+@test "spread: a live-loaded best-ranked account is de-prioritized by the load penalty" {
+  # acctA ranks first but already carries 3 live sessions; acctB is idle → the item lands on acctB.
+  # This is the cross-wave fix (operator 2026-07-19): greedy best-first piled onto acctA regardless.
+  export STUB_RANK='acctA acctB' STUB_ROWS='[{"acct":"acctA","k":3},{"acct":"acctB","k":0}]'
+  run "$WP" --items '[{"id":"1","slot":"lead"}]' --json
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.[0].account=="acctB"'
 }
 
 @test "straddle: Fable window within guard → Opus fallback with reason, NO fable id in the plan" {

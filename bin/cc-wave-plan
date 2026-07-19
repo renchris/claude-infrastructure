@@ -2,7 +2,7 @@
 # cc-wave-plan — QUOTA-AWARE WAVE PLACEMENT (T-P7-6): a wave of work-items → a concrete placement plan
 # {account, model, effort, fire_line} per item, OR a STOP on a quota cliff. This is the WAVE layer the
 # dispatcher (cc-dispatch) calls; per-slot model/effort routing already lives in `cc-route` — this tool
-# LEVERAGES cc-route for that and layers wave spread (best-first placement + ≤N/account concurrency cap)
+# LEVERAGES cc-route for that and layers wave spread (spread-aware least-loaded placement + ≤N/account cap)
 # and the pre-emptive Fable-window STRADDLE guard on top. It NEVER fires anything (fire_line is a template).
 #
 #   cc-wave-plan --items <json> [--json]     <json> = JSON array of {id:string, slot:string}
@@ -10,12 +10,17 @@
 #                                            (--items - reads the array from stdin)
 #   cc-wave-plan selftest
 #
-# PLACEMENT: greedy — consume `claude-accounts --rank general` order (best-first); ≤ CC_WAVE_MAX_PER_ACCT
-#   (default 2) items per account; a 3rd item to a full account spills to the next. No room anywhere = cliff.
+# PLACEMENT: SPREAD-AWARE least-loaded round-robin (NOT greedy best-first — that reconcentrated every wave
+#   onto the top-ranked account: operator-observed 2026-07-19). `--rank general` gives the healthy set +
+#   tie-break order; each account is pre-loaded with its LIVE session count (`--json .rows[].k`); every item
+#   goes to the least-loaded account (live + placed-this-wave), so a wave round-robins across the set AND an
+#   account already carrying sessions from prior waves is de-prioritized. ≤ CC_WAVE_MAX_PER_ACCT (default 2)
+#   items/account/wave is retained as the cliff bound — no account under that cap anywhere = cliff.
 #
 # LIVE SOURCES (never hardcoded — memory: frontier-window-ssot-discipline):
-#   · `claude-accounts --rank general` → ranked "name score" lines (best first) — the placement order.
-#   · `claude-accounts --json`         → .window.deadline (ISO) — minutes-to-close for the straddle guard.
+#   · `claude-accounts --rank general` → ranked "name score" lines (best first) — healthy set + tie-break.
+#   · `claude-accounts --json`         → .window.deadline (straddle guard) + .rows[].k (live session counts,
+#                                        the per-account load seed for spread-aware placement).
 #   · `cc-route <slot> --json`         → per-slot {model, lead_effort, reason}; already SSOT-parses model
 #                                        ids + owns the frontier-window (route='none') + quota-cliff edges.
 #
@@ -88,27 +93,54 @@ window_mins_to_close() {
 }
 
 # ── ranked-account placement (bash-3.2 safe: parallel indexed arrays, NO associative arrays) ──────────
-RANKED=(); RCOUNTS=()
+# SPREAD-AWARE, not greedy best-first: three parallel arrays index the healthy set — RANKED[i] (name,
+# best-first), RLOAD[i] (its CURRENT live session count, the cross-wave load seed) and RCOUNTS[i] (items
+# placed on it THIS wave). Each item lands on the account minimising RLOAD+RCOUNTS, so a wave round-robins
+# across the set AND an account already loaded from prior waves is de-prioritised — the fix for the
+# greedy-fill concentration bug where one top-ranked account absorbed every wave (operator, 2026-07-19).
+RANKED=(); RCOUNTS=(); RLOAD=()
 load_ranks() {
   local bin line name
   bin="$(accounts_bin)"; [ -n "$bin" ] || fail_config "claude-accounts unavailable (cannot rank accounts)"
   while IFS= read -r line; do
     name="${line%% *}"; [ -n "$name" ] || continue
-    RANKED+=("$name"); RCOUNTS+=(0)
+    RANKED+=("$name"); RCOUNTS+=(0); RLOAD+=(0)
   done < <("$bin" --rank general 2>/dev/null)
   [ "${#RANKED[@]}" -gt 0 ] || cliff "no account has general headroom (rank empty)"
 }
-# place_item → sets PLACED_ACCT to the account for the next item, honoring the ≤MAX cap; rc=1 when all
-# full. MUST set a global (not echo) — a command-substitution caller would run this in a subshell and
-# lose the RCOUNTS increment, silently defeating the cap.
+# load_live_counts → seed RLOAD[i] with RANKED[i]'s live session count from `claude-accounts --json`
+# (.rows[].k). Best-effort: an unavailable/unparseable --json leaves the seeds at 0 and placement degrades
+# to pure round-robin (still spreads within a wave, just without the cross-wave penalty) — consistent with
+# window_mins_to_close, which likewise treats an absent --json as "unknown, no pre-empt". Never fail-loud
+# here: round-robin is a principled fallback, not a silent-wrong default.
+load_live_counts() {
+  local bin j kv i name k
+  bin="$(accounts_bin)"; [ -n "$bin" ] || return 0
+  j="$("$bin" --json 2>/dev/null)" || return 0
+  [ -n "$j" ] || return 0
+  kv="$(printf '%s' "$j" | jq -r '.rows[]? | [.acct, (.k // 0)] | @tsv' 2>/dev/null)" || return 0
+  [ -n "$kv" ] || return 0
+  for i in "${!RANKED[@]}"; do
+    name="${RANKED[$i]}"
+    k="$(printf '%s\n' "$kv" | awk -F'\t' -v n="$name" '$1==n{print $2; exit}')"
+    case "$k" in ''|*[!0-9]*) k=0 ;; esac      # absent / non-integer → 0 (never a bad arithmetic seed)
+    RLOAD[i]="$k"
+  done
+}
+# place_item → sets PLACED_ACCT to the LEAST-LOADED ranked account with per-wave headroom (RLOAD+RCOUNTS
+# minimal, RCOUNTS < MAX), rank breaking ties: RANKED is best-first and the strict `<` keeps the earliest
+# account at the running minimum. rc=1 when every account is at the per-wave cap (→ cliff). MUST set a
+# global (not echo) — a command-substitution caller runs in a subshell and would lose the RCOUNTS bump.
 PLACED_ACCT=""
 place_item() {
-  local i c
+  local i eff best_i=-1 best_load=""
   for i in "${!RANKED[@]}"; do
-    c="${RCOUNTS[$i]}"
-    if [ "$c" -lt "$MAX_PER_ACCT" ]; then RCOUNTS[i]=$((c + 1)); PLACED_ACCT="${RANKED[$i]}"; return 0; fi
+    [ "${RCOUNTS[$i]}" -lt "$MAX_PER_ACCT" ] || continue     # skip accounts already at the per-wave cap
+    eff=$(( RLOAD[i] + RCOUNTS[i] ))
+    if [ -z "$best_load" ] || [ "$eff" -lt "$best_load" ]; then best_load="$eff"; best_i="$i"; fi
   done
-  return 1
+  [ "$best_i" -ge 0 ] || return 1
+  RCOUNTS[best_i]=$(( RCOUNTS[best_i] + 1 )); PLACED_ACCT="${RANKED[$best_i]}"; return 0
 }
 
 # ── per-slot model/effort resolution (memoized per distinct slot; STRADDLE decided once per invocation) ──
@@ -205,8 +237,10 @@ cmd_plan() {
     if [ -n "$mins" ] && [ "$mins" -lt "$GUARD_MIN" ]; then STRADDLE=1; STRADDLE_MINS="$mins"; fi
   fi
 
-  # Rank accounts, then greedy-place every item (all-or-nothing: any overflow is a cliff, no partial plan).
+  # Rank accounts, seed each with its live load, then spread-place every item (all-or-nothing: any
+  # overflow is a cliff, no partial plan).
   load_ranks
+  load_live_counts
   local accts=()
   for i in "${!ids[@]}"; do
     place_item || cliff "wave of $n items exceeds capacity (${#RANKED[@]} accounts × ${MAX_PER_ACCT}/acct all capped)"
@@ -259,7 +293,8 @@ selftest() {
   SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 
   # accounts stub: --rank general (STUB_RANK space-list; set-but-empty = cliff) · --json (window deadline
-  # = now + STUB_WIN_MIN minutes, default 600 = wide open).
+  # = now + STUB_WIN_MIN minutes, default 600 = wide open; rows = STUB_ROWS JSON array, default [] = every
+  # account idle, so the live-load seed is 0 and placement is pure round-robin).
   cat > "$tmp/accounts-stub" <<'STUB'
 #!/bin/bash
 case "${1:-}" in
@@ -268,7 +303,7 @@ case "${1:-}" in
   --json)
     m="${STUB_WIN_MIN:-600}"
     dl="$(date -u -v+"${m}"M +%Y-%m-%dT%H:%M:%S+00:00 2>/dev/null || date -u -d "+${m} minutes" +%Y-%m-%dT%H:%M:%S+00:00)"
-    printf '{"window":{"active":true,"deadline":"%s"},"rows":[]}\n' "$dl" ;;
+    printf '{"window":{"active":true,"deadline":"%s"},"rows":%s}\n' "$dl" "${STUB_ROWS:-[]}" ;;
   *) exit 2 ;;
 esac
 STUB
@@ -327,9 +362,21 @@ STUB
   check "open: fable-none route also degrades to opus (cc-route's own edge)" 0 \
     bash -c "STUB_WIN_MIN=600 STUB_FABLE_NONE=1 '$SELF' --items '[{\"id\":\"j\",\"slot\":\"judgment-dense\"}]' --json | jq -e '.[0].model==\"claude-opus-4-8\"'"
 
-  # (c) ≤N/account cap — a 3rd item to a 2-full account spills to the next account.
-  check "cap: 3 items, MAX=2, 2 accts -> item3 spills to acctB" 0 \
-    bash -c "STUB_RANK='acctA acctB' CC_WAVE_MAX_PER_ACCT=2 '$SELF' --items '[{\"id\":\"1\",\"slot\":\"lead\"},{\"id\":\"2\",\"slot\":\"lead\"},{\"id\":\"3\",\"slot\":\"lead\"}]' --json | jq -e '(.[0].account==\"acctA\") and (.[1].account==\"acctA\") and (.[2].account==\"acctB\")'"
+  # (c) SPREAD-AWARE placement — round-robin within a wave + a live-session load penalty across waves.
+  # Round-robin: 2 idle accounts, 2 items → one each (greedy-fill would have put BOTH on rank[0]).
+  check "spread: 2 idle accts, 2 items -> one each (round-robin, not both on rank[0])" 0 \
+    bash -c "STUB_RANK='acctA acctB' '$SELF' --items '[{\"id\":\"1\",\"slot\":\"lead\"},{\"id\":\"2\",\"slot\":\"lead\"}]' --json | jq -e '(.[0].account==\"acctA\") and (.[1].account==\"acctB\")'"
+  # ≤N/account cap still bounds a wave: 3 items, MAX=2, 2 idle accts → A,B,A (round-robin; A caps at 2).
+  check "spread: 3 items, MAX=2, 2 accts -> round-robin A,B,A (per-wave cap retained)" 0 \
+    bash -c "STUB_RANK='acctA acctB' CC_WAVE_MAX_PER_ACCT=2 '$SELF' --items '[{\"id\":\"1\",\"slot\":\"lead\"},{\"id\":\"2\",\"slot\":\"lead\"},{\"id\":\"3\",\"slot\":\"lead\"}]' --json | jq -e '(.[0].account==\"acctA\") and (.[1].account==\"acctB\") and (.[2].account==\"acctA\")'"
+  # Load penalty (the cross-wave fix): acctA is BEST-ranked but already carries 3 live sessions; acctB is
+  # idle → the item goes to acctB. Greedy best-first piled onto acctA regardless of its live load.
+  check "spread: a live-loaded best-ranked acct is de-prioritized (k=3 -> item to idle acctB)" 0 \
+    bash -c "STUB_RANK='acctA acctB' STUB_ROWS='[{\"acct\":\"acctA\",\"k\":3},{\"acct\":\"acctB\",\"k\":0}]' '$SELF' --items '[{\"id\":\"1\",\"slot\":\"lead\"}]' --json | jq -e '.[0].account==\"acctB\"'"
+  # Least-loaded-first across the wave: seeds A=5,B=6,C=4 (rank A,B,C) → item1→C(4), item2→A(5) (C now 5,
+  # A 5 tie → best rank A). Reproduces the operator scenario: the heaviest account (B) is left alone.
+  check "spread: least-loaded-first across live seeds (A=5,B=6,C=4 -> C then A)" 0 \
+    bash -c "STUB_RANK='acctA acctB acctC' STUB_ROWS='[{\"acct\":\"acctA\",\"k\":5},{\"acct\":\"acctB\",\"k\":6},{\"acct\":\"acctC\",\"k\":4}]' CC_WAVE_MAX_PER_ACCT=2 '$SELF' --items '[{\"id\":\"1\",\"slot\":\"lead\"},{\"id\":\"2\",\"slot\":\"lead\"}]' --json | jq -e '(.[0].account==\"acctC\") and (.[1].account==\"acctA\")'"
 
   # (a) QUOTA CLIFF — rank empty, and wave-exceeds-capacity; both exit 4 with NO plan on stdout.
   check "cliff: empty rank -> exit 4" 4 bash -c "STUB_RANK='' '$SELF' --items '[{\"id\":\"a\",\"slot\":\"lead\"}]'"
