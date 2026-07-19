@@ -13,42 +13,47 @@ _(none)_
 
 ## In-Panel
 
-### H-DSH-1 — Deterministic recycle ACTUATION (advisory → fire) · IN-PANEL 2026-07-19
-- **Confidence: high** (grounded in disk truth this session)
-- **Seam:** `hooks/waiting-recycle.sh` (detection+advisory) ⟷ `scripts/handoff-fire.sh --recycle`
-  (actuator). Today the hook only ADVISES the model; it has fired **0 / 2419** times in prod (the
-  fire path is unproven). The deliberate design ("only the model can capture live state") is the
-  wall the task wants to move past.
-- **Question:** Can a deterministic mechanism (hook or hook-armed sidecar) FIRE
-  `handoff-fire.sh --recycle` WITHOUT depending on the model noticing/complying, while preserving
-  the actuator's `/exit`-queue-boundary timing semantics (designed around being the model's OWN
-  Bash tool call — see `handoff-fire.sh:648-658`, the catnav incident)? Which channel/architecture:
-  (i) hook execs it directly, (ii) armed-payload sentinel the model refreshes while healthy + a
-  dumb actuator fires it (session-continue.sh pattern), or (iii) advisory-first with deterministic
-  fire on K-ignored escalation? Where does state-capture live so the successor is never task-less?
-
-### H-DSH-2 — The safe-fire GATE (idle vs active-coordination; no-double-fire) · IN-PANEL 2026-07-19
-- **Confidence: high**
-- **Seam:** the FIRE predicate's SAFE clause (`waiting-recycle.sh:188-196`) vs the desk's true
-  coordination state. Current proxy = clean-git-tree AND no-open-decision-in-last-message. That
-  misses "mid-merge between clean states" and "a sub-session is BLOCKED waiting on THIS desk."
-- **Question:** From DISK signals only (telemetry `/tmp/cc-telemetry`, `~/.claude/wait-contracts`,
-  live-session registry, cc-board, roles, pending pings), how does a hook distinguish
-  recycle-SAFE idle-babysitting (watch state reconstructible → recycle desirable) from
-  recycle-UNSAFE active-coordination (mid-wave dispatch/merge, or a sub-session blocked on this
-  desk's reply)? And how is no-double-fire guaranteed across the recycle boundary (two panes, the
-  cooldown/arm keying, the successor inheriting the arm)?
+_(none)_
 
 ## Resolved
 
-_(none yet)_
+### H-DSH-1 — Deterministic recycle ACTUATION · SOLVED-PATH-KNOWN (Fable panel 2026-07-19)
+Panel verdict: a PostToolUse hook CAN safely exec `handoff-fire.sh --recycle` — the post-catnav
+redesign made queue-timing invocation-agnostic (`/exit` INTERRUPTS in seconds, does NOT hold to
+turn-end; payload rides as shell-eval argv, never touches the queue; setsid watcher armed BEFORE
+`/exit` survives the SIGKILL). Root cause of 0/2419 = the ARM step (model-diligence), not the fire.
+Design = 4 stages (deterministic arm → advisory → K=1 deterministic fire, cap-exempt → idempotency
+latch). Full design + failure modes: `desk-self-handoff-2026-07-19/synthesis.md` + `panel-findings.md`.
+Live bugs found: FM-D empty-payload (`handoff-fire.sh:618` `[ -f ]` not `[ -s ]`), FM-F `/exit`
+self-contradiction (:63/:657/:1121 vs :554/:1141). → CORE implemented on `feat/desk-self-handoff-trigger`.
+
+### H-DSH-2 — The safe-fire GATE · SOLVED-PATH-KNOWN (Fable panel 2026-07-19)
+Panel verdict: S1-S8 predicate (add S1-sequencer-state, S3 inbound-wait w/ waiter-liveness filter,
+S4 mailbox-mtime LOAD-BEARING, S5 teammate HARD-hold, S6 fire-settle, S7 dual-path freshness) + a
+used_pct FLOOR on the rot-tell path (probe P1: shipped regex trips on healthy watch narration — LIVE
+BUG) + a TWO-TIER bias that INVERTS above ~80% (imperfect-recycle-with-brief > auto-compact-without).
+No-double-fire: atomic acquire + SID latch + floor closes the cross-generation rot-tell storm. Full
+design: `desk-self-handoff-2026-07-19/synthesis.md`. → CORE implemented on the same branch.
 
 ## Seam Registry
 
 | Seam | Components | Last swept | Depth | Verdict |
 |---|---|---|---|---|
-| desk self-recycle spine | `waiting-recycle.sh` · `handoff-fire.sh --recycle` · `/tmp/cc-telemetry` · `wait-contracts` | 2026-07-19 | design panel (H-DSH-1/2) | in-panel |
+| desk self-recycle spine | `waiting-recycle.sh` · `handoff-fire.sh --recycle` · `/tmp/cc-telemetry` · `wait-contracts` | 2026-07-19 | Fable design panel (H-DSH-1/2), 2 panelists, probes P1/P4/FM-D/FM-F confirmed | SOLVED-PATH-KNOWN → core built |
 
 ## Campaign Candidates
 
-_(none)_
+### C-DSH-1 — Unifying recycle-lifecycle + watch-state attestation primitive
+BOTH panels' top campaign idea CONVERGED: one SID/cwd-keyed write-before-act record
+`{state:WATCHING|COORDINATING|FIRING, ts, DoD, lifecycle:fired→exited→relaunched→engaged}`, maintained
+by the desk poll loop + the fire hook + the recycle watcher. Dissolves ≥8 named holes across both
+sub-problems (hidden-obligation decidability, G-P4-4 mission-carry, S6 fire-settle, cc-board STALL?
+disambiguation, Stage-3 idempotency latch, cc-notify external-typer fence, supervisor sweep target,
+recycle engagement-verify anchor). GENERATOR-class (one primitive dissolves ≥3 worklist items) →
+promote via `/frontier-campaign`. The shipped CORE is FN-safe without it (mailbox-mtime + contract-scan
++ discrete latch approximations); this is the elegant convergent architecture, not a prerequisite.
+
+### C-DSH-2 — Per-CC-version `/exit` queue-semantics conformance test
+Run on every binary bump: typed-`/exit` interrupt + plain-text-steering + slash-hold assertions.
+Dissolves the catnav/FM-F regression class permanently and retires the file's self-contradictory prose
+(`handoff-fire.sh:63/:657/:1121` "holds to turn end" vs `:554/:1141` "interrupts, does NOT enqueue").
