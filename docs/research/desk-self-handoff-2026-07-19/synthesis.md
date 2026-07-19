@@ -109,6 +109,32 @@ context critical — resolve NOW") instead of silent abstain.
 - **C-DSH-2 per-CC-version /exit queue-semantics conformance test** (dissolves the catnav/FM-F regression
   class + the file's self-contradiction at :63/:657/:1121 vs :554/:1141).
 
+## Implementation status (2026-07-19, branch feat/desk-self-handoff-trigger)
+BUILT + tested (50 tests green: 47 waiting-recycle.bats + 3 handoff-fire-validate.bats):
+- **rot-FLOOR** (f790f7a) — the probe-P1 live bug; rot-tell needs fresh telemetry + used_pct ≥ 25.
+- **gate hardening S1/S3/S4/S5** (55ccafd) — sequencer-state, inbound-wait (waiter-liveness-filtered),
+  mailbox-mtime (load-bearing), teammate hard-hold. FN-safe; seams CC_WR_COORD_DIR/UUID/QUIET_S.
+- **Stage-2 deterministic fire, SHADOW-default** (5d5e734) — advisory → K=1 escalation after GRACE_S,
+  cap+cooldown-exempt (one-fire-per-SID latch), atomic disk-reconstructible brief, `arm --brief/--live`,
+  re-arm no longer clears the loop-breaker. SHADOW logs would-fire; `--live` execs.
+- **FM-D empty-payload guard** in handoff-fire.sh (20ed5fa) — `[ -s ]` rejects a task-less fire.
+
+DEFERRED → follow-ons (net-positive, but beyond the DoD's "ctx>55 AND idle → fires safely" core;
+each is safe to add later without reworking the above):
+- **F1 two-tier bias** (≥80% hard-zone: relax S1-untracked/S4, keep S3+S5 absolute, ALARM instead of
+  silent abstain). The riskiest part (fires despite a soft HOLD) — wants its own soak. `CC_WR_HARD_T`
+  reserved. Until then the gate is monotone-HOLD (safer, occasionally over-holds at high fill).
+- **F2 handoff-fire Stage-3 idempotency latch** (mkdir-lock keyed by pane SID, watcher-cleared) —
+  defense-in-depth vs a hook+model double-fire; low-probability under shadow-default + the /exit-interrupt
+  window, and it touches the large critical actuator, so deferred.
+- **F3 Stage-0 auto-arm-at-spawn** — arming stays opt-in (`arm`); auto-arming monitoring desks at spawn
+  needs desk-role detection in the spawner (an arming-policy layer, separable from the fire mechanism).
+- **Campaign** C-DSH-1 (unifying attestation primitive) + C-DSH-2 (/exit conformance test) — in the ledger.
+
+GO-LIVE (operator's call, offered not auto-fired): review the shadow-fire IDL records
+(`grep stage2-shadow ~/.claude/autonomy/idl.jsonl`), then `waiting-recycle.sh arm --brief <file> --live`
+on a chosen desk to enable the exec. Global kill: `waiting-recycle.sh kill`.
+
 ## Implementation vehicle
 Core is ~2 tightly-coupled safety-critical files on LIVE machinery (`waiting-recycle.sh` +
 `handoff-fire.sh`) + tests + arming wiring. Ships DAMPED (shadow default) so a gate bug cannot strand the
