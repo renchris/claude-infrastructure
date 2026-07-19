@@ -16,6 +16,17 @@ age_of() { local now mt; now="$(date +%s)"; mt="$(stat -f %m "$1" 2>/dev/null ||
   [ "$n_ok" -eq 4 ]
 }
 
+@test "selftest Test B is load-robust: a check-delay before its measurement does not false-flake it (846380c6308f)" {
+  # RED-provable guard for the concurrent-load flake that reds the shared ship-land gate ~1/3 under load.
+  # CC_RUN_SELFTEST_CHECK_DELAY injects the >=1s slip between Test B's output-keyed beat write and its
+  # freshness measurement. The old absolute-age check (now-mtime<1) false-failed here (n_ok=3, exit 1);
+  # the start-relative check (mtime-t0>=1) is invariant to check-delay. 2s clears the 1s split either side.
+  CC_RUN_SELFTEST_CHECK_DELAY=2 run "$RUN" selftest
+  [ "$status" -eq 0 ]
+  n_ok="$(printf '%s' "$output" | grep -c '^  ok ')"
+  [ "$n_ok" -eq 4 ]
+}
+
 @test "streams the command's output through to stdout" {
   run "$RUN" --label o -- bash -c 'echo hello-world'
   [ "$status" -eq 0 ]
