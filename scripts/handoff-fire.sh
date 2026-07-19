@@ -136,6 +136,14 @@ MODEL_CONFIG="$HOME/.claude/model-config.yaml"
 REG_DIR="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"
 CC_ROLES_DIR="${CC_ROLES_DIR:-$HOME/.claude/cc-roles}"
 
+# This script is symlinked into ~/.claude/scripts; resolve its REAL dir so the sibling comms-safety
+# tools it now wires — payload-lint.sh (F3, T-P2-5) and completion-push.sh (F5, T-P2-1) — are found
+# beside the actual file (NOT via $REPO, which is the TARGET-of-fire repo). Env-overridable for tests.
+HF_SELF="$0"; while [ -L "$HF_SELF" ]; do _hf_t="$(readlink "$HF_SELF")"; case "$_hf_t" in /*) HF_SELF="$_hf_t" ;; *) HF_SELF="$(dirname "$HF_SELF")/$_hf_t" ;; esac; done
+HF_DIR="$(cd "$(dirname "$HF_SELF")" && pwd)"
+PAYLOAD_LINT_BIN="${CC_PAYLOAD_LINT_BIN:-$HF_DIR/payload-lint.sh}"
+COMPLETION_PUSH_BIN="${CC_COMPLETION_PUSH_BIN:-$HF_DIR/completion-push.sh}"
+
 PROMPT_FILE="" ACCOUNT="auto" LAUNCHER="" MODEL="" EFFORT="" CWD="" WORKTREE=""
 REPO="$DEFAULT_REPO" WTROOT="$HOME/Development/.worktrees" BASE="origin/main"
 SURFACE="split-right" SURFACE_EXPLICIT=0 SURFACE_REASON="" PROBE=0 DRY=0 IN_PLACE=0 EXTRA="" RECYCLE=0 SESSION_ID=""
@@ -342,6 +350,46 @@ check_goal_length() { # $1=prompt-file → 0 ok, 1 (loud) if a /goal line body e
   return 0
 }
 
+# ---- T-P2-5 (F3 / G-P2-5): payload back-channel lint PRE-FIRE ---------------------------------
+# The W5 incident ROOT: a successor-fire payload DROPPED the back-channel block (a cc-notify recipe +
+# a resolvable desk target), so the fired successor had no VERIFIED channel to the desk and its
+# terminal announce silently degraded (SendMessage → disk-truth); the desk learned of the ship 50 min
+# late FROM THE OPERATOR. payload-lint.sh (F5's sibling) makes that RED — but until this caller nothing
+# linted a payload before firing (the tool was DEAD in the live loop, p02 G-P2-5).
+# We gate a fire ONLY when the payload INTENDS a back-channel — it references cc-notify, or it prescribes
+# a SendMessage terminal-announce (the W5 degrade, F3/a). A pure one-way fire (no such reference) is NOT
+# gated: fire-and-forget is the documented default (commands/handoff.md §8), and one-way payloads legitimately
+# carry no back-channel. payload-lint accepts role-indirection (cc-roles/<role>, --role) so every /goal
+# fire — which resolves the desk via `cat ~/.claude/cc-roles/desk`, not a frozen uuid — passes.
+#   $1 = payload file   $2 = mode: 'enforce' (abort a RED-with-intent fire, return 4) | 'preview' (report only)
+payload_lint_gate() {
+  local pf="$1" mode="$2" out rc intent=0
+  [ -x "$PAYLOAD_LINT_BIN" ] || return 0     # lint tool absent → cannot gate (best-effort; upstream -f/-s guards ran)
+  if out="$("$PAYLOAD_LINT_BIN" "$pf" 2>&1)"; then rc=0; else rc=$?; fi
+  [ "$rc" -eq 0 ] && return 0                # GREEN — a well-formed (or one-way, no-cc-notify) block; nothing to say
+  # RED (1) or INDETERMINATE (2). Intent = a prescriptive SendMessage terminal-announce (F3/a, the W5 bug
+  # regardless of intent) OR a cc-notify reference (the payload MEANT to announce back but botched the block).
+  if printf '%s' "$out" | grep -q 'F3/a' || grep -qE 'cc-notify' "$pf" 2>/dev/null; then intent=1; fi
+  if [ "$rc" -eq 1 ] && [ "$intent" = 1 ]; then
+    if [ "$mode" = enforce ]; then
+      echo "!! handoff-fire ABORTED (F3 / T-P2-5): the fired payload's back-channel is malformed — a fired successor could NOT reliably announce to the desk (the W5 root)." >&2
+      printf '%s\n' "$out" >&2
+      echo "!! Fix the payload: a real back-channel — cc-notify <desk-uuid>, or the desk ROLE (cc-notify \"\$(cat ~/.claude/cc-roles/desk)\" / --role desk) — and NEVER prescribe SendMessage for a desk/terminal announce. For a deliberate one-way fire, drop the cc-notify reference." >&2
+      return 4
+    fi
+    echo "payload-lint (preview): WOULD BLOCK this fire — RED, back-channel intended but malformed:" >&2
+    printf '%s\n' "$out" >&2
+    return 0
+  fi
+  # RED with no back-channel intent (a one-way fire), or INDETERMINATE → LOUD note, never block.
+  if [ "$rc" -eq 2 ]; then
+    echo "⚠ payload-lint: INDETERMINATE — $out (proceeding; the empty/missing prompt guards already passed)" >&2
+  else
+    echo "⚠ payload-lint (advisory): one-way fire with no back-channel block — a fired session cannot announce back. Add --notify-back or a cc-notify recipe if a completion ping is expected." >&2
+  fi
+  return 0
+}
+
 # Internal: self-close watcher (spawned via detach() = setsid; nohup alone dies with the tool
 # call's process group when /exit interrupts the calling turn — see detach() header).
 # ARCHITECTURAL CONSTRAINT: osascript AppleEvents to iTerm2 fail unreliably from detached/orphaned
@@ -527,9 +575,26 @@ MSG
       echo "chain:     announce succession into successor (cc-notify) → arm watcher → FOREGROUND /exit (interrupts any in-flight turn, exits in seconds) → detached ps-poll ≤180s (CR nudge @60s) → it2 force-close pane → FOCUS successor"
     else
       echo "successor: none (--terminal: end-of-line, nothing continues this session's work)"
-      echo "chain:     arm watcher → FOREGROUND /exit (interrupts any in-flight turn, exits in seconds) → detached ps-poll ≤180s (CR nudge @60s) → it2 force-close pane"
+      echo "completion: push a program-terminal completion to the '${CC_COMPLETION_ROLE:-desk}' role via completion-push (F5 / T-P2-1) — VERIFIED-or-LOUD, never silent"
+      echo "chain:     completion-push → arm watcher → FOREGROUND /exit (interrupts any in-flight turn, exits in seconds) → detached ps-poll ≤180s (CR nudge @60s) → it2 force-close pane"
     fi
     exit 0
+  fi
+  # T-P2-1 (F5 / G-P2-1): a --terminal close is a PROGRAM-TERMINAL completion — nothing continues this
+  # session's work — so push it to the desk via completion-push (F5 → cc-announce F1). Until this caller
+  # NOTHING fired completion-push (it was DEAD in the loop, p02 §2c): a terminal event reached the desk
+  # only on the next reload or from the operator (the W5 50-min-late ship). Fired BEFORE the /exit chain
+  # (a typed /exit can interrupt this Bash tool at +ε) with capture-before-notify. NON-FATAL: a push
+  # failure is recorded LOUD (completion-push exit 5) but never aborts the close — the pane must retire.
+  # A --successor close is NOT terminal (work continues in the successor) → no push. The desk role is the
+  # freshest target (kept current by P0-15's role-writer); a stale role degrades LOUD, never silent.
+  if [ "$SC_TERMINAL" = 1 ] && [ -x "$COMPLETION_PUSH_BIN" ]; then
+    if "$COMPLETION_PUSH_BIN" fire --role "${CC_COMPLETION_ROLE:-desk}" --from handoff-fire \
+         --event "session $SC_SID self-closed (--terminal: nothing continues)" --detail "cwd $(pwd)"; then
+      echo "→ terminal completion pushed to the '${CC_COMPLETION_ROLE:-desk}' role (F5 / T-P2-1)"
+    else
+      echo "⚠ terminal completion push did NOT verify (recorded LOUD by completion-push, never silent) — proceeding with the close" >&2
+    fi
   fi
   # P0-15: the pane is about to close — repoint every role still naming it to the (verified-alive)
   # successor, so a role-addressed ping lands on the continuation, never on the dead pane (SO-1).
@@ -1223,6 +1288,7 @@ if [ "$DRY" = 1 ]; then
     echo "engagement: post-spawn transcript/registry-birth verify (P0-11) → re-send once on miss → FIRE FAILED (never a false '→ fired')"
     echo "registry:  provisional row if no P8 SessionStart row appears ≤${FIRE_REG_TIMEOUT:-30}s (P0-12)"
     [ -n "$AS_ROLE" ] && echo "role:      --as-role $AS_ROLE → $CC_ROLES_DIR/$AS_ROLE = <fired pane> (P0-15)"
+    payload_lint_gate "$PROMPT_FILE" preview   # T-P2-5: preview the back-channel lint (dry lints the PRE-trailer payload; a --notify-back block is materialized at fire time)
   fi
   [ "$RECYCLE" = 1 ] || echo "pre-trust: $LAUNCH_DIR → $(basename "$(config_dir_for_launcher "$LAUNCHER")") (fired session skips the workspace-trust dialog)"
   echo "command:  $CMD"
@@ -1233,6 +1299,11 @@ elif [ "$RECYCLE" = 1 ]; then
   [ -n "$AS_ROLE" ] && write_role "$CC_ROLES_DIR" "$AS_ROLE" "$SID"
   recycle_fire
 else
+  # T-P2-5 (F3): gate the MATERIALIZED payload's back-channel before a successor fires (the W5 root).
+  # RED-with-intent (cc-notify present but block malformed, or a SendMessage terminal-announce) → abort
+  # LOUD (exit 4) BEFORE any side effect; a pure one-way fire passes (advisory only). Role-indirection
+  # (/goal fires) passes — payload-lint accepts cc-roles/<role>.
+  payload_lint_gate "$PROMPT_FILE" enforce || exit "$?"
   pre_trust "$LAUNCH_DIR" "$(config_dir_for_launcher "$LAUNCHER")"
   spawn
   # P0-11: prove the fired session ingested the brief before claiming success. A cold fire that
