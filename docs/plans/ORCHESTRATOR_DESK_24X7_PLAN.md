@@ -302,7 +302,7 @@ that wires their subjects — no gate goes green on capability alone again. Full
   T-P10-2 idl.jsonl rotation (183 MB live!), T-P6-4 abstain==100% alarm sweep, T-P7-3 cc-idl/cc-audit, T-P3-3
   reaper→desk paging, P0-12b reaper enumerated≈live-panes self-check, ~~T-P11-6 desk-assert live wiring~~ (DONE 2026-07-19 — see status log), waiting-recycle
   G-P11-7/T-P1-8, T-P10-3 `$CLAUDE_CONFIG_DIR` brick-guard, G-P13-4/G-P6-10 gate coverage, T-P15-4 ship-rail push hook,
-  T-P15-7 executable CC_UNATTENDED guard, ~~T-P8-6 cliff→kimi~~ (DONE 2026-07-19 — see status log), T-P7-7 gate-batching manifest, T-P16-3/4 pmset/caffeinate
+  T-P15-7 executable CC_UNATTENDED guard, ~~T-P8-6 cliff→kimi~~ (DONE 2026-07-19 — see status log), ~~T-P7-7 gate-batching manifest~~ (DONE 2026-07-19 — see status log), T-P16-3/4 pmset/caffeinate
   LaunchAgents, T-P10-7 obsolete-watcher removal, T-P9-7 ship-land auto-rollback. The **supervisor-cadence wiring
   cluster** (T-P4-1/4-2/5-3/3-5, T-P7-2/5-5) is RESERVED as operator-sanctioned per `wiring-all.sh:151` ("the agent
   never edits the live daemon") — surfaced, not auto-built.
@@ -375,3 +375,33 @@ that wires their subjects — no gate goes green on capability alone again. Full
   the offer-vs-auto-route fork is the load-bearing scope call — the safe, contract-preserving choice was
   to keep the cliff a STOP and let WIRED change only what it *says*, so no existing invariant (never
   fire blind / never silent down-tier / exit-4 no-plan) bends to accommodate the hedge.
+- 2026-07-19 (desk peer session, Opus@max, /goal-driven — cc-backlog `4de57082de3d`) — **T-P7-7
+  gate-batching manifest C1..C10 + auto-stamp trailer BUILT + landed** (branch `feat/desk-gate-batching`,
+  RED-first, via project `/ship`). Closes the axis-c remainder of G-P7-8: `gate-classify.sh` (P3
+  surface router) + `cc-bind` (per-ruling content ack) + `cc-decide` (the class-B packet queue) already
+  existed; the missing legs were the **class pre-signing manifest** and its **auto-stamp/backstop**.
+  `scripts/gate-manifest.sh` delivers **P1 registry** (the C1..C10 signability map is data in the
+  script header + `classes`: {C1-C5,C7} pre-signable · {C6 money, C8 next-wave-go} conditional/
+  out-of-class-by-default · {C9 /ship, C10 self-mod} PERMANENT exclusion), **P2 sign** (`sign --wave
+  --classes --expiry` writes `~/.claude/autonomy/gate-manifest/<wave>.json`; REFUSES C9/C10 LOUD even
+  with `--allow-conditional`, REFUSES C6/C8 without it — the gate-classify asymmetry mirrored),
+  **P4 check + auto-stamp** (`check` = the G-manifest gate, FAIL-CLOSED like cc-bind's one-invariant:
+  no-manifest / expired / out-of-class all exit 1 LOUD, never a silent pass; `stamp` prints
+  `Ratified-By: operator (pre-signed class Cn, manifest <wave>@<expiry>)` only when in-class),
+  **P7 per-wave expiry** (a stale manifest ⇒ all out-of-class; ISO-8601-Z lexical compare, `CC_NOW`
+  test-overridable), and **P6 `/ship` backstop** (`gate-manifest.sh backstop <range>` = `git log
+  --grep 'pre-signed class C<n>'` surfacing auto-ratifications for EARLY-VETO, NON-BLOCKING by
+  contract; the `C<n>` digit pins the grep to the stamp TRAILER, not a prose mention).
+  Wired into `scripts/ship-land.sh` preflight (the dual of `esc_scan`: esc_scan PARKS out-of-class
+  surfaces, the backstop only SURFACES in-class auto-ratifications) + documented in
+  `.claude/commands/ship.md`. Gate: `tests/gate-manifest.bats` **33/33** (register-criteria-first;
+  the P6 grep-key `pre-signed class C<n>` is a pinned invariant so P4-stamp and P6-grep can never
+  drift, and the digit blocks prose-mention false-positives) + full `bats tests/` **814/814** +
+  shellcheck clean; the backstop was **effect-verified end-to-end** through
+  a real `ship-land.sh --dry-run` (hermetic origin, stamped commit surfaced, land stayed green).
+  **Scope discipline (non-C10):** `gate-manifest sign` writes a DATA file under `autonomy/` (like
+  `cc-decide`), NOT settings/hooks/launchd — building + running it is within the ceiling; the operator
+  SIGNS manifests at wave start (a runtime action), the agent only builds the mechanism. **Learning:**
+  co-locating the P4 stamp-writer and the P6 grep-reader in ONE file (with a bats-pinned shared key)
+  is what makes the "auto-stamp ledger + /ship retro-review" pair non-regressible — a split would let
+  the trailer text and the backstop grep silently diverge.

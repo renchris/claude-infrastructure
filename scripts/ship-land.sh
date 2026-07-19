@@ -38,6 +38,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 LAND_LOCK="${SCRIPT_DIR}/land-lock.sh"
 LAND_VERIFY="${SCRIPT_DIR}/land-verify.sh"
 STRANDED_SWEEP="${SCRIPT_DIR}/stranded-sweep.sh"
+GATE_MANIFEST="${SCRIPT_DIR}/gate-manifest.sh"
 
 ESC_RE_DEFAULT='DROP[[:space:]]+TABLE|DROP[[:space:]]+COLUMN|DROP[[:space:]]+DATABASE|DROP[[:space:]]+SCHEMA|TRUNCATE[[:space:]]+TABLE|DELETE[[:space:]]+FROM|ALTER[[:space:]]+TABLE[[:space:]].+[[:space:]]DROP|-----BEGIN[[:space:]A-Z]*PRIVATE[[:space:]]+KEY'
 # NOTE: auth/session/navigation code lands are ALSO escalation-worthy (operator ruling),
@@ -277,6 +278,12 @@ main_outer() {
     attest_land "n/a" "n/a" "hit" 3
     exit 3
   fi
+
+  # --- P6 gate-batching backstop (T-P7-7) — SURFACE auto-stamped in-class ratifications in the
+  #     landing range for EARLY-VETO. The dual of esc_scan: esc_scan PARKS out-of-class escalation
+  #     surfaces; this only SURFACES in-class auto-ratifications (`Ratified-By: ... pre-signed class`).
+  #     Non-blocking by contract (never changes the exit code) — a review channel, not a gate. ---
+  [[ -x "$GATE_MANIFEST" ]] && "$GATE_MANIFEST" backstop "$RANGE" || true
 
   # --- safety backup ref (rollback point) ---
   git branch -f "ship/backup-$(git rev-parse --short HEAD)" HEAD >/dev/null 2>&1 || true
