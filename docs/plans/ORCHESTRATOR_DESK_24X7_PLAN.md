@@ -423,3 +423,20 @@ that wires their subjects — no gate goes green on capability alone again. Full
   audit doc's line-141 "T-P9-7" (push-permission intent) is a STALE label collision — that meaning was built
   as T-P15-4; the backlog item (source `desk-audit-2026-07-19`) is unambiguously the auto-rollback task. Grep
   the backlog ID's own title, never a same-numbered audit row.
+- 2026-07-19 (desk peer session, Opus@max, /goal-driven — cc-backlog `846380c6308f` under umbrella
+  `e1624e88cac1`) — **shared-gate de-flake: the `cc-run` selftest Test B heartbeat-freshness load-flake
+  KILLED** (branch `feat/desk-ccrun-flake`, RED-first, via `ship-land` — full `bats tests/` **818/818**,
+  content-verified, landed `69f6426`). `cc-run selftest` Test B proved output-keyed freshness with an
+  **absolute age-at-check** (`now − mtime < 1`) that straddles integer-second boundaries under
+  concurrent-suite load → Test B fails → `n_ok=3` → `tests/cc-run.bats:12` reds the **shared `ship-land`
+  gate ~1/3 under load, blocking EVERY desk session's land** (filed during T-P15-7 landing). Fixed with a
+  **start-relative delta** (`beat mtime − command-start t0 ≥ 1`), invariant to check-delay; a
+  `CC_RUN_SELFTEST_CHECK_DELAY` seam (default 0 → no behavior change) injects the delay so the guard is
+  **RED-provable** (old logic + `=2` → `age 2s wanted <1`, `n_ok=3`, exit 1; new logic → green under
+  2s/5s + 5× repeats) + a bats regression pins it. **Learning:** `3b71718` had already fixed the
+  IDENTICAL pattern on the standalone L3-b *bats* test but left a SECOND copy of it inside `bin/cc-run`'s
+  own `selftest` — a fix applied to ONE instance of a defect CLASS while a sibling copy survives (sweep
+  classes, not instances). De-flaking a timing assertion ⇒ grep every copy of the `age_of`/absolute-age
+  idiom. **Discovery filed** (`179006d15e09`): `tests/handoff-fire-completion-push.bats:51`
+  (`--successor <dead pane>` liveness gate) is a SEPARATE load-sensitive shared-gate flake — failed once
+  in the full suite under load, passes in isolation → new mission-ledger item for a future wave (not this scope).
