@@ -18,7 +18,9 @@ setup() {
   export CC_TELEMETRY_DIR="$BATS_TEST_TMPDIR/tel"
   export CLAUDE_CONFIG_DIR="$BATS_TEST_TMPDIR/cfg"
   export CC_WR_T=55 CC_WR_MAX=3 CC_WR_COOLDOWN_S=600 CC_WR_AGE_MAX=180
-  mkdir -p "$CC_TELEMETRY_DIR" "$CC_WR_STATE_DIR"
+  # Hermetic coordination root (S3 wait-contracts / S4 mailbox / S5 teams / cc-roles) — never the real ~/.claude.
+  export CC_WR_COORD_DIR="$BATS_TEST_TMPDIR/coord"; export CC_WR_UUID="DESK-UUID-0001"; export CC_WR_QUIET_S=180
+  mkdir -p "$CC_TELEMETRY_DIR" "$CC_WR_STATE_DIR" "$CC_WR_COORD_DIR/wait-contracts" "$CC_WR_COORD_DIR/mailbox" "$CC_WR_COORD_DIR/cc-roles" "$CLAUDE_CONFIG_DIR/teams"
   # A CLEAN git repo standing in for the desk's monitoring cwd.
   DESK="$BATS_TEST_TMPDIR/desk"; mkdir -p "$DESK"
   git -C "$DESK" init -q
@@ -82,6 +84,64 @@ ROT="Wait, which sessions did I fire again? Let me reconstruct the state."  # st
 @test "safe-hold: external-info blocker (need your secret) → silent even at 70%" {
   mk_tel s3 70
   run drive s3 "$(mk_tx 3 "I can wire the next fire but I need your API key first.")"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+}
+
+# ── (5) SAFE-HOLD on mid-merge + active-coordination (Fable panel S1/S3/S4/S5, 2026-07-19) ─────────
+# helpers: write an OPEN wait-contract / a mailbox line / a team config into the hermetic coord root
+mk_contract() { # $1=id $2=waitee $3=deadline-epoch $4=waiter_pid $5=status
+  jq -nc --arg w "$2" --arg s "${5:-OPEN}" --argjson dl "$3" --argjson wp "$4" \
+    '{id:"c",waiter:"peer",waiter_pid:$wp,waitee:$w,expected_signal:"x",deadline:$dl,status:$s}' \
+    > "$CC_WR_COORD_DIR/wait-contracts/$1.json"; }
+
+@test "S1 sequencer-state: clean tree but MERGE_HEAD present → HOLD even at 70% (mid-merge)" {
+  : > "$DESK/.git/MERGE_HEAD"
+  mk_tel s5a 70
+  run drive s5a "$(mk_tx 5 "$WAIT")"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+}
+@test "S3 inbound-wait: a peer OPEN-blocked on THIS desk (live waiter, future deadline) → HOLD" {
+  mk_contract wc1 "$CC_WR_UUID" "$(( $(date +%s) + 600 ))" "$$" OPEN
+  mk_tel s5b 70
+  run drive s5b "$(mk_tx 5 "$WAIT")"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+}
+@test "S3 negative: the desk's OWN waiter-contract (waitee is a PEER) does NOT hold → fires" {
+  mk_contract wc2 "some-peer-session" "$(( $(date +%s) + 600 ))" "$$" OPEN
+  mk_tel s5c 70
+  run drive s5c "$(mk_tx 5 "$WAIT")"
+  [ "$status" -eq 0 ]; fired "$output"
+}
+@test "S3 zombie: OPEN contract on me but DEAD waiter_pid → not a live block → fires" {
+  mk_contract wc3 "$CC_WR_UUID" "$(( $(date +%s) + 600 ))" 999999 OPEN
+  mk_tel s5d 70
+  run drive s5d "$(mk_tx 5 "$WAIT")"
+  [ "$status" -eq 0 ]; fired "$output"
+}
+@test "S3 past-deadline: OPEN contract on me but deadline PAST → not a live block → fires" {
+  mk_contract wc4 "$CC_WR_UUID" "$(( $(date +%s) - 10 ))" "$$" OPEN
+  mk_tel s5e 70
+  run drive s5e "$(mk_tx 5 "$WAIT")"
+  [ "$status" -eq 0 ]; fired "$output"
+}
+@test "S4 mailbox: a FRESH inbound line for this desk → HOLD (a peer just reached for me)" {
+  : > "$CC_WR_COORD_DIR/mailbox/$CC_WR_UUID.md"
+  mk_tel s5f 70
+  run drive s5f "$(mk_tx 5 "$WAIT")"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+}
+@test "S4 negative: a STALE mailbox (older than QUIET_S) does NOT hold → fires" {
+  local mb="$CC_WR_COORD_DIR/mailbox/$CC_WR_UUID.md"; : > "$mb"
+  touch -t 200001010000 "$mb"                                   # ancient
+  mk_tel s5g 70
+  run drive s5g "$(mk_tx 5 "$WAIT")"
+  [ "$status" -eq 0 ]; fired "$output"
+}
+@test "S5 teammate hard-hold: a team dir created by this SID → HOLD (results route to dying SID)" {
+  mkdir -p "$CLAUDE_CONFIG_DIR/teams/session-s5h1234"
+  echo '{"members":[{"name":"team-lead"},{"name":"worker-1"}]}' > "$CLAUDE_CONFIG_DIR/teams/session-s5h1234/config.json"
+  mk_tel s5h1234 70
+  run drive s5h1234 "$(mk_tx 5 "$WAIT")"
   [ "$status" -eq 0 ]; [ -z "$output" ]
 }
 
