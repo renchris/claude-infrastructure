@@ -7,12 +7,17 @@
 #   Backlog         cc-backlog open items
 #   Decisions       open packets (awaiting early-veto) + class-B defaults fired in the last 24h
 #   Pages           total page stamps + how many the sweep has surfaced (.seen)
-#   Inert-check     the D9 monitor: any hook that abstained 100% over N>=10 recent evals is INERT
-#                   (its check stopped observing what it guards) → an ALARM line (inv7 :120-125).
+#   Inert-check     the D9 monitor: a hook that abstained on ALL of its recent evals (>=N within the
+#                   last H hours) AND fired NONE of them is INERT (its check stopped observing what
+#                   it guards) → an ALARM line. Actor/flood records are excluded BEFORE windowing and
+#                   a fire inside the recency horizon exonerates, so a rarely-firing healthy guard is
+#                   not falsely flagged after a record-flood night (fix e7d326caa6a7, inv7).
 #
 # Env (tests): CC_LAND_LOG · CC_BACKLOG_FILE/CC_BACKLOG_BIN · CC_DECISIONS_DIR · CC_PAGES_DIR
 #   · CC_SWEEP_SEEN_DIR · CC_IDL · CC_DIGESTS_DIR · CC_DIGEST_DATE · CC_DIGEST_IDL_TAIL (default
-#   5000 — the IDL is append-only + large, so the D9 read is BOUNDED, never a full slurp).
+#   5000 — max hook-eval records scanned; the D9 read greps the append-only IDL down to just its
+#   hook-eval records FIRST, so it stays BOUNDED, never a full slurp) · CC_DIGEST_INERT_HORIZON_H
+#   (default 168 = 7d, the last-fired recency window) · CC_DIGEST_INERT_MIN (default 10 evals).
 # BSD+GNU portable, no eval, fail-loud. Exit 0.
 set -uo pipefail
 
@@ -34,6 +39,12 @@ DATE="${CC_DIGEST_DATE:-$(date -u +%Y-%m-%d 2>/dev/null || echo unknown)}"
 NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '')"
 CUTOFF_24H="$(date -u -v-24H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
             || date -u -d '-24 hours' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '')"
+# D9 inert-check recency horizon: a hook that fired at or after INERT_CUTOFF is NOT inert. Empty
+# cutoff (date failure) degrades to all-time — the safe, lenient direction (fewer alarms).
+INERT_HORIZON_H="${CC_DIGEST_INERT_HORIZON_H:-168}"
+INERT_MIN="${CC_DIGEST_INERT_MIN:-10}"
+INERT_CUTOFF="$(date -u -v-"${INERT_HORIZON_H}"H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+             || date -u -d "-${INERT_HORIZON_H} hours" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '')"
 
 # cc-backlog: env override → beside → ~/.claude/bin → PATH.
 resolve_bin() { local o="$1" n="$2" c
@@ -109,20 +120,33 @@ emit() {
     "$total" "$surfaced" "$((total - surfaced))"
 
   printf '## Inert-check alarms (D9)\n\n'
-  # BOUNDED read: tail the append-only IDL, then group by hook. A hook with >=10 recent evals that
-  # abstained on ALL of them is INERT — its tells stopped matching reality (inv7). ALARM per such hook.
+  # A hook is INERT when its tells stopped matching reality: it abstained on ALL its recent evals and
+  # fired NONE of them. Two guards against the record-flood false-positive (a rarely-firing HEALTHY
+  # hook flagged because page/sweep churn crowded a naive global tail, 2026-07-19, e7d326caa6a7):
+  #   (1) actor-record exclusion — grep the append-only IDL to ONLY hook-eval records (they carry
+  #       BOTH "hook" and "disposition"; a tiny fraction of the file) BEFORE windowing, so flood
+  #       records never consume the read budget. jq never slurps the whole IDL.
+  #   (2) last-fired recency horizon — count only evals at/after INERT_CUTOFF; a hook is inert only
+  #       if it made >=INERT_MIN such evals and fired none. A fire in-horizon exonerates it
+  #       (completion-assert fired 03:08Z the night it was falsely flagged). jq `>=` on ISO-Z
+  #       (fixed-width, UTC) timestamps is a lexicographic string compare == a correct time compare.
+  # This block is kept in lockstep with cc-discover's critic_wiring_inert (same predicate).
   local alarms=""
   if [ -f "$IDL" ]; then
-    alarms="$(tail -n "$IDL_TAIL" "$IDL" 2>/dev/null | jq -rs '
-      map(select(type=="object" and .hook and .disposition))
+    alarms="$(grep -F '"disposition"' "$IDL" 2>/dev/null | grep -F '"hook"' | tail -n "$IDL_TAIL" \
+      | jq -rs --arg cutoff "$INERT_CUTOFF" --argjson n "$INERT_MIN" '
+      map(select(type=="object" and .hook and .disposition and .ts))
       | group_by(.hook)
-      | map({hook: .[0].hook, total: length,
-             abstained: (map(select(.disposition=="abstained")) | length)})
-      | .[] | select(.total >= 10 and .abstained == .total)
-      | "ALARM: hook \(.hook) abstained \(.abstained)/\(.total) (100%) — INERT check: its tells stopped matching reality"
+      | map({hook: .[0].hook,
+             recent:     (map(select(.ts >= $cutoff)) | length),
+             abstained:  (map(select(.ts >= $cutoff and .disposition=="abstained")) | length),
+             fired:      (map(select(.ts >= $cutoff and .disposition!="abstained")) | length),
+             last_fired: (map(select(.disposition!="abstained")) | if length>0 then max_by(.ts).ts else null end)})
+      | .[] | select(.fired == 0 and .abstained >= $n)
+      | "ALARM: hook \(.hook) abstained \(.abstained)/\(.recent) (100%) in the recency window, never fired — INERT check: its tells stopped matching reality (last fired: \(.last_fired // "never"))"
     ' 2>/dev/null || true)"
   fi
-  if [ -n "$alarms" ]; then printf '%s\n' "$alarms"; else printf '_no inert checks — all guards fired at least once in-window_\n'; fi
+  if [ -n "$alarms" ]; then printf '%s\n' "$alarms"; else printf '_no inert checks — every guard fired in-horizon or has too few recent evals_\n'; fi
   printf '\n_generated %s_\n' "$NOW"
 }
 

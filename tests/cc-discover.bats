@@ -93,8 +93,10 @@ EOF
 }
 
 # ── C3 wiring-inert (CLI-level) ──────────────────────────────────────────────
+# Every seed carries .ts, as every real IDL record does — the recency horizon reads it.
 @test "C3 wiring-inert: a hook abstained 11/11 (N>=10, 100%) → 1 wiring-inert add" {
-  for _ in $(seq 1 11); do printf '{"hook":"stale-guard","disposition":"abstained"}\n'; done > "$C/seed.jsonl"
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  for _ in $(seq 1 11); do printf '{"hook":"stale-guard","disposition":"abstained","ts":"%s"}\n' "$now"; done > "$C/seed.jsonl"
   export CC_DISCOVER_IDL="$C/seed.jsonl"
   run "$CD" --once
   [ "$status" -eq 0 ]
@@ -102,18 +104,41 @@ EOF
 }
 
 @test "C3 wiring-inert: a hook below the N>=10 window does NOT add" {
-  for _ in $(seq 1 5); do printf '{"hook":"g","disposition":"abstained"}\n'; done > "$C/seed.jsonl"
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  for _ in $(seq 1 5); do printf '{"hook":"g","disposition":"abstained","ts":"%s"}\n' "$now"; done > "$C/seed.jsonl"
   export CC_DISCOVER_IDL="$C/seed.jsonl"
   run "$CD" --once
   [ "$(count_src wiring-inert)" -eq 0 ]
 }
 
-@test "C3 wiring-inert: a hook that ever fired is NOT inert → 0 adds" {
-  { for _ in $(seq 1 10); do printf '{"hook":"g","disposition":"abstained"}\n'; done
-    printf '{"hook":"g","disposition":"fired"}\n'; } > "$C/seed.jsonl"
+@test "C3 wiring-inert: a hook that fired in-horizon is NOT inert → 0 adds" {
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  { for _ in $(seq 1 10); do printf '{"hook":"g","disposition":"abstained","ts":"%s"}\n' "$now"; done
+    printf '{"hook":"g","disposition":"fired","ts":"%s"}\n' "$now"; } > "$C/seed.jsonl"
   export CC_DISCOVER_IDL="$C/seed.jsonl"
   run "$CD" --once
   [ "$(count_src wiring-inert)" -eq 0 ]
+}
+
+# Regression (e7d326caa6a7): a record-flood night must not false-flag a rare hook that fired that
+# night. The fire is buried first, then a 6000-record flood (> the 5000 tail) that a naive global
+# tail would let crowd the fire out of view; the fix greps to hook-eval records + exonerates in-horizon fires.
+@test "C3 wiring-inert: record-flood does NOT false-flag a rare hook that fired in-horizon (regression: e7d326caa6a7)" {
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  fired="$(date -u -v-2H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '-2 hours' +%Y-%m-%dT%H:%M:%SZ)"
+  {
+    printf '{"hook":"rare-guard","disposition":"fired","ts":"%s"}\n' "$fired"
+    for _ in $(seq 1 6000); do printf '{"actor":"pager","kind":"page","ts":"%s"}\n' "$now"; done
+    for _ in $(seq 1 12); do printf '{"hook":"rare-guard","disposition":"abstained","ts":"%s"}\n' "$now"; done
+    for _ in $(seq 1 12); do printf '{"hook":"dead-guard","disposition":"abstained","ts":"%s"}\n' "$now"; done
+  } > "$C/seed.jsonl"
+  export CC_DISCOVER_IDL="$C/seed.jsonl"
+  run "$CD" --once
+  [ "$status" -eq 0 ]
+  # dead-guard (never fired) is added; rare-guard (fired in-horizon) is not
+  [ "$(count_src wiring-inert)" -eq 1 ]
+  grep -q 'inert hook dead-guard' "$CC_BACKLOG_FILE"
+  ! grep -q 'rare-guard' "$CC_BACKLOG_FILE"
 }
 
 # ── C4 gate-red (CLI-level) ──────────────────────────────────────────────────

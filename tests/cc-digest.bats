@@ -76,9 +76,11 @@ setup() {
 }
 
 # ── D9 inert-check monitor (RED-proven) ────────────────────────────────────────
+# Every seed carries .ts, as every real IDL record does — the recency horizon reads it.
 @test "D9: a hook that abstained 12/12 (100%, N>=10) raises an ALARM line" {
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   for i in $(seq 1 12); do
-    printf '{"hook":"stale-guard","disposition":"abstained","reason":"no-tell"}\n' >> "$CC_IDL"
+    printf '{"hook":"stale-guard","disposition":"abstained","reason":"no-tell","ts":"%s"}\n' "$now" >> "$CC_IDL"
   done
   run bash "$DIGEST"
   echo "$output" | grep -qi "ALARM"
@@ -87,21 +89,45 @@ setup() {
 }
 
 @test "D9: a hook that sometimes fires does NOT alarm" {
-  for i in $(seq 1 10); do printf '{"hook":"healthy-guard","disposition":"abstained"}\n' >> "$CC_IDL"; done
-  printf '{"hook":"healthy-guard","disposition":"fired"}\n' >> "$CC_IDL"
-  printf '{"hook":"healthy-guard","disposition":"fired"}\n' >> "$CC_IDL"
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  for i in $(seq 1 10); do printf '{"hook":"healthy-guard","disposition":"abstained","ts":"%s"}\n' "$now" >> "$CC_IDL"; done
+  printf '{"hook":"healthy-guard","disposition":"fired","ts":"%s"}\n' "$now" >> "$CC_IDL"
+  printf '{"hook":"healthy-guard","disposition":"fired","ts":"%s"}\n' "$now" >> "$CC_IDL"
   run bash "$DIGEST"
   ! echo "$output" | grep -q "healthy-guard"
 }
 
 @test "D9: a hook with fewer than 10 evals does NOT alarm (below the window)" {
-  for i in $(seq 1 5); do printf '{"hook":"quiet-guard","disposition":"abstained"}\n' >> "$CC_IDL"; done
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  for i in $(seq 1 5); do printf '{"hook":"quiet-guard","disposition":"abstained","ts":"%s"}\n' "$now" >> "$CC_IDL"; done
   run bash "$DIGEST"
   ! echo "$output" | grep -q "quiet-guard"
 }
 
 @test "D9: a healthy 'no alarms' line appears when nothing is inert" {
-  printf '{"hook":"g","disposition":"fired"}\n' >> "$CC_IDL"
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  printf '{"hook":"g","disposition":"fired","ts":"%s"}\n' "$now" >> "$CC_IDL"
   run bash "$DIGEST"
   echo "$output" | grep -qiE "no inert|none|no alarm|healthy"
+}
+
+# The bug this fixes (e7d326caa6a7): a record-flood night (page/sweep churn) crowds a naive global
+# tail so a rarely-firing HEALTHY hook that DID fire that night is flagged inert. The fire is buried
+# FIRST, then 6000 flood records (> the 5000 tail) push it out of a global tail, leaving only
+# abstentions in view. The fix greps to hook-eval records first and exonerates any fire in-horizon.
+@test "D9: record-flood does NOT false-flag a rare hook that fired in-horizon (regression: e7d326caa6a7)" {
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  fired="$(date -u -v-2H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '-2 hours' +%Y-%m-%dT%H:%M:%SZ)"
+  {   # one open, not 6000 — grouped redirection keeps the gate fast
+    printf '{"hook":"rare-guard","disposition":"fired","ts":"%s"}\n' "$fired"
+    for i in $(seq 1 6000); do printf '{"actor":"pager","kind":"page","ts":"%s"}\n' "$now"; done
+    for i in $(seq 1 12); do printf '{"hook":"rare-guard","disposition":"abstained","ts":"%s"}\n' "$now"; done
+    for i in $(seq 1 12); do printf '{"hook":"dead-guard","disposition":"abstained","ts":"%s"}\n' "$now"; done
+  } >> "$CC_IDL"
+  run bash "$DIGEST"
+  [ "$status" -eq 0 ]
+  # the false positive being fixed: rare-guard fired in-horizon → NOT flagged
+  ! echo "$output" | grep -q "rare-guard"
+  # the check still works despite the flood: dead-guard never fired → still flagged
+  echo "$output" | grep -q "dead-guard"
 }
