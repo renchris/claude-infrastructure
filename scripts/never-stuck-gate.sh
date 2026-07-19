@@ -119,7 +119,7 @@ run_leg4() {
   echo
   echo "LEG 4 — runtime inventory (READ-ONLY; activation is the operator's hand — never a failure here):"
   local t
-  for t in cc-wait cc-run cc-announce cc-deathwatch-kqueue cc-sessions cc-context cc-board cc-bind cc-teardown cc-respawn cc-route; do
+  for t in cc-wait cc-run cc-announce cc-deathwatch-kqueue cc-sessions cc-context cc-board cc-value cc-bind cc-teardown cc-respawn cc-route; do
     if [ -L "$HOME/.claude/bin/$t" ] && [ -e "$HOME/.claude/bin/$t" ]; then
       case "$(readlink "$HOME/.claude/bin/$t")" in
         *claude-infrastructure*) info "ACTIVE" "$t → symlinked live into the repo" ;;

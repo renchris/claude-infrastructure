@@ -6,6 +6,8 @@
 # primitive is checked with a POSITIVE and (where it matters) an ANTI-TRIGGER fixture —
 # both marquee W0-W3 rescues were OVER-firing, so "proves it fires" is not enough
 # (audit §3b/§3c). Run from the repo root. Exits nonzero on any failure (a gate).
+# shellcheck disable=SC2015  # `check && ok || no` is the file idiom; ok/no always return 0, so C runs only when A is false (the intent)
+# shellcheck disable=SC2034  # `for i in $(seq N)` repeat-loops intentionally do not use the counter
 set -u
 cd "$(dirname "$0")/.." || exit 2
 SL=./statusline.sh CC=./bin/cc-context BOARD=./bin/cc-board
@@ -101,6 +103,47 @@ kill $BLIVE 2>/dev/null
 echo "$b" | grep -q 'self.*next2.*OK'  && ok "OK state + join" || no "OK"
 echo "$b" | grep -q 'place next →'     && ok "rank footer"    || no "footer"
 rm -rf "$QSTUB"
+
+# ── T8: value ledger (T-P14-7 / T-P8-5) — cc-value engine + cc-board surfacing ─────────────────
+echo "T8 value ledger: cc-value engine + cc-board VALUE column/footer + net-negative churn"
+# (a) authoritative, hermetic engine guard — 15 RED-provable value/attribution/churn/cache contracts.
+if bash ./bin/cc-value selftest >/dev/null 2>&1; then ok "cc-value selftest (15 contracts)"; else no "cc-value selftest"; fi
+# fixtures: one in-window commit + one done task ⇒ a deterministic "value 2 = 1c…+1t" footer. A
+# throwaway cache with TTL 0 forces a fresh compute, and CC_VALUE_REPOS pins the scan to the fixture
+# (never the real fleet). Empty telemetry ⇒ cc-board prints header + footer only (fully determinate).
+V8=$(mktemp -d); VLREPO="$V8/repo"
+git init -q "$VLREPO"; git -C "$VLREPO" config user.email t@t; git -C "$VLREPO" config user.name t
+GIT_AUTHOR_DATE="@$((now-200000))" GIT_COMMITTER_DATE="@$((now-200000))" git -C "$VLREPO" commit -q --allow-empty -m ancient
+GIT_AUTHOR_DATE="@$((now-600))" GIT_COMMITTER_DATE="@$((now-600))" git -C "$VLREPO" commit -q --allow-empty -m recent
+git -C "$VLREPO" update-ref refs/remotes/origin/main "$(git -C "$VLREPO" rev-parse HEAD)"
+VLBL="$V8/bl.jsonl"; printf '{"id":"a","event":"done","ts":"%s"}\n' \
+  "$(date -u -r $((now-600)) +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d @$((now-600)) +%Y-%m-%dT%H:%M:%SZ)" > "$VLBL"
+QS8=$(mktemp -d); cat > "$QS8/claude-accounts" <<'SH'
+#!/bin/bash
+case "$*" in *--rank*) printf 'next\n';; *) printf '%s\n' '{"rows":[{"acct":"next","session_pct":20,"weekly_pct":10,"fable_pct":10}]}';; esac
+SH
+chmod +x "$QS8/claude-accounts"
+B8=$(mktemp -d)   # empty telemetry ⇒ header + footer, no session rows
+vb=$(PATH="$QS8:$PATH" CC_TELEMETRY_DIR="$B8" CC_VALUE_REPOS="$VLREPO" CC_BACKLOG_FILE="$VLBL" \
+     CC_VALUE_CACHE="$V8/c1.json" CC_VALUE_CACHE_TTL=0 CC_VALUE_CHURN_MIN_PCT=1 bash "$BOARD" 2>/dev/null)
+echo "$vb" | head -1 | grep -q 'VAL'      && ok "cc-board VAL column header"          || no "VAL header"
+echo "$vb" | grep -q '── value 2 = 1c'    && ok "cc-board fleet value footer (1c+1t)" || no "value footer"
+# (c) the net-negative CHURN detector surfaces on cc-board: one ACTIVE session spending, 0 value
+# landed ⇒ the FLEET CHURN line. Isolated telemetry so exactly one active session is in view.
+C8=$(mktemp -d); sleep 300 & CPID=$!
+# write the active-session telemetry directly ($C8, not $SB — mk hardcodes $SB) with the fields
+# cc-value reads: session_id, config_dir, cwd, used_pct, pid (alive), ts (fresh).
+jq -nc --arg ts "$now" --arg pid "$CPID" \
+  '{ts:($ts|tonumber),session_id:"churnsess",cwd:"/wv",config_dir:"/Users/chrisren/.claude-next",used_pct:20,pid:($pid|tonumber)}' \
+  > "$C8/churnsess.json"
+EMPTYR="$V8/empty"; git init -q "$EMPTYR"; git -C "$EMPTYR" config user.email t@t; git -C "$EMPTYR" config user.name t
+GIT_AUTHOR_DATE="@$((now-200000))" GIT_COMMITTER_DATE="@$((now-200000))" git -C "$EMPTYR" commit -q --allow-empty -m ancient
+git -C "$EMPTYR" update-ref refs/remotes/origin/main "$(git -C "$EMPTYR" rev-parse HEAD)"
+cb=$(PATH="$QS8:$PATH" CC_TELEMETRY_DIR="$C8" CC_VALUE_REPOS="$EMPTYR" CC_BACKLOG_FILE="$V8/none" \
+     CC_VALUE_CACHE="$V8/c2.json" CC_VALUE_CACHE_TTL=0 CC_VALUE_CHURN_MIN_PCT=1 bash "$BOARD" 2>/dev/null)
+kill $CPID 2>/dev/null
+echo "$cb" | grep -q 'FLEET CHURN'  && ok "cc-board net-negative churn callout" || no "churn callout"
+rm -rf "$V8" "$QS8" "$B8" "$C8"
 
 rm -rf "$SB"
 echo ""

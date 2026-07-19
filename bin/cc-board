@@ -36,8 +36,43 @@ qrow() {  # $1=acct → "5h<TAB>wk<TAB>fable"  (or "?\t?\t?")
   [ -n "$r" ] && printf '%s' "$r" || printf '?\t?\t?'
 }
 
+# ── value ledger (T-P14-7 / T-P8-5): a per-session VALUE column + a fleet/per-account footer, read
+# from cc-value's TTL cache so the render stays instant (warm) and pays the ~1s scan only ~1/min.
+# The ledger is AUXILIARY — every read is guarded (+ a `timeout` cap when available) so cc-board
+# renders exactly as before if cc-value is missing/slow: VAL shows "-" and the footer is dropped.
+# resolve cc-value next to the REAL cc-board, following a one-level deploy symlink
+# (~/.claude/bin/cc-board → repo/bin/cc-board) so the ledger is found whether cc-board runs from
+# the repo or via its deployed symlink — no separate ~/.claude/bin/cc-value symlink required.
+_cbsrc="$0"
+if [ -L "$_cbsrc" ]; then
+  _tgt="$(readlink "$_cbsrc")"
+  case "$_tgt" in /*) _cbsrc="$_tgt" ;; *) _cbsrc="$(dirname "$_cbsrc")/$_tgt" ;; esac
+fi
+CCVAL_BIN="$(cd "$(dirname "$_cbsrc")" 2>/dev/null && pwd)/cc-value"; CCVAL_JSON=""; VALFILE=""
+if [ -x "$CCVAL_BIN" ]; then
+  if command -v timeout >/dev/null 2>&1; then
+    CCVAL_JSON="$(CC_ACCTS_JSON="$ACCTS_JSON" timeout 12 "$CCVAL_BIN" --cached --json 2>/dev/null || true)"
+  else
+    CCVAL_JSON="$(CC_ACCTS_JSON="$ACCTS_JSON" "$CCVAL_BIN" --cached --json 2>/dev/null || true)"
+  fi
+  printf '%s' "$CCVAL_JSON" | jq -e '.sessions' >/dev/null 2>&1 || CCVAL_JSON=""
+fi
+if [ -n "$CCVAL_JSON" ]; then
+  VALFILE="$(mktemp "${TMPDIR:-/tmp}/cc-board-val.XXXXXX" 2>/dev/null)" \
+    && printf '%s' "$CCVAL_JSON" | jq -r '.sessions[]|"\(.sid) \(.commits//0)"' > "$VALFILE" 2>/dev/null
+fi
+# val_cell <full-sid> → "+Nc" when the session has attributed landed commits, else "-" (bash-3.2 safe:
+# temp-file + awk, no associative arrays; ASCII "-" keeps the following CWD column byte-aligned).
+val_cell() {
+  local n=0
+  [ -n "$VALFILE" ] && [ -f "$VALFILE" ] && n="$(awk -v s="$1" '$1==s{print $2; exit}' "$VALFILE" 2>/dev/null)"
+  case "$n" in ''|*[!0-9]*) n=0 ;; esac
+  if [ "$n" -gt 0 ] 2>/dev/null; then printf '+%sc' "$n"; else printf '%s' '-'; fi
+}
+
 now=$(date +%s)
-printf "%-9s %-5s %-5s %-6s %-4s %-4s %-6s %-7s %s\n" SESSION AGE CTX ACCT 5h WK FABLE STATE CWD
+printf "%-9s %-5s %-5s %-6s %-4s %-4s %-6s %-7s %-4s %s\n" SESSION AGE CTX ACCT 5h WK FABLE STATE VAL CWD
+# shellcheck disable=SC2045  # `ls -t` is intentional: newest-telemetry-first ordering (a glob cannot sort by mtime); filenames are session-ids, no whitespace
 for f in $(ls -t "$TDIR"/*.json 2>/dev/null); do
   # \037 (unit separator), NOT @tsv: tab is IFS-WHITESPACE, so `IFS=$'\t' read` collapses runs of
   # tabs and a single empty field (an empty config_dir) shifts every later field left — which would
@@ -64,8 +99,8 @@ for f in $(ls -t "$TDIR"/*.json 2>/dev/null); do
   elif [ "$age" -gt "$STALE_S" ]; then
     if [ -n "$pid" ]; then state="STALL?"; else state=STALE; fi
   fi
-  printf "%-9s %-5s %-5s %-6s %-4s %-4s %-6s %-7s %s\n" \
-    "${sid:0:8}" "$astr" "${used}%" "${acct:-?}" "${a5}%" "${awk_}%" "${afb}%" "$state" "$cwd"
+  printf "%-9s %-5s %-5s %-6s %-4s %-4s %-6s %-7s %-4s %s\n" \
+    "${sid:0:8}" "$astr" "${used}%" "${acct:-?}" "${a5}%" "${awk_}%" "${afb}%" "$state" "$(val_cell "$sid")" "$cwd"
 done
 # --- P8 JOIN: registry x telemetry -> make the SILENT ABSENCE loud -----------------------------
 # cc-board's spine is the telemetry FILES, so a pane that never rendered has no row at all: ABSENT,
@@ -90,8 +125,8 @@ if [ -d "$REG_DIR" ]; then
     [ "${rstart:-0}" -gt 0 ] && [ "$ragen" -lt "$GRACE_S" ] && continue   # still starting up
     if [ -n "$rpid" ] && ! kill -0 "$rpid" 2>/dev/null; then rstate="DIED-UNRENDERED"; else rstate="NO-RENDER?"; fi
     if   [ "$ragen" -lt 7200 ]; then rastr="$((ragen/60))m"; else rastr="$((ragen/3600))h"; fi
-    printf "%-9s %-5s %-5s %-6s %-4s %-4s %-6s %-7s %s\n" \
-      "${rsid:0:8}" "$rastr" "--" "?" "?%" "?%" "?%" "$rstate" "$rcwd ($rname)"
+    printf "%-9s %-5s %-5s %-6s %-4s %-4s %-6s %-7s %-4s %s\n" \
+      "${rsid:0:8}" "$rastr" "--" "?" "?%" "?%" "?%" "$rstate" "-" "$rcwd ($rname)"
   done
 fi
 
@@ -99,3 +134,19 @@ if [ -n "$ACCTS_JSON" ]; then
   nxt=$(claude-accounts --rank general 2>/dev/null | head -3 | awk '{printf "%s ", $1}')
   [ -n "$nxt" ] && echo "── place next → ${nxt}──"
 fi
+
+# ── value-ledger footer (T-P14-7 / T-P8-5): the fleet {commits + tasks} ÷ spend rollup + the
+# net-negative churn callout — the single "is the fleet earning its quota, or burning it?" line the
+# desk previously had no way to see. Drawn from the same cc-value JSON; skipped if unavailable.
+if [ -n "$CCVAL_JSON" ]; then
+  printf '%s' "$CCVAL_JSON" | jq -r '
+    .window_h as $w | (.fleet | "── value \(.value) = \(.commits)c"
+       + (if .commits_unattributed>0 then "(\(.commits_unattributed)u)" else "" end)
+       + " + \(.tasks)t  ·  spend ~\(.spend_pct)% (\(.active_sessions) active · \($w)h)"
+       + (if .ratio!=null then "  ·  v/spend \(.ratio)" else "" end)
+       + (if .churn then "   ⚠ FLEET CHURN — spend, 0 landed ──" else " ──" end)),
+    ( [ .accounts[] | select(.churn) | "\(.acct) \(.session_pct // "?")%" ] as $ch
+      | if ($ch|length)>0 then "   ⚠ net-negative: " + ($ch|join(" · ")) + " — spending, 0 landed" else empty end)
+  ' 2>/dev/null
+fi
+[ -n "$VALFILE" ] && rm -f "$VALFILE" 2>/dev/null

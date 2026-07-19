@@ -77,7 +77,7 @@ fi
 echo
 echo "== 2/4 symlinks + role map =="
 for t in cc-wait cc-deathwatch-kqueue cc-run cc-announce cc-respawn cc-route cc-teardown cc-teardown-safety-gate.sh \
-         cc-bind cc-board cc-context cc-sessions cc-notify cc-await-ping \
+         cc-bind cc-board cc-value cc-context cc-sessions cc-notify cc-await-ping \
          desk-assert cc-backlog cc-decide cc-digest \
          cc-wave-plan cc-dispatch cc-discover; do   # Cycle-2 self-originating spine (dispatcher/discovery)
   ln -sf "$REPO/bin/$t" "$BIN/$t" && echo "  linked $t"
