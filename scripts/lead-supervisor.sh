@@ -42,6 +42,7 @@ IDL="${CC_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
 SUPLOG="${CC_SUPERVISOR_LOG:-$HOME/.claude/autonomy/supervisor.log}"
 PAGEDIR="${CC_SUPERVISOR_PAGEDIR:-$HOME/.claude/autonomy/pages}"
 PAGE_TO="${CC_PAGE_TO:-}"                              # operator/desk pane uuid for cc-notify pages (best-effort)
+PAGE_TO_FILE="${CC_PAGE_TO_FILE:-$HOME/.claude/cc-roles/desk}"   # fallback: live desk role file (CC_PAGE_TO wins; /dev/null disables)
 
 now(){ date +%s; }
 utc(){ date -u +%Y-%m-%dT%H:%M:%SZ; }
@@ -63,8 +64,12 @@ page(){ # $1=sid $2=state $3=detail
   local pf="$PAGEDIR/$1.page"
   [ -f "$pf" ] || printf '%s\n' "$(now)" > "$pf"           # stamp the deadline clock on first page only
   idl page "\"sid\":\"$1\",\"state\":\"$2\",\"detail\":\"$3\""
-  if [ -n "$PAGE_TO" ] && command -v cc-notify >/dev/null 2>&1; then
-    cc-notify "$PAGE_TO" "⚠️ SUPERVISOR PAGE — session $1 is $2: $3 (operator/delegated-live-session recovers; supervisor never auto-acts)" >/dev/null 2>&1 || true
+  # target resolves per page, not at startup: an empty CC_PAGE_TO falls back to the desk role file,
+  # so a pane rebind (role-file rewrite) redirects pages with no plist edit and no daemon restart
+  local target="$PAGE_TO"
+  [ -n "$target" ] || target="$(cat "$PAGE_TO_FILE" 2>/dev/null || true)"
+  if [ -n "$target" ] && command -v cc-notify >/dev/null 2>&1; then
+    cc-notify "$target" "⚠️ SUPERVISOR PAGE — session $1 is $2: $3 (operator/delegated-live-session recovers; supervisor never auto-acts)" >/dev/null 2>&1 || true
   fi
 }
 clear_page(){ rm -f "$PAGEDIR/$1.page" 2>/dev/null || true; }
