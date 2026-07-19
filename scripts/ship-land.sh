@@ -166,6 +166,13 @@ main_locked() {
     exit 6
   fi
 
+  # P0-1 gate-green producer: the gate ran GREEN on HEAD, so mark it — boundary-handoff.sh:122 fires its
+  # "handoff before auto-compact eats the DoD" advisory only when gate-green == HEAD on a clean tree.
+  # Before this, the sole gate-green writers were test fixtures, so boundary abstained 100% in production
+  # (the FM1(b) advisory sat inert). Path matches wrap-ledger.sh:79 + boundary-handoff.sh:118 (readers).
+  # Fires on the green path for BOTH --dry-run (proven-green, unpushed) and a real land.
+  git rev-parse HEAD > "$(git rev-parse --git-common-dir)/gate-green" 2>/dev/null || true
+
   if [[ "$DRY_RUN" = "1" ]]; then
     echo "→ ship-land --dry-run: reconciled onto origin/$TRUNK + gate GREEN; STOPPING before push."
     echo "  would push HEAD ($(git rev-parse --short HEAD)) → origin/$TRUNK:"

@@ -148,3 +148,28 @@ on_branch_with() {  # $1=branch $2=file $3=content  → commit a change on a fre
   [ "$status" -eq 0 ]
   echo "$output" | grep -qi "nothing to land"
 }
+
+@test "P0-1 gate-green producer: green gate writes gate-green==HEAD; red gate does not" {
+  # boundary-handoff.sh:122 fires its advisory only when gate-green == HEAD on a clean tree.
+  # Before P0-1, the only gate-green writers were test fixtures, so boundary abstained 100% in prod.
+  gc="$(git rev-parse --git-common-dir)"
+  rm -f "$gc/gate-green"
+
+  # green gate via --dry-run (runs the gate, no push) → producer stamps gate-green with HEAD
+  git checkout -q -b feat/gg main
+  printf '#!/usr/bin/env bash\necho ok\n' > gg.sh
+  git add gg.sh && git commit -q -m "feat: gg"
+  run bash "$SHIPLAND" --trunk main --dry-run
+  [ "$status" -eq 0 ]
+  [ -f "$gc/gate-green" ]
+  [ "$(cat "$gc/gate-green")" = "$(git rev-parse HEAD)" ]   # producer wrote the proven-green HEAD
+
+  # red gate → the red HEAD must NEVER be marked green (gate-green must not advance to it)
+  git checkout -q -b feat/gg-red main
+  printf '#!/usr/bin/env bash\ncd /tmp/nope\necho ok\n' > bad-gg.sh   # SC2164 → shellcheck RED
+  git add bad-gg.sh && git commit -q -m "feat: bad-gg"
+  redhead="$(git rev-parse HEAD)"
+  run bash "$SHIPLAND" --trunk main --dry-run
+  [ "$status" -eq 6 ]
+  [ "$(cat "$gc/gate-green" 2>/dev/null || echo none)" != "$redhead" ]   # unproven tree never green
+}
