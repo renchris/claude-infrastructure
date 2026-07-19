@@ -38,7 +38,7 @@ SH
 
   FRONTMOST_MARK="$BATS_TEST_TMPDIR/frontmost"; rm -f "$FRONTMOST_MARK"
   LAND_MARK="$BATS_TEST_TMPDIR/land";           rm -f "$LAND_MARK"
-  spawn_frontmost() { echo win > "$FRONTMOST_MARK"; }
+  spawn_frontmost() { echo win > "$FRONTMOST_MARK"; echo WINPANE; }   # marker + echoes the new id
   it2_land()        { echo "$1" > "$LAND_MARK"; return 0; }
   as_tab()          { echo NOTFOUND; }                   # per-test override
   CMD="echo test"
@@ -87,19 +87,32 @@ SH
   [[ "$output" == *"REFUSING to fire"* ]]
 }
 
-@test "spawn --window DOES use the fresh-window path (the one legitimate frontmost caller)" {
+@test "spawn --window creates via spawn_frontmost then verified-types via it2_land" {
   FIRING_SID=GOOD; SURFACE=window
   run spawn
   [ "$status" -eq 0 ]
-  [ -f "$FRONTMOST_MARK" ]
+  [ -f "$FRONTMOST_MARK" ]                 # the fresh-window path ran (the one legitimate frontmost caller)
+  [ -f "$LAND_MARK" ]                      # …and the command was TYPED via it2_land (it2_type_verified)
+  [ "$(cat "$LAND_MARK")" = WINPANE ]      #    with the new window's session id — never osascript write text
 }
 
-@test "spawn tab with a live window lands via as_tab, never frontmost" {
+@test "REGRESSION: --window with an uncreatable window FAILS LOUD — nothing launched" {
+  spawn_frontmost() { echo win > "$FRONTMOST_MARK"; }   # created marker but echoes NO id (osascript failed)
+  FIRING_SID=GOOD; SURFACE=window
+  run spawn
+  [ "$status" -ne 0 ]
+  [ ! -f "$LAND_MARK" ]                    # never typed into a window that could not be created
+  [[ "$output" == *"nothing launched"* ]]
+}
+
+@test "spawn tab creates via as_tab then verified-types via it2_land, never frontmost" {
   as_tab() { echo "OK TABPANE"; }
   FIRING_SID=GOOD; SURFACE=tab
   run spawn
   [ "$status" -eq 0 ]
   [ ! -f "$FRONTMOST_MARK" ]
+  [ -f "$LAND_MARK" ]                      # typed via it2_land (it2_type_verified), not osascript write text
+  [ "$(cat "$LAND_MARK")" = TABPANE ]      #   with the tab's session id
 }
 
 @test "REGRESSION: tab with a dead window FAILS LOUD — no frontmost window" {
