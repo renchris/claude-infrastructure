@@ -420,3 +420,16 @@ setup_stage2() { export CC_WR_GRACE_S=0; export CC_WR_FIRE_DIR="$BATS_TEST_TMPDI
   run bash -c '( cd "$1" && bash "$2" status ) | grep -c "GLOBAL KILL"' _ "$DESK" "$HOOK"
   [ "$output" -eq 0 ]
 }
+
+# ── RED-prove (cc-backlog 666c6a64c45e): a " / backslash in a logged field must never emit a
+#    MALFORMED IDL line — one aborts the cc-audit four-zeros `jq -rs` slurp (⇒ D9/alarm silent-GREEN,
+#    defeating the un-gameable detector). jq-encoding fixes it. A bad cwd hits the no-cwd abstain so
+#    log_idl runs with SID carrying the injected chars. FAILS on the old raw-%s emit, PASSES now. ──
+@test "IDL: a quote/backslash-bearing session_id yields a strict-slurp-parseable, lossless line" {
+  local input; input="$(jq -nc '{session_id:"s\"q\\z",cwd:"/no/such/dir"}')"   # bad cwd ⇒ abstain no-cwd logs
+  run bash -c 'printf "%s" "$1" | bash "$2"' _ "$input" "$HOOK"
+  [ "$status" -eq 0 ]
+  run jq -s '.' "$CC_WR_IDL"
+  [ "$status" -eq 0 ]
+  jq -e 'select(.sid=="s\"q\\z")' "$CC_WR_IDL" >/dev/null
+}

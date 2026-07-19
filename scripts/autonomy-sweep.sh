@@ -109,15 +109,22 @@ total_new=$((new_pages + new_alarms + new_pushfailed + open_decisions + fired_de
 # ── age-compact the .seen markers (never the source records — inv7) ──
 find "$SEEN_DIR" -type f -mtime +"$SEEN_TTL" -delete 2>/dev/null || true
 
-log_idl() { # <disposition> <extra-json>
+log_idl() { # <disposition> <extra JSON OBJECT (optional, jq-built {…}; default {})>
   mkdir -p "$(dirname "$IDL")" 2>/dev/null || true
-  printf '{"ts":"%s","tool":"autonomy-sweep","disposition":"%s","new_pages":%d,"new_alarms":%d,"new_pushfailed":%d,"open_decisions":%d,"fired_defaults":%d%s}\n' \
-    "$(now_iso)" "$1" "$new_pages" "$new_alarms" "$new_pushfailed" "$open_decisions" "$fired_defaults" "${2:-}" \
+  local extra="${2:-}"; [ -n "$extra" ] || extra='{}'
+  # jq-encode EVERY field (numerics via --argjson, strings via --arg): a value carrying a " /
+  # backslash / newline then can NEVER emit a malformed IDL line — one malformed line aborts the
+  # cc-audit four-zeros `jq -rs` slurp (reads as "no records" ⇒ silent D9/alarm false-GREEN).
+  jq -cn --arg ts "$(now_iso)" --arg disp "$1" \
+    --argjson np "$new_pages" --argjson na "$new_alarms" --argjson npf "$new_pushfailed" \
+    --argjson od "$open_decisions" --argjson fd "$fired_defaults" --argjson extra "$extra" \
+    '{ts:$ts,tool:"autonomy-sweep",disposition:$disp,new_pages:$np,new_alarms:$na,
+      new_pushfailed:$npf,open_decisions:$od,fired_defaults:$fd} + $extra' \
     >> "$IDL" 2>/dev/null || true
 }
 
 if [ "$total_new" -eq 0 ]; then
-  log_idl abstained ',"reason":"nothing-new"'
+  log_idl abstained '{"reason":"nothing-new"}'
   exit 0
 fi
 
@@ -137,11 +144,11 @@ if [ -n "$DESK_TARGET" ] && [ -n "$NOTIFY" ]; then
   "$NOTIFY" "$DESK_TARGET" "$summary" >/dev/null 2>&1 || true
   # delivered (cc-notify's mailbox fallback makes this durable) → mark the surfaced records seen.
   printf '%s' "$SURFACED" | while IFS= read -r rec; do [ -n "$rec" ] && mark_seen "$rec"; done
-  log_idl fired ",\"notified\":\"${DESK_TARGET}\",\"summary\":\"${summary//\"/}\""
+  log_idl fired "$(jq -cn --arg notified "$DESK_TARGET" --arg summary "$summary" '{notified:$notified,summary:$summary}')"
 else
   # No desk role (or no notify binary): fail LOUD and do NOT mark seen → the SAME records
   # re-surface next sweep once the role is set (a17 S-7: never let a wake drain to nobody).
-  log_idl fired ',"notified":"no-desk-role","delivered":false'
+  log_idl fired '{"notified":"no-desk-role","delivered":false}'
   echo "autonomy-sweep: NEW records but no desk role at $ROLES_DIR/desk — undelivered, will retry" >&2
 fi
 exit 0

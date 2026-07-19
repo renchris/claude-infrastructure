@@ -36,11 +36,16 @@ SID="?"
 
 input="$(cat 2>/dev/null || printf '{}')"
 
-log_idl() { # $1=disposition $2=reason $3=extra-json(optional)
+log_idl() { # $1=disposition $2=reason $3=extra JSON OBJECT (optional, jq-built {…}; default {})
   mkdir -p "$(dirname "$IDL")" 2>/dev/null || true
-  local ts; ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '?')"
-  printf '{"ts":"%s","hook":"completion-assert","sid":"%s","disposition":"%s","reason":"%s"%s}\n' \
-    "$ts" "$SID" "$1" "$2" "${3:+,$3}" >> "$IDL" 2>/dev/null || true
+  local ts extra; ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '?')"
+  extra="${3:-}"; [ -n "$extra" ] || extra='{}'
+  # jq-encode EVERY field: a value carrying a " / backslash / newline then can NEVER emit a
+  # malformed IDL line — one malformed line aborts the cc-audit four-zeros `jq -rs` slurp, which
+  # reads as "no records" and silently flips D9/the alarm GREEN (defeats the un-gameable detector).
+  jq -cn --arg ts "$ts" --arg sid "$SID" --arg disp "$1" --arg reason "$2" --argjson extra "$extra" \
+    '{ts:$ts,hook:"completion-assert",sid:$sid,disposition:$disp,reason:$reason} + $extra' \
+    >> "$IDL" 2>/dev/null || true
 }
 abstain() { log_idl abstained "$1"; exit 0; }
 
@@ -112,7 +117,9 @@ N="$(grep -c . "$FIRED" 2>/dev/null || echo 0)"; case "$N" in ''|*[!0-9]*) N=0 ;
 # ── FIRE: record hash, log, block with the contradicting FACTS. ──
 printf '%s\n' "$HASH" >> "$FIRED" 2>/dev/null || true
 facts="${facts%; }"
-log_idl fired "false-done" "\"facts\":\"${facts//\"/}\",\"rung\":\"${RUNG}\",\"count\":$((N+1)),\"max\":${MAX}"
+log_idl fired "false-done" \
+  "$(jq -cn --arg facts "$facts" --arg rung "$RUNG" --argjson count "$((N+1))" --argjson max "$MAX" \
+      '{facts:$facts,rung:$rung,count:$count,max:$max}')"
 
 reason="Completion-assert: your close reads as done/complete, but the LIVE ledger contradicts it — ${facts}. Ship/land of verified net-positive work is DRIVABLE (not a genuine blocker). Re-answer by DRIVING the remainder to done (📦 ⇒ /ship it; finish the open items; commit with explicit paths) — or name the ONE irreducible blocker (credential / sudo / destructive-migration / external-info only the operator has). (completion-assert $((N+1))/${MAX})"
 

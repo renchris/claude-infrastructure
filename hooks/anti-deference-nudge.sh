@@ -57,11 +57,16 @@ CFG="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 input="$(cat 2>/dev/null || printf '{}')"
 
 # ── B-3: one IDL line per invocation. Never fails the hook. ──
-log_idl() { # $1=disposition $2=reason $3=extra-json(optional)
+log_idl() { # $1=disposition $2=reason $3=extra JSON OBJECT (optional, jq-built {…}; default {})
   mkdir -p "$(dirname "$IDL")" 2>/dev/null || true
-  local ts; ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '?')"
-  printf '{"ts":"%s","hook":"anti-deference-nudge","sid":"%s","disposition":"%s","reason":"%s"%s}\n' \
-    "$ts" "${SID:-?}" "$1" "$2" "${3:+,$3}" >> "$IDL" 2>/dev/null || true
+  local ts extra; ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '?')"
+  extra="${3:-}"; [ -n "$extra" ] || extra='{}'
+  # jq-encode EVERY field: a value carrying a " / backslash / newline then can NEVER emit a
+  # malformed IDL line — one malformed line aborts the cc-audit four-zeros `jq -rs` slurp, which
+  # reads as "no records" and silently flips D9/the alarm GREEN (defeats the un-gameable detector).
+  jq -cn --arg ts "$ts" --arg sid "${SID:-?}" --arg disp "$1" --arg reason "$2" --argjson extra "$extra" \
+    '{ts:$ts,hook:"anti-deference-nudge",sid:$sid,disposition:$disp,reason:$reason} + $extra' \
+    >> "$IDL" 2>/dev/null || true
 }
 abstain() { log_idl abstained "$1"; exit 0; }   # evaluated-but-did-not-fire (LOGGED, not silent)
 
@@ -159,7 +164,7 @@ if [ "$hard" -eq 1 ]; then
   gb_extra=""
   if ! printf '%s' "$MSG" | grep -iqE "$CLASS_C_GENUINE"; then
     gb_pid="$(open_packet_B || true)"
-    [ -n "$gb_pid" ] && gb_extra="\"packet\":\"${gb_pid}\",\"packet_class\":\"B\""
+    [ -n "$gb_pid" ] && gb_extra="$(jq -cn --arg p "$gb_pid" '{packet:$p,packet_class:"B"}')"
   fi
   log_idl abstained "genuine-blocker" "$gb_extra"
   exit 0
@@ -225,7 +230,9 @@ if [ "$FIRE_KIND" = "false-done" ]; then
 else
   TRIGGER="$(printf '%s' "$MSG" | grep -ioE "$TELLS" 2>/dev/null | head -1 | tr -d '\n')"
 fi
-log_idl fired "$FIRE_KIND" "\"tell\":\"${TRIGGER//\"/}\",\"count\":$((N+1)),\"max\":${MAX}"
+log_idl fired "$FIRE_KIND" \
+  "$(jq -cn --arg tell "$TRIGGER" --argjson count "$((N+1))" --argjson max "$MAX" \
+      '{tell:$tell,count:$count,max:$max}')"
 
 detail=""
 { [ "$ship_hold" -eq 1 ] && [ "$drivable" -eq 1 ]; } && detail=" Ship/land of clean committed work is DRIVABLE — /ship it, don't park it."

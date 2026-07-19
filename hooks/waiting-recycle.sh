@@ -162,11 +162,16 @@ esac
 input="$(cat 2>/dev/null || printf '{}')"
 
 # ── B-3: one IDL line per invocation (fired|abstained). "didn't fire" ≠ "never evaluated". ──
-log_idl() { # $1=disposition $2=reason $3=extra-json(optional, leading-comma-free)
+log_idl() { # $1=disposition $2=reason $3=extra JSON OBJECT (optional, jq-built {…}; default {})
   mkdir -p "$(dirname "$IDL")" 2>/dev/null || true
-  local ts; ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '?')"
-  printf '{"ts":"%s","hook":"waiting-recycle","sid":"%s","disposition":"%s","reason":"%s"%s}\n' \
-    "$ts" "${SID:-?}" "$1" "$2" "${3:+,$3}" >> "$IDL" 2>/dev/null || true
+  local ts extra; ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '?')"
+  extra="${3:-}"; [ -n "$extra" ] || extra='{}'
+  # jq-encode EVERY field: a value carrying a " / backslash / newline then can NEVER emit a
+  # malformed IDL line — one malformed line aborts the cc-audit four-zeros `jq -rs` slurp, which
+  # reads as "no records" and silently flips D9/the alarm GREEN (defeats the un-gameable detector).
+  jq -cn --arg ts "$ts" --arg sid "${SID:-?}" --arg disp "$1" --arg reason "$2" --argjson extra "$extra" \
+    '{ts:$ts,hook:"waiting-recycle",sid:$sid,disposition:$disp,reason:$reason} + $extra' \
+    >> "$IDL" 2>/dev/null || true
 }
 abstain() { log_idl abstained "$1"; exit 0; }
 
@@ -371,11 +376,13 @@ if [ "$stage2_pending" = 1 ]; then
     printf '\nFIRST ACTION — re-derive live watch state from DISK (the predecessor context is GONE; do not assume): run cc-board for the fleet roster; read the live-session registry, ~/.claude/wait-contracts (owned waits), and your role mailbox; scan worktrees + git for wave/merge state. Then resume monitoring. Do NOT re-arm waiting-recycle (the arm survives the recycle; re-arming clears the loop-breaker).\n'
   } > "$tmpf" 2>/dev/null
   if [ -s "$tmpf" ]; then mv -f "$tmpf" "$pf" 2>/dev/null; else rm -f "$tmpf" 2>/dev/null; fi
-  if [ ! -s "$pf" ]; then log_idl abstained "fire-compose-empty" "\"used_pct\":${used}"; exit 0; fi
+  if [ ! -s "$pf" ]; then log_idl abstained "fire-compose-empty" "$(jq -cn --argjson used "$used" '{used_pct:$used}')"; exit 0; fi
   tk="$( [ "$over_threshold" = 1 ] && echo threshold || echo behavioral )"
   if [ -f "$(live_for "$CWD")" ]; then
     date +%s > "$cf" 2>/dev/null || true                      # anchor the cross-generation loop-breaker on the FIRE
-    log_idl fired "stage2-live" "\"used_pct\":${used},\"trigger\":\"${tk}\",\"prompt_file\":\"${pf}\",\"grace_s\":${GRACE_S}"
+    log_idl fired "stage2-live" \
+      "$(jq -cn --argjson used "$used" --arg trigger "$tk" --arg prompt_file "$pf" --argjson grace_s "$GRACE_S" \
+          '{used_pct:$used,trigger:$trigger,prompt_file:$prompt_file,grace_s:$grace_s}')"
     # Sanctioned actuator: it arms a DETACHED watcher BEFORE typing /exit (order load-bearing), so the
     # recycle completes even when the /exit interrupt SIGKILLs this hook's process group.
     "$HANDOFF_FIRE" --recycle --prompt-file "$pf" ${UUID:+--session-id "$UUID"} </dev/null >/dev/null 2>&1 || true
@@ -385,7 +392,9 @@ if [ "$stage2_pending" = 1 ]; then
   fi
   # SHADOW (default): everything a live fire does EXCEPT the exec — ships the mechanism DAMPED so a gate
   # bug cannot strand the fleet before the operator reviews the shadow log and arms --live (damp-first).
-  log_idl fired "stage2-shadow" "\"used_pct\":${used},\"would_fire\":true,\"trigger\":\"${tk}\",\"prompt_file\":\"${pf}\",\"grace_s\":${GRACE_S}"
+  log_idl fired "stage2-shadow" \
+    "$(jq -cn --argjson used "$used" --arg trigger "$tk" --arg prompt_file "$pf" --argjson grace_s "$GRACE_S" \
+        '{used_pct:$used,would_fire:true,trigger:$trigger,prompt_file:$prompt_file,grace_s:$grace_s}')"
   smsg="⟳ RECYCLE WOULD FIRE — SHADOW (${trig}). The desk did not self-recycle within ${GRACE_S}s. waiting-recycle is armed SHADOW: it composed the successor brief at ${pf} and logged a would-fire, but did NOT exec (no fleet-stranding risk while soaking). You SHOULD still self-recycle now: run /handoff. To enable the exec after review: waiting-recycle.sh arm --brief <file> --live. Kill-switch: waiting-recycle.sh clear."
   jq -nc --arg a "$smsg" --arg s "$smsg" '{decision:"block",reason:$s,systemMessage:$s,hookSpecificOutput:{hookEventName:"PostToolUse",additionalContext:$a}}'
   exit 0
@@ -395,7 +404,10 @@ fi
 date +%s > "$cf" 2>/dev/null || true                         # stamp cooldown (anti-thrash + loop-breaker)
 printf '%s' "$((N + 1))" > "$capf" 2>/dev/null || true       # bump advisory cap
 [ -f "$escf" ] || date +%s > "$escf" 2>/dev/null || true     # set the Stage-2 grace clock on the FIRST advisory
-log_idl fired "waiting-recycle" "\"trigger\":\"$( [ "$over_threshold" = 1 ] && echo threshold || echo behavioral)\",\"used_pct\":${used},\"rot\":${rot_valid},\"count\":$((N+1)),\"max\":${MAX}"
+log_idl fired "waiting-recycle" \
+  "$(jq -cn --arg trigger "$( [ "$over_threshold" = 1 ] && echo threshold || echo behavioral )" \
+      --argjson used "$used" --argjson rot "$rot_valid" --argjson count "$((N+1))" --argjson max "$MAX" \
+      '{trigger:$trigger,used_pct:$used,rot:$rot,count:$count,max:$max}')"
 
 adv="⟳ MONITORING AUTO-RECYCLE — you are at a quiet monitoring boundary (${trig}). A watching desk accrues low-value context that rots your recall of the load-bearing orchestration state. RECYCLE NOW via your existing self-recycle path: run /handoff — it captures the live state (fired sessions, pending pings, wave/merge state, decisions) into the payload and fires handoff-fire.sh --recycle so the SUCCESSOR PANE IS THE CONTINUATION and this bloated context is discarded. Do it as this turn's next action. IF instead you actually hold in-hand write-work or a genuine open decision (you should not — the tree is clean and no blocker was detected), do NOT recycle: surface it. If you ignore this, the deterministic fire escalates in ${GRACE_S}s. Kill-switch: \`waiting-recycle.sh clear\` (this desk) / \`waiting-recycle.sh kill\` (global). (auto-recycle advisory $((N+1))/${MAX})"
 # ── carry the mission/DoD line so a recycle never loses purpose (T-P4-4; empty = none recorded) ──
