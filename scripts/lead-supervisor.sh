@@ -43,6 +43,14 @@ SUPLOG="${CC_SUPERVISOR_LOG:-$HOME/.claude/autonomy/supervisor.log}"
 PAGEDIR="${CC_SUPERVISOR_PAGEDIR:-$HOME/.claude/autonomy/pages}"
 PAGE_TO="${CC_PAGE_TO:-}"                              # operator/desk pane uuid for cc-notify pages (best-effort)
 PAGE_TO_FILE="${CC_PAGE_TO_FILE:-$HOME/.claude/cc-roles/desk}"   # fallback: live desk role file (CC_PAGE_TO wins; /dev/null disables)
+# cc-notify must resolve under launchd's bare default PATH (/usr/bin:/bin:...) — env override →
+# beside-script repo bin → ~/.claude/bin → PATH (the autonomy-sweep resolve_bin order)
+NOTIFY_BIN="${CC_NOTIFY_BIN:-}"
+if [ -z "$NOTIFY_BIN" ]; then
+  for _c in "$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)/bin/cc-notify" "$HOME/.claude/bin/cc-notify" "$(command -v cc-notify 2>/dev/null || true)"; do
+    [ -n "$_c" ] && [ -x "$_c" ] && { NOTIFY_BIN="$_c"; break; }
+  done
+fi
 
 now(){ date +%s; }
 utc(){ date -u +%Y-%m-%dT%H:%M:%SZ; }
@@ -68,8 +76,8 @@ page(){ # $1=sid $2=state $3=detail
   # so a pane rebind (role-file rewrite) redirects pages with no plist edit and no daemon restart
   local target="$PAGE_TO"
   [ -n "$target" ] || target="$(cat "$PAGE_TO_FILE" 2>/dev/null || true)"
-  if [ -n "$target" ] && command -v cc-notify >/dev/null 2>&1; then
-    cc-notify "$target" "⚠️ SUPERVISOR PAGE — session $1 is $2: $3 (operator/delegated-live-session recovers; supervisor never auto-acts)" >/dev/null 2>&1 || true
+  if [ -n "$target" ] && [ -n "$NOTIFY_BIN" ]; then
+    "$NOTIFY_BIN" "$target" "⚠️ SUPERVISOR PAGE — session $1 is $2: $3 (operator/delegated-live-session recovers; supervisor never auto-acts)" >/dev/null 2>&1 || true
   fi
 }
 clear_page(){ rm -f "$PAGEDIR/$1.page" 2>/dev/null || true; }

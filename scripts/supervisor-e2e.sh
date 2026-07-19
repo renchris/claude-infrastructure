@@ -98,7 +98,9 @@ STUB
 chmod +x "$SBX/bin/cc-notify"
 printf '%s' "ROLE-UUID-T9" > "$SBX/desk-role"
 reset; rm -f "$CC_TELEMETRY_DIR"/*.json; mktel dead9 40 100 99999999 "$REPO"   # pid gone ⇒ DEAD ⇒ page
-CC_NOTIFY_CAPTURE="$SBX/notify.log" CC_PAGE_TO_FILE="$SBX/desk-role" PATH="$SBX/bin:$PATH" bash "$SUP" --once >/dev/null 2>&1
+# CC_NOTIFY_BIN (not PATH): the supervisor resolves beside-script repo bin/ BEFORE PATH, so only
+# the env override keeps the sandbox hermetic against the real cc-notify
+CC_NOTIFY_CAPTURE="$SBX/notify.log" CC_PAGE_TO_FILE="$SBX/desk-role" CC_NOTIFY_BIN="$SBX/bin/cc-notify" bash "$SUP" --once >/dev/null 2>&1
 grep -q "ROLE-UUID-T9" "$SBX/notify.log" 2>/dev/null && ok "page routed to role-file uuid (fallback live)" || no "fallback did not route to role-file uuid"
 # and the /dev/null default keeps every other test notify-silent:
 [ -s "$SBX/notify.log" ] && [ "$(wc -l < "$SBX/notify.log")" -eq 1 ] && ok "exactly one capture (isolation intact)" || no "unexpected notify volume (isolation broken?)"
