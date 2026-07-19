@@ -35,7 +35,18 @@
 set -uo pipefail
 
 if [ -n "${CC_NS_REPO_DIR:-}" ]; then REPO="$CC_NS_REPO_DIR"; LEG1_ONLY=1
-else REPO="$(cd "$(dirname "$0")/.." && pwd)"; LEG1_ONLY=0; fi
+else
+  # resolve $0 through symlinks first: invoked via ~/.claude/scripts/<link>, dirname $0/.. lands in
+  # ~/.claude and 4 checks go red while the direct repo path stays green (C4 caught it 2026-07-19;
+  # same $0 class as the reaper-launchd-path fix)
+  _src="$0"
+  while [ -L "$_src" ]; do
+    _d="$(cd "$(dirname "$_src")" && pwd)"
+    _src="$(readlink "$_src")"
+    case "$_src" in /*) ;; *) _src="$_d/$_src" ;; esac
+  done
+  REPO="$(cd "$(dirname "$_src")/.." && pwd)"; LEG1_ONLY=0
+fi
 
 PASS=0; FAIL=0
 ok(){   printf '  ✅ %-8s %s\n' "$1" "$2"; PASS=$((PASS+1)); }
