@@ -99,12 +99,20 @@ selftest() {
   if [ "$ageA" -ge 1 ]; then printf '  ok   %-58s (age %ss)\n' "L3-a output-then-silence → beat STALE (keyed on output)" "$ageA"; pass=$((pass+1))
   else printf '  FAIL %-58s (age %ss, wanted ≥1)\n' "L3-a beat did not freeze during silence (wall-clock?)" "$ageA"; fail=$((fail+1)); fi
 
-  # Test B — 2s of silence THEN output: the beat advanced WITH the output; at end its age ≈ 0 (FRESH).
-  # Same 2s wall-clock as A, opposite beat-age → the beat tracks OUTPUT timing, not the clock.
+  # Test B — 2s of silence THEN output: the beat advanced WITH the output. FRESHNESS is proved
+  # START-RELATIVE — the output-keyed beat's mtime is ≥1s past the command's start t0 — NOT by an absolute
+  # age-at-check (now − mtime < 1): under concurrent-suite load the age measurement slips a full integer
+  # second past the beat write and false-flakes the < 1 check (recurred 2026-07-19, backlog 846380c6308f).
+  # Start-relative is invariant to that check-delay; it mirrors 3b71718 (the same fix on the standalone
+  # L3-b bats test). A start-keyed bug writes the beat at ~t0 (Δ~0) and still FAILS — Test A catches a
+  # wall-clock beat. CC_RUN_SELFTEST_CHECK_DELAY injects the check-delay so this guard is RED-provable
+  # (0 in normal runs → no behavior change).
+  local t0B; t0B="$(date +%s)"
   env CC_RUN_HEARTBEAT_DIR="$d/hb" "$SELF" --label b -- bash -c 'sleep 2; echo x' >/dev/null 2>&1
-  local ageB; ageB="$(age_of "$d/hb/b.beat")"
-  if [ "$ageB" -lt 1 ]; then printf '  ok   %-58s (age %ss)\n' "L3-a silence-then-output → beat FRESH (advanced with output)" "$ageB"; pass=$((pass+1))
-  else printf '  FAIL %-58s (age %ss, wanted <1)\n' "L3-a beat failed to advance on output" "$ageB"; fail=$((fail+1)); fi
+  sleep "${CC_RUN_SELFTEST_CHECK_DELAY:-0}"
+  local beatB dB; beatB="$(stat -f %m "$d/hb/b.beat" 2>/dev/null || echo 0)"; dB="$((beatB - t0B))"
+  if [ "$dB" -ge 1 ]; then printf '  ok   %-58s (Δstart %ss)\n' "L3-b silence-then-output → beat advanced with output (≥1s past start)" "$dB"; pass=$((pass+1))
+  else printf '  FAIL %-58s (Δstart %ss, wanted ≥1)\n' "L3-b beat did not advance on output (start-keyed?)" "$dB"; fail=$((fail+1)); fi
 
   # Test C — L3-blind routing: a silent op runs --expect silent → heartbeat_expectation=none, so a monitor
   # will NOT false-page it (its liveness routes to L1/pid, not to this beat).
