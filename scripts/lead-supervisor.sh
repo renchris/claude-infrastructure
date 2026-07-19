@@ -44,6 +44,13 @@ SUPLOG="${CC_SUPERVISOR_LOG:-$HOME/.claude/autonomy/supervisor.log}"
 PAGEDIR="${CC_SUPERVISOR_PAGEDIR:-$HOME/.claude/autonomy/pages}"
 PAGE_TO="${CC_PAGE_TO:-}"                              # operator/desk pane uuid for cc-notify pages (best-effort)
 PAGE_TO_FILE="${CC_PAGE_TO_FILE:-$HOME/.claude/cc-roles/desk}"   # fallback: live desk role file (CC_PAGE_TO wins; /dev/null disables)
+# ── PermissionRequest beacon (hooks/cc-permission-beacon.sh) — desk-anti-hitl §B2 ──
+# A permission prompt on an unattended session HANGS (nothing in-session can answer). The MODAL is
+# invisible to this bash sweep (S-3), but the HARNESS-emitted beacon at PERMPEND_DIR/<sid>.json IS
+# readable → a precise "PERMISSION-PENDING: <cmd>" page instead of a slow, detail-free STALL?/MODAL.
+PERMPEND_DIR="${CC_PERMPEND_DIR:-/tmp/cc-permission-pending}"   # MUST match the hook's default + seam
+PERMPEND_NOTICE_S="${CC_PERMPEND_NOTICE_S:-120}"      # page a prompt pending ≥ this (auto-approved tools clear in ms ⇒ no false page)
+PERMPEND_HORIZON_S="${CC_PERMPEND_HORIZON_S:-86400}"  # reap an orphaned beacon past this (hard-kill w/o SessionEnd + no telemetry)
 # cc-notify must resolve under launchd's bare default PATH (/usr/bin:/bin:...) — env override →
 # beside-script repo bin → ~/.claude/bin → PATH (the autonomy-sweep resolve_bin order)
 NOTIFY_BIN="${CC_NOTIFY_BIN:-}"
@@ -55,6 +62,10 @@ fi
 
 now(){ date +%s; }
 utc(){ date -u +%Y-%m-%dT%H:%M:%SZ; }
+# JSON-encode an arbitrary string for safe embedding in an IDL line (quotes/backslashes/newlines) —
+# never raw-%s a worker/command string into JSON (the malformed-IDL class, cc-backlog 666c6a64c45e).
+json_str(){ jq -cn --arg s "${1:-}" '$s' 2>/dev/null || printf '""'; }
+fmt_since(){ date -r "${1:-0}" +%H:%M 2>/dev/null || printf '%s' "${1:-?}"; }   # epoch → local HH:MM for the page
 _ensure(){ mkdir -p "$(dirname "$IDL")" "$(dirname "$SUPLOG")" "$PAGEDIR" 2>/dev/null || true; }
 
 # ── S-4: heartbeat — one IDL line PER SWEEP (even an all-clear one), plus per-finding records. ──
@@ -92,6 +103,25 @@ page(){ # $1=sid $2=state $3=detail
   fi                                                       # later-wired channel still gets its first notify
 }
 clear_page(){ rm -f "$PAGEDIR/$1.page" "$PAGEDIR/$1.notified" 2>/dev/null || true; }
+
+# ── PERMISSION-PENDING page — a SEPARATE namespace (.permpend.*) from the telemetry-liveness pages so
+#    assess()'s clear_page (fired every sweep for a below-threshold session) can NEVER clobber it. A
+#    prompt-blocked session has stale telemetry, so assess would otherwise clear a permpend page. ──
+page_permpend(){ # $1=sid $2=cmd $3=beacon_ts $4=age_s
+  _ensure
+  local sid="$1" cmd="$2" ts="$3" age="$4" nf="$PAGEDIR/$1.permpend.notified"
+  idl permission_pending "\"sid\":\"$sid\",\"since\":$ts,\"age_s\":$age,\"cmd\":$(json_str "$cmd")"
+  # Composer damping: ONE notify per PENDING EPISODE (keyed by the beacon ts). A NEW prompt (new ts)
+  # re-notifies; the SAME prompt across sweeps stays quiet. clear_permpend resets on resolution.
+  local last; last="$(cat "$nf" 2>/dev/null || true)"
+  [ "$last" = "$ts" ] && return 0
+  local target="$PAGE_TO"; [ -n "$target" ] || target="$(cat "$PAGE_TO_FILE" 2>/dev/null || true)"
+  if [ -n "$target" ] && [ -n "$NOTIFY_BIN" ]; then
+    "$NOTIFY_BIN" "$target" "⛔ PERMISSION-PENDING — session $sid blocked ${age}s on a permission prompt: ${cmd} (since $(fmt_since "$ts")). Nothing in-session can answer; operator/live-session must approve or deny." >/dev/null 2>&1 || true
+    printf '%s\n' "$ts" > "$nf"                             # recorded only on an attempted send
+  fi
+}
+clear_permpend(){ rm -f "$PAGEDIR/$1.permpend.notified" 2>/dev/null || true; }
 
 # ── effect RE-READ (S-3b core): is a session emitting WORK-PRODUCTS, independent of whether it replied? ──
 # "fresh" = new commits OR worktree file mtimes OR a live cpu delta since the page. "dark" = none.
@@ -218,8 +248,58 @@ assess(){ # $1=telemetry-json-file → prints 1 if it produced a finding, else 0
   clear_page "$sid"; echo 0
 }
 
+# ── a human-legible one-liner for the blocked command, from the harness-authored tool_input ──
+# Bash → the command; Write/Edit/etc → the file path; anything else → tool_name + compact input.
+beacon_cmd(){ # $1=beacon-file → single-line, ≤160 chars
+  local f="$1" c
+  c="$(jq -r '
+        .tool_input.command
+        // .tool_input.file_path
+        // .tool_input.path
+        // ((.tool_name // "tool") + " " + ((.tool_input // {}) | tostring))' "$f" 2>/dev/null)"
+  [ -n "$c" ] && [ "$c" != "null" ] || c="$(jq -r '.tool_name // "?"' "$f" 2>/dev/null)"
+  c="$(printf '%s' "$c" | tr '\n\t' '  ' | sed 's/  */ /g')"   # collapse to one line
+  [ "${#c}" -gt 160 ] && c="${c:0:157}..."
+  printf '%s' "${c:-?}"
+}
+
+# ── PERMISSION-PENDING beacons: harness-emitted, UNSPOOFABLE. Unlike the MODAL blindness (S-3) the
+#    supervisor CANNOT see, a permission prompt leaves a durable beacon it CAN read → a precise,
+#    command-attached page (minutes-latency) instead of a slow detail-free STALL?/MODAL. ──
+sweep_permission_pending(){ # prints the number of PERMISSION-PENDING pages produced this sweep
+  local dir="$PERMPEND_DIR" found=0 bf sid ts age tel pid cmd
+  [ -d "$dir" ] || { echo 0; return; }
+  for bf in "$dir"/*.json; do
+    [ -e "$bf" ] || continue
+    sid="$(basename "$bf" .json)"
+    case "$sid" in *[!A-Za-z0-9._-]*|''|.|..) continue ;; esac      # ignore stray/unsafe filenames
+    ts="$(jq -r '.ts // 0' "$bf" 2>/dev/null)"; ts="${ts%.*}"; case "$ts" in ''|*[!0-9]*) ts=0;; esac
+    age=$(( $(now) - ts ))
+    # REAP 1 — owning session provably DEAD (pid gone via its telemetry): the prompt died with it. No page.
+    tel="$TEL_DIR/$sid.json"
+    if [ -f "$tel" ]; then
+      pid="$(jq -r '.pid // empty' "$tel" 2>/dev/null)"
+      if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then
+        rm -f "$bf" 2>/dev/null; clear_permpend "$sid"; continue
+      fi
+    fi
+    # REAP 2 — orphan past the long horizon (hard-kill with no SessionEnd AND no telemetry to pid-check).
+    # A ts=0 (malformed) beacon has age≈now ≥ horizon ⇒ reaped, never paged (fail-safe on garbage).
+    if [ "$age" -ge "$PERMPEND_HORIZON_S" ]; then
+      rm -f "$bf" 2>/dev/null; clear_permpend "$sid"; continue
+    fi
+    # PAGE — genuinely pending past the notice threshold.
+    if [ "$age" -ge "$PERMPEND_NOTICE_S" ]; then
+      cmd="$(beacon_cmd "$bf")"
+      page_permpend "$sid" "$cmd" "$ts" "$age"
+      found=$((found+1))
+    fi
+  done
+  echo "$found"
+}
+
 sweep(){
-  local n=0 found=0 r
+  local n=0 found=0 r pp
   if [ -d "$TEL_DIR" ]; then
     for f in "$TEL_DIR"/*.json; do
       [ -e "$f" ] || continue
@@ -229,6 +309,8 @@ sweep(){
   # MODAL is STRUCTURALLY invisible to this bash sweep (S-3): we cannot read a modal/permission dialog or
   # the composer. We never claim a session is modal-free; a live-but-effect-dark session is PAGED as a
   # possible MODAL for the operator to eyeball. (Recorded here so the blindness is declared, not hidden.)
+  # But a permission prompt DOES leave a harness-emitted beacon — read it for a precise page (§B2).
+  pp="$(sweep_permission_pending)"; found=$(( found + ${pp:-0} ))
   heartbeat "$n" "$found"
 }
 
