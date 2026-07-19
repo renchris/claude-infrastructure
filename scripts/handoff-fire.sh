@@ -5,8 +5,8 @@
 #
 # Generalizes the proven /tmp/fire.sh pattern (2026-07-02 parallel-track launch): open an
 # interactive iTerm2 surface (tab / split pane / window) and TYPE the launch command into it via
-# osascript `write text`, because the per-account launchers (claude-next, claude-next2/3/4,
-# claude-fable*) are zsh FUNCTIONS/ALIASES that only resolve in an interactive shell.
+# the it2 API (bracketed-paste + echo-verify), because the per-account launchers (claude-next,
+# claude-next2/3/4, claude-fable*) are zsh FUNCTIONS/ALIASES that only resolve in an interactive shell.
 #
 #   handoff-fire.sh --prompt-file /tmp/fire-<slug>.txt [options]
 #
@@ -1601,12 +1601,6 @@ restore_focus_or_fail() {
   return 1
 }
 
-# ESC is for the FRONTMOST/WINDOW path only — that path embeds the command inside an AppleScript
-# string literal via -e "…write text \"$ESC\"", so backslashes then double-quotes must be escaped
-# (load-bearing order). The it2 split path and as_tab pass $CMD RAW (session run / osascript argv),
-# which reaches the pane verbatim with no string-literal parsing — no escaping needed.
-ESC="$(printf '%s' "$CMD" | sed 's/\\/\\\\/g; s/"/\\"/g')"
-
 # it2 split: split the firing pane (vertically=right / horizontally=down) inheriting ITS profile,
 # and echo the new pane's session id. Returns non-zero (echoing nothing) when the anchor session is
 # gone or iTerm2 errors — the caller retries-then-fails-loud, and NEVER drifts to another window.
@@ -1640,17 +1634,19 @@ it2_land() { # $1=new-session-id  → 0 on typed, 1 (loud) if the pane exists bu
   return 0
 }
 
-# Targeted tab (opt-in --tab surface): create a background tab in the firing session's WINDOW (not
-# the frontmost window), type the raw command into it, raise that window. Echoes "OK <id>" on
-# success / "NOTFOUND" when the window is gone — the caller settle-retries then FAILS LOUD (a tab,
-# like a split, never drifts to the app-frontmost window; only the deliberate --window does that).
-as_tab() { # $1=session-uuid  $2=raw-command-text
-  osascript - "$1" "$2" <<'AS'
+# Targeted tab (opt-in --follow --tab surface): CREATE a background tab in the firing session's
+# WINDOW (not the frontmost window) and echo "OK <new-session-id>" — it does NOT type. The caller
+# lands the launch command via it2_land → it2_type_verified (bracketed-paste + echo-verify), the
+# same ZLE-race-safe transport the split/bg-tab surfaces use, and raises the tab (--follow, via
+# it2_land's session focus). Echoes "NOTFOUND" when the firing window is gone — the caller settle-
+# retries then FAILS LOUD (a tab, like a split, never drifts to the app-frontmost window; only the
+# deliberate --window does that). No `write text` char-stream here → no ttys018 mis-inject (the
+# --tab half of item 0b878805bc27; the split/bg-tab half is e4c7e7fb41bd).
+as_tab() { # $1=session-uuid  → echoes "OK <new-session-id>" | "NOTFOUND"
+  osascript - "$1" <<'AS'
 on run argv
   set sid to item 1 of argv
-  set theText to item 2 of argv
   tell application "iTerm2"
-    activate
     set foundWin to missing value
     repeat with w in windows
       repeat with t in tabs of w
@@ -1669,8 +1665,6 @@ on run argv
       set newTab to (create tab with default profile)
       set newSess to current session of newTab
     end tell
-    tell newSess to write text theText
-    tell foundWin to select
     return "OK " & (id of newSess)
   end tell
 end run
@@ -1678,25 +1672,28 @@ AS
 }
 
 # Fresh-window spawn — the ONLY surface that deliberately does NOT anchor to the firing pane
-# (--window, opt-in). Creates a brand-new iTerm2 window and types the command into it. This is the
-# LAST place that targets iTerm2's app-frontmost/new window; split + tab were deliberately removed
-# from it (2026-07-17) so a mis-resolved anchor can only ever FAIL LOUD, never drift here. Uses
-# $ESC (the command embedded inside the AppleScript string literal). Zero windows → this is also
-# the implicit surface, since there is nothing to split/tab into.
-spawn_frontmost() {
+# (--window, opt-in). CREATE a brand-new iTerm2 window and echo its new session id; it does NOT
+# type. The caller lands the launch command via it2_land → it2_type_verified (bracketed-paste +
+# echo-verify), so there is no `write text` char-stream and no $ESC AppleScript-string escaping —
+# the ttys018 mis-inject cannot reach this surface (the --window half of item 0b878805bc27). This
+# is the LAST place that targets iTerm2's app-frontmost/new window; split + tab were deliberately
+# removed from it (2026-07-17) so a mis-resolved anchor can only ever FAIL LOUD, never drift here.
+# Zero windows → this is also the implicit surface, since there is nothing to split/tab into.
+spawn_frontmost() { # → echoes the new session id on stdout | empty on failure
   # --follow raises iTerm2 (operator watching); autonomous omits `activate` so the fresh window is
-  # created in the background and never pulls the operator off their current app/window (C1).
+  # created in the background and never pulls the operator off their current app/window (C1). The
+  # raise + focus on --follow is completed by it2_land (session focus); autonomous stays background.
   if [ "$FOLLOW" = 1 ]; then
     osascript -e 'tell application "iTerm2"' \
               -e 'activate' \
               -e 'set newWin to (create window with default profile)' \
-              -e "tell current session of newWin to write text \"$ESC\"" \
-              -e 'end tell' >/dev/null
+              -e 'return id of current session of newWin' \
+              -e 'end tell'
   else
     osascript -e 'tell application "iTerm2"' \
               -e 'set newWin to (create window with default profile)' \
-              -e "tell current session of newWin to write text \"$ESC\"" \
-              -e 'end tell' >/dev/null
+              -e 'return id of current session of newWin' \
+              -e 'end tell'
   fi
 }
 
@@ -1707,8 +1704,18 @@ spawn_frontmost() {
 # A fail-loud path returns non-zero → `set -e` aborts the script before the "→ fired" summary, so
 # the calling agent sees a clean failure ("nothing launched") rather than a phantom success.
 spawn() {
-  # --window is SUPPOSED to open a fresh window — no firing-pane anchoring, by design.
-  if [ "$SURFACE" = "window" ]; then spawn_frontmost; return; fi
+  # --window is SUPPOSED to open a fresh window — no firing-pane anchoring, by design. spawn_frontmost
+  # CREATES the window and echoes its new session id; it2_land then lands the launch command via
+  # it2_type_verified (bracketed-paste + echo-verify) and raises it on --follow. An empty id = the
+  # window could not be created → FAIL LOUD (nothing launched), never a phantom success.
+  if [ "$SURFACE" = "window" ]; then
+    local winid
+    winid="$(spawn_frontmost | tr -d '[:space:]')" || winid=""   # || guards set -e on an osascript failure
+    [ -n "$winid" ] || { echo "!! could not create a fresh iTerm2 window (--window) — nothing launched." >&2; return 1; }
+    it2_land "$winid" || return 1
+    SPAWNED_PANE="$winid"                          # the fired pane — engagement verify + registry
+    return 0
+  fi
   if [ -z "$FIRING_SID" ]; then
     echo "!! no \$ITERM_SESSION_ID/--session-id to anchor to — REFUSING to fire a $SURFACE into a random window." >&2
     echo "   Re-run from inside the firing iTerm2 pane, pass --session-id <uuid>, or use --window to open a fresh window on purpose." >&2
@@ -1748,18 +1755,24 @@ spawn() {
       SPAWNED_PANE="$newid"                          # the fired pane — engagement verify + registry
       ;;
     tab)
-      # Reached only WITH --follow (autonomous --tab was normalized to bg-tab). Raise the new tab.
-      local out
-      out="$(as_tab "$FIRING_SID" "$CMD" 2>/dev/null)" || out="ERR($?)"
-      case "$out" in OK\ *) SPAWNED_PANE="${out#OK }"; return 0 ;; esac
-      /bin/sleep 0.8                                # settle + retry once, then fail loud
-      out="$(as_tab "$FIRING_SID" "$CMD" 2>/dev/null)" || out="ERR($?)"
+      # Reached only WITH --follow (autonomous --tab was normalized to bg-tab). as_tab CREATES a
+      # background tab in the firing window and echoes its id; it2_land then lands the launch command
+      # via it2_type_verified (bracketed-paste + echo-verify) and raises the tab (--follow).
+      local out newid
+      out="$(as_tab "$FIRING_SID" 2>/dev/null)" || out="ERR($?)"
       case "$out" in
-        OK\ *) SPAWNED_PANE="${out#OK }" ;;
-        *) echo "!! firing window for $FIRING_SID not found ($out) — NOT firing a tab into a random window." >&2
-           echo "   Nothing was launched. Re-fire from a live pane, or use --window for a deliberate fresh window." >&2
-           return 1 ;;
+        OK\ *) newid="${out#OK }" ;;
+        *) /bin/sleep 0.8                            # settle + retry once, then fail loud
+           out="$(as_tab "$FIRING_SID" 2>/dev/null)" || out="ERR($?)"
+           case "$out" in
+             OK\ *) newid="${out#OK }" ;;
+             *) echo "!! firing window for $FIRING_SID not found ($out) — NOT firing a tab into a random window." >&2
+                echo "   Nothing was launched. Re-fire from a live pane, or use --window for a deliberate fresh window." >&2
+                return 1 ;;
+           esac ;;
       esac
+      it2_land "$newid" || return 1
+      SPAWNED_PANE="$newid"                          # the fired pane — engagement verify + registry
       ;;
   esac
 }
