@@ -164,6 +164,13 @@ The interactive path (no `CC_UNATTENDED`) is UNCHANGED: wait-vs-switch stays the
 `AskUserQuestion` still elicits. This only swaps the *blocking* elicitation for a *durable packet +
 default*, honoring the anti-deference rule (surface the ONE fork, keep everything else moving).
 
+This routing is no longer prose-only: the **`cc-unattended-ask-guard.sh`** PreToolUse hook (matcher
+`AskUserQuestion`) is the deterministic backstop (T-P15-7). Under `CC_UNATTENDED`, an `AskUserQuestion`
+is refused with `exit 2` and a reason that routes the fork to the `cc-decide` class-B packet below —
+so even if this doctrine is forgotten mid-turn, the strand cannot form. Same steer-then-backstop shape
+as `frontier-spawn-gate.sh`. Interactive sessions never trip it (the hook keys off `CC_UNATTENDED`
+alone, not the payload). Kill switch: `CC_UNATTENDED_ASK_GUARD_DISABLED=1`.
+
 Route every limit decision through `scripts/gate-classify.sh "<the limit text>"` first — both cases
 below classify **B** (a value-fork the standing values settle toward continuation), never A, never a
 C money-path. Then:
