@@ -1,3 +1,7 @@
+---
+status: in-progress
+---
+
 # ORCHESTRATOR DESK 24×7 — the self-originating operator program
 
 **Scope (frozen 2026-07-18):** take the orchestrator-desk stack from "largely-activated safety
@@ -217,3 +221,30 @@ that wires their subjects — no gate goes green on capability alone again. Full
   result-delivery gap 3rd instance (rt-synthesis completed, final payload never delivered,
   completed-agent resume no-op — verdict recovered by transcript read; feeds P0-15's consumer
   design: harness notification channels are themselves a lossy layer).
+- 2026-07-19 ~00:5xZ (desk session a7992e04, Opus@max, /goal-driven) — **CYCLE 2 (Program D phases
+  2-3: dispatcher + discovery feed) BUILT + LANDED — the L4 self-initiating spine is now all
+  code-on-trunk (activation C10).** 3-teammate wave off origin/main (worktree-isolated, single-owner,
+  RED-first), combined-branch land via `ship-land.sh` (one 626-bats gate, content-verified, sweep
+  clean) → origin/main `1b1d8b7`. Deliverables: `bin/cc-wave-plan` (T-P7-6, `7276256` — quota-greedy
+  wave placement over `claude-accounts --rank`, ≤2/acct spill, pre-emptive Fable-window straddle guard
+  → reason-carrying Opus fallback, fable id never in a straddle; 20 selftest + 12 bats; caught+fixed a
+  `$(…)` subshell counter-loss that silently defeated the per-account cap) · `bin/cc-backlog list
+  --json` (`23343d6` — machine-readable fold, default table byte-unchanged) · `bin/cc-dispatch`
+  (T-P7-4/5, `fb2c822` — cron `--once` backlog-pull → cc-wave-plan quota-place → claim + spawn via
+  `CC_DISPATCH_SPAWN_BIN` seam; quota-cliff PAGES + abstains + ZERO-spawn, never blind-fires; fail-LOUD
+  exit 3 when wave-plan unresolvable; 18 selftest + 9 bats, effect-verified fold transitions,
+  injection-safe argv fire_line) · `bin/cc-discover` (`1b1d8b7` — 4 standing critics C1 frontier-hole /
+  C2 plan-open / C3 wiring-inert-D9 / C4 gate-red refill cc-backlog idempotently, absent-source →
+  ABSTAIN never fabricate; 13 selftest + 14 bats). Each ships a launchd TEMPLATE plist (RunAtLoad
+  false) + `docs/activation/<tool>-activate-snippet.md`. **C10 activation order (operator): symlink
+  cc-wave-plan FIRST, then cc-dispatch/cc-discover into ~/.claude/bin, then load the plists — loading
+  the dispatcher/discovery plists IS the autonomous-operator-goes-live ratification (operator decision
+  #6); sequencing law already satisfied (reap-safety landed pre-cycle-1).** Backlog closed: c2515f
+  (dispatcher) + 2b72fc (discovery); OPEN residuals: 924a (cc-run load-flake), 5a2b (waiting-recycle
+  DoD-carry). **Wave learnings:** (1) two in-process background subagents stalled ~13 min at zero-write
+  while a third wrote — in-process Agent subagents CPU-SHARE with the lead, so lead over-polling STARVES
+  them; one SendMessage nudge resumed both; the fix is the lead GOES QUIET during a wave (owned-wait),
+  not tighter polling. (2) `ship-land` gates the FULL `bats tests/` (626) — a foreground 2-min Bash
+  timeout kills it mid-gate (fail-closed, no partial land) → run backgrounded. (3) combined-branch land
+  (cherry-pick 3 disjoint single-owner branches → 1 gate run) beat 3 serial lands on wall-clock + CPU,
+  and the combined gate doubles as an integration test; the known cc-run load-flake did NOT trigger.
