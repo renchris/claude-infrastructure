@@ -24,7 +24,7 @@
     <array>
         <string>/bin/bash</string>
         <string>-c</string>
-        <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"; export CC_DISPATCH_PROJECT="$HOME/Development/claude-infrastructure"; exec "$HOME/.claude/bin/cc-dispatch" --once</string>
+        <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"; export CC_DISPATCH_PROJECT="claude-infrastructure"; exec "$HOME/.claude/bin/cc-dispatch" --once</string>
     </array>
 
     <key>StartInterval</key>

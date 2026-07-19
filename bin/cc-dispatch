@@ -54,6 +54,10 @@ IDL="${CC_DISPATCH_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
 MAX_SPAWN="${CC_DISPATCH_MAX_SPAWN:-2}"
 SID="${CC_DISPATCH_SID:-$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo host)-$$}"
 PROJECT="${CC_DISPATCH_PROJECT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+# the ledger convention is the short project NAME (cc-backlog/cc-discover use basename), so a
+# path-style value (env or pwd default) must normalize — unormalized it matches NOTHING and the
+# cron pull reads "backlog empty" forever (found live 2026-07-19)
+PROJECT="$(basename "$PROJECT")"
 
 FIRED=0; ABSTAINED=0; FAILED=0   # run counters → the summary record
 
@@ -245,7 +249,7 @@ STUB
   t "(a) empty backlog → ZERO spawn"        test ! -s "$tmp/spawn.log"
 
   # (b) quota-cliff (wave-plan exit 4) → abstained + page + ZERO spawn.
-  reset; seed_items '[{"id":"i1","project":"/repo/a","status":"open","title":"t1"}]'
+  reset; seed_items '[{"id":"i1","project":"a","status":"open","title":"t1"}]'
   STUB_WP_RC=4 "$SELF" --once >/dev/null 2>&1
   t "(b) cliff → abstained IDL"             grep -q '"action":"abstained"' "$tmp/idl.jsonl"
   t "(b) cliff → summary is the last record" test "$(last '.action')" = summary
@@ -254,7 +258,7 @@ STUB
   t "(b) cliff → ZERO spawn (never fire blind)" test ! -s "$tmp/spawn.log"
 
   # (c) green → claim invoked + spawn invoked with the fire_line + IDL fired.
-  reset; seed_items '[{"id":"i1","project":"/repo/a","status":"open","title":"t1"}]'
+  reset; seed_items '[{"id":"i1","project":"a","status":"open","title":"t1"}]'
   seed_plan '[{"id":"i1","account":"next3","fire_line":["--prompt-file","/tmp/f1.txt","--account","next3"]}]'
   "$SELF" --once >/dev/null 2>&1
   t "(c) green → item claimed (transition invoked)" grep -qx 'claim i1' "$tmp/backlog.log"
@@ -263,14 +267,14 @@ STUB
   t "(c) summary fired=1"                   test "$(last '.fired')" = 1
 
   # (d) spawn non-zero → item reopened + IDL failed.
-  reset; seed_items '[{"id":"i1","project":"/repo/a","status":"open","title":"t1"}]'
+  reset; seed_items '[{"id":"i1","project":"a","status":"open","title":"t1"}]'
   seed_plan '[{"id":"i1","account":"next3","fire_line":["--prompt-file","/tmp/f1.txt"]}]'
   STUB_SPAWN_RC=7 "$SELF" --once >/dev/null 2>&1
   t "(d) spawn-fail → item reopened"        grep -qx 'reopen i1' "$tmp/backlog.log"
   t "(d) spawn-fail → IDL failed"           grep -q '"action":"failed"' "$tmp/idl.jsonl"
 
   # (e) --dry-run → plan printed, backlog UNCHANGED, spawn NOT called, no page.
-  reset; seed_items '[{"id":"i1","project":"/repo/a","status":"open","title":"t1"}]'
+  reset; seed_items '[{"id":"i1","project":"a","status":"open","title":"t1"}]'
   seed_plan '[{"id":"i1","account":"next3","fire_line":["--prompt-file","/tmp/f1.txt"]}]'
   "$SELF" --dry-run > "$tmp/dry.out" 2>/dev/null
   t "(e) --dry-run prints the plan"         grep -q 'PLAN:' "$tmp/dry.out"
@@ -278,7 +282,7 @@ STUB
   t "(e) --dry-run → spawn NOT called"      test ! -s "$tmp/spawn.log"
 
   # (f) MAX_SPAWN cap → only N spawns even with more placements.
-  reset; seed_items '[{"id":"i1","project":"/repo/a","status":"open","title":"t1"},{"id":"i2","project":"/repo/a","status":"open","title":"t2"},{"id":"i3","project":"/repo/a","status":"open","title":"t3"}]'
+  reset; seed_items '[{"id":"i1","project":"a","status":"open","title":"t1"},{"id":"i2","project":"a","status":"open","title":"t2"},{"id":"i3","project":"a","status":"open","title":"t3"}]'
   seed_plan '[{"id":"i1","account":"a","fire_line":["--x"]},{"id":"i2","account":"a","fire_line":["--x"]},{"id":"i3","account":"a","fire_line":["--x"]}]'
   CC_DISPATCH_MAX_SPAWN=2 "$SELF" --once >/dev/null 2>&1
   t "(f) MAX_SPAWN=2 caps spawns at 2"      test "$(grep -c . "$tmp/spawn.log")" -eq 2
@@ -287,15 +291,37 @@ STUB
   CC_DISPATCH_BACKLOG_BIN="/nonexistent/nope" "$SELF" --once >/dev/null 2>&1; rc=$?
   t "(g) unresolvable actuator → exit 3"    test "$rc" -eq 3
 
+  # (h) flag combos: `--once --dry-run` is DRY (no spawn, no IDL) — never a silent live pass.
+  reset; seed_items '[{"id":"i1","project":"a","status":"open","title":"t1"}]'
+  seed_plan '[{"id":"i1","account":"a","fire_line":["--x"]}]'
+  "$SELF" --once --dry-run >/dev/null 2>&1
+  t "(h) --once --dry-run → ZERO spawn"     test ! -s "$tmp/spawn.log"
+  t "(h) --once --dry-run → ZERO IDL"       test ! -s "$tmp/idl.jsonl"
+  # (i) PROJECT normalization: a path-style CC_DISPATCH_PROJECT matches basename-keyed items.
+  reset; seed_items '[{"id":"i1","project":"a","status":"open","title":"t1"}]'
+  seed_plan '[{"id":"i1","account":"a","fire_line":["--x"]}]'
+  CC_DISPATCH_PROJECT="/some/path/to/a" "$SELF" --once >/dev/null 2>&1
+  t "(i) path-style project env → still dispatches (basename-normalized)" test -s "$tmp/spawn.log"
+
   echo "cc-dispatch selftest: $pass passed, $fail failed"
   [ "$fail" -eq 0 ] || exit 1
 }
 
 command -v jq >/dev/null 2>&1 || { echo "cc-dispatch: jq is required" >&2; exit 3; }
-case "${1:-}" in
-  selftest)        selftest ;;
-  --dry-run)       dispatch dry ;;
-  --once|"")       dispatch run ;;
-  -h|--help|help)  usage ;;
-  *) printf 'cc-dispatch: unknown arg %s\n\n' "$1" >&2; usage >&2; exit 3 ;;
-esac
+# flag parsing walks ALL args — `--once --dry-run` must be DRY, never a silent live pass
+# (the single-$1 case ignored trailing flags; found live 2026-07-19). Dry wins over once.
+MODE=run; WANT_SELFTEST=0; WANT_USAGE=0
+[ $# -eq 0 ] && set -- --once
+for a in "$@"; do
+  case "$a" in
+    selftest)        WANT_SELFTEST=1 ;;
+    --dry-run)       MODE=dry ;;
+    --once)          ;;
+    -h|--help|help)  WANT_USAGE=1 ;;
+    *) printf 'cc-dispatch: unknown arg %s\n\n' "$a" >&2; usage >&2; exit 3 ;;
+  esac
+done
+if   [ "$WANT_USAGE" -eq 1 ];    then usage
+elif [ "$WANT_SELFTEST" -eq 1 ]; then selftest
+else dispatch "$MODE"
+fi
