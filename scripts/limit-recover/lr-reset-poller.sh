@@ -11,7 +11,20 @@
 # SAFETY — auto-spawn is OFF by default. Unset/0 LR_POLLER_AUTOFIRE ⇒ detect + NOTIFY +
 # log only (no session is spawned). Set LR_POLLER_AUTOFIRE=1 ONLY after eyeballing a live
 # cycle's log. Kill switch: LR_POLLER_DISABLED=1. Idempotent, fail-open, never crashes the
-# daemon. Monthly-spend caps have no reset ⇒ ignored (need /usage-credits).
+# daemon.
+#
+# SPAWN MECHANISM (P0-8, 2026-07-19): LR_POLLER_SPAWN=auto|gui|tmux (default auto). The GUI
+# path (osascript → iTerm2 window) needs an Aqua session; a LaunchDaemon / SSH / pre-login
+# (P0-10) context has none. `tmux` resumes into a DETACHED tmux PTY instead — fully headless
+# (attach later with `tmux attach -t lr-resume-<sid8>`); `auto` tries GUI then falls back to
+# tmux so a resume is never silently failed. (tmux over `claude -p`: -p is a one-shot print
+# turn that exits — it cannot sustain the parked session's ongoing /goal-driven work.)
+#
+# MONTHLY-SPEND (P0-8 / I-LIVE-1, 2026-07-19): a billing-plane cap ("You've hit your monthly
+# spend limit") has NO reset time, so it cannot be scheduled for auto-resume — but it is NEVER
+# silently ignored (the pre-2026-07-19 session|weekly pre-filter dropped it entirely). The
+# poller opens a class-B cc-decide packet (default = cross-account continuation, operator
+# decision #3) so the strand is surfaced for an async early-veto decision, never left dead.
 #
 # Usage: lr-reset-poller.sh [--dry-run] [--once]   (launchd runs it bare every ~10 min)
 set -uo pipefail
@@ -53,6 +66,80 @@ for r in rows:
 sys.exit(0)' "$acct" 2>/dev/null
 }
 
+# cwd_of <transcript> — the first cwd field (avoids lossy slug-decoding). Empty if none.
+cwd_of() {
+  python3 -c "
+import json,sys
+for ln in open(sys.argv[1],encoding='utf-8'):
+    try: o=json.loads(ln)
+    except: continue
+    c=o.get('cwd')
+    if c: print(c); break
+" "$1" 2>/dev/null
+}
+
+# ── headless-capable resume spawn (P0-8) ───────────────────────────────────────────────
+SPAWN_MECH="${LR_POLLER_SPAWN:-auto}"
+# spawn_gui <launcher> — open an iTerm2 window (needs an Aqua session). 0 = opened.
+spawn_gui() {
+  command -v osascript >/dev/null 2>&1 || return 1
+  osascript -e "tell application \"iTerm2\" to create window with default profile command \"/bin/bash $1\"" >/dev/null 2>&1
+}
+# spawn_tmux <launcher> <sid> — run the launcher in a DETACHED tmux session (headless PTY). 0 = created.
+spawn_tmux() {
+  command -v tmux >/dev/null 2>&1 || return 1
+  tmux new-session -d -s "lr-resume-${2:0:8}" "/bin/bash $1" >/dev/null 2>&1
+}
+# spawn_resume <launcher> <sid> — echo the mechanism used (gui|tmux) on success; non-zero on failure.
+spawn_resume() {
+  local launcher="$1" sid="$2"
+  case "$SPAWN_MECH" in
+    gui)  spawn_gui  "$launcher"        && { echo gui;  return 0; }; return 1 ;;
+    tmux) spawn_tmux "$launcher" "$sid" && { echo tmux; return 0; }; return 1 ;;
+    *)    spawn_gui  "$launcher"        && { echo gui;  return 0; }   # auto: GUI first…
+          spawn_tmux "$launcher" "$sid" && { echo tmux; return 0; }   # …then headless tmux
+          return 1 ;;
+  esac
+}
+
+# ── monthly-spend → class-B decision packet (P0-8 / I-LIVE-1) ───────────────────────────
+SPEND_RE="(hit|reached) your monthly spend limit"     # billing-plane cap; distinct from session|weekly
+SPEND_VETO_HOURS="${LR_SPEND_VETO_HOURS:-1}"          # the class-B default fires this long after opening
+CC_DECIDE_BIN="$(command -v cc-decide 2>/dev/null || true)"
+if [[ -z "$CC_DECIDE_BIN" ]]; then
+  for c in "$HOME/.claude/bin/cc-decide" "$LR/../../bin/cc-decide"; do
+    [[ -x "$c" ]] && { CC_DECIDE_BIN="$c"; break; }
+  done
+fi
+# open_spend_packet <sid> <acct> [cwd] — surface a no-reset billing kill as a class-B decision
+# packet (never silent-park). Idempotent: a marker prevents re-opening every tick.
+open_spend_packet() {
+  local sid="$1" acct="$2" cwd="${3:-}"
+  local marker="$STATE/spend-packet/$sid"
+  mkdir -p "$STATE/spend-packet"
+  [[ -f "$marker" ]] && return 0                       # already surfaced — no per-tick spam
+  local what deadline id
+  what="Session ${sid:0:8} ($acct) hit the monthly spend limit — a billing-plane cap with NO reset time, so it cannot be auto-resumed on the same account. Choose how to continue its work${cwd:+ (cwd: $cwd)}."
+  deadline="$(python3 -c "from datetime import datetime,timezone,timedelta;import sys;print((datetime.now(timezone.utc)+timedelta(hours=float(sys.argv[1]))).isoformat(timespec='seconds').replace('+00:00','Z'))" "$SPEND_VETO_HOURS" 2>/dev/null)"
+  if [[ -z "$CC_DECIDE_BIN" ]]; then                   # never silent: surface via notify, mark once
+    log "ERROR $sid ($acct) — monthly-spend kill but cc-decide unavailable; packet NOT opened (notified)"
+    osascript -e "display notification \"${sid:0:8} ($acct) hit the monthly spend limit — cross-account continuation needed (cc-decide missing).\" with title \"lr-reset-poller\"" >/dev/null 2>&1 || true
+    : > "$marker"; return 0
+  fi
+  id="$("$CC_DECIDE_BIN" open --class B \
+        --what "$what" \
+        --option "cross-account::resume the work on another Max account (next/next2/next3/next4) with quota headroom — quota-plane isolation" \
+        --option "cap-raise::operator raises the monthly spend cap (money-path — operator only)" \
+        --option "kimi-hedge::engage the Kimi hedge key (operator key required)" \
+        --recommendation "cross-account continuation (quota-plane isolation)" \
+        --default "cross-account continuation on another Max account with quota headroom" \
+        --deadline "$deadline" \
+        --session-sid "$sid" 2>>"$LOG")" \
+    || { log "ERROR $sid ($acct) — cc-decide open failed (retrying next tick)"; return 0; }
+  : > "$marker"
+  log "SPEND $sid ($acct) — monthly-spend, no reset → class-B decision packet opened ($id; default fires $deadline)"
+}
+
 fired=0
 # ── 1. DETECT + LEDGER parked sessions ────────────────────────────────────────────────
 for cfg in "$HOME"/.claude-next "$HOME"/.claude-secondary "$HOME"/.claude-tertiary "$HOME"/.claude-quaternary; do
@@ -61,8 +148,24 @@ for cfg in "$HOME"/.claude-next "$HOME"/.claude-secondary "$HOME"/.claude-tertia
   while IFS= read -r tx; do
     [[ -n "$tx" ]] || continue
     sid=$(basename "$tx" .jsonl)
+    tail_bytes=$(tail -c 20000 "$tx" 2>/dev/null)
+    # ── MONTHLY-SPEND (billing plane) — a cap with NO reset. lr-audit can schedule nothing
+    #    (nothing to wait for), and the session|weekly pre-filter below would DROP it silently
+    #    (the pre-2026-07-19 gap). Per P0-8 / I-LIVE-1: surface a class-B packet, never park.
+    #    Teammates are lead-owned (their lead's own spend kill carries the packet) — skip.
+    if printf '%s' "$tail_bytes" | grep -qiE "$SPEND_RE"; then
+      if head -c 8000 "$tx" 2>/dev/null | grep -q '"agentName"'; then
+        if [[ ! -f "$STATE/teammate-skip/$sid" ]]; then
+          mkdir -p "$STATE/teammate-skip"; : > "$STATE/teammate-skip/$sid"
+          log "SKIP  $sid — teammate session (lead-owned recovery)"
+        fi
+        continue
+      fi
+      open_spend_packet "$sid" "$acct" "$(cwd_of "$tx")"
+      continue
+    fi
     # cheap pre-filter: a genuine limit line near the tail (isApiErrorMessage confirmed by lr-audit)
-    tail -c 20000 "$tx" 2>/dev/null | grep -qE "You've hit your (session|weekly) limit" || continue
+    printf '%s' "$tail_bytes" | grep -qE "You've hit your (session|weekly) limit" || continue
     # teammate sessions (implicit-team assignees carry "agentName" on their early
     # records; leads never do) are recovered by their LEAD via the team-aware
     # lr-audit — a bare --resume here would detach them from team semantics
@@ -76,14 +179,7 @@ for cfg in "$HOME"/.claude-next "$HOME"/.claude-secondary "$HOME"/.claude-tertia
     fi
     pgrep -f "resume $sid" >/dev/null 2>&1 && continue        # already running
     # cwd from the transcript itself (avoids lossy slug-decoding)
-    cwd=$(python3 -c "
-import json,sys
-for ln in open(sys.argv[1],encoding='utf-8'):
-    try: o=json.loads(ln)
-    except: continue
-    c=o.get('cwd')
-    if c: print(c); break
-" "$tx" 2>/dev/null)
+    cwd=$(cwd_of "$tx")
     [[ -n "$cwd" && -d "$cwd" ]] || continue
     # authoritative classification via lr-audit (isApiErrorMessage + reset parse)
     aj=$(mktemp); python3 "$AUDIT" --config-dir "$cfg" --session "$sid" --cwd "$cwd" \
@@ -125,6 +221,9 @@ d=json.load(open(sys.argv[1]))
 for k in ('sid','acct','cfg','cwd','reset_at_utc'):
     print('%s=%s'%(k,json.dumps(str(d.get(k,'')))))
 " "$pf")"
+  # sid/acct/cfg/cwd/reset_at_utc are populated by the eval'd python above — shellcheck cannot
+  # trace an eval, so it reports reset_at_utc as unassigned (SC2154). It IS assigned.
+  # shellcheck disable=SC2154
   reset_epoch=$(python3 -c "import sys,calendar,time; from datetime import datetime; print(int(calendar.timegm(datetime.fromisoformat(sys.argv[1].replace('Z','+00:00')).utctimetuple())))" "$reset_at_utc" 2>/dev/null || echo 0)
   (( now < reset_epoch )) && continue                        # reset not reached yet
   pgrep -f "resume $sid" >/dev/null 2>&1 && { mv "$pf" "$RESUMED/$(basename "$pf")" 2>/dev/null; rm -f "$PARKED/$sid.notified"; continue; }
@@ -134,9 +233,12 @@ for k in ('sid','acct','cfg','cwd','reset_at_utc'):
     launcher="/tmp/lr-poller-launch-${sid:0:8}.sh"
     { echo '#!/bin/bash'; printf 'exec "%s/lr-fire-resume.sh" "%s" "%s" "%s" --prompt %q\n' \
         "$LR" "$acct" "$cwd" "$sid" "/limit-recover"; } > "$launcher"; chmod +x "$launcher"
-    osascript -e "tell application \"iTerm2\" to create window with default profile command \"/bin/bash $launcher\"" >/dev/null 2>&1 \
-      && { log "RESUMED $sid on $acct (autofire) — pane opened"; mv "$pf" "$RESUMED/$(basename "$pf")"; rm -f "$PARKED/$sid.notified"; fired=$((fired+1)); } \
-      || log "ERROR  $sid — osascript window open failed"
+    if mech=$(spawn_resume "$launcher" "$sid"); then
+      log "RESUMED $sid on $acct (autofire, $mech) — pane opened"
+      mv "$pf" "$RESUMED/$(basename "$pf")"; rm -f "$PARKED/$sid.notified"; fired=$((fired+1))
+    else
+      log "ERROR  $sid — resume spawn failed (LR_POLLER_SPAWN=$SPAWN_MECH; no GUI and no tmux)"
+    fi
   elif [[ ! -f "$PARKED/$sid.notified" ]]; then    # notify ONCE per parked session (no per-tick spam)
     mode=$([[ "$AUTOFIRE" == "1" ]] && echo "dry-run" || echo "notify-only")
     # headless-safe user alert (a LaunchAgent runs in the Aqua session ⇒ notifications work)

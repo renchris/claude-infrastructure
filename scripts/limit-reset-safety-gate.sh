@@ -35,7 +35,7 @@ todo(){ printf '  ⏳ %-7s %s\n' "$1" "$2"; TODO=$((TODO+1)); }
 SUITE=tests/lr-reset-poller.bats
 POLLER=scripts/limit-recover/lr-reset-poller.sh
 
-echo "limit-reset-safety-gate — never-park-forever bar (LR-a..LR-h registered; RED until $SUITE proves them)"
+echo "limit-reset-safety-gate — never-park-forever bar (LR-a..LR-n registered; RED until $SUITE proves them)"
 echo
 
 if [ ! -f "$POLLER" ]; then
@@ -50,12 +50,17 @@ elif [ ! -f "$SUITE" ]; then
   todo "LR-g" "NOT PROVEN — KILL-SWITCH: LR_POLLER_DISABLED=1 → exit 0 immediately, zero ledger writes, zero fires."
   todo "LR-h" "NOT PROVEN — OUTCOME RECORDS (abstention law): every decision path logs {PARKED|READY|WAIT|RESUMED|CAP} to poller.log — a silent decision is a reaper-shaped detector that cannot be audited."
   todo "LR-i" "NOT PROVEN — RECURRENCE: the resumed/ marker is EVENT-keyed, never sid-keyed-forever. A session resumed once MUST re-park on its NEXT limit event (newer reset ⇒ REPARK); the same event never double-fires. The naive sid-keyed skip is fatal for multi-day runs (a 5h limit recurs every window)."
+  todo "LR-j" "NOT PROVEN — HEADLESS SPAWN (P0-8): LR_POLLER_SPAWN=tmux → a parked, reset-passed session resumes via a DETACHED tmux session running the launcher (no Aqua/iTerm2 window) → the ledger moves parked/→resumed/ and the mechanism is recorded. The GUI-only resume is blind in a LaunchDaemon/SSH/pre-login context (P0-10)."
+  todo "LR-k" "NOT PROVEN — MONTHLY-SPEND PACKET (P0-8 / I-LIVE-1): a billing-plane kill (\"You've hit your monthly spend limit\", NO reset) → a class-B decision packet via cc-decide (cross-account-continuation default, operator decision #3), and the session is NEVER parked (nothing to wait for) and NEVER silently dropped (the pre-2026-07-19 poller's session|weekly pre-filter dropped it entirely)."
+  todo "LR-l" "NOT PROVEN — SPEND IDEMPOTENCY: the class-B spend packet is opened EXACTLY ONCE across N ticks (marker-keyed under spend-packet/) — no per-tick cc-decide spam."
+  todo "LR-m" "NOT PROVEN — AUTO FALLBACK: LR_POLLER_SPAWN=auto with the GUI unavailable (osascript window-open fails) → the resume FALLS BACK to tmux rather than logging ERROR and stranding the session — a resume is never silently failed when a headless path exists."
+  todo "LR-n" "NOT PROVEN — SPEND TEAMMATE-SKIP: a teammate (agentName) monthly-spend session opens NO packet (recovery is lead-owned; the lead's own spend kill carries the packet) — teammate-skip logged."
 else
   if command -v bats >/dev/null 2>&1; then
     if bats "$SUITE" >/dev/null 2>&1; then
-      ok "LR-a..i" "$SUITE GREEN — detect+ledger, no-fire-before-reset, headroom guard, notify-only default + notify-once, autofire idempotency, runaway cap, kill-switch, outcome records, event-keyed recurrence all proven (fixtures = real transcript bytes; stubs for claude-accounts/osascript; suite RED-proven against the as-shipped poller: LR-c blind headroom + LR-i forever-skip both fired)"
+      ok "LR-a..n" "$SUITE GREEN — detect+ledger, no-fire-before-reset, headroom guard, notify-only default + notify-once, autofire idempotency, runaway cap, kill-switch, outcome records, event-keyed recurrence, headless tmux spawn (LR-j) + auto→tmux fallback (LR-m), monthly-spend class-B packet (LR-k) + idempotency (LR-l) + teammate-skip (LR-n) all proven (fixtures = real transcript bytes; stubs for claude-accounts/osascript/tmux/cc-decide; suite RED-proven against the as-shipped poller: LR-c blind headroom + LR-i forever-skip fired, and LR-j/k RED against the GUI-only + session|weekly-only poller)"
     else
-      bad "LR-a..i" "$SUITE RED — a registered limit-reset criterion fails (run: bats $SUITE)"
+      bad "LR-a..n" "$SUITE RED — a registered limit-reset criterion fails (run: bats $SUITE)"
     fi
   else
     bad "LR-*" "bats unavailable — the proof cannot run (install bats-core)"
