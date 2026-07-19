@@ -25,7 +25,10 @@ set -uo pipefail
 
 REPO="${REPO:-$HOME/Development/claude-infrastructure}"
 BIN="$HOME/.claude/bin"
-DESK_UUID="${DESK_UUID:-1EB2C679-625D-4740-9355-A8DB4D21F2D4}"   # trackb-era desk pane; rebind on a NON-in-place restart
+# rebind-safe: a LIVE role file is the SSOT — never stamp the bootstrap default over it (2026-07-19
+# incident: a wiring-all re-run silently re-pointed desk/operator/orchestrator at a dead pane)
+DESK_UUID="${DESK_UUID:-$(head -1 "$HOME/.claude/cc-roles/desk" 2>/dev/null | tr -d '[:space:]')}"
+DESK_UUID="${DESK_UUID:-1EB2C679-625D-4740-9355-A8DB4D21F2D4}"   # void-bootstrap only (trackb-era pane)
 FAILS=0
 echo "== wiring-all v3 ==  repo=$REPO  bindir=$BIN  ($(git -C "$REPO" log --oneline -1 2>/dev/null || echo 'git state unreadable'))"
 [ -d "$REPO/scripts" ] || { echo "✗ repo not found at $REPO — set REPO=<path> and re-run"; exit 1; }
@@ -79,10 +82,12 @@ for t in cc-wait cc-deathwatch-kqueue cc-run cc-announce cc-respawn cc-route cc-
   ln -sf "$REPO/bin/$t" "$BIN/$t" && echo "  linked $t"
 done
 mkdir -p "$HOME/.claude/cc-roles"
-printf '%s\n' "$DESK_UUID" > "$HOME/.claude/cc-roles/desk"
-printf '%s\n' "$DESK_UUID" > "$HOME/.claude/cc-roles/orchestrator"
-printf '%s\n' "$DESK_UUID" > "$HOME/.claude/cc-roles/operator"   # <-- EDIT to your own push target if different
-echo "  ✓ cc-roles/{desk,orchestrator,operator} → $DESK_UUID (rebind on a non-in-place pane restart)"
+# per-role preserve-if-present: existing non-empty bindings survive re-runs; the default fills voids only
+for r in desk orchestrator operator; do
+  cur="$(head -1 "$HOME/.claude/cc-roles/$r" 2>/dev/null | tr -d '[:space:]')"
+  printf '%s\n' "${cur:-$DESK_UUID}" > "$HOME/.claude/cc-roles/$r"
+  echo "  ✓ cc-roles/$r → ${cur:-$DESK_UUID}${cur:+ (preserved)}"
+done
 # The ~/.claude/scripts/limit-recover MIRROR becomes symlinks → repo (kills the statusline-class
 # live-vs-repo drift for the poller: the launchd plist runs the mirror path).
 mkdir -p "$HOME/.claude/scripts/limit-recover"
