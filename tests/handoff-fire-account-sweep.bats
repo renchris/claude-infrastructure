@@ -43,10 +43,8 @@ STUB
   export CC_SECURITY_BIN="$BIN/security-ok"
   export CC_KEYCHAIN_ACCOUNT="tester"
   export HANDOFF_ACCOUNT_SWEEP_STAMP="$BATS_TEST_TMPDIR/stamp.json"
-  export CC_ACCOUNTS_CACHE="$BATS_TEST_TMPDIR/cache.json"
   export CC_HEAL_LOCK_PREFIX="$BATS_TEST_TMPDIR/lock-"
   export HANDOFF_ACCOUNT_SWEEP_THROTTLE_S=0     # no throttle unless a test opts in
-  echo '{}' > "$CC_ACCOUNTS_CACHE"
 }
 
 rows() { printf '%s' "$1" > "$BATS_TEST_TMPDIR/rows.json"; export CC_STUB_ROWS_JSON="$BATS_TEST_TMPDIR/rows.json"; }
@@ -159,13 +157,26 @@ info() { printf '%s' "$2" > "$CC_STUB_INFO_DIR/$1.json"; }
   echo "$output" | grep -q "headless relogin N/A"
 }
 
-@test "last-known quota is sourced from the cache .prev snapshot" {
-  rows '{"rows":[{"acct":"next3","auth":"logged-out","k":0}]}'
+@test "last-known quota is sourced from the durable ledger on --fresh --json (stale_quota + @ recency stamp)" {
+  # claude-accounts' inherit_lastgood stamps a broken row with stale_quota + weekly_pct + quota_as_of
+  # from its TTL-free ledger; the sweep must read THAT (not the old /tmp cache .prev) and render "@ HH:MM".
+  local asof; asof="$(date -u +%Y-%m-%dT%H:%M:%S+00:00)"          # captured "now" ⇒ today ⇒ HH:MM stamp
+  rows "{\"rows\":[{\"acct\":\"next3\",\"auth\":\"logged-out\",\"error\":\"logged-out\",\"k\":0,\"stale_quota\":true,\"weekly_pct\":31,\"quota_as_of\":\"$asof\"}]}"
   info next3 '{"config_dir":"/x","keychain_service":"svc","keychain_state":"no-keychain-item","claude_bin":"/x/claude","oauth_scopes":"a b","has_refresh_token":false}'
-  echo '{"prev":{"rows":{"next3":{"weekly_pct":31}}}}' > "$CC_ACCOUNTS_CACHE"
   run bash "$HF" account-sweep
   [ "$status" -eq 0 ]
-  echo "$output" | grep -q "weekly ~31%"
+  echo "$output" | grep -q "last-known weekly ~31%"
+  echo "$output" | grep -qE "weekly ~31% @ [0-9]{2}:[0-9]{2}"     # recency stamp re-derived from quota_as_of
+}
+
+@test "no ledger entry (row carries no stale_quota) → last-known weekly n/a, no /tmp .prev fallback" {
+  # A broken account the ledger never recorded: the sweep must NOT fall back to the retired /tmp .prev
+  # cache (none is written) — it reports "n/a" honestly.
+  rows '{"rows":[{"acct":"next3","auth":"logged-out","error":"logged-out","k":0}]}'
+  info next3 '{"config_dir":"/x","keychain_service":"svc","keychain_state":"no-keychain-item","claude_bin":"/x/claude","oauth_scopes":"a b","has_refresh_token":false}'
+  run bash "$HF" account-sweep
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "last-known weekly n/a"
 }
 
 @test "dry-run fire advertises the pre-fire sweep in its readout" {
