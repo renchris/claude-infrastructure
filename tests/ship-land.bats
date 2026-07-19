@@ -61,6 +61,32 @@ on_branch_with() {  # $1=branch $2=file $3=content  → commit a change on a fre
   [ -z "$(git ls-tree origin/main -- bad.sh)" ]           # NOT pushed
 }
 
+@test "deleted files: git-rm of a tracked .sh/.py lands GREEN (b452/1bc4 regression) → exit 0" {
+  # run_gate builds shellfiles/pyfiles by extension/shebang; before the fix it did NOT drop paths
+  # removed at HEAD, so shellcheck / py_compile ran on the now-absent path → gate RED (exit 6),
+  # making ANY file-removal commit unlandable. Regression: a commit that git-rm's a tracked .sh
+  # AND .py must land green.
+  # Seed both files STRAIGHT onto trunk (no ship-land seed) so the single delete-land is the unit
+  # under test — a seed *via ship-land* would py_compile doomed.py and leave __pycache__ litter that
+  # this scratch repo, unlike the real one (.gitignore: __pycache__/), does not ignore → a false
+  # dirty-tree exit 2 on the next land that would mask the gate behaviour we are asserting.
+  git checkout -q -b seed main
+  printf '#!/usr/bin/env bash\necho "doomed"\n' > doomed.sh
+  printf 'x = 1\n' > doomed.py
+  git add doomed.sh doomed.py && git commit -q -m "seed doomed files"
+  git push -q origin seed:main
+  git fetch -q origin main
+
+  git checkout -q -b chore/rm-doomed origin/main
+  git rm -q doomed.sh doomed.py && git commit -q -m "chore: remove doomed files"
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "LANDED"
+  git fetch -q origin main
+  [ -z "$(git ls-tree origin/main -- doomed.sh)" ]         # deletion landed on trunk
+  [ -z "$(git ls-tree origin/main -- doomed.py)" ]
+}
+
 @test "gate: extensionless python (shebang) syntax error blocks → exit 6" {
   git checkout -q -b feat/pytool main
   printf '#!/usr/bin/env python3\nx = = 1\n' > pytool       # no .py — caught via shebang scan
