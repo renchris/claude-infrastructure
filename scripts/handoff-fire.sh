@@ -144,11 +144,31 @@ HF_DIR="$(cd "$(dirname "$HF_SELF")" && pwd)"
 PAYLOAD_LINT_BIN="${CC_PAYLOAD_LINT_BIN:-$HF_DIR/payload-lint.sh}"
 COMPLETION_PUSH_BIN="${CC_COMPLETION_PUSH_BIN:-$HF_DIR/completion-push.sh}"
 
+# ---- Part A2: pre-handoff account sweep config (all env-overridable for tests) -----------------
+# The cross-account visibility + auto-heal that runs BEFORE a fire (see pre_fire_account_sweep).
+# Was CC_ACCOUNTS_BIN explicitly provided? A bats run must NEVER poll the REAL claude-accounts (live
+# network sweep + a possible real Phase-1 relogin side effect) — so under bats the sweep runs ONLY
+# when a test opts in by pointing CC_ACCOUNTS_BIN at a stub (captured here, before defaulting).
+CC_ACCOUNTS_BIN_EXPLICIT=0; [ -n "${CC_ACCOUNTS_BIN:-}" ] && CC_ACCOUNTS_BIN_EXPLICIT=1
+CC_ACCOUNTS_BIN="${CC_ACCOUNTS_BIN:-claude-accounts}"          # the dashboard/prober/router SSOT
+CC_SECURITY_BIN="${CC_SECURITY_BIN:-security}"                 # macOS keychain reader (Phase-1 relogin)
+CC_ACCOUNTS_CACHE="${CC_ACCOUNTS_CACHE:-/tmp/claude-accounts-cache.json}"  # its shared cache (last-known quota via .prev)
+CC_ACCOUNTS_JSON="${CC_ACCOUNTS_JSON:-$HOME/.claude/accounts.json}"        # accounts SSOT (keychain -a account)
+ACCOUNT_SWEEP="${HANDOFF_ACCOUNT_SWEEP:-on}"                   # off = skip the sweep entirely
+ACCOUNT_SWEEP_THROTTLE_S="${HANDOFF_ACCOUNT_SWEEP_THROTTLE_S:-60}"  # reuse the last sweep within this window (wave anti-stampede; 0 = always fresh)
+ACCOUNT_SWEEP_STAMP="${HANDOFF_ACCOUNT_SWEEP_STAMP:-/tmp/handoff-account-sweep.json}"
+ACCOUNT_SWEEP_RELOGIN_TIMEOUT_S="${HANDOFF_RELOGIN_TIMEOUT_S:-90}"  # per-account Phase-1 relogin ceiling
+# The per-account lock the Phase-1 relogin flocks. DEFAULT MUST equal claude-accounts heal()'s path
+# (`/tmp/claude-accounts-heal-<acct>.lock`) so the two never log in the same account at once — only
+# override in tests (production leaving this default is what makes the interlock real).
+CC_HEAL_LOCK_PREFIX="${CC_HEAL_LOCK_PREFIX:-/tmp/claude-accounts-heal-}"
+
 PROMPT_FILE="" ACCOUNT="auto" LAUNCHER="" MODEL="" EFFORT="" CWD="" WORKTREE=""
 REPO="$DEFAULT_REPO" WTROOT="$HOME/Development/.worktrees" BASE="origin/main"
 SURFACE="split-right" SURFACE_EXPLICIT=0 SURFACE_REASON="" PROBE=0 DRY=0 IN_PLACE=0 EXTRA="" RECYCLE=0 SESSION_ID=""
 NOTIFY_BACK="" SELF_RETIRE=1 AS_ROLE=""
 SPAWNED_PANE="" ENGAGE_VERIFY=0 FIRE_MARKER=""
+ACCOUNT_SWEEP_BRIDGE=""    # Part A2: embeddable "## ACCOUNT STATE" section (non-empty ⟺ ≥1 stranded account)
 
 # Print the header comment up to (excluding) the first non-comment sentinel — growth-proof range.
 usage() { sed -n '2,/^set -euo pipefail/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
@@ -486,6 +506,220 @@ if [ "${1:-}" = "__recycle" ]; then
   "$IT2" session run -s "$RSID" "# HANDOFF RELAUNCH FAILED — run manually: $(cat "$CMDFILE")" >/dev/null 2>&1 || true
   echo "!! relaunch typed but no claude process appeared within 90s — fallback comment typed into pane" >&2
   exit 1
+fi
+
+# ---- Part A2: pre-handoff account sweep -------------------------------------------------------
+# Before a fire we CANNOT hand off blind to a stranded account: `claude-accounts` drops an account
+# whose auth is broken (logged-out / token-invalid / keychain-error) from routing AND hides its
+# quota, so a wave silently over-loads the survivors while a whole account's headroom is stranded.
+# This sweep runs `claude-accounts --fresh --json` (which auto-heals STALE accounts in-process and
+# repopulates the shared cache the subsequent `--rank` reads), then for each still-broken account
+# either (a) runs account-relogin Phase-1 headlessly — the SAME rotation-safe `claude auth login`
+# refresh grant `claude-accounts` heal() does, gated to a present refresh token + ZERO live sessions
+# + the SAME per-account lock — or (b) emits ONE bridge line (account + last-known quota + relogin
+# pointer) that gets embedded in the fired brief so the successor can re-auth or route around it.
+# SAFE-BY-CONSTRUCTION: the sweep NEVER blocks/aborts a fire (best-effort, returns 0 on any error);
+# the relogin is fail-CLOSED (acts only on provably-recoverable state via the official binary, never
+# a raw token POST, never under a live CC that owns the token lifecycle). Design: docs/research/
+# desk-anti-hitl-2026-07-19.md Part A (rec. 2). The last-good ledger (rec. 1) is a SEPARATE item —
+# until it lands, "last-known quota" is best-effort from the cache's .prev snapshot.
+
+# The macOS keychain `-a` account for the Phase-1 relogin read (mirrors claude-accounts read_creds):
+# env override wins (tests), else the accounts SSOT, else the login user.
+_sweep_keychain_account() {
+  [ -n "${CC_KEYCHAIN_ACCOUNT:-}" ] && { printf '%s' "$CC_KEYCHAIN_ACCOUNT"; return 0; }
+  local v=""
+  if command -v jq >/dev/null 2>&1 && [ -f "$CC_ACCOUNTS_JSON" ]; then
+    v="$(jq -r '.keychain_account // empty' "$CC_ACCOUNTS_JSON" 2>/dev/null || true)"
+  fi
+  [ -n "$v" ] && { printf '%s' "$v"; return 0; }
+  printf '%s' "${USER:-chrisren}"
+}
+
+# Best-effort last-known weekly% for a now-broken account, from the cache's .prev snapshot (the
+# rows from BEFORE this --fresh sweep). "n/a" until the Part-A1 last-good ledger lands.
+_sweep_lastknown_weekly() { # $1=acct
+  local a="$1" p=""
+  if command -v jq >/dev/null 2>&1 && [ -f "$CC_ACCOUNTS_CACHE" ]; then
+    p="$(jq -r --arg a "$a" '.prev.rows[$a].weekly_pct // empty' "$CC_ACCOUNTS_CACHE" 2>/dev/null || true)"
+  fi
+  case "$p" in ''|null) printf 'weekly n/a' ;; *) printf 'weekly ~%s%%' "$p" ;; esac
+}
+
+_sweep_write_stamp() { # $1=epoch-ts  $2=bridge-section — throttle stamp so a wave reuses one sweep
+  command -v jq >/dev/null 2>&1 || return 0
+  local tmp="$ACCOUNT_SWEEP_STAMP.$$.tmp"
+  if jq -cn --argjson ts "${1:-0}" --arg bridge "${2:-}" '{ts:$ts, bridge:$bridge}' > "$tmp" 2>/dev/null; then
+    mv -f "$tmp" "$ACCOUNT_SWEEP_STAMP" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+  else
+    rm -f "$tmp" 2>/dev/null
+  fi
+  return 0
+}
+
+# Phase-1 headless relogin for ONE account — the official-binary refresh grant, done in Python so it
+# interlocks with claude-accounts heal() on the EXACT same fcntl lock + reads the refresh token from
+# the SAME keychain item. Exit: 0 healed · 3 deferred (another heal/login in flight) · 1 failed
+# (no/invalid refresh token, revoked grant, timeout). Prints a short detail on non-zero.
+phase1_relogin() { # $1=acct $2=config_dir $3=keychain_service $4=keychain_account $5=claude_bin $6=oauth_scopes
+  CC_SECURITY_BIN="$CC_SECURITY_BIN" SVC="$3" KCA="$4" CFGDIR="$2" CBIN="$5" SCOPES="$6" \
+  RELOGIN_TIMEOUT="$ACCOUNT_SWEEP_RELOGIN_TIMEOUT_S" HEAL_LOCK_PREFIX="$CC_HEAL_LOCK_PREFIX" \
+  /usr/bin/python3 - "$1" <<'PY'
+import os, sys, json, subprocess, fcntl
+sec = os.environ.get("CC_SECURITY_BIN") or "security"
+svc, kca, cfgdir = os.environ["SVC"], os.environ["KCA"], os.environ["CFGDIR"]
+cbin, scopes = os.environ["CBIN"], os.environ["SCOPES"]
+acct = sys.argv[1]
+try:
+    timeout = int(os.environ.get("RELOGIN_TIMEOUT", "90"))
+except ValueError:
+    timeout = 90
+if not (cfgdir and svc and cbin):
+    print("missing relogin-info (config_dir/keychain_service/claude_bin)"); sys.exit(1)
+# 1. read the refresh token from the SAME keychain item claude-accounts reads (never a raw POST)
+try:
+    p = subprocess.run([sec, "find-generic-password", "-s", svc, "-a", kca, "-w"],
+                       capture_output=True, text=True, timeout=10)
+except Exception as e:                                   # noqa: BLE001 — best-effort, any failure = no heal
+    print(f"keychain read error: {type(e).__name__}"); sys.exit(1)
+if p.returncode != 0:
+    print("keychain read failed (no item / locked)"); sys.exit(1)
+try:
+    rt = (json.loads(p.stdout).get("claudeAiOauth") or {}).get("refreshToken")
+except (ValueError, AttributeError):
+    rt = None
+if not rt:
+    print("no refresh token in keychain"); sys.exit(1)
+# 2. serialize on the EXACT lock claude-accounts heal() uses — never two logins on one account
+lock_path = os.environ.get("HEAL_LOCK_PREFIX", "/tmp/claude-accounts-heal-") + acct + ".lock"
+try:
+    lock = open(lock_path, "w")
+    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except BlockingIOError:
+    print("another heal/login in flight"); sys.exit(3)
+except OSError as e:
+    print(f"lock error: {type(e).__name__}"); sys.exit(1)
+# 3. the rotation-safe refresh grant — the binary persists the (possibly rotated) tokens itself
+env = os.environ.copy()
+env["CLAUDE_CONFIG_DIR"] = cfgdir
+env["CLAUDE_CODE_OAUTH_REFRESH_TOKEN"] = rt
+env["CLAUDE_CODE_OAUTH_SCOPES"] = scopes
+try:
+    r = subprocess.run([cbin, "auth", "login"], env=env, capture_output=True,
+                       text=True, timeout=timeout)
+except subprocess.TimeoutExpired:
+    print("relogin timed out"); sys.exit(1)
+except Exception as e:                                   # noqa: BLE001
+    print(f"relogin error: {type(e).__name__}"); sys.exit(1)
+out = (r.stdout + r.stderr).strip()
+if r.returncode == 0 and "Login successful" in out:
+    sys.exit(0)
+print((out.splitlines() or [f"rc={r.returncode}"])[-1][:120]); sys.exit(1)
+PY
+}
+
+# Orchestrator. Sets ACCOUNT_SWEEP_BRIDGE to the embeddable "## ACCOUNT STATE" section (non-empty
+# ONLY when ≥1 account is stranded). Always returns 0 — a sweep failure must never block a fire.
+# $1="force" bypasses the throttle (the manual `account-sweep` subcommand passes it).
+pre_fire_account_sweep() {
+  local force="${1:-}"
+  ACCOUNT_SWEEP_BRIDGE=""
+  [ "$ACCOUNT_SWEEP" = off ] && { echo "→ pre-fire account sweep: OFF (HANDOFF_ACCOUNT_SWEEP=off)" >&2; return 0; }
+  # Test isolation: under bats, never touch the REAL claude-accounts (network + a possible real
+  # relogin as a test side effect). A test that exercises the sweep opts in via a CC_ACCOUNTS_BIN
+  # stub; production never sets BATS_TEST_TMPDIR, so it is unaffected.
+  if [ -n "${BATS_TEST_TMPDIR:-}" ] && [ "${CC_ACCOUNTS_BIN_EXPLICIT:-0}" != 1 ]; then
+    echo "→ pre-fire account sweep: skipped (bats env, no CC_ACCOUNTS_BIN stub)" >&2; return 0
+  fi
+  command -v jq >/dev/null 2>&1 || { echo "→ pre-fire account sweep: skipped (jq not found)" >&2; return 0; }
+  command -v "$CC_ACCOUNTS_BIN" >/dev/null 2>&1 || { echo "→ pre-fire account sweep: skipped ($CC_ACCOUNTS_BIN not on PATH)" >&2; return 0; }
+
+  local now; now="$(date +%s)"
+  # throttle: reuse the last sweep's bridge within the window so a wave doesn't stampede the endpoint
+  if [ "$force" != force ] && [ "${ACCOUNT_SWEEP_THROTTLE_S:-0}" -gt 0 ] && [ -f "$ACCOUNT_SWEEP_STAMP" ]; then
+    local ts age
+    ts="$(jq -r '.ts // 0' "$ACCOUNT_SWEEP_STAMP" 2>/dev/null || echo 0)"; ts="${ts%.*}"
+    age=$(( now - ${ts:-0} ))
+    if [ "$age" -ge 0 ] && [ "$age" -lt "$ACCOUNT_SWEEP_THROTTLE_S" ]; then
+      ACCOUNT_SWEEP_BRIDGE="$(jq -r '.bridge // ""' "$ACCOUNT_SWEEP_STAMP" 2>/dev/null || true)"
+      local note=""; [ -n "$ACCOUNT_SWEEP_BRIDGE" ] && note=" — stranded account(s), see bridge"
+      echo "→ pre-fire account sweep: reused (${age}s < ${ACCOUNT_SWEEP_THROTTLE_S}s throttle)$note" >&2
+      return 0
+    fi
+  fi
+
+  # 1. live sweep + auto-heal (STALE accounts self-heal inside --fresh; the shared cache is rewritten)
+  local json total broken
+  json="$("$CC_ACCOUNTS_BIN" --fresh --json 2>/dev/null || true)"
+  [ -n "$json" ] || { echo "⚠ pre-fire account sweep: '$CC_ACCOUNTS_BIN --fresh --json' returned nothing — skipping (fire proceeds)" >&2; return 0; }
+  total="$(printf '%s' "$json" | jq -r '.rows | length' 2>/dev/null || echo 0)"
+  broken="$(printf '%s' "$json" | jq -r '.rows[] | select(.auth=="logged-out" or .auth=="token-invalid" or .auth=="keychain-error") | [.acct, .auth, (.k // 0)] | @tsv' 2>/dev/null || true)"
+  if [ -z "$broken" ]; then
+    echo "→ pre-fire account sweep: ${total:-?}/${total:-?} accounts healthy (or auto-healed)" >&2
+    _sweep_write_stamp "$now" ""
+    return 0
+  fi
+
+  # 2. per broken account: Phase-1 headless relogin when eligible, else a bridge line
+  local healed=0 stranded=0 stranded_lines="" summary=""
+  local acct auth k info hrt kstate cfgdir svc cbin scopes kca lastknown rc detail why
+  while IFS="$(printf '\t')" read -r acct auth k; do
+    [ -n "$acct" ] || continue
+    info="$("$CC_ACCOUNTS_BIN" --relogin-info "$acct" 2>/dev/null || true)"
+    hrt="$(printf '%s' "$info" | jq -r '.has_refresh_token // false' 2>/dev/null || echo false)"
+    kstate="$(printf '%s' "$info" | jq -r '.keychain_state // "unknown"' 2>/dev/null || echo unknown)"
+    cfgdir="$(printf '%s' "$info" | jq -r '.config_dir // ""' 2>/dev/null || true)"
+    svc="$(printf '%s' "$info" | jq -r '.keychain_service // ""' 2>/dev/null || true)"
+    cbin="$(printf '%s' "$info" | jq -r '.claude_bin // ""' 2>/dev/null || true)"
+    scopes="$(printf '%s' "$info" | jq -r '.oauth_scopes // ""' 2>/dev/null || true)"
+    kca="$(_sweep_keychain_account)"
+    lastknown="$(_sweep_lastknown_weekly "$acct")"
+
+    # Phase-1 eligibility: refresh token present + keychain readable + ZERO live sessions (a live CC
+    # owns the token lifecycle — never relogin under it; heal()'s k==0 gate). logged-out/keychain-error
+    # inherently fail has_refresh_token, so this branch is reached only by a recoverable token-invalid.
+    if [ "$hrt" = true ] && [ "$kstate" = present ] && [ "${k:-0}" = 0 ] && [ -n "$cfgdir$svc$cbin" ]; then
+      rc=0; detail="$(phase1_relogin "$acct" "$cfgdir" "$svc" "$kca" "$cbin" "$scopes")" || rc=$?
+      if [ "$rc" = 0 ]; then
+        healed=$((healed+1)); summary="$summary ✓$acct(healed)"
+        echo "→ pre-fire account sweep: $acct was $auth → healed via Phase-1 headless relogin" >&2
+        continue
+      elif [ "$rc" = 3 ]; then
+        summary="$summary ↻$acct(deferred)"
+        echo "→ pre-fire account sweep: $acct $auth — Phase-1 relogin deferred (${detail:-in flight})" >&2
+        continue
+      fi
+      stranded=$((stranded+1)); summary="$summary ⚠$acct($auth,relogin-failed)"
+      stranded_lines="$stranded_lines
+- $acct — $auth · Phase-1 headless relogin FAILED (${detail:-unknown}) · last-known $lastknown · fix: \`$CC_ACCOUNTS_BIN --relogin-info $acct\` → account-relogin skill (Phase 2, browser)"
+    else
+      why="no refresh token — headless relogin N/A"
+      [ "${k:-0}" != 0 ] && why="$k live session(s) — token owned by a running CC (never relogin under it)"
+      stranded=$((stranded+1)); summary="$summary ⚠$acct($auth)"
+      stranded_lines="$stranded_lines
+- $acct — $auth · $why · last-known $lastknown · fix: \`$CC_ACCOUNTS_BIN --relogin-info $acct\` → account-relogin skill (Phase 2, browser)"
+    fi
+  done <<EOF
+$broken
+EOF
+
+  # 3. assemble the embeddable bridge section (only the actionable stranded lines)
+  if [ "$stranded" -gt 0 ]; then
+    ACCOUNT_SWEEP_BRIDGE="$(printf '## ACCOUNT STATE — pre-fire sweep (%d of %s account(s) NOT routable)\nQuota is stranded on these — before routing further work here, re-auth or route around them:%s' "$stranded" "${total:-?}" "$stranded_lines")"
+  fi
+  local routable=$(( ${total:-0} - stranded ))
+  echo "⚠ pre-fire account sweep: ${routable}/${total:-?} routable · healed=$healed stranded=$stranded ·$summary" >&2
+  _sweep_write_stamp "$now" "$ACCOUNT_SWEEP_BRIDGE"
+  return 0
+}
+
+# account-sweep — manual/test entrypoint: run the sweep now, print the embeddable bridge section to
+# stdout (empty when all accounts are routable), exit 0. Fresh by default (bypasses the wave throttle);
+# `--throttled` respects it (the exact path a fire takes). Used by /handoff and tests.
+if [ "${1:-}" = "account-sweep" ]; then
+  if [ "${2:-}" = "--throttled" ]; then pre_fire_account_sweep; else pre_fire_account_sweep force; fi
+  [ -n "$ACCOUNT_SWEEP_BRIDGE" ] && printf '%s\n' "$ACCOUNT_SWEEP_BRIDGE"
+  exit 0
 fi
 
 # self-close — arm the detached watcher that retires this session once the calling turn ends.
@@ -847,6 +1081,15 @@ probe_account() { # $1=account → 0 pass; prints rejection class on fail
   return 1
 }
 
+# ---- Part A2: pre-handoff account sweep (auto-heal + stranded-account bridge) ------------------
+# Runs BEFORE ranking so a token-invalid account healed by a headless Phase-1 relogin is written to
+# the shared cache the `--rank` below reads, and any un-healable account is bridge-lined into the
+# fired brief. Best-effort + non-fatal; skipped for --recycle (same-account continuation — no pick)
+# and dry-run (no polling). Sets ACCOUNT_SWEEP_BRIDGE, embedded into $PF_NB in the trailer block.
+if [ "$RECYCLE" = 0 ] && [ "$DRY" = 0 ]; then
+  pre_fire_account_sweep || true
+fi
+
 # ---- pick the account ------------------------------------------------------------------------
 CHOSEN="" RANKED="" NAMES="" reason=""
 if [ -n "$LAUNCHER" ]; then
@@ -964,6 +1207,11 @@ if [ -n "$NOTIFY_BACK" ] || [ "$WANT_SELF_RETIRE" = 1 ] || [ "$ENGAGE_VERIFY" = 
       printf '%s\n' '       $HOME/.claude/scripts/handoff-fire.sh self-close --terminal'
       printf '%s\n' 'Report, finish the trivial tail, close. Do not wait idle for input that is not coming.'
     } >> "$PF_NB"
+  fi
+  # Part A2: embed the pre-fire account-state bridge (only present when ≥1 account is stranded) so the
+  # successor sees which accounts are NOT routable (quota stranded) + how to re-auth / route around them.
+  if [ -n "$ACCOUNT_SWEEP_BRIDGE" ]; then
+    { printf '\n'; printf '%s\n' "$ACCOUNT_SWEEP_BRIDGE"; } >> "$PF_NB"
   fi
   if [ "$ENGAGE_VERIFY" = 1 ]; then
     # A globally-unique engagement marker — embedded ONLY in this launch-time copy, NEVER echoed
@@ -1276,6 +1524,10 @@ if [ "$DRY" = 1 ]; then
     elif [ -n "$NAMES" ]; then echo "probe:    SKIPPED in dry-run (would probe $pm walking: $(printf '%s' "$NAMES" | tr '\n' ' '))"
     else echo "probe:    SKIPPED in dry-run (would probe $pm on $CHOSEN)"; fi
   fi
+  if [ "$RECYCLE" = 0 ]; then
+    if [ "$ACCOUNT_SWEEP" = off ]; then echo "sweep:    account sweep OFF (HANDOFF_ACCOUNT_SWEEP=off)"
+    else echo "sweep:    pre-fire claude-accounts --fresh + Phase-1 auto-heal for token-invalid; bridge-lines any stranded account into the brief (throttle ${ACCOUNT_SWEEP_THROTTLE_S}s; SKIPPED in dry-run)"; fi
+  fi
   if [ -n "$WORKTREE" ]; then
     case "$WT_SETUP" in
       pool)     echo "worktree: POOL CLAIM at fire time (scripts/worktree-pool.sh claim $WORKTREE — path printed by claim; no in-pane install)" ;;
@@ -1325,4 +1577,9 @@ else
   DEST="${CWD:-$REPO (self-routing)}"; [ -n "$WORKTREE" ] && DEST="$WT ($WT_SETUP)"
   RSUM=""; [ -n "$SURFACE_REASON" ] && RSUM=", reason: $SURFACE_REASON"
   echo "→ fired: $LAUNCHER @ $DEST  (surface: $SURFACE, account: $CHOSEN, prompt: $PROMPT_FILE$RSUM)"
+  # NB: an `if` block, NOT `[ -n … ] && echo` — a trailing &&-list whose test is false returns 1,
+  # which would become the script's exit status on the common (no-stranded-account) path.
+  if [ -n "$ACCOUNT_SWEEP_BRIDGE" ]; then
+    echo "  ⚠ pre-fire sweep found stranded account(s) — '## ACCOUNT STATE' embedded in the brief (re-auth or route around; see stderr above)"
+  fi
 fi
