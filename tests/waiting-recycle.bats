@@ -145,6 +145,71 @@ mk_contract() { # $1=id $2=waitee $3=deadline-epoch $4=waiter_pid $5=status
   [ "$status" -eq 0 ]; [ -z "$output" ]
 }
 
+# ── (6) STAGE 2 — deterministic fire (advisory → K=1 escalation), shadow-default ──────────────────
+# GRACE_S=0 ⇒ poll 1 sets the grace clock (advisory), poll 2 escalates to Stage 2.
+setup_stage2() { export CC_WR_GRACE_S=0; export CC_WR_FIRE_DIR="$BATS_TEST_TMPDIR/fire"; mkdir -p "$CC_WR_FIRE_DIR"; }
+
+@test "stage2 SHADOW: advisory then escalates to a would-fire (logs stage2-shadow, composes brief, no exec)" {
+  setup_stage2
+  mk_tel s6 60; run drive s6 "$(mk_tx 6 "$WAIT")"; fired "$output"          # poll 1 = advisory (grace clock)
+  mk_tel s6 61; run drive s6 "$(mk_tx 6 "$WAIT")"                           # poll 2 = Stage 2 (grace elapsed)
+  [ "$status" -eq 0 ]; fired "$output"
+  echo "$output" | grep -qi "SHADOW"
+  grep -q 'stage2-shadow' "$CC_WR_IDL"
+  [ -s "$CC_WR_FIRE_DIR/wr-fire-s6.txt" ]                                   # brief composed, non-empty (no FM-D)
+  grep -q "re-derive live watch state" "$CC_WR_FIRE_DIR/wr-fire-s6.txt"
+}
+@test "stage2 SHADOW: exemption — fires despite an active cwd cooldown (cap/cooldown are Stage-1 only)" {
+  setup_stage2                                                             # COOLDOWN_S stays 600 (default)
+  mk_tel s6x 60; run drive s6x "$(mk_tx 6 "$WAIT")"; fired "$output"       # advisory stamps the cooldown
+  mk_tel s6x 61; run drive s6x "$(mk_tx 6 "$WAIT")"                        # still fires (Stage 2 is cooldown-exempt)
+  [ "$status" -eq 0 ]; fired "$output"; echo "$output" | grep -qi "SHADOW"
+}
+@test "stage2 SHADOW: composed brief carries the frozen DoD when one is recorded" {
+  setup_stage2
+  export DOD_PERSIST="$BATS_TEST_TMPDIR/dod.sh"
+  printf '#!/bin/bash\necho "SHIP the thing to 100/100"\n' > "$DOD_PERSIST"; chmod +x "$DOD_PERSIST"
+  mk_tel s6b 60; run drive s6b "$(mk_tx 6 "$WAIT")"
+  mk_tel s6b 61; run drive s6b "$(mk_tx 6 "$WAIT")"
+  grep -q "Scope (frozen): SHIP the thing to 100/100" "$CC_WR_FIRE_DIR/wr-fire-s6b.txt"
+}
+@test "stage2 one-fire-per-SID: after a fire, the next poll is silent (already-fired latch)" {
+  setup_stage2; export CC_WR_COOLDOWN_S=0                                   # isolate the latch from the cooldown
+  mk_tel s6c 60; run drive s6c "$(mk_tx 6 "$WAIT")"                         # advisory
+  mk_tel s6c 61; run drive s6c "$(mk_tx 6 "$WAIT")"; fired "$output"        # shadow fire (latch set)
+  mk_tel s6c 62; run drive s6c "$(mk_tx 6 "$WAIT")"                         # next poll → already-fired
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  grep -q 'already-fired' "$CC_WR_IDL"
+}
+@test "stage2 grace: within the grace window it stays an ADVISORY (does not fire yet)" {
+  export CC_WR_GRACE_S=9999 CC_WR_COOLDOWN_S=0 CC_WR_FIRE_DIR="$BATS_TEST_TMPDIR/fire"; mkdir -p "$CC_WR_FIRE_DIR"
+  mk_tel s6d 60; run drive s6d "$(mk_tx 6 "$WAIT")"; fired "$output"        # advisory 1
+  mk_tel s6d 61; run drive s6d "$(mk_tx 6 "$WAIT")"                         # poll 2: grace not elapsed → advisory
+  [ "$status" -eq 0 ]; fired "$output"
+  ! echo "$output" | grep -qi "SHADOW"
+  ! grep -q 'stage2' "$CC_WR_IDL"
+}
+@test "stage2 LIVE: arm --brief --live → escalation EXECS handoff-fire --recycle --prompt-file" {
+  setup_stage2
+  local stub="$BATS_TEST_TMPDIR/hf-stub.sh" rec="$BATS_TEST_TMPDIR/hf-args"
+  printf '#!/bin/bash\nprintf "%%s\\n" "$*" > %q\n' "$rec" > "$stub"; chmod +x "$stub"
+  export CC_WR_HANDOFF_FIRE="$stub"
+  local tmpl="$BATS_TEST_TMPDIR/brief.txt"; echo "resume desk monitoring from disk" > "$tmpl"
+  ( cd "$DESK" && bash "$HOOK" arm --brief "$tmpl" --live >/dev/null )
+  mk_tel s6e 60; run drive s6e "$(mk_tx 6 "$WAIT")"                         # advisory
+  mk_tel s6e 61; run drive s6e "$(mk_tx 6 "$WAIT")"                         # Stage 2 LIVE
+  [ "$status" -eq 0 ]
+  [ -f "$rec" ]                                                             # actuator invoked
+  grep -q -- "--recycle" "$rec"; grep -q -- "--prompt-file" "$rec"
+  grep -q 'stage2-live' "$CC_WR_IDL"
+  grep -q "resume desk monitoring from disk" "$CC_WR_FIRE_DIR/wr-fire-s6e.txt"   # used the --brief template
+}
+@test "arm --live without a brief template is REFUSED (no empty-payload fire, FM-D)" {
+  run bash -c "cd '$DESK' && CC_WR_STATE_DIR='$CC_WR_STATE_DIR' bash '$HOOK' arm --live"
+  [ "$status" -eq 2 ]
+  echo "$output" | grep -qi "requires a non-empty --brief"
+}
+
 # ── (4) KILL-SWITCH — opt-out-by-default (not armed) + global kill ───────────────────────────────
 @test "kill-switch: an UN-armed desk is never recycled (opt-out default)" {
   ( cd "$DESK" && bash "$HOOK" clear >/dev/null )    # opt this desk OUT
