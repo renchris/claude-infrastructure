@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.claude.discovery — Program D phase 3, the discovery feed (the true L4 signature).
+  A launchd job runs the standing critics (cc-discover --once) on an interval; each refills
+  cc-backlog idempotently so most work ORIGINATES from Claude, not the operator.
+
+  TEMPLATE (RunAtLoad false, StartInterval 3600 = hourly). C10: the OPERATOR loads this
+  (launchctl bootstrap) — the agent never loads it. See docs/activation/discovery-activate-snippet.md.
+  Kill-switch: launchctl bootout.
+
+  PATH prepends ~/.claude/bin (the 36f9d64 lesson: launchd's default PATH lacks it, so cc-discover,
+  cc-backlog + jq must be put on PATH explicitly) — set inside `bash -c` so $HOME expands at runtime
+  (portable, no hardcoded home). The frontier ledger (C1) is given ABSOLUTELY because launchd runs
+  with cwd=/, where the tool's repo-relative default would not resolve; PROJECT is pinned so
+  candidate records carry a stable project name. Gates (C4) + find-plan (C2) resolve via
+  ~/.claude/{bin,scripts,hooks} inside cc-discover, independent of cwd.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.claude.discovery</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"; export CC_DISCOVER_FRONTIER_LEDGER="$HOME/Development/claude-infrastructure/docs/research/FRONTIER_HOLES.md"; export CC_DISCOVER_PROJECT="claude-infrastructure"; exec "$HOME/.claude/bin/cc-discover" --once</string>
+    </array>
+
+    <key>StartInterval</key>
+    <integer>3600</integer>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>LowPriorityIO</key>
+    <true/>
+
+    <key>Nice</key>
+    <integer>5</integer>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/claude-discovery.stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/tmp/claude-discovery.stderr.log</string>
+</dict>
+</plist>
