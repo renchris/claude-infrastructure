@@ -51,7 +51,12 @@ EVIDENCE_GREP='cc-telemetry|cc-registry|CC_TELEMETRY_DIR|CC_REGISTRY_DIR'
 # scripts/handoff-fire.sh rm's ONLY atomic-write TEMP files (mv-or-rm on registry/role writes) + its own
 # transient rank-stderr capture consumed in-function — scaffolding, never evidence; fire outcomes live in
 # the fired session's transcript + registry row + IDL. No -mmin/RETAIN_H. Declared = reviewed (2026-07-18).
-DECLARED='bin/cc-context bin/cc-board bin/cc-sessions bin/cc-notify hooks/session-register.sh hooks/session-deregister.sh statusline.sh scripts/lead-supervisor.sh scripts/lead-reconciler.sh hooks/waiting-recycle.sh scripts/handoff-fire.sh'
+# bin/cc-reaper names `cc-registry` in prose (the P0-12b self-check message tells the operator where the
+# blind spot is) and rm's ONLY its own surface-page damping markers ($PAGEDIR/*.cause) when a pane leaves
+# the surface set — a page LIFECYCLE op (the clear_page analog, T-P3-3), NOT an age-horizon reaper on the
+# telemetry/registry spine. The registry itself is never read or deleted here (the self-check counts live
+# panes via `ps`, independent of the registry). No -mmin/RETAIN_H. Declared = reviewed (2026-07-19 desk wave).
+DECLARED='bin/cc-context bin/cc-board bin/cc-sessions bin/cc-notify bin/cc-reaper hooks/session-register.sh hooks/session-deregister.sh statusline.sh scripts/lead-supervisor.sh scripts/lead-reconciler.sh hooks/waiting-recycle.sh scripts/handoff-fire.sh'
 
 viol=0
 say(){ printf '  %s\n' "$1"; }
