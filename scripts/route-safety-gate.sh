@@ -43,7 +43,7 @@ if [ ! -f "$TOOL" ]; then
   todo "RT-e" "NOT BUILT — SSOT DISCIPLINE: model ids parsed LIVE from model-config.yaml with key-anchored, value-bounded parses (frontier_access.model, roles.lead_default); window state DELEGATED to claude-accounts (the reference frontier_window()). Parse failure → exit 3 LOUD — never default open OR closed, never hardcode (two real incidents: frontier-window-ssot-discipline)."
   todo "RT-f" "NOT BUILT — OUTCOME RECORDS (abstention law): every plan, fallback, cliff-stop, and refusal appends a record to ~/.claude/route/ (CC_ROUTE_RECORDS_DIR) — routing that cannot be audited cannot be trusted."
 else
-  "$TOOL" selftest >/dev/null 2>&1 && ok "RT" "cc-route selftest GREEN — slot plans, frontier-edge fallback (reason-carrying, fable-id-free), quota-cliff stop (exit 4 + limit-recover, no plan), data-unavailable stop, SSOT parse fail-loud, outcome records all fire RED-provably" || bad "RT" "cc-route selftest not green — an RT-a..f RED-proof does not fire"
+  "$TOOL" selftest >/dev/null 2>&1 && ok "RT" "cc-route selftest GREEN — slot plans, frontier-edge fallback (reason-carrying, fable-id-free), quota-cliff stop (exit 4 + limit-recover, no plan), cliff→kimi offer gated on 'claude-kimi wired' (RT-g: still exit 4, OFFER not auto-route), data-unavailable stop, SSOT parse fail-loud, outcome records all fire RED-provably" || bad "RT" "cc-route selftest not green — an RT-a..g RED-proof does not fire"
   if [ -f tests/cc-route.bats ] && command -v bats >/dev/null 2>&1; then
     bats tests/cc-route.bats >/dev/null 2>&1 && ok "RT-cli" "tests/cc-route.bats GREEN — CLI exit-code contract (0 plan · 2 usage · 3 blind/no-data · 4 cliff) regression-pinned" || bad "RT-cli" "tests/cc-route.bats RED"
   else

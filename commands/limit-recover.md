@@ -190,8 +190,19 @@ C money-path. Then:
   ```
 
   then fire `/limit-recover handoff auto` on that default. This IS operator **decision #3**'s
-  default-if-no-veto: cross-account continuation (quota-plane isolation); Kimi engages only on an
-  operator key.
+  default-if-no-veto: cross-account continuation (quota-plane isolation).
+
+  **Kimi overflow — the last-resort hedge (T-P8-6, gated on the operator key).** Cross-account
+  continuation only helps while *some* Max account still has headroom. When EVERY Max account is
+  capped — the true quota cliff (a full Anthropic cap / outage) — the metered Kimi hedge (a
+  non-Anthropic endpoint) is the one remaining overflow. It is **gated on the operator key**:
+  `cc-route`'s cliff branch runs `claude-kimi wired` and, only when WIRED, **OFFERS** it on the
+  same exit-4 STOP (`claude-kimi` — metered, ~$3/$15 per MTok, isolated from the 4 Max accounts)
+  alongside `/limit-recover`. It is an **OFFER, never an auto-route** — a cliff never
+  silent-down-tiers to a paid endpoint or fires blind; actuation is one explicit `claude-kimi`
+  invocation (a standing-authorization auto-fire, if ever wanted, is the separate autonomy policy,
+  not this always-a-STOP branch). Not wired → `claude-kimi set-key` enables it for next time
+  (OPERATOR key — the operator's metered spend).
 
 - **Monthly-spend cap (NO reset time)** → there is nothing to wait for, and raising the cap is a C6
   money-path the desk must never sign. `gate-classify.sh` routes the monthly-spend text to **B** (a
