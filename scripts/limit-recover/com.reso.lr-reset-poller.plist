@@ -4,7 +4,14 @@
      Default = NOTIFY-ONLY (safe): it detects limit-parked sessions + macOS-notifies once, spawns nothing.
      To ENABLE unattended auto-resume AFTER reviewing ~/.reso/limit-recover/poller.log, add the
      EnvironmentVariables block below (LR_POLLER_AUTOFIRE=1) and `launchctl unload && load` it.
-     Kill switch: set LR_POLLER_DISABLED=1 (or unload). -->
+     Kill switch: set LR_POLLER_DISABLED=1 (or unload).
+
+     HEADLESS (P0-8): this LaunchAgent runs in the Aqua session, so the default LR_POLLER_SPAWN=auto
+     resumes via an iTerm2 window (GUI). For a LaunchDaemon / headless / pre-login (P0-10) install,
+     set LR_POLLER_SPAWN=tmux so resumes run in a DETACHED tmux PTY (attach: `tmux attach -t
+     lr-resume-<sid8>`). auto = try GUI, fall back to tmux — never silently fail a resume.
+     A MONTHLY-SPEND kill (no reset) opens a class-B cc-decide packet instead of parking; its default
+     fires after LR_SPEND_VETO_HOURS (default 1h). -->
 <plist version="1.0">
 <dict>
   <key>Label</key><string>com.reso.lr-reset-poller</string>
@@ -17,9 +24,12 @@
   <key>RunAtLoad</key><true/>
   <key>StandardOutPath</key><string>/Users/chrisren/.reso/limit-recover/poller.launchd.out</string>
   <key>StandardErrorPath</key><string>/Users/chrisren/.reso/limit-recover/poller.launchd.err</string>
-  <!-- Auto-resume is OFF by default. To enable, uncomment:
+  <!-- Auto-resume is OFF by default. To enable, uncomment (add LR_POLLER_SPAWN=tmux for headless):
   <key>EnvironmentVariables</key>
-  <dict><key>LR_POLLER_AUTOFIRE</key><string>1</string></dict>
+  <dict>
+    <key>LR_POLLER_AUTOFIRE</key><string>1</string>
+    <key>LR_POLLER_SPAWN</key><string>auto</string>
+  </dict>
   -->
 </dict>
 </plist>

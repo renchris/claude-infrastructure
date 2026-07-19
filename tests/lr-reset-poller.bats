@@ -1,5 +1,7 @@
 #!/usr/bin/env bats
-# limit-reset poller — LR-a..LR-h proofs (scripts/limit-reset-safety-gate.sh registers the criteria).
+# limit-reset poller — LR-a..LR-n proofs (scripts/limit-reset-safety-gate.sh registers the criteria).
+# LR-j..LR-n (2026-07-19, P0-8 agent half) prove the headless resume spawn path (tmux, no GUI) and
+# the monthly-spend → class-B decision-packet path (no reset ⇒ never silent-park).
 #
 # Harness laws honored (blueprint §3.10 L1-L4): the LR-a fixture carries the REAL transcript artifact's
 # BYTES (type:assistant + isApiErrorMessage:true + error:rate_limit + the verbatim "You've hit your …
@@ -19,14 +21,37 @@ setup() {
   mkdir -p "$HOME/bin" "$STATE/parked" "$STATE/resumed" "$BATS_TEST_TMPDIR/stubs" "$BATS_TEST_TMPDIR/cwd"
   CWD="$BATS_TEST_TMPDIR/cwd"
 
-  # osascript stub — records every invocation, opens/notifies NOTHING.
+  # osascript stub — records every invocation, opens/notifies NOTHING. OSA_FAIL=1 makes the
+  # window-open FAIL (exit 1) AFTER recording — simulates a no-GUI context for the auto→tmux fallback.
   cat > "$BATS_TEST_TMPDIR/stubs/osascript" <<'STUB'
 #!/bin/bash
 printf '%s\n' "$*" >> "${OSA_LOG:?}"
+[ "${OSA_FAIL:-0}" = 1 ] && exit 1
 exit 0
 STUB
   chmod +x "$BATS_TEST_TMPDIR/stubs/osascript"
   export OSA_LOG="$BATS_TEST_TMPDIR/osascript.log"; : > "$OSA_LOG"
+
+  # tmux stub — records argv (headless spawn path); TMUX_FAIL=1 makes new-session fail.
+  cat > "$BATS_TEST_TMPDIR/stubs/tmux" <<'STUB'
+#!/bin/bash
+printf '%s\n' "$*" >> "${TMUX_LOG:?}"
+[ "${TMUX_FAIL:-0}" = 1 ] && exit 1
+exit 0
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/stubs/tmux"
+  export TMUX_LOG="$BATS_TEST_TMPDIR/tmux.log"; : > "$TMUX_LOG"
+
+  # cc-decide stub — records argv, echoes a fixed packet id (the decision-queue writer).
+  cat > "$BATS_TEST_TMPDIR/stubs/cc-decide" <<'STUB'
+#!/bin/bash
+printf '%s\n' "$*" >> "${CCD_LOG:?}"
+echo "deadbeefcafe"
+exit 0
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/stubs/cc-decide"
+  export CCD_LOG="$BATS_TEST_TMPDIR/cc-decide.log"; : > "$CCD_LOG"
+
   export PATH="$BATS_TEST_TMPDIR/stubs:$PATH"
 
   # claude-accounts stub — headroom by default; ACCTS_CAPPED=1 flips next4 to capped.
@@ -69,6 +94,30 @@ future_disp() { python3 -c "from datetime import datetime,timezone,timedelta;d=d
 
 past_iso()   { python3 -c "from datetime import datetime,timezone,timedelta;print((datetime.now(timezone.utc)-timedelta(hours=1)).isoformat().replace('+00:00','Z'))"; }
 future_iso() { python3 -c "from datetime import datetime,timezone,timedelta;print((datetime.now(timezone.utc)+timedelta(hours=3)).isoformat().replace('+00:00','Z'))"; }
+
+# A REAL-shape MONTHLY-SPEND kill: the billing-plane isApiErrorMessage carries the verbatim
+# "You've hit your monthly spend limit" text and NO reset time. $1=sid $2=event-epoch.
+mk_spend_transcript() {
+  local sid="$1" ev_epoch="$2"
+  local proj="$HOME/.claude-quaternary/projects/-test-proj"
+  mkdir -p "$proj"
+  local ev_iso; ev_iso="$(python3 -c "from datetime import datetime,timezone;import sys;print(datetime.fromtimestamp(int(sys.argv[1]),tz=timezone.utc).isoformat().replace('+00:00','Z'))" "$ev_epoch")"
+  {
+    printf '{"type":"user","cwd":"%s","timestamp":"%s","message":{"role":"user","content":"go"}}\n' "$CWD" "$ev_iso"
+    printf '{"type":"assistant","isApiErrorMessage":true,"timestamp":"%s","message":{"role":"assistant","model":"claude-opus-4-8","content":[{"type":"text","text":"You'\''ve hit your monthly spend limit"}]}}\n' "$ev_iso"
+  } > "$proj/$sid.jsonl"
+}
+# Same, but a TEAMMATE (agentName in an early record) — recovery is lead-owned, so no packet.
+mk_spend_teammate_transcript() {
+  local sid="$1" ev_epoch="$2"
+  local proj="$HOME/.claude-quaternary/projects/-test-proj"
+  mkdir -p "$proj"
+  local ev_iso; ev_iso="$(python3 -c "from datetime import datetime,timezone;import sys;print(datetime.fromtimestamp(int(sys.argv[1]),tz=timezone.utc).isoformat().replace('+00:00','Z'))" "$ev_epoch")"
+  {
+    printf '{"type":"user","cwd":"%s","agentName":"worker-3","timestamp":"%s","message":{"role":"user","content":"go"}}\n' "$CWD" "$ev_iso"
+    printf '{"type":"assistant","isApiErrorMessage":true,"timestamp":"%s","message":{"role":"assistant","model":"claude-opus-4-8","content":[{"type":"text","text":"You'\''ve hit your monthly spend limit"}]}}\n' "$ev_iso"
+  } > "$proj/$sid.jsonl"
+}
 
 @test "LR-a: genuine limit transcript (real bytes, reset-bearing) → PARKED ledger row with kind+reset" {
   # event 30 min ago; reset display = a time strictly between event and now would race midnight math —
@@ -181,4 +230,71 @@ future_iso() { python3 -c "from datetime import datetime,timezone,timedelta;prin
   [ "$status" -eq 0 ]
   [ ! -e "$STATE/parked/$sid.json" ]
   [ -f "$STATE/resumed/$sid.json" ]                                  # marker intact — the same event never re-fires
+}
+
+# ── P0-8 agent half: headless resume (tmux) + monthly-spend → class-B packet ──────────────────────
+
+@test "LR-j: LR_POLLER_SPAWN=tmux → headless resume via tmux (no GUI window), ledger parked→resumed" {
+  mk_parked "aaaa000j-1111-2222-3333-444444444444" "$(past_iso)"
+  LR_POLLER_AUTOFIRE=1 LR_POLLER_SPAWN=tmux run bash "$POLLER" --once
+  [ "$status" -eq 0 ]
+  # a DETACHED tmux session ran the SAME launcher — a headless PTY, no Aqua session needed
+  grep -q 'new-session' "$TMUX_LOG"
+  grep -q "lr-poller-launch-aaaa000j.sh" "$TMUX_LOG"
+  # and NO iTerm2 window was opened (the GUI path was never taken)
+  [ "$(grep -c 'create window' "$OSA_LOG")" -eq 0 ]
+  [ -x "/tmp/lr-poller-launch-aaaa000j.sh" ]
+  grep -q "lr-fire-resume.sh" "/tmp/lr-poller-launch-aaaa000j.sh"
+  [ -f "$STATE/resumed/aaaa000j-1111-2222-3333-444444444444.json" ]
+  [ ! -e "$STATE/parked/aaaa000j-1111-2222-3333-444444444444.json" ]
+  grep -qE 'RESUMED aaaa000j.*tmux' "$STATE/poller.log"              # mechanism recorded in the outcome
+  rm -f "/tmp/lr-poller-launch-aaaa000j.sh"
+}
+
+@test "LR-k: monthly-spend kill (no reset) → class-B decision packet opened, NEVER silent-parked" {
+  local now; now=$(date +%s)
+  mk_spend_transcript "aaaa000k-1111-2222-3333-444444444444" "$((now-1800))"
+  run bash "$POLLER" --once
+  [ "$status" -eq 0 ]
+  # cc-decide opened a class-B packet whose default is cross-account continuation (operator decision #3)
+  grep -q 'open --class B' "$CCD_LOG"
+  grep -q 'cross-account' "$CCD_LOG"
+  grep -q -- '--session-sid aaaa000k-1111-2222-3333-444444444444' "$CCD_LOG"
+  # the silent-park gap is CLOSED: a no-reset billing kill is surfaced, never parked and never dropped
+  [ ! -e "$STATE/parked/aaaa000k-1111-2222-3333-444444444444.json" ]
+  [ -f "$STATE/spend-packet/aaaa000k-1111-2222-3333-444444444444" ]  # idempotency marker
+  grep -q "SPEND aaaa000k" "$STATE/poller.log"                       # greppable outcome (abstention law)
+}
+
+@test "LR-l: monthly-spend packet opened exactly ONCE across ticks (marker-keyed, no per-tick spam)" {
+  local now; now=$(date +%s)
+  mk_spend_transcript "aaaa000l-1111-2222-3333-444444444444" "$((now-1800))"
+  run bash "$POLLER" --once
+  [ "$status" -eq 0 ]
+  run bash "$POLLER" --once
+  [ "$status" -eq 0 ]
+  [ "$(grep -c 'open --class B' "$CCD_LOG")" -eq 1 ]                 # cc-decide invoked once, not per-tick
+  [ "$(grep -c 'SPEND aaaa000l' "$STATE/poller.log")" -eq 1 ]
+}
+
+@test "LR-m: LR_POLLER_SPAWN=auto with no GUI (osascript fails) → falls back to tmux, never silent-fails a resume" {
+  mk_parked "aaaa000m-1111-2222-3333-444444444444" "$(past_iso)"
+  OSA_FAIL=1 LR_POLLER_AUTOFIRE=1 run bash "$POLLER" --once          # default LR_POLLER_SPAWN=auto
+  [ "$status" -eq 0 ]
+  grep -q 'create window' "$OSA_LOG"                                 # GUI attempted first...
+  grep -q 'new-session' "$TMUX_LOG"                                  # ...then tmux carried it headlessly
+  grep -q "lr-poller-launch-aaaa000m.sh" "$TMUX_LOG"
+  [ -f "$STATE/resumed/aaaa000m-1111-2222-3333-444444444444.json" ]
+  grep -qE 'RESUMED aaaa000m.*tmux' "$STATE/poller.log"
+  rm -f "/tmp/lr-poller-launch-aaaa000m.sh"
+}
+
+@test "LR-n: teammate monthly-spend session → NO packet (lead-owned recovery), teammate-skip logged" {
+  local now; now=$(date +%s)
+  mk_spend_teammate_transcript "aaaa000n-1111-2222-3333-444444444444" "$((now-1800))"
+  run bash "$POLLER" --once
+  [ "$status" -eq 0 ]
+  [ ! -s "$CCD_LOG" ]                                                # cc-decide never called for a teammate
+  [ ! -e "$STATE/spend-packet/aaaa000n-1111-2222-3333-444444444444" ]
+  grep -q "SKIP  aaaa000n" "$STATE/poller.log"
 }
