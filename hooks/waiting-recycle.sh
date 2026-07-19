@@ -195,15 +195,84 @@ ROT_TELLS='(lost|losing) track|(remind|reorient|reacquaint) (myself|me)|(do(n.?t
 rot_valid=0; { [ "$rot" = 1 ] && [ "$fresh" = 1 ] && [ "$used" -ge "$ROT_FLOOR" ]; } && rot_valid=1
 { [ "$over_threshold" = 1 ] || [ "$rot_valid" = 1 ]; } || abstain "below-threshold-no-tell:used=${used},fresh=${fresh},rot=${rot},floor=${ROT_FLOOR}"
 
-# 5. SAFE — genuinely just-WAITING, never mid-write-work or holding a decision.
-# 5a. Clean tree: uncommitted changes = in-scope write work in hand ⇒ HOLD (never recycle over it).
+# 5. SAFE — genuinely just-WAITING, never mid-write-work, mid-merge, mid-coordination, or holding
+# a decision. Every clause below is FALSE-NEGATIVE-safe: an unreadable/ambiguous signal HOLDS (a
+# missed recycle just waits for the next poll; a wrong recycle strands the fleet).
+# 5a. Clean tree + no git SEQUENCER state: uncommitted changes = in-scope work in hand ⇒ HOLD; a live
+# merge/rebase/cherry-pick is porcelain-CLEAN at step boundaries yet mid-active-work (the audit's
+# "mid-merge between clean states", Fable panel S1) ⇒ HOLD on the sequencer files.
 if git -C "$CWD" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   [ -z "$(git -C "$CWD" status --porcelain 2>/dev/null)" ] || abstain "dirty-tree-hold"
+  gd="$(git -C "$CWD" rev-parse --git-dir 2>/dev/null)"
+  if [ -n "$gd" ]; then
+    case "$gd" in /*) ;; *) gd="$CWD/$gd" ;; esac
+    for seq in MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD rebase-merge rebase-apply; do
+      [ -e "$gd/$seq" ] && abstain "sequencer-state-hold:$seq"
+    done
+  fi
 fi
 # 5b. Open decision/blocker in the last message (reuse anti-deference's GENUINE carve-out): a desk
 # waiting on the operator's call must SURFACE, not silently recycle the question away.
 GENUINE='your (credential|password|api.?key|secret|token|login|cookie)|need (your|the)[^.]{0,40}(credential|password|secret|token|key|access|permission|approval)|only you (can|have|know)|(don.?t|do not|no) [a-z ]{0,20}access|which account|you.?ll need to (provide|give|share|tell|run|log ?in)|i (don.?t|do not) have (access|the |your |permission)|can you (provide|share|tell me|give me|confirm which)|which (do you|would you|of (these|the)|option|approach|one)|(would|do) you prefer|your call|up to you|how would you like|which direction|your approval|requires? (your|sudo|approval|authentication)|run (this|it|the [a-z ]{0,20}) ?yourself|sudo|interactive login|auth login|pushing to (main|origin)|push (is|remains)[^.]{0,20}your call|won.?t push|will not push|not push(ing)? (to|without)|force.?push|destructive migration|drop table|delete[^.]{0,20}production|navigation pattern|(db|database) timeout'
 [ -n "$MSG" ] && printf '%s' "$MSG" | grep -iqE "$GENUINE" && abstain "open-decision-hold"
+
+# 5c. Active-COORDINATION holds (Fable panel 2026-07-19 S3/S4/S5). A monitoring desk can be clean-tree
+# yet mid-coordination; a recycle would strand state that lives ONLY in this SID's context. The desk's
+# OWN waiter-contracts do NOT hold (durable on disk, the successor resumes them) — only a peer BLOCKED
+# ON this desk, an unprocessed inbound ping, or a live teammate do. Roots are seam-overridable for tests.
+COORD="${CC_WR_COORD_DIR:-$HOME/.claude}"                    # root of wait-contracts/ mailbox/ cc-roles/
+UUID="${CC_WR_UUID:-${ITERM_SESSION_ID##*:}}"               # this desk's iTerm pane uuid (survives recycle)
+QUIET_S="${CC_WR_QUIET_S:-180}"                             # S4: a mailbox line fresher than this = active
+now_s="$(date +%s)"
+# identity set a peer addresses THIS desk by: session_id, pane uuid, or a role file resolving to either.
+ident_is_me() { # $1=addressee → 0 if it names this desk
+  local w="$1"; [ -n "$w" ] || return 1
+  { [ "$w" = "$SID" ] || { [ -n "$UUID" ] && [ "$w" = "$UUID" ]; }; } && return 0
+  if [ -f "$COORD/cc-roles/$w" ]; then
+    local rv; rv="$(cat "$COORD/cc-roles/$w" 2>/dev/null)"
+    { [ "$rv" = "$SID" ] || { [ -n "$UUID" ] && [ "$rv" = "$UUID" ]; }; } && return 0
+  fi
+  return 1
+}
+# S5 — live context-bound TEAMMATES (HARD HOLD — teammate/TaskOutput results route to THIS SID; a
+# recycle or /compact kills them unrecoverably). Signal: a team dir created BY this session. Conservative
+# (existence ⇒ HOLD): a lingering post-teardown dir over-holds, which is FALSE-NEGATIVE-safe and visible
+# in the shadow log for teardown-hygiene follow-up.
+for td in "$CFG"/teams/session-"${SID:0:8}"*; do
+  { [ -d "$td" ] && [ -f "$td/config.json" ]; } && abstain "live-team-hold"
+done
+# S3 — a peer is contract-BLOCKED on this desk: OPEN wait-contract, waitee names me, deadline future,
+# waiter still ALIVE (a dead waiter's OPEN contract is a zombie — kill -0 filters it, panel S3).
+if [ -d "$COORD/wait-contracts" ]; then
+  for wc in "$COORD"/wait-contracts/*.json; do
+    [ -f "$wc" ] || continue
+    [ "$(jq -r '.status // empty' "$wc" 2>/dev/null)" = "OPEN" ] || continue
+    ident_is_me "$(jq -r '.waitee // empty' "$wc" 2>/dev/null)" || continue
+    dl="$(jq -r '.deadline // 0' "$wc" 2>/dev/null)"; case "$dl" in ''|*[!0-9]*) dl=0 ;; esac
+    [ "$dl" -gt "$now_s" ] || continue                        # past deadline ⇒ not a live block
+    wp="$(jq -r '.waiter_pid // empty' "$wc" 2>/dev/null)"
+    { [ -n "$wp" ] && ! kill -0 "$wp" 2>/dev/null; } && continue   # dead waiter ⇒ zombie, skip
+    abstain "inbound-wait-hold"
+  done
+fi
+# S4 — a peer just reached for this desk (mailbox line fresher than QUIET_S). cc-notify ALWAYS
+# mailbox-writes before injecting, and cc-dispatch workers notify the desk ROLE without a contract,
+# so S3 alone under-detects — S4 is load-bearing. Check the own-uuid mailbox + any role resolving to me.
+mbx_active() { # $1=mailbox file → 0 if touched within QUIET_S
+  [ -f "$1" ] || return 1
+  local mt; mt="$(stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0)"
+  case "$mt" in ''|*[!0-9]*) mt=0 ;; esac
+  [ "$(( now_s - mt ))" -lt "$QUIET_S" ]
+}
+{ [ -n "$UUID" ] && mbx_active "$COORD/mailbox/$UUID.md"; } && abstain "inbox-active-hold"
+if [ -d "$COORD/cc-roles" ]; then
+  for rf in "$COORD"/cc-roles/*; do
+    [ -f "$rf" ] || continue
+    rv="$(cat "$rf" 2>/dev/null)"
+    { [ "$rv" = "$SID" ] || { [ -n "$UUID" ] && [ "$rv" = "$UUID" ]; }; } || continue
+    mbx_active "$COORD/mailbox/$rv.md" && abstain "inbox-active-hold-role"
+  done
+fi
 
 # ── FIRE: stamp cooldown (loop-breaker) + bump cap, log, advise the model to recycle NOW. ──
 mkdir -p "$STATE_DIR" 2>/dev/null || true
