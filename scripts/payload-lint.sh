@@ -13,8 +13,10 @@
 # happen. This lint makes it RED.
 #
 # THE RULE (two checks):
-#   F3    BACK-CHANNEL BLOCK — the payload MUST carry a cc-notify reference AND a full desk uuid
-#         (8-4-4-4-12). Missing EITHER → RED (a successor cannot announce).
+#   F3    BACK-CHANNEL BLOCK — the payload MUST carry a cc-notify reference AND a resolvable target:
+#         a full desk uuid (8-4-4-4-12) OR role-indirection (cc-roles/<role> | --role <role>, the
+#         P0-15 form that follows a recycled desk). Missing the reference, or carrying it with NO
+#         resolvable target → RED (a successor cannot announce).
 #   F3/a  (serves F2) NO TERMINAL-ANNOUNCE VIA SendMessage — a line PRESCRIBING SendMessage for a terminal /
 #         desk / orchestrator / operator announce is the W5 bug (SendMessage is teammate-scope only). A
 #         PROHIBITION ('never SendMessage the desk') is fine — the lint distinguishes prescriptive from
@@ -40,16 +42,25 @@ SENDMSG='SendMessage'
 ANN='desk|orchestrator|operator|terminal|ship-witness|succession|program-complete'
 # prohibition / documentation markers — a line carrying one is guidance, not a prescription.
 NEGATION='never|not a teammate|unresolv|do ?n.?t|does ?n.?t|avoid|degrad|silent|teammate-scope|instead of|rather than|WRONG|bug|forbidden|prohibit'
+# role-indirection (P0-15): the sanctioned back-channel that resolves a ROLE to the CURRENT pane via
+# ~/.claude/cc-roles/<role> — strictly better than a frozen uuid, which goes stale (the G-P2-2 dead-desk-
+# uuid incident). A payload pairing cc-notify with a role reference (the cc-roles/<role> path a reader
+# cats, or a --role flag) is addressable and MUST satisfy F3 alongside a literal uuid — else every
+# role-driven fire (every /goal fire uses `cc-notify "$(cat ~/.claude/cc-roles/desk)"`) false-REDs.
+ROLE_REF='cc-roles/(desk|operator|orchestrator)|--role[[:space:]=]+(desk|operator|orchestrator)'
 
 lint_file() {
   local pf="$1"
   [ -n "$pf" ] && [ -f "$pf" ] && [ -s "$pf" ] || { echo "payload-lint: CANNOT DETERMINE — no readable payload '$pf'"; return 2; }
-  local fail=0 has_cc has_uuid presc
-  grep -qE 'cc-notify' "$pf" && has_cc=1 || has_cc=0
+  local fail=0 has_cc has_uuid has_role presc
+  grep -qE 'cc-notify' "$pf" && has_cc=1   || has_cc=0
   grep -qE "$UUID"     "$pf" && has_uuid=1 || has_uuid=0
-  # F3 — the back-channel block: a cc-notify line AND a full desk uuid, both present.
-  if [ "$has_cc" = 0 ] || [ "$has_uuid" = 0 ]; then
-    echo "  RED  F3   BACK-CHANNEL BLOCK missing — cc-notify line: $([ "$has_cc" = 1 ] && echo present || echo ABSENT); desk full-uuid: $([ "$has_uuid" = 1 ] && echo present || echo ABSENT). A successor cannot announce (the W5 root)."
+  grep -qE "$ROLE_REF" "$pf" && has_role=1 || has_role=0
+  # F3 — the back-channel block: a cc-notify reference AND a resolvable target — a full desk uuid OR
+  # role-indirection (cc-roles/<role> | --role <role>, the P0-15 form that follows a recycled desk).
+  # Missing the reference, or having it with NO resolvable target → RED (a successor cannot announce).
+  if [ "$has_cc" = 0 ] || { [ "$has_uuid" = 0 ] && [ "$has_role" = 0 ]; }; then
+    echo "  RED  F3   BACK-CHANNEL BLOCK missing — cc-notify: $([ "$has_cc" = 1 ] && echo present || echo ABSENT); resolvable target (desk full-uuid OR role-indirection cc-roles/<role>|--role): $({ [ "$has_uuid" = 1 ] || [ "$has_role" = 1 ]; } && echo present || echo ABSENT). A successor cannot announce (the W5 root)."
     fail=1
   fi
   # F3/a — a PRESCRIPTIVE terminal-announce via SendMessage (a prohibition is filtered out by NEGATION).
@@ -59,7 +70,7 @@ lint_file() {
     printf '           %s\n' "$presc"
     fail=1
   fi
-  [ "$fail" -eq 0 ] && { echo "  OK   F3   back-channel block present (cc-notify + desk full-uuid); no SendMessage terminal-announce"; return 0; }
+  [ "$fail" -eq 0 ] && { echo "  OK   F3   back-channel block present (cc-notify + $([ "$has_uuid" = 1 ] && echo 'desk full-uuid' || echo 'role-indirection cc-roles/<role>')); no SendMessage terminal-announce"; return 0; }
   return 1
 }
 
@@ -92,6 +103,15 @@ BACK-CHANNEL: cc-notify $DESK is the desk address.
 On ship, announce the ship-witness to the desk via SendMessage.
 EOF
 
+  # (4) ROLE-INDIRECTION — cc-notify + a cc-roles/<role> reference, NO literal uuid (the P0-15 sanctioned
+  #     form; every /goal fire uses `cc-notify "$(cat ~/.claude/cc-roles/desk)"`). MUST go GREEN, or every
+  #     role-driven fire false-REDs and the T-P2-5 pre-fire wiring wrongly BLOCKS the desk's own /goal fires.
+  cat >"$d/role.txt" <<'EOF'
+SUCCESSOR FIRE — continue the build.
+BACK-CHANNEL: announce to the desk via cc-notify "$(cat ~/.claude/cc-roles/desk)", VERIFIED.
+NEVER SendMessage — the desk is NOT a teammate.
+EOF
+
   fails=0
   expect() { # <file> <want-rc> <label>  — capture the code directly (no `[ $? ]`, per SC2181)
     lint_file "$1" >/dev/null 2>&1; local got=$?
@@ -100,9 +120,10 @@ EOF
   expect "$d/missing.txt" 1 "block-less payload did not go RED"
   expect "$d/present.txt" 0 "well-formed payload did not go GREEN (a prohibition false-RED'd?)"
   expect "$d/sendmsg.txt" 1 "a SendMessage terminal-announce did not go RED"
+  expect "$d/role.txt"    0 "role-indirection payload (cc-notify + cc-roles/<role>, no uuid) did not go GREEN"
   expect "$d/absent.txt"  2 "a missing file did not exit 2 (LOUD)"
   if [ "$fails" -eq 0 ]; then
-    echo "payload-lint --selftest: 4/4 — RED on a block-less payload, RED on a SendMessage terminal-announce, GREEN on a well-formed one (prohibition tolerated), LOUD on missing."
+    echo "payload-lint --selftest: 5/5 — RED on a block-less payload, RED on a SendMessage terminal-announce, GREEN on a well-formed one (uuid) AND on role-indirection (cc-roles/<role>; prohibition tolerated), LOUD on missing."
     exit 0
   fi
   echo "payload-lint --selftest: FAILED — the lint does not discriminate (do not trust F3)."
