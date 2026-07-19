@@ -294,3 +294,16 @@ fired()  { echo "$1" | grep -q '"decision":"block"'; }   # hook stdout ⇒ did i
   run bash -c "ls '$CC_DECISIONS_DIR'/*.json 2>/dev/null"
   [ -z "$output" ]                                             # credential ⇒ class C ⇒ hook opens no packet
 }
+
+# ── RED-prove (cc-backlog 666c6a64c45e): a " / backslash in a logged field must never emit a
+#    MALFORMED IDL line — one aborts the cc-audit four-zeros `jq -rs` slurp (⇒ D9/alarm silent-GREEN).
+#    The `tell` here is a substring of the MODEL's own prose (it can carry quotes), so this hook was
+#    the sharpest real vector. jq-encoding fixes it. FAILS on the old raw-%s emit, PASSES now. ──
+@test "IDL: a quote/backslash-bearing session_id yields a strict-slurp-parseable, lossless line" {
+  local input; input="$(jq -nc '{session_id:"s\"q\\z",cwd:"/tmp"}')"   # no transcript_path ⇒ abstain logs
+  run bash -c 'printf "%s" "$1" | bash "$2"' _ "$input" "$HOOK"
+  [ "$status" -eq 0 ]
+  run jq -s '.' "$ANTIDEF_IDL"
+  [ "$status" -eq 0 ]
+  jq -e 'select(.sid=="s\"q\\z")' "$ANTIDEF_IDL" >/dev/null
+}

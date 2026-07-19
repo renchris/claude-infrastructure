@@ -182,3 +182,17 @@ fired() { printf '%s' "$1" | grep -q '"decision":"block"'; }
   run run_ca "$(mkfix "Everything is done, all green.")" "$w2"
   grep -q '"disposition":"abstained"' "$COMPLETION_IDL"
 }
+
+# ── RED-prove (cc-backlog 666c6a64c45e): a " / backslash in a logged field must never emit a
+#    MALFORMED IDL line. Raw %s did — `{…,"sid":"s"q",…}` — which aborts the cc-audit four-zeros
+#    `jq -rs` slurp (⇒ "no records" ⇒ D9/alarm silently GREEN, defeating the un-gameable detector).
+#    jq-encoding every field fixes it. Drive an early abstain so log_idl runs with SID carrying the
+#    injected chars. This test FAILS on the old raw-printf emit (jq -s aborts) and PASSES now. ──
+@test "IDL: a quote/backslash-bearing session_id yields a strict-slurp-parseable, lossless line" {
+  local input; input="$(jq -nc '{session_id:"s\"q\\z",cwd:"/tmp"}')"   # no transcript_path ⇒ abstain logs
+  run bash -c 'printf "%s" "$1" | bash "$2"' _ "$input" "$HOOK"
+  [ "$status" -eq 0 ]
+  run jq -s '.' "$COMPLETION_IDL"                                # STRICT slurp = what the four-zeros consumer does
+  [ "$status" -eq 0 ]                                            # one malformed line would abort this
+  jq -e 'select(.sid=="s\"q\\z")' "$COMPLETION_IDL" >/dev/null   # lossless: jq-escaped, NOT quote-stripped
+}

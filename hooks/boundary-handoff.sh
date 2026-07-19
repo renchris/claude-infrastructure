@@ -72,11 +72,16 @@ stdin_json="$(cat 2>/dev/null || true)"
 sid="$(printf '%s' "$stdin_json" | jq -r '.session_id // empty' 2>/dev/null || true)"
 
 # ── B-3: one IDL line per invocation. Never fails the hook. ──
-log_idl() { # $1=disposition  $2=reason  $3=extra-json-fields(optional, leading comma-free)
+log_idl() { # $1=disposition  $2=reason  $3=extra JSON OBJECT (optional, jq-built {…}; default {})
   mkdir -p "$(dirname "$IDL")" 2>/dev/null || true
-  local ts; ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  printf '{"ts":"%s","hook":"boundary-handoff","sid":"%s","disposition":"%s","reason":"%s"%s}\n' \
-    "$ts" "${sid:-?}" "$1" "$2" "${3:+,$3}" >> "$IDL" 2>/dev/null || true
+  local ts extra; ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  extra="${3:-}"; [ -n "$extra" ] || extra='{}'
+  # jq-encode EVERY field: a value carrying a " / backslash / newline then can NEVER emit a
+  # malformed IDL line — one malformed line aborts the cc-audit four-zeros `jq -rs` slurp, which
+  # reads as "no records" and silently flips D9/the alarm GREEN (defeats the un-gameable detector).
+  jq -cn --arg ts "$ts" --arg sid "${sid:-?}" --arg disp "$1" --arg reason "$2" --argjson extra "$extra" \
+    '{ts:$ts,hook:"boundary-handoff",sid:$sid,disposition:$disp,reason:$reason} + $extra' \
+    >> "$IDL" 2>/dev/null || true
 }
 abstain() { log_idl abstained "$1"; exit 0; }     # abstained = evaluated but did not fire (LOGGED, not silent)
 
@@ -155,7 +160,9 @@ fi
 
 # ── FIRE — record the fill at fire-time (the re-arm baseline), log, then advise via latched block ──
 printf '%s' "$used" > "$latch" 2>/dev/null || true
-log_idl fired "past-boundary" "\"used_pct\":${used},\"threshold\":${T},\"head\":\"${head:0:8}\""
+log_idl fired "past-boundary" \
+  "$(jq -cn --argjson used "$used" --argjson threshold "$T" --arg head "${head:0:8}" \
+      '{used_pct:$used,threshold:$threshold,head:$head}')"
 reason="⚑ Boundary reached — context ${used}% ≥ ${T}% at a committed + green boundary (HEAD ${head:0:8}). Run the /handoff rails now to preserve state into a successor before auto-compaction. (Advisory: if you have a genuine reason to keep working, do so — this re-arms at +${REARM_DELTA}% fill.)"
 jq -nc --arg r "$reason" '{decision:"block",reason:$r,systemMessage:$r}'
 exit 0
