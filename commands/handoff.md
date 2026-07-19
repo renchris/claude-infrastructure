@@ -230,6 +230,30 @@ transcript-activity proxy. Static hint orders are retired — two of them contra
 within 48h. If a fired session rate-limits, relaunch the SAME worktree on another `claude-nextN`
 (no rework). Account = launcher suffix only; the worktree is account-agnostic.
 
+**2a · Pre-fire account sweep — never hand off blind to a stranded account.** BEFORE it ranks,
+`handoff-fire.sh` runs `claude-accounts --fresh` (which auto-heals STALE accounts in-process and
+rewrites the shared cache the `--rank` above then reads) and inspects every account's auth. For each
+account whose auth is broken it acts by PROVABLE recoverability, never by guesswork:
+
+- **`token-invalid` with a live refresh token + ZERO live sessions →** it runs **account-relogin
+  Phase 1 headlessly** — the same rotation-safe `claude auth login` refresh grant that
+  `claude-accounts` heal() does, under the SAME `/tmp/claude-accounts-heal-<acct>.lock` (never two
+  logins on one account; deferred if a heal is already in flight). The account is healed in place and
+  routable next sweep. It NEVER relogins under a live CC (`k>0`) — that session owns the token lifecycle.
+- **`logged-out` / `keychain-error` / a revoked refresh token →** not headless-recoverable, so it
+  embeds ONE **`## ACCOUNT STATE`** bridge line into the fired brief — `<acct> <state> · last-known
+  weekly <N>% · fix: claude-accounts --relogin-info <acct> → account-relogin skill (Phase 2, browser)`
+  — so the successor can re-auth it or deliberately route around it instead of silently over-loading
+  the survivors. (Last-known quota is best-effort from the cache `.prev` snapshot until the last-good
+  ledger lands — Part A1.)
+
+The sweep is **best-effort and never blocks a fire** (any tool/parse failure ⇒ it's skipped, the fire
+proceeds). It is **wave-throttled** (`HANDOFF_ACCOUNT_SWEEP_THROTTLE_S`, default 60s — the first fire
+of a wave sweeps, the rest reuse its result so a burst doesn't stampede the endpoint) and disableable
+with `HANDOFF_ACCOUNT_SWEEP=off`. Run it standalone any time with `handoff-fire.sh account-sweep`
+(prints the bridge section; empty when all four accounts are routable). Design:
+`docs/research/desk-anti-hitl-2026-07-19.md` Part A; skill: `account-relogin`.
+
 **3 · Model + effort.** Pick per the SSOT ladders (`~/.claude/model-config.yaml` `effort_defaults` +
 `roles`) — Opus and Fable run DIFFERENT ladders; never carry one model's effort habit onto the other:
 
@@ -506,6 +530,12 @@ section) plus the deterministic helper; the un-fakeable part lives in the script
 
 ## Guardrails
 
+- **The pre-fire account sweep (§ item 2a) is fail-SAFE for the fire but fail-CLOSED for the relogin.**
+  It NEVER blocks or aborts a fire (best-effort). The headless Phase-1 relogin acts ONLY on provably
+  recoverable state (a readable refresh token, zero live sessions, its own account lock) via the
+  official binary — never a raw refresh-token POST, never under a live CC. A logged-out / revoked
+  account is SURFACED (a `## ACCOUNT STATE` bridge line), never force-fixed. Leave `CC_HEAL_LOCK_PREFIX`
+  at its default in production — it MUST equal `claude-accounts` heal()'s lock path or the interlock breaks.
 - NEVER write the bridge into a tracked/repo path or commit it. Stateless → `/tmp` only.
 - It's a pointer: reference the plan's section; don't restate its body (that's the staleness trap).
 - If durable state isn't captured in the plan yet, update the plan FIRST, then emit the bridge.
