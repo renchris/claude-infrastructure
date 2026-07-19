@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.claude.boot-resume — P0-10 agent half (T-P16-2/-7): the post-login reboot-recovery chain.
+  RunAtLoad fires it at GUI login; it detects sessions that were open at last boot (durable
+  cc-registry ghosts vs kern.boottime) and either PAGES the boot-delta once (posture=page, default)
+  or resumes them + starts keepalive (posture=resume). Idempotent per boot — exactly one page per
+  reboot; every post-first run this boot is a cheap already-processed abstain.
+
+  TEMPLATE — NOT auto-loaded. This ships UNLOADED on purpose: the reboot-posture decision is the
+  OPERATOR's (auto-login/FileVault/LaunchDaemon tradeoff), and whether the chain RESUMES vs only
+  PAGES is the posture switch (ruling #1: PAGES by default, never auto-recovers). The agent never
+  loads launchd. Activation + rollback + the posture switch: docs/activation/boot-resume-activate-snippet.md.
+  Kill-switch: launchctl bootout gui/$UID/com.claude.boot-resume
+
+  StartInterval 300s is a self-heal RETRY, not a poll: if the desk role is absent at login the page
+  can't deliver, so the run fails LOUD without marking the boot processed; the 5-min tick re-attempts
+  until it delivers, then every further tick abstains (already-processed) until the next reboot.
+  PATH prepends ~/.claude/bin so cc-notify (+ jq) resolve — launchd's default PATH lacks it.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.claude.boot-resume</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"; exec "$HOME/.claude/scripts/boot-resume.sh"</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StartInterval</key>
+    <integer>300</integer>
+
+    <key>LowPriorityIO</key>
+    <true/>
+
+    <key>Nice</key>
+    <integer>5</integer>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/claude-boot-resume.stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/tmp/claude-boot-resume.stderr.log</string>
+</dict>
+</plist>
