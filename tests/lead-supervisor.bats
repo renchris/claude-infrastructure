@@ -17,7 +17,7 @@ setup() {
   echo "$output" | grep -qE 'supervisor-e2e: [0-9]+ passed, 0 failed'
   # guard against a zero-check 'pass' (a suite that silently runs nothing must not read green)
   n_pass="$(echo "$output" | sed -nE 's/.*supervisor-e2e: ([0-9]+) passed.*/\1/p')"
-  [ "${n_pass:-0}" -ge 24 ]
+  [ "${n_pass:-0}" -ge 30 ]
 }
 
 @test "clean-completion reap + stranded-death page are both exercised (item 9b183d78c723)" {
@@ -36,4 +36,13 @@ setup() {
   echo "$output" | grep -q 'T16 REAP orphan'
   echo "$output" | grep -q 'T17 REAP dead-pid'
   echo "$output" | grep -q 'T18 DAMPING'
+}
+
+@test "registered-desk STALL? exemption — role=sid, role=pane→registry, desk-specific, dead-still-DEAD (item ff95faea46c8)" {
+  run bash "$SUP" --selftest
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'T23 REGISTERED-DESK EXEMPTION (role=sid)'
+  echo "$output" | grep -q 'T24 REGISTERED-DESK EXEMPTION (role=pane→registry)'
+  echo "$output" | grep -q 'T25 EXEMPTION IS DESK-SPECIFIC'
+  echo "$output" | grep -q 'T26 DEAD DESK'
 }

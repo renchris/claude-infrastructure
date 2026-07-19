@@ -27,6 +27,7 @@ export CC_SUP_PAGE_DEADLINE_S=1
 export CC_PERMPEND_DIR="$SBX/permpend";           mkdir -p "$CC_PERMPEND_DIR"
 export CC_PERMPEND_NOTICE_S=1                      # page a beacon pending ≥1s (fast tests; prod default 120)
 export CC_PERMPEND_HORIZON_S=86400                # orphan-reap horizon (T16 ages a beacon past it)
+export CC_REGISTRY_DIR="$SBX/registry";           mkdir -p "$CC_REGISTRY_DIR"   # paneUUID→sid map for the registered-desk exemption tests (T23-T26)
 
 ALIVE=; cleanup(){ [ -n "$ALIVE" ] && kill "$ALIVE" 2>/dev/null; rm -rf "$SBX"; }
 trap cleanup EXIT
@@ -258,6 +259,39 @@ idl_has '"kind":"page_void","sid":"osc"' && ok "fresh effects past deadline ⇒ 
 # sweep 3 — the same stale telemetry re-raises STALL?, but the RETAINED marker keeps it composer-quiet
 CC_NOTIFY_CAPTURE="$SBX/notify.log" CC_PAGE_TO_FILE="$SBX/desk-role" CC_NOTIFY_BIN="$SBX/bin/cc-notify" bash "$SUP" --once >/dev/null 2>&1
 [ "$(wc -l < "$SBX/notify.log")" -eq 1 ] && ok "re-STALL? after void ⇒ NO re-notify (marker retained — storm fixed)" || no "void dropped the marker ⇒ re-notify storm (lines=$(wc -l < "$SBX/notify.log"))"
+
+echo "T23 REGISTERED-DESK EXEMPTION (role=sid) — a pid-alive idle desk with STALE telemetry+transcript is NOT a STALL? candidate (item ff95faea46c8)"
+reset; permreset; rm -f "$CC_TELEMETRY_DIR"/*.json
+printf '%s' "deskA" > "$SBX/desk-role"                            # role file holds the desk's sid DIRECTLY
+mktel deskA 40 100 "$ALIVE" "$REPO"                              # live pid, telemetry 100s stale (≥ STALL_S=5), NO transcript ⇒ cold — exactly the idle-monitor false positive
+CC_PAGE_TO_FILE="$SBX/desk-role" bash "$SUP" --once >/dev/null 2>&1
+paged deskA && no "paged the registered desk (exemption FAILED — idle-monitor STALL? false positive)" || ok "registered desk (role=sid) exempt from STALL?"
+idl_has '"sid":"deskA","state":"STALL?"' && no "STALL? finding emitted for the registered desk" || ok "no STALL? finding for the registered desk"
+
+echo "T24 REGISTERED-DESK EXEMPTION (role=pane→registry) — a pane-uuid role file bridges to the sid via cc-registry (item ff95faea46c8)"
+reset; permreset; rm -f "$CC_TELEMETRY_DIR"/*.json
+printf '%s' "PANE-DESK-24" > "$SBX/desk-role"                     # role file holds a PANE uuid…
+jq -nc --arg u PANE-DESK-24 --arg s deskB '{paneUUID:$u,session_id:$s,pid:1,cwd:"/x"}' > "$CC_REGISTRY_DIR/PANE-DESK-24.json"   # …registry maps pane → sid deskB
+mktel deskB 40 100 "$ALIVE" "$REPO"
+CC_PAGE_TO_FILE="$SBX/desk-role" bash "$SUP" --once >/dev/null 2>&1
+paged deskB && no "paged the registered desk via pane→registry bridge (bridge FAILED)" || ok "registered desk (role=pane→registry sid) exempt from STALL?"
+
+echo "T25 EXEMPTION IS DESK-SPECIFIC — a NON-desk stale-live session still pages STALL? with a desk registered (identity-scoped, not a blanket disable)"
+reset; permreset; rm -f "$CC_TELEMETRY_DIR"/*.json
+printf '%s' "deskA" > "$SBX/desk-role"                            # deskA is the registered desk…
+mktel other25 40 100 "$ALIVE" "$REPO"                            # …but THIS session (other25) is a different, genuinely-stalled one
+CC_PAGE_TO_FILE="$SBX/desk-role" bash "$SUP" --once >/dev/null 2>&1
+# assert the durable IDL finding, not the ephemeral .page: with DEADLINE_S=1 a single sweep can cross the
+# deadline and void the .page on fresh cwd-effects — the STALL? IDL row is the append-only proof it fired.
+idl_has '"sid":"other25","state":"STALL?"' && ok "non-desk stale-live session still raises STALL? (exemption is identity-scoped)" || no "non-desk session wrongly exempted (blanket disable — WRONG)"
+
+echo "T26 DEAD DESK — a registered desk whose pid is GONE still hits DEAD (the exemption never masks a real death; DEAD precedes STALL?)"
+reset; permreset; rm -f "$CC_TELEMETRY_DIR"/*.json
+printf '%s' "deskC" > "$SBX/desk-role"
+mktel deskC 40 100 99999999 "$REPO"                              # registered desk BUT pid gone ⇒ DEAD branch (runs before STALL?)
+CC_PAGE_TO_FILE="$SBX/desk-role" bash "$SUP" --once >/dev/null 2>&1
+paged deskC && ok "dead registered-desk pid still pages (exemption is pid-alive-only)" || no "dead desk not paged (exemption wrongly masked a death)"
+idl_has '"sid":"deskC","state":"DEAD"' && ok "DEAD state emitted for the dead registered desk" || no "DEAD not emitted for the dead desk"
 
 echo ""
 echo "supervisor-e2e: $P passed, $F failed"
