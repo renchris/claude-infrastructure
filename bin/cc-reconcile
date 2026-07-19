@@ -1,0 +1,185 @@
+#!/bin/bash
+# cc-reconcile — self-heal the cross-session registry so the reaper is never blind to a live pane.
+#
+# THE BUG THIS CLOSES. Registration is WRITE-ONCE at SessionStart (hooks/session-register.sh). A
+# session whose account had the register hook wired AFTER it started — the whole pre-2026-07-18 cohort,
+# a hook wired mid-fleet, a future outage, or any spawn mode that doesn't fire SessionStart — NEVER
+# back-registers, because SessionStart already fired for it. It stays live, holding quota, INVISIBLE to
+# cc-sessions / cc-classify / cc-reaper: the reaper's P0-12b self-check can only SURFACE the delta
+# (`live panes − enumerated`), it cannot CLOSE it. Verified 2026-07-19: 12 live interactive claude panes,
+# 8 registered — the 4 unseen all started before their account's hook was wired (NOT a broken spawn mode;
+# every mode registers post-wiring). See docs & the backlog item 2be82e9732c1.
+#
+# THE FIX — reconciliation, not another SessionStart write. For every LIVE interactive claude pane that
+# has no cc-registry row, synthesize the exact row SessionStart would have written, from two authoritative
+# sources that already exist for every session:
+#   • the pane identity + account — from the process ENV (ITERM_SESSION_ID → paneUUID, CLAUDE_CONFIG_DIR
+#     → account) — the same fields hooks/session-register.sh reads;
+#   • the session_id + cwd + startedAt — from Claude Code's OWN per-pid registry ~/.claude*/sessions/<pid>.json
+#     (CC writes it for every session; it carries {pid, sessionId, cwd, startedAt, kind, status}).
+# This makes the registry SELF-HEALING: "ensure every spawn registers" becomes a structural guarantee
+# independent of which hook was wired when, instead of a spawn-mode whack-a-mole.
+#
+# INVARIANTS (each load-bearing):
+#   ADDITIVE-ONLY   — only ever CREATES a row for a live pane with none. Never edits, never deletes: a
+#                     fresh SessionStart row is authoritative and untouched; retention/sweep stays with
+#                     cc-sessions (age-based, P8). Idempotent: an existing row is skipped.
+#   P8 JOIN HELD    — a row is written ONLY with a real session_id (from CC's registry). A null-sid row
+#                     would look like a spawn-death to cc-board's telemetry join, so we SKIP (surface via
+#                     the reaper self-check) rather than write a false one.
+#   SCHEMA-IDENTICAL— byte-compatible with hooks/session-register.sh's row {paneUUID,name,cwd,account,pid,
+#                     startedAt,session_id}; cc-sessions can't tell a backfilled row from a hook-written one.
+#   FAIL-SAFE       — best-effort; a pane we cannot resolve (no ITERM_SESSION_ID, no sessions/<pid>.json,
+#                     no sid) is left for the self-check to surface. Always exits 0.
+#
+# Usage:
+#   cc-reconcile            backfill missing rows for live panes; print a one-line summary
+#   cc-reconcile --dry-run  show what WOULD be backfilled; write nothing
+#   cc-reconcile --json     summary as a JSON object
+#   cc-reconcile -h         this help
+#
+# Env overrides (tests): CC_REGISTRY_DIR · CC_RECONCILE_PS_BIN · CC_RECONCILE_SESSIONS_DIRS
+#   (space-separated dirs holding <pid>.json) · CC_RECONCILE_LOG · CC_RECONCILE_NOW_MS.
+# bash 3.2-safe. Read-only except for the additive row writes.
+set -uo pipefail
+
+REG_DIR="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"
+PS_BIN="${CC_RECONCILE_PS_BIN:-/bin/ps}"
+# CC's per-pid session registries across the accounts. ~/.claude-next/sessions symlinks to
+# ~/.claude/sessions, so that one dir covers both; realpath-dedup below drops the alias.
+SESSIONS_DIRS="${CC_RECONCILE_SESSIONS_DIRS:-$HOME/.claude/sessions $HOME/.claude-secondary/sessions $HOME/.claude-tertiary/sessions $HOME/.claude-quaternary/sessions}"
+LOG_FILE="${CC_RECONCILE_LOG:-$HOME/.claude/logs/cc-reconcile.log}"
+
+MODE=backfill; JSON=0
+for a in "$@"; do
+  case "$a" in
+    --dry-run)  MODE=dryrun ;;
+    --json)     JSON=1 ;;
+    -h|--help)  sed -n '2,44p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    '')         ;;
+    *)          printf 'cc-reconcile: unknown option %s\n' "$a" >&2; exit 2 ;;
+  esac
+done
+
+command -v jq >/dev/null 2>&1 || { [ "$JSON" = 1 ] && echo '{"error":"jq required"}'; exit 0; }
+
+log() { printf '[%s] %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null)" "$*" >> "$LOG_FILE" 2>/dev/null || true; }
+
+# realpath-deduped sessions dirs (drop the .claude-next→.claude symlink alias so we scan each once).
+uniq_sessions_dirs() {
+  local d rp seen=""
+  for d in $SESSIONS_DIRS; do
+    [ -d "$d" ] || continue
+    rp="$(cd "$d" 2>/dev/null && pwd -P)" || continue
+    case " $seen " in *" $rp "*) ;; *) seen="$seen $rp"; printf '%s\n' "$rp" ;; esac
+  done
+}
+
+# LIVE interactive claude pids — the SAME argv scan cc-reaper's live_pane_count uses (argv0 is claude /
+# */claude / *cli.js; a print/version invocation is not a session). Emits one pid per line.
+live_claude_pids() {
+  "$PS_BIN" -wwo pid=,command= 2>/dev/null | awk '
+    { pid=$1; a=$2
+      if (a!="claude" && a !~ /\/claude$/ && a !~ /cli\.js/) next
+      for (i=3; i<=8 && i<=NF; i++) if ($i=="-p" || $i=="--print" || $i=="--version") next
+      print pid }'
+}
+
+# One env read per pid; callers grep the cached line. ITERM_SESSION_ID and CLAUDE_CONFIG_DIR are
+# space-free, so word-splitting the env blob is safe for exactly these two keys.
+env_val() { # <env-blob> <KEY>
+  printf '%s' "$1" | tr ' ' '\n' | grep -E "^$2=" | head -1 | cut -d= -f2-
+}
+
+# Find CC's <pid>.json across the (deduped) sessions dirs; echo its path or empty.
+sessions_file_for() { # <pid>
+  local d f
+  while IFS= read -r d; do
+    f="$d/$1.json"
+    [ -f "$f" ] && { printf '%s\n' "$f"; return 0; }
+  done <<EOF
+$(uniq_sessions_dirs)
+EOF
+  return 1
+}
+
+now_ms="${CC_RECONCILE_NOW_MS:-$(( $(date +%s) * 1000 ))}"
+mkdir -p "$REG_DIR" 2>/dev/null || true
+
+n_live=0 n_present=0 n_backfilled=0 n_no_pane=0 n_no_sid=0 n_skipped=0
+backfilled_names=""
+
+while IFS= read -r pid; do
+  [ -n "$pid" ] || continue
+  n_live=$(( n_live + 1 ))
+
+  env_blob="$("$PS_BIN" eww -p "$pid" -o command= 2>/dev/null)"
+  # paneUUID from ITERM_SESSION_ID (strip the wNtNpN: prefix). No pane / not a UUID ⇒ unaddressable,
+  # exactly as SessionStart would skip it (return 0 on a bad ITERM_SESSION_ID).
+  pane="$(env_val "$env_blob" ITERM_SESSION_ID)"; pane="${pane##*:}"
+  case "$pane" in
+    ''|*[!0-9A-Fa-f-]*) n_no_pane=$(( n_no_pane + 1 )); continue ;;
+  esac
+
+  # Idempotent: a live row already exists (SessionStart wrote it, or a prior reconcile). Leave it.
+  if [ -f "$REG_DIR/$pane.json" ]; then n_present=$(( n_present + 1 )); continue; fi
+
+  sfile="$(sessions_file_for "$pid")" || sfile=""
+  if [ -z "$sfile" ]; then n_no_sid=$(( n_no_sid + 1 )); continue; fi
+
+  kind="$(jq -r '.kind // empty' "$sfile" 2>/dev/null)"
+  [ "$kind" = "interactive" ] || { n_skipped=$(( n_skipped + 1 )); continue; }
+  sid="$(jq -r '.sessionId // empty' "$sfile" 2>/dev/null)"
+  cwd="$(jq -r '.cwd // empty'       "$sfile" 2>/dev/null)"
+  started="$(jq -r '.startedAt // empty' "$sfile" 2>/dev/null)"
+  # P8: never synthesize a null-sid row (it would read as a spawn-death). Missing cwd ⇒ can't name/scope.
+  { [ -n "$sid" ] && [ -n "$cwd" ]; } || { n_no_sid=$(( n_no_sid + 1 )); continue; }
+  case "$started" in ''|*[!0-9]*) started="$now_ms" ;; esac
+
+  # account = basename(CLAUDE_CONFIG_DIR or ~/.claude), leading dot stripped — identical to
+  # session-register.sh:54. name = basename(cwd)-<short-uuid> — identical to session-register.sh:56.
+  ccd="$(env_val "$env_blob" CLAUDE_CONFIG_DIR)"; [ -n "$ccd" ] || ccd="$HOME/.claude"
+  acct="$(basename "$ccd" | sed 's/^\.//')"
+  short="${pane%%-*}"
+  name="$(basename "$cwd")-$short"
+
+  if [ "$MODE" = dryrun ]; then
+    n_backfilled=$(( n_backfilled + 1 )); backfilled_names="$backfilled_names $name"
+    continue
+  fi
+
+  # Atomic write (tmp + mv) — a concurrent cc-sessions read never sees a partial file. Schema byte-
+  # identical to hooks/session-register.sh:75-81.
+  tmp="$REG_DIR/.$pane.$$.tmp"
+  if jq -n --arg paneUUID "$pane" --arg name "$name" --arg cwd "$cwd" \
+          --arg account "$acct" --arg sessionId "$sid" \
+          --argjson pid "$pid" --argjson startedAt "$started" \
+        '{paneUUID:$paneUUID, name:$name, cwd:$cwd, account:$account, pid:$pid,
+          startedAt:$startedAt, session_id:(if $sessionId=="" then null else $sessionId end)}' \
+        > "$tmp" 2>/dev/null; then
+    if mv -f "$tmp" "$REG_DIR/$pane.json" 2>/dev/null; then
+      n_backfilled=$(( n_backfilled + 1 )); backfilled_names="$backfilled_names $name"
+      log "backfilled $name pane=$pane pid=$pid account=$acct sid=$sid"
+    else
+      rm -f "$tmp" 2>/dev/null; n_skipped=$(( n_skipped + 1 ))
+    fi
+  else
+    rm -f "$tmp" 2>/dev/null; n_skipped=$(( n_skipped + 1 ))
+  fi
+done <<EOF
+$(live_claude_pids)
+EOF
+
+verb=$([ "$MODE" = dryrun ] && echo "would backfill" || echo "backfilled")
+if [ "$JSON" = 1 ]; then
+  jq -nc --argjson live "$n_live" --argjson present "$n_present" --argjson backfilled "$n_backfilled" \
+         --argjson no_pane "$n_no_pane" --argjson no_sid "$n_no_sid" --argjson skipped "$n_skipped" \
+         --arg mode "$MODE" \
+    '{mode:$mode, live:$live, present:$present, backfilled:$backfilled,
+      no_pane:$no_pane, no_sid:$no_sid, skipped:$skipped}'
+else
+  printf 'cc-reconcile: %d live · %d present · %s %d · skipped %d (no-pane %d, no-sid %d)\n' \
+    "$n_live" "$n_present" "$verb" "$n_backfilled" "$n_skipped" "$n_no_pane" "$n_no_sid"
+  [ -n "$backfilled_names" ] && printf '  %s:%s\n' "$verb" "$backfilled_names"
+fi
+exit 0

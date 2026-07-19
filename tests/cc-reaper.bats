@@ -54,9 +54,17 @@ EOF
 n=\$(cat "$D/nlive" 2>/dev/null || echo 1)
 for ((k=0; k<n; k++)); do echo "claude --permission-mode auto --model claude-opus-4-8 --effort max"; done
 EOF
-  chmod +x "$D/bin/notify" "$D/bin/ps"
+  # mock cc-reconcile: records that (and how) it was invoked so no test hits the LIVE cc-registry, and
+  # the reconcile wiring (runs on --reap, before classify) is assertable.
+  cat > "$D/bin/reconcile" <<EOF
+#!/bin/bash
+printf 'RECON %s\n' "\$*" >> "$D/reconcile-calls"
+echo "cc-reconcile: mock 0 backfilled"
+EOF
+  chmod +x "$D/bin/notify" "$D/bin/ps" "$D/bin/reconcile"
   export CC_REAPER_NOTIFY_BIN="$D/bin/notify"
   export CC_REAPER_PS_BIN="$D/bin/ps"
+  export CC_REAPER_RECONCILE_BIN="$D/bin/reconcile"
   export CC_REAPER_PAGEDIR="$D/pages"
   export CC_REAPER_IDL="$D/idl.jsonl"
   export CC_PAGE_TO=""                        # neutralize any inherited real desk target
@@ -64,6 +72,7 @@ EOF
   export CC_REAPER_SELFCHECK_MIN_PERSIST=1    # one sweep pages a real blind spot (hysteresis tests override)
 }
 notified()  { [ -s "$D/notify-calls" ]; }
+reconciled() { [ -f "$D/reconcile-calls" ]; }
 set_desk()  { echo "DESK-UUID" > "$D/desk"; }
 set_live()  { echo "$1" > "$D/nlive"; }
 
@@ -342,4 +351,19 @@ EOF
   [ "$status" -eq 0 ]
   echo "$output" | grep -q 'self-check: WOULD-PAGE'
   ! notified
+}
+
+@test "reconcile runs on --reap (heals the registry before the self-check surfaces a delta)" {
+  mock_classify active "$D/clean" 10 no PANE-1
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  reconciled                                        # cc-reconcile was invoked
+  echo "$output" | grep -q 'cc-reconcile: mock'     # its summary is surfaced on stdout
+}
+
+@test "reconcile does NOT run on a DRY-RUN sweep (dry-run writes nothing)" {
+  mock_classify active "$D/clean" 10 no PANE-1
+  run "$R" sweep
+  [ "$status" -eq 0 ]
+  ! reconciled
 }
