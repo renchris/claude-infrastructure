@@ -117,6 +117,17 @@ emit() {
   if [ -n "$bl" ]; then printf '%s\n' "$bl" | sed 's/^/    /'; else printf '_no open backlog items_\n'; fi
   printf '\n'
 
+  # Blocked-on-operator: items parked OUT of the dispatch wave until a human does the named
+  # step (a key, a launchctl bootout, …). Surfacing the pending step here IS the desk hand-off
+  # — the operator does it, then `cc-backlog unblock <id>` returns it to the dispatchable wave.
+  printf '## Blocked on operator (needs a human step)\n\n'
+  local blk=""
+  [ -n "$BACKLOG" ] && blk="$("$BACKLOG" list --all --json 2>/dev/null \
+    | jq -r '.[] | select(.status=="blocked")
+             | "- [\(.id)] \(.project) — \(.title)\n      ↳ needs: \(if (.needs // "")=="" then "(unspecified)" else .needs end)  →  unblock: cc-backlog unblock \(.id)"' 2>/dev/null || true)"
+  if [ -n "$blk" ]; then printf '%s\n' "$blk"; else printf '_none blocked on operator_\n'; fi
+  printf '\n'
+
   printf '## Decisions\n\n'
   printf '### Open — awaiting early-veto\n\n'
   local anyopen=0 f st cls id what dl def res

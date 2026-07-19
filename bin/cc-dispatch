@@ -209,7 +209,9 @@ dispatch() { # <dry|run>
         "/goal ${title:-backlog item $id} — cc-backlog item $id (project $PROJECT)." \
         "DoD ref: ${dod:-none}. Scope (frozen): drive this ONE item to finished-verified-landed." \
         "Rails: dedicated worktree + own branch; gate green before commit; land ONLY via the project-local /ship (never bare push); C10 — never edit settings.json/live hooks/launchd in place." \
-        "On completion: cc-backlog done $id --evidence \"<landed sha>\". If genuinely blocked: cc-backlog reopen $id and cc-notify the desk role (cat ~/.claude/cc-roles/desk) with the blocker." \
+        "On completion: cc-backlog done $id --evidence \"<landed sha>\"." \
+        "If blocked on an OPERATOR-only step (a key, a launchctl bootout, any human action you cannot do): cc-backlog block $id --needs \"<the exact step>\" — this PARKS the item OUT of the dispatch wave (no re-dispatch loop, no burned worker slot) until the operator acts, then cc-notify the desk role (cat ~/.claude/cc-roles/desk). Do NOT reopen an operator-gated item — that re-cycles it." \
+        "If blocked on info or a decision instead (not an operator step): cc-backlog reopen $id and cc-notify the desk with the blocker." \
         > "$pfile"; then
         "$backlog" reopen "$id" >/dev/null 2>&1 || true
         FAILED=$((FAILED + 1)); idl failed "$id: brief compose failed (reopened)"; continue
@@ -283,6 +285,14 @@ STUB
   "$SELF" --once >/dev/null 2>&1
   t "(a) empty backlog → passed"            grep -q '"action":"passed"' "$tmp/idl.jsonl"
   t "(a) empty backlog → ZERO spawn"        test ! -s "$tmp/spawn.log"
+
+  # (k) blocked-on-operator item → filtered out (dispatch keeps ONLY status=="open") → passed,
+  # ZERO spawn. THE anti-loop guard: an operator-gated item that `block`ed itself must NOT be
+  # re-dispatched (the whole point of the blocked status). RED-proves the step-1 filter.
+  reset; seed_items '[{"id":"i1","project":"a","status":"blocked","title":"t1","needs":"operator: run claude-kimi set-key"}]'; seed_plan '[]'
+  "$SELF" --once >/dev/null 2>&1
+  t "(k) blocked item → NOT dispatched (passed)" grep -q '"action":"passed"' "$tmp/idl.jsonl"
+  t "(k) blocked item → ZERO spawn (no loop)"    test ! -s "$tmp/spawn.log"
 
   # (b) quota-cliff (wave-plan exit 4) → abstained + page + ZERO spawn.
   reset; seed_items '[{"id":"i1","project":"a","status":"open","title":"t1"}]'

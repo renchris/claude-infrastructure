@@ -51,11 +51,11 @@ add_item()   { "$BACKLOG" add --title "$1" --project proj --source bats; }   # e
 status_of()  { "$BACKLOG" list --all --json | jq -r --arg i "$1" '.[]|select(.id==$i)|.status'; }
 idl_action() { tail -1 "$C/idl.jsonl" | jq -r '.action'; }
 
-@test "selftest passes and runs all 27 checks (a zero-check suite must not 'pass')" {
+@test "selftest passes and runs all 29 checks (a zero-check suite must not 'pass')" {
   run "$DISP" selftest
   [ "$status" -eq 0 ]
   n_ok="$(printf '%s' "$output" | grep -c '^  ok ')"
-  [ "$n_ok" -eq 27 ]
+  [ "$n_ok" -eq 29 ]
   ! printf '%s' "$output" | grep -q '^  FAIL'
 }
 
@@ -92,6 +92,17 @@ idl_action() { tail -1 "$C/idl.jsonl" | jq -r '.action'; }
   [ "$(status_of "$id")" = claimed ]
   grep -q -- '--prompt-file /tmp/fire.txt --account next3' "$C/spawn.log"
   grep -q '"action":"fired"' "$C/idl.jsonl"
+}
+
+@test "(k) blocked-on-operator item is NOT dispatched (real fold): ZERO spawn, stays blocked, IDL passed" {
+  id="$(add_item parked)"
+  "$BACKLOG" block "$id" --needs "operator: run claude-kimi set-key" >/dev/null
+  [ "$(status_of "$id")" = blocked ]
+  run "$DISP" --once
+  [ "$status" -eq 0 ]
+  grep -q '"action":"passed"' "$C/idl.jsonl"   # filtered out → backlog looks empty → passed
+  [ ! -s "$C/spawn.log" ]                       # no worker slot burned (the anti-loop guard)
+  [ "$(status_of "$id")" = blocked ]            # untouched: not claimed, not reopened
 }
 
 @test "(d) spawn non-zero → item REOPENED (open again) + IDL failed" {

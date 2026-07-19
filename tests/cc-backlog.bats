@@ -71,6 +71,56 @@ setup() {
   echo "$output" | grep -q 'open'
 }
 
+# ── blocked-on-operator (parks an item OUT of the dispatch wave) ────────────────
+@test "block sets status blocked + carries needs; unblock returns to open" {
+  id=$(bash "$CB" add --project /r --title T --source S)
+  bash "$CB" block "$id" --needs "run claude-kimi set-key" >/dev/null
+  run bash "$CB" list --all --json
+  echo "$output" | jq -e --arg i "$id" '.[]|select(.id==$i)|.status=="blocked"'
+  echo "$output" | jq -e --arg i "$id" '.[]|select(.id==$i)|.needs=="run claude-kimi set-key"'
+  bash "$CB" unblock "$id" >/dev/null
+  run bash "$CB" list --all --json
+  echo "$output" | jq -e --arg i "$id" '.[]|select(.id==$i)|.status=="open"'
+}
+
+@test "block WITHOUT --needs fails loud (the operator step IS the payload)" {
+  id=$(bash "$CB" add --project /r --title T --source S)
+  run bash "$CB" block "$id"
+  [ "$status" -eq 2 ]
+  echo "$output" | grep -qi 'needs'
+}
+
+@test "a blocked item still shows in --open (desk sees it) but reads 'blocked', not 'open'" {
+  id=$(bash "$CB" add --project /r --title Parked --source S)
+  bash "$CB" block "$id" --needs "operator: launchctl bootout" >/dev/null
+  run bash "$CB" list --open
+  echo "$output" | grep -q "$id"                 # desk still sees it
+  echo "$output" | grep -q 'blocked'             # …as blocked, NOT open
+  echo "$output" | grep -q 'launchctl bootout'   # the pending operator step is surfaced
+}
+
+@test "list --blocked filters to ONLY blocked items and carries needs in --json" {
+  a=$(bash "$CB" add --project /r --title Aye --source A)
+  b=$(bash "$CB" add --project /r --title Bee --source B)
+  bash "$CB" block "$b" --needs "operator: set the API key" >/dev/null
+  run bash "$CB" list --blocked
+  echo "$output" | grep -q "$b"
+  ! echo "$output" | grep -q "$a"                # open item excluded
+  run bash "$CB" list --blocked --json
+  echo "$output" | jq -e --arg i "$b" 'length==1 and (.[0].id==$i) and (.[0].needs=="operator: set the API key")'
+}
+
+@test "append-only: add → block → unblock leaves 3 records; the trail is legible" {
+  id=$(bash "$CB" add --project /r --title T --source S)
+  bash "$CB" block "$id" --needs step >/dev/null
+  bash "$CB" unblock "$id" >/dev/null
+  [ "$(wc -l < "$CC_BACKLOG_FILE" | tr -d ' ')" -eq 3 ]
+  run cat "$CC_BACKLOG_FILE"
+  echo "$output" | sed -n '2p' | grep -q '"event":"block"'
+  echo "$output" | sed -n '2p' | grep -q '"needs":"step"'
+  echo "$output" | sed -n '3p' | grep -q '"event":"unblock"'
+}
+
 @test "list --project filters to one project" {
   bash "$CB" add --project /r/a --title Aye --source S >/dev/null
   bash "$CB" add --project /r/b --title Bee --source S >/dev/null
