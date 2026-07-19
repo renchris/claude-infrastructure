@@ -135,8 +135,22 @@ ROT="Wait, which sessions did I fire again? Let me reconstruct the state."  # st
   run drive s8 "$(mk_tx 8 "$WAIT")"
   [ "$status" -eq 0 ]; [ -z "$output" ]
 }
-@test "stale telemetry + rot tell → fires (behavioral is independent of telemetry)" {
-  mk_tel_stale s8 10
+# ROT-FLOOR (2026-07-19 Fable panel, probe P1): a rot-tell needs FRESH telemetry AND used_pct ≥
+# ROT_FLOOR to count — an un-floored tell false-positives on healthy watch narration, and with the
+# deterministic-fire path that becomes a WRONG recycle. This REVERSES the old "rot fires independent
+# of telemetry" contract (which was safe only while the hook was advisory-only).
+@test "stale telemetry + rot tell → SILENT (rot now requires FRESH telemetry, not a lagging tell)" {
+  mk_tel_stale s8 90
+  run drive s8 "$(mk_tx 8 "$ROT")"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+}
+@test "rot-floor: fresh telemetry + rot tell + used BELOW floor (15 < 25) → SILENT (floored out)" {
+  mk_tel s8 15
+  run drive s8 "$(mk_tx 8 "$ROT")"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+}
+@test "rot-floor: fresh telemetry + rot tell + used AT floor (25) → fires" {
+  mk_tel s8 25
   run drive s8 "$(mk_tx 8 "$ROT")"
   [ "$status" -eq 0 ]; fired "$output"
 }
