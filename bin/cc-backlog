@@ -19,6 +19,7 @@
 #   reopen  <id>
 #   block   <id> --needs "<operator-only step>"                  → status "blocked"
 #   unblock <id>                                                 → back to "open"
+#   reap    [--dry-run]                                          → stale-claim maintenance sweep
 #   compact [--older-than-days N]                                (default N=30)
 #
 # BLOCKED-ON-OPERATOR: an item whose DoD needs an operator-only step (a key, a
@@ -27,6 +28,18 @@
 # from the wave (no re-dispatch loop), while `list --open`/`--blocked` and the desk
 # digest still SURFACE it + its `needs`. The operator `unblock`s once the step is
 # done → back to `open` → dispatchable again.
+#
+# REAP (stale-claim maintenance — the dead-worker/thrash sweep): `block` above covers only
+# OPERATOR-gated items and cc-reconcile heals only the SESSION registry — neither touches a
+# CLAIM whose worker DIED. A `claim`ed item whose worker is gone (limit-killed, crashed, or
+# self-closed without transitioning) stays `claimed` forever — cc-dispatch fires only
+# status=="open", so the work STRANDS; a spawn-fail / land-conflict item THRASHES the wave
+# (claim→reopen→claim…). `reap` folds the trail and, append-only + idempotent: (B, priority)
+# BLOCKS an item with >= MAX_THRASH fast claim→reopen cycles (the spawn-fail / rebase-exit-5
+# signature) so it leaves the wave for a human; (A) REOPENS a dead-worker claim idle past
+# STALE_CLAIM_S whose claimer is not live — BOUNDED, so after MAX_ATTEMPTS dispatch claims a
+# still-stale item is BLOCKED instead (never a slow-reopen loop). cc-reaper calls it each
+# --reap sweep. All thresholds env-tunable (see the reap body).
 set -uo pipefail
 
 BACKLOG="${CC_BACKLOG_FILE:-$HOME/.claude/autonomy/backlog.jsonl}"
@@ -237,6 +250,140 @@ cmd_compact() {
     "$kept" "$dropped" "$malformed" >&2
 }
 
+# _resolve_sessions_bin → path to cc-sessions (the live-registry liveness oracle), or "" (rc 0).
+# Env override wins (tests), then sibling, then ~/.claude/bin, then PATH (launchd bare-PATH safe).
+_resolve_sessions_bin() {
+  if [ -n "${CC_BACKLOG_SESSIONS_BIN:-}" ]; then printf '%s' "$CC_BACKLOG_SESSIONS_BIN"; return 0; fi
+  local c
+  for c in "$(dirname "$0")/cc-sessions" "$HOME/.claude/bin/cc-sessions" "$(command -v cc-sessions 2>/dev/null || true)"; do
+    [ -n "$c" ] && [ -x "$c" ] && { printf '%s' "$c"; return 0; }
+  done
+  printf ''
+}
+
+# claimer_live <by> — is the claim's owner still live? A `<host>-<pid>` claimer (cc-dispatch and
+# most manual claims) is authoritatively checked with `kill -0` (same user across accounts); a
+# session-id / UUID / name claimer against the live cc-sessions registry (best-effort — an
+# unresolved oracle reads NOT-live, since by the time reap consults this the stale timeout has
+# already elapsed and leaving the work stranded is the worse failure). Our own reap marker is
+# never "live". rc 0 = live (⇒ do NOT reopen), rc 1 = not live / unknown.
+claimer_live() {
+  local by="$1"
+  [ -n "$by" ] && [ "$by" != cc-backlog-reap ] || return 1
+  local host; host="$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo localhost)"
+  local pid="${by##*-}"
+  if [ "$by" = "$host-$pid" ] && [[ "$pid" =~ ^[0-9]+$ ]]; then
+    if kill -0 "$pid" 2>/dev/null; then return 0; fi
+    return 1
+  fi
+  local sb; sb="$(_resolve_sessions_bin)"
+  [ -n "$sb" ] || return 1
+  "$sb" --json 2>/dev/null \
+    | jq -e --arg b "$by" 'any(.[]?; (.paneUUID==$b) or (.name==$b) or (.sessionId==$b))' >/dev/null 2>&1
+}
+
+# cmd_reap — the stale-claim maintenance sweep (see the REAP header block). Append-only, idempotent,
+# and safe to run every cc-reaper sweep. Terminal (done) and already-blocked items are never touched.
+# --dry-run classifies + prints WOULD-* and writes NOTHING.
+#
+# Thresholds (all env-tunable; defaults calibrated from 75 real claim→done items — p50 33min / p90
+# 55min, so a live worker under p90 is never double-dispatched by the 90-min stale gate):
+#   CC_BACKLOG_STALE_CLAIM_S    (5400)  claimed idle past this ⇒ dead-worker candidate → reopen
+#   CC_BACKLOG_MAX_THRASH       (2)     >= this many fast claim→reopen cycles ⇒ thrash → block
+#   CC_BACKLOG_MAX_ATTEMPTS     (3)     >= this many total dispatch claims on a still-stale item ⇒ block
+#   CC_BACKLOG_THRASH_WINDOW_S  (90)    a claim→reopen within this gap counts as one fast-fail cycle
+#   CC_BACKLOG_NOW              (now)   epoch "now" seam (deterministic age/window math in tests)
+cmd_reap() {
+  local dry=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --dry-run) dry=1 ;;
+      *) printf 'cc-backlog reap: unknown arg %s\n' "$1" >&2; return 2 ;;
+    esac
+    shift
+  done
+  ensure_file
+  local stale="${CC_BACKLOG_STALE_CLAIM_S:-5400}"
+  local maxthrash="${CC_BACKLOG_MAX_THRASH:-2}"
+  local maxattempts="${CC_BACKLOG_MAX_ATTEMPTS:-3}"
+  local window="${CC_BACKLOG_THRASH_WINDOW_S:-90}"
+  local now="${CC_BACKLOG_NOW:-$(date +%s)}"
+
+  # Per non-terminal id → TSV [id, status, claimBy, claimAgeS, totalClaims, fastFailCycles].
+  # status = last-event fold; claimBy/claimTs from the LAST claim (not our reap-reopen); fastFail =
+  # adjacent claim→reopen pairs within $window (the intervening-done/block case can't be adjacent).
+  local analysis
+  analysis="$(valid_records | jq -s -r --argjson now "$now" --argjson window "$window" '
+    def st($e): if $e=="done" then "done" elif $e=="block" then "blocked"
+      elif $e=="unblock" then "open" elif $e=="claim" then "claimed"
+      elif $e=="reopen" then "open" else "open" end;
+    group_by(.id)
+    | map(
+        (sort_by(.ts)) as $g
+        | ($g[-1]) as $last
+        | { id: $last.id,
+            status: st($last.event),
+            claimBy: ([$g[] | select(.event=="claim")] | last | .by // ""),
+            claimTs: ([$g[] | select(.event=="claim")] | last | .ts // ""),
+            totalClaims: ([$g[] | select(.event=="claim")] | length),
+            fastFail: ([ range(0; ($g|length)-1) as $i
+                | select($g[$i].event=="claim" and $g[$i+1].event=="reopen"
+                         and (($g[$i+1].ts|fromdateiso8601) - ($g[$i].ts|fromdateiso8601)) <= $window) ]
+              | length) }
+        | .claimAgeS = (if .claimTs=="" then -1 else ($now - (.claimTs|fromdateiso8601)) end)
+      )
+    | .[]
+    | select(.status != "done" and .status != "blocked")
+    | [.id, .status, .claimBy, (.claimAgeS|floor|tostring), (.totalClaims|tostring), (.fastFail|tostring)]
+    | join("\u001f")
+  ')"
+
+  # Split on US (\037), NOT tab: an open item with no claim has an EMPTY claimBy field, and bash
+  # `read` COALESCES consecutive whitespace-IFS chars (tab included) — two adjacent tabs would drop
+  # the empty field and shift every later column left (fast → empty → "integer expression" error).
+  # A non-whitespace IFS preserves empty fields positionally.
+  local reopened=0 blocked=0 scanned=0 id status by ageS claims fast
+  while IFS=$'\037' read -r id status by ageS claims fast; do
+    [ -n "$id" ] || continue
+    scanned=$((scanned + 1))
+    # Rule B (priority): persistent thrash → block (out of the wave, surfaced to the desk).
+    if [ "$fast" -ge "$maxthrash" ]; then
+      local bmsg="persistent thrash — ${fast} fast claim→reopen cycle(s) (spawn-fail / land-conflict rebase-exit-5); the worker cannot land. Investigate the root cause, then \`cc-backlog unblock ${id}\`."
+      if [ "$dry" = 1 ]; then
+        printf 'cc-backlog reap: WOULD-BLOCK %s [thrash x%s]\n' "$id" "$fast"
+      elif cmd_transition block "$id" --needs "$bmsg" --by cc-backlog-reap >/dev/null; then
+        blocked=$((blocked + 1)); printf 'cc-backlog reap: BLOCK %s [thrash x%s]\n' "$id" "$fast"
+      fi
+      continue
+    fi
+    # Rule A: dead-worker stale claim → reopen (bounded → block after MAX_ATTEMPTS).
+    if [ "$status" = claimed ] && [ "$ageS" -gt "$stale" ]; then
+      if claimer_live "$by"; then
+        [ "$dry" = 1 ] && printf 'cc-backlog reap: keep %s [claimed %ss — claimer %s LIVE]\n' "$id" "$ageS" "$by"
+        continue
+      fi
+      if [ "$claims" -ge "$maxattempts" ]; then
+        local smsg="dead-worker stall after ${claims} dispatch attempt(s) (idle ${ageS}s) — not auto-completable. Investigate, then \`cc-backlog unblock ${id}\`."
+        if [ "$dry" = 1 ]; then
+          printf 'cc-backlog reap: WOULD-BLOCK %s [stall, %s attempts]\n' "$id" "$claims"
+        elif cmd_transition block "$id" --needs "$smsg" --by cc-backlog-reap >/dev/null; then
+          blocked=$((blocked + 1)); printf 'cc-backlog reap: BLOCK %s [stall, %s attempts]\n' "$id" "$claims"
+        fi
+      elif [ "$dry" = 1 ]; then
+        printf 'cc-backlog reap: WOULD-REOPEN %s [dead-worker, claimed %ss, %s attempt(s)]\n' "$id" "$ageS" "$claims"
+      elif cmd_transition reopen "$id" --by cc-backlog-reap >/dev/null; then
+        reopened=$((reopened + 1)); printf 'cc-backlog reap: REOPEN %s [dead-worker, claimed %ss]\n' "$id" "$ageS"
+      fi
+    fi
+  done <<< "$analysis"
+
+  if [ "$dry" = 1 ]; then
+    printf 'cc-backlog reap (dry-run): %s non-terminal item(s) scanned — no writes\n' "$scanned"
+  else
+    printf 'cc-backlog reap: %s reopened, %s blocked (%s non-terminal scanned)\n' "$reopened" "$blocked" "$scanned"
+  fi
+}
+
 command -v jq >/dev/null 2>&1 || { echo "cc-backlog: jq is required" >&2; exit 1; }
 
 case "${1:-}" in
@@ -247,6 +394,7 @@ case "${1:-}" in
   reopen)  shift; cmd_transition reopen "$@" ;;
   block)   shift; cmd_transition block "$@" ;;
   unblock) shift; cmd_transition unblock "$@" ;;
+  reap)    shift; cmd_reap "$@" ;;
   compact) shift; cmd_compact "$@" ;;
   ""|-h|--help|help) usage ;;
   *) printf 'cc-backlog: unknown verb %s\n\n' "$1" >&2; usage >&2; exit 2 ;;
