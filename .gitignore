@@ -21,3 +21,6 @@
 .claude/worktrees/
 .claude/tmp/
 .claude/logs/
+
+# ad-hoc token-usage snapshot dumps (cross-account transcript analysis, 2026-07-16) — generated, never source
+usage/
