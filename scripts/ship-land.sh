@@ -128,6 +128,11 @@ run_gate() {  # $1=range → 0 green / 1 red
   local shellfiles=() pyfiles=()
   while IFS= read -r -d '' p; do
     [[ -z "$p" ]] && continue
+    # skip paths removed at HEAD: git diff --name-only lists deletions, but linting the now-absent
+    # path (shellcheck / py_compile) exits non-zero → gate RED, blocking EVERY file-removal land
+    # (the deleted-*.sh gate, backlog b452/1bc4). -e mirrors the repo-root-relative resolution the
+    # linters below already rely on (gate runs at repo root on a clean HEAD).
+    [[ -e "$p" ]] || continue
     is_shell_file "$p" && shellfiles+=("$p")
     is_python_file "$p" && pyfiles+=("$p")
   done < <(git diff --name-only -z "$range" 2>/dev/null)
