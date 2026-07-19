@@ -128,6 +128,7 @@ vb=$(PATH="$QS8:$PATH" CC_TELEMETRY_DIR="$B8" CC_VALUE_REPOS="$VLREPO" CC_BACKLO
      CC_VALUE_CACHE="$V8/c1.json" CC_VALUE_CACHE_TTL=0 CC_VALUE_CHURN_MIN_PCT=1 bash "$BOARD" 2>/dev/null)
 echo "$vb" | head -1 | grep -q 'VAL'      && ok "cc-board VAL column header"          || no "VAL header"
 echo "$vb" | grep -q '── value 2 = 1c'    && ok "cc-board fleet value footer (1c+1t)" || no "value footer"
+echo "$vb" | grep -q 'by acct  next '     && ok "cc-board per-account value×spend line (T-P8-5)" || no "per-account line"
 # (c) the net-negative CHURN detector surfaces on cc-board: one ACTIVE session spending, 0 value
 # landed ⇒ the FLEET CHURN line. Isolated telemetry so exactly one active session is in view.
 C8=$(mktemp -d); sleep 300 & CPID=$!
