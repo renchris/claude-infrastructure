@@ -31,11 +31,11 @@ count_src() {
 }
 
 # ── the selftest contract ────────────────────────────────────────────────────
-@test "selftest passes and runs all 13 checks (a zero-check suite must not 'pass')" {
+@test "selftest passes and runs all 14 checks (a zero-check suite must not 'pass')" {
   run "$CD" selftest
   [ "$status" -eq 0 ]
   n_ok="$(printf '%s' "$output" | grep -c '^  ok ')"
-  [ "$n_ok" -eq 13 ]
+  [ "$n_ok" -eq 14 ]
   ! printf '%s' "$output" | grep -q '^  FAIL'
 }
 
@@ -61,7 +61,7 @@ count_src() {
 }
 
 # ── C2 plan-open (CLI-level) ─────────────────────────────────────────────────
-@test "C2 plan-open: stub emitting 2 open plans → 2 plan-open adds" {
+@test "C2 plan-open: default scope adds ONLY the mission project's rows (foreign plans skipped)" {
   cat > "$C/findplan" <<'EOF'
 #!/bin/bash
 [ "$1" = "--list-open" ] || exit 0
@@ -70,6 +70,23 @@ printf '%s\n' "IN-PROGRESS | projB | /p/b.md | Plan B"
 EOF
   chmod +x "$C/findplan"
   export CC_DISCOVER_FINDPLAN="$C/findplan"
+  export CC_DISCOVER_PROJECT=projA
+  run "$CD" --once
+  [ "$status" -eq 0 ]
+  [ "$(count_src plan-open)" -eq 1 ]
+}
+
+@test "C2 plan-open: CC_DISCOVER_PLAN_SCOPE=all restores the L4 cross-project walk (2 adds)" {
+  cat > "$C/findplan" <<'EOF'
+#!/bin/bash
+[ "$1" = "--list-open" ] || exit 0
+printf '%s\n' "OPEN        | projA | /p/a.md | Plan A"
+printf '%s\n' "IN-PROGRESS | projB | /p/b.md | Plan B"
+EOF
+  chmod +x "$C/findplan"
+  export CC_DISCOVER_FINDPLAN="$C/findplan"
+  export CC_DISCOVER_PROJECT=projA
+  export CC_DISCOVER_PLAN_SCOPE=all
   run "$CD" --once
   [ "$status" -eq 0 ]
   [ "$(count_src plan-open)" -eq 2 ]

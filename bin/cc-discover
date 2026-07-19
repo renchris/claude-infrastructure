@@ -29,6 +29,7 @@
 #   CC_DISCOVER_IDL_TAIL         C3 bounded read depth       (default: 5000)
 #   CC_DISCOVER_GATES            C4 sources (space-sep list) (default: "never-stuck-gate.sh premortem-gate.sh")
 #   CC_DISCOVER_PROJECT          project string for C1/C3/C4 (default: basename $PWD)
+#   CC_DISCOVER_PLAN_SCOPE       C2 reach: project (default — only $PROJECT rows) | all (L4 cross-project)
 #
 # BSD+GNU portable, no eval, fail-loud. Exit: 0 normal · 3 config-fail LOUD · 2 usage.
 set -uo pipefail
@@ -155,6 +156,13 @@ critic_plan_open() {
     [ -n "$title" ] || title="$path"
     [ -n "$title" ] || continue
     [ -n "$proj" ]  || proj="$PROJECT"
+    # mission scoping: find-plan is cross-project, so an unscoped walk floods the ledger with every
+    # repo's open plans and drowns the dispatcher's pull (2026-07-19: one --once added 261 foreign
+    # 'advance' items). Default = rows for $PROJECT only; CC_DISCOVER_PLAN_SCOPE=all is the explicit
+    # L4 cross-project opt-in.
+    if [ "${CC_DISCOVER_PLAN_SCOPE:-project}" != all ] && [ "$proj" != "$PROJECT" ]; then
+      continue
+    fi
     add_candidate "advance $title" "$proj" "$path" "plan-open"; rc=$?
     cands=$((cands + 1)); [ "$rc" -eq 0 ] && added=$((added + 1))
   done < <("$bin" --list-open 2>/dev/null)
@@ -270,16 +278,21 @@ selftest() {
   n="$(count_source "$d/a/backlog.jsonl" frontier-hole)"
   [ "$n" -eq 1 ] && okp "C1: 1 open hole → 1 frontier-hole add" || badp "C1: expected 1, got $n"
 
-  # (b) stub find-plan emitting 2 open plans → 2 plan-open adds
+  # (b) stub find-plan: 1 mission-project row + 1 foreign row → default scope adds ONLY the mission row
   mkdir -p "$d/b"
   # shellcheck disable=SC2016  # $1 is written LITERALLY into the generated stub (must not expand here).
   { printf '#!/bin/bash\n[ "$1" = "--list-open" ] || exit 0\n'
-    printf 'printf "%%s\\n" "OPEN        | projX  | /p/plan-one.md | Plan One"\n'
-    printf 'printf "%%s\\n" "IN-PROGRESS | projY  | /p/plan-two.md | Plan Two"\n'
+    printf 'printf "%%s\\n" "OPEN        | selftest | /p/plan-one.md | Plan One"\n'
+    printf 'printf "%%s\\n" "IN-PROGRESS | projY    | /p/plan-two.md | Plan Two"\n'
   } > "$d/b/findplan"; chmod +x "$d/b/findplan"
   run_case b --once CC_DISCOVER_FINDPLAN="$d/b/findplan"
   n="$(count_source "$d/b/backlog.jsonl" plan-open)"
-  [ "$n" -eq 2 ] && okp "C2: 2 open plans → 2 plan-open adds" || badp "C2: expected 2, got $n"
+  [ "$n" -eq 1 ] && okp "C2: default scope → only the mission project's plan adds" || badp "C2: expected 1 (scoped), got $n"
+  # (b2) CC_DISCOVER_PLAN_SCOPE=all → the L4 cross-project walk adds both
+  mkdir -p "$d/b2"
+  run_case b2 --once CC_DISCOVER_FINDPLAN="$d/b/findplan" CC_DISCOVER_PLAN_SCOPE=all
+  n="$(count_source "$d/b2/backlog.jsonl" plan-open)"
+  [ "$n" -eq 2 ] && okp "C2: PLAN_SCOPE=all → cross-project walk adds both" || badp "C2 all-scope: expected 2, got $n"
 
   # (c) red gate → 1 gate-red add ; green gate → 0 (RED-prove the negative)
   mkdir -p "$d/c"
