@@ -22,8 +22,14 @@ invariant). Re-establish the loop, then continue the mission — do not wait to 
 
 - Drain the write-only dirs each cycle (`~/.claude/autonomy/pages/`, `cc-announce-alarms/`,
   `completion-push/`) → they are the fleet's wake signals.
-- Keep two-way comms grounded (FM2 triad: last-assistant-turn read · sessionId-resolved pane ·
-  fixed-witnessed-ref diff) before any state/causal claim about another session.
+- Ground every state/causal claim about another session BEFORE you make it — do not assert
+  working/stuck/done/rate-limited/resumed from an indirect signal (JSONL mtime, a HEAD move, a file
+  appearing, a bare-string grep, pane name/age). RUN the guard: `desk-assert <sid> [--witnessed-ref
+  <fixed-ref>]` — the FM2 grounding triad (law #9) made executable (last-assistant-turn read ·
+  sessionId-resolved pane · fixed-witnessed-ref diff). `GROUNDED …` (exit 0) earns the claim;
+  `UNGROUNDED: <missing legs>` (exit 1) means you have NOT earned it — read the transcript / resolve
+  the pane via `cc-sessions --json` / pin the witnessed ref, then re-run. Pass `--witnessed-ref
+  <the fixed ref you witnessed>` whenever the claim is about landed/HEAD state (never a recomputed BASE).
 - Never premature-done (FM1): a done assertion must clear the machine ledger, not memory.
 - On context pressure, `/handoff --recycle` in place (carry the frozen DoD + `/goal` forward).
 
