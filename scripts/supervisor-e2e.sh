@@ -105,6 +105,22 @@ grep -q "ROLE-UUID-T9" "$SBX/notify.log" 2>/dev/null && ok "page routed to role-
 # and the /dev/null default keeps every other test notify-silent:
 [ -s "$SBX/notify.log" ] && [ "$(wc -l < "$SBX/notify.log")" -eq 1 ] && ok "exactly one capture (isolation intact)" || no "unexpected notify volume (isolation broken?)"
 
+echo "T10 notify damping — a re-sweep of the same state is composer-quiet; a state CHANGE re-notifies"
+# same dead fixture, second sweep: page re-fires in IDL but the capture must NOT grow (storm fix)
+CC_NOTIFY_CAPTURE="$SBX/notify.log" CC_PAGE_TO_FILE="$SBX/desk-role" CC_NOTIFY_BIN="$SBX/bin/cc-notify" bash "$SUP" --once >/dev/null 2>&1
+[ "$(wc -l < "$SBX/notify.log")" -eq 1 ] && ok "re-sweep same state ⇒ no re-notify (damped)" || no "re-sweep re-notified (storm regression)"
+# a state transition re-notifies exactly once. Escalation is only reachable from the STALL? branch
+# (alive pid), so: alive fixture + aged page + already-notified STALL? state + dark effects ⇒ the
+# ESCALATED transition must produce exactly one new send (capture 1→2)
+mktel hang10 40 100 "$ALIVE" "$REPO"
+# stamp now-3: past DEADLINE_S=1 but NEWER than the init commit (the suite's sleeps guarantee ≥4s
+# elapsed), else the effects re-read counts the commit as fresh and VOIDs instead of escalating
+printf '%s' "$(( $(date +%s) - 3 ))" > "$CC_SUPERVISOR_PAGEDIR/hang10.page"
+printf '%s\n' "STALL?" > "$CC_SUPERVISOR_PAGEDIR/hang10.notified"
+CC_NOTIFY_CAPTURE="$SBX/notify.log" CC_PAGE_TO_FILE="$SBX/desk-role" CC_NOTIFY_BIN="$SBX/bin/cc-notify" bash "$SUP" --once >/dev/null 2>&1
+# (the stub captures the TARGET per send, so growth 1→2 lines = exactly one new notify)
+[ "$(wc -l < "$SBX/notify.log")" -eq 2 ] && ok "state change (→ESCALATED) re-notified exactly once" || no "state change did not re-notify once (lines=$(wc -l < "$SBX/notify.log"))"
+
 echo ""
 echo "supervisor-e2e: $P passed, $F failed"
 [ "$F" -eq 0 ] || exit 1

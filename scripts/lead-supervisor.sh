@@ -69,18 +69,23 @@ heartbeat(){ # $1=n_swept $2=n_findings
 #    effort cc-notify. NEVER reaps/closes anything. Deadline-stamped so resolve_page can re-observe. ──
 page(){ # $1=sid $2=state $3=detail
   _ensure
-  local pf="$PAGEDIR/$1.page"
+  local pf="$PAGEDIR/$1.page" nf="$PAGEDIR/$1.notified"
   [ -f "$pf" ] || printf '%s\n' "$(now)" > "$pf"           # stamp the deadline clock on first page only
   idl page "\"sid\":\"$1\",\"state\":\"$2\",\"detail\":\"$3\""
+  # composer damping: ONE notify per sid per STATE — a re-sweep of an already-notified state stays
+  # IDL/mailbox-quiet; a state CHANGE (DEAD→ESCALATED) re-notifies (2026-07-19 page-storm fix: every
+  # ~30s sweep re-notified every known-dead session, flooding the desk composer)
+  [ "$(cat "$nf" 2>/dev/null)" = "$2" ] && return 0
   # target resolves per page, not at startup: an empty CC_PAGE_TO falls back to the desk role file,
   # so a pane rebind (role-file rewrite) redirects pages with no plist edit and no daemon restart
   local target="$PAGE_TO"
   [ -n "$target" ] || target="$(cat "$PAGE_TO_FILE" 2>/dev/null || true)"
   if [ -n "$target" ] && [ -n "$NOTIFY_BIN" ]; then
     "$NOTIFY_BIN" "$target" "⚠️ SUPERVISOR PAGE — session $1 is $2: $3 (operator/delegated-live-session recovers; supervisor never auto-acts)" >/dev/null 2>&1 || true
-  fi
+    printf '%s\n' "$2" > "$nf"                             # recorded only on an attempted send — a
+  fi                                                       # later-wired channel still gets its first notify
 }
-clear_page(){ rm -f "$PAGEDIR/$1.page" 2>/dev/null || true; }
+clear_page(){ rm -f "$PAGEDIR/$1.page" "$PAGEDIR/$1.notified" 2>/dev/null || true; }
 
 # ── effect RE-READ (S-3b core): is a session emitting WORK-PRODUCTS, independent of whether it replied? ──
 # "fresh" = new commits OR worktree file mtimes OR a live cpu delta since the page. "dark" = none.
