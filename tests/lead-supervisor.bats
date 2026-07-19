@@ -27,3 +27,13 @@ setup() {
   echo "$output" | grep -q 'T12 STRANDED (dirty)'
   echo "$output" | grep -q 'T13 STRANDED (unlanded)'
 }
+
+@test "PermissionRequest beacon sweep — page/threshold/reap/damping all exercised (item 08d514250031)" {
+  run bash "$SUP" --selftest
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'T14 PERMISSION-PENDING'
+  echo "$output" | grep -q 'T15 THRESHOLD GATE'
+  echo "$output" | grep -q 'T16 REAP orphan'
+  echo "$output" | grep -q 'T17 REAP dead-pid'
+  echo "$output" | grep -q 'T18 DAMPING'
+}

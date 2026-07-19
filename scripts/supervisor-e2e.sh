@@ -24,6 +24,9 @@ export CC_PAGE_TO_FILE=/dev/null                  # …and no role-file fallback
 export CC_SUP_T=73
 export CC_SUP_STALL_S=5
 export CC_SUP_PAGE_DEADLINE_S=1
+export CC_PERMPEND_DIR="$SBX/permpend";           mkdir -p "$CC_PERMPEND_DIR"
+export CC_PERMPEND_NOTICE_S=1                      # page a beacon pending ≥1s (fast tests; prod default 120)
+export CC_PERMPEND_HORIZON_S=86400                # orphan-reap horizon (T16 ages a beacon past it)
 
 ALIVE=; cleanup(){ [ -n "$ALIVE" ] && kill "$ALIVE" 2>/dev/null; rm -rf "$SBX"; }
 trap cleanup EXIT
@@ -49,6 +52,12 @@ mkrepo_landed(){ # $1=dir — a shipped+clean repo: clean tree, HEAD == origin/m
   echo x > "$r/f"; git -C "$r" add f; git -C "$r" commit -qm init
   git -C "$r" update-ref refs/remotes/origin/main HEAD          # fabricate the landed trunk (no remote)
 }
+mkbeacon(){ # $1=sid $2=age_s $3=tool_name $4=tool_input_json — a harness-authored PermissionRequest beacon
+  local ts; ts=$(( $(date +%s) - $2 ))
+  jq -nc --argjson ts "$ts" --arg tn "$3" --argjson ti "$4" --arg cwd "$REPO" \
+    '{ts:$ts,tool_name:$tn,tool_input:$ti,cwd:$cwd}' > "$CC_PERMPEND_DIR/$1.json"; }
+beacon_exists(){ [ -f "$CC_PERMPEND_DIR/$1.json" ]; }
+permreset(){ rm -f "$CC_PERMPEND_DIR"/*.json "$CC_SUPERVISOR_PAGEDIR"/*.permpend.notified 2>/dev/null; }
 
 echo "T1 DEAD — pid gone ⇒ checkpoint-preserve + PAGE (never auto-respawn)"
 reset; rm -f "$CC_TELEMETRY_DIR"/*.json; mktel dead 40 2 999999 "$REPO"
@@ -164,6 +173,57 @@ once
 paged unlandsid      && ok "stranded (unlanded) death PAGED"                     || no "unlanded death not paged — committed work stranded"
 tel_exists unlandsid && ok "unlanded telemetry NOT reaped"                       || no "unlanded telemetry WRONGLY reaped (silent loss of unlanded commits)"
 idl_has '"kind":"reap"' && no "an unlanded death was reaped (must never happen)" || ok "no reap for an unlanded death"
+
+echo "T14 PERMISSION-PENDING — a harness beacon past the notice threshold ⇒ a PRECISE page with the cmd attached"
+# the §B2 core: a permission prompt is INVISIBLE to the bash sweep (S-3 modal blindness), but the harness
+# leaves a durable beacon the supervisor CAN read → a command-attached page instead of a detail-free STALL?.
+reset; permreset; rm -f "$CC_TELEMETRY_DIR"/*.json
+mkbeacon permbash 10 Bash '{"command":"git reset --hard origin/main"}'
+once
+idl_has '"kind":"permission_pending"'  && ok "permission_pending recorded in the IDL"           || no "no permission_pending record"
+idl_has 'git reset --hard origin/main' && ok "the exact blocked command is attached to the page" || no "blocked command not attached"
+beacon_exists permbash                 && ok "a still-pending beacon is retained (paged, not reaped, while alive)" || no "pending beacon wrongly removed"
+
+echo "T15 THRESHOLD GATE — a beacon younger than the notice threshold is NOT paged (auto-approved tools clear in ms)"
+reset; permreset; rm -f "$CC_TELEMETRY_DIR"/*.json
+mkbeacon permyoung 10 Bash '{"command":"echo hi"}'
+CC_PERMPEND_NOTICE_S=99999 bash "$SUP" --once >/dev/null 2>&1
+idl_has '"kind":"permission_pending"' && no "paged a below-threshold beacon (false page)" || ok "below-threshold beacon not paged"
+beacon_exists permyoung               && ok "below-threshold beacon retained (it will page once it ages)" || no "below-threshold beacon wrongly removed"
+
+echo "T16 REAP orphan — a beacon past the horizon with no telemetry ⇒ REAPED silently (hard-kill, no SessionEnd)"
+reset; permreset; rm -f "$CC_TELEMETRY_DIR"/*.json
+mkbeacon permorphan 90000 Bash '{"command":"stale"}'
+once
+beacon_exists permorphan              && no "orphaned beacon NOT reaped past horizon" || ok "orphaned beacon reaped past the horizon"
+idl_has '"kind":"permission_pending"' && no "an orphan was paged (must reap silently)" || ok "orphan not paged"
+
+echo "T17 REAP dead-pid — a beacon whose owning session pid is gone ⇒ REAPED (the prompt died with the session)"
+reset; permreset; rm -f "$CC_TELEMETRY_DIR"/*.json
+DREPO2="$SBX/permdead-repo"; mkrepo_landed "$DREPO2"; echo wip > "$DREPO2/uncommitted"  # dead+dirty ⇒ tel row survives the sweep, so the beacon's pid-reap can read it
+mktel   permdead 40 5 999999 "$DREPO2"           # pid 999999 gone
+mkbeacon permdead 10 Bash '{"command":"blocked"}'
+once
+beacon_exists permdead                && no "dead-session beacon NOT reaped" || ok "dead-session beacon reaped (prompt died with the session)"
+idl_has '"kind":"permission_pending"' && no "a dead-session prompt was PERMISSION-PENDING paged (the DEAD page already covers it)" || ok "no permission_pending page for a dead session"
+
+echo "T18 DAMPING — one notify per PENDING EPISODE (same beacon ts quiet across sweeps); a NEW prompt (new ts) re-notifies"
+# uses the T9 capturing cc-notify stub + role file. keyed by the beacon ts so a re-prompt is a new episode.
+reset; permreset; rm -f "$CC_TELEMETRY_DIR"/*.json; : > "$SBX/permnotify.log"
+mkbeacon permdamp 10 Bash '{"command":"first prompt"}'
+CC_NOTIFY_CAPTURE="$SBX/permnotify.log" CC_PAGE_TO_FILE="$SBX/desk-role" CC_NOTIFY_BIN="$SBX/bin/cc-notify" bash "$SUP" --once >/dev/null 2>&1
+[ "$(wc -l < "$SBX/permnotify.log")" -eq 1 ] && ok "first pending episode notifies exactly once" || no "episode did not notify once (lines=$(wc -l < "$SBX/permnotify.log"))"
+CC_NOTIFY_CAPTURE="$SBX/permnotify.log" CC_PAGE_TO_FILE="$SBX/desk-role" CC_NOTIFY_BIN="$SBX/bin/cc-notify" bash "$SUP" --once >/dev/null 2>&1
+[ "$(wc -l < "$SBX/permnotify.log")" -eq 1 ] && ok "same episode across sweeps is composer-quiet (damped)" || no "same episode re-notified (storm)"
+mkbeacon permdamp 5 Bash '{"command":"second prompt"}'    # a NEW prompt: newer ts ⇒ a new episode
+CC_NOTIFY_CAPTURE="$SBX/permnotify.log" CC_PAGE_TO_FILE="$SBX/desk-role" CC_NOTIFY_BIN="$SBX/bin/cc-notify" bash "$SUP" --once >/dev/null 2>&1
+[ "$(wc -l < "$SBX/permnotify.log")" -eq 2 ] && ok "a new prompt (new ts) re-notifies exactly once" || no "new episode did not re-notify (lines=$(wc -l < "$SBX/permnotify.log"))"
+
+echo "T19 CMD RENDER — a non-Bash prompt (Write) attaches the file path, not a raw tool dump"
+reset; permreset; rm -f "$CC_TELEMETRY_DIR"/*.json
+mkbeacon permwrite 10 Write '{"file_path":"/x/secret.ts","content":"..."}'
+once
+idl_has '/x/secret.ts' && ok "a Write prompt renders its file_path" || no "file_path not rendered in the page"
 
 echo ""
 echo "supervisor-e2e: $P passed, $F failed"
