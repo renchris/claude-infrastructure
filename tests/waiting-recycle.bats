@@ -17,7 +17,9 @@ setup() {
   export CC_WR_IDL="$BATS_TEST_TMPDIR/idl.jsonl"
   export CC_TELEMETRY_DIR="$BATS_TEST_TMPDIR/tel"
   export CLAUDE_CONFIG_DIR="$BATS_TEST_TMPDIR/cfg"
-  export CC_WR_T=55 CC_WR_MAX=3 CC_WR_COOLDOWN_S=600 CC_WR_AGE_MAX=180
+  # idle threshold pinned 55 (existing cases predate the lowered 35 default); busy-force ceiling 75 (so the
+  # legacy 70% "busy hold" cases stay MEDIUM tier). New tiered cases override these explicitly.
+  export CC_WR_T_IDLE=55 CC_WR_T_BUSY=75 CC_WR_MAX=3 CC_WR_COOLDOWN_S=600 CC_WR_AGE_MAX=180
   # Hermetic coordination root (S3 wait-contracts / S4 mailbox / S5 teams / cc-roles) — never the real ~/.claude.
   export CC_WR_COORD_DIR="$BATS_TEST_TMPDIR/coord"; export CC_WR_UUID="DESK-UUID-0001"; export CC_WR_QUIET_S=180
   mkdir -p "$CC_TELEMETRY_DIR" "$CC_WR_STATE_DIR" "$CC_WR_COORD_DIR/wait-contracts" "$CC_WR_COORD_DIR/mailbox" "$CC_WR_COORD_DIR/cc-roles" "$CLAUDE_CONFIG_DIR/teams"
@@ -553,4 +555,180 @@ setup_stage2() { export CC_WR_GRACE_S=0; export CC_WR_FIRE_DIR="$BATS_TEST_TMPDI
   run jq -s '.' "$CC_WR_IDL"
   [ "$status" -eq 0 ]
   jq -e 'select(.sid=="s\"q\\z")' "$CC_WR_IDL" >/dev/null
+}
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# TIERED CONTEXT-REFRESH (cc-backlog 4ce6ffc0194f, 2026-07-19) — a smarter desk policy:
+#   Tier 1  IDLE + lowered/adaptive threshold  → proactive recycle below the old 55%.
+#   Tier 2  BUSY + medium ctx                  → queue a refresh (marker) + hold; the lowered idle
+#                                                 threshold fires it at the next idle gap.
+#   Tier 3  BUSY + high ctx (≥ T_BUSY)         → force-recycle DRAINING the ping queue into the brief
+#                                                 (shadow+page default; exec behind --busy-force). Hard
+#                                                 holds (decision/sequencer/teammate) PAGE, never force.
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+
+# ── TIER 1 — lowered idle threshold: an IDLE (clean, benign) desk recycles proactively below 55% ──
+@test "tier1 default idle threshold is 35 (unset): idle fires at 40%, silent at 30%" {
+  unset CC_WR_T_IDLE                                       # exercise the shipped default (35)
+  mk_tel t1a 40
+  run drive t1a "$(mk_tx 200 "$WAIT")"
+  [ "$status" -eq 0 ]; fired "$output"                    # 40 ≥ 35 default → proactive idle recycle
+  mk_tel t1b 30
+  run drive t1b "$(mk_tx 201 "$WAIT")"
+  [ "$status" -eq 0 ]; [ -z "$output" ]                  # 30 < 35, no rot → silent
+}
+@test "tier1 CC_WR_T back-compat alias: seeds the idle threshold (55 → 40% silent)" {
+  unset CC_WR_T_IDLE; export CC_WR_T=55
+  mk_tel t1c 40
+  run drive t1c "$(mk_tx 202 "$WAIT")"
+  [ "$status" -eq 0 ]; [ -z "$output" ]                  # alias raised the idle bar to 55 → 40 silent
+}
+
+# ── ADAPTIVE DECAY — the idle threshold decays toward the floor the longer a SID has sat idle below it ──
+@test "adaptive: a long-idle SID (aged idlewatch clock) fires BELOW the base idle threshold" {
+  export CC_WR_T_IDLE=40 CC_WR_T_IDLE_FLOOR=25 CC_WR_IDLE_DECAY_S=100
+  printf '%s' "$(( $(date +%s) - 300 ))" > "$CC_WR_STATE_DIR/idlewatch-t1d"  # fully decayed (age ≫ window)
+  mk_tel t1d 30                                            # 30 < 40 base, but ≥ 25 floor
+  run drive t1d "$(mk_tx 203 "$WAIT")"
+  [ "$status" -eq 0 ]; fired "$output"                    # eff_idle decayed to the floor → fires
+}
+@test "adaptive: a FRESH idle clock does NOT decay — same 30% is silent (no decay at age 0)" {
+  export CC_WR_T_IDLE=40 CC_WR_T_IDLE_FLOOR=25 CC_WR_IDLE_DECAY_S=100
+  mk_tel t1e 30                                            # hook stamps idlewatch NOW → eff_idle=40 → 30<40
+  run drive t1e "$(mk_tx 204 "$WAIT")"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+}
+@test "adaptive: the floor holds — below T_IDLE_FLOOR never fires even fully decayed" {
+  export CC_WR_T_IDLE=40 CC_WR_T_IDLE_FLOOR=25 CC_WR_IDLE_DECAY_S=100
+  printf '%s' "$(( $(date +%s) - 300 ))" > "$CC_WR_STATE_DIR/idlewatch-t1f"
+  mk_tel t1f 24                                            # 24 < 25 floor
+  run drive t1f "$(mk_tx 205 "$WAIT")"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+}
+
+# ── TIER 3 — busy + HIGH context: force-recycle, DRAINING the ping queue into the successor brief ──
+@test "tier3 shadow: busy (dirty tree) + high ctx (≥75) → advisory then shadow would-force + PAGE + brief" {
+  setup_stage2; export CC_WR_COOLDOWN_S=0
+  local nlog="$BATS_TEST_TMPDIR/notify.log"
+  printf '#!/bin/bash\necho called >> %q\n' "$nlog" > "$CC_WR_NOTIFY"; chmod +x "$CC_WR_NOTIFY"
+  echo change >> "$DESK/f.txt"                             # dirty = BUSY (soft hold)
+  mk_tel t3a 80; run drive t3a "$(mk_tx 210 "$WAIT")"; fired "$output"   # poll1 = busy advisory
+  echo "$output" | grep -qi "BUSY"
+  mk_tel t3a 81; run drive t3a "$(mk_tx 210 "$WAIT")"                    # poll2 = busy shadow would-force
+  [ "$status" -eq 0 ]; fired "$output"
+  echo "$output" | grep -qi "SHADOW"
+  grep -q '"reason":"stage2-shadow"' "$CC_WR_IDL"
+  grep -q '"mode":"busy"' "$CC_WR_IDL"
+  [ -f "$nlog" ]                                           # busy shadow ALSO pages (mid-work AND high = urgent)
+  grep -q "FORCED mid-work" "$CC_WR_FIRE_DIR/wr-fire-t3a.txt"
+}
+@test "tier3 drain: busy (mailbox ping) + high ctx → shadow force, brief carries the DRAINED ping" {
+  setup_stage2; export CC_WR_COOLDOWN_S=0
+  printf 'PING: money track BLOCKED on your review of abc1234\n' > "$CC_WR_COORD_DIR/mailbox/$CC_WR_UUID.md"
+  mk_tel t3b 80; run drive t3b "$(mk_tx 211 "$WAIT")"; fired "$output"   # poll1 advisory (S4 soft hold)
+  mk_tel t3b 81; run drive t3b "$(mk_tx 211 "$WAIT")"                    # poll2 shadow force
+  [ "$status" -eq 0 ]; fired "$output"
+  grep -q "PENDING PINGS/REQUESTS TO CARRY" "$CC_WR_FIRE_DIR/wr-fire-t3b.txt"
+  grep -q "money track BLOCKED" "$CC_WR_FIRE_DIR/wr-fire-t3b.txt"        # the drained mailbox line rode in
+}
+@test "tier3 live: busy + high + arm --live --busy-force → EXECS handoff-fire --recycle with drained brief" {
+  setup_stage2; export CC_WR_COOLDOWN_S=0
+  local stub="$BATS_TEST_TMPDIR/hf-stub.sh" rec="$BATS_TEST_TMPDIR/hf-args"
+  printf '#!/bin/bash\nprintf "%%s\\n" "$*" > %q\n' "$rec" > "$stub"; chmod +x "$stub"
+  export CC_WR_HANDOFF_FIRE="$stub"
+  local tmpl="$BATS_TEST_TMPDIR/brief.txt"; echo "resume desk from disk" > "$tmpl"
+  ( cd "$DESK" && bash "$HOOK" arm --brief "$tmpl" --live --busy-force >/dev/null )
+  echo change >> "$DESK/f.txt"                             # busy
+  printf 'PING: worker-2 done at def5678\n' > "$CC_WR_COORD_DIR/mailbox/$CC_WR_UUID.md"
+  mk_tel t3c 80; run drive t3c "$(mk_tx 212 "$WAIT")"      # advisory
+  mk_tel t3c 81; run drive t3c "$(mk_tx 212 "$WAIT")"      # Stage-2 busy LIVE
+  [ "$status" -eq 0 ]
+  [ -f "$rec" ]; grep -q -- "--recycle" "$rec"; grep -q -- "--prompt-file" "$rec"
+  grep -q '"reason":"stage2-live"' "$CC_WR_IDL"; grep -q '"mode":"busy"' "$CC_WR_IDL"
+  grep -q "worker-2 done" "$CC_WR_FIRE_DIR/wr-fire-t3c.txt"     # drained ping in the executed brief
+}
+@test "tier3 gate: busy + high + armed --live but NO --busy-force → shadow (no exec), still pages" {
+  setup_stage2; export CC_WR_COOLDOWN_S=0
+  local stub="$BATS_TEST_TMPDIR/hf-stub.sh" rec="$BATS_TEST_TMPDIR/hf-args"
+  printf '#!/bin/bash\nprintf "%%s\\n" "$*" > %q\n' "$rec" > "$stub"; chmod +x "$stub"
+  export CC_WR_HANDOFF_FIRE="$stub"
+  local tmpl="$BATS_TEST_TMPDIR/brief.txt"; echo "resume from disk" > "$tmpl"
+  ( cd "$DESK" && bash "$HOOK" arm --brief "$tmpl" --live >/dev/null )   # --live but NOT --busy-force
+  echo change >> "$DESK/f.txt"
+  mk_tel t3d 80; run drive t3d "$(mk_tx 213 "$WAIT")"                    # advisory
+  mk_tel t3d 81; run drive t3d "$(mk_tx 213 "$WAIT")"                    # Stage-2 busy → SHADOW (not exec)
+  [ "$status" -eq 0 ]; fired "$output"; echo "$output" | grep -qi SHADOW
+  [ ! -f "$rec" ]                                                        # busy exec is gated beyond --live
+  grep -q '"reason":"stage2-shadow"' "$CC_WR_IDL"
+}
+
+# ── TIER 3 HARD HOLDS — sequencer / open-decision / live-teammate PAGE, never force (even fully opted-in) ──
+@test "tier3 hard: busy (open decision) + high ctx → PAGE, never force (even with busy-force on)" {
+  export CC_WR_COOLDOWN_S=0 CC_WR_BUSY_FORCE=on           # even fully opted-in, a HARD hold never force-recycles
+  local nlog="$BATS_TEST_TMPDIR/notify.log"
+  printf '#!/bin/bash\necho called >> %q\n' "$nlog" > "$CC_WR_NOTIFY"; chmod +x "$CC_WR_NOTIFY"
+  mk_tel t3e 80
+  run drive t3e "$(mk_tx 214 "Which account should I use? Your call.")"
+  [ "$status" -eq 0 ]; fired "$output"
+  echo "$output" | grep -qi "HIGH"
+  grep -q '"disposition":"escalated"' "$CC_WR_IDL"
+  grep -q 'busy-hard-hold:open-decision-hold' "$CC_WR_IDL"
+  [ -f "$nlog" ]                                            # paged
+}
+@test "tier3 hard: sequencer (MERGE_HEAD) + high ctx → PAGE (mid-merge, never force)" {
+  export CC_WR_COOLDOWN_S=0 CC_WR_BUSY_FORCE=on
+  : > "$DESK/.git/MERGE_HEAD"
+  mk_tel t3f 80
+  run drive t3f "$(mk_tx 215 "$WAIT")"
+  [ "$status" -eq 0 ]; fired "$output"; echo "$output" | grep -qi "HIGH"
+  grep -q 'busy-hard-hold:sequencer-state-hold:MERGE_HEAD' "$CC_WR_IDL"
+}
+@test "tier3 hard: live teammate + high ctx → PAGE (results route to dying SID, never force)" {
+  export CC_WR_COOLDOWN_S=0 CC_WR_BUSY_FORCE=on
+  mkdir -p "$CLAUDE_CONFIG_DIR/teams/session-t3g1234"
+  echo '{"members":[{"name":"lead"}]}' > "$CLAUDE_CONFIG_DIR/teams/session-t3g1234/config.json"
+  mk_tel t3g1234 80
+  run drive t3g1234 "$(mk_tx 216 "$WAIT")"
+  [ "$status" -eq 0 ]; fired "$output"
+  grep -q 'busy-hard-hold:live-team-hold' "$CC_WR_IDL"
+}
+@test "tier3 hard page pacing: a second busy-hard poll within ESCALATE_DEDUP_S is silent (page-once)" {
+  export CC_WR_COOLDOWN_S=0 CC_WR_ESCALATE_DEDUP_S=9999
+  mk_tel t3h 80; run drive t3h "$(mk_tx 217 "Your call: which account?")"; fired "$output"  # page 1
+  mk_tel t3h 81; run drive t3h "$(mk_tx 217 "Your call: which account?")"                    # within dedup → silent
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  grep -q 'busy-page-paced' "$CC_WR_IDL"
+}
+
+# ── TIER 2 — busy + MEDIUM ctx: queue a refresh (marker) + hold; the lowered idle threshold fires it later ──
+@test "tier2 queue: busy (dirty) + MEDIUM ctx → holds (dirty-tree-hold) + sets a refresh-queued marker" {
+  export CC_WR_COOLDOWN_S=0
+  echo change >> "$DESK/f.txt"
+  mk_tel t2a 60                                            # 55 ≤ 60 < 75 → medium, busy
+  run drive t2a "$(mk_tx 220 "$WAIT")"
+  [ "$status" -eq 0 ]; [ -z "$output" ]                  # held, silent (don't interrupt medium work)
+  grep -q '"reason":"dirty-tree-hold"' "$CC_WR_IDL"
+  grep -q '"refresh_queued":true' "$CC_WR_IDL"
+  [ -f "$CC_WR_STATE_DIR/queued-t2a" ]                     # marker for the next idle gap
+}
+@test "tier2 contrast: the SAME soft hold only QUEUES at medium but FORCES at high" {
+  export CC_WR_COOLDOWN_S=0 CC_WR_GRACE_S=0 CC_WR_FIRE_DIR="$BATS_TEST_TMPDIR/fire"; mkdir -p "$CC_WR_FIRE_DIR"
+  echo change >> "$DESK/f.txt"
+  mk_tel t2b 60; run drive t2b "$(mk_tx 221 "$WAIT")"; [ -z "$output" ]        # medium → Tier-2 hold (silent)
+  mk_tel t2c 80; run drive t2c "$(mk_tx 222 "$WAIT")"; fired "$output"         # high → Tier-3 busy advisory
+  echo "$output" | grep -qi "BUSY"
+}
+
+# ── CLI — --busy-force opt-in + status reporting ──
+@test "cli: arm --busy-force without --live is REFUSED (mid-work exec is opt-in beyond --live)" {
+  local tmpl="$BATS_TEST_TMPDIR/brief.txt"; echo x > "$tmpl"
+  run bash -c "cd '$DESK' && CC_WR_STATE_DIR='$CC_WR_STATE_DIR' bash '$HOOK' arm --brief '$tmpl' --busy-force"
+  [ "$status" -eq 2 ]
+  echo "$output" | grep -qi "busy-force requires --live"
+}
+@test "cli: status reports the tiered thresholds and the busy-force mode" {
+  local tmpl="$BATS_TEST_TMPDIR/brief.txt"; echo x > "$tmpl"
+  ( cd "$DESK" && bash "$HOOK" arm --brief "$tmpl" --live --busy-force >/dev/null )
+  ( cd "$DESK" && bash "$HOOK" status ) | grep -q "busy-force≥75%"
+  ( cd "$DESK" && bash "$HOOK" status ) | grep -qi "busy-force: ON"
 }
