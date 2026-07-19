@@ -48,22 +48,35 @@
 #   3. NOT in cooldown — no advisory for this cwd within COOLDOWN_S. This is the anti-thrash pacer AND
 #      the cross-session LOOP-BREAKER: a fresh recycled desk (same cwd) sees the predecessor's cooldown
 #      stamp and stays quiet, so recycle→fresh→recycle can't spin.
-#   4. TRIGGER — context used_pct ≥ T (default 55, moderate; fresh telemetry), OR a behavioral ROT tell
-#      in the last message that ALSO clears used_pct ≥ ROT_FLOOR on FRESH telemetry (an un-floored tell
-#      false-positives on healthy watch narration — probe P1 2026-07-19; a floored tell can fire below T).
-#   5. SAFE — genuinely just-WAITING, never mid-work / mid-merge / mid-coordination:
-#        5a clean git tree AND no sequencer state (MERGE_HEAD/rebase/cherry-pick — S1);
-#        5b no open decision/blocker in the last message (anti-deference's GENUINE carve-out);
-#        5c no active COORDINATION — no peer contract-BLOCKED on this desk (S3, waiter-liveness-filtered),
-#           no fresh inbound mailbox line (S4, load-bearing: dispatch workers notify without a contract),
-#           no live context-bound teammate (S5, HARD hold: results route to the dying SID). Any ⇒ HOLD.
-#      The desk's OWN waiter-contracts do NOT hold — durable on disk, the successor resumes them.
+#   4. TRIGGER — context used_pct ≥ eff_idle (the ADAPTIVE idle threshold: base T_IDLE=35, decaying toward
+#      T_IDLE_FLOOR=25 the longer this SID sits idle below it — proactive; recycling an IDLE desk is a FREE
+#      WIN, no work in hand to lose, so we don't wait for 55%), OR a behavioral ROT tell in the last message
+#      that ALSO clears used_pct ≥ ROT_FLOOR on FRESH telemetry (an un-floored tell false-positives on
+#      healthy watch narration — probe P1 2026-07-19; a floored tell can fire below the threshold).
+#   5. SAFE vs BUSY — the desk is CLASSIFIED, not just gated. SAFE (idle, just-waiting) ⇒ recycle. BUSY
+#      holds are split soft/hard (see §7): 5a clean git tree (dirty=SOFT) + no sequencer state (MERGE_HEAD/
+#      rebase/cherry-pick=HARD, S1); 5b no open decision (HARD — anti-deference's GENUINE carve-out); 5c no
+#      active COORDINATION — a peer contract-BLOCKED on this desk (S3, SOFT), a fresh inbound mailbox line
+#      (S4, SOFT — dispatch workers notify without a contract), a live context-bound teammate (S5, HARD:
+#      results route to the dying SID). The desk's OWN waiter-contracts do NOT hold (durable on disk).
 #   6. Under the per-session advisory CAP (Stage 1 only; Stage 2 is cap-exempt, latch-bounded). WEDGE
 #      ESCALATION (T-P1-8): a fire-worthy-and-just-waiting desk that has exhausted its recycle attempts
 #      (advisory CAP reached, or a SHADOW would-fire already latched) does NOT silently ride to the 90%
 #      auto-compact wall — it PAGES the operator out-of-band (osascript + push-critical + an `escalated`
 #      IDL record + a decision:block advisory), page-once per ESCALATE_DEDUP_S. Paging is fleet-safe, so
 #      the escalation ships LIVE (unlike the Stage-2 exec, which stays SHADOW until armed --live).
+#   7. TIERED CONTEXT-REFRESH (operator 2026-07-19, cc-backlog 4ce6ffc0194f) — once fire-worthy, route on
+#      desk STATE (the evidence: a desk sat low-context for hours then hit 74% MID-work, an awkward recycle):
+#        • IDLE (SAFE)                       → recycle at the lowered ADAPTIVE T_IDLE (§4). Tiers 1–2.
+#        • BUSY soft + HIGH ctx (≥ T_BUSY=75)→ FORCE-recycle, DRAINING the pending pings (mailbox + inbound
+#          wait-contracts) into the successor brief so NONE are dropped (Tier 3). SHADOW-default: composes
+#          the drained brief + PAGES (fleet-safe, ships LIVE); the EXEC is opt-in beyond --live (--busy-force).
+#        • BUSY hard + HIGH ctx              → PAGE (a sequencer/teammate/open-decision recycle would lose
+#          state or bury a decision — surface, never force).
+#        • BUSY + medium/low                 → Tier 2: mark a refresh-queued intent + hold; the lowered idle
+#          threshold fires it at the next idle gap (context grows monotonically, so it converges there).
+#      All new aggressiveness is advisory or SHADOW+page by default — nothing auto-execs until armed
+#      (idle: --live; busy: --live --busy-force). Damp-first, unchanged from the Stage-2 discipline.
 #
 # Delivery: {decision:"block"} + hookSpecificOutput.additionalContext (the MODEL-facing recycle
 # advisory — confirmed delivered on PostToolUse @ 2.1.183) + systemMessage/reason (operator-facing).
@@ -79,20 +92,35 @@
 #   waiting-recycle.sh unkill    # remove the global kill-switch
 # Claude Code calls it with NO args + the PostToolUse JSON on stdin → actuation mode.
 #
-# Agent/operator CLI (extended): arm [--brief <file>] [--live]  — --brief seeds the Stage-2 successor
-#   prompt; --live enables the Stage-2 EXEC (requires a non-empty --brief; default is SHADOW/log-only).
+# Agent/operator CLI (extended): arm [--brief <file>] [--live] [--busy-force]  — --brief seeds the Stage-2
+#   successor prompt; --live enables the idle Stage-2 EXEC (requires a non-empty --brief; default SHADOW);
+#   --busy-force ALSO enables the Tier-3 BUSY+HIGH mid-work forced-recycle EXEC (requires --live).
 #
-# Env seams (tests): CC_WR_T · CC_TELEMETRY_DIR · CC_WR_AGE_MAX · CC_WR_IDL · CC_WR_STATE_DIR ·
-#                    CC_WR_MAX · CC_WR_COOLDOWN_S · CC_WR_KILL · CC_WR_ROT_FLOOR · CC_WR_GRACE_S ·
-#                    CC_WR_COORD_DIR · CC_WR_UUID · CC_WR_QUIET_S · CC_WR_FIRE_DIR · CC_WR_HANDOFF_FIRE ·
-#                    CC_WR_DESK_ROLE · CC_WR_NOTIFY · CC_WR_PUSH · CC_WR_ESCALATE_DEDUP_S
+# Env seams (tests): CC_WR_T (alias→T_IDLE) · CC_WR_T_IDLE · CC_WR_T_BUSY · CC_WR_T_IDLE_FLOOR ·
+#                    CC_WR_IDLE_DECAY_S · CC_WR_BUSY_FORCE · CC_TELEMETRY_DIR · CC_WR_AGE_MAX · CC_WR_IDL ·
+#                    CC_WR_STATE_DIR · CC_WR_MAX · CC_WR_COOLDOWN_S · CC_WR_KILL · CC_WR_ROT_FLOOR ·
+#                    CC_WR_GRACE_S · CC_WR_COORD_DIR · CC_WR_UUID · CC_WR_QUIET_S · CC_WR_FIRE_DIR ·
+#                    CC_WR_HANDOFF_FIRE · CC_WR_DESK_ROLE · CC_WR_NOTIFY · CC_WR_PUSH · CC_WR_ESCALATE_DEDUP_S
 #
 # NOTE: deliberately NO `set -e` — a hook must fail SAFE (abstain), and a stray non-zero from a grep
 # test must never become the script's exit code and suppress a legitimate abstain-log. -u/pipefail are
 # on for hygiene; every path ends `exit 0`.
 set -uo pipefail
 
-T="${CC_WR_T:-55}"                                          # moderate fire threshold, used_pct
+# ── TIERED CONTEXT THRESHOLDS (operator 2026-07-19, cc-backlog 4ce6ffc0194f) ──────────────────────
+# A monitoring desk fills with low-value watch noise; recycling at an IDLE (just-waiting) boundary is
+# a FREE WIN — no work in hand to lose (state is disk-reconstructible), and it sheds the rot BEFORE it
+# reaches the awkward busy-and-high case (the evidence: a desk sat low-context for hours, then hit 74%
+# MID-conversation). So the single 55% gate is split into two state-keyed thresholds:
+#   • IDLE (SAFE gate passes — just waiting)  → recycle at the LOWER, ADAPTIVE T_IDLE (proactive).
+#   • BUSY (SAFE gate fails — mid-work/coord) → hold as before UNTIL context reaches the HIGH T_BUSY,
+#     where a forced path drains the pending pings into the successor brief (never a silent ride to the
+#     90% auto-compact wall). See the decision-routing block below.
+# CC_WR_T stays a back-compat alias: if set, it seeds T_IDLE (old callers pinning 55 keep a 55 idle bar).
+T_IDLE="${CC_WR_T_IDLE:-${CC_WR_T:-35}}"                     # IDLE recycle threshold (was 55; lowered — proactive)
+T_BUSY="${CC_WR_T_BUSY:-75}"                                 # BUSY forced-recycle threshold (Tier 3; just above the observed-awkward 74%)
+T_IDLE_FLOOR="${CC_WR_T_IDLE_FLOOR:-25}"                     # adaptive decay floor (== ROT_FLOOR: the two triggers converge here)
+IDLE_DECAY_S="${CC_WR_IDLE_DECAY_S:-3600}"                   # T_IDLE decays to the floor over THIS long-idle window (0 ⇒ no decay)
 ROT_FLOOR="${CC_WR_ROT_FLOOR:-25}"                          # rot-tell needs THIS much fill to be real
 AGE_MAX="${CC_WR_AGE_MAX:-180}"                             # telemetry older than this can't be trusted
 MAX="${CC_WR_MAX:-3}"                                       # per-session advisory cap (never nag forever)
@@ -120,6 +148,10 @@ live_for()     { printf '%s/live-%s'     "$STATE_DIR" "$(key_cwd "$1")"; } # cwd
 brief_for()    { printf '%s/brief-%s'    "$STATE_DIR" "$(key_cwd "$1")"; } # cwd-keyed: standing successor-brief template
 disarm_for()   { printf '%s/disarm-%s'   "$STATE_DIR" "$(key_cwd "$1")"; } # cwd-keyed: per-desk opt-out (suppresses arm-by-default, G-P11-7)
 escalated_for(){ printf '%s/escalated-%s' "$STATE_DIR" "$1"; }             # SID-keyed: T-P1-8 wedge page-once pacer
+# Tiered-refresh state (4ce6ffc0194f, 2026-07-19):
+idlewatch_for(){ printf '%s/idlewatch-%s' "$STATE_DIR" "$1"; }             # SID-keyed: first sub-T_IDLE fresh poll (adaptive-decay clock)
+queued_for()   { printf '%s/queued-%s'    "$STATE_DIR" "$1"; }             # SID-keyed: Tier-2 refresh-queued marker (busy@medium wants a refresh)
+busyforce_for(){ printf '%s/busyforce-%s' "$STATE_DIR" "$(key_cwd "$1")"; } # cwd-keyed: Tier-3 forced-recycle EXEC opt-in (beyond --live; default OFF ⇒ shadow+page)
 
 GRACE_S="${CC_WR_GRACE_S:-180}"                            # Stage-1 advisory → Stage-2 fire grace
 # actuator (test seam): resolve next to this hook (repo hooks/../scripts + symlinked ~/.claude install)
@@ -131,11 +163,12 @@ HANDOFF_FIRE="${CC_WR_HANDOFF_FIRE:-$_wrd/../scripts/handoff-fire.sh}"
 case "${1:-}" in
   arm)
     mkdir -p "$STATE_DIR" 2>/dev/null
-    shift; _brief="" _live=0
+    shift; _brief="" _live=0 _busyforce=0
     while [ $# -gt 0 ]; do case "$1" in
-      --brief) _brief="${2:?--brief needs a file}"; shift 2 ;;
-      --live)  _live=1; shift ;;
-      *) echo "!! unknown arm arg: $1 (use: arm [--brief <file>] [--live])" >&2; exit 2 ;;
+      --brief)      _brief="${2:?--brief needs a file}"; shift 2 ;;
+      --live)       _live=1; shift ;;
+      --busy-force) _busyforce=1; shift ;;
+      *) echo "!! unknown arm arg: $1 (use: arm [--brief <file>] [--live] [--busy-force])" >&2; exit 2 ;;
     esac; done
     f="$(arm_for "$PWD")"; was_armed=0; [ -f "$f" ] && was_armed=1
     rm -f "$(disarm_for "$PWD")" 2>/dev/null                # an explicit arm overrides a prior `clear` opt-out
@@ -151,13 +184,22 @@ case "${1:-}" in
     else
       rm -f "$(live_for "$PWD")" 2>/dev/null; mode="SHADOW (deterministic recycle LOGS would-fire, does NOT exec)"
     fi
+    # --busy-force: opt IN to the Tier-3 mid-work forced-recycle EXEC (beyond --live — a mid-work recycle is
+    # riskier than an idle one). Without it, a busy+high desk still shadow-composes the drained brief + PAGES,
+    # but does not exec. Requires --live (the busy exec gates on BOTH live + busyforce).
+    if [ "$_busyforce" = 1 ]; then
+      [ "$_live" = 1 ] || { echo "!! --busy-force requires --live (a mid-work forced recycle is opt-in beyond --live)" >&2; exit 2; }
+      : > "$(busyforce_for "$PWD")"; mode="$mode + BUSY-FORCE (busy+high mid-work recycle ALSO execs)"
+    else
+      rm -f "$(busyforce_for "$PWD")" 2>/dev/null
+    fi
     # A fresh opt-in clears a stale cooldown; a RE-ARM of an already-armed desk does NOT — re-arming
     # would clear the cross-generation loop-breaker (panel landmine). Arm survives the in-place recycle,
     # so a SUCCESSOR must NEVER re-arm.
     [ "$was_armed" = 0 ] && rm -f "$(cooldown_for "$PWD")" 2>/dev/null
     echo "armed $mode → $f"; exit 0 ;;
   clear)
-    rm -f "$(arm_for "$PWD")" "$(cooldown_for "$PWD")" "$(live_for "$PWD")" "$(brief_for "$PWD")" 2>/dev/null
+    rm -f "$(arm_for "$PWD")" "$(cooldown_for "$PWD")" "$(live_for "$PWD")" "$(brief_for "$PWD")" "$(busyforce_for "$PWD")" 2>/dev/null
     # Durable disarm marker — the per-desk kill-switch must ALSO suppress arm-by-default (a desk that
     # still HOLDS the monitoring-desk role would otherwise re-arm on the next poll). `arm` removes it.
     mkdir -p "$STATE_DIR" 2>/dev/null; date -u +%Y-%m-%dT%H:%M:%SZ > "$(disarm_for "$PWD")" 2>/dev/null
@@ -166,9 +208,11 @@ case "${1:-}" in
     a="$(arm_for "$PWD")"; c="$(cooldown_for "$PWD")"
     if [ -f "$KILL" ]; then echo "GLOBAL KILL active ($KILL) — no session recycles"; fi
     if [ -f "$(disarm_for "$PWD")" ]; then echo "DISARMED (this cwd) — 'clear' opt-out suppresses arm-by-default; run 'arm' to re-enable"; fi
+    echo "thresholds: idle≥${T_IDLE}% (adaptive → floor ${T_IDLE_FLOOR}% over ${IDLE_DECAY_S}s idle) · busy-force≥${T_BUSY}% · rot-floor ${ROT_FLOOR}%"
     if [ -f "$a" ]; then
       echo "ARMED: $(cat "$a")"
       [ -f "$(live_for "$PWD")" ] && echo "  mode: LIVE (Stage-2 execs)" || echo "  mode: SHADOW (Stage-2 logs would-fire only)"
+      [ -f "$(busyforce_for "$PWD")" ] && echo "  busy-force: ON (busy+high mid-work recycle also execs)" || echo "  busy-force: off (busy+high shadow-composes + pages, does NOT exec)"
       [ -s "$(brief_for "$PWD")" ] && echo "  brief: $(brief_for "$PWD") ($(wc -l < "$(brief_for "$PWD")" | tr -d ' ') lines)" || echo "  brief: none (LIVE blocked until set)"
     else echo "not armed by sentinel (this cwd) — a session HOLDING the '$DESK_ROLE' role is armed-by-default at poll time (SHADOW) unless disarmed"; fi
     if [ -f "$c" ]; then
@@ -311,7 +355,27 @@ if [ -f "$tel" ]; then
     case "$used" in ''|*[!0-9]*) used=0 ;; esac
   fi
 fi
-over_threshold=0; { [ "$fresh" = 1 ] && [ "$used" -ge "$T" ]; } && over_threshold=1
+# 4a-bis. ADAPTIVE IDLE THRESHOLD (4ce6ffc0194f): the base T_IDLE decays toward T_IDLE_FLOOR the longer
+# this SID has sat below it on fresh polls — a desk idle for hours grows more eager to shed watch-rot
+# (the "sat idle for hours then hit 74%" evidence). The clock is stamped on the FIRST sub-T_IDLE fresh
+# poll and rides the SID; a recycle mints a fresh SID (clock resets) and the cwd cooldown still gates
+# churn, so the decay cannot spin. IDLE_DECAY_S=0 disables it (eff_idle == T_IDLE). The decay lowers ONLY
+# the IDLE bar; the BUSY forced path keys on T_BUSY, never eff_idle.
+eff_idle="$T_IDLE"
+if [ "$fresh" = 1 ]; then
+  iwf="$(idlewatch_for "$SID")"
+  { [ "$used" -lt "$T_IDLE" ] && [ ! -f "$iwf" ]; } && { date +%s > "$iwf" 2>/dev/null || true; }
+  if [ -f "$iwf" ] && [ "$IDLE_DECAY_S" -gt 0 ] 2>/dev/null; then
+    iw="$(cat "$iwf" 2>/dev/null || echo 0)"; case "$iw" in ''|*[!0-9]*) iw=0 ;; esac
+    if [ "$iw" -gt 0 ]; then
+      idle_age=$(( $(date +%s) - iw )); [ "$idle_age" -lt 0 ] && idle_age=0
+      span=$(( T_IDLE - T_IDLE_FLOOR )); [ "$span" -lt 0 ] && span=0
+      drop=$(( span * idle_age / IDLE_DECAY_S )); [ "$drop" -gt "$span" ] && drop="$span"
+      eff_idle=$(( T_IDLE - drop )); [ "$eff_idle" -lt "$T_IDLE_FLOOR" ] && eff_idle="$T_IDLE_FLOOR"
+    fi
+  fi
+fi
+over_threshold=0; { [ "$fresh" = 1 ] && [ "$used" -ge "$eff_idle" ]; } && over_threshold=1
 
 # 4b. Behavioral ROT tell — the desk re-deriving already-known orchestration state (confusion /
 # memory-loss markers a HEALTHY polling desk does not emit; NOT generic "let me check X"). Fires
@@ -343,32 +407,39 @@ ROT_TELLS='(lost|losing) track|(remind|reorient|reacquaint) (myself|me)|(do(n.?t
 rot_valid=0; { [ "$rot" = 1 ] && [ "$fresh" = 1 ] && [ "$used" -ge "$ROT_FLOOR" ]; } && rot_valid=1
 { [ "$over_threshold" = 1 ] || [ "$rot_valid" = 1 ]; } || abstain "below-threshold-no-tell:used=${used},fresh=${fresh},rot=${rot},floor=${ROT_FLOOR}"
 
-# 5. SAFE — genuinely just-WAITING, never mid-write-work, mid-merge, mid-coordination, or holding
-# a decision. Every clause below is FALSE-NEGATIVE-safe: an unreadable/ambiguous signal HOLDS (a
-# missed recycle just waits for the next poll; a wrong recycle strands the fleet).
-# 5a. Clean tree + no git SEQUENCER state: uncommitted changes = in-scope work in hand ⇒ HOLD; a live
-# merge/rebase/cherry-pick is porcelain-CLEAN at step boundaries yet mid-active-work (the audit's
-# "mid-merge between clean states", Fable panel S1) ⇒ HOLD on the sequencer files.
-if git -C "$CWD" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  [ -z "$(git -C "$CWD" status --porcelain 2>/dev/null)" ] || abstain "dirty-tree-hold"
+# 5. SAFE vs BUSY — we no longer abstain at the first hold: we CLASSIFY it and fall through to the
+# decision-routing block (idle-fire vs busy-force vs busy-page vs Tier-2 hold). Every clause stays
+# FALSE-NEGATIVE-safe (an unreadable/ambiguous signal HOLDS). First hold, in order, wins.
+#   • class=soft — disk-DURABLE state (uncommitted tree, inbound wait-contract, mailbox ping): the
+#     successor inherits it from disk, so at HIGH context the busy-force path recycles anyway and DRAINS
+#     the pings into the successor brief (nothing dropped — the Tier-3 point).
+#   • class=hard — would LOSE state or BURY a decision if recycled (git sequencer mid-merge, open operator
+#     decision, live context-bound teammate): NEVER force — at high context it PAGES, it does not recycle.
+SAFE=1; hold_class=""; hold_reason=""
+hold() { if [ "$SAFE" = 1 ]; then SAFE=0; hold_class="$1"; hold_reason="$2"; fi; }
+
+# 5a. Clean tree + no git SEQUENCER state. Dirty tree (SOFT): the working tree survives a pane recycle, so
+# the successor inherits the uncommitted change (flagged in the brief). Live merge/rebase/cherry-pick
+# (HARD): porcelain-CLEAN at step boundaries yet mid-active-work (the audit's "mid-merge between clean
+# states", Fable panel S1) — fresh context mid-sequencer is error-prone, so page not force.
+if [ "$SAFE" = 1 ] && git -C "$CWD" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  [ -z "$(git -C "$CWD" status --porcelain 2>/dev/null)" ] || hold soft "dirty-tree-hold"
   gd="$(git -C "$CWD" rev-parse --git-dir 2>/dev/null)"
-  if [ -n "$gd" ]; then
+  if [ "$SAFE" = 1 ] && [ -n "$gd" ]; then
     case "$gd" in /*) ;; *) gd="$CWD/$gd" ;; esac
     for seq in MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD rebase-merge rebase-apply; do
-      [ -e "$gd/$seq" ] && abstain "sequencer-state-hold:$seq"
+      [ -e "$gd/$seq" ] && { hold hard "sequencer-state-hold:$seq"; break; }
     done
   fi
 fi
 # 5b. Open decision/blocker in the last message (reuse anti-deference's GENUINE carve-out): a desk
-# waiting on the operator's call must SURFACE, not silently recycle the question away.
+# waiting on the operator's call must SURFACE, not silently recycle the question away (HARD).
 GENUINE='your (credential|password|api.?key|secret|token|login|cookie)|need (your|the)[^.]{0,40}(credential|password|secret|token|key|access|permission|approval)|only you (can|have|know)|(don.?t|do not|no) [a-z ]{0,20}access|which account|you.?ll need to (provide|give|share|tell|run|log ?in)|i (don.?t|do not) have (access|the |your |permission)|can you (provide|share|tell me|give me|confirm which)|which (do you|would you|of (these|the)|option|approach|one)|(would|do) you prefer|your call|up to you|how would you like|which direction|your approval|requires? (your|sudo|approval|authentication)|run (this|it|the [a-z ]{0,20}) ?yourself|sudo|interactive login|auth login|pushing to (main|origin)|push (is|remains)[^.]{0,20}your call|won.?t push|will not push|not push(ing)? (to|without)|force.?push|destructive migration|drop table|delete[^.]{0,20}production|navigation pattern|(db|database) timeout'
-[ -n "$MSG" ] && printf '%s' "$MSG" | grep -iqE "$GENUINE" && abstain "open-decision-hold"
+[ "$SAFE" = 1 ] && [ -n "$MSG" ] && printf '%s' "$MSG" | grep -iqE "$GENUINE" && hold hard "open-decision-hold"
 
-# 5c. Active-COORDINATION holds (Fable panel 2026-07-19 S3/S4/S5). A monitoring desk can be clean-tree
-# yet mid-coordination; a recycle would strand state that lives ONLY in this SID's context. The desk's
-# OWN waiter-contracts do NOT hold (durable on disk, the successor resumes them) — only a peer BLOCKED
-# ON this desk, an unprocessed inbound ping, or a live teammate do. COORD/UUID are resolved above (the
-# arm-by-default check shares them); both are seam-overridable for tests.
+# 5c. Active-COORDINATION (Fable panel 2026-07-19 S3/S4/S5). S5 live teammate = HARD. S3 inbound wait +
+# S4 mailbox = SOFT (durable on disk; the busy-force path DRAINS them into the successor brief). The
+# desk's OWN waiter-contracts do NOT hold (durable — the successor resumes them). COORD/UUID resolved above.
 QUIET_S="${CC_WR_QUIET_S:-180}"                             # S4: a mailbox line fresher than this = active
 now_s="$(date +%s)"
 # identity set a peer addresses THIS desk by: session_id, pane uuid, or a role file resolving to either.
@@ -381,16 +452,22 @@ ident_is_me() { # $1=addressee → 0 if it names this desk
   fi
   return 1
 }
-# S5 — live context-bound TEAMMATES (HARD HOLD — teammate/TaskOutput results route to THIS SID; a
-# recycle or /compact kills them unrecoverably). Signal: a team dir created BY this session. Conservative
-# (existence ⇒ HOLD): a lingering post-teardown dir over-holds, which is FALSE-NEGATIVE-safe and visible
-# in the shadow log for teardown-hygiene follow-up.
-for td in "$CFG"/teams/session-"${SID:0:8}"*; do
-  { [ -d "$td" ] && [ -f "$td/config.json" ]; } && abstain "live-team-hold"
-done
+mbx_active() { # $1=mailbox file → 0 if touched within QUIET_S
+  [ -f "$1" ] || return 1
+  local mt; mt="$(stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0)"
+  case "$mt" in ''|*[!0-9]*) mt=0 ;; esac
+  [ "$(( now_s - mt ))" -lt "$QUIET_S" ]
+}
+# S5 — live context-bound TEAMMATES (HARD HOLD — teammate/TaskOutput results route to THIS SID; a recycle
+# or /compact kills them unrecoverably). Signal: a team dir created BY this session (existence ⇒ HOLD).
+if [ "$SAFE" = 1 ]; then
+  for td in "$CFG"/teams/session-"${SID:0:8}"*; do
+    { [ -d "$td" ] && [ -f "$td/config.json" ]; } && { hold hard "live-team-hold"; break; }
+  done
+fi
 # S3 — a peer is contract-BLOCKED on this desk: OPEN wait-contract, waitee names me, deadline future,
-# waiter still ALIVE (a dead waiter's OPEN contract is a zombie — kill -0 filters it, panel S3).
-if [ -d "$COORD/wait-contracts" ]; then
+# waiter still ALIVE (a dead waiter's OPEN contract is a zombie — kill -0 filters it, panel S3). SOFT.
+if [ "$SAFE" = 1 ] && [ -d "$COORD/wait-contracts" ]; then
   for wc in "$COORD"/wait-contracts/*.json; do
     [ -f "$wc" ] || continue
     [ "$(jq -r '.status // empty' "$wc" 2>/dev/null)" = "OPEN" ] || continue
@@ -399,36 +476,99 @@ if [ -d "$COORD/wait-contracts" ]; then
     [ "$dl" -gt "$now_s" ] || continue                        # past deadline ⇒ not a live block
     wp="$(jq -r '.waiter_pid // empty' "$wc" 2>/dev/null)"
     { [ -n "$wp" ] && ! kill -0 "$wp" 2>/dev/null; } && continue   # dead waiter ⇒ zombie, skip
-    abstain "inbound-wait-hold"
+    hold soft "inbound-wait-hold"; break
   done
 fi
 # S4 — a peer just reached for this desk (mailbox line fresher than QUIET_S). cc-notify ALWAYS
-# mailbox-writes before injecting, and cc-dispatch workers notify the desk ROLE without a contract,
-# so S3 alone under-detects — S4 is load-bearing. Check the own-uuid mailbox + any role resolving to me.
-mbx_active() { # $1=mailbox file → 0 if touched within QUIET_S
-  [ -f "$1" ] || return 1
-  local mt; mt="$(stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0)"
-  case "$mt" in ''|*[!0-9]*) mt=0 ;; esac
-  [ "$(( now_s - mt ))" -lt "$QUIET_S" ]
-}
-{ [ -n "$UUID" ] && mbx_active "$COORD/mailbox/$UUID.md"; } && abstain "inbox-active-hold"
-if [ -d "$COORD/cc-roles" ]; then
+# mailbox-writes before injecting, and cc-dispatch workers notify the desk ROLE without a contract, so S3
+# alone under-detects — S4 is load-bearing. Check the own-uuid mailbox + any role resolving to me. SOFT.
+if [ "$SAFE" = 1 ]; then
+  { [ -n "$UUID" ] && mbx_active "$COORD/mailbox/$UUID.md"; } && hold soft "inbox-active-hold"
+fi
+if [ "$SAFE" = 1 ] && [ -d "$COORD/cc-roles" ]; then
   for rf in "$COORD"/cc-roles/*; do
     [ -f "$rf" ] || continue
     rv="$(cat "$rf" 2>/dev/null)"
     { [ "$rv" = "$SID" ] || { [ -n "$UUID" ] && [ "$rv" = "$UUID" ]; }; } || continue
-    mbx_active "$COORD/mailbox/$rv.md" && abstain "inbox-active-hold-role"
+    mbx_active "$COORD/mailbox/$rv.md" && { hold soft "inbox-active-hold-role"; break; }
   done
 fi
 
-# ── FIRE-worthy: trigger AND safe. Stage 2 (deterministic fire) if the grace since the first advisory
-#    has elapsed; else Stage 1 (advisory). ──────────────────────────────────────────────────────────
+# drain_scan — print the desk's PENDING ping queue (mailbox tails + inbound OPEN contracts naming me), or
+# nothing. Tier-3 busy-force embeds this in the successor brief so a mid-work recycle drops NO ping. It
+# carries ALL pending content (not only QUIET_S-fresh) so a slightly-stale-but-unprocessed ping still rides.
+drain_scan() {
+  local rf rv wc
+  if [ -n "$UUID" ] && [ -s "$COORD/mailbox/$UUID.md" ]; then
+    printf '── mailbox %s ──\n' "$UUID"; tail -40 "$COORD/mailbox/$UUID.md" 2>/dev/null
+  fi
+  if [ -d "$COORD/cc-roles" ]; then
+    for rf in "$COORD"/cc-roles/*; do
+      [ -f "$rf" ] || continue
+      rv="$(cat "$rf" 2>/dev/null)"
+      { [ "$rv" = "$SID" ] || { [ -n "$UUID" ] && [ "$rv" = "$UUID" ]; }; } || continue
+      [ -s "$COORD/mailbox/$rv.md" ] && { printf '── mailbox role:%s → %s ──\n' "$(basename "$rf")" "$rv"; tail -40 "$COORD/mailbox/$rv.md" 2>/dev/null; }
+    done
+  fi
+  if [ -d "$COORD/wait-contracts" ]; then
+    for wc in "$COORD"/wait-contracts/*.json; do
+      [ -f "$wc" ] || continue
+      [ "$(jq -r '.status // empty' "$wc" 2>/dev/null)" = "OPEN" ] || continue
+      ident_is_me "$(jq -r '.waitee // empty' "$wc" 2>/dev/null)" || continue
+      printf '── inbound wait-contract %s ──\n' "$(basename "$wc")"; jq -rc '{waiter,expected_signal,deadline,heartbeat}' "$wc" 2>/dev/null
+    done
+  fi
+}
+
+# ── DECISION ROUTING (tiered context-refresh, 4ce6ffc0194f) ──────────────────────────────────────────
+# The desk is TRIGGER-worthy (over eff_idle, or a floored rot tell). Route on desk STATE:
+#   SAFE (idle)                     → fire_mode=idle → the shared fire machine (Stage 1/2/wedge), unchanged.
+#   BUSY soft + HIGH ctx (≥ T_BUSY) → fire_mode=busy → the shared fire machine, DRAINING the ping queue.
+#   BUSY hard + HIGH ctx            → busy-page (cannot safely force — surface, never bury).
+#   BUSY + medium/low               → Tier-2: mark a refresh-queued intent + hold (the lowered idle
+#                                     threshold fires it at the next idle gap).
 mkdir -p "$STATE_DIR" 2>/dev/null || true
-if [ "$over_threshold" = 1 ] && [ "$rot_valid" = 1 ]; then trig="context ${used}% ≥ ${T}% AND a state-rot tell"
-elif [ "$over_threshold" = 1 ];                     then trig="context ${used}% ≥ ${T}%"
-else                                                     trig="a floored state-rot tell (re-deriving known state, ${used}% ≥ ${ROT_FLOOR}% floor)"
-fi
+high_ctx=0; { [ "$fresh" = 1 ] && [ "$used" -ge "$T_BUSY" ]; } && high_ctx=1
 dod_carry="$("${DOD_PERSIST:-$(dirname "$0")/dod-persist.sh}" get 2>/dev/null || true)"
+fire_mode=idle; drain_section=""
+
+if [ "$SAFE" = 0 ]; then
+  if [ "$high_ctx" = 1 ] && [ "$hold_class" = soft ]; then
+    fire_mode=busy; drain_section="$(drain_scan)"             # Tier-3: force-recycle, carrying the pings
+  elif [ "$high_ctx" = 1 ]; then
+    # ── BUSY-PAGE — a HARD hold at high context. Forcing would lose state (sequencer/teammate) or bury a
+    #    decision, so it will NOT recycle — page the operator OUT-OF-BAND (fleet-safe ⇒ ships LIVE),
+    #    page-once per ESCALATE_DEDUP_S via escalated_for.
+    if [ -f "$(escalated_for "$SID")" ]; then
+      ep="$(cat "$(escalated_for "$SID")" 2>/dev/null || echo 0)"; case "$ep" in ''|*[!0-9]*) ep=0 ;; esac
+      [ "$(( $(date +%s) - ep ))" -lt "$ESCALATE_DEDUP_S" ] && abstain "busy-page-paced:${hold_reason}"
+    fi
+    date +%s > "$(escalated_for "$SID")" 2>/dev/null || true
+    log_idl escalated "busy-hard-hold:${hold_reason}" \
+      "$(jq -cn --argjson used "$used" --arg hold "$hold_reason" --argjson busy 1 '{used_pct:$used,hold:$hold,busy:($busy==1),forceable:false}')"
+    wr_os_notify "Claude desk BUSY+HIGH" "desk ${UUID:-$SID} at ${used}% mid-work (${hold_reason}) — can't safely auto-recycle"
+    wr_push_page "BUSY+HIGH DESK (${DESK_ROLE}) ${used}% ctx, ${hold_reason} — resolve + /handoff; auto-recycle held (hard)"
+    pmsg="⚠ BUSY + HIGH CONTEXT (${used}% ≥ ${T_BUSY}%) held by ${hold_reason} — a HARD hold: an auto-recycle would lose state or bury a decision, so it will NOT fire. You are climbing toward the 90% auto-compact wall. ACT NOW: resolve the ${hold_reason} (commit / finish the merge, answer the decision, or let the teammate finish), then run /handoff to recycle. Re-pages every ${ESCALATE_DEDUP_S}s. Kill-switch: \`waiting-recycle.sh clear\`."
+    jq -nc --arg a "$pmsg" --arg s "$pmsg" \
+      '{decision:"block",reason:$s,systemMessage:$s,hookSpecificOutput:{hookEventName:"PostToolUse",additionalContext:$a}}'
+    exit 0
+  else
+    # ── TIER 2 — BUSY at medium/low context. Don't interrupt the work; QUEUE a refresh (a soft hold marks
+    #    intent; the lowered idle threshold fires it at the next idle gap) + hold with the specific reason.
+    [ "$hold_class" = soft ] && { : > "$(queued_for "$SID")" 2>/dev/null || true; }
+    log_idl abstained "$hold_reason" \
+      "$(jq -cn --argjson used "$used" --arg cls "$hold_class" '{used_pct:$used,hold_class:$cls,refresh_queued:($cls=="soft")}')"
+    exit 0
+  fi
+fi
+# Reaching here: fire_mode=idle (SAFE) OR fire_mode=busy (BUSY soft + high ctx). The SHARED fire machine.
+
+# trig label — honest to the actual gate (eff_idle for idle; T_BUSY for busy).
+if   [ "$fire_mode" = busy ];                                then trig="context ${used}% ≥ ${T_BUSY}% while BUSY (${hold_reason})"
+elif [ "$over_threshold" = 1 ] && [ "$rot_valid" = 1 ];     then trig="context ${used}% ≥ ${eff_idle}% AND a state-rot tell"
+elif [ "$over_threshold" = 1 ];                             then trig="context ${used}% ≥ ${eff_idle}%"
+else                                                             trig="a floored state-rot tell (re-deriving known state, ${used}% ≥ ${ROT_FLOOR}% floor)"
+fi
 
 # Already fired for THIS SID? one-fire-per-SID latch. A LIVE fire recycles to a fresh SID, so this only
 # re-hits in SHADOW. If the desk is WEDGED (still fire-worthy) it routes to the escalate branch below
@@ -440,22 +580,34 @@ dod_carry="$("${DOD_PERSIST:-$(dirname "$0")/dod-persist.sh}" get 2>/dev/null ||
 if [ "$stage2_pending" = 1 ]; then
   : > "$firedf" 2>/dev/null                                   # latch FIRST — at-most-once per SID even on re-entry
   # Compose the successor brief ATOMICALLY (tmp+mv). NEVER empty/partial → no task-less successor (FM-D):
-  #   standing --brief template (if armed) + frozen DoD + a re-derive-from-disk directive.
+  #   standing --brief template (if armed) + frozen DoD + (busy) the drained ping queue + a re-derive directive.
   FIRE_DIR="${CC_WR_FIRE_DIR:-/tmp}"; pf="$FIRE_DIR/wr-fire-${SID}.txt"; tmpf="$pf.$$"
   {
     if [ -s "$(brief_for "$CWD")" ]; then cat "$(brief_for "$CWD")"
+    elif [ "$fire_mode" = busy ]; then printf '%s\n' "You are the monitoring DESK, resumed by a deterministic self-recycle FORCED mid-work (predecessor context was ${used}% full — over the ${T_BUSY}% busy ceiling — and has been discarded to stop context rot)."
     else printf '%s\n' "You are the monitoring DESK, resumed by a deterministic self-recycle (predecessor context was ${used}% full and has been discarded to stop context rot)."; fi
     [ -n "$dod_carry" ] && printf '\nScope (frozen): %s\n' "$dod_carry"
+    if [ "$fire_mode" = busy ]; then
+      printf '\nNOTE — this recycle was FORCED while the desk was mid-work (%s). The working tree and any coordination state are on DISK; inspect git status / git diff and act on the drained pings below before assuming a clean slate.\n' "$hold_reason"
+      [ -n "$drain_section" ] && printf '\nPENDING PINGS/REQUESTS TO CARRY (drained at recycle — do NOT drop; act on these after re-deriving state):\n%s\n' "$drain_section"
+    fi
     printf '\nFIRST ACTION — re-derive live watch state from DISK (the predecessor context is GONE; do not assume): run cc-board for the fleet roster; read the live-session registry, ~/.claude/wait-contracts (owned waits), and your role mailbox; scan worktrees + git for wave/merge state. Then resume monitoring. Do NOT re-arm waiting-recycle (the arm survives the recycle; re-arming clears the loop-breaker).\n'
   } > "$tmpf" 2>/dev/null
   if [ -s "$tmpf" ]; then mv -f "$tmpf" "$pf" 2>/dev/null; else rm -f "$tmpf" 2>/dev/null; fi
   if [ ! -s "$pf" ]; then log_idl abstained "fire-compose-empty" "$(jq -cn --argjson used "$used" '{used_pct:$used}')"; exit 0; fi
   tk="$( [ "$over_threshold" = 1 ] && echo threshold || echo behavioral )"
+  # EXEC gate: idle ⇒ armed --live. busy ⇒ armed --live AND the extra busy-force opt-in (a mid-work recycle
+  # is qualitatively riskier than an idle one — it needs its own arm beyond --live). Else SHADOW.
+  exec_ok=0
   if [ -f "$(live_for "$CWD")" ]; then
+    if [ "$fire_mode" = idle ]; then exec_ok=1
+    elif [ -f "$(busyforce_for "$CWD")" ] || [ "${CC_WR_BUSY_FORCE:-}" = on ]; then exec_ok=1; fi
+  fi
+  if [ "$exec_ok" = 1 ]; then
     date +%s > "$cf" 2>/dev/null || true                      # anchor the cross-generation loop-breaker on the FIRE
     log_idl fired "stage2-live" \
-      "$(jq -cn --argjson used "$used" --arg trigger "$tk" --arg prompt_file "$pf" --argjson grace_s "$GRACE_S" \
-          '{used_pct:$used,trigger:$trigger,prompt_file:$prompt_file,grace_s:$grace_s}')"
+      "$(jq -cn --argjson used "$used" --arg trigger "$tk" --arg mode "$fire_mode" --arg prompt_file "$pf" --argjson grace_s "$GRACE_S" \
+          '{used_pct:$used,trigger:$trigger,mode:$mode,prompt_file:$prompt_file,grace_s:$grace_s}')"
     # Sanctioned actuator: it arms a DETACHED watcher BEFORE typing /exit (order load-bearing), so the
     # recycle completes even when the /exit interrupt SIGKILLs this hook's process group.
     "$HANDOFF_FIRE" --recycle --prompt-file "$pf" ${UUID:+--session-id "$UUID"} </dev/null >/dev/null 2>&1 || true
@@ -464,29 +616,37 @@ if [ "$stage2_pending" = 1 ]; then
     exit 0
   fi
   # SHADOW (default): everything a live fire does EXCEPT the exec — ships the mechanism DAMPED so a gate
-  # bug cannot strand the fleet before the operator reviews the shadow log and arms --live (damp-first).
+  # bug cannot strand the fleet before the operator reviews the shadow log and arms live (damp-first). A
+  # BUSY shadow is more urgent than idle (mid-work AND high), so it ALSO pages out-of-band.
   log_idl fired "stage2-shadow" \
-    "$(jq -cn --argjson used "$used" --arg trigger "$tk" --arg prompt_file "$pf" --argjson grace_s "$GRACE_S" \
-        '{used_pct:$used,would_fire:true,trigger:$trigger,prompt_file:$prompt_file,grace_s:$grace_s}')"
-  smsg="⟳ RECYCLE WOULD FIRE — SHADOW (${trig}). The desk did not self-recycle within ${GRACE_S}s. waiting-recycle is armed SHADOW: it composed the successor brief at ${pf} and logged a would-fire, but did NOT exec (no fleet-stranding risk while soaking). You SHOULD still self-recycle now: run /handoff. To enable the exec after review: waiting-recycle.sh arm --brief <file> --live. Kill-switch: waiting-recycle.sh clear."
+    "$(jq -cn --argjson used "$used" --arg trigger "$tk" --arg mode "$fire_mode" --arg prompt_file "$pf" --argjson grace_s "$GRACE_S" \
+        '{used_pct:$used,would_fire:true,trigger:$trigger,mode:$mode,prompt_file:$prompt_file,grace_s:$grace_s}')"
+  if [ "$fire_mode" = busy ]; then
+    wr_os_notify "Claude desk BUSY+HIGH would-recycle" "desk ${UUID:-$SID} at ${used}% mid-work (${hold_reason}); drained brief at ${pf}"
+    wr_push_page "BUSY+HIGH would-recycle (${DESK_ROLE}) ${used}%: drained brief at ${pf} — /handoff now or arm --busy-force"
+    smsg="⟳ BUSY+HIGH RECYCLE WOULD FIRE — SHADOW (${trig}). The desk is mid-work (${hold_reason}) and did not self-recycle within ${GRACE_S}s. waiting-recycle composed a successor brief WITH the drained ping queue at ${pf} and logged a would-fire, but did NOT exec (a mid-work auto-recycle is opt-in beyond --live). Self-recycle now: run /handoff (it captures the same pings). To enable the exec: waiting-recycle.sh arm --brief <file> --live --busy-force. Kill-switch: waiting-recycle.sh clear."
+  else
+    smsg="⟳ RECYCLE WOULD FIRE — SHADOW (${trig}). The desk did not self-recycle within ${GRACE_S}s. waiting-recycle is armed SHADOW: it composed the successor brief at ${pf} and logged a would-fire, but did NOT exec (no fleet-stranding risk while soaking). You SHOULD still self-recycle now: run /handoff. To enable the exec after review: waiting-recycle.sh arm --brief <file> --live. Kill-switch: waiting-recycle.sh clear."
+  fi
   jq -nc --arg a "$smsg" --arg s "$smsg" '{decision:"block",reason:$s,systemMessage:$s,hookSpecificOutput:{hookEventName:"PostToolUse",additionalContext:$a}}'
   exit 0
 fi
 
 # ════ T-P1-8 ESCALATE — a WEDGED desk (advisory CAP reached / SHADOW would-fire latched) that is STILL
-#     fire-worthy AND just-waiting (it passed the trigger + SAFE gates above) pages the operator OUT-OF-
-#     BAND rather than silently riding to the 90% auto-compact wall. Paging is fleet-SAFE, so this ships
-#     LIVE (unlike the Stage-2 exec). Page-once per ESCALATE_DEDUP_S via the escalated_for pacer. ══════
+#     fire-worthy pages the operator OUT-OF-BAND rather than silently riding to the 90% auto-compact wall.
+#     Paging is fleet-SAFE, so this ships LIVE. Page-once per ESCALATE_DEDUP_S via the escalated_for pacer. ═
 if [ "$wedged" = 1 ]; then
   date +%s > "$(escalated_for "$SID")" 2>/dev/null || true   # stamp the page-once pacer FIRST (at-most-once/window)
+  livearm="--live"; [ "$fire_mode" = busy ] && livearm="--live --busy-force"
   if [ "$capped" = 1 ]; then why="advisory budget exhausted (${N}/${MAX}), no recycle"
-  else                        why="a SHADOW would-fire is latched but the exec is not armed --live"; fi
+  else                        why="a SHADOW would-fire is latched but the exec is not armed ${livearm}"; fi
+  state_phrase="clean tree + no open decision"; [ "$fire_mode" = busy ] && state_phrase="mid-work (${hold_reason})"
   log_idl escalated "wedge:${why}" \
-    "$(jq -cn --argjson used "$used" --arg why "$why" --argjson capped "$capped" --argjson shadow "$shadow_fired" \
-        '{used_pct:$used,why:$why,capped:($capped==1),shadow_fired:($shadow==1)}')"
+    "$(jq -cn --argjson used "$used" --arg why "$why" --arg mode "$fire_mode" --argjson capped "$capped" --argjson shadow "$shadow_fired" \
+        '{used_pct:$used,why:$why,mode:$mode,capped:($capped==1),shadow_fired:($shadow==1)}')"
   wr_os_notify "Claude desk WEDGED" "desk ${UUID:-$SID} at ${used}% can't self-recycle — ${why}"
-  wr_push_page "WEDGED DESK (${DESK_ROLE}) ${used}% ctx: ${why} — /handoff now or arm --live"
-  emsg="⚠ WEDGED — quiet monitoring boundary (${trig}), clean tree + no open decision, but ${why}: you are RIDING toward the 90% auto-compact wall with NO recycle. ACT NOW: run /handoff to self-recycle, or (operator) arm the deterministic exec — desk-arm-live.sh (or waiting-recycle.sh arm --brief <file> --live). Re-pages every ${ESCALATE_DEDUP_S}s until resolved. Kill-switch: waiting-recycle.sh clear (this desk) / kill (global)."
+  wr_push_page "WEDGED DESK (${DESK_ROLE}) ${used}% ctx: ${why} — /handoff now or arm ${livearm}"
+  emsg="⚠ WEDGED — quiet monitoring boundary (${trig}), ${state_phrase}, but ${why}: you are RIDING toward the 90% auto-compact wall with NO recycle. ACT NOW: run /handoff to self-recycle, or (operator) arm the deterministic exec — desk-arm-live.sh (or waiting-recycle.sh arm --brief <file> ${livearm}). Re-pages every ${ESCALATE_DEDUP_S}s until resolved. Kill-switch: waiting-recycle.sh clear (this desk) / kill (global)."
   jq -nc --arg a "$emsg" --arg s "$emsg" \
     '{decision:"block",reason:$s,systemMessage:$s,hookSpecificOutput:{hookEventName:"PostToolUse",additionalContext:$a}}'
   exit 0
@@ -497,11 +657,17 @@ date +%s > "$cf" 2>/dev/null || true                         # stamp cooldown (a
 printf '%s' "$((N + 1))" > "$capf" 2>/dev/null || true       # bump advisory cap
 [ -f "$escf" ] || date +%s > "$escf" 2>/dev/null || true     # set the Stage-2 grace clock on the FIRST advisory
 log_idl fired "waiting-recycle" \
-  "$(jq -cn --arg trigger "$( [ "$over_threshold" = 1 ] && echo threshold || echo behavioral )" \
+  "$(jq -cn --arg trigger "$( [ "$over_threshold" = 1 ] && echo threshold || echo behavioral )" --arg mode "$fire_mode" \
       --argjson used "$used" --argjson rot "$rot_valid" --argjson count "$((N+1))" --argjson max "$MAX" \
-      '{trigger:$trigger,used_pct:$used,rot:$rot,count:$count,max:$max}')"
+      '{trigger:$trigger,mode:$mode,used_pct:$used,rot:$rot,count:$count,max:$max}')"
 
-adv="⟳ MONITORING AUTO-RECYCLE — you are at a quiet monitoring boundary (${trig}). A watching desk accrues low-value context that rots your recall of the load-bearing orchestration state. RECYCLE NOW via your existing self-recycle path: run /handoff — it captures the live state (fired sessions, pending pings, wave/merge state, decisions) into the payload and fires handoff-fire.sh --recycle so the SUCCESSOR PANE IS THE CONTINUATION and this bloated context is discarded. Do it as this turn's next action. IF instead you actually hold in-hand write-work or a genuine open decision (you should not — the tree is clean and no blocker was detected), do NOT recycle: surface it. If you ignore this, the deterministic fire escalates in ${GRACE_S}s. Kill-switch: \`waiting-recycle.sh clear\` (this desk) / \`waiting-recycle.sh kill\` (global). (auto-recycle advisory $((N+1))/${MAX})"
+if [ "$fire_mode" = busy ]; then
+  # BUSY advisory — mid-work at high context. Urge a self-/handoff NOW (it captures the same pings); if
+  # ignored, the shadow would-force (or, opted-in, the exec) escalates after grace.
+  adv="⟳ BUSY + HIGH-CONTEXT AUTO-RECYCLE — you are mid-work (${hold_reason}) at ${used}% ≥ ${T_BUSY}%, climbing toward the 90% auto-compact wall. RECYCLE NOW while you still can cleanly: run /handoff — it captures the live state INCLUDING the pending pings/requests (mailbox + inbound wait-contracts) into the payload and fires handoff-fire.sh --recycle so the SUCCESSOR PANE IS THE CONTINUATION with nothing dropped. Commit any in-hand edit first (the working tree survives the recycle, but a fresh desk shouldn't inherit an unexplained diff). If you ignore this, the deterministic drain-and-recycle escalates in ${GRACE_S}s. Kill-switch: \`waiting-recycle.sh clear\` (this desk) / \`waiting-recycle.sh kill\` (global). (busy auto-recycle advisory $((N+1))/${MAX})"
+else
+  adv="⟳ MONITORING AUTO-RECYCLE — you are at a quiet monitoring boundary (${trig}). A watching desk accrues low-value context that rots your recall of the load-bearing orchestration state. RECYCLE NOW via your existing self-recycle path: run /handoff — it captures the live state (fired sessions, pending pings, wave/merge state, decisions) into the payload and fires handoff-fire.sh --recycle so the SUCCESSOR PANE IS THE CONTINUATION and this bloated context is discarded. Do it as this turn's next action. IF instead you actually hold in-hand write-work or a genuine open decision (you should not — the tree is clean and no blocker was detected), do NOT recycle: surface it. If you ignore this, the deterministic fire escalates in ${GRACE_S}s. Kill-switch: \`waiting-recycle.sh clear\` (this desk) / \`waiting-recycle.sh kill\` (global). (auto-recycle advisory $((N+1))/${MAX})"
+fi
 # ── carry the mission/DoD line so a recycle never loses purpose (T-P4-4; empty = none recorded) ──
 [ -n "$dod_carry" ] && adv="${adv}
 
