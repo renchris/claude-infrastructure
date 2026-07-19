@@ -29,11 +29,17 @@ age_of() { local now mt; now="$(date +%s)"; mt="$(stat -f %m "$1" 2>/dev/null ||
 }
 
 @test "L3-a: silence then output → the heartbeat is FRESH (advanced with the output)" {
+  t0="$(date +%s)"
   "$RUN" --label b -- bash -c 'sleep 2; echo x' >/dev/null 2>&1
-  # age_of is INTEGER seconds; the beat-write→check gap can straddle a second boundary under
-  # suite load, reading age 1 for a beat that is really ~0s old (flake). <2 tolerates that one
-  # boundary while still failing a start-keyed/stale beat (age ≈ the 2s command duration).
-  [ "$(age_of "$CC_RUN_HEARTBEAT_DIR/b.beat")" -lt 2 ]
+  [ -f "$CC_RUN_HEARTBEAT_DIR/b.beat" ]
+  # The beat is keyed on OUTPUT (command-relative t≈2s), not START (t=0). Assert it was written
+  # >=1s AFTER the command started — a start-relative delta that is robust to suite-load check-delay,
+  # unlike an absolute age-at-check (age_of), which under parallel load straddles multiple
+  # integer-second boundaries and false-flakes (3596b45 class; recurred 2026-07-18 full-suite run).
+  # A start-keyed bug writes the beat at ~t0 (delta ~0) and FAILS; the correct output-keyed beat's
+  # mtime is ~2s past t0. The 2s sleep guarantees a wide margin either side of the 1s split.
+  beat_mt="$(stat -f %m "$CC_RUN_HEARTBEAT_DIR/b.beat")"
+  [ "$((beat_mt - t0))" -ge 1 ]
 }
 
 @test "L3-blind: --expect silent records heartbeat_expectation=none (routes liveness to L1/pid)" {
