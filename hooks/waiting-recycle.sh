@@ -369,7 +369,8 @@ if [ "$stage2_pending" = 1 ]; then
     else printf '%s\n' "You are the monitoring DESK, resumed by a deterministic self-recycle (predecessor context was ${used}% full and has been discarded to stop context rot)."; fi
     [ -n "$dod_carry" ] && printf '\nScope (frozen): %s\n' "$dod_carry"
     printf '\nFIRST ACTION — re-derive live watch state from DISK (the predecessor context is GONE; do not assume): run cc-board for the fleet roster; read the live-session registry, ~/.claude/wait-contracts (owned waits), and your role mailbox; scan worktrees + git for wave/merge state. Then resume monitoring. Do NOT re-arm waiting-recycle (the arm survives the recycle; re-arming clears the loop-breaker).\n'
-  } > "$tmpf" 2>/dev/null && mv -f "$tmpf" "$pf" 2>/dev/null || rm -f "$tmpf" 2>/dev/null
+  } > "$tmpf" 2>/dev/null
+  if [ -s "$tmpf" ]; then mv -f "$tmpf" "$pf" 2>/dev/null; else rm -f "$tmpf" 2>/dev/null; fi
   if [ ! -s "$pf" ]; then log_idl abstained "fire-compose-empty" "\"used_pct\":${used}"; exit 0; fi
   tk="$( [ "$over_threshold" = 1 ] && echo threshold || echo behavioral )"
   if [ -f "$(live_for "$CWD")" ]; then
