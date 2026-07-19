@@ -122,8 +122,14 @@ dispatch() { # <dry|run>
     idl passed "backlog empty"; idl_summary; return 0
   fi
 
-  # 3. wave → quota placement.
-  wave="$(printf '%s' "$dispatchable" | jq -c '[ .[] | {id, slot: (.slot // "lead")} ]')"
+  # 3. wave → quota placement. BOUND the wave to MAX_SPAWN: cc-wave-plan cliffs (exit 4) on any
+  # wave exceeding total concurrency (~2x accounts) and by contract NEVER partial-places ("never a
+  # blind partial"), so planning the ENTIRE open backlog false-cliffs the instant it exceeds that --
+  # stranding ALL items though headroom exists (found live 2026-07-19: a 28-item backlog cliffed
+  # every tick while next4 sat at 5h-0%). We spawn at most MAX_SPAWN per tick (step 5) anyway, so
+  # plan exactly that many; unclaimed items carry to the next tick. A cliff on THIS bounded wave is
+  # then a genuine all-capped cliff. (Assumes MAX_SPAWN <= total concurrency; true for the default.)
+  wave="$(printf '%s' "$dispatchable" | jq -c --argjson k "$MAX_SPAWN" '[ .[0:$k][] | {id, slot: (.slot // "lead")} ]')"
   waveplan="$(resolve_bin "${CC_DISPATCH_WAVEPLAN_BIN:-}" cc-wave-plan)" \
     || die3 "wave-plan bin unresolvable (set CC_DISPATCH_WAVEPLAN_BIN)"
   plan="$("$waveplan" --items "$wave" --json 2>/dev/null)"; rc=$?
@@ -239,9 +245,11 @@ case "\$1" in
 esac
 exit 0
 STUB
-  # wave-plan stub: rc from \$STUB_WP_RC; plan from \$tmp/plan.json.
+  # wave-plan stub: rc from \$STUB_WP_RC; plan from \$tmp/plan.json; captures the --items wave to
+  # \$tmp/wave.json so (j) can assert the dispatcher bounds it to MAX_SPAWN.
   cat > "$tmp/waveplan" <<STUB
 #!/bin/bash
+while [ "\$#" -gt 0 ]; do case "\$1" in --items) printf '%s' "\$2" > "$tmp/wave.json"; shift 2 ;; *) shift ;; esac; done
 rc="\${STUB_WP_RC:-0}"
 [ "\$rc" = 0 ] && cat "$tmp/plan.json"
 exit "\$rc"
@@ -324,6 +332,17 @@ STUB
   seed_plan '[{"id":"i1","account":"a","fire_line":["--x"]},{"id":"i2","account":"a","fire_line":["--x"]},{"id":"i3","account":"a","fire_line":["--x"]}]'
   CC_DISPATCH_MAX_SPAWN=2 "$SELF" --once >/dev/null 2>&1
   t "(f) MAX_SPAWN=2 caps spawns at 2"      test "$(grep -c . "$tmp/spawn.log")" -eq 2
+
+  # (j) WAVE BOUNDING (regression: false quota-cliff on an oversized backlog). A backlog LARGER
+  # than MAX_SPAWN must still reach wave-plan as a wave sliced to MAX_SPAWN — else wave-plan's
+  # total-concurrency guard (exit 4, never a partial) makes dispatch abstain and strand everything
+  # though headroom exists. RED-proves the slice at step 3.
+  reset; rm -f "$tmp/wave.json"
+  seed_items '[{"id":"i1","project":"a","status":"open","title":"t1"},{"id":"i2","project":"a","status":"open","title":"t2"},{"id":"i3","project":"a","status":"open","title":"t3"},{"id":"i4","project":"a","status":"open","title":"t4"},{"id":"i5","project":"a","status":"open","title":"t5"}]'
+  seed_plan '[{"id":"i1","account":"a","fire_line":["--x"]},{"id":"i2","account":"a","fire_line":["--x"]}]'
+  CC_DISPATCH_MAX_SPAWN=2 "$SELF" --once >/dev/null 2>&1
+  t "(j) backlog=5 → wave sliced to MAX_SPAWN=2" test "$(jq 'length' "$tmp/wave.json" 2>/dev/null)" -eq 2
+  t "(j) wave keeps the FIRST items (i1 first)"  test "$(jq -r '.[0].id' "$tmp/wave.json" 2>/dev/null)" = i1
 
   # (g) config-fail: unresolvable backlog bin → exit 3 LOUD.
   CC_DISPATCH_BACKLOG_BIN="/nonexistent/nope" "$SELF" --once >/dev/null 2>&1; rc=$?
