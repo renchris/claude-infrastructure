@@ -247,6 +247,26 @@ ROT="Wait, which sessions did I fire again? Let me reconstruct the state."  # st
   echo "$output" | jq -e '.decision=="block"' >/dev/null
 }
 
+# ── DoD carry (T-P4-4): the advisory carries the frozen mission line for the successor ───────────
+@test "dod-carry: advisory carries the frozen DoD line when one is recorded" {
+  export WRAP_DOD_FILE="$BATS_TEST_TMPDIR/dod.md"
+  printf 'Scope (frozen): drive PLAN.md — carry me across the recycle\n' > "$WRAP_DOD_FILE"
+  mk_tel sd 60
+  run drive sd "$(mk_tx 90 "$WAIT")"
+  [ "$status" -eq 0 ]; fired "$output"
+  ctx="$(echo "$output" | jq -r '.hookSpecificOutput.additionalContext')"
+  echo "$ctx" | grep -q "MISSION TO CARRY"
+  echo "$ctx" | grep -q "carry me across the recycle"
+}
+@test "dod-carry: no DoD recorded → advisory still fires, no MISSION line (graceful degrade)" {
+  export WRAP_DOD_FILE="$BATS_TEST_TMPDIR/empty-dod.md"; : > "$WRAP_DOD_FILE"
+  mk_tel se 60
+  run drive se "$(mk_tx 91 "$WAIT")"
+  [ "$status" -eq 0 ]; fired "$output"
+  ctx="$(echo "$output" | jq -r '.hookSpecificOutput.additionalContext')"
+  [ -z "$(printf '%s' "$ctx" | grep 'MISSION TO CARRY' || true)" ]
+}
+
 # ── CLI — arm / clear / status / kill / unkill ──────────────────────────────────────────────────
 @test "cli: arm then status reports ARMED; clear then status reports not armed" {
   ( cd "$DESK" && run bash "$HOOK" status ) # armed in setup
