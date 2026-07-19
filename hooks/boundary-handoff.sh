@@ -37,6 +37,18 @@
 #        "$f" > "$f.tmp" && mv "$f.tmp" "$f"
 #   done
 # Full wiring + rollback: docs/activation/fm1b-activate-snippet.md (wiring is the operator's — C10).
+#
+# ── RE-OBSERVED 2026-07-19 (backlog 8a5aaf4eb824 "inert hook boundary-handoff: re-observe") ──
+# The wiring prescribed above is DONE: all four config dirs now carry this hook in Stop obj-0 via
+# ~/.claude/hooks/… and it is ACTIVELY EVALUATING — 53 IDL evals in ~3h across sessions, so the
+# "0 IDL records / never evaluates" concern above is RESOLVED (that note is now historical). All 53
+# abstained, but every reason is a HEALTHY condition-not-met (52× below-threshold, 1× no-telemetry)
+# with 0 fired → the hook is healthy-DORMANT, not inert; the fire path is intact and simply had no
+# session cross the 73% boundary at a committed + green Stop. The C3 `wiring-inert` discovery critic
+# that filed the item alarms on disposition==abstained==100% over N≥10 REGARDLESS of reason, so a
+# rarely-firing advisory hook is a structural false positive there (systemic follow-on backlogged).
+# Residual (operator/C10, live settings.json): ~/.claude also keeps a redundant obj-1 copy at the old
+# hardcoded repo-abs path — harmless (both exit 0 + latched), removable at the operator's discretion.
 set -uo pipefail
 
 T="${CC_BOUNDARY_T:-73}"                          # fire threshold, used_pct (≤73; autocompact at 90, D-F)
@@ -53,6 +65,7 @@ _blib="$_bscd/lib/continue-sentinel.sh"
 [ -f "$_blib" ] || _blib="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/continue-sentinel.sh"
 [ -f "$_blib" ] || _blib="$HOME/.claude/hooks/lib/continue-sentinel.sh"
 # shellcheck source=lib/continue-sentinel.sh
+# shellcheck disable=SC1091  # source path resolved at runtime; static-follow needs -x, ship-land's gate runs without it → SC1091(info) would red a solo change to this file
 [ -f "$_blib" ] && . "$_blib" 2>/dev/null || true
 
 stdin_json="$(cat 2>/dev/null || true)"
