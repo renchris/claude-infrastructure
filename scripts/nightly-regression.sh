@@ -11,6 +11,8 @@
 #   1. bats tests/                       — the full suite (a broken detector's bats reds here)
 #   2. plutil -lint launchd/*.plist      — every plist parses (catches the raw-& class, T-P16-6)
 #   3. never-stuck-gate.sh (live)        — THE systematic invariant (the p12 21·0→19·2 signal)
+#   3b. idl-abstain-alarm.sh (live)      — the IDL abstention monitor: PAGES a check stuck at 100%
+#                                          BLIND abstention (an inert no-check, T-P6-4); healthy-dormant is quiet.
 #   4. every scripts/*gate*.sh + *lint*.sh: `--selftest` where supported, else a bare read-only run.
 #      SKIPS *-e2e.sh (side-effectful — would spawn panes/sessions) — the skip is LOGGED, never silent.
 #
@@ -29,6 +31,7 @@ PLIST_GLOB="${CC_NIGHTLY_PLIST_GLOB:-$REPO/launchd/*.plist}"
 GATE_GLOB="${CC_NIGHTLY_GATE_GLOB:-$REPO/scripts/*gate*.sh}"
 LINT_GLOB="${CC_NIGHTLY_LINT_GLOB:-$REPO/scripts/*lint*.sh}"
 NEVERSTUCK="${CC_NIGHTLY_NEVERSTUCK:-$REPO/scripts/never-stuck-gate.sh}"   # live systematic invariant; stubbable for --selftest
+ABSTAIN="${CC_NIGHTLY_ABSTAIN:-$REPO/scripts/idl-abstain-alarm.sh}"        # live IDL abstention monitor (T-P6-4); stubbable for --selftest
 PAGE_KEY="${CC_NIGHTLY_PAGE_KEY:-nightly-regression}"
 
 now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
@@ -79,6 +82,12 @@ regress() {
 
   # 3. the live systematic invariant (p12 regression signal)
   [ -x "$NEVERSTUCK" ] && run_check "never-stuck-gate(live)" "$NEVERSTUCK"
+
+  # 3b. the live IDL abstention monitor — a check stuck at 100% BLIND abstention is a silent
+  #     no-check (blind-check law §3i, T-P6-4). Exits nonzero only on a PROVABLY inert hook;
+  #     healthy-dormant hooks (100% abstained but condition-not-met) stay green. Not a *gate*/
+  #     *lint* name, so step 4's glob never double-runs it.
+  [ -x "$ABSTAIN" ] && run_check "idl-abstain-alarm(live)" "$ABSTAIN"
 
   # 4. every gate + lint: --selftest where supported, else bare; SKIP e2e (side-effectful)
   local f b
@@ -132,7 +141,7 @@ selftest() {
 
   # run the invariant with a stubbed check-set (NO eval — env-scoped overrides). <pagedir> <log> <batsdir> <plistglob>
   run_inv() {
-    env CC_NIGHTLY_NOTIFY=/usr/bin/true CC_NIGHTLY_NEVERSTUCK=/usr/bin/true \
+    env CC_NIGHTLY_NOTIFY=/usr/bin/true CC_NIGHTLY_NEVERSTUCK=/usr/bin/true CC_NIGHTLY_ABSTAIN=/usr/bin/true \
         CC_NIGHTLY_GATE_GLOB="$d/emptygl/*.sh" CC_NIGHTLY_LINT_GLOB="$d/emptygl/*.sh" \
         CC_NIGHTLY_PAGEDIR="$1" CC_NIGHTLY_LOG="$2" CC_NIGHTLY_BATS_DIR="$3" CC_NIGHTLY_PLIST_GLOB="$4" \
         "$SELF" >/dev/null 2>&1
