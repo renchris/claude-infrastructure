@@ -4,10 +4,24 @@
 # causes, checkpoint-first, through the effect-verified cc-teardown actuator. The end of the
 # north star: an idle handed-off lead never lingers holding a pane, and NOTHING else is ever killed.
 #
-#   cc-reaper sweep            DRY-RUN — classify + show what WOULD be reaped (default; writes nothing)
-#   cc-reaper sweep --reap     ACT — checkpoint → re-verify → cc-teardown the safe candidates
+#   cc-reaper sweep            DRY-RUN — classify + show what WOULD be reaped/paged (default; writes nothing)
+#   cc-reaper sweep --reap     ACT — checkpoint → re-verify → cc-teardown safe candidates; PAGE the desk on
+#                              never-reap-but-surface causes; run the enumerated≈live-panes self-check
 #   cc-reaper selftest         RED-proof the disposition + the never-reap guarantees (no real session)
 #
+# SURFACE PAGING (T-P3-3 — surfaced ≠ acted, the FM2 gap G-P3-3): a never-reap cause that needs a HUMAN
+# (coordination-hang / crashed / finished-shared-review) was only `say`'d to stdout+log and NOTHING
+# consumed it — the desk was never told. Now `--reap` emits a best-effort cc-notify PAGE to the desk
+# (CC_PAGE_TO → the live cc-roles/desk file), composer-DAMPED (one page per pane per cause; a cause
+# CHANGE re-pages; a pane leaving the surface set clears its marker → re-armed), plus a desk-board IDL
+# row. cc-reaper NEVER acts on a surfaced cause — the operator/desk re-engages / closes / confirm-closes.
+#
+# ENUMERATED≈LIVE-PANES SELF-CHECK (P0-12b — the blind-spot detector, G-P3-1): the reaper can only reap
+# what cc-classify enumerates. A spawn mode that never registers (cc-registry) is INVISIBLE — a live pane
+# holding quota the reaper reports as "healthy" (it can't see it at all). Each `--reap` sweep counts live
+# INTERACTIVE claude panes INDEPENDENTLY (a `ps` argv0 scan, NOT the registry) and compares to the
+# enumerated count; a positive delta past tolerance, PERSISTED across sweeps (kills a start/exit race),
+# PAGES the desk with the blind-session count. Surfaces the delta — never reaps on it.
 # SAFETY (defence-in-depth — a reap requires ALL of these, independently):
 #   1. cc-classify labels the session handed-off-lead (successor live) OR finished-teammate OR
 #      finished (idle past settle + no live teammates + work landed) OR coordination-abandoned
@@ -44,6 +58,63 @@ command -v jq >/dev/null || { echo "cc-reaper: jq required" >&2; exit 2; }
 mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
 log(){ printf '[%s] %s\n' "$(date '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null)" "$*" >> "$LOG_FILE" 2>/dev/null || true; }
 say(){ printf '%s\n' "$*"; }
+
+# ── surface-cause desk paging (T-P3-3) + enumerated≈live-panes self-check (P0-12b) config ──
+PAGEDIR="${CC_REAPER_PAGEDIR:-$HOME/.claude/autonomy/pages/reaper}"     # damping/state (autonomy/pages namespace)
+IDL_FILE="${CC_REAPER_IDL:-$HOME/.claude/autonomy/idl.jsonl}"           # shared desk board (supervisor-shaped rows)
+PAGE_TO="${CC_PAGE_TO:-}"                                               # desk pane for cc-notify (best-effort)
+PAGE_TO_FILE="${CC_PAGE_TO_FILE:-$HOME/.claude/cc-roles/desk}"          # fallback: live desk role file (empty PAGE_TO)
+# never-reap causes that WARRANT a desk page (a human must re-engage / close / confirm-close). active,
+# owned-wait, rate-limited are DELIBERATELY excluded: healthy or self-healing, a page would be noise.
+SURFACE_PAGE_RE='^(coordination-hang|crashed|finished-shared-review)$'
+PANE_DELTA_TOL="${CC_REAPER_PANE_DELTA_TOL:-0}"                         # live−enumerated > tol ⇒ blind-spot surface
+SELFCHECK_MIN_PERSIST="${CC_REAPER_SELFCHECK_MIN_PERSIST:-2}"          # delta must persist N sweeps (kills a race)
+PS_BIN="${CC_REAPER_PS_BIN:-/bin/ps}"
+# cc-notify must resolve under launchd's bare default PATH — env override → beside-script bin → ~/.claude/bin
+# → PATH (mirrors lead-supervisor's resolve order; the reaper's own NOTIFY_BIN seam is added for tests).
+NOTIFY_BIN="${CC_REAPER_NOTIFY_BIN:-}"
+if [ -z "$NOTIFY_BIN" ]; then
+  for _c in "$HERE/cc-notify" "$HOME/.claude/bin/cc-notify" "$(command -v cc-notify 2>/dev/null || true)"; do
+    [ -n "$_c" ] && [ -x "$_c" ] && { NOTIFY_BIN="$_c"; break; }
+  done
+fi
+
+utc(){ date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null; }
+# desk-board IDL rows — supervisor-shaped {ts,actor,kind,…}. Values pass as jq --arg/--argjson (NEVER
+# string-interpolated into the filter) so a name/pane carrying quotes can't corrupt or inject the row.
+# The abstain-monitor filters for .hook+.disposition, so these actor-tagged rows are safely ignored there.
+idl_surface(){ # <cause> <name> <pane>
+  mkdir -p "$(dirname "$IDL_FILE")" 2>/dev/null || true
+  jq -nc --arg ts "$(utc)" --arg cause "$1" --arg name "$2" --arg pane "$3" \
+    '{ts:$ts, actor:"cc-reaper", kind:"surface-page", cause:$cause, name:$name, pane:$pane}' \
+    2>/dev/null >> "$IDL_FILE" || true
+}
+idl_selfcheck(){ # <live> <enumerated> <delta>
+  mkdir -p "$(dirname "$IDL_FILE")" 2>/dev/null || true
+  jq -nc --arg ts "$(utc)" --argjson live "$1" --argjson enum "$2" --argjson delta "$3" \
+    '{ts:$ts, actor:"cc-reaper", kind:"selfcheck-page", live:$live, enumerated:$enum, delta:$delta}' \
+    2>/dev/null >> "$IDL_FILE" || true
+}
+page_target(){ local t="$PAGE_TO"; [ -n "$t" ] || t="$(cat "$PAGE_TO_FILE" 2>/dev/null || true)"; printf '%s' "$t"; }
+notify_desk(){ # <message> — best-effort desk cc-notify; an unresolved target or missing cc-notify is silent, never fatal
+  local target; target="$(page_target)"
+  [ -n "$target" ] && [ -n "$NOTIFY_BIN" ] || return 0
+  "$NOTIFY_BIN" "$target" "$1" >/dev/null 2>&1 || true
+}
+sanitize_key(){ printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_'; }   # marker-filename-safe damping key
+
+# live_pane_count — INDEPENDENT count of live INTERACTIVE claude panes (the P0-12b truth signal). Mirrors
+# claude-accounts.concurrency(): argv0 is the claude binary (or its cli.js), excluding headless one-shots
+# (-p/--print/--version) and env-inherited node/MCP children. Deliberately NOT read from the cc-registry —
+# the whole point is to catch panes the registry (hence cc-classify) never enumerated.
+live_pane_count(){
+  "$PS_BIN" -wwEo command= 2>/dev/null | awk '
+    { t0=$1
+      if (t0!="claude" && t0 !~ /\/claude$/ && t0 !~ /cli\.js/) next
+      for (i=2; i<=7 && i<=NF; i++) if ($i=="-p" || $i=="--print" || $i=="--version") next
+      c++ }
+    END { print c+0 }'
+}
 
 # clean AND the branch's content is on trunk — the load-bearing work-landed re-check (post-classify race
 # guard). P0-17 landed-by-CONTENT (a18 L-10): a squash/cherry-pick land (different sha, same content)
@@ -88,6 +159,55 @@ worktree_cleanup() { # <cwd> — remove a LINKED worktree after a confirmed tear
   fi
 }
 
+# ── T-P3-3: page the desk on a never-reap-but-surface cause (damped). Prints the reaper's per-session line. ──
+handle_surface() { # <reap> <key> <name> <cause> <pane> <detail>
+  local reap="$1" key="$2" name="$3" cause="$4" pane="$5" detail="$6"
+  if [ "$reap" = 0 ]; then
+    say "  WOULD-PAGE $name [$cause] — surface-worthy (desk paged in --reap)"; return 0
+  fi
+  mkdir -p "$PAGEDIR" 2>/dev/null || true
+  local mk="$PAGEDIR/$key.cause" last
+  last="$(cat "$mk" 2>/dev/null || true)"
+  if [ "$last" = "$cause" ]; then
+    say "  keep   $name [$cause] — surfaced (already paged this cause; damped)"; return 0
+  fi
+  notify_desk "⚠️ REAPER SURFACE — session ${name} is ${cause}: ${detail} (never-reap; desk/operator resolves — re-engage a hang · close a crashed pane · confirm-close a shared-review). cc-reaper never auto-acts on this."
+  printf '%s\n' "$cause" > "$mk" 2>/dev/null || true
+  idl_surface "$cause" "$name" "$pane"
+  say "  PAGE   $name [$cause] → desk (surfaced, never-reap)"
+  log "surface-page $name [$cause] pane=$pane"
+}
+
+# ── P0-12b: enumerated≈live-panes self-check. `enum` = what cc-classify saw this sweep; `live` = the
+#    independent interactive-pane count. A positive delta past tolerance, PERSISTED, pages the desk once. ──
+self_check() { # <reap> <enumerated>
+  local reap="$1" enum="$2" live delta sf
+  live="$(live_pane_count)"; delta=$(( live - enum ))
+  sf="$PAGEDIR/selfcheck.state"
+  if [ "$delta" -le "$PANE_DELTA_TOL" ]; then
+    say "cc-reaper self-check: $live live pane(s) ≈ $enum enumerated (Δ$delta ≤ tol $PANE_DELTA_TOL) — reaper sees all live panes"
+    [ "$reap" = 1 ] && { mkdir -p "$PAGEDIR" 2>/dev/null || true; printf '0 0\n' > "$sf" 2>/dev/null || true; }   # re-arm
+    return 0
+  fi
+  if [ "$reap" = 0 ]; then
+    say "cc-reaper self-check: WOULD-PAGE — $live live panes vs $enum enumerated (Δ$delta unseen; a spawn mode isn't registering)"; return 0
+  fi
+  mkdir -p "$PAGEDIR" 2>/dev/null || true
+  local consec paged
+  read -r consec paged < <(cat "$sf" 2>/dev/null || echo "0 0"); consec="${consec:-0}"; paged="${paged:-0}"
+  consec=$(( consec + 1 ))
+  if [ "$consec" -ge "$SELFCHECK_MIN_PERSIST" ] && { [ "$paged" = 0 ] || [ "$delta" -gt "$paged" ]; }; then
+    notify_desk "⚠️ REAPER SELF-CHECK — ${live} live Claude panes but only ${enum} enumerated (Δ${delta} unseen). The reaper is BLIND to ${delta} live session(s): a spawn mode isn't registering in cc-registry, so they can't be classified or reaped. Investigate: compare \`cc-sessions --json\` against the live interactive-claude procs."
+    idl_selfcheck "$live" "$enum" "$delta"
+    say "cc-reaper self-check: PAGE — Δ$delta blind spot ($live live vs $enum enumerated) → desk"
+    log "self-check page: live=$live enum=$enum delta=$delta (persisted ${consec} sweep(s))"
+    paged="$delta"
+  else
+    say "cc-reaper self-check: Δ$delta blind spot ($live live vs $enum enumerated) — persist ${consec}/${SELFCHECK_MIN_PERSIST}$([ "$paged" != 0 ] && printf ' (already paged; damped)')"
+  fi
+  printf '%s %s\n' "$consec" "$paged" > "$sf" 2>/dev/null || true
+}
+
 sweep() {
   local reap=0; [ "${1:-}" = "--reap" ] && reap=1
   local mode; mode=$([ $reap = 1 ] && echo REAP || echo DRY-RUN)
@@ -95,7 +215,7 @@ sweep() {
   log "sweep start mode=$mode settle=$SETTLE_S"
   local cj; cj="$("$CLASSIFY_BIN" --all --json 2>/dev/null || echo '[]')"
   local n; n="$(printf '%s' "$cj" | jq 'length' 2>/dev/null || echo 0)"
-  local reaped=0 candidates=0 i
+  local reaped=0 candidates=0 surfaced=0 surfaced_keys=" " i
   for ((i=0; i<n; i++)); do
     local o cause name pane cwd idle landed xpid xlstart
     o="$(printf '%s' "$cj" | jq -c ".[$i]")"
@@ -110,7 +230,16 @@ sweep() {
 
     # ── disposition (never-reap is the default; a reap needs every gate) ──
     if ! [[ "$cause" =~ $REAPABLE_RE ]]; then
-      say "  keep   $name [$cause] — never-reap cause"; continue
+      # T-P3-3: a never-reap cause that needs a HUMAN → page the desk (damped); the rest just stay quiet.
+      if [[ "$cause" =~ $SURFACE_PAGE_RE ]]; then
+        surfaced=$((surfaced+1))
+        local key; key="$(sanitize_key "${pane:-$name}")"
+        surfaced_keys="$surfaced_keys$key "
+        handle_surface "$reap" "$key" "$name" "$cause" "$pane" "$(printf '%s' "$o" | jq -r '.detail // ""')"
+      else
+        say "  keep   $name [$cause] — never-reap cause"
+      fi
+      continue
     fi
     if [ "$landed" != yes ]; then
       say "  keep   $name [$cause] — work NOT landed (would strand work) → DEFER"; log "defer $name: not landed"; continue
@@ -145,8 +274,24 @@ sweep() {
       say "    cc-teardown returned $trc (10=DEFER 2=REFUSE 5=FAIL) — its gate refused; NOT reaped (trusted)"; log "teardown-refused $name rc=$trc"
     fi
   done
-  say "cc-reaper: $n classified · $candidates safe candidate(s) · $reaped reaped"
-  log "sweep end: $n classified $candidates candidates $reaped reaped"
+
+  # ── T-P3-3 re-arm: a pane no longer in the surface set (recovered / cause cleared) drops its damping
+  #    marker, so a future re-hang re-pages. A persistent hang stays surfaced every sweep → never cleared.
+  #    (Page-marker LIFECYCLE, the clear_page analog — NOT an evidence-horizon reaper; see reaper-horizon-lint.)
+  if [ "$reap" = 1 ] && [ -d "$PAGEDIR" ]; then
+    local mk bn
+    for mk in "$PAGEDIR"/*.cause; do
+      [ -e "$mk" ] || continue
+      bn="$(basename "$mk" .cause)"
+      case "$surfaced_keys" in *" $bn "*) ;; *) rm -f "$mk" 2>/dev/null || true ;; esac
+    done
+  fi
+
+  say "cc-reaper: $n classified · $candidates safe candidate(s) · $reaped reaped · $surfaced surfaced"
+  log "sweep end: $n classified $candidates candidates $reaped reaped $surfaced surfaced"
+
+  # ── P0-12b: the blind-spot self-check runs once per sweep, AFTER classification (enum = what we saw). ──
+  self_check "$reap" "$n"
   return 0
 }
 

@@ -41,7 +41,31 @@ EOF
   export CC_REAPER_SETTLE_S=100
   export CC_REAPER_TRUNK=origin/main
   export CC_REAPER_LOG="$D/reaper.log"
+  # ── hermetic paging (T-P3-3) + self-check (P0-12b): mock cc-notify + ps so no test can hit the LIVE
+  #    desk or count REAL panes. Desk target is absent by default (→ no notify); surface/self-check tests
+  #    opt in with set_desk. Live-pane count comes from $D/nlive (default 1 → matches the common 1-session
+  #    case, so unrelated tests see Δ0 and never self-check-page). ──
+  cat > "$D/bin/notify" <<EOF
+#!/bin/bash
+printf 'NOTIFY %s\n' "\$2" >> "$D/notify-calls"
+EOF
+  cat > "$D/bin/ps" <<EOF
+#!/bin/bash
+n=\$(cat "$D/nlive" 2>/dev/null || echo 1)
+for ((k=0; k<n; k++)); do echo "claude --permission-mode auto --model claude-opus-4-8 --effort max"; done
+EOF
+  chmod +x "$D/bin/notify" "$D/bin/ps"
+  export CC_REAPER_NOTIFY_BIN="$D/bin/notify"
+  export CC_REAPER_PS_BIN="$D/bin/ps"
+  export CC_REAPER_PAGEDIR="$D/pages"
+  export CC_REAPER_IDL="$D/idl.jsonl"
+  export CC_PAGE_TO=""                        # neutralize any inherited real desk target
+  export CC_PAGE_TO_FILE="$D/desk"            # absent by default → no notify; opt in via set_desk
+  export CC_REAPER_SELFCHECK_MIN_PERSIST=1    # one sweep pages a real blind spot (hysteresis tests override)
 }
+notified()  { [ -s "$D/notify-calls" ]; }
+set_desk()  { echo "DESK-UUID" > "$D/desk"; }
+set_live()  { echo "$1" > "$D/nlive"; }
 
 # emit a mock cc-classify --all --json with ONE session; args: cause cwd idle landed [pane]
 mock_classify() {
@@ -197,4 +221,125 @@ EOF
   [ "$status" -eq 0 ]
   td_called
   grep -q PANE-A "$D/td-calls"
+}
+
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+# T-P3-3 — surfaced-not-reaped causes get a DESK PAGE consumer (FM2 "surfaced ≠ acted" gap G-P3-3)
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+@test "T-P3-3: coordination-hang → desk PAGE (cc-notify) within one sweep, never reaped" {
+  set_desk; set_live 1
+  mock_classify coordination-hang "$D/clean" 9000 no PANE-H
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  notified                                         # a cc-notify reached the desk
+  grep -q 'REAPER SURFACE' "$D/notify-calls"
+  grep -q 'coordination-hang' "$D/notify-calls"
+  ! td_called                                      # surfaced only — NEVER torn down
+}
+
+@test "T-P3-3: crashed and finished-shared-review each page the desk" {
+  set_desk; set_live 1
+  mock_classify crashed "$D/clean" 9000 no PANE-C
+  run "$R" sweep --reap
+  notified; grep -q 'crashed' "$D/notify-calls"
+  : > "$D/notify-calls"; rm -rf "$D/pages"
+  mock_classify finished-shared-review "$D/clean" 9000 no PANE-R
+  run "$R" sweep --reap
+  notified; grep -q 'finished-shared-review' "$D/notify-calls"
+}
+
+@test "T-P3-3 damping: the SAME surface cause pages ONCE across sweeps (no per-sweep composer storm)" {
+  set_desk; set_live 1
+  mock_classify coordination-hang "$D/clean" 9000 no PANE-H
+  run "$R" sweep --reap; notified                  # first sweep pages
+  : > "$D/notify-calls"
+  run "$R" sweep --reap                             # identical second sweep
+  [ "$status" -eq 0 ]
+  ! notified                                        # damped — no second notify
+  echo "$output" | grep -q 'damped'
+}
+
+@test "T-P3-3: a cause CHANGE on the same pane re-pages (coordination-hang → crashed)" {
+  set_desk; set_live 1
+  mock_classify coordination-hang "$D/clean" 9000 no PANE-H
+  run "$R" sweep --reap
+  : > "$D/notify-calls"
+  mock_classify crashed "$D/clean" 9000 no PANE-H   # same pane, worsened cause
+  run "$R" sweep --reap
+  notified; grep -q 'crashed' "$D/notify-calls"
+}
+
+@test "T-P3-3: a non-surface never-reap cause (active/owned-wait/rate-limited) NEVER pages" {
+  set_desk; set_live 1
+  for c in active owned-wait rate-limited; do
+    : > "$D/notify-calls"
+    mock_classify "$c" "$D/clean" 9000 no PANE-X
+    run "$R" sweep --reap
+    [ "$status" -eq 0 ]
+    ! notified
+  done
+}
+
+@test "T-P3-3 dry-run: a surface cause prints WOULD-PAGE and NEVER notifies" {
+  set_desk; set_live 1
+  mock_classify coordination-hang "$D/clean" 9000 no PANE-H
+  run "$R" sweep
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'WOULD-PAGE'
+  ! notified
+}
+
+@test "T-P3-3 re-arm: a pane leaving the surface set drops its damping marker (recovery re-pages later)" {
+  set_desk; set_live 1
+  mock_classify coordination-hang "$D/clean" 9000 no PANE-H
+  run "$R" sweep --reap
+  [ -f "$D/pages/PANE-H.cause" ]                    # marker written on first page
+  mock_classify active "$D/clean" 10 no PANE-H      # recovered → no longer surfaced
+  run "$R" sweep --reap
+  [ ! -f "$D/pages/PANE-H.cause" ]                  # marker pruned → re-armed
+}
+
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+# P0-12b — enumerated≈live-panes self-check: surface the delta when the reaper is blind to live panes
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+@test "P0-12b: live panes > enumerated → desk PAGE (blind-spot surface), never a reap" {
+  set_desk; set_live 4                              # 4 live interactive panes
+  mock_classify active "$D/clean" 10 no PANE-1      # but only 1 enumerated
+  run "$R" sweep --reap                             # MIN_PERSIST=1 → pages on the first sweep
+  [ "$status" -eq 0 ]
+  notified
+  grep -q 'SELF-CHECK' "$D/notify-calls"
+  grep -q 'BLIND to 3' "$D/notify-calls"
+  ! td_called
+}
+
+@test "P0-12b: live == enumerated → no page (the reaper sees every live pane)" {
+  set_desk; set_live 1
+  mock_classify active "$D/clean" 10 no PANE-1
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  ! notified
+  echo "$output" | grep -q 'reaper sees all live panes'
+}
+
+@test "P0-12b hysteresis: a blind-spot delta must PERSIST before it pages (kills a start/exit race)" {
+  set_desk; set_live 3
+  export CC_REAPER_SELFCHECK_MIN_PERSIST=2
+  mock_classify active "$D/clean" 10 no PANE-1
+  run "$R" sweep --reap                             # sweep 1 → persist 1/2, observe only
+  ! notified
+  echo "$output" | grep -q 'persist 1/2'
+  run "$R" sweep --reap                             # sweep 2 → persist 2/2, page
+  notified; grep -q 'SELF-CHECK' "$D/notify-calls"
+}
+
+@test "P0-12b dry-run: a blind spot prints WOULD-PAGE and NEVER notifies" {
+  set_desk; set_live 4
+  mock_classify active "$D/clean" 10 no PANE-1
+  run "$R" sweep
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'self-check: WOULD-PAGE'
+  ! notified
 }
