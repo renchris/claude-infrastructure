@@ -12,13 +12,17 @@
 #       last-moment `git fetch` → `git rebase` (conflict ⇒ exit 5) → GATE (shellcheck +
 #       bats + `bash -n` + py_compile for changed shell/python INCLUDING extensionless
 #       by shebang; red ⇒ exit 6) → `git push HEAD:<trunk>` (non-ff ⇒ exit 7) →
-#       land-verify.sh (content not intact on trunk ⇒ exit 8) → stranded-sweep
-#       (exit 1 ⇒ REVIEW verdict, surfaced, never auto-recovered) → self-attesting
-#       land.log line {verify,sweep,esc_scan,sid}.
+#       land-verify.sh → on a content-drop, BOUNDED AUTO-RETRY + ROLLBACK (T-P9-7):
+#       re-fetch + rebase onto the moved trunk + re-gate + re-push, up to
+#       SHIP_LAND_VERIFY_RETRIES times; a retry rebase-conflict rolls back (rebase --abort)
+#       ⇒ exit 5, retries exhausted (still not intact) ⇒ clean tree + exit 8 →
+#       stranded-sweep (exit 1 ⇒ REVIEW verdict, surfaced, never auto-recovered) →
+#       self-attesting land.log line {verify,sweep,esc_scan,sid}.
 #
 # --dry-run stops after the gate (no push). Exit codes: 0 landed · 2 preflight refusal ·
-# 3 escalation PARK · 4 shared-checkout refusal · 5 rebase conflict · 6 gate red ·
-# 7 push non-ff · 8 content-verify failed.
+# 3 escalation PARK · 4 shared-checkout refusal · 5 rebase conflict (initial OR an auto-retry
+# rebase, the latter rolled back) · 6 gate red · 7 push non-ff · 8 content-verify failed
+# after exhausting the bounded auto-retries.
 #
 # TRAILER CONVENTION (ownership-decidable sweep, T-P9-4): a session's commits should
 # carry a `Session-Id: <CLAUDE_CODE_SESSION_ID>` trailer so `stranded-sweep.sh --mine
@@ -27,7 +31,8 @@
 #
 # Env overrides (mostly for tests): SHIP_LAND_SHARED_CHECKOUT · SHIP_LAND_SESSION_BRANCH_RE
 # · SHIP_LAND_ALLOW_SHARED=1 · SHIP_LAND_ESC_RE · SHIP_LAND_DECISIONS_DIR · LAND_LOG ·
-# LAND_LOCK_DIR (see land-lock.sh).
+# LAND_LOCK_DIR (see land-lock.sh) · SHIP_LAND_VERIFY_RETRIES (default 2; 0 = single-shot,
+# the pre-T-P9-7 kill switch — one push, one verify, no auto-retry).
 #
 # bash 3.2-safe (no declare -A / mapfile; empty-array expansion guarded under `set -u`).
 # `pipefail` load-bearing; NO `set -e`.
@@ -102,6 +107,13 @@ attest_land() {  # $1=verify $2=sweep $3=esc $4=exit — self-attesting land.log
   printf '{"ts":"%s","tool":"ship-land","repo":"%s","branch":"%s","sid":"%s","verify":"%s","sweep":"%s","esc_scan":"%s","exit":%s}\n' \
     "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${REPO_ROOT}" "${BRANCH}" "${CLAUDE_CODE_SESSION_ID:-}" \
     "$1" "$2" "$3" "$4" >> "$log" 2>/dev/null || true
+}
+
+rollback_clean() {  # T-P9-7: abort any in-progress rebase so ship-land never exits on a wedged tree.
+  # A no-op (harmless non-zero, suppressed) when no rebase is in progress — so it also serves as the
+  # clean-tree guarantee on the retry-exhaustion path where nothing was mid-flight. Our commits and
+  # the ship/backup-* ref are left intact either way; rollback undoes only a half-applied replay.
+  git rebase --abort >/dev/null 2>&1 || true
 }
 
 detect_trunk() {
@@ -181,20 +193,71 @@ main_locked() {
     exit 0
   fi
 
-  local LANDED_HEAD
-  LANDED_HEAD="$(git rev-parse HEAD)"
+  # --- push + content-verify, with bounded auto-retry + rollback on a concurrent drop (T-P9-7) ---
+  # A push can 'succeed' yet have its content dropped from the trunk by a concurrent rebase-land (the
+  # 2026-07-11 incident class → land-verify FAIL). Rather than strand the operator on manual recovery
+  # (the old bare exit-8), auto-reconcile onto the moved trunk (re-fetch + rebase + re-gate) and
+  # re-push, up to SHIP_LAND_VERIFY_RETRIES times. Fail-closed + bounded:
+  #   * an auto-retry rebase CONFLICT rolls back (git rebase --abort — never strand a half-applied tree)
+  #     and exits 5 — UNLIKE the first rebase at the top of the pipeline, which is left in progress for a
+  #     human who ran /ship interactively; an autonomous retry has no human to resolve it, so it rolls back.
+  #   * exhausting the retries guarantees a clean, committed tree (backup ref ship/backup-* intact) → exit 8.
+  # Scope: retry is triggered ONLY by a verify-fail. The FIRST push keeps its original semantics — a non-ff
+  # there is a sibling beating us before we landed at all ⇒ exit 7, no retry. SHIP_LAND_VERIFY_RETRIES=0
+  # restores the pre-T-P9-7 single-shot behavior (the kill switch).
+  local MAX_RETRIES; MAX_RETRIES="${SHIP_LAND_VERIFY_RETRIES:-2}"
+  local attempt=0 LANDED_HEAD
 
+  LANDED_HEAD="$(git rev-parse HEAD)"
   if ! git push origin "HEAD:$TRUNK" >&2; then
     echo "✗ ship-land: push to origin/$TRUNK REJECTED (non-fast-forward — a sibling beat you inside the window). Re-run /ship to re-fetch+rebase+re-verify. Backup ref intact." >&2
     exit 7
   fi
 
-  git fetch origin "$TRUNK" 2>/dev/null || true
-  if ! "$LAND_VERIFY" "$LAND_BASE..$LANDED_HEAD" "origin/$TRUNK" "$LANDED_HEAD"; then
-    echo "✗ ship-land: post-push CONTENT-VERIFY FAILED — your paths are NOT intact on origin/$TRUNK (a concurrent rebase-land dropped content — the 2026-07-11 incident class). Backup ref ship/backup-* holds your commit; recover + re-land." >&2
-    attest_land "FAIL" "n/a" "clean" 8
-    exit 8
-  fi
+  while :; do
+    git fetch origin "$TRUNK" 2>/dev/null || true
+    if "$LAND_VERIFY" "$LAND_BASE..$LANDED_HEAD" "origin/$TRUNK" "$LANDED_HEAD"; then
+      break   # ✓ every landed path present + content-identical on the trunk — landed for real
+    fi
+
+    # CONTENT-VERIFY FAILED — the push 'succeeded' but the content is not intact on the trunk.
+    if [[ "$attempt" -ge "$MAX_RETRIES" ]]; then
+      echo "✗ ship-land: post-push CONTENT-VERIFY FAILED after ${attempt} auto-retry attempt(s) — your paths are NOT intact on origin/$TRUNK (a concurrent rebase-land keeps dropping content — the 2026-07-11 incident class). Tree left clean; backup ref ship/backup-* holds your commit; recover + re-land." >&2
+      rollback_clean
+      attest_land "FAIL" "n/a" "clean" 8
+      exit 8
+    fi
+    attempt=$(( attempt + 1 ))
+    echo "↻ ship-land: content-verify failed (concurrent drop) — auto-retry ${attempt}/${MAX_RETRIES}: re-fetch + rebase onto origin/$TRUNK + re-gate + re-push…" >&2
+
+    # reconcile onto the moved trunk (origin/$TRUNK is fresh from the loop-top fetch).
+    if ! git rebase "origin/$TRUNK" >&2; then
+      rollback_clean
+      echo "✗ ship-land: auto-retry rebase onto origin/$TRUNK hit a conflict — rolled back to a clean tree; backup ref ship/backup-* intact. Resolve the conflict and re-run /ship." >&2
+      attest_land "n/a" "n/a" "clean" 5
+      exit 5
+    fi
+    LAND_BASE="$(git rev-parse "origin/$TRUNK")"
+    if [[ -z "$(git rev-list "$LAND_BASE..HEAD" 2>/dev/null)" ]]; then
+      echo "✓ ship-land: after reconcile, origin/$TRUNK already contains HEAD — the drop self-healed (a sibling landed our content)."
+      attest_land "ok" "n/a" "clean" 0
+      exit 0
+    fi
+    if ! run_gate "$LAND_BASE..HEAD"; then
+      echo "✗ ship-land: GATE RED on the re-reconciled range — not re-pushing. Backup ref ship/backup-* intact." >&2
+      attest_land "n/a" "n/a" "clean" 6
+      exit 6
+    fi
+    git rev-parse HEAD > "$(git rev-parse --git-common-dir)/gate-green" 2>/dev/null || true
+
+    LANDED_HEAD="$(git rev-parse HEAD)"
+    if ! git push origin "HEAD:$TRUNK" >&2; then
+      # a sibling advanced trunk again inside the retry window — reconcilable. The next loop iteration's
+      # verify fails (our head is not on the trunk) and drives another bounded reconcile; the attempt
+      # counter still terminates a persistently-rejecting remote.
+      echo "↻ ship-land: re-push non-ff inside the retry window — reconciling again next round." >&2
+    fi
+  done
 
   local sweep_out sweep_rc sweep_field
   sweep_out="$("$STRANDED_SWEEP" "$TRUNK" 2>&1)"; sweep_rc=$?
