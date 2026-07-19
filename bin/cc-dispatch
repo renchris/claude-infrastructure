@@ -1,0 +1,301 @@
+#!/bin/bash
+# cc-dispatch — the L4 dispatcher spine ("Claude kicks off Claude"; T-P7-4/5, Program D).
+#
+# Cron-woken (launchd → `cc-dispatch --once`): pull open backlog items → quota-place via
+# cc-wave-plan → claim + spawn a worker session → log the decision to the IDL. It does NOT land
+# work itself — the spawned session's lead lands via the existing ship-land rails.
+#
+# THE ABSTENTION LAW (mirrors cc-route RT-c): a quota-cliff PAGES and STOPS. It is never a silent
+# fence and never a blind spawn — cc-dispatch fires ONLY on a live, quota-cleared placement.
+#
+#   cc-dispatch [--once] [--dry-run]     one cron pass: pull → place → claim + spawn (capped)
+#   cc-dispatch selftest                 RED-proves every branch against stubbed actuators
+#
+# FLOW (each step is fail-LOUD / abstain, never fail-silent-open):
+#   1. items  = `<backlog> list --open --json`, filtered dispatchable: status=="open" AND
+#               project == CC_DISPATCH_PROJECT. Already-claimed items are skipped.
+#   2. no items                    → IDL {action:"passed", detail:"backlog empty"}, exit 0.
+#   3. wave   = [{id, slot}]  (slot from an optional item hint; MVP default "lead")
+#      plan   = `<wave-plan> --items <wave-json> --json`
+#   4. wave-plan exit 4 (CLIFF)    → IDL {action:"abstained", detail:"quota-cliff"} + PAGE, exit 0.
+#                                    NEVER spawn on a cliff.  (any other non-zero → exit 3, no spawn)
+#   5. per placement, up to CC_DISPATCH_MAX_SPAWN (default 2):
+#        a. `<backlog> claim <id> --by $SID`
+#        b. spawn `<spawn-bin> <fire_line...>`   (fire_line = an ARGV ARRAY, injection-safe)
+#           non-zero → `<backlog> reopen <id>` + IDL {action:"failed"}
+#        c. success  → IDL {action:"fired", detail:"<id> -> <account>"}
+#   6. --dry-run  → steps 1-4 as READS only; PRINT the plan; NO IDL / page / claim / spawn.
+#      --once     → a single pass (the cron entrypoint; default when no mode flag is given).
+#   7. one run-summary IDL {action:"summary", fired:N, abstained:B, failed:F}.
+#
+# CONTRACT with cc-wave-plan (T-P7-6, its owner; consumed here purely through the env seam):
+#   input : --items '[{"id":"<id>","slot":"lead"}, ...]' --json
+#   stdout: a JSON ARRAY of placements, each {"id","account","fire_line":[argv...], ...}
+#   exit  : 0 = placements emitted · 4 = QUOTA CLIFF (no account has headroom)
+#   fire_line is an argv ARRAY so cc-dispatch passes it VERBATIM to the spawn bin — no eval,
+#   no word-splitting (a plain-string fire_line is accepted too, as a single argument).
+#
+# Exit: 0 = normal (passed | abstained-cliff | fired/failed loop) · 3 = config-fail LOUD
+#       (jq / a required actuator unresolvable, or wave-plan returned an un-plannable non-cliff rc).
+# Env (actuator seams — every external side-effect is overridable so bats can stub it):
+#   CC_DISPATCH_BACKLOG_BIN  (default: cc-backlog on PATH / sibling)
+#   CC_DISPATCH_WAVEPLAN_BIN (default: cc-wave-plan on PATH / sibling)
+#   CC_DISPATCH_SPAWN_BIN    (default: $HOME/.claude/scripts/handoff-fire.sh)
+#   CC_DISPATCH_PAGES_DIR    (default: $HOME/.claude/autonomy/pages)   — the desk page channel
+#   CC_DISPATCH_IDL          (default: $HOME/.claude/autonomy/idl.jsonl)
+#   CC_DISPATCH_PROJECT      (default: git toplevel, else $PWD)
+#   CC_DISPATCH_MAX_SPAWN    (default: 2)
+#   CC_DISPATCH_SID          (default: <host>-<pid>)
+#   (CC_BACKLOG_FILE flows through to the backlog bin unchanged — tests point it at a temp jsonl.)
+set -uo pipefail
+
+PAGES_DIR="${CC_DISPATCH_PAGES_DIR:-$HOME/.claude/autonomy/pages}"
+IDL="${CC_DISPATCH_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
+MAX_SPAWN="${CC_DISPATCH_MAX_SPAWN:-2}"
+SID="${CC_DISPATCH_SID:-$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo host)-$$}"
+PROJECT="${CC_DISPATCH_PROJECT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+
+FIRED=0; ABSTAINED=0; FAILED=0   # run counters → the summary record
+
+usage() { sed -n '2,/^set -uo/p' "$0" | sed 's/^# \{0,1\}//; /^set -uo/d'; }
+now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+die3() { echo "cc-dispatch: $*" >&2; exit 3; }   # config-fail is LOUD, never a silent no-op
+
+# resolve_bin <override> <name> [fallback-abspath...] → echoes an executable path, or "" (rc 1)
+resolve_bin() {
+  local override="$1" name="$2"; shift 2
+  if [ -n "$override" ]; then echo "$override"; return 0; fi
+  if command -v "$name" >/dev/null 2>&1; then command -v "$name"; return 0; fi
+  local f; for f in "$@"; do [ -x "$f" ] && { echo "$f"; return 0; }; done
+  local sib; sib="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/$name"
+  [ -x "$sib" ] && { echo "$sib"; return 0; }
+  echo ""; return 1
+}
+
+# idl <action> <detail> — one append-only decision record (best-effort; a cron sweep never
+# hard-fails on log I/O). Shape mirrors the desk IDL: {ts, actor, action, detail}.
+idl() {
+  mkdir -p "$(dirname "$IDL")" 2>/dev/null || true
+  jq -cn --arg ts "$(now_iso)" --arg action "$1" --arg detail "$2" \
+     '{ts:$ts, actor:"cc-dispatch", action:$action, detail:$detail}' >> "$IDL" 2>/dev/null || true
+}
+idl_summary() {
+  mkdir -p "$(dirname "$IDL")" 2>/dev/null || true
+  jq -cn --arg ts "$(now_iso)" --argjson f "$FIRED" --argjson b "$ABSTAINED" --argjson x "$FAILED" \
+     '{ts:$ts, actor:"cc-dispatch", action:"summary", fired:$f, abstained:$b, failed:$x}' \
+     >> "$IDL" 2>/dev/null || true
+}
+
+# PAGE channel (autonomy-sweep drains *.page; nightly-regression format: line1 epoch, line2 human).
+# A standing-alarm key: the cliff persists until quota resets; a recovered run clears it.
+PAGE_FILE="$PAGES_DIR/cc-dispatch-quota-cliff.page"
+write_page() { # <detail>
+  mkdir -p "$PAGES_DIR" 2>/dev/null || return 0
+  { date +%s; printf 'cc-dispatch quota-cliff @ %s: %s\n' "$(now_iso)" "$1"; } \
+    > "$PAGE_FILE" 2>/dev/null || true
+}
+clear_page() { rm -f "$PAGE_FILE" 2>/dev/null || true; }
+
+# ── one cron pass ────────────────────────────────────────────────────────────────────────────────
+dispatch() { # <dry|run>
+  local mode="$1" backlog waveplan spawn items dispatchable count wave plan rc n
+
+  backlog="$(resolve_bin "${CC_DISPATCH_BACKLOG_BIN:-}" cc-backlog)" \
+    || die3 "backlog bin unresolvable (set CC_DISPATCH_BACKLOG_BIN)"
+
+  # 1. pull + filter dispatchable (status=="open" skips already-claimed).
+  items="$("$backlog" list --open --json 2>/dev/null)"; rc=$?
+  [ "$rc" -eq 0 ] || die3 "'$backlog list --open --json' failed (rc=$rc)"
+  printf '%s' "$items" | jq -e 'type=="array"' >/dev/null 2>&1 \
+    || die3 "backlog list did not return a JSON array"
+  dispatchable="$(printf '%s' "$items" \
+    | jq -c --arg p "$PROJECT" '[ .[] | select(.status=="open" and .project==$p) ]')"
+  count="$(printf '%s' "$dispatchable" | jq 'length' 2>/dev/null || echo 0)"
+
+  # 2. empty backlog → passed.
+  if [ "$count" -eq 0 ]; then
+    if [ "$mode" = dry ]; then echo "PLAN: backlog empty (project=$PROJECT) → would pass, no spawn"; return 0; fi
+    idl passed "backlog empty"; idl_summary; return 0
+  fi
+
+  # 3. wave → quota placement.
+  wave="$(printf '%s' "$dispatchable" | jq -c '[ .[] | {id, slot: (.slot // "lead")} ]')"
+  waveplan="$(resolve_bin "${CC_DISPATCH_WAVEPLAN_BIN:-}" cc-wave-plan)" \
+    || die3 "wave-plan bin unresolvable (set CC_DISPATCH_WAVEPLAN_BIN)"
+  plan="$("$waveplan" --items "$wave" --json 2>/dev/null)"; rc=$?
+
+  # 4. cliff (exit 4) → abstain + page, NEVER spawn.  Any other non-zero → fail-closed, exit 3.
+  if [ "$rc" -eq 4 ]; then
+    if [ "$mode" = dry ]; then echo "PLAN: quota-cliff → would abstain + page, NO spawn"; return 0; fi
+    ABSTAINED=1; idl abstained "quota-cliff"; write_page "wave-plan reports no account headroom"
+    echo "cc-dispatch: ⛔ QUOTA CLIFF — abstained, paged, NO spawn (run /limit-recover)." >&2
+    idl_summary; return 0
+  fi
+  if [ "$rc" -ne 0 ]; then
+    if [ "$mode" = dry ]; then echo "PLAN: wave-plan un-plannable (rc=$rc) → would refuse, NO spawn"; fi
+    [ "$mode" = dry ] || { FAILED=1; idl failed "wave-plan rc=$rc"; idl_summary; }
+    die3 "wave-plan returned non-cliff rc=$rc — refusing to fire blind"
+  fi
+  printf '%s' "$plan" | jq -e 'type=="array"' >/dev/null 2>&1 \
+    || die3 "wave-plan did not return a JSON array"
+  n="$(printf '%s' "$plan" | jq 'length' 2>/dev/null || echo 0)"
+
+  # dry-run: PRINT the plan, no writes.
+  if [ "$mode" = dry ]; then
+    echo "PLAN: $n placement(s), spawn cap=$MAX_SPAWN (project=$PROJECT):"
+    printf '%s' "$plan" | jq -r '.[] | "  \(.id) -> \(.account // "?")  fire_line=\(.fire_line // [] | @json)"'
+    return 0
+  fi
+
+  clear_page   # a live placement means quota recovered → drop any standing cliff alarm.
+
+  # 5. claim + spawn, capped at MAX_SPAWN.
+  spawn="$(resolve_bin "${CC_DISPATCH_SPAWN_BIN:-}" handoff-fire.sh "$HOME/.claude/scripts/handoff-fire.sh")" \
+    || die3 "spawn bin unresolvable (set CC_DISPATCH_SPAWN_BIN)"
+  local i=0 spawned=0 p id acct ftype a
+  while [ "$i" -lt "$n" ]; do
+    [ "$spawned" -ge "$MAX_SPAWN" ] && break
+    p="$(printf '%s' "$plan" | jq -c ".[$i]")"; i=$((i + 1))
+    id="$(printf '%s' "$p" | jq -r '.id // empty')"
+    acct="$(printf '%s' "$p" | jq -r '.account // "?"')"
+    [ -n "$id" ] || { FAILED=$((FAILED + 1)); idl failed "placement missing id"; continue; }
+
+    # build the fire_line argv (array | single string), injection-safe.
+    local fire_args=()
+    ftype="$(printf '%s' "$p" | jq -r '.fire_line | type' 2>/dev/null)"
+    if [ "$ftype" = array ]; then
+      while IFS= read -r a; do fire_args+=("$a"); done \
+        < <(printf '%s' "$p" | jq -r '.fire_line[]')
+    elif [ "$ftype" = string ]; then
+      fire_args=( "$(printf '%s' "$p" | jq -r '.fire_line')" )
+    fi
+    if [ "${#fire_args[@]}" -eq 0 ]; then
+      FAILED=$((FAILED + 1)); idl failed "$id: empty/invalid fire_line"; continue
+    fi
+
+    # a. claim
+    if ! "$backlog" claim "$id" --by "$SID" >/dev/null 2>&1; then
+      FAILED=$((FAILED + 1)); idl failed "$id: claim failed"; continue
+    fi
+    # b. spawn → on non-zero, reopen the claim (leave it for the next run).
+    if "$spawn" "${fire_args[@]}" >/dev/null 2>&1; then
+      FIRED=$((FIRED + 1)); spawned=$((spawned + 1)); idl fired "$id -> $acct"
+    else
+      "$backlog" reopen "$id" >/dev/null 2>&1 || true
+      FAILED=$((FAILED + 1)); idl failed "$id: spawn non-zero (reopened)"
+    fi
+  done
+
+  idl_summary
+  return 0
+}
+
+# ── selftest: every branch RED-proved against stubbed actuators (no bats dependency) ───────────────
+selftest() {
+  local pass=0 fail=0 tmp SELF
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/cc-dispatch-selftest.XXXXXX")" || die3 "cannot mktemp"
+  trap 'rm -rf "${tmp:-}"' EXIT
+  SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+
+  # backlog stub: seeded array from $STUB_ITEMS; claim/reopen append to $tmp/backlog.log + echo id.
+  cat > "$tmp/backlog" <<STUB
+#!/bin/bash
+case "\$1" in
+  list)  cat "$tmp/items.json" ;;
+  claim) printf 'claim %s\n' "\$2" >> "$tmp/backlog.log"; echo "\$2" ;;
+  reopen)printf 'reopen %s\n' "\$2" >> "$tmp/backlog.log"; echo "\$2" ;;
+esac
+exit 0
+STUB
+  # wave-plan stub: rc from \$STUB_WP_RC; plan from \$tmp/plan.json.
+  cat > "$tmp/waveplan" <<STUB
+#!/bin/bash
+rc="\${STUB_WP_RC:-0}"
+[ "\$rc" = 0 ] && cat "$tmp/plan.json"
+exit "\$rc"
+STUB
+  # spawn stub: rc from \$STUB_SPAWN_RC; logs argv to \$tmp/spawn.log.
+  cat > "$tmp/spawn" <<STUB
+#!/bin/bash
+printf '%s\n' "\$*" >> "$tmp/spawn.log"
+exit "\${STUB_SPAWN_RC:-0}"
+STUB
+  chmod +x "$tmp/backlog" "$tmp/waveplan" "$tmp/spawn"
+
+  export CC_DISPATCH_BACKLOG_BIN="$tmp/backlog" CC_DISPATCH_WAVEPLAN_BIN="$tmp/waveplan" \
+         CC_DISPATCH_SPAWN_BIN="$tmp/spawn" CC_DISPATCH_PAGES_DIR="$tmp/pages" \
+         CC_DISPATCH_IDL="$tmp/idl.jsonl" CC_DISPATCH_PROJECT="/repo/a" CC_DISPATCH_MAX_SPAWN=2 \
+         CC_DISPATCH_SID="selftest"
+
+  reset() { : > "$tmp/backlog.log"; : > "$tmp/spawn.log"; : > "$tmp/idl.jsonl"; rm -rf "$tmp/pages"; }
+  ok()   { printf '  ok   %s\n' "$1"; pass=$((pass+1)); }
+  bad()  { printf '  FAIL %s\n' "$1"; fail=$((fail+1)); }
+  t()    { local m="$1"; shift; if "$@"; then ok "$m"; else bad "$m"; fi; }   # <label> <predicate-cmd...>
+  last() { tail -1 "$tmp/idl.jsonl" | jq -r "$1" 2>/dev/null; }
+  epoch1() { head -1 "$1" 2>/dev/null | grep -qE '^[0-9]+$'; }                # first line is an epoch
+  seed_items() { printf '%s\n' "$1" > "$tmp/items.json"; }
+  seed_plan()  { printf '%s\n' "$1" > "$tmp/plan.json"; }
+
+  echo "cc-dispatch selftest — every branch must RED-prove:"
+
+  # (a) empty backlog → passed, no spawn.
+  reset; seed_items '[]'; seed_plan '[]'
+  "$SELF" --once >/dev/null 2>&1
+  t "(a) empty backlog → passed"            grep -q '"action":"passed"' "$tmp/idl.jsonl"
+  t "(a) empty backlog → ZERO spawn"        test ! -s "$tmp/spawn.log"
+
+  # (b) quota-cliff (wave-plan exit 4) → abstained + page + ZERO spawn.
+  reset; seed_items '[{"id":"i1","project":"/repo/a","status":"open","title":"t1"}]'
+  STUB_WP_RC=4 "$SELF" --once >/dev/null 2>&1
+  t "(b) cliff → abstained IDL"             grep -q '"action":"abstained"' "$tmp/idl.jsonl"
+  t "(b) cliff → summary is the last record" test "$(last '.action')" = summary
+  t "(b) cliff → page file written"         test -f "$tmp/pages/cc-dispatch-quota-cliff.page"
+  t "(b) page line1 is an epoch (drain-compatible)" epoch1 "$tmp/pages/cc-dispatch-quota-cliff.page"
+  t "(b) cliff → ZERO spawn (never fire blind)" test ! -s "$tmp/spawn.log"
+
+  # (c) green → claim invoked + spawn invoked with the fire_line + IDL fired.
+  reset; seed_items '[{"id":"i1","project":"/repo/a","status":"open","title":"t1"}]'
+  seed_plan '[{"id":"i1","account":"next3","fire_line":["--prompt-file","/tmp/f1.txt","--account","next3"]}]'
+  "$SELF" --once >/dev/null 2>&1
+  t "(c) green → item claimed (transition invoked)" grep -qx 'claim i1' "$tmp/backlog.log"
+  t "(c) green → spawn got the fire_line argv" grep -q -- '--prompt-file /tmp/f1.txt --account next3' "$tmp/spawn.log"
+  t "(c) green → IDL fired"                 grep -q '"action":"fired"' "$tmp/idl.jsonl"
+  t "(c) summary fired=1"                   test "$(last '.fired')" = 1
+
+  # (d) spawn non-zero → item reopened + IDL failed.
+  reset; seed_items '[{"id":"i1","project":"/repo/a","status":"open","title":"t1"}]'
+  seed_plan '[{"id":"i1","account":"next3","fire_line":["--prompt-file","/tmp/f1.txt"]}]'
+  STUB_SPAWN_RC=7 "$SELF" --once >/dev/null 2>&1
+  t "(d) spawn-fail → item reopened"        grep -qx 'reopen i1' "$tmp/backlog.log"
+  t "(d) spawn-fail → IDL failed"           grep -q '"action":"failed"' "$tmp/idl.jsonl"
+
+  # (e) --dry-run → plan printed, backlog UNCHANGED, spawn NOT called, no page.
+  reset; seed_items '[{"id":"i1","project":"/repo/a","status":"open","title":"t1"}]'
+  seed_plan '[{"id":"i1","account":"next3","fire_line":["--prompt-file","/tmp/f1.txt"]}]'
+  "$SELF" --dry-run > "$tmp/dry.out" 2>/dev/null
+  t "(e) --dry-run prints the plan"         grep -q 'PLAN:' "$tmp/dry.out"
+  t "(e) --dry-run → backlog UNCHANGED"     test ! -s "$tmp/backlog.log"
+  t "(e) --dry-run → spawn NOT called"      test ! -s "$tmp/spawn.log"
+
+  # (f) MAX_SPAWN cap → only N spawns even with more placements.
+  reset; seed_items '[{"id":"i1","project":"/repo/a","status":"open","title":"t1"},{"id":"i2","project":"/repo/a","status":"open","title":"t2"},{"id":"i3","project":"/repo/a","status":"open","title":"t3"}]'
+  seed_plan '[{"id":"i1","account":"a","fire_line":["--x"]},{"id":"i2","account":"a","fire_line":["--x"]},{"id":"i3","account":"a","fire_line":["--x"]}]'
+  CC_DISPATCH_MAX_SPAWN=2 "$SELF" --once >/dev/null 2>&1
+  t "(f) MAX_SPAWN=2 caps spawns at 2"      test "$(grep -c . "$tmp/spawn.log")" -eq 2
+
+  # (g) config-fail: unresolvable backlog bin → exit 3 LOUD.
+  CC_DISPATCH_BACKLOG_BIN="/nonexistent/nope" "$SELF" --once >/dev/null 2>&1; rc=$?
+  t "(g) unresolvable actuator → exit 3"    test "$rc" -eq 3
+
+  echo "cc-dispatch selftest: $pass passed, $fail failed"
+  [ "$fail" -eq 0 ] || exit 1
+}
+
+command -v jq >/dev/null 2>&1 || { echo "cc-dispatch: jq is required" >&2; exit 3; }
+case "${1:-}" in
+  selftest)        selftest ;;
+  --dry-run)       dispatch dry ;;
+  --once|"")       dispatch run ;;
+  -h|--help|help)  usage ;;
+  *) printf 'cc-dispatch: unknown arg %s\n\n' "$1" >&2; usage >&2; exit 3 ;;
+esac
