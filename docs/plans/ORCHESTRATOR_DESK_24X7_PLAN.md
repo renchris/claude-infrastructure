@@ -314,3 +314,17 @@ that wires their subjects — no gate goes green on capability alone again. Full
   bounded to lead-buildable linchpins + staging + honest enumeration; the mechanical ladder remainder is fed to the
   mission ledger for the dispatcher's future waves rather than hand-built in one session (respects the desk's own
   iterative-wave architecture + the scope-freeze discipline).
+
+- 2026-07-19 — **T-P15-4 ship-rail scoped-allow push hook BUILT (agent half; C10 activation staged for the
+  operator).** `hooks/ship-rail-push-allow.sh` is a PreToolUse(Bash) hook that auto-allows exactly the
+  non-force land shape `git push origin HEAD:<branch>` and defers everything else (force / other-remote /
+  bare push / compound / substitution → the `git push:*` ask + the force `deny` rules stay in force). Mirrors
+  `rm-safe-allowlist` (allow is opt-in to ONE shape). `tests/ship-rail-push-allow.bats` 8/8 green + shellcheck
+  clean; landed via ship-land. Activation is **C10 / operator decision #4**:
+  `docs/SHIP-RAIL-PUSH-ALLOW-ACTIVATION.md` + idempotent `docs/activation/ship-rail-push-activate.sh` (dry-run
+  validated against all 5 live `settings.json`; the agent NEVER edits `settings.json` in place).
+  **U2 RESOLVED** (the audit's open uncertainty): the infra rail did NOT strand because `ship-land.sh:186`
+  pushes as a **subprocess** (a non-Bash-tool path, already ask-exempt — recent `tool:ship-land` `land.log`
+  entries exit 0 unattended). The real strand is the **model-issued** land push (`commands/ship.md:43`), which
+  this hook covers; it is the complement of `smart-bash-allowlist.sh`, which allows feature-branch pushes but
+  DELIBERATELY EXCLUDES trunk. The remainder-list line above (T-P15-4) is now built, pending operator activation.
