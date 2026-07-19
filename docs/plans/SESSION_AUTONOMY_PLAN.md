@@ -1,3 +1,7 @@
+---
+status: complete
+---
+
 # SESSION AUTONOMY — platform-scale orchestration without unplanned human intervention
 
 **Scope (frozen 2026-07-14):** make the multi-wave, multi-session build pattern
@@ -718,3 +722,41 @@ seen RED before the build), RED-proven against its naive/absent form, committed 
   limit needs an EVENT-keyed idempotency marker; sid-keyed markers break on the second occurrence of
   anything. bash exec-optimizes a bare `-c 'sleep N'` (argv vanishes) — fixture processes need a
   compound body to stay visible to ps.
+
+---
+
+## ✅ PLAN COMPLETE — closeout (2026-07-18, session-autonomy-closeout)
+
+**Status → `complete`** (frontmatter added this commit). Every agent-buildable deliverable in this
+plan is BUILT, RED-proven, LANDED on `origin/main`, and — per the never-stuck-gate LEG-4 runtime
+inventory — ACTIVATED by the operator (all `cc-*` tools symlinked live; `lead-supervisor` +
+`lr-reset-poller` launchd loaded). The frozen scope (the multi-wave / multi-session build pattern
+running for DAYS on designed gates only) is fulfilled by the now-live machinery. Ongoing autonomy
+hardening continues under the SEPARATE **`ORCHESTRATOR_DESK_24X7_PLAN.md`** (status `in-progress`,
+which BUILT ON this foundation — dispatcher, discovery-feed, escalation) — **this plan's scope is
+closed, not the mission.**
+
+**Re-verified on current `origin/main` content THIS turn (measured, never recalled)** — the same
+discipline as the `44ed408` handoff-disposition closeout:
+
+- **9/9 gates GREEN:** premortem `8·0` · never-stuck `21·0` · session-lifecycle `3·0·0` ·
+  wait-safety `13·0·0` · reaper-safety · comms-safety · respawn · route · limit-reset (each
+  "every registered criterion is mechanically satisfied").
+- **bats `629/629` GREEN** (full `tests/` suite, 56 files, 3m45s); shellcheck / py_compile n/a
+  (docs-only closeout — nothing to gate).
+- **All work landed:** `git rev-list origin/main...HEAD` = `0 0` at entry.
+- Every `NOT BUILT` token in the status log above is a HISTORICAL red-by-design registration later
+  turned green — each is superseded by its own `· 0 NOT BUILT` GREEN declaration (register-criteria-
+  FIRST discipline: a gate is SEEN firing RED before the build, then driven green).
+
+**Why this commit exists (the closeout mechanism — itself a session-autonomy fix):** the
+discovery-feed's `plan-open` critic (`cc-discover` C2 → `find-plan.sh --list-open`) classifies a
+frontmatter-less plan as `UNKNOWN` = open, so it perpetually refilled `cc-backlog` with
+`advance SESSION AUTONOMY …` (item `cf519f2f966d`); the Program-D dispatcher then spawned **3
+sessions in ~1h** that each claimed → bounced (all three pids since dead) — **a completed-but-
+unmarked plan manufacturing exactly the unplanned session churn this plan exists to eliminate.**
+`status: complete` excludes it from `--list-open` at the ROOT (discovery stops emitting the
+candidate); `cc-backlog done cf519f2f966d` closes the current open item (the ledger fold's `done`
+status is STICKY against a later idempotent re-`add`, so discovery cannot resurrect it). Landed
+via the project-local `/ship` (`scripts/ship-land.sh`: gate-in-lock → content-verify →
+stranded-sweep) from a dedicated `/tmp/wt-sa-close` worktree — never the shared checkout.
