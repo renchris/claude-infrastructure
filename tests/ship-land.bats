@@ -82,9 +82,11 @@ on_branch_with() {  # $1=branch $2=file $3=content  → commit a change on a fre
   echo "$output" | grep -qi "reject"
 }
 
-@test "verify-fail: concurrent drop after push → exit 8, land.log verify:FAIL" {
-  # post-update hook resets main back to base AFTER our push — the 2026-07-11 incident:
-  # our push 'succeeds' but a concurrent rebase-land drops our commit from the trunk.
+@test "verify-fail: PERSISTENT concurrent drop → bounded auto-retry exhausts → exit 8, clean rollback" {
+  # post-update hook resets main back to base AFTER EVERY push — the 2026-07-11 incident, but persistent:
+  # our push 'succeeds' yet a concurrent rebase-land drops our commit from the trunk, every single time.
+  # T-P9-7: ship-land auto-retries (bounded by SHIP_LAND_VERIFY_RETRIES=2) and, on exhaustion, leaves a
+  # CLEAN committed tree (never a wedged rebase) with the ship/backup-* ref intact for manual recovery.
   base_sha="$(git -C "$ORIGIN" rev-parse main)"
   printf '#!/bin/sh\ngit update-ref refs/heads/main %s\n' "$base_sha" > "$ORIGIN/hooks/post-update"
   chmod +x "$ORIGIN/hooks/post-update"
@@ -94,8 +96,14 @@ on_branch_with() {  # $1=branch $2=file $3=content  → commit a change on a fre
   run bash "$SHIPLAND" --trunk main
   [ "$status" -eq 8 ]
   echo "$output" | grep -qi "VERIFY FAILED"
+  echo "$output" | grep -qi "auto-retry"                 # it DID retry before giving up (bounded)
   grep -q '"verify":"FAIL"' "$LAND_LOG"
   grep -q '"exit":8' "$LAND_LOG"
+  # rollback guarantee: no rebase left in progress, working tree clean, backup ref intact
+  [ ! -d "$WORK/.git/rebase-merge" ]
+  [ ! -d "$WORK/.git/rebase-apply" ]
+  [ -z "$(git status --porcelain)" ]
+  [ -n "$(git branch --list 'ship/backup-*')" ]
 }
 
 @test "esc-scan: DROP TABLE in the range → exit 3, decision packet parked, trunk unchanged" {
@@ -172,4 +180,79 @@ on_branch_with() {  # $1=branch $2=file $3=content  → commit a change on a fre
   run bash "$SHIPLAND" --trunk main --dry-run
   [ "$status" -eq 6 ]
   [ "$(cat "$gc/gate-green" 2>/dev/null || echo none)" != "$redhead" ]   # unproven tree never green
+}
+
+@test "T-P9-7 recover: TRANSIENT concurrent drop → auto-retry re-lands → exit 0, content on trunk" {
+  # post-update drops main to base only on the FIRST push (one-time marker); the auto-retry's re-push
+  # then sticks and content-verify passes. Proves the bounded retry HEALS a transient drop instead of
+  # stranding on the old manual exit-8 recovery. (base_sha + $ORIGIN expand at write time; \$marker is
+  # literal for the hook's runtime.)
+  base_sha="$(git -C "$ORIGIN" rev-parse main)"
+  cat > "$ORIGIN/hooks/post-update" <<EOF
+#!/bin/sh
+marker="$ORIGIN/dropped-once"
+if [ ! -f "\$marker" ]; then
+  : > "\$marker"
+  git update-ref refs/heads/main $base_sha
+fi
+EOF
+  chmod +x "$ORIGIN/hooks/post-update"
+
+  on_branch_with feat/heal heal.txt payload
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qi "auto-retry"                 # it reconciled + re-pushed
+  echo "$output" | grep -q "LANDED"
+  git fetch -q origin main
+  [ -n "$(git ls-tree origin/main -- heal.txt)" ]        # content really reached the trunk on retry
+  grep -q '"verify":"ok"' "$LAND_LOG"
+}
+
+@test "T-P9-7 kill-switch: SHIP_LAND_VERIFY_RETRIES=0 → single-shot exit 8, no auto-retry" {
+  # =0 restores the pre-T-P9-7 behavior: one push, one verify, no retry. Persistent drop → immediate exit 8.
+  base_sha="$(git -C "$ORIGIN" rev-parse main)"
+  printf '#!/bin/sh\ngit update-ref refs/heads/main %s\n' "$base_sha" > "$ORIGIN/hooks/post-update"
+  chmod +x "$ORIGIN/hooks/post-update"
+
+  on_branch_with feat/noretry nr.txt payload
+
+  run env SHIP_LAND_VERIFY_RETRIES=0 bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 8 ]
+  ! echo "$output" | grep -qi "auto-retry"               # zero retries attempted (single-shot)
+  grep -q '"exit":8' "$LAND_LOG"
+}
+
+@test "T-P9-7 rollback: auto-retry rebase CONFLICT → rolled back clean, exit 5" {
+  # A sibling commit on origin edits base.txt divergently; the one-time hook resets main to it after our
+  # first push. The auto-retry then rebases onto the sibling and CONFLICTS on base.txt → ship-land must
+  # roll the rebase back (git rebase --abort → clean tree) and exit 5, never leave a wedged mid-conflict tree.
+  git checkout -q -b sibling main
+  printf 'theirs\n' > base.txt
+  git commit -q -am "sibling: base.txt"
+  git push -q origin sibling
+  sib_sha="$(git -C "$ORIGIN" rev-parse sibling)"
+  git checkout -q main
+
+  cat > "$ORIGIN/hooks/post-update" <<EOF
+#!/bin/sh
+marker="$ORIGIN/reset-once"
+if [ ! -f "\$marker" ]; then
+  : > "\$marker"
+  git update-ref refs/heads/main $sib_sha
+fi
+EOF
+  chmod +x "$ORIGIN/hooks/post-update"
+
+  git checkout -q -b feat/conflict main
+  printf 'ours\n' > base.txt                              # same line as the sibling → guaranteed conflict
+  git commit -q -am "feat: base.txt ours"
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 5 ]
+  echo "$output" | grep -qi "rolled back"
+  # rollback guarantee: no rebase left in progress, working tree clean
+  [ ! -d "$WORK/.git/rebase-merge" ]
+  [ ! -d "$WORK/.git/rebase-apply" ]
+  [ -z "$(git status --porcelain)" ]
 }
