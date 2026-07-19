@@ -37,16 +37,19 @@ log() {
 cat >/dev/null 2>&1 || true
 
 # === SETTINGS MODEL PORTABILITY GUARD (2026-06-11) ===
-# `/model <X>` "saved as default" writes "model" into ~/.claude/settings.json,
-# which is SYMLINKED into every CLAUDE_CONFIG_DIR (next/secondary/tertiary) — so
-# a window-bound frontier model (fable / claude-fable-5) saved from an eval-track
-# session poisons the STABLE track: 2.1.114 can't resolve it and every plain
-# `claude` launch dies with "There's an issue with the selected model".
-# Frontier sessions never need the saved default (claude-fable pins --model
-# explicitly), so stripping it is always safe. Self-heal + warn. Observed live
-# 2026-06-11 (a /model fable save broke stable-track probes). On new frontier
-# tiers, extend the case pattern via the /model-upgrade skill.
-SETTINGS_FILE="$HOME/.claude/settings.json"
+# `/model <X>` "saved as default" writes "model" into the LAUNCHING account's own
+# settings.json — a PER-ACCOUNT file keyed by CLAUDE_CONFIG_DIR (~/.claude,
+# ~/.claude-next, ~/.claude-secondary, … are INDEPENDENT real files, NOT symlinked).
+# A window-bound frontier model (fable / claude-fable-5) left saved there poisons THAT
+# account: the day it resolves to a stable binary (2.1.114 can't resolve the model)
+# every plain `claude` launch dies with "There's an issue with the selected model".
+# So the guard MUST read the launching account's settings via CLAUDE_CONFIG_DIR — a
+# hardcoded ~/.claude/settings.json only heals the DEFAULT account and leaves every
+# non-default account bricked (T-P10-3). Frontier sessions never need the saved default
+# (claude-fable pins --model explicitly), so stripping it is always safe. Self-heal +
+# warn. Observed live 2026-06-11 (a /model fable save broke stable-track probes). On new
+# frontier tiers, extend the case pattern via the /model-upgrade skill.
+SETTINGS_FILE="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json"
 if [[ -f "$SETTINGS_FILE" ]] && command -v python3 >/dev/null 2>&1; then
   saved_model=$(python3 -c "import json;print(json.load(open('$SETTINGS_FILE')).get('model',''))" 2>/dev/null || echo '')
   case "$saved_model" in
@@ -120,6 +123,9 @@ echo "[pre-session-validate] WARNING: $current_target failed --version check" >&
 
 # Find highest semver-sorted version directory that ISN'T the broken one
 fallback=""
+# ls|grep|sort -V -r is intentional: semver-DESCENDING scan of version dirs (a bare
+# glob expands lexically — 2.1.10 before 2.1.9 — which would pick the wrong fallback).
+# shellcheck disable=SC2010
 for candidate in $(ls -1 "$VERSIONS_DIR" 2>/dev/null | grep -E '^[0-9]+\.[0-9]+' | sort -V -r); do
   candidate_path="$VERSIONS_DIR/$candidate"
   # Skip the current broken target
