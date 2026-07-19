@@ -1,0 +1,476 @@
+#!/bin/bash
+# cc-value — the net-positive VALUE LEDGER for the desk fleet (Program D, T-P14-7/T-P8-5).
+#
+# WHY: cc-board answers "is each session alive / how full / which account" — a SPEND-side
+# glance. It could not answer the value-side question the 24x7 operator actually needs:
+# "for all this quota we're burning, is the fleet LANDING anything, or churning?" This CLI
+# is the value ledger: {commits-landed + tasks-closed} over a window ÷ the quota spent to
+# produce them, with a NET-NEGATIVE CHURN detector (spend > 0, value == 0). cc-board renders
+# a compact rollup of it (a per-session VALUE column + a per-account footer); this tool is the
+# engine + the standalone read (`cc-value`, `cc-value --me`, `cc-value --json`).
+#
+# TRUTH DISCIPLINE (design law §2: abstain, never fabricate). The three inputs have DIFFERENT
+# attribution fidelity, and the ledger reports each at exactly the granularity it can prove:
+#   • commits-landed — counted on each repo's LOCAL origin/main ref within the window. A commit
+#     is attributed to a session/account ONLY via a `Session-Id:`/`Land-Session:` UUID trailer
+#     that joins to live telemetry (config_dir → account). Trailer-less commits (most, incl. the
+#     `Claude-Session:` URL style which does NOT join) are counted in the FLEET total but left
+#     UNATTRIBUTED — never guessed onto an account.
+#   • tasks-closed — folded from the cc-backlog JSONL (status==done, done-transition in window).
+#     The `claim.by` field is a SHELL pid (`<host>-<pid>`), NOT the claude session UUID, so tasks
+#     are counted at FLEET level only — never split per-account (that would be fabrication).
+#   • spend — Max plans meter no dollars (credits_used==0), so spend is the quota proxy:
+#     per-account session_pct (5h) / weekly_pct (7d) from claude-accounts; per-session the live
+#     context input_tokens. Reported as-is, labeled; no synthetic dollar figure is invented.
+# Freshness caveat: origin/main is the LOCAL ref (advances on fetch/push); the ledger is a TREND
+# signal, not an accounting record — read it as "is value flowing", not "exact attributed cost".
+#
+# Usage:
+#   cc-value                     value ledger table (fleet rollup · per-account · churn)
+#   cc-value --json              machine-readable {window_h, fleet, accounts[], sessions[], repos[]}
+#   cc-value --me                THIS session's own net contribution (commits landed by my UUID)
+#   cc-value --session <uuid>    a specific session's landed-commit contribution
+#   cc-value selftest            RED-provable hermetic self-check (fixture repo+backlog+telemetry)
+#
+# Config (all env, test-overridable):
+#   CC_VALUE_WINDOW_H     value window in hours                     (default 24)
+#   CC_VALUE_REPOS        ':'-sep repo roots to scan for landed commits
+#                         (default: this repo ∪ git-toplevels of active telemetry cwds)
+#   CC_VALUE_CHURN_MIN_PCT quota-spend floor below which churn is not flagged (default 8)
+#   CC_VALUE_REF          the landed-trunk ref to count on          (default origin/main)
+#   CC_TELEMETRY_DIR      session telemetry dir                     (default /tmp/cc-telemetry)
+#   CC_BACKLOG_FILE       backlog JSONL                             (default ~/.claude/autonomy/backlog.jsonl)
+#   CC_ACCTS_JSON         pre-read `claude-accounts --json` (cc-board passes its cached read)
+#   CC_NOW                epoch override for the window's "now"      (tests)
+set -u
+
+WINDOW_H="${CC_VALUE_WINDOW_H:-24}"
+CHURN_MIN="${CC_VALUE_CHURN_MIN_PCT:-8}"
+REF="${CC_VALUE_REF:-origin/main}"
+TDIR="${CC_TELEMETRY_DIR:-/tmp/cc-telemetry}"
+BACKLOG="${CC_BACKLOG_FILE:-$HOME/.claude/autonomy/backlog.jsonl}"
+STALE_S="${CC_VALUE_STALE_S:-900}"     # a telemetry row older than this = not "active" for spend
+
+command -v jq >/dev/null 2>&1 || { echo "cc-value: jq required" >&2; exit 2; }
+
+now() { echo "${CC_NOW:-$(date +%s)}"; }
+
+# epoch → ISO-8601Z, portable across macOS (date -r) and GNU (date -d @).
+epoch_to_iso() {
+  date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+    || date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null
+}
+
+# config_dir → account name (statusline suffix convention; same map as cc-board/cc-context).
+map_acct() { case "$1" in
+  */.claude-next)       echo next  ;;  */.claude-secondary)  echo next2 ;;
+  */.claude-tertiary)   echo next3 ;;  */.claude-quaternary) echo next4 ;;  *) echo "" ;;
+esac ; }
+
+# ── telemetry → { uuid→acct } and the set of ACTIVE sessions/accounts ─────────────────────────
+# One pass over the telemetry dir. Emits TSV lines: <uuid>\t<acct>\t<used_pct>\t<active(0|1)>.
+# active = fresh (age ≤ STALE_S) AND pid alive — the honest "is this session spending right now".
+telemetry_rows() {
+  [ -d "$TDIR" ] || return 0
+  local f nowt; nowt="$(now)"
+  for f in "$TDIR"/*.json; do
+    [ -f "$f" ] || continue
+    jq -r --argjson now "$nowt" --argjson stale "$STALE_S" '
+      [ (.session_id // ""),
+        (.config_dir // ""),
+        ((.used_pct // 0)|floor|tostring),
+        (.pid // ""),
+        (($now - (.ts // 0)) <= $stale) ] | @tsv' "$f" 2>/dev/null
+  done | while IFS=$'\t' read -r sid cfg used pid fresh; do
+    [ -n "$sid" ] || continue
+    local acct active=0
+    acct="$(map_acct "$cfg")"
+    # active iff fresh AND (pid alive, or pid unknown→trust freshness)
+    if [ "$fresh" = "true" ]; then
+      case "$pid" in ''|*[!0-9]*) active=1 ;; *) kill -0 "$pid" 2>/dev/null && active=1 ;; esac
+    fi
+    printf '%s\t%s\t%s\t%s\n' "$sid" "$acct" "$used" "$active"
+  done
+}
+
+# ── repo set — where to count landed commits ──────────────────────────────────────────────────
+# Explicit CC_VALUE_REPOS wins (also the selftest hook to a fixture repo). Otherwise: this repo,
+# unioned with the git-toplevel of each active session's cwd (so the ledger scopes to exactly the
+# repos the fleet is working in — self-configuring, bounded by live sessions).
+repo_set() {
+  if [ -n "${CC_VALUE_REPOS:-}" ]; then
+    printf '%s\n' "$CC_VALUE_REPOS" | tr ':' '\n' | sed '/^$/d'
+    return 0
+  fi
+  { git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null
+    if [ -d "$TDIR" ]; then
+      local f cwd
+      for f in "$TDIR"/*.json; do
+        [ -f "$f" ] || continue
+        cwd="$(jq -r '.cwd // empty' "$f" 2>/dev/null)"
+        [ -n "$cwd" ] && [ -d "$cwd" ] && git -C "$cwd" rev-parse --show-toplevel 2>/dev/null
+      done
+    fi
+  } | sort -u | sed '/^$/d'
+}
+
+# ── landed commits in window → TSV: <total>  then per-commit <uuid> lines ──────────────────────
+# For each repo, walk REF since the window start; keep commits whose committer-epoch ≥ since
+# (exact — --since only prunes). Emit the first non-empty Session-Id/Land-Session UUID per commit
+# (or the literal '-' when trailer-less). Caller aggregates total + attribution.
+commit_uuids() {
+  local since_epoch="$1" iso repo
+  iso="$(epoch_to_iso "$since_epoch")"
+  for repo in $(repo_set); do
+    [ -d "$repo" ] || continue
+    git -C "$repo" rev-parse --verify --quiet "$REF" >/dev/null 2>&1 || continue
+    # %ct<US>Session-Id(csv)<US>Land-Session(csv)  — hash not needed (we only window + attribute)
+    git -C "$repo" log "$REF" --since="$iso" --no-merges \
+      --format='%ct%x1f%(trailers:key=Session-Id,valueonly,separator=%x2C)%x1f%(trailers:key=Land-Session,valueonly,separator=%x2C)' \
+      2>/dev/null \
+    | while IFS=$'\x1f' read -r ct sidt landt; do
+        case "$ct" in ''|*[!0-9]*) continue ;; esac
+        [ "$ct" -ge "$since_epoch" ] || continue          # exact window (git --since is fuzzy)
+        # first non-empty trailer UUID, else '-'
+        local u="${sidt%%,*}"; [ -n "$u" ] || u="${landt%%,*}"; [ -n "$u" ] || u='-'
+        printf '%s\n' "$u"
+      done
+  done
+}
+
+# ── tasks closed in window (FLEET) — fold cc-backlog, status==done, done-ts ≥ since ────────────
+tasks_closed() {
+  local since_epoch="$1"
+  [ -f "$BACKLOG" ] || { echo 0; return 0; }
+  # valid records only (has id+event); fold last-event-wins; keep done-in-window.
+  jq -R 'fromjson? // empty' "$BACKLOG" 2>/dev/null | jq -s --argjson since "$since_epoch" '
+    ( reduce .[] as $r ({};
+        select($r|has("id") and has("event")) as $_ |
+        .[$r.id] = { status: $r.event, ts: ($r.ts // "") } ) )
+    | [ to_entries[] | select(.value.status == "done")
+        | (.value.ts | (fromdateiso8601? // 0)) | select(. >= $since) ]
+    | length' 2>/dev/null || echo 0
+}
+
+# ── accounts json (quota/spend proxy) ─────────────────────────────────────────────────────────
+accounts_json() {
+  if [ -n "${CC_ACCTS_JSON:-}" ]; then printf '%s' "$CC_ACCTS_JSON"; return 0; fi
+  command -v claude-accounts >/dev/null 2>&1 && claude-accounts --json 2>/dev/null || echo '{"rows":[]}'
+}
+
+# ── assemble the whole ledger as ONE json object (the single source both render modes read) ────
+build_json() {
+  local nowt since_epoch; nowt="$(now)"; since_epoch=$(( nowt - WINDOW_H * 3600 ))
+
+  local tel; tel="$(telemetry_rows)"                       # uuid \t acct \t used \t active
+  local commits; commits="$(commit_uuids "$since_epoch")"  # one uuid (or '-') per landed commit
+  local tasks;   tasks="$(tasks_closed "$since_epoch")"
+  local repos;   repos="$(repo_set | jq -R . | jq -s -c .)"
+  local accts;   accts="$(accounts_json)"
+
+  # uuid→acct join map, and per-session used%/active, as compact json fed to the assembler.
+  local telj
+  telj="$(printf '%s\n' "$tel" | jq -R 'select(length>0)|split("\t")|{sid:.[0],acct:.[1],used:(.[2]|tonumber? // 0),active:(.[3]=="1")}' | jq -s -c .)"
+  local commitsj
+  commitsj="$(printf '%s\n' "$commits" | jq -R 'select(length>0)' | jq -s -c .)"
+
+  jq -n \
+    --argjson tel "$telj" \
+    --argjson commits "$commitsj" \
+    --argjson tasks "${tasks:-0}" \
+    --argjson repos "$repos" \
+    --argjson accts "$accts" \
+    --argjson window "$WINDOW_H" \
+    --argjson churnmin "$CHURN_MIN" \
+    --argjson now "$nowt" '
+    # uuid → acct (only sessions we can see in telemetry)
+    ($tel | map(select(.acct!="")) | map({key:.sid,value:.acct}) | from_entries) as $u2a |
+    # per-account commit tallies (attributed) + fleet total + unattributed
+    ( reduce $commits[] as $u ({total:0, byacct:{}, unattr:0, bysid:{}};
+        .total += 1
+        | ($u2a[$u]) as $a
+        | if $u == "-" then .unattr += 1
+          elif $a == null then .unattr += 1
+          else .byacct[$a] = ((.byacct[$a]//0)+1) end
+        | if $u != "-" then .bysid[$u] = ((.bysid[$u]//0)+1) else . end
+      ) ) as $c |
+    # active accounts + their spend (session_pct/weekly_pct) from claude-accounts rows
+    ( $tel | map(select(.active and .acct!="")) | map(.acct) | unique ) as $active_accts |
+    ( ($accts.rows // []) | map({key:.acct, value:{s:.session_pct, w:.weekly_pct}}) | from_entries ) as $q |
+    ( [ $active_accts[] | ($q[.].s // 0) ] | add // 0 ) as $fleet_spend |
+    ( ($c.total) + $tasks ) as $fleet_value |
+    # churn-candidate accounts: any account whose 5h spend ≥ the floor, even with NO live session —
+    # an account can burn quota and then go idle, and it must still be visible to the churn detector
+    # (otherwise a spent-then-parked account silently escapes the net-negative check).
+    ( [ $q | to_entries[] | select((.value.s // 0) >= $churnmin) | .key ] ) as $spend_accts |
+    {
+      window_h: $window,
+      now: $now,
+      churn_min_pct: $churnmin,
+      repos: $repos,
+      fleet: {
+        commits: $c.total,
+        commits_unattributed: $c.unattr,
+        tasks: $tasks,
+        value: $fleet_value,
+        active_sessions: ($tel | map(select(.active)) | length),
+        spend_pct: $fleet_spend,
+        # value produced per 1% of quota spent (the DoD "{commits+tasks} ÷ spend"), 1 decimal.
+        # High ⇒ efficient; trending toward 0 with active spend ⇒ approaching churn.
+        ratio: (if $fleet_spend > 0 then (($fleet_value / $fleet_spend * 10) | round / 10) else null end),
+        churn: ($fleet_value == 0 and ($tel|map(select(.active))|length) > 0 and $fleet_spend >= $churnmin)
+      },
+      accounts: (
+        ( ($active_accts + ($c.byacct|keys) + $spend_accts) | unique ) | map(. as $a | {
+          acct: $a,
+          commits: ($c.byacct[$a] // 0),
+          session_pct: ($q[$a].s),
+          weekly_pct: ($q[$a].w),
+          active: ($active_accts | index($a) != null),
+          # account churn is conservative: flagged ONLY when the fleet produced ZERO value in the
+          # window (no commits — attributed OR unattributed — and no tasks closed) yet this account
+          # is spending at-or-above the floor. Gating on fleet.value, NOT this account ATTRIBUTED
+          # commit count, is what prevents a false positive: most landed commits carry no joinable
+          # Session-Id trailer, so byacct==0 is true even for a productive account — but if the
+          # fleet landed anything, we cannot honestly call any single spender a churner.
+          churn: ($fleet_value == 0 and (($q[$a].s // 0) >= $churnmin))
+        })
+      ),
+      sessions: (
+        $tel | map(. as $t | {
+          sid: .sid,
+          sid8: (.sid[0:8]),
+          acct: .acct,
+          commits: ($c.bysid[.sid] // 0),
+          used_pct: .used,
+          active: .active,
+          churn: (.active and ($c.bysid[.sid] // 0) == 0 and (.used // 0) >= 40)
+        })
+      )
+    }'
+}
+
+# ── renderers ─────────────────────────────────────────────────────────────────────────────────
+render_table() {
+  local j="$1"
+  # header + fleet rollup line
+  printf '%s' "$j" | jq -r '
+    "value ledger — \(.window_h)h window · churn-floor \(.churn_min_pct)%   (\(.repos|length) repo\(if (.repos|length)==1 then "" else "s" end) scanned)",
+    (.fleet | "  FLEET   value \(.value)  = \(.commits) commits landed"
+      + (if .commits_unattributed>0 then " (\(.commits_unattributed) unattributed)" else "" end)
+      + " · \(.tasks) tasks closed   |  spend ~\(.spend_pct)% (Σ5h · \(.active_sessions) active)"
+      + (if .ratio!=null then " · v/spend \(.ratio)" else "" end)
+      + (if .churn then "   ⚠ FLEET CHURN — spend, 0 landed" else "" end))
+  ' 2>/dev/null
+  # per-account lines (separate pass → stable column widths via awk)
+  printf '%s' "$j" | jq -r '.accounts[] |
+    "\(.acct)\t+\(.commits)c\t5h \(.session_pct // "?")%\twk \(.weekly_pct // "?")%\t"
+    + (if .churn then "CHURN? (spend, 0 landed commits)" elif .active then "active" else "idle" end)' 2>/dev/null \
+    | awk -F'\t' '{printf "  %-7s %-5s %-9s %-9s %s\n",$1,$2,$3,$4,$5}'
+}
+
+# ── TTL cache — lets cc-board embed the ledger without paying ~1s of git-log scans every render ──
+# `--cached` serves a cache file while it is younger than CC_VALUE_CACHE_TTL, else regenerates it
+# atomically (temp + mv, same dir → same filesystem → atomic; concurrent regens are idempotent, no
+# lock needed). The ledger is a 24h-window TREND, so a ≤60s-stale read is exactly right; standalone
+# `cc-value` (no --cached) always computes fresh. CC_NOW (tests) bypasses the shared cache entirely.
+# The cache path is a plain file OUTSIDE $TDIR so it can never be mistaken for a telemetry row.
+CACHE_TTL="${CC_VALUE_CACHE_TTL:-60}"
+CACHE_FILE="${CC_VALUE_CACHE:-${TMPDIR:-/tmp}/cc-value-cache.json}"
+file_mtime() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0; }
+emit_cached() {
+  [ -n "${CC_NOW:-}" ] && { build_json; return; }        # tests: never touch the shared cache
+  local age=999999
+  [ -f "$CACHE_FILE" ] && age=$(( $(date +%s) - $(file_mtime "$CACHE_FILE") ))
+  if [ "$age" -ge "$CACHE_TTL" ]; then
+    local tmpc
+    if tmpc="$(mktemp "${CACHE_FILE}.XXXXXX" 2>/dev/null)"; then
+      if build_json >"$tmpc" 2>/dev/null && [ -s "$tmpc" ]; then mv -f "$tmpc" "$CACHE_FILE" 2>/dev/null || rm -f "$tmpc"
+      else rm -f "$tmpc"; fi
+    fi
+  fi
+  if [ -s "$CACHE_FILE" ]; then cat "$CACHE_FILE"; else build_json; fi   # cache unavailable ⇒ fresh
+}
+get_json() { if [ "${CACHED:-0}" = 1 ]; then emit_cached; else build_json; fi; }
+
+# ── selftest (RED-provable, hermetic): fixture git repo + backlog + telemetry via env overrides ─
+run_selftest() {
+  local pass=0 fail=0 tmp SELF
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/cc-value-selftest.XXXXXX")" || { echo "cannot mktemp" >&2; exit 2; }
+  trap 'rm -rf "${tmp:-}"' EXIT
+  SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+
+  # frozen "now" so windows are deterministic; commits/tasks are stamped relative to it.
+  local T=1784470000
+  local IN=$(( T - 3600 ))        # 1h ago — inside a 24h window
+  local OUT=$(( T - 90000 ))      # 25h ago — outside a 24h window
+
+  # fixture repo with origin/main; two in-window commits (one carries a Session-Id UUID that the
+  # telemetry maps to account 'next'), one out-of-window commit that must NOT be counted.
+  # COMMIT ORDER IS LOAD-BEARING: the OUT-of-window commit is committed FIRST (it is the OLDEST),
+  # so the tip is the newest in-window commit — exactly like any real repo, where the trunk tip's
+  # committer-date is ~now. `git log --since` prunes traversal at the first too-old commit, so a
+  # pathological fixture with the OLD commit at the TIP would stop the walk before reaching the
+  # newer in-window ancestors (0 commits counted). Real trunks never look like that; the ledger's
+  # `--since` fast-prune + exact `%ct >= since` filter is correct for them. Keep OUT committed first.
+  local REPO="$tmp/repo"
+  git init -q "$REPO"
+  git -C "$REPO" config user.email t@t; git -C "$REPO" config user.name t
+  GIT_AUTHOR_DATE="@$OUT" GIT_COMMITTER_DATE="@$OUT" git -C "$REPO" commit -q --allow-empty \
+    -m "OUT-of-window"
+  GIT_AUTHOR_DATE="@$IN" GIT_COMMITTER_DATE="@$IN" git -C "$REPO" commit -q --allow-empty \
+    -m "in-window attributed" -m "Session-Id: uuid-AAA"
+  GIT_AUTHOR_DATE="@$IN" GIT_COMMITTER_DATE="@$IN" git -C "$REPO" commit -q --allow-empty \
+    -m "in-window trailerless"
+  git -C "$REPO" branch -f _trunk >/dev/null 2>&1
+  git -C "$REPO" update-ref refs/remotes/origin/main "$(git -C "$REPO" rev-parse HEAD)"
+
+  # fixture telemetry: session uuid-AAA on account 'next' (config .claude-next), fresh + active.
+  local TEL="$tmp/tel"; mkdir -p "$TEL"
+  printf '{"session_id":"uuid-AAA","config_dir":"/x/.claude-next","cwd":"%s","used_pct":55,"pid":%d,"ts":%d}\n' \
+    "$REPO" "$$" "$(( T - 60 ))" > "$TEL/uuid-AAA.json"
+
+  # fixture backlog: one done in-window, one done-then-reopened (NOT closed), one done out-of-window.
+  local BL="$tmp/backlog.jsonl"
+  {
+    printf '{"id":"i1","event":"add","ts":"%s"}\n' "$(epoch_to_iso "$IN")"
+    printf '{"id":"i1","event":"done","ts":"%s","evidence":"x"}\n' "$(epoch_to_iso "$IN")"
+    printf '{"id":"i2","event":"done","ts":"%s"}\n' "$(epoch_to_iso "$IN")"
+    printf '{"id":"i2","event":"reopen","ts":"%s"}\n' "$(epoch_to_iso "$IN")"
+    printf '{"id":"i3","event":"done","ts":"%s"}\n' "$(epoch_to_iso "$OUT")"
+  } > "$BL"
+
+  # accounts fixture: 'next' at 20% 5h (spends), 'next3' at 12% 5h (spends, no commits → churn cand).
+  local ACCTS='{"rows":[{"acct":"next","session_pct":20,"weekly_pct":30},{"acct":"next3","session_pct":12,"weekly_pct":5}]}'
+
+  export CC_NOW="$T" CC_VALUE_WINDOW_H=24 CC_VALUE_REPOS="$REPO" \
+         CC_TELEMETRY_DIR="$TEL" CC_BACKLOG_FILE="$BL" CC_ACCTS_JSON="$ACCTS" \
+         CC_VALUE_CHURN_MIN_PCT=8
+
+  local J; J="$(bash "$SELF" --json)"
+  check() { # <label> <jq-filter-bool>
+    local label="$1" filt="$2"
+    if printf '%s' "$J" | jq -e "$filt" >/dev/null 2>&1; then
+      printf '  ok   %s\n' "$label"; pass=$((pass+1))
+    else
+      printf '  FAIL %s\n' "$label"; fail=$((fail+1))
+    fi
+  }
+
+  echo "cc-value selftest — RED-provable value-ledger contracts:"
+  check "2 in-window commits counted; OUT excluded"        '.fleet.commits==2'
+  check "1 commit attributed to next (uuid join)"          '(.accounts[]|select(.acct=="next")|.commits)==1'
+  check "1 commit left UNATTRIBUTED (trailerless)"          '.fleet.commits_unattributed==1'
+  check "1 task closed in-window (reopen+OUT excluded)"     '.fleet.tasks==1'
+  check "fleet value = commits+tasks = 3"                   '.fleet.value==3'
+  check "value>0 ⇒ fleet NOT churn"                         '.fleet.churn==false'
+  check "next3 spends 12% + 0 commits + 0 fleet? — NOT (fleet closed a task)"  '(.accounts[]|select(.acct=="next3")|.churn)==false'
+  check "session uuid-AAA reads its own 1 commit"           '(.sessions[]|select(.sid=="uuid-AAA")|.commits)==1'
+  check "repos scanned == 1 (explicit CC_VALUE_REPOS)"      '(.repos|length)==1'
+
+  # churn RED-proof: wipe all value (no commits, no tasks) but keep active spend → fleet churn fires.
+  local EMPTY="$tmp/emptyrepo"; git init -q "$EMPTY"
+  git -C "$EMPTY" config user.email t@t; git -C "$EMPTY" config user.name t
+  GIT_AUTHOR_DATE="@$OUT" GIT_COMMITTER_DATE="@$OUT" git -C "$EMPTY" commit -q --allow-empty -m old
+  git -C "$EMPTY" update-ref refs/remotes/origin/main "$(git -C "$EMPTY" rev-parse HEAD)"
+  local JC
+  JC="$(CC_VALUE_REPOS="$EMPTY" CC_BACKLOG_FILE="$tmp/none.jsonl" bash "$SELF" --json)"
+  if printf '%s' "$JC" | jq -e '.fleet.churn==true and .fleet.value==0' >/dev/null 2>&1; then
+    printf '  ok   %s\n' "churn RED-proof: 0 value + active spend ⇒ FLEET CHURN"; pass=$((pass+1))
+  else
+    printf '  FAIL %s\n' "churn RED-proof: 0 value + active spend ⇒ FLEET CHURN"; fail=$((fail+1))
+  fi
+  # per-account churn RED-proof: same empty-value world → next3 (spends, 0 commits, 0 tasks) IS churn.
+  if printf '%s' "$JC" | jq -e '(.accounts[]|select(.acct=="next3")|.churn)==true' >/dev/null 2>&1; then
+    printf '  ok   %s\n' "per-acct churn: spend + 0 commits + 0 tasks ⇒ next3 CHURN"; pass=$((pass+1))
+  else
+    printf '  FAIL %s\n' "per-acct churn: spend + 0 commits + 0 tasks ⇒ next3 CHURN"; fail=$((fail+1))
+  fi
+
+  # anti-tautology RED-proof for the truth-discipline churn guard: a world with an UNATTRIBUTED
+  # in-window commit (fleet DID land value, but no trailer joins it to an account) + a spending
+  # account MUST NOT flag that account as churn. A naive guard (`byacct[a]==0 && tasks==0`) would
+  # false-positive here — byacct is empty because the commit carries no joinable trailer, yet the
+  # fleet plainly produced a commit. Gating on fleet.value==0 is the only honest predicate.
+  local UNATTR="$tmp/unattr"; git init -q "$UNATTR"
+  git -C "$UNATTR" config user.email t@t; git -C "$UNATTR" config user.name t
+  GIT_AUTHOR_DATE="@$OUT" GIT_COMMITTER_DATE="@$OUT" git -C "$UNATTR" commit -q --allow-empty -m old
+  GIT_AUTHOR_DATE="@$IN"  GIT_COMMITTER_DATE="@$IN"  git -C "$UNATTR" commit -q --allow-empty -m "in-window trailerless"
+  git -C "$UNATTR" update-ref refs/remotes/origin/main "$(git -C "$UNATTR" rev-parse HEAD)"
+  local JU
+  JU="$(CC_VALUE_REPOS="$UNATTR" CC_BACKLOG_FILE="$tmp/none.jsonl" bash "$SELF" --json)"
+  if printf '%s' "$JU" | jq -e '.fleet.commits==1 and .fleet.value==1 and .fleet.commits_unattributed==1 and ((.accounts[]|select(.acct=="next3")|.churn)==false)' >/dev/null 2>&1; then
+    printf '  ok   %s\n' "unattributed commit ⇒ fleet has value ⇒ spender NOT churn (no false positive)"; pass=$((pass+1))
+  else
+    printf '  FAIL %s\n' "unattributed commit ⇒ fleet has value ⇒ spender NOT churn (no false positive)"; fail=$((fail+1))
+  fi
+
+  # graceful degrade: no telemetry dir at all → still emits valid json, no crash.
+  if CC_TELEMETRY_DIR="$tmp/nope" CC_VALUE_REPOS="$REPO" bash "$SELF" --json | jq -e '.fleet' >/dev/null 2>&1; then
+    printf '  ok   %s\n' "absent telemetry dir ⇒ valid json (abstain, no crash)"; pass=$((pass+1))
+  else
+    printf '  FAIL %s\n' "absent telemetry dir ⇒ valid json (abstain, no crash)"; fail=$((fail+1))
+  fi
+
+  # ── TTL cache RED-proofs (the mechanism cc-board relies on) — run WITHOUT CC_NOW so the cache
+  # path is live; a sentinel proves read-from-cache vs regenerate, deterministically. ────────────
+  local CF="$tmp/cache.json"
+  # 1) prime the cache, then overwrite it with a sentinel: a fresh --cached within TTL MUST serve
+  #    the sentinel (proving it read the cache and did NOT regenerate).
+  env -u CC_NOW CC_VALUE_CACHE="$CF" CC_VALUE_CACHE_TTL=3600 CC_VALUE_REPOS="$REPO" \
+      CC_TELEMETRY_DIR="$TEL" CC_ACCTS_JSON="$ACCTS" bash "$SELF" --cached --json >/dev/null 2>&1
+  printf '{"fleet":{"value":424242},"sentinel":true}\n' > "$CF"
+  if env -u CC_NOW CC_VALUE_CACHE="$CF" CC_VALUE_CACHE_TTL=3600 CC_VALUE_REPOS="$REPO" \
+      CC_TELEMETRY_DIR="$TEL" CC_ACCTS_JSON="$ACCTS" bash "$SELF" --cached --json \
+      | jq -e '.sentinel==true and .fleet.value==424242' >/dev/null 2>&1; then
+    printf '  ok   %s\n' "cache: --cached within TTL serves the cache (no regen)"; pass=$((pass+1))
+  else
+    printf '  FAIL %s\n' "cache: --cached within TTL serves the cache (no regen)"; fail=$((fail+1))
+  fi
+  # 2) age past TTL (TTL=0 ⇒ always stale) ⇒ the sentinel is regenerated into a real ledger.
+  if env -u CC_NOW CC_VALUE_CACHE="$CF" CC_VALUE_CACHE_TTL=0 CC_VALUE_REPOS="$REPO" \
+      CC_TELEMETRY_DIR="$TEL" CC_ACCTS_JSON="$ACCTS" bash "$SELF" --cached --json \
+      | jq -e '(.sentinel|not) and (.fleet|has("commits"))' >/dev/null 2>&1; then
+    printf '  ok   %s\n' "cache: age≥TTL regenerates (sentinel replaced by fresh ledger)"; pass=$((pass+1))
+  else
+    printf '  FAIL %s\n' "cache: age≥TTL regenerates (sentinel replaced by fresh ledger)"; fail=$((fail+1))
+  fi
+
+  echo "cc-value selftest: $pass passed, $fail failed"
+  [ "$fail" -eq 0 ]
+}
+
+# ── main ──────────────────────────────────────────────────────────────────────────────────────
+MODE=table SESSION="" CACHED=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --json)     MODE=json ;;
+    --cached)   CACHED=1 ;;
+    --me)       MODE=session; SESSION="${CLAUDE_CODE_SESSION_ID:-}"
+                [ -n "$SESSION" ] || { echo "cc-value --me: CLAUDE_CODE_SESSION_ID unset" >&2; exit 4; } ;;
+    --session)  MODE=session; SESSION="${2:?--session needs a uuid}"; shift ;;
+    selftest)   MODE=selftest ;;
+    -h|--help)  sed -n '2,32p' "$0"; exit 0 ;;
+    --*)        echo "cc-value: unknown flag '$1'" >&2; exit 2 ;;
+    *)          echo "cc-value: unexpected arg '$1'" >&2; exit 2 ;;
+  esac
+  shift
+done
+
+case "$MODE" in
+  json)    get_json ;;
+  table)   render_table "$(get_json)" ;;
+  session)
+    # one session's own net contribution (commits landed by its UUID trailer, across repos)
+    j="$(get_json)"
+    printf '%s' "$j" | jq -r --arg s "$SESSION" '
+      (.sessions[] | select(.sid==$s)) as $me |
+      ($me.commits // (.fleet as $f | null)) as $c |
+      if $me == null then
+        "session \($s[0:8]) — no live telemetry row; landed-commit contribution not resolvable here"
+      else
+        "session \($s[0:8]) on \($me.acct // "?") — \($me.commits) commit\(if $me.commits==1 then "" else "s" end) landed in \(.window_h)h · ctx \($me.used_pct)%"
+        + (if $me.churn then "   ⚠ churn (ctx spent, 0 landed)" else "" end)
+      end' ;;
+  selftest) run_selftest ;;
+esac
