@@ -207,6 +207,40 @@ AS
 }
 
 as_tty() { # $1=session-uuid → the pane's tty path (empty when the session is gone)
+  # LOAD-ROBUST (T-P2-1, 2026-07-19; same class as cc-run 846380c6308f). iTerm2's AppleScript bridge
+  # intermittently errors NON-ZERO under concurrent-session contention. Every caller assigns bare —
+  # `SUC_TTY="$(as_tty …)"` (successor-liveness gate), `SC_TTY=` / `tty=` (self-close + recycle) — so a
+  # non-zero return would trip `set -e` (line 140) and abort with the LEAKED osascript exit code instead
+  # of the caller's own classification. That is exactly how the self-close successor-liveness gate leaked
+  # a non-3 exit under load and RED-flaked the shared ship-land gate. So as_tty NEVER trips set -e: it
+  # RETRIES a failed (non-zero) query a bounded number of times and ALWAYS exits 0, printing the resolved
+  # tty or empty. A genuinely ABSENT pane returns immediately (the query SUCCEEDS — exit 0 — with empty
+  # output, never retried); only a FAILED query is retried, so a real, alive successor still resolves
+  # through a transient bridge hiccup rather than being spuriously judged dead.
+  local out n=0 max="${HANDOFF_TTY_RETRIES:-5}"
+  while [ "$n" -lt "$max" ]; do
+    n=$((n + 1))
+    # `if out=$(…)` runs the query in an if-condition ⇒ set -e is suppressed for it; a non-zero query
+    # falls through to the retry instead of aborting. A successful query (incl. empty = pane absent) wins.
+    if out="$(_as_tty_query "$1")"; then printf '%s' "$out"; return 0; fi
+    [ "$n" -lt "$max" ] && /bin/sleep "${HANDOFF_TTY_RETRY_SLEEP_S:-0.3}"
+  done
+  return 0   # query never succeeded (iTerm2 wedged) → nothing printed = empty tty; the caller aborts safely
+}
+
+# Raw single pane→tty query (the osascript), split out so as_tty's retry / set-e-safety wrapper is
+# testable. SELFTEST SEAM: while the countdown file $HANDOFF_TTY_FAIL_FILE holds a positive integer this
+# returns NON-ZERO (modelling the AppleScript bridge erroring under load) and decrements it — so as_tty's
+# load-robustness is RED-provable without real contention (tests/handoff-fire-completion-push.bats). Inert
+# unless the var is set.
+_as_tty_query() { # $1=session-uuid → tty on stdout; non-zero when the query itself failed
+  if [ -n "${HANDOFF_TTY_FAIL_FILE:-}" ]; then
+    local left; left="$(cat "$HANDOFF_TTY_FAIL_FILE" 2>/dev/null || printf '0')"
+    if [ "${left:-0}" -gt 0 ] 2>/dev/null; then
+      printf '%s' "$((left - 1))" > "$HANDOFF_TTY_FAIL_FILE"
+      return 1
+    fi
+  fi
   osascript - "$1" <<'AS' 2>/dev/null
 on run argv
   tell application "iTerm2"

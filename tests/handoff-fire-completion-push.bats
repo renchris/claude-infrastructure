@@ -52,6 +52,23 @@ setup() {
   [ ! -f "$MARK" ]     # a successor close is NOT terminal — no push
 }
 
+@test "--successor liveness gate is load-robust: a failing tty query does NOT leak a non-3 exit (T-P2-1)" {
+  # RED-provable guard for the concurrent-load flake that reds the shared ship-land gate. Under iTerm2
+  # AppleScript-bridge contention as_tty's osascript errors NON-ZERO; a bare `SUC_TTY="$(as_tty …)"` under
+  # `set -e` then LEAKED that code (status 1/128+sig), NOT the gate's intended `exit 3` — the same CLASS as
+  # cc-run 846380c6308f. The seam HANDOFF_TTY_FAIL_FILE fails EVERY query (count 4 > RETRIES 3), so the run
+  # never touches real iTerm2 — the only way to reach exit 3 is the fixed as_tty retrying past the failures
+  # then classifying the unresolved pane as absent. A naive as_tty (no retry / no set-e guard) leaks status
+  # 1 here instead. RETRY_SLEEP_S=0 keeps it instant.
+  local failf="$BATS_TEST_TMPDIR/ttyfail"; printf '4\n' > "$failf"
+  run env CC_COMPLETION_PUSH_BIN="$STUB" \
+      HANDOFF_TTY_FAIL_FILE="$failf" HANDOFF_TTY_RETRIES=3 HANDOFF_TTY_RETRY_SLEEP_S=0 \
+      bash "$HF" self-close --successor "NOPANE-5150" --session-id "fake:FFFF-5150"
+  [ "$status" -eq 3 ]                       # NOT a leaked osascript code — the flake this fixes
+  [ ! -f "$MARK" ]                          # still aborts BEFORE any completion push
+  [ "$(cat "$failf")" -eq 1 ]              # seam consumed on all 3 retries (4→1) — proves the query was retried
+}
+
 @test "real completion-push (default bin resolution) → a completion-push RECORD, verdict verified" {
   local roles="$BATS_TEST_TMPDIR/roles" recs="$BATS_TEST_TMPDIR/records"
   mkdir -p "$roles"; printf 'DESK-UUID-1\n' > "$roles/desk"
