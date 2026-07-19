@@ -12,12 +12,21 @@
 # IDs are event-keyed (hash of project+title+source) → re-`add` is idempotent.
 #
 # Verbs:
-#   add    --title T [--project P] [--dod-ref R] [--source S]   → echoes the id
-#   list   [--open | --all | --project P] [--json]              (default: --open, table)
-#   claim  <id> --by <sid>
-#   done   <id> --evidence <ref>
-#   reopen <id>
-#   compact [--older-than-days N]                               (default N=30)
+#   add     --title T [--project P] [--dod-ref R] [--source S]   → echoes the id
+#   list    [--open | --all | --blocked | --project P] [--json]  (default: --open, table)
+#   claim   <id> --by <sid>
+#   done    <id> --evidence <ref>
+#   reopen  <id>
+#   block   <id> --needs "<operator-only step>"                  → status "blocked"
+#   unblock <id>                                                 → back to "open"
+#   compact [--older-than-days N]                                (default N=30)
+#
+# BLOCKED-ON-OPERATOR: an item whose DoD needs an operator-only step (a key, a
+# `launchctl bootout`, any human action) is `block`ed with the pending step in
+# `--needs`. `blocked` folds distinctly from `open`, so cc-dispatch EXCLUDES it
+# from the wave (no re-dispatch loop), while `list --open`/`--blocked` and the desk
+# digest still SURFACE it + its `needs`. The operator `unblock`s once the step is
+# done → back to `open` → dispatchable again.
 set -uo pipefail
 
 BACKLOG="${CC_BACKLOG_FILE:-$HOME/.claude/autonomy/backlog.jsonl}"
@@ -74,10 +83,13 @@ fold() {
         source:   ($r.source   // $p.source   // ""),
         by:       ($r.by       // $p.by       // ""),
         evidence: ($r.evidence // $p.evidence // ""),
+        needs:    ($r.needs    // $p.needs    // ""),
         status: (
-          if   $r.event == "done"   then "done"
-          elif $r.event == "claim"  then "claimed"
-          elif $r.event == "reopen" then "open"
+          if   $r.event == "done"    then "done"
+          elif $r.event == "block"   then "blocked"
+          elif $r.event == "unblock" then "open"
+          elif $r.event == "claim"   then "claimed"
+          elif $r.event == "reopen"  then "open"
           else ($p.status // "open") end),
         lastTs:   ($r.ts // $p.lastTs // "")
       })
@@ -116,23 +128,29 @@ cmd_add() {
 cmd_transition() {
   local event="$1"; shift
   local id="${1:-}"; [ $# -gt 0 ] && shift
-  local by="" evidence=""
+  local by="" evidence="" needs=""
   while [ $# -gt 0 ]; do
     local key="$1"; shift
     case "$key" in
       --by)       by="${1:-}";       [ $# -gt 0 ] && shift ;;
       --evidence) evidence="${1:-}"; [ $# -gt 0 ] && shift ;;
+      --needs)    needs="${1:-}";    [ $# -gt 0 ] && shift ;;
       *) printf 'cc-backlog %s: unknown arg %s\n' "$event" "$key" >&2; return 2 ;;
     esac
   done
   [ -n "$id" ] || { printf 'cc-backlog %s: <id> is required\n' "$event" >&2; return 2; }
+  # `block` MUST carry the pending operator step — that IS the desk-surfaced payload.
+  if [ "$event" = block ] && [ -z "$needs" ]; then
+    printf 'cc-backlog block: --needs "<operator-only step>" is required\n' >&2; return 2
+  fi
   ensure_file
   has_id "$id" || { printf 'cc-backlog %s: unknown id %s\n' "$event" "$id" >&2; return 3; }
   jq -nc --arg id "$id" --arg ts "$(now_iso)" --arg event "$event" \
-     --arg by "$by" --arg evidence "$evidence" \
+     --arg by "$by" --arg evidence "$evidence" --arg needs "$needs" \
      '{id:$id, ts:$ts, event:$event}
       + (if $by != ""       then {by:$by}             else {} end)
-      + (if $evidence != "" then {evidence:$evidence} else {} end)' \
+      + (if $evidence != "" then {evidence:$evidence} else {} end)
+      + (if $needs != ""    then {needs:$needs}       else {} end)' \
      >> "$BACKLOG"
   echo "$id"
 }
@@ -142,30 +160,41 @@ cmd_list() {
   while [ $# -gt 0 ]; do
     local key="$1"; shift
     case "$key" in
-      --open) mode="open" ;;
-      --all)  mode="all" ;;
+      --open)    mode="open" ;;
+      --all)     mode="all" ;;
+      --blocked) mode="blocked" ;;
       --project) projfilter="${1:-}"; [ $# -gt 0 ] && shift ;;
       --json) fmt="json" ;;
       *) printf 'cc-backlog list: unknown arg %s\n' "$key" >&2; return 2 ;;
     esac
   done
-  # --json: the SAME filtered fold as the table, emitted as a compact JSON array (one
-  # object per item, full carried meta) for machine consumers (cc-dispatch). The default
-  # (table) branch below is byte-unchanged.
+  # mode → status predicate (`keep`, shared by json + table): all=every item ·
+  # blocked=only blocked · open(default)=every non-done item (so `blocked` items STILL
+  # surface in the desk's --open view, but cc-dispatch's exact status=="open" filter
+  # excludes them). `needs` (the pending operator step) is carried in both branches.
+  # --json: the SAME filtered fold as the table, as a compact JSON array (one object per
+  # item, full carried meta incl. `needs`) for machine consumers (cc-dispatch, the desk
+  # digest). The default (table) branch is byte-unchanged for non-blocked rows.
   if [ "$fmt" = json ]; then
     fold | jq -c --arg mode "$mode" --arg proj "$projfilter" '
+      def keep: if $mode=="all" then true elif $mode=="blocked" then .status=="blocked" else .status!="done" end;
       sort_by(.project, .title)
-      | map( select($mode == "all" or .status != "done")
+      | map( select(keep)
            | select($proj == "" or .project == $proj) )'
     return 0
   fi
   fold | jq -r --arg mode "$mode" --arg proj "$projfilter" '
+    def keep: if $mode=="all" then true elif $mode=="blocked" then .status=="blocked" else .status!="done" end;
     sort_by(.project, .title) | .[]
-    | select($mode == "all" or .status != "done")
+    | select(keep)
     | select($proj == "" or .project == $proj)
-    | [.status, .id, .project, .title] | @tsv
-  ' | while IFS=$'\t' read -r st id proj title; do
-      printf '%-8s | %s | %-28s | %s\n' "$st" "$id" "$proj" "$title"
+    | [.status, .id, .project, .title, (.needs // "")] | @tsv
+  ' | while IFS=$'\t' read -r st id proj title needs; do
+      if [ "$st" = blocked ] && [ -n "$needs" ]; then
+        printf '%-8s | %s | %-28s | %s  ⟵ needs: %s\n' "$st" "$id" "$proj" "$title" "$needs"
+      else
+        printf '%-8s | %s | %-28s | %s\n' "$st" "$id" "$proj" "$title"
+      fi
     done
 }
 
@@ -216,6 +245,8 @@ case "${1:-}" in
   claim)   shift; cmd_transition claim "$@" ;;
   done)    shift; cmd_transition "done" "$@" ;;
   reopen)  shift; cmd_transition reopen "$@" ;;
+  block)   shift; cmd_transition block "$@" ;;
+  unblock) shift; cmd_transition unblock "$@" ;;
   compact) shift; cmd_compact "$@" ;;
   ""|-h|--help|help) usage ;;
   *) printf 'cc-backlog: unknown verb %s\n\n' "$1" >&2; usage >&2; exit 2 ;;

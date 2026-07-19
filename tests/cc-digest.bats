@@ -38,6 +38,7 @@ chmod +x "$p"; echo "$p"; }
   echo "$output" | grep -q "# Desk digest"
   echo "$output" | grep -q "## Landed"
   echo "$output" | grep -q "## Backlog"
+  echo "$output" | grep -q "## Blocked on operator"
   echo "$output" | grep -q "## Decisions"
   echo "$output" | grep -q "## Pages"
   echo "$output" | grep -qi "## Inert-check alarms"
@@ -61,6 +62,17 @@ chmod +x "$p"; echo "$p"; }
   bash "$CC_BACKLOG_BIN" add --project /r --title "wire the reset poller" --source p8 >/dev/null
   run bash "$DIGEST"
   echo "$output" | grep -q "wire the reset poller"
+}
+
+@test "Blocked-on-operator section surfaces the item, its pending step, and the unblock command" {
+  id=$(bash "$CC_BACKLOG_BIN" add --project /r --title "needs the kimi key" --source z)
+  bash "$CC_BACKLOG_BIN" block "$id" --needs "run claude-kimi set-key" >/dev/null
+  run bash "$DIGEST"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "## Blocked on operator"
+  echo "$output" | grep -q "needs the kimi key"
+  echo "$output" | grep -q "run claude-kimi set-key"    # the pending operator step
+  echo "$output" | grep -q "cc-backlog unblock $id"     # the exact operator affordance
 }
 
 @test "Decisions: open packets and class-B defaults fired in the last 24h both appear" {
