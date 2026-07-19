@@ -1,0 +1,384 @@
+#!/bin/bash
+# cc-wave-plan — QUOTA-AWARE WAVE PLACEMENT (T-P7-6): a wave of work-items → a concrete placement plan
+# {account, model, effort, fire_line} per item, OR a STOP on a quota cliff. This is the WAVE layer the
+# dispatcher (cc-dispatch) calls; per-slot model/effort routing already lives in `cc-route` — this tool
+# LEVERAGES cc-route for that and layers wave spread (best-first placement + ≤N/account concurrency cap)
+# and the pre-emptive Fable-window STRADDLE guard on top. It NEVER fires anything (fire_line is a template).
+#
+#   cc-wave-plan --items <json> [--json]     <json> = JSON array of {id:string, slot:string}
+#                                            slot ∈ lead | judgment-dense | transcription | adversarial
+#                                            (--items - reads the array from stdin)
+#   cc-wave-plan selftest
+#
+# PLACEMENT: greedy — consume `claude-accounts --rank general` order (best-first); ≤ CC_WAVE_MAX_PER_ACCT
+#   (default 2) items per account; a 3rd item to a full account spills to the next. No room anywhere = cliff.
+#
+# LIVE SOURCES (never hardcoded — memory: frontier-window-ssot-discipline):
+#   · `claude-accounts --rank general` → ranked "name score" lines (best first) — the placement order.
+#   · `claude-accounts --json`         → .window.deadline (ISO) — minutes-to-close for the straddle guard.
+#   · `cc-route <slot> --json`         → per-slot {model, lead_effort, reason}; already SSOT-parses model
+#                                        ids + owns the frontier-window (route='none') + quota-cliff edges.
+#
+# 🚨 THE TWO EDGES (RED-proven in selftest):
+#   · FABLE-WINDOW STRADDLE — a frontier slot (judgment-dense|adversarial) whose Fable window is within
+#     CC_WAVE_FABLE_GUARD_MIN (default 30) minutes of close, OR route='none', degrades to an EXPLICIT
+#     reason-carrying Opus fallback. The fable model id NEVER appears in a straddle plan.
+#   · QUOTA CLIFF — every account capped (rank empty) or the wave exceeds total concurrency → exit 4,
+#     NO plan, "run /limit-recover". A cliff is a STOP, never a silent down-tier, never a blind partial.
+#
+# Exit: 0 = plan emitted · 2 = usage (bad/empty args) · 3 = config/parse-fail (LOUD, never a silent
+#       default) · 4 = QUOTA CLIFF (stop + /limit-recover). One IDL record per invocation.
+# Env (tests): CC_WAVE_ACCOUNTS_BIN, CC_WAVE_ROUTE_BIN, CC_WAVE_MAX_PER_ACCT, CC_WAVE_FABLE_GUARD_MIN, CC_WAVE_IDL.
+set -uo pipefail
+
+ACCOUNTS_BIN_DEFAULT="claude-accounts"
+ROUTE_BIN_DEFAULT="cc-route"
+MAX_PER_ACCT="${CC_WAVE_MAX_PER_ACCT:-2}"
+GUARD_MIN="${CC_WAVE_FABLE_GUARD_MIN:-30}"
+IDL="${CC_WAVE_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
+
+usage()       { sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'; }
+die()         { echo "cc-wave-plan: $*" >&2; exit 2; }                       # usage
+fail_config() { idl failed "config: $*"; echo "cc-wave-plan: REFUSING — $* (config/parse-fail; never a silent default)." >&2; exit 3; }
+cliff()       { idl failed "quota-cliff: $*"; echo "cc-wave-plan: ⛔ QUOTA CLIFF — $*. STOP: run /limit-recover (disk-truth audit, re-run or transplant). No plan emitted." >&2; exit 4; }
+
+now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+
+# IDL (one record per invocation): action ∈ fired|passed|abstained|failed.
+idl() { # <action> <detail>
+  mkdir -p "$(dirname "$IDL")" 2>/dev/null || true
+  jq -cn --arg ts "$(now_iso)" --arg actor "cc-wave-plan" --arg action "$1" --arg detail "$2" \
+     '{ts:$ts, actor:$actor, action:$action, detail:$detail}' >> "$IDL" 2>/dev/null || true
+}
+
+accounts_bin() {
+  if [ -n "${CC_WAVE_ACCOUNTS_BIN:-}" ]; then echo "$CC_WAVE_ACCOUNTS_BIN"
+  elif command -v "$ACCOUNTS_BIN_DEFAULT" >/dev/null 2>&1; then command -v "$ACCOUNTS_BIN_DEFAULT"
+  elif [ -x "$HOME/bin/$ACCOUNTS_BIN_DEFAULT" ]; then echo "$HOME/bin/$ACCOUNTS_BIN_DEFAULT"
+  else echo ""; fi
+}
+route_bin() {
+  if [ -n "${CC_WAVE_ROUTE_BIN:-}" ]; then echo "$CC_WAVE_ROUTE_BIN"
+  elif command -v "$ROUTE_BIN_DEFAULT" >/dev/null 2>&1; then command -v "$ROUTE_BIN_DEFAULT"
+  elif [ -x "$HOME/.claude/bin/$ROUTE_BIN_DEFAULT" ]; then echo "$HOME/.claude/bin/$ROUTE_BIN_DEFAULT"
+  else echo ""; fi
+}
+
+# iso_to_epoch <iso> → seconds (UTC assumed; tz offset stripped). BSD + GNU date.
+iso_to_epoch() {
+  local s="${1:0:19}"   # YYYY-MM-DDTHH:MM:SS (drops any +00:00 / Z suffix)
+  date -u -j -f "%Y-%m-%dT%H:%M:%S" "$s" +%s 2>/dev/null \
+    || date -u -d "$s" +%s 2>/dev/null
+}
+
+# window_mins_to_close → integer minutes until the Fable window closes; empty when unknown (→ no pre-empt,
+# cc-route's live route still governs). active:false = closed = 0.
+window_mins_to_close() {
+  local bin j active deadline dl now
+  bin="$(accounts_bin)"; [ -n "$bin" ] || return 1
+  j="$("$bin" --json 2>/dev/null)" || return 1
+  [ -n "$j" ] || return 1
+  active="$(printf '%s' "$j" | jq -r '.window.active // empty' 2>/dev/null)"
+  [ "$active" = "false" ] && { echo 0; return 0; }
+  deadline="$(printf '%s' "$j" | jq -r '.window.deadline // empty' 2>/dev/null)"
+  [ -n "$deadline" ] || return 1
+  dl="$(iso_to_epoch "$deadline")"; [ -n "$dl" ] || return 1
+  now="$(date -u +%s)"
+  echo $(( (dl - now) / 60 ))
+}
+
+# ── ranked-account placement (bash-3.2 safe: parallel indexed arrays, NO associative arrays) ──────────
+RANKED=(); RCOUNTS=()
+load_ranks() {
+  local bin line name
+  bin="$(accounts_bin)"; [ -n "$bin" ] || fail_config "claude-accounts unavailable (cannot rank accounts)"
+  while IFS= read -r line; do
+    name="${line%% *}"; [ -n "$name" ] || continue
+    RANKED+=("$name"); RCOUNTS+=(0)
+  done < <("$bin" --rank general 2>/dev/null)
+  [ "${#RANKED[@]}" -gt 0 ] || cliff "no account has general headroom (rank empty)"
+}
+# place_item → sets PLACED_ACCT to the account for the next item, honoring the ≤MAX cap; rc=1 when all
+# full. MUST set a global (not echo) — a command-substitution caller would run this in a subshell and
+# lose the RCOUNTS increment, silently defeating the cap.
+PLACED_ACCT=""
+place_item() {
+  local i c
+  for i in "${!RANKED[@]}"; do
+    c="${RCOUNTS[$i]}"
+    if [ "$c" -lt "$MAX_PER_ACCT" ]; then RCOUNTS[i]=$((c + 1)); PLACED_ACCT="${RANKED[$i]}"; return 0; fi
+  done
+  return 1
+}
+
+# ── per-slot model/effort resolution (memoized per distinct slot; STRADDLE decided once per invocation) ──
+LEAD_MODEL=""; STRADDLE=0; STRADDLE_MINS=""
+route_call() { RJ_OUT="$("$(route_bin)" "$@" 2>/dev/null)"; return $?; }   # sets RJ_OUT, returns cc-route rc
+
+resolve_lead_model() { # SSOT lead_default via cc-route (never hardcode a model id)
+  [ -n "$LEAD_MODEL" ] && return 0
+  [ -n "$(route_bin)" ] || fail_config "cc-route unavailable (cannot resolve model/effort)"
+  route_call lead --json; local rc=$?
+  [ "$rc" -eq 4 ] && cliff "cc-route reports a quota cliff (lead route)"
+  [ "$rc" -ne 0 ] && fail_config "cc-route failed (rc=$rc) resolving lead_default"
+  LEAD_MODEL="$(printf '%s' "$RJ_OUT" | jq -r '.model // empty' 2>/dev/null)"
+  [ -n "$LEAD_MODEL" ] || fail_config "cc-route returned no model for the lead slot"
+}
+
+R_MODEL=""; R_EFF=""; R_REASON=""; R_FALLBACK=0
+resolve_slot() { # <slot> → sets R_MODEL R_EFF R_REASON R_FALLBACK
+  local slot="$1"
+  case "$slot" in
+    lead|transcription)
+      [ -n "$(route_bin)" ] || fail_config "cc-route unavailable (cannot resolve model/effort)"
+      route_call "$slot" --json; local rc=$?
+      [ "$rc" -eq 4 ] && cliff "cc-route reports a quota cliff (slot $slot)"
+      [ "$rc" -ne 0 ] && fail_config "cc-route failed (rc=$rc) for slot $slot"
+      R_MODEL="$(printf '%s' "$RJ_OUT" | jq -r '.model // empty')"
+      R_EFF="$(printf '%s' "$RJ_OUT" | jq -r '.lead_effort // empty')"
+      R_REASON="$(printf '%s' "$RJ_OUT" | jq -r '.reason // empty')"
+      R_FALLBACK=0
+      ;;
+    judgment-dense|adversarial)
+      resolve_lead_model
+      if [ "$STRADDLE" -eq 1 ]; then
+        # STRADDLE guard: pre-empt the fable id entirely — explicit reason-carrying Opus fallback.
+        R_MODEL="$LEAD_MODEL"
+        [ "$slot" = adversarial ] && R_EFF=xhigh || R_EFF=max
+        R_REASON="fable window ${STRADDLE_MINS}m to close < guard ${GUARD_MIN}m → Opus straddle fallback"
+        R_FALLBACK=1
+      else
+        route_call "$slot" --json; local rc=$?
+        [ "$rc" -eq 4 ] && cliff "cc-route reports a quota cliff (slot $slot)"
+        [ "$rc" -ne 0 ] && fail_config "cc-route failed (rc=$rc) for slot $slot"
+        R_MODEL="$(printf '%s' "$RJ_OUT" | jq -r '.model // empty')"
+        R_EFF="$(printf '%s' "$RJ_OUT" | jq -r '.lead_effort // empty')"
+        R_REASON="$(printf '%s' "$RJ_OUT" | jq -r '.reason // empty')"
+        # cc-route fell back on its own (window route='none') iff a frontier slot resolved to lead_default.
+        [ "$R_MODEL" = "$LEAD_MODEL" ] && R_FALLBACK=1 || R_FALLBACK=0
+      fi
+      ;;
+    *) fail_config "invalid slot '$slot' (lead | judgment-dense | transcription | adversarial)" ;;
+  esac
+  [ -n "$R_MODEL" ] && [ -n "$R_EFF" ] || fail_config "empty model/effort resolving slot $slot"
+}
+
+# slot→resolution memo (parallel arrays; ≤4 distinct slots).
+SKEYS=(); SMODEL=(); SEFF=(); SREASON=(); SFB=()
+memo_slot() { # <slot> — resolve once, cache
+  local i
+  for i in "${!SKEYS[@]}"; do [ "${SKEYS[$i]}" = "$1" ] && return 0; done
+  resolve_slot "$1"
+  SKEYS+=("$1"); SMODEL+=("$R_MODEL"); SEFF+=("$R_EFF"); SREASON+=("$R_REASON"); SFB+=("$R_FALLBACK")
+}
+memo_get() { # <slot> — sets R_MODEL R_EFF R_REASON R_FALLBACK from cache
+  local i
+  for i in "${!SKEYS[@]}"; do
+    if [ "${SKEYS[$i]}" = "$1" ]; then
+      R_MODEL="${SMODEL[$i]}"; R_EFF="${SEFF[$i]}"; R_REASON="${SREASON[$i]}"; R_FALLBACK="${SFB[$i]}"; return 0
+    fi
+  done
+  return 1
+}
+
+cmd_plan() {
+  local items="$1" as_json="$2"
+  # Parse + validate the items array (fail-loud, never a silent default).
+  printf '%s' "$items" | jq -e 'type=="array"' >/dev/null 2>&1 || fail_config "--items is not a JSON array"
+  local n; n="$(printf '%s' "$items" | jq 'length' 2>/dev/null)" || fail_config "--items is unparseable JSON"
+  [ "$n" -gt 0 ] || die "--items is an empty array (nothing to place)"
+  printf '%s' "$items" | jq -e 'all(.[]; (.id|type=="string") and (.id|length>0)
+      and (.slot=="lead" or .slot=="judgment-dense" or .slot=="transcription" or .slot=="adversarial"))' \
+    >/dev/null 2>&1 || fail_config "every item needs a non-empty string id and a valid slot"
+
+  # Read items in order into parallel arrays.
+  local ids=() slots=() line id slot
+  while IFS=$'\t' read -r id slot; do ids+=("$id"); slots+=("$slot"); done \
+    < <(printf '%s' "$items" | jq -r '.[] | [.id, .slot] | @tsv')
+
+  # Decide the Fable STRADDLE once (window state is uniform across the wave).
+  local has_frontier=0 i
+  for slot in "${slots[@]}"; do case "$slot" in judgment-dense|adversarial) has_frontier=1;; esac; done
+  if [ "$has_frontier" -eq 1 ]; then
+    resolve_lead_model
+    local mins; mins="$(window_mins_to_close)"
+    if [ -n "$mins" ] && [ "$mins" -lt "$GUARD_MIN" ]; then STRADDLE=1; STRADDLE_MINS="$mins"; fi
+  fi
+
+  # Rank accounts, then greedy-place every item (all-or-nothing: any overflow is a cliff, no partial plan).
+  load_ranks
+  local accts=()
+  for i in "${!ids[@]}"; do
+    place_item || cliff "wave of $n items exceeds capacity (${#RANKED[@]} accounts × ${MAX_PER_ACCT}/acct all capped)"
+    accts+=("$PLACED_ACCT")
+  done
+
+  # Resolve model/effort per distinct slot.
+  for slot in "${slots[@]}"; do memo_slot "$slot"; done
+
+  # Build the plan; track whether any frontier slot degraded (→ abstained), and account fan-out.
+  local objs=() any_fb=0 fire model eff
+  local seen_accts=""
+  for i in "${!ids[@]}"; do
+    memo_get "${slots[$i]}"; model="$R_MODEL"; eff="$R_EFF"
+    [ "$R_FALLBACK" -eq 1 ] && any_fb=1
+    case " $seen_accts " in *" ${accts[$i]} "*) : ;; *) seen_accts="$seen_accts ${accts[$i]}" ;; esac
+    # fire_line is a copy-paste TEMPLATE, not run by this script — the literal ~ is deliberate (the
+    # consuming shell expands it at fire time; cc-wave-plan NEVER fires).
+    # shellcheck disable=SC2088
+    fire="~/.claude/scripts/handoff-fire.sh --prompt-file /tmp/fire-${ids[$i]}.txt --account ${accts[$i]} --model ${model} --effort ${eff} --split-right"
+    objs+=("$(jq -cn --arg id "${ids[$i]}" --arg slot "${slots[$i]}" --arg acct "${accts[$i]}" \
+        --arg model "$model" --arg eff "$eff" --arg fire "$fire" \
+        '{id:$id, slot:$slot, account:$acct, model:$model, effort:$eff, fire_line:$fire}')")
+  done
+
+  local n_accts; n_accts="$(echo "$seen_accts" | wc -w | tr -d ' ')"
+  if [ "$any_fb" -eq 1 ]; then
+    idl abstained "fable-straddle-fallback: frontier items → Opus (window guard ${GUARD_MIN}m); placed $n across $n_accts accounts"
+  else
+    idl fired "placed $n items across $n_accts accounts"
+  fi
+
+  if [ "$as_json" -eq 1 ]; then
+    printf '%s\n' "${objs[@]}" | jq -s '.'
+  else
+    echo "cc-wave-plan: $n items placed across $n_accts account(s)$([ "$any_fb" -eq 1 ] && echo ' — Fable straddle fallback active')"
+    for i in "${!ids[@]}"; do
+      memo_get "${slots[$i]}"
+      printf '  %-14s %-14s → %-16s @ %-5s on %s\n' "${ids[$i]}" "${slots[$i]}" "$R_MODEL" "$R_EFF" "${accts[$i]}"
+    done
+  fi
+}
+
+# ── selftest: every edge RED-proven against stubbed accounts + cc-route ───────────────────────────────
+selftest() {
+  local pass=0 fail=0 rc tmp SELF
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/cc-wave-plan-selftest.XXXXXX")" || die "cannot mktemp"
+  trap 'rm -rf "${tmp:-}"' EXIT
+  export CC_WAVE_IDL="$tmp/idl.jsonl"
+  SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+
+  # accounts stub: --rank general (STUB_RANK space-list; set-but-empty = cliff) · --json (window deadline
+  # = now + STUB_WIN_MIN minutes, default 600 = wide open).
+  cat > "$tmp/accounts-stub" <<'STUB'
+#!/bin/bash
+case "${1:-}" in
+  --rank)
+    i=0; for n in ${STUB_RANK-next next4 next3 next2}; do printf '%s 0.%03d\n' "$n" $((900-i)); i=$((i+1)); done ;;
+  --json)
+    m="${STUB_WIN_MIN:-600}"
+    dl="$(date -u -v+"${m}"M +%Y-%m-%dT%H:%M:%S+00:00 2>/dev/null || date -u -d "+${m} minutes" +%Y-%m-%dT%H:%M:%S+00:00)"
+    printf '{"window":{"active":true,"deadline":"%s"},"rows":[]}\n' "$dl" ;;
+  *) exit 2 ;;
+esac
+STUB
+  chmod +x "$tmp/accounts-stub"; export CC_WAVE_ACCOUNTS_BIN="$tmp/accounts-stub"
+
+  # cc-route stub: mirrors the real slot table + edges (STUB_ROUTE_CLIFF → exit 4; STUB_FABLE_NONE → Opus).
+  cat > "$tmp/route-stub" <<'STUB'
+#!/bin/bash
+[ -n "${STUB_ROUTE_CLIFF:-}" ] && { echo "cc-route: cliff" >&2; exit 4; }
+slot="$1"
+case "$slot" in
+  lead)          model=claude-opus-4-8; eff=max;  reason="general route" ;;
+  transcription) model=claude-opus-4-8; eff=high; reason="general route" ;;
+  judgment-dense|adversarial)
+    if [ -n "${STUB_FABLE_NONE:-}" ]; then
+      model=claude-opus-4-8; reason="frontier unavailable → designed Opus fallback"
+      [ "$slot" = adversarial ] && eff=xhigh || eff=max
+    else model=claude-fable-5; eff=xhigh; reason="frontier window open"; fi ;;
+  *) echo "unknown slot" >&2; exit 2 ;;
+esac
+jq -cn --arg s "$slot" --arg m "$model" --arg a stub --arg e "$eff" --arg r "$reason" \
+   '{slot:$s,model:$m,account:$a,lead_effort:$e,reason:$r}'
+STUB
+  chmod +x "$tmp/route-stub"; export CC_WAVE_ROUTE_BIN="$tmp/route-stub"
+
+  check() { # <label> <want-rc> <cmd...>
+    local label="$1" want="$2"; shift 2
+    "$@" >/dev/null 2>&1; rc=$?
+    if [ "$rc" = "$want" ]; then printf '  ok   %-62s (exit %s)\n' "$label" "$rc"; pass=$((pass+1))
+    else printf '  FAIL %-62s (exit %s, wanted %s)\n' "$label" "$rc" "$want"; fail=$((fail+1)); fi
+  }
+
+  echo "cc-wave-plan selftest — every edge must RED-prove:"
+
+  # Happy path — a mixed wave places + carries model/effort.
+  check "happy: mixed wave -> exit 0" 0 \
+    env "$SELF" --items '[{"id":"a","slot":"lead"},{"id":"b","slot":"transcription"}]' --json
+  check "happy: lead item carries opus @ max on the best account (next)" 0 \
+    bash -c "'$SELF' --items '[{\"id\":\"a\",\"slot\":\"lead\"}]' --json | jq -e '.[0]|select(.model==\"claude-opus-4-8\" and .effort==\"max\" and .account==\"next\")'"
+  check "happy: fire_line references handoff-fire.sh + the id's prompt-file" 0 \
+    bash -c "'$SELF' --items '[{\"id\":\"zz\",\"slot\":\"lead\"}]' --json | jq -e '.[0].fire_line|test(\"handoff-fire.sh\") and test(\"/tmp/fire-zz.txt\")'"
+
+  # (b) Fable-window STRADDLE — within-guard window → Opus fallback carrying reason; NO fable id.
+  check "straddle: window 10m<guard -> judgment-dense falls back to opus" 0 \
+    bash -c "STUB_WIN_MIN=10 '$SELF' --items '[{\"id\":\"j\",\"slot\":\"judgment-dense\"}]' --json | jq -e '.[0]|select(.model==\"claude-opus-4-8\" and .effort==\"max\" and (.slot==\"judgment-dense\"))'"
+  check "straddle: adversarial keeps xhigh on fallback (verify_judge tier)" 0 \
+    bash -c "STUB_WIN_MIN=10 '$SELF' --items '[{\"id\":\"v\",\"slot\":\"adversarial\"}]' --json | jq -e '.[0]|select(.model==\"claude-opus-4-8\" and .effort==\"xhigh\")'"
+  check "straddle: NO fable id anywhere in the plan" 0 \
+    bash -c "STUB_WIN_MIN=10 '$SELF' --items '[{\"id\":\"j\",\"slot\":\"judgment-dense\"}]' --json 2>/dev/null | grep -vq fable"
+  check "straddle: IDL records the invocation as abstained" 0 \
+    bash -c "STUB_WIN_MIN=10 '$SELF' --items '[{\"id\":\"j\",\"slot\":\"judgment-dense\"}]' --json >/dev/null 2>&1; tail -1 '$tmp/idl.jsonl' | jq -e 'select(.action==\"abstained\" and .actor==\"cc-wave-plan\")'"
+
+  # Window WIDE OPEN — the fable id IS emitted (guard is not over-firing).
+  check "open: window 600m -> judgment-dense keeps the fable model @ xhigh" 0 \
+    bash -c "STUB_WIN_MIN=600 '$SELF' --items '[{\"id\":\"j\",\"slot\":\"judgment-dense\"}]' --json | jq -e '.[0]|select(.model==\"claude-fable-5\" and .effort==\"xhigh\")'"
+  check "open: fable-none route also degrades to opus (cc-route's own edge)" 0 \
+    bash -c "STUB_WIN_MIN=600 STUB_FABLE_NONE=1 '$SELF' --items '[{\"id\":\"j\",\"slot\":\"judgment-dense\"}]' --json | jq -e '.[0].model==\"claude-opus-4-8\"'"
+
+  # (c) ≤N/account cap — a 3rd item to a 2-full account spills to the next account.
+  check "cap: 3 items, MAX=2, 2 accts -> item3 spills to acctB" 0 \
+    bash -c "STUB_RANK='acctA acctB' CC_WAVE_MAX_PER_ACCT=2 '$SELF' --items '[{\"id\":\"1\",\"slot\":\"lead\"},{\"id\":\"2\",\"slot\":\"lead\"},{\"id\":\"3\",\"slot\":\"lead\"}]' --json | jq -e '(.[0].account==\"acctA\") and (.[1].account==\"acctA\") and (.[2].account==\"acctB\")'"
+
+  # (a) QUOTA CLIFF — rank empty, and wave-exceeds-capacity; both exit 4 with NO plan on stdout.
+  check "cliff: empty rank -> exit 4" 4 bash -c "STUB_RANK='' '$SELF' --items '[{\"id\":\"a\",\"slot\":\"lead\"}]'"
+  check "cliff: empty rank emits NO plan + names /limit-recover" 0 \
+    bash -c "out=\$(STUB_RANK='' '$SELF' --items '[{\"id\":\"a\",\"slot\":\"lead\"}]' 2>'$tmp/err'); [ -z \"\$out\" ] && grep -q limit-recover '$tmp/err'"
+  check "cliff: wave exceeds capacity (5 items, MAX=2, 2 accts) -> exit 4" 4 \
+    bash -c "STUB_RANK='acctA acctB' CC_WAVE_MAX_PER_ACCT=2 '$SELF' --items '[{\"id\":\"1\",\"slot\":\"lead\"},{\"id\":\"2\",\"slot\":\"lead\"},{\"id\":\"3\",\"slot\":\"lead\"},{\"id\":\"4\",\"slot\":\"lead\"},{\"id\":\"5\",\"slot\":\"lead\"}]'"
+  check "cliff: cc-route quota cliff propagates -> exit 4" 4 \
+    bash -c "STUB_ROUTE_CLIFF=1 '$SELF' --items '[{\"id\":\"a\",\"slot\":\"lead\"}]'"
+
+  # (d) usage + config edges.
+  check "usage: empty items array -> exit 2" 2 "$SELF" --items '[]'
+  check "usage: --items with no value -> exit 2" 2 "$SELF" --items
+  check "usage: unknown flag -> exit 2" 2 "$SELF" --bogus
+  check "config: non-array items -> exit 3" 3 "$SELF" --items '{"id":"a"}'
+  check "config: malformed JSON items -> exit 3" 3 "$SELF" --items 'not-json'
+  check "config: invalid slot in an item -> exit 3 (never a silent default)" 3 \
+    "$SELF" --items '[{"id":"a","slot":"chief-vibes-officer"}]'
+
+  echo "cc-wave-plan selftest: $pass passed, $fail failed"
+  [ "$fail" -eq 0 ] || exit 1
+}
+
+command -v jq >/dev/null 2>&1 || { echo "cc-wave-plan: jq required" >&2; exit 3; }
+
+case "${1:-}" in
+  selftest)     selftest ;;
+  -h|--help|"") usage; exit 0 ;;
+  --items)
+    shift
+    [ $# -gt 0 ] || die "--items requires a JSON array argument"
+    ITEMS="$1"; shift
+    [ "$ITEMS" = "-" ] && ITEMS="$(cat)"
+    AS_JSON=0
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --json) AS_JSON=1; shift ;;
+        *) die "unexpected argument '$1' (usage: cc-wave-plan --items <json> [--json])" ;;
+      esac
+    done
+    cmd_plan "$ITEMS" "$AS_JSON"
+    ;;
+  --json)
+    # allow --json before --items
+    shift; AS_JSON=1
+    [ "${1:-}" = "--items" ] || die "usage: cc-wave-plan --items <json> [--json]"
+    shift; [ $# -gt 0 ] || die "--items requires a JSON array argument"
+    ITEMS="$1"; [ "$ITEMS" = "-" ] && ITEMS="$(cat)"
+    cmd_plan "$ITEMS" "$AS_JSON"
+    ;;
+  *) die "unknown argument '$1' (usage: cc-wave-plan --items <json> [--json] | selftest)" ;;
+esac
