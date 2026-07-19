@@ -25,7 +25,8 @@
 #
 # Modes:  --once  one sweep then exit (cron/test) · --daemon  loop (default) · --selftest  prove the logic.
 # Env seams: CC_TELEMETRY_DIR · CC_IDL · CC_SUPERVISOR_LOG · CC_PAGE_TO · CC_SUP_T · CC_SUP_STALL_S ·
-#            CC_SUP_PAGE_DEADLINE_S · SUPERVISOR_SWEEP_MAX_S · SUPERVISOR_SWEEP · CC_PAGE_TO_FILE · CC_REGISTRY_DIR
+#            CC_SUP_PAGE_DEADLINE_S · CC_SUP_TRUNK · CC_SUP_GC_S · CC_SUP_OWNER_PAT · CC_PAGE_TO_FILE ·
+#            CC_REGISTRY_DIR · SUPERVISOR_SWEEP_MAX_S · SUPERVISOR_SWEEP
 set -uo pipefail
 
 # The sweep interval SHARES reaper-horizon-lint's constant — never fork the number (invariant 7; the
@@ -38,6 +39,8 @@ T="${CC_SUP_T:-73}"                                    # past-threshold (used_pc
 STALL_S="${CC_SUP_STALL_S:-1800}"                      # telemetry age past which a live pid is a STALL? candidate
 DEADLINE_S="${CC_SUP_PAGE_DEADLINE_S:-900}"            # page deadline before the re-observe (15m default)
 TRUNK="${CC_SUP_TRUNK:-origin/main}"                   # trunk for the clean-completion landed-check (cf. cc-classify CC_CLASSIFY_TRUNK)
+GC_S="${CC_SUP_GC_S:-21600}"                           # telemetry age past which a LIVE-OWNER row is GC'd — a hung/pid-recycled owner would STALL?-escalate every sweep forever (item fdc101e8b0c7). reaper-horizon-lint bounds this ≥ SUPERVISOR_SWEEP_MAX_S×10; default 6h = 12× STALL_S.
+OWNER_PAT="${CC_SUP_OWNER_PAT:-claude}"               # a live pid OWNS its telemetry row only if its process command matches this — kill -0 alone reads a RECYCLED pid as the original session (the STALL? zombie)
 TEL_DIR="${CC_TELEMETRY_DIR:-/tmp/cc-telemetry}"
 IDL="${CC_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
 SUPLOG="${CC_SUPERVISOR_LOG:-$HOME/.claude/autonomy/supervisor.log}"
@@ -75,9 +78,9 @@ _ensure(){ mkdir -p "$(dirname "$IDL")" "$(dirname "$SUPLOG")" "$PAGEDIR" 2>/dev
 idl(){ # $1=kind  $2=json-body(no braces)
   _ensure; printf '{"ts":"%s","actor":"lead-supervisor","kind":"%s",%s}\n' "$(utc)" "$1" "$2" >> "$IDL" 2>/dev/null || true
 }
-heartbeat(){ # $1=n_swept $2=n_findings
-  idl heartbeat "\"swept\":$1,\"findings\":$2,\"sweep_s\":$SWEEP"
-  printf '%s  swept=%s findings=%s\n' "$(utc)" "$1" "$2" >> "$SUPLOG" 2>/dev/null || true
+heartbeat(){ # $1=n_swept $2=n_findings $3=n_gc(optional)
+  idl heartbeat "\"swept\":$1,\"findings\":$2,\"gc\":${3:-0},\"sweep_s\":$SWEEP"
+  printf '%s  swept=%s findings=%s gc=%s\n' "$(utc)" "$1" "$2" "${3:-0}" >> "$SUPLOG" 2>/dev/null || true
 }
 
 # ── PAGE — the only operator-facing act (besides safe checkpointing). Records a durable page + best-
@@ -267,6 +270,47 @@ is_registered_desk(){ # $1=telemetry session_id → 0 iff it is the registered m
   [ -n "$rsid" ] && [ "$rsid" = "$sid" ]
 }
 
+# ── pid-identity: does this pid still OWN its telemetry row, or was it recycled? (item fdc101e8b0c7) ──
+# kill -0 proves only that SOME process holds the pid — after a session exits, the OS recycles its pid to
+# an unrelated process (or a NEWER claude), so a days-dead row's pid reads as "alive" and the STALL? branch
+# re-escalates it every sweep (the zombie: 266841ba 14h-stale, 5277b63a 3d-stale, 2026-07-19). A live pid
+# is the ORIGINAL owner only if its process command still marks it a claude session. This resolves the
+# recycled-by-NON-claude case in assess() (route it to DEAD, insurance intact); the recycled-by-claude and
+# genuine-hung-owner cases (command still matches) are dropped by gc_stale once the row ages past GC_S.
+pid_alive_owner(){ # $1=pid → 0 iff alive AND its process command marks it a claude session owner
+  local p="$1"
+  [ -n "$p" ] && kill -0 "$p" 2>/dev/null || return 1
+  ps -p "$p" -o command= 2>/dev/null | grep -qiF "$OWNER_PAT"
+}
+
+# ── GC — drop a LIVE-OWNER telemetry row that has been stale past the horizon (item fdc101e8b0c7). ──
+# The statusline re-exports a row every turn boundary, so cc-context's own contract is "rows older than
+# ~15m are idle or closed". Past GC_S (default 6h = 12× STALL_S) the owning claude has not emitted for
+# hours — hung, or its pid recycled to another claude — yet its command still matches, so the STALL?
+# branch would re-page it EVERY sweep forever. GC drops the row (+ any standing page) so the zombie stops
+# re-paging; recorded to the IDL (S-4 auditable). GUARD: only a still-ALIVE OWNER is GC'd here — a GONE or
+# recycled-NON-owner pid is left to assess(), whose DEAD path reap_clean's a clean completion and
+# checkpoint-preserves + PAGES a stranded death (dirty/unlanded); GC must never silently drop that
+# insurance. Self-healing: a still-live idle owner re-exports a fresh row on its next turn boundary.
+gc_stale(){ # → prints the count of horizon-stale live-owner rows dropped
+  local f sid ts pid age g=0
+  [ -d "$TEL_DIR" ] || { echo 0; return; }
+  for f in "$TEL_DIR"/*.json; do
+    [ -e "$f" ] || continue
+    ts="$(jq -r '.ts // 0' "$f" 2>/dev/null)"; ts="${ts%.*}"; case "$ts" in ''|*[!0-9]*) ts=0;; esac
+    age=$(( $(now) - ts ))
+    [ "$age" -ge "$GC_S" ] || continue
+    pid="$(jq -r '.pid // empty' "$f" 2>/dev/null)"
+    pid_alive_owner "$pid" || continue                              # GONE / recycled-non-owner → leave for assess()
+    sid="$(jq -r '.session_id // empty' "$f" 2>/dev/null)"
+    rm -f "$f" 2>/dev/null || true
+    [ -n "$sid" ] && clear_page "$sid"
+    idl gc "\"sid\":\"${sid:-unknown}\",\"age\":$age,\"horizon\":$GC_S,\"pid\":\"${pid:-}\",\"why\":\"live-owner pid on telemetry ${age}s stale >= ${GC_S}s horizon — hung or pid-recycled owner; dropped the row so it stops re-paging every sweep\""
+    g=$((g+1))
+  done
+  echo "$g"
+}
+
 # ── classify one telemetry row and route to a PAGE (never an action) ──
 assess(){ # $1=telemetry-json-file → prints 1 if it produced a finding, else 0
   local f="$1" sid used ts cwd cfg pid age
@@ -278,28 +322,30 @@ assess(){ # $1=telemetry-json-file → prints 1 if it produced a finding, else 0
   pid="$(jq -r '.pid // empty' "$f" 2>/dev/null)"
   age=$(( $(now) - ts ))
 
-  # DEAD — pid gone (effect-verified). CLEAN COMPLETION vs STRANDED death (item 9b183d78c723).
-  if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then
+  # DEAD — the owning pid is GONE, or was RECYCLED to a non-claude process (kill -0 lies: it proves only
+  # that SOME process holds the pid, item fdc101e8b0c7). Either way the original session has exited, so it
+  # is classified exactly like pid-gone. CLEAN COMPLETION vs STRANDED death (item 9b183d78c723).
+  if [ -n "$pid" ] && ! pid_alive_owner "$pid"; then
     # A dead worker whose worktree is shipped+clean (clean tree AND content landed on trunk) finished its
     # dispatched item and exited — a normal lifecycle end, ~68% of dead-pid rows (13/19, 2026-07-19) and the
     # dominant source of desk wake-toil. Auto-reap and NEVER page. Only an UNFINISHED/stranded death (dirty
     # tree, unlanded commits, or a cwd we cannot prove clean) is checkpoint-preserved + PAGED, as before.
     if work_landed "$cwd"; then reap_clean "$sid" "$cwd"; echo 0; return; fi
-    checkpoint_preserve "$sid" "$cwd"; page "$sid" DEAD "owning pid $pid gone; worktree checkpoint-preserved"; echo 1; return
+    local why="owning pid $pid gone"
+    kill -0 "$pid" 2>/dev/null && why="owning pid $pid recycled to a non-claude process (session gone)"
+    checkpoint_preserve "$sid" "$cwd"; page "$sid" DEAD "$why; worktree checkpoint-preserved"; echo 1; return
   fi
-  # STALL? — pid ALIVE but telemetry stale: a CANDIDATE, never an action. Page with the deadline→re-observe
-  # protocol; a resolve_page on the next sweep re-reads effects. (Age alone can NEVER confirm a stall — a
-  # healthy long turn renders zero times too; only the effects re-read discriminates.) WARM-TRANSCRIPT
-  # EXEMPTION (item 1c324d9fcc32): telemetry staleness alone is a FALSE stall signal, so require the
-  # transcript ALSO stale before treating a live pid as a candidate. A warm transcript ⇒ the session is
-  # demonstrably alive (still appending messages/tool events) ⇒ fall through to OK, page nothing — this is
-  # what stops the idle-live STALL?→void→re-STALL? oscillation at its ROOT (the void-damping fix above is
-  # the backstop for the residual cold-transcript-but-ambient-cwd-churn case).
-  # REGISTERED-DESK EXEMPTION (item ff95faea46c8): a pid-alive registered monitoring desk is legitimately
-  # idle between pages — BOTH its telemetry and transcript go stale by design, so the warm-transcript
-  # exemption cannot save it. `! is_registered_desk` on the condition drops the desk straight through to OK
-  # (clear_page); its liveness is owned by desk-invariant.sh, not this staleness proxy (see is_registered_desk).
-  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && [ "$age" -ge "$STALL_S" ] && ! is_registered_desk "$sid"; then
+  # STALL? — pid ALIVE and still a claude OWNER but telemetry stale: a CANDIDATE, never an action. Page with
+  # the deadline→re-observe protocol; a resolve_page on the next sweep re-reads effects. (Age alone can NEVER
+  # confirm a stall — a healthy long turn renders zero times too; only the effects re-read discriminates. A
+  # recycled/non-owner pid took the DEAD branch above; a genuinely-hung owner ages out via gc_stale.)
+  # WARM-TRANSCRIPT EXEMPTION (item 1c324d9fcc32): telemetry staleness alone is a FALSE stall signal, so
+  # require the transcript ALSO stale before treating a live owner as a candidate — a warm transcript ⇒ the
+  # session is demonstrably alive ⇒ fall through to OK (stops the idle-live STALL?→void→re-STALL? oscillation).
+  # REGISTERED-DESK EXEMPTION (item ff95faea46c8): a pid-alive registered monitoring desk is legitimately idle
+  # between pages — BOTH telemetry and transcript go stale by design, so `! is_registered_desk` drops it to OK;
+  # its liveness is owned by desk-invariant.sh, not this staleness proxy (see is_registered_desk).
+  if pid_alive_owner "$pid" && [ "$age" -ge "$STALL_S" ] && ! is_registered_desk "$sid"; then
     local tage; tage="$(transcript_age "$cwd" "$cfg" "$sid")"
     if [ "$tage" -ge "$STALL_S" ]; then
       page "$sid" "STALL?" "pid alive but telemetry ${age}s + transcript ${tage}s stale — CANDIDATE; re-observing effects at deadline"
@@ -367,7 +413,8 @@ sweep_permission_pending(){ # prints the number of PERMISSION-PENDING pages prod
 }
 
 sweep(){
-  local n=0 found=0 r pp
+  local n=0 found=0 gc r pp
+  gc="$(gc_stale)"                 # GC horizon-stale live-owner zombies FIRST — they are resolved, not a per-sweep finding
   if [ -d "$TEL_DIR" ]; then
     for f in "$TEL_DIR"/*.json; do
       [ -e "$f" ] || continue
@@ -379,7 +426,7 @@ sweep(){
   # possible MODAL for the operator to eyeball. (Recorded here so the blindness is declared, not hidden.)
   # But a permission prompt DOES leave a harness-emitted beacon — read it for a precise page (§B2).
   pp="$(sweep_permission_pending)"; found=$(( found + ${pp:-0} ))
-  heartbeat "$n" "$found"
+  heartbeat "$n" "$found" "$gc"
 }
 
 case "${1:-}" in
