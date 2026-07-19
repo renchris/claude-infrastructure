@@ -90,10 +90,10 @@ chmod +x "$p"; echo "$p"; }
 
 # ── D9 inert-check monitor (RED-proven) ────────────────────────────────────────
 # Every seed carries .ts, as every real IDL record does — the recency horizon reads it.
-@test "D9: a hook that abstained 12/12 (100%, N>=10) raises an ALARM line" {
+@test "D9: a hook 12/12 BLIND-abstained (100%, N>=10) raises an ALARM line" {
   now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   for i in $(seq 1 12); do
-    printf '{"hook":"stale-guard","disposition":"abstained","reason":"no-tell","ts":"%s"}\n' "$now" >> "$CC_IDL"
+    printf '{"hook":"stale-guard","disposition":"abstained","reason":"no-assistant-text","ts":"%s"}\n' "$now" >> "$CC_IDL"
   done
   run bash "$DIGEST"
   echo "$output" | grep -qi "ALARM"
@@ -134,8 +134,8 @@ chmod +x "$p"; echo "$p"; }
   {   # one open, not 6000 — grouped redirection keeps the gate fast
     printf '{"hook":"rare-guard","disposition":"fired","ts":"%s"}\n' "$fired"
     for i in $(seq 1 6000); do printf '{"actor":"pager","kind":"page","ts":"%s"}\n' "$now"; done
-    for i in $(seq 1 12); do printf '{"hook":"rare-guard","disposition":"abstained","ts":"%s"}\n' "$now"; done
-    for i in $(seq 1 12); do printf '{"hook":"dead-guard","disposition":"abstained","ts":"%s"}\n' "$now"; done
+    for i in $(seq 1 12); do printf '{"hook":"rare-guard","disposition":"abstained","reason":"no-transcript-path","ts":"%s"}\n' "$now"; done
+    for i in $(seq 1 12); do printf '{"hook":"dead-guard","disposition":"abstained","reason":"no-transcript-path","ts":"%s"}\n' "$now"; done
   } >> "$CC_IDL"
   run bash "$DIGEST"
   [ "$status" -eq 0 ]
@@ -143,6 +143,19 @@ chmod +x "$p"; echo "$p"; }
   ! echo "$output" | grep -q "rare-guard"
   # the check still works despite the flood: dead-guard never fired → still flagged
   echo "$output" | grep -q "dead-guard"
+}
+
+# reason-aware (blind-check law §3i, 117bf1aea7b7): a correctly-quiet CONDITIONAL hook abstains 100%
+# for DORMANT reasons (condition-not-met: no-tell / not-armed) — it still sees reality, so it is NOT
+# inert and must NOT alarm. Without reason discrimination this healthy advisory paged every night.
+@test "D9: a 100%-DORMANT hook (condition-not-met reasons) does NOT alarm (reason-aware)" {
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  for i in $(seq 1 8); do printf '{"hook":"quiet-cond","disposition":"abstained","reason":"no-tell","ts":"%s"}\n' "$now" >> "$CC_IDL"; done
+  for i in $(seq 1 4); do printf '{"hook":"quiet-cond","disposition":"abstained","reason":"not-armed","ts":"%s"}\n' "$now" >> "$CC_IDL"; done
+  run bash "$DIGEST"
+  [ "$status" -eq 0 ]
+  ! echo "$output" | grep -q "ALARM"
+  ! echo "$output" | grep -q "quiet-cond"
 }
 
 # ── push wiring (T-P15-6 delivery) ─────────────────────────────────────────────────────────────
@@ -162,7 +175,7 @@ chmod +x "$p"; echo "$p"; }
 
 @test "push: the summary's inert count is DERIVED from the digest's ALARM lines (single source of truth)" {
   now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  for i in $(seq 1 12); do printf '{"hook":"stale-guard","disposition":"abstained","ts":"%s"}\n' "$now" >> "$CC_IDL"; done
+  for i in $(seq 1 12); do printf '{"hook":"stale-guard","disposition":"abstained","reason":"no-assistant-text","ts":"%s"}\n' "$now" >> "$CC_IDL"; done
   CC_PUSH_SEND_BIN="$(mkpush 0)" CC_ANNOUNCE_BIN="$(mkann 0)" run bash "$DIGEST" push
   [ "$status" -eq 0 ]
   n="$(echo "$output" | grep -c '^ALARM:')"; [ "$n" -eq 1 ]   # emit produced exactly one ALARM…
