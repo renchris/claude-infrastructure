@@ -25,7 +25,7 @@
 #
 # Modes:  --once  one sweep then exit (cron/test) · --daemon  loop (default) · --selftest  prove the logic.
 # Env seams: CC_TELEMETRY_DIR · CC_IDL · CC_SUPERVISOR_LOG · CC_PAGE_TO · CC_SUP_T · CC_SUP_STALL_S ·
-#            CC_SUP_PAGE_DEADLINE_S · SUPERVISOR_SWEEP_MAX_S · SUPERVISOR_SWEEP
+#            CC_SUP_PAGE_DEADLINE_S · SUPERVISOR_SWEEP_MAX_S · SUPERVISOR_SWEEP · CC_PAGE_TO_FILE · CC_REGISTRY_DIR
 set -uo pipefail
 
 # The sweep interval SHARES reaper-horizon-lint's constant — never fork the number (invariant 7; the
@@ -44,6 +44,9 @@ SUPLOG="${CC_SUPERVISOR_LOG:-$HOME/.claude/autonomy/supervisor.log}"
 PAGEDIR="${CC_SUPERVISOR_PAGEDIR:-$HOME/.claude/autonomy/pages}"
 PAGE_TO="${CC_PAGE_TO:-}"                              # operator/desk pane uuid for cc-notify pages (best-effort)
 PAGE_TO_FILE="${CC_PAGE_TO_FILE:-$HOME/.claude/cc-roles/desk}"   # fallback: live desk role file (CC_PAGE_TO wins; /dev/null disables)
+# cc-registry maps paneUUID → session_id (single shared dir across accounts). Bridges the desk role file
+# (which holds a PANE uuid) to a telemetry session_id for the registered-desk STALL? exemption (item ff95faea46c8).
+REGISTRY_DIR="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"
 # ── PermissionRequest beacon (hooks/cc-permission-beacon.sh) — desk-anti-hitl §B2 ──
 # A permission prompt on an unattended session HANGS (nothing in-session can answer). The MODAL is
 # invisible to this bash sweep (S-3), but the HARNESS-emitted beacon at PERMPEND_DIR/<sid>.json IS
@@ -240,6 +243,30 @@ transcript_age(){ # $1=cwd $2=config_dir $3=sid → prints age_s (999999999 = un
   printf '%s' "$(( $(now) - ${mt:-0} ))"
 }
 
+# ── registered-desk identity (item ff95faea46c8): is this telemetry sid THE monitoring desk? ──
+# The desk is a legitimately-idle MONITOR — it watches quietly between pages, so during a normal quiet
+# window (30m+) its telemetry AND its transcript both go stale while the session is fully ALIVE (cc-reaper
+# classifies it [active]; its pid is real, not reused). Telemetry-freshness is therefore a FALSE liveness
+# proxy for the desk, and the warm-transcript exemption above cannot save it — an idle monitor emits no
+# transcript messages between pages either, so BOTH ages exceed STALL_S and it false-flags STALL?→ESCALATED
+# every deadline. A pid-identity check (does the pid run claude?) does NOT help: the desk's pid legitimately
+# runs claude. The fix is IDENTITY-based, keyed on the correct liveness signal (pid alive), not staleness:
+# desk liveness is authoritatively owned by desk-invariant.sh (assistant-turn recency + owned wait-contracts,
+# launchd every 300s) plus cc-reaper's [active] surface, so lead-supervisor must NOT double-count it with a
+# structurally-wrong staleness heuristic. Coverage is not lost: a DEAD desk pid still hits the DEAD branch
+# above (effect-verified), and a genuinely-hung (pid-alive) desk is caught by desk-invariant + the permission
+# beacon. Identity bridge mirrors is_monitoring_desk (waiting-recycle.sh) / desk-invariant.sh: the desk role
+# file (PAGE_TO_FILE) holds the desk's PANE uuid OR its sid; map a pane via cc-registry/<pane>.json.session_id.
+is_registered_desk(){ # $1=telemetry session_id → 0 iff it is the registered monitoring desk
+  local sid="$1" ref rsid
+  [ -n "$sid" ] || return 1
+  ref="$(head -1 "$PAGE_TO_FILE" 2>/dev/null | tr -d '[:space:]')"
+  [ -n "$ref" ] || return 1
+  [ "$ref" = "$sid" ] && return 0                        # role file holds the sid directly
+  rsid="$(jq -r '.session_id // .sessionId // empty' "$REGISTRY_DIR/$ref.json" 2>/dev/null)"  # else ref is a pane uuid → registry-bridge
+  [ -n "$rsid" ] && [ "$rsid" = "$sid" ]
+}
+
 # ── classify one telemetry row and route to a PAGE (never an action) ──
 assess(){ # $1=telemetry-json-file → prints 1 if it produced a finding, else 0
   local f="$1" sid used ts cwd cfg pid age
@@ -268,7 +295,11 @@ assess(){ # $1=telemetry-json-file → prints 1 if it produced a finding, else 0
   # demonstrably alive (still appending messages/tool events) ⇒ fall through to OK, page nothing — this is
   # what stops the idle-live STALL?→void→re-STALL? oscillation at its ROOT (the void-damping fix above is
   # the backstop for the residual cold-transcript-but-ambient-cwd-churn case).
-  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && [ "$age" -ge "$STALL_S" ]; then
+  # REGISTERED-DESK EXEMPTION (item ff95faea46c8): a pid-alive registered monitoring desk is legitimately
+  # idle between pages — BOTH its telemetry and transcript go stale by design, so the warm-transcript
+  # exemption cannot save it. `! is_registered_desk` on the condition drops the desk straight through to OK
+  # (clear_page); its liveness is owned by desk-invariant.sh, not this staleness proxy (see is_registered_desk).
+  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && [ "$age" -ge "$STALL_S" ] && ! is_registered_desk "$sid"; then
     local tage; tage="$(transcript_age "$cwd" "$cfg" "$sid")"
     if [ "$tage" -ge "$STALL_S" ]; then
       page "$sid" "STALL?" "pid alive but telemetry ${age}s + transcript ${tage}s stale — CANDIDATE; re-observing effects at deadline"
