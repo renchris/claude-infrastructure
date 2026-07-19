@@ -144,9 +144,12 @@ reprompt() { # <uuid> <text> → 0 if BOTH keystrokes sent (type text, then subm
 }
 
 fire_replacement() { # fire a fresh desk from the canned brief (role-tagged). Returns handoff-fire's rc.
-  # NOTE: --as-role is fm2-stack's P0-15 handoff-fire role-write; the boot brief rides $DESK_BOOT_BRIEF.
-  # Until P0-15 lands, wiring-all ⑤ has the operator confirm the exact argv. The selftest stubs FIRE_BIN.
-  DESK_BOOT_BRIEF="$BRIEF" "$FIRE_BIN" --as-role "$ROLE" --cwd "$CANNED_CWD" >/dev/null 2>&1
+  # P0-14 fix: $BRIEF is a prompt-FILE path (docs/templates/desk-boot-brief.md), and handoff-fire makes
+  # --prompt-file UNCONDITIONALLY required (handoff-fire.sh:617-618) — the old `DESK_BOOT_BRIEF=… --as-role
+  # --cwd` argv (no --prompt-file; env var unconsumed) exited 1 in prod, so a fully-dead desk was NEVER
+  # respawned (a17's "nothing can CREATE a desk" organ, silently broken). Pass the brief as --prompt-file.
+  [ -f "$BRIEF" ] || { echo "desk-invariant: boot brief missing, cannot respawn: $BRIEF" >&2; return 1; }
+  "$FIRE_BIN" --prompt-file "$BRIEF" --as-role "$ROLE" --cwd "$CANNED_CWD" >/dev/null 2>&1
 }
 
 dedup_fresh() { # <state> → 0 if we already paged (sid,state) within DEDUP_WINDOW_S

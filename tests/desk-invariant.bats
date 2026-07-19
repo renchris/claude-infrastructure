@@ -9,10 +9,22 @@ setup() {
   DI="$REPO/scripts/desk-invariant.sh"
   C="$BATS_TEST_TMPDIR/case"
   mkdir -p "$C/roles" "$C/registry" "$C/projects/p" "$C/wait" "$C/state" "$C/stubs"
-  for s in it2 notify push fire; do
+  for s in it2 notify push; do
     { printf '#!/bin/bash\n'; printf 'printf "%%s\\n" "$*" >> "%s/stubs/%s.log"\nexit 0\n' "$C" "$s"; } > "$C/stubs/$s"
     chmod +x "$C/stubs/$s"
   done
+  # fire stub REPLICATES handoff-fire's hard contract (handoff-fire.sh:617-618): --prompt-file is
+  # REQUIRED and its file must exist, else exit 1 with NO log. This RED-proves P0-14 — a fire_replacement
+  # that omits --prompt-file leaves no fire.log (the dead-desk recreate silently fails), exactly as prod.
+  cat > "$C/stubs/fire" <<'FIRE'
+#!/bin/bash
+orig="$*"; pf=""
+while [ $# -gt 0 ]; do case "$1" in --prompt-file) pf="${2:-}"; shift 2 ;; *) shift ;; esac; done
+[ -n "$pf" ] && [ -f "$pf" ] || exit 1
+printf '%s\n' "$orig" >> "$(dirname "$0")/fire.log"
+exit 0
+FIRE
+  chmod +x "$C/stubs/fire"
   export DESK_INVARIANT_ROLE=desk DESK_INVARIANT_ROLES_DIR="$C/roles" \
     DESK_INVARIANT_REGISTRY_DIR="$C/registry" DESK_INVARIANT_PROJECT_ROOTS="$C/projects" \
     DESK_INVARIANT_WAIT_DIR="$C/wait" DESK_INVARIANT_STATE_DIR="$C/state" DESK_INVARIANT_IDL="$C/idl.jsonl" \
@@ -75,6 +87,10 @@ disp() { tail -1 "$C/idl.jsonl" | jq -r '.disposition'; }
   run "$DI" --once
   [ "$(disp)" = no-desk ]
   [ -f "$C/stubs/fire.log" ]
+  # P0-14: the recreate must pass --prompt-file (the brief file) — a bare --as-role/--cwd fire is
+  # rejected by real handoff-fire (exit 1) and never respawns the dead desk.
+  grep -q -- '--prompt-file' "$C/stubs/fire.log"
+  grep -q -- "$C/brief.md" "$C/stubs/fire.log"
   ls "$C/state"/respawn-*.marker >/dev/null 2>&1
 }
 
