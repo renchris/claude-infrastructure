@@ -303,7 +303,7 @@ that wires their subjects — no gate goes green on capability alone again. Full
   reaper→desk paging, P0-12b reaper enumerated≈live-panes self-check, ~~T-P11-6 desk-assert live wiring~~ (DONE 2026-07-19 — see status log), waiting-recycle
   G-P11-7/T-P1-8, T-P10-3 `$CLAUDE_CONFIG_DIR` brick-guard, G-P13-4/G-P6-10 gate coverage, T-P15-4 ship-rail push hook,
   T-P15-7 executable CC_UNATTENDED guard, ~~T-P8-6 cliff→kimi~~ (DONE 2026-07-19 — see status log), ~~T-P7-7 gate-batching manifest~~ (DONE 2026-07-19 — see status log), T-P16-3/4 pmset/caffeinate
-  LaunchAgents, T-P10-7 obsolete-watcher removal, T-P9-7 ship-land auto-rollback. The **supervisor-cadence wiring
+  LaunchAgents, T-P10-7 obsolete-watcher removal, ~~T-P9-7 ship-land auto-rollback~~ (DONE 2026-07-19 — see status log). The **supervisor-cadence wiring
   cluster** (T-P4-1/4-2/5-3/3-5, T-P7-2/5-5) is RESERVED as operator-sanctioned per `wiring-all.sh:151` ("the agent
   never edits the live daemon") — surfaced, not auto-built.
   **Learnings:** (1) the audit vindicated the "already-landed premises are the #1 audit dimension" rule — 2 of the
@@ -405,3 +405,21 @@ that wires their subjects — no gate goes green on capability alone again. Full
   co-locating the P4 stamp-writer and the P6 grep-reader in ONE file (with a bats-pinned shared key)
   is what makes the "auto-stamp ledger + /ship retro-review" pair non-regressible — a split would let
   the trailer text and the backstop grep silently diverge.
+- 2026-07-19 (desk peer session, Opus@max, /goal-driven — cc-backlog `25c1dc96551c`) — **T-P9-7
+  ship-land auto-rollback + bounded retry on verify-fail landed** (`ad73469`, branch
+  `feat/ship-land-auto-rollback`, RED-first, via project `/ship`). The post-push content-verify (the
+  2026-07-11 concurrent-drop guard) previously exited 8 and stranded the operator on MANUAL recovery. Now
+  `scripts/ship-land.sh` auto-reconciles onto the moved trunk (re-fetch + rebase + re-gate + re-push) up to
+  `SHIP_LAND_VERIFY_RETRIES` times (default 2; `=0` = the pre-T-P9-7 single-shot kill switch). Fail-closed +
+  bounded: a **transient** concurrent drop now SELF-HEALS (the re-push sticks → exit 0); an auto-retry rebase
+  **conflict** rolls back (`git rebase --abort`, never a wedged tree) → exit 5; retries **exhausted** → a
+  guaranteed-clean committed tree with the `ship/backup-*` ref intact → exit 8. **Scope discipline:** the
+  retry is triggered ONLY by a verify-fail — the FIRST push keeps its exit-7 (no retry), so the pre-existing
+  non-ff semantics and its test are untouched. `tests/ship-land.bats` 14/14 (3 new + 1 augmented),
+  **anti-tautology-proven**: recover→exit-0, conflict→exit-5, and the exhaustion retry-evidence assertion all
+  go RED against the pre-change script, while the `=0` kill-switch stays green on both (the back-compat guard).
+  Full `bats tests/` 821 green + shellcheck clean; content-verified on land (`land.log` exit 0, hold 309s).
+  **Non-C10** (script + tests + docs only; no `settings.json` / live-hook / launchd edit). **Learning:** the
+  audit doc's line-141 "T-P9-7" (push-permission intent) is a STALE label collision — that meaning was built
+  as T-P15-4; the backlog item (source `desk-audit-2026-07-19`) is unambiguously the auto-rollback task. Grep
+  the backlog ID's own title, never a same-numbered audit row.
