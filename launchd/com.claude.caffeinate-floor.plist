@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.claude.caffeinate-floor — T-P16-4 the machine-awake FLOOR, independent of CC per-turn caffeinate.
+  RunAtLoad + KeepAlive: holds a `caffeinate -i -s` idle-sleep assertion FOREVER, so a caffeinate
+  assertion is present in `pmset -g assertions` even with ZERO active CC turns (the acceptance). The
+  wrapper exec's caffeinate, so the KeepAlive-tracked process IS the assertion holder — killed → launchd
+  relaunches it (≥10 s throttle). No StartInterval (persistent, not periodic). Downgrade to an AC-only
+  floor with CC_CAFFEINATE_FLAGS=-s (see docs/activation/pmset-caffeinate-activate-snippet.md § battery).
+  PATH set inside bash -c so $HOME expands at runtime (portable). C10: the OPERATOR loads this
+  (launchctl bootstrap); the agent never loads it. Kill-switch: launchctl bootout.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.claude.caffeinate-floor</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>export PATH="/usr/bin:/bin"; exec "$HOME/Development/claude-infrastructure/scripts/caffeinate-floor.sh" --run</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <key>LowPriorityIO</key>
+    <true/>
+
+    <key>Nice</key>
+    <integer>5</integer>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/claude-caffeinate-floor.stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/tmp/claude-caffeinate-floor.stderr.log</string>
+</dict>
+</plist>
