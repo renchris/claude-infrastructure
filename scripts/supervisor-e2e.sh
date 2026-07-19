@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=SC2015  # `cond && ok || no` assertion idiom: ok() is a counter+echo that cannot fail
 # supervisor-e2e.sh — regression guard for scripts/lead-supervisor.sh (SESSION_AUTONOMY §3.3, B-1/S-3/S-3b/S-4).
 #
 # Sandbox: telemetry fixtures + a real alive pid + a git repo (for the effects re-read). Asserts the
@@ -19,6 +20,7 @@ export CC_IDL="$SBX/idl.jsonl"
 export CC_SUPERVISOR_LOG="$SBX/sup.log"
 export CC_SUPERVISOR_PAGEDIR="$SBX/pages";        mkdir -p "$CC_SUPERVISOR_PAGEDIR"
 export CC_PAGE_TO=""                              # no cc-notify in tests
+export CC_PAGE_TO_FILE=/dev/null                  # …and no role-file fallback either (T9 opts back in)
 export CC_SUP_T=73
 export CC_SUP_STALL_S=5
 export CC_SUP_PAGE_DEADLINE_S=1
@@ -86,6 +88,20 @@ idl_has '"kind":"page_escalate"' && ok "effects-dark past deadline ⇒ ESCALATE"
 echo "T8 S-3b discrimination — the disposition is NOT reachable from silence alone"
 # proven statically by s3b-lint on this very file's target; assert the lint agrees at runtime too
 ./scripts/s3b-lint.sh "$SUP" >/dev/null 2>&1 && ok "s3b-lint GREEN on the supervisor (no silence→dispose)" || no "s3b-lint RED"
+
+echo "T9 role-file page fallback — empty CC_PAGE_TO ⇒ target read from CC_PAGE_TO_FILE at page time"
+# effect-read through a capturing cc-notify stub: the page must reach the uuid in the role FILE
+mkdir -p "$SBX/bin"; cat > "$SBX/bin/cc-notify" <<'STUB'
+#!/bin/bash
+printf '%s\n' "$1" >> "${CC_NOTIFY_CAPTURE:?}"
+STUB
+chmod +x "$SBX/bin/cc-notify"
+printf '%s' "ROLE-UUID-T9" > "$SBX/desk-role"
+reset; rm -f "$CC_TELEMETRY_DIR"/*.json; mktel dead9 40 100 99999999 "$REPO"   # pid gone ⇒ DEAD ⇒ page
+CC_NOTIFY_CAPTURE="$SBX/notify.log" CC_PAGE_TO_FILE="$SBX/desk-role" PATH="$SBX/bin:$PATH" bash "$SUP" --once >/dev/null 2>&1
+grep -q "ROLE-UUID-T9" "$SBX/notify.log" 2>/dev/null && ok "page routed to role-file uuid (fallback live)" || no "fallback did not route to role-file uuid"
+# and the /dev/null default keeps every other test notify-silent:
+[ -s "$SBX/notify.log" ] && [ "$(wc -l < "$SBX/notify.log")" -eq 1 ] && ok "exactly one capture (isolation intact)" || no "unexpected notify volume (isolation broken?)"
 
 echo ""
 echo "supervisor-e2e: $P passed, $F failed"
