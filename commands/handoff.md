@@ -314,6 +314,15 @@ the account ranking + the exact command it would type. Occasional flags: `--extr
 plan"`, `--launcher` for an explicit tier (e.g. `claude-fable-x`; note it skips the probe),
 `--repo`/`--wtroot`/`--base` for non-default placement — full list in the script header.
 
+> **`/handoff` fires pass `--follow` — you are watching.** `/handoff` is operator-initiated, so its
+> fires SHOULD raise + land your view on the continuation (the ⌘D split-right experience). `--follow`
+> is what turns the raise back on; **every `/handoff` fire below carries it.** WITHOUT `--follow` a
+> fire is AUTONOMOUS and never moves your focus (C1, 2026-07-19, the ttys018 mis-inject): the default
+> surface becomes a background tab, nothing is raised, and the operator-focused session is captured +
+> asserted unchanged. That background mode is for the DESK's own automation (`cc-dispatch`, `/goal`,
+> `waiting-recycle`, wave fires) — none of which read this file — so it fires alongside a typing
+> operator without stealing focus. When YOU run `/handoff`, keep `--follow` on.
+
 > **Split-right is the STICKY default — do NOT preemptively downgrade to `--tab`.** The window is
 > comfortable at **3-4 side panes** (⌘D-style), so a 2nd or 3rd concurrent handoff still fires
 > `--split-right`, NOT `--tab`. Reach for `--tab` ONLY when (a) the firing window already holds ~4+
@@ -324,13 +333,14 @@ plan"`, `--launcher` for an explicit tier (e.g. `claude-fable-x`; note it skips 
 > the agent's judgment call, not the user's) never inherits a prior fire's `--tab`.
 
 ```bash
-# typical: fresh track, auto account, Opus@max, split pane in the current view (⌘D-style default)
-~/.claude/scripts/handoff-fire.sh --prompt-file /tmp/fire-<slug>.txt --worktree <slug>
+# typical: fresh track, auto account, Opus@max, split pane in the current view (⌘D-style default).
+# --follow = you're watching this /handoff → raise + land your view on it (drop it for a background fire).
+~/.claude/scripts/handoff-fire.sh --prompt-file /tmp/fire-<slug>.txt --worktree <slug> --follow
 # a 2nd/3rd concurrent handoff STILL splits (do NOT switch to --tab here) — ⌘D again, e.g. below:
-~/.claude/scripts/handoff-fire.sh --prompt-file /tmp/fire-<slug>.txt --cwd <wt> --model fable --probe --split-down
+~/.claude/scripts/handoff-fire.sh --prompt-file /tmp/fire-<slug>.txt --cwd <wt> --model fable --probe --split-down --follow
 # --tab is for OVERFLOW ONLY (window already ~4+ panes) or an explicit user "put it in a tab" —
 # a non-default surface, so record WHY with --surface-reason (silences the split-right advisory)
-~/.claude/scripts/handoff-fire.sh --prompt-file /tmp/fire-<slug>.txt --worktree <slug> --tab --surface-reason "overflow: window already ~4+ panes"
+~/.claude/scripts/handoff-fire.sh --prompt-file /tmp/fire-<slug>.txt --worktree <slug> --tab --follow --surface-reason "overflow: window already ~4+ panes"
 ```
 
 **6 · Waves — N parallel handoffs (THE high-value case).** A fire request covers EVERY track in the
@@ -357,10 +367,11 @@ and like a wave there is no track cap (practical ceiling ≈ 4 accounts × 2 con
   a probed Fable track freely.
 
 ```bash
-# 3-track wave: rank once, spread explicitly, splits for the first two, tab for the third
-~/.claude/scripts/handoff-fire.sh --prompt-file /tmp/fire-sec.txt   --worktree wsfa-sec   --account next4
-~/.claude/scripts/handoff-fire.sh --prompt-file /tmp/fire-money.txt --worktree wsfa-money --account next3
-~/.claude/scripts/handoff-fire.sh --prompt-file /tmp/fire-fable.txt --worktree wsfa-fable --account next2 --model fable --probe --tab --surface-reason "overflow: 3rd track"
+# 3-track wave: rank once, spread explicitly, splits for the first two, tab for the third.
+# --follow on each: an operator-initiated wave lands its grid in your view (drop it for a background wave).
+~/.claude/scripts/handoff-fire.sh --prompt-file /tmp/fire-sec.txt   --worktree wsfa-sec   --account next4 --follow
+~/.claude/scripts/handoff-fire.sh --prompt-file /tmp/fire-money.txt --worktree wsfa-money --account next3 --follow
+~/.claude/scripts/handoff-fire.sh --prompt-file /tmp/fire-fable.txt --worktree wsfa-fable --account next2 --model fable --probe --tab --follow --surface-reason "overflow: 3rd track"
 ```
 
 **Fire guardrails:** the gate is READINESS, not an explicit ask — firing is the default close of

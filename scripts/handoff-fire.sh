@@ -41,18 +41,31 @@
 #   --base REF          Base ref for --worktree (default origin/main; fetched first).
 #   --in-place          Prefix CLAUDE_ISOLATION_SKIP=1 (launch in cwd even at the reso primary
 #                       root, where claude-next otherwise auto-creates a fresh worktree).
-#   --split-right       DEFAULT + the STANDING operator preference for handoffs. ⌘D-split the FIRING
-#                       pane — THIS session's own pane, located via $ITERM_SESSION_ID — new pane to
-#                       the RIGHT, SAME TAB, SAME PROFILE, IN THE OPERATOR'S WINDOW. Resolved + split
-#                       via the it2 python API (get_session_by_id, atomic); if the anchor is gone it
-#                       RETRIES once after a settle then FAILS LOUD — it NEVER fires into another
-#                       window (the "separate window" complaint this default exists to kill).
+#   --follow            OPT-IN. "The operator is WATCHING this fire — land their view on the
+#                       continuation": RAISE + focus the new surface (⌘D split of the firing pane by
+#                       default) exactly as a manual /handoff wants. WITHOUT --follow the fire is
+#                       AUTONOMOUS and NEVER steals focus (C1, 2026-07-19, the ttys018 mis-inject):
+#                       the default surface becomes a BACKGROUND tab (not a split of the operator's
+#                       active pane), nothing is raised (no `session focus`/order_window_front=True),
+#                       and the operator-focused session is captured before + asserted unchanged after
+#                       the fire (fail-loud on any steal). Only /handoff (operator-initiated) passes it.
+#   --split-right       The --follow DEFAULT + the STANDING operator preference for MANUAL handoffs.
+#                       ⌘D-split the FIRING pane — THIS session's own pane, located via $ITERM_SESSION_ID
+#                       — new pane to the RIGHT, SAME TAB, SAME PROFILE, IN THE OPERATOR'S WINDOW.
+#                       Resolved + split via the it2 python API (get_session_by_id, atomic); if the
+#                       anchor is gone it RETRIES once after a settle then FAILS LOUD — it NEVER fires
+#                       into another window (the "separate window" complaint this default exists to
+#                       kill). An EXPLICIT --split-right WITHOUT --follow still splits, but restores +
+#                       asserts the operator's focus (never raises). AUTONOMOUS fires that pass no
+#                       surface flag get --tab-style background instead (see --follow).
 #   --split-down        Split the firing pane, new pane below (⌘⇧D). Same it2 path + fail-loud.
-#   --tab               OPT-IN (pair with --surface-reason). Background tab in the FIRING pane's
-#                       window (not the current view). Overrides the split-right default; also
-#                       fails loud rather than drifting to another window.
+#   --tab               Background tab in the FIRING pane's window (not the current view); fails loud
+#                       rather than drifting to another window. WITH --follow it raises the tab; the
+#                       AUTONOMOUS default already IS a background tab, so an explicit autonomous --tab
+#                       is the same background surface (opt-in for --follow: pair with --surface-reason).
 #   --window            OPT-IN (pair with --surface-reason). Fresh iTerm2 window — the ONLY surface
-#                       that deliberately does NOT anchor to the firing pane.
+#                       that deliberately does NOT anchor to the firing pane. WITHOUT --follow it is
+#                       created without activating iTerm2 (background).
 #   --surface-reason R  Why a non-default surface (--tab/--window) was chosen — e.g. sliver-avoidance
 #                       for many parallel fires. Recorded in the fire summary; silences the advisory
 #                       that otherwise warns a --tab/--window handoff is overriding the ⌘D default.
@@ -166,7 +179,7 @@ CC_HEAL_LOCK_PREFIX="${CC_HEAL_LOCK_PREFIX:-/tmp/claude-accounts-heal-}"
 PROMPT_FILE="" ACCOUNT="auto" LAUNCHER="" MODEL="" EFFORT="" CWD="" WORKTREE=""
 REPO="$DEFAULT_REPO" WTROOT="$HOME/Development/.worktrees" BASE="origin/main"
 SURFACE="split-right" SURFACE_EXPLICIT=0 SURFACE_REASON="" PROBE=0 DRY=0 IN_PLACE=0 EXTRA="" RECYCLE=0 SESSION_ID=""
-NOTIFY_BACK="" SELF_RETIRE=1 AS_ROLE=""
+NOTIFY_BACK="" SELF_RETIRE=1 AS_ROLE="" FOLLOW=0
 SPAWNED_PANE="" ENGAGE_VERIFY=0 FIRE_MARKER=""
 ACCOUNT_SWEEP_BRIDGE=""    # Part A2: embeddable "## ACCOUNT STATE" section (non-empty ⟺ ≥1 stranded account)
 
@@ -910,6 +923,7 @@ while [ $# -gt 0 ]; do case "$1" in
   --no-self-retire) SELF_RETIRE=0; shift ;;
   --as-role)     AS_ROLE="${2:?--as-role needs a value}"; shift 2 ;;
   --extra)       EXTRA="${2:?--extra needs a value}"; shift 2 ;;
+  --follow)      FOLLOW=1; shift ;;
   --dry-run)     DRY=1; shift ;;
   -h|--help)     usage ;;
   *) echo "!! unknown arg: $1" >&2; usage 1 ;;
@@ -926,6 +940,16 @@ check_goal_length "$PROMPT_FILE" || exit 1
 [ -n "$CWD" ] && [ -n "$WORKTREE" ] && { echo "!! --cwd and --worktree are mutually exclusive" >&2; exit 1; }
 if [ -n "$WORKTREE" ] && ! git check-ref-format --branch "$WORKTREE" >/dev/null 2>&1; then
   echo "!! invalid branch name for --worktree: $WORKTREE" >&2; exit 1
+fi
+
+# ---- C1 (no-focus-steal): autonomous default surface --------------------------------------
+# An AUTONOMOUS fire (no --follow) must NEVER split/raise the operator's active pane (the ttys018
+# mis-inject, 2026-07-19). So when the operator is not following: the DEFAULT surface (no explicit
+# flag) becomes a BACKGROUND tab, and an EXPLICIT --tab is likewise that background surface. Explicit
+# --split-right/--split-down/--window stay as chosen but are fired without a raise + focus-asserted
+# (see spawn). --follow (manual /handoff) keeps the split-right ⌘D preference + the raise, unchanged.
+if [ "$RECYCLE" = 0 ] && [ "$FOLLOW" = 0 ] && { [ "$SURFACE_EXPLICIT" = 0 ] || [ "$SURFACE" = tab ]; }; then
+  SURFACE="bg-tab"
 fi
 
 # ---- model normalization -------------------------------------------------------------------
@@ -1310,6 +1334,186 @@ REAL_IT2="$(sed -n 's/^REAL_IT2="\(.*\)"$/\1/p' "$IT2_SHIM" 2>/dev/null | head -
 [ -n "$REAL_IT2" ] && [ -x "$REAL_IT2" ] || REAL_IT2="$IT2_SHIM"
 [ -n "${IT2_BIN:-}" ] && REAL_IT2="$IT2_BIN"   # test seam (same convention as cc-sessions)
 
+# PYTHON_BIN — same single-source-of-truth resolution as REAL_IT2 (the shim's own PYTHON_BIN= line,
+# the interpreter with the iterm2 module). it2py() below drives the iterm2 Python API directly for the
+# two things the it2 0.2.3 CLI cannot do WITHOUT stealing focus (C1): read the operator-focused session,
+# and create a BACKGROUND surface then restore focus atomically. Same transport the shim uses for
+# `session close -f`. Falls back to `python3` if the shim is unreadable; IT2_PYTHON_BIN is the test seam.
+PYTHON_BIN="$(sed -n 's/^PYTHON_BIN="\(.*\)"$/\1/p' "$IT2_SHIM" 2>/dev/null | head -1)"
+[ -n "$PYTHON_BIN" ] && [ -x "$PYTHON_BIN" ] || PYTHON_BIN="python3"
+[ -n "${IT2_PYTHON_BIN:-}" ] && PYTHON_BIN="$IT2_PYTHON_BIN"
+
+# it2py VERB [args] — iterm2 Python API driver (AppleEvent-free; the focus-safe transport). Verbs:
+#   active               → print the currently-active (operator-focused) iTerm2 session id, or empty.
+#   frontapp             → print the frontmost macOS application's process name (System Events), or empty.
+#   bgtab FIRING         → create a BACKGROUND tab in FIRING's window, then restore the operator's PRE-
+#                          CREATE focus (iTerm2 active session + frontmost app) and ASSERT it returned
+#                          (self-clean + rc 5 on a genuine steal). Prints "Created new pane: <id>" rc 0;
+#                          rc 1 = anchor/window gone.
+#   restore SID FRONTAPP → restore SID as the active iTerm2 session + re-focus FRONTAPP (if not iTerm2),
+#                          then ASSERT SID is active. rc 0 restored / rc 5 not-restored. (split path.)
+# WHY order_window_front=True on the RESTORE (not on the fired surface): creating a tab/pane always
+# makes it the active session (no API flag suppresses that), and only order_window_front=True reliably
+# returns the operator's window+session (empirically: =False leaves focus on the new tab cross-window).
+# The design's "never order_window_front=True on an autonomous fire" is about not raising the FIRED
+# surface — restoring the OPERATOR's own focus is the mechanism that makes "active-session unchanged"
+# hold. The frontmost-app re-focus undoes any transient iTerm2 raise for an operator in another app.
+it2py() {
+  "$PYTHON_BIN" - "$@" <<'PY'
+import subprocess
+import sys
+
+import iterm2
+
+rc = 0
+out = []
+
+
+def active_id(app):
+    cw = app.current_terminal_window
+    if cw is not None and cw.current_tab is not None and cw.current_tab.current_session is not None:
+        return cw.current_tab.current_session.session_id
+    return None
+
+
+def frontmost_app():
+    try:
+        r = subprocess.run(
+            ["osascript", "-e",
+             'tell application "System Events" to name of first process whose frontmost is true'],
+            capture_output=True, text=True, timeout=5)
+        return r.stdout.strip()
+    except Exception:  # noqa: BLE001 — focus-app read is best-effort
+        return ""
+
+
+def reactivate_app(name):
+    # Return the operator to the app they were in before the fire (best-effort). Skip iTerm2 (the fire
+    # target) and any name with a quote (can't be embedded safely — and no real app name has one).
+    if not name or name == "iTerm2" or '"' in name:
+        return
+    try:
+        subprocess.run(
+            ["osascript", "-e",
+             'tell application "System Events" to set frontmost of process "%s" to true' % name],
+            capture_output=True, timeout=5)
+    except Exception:  # noqa: BLE001 — best-effort
+        pass
+
+
+async def restore_focus(app, sid, frontapp):
+    # Make SID the active iTerm2 session (order_window_front=True is the only reliable restore), then
+    # re-focus the operator's original app. Returns True iff SID is active afterward.
+    s = app.get_session_by_id(sid)
+    if s is None:
+        return False
+    await s.async_activate(select_tab=True, order_window_front=True)
+    reactivate_app(frontapp)
+    return active_id(app) == sid
+
+
+async def main(connection):
+    global rc
+    app = await iterm2.async_get_app(connection)
+    verb = sys.argv[1] if len(sys.argv) > 1 else ""
+
+    if verb == "active":
+        a = active_id(app)
+        out.append(a if a else "")
+        return
+
+    if verb == "frontapp":
+        out.append(frontmost_app())
+        return
+
+    if verb == "restore":
+        sid = sys.argv[2]
+        frontapp = sys.argv[3] if len(sys.argv) > 3 else ""
+        if not await restore_focus(app, sid, frontapp):
+            print("Error: focus not restored to '%s'" % sid, file=sys.stderr)
+            rc = 5
+        return
+
+    if verb == "bgtab":
+        firing = sys.argv[2]
+        s = app.get_session_by_id(firing)
+        if s is None:
+            print("Error: firing session '%s' not found" % firing, file=sys.stderr)
+            rc = 1
+            return
+        window, _tab = app.get_window_and_tab_for_session(s)
+        if window is None:
+            print("Error: window for firing session '%s' not found" % firing, file=sys.stderr)
+            rc = 1
+            return
+        before = active_id(app)             # capture the operator's focus BEFORE the create (atomic)
+        front_before = frontmost_app()
+        tab = await window.async_create_tab()
+        if tab is None or tab.current_session is None:
+            print("Error: create_tab returned no session", file=sys.stderr)
+            rc = 1
+            return
+        new_sess = tab.current_session
+        new_id = new_sess.session_id
+        # C1: restore the operator's focus; if it will not return (their pane still exists but the
+        # active session did not come back), the fire stole focus — self-clean the untyped pane and
+        # fail loud. A vanished `before` pane (bs is None) is nothing-to-restore, not a steal.
+        if before and app.get_session_by_id(before) is not None:
+            if not await restore_focus(app, before, front_before):
+                try:
+                    await new_sess.async_close(force=True)
+                except Exception:  # noqa: BLE001
+                    pass
+                print("Error: focus not restored (wanted %s) — closed pane %s" % (before, new_id),
+                      file=sys.stderr)
+                rc = 5
+                return
+        out.append("Created new pane: %s" % new_id)
+        return
+
+    print("Error: unknown it2py verb '%s'" % verb, file=sys.stderr)
+    rc = 2
+
+
+try:
+    iterm2.run_until_complete(main)
+except Exception as e:  # noqa: BLE001 — fail closed on any API/connection error
+    print("iterm2 API error: %s" % e, file=sys.stderr)
+    sys.exit(1)
+
+if out:
+    print("\n".join(out))
+sys.exit(rc)
+PY
+}
+
+# it2_bgtab FIRING — mirrors it2_split's contract (echoes the new session id | returns 1). A BACKGROUND
+# tab in FIRING's window; it2py bgtab captures + restores + asserts the operator's focus atomically, so
+# no split/raise of the operator's pane survives the fire (and a genuine steal self-cleans + returns 1).
+it2_bgtab() {
+  local out
+  out="$(it2py bgtab "$1" 2>/dev/null)" || return 1
+  case "$out" in
+    "Created new pane: "*) printf '%s' "${out#Created new pane: }"; return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# restore_focus_or_fail BEFORE FRONT NEWID LABEL — the C1 post-condition for the split path: restore
+# the operator's focus (session BEFORE + frontmost app FRONT) after an autonomous split; if it cannot
+# be restored, close the untyped child pane and FAIL LOUD (never silently steal / orphan). Best-effort
+# skip when BEFORE is empty (focus was unreadable → nothing to assert; never a false failure).
+restore_focus_or_fail() {
+  local before="$1" front="$2" newid="$3" label="$4"
+  [ -n "$before" ] || return 0
+  it2py restore "$before" "$front" >/dev/null 2>&1 && return 0
+  "$IT2_SHIM" session close -f -s "$newid" >/dev/null 2>&1 || true
+  echo "!! FOCUS-STOLEN ($label): could not restore the operator's focus ($before) after the fire." >&2
+  echo "   Closed the untyped pane $newid — NOTHING launched (C1: a background fire must not move focus)." >&2
+  echo "   Pass --follow to intentionally land your view on the continuation, else re-fire." >&2
+  return 1
+}
+
 # ESC is for the FRONTMOST/WINDOW path only — that path embeds the command inside an AppleScript
 # string literal via -e "…write text \"$ESC\"", so backslashes then double-quotes must be escaped
 # (load-bearing order). The it2 split path and as_tab pass $CMD RAW (session run / osascript argv),
@@ -1328,10 +1532,13 @@ it2_split() { # $1=firing-uuid  $2=vertically|horizontally  → echoes new sessi
   esac
 }
 
-# Land the launch command into a freshly split pane + focus it. $CMD arrives RAW via `session run`
+# Land the launch command into a freshly created pane. $CMD arrives RAW via `session run`
 # (async_send_text + CR — the Ink-safe submit the recycle path already relies on); no AppleScript
-# string-literal escaping. A fresh split's shell needs a beat to attach its tty before it reads
-# typed input, hence the settle. Focus lands the operator's view ON the continuation (best-effort).
+# string-literal escaping. A fresh pane's shell needs a beat to attach its tty before it reads typed
+# input, hence the settle. `session run` targets by id and does NOT move focus. The raise afterwards
+# (`session focus` → async_activate(order_window_front=True)) is the OLD unconditional focus-steal —
+# now gated on --follow: only a manual /handoff (operator watching) lands their view on the pane; an
+# autonomous fire (FOLLOW=0) never raises (C1, the ttys018 mis-inject fix).
 it2_land() { # $1=new-session-id  → 0 on typed, 1 (loud) if the pane exists but typing failed
   local id="$1" ok=0
   /bin/sleep 0.4
@@ -1339,8 +1546,10 @@ it2_land() { # $1=new-session-id  → 0 on typed, 1 (loud) if the pane exists bu
     if "$REAL_IT2" session run -s "$id" "$CMD" >/dev/null 2>&1; then ok=1; break; fi
     /bin/sleep 0.6
   done
-  [ "$ok" = 1 ] || { echo "!! split pane $id created but typing the launch command failed (2×) — run manually in it: $CMD" >&2; return 1; }
-  "$REAL_IT2" session focus "$id" >/dev/null 2>&1 || true   # land the operator's view on the continuation (best-effort)
+  [ "$ok" = 1 ] || { echo "!! pane $id created but typing the launch command failed (2×) — run manually in it: $CMD" >&2; return 1; }
+  if [ "$FOLLOW" = 1 ]; then
+    "$REAL_IT2" session focus "$id" >/dev/null 2>&1 || true   # --follow: land the operator's view on the continuation
+  fi
   return 0
 }
 
@@ -1388,11 +1597,20 @@ AS
 # $ESC (the command embedded inside the AppleScript string literal). Zero windows → this is also
 # the implicit surface, since there is nothing to split/tab into.
 spawn_frontmost() {
-  osascript -e 'tell application "iTerm2"' \
-            -e 'activate' \
-            -e 'set newWin to (create window with default profile)' \
-            -e "tell current session of newWin to write text \"$ESC\"" \
-            -e 'end tell' >/dev/null
+  # --follow raises iTerm2 (operator watching); autonomous omits `activate` so the fresh window is
+  # created in the background and never pulls the operator off their current app/window (C1).
+  if [ "$FOLLOW" = 1 ]; then
+    osascript -e 'tell application "iTerm2"' \
+              -e 'activate' \
+              -e 'set newWin to (create window with default profile)' \
+              -e "tell current session of newWin to write text \"$ESC\"" \
+              -e 'end tell' >/dev/null
+  else
+    osascript -e 'tell application "iTerm2"' \
+              -e 'set newWin to (create window with default profile)' \
+              -e "tell current session of newWin to write text \"$ESC\"" \
+              -e 'end tell' >/dev/null
+  fi
 }
 
 # Dispatcher. SPLIT surfaces (the ⌘D default) go through the it2 API and, if the firing anchor
@@ -1410,7 +1628,25 @@ spawn() {
     return 1
   fi
   case "$SURFACE" in
+    bg-tab)
+      # AUTONOMOUS DEFAULT — a BACKGROUND tab in the firing pane's window: never splits the operator's
+      # active pane, never raises. it2_bgtab captures + restores + asserts the operator's focus
+      # atomically (self-cleans + returns 1 on a genuine steal), so nothing here can move focus.
+      local newid
+      newid="$(it2_bgtab "$FIRING_SID")" \
+        || { /bin/sleep 0.8; newid="$(it2_bgtab "$FIRING_SID")"; } \
+        || { echo "!! firing window for $FIRING_SID not found in iTerm2 (settled + retried) — anchor gone; NOT firing into a random window." >&2
+             echo "   Nothing was launched. Re-fire from a live pane, or pass --window for a deliberate fresh window." >&2
+             return 1; }
+      it2_land "$newid" || return 1
+      SPAWNED_PANE="$newid"                          # the fired pane — engagement verify + registry
+      ;;
     split-right|split-down)
+      # C1: an explicit autonomous split still activates the child WITHIN the tab, so capture the
+      # operator's focus (session + frontmost app) BEFORE the split, restore it after, and fail loud
+      # if it will not return. --follow skips this: the raise is the point of a manual /handoff.
+      local before="" front=""
+      if [ "$FOLLOW" = 0 ]; then before="$(it2py active 2>/dev/null || true)"; front="$(it2py frontapp 2>/dev/null || true)"; fi
       local dir=vertically; [ "$SURFACE" = split-down ] && dir=horizontally
       local newid
       newid="$(it2_split "$FIRING_SID" "$dir")" \
@@ -1418,10 +1654,14 @@ spawn() {
         || { echo "!! firing pane $FIRING_SID not found in iTerm2 (settled + retried) — anchor gone; NOT firing into a random window." >&2
              echo "   Nothing was launched. Re-fire from a live pane, or pass --window for a deliberate fresh window." >&2
              return 1; }
+      if [ "$FOLLOW" = 0 ]; then
+        restore_focus_or_fail "$before" "$front" "$newid" "split" || return 1
+      fi
       it2_land "$newid" || return 1
       SPAWNED_PANE="$newid"                          # the fired pane — engagement verify + registry
       ;;
     tab)
+      # Reached only WITH --follow (autonomous --tab was normalized to bg-tab). Raise the new tab.
       local out
       out="$(as_tab "$FIRING_SID" "$CMD" 2>/dev/null)" || out="ERR($?)"
       case "$out" in OK\ *) SPAWNED_PANE="${out#OK }"; return 0 ;; esac
@@ -1502,8 +1742,19 @@ if [ "$DRY" = 1 ]; then
     echo "chain:    arm watcher (setsid-detached, heartbeat-verified) → FOREGROUND /exit (interrupts any in-flight turn, exits in seconds — emit report/fallback BEFORE firing) → detached ps-poll ≤600s (CR nudges @60/150/300s) → it2-typed relaunch into the shell → confirm claude on tty (guarded retype, pane-visible fallback on failure)"
   else
     echo "surface:  $SURFACE"
+    if [ "$FOLLOW" = 1 ]; then
+      echo "follow:   YES — raises + focuses the new surface (manual /handoff, operator watching)"
+    else
+      echo "follow:   no — AUTONOMOUS: no raise, no split of the operator's active pane; operator focus captured + asserted unchanged, fail-loud on a steal (C1)"
+    fi
     [ -n "$SURFACE_REASON" ] && echo "reason:   $SURFACE_REASON"
     case "$SURFACE" in
+      bg-tab)
+        if [ -n "$FIRING_SID" ]; then
+          echo "anchor:   firing session $FIRING_SID — BACKGROUND tab in ITS window (no raise, no active-pane split; fail-loud if the window is gone, NEVER another window)"
+        else
+          echo "anchor:   (no \$ITERM_SESSION_ID/--session-id — would REFUSE to fire; pass --session-id or --window)"
+        fi ;;
       split-right|split-down)
         if [ -n "$FIRING_SID" ]; then
           echo "anchor:   firing session $FIRING_SID — ${SURFACE} lands in ITS tab (it2 API ⌘D-style; fail-loud if the anchor is gone, NEVER another window)"
@@ -1576,7 +1827,8 @@ else
   fi
   DEST="${CWD:-$REPO (self-routing)}"; [ -n "$WORKTREE" ] && DEST="$WT ($WT_SETUP)"
   RSUM=""; [ -n "$SURFACE_REASON" ] && RSUM=", reason: $SURFACE_REASON"
-  echo "→ fired: $LAUNCHER @ $DEST  (surface: $SURFACE, account: $CHOSEN, prompt: $PROMPT_FILE$RSUM)"
+  if [ "$FOLLOW" = 1 ]; then FSUM=", --follow (raised)"; else FSUM=", background (operator focus preserved)"; fi
+  echo "→ fired: $LAUNCHER @ $DEST  (surface: $SURFACE$FSUM, account: $CHOSEN, prompt: $PROMPT_FILE$RSUM)"
   # NB: an `if` block, NOT `[ -n … ] && echo` — a trailing &&-list whose test is false returns 1,
   # which would become the script's exit status on the common (no-stranded-account) path.
   if [ -n "$ACCOUNT_SWEEP_BRIDGE" ]; then
