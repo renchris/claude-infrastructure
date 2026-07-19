@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>            <string>com.claude.log-rotation</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>-lc</string>
+    <string>export PATH="$HOME/.claude/bin:$PATH"; ~/.claude/scripts/rotate-autonomy-logs.sh</string>
+  </array>
+  <key>StartInterval</key>    <integer>3600</integer>
+  <key>RunAtLoad</key>        <true/>
+  <key>ProcessType</key>      <string>Background</string>
+  <key>LowPriorityIO</key>    <true/>
+  <key>Nice</key>             <integer>10</integer>
+  <key>StandardOutPath</key>  <string>/Users/chrisren/.claude/logs/log-rotation.out.log</string>
+  <key>StandardErrorPath</key><string>/Users/chrisren/.claude/logs/log-rotation.err.log</string>
+</dict>
+</plist>
