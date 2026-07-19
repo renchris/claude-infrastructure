@@ -242,10 +242,12 @@ account whose auth is broken it acts by PROVABLE recoverability, never by guessw
   routable next sweep. It NEVER relogins under a live CC (`k>0`) — that session owns the token lifecycle.
 - **`logged-out` / `keychain-error` / a revoked refresh token →** not headless-recoverable, so it
   embeds ONE **`## ACCOUNT STATE`** bridge line into the fired brief — `<acct> <state> · last-known
-  weekly <N>% · fix: claude-accounts --relogin-info <acct> → account-relogin skill (Phase 2, browser)`
+  weekly ~<N>% @ <HH:MM> · fix: claude-accounts --relogin-info <acct> → account-relogin skill (Phase 2, browser)`
   — so the successor can re-auth it or deliberately route around it instead of silently over-loading
-  the survivors. (Last-known quota is best-effort from the cache `.prev` snapshot until the last-good
-  ledger lands — Part A1.)
+  the survivors. (Last-known quota comes from the durable last-good ledger — Part A1, landed: the sweep
+  reads the `stale_quota` / `weekly_pct` / `quota_as_of` fields `claude-accounts --fresh --json` stamps
+  from its TTL-free `~/.claude/logs/claude-accounts-lastgood.json`, so it survives a `/tmp`-sweep and no
+  longer decays after one sweep. The `@ <HH:MM>` recency stamp mirrors the dashboard table.)
 
 The sweep is **best-effort and never blocks a fire** (any tool/parse failure ⇒ it's skipped, the fire
 proceeds). It is **wave-throttled** (`HANDOFF_ACCOUNT_SWEEP_THROTTLE_S`, default 60s — the first fire

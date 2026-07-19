@@ -165,7 +165,6 @@ COMPLETION_PUSH_BIN="${CC_COMPLETION_PUSH_BIN:-$HF_DIR/completion-push.sh}"
 CC_ACCOUNTS_BIN_EXPLICIT=0; [ -n "${CC_ACCOUNTS_BIN:-}" ] && CC_ACCOUNTS_BIN_EXPLICIT=1
 CC_ACCOUNTS_BIN="${CC_ACCOUNTS_BIN:-claude-accounts}"          # the dashboard/prober/router SSOT
 CC_SECURITY_BIN="${CC_SECURITY_BIN:-security}"                 # macOS keychain reader (Phase-1 relogin)
-CC_ACCOUNTS_CACHE="${CC_ACCOUNTS_CACHE:-/tmp/claude-accounts-cache.json}"  # its shared cache (last-known quota via .prev)
 CC_ACCOUNTS_JSON="${CC_ACCOUNTS_JSON:-$HOME/.claude/accounts.json}"        # accounts SSOT (keychain -a account)
 ACCOUNT_SWEEP="${HANDOFF_ACCOUNT_SWEEP:-on}"                   # off = skip the sweep entirely
 ACCOUNT_SWEEP_THROTTLE_S="${HANDOFF_ACCOUNT_SWEEP_THROTTLE_S:-60}"  # reuse the last sweep within this window (wave anti-stampede; 0 = always fresh)
@@ -599,8 +598,10 @@ fi
 # SAFE-BY-CONSTRUCTION: the sweep NEVER blocks/aborts a fire (best-effort, returns 0 on any error);
 # the relogin is fail-CLOSED (acts only on provably-recoverable state via the official binary, never
 # a raw token POST, never under a live CC that owns the token lifecycle). Design: docs/research/
-# desk-anti-hitl-2026-07-19.md Part A (rec. 2). The last-good ledger (rec. 1) is a SEPARATE item —
-# until it lands, "last-known quota" is best-effort from the cache's .prev snapshot.
+# desk-anti-hitl-2026-07-19.md Part A (rec. 2). Last-known quota for a stranded account now comes from
+# the durable last-good ledger (rec. 1, landed e98f366): claude-accounts stamps stale_quota + weekly_pct
+# + quota_as_of onto the `--fresh --json` rows this sweep already fetches, sourced from its TTL-free
+# ~/.claude/logs/claude-accounts-lastgood.json — not the decaying /tmp cache .prev snapshot.
 
 # The macOS keychain `-a` account for the Phase-1 relogin read (mirrors claude-accounts read_creds):
 # env override wins (tests), else the accounts SSOT, else the login user.
@@ -614,14 +615,35 @@ _sweep_keychain_account() {
   printf '%s' "${USER:-chrisren}"
 }
 
-# Best-effort last-known weekly% for a now-broken account, from the cache's .prev snapshot (the
-# rows from BEFORE this --fresh sweep). "n/a" until the Part-A1 last-good ledger lands.
-_sweep_lastknown_weekly() { # $1=acct
-  local a="$1" p=""
-  if command -v jq >/dev/null 2>&1 && [ -f "$CC_ACCOUNTS_CACHE" ]; then
-    p="$(jq -r --arg a "$a" '.prev.rows[$a].weekly_pct // empty' "$CC_ACCOUNTS_CACHE" 2>/dev/null || true)"
+# Last-known weekly% for a now-broken account, read from the durable last-good ledger as surfaced on
+# the in-hand `--fresh --json` rows (Part-A1, e98f366): claude-accounts' inherit_lastgood stamps a
+# broken row with stale_quota + weekly_pct + quota_as_of from its TTL-free ledger (with a .prev
+# fallback baked in on the claude-accounts side). Unlike the old direct .prev read this survives a
+# /tmp-sweep/reboot and does not decay after one sweep. The `@ HH:MM` recency stamp — re-derived from
+# quota_as_of in local time, mirroring the dashboard table — lets the successor weigh how stale the
+# number is. "weekly n/a" when no good sweep ever recorded the account.
+_sweep_lastknown_weekly() { # $1=acct  $2=sweep-json (the --fresh --json already fetched at call time)
+  local a="$1" j="${2:-}" wp="" asof="" stamp="" base="" epoch=""
+  command -v jq >/dev/null 2>&1 || { printf 'weekly n/a'; return 0; }
+  wp="$(printf '%s' "$j" | jq -r --arg a "$a" \
+    '.rows[]? | select(.acct==$a and .stale_quota==true) | .weekly_pct // empty' 2>/dev/null || true)"
+  case "$wp" in ''|null) printf 'weekly n/a'; return 0 ;; esac
+  asof="$(printf '%s' "$j" | jq -r --arg a "$a" \
+    '.rows[]? | select(.acct==$a) | .quota_as_of // empty' 2>/dev/null || true)"
+  # quota_as_of is ISO-8601 UTC (…T…+00:00). Take the first 19 chars (YYYY-MM-DDTHH:MM:SS), parse as
+  # UTC, render local — "HH:MM" when captured today, else "Mon DD". Unparseable/absent ⇒ omit "@ …".
+  if [ -n "$asof" ] && [ "$asof" != null ]; then
+    base="${asof:0:19}"
+    epoch="$(date -j -u -f '%Y-%m-%dT%H:%M:%S' "$base" +%s 2>/dev/null || true)"
+    if [ -n "$epoch" ]; then
+      if [ "$(date -r "$epoch" +%Y%m%d 2>/dev/null)" = "$(date +%Y%m%d)" ]; then
+        stamp=" @ $(date -r "$epoch" +%H:%M 2>/dev/null)"
+      else
+        stamp=" @ $(date -r "$epoch" '+%a %d' 2>/dev/null)"
+      fi
+    fi
   fi
-  case "$p" in ''|null) printf 'weekly n/a' ;; *) printf 'weekly ~%s%%' "$p" ;; esac
+  printf 'weekly ~%s%%%s' "$wp" "$stamp"
 }
 
 _sweep_write_stamp() { # $1=epoch-ts  $2=bridge-section — throttle stamp so a wave reuses one sweep
@@ -751,7 +773,7 @@ pre_fire_account_sweep() {
     cbin="$(printf '%s' "$info" | jq -r '.claude_bin // ""' 2>/dev/null || true)"
     scopes="$(printf '%s' "$info" | jq -r '.oauth_scopes // ""' 2>/dev/null || true)"
     kca="$(_sweep_keychain_account)"
-    lastknown="$(_sweep_lastknown_weekly "$acct")"
+    lastknown="$(_sweep_lastknown_weekly "$acct" "$json")"
 
     # Phase-1 eligibility: refresh token present + keychain readable + ZERO live sessions (a live CC
     # owns the token lifecycle — never relogin under it; heal()'s k==0 gate). logged-out/keychain-error
