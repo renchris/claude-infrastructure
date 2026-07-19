@@ -1,3 +1,7 @@
+---
+status: complete
+---
+
 # /handoff Post-Fire Disposition Contract — close, or explicitly-open
 
 **Scope (frozen, from the user's ask 2026-07-11):** after a handoff fires, the main session must
@@ -159,3 +163,25 @@ taxonomy must not drift apart (single table, referenced twice).
   output; markdown `[x](file://…)` adds no clickability (CC's OSC-8 hyperlink emission exists —
   15 `]8;;` sites in the 2.1.183 binary — but file:// OSC-8 opening is terminal-policy-dependent)
   and the label hides the path. Preference rule from the addendum: bare path when both work.
+- 2026-07-18 — **GATE 4 CLOSED / item DONE** (closeout verification, backlog `304902396f7c`). The
+  2026-07-11 landing DID happen — the "PARKED" entry above was simply never circled back. Disk-truth
+  audit against origin/main (`3206838`):
+  - **Landed content, un-fakeable provenance:** the helper first hit origin/main at `2889e55`
+    (2026-07-11, `feat(handoff): disposition helper …`) — a NEW sha, not the branch's `6f607da`,
+    because it went THROUGH ship-hardening's locked rebase flow (C2 honored). Contract + helper have
+    since been HARDENED further on main: `27a98e7` (fail-closed registry + word-boundary slug +
+    deliverable-completeness axis, growing bats 14→24) and `02e6545` (waiting-recycle advisory +
+    mission/DoD capture line) — both 2026-07-18.
+  - **Stranded-sweep CLEAN:** `git cherry origin/main handoff-disposition` empty; branch 0-ahead /
+    203-behind → fully superseded. Nothing stranded (the dfacccd-class drop C2 guards against did
+    NOT occur). Stale local branch `handoff-disposition` is safe to prune.
+  - **All 4 gates re-verified on CURRENT origin/main content** (measured this turn, not recalled):
+    gate 1 — closed taxonomy table (R-DECIDE≻R-USER≻R-PING≻R-WORK≻R-DIRTY) + forced OPEN structure
+    (code + instance + discharge + next-action) + kill-switches intact in `commands/handoff.md`;
+    gate 2 — `shellcheck -S warning` green, `bats tests/handoff-disposition.bats` **24/24 green**,
+    exit codes correct (clean → 0 close-eligible, valid JSON), degrades cleanly when
+    cc-sessions/mailbox absent; gate 3 — E2E both paths incl. self-close met live 2026-07-11
+    (transcript above); gate 4 — content on origin/main + clean stranded-sweep.
+  - Verification ran in dedicated worktree `/tmp/wt-handoff-disposition-closeout` off origin/main
+    (C1 honored, shared checkout untouched). This status entry is the only remaining artifact; it
+    lands via the project-local `/ship`.
