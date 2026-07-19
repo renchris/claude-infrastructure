@@ -62,6 +62,8 @@
 set -uo pipefail
 
 T="${CC_WR_T:-55}"                                          # moderate fire threshold, used_pct
+ROT_FLOOR="${CC_WR_ROT_FLOOR:-25}"                          # rot-tell needs THIS much fill to be real
+HARD_T="${CC_WR_HARD_T:-80}"                                # hard-zone: bias INVERTS above this (D-P2)
 AGE_MAX="${CC_WR_AGE_MAX:-180}"                             # telemetry older than this can't be trusted
 MAX="${CC_WR_MAX:-3}"                                       # per-session advisory cap (never nag forever)
 COOLDOWN_S="${CC_WR_COOLDOWN_S:-600}"                       # cwd-keyed anti-thrash + cross-session loop-breaker
@@ -182,8 +184,16 @@ MSG="${MSG:0:4000}"
 ROT_TELLS='(lost|losing) track|(remind|reorient|reacquaint) (myself|me)|(do(n.?t| not)|no longer|can.?t|cannot) (recall|remember)|(not sure|not certain|no longer sure|unsure)( any ?more|,? (which|what|where|how many|whether))|what was i (monitoring|watching|waiting|tracking|doing|supposed)|which (sessions?|ones?|teammates?|tasks?)[^.]{0,20}(did i|was i|were we|had i|do i)|(did|do) i (fire|launch|spawn|start|kick|have)[^.]{0,20}(again|already|so far)|(reconstruct|re-?establish|re-?derive|re-?orient|re-?build|re-?assemble)[^.]{0,15}(state|context|picture|status|situation|standing|where|what|which)|re-?(check|read|verify|confirm|examine|scan)[^.]{0,15}(which|what|the current|whether|where things|from scratch)|from scratch|starting over|(again|already),? (which|what|how many|who|whether)|(which|what|how many)[^.]{0,25}(again|already|so far)'
 [ -n "$MSG" ] && printf '%s' "$MSG" | grep -iqE "$ROT_TELLS" && rot=1
 
-# 4. TRIGGER gate — threshold OR behavioral rot. Neither ⇒ nothing to do.
-{ [ "$over_threshold" = 1 ] || [ "$rot" = 1 ]; } || abstain "below-threshold-no-tell:used=${used},fresh=${fresh}"
+# 4. TRIGGER gate — threshold OR FLOORED behavioral rot. A rot-tell needs FRESH telemetry AND
+# used_pct ≥ ROT_FLOOR to count: rot physically requires accumulated context, and the shipped regex
+# matches HEALTHY watch narration ("re-checking which sessions are still running") — an un-floored
+# rot-tell at single-digit fill is by construction re-orientation narration, not rot (probe P1,
+# 2026-07-19: the regex trips on 3/5 benign monitoring lines). The floor also closes the
+# cross-generation rot-tell recycle-storm (a fresh successor's re-orientation narration can't re-fire
+# below the floor). fresh=0 (telemetry writer dead) ⇒ rot cannot fire — FM-G is covered by a separate
+# stale-telemetry alarm, not by firing blind on a lagging tell.
+rot_valid=0; { [ "$rot" = 1 ] && [ "$fresh" = 1 ] && [ "$used" -ge "$ROT_FLOOR" ]; } && rot_valid=1
+{ [ "$over_threshold" = 1 ] || [ "$rot_valid" = 1 ]; } || abstain "below-threshold-no-tell:used=${used},fresh=${fresh},rot=${rot},floor=${ROT_FLOOR}"
 
 # 5. SAFE — genuinely just-WAITING, never mid-write-work or holding a decision.
 # 5a. Clean tree: uncommitted changes = in-scope write work in hand ⇒ HOLD (never recycle over it).
@@ -199,11 +209,11 @@ GENUINE='your (credential|password|api.?key|secret|token|login|cookie)|need (you
 mkdir -p "$STATE_DIR" 2>/dev/null || true
 date +%s > "$cf" 2>/dev/null || true
 printf '%s' "$((N + 1))" > "$capf" 2>/dev/null || true
-if [ "$over_threshold" = 1 ] && [ "$rot" = 1 ]; then trig="context ${used}% ≥ ${T}% AND a state-rot tell"
-elif [ "$over_threshold" = 1 ];                 then trig="context ${used}% ≥ ${T}%"
-else                                                 trig="a state-rot tell (re-deriving known state) below the ${T}% threshold"
+if [ "$over_threshold" = 1 ] && [ "$rot_valid" = 1 ]; then trig="context ${used}% ≥ ${T}% AND a state-rot tell"
+elif [ "$over_threshold" = 1 ];                     then trig="context ${used}% ≥ ${T}%"
+else                                                     trig="a floored state-rot tell (re-deriving known state, ${used}% ≥ ${ROT_FLOOR}% floor)"
 fi
-log_idl fired "waiting-recycle" "\"trigger\":\"$( [ "$over_threshold" = 1 ] && echo threshold || echo behavioral)\",\"used_pct\":${used},\"rot\":${rot},\"count\":$((N+1)),\"max\":${MAX}"
+log_idl fired "waiting-recycle" "\"trigger\":\"$( [ "$over_threshold" = 1 ] && echo threshold || echo behavioral)\",\"used_pct\":${used},\"rot\":${rot_valid},\"count\":$((N+1)),\"max\":${MAX}"
 
 adv="⟳ MONITORING AUTO-RECYCLE — you are at a quiet monitoring boundary (${trig}). A watching desk accrues low-value context that rots your recall of the load-bearing orchestration state. RECYCLE NOW via your existing self-recycle path: run /handoff — it captures the live state (fired sessions, pending pings, wave/merge state, decisions) into the payload and fires handoff-fire.sh --recycle so the SUCCESSOR PANE IS THE CONTINUATION and this bloated context is discarded. Do it as this turn's next action. IF instead you actually hold in-hand write-work or a genuine open decision (you should not — the tree is clean and no blocker was detected), do NOT recycle: surface it. Kill-switch: \`waiting-recycle.sh clear\` (this desk) / \`waiting-recycle.sh kill\` (global). (auto-recycle advisory $((N+1))/${MAX})"
 # ── carry the mission/DoD line so a recycle never loses purpose (T-P4-4; empty = none recorded) ──
