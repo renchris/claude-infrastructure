@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.claude.power-policy-verify — T-P16-3 the machine-awake POLICY verifier.
+  RunAtLoad (verify right after a login/reboot — the "matches intended policy after a reboot"
+  acceptance) + StartInterval 3600 (catch a mid-run drift within the hour: OS update / SMC reset).
+  Runs power-policy-verify.sh --verify: checks the AC pmset policy vs intent and PAGES on drift
+  (autonomy/pages/ + osascript) with the exact `sudo pmset -c …` remediation; the caffeinate floor
+  is reported informationally (its own liveness is the floor plist's KeepAlive). The job cannot
+  re-apply pmset (a user LaunchAgent has no root) — the sudo apply is the OPERATOR's (C10).
+  PATH prepends ~/.claude/bin (cc-* + jq) via the bash -c so $HOME expands at runtime.
+  C10: the OPERATOR loads this (launchctl bootstrap); the agent never loads it. Kill-switch: bootout.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.claude.power-policy-verify</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"; exec "$HOME/Development/claude-infrastructure/scripts/power-policy-verify.sh" --verify</string>
+    </array>
+
+    <key>StartInterval</key>
+    <integer>3600</integer>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>LowPriorityIO</key>
+    <true/>
+
+    <key>Nice</key>
+    <integer>10</integer>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/claude-power-policy-verify.stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/tmp/claude-power-policy-verify.stderr.log</string>
+</dict>
+</plist>
