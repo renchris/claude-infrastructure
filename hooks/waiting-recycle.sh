@@ -37,9 +37,13 @@
 #
 # FIRE PREDICATE — ALL must hold (bias: FALSE-NEGATIVE over FALSE-POSITIVE; a missed recycle just
 # waits for the threshold, a wrong recycle interrupts a healthy desk):
-#   1. ARMED (opt-in) — the desk declared monitoring mode via `waiting-recycle.sh arm` (sentinel keyed
-#      by cwd, so it survives a recycle: a monitoring desk stays one). OFF BY DEFAULT ⇒ a builder is
-#      never touched. This IS the primary kill-switch (never arm / `clear`).
+#   1. ARMED — the desk opted in via `waiting-recycle.sh arm` (sentinel keyed by cwd, survives a
+#      recycle) OR it HOLDS the monitoring-desk role (cc-roles/<desk> resolves to this pane's uuid/sid
+#      ⇒ ARM-BY-DEFAULT, G-P11-7): deterministic arming kills the "arm step is itself model-diligence"
+#      root (0/2419 prod fires decomposed as 1977 not-armed). A builder (no arm sentinel, not the desk
+#      role) is still never touched. Role-arm defaults to SHADOW (the live_for sentinel still gates the
+#      exec — damp-first). Kill-switch: `clear` (per-desk, writes a durable disarm marker that also
+#      suppresses arm-by-default) / `kill` (global). An explicit `arm` removes a prior disarm.
 #   2. NOT globally killed — the blanket opt-out file ($CC_WR_KILL) is absent.
 #   3. NOT in cooldown — no advisory for this cwd within COOLDOWN_S. This is the anti-thrash pacer AND
 #      the cross-session LOOP-BREAKER: a fresh recycled desk (same cwd) sees the predecessor's cooldown
@@ -54,7 +58,12 @@
 #           no fresh inbound mailbox line (S4, load-bearing: dispatch workers notify without a contract),
 #           no live context-bound teammate (S5, HARD hold: results route to the dying SID). Any ⇒ HOLD.
 #      The desk's OWN waiter-contracts do NOT hold — durable on disk, the successor resumes them.
-#   6. Under the per-session advisory CAP (Stage 1 only; Stage 2 is cap-exempt, latch-bounded).
+#   6. Under the per-session advisory CAP (Stage 1 only; Stage 2 is cap-exempt, latch-bounded). WEDGE
+#      ESCALATION (T-P1-8): a fire-worthy-and-just-waiting desk that has exhausted its recycle attempts
+#      (advisory CAP reached, or a SHADOW would-fire already latched) does NOT silently ride to the 90%
+#      auto-compact wall — it PAGES the operator out-of-band (osascript + push-critical + an `escalated`
+#      IDL record + a decision:block advisory), page-once per ESCALATE_DEDUP_S. Paging is fleet-safe, so
+#      the escalation ships LIVE (unlike the Stage-2 exec, which stays SHADOW until armed --live).
 #
 # Delivery: {decision:"block"} + hookSpecificOutput.additionalContext (the MODEL-facing recycle
 # advisory — confirmed delivered on PostToolUse @ 2.1.183) + systemMessage/reason (operator-facing).
@@ -62,9 +71,10 @@
 # (unlike a PreToolUse deny). Exit 0 ALWAYS — a PostToolUse hook must never cost a session.
 #
 # Agent/operator CLI (run from the desk's worktree):
-#   waiting-recycle.sh arm      # opt IN this desk to monitoring auto-recycle (keyed by cwd)
-#   waiting-recycle.sh clear    # opt OUT this desk (per-desk kill-switch) + reset its cooldown/cap
-#   waiting-recycle.sh status   # inspect this desk's arm/cooldown/cap + global kill state
+#   waiting-recycle.sh arm      # opt IN this desk (keyed by cwd) — also removes a prior `clear` disarm
+#   waiting-recycle.sh clear    # opt OUT this desk (per-desk kill-switch: writes a durable disarm marker
+#                               #   that ALSO suppresses arm-by-default) + reset its cooldown/cap
+#   waiting-recycle.sh status   # inspect this desk's arm/disarm/cooldown/cap + global kill state
 #   waiting-recycle.sh kill      # GLOBAL blanket off (all sessions)
 #   waiting-recycle.sh unkill    # remove the global kill-switch
 # Claude Code calls it with NO args + the PostToolUse JSON on stdin → actuation mode.
@@ -74,7 +84,8 @@
 #
 # Env seams (tests): CC_WR_T · CC_TELEMETRY_DIR · CC_WR_AGE_MAX · CC_WR_IDL · CC_WR_STATE_DIR ·
 #                    CC_WR_MAX · CC_WR_COOLDOWN_S · CC_WR_KILL · CC_WR_ROT_FLOOR · CC_WR_GRACE_S ·
-#                    CC_WR_COORD_DIR · CC_WR_UUID · CC_WR_QUIET_S · CC_WR_FIRE_DIR · CC_WR_HANDOFF_FIRE
+#                    CC_WR_COORD_DIR · CC_WR_UUID · CC_WR_QUIET_S · CC_WR_FIRE_DIR · CC_WR_HANDOFF_FIRE ·
+#                    CC_WR_DESK_ROLE · CC_WR_NOTIFY · CC_WR_PUSH · CC_WR_ESCALATE_DEDUP_S
 #
 # NOTE: deliberately NO `set -e` — a hook must fail SAFE (abstain), and a stray non-zero from a grep
 # test must never become the script's exit code and suppress a legitimate abstain-log. -u/pipefail are
@@ -91,6 +102,10 @@ IDL="${CC_WR_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
 STATE_DIR="${CC_WR_STATE_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/state/waiting-recycle}"
 KILL="${CC_WR_KILL:-$STATE_DIR/OFF}"                        # global blanket kill-switch
 CFG="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+DESK_ROLE="${CC_WR_DESK_ROLE:-desk}"                       # G-P11-7: role a monitoring desk holds → arm-by-default
+NOTIFY_CMD="${CC_WR_NOTIFY:-}"                              # T-P1-8: empty → builtin osascript operator page
+PUSH_BIN="${CC_WR_PUSH:-$CFG/hooks/push-critical.sh}"      # T-P1-8: Pushover break-through (INERT unless armed)
+ESCALATE_DEDUP_S="${CC_WR_ESCALATE_DEDUP_S:-900}"          # T-P1-8: page-once cadence while a desk stays wedged
 
 # Per-cwd key (arm + cooldown survive a recycle since cwd is stable across it); per-session key (cap
 # resets on the fresh successor). Mirrors session-continue.sh's config-dir|path hash.
@@ -103,6 +118,8 @@ escalate_for() { printf '%s/escalate-%s' "$STATE_DIR" "$1"; }              # SID
 fired_for()    { printf '%s/fired-%s'    "$STATE_DIR" "$1"; }              # SID-keyed: one-fire-per-SID latch (Stage-2 bound)
 live_for()     { printf '%s/live-%s'     "$STATE_DIR" "$(key_cwd "$1")"; } # cwd-keyed: live-fire opt-in (else SHADOW/log-only)
 brief_for()    { printf '%s/brief-%s'    "$STATE_DIR" "$(key_cwd "$1")"; } # cwd-keyed: standing successor-brief template
+disarm_for()   { printf '%s/disarm-%s'   "$STATE_DIR" "$(key_cwd "$1")"; } # cwd-keyed: per-desk opt-out (suppresses arm-by-default, G-P11-7)
+escalated_for(){ printf '%s/escalated-%s' "$STATE_DIR" "$1"; }             # SID-keyed: T-P1-8 wedge page-once pacer
 
 GRACE_S="${CC_WR_GRACE_S:-180}"                            # Stage-1 advisory → Stage-2 fire grace
 # actuator (test seam): resolve next to this hook (repo hooks/../scripts + symlinked ~/.claude install)
@@ -121,6 +138,7 @@ case "${1:-}" in
       *) echo "!! unknown arm arg: $1 (use: arm [--brief <file>] [--live])" >&2; exit 2 ;;
     esac; done
     f="$(arm_for "$PWD")"; was_armed=0; [ -f "$f" ] && was_armed=1
+    rm -f "$(disarm_for "$PWD")" 2>/dev/null                # an explicit arm overrides a prior `clear` opt-out
     printf '%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ) $PWD" > "$f"
     # brief template = the Stage-2 successor prompt seed; hard-required for LIVE (no empty-payload fire, FM-D)
     if [ -n "$_brief" ]; then
@@ -140,15 +158,19 @@ case "${1:-}" in
     echo "armed $mode → $f"; exit 0 ;;
   clear)
     rm -f "$(arm_for "$PWD")" "$(cooldown_for "$PWD")" "$(live_for "$PWD")" "$(brief_for "$PWD")" 2>/dev/null
-    echo "cleared (this desk opted out of monitoring auto-recycle)"; exit 0 ;;
+    # Durable disarm marker — the per-desk kill-switch must ALSO suppress arm-by-default (a desk that
+    # still HOLDS the monitoring-desk role would otherwise re-arm on the next poll). `arm` removes it.
+    mkdir -p "$STATE_DIR" 2>/dev/null; date -u +%Y-%m-%dT%H:%M:%SZ > "$(disarm_for "$PWD")" 2>/dev/null
+    echo "cleared (this desk opted out of monitoring auto-recycle; disarm marker set — run 'arm' to re-enable)"; exit 0 ;;
   status)
     a="$(arm_for "$PWD")"; c="$(cooldown_for "$PWD")"
     if [ -f "$KILL" ]; then echo "GLOBAL KILL active ($KILL) — no session recycles"; fi
+    if [ -f "$(disarm_for "$PWD")" ]; then echo "DISARMED (this cwd) — 'clear' opt-out suppresses arm-by-default; run 'arm' to re-enable"; fi
     if [ -f "$a" ]; then
       echo "ARMED: $(cat "$a")"
       [ -f "$(live_for "$PWD")" ] && echo "  mode: LIVE (Stage-2 execs)" || echo "  mode: SHADOW (Stage-2 logs would-fire only)"
       [ -s "$(brief_for "$PWD")" ] && echo "  brief: $(brief_for "$PWD") ($(wc -l < "$(brief_for "$PWD")" | tr -d ' ') lines)" || echo "  brief: none (LIVE blocked until set)"
-    else echo "not armed (this cwd)"; fi
+    else echo "not armed by sentinel (this cwd) — a session HOLDING the '$DESK_ROLE' role is armed-by-default at poll time (SHADOW) unless disarmed"; fi
     if [ -f "$c" ]; then
       cd_at="$(cat "$c" 2>/dev/null || echo 0)"; left=$(( COOLDOWN_S - ( $(date +%s) - ${cd_at:-0} ) ))
       [ "$left" -gt 0 ] 2>/dev/null && echo "cooldown: ${left}s remaining" || echo "cooldown: expired"
@@ -175,6 +197,17 @@ log_idl() { # $1=disposition $2=reason $3=extra JSON OBJECT (optional, jq-built 
 }
 abstain() { log_idl abstained "$1"; exit 0; }
 
+# T-P1-8 out-of-band operator pages (API-independent; BOTH are safe no-ops when unavailable/unarmed).
+wr_os_notify() { # $1=title $2=msg — OS notification (osascript, or a stub in tests via CC_WR_NOTIFY)
+  if [ -n "$NOTIFY_CMD" ]; then "$NOTIFY_CMD" "$1" "$2" >/dev/null 2>&1 || true; return 0; fi
+  command -v osascript >/dev/null 2>&1 && \
+    osascript -e "display notification \"${2//\"/}\" with title \"${1//\"/}\"" >/dev/null 2>&1 || true
+}
+wr_push_page() { # $1=msg — Pushover break-through; no-op (return 0) when the hook is missing/INERT
+  [ -x "$PUSH_BIN" ] || return 0
+  jq -cn --arg m "$1" --arg c "$CWD" '{message:$m,cwd:$c}' | "$PUSH_BIN" >/dev/null 2>&1 || true
+}
+
 command -v jq >/dev/null 2>&1 || { SID="?"; abstain "no-jq"; }
 
 SID="$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null || true)"
@@ -190,8 +223,29 @@ CMD="$(printf '%s' "$input" | jq -r '.tool_input.command // empty' 2>/dev/null |
 # cwd is needed for the arm / cooldown / clean-tree checks — no cwd, nothing to reason about.
 { [ -n "$CWD" ] && [ -d "$CWD" ]; } || abstain "no-cwd"
 
-# 1. OPT-IN: armed for this cwd? OFF by default ⇒ a builder is never recycled at 55%.
-[ -f "$(arm_for "$CWD")" ] || abstain "not-armed"
+# Desk-identity roots — shared by arm-by-default (below) + the S3/S4/S5 coordination holds. COORD is a
+# FIXED path (cc-roles lives at $HOME/.claude, NOT $CLAUDE_CONFIG_DIR), so arm-by-default keys on the
+# role regardless of which config dir the desk migrates to (unlike the (cfg,cwd) arm sentinel).
+COORD="${CC_WR_COORD_DIR:-$HOME/.claude}"                    # root of wait-contracts/ mailbox/ cc-roles/
+UUID="${CC_WR_UUID:-${ITERM_SESSION_ID:-}}"; UUID="${UUID##*:}"   # this desk's iTerm pane uuid (survives recycle)
+# G-P11-7: is THIS session the monitoring desk? (cc-roles/<DESK_ROLE> resolves to its uuid or sid).
+is_monitoring_desk() {
+  local rf="$COORD/cc-roles/$DESK_ROLE" rv
+  [ -f "$rf" ] || return 1
+  rv="$(head -1 "$rf" 2>/dev/null | tr -d '[:space:]')"; [ -n "$rv" ] || return 1
+  [ "$rv" = "$SID" ] || { [ -n "$UUID" ] && [ "$rv" = "$UUID" ]; }
+}
+
+# 1. OPT-IN (ARM-BY-DEFAULT, G-P11-7): a builder is never touched, but a MONITORING DESK is armed
+# without the manual `arm` step. A per-desk `clear` disarm marker suppresses BOTH the sentinel and the
+# role-arm (the kill-switch must still bite a role-holding desk). LIVE exec stays gated on live_for, so
+# a role-armed desk is SHADOW by default (damp-first).
+[ -f "$(disarm_for "$CWD")" ] && abstain "disarmed"
+armed_by=""
+if   [ -f "$(arm_for "$CWD")" ]; then armed_by="sentinel"
+elif is_monitoring_desk;        then armed_by="desk-role"
+fi
+[ -n "$armed_by" ] || abstain "not-armed"
 
 # GUARD: never advise-recycle off the recycle/handoff machinery's OWN Bash calls (defense-in-depth;
 # the cooldown set at fire-time also covers this, but an explicit guard removes any ordering risk).
@@ -214,16 +268,35 @@ capped=0; [ "$N" -ge "$MAX" ] && capped=1
 
 # Stage-2 PENDING? (cheap; decides whether the expensive trigger+SAFE eval must run even when
 # cooled/capped): a prior advisory left an escalate stamp, grace has elapsed, and this SID has not
-# yet fired. If Stage-2 is NOT pending and the advisory is cooled/capped, nothing to do → abstain
-# early (preserves the pre-restructure perf and the "cooldown"/"capped" abstain reasons).
+# yet fired.
 escf="$(escalate_for "$SID")"; firedf="$(fired_for "$SID")"; stage2_pending=0
 if [ -f "$escf" ] && [ ! -f "$firedf" ]; then
   est="$(cat "$escf" 2>/dev/null)"; case "$est" in ''|*[!0-9]*) est=0 ;; esac
   [ "$est" -gt 0 ] && [ "$(( $(date +%s) - est ))" -ge "$GRACE_S" ] && stage2_pending=1
 fi
-if [ "$stage2_pending" = 0 ]; then
+
+# T-P1-8 WEDGE — a desk that has exhausted its recycle attempts but is STILL fire-worthy must ESCALATE
+# (page) not silently ride to auto-compaction. Two wedge shapes: the advisory CAP is reached, or a
+# SHADOW would-fire already latched (already-fired recurs ONLY in shadow — a LIVE fire recycles to a
+# fresh SID). The cwd COOLDOWN gates it (a recent advisory/fire ⇒ not yet wedged), and its own page-once
+# pacer (escalated_for + ESCALATE_DEDUP_S) throttles the ongoing pages. Detected as a FLAG here; the
+# page happens only AFTER the trigger+SAFE eval below confirms the desk is genuinely fire-worthy-and-
+# just-waiting (never page a mid-work/holding desk).
+shadow_fired=0; { [ "$stage2_pending" = 0 ] && [ -f "$firedf" ]; } && shadow_fired=1
+wedged=0; escalation_paced=0
+if [ "$stage2_pending" = 0 ] && [ "$cooled" = 0 ]; then
+  { [ "$capped" = 1 ] || [ "$shadow_fired" = 1 ]; } && wedged=1
+fi
+if [ "$wedged" = 1 ] && [ -f "$(escalated_for "$SID")" ]; then
+  ed_at="$(cat "$(escalated_for "$SID")" 2>/dev/null || echo 0)"; case "$ed_at" in ''|*[!0-9]*) ed_at=0 ;; esac
+  [ "$(( $(date +%s) - ed_at ))" -lt "$ESCALATE_DEDUP_S" ] && { wedged=0; escalation_paced=1; }
+fi
+# Fast-path abstains (preserve the pre-restructure perf + reasons) — but NOT when a wedge must escalate:
+# a wedged desk falls through to the trigger+SAFE eval so the escalate branch can page it.
+if [ "$stage2_pending" = 0 ] && [ "$wedged" = 0 ]; then
+  [ "$escalation_paced" = 1 ] && abstain "escalation-paced"
   [ "$cooled" = 1 ] && abstain "cooldown"
-  [ "$capped" = 1 ] && abstain "capped:${N}>=${MAX}"
+  [ "$capped" = 1 ] && abstain "capped:${N}>=${MAX}"    # defensive backstop (unreachable unless cooled/paced cleared the wedge)
 fi
 
 # 4a. Context fill (telemetry) — fresh number only; an old % is not evidence of the current fill.
@@ -294,9 +367,8 @@ GENUINE='your (credential|password|api.?key|secret|token|login|cookie)|need (you
 # 5c. Active-COORDINATION holds (Fable panel 2026-07-19 S3/S4/S5). A monitoring desk can be clean-tree
 # yet mid-coordination; a recycle would strand state that lives ONLY in this SID's context. The desk's
 # OWN waiter-contracts do NOT hold (durable on disk, the successor resumes them) — only a peer BLOCKED
-# ON this desk, an unprocessed inbound ping, or a live teammate do. Roots are seam-overridable for tests.
-COORD="${CC_WR_COORD_DIR:-$HOME/.claude}"                    # root of wait-contracts/ mailbox/ cc-roles/
-UUID="${CC_WR_UUID:-${ITERM_SESSION_ID##*:}}"               # this desk's iTerm pane uuid (survives recycle)
+# ON this desk, an unprocessed inbound ping, or a live teammate do. COORD/UUID are resolved above (the
+# arm-by-default check shares them); both are seam-overridable for tests.
 QUIET_S="${CC_WR_QUIET_S:-180}"                             # S4: a mailbox line fresher than this = active
 now_s="$(date +%s)"
 # identity set a peer addresses THIS desk by: session_id, pane uuid, or a role file resolving to either.
@@ -358,10 +430,11 @@ else                                                     trig="a floored state-r
 fi
 dod_carry="$("${DOD_PERSIST:-$(dirname "$0")/dod-persist.sh}" get 2>/dev/null || true)"
 
-# Already escalated to a fire for THIS SID? one-fire-per-SID latch. A LIVE fire recycles to a new SID
-# (so this only re-hits in SHADOW, where it correctly goes quiet after logging one would-fire);
-# prevents advisory-spam after the escalation. Placed before Stage 2 so a re-poll never double-fires.
-{ [ "$stage2_pending" = 0 ] && [ -f "$firedf" ]; } && abstain "already-fired"
+# Already fired for THIS SID? one-fire-per-SID latch. A LIVE fire recycles to a fresh SID, so this only
+# re-hits in SHADOW. If the desk is WEDGED (still fire-worthy) it routes to the escalate branch below
+# (T-P1-8) instead of a silent already-fired; otherwise (cooled/paced — already handled in the fast-path
+# above) stay quiet. Placed before Stage 2 so a re-poll never double-fires.
+{ [ "$stage2_pending" = 0 ] && [ -f "$firedf" ] && [ "$wedged" = 0 ]; } && abstain "already-fired"
 
 # ════ STAGE 2 — deterministic FIRE (cooldown+cap EXEMPT; bound = one-fire-per-SID latch) ════
 if [ "$stage2_pending" = 1 ]; then
@@ -397,6 +470,25 @@ if [ "$stage2_pending" = 1 ]; then
         '{used_pct:$used,would_fire:true,trigger:$trigger,prompt_file:$prompt_file,grace_s:$grace_s}')"
   smsg="⟳ RECYCLE WOULD FIRE — SHADOW (${trig}). The desk did not self-recycle within ${GRACE_S}s. waiting-recycle is armed SHADOW: it composed the successor brief at ${pf} and logged a would-fire, but did NOT exec (no fleet-stranding risk while soaking). You SHOULD still self-recycle now: run /handoff. To enable the exec after review: waiting-recycle.sh arm --brief <file> --live. Kill-switch: waiting-recycle.sh clear."
   jq -nc --arg a "$smsg" --arg s "$smsg" '{decision:"block",reason:$s,systemMessage:$s,hookSpecificOutput:{hookEventName:"PostToolUse",additionalContext:$a}}'
+  exit 0
+fi
+
+# ════ T-P1-8 ESCALATE — a WEDGED desk (advisory CAP reached / SHADOW would-fire latched) that is STILL
+#     fire-worthy AND just-waiting (it passed the trigger + SAFE gates above) pages the operator OUT-OF-
+#     BAND rather than silently riding to the 90% auto-compact wall. Paging is fleet-SAFE, so this ships
+#     LIVE (unlike the Stage-2 exec). Page-once per ESCALATE_DEDUP_S via the escalated_for pacer. ══════
+if [ "$wedged" = 1 ]; then
+  date +%s > "$(escalated_for "$SID")" 2>/dev/null || true   # stamp the page-once pacer FIRST (at-most-once/window)
+  if [ "$capped" = 1 ]; then why="advisory budget exhausted (${N}/${MAX}), no recycle"
+  else                        why="a SHADOW would-fire is latched but the exec is not armed --live"; fi
+  log_idl escalated "wedge:${why}" \
+    "$(jq -cn --argjson used "$used" --arg why "$why" --argjson capped "$capped" --argjson shadow "$shadow_fired" \
+        '{used_pct:$used,why:$why,capped:($capped==1),shadow_fired:($shadow==1)}')"
+  wr_os_notify "Claude desk WEDGED" "desk ${UUID:-$SID} at ${used}% can't self-recycle — ${why}"
+  wr_push_page "WEDGED DESK (${DESK_ROLE}) ${used}% ctx: ${why} — /handoff now or arm --live"
+  emsg="⚠ WEDGED — quiet monitoring boundary (${trig}), clean tree + no open decision, but ${why}: you are RIDING toward the 90% auto-compact wall with NO recycle. ACT NOW: run /handoff to self-recycle, or (operator) arm the deterministic exec — desk-arm-live.sh (or waiting-recycle.sh arm --brief <file> --live). Re-pages every ${ESCALATE_DEDUP_S}s until resolved. Kill-switch: waiting-recycle.sh clear (this desk) / kill (global)."
+  jq -nc --arg a "$emsg" --arg s "$emsg" \
+    '{decision:"block",reason:$s,systemMessage:$s,hookSpecificOutput:{hookEventName:"PostToolUse",additionalContext:$a}}'
   exit 0
 fi
 

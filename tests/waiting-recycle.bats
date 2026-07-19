@@ -21,6 +21,8 @@ setup() {
   # Hermetic coordination root (S3 wait-contracts / S4 mailbox / S5 teams / cc-roles) — never the real ~/.claude.
   export CC_WR_COORD_DIR="$BATS_TEST_TMPDIR/coord"; export CC_WR_UUID="DESK-UUID-0001"; export CC_WR_QUIET_S=180
   mkdir -p "$CC_TELEMETRY_DIR" "$CC_WR_STATE_DIR" "$CC_WR_COORD_DIR/wait-contracts" "$CC_WR_COORD_DIR/mailbox" "$CC_WR_COORD_DIR/cc-roles" "$CLAUDE_CONFIG_DIR/teams"
+  # No-op osascript-page stub so no test accidentally pops a real OS notification (the T-P1-8 escalate path).
+  export CC_WR_NOTIFY="$BATS_TEST_TMPDIR/notify-noop.sh"; printf '#!/bin/bash\nexit 0\n' > "$CC_WR_NOTIFY"; chmod +x "$CC_WR_NOTIFY"
   # A CLEAN git repo standing in for the desk's monitoring cwd.
   DESK="$BATS_TEST_TMPDIR/desk"; mkdir -p "$DESK"
   git -C "$DESK" init -q
@@ -173,13 +175,28 @@ setup_stage2() { export CC_WR_GRACE_S=0; export CC_WR_FIRE_DIR="$BATS_TEST_TMPDI
   mk_tel s6b 61; run drive s6b "$(mk_tx 6 "$WAIT")"
   grep -q "Scope (frozen): SHIP the thing to 100/100" "$CC_WR_FIRE_DIR/wr-fire-s6b.txt"
 }
-@test "stage2 one-fire-per-SID: after a fire, the next poll is silent (already-fired latch)" {
+@test "stage2 one-fire-per-SID: the shadow FIRE is at-most-once (latch prevents a second Stage-2 fire)" {
   setup_stage2; export CC_WR_COOLDOWN_S=0                                   # isolate the latch from the cooldown
-  mk_tel s6c 60; run drive s6c "$(mk_tx 6 "$WAIT")"                         # advisory
-  mk_tel s6c 61; run drive s6c "$(mk_tx 6 "$WAIT")"; fired "$output"        # shadow fire (latch set)
-  mk_tel s6c 62; run drive s6c "$(mk_tx 6 "$WAIT")"                         # next poll → already-fired
-  [ "$status" -eq 0 ]; [ -z "$output" ]
-  grep -q 'already-fired' "$CC_WR_IDL"
+  mk_tel s6c 60; run drive s6c "$(mk_tx 6 "$WAIT")"                         # advisory (grace clock)
+  mk_tel s6c 61; run drive s6c "$(mk_tx 6 "$WAIT")"; fired "$output"        # shadow fire (firedf latch set)
+  echo "$output" | grep -qi SHADOW
+  mk_tel s6c 62; run drive s6c "$(mk_tx 6 "$WAIT")"                         # next poll: NO second stage2-shadow fire
+  [ "$(grep -c 'stage2-shadow' "$CC_WR_IDL")" -eq 1 ]                       # exactly one shadow fire for this SID
+}
+# ── T-P1-8 WEDGE ESCALATION — a desk that exhausted its recycle attempts but is STILL fire-worthy PAGES
+#    the operator out-of-band instead of silently riding to the 90% auto-compact wall (not silent abstain).
+@test "shadow wedge → escalate (T-P1-8): after a shadow would-fire, a still-climbing desk PAGES (not silent)" {
+  setup_stage2; export CC_WR_COOLDOWN_S=0                                   # isolate the wedge from the cooldown gate
+  local nlog="$BATS_TEST_TMPDIR/notify.log"
+  printf '#!/bin/bash\necho called >> %q\n' "$nlog" > "$CC_WR_NOTIFY"; chmod +x "$CC_WR_NOTIFY"
+  mk_tel s6w 60; run drive s6w "$(mk_tx 6 "$WAIT")"                         # advisory
+  mk_tel s6w 61; run drive s6w "$(mk_tx 6 "$WAIT")"; fired "$output"        # shadow fire (firedf latched)
+  mk_tel s6w 62; run drive s6w "$(mk_tx 6 "$WAIT")"                         # next poll → WEDGED → escalate
+  [ "$status" -eq 0 ]; fired "$output"
+  echo "$output" | grep -qi "WEDGED"
+  grep -q '"disposition":"escalated"' "$CC_WR_IDL"
+  [ -f "$nlog" ]                                                            # out-of-band operator page fired
+  [ -z "$(grep '"reason":"already-fired"' "$CC_WR_IDL" || true)" ]         # NOT the old silent already-fired
 }
 @test "stage2 grace: within the grace window it stays an ADVISORY (does not fire yet)" {
   export CC_WR_GRACE_S=9999 CC_WR_COOLDOWN_S=0 CC_WR_FIRE_DIR="$BATS_TEST_TMPDIR/fire"; mkdir -p "$CC_WR_FIRE_DIR"
@@ -228,6 +245,61 @@ setup_stage2() { export CC_WR_GRACE_S=0; export CC_WR_FIRE_DIR="$BATS_TEST_TMPDI
   [ "$status" -eq 0 ]; fired "$output"
 }
 
+# ── ARM-BY-DEFAULT (G-P11-7) — a session HOLDING the monitoring-desk role is armed with NO explicit
+#    `arm` step (deterministic arming); a builder is still never touched; `clear` still opts out. ─────
+@test "arm-by-default (G-P11-7): a session holding the desk role fires WITHOUT an explicit arm sentinel" {
+  rm -f "$CC_WR_STATE_DIR"/arm-* 2>/dev/null              # drop setup's explicit arm → rely on the role only
+  printf '%s\n' "$CC_WR_UUID" > "$CC_WR_COORD_DIR/cc-roles/desk"   # this pane HOLDS the monitoring-desk role
+  mk_tel r1 60
+  run drive r1 "$(mk_tx 100 "$WAIT")"
+  [ "$status" -eq 0 ]; fired "$output"
+  echo "$output" | grep -qi "recycle"; echo "$output" | grep -q "/handoff"
+  grep -q '"disposition":"fired"' "$CC_WR_IDL"
+}
+@test "arm-by-default (G-P11-7): the role resolves by SID too (not only the pane uuid)" {
+  rm -f "$CC_WR_STATE_DIR"/arm-* 2>/dev/null
+  printf '%s\n' "rSID" > "$CC_WR_COORD_DIR/cc-roles/desk"          # role names the SESSION id
+  mk_tel rSID 60
+  run drive rSID "$(mk_tx 103 "$WAIT")"
+  [ "$status" -eq 0 ]; fired "$output"
+}
+@test "arm-by-default (G-P11-7): a builder (no sentinel, NOT the desk role) stays silent even at 88% + rot" {
+  rm -f "$CC_WR_STATE_DIR"/arm-* 2>/dev/null              # no arm sentinel; NO role file written
+  mk_tel nb 88
+  run drive nb "$(mk_tx 120 "$ROT")"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  grep -q '"reason":"not-armed"' "$CC_WR_IDL"
+}
+@test "arm-by-default (G-P11-7): DISARM marker (clear) suppresses role-arm — per-desk kill-switch still bites" {
+  rm -f "$CC_WR_STATE_DIR"/arm-* 2>/dev/null
+  printf '%s\n' "$CC_WR_UUID" > "$CC_WR_COORD_DIR/cc-roles/desk"
+  ( cd "$DESK" && bash "$HOOK" clear >/dev/null )         # writes the durable disarm marker
+  mk_tel r2 88
+  run drive r2 "$(mk_tx 101 "$ROT")"                      # even 88% + a rot tell
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  grep -q '"reason":"disarmed"' "$CC_WR_IDL"
+}
+@test "arm-by-default (G-P11-7): an explicit arm removes a prior clear disarm (re-enable)" {
+  rm -f "$CC_WR_STATE_DIR"/arm-* 2>/dev/null
+  printf '%s\n' "$CC_WR_UUID" > "$CC_WR_COORD_DIR/cc-roles/desk"
+  ( cd "$DESK" && bash "$HOOK" clear >/dev/null )         # disarm
+  ( cd "$DESK" && bash "$HOOK" arm   >/dev/null )         # explicit re-arm removes the disarm
+  mk_tel r3 60
+  run drive r3 "$(mk_tx 102 "$WAIT")"
+  [ "$status" -eq 0 ]; fired "$output"
+}
+@test "fire-path smoke (G-P11-7): role-armed desk drives advisory → Stage-2 shadow would-fire end-to-end" {
+  rm -f "$CC_WR_STATE_DIR"/arm-* 2>/dev/null
+  printf '%s\n' "$CC_WR_UUID" > "$CC_WR_COORD_DIR/cc-roles/desk"   # armed-by-default via the role
+  export CC_WR_GRACE_S=0 CC_WR_COOLDOWN_S=0 CC_WR_FIRE_DIR="$BATS_TEST_TMPDIR/fire"; mkdir -p "$CC_WR_FIRE_DIR"
+  mk_tel sm 60; run drive sm "$(mk_tx 110 "$WAIT")"; fired "$output"    # advisory (role-armed, no sentinel)
+  echo "$output" | grep -qi "recycle"
+  mk_tel sm 61; run drive sm "$(mk_tx 110 "$WAIT")"                     # Stage 2 (grace elapsed) → shadow would-fire
+  [ "$status" -eq 0 ]; fired "$output"; echo "$output" | grep -qi SHADOW
+  grep -q 'stage2-shadow' "$CC_WR_IDL"
+  [ -s "$CC_WR_FIRE_DIR/wr-fire-sm.txt" ]                               # composed a non-empty successor brief (no FM-D)
+}
+
 # ── COOLDOWN — cross-session loop-breaker (a fresh recycled desk can't immediately re-recycle) ──
 @test "cooldown: after one advisory, a DIFFERENT session in the same cwd is silenced" {
   mk_tel a1 60
@@ -237,14 +309,56 @@ setup_stage2() { export CC_WR_GRACE_S=0; export CC_WR_FIRE_DIR="$BATS_TEST_TMPDI
   [ "$status" -eq 0 ]; [ -z "$output" ]                    # within cooldown → held (no recycle→recycle spin)
 }
 
-# ── CAP — a wedged single session is never nagged past MAX ──────────────────────────────────────
-@test "cap: same session fires up to MAX, then goes silent" {
-  export CC_WR_COOLDOWN_S=0                                # isolate the cap from the cooldown gate
-  mk_tel c1 60; run drive c1 "$(mk_tx 6 "$WAIT")"; fired "$output"     # 1
+# ── CAP → ESCALATE (T-P1-8) — after MAX advisories a still-wedged session PAGES, it does not silence ──
+@test "cap → escalate (T-P1-8): after MAX advisories a still-fire-worthy desk PAGES (not silent)" {
+  export CC_WR_COOLDOWN_S=0 CC_WR_GRACE_S=9999            # cap path: no cooldown gate, no Stage-2 interference
+  local nlog="$BATS_TEST_TMPDIR/notify.log"
+  printf '#!/bin/bash\necho called >> %q\n' "$nlog" > "$CC_WR_NOTIFY"; chmod +x "$CC_WR_NOTIFY"
+  mk_tel c1 60; run drive c1 "$(mk_tx 6 "$WAIT")"; fired "$output"     # advisory 1
   mk_tel c1 61; run drive c1 "$(mk_tx 6 "$WAIT")"; fired "$output"     # 2
-  mk_tel c1 62; run drive c1 "$(mk_tx 6 "$WAIT")"; fired "$output"     # 3
-  mk_tel c1 63; run drive c1 "$(mk_tx 6 "$WAIT")"                      # 4 → capped
+  mk_tel c1 62; run drive c1 "$(mk_tx 6 "$WAIT")"; fired "$output"     # 3 (cap now reached)
+  mk_tel c1 63; run drive c1 "$(mk_tx 6 "$WAIT")"                      # 4 → WEDGED → escalate
+  [ "$status" -eq 0 ]; fired "$output"
+  echo "$output" | grep -qi "WEDGED"
+  grep -q '"disposition":"escalated"' "$CC_WR_IDL"
+  echo "$output" | grep -qi "advisory budget exhausted"
+  [ -f "$nlog" ]                                                       # osascript operator page (stub) invoked
+}
+@test "escalate pacing (T-P1-8): a second wedged poll within ESCALATE_DEDUP_S is silent (page-once)" {
+  export CC_WR_COOLDOWN_S=0 CC_WR_GRACE_S=9999 CC_WR_ESCALATE_DEDUP_S=9999
+  mk_tel c9 60; run drive c9 "$(mk_tx 6 "$WAIT")"; fired "$output"     # advisory 1
+  mk_tel c9 61; run drive c9 "$(mk_tx 6 "$WAIT")"; fired "$output"     # 2
+  mk_tel c9 62; run drive c9 "$(mk_tx 6 "$WAIT")"; fired "$output"     # 3
+  mk_tel c9 63; run drive c9 "$(mk_tx 6 "$WAIT")"; fired "$output"     # 4 → escalate (stamps the pacer)
+  echo "$output" | grep -qi WEDGED
+  mk_tel c9 64; run drive c9 "$(mk_tx 6 "$WAIT")"                      # 5 → within ESCALATE_DEDUP_S → paced (silent)
   [ "$status" -eq 0 ]; [ -z "$output" ]
+  grep -q '"reason":"escalation-paced"' "$CC_WR_IDL"
+}
+@test "escalate gate (T-P1-8): a capped desk that dropped BELOW threshold does not page (still-fire-worthy gate)" {
+  export CC_WR_COOLDOWN_S=0 CC_WR_GRACE_S=9999
+  local nlog="$BATS_TEST_TMPDIR/notify.log"
+  printf '#!/bin/bash\necho called >> %q\n' "$nlog" > "$CC_WR_NOTIFY"; chmod +x "$CC_WR_NOTIFY"
+  mk_tel c8 60; run drive c8 "$(mk_tx 6 "$WAIT")"; fired "$output"     # 1
+  mk_tel c8 61; run drive c8 "$(mk_tx 6 "$WAIT")"; fired "$output"     # 2
+  mk_tel c8 62; run drive c8 "$(mk_tx 6 "$WAIT")"; fired "$output"     # 3 (capped)
+  mk_tel c8 40; run drive c8 "$(mk_tx 6 "$WAIT")"                      # 4 → capped BUT below threshold → no page
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  grep -q 'below-threshold-no-tell' "$CC_WR_IDL"
+  [ ! -f "$nlog" ]                                                     # never paged a not-fire-worthy desk
+}
+@test "escalate gate (T-P1-8): a capped desk with a dirty tree (mid-work) does not page (SAFE gate)" {
+  export CC_WR_COOLDOWN_S=0 CC_WR_GRACE_S=9999
+  local nlog="$BATS_TEST_TMPDIR/notify.log"
+  printf '#!/bin/bash\necho called >> %q\n' "$nlog" > "$CC_WR_NOTIFY"; chmod +x "$CC_WR_NOTIFY"
+  mk_tel c7 60; run drive c7 "$(mk_tx 6 "$WAIT")"; fired "$output"     # 1
+  mk_tel c7 61; run drive c7 "$(mk_tx 6 "$WAIT")"; fired "$output"     # 2
+  mk_tel c7 62; run drive c7 "$(mk_tx 6 "$WAIT")"; fired "$output"     # 3 (capped)
+  echo dirty >> "$DESK/f.txt"                                          # now mid-work
+  mk_tel c7 63; run drive c7 "$(mk_tx 6 "$WAIT")"                      # 4 → capped BUT dirty → HOLD, no page
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  grep -q 'dirty-tree-hold' "$CC_WR_IDL"
+  [ ! -f "$nlog" ]                                                     # never paged a working desk
 }
 
 # ── RECYCLE-MACHINERY GUARD — never advise-recycle off the recycle path's own Bash calls ─────────
@@ -412,6 +526,13 @@ setup_stage2() { export CC_WR_GRACE_S=0; export CC_WR_FIRE_DIR="$BATS_TEST_TMPDI
   ( cd "$DESK" && bash "$HOOK" status ) | grep -q "ARMED"
   ( cd "$DESK" && bash "$HOOK" clear >/dev/null )
   ( cd "$DESK" && bash "$HOOK" status ) | grep -q "not armed"
+}
+@test "cli: clear reports DISARMED in status; a subsequent arm clears the disarm" {
+  ( cd "$DESK" && bash "$HOOK" clear >/dev/null )
+  ( cd "$DESK" && bash "$HOOK" status ) | grep -q "DISARMED"
+  ( cd "$DESK" && bash "$HOOK" arm >/dev/null )
+  run bash -c '( cd "$1" && bash "$2" status ) | grep -c "DISARMED"' _ "$DESK" "$HOOK"
+  [ "$output" -eq 0 ]
 }
 @test "cli: kill then status reports GLOBAL KILL; unkill clears it" {
   bash "$HOOK" kill >/dev/null
