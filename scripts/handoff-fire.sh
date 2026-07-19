@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2009  # file-wide: `ps -o comm= -t <tty>` is a controlling-TTY process lookup
+#   that pgrep cannot express (pgrep matches by name/args, not by tty). Correct + intentional here.
 # handoff-fire.sh — autonomously launch a Claude Code continuation session in iTerm2.
 #
 # Generalizes the proven /tmp/fire.sh pattern (2026-07-02 parallel-track launch): open an
