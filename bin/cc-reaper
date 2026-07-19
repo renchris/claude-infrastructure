@@ -78,6 +78,16 @@ if [ -z "$NOTIFY_BIN" ]; then
     [ -n "$_c" ] && [ -x "$_c" ] && { NOTIFY_BIN="$_c"; break; }
   done
 fi
+# cc-reconcile — the P0-12b companion that CLOSES the blind-spot delta instead of only surfacing it:
+# it backfills a cc-registry row for any live pane that missed SessionStart (pre-wiring cohort / hook
+# outage / a spawn mode that didn't fire the hook), so those panes are ENUMERATED this sweep. Same
+# resolve order as NOTIFY_BIN; a missing binary just means the self-check keeps surfacing (no regression).
+RECONCILE_BIN="${CC_REAPER_RECONCILE_BIN:-}"
+if [ -z "$RECONCILE_BIN" ]; then
+  for _c in "$HERE/cc-reconcile" "$HOME/.claude/bin/cc-reconcile" "$(command -v cc-reconcile 2>/dev/null || true)"; do
+    [ -n "$_c" ] && [ -x "$_c" ] && { RECONCILE_BIN="$_c"; break; }
+  done
+fi
 
 utc(){ date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null; }
 # desk-board IDL rows — supervisor-shaped {ts,actor,kind,…}. Values pass as jq --arg/--argjson (NEVER
@@ -213,6 +223,13 @@ sweep() {
   local mode; mode=$([ $reap = 1 ] && echo REAP || echo DRY-RUN)
   say "cc-reaper sweep ($mode) — settle=${SETTLE_S}s trunk=$TRUNK"
   log "sweep start mode=$mode settle=$SETTLE_S"
+  # Self-heal the registry BEFORE enumerating, so a pane that missed SessionStart is backfilled and
+  # ENUMERATED this same sweep (delta closes) rather than only surfaced. Additive + idempotent; gated on
+  # --reap so a DRY-RUN sweep still writes nothing (its self-check then reports the true pre-heal delta).
+  if [ "$reap" = 1 ] && [ -n "$RECONCILE_BIN" ]; then
+    local rout; rout="$("$RECONCILE_BIN" 2>/dev/null || true)"
+    [ -n "$rout" ] && { say "$rout"; log "reconcile: $rout"; }
+  fi
   local cj; cj="$("$CLASSIFY_BIN" --all --json 2>/dev/null || echo '[]')"
   local n; n="$(printf '%s' "$cj" | jq 'length' 2>/dev/null || echo 0)"
   local reaped=0 candidates=0 surfaced=0 surfaced_keys=" " i
