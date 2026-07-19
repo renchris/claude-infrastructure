@@ -13,7 +13,7 @@
 #
 # Verbs:
 #   add    --title T [--project P] [--dod-ref R] [--source S]   → echoes the id
-#   list   [--open | --all | --project P]                       (default: --open)
+#   list   [--open | --all | --project P] [--json]              (default: --open, table)
 #   claim  <id> --by <sid>
 #   done   <id> --evidence <ref>
 #   reopen <id>
@@ -138,16 +138,27 @@ cmd_transition() {
 }
 
 cmd_list() {
-  local mode="open" projfilter=""
+  local mode="open" projfilter="" fmt="table"
   while [ $# -gt 0 ]; do
     local key="$1"; shift
     case "$key" in
       --open) mode="open" ;;
       --all)  mode="all" ;;
       --project) projfilter="${1:-}"; [ $# -gt 0 ] && shift ;;
+      --json) fmt="json" ;;
       *) printf 'cc-backlog list: unknown arg %s\n' "$key" >&2; return 2 ;;
     esac
   done
+  # --json: the SAME filtered fold as the table, emitted as a compact JSON array (one
+  # object per item, full carried meta) for machine consumers (cc-dispatch). The default
+  # (table) branch below is byte-unchanged.
+  if [ "$fmt" = json ]; then
+    fold | jq -c --arg mode "$mode" --arg proj "$projfilter" '
+      sort_by(.project, .title)
+      | map( select($mode == "all" or .status != "done")
+           | select($proj == "" or .project == $proj) )'
+    return 0
+  fi
   fold | jq -r --arg mode "$mode" --arg proj "$projfilter" '
     sort_by(.project, .title) | .[]
     | select($mode == "all" or .status != "done")
