@@ -300,7 +300,7 @@ that wires their subjects — no gate goes green on capability alone again. Full
   agent-half (P0-10 resume chain + boot-delta pager), P0-7/P0-8 agent halves (delivery-verify probe, headless resume,
   killed-session monthly-spend packet), the net-positive value ledger (T-P14-7/T-P8-5 — the program's own goal),
   T-P10-2 idl.jsonl rotation (183 MB live!), T-P6-4 abstain==100% alarm sweep, T-P7-3 cc-idl/cc-audit, T-P3-3
-  reaper→desk paging, P0-12b reaper enumerated≈live-panes self-check, T-P11-6 desk-assert live wiring, waiting-recycle
+  reaper→desk paging, P0-12b reaper enumerated≈live-panes self-check, ~~T-P11-6 desk-assert live wiring~~ (DONE 2026-07-19 — see status log), waiting-recycle
   G-P11-7/T-P1-8, T-P10-3 `$CLAUDE_CONFIG_DIR` brick-guard, G-P13-4/G-P6-10 gate coverage, T-P15-4 ship-rail push hook,
   T-P15-7 executable CC_UNATTENDED guard, T-P8-6 cliff→kimi, T-P7-7 gate-batching manifest, T-P16-3/4 pmset/caffeinate
   LaunchAgents, T-P10-7 obsolete-watcher removal, T-P9-7 ship-land auto-rollback. The **supervisor-cadence wiring
@@ -328,3 +328,25 @@ that wires their subjects — no gate goes green on capability alone again. Full
   entries exit 0 unattended). The real strand is the **model-issued** land push (`commands/ship.md:43`), which
   this hook covers; it is the complement of `smart-bash-allowlist.sh`, which allows feature-branch pushes but
   DELIBERATELY EXCLUDES trunk. The remainder-list line above (T-P15-4) is now built, pending operator activation.
+- 2026-07-19 (desk peer session, Opus@max, /goal-driven — cc-backlog `59e9fdf1132c`) — **T-P11-6
+  desk-assert LIVE WIRING landed** (branch `feat/desk-assert-live-wiring`, RED-first, via project
+  `/ship`). `bin/desk-assert` (the law-#9 grounding-triad guard, `a103e7f`) shipped selftest-only — the
+  textbook "capability-green ≠ active" gap (law #10): PATH-installed via `wiring-all.sh`'s symlink loop
+  but with NO production caller. Closed by upgrading the RESIDENT DESK RULE the LIVE `desk-invariant`
+  daemon fires from (`docs/templates/desk-boot-brief.md:25`, per `desk-invariant.sh:48`) from prose
+  ("keep two-way comms grounded (FM2 triad…)") into an EXECUTABLE rule that RUNS
+  `desk-assert <sid> [--witnessed-ref <ref>]` before any state/causal claim about another session, with
+  `UNGROUNDED`(exit 1) = claim-not-earned (read transcript / resolve pane via `cc-sessions --json` /
+  pin the witnessed ref, then re-run). Made non-regressible by a RED-provable wiring gate
+  (`tests/desk-assert-wiring.bats`, 8 checks: INSTALL-on-PATH · GUARD-invocable · the RESIDENT-RULE
+  legs that the brief INVOKES the guard inside the law-#9 context — strip the invocation back to prose
+  and 4 legs go red, proven this session). Full `bats tests/` **715/715 green**.
+  **Scope discipline (why this is the whole item, and non-C10):** the desk's AUTOMATED state-claim path
+  (`cc-classify`) already embodies the triad IN CODE (leg-1 `last_assistant_ts` excludes sidechain/
+  api-error, leg-2 pane resolution, never mtime) → NOT touched; `lead-supervisor` is the
+  operator-sanctioned live daemon (`wiring-all.sh:151` "the agent never edits the live daemon") → NOT
+  touched; a NEW settings.json hook would be a C10 activation → avoided (this item is "NONE are C10").
+  The residual FM2 gap was exactly p11's INC-1/2/3: the IN-SESSION desk making ad-hoc ungrounded claims
+  where the rule was prose-only — now an executable check the desk runs. **Learning:** desk-assert's own
+  header already called itself "the house rule made executable"; the missing half was a resident rule
+  that INVOKES it + a gate that fails if that invocation ever regresses to a name-drop.
