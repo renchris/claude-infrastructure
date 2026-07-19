@@ -31,11 +31,11 @@ count_src() {
 }
 
 # ── the selftest contract ────────────────────────────────────────────────────
-@test "selftest passes and runs all 14 checks (a zero-check suite must not 'pass')" {
+@test "selftest passes and runs all 16 checks (a zero-check suite must not 'pass')" {
   run "$CD" selftest
   [ "$status" -eq 0 ]
   n_ok="$(printf '%s' "$output" | grep -c '^  ok ')"
-  [ "$n_ok" -eq 14 ]
+  [ "$n_ok" -eq 16 ]
   ! printf '%s' "$output" | grep -q '^  FAIL'
 }
 
@@ -93,10 +93,12 @@ EOF
 }
 
 # ── C3 wiring-inert (CLI-level) ──────────────────────────────────────────────
-# Every seed carries .ts, as every real IDL record does — the recency horizon reads it.
-@test "C3 wiring-inert: a hook abstained 11/11 (N>=10, 100%) → 1 wiring-inert add" {
+# Every seed carries .ts, as every real IDL record does — the recency horizon reads it. A hook is
+# INERT only when its every in-horizon abstention is BLIND (could-not-observe); see blind-check law
+# §3i (scripts/idl-abstain-alarm.sh) and the C3 critic comment.
+@test "C3 wiring-inert: a hook 11/11 BLIND-abstained (N>=10, 100%) → 1 wiring-inert add" {
   now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  for _ in $(seq 1 11); do printf '{"hook":"stale-guard","disposition":"abstained","ts":"%s"}\n' "$now"; done > "$C/seed.jsonl"
+  for _ in $(seq 1 11); do printf '{"hook":"stale-guard","disposition":"abstained","reason":"transcript-missing","ts":"%s"}\n' "$now"; done > "$C/seed.jsonl"
   export CC_DISCOVER_IDL="$C/seed.jsonl"
   run "$CD" --once
   [ "$status" -eq 0 ]
@@ -105,7 +107,7 @@ EOF
 
 @test "C3 wiring-inert: a hook below the N>=10 window does NOT add" {
   now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  for _ in $(seq 1 5); do printf '{"hook":"g","disposition":"abstained","ts":"%s"}\n' "$now"; done > "$C/seed.jsonl"
+  for _ in $(seq 1 5); do printf '{"hook":"g","disposition":"abstained","reason":"transcript-missing","ts":"%s"}\n' "$now"; done > "$C/seed.jsonl"
   export CC_DISCOVER_IDL="$C/seed.jsonl"
   run "$CD" --once
   [ "$(count_src wiring-inert)" -eq 0 ]
@@ -113,32 +115,66 @@ EOF
 
 @test "C3 wiring-inert: a hook that fired in-horizon is NOT inert → 0 adds" {
   now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  { for _ in $(seq 1 10); do printf '{"hook":"g","disposition":"abstained","ts":"%s"}\n' "$now"; done
-    printf '{"hook":"g","disposition":"fired","ts":"%s"}\n' "$now"; } > "$C/seed.jsonl"
+  { for _ in $(seq 1 10); do printf '{"hook":"g","disposition":"abstained","reason":"transcript-missing","ts":"%s"}\n' "$now"; done
+    printf '{"hook":"g","disposition":"fired","reason":"deference","ts":"%s"}\n' "$now"; } > "$C/seed.jsonl"
   export CC_DISCOVER_IDL="$C/seed.jsonl"
   run "$CD" --once
   [ "$(count_src wiring-inert)" -eq 0 ]
 }
 
-# Regression (e7d326caa6a7): a record-flood night must not false-flag a rare hook that fired that
-# night. The fire is buried first, then a 6000-record flood (> the 5000 tail) that a naive global
-# tail would let crowd the fire out of view; the fix greps to hook-eval records + exonerates in-horizon fires.
-@test "C3 wiring-inert: record-flood does NOT false-flag a rare hook that fired in-horizon (regression: e7d326caa6a7)" {
+# reason-aware (117bf1aea7b7): a correctly-quiet CONDITIONAL hook abstains 100% for DORMANT reasons
+# (condition-not-met: no-tell / not-armed) — it still sees reality, so it is NOT inert. This is the
+# false positive this item fixes: reason-blind counting filed re-observe make-work on every advisory.
+@test "C3 wiring-inert: a 100%-DORMANT hook (condition-not-met reasons) does NOT add (reason-aware)" {
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  { for _ in $(seq 1 8); do printf '{"hook":"quiet-cond","disposition":"abstained","reason":"no-tell","ts":"%s"}\n' "$now"; done
+    for _ in $(seq 1 4); do printf '{"hook":"quiet-cond","disposition":"abstained","reason":"not-armed","ts":"%s"}\n' "$now"; done; } > "$C/seed.jsonl"
+  export CC_DISCOVER_IDL="$C/seed.jsonl"
+  run "$CD" --once
+  [ "$status" -eq 0 ]
+  [ "$(count_src wiring-inert)" -eq 0 ]
+}
+
+# Regression (e7d326caa6a7): an actor-record flood must not false-flag a rare hook that fired that
+# night. The fire is buried first, then a 6000-record actor flood (no .hook/.disposition) the grep
+# excludes; per-hook grouping + in-horizon fire exoneration keep the rare hook clean.
+@test "C3 wiring-inert: actor-record flood does NOT false-flag a rare hook that fired in-horizon (regression: e7d326caa6a7)" {
   now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   fired="$(date -u -v-2H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '-2 hours' +%Y-%m-%dT%H:%M:%SZ)"
   {
     printf '{"hook":"rare-guard","disposition":"fired","ts":"%s"}\n' "$fired"
     for _ in $(seq 1 6000); do printf '{"actor":"pager","kind":"page","ts":"%s"}\n' "$now"; done
-    for _ in $(seq 1 12); do printf '{"hook":"rare-guard","disposition":"abstained","ts":"%s"}\n' "$now"; done
-    for _ in $(seq 1 12); do printf '{"hook":"dead-guard","disposition":"abstained","ts":"%s"}\n' "$now"; done
+    for _ in $(seq 1 12); do printf '{"hook":"rare-guard","disposition":"abstained","reason":"no-transcript-path","ts":"%s"}\n' "$now"; done
+    for _ in $(seq 1 12); do printf '{"hook":"dead-guard","disposition":"abstained","reason":"no-transcript-path","ts":"%s"}\n' "$now"; done
   } > "$C/seed.jsonl"
   export CC_DISCOVER_IDL="$C/seed.jsonl"
   run "$CD" --once
   [ "$status" -eq 0 ]
-  # dead-guard (never fired) is added; rare-guard (fired in-horizon) is not
+  # dead-guard (12/12 blind, never fired) is added; rare-guard (fired in-horizon) is not
   [ "$(count_src wiring-inert)" -eq 1 ]
   grep -q 'inert hook dead-guard' "$CC_BACKLOG_FILE"
   ! grep -q 'rare-guard' "$CC_BACKLOG_FILE"
+}
+
+# Regression (117bf1aea7b7, fix a): PER-HOOK windowing. A high-frequency hook's own eval churn is
+# itself a hook-eval flood (it passes the grep), so a naive global tail-5000 crowds a rare hook's
+# fire out of view AND flags the noisy hook on reason-blind counting. group_by(.hook) + reason-aware
+# counting fix both: the rare hook's fire stays in its OWN window; the noisy hook's churn is DORMANT.
+@test "C3 wiring-inert: a high-frequency hook's flood does NOT crowd a rare hook's fire out (per-hook window)" {
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  fired="$(date -u -v-2H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '-2 hours' +%Y-%m-%dT%H:%M:%SZ)"
+  {
+    printf '{"hook":"rare-guard","disposition":"fired","ts":"%s"}\n' "$fired"
+    for _ in $(seq 1 6000); do printf '{"hook":"noisy","disposition":"abstained","reason":"not-armed","ts":"%s"}\n' "$now"; done
+    for _ in $(seq 1 12); do printf '{"hook":"rare-guard","disposition":"abstained","reason":"no-assistant-text","ts":"%s"}\n' "$now"; done
+  } > "$C/seed.jsonl"
+  export CC_DISCOVER_IDL="$C/seed.jsonl"
+  run "$CD" --once
+  [ "$status" -eq 0 ]
+  # rare-guard's fire survives per-hook (not crowded out); noisy's not-armed churn is DORMANT → 0 adds
+  [ "$(count_src wiring-inert)" -eq 0 ]
+  ! grep -q 'rare-guard' "$CC_BACKLOG_FILE"
+  ! grep -q 'inert hook noisy' "$CC_BACKLOG_FILE"
 }
 
 # ── C4 gate-red (CLI-level) ──────────────────────────────────────────────────

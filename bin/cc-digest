@@ -21,10 +21,10 @@
 #   unchanged: emit to stdout + disk only.
 #
 # Env (tests): CC_LAND_LOG · CC_BACKLOG_FILE/CC_BACKLOG_BIN · CC_DECISIONS_DIR · CC_PAGES_DIR
-#   · CC_SWEEP_SEEN_DIR · CC_IDL · CC_DIGESTS_DIR · CC_DIGEST_DATE · CC_DIGEST_IDL_TAIL (default
-#   5000 — max hook-eval records scanned; the D9 read greps the append-only IDL down to just its
-#   hook-eval records FIRST, so it stays BOUNDED, never a full slurp) · CC_DIGEST_INERT_HORIZON_H
-#   (default 168 = 7d, the last-fired recency window) · CC_DIGEST_INERT_MIN (default 10 evals).
+#   · CC_SWEEP_SEEN_DIR · CC_IDL · CC_DIGESTS_DIR · CC_DIGEST_DATE · CC_DIGEST_INERT_HORIZON_H
+#   (default 168 = 7d, the last-fired recency window) · CC_DIGEST_INERT_MIN (default 10 evals). The
+#   D9 read greps the append-only IDL down to just its hook-eval records FIRST (never a full slurp),
+#   then windows PER-HOOK (no global tail — see the Inert-check block).
 #   Push: CC_PUSH_SEND_BIN · CC_ANNOUNCE_BIN · CC_DIGEST_ROLE (default desk).
 # BSD+GNU portable, no eval, fail-loud. Exit 0 (emit) · 2 (usage) · 5 (push: a requested delivery leg FAILED).
 set -uo pipefail
@@ -35,7 +35,6 @@ PAGES_DIR="${CC_PAGES_DIR:-$HOME/.claude/autonomy/pages}"
 SEEN_DIR="${CC_SWEEP_SEEN_DIR:-$HOME/.claude/autonomy/sweep-seen}"
 IDL="${CC_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
 DIGESTS_DIR="${CC_DIGESTS_DIR:-$HOME/.claude/autonomy/digests}"
-IDL_TAIL="${CC_DIGEST_IDL_TAIL:-5000}"
 LAND_TAIL="${CC_DIGEST_LAND_TAIL:-10}"
 
 usage() { sed -n '2,/^set -uo/p' "$0" | sed 's/^# \{0,1\}//; /^set -uo/d'; }
@@ -69,6 +68,16 @@ INERT_HORIZON_H="${CC_DIGEST_INERT_HORIZON_H:-168}"
 INERT_MIN="${CC_DIGEST_INERT_MIN:-10}"
 INERT_CUTOFF="$(date -u -v-"${INERT_HORIZON_H}"H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
              || date -u -d "-${INERT_HORIZON_H} hours" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '')"
+
+# D9 BLIND reason-tokens (blind-check law §3i) — the "could-not-observe-my-guard" abstain reasons
+# (matched on the token BEFORE the first ':', so dynamic suffixes like `stale-telemetry:120s` hit).
+# A hook ALARMS only when EVERY in-horizon abstention is BLIND; any DORMANT (condition-not-met)
+# reason — or an unlisted/absent one — proves the hook still sees reality (fail toward NOT alarming).
+# Kept BYTE-FOR-BYTE in lockstep with scripts/idl-abstain-alarm.sh (_default_blind) and cc-discover's
+# C3 critic — edit all three together.
+_inert_blind=(no-jq no-session-id no-stdin no-telemetry stale-telemetry \
+              no-transcript-path transcript-missing not-a-repo no-cwd no-assistant-text)
+INERT_BLIND_JSON="$(printf '%s\n' "${_inert_blind[@]}" | jq -Rsc 'split("\n")|map(select(length>0))' 2>/dev/null)"
 
 # cc-backlog: env override → beside → ~/.claude/bin → PATH.
 resolve_bin() { local o="$1" n="$2" c
@@ -155,33 +164,41 @@ emit() {
     "$total" "$surfaced" "$((total - surfaced))"
 
   printf '## Inert-check alarms (D9)\n\n'
-  # A hook is INERT when its tells stopped matching reality: it abstained on ALL its recent evals and
-  # fired NONE of them. Two guards against the record-flood false-positive (a rarely-firing HEALTHY
-  # hook flagged because page/sweep churn crowded a naive global tail, 2026-07-19, e7d326caa6a7):
+  # A hook is INERT when its tells stopped matching reality: it abstained on ALL its recent evals,
+  # fired NONE, AND every abstention was BLIND (could not observe its guard). Three guards against the
+  # false-positive (a healthy quiet advisory nightly-alarmed, 2026-07-19, e7d326caa6a7 / 117bf1aea7b7):
   #   (1) actor-record exclusion — grep the append-only IDL to ONLY hook-eval records (they carry
   #       BOTH "hook" and "disposition"; a tiny fraction of the file) BEFORE windowing, so flood
   #       records never consume the read budget. jq never slurps the whole IDL.
-  #   (2) last-fired recency horizon — count only evals at/after INERT_CUTOFF; a hook is inert only
-  #       if it made >=INERT_MIN such evals and fired none. A fire in-horizon exonerates it
+  #   (2) PER-HOOK windowing + last-fired recency horizon — group_by(.hook) counts EACH hook's OWN
+  #       in-horizon (>=INERT_CUTOFF) evals; there is NO global line tail, so a high-frequency hook's
+  #       churn can never crowd a rare hook's fire out of view. A fire in-horizon exonerates it
   #       (completion-assert fired 03:08Z the night it was falsely flagged). jq `>=` on ISO-Z
   #       (fixed-width, UTC) timestamps is a lexicographic string compare == a correct time compare.
-  # This block is kept in lockstep with cc-discover's critic_wiring_inert (same predicate).
+  #   (3) abstain-REASON discrimination (blind-check law §3i) — a DORMANT abstention (guard reached,
+  #       fire condition legitimately not met: no-tell / not-armed / below-threshold / ledger-clean)
+  #       proves the hook still sees reality; a hook alarms only when EVERY abstention is BLIND
+  #       (the _inert_blind set above; unlisted/absent reason ⇒ DORMANT, fail toward NOT alarming).
+  #       Reasons match on the token BEFORE the first ':'. Without this every quiet advisory paged.
+  # Kept in lockstep with cc-discover's critic_wiring_inert + scripts/idl-abstain-alarm.sh (same
+  # predicate + _default_blind).
   local alarms=""
   if [ -f "$IDL" ]; then
-    alarms="$(grep -F '"disposition"' "$IDL" 2>/dev/null | grep -F '"hook"' | tail -n "$IDL_TAIL" \
-      | jq -rs --arg cutoff "$INERT_CUTOFF" --argjson n "$INERT_MIN" '
+    alarms="$(grep -F '"disposition"' "$IDL" 2>/dev/null | grep -F '"hook"' \
+      | jq -rs --arg cutoff "$INERT_CUTOFF" --argjson n "$INERT_MIN" --argjson blind "$INERT_BLIND_JSON" '
       map(select(type=="object" and .hook and .disposition and .ts))
       | group_by(.hook)
       | map({hook: .[0].hook,
-             recent:     (map(select(.ts >= $cutoff)) | length),
+             total:      (map(select(.ts >= $cutoff)) | length),
              abstained:  (map(select(.ts >= $cutoff and .disposition=="abstained")) | length),
-             fired:      (map(select(.ts >= $cutoff and .disposition!="abstained")) | length),
+             blind:      (map(select(.ts >= $cutoff and .disposition=="abstained"
+                            and (((.reason // "") | split(":")[0]) as $rt | ($blind | index($rt)) != null))) | length),
              last_fired: (map(select(.disposition!="abstained")) | if length>0 then max_by(.ts).ts else null end)})
-      | .[] | select(.fired == 0 and .abstained >= $n)
-      | "ALARM: hook \(.hook) abstained \(.abstained)/\(.recent) (100%) in the recency window, never fired — INERT check: its tells stopped matching reality (last fired: \(.last_fired // "never"))"
+      | .[] | select(.total >= $n and .abstained == .total and .blind == .abstained)
+      | "ALARM: hook \(.hook) blind \(.blind)/\(.total) recent evals (100% blind — could not observe its guard), never fired — INERT check: its tells stopped matching reality (last fired: \(.last_fired // "never"))"
     ' 2>/dev/null || true)"
   fi
-  if [ -n "$alarms" ]; then printf '%s\n' "$alarms"; else printf '_no inert checks — every guard fired in-horizon or has too few recent evals_\n'; fi
+  if [ -n "$alarms" ]; then printf '%s\n' "$alarms"; else printf '_no inert checks — every guard fired in-horizon, is DORMANT (healthy condition-not-met), or has too few recent evals_\n'; fi
   printf '\n_generated %s_\n' "$NOW"
 }
 

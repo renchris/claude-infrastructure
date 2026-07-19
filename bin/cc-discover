@@ -27,7 +27,6 @@
 #   CC_DISCOVER_FRONTIER_LEDGER  C1 source                   (default: docs/research/FRONTIER_HOLES.md)
 #   CC_DISCOVER_FINDPLAN         C2 source (--list-open)     (default: find-plan.sh)
 #   CC_DISCOVER_IDL              C3 source + our eval log     (default: ~/.claude/autonomy/idl.jsonl)
-#   CC_DISCOVER_IDL_TAIL         C3 max hook-eval records    (default: 5000, post actor-exclusion)
 #   CC_DISCOVER_INERT_HORIZON_H  C3 last-fired recency (h)    (default: 168 = 7d)
 #   CC_DISCOVER_INERT_MIN        C3 min in-horizon evals      (default: 10)
 #   CC_DISCOVER_GATES            C4 sources (space-sep list) (default: "never-stuck-gate.sh premortem-gate.sh")
@@ -42,7 +41,6 @@ FRONTIER_LEDGER="${CC_DISCOVER_FRONTIER_LEDGER:-docs/research/FRONTIER_HOLES.md}
 FINDPLAN_RAW="${CC_DISCOVER_FINDPLAN:-find-plan.sh}"
 GATES="${CC_DISCOVER_GATES:-never-stuck-gate.sh premortem-gate.sh}"
 IDL="${CC_DISCOVER_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
-IDL_TAIL="${CC_DISCOVER_IDL_TAIL:-5000}"
 BACKLOG_FILE="${CC_BACKLOG_FILE:-$HOME/.claude/autonomy/backlog.jsonl}"
 PROJECT="${CC_DISCOVER_PROJECT:-$(basename "$(pwd)")}"
 # D9 inert-check recency horizon (mirrors cc-digest): a hook that fired at/after INERT_CUTOFF is NOT
@@ -51,6 +49,16 @@ INERT_HORIZON_H="${CC_DISCOVER_INERT_HORIZON_H:-168}"
 INERT_MIN="${CC_DISCOVER_INERT_MIN:-10}"
 INERT_CUTOFF="$(date -u -v-"${INERT_HORIZON_H}"H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
              || date -u -d "-${INERT_HORIZON_H} hours" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '')"
+
+# C3 BLIND reason-tokens (blind-check law §3i) — the "could-not-observe-my-guard" abstain reasons
+# (matched on the token BEFORE the first ':', so dynamic suffixes like `stale-telemetry:120s` hit).
+# A hook is INERT only when EVERY in-horizon abstention is BLIND; any DORMANT (condition-not-met)
+# reason — or an unlisted/absent one — proves the hook still sees reality (fail toward NOT filing
+# make-work). Kept BYTE-FOR-BYTE in lockstep with scripts/idl-abstain-alarm.sh (_default_blind) and
+# cc-digest's Inert-check — edit all three together.
+_inert_blind=(no-jq no-session-id no-stdin no-telemetry stale-telemetry \
+              no-transcript-path transcript-missing not-a-repo no-cwd no-assistant-text)
+INERT_BLIND_JSON="$(printf '%s\n' "${_inert_blind[@]}" | jq -Rsc 'split("\n")|map(select(length>0))' 2>/dev/null)"
 
 DRY_RUN=0; BACKLOG_BIN=""; IDL_SNAPSHOT=""
 RUN_ADDED=0; RUN_CANDS=0; RUN_ABSTAINED=0
@@ -179,22 +187,35 @@ critic_plan_open() {
 }
 
 # ── C3 wiring-inert ──────────────────────────────────────────────────────────
-# The D9 signal (cc-digest Inert-check): a hook that abstained on ALL its recent evals (>=INERT_MIN
-# within the last INERT_HORIZON_H hours) and fired NONE has stopped observing what it guards.
-# Actor/flood records are grep-excluded BEFORE the tail so page/sweep churn can't crowd the window,
-# and a fire in-horizon exonerates a rarely-firing healthy guard (e7d326caa6a7). Kept in lockstep
-# with cc-digest's Inert-check predicate. Absent IDL → abstain.
+# The D9 signal (blind-check law §3i; canonical scripts/idl-abstain-alarm.sh): a hook whose EVERY
+# in-horizon eval (>=INERT_MIN in the last INERT_HORIZON_H hours) was a BLIND abstention — it could
+# not observe its guard (the INERT_BLIND set: no-transcript-path / transcript-missing / no-telemetry
+# / …) — has stopped observing what it guards → re-observe. Two false-positive guards, both
+# load-bearing (this item, 117bf1aea7b7):
+#   (a) PER-HOOK windowing — group_by(.hook) evaluates EACH hook's OWN in-horizon evals; there is NO
+#       global line tail, so a high-frequency hook's churn can NEVER crowd a rare hook's fire out of
+#       view (the tail-5000 flood false-positive: a real fire buried 42.9k lines deep). Actor/flood
+#       records are still grep-excluded up front (they carry neither .hook nor .disposition).
+#   (b) reason-AWARE counting — a DORMANT abstention (guard reached, fire condition legitimately not
+#       met: no-tell / not-armed / below-threshold / ledger-clean / …) proves the hook still sees
+#       reality, so ONE dormant (or one fire) in-horizon exonerates it. A correctly-quiet conditional
+#       hook abstains ~100% for DORMANT reasons and is NEVER flagged. Unlisted/absent reason ⇒ DORMANT
+#       (fail toward NOT filing make-work). Reasons match on the token BEFORE the first ':'.
+# Kept in lockstep with cc-digest's Inert-check + scripts/idl-abstain-alarm.sh (same predicate +
+# _default_blind) — edit all three together. Absent IDL → abstain.
 critic_wiring_inert() {
   local added=0 cands=0 hook inert rc
   if [ -z "$IDL_SNAPSHOT" ] || [ ! -f "$IDL_SNAPSHOT" ]; then abstain wiring-inert "IDL absent: $IDL"; return 0; fi
-  inert="$(grep -F '"disposition"' "$IDL_SNAPSHOT" 2>/dev/null | grep -F '"hook"' | tail -n "$IDL_TAIL" \
-      | jq -rs --arg cutoff "$INERT_CUTOFF" --argjson n "$INERT_MIN" '
-      map(select(type=="object" and .hook and .disposition and .ts))
+  inert="$(grep -F '"disposition"' "$IDL_SNAPSHOT" 2>/dev/null | grep -F '"hook"' \
+      | jq -rs --arg cutoff "$INERT_CUTOFF" --argjson n "$INERT_MIN" --argjson blind "$INERT_BLIND_JSON" '
+      map(select(type=="object" and .hook and .disposition and .ts and .ts >= $cutoff))
       | group_by(.hook)
       | map({hook: .[0].hook,
-             abstained: (map(select(.ts >= $cutoff and .disposition=="abstained")) | length),
-             fired:     (map(select(.ts >= $cutoff and .disposition!="abstained")) | length)})
-      | .[] | select(.fired == 0 and .abstained >= $n) | .hook' 2>/dev/null || true)"
+             total:     length,
+             abstained: (map(select(.disposition=="abstained")) | length),
+             blind:     (map(select(.disposition=="abstained"
+                          and (((.reason // "") | split(":")[0]) as $rt | ($blind | index($rt)) != null))) | length)})
+      | .[] | select(.total >= $n and .abstained == .total and .blind == .abstained) | .hook' 2>/dev/null || true)"
   if [ -z "$inert" ]; then emit_critic_result wiring-inert 0 0; return 0; fi
   while IFS= read -r hook; do
     [ -n "$hook" ] || continue
@@ -320,18 +341,40 @@ selftest() {
   n="$(count_source "$d/cg/backlog.jsonl" gate-red)"
   [ "$n" -eq 0 ] && okp "C4: green gate → 0 adds" || badp "C4: green gate added $n"
 
-  # (C3) inert hook (12/12 abstained in-horizon, never fired) → 1 add ; a hook that fired in-horizon → 0
+  # (C3) INERT: a hook whose every in-horizon abstention is BLIND (transcript-missing = could not
+  # observe its guard), never fired → 1 add. The blind reason is the load-bearing discriminator.
   mkdir -p "$d/i"
-  for _ in $(seq 1 12); do printf '{"hook":"stale-guard","disposition":"abstained","ts":"%s"}\n' "$nowts"; done > "$d/i/seed.jsonl"
+  for _ in $(seq 1 12); do printf '{"hook":"stale-guard","disposition":"abstained","reason":"transcript-missing","ts":"%s"}\n' "$nowts"; done > "$d/i/seed.jsonl"
   run_case i --once CC_DISCOVER_IDL="$d/i/seed.jsonl"
   n="$(count_source "$d/i/backlog.jsonl" wiring-inert)"
-  [ "$n" -eq 1 ] && okp "C3: inert hook 12/12 abstained → 1 wiring-inert add" || badp "C3: expected 1, got $n"
+  [ "$n" -eq 1 ] && okp "C3: inert hook 12/12 BLIND-abstained → 1 wiring-inert add" || badp "C3: expected 1, got $n"
+  # (C3-fired) a hook that fired in-horizon is NOT inert (even with blind abstains) → 0 adds.
   mkdir -p "$d/ih"
-  { for _ in $(seq 1 10); do printf '{"hook":"h","disposition":"abstained","ts":"%s"}\n' "$nowts"; done
-    printf '{"hook":"h","disposition":"fired","ts":"%s"}\n' "$nowts"; } > "$d/ih/seed.jsonl"
+  { for _ in $(seq 1 10); do printf '{"hook":"h","disposition":"abstained","reason":"transcript-missing","ts":"%s"}\n' "$nowts"; done
+    printf '{"hook":"h","disposition":"fired","reason":"deference","ts":"%s"}\n' "$nowts"; } > "$d/ih/seed.jsonl"
   run_case ih --once CC_DISCOVER_IDL="$d/ih/seed.jsonl"
   n="$(count_source "$d/ih/backlog.jsonl" wiring-inert)"
-  [ "$n" -eq 0 ] && okp "C3: a hook that fired in-horizon → 0 adds" || badp "C3: healthy hook added $n"
+  [ "$n" -eq 0 ] && okp "C3: a hook that fired in-horizon → 0 adds" || badp "C3: fired hook added $n"
+  # (C3-dormant) reason-AWARE: 12/12 abstained but ALL for HEALTHY condition-not-met reasons
+  # (no-tell / not-armed) is a correctly-quiet conditional hook, NOT inert → 0 adds. This is the
+  # false positive this item fixes — reason-blind counting flagged every quiet advisory nightly.
+  mkdir -p "$d/id"
+  { for _ in $(seq 1 8); do printf '{"hook":"quiet-cond","disposition":"abstained","reason":"no-tell","ts":"%s"}\n' "$nowts"; done
+    for _ in $(seq 1 4); do printf '{"hook":"quiet-cond","disposition":"abstained","reason":"not-armed","ts":"%s"}\n' "$nowts"; done; } > "$d/id/seed.jsonl"
+  run_case id --once CC_DISCOVER_IDL="$d/id/seed.jsonl"
+  n="$(count_source "$d/id/backlog.jsonl" wiring-inert)"
+  [ "$n" -eq 0 ] && okp "C3: 12/12 DORMANT (healthy condition-not-met) → 0 adds (reason-aware)" || badp "C3: dormant hook falsely added $n"
+  # (C3-window) PER-HOOK windowing: a rare hook's exonerating fire (buried FIRST) survives a
+  # high-frequency hook's flood — group_by(.hook) means no global tail can crowd it out. Old
+  # tail-5000 flagged the rare hook; per-hook grouping keeps its OWN fire in view. noisy's healthy
+  # churn (not-armed = dormant) is also not counted.
+  mkdir -p "$d/iw"
+  { printf '{"hook":"rare-guard","disposition":"fired","reason":"past-boundary","ts":"%s"}\n' "$nowts"
+    for _ in $(seq 1 60); do printf '{"hook":"noisy","disposition":"abstained","reason":"not-armed","ts":"%s"}\n' "$nowts"; done
+    for _ in $(seq 1 12); do printf '{"hook":"rare-guard","disposition":"abstained","reason":"no-assistant-text","ts":"%s"}\n' "$nowts"; done; } > "$d/iw/seed.jsonl"
+  run_case iw --once CC_DISCOVER_IDL="$d/iw/seed.jsonl"
+  n="$(count_source "$d/iw/backlog.jsonl" wiring-inert)"
+  [ "$n" -eq 0 ] && okp "C3: per-hook window keeps a rare hook's fire despite a noisy flood" || badp "C3 window: expected 0, got $n"
 
   # (d) all sources absent → ZERO adds, and abstentions EFFECT-logged in the IDL
   run_case none --once
