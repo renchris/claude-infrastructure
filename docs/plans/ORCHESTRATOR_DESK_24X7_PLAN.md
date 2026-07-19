@@ -196,7 +196,9 @@ that wires their subjects — no gate goes green on capability alone again. Full
   activation-watch · wiring-all v3 — 20 bats + 6 plists lint-clean) · fm2-stack `a103e7f`
   (engagement-verify · registration · role-writer · goal-guard · disposition-hardening ·
   desk-assert — 81 tests) · landing `cf0218b` (lock re-key by git-common-dir · land-verify ·
-  ship-land.sh pipeline w/ gate-green producer · thin ship.md · sweep --mine — 32 bats, faithful
+  ship-land.sh pipeline [gate-green producer NOT actually delivered here — false claim, corrected in
+  the 2026-07-19 Cycle-3 reconciliation below; P0-1 landed separately as `cc9348c`] · thin ship.md ·
+  sweep --mine — 32 bats, faithful
   2026-07-11 repro exits 8) · reap-safety `8fe4cb9` (ms/s+self-scope · in-flight-tool guard ·
   wait-contract+desk-role never-reap · classify→act identity pin · landed-by-content ·
   monthly-spend cap-grep — 58 checks; + C-locale unicode-adjacency fix, repo sweep clean) ·
@@ -248,3 +250,67 @@ that wires their subjects — no gate goes green on capability alone again. Full
   timeout kills it mid-gate (fail-closed, no partial land) → run backgrounded. (3) combined-branch land
   (cherry-pick 3 disjoint single-owner branches → 1 gate run) beat 3 serial lands on wall-clock + CPU,
   and the combined gate doubles as an integration test; the known cc-run load-flake did NOT trigger.
+- 2026-07-19 ~02:xxZ (desk session, Opus@max, /goal-driven — cc-backlog item `e1624e88cac1`) —
+  **CYCLE 3: COMPLETENESS RECONCILIATION + TWO LINCHPIN SAFETY FIXES landed; agent-buildable remainder
+  enumerated into the mission ledger; operator go-live surfaced.** Method: a 7-agent read-only audit wave
+  (one per Program A/B/C/D+E/F + adversarial P0-13..18 + the activation/wiring boundary) verified EVERY
+  task ID against HEAD, not the status-log's self-report — plus the full `bats tests/` = **629/629 green**
+  ground-truth. Corpus: `docs/research/desk-audit-2026-07-18/` + the lead's synthesis. **What the audit
+  found (the honest map):**
+  - The **P0-ledger core (P0-1..18) + Cycle-2 spine is genuinely built, RED-proven, landed, and the
+    desk-existence organs are LOADED LIVE** (`com.claude.desk-invariant`, `com.claude.nightly-regression`,
+    `com.chrisren.autonomy-sweep`, `com.chrisren.cc-reaper`, `com.claude.lead-supervisor`, `com.reso.lr-reset-poller`
+    — the last FIRED in prod 2026-07-19). Hooks (completion-assert/anti-deference/session-continue/dod-persist/
+    boundary-handoff/activation-watch) live + uniform across all config dirs.
+  - **FALSE already-landed premises (corrected):** (1) **P0-1 gate-green producer was NOT built** — `ship-land.sh`
+    never wrote `gate-green`; the only writers were test fixtures, so `boundary-handoff.sh:122` abstained 100%
+    in prod (FM1(b) advisory inert). The "landing … pipeline w/ gate-green producer" claim above was false.
+    (2) **P0-14 dead-desk RESPAWN was broken in prod** — `desk-invariant.sh fire_replacement` omitted the
+    `--prompt-file` that `handoff-fire.sh:617` requires (rode an unconsumed `DESK_BOOT_BRIEF`), so a fully-dead
+    desk exited 1 and was NEVER recreated (a17's #1 "nothing can CREATE a desk" organ, silently broken; its
+    selftest masked it by stubbing `FIRE_BIN` accept-anything). STUNNED/STALE re-prompt + spend-cap OS-page
+    (the 11h-stun incident) DO work and are live — only the fully-dead respawn sub-path was broken.
+  - **Program-*ladder* over-claim:** "W-a/W-b COMPLETE" is accurate only for the P0-ledger rows; the P1/P2
+    ladder items (T-P*/G-P*) were largely NEVER assigned to a teammate and remain unbuilt (dark capabilities:
+    every safety capability — deathwatch/reconciler/wait-contract-lint/never-stuck/completion-push F5/payload-lint
+    F3/exit-deadline F4 — is built + bats-green but the live `lead-supervisor.sh sweep()` invokes NONE).
+  - **Two plan-mandated STAGING gaps:** `~/.claude/autonomy/pending-activation/` was ABSENT → `activation-watch`
+    (wired live, all dirs) was INERT (watches a missing dir); and `wiring-all.sh`'s symlink list was stale vs
+    Cycle-2 (missed cc-wave-plan/dispatch/discover).
+
+  **THIS session landed (branch `feat/desk-24x7-finalize`, RED-first, single 629+2-bats gate, via ship-land):**
+  `27d9ed1` P0-14 dead-desk respawn (pass `--prompt-file "$BRIEF"`; masking accept-anything stub → contract-faithful,
+  RED-proven) · `cc9348c` P0-1 gate-green producer (write HEAD→gate-green after `run_gate` passes, both --dry-run
+  + push paths; RED-proven absent-before/==HEAD-after/never-red) · `645186a` wiring-all Cycle-2 symlink
+  refresh · plan reconciliation (this entry + the inline P0-1 correction). Plus (non-repo, plan law #6): the
+  **pending-activation queue POPULATED** with the outstanding C10 operator steps as durable one-action scripts +
+  rollback (activation-watch is now a live absence-is-loud net), and the **full agent-buildable remainder
+  ENUMERATED into cc-backlog** (the plan's own Program-D discovery function, done by hand since the discovery
+  plist is unloaded).
+
+  **OPERATOR go-live sequence (C10 — agent staged, operator runs; a class-B decision packet + desk notify were
+  opened):** (1) **reap-guard insert into live `teammate-auto-shutdown.sh` FIRST** (sequencing lynchpin — must
+  precede any autonomous ship-land, else the dirty-tree shield is removed while reap-guard is dormant = wrongful-reap
+  window) → (2) load `com.claude.dispatcher` + `com.claude.discovery` plists (the autonomous-operator go-live
+  ratification, operator decisions #5/#6) → (3) arm the phone page channel (`PUSHOVER_TOKEN/USER` + `CC_PAGE_TO=desk`
+  — currently dead-letter, P0-7 decision #2). Open operator decisions unchanged: #1 reboot posture, #3 monthly-spend
+  policy, #4 ask-narrowing sanction.
+
+  **Agent-buildable remainder (→ cc-backlog for future desk waves; NONE are C10):** P0-14-adjacent none; the reboot
+  agent-half (P0-10 resume chain + boot-delta pager), P0-7/P0-8 agent halves (delivery-verify probe, headless resume,
+  killed-session monthly-spend packet), the net-positive value ledger (T-P14-7/T-P8-5 — the program's own goal),
+  T-P10-2 idl.jsonl rotation (183 MB live!), T-P6-4 abstain==100% alarm sweep, T-P7-3 cc-idl/cc-audit, T-P3-3
+  reaper→desk paging, P0-12b reaper enumerated≈live-panes self-check, T-P11-6 desk-assert live wiring, waiting-recycle
+  G-P11-7/T-P1-8, T-P10-3 `$CLAUDE_CONFIG_DIR` brick-guard, G-P13-4/G-P6-10 gate coverage, T-P15-4 ship-rail push hook,
+  T-P15-7 executable CC_UNATTENDED guard, T-P8-6 cliff→kimi, T-P7-7 gate-batching manifest, T-P16-3/4 pmset/caffeinate
+  LaunchAgents, T-P10-7 obsolete-watcher removal, T-P9-7 ship-land auto-rollback. The **supervisor-cadence wiring
+  cluster** (T-P4-1/4-2/5-3/3-5, T-P7-2/5-5) is RESERVED as operator-sanctioned per `wiring-all.sh:151` ("the agent
+  never edits the live daemon") — surfaced, not auto-built.
+  **Learnings:** (1) the audit vindicated the "already-landed premises are the #1 audit dimension" rule — 2 of the
+  program's highest-value P0 items (P0-1, P0-14) were false-landed/broken-in-prod behind green selftests that
+  MASKED the gap (accept-anything stubs). Never trust a status-log "landed"; grep HEAD + demand a contract-faithful
+  RED test. (2) "capability-green ≠ active" held 3rd/4th time: dark capabilities + an inert activation-watch (empty
+  queue) + an unconsumed env var were all green-at-the-unit yet dead-in-prod. (3) Cycle-3 scope was deliberately
+  bounded to lead-buildable linchpins + staging + honest enumeration; the mechanical ladder remainder is fed to the
+  mission ledger for the dispatcher's future waves rather than hand-built in one session (respects the desk's own
+  iterative-wave architecture + the scope-freeze discipline).
