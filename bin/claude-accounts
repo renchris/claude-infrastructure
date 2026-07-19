@@ -58,6 +58,11 @@ from hashlib import sha256
 HOME = os.path.expanduser("~")
 CFG_PATH = os.environ.get("CLAUDE_ACCOUNTS_JSON", os.path.join(HOME, ".claude", "accounts.json"))
 LOG_PATH = os.path.join(HOME, ".claude", "logs", "claude-accounts.log")
+# Last-good quota ledger: TTL-free, per-account, persisted OUTSIDE /tmp so a reboot/tmp-sweep
+# never strands the last-known numbers. Env-overridable (mirrors CLAUDE_ACCOUNTS_JSON) so tests
+# and scratch configs never touch the real ledger.
+LASTGOOD_PATH = os.environ.get(
+    "CLAUDE_ACCOUNTS_LASTGOOD", os.path.join(HOME, ".claude", "logs", "claude-accounts-lastgood.json"))
 
 
 def log_event(msg):
@@ -291,9 +296,79 @@ def pick(u, kind, scope_name=None):
     return None, None
 
 
+# ---- last-good quota ledger (durable stale-quota visibility; NEVER influences routing) --------
+# The oauth/usage endpoint yields quota ONLY on a 200. Every other outcome — logged-out /
+# token-invalid / keychain-error / expired-stale-401 / no-data / 429 poll-throttle — leaves the
+# row quota-blank and _excluded() drops it from routing. That exclusion is CORRECT and stays; the
+# gap is that the STRANDED quota (how much weekly an unreachable account still holds) vanishes from
+# --json / the table / a handoff successor. This ledger records the last good numbers per account
+# so those surfaces can show "next3 logged-out — last-known weekly 31% @ 09:40" while the router
+# still excludes the row (its error field is untouched). Generalizes the 429 poll-throttle's
+# in-memory `prev` inheritance (≤ cache TTL) to a durable, TTL-free store.
+
+
+def load_lastgood():
+    """-> {acct: {quota fields + quota_as_of}}. Never raises (missing/corrupt ⇒ {})."""
+    try:
+        with open(LASTGOOD_PATH) as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def save_lastgood(ledger):
+    """Atomic replace; best-effort (a failed persist must never break a sweep)."""
+    try:
+        os.makedirs(os.path.dirname(LASTGOOD_PATH), exist_ok=True)
+        tmp = f"{LASTGOOD_PATH}.{os.getpid()}.tmp"
+        with open(tmp, "w") as f:
+            json.dump(ledger, f, indent=2, sort_keys=True)
+        os.replace(tmp, LASTGOOD_PATH)
+    except OSError:
+        pass
+
+
+def inherit_lastgood(row, ledger, prev):
+    """Merge an account's last-good quota into a quota-absent row for VISIBILITY ONLY.
+    NEVER touches row['error'] → _excluded() still bails on it, so the router excludes the row
+    exactly as before (no policy change). Absolute reset stamps are re-derived to *_reset_h at
+    read time, so a day-old ledger shows a correct (possibly already-elapsed) countdown, not a
+    frozen one. Prefers the durable ledger; falls back to the ≤TTL in-memory `prev` snapshot
+    (percent-only) for the window before the first good sweep populates the ledger. Returns True
+    if any quota was inherited."""
+    e = ledger.get(row["acct"])
+    if e and e.get("weekly_pct") is not None:
+        row["session_pct"] = e.get("session_pct")
+        row["session_reset_h"] = hrs_until(e.get("session_reset_at"))
+        row["weekly_pct"] = e.get("weekly_pct")
+        row["weekly_reset_at"] = e.get("weekly_reset_at")
+        row["weekly_reset_h"] = hrs_until(e.get("weekly_reset_at"))
+        row["fable_pct"] = e.get("fable_pct")
+        row["fable_reset_at"] = e.get("fable_reset_at")
+        row["fable_reset_h"] = hrs_until(e.get("fable_reset_at"))
+        row["credits_on"] = bool(e.get("credits_on"))
+        row["credits_used"] = e.get("credits_used") or 0.0
+        row["stale_quota"] = True
+        row["quota_as_of"] = e.get("quota_as_of")
+        return True
+    pr = (prev or {}).get("rows", {}).get(row["acct"])
+    if pr and pr.get("weekly_pct") is not None:
+        for f in ("session_pct", "weekly_pct", "fable_pct"):
+            if pr.get(f) is not None:
+                row[f] = pr[f]
+        ts = (prev or {}).get("ts")
+        row["stale_quota"] = True
+        row["quota_as_of"] = datetime.fromtimestamp(ts, timezone.utc).isoformat() if ts else None
+        return True
+    return False
+
+
 def collect(cfg, no_heal=False, prev=None):
     kc = cfg["keychain_account"]
     counts = concurrency(cfg)
+    ledger = load_lastgood()
+    lastgood_dirty = False
     rows = []
     for acct in cfg["accounts"]:
         name = acct["name"]
@@ -303,6 +378,7 @@ def collect(cfg, no_heal=False, prev=None):
         if kstate != "present":
             row["auth"] = "logged-out" if kstate == "no-keychain-item" else "keychain-error"
             row["error"] = row["auth"]
+            inherit_lastgood(row, ledger, prev)
             rows.append(row)
             continue
         # (creds or {}): a valid keychain item can carry an empty/absent claudeAiOauth blob
@@ -319,6 +395,7 @@ def collect(cfg, no_heal=False, prev=None):
             elif "invalid" in detail.lower() or "revoked" in detail.lower():
                 row["auth"] = "logged-out"
                 row["error"] = "logged-out"
+                inherit_lastgood(row, ledger, prev)
                 rows.append(row)
                 continue
             else:
@@ -336,6 +413,7 @@ def collect(cfg, no_heal=False, prev=None):
                 else:
                     row["auth"] = "token-invalid"
                     row["error"] = "token-invalid (revoked? run /accounts relogin check)"
+                inherit_lastgood(row, ledger, prev)
                 rows.append(row)
                 continue
         if status == 429:
@@ -346,16 +424,13 @@ def collect(cfg, no_heal=False, prev=None):
             # session-classifier read a transient poll failure as a hard cap (false-limit
             # misdiagnosis 2026-07-16). Flag it distinctly + fall back to last-good percents.
             row["poll_throttled"] = True
-            pr = (prev or {}).get("rows", {}).get(name)
-            if pr and pr.get("weekly_pct") is not None:
-                row.update({k: v for k, v in pr.items() if v is not None})
-                row["error"] = "poll throttled ↻ (cached usage)"
-            else:
-                row["error"] = "poll throttled ↻"
+            row["error"] = ("poll throttled ↻ (cached usage)"
+                            if inherit_lastgood(row, ledger, prev) else "poll throttled ↻")
             rows.append(row)
             continue
         if not u or "limits" not in u:
             row["error"] = f"no data (http {status})"
+            inherit_lastgood(row, ledger, prev)
             rows.append(row)
             continue
         sp, sr = pick(u, "session")
@@ -368,7 +443,20 @@ def collect(cfg, no_heal=False, prev=None):
             "fable_pct": fp, "fable_reset_h": hrs_until(fr), "fable_reset_at": fr,
             "credits_on": bool(eu.get("is_enabled")), "credits_used": eu.get("used_credits") or 0.0,
         })
+        # capture last-good (weekly is the durable stranded-quota signal; skip data-less rows).
+        # Absolute reset stamps are stored (NOT the decaying *_reset_h) — inherit re-derives them.
+        if wp is not None:
+            ledger[name] = {
+                "session_pct": sp, "session_reset_at": sr,
+                "weekly_pct": wp, "weekly_reset_at": wr,
+                "fable_pct": fp, "fable_reset_at": fr,
+                "credits_on": bool(eu.get("is_enabled")), "credits_used": eu.get("used_credits") or 0.0,
+                "quota_as_of": datetime.now(timezone.utc).isoformat(),
+            }
+            lastgood_dirty = True
         rows.append(row)
+    if lastgood_dirty:
+        save_lastgood(ledger)
     return rows
 
 
@@ -624,6 +712,21 @@ def fmt_h(h):
     return f"{h / 24:.1f}d"
 
 
+def _fmt_asof(iso):
+    """A last-good quota_as_of stamp → 'HH:MM' when captured today, else 'Mon DD', in LOCAL time
+    (matches the table's header clock). None / unparseable ⇒ '' (caller omits the '@ …')."""
+    if not iso:
+        return ""
+    try:
+        dt = datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return ""
+    if dt.tzinfo is not None:
+        dt = dt.astimezone()                     # aware → local, to match 'live · Mon HH:MM'
+    now = datetime.now()
+    return dt.strftime("%H:%M") if dt.date() == now.date() else dt.strftime("%a %d")
+
+
 AUTH_GLYPH = {
     "ok": ("●", GREEN), "healed": ("●", PERI), "stale": ("◐", AMBER),
     "logged-out": ("○", RED), "token-invalid": ("✕", RED), "keychain-error": ("△", AMBER),
@@ -655,10 +758,19 @@ def render_table(rows, cfg, win, cached, prev=None):
         glyph, grgb = AUTH_GLYPH.get(a, ("·", GRAY))
         name = c(f"{r['acct']:<8}", bold=True) if a in ("ok", "healed") else f"{r['acct']:<8}"
         k = c(f"{r.get('k', 0):>4}", GRAY, dim=(r.get("k", 0) == 0))
-        if "error" in r and r.get("session_pct") is None:
+        if "error" in r and not r.get("poll_throttled"):
+            # auth-broken (logged-out / token-invalid / keychain-error / expired-stale / no-data):
+            # error text prominent, plus the STRANDED last-known weekly when the ledger has it
+            # (inheritance populated session_pct, which the old `is None` guard would have hidden).
             msg = r["error"]
+            lastknown = ""
+            if r.get("stale_quota") and r.get("weekly_pct") is not None:
+                asof = _fmt_asof(r.get("quota_as_of"))
+                lastknown = c(f"  · last-known wk {r['weekly_pct']:.0f}%"
+                              + (f" @ {asof}" if asof else ""), AMBER, dim=True)
             print(f"  {name} {c(glyph, grgb)} {k}  "
                   + c(msg, RED if a in ("logged-out", "token-invalid") else AMBER)
+                  + lastknown
                   + c(f"  ({r['email']})", GRAY, dim=True))
         else:
             srh = r.get("session_reset_h")
@@ -687,10 +799,12 @@ def render_table(rows, cfg, win, cached, prev=None):
             alerts.append(c("◐ ", AMBER) + c(f"{r['acct']} token stale — heal skipped", AMBER)
                           + c(f" · {r.get('heal_note', r.get('error', ''))}", GRAY, dim=True))
         sp = r.get("session_pct")
-        if sp is not None and sp >= 85:
+        # these two alerts imply a LIVE, routable account — never fire them on a stale/last-known
+        # row (its number is historical; the account is currently unreachable/excluded).
+        if sp is not None and sp >= 85 and not r.get("stale_quota"):
             alerts.append(c("▲ ", RED) + c(f"{r['acct']} 5h window at {sp:.0f}% — routing cutoff", RED)
                           + c(f" · resets in {fmt_h(r.get('session_reset_h'))}", GRAY, dim=True))
-        if r.get("credits_on"):
+        if r.get("credits_on") and not r.get("stale_quota"):
             alerts.append(c("¢ ", AMBER) + c(f"{r['acct']} extra-usage credits ON", AMBER)
                           + c(f" · used {r.get('credits_used', 0):.0f}", GRAY, dim=True))
     if alerts:
