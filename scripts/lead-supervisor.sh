@@ -75,7 +75,12 @@ page(){ # $1=sid $2=state $3=detail
   # composer damping: ONE notify per sid per STATE — a re-sweep of an already-notified state stays
   # IDL/mailbox-quiet; a state CHANGE (DEAD→ESCALATED) re-notifies (2026-07-19 page-storm fix: every
   # ~30s sweep re-notified every known-dead session, flooding the desk composer)
-  [ "$(cat "$nf" 2>/dev/null)" = "$2" ] && return 0
+  local last; last="$(cat "$nf" 2>/dev/null || true)"
+  [ "$last" = "$2" ] && return 0
+  # ESCALATED is STICKY: the STALL?→ESCALATED pair re-fires every sweep for a zombie (stale telemetry
+  # + reused pid), so equality damping alone still leaks 2 notifies/sweep — after an ESCALATED send,
+  # only a genuine worsening to DEAD notifies again; clear_page (recovery/void) resets the marker
+  [ "$last" = "ESCALATED" ] && [ "$2" != "DEAD" ] && return 0
   # target resolves per page, not at startup: an empty CC_PAGE_TO falls back to the desk role file,
   # so a pane rebind (role-file rewrite) redirects pages with no plist edit and no daemon restart
   local target="$PAGE_TO"

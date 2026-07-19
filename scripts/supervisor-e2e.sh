@@ -120,6 +120,11 @@ printf '%s\n' "STALL?" > "$CC_SUPERVISOR_PAGEDIR/hang10.notified"
 CC_NOTIFY_CAPTURE="$SBX/notify.log" CC_PAGE_TO_FILE="$SBX/desk-role" CC_NOTIFY_BIN="$SBX/bin/cc-notify" bash "$SUP" --once >/dev/null 2>&1
 # (the stub captures the TARGET per send, so growth 1→2 lines = exactly one new notify)
 [ "$(wc -l < "$SBX/notify.log")" -eq 2 ] && ok "state change (→ESCALATED) re-notified exactly once" || no "state change did not re-notify once (lines=$(wc -l < "$SBX/notify.log"))"
+# sticky escalation: the next sweep re-fires the STALL?→ESCALATED pair for the same zombie — with
+# nf=ESCALATED both must be suppressed (the 2-notifies-per-sweep oscillation leak)
+printf '%s' "$(( $(date +%s) - 3 ))" > "$CC_SUPERVISOR_PAGEDIR/hang10.page"
+CC_NOTIFY_CAPTURE="$SBX/notify.log" CC_PAGE_TO_FILE="$SBX/desk-role" CC_NOTIFY_BIN="$SBX/bin/cc-notify" bash "$SUP" --once >/dev/null 2>&1
+[ "$(wc -l < "$SBX/notify.log")" -eq 2 ] && ok "escalated is sticky (STALL?/ESCALATED oscillation quiet)" || no "oscillation leaked notifies (lines=$(wc -l < "$SBX/notify.log"))"
 
 echo ""
 echo "supervisor-e2e: $P passed, $F failed"
