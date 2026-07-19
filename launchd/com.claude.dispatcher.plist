@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.claude.dispatcher — the L4 dispatcher spine (T-P7-4/5): cron-woken `cc-dispatch --once`
+  pulls open backlog items → quota-places via cc-wave-plan → claims + spawns a worker session,
+  logging each decision to the IDL. A quota-cliff PAGES + abstains (never a blind spawn).
+
+  ⚠️  TEMPLATE — NOT auto-loaded. RunAtLoad is FALSE and this file ships UNLOADED on purpose:
+  autonomous "Claude kicks off Claude" spawning begins ONLY when the OPERATOR loads it by hand
+  (launchctl bootstrap) after the C10 review in docs/activation/dispatcher-activate-snippet.md.
+  The agent never loads launchd. Kill-switch: `launchctl bootout gui/$UID/com.claude.dispatcher`.
+
+  StartInterval 900s (15 min): the desk cadence for pulling new work; tune per throughput.
+  PATH prepends ~/.claude/bin so cc-dispatch, cc-backlog, cc-wave-plan, handoff-fire.sh + jq
+  resolve (launchd's default PATH lacks it — the 36f9d64 lesson). CC_DISPATCH_PROJECT pins the
+  repo whose backlog is dispatched; edit it for another project. $HOME expands at runtime.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.claude.dispatcher</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"; export CC_DISPATCH_PROJECT="$HOME/Development/claude-infrastructure"; exec "$HOME/.claude/bin/cc-dispatch" --once</string>
+    </array>
+
+    <key>StartInterval</key>
+    <integer>900</integer>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>LowPriorityIO</key>
+    <true/>
+
+    <key>Nice</key>
+    <integer>5</integer>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/claude-dispatcher.stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/tmp/claude-dispatcher.stderr.log</string>
+</dict>
+</plist>
