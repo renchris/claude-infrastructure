@@ -28,6 +28,7 @@ export CC_PERMPEND_DIR="$SBX/permpend";           mkdir -p "$CC_PERMPEND_DIR"
 export CC_PERMPEND_NOTICE_S=1                      # page a beacon pending ≥1s (fast tests; prod default 120)
 export CC_PERMPEND_HORIZON_S=86400                # orphan-reap horizon (T16 ages a beacon past it)
 export CC_REGISTRY_DIR="$SBX/registry";           mkdir -p "$CC_REGISTRY_DIR"   # paneUUID→sid map for the registered-desk exemption tests (T23-T26)
+export CC_SUP_OWNER_PAT=sleep     # the live-session fixtures below are `sleep` PIDs — mark them owners (prod default: claude)
 
 ALIVE=; cleanup(){ [ -n "$ALIVE" ] && kill "$ALIVE" 2>/dev/null; rm -rf "$SBX"; }
 trap cleanup EXIT
@@ -292,6 +293,27 @@ mktel deskC 40 100 99999999 "$REPO"                              # registered de
 CC_PAGE_TO_FILE="$SBX/desk-role" bash "$SUP" --once >/dev/null 2>&1
 paged deskC && ok "dead registered-desk pid still pages (exemption is pid-alive-only)" || no "dead desk not paged (exemption wrongly masked a death)"
 idl_has '"sid":"deskC","state":"DEAD"' && ok "DEAD state emitted for the dead registered desk" || no "DEAD not emitted for the dead desk"
+echo "T27 GC — a LIVE-OWNER row stale past the horizon ⇒ row DROPPED, no STALL? page (item fdc101e8b0c7)"
+# the zombie: a hung owner (silent for days) or a pid recycled to a NEWER claude reads as "alive" on a
+# days-stale row, so the STALL? branch re-pages it every sweep FOREVER. gc_stale drops it past GC_S.
+reset; rm -f "$CC_TELEMETRY_DIR"/*.json
+mktel zombie 40 100 "$ALIVE" "$REPO"                              # alive OWNER (kill -0 ok, cmd matches OWNER_PAT); telemetry 100s stale
+CC_SUP_GC_S=50 bash "$SUP" --once >/dev/null 2>&1                 # horizon 50s < age 100s ⇒ GC (age also >= STALL_S, so this proves GC PRE-EMPTS STALL?)
+tel_exists zombie && no "horizon-stale live-owner row NOT dropped (zombie persists)"    || ok "horizon-stale live-owner row GC'd"
+paged zombie      && no "GC'd zombie still PAGED (STALL? leaked past the horizon)"      || ok "no page for a GC'd zombie"
+idl_has '"kind":"gc"'      && ok "GC recorded in IDL (S-4 auditable, not a silent delete)"           || no "GC not recorded in IDL"
+idl_has '"state":"STALL?"' && no "STALL? paged for a horizon-stale row (GC must pre-empt it)"        || ok "STALL? did not fire (GC pre-empted the zombie)"
+
+echo "T28 RECYCLED PID — alive pid that is NOT a claude owner + stale ⇒ DEAD, never STALL? (item fdc101e8b0c7)"
+# kill -0 alone reads a recycled (non-claude) pid as a live session and STALL?-escalates it; the owner
+# check routes it to DEAD instead — where an UNLANDED cwd (here $REPO, no origin/main) is a stranded death.
+reset; rm -f "$CC_TELEMETRY_DIR"/*.json
+tail -f /dev/null & NONOWNER=$!                                   # a genuinely-alive pid whose command does NOT match OWNER_PAT (sleep)
+mktel recycled 40 100 "$NONOWNER" "$REPO"                         # age 100 >= STALL_S but < GC default: would be STALL? if kill -0 were trusted blindly
+once
+kill "$NONOWNER" 2>/dev/null
+idl_has '"state":"STALL?"'              && no "a recycled (non-owner) alive pid was paged STALL? (kill -0 trusted blindly)" || ok "recycled pid NOT paged STALL?"
+idl_has '"kind":"page".*"state":"DEAD"' && ok "recycled-pid death routed to DEAD (owner-identity check)"                    || no "recycled pid not classified DEAD"
 
 echo ""
 echo "supervisor-e2e: $P passed, $F failed"

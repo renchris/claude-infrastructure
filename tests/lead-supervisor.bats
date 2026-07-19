@@ -17,7 +17,7 @@ setup() {
   echo "$output" | grep -qE 'supervisor-e2e: [0-9]+ passed, 0 failed'
   # guard against a zero-check 'pass' (a suite that silently runs nothing must not read green)
   n_pass="$(echo "$output" | sed -nE 's/.*supervisor-e2e: ([0-9]+) passed.*/\1/p')"
-  [ "${n_pass:-0}" -ge 30 ]
+  [ "${n_pass:-0}" -ge 36 ]
 }
 
 @test "clean-completion reap + stranded-death page are both exercised (item 9b183d78c723)" {

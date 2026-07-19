@@ -35,11 +35,12 @@ MIN_HORIZON_S=$(( SUPERVISOR_SWEEP_MAX_S * SAFETY ))
 # not supervisor-observed evidence. A lint that flagged it would false-positive on every run, and a
 # detector that cries wolf is a detector that gets ignored (the same reason cc-board has a grace window).
 EVIDENCE_GREP='cc-telemetry|cc-registry|CC_TELEMETRY_DIR|CC_REGISTRY_DIR'
-# scripts/lead-supervisor.sh READS telemetry (evidence) and has an `rm -f`, so section-3 flags it — but
-# its only rm -f is `clear_page` on its OWN page files (a page LIFECYCLE op: a page is removed when it is
-# resolved/voided), NOT an age-horizon reaper on the telemetry/registry spine. It declares no `-mmin`/
-# `RETAIN_H` horizon, so sections 1/2 find nothing to bound. Declared here = reviewed; if it ever grows a
-# real age-reaper on evidence, sections 1/2 will then bound it (this is why declaring keeps the protection).
+# scripts/lead-supervisor.sh READS telemetry (evidence) and reaps it two ways: (a) reap_clean / clear_page
+# drop a row/page on a RESOLVED lifecycle end (clean-completion or page void) — a page/state LIFECYCLE op,
+# not an age reaper; (b) gc_stale is a REAL AGE-HORIZON reaper — it drops a live-owner telemetry row past
+# CC_SUP_GC_S seconds (item fdc101e8b0c7: a hung / pid-recycled owner otherwise STALL?-escalates every
+# sweep). Section 2b below bounds that horizon ≥ the floor, exactly as §1/§2 bound -mmin/RETAIN_H — the
+# age-reaper the earlier note anticipated ("declaring keeps the protection"). Declared here = reviewed.
 # scripts/lead-reconciler.sh (L4) references CC_REGISTRY_DIR (an INDEPENDENT liveness roster) and has an
 # `rm -f`, so section-3 flags it — but its only rm -f is clearing a DIVERGENCE-STATE file when that
 # divergence RESOLVES (a state LIFECYCLE op, the exact analog of clear_page) + a jq temp; NOT an age-horizon
@@ -109,6 +110,23 @@ while IFS= read -r hit; do
     say "ok  $f:$ln  retention ${secs}s (${hrs}h)"
   fi
 done < <(grep -rnE 'RETAIN_H:-[0-9]+' $DECLARED 2>/dev/null)
+
+# ── 2b. seconds-style GC horizons (the supervisor's telemetry GC, item fdc101e8b0c7) ──────────────
+# lead-supervisor.sh's gc_stale drops telemetry rows past CC_SUP_GC_S seconds. Bound it exactly like the
+# -mmin (§1) and RETAIN_H (§2) horizons: a GC shorter than the slowest sweep ×10 would delete the evidence
+# a supervisor needs BEFORE it can sweep for it — the blindness this lint exists to forbid.
+while IFS= read -r hit; do
+  [ -n "$hit" ] || continue
+  f="${hit%%:*}"; rest="${hit#*:}"; ln="${rest%%:*}"
+  is_comment "$hit" && continue
+  secs=$(printf '%s' "$hit" | sed -nE 's/.*CC_SUP_GC_S:-([0-9]+).*/\1/p')
+  [ -n "$secs" ] || continue
+  if [ "$secs" -lt "$MIN_HORIZON_S" ]; then
+    bad "$f:$ln  GC horizon ${secs}s (CC_SUP_GC_S) < floor ${MIN_HORIZON_S}s — a supervisor would MISS this evidence"
+  else
+    say "ok  $f:$ln  GC horizon ${secs}s (CC_SUP_GC_S)"
+  fi
+done < <(grep -rnE 'CC_SUP_GC_S:-[0-9]+' $DECLARED 2>/dev/null)
 
 # ── 3. FAIL-CLOSED on an UNDECLARED reaper ────────────────────────────────────────────────────────
 # A new file that both touches an evidence artifact AND deletes is a reaper nobody reviewed. Without
