@@ -255,6 +255,71 @@ await_armed() { # $1=logfile → 0 once armed, 1 on timeout
   return 1
 }
 
+# ---- reliable launch-command injection (INC ttys018, 2026-07-19) ------------------------------
+# Typing a launch command into an interactive zsh as a raw async_send_text CHAR-STREAM races the
+# target shell's ZLE: zsh-autosuggestions + zsh-syntax-highlighting recompute per keystroke and
+# `setopt CORRECT` spell-prompts the first word (all three are live in ~/.zshrc). On a freshly-split
+# pane whose .zshrc is still loading, that race TRANSPOSES characters — observed `cd` → `ould ocd` —
+# CORRECT then holds the mangled first word at a [nyae] prompt and the tail of the line (including
+# the `"$(cat …)"`) spills out of its quotes, so the brief floods the shell as raw commands and the
+# launcher never starts (item e4c7e7fb41bd; worker left task-less). Two composed defenses, both from
+# stock it2 primitives (no it2-package edit):
+#   BRACKETED PASTE — wrap the command in ESC[200~ … ESC[201~ so ZLE inserts it as ONE literal block
+#     with NO per-character widget firing (autosuggest / highlight / correct all sit out a paste); the
+#     command lands intact regardless of shell-init timing or plugins.
+#   ECHO-VERIFY before submit — read the pane back and confirm the intact command is on the input line
+#     BEFORE the CR. A half-ready shell that dropped the paste never gets an Enter; clear the line and
+#     retry with a longer settle. The destructive keystroke (Enter — which makes the shell RUN the
+#     line and `cat` the brief) is gated on proof, so a mangled line is NEVER executed.
+# This composes with the C1 no-focus-steal surface work (background tab, no raise): a background fresh
+# zsh still races ZLE, so intact injection is needed even once focus-steal is gone. Timings are env-
+# overridable so tests run in ms (IT2_BIN seam). ESC = $'\x1b'.
+BP_START=$'\x1b[200~'
+BP_END=$'\x1b[201~'
+it2_type_verified() { # $1=it2-bin $2=session-id $3=command → 0 verified+submitted / 1 fail-loud
+  local it2="$1" id="$2" cmd="$3" attempt mode reread want
+  # nlines=500 reads the WHOLE visible screen, not the last N rows: a freshly-split pane's prompt +
+  # input line sit at the TOP (row 0-1) with blank rows below, so a small "last N" window reads only
+  # blanks and never sees the command (live-verified 2026-07-19). 500 > any pane height, so it2's
+  # `read -n` returns every visible line and grep finds the command wherever the prompt is.
+  local attempts="${FIRE_TYPE_ATTEMPTS:-4}" settle="${FIRE_TYPE_SETTLE:-0.5}" nlines="${FIRE_TYPE_READLINES:-500}"
+  local presettle="${FIRE_TYPE_PRESETTLE:-0.12}"
+  want="$(printf '%s' "$cmd" | tr -d '[:space:]')"
+  [ -n "$want" ] || return 1
+  for attempt in $(seq 1 "$attempts"); do
+    # Final attempt degrades to a plain (un-bracketed) char-send — covers the exotic case of a shell
+    # with bracketed paste disabled; echo-verify still gates the CR so the fallback is never unsafe.
+    mode="paste"; [ "$attempt" -ge "$attempts" ] && mode="plain"
+    "$it2" session send -s "$id" $'\x15' >/dev/null 2>&1 || true    # Ctrl-U: scrub any partial line
+    /bin/sleep "$presettle"
+    if [ "$mode" = "paste" ]; then
+      "$it2" session send -s "$id" "${BP_START}${cmd}${BP_END}" >/dev/null 2>&1 || { /bin/sleep "$settle"; continue; }
+    else
+      "$it2" session send -s "$id" "$cmd" >/dev/null 2>&1 || { /bin/sleep "$settle"; continue; }
+    fi
+    /bin/sleep "$settle"
+    reread="$("$it2" session read -s "$id" -n "$nlines" 2>/dev/null | tr -d '[:space:]' || true)"
+    if printf '%s' "$reread" | grep -qF -- "$want"; then
+      "$it2" session send -s "$id" $'\r' >/dev/null 2>&1 && return 0   # verified → submit
+    fi
+    "$it2" session send -s "$id" $'\x15' >/dev/null 2>&1 || true    # scrub the mangled/half line
+    /bin/sleep "$settle"
+  done
+  return 1
+}
+
+# INC-4 engagement RESEND: re-inject the (multi-line) BRIEF into what should be the fired session's
+# claude composer. Same bracketed-paste atomicity so that IF claude has not yet taken the pane (still
+# a shell) the brief lands as ONE inert buffer blob instead of flooding line-by-line as commands (the
+# ttys018 catastrophe). No echo-verify here — the target is Ink's composer, not a shell input line —
+# but bracketed paste alone removes the flood. CR submits (Ink binds Enter to CR).
+it2_paste_submit() { # $1=it2-bin $2=session-id $3=text → 0 pasted+submitted / 1 send failed
+  local it2="$1" id="$2" text="$3"
+  "$it2" session send -s "$id" "${BP_START}${text}${BP_END}" >/dev/null 2>&1 || return 1
+  /bin/sleep "${FIRE_TYPE_SETTLE:-0.5}"
+  "$it2" session send -s "$id" $'\r' >/dev/null 2>&1
+}
+
 # ---- P0-11 engagement verification (FM2 / INC-4 cold-fire auto-submit race) -------------------
 # A non-recycle fire types the launch command + focuses, then historically printed "→ fired"
 # UNCONDITIONALLY. But a cold --worktree fire can race CC boot: the auto-submit keystroke is lost
@@ -293,7 +358,7 @@ verify_engagement() { # $1=projects $2=marker $3=regdir $4=pane $5=it2-bin $6=re
   done
   echo "⚠ fired session not engaged after ${timeout}s — re-typing the prompt once (INC-4 recovery)" >&2
   if [ -n "$pane" ] && [ -n "$it2" ] && [ -n "$resend" ]; then
-    "$it2" session run -s "$pane" "$resend" >/dev/null 2>&1 || true
+    it2_paste_submit "$it2" "$pane" "$resend" || true   # bracketed-paste: no flood if pane is still a shell
   fi
   t=0
   while [ "$t" -lt "$retry" ]; do
@@ -495,7 +560,7 @@ if [ "${1:-}" = "__recycle" ]; then
   sleep 2                                        # shell-prompt settle after claude exits
   ok=0
   for _ in 1 2; do
-    if "$IT2" session run -s "$RSID" "$(cat "$CMDFILE")" >/dev/null 2>&1; then ok=1; break; fi
+    if it2_type_verified "$IT2" "$RSID" "$(cat "$CMDFILE")"; then ok=1; break; fi
     sleep 3
   done
   [ "$ok" = 1 ] || { echo "!! it2 relaunch write failed twice — run manually in the pane: $(cat "$CMDFILE")" >&2; exit 1; }
@@ -509,7 +574,7 @@ if [ "${1:-}" = "__recycle" ]; then
   for _ in $(seq 1 15); do sleep 3; if cc_alive; then up=1; break; fi; done
   if [ "$up" = 0 ] && ! cc_alive; then
     echo "⚠ no claude on $TTY_PATH 45s after relaunch — retyping once"
-    "$IT2" session run -s "$RSID" "$(cat "$CMDFILE")" >/dev/null 2>&1 || true
+    it2_type_verified "$IT2" "$RSID" "$(cat "$CMDFILE")" || true
     for _ in $(seq 1 15); do sleep 3; if cc_alive; then up=1; break; fi; done
   fi
   if [ "$up" = 1 ] || cc_alive; then
@@ -1543,7 +1608,7 @@ it2_land() { # $1=new-session-id  → 0 on typed, 1 (loud) if the pane exists bu
   local id="$1" ok=0
   /bin/sleep 0.4
   for _ in 1 2; do
-    if "$REAL_IT2" session run -s "$id" "$CMD" >/dev/null 2>&1; then ok=1; break; fi
+    if it2_type_verified "$REAL_IT2" "$id" "$CMD"; then ok=1; break; fi
     /bin/sleep 0.6
   done
   [ "$ok" = 1 ] || { echo "!! pane $id created but typing the launch command failed (2×) — run manually in it: $CMD" >&2; return 1; }
@@ -1690,8 +1755,8 @@ recycle_fire() {
   [ -n "$tty" ] || { echo "!! recycle: session $SID not found in iTerm2" >&2; exit 1; }
   if ! ps -o comm= -t "$(basename "$tty")" 2>/dev/null | grep -qE 'node|claude'; then
     # No CC on the pane (shell-only): nothing to /exit — type the relaunch right now.
-    "$HOME/.claude/bin/it2" session run -s "$SID" "$CMD" \
-      || { echo "!! recycle: it2 write into $SID failed — run manually: $CMD" >&2; exit 1; }
+    it2_type_verified "$HOME/.claude/bin/it2" "$SID" "$CMD" \
+      || { echo "!! recycle: it2 verified-type into $SID failed — run manually: $CMD" >&2; exit 1; }
     echo "→ recycled (no CC was running): typed relaunch into $SID"
     return 0
   fi

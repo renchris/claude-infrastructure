@@ -26,12 +26,19 @@ setup() {
   PF="$BATS_TEST_TMPDIR/brief.md"
   printf 'BRIEF BODY line one\nline two\n' > "$PF"
 
-  # it2 stub: `session split` echoes a fake pane; run/focus/send are silent successes.
+  # it2 stub: `session split` echoes a fake pane; `session send`/`run` record the payload and
+  # `session read` echoes it back (terminal-echo sim) so it2_type_verified's echo-verify passes;
+  # focus + everything else are silent successes.
   BIN="$BATS_TEST_TMPDIR/bin"; mkdir -p "$BIN"
   cat > "$BIN/it2" <<STUB
 #!/bin/bash
+LAST="$BATS_TEST_TMPDIR/it2-last-send"
+case "\$1 \$2" in
+  "session send"|"session run") printf '%s' "\${!#}" > "\$LAST" ;;
+esac
 case "\$*" in
   *"session split"*) echo "Created new pane: $PANE" ;;
+  *"session read"*)  cat "\$LAST" 2>/dev/null ;;
   *) : ;;
 esac
 STUB

@@ -24,8 +24,13 @@ _fire_harness() {
   PANE="FAKEPANE-0000-0000-0000-000000000001"
   cat > "$BATS_TEST_TMPDIR/bin/it2" <<STUB
 #!/bin/bash
+LAST="$BATS_TEST_TMPDIR/it2-last-send"
+case "\$1 \$2" in
+  "session send"|"session run") printf '%s' "\${!#}" > "\$LAST" ;;
+esac
 case "\$*" in
   *"session split"*) echo "Created new pane: $PANE" ;;
+  *"session read"*)  cat "\$LAST" 2>/dev/null ;;
   *) : ;;
 esac
 STUB
