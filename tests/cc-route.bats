@@ -29,13 +29,22 @@ exit 2
 STUB
   chmod +x "$BATS_TEST_TMPDIR/accounts-stub"
   export CC_ROUTE_ACCOUNTS_BIN="$BATS_TEST_TMPDIR/accounts-stub"
+  # hermetic Kimi gate: default UNwired so the cliff tests exercise the plain STOP without touching the
+  # operator's real key/binary; the offer test below overrides CC_ROUTE_KIMI_BIN with a wired stub.
+  cat > "$BATS_TEST_TMPDIR/kimi-unwired" <<'STUB'
+#!/bin/bash
+[ "${1:-}" = wired ] && exit 1
+exit 0
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/kimi-unwired"
+  export CC_ROUTE_KIMI_BIN="$BATS_TEST_TMPDIR/kimi-unwired"
 }
 
-@test "selftest passes and runs all 15 checks (a zero-check suite must not 'pass')" {
+@test "selftest passes and runs all 19 checks (a zero-check suite must not 'pass')" {
   run "$T" selftest
   [ "$status" -eq 0 ]
   n_ok="$(printf '%s' "$output" | grep -c '^  ok ')"
-  [ "$n_ok" -eq 15 ]
+  [ "$n_ok" -eq 19 ]
 }
 
 @test "lead → one-line JSON plan {slot,model,account,lead_effort,reason} on stdout" {
@@ -56,6 +65,23 @@ STUB
   run bash -c "STUB_GENERAL_RC=2 '$T' lead 2>/dev/null"
   [ "$status" -eq 4 ]
   [ -z "$output" ]
+}
+
+@test "cliff + Kimi WIRED → STILL exit 4, stdout EMPTY, OFFERS claude-kimi on stderr (T-P8-6 offer, never auto-route)" {
+  cat > "$BATS_TEST_TMPDIR/kimi-wired" <<'STUB'
+#!/bin/bash
+exit 0
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/kimi-wired"
+  # exit-code + empty stdout contract is UNCHANGED by the offer (a cliff is always a STOP)
+  run bash -c "STUB_GENERAL_RC=2 CC_ROUTE_KIMI_BIN='$BATS_TEST_TMPDIR/kimi-wired' '$T' lead 2>/dev/null"
+  [ "$status" -eq 4 ]
+  [ -z "$output" ]
+  # the offer is surfaced on stderr (Kimi named, WIRED, alongside /limit-recover)
+  run bash -c "STUB_GENERAL_RC=2 CC_ROUTE_KIMI_BIN='$BATS_TEST_TMPDIR/kimi-wired' '$T' lead 2>&1 1>/dev/null"
+  [[ "$output" == *"claude-kimi"* ]]
+  [[ "$output" == *"Kimi hedge is WIRED"* ]]
+  [[ "$output" == *"limit-recover"* ]]
 }
 
 @test "data-unavailable → exit 3 and stdout is EMPTY (never fire blind)" {

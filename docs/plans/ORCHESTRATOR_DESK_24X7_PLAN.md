@@ -302,7 +302,7 @@ that wires their subjects — no gate goes green on capability alone again. Full
   T-P10-2 idl.jsonl rotation (183 MB live!), T-P6-4 abstain==100% alarm sweep, T-P7-3 cc-idl/cc-audit, T-P3-3
   reaper→desk paging, P0-12b reaper enumerated≈live-panes self-check, ~~T-P11-6 desk-assert live wiring~~ (DONE 2026-07-19 — see status log), waiting-recycle
   G-P11-7/T-P1-8, T-P10-3 `$CLAUDE_CONFIG_DIR` brick-guard, G-P13-4/G-P6-10 gate coverage, T-P15-4 ship-rail push hook,
-  T-P15-7 executable CC_UNATTENDED guard, T-P8-6 cliff→kimi, T-P7-7 gate-batching manifest, T-P16-3/4 pmset/caffeinate
+  T-P15-7 executable CC_UNATTENDED guard, ~~T-P8-6 cliff→kimi~~ (DONE 2026-07-19 — see status log), T-P7-7 gate-batching manifest, T-P16-3/4 pmset/caffeinate
   LaunchAgents, T-P10-7 obsolete-watcher removal, T-P9-7 ship-land auto-rollback. The **supervisor-cadence wiring
   cluster** (T-P4-1/4-2/5-3/3-5, T-P7-2/5-5) is RESERVED as operator-sanctioned per `wiring-all.sh:151` ("the agent
   never edits the live daemon") — surfaced, not auto-built.
@@ -350,3 +350,28 @@ that wires their subjects — no gate goes green on capability alone again. Full
   where the rule was prose-only — now an executable check the desk runs. **Learning:** desk-assert's own
   header already called itself "the house rule made executable"; the missing half was a resident rule
   that INVOKES it + a gate that fails if that invocation ever regresses to a name-drop.
+- 2026-07-19 (desk peer session, Opus@max, /goal-driven — cc-backlog `99beeafd7774`) — **T-P8-6
+  cliff→kimi offer/route landed** (branch `feat/cliff-kimi-offer`, RED-first, via project `/ship`).
+  Closes G-P8-5's machinery half: a full-Anthropic cap (every Max account capped = the true `cc-route`
+  QUOTA CLIFF) had **zero overflow capacity** because the metered Kimi hedge could only engage by a
+  human remembering it. Now the cliff branch (`bin/cc-route` `general_stop`) runs a new silent gate
+  `claude-kimi wired` (`bin/claude-kimi` `_cmd_wired` — exit 0 iff a key resolves, via the SAME
+  `_resolve_key` authority; no output) and, **only when WIRED**, OFFERS Kimi overflow on the *same
+  exit-4 STOP* (stderr: `claude-kimi` alongside `/limit-recover`; record `cliff-kimi-offer`); not
+  wired → the unchanged plain STOP + a `claude-kimi set-key` enablement hint. Doc surface upgraded in
+  `commands/limit-recover.md` (the "Kimi engages only on an operator key" line → the wired-gated
+  offer). **Design decision (why OFFER, not the audit's looser "auto-select"):** a cliff is a STOP —
+  `cc-route` never emits a spawn plan for, nor silent-down-tiers to, a *metered paid endpoint*; the
+  exit-4 / empty-stdout RT-c contract is preserved byte-for-byte (all prior RT-c tests stay green),
+  WIRED changes only the STOP's stderr guidance + the audit record. Ratifies the plan's own line-123
+  wording ("cliff-fallback **offer**") over p08's "offer/auto-select"; a standing-authorization
+  auto-fire, if ever wanted, is T-P8-3's autonomy policy, not this always-a-STOP branch. **Gate:**
+  `cc-route selftest` 15→**19** (new RT-g: WIRED still-exit-4 · no-plan+offers-claude-kimi ·
+  records-cliff-kimi-offer · UNwired-no-leak), `claude-kimi selftest` 12→**14** (ST-h wired gate),
+  `bats tests/cc-route.bats`+`claude-kimi.bats` count-pinned + CLI offer/gate regressions, `shellcheck`
+  clean, `route-safety-gate.sh` green. **The DoD's other half is the OPERATOR's:** `claude-kimi status`
+  = WIRED needs `claude-kimi set-key` (the metered key = the operator's spend, plan §E line-123
+  "OPERATOR key") — the machinery is complete + gate-green and correctly abstains until then. **Learning:**
+  the offer-vs-auto-route fork is the load-bearing scope call — the safe, contract-preserving choice was
+  to keep the cliff a STOP and let WIRED change only what it *says*, so no existing invariant (never
+  fire blind / never silent down-tier / exit-4 no-plan) bends to accommodate the hedge.

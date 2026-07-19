@@ -27,7 +27,9 @@
 #     EXPLICIT Opus fallback carrying the reason; the fable id NEVER appears in a fallback plan. Every
 #     call is a fresh live read, so a mid-wave Fable-close routes the fallback on the very next spawn.
 #   · QUOTA CLIFF — general route 'none' (every account capped) → exit 4, NO plan, "run /limit-recover".
-#     A cliff is a STOP, never a silent down-tier, never a blind fire.
+#     A cliff is a STOP, never a silent down-tier, never a blind fire. When the metered Kimi hedge is
+#     WIRED (`claude-kimi wired`), the SAME exit-4 STOP additionally OFFERS Kimi overflow (T-P8-6, RT-g)
+#     — an offer surfaced on stderr, NEVER an auto-route (a cliff never fires blind to a paid endpoint).
 #
 # Exit: 0 = plan emitted (stdout: one-line JSON) · 2 = usage/unknown slot · 3 = fire-blind refusal
 #       (quota data unavailable OR SSOT unparseable) · 4 = QUOTA CLIFF (stop + /limit-recover).
@@ -45,6 +47,20 @@ accounts_bin() {
   elif command -v claude-accounts >/dev/null 2>&1; then command -v claude-accounts
   elif [ -x "$HOME/bin/claude-accounts" ]; then echo "$HOME/bin/claude-accounts"
   else echo ""; fi
+}
+
+# T-P8-6: locate + query the metered Kimi hedge. `claude-kimi wired` is the SINGLE authority on key
+# presence (never re-implement key resolution here) — the gate the cliff→kimi OFFER below conditions on.
+kimi_bin() {
+  if [ -n "${CC_ROUTE_KIMI_BIN:-}" ]; then echo "$CC_ROUTE_KIMI_BIN"
+  elif command -v claude-kimi >/dev/null 2>&1; then command -v claude-kimi
+  elif [ -x "$HOME/bin/claude-kimi" ]; then echo "$HOME/bin/claude-kimi"
+  else echo ""; fi
+}
+kimi_wired() { # 0 iff the metered Kimi hedge has a key wired (offer-gate OPEN); absent binary ⇒ not wired
+  local bin; bin="$(kimi_bin)"
+  [ -n "$bin" ] || return 1
+  "$bin" wired >/dev/null 2>&1
 }
 
 # RT-f (abstention law): every plan / fallback / stop / refusal is recorded.
@@ -144,9 +160,29 @@ cmd_route() {
 general_stop() { # <slot> <rc from route_account general>
   local slot="$1" rc="$2"
   if [ "$rc" -eq 2 ]; then
-    # RT-c QUOTA CLIFF: policy-none on the GENERAL route = every account capped. A cliff is a STOP.
-    record "$slot" cliff-stop "general route policy-none (${ROUTE_REASON:-all capped})"
-    echo "cc-route: ⛔ QUOTA CLIFF (RT-c) — no account has headroom (${ROUTE_REASON:-policy-none}). STOP: run /limit-recover (disk-truth audit, re-run or transplant). NEVER silent down-tier, never fire blind. No plan emitted." >&2
+    # RT-c QUOTA CLIFF: policy-none on the GENERAL route = every Max account capped. A cliff is a STOP
+    # — exit 4, NO plan on stdout — ALWAYS. WIRED only changes what the STOP *says* + the audit record.
+    if kimi_wired; then
+      # RT-g CLIFF→KIMI OFFER (T-P8-6): the metered Kimi hedge (a non-Anthropic endpoint) IS wired, so
+      # when every Anthropic account is capped it is the one remaining overflow. OFFER it — NEVER
+      # auto-route: Kimi is metered spend and a cliff never fires blind or silent-down-tiers to a paid
+      # endpoint. Actuation is one explicit `claude-kimi` invocation (a standing-authorization auto-fire,
+      # if ever wanted, belongs to the T-P8-3 autonomy policy, not to this always-a-STOP cliff branch).
+      record "$slot" cliff-kimi-offer "every Max account capped (${ROUTE_REASON:-policy-none}); Kimi hedge WIRED — metered overflow OFFERED (not auto-routed)"
+      {
+        echo "cc-route: ⛔ QUOTA CLIFF (RT-c) — no Max account has headroom (${ROUTE_REASON:-policy-none}). No plan emitted (a cliff is a STOP)."
+        echo "cc-route: 🌙 Kimi hedge is WIRED — metered overflow AVAILABLE. Two options at the cliff:"
+        echo "cc-route:    (1) /limit-recover — disk-truth audit; wait-for-reset or cross-account transplant (no spend), or"
+        echo "cc-route:    (2) continue NOW on the metered Kimi hedge:  claude-kimi   (your \$ — ~\$3/\$15 per MTok, isolated from the 4 Max accounts)."
+        echo "cc-route: Kimi is an OFFER, never an auto-route — cc-route emits no plan and never silent-down-tiers to a paid endpoint."
+      } >&2
+      exit 4
+    fi
+    record "$slot" cliff-stop "general route policy-none (${ROUTE_REASON:-all capped}); Kimi hedge NOT wired — no overflow"
+    {
+      echo "cc-route: ⛔ QUOTA CLIFF (RT-c) — no account has headroom (${ROUTE_REASON:-policy-none}). STOP: run /limit-recover (disk-truth audit, re-run or transplant). NEVER silent down-tier, never fire blind. No plan emitted."
+      echo "cc-route:    (No overflow hedge wired: 'claude-kimi set-key' enables a metered Kimi cliff-fallback for next time — OPERATOR key, the operator's metered \$.)"
+    } >&2
     exit 4
   fi
   record "$slot" refused "general quota data unavailable (${ROUTE_REASON:-})"
@@ -190,6 +226,16 @@ STUB
   chmod +x "$tmp/accounts-stub"
   export CC_ROUTE_ACCOUNTS_BIN="$tmp/accounts-stub"
 
+  # kimi stub: `wired` exits 0 iff STUB_KIMI_WIRED=1 (the cliff→kimi offer-gate); any other verb is a
+  # harmless no-op. Default (unset) ⇒ NOT wired, so the existing RT-c checks exercise the plain STOP.
+  cat > "$tmp/kimi-stub" <<'STUB'
+#!/bin/bash
+if [ "${1:-}" = wired ]; then [ "${STUB_KIMI_WIRED:-0}" = 1 ] && exit 0 || exit 1; fi
+exit 0
+STUB
+  chmod +x "$tmp/kimi-stub"
+  export CC_ROUTE_KIMI_BIN="$tmp/kimi-stub"
+
   check() { # <label> <expected-rc> <cmd...>
     local label="$1" want="$2"; shift 2
     "$@" >/dev/null 2>&1; rc=$?
@@ -221,6 +267,17 @@ STUB
     bash -c "out=\$(env STUB_GENERAL_RC=2 '$SELF' lead 2>'$tmp/err'); [ -z \"\$out\" ] && grep -q limit-recover '$tmp/err'"
   check "RT-c cliff on the FALLBACK leg too (fable none + general none)" 4 \
     env STUB_FABLE_RC=2 STUB_GENERAL_RC=2 "$SELF" judgment-dense
+
+  # RT-g CLIFF→KIMI OFFER (T-P8-6): the metered hedge, GATED on `claude-kimi wired`. A cliff stays a
+  # STOP (exit 4, no plan) in BOTH states — WIRED only changes the STOP's guidance + the audit record.
+  check "RT-g cliff+kimi-WIRED -> STILL exit 4 (a cliff is a STOP; Kimi is an OFFER, never an auto-route)" 4 \
+    env STUB_GENERAL_RC=2 STUB_KIMI_WIRED=1 "$SELF" lead
+  check "RT-g cliff+kimi-WIRED: NO plan on stdout + OFFERS claude-kimi AND names limit-recover on stderr" 0 \
+    bash -c "out=\$(env STUB_GENERAL_RC=2 STUB_KIMI_WIRED=1 '$SELF' lead 2>'$tmp/kerr'); [ -z \"\$out\" ] && grep -q 'claude-kimi' '$tmp/kerr' && grep -q limit-recover '$tmp/kerr'"
+  check "RT-g cliff+kimi-WIRED records a cliff-kimi-offer outcome (abstention law)" 0 \
+    bash -c "grep -q '\"outcome\":\"cliff-kimi-offer\"' '$tmp/records/route.jsonl'"
+  check "RT-g cliff+kimi-UNwired: plain STOP names limit-recover, does NOT offer to continue on Kimi (no auto-route leak)" 0 \
+    bash -c "out=\$(env STUB_GENERAL_RC=2 STUB_KIMI_WIRED=0 '$SELF' lead 2>'$tmp/uerr'); [ -z \"\$out\" ] && grep -q limit-recover '$tmp/uerr' && ! grep -q 'continue NOW on the metered Kimi' '$tmp/uerr'"
 
   # RT-d DATA-UNAVAILABLE: exit 3, no plan (never fire blind).
   check "RT-d general data-unavailable -> exit 3" 3 env STUB_GENERAL_RC=3 "$SELF" lead

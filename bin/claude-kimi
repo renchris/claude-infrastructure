@@ -35,6 +35,8 @@
 #                                  --permission-mode auto: metered $ + un-burned-in agentic behaviour.
 #                                  Pass --permission-mode auto yourself once you trust it).
 #   claude-kimi status             Show whether the key is wired + the resolved endpoint/model/cost.
+#   claude-kimi wired              Silent exit-code gate: 0 iff a key resolves (the cliff→kimi OFFER
+#                                  gate cc-route / limit-recover condition on). No output; use in scripts.
 #   claude-kimi set-key            Read a key from STDIN (not argv → no shell-history leak) and store
 #                                  it 0600 at the key file.
 #   claude-kimi selftest           Run internal RED-proof checks (isolation, no-key notice, contract).
@@ -182,6 +184,11 @@ _cmd_set_key() {
   echo "✓ key stored 0600 at $KIMI_KEY_FILE — run 'claude-kimi' to launch." >&2
 }
 
+# Silent exit-code gate — 0 iff a metered key resolves; the SINGLE authority the cliff→kimi OFFER
+# (cc-route's cliff branch + /limit-recover — T-P8-6) conditions on. Delegates to _resolve_key so "is
+# Kimi wired" has ONE definition; emits NOTHING (a gate, not a report — use `status` for the human view).
+_cmd_wired() { _resolve_key >/dev/null 2>&1; }
+
 _cmd_selftest() {
   local fails=0 n=0
   ok()  { n=$((n+1)); printf '  ok %d - %s\n' "$n" "$1"; }
@@ -242,6 +249,13 @@ _cmd_selftest() {
   fi
   printf '%s' "$seed" | grep -q 'claude/statusline.sh' && bad "seed loads the Max statusline (isolation leak)" || ok "seed loads no Max statusline (isolated)"
 
+  # ST-h: `wired` is the silent exit-code gate the cliff→kimi OFFER conditions on (T-P8-6) — 0 iff a key
+  #        resolves, via the SAME _resolve_key authority (mirrors the ST-a/ST-b in-process subshell idiom).
+  ( unset KIMI_API_KEY; KIMI_KEY_FILE="$tmp/none"; _cmd_wired ) \
+    && bad "wired must exit non-zero when no key resolves (offer-gate must be CLOSED)" || ok "wired → non-zero, no key (offer-gate CLOSED)"
+  ( KIMI_API_KEY='sk-present' KIMI_KEY_FILE="$tmp/none"; _cmd_wired ) \
+    && ok "wired → 0 when a key resolves (offer-gate OPEN)" || bad "wired must exit 0 when a key resolves"
+
   printf '%s\n' "selftest: $((n - fails))/$n checks passed"
   [ "$fails" -eq 0 ]
 }
@@ -250,6 +264,7 @@ _cmd_selftest() {
 case "${1:-}" in
   status|--status)   _cmd_status; exit 0 ;;
   set-key|--set-key) _cmd_set_key; exit $? ;;
+  wired|--wired)     if _cmd_wired; then exit 0; else exit 1; fi ;;   # silent gate for the cliff→kimi OFFER (T-P8-6)
   selftest)          _cmd_selftest; exit $? ;;
   help|--help|-h)
     sed -n '2,60p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;

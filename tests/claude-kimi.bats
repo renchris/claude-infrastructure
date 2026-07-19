@@ -20,13 +20,23 @@ setup() {
   unset KIMI_API_KEY
 }
 
-@test "selftest passes and runs all 12 RED-proof checks (a zero-check suite must not 'pass')" {
+@test "selftest passes and runs all 14 RED-proof checks (a zero-check suite must not 'pass')" {
   run "$T" selftest
   [ "$status" -eq 0 ]
   n_ok="$(printf '%s' "$output" | grep -c '^  ok ')"
-  [ "$n_ok" -eq 12 ]
+  [ "$n_ok" -eq 14 ]
   # and never a silent NOT-ok slipping through with exit 0
   ! printf '%s' "$output" | grep -q '^  NOT ok '
+}
+
+@test "wired: silent exit-code gate — non-zero + no output with no key, 0 with a key (cliff→kimi offer gate, T-P8-6)" {
+  run "$T" wired
+  [ "$status" -ne 0 ]          # no key wired (setup unsets KIMI_API_KEY + empty key file) → gate CLOSED
+  [ -z "$output" ]            # a gate, not a report: emits nothing
+  export KIMI_API_KEY='sk-test-key'
+  run "$T" wired
+  [ "$status" -eq 0 ]         # a key resolves → gate OPEN
+  [ -z "$output" ]
 }
 
 @test "no key → activation notice on stderr, exit 0, ~\$0 idle (claude never invoked)" {
