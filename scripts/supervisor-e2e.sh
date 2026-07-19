@@ -36,10 +36,10 @@ REPO="$SBX/repo"; mkdir -p "$REPO"
 git -C "$REPO" init -q; git -C "$REPO" config user.email t@t; git -C "$REPO" config user.name t
 echo x > "$REPO/f"; git -C "$REPO" add f; git -C "$REPO" commit -qm init
 
-mktel(){ # $1=sid $2=used $3=age_s $4=pid $5=cwd
-  local ts; ts=$(( $(date +%s) - $3 ))
-  jq -nc --arg sid "$1" --argjson up "$2" --argjson ts "$ts" --arg pid "$4" --arg cwd "$5" \
-    '{ts:$ts,session_id:$sid,used_pct:$up,cwd:$cwd,config_dir:"/x/.claude-next",pid:($pid|tonumber)}' \
+mktel(){ # $1=sid $2=used $3=age_s $4=pid $5=cwd [$6=config_dir]
+  local ts; ts=$(( $(date +%s) - $3 )); local cfg="${6:-/x/.claude-next}"
+  jq -nc --arg sid "$1" --argjson up "$2" --argjson ts "$ts" --arg pid "$4" --arg cwd "$5" --arg cfg "$cfg" \
+    '{ts:$ts,session_id:$sid,used_pct:$up,cwd:$cwd,config_dir:$cfg,pid:($pid|tonumber)}' \
     > "$CC_TELEMETRY_DIR/$1.json"; }
 once(){ bash "$SUP" --once >/dev/null 2>&1; }
 idl_has(){ grep -q "$1" "$CC_IDL" 2>/dev/null; }
@@ -224,6 +224,40 @@ reset; permreset; rm -f "$CC_TELEMETRY_DIR"/*.json
 mkbeacon permwrite 10 Write '{"file_path":"/x/secret.ts","content":"..."}'
 once
 idl_has '/x/secret.ts' && ok "a Write prompt renders its file_path" || no "file_path not rendered in the page"
+echo "T20 WARM-TRANSCRIPT EXEMPTION — live pid + stale telemetry but a FRESH transcript ⇒ NOT a STALL? candidate (item 1c324d9fcc32)"
+# the idle-live ROOT fix: telemetry goes stale (the statusline stops emitting for a backgrounded / long-
+# turn pane) while the session keeps appending its transcript — a warm transcript ⇒ demonstrably alive ⇒
+# exempt. Transcript path = <config_dir>/projects/<slug(cwd)>/<sid>.jsonl (CC '/'+'.'→'-' mangling).
+reset; permreset; rm -f "$CC_TELEMETRY_DIR"/*.json
+WCFG="$SBX/warmcfg"; WSLUG="$(printf '%s' "$REPO" | sed 's|[/.]|-|g')"
+mkdir -p "$WCFG/projects/$WSLUG"
+: > "$WCFG/projects/$WSLUG/warm1.jsonl"                            # mtime = now ⇒ warm
+mktel warm1 40 100 "$ALIVE" "$REPO" "$WCFG"                       # telemetry 100s stale (≥ STALL_S=5), pid alive
+once
+paged warm1 && no "paged a warm-transcript session (exemption FAILED — idle-live false positive)" || ok "warm transcript exempts STALL? candidacy"
+idl_has '"state":"STALL?"' && no "STALL? finding emitted for a warm-transcript session" || ok "no STALL? finding for a warm transcript"
+
+echo "T21 COLD-TRANSCRIPT — live pid + stale telemetry + a STALE transcript ⇒ STILL a STALL? candidate (a warmth check, not has-transcript)"
+reset; permreset; rm -f "$CC_TELEMETRY_DIR"/*.json
+: > "$WCFG/projects/$WSLUG/cold1.jsonl"
+touch -t "$(date -r "$(( $(date +%s) - 100 ))" +%Y%m%d%H%M.%S)" "$WCFG/projects/$WSLUG/cold1.jsonl"   # mtime 100s ago ⇒ cold
+mktel cold1 40 100 "$ALIVE" "$REPO" "$WCFG"
+once
+paged cold1 && ok "cold transcript stays a STALL? candidate (exemption is warmth-specific)" || no "cold transcript wrongly exempted"
+
+echo "T22 IDLE-LIVE OSCILLATION — STALL?→void→re-STALL? re-notifies ONCE, not per cycle (item 1c324d9fcc32 — void keeps the damping marker)"
+reset; permreset; rm -f "$CC_TELEMETRY_DIR"/*.json "$SBX/notify.log" "$CC_SUPERVISOR_PAGEDIR"/osc.notified "$REPO/osc.txt"
+mktel osc 40 100 "$ALIVE" "$REPO"                                 # live pid, telemetry 100s stale, NO transcript ⇒ STALL? candidate
+# sweep 1 — first STALL? page ⇒ exactly one notify, marker set to STALL?
+CC_NOTIFY_CAPTURE="$SBX/notify.log" CC_PAGE_TO_FILE="$SBX/desk-role" CC_NOTIFY_BIN="$SBX/bin/cc-notify" bash "$SUP" --once >/dev/null 2>&1
+[ "$(wc -l < "$SBX/notify.log")" -eq 1 ] && ok "STALL? first page ⇒ one notify" || no "STALL? first page did not notify once (lines=$(wc -l < "$SBX/notify.log"))"
+# sweep 2 — deadline passes + a FRESH effect in cwd ⇒ VOID; the damping marker MUST survive the void
+sleep 2; echo work > "$REPO/osc.txt"
+CC_NOTIFY_CAPTURE="$SBX/notify.log" CC_PAGE_TO_FILE="$SBX/desk-role" CC_NOTIFY_BIN="$SBX/bin/cc-notify" bash "$SUP" --once >/dev/null 2>&1
+idl_has '"kind":"page_void","sid":"osc"' && ok "fresh effects past deadline ⇒ VOID (oscillation midpoint)" || no "did not VOID (test setup wrong)"
+# sweep 3 — the same stale telemetry re-raises STALL?, but the RETAINED marker keeps it composer-quiet
+CC_NOTIFY_CAPTURE="$SBX/notify.log" CC_PAGE_TO_FILE="$SBX/desk-role" CC_NOTIFY_BIN="$SBX/bin/cc-notify" bash "$SUP" --once >/dev/null 2>&1
+[ "$(wc -l < "$SBX/notify.log")" -eq 1 ] && ok "re-STALL? after void ⇒ NO re-notify (marker retained — storm fixed)" || no "void dropped the marker ⇒ re-notify storm (lines=$(wc -l < "$SBX/notify.log"))"
 
 echo ""
 echo "supervisor-e2e: $P passed, $F failed"

@@ -91,7 +91,9 @@ page(){ # $1=sid $2=state $3=detail
   [ "$last" = "$2" ] && return 0
   # ESCALATED is STICKY: the STALL?→ESCALATED pair re-fires every sweep for a zombie (stale telemetry
   # + reused pid), so equality damping alone still leaks 2 notifies/sweep — after an ESCALATED send,
-  # only a genuine worsening to DEAD notifies again; clear_page (recovery/void) resets the marker
+  # only a genuine worsening to DEAD notifies again; the OK-branch clear_page resets the marker on a
+  # true recovery, but a VOID keeps it (void_page, item 1c324d9fcc32) so a STALL?→void→re-STALL?
+  # oscillation stays composer-damped — the stale-telemetry situation that triggered it still persists.
   [ "$last" = "ESCALATED" ] && [ "$2" != "DEAD" ] && return 0
   # target resolves per page, not at startup: an empty CC_PAGE_TO falls back to the desk role file,
   # so a pane rebind (role-file rewrite) redirects pages with no plist edit and no daemon restart
@@ -103,6 +105,14 @@ page(){ # $1=sid $2=state $3=detail
   fi                                                       # later-wired channel still gets its first notify
 }
 clear_page(){ rm -f "$PAGEDIR/$1.page" "$PAGEDIR/$1.notified" 2>/dev/null || true; }
+# ── void a page WITHOUT resetting the notify-damping marker (item 1c324d9fcc32). ──
+# A VOID means "alive + working, no escalation" — NOT "incident cleared, re-arm the alarm". The
+# telemetry-staleness that raised the STALL? still persists, so the very next sweep re-pages the SAME
+# candidate; dropping .notified here (as clear_page does) let every STALL?→void→re-STALL? cycle re-notify
+# the desk (one composer ping per DEADLINE_S — the idle-live oscillation). Reset only the deadline clock
+# (.page); keep .notified so the ongoing situation stays damped until it genuinely CHANGES (DEAD/ESCALATED
+# break through; a true recovery clears it via the OK-branch clear_page).
+void_page(){ rm -f "$PAGEDIR/$1.page" 2>/dev/null || true; }
 
 # ── PERMISSION-PENDING page — a SEPARATE namespace (.permpend.*) from the telemetry-liveness pages so
 #    assess()'s clear_page (fired every sweep for a below-threshold session) can NEVER clobber it. A
@@ -158,7 +168,7 @@ resolve_page(){ # $1=sid $2=cwd
     escalate_page "$sid" "$cwd"                 # effects-dark ⇒ disposition (never reached from silence alone)
   else
     idl page_void "\"sid\":\"$sid\",\"why\":\"fresh-effects-after-deadline\""   # alive + working ⇒ VOID
-    clear_page "$sid"
+    void_page "$sid"                            # reset the deadline clock but KEEP notify damping (item 1c324d9fcc32)
   fi
 }
 escalate_page(){ # $1=sid $2=cwd — page LOUDER (still page-only; the operator recovers). Never a reap.
@@ -212,13 +222,32 @@ reap_clean(){ # $1=sid $2=cwd
   printf '%s  reap sid=%s (clean+landed — dispatched-worker lifecycle end)\n' "$(utc)" "$1" >> "$SUPLOG" 2>/dev/null || true
 }
 
+# ── transcript liveness (item 1c324d9fcc32): the session's own JSONL is appended on EVERY message / ──
+# tool event, so its mtime is a FAR fresher liveness signal than telemetry `ts`. The telemetry writer is
+# the statusline, which stops emitting when a pane is not actively rendering (statusline.sh:48 — "a
+# session inside ONE long operation, or genuinely hung, renders ZERO times"): a healthy BACKGROUNDED /
+# long-turn / idle-interactive session goes telemetry-stale for hours while its transcript stays warm
+# (measured 2026-07-19: a live session at 3.5-DAY-stale telemetry with a 5-min-warm transcript). Prints
+# the transcript's age in seconds; a huge sentinel when it cannot be resolved (no config_dir / missing
+# file) so the caller treats "unprovable" as COLD — fail-safe: we never exempt a stall we cannot disprove.
+transcript_age(){ # $1=cwd $2=config_dir $3=sid → prints age_s (999999999 = unresolved ⇒ cold)
+  local cwd="$1" cfg="$2" sid="$3" slug tp mt
+  { [ -n "$cwd" ] && [ -n "$cfg" ] && [ -n "$sid" ]; } || { printf '%s' 999999999; return; }
+  slug="$(printf '%s' "$cwd" | sed 's|[/.]|-|g')"          # CC projects/ dir mangling: every '/' and '.' → '-'
+  tp="$cfg/projects/$slug/$sid.jsonl"
+  [ -f "$tp" ] || { printf '%s' 999999999; return; }
+  mt="$(stat -f %m "$tp" 2>/dev/null || stat -c %Y "$tp" 2>/dev/null || echo 0)"   # BSD stat, then GNU fallback
+  printf '%s' "$(( $(now) - ${mt:-0} ))"
+}
+
 # ── classify one telemetry row and route to a PAGE (never an action) ──
 assess(){ # $1=telemetry-json-file → prints 1 if it produced a finding, else 0
-  local f="$1" sid used ts cwd pid age
+  local f="$1" sid used ts cwd cfg pid age
   sid="$(jq -r '.session_id // empty' "$f" 2>/dev/null)"; [ -n "$sid" ] || { echo 0; return; }
   used="$(jq -r '.used_pct // 0' "$f" 2>/dev/null)"; used="${used%.*}"; case "$used" in ''|*[!0-9]*) used=0;; esac
   ts="$(jq -r '.ts // 0' "$f" 2>/dev/null)"; ts="${ts%.*}"; case "$ts" in ''|*[!0-9]*) ts=0;; esac
   cwd="$(jq -r '.cwd // empty' "$f" 2>/dev/null)"
+  cfg="$(jq -r '.config_dir // empty' "$f" 2>/dev/null)"
   pid="$(jq -r '.pid // empty' "$f" 2>/dev/null)"
   age=$(( $(now) - ts ))
 
@@ -233,10 +262,18 @@ assess(){ # $1=telemetry-json-file → prints 1 if it produced a finding, else 0
   fi
   # STALL? — pid ALIVE but telemetry stale: a CANDIDATE, never an action. Page with the deadline→re-observe
   # protocol; a resolve_page on the next sweep re-reads effects. (Age alone can NEVER confirm a stall — a
-  # healthy long turn renders zero times too; only the effects re-read discriminates.)
+  # healthy long turn renders zero times too; only the effects re-read discriminates.) WARM-TRANSCRIPT
+  # EXEMPTION (item 1c324d9fcc32): telemetry staleness alone is a FALSE stall signal, so require the
+  # transcript ALSO stale before treating a live pid as a candidate. A warm transcript ⇒ the session is
+  # demonstrably alive (still appending messages/tool events) ⇒ fall through to OK, page nothing — this is
+  # what stops the idle-live STALL?→void→re-STALL? oscillation at its ROOT (the void-damping fix above is
+  # the backstop for the residual cold-transcript-but-ambient-cwd-churn case).
   if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && [ "$age" -ge "$STALL_S" ]; then
-    page "$sid" "STALL?" "pid alive but telemetry ${age}s stale — CANDIDATE; re-observing effects at deadline"
-    resolve_page "$sid" "$cwd"; echo 1; return
+    local tage; tage="$(transcript_age "$cwd" "$cfg" "$sid")"
+    if [ "$tage" -ge "$STALL_S" ]; then
+      page "$sid" "STALL?" "pid alive but telemetry ${age}s + transcript ${tage}s stale — CANDIDATE; re-observing effects at deadline"
+      resolve_page "$sid" "$cwd"; echo 1; return
+    fi
   fi
   # B-1 — PAST-THRESHOLD ∧ NOT-STOPPING: fill ≥ T but the session is live and fresh (still working, never
   # Stopped) so the boundary hook cannot fire for it. Advise via a page; the live session's own model acts.
