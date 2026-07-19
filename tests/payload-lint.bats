@@ -1,8 +1,9 @@
 #!/usr/bin/env bats
-# comms-safety — F3 payload-lint: a successor-fire payload missing the BACK-CHANNEL BLOCK (cc-notify line +
-# desk full-uuid) lints RED — the W5 incident root; a terminal-announce via SendMessage lints RED (serves
-# F2/a). The tool's --selftest RED-proves discrimination; these bats add CLI-level regression on the exit
-# codes (0=GREEN, 1=RED, 2=LOUD).
+# comms-safety — F3 payload-lint: a successor-fire payload missing the BACK-CHANNEL BLOCK (cc-notify +
+# a resolvable target — a desk full-uuid OR role-indirection cc-roles/<role>|--role, the P0-15 form)
+# lints RED — the W5 incident root; a terminal-announce via SendMessage lints RED (serves F2/a). The
+# tool's --selftest RED-proves discrimination; these bats add CLI-level regression on the exit codes
+# (0=GREEN, 1=RED, 2=LOUD), including the role-indirection acceptance the T-P2-5 pre-fire wiring needs.
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
@@ -11,10 +12,10 @@ setup() {
   P="$BATS_TEST_TMPDIR/p.txt"
 }
 
-@test "selftest passes 4/4 (a zero-check suite must not 'pass')" {
+@test "selftest passes 5/5 (a zero-check suite must not 'pass')" {
   run "$L" --selftest
   [ "$status" -eq 0 ]
-  [[ "$output" == *"4/4"* ]]
+  [[ "$output" == *"5/5"* ]]
 }
 
 @test "block-less payload → RED (exit 1) — the W5 drop" {
@@ -38,10 +39,26 @@ setup() {
   [ "$status" -eq 1 ]
 }
 
-@test "missing desk uuid (cc-notify only) → RED" {
+@test "missing desk uuid (cc-notify + prose 'the desk', no cc-roles/ or --role) → RED" {
   printf 'FIRE. announce via cc-notify to the desk. carry on.\n' > "$P"
   run "$L" "$P"
   [ "$status" -eq 1 ]
+}
+
+@test "role-indirection (cc-notify + cc-roles/<role>, NO literal uuid) → GREEN — the P0-15 form" {
+  # Every /goal fire resolves the desk via `cat ~/.claude/cc-roles/desk`; this MUST pass or the
+  # T-P2-5 pre-fire wiring would wrongly BLOCK the desk's own /goal fires (role != frozen uuid).
+  { printf 'FIRE. continue the build.\n'
+    printf 'BACK-CHANNEL: cc-notify "$(cat ~/.claude/cc-roles/desk)" on completion, VERIFIED.\n'; } > "$P"
+  run "$L" "$P"
+  [ "$status" -eq 0 ]
+}
+
+@test "role-indirection via --role flag (cc-notify + --role desk, NO uuid) → GREEN" {
+  { printf 'FIRE. continue the build.\n'
+    printf 'BACK-CHANNEL: cc-notify --role desk "done" on completion.\n'; } > "$P"
+  run "$L" "$P"
+  [ "$status" -eq 0 ]
 }
 
 @test "terminal-announce via SendMessage (F3/a) → RED even with the block present" {
