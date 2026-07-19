@@ -1,0 +1,350 @@
+#!/bin/bash
+# shellcheck disable=SC2015  # file-wide: the selftest's `[ test ] && okp || badp` reporter idiom is
+# safe here — okp/badp end in `printf` (rc 0), so the `|| badp` never runs when the test passed.
+# cc-discover — the discovery feed: standing critics that refill cc-backlog so most
+# work ORIGINATES from Claude, not the operator (Program D phase 3 — the true L4 signature).
+#
+# Each critic reads ONE source and emits zero+ candidates; each candidate is added
+# idempotently via `cc-backlog add` (event-keyed on project+title+source → re-runs NEVER
+# duplicate). A critic whose source is ABSENT ABSTAINS and logs it — it NEVER passes
+# silently and NEVER fabricates a candidate. The EFFECT (a backlog record appeared, or
+# did not) is what selftest asserts, never a self-report.
+#
+#   C1 frontier-hole : OPEN holes in FRONTIER_HOLES.md      → "frontier hole: <id · hole>"
+#   C2 plan-open     : `find-plan.sh --list-open`           → "advance <plan>"
+#   C3 wiring-inert  : the D9 signal — a hook that abstained → "inert hook <name>: re-observe"
+#                      100% over N>=10 recent IDL evals (reuses cc-digest's inert-scan logic)
+#   C4 gate-red      : any gate script exiting non-zero      → "fix red gate <name>"
+#
+# Usage:
+#   cc-discover [--once] [--dry-run]   run every critic (add candidates; --dry-run prints only)
+#   cc-discover selftest               RED-prove every branch (hermetic, stubbed sources)
+#
+# Env seams (every source overridable so bats can stub it):
+#   CC_DISCOVER_BACKLOG_BIN      cc-backlog to invoke        (default: resolved cc-backlog)
+#   CC_BACKLOG_FILE              cc-backlog's store (shared) (default: ~/.claude/autonomy/backlog.jsonl)
+#   CC_DISCOVER_FRONTIER_LEDGER  C1 source                   (default: docs/research/FRONTIER_HOLES.md)
+#   CC_DISCOVER_FINDPLAN         C2 source (--list-open)     (default: find-plan.sh)
+#   CC_DISCOVER_IDL              C3 source + our eval log     (default: ~/.claude/autonomy/idl.jsonl)
+#   CC_DISCOVER_IDL_TAIL         C3 bounded read depth       (default: 5000)
+#   CC_DISCOVER_GATES            C4 sources (space-sep list) (default: "never-stuck-gate.sh premortem-gate.sh")
+#   CC_DISCOVER_PROJECT          project string for C1/C3/C4 (default: basename $PWD)
+#
+# BSD+GNU portable, no eval, fail-loud. Exit: 0 normal · 3 config-fail LOUD · 2 usage.
+set -uo pipefail
+
+SELF="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/$(basename "$0")"
+FRONTIER_LEDGER="${CC_DISCOVER_FRONTIER_LEDGER:-docs/research/FRONTIER_HOLES.md}"
+FINDPLAN_RAW="${CC_DISCOVER_FINDPLAN:-find-plan.sh}"
+GATES="${CC_DISCOVER_GATES:-never-stuck-gate.sh premortem-gate.sh}"
+IDL="${CC_DISCOVER_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
+IDL_TAIL="${CC_DISCOVER_IDL_TAIL:-5000}"
+BACKLOG_FILE="${CC_BACKLOG_FILE:-$HOME/.claude/autonomy/backlog.jsonl}"
+PROJECT="${CC_DISCOVER_PROJECT:-$(basename "$(pwd)")}"
+
+DRY_RUN=0; BACKLOG_BIN=""; IDL_SNAPSHOT=""
+RUN_ADDED=0; RUN_CANDS=0; RUN_ABSTAINED=0
+
+now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+usage()   { sed -n '2,/^set -uo/p' "$0" | sed 's/^# \{0,1\}//; /^set -uo/d'; }
+
+# resolve_helper <name-or-path> → absolute executable path on stdout, rc 1 if unresolvable.
+# An explicit path (contains '/') is honored as-is; a bare name is searched beside the
+# script, then ../scripts, ../hooks, ~/.claude/{bin,scripts,hooks}, then PATH.
+resolve_helper() {
+  local n="$1" base d
+  [ -n "$n" ] || return 1
+  case "$n" in
+    */*) [ -x "$n" ] && { printf '%s' "$n"; return 0; }; return 1 ;;
+  esac
+  base="$(dirname "$SELF")"
+  for d in "$base" "$base/../scripts" "$base/../hooks" \
+           "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/bin" "$HOME/.claude/bin" \
+           "$HOME/.claude/scripts" "$HOME/.claude/hooks"; do
+    [ -x "$d/$n" ] && { printf '%s' "$d/$n"; return 0; }
+  done
+  command -v "$n" >/dev/null 2>&1 && { printf '%s' "$(command -v "$n")"; return 0; }
+  return 1
+}
+
+# backlog_count → number of append-only records (lines) in the store, 0 if absent. A NEW
+# add appends exactly one line; a deduped add appends zero → the delta is the new-add signal.
+backlog_count() {
+  [ -f "$BACKLOG_FILE" ] || { printf 0; return 0; }
+  wc -l < "$BACKLOG_FILE" | tr -d '[:space:]'
+}
+
+# idl_log <critic> <action> <detail> — one append-only eval record. Suppressed in --dry-run
+# (a dry run has NO side effects). Our records carry NO .hook/.disposition, so C3's inert-scan
+# never counts them (it selects only records that have both).
+idl_log() {
+  [ "$DRY_RUN" -eq 1 ] && return 0
+  mkdir -p "$(dirname "$IDL")" 2>/dev/null || true
+  jq -cn --arg ts "$(now_iso)" --arg critic "$1" --arg action "$2" --arg detail "$3" \
+    '{ts:$ts, actor:"cc-discover", critic:$critic, action:$action, detail:$detail}' \
+    >> "$IDL" 2>/dev/null || true
+}
+
+abstain() { # <critic> <reason>
+  RUN_ABSTAINED=$((RUN_ABSTAINED + 1))
+  printf '[%s] abstained: %s\n' "$1" "$2"
+  idl_log "$1" abstained "$2"
+}
+
+# add_candidate <title> <project> <dod-ref> <source>
+#   prints the candidate; rc 0 = a NEW backlog record appeared · 1 = dedup/fail · 2 = dry-run.
+add_candidate() {
+  local title="$1" project="$2" dod="$3" source="$4" n0 n1
+  printf 'candidate [%s] %s  (project=%s)\n' "$source" "$title" "$project"
+  RUN_CANDS=$((RUN_CANDS + 1))
+  [ "$DRY_RUN" -eq 1 ] && return 2
+  n0="$(backlog_count)"
+  if ! "$BACKLOG_BIN" add --title "$title" --project "$project" --dod-ref "$dod" --source "$source" >/dev/null 2>&1; then
+    idl_log "$source" failed "cc-backlog add nonzero: $title"
+    return 1
+  fi
+  n1="$(backlog_count)"
+  if [ "${n1:-0}" -gt "${n0:-0}" ]; then RUN_ADDED=$((RUN_ADDED + 1)); return 0; fi
+  return 1
+}
+
+emit_critic_result() { # <critic> <added> <cands>
+  local critic="$1" added="$2" cands="$3"
+  if [ "$cands" -eq 0 ]; then
+    printf '[%s] passed: 0 candidate(s)\n' "$critic"; idl_log "$critic" passed "0 candidates"
+  elif [ "$DRY_RUN" -eq 1 ]; then
+    printf '[%s] dry-run: %d candidate(s), not added\n' "$critic" "$cands"
+  elif [ "$added" -gt 0 ]; then
+    printf '[%s] fired: added %d of %d candidate(s)\n' "$critic" "$added" "$cands"
+    idl_log "$critic" fired "added $added of $cands"
+  else
+    printf '[%s] passed: %d candidate(s), 0 new (idempotent)\n' "$critic" "$cands"
+    idl_log "$critic" passed "$cands seen, 0 new"
+  fi
+}
+
+# ── C1 frontier-hole ─────────────────────────────────────────────────────────
+# OPEN holes are markdown headings `### H-<n> · <hole> — OPEN <YYYY-MM-DD>` (the exact
+# shape the frontier-hole SessionStart hook counts: ^### H-\d.*OPEN). Absent ledger → abstain.
+critic_frontier_hole() {
+  local added=0 cands=0 line title rc
+  if [ ! -f "$FRONTIER_LEDGER" ]; then abstain frontier-hole "ledger absent: $FRONTIER_LEDGER"; return 0; fi
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    title="$(printf '%s' "$line" | sed -E 's/^###[[:space:]]+//')"
+    title="${title%%OPEN*}"
+    title="$(printf '%s' "$title" | sed -E 's/ —[[:space:]]*$//; s/-[[:space:]]*$//; s/[[:space:]]+$//')"
+    [ -n "$title" ] || title="$line"
+    add_candidate "frontier hole: $title" "$PROJECT" "$FRONTIER_LEDGER" "frontier-hole"; rc=$?
+    cands=$((cands + 1)); [ "$rc" -eq 0 ] && added=$((added + 1))
+  done < <(grep -E '^###[[:space:]]+H-[0-9].*OPEN' "$FRONTIER_LEDGER" 2>/dev/null)
+  emit_critic_result frontier-hole "$added" "$cands"
+}
+
+# ── C2 plan-open ─────────────────────────────────────────────────────────────
+# `find-plan.sh --list-open` emits `STATUS | PROJECT | PATH | TITLE` (space-pipe-space).
+# Unresolvable find-plan → abstain (a missing source, never a fabricated candidate).
+critic_plan_open() {
+  local added=0 cands=0 line proj path title rc bin
+  bin="$(resolve_helper "$FINDPLAN_RAW")" || { abstain plan-open "find-plan absent: $FINDPLAN_RAW"; return 0; }
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    proj="$(printf  '%s' "$line" | awk -F ' \\| ' '{print $2}' | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
+    path="$(printf  '%s' "$line" | awk -F ' \\| ' '{print $3}' | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
+    title="$(printf '%s' "$line" | awk -F ' \\| ' '{print $4}' | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
+    [ -n "$title" ] || title="$path"
+    [ -n "$title" ] || continue
+    [ -n "$proj" ]  || proj="$PROJECT"
+    add_candidate "advance $title" "$proj" "$path" "plan-open"; rc=$?
+    cands=$((cands + 1)); [ "$rc" -eq 0 ] && added=$((added + 1))
+  done < <("$bin" --list-open 2>/dev/null)
+  emit_critic_result plan-open "$added" "$cands"
+}
+
+# ── C3 wiring-inert ──────────────────────────────────────────────────────────
+# The D9 signal (cc-digest Inert-check): a hook with >=10 recent evals that abstained on
+# ALL of them has stopped observing what it guards. Bounded tail read; group by .hook.
+# Absent IDL → abstain.
+critic_wiring_inert() {
+  local added=0 cands=0 hook inert rc
+  if [ -z "$IDL_SNAPSHOT" ] || [ ! -f "$IDL_SNAPSHOT" ]; then abstain wiring-inert "IDL absent: $IDL"; return 0; fi
+  inert="$(tail -n "$IDL_TAIL" "$IDL_SNAPSHOT" 2>/dev/null | jq -rs '
+      map(select(type=="object" and .hook and .disposition))
+      | group_by(.hook)
+      | map({hook: .[0].hook, total: length,
+             abstained: (map(select(.disposition=="abstained")) | length)})
+      | .[] | select(.total >= 10 and .abstained == .total) | .hook' 2>/dev/null || true)"
+  if [ -z "$inert" ]; then emit_critic_result wiring-inert 0 0; return 0; fi
+  while IFS= read -r hook; do
+    [ -n "$hook" ] || continue
+    add_candidate "inert hook $hook: re-observe" "$PROJECT" "$IDL" "wiring-inert"; rc=$?
+    cands=$((cands + 1)); [ "$rc" -eq 0 ] && added=$((added + 1))
+  done <<< "$inert"
+  emit_critic_result wiring-inert "$added" "$cands"
+}
+
+# ── C4 gate-red ──────────────────────────────────────────────────────────────
+# Run each configured gate; a non-zero exit is a RED gate → a fix candidate. A gate whose
+# script is ABSENT abstains (per-gate); if ALL are absent, C4 abstained entirely.
+critic_gate_red() {
+  local added=0 cands=0 ran=0 g gp rc
+  # shellcheck disable=SC2086  # GATES is an intentional space-separated list of gate names.
+  for g in $GATES; do
+    gp="$(resolve_helper "$g")" || { abstain gate-red "gate absent: $g"; continue; }
+    ran=$((ran + 1))
+    if "$gp" >/dev/null 2>&1; then continue; fi   # green gate → no candidate
+    add_candidate "fix red gate $g" "$PROJECT" "$gp" "gate-red"; rc=$?
+    cands=$((cands + 1)); [ "$rc" -eq 0 ] && added=$((added + 1))
+  done
+  [ "$ran" -eq 0 ] && return 0                     # fully abstained; already logged per-gate
+  emit_critic_result gate-red "$added" "$cands"
+}
+
+run_once() {
+  command -v jq >/dev/null 2>&1 || { echo "cc-discover: jq is required" >&2; exit 3; }
+  if [ "$DRY_RUN" -eq 0 ]; then
+    BACKLOG_BIN="$(resolve_helper "${CC_DISCOVER_BACKLOG_BIN:-cc-backlog}")" \
+      || { echo "cc-discover: cc-backlog not found (set CC_DISCOVER_BACKLOG_BIN)" >&2; exit 3; }
+  fi
+  # Snapshot the IDL as it exists BEFORE this run — C3 reads the snapshot so its inert-scan AND its
+  # absent→abstain branch are insulated from cc-discover's OWN in-run eval writes (C1/C2 append here).
+  if [ -f "$IDL" ] && IDL_SNAPSHOT="$(mktemp "${TMPDIR:-/tmp}/cc-discover-idlsnap.XXXXXX" 2>/dev/null)"; then
+    cp "$IDL" "$IDL_SNAPSHOT" 2>/dev/null || IDL_SNAPSHOT=""
+    trap 'rm -f "${IDL_SNAPSHOT:-}" 2>/dev/null' EXIT
+  else
+    IDL_SNAPSHOT=""
+  fi
+  printf '# cc-discover — %s%s\n' "$(now_iso)" "$([ "$DRY_RUN" -eq 1 ] && printf '  (dry-run)')"
+  critic_frontier_hole
+  critic_plan_open
+  critic_wiring_inert
+  critic_gate_red
+  printf 'cc-discover: %d added, %d seen, %d abstained\n' \
+    "$RUN_ADDED" "$((RUN_CANDS - RUN_ADDED))" "$RUN_ABSTAINED"
+  return 0
+}
+
+# ── selftest — register-criteria-FIRST: RED-prove each critic branch, hermetically ──
+PASS=0; FAIL=0
+# shellcheck disable=SC2317  # selftest helpers are reached only via the `selftest` dispatch.
+okp()  { PASS=$((PASS + 1)); printf '  ok   %s\n' "$1"; }
+# shellcheck disable=SC2317
+badp() { FAIL=$((FAIL + 1)); printf '  FAIL %s\n' "$1"; }
+# shellcheck disable=SC2317
+count_source() { # <backlog-file> <source> → number of add-records with that source
+  [ -f "$1" ] || { printf 0; return 0; }
+  jq -rs --arg s "$2" '[.[] | select(.event=="add" and .source==$s)] | length' "$1" 2>/dev/null || printf 0
+}
+# shellcheck disable=SC2317
+file_lines() { [ -f "$1" ] && { wc -l < "$1" | tr -d '[:space:]'; } || printf 0; }
+
+# shellcheck disable=SC2317
+selftest() {
+  command -v jq >/dev/null 2>&1 || { echo "cc-discover selftest: jq required" >&2; exit 3; }
+  local bk d n n1 n2 tot ab
+  bk="$(resolve_helper "${CC_DISCOVER_BACKLOG_BIN:-cc-backlog}")" \
+    || { echo "cc-discover selftest: cc-backlog not found beside script" >&2; exit 3; }
+  d="$(mktemp -d "${TMPDIR:-/tmp}/cc-discover-selftest.XXXXXX")" || { echo "mktemp failed" >&2; exit 3; }
+  trap 'rm -rf "${d:-}"' EXIT
+  echo "cc-discover selftest — every critic must RED-prove:"
+
+  # run cc-discover hermetically: all sources default to ABSENT; overrides come via "$@".
+  run_case() { # <case> <mode: --once|--dry-run> [KEY=VAL ...]
+    local c="$d/$1" mode="$2"; shift 2
+    mkdir -p "$c"
+    env -i HOME="$HOME" PATH="$PATH" TMPDIR="${TMPDIR:-/tmp}" \
+      CC_DISCOVER_BACKLOG_BIN="$bk" \
+      CC_BACKLOG_FILE="$c/backlog.jsonl" \
+      CC_DISCOVER_IDL="$c/idl.jsonl" \
+      CC_DISCOVER_FRONTIER_LEDGER="$c/absent-ledger.md" \
+      CC_DISCOVER_FINDPLAN="$c/absent-findplan" \
+      CC_DISCOVER_GATES="$c/absent-gate" \
+      CC_DISCOVER_PROJECT="selftest" \
+      "$@" "$SELF" "$mode" >"$c/out.log" 2>&1
+  }
+
+  # (a) one OPEN frontier hole → exactly one frontier-hole add
+  mkdir -p "$d/a"
+  printf '## Open\n\n### H-7 · CVR × offline-queue seam — OPEN 2026-07-18\n- x\n' > "$d/a/ledger.md"
+  run_case a --once CC_DISCOVER_FRONTIER_LEDGER="$d/a/ledger.md"
+  n="$(count_source "$d/a/backlog.jsonl" frontier-hole)"
+  [ "$n" -eq 1 ] && okp "C1: 1 open hole → 1 frontier-hole add" || badp "C1: expected 1, got $n"
+
+  # (b) stub find-plan emitting 2 open plans → 2 plan-open adds
+  mkdir -p "$d/b"
+  # shellcheck disable=SC2016  # $1 is written LITERALLY into the generated stub (must not expand here).
+  { printf '#!/bin/bash\n[ "$1" = "--list-open" ] || exit 0\n'
+    printf 'printf "%%s\\n" "OPEN        | projX  | /p/plan-one.md | Plan One"\n'
+    printf 'printf "%%s\\n" "IN-PROGRESS | projY  | /p/plan-two.md | Plan Two"\n'
+  } > "$d/b/findplan"; chmod +x "$d/b/findplan"
+  run_case b --once CC_DISCOVER_FINDPLAN="$d/b/findplan"
+  n="$(count_source "$d/b/backlog.jsonl" plan-open)"
+  [ "$n" -eq 2 ] && okp "C2: 2 open plans → 2 plan-open adds" || badp "C2: expected 2, got $n"
+
+  # (c) red gate → 1 gate-red add ; green gate → 0 (RED-prove the negative)
+  mkdir -p "$d/c"
+  printf '#!/bin/bash\nexit 1\n' > "$d/c/redgate"; chmod +x "$d/c/redgate"
+  run_case c --once CC_DISCOVER_GATES="$d/c/redgate"
+  n="$(count_source "$d/c/backlog.jsonl" gate-red)"
+  [ "$n" -eq 1 ] && okp "C4: red gate → 1 gate-red add" || badp "C4: expected 1, got $n"
+  mkdir -p "$d/cg"
+  printf '#!/bin/bash\nexit 0\n' > "$d/cg/greengate"; chmod +x "$d/cg/greengate"
+  run_case cg --once CC_DISCOVER_GATES="$d/cg/greengate"
+  n="$(count_source "$d/cg/backlog.jsonl" gate-red)"
+  [ "$n" -eq 0 ] && okp "C4: green gate → 0 adds" || badp "C4: green gate added $n"
+
+  # (C3) inert hook (12/12 abstained) → 1 add ; a hook that ever fired → 0
+  mkdir -p "$d/i"
+  for _ in $(seq 1 12); do printf '{"hook":"stale-guard","disposition":"abstained"}\n'; done > "$d/i/seed.jsonl"
+  run_case i --once CC_DISCOVER_IDL="$d/i/seed.jsonl"
+  n="$(count_source "$d/i/backlog.jsonl" wiring-inert)"
+  [ "$n" -eq 1 ] && okp "C3: inert hook 12/12 abstained → 1 wiring-inert add" || badp "C3: expected 1, got $n"
+  mkdir -p "$d/ih"
+  { for _ in $(seq 1 10); do printf '{"hook":"h","disposition":"abstained"}\n'; done
+    printf '{"hook":"h","disposition":"fired"}\n'; } > "$d/ih/seed.jsonl"
+  run_case ih --once CC_DISCOVER_IDL="$d/ih/seed.jsonl"
+  n="$(count_source "$d/ih/backlog.jsonl" wiring-inert)"
+  [ "$n" -eq 0 ] && okp "C3: a hook that ever fired → 0 adds" || badp "C3: healthy hook added $n"
+
+  # (d) all sources absent → ZERO adds, and abstentions EFFECT-logged in the IDL
+  run_case none --once
+  tot="$(file_lines "$d/none/backlog.jsonl")"
+  [ "${tot:-0}" -eq 0 ] && okp "all sources absent → ZERO backlog adds" || badp "absent sources added $tot"
+  ab="$( [ -f "$d/none/idl.jsonl" ] && jq -rs '[.[]|select(.action=="abstained")]|length' "$d/none/idl.jsonl" 2>/dev/null || printf 0 )"
+  [ "${ab:-0}" -ge 3 ] && okp "all sources absent → abstentions logged ($ab)" || badp "absent sources logged $ab abstentions (want >=3)"
+
+  # (e) idempotency: run twice over the SAME ledger → second run adds 0 new
+  mkdir -p "$d/e"
+  printf '### H-1 · seam A — OPEN 2026-07-18\n### H-2 · seam B — OPEN 2026-07-18\n' > "$d/e/ledger.md"
+  run_case e --once CC_DISCOVER_FRONTIER_LEDGER="$d/e/ledger.md"
+  n1="$(count_source "$d/e/backlog.jsonl" frontier-hole)"
+  run_case e --once CC_DISCOVER_FRONTIER_LEDGER="$d/e/ledger.md"
+  n2="$(count_source "$d/e/backlog.jsonl" frontier-hole)"
+  [ "$n1" -eq 2 ] && okp "idempotency: first run adds 2" || badp "idempotency: first run added $n1 (want 2)"
+  [ "$n2" -eq 2 ] && okp "idempotency: second run adds 0 new (still 2)" || badp "idempotency: second run drifted to $n2"
+
+  # (f) --dry-run → candidate printed, backlog + IDL UNCHANGED (no side effects)
+  mkdir -p "$d/f"
+  printf '### H-9 · dry seam — OPEN 2026-07-18\n' > "$d/f/ledger.md"
+  run_case f --dry-run CC_DISCOVER_FRONTIER_LEDGER="$d/f/ledger.md"
+  grep -q '^candidate \[frontier-hole\]' "$d/f/out.log" && okp "dry-run: candidate printed" || badp "dry-run: no candidate printed"
+  [ ! -f "$d/f/backlog.jsonl" ] && okp "dry-run: backlog UNCHANGED (not created)" || badp "dry-run: backlog was written"
+  [ ! -f "$d/f/idl.jsonl" ] && okp "dry-run: no IDL side-effects" || badp "dry-run: IDL written in dry-run"
+
+  echo "cc-discover selftest: $PASS passed, $FAIL failed"
+  [ "$FAIL" -eq 0 ] || exit 1
+  echo "cc-discover selftest: GREEN — C1/C2/C3/C4 + idempotency + dry-run all RED-proven."
+}
+
+# ── dispatch ─────────────────────────────────────────────────────────────────
+case "${1:-}" in selftest) selftest; exit $? ;; esac
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --once)          : ;;                 # single pass is the only mode; the cron entrypoint marker
+    --dry-run)       DRY_RUN=1 ;;
+    -h|--help|help)  usage; exit 0 ;;
+    *) printf 'cc-discover: unknown arg %s (use --once | --dry-run | selftest)\n' "$1" >&2; exit 2 ;;
+  esac
+  shift
+done
+run_once
