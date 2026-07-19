@@ -181,6 +181,27 @@ dispatch() { # <dry|run>
     if ! "$backlog" claim "$id" --by "$SID" >/dev/null 2>&1; then
       FAILED=$((FAILED + 1)); idl failed "$id: claim failed"; continue
     fi
+    # a2. compose the BRIEF the fire_line references. wave-plan (a pure planner) only emits the
+    # path; the actuator writes the content — with nothing writing it, every spawn died on the
+    # absent --prompt-file (found live 2026-07-19). An existing NON-EMPTY file is honored
+    # (an operator-authored brief wins); compose-fail reopens, never a blind spawn.
+    local pfile="" bj title dod
+    for ((bj=0; bj<${#fire_args[@]}-1; bj++)); do
+      [ "${fire_args[$bj]}" = "--prompt-file" ] && { pfile="${fire_args[$((bj+1))]}"; break; }
+    done
+    if [ -n "$pfile" ] && [ ! -s "$pfile" ]; then
+      title="$(printf '%s' "$dispatchable" | jq -r --arg i "$id" '.[]|select(.id==$i)|.title // empty' | head -1)"
+      dod="$(printf '%s' "$dispatchable"   | jq -r --arg i "$id" '.[]|select(.id==$i)|.dodRef // empty' | head -1)"
+      if ! printf '%s\n' \
+        "/goal ${title:-backlog item $id} — cc-backlog item $id (project $PROJECT)." \
+        "DoD ref: ${dod:-none}. Scope (frozen): drive this ONE item to finished-verified-landed." \
+        "Rails: dedicated worktree + own branch; gate green before commit; land ONLY via the project-local /ship (never bare push); C10 — never edit settings.json/live hooks/launchd in place." \
+        "On completion: cc-backlog done $id --evidence \"<landed sha>\". If genuinely blocked: cc-backlog reopen $id and cc-notify the desk role (cat ~/.claude/cc-roles/desk) with the blocker." \
+        > "$pfile"; then
+        "$backlog" reopen "$id" >/dev/null 2>&1 || true
+        FAILED=$((FAILED + 1)); idl failed "$id: brief compose failed (reopened)"; continue
+      fi
+    fi
     # b. spawn → on non-zero, reopen the claim (leave it for the next run).
     if "$spawn" "${fire_args[@]}" >/dev/null 2>&1; then
       FIRED=$((FIRED + 1)); spawned=$((spawned + 1)); idl fired "$id -> $acct"
@@ -231,7 +252,7 @@ STUB
          CC_DISPATCH_IDL="$tmp/idl.jsonl" CC_DISPATCH_PROJECT="/repo/a" CC_DISPATCH_MAX_SPAWN=2 \
          CC_DISPATCH_SID="selftest"
 
-  reset() { : > "$tmp/backlog.log"; : > "$tmp/spawn.log"; : > "$tmp/idl.jsonl"; rm -rf "$tmp/pages"; }
+  reset() { : > "$tmp/backlog.log"; : > "$tmp/spawn.log"; : > "$tmp/idl.jsonl"; rm -rf "$tmp/pages"; rm -f /tmp/f1.txt; }
   ok()   { printf '  ok   %s\n' "$1"; pass=$((pass+1)); }
   bad()  { printf '  FAIL %s\n' "$1"; fail=$((fail+1)); }
   t()    { local m="$1"; shift; if "$@"; then ok "$m"; else bad "$m"; fi; }   # <label> <predicate-cmd...>
@@ -265,6 +286,8 @@ STUB
   t "(c) green → spawn got the fire_line argv" grep -q -- '--prompt-file /tmp/f1.txt --account next3' "$tmp/spawn.log"
   t "(c) green → IDL fired"                 grep -q '"action":"fired"' "$tmp/idl.jsonl"
   t "(c) summary fired=1"                   test "$(last '.fired')" = 1
+  t "(c) brief composed at the fire_line path (id + title)" grep -q 'cc-backlog item i1' /tmp/f1.txt
+  t "(c) brief carries the ship rail"       grep -q 'project-local /ship' /tmp/f1.txt
 
   # (d) spawn non-zero → item reopened + IDL failed.
   reset; seed_items '[{"id":"i1","project":"a","status":"open","title":"t1"}]'
