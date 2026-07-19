@@ -18,6 +18,19 @@ setup() {
   export CC_DECIDE_BIN="$REPO/bin/cc-decide"
   mkdir -p "$CC_DECISIONS_DIR" "$CC_PAGES_DIR" "$CC_SWEEP_SEEN_DIR"
 }
+# stub push-send / cc-announce: log argv (so we can assert the summary counts) + exit a baked rc.
+mkpush() { local p="$BATS_TEST_TMPDIR/push-send.sh"; cat > "$p" <<EOF
+#!/bin/bash
+printf '%s\n' "\$*" >> "$BATS_TEST_TMPDIR/push-args"
+exit $1
+EOF
+chmod +x "$p"; echo "$p"; }
+mkann() { local p="$BATS_TEST_TMPDIR/cc-announce"; cat > "$p" <<EOF
+#!/bin/bash
+printf '%s\n' "\$*" >> "$BATS_TEST_TMPDIR/ann-args"
+exit $1
+EOF
+chmod +x "$p"; echo "$p"; }
 
 @test "emits every section header even with empty inputs" {
   run bash "$DIGEST"
@@ -130,4 +143,71 @@ setup() {
   ! echo "$output" | grep -q "rare-guard"
   # the check still works despite the flood: dead-guard never fired → still flagged
   echo "$output" | grep -q "dead-guard"
+}
+
+# ── push wiring (T-P15-6 delivery) ─────────────────────────────────────────────────────────────
+@test "push: delivers a quiet phone summary + a desk wake carrying the section counts (exit 0)" {
+  printf '{"landed":"abc1234"}\n{"landed":"def5678"}\n' > "$CC_LAND_LOG"
+  bash "$CC_BACKLOG_BIN" add --project /r --title "open one" --source x >/dev/null
+  echo 1784370726 > "$CC_PAGES_DIR/p1.page"
+  CC_PUSH_SEND_BIN="$(mkpush 0)" CC_ANNOUNCE_BIN="$(mkann 0)" run bash "$DIGEST" push
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'phone push delivered'
+  echo "$output" | grep -q 'desk-role wake delivered'
+  grep -q '2 landed' "$BATS_TEST_TMPDIR/push-args"
+  grep -q '1 backlog' "$BATS_TEST_TMPDIR/push-args"
+  grep -q '1 page(s) pending' "$BATS_TEST_TMPDIR/push-args"
+  grep -q 'priority -1' "$BATS_TEST_TMPDIR/push-args"   # quiet / never-an-interrupt
+}
+
+@test "push: the summary's inert count is DERIVED from the digest's ALARM lines (single source of truth)" {
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  for i in $(seq 1 12); do printf '{"hook":"stale-guard","disposition":"abstained","ts":"%s"}\n' "$now" >> "$CC_IDL"; done
+  CC_PUSH_SEND_BIN="$(mkpush 0)" CC_ANNOUNCE_BIN="$(mkann 0)" run bash "$DIGEST" push
+  [ "$status" -eq 0 ]
+  n="$(echo "$output" | grep -c '^ALARM:')"; [ "$n" -eq 1 ]   # emit produced exactly one ALARM…
+  grep -q '1 inert alarm(s)' "$BATS_TEST_TMPDIR/push-args"     # …and the summary reports the SAME count
+}
+
+@test "push: phone INERT (push-send exit 3) is a NOTE, not a failure → exit 0" {
+  CC_PUSH_SEND_BIN="$(mkpush 3)" CC_ANNOUNCE_BIN="$(mkann 0)" run bash "$DIGEST" push
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qi 'INERT'
+}
+
+@test "push: desk-role wake FAILS → exit 5 (never silent)" {
+  CC_PUSH_SEND_BIN="$(mkpush 0)" CC_ANNOUNCE_BIN="$(mkann 5)" run bash "$DIGEST" push
+  [ "$status" -eq 5 ]
+  echo "$output" | grep -q 'desk-role wake NOT verified'
+}
+
+@test "push: phone send FAILS (creds present) → exit 5 (never silent)" {
+  CC_PUSH_SEND_BIN="$(mkpush 5)" CC_ANNOUNCE_BIN="$(mkann 0)" run bash "$DIGEST" push
+  [ "$status" -eq 5 ]
+  echo "$output" | grep -q 'phone push FAILED'
+}
+
+@test "push --no-phone skips the phone leg (a failing phone leg can't fail the run)" {
+  CC_PUSH_SEND_BIN="$(mkpush 5)" CC_ANNOUNCE_BIN="$(mkann 0)" run bash "$DIGEST" push --no-phone
+  [ "$status" -eq 0 ]
+  [ ! -f "$BATS_TEST_TMPDIR/push-args" ]
+}
+
+@test "push --no-desk skips the desk leg" {
+  CC_PUSH_SEND_BIN="$(mkpush 0)" CC_ANNOUNCE_BIN="$(mkann 5)" run bash "$DIGEST" push --no-desk
+  [ "$status" -eq 0 ]
+  [ ! -f "$BATS_TEST_TMPDIR/ann-args" ]
+}
+
+@test "bare cc-digest (no subcommand) does NOT deliver — default path unchanged (exit 0)" {
+  CC_PUSH_SEND_BIN="$(mkpush 5)" CC_ANNOUNCE_BIN="$(mkann 5)" run bash "$DIGEST"
+  [ "$status" -eq 0 ]
+  ! echo "$output" | grep -q 'phone push'
+  ! echo "$output" | grep -q 'desk-role wake'
+  [ ! -f "$BATS_TEST_TMPDIR/push-args" ]
+}
+
+@test "unknown subcommand → usage error (exit 2)" {
+  run bash "$DIGEST" bogus
+  [ "$status" -eq 2 ]
 }
