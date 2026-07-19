@@ -616,6 +616,10 @@ esac; done
 
 [ -n "$PROMPT_FILE" ] || { echo "!! --prompt-file is required" >&2; usage 1; }
 [ -f "$PROMPT_FILE" ] || { echo "!! missing prompt file: $PROMPT_FILE" >&2; exit 1; }
+# FM-D (Fable panel 2026-07-19): an EMPTY prompt file passed the [ -f ] check and fired `claude ""` →
+# a task-less-idle successor (the same class the /goal-over-cap guard documents). Reject empty BEFORE
+# any side effect — every fire mode, incl. the deterministic waiting-recycle Stage-2 fire.
+[ -s "$PROMPT_FILE" ] || { echo "!! empty prompt file: $PROMPT_FILE — an empty payload fires a task-less successor (FM-D)" >&2; exit 1; }
 # P0-16: reject an over-cap /goal payload BEFORE any side effect (covers every fire mode).
 check_goal_length "$PROMPT_FILE" || exit 1
 [ -n "$CWD" ] && [ -n "$WORKTREE" ] && { echo "!! --cwd and --worktree are mutually exclusive" >&2; exit 1; }
