@@ -61,10 +61,18 @@ EOF
 printf 'RECON %s\n' "\$*" >> "$D/reconcile-calls"
 echo "cc-reconcile: mock 0 backfilled"
 EOF
-  chmod +x "$D/bin/notify" "$D/bin/ps" "$D/bin/reconcile"
+  # mock cc-backlog: records that `reap` was invoked (the claim-ledger sweep wiring, --reap only) so no
+  # test hits the LIVE backlog. Echoes a summary line like the real one so the reaper surfaces it.
+  cat > "$D/bin/backlog" <<EOF
+#!/bin/bash
+printf 'BACKLOG %s\n' "\$*" >> "$D/backlog-calls"
+echo "cc-backlog reap: 0 reopened, 0 blocked (0 non-terminal scanned)"
+EOF
+  chmod +x "$D/bin/notify" "$D/bin/ps" "$D/bin/reconcile" "$D/bin/backlog"
   export CC_REAPER_NOTIFY_BIN="$D/bin/notify"
   export CC_REAPER_PS_BIN="$D/bin/ps"
   export CC_REAPER_RECONCILE_BIN="$D/bin/reconcile"
+  export CC_REAPER_BACKLOG_BIN="$D/bin/backlog"
   export CC_REAPER_PAGEDIR="$D/pages"
   export CC_REAPER_IDL="$D/idl.jsonl"
   export CC_PAGE_TO=""                        # neutralize any inherited real desk target
@@ -73,6 +81,7 @@ EOF
 }
 notified()  { [ -s "$D/notify-calls" ]; }
 reconciled() { [ -f "$D/reconcile-calls" ]; }
+backlog_reaped() { grep -q '^BACKLOG reap' "$D/backlog-calls" 2>/dev/null; }
 set_desk()  { echo "DESK-UUID" > "$D/desk"; }
 set_live()  { echo "$1" > "$D/nlive"; }
 
@@ -359,6 +368,21 @@ EOF
   [ "$status" -eq 0 ]
   reconciled                                        # cc-reconcile was invoked
   echo "$output" | grep -q 'cc-reconcile: mock'     # its summary is surfaced on stdout
+}
+
+@test "cc-backlog reap runs on --reap (heals the CLAIM ledger, its summary surfaced)" {
+  mock_classify active "$D/clean" 10 no PANE-1
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  backlog_reaped                                    # cc-backlog reap was invoked
+  echo "$output" | grep -q 'cc-backlog reap:'       # its summary is surfaced on stdout
+}
+
+@test "cc-backlog reap does NOT run on a DRY-RUN sweep (dry-run writes nothing)" {
+  mock_classify active "$D/clean" 10 no PANE-1
+  run "$R" sweep
+  [ "$status" -eq 0 ]
+  ! backlog_reaped                                  # no claim-ledger mutation on a dry-run
 }
 
 @test "reconcile does NOT run on a DRY-RUN sweep (dry-run writes nothing)" {

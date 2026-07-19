@@ -172,3 +172,177 @@ setup() {
   run bash "$CB" compact --older-than-days 30
   grep -q 'garbage-not-json' "$CC_BACKLOG_FILE"
 }
+
+# ── reap: stale-claim maintenance (dead-worker timeout → reopen · thrash → block) ───────────────
+# A claim whose worker DIED stays `claimed` forever (cc-dispatch fires only status=="open" ⇒ work
+# STRANDS); a spawn-fail/land-conflict item THRASHES (claim→reopen→claim…). `reap` folds the trail
+# and, append-only + idempotent: BLOCKS thrash (≥ MAX_THRASH fast claim→reopen cycles), REOPENS a
+# dead-worker stale claim (idle > STALE_CLAIM_S, claimer not live), and BLOCKS (not reopens) once a
+# still-stale claim passes MAX_ATTEMPTS. Clock is pinned via jq fromdateiso8601 so ages are exact;
+# host-pid liveness uses REAL kill -0 (a dead PID = 2147483647, a live one = the test's own $$).
+reap_env() {
+  # "now" = 2026-01-01T02:00:00Z. A claim at 00:00:00Z ⇒ 7200s old (> 5400 stale); at 01:59:00Z ⇒ 60s.
+  export CC_BACKLOG_NOW; CC_BACKLOG_NOW="$(jq -n '"2026-01-01T02:00:00Z"|fromdateiso8601')"
+  export CC_BACKLOG_STALE_CLAIM_S=5400 CC_BACKLOG_MAX_THRASH=2 CC_BACKLOG_MAX_ATTEMPTS=3 CC_BACKLOG_THRASH_WINDOW_S=90
+  # default liveness oracle: an EMPTY live registry ⇒ no session-shaped claimer is ever live.
+  printf '#!/bin/bash\necho "[]"\n' > "$BATS_TEST_TMPDIR/nosess"; chmod +x "$BATS_TEST_TMPDIR/nosess"
+  export CC_BACKLOG_SESSIONS_BIN="$BATS_TEST_TMPDIR/nosess"
+  HOST="$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo localhost)"
+}
+rec() { printf '%s\n' "$1" >> "$CC_BACKLOG_FILE"; }
+status_of() { bash "$CB" list --all --json | jq -r --arg i "$1" '.[]|select(.id==$i)|.status'; }
+
+@test "reap: persistent thrash (≥MAX_THRASH fast claim→reopen cycles) → blocked, needs names the cause" {
+  reap_env
+  rec '{"id":"thrashaaaa01","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"Thrash"}'
+  rec '{"id":"thrashaaaa01","ts":"2026-01-01T00:00:10Z","event":"claim","by":"h-1"}'
+  rec '{"id":"thrashaaaa01","ts":"2026-01-01T00:00:14Z","event":"reopen"}'   # cycle 1: 4s < window
+  rec '{"id":"thrashaaaa01","ts":"2026-01-01T00:00:20Z","event":"claim","by":"h-2"}'
+  rec '{"id":"thrashaaaa01","ts":"2026-01-01T00:00:24Z","event":"reopen"}'   # cycle 2: 4s < window
+  run bash "$CB" reap
+  [ "$status" -eq 0 ]
+  [ "$(status_of thrashaaaa01)" = blocked ]
+  bash "$CB" list --all --json | jq -e --arg i thrashaaaa01 '.[]|select(.id==$i)|.needs|test("thrash")'
+}
+
+@test "reap: ONE fast cycle (< MAX_THRASH) does NOT block — stays as it folded (open)" {
+  reap_env
+  rec '{"id":"onecyc00bb01","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"One"}'
+  rec '{"id":"onecyc00bb01","ts":"2026-01-01T00:00:10Z","event":"claim","by":"h-1"}'
+  rec '{"id":"onecyc00bb01","ts":"2026-01-01T00:00:14Z","event":"reopen"}'   # only 1 cycle
+  run bash "$CB" reap
+  [ "$status" -eq 0 ]
+  [ "$(status_of onecyc00bb01)" = open ]
+}
+
+@test "reap: a slow claim→reopen (gap > THRASH_WINDOW_S) is NOT a fast-fail cycle" {
+  reap_env
+  rec '{"id":"slowcyc0cc01","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"Slow"}'
+  rec '{"id":"slowcyc0cc01","ts":"2026-01-01T00:00:00Z","event":"claim","by":"h-1"}'
+  rec '{"id":"slowcyc0cc01","ts":"2026-01-01T00:10:00Z","event":"reopen"}'   # 600s gap ≫ 90s window
+  rec '{"id":"slowcyc0cc01","ts":"2026-01-01T00:11:00Z","event":"claim","by":"h-2"}'
+  rec '{"id":"slowcyc0cc01","ts":"2026-01-01T00:21:00Z","event":"reopen"}'   # 600s gap ≫ window
+  run bash "$CB" reap
+  [ "$status" -eq 0 ]
+  [ "$(status_of slowcyc0cc01)" = open ]                # not thrash, not claimed ⇒ untouched
+}
+
+@test "reap: dead-worker stale claim (idle>STALE, claimer PID dead) → reopened, tagged by cc-backlog-reap" {
+  reap_env
+  rec '{"id":"stale000dd01","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"Stale"}'
+  rec "{\"id\":\"stale000dd01\",\"ts\":\"2026-01-01T00:00:00Z\",\"event\":\"claim\",\"by\":\"$HOST-2147483647\"}"  # 7200s old, dead pid
+  run bash "$CB" reap
+  [ "$status" -eq 0 ]
+  [ "$(status_of stale000dd01)" = open ]
+  # the reopen is auditable as the reaper's
+  tail -1 "$CC_BACKLOG_FILE" | jq -e '.event=="reopen" and .by=="cc-backlog-reap"'
+}
+
+@test "reap: FRESH claim (age < STALE_CLAIM_S) is left alone (worker still within its window)" {
+  reap_env
+  rec '{"id":"fresh000ee01","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"Fresh"}'
+  rec "{\"id\":\"fresh000ee01\",\"ts\":\"2026-01-01T01:59:00Z\",\"event\":\"claim\",\"by\":\"$HOST-2147483647\"}"  # 60s old
+  run bash "$CB" reap
+  [ "$status" -eq 0 ]
+  [ "$(status_of fresh000ee01)" = claimed ]            # untouched
+}
+
+@test "reap: stale claim but claimer PID is LIVE → NOT reopened (never double-dispatch a live worker)" {
+  reap_env
+  rec '{"id":"livepid0ff01","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"Live"}'
+  rec "{\"id\":\"livepid0ff01\",\"ts\":\"2026-01-01T00:00:00Z\",\"event\":\"claim\",\"by\":\"$HOST-$$\"}"  # 7200s old, but $$ alive
+  run bash "$CB" reap
+  [ "$status" -eq 0 ]
+  [ "$(status_of livepid0ff01)" = claimed ]            # kill -0 $$ succeeds ⇒ skipped
+}
+
+@test "reap: stale claim whose claimer is a LIVE registry session → NOT reopened" {
+  reap_env
+  printf '#!/bin/bash\necho %s\n' "'[{\"paneUUID\":\"PANE-LIVE-1\",\"name\":\"wkr\"}]'" > "$BATS_TEST_TMPDIR/livesess"
+  chmod +x "$BATS_TEST_TMPDIR/livesess"; export CC_BACKLOG_SESSIONS_BIN="$BATS_TEST_TMPDIR/livesess"
+  rec '{"id":"livereg0gg01","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"Reg"}'
+  rec '{"id":"livereg0gg01","ts":"2026-01-01T00:00:00Z","event":"claim","by":"PANE-LIVE-1"}'   # 7200s old, session id
+  run bash "$CB" reap
+  [ "$status" -eq 0 ]
+  [ "$(status_of livereg0gg01)" = claimed ]            # registry says PANE-LIVE-1 is live ⇒ skipped
+}
+
+@test "reap: bounded — a stale claim past MAX_ATTEMPTS is BLOCKED, not reopened (no slow-loop)" {
+  reap_env
+  rec '{"id":"bound000hh01","ts":"2025-12-31T21:00:00Z","event":"add","project":"/r","title":"Bound"}'
+  rec '{"id":"bound000hh01","ts":"2025-12-31T22:00:00Z","event":"claim","by":"h-1"}'
+  rec '{"id":"bound000hh01","ts":"2025-12-31T22:30:00Z","event":"reopen","by":"cc-backlog-reap"}'  # 1800s gap, not fast
+  rec '{"id":"bound000hh01","ts":"2025-12-31T23:00:00Z","event":"claim","by":"h-2"}'
+  rec '{"id":"bound000hh01","ts":"2025-12-31T23:30:00Z","event":"reopen","by":"cc-backlog-reap"}'  # not fast
+  rec "{\"id\":\"bound000hh01\",\"ts\":\"2026-01-01T00:00:00Z\",\"event\":\"claim\",\"by\":\"$HOST-2147483647\"}"  # 3rd claim, 7200s old, dead
+  run bash "$CB" reap
+  [ "$status" -eq 0 ]
+  [ "$(status_of bound000hh01)" = blocked ]            # totalClaims≥3 ⇒ block instead of a 4th reopen
+  bash "$CB" list --all --json | jq -e --arg i bound000hh01 '.[]|select(.id==$i)|.needs|test("dead-worker stall")'
+}
+
+@test "reap --dry-run: classifies but writes NOTHING (append-only file unchanged)" {
+  reap_env
+  rec '{"id":"dryrun00ii01","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"Dry"}'
+  rec "{\"id\":\"dryrun00ii01\",\"ts\":\"2026-01-01T00:00:00Z\",\"event\":\"claim\",\"by\":\"$HOST-2147483647\"}"
+  before="$(wc -l < "$CC_BACKLOG_FILE" | tr -d ' ')"
+  run bash "$CB" reap --dry-run
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'WOULD-REOPEN'
+  echo "$output" | grep -qi 'no writes'
+  [ "$(wc -l < "$CC_BACKLOG_FILE" | tr -d ' ')" -eq "$before" ]   # nothing appended
+  [ "$(status_of dryrun00ii01)" = claimed ]                       # still claimed
+}
+
+@test "reap: NEVER touches done or already-blocked items (terminal / parked)" {
+  reap_env
+  # a done item (even if it had a stale-looking claim in its trail)
+  rec '{"id":"doneitm0jj01","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"Done"}'
+  rec "{\"id\":\"doneitm0jj01\",\"ts\":\"2026-01-01T00:00:00Z\",\"event\":\"claim\",\"by\":\"$HOST-2147483647\"}"
+  rec '{"id":"doneitm0jj01","ts":"2026-01-01T00:05:00Z","event":"done","evidence":"sha:1"}'
+  # an operator-blocked item
+  id2=$(bash "$CB" add --project /r --title Parked --source S)
+  bash "$CB" block "$id2" --needs "operator: set key" >/dev/null
+  before="$(wc -l < "$CC_BACKLOG_FILE" | tr -d ' ')"
+  run bash "$CB" reap
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < "$CC_BACKLOG_FILE" | tr -d ' ')" -eq "$before" ]   # no new events for done/blocked
+  [ "$(status_of doneitm0jj01)" = done ]
+  [ "$(status_of "$id2")" = blocked ]
+}
+
+@test "reap: clean backlog (no stale/thrash) → 0 reopened, 0 blocked, exit 0 (no field-align error)" {
+  reap_env
+  bash "$CB" add --project /r --title Open1 --source S >/dev/null   # a plain open item (empty claimBy)
+  run bash "$CB" reap
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q '0 reopened, 0 blocked'
+  ! echo "$output" | grep -qi 'integer expression'   # empty claimBy must not shift columns
+}
+
+@test "reap: a claimless open item (empty claimBy) does NOT misalign later columns" {
+  # Regression: a US-delimited row is used precisely because bash `read` COALESCES adjacent TABS
+  # (whitespace IFS) — an empty claimBy would drop the field and shift `fast`→empty→a spurious
+  # 'integer expression' error, masking real work. Proven by mixing a claimless open item with a
+  # genuine dead-worker stale claim: the stale one must STILL reopen (columns stayed aligned).
+  reap_env
+  bash "$CB" add --project /r --title OpenNoClaim --source S >/dev/null            # open, claimBy=""
+  rec '{"id":"mixstale0z01","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"Stale"}'
+  rec "{\"id\":\"mixstale0z01\",\"ts\":\"2026-01-01T00:00:00Z\",\"event\":\"claim\",\"by\":\"$HOST-2147483647\"}"
+  run bash "$CB" reap
+  [ "$status" -eq 0 ]
+  ! echo "$output" | grep -qi 'integer expression'   # no misalignment error on the empty field
+  [ "$(status_of mixstale0z01)" = open ]             # the stale claim still reopened (columns aligned)
+}
+
+@test "reap is idempotent — a second immediate run is a no-op (already reopened/blocked)" {
+  reap_env
+  rec '{"id":"idem0000kk01","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"Idem"}'
+  rec "{\"id\":\"idem0000kk01\",\"ts\":\"2026-01-01T00:00:00Z\",\"event\":\"claim\",\"by\":\"$HOST-2147483647\"}"
+  bash "$CB" reap >/dev/null                            # reopens it (now open)
+  n1="$(wc -l < "$CC_BACKLOG_FILE" | tr -d ' ')"
+  run bash "$CB" reap                                   # open + no fast cycles ⇒ nothing to do
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q '0 reopened, 0 blocked'
+  [ "$(wc -l < "$CC_BACKLOG_FILE" | tr -d ' ')" -eq "$n1" ]   # no further appends
+}

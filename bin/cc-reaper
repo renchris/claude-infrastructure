@@ -88,6 +88,17 @@ if [ -z "$RECONCILE_BIN" ]; then
     [ -n "$_c" ] && [ -x "$_c" ] && { RECONCILE_BIN="$_c"; break; }
   done
 fi
+# cc-backlog — the CLAIM-ledger companion to cc-reconcile: where cc-reconcile heals the SESSION
+# registry, `cc-backlog reap` heals the CLAIM ledger (dead-worker stale claim → reopen · persistent
+# spawn-fail/land-conflict thrash → block), the FM2 gap neither the reaper nor cc-reconcile closed.
+# Same resolve order; a missing binary just skips the claim sweep (no regression). Tunable via
+# CC_BACKLOG_* (see cc-backlog `reap`); the reaper calls it with defaults.
+BACKLOG_BIN="${CC_REAPER_BACKLOG_BIN:-}"
+if [ -z "$BACKLOG_BIN" ]; then
+  for _c in "$HERE/cc-backlog" "$HOME/.claude/bin/cc-backlog" "$(command -v cc-backlog 2>/dev/null || true)"; do
+    [ -n "$_c" ] && [ -x "$_c" ] && { BACKLOG_BIN="$_c"; break; }
+  done
+fi
 
 utc(){ date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null; }
 # desk-board IDL rows — supervisor-shaped {ts,actor,kind,…}. Values pass as jq --arg/--argjson (NEVER
@@ -229,6 +240,12 @@ sweep() {
   if [ "$reap" = 1 ] && [ -n "$RECONCILE_BIN" ]; then
     local rout; rout="$("$RECONCILE_BIN" 2>/dev/null || true)"
     [ -n "$rout" ] && { say "$rout"; log "reconcile: $rout"; }
+  fi
+  # Claim-ledger reap (dead-worker stale claim → reopen · thrash → block). Same --reap gating as
+  # reconcile (a DRY-RUN sweep writes nothing); append-only + idempotent, so it is safe every sweep.
+  if [ "$reap" = 1 ] && [ -n "$BACKLOG_BIN" ]; then
+    local bout; bout="$("$BACKLOG_BIN" reap 2>/dev/null || true)"
+    [ -n "$bout" ] && { say "$bout"; log "backlog-reap: $bout"; }
   fi
   local cj; cj="$("$CLASSIFY_BIN" --all --json 2>/dev/null || echo '[]')"
   local n; n="$(printf '%s' "$cj" | jq 'length' 2>/dev/null || echo 0)"
