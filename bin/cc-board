@@ -135,9 +135,10 @@ if [ -n "$ACCTS_JSON" ]; then
   [ -n "$nxt" ] && echo "── place next → ${nxt}──"
 fi
 
-# ── value-ledger footer (T-P14-7 / T-P8-5): the fleet {commits + tasks} ÷ spend rollup + the
-# net-negative churn callout — the single "is the fleet earning its quota, or burning it?" line the
-# desk previously had no way to see. Drawn from the same cc-value JSON; skipped if unavailable.
+# ── value-ledger footer (T-P14-7 / T-P8-5): the fleet {commits + tasks} ÷ spend rollup, then the
+# PER-ACCOUNT net-positive breakdown (attributed commits ÷ spend — tasks stay fleet-level, never
+# split per account, per the truth discipline), then the net-negative churn callout. The single
+# "is the fleet earning its quota, or burning it?" view the desk lacked. Skipped if unavailable.
 if [ -n "$CCVAL_JSON" ]; then
   printf '%s' "$CCVAL_JSON" | jq -r '
     .window_h as $w | (.fleet | "── value \(.value) = \(.commits)c"
@@ -145,6 +146,8 @@ if [ -n "$CCVAL_JSON" ]; then
        + " + \(.tasks)t  ·  spend ~\(.spend_pct)% (\(.active_sessions) active · \($w)h)"
        + (if .ratio!=null then "  ·  v/spend \(.ratio)" else "" end)
        + (if .churn then "   ⚠ FLEET CHURN — spend, 0 landed ──" else " ──" end)),
+    ( [ .accounts[] | "\(.acct) +\(.commits)c/\(.session_pct // "?")%" + (if .churn then "⚠" else "" end) ] as $pa
+      | if ($pa|length)>0 then "   by acct  " + ($pa | join("  ·  ")) else empty end),
     ( [ .accounts[] | select(.churn) | "\(.acct) \(.session_pct // "?")%" ] as $ch
       | if ($ch|length)>0 then "   ⚠ net-negative: " + ($ch|join(" · ")) + " — spending, 0 landed" else empty end)
   ' 2>/dev/null
