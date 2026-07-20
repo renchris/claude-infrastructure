@@ -33,7 +33,27 @@
 #                                    caller must escalate + still deliver, never silently drop (F9).
 #   mailbox_promote_acked  <uuid>    LOCKED: acked=seen (the Stop-fold lag: last cycle's emitted is now consumed)
 #
-# Env: CC_MAILBOX_DIR (default ~/.claude/mailbox) · CC_MBX_LOCK_WAIT_MS (2000) · CC_MBX_LOCK_STALE_S (10).
+# ── FORWARD CHAINS (v3 D1 — succession must not strand an inbox) ──────────────────────────────────
+# The mailbox is PANE-UUID-keyed, so a recycle/succession orphans the predecessor's box: live forensics
+# 2026-07-20 found 631/206/155-line former-desk boxes, every line permanently unread, because producers
+# kept paging a UUID whose pane was gone (research doc §2 — "root cause is addressing, not transport").
+# A `<old-uuid>.forward` file holding the successor UUID makes the box a POINTER, so:
+#   • SEND side  — cc-notify follows the chain BEFORE enqueue, so a stale address still lands live.
+#   • DRAIN side — the successor ADOPTS the predecessor's undelivered tail exactly once (migration).
+# Both are bounded (MAX_HOPS) and cycle-safe (visited set): a forward loop must degrade to "deliver to
+# where I got stuck", never spin a hook. A `.forward` is also the D6 tombstone — archive preserves it.
+#
+#   mailbox_forward_of   <uuid>       resolve the chain HEAD (echo the terminal uuid; echoes <uuid>
+#                                     itself when there is no forward). Bounded 4 hops, cycle-safe.
+#   mailbox_write_forward <old> <new> atomic tmp+mv pointer write. Refuses a self-forward.
+#   mailbox_migrate <old> <new>       LOCKED (both boxes): append old's UNCONSUMED (acked, EOF] lines to
+#                                     new's inbox with a provenance prefix, then advance BOTH of old's
+#                                     cursors to EOF. Exactly-once by construction — the cursor advance
+#                                     is what makes a second call a no-op (idempotent, safe to re-run
+#                                     on every SessionStart).
+#
+# Env: CC_MAILBOX_DIR (default ~/.claude/mailbox) · CC_MBX_LOCK_WAIT_MS (2000) · CC_MBX_LOCK_STALE_S (10)
+#      · CC_MBX_FORWARD_MAX_HOPS (4).
 # bash 3.2-safe. No `set -e`.
 
 _mbx_dir() { printf '%s' "${CC_MAILBOX_DIR:-$HOME/.claude/mailbox}"; }
@@ -122,4 +142,117 @@ mailbox_promote_acked() { # <uuid> — the Stop-fold lag: everything emitted las
   seen="$(mailbox_seen "$u")"
   _mbx_write_int "$(_mbx_dir)/$u.acked" "$seen" || true
   _mbx_unlock "$u"
+}
+
+# ── FORWARD CHAINS + SUCCESSION MIGRATION (v3 D1) ────────────────────────────────────────────────
+_mbx_fwd_file() { printf '%s/%s.forward' "$(_mbx_dir)" "${1:-}"; }
+
+# STRICT canonical 8-4-4-4-12 check — deliberately stricter than _mbx_valid_uuid (which is permissive
+# "hex-and-dashes" by design, so the read primitives stay fail-safe on odd input). A forward pointer is
+# an ADDRESS: combined with the `tr -dc` sanitiser, permissive validation turns a corrupt pointer like
+# "not-a-uuid!!" into the plausible-looking "-a-" and would route real mail into a garbage box. A
+# pointer is only ever written by mailbox_write_forward, so anything non-canonical IS corruption —
+# refuse to write it, and ignore it on read (stopping at the last good hop).
+_mbx_strict_uuid() {
+  case "${1:-}" in
+    [0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]-[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]-[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]-[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]-[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Resolve a forward chain to its HEAD. Echoes the TERMINAL uuid — which is the input uuid when there is
+# no forward — so every caller can pipe through this unconditionally with no "does a forward exist?"
+# branch. Bounded (CC_MBX_FORWARD_MAX_HOPS, default 4) and cycle-safe (visited set): a loop, an
+# over-long chain, or a junk pointer STOPS at the last good hop and delivers there. A hook must degrade
+# to a slightly-stale address, never spin.
+# Exit: 0 = resolved (head echoed) · 1 = invalid input uuid (echoed back verbatim, caller decides).
+mailbox_forward_of() {
+  local u="${1:-}" max="${CC_MBX_FORWARD_MAX_HOPS:-4}" hops=0 visited nxt
+  _mbx_valid_uuid "$u" || { printf '%s' "$u"; return 1; }
+  case "$max" in ''|*[!0-9]*) max=4 ;; esac
+  visited=" $u "
+  while [ "$hops" -lt "$max" ]; do
+    nxt="$(head -n1 "$(_mbx_fwd_file "$u")" 2>/dev/null | tr -dc '0-9A-Fa-f-')"
+    [ -n "$nxt" ] || break                            # no pointer → u IS the head
+    _mbx_strict_uuid "$nxt" || break                  # junk/corrupt pointer → stop at the last good hop
+    case "$visited" in *" $nxt "*) break ;; esac      # CYCLE → stop (never spin)
+    visited="$visited$nxt "
+    u="$nxt"; hops=$(( hops + 1 ))
+  done
+  printf '%s' "$u"
+  return 0
+}
+
+# Point <old>'s box at <new> (atomic tmp+mv, like every other cursor write here). A SELF-forward is
+# refused: it would make mailbox_forward_of a silent no-op and hide a real succession bug behind a
+# pointer that looks wired.
+mailbox_write_forward() { # <old> <new>
+  local old="${1:-}" new="${2:-}" dir tmp
+  # never persist a non-canonical address (explicit if, not `A && B || C` — same reason as migrate's)
+  if ! _mbx_strict_uuid "$old" || ! _mbx_strict_uuid "$new"; then return 1; fi
+  [ "$old" = "$new" ] && return 1
+  dir="$(_mbx_dir)"; mkdir -p "$dir" 2>/dev/null || return 1
+  tmp="$dir/.$old.forward.$$.tmp"
+  printf '%s\n' "$new" > "$tmp" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; return 1; }
+  mv -f "$tmp" "$(_mbx_fwd_file "$old")" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; return 1; }
+  return 0
+}
+
+# Adopt <old>'s UNCONSUMED tail into <new>: append old's (acked, EOF] lines to new's inbox with a
+# provenance prefix, then advance old's cursors past what actually landed. Echoes the migrated count.
+#
+# Why (acked, EOF] and not (seen, EOF] — `.seen` is EAGER (emitted); `.acked` is PROVEN-consumed, and
+# it is the cursor the fail-loud guard keys on. Migrating from `acked` can therefore re-deliver a line
+# the dying session was shown but never provably took. That direction is deliberate: a dup is visible
+# and harmless, a drop is invisible and permanent (same reasoning as the F11 past-EOF re-deliver).
+#
+# EXACTLY-ONCE is the cursor advance, so this is safe to re-run on every SessionStart: a second call
+# reads acked == EOF, finds nothing unconsumed, and no-ops.
+# Exit: 0 = migrated ≥1 · 1 = nothing to migrate (incl. bad/equal uuids, missing box) · 2 = PARTIAL —
+# some lines landed, then a write failed; old's cursors were advanced by exactly what landed, so the
+# next call resumes at the right line (no loss, no dup).
+mailbox_migrate() { # <old> <new>
+  local old="${1:-}" new="${2:-}" f_old f_new a cur body lo hi ts pfx ln migrated=0 rc=0 cursor
+  if ! _mbx_valid_uuid "$old" || ! _mbx_valid_uuid "$new"; then echo 0; return 1; fi
+  [ "$old" = "$new" ] && { echo 0; return 1; }
+  f_old="$(mailbox_file "$old")"; f_new="$(mailbox_file "$new")"
+  [ -f "$f_old" ] || { echo 0; return 1; }
+  mkdir -p "$(_mbx_dir)" 2>/dev/null || { echo 0; return 1; }
+
+  # DEADLOCK-FREE two-box locking: acquire in a FIXED lexicographic order, so two migrations running in
+  # opposite directions can never hold-and-wait on each other. _mbx_lock already gives up after ~2 s and
+  # degrades lock-free rather than hanging, so this is belt-and-braces — but a hook is exactly where a
+  # stall is unacceptable, and an ordered acquire costs nothing.
+  if [[ "$old" < "$new" ]]; then lo="$old"; hi="$new"; else lo="$new"; hi="$old"; fi
+  _mbx_lock "$lo" || true
+  _mbx_lock "$hi" || true
+
+  a="$(mailbox_acked "$old")"; cur="$(mailbox_lines "$old")"
+  if [ "$cur" -le "$a" ]; then _mbx_unlock "$hi"; _mbx_unlock "$lo"; echo 0; return 1; fi
+  body="$(tail -n +"$((a + 1))" "$f_old" 2>/dev/null | head -n "$(( cur - a ))")"
+  if [ -z "$body" ]; then _mbx_unlock "$hi"; _mbx_unlock "$lo"; echo 0; return 1; fi
+
+  # APPEND FIRST, ADVANCE SECOND — that ordering IS the no-loss guarantee. Advancing the cursor first
+  # would silently destroy mail on a full/read-only disk. Line-at-a-time (not one bulk append) so a
+  # partial failure is COUNTABLE: we advance by exactly what landed and the retry resumes cleanly.
+  # One prefixed line per source line keeps the 1-message-1-line cursor contract intact, and keeps the
+  # original "<ISO> [<from>] <msg>" visible after the provenance stamp.
+  ts="$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null)"
+  pfx="$ts [forwarded:$(printf '%s' "$old" | cut -c1-8)] "
+  while IFS= read -r ln; do
+    printf '%s%s\n' "$pfx" "$ln" >> "$f_new" 2>/dev/null || { rc=2; break; }
+    migrated=$(( migrated + 1 ))
+  done <<MBXEOF
+$body
+MBXEOF
+
+  if [ "$migrated" -gt 0 ]; then
+    cursor=$(( a + migrated ))
+    _mbx_write_int "$(_mbx_dir)/$old.seen"  "$cursor" || rc=2
+    _mbx_write_int "$(_mbx_dir)/$old.acked" "$cursor" || rc=2
+  fi
+  _mbx_unlock "$hi"; _mbx_unlock "$lo"
+  echo "$migrated"
+  [ "$migrated" -gt 0 ] || return 1
+  return "$rc"
 }
