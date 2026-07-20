@@ -46,7 +46,8 @@ if [[ "${TEAMMATE_SHUTDOWN_DISABLED:-0}" == "1" ]]; then
 fi
 
 readonly MAX_DEFERS="${TEAMMATE_MAX_DEFERS:-3}"
-readonly HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # declare/assign split: SC2155
+readonly HOOK_DIR
 readonly LOG_DIR="$HOME/.claude/logs"
 readonly WATCHDOG_DIR="$HOME/.claude/watchdog"
 
