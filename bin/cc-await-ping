@@ -82,13 +82,22 @@ _lc() { if [ -f "$MBOX" ]; then grep -c '' "$MBOX" 2>/dev/null; else echo 0; fi;
 baseline="$(_lc)"
 echo "cc-await-ping: watching $CUR_UUID inbox ($([ "$_have_lib" = 1 ] && echo 'shared .seen cursor' || echo "from line $baseline"); timeout ${TIMEOUT}s, every ${INTERVAL}s)" >&2
 
+# Wake-path HEARTBEAT (critique F5): touch <uuid>.watching each poll so cc-notify/cc-announce can tell a
+# live session that WILL be woken (a fresh watcher heartbeat) from a live-but-idle one that only drains on
+# its next turn. Cleaned on exit. Works for uuid- AND role-watchers (both resolve to a concrete uuid).
+_watchfile() { printf '%s/%s.watching' "$MAILBOX_DIR" "$CUR_UUID"; }
+trap 'rm -f "$(_watchfile)" 2>/dev/null || true' EXIT
+
 elapsed=0
 while [ "$elapsed" -lt "$TIMEOUT" ]; do
   next_uuid="$(resolve_uuid)"
   if [ -n "$next_uuid" ] && [ "$next_uuid" != "$CUR_UUID" ]; then
+    rm -f "$(_watchfile)" 2>/dev/null || true
     CUR_UUID="$next_uuid"; MBOX="$MAILBOX_DIR/$CUR_UUID.md"; baseline="$(_lc)"
     echo "cc-await-ping: role re-pointed → now watching $CUR_UUID" >&2
   fi
+  mkdir -p "$MAILBOX_DIR" 2>/dev/null || true; : > "$(_watchfile)" 2>/dev/null || true   # heartbeat
+
   if [ "$_have_lib" = 1 ]; then
     if mailbox_has_pending "$CUR_UUID"; then
       mailbox_take "$CUR_UUID" 1    # print the new line(s) + advance the shared cursor (reliable delivery)

@@ -1,46 +1,52 @@
 #!/bin/bash
-# cc-notify — ping ANY live Claude Code session (any account) by friendly name or
-# pane UUID. The general primitive of the two-way session-comms feature.
+# cc-notify — deliver a message to ANY Claude Code session (any account) by friendly name or pane UUID,
+# as a MESSAGE it reads at a safe boundary — NEVER as keystrokes on its live input line.
 #
 #   cc-notify <target> "<message>"   target = friendly-name | pane-UUID | --self
 #   cc-notify --self                 print THIS session's pane UUID and exit
 #   cc-notify --list [--json]        list sessions (delegates to cc-sessions)
 #
 # Options:
-#   --from <name>     attribution written to the mailbox line (default: own
-#                     registered name, else the account)
-#   --mailbox-only    record to the mailbox but skip composer injection
+#   --from <name>     attribution written to the inbox line (default: own registered name / account)
+#   --mailbox-only    force inbox-only (skip the liveness classification / never a "not-live" note)
 #   -h, --help        this help
 #
-# Delivery (two-way transport):
-#   1. it2 `session send -s <uuid> "<message>"`  — types the text, and
-#   2. it2 `session send -s <uuid> $'\r'`         — submits it (CARRIAGE RETURN,
-#      NOT newline: Claude Code's Ink composer binds Enter to \r only).
-#   The text lands in the target's composer as a real user message — waking an
-#   idle session or queuing into a busy one.
-#   3. VERIFIED (2026-07-13 hardening): the pane is captured and the submit is
-#      confirmed — a message still sitting at the composer '❯' gets up to 2 CR
-#      retries; a strand is reported LOUDLY (exit 4), never as "delivered"
-#      (an Ink redraw swallows the submit ~1-in-6; a strand sat 20 min once).
-#   ALWAYS also appends ~/.claude/mailbox/<uuid>.md ("<ISO> [<from>] <message>")
-#   as the durable fallback: a closed/recycled pane makes it2 exit non-zero, and
-#   cc-notify then reports "mailbox only" and still exits 0 — never a hard fail.
+# ── TRANSPORT (v2, 2026-07-20): the INBOX, drained at a safe boundary — NO keystroke injection ──
+#   cc-notify APPENDS the message to the target's inbox ~/.claude/mailbox/<uuid>.md (one line:
+#   "<ISO> [<from>] <message>"). The target's `hooks/mailbox-drain.sh` drains it and surfaces it as
+#   CONTEXT — additionalContext on SessionStart/UserPromptSubmit, or a Stop decision:block reason —
+#   so it ALWAYS lands as a message the session reads and NEVER races the user's typing (at a Claude
+#   prompt OR a bash prompt). An idle session is woken by its own armed `cc-await-ping` watcher (which
+#   polls this same inbox) → the harness task-completion notification re-invokes it. Non-keystroke,
+#   robust to pane state. The v1 it2 `session send` transport is GONE — it raced live input (the exact
+#   bug this replaces): at a bash prompt the surface text ran as a command; at a Claude prompt it
+#   corrupted the half-typed message + cursor.
 #
-# Resolution order: friendly name (exact, via the cc-registry) -> raw pane UUID
-#   passthrough -> --self. Names never look like a UUID, so there is no ambiguity.
+# The <uuid>.seen line-count cursor (shared with handoff-disposition.sh --ack and mailbox-drain.sh)
+# makes delivery exactly-once. A single-line-per-message invariant is preserved (newlines in the
+# message are collapsed to spaces) so the cursor counts messages, not physical lines.
 #
+# ── DELIVERABILITY (honest exit codes — an enqueue to a DEAD inbox must not read as delivered) ──
+#   The target's liveness decides the verdict cc-announce trusts. A LIVE session (registered live in
+#   cc-sessions, or a live iTerm2 pane) WILL drain the inbox → "delivered to inbox". A NOT-live target
+#   (closed/recycled pane, dead pid) is enqueued but no drain will ever run → "mailbox only" (the
+#   cc-announce alarm path; disk-truth that nothing reads is NOT a delivery — the W5 lesson holds).
+#
+# Resolution order: friendly name (exact, cc-registry) -> raw pane UUID passthrough -> --self.
 # Env overrides (tests): CC_REGISTRY_DIR, CC_MAILBOX_DIR, IT2_BIN.
-# bash 3.2-safe. Exit 0 = delivered(+verified/unverifiable) or mailboxed; 2 = usage;
-# 3 = unresolvable target; 4 = typed but STRANDED unsubmitted after retries (mailboxed).
+# bash 3.2-safe. Exit: 0 = enqueued (delivered to a live inbox, OR mailbox-only to a not-live/unknown-
+#   liveness target — stderr says which); 2 = usage; 3 = unresolvable target; 5 = inbox UNWRITABLE
+#   (LOUD — a message that cannot even persist must alarm, never a silent drop).
 set -uo pipefail
 
 MAILBOX_DIR="${CC_MAILBOX_DIR:-$HOME/.claude/mailbox}"
-IT2="${IT2_BIN:-$HOME/.claude/bin/it2}"
+IT2="${IT2_BIN:-$HOME/.claude/bin/it2}"     # read-only here (session list, for pane liveness) — NEVER `session send`
 
 usage() { sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; }
 
-# cc-sessions lives beside cc-notify (same bin/). Prefer the sibling (deterministic
-# for tests + symlinked deploys), then PATH, then the canonical ~/.claude/bin.
+# cc-sessions lives beside cc-notify (same bin/). Prefer the sibling (deterministic for tests +
+# symlinked deploys), then PATH, then the canonical ~/.claude/bin. It is BOTH the name resolver and
+# the liveness oracle (its --json lists LIVE sessions only: pid alive + pane present).
 _sd="$(cd "$(dirname "$0")" 2>/dev/null && pwd || true)"
 CCS=""
 if   [ -n "$_sd" ] && [ -x "$_sd/cc-sessions" ]; then CCS="$_sd/cc-sessions"
@@ -116,74 +122,86 @@ if [ -z "$FROM" ]; then
   [ -z "$FROM" ] && FROM="$(basename "${CLAUDE_CONFIG_DIR:-$HOME/.claude}" | sed 's/^\.//')"
 fi
 
-# --- ALWAYS record the mailbox (durable fallback) ---
+# --- ENQUEUE to the inbox (the durable, keystroke-free transport) ---
+# One message = one line: collapse any embedded newlines/CR to spaces so the <uuid>.seen line-count
+# cursor counts MESSAGES, not physical lines (a multi-line message would otherwise desync the cursor).
+MSG_1LINE="$(printf '%s' "$MSG" | tr '\r\n' '  ')"
 mailbox_write() {
   mkdir -p "$MAILBOX_DIR" 2>/dev/null || return 1
-  printf '%s [%s] %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$FROM" "$MSG" >> "$MAILBOX_DIR/$uuid.md"
+  printf '%s [%s] %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$FROM" "$MSG_1LINE" >> "$MAILBOX_DIR/$uuid.md"
 }
-mailbox_write || echo "cc-notify: warning — could not write mailbox $MAILBOX_DIR/$uuid.md" >&2
+if ! mailbox_write; then
+  # A message that cannot even be persisted must NOT read as delivered — LOUD, never a silent drop.
+  # F4: exit 5 alone is INERT (every fire-and-forget caller swallows it with `|| true`). So the backstop
+  # for "cannot persist" must NOT depend on persistence — escalate DIRECTLY here: a durable alarm record
+  # in a DIFFERENT dir (the target mailbox is what failed) + a best-effort push to the operator's phone.
+  adir="${CC_COMMS_ALARM_DIR:-$HOME/.claude/autonomy/comms-alarms}"
+  if mkdir -p "$adir" 2>/dev/null; then
+    jq -nc --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)" --arg tgt "$uuid" --arg from "$FROM" --arg msg "$MSG_1LINE" \
+      '{kind:"enqueue-failed", target:$tgt, from:$from, msg:$msg, ts:$ts}' \
+      > "$adir/enqueue-fail-$(date -u +%Y%m%dT%H%M%SZ 2>/dev/null)-$$.json" 2>/dev/null || true
+  fi
+  for _p in "$_sd/../scripts/push-send.sh" "$HOME/.claude/scripts/push-send.sh" "$(command -v push-send.sh 2>/dev/null || true)"; do
+    [ -n "$_p" ] && [ -x "$_p" ] && { "$_p" send --title "cc-notify enqueue FAILED" --message "inbox unwritable for $uuid; NOT delivered: $MSG_1LINE" >/dev/null 2>&1 || true; break; }
+  done
+  echo "cc-notify: FAILED to write inbox $MAILBOX_DIR/$uuid.md — message NOT delivered; alarm recorded + phone paged (check permissions/disk)" >&2
+  exit 5
+fi
 
-# --- inject into the composer (unless --mailbox-only) ---
+# --mailbox-only: caller explicitly wants a pure record, no liveness verdict.
 if [ "$MAILBOX_ONLY" = 1 ]; then
-  echo "cc-notify: [$uuid] recorded to mailbox (injection skipped: --mailbox-only)" >&2
+  echo "cc-notify: [$uuid] recorded to inbox ($MAILBOX_DIR/$uuid.md; --mailbox-only)" >&2
   exit 0
 fi
 
-# text, then CR submit (\r — Ink composer submits on CR, never \n)
-if ! { "$IT2" session send -s "$uuid" "$MSG" 2>/dev/null \
-       && "$IT2" session send -s "$uuid" "$(printf '\r')" 2>/dev/null; }; then
-  echo "cc-notify: pane $uuid unreachable (closed/recycled) — delivered to mailbox only" >&2
-  exit 0
-fi
-
-# --- verify the SUBMIT, never trust the keystroke (hardened 2026-07-13) ----------------------
-# An Ink redraw swallows the submitting newline ~1-in-6 (the handoff-fire as_write finding);
-# a stranded message then sits at the composer '❯' indefinitely — observed 20 minutes on a
-# live countermand the same day this was added. Same confirm-the-effect pattern as the
-# handoff-fire relaunch fix: capture the pane, and while the message head still sits AT/AFTER
-# the last composer prompt, re-send CR (2 retries), then fail LOUD — the mailbox already holds
-# the message, but a strand must never be reported as "delivered".
-# Exit codes: 0 = delivered (verified, or pane text unreadable — degrade gracefully);
-#             4 = typed but STRANDED in the composer after retries (mailbox recorded).
-_cap="$(mktemp "${TMPDIR:-/tmp}/cc-notify-cap.XXXXXX")"
-trap 'rm -f "$_cap"' EXIT
-_head="$(printf '%s' "$MSG" | head -1 | cut -c1-40)"
-composer_stranded() { # 0 = stranded, 1 = clear/submitted, 2 = unreadable
-  "$IT2" session capture -s "$uuid" -o "$_cap" >/dev/null 2>&1 || return 2
-  [ -s "$_cap" ] || return 2
-  # LC_ALL=C IS LOAD-BEARING (with -a). An it2 screen capture pads empty cells with NUL bytes
-  # (~177 in a 4.5KB screen), so it is a BINARY file. BSD /usr/bin/grep then:
-  #   plain            -> no match (binary suppression)
-  #   -a, UTF-8 locale -> STILL no match: the NULs break its multibyte decode, so the
-  #                       multibyte '❯' (U+276F, e2 9d af) is never found
-  #   LC_ALL=C -a      -> matches (pure byte compare)  <-- the only combination that works
-  # Both probes below silently returned empty before this, so composer_stranded() always hit
-  # `return 2` and EVERY send reported "UNVERIFIED": the strand path never ran once. Beware
-  # testing this at an interactive prompt where `grep` may be a function/alias (ugrep, GNU) —
-  # those DO match, which is exactly what hid this bug. Keep LC_ALL=C.
-  # last composer-prompt line; the message head appearing ON or AFTER it = stranded.
-  last_prompt="$(LC_ALL=C grep -an '❯' "$_cap" 2>/dev/null | tail -1 | cut -d: -f1)"
-  [ -n "$last_prompt" ] || return 2
-  hit="$(LC_ALL=C grep -anF "$_head" "$_cap" 2>/dev/null | tail -1 | cut -d: -f1)"
-  [ -n "$hit" ] && [ "$hit" -ge "$last_prompt" ] && return 0
-  return 1
+# --- liveness classification: does a LIVE session exist to drain this inbox? ---
+# LIVE  → the drain hook (or the target's armed cc-await-ping watcher) WILL surface it → delivered.
+# not-live (closed/recycled pane, dead pid) → enqueued but no drain will run → "mailbox only" (the
+#   cc-announce alarm path; a dead inbox is not a delivery).
+# unknown (no liveness oracle available) → degrade to "mailbox only", never a false "delivered".
+target_live() {
+  local u="$1"
+  # self is always live (it is us)
+  [ "$u" = "$own_uuid" ] && [ -n "$own_uuid" ] && return 0
+  # registered live (cc-sessions --json lists LIVE rows only: pid alive + pane present)
+  if [ -n "$CCS" ]; then
+    local hit; hit="$("$CCS" --json 2>/dev/null | jq -r --arg u "$u" 'map(select(.paneUUID==$u)) | length' 2>/dev/null)"
+    [ -n "$hit" ] && [ "$hit" != 0 ] && return 0
+  fi
+  # else a live (possibly unregistered) iTerm2 pane — read-only `session list`, never `session send`.
+  # A VALID JSON array (even []) means the list is READABLE → membership is authoritative (a `[]` means
+  # zero live panes → not-live, NOT "unknown"). Only a non-array / errored output is "unknown".
+  local raw; raw="$("$IT2" session list --json 2>/dev/null || true)"
+  if [ -n "$raw" ] && printf '%s' "$raw" | jq -e 'type=="array"' >/dev/null 2>&1; then
+    printf '%s' "$raw" | jq -r '.[].id // empty' 2>/dev/null | grep -qxF "$u" && return 0
+    return 1       # list readable AND uuid absent → authoritatively not-live
+  fi
+  return 2         # it2 unavailable / errored → no liveness oracle → unknown
 }
-_attempt=0
-while :; do
-  composer_stranded; _st=$?
-  if [ "$_st" = 1 ]; then
-    echo "cc-notify: delivered to $uuid (composer + mailbox; submit VERIFIED)" >&2
-    exit 0
-  fi
-  if [ "$_st" = 2 ]; then
-    echo "cc-notify: delivered to $uuid (composer + mailbox; submit UNVERIFIED — pane text unreadable: no capture, or no composer prompt on screen)" >&2
-    exit 0
-  fi
-  _attempt=$((_attempt + 1))
-  if [ "$_attempt" -gt 2 ]; then
-    echo "cc-notify: STRANDED — message typed into $uuid but the composer never submitted after $_attempt CR retries; mailbox holds it. Submit manually (press Enter in that pane) or re-run." >&2
-    exit 4
-  fi
-  sleep 1
-  "$IT2" session send -s "$uuid" "$(printf '\r')" 2>/dev/null || true
-done
+
+# F5: a WAKE PATH — not mere registered-liveness — is what makes a delivery a wake. A fresh cc-await-ping
+# heartbeat (<uuid>.watching) means the target's watcher wakes it within a poll; its ABSENCE means the
+# target only drains on its NEXT turn (fine for a routine ping, but NOT a guaranteed wake for a terminal
+# announce — cc-announce treats no-watcher as a degrade, never "wake confirmed"). Never equate live+idle
+# with a wake (that WAS the W5 incident).
+WATCH_FRESH_S="${CC_WATCH_FRESH_S:-90}"
+wake_path_armed() {
+  local u="$1" wf mt now
+  wf="$MAILBOX_DIR/$u.watching"; [ -f "$wf" ] || return 1
+  mt="$(stat -f %m "$wf" 2>/dev/null || stat -c %Y "$wf" 2>/dev/null || echo 0)"
+  now="$(date +%s 2>/dev/null || echo 0)"; case "$mt" in ''|*[!0-9]*) mt=0 ;; esac
+  [ "$(( now - mt ))" -le "$WATCH_FRESH_S" ]
+}
+
+target_live "$uuid"; _lv=$?
+case "$_lv" in
+  0)
+    if [ "$uuid" = "$own_uuid" ] || wake_path_armed "$uuid"; then
+      echo "cc-notify: delivered to inbox [$uuid] (live session, wake-path armed — its cc-await-ping watcher wakes it within a poll)" >&2
+    else
+      echo "cc-notify: delivered to inbox [$uuid] (live session, NO watcher armed — drains on its NEXT turn; delivered but not a guaranteed instant wake)" >&2
+    fi
+    exit 0 ;;
+  1) echo "cc-notify: [$uuid] mailbox only — target is NOT a live session (closed/recycled pane); no drain will run. The message is recorded but unread until/unless that pane returns." >&2; exit 0 ;;
+  *) echo "cc-notify: delivered to inbox [$uuid] (liveness UNVERIFIABLE — no session registry/pane list; recorded, will drain if the pane is live)" >&2; exit 0 ;;
+esac

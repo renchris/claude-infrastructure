@@ -17,11 +17,12 @@ setup() {
 stub() { # <mode>
   local p="$BATS_TEST_TMPDIR/stub-$1.sh" body
   case "$1" in
-    verified)   body='echo "cc-notify: delivered to T (composer + mailbox; submit VERIFIED)" >&2; exit 0' ;;
-    mailbox)    body='echo "cc-notify: pane T unreachable — delivered to mailbox only" >&2; exit 0' ;;
-    unresolved) body='echo "cc-notify: cannot resolve target — not a live session name or a pane UUID" >&2; exit 3' ;;
-    stranded)   body='echo "cc-notify: STRANDED — typed but never submitted" >&2; exit 4' ;;
-    unreadable) body='echo "cc-notify: delivered (submit UNVERIFIED — pane text unreadable)" >&2; exit 0' ;;
+    verified)     body='echo "cc-notify: delivered to inbox [T] (live session, wake-path armed — its cc-await-ping watcher wakes it within a poll)" >&2; exit 0' ;;
+    nowatch)      body='echo "cc-notify: delivered to inbox [T] (live session, NO watcher armed — drains on its NEXT turn; delivered but not a guaranteed instant wake)" >&2; exit 0' ;;
+    mailbox)      body='echo "cc-notify: [T] mailbox only — target is NOT a live session (closed/recycled pane); no drain will run" >&2; exit 0' ;;
+    unresolved)   body='echo "cc-notify: cannot resolve target — not a live session name or a pane UUID" >&2; exit 3' ;;
+    writefail)    body='echo "cc-notify: FAILED to write inbox — message NOT delivered" >&2; exit 5' ;;
+    unverifiable) body='echo "cc-notify: delivered to inbox [T] (liveness UNVERIFIABLE — no session registry/pane list; recorded)" >&2; exit 0' ;;
   esac
   { echo '#!/bin/bash'; echo "printf '%s\\n' \"\$*\" >> \"$BATS_TEST_TMPDIR/stub.log\""; echo "$body"; } > "$p"
   chmod +x "$p"; echo "$p"
@@ -29,17 +30,25 @@ stub() { # <mode>
 n_alarm() { find "$CC_ANNOUNCE_ALARM_DIR" -name 'announce-alarm-*.json' 2>/dev/null | wc -l | tr -d ' '; }
 n_degrade() { find "$CC_ANNOUNCE_ALARM_DIR" -name 'announce-degrade-*.json' 2>/dev/null | wc -l | tr -d ' '; }
 
-@test "selftest passes and runs all 6 never-silent checks (a zero-check suite must not 'pass')" {
+@test "selftest passes and runs all 7 never-silent checks (a zero-check suite must not 'pass')" {
   run "$A" --selftest
   [ "$status" -eq 0 ]
   n_ok="$(printf '%s' "$output" | grep -c '^  ok ')"
-  [ "$n_ok" -eq 6 ]
+  [ "$n_ok" -eq 7 ]
 }
 
-@test "verified delivery → exit 0, no alarm" {
+@test "wake-path armed → VERIFIED, exit 0, no alarm" {
   CC_NOTIFY_BIN="$(stub verified)" run "$A" some-target "done"
   [ "$status" -eq 0 ]
   [ "$(n_alarm)" -eq 0 ]
+  [ "$(n_degrade)" -eq 0 ]
+}
+
+@test "live-but-no-watcher → recorded DEGRADE, exit 0, NO alarm (F5: live ≠ a confirmed wake)" {
+  CC_NOTIFY_BIN="$(stub nowatch)" run "$A" idle-desk "shipped"
+  [ "$status" -eq 0 ]
+  [ "$(n_alarm)" -eq 0 ]
+  [ "$(n_degrade)" -ge 1 ]
 }
 
 @test "unresolvable target → LOUD alarm + non-zero (the SendMessage bug: desk is not resolvable)" {
@@ -54,14 +63,14 @@ n_degrade() { find "$CC_ANNOUNCE_ALARM_DIR" -name 'announce-degrade-*.json' 2>/d
   [ "$(n_alarm)" -ge 1 ]
 }
 
-@test "stranded (typed, unsubmitted) → LOUD alarm + non-zero" {
-  CC_NOTIFY_BIN="$(stub stranded)" run "$A" busy-desk "done"
+@test "inbox-unwritable (exit 5) → LOUD alarm + non-zero (a message that cannot persist is not delivered)" {
+  CC_NOTIFY_BIN="$(stub writefail)" run "$A" busy-desk "done"
   [ "$status" -ne 0 ]
   [ "$(n_alarm)" -ge 1 ]
 }
 
-@test "unverifiable-but-alive (busy composer) → exit 0 but a degrade record (recorded, never silent)" {
-  CC_NOTIFY_BIN="$(stub unreadable)" run "$A" busy-alive "done"
+@test "unverifiable-but-alive (liveness unconfirmed) → exit 0 but a degrade record (recorded, never silent)" {
+  CC_NOTIFY_BIN="$(stub unverifiable)" run "$A" busy-alive "done"
   [ "$status" -eq 0 ]
   [ "$(n_degrade)" -ge 1 ]
 }

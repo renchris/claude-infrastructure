@@ -73,7 +73,7 @@ setup() {
   local roles="$BATS_TEST_TMPDIR/roles" recs="$BATS_TEST_TMPDIR/records"
   mkdir -p "$roles"; printf 'DESK-UUID-1\n' > "$roles/desk"
   local ccn="$BATS_TEST_TMPDIR/ccn.sh"
-  { printf '#!/bin/bash\n'; printf 'echo "cc-notify: delivered to T (composer + mailbox; submit VERIFIED)" >&2\nexit 0\n'; } > "$ccn"
+  { printf '#!/bin/bash\n'; printf 'echo "cc-notify: delivered to inbox [T] (live session, wake-path armed — its cc-await-ping watcher wakes it within a poll)" >&2\nexit 0\n'; } > "$ccn"
   chmod +x "$ccn"
   ( cd "$WORK" && \
     CC_NOTIFY_BIN="$ccn" CC_ROLES_DIR="$roles" CC_COMPLETION_RECORDS_DIR="$recs" \
