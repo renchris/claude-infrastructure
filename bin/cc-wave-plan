@@ -40,6 +40,9 @@ ACCOUNTS_BIN_DEFAULT="claude-accounts"
 ROUTE_BIN_DEFAULT="cc-route"
 MAX_PER_ACCT="${CC_WAVE_MAX_PER_ACCT:-2}"
 GUARD_MIN="${CC_WAVE_FABLE_GUARD_MIN:-30}"
+# Per-item worktree root. Only ever composed into the fire_line TEMPLATE — this script creates
+# nothing (cc-dispatch, the actuator, provisions the path warm before it fires).
+WTROOT="${CC_WAVE_WTROOT:-$HOME/Development/.worktrees}"
 IDL="${CC_WAVE_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
 
 usage()       { sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'; }
@@ -259,8 +262,17 @@ cmd_plan() {
     case " $seen_accts " in *" ${accts[$i]} "*) : ;; *) seen_accts="$seen_accts ${accts[$i]}" ;; esac
     # fire_line is a copy-paste TEMPLATE, not run by this script — the literal ~ is deliberate (the
     # consuming shell expands it at fire time; cc-wave-plan NEVER fires).
+    #
+    # --cwd (item b87573077f11), never --worktree. Workers used to fire co-cwd with the desk in the
+    # SHARED checkout, so a wave of them fought over one git index and land-conflicted (rebase exit
+    # 5). Each item now gets its OWN worktree path. It is `--cwd <path>` and not `--worktree <br>`
+    # deliberately: handoff-fire's --worktree branch provisions COLD (scripts/worktree-pool.sh, its
+    # only warm path, does not exist — so POOL_ELIGIBLE is always 0), and a cold worktree fire races
+    # CC boot for the auto-submit keystroke — the session never engages, 0 commits, looks fired
+    # (memory cold-worktree-fire-autosubmit-race). cc-dispatch, the ACTUATOR, creates this path warm
+    # before firing; cc-wave-plan stays a pure planner and emits only the path.
     # shellcheck disable=SC2088
-    fire="~/.claude/scripts/handoff-fire.sh --prompt-file /tmp/fire-${ids[$i]}.txt --account ${accts[$i]} --model ${model} --effort ${eff} --split-right"
+    fire="~/.claude/scripts/handoff-fire.sh --prompt-file /tmp/fire-${ids[$i]}.txt --cwd ${WTROOT}/wt-${ids[$i]} --account ${accts[$i]} --model ${model} --effort ${eff} --split-right"
     objs+=("$(jq -cn --arg id "${ids[$i]}" --arg slot "${slots[$i]}" --arg acct "${accts[$i]}" \
         --arg model "$model" --arg eff "$eff" --arg fire "$fire" \
         '{id:$id, slot:$slot, account:$acct, model:$model, effort:$eff, fire_line:$fire}')")
@@ -345,6 +357,19 @@ STUB
     bash -c "'$SELF' --items '[{\"id\":\"a\",\"slot\":\"lead\"}]' --json | jq -e '.[0]|select(.model==\"claude-opus-4-8\" and .effort==\"max\" and .account==\"next\")'"
   check "happy: fire_line references handoff-fire.sh + the id's prompt-file" 0 \
     bash -c "'$SELF' --items '[{\"id\":\"zz\",\"slot\":\"lead\"}]' --json | jq -e '.[0].fire_line|test(\"handoff-fire.sh\") and test(\"/tmp/fire-zz.txt\")'"
+
+  # (e) b87573077f11 — each worker routes to its OWN worktree, WARM. Co-cwd firing made a wave fight
+  # over the shared checkout's git index (land-conflict, rebase exit 5); `--worktree` would take
+  # handoff-fire's cold path and race the auto-submit keystroke (cold-worktree-fire-autosubmit-race).
+  check "worktree: fire_line routes to a per-item --cwd worktree path" 0 \
+    bash -c "CC_WAVE_WTROOT=/wt '$SELF' --items '[{\"id\":\"zz\",\"slot\":\"lead\"}]' --json | jq -e '.[0].fire_line|test(\"--cwd /wt/wt-zz\")'"
+  check "worktree: fire_line NEVER emits the cold --worktree flag" 0 \
+    bash -c "CC_WAVE_WTROOT=/wt '$SELF' --items '[{\"id\":\"zz\",\"slot\":\"lead\"}]' --json | jq -e '.[0].fire_line|test(\"--worktree\")|not'"
+  check "worktree: two items get DISTINCT worktrees (no shared index between workers)" 0 \
+    bash -c "CC_WAVE_WTROOT=/wt '$SELF' --items '[{\"id\":\"a\",\"slot\":\"lead\"},{\"id\":\"b\",\"slot\":\"lead\"}]' --json | jq -e '(.[0].fire_line|test(\"--cwd /wt/wt-a\")) and (.[1].fire_line|test(\"--cwd /wt/wt-b\"))'"
+  # PURE PLANNER: emitting the path must create nothing on disk.
+  check "worktree: planning CREATES nothing (cc-wave-plan never actuates)" 0 \
+    bash -c "CC_WAVE_WTROOT='$tmp/wtroot' '$SELF' --items '[{\"id\":\"zz\",\"slot\":\"lead\"}]' --json >/dev/null; [ ! -e '$tmp/wtroot' ]"
 
   # (b) Fable-window STRADDLE — within-guard window → Opus fallback carrying reason; NO fable id.
   check "straddle: window 10m<guard -> judgment-dense falls back to opus" 0 \
