@@ -2,9 +2,15 @@
 
 **Date:** 2026-07-20 · **Trigger:** a Fable ultracode session ran the skill inside a Dynamic
 Workflow and spent 1M+ tokens over 1hr+, against an expectation of ~a dozen minutes.
-**Verdict:** the skill is fine; the *deployment* inverted its economics. Three compounding causes,
-one of which dominates. Fix = an execution contract carried in `SKILL.md` itself, because the skill
-is what loads into the orchestrator's context.
+**Verdict:** the skill is fine; the *deployment* inverted its economics. Fix = an execution contract
+carried in `SKILL.md` itself, because the skill is what loads into the orchestrator's context.
+
+**Evidence discipline.** Two findings are **measured** from artifacts still on disk (the unbounded
+input body; the uncapped rework loop). One commonly-assumed cause — a per-session agent fan-out — is
+**inferred only**: the originating transcript has aged out and no retained workflow runs this skill.
+The sections below label which is which, and §5 states plainly what could not be verified. An
+earlier draft of this document asserted the fan-out as an observed cause; that was an overclaim and
+is corrected here.
 
 ---
 
@@ -47,7 +53,25 @@ Session 0.
 Mode C and mode R need only the documents that *govern* the message, never the whole corpus that
 produced it. Modes P and T legitimately need more — but still need a stated bound.
 
-### Cause 2: the fan-out axis was the sessions
+### Risk 2 — fanning out along the sessions (INFERRED, *not* observed in this run)
+
+> **Evidence status — read this before relying on the section below.** The originating session's
+> transcript is **gone**. Every transcript that references `README.pyramid-worklog` post-dates the
+> `9c43d191` commit; the earliest is 07-10 18:04, the commit was 07-10 01:51. A sweep of every
+> retained workflow run (`~/.claude/projects/*/*/subagents/workflows/*/`) found **no workflow whose
+> agents execute this skill** — the single hit is a 2026-06-22 run on Sonnet 4.6 / Opus 4.8 that
+> merely mentions "Pyramid Principle" and pre-dates the skill's creation. So **I cannot show that
+> this run was structured as a per-session fan-out.** What follows is a first-principles argument
+> for why that decomposition is wrong, which stands on the skill's own text regardless of what this
+> particular run did. It justifies rule 2 as *prevention*. It is not a diagnosis of the 1M+ spend.
+>
+> Two nearby measurements, for calibration rather than attribution: the doc_classifier session
+> closest to the commit window spent **1.49M fresh tokens over 42 min on Opus 4.8** with exactly one
+> `Workflow` call — and that call was for an unrelated reso decision. Separately, three 2026-07-11
+> `claude-fable-5` workflows in the doc_classifier project spent **26.4M / 10.7M / 10.2M fresh
+> tokens** across **111 / 35 / 46 agents**; the 111-agent run's 68-minute window matches the "1hr+"
+> recollection closely, but its agents are running a *documentation audit* (one agent per claim,
+> adversarial-verify shape), **not** this skill.
 
 The skill presents **10 numbered sessions**. An ultracode orchestrator's default decomposition
 heuristic maps numbered lists onto workflow phases — one agent per session. That is the single
@@ -161,17 +185,33 @@ Checked against the Jul-10 run's own recorded numbers:
 
 | Rule | What it tests | Jul-10 run | Fires? |
 |---|---|---|---|
-| 1 — bound the input | declared body > 150K tokens | ~740K declared | **yes**, at Session 0, before any cost |
-| 2 — inline spine | one agent per session | (pending forensics on the actual shape) | — |
-| 3 — fan-out boundaries | fans outside S3/S10 | (pending forensics) | — |
-| 4 — rework cap | > 2 repair rounds | **6 rounds**, 47% of the worklog | **yes**, at round 3 |
-| Budget | run > 2× input body | 1M+ vs a *correctly bounded* 91K body | **yes**, early |
+| 1 — bound the input | declared body > 150K tokens | ~740K declared (**measured**) | **yes**, at Session 0, before any cost |
+| 2 — inline spine | one agent per session | **unverifiable** — transcript aged out | can't say |
+| 3 — fan-out boundaries | fans outside S3/S10 | **unverifiable** — same | can't say |
+| 4 — rework cap | > 2 repair rounds | **6 rounds**, 47% of the worklog (**measured**) | **yes**, at round 3 |
+| Budget | run > 2× input body | declared body alone is ~8× the governing subset | **yes**, early |
 
-Rule 1 is the one that matters: it fires at Session 0, before a single token of analysis is spent,
-and it alone would have re-scoped this run from ~740K tokens of declared input to ~91K. Rule 4
-fires later but caps the tail. Rules 2–3 await the workflow-shape forensics to confirm the
-mechanism, but they are sound independent of it — the sequential-chain argument in §2 does not
-depend on what this particular run did.
+Rule 1 is the one that carries the result: it fires at Session 0, before a single token of analysis
+is spent, and alone re-scopes the run from ~740K tokens of declared input to ~91K. Rule 4 fires
+later and caps the tail. **Rules 2, 3 and 5 are prevention, not repair** — they are justified by the
+first-principles argument about sequential chains, not by anything observed in this run.
+
+### What could not be verified
+
+Stated plainly, so nobody later mistakes inference for measurement:
+
+- **The orchestration shape of the 1M+ run.** The originating transcript has aged out of retention.
+  No retained workflow anywhere on disk executes this skill.
+- **The token split of that run** (output vs cache-read vs fresh). Same cause. Note that "1M+" is
+  ambiguous without that split: in the nearby runs measured for calibration, `cache_read` exceeds
+  fresh spend by roughly 5–6×, so a headline token figure can describe very different real costs.
+- **Whether the run was on Fable 5.** The session nearest the commit window ran on Opus 4.8. The
+  Fable-5 workflows found in that project were doing a documentation audit, not this skill.
+
+None of this weakens the contract. Rules 1 and 4 answer measured defects; rules 2, 3 and 5 are
+cheap, sound as design guidance, and cost nothing when they turn out to be unnecessary. But the
+honest summary is: **the dominant measured cause is the unbounded input, and the orchestration story
+is a hypothesis.**
 
 ---
 
