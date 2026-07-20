@@ -77,7 +77,13 @@ SS_ENTRY="$(jq -c --arg m "$SS_MATCH" 'first(.hooks.SessionStart[]?.hooks[]? | s
 UP_ENTRY="$(jq -c --arg m "$UP_MATCH" 'first(.hooks.UserPromptSubmit[]?.hooks[]? | select(.command? // "" | contains($m)))' "$TEMPLATE" 2>/dev/null)"
 for pair in "SessionStart:$SS_ENTRY" "UserPromptSubmit:$UP_ENTRY"; do
   key="${pair%%:*}"; val="${pair#*:}"
-  [ -n "$val" ] && [ "$val" != "null" ] || { echo "✗ no mailbox-drain entry under .hooks.$key in $TEMPLATE — nothing to copy. STOP." >&2; exit 1; }
+  if [ -z "$val" ] || [ "$val" = "null" ]; then
+    echo "✗ no mailbox-drain entry under .hooks.$key in $TEMPLATE — nothing to copy. STOP." >&2
+    echo "  The checkout predates the 2-way-comms commit. Deploy it first, then re-run:" >&2
+    echo "      git -C $REPO fetch origin && git -C $REPO merge --ff-only origin/main" >&2
+    echo "      (currently behind origin/main by: $(git -C "$REPO" rev-list --count HEAD..origin/main 2>/dev/null || echo '?') commit(s))" >&2
+    exit 1
+  fi
 done
 
 # The live set, verified at run time — never a hardcoded assumption about how many dirs exist.
