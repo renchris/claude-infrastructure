@@ -379,7 +379,28 @@ were NOT fully met. The two architectural fixes SIMPLIFY the design:
 retired by A/B; F11/F12 are cheap hardening folded into `cc-inbox-guard`.
 
 ## v2 Status log
-- **2026-07-20** — v2 opened. Research complete. Design frozen. Phase 1 (drain + lib + tests) built +
-  committed (6cb7c7f, e420e30), cc-notify swap + cc-announce migrated (uncommitted) — THEN the adversarial
-  critique landed 14 fixes (above). Phase 1's Stop branch is being REVISED per (A)/(B). NEXT: fold the
-  must-fixes, re-verify, land via `/ship`.
+- **2026-07-20** — v2 opened. Research → design frozen → Phase 1 built → adversarial critique (14 fixes) →
+  **all must-fixes folded + implemented + tested + gate-green.** Commits (branch `feat/twoway-comms-100`):
+  - `19b35ae` research+design · `6cb7c7f`+`e420e30` Phase-1 drain+lib+tests · `a721ce0` critique-fixes design.
+  - `a1f241e` **(A)** split cursor `.seen`/`.acked` + **(F1)** locked atomic `mailbox_take` + **(B)** fold
+    Stop delivery into `session-continue` (drop the standalone Stop blocker + 4-hook yield-guards) +
+    **(F6a)** `cc-await-ping` seeds from `.seen` + **(F9)** advance-returns-failure.
+  - `8df066a` **(F5)** wake-path VERIFIED (a `<uuid>.watching` heartbeat, not mere liveness — the W5
+    lesson) + **(F3)** `cc-announce` fail-CLOSED + **(F4)** `cc-notify` exit-5 self-escalation.
+  - `72e0d37` **(F7)** `desk-invariant` re-engages via the inbox, NEVER keystrokes a live composer (the
+    operator's literal complaint — the third + last keystroke site eliminated).
+  - `1bc1601` **`cc-inbox-guard`** — the fail-loud backstop (F5/F6/F8/F11/F12/F4): undelivered-to-a-live-
+    session mail escalates to the phone; keys on `.acked` so an eager `.seen` can't hide a loss.
+  - `efb6267` wiring: drain hooks on SessionStart/UserPromptSubmit; guard rides the reaper cadence;
+    delivery-survives-busy-pane proof. `6f2f83a` docs §8.
+  - **Gate:** `shellcheck -S warning` clean on all touched bins/hooks/scripts; the three required suites
+    (delivery-lands-as-message-not-keystroke = cc-notify 17/17 + mailbox-drain 10/10; delivery-survives-
+    busy-pane; undelivered-alarms = cc-inbox-guard 12/12) + cc-announce 10/10, desk-invariant 6/6,
+    completion-push, handoff-fire, cc-reaper 35/35 all green.
+  - **Keystroke sites eliminated (3/3):** `cc-notify` (the chokepoint — reaper/supervisor/notify-back/
+    cc-announce all ride it), `desk-invariant reprompt()`, and any composer-inject path. `handoff-fire`'s
+    FRESH-pane launch (empty new pane, no live input) is the only remaining `session send` — legitimately
+    out of scope.
+  - **Post-land (operator C10):** activate the drain hooks in the LIVE `settings.json` across the 4 config
+    dirs (the template is wired; the live per-account settings are the operator's step, like boundary-handoff).
+    NEXT: land via project-local `/ship`.
