@@ -1,7 +1,7 @@
 ---
 description: Session-Close ledger from LIVE git/gate/DoD reads (never self-report)
 disable-model-invocation: false
-allowed-tools: Bash(scripts/wrap-ledger.sh*), Bash(*/wrap-ledger.sh*), Read
+allowed-tools: Bash(scripts/wrap-ledger.sh*), Bash(*/wrap-ledger.sh*), Bash(hooks/operator-readout.sh*), Bash(*/operator-readout.sh*), Read
 argument-hint: [--full]
 ---
 
@@ -13,8 +13,15 @@ git/gate/DoD reads itself, so the rung reports ground truth.
 
 - Default (one-line readout): !`scripts/wrap-ledger.sh 2>&1 || true`
 - Full ledger (with `--full`): !`[ "$ARGUMENTS" = "--full" ] && scripts/wrap-ledger.sh --full 2>&1 || true`
+- Operator steps (silver-platter block): !`hooks/operator-readout.sh --render 2>&1 || true`
 
 (If the repo root differs, the launcher resolves the script under the repo — `scripts/wrap-ledger.sh`.)
+
+The operator-steps block is the SAME renderer the `operator-readout.sh` Stop hook pushes at turn
+close (one code path — the push and pull surfaces cannot drift): one state line, then numbered
+`▶ <exact runnable command>` lines from disk truth (deploy-lag · pending activations · open
+class-C decisions · blocked backlog), `◆` for genuine judgment calls. Relay it VERBATIM at the
+top of your close — never paraphrase the commands into prose (the silver-platter rule).
 
 ## Read the rung, then act on it
 
