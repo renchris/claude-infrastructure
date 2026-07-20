@@ -458,3 +458,29 @@ that wires their subjects — no gate goes green on capability alone again. Full
   `sed` target). Each smart-bash shape maps to a scoped hook (`rm`→`rm-safe-allowlist` live; land-push→`ship-rail`;
   the rest → new tight hooks *iff* a strand is observed) — never the broad one. Full proposal +
   operator runbook: `docs/PART-B1-PERMISSION-HOOK-WIRING.md`. No `--apply` shipped for smart-bash by design.
+
+- 2026-07-20 (desk peer session, Opus@max, /goal-driven — cc-backlog `344da980ad96`) — **dispatch-dedup /
+  done-guard: `reopen` is no longer the one unguarded transition.** Filed after `a60d62a215f1` → `6488617`
+  put TWO peers on ONE item and burned a session. **The filed root cause was half wrong and the ledger says
+  so** — there was no stale re-file and no reopen-of-`done` in that trail (single `add`, and both `done`
+  records came *after*). What actually fired: the item was `reopen`ed **33 min into a LIVE claim**
+  (`Chriss-MacBook-Pro-3-50503`, well inside reap's 90-min stale gate, so reap never saw it), and the next
+  `cc-dispatch` tick re-claimed + spawned peer 2 **15 s later**. `cmd_transition` had no status check at all,
+  so *both* the named gap and the one that fired were the same defect. Three guards, all RED-proved by
+  stashing the fix: (1) **terminal** — `reopen` of a `done` item is REFUSED rc 4, showing the prior evidence;
+  (2) **live claim** — `reopen` of a `claimed` item whose claimer is *provably* live (the same `claimer_live`
+  oracle reap uses) and isn't the caller is REFUSED rc 4. Deliberately NOT refused: a claimer releasing its
+  **own** claim (`--by <sid>`) and a dead/unattributable claimer (reap's path — stranding is the worse
+  failure), so **reap is untouched** (13/13 reap bats still green); (3) **`add`** on a `done` event-key warns
+  loud with the prior evidence but keeps rc 0 + echoes the id (`cc-discover:121` branches on that rc).
+  `--force` overrides (1)+(2) and is recorded as `force:true`. New fold field **`wasDone`** — a done LATCH
+  that survives a reopen and clears only on `--force` — is what `cc-dispatch` now filters on (step 1b), so
+  completed work stays out of the wave even if something re-opens it by hand; each skip is printed + IDL
+  `{action:"skipped"}` with the evidence and the exact override command (never a silent fence), and the run
+  summary gained `skipped:N`. **Deliberately NOT a git content-verify** in the dispatcher: a sha lookup there
+  must fail OPEN whenever the repo can't be resolved (bare launchd PATH/cwd — the common case), which is the
+  fail-silent-open this spine forbids; the ledger latch is fail-CLOSED and the evidence rides the skip record
+  for a human to verify. Regression caught in-flight: the live-claim guard would have broken cc-dispatch's own
+  spawn-fail rollback (it claims `--by $SID`, its own still-running pid), so both rollbacks now self-release
+  with `--by "$SID"` — RED-proved by `(d2)`. Live ledger re-checked read-only before landing: 460 done-latched
+  items, **zero currently-open ones**, so activation strands nothing. Gates: 1093/1093 bats, shellcheck clean.

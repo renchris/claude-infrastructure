@@ -51,11 +51,11 @@ add_item()   { "$BACKLOG" add --title "$1" --project proj --source bats; }   # e
 status_of()  { "$BACKLOG" list --all --json | jq -r --arg i "$1" '.[]|select(.id==$i)|.status'; }
 idl_action() { tail -1 "$C/idl.jsonl" | jq -r '.action'; }
 
-@test "selftest passes and runs all 29 checks (a zero-check suite must not 'pass')" {
+@test "selftest passes and runs all 38 checks (a zero-check suite must not 'pass')" {
   run "$DISP" selftest
   [ "$status" -eq 0 ]
   n_ok="$(printf '%s' "$output" | grep -c '^  ok ')"
-  [ "$n_ok" -eq 29 ]
+  [ "$n_ok" -eq 38 ]
   ! printf '%s' "$output" | grep -q '^  FAIL'
 }
 
@@ -137,6 +137,42 @@ idl_action() { tail -1 "$C/idl.jsonl" | jq -r '.action'; }
   [ "$status" -eq 0 ]
   printf '%s' "$output" | grep -q ' | proj'
   ! printf '%s' "$output" | grep -q '^\['
+}
+
+# ── done-guard: completed work never re-enters the wave (incident 2026-07-20) ───────────────────
+@test "(l) a re-opened DONE item is SKIPPED, not dispatched; --force re-arms it (real fold)" {
+  id="$(add_item guarded)"
+  "$BACKLOG" done "$id" --evidence "6488617 landed" >/dev/null
+  # a hand-appended UNFORCED reopen — the exact shape that burned a session: status is "open"
+  # again, which is cc-dispatch's fire predicate, but the done latch is still set.
+  printf '{"id":"%s","ts":"2026-07-20T09:00:00Z","event":"reopen"}\n' "$id" >> "$CC_BACKLOG_FILE"
+  [ "$(status_of "$id")" = open ]
+  run "$DISP" --once
+  [ "$status" -eq 0 ]
+  [ ! -s "$C/spawn.log" ]                        # no worker session burned
+  [ "$(status_of "$id")" = open ]                # and not even claimed
+  grep -q '"action":"skipped"' "$C/idl.jsonl"    # never a silent fence
+  grep -q '6488617' "$C/idl.jsonl"               # the skip carries the prior evidence
+  # the deliberate override clears the latch and the item becomes dispatchable again
+  "$BACKLOG" reopen "$id" --force >/dev/null
+  run "$DISP" --once
+  [ "$status" -eq 0 ]
+  [ -s "$C/spawn.log" ]
+  [ "$(status_of "$id")" = claimed ]
+}
+
+@test "(d2) spawn-fail rollback survives the live-claim guard when SID is a LIVE host-pid" {
+  # Regression on the rollback path itself: cc-dispatch claims --by \$SID and, on spawn-fail,
+  # reopens. \$SID is its OWN still-running <host>-<pid> — maximally live — so the reopen is only
+  # legal as a SELF-release (--by \$SID). Drop that flag and the live-claim guard refuses the
+  # rollback and the item strands as `claimed` until reap. Proven against the REAL cc-backlog.
+  export CC_DISPATCH_SID="$(hostname -s 2>/dev/null || hostname)-$$"
+  id="$(add_item selfrelease)"
+  echo 7 > "$C/spawn_rc"
+  run "$DISP" --once
+  [ "$status" -eq 0 ]
+  [ "$(status_of "$id")" = open ]                 # rolled back, NOT stranded as claimed
+  grep -q '"action":"failed"' "$C/idl.jsonl"
 }
 
 @test "MAX_SPAWN cap → 3 dispatchable items, only 2 spawned in one pass" {

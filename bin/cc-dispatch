@@ -14,6 +14,9 @@
 # FLOW (each step is fail-LOUD / abstain, never fail-silent-open):
 #   1. items  = `<backlog> list --open --json`, filtered dispatchable: status=="open" AND
 #               project == CC_DISPATCH_PROJECT. Already-claimed items are skipped.
+#   1b. DONE-GUARD: an item carrying the ledger's done latch (`wasDone`) is dropped from the wave
+#               and recorded as IDL {action:"skipped"} — completed work is never re-dispatched by
+#               a reopen. Cleared only by `cc-backlog reopen <id> --force`. (2026-07-20 incident.)
 #   2. no items                    → IDL {action:"passed", detail:"backlog empty"}, exit 0.
 #   3. wave   = [{id, slot}]  (slot from an optional item hint; MVP default "lead")
 #      plan   = `<wave-plan> --items <wave-json> --json`
@@ -59,7 +62,7 @@ PROJECT="${CC_DISPATCH_PROJECT:-$(git rev-parse --show-toplevel 2>/dev/null || p
 # cron pull reads "backlog empty" forever (found live 2026-07-19)
 PROJECT="$(basename "$PROJECT")"
 
-FIRED=0; ABSTAINED=0; FAILED=0   # run counters → the summary record
+FIRED=0; ABSTAINED=0; FAILED=0; SKIPPED=0   # run counters → the summary record
 
 usage() { sed -n '2,/^set -uo/p' "$0" | sed 's/^# \{0,1\}//; /^set -uo/d'; }
 now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
@@ -86,7 +89,8 @@ idl() {
 idl_summary() {
   mkdir -p "$(dirname "$IDL")" 2>/dev/null || true
   jq -cn --arg ts "$(now_iso)" --argjson f "$FIRED" --argjson b "$ABSTAINED" --argjson x "$FAILED" \
-     '{ts:$ts, actor:"cc-dispatch", action:"summary", fired:$f, abstained:$b, failed:$x}' \
+     --argjson s "$SKIPPED" \
+     '{ts:$ts, actor:"cc-dispatch", action:"summary", fired:$f, abstained:$b, failed:$x, skipped:$s}' \
      >> "$IDL" 2>/dev/null || true
 }
 
@@ -112,14 +116,45 @@ dispatch() { # <dry|run>
   [ "$rc" -eq 0 ] || die3 "'$backlog list --open --json' failed (rc=$rc)"
   printf '%s' "$items" | jq -e 'type=="array"' >/dev/null 2>&1 \
     || die3 "backlog list did not return a JSON array"
-  dispatchable="$(printf '%s' "$items" \
+  local open_items guarded gcount g
+  open_items="$(printf '%s' "$items" \
     | jq -c --arg p "$PROJECT" '[ .[] | select(.status=="open" and .project==$p) ]')"
-  count="$(printf '%s' "$dispatchable" | jq 'length' 2>/dev/null || echo 0)"
 
-  # 2. empty backlog → passed.
+  # 1b. DONE-GUARD — an item that has ALREADY been completed once is not auto-dispatchable, even
+  # when something has put it back to "open". `wasDone` is cc-backlog's done LATCH: it sticks from
+  # the first `done` and clears only on a deliberate `cc-backlog reopen <id> --force`. Without this
+  # the wave re-fires landed work and burns a whole worker session on it (incident 2026-07-20:
+  # a60d62a215f1 → 6488617, two peers on one already-landed item).
+  #
+  # Fail-CLOSED by construction. The latch lives in the ledger fold, so the check needs no repo or
+  # sha lookup — a git content-verify HERE would have to fail OPEN (dispatch anyway) every time the
+  # repo could not be resolved, which under a bare launchd PATH/cwd is the common case, not the
+  # rare one; fail-silent-open is precisely what this spine forbids. The prior `evidence` rides the
+  # skip record instead, so a human content-verifies from the surfaced sha.
+  guarded="$(     printf '%s' "$open_items" | jq -c '[ .[] | select(.wasDone == true) ]')"
+  dispatchable="$(printf '%s' "$open_items" | jq -c '[ .[] | select(.wasDone != true) ]')"
+  gcount="$(printf '%s' "$guarded"      | jq 'length' 2>/dev/null || echo 0)"
+  count="$( printf '%s' "$dispatchable" | jq 'length' 2>/dev/null || echo 0)"
+
+  # never a SILENT fence (the abstention law): every skip is printed AND recorded with its evidence
+  # and the exact command that would override it.
+  if [ "$gcount" -gt 0 ]; then
+    while IFS= read -r g; do
+      [ -n "$g" ] || continue
+      echo "cc-dispatch: skipped $g" >&2
+      [ "$mode" = dry ] && { echo "PLAN: SKIP $g"; continue; }
+      SKIPPED=$((SKIPPED + 1)); idl skipped "$g"
+    done < <(printf '%s' "$guarded" | jq -r '.[]
+      | "\(.id): already done — evidence: \(if (.evidence // "") == "" then "<none>" else .evidence end)"
+      + " — re-dispatch needs `cc-backlog reopen \(.id) --force`"')
+  fi
+
+  # 2. nothing dispatchable → passed.
   if [ "$count" -eq 0 ]; then
-    if [ "$mode" = dry ]; then echo "PLAN: backlog empty (project=$PROJECT) → would pass, no spawn"; return 0; fi
-    idl passed "backlog empty"; idl_summary; return 0
+    local why="backlog empty"
+    [ "$gcount" -gt 0 ] && why="backlog empty after done-guard ($gcount already-done item(s) skipped)"
+    if [ "$mode" = dry ]; then echo "PLAN: $why (project=$PROJECT) → would pass, no spawn"; return 0; fi
+    idl passed "$why"; idl_summary; return 0
   fi
 
   # 3. wave → quota placement. BOUND the wave to MAX_SPAWN: cc-wave-plan cliffs (exit 4) on any
@@ -213,7 +248,11 @@ dispatch() { # <dry|run>
         "If blocked on an OPERATOR-only step (a key, a launchctl bootout, any human action you cannot do): cc-backlog block $id --needs \"<the exact step>\" — this PARKS the item OUT of the dispatch wave (no re-dispatch loop, no burned worker slot) until the operator acts, then cc-notify the desk role (cat ~/.claude/cc-roles/desk). Do NOT reopen an operator-gated item — that re-cycles it." \
         "If blocked on info or a decision instead (not an operator step): cc-backlog reopen $id and cc-notify the desk with the blocker." \
         > "$pfile"; then
-        "$backlog" reopen "$id" >/dev/null 2>&1 || true
+        # --by $SID: this is a SELF-RELEASE of the claim we took two lines up. cc-backlog's
+        # live-claim reopen guard refuses a FOREIGN reopen of a live claim (and $SID — our own
+        # still-running pid — is maximally live), so the rollback must identify itself as the
+        # claimer or it would be refused and the item would strand as claimed until reap.
+        "$backlog" reopen "$id" --by "$SID" >/dev/null 2>&1 || true
         FAILED=$((FAILED + 1)); idl failed "$id: brief compose failed (reopened)"; continue
       fi
     fi
@@ -221,7 +260,7 @@ dispatch() { # <dry|run>
     if "$spawn" "${fire_args[@]}" >/dev/null 2>&1; then
       FIRED=$((FIRED + 1)); spawned=$((spawned + 1)); idl fired "$id -> $acct"
     else
-      "$backlog" reopen "$id" >/dev/null 2>&1 || true
+      "$backlog" reopen "$id" --by "$SID" >/dev/null 2>&1 || true   # self-release (see above)
       FAILED=$((FAILED + 1)); idl failed "$id: spawn non-zero (reopened)"
     fi
   done
@@ -273,6 +312,7 @@ STUB
   ok()   { printf '  ok   %s\n' "$1"; pass=$((pass+1)); }
   bad()  { printf '  FAIL %s\n' "$1"; fail=$((fail+1)); }
   t()    { local m="$1"; shift; if "$@"; then ok "$m"; else bad "$m"; fi; }   # <label> <predicate-cmd...>
+  not()  { ! "$@"; }                                                          # negate a predicate for t()
   last() { tail -1 "$tmp/idl.jsonl" | jq -r "$1" 2>/dev/null; }
   epoch1() { head -1 "$1" 2>/dev/null | grep -qE '^[0-9]+$'; }                # first line is an epoch
   seed_items() { printf '%s\n' "$1" > "$tmp/items.json"; }
@@ -293,6 +333,31 @@ STUB
   "$SELF" --once >/dev/null 2>&1
   t "(k) blocked item → NOT dispatched (passed)" grep -q '"action":"passed"' "$tmp/idl.jsonl"
   t "(k) blocked item → ZERO spawn (no loop)"    test ! -s "$tmp/spawn.log"
+
+  # (l) DONE-GUARD: an item carrying the ledger's done latch (`wasDone`) is NOT dispatched even
+  # though it folds to status "open" — it is skipped, recorded WITH its prior evidence, and never
+  # claimed. THE anti-waste guard: without it a reopen of completed work burns a whole worker
+  # session re-doing what already landed (incident 2026-07-20, a60d62a215f1 → 6488617).
+  # the plan is seeded with a LIVE placement for i1 — what a planner handed [i1] would return — so
+  # this RED-proves the step-1b filter: drop it and i1 reaches the planner and spawns.
+  reset; seed_items '[{"id":"i1","project":"a","status":"open","wasDone":true,"title":"t1","evidence":"6488617 fix(x)"}]'
+  seed_plan '[{"id":"i1","account":"next3","fire_line":["--prompt-file","/tmp/f1.txt"]}]'
+  "$SELF" --once >/dev/null 2>&1
+  t "(l) done-latched item → ZERO spawn (no burned session)"  test ! -s "$tmp/spawn.log"
+  t "(l) done-latched item → NOT claimed"                     test ! -s "$tmp/backlog.log"
+  t "(l) done-latched item → IDL skipped (never a silent fence)" grep -q '"action":"skipped"' "$tmp/idl.jsonl"
+  t "(l) skip record carries the prior evidence"              grep -q '6488617' "$tmp/idl.jsonl"
+  t "(l) skip record names the --force override"              grep -q 'reopen i1 --force' "$tmp/idl.jsonl"
+  t "(l) summary counts the skip"                             test "$(last '.skipped')" = 1
+
+  # (m) the guard is PER-ITEM, not a whole-wave abort: a done-latched item beside a fresh one
+  # must not suppress the fresh one.
+  reset; seed_items '[{"id":"i1","project":"a","status":"open","wasDone":true,"title":"t1"},{"id":"i2","project":"a","status":"open","title":"t2"}]'
+  seed_plan '[{"id":"i2","account":"next3","fire_line":["--prompt-file","/tmp/f1.txt"]}]'
+  "$SELF" --once >/dev/null 2>&1
+  t "(m) mixed wave → the un-done item IS claimed"     grep -qx 'claim i2' "$tmp/backlog.log"
+  t "(m) mixed wave → the done-latched item is NOT claimed" not grep -qx 'claim i1' "$tmp/backlog.log"
+  t "(m) mixed wave → exactly 1 spawn"                 test "$(grep -c . "$tmp/spawn.log")" -eq 1
 
   # (b) quota-cliff (wave-plan exit 4) → abstained + page + ZERO spawn.
   reset; seed_items '[{"id":"i1","project":"a","status":"open","title":"t1"}]'

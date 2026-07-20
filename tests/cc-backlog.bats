@@ -62,13 +62,139 @@ setup() {
   echo "$output" | grep -q 'done'
 }
 
-@test "reopen returns a done item to open" {
+# ── reopen guards: done-terminal + live-claim (incident 2026-07-20, a60d62a215f1 → 6488617) ─────
+# `reopen` was the one transition with NO status check: it would resurrect a terminal item and it
+# would yank an item out from under a still-running worker. Both land the item back on status
+# "open" — cc-dispatch's exact fire predicate — so the next tick claimed + spawned a SECOND peer
+# onto work that was already in progress / already landed. Two guards, both `--force`-overridable.
+# Liveness is stubbed to an EMPTY registry so a session-shaped claimer is never accidentally live;
+# host-pid liveness uses REAL kill -0 (dead = 2147483647, live = the test's own $$).
+guard_env() {
+  printf '#!/bin/bash\necho "[]"\n' > "$BATS_TEST_TMPDIR/nosess"; chmod +x "$BATS_TEST_TMPDIR/nosess"
+  export CC_BACKLOG_SESSIONS_BIN="$BATS_TEST_TMPDIR/nosess"
+  HOST="$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo localhost)"
+}
+st_of() { bash "$CB" list --all --json | jq -r --arg i "$1" '.[]|select(.id==$i)|.status'; }
+
+@test "reopen of a DONE item is REFUSED (rc 4), appends NOTHING, stays done" {
+  guard_env
+  id=$(bash "$CB" add --project /r --title T --source S)
+  bash "$CB" done "$id" --evidence "6488617 the fix" >/dev/null
+  before="$(wc -l < "$CC_BACKLOG_FILE" | tr -d ' ')"
+  run bash "$CB" reopen "$id"
+  [ "$status" -eq 4 ]
+  echo "$output" | grep -qi 'terminal'
+  echo "$output" | grep -q '6488617'          # the refusal SHOWS what already landed
+  echo "$output" | grep -q -- '--force'       # …and names the deliberate override
+  [ "$(wc -l < "$CC_BACKLOG_FILE" | tr -d ' ')" -eq "$before" ]   # append-only ledger untouched
+  [ "$(st_of "$id")" = done ]
+}
+
+@test "reopen --force DOES return a done item to open and records force:true" {
+  guard_env
   id=$(bash "$CB" add --project /r --title T --source S)
   bash "$CB" done "$id" --evidence ref:1 >/dev/null
-  bash "$CB" reopen "$id" >/dev/null
+  run bash "$CB" reopen "$id" --force
+  [ "$status" -eq 0 ]
+  [ "$(st_of "$id")" = open ]
   run bash "$CB" list --open
   echo "$output" | grep -q "$id"
-  echo "$output" | grep -q 'open'
+  tail -1 "$CC_BACKLOG_FILE" | jq -e '.event=="reopen" and .force==true'   # the override is auditable
+}
+
+@test "wasDone latches on done and is cleared ONLY by a forced reopen" {
+  guard_env
+  id=$(bash "$CB" add --project /r --title T --source S)
+  bash "$CB" list --all --json | jq -e --arg i "$id" '.[]|select(.id==$i)|.wasDone==false'
+  bash "$CB" done "$id" --evidence ref:1 >/dev/null
+  bash "$CB" list --all --json | jq -e --arg i "$id" '.[]|select(.id==$i)|.wasDone==true'
+  # a hand-appended UNFORCED reopen (bypassing the CLI guard) re-opens the status but must NOT
+  # clear the latch — that is what keeps cc-dispatch from re-firing landed work.
+  printf '{"id":"%s","ts":"2026-07-20T09:00:00Z","event":"reopen"}\n' "$id" >> "$CC_BACKLOG_FILE"
+  bash "$CB" list --all --json | jq -e --arg i "$id" '.[]|select(.id==$i)|.status=="open" and .wasDone==true'
+  bash "$CB" reopen "$id" --force >/dev/null
+  bash "$CB" list --all --json | jq -e --arg i "$id" '.[]|select(.id==$i)|.wasDone==false'
+}
+
+@test "reopen of a LIVE claim by a FOREIGN caller is REFUSED (rc 4) — the double-dispatch bug" {
+  guard_env
+  id=$(bash "$CB" add --project /r --title T --source S)
+  bash "$CB" claim "$id" --by "$HOST-$$" >/dev/null       # $$ is alive
+  before="$(wc -l < "$CC_BACKLOG_FILE" | tr -d ' ')"
+  run bash "$CB" reopen "$id"                              # no --by ⇒ foreign
+  [ "$status" -eq 4 ]
+  echo "$output" | grep -qi 'live'
+  [ "$(wc -l < "$CC_BACKLOG_FILE" | tr -d ' ')" -eq "$before" ]
+  [ "$(st_of "$id")" = claimed ]                           # worker keeps its item
+}
+
+@test "the claimer may release its OWN live claim (--by <claimer>) — cc-dispatch's rollback" {
+  guard_env
+  id=$(bash "$CB" add --project /r --title T --source S)
+  bash "$CB" claim "$id" --by "$HOST-$$" >/dev/null
+  run bash "$CB" reopen "$id" --by "$HOST-$$"
+  [ "$status" -eq 0 ]
+  [ "$(st_of "$id")" = open ]
+}
+
+@test "reopen of a DEAD claim needs no --force (reap's path / normal recovery)" {
+  guard_env
+  id=$(bash "$CB" add --project /r --title T --source S)
+  bash "$CB" claim "$id" --by "$HOST-2147483647" >/dev/null   # dead pid
+  run bash "$CB" reopen "$id"
+  [ "$status" -eq 0 ]
+  [ "$(st_of "$id")" = open ]
+}
+
+@test "reopen of an UNATTRIBUTABLE claim (no --by) is allowed — not provably live" {
+  guard_env
+  id=$(bash "$CB" add --project /r --title T --source S)
+  bash "$CB" claim "$id" >/dev/null                        # bare claim, no --by
+  run bash "$CB" reopen "$id"
+  [ "$status" -eq 0 ]                                       # stranding the work is the worse failure
+  [ "$(st_of "$id")" = open ]
+}
+
+@test "reopen of an OPEN or BLOCKED item is unaffected by the guards" {
+  guard_env
+  id=$(bash "$CB" add --project /r --title T --source S)
+  run bash "$CB" reopen "$id"
+  [ "$status" -eq 0 ]
+  id2=$(bash "$CB" add --project /r --title U --source S)
+  bash "$CB" block "$id2" --needs "operator: set key" >/dev/null
+  run bash "$CB" reopen "$id2"
+  [ "$status" -eq 0 ]
+  [ "$(st_of "$id2")" = open ]
+}
+
+@test "--force is rejected on any event other than reopen (never silently ignored)" {
+  guard_env
+  id=$(bash "$CB" add --project /r --title T --source S)
+  run bash "$CB" done "$id" --evidence ref:1 --force
+  [ "$status" -eq 2 ]
+  echo "$output" | grep -q -- '--force'
+}
+
+@test "add on a DONE event-key WARNS loud but still echoes the id with rc 0 (cc-discover contract)" {
+  guard_env
+  id=$(bash "$CB" add --project /r --title T --source S)
+  bash "$CB" done "$id" --evidence "6488617 the fix" >/dev/null
+  before="$(wc -l < "$CC_BACKLOG_FILE" | tr -d ' ')"
+  run bash -c "bash '$CB' add --project /r --title T --source S 2>&1"
+  [ "$status" -eq 0 ]                       # rc 0: callers branch on it (cc-discover:121)
+  echo "$output" | grep -q "$id"            # the id is still echoed (idempotency contract)
+  echo "$output" | grep -qi 'already done'
+  echo "$output" | grep -q '6488617'        # the prior evidence is surfaced
+  [ "$(wc -l < "$CC_BACKLOG_FILE" | tr -d ' ')" -eq "$before" ]   # NOT re-opened, no new record
+  [ "$(st_of "$id")" = done ]
+}
+
+@test "add on a non-done event-key stays silent (no warning noise on ordinary dedup)" {
+  guard_env
+  bash "$CB" add --project /r --title T --source S >/dev/null
+  run bash -c "bash '$CB' add --project /r --title T --source S 2>&1"
+  [ "$status" -eq 0 ]
+  ! echo "$output" | grep -qi 'already done'
 }
 
 # ── blocked-on-operator (parks an item OUT of the dispatch wave) ────────────────
