@@ -1,0 +1,256 @@
+#!/bin/bash
+# cc-inbox-guard — the FAIL-LOUD backstop of the v2 non-keystroke comms channel. A message enqueued to a
+# session but never CONSUMED must ALARM, never silently vanish (the frozen guarantee). This is what makes
+# the inbox transport safe: delivery is best-effort at a boundary, but an undelivered line is loud.
+#
+#   cc-inbox-guard sweep            check every inbox; escalate the overdue ones (default; writes markers)
+#   cc-inbox-guard sweep --dry-run  classify + print, escalate NOTHING
+#   cc-inbox-guard --selftest       RED-prove the alarm fires (and does NOT on a consumed inbox)
+#
+# WHAT IT WATCHES (critique fixes, keyed on the CONSUMED cursor — never the eager .seen):
+#   • unacked mail past a deadline (mailbox_unacked_count = lines − .acked). The drain/fold advance .acked
+#     only on proven consumption, so unacked>0 past the deadline = the model never took a turn carrying it.
+#   • F8: owner liveness by PANE existence (it2 session list) after a cc-reconcile backfill — NOT registry
+#     membership. An INDETERMINATE owner (can't prove the pane gone) ESCALATES — silence is not fail-loud.
+#   • F12: class-specific deadlines — a reaper/supervisor PAGE ([from] tag) is urgent (short); a peer ping
+#     is routine (long). v1's instant keystroke gave confirmed-stuck classes an urgency floor; preserve it.
+#   • F11: cursor-past-EOF (.seen or .acked > line count — rotation/GC/recycle can drop mail) alarms too.
+#   • F4: enqueue-FAILED records (cc-notify's exit-5 dir) — a message that could not even persist — alarm.
+#
+# ESCALATION = push-send.sh (the VERIFIED phone leg) + an IDL record + a durable alarm record. Damped per
+# (uuid, acked:lines) so the SAME undelivered mail escalates once; new mail or partial progress re-fires.
+#
+# Env seams (tests): CC_MAILBOX_DIR · CC_INBOX_GUARD_DEADLINE_S (600) · CC_INBOX_GUARD_URGENT_S (60) ·
+#   CC_INBOX_GUARD_STATE_DIR · CC_IDL · CC_COMMS_ALARM_DIR · CC_INBOX_GUARD_PUSH_BIN · CC_INBOX_GUARD_IT2 ·
+#   CC_INBOX_GUARD_RECONCILE_BIN · CC_INBOX_GUARD_NOW (epoch clock override) · CC_INBOX_GUARD_LIVE_UUIDS
+#   (test: space-sep list treated as live panes, bypassing it2).
+# bash 3.2-safe. Exit: 0 = swept (escalations may have fired) · 2 = usage.
+# shellcheck disable=SC2015  # file-wide: the selftest's `[ test ] && okp || badp` reporter idiom is
+# intentional — okp/badp always return 0 (printf + arithmetic), so SC2015's "C runs when A true but B
+# fails" cannot occur.
+set -uo pipefail
+
+MBOX_DIR="${CC_MAILBOX_DIR:-$HOME/.claude/mailbox}"
+DEADLINE_S="${CC_INBOX_GUARD_DEADLINE_S:-600}"
+URGENT_S="${CC_INBOX_GUARD_URGENT_S:-60}"
+STATE_DIR="${CC_INBOX_GUARD_STATE_DIR:-$HOME/.claude/autonomy/inbox-guard}"
+IDL="${CC_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
+ALARM_DIR="${CC_COMMS_ALARM_DIR:-$HOME/.claude/autonomy/comms-alarms}"
+IT2="${CC_INBOX_GUARD_IT2:-$HOME/.claude/bin/it2}"
+
+command -v jq >/dev/null 2>&1 || { echo "cc-inbox-guard: jq required" >&2; exit 2; }
+
+# shared cursor lib (bin → ../hooks/lib, then ~/.claude/hooks/lib)
+_bd="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
+_mbxlib="$_bd/../hooks/lib/mailbox-pending.sh"
+[ -f "$_mbxlib" ] || _mbxlib="$HOME/.claude/hooks/lib/mailbox-pending.sh"
+# shellcheck source=/dev/null
+if [ -f "$_mbxlib" ]; then . "$_mbxlib" 2>/dev/null || true; fi
+command -v mailbox_lines >/dev/null 2>&1 || { echo "cc-inbox-guard: mailbox lib not usable ($_mbxlib)" >&2; exit 2; }
+
+PUSH_BIN="${CC_INBOX_GUARD_PUSH_BIN:-}"
+if [ -z "$PUSH_BIN" ]; then
+  for _c in "$_bd/../scripts/push-send.sh" "$HOME/.claude/scripts/push-send.sh" "$(command -v push-send.sh 2>/dev/null || true)"; do
+    [ -n "$_c" ] && [ -x "$_c" ] && { PUSH_BIN="$_c"; break; }
+  done
+fi
+RECONCILE_BIN="${CC_INBOX_GUARD_RECONCILE_BIN:-}"
+if [ -z "$RECONCILE_BIN" ]; then
+  for _c in "$_bd/cc-reconcile" "$HOME/.claude/bin/cc-reconcile" "$(command -v cc-reconcile 2>/dev/null || true)"; do
+    [ -n "$_c" ] && [ -x "$_c" ] && { RECONCILE_BIN="$_c"; break; }
+  done
+fi
+
+now()  { printf '%s' "${CC_INBOX_GUARD_NOW:-$(date +%s 2>/dev/null || echo 0)}"; }
+utc()  { date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo ''; }
+stamp(){ date -u +%Y%m%dT%H%M%SZ 2>/dev/null || echo "$$"; }
+
+# ISO ("2026-07-20T02:10:14-0700") → epoch. BSD `date -j -f` first, then GNU `date -d`.
+iso_epoch() {
+  local iso="$1" e
+  e="$(date -j -f '%Y-%m-%dT%H:%M:%S%z' "$iso" +%s 2>/dev/null)" && { printf '%s' "$e"; return; }
+  e="$(date -d "$iso" +%s 2>/dev/null)" && { printf '%s' "$e"; return; }
+  printf '0'
+}
+
+# owner liveness by PANE existence (F8): live=0 · dead=1 · indeterminate=2. Test override wins.
+owner_liveness() {
+  local u="$1"
+  if [ -n "${CC_INBOX_GUARD_LIVE_UUIDS:-}" ]; then
+    case " $CC_INBOX_GUARD_LIVE_UUIDS " in *" $u "*) return 0 ;; *) return 1 ;; esac
+  fi
+  local raw; raw="$("$IT2" session list --json 2>/dev/null || true)"
+  if [ -n "$raw" ] && printf '%s' "$raw" | jq -e 'type=="array"' >/dev/null 2>&1; then
+    printf '%s' "$raw" | jq -r '.[].id // empty' 2>/dev/null | grep -qxF "$u" && return 0
+    return 1
+  fi
+  return 2   # it2 unavailable → cannot prove the pane gone → INDETERMINATE (escalate, never assume dead)
+}
+
+class_deadline() { # <from-tag> → the deadline seconds for this message class (F12)
+  case "$1" in
+    *reaper*|*supervisor*|*desk-invariant*|*deathwatch*|*PAGE*|*permission*) printf '%s' "$URGENT_S" ;;
+    *) printf '%s' "$DEADLINE_S" ;;
+  esac
+}
+
+idl_rec() { # <uuid> <kind> <detail-json-obj>
+  mkdir -p "$(dirname "$IDL")" 2>/dev/null || true
+  jq -nc --arg ts "$(utc)" --arg u "$1" --arg kind "$2" --argjson x "${3:-{\}}" \
+    '{ts:$ts, actor:"cc-inbox-guard", uuid:$u, kind:$kind} + $x' >> "$IDL" 2>/dev/null || true
+}
+alarm_rec() { # <uuid> <reason>
+  mkdir -p "$ALARM_DIR" 2>/dev/null || true
+  jq -nc --arg ts "$(utc)" --arg u "$1" --arg r "$2" \
+    '{kind:"undelivered", uuid:$u, reason:$r, ts:$ts}' > "$ALARM_DIR/undelivered-$(stamp)-$$-$RANDOM.json" 2>/dev/null || true
+}
+phone() { # <title> <msg> — best-effort VERIFIED phone; records the leg's outcome, never crashes the sweep
+  [ -n "$PUSH_BIN" ] || { printf 'no-push-bin'; return 0; }
+  local prc
+  "$PUSH_BIN" send --title "$1" --message "$2" >/dev/null 2>&1; prc=$?
+  if [ "$prc" = 0 ]; then printf 'phoned'; else printf 'push-rc-%s' "$prc"; fi
+}
+
+DRY=0
+escalate() { # <uuid> <reason> <phone-msg>
+  local u="$1" reason="$2" pmsg="$3"
+  # damping: one escalation per (uuid, acked:lines); new mail / partial progress changes the key → re-fire.
+  local key ackln mk last
+  ackln="$(mailbox_acked "$u"):$(mailbox_lines "$u")"
+  key="$(printf '%s' "$u" | tr -c 'A-Za-z0-9._-' '_')"
+  mk="$STATE_DIR/$key.escalated"
+  last="$(cat "$mk" 2>/dev/null || true)"
+  if [ "$last" = "$ackln" ]; then
+    echo "  keep   $u — already escalated (acked:lines=$ackln; damped)"
+    return 0
+  fi
+  if [ "$DRY" = 1 ]; then echo "  WOULD-ESCALATE $u — $reason"; return 0; fi
+  local pr; pr="$(phone "⚠️ UNDELIVERED comms" "$pmsg")"
+  alarm_rec "$u" "$reason"
+  idl_rec "$u" "undelivered-escalated" "$(jq -nc --arg r "$reason" --arg p "$pr" '{reason:$r, phone:$p}')"
+  mkdir -p "$STATE_DIR" 2>/dev/null || true; printf '%s' "$ackln" > "$mk" 2>/dev/null || true
+  echo "  ESCALATE $u — $reason (phone: $pr)"
+}
+
+sweep() {
+  [ "${1:-}" = "--dry-run" ] && DRY=1
+  echo "cc-inbox-guard sweep$([ "$DRY" = 1 ] && echo ' (DRY-RUN)') — deadline=${DEADLINE_S}s urgent=${URGENT_S}s"
+  # backfill the registry first so a live-but-unregistered pane is classifiable (F8), gated off dry-run.
+  [ "$DRY" = 0 ] && [ -n "$RECONCILE_BIN" ] && "$RECONCILE_BIN" >/dev/null 2>&1 || true
+  local now; now="$(now)"; local n_esc=0
+
+  # F4: enqueue-FAILED records — a message that could not even persist. Escalate + consume the record.
+  if [ -d "$ALARM_DIR" ]; then
+    local ef
+    for ef in "$ALARM_DIR"/enqueue-fail-*.json; do
+      [ -e "$ef" ] || continue
+      local tgt msg; tgt="$(jq -r '.target // "?"' "$ef" 2>/dev/null)"; msg="$(jq -r '.msg // ""' "$ef" 2>/dev/null)"
+      if [ "$DRY" = 1 ]; then echo "  WOULD-ESCALATE [enqueue-fail] $tgt"; else
+        phone "⚠️ comms enqueue FAILED" "inbox unwritable for $tgt — NOT delivered: $msg" >/dev/null
+        idl_rec "$tgt" "enqueue-failed-escalated" "$(jq -nc --arg m "$msg" '{msg:$m}')"
+        mv -f "$ef" "$ef.handled" 2>/dev/null || rm -f "$ef" 2>/dev/null || true
+      fi
+      n_esc=$((n_esc+1))
+    done
+  fi
+
+  [ -d "$MBOX_DIR" ] || { echo "cc-inbox-guard: no mailbox dir — $n_esc escalation(s)"; return 0; }
+  local f u lines acked unacked
+  for f in "$MBOX_DIR"/*.md; do
+    [ -e "$f" ] || continue
+    u="$(basename "$f" .md)"
+    case "$u" in *[!0-9A-Fa-f-]*|'') continue ;; esac
+    lines="$(mailbox_lines "$u")"; acked="$(mailbox_acked "$u")"
+    unacked="$(mailbox_unacked_count "$u")"
+
+    # F11: a raw cursor PAST EOF (before the lib clamp) = rotation/GC/recycle that can silently drop mail.
+    local raw_seen; raw_seen="$(head -n1 "$MBOX_DIR/$u.seen" 2>/dev/null | tr -dc '0-9')"; raw_seen="${raw_seen:-0}"
+    if [ "${raw_seen:-0}" -gt "$lines" ] 2>/dev/null; then
+      escalate "$u" "cursor past EOF (.seen=$raw_seen > lines=$lines) — mailbox rotated/truncated under a live cursor; mail may have been dropped" \
+        "inbox $u cursor past EOF ($raw_seen>$lines) — possible dropped mail"
+      n_esc=$((n_esc+1))
+    fi
+
+    [ "$unacked" -gt 0 ] 2>/dev/null || continue   # nothing unconsumed → fine
+
+    # the oldest unacked line (line acked+1) and its class deadline; escalate if ANY unacked line is overdue.
+    local overdue=0 oldest_age=0 fromtag=""
+    local i line ts ep age dl
+    i="$acked"
+    while [ "$i" -lt "$lines" ]; do
+      i=$((i+1))
+      line="$(sed -n "${i}p" "$f" 2>/dev/null)"
+      [ -n "$line" ] || continue
+      ts="$(printf '%s' "$line" | sed -n 's/^\([0-9T:+-]*\).*/\1/p')"
+      fromtag="$(printf '%s' "$line" | sed -n 's/^[^[]*\[\([^]]*\)\].*/\1/p')"
+      ep="$(iso_epoch "$ts")"; [ "$ep" = 0 ] && ep="$now"     # unparseable ts → treat as now (fail toward NOT over-alarming a fresh line)
+      age=$(( now - ep )); [ "$age" -lt 0 ] && age=0
+      dl="$(class_deadline "$fromtag")"
+      [ "$age" -gt "$oldest_age" ] && oldest_age="$age"
+      [ "$age" -ge "$dl" ] 2>/dev/null && overdue=1
+    done
+    [ "$overdue" = 1 ] || { echo "  ok     $u — $unacked unacked but within deadline (oldest ${oldest_age}s)"; continue; }
+
+    owner_liveness "$u"; local lv=$?
+    case "$lv" in
+      0) escalate "$u" "LIVE session, $unacked message(s) unconsumed for ${oldest_age}s past deadline — its watcher lapsed / it never took a turn to drain" \
+                  "desk/session $u: $unacked message(s) undrained ${oldest_age}s (live but not consuming) — re-engage it" ;;
+      1) escalate "$u" "$unacked message(s) enqueued to a NOW-DEAD pane ($u) — the target died with mail undelivered" \
+                  "session $u died with $unacked undelivered message(s) — the page never reached anyone" ;;
+      *) escalate "$u" "$unacked message(s) unconsumed ${oldest_age}s AND owner liveness INDETERMINATE (it2 unreadable) — cannot prove delivery" \
+                  "inbox $u: $unacked undelivered ${oldest_age}s, liveness unknown — fail-loud escalate" ;;
+    esac
+    n_esc=$((n_esc+1))
+  done
+  echo "cc-inbox-guard: sweep done — $n_esc escalation(s)$([ "$DRY" = 1 ] && echo ' (dry-run: none fired)')"
+  return 0
+}
+
+# ── selftest: RED-prove the alarm fires for undelivered-to-live past deadline, and NOT for a consumed inbox ──
+PASS=0; FAIL=0
+okp()  { printf '  ok   %s\n' "$1"; PASS=$((PASS+1)); }
+badp() { printf '  FAIL %s\n' "$1"; FAIL=$((FAIL+1)); }
+selftest() {
+  # d is script-scope (NOT local): the EXIT trap fires after this function returns, where a `local` would
+  # be out of scope under `set -u`. Guard with ${d:-} for belt-and-suspenders.
+  d="$(mktemp -d "${TMPDIR:-/tmp}/cc-inbox-guard-selftest.XXXXXX")" || { echo mktemp; exit 1; }
+  trap 'rm -rf "${d:-}"' EXIT
+  export CC_MAILBOX_DIR="$d/mbox"; export CC_INBOX_GUARD_STATE_DIR="$d/state"; export CC_IDL="$d/idl.jsonl"
+  export CC_COMMS_ALARM_DIR="$d/alarms"; export CC_INBOX_GUARD_DEADLINE_S=600
+  mkdir -p "$CC_MAILBOX_DIR"
+  local U="AAAAAAAA-1111-2222-3333-444444444444"
+  local pushlog="$d/push.log"
+  export CC_INBOX_GUARD_PUSH_BIN="$d/push"; { printf '#!/bin/bash\n'; printf 'printf "%%s\\n" "$*" >> "%s"\nexit 0\n' "$pushlog"; } > "$d/push"; chmod +x "$d/push"
+  export CC_INBOX_GUARD_RECONCILE_BIN=""; export CC_INBOX_GUARD_LIVE_UUIDS="$U"
+  local SELF; SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+  # an old (2h-stale) unacked message to a LIVE session, .acked=0 → MUST escalate
+  printf '2026-07-20T00:00:00+0000 [reaper] crashed pane needs triage\n' > "$CC_MAILBOX_DIR/$U.md"
+  CC_INBOX_GUARD_NOW=$(( $(date -j -f '%Y-%m-%dT%H:%M:%S%z' '2026-07-20T02:00:00+0000' +%s 2>/dev/null || date -d '2026-07-20T02:00:00+0000' +%s) )) \
+    "$SELF" sweep >/dev/null 2>&1
+  [ -s "$pushlog" ] && [ -n "$(find "$d/alarms" -name 'undelivered-*.json' 2>/dev/null)" ] \
+    && okp "undelivered-to-LIVE past deadline → phone + alarm record (fail-loud)" \
+    || badp "an undelivered-to-live message did NOT escalate"
+  # now mark it consumed (.acked=1) → a re-sweep must NOT escalate (no double-alarm on delivered mail)
+  : > "$pushlog"; rm -f "$d"/alarms/*.json 2>/dev/null || true; rm -rf "$CC_INBOX_GUARD_STATE_DIR" 2>/dev/null
+  printf '1\n' > "$CC_MAILBOX_DIR/$U.acked"; printf '1\n' > "$CC_MAILBOX_DIR/$U.seen"
+  CC_INBOX_GUARD_NOW=$(( $(date -j -f '%Y-%m-%dT%H:%M:%S%z' '2026-07-20T02:00:00+0000' +%s 2>/dev/null || date -d '2026-07-20T02:00:00+0000' +%s) )) \
+    "$SELF" sweep >/dev/null 2>&1
+  [ ! -s "$pushlog" ] && [ -z "$(find "$d/alarms" -name 'undelivered-*.json' 2>/dev/null)" ] \
+    && okp "CONSUMED (.acked advanced) inbox → NO escalation (guard keys on .acked, not .seen)" \
+    || badp "the guard escalated a consumed inbox (false alarm)"
+  # enqueue-fail record → escalate (F4)
+  : > "$pushlog"; mkdir -p "$d/alarms"; printf '{"kind":"enqueue-failed","target":"%s","msg":"x"}' "$U" > "$d/alarms/enqueue-fail-test.json"
+  "$SELF" sweep >/dev/null 2>&1
+  [ -s "$pushlog" ] && okp "F4: enqueue-FAILED record → phone escalation (a message that could not persist)" \
+    || badp "an enqueue-fail record did not escalate"
+  echo "cc-inbox-guard --selftest: $PASS passed, $FAIL failed"
+  [ "$FAIL" -eq 0 ] || exit 1
+  echo "cc-inbox-guard --selftest: GREEN — undelivered-to-live + enqueue-fail escalate; consumed does not."
+}
+
+case "${1:-}" in
+  sweep)       sweep "${2:-}" ;;
+  --selftest)  selftest ;;
+  -h|--help|"") sed -n '2,32p' "$0"; exit 0 ;;
+  *)           echo "cc-inbox-guard: unknown command '$1' (sweep | --selftest)" >&2; exit 2 ;;
+esac
