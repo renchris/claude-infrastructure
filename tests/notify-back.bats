@@ -66,12 +66,15 @@ cmd_prompt_of() { printf '%s\n' "$1" | sed -n 's/.*cat \([^)]*\)).*/\1/p'; }
   printf '%s\n' "$output" | grep -q 'ITERM_SESSION_ID and no UUID'
 }
 
-@test "trailer documents the \\r-not-\\n submit invariant" {
+@test "trailer documents the v2 inbox transport (no keystrokes, no hand-written mailbox files)" {
   run env ITERM_SESSION_ID="w1t0p0:AAAAAAAA-0000-0000-0000-000000000003" \
     bash "$HF" --prompt-file "$PF" --launcher claude-test --notify-back --dry-run
   [ "$status" -eq 0 ]
   copy="$(copy_of "$output")"
-  grep -q 'r submit, not' "$copy"               # "(\r submit, not \n)"
+  grep -q 'v2 INBOX transport' "$copy"          # names the transport
+  grep -q 'NO keystrokes' "$copy"               # the v1 composer-inject claim is gone for good
+  ! grep -q 'r submit, not' "$copy"             # the \r-not-\n note is historical (v2 plan Phase 3)
+  grep -q 'do NOT hand-write mailbox files' "$copy"  # the "durable fallback" invitation is gone
 }
 
 @test "--no-self-retire (no --notify-back): no trailer, original prompt used as-is" {

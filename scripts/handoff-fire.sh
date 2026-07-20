@@ -1449,17 +1449,20 @@ if [ -n "$NOTIFY_BACK" ] || [ "$WANT_SELF_RETIRE" = 1 ] || [ "$ENGAGE_VERIFY" = 
     fi
     [ -n "$BACK_SID" ] || { echo "!! --notify-back: no \$ITERM_SESSION_ID and no UUID given" >&2; exit 1; }
     NB_SLUG="$(basename "${PROMPT_FILE%.*}")"
-    # shellcheck disable=SC2016  # $HOME (and \r/\n) below are LITERAL guidance for the fired reader, not shell expansions
+    # shellcheck disable=SC2016  # $HOME below is LITERAL guidance for the fired reader, not shell expansions
     {
       printf '\n'
       printf '## BACK-CHANNEL — ping the originator (%s)\n' "$BACK_SID"
       printf '%s\n' 'On completion, at a decision gate, or on a blocker, ping the session that fired this handoff:'
       printf '  cc-notify %s "HANDOFF-PING %s: <one-line status>"\n' "$BACK_SID" "$NB_SLUG"
-      printf '%s\n' '(cc-notify is on PATH at $HOME/.claude/bin/cc-notify — it types the line into the'
-      printf '%s\n' "originator's composer via the it2 transport (\\r submit, not \\n) AND records"
-      printf '%s%s.md as the durable fallback,\n' '$HOME/.claude/mailbox/' "$BACK_SID"
-      printf '%s\n' 'so the ping survives a closed/recycled pane. If the originator armed cc-await-ping,'
-      printf '%s\n' 'the mailbox write alone wakes it; the composer injection is the interrupt path.)'
+      printf '%s\n' '(cc-notify is on PATH at $HOME/.claude/bin/cc-notify — v2 INBOX transport: it'
+      printf '%s\n' "APPENDS the ping to the originator's inbox \$HOME/.claude/mailbox/<uuid>.md;"
+      printf '%s\n' 'NO keystrokes — nothing is ever typed into any composer. The originator reads it'
+      printf '%s\n' 'at its next safe boundary (SessionStart / UserPromptSubmit / its Stop-fold), or'
+      printf '%s\n' 'within seconds if it armed cc-await-ping (the mailbox write wakes the watcher).'
+      printf '%s\n' 'Trust the stderr verdict: "wake-path armed" = instant; "NO watcher armed" ='
+      printf '%s\n' 'lands next turn; "mailbox only" = target gone — surface that in YOUR report and'
+      printf '%s\n' 'do NOT hand-write mailbox files yourself.)'
     } >> "$PF_NB"
   fi
   if [ "$WANT_SELF_RETIRE" = 1 ]; then
