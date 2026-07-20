@@ -16,11 +16,31 @@
 #   list    [--open | --all | --blocked | --project P] [--json]  (default: --open, table)
 #   claim   <id> --by <sid>
 #   done    <id> --evidence <ref>
-#   reopen  <id>
+#   reopen  <id> [--by <sid>] [--force]
 #   block   <id> --needs "<operator-only step>"                  → status "blocked"
 #   unblock <id>                                                 → back to "open"
 #   reap    [--dry-run]                                          → stale-claim maintenance sweep
 #   compact [--older-than-days N]                                (default N=30)
+#
+# REOPEN GUARDS (added 2026-07-20 after a60d62a215f1 → 6488617 burned a peer session). `reopen`
+# was the ONE transition with no status check at all: it would resurrect a terminal item and it
+# would yank an item out from under a worker that was still running. Both put the item back at
+# status "open", which is exactly cc-dispatch's fire predicate — so the next tick claimed and
+# spawned on it. Two guards, both overridable by an explicit `--force`:
+#
+#   (1) TERMINAL — `reopen` of a `done` item is REFUSED (rc 4). Re-doing landed work is a pure
+#       waste of a worker session. A genuine regression / premature `done` is re-opened
+#       DELIBERATELY with `--force`, which is recorded in the trail as `force:true`.
+#   (2) LIVE CLAIM — `reopen` of a `claimed` item whose claimer is PROVABLY live (the same
+#       `claimer_live` oracle `reap` uses) and is not the caller is REFUSED (rc 4). This is the
+#       mechanism that actually fired: the item was reopened 33 min into a live claim, and the
+#       next dispatch tick claimed + spawned a second peer 15 s later.
+#       Deliberately NOT refused: a claimer releasing its OWN claim (pass `--by <its sid>` — this
+#       is cc-dispatch's spawn-fail rollback), and a claim whose owner is dead or unattributable
+#       (that is `reap`'s dead-worker path — stranding the work is the worse failure).
+#
+# The DONE latch also survives the fold as `wasDone`, which cc-dispatch reads to keep completed
+# work out of the wave even if something re-opened it by hand. `--force` is what clears it.
 #
 # BLOCKED-ON-OPERATOR: an item whose DoD needs an operator-only step (a key, a
 # `launchctl bootout`, any human action) is `block`ed with the pending step in
@@ -104,10 +124,24 @@ fold() {
           elif $r.event == "claim"   then "claimed"
           elif $r.event == "reopen"  then "open"
           else ($p.status // "open") end),
+        # wasDone — the DONE LATCH (not the same thing as status=="done"). It sticks once the
+        # item has EVER been completed and is cleared ONLY by a deliberate `reopen --force`, so
+        # a re-opened-by-hand item still reads "this was already finished once". cc-dispatch
+        # fires on `status=="open" and wasDone != true`, which is what keeps landed work out of
+        # the wave after any reopen path (guarded, forced, or a hand-appended JSONL line).
+        wasDone: (
+          if   $r.event == "done"                            then true
+          elif ($r.event == "reopen" and ($r.force // false)) then false
+          else ($p.wasDone // false) end),
         lastTs:   ($r.ts // $p.lastTs // "")
       })
     ) | [ .[] ]'
 }
+
+# item_json <id> → the folded object for <id> (compact JSON), or "" when the id is unknown.
+# stderr is dropped: callers here are GUARDS, and a malformed-line report belongs to the verb
+# the user actually ran (list/reap), not to a status peek inside a transition.
+item_json() { fold 2>/dev/null | jq -c --arg i "$1" 'map(select(.id == $i)) | first // empty' 2>/dev/null; }
 
 has_id() {
   [ -f "$BACKLOG" ] || return 1
@@ -130,7 +164,23 @@ cmd_add() {
   [ -n "$project" ] || project="$(pwd)"
   ensure_file
   local id; id=$(mk_id "$project" "$title" "$source")
-  if has_id "$id"; then echo "$id"; return 0; fi   # idempotent: no duplicate add
+  if has_id "$id"; then                            # idempotent: no duplicate add
+    # DONE-GUARD (add side): the event key (project+title+source) resolves to an item that is
+    # already TERMINAL — this `add` is a re-file of completed work. The id is still echoed with
+    # rc 0 (the idempotency contract `cc-discover` and every other caller depends on) and the
+    # item is deliberately NOT re-opened, but the collision is announced LOUD so a stale re-file
+    # can never read as fresh work.
+    local ex; ex="$(item_json "$id")"
+    if [ "$(printf '%s' "$ex" | jq -r '.status // ""' 2>/dev/null)" = "done" ]; then
+      { printf 'cc-backlog add: WARNING — this event-key is already DONE; NOT re-opened.\n'
+        printf '  id %s · done %s\n' "$id" "$(printf '%s' "$ex" | jq -r '.lastTs // "?"')"
+        printf '  evidence: %s\n' "$(printf '%s' "$ex" | jq -r 'if (.evidence // "") == "" then "<none>" else .evidence end')"
+        printf '  Genuinely new work needs a distinct title/source (the id is a hash of\n'
+        printf '  project+title+source). If THIS work regressed:  cc-backlog reopen %s --force\n' "$id"
+      } >&2
+    fi
+    echo "$id"; return 0
+  fi
   jq -nc --arg id "$id" --arg ts "$(now_iso)" --arg project "$project" \
      --arg title "$title" --arg dod "$dod" --arg source "$source" \
      '{id:$id, ts:$ts, event:"add", project:$project, title:$title, dodRef:$dod, source:$source}' \
@@ -141,13 +191,14 @@ cmd_add() {
 cmd_transition() {
   local event="$1"; shift
   local id="${1:-}"; [ $# -gt 0 ] && shift
-  local by="" evidence="" needs=""
+  local by="" evidence="" needs="" force=0
   while [ $# -gt 0 ]; do
     local key="$1"; shift
     case "$key" in
       --by)       by="${1:-}";       [ $# -gt 0 ] && shift ;;
       --evidence) evidence="${1:-}"; [ $# -gt 0 ] && shift ;;
       --needs)    needs="${1:-}";    [ $# -gt 0 ] && shift ;;
+      --force)    force=1 ;;
       *) printf 'cc-backlog %s: unknown arg %s\n' "$event" "$key" >&2; return 2 ;;
     esac
   done
@@ -156,14 +207,50 @@ cmd_transition() {
   if [ "$event" = block ] && [ -z "$needs" ]; then
     printf 'cc-backlog block: --needs "<operator-only step>" is required\n' >&2; return 2
   fi
+  # --force is the reopen-guard override and nothing else — never silently ignored elsewhere.
+  if [ "$force" -eq 1 ] && [ "$event" != reopen ]; then
+    printf 'cc-backlog %s: --force applies only to reopen\n' "$event" >&2; return 2
+  fi
   ensure_file
   has_id "$id" || { printf 'cc-backlog %s: unknown id %s\n' "$event" "$id" >&2; return 3; }
+  # REOPEN GUARDS (see the header block) — refuse a resurrection of terminal work and a yank of a
+  # live claim. Both are rc 4 and both name the exact `--force` escape in the refusal.
+  if [ "$event" = reopen ] && [ "$force" -eq 0 ]; then
+    local cur cstatus cby cev cts
+    cur="$(item_json "$id")"
+    cstatus="$(printf '%s' "$cur" | jq -r '.status   // ""' 2>/dev/null)"
+    cby="$(    printf '%s' "$cur" | jq -r '.by       // ""' 2>/dev/null)"
+    if [ "$cstatus" = "done" ]; then
+      cev="$(printf '%s' "$cur" | jq -r 'if (.evidence // "") == "" then "<none>" else .evidence end' 2>/dev/null)"
+      cts="$(printf '%s' "$cur" | jq -r '.lastTs // "?"' 2>/dev/null)"
+      { printf 'cc-backlog reopen: REFUSED — %s is TERMINAL (done %s)\n' "$id" "$cts"
+        printf '  evidence: %s\n' "$cev"
+        printf '  Re-opening completed work puts it back in the dispatch wave and burns a worker\n'
+        printf '  session re-doing what already landed (incident 2026-07-20, a60d62a215f1).\n'
+        printf '  If the work genuinely regressed, or the completion was premature, say so explicitly:\n'
+        printf '      cc-backlog reopen %s --force\n' "$id"
+      } >&2
+      return 4
+    fi
+    if [ "$cstatus" = claimed ] && [ -n "$cby" ] && [ "$cby" != "$by" ] && claimer_live "$cby"; then
+      { printf 'cc-backlog reopen: REFUSED — %s is claimed by %s, which is still LIVE\n' "$id" "$cby"
+        printf '  A live claim returned to "open" is re-dispatchable: the next cc-dispatch tick\n'
+        printf '  claims it and spawns a SECOND worker onto work already in progress. That is the\n'
+        printf '  2026-07-20 incident exactly (reopened 33 min into a live claim, re-claimed 15 s later).\n'
+        printf '  The claimer releases its own claim with:  cc-backlog reopen %s --by %s\n' "$id" "$cby"
+        printf '  A DEAD claimer needs no force — cc-backlog reap reopens it once it goes stale.\n'
+        printf '  To override deliberately:  cc-backlog reopen %s --force\n' "$id"
+      } >&2
+      return 4
+    fi
+  fi
   jq -nc --arg id "$id" --arg ts "$(now_iso)" --arg event "$event" \
-     --arg by "$by" --arg evidence "$evidence" --arg needs "$needs" \
+     --arg by "$by" --arg evidence "$evidence" --arg needs "$needs" --argjson force "$force" \
      '{id:$id, ts:$ts, event:$event}
       + (if $by != ""       then {by:$by}             else {} end)
       + (if $evidence != "" then {evidence:$evidence} else {} end)
-      + (if $needs != ""    then {needs:$needs}       else {} end)' \
+      + (if $needs != ""    then {needs:$needs}       else {} end)
+      + (if $force == 1     then {force:true}         else {} end)' \
      >> "$BACKLOG"
   echo "$id"
 }
