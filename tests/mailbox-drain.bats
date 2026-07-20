@@ -52,22 +52,22 @@ add()  { printf '%s\n' "$@" >> "$MBOX"; }
   printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext' | grep -q 'resume-time message'
 }
 
-@test "stop drain: pending mail → decision:block reason (the wake channel), cursor advances" {
-  seed "mid-turn page from supervisor"
+@test "Stop is NOT handled by the drain (fix B: in-loop delivery folds into session-continue)" {
+  seed "mid-turn page"
   run bash -c 'echo "{}" | "$0" stop' "$DRAIN"
   [ "$status" -eq 0 ]
-  dec="$(printf '%s' "$output" | jq -r '.decision')"
-  [ "$dec" = "block" ]
-  printf '%s' "$output" | jq -r '.reason' | grep -q 'mid-turn page from supervisor'
-  [ "$(cat "$SEEN")" -eq 1 ]
+  [ -z "$output" ]               # no decision:block here — the standalone Stop blocker is gone
+  [ ! -f "$SEEN" ]               # and it did NOT consume the mail (session-continue / watcher will)
 }
 
-@test "stop drain: NO pending mail → no block, exit 0 (never a spurious wedge)" {
-  seed "already seen"
-  echo "1" > "$SEEN"
-  run bash -c 'echo "{}" | "$0" stop' "$DRAIN"
-  [ "$status" -eq 0 ]
-  [ -z "$output" ]
+@test "reliable channel advances BOTH cursors → guard's unacked_count is 0 (fix A: split cursor)" {
+  seed "page one" "page two"
+  echo '{}' | "$DRAIN" prompt >/dev/null
+  [ "$(cat "$SEEN")" -eq 2 ]
+  [ "$(cat "$CC_MAILBOX_DIR/$UUID.acked")" -eq 2 ]   # additionalContext is reliable → immediate ack
+  # the cc-inbox-guard keys on unacked (lines-acked); after a reliable drain it is 0 → no false alarm
+  source "$REPO/hooks/lib/mailbox-pending.sh"
+  [ "$(CC_MAILBOX_DIR="$CC_MAILBOX_DIR" mailbox_unacked_count "$UUID")" -eq 0 ]
 }
 
 @test "append-during-drain: a line added AFTER the count is read stays pending (no loss, no dup)" {

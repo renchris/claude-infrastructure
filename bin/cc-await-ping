@@ -64,27 +64,43 @@ fi
 CUR_UUID="$(resolve_uuid)"
 [ -n "$CUR_UUID" ] || { echo "cc-await-ping: no uuid given and no \$ITERM_SESSION_ID (or role file '$ROLES_DIR/$ROLE' missing)" >&2; exit 3; }
 
-MBOX="$MAILBOX_DIR/$CUR_UUID.md"
-linecount() { [ -f "$MBOX" ] && wc -l < "$MBOX" | tr -d ' ' || echo 0; }
+# ── shared cursor lib (critique F6a): baseline off the SAME .seen cursor the drain/fold use, so mail
+#    ALREADY pending when we arm fires IMMEDIATELY — the old `wc -l` arm-time baseline missed exactly
+#    that line. On fire, mailbox_take advances seen+acked (our stdout rides the harness task-completion
+#    notification → a reliable delivery the model reads). Lib absent → the standalone grep -c '' fallback.
+_bd="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
+_mbxlib="$_bd/../hooks/lib/mailbox-pending.sh"
+[ -f "$_mbxlib" ] || _mbxlib="$HOME/.claude/hooks/lib/mailbox-pending.sh"
+_have_lib=0
+if [ -f "$_mbxlib" ] && command -v jq >/dev/null 2>&1; then
+  # shellcheck source=/dev/null
+  . "$_mbxlib" 2>/dev/null && command -v mailbox_has_pending >/dev/null 2>&1 && _have_lib=1
+fi
 
-baseline="$(linecount)"
-echo "cc-await-ping: watching $MBOX from line $baseline (timeout ${TIMEOUT}s, every ${INTERVAL}s)" >&2
+MBOX="$MAILBOX_DIR/$CUR_UUID.md"
+_lc() { if [ -f "$MBOX" ]; then grep -c '' "$MBOX" 2>/dev/null; else echo 0; fi; }   # grep -c '' — matches the lib (F1)
+baseline="$(_lc)"
+echo "cc-await-ping: watching $CUR_UUID inbox ($([ "$_have_lib" = 1 ] && echo 'shared .seen cursor' || echo "from line $baseline"); timeout ${TIMEOUT}s, every ${INTERVAL}s)" >&2
 
 elapsed=0
 while [ "$elapsed" -lt "$TIMEOUT" ]; do
   next_uuid="$(resolve_uuid)"
   if [ -n "$next_uuid" ] && [ "$next_uuid" != "$CUR_UUID" ]; then
-    CUR_UUID="$next_uuid"; MBOX="$MAILBOX_DIR/$CUR_UUID.md"; baseline=0
-    echo "cc-await-ping: role re-pointed → now watching $MBOX from line 0" >&2
+    CUR_UUID="$next_uuid"; MBOX="$MAILBOX_DIR/$CUR_UUID.md"; baseline="$(_lc)"
+    echo "cc-await-ping: role re-pointed → now watching $CUR_UUID" >&2
   fi
-  cur="$(linecount)"
-  if [ "$cur" -gt "$baseline" ]; then
-    tail -n +"$((baseline + 1))" "$MBOX"   # the new line(s) only
-    exit 0
+  if [ "$_have_lib" = 1 ]; then
+    if mailbox_has_pending "$CUR_UUID"; then
+      mailbox_take "$CUR_UUID" 1    # print the new line(s) + advance the shared cursor (reliable delivery)
+      exit 0
+    fi
+  else
+    cur="$(_lc)"
+    if [ "$cur" -gt "$baseline" ]; then tail -n +"$((baseline + 1))" "$MBOX"; exit 0; fi
   fi
   sleep "$INTERVAL"
   elapsed=$((elapsed + INTERVAL))
 done
 
-echo "cc-await-ping: timed out after ${TIMEOUT}s — no new ping in $MBOX" >&2
+echo "cc-await-ping: timed out after ${TIMEOUT}s — no new ping for $CUR_UUID" >&2
 exit 2

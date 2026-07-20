@@ -145,10 +145,44 @@ fi
 n=$((n + 1))
 printf '%s' "$n" > "${f}.count"
 
+# ── v2 comms fold (critique B): carry any pending inbox mail in THIS block reason. ───────────────────
+# session-continue is the ONE hook already blocking the in-loop desk, so folding delivery here means NO
+# competing Stop blocker (no standalone mailbox-drain Stop hook, no 4-hook yield-guards, no wall-clock
+# TTL). Lag-ack: promote last cycle's emitted mail to .acked (this Stop proves a turn ran), then take
+# this cycle's mail with ack_now=0 (the Stop channel is less certain than additionalContext, so the
+# cc-inbox-guard's .acked watch is the backstop). A missing lib just skips the fold — never blocks.
+mail=""
+_mbxlib="$_scd/lib/mailbox-pending.sh"
+[ -f "$_mbxlib" ] || _mbxlib="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/mailbox-pending.sh"
+[ -f "$_mbxlib" ] || _mbxlib="$HOME/.claude/hooks/lib/mailbox-pending.sh"
+if [ -f "$_mbxlib" ] && command -v jq >/dev/null 2>&1; then
+  # shellcheck source=lib/mailbox-pending.sh
+  # shellcheck disable=SC1091
+  if . "$_mbxlib" 2>/dev/null; then
+    _ouid="${ITERM_SESSION_ID:-}"; _ouid="${_ouid##*:}"
+    case "$_ouid" in ''|*[!0-9A-Fa-f-]*) : ;; *)
+      mailbox_promote_acked "$_ouid"
+      mail="$(mailbox_take "$_ouid" 0)"
+    ;; esac
+  fi
+fi
+
 step=$(cat "$f")
 reason="🔧 Loose ends remain — do NOT stop yet. Next: ${step}
 
 Re-arm each 🔧 turn: run \`~/.claude/hooks/session-continue.sh set \"<next step>\"\` to refresh the step AND reset the continuation counter (a fresh set zeroes .count — this is how a long grind stays under the ${MAX}-cap). When done (✅/📦), blocked on the user (⛔), or out of context (📤), run \`~/.claude/hooks/session-continue.sh clear\` so the session can close. (continuation ${n}/${MAX})"
+
+# v2 fold: PREPEND pending peer mail (higher priority than self-continuation — a peer is trying to reach
+# you). The re-arm reminder stays in $reason below it, so folding never starves the continuation counter (F14).
+if [ -n "$mail" ]; then
+  _mn="$(printf '%s\n' "$mail" | grep -c '')"
+  reason="📬 INBOX — ${_mn} new peer message(s), delivered as CONTEXT (never typed into your input):
+${mail}
+
+Triage these first (a reaper/supervisor page, a back-channel ping, a peer) — reply with cc-notify <uuid> \"…\" — THEN continue the loop below.
+
+${reason}"
+fi
 
 # decision:block blocks the stop; reason is fed back to the model as the next turn.
 jq -nc --arg r "$reason" '{decision:"block",reason:$r}'
