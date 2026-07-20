@@ -16,6 +16,7 @@ setup() {
   HF="$REPO/scripts/handoff-fire.sh"
   eval "$(sed -n '/^engagement_seen() {/,/^}/p' "$HF")"
   eval "$(sed -n '/^ensure_registration() {/,/^}/p' "$HF")"
+  eval "$(sed -n '/^mark_fired_peer() {/,/^}/p' "$HF")"
 
   HOMEDIR="$BATS_TEST_TMPDIR/home"
   mkdir -p "$HOMEDIR/.claude/projects" "$HOMEDIR/.claude/cc-registry"
@@ -125,4 +126,44 @@ STUB
   export FIRE_REG_TIMEOUT=0
   run ensure_registration "$REG" "" "nm" "/cwd" "cmd"
   [ "$status" -eq 0 ]
+}
+
+# ---- T-P3-4 unit: mark_fired_peer (the cc-reaper auto-reap key) -------------------------------
+# The marker is the ONLY thing that distinguishes a fired peer worker from an operator's own
+# session, and cc-reaper will CLOSE a marked pane without asking. So the invariant that matters is
+# not "it writes a file" — it is that nothing else can ever produce one.
+
+@test "mark_fired_peer: writes a marker keyed by the fired pane UUID" {
+  FPANE="2BE82E97-1111-4222-8333-444455556666"
+  FDIR="$BATS_TEST_TMPDIR/fired"
+  run mark_fired_peer "$FDIR" "$FPANE" "/work/cwd" "FIRING-0000-0000-0000-000000000002"
+  [ "$status" -eq 0 ]
+  [ -f "$FDIR/$FPANE.json" ]
+  run jq -e '.selfRetire == true and .paneUUID=="'"$FPANE"'" and .cwd=="/work/cwd"' "$FDIR/$FPANE.json"
+  [ "$status" -eq 0 ]
+}
+
+@test "mark_fired_peer: a non-UUID pane is refused (no marker, no path escape)" {
+  # A pane value is never trusted as a path component — '../' must not reach the filesystem.
+  FDIR="$BATS_TEST_TMPDIR/fired2"
+  run mark_fired_peer "$FDIR" "../../etc/pwned" "/cwd" "by"
+  [ "$status" -eq 0 ]
+  [ ! -e "$BATS_TEST_TMPDIR/etc/pwned.json" ]
+  [ ! -d "$FDIR" ]
+}
+
+@test "mark_fired_peer: empty pane / empty dir are clean no-ops (fail-safe, never fatal)" {
+  run mark_fired_peer "$BATS_TEST_TMPDIR/fired3" "" "/cwd" "by"
+  [ "$status" -eq 0 ]
+  [ ! -d "$BATS_TEST_TMPDIR/fired3" ]
+  run mark_fired_peer "" "2BE82E97-1111-4222-8333-444455556666" "/cwd" "by"
+  [ "$status" -eq 0 ]
+}
+
+@test "the fire path stamps the marker ONLY for a self-retiring peer fire" {
+  # Guards the call-site condition, not just the function: a --no-self-retire or --recycle fire
+  # must leave NO marker (⇒ cc-reaper treats it as an operator session ⇒ never auto-reaped).
+  run grep -B4 'mark_fired_peer "$FIRED_DIR"' "$HF"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'if \[ "$WANT_SELF_RETIRE" = 1 \]; then'
 }

@@ -91,7 +91,15 @@ EOF
   export CC_PAGE_TO=""                        # neutralize any inherited real desk target
   export CC_PAGE_TO_FILE="$D/desk"            # absent by default → no notify; opt in via set_desk
   export CC_REAPER_SELFCHECK_MIN_PERSIST=1    # one sweep pages a real blind spot (hysteresis tests override)
+  # ── T-P3-4 fired-peer markers: hermetic dir, EMPTY by default so every pre-existing test runs
+  #    unmarked (⇒ operator ⇒ never promoted). Tests opt in with mark_fired. ──
+  export CC_FIRED_DIR="$D/fired"
 }
+# Pane UUIDs must be UUID-SHAPED ([0-9A-Fa-f-]) — cc-reaper's fired_peer refuses anything else as a
+# path fragment, so the legacy "PANE-A" labels deliberately cannot carry a marker.
+WPANE="2BE82E97-1111-4222-8333-444455556666"
+mark_fired()   { mkdir -p "$D/fired"; echo '{"selfRetire":true}' > "$D/fired/${1:-$WPANE}.json"; }
+fired_marked() { [ -f "$D/fired/${1:-$WPANE}.json" ]; }
 notified()  { [ -s "$D/notify-calls" ]; }
 reconciled() { [ -f "$D/reconcile-calls" ]; }
 backlog_reaped() { grep -q '^BACKLOG reap' "$D/backlog-calls" 2>/dev/null; }
@@ -274,6 +282,121 @@ EOF
   run "$R" sweep --reap
   ! td_called
   echo "$output" | grep -q ABORT
+}
+
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+# T-P3-4 — AUTO-REAP the desk-fired worker pile (backlog 9113c6abb6c5). The four SAFETY INVARIANTS
+# come first: what must NEVER be auto-reaped is proven before what must.
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+@test "SAFETY 1: an operator/role session (NO fired marker) that is finished-shared-review is NEVER auto-reaped — still surfaced" {
+  # The load-bearing invariant. Identical state to the reapable case in every respect EXCEPT the
+  # spawner's marker: idle, landed, tracked-clean, shared cwd. Unmarked ⇒ operator ⇒ hands off.
+  set_desk; set_live 1
+  mock_classify finished-shared-review "$D/untracked" 9000 no "$WPANE"    # no mark_fired
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  ! td_called                                        # NOT reaped
+  notified; grep -q 'finished-shared-review' "$D/notify-calls"   # surfaced exactly as before
+}
+
+@test "SAFETY 2: owned-wait / coordination-hang / crashed are NEVER auto-reaped — even WITH a fired marker" {
+  # A marker is necessary but never sufficient: the cause gate is independent. A fired worker that
+  # is hung mid-coordination, or whose process died, is a HUMAN's problem, not a reap candidate.
+  set_desk; set_live 1
+  for c in owned-wait coordination-hang crashed; do
+    rm -f "$D/td-calls"; mark_fired "$WPANE"
+    mock_classify "$c" "$D/untracked" 9000 yes "$WPANE"
+    run "$R" sweep --reap
+    [ "$status" -eq 0 ]
+    ! td_called
+  done
+}
+
+@test "SAFETY 3: a desk-fired peer whose TRACKED tree is dirty is NOT reaped — surfaced" {
+  set_desk; set_live 1; mark_fired "$WPANE"
+  mock_classify finished-shared-review "$D/dirty" 9000 no "$WPANE"
+  run "$R" sweep --reap
+  ! td_called
+  echo "$output" | grep -q 'TRACKED tree dirty'
+  notified                                           # falls through to the surface path
+}
+
+@test "SAFETY 4: a desk-fired peer whose work is NOT landed is NOT reaped — surfaced" {
+  # Clean tree, but 1 commit genuinely absent from trunk. Reaping would strand it.
+  set_desk; set_live 1; mark_fired "$WPANE"
+  mock_classify finished-shared-review "$D/ahead" 9000 no "$WPANE"
+  run "$R" sweep --reap
+  ! td_called
+  notified
+}
+
+@test "a desk-fired peer that is finished + landed + tracked-clean IS auto-reaped — no page, no confirm-close" {
+  # The acute pain, fixed: this is the state 13+ workers were stuck in, each awaiting a hand-close.
+  set_desk; set_live 1; mark_fired "$WPANE"
+  mock_classify finished-shared-review "$D/untracked" 9000 no "$WPANE"
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  td_called; grep -q "$WPANE" "$D/td-calls"
+  echo "$output" | grep -q 'promote'
+  ! notified                                         # auto-reaped SILENTLY — the operator is not paged
+  # the DURABLE audit string must state the basis it actually has (fired peer + tracked-clean),
+  # not the generic "clean & 0 ahead" evidence a promoted reap does NOT rest on
+  grep -q 'T-P3-4 auto-reap' "$D/td-calls"
+  grep -q 'desk-fired peer worker' "$D/td-calls"
+}
+
+@test "promotion still obeys the settle window (self-close keeps its first chance)" {
+  set_desk; set_live 1; mark_fired "$WPANE"
+  mock_classify finished-shared-review "$D/untracked" 50 no "$WPANE"   # idle < settle(100)
+  run "$R" sweep --reap
+  ! td_called
+  echo "$output" | grep -q 'settle'
+}
+
+@test "DRY-RUN promotes but NEVER tears down (WOULD-REAP only)" {
+  set_desk; set_live 1; mark_fired "$WPANE"
+  mock_classify finished-shared-review "$D/untracked" 9000 no "$WPANE"
+  run "$R" sweep
+  [ "$status" -eq 0 ]
+  ! td_called
+  echo "$output" | grep -q WOULD-REAP
+}
+
+@test "a successful reap retires the fired-peer marker (the marker dir cannot grow forever)" {
+  set_desk; set_live 1; mark_fired "$WPANE"
+  fired_marked                                       # present before
+  mock_classify finished-shared-review "$D/untracked" 9000 no "$WPANE"
+  run "$R" sweep --reap
+  td_called
+  ! fired_marked                                     # retired with the pane
+}
+
+@test "a REFUSED teardown (rc10) keeps the fired-peer marker (the pane is still live)" {
+  set_desk; set_live 1; mark_fired "$WPANE"
+  mock_classify finished-shared-review "$D/untracked" 9000 no "$WPANE"
+  TEARDOWN_RC=10 run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  fired_marked                                       # NOT dropped — the session lives on
+}
+
+@test "kill-switch CC_REAPER_AUTOREAP_FIRED=0 restores the old surface-only behaviour" {
+  set_desk; set_live 1; mark_fired "$WPANE"
+  export CC_REAPER_AUTOREAP_FIRED=0
+  mock_classify finished-shared-review "$D/untracked" 9000 no "$WPANE"
+  run "$R" sweep --reap
+  ! td_called
+  notified
+}
+
+@test "a non-UUID pane can never carry a marker (path-fragment guard fails safe)" {
+  # fired_peer refuses anything not [0-9A-Fa-f-]; a marker filed under such a name is inert.
+  set_desk; set_live 1
+  mkdir -p "$D/fired"; echo '{"selfRetire":true}' > "$D/fired/../fired/PANE-X.json"
+  mock_classify finished-shared-review "$D/untracked" 9000 no PANE-X
+  run "$R" sweep --reap
+  ! td_called
+  notified
 }
 
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
