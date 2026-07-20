@@ -45,6 +45,8 @@ _lib="$_scd/lib/continue-sentinel.sh"
 [ -f "$_lib" ] || _lib="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/continue-sentinel.sh"
 [ -f "$_lib" ] || _lib="$HOME/.claude/hooks/lib/continue-sentinel.sh"
 # shellcheck source=lib/continue-sentinel.sh
+# shellcheck disable=SC1091  # source path resolved at runtime (fallback chain); static-follow needs -x, the
+# ship-land gate runs shellcheck without it → SC1091(info) would red a change to this file (matches boundary-handoff.sh)
 if ! . "$_lib" 2>/dev/null; then
   # Fail LOUD but SAFE: a missing path-SSOT is a misconfig, not a runtime state. A Stop hook must
   # never block on error (→ exit 0 allow); a CLI mode signals the failure to the agent (→ exit 2).
