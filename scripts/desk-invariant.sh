@@ -54,7 +54,14 @@ PROJECT_ROOTS="${DESK_INVARIANT_PROJECT_ROOTS:-$HOME/.claude*/projects}"   # glo
 WAIT_DIR="${DESK_INVARIANT_WAIT_DIR:-$HOME/.claude/wait-contracts}"
 STATE_DIR="${DESK_INVARIANT_STATE_DIR:-$HOME/.claude/autonomy/desk-invariant}"
 IDL="${DESK_INVARIANT_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
-IT2="${DESK_INVARIANT_IT2:-$HOME/.claude/bin/it2}"
+# cc-notify — the INBOX transport for re-engagement (F7: no keystrokes into a live composer). Resolve:
+# env seam → repo bin → ~/.claude/bin → PATH (mirrors the autonomy-sweep resolve order).
+NOTIFY_BIN="${DESK_INVARIANT_NOTIFY_BIN:-}"
+if [ -z "$NOTIFY_BIN" ]; then
+  for _c in "$SCRIPT_DIR/../bin/cc-notify" "$HOME/.claude/bin/cc-notify" "$(command -v cc-notify 2>/dev/null || true)"; do
+    [ -n "$_c" ] && [ -x "$_c" ] && { NOTIFY_BIN="$_c"; break; }
+  done
+fi
 PUSH="${DESK_INVARIANT_PUSH:-$HOME/.claude/hooks/push-critical.sh}"
 NOTIFY_CMD="${DESK_INVARIANT_NOTIFY:-}"                                    # empty → builtin osascript
 FIRE_BIN="${DESK_INVARIANT_FIRE_BIN:-$HOME/.claude/scripts/handoff-fire.sh}"
@@ -149,12 +156,17 @@ push_page() { # <msg> — Pushover break-through; a no-op (exit 0) when unarmed
   "$JQ" -cn --arg m "$msg" --arg c "$CANNED_CWD" '{message:$m,cwd:$c}' | "$PUSH" >/dev/null 2>&1 || true
 }
 
-reprompt() { # <uuid> <text> → 0 if BOTH keystrokes sent (type text, then submit with CR)
+# v2 (critique F7 — the operator's LITERAL complaint): re-engagement must NEVER keystroke a live composer.
+# The old reprompt() did `it2 session send <text>` + CR into the desk pane, gated only on assistant-idle —
+# which is exactly correlated with "operator stepped away and is now back typing." A 45-min-stale pane is
+# not a wedged pane; injecting there corrupts the half-typed message + submits it. So re-engagement now
+# ENQUEUES the resume to the desk's OWN inbox via cc-notify (drains as context at its next boundary; a
+# watcher-armed desk wakes within a poll). A stale desk with no watcher can't self-wake from a mailbox
+# line — the caller pages the human instead (the only safe recovery). No keystroke path remains here.
+enqueue_resume() { # <uuid> <text> → cc-notify the resume into the pane's inbox; echoes cc-notify's verdict line
   local uuid="$1" text="$2"
-  [ -x "$IT2" ] || return 1
-  "$IT2" session send -s "$uuid" "$text" >/dev/null 2>&1 || return 1
-  "$IT2" session send -s "$uuid" $'\r'   >/dev/null 2>&1 || return 1
-  return 0
+  [ -n "$NOTIFY_BIN" ] && [ -x "$NOTIFY_BIN" ] || { echo "cc-notify unavailable"; return 1; }
+  "$NOTIFY_BIN" --from desk-invariant "$uuid" "$text" 2>&1
 }
 
 fire_replacement() { # fire a fresh desk from the canned brief (role-tagged). Returns handoff-fire's rc.
@@ -193,21 +205,29 @@ handle_stunned() { # <idle_s>
   if dedup_fresh stunned; then idl stunned abstained "page-once dedup (idle=${idle}s)"; return; fi
   notify "Claude desk STUNNED" "desk ${PANE} stalled ${idle}s — cap/billing/classifier error in transcript tail"
   push_page "DESK STUNNED (${ROLE}): pane ${PANE} idle ${idle}s, cap/billing/classifier error — human action likely needed"
-  reprompt "$PANE" "$REPROMPT_TEXT" && act="page+reprompt"
+  # F7: cap-modal → the human is paged above (the correct recovery for a usage cap); enqueue a resume to
+  # the inbox too (drains if/when the modal clears). NO keystroke into a possibly-live composer.
+  enqueue_resume "$PANE" "$REPROMPT_TEXT" >/dev/null 2>&1 && act="page+mailbox-resume"
   dedup_write stunned
   idl stunned "$act" "cap/billing/classifier stun; idle=${idle}s"
 }
 
 handle_stale() { # <idle_s>
-  local idle="$1" act="reprompt"
-  if dedup_fresh stale; then idl stale abstained "reprompt-once dedup (idle=${idle}s)"; return; fi
-  notify "Claude desk idle" "desk ${PANE} took no turn in ${idle}s — re-prompting to re-engage"
-  if ! reprompt "$PANE" "$REPROMPT_TEXT"; then
-    act="reprompt-failed"
-    push_page "DESK UNREACHABLE (${ROLE}): pane ${PANE} idle ${idle}s and it2 re-prompt failed — check the pane/it2 daemon"
+  local idle="$1" act="mailbox-resume" out
+  if dedup_fresh stale; then idl stale abstained "resume-once dedup (idle=${idle}s)"; return; fi
+  notify "Claude desk idle" "desk ${PANE} took no turn in ${idle}s — enqueuing a resume to its inbox (no keystroke)"
+  # F7: enqueue the resume to the desk's OWN inbox (no keystroke). cc-notify's verdict says whether a
+  # watcher will WAKE it: "wake-path armed" → woken within a poll; else a stale desk can't self-wake from a
+  # mailbox line, so PAGE the human (the only safe recovery — never keystroke a possibly-live composer).
+  out="$(enqueue_resume "$PANE" "$REPROMPT_TEXT")"
+  if printf '%s' "$out" | grep -q 'wake-path armed'; then
+    act="mailbox-resume+wake"
+  else
+    act="mailbox-resume+page"
+    push_page "DESK IDLE (${ROLE}): pane ${PANE} idle ${idle}s — resume enqueued to its inbox but NO watcher armed to wake it; re-engage it (it will otherwise drain on its next turn)"
   fi
   dedup_write stale
-  idl stale "$act" "idle=${idle}s, no cap error; re-engage attempt"
+  idl stale "$act" "idle=${idle}s, no cap error; inbox resume (no keystroke — F7)"
 }
 
 handle_no_desk() { # <reason>
@@ -285,11 +305,16 @@ setup_case() { # <casedir> — build stubs+dirs, export the full override surfac
   local c="$1"
   mkdir -p "$c/roles" "$c/registry" "$c/projects/p" "$c/wait" "$c/state" "$c/stubs"
   mkstub "$c/stubs/it2"; mkstub "$c/stubs/notify"; mkstub "$c/stubs/push"; mkstub "$c/stubs/fire"
+  # cc-notify stub (F7 inbox transport): log argv AND emit the "wake-path armed" verdict handle_stale greps.
+  { printf '#!/bin/bash\n'; printf 'printf "%%s\\n" "$*" >> "%s/stubs/ccnotify.log"\n' "$c"
+    printf 'echo "cc-notify: delivered to inbox [T] (live session, wake-path armed)" >&2\nexit 0\n'; } > "$c/stubs/ccnotify"
+  chmod +x "$c/stubs/ccnotify"
   : > "$c/brief.md"
   export DESK_INVARIANT_ROLE=desk DESK_INVARIANT_ROLES_DIR="$c/roles" \
     DESK_INVARIANT_REGISTRY_DIR="$c/registry" DESK_INVARIANT_PROJECT_ROOTS="$c/projects" \
     DESK_INVARIANT_WAIT_DIR="$c/wait" DESK_INVARIANT_STATE_DIR="$c/state" DESK_INVARIANT_IDL="$c/idl.jsonl" \
     DESK_INVARIANT_IT2="$c/stubs/it2" DESK_INVARIANT_NOTIFY="$c/stubs/notify" DESK_INVARIANT_PUSH="$c/stubs/push" \
+    DESK_INVARIANT_NOTIFY_BIN="$c/stubs/ccnotify" \
     DESK_INVARIANT_FIRE_BIN="$c/stubs/fire" DESK_INVARIANT_CANNED_CWD="$c" DESK_INVARIANT_BRIEF="$c/brief.md" \
     DESK_INVARIANT_STALE_MIN=45
 }
@@ -327,7 +352,8 @@ selftest() {
     mk_transcript "$d/stunned/projects/p/S2.jsonl" "$stale" "reached the monthly spend limit for this account"
     "$SELF" )
   [ "$(disp_of "$d/stunned")" = stunned ] && okp "stunned: idl disposition=stunned" || badp "stunned: disposition=$(disp_of "$d/stunned")"
-  [ -f "$d/stunned/stubs/it2.log" ] && okp "stunned: re-prompt keystroke sent" || badp "stunned: no re-prompt"
+  [ -f "$d/stunned/stubs/ccnotify.log" ] && okp "stunned: inbox resume enqueued (cc-notify)" || badp "stunned: no inbox resume"
+  [ ! -f "$d/stunned/stubs/it2.log" ] && okp "stunned: NO keystroke into the live composer (F7)" || badp "stunned: KEYSTROKED a live composer (F7 regression)"
   [ -f "$d/stunned/stubs/push.log" ] && okp "stunned: OS/push page fired" || badp "stunned: no page"
   ( setup_case "$d/stunned"      # second sweep, same (sid,state) → dedup abstains
     printf 'U-STUN\n' > "$d/stunned/roles/desk"
@@ -344,7 +370,8 @@ selftest() {
     mk_transcript "$d/stale/projects/p/S3.jsonl" "$stale"
     "$SELF" )
   [ "$(disp_of "$d/stale")" = stale ] && okp "stale: idl disposition=stale" || badp "stale: disposition=$(disp_of "$d/stale")"
-  [ -f "$d/stale/stubs/it2.log" ] && okp "stale: re-prompt keystroke sent" || badp "stale: no re-prompt"
+  [ -f "$d/stale/stubs/ccnotify.log" ] && okp "stale: inbox resume enqueued (cc-notify, no keystroke)" || badp "stale: no inbox resume"
+  [ ! -f "$d/stale/stubs/it2.log" ] && okp "stale: NO keystroke into the live composer (F7)" || badp "stale: KEYSTROKED a live composer (F7 regression)"
   [ ! -f "$d/stale/stubs/fire.log" ] && okp "stale: NO fire (desk is alive)" || badp "stale: fired against a live desk"
 
   # 4. HEALTHY via owned wait-contract — stale turn but a fresh open wait-contract it owns
