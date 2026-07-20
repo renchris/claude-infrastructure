@@ -103,19 +103,30 @@ background task**; a Stop `decision:block` continuation does **not** re-fire Use
 
 **Provenance:** rows marked ⚑ are proven by THIS repo's battle-tested code/comments (each cite is a
 real escape or a shipped mechanism — trumps docs); rows marked ◇ are assistant-knowledge
-(Jan-2026 cutoff), pending the `claude-code-guide` verification pass (agent in flight at close;
-fold its table here when it reports, and re-check the two ◇ rows D5/D11 depend on before building).
+(Jan-2026 cutoff) or docs-only.
+
+**Verification pass (2026-07-20, P1 step 0)** — the two ◇ rows D5/D11 depend on were checked against
+the official hooks reference (`https://code.claude.com/docs/en/hooks`, reached via the 301 from
+`docs.anthropic.com/en/docs/claude-code/hooks`). **Both are docs-CONFIRMED, neither is refuted**:
+PreToolUse/PostToolUse `additionalContext` is documented (with a PostToolUse example), and
+`systemMessage` is a universal all-events field. **The D5 gate does NOT open on this alone.** A
+citation proves the documented contract; it does not prove the running binary — and this repo holds
+the counter-example, in the same field: Stop `additionalContext` is in the docs' supported list and
+is nonetheless INERT on 2.1.207 (`boundary-handoff.sh:21-22`, learned from a real escape). The
+standing rule ("battle-tested code trumps docs") therefore still binds. **D5's real gate is a live
+smoke-probe** — a throwaway PostToolUse hook emitting a sentinel `additionalContext`, confirmed
+visible to the model on the running version — which is P2's first step, not P1's.
 
 | Surface | Sees it | Fires | Facts + caveats |
 |---|---|---|---|
 | ⚑ `additionalContext` (SessionStart, UserPromptSubmit) | model only | session start / human prompt submit | the v2 delivery channel (`mailbox-drain.sh:12-13`); renders NOTHING to the human (operator-confirmed) |
 | ⚑ `additionalContext` (Stop) | — | — | **INERT** on the running version (`boundary-handoff.sh:22`, learned from a real escape) |
 | ⚑ Stop `decision:block` reason | both (model = next-turn input; human sees the blocked-stop notice) | turn end, when a Stop hook blocks | the desk loop + mail fold ride it (`session-continue.sh:189-190`); a `decision:block` continuation does NOT re-fire UserPromptSubmit (v2 load-bearing fact) |
-| ⚑ `systemMessage` (hook JSON, top-level) | human (TUI notice) | on the emitting hook's event | already emitted at `session-continue.sh:144` (cap message); the D11 lever — ◇ exact per-event support on SessionStart/UserPromptSubmit needs the guide pass |
+| ⚑ `systemMessage` (hook JSON, top-level) | human (TUI notice) | on the emitting hook's event | already emitted at `session-continue.sh:144` (cap message); the D11 lever. **RESOLVED (2026-07-20, P1 step 0):** the official hooks reference documents `systemMessage` in the **universal** JSON-output field table ("Warning message shown to the user") — NOT scoped to a subset of events, so SessionStart/UserPromptSubmit are covered. Same running-binary caveat as the row above applies to any single event, but here a shipped in-repo emitter already proves the field renders |
 | ⚑ background-task completion notification | both — renders in the TUI AND re-invokes the model | when an in-session background task exits | the `cc-await-ping` wake path; the ONLY external-write→model wake (harness floor) |
 | ⚑ statusline command | human (ambient) | re-runs on UI/transcript updates — event-driven, NOT timed | proven caveat in `statusline.sh:47-52`: a session inside ONE long operation renders ZERO times (telemetry-staleness lesson) — the 📬 badge (D10) inherits this; fine for idle sessions, which is where the badge matters |
 | ⚑ mid-turn user messages | both | queued into the RUNNING turn alongside tool results | demonstrated in this very session (operator's mid-turn pointer); does NOT pass the UserPromptSubmit boundary → the drain does not fire on it |
-| ◇ `additionalContext` (PreToolUse / PostToolUse) | model only | every tool call, including hours-long autonomous turns | believed supported on current 2.1.x — **the D5 mid-turn boundary rides on this; VERIFY before building** (D5 is already gated) |
+| ⚑◇ `additionalContext` (PreToolUse / PostToolUse) | model only | every tool call, including hours-long autonomous turns | **DOCS-CONFIRMED** (2026-07-20, P1 step 0): the official hooks reference lists `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PostToolBatch` among the events where an `hookSpecificOutput.additionalContext` reminder renders — placed "next to the tool result" — with an explicit `PostToolUse` JSON example. **Caveat that keeps this ◇, not ⚑:** docs describe the CONTRACT, not the running binary — the row two above is the standing counter-example (Stop `additionalContext` is documented in the SAME list yet is INERT/probe-gated on 2.1.207, `boundary-handoff.sh:21-22`, learned from a real escape). So D5 stays gated on a **live smoke-probe of the running version**, not on this citation |
 | ◇ Notification hook (permission_prompt / idle_prompt / elicitation_dialog) | outbound only (CC → hook command) | on those TUI events | no inbound external-push-into-transcript channel exists — consistent with the v2 harness floor |
 | ◇ external process → rendered transcript message | none | — | no supported API; keystrokes (banned) and context injection at boundaries remain the only external inputs |
 
