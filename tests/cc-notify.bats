@@ -1,21 +1,13 @@
 #!/usr/bin/env bats
-# Phase 2 — cc-notify: name/uuid/self resolution, the two-call \r submit recipe,
-# the always-on mailbox, and graceful closed-pane degradation.
+# cc-notify (v2) — the NON-KEYSTROKE transport. Proves cc-notify ENQUEUES to the target's inbox
+# (~/.claude/mailbox/<uuid>.md) and NEVER calls it2 `session send` (the v1 keystroke path that raced the
+# user's live input — the exact bug v2 removes). Liveness decides the honest exit verdict cc-announce
+# trusts: a LIVE session → "delivered to inbox"; a NOT-live target → "mailbox only"; unresolvable → 3;
+# unwritable inbox → 5. Isolated via CC_REGISTRY_DIR / CC_MAILBOX_DIR and an IT2_BIN stub.
 #
-# Isolated via CC_REGISTRY_DIR / CC_MAILBOX_DIR (temp) and IT2_BIN (a stub that
-# LOGS each call, rendering a bare CR arg as the token <CR>, and can be forced to
-# fail via IT2_STUB_FAIL=1 to simulate a closed/recycled pane).
-#
-# THREE harness rules, each learned from a real escape (2026-07-14). This suite was
-# 15/15 GREEN for a day while the verifier it certifies was INERT in production:
-#   1. `|| false` on EVERY [[ ]] — bats does NOT trap a bare [[ ]] failure mid-body
-#      (it is a bash keyword, exempt from the errexit path; `[ ]` and `grep -q` DO
-#      trap). A non-final [[ ]] assertion without `|| false` can NEVER fail a test.
-#   2. Assert on "submit VERIFIED", never "VERIFIED" — *"VERIFIED"* also matches
-#      "UNVERIFIED", so the loose glob passed on the degraded result it should catch.
-#   3. Capture fixtures are NUL-padded to BINARY by the stub (see use_capture_stub) —
-#      a real it2 capture is binary, and BSD grep's behaviour on it is what broke.
-#      A plain-text fixture tests a file production never produces.
+# Harness rules (learned from real escapes, v1 suite):
+#   1. `|| false` on EVERY bare [[ ]] — bats does not trap a bare [[ ]] failure mid-body.
+#   2. Assert the SPECIFIC verdict string, never a loose glob a degraded result also matches.
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
@@ -23,224 +15,157 @@ setup() {
   export CC_REGISTRY_DIR="$BATS_TEST_TMPDIR/reg"
   export CC_MAILBOX_DIR="$BATS_TEST_TMPDIR/mbox"
   export IT2_LOG="$BATS_TEST_TMPDIR/it2.log"
-  mkdir -p "$CC_REGISTRY_DIR"
+  mkdir -p "$CC_REGISTRY_DIR" "$CC_MAILBOX_DIR"
 
+  UUID="AAAAAAAA-1111-2222-3333-444444444444"
+  # a LIVE registered peer: pid=$$ (this test proc, kill -0 succeeds) + the it2 stub lists its pane.
+  printf '{"paneUUID":"%s","name":"peer","cwd":"/tmp","account":"next","pid":%s,"startedAt":1}' \
+    "$UUID" "$$" > "$CC_REGISTRY_DIR/$UUID.json"
+
+  # it2 stub: `session list --json` → the live pane set (peer UUID); `session send` → LOG it, so a test
+  # can assert it is NEVER called. cc-notify v2 must only ever use `session list` (read-only), never send.
   STUB="$BATS_TEST_TMPDIR/it2"
-  cat > "$STUB" <<'SH'
+  cat > "$STUB" <<SH
 #!/bin/bash
-# `it2 session send -s <uuid> <text>` — log a readable form (CR arg -> <CR>).
-out=""
-for a in "$@"; do
-  if [ "$a" = "$(printf '\r')" ]; then out="$out<CR> "; else out="$out$a "; fi
-done
-printf '%s\n' "$out" >> "$IT2_LOG"
-[ "${IT2_STUB_FAIL:-0}" = 1 ] && exit 1
+if [ "\$1" = "session" ] && [ "\$2" = "list" ]; then
+  printf '[{"id":"%s"}]\n' "$UUID"; exit 0
+fi
+if [ "\$1" = "session" ] && [ "\$2" = "send" ]; then
+  printf 'SEND %s\n' "\$*" >> "$IT2_LOG"; exit 0
+fi
 exit 0
 SH
   chmod +x "$STUB"
   export IT2_BIN="$STUB"
-
-  UUID="AAAAAAAA-1111-2222-3333-444444444444"
-  # cc-sessions (sibling) must see this pane as live -> stub its it2 list too.
-  # cc-notify calls cc-sessions --json, which uses IT2_BIN's `session list`. Our
-  # stub only handles `session send`; give cc-sessions its own live-pane view by
-  # registering the entry with a LIVE pid ($$) and listing the pane.
-  printf '{"paneUUID":"%s","name":"peer","cwd":"/tmp","account":"next","pid":%s,"startedAt":1}' \
-    "$UUID" "$$" > "$CC_REGISTRY_DIR/$UUID.json"
 }
 
-# cc-notify resolves names via `cc-sessions --json`, whose stale-sweep calls
-# `it2 session list`. Our send-stub returns [] for list -> pane looks absent ->
-# cc-sessions would sweep "peer". So point cc-sessions at a list-aware stub.
-# Simplest: give the stub a `session list` branch echoing the peer UUID.
-teardown() { :; }
+sent_count() { if [ -f "$IT2_LOG" ]; then grep -c '^SEND' "$IT2_LOG"; else echo 0; fi; }
 
-use_full_stub() {
-  cat > "$IT2_BIN" <<SH
-#!/bin/bash
-if [ "\$1 \$2 \$3" = "session list --json" ]; then
-  echo '[{"id":"$UUID"}]'; exit 0
-fi
-out=""
-for a in "\$@"; do
-  if [ "\$a" = "\$(printf '\r')" ]; then out="\$out<CR> "; else out="\$out\$a "; fi
-done
-printf '%s\n' "\$out" >> "$IT2_LOG"
-[ "\${IT2_STUB_FAIL:-0}" = 1 ] && exit 1
-exit 0
-SH
-  chmod +x "$IT2_BIN"
-}
-
-@test "resolves a friendly NAME to its pane UUID and injects" {
-  use_full_stub
-  run bash "$NOTIFY" peer "hello world"
+@test "resolves a friendly NAME to a LIVE session → 'delivered to inbox', enqueues, NO keystroke" {
+  run "$NOTIFY" peer "hello world"
   [ "$status" -eq 0 ]
-  # two send calls: text then CR, both to the resolved UUID
-  [ "$(grep -c 'session send' "$IT2_LOG")" -eq 2 ]
-  grep -q "session send -s $UUID hello world" "$IT2_LOG"
-  grep -q "session send -s $UUID <CR>" "$IT2_LOG"
+  [[ "$output" == *"delivered to inbox"* ]] || false
+  grep -q '\] hello world' "$CC_MAILBOX_DIR/$UUID.md"   # line is "<iso> [<sender>] hello world"
+  [ "$(sent_count)" -eq 0 ]     # THE anti-keystroke invariant: session send was NEVER called
 }
 
-@test "raw pane UUID passes through (no registry entry needed)" {
-  use_full_stub
-  RAW="99999999-8888-7777-6666-555555555555"
-  run bash "$NOTIFY" "$RAW" "ping"
+@test "raw pane UUID of a live pane passes through and enqueues" {
+  run "$NOTIFY" "$UUID" "ping"
   [ "$status" -eq 0 ]
-  grep -q "session send -s $RAW ping" "$IT2_LOG"
-  grep -q "session send -s $RAW <CR>" "$IT2_LOG"
+  [[ "$output" == *"delivered to inbox"* ]] || false
+  grep -q '\] ping' "$CC_MAILBOX_DIR/$UUID.md"
+  [ "$(sent_count)" -eq 0 ]
 }
 
-@test "the submit uses \\r (CR), never \\n — text call then <CR>, then the verify capture" {
-  use_full_stub
-  run bash "$NOTIFY" peer "msg"
+@test "NOT-live target (it2 lists no such pane, no registry row) → 'mailbox only', exit 0, still enqueued" {
+  DEAD="DDDDDDDD-9999-8888-7777-666666666666"
+  run "$NOTIFY" "$DEAD" "to a closed pane"
   [ "$status" -eq 0 ]
-  # hardened sequence: send text -> send <CR> -> session capture (verify)
-  [ "$(grep -c 'session send' "$IT2_LOG")" -eq 2 ]
-  run sed -n '2p' "$IT2_LOG"
-  [[ "$output" == *"<CR>"* ]] || false
-  [[ "$output" != *"msg"* ]] || false   # the CR call carries no text
-  grep -q "session capture -s $UUID" "$IT2_LOG"
-}
-
-# --- submit-verification hardening (2026-07-13): confirm the effect, never the keystroke ---
-
-# A capture-aware stub: `session capture -s <uuid> -o <file>` copies the Nth fixture
-# from $CAPTURE_FIXTURES_DIR/cap.N (N = capture call count) so tests can script the
-# composer's state over retries. Missing fixture -> no file (capture unavailable).
-use_capture_stub() {
-  export CAPTURE_FIXTURES_DIR="$BATS_TEST_TMPDIR/caps"
-  mkdir -p "$CAPTURE_FIXTURES_DIR"
-  cat > "$IT2_BIN" <<SH
-#!/bin/bash
-if [ "\$1 \$2 \$3" = "session list --json" ]; then
-  echo '[{"id":"$UUID"}]'; exit 0
-fi
-if [ "\$1 \$2" = "session capture" ]; then
-  cnt_f="$BATS_TEST_TMPDIR/capcount"; n=\$(cat "\$cnt_f" 2>/dev/null || echo 0); n=\$((n+1)); echo "\$n" > "\$cnt_f"
-  printf 'session capture -s %s (call %s)
-' "\$4" "\$n" >> "$IT2_LOG"
-  src="$CAPTURE_FIXTURES_DIR/cap.\$n"
-  # sticky: past the last scripted fixture, keep serving the highest one
-  while [ ! -f "\$src" ] && [ "\$n" -gt 1 ]; do n=\$((n-1)); src="$CAPTURE_FIXTURES_DIR/cap.\$n"; done
-  [ -f "\$src" ] || exit 0
-  # -o <file> is arg 6 (capture -s <uuid> -o <file>)
-  # NUL-pad every line-end: iTerm2 pads empty screen cells with NUL, so a REAL capture is a
-  # BINARY file (~177 NULs in a 4.5KB screen) and grep needs -a to read it. Text-only fixtures
-  # are what let the unfixed verifier "pass" here for a day while it was inert in production.
-  # Keep the fixture byte-faithful or this suite certifies a phantom. Line structure preserved.
-  python3 -c 'import sys;d=open(sys.argv[1],"rb").read();open(sys.argv[2],"wb").write(d.replace(chr(10).encode(),bytes([0,0,10])))' "\$src" "\$6"; exit 0
-fi
-out=""
-for a in "\$@"; do
-  if [ "\$a" = "\$(printf '\r')" ]; then out="\$out<CR> "; else out="\$out\$a "; fi
-done
-printf '%s
-' "\$out" >> "$IT2_LOG"
-exit 0
-SH
-}
-
-@test "verify: clean submit on first capture -> exit 0, VERIFIED, no extra CR" {
-  use_capture_stub
-  printf 'countermand text (queued above)
-\342\235\257 Press up to edit queued messages
-' > "$CAPTURE_FIXTURES_DIR/cap.1"
-  run bash "$NOTIFY" peer "countermand text"
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"submit VERIFIED"* ]] || false   # NOT *VERIFIED* — that substring also matches "UNVERIFIED" (phantom green)
-  [ "$(grep -c '<CR>' "$IT2_LOG")" -eq 1 ]
-}
-
-@test "verify: stranded once -> one CR retry -> VERIFIED exit 0" {
-  use_capture_stub
-  printf 'noise
-\342\235\257 countermand text still sitting here
-' > "$CAPTURE_FIXTURES_DIR/cap.1"
-  printf 'countermand text (queued above)
-\342\235\257 Press up to edit queued messages
-' > "$CAPTURE_FIXTURES_DIR/cap.2"
-  run bash "$NOTIFY" peer "countermand text"
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"submit VERIFIED"* ]] || false   # NOT *VERIFIED* — that substring also matches "UNVERIFIED" (phantom green)
-  [ "$(grep -c '<CR>' "$IT2_LOG")" -eq 2 ]   # initial + 1 retry
-}
-
-@test "verify: stranded forever -> exit 4, STRANDED reported, mailbox still holds it" {
-  use_capture_stub
-  printf 'noise
-\342\235\257 countermand text still sitting here
-' > "$CAPTURE_FIXTURES_DIR/cap.1"
-  run bash "$NOTIFY" peer "countermand text"
-  [ "$status" -eq 4 ]
-  [[ "$output" == *"STRANDED"* ]] || false
-  [ "$(grep -c '<CR>' "$IT2_LOG")" -eq 3 ]   # initial + 2 retries
-  grep -q "countermand text" "$CC_MAILBOX_DIR/$UUID.md"
-}
-
-@test "verify: capture unavailable -> graceful UNVERIFIED, exit 0" {
-  use_capture_stub   # no fixtures written -> capture produces no file
-  run bash "$NOTIFY" peer "some message"
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"UNVERIFIED"* ]] || false
-}
-
-@test "ALWAYS writes the mailbox on success (composer + mailbox)" {
-  use_full_stub
-  run bash "$NOTIFY" --from tester peer "recorded too"
-  [ "$status" -eq 0 ]
-  [ -f "$CC_MAILBOX_DIR/$UUID.md" ]
-  grep -q "\[tester\] recorded too" "$CC_MAILBOX_DIR/$UUID.md"
-}
-
-@test "closed/recycled pane -> mailbox-only, exit 0, stderr note (no hard fail)" {
-  use_full_stub
-  export IT2_STUB_FAIL=1
-  run bash "$NOTIFY" peer "into the void"
-  [ "$status" -eq 0 ]
-  [ -f "$CC_MAILBOX_DIR/$UUID.md" ]
-  grep -q "into the void" "$CC_MAILBOX_DIR/$UUID.md"
   [[ "$output" == *"mailbox only"* ]] || false
+  [[ "$output" == *"NOT a live session"* ]] || false
+  grep -q '\] to a closed pane' "$CC_MAILBOX_DIR/$DEAD.md"   # recorded even though not-live
+  [ "$(sent_count)" -eq 0 ]
 }
 
-@test "--mailbox-only records but skips injection (it2 send never called)" {
-  use_full_stub
-  run bash "$NOTIFY" --mailbox-only peer "silent"
+@test "liveness UNVERIFIABLE (it2 errors) → recorded degrade, exit 0, enqueued" {
+  # break it2 so `session list` errors → liveness oracle unavailable → unknown, never a false not-live.
+  printf '#!/bin/bash\nexit 1\n' > "$IT2_BIN"
+  GHOST="EEEEEEEE-9999-8888-7777-666666666666"
+  run "$NOTIFY" "$GHOST" "maybe live"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"UNVERIFIABLE"* ]] || false
+  grep -q '\] maybe live' "$CC_MAILBOX_DIR/$GHOST.md"
+}
+
+@test "wake-path: a fresh .watching heartbeat → 'wake-path armed'; its absence → 'NO watcher armed' (F5)" {
+  # no watcher armed → delivered but not a guaranteed wake
+  run "$NOTIFY" "$UUID" "no watcher"
+  [[ "$output" == *"NO watcher armed"* ]] || false
+  # arm a fresh watcher heartbeat → wake-path armed (VERIFIED-worthy for cc-announce)
+  : > "$CC_MAILBOX_DIR/$UUID.watching"
+  run "$NOTIFY" "$UUID" "with watcher"
+  [[ "$output" == *"wake-path armed"* ]] || false
+}
+
+@test "F4: inbox-unwritable self-escalates — a durable alarm record is written even though exit is swallowed" {
+  export CC_MAILBOX_DIR="$BATS_TEST_TMPDIR/ro/deeper"
+  export CC_COMMS_ALARM_DIR="$BATS_TEST_TMPDIR/comms-alarms"
+  mkdir -p "$BATS_TEST_TMPDIR/ro"; chmod 500 "$BATS_TEST_TMPDIR/ro"
+  run "$NOTIFY" "$UUID" "cannot persist"
+  chmod 700 "$BATS_TEST_TMPDIR/ro"
+  [ "$status" -eq 5 ]
+  # the loud path does NOT depend on the mailbox it reports as broken — an alarm lands in a DIFFERENT dir
+  [ -n "$(find "$CC_COMMS_ALARM_DIR" -name 'enqueue-fail-*.json' 2>/dev/null)" ]
+}
+
+@test "ALWAYS enqueues on success (the inbox is the durable transport, not a fallback)" {
+  run "$NOTIFY" peer "durable record"
   [ "$status" -eq 0 ]
   [ -f "$CC_MAILBOX_DIR/$UUID.md" ]
-  grep -q "silent" "$CC_MAILBOX_DIR/$UUID.md"
-  [ ! -f "$IT2_LOG" ] || [ "$(grep -c 'session send' "$IT2_LOG")" -eq 0 ]
+  grep -q 'durable record' "$CC_MAILBOX_DIR/$UUID.md"
 }
 
-@test "--self prints own pane UUID and exits (no message)" {
-  run env ITERM_SESSION_ID="w9t0p0:FEEDFACE-0000-0000-0000-000000000000" bash "$NOTIFY" --self
-  [ "$status" -eq 0 ]
-  [ "$output" = "FEEDFACE-0000-0000-0000-000000000000" ]
-}
-
-@test "--self <msg> injects into own pane" {
-  use_full_stub
-  run env ITERM_SESSION_ID="w9t0p0:$UUID" bash "$NOTIFY" --self "note to self"
-  [ "$status" -eq 0 ]
-  grep -q "session send -s $UUID note to self" "$IT2_LOG"
-}
-
-@test "unresolvable target -> exit 3, no mailbox (unknown UUID)" {
-  use_full_stub
-  run bash "$NOTIFY" no-such-session "hi"
+@test "unresolvable target → exit 3, no mailbox (unknown name, not a UUID)" {
+  run "$NOTIFY" "not-a-name-or-uuid" "x"
   [ "$status" -eq 3 ]
-  [ ! -d "$CC_MAILBOX_DIR" ] || [ -z "$(ls -A "$CC_MAILBOX_DIR" 2>/dev/null)" ]
+  [ ! -f "$CC_MAILBOX_DIR/not-a-name-or-uuid.md" ]
 }
 
-@test "missing message (non-self target) -> usage error exit 2" {
-  use_full_stub
-  run bash "$NOTIFY" peer
+@test "missing message (non-self target) → usage error exit 2" {
+  run "$NOTIFY" peer
   [ "$status" -eq 2 ]
 }
 
-@test "--from attribution appears in the mailbox line" {
-  use_full_stub
-  run bash "$NOTIFY" --from originator-session peer "with attribution"
+@test "inbox UNWRITABLE → exit 5 LOUD (a message that cannot persist is not delivered)" {
+  export CC_MAILBOX_DIR="$BATS_TEST_TMPDIR/ro/deeper"
+  mkdir -p "$BATS_TEST_TMPDIR/ro"; chmod 500 "$BATS_TEST_TMPDIR/ro"
+  run "$NOTIFY" "$UUID" "cannot persist"
+  chmod 700 "$BATS_TEST_TMPDIR/ro"     # restore for teardown
+  [ "$status" -eq 5 ]
+  [[ "$output" == *"FAILED to write inbox"* ]] || false
+}
+
+@test "--self prints own pane UUID and exits (no message)" {
+  export ITERM_SESSION_ID="w0t0p0:$UUID"
+  run "$NOTIFY" --self
   [ "$status" -eq 0 ]
-  grep -q "\[originator-session\] with attribution" "$CC_MAILBOX_DIR/$UUID.md"
+  [ "$output" = "$UUID" ]
+}
+
+@test "--self <msg> enqueues into own inbox (self is always live)" {
+  export ITERM_SESSION_ID="w0t0p0:$UUID"
+  run "$NOTIFY" --self "note to self"
+  [ "$status" -eq 0 ]
+  grep -q 'note to self' "$CC_MAILBOX_DIR/$UUID.md"
+  [ "$(sent_count)" -eq 0 ]
+}
+
+@test "--from attribution appears in the inbox line" {
+  run "$NOTIFY" --from reaper "$UUID" "surface page"
+  [ "$status" -eq 0 ]
+  grep -q '\[reaper\] surface page' "$CC_MAILBOX_DIR/$UUID.md"
+}
+
+@test "--mailbox-only records but reports inbox-only, exit 0" {
+  run "$NOTIFY" --mailbox-only "$UUID" "record only"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"--mailbox-only"* ]] || false
+  grep -q 'record only' "$CC_MAILBOX_DIR/$UUID.md"
+  [ "$(sent_count)" -eq 0 ]
+}
+
+@test "a message with embedded newlines is collapsed to ONE inbox line (cursor invariant)" {
+  run "$NOTIFY" "$UUID" "$(printf 'line-a\nline-b\nline-c')"
+  [ "$status" -eq 0 ]
+  # exactly ONE line was appended (one message = one line, so the .seen cursor counts messages)
+  [ "$(grep -c '' "$CC_MAILBOX_DIR/$UUID.md")" -eq 1 ]
+  grep -q 'line-a line-b line-c' "$CC_MAILBOX_DIR/$UUID.md"
+}
+
+@test "cc-notify NEVER invokes the keystroke transport across ALL send paths" {
+  "$NOTIFY" peer "one" >/dev/null 2>&1
+  "$NOTIFY" "$UUID" "two" >/dev/null 2>&1
+  "$NOTIFY" --from x "$UUID" "three" >/dev/null 2>&1
+  export ITERM_SESSION_ID="w0t0p0:$UUID"; "$NOTIFY" --self "four" >/dev/null 2>&1
+  [ "$(sent_count)" -eq 0 ]     # zero it2 `session send` across name/uuid/from/self — no keystrokes, ever
 }

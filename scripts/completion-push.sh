@@ -102,7 +102,7 @@ selftest() {
   make_stub() { # <mode> -> a stub cc-notify (drives cc-announce's outcome)
     local mode="$1"; local p="$d/stub-$mode.sh"; local body
     case "$mode" in
-      verified)   body='echo "cc-notify: delivered to T (composer + mailbox; submit VERIFIED)" >&2; exit 0' ;;
+      verified)   body='echo "cc-notify: delivered to inbox [T] (live session, wake-path armed — its cc-await-ping watcher wakes it within a poll)" >&2; exit 0' ;;
       unresolved) body='echo "cc-notify: cannot resolve target — not a live session name or a pane UUID" >&2; exit 3' ;;
     esac
     { printf '#!/bin/bash\n'; printf '%s\n' "$body"; } > "$p"

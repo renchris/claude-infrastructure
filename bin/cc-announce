@@ -12,10 +12,13 @@
 # late FROM THE OPERATOR. The lesson: disk-truth is a RELOAD signal, not a WAKE — a TERMINAL event demands
 # an ACTIVE, VERIFIED announce, and a channel that can only reach disk-truth must fail LOUD, never silent.
 #
-# cc-announce trusts ONLY cc-notify's "submit VERIFIED" (a confirmed composer wake). Every lesser outcome —
-# unresolvable, stranded, or mailbox-only (the RELOAD-not-WAKE case) — is retried ONCE, then written to a
-# LOUD alarm record with a non-zero exit. The naive form (call cc-notify, trust its exit 0) accepts
-# mailbox-only as success — that IS the SendMessage silent-degrade, one channel over.
+# cc-announce trusts ONLY cc-notify's "delivered to inbox (live session)" verdict (v2: an inbox a LIVE
+# session WILL drain, via mailbox-drain.sh at its next boundary or its armed cc-await-ping watcher). Every
+# lesser outcome — unresolvable, inbox-unwritable, or mailbox-only-to-a-NOT-live-target (the RELOAD-not-WAKE
+# case: a dead inbox nothing reads) — is retried ONCE, then written to a LOUD alarm record with a non-zero
+# exit. The naive form (call cc-notify, trust its exit 0) accepts mailbox-only-to-a-dead-pane as success —
+# that IS the SendMessage silent-degrade, one channel over. (v1 trusted the "submit VERIFIED" composer wake;
+# the keystroke transport is GONE — see the v2 comms redesign, docs/plans/TWO_WAY_SESSION_COMMS_PLAN.md.)
 #
 #   cc-announce <role|name|uuid> "<message>"   announce; VERIFIED or a LOUD alarm (never silent)
 #   cc-announce --selftest                      RED-prove: undeliverable → alarm+nonzero; deliverable → verified
@@ -84,18 +87,28 @@ resolve_role() { # <token> -> echoes target (sets ROLE_LABEL)
 }
 
 # ── classify cc-notify's OUTCOME by its stderr + exit code (never trust exit 0 alone — that IS the bug). ─
+# v2 (2026-07-20): cc-notify ENQUEUES to the inbox (no keystrokes). Its stderr says whether a LIVE
+# session exists to DRAIN the inbox — that, not a composer wake, is now the delivery signal.
 classify() { # <captured out+err> <rc>  -> sets VERDICT
   local out="$1" rc="$2"
   case "$rc" in
+    0) ;;                             # fall through to the stderr analysis
     2) VERDICT=USAGE; return ;;
     3) VERDICT=UNRESOLVED; return ;;
-    4) VERDICT=STRANDED; return ;;
+    5) VERDICT=WRITEFAIL; return ;;   # inbox unwritable — a message that cannot persist is NOT delivered
+    *) VERDICT=UNKNOWN; return ;;      # F3: ANY unmapped rc fails CLOSED (alarm) — never a phantom wake
   esac
-  # rc 0: distinguish a true composer wake from the graceful degrades cc-notify ALSO exits 0 on.
-  if   printf '%s' "$out" | grep -q 'submit VERIFIED'; then VERDICT=VERIFIED
-  elif printf '%s' "$out" | grep -q 'mailbox only';    then VERDICT=MAILBOX
-  elif printf '%s' "$out" | grep -q 'UNVERIFIED';      then VERDICT=UNVERIFIED
-  else VERDICT=VERIFIED; fi
+  # rc 0: an enqueue happened; the verdict turns on liveness AND a WAKE PATH (F5 — liveness ≠ a wake):
+  #   "mailbox only … NOT a live session" → MAILBOX   (a DEAD inbox nothing will drain — RELOAD≠WAKE, W5)
+  #   "NO watcher armed"                   → UNVERIFIED (live, but only drains on its NEXT turn — a degrade,
+  #                                                      NEVER "wake confirmed"; the guard is the backstop)
+  #   "liveness UNVERIFIABLE"              → UNVERIFIED (liveness unconfirmed — degrade)
+  #   "wake-path armed"                    → VERIFIED   (a live session its cc-await-ping watcher wakes)
+  if   printf '%s' "$out" | grep -q 'mailbox only';    then VERDICT=MAILBOX
+  elif printf '%s' "$out" | grep -q 'NO watcher armed'; then VERDICT=UNVERIFIED
+  elif printf '%s' "$out" | grep -q 'UNVERIFIABLE';    then VERDICT=UNVERIFIED
+  elif printf '%s' "$out" | grep -q 'wake-path armed'; then VERDICT=VERIFIED
+  else VERDICT=UNKNOWN; fi              # F3: fail-CLOSED — an unrecognized rc-0 string alarms, never VERIFIED
 }
 
 announce() { # <role-token> <message>
@@ -113,14 +126,14 @@ announce() { # <role-token> <message>
         die "cc-notify usage error delivering to $target: $out" ;;
       UNVERIFIED)
         if [ "$attempt" -ge 1 ]; then
-          write_degrade "delivered but submit UNVERIFIED after retry (target busy/unreadable — likely alive): $out" "$token" "$target"
-          echo "cc-announce: ⚠️  $ROLE_LABEL — delivered but UNVERIFIED after retry (target busy/unreadable); RECORDED, not silent" >&2
+          write_degrade "delivered to inbox but NOT a confirmed wake after retry (no watcher armed, or liveness unconfirmed — drains on the target's next turn; cc-inbox-guard escalates if it never does): $out" "$token" "$target"
+          echo "cc-announce: ⚠️  $ROLE_LABEL — delivered to inbox but NOT a confirmed wake after retry (no watcher / liveness unconfirmed); RECORDED, guard backstops" >&2
           return 0
         fi ;;
-      *)  # MAILBOX (disk-truth) | STRANDED | UNRESOLVED — the "not a wake" set.
+      *)  # MAILBOX (dead inbox) | UNRESOLVED | WRITEFAIL — the "nothing will read it" set.
         if [ "$attempt" -ge 1 ]; then
           write_alarm "announce-not-verified" "announce to $target NOT verified after one retry (verdict=$VERDICT): $out" "$token" "$target" "$VERDICT"
-          echo "cc-announce: ⛔ ALARM — $ROLE_LABEL announce NOT verified (verdict=$VERDICT) after one retry; disk-truth is a RELOAD not a WAKE. Alarm recorded in $ALARM_DIR." >&2
+          echo "cc-announce: ⛔ ALARM — $ROLE_LABEL announce NOT verified (verdict=$VERDICT) after one retry; an inbox no live session drains is a RELOAD not a WAKE. Alarm recorded in $ALARM_DIR." >&2
           return 5
         fi ;;
     esac
@@ -147,21 +160,23 @@ selftest() {
   make_stub() { # <mode> -> path to a stub cc-notify that logs its args then emits <mode>'s outcome
     local mode="$1"; local p="$d/stub-$mode.sh"; local body
     case "$mode" in
-      verified)   body='echo "cc-notify: delivered to T (composer + mailbox; submit VERIFIED)" >&2; exit 0' ;;
-      mailbox)    body='echo "cc-notify: pane T unreachable (closed/recycled) — delivered to mailbox only" >&2; exit 0' ;;
-      unresolved) body='echo "cc-notify: cannot resolve target — not a live session name or a pane UUID" >&2; exit 3' ;;
-      stranded)   body='echo "cc-notify: STRANDED — typed into T but the composer never submitted" >&2; exit 4' ;;
-      unreadable) body='echo "cc-notify: delivered to T (composer + mailbox; submit UNVERIFIED — pane text unreadable)" >&2; exit 0' ;;
+      verified)     body='echo "cc-notify: delivered to inbox [T] (live session, wake-path armed — its cc-await-ping watcher wakes it within a poll)" >&2; exit 0' ;;
+      nowatch)      body='echo "cc-notify: delivered to inbox [T] (live session, NO watcher armed — drains on its NEXT turn; delivered but not a guaranteed instant wake)" >&2; exit 0' ;;
+      mailbox)      body='echo "cc-notify: [T] mailbox only — target is NOT a live session (closed/recycled pane); no drain will run" >&2; exit 0' ;;
+      unresolved)   body='echo "cc-notify: cannot resolve target — not a live session name or a pane UUID" >&2; exit 3' ;;
+      writefail)    body='echo "cc-notify: FAILED to write inbox — message NOT delivered" >&2; exit 5' ;;
+      unverifiable) body='echo "cc-notify: delivered to inbox [T] (liveness UNVERIFIABLE — no session registry/pane list; recorded)" >&2; exit 0' ;;
     esac
     { printf '#!/bin/bash\n'; printf 'echo "$*" >> %q\n' "$d/stub.log"; printf '%s\n' "$body"; } > "$p"
     chmod +x "$p"; echo "$p"
   }
-  run() { # <mode> <token> -> sets RC, NALARM
+  run() { # <mode> <token> -> sets RC, NALARM, NDEGRADE
     local mode="$1" token="$2"
     : > "$d/stub.log"; rm -f "$d"/alarms/*.json 2>/dev/null || true
     CC_NOTIFY_BIN="$(make_stub "$mode")" "$SELF" "$token" "completion witnessed" >/dev/null 2>&1
     RC=$?
     NALARM="$(find "$d/alarms" -name 'announce-alarm-*.json' 2>/dev/null | wc -l | tr -d ' ')"
+    NDEGRADE="$(find "$d/alarms" -name 'announce-degrade-*.json' 2>/dev/null | wc -l | tr -d ' ')"
   }
 
   echo "cc-announce --selftest — every never-silent RED-proof must fire:"
@@ -184,15 +199,24 @@ selftest() {
     && okp "mailbox-only (disk-truth) → LOUD alarm + non-zero (RELOAD ≠ WAKE)" \
     || badp "a mailbox-only announce was accepted silently (rc=$RC alarms=$NALARM) — the SendMessage degrade"
 
-  # 4. STRANDED (typed, unsubmitted) → alarm + non-zero.
-  run stranded busy-desk
+  # 4. WRITEFAIL (inbox unwritable, exit 5) → alarm + non-zero. A message that cannot even persist is not
+  #    delivered — the v2 analog of the old STRANDED (no keystroke transport exists to strand anymore).
+  run writefail busy-desk
   [ "$RC" != 0 ] && [ "$NALARM" -ge 1 ] \
-    && okp "stranded (typed, unsubmitted) → LOUD alarm + non-zero" \
-    || badp "a stranded announce was accepted (rc=$RC alarms=$NALARM)"
+    && okp "inbox-unwritable (exit 5) → LOUD alarm + non-zero" \
+    || badp "a write-failed announce was accepted (rc=$RC alarms=$NALARM)"
 
-  # 5. DISCRIMINATION: verified-wake vs mailbox-only are BOTH cc-notify exit 0 — the naive 'trust exit 0'
-  #    form cannot tell them apart and silently degrades; cc-announce gives them OPPOSITE outcomes (1 vs 3).
-  okp "DISCRIMINATES verified-wake vs mailbox-only — both are cc-notify exit 0 (the naive form degrades silently)"
+  # 4b. NO-WATCH (F5): live but no watcher armed → NOT verified — a recorded DEGRADE, exit 0, NO alarm.
+  #     Never stamp "wake confirmed" on a live-but-idle target (that WAS the W5 incident, re-created).
+  run nowatch idle-desk
+  [ "$RC" = 0 ] && [ "$NALARM" = 0 ] && [ "$NDEGRADE" -ge 1 ] \
+    && okp "live-but-no-watcher → recorded DEGRADE (exit 0, NO alarm, never VERIFIED — F5)" \
+    || badp "a no-watcher announce was not a clean recorded degrade (rc=$RC alarms=$NALARM degrades=$NDEGRADE)"
+
+  # 5. DISCRIMINATION: wake-path-armed vs mailbox-only(not-live) are BOTH cc-notify exit 0 — the naive
+  #    'trust exit 0' form cannot tell them apart and silently degrades; cc-announce gives them OPPOSITE
+  #    outcomes (VERIFIED vs ALARM). This is the W5 SendMessage silent-degrade, one channel over.
+  okp "DISCRIMINATES wake-path-armed vs mailbox-only(not-live) — both are cc-notify exit 0 (the naive form degrades silently)"
 
   # 6. ROLE RESOLUTION: a role-map file maps the token → a concrete target passed to cc-notify.
   printf 'MAPPED-UUID-1234\n' > "$d/roles/desk"
@@ -203,7 +227,7 @@ selftest() {
 
   echo "cc-announce --selftest: $PASS passed, $FAIL failed"
   [ "$FAIL" -eq 0 ] || exit 1
-  echo "cc-announce --selftest: GREEN — VERIFIED-or-LOUD (unresolvable/mailbox-only/stranded all alarm+fail; role map applied)."
+  echo "cc-announce --selftest: GREEN — VERIFIED-or-LOUD (unresolvable/mailbox-only/inbox-unwritable all alarm+fail; role map applied)."
   exit 0
 }
 
