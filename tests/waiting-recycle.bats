@@ -20,6 +20,9 @@ setup() {
   # idle threshold pinned 55 (existing cases predate the lowered 35 default); busy-force ceiling 75 (so the
   # legacy 70% "busy hold" cases stay MEDIUM tier). New tiered cases override these explicitly.
   export CC_WR_T_IDLE=55 CC_WR_T_BUSY=75 CC_WR_MAX=3 CC_WR_COOLDOWN_S=600 CC_WR_AGE_MAX=180
+  # context-econ (2026-07-20): nudge pinned OFF (101) — legacy busy-hold cases assert Tier-2 SILENCE
+  # at ≥50% fill, which predates the pause-point nudge. Nudge/forecast cases override explicitly.
+  export CC_WR_T_NUDGE=101
   # Hermetic coordination root (S3 wait-contracts / S4 mailbox / S5 teams / cc-roles) — never the real ~/.claude.
   export CC_WR_COORD_DIR="$BATS_TEST_TMPDIR/coord"; export CC_WR_UUID="DESK-UUID-0001"; export CC_WR_QUIET_S=180
   mkdir -p "$CC_TELEMETRY_DIR" "$CC_WR_STATE_DIR" "$CC_WR_COORD_DIR/wait-contracts" "$CC_WR_COORD_DIR/mailbox" "$CC_WR_COORD_DIR/cc-roles" "$CLAUDE_CONFIG_DIR/teams"
@@ -731,4 +734,109 @@ setup_stage2() { export CC_WR_GRACE_S=0; export CC_WR_FIRE_DIR="$BATS_TEST_TMPDI
   ( cd "$DESK" && bash "$HOOK" arm --brief "$tmpl" --live --busy-force >/dev/null )
   ( cd "$DESK" && bash "$HOOK" status ) | grep -q "busy-force≥75%"
   ( cd "$DESK" && bash "$HOOK" status ) | grep -qi "busy-force: ON"
+}
+
+# ── CONTEXT-ECON (2026-07-20): S6 conversation-hold · forecast-early busy · pause-point nudge ────
+# Fixture shapes mirror the live transcript producer (fixture-parity; see tests/context-econ.bats).
+iso_at() { date -u -r "$1" +%Y-%m-%dT%H:%M:%S.000Z 2>/dev/null || date -u -d "@$1" +%Y-%m-%dT%H:%M:%S.000Z; }
+# Transcript: one INTERACTIVE human turn aged $2 seconds, then a benign assistant line; echo path.
+mk_tx_conv() { local p="$BATS_TEST_TMPDIR/txc-${BATS_TEST_NUMBER}-$1.jsonl"
+  jq -nc --arg t "${3:-please check on the wave when you can}" --arg ts "$(iso_at $(( $(date +%s) - $2 )))" \
+    '{type:"user",isMeta:null,userType:"external",message:{role:"user",content:$t},timestamp:$ts}' > "$p"
+  jq -nc --arg t "$WAIT" '{type:"assistant",message:{content:[{type:"text",text:$t}]}}' >> "$p"
+  printf '%s' "$p"; }
+# Transcript: ONLY auto-drive traffic (Stop-hook feedback, isMeta:true — the session-continue/goal shape).
+mk_tx_auto() { local p="$BATS_TEST_TMPDIR/txa-${BATS_TEST_NUMBER}.jsonl"
+  jq -nc --arg ts "$(iso_at $(( $(date +%s) - 5 )))" \
+    '{type:"user",isMeta:true,userType:"external",message:{role:"user",content:"Stop hook feedback:\n[keep driving the goal]"},timestamp:$ts}' > "$p"
+  jq -nc --arg t "$WAIT" '{type:"assistant",message:{content:[{type:"text",text:$t}]}}' >> "$p"
+  printf '%s' "$p"; }
+# Burn history for a sid: two samples — $2% at (now-$4s) → $3% now — plus matching fresh telemetry.
+mk_hist() { local now; now=$(date +%s)
+  printf '%s %s 1\n%s %s 1\n' "$(( now - $4 ))" "$2" "$now" "$3" > "$CC_TELEMETRY_DIR/$1.hist"
+  mk_tel "$1" "$3"; }
+
+@test "S6 conv-hold: fresh operator turn at 60% idle-clean → HELD (no advisory), reason logged" {
+  mk_tel c1 60
+  run drive c1 "$(mk_tx_conv a 30)"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  grep -q '"reason":"operator-conversing-hold"' "$CC_WR_IDL"
+}
+@test "S6 conv-hold ages out: operator turn OLDER than CONV_HOLD_S → fires the idle advisory" {
+  export CC_WR_CONV_HOLD_S=100
+  mk_tel c2 60
+  run drive c2 "$(mk_tx_conv a 2000)"
+  [ "$status" -eq 0 ]; fired "$output"
+}
+@test "S6 auto-drive is NOT a conversation: fresh Stop-hook feedback only → fires (free-win kept)" {
+  mk_tel c3 60
+  run drive c3 "$(mk_tx_auto)"
+  [ "$status" -eq 0 ]; fired "$output"
+}
+@test "S6 at HIGH ctx is SOFT: conversing desk at 78% ≥ T_BUSY → busy advisory (drain path), not silence" {
+  mk_tel c4 78
+  run drive c4 "$(mk_tx_conv a 30)"
+  [ "$status" -eq 0 ]; fired "$output"
+  echo "$output" | grep -q "BUSY + HIGH-CONTEXT"
+  echo "$output" | grep -q "operator-conversing-hold"
+}
+@test "forecast-early: dirty tree at 65% + fast burn (≤LEAD_MIN to wall) → busy advisory BELOW T_BUSY" {
+  echo dirt >> "$DESK/f.txt"
+  mk_hist f1 55 65 300              # +10%/300s → burn_x100=200 → forecast (88-65)*100/200 = 11min
+  run drive f1 "$(mk_tx 9 "$WAIT")"
+  [ "$status" -eq 0 ]; fired "$output"
+  echo "$output" | grep -q "forecast"
+  echo "$output" | grep -q "BUSY + HIGH-CONTEXT"
+}
+@test "forecast-early: same fill with NO burn history → Tier-2 silence (unknown never triggers)" {
+  echo dirt >> "$DESK/f.txt"
+  mk_tel f2 65
+  run drive f2 "$(mk_tx 9 "$WAIT")"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+}
+@test "forecast-early: fast burn below the T_BUSY_MIN floor (55%) does NOT trigger the busy ladder" {
+  echo dirt >> "$DESK/f.txt"
+  mk_hist f3 45 55 300
+  run drive f3 "$(mk_tx 9 "$WAIT")"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+}
+@test "nudge: BUSY soft at 58% (T_NUDGE=50) → paced pause-point advisory; re-arms only at +10% fill" {
+  export CC_WR_T_NUDGE=50
+  echo dirt >> "$DESK/f.txt"
+  mk_tel n1 58
+  run drive n1 "$(mk_tx 9 "$WAIT")"
+  [ "$status" -eq 0 ]; fired "$output"
+  echo "$output" | grep -q "PAUSE-POINT"
+  mk_tel n1 61                       # +3 < re-arm delta → silent
+  run drive n1 "$(mk_tx 9 "$WAIT")"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  mk_tel n1 68                       # +10 from the nudge fill → re-advises
+  run drive n1 "$(mk_tx 9 "$WAIT")"
+  [ "$status" -eq 0 ]; fired "$output"
+}
+@test "nudge: conversation wording when the soft hold IS the exchange (land the exchange, don't cut it)" {
+  export CC_WR_T_NUDGE=50
+  mk_tel n2 58
+  run drive n2 "$(mk_tx_conv a 30)"
+  [ "$status" -eq 0 ]; fired "$output"
+  echo "$output" | grep -q "live exchange"
+}
+@test "nudge: a HARD hold (open decision) never gets the nudge — the decision must surface, not a recycle plan" {
+  export CC_WR_T_NUDGE=50
+  mk_tel n3 58
+  run drive n3 "$(mk_tx 9 "Blocked: which account should I use? your call.")"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+}
+@test "integration: a drive SAMPLES telemetry into the burn history (hist file appears)" {
+  mk_tel h1 60
+  run drive h1 "$(mk_tx_conv a 30)"
+  [ "$status" -eq 0 ]
+  [ -f "$CC_TELEMETRY_DIR/h1.hist" ]
+  grep -qE "^[0-9]+ 60 " "$CC_TELEMETRY_DIR/h1.hist"
+}
+@test "observability: the Stage-1 fire record carries burn_x100/forecast_min/conv_age_s" {
+  mk_tel o1 60
+  run drive o1 "$(mk_tx 9 "$WAIT")"
+  [ "$status" -eq 0 ]; fired "$output"
+  tail -1 "$CC_WR_IDL" | jq -e 'select(.reason=="waiting-recycle") | has("burn_x100") and has("forecast_min") and has("conv_age_s")' >/dev/null
 }

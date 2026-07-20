@@ -77,6 +77,19 @@
 #          threshold fires it at the next idle gap (context grows monotonically, so it converges there).
 #      All new aggressiveness is advisory or SHADOW+page by default — nothing auto-execs until armed
 #      (idle: --live; busy: --live --busy-force). Damp-first, unchanged from the Stage-2 discipline.
+#   8. CONTEXT-ECON SIGNALS (2026-07-20 — docs/research/context-econ-2026-07-20.md) — three continuous
+#      signals sharpen the tiers, from hooks/lib/context-econ.sh; ANY unknown signal degrades to the
+#      exact legacy behavior (false-negative bias kept):
+#        • S6 CONVERSATION-HOLD (SOFT) — a fresh INTERACTIVE turn (< CONV_HOLD_S) marks a live 2-way
+#          exchange: HIGH-VALUE context that leaves NO git/mailbox trace (the "74% mid-conversation"
+#          incident — S1–S5 read it as idle). Auto-drive re-prompts (session-continue 🔧 / goal Stop
+#          feedback) are excluded on two axes, so an auto-driven desk still free-wins.
+#        • FORECAST-EARLY busy trigger — used ≥ T_BUSY_MIN AND burn-forecast ≤ LEAD_MIN minutes to the
+#          wall ⇒ the busy ladder (advisory→drain) starts BEFORE T_BUSY; at high burn the wall arrives
+#          first. Exec gating unchanged (--live --busy-force).
+#        • PAUSE-POINT NUDGE — BUSY soft-held ≥ T_NUDGE gets a PACED advisory to plan its own boundary
+#          (commit → persist → /handoff) instead of silent Tier-2; the model is the pause-point judge.
+#          Re-arms per +NUDGE_REARM pct fill (the boundary-handoff B-2 shape); never fires a recycle.
 #
 # Delivery: {decision:"block"} + hookSpecificOutput.additionalContext (the MODEL-facing recycle
 # advisory — confirmed delivered on PostToolUse @ 2.1.183) + systemMessage/reason (operator-facing).
@@ -100,7 +113,9 @@
 #                    CC_WR_IDLE_DECAY_S · CC_WR_BUSY_FORCE · CC_TELEMETRY_DIR · CC_WR_AGE_MAX · CC_WR_IDL ·
 #                    CC_WR_STATE_DIR · CC_WR_MAX · CC_WR_COOLDOWN_S · CC_WR_KILL · CC_WR_ROT_FLOOR ·
 #                    CC_WR_GRACE_S · CC_WR_COORD_DIR · CC_WR_UUID · CC_WR_QUIET_S · CC_WR_FIRE_DIR ·
-#                    CC_WR_HANDOFF_FIRE · CC_WR_DESK_ROLE · CC_WR_NOTIFY · CC_WR_PUSH · CC_WR_ESCALATE_DEDUP_S
+#                    CC_WR_HANDOFF_FIRE · CC_WR_DESK_ROLE · CC_WR_NOTIFY · CC_WR_PUSH · CC_WR_ESCALATE_DEDUP_S ·
+#                    CC_WR_CONV_HOLD_S · CC_WR_T_BUSY_MIN · CC_WR_LEAD_MIN · CC_WR_T_NUDGE · CC_WR_NUDGE_REARM ·
+#                    CC_CE_* (context-econ lib: WIN_S / WALL / MIN_SPAN_S / HIST_MAX / TAIL_BYTES / AUTO_RX)
 #
 # NOTE: deliberately NO `set -e` — a hook must fail SAFE (abstain), and a stray non-zero from a grep
 # test must never become the script's exit code and suppress a legitimate abstain-log. -u/pipefail are
@@ -135,6 +150,13 @@ NOTIFY_CMD="${CC_WR_NOTIFY:-}"                              # T-P1-8: empty → 
 PUSH_BIN="${CC_WR_PUSH:-$CFG/hooks/push-critical.sh}"      # T-P1-8: Pushover break-through (INERT unless armed)
 ESCALATE_DEDUP_S="${CC_WR_ESCALATE_DEDUP_S:-900}"          # T-P1-8: page-once cadence while a desk stays wedged
 
+# ── CONTEXT-ECON knobs (2026-07-20 — docs/research/context-econ-2026-07-20.md, header §8) ─────────
+CONV_HOLD_S="${CC_WR_CONV_HOLD_S:-900}"                    # S6: a fresh interactive turn holds a free-win recycle this long
+T_BUSY_MIN="${CC_WR_T_BUSY_MIN:-60}"                       # forecast-early busy trigger never fires below this fill
+LEAD_MIN="${CC_WR_LEAD_MIN:-20}"                           # burn-forecast ≤ this many minutes to the wall ⇒ act early while BUSY
+T_NUDGE="${CC_WR_T_NUDGE:-50}"                             # BUSY pause-point-planning advisory from this fill upward
+NUDGE_REARM="${CC_WR_NUDGE_REARM:-10}"                     # re-nudge per +N pct fill climb (B-2 shape)
+
 # Per-cwd key (arm + cooldown survive a recycle since cwd is stable across it); per-session key (cap
 # resets on the fresh successor). Mirrors session-continue.sh's config-dir|path hash.
 key_cwd() { printf '%s|%s' "$CFG" "$1" | shasum 2>/dev/null | cut -c1-16; }
@@ -152,12 +174,23 @@ escalated_for(){ printf '%s/escalated-%s' "$STATE_DIR" "$1"; }             # SID
 idlewatch_for(){ printf '%s/idlewatch-%s' "$STATE_DIR" "$1"; }             # SID-keyed: first sub-T_IDLE fresh poll (adaptive-decay clock)
 queued_for()   { printf '%s/queued-%s'    "$STATE_DIR" "$1"; }             # SID-keyed: Tier-2 refresh-queued marker (busy@medium wants a refresh)
 busyforce_for(){ printf '%s/busyforce-%s' "$STATE_DIR" "$(key_cwd "$1")"; } # cwd-keyed: Tier-3 forced-recycle EXEC opt-in (beyond --live; default OFF ⇒ shadow+page)
+# Context-econ state (2026-07-20):
+nudged_for()   { printf '%s/nudged-%s'    "$STATE_DIR" "$1"; }             # SID-keyed: busy pause-point-nudge pacer (fill at last nudge; re-arm per +NUDGE_REARM)
 
 GRACE_S="${CC_WR_GRACE_S:-180}"                            # Stage-1 advisory → Stage-2 fire grace
 # actuator (test seam): resolve next to this hook (repo hooks/../scripts + symlinked ~/.claude install)
 _wrd="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
 HANDOFF_FIRE="${CC_WR_HANDOFF_FIRE:-$_wrd/../scripts/handoff-fire.sh}"
 [ -f "$HANDOFF_FIRE" ] || HANDOFF_FIRE="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/handoff-fire.sh"
+
+# context-econ signal lib (burn/forecast + interactive-recency, header §8) — same repo→install
+# resolution as HANDOFF_FIRE; a MISSING lib degrades every signal seam to legacy behavior via the
+# command -v guards at the call sites (a signal must never cost the hook).
+_welib="$_wrd/lib/context-econ.sh"
+[ -f "$_welib" ] || _welib="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/context-econ.sh"
+# shellcheck source=lib/context-econ.sh
+# shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+[ -f "$_welib" ] && . "$_welib" 2>/dev/null || true
 
 # ---- Agent/operator CLI mode ---------------------------------------------------------------------
 case "${1:-}" in
@@ -225,6 +258,7 @@ case "${1:-}" in
     if [ -f "$KILL" ]; then echo "GLOBAL KILL active ($KILL) — no session recycles"; fi
     if [ -f "$(disarm_for "$PWD")" ]; then echo "DISARMED (this cwd) — 'clear' opt-out suppresses arm-by-default; run 'arm' to re-enable"; fi
     echo "thresholds: idle≥${T_IDLE}% (adaptive → floor ${T_IDLE_FLOOR}% over ${IDLE_DECAY_S}s idle) · busy-force≥${T_BUSY}% · rot-floor ${ROT_FLOOR}%"
+    echo "context-econ: conv-hold ${CONV_HOLD_S}s · nudge≥${T_NUDGE}% (re-arm +${NUDGE_REARM}%) · early-busy≥${T_BUSY_MIN}% @ forecast≤${LEAD_MIN}min"
     if [ -f "$a" ]; then
       echo "ARMED: $(cat "$a")"
       [ -f "$(live_for "$PWD")" ] && echo "  mode: LIVE (Stage-2 execs)" || echo "  mode: SHADOW (Stage-2 logs would-fire only)"
@@ -371,6 +405,17 @@ if [ -f "$tel" ]; then
     case "$used" in ''|*[!0-9]*) used=0 ;; esac
   fi
 fi
+# 4a-ter. CONTEXT-ECON velocity (header §8): sample this poll into the burn history, then read the
+# velocity + minutes-to-wall forecast. Lib missing / data sparse ⇒ burn 0 + forecast -1 = the exact
+# legacy behavior at every consumer below.
+burn_x100=0; forecast_min=-1
+if command -v ce_sample >/dev/null 2>&1 && [ -f "$tel" ]; then
+  ce_sample "$tel" || true
+  _bf="$(ce_burn "$tel" 2>/dev/null || printf '0 -1')"
+  burn_x100="${_bf%% *}"; forecast_min="${_bf##* }"
+  case "$burn_x100" in ''|*[!0-9]*) burn_x100=0 ;; esac
+  case "$forecast_min" in -1) ;; ''|*[!0-9]*) forecast_min=-1 ;; esac
+fi
 # 4a-bis. ADAPTIVE IDLE THRESHOLD (4ce6ffc0194f): the base T_IDLE decays toward T_IDLE_FLOOR the longer
 # this SID has sat below it on fresh polls — a desk idle for hours grows more eager to shed watch-rot
 # (the "sat idle for hours then hit 74%" evidence). The clock is stamped on the FIRST sub-T_IDLE fresh
@@ -404,6 +449,13 @@ if [ -n "$TP" ]; then
     MSG="$(jq -c 'select(.type=="assistant")' "$TP" 2>/dev/null | tail -1 \
             | jq -r '[.message.content[]? | select(.type=="text") | .text] | join("\n")' 2>/dev/null || true)"
   fi
+fi
+# CONTEXT-ECON interactive recency (header §8, S6): age of the last operator/peer turn, or "" when
+# none is visible (auto-drive re-prompts and tool traffic excluded by the lib — see its taxonomy).
+conv_age=""
+if command -v ce_last_interactive_age >/dev/null 2>&1 && [ -n "$TP" ] && [ -f "$TP" ]; then
+  conv_age="$(ce_last_interactive_age "$TP")"
+  case "$conv_age" in *[!0-9]*) conv_age="" ;; esac
 fi
 # Bound grep input (a re-derivation tell is opening narration; this is a hang-safety backstop, not
 # a correctness limit). Combined with the backtracking-SAFE regex below (≤1 bounded gap per branch,
@@ -509,6 +561,15 @@ if [ "$SAFE" = 1 ] && [ -d "$COORD/cc-roles" ]; then
     mbx_active "$COORD/mailbox/$rv.md" && { hold soft "inbox-active-hold-role"; break; }
   done
 fi
+# 5d — S6 CONVERSATION-VALUE hold (context-econ, header §8). A fresh INTERACTIVE turn (operator typed
+# or a peer injected < CONV_HOLD_S ago) marks a live 2-way exchange — HIGH-VALUE context that leaves
+# NO git/mailbox trace, which is exactly how the desk hit 74% MID-conversation while classified idle.
+# SOFT: below the busy ceiling the recycle waits for the exchange to quiet; at/above it the forced
+# drain still recycles (riding to the wall destroys the same exchange PLUS the session). The lib
+# excludes auto-drive re-prompts on two axes, so an auto-driven desk still free-wins.
+if [ "$SAFE" = 1 ] && [ -n "$conv_age" ] && [ "$conv_age" -lt "$CONV_HOLD_S" ] 2>/dev/null; then
+  hold soft "operator-conversing-hold"
+fi
 
 # drain_scan — print the desk's PENDING ping queue (mailbox tails + inbound OPEN contracts naming me), or
 # nothing. Tier-3 busy-force embeds this in the successor brief so a mid-work recycle drops NO ping. It
@@ -544,7 +605,15 @@ drain_scan() {
 #   BUSY + medium/low               → Tier-2: mark a refresh-queued intent + hold (the lowered idle
 #                                     threshold fires it at the next idle gap).
 mkdir -p "$STATE_DIR" 2>/dev/null || true
-high_ctx=0; { [ "$fresh" = 1 ] && [ "$used" -ge "$T_BUSY" ]; } && high_ctx=1
+high_ctx=0; early_busy=0
+{ [ "$fresh" = 1 ] && [ "$used" -ge "$T_BUSY" ]; } && high_ctx=1
+# context-econ FORECAST-EARLY busy trigger (header §8): at high burn the 90% wall arrives before
+# T_BUSY does — act while the advisory→grace→drain ladder still has LEAD_MIN of runway. Floor
+# T_BUSY_MIN keeps mid-fill sessions from tripping on a burst; forecast -1 (unknown) never triggers.
+if [ "$high_ctx" = 0 ] && [ "$fresh" = 1 ] && [ "$used" -ge "$T_BUSY_MIN" ] \
+   && [ "$forecast_min" -ge 0 ] 2>/dev/null && [ "$forecast_min" -le "$LEAD_MIN" ]; then
+  high_ctx=1; early_busy=1
+fi
 dod_carry="$("${DOD_PERSIST:-$(dirname "$0")/dod-persist.sh}" get 2>/dev/null || true)"
 fire_mode=idle; drain_section=""
 
@@ -561,7 +630,8 @@ if [ "$SAFE" = 0 ]; then
     fi
     date +%s > "$(escalated_for "$SID")" 2>/dev/null || true
     log_idl escalated "busy-hard-hold:${hold_reason}" \
-      "$(jq -cn --argjson used "$used" --arg hold "$hold_reason" --argjson busy 1 '{used_pct:$used,hold:$hold,busy:($busy==1),forceable:false}')"
+      "$(jq -cn --argjson used "$used" --arg hold "$hold_reason" --argjson busy 1 --argjson burn "$burn_x100" --argjson fc "$forecast_min" \
+          '{used_pct:$used,hold:$hold,busy:($busy==1),forceable:false,burn_x100:$burn,forecast_min:$fc}')"
     wr_os_notify "Claude desk BUSY+HIGH" "desk ${UUID:-$SID} at ${used}% mid-work (${hold_reason}) — can't safely auto-recycle"
     wr_push_page "BUSY+HIGH DESK (${DESK_ROLE}) ${used}% ctx, ${hold_reason} — resolve + /handoff; auto-recycle held (hard)"
     pmsg="⚠ BUSY + HIGH CONTEXT (${used}% ≥ ${T_BUSY}%) held by ${hold_reason} — a HARD hold: an auto-recycle would lose state or bury a decision, so it will NOT fire. You are climbing toward the 90% auto-compact wall. ACT NOW: resolve the ${hold_reason} (commit / finish the merge, answer the decision, or let the teammate finish), then run /handoff to recycle. Re-pages every ${ESCALATE_DEDUP_S}s. Kill-switch: \`waiting-recycle.sh clear\`."
@@ -572,15 +642,41 @@ if [ "$SAFE" = 0 ]; then
     # ── TIER 2 — BUSY at medium/low context. Don't interrupt the work; QUEUE a refresh (a soft hold marks
     #    intent; the lowered idle threshold fires it at the next idle gap) + hold with the specific reason.
     [ "$hold_class" = soft ] && { : > "$(queued_for "$SID")" 2>/dev/null || true; }
+    # context-econ PAUSE-POINT NUDGE (header §8): from T_NUDGE up, a BUSY soft-held desk is no longer
+    # held in SILENCE — tell the model (the only judge of a good boundary) to PLAN its pause-point
+    # while the choice is cheap. Advisory-only: this branch can never fire a recycle; the idle path
+    # and the busy ceiling keep that role. Own pacer, re-armed per +NUDGE_REARM pct fill (the
+    # boundary-handoff B-2 shape — going silent while the fill climbs would be the bug). Soft-only:
+    # a HARD hold (open decision / sequencer / teammate) must surface its own state, not a nudge.
+    if [ "$fresh" = 1 ] && [ "$used" -ge "$T_NUDGE" ] && [ "$hold_class" = soft ]; then
+      nf="$(nudged_for "$SID")"
+      last_n="$(cat "$nf" 2>/dev/null || echo 0)"; case "$last_n" in ''|*[!0-9]*) last_n=0 ;; esac
+      if [ "$last_n" = 0 ] || [ $(( used - last_n )) -ge "$NUDGE_REARM" ]; then
+        printf '%s' "$used" > "$nf" 2>/dev/null || true
+        log_idl fired "busy-nudge:${hold_reason}" \
+          "$(jq -cn --argjson used "$used" --arg hold "$hold_reason" --argjson burn "$burn_x100" --argjson fc "$forecast_min" \
+              '{used_pct:$used,hold:$hold,burn_x100:$burn,forecast_min:$fc}')"
+        if [ "$hold_reason" = "operator-conversing-hold" ]; then
+          nmsg="⟳ CONTEXT PAUSE-POINT PLANNING — a live exchange is in flight and context is ${used}% (≥ ${T_NUDGE}%). Do NOT cut the exchange; DO plan its landing: at the natural end of this exchange, persist the decisions it produced (dod-persist / plan / memory), commit any in-hand work, then run /handoff to recycle into a fresh successor. The forced drain engages at ${T_BUSY}% (or sooner at high burn). (paced: re-advises per +${NUDGE_REARM}% fill)"
+        else
+          nmsg="⟳ CONTEXT PAUSE-POINT PLANNING — you are mid-work (${hold_reason}) at ${used}% (≥ ${T_NUDGE}%). Plan your own pause-point NOW while the choice is cheap: finish the in-hand step, commit, persist open decisions, then run /handoff at that natural boundary to recycle. If you ride on, the forced drain engages at ${T_BUSY}% (or sooner at high burn). (paced: re-advises per +${NUDGE_REARM}% fill)"
+        fi
+        jq -nc --arg a "$nmsg" --arg s "$nmsg" \
+          '{decision:"block",reason:$s,systemMessage:$s,hookSpecificOutput:{hookEventName:"PostToolUse",additionalContext:$a}}'
+        exit 0
+      fi
+    fi
     log_idl abstained "$hold_reason" \
-      "$(jq -cn --argjson used "$used" --arg cls "$hold_class" '{used_pct:$used,hold_class:$cls,refresh_queued:($cls=="soft")}')"
+      "$(jq -cn --argjson used "$used" --arg cls "$hold_class" --argjson burn "$burn_x100" --argjson fc "$forecast_min" \
+          '{used_pct:$used,hold_class:$cls,refresh_queued:($cls=="soft"),burn_x100:$burn,forecast_min:$fc}')"
     exit 0
   fi
 fi
 # Reaching here: fire_mode=idle (SAFE) OR fire_mode=busy (BUSY soft + high ctx). The SHARED fire machine.
 
-# trig label — honest to the actual gate (eff_idle for idle; T_BUSY for busy).
-if   [ "$fire_mode" = busy ];                                then trig="context ${used}% ≥ ${T_BUSY}% while BUSY (${hold_reason})"
+# trig label — honest to the actual gate (eff_idle for idle; T_BUSY or the burn forecast for busy).
+if   [ "$fire_mode" = busy ] && [ "$early_busy" = 1 ];       then trig="context ${used}% burning ~$(( burn_x100 / 100 )).$(( burn_x100 % 100 / 10 ))%/min — forecast ≤${forecast_min}min to the ${CC_CE_WALL:-88}% wall while BUSY (${hold_reason})"
+elif [ "$fire_mode" = busy ];                                then trig="context ${used}% ≥ ${T_BUSY}% while BUSY (${hold_reason})"
 elif [ "$over_threshold" = 1 ] && [ "$rot_valid" = 1 ];     then trig="context ${used}% ≥ ${eff_idle}% AND a state-rot tell"
 elif [ "$over_threshold" = 1 ];                             then trig="context ${used}% ≥ ${eff_idle}%"
 else                                                             trig="a floored state-rot tell (re-deriving known state, ${used}% ≥ ${ROT_FLOOR}% floor)"
@@ -600,6 +696,7 @@ if [ "$stage2_pending" = 1 ]; then
   FIRE_DIR="${CC_WR_FIRE_DIR:-/tmp}"; pf="$FIRE_DIR/wr-fire-${SID}.txt"; tmpf="$pf.$$"
   {
     if [ -s "$(brief_for "$CWD")" ]; then cat "$(brief_for "$CWD")"
+    elif [ "$fire_mode" = busy ] && [ "$early_busy" = 1 ]; then printf '%s\n' "You are the monitoring DESK, resumed by a deterministic self-recycle FORCED mid-work (predecessor context was ${used}% full and BURNING toward the auto-compact wall — forecast ≤${forecast_min}min at the observed rate — so it was discarded before rot/exhaustion)."
     elif [ "$fire_mode" = busy ]; then printf '%s\n' "You are the monitoring DESK, resumed by a deterministic self-recycle FORCED mid-work (predecessor context was ${used}% full — over the ${T_BUSY}% busy ceiling — and has been discarded to stop context rot)."
     else printf '%s\n' "You are the monitoring DESK, resumed by a deterministic self-recycle (predecessor context was ${used}% full and has been discarded to stop context rot)."; fi
     [ -n "$dod_carry" ] && printf '\nScope (frozen): %s\n' "$dod_carry"
@@ -623,7 +720,8 @@ if [ "$stage2_pending" = 1 ]; then
     date +%s > "$cf" 2>/dev/null || true                      # anchor the cross-generation loop-breaker on the FIRE
     log_idl fired "stage2-live" \
       "$(jq -cn --argjson used "$used" --arg trigger "$tk" --arg mode "$fire_mode" --arg prompt_file "$pf" --argjson grace_s "$GRACE_S" \
-          '{used_pct:$used,trigger:$trigger,mode:$mode,prompt_file:$prompt_file,grace_s:$grace_s}')"
+          --argjson burn "$burn_x100" --argjson fc "$forecast_min" --argjson early "$early_busy" \
+          '{used_pct:$used,trigger:$trigger,mode:$mode,prompt_file:$prompt_file,grace_s:$grace_s,burn_x100:$burn,forecast_min:$fc,early_busy:($early==1)}')"
     # Sanctioned actuator: it arms a DETACHED watcher BEFORE typing /exit (order load-bearing), so the
     # recycle completes even when the /exit interrupt SIGKILLs this hook's process group.
     "$HANDOFF_FIRE" --recycle --prompt-file "$pf" ${UUID:+--session-id "$UUID"} </dev/null >/dev/null 2>&1 || true
@@ -636,7 +734,8 @@ if [ "$stage2_pending" = 1 ]; then
   # BUSY shadow is more urgent than idle (mid-work AND high), so it ALSO pages out-of-band.
   log_idl fired "stage2-shadow" \
     "$(jq -cn --argjson used "$used" --arg trigger "$tk" --arg mode "$fire_mode" --arg prompt_file "$pf" --argjson grace_s "$GRACE_S" \
-        '{used_pct:$used,would_fire:true,trigger:$trigger,mode:$mode,prompt_file:$prompt_file,grace_s:$grace_s}')"
+        --argjson burn "$burn_x100" --argjson fc "$forecast_min" --argjson early "$early_busy" \
+        '{used_pct:$used,would_fire:true,trigger:$trigger,mode:$mode,prompt_file:$prompt_file,grace_s:$grace_s,burn_x100:$burn,forecast_min:$fc,early_busy:($early==1)}')"
   if [ "$fire_mode" = busy ]; then
     wr_os_notify "Claude desk BUSY+HIGH would-recycle" "desk ${UUID:-$SID} at ${used}% mid-work (${hold_reason}); drained brief at ${pf}"
     wr_push_page "BUSY+HIGH would-recycle (${DESK_ROLE}) ${used}%: drained brief at ${pf} — /handoff now or arm --busy-force"
@@ -675,12 +774,13 @@ printf '%s' "$((N + 1))" > "$capf" 2>/dev/null || true       # bump advisory cap
 log_idl fired "waiting-recycle" \
   "$(jq -cn --arg trigger "$( [ "$over_threshold" = 1 ] && echo threshold || echo behavioral )" --arg mode "$fire_mode" \
       --argjson used "$used" --argjson rot "$rot_valid" --argjson count "$((N+1))" --argjson max "$MAX" \
-      '{trigger:$trigger,mode:$mode,used_pct:$used,rot:$rot,count:$count,max:$max}')"
+      --argjson burn "$burn_x100" --argjson fc "$forecast_min" --arg conv "${conv_age:-}" \
+      '{trigger:$trigger,mode:$mode,used_pct:$used,rot:$rot,count:$count,max:$max,burn_x100:$burn,forecast_min:$fc,conv_age_s:$conv}')"
 
 if [ "$fire_mode" = busy ]; then
   # BUSY advisory — mid-work at high context. Urge a self-/handoff NOW (it captures the same pings); if
   # ignored, the shadow would-force (or, opted-in, the exec) escalates after grace.
-  adv="⟳ BUSY + HIGH-CONTEXT AUTO-RECYCLE — you are mid-work (${hold_reason}) at ${used}% ≥ ${T_BUSY}%, climbing toward the 90% auto-compact wall. RECYCLE NOW while you still can cleanly: run /handoff — it captures the live state INCLUDING the pending pings/requests (mailbox + inbound wait-contracts) into the payload and fires handoff-fire.sh --recycle so the SUCCESSOR PANE IS THE CONTINUATION with nothing dropped. Commit any in-hand edit first (the working tree survives the recycle, but a fresh desk shouldn't inherit an unexplained diff). If you ignore this, the deterministic drain-and-recycle escalates in ${GRACE_S}s. Kill-switch: \`waiting-recycle.sh clear\` (this desk) / \`waiting-recycle.sh kill\` (global). (busy auto-recycle advisory $((N+1))/${MAX})"
+  adv="⟳ BUSY + HIGH-CONTEXT AUTO-RECYCLE — ${trig}: you are climbing toward the 90% auto-compact wall. RECYCLE NOW while you still can cleanly: run /handoff — it captures the live state INCLUDING the pending pings/requests (mailbox + inbound wait-contracts) into the payload and fires handoff-fire.sh --recycle so the SUCCESSOR PANE IS THE CONTINUATION with nothing dropped. Commit any in-hand edit first (the working tree survives the recycle, but a fresh desk shouldn't inherit an unexplained diff). If you ignore this, the deterministic drain-and-recycle escalates in ${GRACE_S}s. Kill-switch: \`waiting-recycle.sh clear\` (this desk) / \`waiting-recycle.sh kill\` (global). (busy auto-recycle advisory $((N+1))/${MAX})"
 else
   adv="⟳ MONITORING AUTO-RECYCLE — you are at a quiet monitoring boundary (${trig}). A watching desk accrues low-value context that rots your recall of the load-bearing orchestration state. RECYCLE NOW via your existing self-recycle path: run /handoff — it captures the live state (fired sessions, pending pings, wave/merge state, decisions) into the payload and fires handoff-fire.sh --recycle so the SUCCESSOR PANE IS THE CONTINUATION and this bloated context is discarded. Do it as this turn's next action. IF instead you actually hold in-hand write-work or a genuine open decision (you should not — the tree is clean and no blocker was detected), do NOT recycle: surface it. If you ignore this, the deterministic fire escalates in ${GRACE_S}s. Kill-switch: \`waiting-recycle.sh clear\` (this desk) / \`waiting-recycle.sh kill\` (global). (auto-recycle advisory $((N+1))/${MAX})"
 fi
