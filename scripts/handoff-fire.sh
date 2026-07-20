@@ -994,15 +994,16 @@ MSG
   refresh_roles_for "$CC_ROLES_DIR" "$SC_SID" "$SC_SUCCESSOR"
   # Succession announce — INTO the survivor, BEFORE the close chain starts. The report emitted
   # in the closing pane dies with the pane (observed 23:03 2026-07-13); the successor's
-  # transcript + mailbox are where the operator/its model will actually look. Composer inject
-  # is visible and queues safely into a busy session; failure degrades loudly but does NOT
-  # abort the close (mailbox record + post-close focus still carry the succession).
+  # v2: cc-notify ENQUEUES to the successor's inbox (drained as context at its next boundary / by its
+  # cc-await-ping watcher) — NO keystroke into its composer, so it can never corrupt the successor's
+  # input. Failure degrades loudly but does NOT abort the close (the inbox record + post-close focus
+  # still carry the succession).
   if [ -n "$SC_SUCCESSOR" ] && [ "$SC_NO_NOTIFY" = 0 ]; then
     if [ -x "$HOME/.claude/bin/cc-notify" ]; then
       if "$HOME/.claude/bin/cc-notify" "$SC_SUCCESSOR" "HANDOFF-SUCCESSION: predecessor pane $SC_SID is self-closing now ($(date '+%H:%M:%S')) — you are the active continuation of its work; the operator's view will be focused here. Close log: $SC_LOG" >/dev/null 2>&1; then
-        echo "→ succession announced into $SC_SUCCESSOR (composer + mailbox)"
+        echo "→ succession announced into $SC_SUCCESSOR's inbox (drains as context at its next boundary)"
       else
-        echo "⚠ cc-notify to successor did not verify (strand/closed?) — mailbox record + post-close focus still carry the succession" >&2
+        echo "⚠ cc-notify to successor did not land (unresolvable/unwritable?) — mailbox record + post-close focus still carry the succession" >&2
       fi
     else
       echo "⚠ cc-notify unavailable — succession carried by post-close focus only" >&2
