@@ -30,7 +30,21 @@
 set -uo pipefail
 
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# SCRIPT_DIR must be SYMLINK-RESOLVED: it anchors $BRIEF (the canned boot brief in the checkout),
+# and the live entry point ~/.claude/scripts/desk-invariant.sh is a per-file symlink INTO the
+# checkout. Unresolved, "$SCRIPT_DIR/../docs/…" became ~/.claude/docs/… — a path that does not
+# exist — so fire_replacement()'s `[ -f "$BRIEF" ]` guard failed and the desk-existence invariant
+# could NOT respawn a dead desk ("nothing can CREATE a desk", a17's organ, silently broken). Prod
+# survived only because launchd/com.claude.desk-invariant.plist passes an absolute
+# DESK_INVARIANT_BRIEF override; ANY other entry point (a hand-run sweep, a new caller) hit the
+# dead default. bash 3.2-safe — macOS has no `readlink -f`.
+_di_self="${BASH_SOURCE[0]}"
+while [ -L "$_di_self" ]; do
+  _di_dir="$(cd -P "$(dirname "$_di_self")" 2>/dev/null && pwd)" || break
+  _di_self="$(readlink "$_di_self")"
+  case "$_di_self" in /*) ;; *) _di_self="$_di_dir/$_di_self" ;; esac
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$_di_self")" && pwd)"
 
 # ── config (ALL overridable — the override surface is what makes --selftest hermetic) ─────────────
 ROLE="${DESK_INVARIANT_ROLE:-desk}"
