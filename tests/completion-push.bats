@@ -15,7 +15,7 @@ setup() {
 stub() { # <mode> — a stub cc-notify driving cc-announce's outcome
   local p="$BATS_TEST_TMPDIR/notify-$1.sh" body
   case "$1" in
-    verified)   body='echo "cc-notify: submit VERIFIED" >&2; exit 0' ;;
+    verified)   body='echo "cc-notify: delivered to inbox [T] (live session, wake-path armed)" >&2; exit 0' ;;
     unresolved) body='echo "cc-notify: cannot resolve target" >&2; exit 3' ;;
   esac
   { printf '#!/bin/bash\n'; printf '%s\n' "$body"; } > "$p"; chmod +x "$p"; echo "$p"
