@@ -25,10 +25,15 @@ printf '%s\n' "$orig" >> "$(dirname "$0")/fire.log"
 exit 0
 FIRE
   chmod +x "$C/stubs/fire"
+  # cc-notify stub (F7 inbox transport): log argv + emit the "wake-path armed" verdict handle_stale greps.
+  { printf '#!/bin/bash\n'; printf 'printf "%%s\\n" "$*" >> "%s/stubs/ccnotify.log"\n' "$C"
+    printf 'echo "cc-notify: delivered to inbox [T] (live session, wake-path armed)" >&2\nexit 0\n'; } > "$C/stubs/ccnotify"
+  chmod +x "$C/stubs/ccnotify"
   export DESK_INVARIANT_ROLE=desk DESK_INVARIANT_ROLES_DIR="$C/roles" \
     DESK_INVARIANT_REGISTRY_DIR="$C/registry" DESK_INVARIANT_PROJECT_ROOTS="$C/projects" \
     DESK_INVARIANT_WAIT_DIR="$C/wait" DESK_INVARIANT_STATE_DIR="$C/state" DESK_INVARIANT_IDL="$C/idl.jsonl" \
     DESK_INVARIANT_IT2="$C/stubs/it2" DESK_INVARIANT_NOTIFY="$C/stubs/notify" DESK_INVARIANT_PUSH="$C/stubs/push" \
+    DESK_INVARIANT_NOTIFY_BIN="$C/stubs/ccnotify" \
     DESK_INVARIANT_FIRE_BIN="$C/stubs/fire" DESK_INVARIANT_CANNED_CWD="$C" DESK_INVARIANT_BRIEF="$C/brief.md" \
     DESK_INVARIANT_STALE_MIN=45
   : > "$C/brief.md"
@@ -44,11 +49,11 @@ transcript() { # <sid> <iso-ts> [cap-text]
 }
 disp() { tail -1 "$C/idl.jsonl" | jq -r '.disposition'; }
 
-@test "selftest passes and runs all 18 checks (a zero-check suite must not 'pass')" {
+@test "selftest passes and runs all 20 checks (a zero-check suite must not 'pass')" {
   run "$DI" --selftest
   [ "$status" -eq 0 ]
   n_ok="$(printf '%s' "$output" | grep -c '^  ok ')"
-  [ "$n_ok" -eq 18 ]
+  [ "$n_ok" -eq 20 ]
   ! printf '%s' "$output" | grep -q '^  FAIL'
 }
 
@@ -70,7 +75,7 @@ disp() { tail -1 "$C/idl.jsonl" | jq -r '.disposition'; }
   [ ! -f "$C/stubs/fire.log" ]
 }
 
-@test "stunned: alive pid + stale turn + 'monthly spend limit' text → page + re-prompt" {
+@test "stunned: alive pid + stale turn + 'monthly spend limit' → page + inbox resume, NO keystroke (F7)" {
   printf 'U2\n' > "$C/roles/desk"
   sleep 60 & local sp=$!
   row U2 S2 "$sp"
@@ -78,7 +83,8 @@ disp() { tail -1 "$C/idl.jsonl" | jq -r '.disposition'; }
   run "$DI" --once
   kill "$sp" 2>/dev/null || true
   [ "$(disp)" = stunned ]
-  [ -f "$C/stubs/it2.log" ]
+  [ -f "$C/stubs/ccnotify.log" ]      # resume enqueued to the inbox
+  [ ! -f "$C/stubs/it2.log" ]         # F7: NEVER keystroked the live composer
   [ -f "$C/stubs/push.log" ]
 }
 
