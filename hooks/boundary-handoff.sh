@@ -22,8 +22,19 @@
 # 2.1.207; the latch is what makes a block ADVISORY-not-looping — an UNLATCHED block is the banned
 # infinite-loop anti-pattern). Exit 0 ALWAYS: a Stop hook must never cost a session.
 #
+# ── CONTEXT-ECON (2026-07-20 — docs/research/context-econ-2026-07-20.md) ──
+# Two continuous signals from hooks/lib/context-econ.sh sharpen the static threshold for ALL sessions:
+#   • FORECAST-EARLY fire — used ≥ T_MIN (55) AND burn-forecast ≤ LEAD_MIN (20) minutes to the wall ⇒
+#     advise BEFORE the static T (73): at high burn a builder can cross 73→90 inside one long turn,
+#     and a Stop is exactly the pause-point to act at. Unknown forecast ⇒ static behavior, unchanged.
+#   • CONVERSATION-AWARE WORDING — a fresh interactive turn (< CONV_S) means an exchange is in flight:
+#     the advisory still fires (at ≥73% it must not vanish mid-dialogue) but tells the model to finish
+#     the exchange + persist its decisions FIRST, then /handoff at the exchange's natural end. Wording,
+#     never suppression; the model is the pause-point judge.
+#
 # Env seams (tests): CC_TELEMETRY_DIR · CC_IDL · CC_BOUNDARY_T · CC_BOUNDARY_REARM_DELTA ·
-#                    CC_BOUNDARY_LATCH_DIR · CC_BOUNDARY_LOGFILE · CC_CONTINUE_SENTINEL
+#                    CC_BOUNDARY_LATCH_DIR · CC_BOUNDARY_LOGFILE · CC_CONTINUE_SENTINEL ·
+#                    CC_BOUNDARY_T_MIN · CC_BOUNDARY_LEAD_MIN · CC_BOUNDARY_CONV_S · CC_CE_*
 #
 # ── CC_BOUNDARY_DIRS_NOTE (G-P6-5b / a19 live table) — REGISTER ON ALL FOUR CONFIG DIRS ──
 # The desk runs on .claude-secondary / -tertiary, which today carry NO boundary hook at all; it
@@ -54,6 +65,9 @@ set -uo pipefail
 T="${CC_BOUNDARY_T:-73}"                          # fire threshold, used_pct (≤73; autocompact at 90, D-F)
 AGE_MAX=180                                        # abstain if telemetry older than this (can't trust stale)
 REARM_DELTA="${CC_BOUNDARY_REARM_DELTA:-10}"       # B-2 second re-arm dimension (used_pct climb)
+T_MIN="${CC_BOUNDARY_T_MIN:-55}"                   # context-econ: forecast-early fire never below this fill
+LEAD_MIN="${CC_BOUNDARY_LEAD_MIN:-20}"             # context-econ: forecast ≤ this many min to the wall ⇒ early fire
+CONV_S="${CC_BOUNDARY_CONV_S:-900}"                # context-econ: an interactive turn fresher than this = exchange in flight
 IDL="${CC_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
 LATCH_DIR="${CC_BOUNDARY_LATCH_DIR:-$HOME/.claude/autonomy/boundary-latch}"
 TEL_DIR="${CC_TELEMETRY_DIR:-/tmp/cc-telemetry}"
@@ -68,8 +82,18 @@ _blib="$_bscd/lib/continue-sentinel.sh"
 # shellcheck disable=SC1091  # source path resolved at runtime; static-follow needs -x, ship-land's gate runs without it → SC1091(info) would red a solo change to this file
 [ -f "$_blib" ] && . "$_blib" 2>/dev/null || true
 
+# context-econ signal lib (burn/forecast + interactive recency) — same resolution ladder; a missing
+# lib degrades every new signal to the static legacy behavior via the command -v guards below.
+_celib="$_bscd/lib/context-econ.sh"
+[ -f "$_celib" ] || _celib="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/context-econ.sh"
+[ -f "$_celib" ] || _celib="$HOME/.claude/hooks/lib/context-econ.sh"
+# shellcheck source=lib/context-econ.sh
+# shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+[ -f "$_celib" ] && . "$_celib" 2>/dev/null || true
+
 stdin_json="$(cat 2>/dev/null || true)"
 sid="$(printf '%s' "$stdin_json" | jq -r '.session_id // empty' 2>/dev/null || true)"
+tp="$(printf '%s' "$stdin_json" | jq -r '.transcript_path // empty' 2>/dev/null || true)"
 
 # ── B-3: one IDL line per invocation. Never fails the hook. ──
 log_idl() { # $1=disposition  $2=reason  $3=extra JSON OBJECT (optional, jq-built {…}; default {})
@@ -99,7 +123,25 @@ age=$(( now - ts ))
 [ "$age" -le "$AGE_MAX" ] || abstain "stale-telemetry:${age}s"
 used="$(jq -r '.used_pct // 0' "$tel" 2>/dev/null || echo 0)"; used="${used%.*}"
 case "$used" in ''|*[!0-9]*) used=0 ;; esac
-[ "$used" -ge "$T" ] || abstain "below-threshold:${used}<${T}"
+
+# ── context-econ: sample velocity + forecast; fire EARLY (used ≥ T_MIN ∧ forecast ≤ LEAD_MIN) or at
+#    the static T as before. Unknown forecast (-1) never triggers — static behavior preserved. ──
+burn_x100=0; forecast_min=-1
+if command -v ce_sample >/dev/null 2>&1; then
+  ce_sample "$tel" || true
+  _bf="$(ce_burn "$tel" 2>/dev/null || printf '0 -1')"
+  burn_x100="${_bf%% *}"; forecast_min="${_bf##* }"
+  case "$burn_x100" in ''|*[!0-9]*) burn_x100=0 ;; esac
+  case "$forecast_min" in -1) ;; ''|*[!0-9]*) forecast_min=-1 ;; esac
+fi
+early=0
+if [ "$used" -lt "$T" ]; then
+  if [ "$used" -ge "$T_MIN" ] && [ "$forecast_min" -ge 0 ] && [ "$forecast_min" -le "$LEAD_MIN" ]; then
+    early=1
+  else
+    abstain "below-threshold:${used}<${T}"
+  fi
+fi
 
 # ── repo resolution (session's cwd; --git-common-dir so linked worktrees resolve the shared gitdir) ──
 cwd="$(jq -r '.cwd // empty' "$tel" 2>/dev/null || true)"
@@ -158,11 +200,29 @@ if [ -f "$latch" ]; then
   [ "$(( used - last_used ))" -ge "$REARM_DELTA" ] || abstain "latched:used=${used},last=${last_used},need=+${REARM_DELTA}"
 fi
 
+# ── context-econ: is an exchange in flight? (wording only — never suppression; see header) ──
+conv_age=""
+if command -v ce_last_interactive_age >/dev/null 2>&1 && [ -n "$tp" ]; then
+  case "$tp" in "~"*) tp="$HOME${tp#\~}" ;; esac
+  [ -f "$tp" ] && conv_age="$(ce_last_interactive_age "$tp")"
+  case "$conv_age" in *[!0-9]*) conv_age="" ;; esac
+fi
+
 # ── FIRE — record the fill at fire-time (the re-arm baseline), log, then advise via latched block ──
 printf '%s' "$used" > "$latch" 2>/dev/null || true
 log_idl fired "past-boundary" \
   "$(jq -cn --argjson used "$used" --argjson threshold "$T" --arg head "${head:0:8}" \
-      '{used_pct:$used,threshold:$threshold,head:$head}')"
-reason="⚑ Boundary reached — context ${used}% ≥ ${T}% at a committed + green boundary (HEAD ${head:0:8}). Run the /handoff rails now to preserve state into a successor before auto-compaction. (Advisory: if you have a genuine reason to keep working, do so — this re-arms at +${REARM_DELTA}% fill.)"
+      --argjson burn "$burn_x100" --argjson fc "$forecast_min" --argjson early "$early" --arg conv "${conv_age:-}" \
+      '{used_pct:$used,threshold:$threshold,head:$head,burn_x100:$burn,forecast_min:$fc,early:($early==1),conv_age_s:$conv}')"
+if [ "$early" = 1 ]; then
+  why="context ${used}% BURNING toward the ${CC_CE_WALL:-88}% auto-compact wall — forecast ≤${forecast_min}min at the observed rate"
+else
+  why="context ${used}% ≥ ${T}%"
+fi
+reason="⚑ Boundary reached — ${why} at a committed + green boundary (HEAD ${head:0:8}). Run the /handoff rails now to preserve state into a successor before auto-compaction. (Advisory: if you have a genuine reason to keep working, do so — this re-arms at +${REARM_DELTA}% fill.)"
+if [ -n "$conv_age" ] && [ "$conv_age" -lt "$CONV_S" ] 2>/dev/null; then
+  reason="${reason}
+⚑ An operator/peer exchange is in flight (last interactive turn ${conv_age}s ago): do NOT cut it — finish the exchange, persist the decisions it produced (dod-persist / plan / memory), THEN run /handoff at its natural end."
+fi
 jq -nc --arg r "$reason" '{decision:"block",reason:$r,systemMessage:$r}'
 exit 0
