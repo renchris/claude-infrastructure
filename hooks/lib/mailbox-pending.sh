@@ -1,120 +1,125 @@
 #!/bin/bash
-# mailbox-pending.sh — shared inbox-cursor predicates for the v2 non-keystroke comms channel.
+# mailbox-pending.sh — inbox-cursor primitives for the v2 non-keystroke comms channel.
 #
-# ONE cursor, ONE truth. A session's inbox is ~/.claude/mailbox/<uuid>.md (append-only, one
-# message per line, written by cc-notify). Delivered-vs-pending is tracked by <uuid>.seen — a
-# single integer LINE COUNT. This is the SAME cursor scripts/handoff-disposition.sh reads
-# (mailbox_pending) and advances (--ack), so the drain hook and the disposition helper agree by
-# construction. The line-count method here (grep -c '') is byte-identical to handoff-disposition's,
-# so both compute the SAME cursor for the same file state — never drift them.
+# TWO cursors, one truth (critique fix A — split delivery from ack so the fail-loud guard can SEE a loss
+# the delivery cursor would hide):
+#   <uuid>.seen   EMITTED  — the drain/fold has SURFACED lines up to here (don't re-deliver / re-block).
+#                            Shared with handoff-disposition.sh (mailbox_pending) + its --ack.
+#   <uuid>.acked  CONSUMED — the model PROVABLY took a turn carrying these (reliable channels advance it
+#                            immediately; the Stop-fold lags one cycle). cc-inbox-guard alarms on
+#                            acked < EOF — NEVER on the eager `seen` — so a dropped/undrained line is loud.
+#   acked ≤ seen ≤ lines is the invariant (both clamped on read).
 #
-# Sourced by:
-#   hooks/mailbox-drain.sh            — the delivery drain (SessionStart / UserPromptSubmit / Stop)
-#   the Stop-blocker yield-guards     — so at most one Stop hook blocks when mail is pending
+# The inbox <uuid>.md is append-only (cc-notify), one message per line "<ISO> [<from>] <message>".
+# Line count is grep -c '' EVERYWHERE (matches handoff-disposition; wc -l diverges on a non-newline-
+# terminated final line — a torn concurrent append — so never mix the two: critique F1).
 #
-# Functions (all fail-safe: a missing uuid / dir / file → "no pending", never an error):
-#   mailbox_file   <uuid>            → echo the .md path
-#   mailbox_lines  <uuid>            → current line count of <uuid>.md (0 if absent)
-#   mailbox_seen   <uuid>            → the .seen cursor, clamped to [0, lines] (0 if absent/garbage)
-#   mailbox_pending_count <uuid>     → max(0, lines - seen)
-#   mailbox_has_pending  <uuid>      → exit 0 iff pending_count > 0
-#   mailbox_advance_seen <uuid> <n>  → write cursor n (atomic tmp+mv); n defaults to current lines
-#   mailbox_mark_draining <uuid>     → touch the breadcrumb (call BEFORE advancing .seen on Stop)
-#   mailbox_recently_drained <uuid>  → exit 0 iff breadcrumb younger than CC_DRAIN_BREADCRUMB_TTL
-#   mailbox_defer_to_drain <uuid>    → exit 0 iff has_pending OR recently_drained (the yield predicate)
+# Atomicity (critique F1 — the desk is a HOT target: reaper/supervisor/any peer append at any instant):
+# every cursor read-modify-write runs under a portable mkdir lock (macOS has no flock). mailbox_take
+# snapshots the window AND advances under ONE lock hold, so a concurrent append is never marked seen
+# without being delivered. The lock self-breaks if stale (holder died) and gives up after ~2s degrading
+# to lock-free (risking a benign DUP, never a hang — a hook must never block).
 #
-# Why the breadcrumb: on a Stop pass the drain advances .seen; another Stop-blocker checking
-# "has_pending" AFTER that advance would see none and wrongly proceed to block too. The drain marks
-# the breadcrumb BEFORE advancing, and blockers yield on "pending OR recently-drained", so the
-# decision is order-independent under parallel hook execution and self-expires (TTL) after the pass.
+# Functions (fail-safe: bad uuid / missing dir → "nothing", never an error):
+#   mailbox_lines  <uuid>            current line count (grep -c '')
+#   mailbox_seen   <uuid>            emitted cursor, clamped [0, lines]  (past-EOF ⇒ 0: re-deliver, F11)
+#   mailbox_acked  <uuid>            consumed cursor, clamped [0, seen]
+#   mailbox_pending_count  <uuid>    lines - seen   (undrained — the drain/fold signal)
+#   mailbox_unacked_count  <uuid>    lines - acked  (unconsumed — the GUARD signal)
+#   mailbox_has_pending    <uuid>    exit 0 iff pending_count > 0
+#   mailbox_take <uuid> [ack_now]    LOCKED: print lines (seen, EOF] to stdout; advance seen=EOF; if
+#                                    ack_now=1 also acked=EOF. Return 0 = delivered+committed · 1 = nothing
+#                                    new (no body) · 2 = body printed but the cursor WRITE FAILED — the
+#                                    caller must escalate + still deliver, never silently drop (F9).
+#   mailbox_promote_acked  <uuid>    LOCKED: acked=seen (the Stop-fold lag: last cycle's emitted is now consumed)
 #
-# Env: CC_MAILBOX_DIR (default ~/.claude/mailbox) · CC_DRAIN_BREADCRUMB_TTL seconds (default 2).
-# bash 3.2-safe. No `set -e` (sourced into hooks that must not inherit errexit).
+# Env: CC_MAILBOX_DIR (default ~/.claude/mailbox) · CC_MBX_LOCK_WAIT_MS (2000) · CC_MBX_LOCK_STALE_S (10).
+# bash 3.2-safe. No `set -e`.
 
 _mbx_dir() { printf '%s' "${CC_MAILBOX_DIR:-$HOME/.claude/mailbox}"; }
 _mbx_valid_uuid() { case "${1:-}" in ''|*[!0-9A-Fa-f-]*) return 1 ;; *) return 0 ;; esac; }
-
 mailbox_file() { printf '%s/%s.md' "$(_mbx_dir)" "${1:-}"; }
+_mbx_int() { case "${1:-}" in ''|*[!0-9]*) echo 0 ;; *) echo "$1" ;; esac; }
 
-# grep -c '' counts lines identically to handoff-disposition.sh (every line matches ''), and matches
-# wc -l for files with a trailing newline — cc-notify always writes '…\n', so they never diverge.
-mailbox_lines() {
-  local u="${1:-}" f
-  _mbx_valid_uuid "$u" || { echo 0; return; }
-  f="$(mailbox_file "$u")"
-  [ -f "$f" ] || { echo 0; return; }
-  local n; n="$(grep -c '' "$f" 2>/dev/null)"
-  case "$n" in ''|*[!0-9]*) n=0 ;; esac
-  echo "$n"
+# ── portable mkdir lock (macOS-safe; flock is Linux-only) ─────────────────────────────────────────
+_mbx_lock() { # <uuid> → 0 acquired, 1 gave up (caller proceeds lock-free: dup-risk, never a hang)
+  local u="$1" ld waited=0 step=50 max="${CC_MBX_LOCK_WAIT_MS:-2000}" stale="${CC_MBX_LOCK_STALE_S:-10}"
+  mkdir -p "$(_mbx_dir)" 2>/dev/null || return 1
+  ld="$(_mbx_dir)/.$u.lock"
+  while ! mkdir "$ld" 2>/dev/null; do
+    local mt now age; mt="$(stat -f %m "$ld" 2>/dev/null || stat -c %Y "$ld" 2>/dev/null || echo 0)"
+    now="$(date +%s 2>/dev/null || echo 0)"; age=$(( now - $(_mbx_int "$mt") ))
+    [ "$age" -ge "$stale" ] 2>/dev/null && { rm -rf "$ld" 2>/dev/null; continue; }   # holder died → break
+    [ "$waited" -ge "$max" ] && return 1
+    sleep 0.05 2>/dev/null || sleep 1; waited=$(( waited + step ))
+  done
+  return 0
+}
+_mbx_unlock() { rm -rf "$(_mbx_dir)/.${1:-}.lock" 2>/dev/null || true; }
+
+_mbx_read_int_file() { local f="$1" v=0; [ -f "$f" ] && v="$(head -n1 "$f" 2>/dev/null | tr -dc '0-9')"; _mbx_int "$v"; }
+# atomic write; echoes nothing, returns 1 on failure (F9 — the caller must be able to SEE a write fail).
+_mbx_write_int() {
+  local f="$1" n="$2" dir tmp; dir="$(dirname "$f")"
+  mkdir -p "$dir" 2>/dev/null || return 1
+  tmp="$dir/.$(basename "$f").$$.tmp"
+  printf '%s\n' "$n" > "$tmp" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; return 1; }
+  mv -f "$tmp" "$f" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; return 1; }
+  return 0
 }
 
-mailbox_seen() {
-  local u="${1:-}" f seen lines
+mailbox_lines() {
+  local u="${1:-}" f n
   _mbx_valid_uuid "$u" || { echo 0; return; }
-  seen="$(_mbx_dir)/$u.seen"
-  local p; p=0
-  [ -f "$seen" ] && p="$(head -n1 "$seen" 2>/dev/null | tr -dc '0-9')"
-  case "$p" in ''|*[!0-9]*) p=0 ;; esac
-  # Clamp to [0, lines]: a cursor AHEAD of EOF (file rotated/truncated, or garbage) must never hide
-  # real lines — treat as 0 so a regrown mailbox re-delivers rather than silently swallowing. Bias to
-  # no-loss over a rare benign re-delivery (notifications are idempotent to read).
-  lines="$(mailbox_lines "$u")"
+  f="$(mailbox_file "$u")"; [ -f "$f" ] || { echo 0; return; }
+  n="$(grep -c '' "$f" 2>/dev/null)"; _mbx_int "$n"
+}
+
+mailbox_seen() { # emitted cursor, clamped [0, lines]; a cursor PAST EOF (rotate/GC/recycle) ⇒ 0 (re-deliver, F11)
+  local u="${1:-}" p lines
+  _mbx_valid_uuid "$u" || { echo 0; return; }
+  p="$(_mbx_read_int_file "$(_mbx_dir)/$u.seen")"; lines="$(mailbox_lines "$u")"
   [ "$p" -gt "$lines" ] 2>/dev/null && p=0
   echo "$p"
 }
 
-mailbox_pending_count() {
-  local u="${1:-}" lines seen
-  lines="$(mailbox_lines "$u")"; seen="$(mailbox_seen "$u")"
-  local d=$(( lines - seen ))
-  [ "$d" -lt 0 ] && d=0
-  echo "$d"
+mailbox_acked() { # consumed cursor, clamped [0, seen]
+  local u="${1:-}" a seen
+  _mbx_valid_uuid "$u" || { echo 0; return; }
+  a="$(_mbx_read_int_file "$(_mbx_dir)/$u.acked")"; seen="$(mailbox_seen "$u")"
+  [ "$a" -gt "$seen" ] 2>/dev/null && a="$seen"
+  echo "$a"
 }
 
-mailbox_has_pending() { [ "$(mailbox_pending_count "${1:-}")" -gt 0 ]; }
+mailbox_pending_count() { local d=$(( $(mailbox_lines "${1:-}") - $(mailbox_seen "${1:-}") )); [ "$d" -lt 0 ] && d=0; echo "$d"; }
+mailbox_unacked_count() { local d=$(( $(mailbox_lines "${1:-}") - $(mailbox_acked "${1:-}") )); [ "$d" -lt 0 ] && d=0; echo "$d"; }
+mailbox_has_pending()   { [ "$(mailbox_pending_count "${1:-}")" -gt 0 ]; }
 
-mailbox_advance_seen() {
-  local u="${1:-}" n="${2:-}"
-  _mbx_valid_uuid "$u" || return 0
-  [ -n "$n" ] || n="$(mailbox_lines "$u")"
-  case "$n" in ''|*[!0-9]*) return 0 ;; esac
-  local dir seen tmp; dir="$(_mbx_dir)"; seen="$dir/$u.seen"
-  mkdir -p "$dir" 2>/dev/null || return 0
-  tmp="$dir/.$u.seen.$$.tmp"
-  if printf '%s\n' "$n" > "$tmp" 2>/dev/null; then
-    mv -f "$tmp" "$seen" 2>/dev/null || rm -f "$tmp" 2>/dev/null
-  else
-    rm -f "$tmp" 2>/dev/null
-  fi
-}
-
-_mbx_breadcrumb() { printf '%s/.%s.draining' "$(_mbx_dir)" "${1:-}"; }
-
-mailbox_mark_draining() {
-  local u="${1:-}" bc
-  _mbx_valid_uuid "$u" || return 0
-  mkdir -p "$(_mbx_dir)" 2>/dev/null || return 0
-  bc="$(_mbx_breadcrumb "$u")"
-  : > "$bc" 2>/dev/null || true
-}
-
-mailbox_recently_drained() {
-  local u="${1:-}" bc ttl mt now
+# LOCKED atomic take: snapshot the window (seen, EOF], print it, advance seen=EOF (never regress), and —
+# for a reliable channel — acked=EOF too. Emitting is the CALLER's job (it wraps the body in JSON); the
+# guard's acked cursor is what makes a post-print emit-failure loud, so advancing seen inside the lock is
+# safe (F1 atomicity) without needing emit-before-advance for the reliable path. Returns 1 if the seen
+# write FAILED (F9): the caller must escalate, not re-loop on the same mail.
+mailbox_take() { # <uuid> [ack_now]  (ack_now=1 ⇒ reliable channel: advance acked too)
+  local u="${1:-}" ack_now="${2:-0}" f prev cur body rc=0
   _mbx_valid_uuid "$u" || return 1
-  bc="$(_mbx_breadcrumb "$u")"
-  [ -f "$bc" ] || return 1
-  ttl="${CC_DRAIN_BREADCRUMB_TTL:-2}"
-  mt="$(stat -f %m "$bc" 2>/dev/null || stat -c %Y "$bc" 2>/dev/null || echo 0)"
-  now="$(date +%s 2>/dev/null || echo 0)"
-  case "$mt" in ''|*[!0-9]*) mt=0 ;; esac
-  [ "$(( now - mt ))" -le "$ttl" ]
+  f="$(mailbox_file "$u")"
+  _mbx_lock "$u" || true                       # gave up ⇒ proceed lock-free (dup-risk, never a hang)
+  prev="$(mailbox_seen "$u")"; cur="$(mailbox_lines "$u")"
+  if [ "$cur" -le "$prev" ]; then _mbx_unlock "$u"; return 1; fi   # nothing new
+  body="$(tail -n +"$((prev + 1))" "$f" 2>/dev/null | head -n "$(( cur - prev ))")"
+  printf '%s' "$body"
+  if ! _mbx_write_int "$(_mbx_dir)/$u.seen" "$cur"; then rc=2; fi   # F9: body printed, cursor write FAILED
+  [ "$ack_now" = 1 ] && [ "$rc" = 0 ] && _mbx_write_int "$(_mbx_dir)/$u.acked" "$cur"
+  _mbx_unlock "$u"
+  return "$rc"
 }
 
-# The yield predicate the OTHER Stop hooks call: yield (exit 0) iff mail is pending OR the drain just
-# fired this pass. Order-independent + self-expiring — see the breadcrumb note above.
-mailbox_defer_to_drain() {
-  local u="${1:-}"
-  mailbox_has_pending "$u" && return 0
-  mailbox_recently_drained "$u" && return 0
-  return 1
+mailbox_promote_acked() { # <uuid> — the Stop-fold lag: everything emitted last cycle is now consumed (a turn ran)
+  local u="${1:-}" seen
+  _mbx_valid_uuid "$u" || return 0
+  _mbx_lock "$u" || true
+  seen="$(mailbox_seen "$u")"
+  _mbx_write_int "$(_mbx_dir)/$u.acked" "$seen" || true
+  _mbx_unlock "$u"
 }
