@@ -1,8 +1,18 @@
 ---
-status: complete
+status: in-progress
 ---
 
 # Two-Way Session Comms — Implementation Plan
+
+> **v2 (2026-07-20) — eliminate keystroke injection.** The v1 feature below is landed and works, but its
+> transport is the problem v2 fixes: every delivery (`cc-notify`, reaper surface, supervisor page,
+> `--notify-back`, `cc-announce`) lands via **it2 keystroke injection** into the target pane, which RACES
+> the user's live input — at a bash prompt the surface text runs as a command (`(eval):1: parse error`,
+> dozens hit the operator today); at a Claude prompt it corrupts their half-typed message + cursor. v2
+> moves delivery to a **durable inbox drained at a safe boundary via hooks** (arrives as context, never as
+> keystrokes) with the **existing `cc-await-ping` background watcher** as the non-keystroke idle-wake. See
+> **§ v2 — Eliminate keystroke injection** at the end of this doc. The v1 sections below are unchanged
+> (historical); read them for the mailbox/registry primitives v2 builds on.
 
 **Created**: 2026-07-10 · **Repo**: `claude-infrastructure` · **Research**:
 [`docs/research/HANDOFF_BACKCHANNEL_2026-07-10.md`](../research/HANDOFF_BACKCHANNEL_2026-07-10.md)
@@ -188,9 +198,147 @@ spawn-after-merge), never parallel — the deps forbid it. Either way: commit pe
     of `cc-notify`), and the branch also carries unrelated `accounts`/`limit-recover`/`hooks` commits
     out of this plan's scope. cc-backlog `9775f356eb03` closed with the landed SHAs as evidence.
 
-## Resume
-**Nothing to resume — this plan is COMPLETE and landed on `origin/main`** (see the 2026-07-18 Status
-log entry for SHAs + verification). Do NOT rebuild, and do NOT land the stale
-`feat/two-way-session-comms` branch (superseded — it would revert the hardening). To re-verify:
+## Resume (v1)
+**v1 is COMPLETE and landed on `origin/main`** (see the 2026-07-18 Status log entry for SHAs +
+verification). Do NOT rebuild v1, and do NOT land the stale `feat/two-way-session-comms` branch
+(superseded). v2 (below) is the ACTIVE work. To re-verify v1:
 `bats tests/{cc-notify,notify-back,session-registry}.bats` + `shellcheck bin/cc-notify bin/cc-sessions
 bin/cc-await-ping hooks/session-register.sh hooks/session-deregister.sh`.
+
+---
+
+# § v2 — Eliminate keystroke injection (2026-07-20)
+
+**Scope (frozen):** a notification to a Claude session ALWAYS lands as a message/context the session
+reads, and NEVER injects into the user's live input (text + cursor), whether the pane is at a Claude
+prompt OR a bash prompt, and robust to pane state (idle, busy, mid-command, actively typing). Migrate
+the delivery paths (`cc-notify` → reaper surface, supervisor page, `--notify-back`, `cc-announce`) onto
+the safe channel. Keep a **fail-loud guard** (a dropped/undelivered message alarms, never silently
+vanishes). **Preserve the wake** (the desk is still woken to triage) — via a non-keystroke channel.
+Tests: delivery-lands-as-message-not-keystroke · delivery-survives-busy-pane · undelivered-alarms.
+Land via the project-local `/ship`.
+
+## Research findings — the non-keystroke delivery design space
+
+The corruption source is **`it2 session send`** keystroke injection into the target pane. Three sites:
+`bin/cc-notify:133-134` (the primitive — the central chokepoint), `scripts/handoff-fire.sh` (LAUNCH
+prompt into a *fresh* pane — legit, no live input to corrupt — plus succession-announce which goes
+*through* cc-notify), and `scripts/desk-invariant.sh:141-142` (`reprompt()` — a stall-recovery re-prompt,
+a separate last-resort un-stick, NOT a routine notification). **`cc-notify` is the single migration
+point:** reaper `notify_desk`, supervisor `page`/`page_permpend`, `--notify-back`, `cc-announce`, dispatch,
+boot-resume, autonomy-sweep ALL deliver through it. Fix `cc-notify` → every path is fixed at once.
+
+Candidate channels evaluated (harness semantics confirmed via claude-code-guide + the repo's own
+battle-tested hook comments):
+
+| Channel | Wakes idle? | Corrupts input? | Verdict |
+|---|---|---|---|
+| **it2 `session send`** (today) | yes | **YES (the bug)** | ❌ remove |
+| **Inbox + `UserPromptSubmit` `additionalContext`** | no (rides next user turn) | no | ✅ delivery (interactive) |
+| **Inbox + `SessionStart` `additionalContext`** | no (rides resume/start) | no | ✅ delivery (resume) |
+| **Inbox + `Stop` `decision:block` reason** | keeps an active session awake to triage | no | ✅ delivery (end-of-turn / desk loop) |
+| **`cc-await-ping` background watcher → task-completion notification** | **yes** (the only non-keystroke idle-wake) | no | ✅ wake (already built) |
+| MCP / Remote-Control / `FileChanged` hook | maybe | no | ⏳ undocumented on our version → not relied on |
+
+**Load-bearing harness facts** (design turns on these):
+- **No external process can wake a fully-idle CC session without keystrokes OR a pre-armed in-session
+  background task** (confirmed). ⇒ the idle-wake MUST be the target's own armed `cc-await-ping`; there is
+  no "push into an idle pane" that is both non-keystroke and external. This is a harness floor, not a
+  design gap.
+- **A `Stop` `decision:block` continuation does NOT re-fire `UserPromptSubmit`** (confirmed). ⇒ a desk
+  looping via `session-continue` (Stop-block) never hits the `UserPromptSubmit` drain, so in-loop mail
+  MUST be delivered on the **Stop** channel.
+- **`Stop` `additionalContext` is empirically INERT on the running version** (`boundary-handoff.sh:22`,
+  learned from a real escape — trumps the doc which says "active"). ⇒ the Stop channel uses
+  `decision:block` (which `session-continue`/`completion-assert`/`anti-deference` all rely on), never
+  `additionalContext`.
+- **The cursor already exists**: `~/.claude/mailbox/<uuid>.seen` holds a line-count; `handoff-disposition.sh`
+  reads `mailbox_pending` = (`wc -l <uuid>.md` > `<uuid>.seen`) and its `--ack` advances it. The drain
+  MUST reuse this SAME cursor, so "delivered" and "pending" agree across both systems by construction.
+- **`cc-await-ping` PRINTS the new mailbox line(s) to stdout on wake** — so when it fires, the mail
+  content arrives *inside* the task-completion notification. For the idle desk it is delivery **and** wake
+  in one; the hooks cover the non-watcher cases.
+
+## The mechanism (chosen)
+
+The mailbox (`~/.claude/mailbox/<uuid>.md`, append-only, `<ISO> [<from>] <message>` per line) is already
+written by `cc-notify` on EVERY send (today labeled "fallback"). v2 **promotes the mailbox to the primary
+transport** and removes keystroke injection. Delivery = **drain the mailbox at a safe boundary**; wake =
+the target's armed watcher. One cursor (`<uuid>.seen`) makes delivery exactly-once across all channels.
+
+1. **`hooks/mailbox-drain.sh`** (NEW) — one script, event-dispatched (arg `session-start`|`prompt`|`stop`):
+   reads lines after `.seen`, formats them, and delivers. Advances `.seen` to EOF on delivery (idempotent,
+   exactly-once, and consistent with `handoff-disposition`'s `--ack`).
+   - `SessionStart` / `UserPromptSubmit` → emit as `additionalContext` (reliable). Advance `.seen`.
+   - `Stop` → if pending, `decision:block` with the mail as the reason (wakes an active session to triage;
+     the only in-loop channel). Advance `.seen`. **Coexistence:** a shared `hooks/lib/mailbox-pending.sh`
+     helper lets the other Stop-blockers yield one turn when mail is pending (see Phase 2) so at most one
+     hook blocks — additive, fail-safe (yield = allow-stop = the safe direction).
+2. **`bin/cc-notify`** — REMOVE `it2 session send` entirely. New job: resolve target → **enqueue to the
+   mailbox** (durable) → classify deliverability for an honest exit code. Liveness via `cc-sessions`
+   (live registry) / `it2 session list` (read-only, no keystrokes): target is a LIVE session → exit 0
+   "delivered to inbox" (a drain/watcher will surface it); target not live (closed/recycled) → exit 0
+   "mailbox only" (a dead inbox — the `cc-announce` alarm path still fires); unresolvable → exit 3;
+   **mailbox unwritable → exit 5 LOUD** (a message that can't even persist must alarm, not warn). No more
+   "submit VERIFIED"/strand/exit-4 (there is no keystroke to strand).
+3. **`bin/cc-announce`** — update `classify()`: VERIFIED = "delivered to inbox (live session)"; MAILBOX
+   (target-not-live) / UNRESOLVED / write-fail = LOUD alarm (unchanged VERIFIED-or-LOUD contract; the W5
+   "RELOAD ≠ WAKE" lesson holds — a dead inbox is not a delivery). The mailbox-write to a LIVE session IS
+   a wake now (the target's watcher pulls it), so mailbox-to-a-live-target is no longer a degrade.
+4. **Wake** — unchanged mechanism, now primary: the desk (and any `--notify-back` originator) keeps a
+   background `cc-await-ping` armed while idle; a `cc-notify` mailbox write makes it exit → task-completion
+   notification re-invokes the session with the mail in the notification body. Non-keystroke, already built.
+5. **Fail-loud guard `bin/cc-inbox-guard`** (NEW) — sweeps mailboxes; for any whose owning session is LIVE
+   (registered + pane/pid alive) and whose oldest undelivered line (`.seen` < EOF; line ISO timestamp)
+   is older than a deadline (default 600s), escalates via `push-send.sh` (the VERIFIED phone leg) + writes
+   an alarm record. A message enqueued but never drained CANNOT silently vanish. Wired into the existing
+   autonomy/reaper cron; `--selftest` RED-proves the alarm fires.
+
+**Out of scope / noted:** `desk-invariant.sh:reprompt()` (stall-recovery keystroke un-stick — a separate
+last-resort actuator, gated by stall detection, not a routine notification; forcing a turn on a *wedged*
+session is exactly what inbox-drain cannot do). `handoff-fire.sh` fresh-pane LAUNCH injection (no live
+input to corrupt). Both stay; documented so the remaining keystroke sites are explicit, not hidden.
+
+## Phase 0 — orchestration (single focused session, by design)
+
+Same call as v1 Phase 0, same reason: the pieces are **one tightly-coupled contract** — the `.seen` cursor
+semantics, `cc-notify`'s new exit codes, `cc-announce`'s `classify()`, the Stop-hook yield-protocol, and
+their tests all interlock. Parallel teammates would race the shared contract (exit codes / "verified"
+meaning / cursor) and create merge hazard on the exact interfaces that must stay coherent. Total ≈350–450
+LOC across `bin/cc-notify` (rewrite ~−40/+40), `bin/cc-announce` (~+15), `hooks/mailbox-drain.sh` (NEW ~120),
+`hooks/lib/mailbox-pending.sh` (NEW ~25), 4 safety-hook 2-line guards, `bin/cc-inbox-guard` (NEW ~90),
+tests. Under the 500-LOC single-owner threshold and non-parallelizable ⇒ **single session, commit per
+phase, gate each** (shellcheck + bats). Research fan-out (already done) used background subagents only.
+
+## Phase 1 — mailbox-drain hook + cursor (delivery, no keystrokes)
+- `hooks/mailbox-drain.sh`: shared `drain(uuid)` → lines `(.seen, EOF]`; `SessionStart`/`UserPromptSubmit`
+  → `additionalContext`; `Stop` → `decision:block`. Advance `.seen`. Env seams `CC_MAILBOX_DIR`. Fail-safe:
+  every path exits 0 except the Stop-block (which is the intended block). No `set -e`.
+- `hooks/lib/mailbox-pending.sh`: `mailbox_has_pending <uuid>` + `mailbox_drain_recently_fired <uuid>`
+  (breadcrumb `<uuid>.draining`, 2s freshness) → `mailbox_defer_to_drain <uuid>` (0 = should-yield).
+- Wire `mailbox-drain.sh` into `settings-templates/settings.example.json` on SessionStart (first),
+  UserPromptSubmit (first), Stop (first in obj-1).
+- **Gate**: shellcheck; bats — delivery-lands-as-message (additionalContext shape) + cursor advances
+  exactly-once + Stop emits decision:block.
+
+## Phase 2 — cc-notify transport swap + Stop-hook coexistence + cc-announce
+- `bin/cc-notify`: remove it2 send; enqueue + liveness-classify + exit codes (§ mechanism 2). Keep
+  `--mailbox-only`, `--from`, `--self`, `--list`. Update the header contract.
+- Add the `mailbox_defer_to_drain` yield-guard (source `hooks/lib/mailbox-pending.sh`) to
+  `session-continue.sh`, `completion-assert.sh`, `anti-deference-nudge.sh`, `boundary-handoff.sh` — top of
+  the actuation path, additive, exit 0 on yield.
+- `bin/cc-announce`: update `classify()` per § mechanism 3.
+- **Gate**: shellcheck; bats — cc-notify never calls `session send` (stub asserts 0 invocations),
+  delivery-survives-busy-pane (busy/any pane → mailbox written, composer untouched), cc-announce
+  VERIFIED-or-LOUD holds on the new outputs; the 4 guards yield when mail pending.
+
+## Phase 3 — fail-loud guard + docs + full gate
+- `bin/cc-inbox-guard` + `--selftest`; wire into the autonomy/reaper cron.
+- Update `commands/handoff.md` §8 + `bin/cc-notify`/`cc-await-ping` headers: the transport is now
+  inbox-drain, NOT keystroke; the `\r`-not-`\n` note becomes historical.
+- **Gate**: shellcheck all touched bins/hooks; `bats tests/` green (updated cc-notify/cc-announce/
+  notify-back + the 3 new suites); then project-local `/ship`.
+
+## v2 Status log
+- **2026-07-20** — v2 opened. Research complete (design space + harness semantics + cursor reuse). Design
+  frozen above. NEXT: implement Phase 1 → 3 in one session, commit per phase, gate each, land via `/ship`.
