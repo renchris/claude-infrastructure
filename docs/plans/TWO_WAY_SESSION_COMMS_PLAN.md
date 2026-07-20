@@ -339,6 +339,47 @@ phase, gate each** (shellcheck + bats). Research fan-out (already done) used bac
 - **Gate**: shellcheck all touched bins/hooks; `bats tests/` green (updated cc-notify/cc-announce/
   notify-back + the 3 new suites); then project-local `/ship`.
 
+## Critique fixes (adversarial red-team, 2026-07-20) — FOLD BEFORE SHIP
+
+A 5-lens adversarial critique (wf_ac5f975e-1c0) of the frozen design returned **14 survivors** — verdict
+"sound WITH fixes, not a rethink." The foundation holds (cc-notify IS the single chokepoint; fresh-pane
+launch never touches a live composer; the drain jq-escapes peer content; the Phase-1 breadcrumb ordering
+closes the basic parallel race). But the fail-loud + wake guarantees and the operator's literal complaint
+were NOT fully met. The two architectural fixes SIMPLIFY the design:
+
+- **(A) Split the delivery cursor from the ack/guard cursor.** `<uuid>.seen` = EMITTED (advanced by the
+  drain, AFTER emitting — emit-before-advance). `<uuid>.acked` = CONSUMED (advanced only when a boundary
+  proves the model took a turn: immediately on the reliable additionalContext channels; lag-one-cycle for
+  the Stop channel). The fail-loud guard keys on `acked < EOF`, NEVER the eager `seen`. Closes F2, cures
+  F11's guard-blindness, gives F5 its clean "delivered" definition, retires the raw-EOF `--ack` writer.
+- **(B) Fold in-loop Stop delivery into `session-continue` (the ONE hook already blocking the in-loop
+  desk); DROP the standalone mailbox-drain Stop blocker + the 4-hook yield-guards + the 2 s TTL.** The
+  drain handles SessionStart + UserPromptSubmit only. Removes the multi-block blast radius (F10), the
+  fragile wall-clock sync, and the re-arm starvation (F14) in one move. Idle/mid-turn mail is caught by
+  the F6 watcher on arm; the looping desk by the fold; interactive/resume by additionalContext.
+
+| # | Sev | Defect (file) | Fix |
+|---|---|---|---|
+| **F1** | must | TOCTOU: concurrent append between the drain's read and `.seen`-advance → silent drop; hot target = desk | `flock` a single atomic snapshot; serialize every `.seen` RMW; standardize `grep -c ''` (not `wc -l`) everywhere |
+| **F2** | must | `.seen` advances at emit-time; guard keys on same cursor → dropped mail (hook-kill / double-block) invisible | **(A)** split emitted/acked; emit-before-advance |
+| **F3** | must | `cc-announce classify()` fail-open `else VERIFIED` reports exit-5 write-fail as a confirmed wake | rc5→WRITEFAIL (DONE) + flip terminal default to fail-CLOSED (alarm) + selftest/bats exit-5 case (DONE) |
+| **F4** | must | exit-5 (inbox unwritable) is swallowed by every fire-and-forget caller → "loud" only in its number | `cc-notify` self-escalates on write-fail: alarm record in a durable dir + best-effort `push-send.sh` |
+| **F5** | blocker | VERIFIED = "registered-live" equates liveness with a wake → W5 recreated under a VERIFIED label | Award VERIFIED only on a confirmed WAKE PATH (armed `cc-await-ping` for the uuid, or drain-confirmed via `acked`); live-but-unwatched idle → a distinct degrade `cc-announce` alarms on |
+| **F6** | must | idle-desk wake unimplemented: `cc-await-ping` baselines at `wc -l` (off `.seen`), one-shot, nothing re-arms | seed baseline from `mailbox_seen`; advance `.seen` on fire; a SUPERVISED auto-re-arming desk watcher (guard kicks/re-arms before phoning the operator) |
+| **F7** | must | `desk-invariant reprompt()` still injects text+Enter into the desk's LIVE composer on the stale branch (gated only on assistant-idle ≈ operator-returns-and-types) — the operator's verbatim complaint | ABORT reprompt if the composer is non-empty/changed since last sweep; for the pure-stale branch, enqueue the resume to the desk's OWN mailbox instead of keystrokes; keystroke only a proven-frozen cap-modal |
+| **F8** | high | `cc-inbox-guard` fails SILENT on an unclassifiable owner (not-registered ⇒ treated dead ⇒ no escalation) | liveness by PANE existence (`it2 session list`), run `cc-reconcile` first; INDETERMINATE owner ⇒ ESCALATE (fail-loud) |
+| **F9** | high | Stop drain has no cap/latch; a swallowed `.seen`-write failure re-blocks the same mail every Stop forever | (mostly retired by **B**) + `mailbox_advance_seen` RETURNS failure; folded-delivery caps like its siblings; on advance-fail allow-stop + escalate |
+| **F10** | med | single-blocker is unenforced convention across 5 files + fragile 2 s TTL | retired by **B** (no competing blocker) |
+| **F11** | med | cursor-past-EOF (GC/rotation/recycle) → drop + guard blind | clamp `.seen>cur`→0 re-deliver (DONE in lib) + guard ALSO alarms on `.seen>EOF`; GC = atomic compact-and-reset under the lock |
+| **F12** | med | uniform 600 s guard deadline loses v1's instant urgency for confirmed-stuck classes | class-specific short deadline (~0–60 s) for permission-pending / coordination-hang / crashed / DEAD |
+| **F13** | minor | multi-line message breaks line==message + ISO-per-line age-parse | collapse newlines→spaces (DONE in cc-notify) |
+| **F14** | low | mail Stop replaces `session-continue`'s reason → re-arm reminder starved → `.count` hits cap, loop abandons | retired by **B** (fold keeps the re-arm reminder in the same reason) |
+
+**Ship gate:** none of Phase 2/3 lands until A, B, F1, F3, F4, F5, F6, F7, F8, F9 are in. F10/F13/F14 are
+retired by A/B; F11/F12 are cheap hardening folded into `cc-inbox-guard`.
+
 ## v2 Status log
-- **2026-07-20** — v2 opened. Research complete (design space + harness semantics + cursor reuse). Design
-  frozen above. NEXT: implement Phase 1 → 3 in one session, commit per phase, gate each, land via `/ship`.
+- **2026-07-20** — v2 opened. Research complete. Design frozen. Phase 1 (drain + lib + tests) built +
+  committed (6cb7c7f, e420e30), cc-notify swap + cc-announce migrated (uncommitted) — THEN the adversarial
+  critique landed 14 fixes (above). Phase 1's Stop branch is being REVISED per (A)/(B). NEXT: fold the
+  must-fixes, re-verify, land via `/ship`.
