@@ -404,3 +404,63 @@ retired by A/B; F11/F12 are cheap hardening folded into `cc-inbox-guard`.
   - **Post-land (operator C10):** activate the drain hooks in the LIVE `settings.json` across the 4 config
     dirs (the template is wired; the live per-account settings are the operator's step, like boundary-handoff).
     NEXT: land via project-local `/ship`.
+
+---
+
+# § v3 — Delivery SLO + human visibility (2026-07-20)
+
+**Why a v3:** v2 made the transport safe (no keystrokes) and honest (split cursor, fail-loud
+guard) — but live forensics the same day show it has **no service level**: 1,788 lines ever sent,
+~1,401 (78%) never consumed; 39 of 42 mail-carrying inboxes belong to dead panes (former-desk
+boxes: 631/206/155 stranded lines from producers paging stale UUIDs); the live desk sat on 57
+unacked pages for 2+ hours with 0 watchers armed fleet-wide; and NOTHING renders delivery to the
+human — `additionalContext` is model-only, the guard is loud-to-disk with an inert phone leg, the
+Board reads no comms store. Full gap analysis + evidence + design: **`docs/research/cross-session-mail-2026-07-20.md`**
+(the SSOT for v3 — elements D1–D13, failure inventory R/S/U, harness capability table).
+
+**Scope (frozen):** cross-session mail is (1) reliably RECEIVABLE — bounded-time delivery to live
+sessions (standing wake floor; mid-turn PostToolUse boundary if harness-supported), forward-chain +
+succession migration for recycled panes, dead-box lifecycle (archive, never delete); (2) reliably
+SENDABLE — `--role` addressing resolved at send time, dead-target reroute-to-desk, producer
+damping, v1 doc-drift purged; (3) HUMAN-VISIBLE in the Claude Code UI — `systemMessage` on every
+drain, statusline 📬 badge, `cc-thread` adopted into the repo as the first-class reader,
+comms-alarms on the Operator Blocker Board.
+
+## Phase 0 — orchestration (v3)
+
+- **P1 = ONE single-owner session** (same ruling as v2 Phase 0: forward-chain semantics,
+  `cc-notify` verdicts, drain migration, and their tests are one tightly-coupled contract —
+  parallel teammates would race the cursor/verdict interfaces). ≈250–350 LOC touching
+  `bin/cc-notify`, `hooks/mailbox-drain.sh`, `hooks/lib/mailbox-pending.sh` (+`.forward`
+  primitives), `scripts/handoff-fire.sh` (succession pointer), producers (`bin/cc-reaper`
+  `notify_desk`, `scripts/lead-supervisor.sh` `page`), bats. Under the 500-LOC single-owner
+  threshold.
+- **P2 piggybacks P1's owner** (wake-floor rule text + `cc-wait` arm + drain nudge are small and
+  touch the same files); the PostToolUse drain (D5) is a separate ~60-LOC follow-on once the
+  harness table confirms support.
+- **P3 = Agent Team, 3 teammates, worktree-isolated** (2+ code-writing tasks, all decoupled
+  read-only surfaces over the frozen substrate): T1 `cc-thread` adoption + filters + bats · T2
+  statusline badge + drain/fold `systemMessage` · T3 Board comms store + lint. Briefs ≤150 lines,
+  pre-greped line ranges, verbatim stop-on-issue clause per the agent-teams checklist. D12's
+  phone arm stays operator C10 (`04-page-channel`).
+- **P4 = single small session** (reaper/teardown sweep + archive + quarantine + backfill), after
+  P1 lands (archive must honor `.forward` tombstones).
+
+**Phases** (build order + rationale in the research doc §6):
+- **P1 — kill the flooding class:** forward chains + succession migration (D1) · `cc-notify --role`
+  + pager migration (D2) · dead-target reroute (D3) · `handoff-fire.sh` trailer rewrite (D8 —
+  ✅ DONE in the investigation session, branch `xsession-mail-100`). Single-owner session (cursor/
+  verdict contract coupling — same reasoning as v2 Phase 0).
+- **P2 — delivery floor:** wake-floor rule + `cc-wait` arm contract + drain no-watcher nudge (D4) ·
+  PostToolUse mid-turn drain, gated on the harness table (D5) · producer damping (D7).
+- **P3 — human plane (parallelizable):** `cc-thread` adoption + filter + bats (D9) · statusline
+  badge (D10) · drain `systemMessage` (D11) · Board comms store + `04-page-channel` phone arm —
+  operator C10 (D12).
+- **P4 — lifecycle:** archive/GC/quarantine + backfill sweep of the 39 dead boxes (D6, D13);
+  1,401 unacked lines are forensic history — archived, never deleted.
+
+## v3 Status log
+- **2026-07-20** — v3 opened by the goal-directed investigation session (`xsession-mail-100`):
+  research doc written, D8 trailer fix applied, backlog item filed for the P1–P4 build. The
+  investigation deliberately did NOT start the coupled P1 build (single-owner session per Phase-0
+  discipline).
