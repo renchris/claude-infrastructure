@@ -28,3 +28,8 @@ usage/
 # python bytecode cache (bin/*.py, cc-wave-plan, claude-accounts, etc.)
 __pycache__/
 *.pyc
+
+# defensive: a worktree must NEVER be created INSIDE the repo (they belong in
+# ~/Development/.worktrees). A stray inside-repo one read as untracked litter and made every
+# co-cwd session permanently "dirty" to the reaper. .claude/worktrees/ is ignored above.
+/.worktrees/

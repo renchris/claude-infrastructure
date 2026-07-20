@@ -14,11 +14,11 @@ mkrepo() { # <dir> — clean shipped repo: origin/main == HEAD, origin/HEAD → 
   git -C "$1" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
 }
 
-@test "selftest passes and runs all 7 checks (a zero-check suite must not 'pass')" {
+@test "selftest passes and runs all 8 checks (a zero-check suite must not 'pass')" {
   run "$G" --selftest
   [ "$status" -eq 0 ]
   n_ok="$(printf '%s' "$output" | grep -c '^  ok ')"
-  [ "$n_ok" -eq 7 ]
+  [ "$n_ok" -eq 8 ]
 }
 
 @test "G-a shipped+clean + done-evidence → TEARDOWN (exit 0)" {
@@ -33,6 +33,16 @@ mkrepo() { # <dir> — clean shipped repo: origin/main == HEAD, origin/HEAD → 
   run "$G" decide --cwd "$BATS_TEST_TMPDIR/dirty" --done-evidence "x"
   [ "$status" -eq 10 ]
   [ "$(printf '%s' "$output" | jq -r '.reason_kind')" = "dirty-tree" ]
+}
+
+@test "G-a untracked-only litter → TEARDOWN (exit 0) — cc-reaper reaps THROUGH this gate" {
+  # Was DEFER: the bare `status --porcelain` counted untracked files, so any co-cwd session in a
+  # shared checkout deferred forever and 13+ finished workers stranded awaiting a hand-close. The
+  # reaper-side relaxation is INERT without this one — every promoted auto-reap would land here.
+  mkrepo "$BATS_TEST_TMPDIR/untracked"; echo litter > "$BATS_TEST_TMPDIR/untracked/stray-scratch.md"
+  run "$G" decide --cwd "$BATS_TEST_TMPDIR/untracked" --done-evidence "x"
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | jq -r '.decision')" = "TEARDOWN" ]
 }
 
 @test "G-a committed-not-pushed → DEFER (exit 10)" {

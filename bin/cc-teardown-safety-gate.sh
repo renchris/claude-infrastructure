@@ -85,8 +85,14 @@ cmd_decide() {
       "cwd is not a git work tree — cannot prove shipped+clean (the only closeable state); fail-closed" not-git 0 0
     return 10
   fi
-  if [ -n "$("$GIT" -C "$cwd" status --porcelain 2>/dev/null)" ]; then
-    emit DEFER dirty-tree "uncommitted changes present — not shipped+clean" dirty 1 0
+  # --untracked-files=no (2026-07-20): "work-safe" is about UNCOMMITTED TRACKED work — the state a
+  # pane close could strand. An untracked file survives the close on disk, and in a SHARED checkout
+  # it is typically a live sibling's scratch litter, not the closing session's. Counting untracked
+  # files made this gate DEFER forever on any co-cwd session, which is what stranded 13+ finished
+  # workers on the operator's confirm-close queue (cc-reaper reaps THROUGH this gate, so the
+  # reaper-side relaxation is inert without this one). Tracked dirt still DEFERs, unchanged.
+  if [ -n "$("$GIT" -C "$cwd" status --porcelain --untracked-files=no 2>/dev/null)" ]; then
+    emit DEFER dirty-tree "uncommitted TRACKED changes present — not shipped+clean" dirty 1 0
     return 10
   fi
   [ -n "$trunk" ] || trunk="$(detect_trunk "$cwd")" || {
@@ -139,6 +145,14 @@ selftest() {
   rc="$(dec --cwd "$d/dirty" --done-evidence "x")"
   [ "$rc" = 10 ] && okp "G-a dirty tree → DEFER (exit 10)" \
                  || badp "G-a a dirty tree was not deferred (rc $rc, want 10)"
+
+  # G-a — UNTRACKED-ONLY litter is NOT dirty → TEARDOWN. "Work-safe" means no uncommitted TRACKED
+  # work; an untracked file survives the close on disk and in a shared checkout is typically a live
+  # sibling's scratch output. Counting it deferred every co-cwd session forever (2026-07-20).
+  mkrepo "$d/untracked"; echo litter > "$d/untracked/stray-scratch.md"
+  rc="$(dec --cwd "$d/untracked" --done-evidence "x")"
+  [ "$rc" = 0 ]  && okp "G-a untracked-only litter → TEARDOWN (exit 0) — tracked tree is clean" \
+                 || badp "G-a untracked litter still blocked a clean+shipped teardown (rc $rc, want 0)"
 
   # G-a — committed-not-pushed (HEAD ahead of origin/main) → DEFER.
   mkrepo "$d/ahead"; echo more >> "$d/ahead/f"; git -C "$d/ahead" commit -aqm c2
