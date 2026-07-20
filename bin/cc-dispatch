@@ -241,7 +241,7 @@ dispatch() { # <dry|run>
       title="$(printf '%s' "$dispatchable" | jq -r --arg i "$id" '.[]|select(.id==$i)|.title // empty' | head -1)"
       dod="$(printf '%s' "$dispatchable"   | jq -r --arg i "$id" '.[]|select(.id==$i)|.dodRef // empty' | head -1)"
       if ! printf '%s\n' \
-        "/goal ${title:-backlog item $id} — cc-backlog item $id (project $PROJECT)." \
+        "TASK — ${title:-backlog item $id} — cc-backlog item $id (project $PROJECT)." \
         "DoD ref: ${dod:-none}. Scope (frozen): drive this ONE item to finished-verified-landed." \
         "Rails: dedicated worktree + own branch; gate green before commit; land ONLY via the project-local /ship (never bare push); C10 — never edit settings.json/live hooks/launchd in place." \
         "On completion: cc-backlog done $id --evidence \"<landed sha>\"." \

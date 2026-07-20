@@ -375,17 +375,50 @@ it2_paste_submit() { # $1=it2-bin $2=session-id $3=text → 0 pasted+submitted /
 # row for the fired pane bearing a session_id is an equivalent positive. The marker is globally
 # unique and is NEVER echoed to this session's own stream, so only the FIRED session's transcript
 # can hold it (this session merely wrote it into a launch-time file the launcher `cat`s at exec).
+#
+# BIRTH IS NOT ENGAGEMENT (item ff2d6609a33e). Both signals above prove only that a transcript/row
+# came into EXISTENCE — attachment + system rows land, and the registry row is written by the
+# SessionStart hook, before the model has done anything. A fire whose first prompt was REJECTED (the
+# /goal >4000-char cap — memory handoff-fire-goal-prefix-trap) or never submitted at all is born
+# with exactly those rows and then idles forever, so the birth-check silently defeated
+# verify_engagement's one re-type recovery. Engagement now requires a real first ASSISTANT turn.
+assistant_turn_in() { # $1=transcript jsonl → 0 a content-bearing assistant turn exists / 1 none
+  local f="$1"
+  [ -s "$f" ] || return 1
+  if command -v jq >/dev/null 2>&1; then
+    # `first(inputs|…)` short-circuits on the first hit — never slurps a large transcript.
+    [ "$(jq -rn 'first(inputs
+                   | select(.type == "assistant"
+                            and (((.message.content? // .content? // "") | tostring | length) > 0))
+                   | "1")' "$f" 2>/dev/null)" = 1 ] && return 0
+    return 1
+  fi
+  grep -q '"type":"assistant"' "$f"   # jq-less fallback: still a turn-check, never mere existence
+}
+
 engagement_seen() { # $1=projects-dir $2=marker $3=registry-dir $4=fired-pane → 0 engaged / 1 not
   local pdir="$1" marker="$2" regdir="$3" pane="$4" hit rsid
-  # (a) transcript-birth: a JSONL under the target account's projects dir carrying the marker.
+  # (a) the transcript carrying the marker must ALSO show an assistant turn (ingested AND ran).
   if [ -n "$marker" ] && [ -d "$pdir" ]; then
-    hit="$(find "$pdir" -name '*.jsonl' -type f -exec grep -lF -- "$marker" {} + 2>/dev/null | head -1)"
-    [ -n "$hit" ] && return 0
+    while IFS= read -r hit; do
+      [ -n "$hit" ] || continue
+      assistant_turn_in "$hit" && return 0
+    done <<EOF
+$(find "$pdir" -name '*.jsonl' -type f -exec grep -lF -- "$marker" {} + 2>/dev/null)
+EOF
   fi
-  # (b) a cc-registry row for the fired pane bearing a (non-null) session_id — CC registered.
+  # (b) a cc-registry row's (non-null) session_id NAMES a transcript — that transcript must show an
+  #     assistant turn too. The row alone is the SessionStart hook's own output: pure birth.
   if [ -n "$pane" ] && [ -n "$regdir" ] && [ -f "$regdir/$pane.json" ] && command -v jq >/dev/null 2>&1; then
     rsid="$(jq -r '.session_id // empty' "$regdir/$pane.json" 2>/dev/null)"
-    [ -n "$rsid" ] && return 0
+    if [ -n "$rsid" ] && [ -d "$pdir" ]; then
+      while IFS= read -r hit; do
+        [ -n "$hit" ] || continue
+        assistant_turn_in "$hit" && return 0
+      done <<EOF
+$(find "$pdir" -name "$rsid.jsonl" -type f 2>/dev/null)
+EOF
+    fi
   fi
   return 1
 }
@@ -523,6 +556,34 @@ check_goal_length() { # $1=prompt-file → 0 ok, 1 (loud) if a /goal line body e
         fi ;;
     esac
   done < "$pf"
+  return 0
+}
+
+# ---- P0-16b slash-command HEAD guard (item ff2d6609a33e) --------------------------------------
+# check_goal_length above measures a /goal LINE's own body — but the live failure is one level up:
+# when the payload's FIRST line is a slash command, the harness parses the WHOLE submission as that
+# command, so a short `/goal do the thing.` followed by a 6000-char brief blows the 4000-char cap on
+# text the line-scan never counted. The prompt is rejected, nothing submits, and the pane idles at an
+# empty composer looking fired (memory handoff-fire-goal-prefix-trap). Briefs must start with PLAIN
+# TEXT; a /goal head over the cap is REFUSED (never a silent dead fire), any other slash head warns.
+check_slash_head() { # $1=prompt-file → 0 ok/warned, 1 (loud) if a /goal head would exceed the cap
+  local pf="$1" limit="${GOAL_MAX_CHARS:-4000}" line head total
+  [ -f "$pf" ] || return 0
+  [ "${FIRE_ALLOW_SLASH_HEAD:-0}" = 1 ] && return 0
+  # first NON-EMPTY line — leading blank lines do not change how the harness parses the payload.
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in ''|[[:space:]]*) [ -z "${line//[[:space:]]/}" ] && continue ;; esac
+    break
+  done < "$pf"
+  case "$line" in /*) : ;; *) return 0 ;; esac
+  head="${line%%[[:space:]]*}"
+  total=$(wc -c < "$pf" | tr -d ' ')
+  if [ "$head" = "/goal" ] && [ "$total" -gt "$limit" ]; then
+    echo "!! prompt STARTS with $head and the whole payload is ${total} chars — the harness parses the ENTIRE submission as $head and HARD-CAPS it at ${limit}, so this fire would be REJECTED and the pane would idle at an empty composer (memory handoff-fire-goal-prefix-trap)." >&2
+    echo "   Fix: start the brief with PLAIN TEXT (move /goal to its own short pointer line, or drop it) — e.g. 'TASK — <one line>. …', keeping any /goal condition <=${limit} chars." >&2
+    return 1
+  fi
+  echo "⚠ prompt starts with the slash command '$head' — the harness parses the whole submission as a command, not a brief. Prefer a PLAIN-TEXT first line (handoff-fire-goal-prefix-trap)." >&2
   return 0
 }
 
@@ -1122,6 +1183,7 @@ esac; done
 [ -s "$PROMPT_FILE" ] || { echo "!! empty prompt file: $PROMPT_FILE — an empty payload fires a task-less successor (FM-D)" >&2; exit 1; }
 # P0-16: reject an over-cap /goal payload BEFORE any side effect (covers every fire mode).
 check_goal_length "$PROMPT_FILE" || exit 1
+check_slash_head  "$PROMPT_FILE" || exit 1
 [ -n "$CWD" ] && [ -n "$WORKTREE" ] && { echo "!! --cwd and --worktree are mutually exclusive" >&2; exit 1; }
 if [ -n "$WORKTREE" ] && ! git check-ref-format --branch "$WORKTREE" >/dev/null 2>&1; then
   echo "!! invalid branch name for --worktree: $WORKTREE" >&2; exit 1

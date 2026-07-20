@@ -14,7 +14,9 @@
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   HF="$REPO/scripts/handoff-fire.sh"
+  eval "$(sed -n '/^assistant_turn_in() {/,/^}/p' "$HF")"
   eval "$(sed -n '/^engagement_seen() {/,/^}/p' "$HF")"
+  eval "$(sed -n '/^check_slash_head() {/,/^}/p' "$HF")"
   eval "$(sed -n '/^ensure_registration() {/,/^}/p' "$HF")"
   eval "$(sed -n '/^mark_fired_peer() {/,/^}/p' "$HF")"
 
@@ -51,11 +53,32 @@ STUB
 
 # ---- P0-11 unit: engagement_seen (the pure detector) ----------------------------------------
 
-@test "engagement_seen: marker in a transcript JSONL -> engaged (0)" {
+@test "engagement_seen: marker in a transcript WITH an assistant turn -> engaged (0)" {
   mkdir -p "$PROJ/proj"
-  printf '{"type":"user","message":{"role":"user","content":"hi MARKER-XYZ ok"}}\n' > "$PROJ/proj/s.jsonl"
+  { printf '{"type":"user","message":{"role":"user","content":"hi MARKER-XYZ ok"}}\n'
+    printf '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"on it"}]}}\n'
+  } > "$PROJ/proj/s.jsonl"
   run engagement_seen "$PROJ" "MARKER-XYZ" "$REG" "$PANE"
   [ "$status" -eq 0 ]
+}
+
+# THE ff2d6609a33e RED: transcript BIRTH is not engagement. This is the exact live shape — the fired
+# brief landed in the transcript (attachment/system rows + the harness's own /goal rejection line),
+# the marker is present, and the model NEVER took a turn. The old birth-check called this engaged.
+@test "engagement_seen: marker present but ONLY attachment/system rows (rejected /goal) -> NOT engaged (1)" {
+  mkdir -p "$PROJ/proj"
+  { printf '{"type":"attachment","content":"the brief MARKER-XYZ ok"}\n'
+    printf '{"type":"system","content":"Goal condition is limited to 4000 characters"}\n'
+  } > "$PROJ/proj/s.jsonl"
+  run engagement_seen "$PROJ" "MARKER-XYZ" "$REG" "$PANE"
+  [ "$status" -eq 1 ]
+}
+
+@test "engagement_seen: an assistant row with EMPTY content is not a turn -> not engaged (1)" {
+  mkdir -p "$PROJ/proj"
+  printf '{"type":"assistant","message":{"role":"assistant","content":""},"x":"MARKER-XYZ"}\n' > "$PROJ/proj/s.jsonl"
+  run engagement_seen "$PROJ" "MARKER-XYZ" "$REG" "$PANE"
+  [ "$status" -eq 1 ]
 }
 
 @test "engagement_seen: marker absent + no registry row -> not engaged (1)" {
@@ -65,16 +88,66 @@ STUB
   [ "$status" -eq 1 ]
 }
 
-@test "engagement_seen: cc-registry row bearing a session_id -> engaged (0), marker not needed" {
+@test "engagement_seen: registry session_id whose transcript HAS an assistant turn -> engaged (0)" {
+  mkdir -p "$PROJ/proj"
+  printf '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}\n' \
+    > "$PROJ/proj/sid-123.jsonl"
   printf '{"paneUUID":"%s","session_id":"sid-123"}\n' "$PANE" > "$REG/$PANE.json"
   run engagement_seen "$PROJ" "MARKER-ABSENT" "$REG" "$PANE"
   [ "$status" -eq 0 ]
+}
+
+# The registry row is written by the SessionStart hook — pure birth. On its own it must not engage.
+@test "engagement_seen: registry session_id with NO assistant turn in its transcript -> not engaged (1)" {
+  mkdir -p "$PROJ/proj"
+  printf '{"type":"system","content":"boot"}\n' > "$PROJ/proj/sid-123.jsonl"
+  printf '{"paneUUID":"%s","session_id":"sid-123"}\n' "$PANE" > "$REG/$PANE.json"
+  run engagement_seen "$PROJ" "MARKER-ABSENT" "$REG" "$PANE"
+  [ "$status" -eq 1 ]
 }
 
 @test "engagement_seen: registry row with NULL session_id -> not engaged (1)" {
   printf '{"paneUUID":"%s","session_id":null}\n' "$PANE" > "$REG/$PANE.json"
   run engagement_seen "$PROJ" "MARKER-ABSENT" "$REG" "$PANE"
   [ "$status" -eq 1 ]
+}
+
+# ---- ff2d6609a33e: the slash-command HEAD guard ----------------------------------------------
+
+@test "check_slash_head: a plain-text first line passes silently" {
+  printf 'TASK — do the thing.\nmore body\n' > "$BATS_TEST_TMPDIR/p1.txt"
+  run check_slash_head "$BATS_TEST_TMPDIR/p1.txt"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "check_slash_head: a /goal head over the cap is REFUSED (the silent-dead-fire shape)" {
+  { printf '/goal do the thing.\n'; head -c 5000 /dev/zero | tr '\0' 'x'; printf '\n'; } \
+    > "$BATS_TEST_TMPDIR/p2.txt"
+  run check_slash_head "$BATS_TEST_TMPDIR/p2.txt"
+  [ "$status" -eq 1 ]
+  printf '%s\n' "$output" | grep -q 'parses the ENTIRE submission'
+}
+
+@test "check_slash_head: a SHORT /goal head only warns (exit 0) — leading blank lines ignored" {
+  printf '\n\n/goal read the plan and satisfy the DoD\n' > "$BATS_TEST_TMPDIR/p3.txt"
+  run check_slash_head "$BATS_TEST_TMPDIR/p3.txt"
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" | grep -q "starts with the slash command '/goal'"
+}
+
+@test "check_slash_head: FIRE_ALLOW_SLASH_HEAD=1 bypasses the refusal" {
+  { printf '/goal do the thing.\n'; head -c 5000 /dev/zero | tr '\0' 'x'; printf '\n'; } \
+    > "$BATS_TEST_TMPDIR/p4.txt"
+  run env FIRE_ALLOW_SLASH_HEAD=1 bash -c \
+    "$(declare -f check_slash_head); check_slash_head '$BATS_TEST_TMPDIR/p4.txt'"
+  [ "$status" -eq 0 ]
+}
+
+@test "cc-dispatch's composed brief does NOT start with a slash command (would be parsed as one)" {
+  run grep -n 'cc-backlog item \$id (project \$PROJECT)' "$REPO/bin/cc-dispatch"
+  [ "$status" -eq 0 ]
+  ! printf '%s\n' "$output" | grep -q '"/'
 }
 
 # ---- P0-11 E2E: never-engaged FAILS LOUD (the RED->GREEN), engaged still succeeds ------------
@@ -92,7 +165,9 @@ STUB
 
 @test "E2E: an engaged fire (marker in a transcript) prints '→ fired' exit 0" {
   mkdir -p "$PROJ/proj"
-  printf '{"type":"user","message":{"role":"user","content":"the brief SEEN-MARKER ok"}}\n' > "$PROJ/proj/s.jsonl"
+  { printf '{"type":"user","message":{"role":"user","content":"the brief SEEN-MARKER ok"}}\n'
+    printf '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"working"}]}}\n'
+  } > "$PROJ/proj/s.jsonl"
   run env HOME="$HOMEDIR" IT2_BIN="$BIN/it2" TMPDIR="$BATS_TEST_TMPDIR" \
     FIRE_ENGAGE_TIMEOUT=5 FIRE_ENGAGE_RETRY=1 FIRE_ENGAGE_INTERVAL=1 FIRE_REG_TIMEOUT=0 \
     FIRE_ENGAGE_MARKER=SEEN-MARKER \
