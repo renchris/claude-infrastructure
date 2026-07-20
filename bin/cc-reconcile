@@ -20,10 +20,22 @@
 # This makes the registry SELF-HEALING: "ensure every spawn registers" becomes a structural guarantee
 # independent of which hook was wired when, instead of a spawn-mode whack-a-mole.
 #
+# SECOND BLIND SPOT — a STALE row on a RECYCLED pane (item a60d62a215f1). A row is WRITE-ONCE per pane,
+# but a MONITORING DESK recycles in place: same pane uuid, new pid + session + cwd (often a new account).
+# Its row rots to a DEAD pid, so cc-sessions sweeps it stale and cc-classify never enumerates the pane —
+# yet the pane is LIVE, so the reaper self-check false-pages Δ1 forever (the desk is never a reap target:
+# harmless but recurring page-noise). Mere file-existence hid this from reconcile too (it counted the
+# rotted row "present"). The fix ALIGNS reconcile's present-test with cc-sessions' liveness (kill -0 on
+# the recorded pid): a dead-pid row on a LIVE pane is HEALED (rewritten from the current occupant), not
+# counted present. Mirrors the "registered desk exempt" precedent (4052d02): liveness-grounded, not blanket.
+#
 # INVARIANTS (each load-bearing):
-#   ADDITIVE-ONLY   — only ever CREATES a row for a live pane with none. Never edits, never deletes: a
-#                     fresh SessionStart row is authoritative and untouched; retention/sweep stays with
-#                     cc-sessions (age-based, P8). Idempotent: an existing row is skipped.
+#   ADDITIVE + STALE-HEAL — CREATES a row for a live pane with none, OR HEALS a row whose recorded pid is
+#                     DEAD while the pane is live (a recycle-in-place: same pane, new pid/session). NEVER
+#                     touches a row whose pid is ALIVE (a fresh SessionStart row stays authoritative),
+#                     NEVER deletes. P8 HOLDS: a genuine spawn-death leaves a DEAD pane with no live pid,
+#                     which this scan never iterates — only a LIVE pane's own superseded row is rewritten;
+#                     retention/sweep stays with cc-sessions (age-based, P8).
 #   P8 JOIN HELD    — a row is written ONLY with a real session_id (from CC's registry). A null-sid row
 #                     would look like a spawn-death to cc-board's telemetry join, so we SKIP (surface via
 #                     the reaper self-check) rather than write a false one.
@@ -55,7 +67,7 @@ for a in "$@"; do
   case "$a" in
     --dry-run)  MODE=dryrun ;;
     --json)     JSON=1 ;;
-    -h|--help)  sed -n '2,44p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)  sed -n '2,/^set -uo pipefail/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit 0 ;;
     '')         ;;
     *)          printf 'cc-reconcile: unknown option %s\n' "$a" >&2; exit 2 ;;
   esac
@@ -106,8 +118,8 @@ EOF
 now_ms="${CC_RECONCILE_NOW_MS:-$(( $(date +%s) * 1000 ))}"
 mkdir -p "$REG_DIR" 2>/dev/null || true
 
-n_live=0 n_present=0 n_backfilled=0 n_no_pane=0 n_no_sid=0 n_skipped=0
-backfilled_names=""
+n_live=0 n_present=0 n_backfilled=0 n_healed=0 n_no_pane=0 n_no_sid=0 n_skipped=0
+backfilled_names="" healed_names=""
 
 while IFS= read -r pid; do
   [ -n "$pid" ] || continue
@@ -121,8 +133,21 @@ while IFS= read -r pid; do
     ''|*[!0-9A-Fa-f-]*) n_no_pane=$(( n_no_pane + 1 )); continue ;;
   esac
 
-  # Idempotent: a live row already exists (SessionStart wrote it, or a prior reconcile). Leave it.
-  if [ -f "$REG_DIR/$pane.json" ]; then n_present=$(( n_present + 1 )); continue; fi
+  # PRESENT MUST MEAN LIVE — aligned with cc-sessions' kill -0, NOT mere file-existence. A row whose
+  # recorded pid is ALIVE is genuinely present: leave it untouched (idempotent — a fresh SessionStart row
+  # stays authoritative). A row whose pid is DEAD while THIS pane is live is a STALE row for a SUPERSEDED
+  # incarnation — a recycle-in-place (the monitoring desk keeps its pane across a recycle but gets a new
+  # pid/session, so its write-once row rots to a dead pid). cc-sessions sweeps that row, so cc-classify
+  # never enumerates the pane and the reaper self-check false-pages Δ1. HEAL it below (rewrite from the
+  # live pid's <pid>.json) instead of miscounting it "present". (Item a60d62a215f1.)
+  heal=0
+  if [ -f "$REG_DIR/$pane.json" ]; then
+    rowpid="$(jq -r '.pid // empty' "$REG_DIR/$pane.json" 2>/dev/null)"
+    if [ -n "$rowpid" ] && kill -0 "$rowpid" 2>/dev/null; then
+      n_present=$(( n_present + 1 )); continue          # recorded pid alive → genuinely present, untouched
+    fi
+    heal=1                                              # dead-pid row on a live pane → recycle: heal (rewrite) below
+  fi
 
   sfile="$(sessions_file_for "$pid")" || sfile=""
   if [ -z "$sfile" ]; then n_no_sid=$(( n_no_sid + 1 )); continue; fi
@@ -144,7 +169,11 @@ while IFS= read -r pid; do
   name="$(basename "$cwd")-$short"
 
   if [ "$MODE" = dryrun ]; then
-    n_backfilled=$(( n_backfilled + 1 )); backfilled_names="$backfilled_names $name"
+    if [ "$heal" = 1 ]; then
+      n_healed=$(( n_healed + 1 )); healed_names="$healed_names $name"
+    else
+      n_backfilled=$(( n_backfilled + 1 )); backfilled_names="$backfilled_names $name"
+    fi
     continue
   fi
 
@@ -158,8 +187,13 @@ while IFS= read -r pid; do
           startedAt:$startedAt, session_id:(if $sessionId=="" then null else $sessionId end)}' \
         > "$tmp" 2>/dev/null; then
     if mv -f "$tmp" "$REG_DIR/$pane.json" 2>/dev/null; then
-      n_backfilled=$(( n_backfilled + 1 )); backfilled_names="$backfilled_names $name"
-      log "backfilled $name pane=$pane pid=$pid account=$acct sid=$sid"
+      if [ "$heal" = 1 ]; then
+        n_healed=$(( n_healed + 1 )); healed_names="$healed_names $name"
+        log "healed $name pane=$pane pid=$pid account=$acct sid=$sid (stale-pid row rewritten from live occupant)"
+      else
+        n_backfilled=$(( n_backfilled + 1 )); backfilled_names="$backfilled_names $name"
+        log "backfilled $name pane=$pane pid=$pid account=$acct sid=$sid"
+      fi
     else
       rm -f "$tmp" 2>/dev/null; n_skipped=$(( n_skipped + 1 ))
     fi
@@ -171,15 +205,18 @@ $(live_claude_pids)
 EOF
 
 verb=$([ "$MODE" = dryrun ] && echo "would backfill" || echo "backfilled")
+healverb=$([ "$MODE" = dryrun ] && echo "would heal" || echo "healed")
 if [ "$JSON" = 1 ]; then
   jq -nc --argjson live "$n_live" --argjson present "$n_present" --argjson backfilled "$n_backfilled" \
+         --argjson healed "$n_healed" \
          --argjson no_pane "$n_no_pane" --argjson no_sid "$n_no_sid" --argjson skipped "$n_skipped" \
          --arg mode "$MODE" \
-    '{mode:$mode, live:$live, present:$present, backfilled:$backfilled,
+    '{mode:$mode, live:$live, present:$present, backfilled:$backfilled, healed:$healed,
       no_pane:$no_pane, no_sid:$no_sid, skipped:$skipped}'
 else
-  printf 'cc-reconcile: %d live · %d present · %s %d · skipped %d (no-pane %d, no-sid %d)\n' \
-    "$n_live" "$n_present" "$verb" "$n_backfilled" "$n_skipped" "$n_no_pane" "$n_no_sid"
+  printf 'cc-reconcile: %d live · %d present · %s %d · %s %d · skipped %d (no-pane %d, no-sid %d)\n' \
+    "$n_live" "$n_present" "$verb" "$n_backfilled" "$healverb" "$n_healed" "$n_skipped" "$n_no_pane" "$n_no_sid"
   [ -n "$backfilled_names" ] && printf '  %s:%s\n' "$verb" "$backfilled_names"
+  [ -n "$healed_names" ] && printf '  %s:%s\n' "$healverb" "$healed_names"
 fi
 exit 0

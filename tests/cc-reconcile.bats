@@ -53,6 +53,10 @@ add_pane_no_iterm() {
   printf '{"pid":%s,"sessionId":"s","cwd":"/tmp/x","startedAt":1,"kind":"interactive"}\n' "$pid" > "$D/sessions/$pid.json"
 }
 rows() { ls "$CC_REGISTRY_DIR"/*.json 2>/dev/null | wc -l | tr -d ' '; }
+# a definitely-dead real pid (spawn → kill → reap) — for the recycle-in-place stale-row heal tests.
+# The heal decision uses a REAL kill -0 on the row's recorded pid (aligned with cc-sessions), so a
+# "present" row needs a live pid ($$) and a "stale" row needs a dead one. Mirrors session-registry.bats.
+deadpid() { sleep 1 & local p=$!; kill "$p" 2>/dev/null; wait "$p" 2>/dev/null || true; echo "$p"; }
 
 @test "backfills a live pane that has no registry row" {
   add_pane 1234 AAAA1111-2222-3333-4444-555566667777 /Users/x/.claude-next sid-abc /tmp/wt-pool-9 1699111111000
@@ -91,9 +95,10 @@ rows() { ls "$CC_REGISTRY_DIR"/*.json 2>/dev/null | wc -l | tr -d ' '; }
 ]' ]
 }
 
-@test "idempotent: an existing row is left untouched (never overwritten)" {
+@test "idempotent: an existing LIVE-pid row is left untouched (never overwritten)" {
   local f="$CC_REGISTRY_DIR/AAAA1111-2222-3333-4444-555566667777.json"
-  printf '{"paneUUID":"AAAA1111-2222-3333-4444-555566667777","name":"orig","cwd":"/orig","account":"next","pid":1234,"startedAt":1,"session_id":"orig-sid","sentinel":true}' > "$f"
+  # pid = $$ (this test proc, alive) → kill -0 passes → genuinely present, untouched.
+  printf '{"paneUUID":"AAAA1111-2222-3333-4444-555566667777","name":"orig","cwd":"/orig","account":"next","pid":%s,"startedAt":1,"session_id":"orig-sid","sentinel":true}' "$$" > "$f"
   add_pane 1234 AAAA1111-2222-3333-4444-555566667777 /Users/x/.claude-next sid-NEW /tmp/wt
   run "$CCR"
   [ "$status" -eq 0 ]
@@ -162,16 +167,81 @@ rows() { ls "$CC_REGISTRY_DIR"/*.json 2>/dev/null | wc -l | tr -d ' '; }
   [ "$(echo "$output" | jq -r '.mode')" = "backfill" ]
 }
 
-@test "two live panes, one already registered → backfills only the missing one" {
+@test "two live panes, one already registered (live pid) → backfills only the missing one" {
   add_pane 1234 AAAA1111-2222-3333-4444-555566667777 /Users/x/.claude sid-a /tmp/w1
   add_pane 2345 BBBB2222-2222-3333-4444-555566667777 /Users/x/.claude sid-b /tmp/w2
-  printf '{"paneUUID":"AAAA1111-2222-3333-4444-555566667777","name":"x","cwd":"/tmp/w1","account":"claude","pid":1234,"startedAt":1,"session_id":"sid-a"}' > "$CC_REGISTRY_DIR/AAAA1111-2222-3333-4444-555566667777.json"
+  # AAAA's row carries a LIVE pid ($$) → present (untouched); BBBB has no row → backfilled.
+  printf '{"paneUUID":"AAAA1111-2222-3333-4444-555566667777","name":"x","cwd":"/tmp/w1","account":"claude","pid":%s,"startedAt":1,"session_id":"sid-a"}' "$$" > "$CC_REGISTRY_DIR/AAAA1111-2222-3333-4444-555566667777.json"
   run "$CCR"
   [ "$status" -eq 0 ]
   [ "$(rows)" = "2" ]
   echo "$output" | grep -q 'backfilled 1'
   echo "$output" | grep -q '1 present'
   [ -f "$CC_REGISTRY_DIR/BBBB2222-2222-3333-4444-555566667777.json" ]
+}
+
+# ── STALE-ROW HEAL (recycle-in-place) — item a60d62a215f1 ──────────────────────────────────────────
+# A monitoring desk recycles in place: same pane uuid, new pid + session + cwd (often a new account).
+# Its WRITE-ONCE row rots to a dead pid, so cc-sessions sweeps it stale and cc-classify stops enumerating
+# the (still-LIVE) pane → the reaper self-check false-pages Δ1. Aligning reconcile's present-test with
+# cc-sessions' liveness (kill -0 on the recorded pid) HEALS the row instead of miscounting it "present".
+
+@test "heals a stale-pid row on a live pane (recycle-in-place → new pid/session/cwd; full rewrite)" {
+  local pane=D08B4FC0-9253-4F54-A699-7D45CE568F84
+  local dead; dead="$(deadpid)"
+  # a rotted row from the PRIOR incarnation: dead pid + old session/cwd/account + a stale extra field.
+  printf '{"paneUUID":"%s","name":"tmp-D08B4FC0","cwd":"/private/tmp","account":"claude-secondary","pid":%s,"startedAt":1,"session_id":"old-sid-aaaa","stale_extra":true}' \
+    "$pane" "$dead" > "$CC_REGISTRY_DIR/$pane.json"
+  # the CURRENT live occupant of the SAME pane: new pid, new session, new cwd + account.
+  add_pane 2345 "$pane" /Users/x/.claude-quaternary new-sid-bbbb /Users/chrisren/Development/claude-infrastructure 1699222222000
+  run "$CCR"
+  [ "$status" -eq 0 ]
+  local f="$CC_REGISTRY_DIR/$pane.json"
+  [ "$(jq -r '.session_id' "$f")" = "new-sid-bbbb" ]                            # rewritten to the live occupant
+  [ "$(jq -r '.cwd' "$f")" = "/Users/chrisren/Development/claude-infrastructure" ]
+  [ "$(jq -r '.pid' "$f")" = "2345" ]
+  [ "$(jq -r '.account' "$f")" = "claude-quaternary" ]
+  [ "$(jq -r '.startedAt' "$f")" = "1699222222000" ]                           # CC's real start, not the stale 1
+  [ "$(jq -r '.stale_extra' "$f")" = "null" ]                                  # full rewrite — stale field gone
+  echo "$output" | grep -q 'healed 1'
+  echo "$output" | grep -q '0 present'                                        # NOT miscounted present
+}
+
+@test "--json reports a stale-row heal as healed, not backfilled or present" {
+  local pane=CAFED00D-1111-2222-3333-444444444444
+  local dead; dead="$(deadpid)"
+  printf '{"paneUUID":"%s","name":"old","cwd":"/old","account":"next","pid":%s,"startedAt":1,"session_id":"old"}' \
+    "$pane" "$dead" > "$CC_REGISTRY_DIR/$pane.json"
+  add_pane 2345 "$pane" /Users/x/.claude new-sid /tmp/new
+  run "$CCR" --json
+  [ "$status" -eq 0 ]
+  [ "$(echo "$output" | jq -r '.healed')" = "1" ]
+  [ "$(echo "$output" | jq -r '.backfilled')" = "0" ]
+  [ "$(echo "$output" | jq -r '.present')" = "0" ]
+}
+
+@test "--dry-run heals nothing (row unchanged) but reports would-heal" {
+  local pane=CAFED00D-1111-2222-3333-444444444444
+  local dead; dead="$(deadpid)"
+  printf '{"paneUUID":"%s","name":"old","cwd":"/old","account":"next","pid":%s,"startedAt":1,"session_id":"old-sid"}' \
+    "$pane" "$dead" > "$CC_REGISTRY_DIR/$pane.json"
+  add_pane 2345 "$pane" /Users/x/.claude new-sid /tmp/new
+  run "$CCR" --dry-run
+  [ "$status" -eq 0 ]
+  [ "$(jq -r '.session_id' "$CC_REGISTRY_DIR/$pane.json")" = "old-sid" ]   # NOT rewritten
+  echo "$output" | grep -q 'would heal 1'
+}
+
+@test "P8 forensics: a dead-pid row whose pane is NOT live is never touched (reconcile scans only live panes)" {
+  local pane=DEADBEEF-0000-0000-0000-000000000000
+  local dead; dead="$(deadpid)"
+  printf '{"paneUUID":"%s","name":"gone","cwd":"/gone","account":"next","pid":%s,"startedAt":1,"session_id":"forensic-sid"}' \
+    "$pane" "$dead" > "$CC_REGISTRY_DIR/$pane.json"
+  # NO add_pane for this pane → no live claude proc resolves to it → reconcile never iterates it.
+  run "$CCR"
+  [ "$status" -eq 0 ]
+  [ "$(jq -r '.session_id' "$CC_REGISTRY_DIR/$pane.json")" = "forensic-sid" ]  # forensic row untouched
+  echo "$output" | grep -q '0 live'
 }
 
 @test "unknown option → exit 2" {
