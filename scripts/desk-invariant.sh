@@ -365,8 +365,22 @@ selftest() {
   echo "desk-invariant --selftest: GREEN — healthy/stunned/stale/owned-wait/no-desk/budget-exhausted all RED-proven."
 }
 
+# ── companion check: the desk self-recycle ARMEDNESS invariant ────────────────────────────────────
+# Orthogonal to desk EXISTENCE (this script's subject): a desk can be perfectly alive and engaged
+# while its deterministic self-recycle is armed-but-inert, which is exactly how waiting-recycle.sh
+# reached 5425 abstains / 0 fires unnoticed. Wired HERE rather than as its own launchd job on
+# purpose: com.claude.desk-invariant.plist is already bootstrapped, and adding a plist is a C10
+# operator step — this fix must not sit behind one to go live. Best-effort by construction: it pages
+# through its own channel and must never alter this script's exit semantics.
+recycle_invariant_check() {
+  local s="${DESK_INVARIANT_RECYCLE_CHECK:-$SCRIPT_DIR/desk-recycle-invariant.sh}"
+  [ -x "$s" ] || return 0
+  "$s" --once >/dev/null 2>&1 || true
+  return 0
+}
+
 case "${1:-}" in
   --selftest) selftest ;;
-  ""|--once)  evaluate ;;
+  ""|--once)  evaluate; recycle_invariant_check ;;
   *)          printf 'desk-invariant: unknown arg %s (use --once | --selftest)\n' "$1" >&2; exit 2 ;;
 esac

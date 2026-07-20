@@ -171,24 +171,40 @@ case "${1:-}" in
       *) echo "!! unknown arm arg: $1 (use: arm [--brief <file>] [--live] [--busy-force])" >&2; exit 2 ;;
     esac; done
     f="$(arm_for "$PWD")"; was_armed=0; [ -f "$f" ] && was_armed=1
-    rm -f "$(disarm_for "$PWD")" 2>/dev/null                # an explicit arm overrides a prior `clear` opt-out
-    printf '%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ) $PWD" > "$f"
-    # brief template = the Stage-2 successor prompt seed; hard-required for LIVE (no empty-payload fire, FM-D)
+    # ── FAIL-ATOMIC VALIDATION (durability, 2026-07-20) ────────────────────────────────────────────
+    # Every refusal condition is checked BEFORE any marker is written, so a REFUSED arm changes
+    # NOTHING on disk. The prior order wrote the arm sentinel first and only THEN refused `--live`
+    # for a missing brief — exit 2, but the desk was left HALF-ARMED: `arm-<key>` present with
+    # `live-<key>`/`brief-<key>` absent, i.e. armed-and-SHADOW *forever*. That state reads as "armed"
+    # to `status` and to the hook's own opt-in gate, yet Stage 2 can never exec. Observed live under
+    # .claude-quaternary (arm- written 01:03, no live-/brief-) — the desk polled for hours, passed the
+    # arm gate, and shadow-logged instead of recycling. A half-success is the worst outcome for a
+    # go-live actuator: it looks armed and is inert. Refuse whole, or apply whole.
     if [ -n "$_brief" ]; then
       { [ -f "$_brief" ] && [ -s "$_brief" ]; } || { echo "!! --brief file missing/empty: $_brief" >&2; exit 2; }
-      cp "$_brief" "$(brief_for "$PWD")" 2>/dev/null
     fi
     if [ "$_live" = 1 ]; then
-      [ -s "$(brief_for "$PWD")" ] || { echo "!! --live requires a non-empty --brief template first (no empty-payload fire)" >&2; exit 2; }
-      : > "$(live_for "$PWD")"; mode="LIVE (deterministic recycle EXECS handoff-fire --recycle)"
-    else
-      rm -f "$(live_for "$PWD")" 2>/dev/null; mode="SHADOW (deterministic recycle LOGS would-fire, does NOT exec)"
+      # A usable brief must come from THIS invocation or from a prior arm of this cwd — checked here,
+      # against the not-yet-written state, so the refusal leaves the previous state intact.
+      { [ -n "$_brief" ] || [ -s "$(brief_for "$PWD")" ]; } || { echo "!! --live requires a non-empty --brief template first (no empty-payload fire)" >&2; exit 2; }
     fi
     # --busy-force: opt IN to the Tier-3 mid-work forced-recycle EXEC (beyond --live — a mid-work recycle is
     # riskier than an idle one). Without it, a busy+high desk still shadow-composes the drained brief + PAGES,
     # but does not exec. Requires --live (the busy exec gates on BOTH live + busyforce).
     if [ "$_busyforce" = 1 ]; then
       [ "$_live" = 1 ] || { echo "!! --busy-force requires --live (a mid-work forced recycle is opt-in beyond --live)" >&2; exit 2; }
+    fi
+    # ── all refusals cleared — every write below is unconditional ──────────────────────────────────
+    rm -f "$(disarm_for "$PWD")" 2>/dev/null                # an explicit arm overrides a prior `clear` opt-out
+    printf '%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ) $PWD" > "$f"
+    # brief template = the Stage-2 successor prompt seed; hard-required for LIVE (no empty-payload fire, FM-D)
+    [ -n "$_brief" ] && cp "$_brief" "$(brief_for "$PWD")" 2>/dev/null
+    if [ "$_live" = 1 ]; then
+      : > "$(live_for "$PWD")"; mode="LIVE (deterministic recycle EXECS handoff-fire --recycle)"
+    else
+      rm -f "$(live_for "$PWD")" 2>/dev/null; mode="SHADOW (deterministic recycle LOGS would-fire, does NOT exec)"
+    fi
+    if [ "$_busyforce" = 1 ]; then
       : > "$(busyforce_for "$PWD")"; mode="$mode + BUSY-FORCE (busy+high mid-work recycle ALSO execs)"
     else
       rm -f "$(busyforce_for "$PWD")" 2>/dev/null
