@@ -68,11 +68,19 @@ EOF
 printf 'BACKLOG %s\n' "\$*" >> "$D/backlog-calls"
 echo "cc-backlog reap: 0 reopened, 0 blocked (0 non-terminal scanned)"
 EOF
-  chmod +x "$D/bin/notify" "$D/bin/ps" "$D/bin/reconcile" "$D/bin/backlog"
+  # mock cc-inbox-guard: records the sweep call (comms fail-loud backstop wiring, --reap only) so no test
+  # hits the LIVE mailbox / operator phone. MUST be mocked — the real guard would sweep ~/.claude/mailbox.
+  cat > "$D/bin/guard" <<EOF
+#!/bin/bash
+printf 'GUARD %s\n' "\$*" >> "$D/guard-calls"
+echo "cc-inbox-guard: sweep done — 0 escalation(s)"
+EOF
+  chmod +x "$D/bin/notify" "$D/bin/ps" "$D/bin/reconcile" "$D/bin/backlog" "$D/bin/guard"
   export CC_REAPER_NOTIFY_BIN="$D/bin/notify"
   export CC_REAPER_PS_BIN="$D/bin/ps"
   export CC_REAPER_RECONCILE_BIN="$D/bin/reconcile"
   export CC_REAPER_BACKLOG_BIN="$D/bin/backlog"
+  export CC_REAPER_GUARD_BIN="$D/bin/guard"
   export CC_REAPER_PAGEDIR="$D/pages"
   export CC_REAPER_IDL="$D/idl.jsonl"
   export CC_PAGE_TO=""                        # neutralize any inherited real desk target

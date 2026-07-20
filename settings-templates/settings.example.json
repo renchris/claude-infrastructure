@@ -274,6 +274,11 @@
             "type": "command",
             "command": "~/.claude/hooks/session-register.sh",
             "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/mailbox-drain.sh session-start",
+            "timeout": 5
           }
         ]
       },
@@ -458,6 +463,11 @@
           {
             "type": "command",
             "command": "~/.claude/hooks/research-precognition-nudge.sh",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/mailbox-drain.sh prompt",
             "timeout": 5
           }
         ]

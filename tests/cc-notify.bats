@@ -162,6 +162,19 @@ sent_count() { if [ -f "$IT2_LOG" ]; then grep -c '^SEND' "$IT2_LOG"; else echo 
   grep -q 'line-a line-b line-c' "$CC_MAILBOX_DIR/$UUID.md"
 }
 
+@test "delivery-survives-busy-pane: a busy / bash-prompt pane still gets the message (mailbox → context, never keystrokes)" {
+  # 'busy' is IRRELEVANT to delivery — there is no keystroke to race. cc-notify enqueues regardless of what
+  # the pane is doing (mid-command, at a bash prompt, user actively typing) and touches NO composer.
+  run "$NOTIFY" "$UUID" "reaper page while you were mid-command"
+  [ "$status" -eq 0 ]
+  grep -q 'reaper page while you were mid-command' "$CC_MAILBOX_DIR/$UUID.md"
+  [ "$(sent_count)" -eq 0 ]     # zero keystrokes → nothing to corrupt / mis-run on the busy pane
+  # and the drain surfaces it as CONTEXT at the next SAFE boundary — never as a command on the bash line.
+  local drain="$REPO/hooks/mailbox-drain.sh" out
+  out="$(ITERM_SESSION_ID="w0t0p0:$UUID" bash -c 'echo "{}" | "$0" prompt' "$drain")"
+  printf '%s' "$out" | jq -r '.hookSpecificOutput.additionalContext' | grep -q 'reaper page while you were mid-command'
+}
+
 @test "cc-notify NEVER invokes the keystroke transport across ALL send paths" {
   "$NOTIFY" peer "one" >/dev/null 2>&1
   "$NOTIFY" "$UUID" "two" >/dev/null 2>&1

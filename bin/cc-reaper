@@ -99,6 +99,15 @@ if [ -z "$BACKLOG_BIN" ]; then
     [ -n "$_c" ] && [ -x "$_c" ] && { BACKLOG_BIN="$_c"; break; }
   done
 fi
+# cc-inbox-guard — the v2-comms fail-loud backstop: escalate mail enqueued to a session but never CONSUMED
+# (unacked past a deadline). Rides the reaper cadence (same --reap gating as reconcile/backlog); a missing
+# binary just skips the guard (no regression). Tunable via CC_INBOX_GUARD_* (see cc-inbox-guard).
+GUARD_BIN="${CC_REAPER_GUARD_BIN:-}"
+if [ -z "$GUARD_BIN" ]; then
+  for _c in "$HERE/cc-inbox-guard" "$HOME/.claude/bin/cc-inbox-guard" "$(command -v cc-inbox-guard 2>/dev/null || true)"; do
+    [ -n "$_c" ] && [ -x "$_c" ] && { GUARD_BIN="$_c"; break; }
+  done
+fi
 
 utc(){ date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null; }
 # desk-board IDL rows — supervisor-shaped {ts,actor,kind,…}. Values pass as jq --arg/--argjson (NEVER
@@ -246,6 +255,12 @@ sweep() {
   if [ "$reap" = 1 ] && [ -n "$BACKLOG_BIN" ]; then
     local bout; bout="$("$BACKLOG_BIN" reap 2>/dev/null || true)"
     [ -n "$bout" ] && { say "$bout"; log "backlog-reap: $bout"; }
+  fi
+  # v2-comms fail-loud backstop: escalate inbox mail enqueued but never consumed. Same --reap gating; the
+  # guard is self-damping (one escalation per undelivered state), so it is safe every sweep.
+  if [ "$reap" = 1 ] && [ -n "$GUARD_BIN" ]; then
+    local gout; gout="$("$GUARD_BIN" sweep 2>/dev/null || true)"
+    [ -n "$gout" ] && log "inbox-guard: $gout"
   fi
   local cj; cj="$("$CLASSIFY_BIN" --all --json 2>/dev/null || echo '[]')"
   local n; n="$(printf '%s' "$cj" | jq 'length' 2>/dev/null || echo 0)"
