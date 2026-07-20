@@ -445,9 +445,10 @@ the fired peer is an independent OS process, usually on another account, with no
 `--notify-back [UUID]` to close the loop: it appends a back-channel trailer to a COPY of the prompt (NEVER
 the caller's file) telling the fired session to ping the ORIGINATOR on completion / decision gate / blocker
 via `cc-notify <UUID> "HANDOFF-PING <slug>: <status>"`. UUID defaults to THIS firing pane
-(`$ITERM_SESSION_ID`, or `--session-id`). Reuses the SAME it2 pane-injection transport handoff-fire already
-uses downward — run in reverse (research: `docs/research/HANDOFF_BACKCHANNEL_2026-07-10.md`; plan:
-`docs/plans/TWO_WAY_SESSION_COMMS_PLAN.md`).
+(`$ITERM_SESSION_ID`, or `--session-id`). The ping rides the v2 INBOX transport — it lands in the
+originator's mailbox and is surfaced as context at its next safe boundary (or its `cc-await-ping` watcher
+wakes it), NEVER as keystrokes into a live composer (research: `docs/research/HANDOFF_BACKCHANNEL_2026-07-10.md`;
+plan + v2 anti-keystroke redesign: `docs/plans/TWO_WAY_SESSION_COMMS_PLAN.md`).
 
 **`--notify-back` ARMS R-PING** (§ Post-fire disposition): from the moment such a track fires, every
 disposition emission MUST carry an `R-PING: awaiting <before|during|after> ping from <slug>` clause
@@ -457,21 +458,30 @@ Pass the UUID EXPLICITLY even though it defaults: the disposition helper attribu
 this session by matching the uuid on the process cmdline — a bare watcher is invisible to it. The
 three companion CLIs (in `~/.claude/bin/`, on PATH):
 
-- **`cc-notify <name|uuid|--self> "<msg>"`** — the general any-session→any-session primitive, and the
-  ONLY sanctioned send path (⚠ never raw `osascript write text` for cross-session sends — its submit
-  newline is redraw-swallowed ~1-in-6 and nothing notices; a live countermand sat stranded 20 min on
-  2026-07-13). Resolves a friendly name (via the session registry / `cc-sessions`) or a raw pane UUID,
-  types the message into the target's composer, submits with **`\r` — NOT `\n`** (Claude Code's Ink
-  composer binds Enter to CR only; a `\n` is a no-op submit), then **VERIFIES the submit** (hardened
-  2026-07-13, same confirm-the-effect pattern as the recycle watcher): captures the pane, and while the
-  message still sits at the composer `❯`, re-sends CR (2 retries) — a persistent strand exits **4** with
-  a loud message, never a false "delivered". Lands as a real user message: WAKES an idle session, QUEUES
-  into a busy one. ALWAYS also records `~/.claude/mailbox/<uuid>.md` — so a closed/recycled pane degrades
-  to mailbox-only (exit 0), never a hard fail. `--mailbox-only` skips injection; `--from <name>` attributes.
-- **`cc-await-ping [<uuid>]`** — the modal-safe PULL complement. Launch via `Bash(run_in_background)`
-  before going idle after a `--notify-back` fire; it blocks on your mailbox and exits when a ping lands, so
-  the harness's task-completion notification re-invokes you even if the peer's composer injection mislanded
-  because you were at a permission/modal prompt. Bounded `--timeout` (default 1800s).
+- **`cc-notify <name|uuid|--self> "<msg>"`** — the general any-session→any-session primitive, and the ONLY
+  sanctioned send path. **v2 (2026-07-20 — the anti-keystroke redesign):** it ENQUEUES the message to the
+  target's inbox `~/.claude/mailbox/<uuid>.md`; it does NOT keystroke the composer. The v1 it2 `session
+  send` transport is GONE — it raced the user's live input (at a bash prompt the surface text ran as a
+  command, `(eval):1: parse error`; at a Claude prompt it corrupted the half-typed message + cursor). The
+  target's `hooks/mailbox-drain.sh` surfaces the mail as CONTEXT (additionalContext on
+  SessionStart/UserPromptSubmit, or folded into `session-continue`'s Stop reason for a looping session),
+  and its armed `cc-await-ping` watcher wakes it within a poll — so the message ALWAYS lands as something
+  it READS, at a safe boundary, NEVER as keystrokes on the live input line (regular box OR bash box).
+  Resolves a friendly name (registry / `cc-sessions`) or a raw pane UUID. Exit: **0** = enqueued (stderr
+  says "wake-path armed" for a watched live target, "NO watcher armed" for a live-but-idle one, "mailbox
+  only" for a not-live/closed pane); **3** = unresolvable; **5** = inbox UNWRITABLE (self-escalates — a
+  durable alarm record + a best-effort phone page, since a message that cannot persist must be loud). The
+  `<uuid>.seen`/`.acked` split cursor makes delivery exactly-once + lets the guard see a loss. `--mailbox-only`
+  records without the liveness verdict; `--from <name>` attributes. The fail-loud backstop **`cc-inbox-guard`**
+  (rides the reaper cadence) escalates any message enqueued to a live session but never CONSUMED — nothing
+  silently vanishes.
+- **`cc-await-ping [<uuid>]`** — the modal-safe PULL complement AND the idle-WAKE. Launch via
+  `Bash(run_in_background)` when going idle (after a `--notify-back` fire, or as a monitoring desk's standing
+  listener); it polls the shared `.seen` cursor — firing IMMEDIATELY on mail already pending at arm time
+  (v2 F6a; the old `wc -l` baseline missed exactly that line) — and on a new line prints it (advancing the
+  cursor) then exits, so the harness's task-completion notification re-invokes you with the mail in the
+  notification body. It beats a `<uuid>.watching` heartbeat each poll so `cc-notify`/`cc-announce` can
+  confirm a real WAKE path (not mere liveness). Bounded `--timeout` (default 1800s).
 - **`cc-sessions [--json|--names]`** — lists live sessions (name→pane UUID) for addressing; sweeps stale
   entries (pane gone or owning process dead). Sessions register on `SessionStart` (predating sessions
   register on next restart); the registry is account-agnostic (`~/.claude/cc-registry/`), so cross-account
