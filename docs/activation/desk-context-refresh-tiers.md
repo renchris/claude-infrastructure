@@ -79,3 +79,25 @@ Downgrade without disarming: `desk-arm-live.sh --shadow`, or re-`arm --live` (dr
 adaptive decay + floor, busy-force shadow/live/drain/`--busy-force`-gate, hard-hold pages
 (decision/sequencer/teammate) + page-pacing, Tier-2 queue + high-vs-medium contrast, and the CLI. Idle-path
 output is byte-identical to the pre-tier hook (all busy branches are guarded), so every prior guarantee holds.
+
+## Continuous-signals upgrade — context-econ (2026-07-20)
+
+Design + rationale: `docs/research/context-econ-2026-07-20.md` (operator goal: "intelligent, not
+hardcoded" recycle timing). Three signals from the shared `hooks/lib/context-econ.sh` compose ONTO the
+tiers above — every unknown signal degrades to the exact tiered behavior, and the arm/live/busy-force
+exec gating is unchanged:
+
+| Addition | What it does | Damp posture |
+|---|---|---|
+| **S6 conversation-hold** (SOFT) | a fresh INTERACTIVE turn (operator typed / peer injected < `CC_WR_CONV_HOLD_S` 900s) holds the free-win recycle — a live exchange leaves no git/mailbox trace and used to read as "idle" (the 74%-mid-conversation incident). Auto-drive re-prompts (session-continue 🔧 / goal Stop feedback) are excluded on two axes (isMeta:true + prefix), so auto-driven desks still free-win. At ≥ the busy ceiling it yields like every soft hold (forced drain carries on). | a HOLD only ever reduces firing → ships LIVE |
+| **Forecast-early busy trigger** | `used ≥ CC_WR_T_BUSY_MIN` (60) AND burn-forecast ≤ `CC_WR_LEAD_MIN` (20) minutes to the 88% wall ⇒ the busy ladder (advisory → drain) starts BEFORE `T_BUSY` — at high burn the wall arrives first. Burn measured consumer-side into `<tel>.hist` (`ce_sample`/`ce_burn`; ≥2 samples spanning ≥120s or no forecast). | widens advisory/shadow/page only; EXEC still `--live --busy-force` |
+| **Pause-point nudge** | BUSY + soft-hold + `used ≥ CC_WR_T_NUDGE` (50) ⇒ a PACED advisory to plan the boundary (commit → persist → /handoff), re-armed per +`CC_WR_NUDGE_REARM` (10)% fill; conversation-aware wording. Replaces the silent 50–75% gap; never fires a recycle itself. | advisory-only → ships LIVE |
+
+`boundary-handoff.sh` (ALL sessions, Stop-event) gains the same forecast-early fire
+(`CC_BOUNDARY_T_MIN` 55 / `CC_BOUNDARY_LEAD_MIN` 20) and conversation-aware WORDING (never
+suppression) via `CC_BOUNDARY_CONV_S` (900s). Model-side half: the global CLAUDE.md
+**Context Stewardship** section (three-regime judgment; hook advisories are authoritative).
+
+Tests now: `tests/waiting-recycle.bats` 88 (76 prior + 12 context-econ) ·
+`tests/context-econ.bats` 17 (lib unit, production-shaped fixtures) ·
+`tests/boundary-handoff.bats` 11 (new suite — the hook was previously untested).

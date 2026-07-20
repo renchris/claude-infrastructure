@@ -193,6 +193,31 @@ Multiple Claude Code sessions on ONE checkout share the git index → a bare
 
 ---
 
+## Context Stewardship (All Projects)
+
+⚠️ Context is a **budget with three regimes** — treat every natural pause as a recycle decision (fill%
+from the statusline / `cc-context`); the goal is a recycle at the RIGHT moment, never a forced one at
+the wall:
+
+- **Idle** (just waiting/watching) at **≥~35%** fill — or long-idle at ≥25% — is a **free win**:
+  `/handoff` now. Nothing is in hand, state is disk-reconstructible; a fresh successor beats a rotting
+  context every time.
+- **Valuable in-flight state** (a live operator/peer exchange, rich unpersisted decisions): do NOT cut
+  it — and do not ride it blindly either. From **~50%**, plan the pause-point deliberately: finish the
+  exchange, **persist** what it produced (dod-persist / plan doc / memory / commit), THEN `/handoff` at
+  its natural end.
+- **Heavy build / high 2-way volume**: watch **velocity, not just level** — at high burn the 90%
+  auto-compact wall arrives mid-turn. Land the drain (commit → persist → `/handoff`) **before ~75%**;
+  never ride past ~85%. Rot degrades decisions well before the wall breaks the session.
+
+Deterministic rails back this judgment (claude-infrastructure): `waiting-recycle.sh` (desk — tiered
+free-win/forced-drain + S6 conversation-hold + burn-forecast early trigger + pause-point nudge) and
+`boundary-handoff.sh` (all sessions, committed+green Stop, forecast-early). Treat their `⟳`/`⚑`
+advisories as **authoritative — act on the FIRST one** (each escalates deterministically if ignored).
+Design + signals: `docs/research/context-econ-2026-07-20.md`.
+
+---
+
 ## Session Close Protocol (All Projects)
 
 🚨 Drive in-scope work to a finished, verified, committed state **without stopping to ask**;
