@@ -140,6 +140,19 @@ Both fans use `parallel()` rather than `pipeline()`. That is one of the genuine 
 lead cannot group candidates until it holds all of them, and cannot write the variance log until all
 lenses have reported.
 
+**Making the contract auditable.** Rules 1 and 4 are mechanically checkable, so they are checked:
+`pyramid-principle-full/scripts/pyramid-worklog-lint.sh` is fail-closed (exit 1 on violation, 2 on
+usage/unreadable) and asserts Session 0 recorded a bounded input with a token estimate and a tier,
+and that the rework loop stayed within 2 rounds; it warns when the Session 3 pyramid carries no
+citations — the condition that forces later sessions back into the corpus. It was proven on a
+**discriminator pair** rather than one direction: the Jul-10 doc_classifier worklog fails both rules
+and exits 1, a compliant fixture exits 0. Without the contract, a non-compliant run was visible only
+as a large bill after the fact.
+
+Rules 2, 3 and 5 are not mechanically checkable from the worklog — they are properties of the
+orchestration, not of the artifact. They rely on the contract loading with the skill, which is why
+it lives in `SKILL.md` rather than in this document.
+
 ---
 
 ## 5. Replay — would the contract have caught this run?
