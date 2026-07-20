@@ -51,12 +51,19 @@
 #   cc-reconcile -h         this help
 #
 # Env overrides (tests): CC_REGISTRY_DIR · CC_RECONCILE_PS_BIN · CC_RECONCILE_SESSIONS_DIRS
-#   (space-separated dirs holding <pid>.json) · CC_RECONCILE_LOG · CC_RECONCILE_NOW_MS.
+#   (space-separated dirs holding <pid>.json) · CC_RECONCILE_LOG · CC_RECONCILE_NOW_MS ·
+#   CC_RECONCILE_IT2_BIN (pane-liveness transport for the prune) · CC_REG_RETAIN_H.
+#
+# GUARDED PRUNE (f9385874de10): after backfill/heal, rows for CONFIRMED-GONE panes (pid dead AND
+#   pane absent from `it2 session list`) are removed once past the CC_REG_RETAIN_H forensic window —
+#   the same retention contract cc-sessions applies, so P8 (a spawn-death stays investigable) holds.
+#   A LIVE pane's stale-pid row is HEALED, never pruned. it2 unreadable ⇒ prune NOTHING (fail-closed).
 # bash 3.2-safe. Read-only except for the additive row writes.
 set -uo pipefail
 
 REG_DIR="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"
 PS_BIN="${CC_RECONCILE_PS_BIN:-/bin/ps}"
+IT2_BIN="${CC_RECONCILE_IT2_BIN:-$HOME/.claude/bin/it2}"
 # CC's per-pid session registries across the accounts. ~/.claude-next/sessions symlinks to
 # ~/.claude/sessions, so that one dir covers both; realpath-dedup below drops the alias.
 SESSIONS_DIRS="${CC_RECONCILE_SESSIONS_DIRS:-$HOME/.claude/sessions $HOME/.claude-secondary/sessions $HOME/.claude-tertiary/sessions $HOME/.claude-quaternary/sessions}"
@@ -204,18 +211,68 @@ done <<EOF
 $(live_claude_pids)
 EOF
 
+# ── GUARDED PRUNE — confirmed-gone rows only (item f9385874de10) ──────────────────────────────────
+# The registry leaked rows: hooks/session-deregister.sh was written to drop a pane's own row on
+# SessionEnd but was never WIRED into settings.json, so every clean close and every `handoff-fire.sh
+# self-close` left its row behind (82 stale rows, 2026-07-20) and cc-reaper read those ghosts as
+# crashed sessions. Wiring the hook stops NEW leaks; this sweeps the accumulated ones.
+#
+# THE INVARIANTS THIS MUST NOT BREAK:
+#   P8 (presence ≠ liveness) — a dead row is the ONLY evidence of a spawn-death, so deletion stays an
+#     AGE decision, never a liveness one. Same CC_REG_RETAIN_H window cc-sessions uses (default 24h).
+#     We only fix the leak IN that policy: cc-sessions requires `startedAt > 0` to age a row out, so a
+#     row with a missing/zero timestamp was IMMORTAL. Undated rows now age by file mtime.
+#   HEAL, DO NOT PRUNE — a LIVE pane whose row carries a stale pid is cc-reconcile's heal case
+#     (handled above); it must never be deleted here. Hence pid-dead AND pane-gone, both required.
+#   FAIL-CLOSED — if it2 cannot answer, pane liveness is UNKNOWN, so NOTHING is pruned. An
+#     unreadable transport must never look like "every pane is gone".
+n_pruned=0
+RETAIN_S=$(( ${CC_REG_RETAIN_H:-24} * 3600 ))
+now_s=$(( now_ms / 1000 ))
+live_panes=""; have_panes=0
+if pl="$("$IT2_BIN" session list --json 2>/dev/null)" && [ -n "$pl" ]; then
+  lp="$(printf '%s' "$pl" | jq -r 'if type=="array" then .[].id // empty else empty end' 2>/dev/null)"
+  [ -n "$lp" ] && { live_panes="$lp"; have_panes=1; }
+fi
+if [ "$have_panes" = 1 ]; then
+  for f in "$REG_DIR"/*.json; do
+    [ -e "$f" ] || continue
+    uuid="$(jq -r '.paneUUID // empty' "$f" 2>/dev/null)"
+    [ -n "$uuid" ] || continue                                   # corrupt row → cc-sessions' call, not ours
+    printf '%s\n' "$live_panes" | grep -qxF "$uuid" && continue  # pane LIVE → never prune (heal case)
+    rowpid="$(jq -r '.pid // empty' "$f" 2>/dev/null)"
+    [ -n "$rowpid" ] && kill -0 "$rowpid" 2>/dev/null && continue # pid alive → not confirmed gone
+    # CONFIRMED GONE. Age it out under the retention window; undated rows fall back to mtime so
+    # they can expire at all (the cc-sessions `startedAt > 0` immortality gap).
+    started="$(jq -r '.startedAt // 0' "$f" 2>/dev/null)"
+    case "$started" in ''|*[!0-9]*) started=0 ;; esac
+    started=$(( started / 1000 ))
+    [ "$started" -gt 0 ] || started="$(stat -f %m "$f" 2>/dev/null || stat -c %Y "$f" 2>/dev/null || echo 0)"
+    case "$started" in ''|*[!0-9]*) started=0 ;; esac
+    [ "$started" -gt 0 ] && [ $(( now_s - started )) -gt "$RETAIN_S" ] || continue
+    if [ "$MODE" = dryrun ]; then
+      n_pruned=$(( n_pruned + 1 ))
+    elif rm -f "$f" 2>/dev/null; then
+      n_pruned=$(( n_pruned + 1 ))
+      log "pruned pane=$uuid pid=${rowpid:-none} (pane gone + pid dead, age > ${RETAIN_S}s)"
+    fi
+  done
+fi
+
 verb=$([ "$MODE" = dryrun ] && echo "would backfill" || echo "backfilled")
 healverb=$([ "$MODE" = dryrun ] && echo "would heal" || echo "healed")
+pruneverb=$([ "$MODE" = dryrun ] && echo "would prune" || echo "pruned")
 if [ "$JSON" = 1 ]; then
   jq -nc --argjson live "$n_live" --argjson present "$n_present" --argjson backfilled "$n_backfilled" \
-         --argjson healed "$n_healed" \
+         --argjson healed "$n_healed" --argjson pruned "$n_pruned" \
          --argjson no_pane "$n_no_pane" --argjson no_sid "$n_no_sid" --argjson skipped "$n_skipped" \
          --arg mode "$MODE" \
     '{mode:$mode, live:$live, present:$present, backfilled:$backfilled, healed:$healed,
-      no_pane:$no_pane, no_sid:$no_sid, skipped:$skipped}'
+      pruned:$pruned, no_pane:$no_pane, no_sid:$no_sid, skipped:$skipped}'
 else
-  printf 'cc-reconcile: %d live · %d present · %s %d · %s %d · skipped %d (no-pane %d, no-sid %d)\n' \
-    "$n_live" "$n_present" "$verb" "$n_backfilled" "$healverb" "$n_healed" "$n_skipped" "$n_no_pane" "$n_no_sid"
+  printf 'cc-reconcile: %d live · %d present · %s %d · %s %d · %s %d · skipped %d (no-pane %d, no-sid %d)\n' \
+    "$n_live" "$n_present" "$verb" "$n_backfilled" "$healverb" "$n_healed" \
+    "$pruneverb" "$n_pruned" "$n_skipped" "$n_no_pane" "$n_no_sid"
   [ -n "$backfilled_names" ] && printf '  %s:%s\n' "$verb" "$backfilled_names"
   [ -n "$healed_names" ] && printf '  %s:%s\n' "$healverb" "$healed_names"
 fi

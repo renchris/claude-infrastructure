@@ -31,7 +31,33 @@ exit 0
 SH
   chmod +x "$D/bin/ps"
   export CC_RECONCILE_PS_BIN="$D/bin/ps"
+
+  # it2 stub for the guarded prune (f9385874de10). `session list --json` echoes $D/panes, which is
+  # EMPTY by default ⇒ pane liveness unknown ⇒ FAIL-CLOSED, prune disabled. Every pre-existing test
+  # therefore keeps its exact old behaviour; the prune tests opt in via live_panes/gone_panes below.
+  : > "$D/panes"
+  cat > "$D/bin/it2" <<SH
+#!/bin/bash
+[ "\$1 \$2" = "session list" ] && cat "$D/panes"
+exit 0
+SH
+  chmod +x "$D/bin/it2"
+  export CC_RECONCILE_IT2_BIN="$D/bin/it2"
 }
+
+# declare the iTerm2-live pane set (a JSON array of {id}); any pane NOT listed reads as GONE.
+set_live_panes() {
+  local out="[" first=1 p
+  for p in "$@"; do [ "$first" = 1 ] || out="$out,"; out="$out{\"id\":\"$p\"}"; first=0; done
+  printf '%s]\n' "$out" > "$D/panes"
+}
+# a registry row for a pane with NO live claude proc — args: pane pid startedAt
+add_orphan_row() {
+  printf '{"paneUUID":"%s","name":"orphan","cwd":"/gone","account":"next","pid":%s,"startedAt":%s,"session_id":"sid-%s"}' \
+    "$1" "$2" "$3" "$1" > "$CC_REGISTRY_DIR/$1.json"
+}
+# startedAt (ms) far enough in the past to clear the CC_REG_RETAIN_H forensic window.
+old_ms() { echo $(( CC_RECONCILE_NOW_MS - 48 * 3600 * 1000 )); }
 
 # add a live claude proc to the ps list + its env blob + (optionally) a CC sessions/<pid>.json.
 # args: pid paneUUID configdir sid cwd [startedAt] [kind]
@@ -247,4 +273,102 @@ deadpid() { sleep 1 & local p=$!; kill "$p" 2>/dev/null; wait "$p" 2>/dev/null |
 @test "unknown option → exit 2" {
   run "$CCR" --bogus
   [ "$status" -eq 2 ]
+}
+
+# ── f9385874de10: the guarded prune ─────────────────────────────────────────────────────────────
+
+@test "prune: a CONFIRMED-GONE row (pane absent + pid dead) past the retain window is removed" {
+  local pane=AAAA0000-0000-0000-0000-000000000001 dead; dead="$(deadpid)"
+  add_orphan_row "$pane" "$dead" "$(old_ms)"
+  set_live_panes SOMEONE-ELSE-0000-0000-000000000009
+  run "$CCR" --json
+  [ "$status" -eq 0 ]
+  [ ! -f "$CC_REGISTRY_DIR/$pane.json" ]
+  [ "$(printf '%s' "$output" | jq -r .pruned)" = 1 ]
+}
+
+@test "prune: a LIVE pane's stale-pid row is HEALED, never pruned (that is cc-reconcile's heal case)" {
+  local pane=AAAA0000-0000-0000-0000-000000000002 dead; dead="$(deadpid)"
+  add_orphan_row "$pane" "$dead" "$(old_ms)"
+  add_pane 51001 "$pane" "$HOME/.claude" "fresh-sid" "/work/x"   # a LIVE claude proc on that pane
+  set_live_panes "$pane"
+  run "$CCR" --json
+  [ "$status" -eq 0 ]
+  [ -f "$CC_REGISTRY_DIR/$pane.json" ]
+  [ "$(jq -r .session_id "$CC_REGISTRY_DIR/$pane.json")" = "fresh-sid" ]   # healed
+  [ "$(printf '%s' "$output" | jq -r .pruned)" = 0 ]
+  [ "$(printf '%s' "$output" | jq -r .healed)" = 1 ]
+}
+
+@test "prune: FAIL-CLOSED — it2 unreadable (pane liveness unknown) prunes NOTHING" {
+  local pane=AAAA0000-0000-0000-0000-000000000003 dead; dead="$(deadpid)"
+  add_orphan_row "$pane" "$dead" "$(old_ms)"
+  : > "$D/panes"                      # it2 answers nothing ⇒ unknown, NOT "every pane is gone"
+  run "$CCR" --json
+  [ "$status" -eq 0 ]
+  [ -f "$CC_REGISTRY_DIR/$pane.json" ]
+  [ "$(printf '%s' "$output" | jq -r .pruned)" = 0 ]
+}
+
+@test "prune: P8 forensics — a gone row INSIDE the retain window survives (age, not liveness)" {
+  local pane=AAAA0000-0000-0000-0000-000000000004 dead; dead="$(deadpid)"
+  add_orphan_row "$pane" "$dead" "$CC_RECONCILE_NOW_MS"   # just died — still investigable
+  set_live_panes SOMEONE-ELSE-0000-0000-000000000009
+  run "$CCR" --json
+  [ "$status" -eq 0 ]
+  [ -f "$CC_REGISTRY_DIR/$pane.json" ]
+  [ "$(printf '%s' "$output" | jq -r .pruned)" = 0 ]
+}
+
+@test "prune: a gone pane whose recorded pid is still ALIVE is not confirmed gone → kept" {
+  local pane=AAAA0000-0000-0000-0000-000000000005
+  add_orphan_row "$pane" "$$" "$(old_ms)"                 # $$ = this bats process, definitely alive
+  set_live_panes SOMEONE-ELSE-0000-0000-000000000009
+  run "$CCR" --json
+  [ "$status" -eq 0 ]
+  [ -f "$CC_REGISTRY_DIR/$pane.json" ]
+  [ "$(printf '%s' "$output" | jq -r .pruned)" = 0 ]
+}
+
+# cc-sessions ages a row out only when startedAt > 0, so an undated row was IMMORTAL — the shape the
+# 82-row pile was made of. mtime is the fallback clock (the file is backdated here to prove it).
+@test "prune: an UNDATED gone row ages out by file mtime (the immortality gap)" {
+  local pane=AAAA0000-0000-0000-0000-000000000006 dead; dead="$(deadpid)"
+  printf '{"paneUUID":"%s","name":"undated","cwd":"/gone","account":"next","pid":%s,"session_id":"s"}' \
+    "$pane" "$dead" > "$CC_REGISTRY_DIR/$pane.json"
+  touch -t 202001010000 "$CC_REGISTRY_DIR/$pane.json"
+  set_live_panes SOMEONE-ELSE-0000-0000-000000000009
+  run env CC_RECONCILE_NOW_MS=$(( $(date +%s) * 1000 )) "$CCR" --json
+  [ "$status" -eq 0 ]
+  [ ! -f "$CC_REGISTRY_DIR/$pane.json" ]
+}
+
+@test "prune: --dry-run reports the count but deletes nothing" {
+  local pane=AAAA0000-0000-0000-0000-000000000007 dead; dead="$(deadpid)"
+  add_orphan_row "$pane" "$dead" "$(old_ms)"
+  set_live_panes SOMEONE-ELSE-0000-0000-000000000009
+  run "$CCR" --dry-run --json
+  [ "$status" -eq 0 ]
+  [ -f "$CC_REGISTRY_DIR/$pane.json" ]
+  [ "$(printf '%s' "$output" | jq -r .pruned)" = 1 ]
+}
+
+# ── f9385874de10: the WIRING (the actual root cause — the hook existed but nothing called it) ────
+
+@test "wiring: session-deregister.sh is registered as a SessionEnd hook in the settings template" {
+  run jq -e '[.hooks.SessionEnd[]?.hooks[]?.command]
+             | any(. == "~/.claude/hooks/session-deregister.sh")' \
+    "$REPO/settings-templates/settings.example.json"
+  [ "$status" -eq 0 ]
+}
+
+@test "wiring: an activation script exists to wire the hook into the LIVE settings.json (C10)" {
+  local A="$REPO/docs/activation/pending-activation/08-session-deregister-activate.sh"
+  [ -f "$A" ]
+  run bash -n "$A"
+  [ "$status" -eq 0 ]
+  grep -q 'session-deregister.sh' "$A"
+  run env CONFIRM=0 bash "$A"      # no CONFIRM ⇒ dry run, must never touch the live settings
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" | grep -qi 'dry run'
 }

@@ -359,6 +359,16 @@
         ]
       },
       {
+        "_comment": "Registry deregistration: removes THIS pane's ~/.claude/cc-registry/<paneUUID>.json on a clean close. session-register.sh (SessionStart) wrote the row and session-deregister.sh was written to remove it, but the pair was never actually wired here — so every clean close and every `handoff-fire.sh self-close` leaked its row (82 stale rows found 2026-07-20), and the reaper read those ghosts as crashed sessions. Skips reason=clear by design (same pane re-registers immediately). Wired by docs/activation/pending-activation/08-session-deregister-activate.sh.",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/session-deregister.sh",
+            "timeout": 5
+          }
+        ]
+      },
+      {
         "hooks": [
           {
             "type": "command",
