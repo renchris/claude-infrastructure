@@ -223,8 +223,11 @@ Design + signals: `docs/research/context-econ-2026-07-20.md`.
 🚨 Drive in-scope work to a finished, verified, committed state **without stopping to ask**;
 surface everything else; end every *write* turn with one un-fakeable state readout — replacing
 the manual "are we complete / loose-ends / handoff?" close. **Mechanism = this rule + a `/wrap`
-command. NO Stop hook** (a Stop hook can't see scope and can't reach the model except by
-*blocking* — an infinite-loop anti-pattern; an advisory `additionalContext` Stop hook is inert).
+command + fact-bound Stop hooks — never a scope-judging one** (a Stop hook can't see scope and
+can't reach the model except by *blocking* — an infinite-loop anti-pattern; an advisory
+`additionalContext` Stop hook is inert. What DOES run at Stop is fact-bound: `completion-assert.sh`
+blocks a false-done against the live ledger; `operator-readout.sh` renders the operator's
+manual-steps close block from disk truth — pure `systemMessage`, never a block).
 The agent runs the git/gate reads itself, so the ledger reports facts, not self-report.
 
 **Freeze the DoD at intake.** The first time a task will write tracked files, restate the user's
@@ -291,6 +294,15 @@ rung (priority **⛔ > 📤 > 🔧 > 📦 > ✅**); each is exactly one disposit
 `📦` vs `✅` (*committed ≠ landed*) is the load-bearing split — it surfaces the branch-stranded risk.
 The line's verb = the `→ Next` below; only ⛔/📦 wait on the user, the rest auto-continue. Mixed turn →
 show the worst-open rung only.
+
+**Manual steps are rendered by construction (silver-platter close).** When operator-owned steps
+exist on disk (deploy-lag · pending activations · open class-C decisions · blocked backlog) or
+work sits 📦-parked, the `operator-readout.sh` Stop hook renders the close block itself — the
+state line plus numbered `▶ <exact runnable command>` lines (`◆` marks a genuine judgment call
+with no single command), damped: any change renders NOW; unchanged re-asserts after 15 min. Your
+close prose must lead with the same governing line and must NEVER bury or paraphrase a rendered
+command back into paragraphs (Silver-Platter rule); `/wrap` prints the same block
+(`hooks/operator-readout.sh --render` — one renderer, so the push and pull surfaces cannot drift).
 
 **Opt-in detail** (`/wrap --full` / on request) appends the dense per-field ledger — never the default:
 

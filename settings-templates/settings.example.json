@@ -438,6 +438,11 @@
             "type": "command",
             "command": "~/.claude/hooks/completion-assert.sh",
             "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/operator-readout.sh",
+            "timeout": 10
           }
         ]
       },
