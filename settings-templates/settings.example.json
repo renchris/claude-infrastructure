@@ -331,6 +331,16 @@
             "timeout": 5
           }
         ]
+      },
+      {
+        "_comment": "Desk role activation: injects the canonical desk brief (docs/templates/desk-boot-brief.md) IFF this pane holds ~/.claude/cc-roles/desk. Pairs with dod-persist.sh above — that carries the mutable frozen DoD keyed on cwd, this carries the durable ROLE keyed on the role file. Silent no-op in every non-desk session. Wired by docs/activation/pending-activation/06-desk-bootstrap-activate.sh.",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/desk-brief-inject.sh",
+            "timeout": 5
+          }
+        ]
       }
     ],
     "SessionEnd": [

@@ -1,0 +1,114 @@
+#!/bin/bash
+# desk-register — register the CURRENT pane as the machine-wide desk (P0-15 role indirection).
+#
+# The desk identity is a FILE: ${CC_ROLES_DIR:-~/.claude/cc-roles}/desk holds the pane UUID of
+# whichever pane currently holds the role. Every role-addressed consumer follows it —
+# cc-notify/cc-announce (ping routing), cc-await-ping (mailbox), cc-reaper (page target,
+# CC_PAGE_TO_FILE), cc-classify (desk-role NEVER-REAP, a17 S-3), cc-dispatch (worker back-channel),
+# hooks/waiting-recycle.sh (idle-recycle gate) and scripts/desk-invariant.sh (desk-existence sweep).
+#
+# handoff-fire.sh already writes this file on an `--as-role desk` fire, so a FIRED desk is
+# registered automatically. This tool is the missing standalone primitive: it registers a desk that
+# was started by HAND (`claude-desk`, or `/desk` in an already-open session), which handoff-fire
+# never touched. Registration is the single activation trigger — hooks/desk-brief-inject.sh keys the
+# canonical brief injection off this exact file.
+#
+# Usage:
+#   desk-register [--role <name>] [--pane <uuid|sid|name>] [--print] [--quiet] [--force]
+#
+# Output (default):
+#   registered <role> → <pane>              (exit 0, newly claimed)
+#   already <role> → <pane>                 (exit 0, idempotent no-op — same pane)
+#   reassigned <role>: <old> → <pane>       (exit 0, role moved to this pane)
+#
+# Pane resolution (first hit wins):
+#   --pane <value>  → used VERBATIM (a caller passing an explicit target owns its shape; the role
+#                     file legitimately holds a uuid, a session id, or a pane name).
+#   $SESSION_ID     → used verbatim.
+#   $ITERM_SESSION_ID ("w2t0p3:<UUID>") → the part after the last colon, SHAPE-CHECKED as a UUID.
+# The shape check exists because `${VAR##*:}` on an unset/malformed variable silently yields garbage
+# rather than empty — and a garbage role file breaks every consumer above SILENTLY (pings route to
+# nowhere, the reaper pages a pane that does not exist, cc-classify stops protecting the real desk).
+# Fail loud instead. --force skips the shape check (escape hatch; still refuses an empty value).
+#
+# Writes are atomic (tmp + mv, mirroring handoff-fire.sh write_role) so a concurrent reader never
+# sees a half-written role file.
+#
+# Env overrides (tests):
+#   CC_ROLES_DIR   (default ~/.claude/cc-roles)
+set -uo pipefail
+
+ROLES_DIR="${CC_ROLES_DIR:-$HOME/.claude/cc-roles}"
+
+usage() { sed -n '2,38p' "$0" | sed 's/^# \{0,1\}//'; }
+
+ROLE="desk" PANE="" QUIET=0 PRINT=0 FORCE=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --role)    ROLE="${2:?--role needs a value}"; shift 2 ;;
+    --pane)    PANE="${2:?--pane needs a value}"; shift 2 ;;
+    --print)   PRINT=1; shift ;;
+    --quiet|-q) QUIET=1; shift ;;
+    --force)   FORCE=1; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *)         echo "desk-register: unknown argument '$1'" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
+# --print: report the CURRENT holder without writing anything (the read half of the contract).
+if [ "$PRINT" = 1 ]; then
+  cur="$(head -n1 "$ROLES_DIR/$ROLE" 2>/dev/null | tr -d '[:space:]')"
+  [ -n "$cur" ] || { echo "desk-register: no '$ROLE' role registered" >&2; exit 1; }
+  printf '%s\n' "$cur"; exit 0
+fi
+
+# --- resolve this pane ------------------------------------------------------------------------
+explicit=1
+if [ -z "$PANE" ]; then
+  if [ -n "${SESSION_ID:-}" ]; then
+    PANE="$SESSION_ID"
+  else
+    itsid="${ITERM_SESSION_ID:-}"
+    [ -n "$itsid" ] || {
+      echo "desk-register: no \$ITERM_SESSION_ID and no --pane — cannot tell which pane to register." >&2
+      echo "   Run this INSIDE the pane that should hold the '$ROLE' role, or pass --pane <uuid>." >&2
+      exit 1
+    }
+    PANE="${itsid##*:}"
+    explicit=0
+  fi
+fi
+[ -n "$PANE" ] || { echo "desk-register: resolved an EMPTY pane id — refusing to write a role file that routes nowhere." >&2; exit 1; }
+
+# Shape-check ONLY the derived-from-$ITERM_SESSION_ID path (see header). An explicit --pane/$SESSION_ID
+# is the caller's own contract and may legitimately be a session id or a pane name.
+if [ "$explicit" = 0 ] && [ "$FORCE" = 0 ]; then
+  case "$PANE" in
+    [0-9A-Fa-f]*-[0-9A-Fa-f]*-[0-9A-Fa-f]*-[0-9A-Fa-f]*-[0-9A-Fa-f]*) : ;;
+    *)
+      echo "desk-register: \$ITERM_SESSION_ID='${ITERM_SESSION_ID:-}' did not yield a pane UUID (got '$PANE')." >&2
+      echo "   Expected the iTerm2 form 'w0t0p0:<UUID>'. A malformed role file breaks ping routing, the" >&2
+      echo "   reaper page target and cc-classify's desk never-reap SILENTLY — refusing. Use --pane/--force." >&2
+      exit 1 ;;
+  esac
+fi
+
+# --- idempotent atomic write ------------------------------------------------------------------
+prev="$(head -n1 "$ROLES_DIR/$ROLE" 2>/dev/null | tr -d '[:space:]')"
+if [ "$prev" = "$PANE" ]; then
+  [ "$QUIET" = 1 ] || printf 'already %s → %s\n' "$ROLE" "$PANE"
+  exit 0
+fi
+
+mkdir -p "$ROLES_DIR" 2>/dev/null || { echo "desk-register: cannot create roles dir: $ROLES_DIR" >&2; exit 1; }
+tmp="$ROLES_DIR/.$ROLE.$$"
+if printf '%s\n' "$PANE" > "$tmp" 2>/dev/null && mv -f "$tmp" "$ROLES_DIR/$ROLE" 2>/dev/null; then
+  if [ "$QUIET" != 1 ]; then
+    if [ -n "$prev" ]; then printf 'reassigned %s: %s → %s\n' "$ROLE" "$prev" "$PANE"
+    else                    printf 'registered %s → %s\n' "$ROLE" "$PANE"; fi
+  fi
+  exit 0
+fi
+rm -f "$tmp" 2>/dev/null
+echo "desk-register: failed to write $ROLES_DIR/$ROLE" >&2
+exit 1
