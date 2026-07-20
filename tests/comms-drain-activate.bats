@@ -145,6 +145,18 @@ drain_count() { # $1=file $2=hook key
   [ ! -e "$empty/settings.json" ]
 }
 
+@test "a template PREDATING the 2-way-comms commit → nonzero + names the ff-sync fix" {
+  fake="$BATS_TEST_TMPDIR/oldrepo"
+  mkdir -p "$fake/settings-templates"
+  echo '{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"~/.claude/hooks/session-start.sh"}]}]}}' \
+    > "$fake/settings-templates/settings.example.json"
+  CC_CONFIG_DIRS="$A" CC_LIVE_DIR="$LIVE" CC_REPO="$fake" CONFIRM=1 run bash "$S"
+  [ "$status" -ne 0 ]
+  printf '%s' "$output" | grep -q 'no mailbox-drain entry'
+  printf '%s' "$output" | grep -q 'merge --ff-only origin/main'
+  ! grep -q 'mailbox-drain' "$A/settings.json"
+}
+
 @test "the live ~/.claude* settings are NEVER touched by this suite" {
   # Guard the guard: the script must refuse to run with no template rather than fall back to defaults.
   CC_CONFIG_DIRS="$A" CC_LIVE_DIR="$LIVE" CC_REPO="$BATS_TEST_TMPDIR/nope" CONFIRM=1 run bash "$S"
