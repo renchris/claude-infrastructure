@@ -86,6 +86,38 @@ idl() {
   jq -cn --arg ts "$(now_iso)" --arg action "$1" --arg detail "$2" \
      '{ts:$ts, actor:"cc-dispatch", action:$action, detail:$detail}' >> "$IDL" 2>/dev/null || true
 }
+# warm_worktree <abs-path> → 0 provisioned (branch + deps + secrets), 1 loud fail. Idempotent.
+# "Warm" is the whole point: the fired pane must only `cd` and launch. Any install left for the pane
+# to run at boot is exactly the cold path whose keystroke race this fix exists to avoid.
+warm_worktree() {
+  local wt="$1" br repo="${CC_DISPATCH_REPO:-$HOME/Development/claude-infrastructure}"
+  local base="${CC_DISPATCH_WT_BASE:-origin/main}"
+  case "$wt" in /*) ;; *) echo "cc-dispatch: refusing a non-absolute worktree path: $wt" >&2; return 1 ;; esac
+  git -C "$repo" rev-parse --git-dir >/dev/null 2>&1 || { echo "cc-dispatch: not a git repo: $repo" >&2; return 1; }
+  br="$(basename "$wt")"
+  git -C "$repo" fetch origin -q 2>/dev/null || echo "cc-dispatch: fetch failed — basing off last-fetched $base" >&2
+  # Reuse the branch if it already exists (a re-dispatch after a failed spawn must not hard-fail).
+  if git -C "$repo" show-ref --verify --quiet "refs/heads/$br"; then
+    git -C "$repo" worktree add "$wt" "$br" >/dev/null 2>&1 || return 1
+  else
+    git -C "$repo" worktree add "$wt" -b "$br" "$base" >/dev/null 2>&1 || return 1
+  fi
+  [ -f "$repo/.env.local" ] && { cp "$repo/.env.local" "$wt/.env.local" 2>/dev/null; chmod 600 "$wt/.env.local" 2>/dev/null; }
+  # Deps by DETECTED package manager, never pnpm-hardcoded (a hardcoded install broke every
+  # non-Node project). Install failure does NOT fail provisioning — a launched session can self-heal
+  # its deps; an unlaunched one can do nothing.
+  ( cd "$wt" 2>/dev/null || exit 0
+    if   [ -f pnpm-lock.yaml ];   then CI=true pnpm install --frozen-lockfile
+    elif [ -f bun.lockb ] || [ -f bun.lock ]; then bun install
+    elif [ -f package-lock.json ]; then npm ci
+    elif [ -f yarn.lock ];        then yarn install --frozen-lockfile
+    elif [ -f uv.lock ];          then uv sync --frozen || uv sync
+    elif [ -f go.sum ];           then go mod download
+    elif [ -f Cargo.lock ];       then cargo fetch
+    fi ) >/dev/null 2>&1 || true
+  return 0
+}
+
 idl_summary() {
   mkdir -p "$(dirname "$IDL")" 2>/dev/null || true
   jq -cn --arg ts "$(now_iso)" --argjson f "$FIRED" --argjson b "$ABSTAINED" --argjson x "$FAILED" \
@@ -256,6 +288,21 @@ dispatch() { # <dry|run>
         FAILED=$((FAILED + 1)); idl failed "$id: brief compose failed (reopened)"; continue
       fi
     fi
+    # a3. provision the worker's OWN worktree WARM (item b87573077f11). wave-plan is a pure planner:
+    # it emits `--cwd <path>` and creates nothing. Firing every worker co-cwd in the shared checkout
+    # made a wave fight over one git index and land-conflict (rebase exit 5); handing them
+    # `--worktree` instead would take handoff-fire's COLD path, which races CC boot for the
+    # auto-submit keystroke (memory cold-worktree-fire-autosubmit-race). So we create it here, fully
+    # provisioned, and the fire is a plain warm `cd`. Absent/existing path ⇒ no-op; failure reopens.
+    local wcwd="" wj
+    for ((wj=0; wj<${#fire_args[@]}-1; wj++)); do
+      [ "${fire_args[$wj]}" = "--cwd" ] && { wcwd="${fire_args[$((wj+1))]}"; break; }
+    done
+    if [ -n "$wcwd" ] && [ ! -d "$wcwd" ] && ! warm_worktree "$wcwd"; then
+      "$backlog" reopen "$id" --by "$SID" >/dev/null 2>&1 || true   # self-release (see above)
+      FAILED=$((FAILED + 1)); idl failed "$id: worktree provision failed (reopened)"; continue
+    fi
+
     # b. spawn → on non-zero, reopen the claim (leave it for the next run).
     if "$spawn" "${fire_args[@]}" >/dev/null 2>&1; then
       FIRED=$((FIRED + 1)); spawned=$((spawned + 1)); idl fired "$id -> $acct"
@@ -386,6 +433,41 @@ STUB
   "$SELF" --once >/dev/null 2>&1
   t "(c2) string fire_line → spawn got SPLIT argv (no program token)" grep -q -- '^--prompt-file /tmp/f1.txt --account next3$' "$tmp/spawn.log"
   t "(c2) string fire_line → brief composed" grep -q 'cc-backlog item i1' /tmp/f1.txt
+
+  # (c3) b87573077f11 — a fire_line carrying `--cwd <wt>` gets that worktree provisioned WARM by
+  # THIS actuator before the spawn. wave-plan only emits the path (pure planner), so if nothing
+  # created it the fired pane would `cd` into a non-existent dir. Warm, not cold: the pane must only
+  # cd+launch, never install at boot (that is the keystroke race this whole fix avoids).
+  reset; seed_items '[{"id":"i1","project":"a","status":"open","title":"t1"}]'
+  wtrepo="$tmp/wtrepo"; rm -rf "$wtrepo" "$tmp/wt-i1"
+  ( mkdir -p "$wtrepo" && cd "$wtrepo" && git init -q . && git config user.email t@t && git config user.name t \
+    && echo x > f && git add f && git commit -qm init && git branch -f origin/main HEAD ) >/dev/null 2>&1
+  seed_plan '[{"id":"i1","account":"next3","fire_line":["--prompt-file","/tmp/f1.txt","--cwd","'"$tmp"'/wt-i1"]}]'
+  CC_DISPATCH_REPO="$wtrepo" CC_DISPATCH_WT_BASE=origin/main "$SELF" --once >/dev/null 2>&1
+  t "(c3) --cwd worktree is CREATED before the fire"    test -d "$tmp/wt-i1"
+  t "(c3) it is a real git worktree (own checkout)"     test -e "$tmp/wt-i1/.git"
+  t "(c3) it is on its OWN branch (no shared index)" \
+    bash -c "[ \"\$(git -C '$tmp/wt-i1' rev-parse --abbrev-ref HEAD)\" = wt-i1 ]"
+  t "(c3) the spawn still received the --cwd argv"      grep -q -- "--cwd $tmp/wt-i1" "$tmp/spawn.log"
+  t "(c3) spawn happened (provisioning did not swallow the fire)" test -s "$tmp/spawn.log"
+  t "(c3) IDL fired"                                    grep -q '"action":"fired"' "$tmp/idl.jsonl"
+
+  # (c4) provisioning FAILURE must reopen the claim and fire NOTHING — never a spawn into a dir
+  # that does not exist (the shape that burns a worker slot silently).
+  reset; seed_items '[{"id":"i1","project":"a","status":"open","title":"t1"}]'
+  seed_plan '[{"id":"i1","account":"next3","fire_line":["--prompt-file","/tmp/f1.txt","--cwd","'"$tmp"'/wt-nope"]}]'
+  CC_DISPATCH_REPO="$tmp/not-a-repo" "$SELF" --once >/dev/null 2>&1
+  t "(c4) unprovisionable worktree → ZERO spawn"  test ! -s "$tmp/spawn.log"
+  t "(c4) unprovisionable worktree → reopened"    grep -q 'reopen i1' "$tmp/backlog.log"
+  t "(c4) unprovisionable worktree → IDL failed"  grep -q '"action":"failed"' "$tmp/idl.jsonl"
+
+  # (c5) an EXISTING --cwd is reused as-is (idempotent re-dispatch, no clobber of live work).
+  reset; seed_items '[{"id":"i1","project":"a","status":"open","title":"t1"}]'
+  mkdir -p "$tmp/wt-live" && echo sentinel > "$tmp/wt-live/keep"
+  seed_plan '[{"id":"i1","account":"next3","fire_line":["--prompt-file","/tmp/f1.txt","--cwd","'"$tmp"'/wt-live"]}]'
+  CC_DISPATCH_REPO="$tmp/not-a-repo" "$SELF" --once >/dev/null 2>&1
+  t "(c5) existing worktree → untouched" test -f "$tmp/wt-live/keep"
+  t "(c5) existing worktree → still spawns" test -s "$tmp/spawn.log"
 
   # (d) spawn non-zero → item reopened + IDL failed.
   reset; seed_items '[{"id":"i1","project":"a","status":"open","title":"t1"}]'
