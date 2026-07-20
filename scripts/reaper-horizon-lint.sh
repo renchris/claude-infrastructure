@@ -53,10 +53,14 @@ EVIDENCE_GREP='cc-telemetry|cc-registry|CC_TELEMETRY_DIR|CC_REGISTRY_DIR'
 # transient rank-stderr capture consumed in-function — scaffolding, never evidence; fire outcomes live in
 # the fired session's transcript + registry row + IDL. No -mmin/RETAIN_H. Declared = reviewed (2026-07-18).
 # bin/cc-reaper names `cc-registry` in prose (the P0-12b self-check message tells the operator where the
-# blind spot is) and rm's ONLY its own surface-page damping markers ($PAGEDIR/*.cause) when a pane leaves
-# the surface set — a page LIFECYCLE op (the clear_page analog, T-P3-3), NOT an age-horizon reaper on the
-# telemetry/registry spine. The registry itself is never read or deleted here (the self-check counts live
-# panes via `ps`, independent of the registry). No -mmin/RETAIN_H. Declared = reviewed (2026-07-19 desk wave).
+# blind spot is) and rm's ONLY two things, both state LIFECYCLE ops (the clear_page analog), NEITHER an
+# age-horizon reaper on the telemetry/registry spine: (a) its own surface-page damping markers
+# ($PAGEDIR/*.cause) when a pane leaves the surface set (T-P3-3); (b) its own fired-peer markers
+# ($FIRED_DIR/<pane>.json, clear_fired_marker) after a CONFIRMED teardown of that pane — the subject of
+# the evidence no longer exists, so the marker is retired with it, never on age. Neither is read by a
+# supervisor as failure evidence. The registry itself is never read or deleted here (the self-check counts
+# live panes via `ps`, independent of the registry). No -mmin/RETAIN_H. Declared = reviewed
+# (2026-07-19 desk wave; fired-peer marker added 2026-07-20, T-P3-4).
 # bin/cc-value READS CC_TELEMETRY_DIR (evidence) to compute the value ledger and has an `rm -f`, so
 # section-3 flags it — but its only rm -f is the mv-or-rm on its OWN atomic-write cache temp `$tmpc`
 # (`mktemp "${CACHE_FILE}.XXXXXX"` → `mv -f $tmpc $CACHE_FILE || rm -f $tmpc`, the handoff-fire scaffold

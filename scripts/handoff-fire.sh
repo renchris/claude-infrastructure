@@ -159,6 +159,7 @@ MODEL_CONFIG="$HOME/.claude/model-config.yaml"
 # $CLAUDE_CONFIG_DIR). Env-overridable for tests.
 REG_DIR="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"
 CC_ROLES_DIR="${CC_ROLES_DIR:-$HOME/.claude/cc-roles}"
+FIRED_DIR="${CC_FIRED_DIR:-$HOME/.claude/cc-fired}"   # T-P3-4 fired-peer markers (read by bin/cc-reaper)
 
 # This script is symlinked into ~/.claude/scripts; resolve its REAL dir so the sibling comms-safety
 # tools it now wires — payload-lint.sh (F3, T-P2-5) and completion-push.sh (F5, T-P2-1) — are found
@@ -435,6 +436,39 @@ ensure_registration() { # $1=regdir $2=pane $3=name $4=cwd $5=cmd → best-effor
      && [ -s "$tmp" ]; then
     mv -f "$tmp" "$regdir/$pane.json" 2>/dev/null || rm -f "$tmp" 2>/dev/null
     echo "→ provisional registry row written for $pane (SessionStart P8 register replaces it)" >&2
+  else
+    rm -f "$tmp" 2>/dev/null
+  fi
+  return 0
+}
+
+# ---- T-P3-4 fired-peer marker (the cc-reaper auto-reap key) -----------------------------------
+# A fire that carries the SELF-RETIRE trailer creates a PEER WORKER — a session explicitly told
+# "you are NOT an idle human-in-the-loop pane: finish, report, close yourself". cc-reaper may
+# therefore AUTO-REAP it once it is finished + landed + its own tracked tree is clean, instead of
+# paging the operator to hand-confirm-close every one (13+ piled up by 2026-07-20, each surfaced
+# through a keystroke injection that corrupts the operator's terminal).
+#
+# The marker is written by the SPAWNER — the only process that can know a session was FIRED rather
+# than started by a human — and keyed by the fired pane UUID. Deliberately NOT a cc-registry field:
+# SessionStart's register() rewrites that row wholesale and would clobber it.
+#
+# FAIL-SAFE BY CONSTRUCTION: absence ⇒ unmarked ⇒ cc-reaper treats it as an operator session ⇒ NEVER
+# auto-reaped. An operator's shell launch, `claude -w`, a --recycle continuation and a
+# --no-self-retire fire all leave no marker, and nothing anywhere infers one from session state —
+# so a session cannot earn the marker by behaving like a worker.
+mark_fired_peer() { # $1=fired-dir $2=fired-pane $3=cwd $4=firing-pane → best-effort, always 0
+  local dir="$1" pane="$2" cwd="$3" by="$4" tmp
+  [ -n "$dir" ] && [ -n "$pane" ] || return 0
+  case "$pane" in *[!0-9A-Fa-f-]*) return 0 ;; esac    # UUID-shaped only — never a path fragment
+  command -v jq >/dev/null 2>&1 || return 0
+  mkdir -p "$dir" 2>/dev/null || return 0
+  tmp="$dir/.$pane.$$"
+  if jq -n --arg paneUUID "$pane" --arg cwd "$cwd" --arg firedBy "$by" \
+        --arg firedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)" \
+        '{paneUUID:$paneUUID, cwd:$cwd, firedBy:$firedBy, firedAt:$firedAt, selfRetire:true}' \
+        > "$tmp" 2>/dev/null && [ -s "$tmp" ]; then
+    mv -f "$tmp" "$dir/$pane.json" 2>/dev/null || rm -f "$tmp" 2>/dev/null
   else
     rm -f "$tmp" 2>/dev/null
   fi
@@ -1982,6 +2016,12 @@ else
       # P0-12: guarantee a registry row so the reaper/board can see the fired pane.
       FIRE_NAME="$(basename "$LAUNCH_DIR")-${SPAWNED_PANE%%-*}"
       ensure_registration "$REG_DIR" "$SPAWNED_PANE" "$FIRE_NAME" "$LAUNCH_DIR" "$CMD"
+      # T-P3-4: stamp the auto-reap key — ONLY for a self-retiring peer fire (see mark_fired_peer).
+      # An `if` block, NOT `[ … ] && …`: a false test would return 1 and `set -e` would abort the
+      # fire right before the "→ fired" summary (the same trap noted at the stranded-account line).
+      if [ "$WANT_SELF_RETIRE" = 1 ]; then
+        mark_fired_peer "$FIRED_DIR" "$SPAWNED_PANE" "$LAUNCH_DIR" "$FIRING_SID"
+      fi
       # P0-15: publish the fired pane under its role so role-addressed pings reach it.
       if [ -n "$AS_ROLE" ] && [ -n "$SPAWNED_PANE" ]; then write_role "$CC_ROLES_DIR" "$AS_ROLE" "$SPAWNED_PANE"; fi
     else

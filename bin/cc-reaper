@@ -35,9 +35,17 @@
 #   5. cc-teardown re-runs its OWN gate (work-safe G-a + positive-done G-b + self-guard + tty-exclusive
 #      + re-observed effect-verify). The done-evidence is DERIVED from positive signals (successor
 #      alive, commits on trunk), NEVER inferred from silence — "idle ≠ done".
-# active / owned-wait / coordination-hang / rate-limited / crashed / finished-shared-review are NEVER
-# reaped — surfaced only (finished-shared-review = a done solo session whose dirty shared cwd is owned
-# by a live sibling; surfaced for desk confirm-close since a dirty tree could still hold its own WIP).
+# active / owned-wait / coordination-hang / rate-limited / crashed are NEVER reaped — surfaced only.
+#
+# T-P3-4 AUTO-REAP OF DESK-FIRED WORKERS (the one exception, 2026-07-20): finished-shared-review
+# (a done session whose dirty shared cwd is owned by a live sibling) was ALSO surfaced-only, for desk
+# confirm-close — because a dirty tree could still hold its own WIP. In a shared checkout that dirt is
+# almost always a sibling's UNTRACKED litter, so 13+ finished desk-fired workers piled up waiting to be
+# hand-closed one by one. Now such a session is AUTO-REAPED iff ALL of: the SPAWNER stamped it a
+# self-retiring fired peer (scripts/handoff-fire.sh mark_fired_peer — an operator/role session carries
+# no marker and is NEVER promoted), its OWN TRACKED tree is clean, and its work is landed. TRACKED dirt,
+# an unlanded tree, or a missing marker all fall back to surface-only. See AUTOREAP_FIRED_RE / fired_peer;
+# CC_REAPER_AUTOREAP_FIRED=0 restores the old surface-everything behaviour.
 #
 # C10 note: cc-teardown's header bars raw hook/settings wiring; cc-reaper is the sanctioned PRE-GATED
 # autonomous caller. cc-reaper's OWN standing-loop deployment (launchd) is the C10 operator step —
@@ -67,6 +75,21 @@ PAGE_TO_FILE="${CC_PAGE_TO_FILE:-$HOME/.claude/cc-roles/desk}"          # fallba
 # never-reap causes that WARRANT a desk page (a human must re-engage / close / confirm-close). active,
 # owned-wait, rate-limited are DELIBERATELY excluded: healthy or self-healing, a page would be noise.
 SURFACE_PAGE_RE='^(coordination-hang|crashed|finished-shared-review)$'
+# ── T-P3-4: auto-reap the DESK-FIRED WORKER pile ───────────────────────────────────────────────
+# Every finished session sharing a cwd with a live sibling was SURFACED for operator confirm-close
+# (finished-shared-review) and 0 were auto-reaped, so 13+ finished desk-fired workers piled up and
+# each had to be hand-closed — through keystroke-injected surfaces that corrupt the operator's
+# terminal. But a session the SPAWNER stamped as a self-retiring fired peer is not a judgement
+# call: it was born under a brief that says "you are NOT an idle human-in-the-loop pane — finish,
+# report, close yourself". Once it is finished + landed + its OWN TRACKED tree is clean, reaping it
+# is just enforcing the contract it was created with. Only these causes are promotable — a session
+# that is owned-wait / coordination-hang / crashed / active / rate-limited NEVER is, marker or not.
+AUTOREAP_FIRED_RE='^(finished-shared-review)$'
+AUTOREAP_FIRED="${CC_REAPER_AUTOREAP_FIRED:-1}"          # operator kill-switch: 0 = surface as before
+# Marker dir — the shared spawner↔reaper contract (scripts/handoff-fire.sh mark_fired_peer writes,
+# this reads). Deliberately NOT a cc-registry field: SessionStart's register() rewrites that row
+# wholesale and would clobber it.
+FIRED_DIR="${CC_FIRED_DIR:-$HOME/.claude/cc-fired}"
 PANE_DELTA_TOL="${CC_REAPER_PANE_DELTA_TOL:-0}"                         # live−enumerated > tol ⇒ blind-spot surface
 SELFCHECK_MIN_PERSIST="${CC_REAPER_SELFCHECK_MIN_PERSIST:-2}"          # delta must persist N sweeps (kills a race)
 PS_BIN="${CC_REAPER_PS_BIN:-/bin/ps}"
@@ -132,6 +155,26 @@ notify_desk(){ # <message> — best-effort desk cc-notify; an unresolved target 
   "$NOTIFY_BIN" "$target" "$1" >/dev/null 2>&1 || true
 }
 sanitize_key(){ printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_'; }   # marker-filename-safe damping key
+
+# ── T-P3-4: was this pane FIRED as a self-retiring peer worker (vs started by the operator)? ──
+# The ONLY writer is the spawner (handoff-fire.sh, at fire time — the one process that can know a
+# session was fired rather than launched by a human). FAIL-SAFE BY CONSTRUCTION: no marker ⇒ treated
+# as an operator/role session ⇒ never auto-reaped. Nothing here INFERS the marker from session
+# state, so it cannot be forged by a session's own behaviour — an idle, clean, landed operator pane
+# looks identical to a worker and is still never promoted. An operator's shell launch, `claude -w`,
+# a --recycle continuation and a --no-self-retire fire all leave no marker.
+fired_peer(){ # <paneUUID> → 0 if the spawner stamped this pane
+  local pane="${1:-}"
+  [ -n "$pane" ] || return 1
+  case "$pane" in *[!0-9A-Fa-f-]*) return 1 ;; esac   # UUID-shaped only — never a path fragment
+  [ -f "$FIRED_DIR/$pane.json" ]
+}
+clear_fired_marker(){ # <paneUUID> — the pane is gone; drop its marker so the dir cannot grow forever
+  local pane="${1:-}"
+  [ -n "$pane" ] || return 0
+  case "$pane" in *[!0-9A-Fa-f-]*) return 0 ;; esac
+  rm -f "$FIRED_DIR/$pane.json" 2>/dev/null || true
+}
 
 # live_pane_count — INDEPENDENT count of live INTERACTIVE claude panes (the P0-12b truth signal). Mirrors
 # claude-accounts.concurrency(): argv0 is the claude binary (or its cli.js), excluding headless one-shots
@@ -293,8 +336,28 @@ sweep() {
     xpid="$(printf '%s'  "$o" | jq -r '.pid // ""')"        # classify-time identity pin (a17 S-4)
     xlstart="$(printf '%s' "$o" | jq -r '.lstart // ""')"
 
+    # ── T-P3-4 PROMOTION: a desk-fired peer worker that is finished + landed + tracked-clean is
+    #    auto-reaped instead of paged for confirm-close. THREE independent gates, all required:
+    #    (1) the cause is promotable (finished-shared-review only — see AUTOREAP_FIRED_RE),
+    #    (2) the SPAWNER marked this pane a self-retiring fired peer (absence ⇒ operator ⇒ never), and
+    #    (3) work_landed re-verifies HERE, at act time, that its OWN TRACKED tree is clean AND the
+    #        content is on trunk. Untracked litter (usually a live sibling's) no longer blocks this;
+    #        TRACKED dirt still does, and falls through to the surface path exactly as before.
+    #    A promoted session then faces every ORIGINAL gate too: settle window, checkpoint-first,
+    #    the post-classify work_landed re-check, and cc-teardown's own independent gate.
+    local promoted=0
+    if [ "$AUTOREAP_FIRED" = 1 ] && [[ "$cause" =~ $AUTOREAP_FIRED_RE ]] && fired_peer "$pane"; then
+      if work_landed "$cwd"; then
+        promoted=1; landed=yes
+        say "  promote $name [$cause] — desk-fired peer, own TRACKED tree clean + landed → auto-reap (no confirm-close)"
+        log "promote $name [$cause] pane=$pane: fired peer, tracked-clean + landed → reapable"
+      else
+        say "  keep   $name [$cause] — desk-fired peer but TRACKED tree dirty / not landed → surface (never auto-reap)"
+      fi
+    fi
+
     # ── disposition (never-reap is the default; a reap needs every gate) ──
-    if ! [[ "$cause" =~ $REAPABLE_RE ]]; then
+    if [ "$promoted" = 0 ] && ! [[ "$cause" =~ $REAPABLE_RE ]]; then
       # T-P3-3: a never-reap cause that needs a HUMAN → page the desk (damped); the rest just stay quiet.
       if [[ "$cause" =~ $SURFACE_PAGE_RE ]]; then
         surfaced=$((surfaced+1))
@@ -326,6 +389,9 @@ sweep() {
     local succ ev trc
     succ="$(printf '%s' "$o" | jq -r '.successor // "none"')"
     ev="cc-reaper: cause=$cause successor=$succ work-landed(clean & 0 ahead of $TRUNK) idle=${idle}s — positive done-evidence, not inferred from silence"
+    # A PROMOTED reap rests on a DIFFERENT basis than the generic one, so the durable audit string
+    # must say so rather than assert evidence it does not have (T-P3-4).
+    [ "$promoted" = 1 ] && ev="cc-reaper: cause=$cause (T-P3-4 auto-reap) — desk-fired peer worker under the self-retire contract; own TRACKED tree clean AND content landed on $TRUNK, re-verified at act time; idle=${idle}s. Untracked litter in the shared cwd is the live sibling's, not this session's."
     # identity pin (a17 S-4): pass classify-time {pid,lstart} so cc-teardown REFUSES if the pane recycled
     # in the classify→act window (successor booted in the same pane). Only pin when classify supplied it.
     local expect_args=()
@@ -334,6 +400,7 @@ sweep() {
     "$TEARDOWN_BIN" "$pane" --done-evidence "$ev" "${expect_args[@]+"${expect_args[@]}"}"; trc=$?
     if [ "$trc" = 0 ]; then
       reaped=$((reaped+1)); say "    torn down + effect-verified (cc-teardown exit 0)"; log "reaped $name [$cause] pane=$pane"
+      clear_fired_marker "$pane"        # the pane is gone — retire its fired-peer marker (T-P3-4)
       worktree_cleanup "$cwd"
     else
       say "    cc-teardown returned $trc (10=DEFER 2=REFUSE 5=FAIL) — its gate refused; NOT reaped (trusted)"; log "teardown-refused $name rc=$trc"
