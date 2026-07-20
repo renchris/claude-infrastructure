@@ -943,7 +943,12 @@ USAGE
   # in-flight work, not this session's — --dirty-owner successor asserts exactly that (owner
   # verified alive above), keeping --allow-dirty for the genuinely lossy override.
   if [ "$SC_ALLOW_DIRTY" = 0 ] && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    if [ -n "$(git status --porcelain 2>/dev/null | head -1)" ]; then
+    # --untracked-files=no (2026-07-20): the refusal exists to stop a close from evaporating
+    # UNCOMMITTED work — that means TRACKED modifications. An untracked file survives the close
+    # untouched on disk, and in a shared checkout it is usually a SIBLING's scratch litter, not
+    # ours; counting it made a finished session permanently unable to self-close (the pile-up
+    # this fix ends). --allow-dirty remains for the genuinely lossy override.
+    if [ -n "$(git status --porcelain --untracked-files=no 2>/dev/null | head -1)" ]; then
       if [ "$SC_DIRTY_OWNER" = "successor" ]; then
         echo "→ dirty tree in $(pwd) asserted owned by successor $SC_SUCCESSOR (verified alive) — the close loses nothing; proceeding"
       else

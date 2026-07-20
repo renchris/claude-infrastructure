@@ -153,7 +153,14 @@ work_landed() {
   local cwd="$1"
   [ -d "$cwd" ] || return 1
   "$GIT_BIN" -C "$cwd" rev-parse --git-dir >/dev/null 2>&1 || return 1
-  [ -z "$("$GIT_BIN" -C "$cwd" status --porcelain 2>/dev/null)" ] || return 1
+  # --untracked-files=no (2026-07-20): a finished session's own work-safety is about ITS OWN
+  # uncommitted TRACKED changes — never a sibling's untracked litter in a SHARED cwd. Counting
+  # untracked files left every co-cwd session permanently "dirty" (one stray scratch file in the
+  # shared checkout ⇒ landed never re-verified ⇒ nothing could self-close), which is how 13+
+  # finished workers piled up on the operator's confirm-close queue. Untracked files are also
+  # never LOST by a pane close (they stay on disk; worktree_cleanup separately refuses to
+  # --force-remove a tree carrying any).
+  [ -z "$("$GIT_BIN" -C "$cwd" status --porcelain --untracked-files=no 2>/dev/null)" ] || return 1
   local ahead; ahead="$("$GIT_BIN" -C "$cwd" rev-list --count "$TRUNK"..HEAD 2>/dev/null)" || return 1
   [ "${ahead:-1}" = 0 ] && return 0                              # fast path: 0 ahead by COUNT → landed
   # content path: `git cherry` patch-id equivalence ('+' = genuinely unlanded); tree-diff-0 = squash backstop.
@@ -182,6 +189,15 @@ worktree_cleanup() { # <cwd> — remove a LINKED worktree after a confirmed tear
   case "$gitdir" in */worktrees/*) ;; *) return 0 ;; esac      # not a linked worktree → leave it
   main="$("$GIT_BIN" -C "$cwd" worktree list --porcelain 2>/dev/null | awk '/^worktree /{print $2; exit}')"
   [ -n "$main" ] && [ "$main" != "$cwd" ] || return 0
+  # UNTRACKED GUARD (2026-07-20, paired with the --untracked-files=no relaxation in work_landed):
+  # `worktree remove --force` DELETES untracked files. work_landed now (correctly) ignores them, so
+  # without this check a reap could reach here and destroy an uncommitted research report / scratch
+  # output nothing ever committed. HERE — and only here, where deletion is real — untracked counts
+  # as dirty: leave the tree on disk and say so. The PANE is still reaped either way.
+  if [ -n "$("$GIT_BIN" -C "$cwd" status --porcelain 2>/dev/null)" ]; then
+    say "    worktree LEFT INTACT (untracked files present — --force would delete them): $cwd"
+    log "worktree left intact (untracked present): $cwd"; return 0
+  fi
   if "$GIT_BIN" -C "$main" worktree remove --force "$cwd" 2>/dev/null; then
     say "    worktree removed: $cwd"; log "worktree removed: $cwd"
   else

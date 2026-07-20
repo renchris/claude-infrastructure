@@ -21,8 +21,13 @@ setup() {
              git -C "$r" reset -q --hard HEAD~1; echo feature >> "$r/f"; git -C "$r" add f
              GIT_AUTHOR_DATE="@1000000500" GIT_COMMITTER_DATE="@1000000500" git -C "$r" commit -qm featureX; }
   mkrepo "$D/clean"
-  mkrepo "$D/dirty"; echo change >> "$D/dirty/f"      # dirty tree
+  mkrepo "$D/dirty"; echo change >> "$D/dirty/f"      # dirty tree (TRACKED modification)
   mksquashland "$D/squash"                             # clean + content-landed but count>0 ahead
+  # UNTRACKED-ONLY litter: tracked tree clean + landed, but a stray file nobody committed. This is
+  # the shared-checkout reality (a live sibling's scratch output) that used to read "dirty" forever.
+  mkrepo "$D/untracked"; echo litter > "$D/untracked/stray-scratch.md"
+  # AHEAD: clean tree but 1 genuinely-unlanded commit (content NOT on trunk) → never reapable.
+  mkrepo "$D/ahead"; echo more >> "$D/ahead/f"; git -C "$D/ahead" commit -aqm unlanded
   # mock teardown: record argv + ordering; rc from TEARDOWN_RC
   cat > "$D/bin/teardown" <<EOF
 #!/bin/bash
@@ -247,6 +252,63 @@ EOF
   [ "$status" -eq 0 ]
   td_called
   grep -q PANE-A "$D/td-calls"
+}
+
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+# ITEM A — the dirty-check must ignore UNTRACKED files (backlog 99adcddc2cc8)
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+@test "untracked-only litter does NOT read dirty — a landed session is still reaped (99adcddc2cc8)" {
+  # THE BUG: work_landed used a bare `status --porcelain`, so ONE stray untracked file in a shared
+  # cwd (a live sibling's scratch output — never this session's uncommitted work) made every co-cwd
+  # session permanently "dirty". The post-classify re-check ABORTed forever and nothing could close.
+  mock_classify finished "$D/untracked" 999 yes PANE-U
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  td_called                                          # reaped, not ABORTed
+  ! echo "$output" | grep -q ABORT
+}
+
+@test "a TRACKED modification still reads dirty → ABORT (the relaxation removes no real safety)" {
+  mock_classify finished "$D/dirty" 999 yes PANE-D
+  run "$R" sweep --reap
+  ! td_called
+  echo "$output" | grep -q ABORT
+}
+
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+# worktree_cleanup — the relaxed dirty-check must NOT let `worktree remove --force` delete untracked
+# work. Untracked counts as dirty HERE and only here, because here deletion is real.
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+mkworktree() { # <main-repo> <wt-path> — a real LINKED worktree under a */.worktrees/* path
+  local m="$1" w="$2"
+  mkdir -p "$m"; git -C "$m" init -q; git -C "$m" config user.email t@t; git -C "$m" config user.name t
+  echo a > "$m/f"; git -C "$m" add f; git -C "$m" commit -qm c1
+  git -C "$m" update-ref refs/remotes/origin/main HEAD
+  mkdir -p "$(dirname "$w")"
+  git -C "$m" worktree add -q "$w" -b wt-branch >/dev/null 2>&1
+}
+
+@test "worktree_cleanup REMOVES a fully clean linked worktree after a reap" {
+  mkworktree "$D/main" "$D/.worktrees/wt-clean"
+  mock_classify finished-teammate "$D/.worktrees/wt-clean" 999 yes PANE-W
+  run "$R" sweep --reap
+  td_called
+  echo "$output" | grep -q 'worktree removed'
+  [ ! -d "$D/.worktrees/wt-clean" ]
+}
+
+@test "worktree_cleanup LEAVES a worktree holding untracked files (--force would delete them)" {
+  # The pane is still reaped — only the on-disk tree is preserved. Without this guard the relaxed
+  # work_landed would let an uncommitted research report be deleted by `worktree remove --force`.
+  mkworktree "$D/main2" "$D/.worktrees/wt-litter"
+  echo "uncommitted research report" > "$D/.worktrees/wt-litter/REPORT.md"
+  mock_classify finished-teammate "$D/.worktrees/wt-litter" 999 yes PANE-W2
+  run "$R" sweep --reap
+  td_called                                          # pane reaped
+  echo "$output" | grep -q 'LEFT INTACT'
+  [ -f "$D/.worktrees/wt-litter/REPORT.md" ]         # the work survives
 }
 
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
