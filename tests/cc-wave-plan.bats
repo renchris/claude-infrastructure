@@ -49,11 +49,11 @@ STUB
 }
 
 # ── (a) selftest contract ─────────────────────────────────────────────────────────────────────────────
-@test "selftest passes and runs all 23 checks (a zero-check suite must not 'pass')" {
+@test "selftest passes and runs all 27 checks (a zero-check suite must not 'pass')" {
   run "$WP" selftest
   [ "$status" -eq 0 ]
   n_ok="$(printf '%s' "$output" | grep -c '^  ok ')"
-  [ "$n_ok" -eq 23 ]
+  [ "$n_ok" -eq 27 ]
   ! printf '%s' "$output" | grep -q '^  FAIL'
 }
 

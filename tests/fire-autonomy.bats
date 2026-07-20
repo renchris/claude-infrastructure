@@ -160,7 +160,11 @@ STUB
 
 @test "E2E: --as-role writes cc-roles/<role> = the FIRED pane on an engaged fire" {
   _fire_harness
-  printf '{"type":"user","message":{"role":"user","content":"brief ROLE-MARK ok"}}\n' > "$HOMEDIR/.claude/projects/p/s.jsonl"
+  # Engagement needs a real ASSISTANT turn, not just a transcript carrying the marker (transcript
+  # BIRTH is what a rejected/never-submitted prompt also produces — item ff2d6609a33e).
+  { printf '{"type":"user","message":{"role":"user","content":"brief ROLE-MARK ok"}}\n'
+    printf '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}\n'
+  } > "$HOMEDIR/.claude/projects/p/s.jsonl"
   printf 'BRIEF\n' > "$BATS_TEST_TMPDIR/brief.md"
   run env HOME="$HOMEDIR" IT2_BIN="$BATS_TEST_TMPDIR/bin/it2" TMPDIR="$BATS_TEST_TMPDIR" \
     FIRE_ENGAGE_TIMEOUT=5 FIRE_ENGAGE_INTERVAL=1 FIRE_REG_TIMEOUT=0 FIRE_ENGAGE_MARKER=ROLE-MARK \

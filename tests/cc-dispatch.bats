@@ -51,11 +51,11 @@ add_item()   { "$BACKLOG" add --title "$1" --project proj --source bats; }   # e
 status_of()  { "$BACKLOG" list --all --json | jq -r --arg i "$1" '.[]|select(.id==$i)|.status'; }
 idl_action() { tail -1 "$C/idl.jsonl" | jq -r '.action'; }
 
-@test "selftest passes and runs all 38 checks (a zero-check suite must not 'pass')" {
+@test "selftest passes and runs all 49 checks (a zero-check suite must not 'pass')" {
   run "$DISP" selftest
   [ "$status" -eq 0 ]
   n_ok="$(printf '%s' "$output" | grep -c '^  ok ')"
-  [ "$n_ok" -eq 38 ]
+  [ "$n_ok" -eq 49 ]
   ! printf '%s' "$output" | grep -q '^  FAIL'
 }
 
