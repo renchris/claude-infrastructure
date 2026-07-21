@@ -280,6 +280,14 @@ def heal(cfg, acct, refresh_token, k_live):
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             return False, "skipped: another heal in flight"
+        # Re-check liveness UNDER the lock. k_live came from a single ps snapshot taken at
+        # the start of the sweep, which can be minutes old by the time this account's turn
+        # arrives (each earlier account may burn a 90s heal plus two retry ladders). This
+        # gate is the rotation-safety invariant — a refresh racing a running CC can rotate
+        # the token out from under it, and a discarded rotation means logged out — so it
+        # must be evaluated against current state, not a stale reading.
+        if concurrency(cfg).get(acct["name"], 0) > 0:
+            return False, "skipped: a session started during the sweep — CC owns the token"
         env = os.environ.copy()
         env["CLAUDE_CONFIG_DIR"] = acct["config_dir"]
         env["CLAUDE_CODE_OAUTH_REFRESH_TOKEN"] = refresh_token
@@ -679,7 +687,9 @@ BAD_AUTH = ("stale", "logged-out", "token-invalid", "keychain-error", "no-oauth-
             "probe-error")
 
 
-def cache_read(cfg, want_heal=False):
+def cache_read(cfg, want_heal=False, grace_s=None):
+    """grace_s overrides the TTL — used ONLY by the lock-degrade path, which prefers a
+    slightly-expired sweep over blocking behind another caller's multi-minute one."""
     try:
         with open(cfg["cache_file"]) as f:
             c = json.load(f)
@@ -691,7 +701,8 @@ def cache_read(cfg, want_heal=False):
             return None
         if c.get("cfg_key") != _cfg_key(cfg):
             return None
-        if time.time() - c.get("ts", 0) > cfg.get("cache_ttl_s", 90):
+        ttl = grace_s if grace_s is not None else cfg.get("cache_ttl_s", 90)
+        if time.time() - c.get("ts", 0) > ttl:
             return None
         # A no-heal sweep that saw auth trouble must not satisfy a heal-enabled caller —
         # that would defer the heal for the whole TTL and mislabel the state.
@@ -733,6 +744,29 @@ def _prev_snapshot(cfg):
         return None
 
 
+def _acquire_lock(lock, cfg, allow_degrade):
+    """Take the single-flight lock. -> True when held; False only when allow_degrade is set
+    and the wait budget expired (caller should then serve a grace-TTL cache).
+
+    allow_degrade is FALSE for --fresh, which must never be satisfied by cached data:
+    handoff-fire runs `--fresh --json` specifically to force a live sweep WITH in-process
+    auto-heal before firing a wave, and then reads the resulting rows to decide the fleet is
+    healthy. Handing it a 91-second-old cache would report "all accounts healthy (or
+    auto-healed)" when no heal had run at all, and the wave would fire at a stranded account."""
+    if not allow_degrade:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return True
+    deadline = time.time() + cfg.get("lock_wait_s", 5)
+    while True:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except BlockingIOError:
+            if time.time() >= deadline:
+                return False
+            time.sleep(0.15)
+
+
 def get_data(cfg, fresh=False, no_heal=False):
     if not fresh:
         c = cache_read(cfg, want_heal=not no_heal)
@@ -740,7 +774,18 @@ def get_data(cfg, fresh=False, no_heal=False):
             return c["rows"], c["window"], True, c.get("prev")
     lock_path = cfg["cache_file"] + ".lock"
     with open(lock_path, "w") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)         # single-flight: first caller sweeps, rest reuse
+        # single-flight: first caller sweeps, rest reuse. The holder can own this for MINUTES
+        # in the worst case — 4 accounts x (keychain read + a 90s heal subprocess + two
+        # fetch_usage retry ladders) — and a bare blocking flock made every other caller
+        # (statuslines, cc-board, a handoff wave) wait it out with no way to fall back to the
+        # cache it had just declined by a few seconds.
+        if not _acquire_lock(lock, cfg, allow_degrade=not fresh):
+            c = cache_read(cfg, want_heal=not no_heal,
+                           grace_s=cfg.get("cache_grace_s", 600))
+            if c:
+                return c["rows"], c["window"], True, c.get("prev")
+            # Nothing servable — the wait is the only correct option.
+            fcntl.flock(lock, fcntl.LOCK_EX)
         if not fresh:
             c = cache_read(cfg, want_heal=not no_heal)
             if c:

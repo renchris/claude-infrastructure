@@ -13,6 +13,9 @@
   "dia_local_state": "~/Library/Application Support/Dia/User Data/Local State",
   "cache_file": "/tmp/claude-accounts-cache.json",
   "cache_ttl_s": 90,
+  "_lock": "lock_wait_s = how long a caller waits for the single-flight lock before serving a grace-TTL cache instead of blocking (the holder can own it for minutes: 4 accounts x keychain + 90s heal + retry ladders). cache_grace_s = the widened TTL used ONLY on that degrade path. --fresh NEVER degrades — handoff-fire relies on it forcing a live sweep with auto-heal.",
+  "lock_wait_s": 5,
+  "cache_grace_s": 600,
   "frontier": {
     "_": "Window end/active are READ LIVE from model_config_ssot frontier_access (never hardcode a date — the reso-quota JUL7 lesson). coupling = fable_cap/weekly_cap per SSOT '<=50% of weekly usage limits'. end_date_inclusive: SSOT 'end:' means available THROUGH that date. credits_authorized: keep scoring Fable past the window deadline (deprioritized by CF) instead of hard-excluding — flip only on explicit operator authorization.",
     "scoped_display_name": "Fable",

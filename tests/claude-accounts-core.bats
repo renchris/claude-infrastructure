@@ -33,9 +33,12 @@ json.dump({
   "usage_endpoint": "http://127.0.0.1:9/never", "token_endpoint": "http://127.0.0.1:9/never",
   "user_agent": "test", "claude_bin": "/nonexistent/claude",
   "model_config_ssot": yaml, "dia_local_state": "/nonexistent/LS",
-  "cache_file": cache, "cache_ttl_s": 90,
+  "cache_file": cache,
   # DERIVED from the real SSOT — never hand-copied (a hand-copied block silently diverges
-  # the moment a constant is added, and the suite then certifies math production never runs).
+  # the moment a constant is added, and the suite then certifies math production never runs;
+  # cache_grace_s was added later and a hand-copied fixture missed it immediately).
+  "cache_ttl_s": r["cache_ttl_s"], "lock_wait_s": r["lock_wait_s"],
+  "cache_grace_s": r["cache_grace_s"],
   "frontier": r["frontier"], "router": r["router"],
   "accounts": [{"name": "next3", "config_dir": "/tmp/ca-test-nonexistent-xyz",
                 "launcher": "claude-next3", "fable_launcher": "claude-fable3",
@@ -472,4 +475,61 @@ print('OK')" <<< "$output"
   run python3 "$CA_BIN" --relogin-info next3
   [ "$status" -eq 0 ]
   [[ "$output" == *keychain_service* ]]
+}
+
+# ---- single-flight lock ------------------------------------------------------------------------
+
+@test "lock: a caller degrades to the grace cache instead of blocking behind a long sweep" {
+  # A holder process owns the lock for far longer than the wait budget, standing in for a
+  # real mid-sweep caller (4 accounts x keychain + a 90s heal + retry ladders = minutes).
+  export HOLDER="$BATS_TEST_TMPDIR/holder.py"
+  cat > "$HOLDER" <<'PY'
+import fcntl, sys, time
+f = open(sys.argv[1], "w")
+fcntl.flock(f, fcntl.LOCK_EX)
+sys.stdout.write("held\n"); sys.stdout.flush()
+time.sleep(30)
+PY
+  run python3 -c "$LOAD"'
+import time, subprocess, sys
+lock_path = cfg["cache_file"] + ".lock"
+# a cache that is EXPIRED for a normal read but still inside the grace window
+json.dump({"ts": time.time() - (cfg["cache_ttl_s"] + 60), "cfg_key": ca._cfg_key(cfg),
+           "no_heal": True, "prev": None,
+           "window": {"active": True, "end": "x", "deadline": None, "permanent": True},
+           "rows": [{"acct": "next3", "auth": "ok", "k": 0, "weekly_pct": 7}]},
+          open(cfg["cache_file"], "w"))
+assert ca.cache_read(cfg, want_heal=False) is None
+assert ca.cache_read(cfg, want_heal=False, grace_s=cfg["cache_grace_s"]) is not None
+
+holder = subprocess.Popen([sys.executable, os.environ["HOLDER"], lock_path],
+                          stdout=subprocess.PIPE, text=True)
+assert holder.stdout.readline().strip() == "held"
+try:
+    t0 = time.time()
+    rows, win, cached, prev = ca.get_data(cfg, fresh=False, no_heal=True)
+    waited = time.time() - t0
+    # served the grace cache rather than waiting out the 30s hold
+    assert cached is True, cached
+    assert rows[0]["weekly_pct"] == 7, rows
+    assert waited < cfg["lock_wait_s"] + 3, waited
+    # --fresh must REFUSE to degrade (handoff-fire relies on it forcing a real heal), so
+    # its acquire blocks. Assert the contract directly — calling get_data(fresh=True)
+    # here would hang for the full hold.
+    f = open(lock_path, "w")
+    assert ca._acquire_lock(f, cfg, allow_degrade=True) is False
+finally:
+    holder.kill()
+print("OK")'
+  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]]
+}
+
+@test "--json envelope: .rows[] is the accessor the consumer docs use" {
+  # commands/limit-recover.md documented `.[] | select(.acct==…)`, which iterates the
+  # top-level VALUES and dies on the `cached` boolean. Pin the envelope so a reshape breaks
+  # loudly here instead of silently in a runbook the operator runs mid-incident.
+  command -v jq >/dev/null || skip "jq not installed"
+  run bash -c "python3 '$CA_BIN' --json --fresh --no-heal | jq -e '.rows[] | select(.acct==\"next3\") | .acct'"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *next3* ]]
 }
