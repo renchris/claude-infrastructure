@@ -1,12 +1,12 @@
 ---
-status: done
+status: complete
 created: 2026-07-21
 owner_repo: claude-infrastructure
 ---
 
 # Session Sprawl Consolidation — one session per worktree, not N
 
-**Status:** OPEN · created 2026-07-21
+**Status:** DONE 2026-07-21 · created 2026-07-21
 **Owner repo:** `claude-infrastructure` (branch `main`)
 **Scope (frozen):** Stop crash/limit recovery from resurrecting every historical
 session per project. Recovery must consolidate to ONE live session per worktree
