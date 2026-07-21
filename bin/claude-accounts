@@ -1094,7 +1094,10 @@ def render_table(rows, cfg, win, cached, prev=None):
             wrh = r.get("weekly_reset_h")
             reset_rgb = AMBER if (wrh is not None and wrh < 6) else GRAY   # imminent = act on it
             print(f"  {name} {c(glyph, grgb)} {k}  {cells}  "
-                  + c(f"{fmt_h(wrh):>6}", reset_rgb))
+                  # dim when there is no stamp, so "?" reads as an ABSENCE rather than as
+                  # a value — the 5h column already does exactly this, and dim-for-absent is
+                  # the established idiom (null bars, k==0). No new colour is introduced.
+                  + c(f"{fmt_h(wrh):>6}", reset_rgb, dim=(wrh is None)))
         # conditional detail — only states that need action surface below the table
         if a in ACTIONABLE_AUTH:
             alerts.append(c("○ ", RED) + c(f"{r['acct']} {a}", RED, bold=True)
