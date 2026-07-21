@@ -536,6 +536,26 @@ refresh_roles_for() { # $1=roles-dir $2=old-pane $3=new-pane → repoint every r
   return 0
 }
 
+# v3 D1 — the MAILBOX twin of refresh_roles_for. Repointing roles fixes ROLE-addressed mail, but a peer
+# holding the closing pane's raw UUID (every back-channel ping ever fired carries one) would still
+# enqueue into a box that no longer drains — that is the class that stranded 631/206/155 lines in the
+# former-desk boxes. The `.forward` pointer makes those raw-UUID sends follow the succession too, and
+# lets the successor's SessionStart adopt whatever the predecessor never consumed.
+# Best-effort by construction: a missing lib / unwritable dir must NEVER abort a close.
+write_forward_for() { # $1=old-pane $2=new-pane
+  local old="$1" new="$2" lib
+  [ -n "$old" ] && [ -n "$new" ] && [ "$old" != "$new" ] || return 0   # --terminal / --recycle: nothing to forward
+  for lib in "$HF_DIR/../hooks/lib/mailbox-pending.sh" \
+             "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/mailbox-pending.sh" \
+             "$HOME/.claude/hooks/lib/mailbox-pending.sh"; do
+    # shellcheck disable=SC1090,SC1091
+    [ -f "$lib" ] && { . "$lib" 2>/dev/null || true; break; }
+  done
+  command -v mailbox_write_forward >/dev/null 2>&1 || return 0
+  mailbox_write_forward "$old" "$new" 2>/dev/null || true
+  return 0
+}
+
 # ---- P0-16 /goal >4000-char guard (a19 D-11) -------------------------------------------------
 # A /goal payload line whose condition exceeds the harness's 4000-char cap is a SILENT dead fire —
 # the successor spawns task-less and idles believing nothing to do (observed 2026-07-10). Hard-fail
@@ -1092,6 +1112,8 @@ MSG
   # successor, so a role-addressed ping lands on the continuation, never on the dead pane (SO-1).
   # A --terminal close has no successor → refresh_roles_for no-ops (nothing continues).
   refresh_roles_for "$CC_ROLES_DIR" "$SC_SID" "$SC_SUCCESSOR"
+  # …and the same for raw-UUID senders: leave a forward pointer on the closing pane's inbox (D1).
+  write_forward_for "$SC_SID" "$SC_SUCCESSOR"
   # Succession announce — INTO the survivor, BEFORE the close chain starts. The report emitted
   # in the closing pane dies with the pane (observed 23:03 2026-07-13); the successor's
   # v2: cc-notify ENQUEUES to the successor's inbox (drained as context at its next boundary / by its
