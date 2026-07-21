@@ -107,11 +107,26 @@ echo "T8 S-3b discrimination — the disposition is NOT reachable from silence a
 # proven statically by s3b-lint on this very file's target; assert the lint agrees at runtime too
 ./scripts/s3b-lint.sh "$SUP" >/dev/null 2>&1 && ok "s3b-lint GREEN on the supervisor (no silence→dispose)" || no "s3b-lint RED"
 
-echo "T9 role-file page fallback — empty CC_PAGE_TO ⇒ target read from CC_PAGE_TO_FILE at page time"
-# effect-read through a capturing cc-notify stub: the page must reach the uuid in the role FILE
+echo "T9 role-file page fallback — empty CC_PAGE_TO ⇒ target resolved from CC_PAGE_TO_FILE at page time"
+# effect-read through a capturing cc-notify stub: the page must reach the uuid in the role FILE.
+# The stub RESOLVES `--role` exactly as the real cc-notify does (v3 D2 moved role→uuid resolution out
+# of the supervisor and into cc-notify, so the supervisor now passes `--role <name>` + CC_ROLES_DIR
+# instead of a locally-cat'd uuid). A stub pinned to "$1" would capture the flag, not the target, and
+# report a routing failure that never happened — fixture shape must track the real producer's argv.
 mkdir -p "$SBX/bin"; cat > "$SBX/bin/cc-notify" <<'STUB'
 #!/bin/bash
-printf '%s\n' "$1" >> "${CC_NOTIFY_CAPTURE:?}"
+target=""; role=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --role) role="$2"; shift 2 ;;
+    --role=*) role="${1#--role=}"; shift ;;
+    --from) shift 2 ;;
+    --*) shift ;;
+    *) [ -z "$target" ] && target="$1"; shift ;;
+  esac
+done
+[ -n "$role" ] && target="$(head -n1 "${CC_ROLES_DIR:-$HOME/.claude/cc-roles}/$role" 2>/dev/null | tr -d '[:space:]')"
+printf '%s\n' "$target" >> "${CC_NOTIFY_CAPTURE:?}"
 STUB
 chmod +x "$SBX/bin/cc-notify"
 printf '%s' "ROLE-UUID-T9" > "$SBX/desk-role"

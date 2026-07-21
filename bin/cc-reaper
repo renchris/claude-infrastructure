@@ -69,9 +69,18 @@ say(){ printf '%s\n' "$*"; }
 
 # ── surface-cause desk paging (T-P3-3) + enumerated≈live-panes self-check (P0-12b) config ──
 PAGEDIR="${CC_REAPER_PAGEDIR:-$HOME/.claude/autonomy/pages/reaper}"     # damping/state (autonomy/pages namespace)
+# D7 send-damping state lives BESIDE this pager's own state, so it inherits every existing test
+# isolation seam (CC_REAPER_PAGEDIR) automatically — a damp dir defaulting to the live ~/.claude tree
+# would have tests writing real markers and contaminating each other.
+CC_PAGE_DAMP_DIR="${CC_PAGE_DAMP_DIR:-$PAGEDIR/damp}"
 IDL_FILE="${CC_REAPER_IDL:-$HOME/.claude/autonomy/idl.jsonl}"           # shared desk board (supervisor-shaped rows)
-PAGE_TO="${CC_PAGE_TO:-}"                                               # desk pane for cc-notify (best-effort)
-PAGE_TO_FILE="${CC_PAGE_TO_FILE:-$HOME/.claude/cc-roles/desk}"          # fallback: live desk role file (empty PAGE_TO)
+# ADDRESSING (v3 D2): page the desk ROLE, resolved by cc-notify at SEND time — never a uuid snapshotted
+# at process start. The plists set no CC_PAGE_TO, so the old path fell through to reading the role file
+# HERE and passing a frozen uuid; when the desk recycled mid-run, every subsequent page went to a dead
+# box (the 570-page flood). CC_PAGE_TO remains as an EXPLICIT override for a human/test aiming at one
+# specific pane; PAGE_TO_FILE is retained only for that legacy fallback shape.
+PAGE_TO="${CC_PAGE_TO:-}"                                               # explicit pane override (rare; tests/manual)
+PAGE_TO_FILE="${CC_PAGE_TO_FILE:-$HOME/.claude/cc-roles/desk}"          # DEFAULT: the ROLE file cc-notify --role resolves
 # never-reap causes that WARRANT a desk page (a human must re-engage / close / confirm-close). active,
 # owned-wait, rate-limited are DELIBERATELY excluded: healthy or self-healing, a page would be noise.
 SURFACE_PAGE_RE='^(coordination-hang|crashed|finished-shared-review)$'
@@ -101,6 +110,12 @@ if [ -z "$NOTIFY_BIN" ]; then
     [ -n "$_c" ] && [ -x "$_c" ] && { NOTIFY_BIN="$_c"; break; }
   done
 fi
+# D7 send-damping (best-effort: absent lib ⇒ undamped, i.e. today's behaviour, never a lost page).
+for _c in "$HERE/../hooks/lib/page-damp.sh" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/page-damp.sh" \
+          "$HOME/.claude/hooks/lib/page-damp.sh"; do
+  # shellcheck disable=SC1090,SC1091
+  [ -f "$_c" ] && { . "$_c" 2>/dev/null || true; break; }
+done
 # cc-reconcile — the P0-12b companion that CLOSES the blind-spot delta instead of only surfacing it:
 # it backfills a cc-registry row for any live pane that missed SessionStart (pre-wiring cohort / hook
 # outage / a spawn mode that didn't fire the hook), so those panes are ENUMERATED this sweep. Same
@@ -148,11 +163,29 @@ idl_selfcheck(){ # <live> <enumerated> <delta>
     '{ts:$ts, actor:"cc-reaper", kind:"selfcheck-page", live:$live, enumerated:$enum, delta:$delta}' \
     2>/dev/null >> "$IDL_FILE" || true
 }
-page_target(){ local t="$PAGE_TO"; [ -n "$t" ] || t="$(cat "$PAGE_TO_FILE" 2>/dev/null || true)"; printf '%s' "$t"; }
-notify_desk(){ # <message> — best-effort desk cc-notify; an unresolved target or missing cc-notify is silent, never fatal
-  local target; target="$(page_target)"
-  [ -n "$target" ] && [ -n "$NOTIFY_BIN" ] || return 0
-  "$NOTIFY_BIN" "$target" "$1" >/dev/null 2>&1 || true
+# <message> [state-fingerprint] — best-effort desk page. ROLE-ADDRESSED by default (D2): cc-notify
+# resolves the role file itself at send time AND follows a `.forward` chain / reroutes a dead target,
+# none of which a locally-cat'd uuid can do. CC_PAGE_TO still forces one explicit pane.
+#
+# The role name + dir are DERIVED from PAGE_TO_FILE (dirname → CC_ROLES_DIR, basename → role) rather
+# than hardcoded, so every existing seam keeps working unchanged: the default resolves to
+# cc-roles/desk, tests/cc-reaper.bats' custom path resolves to its own dir, and /dev/null still
+# disables (not a regular file ⇒ cc-notify exit 3 ⇒ no page).
+#
+# When a fingerprint is supplied, D7 damping suppresses an identical (target,fingerprint) re-send
+# inside the TTL — a state CHANGE always gets through. A missing cc-notify is silent, never fatal.
+notify_desk(){ # <message> [fingerprint]
+  local msg="$1" fp="${2:-}" rdir rname
+  [ -n "$NOTIFY_BIN" ] || return 0
+  if [ -n "$fp" ] && command -v damp_should_send >/dev/null 2>&1; then
+    damp_should_send "${PAGE_TO:-role:$PAGE_TO_FILE}" "$fp" || { log "page-damped [$fp]"; return 0; }
+  fi
+  if [ -n "$PAGE_TO" ]; then
+    "$NOTIFY_BIN" "$PAGE_TO" "$msg" >/dev/null 2>&1 || true
+  else
+    rdir="$(dirname "$PAGE_TO_FILE")"; rname="$(basename "$PAGE_TO_FILE")"
+    CC_ROLES_DIR="$rdir" "$NOTIFY_BIN" --role "$rname" "$msg" >/dev/null 2>&1 || true
+  fi
 }
 sanitize_key(){ printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_'; }   # marker-filename-safe damping key
 
@@ -260,7 +293,10 @@ handle_surface() { # <reap> <key> <name> <cause> <pane> <detail>
   if [ "$last" = "$cause" ]; then
     say "  keep   $name [$cause] — surfaced (already paged this cause; damped)"; return 0
   fi
-  notify_desk "⚠️ REAPER SURFACE — session ${name} is ${cause}: ${detail} (never-reap; desk/operator resolves — re-engage a hang · close a crashed pane · confirm-close a shared-review). cc-reaper never auto-acts on this."
+  # fingerprint = the STATE words only (session + cause). ${detail} is deliberately excluded: it
+  # carries volatile text (times, counts) that would change every sweep and silently defeat damping.
+  notify_desk "⚠️ REAPER SURFACE — session ${name} is ${cause}: ${detail} (never-reap; desk/operator resolves — re-engage a hang · close a crashed pane · confirm-close a shared-review). cc-reaper never auto-acts on this." \
+              "surface:${name}:${cause}"
   printf '%s\n' "$cause" > "$mk" 2>/dev/null || true
   idl_surface "$cause" "$name" "$pane"
   say "  PAGE   $name [$cause] → desk (surfaced, never-reap)"
@@ -286,7 +322,8 @@ self_check() { # <reap> <enumerated>
   read -r consec paged < <(cat "$sf" 2>/dev/null || echo "0 0"); consec="${consec:-0}"; paged="${paged:-0}"
   consec=$(( consec + 1 ))
   if [ "$consec" -ge "$SELFCHECK_MIN_PERSIST" ] && { [ "$paged" = 0 ] || [ "$delta" -gt "$paged" ]; }; then
-    notify_desk "⚠️ REAPER SELF-CHECK — ${live} live Claude panes but only ${enum} enumerated (Δ${delta} unseen). The reaper is BLIND to ${delta} live session(s): a spawn mode isn't registering in cc-registry, so they can't be classified or reaped. Investigate: compare \`cc-sessions --json\` against the live interactive-claude procs."
+    notify_desk "⚠️ REAPER SELF-CHECK — ${live} live Claude panes but only ${enum} enumerated (Δ${delta} unseen). The reaper is BLIND to ${delta} live session(s): a spawn mode isn't registering in cc-registry, so they can't be classified or reaped. Investigate: compare \`cc-sessions --json\` against the live interactive-claude procs." \
+                "selfcheck-blind:delta${delta}"
     idl_selfcheck "$live" "$enum" "$delta"
     say "cc-reaper self-check: PAGE — Δ$delta blind spot ($live live vs $enum enumerated) → desk"
     log "self-check page: live=$live enum=$enum delta=$delta (persisted ${consec} sweep(s))"
