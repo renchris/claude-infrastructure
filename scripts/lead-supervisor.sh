@@ -188,7 +188,10 @@ reobserve_effects(){ # $1=sid $2=cwd $3=since_epoch → prints "fresh" | "dark"
       local ref; ref="$(mktemp 2>/dev/null)"
       if [ -n "$ref" ]; then
         touch -t "$(date -r "$since" +%Y%m%d%H%M.%S 2>/dev/null || echo 197001010000)" "$ref" 2>/dev/null
-        [ -n "$(find "$cwd" -type f -newer "$ref" -not -path '*/.git/*' -print -quit 2>/dev/null)" ] && fresh=fresh
+        # PERF: -prune generated/scratch trees. `-not -path` still DESCENDS into them; -prune does not.
+        # doc_classifier holds 1.27M files (tmp/ = 921K scale/prof fixtures). A full walk took ~5min vs
+        # the 30s SWEEP, so sweeps overlapped and pinned the disk at ~1.6k tps while the box sat idle.
+        [ -n "$(find "$cwd" \( -name .git -o -name tmp -o -name node_modules -o -name .venv -o -name venv -o -name __pycache__ -o -name .next -o -name dist -o -name .worktrees \) -prune -o -type f -newer "$ref" -print -quit 2>/dev/null)" ] && fresh=fresh
         rm -f "$ref"
       fi
     fi
