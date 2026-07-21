@@ -182,3 +182,97 @@ sent_count() { if [ -f "$IT2_LOG" ]; then grep -c '^SEND' "$IT2_LOG"; else echo 
   export ITERM_SESSION_ID="w0t0p0:$UUID"; "$NOTIFY" --self "four" >/dev/null 2>&1
   [ "$(sent_count)" -eq 0 ]     # zero it2 `session send` across name/uuid/from/self — no keystrokes, ever
 }
+
+# ── v3 ADDRESSING: --role · forward chains · dead-target reroute (D1/D2/D3) ───────────────────────
+# These pin the class that lost ~78% of all mail ever sent: an address frozen at producer start-up,
+# a pane that recycled out from under it, and a "success" exit that looped for three days.
+
+@test "--role resolves the role file at SEND time (not a snapshot) and enqueues to that pane" {
+  export CC_ROLES_DIR="$BATS_TEST_TMPDIR/roles"; mkdir -p "$CC_ROLES_DIR"
+  printf '%s\n' "$UUID" > "$CC_ROLES_DIR/desk"
+  run "$NOTIFY" --role desk "role addressed"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"delivered to inbox"* ]] || false
+  grep -q '\] role addressed' "$CC_MAILBOX_DIR/$UUID.md"
+  [ "$(sent_count)" -eq 0 ]
+}
+
+@test "--role REPOINTED between sends follows the role, not the original pane (the anti-flood property)" {
+  export CC_ROLES_DIR="$BATS_TEST_TMPDIR/roles"; mkdir -p "$CC_ROLES_DIR"
+  local NEW="CCCCCCCC-9999-8888-7777-666666666666"
+  printf '%s\n' "$UUID" > "$CC_ROLES_DIR/desk"
+  "$NOTIFY" --role desk "before recycle" >/dev/null 2>&1
+  printf '%s\n' "$NEW" > "$CC_ROLES_DIR/desk"          # the desk recycled; role repointed
+  "$NOTIFY" --role desk "after recycle" >/dev/null 2>&1
+  grep -q 'before recycle' "$CC_MAILBOX_DIR/$UUID.md"
+  grep -q 'after recycle'  "$CC_MAILBOX_DIR/$NEW.md"
+  ! grep -q 'after recycle' "$CC_MAILBOX_DIR/$UUID.md" || false   # the OLD box does not keep receiving
+}
+
+@test "--role with a MISSING role file → exit 3 with a hint, and nothing is enqueued" {
+  export CC_ROLES_DIR="$BATS_TEST_TMPDIR/roles"; mkdir -p "$CC_ROLES_DIR"
+  run "$NOTIFY" --role nosuch "x"
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"role 'nosuch' is not set"* ]] || false
+  [ -z "$(ls -A "$CC_MAILBOX_DIR")" ]
+}
+
+@test "--role with an EMPTY role file → exit 3 (an unset role is not a silent no-op)" {
+  export CC_ROLES_DIR="$BATS_TEST_TMPDIR/roles"; mkdir -p "$CC_ROLES_DIR"
+  : > "$CC_ROLES_DIR/desk"
+  run "$NOTIFY" --role desk "x"
+  [ "$status" -eq 3 ]
+}
+
+@test "a send to a pane with a .forward lands in the SUCCESSOR's box, not the dead one" {
+  local DEAD="DEADBEEF-1111-2222-3333-444444444444"
+  printf '%s\n' "$UUID" > "$CC_MAILBOX_DIR/$DEAD.forward"    # DEAD self-closed → UUID (live) continues
+  run "$NOTIFY" "$DEAD" "follow the chain"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"following its forward chain"* ]] || false
+  grep -q 'follow the chain' "$CC_MAILBOX_DIR/$UUID.md"
+  [ ! -f "$CC_MAILBOX_DIR/$DEAD.md" ]                        # nothing written to the dead box
+}
+
+@test "dead target with NO forward → REROUTED to the desk role, tagged [for:<orig>]" {
+  export CC_ROLES_DIR="$BATS_TEST_TMPDIR/roles"; mkdir -p "$CC_ROLES_DIR"
+  printf '%s\n' "$UUID" > "$CC_ROLES_DIR/desk"               # UUID is the live desk
+  local DEAD="DEADBEEF-1111-2222-3333-444444444444"          # not in the it2 stub's live list
+  run "$NOTIFY" "$DEAD" "orphaned page"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"rerouted to desk"* ]] || false
+  grep -q "\[for:$DEAD\] orphaned page" "$CC_MAILBOX_DIR/$UUID.md"   # the desk sees it, attributed
+  grep -q 'orphaned page' "$CC_MAILBOX_DIR/$DEAD.md"                 # forensics stay in the dead box
+}
+
+@test "a reroute stays HONEST — stderr never upgrades it to a delivery to the original target" {
+  export CC_ROLES_DIR="$BATS_TEST_TMPDIR/roles"; mkdir -p "$CC_ROLES_DIR"
+  printf '%s\n' "$UUID" > "$CC_ROLES_DIR/desk"
+  local DEAD="DEADBEEF-1111-2222-3333-444444444444"
+  run "$NOTIFY" "$DEAD" "still undelivered"
+  [[ "$output" == *"mailbox only"* ]] || false                       # the W5 verdict survives
+  [[ "$output" == *"NOT a delivery to the original target"* ]] || false
+  [[ "$output" != *"delivered to inbox [$DEAD]"* ]] || false         # never a false success
+}
+
+@test "dead target with NO desk role → says so plainly instead of claiming a reroute" {
+  export CC_ROLES_DIR="$BATS_TEST_TMPDIR/roles"; mkdir -p "$CC_ROLES_DIR"
+  local DEAD="DEADBEEF-1111-2222-3333-444444444444"
+  run "$NOTIFY" "$DEAD" "nobody home"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"no reroute"* ]] || false
+  [[ "$output" != *"rerouted to desk"* ]] || false
+}
+
+@test "an UNKNOWN-liveness target is NOT rerouted (only an authoritative dead target is)" {
+  export CC_ROLES_DIR="$BATS_TEST_TMPDIR/roles"; mkdir -p "$CC_ROLES_DIR"
+  printf '%s\n' "$UUID" > "$CC_ROLES_DIR/desk"
+  local UNK="DEADBEEF-1111-2222-3333-444444444444"
+  printf '#!/bin/bash\nexit 1\n' > "$BATS_TEST_TMPDIR/it2-broken"    # no liveness oracle
+  chmod +x "$BATS_TEST_TMPDIR/it2-broken"
+  IT2_BIN="$BATS_TEST_TMPDIR/it2-broken" run "$NOTIFY" "$UNK" "unknown liveness"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"UNVERIFIABLE"* ]] || false
+  [[ "$output" != *"rerouted"* ]] || false                           # would spam the desk on every it2 blip
+  [ ! -f "$CC_MAILBOX_DIR/$UUID.md" ] || ! grep -q 'unknown liveness' "$CC_MAILBOX_DIR/$UUID.md"
+}

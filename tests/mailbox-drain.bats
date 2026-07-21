@@ -121,3 +121,79 @@ add()  { printf '%s\n' "$@" >> "$MBOX"; }
   [ "$status" -eq 0 ]
   printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext' | grep -q 'context-only delivery'
 }
+
+# ── v3: succession ADOPTION (D1) + the unwatched wake NUDGE (D4) ──────────────────────────────────
+
+@test "SessionStart ADOPTS a predecessor's unconsumed mail and surfaces it in the SAME boundary" {
+  local PRED="BBBBBBBB-1111-2222-3333-444444444444"
+  printf 'own line\n'                    > "$CC_MAILBOX_DIR/$UUID.md"
+  printf 'inherited 1\ninherited 2\n'    > "$CC_MAILBOX_DIR/$PRED.md"
+  printf '%s\n' "$UUID"                  > "$CC_MAILBOX_DIR/$PRED.forward"
+  run bash -c "echo '{}' | ITERM_SESSION_ID='w0t0p0:$UUID' '$DRAIN' session-start"
+  [ "$status" -eq 0 ]
+  local ctx; ctx="$(printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext')"
+  printf '%s' "$ctx" | grep -q 'own line'
+  printf '%s' "$ctx" | grep -q '\[forwarded:BBBBBBBB\] inherited 1'
+  printf '%s' "$ctx" | grep -q '\[forwarded:BBBBBBBB\] inherited 2'
+  printf '%s' "$ctx" | grep -q '3 new messages'      # own + both adopted, ONE delivery
+}
+
+@test "adoption is exactly-once — a second SessionStart inherits nothing further" {
+  local PRED="BBBBBBBB-1111-2222-3333-444444444444"
+  printf 'inherited\n'   > "$CC_MAILBOX_DIR/$PRED.md"
+  printf '%s\n' "$UUID"  > "$CC_MAILBOX_DIR/$PRED.forward"
+  bash -c "echo '{}' | ITERM_SESSION_ID='w0t0p0:$UUID' '$DRAIN' session-start" >/dev/null
+  run bash -c "echo '{}' | ITERM_SESSION_ID='w0t0p0:$UUID' '$DRAIN' session-start"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]                                   # nothing left to deliver
+  [ "$(grep -c '' "$CC_MAILBOX_DIR/$UUID.md")" -eq 1 ]   # NOT duplicated into our box
+}
+
+@test "a .forward pointing at SOMEONE ELSE is not adopted (we take only what names us)" {
+  local PRED="BBBBBBBB-1111-2222-3333-444444444444" OTHER="CCCCCCCC-1111-2222-3333-444444444444"
+  printf 'not for us\n'   > "$CC_MAILBOX_DIR/$PRED.md"
+  printf '%s\n' "$OTHER"  > "$CC_MAILBOX_DIR/$PRED.forward"
+  run bash -c "echo '{}' | ITERM_SESSION_ID='w0t0p0:$UUID' '$DRAIN' session-start"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  [ "$(grep -c '' "$CC_MAILBOX_DIR/$PRED.md")" -eq 1 ]   # left untouched for its real successor
+}
+
+@test "adoption does NOT run on the prompt boundary (one-shot, at session start)" {
+  local PRED="BBBBBBBB-1111-2222-3333-444444444444"
+  printf 'inherited\n'   > "$CC_MAILBOX_DIR/$PRED.md"
+  printf '%s\n' "$UUID"  > "$CC_MAILBOX_DIR/$PRED.forward"
+  run bash -c "echo '{}' | ITERM_SESSION_ID='w0t0p0:$UUID' '$DRAIN' prompt"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  [ "$(mailbox_acked "$PRED")" -eq 0 ] 2>/dev/null || [ -z "$(cat "$CC_MAILBOX_DIR/$PRED.acked" 2>/dev/null)" ]
+}
+
+@test "D4: an UNWATCHED session draining mail gets the arm-a-watcher nudge, exactly once" {
+  printf 'a page\n' > "$CC_MAILBOX_DIR/$UUID.md"
+  run bash -c "echo '{}' | ITERM_SESSION_ID='w0t0p0:$UUID' '$DRAIN' prompt"
+  local ctx; ctx="$(printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext')"
+  printf '%s' "$ctx" | grep -q 'no watcher armed'
+  printf '%s' "$ctx" | grep -q 'cc-await-ping'
+  [ "$(printf '%s' "$ctx" | grep -c 'no watcher armed')" -eq 1 ]
+}
+
+@test "D4: a WATCHED session (fresh .watching heartbeat) gets NO nudge" {
+  printf 'a page\n' > "$CC_MAILBOX_DIR/$UUID.md"
+  touch "$CC_MAILBOX_DIR/$UUID.watching"
+  run bash -c "echo '{}' | ITERM_SESSION_ID='w0t0p0:$UUID' '$DRAIN' prompt"
+  local ctx; ctx="$(printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext')"
+  printf '%s' "$ctx" | grep -q 'a page'
+  ! printf '%s' "$ctx" | grep -q 'no watcher armed' || false
+}
+
+@test "D4: a STALE .watching heartbeat counts as unwatched (a dead watcher is not a wake path)" {
+  printf 'a page\n' > "$CC_MAILBOX_DIR/$UUID.md"
+  # BACKDATE the heartbeat rather than shrinking the threshold to 0: at CC_WATCH_FRESH_S=0 a
+  # just-touched file is still "0s old ≤ 0" and reads as FRESH, so that test would pass for the wrong
+  # reason (and pass even if staleness were never checked). A real past mtime is the actual predicate.
+  touch "$CC_MAILBOX_DIR/$UUID.watching"
+  touch -t 202001010000 "$CC_MAILBOX_DIR/$UUID.watching"
+  run bash -c "echo '{}' | ITERM_SESSION_ID='w0t0p0:$UUID' '$DRAIN' prompt"
+  printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext' | grep -q 'no watcher armed'
+}
