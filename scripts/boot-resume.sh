@@ -55,6 +55,18 @@ resolve_bin() { # <env-value> <basename> [<beside-name>]
 }
 NOTIFY="$(resolve_bin "${CC_NOTIFY_BIN:-}" cc-notify)"
 LAUNCH="$(resolve_bin "${CC_RESUME_LAUNCH_BIN:-}" boot-resume-launch.sh boot-resume-launch.sh)"
+# ── the shared resume-selection decision point (session-sprawl consolidation, 2026-07-21).
+#    Without it this loop fires one session PER GHOST — the incident shape (14 sessions, one
+#    project, 2.76 GB RSS). resolve_bin's search does not reach the limit-recover subdir. ──
+SELECT="${CC_RESUME_SELECT_BIN:-}"
+if [ -z "$SELECT" ]; then
+  for cand in "$(dirname "$0")/limit-recover/lr-select.py" \
+              "$HOME/.claude/scripts/limit-recover/lr-select.py"; do
+    [ -x "$cand" ] && { SELECT="$cand"; break; }
+  done
+fi
+MAX_PER_WT="${CC_BOOT_RESUME_MAX_PER_WORKTREE:-1}"
+MAX_TOTAL="${CC_BOOT_RESUME_MAX_TOTAL:-4}"
 KEEPALIVE="$(resolve_bin "${CC_KEEPALIVE_BIN:-}" reso-keepalive)"
 [ -z "$KEEPALIVE" ] && [ -x "$HOME/.reso/bin/reso-keepalive" ] && KEEPALIVE="$HOME/.reso/bin/reso-keepalive"
 LAUNCHCTL="${CC_LAUNCHCTL_BIN:-launchctl}"
@@ -170,16 +182,41 @@ fi
 # ── ACT: resume (posture=resume) per ghost, else page-only (posture=page). ──
 resumed=0
 resume_fail=0
+n_fire=0        # ghosts SELECTED to fire (post-consolidation) — distinct from n_open (ghosts found)
 if [ "$MODE" = "resume" ]; then
   if [ -z "$LAUNCH" ] || [ ! -x "$LAUNCH" ]; then
     log_idl failed ",\"n_open\":$n_open,\"resumed\":0,\"delivered\":false,\"reason\":\"no-resume-launcher\""
     echo "boot-resume: mode=resume but no executable resume launcher — not marking boot; will retry" >&2
     exit 3
   fi
-  # Resume each ghost through the (TTY-coupled) launcher seam. Order is irrelevant; each is independent.
+  # ── CONSOLIDATE before firing. A reboot can leave many ghosts sharing ONE worktree; resuming
+  #    each is the 2026-07-21 sprawl incident. lr-select groups by worktree, picks the single
+  #    session per group that holds the most real state, and lists the rest. Missing selector =
+  #    FAIL LOUD and resume NOTHING (same discipline as a missing launcher above) — never fall
+  #    back to firing every ghost, which is the exact bug. ──
+  if [ -z "$SELECT" ] || [ ! -x "$SELECT" ]; then
+    log_idl failed ",\"n_open\":$n_open,\"resumed\":0,\"delivered\":false,\"reason\":\"no-resume-selector\""
+    echo "boot-resume: mode=resume but no executable lr-select — refusing to resume unconsolidated" >&2
+    exit 3
+  fi
+  SEL_ARGS=""
   while IFS=$'\t' read -r acct cwd sid _name; do
     [ -n "$sid" ] || continue
-    alias="$(map_account "$acct")"
+    SEL_ARGS="$SEL_ARGS --candidate $(map_account "$acct"):$sid:$cwd"
+  done <<EOF
+$GHOSTS
+EOF
+  mkdir -p "$STATE_DIR" 2>/dev/null || true
+  # SEL_ARGS is a built flag list and MUST word-split into separate --candidate args.
+  # shellcheck disable=SC2086
+  WINNERS="$("$SELECT" $SEL_ARGS --max-per-worktree "$MAX_PER_WT" --max-total "$MAX_TOTAL" \
+    --allow-missing-cwd --json "$STATE_DIR/last-selection.json" 2>"$STATE_DIR/last-triage.txt")"
+  n_fire=0
+  [ -n "$WINNERS" ] && n_fire="$(printf '%s\n' "$WINNERS" | grep -c . || true)"
+
+  # Resume each WINNER through the (TTY-coupled) launcher seam. Order is irrelevant; each is independent.
+  while IFS=$'\t' read -r alias sid cwd _br; do
+    [ -n "$sid" ] || continue
     branch=""
     [ -n "$cwd" ] && [ -d "$cwd" ] && branch="$(git -C "$cwd" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
     if "$LAUNCH" "$alias" "$cwd" "$sid" "$branch" >/dev/null 2>&1; then
@@ -188,7 +225,7 @@ if [ "$MODE" = "resume" ]; then
       resume_fail=$((resume_fail + 1))
     fi
   done <<EOF
-$GHOSTS
+$WINNERS
 EOF
   # start the keepalive watcher ONCE so the resumed panes keep working (their /goal Stop-hook is gone
   # after a resume-from-summary /compact). Best-effort; a stub in tests just records the call.
@@ -216,7 +253,9 @@ EOF
 "
 
 if [ "$MODE" = "resume" ]; then
-  msg="🔄 boot-delta: rebooted ${boot_h} · resumed ${resumed}/${n_open} desk session(s), keepalive started."
+  msg="🔄 boot-delta: rebooted ${boot_h} · resumed ${resumed}/${n_fire} desk session(s), keepalive started."
+  [ "$n_open" -gt "$n_fire" ] && msg="${msg}
+  consolidated: ${n_open} ghost(s) → ${n_fire} fired (max ${MAX_PER_WT}/worktree, ${MAX_TOTAL} total). The rest are LISTED, not lost — ${STATE_DIR}/last-triage.txt"
   [ "$resume_fail" -gt 0 ] && msg="${msg} ⚠ ${resume_fail} failed to launch — check /resume-sessions."
   msg="${msg}
 ${listing}desk-jobs: ${dj_up}/${dj_total} com.claude agent(s) up."
