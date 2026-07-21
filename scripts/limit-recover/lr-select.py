@@ -34,7 +34,14 @@ picked by a lexicographic tuple:
     3. session id          — deterministic final tiebreak (reproducible => testable)
 
 Hard filters run BEFORE ranking and are not tiebreaks: already-running, teammate
-sessions (lead-owned recovery), agent-*/wf_* internals, and a vanished cwd.
+sessions (lead-owned recovery), agent-*/wf_* internals, and a vanished cwd
+(--allow-missing-cwd keeps the last of these for callers whose spawner can
+recreate the worktree from its branch).
+
+Losing is not one fact. A per-worktree loser has a winner covering its worktree;
+a total-ceiling loser is alone in its own worktree and nothing else covers it.
+Callers must read the reason and dispose accordingly — lr-reset-poller.sh retires
+the former and DEFERS the latter to its next tick.
 
 Usage:
   lr-select.py --candidate ACCT:SID:CWD [--candidate ...]   # caller-supplied set
