@@ -78,6 +78,22 @@ park() {
   [ -f "$RESUMED/lose.json" ]                               # retired for THIS event, not deleted
 }
 
+@test "the LISTED log carries lr-select's REAL reason, not an assumed one" {
+  # A non-winner may have lost the per-worktree contest OR been filtered outright (no transcript,
+  # teammate, cwd gone). Those are different facts; the log must not misattribute one as the other.
+  park mate next "$BATS_TEST_TMPDIR/wt/shared"
+  cat > "$LR_SELECT_BIN" <<'SH'
+#!/bin/bash
+while [ $# -gt 0 ]; do case "$1" in --json) J="$2"; shift 2 ;; *) shift ;; esac; done
+printf '{"winners":[],"listed":[],"filtered":[{"sid":"mate","reason":"teammate-session (lead-owned recovery)"}]}\n' > "$J"
+SH
+  chmod +x "$LR_SELECT_BIN"
+  run bash "$SCRIPT" --once
+  [ "$status" -eq 0 ]
+  grep -q 'LISTED mate .* teammate-session (lead-owned recovery)' "$LOG"
+  ! grep -q 'LISTED mate .* not the per-worktree winner' "$LOG"
+}
+
 @test "consolidation is logged with the counts, never silent" {
   park a next "$BATS_TEST_TMPDIR/wt/shared"
   park b next "$BATS_TEST_TMPDIR/wt/shared"
