@@ -517,6 +517,27 @@ def clamp(x, lo, hi):
     return max(lo, min(hi, x))
 
 
+def horizon(reset_h, R):
+    """Hours of runway a bucket has left -> the urgency DENOMINATOR (score = headroom / time).
+
+    `(reset_h or EPS_H)` was wrong in three ways at once: None (the endpoint omits resets_at
+    on a freshly-rolled bucket), 0.0, and any NEGATIVE value (a reset stamp inherited from the
+    last-good ledger that has since elapsed) all collapsed T to the EPS_H floor — 0.25h. That
+    is MAXIMUM urgency, so the account with the least trustworthy timing data scored ~400x
+    higher than a healthy one and won the route.
+
+    A missing horizon must read as "far away", never "imminent": substitute the full bucket
+    period (NO_RESET_H) so the row stays rankable by its real headroom (w_rem / f_eff still
+    discriminate) without the urgency inflation. Excluding the row instead would fail CLOSED —
+    all four accounts sit at 0% with a null resets_at right after a weekly reset, i.e. exactly
+    when the fleet is maximally available, and the router would answer "none".
+
+    The EPS_H clamp is retained: it is a correct divide-by-zero guard for a genuinely imminent
+    MEASURED reset — it must simply never be the fallback for an absent one."""
+    h = reset_h if (reset_h is not None and reset_h > 0) else R.get("NO_RESET_H", 168.0)
+    return max(h - R["MARGIN_H"], R["EPS_H"])
+
+
 def _soft(r, R):
     su = (r.get("session_pct") or 0) / 100.0
     wu = (r.get("weekly_pct") or 0) / 100.0
@@ -551,7 +572,7 @@ def score_general(r, cfg):
     w_rem = max(0.0, wtgt - r["weekly_pct"] / 100.0)
     if w_rem <= R["WEEKLY_FLOOR"]:
         return None, "weekly-exhausted"
-    T = max((r.get("weekly_reset_h") or R["EPS_H"]) - R["MARGIN_H"], R["EPS_H"])
+    T = horizon(r.get("weekly_reset_h"), R)
     return (w_rem / T) * _soft(r, R), None
 
 
@@ -580,7 +601,7 @@ def score_fable(r, cfg, win):
     f_eff = min(F["coupling"] * max(0.0, 1 - r["fable_pct"] / 100.0), w_rem)
     if f_eff <= R["FABLE_FLOOR"]:
         return None, "fable-exhausted"
-    T_fable = max((r.get("fable_reset_h") or R["EPS_H"]) - R["MARGIN_H"], R["EPS_H"])
+    T_fable = horizon(r.get("fable_reset_h"), R)
     H = max(min(T_fable, h_deadline), R["EPS_H"]) if h_deadline is not None else max(T_fable, R["EPS_H"])
     JB = R["JB_BONUS"] if (h_deadline is not None and T_fable > h_deadline) else 1.00
     return (f_eff / H) * JB * _soft(r, R), None
