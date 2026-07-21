@@ -67,8 +67,24 @@ LOG_PATH = os.path.join(HOME, ".claude", "logs", "claude-accounts.log")
 # Last-good quota ledger: TTL-free, per-account, persisted OUTSIDE /tmp so a reboot/tmp-sweep
 # never strands the last-known numbers. Env-overridable (mirrors CLAUDE_ACCOUNTS_JSON) so tests
 # and scratch configs never touch the real ledger.
-LASTGOOD_PATH = os.environ.get(
-    "CLAUDE_ACCOUNTS_LASTGOOD", os.path.join(HOME, ".claude", "logs", "claude-accounts-lastgood.json"))
+def _lastgood_path():
+    explicit = os.environ.get("CLAUDE_ACCOUNTS_LASTGOOD")
+    if explicit:
+        return explicit
+    logs = os.path.join(HOME, ".claude", "logs")
+    # CLAUDE_ACCOUNTS_LASTGOOD is an INDEPENDENT variable that CLAUDE_ACCOUNTS_JSON does not
+    # imply, so a scratch/test SSOT that overrode only the config still read and wrote the
+    # REAL ledger — the cache is protected from exactly this by its cfg_key guard. Derive a
+    # sibling ledger in that case. The default SSOT keeps the unchanged path on purpose:
+    # deriving it unconditionally would orphan the whole accumulated ledger the day an
+    # account is added or the SSOT moves, blanking "last-known" precisely when it matters.
+    if os.environ.get("CLAUDE_ACCOUNTS_JSON"):
+        h = sha256(os.path.realpath(CFG_PATH).encode()).hexdigest()[:8]
+        return os.path.join(logs, f"claude-accounts-lastgood-{h}.json")
+    return os.path.join(logs, "claude-accounts-lastgood.json")
+
+
+LASTGOOD_PATH = _lastgood_path()
 
 
 def log_event(msg):
@@ -90,7 +106,40 @@ def load_cfg():
         a["config_dir"] = os.path.expanduser(a["config_dir"])
     for k in ("claude_bin", "model_config_ssot", "dia_local_state"):
         cfg[k] = os.path.expanduser(cfg[k])
+    _validate_router(cfg)
     return cfg
+
+
+ROUTER_KEYS = ("S_CUT", "S_SOFT", "SF_FLOOR", "KMAX", "KFLOOR", "MARGIN_H", "EPS_H",
+               "WEEKLY_FLOOR", "FABLE_FLOOR", "JB_BONUS")
+
+
+def _validate_router(cfg):
+    """Fail with a MESSAGE on a bad router block, never with a traceback.
+
+    The constants are documented as operator-tunable (KMAX was hand-raised 4 -> 8), and they
+    are consumed unguarded — _soft divides by (S_CUT - S_SOFT), so S_SOFT == S_CUT is a
+    ZeroDivisionError inside every consumer of this tool at once, and a typo'd key is a
+    KeyError with no hint which file caused it. Same fail-loud contract load_cfg already uses
+    for an unreadable SSOT."""
+    R = cfg.get("router")
+    if not isinstance(R, dict):
+        sys.exit(f"claude-accounts: {CFG_PATH} has no 'router' block")
+    bad = [k for k in ROUTER_KEYS
+           if not isinstance(R.get(k), (int, float)) or isinstance(R.get(k), bool)]
+    if bad:
+        sys.exit(f"claude-accounts: router constants missing or non-numeric in {CFG_PATH}: "
+                 + ", ".join(bad))
+    problems = []
+    if not 0 <= R["S_SOFT"] < R["S_CUT"] <= 1:
+        problems.append(f"require 0 <= S_SOFT ({R['S_SOFT']}) < S_CUT ({R['S_CUT']}) <= 1")
+    if R["KMAX"] < 1:
+        problems.append(f"KMAX must be >= 1 (got {R['KMAX']})")
+    if R["EPS_H"] <= 0:
+        problems.append(f"EPS_H must be > 0 (got {R['EPS_H']})")
+    if problems:
+        sys.exit(f"claude-accounts: invalid router constants in {CFG_PATH}: "
+                 + "; ".join(problems))
 
 
 # ---- keychain -------------------------------------------------------------------------------
@@ -1069,7 +1118,10 @@ def render_table(rows, cfg, win, cached, prev=None):
                         continue
                     chips.append(c(f"{r['acct']} {b - a:+.0f}% {tag}", GRAY))
         if chips:
-            since = datetime.fromtimestamp(prev["ts"]).strftime("%H:%M")
+            # _prev_snapshot deliberately ignores the TTL, so this stamp can be days old.
+            # Reuse the same today/not-today switch _fmt_asof uses — a bare "since 02:45"
+            # reads as this morning even when it is from last week.
+            since = _fmt_asof(datetime.fromtimestamp(prev["ts"], timezone.utc).isoformat())
             print()
             print("  " + c("Δ ", PERI) + c(f"since {since}  ", GRAY, dim=True)
                   + c(" · ", GRAY, dim=True).join(chips))
