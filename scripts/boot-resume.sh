@@ -199,17 +199,23 @@ if [ "$MODE" = "resume" ]; then
     echo "boot-resume: mode=resume but no executable lr-select — refusing to resume unconsolidated" >&2
     exit 3
   fi
-  SEL_ARGS=""
+  # An ARRAY, not a word-split string: a worktree path containing a space would otherwise break
+  # into two argv entries and silently skip that session. bash 3.2 supports indexed arrays.
+  SEL_ARGS=()
   while IFS=$'\t' read -r acct cwd sid _name; do
     [ -n "$sid" ] || continue
-    SEL_ARGS="$SEL_ARGS --candidate $(map_account "$acct"):$sid:$cwd"
+    SEL_ARGS[${#SEL_ARGS[@]}]="--candidate"
+    SEL_ARGS[${#SEL_ARGS[@]}]="$(map_account "$acct"):$sid:$cwd"
   done <<EOF
 $GHOSTS
 EOF
+  if [ "${#SEL_ARGS[@]}" -eq 0 ]; then
+    log_idl failed ",\"n_open\":$n_open,\"resumed\":0,\"delivered\":false,\"reason\":\"no-usable-ghosts\""
+    echo "boot-resume: ${n_open} ghost(s) but none carried a session id — not marking boot" >&2
+    exit 3
+  fi
   mkdir -p "$STATE_DIR" 2>/dev/null || true
-  # SEL_ARGS is a built flag list and MUST word-split into separate --candidate args.
-  # shellcheck disable=SC2086
-  WINNERS="$("$SELECT" $SEL_ARGS --max-per-worktree "$MAX_PER_WT" --max-total "$MAX_TOTAL" \
+  WINNERS="$("$SELECT" "${SEL_ARGS[@]}" --max-per-worktree "$MAX_PER_WT" --max-total "$MAX_TOTAL" \
     --allow-missing-cwd --json "$STATE_DIR/last-selection.json" 2>"$STATE_DIR/last-triage.txt")"
   n_fire=0
   [ -n "$WINNERS" ] && n_fire="$(printf '%s\n' "$WINNERS" | grep -c . || true)"
