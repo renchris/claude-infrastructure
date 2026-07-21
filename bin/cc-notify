@@ -3,10 +3,14 @@
 # as a MESSAGE it reads at a safe boundary — NEVER as keystrokes on its live input line.
 #
 #   cc-notify <target> "<message>"   target = friendly-name | pane-UUID | --self
+#   cc-notify --role <name> "<msg>"  target = a ROLE (desk/operator/…), resolved at SEND time
 #   cc-notify --self                 print THIS session's pane UUID and exit
 #   cc-notify --list [--json]        list sessions (delegates to cc-sessions)
 #
 # Options:
+#   --role <name>     address a ROLE, not a pane: reads ~/.claude/cc-roles/<name> at SEND time, so a
+#                     recycled/succeeded pane is followed automatically. PREFER THIS for any automated
+#                     pager (see ADDRESSING below). Missing/empty role file → exit 3.
 #   --from <name>     attribution written to the inbox line (default: own registered name / account)
 #   --mailbox-only    force inbox-only (skip the liveness classification / never a "not-live" note)
 #   -h, --help        this help
@@ -26,23 +30,55 @@
 # makes delivery exactly-once. A single-line-per-message invariant is preserved (newlines in the
 # message are collapsed to spaces) so the cursor counts messages, not physical lines.
 #
+# ── ADDRESSING (v3, 2026-07-20): a pane UUID is a STALE address the moment that pane recycles ──
+#   Live forensics found 570 pages looping into ONE dead former-desk box for three days: producers had
+#   snapshotted a UUID once and nothing ever re-resolved it. Three layers now make an address survive
+#   a recycle — applied in this order, before the liveness verdict:
+#     1. --role <name>   resolved at SEND time from ~/.claude/cc-roles/<name> (the same file
+#                        cc-await-ping --role re-reads per poll). An automated pager should address a
+#                        ROLE, never a frozen uuid. This is also the form scripts/payload-lint.sh:50
+#                        already blesses as a sanctioned back-channel (P0-15) — the flag now exists.
+#     2. forward chain   <uuid>.forward, written by handoff-fire at succession, followed here to the
+#                        chain head (bounded 4 hops, cycle-safe — hooks/lib/mailbox-pending.sh).
+#     3. reroute         a target that is neither live NOR forwarded would enqueue into a box nothing
+#                        will ever drain. The line is still recorded there (forensics are never lost),
+#                        AND tee'd to the desk role's box tagged "[for:<orig-uuid>]" — the desk is the
+#                        standing triager, so mail lands where triage happens instead of rotting.
+#
 # ── DELIVERABILITY (honest exit codes — an enqueue to a DEAD inbox must not read as delivered) ──
 #   The target's liveness decides the verdict cc-announce trusts. A LIVE session (registered live in
 #   cc-sessions, or a live iTerm2 pane) WILL drain the inbox → "delivered to inbox". A NOT-live target
 #   (closed/recycled pane, dead pid) is enqueued but no drain will ever run → "mailbox only" (the
 #   cc-announce alarm path; disk-truth that nothing reads is NOT a delivery — the W5 lesson holds).
+#   A reroute does NOT upgrade that verdict to "delivered": stderr stays honest ("mailbox only …
+#   rerouted to desk"), because the ORIGINAL addressee still did not receive it.
 #
-# Resolution order: friendly name (exact, cc-registry) -> raw pane UUID passthrough -> --self.
-# Env overrides (tests): CC_REGISTRY_DIR, CC_MAILBOX_DIR, IT2_BIN.
+# Resolution order: --role (cc-roles) -> friendly name (exact, cc-registry) -> raw pane UUID
+#   passthrough -> --self; then the forward chain.
+# Env overrides (tests): CC_REGISTRY_DIR, CC_MAILBOX_DIR, CC_ROLES_DIR, CC_COMMS_ALARM_DIR, IT2_BIN.
 # bash 3.2-safe. Exit: 0 = enqueued (delivered to a live inbox, OR mailbox-only to a not-live/unknown-
-#   liveness target — stderr says which); 2 = usage; 3 = unresolvable target; 5 = inbox UNWRITABLE
+#   liveness target, possibly rerouted — stderr says which); 2 = usage; 3 = unresolvable target
+#   (incl. a missing/empty --role file); 5 = inbox UNWRITABLE
 #   (LOUD — a message that cannot even persist must alarm, never a silent drop).
 set -uo pipefail
 
 MAILBOX_DIR="${CC_MAILBOX_DIR:-$HOME/.claude/mailbox}"
+ROLES_DIR="${CC_ROLES_DIR:-$HOME/.claude/cc-roles}"   # role → CURRENT pane uuid, re-read at SEND time
+DESK_ROLE="${CC_DESK_ROLE:-desk}"                     # the standing triager reroutes land on
 IT2="${IT2_BIN:-$HOME/.claude/bin/it2}"     # read-only here (session list, for pane liveness) — NEVER `session send`
 
-usage() { sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; }
+# Forward-chain primitives (D1). Sourced best-effort from the sibling hooks/lib, then the live layer:
+# cc-notify must still WORK if the lib is missing, so every use is guarded by a function-exists check —
+# a missing lib degrades to "no forward following", never a hard failure on the send path.
+for _cand in "$(dirname "$0")/../hooks/lib/mailbox-pending.sh" \
+             "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/mailbox-pending.sh" \
+             "$HOME/.claude/hooks/lib/mailbox-pending.sh"; do
+  # shellcheck source=../hooks/lib/mailbox-pending.sh
+  # shellcheck disable=SC1091
+  [ -f "$_cand" ] && { . "$_cand" 2>/dev/null || true; break; }
+done
+
+usage() { sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; }
 
 # cc-sessions lives beside cc-notify (same bin/). Prefer the sibling (deterministic for tests +
 # symlinked deploys), then PATH, then the canonical ~/.claude/bin. It is BOTH the name resolver and
@@ -57,11 +93,13 @@ fi
 command -v jq >/dev/null 2>&1 || { echo "cc-notify: jq required" >&2; exit 1; }
 
 # --- parse args ---
-FROM=""; MAILBOX_ONLY=0; TARGET=""; MSG=""; HAVE_TARGET=0; HAVE_MSG=0
+FROM=""; MAILBOX_ONLY=0; TARGET=""; MSG=""; HAVE_TARGET=0; HAVE_MSG=0; ROLE=""; ROLE_GIVEN=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --list)         shift; if [ -n "$CCS" ]; then exec "$CCS" "$@"; else echo "cc-notify: cc-sessions not found" >&2; exit 1; fi ;;
     --self)         TARGET="__self__"; HAVE_TARGET=1; shift ;;
+    --role)         ROLE="${2:-}"; HAVE_TARGET=1; ROLE_GIVEN=1; shift; [ $# -gt 0 ] && shift ;;
+    --role=*)       ROLE="${1#--role=}"; HAVE_TARGET=1; ROLE_GIVEN=1; shift ;;
     --mailbox-only) MAILBOX_ONLY=1; shift ;;
     --from)         FROM="${2:-}"; shift; [ $# -gt 0 ] && shift ;;
     --from=*)       FROM="${1#--from=}"; shift ;;
@@ -97,7 +135,27 @@ resolve() {
   return 1
 }
 
-if ! uuid="$(resolve "$TARGET")"; then
+# ROLE resolution (v3 D2) — read the role file at SEND time, never a snapshot. This is what makes an
+# automated pager survive the target recycling: the role file is repointed by handoff-fire at
+# succession (refresh_roles_for), so the very next page goes to the continuation.
+role_uuid() { # <role-name> → current pane uuid (empty + rc 1 if the role is unset)
+  local r="$1" u=""
+  [ -f "$ROLES_DIR/$r" ] || return 1
+  u="$(head -n1 "$ROLES_DIR/$r" 2>/dev/null | tr -d '[:space:]')"
+  [ -n "$u" ] || return 1
+  printf '%s' "$u"
+}
+
+if [ -n "$ROLE" ]; then
+  if ! uuid="$(role_uuid "$ROLE")"; then
+    echo "cc-notify: role '$ROLE' is not set — no live pane at $ROLES_DIR/$ROLE (missing or empty)" >&2
+    echo "  a role is pointed at a pane by handoff-fire (--as-role) / cc-register; check: ls $ROLES_DIR" >&2
+    exit 3
+  fi
+  TARGET="--role $ROLE"          # for human-readable messages only
+elif [ "$ROLE_GIVEN" = 1 ]; then
+  echo "cc-notify: --role needs a role name (e.g. --role desk)" >&2; usage >&2; exit 2
+elif ! uuid="$(resolve "$TARGET")"; then
   if [ "$TARGET" = "__self__" ]; then
     echo "cc-notify: --self needs \$ITERM_SESSION_ID (not in an iTerm2 pane)" >&2
   else
@@ -105,6 +163,18 @@ if ! uuid="$(resolve "$TARGET")"; then
     echo "  try: cc-notify --list" >&2
   fi
   exit 3
+fi
+
+# FORWARD CHAIN (v3 D1) — a resolved uuid may be a pane that has since self-closed with a successor.
+# Follow the chain to its head BEFORE enqueue, so the message lands on the continuation rather than in
+# a box nothing drains. Degrades to the original uuid when the lib is absent or no forward exists.
+ORIG_UUID="$uuid"
+if command -v mailbox_forward_of >/dev/null 2>&1; then
+  _fwd="$(mailbox_forward_of "$uuid" 2>/dev/null || true)"
+  if [ -n "$_fwd" ] && [ "$_fwd" != "$uuid" ]; then
+    uuid="$_fwd"
+    echo "cc-notify: [$ORIG_UUID] has self-closed — following its forward chain to the successor [$uuid]" >&2
+  fi
 fi
 
 # `cc-notify --self` with no message = just print own UUID (utility).
@@ -202,6 +272,28 @@ case "$_lv" in
       echo "cc-notify: delivered to inbox [$uuid] (live session, NO watcher armed — drains on its NEXT turn; delivered but not a guaranteed instant wake)" >&2
     fi
     exit 0 ;;
-  1) echo "cc-notify: [$uuid] mailbox only — target is NOT a live session (closed/recycled pane); no drain will run. The message is recorded but unread until/unless that pane returns." >&2; exit 0 ;;
+  1)
+    echo "cc-notify: [$uuid] mailbox only — target is NOT a live session (closed/recycled pane); no drain will run. The message is recorded but unread until/unless that pane returns." >&2
+    # D3 REROUTE — a dead, unforwarded target is the silent-loop class (570 pages into one dead box for
+    # three days). The line stays in the original box (forensics are never moved), and a COPY goes to
+    # the desk role tagged [for:<orig>] so a human/triager actually sees it. Skipped when a forward was
+    # followed (the chain already re-addressed it) and when the desk IS the target (no self-tee).
+    if [ "$uuid" = "$ORIG_UUID" ]; then
+      desk_uuid="$(role_uuid "$DESK_ROLE" 2>/dev/null || true)"
+      if [ -z "$desk_uuid" ]; then
+        echo "cc-notify: no reroute — the '$DESK_ROLE' role is unset ($ROLES_DIR/$DESK_ROLE), so there is no triager to receive it; the message sits in a box nothing drains" >&2
+      elif [ "$desk_uuid" = "$uuid" ]; then
+        # The dead target IS the desk. Teeing would copy the line into the same dead box; say so
+        # plainly rather than reporting a reroute that changed nothing (this is the desk-is-down case
+        # the desk-invariant replacement path exists for).
+        echo "cc-notify: no reroute — the '$DESK_ROLE' role still points at THIS dead pane [$uuid]; the triager itself is down (desk-invariant fires a replacement). Message recorded, undrained." >&2
+      elif printf '%s [%s] [for:%s] %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$FROM" "$uuid" "$MSG_1LINE" \
+             >> "$MAILBOX_DIR/$desk_uuid.md" 2>/dev/null; then
+        echo "cc-notify: rerouted to desk [$desk_uuid] tagged [for:$uuid] — the original addressee is gone; the desk is the standing triager. NOT a delivery to the original target." >&2
+      else
+        echo "cc-notify: reroute to desk FAILED (inbox $MAILBOX_DIR/$desk_uuid.md unwritable) — the message is recorded in the dead box only" >&2
+      fi
+    fi
+    exit 0 ;;
   *) echo "cc-notify: delivered to inbox [$uuid] (liveness UNVERIFIABLE — no session registry/pane list; recorded, will drain if the pane is live)" >&2; exit 0 ;;
 esac
