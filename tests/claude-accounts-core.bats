@@ -582,3 +582,70 @@ assert ca.LASTGOOD_PATH.endswith(\"/claude-accounts-lastgood.json\"), ca.LASTGOO
 print(\"OK\")'"
   [ "$status" -eq 0 ] && [[ "$output" == *OK* ]]
 }
+
+@test "collect: the 401 rotation retry re-reads the keychain once and recovers" {
+  run python3 -c "$LOAD"'
+ca.LASTGOOD_PATH = os.environ["CA_LEDGER"]
+ca.concurrency = lambda c: {"next3": 1}
+reads = {"n": 0}
+def creds(d, k):
+    reads["n"] += 1
+    return ({"accessToken": "tok%d" % reads["n"], "expiresAt": 9e12}, "present")
+ca.read_creds = creds
+seen = []
+def fetch(cfg_, token, retries=2):
+    seen.append(token)
+    # CC rotated the token between our keychain read and the call: first 401, then OK
+    if len(seen) == 1: return 401, {}
+    return 200, {"limits": [{"kind": "session", "percent": 3, "resets_at": None},
+                            {"kind": "weekly_all", "percent": 9, "resets_at": None}]}
+ca.fetch_usage = fetch
+rows = ca.collect(cfg, no_heal=True)
+assert reads["n"] == 2, reads          # exactly ONE fresh re-read, not a loop
+assert seen == ["tok1", "tok2"], seen  # retried with the NEW token
+assert rows[0]["weekly_pct"] == 9 and "error" not in rows[0], rows[0]
+print("OK")'
+  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]]
+}
+
+@test "collect: a persistent 401 on a stale token is reported as stale, not as token-invalid" {
+  run python3 -c "$LOAD"'
+ca.LASTGOOD_PATH = os.environ["CA_LEDGER"]
+ca.concurrency = lambda c: {"next3": 2}
+# expired token + live sessions ⇒ heal is skipped by design (CC owns the lifecycle)
+ca.read_creds = lambda d, k: ({"accessToken": "t", "expiresAt": 1000}, "present")
+ca.fetch_usage = lambda *a, **k: (401, {})
+rows = ca.collect(cfg, no_heal=True)
+assert rows[0]["auth"] == "stale", rows[0]
+assert "token-invalid" not in rows[0]["error"], rows[0]
+assert "--no-heal" in rows[0]["error"], rows[0]
+# a VALID (non-stale) token that 401s IS token-invalid — the revoked case
+ca.read_creds = lambda d, k: ({"accessToken": "t", "expiresAt": 9e12}, "present")
+rows = ca.collect(cfg, no_heal=True)
+assert rows[0]["auth"] == "token-invalid", rows[0]
+print("OK")'
+  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]]
+}
+
+@test "collect: a 429 is a transient poll-throttle, never a cap, and falls back to last-good" {
+  run python3 -c "$LOAD"'
+from datetime import datetime, timezone, timedelta
+ca.LASTGOOD_PATH = os.environ["CA_LEDGER"]
+ca.concurrency = lambda c: {"next3": 0}
+ca.read_creds = lambda d, k: ({"accessToken": "t", "expiresAt": 9e12}, "present")
+future = (datetime.now(timezone.utc) + timedelta(hours=6)).isoformat()
+json.dump({"next3": {"session_pct": 4, "session_reset_at": future, "weekly_pct": 41,
+                     "weekly_reset_at": future, "fable_pct": 8, "fable_reset_at": future,
+                     "quota_as_of": "2026-07-19T09:40:00+00:00"}},
+          open(os.environ["CA_LEDGER"], "w"))
+ca.fetch_usage = lambda *a, **k: (429, {})
+r = ca.collect(cfg, no_heal=True)[0]
+assert r["poll_throttled"] is True
+assert r["auth"] == "ok"                       # a throttle says nothing about auth
+assert r["weekly_pct"] == 41 and r["stale_quota"] is True
+assert "cached usage" in r["error"], r["error"]
+# and it is NOT reported as a limit: the row is excluded for a DATA reason, not policy
+assert ca.reason_class(r, ca.score_general(r, cfg)[1]) == "data"
+print("OK")'
+  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]]
+}
