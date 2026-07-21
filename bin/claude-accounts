@@ -405,7 +405,7 @@ def inherit_lastgood(row, ledger, prev):
     return False
 
 
-def probe_account(cfg, acct, kc, k_live, ledger, prev, no_heal, self_dir):
+def probe_account(cfg, acct, kc, k_live, ledger, prev, no_heal):
     """Probe ONE account -> (row, lastgood_entry | None).
 
     Split out of collect() so that an UNEXPECTED exception can be contained per-account:
@@ -414,12 +414,7 @@ def probe_account(cfg, acct, kc, k_live, ledger, prev, no_heal, self_dir):
     of degrading the single bad row."""
     name = acct["name"]
     row = {"acct": name, "email": acct["email"], "dia_profile": acct["dia_profile"],
-           "launcher": acct["launcher"], "k": k_live, "auth": None,
-           # is_self is resolved HERE, from the same config_dir map the rest of the tool
-           # keys off, because callers cannot derive it: the row carries no config_dir and
-           # $CLAUDE_CONFIG_DIR is the *reader's* env. Hand-derivation mislabelled the
-           # wrong account in a live session (2026-07-21).
-           "is_self": self_dir is not None and acct["config_dir"].rstrip("/") == self_dir}
+           "launcher": acct["launcher"], "k": k_live, "auth": None}
     creds, kstate = read_creds(acct["config_dir"], kc)
     if kstate != "present":
         row["auth"] = "logged-out" if kstate == "no-keychain-item" else "keychain-error"
@@ -515,21 +510,20 @@ def collect(cfg, no_heal=False, prev=None):
     kc = cfg["keychain_account"]
     counts = concurrency(cfg)
     ledger = load_lastgood()
-    self_dir = os.path.expanduser(os.environ.get("CLAUDE_CONFIG_DIR", "")).rstrip("/") or None
     lastgood_dirty = False
     rows = []
     for acct in cfg["accounts"]:
         name = acct["name"]
         try:
             row, entry = probe_account(cfg, acct, kc, counts.get(name, 0), ledger, prev,
-                                       no_heal, self_dir)
+                                       no_heal)
         except Exception as e:                    # never bare: KeyboardInterrupt/SystemExit pass
             # Containment, not concealment — the traceback goes to the log so a real
             # regression is still discoverable rather than silently degrading forever.
             log_event(f"probe {name}: UNEXPECTED {type(e).__name__}: {e}\n{traceback.format_exc()}")
             row = {"acct": name, "email": acct.get("email"), "dia_profile": acct.get("dia_profile"),
                    "launcher": acct.get("launcher"), "k": counts.get(name, 0),
-                   "auth": "probe-error", "is_self": False,
+                   "auth": "probe-error",
                    "error": f"probe failed: {type(e).__name__} (see claude-accounts.log)"}
             inherit_lastgood(row, ledger, prev)
             entry = None
@@ -756,6 +750,31 @@ def get_data(cfg, fresh=False, no_heal=False):
         cache_write(cfg, {"ts": time.time(), "cfg_key": _cfg_key(cfg), "no_heal": no_heal,
                           "rows": rows, "window": wj, "prev": prev})
         return rows, wj, False, prev
+
+
+def mark_self(rows, cfg):
+    """Stamp is_self on each row — ALWAYS after get_data(), never inside collect().
+
+    The sweep result is written to ONE shared cache file whose key hashes only the SSOT path
+    plus the account names, and that path is $HOME/.claude/accounts.json for every session
+    regardless of CLAUDE_CONFIG_DIR. All four accounts therefore share a single cache entry,
+    so an is_self computed during the sweep would be served to a DIFFERENT account's session
+    for the rest of the TTL — marking the wrong row as "you", which is the exact error this
+    field exists to prevent. Computing it per-invocation from the reader's own env is the
+    only correct placement.
+
+    A bare ~/.claude (CLAUDE_CONFIG_DIR unset) attributes to the 'next' account, the same
+    mirror rule concurrency() uses."""
+    self_dir = os.path.expanduser(
+        os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(HOME, ".claude")).rstrip("/")
+    by_name = {a["name"]: a["config_dir"].rstrip("/") for a in cfg["accounts"]}
+    mirror = next((a["name"] for a in cfg["accounts"]
+                   if a["config_dir"].rstrip("/").endswith(".claude-next")), None)
+    for r in rows:
+        d = by_name.get(r["acct"])
+        r["is_self"] = bool(d and d == self_dir) or (
+            r["acct"] == mirror and self_dir == os.path.join(HOME, ".claude"))
+    return rows
 
 
 def win_from_json(wj):
@@ -1095,6 +1114,7 @@ def main():
         return
 
     rows, wj, cached, prev = get_data(cfg, fresh=fresh, no_heal=no_heal)
+    mark_self(rows, cfg)                          # per-invocation: MUST be after the cache read
     win = win_from_json(wj)
 
     if "--json" in args:
@@ -1109,7 +1129,11 @@ def main():
             r["route_reason_class"] = {
                 "general": reason_class(r, gr) if gr else None,
                 "fable": reason_class(r, fr_) if fr_ else None}
-        print(json.dumps({"window": wj, "cached": cached, "rows": rows}, indent=2))
+        # s_cut is config, not per-account state, so it rides at top level once. Emitted so
+        # consumers read the routing cutoff as DATA instead of hardcoding 85 in prose that
+        # silently diverges the day the SSOT constant changes.
+        print(json.dumps({"window": wj, "cached": cached,
+                          "s_cut": cfg["router"]["S_CUT"], "rows": rows}, indent=2))
         return
 
     if "--route" in args or "--rank" in args:
