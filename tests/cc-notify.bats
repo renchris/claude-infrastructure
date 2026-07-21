@@ -276,3 +276,18 @@ sent_count() { if [ -f "$IT2_LOG" ]; then grep -c '^SEND' "$IT2_LOG"; else echo 
   [[ "$output" != *"rerouted"* ]] || false                           # would spam the desk on every it2 blip
   [ ! -f "$CC_MAILBOX_DIR/$UUID.md" ] || ! grep -q 'unknown liveness' "$CC_MAILBOX_DIR/$UUID.md"
 }
+
+@test "a REROUTE follows the desk's OWN forward chain (never tees into a self-closed desk box)" {
+  # Without this the anti-stranding mechanism would itself strand mail: the desk role can name a pane
+  # that has since self-closed, leaving a .forward to its successor.
+  export CC_ROLES_DIR="$BATS_TEST_TMPDIR/roles"; mkdir -p "$CC_ROLES_DIR"
+  local OLDDESK="ABCDEF01-1111-2222-3333-444444444444"
+  local DEAD="DEADBEEF-1111-2222-3333-444444444444"
+  printf '%s\n' "$OLDDESK" > "$CC_ROLES_DIR/desk"              # role still names the OLD desk…
+  printf '%s\n' "$UUID"    > "$CC_MAILBOX_DIR/$OLDDESK.forward" # …which self-closed → live successor
+  run "$NOTIFY" "$DEAD" "reroute me"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"rerouted to desk [$UUID]"* ]] || false      # landed on the SUCCESSOR
+  grep -q "\[for:$DEAD\] reroute me" "$CC_MAILBOX_DIR/$UUID.md"
+  [ ! -f "$CC_MAILBOX_DIR/$OLDDESK.md" ]                        # nothing written to the dead desk box
+}

@@ -280,6 +280,15 @@ case "$_lv" in
     # followed (the chain already re-addressed it) and when the desk IS the target (no self-tee).
     if [ "$uuid" = "$ORIG_UUID" ]; then
       desk_uuid="$(role_uuid "$DESK_ROLE" 2>/dev/null || true)"
+      # The reroute target gets the SAME forward-chain treatment as the primary target. Without this
+      # a reroute could tee into a desk box that has itself self-closed — re-creating, in the very
+      # mechanism built to end stranding, the stranding class this whole change exists to kill. (The
+      # role file is normally repointed at succession, but a stale role + a live forward is exactly
+      # the window this covers.)
+      if [ -n "$desk_uuid" ] && command -v mailbox_forward_of >/dev/null 2>&1; then
+        _dfwd="$(mailbox_forward_of "$desk_uuid" 2>/dev/null || true)"
+        [ -n "$_dfwd" ] && desk_uuid="$_dfwd"
+      fi
       if [ -z "$desk_uuid" ]; then
         echo "cc-notify: no reroute — the '$DESK_ROLE' role is unset ($ROLES_DIR/$DESK_ROLE), so there is no triager to receive it; the message sits in a box nothing drains" >&2
       elif [ "$desk_uuid" = "$uuid" ]; then
