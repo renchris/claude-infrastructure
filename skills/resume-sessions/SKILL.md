@@ -40,9 +40,37 @@ Account → config dir: `next`→`.claude-next` · `next2`→`.claude-secondary`
 3. Present a tiered inventory (hot = mid-task recently; warm = idle/blocked; stale = days-old/done) with,
    per session: account, session-id, worktree/branch, one-line "what it was doing", last-activity.
 
+## Phase 1b — CONSOLIDATE: one session per worktree (MANDATORY, not judgment)
+
+🚨 **Enumerating is not selecting.** "Resume everything resumable" was the emergent default here and
+it cost 39 live sessions / 8.8 GB RSS / zero free RAM on 2026-07-21 — **14 sessions for one project**,
+batch-spawned in ~2 seconds. A project with a long transcript history resurrects proportionally many
+sessions unless something says stop. **You are not the ceiling. The helper is.**
+
+Do NOT hand-pick from the Phase 1 inventory. Run the shared selector — the same one
+`lr-reset-poller.sh` and `boot-resume.sh` consult, so all three paths obey one policy:
+
+```
+~/.claude/scripts/limit-recover/lr-select.py --scan            # stdout: TSV winners, stderr: triage
+```
+
+- Resumes **one session per worktree** — the one that holds the most real state — and **lists** the
+  rest. Total ceiling 4 per run. Both are flags (`--max-per-worktree`, `--max-total`), so exceeding
+  them is explicit and visible, never a silent default.
+- Winner = last **internal** transcript timestamp, then turn count, then sid. Never file mtime (a bulk
+  mirror touch gives many transcripts the same mtime, which is not activity).
+- Uncommitted work marks a group **HOT** in the triage table; it does not pick the winner — every
+  session in a worktree sees the identical dirty tree, so it cannot discriminate between them.
+- Teammate sessions, already-running sessions, and `agent-*`/`wf_*` internals are filtered out.
+
+**Show the triage table (stderr) to the user before firing** — it is what makes 14-for-one visible
+*before* it consumes 2.76 GB. A listed session is not lost: its transcript is intact and it can be
+resumed explicitly by sid. If the user genuinely wants more than one per worktree, pass the flag; do
+not work around the helper.
+
 ## Phase 2 — Recover each chosen session (autonomous, never blocks)
 
-For every session to bring back:
+**Only the Phase 1b winners.** One invocation per winner:
 
 ```
 ~/.reso/bin/reso-resume-one <account> <worktree-path> <session-id> [branch]
@@ -118,6 +146,11 @@ before their resets (unused = destroyed); the Fable window end is the SSOT
 `~/.claude/model-config.yaml frontier_access.end` — never a remembered date.**
 
 ## Success criteria
-Every chosen session: worktree exists · resumed past the summary prompt · input box clean · re-engaged
+Every **winner**: worktree exists · resumed past the summary prompt · input box clean · re-engaged
 (fresh commit or a running turn) · keepalive covering it. Report the tiered inventory + which are
 working / at-a-prompt (needs the user) / idle-by-design.
+
+**And the consolidation invariant: no worktree has more than one session resumed by this recovery,
+and every session NOT resumed was listed with its reason.** A recovery that fired more than it
+reported, or reported fewer candidates than it found, is a failed recovery even if every pane is
+alive — that is exactly how the 2026-07-21 incident read as success while the machine ran out of RAM.
