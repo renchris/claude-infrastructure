@@ -1,5 +1,5 @@
 ---
-status: open
+status: done
 created: 2026-07-21
 owner_repo: claude-infrastructure
 ---
@@ -87,7 +87,46 @@ The gap is in **who decides which sessions to resume**:
 So "resume everything resumable" is the emergent default, and a project with a
 long transcript history resurrects proportionally many sessions.
 
-## The fix — three parts
+## The fix — three parts · **DONE 2026-07-21**
+
+All three landed as one helper (`scripts/limit-recover/lr-select.py`, `ab55b95`)
+consulted by all three sprawl-capable callers. Commits:
+
+| | | |
+|---|---|---|
+| Design (Q1–Q3, Phase 0 re-plan) | `21ba59a` | four callers found, not one |
+| P1+P2+P3 helper + 21 tests | `ab55b95` | grouping, ranking, ceiling, triage report |
+| `--allow-missing-cwd` | `d986f57` | reaped worktrees stay resumable |
+| Caller 3 `boot-resume.sh` + 4 tests | `efa405d` | was unbounded; fails closed now |
+| Caller 2 `lr-reset-poller.sh` + 8 tests | `4d84557` | per-tick cap → per-recovery |
+| Skill import (verbatim) | `93c8c2b` | it was untracked |
+| Caller 1 skill Phase 1b | `ff92305` | the incident path |
+
+**Learnings worth keeping:**
+
+- **The per-file symlink trap nearly shipped a live regression.**
+  `~/.claude/scripts/limit-recover/` is a real directory of per-file symlinks, not
+  a symlinked directory. A new tracked file is therefore **not deployed** by
+  landing it. The live, launchd-loaded, autofiring poller resolves its selector
+  next to itself (`dirname "$BASH_SOURCE"` → the `~/.claude` copy), so landing
+  without the symlink would have made it fail closed and **silently stop resuming
+  anything**. Caught pre-land; symlink created by hand (there is no deploy script
+  for these — a real gap, filed below). Same class as memory
+  `deploy-lag-checkout-behind-origin`: landed ≠ deployed.
+- **Fail-closed is the right default here, and it is counterintuitive.** For both
+  automated callers the "working" fallback (fire everything up to the old cap) *is*
+  the incident. An un-fired resume is human-recoverable; 8.8 GB of resurrected
+  sessions took the machine down. Both callers therefore refuse to fire rather
+  than fire unconsolidated, and both log loudly.
+- **A loser must be retired, not left parked.** The poller's first correct-looking
+  design left non-winners parked — but once the winner is running, `already-running`
+  filters it out and the loser is elected next tick. That is the same sprawl at
+  10-minute cadence. Losers move to `resumed/` (listed, never deleted); a genuinely
+  new limit event re-parks them via the existing REPARK path.
+- **Verified on real data**, read-only: 14 live candidates → 3 fired at
+  `--max-total 3`, 11 listed, `doc_classifier` correctly consolidated to one.
+
+## The fix — three parts (original specification)
 
 **P1 · Consolidation rule (policy, in the skill).** Recovery groups candidate
 sessions by `cwd`/worktree and resumes **one per group** — the most recent
@@ -227,6 +266,19 @@ bounded commit, content-identical import + one appended rule).
 
 ## Status log
 
+- **2026-07-21 (successor)** — **Fix complete and verified.** Q1–Q3 answered before
+  any code (see § Answers). Q2 reframed the work: four callers, not one. Single
+  helper `lr-select.py` now owns the policy; all three sprawl-capable callers
+  consult it; the spawners stayed dumb as the root-cause section required. 33 new
+  tests + 10 existing boot-resume cases green. Nothing was deleted or bulk-closed;
+  the `doc_classifier` sessions were never touched. Landed on `main` — see the
+  table above for per-commit detail.
+  **Open follow-up (named, not silently carried):** there is **no deploy script**
+  for the `~/.claude` per-file symlinks. Every new tracked script under
+  `scripts/**` must be hand-linked into `~/.claude/scripts/**` or it is landed but
+  not deployed. That is a systemic gap of the class memory
+  `desk-whack-a-mole-means-file-systemic-fix` says to file rather than hand-clear —
+  a `scripts/link-live.sh` that reconciles checkout → live and reports drift.
 - **2026-07-21** — Plan created. Root cause identified and evidenced (batch-spawn
   signature, `LR_*` expect wrappers, no dedup/cap in `lr-fire-resume.sh`,
   selection left to model judgment in the skill). Cleanup of the 14 `voiceink`
