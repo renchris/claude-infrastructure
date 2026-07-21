@@ -676,3 +676,23 @@ assert ca.cut_marker(None, CUT) == " " and ca.cut_marker(50, None) == " "
 print("OK")'
   [ "$status" -eq 0 ] && [[ "$output" == *OK* ]]
 }
+
+@test "keychain_service: the CC 2.1.183 service-name contract, incl. NFC normalisation" {
+  # If this derivation drifts, every account resolves to a nonexistent keychain item and the
+  # whole fleet reads as logged-out — the highest-blast-radius pure function in the file, and
+  # it was structurally uncovered (the fixture only exercises the item-not-found path).
+  run python3 -c "$LOAD"'
+import hashlib, unicodedata
+for d in ("/Users/x/.claude-next", "/Users/x/.claude-secondary", "/tmp/ca-test-nonexistent-xyz"):
+    want = "Claude Code-credentials-" + hashlib.sha256(d.encode()).hexdigest()[:8]
+    assert ca.keychain_service(d) == want, (d, ca.keychain_service(d), want)
+    assert len(ca.keychain_service(d).rsplit("-", 1)[1]) == 8
+# NFC normalisation: the same path spelled decomposed must map to the SAME item, or an
+# account whose dir carries an accent silently loses its credentials.
+nfc = unicodedata.normalize("NFC", "/Users/x/.claude-café")
+nfd = unicodedata.normalize("NFD", "/Users/x/.claude-café")
+assert nfc != nfd                                   # genuinely different byte sequences
+assert ca.keychain_service(nfc) == ca.keychain_service(nfd)
+print("OK")'
+  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]]
+}
