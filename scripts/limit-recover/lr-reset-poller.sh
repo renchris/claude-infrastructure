@@ -295,9 +295,20 @@ for k in ('sid','acct','cfg','cwd','reset_at_utc'):
     # contest, or may have been filtered outright (no transcript, teammate, cwd gone) — those
     # are different facts and "not the winner" would misattribute them.
     why="$(sel_reason "$sid")"; [[ -n "$why" ]] || why="not selected"
-    log "LISTED $sid ($acct) — $why; consolidated, resume by sid if wanted"
-    mv "$pf" "$RESUMED/$(basename "$pf")" 2>/dev/null; rm -f "$PARKED/$sid.notified"
-    continue
+    case "$why" in
+      *total-ceiling*)
+        # Lost the RUN ceiling, not the per-worktree contest — nothing else covers this worktree,
+        # so retiring it would strand a project with no session at all. Leave it PARKED and let the
+        # next tick take it: the pre-consolidation CAP semantics, preserved deliberately.
+        log "CAP   $sid ($acct) — $why; deferred to next tick"
+        continue ;;
+      *)
+        # Lost the per-worktree contest (a winner IS covering this worktree), or was filtered as
+        # unresumable. Retire this limit event; a new one re-parks via the REPARK path above.
+        log "LISTED $sid ($acct) — $why; consolidated, resume by sid if wanted"
+        mv "$pf" "$RESUMED/$(basename "$pf")" 2>/dev/null; rm -f "$PARKED/$sid.notified"
+        continue ;;
+    esac
   fi
   if ! account_has_headroom "$acct"; then log "WAIT  $sid — $acct still capped, retry next tick"; continue; fi
   (( fired >= MAX_PER_RUN )) && { log "CAP   per-run resume cap ($MAX_PER_RUN) reached; deferring rest"; break; }

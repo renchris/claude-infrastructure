@@ -80,9 +80,25 @@ mk_transcript() {
 }
 
 # Seed a parked-ledger row directly (phase-2-only tests). $1=sid $2=reset-iso-utc
+# $1=sid $2=reset-iso-utc [$3=cwd, default $CWD — distinct cwds model distinct worktrees]
+# Emits BOTH halves of what the real producer leaves behind: the ledger row AND the transcript it
+# was derived from. Section 1 only ever parks a session it just read a transcript for, so a ledger
+# row without one is a shape the producer cannot emit — and since 2026-07-21 the consolidation
+# selector ranks candidates BY that transcript, a ledger-only fixture would silently rank as
+# unresumable while production works (memory: fixture-shape-parity-with-real-producer).
+# The transcript deliberately carries NO limit line, so section 1 will not re-park it.
 mk_parked() {
+  local sid="$1" reset="$2" cwd="${3:-$CWD}" proj ts
+  mkdir -p "$cwd"
+  proj="$HOME/.claude-quaternary/projects/$(printf '%s' "$cwd" | tr '/' '-')"
+  mkdir -p "$proj"
+  ts="$(python3 -c "from datetime import datetime,timezone;print(datetime.now(timezone.utc).isoformat().replace('+00:00','Z'))")"
+  {
+    printf '{"type":"user","cwd":"%s","gitBranch":"main","timestamp":"%s"}\n' "$cwd" "$ts"
+    printf '{"type":"assistant","timestamp":"%s"}\n' "$ts"
+  } > "$proj/$sid.jsonl"
   printf '{"sid":"%s","acct":"next4","cfg":"%s","cwd":"%s","kind":"session","reset_at_utc":"%s","parked_at":"2026-07-15T00:00:00Z"}\n' \
-    "$1" "$HOME/.claude-quaternary" "$CWD" "$2" > "$STATE/parked/$1.json"
+    "$sid" "$HOME/.claude-quaternary" "$cwd" "$reset" > "$STATE/parked/$sid.json"
 }
 # Seed a resumed-ledger row (recurrence tests). $1=sid $2=reset-iso-utc of the HANDLED event
 mk_resumed() {
@@ -178,8 +194,14 @@ mk_spend_teammate_transcript() {
 }
 
 @test "LR-f: 5 ready rows, MAX_PER_RUN=4 → exactly 4 fire, CAP logged, 5th deferred" {
+  # DISTINCT cwds — five independent worktrees, which is what "5 ready rows" always meant. Five
+  # rows sharing ONE worktree is the sprawl case and is covered by lr-reset-poller-consolidate.bats;
+  # here the bound under test is the RUN ceiling, and a total-ceiling loser must DEFER (stay parked
+  # for the next tick), never be retired — nothing else covers its worktree.
   local i
-  for i in 1 2 3 4 5; do mk_parked "ffffff0${i}-1111-2222-3333-444444444444" "$(past_iso)"; done
+  for i in 1 2 3 4 5; do
+    mk_parked "ffffff0${i}-1111-2222-3333-444444444444" "$(past_iso)" "$CWD/wt$i"
+  done
   LR_POLLER_AUTOFIRE=1 run bash "$POLLER" --once
   [ "$status" -eq 0 ]
   [ "$(grep -c 'create window' "$OSA_LOG")" -eq 4 ]

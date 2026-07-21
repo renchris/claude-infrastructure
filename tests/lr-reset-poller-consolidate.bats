@@ -78,6 +78,33 @@ park() {
   [ -f "$RESUMED/lose.json" ]                               # retired for THIS event, not deleted
 }
 
+@test "a TOTAL-CEILING loser DEFERS (stays parked); a per-worktree loser RETIRES" {
+  # The two losses are not the same fact. A per-worktree loser has a winner covering its worktree,
+  # so retiring it is correct. A total-ceiling loser is alone in ITS worktree — retiring it would
+  # strand that project with no session at all, so it must come back on the next tick.
+  park wtloser next "$BATS_TEST_TMPDIR/wt/shared"
+  park capped   next "$BATS_TEST_TMPDIR/wt/lonely"
+  cat > "$LR_SELECT_BIN" <<'SH'
+#!/bin/bash
+while [ $# -gt 0 ]; do case "$1" in --json) J="$2"; shift 2 ;; *) shift ;; esac; done
+cat > "$J" <<'JSON'
+{"winners":[],
+ "listed":[{"sid":"wtloser","reason":"per-worktree cap (1) — not the winner"},
+           {"sid":"capped","reason":"total-ceiling (4) reached"}],
+ "filtered":[]}
+JSON
+SH
+  chmod +x "$LR_SELECT_BIN"
+  run bash "$SCRIPT" --once
+  [ "$status" -eq 0 ]
+  # per-worktree loser → retired
+  grep -q 'LISTED wtloser' "$LOG"
+  [ -f "$RESUMED/wtloser.json" ] && [ ! -f "$PARKED/wtloser.json" ]
+  # total-ceiling loser → deferred, still parked for the next tick
+  grep -q 'CAP   capped' "$LOG"
+  [ -f "$PARKED/capped.json" ] && [ ! -f "$RESUMED/capped.json" ]
+}
+
 @test "the LISTED log carries lr-select's REAL reason, not an assumed one" {
   # A non-winner may have lost the per-worktree contest OR been filtered outright (no transcript,
   # teammate, cwd gone). Those are different facts; the log must not misattribute one as the other.
