@@ -130,7 +130,7 @@ def frontier_window(cfg):
     """Parse frontier_access.{active,end} from model-config.yaml without PyYAML.
     Returns {active: bool|None, end: str|None, deadline: dt|None}. active None = UNKNOWN
     (parse failure) — callers must treat unknown as un-routable, never as open or closed."""
-    win = {"active": None, "end": None, "deadline": None}
+    win = {"active": None, "end": None, "deadline": None, "permanent": False}
     try:
         text = open(cfg["model_config_ssot"]).read()
     except OSError:
@@ -141,14 +141,25 @@ def frontier_window(cfg):
     block = m.group(1)
     ma = re.search(r"^\s*active:\s*(true|false)\b", block, re.M)
     me = re.search(r"^\s*end:\s*\"?(\d{4}-\d{2}-\d{2})\"?", block, re.M)
+    mp = re.search(r"^\s*permanent:\s*(true|false)\b", block, re.M)
     if ma:
         win["active"] = ma.group(1) == "true"
+    # The SSOT states this outright: "This flag is the truth; `end` is a sentinel only."
+    # Fable became a standing plan inclusion on 2026-07-20 and `end` was pinned to a
+    # far-future date purely so date-based consumers never raise a false "expired". Parsing
+    # only `end` made the footer advertise "26826.6d left" — a 73-year countdown on a
+    # window that no longer exists. deadline=None is score-neutral: score_fable's
+    # window-ended check and JB_BONUS branch are both already guarded on deadline is None.
+    if mp and mp.group(1) == "true":
+        win["permanent"] = True
     if me:
         win["end"] = me.group(1)
         end = datetime.strptime(me.group(1), "%Y-%m-%d").replace(tzinfo=timezone.utc)
         if cfg["frontier"].get("end_date_inclusive", True):
             end += timedelta(days=1)             # available THROUGH the end date
-        win["deadline"] = end
+        # A permanent entitlement has no deadline to press against — leave it None so no
+        # surface derives urgency from the sentinel.
+        win["deadline"] = None if win["permanent"] else end
     return win
 
 
@@ -714,7 +725,9 @@ def get_data(cfg, fresh=False, no_heal=False):
         prev = _prev_snapshot(cfg)
         win = frontier_window(cfg)
         rows = collect(cfg, no_heal=no_heal, prev=prev)
-        wj = {"active": win["active"], "end": win["end"],
+        wj = {"active": win["active"], "end": win["end"], "permanent": win.get("permanent", False),
+              # permanent is carried explicitly: without it a null deadline cannot be told
+              # apart from "the SSOT deadline was unparseable" by any --json consumer.
               "deadline": win["deadline"].isoformat() if win["deadline"] else None}
         cache_write(cfg, {"ts": time.time(), "cfg_key": _cfg_key(cfg), "no_heal": no_heal,
                           "rows": rows, "window": wj, "prev": prev})
@@ -725,7 +738,8 @@ def win_from_json(wj):
     d = None
     if wj.get("deadline"):
         d = datetime.fromisoformat(wj["deadline"])
-    return {"active": wj.get("active"), "end": wj.get("end"), "deadline": d}
+    return {"active": wj.get("active"), "end": wj.get("end"), "deadline": d,
+            "permanent": bool(wj.get("permanent"))}
 
 
 # ---- output ----------------------------------------------------------------------------------
@@ -800,6 +814,12 @@ def pct(p):
 def fmt_h(h):
     if h is None:
         return "?"
+    if h < 0:
+        # An elapsed stamp means the bucket ALREADY rolled — fresh capacity, not an
+        # expiry. Rendering it through the h<1 branch produced raw negative minutes
+        # ("↻-2499m" observed live), which also overflowed the :>5 / :>6 reset cells and
+        # skewed every column to the right of it. Kept to 3 chars so both fields hold.
+        return "now"
     if h < 1:
         return f"{int(h * 60)}m"
     if h < 48:
@@ -855,7 +875,18 @@ def render_table(rows, cfg, win, cached, prev=None):
     for r in rows:
         a = r.get("auth")
         glyph, grgb = AUTH_GLYPH.get(a, ("·", GRAY))
-        name = c(f"{r['acct']:<8}", bold=True) if a in ("ok", "healed") else f"{r['acct']:<8}"
+        # Quota-staleness OVERRIDES the auth glyph. A poll-throttled row keeps auth="ok",
+        # so it rendered with the green ● and full-brightness bars — visually identical to
+        # live data, while actually showing ledger numbers that can be days old AND being
+        # silently dropped from routing. The bars stay bright on purpose (pct()'s comment
+        # records that dimmed data reads worse than crisp numerals); the GLYPH carries the
+        # warning. A row that was both healed and throttled loses the healed glyph here —
+        # acceptable only because the "healed headlessly" alert fires independently below.
+        if r.get("stale_quota"):
+            glyph, grgb = "↻", AMBER
+        # the invoking session's own account, resolved in probe_account from config_dir
+        label = r["acct"] + (" ←" if r.get("is_self") else "")
+        name = c(f"{label:<8}", bold=True) if a in ("ok", "healed") else f"{label:<8}"
         k = c(f"{r.get('k', 0):>4}", GRAY, dim=(r.get("k", 0) == 0))
         if "error" in r and not r.get("poll_throttled"):
             # auth-broken (logged-out / token-invalid / keychain-error / expired-stale / no-data):
@@ -897,6 +928,15 @@ def render_table(rows, cfg, win, cached, prev=None):
         elif a == "stale":
             alerts.append(c("◐ ", AMBER) + c(f"{r['acct']} token stale — heal skipped", AMBER)
                           + c(f" · {r.get('heal_note', r.get('error', ''))}", GRAY, dim=True))
+        if r.get("stale_quota"):
+            # The numbers on this row are historical AND the row is router-excluded (every
+            # inheritance path leaves row["error"] set, which _excluded() bails on). Say both
+            # — a number with no provenance reads as current.
+            asof = _fmt_asof(r.get("quota_as_of"))
+            alerts.append(c("↻ ", AMBER)
+                          + c(f"{r['acct']} showing LAST-KNOWN quota, not polled this sweep", AMBER)
+                          + c(f" · as of {asof or 'unknown'} · excluded from routing"
+                              " · --fresh to retry", GRAY, dim=True))
         sp = r.get("session_pct")
         # these two alerts imply a LIVE, routable account — never fire them on a stale/last-known
         # row (its number is historical; the account is currently unreachable/excluded).
@@ -935,14 +975,30 @@ def render_table(rows, cfg, win, cached, prev=None):
             + c(" — model-config.yaml frontier_access unreadable", GRAY, dim=True)
     elif not win["active"]:
         wline = c("○ ", GRAY, dim=True) + c("Fable window inactive", GRAY, dim=True)
+    elif win.get("permanent"):
+        # No countdown: there is no deadline to press against. The old code derived one from
+        # the far-future sentinel `end` and advertised "26826.6d left".
+        wline = c("◉ ", GREEN) + c("Fable permanent", GREEN) \
+            + c(" — standard Max/Team-Premium inclusion at ≤50% of weekly limits", GRAY)
     else:
         left_h = None
         if win["deadline"]:
             left_h = (win["deadline"] - datetime.now(timezone.utc)).total_seconds() / 3600.0
+        # left_h stays truthful to the printed `end` date — subtracting the router's safety
+        # margin here would contradict the date on the same line. The divergence that
+        # mattered is the LABEL: score_fable stops routing Fable once left_h drops below
+        # deadline_margin_h, so the footer must not still read "open" at that point.
+        margin = cfg["frontier"].get("deadline_margin_h", 0.0)
+        ended = (left_h is not None and left_h - margin <= 0
+                 and not cfg["frontier"].get("credits_authorized"))
         urgent = left_h is not None and left_h < 24
-        wline = c("◉ ", AMBER if urgent else GREEN) \
-            + c(f"Fable window open through {win['end']}", AMBER if urgent else GREEN) \
-            + (c(f" · {fmt_h(left_h)} left", GRAY) if left_h is not None else "")
+        if ended:
+            wline = c("○ ", RED) + c(f"Fable window ended {win['end']}", RED, bold=True) \
+                + c(" — router excluding Fable", GRAY)
+        else:
+            wline = c("◉ ", AMBER if urgent else GREEN) \
+                + c(f"Fable window open through {win['end']}", AMBER if urgent else GREEN) \
+                + (c(f" · {fmt_h(left_h)} left", GRAY) if left_h is not None else "")
     print("  " + wline)
     g, gre = ranked(rows, cfg, win, "general")
     f, fre = ranked(rows, cfg, win, "fable")
