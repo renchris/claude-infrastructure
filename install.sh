@@ -109,10 +109,25 @@ if $IS_GLOBAL; then
   echo ""
   echo "Bin tools → ~/bin/"
   mkdir -p "$HOME/bin"
-  for tool in claude-latest claude-update claude-versions browsermcp-wrapper.sh claude-accounts claude-kimi; do
+  for tool in claude-latest claude-update claude-versions browsermcp-wrapper.sh claude-kimi; do
     [[ -f "$REPO_DIR/bin/$tool" ]] || continue
     copy_file "$REPO_DIR/bin/$tool" "$HOME/bin/$tool"
   done
+
+  # claude-accounts is SYMLINKED, unlike its copied neighbours above. Those are
+  # self-updating launchers that may legitimately diverge from the checkout; this
+  # is a read-only SSOT probe whose consumers (cc-board, cc-context --quota,
+  # cc-route, handoff-fire, lr-*) must all see the SAME code. As a copy it silently
+  # drifted for 2 days (repo gained the last-good quota ledger 2026-07-19; ~/bin
+  # stayed on 2026-07-17), so handoff-fire read a stale_quota field the deployed
+  # binary never emitted, and sync.sh — which copies ~/bin BACK into the repo with
+  # no direction guard — would have clobbered the newer repo version with the stale
+  # copy. Symlinking makes drift structurally impossible and turns that sync.sh leg
+  # into a no-op (sync_file resolves the link, then short-circuits on identical).
+  # Stays at ~/bin (NOT moved to ~/.claude/bin): two hardcoded consumers reference
+  # $HOME/bin/claude-accounts by absolute path, and two binaries sharing one
+  # /tmp cache would be split-brain. Verified by scripts/deploy-parity-assert.sh.
+  link_file "$REPO_DIR/bin/claude-accounts" "$HOME/bin/claude-accounts"
 
   # Accounts SSOT — symlink (repo = source of truth; the knowledge-layer mirror
   # shares ~/.claude/accounts.json into every alt config dir automatically).
