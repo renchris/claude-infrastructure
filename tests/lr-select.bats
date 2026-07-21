@@ -230,6 +230,20 @@ run_sel() { run python3 "$SEL" "$@" --quiet; }
   [[ "$output" == *"no-transcript"* || "$output" == *"cwd-missing"* ]]
 }
 
+@test "--allow-missing-cwd keeps a reaped worktree the spawner can recreate" {
+  # reso-resume-one / lr-fire-resume.sh recreate a reaped worktree from --branch. Without the
+  # opt-in the candidate is filtered (a caller that cannot recreate must not fire into thin air);
+  # with it, the ghost stays resumable — no silent capability regression when callers are wired.
+  local wt="$BATS_TEST_TMPDIR/wt/reaped"
+  mk .claude-next ghost "$wt" "2026-07-21T09:00:00Z" 5
+  rmdir "$wt"
+  run python3 "$SEL" --scan --recency-min 0 2>&1
+  [[ "$output" == *"cwd-missing"* ]]
+  run_sel --scan --recency-min 0 --allow-missing-cwd
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"ghost"* ]]
+}
+
 @test "the .claude/.claude-next mirror counts as ONE session, not two" {
   local wt="$BATS_TEST_TMPDIR/wt/a"
   mk .claude-next dup "$wt" "2026-07-21T09:00:00Z" 5
