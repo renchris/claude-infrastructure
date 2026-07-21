@@ -533,3 +533,52 @@ print("OK")'
   [ "$status" -eq 0 ]
   [[ "$output" == *next3* ]]
 }
+
+@test "load_cfg: a bad router constant fails with a message, never a traceback" {
+  # The constants are documented as operator-tunable and are consumed unguarded: _soft
+  # divides by (S_CUT - S_SOFT), so S_SOFT == S_CUT is a ZeroDivisionError inside every
+  # consumer of this tool at once.
+  python3 - "$CA_CFG" <<'PY'
+import json, sys
+c = json.load(open(sys.argv[1])); c["router"]["S_SOFT"] = c["router"]["S_CUT"]
+json.dump(c, open(sys.argv[1], "w"))
+PY
+  run python3 "$CA_BIN" --route general --no-heal
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"invalid router constants"* ]]
+  [[ "$output" != *Traceback* ]]
+
+  python3 - "$CA_CFG" <<'PY'
+import json, sys
+c = json.load(open(sys.argv[1])); c["router"].pop("EPS_H")
+json.dump(c, open(sys.argv[1], "w"))
+PY
+  run python3 "$CA_BIN" --json --no-heal
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"missing or non-numeric"* ]]
+  [[ "$output" == *EPS_H* ]]
+}
+
+@test "ledger: a scratch SSOT never reads or writes the real last-good ledger" {
+  # CLAUDE_ACCOUNTS_LASTGOOD is an independent variable that CLAUDE_ACCOUNTS_JSON does not
+  # imply, so overriding only the config used to fall through to the production ledger.
+  run bash -c "unset CLAUDE_ACCOUNTS_LASTGOOD; CLAUDE_ACCOUNTS_JSON='$CA_CFG' python3 -c '
+import importlib.machinery, importlib.util, os
+ca = importlib.util.module_from_spec(importlib.util.spec_from_loader(
+    \"ca\", importlib.machinery.SourceFileLoader(\"ca\", os.environ[\"CA_BIN\"])))
+importlib.machinery.SourceFileLoader(\"ca\", os.environ[\"CA_BIN\"]).exec_module(ca)
+real = os.path.join(os.path.expanduser(\"~\"), \".claude/logs/claude-accounts-lastgood.json\")
+assert ca.LASTGOOD_PATH != real, ca.LASTGOOD_PATH
+print(\"OK\")'"
+  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]]
+
+  # ...while the DEFAULT SSOT keeps the canonical path, so the accumulated ledger is never orphaned
+  run bash -c "unset CLAUDE_ACCOUNTS_LASTGOOD CLAUDE_ACCOUNTS_JSON; python3 -c '
+import importlib.machinery, importlib.util, os
+ca = importlib.util.module_from_spec(importlib.util.spec_from_loader(
+    \"ca\", importlib.machinery.SourceFileLoader(\"ca\", os.environ[\"CA_BIN\"])))
+importlib.machinery.SourceFileLoader(\"ca\", os.environ[\"CA_BIN\"]).exec_module(ca)
+assert ca.LASTGOOD_PATH.endswith(\"/claude-accounts-lastgood.json\"), ca.LASTGOOD_PATH
+print(\"OK\")'"
+  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]]
+}
