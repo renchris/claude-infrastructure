@@ -116,6 +116,106 @@ consumed 2.76 GB.
    uncommitted work in the worktree, or transcript length? Note `voiceink` had a
    **clean tree**, so uncommitted-work alone is insufficient as a signal.
 
+## Answers — Q1–Q3 resolved (2026-07-21, successor session)
+
+### Q2 first: the selection path is **NOT shared — there are four callers**, and only one has any cap
+
+Q2 was asked as a yes/no and the answer reframes Q1. Full caller inventory, by
+disk inspection:
+
+| # | Caller | Selects by | Total cap | Per-worktree rule | Live? |
+|---|---|---|---|---|---|
+| 1 | `skills/resume-sessions/SKILL.md` Ph1→Ph2 → `reso-resume-one` | **model judgment** ("enumerate all" → "for every session to bring back") | **none** | **none** | **LIVE — the incident path** |
+| 2 | `scripts/limit-recover/lr-reset-poller.sh` | limit-parked detection; per-`sid` dedup via `pgrep` | `MAX_PER_RUN=4` **per 10-min tick** | **none** | **LIVE, launchd-loaded, `LR_POLLER_AUTOFIRE=1`** |
+| 3 | `scripts/boot-resume.sh` (`mode=resume`) | registry ghosts predating `kern.boottime` | **none — unbounded `while` over all ghosts** (L180-192) | **none** | staged, **NOT loaded** (latent) |
+| 4 | `commands/limit-recover.md` → `lr-handoff.sh` | the ONE lead session being transplanted | inherently 1 | n/a | LIVE — **not a sprawl vector** |
+
+Three consequences:
+
+- **Caller 4 is exonerated.** `/limit-recover` does not share the sprawl path; its
+  handoff moves exactly one lead session (`lr-handoff.sh:138` — a single `exec`).
+  It needs no ceiling.
+- **Caller 2's cap is per-tick, not per-recovery.** `MAX_PER_RUN=4` every 600 s
+  means 14 parked sessions in one worktree still all come up — just over ~35 min
+  instead of 2 s. Slower sprawl is still sprawl.
+- **Caller 3 is a loaded gun.** It loops every ghost with no cap at all, and it is
+  sitting in `pending-activation` awaiting an operator `launchctl load`. Activating
+  it today would reproduce the incident *by design* on the next reboot. Fixing it
+  before activation is the whole point of getting there first.
+
+### Q1 — helper, and the answer is now forced
+
+Preference confirmed, but Q2 upgrades it from taste to necessity: **a rule written
+only in skill text would cover caller 1 and leave callers 2 and 3 uncovered** — and
+those two are precisely the ones that run *with no human watching*. Policy therefore
+goes in a shared, testable helper that all three consult:
+
+- **`scripts/limit-recover/lr-select.py`** — grouping, winner-pick, ceiling, and the
+  P3 triage report. Subsystem-neutral despite the `lr-` name (caller 3 is desk
+  machinery, not limit-recover); named per this plan's own preference and sited
+  beside `lr-audit.py`, with which it shares all transcript-parsing concerns.
+- `lr-fire-resume.sh` and `reso-resume-one` **stay dumb** — unchanged. One-shot
+  primitives, exactly as the root-cause section rules.
+- The skill keeps a *rule* (call the helper, fire only winners), not a *policy*.
+
+### Q3 — "holds real state", and a correction to the question
+
+The question contains a latent flaw worth naming: **uncommitted work cannot pick a
+winner within a group, because it is a property of the worktree, not the session.**
+All N sessions sharing a `cwd` see the identical dirty tree. That — not merely
+`voiceink`'s clean tree — is why the signal is insufficient: it is *constant across
+the group*. It tells you the group matters; it cannot discriminate inside it.
+
+So the two roles split:
+
+- **Group-level annotation** — `dirty` (uncommitted file count). Marks the group HOT
+  in the triage report and is the fact that justifies an operator override. Never a
+  ranker.
+- **Within-group ranking** — a lexicographic tuple of per-session signals, first
+  non-tie wins:
+  1. **last real activity** = the transcript's *internal* max timestamp, never file
+     mtime (a bulk mirror touch gives many files an identical mtime that is not
+     activity — the rule the skill already states for Phase 1 ranking).
+  2. **substantive depth** = turn count, as tiebreak. A 2-turn stub loses to a
+     400-turn session at the same timestamp.
+  3. **session id**, lexicographic — a final deterministic tiebreak so selection is
+     reproducible and therefore testable.
+
+Hard filters run *before* ranking and are not tiebreaks: already-running
+(`pgrep -f "resume <sid>"`), teammate sessions (`agentName` on early records —
+lead-owned recovery), `agent-*.jsonl` / `wf_*` internals, and a `cwd` that no longer
+exists.
+
+### Phase 0 — re-planned (as this plan requires before any spawn)
+
+**Verdict unchanged: SINGLE session, no team.** The rationale is *replaced*, because
+Q2 fired the plan's own escalation trigger ("if `resume-sessions` and
+`/limit-recover` turn out to have fully independent selection paths"). They did — so
+the trigger is re-evaluated on its merits rather than followed mechanically:
+
+The four paths are independent *callers*, but the work is not four tracks. It is
+**one new helper that defines a contract, plus three ≤10-line wirings that consume
+it**. No teammate can write a caller wiring before the helper's contract exists, so
+the dependency is strictly serial and a team would serialize into a queue with extra
+merge risk. The escalation condition ("genuinely separate files with **no shared
+decision point**") is not met: the helper *is* the shared decision point — that is
+its entire purpose. Research subagents remain unnecessary; the inventory above is
+complete by direct inspection.
+
+### Deployment finding (blocks P1)
+
+`skills/resume-sessions/` is **not tracked in this repo** — it exists only as real
+files in all 5 config dirs. Every other skill (`agent-teams`, `coding-standards`, …)
+is a per-file symlink from all 5 dirs into the checkout. P1 cannot land as a
+reviewable change until the skill is imported to `skills/resume-sessions/` and the
+5 copies re-pointed. That import is therefore in scope.
+
+`Scope (grown): +import the untracked resume-sessions skill into the repo and
+symlink the 5 config dirs` — Follow-On Gate F1-F4 PASS (F1 P1 cannot land without
+it; F2 verified by direct `ls -la`/`readlink` inspection this session; F3 no
+escalation surface, matches the repo's own established symlink convention; F4 one
+bounded commit, content-identical import + one appended rule).
+
 ## Constraints (HARD)
 
 - **Do not delete or bulk-close anyone's sessions as part of this work.** The
