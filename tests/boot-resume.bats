@@ -283,3 +283,13 @@ SH
   grep -q '"delivered":false' "$CC_IDL"
   [ "$(marker)" != "1784800000" ]                         # a re-run must retry the page
 }
+
+# ── a worktree path containing a space must survive the candidate handoff ──────
+@test "a cwd with spaces reaches lr-select as ONE candidate, not two argv entries" {
+  reg_entry gs 1784700000000 claude-quaternary "/Users/x/My Dev Worktree" gs-name
+  export CC_BOOT_RESUME_MODE=resume
+  run bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  grep -qF -- '--candidate next4:gs:/Users/x/My Dev Worktree' "$CC_RESUME_SELECT_BIN.log"
+  grep -qF 'My Dev Worktree' "$CC_RESUME_LAUNCH_BIN.log"
+}
