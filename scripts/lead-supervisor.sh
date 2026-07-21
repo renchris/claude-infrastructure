@@ -45,8 +45,12 @@ TEL_DIR="${CC_TELEMETRY_DIR:-/tmp/cc-telemetry}"
 IDL="${CC_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
 SUPLOG="${CC_SUPERVISOR_LOG:-$HOME/.claude/autonomy/supervisor.log}"
 PAGEDIR="${CC_SUPERVISOR_PAGEDIR:-$HOME/.claude/autonomy/pages}"
-PAGE_TO="${CC_PAGE_TO:-}"                              # operator/desk pane uuid for cc-notify pages (best-effort)
-PAGE_TO_FILE="${CC_PAGE_TO_FILE:-$HOME/.claude/cc-roles/desk}"   # fallback: live desk role file (CC_PAGE_TO wins; /dev/null disables)
+PAGE_TO="${CC_PAGE_TO:-}"                              # EXPLICIT pane override (CC_PAGE_TO wins over the role)
+PAGE_TO_FILE="${CC_PAGE_TO_FILE:-$HOME/.claude/cc-roles/desk}"   # the ROLE file cc-notify --role resolves (/dev/null disables)
+# D7 send-damping state beside this pager's own state, so it inherits the CC_SUPERVISOR_PAGEDIR test
+# isolation seam. Lives in a `damp/` SUBDIR: autonomy-sweep globs "$PAGES_DIR"/*.page at the top level
+# only, so damp markers can never be mistaken for page records and wake the desk.
+CC_PAGE_DAMP_DIR="${CC_PAGE_DAMP_DIR:-$PAGEDIR/damp}"
 # cc-registry maps paneUUID → session_id (single shared dir across accounts). Bridges the desk role file
 # (which holds a PANE uuid) to a telemetry session_id for the registered-desk STALL? exemption (item ff95faea46c8).
 REGISTRY_DIR="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"
@@ -65,6 +69,38 @@ if [ -z "$NOTIFY_BIN" ]; then
     [ -n "$_c" ] && [ -x "$_c" ] && { NOTIFY_BIN="$_c"; break; }
   done
 fi
+# D7 send-damping (best-effort: absent lib ⇒ undamped, i.e. today's behaviour, never a lost page).
+for _c in "$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)/hooks/lib/page-damp.sh" \
+          "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/page-damp.sh" "$HOME/.claude/hooks/lib/page-damp.sh"; do
+  # shellcheck disable=SC1090,SC1091
+  [ -f "$_c" ] && { . "$_c" 2>/dev/null || true; break; }
+done
+
+# ── the ONE send path for every supervisor page (v3 D2/D7) ───────────────────────────────────────
+# ROLE-addressed by default: cc-notify resolves the role file at send time AND follows a `.forward`
+# chain / reroutes a dead target — none of which a locally-cat'd uuid can do. Role name + dir are
+# DERIVED from PAGE_TO_FILE (dirname → CC_ROLES_DIR, basename → role), so every existing seam keeps
+# working unchanged (default → cc-roles/desk; the E2E's custom path → its own dir; /dev/null → not a
+# regular file ⇒ no send). CC_PAGE_TO still forces one explicit pane.
+# Returns 0 = a send was ATTEMPTED (caller records its own damping marker) · 1 = no channel wired
+# (marker NOT recorded, so a later-wired channel still gets its first notify — the pre-existing rule).
+send_page(){ # $1=message [$2=state-fingerprint]
+  local msg="$1" fp="${2:-}" target rdir rname
+  [ -n "$NOTIFY_BIN" ] || return 1
+  # resolved only to GATE on "is a channel wired at all" — the ADDRESS used below is the role itself
+  target="$PAGE_TO"; [ -n "$target" ] || target="$(head -n1 "$PAGE_TO_FILE" 2>/dev/null | tr -d '[:space:]')"
+  [ -n "$target" ] || return 1
+  if [ -n "$fp" ] && command -v damp_should_send >/dev/null 2>&1; then
+    damp_should_send "${PAGE_TO:-role:$PAGE_TO_FILE}" "$fp" || return 0   # suppressed, but still "handled"
+  fi
+  if [ -n "$PAGE_TO" ]; then
+    "$NOTIFY_BIN" "$PAGE_TO" "$msg" >/dev/null 2>&1 || true
+  else
+    rdir="$(dirname "$PAGE_TO_FILE")"; rname="$(basename "$PAGE_TO_FILE")"
+    CC_ROLES_DIR="$rdir" "$NOTIFY_BIN" --role "$rname" "$msg" >/dev/null 2>&1 || true
+  fi
+  return 0
+}
 
 now(){ date +%s; }
 utc(){ date -u +%Y-%m-%dT%H:%M:%SZ; }
@@ -101,12 +137,10 @@ page(){ # $1=sid $2=state $3=detail
   # true recovery, but a VOID keeps it (void_page, item 1c324d9fcc32) so a STALL?→void→re-STALL?
   # oscillation stays composer-damped — the stale-telemetry situation that triggered it still persists.
   [ "$last" = "ESCALATED" ] && [ "$2" != "DEAD" ] && return 0
-  # target resolves per page, not at startup: an empty CC_PAGE_TO falls back to the desk role file,
-  # so a pane rebind (role-file rewrite) redirects pages with no plist edit and no daemon restart
-  local target="$PAGE_TO"
-  [ -n "$target" ] || target="$(cat "$PAGE_TO_FILE" 2>/dev/null || true)"
-  if [ -n "$target" ] && [ -n "$NOTIFY_BIN" ]; then
-    "$NOTIFY_BIN" "$target" "⚠️ SUPERVISOR PAGE — session $1 is $2: $3 (operator/delegated-live-session recovers; supervisor never auto-acts)" >/dev/null 2>&1 || true
+  # Addressing resolves per page, not at startup (send_page): a pane rebind (role-file rewrite)
+  # redirects pages with no plist edit and no daemon restart. D7 fingerprint = sid+state ONLY —
+  # $3 (detail) carries volatile text that would change every sweep and silently defeat damping.
+  if send_page "⚠️ SUPERVISOR PAGE — session $1 is $2: $3 (operator/delegated-live-session recovers; supervisor never auto-acts)" "page:$1:$2"; then
     printf '%s\n' "$2" > "$nf"                             # recorded only on an attempted send — a
   fi                                                       # later-wired channel still gets its first notify
 }
@@ -131,9 +165,9 @@ page_permpend(){ # $1=sid $2=cmd $3=beacon_ts $4=age_s
   # re-notifies; the SAME prompt across sweeps stays quiet. clear_permpend resets on resolution.
   local last; last="$(cat "$nf" 2>/dev/null || true)"
   [ "$last" = "$ts" ] && return 0
-  local target="$PAGE_TO"; [ -n "$target" ] || target="$(cat "$PAGE_TO_FILE" 2>/dev/null || true)"
-  if [ -n "$target" ] && [ -n "$NOTIFY_BIN" ]; then
-    "$NOTIFY_BIN" "$target" "⛔ PERMISSION-PENDING — session $sid blocked ${age}s on a permission prompt: ${cmd} (since $(fmt_since "$ts")). Nothing in-session can answer; operator/live-session must approve or deny." >/dev/null 2>&1 || true
+  # D7 fingerprint = the EPISODE (sid + beacon ts): a new prompt is a new ts ⇒ new fingerprint ⇒ sends.
+  # ${age} is excluded — it grows every sweep and would defeat damping while looking wired.
+  if send_page "⛔ PERMISSION-PENDING — session $sid blocked ${age}s on a permission prompt: ${cmd} (since $(fmt_since "$ts")). Nothing in-session can answer; operator/live-session must approve or deny." "permpend:$sid:$ts"; then
     printf '%s\n' "$ts" > "$nf"                             # recorded only on an attempted send
   fi
 }

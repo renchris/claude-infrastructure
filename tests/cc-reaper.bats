@@ -50,9 +50,14 @@ EOF
   #    desk or count REAL panes. Desk target is absent by default (→ no notify); surface/self-check tests
   #    opt in with set_desk. Live-pane count comes from $D/nlive (default 1 → matches the common 1-session
   #    case, so unrelated tests see Δ0 and never self-check-page). ──
+  # Records the FULL argv, not "$2". v3 D2 moved paging from `cc-notify <uuid> <msg>` to
+  # `cc-notify --role <role> <msg>`, which shifted the message off $2 — a stub pinned to a positional
+  # index silently records the wrong field the moment the real tool's argv shape changes. Capturing
+  # "$*" keeps every message-content assertion below working under BOTH shapes and additionally lets a
+  # test assert the addressing form itself.
   cat > "$D/bin/notify" <<EOF
 #!/bin/bash
-printf 'NOTIFY %s\n' "\$2" >> "$D/notify-calls"
+printf 'NOTIFY %s\n' "\$*" >> "$D/notify-calls"
 EOF
   cat > "$D/bin/ps" <<EOF
 #!/bin/bash

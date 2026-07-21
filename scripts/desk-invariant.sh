@@ -163,10 +163,15 @@ push_page() { # <msg> — Pushover break-through; a no-op (exit 0) when unarmed
 # ENQUEUES the resume to the desk's OWN inbox via cc-notify (drains as context at its next boundary; a
 # watcher-armed desk wakes within a poll). A stale desk with no watcher can't self-wake from a mailbox
 # line — the caller pages the human instead (the only safe recovery). No keystroke path remains here.
-enqueue_resume() { # <uuid> <text> → cc-notify the resume into the pane's inbox; echoes cc-notify's verdict line
+enqueue_resume() { # <uuid> <text> → cc-notify the resume into the desk's inbox; echoes cc-notify's verdict line
+  # v3 D2: address the ROLE, not the uuid we sampled at :253. The uuid is still the right thing to
+  # CHECK health against (registry row, pid liveness), but by send time the desk may have self-closed
+  # and repointed the role at its successor — a role-addressed send follows that, and cc-notify also
+  # follows a `.forward` chain / reroutes a dead target. $1 is kept for the caller's logging contract.
   local uuid="$1" text="$2"
   [ -n "$NOTIFY_BIN" ] && [ -x "$NOTIFY_BIN" ] || { echo "cc-notify unavailable"; return 1; }
-  "$NOTIFY_BIN" --from desk-invariant "$uuid" "$text" 2>&1
+  CC_ROLES_DIR="$ROLES_DIR" "$NOTIFY_BIN" --from desk-invariant --role "$ROLE" "$text" 2>&1 \
+    || { echo "cc-notify --role $ROLE failed (target ${uuid:-unknown})"; return 1; }
 }
 
 fire_replacement() { # fire a fresh desk from the canned brief (role-tagged). Returns handoff-fire's rc.
