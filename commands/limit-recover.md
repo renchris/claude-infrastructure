@@ -12,7 +12,12 @@ the model reconciles from its CONTEXT (which contains pre-kill narrative and loo
 of from DISK, satisfices on the units it happens to remember, and smooths gaps into the conclusion.
 This command replaces that with a deterministic audit → forced re-run → re-audit fixpoint. Scripts:
 `~/.claude/scripts/limit-recover/` (`lr-audit.py`, `lr-transplant.sh`, `lr-handoff.sh`,
-`lr-fire-resume.sh`, `lr-preseed-env.sh`). Artifacts: `~/.reso/limit-recover/<sid>/`. Invoking this
+`lr-fire-resume.sh`, `lr-preseed-env.sh`, `lr-select.py`).
+**`lr-select.py` is the session-resume consolidation gate** (one session per worktree + a total
+ceiling; incident 2026-07-21) used by `lr-reset-poller.sh`, `boot-resume.sh` and the
+`resume-sessions` skill. **This command does not need it**: `handoff` transplants exactly ONE lead
+session, and the re-runs below are workflow slots / subagents / teammates, not session resumes. If
+you ever add a path here that resumes MULTIPLE sessions, it must route through `lr-select.py`. Artifacts: `~/.reso/limit-recover/<sid>/`. Invoking this
 command IS the authorization to call the Workflow tool for resume/re-run of the session's own workflow runs.
 
 **Autonomous resume is prompt-free at the SOURCE (no human in the loop).** `lr-fire-resume.sh` calls
