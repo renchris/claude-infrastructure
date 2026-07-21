@@ -154,6 +154,29 @@ for script in "$REPO_DIR"/scripts/*.sh; do
   fi
 done
 
+# scripts/limit-recover/ — the loop above globs scripts/*.sh (top level only), so this
+# subdirectory was never deployed by the installer. It was reachable ONLY via
+# docs/activation/wiring-all.sh, which is explicitly marked run-by-hand — yet
+# com.reso.lr-reset-poller.plist is a LOADED launchd job that executes
+# ~/.claude/scripts/limit-recover/lr-reset-poller.sh by absolute path. On a fresh machine
+# ./install.sh therefore produced a loaded job pointing at a missing script. Deploying the
+# files here does NOT touch launchd (nothing is loaded, unloaded or rewritten) — it only
+# makes what the job already references reproducible. Every file, not just *.sh: the job
+# also reads lr-audit.py and the plist itself.
+if [[ -d "$REPO_DIR/scripts/limit-recover" ]]; then
+  echo ""
+  echo "limit-recover scripts → $CONFIG_DIR/scripts/limit-recover/"
+  ensure_real_dir "$CONFIG_DIR/scripts/limit-recover"
+  for f in "$REPO_DIR"/scripts/limit-recover/*; do
+    [[ -f "$f" ]] || continue
+    if $IS_GLOBAL; then
+      link_file "$f" "$CONFIG_DIR/scripts/limit-recover/$(basename "$f")"
+    else
+      copy_file "$f" "$CONFIG_DIR/scripts/limit-recover/$(basename "$f")"
+    fi
+  done
+fi
+
 # Convenience symlink (global only)
 if $IS_GLOBAL && [[ ! -L "$HOME/bin/restore-file" ]]; then
   run ln -sf "$HOME/.claude/scripts/restore-file.sh" "$HOME/bin/restore-file"

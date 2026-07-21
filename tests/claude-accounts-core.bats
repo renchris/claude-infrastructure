@@ -649,3 +649,30 @@ assert ca.reason_class(r, ca.score_general(r, cfg)[1]) == "data"
 print("OK")'
   [ "$status" -eq 0 ] && [[ "$output" == *OK* ]]
 }
+
+@test "bar/cut_marker: the routing cutoff is visible at EVERY usage level, in monochrome" {
+  run python3 -c "$LOAD"'
+ca.COLOR = False
+CUT = R["S_CUT"]
+gaps, widths = [], set()
+for i in range(0, 1001):
+    p = i / 10.0
+    rendered = ca.bar(p, cut=CUT) + ca.cut_marker(p, CUT)
+    if "┆" not in rendered and "▲" not in rendered:
+        gaps.append(p)
+    widths.add(len(rendered + ca.pct(p)))
+# the tick used to vanish once the fill covered its cell — i.e. across the whole
+# 81-100% band, precisely where it decides routing
+assert not gaps, gaps[:12]
+# fixed-width column: an overflow skews every column to the right of it
+assert widths == {15}, widths
+# the crossing is an EXACT p >= S_CUT test, not cell arithmetic (a 10-cell track
+# cannot resolve 85% by itself)
+assert ca.cut_marker(CUT * 100 - 0.1, CUT) != "▲"
+assert ca.cut_marker(CUT * 100, CUT) == "▲"
+assert ca.cut_marker(100, CUT) == "▲"
+# and it degrades cleanly with no data / no cutoff
+assert ca.cut_marker(None, CUT) == " " and ca.cut_marker(50, None) == " "
+print("OK")'
+  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]]
+}

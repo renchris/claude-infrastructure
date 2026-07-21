@@ -927,10 +927,40 @@ def usage_rgb(p):
 EIGHTHS = "▏▎▍▌▋▊▉█"
 
 
+def cut_marker(p, cut, width=10):
+    """'▲' once usage is at/over the router's hard cutoff, else ' '.
+
+    The ┆ tick inside bar() can only sit on a CELL boundary, so on a 10-cell track it marks
+    80%, not S_CUT=85% — and it is overwritten by the fill as soon as usage reaches it, i.e.
+    it disappears from the 81-100% band, exactly where it decides routing. Widening the bar
+    blows the 82-column budget; recoloring the fill is invisible under --no-color (which is
+    how the agent path invokes this); substituting a glyph destroys the 1/8-cell magnitude
+    the fill carries.
+
+    So the crossing is signalled OUTSIDE the bar, in the separator that already sits between
+    the bar and the percentage — width-neutral, a real character rather than a color, and an
+    EXACT `p >= cut` comparison instead of cell arithmetic. Net effect: below the cutoff the
+    ┆ tick shows how much room is left; at/over it the ▲ shows the line is crossed. Between
+    the two — where the fill has swallowed the tick cell but usage has not yet reached the
+    cutoff (82-84% on a 10-cell track) — the ┆ simply relocates here, so the decision line is
+    visible at EVERY usage level rather than blinking out for the last few points before it
+    matters most."""
+    if p is None or cut is None:
+        return " "
+    if p >= cut * 100:
+        return "▲"
+    q = max(0.0, min(100.0, p)) / 100.0 * width
+    full = int(q)
+    fill_len = full + (1 if int((q - full) * 8) else 0)
+    return "┆" if fill_len > int(width * cut) else " "
+
+
 def bar(p, width=10, cut=None):
     """0-100 used% → `████▌···┆·` at 1/8-cell resolution, colored by severity.
-    cut (0..1) draws a boundary tick in the track where the router's hard cutoff sits —
-    the bar shows the DECISION LINE, not just magnitude (5h column: S_CUT)."""
+    cut (0..1) draws a boundary tick in the TRACK where the router's hard cutoff sits, so the
+    bar shows the DECISION LINE and not just magnitude (5h column: S_CUT). The tick is
+    cell-granular (±5% on a 10-cell track) and is covered once the fill reaches it —
+    cut_marker() carries the exact crossing signal from there on."""
     if p is None:
         return c("·" * width, GRAY, dim=True)
     q = max(0.0, min(100.0, p)) / 100.0 * width
@@ -1056,7 +1086,9 @@ def render_table(rows, cfg, win, cached, prev=None):
             s5r_rgb = AMBER if (srh is not None and srh < 1) else GRAY
             s5reset = c(f"{('↻' + fmt_h(srh)):>5}", s5r_rgb, dim=(srh is None or srh >= 1))
             cells = "  ".join([
-                bar(r.get("session_pct"), cut=cfg["router"]["S_CUT"]) + " " + pct(r.get("session_pct")) + " " + s5reset,
+                bar(r.get("session_pct"), cut=cfg["router"]["S_CUT"])
+                + c(cut_marker(r.get("session_pct"), cfg["router"]["S_CUT"]), RED, bold=True)
+                + pct(r.get("session_pct")) + " " + s5reset,
                 bar(r.get("weekly_pct")) + " " + pct(r.get("weekly_pct")),
                 bar(r.get("fable_pct")) + " " + pct(r.get("fable_pct"))])
             wrh = r.get("weekly_reset_h")

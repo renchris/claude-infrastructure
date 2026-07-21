@@ -62,3 +62,34 @@ run_wire() { run bash "$REPO/install.sh" --wire-hooks --config-dir "$CFG"; }
   after=$(jq -S . "$CFG/settings.json")
   [ "$before" = "$after" ]
 }
+
+# ---- scripts/limit-recover deployment ----------------------------------------------------------
+
+@test "install.sh deploys scripts/limit-recover (the loaded launchd job runs it by absolute path)" {
+  # The scripts loop globs scripts/*.sh — top level only — so this subdirectory was never
+  # deployed by the installer; it was reachable only via docs/activation/wiring-all.sh, which
+  # is marked run-by-hand. com.reso.lr-reset-poller.plist is a LOADED job that executes
+  # <config>/scripts/limit-recover/lr-reset-poller.sh, so a fresh machine ended up with a
+  # loaded job pointing at a missing script.
+  REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
+  [ -d "$REPO/scripts/limit-recover" ] || skip "no limit-recover dir in this checkout"
+  run "$REPO/install.sh" --config-dir "$BATS_TEST_TMPDIR/fresh"
+  [ "$status" -eq 0 ]
+  [ -f "$BATS_TEST_TMPDIR/fresh/scripts/limit-recover/lr-reset-poller.sh" ]
+  # every file, not just *.sh — the flow also reads lr-audit.py and the plist itself
+  for f in "$REPO"/scripts/limit-recover/*; do
+    [ -f "$f" ] || continue
+    [ -e "$BATS_TEST_TMPDIR/fresh/scripts/limit-recover/$(basename "$f")" ]
+  done
+}
+
+@test "install.sh limit-recover deployment is idempotent (a second run changes nothing)" {
+  REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
+  [ -d "$REPO/scripts/limit-recover" ] || skip "no limit-recover dir in this checkout"
+  "$REPO/install.sh" --config-dir "$BATS_TEST_TMPDIR/fresh" >/dev/null 2>&1
+  ls -l "$BATS_TEST_TMPDIR/fresh/scripts/limit-recover" > "$BATS_TEST_TMPDIR/before.txt"
+  "$REPO/install.sh" --config-dir "$BATS_TEST_TMPDIR/fresh" >/dev/null 2>&1
+  ls -l "$BATS_TEST_TMPDIR/fresh/scripts/limit-recover" > "$BATS_TEST_TMPDIR/after.txt"
+  run diff "$BATS_TEST_TMPDIR/before.txt" "$BATS_TEST_TMPDIR/after.txt"
+  [ "$status" -eq 0 ]
+}
