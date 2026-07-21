@@ -49,6 +49,7 @@ import re
 import subprocess
 import sys
 import time
+import traceback
 import unicodedata
 import urllib.error
 import urllib.request
@@ -110,9 +111,17 @@ def read_creds(config_dir, kc_account):
     if p.returncode != 0:                        # locked keychain / ACL / other
         return None, "keychain-error"
     try:
-        return json.loads(p.stdout).get("claudeAiOauth", {}) or None, "present"
+        d = json.loads(p.stdout)
     except json.JSONDecodeError:
         return None, "keychain-error"
+    # A keychain password that is valid JSON but NOT an object (null, a list, a bare string)
+    # used to reach .get() and raise AttributeError, which only json.JSONDecodeError was
+    # catching — the traceback escaped main() and killed every mode. A non-object payload is
+    # a corrupt item, not a missing one: "keychain-error", never "no-keychain-item" (the
+    # latter maps to auth=logged-out at the caller and would trigger a pointless relogin).
+    if not isinstance(d, dict):
+        return None, "keychain-error"
+    return (d.get("claudeAiOauth") or None), "present"
 
 
 # ---- frontier window (SSOT read — never hardcode) --------------------------------------------
@@ -340,6 +349,7 @@ def inherit_lastgood(row, ledger, prev):
     e = ledger.get(row["acct"])
     if e and e.get("weekly_pct") is not None:
         row["session_pct"] = e.get("session_pct")
+        row["session_reset_at"] = e.get("session_reset_at")
         row["session_reset_h"] = hrs_until(e.get("session_reset_at"))
         row["weekly_pct"] = e.get("weekly_pct")
         row["weekly_reset_at"] = e.get("weekly_reset_at")
@@ -364,95 +374,136 @@ def inherit_lastgood(row, ledger, prev):
     return False
 
 
+def probe_account(cfg, acct, kc, k_live, ledger, prev, no_heal, self_dir):
+    """Probe ONE account -> (row, lastgood_entry | None).
+
+    Split out of collect() so that an UNEXPECTED exception can be contained per-account:
+    before the split, one malformed keychain item raised out of the loop and blanked the
+    dashboard for ALL FOUR accounts (and every consumer of --json/--route/--rank) instead
+    of degrading the single bad row."""
+    name = acct["name"]
+    row = {"acct": name, "email": acct["email"], "dia_profile": acct["dia_profile"],
+           "launcher": acct["launcher"], "k": k_live, "auth": None,
+           # is_self is resolved HERE, from the same config_dir map the rest of the tool
+           # keys off, because callers cannot derive it: the row carries no config_dir and
+           # $CLAUDE_CONFIG_DIR is the *reader's* env. Hand-derivation mislabelled the
+           # wrong account in a live session (2026-07-21).
+           "is_self": self_dir is not None and acct["config_dir"].rstrip("/") == self_dir}
+    creds, kstate = read_creds(acct["config_dir"], kc)
+    if kstate != "present":
+        row["auth"] = "logged-out" if kstate == "no-keychain-item" else "keychain-error"
+        row["error"] = row["auth"]
+        inherit_lastgood(row, ledger, prev)
+        return row, None
+    if not creds:
+        # The item exists but carries no usable claudeAiOauth blob (API-key auth, or a
+        # half-written/cleared payload). read_creds returns (None, "present") for this by
+        # design; the old code then called creds.get("refreshToken") -> AttributeError.
+        # Short-circuit before the pointless heal + guaranteed-failing fetch, and give the
+        # operator a label that names the real cause instead of "no data (http None)".
+        row["auth"] = "no-oauth-blob"
+        row["error"] = "keychain item present but carries no OAuth credentials"
+        inherit_lastgood(row, ledger, prev)
+        return row, None
+    token = creds.get("accessToken")
+    expires_ms = creds.get("expiresAt") or 0
+    stale = expires_ms / 1000.0 <= time.time() + 60
+    row["auth"] = "stale" if stale else "ok"
+    if stale and not no_heal:
+        ok, detail = heal(cfg, acct, creds.get("refreshToken"), k_live)
+        if ok:
+            creds, kstate = read_creds(acct["config_dir"], kc)
+            token = (creds or {}).get("accessToken")
+            row["auth"] = "healed"
+        elif "invalid" in detail.lower() or "revoked" in detail.lower():
+            row["auth"] = "logged-out"
+            row["error"] = "logged-out"
+            inherit_lastgood(row, ledger, prev)
+            return row, None
+        else:
+            row["heal_note"] = detail
+    status, u = fetch_usage(cfg, token) if token else (None, None)
+    if status == 401:
+        # CC may have rotated the token between our read and the call — one fresh re-read.
+        creds, kstate = read_creds(acct["config_dir"], kc)
+        token = (creds or {}).get("accessToken")
+        status, u = fetch_usage(cfg, token) if token else (None, None)
+        if status == 401:
+            if row["auth"] == "stale":
+                row["error"] = ("stale (expired token; --no-heal)" if no_heal
+                                else "stale (expired token; heal skipped/failed — see heal_note)")
+            else:
+                row["auth"] = "token-invalid"
+                row["error"] = "token-invalid (revoked? run /accounts relogin check)"
+            inherit_lastgood(row, ledger, prev)
+            return row, None
+    if status == 429:
+        # A 429 from the oauth/usage endpoint is ALWAYS a transient POLL-THROTTLE
+        # (concurrent callers racing the 90s single-flight cache) — NEVER a usage cap.
+        # A real weekly/5h/Fable cap returns HTTP 200 with percent≈100; status+endpoint
+        # alone is the discriminator. Labeling this "rate-limited" made a downstream
+        # session-classifier read a transient poll failure as a hard cap (false-limit
+        # misdiagnosis 2026-07-16). Flag it distinctly + fall back to last-good percents.
+        row["poll_throttled"] = True
+        row["error"] = ("poll throttled ↻ (cached usage)"
+                        if inherit_lastgood(row, ledger, prev) else "poll throttled ↻")
+        return row, None
+    if not u or "limits" not in u:
+        row["error"] = f"no data (http {status})"
+        inherit_lastgood(row, ledger, prev)
+        return row, None
+    sp, sr = pick(u, "session")
+    wp, wr = pick(u, "weekly_all")
+    fp, fr = pick(u, "weekly_scoped", cfg["frontier"]["scoped_display_name"])
+    eu = u.get("extra_usage") or {}
+    row.update({
+        # session_reset_at is emitted alongside the *_reset_h countdown for the SAME reason
+        # weekly/fable are: a countdown decays the moment it is serialized, so any consumer
+        # rendering an absolute wall-clock time (the /accounts chat readout does) had to do
+        # now + session_reset_h arithmetic itself. The absolute stamp is the durable form.
+        "session_pct": sp, "session_reset_h": hrs_until(sr), "session_reset_at": sr,
+        "weekly_pct": wp, "weekly_reset_h": hrs_until(wr), "weekly_reset_at": wr,
+        "fable_pct": fp, "fable_reset_h": hrs_until(fr), "fable_reset_at": fr,
+        "credits_on": bool(eu.get("is_enabled")), "credits_used": eu.get("used_credits") or 0.0,
+    })
+    # capture last-good (weekly is the durable stranded-quota signal; skip data-less rows).
+    # Absolute reset stamps are stored (NOT the decaying *_reset_h) — inherit re-derives them.
+    entry = None
+    if wp is not None:
+        entry = {
+            "session_pct": sp, "session_reset_at": sr,
+            "weekly_pct": wp, "weekly_reset_at": wr,
+            "fable_pct": fp, "fable_reset_at": fr,
+            "credits_on": bool(eu.get("is_enabled")), "credits_used": eu.get("used_credits") or 0.0,
+            "quota_as_of": datetime.now(timezone.utc).isoformat(),
+        }
+    return row, entry
+
+
 def collect(cfg, no_heal=False, prev=None):
     kc = cfg["keychain_account"]
     counts = concurrency(cfg)
     ledger = load_lastgood()
+    self_dir = os.path.expanduser(os.environ.get("CLAUDE_CONFIG_DIR", "")).rstrip("/") or None
     lastgood_dirty = False
     rows = []
     for acct in cfg["accounts"]:
         name = acct["name"]
-        row = {"acct": name, "email": acct["email"], "dia_profile": acct["dia_profile"],
-               "launcher": acct["launcher"], "k": counts.get(name, 0), "auth": None}
-        creds, kstate = read_creds(acct["config_dir"], kc)
-        if kstate != "present":
-            row["auth"] = "logged-out" if kstate == "no-keychain-item" else "keychain-error"
-            row["error"] = row["auth"]
+        try:
+            row, entry = probe_account(cfg, acct, kc, counts.get(name, 0), ledger, prev,
+                                       no_heal, self_dir)
+        except Exception as e:                    # never bare: KeyboardInterrupt/SystemExit pass
+            # Containment, not concealment — the traceback goes to the log so a real
+            # regression is still discoverable rather than silently degrading forever.
+            log_event(f"probe {name}: UNEXPECTED {type(e).__name__}: {e}\n{traceback.format_exc()}")
+            row = {"acct": name, "email": acct.get("email"), "dia_profile": acct.get("dia_profile"),
+                   "launcher": acct.get("launcher"), "k": counts.get(name, 0),
+                   "auth": "probe-error", "is_self": False,
+                   "error": f"probe failed: {type(e).__name__} (see claude-accounts.log)"}
             inherit_lastgood(row, ledger, prev)
-            rows.append(row)
-            continue
-        # (creds or {}): a valid keychain item can carry an empty/absent claudeAiOauth blob
-        token = (creds or {}).get("accessToken")
-        expires_ms = (creds or {}).get("expiresAt") or 0
-        stale = expires_ms / 1000.0 <= time.time() + 60
-        row["auth"] = "stale" if stale else "ok"
-        if stale and not no_heal:
-            ok, detail = heal(cfg, acct, creds.get("refreshToken"), row["k"])
-            if ok:
-                creds, kstate = read_creds(acct["config_dir"], kc)
-                token = (creds or {}).get("accessToken")
-                row["auth"] = "healed"
-            elif "invalid" in detail.lower() or "revoked" in detail.lower():
-                row["auth"] = "logged-out"
-                row["error"] = "logged-out"
-                inherit_lastgood(row, ledger, prev)
-                rows.append(row)
-                continue
-            else:
-                row["heal_note"] = detail
-        status, u = fetch_usage(cfg, token) if token else (None, None)
-        if status == 401:
-            # CC may have rotated the token between our read and the call — one fresh re-read.
-            creds, kstate = read_creds(acct["config_dir"], kc)
-            token = (creds or {}).get("accessToken")
-            status, u = fetch_usage(cfg, token) if token else (None, None)
-            if status == 401:
-                if row["auth"] == "stale":
-                    row["error"] = ("stale (expired token; --no-heal)" if no_heal
-                                    else "stale (expired token; heal skipped/failed — see heal_note)")
-                else:
-                    row["auth"] = "token-invalid"
-                    row["error"] = "token-invalid (revoked? run /accounts relogin check)"
-                inherit_lastgood(row, ledger, prev)
-                rows.append(row)
-                continue
-        if status == 429:
-            # A 429 from the oauth/usage endpoint is ALWAYS a transient POLL-THROTTLE
-            # (concurrent callers racing the 90s single-flight cache) — NEVER a usage cap.
-            # A real weekly/5h/Fable cap returns HTTP 200 with percent≈100; status+endpoint
-            # alone is the discriminator. Labeling this "rate-limited" made a downstream
-            # session-classifier read a transient poll failure as a hard cap (false-limit
-            # misdiagnosis 2026-07-16). Flag it distinctly + fall back to last-good percents.
-            row["poll_throttled"] = True
-            row["error"] = ("poll throttled ↻ (cached usage)"
-                            if inherit_lastgood(row, ledger, prev) else "poll throttled ↻")
-            rows.append(row)
-            continue
-        if not u or "limits" not in u:
-            row["error"] = f"no data (http {status})"
-            inherit_lastgood(row, ledger, prev)
-            rows.append(row)
-            continue
-        sp, sr = pick(u, "session")
-        wp, wr = pick(u, "weekly_all")
-        fp, fr = pick(u, "weekly_scoped", cfg["frontier"]["scoped_display_name"])
-        eu = u.get("extra_usage") or {}
-        row.update({
-            "session_pct": sp, "session_reset_h": hrs_until(sr),
-            "weekly_pct": wp, "weekly_reset_h": hrs_until(wr), "weekly_reset_at": wr,
-            "fable_pct": fp, "fable_reset_h": hrs_until(fr), "fable_reset_at": fr,
-            "credits_on": bool(eu.get("is_enabled")), "credits_used": eu.get("used_credits") or 0.0,
-        })
-        # capture last-good (weekly is the durable stranded-quota signal; skip data-less rows).
-        # Absolute reset stamps are stored (NOT the decaying *_reset_h) — inherit re-derives them.
-        if wp is not None:
-            ledger[name] = {
-                "session_pct": sp, "session_reset_at": sr,
-                "weekly_pct": wp, "weekly_reset_at": wr,
-                "fable_pct": fp, "fable_reset_at": fr,
-                "credits_on": bool(eu.get("is_enabled")), "credits_used": eu.get("used_credits") or 0.0,
-                "quota_as_of": datetime.now(timezone.utc).isoformat(),
-            }
+            entry = None
+        if entry:
+            ledger[name] = entry
             lastgood_dirty = True
         rows.append(row)
     if lastgood_dirty:
@@ -557,13 +608,20 @@ def _cfg_key(cfg):
     return sha256(ident.encode()).hexdigest()[:12]
 
 
-BAD_AUTH = ("stale", "logged-out", "token-invalid", "keychain-error")
+BAD_AUTH = ("stale", "logged-out", "token-invalid", "keychain-error", "no-oauth-blob",
+            "probe-error")
 
 
 def cache_read(cfg, want_heal=False):
     try:
         with open(cfg["cache_file"]) as f:
             c = json.load(f)
+        # Valid JSON that is not an object (a stray `null`, `[]`, or a bare string written by
+        # something else sharing /tmp) reached .get() and raised AttributeError, which the
+        # handler below does not catch — every invocation then died until the file was
+        # removed by hand. A malformed cache must degrade to "no cache", never wedge the tool.
+        if not isinstance(c, dict):
+            return None
         if c.get("cfg_key") != _cfg_key(cfg):
             return None
         if time.time() - c.get("ts", 0) > cfg.get("cache_ttl_s", 90):
@@ -730,7 +788,11 @@ def _fmt_asof(iso):
 AUTH_GLYPH = {
     "ok": ("●", GREEN), "healed": ("●", PERI), "stale": ("◐", AMBER),
     "logged-out": ("○", RED), "token-invalid": ("✕", RED), "keychain-error": ("△", AMBER),
+    "no-oauth-blob": ("△", AMBER), "probe-error": ("✕", RED),
 }
+# auth states that need an operator ACTION, surfaced as a bullet under the table
+ACTIONABLE_AUTH = ("logged-out", "token-invalid", "keychain-error", "no-oauth-blob",
+                   "probe-error")
 
 
 def render_table(rows, cfg, win, cached, prev=None):
@@ -787,7 +849,7 @@ def render_table(rows, cfg, win, cached, prev=None):
             print(f"  {name} {c(glyph, grgb)} {k}  {cells}  "
                   + c(f"{fmt_h(wrh):>6}", reset_rgb))
         # conditional detail — only states that need action surface below the table
-        if a in ("logged-out", "token-invalid", "keychain-error"):
+        if a in ACTIONABLE_AUTH:
             alerts.append(c("○ ", RED) + c(f"{r['acct']} {a}", RED, bold=True)
                           + c(f" → {r['email']} · Dia “{r['dia_profile']}”", GRAY)
                           + c(f" · fix: claude-accounts --relogin-info {r['acct']} → account-relogin skill",
