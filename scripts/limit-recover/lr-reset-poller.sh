@@ -227,6 +227,18 @@ done
 # recreate a reaped worktree and must not fire into one.
 now=$(date -u +%s)
 WINNER_SIDS=""
+# sel_reason <sid> — why lr-select did not select this sid, verbatim from its decision record.
+sel_reason() {
+  python3 -c "
+import json,sys
+try: d=json.load(open(sys.argv[1]))
+except Exception: sys.exit(0)
+for k in ('listed','filtered'):
+    for r in d.get(k,[]):
+        if r.get('sid')==sys.argv[2]:
+            print(r.get('reason','')); sys.exit(0)
+" "$STATE/last-selection.json" "$1" 2>/dev/null
+}
 if [[ ! -x "$SELECT" ]]; then
   # Fail CLOSED, loudly — same discipline as boot-resume.sh. The "working" fallback (fire
   # everything up to the per-tick cap) is the incident itself; an un-fired resume is recoverable
@@ -279,7 +291,11 @@ for k in ('sid','acct','cfg','cwd','reset_at_utc'):
   # winner out) — sprawl at 10-minute cadence. The session is not lost: resume it explicitly by
   # sid, and a genuinely new limit event re-parks it via the REPARK path above.
   if ! printf '%s\n' "$WINNER_SIDS" | grep -qx "$sid"; then
-    log "LISTED $sid ($acct) — not the per-worktree winner; consolidated, resume by sid if wanted"
+    # Log the REAL reason, not an assumed one. A non-winner may have lost the per-worktree
+    # contest, or may have been filtered outright (no transcript, teammate, cwd gone) — those
+    # are different facts and "not the winner" would misattribute them.
+    why="$(sel_reason "$sid")"; [[ -n "$why" ]] || why="not selected"
+    log "LISTED $sid ($acct) — $why; consolidated, resume by sid if wanted"
     mv "$pf" "$RESUMED/$(basename "$pf")" 2>/dev/null; rm -f "$PARKED/$sid.notified"
     continue
   fi
