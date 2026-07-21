@@ -51,8 +51,15 @@ Do NOT hand-pick from the Phase 1 inventory. Run the shared selector — the sam
 `lr-reset-poller.sh` and `boot-resume.sh` consult, so all three paths obey one policy:
 
 ```
-~/.claude/scripts/limit-recover/lr-select.py --scan            # stdout: TSV winners, stderr: triage
+~/.claude/scripts/limit-recover/lr-select.py --scan --allow-missing-cwd
+#   stdout: TSV winners  acct <TAB> sid <TAB> worktree <TAB> branch   → feeds Phase 2 verbatim
+#   stderr: the triage table                                          → show this to the user
 ```
+
+`--allow-missing-cwd` is required here **because Phase 2 can recreate a reaped worktree from its
+branch** (that is what `reso-resume-one`'s `git worktree add` is for). Without it those sessions are
+filtered before Phase 2 ever sees them — the callers that *cannot* recreate a worktree omit the flag.
+The TSV's 4th column is the branch, which is exactly `reso-resume-one`'s optional 4th argument.
 
 - Resumes **one session per worktree** — the one that holds the most real state — and **lists** the
   rest. Total ceiling 4 per run. Both are flags (`--max-per-worktree`, `--max-total`), so exceeding
