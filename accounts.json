@@ -30,6 +30,7 @@
     "KFLOOR": 0.1,
     "MARGIN_H": 0.5,
     "EPS_H": 0.25,
+    "NO_RESET_H": 168.0,
     "WEEKLY_FLOOR": 0.005,
     "FABLE_FLOOR": 0.02,
     "JB_BONUS": 1.25
