@@ -359,15 +359,27 @@ def inherit_lastgood(row, ledger, prev):
     if any quota was inherited."""
     e = ledger.get(row["acct"])
     if e and e.get("weekly_pct") is not None:
-        row["session_pct"] = e.get("session_pct")
-        row["session_reset_at"] = e.get("session_reset_at")
-        row["session_reset_h"] = hrs_until(e.get("session_reset_at"))
-        row["weekly_pct"] = e.get("weekly_pct")
-        row["weekly_reset_at"] = e.get("weekly_reset_at")
-        row["weekly_reset_h"] = hrs_until(e.get("weekly_reset_at"))
-        row["fable_pct"] = e.get("fable_pct")
-        row["fable_reset_at"] = e.get("fable_reset_at")
-        row["fable_reset_h"] = hrs_until(e.get("fable_reset_at"))
+        # Per-bucket validation against that bucket's OWN reset stamp. A percent whose reset
+        # has already passed is provably obsolete — that window rolled over to ~0 — so it must
+        # not be presented as "last-known". The rollover is itself the useful fact: a stranded
+        # account whose weekly has since reset is likely FRESH, which is exactly what decides
+        # whether to bother relogging in. So record it; never blank the row (that would clear
+        # stale_quota and leave the table with nothing to render at all).
+        rolled = []
+        for pfx in ("session", "weekly", "fable"):
+            stamp = e.get(f"{pfx}_reset_at")
+            h = hrs_until(stamp)
+            if stamp and h is not None and h <= 0:
+                row[f"{pfx}_pct"] = None
+                row[f"{pfx}_reset_at"] = None
+                row[f"{pfx}_reset_h"] = None
+                rolled.append(pfx)
+            else:
+                row[f"{pfx}_pct"] = e.get(f"{pfx}_pct")
+                row[f"{pfx}_reset_at"] = stamp
+                row[f"{pfx}_reset_h"] = h
+        if rolled:
+            row["rolled_since"] = rolled
         row["credits_on"] = bool(e.get("credits_on"))
         row["credits_used"] = e.get("credits_used") or 0.0
         row["stale_quota"] = True
@@ -380,7 +392,15 @@ def inherit_lastgood(row, ledger, prev):
                 row[f] = pr[f]
         ts = (prev or {}).get("ts")
         row["stale_quota"] = True
-        row["quota_as_of"] = datetime.fromtimestamp(ts, timezone.utc).isoformat() if ts else None
+        # Provenance must survive re-inheritance. get_data writes the inherited row back into
+        # the cache and _prev_snapshot reads rows back out of it, so an account with no ledger
+        # entry re-inherits its OWN previously-inherited percents every sweep. Stamping
+        # prev["ts"] unconditionally re-dated that data to "just now" on each pass, so numbers
+        # of any age reported as fresh, forever. Carry the original stamp forward; only a row
+        # that was genuinely LIVE in that snapshot may be dated by the snapshot's own time.
+        row["quota_as_of"] = (
+            pr.get("quota_as_of") if pr.get("stale_quota")
+            else (datetime.fromtimestamp(ts, timezone.utc).isoformat() if ts else None))
         return True
     return False
 
@@ -702,9 +722,13 @@ def _prev_snapshot(cfg):
             old = json.load(f)
         if old.get("cfg_key") != _cfg_key(cfg):
             return None
+        # quota_as_of/stale_quota ride along so inherit_lastgood can carry provenance forward
+        # instead of re-dating inherited numbers to "now" on every sweep. The burn-delta loop
+        # (the only other consumer) reads a fixed field tuple and ignores the extra keys.
         return {"ts": old.get("ts"),
                 "rows": {r["acct"]: {k: r.get(k) for k in
-                                     ("session_pct", "weekly_pct", "fable_pct")}
+                                     ("session_pct", "weekly_pct", "fable_pct",
+                                      "quota_as_of", "stale_quota")}
                          for r in old.get("rows", [])}}
     except (OSError, json.JSONDecodeError, KeyError):
         return None
@@ -937,6 +961,12 @@ def render_table(rows, cfg, win, cached, prev=None):
                           + c(f"{r['acct']} showing LAST-KNOWN quota, not polled this sweep", AMBER)
                           + c(f" · as of {asof or 'unknown'} · excluded from routing"
                               " · --fresh to retry", GRAY, dim=True))
+            if r.get("rolled_since"):
+                # The most actionable derived fact available for a stranded account: those
+                # windows have reset since the reading, so it is probably fresh again.
+                alerts.append(c("  ⤷ ", GREEN)
+                              + c(f"{'/'.join(r['rolled_since'])} window(s) have RESET since"
+                                  " that reading — this account is likely fresh", GREEN))
         sp = r.get("session_pct")
         # these two alerts imply a LIVE, routable account — never fire them on a stale/last-known
         # row (its number is historical; the account is currently unreachable/excluded).
