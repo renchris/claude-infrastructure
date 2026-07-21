@@ -187,10 +187,20 @@ suite consumes a LITERAL live-format line). Land via project-local `/ship`.
 - **Backlog item `02ba4e52389a`** — "Build v3 cross-session mail: delivery SLO + human visibility
   (P1–P4)", dod-ref = plan § v3 + this doc.
 - **NOT started here (deliberate):** the P1 coupled build — single-owner session per Phase-0
-  discipline; this session's goal verb is *investigate*.
+  discipline; this session's goal verb is *investigate*. → **Subsequently BUILT + LANDED** by that
+  single-owner session on 2026-07-20 (`mail-v3-p1` → `e542db4`): D1+D2+D3 plus P2's D4 nudge and D7
+  damping. Design followed as frozen; no element re-derived. Full record + learnings: plan § v3
+  Status log.
 
 ## Status log
 
 - **2026-07-20** — Investigation session (goal: cross-session mail → 100th percentile). Full
   substrate read + live forensics + harness verification; doc created; v3 design frozen as above;
   plan doc § v3 pointer added; backlog item filed for the P1–P4 build.
+- **2026-07-20** — P1 build session (`mail-v3-p1`, landed `e542db4`). §4's two ◇ rows resolved
+  against the official hooks reference (both docs-confirmed; D5 still gated on a live probe — see
+  the §4 verification note). D1/D2/D3 + D4 nudge + D7 damping shipped; the S-1 lint↔tool contract
+  break is repaired and pinned by `tests/payload-lint-tool-parity.bats` (RED-proved against the
+  pre-fix binary: exit 2, "unknown option '--role'"). **Still open: P3 (human plane — the entire
+  U-1…U-4 class; delivery is still invisible to the human) and P4 (lifecycle — today's 39 dead
+  boxes and 1,401 unacked lines are still unarchived).**

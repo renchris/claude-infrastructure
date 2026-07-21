@@ -447,12 +447,15 @@ comms-alarms on the Operator Blocker Board.
   P1 lands (archive must honor `.forward` tombstones).
 
 **Phases** (build order + rationale in the research doc §6):
-- **P1 — kill the flooding class:** forward chains + succession migration (D1) · `cc-notify --role`
-  + pager migration (D2) · dead-target reroute (D3) · `handoff-fire.sh` trailer rewrite (D8 —
-  ✅ DONE in the investigation session, branch `xsession-mail-100`). Single-owner session (cursor/
-  verdict contract coupling — same reasoning as v2 Phase 0).
-- **P2 — delivery floor:** wake-floor rule + `cc-wait` arm contract + drain no-watcher nudge (D4) ·
-  PostToolUse mid-turn drain, gated on the harness table (D5) · producer damping (D7).
+- **P1 — kill the flooding class:** ✅ **LANDED 2026-07-20** (`e542db4`, branch `mail-v3-p1`) —
+  forward chains + succession migration (D1) · `cc-notify --role` + pager migration (D2) ·
+  dead-target reroute (D3) · `handoff-fire.sh` trailer rewrite (D8 — done earlier in the
+  investigation session, branch `xsession-mail-100`). Single-owner session (cursor/verdict contract
+  coupling — same reasoning as v2 Phase 0).
+- **P2 — delivery floor:** drain no-watcher nudge (D4) ✅ **LANDED with P1** · producer damping (D7)
+  ✅ **LANDED with P1** · **REMAINING:** wake-floor resident rule + `cc-wait` arm contract (D4's
+  rule half) · PostToolUse mid-turn drain (D5) — **gated on a live smoke-probe, NOT on the docs**
+  (see the §4 verdict below).
 - **P3 — human plane (parallelizable):** `cc-thread` adoption + filter + bats (D9) · statusline
   badge (D10) · drain `systemMessage` (D11) · Board comms store + `04-page-channel` phone arm —
   operator C10 (D12).
@@ -464,3 +467,31 @@ comms-alarms on the Operator Blocker Board.
   research doc written, D8 trailer fix applied, backlog item filed for the P1–P4 build. The
   investigation deliberately did NOT start the coupled P1 build (single-owner session per Phase-0
   discipline).
+- **2026-07-20** — **P1 BUILT + LANDED** by the single-owner session (`mail-v3-p1` → `e542db4`,
+  gate green: shellcheck + 1308/1308 bats, content-verified on `origin/main`). Shipped: D1 (three
+  primitives in `hooks/lib/mailbox-pending.sh` + succession `.forward` at `handoff-fire.sh:1094` +
+  SessionStart adoption in `mailbox-drain.sh`) · D2 (`cc-notify --role`, producers migrated) ·
+  D3 (dead-target reroute) · D4 nudge · D7 (`hooks/lib/page-damp.sh`, wired into reaper +
+  supervisor). New suites: `mailbox-forward.bats`, `page-damp.bats`, `payload-lint-tool-parity.bats`.
+
+  **Learnings (carry into P2–P4):**
+  - **§4 harness verdict — docs CONFIRM PreToolUse/PostToolUse `additionalContext` and universal
+    `systemMessage`, but that does NOT open the D5 gate.** This repo holds a counter-example in the
+    same field: Stop `additionalContext` is in the docs' supported list and is INERT on 2.1.207
+    (`boundary-handoff.sh:21-22`). A citation proves the documented contract, not the running
+    binary. **D5's real gate is a live smoke-probe** — a throwaway PostToolUse hook emitting a
+    sentinel, confirmed visible to the model — and that is P2's FIRST step. D11 (systemMessage) is
+    lower-risk: a shipped in-repo emitter (`session-continue.sh:144`) already proves it renders.
+  - **Two test stubs encoded the OLD argv shape and silently pointed at the wrong field** once
+    paging moved to `--role`: `tests/cc-reaper.bats` captured `$2`, `supervisor-e2e.sh` captured
+    `$1`. Both now capture shape-robustly / resolve `--role` as the real tool does. **Any P3 work
+    touching a producer's argv must re-check its stubs** — a positional-index fixture fails silently.
+  - **The repo gate runs BARE `shellcheck` (includes `info`), stricter than `-S warning`.** An
+    `SC2015` finding turned the first land red. Verify with bare `shellcheck` before landing.
+  - **Adoption ordering is load-bearing:** own take → migrate → second take, so inherited mail is
+    surfaced in the SAME boundary. Deferring it to the next boundary would reproduce the latency
+    the SLO exists to kill.
+  - **Damping's whole contract is the fingerprint** — state words only, never a clock/counter. A
+    timestamped fingerprint disables damping while looking correctly wired (pinned by a test).
+  - Damp state lives under each pager's own `PAGEDIR/damp`, inheriting existing test-isolation
+    seams; a live-tree default would have tests writing real markers.
