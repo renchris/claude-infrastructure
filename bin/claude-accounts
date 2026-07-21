@@ -620,6 +620,22 @@ def ranked(rows, cfg, win, kind):
     return out, reasons
 
 
+# Exclusion reasons meaning "we could not SEE the data", as opposed to "policy says no".
+# This drives the --route/--rank exit code, which callers branch on: 3 = data unavailable
+# (degrade to a proxy), 2 = data was fine and policy refused (do NOT fire blind). The old
+# test — `all("error" in r for r in rows)` — keyed on a row field these reasons never set,
+# so a fleet excluded purely for missing data reported as a policy QUOTA CLIFF.
+# Deliberately EXCLUDES "no-fable-limit": a missing scoped limit is an entitlement fact, not
+# a gap in our knowledge. Classifying it as data-unavailable would make cc-route hard-refuse
+# (RT-d) instead of taking its designed Opus down-tier when no account carries Fable.
+DATA_UNAVAILABLE = {"no-session-data", "no-weekly-data", "window-unknown"}
+
+
+def reason_class(row, why):
+    """-> 'data' | 'policy' for one row's exclusion (see DATA_UNAVAILABLE)."""
+    return "data" if ("error" in row or why in DATA_UNAVAILABLE) else "policy"
+
+
 # ---- shared cache (single-flight) -------------------------------------------------------------
 
 def _cfg_key(cfg):
@@ -938,7 +954,12 @@ def render_table(rows, cfg, win, cached, prev=None):
                 + c("  " + " · ".join(f"{a} {w}" for a, w in reasons.items()), GRAY, dim=True)
         row = lst[0][1]
         why = " · ".join(w for w in (why_fields(row),) if w)
-        return head + c(f"{row['acct']:<6}", CLAY, bold=True) + c(f" {why}", GRAY)
+        # A COUNT, not the reason map: the footer lives in the same 82-col budget as the
+        # table, and three "acct reason" pairs overflow it. The count is what changes the
+        # read — "best of 4" and "best of the 1 we could see" are different claims — and the
+        # per-account detail is already in the alert block above and --json route_reasons.
+        excl = c(f"  · {len(reasons)} excluded", GRAY, dim=True) if reasons else ""
+        return head + c(f"{row['acct']:<6}", CLAY, bold=True) + c(f" {why}", GRAY) + excl
 
     def fable_why(r):
         # Lead with the REASON. An imminent reset is a use-it-or-lose-it pick — naming it
@@ -996,21 +1017,45 @@ def main():
             f, fr_ = score_fable(r, cfg, win)
             r["score_general"], r["score_fable"] = g, f
             r["route_reasons"] = {"general": gr, "fable": fr_}
+            # Parallel map, not a reshape of route_reasons: the reason strings are prose
+            # (one carries an emoji), so a consumer classifying them had to string-match.
+            # None where the account routed — there is nothing to classify.
+            r["route_reason_class"] = {
+                "general": reason_class(r, gr) if gr else None,
+                "fable": reason_class(r, fr_) if fr_ else None}
         print(json.dumps({"window": wj, "cached": cached, "rows": rows}, indent=2))
         return
 
     if "--route" in args or "--rank" in args:
+        if "--route" in args and "--rank" in args:
+            sys.exit("claude-accounts: --route and --rank are mutually exclusive")
         flag = "--route" if "--route" in args else "--rank"
-        kind = "fable" if "fable" in args else "general"
+        # Read the flag's VALUE positionally. The old `"fable" if "fable" in args` was a
+        # membership test over all of argv, so `--route fabel`, `--route FABLE` and a bare
+        # `--route` all fell through to general and exited 0 with a confident account name —
+        # a caller asking for a frontier account silently got a general one.
+        i = args.index(flag)
+        kind = args[i + 1] if i + 1 < len(args) else None
+        if kind not in ("general", "fable"):
+            sys.exit(f"claude-accounts: {flag} requires general|fable (got {kind!r})")
         cand, reasons = ranked(rows, cfg, win, kind)
         if not cand:
             print("none")
             print(f"claude-accounts: no routable account for {kind}: "
                   + "; ".join(f"{a}={w}" for a, w in reasons.items()), file=sys.stderr)
-            # exit 3 = every account errored (data unavailable — callers may degrade to a
-            # proxy); exit 2 = data was fine, no account routable by POLICY (exhausted /
-            # window / cutoff — callers must NOT fire blind).
-            sys.exit(3 if all("error" in r for r in rows) else 2)
+            # exit 3 = data unavailable (callers may degrade to a proxy); exit 2 = data was
+            # fine, no account routable by POLICY (exhausted / window / cutoff — callers must
+            # NOT fire blind). Classified by REASON, not by the presence of a row error.
+            sys.exit(3 if all(reason_class(r, reasons.get(r["acct"])) == "data" for r in rows)
+                     else 2)
+        # Excluded accounts are named even when a route WAS found. Without this the caller
+        # sees a confident winner and no hint that a roomier account was dropped for a
+        # TRANSIENT reason (a 90s poll throttle scores null and vanishes) — which reads as
+        # "this is the best account" rather than "this is the best account we could see".
+        # stderr, so the stdout contract for both flags is untouched.
+        if reasons:
+            print(f"claude-accounts: {kind} excluded — "
+                  + "; ".join(f"{a}={w}" for a, w in reasons.items()), file=sys.stderr)
         if flag == "--route":
             print(cand[0][1]["acct"])
         else:
