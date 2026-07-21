@@ -39,7 +39,14 @@ mkdir -p "$PARKED" "$RESUMED"
 DRY=0; [[ "${1:-}" == "--dry-run" ]] && DRY=1
 AUTOFIRE="${LR_POLLER_AUTOFIRE:-0}"
 RECENCY_MIN=$(( 48 * 60 ))          # only sessions touched in the last 48h
-MAX_PER_RUN=4                       # runaway guard
+MAX_PER_RUN=4                       # runaway guard (per TICK — see consolidation below)
+# ── session-sprawl consolidation (incident 2026-07-21) ────────────────────────────────
+# MAX_PER_RUN alone bounds a TICK, not a recovery: 14 parked sessions in one worktree still
+# all came up, just spread over ~35 min instead of 2 s. lr-select is the shared decision point
+# (boot-resume.sh and the resume-sessions skill consult the same one) — it groups parked
+# candidates by worktree and returns the ONE per group that holds the most real state.
+SELECT="${LR_SELECT_BIN:-$LR/lr-select.py}"
+MAX_PER_WT="${LR_POLLER_MAX_PER_WORKTREE:-1}"
 
 log() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >> "$LOG"; }
 acct_of_cfg() { case "$1" in
@@ -211,8 +218,48 @@ if es: e=es[-1]; print(e['kind'], e['resets_at_utc'])
   done < <(find "$cfg/projects" -maxdepth 2 -name '*.jsonl' -mmin "-$RECENCY_MIN" 2>/dev/null)
 done
 
-# ── 2. RESUME (or notify) parked sessions whose reset has passed ───────────────────────
+# ── 1b. CONSOLIDATE: decide the winners ONCE, before any firing ────────────────────────
+# Candidates = parked sessions whose reset has passed. lr-select applies the per-worktree rule
+# and the total ceiling (MAX_PER_RUN, so the existing bound is preserved and unified rather than
+# second-guessed). Losers are moved to RESUMED/ below — LISTED, never deleted: the transcript is
+# intact and can be resumed explicitly by sid, and a NEW limit event re-parks them normally.
+# No --allow-missing-cwd here: this caller fires lr-fire-resume.sh WITHOUT --branch, so it cannot
+# recreate a reaped worktree and must not fire into one.
 now=$(date -u +%s)
+WINNER_SIDS=""
+if [[ ! -x "$SELECT" ]]; then
+  # Fail CLOSED, loudly — same discipline as boot-resume.sh. The "working" fallback (fire
+  # everything up to the per-tick cap) is the incident itself; an un-fired resume is recoverable
+  # by a human, 8.8 GB of resurrected sessions took the machine down.
+  log "ERROR lr-select missing at $SELECT — refusing to fire unconsolidated resumes this tick"
+  exit 0
+fi
+sel_input=$(python3 -c "
+import json,sys,glob,os,calendar
+from datetime import datetime
+now=int(sys.argv[2])
+for p in sorted(glob.glob(os.path.join(sys.argv[1],'*.json'))):
+    try: d=json.load(open(p))
+    except Exception: continue
+    try: e=calendar.timegm(datetime.fromisoformat(str(d.get('reset_at_utc','')).replace('Z','+00:00')).utctimetuple())
+    except Exception: continue
+    if now < e: continue
+    print('%s:%s:%s'%(d.get('acct',''),d.get('sid',''),d.get('cwd','')))
+" "$PARKED" "$now" 2>/dev/null)
+if [[ -n "$sel_input" ]]; then
+  sel_args=()
+  while IFS= read -r c; do [[ -n "$c" ]] && sel_args+=(--candidate "$c"); done <<< "$sel_input"
+  if (( ${#sel_args[@]} > 0 )); then
+    WINNER_SIDS=$("$SELECT" "${sel_args[@]}" \
+      --max-per-worktree "$MAX_PER_WT" --max-total "$MAX_PER_RUN" \
+      --json "$STATE/last-selection.json" 2>"$STATE/last-triage.txt" | cut -f2)
+    n_cand=$(printf '%s\n' "$sel_input" | grep -c . || true)
+    n_win=0; [[ -n "$WINNER_SIDS" ]] && n_win=$(printf '%s\n' "$WINNER_SIDS" | grep -c . || true)
+    (( n_cand > n_win )) && log "CONSOLIDATED $n_cand ready → $n_win winner(s) (max $MAX_PER_WT/worktree, $MAX_PER_RUN total); see $STATE/last-triage.txt"
+  fi
+fi
+
+# ── 2. RESUME (or notify) parked sessions whose reset has passed ───────────────────────
 for pf in "$PARKED"/*.json; do
   [[ -e "$pf" ]] || continue
   eval "$(python3 -c "
@@ -227,6 +274,15 @@ for k in ('sid','acct','cfg','cwd','reset_at_utc'):
   reset_epoch=$(python3 -c "import sys,calendar,time; from datetime import datetime; print(int(calendar.timegm(datetime.fromisoformat(sys.argv[1].replace('Z','+00:00')).utctimetuple())))" "$reset_at_utc" 2>/dev/null || echo 0)
   (( now < reset_epoch )) && continue                        # reset not reached yet
   pgrep -f "resume $sid" >/dev/null 2>&1 && { mv "$pf" "$RESUMED/$(basename "$pf")" 2>/dev/null; rm -f "$PARKED/$sid.notified"; continue; }
+  # Not the winner for its worktree → LIST it and retire THIS limit event. Leaving it parked
+  # would just re-elect it next tick once the winner is running (already-running filters the
+  # winner out) — sprawl at 10-minute cadence. The session is not lost: resume it explicitly by
+  # sid, and a genuinely new limit event re-parks it via the REPARK path above.
+  if ! printf '%s\n' "$WINNER_SIDS" | grep -qx "$sid"; then
+    log "LISTED $sid ($acct) — not the per-worktree winner; consolidated, resume by sid if wanted"
+    mv "$pf" "$RESUMED/$(basename "$pf")" 2>/dev/null; rm -f "$PARKED/$sid.notified"
+    continue
+  fi
   if ! account_has_headroom "$acct"; then log "WAIT  $sid — $acct still capped, retry next tick"; continue; fi
   (( fired >= MAX_PER_RUN )) && { log "CAP   per-run resume cap ($MAX_PER_RUN) reached; deferring rest"; break; }
   if [[ "$AUTOFIRE" == "1" && $DRY -eq 0 ]]; then
