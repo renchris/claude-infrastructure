@@ -88,7 +88,12 @@ model that was interrupted.
 
 1. **Still limited?** Map this config dir → account (`~/.claude`+`~/.claude-next`→next,
    `-secondary`→next2, `-tertiary`→next3, `-quaternary`→next4) and check live headroom:
-   `~/bin/claude-accounts --json | jq '.[] | select(.acct=="<label>")'`. If `session_pct`/
+   `claude-accounts --json | jq '.rows[] | select(.acct=="<label>")'` (rows live under
+   `.rows` — a bare `.[]` iterates the top-level values and dies on the `cached` boolean;
+   resolve the binary from PATH, not `~/bin`). Treat a row carrying `error` or
+   `stale_quota: true` as NOT a live reading — check `quota_as_of` before concluding
+   anything about headroom, and note `poll_throttled` is a transient poll failure, never a
+   cap. If `session_pct`/
    `weekly_pct` ≥ 100 (or the first re-run comes back with a genuine "You've hit your…" error):
    STOP and present — reset time (from the audit), wait cost, and the exact escape hatch
    `/limit-recover handoff auto`. Waiting vs switching accounts is the user's call; **only if the
