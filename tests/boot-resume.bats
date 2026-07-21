@@ -43,6 +43,25 @@ printf '%s\n' "$*" >> "$0.log"
 SH
   chmod +x "$CC_RESUME_LAUNCH_BIN"
 
+  # stub lr-select (session-sprawl consolidation seam, 2026-07-21). Default = identity pass-through:
+  # every --candidate becomes a winner, so the launcher-wiring tests stay about boot-resume's seam
+  # rather than re-testing lr-select's policy (which owns its own 21 cases in lr-select.bats).
+  # A test that wants consolidation writes the winner TSV to .winners.
+  export CC_RESUME_SELECT_BIN="$BATS_TEST_TMPDIR/stub-select"
+  cat > "$CC_RESUME_SELECT_BIN" <<'SH'
+#!/bin/bash
+printf '%s\n' "$*" >> "$0.log"
+if [ -f "$0.winners" ]; then cat "$0.winners"; exit 0; fi
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --candidate) a="${2%%:*}"; rest="${2#*:}"; s="${rest%%:*}"; c="${rest#*:}"
+                 printf '%s\t%s\t%s\t\n' "$a" "$s" "$c"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+SH
+  chmod +x "$CC_RESUME_SELECT_BIN"
+
   # stub keepalive: log the call, exit 0 (never start the real infinite loop in a test).
   export CC_KEEPALIVE_BIN="$BATS_TEST_TMPDIR/stub-keepalive"
   cat > "$CC_KEEPALIVE_BIN" <<'SH'
@@ -202,6 +221,56 @@ SH
   [ "$status" -eq 0 ]
   grep -q '/Users/x/Development/.worktrees/wt-zeta' "$CC_RESUME_LAUNCH_BIN.log"
   grep -q 'sidX' "$CC_RESUME_LAUNCH_BIN.log"
+}
+
+# ── session-sprawl consolidation (2026-07-21): fire WINNERS, not ghosts ───────
+@test "resume-mode: ghosts are routed through lr-select with the MAPPED account alias" {
+  reg_entry g1 1784700000000 claude-quaternary /Users/x/wt-a aaa
+  reg_entry g2 1784600000000 claude            /Users/x/wt-b bbb
+  export CC_BOOT_RESUME_MODE=resume
+  run bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  grep -q -- '--candidate next4:g1:/Users/x/wt-a' "$CC_RESUME_SELECT_BIN.log"
+  grep -q -- '--candidate next:g2:/Users/x/wt-b'  "$CC_RESUME_SELECT_BIN.log"
+  grep -q -- '--max-per-worktree 1' "$CC_RESUME_SELECT_BIN.log"   # the consolidation default
+  grep -q -- '--max-total 4'        "$CC_RESUME_SELECT_BIN.log"
+}
+
+@test "resume-mode: N ghosts in one worktree fire only the selected winner (incident shape)" {
+  # 4 ghosts, ONE worktree — the 2026-07-21 shape. lr-select returns a single winner.
+  for g in g1 g2 g3 g4; do reg_entry "$g" 1784700000000 claude-quaternary /Users/x/wt-shared "$g"; done
+  printf 'next4\tg3\t/Users/x/wt-shared\t\n' > "$CC_RESUME_SELECT_BIN.winners"
+  export CC_BOOT_RESUME_MODE=resume
+  run bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  [ "$(launch_count)" -eq 1 ]                               # NOT 4
+  grep -q 'g3' "$CC_RESUME_LAUNCH_BIN.log"
+  grep -q '"n_open":4' "$CC_IDL"                            # all four still DETECTED…
+  grep -q '"resumed":1' "$CC_IDL"                           # …only one FIRED
+}
+
+@test "consolidation is surfaced in the page, never silent" {
+  for g in g1 g2 g3 g4; do reg_entry "$g" 1784700000000 claude-quaternary /Users/x/wt-shared "$g"; done
+  printf 'next4\tg3\t/Users/x/wt-shared\t\n' > "$CC_RESUME_SELECT_BIN.winners"
+  export CC_BOOT_RESUME_MODE=resume
+  run bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  grep -qF 'consolidated: 4 ghost(s) → 1 fired' "$CC_NOTIFY_BIN.log"
+  grep -qF 'LISTED, not lost' "$CC_NOTIFY_BIN.log"
+}
+
+@test "a missing selector refuses to resume — never falls back to firing every ghost" {
+  # The fallback that "works" is the incident itself. Fail loud, launch nothing, do NOT mark the
+  # boot processed (same discipline as a missing launcher).
+  reg_entry g1 1784700000000 claude-quaternary /Users/x/wt-a aaa
+  reg_entry g2 1784600000000 claude-quaternary /Users/x/wt-a bbb
+  export CC_BOOT_RESUME_MODE=resume
+  export CC_RESUME_SELECT_BIN="$BATS_TEST_TMPDIR/does-not-exist"
+  run bash "$SCRIPT"
+  [ "$status" -eq 3 ]
+  [ ! -f "$CC_RESUME_LAUNCH_BIN.log" ]                      # nothing launched
+  grep -q 'no-resume-selector' "$CC_IDL"
+  [ "$(marker)" != "1784800000" ]                           # boot NOT marked → a re-run retries
 }
 
 # ── FAIL-LOUD: a delta with no desk role must NOT mark the boot processed ──────
