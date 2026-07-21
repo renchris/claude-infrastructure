@@ -41,7 +41,7 @@ Usage:
   lr-select.py --scan [--recency-min N]                     # enumerate all stores
     [--max-per-worktree N]  (default 1)
     [--max-total N]         (default 4)
-    [--json PATH] [--quiet] [--no-liveness]
+    [--json PATH] [--quiet] [--no-liveness] [--allow-missing-cwd]
 
 Output:
   stdout  TSV winners:  acct <TAB> sid <TAB> cwd <TAB> branch
@@ -191,7 +191,9 @@ def locate_transcript(acct: str, sid: str) -> str:
 
 
 # ── the decision ──────────────────────────────────────────────────────────────
-def build(cands: list[dict], check_liveness: bool) -> tuple[list[dict], list[dict]]:
+def build(
+    cands: list[dict], check_liveness: bool, allow_missing_cwd: bool = False
+) -> tuple[list[dict], list[dict]]:
     """Enrich candidates and split into (eligible, filtered) with drop reasons."""
     eligible, filtered = [], []
     for c in cands:
@@ -210,7 +212,14 @@ def build(cands: list[dict], check_liveness: bool) -> tuple[list[dict], list[dic
             rec["reason"] = "teammate-session (lead-owned recovery)"
             filtered.append(rec)
             continue
-        if not rec["cwd"] or not Path(rec["cwd"]).is_dir():
+        if not rec["cwd"]:
+            rec["reason"] = "cwd-unknown"
+            filtered.append(rec)
+            continue
+        # A reaped worktree is still resumable IF the caller's spawner can recreate it from the
+        # branch (reso-resume-one and lr-fire-resume.sh both do, given --branch). Callers that
+        # cannot must leave this off, or they would fire into a directory that is not there.
+        if not allow_missing_cwd and not Path(rec["cwd"]).is_dir():
             rec["reason"] = "cwd-missing"
             filtered.append(rec)
             continue
@@ -223,8 +232,8 @@ def build(cands: list[dict], check_liveness: bool) -> tuple[list[dict], list[dic
     return eligible, filtered
 
 
-def select(cands, max_per_worktree, max_total, check_liveness):
-    eligible, filtered = build(cands, check_liveness)
+def select(cands, max_per_worktree, max_total, check_liveness, allow_missing_cwd=False):
+    eligible, filtered = build(cands, check_liveness, allow_missing_cwd)
 
     groups: dict[str, list[dict]] = {}
     for e in eligible:
@@ -331,6 +340,11 @@ def main() -> int:
         "--quiet", action="store_true", help="suppress the triage report on stderr"
     )
     p.add_argument(
+        "--allow-missing-cwd",
+        action="store_true",
+        help="keep candidates whose worktree was reaped (the spawner recreates it from --branch)",
+    )
+    p.add_argument(
         "--no-liveness",
         action="store_true",
         help="skip the already-running pgrep check",
@@ -372,7 +386,7 @@ def main() -> int:
         uniq.append(c)
 
     winners, dropped, filtered, report = select(
-        uniq, a.max_per_worktree, a.max_total, not a.no_liveness
+        uniq, a.max_per_worktree, a.max_total, not a.no_liveness, a.allow_missing_cwd
     )
 
     for w in winners:
