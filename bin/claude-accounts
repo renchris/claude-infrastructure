@@ -30,8 +30,13 @@ Auth policy (rotation-safe by construction):
 Usage:
   claude-accounts                     human table + route hints
   claude-accounts --json              machine-readable (rows + window + scores; tokens redacted)
-  claude-accounts --route general|fable   best account name (reason on stderr when 'none')
+  claude-accounts --route general|fable   best account name (bare, on stdout)
   claude-accounts --rank general|fable    ranked "name score" lines for wave spread (handoff)
+      Both print the EXCLUDED accounts and why on stderr, on every invocation — a winner is
+      "best of what we could see", and a transient throttle silently removes a candidate.
+      Exit: 0 routable · 2 data was fine but nothing routable by POLICY (exhausted / 5h
+      cutoff / window — callers must NOT fire blind) · 3 data unavailable for every account
+      (callers may degrade to a proxy). A non-zero exit is an ANSWER, not a tool failure.
   claude-accounts --relogin-info NAME     JSON identity block for the account-relogin skill
   claude-accounts --fresh             bypass the shared cache
   claude-accounts --no-heal           never run the headless heal (pure read-only)
