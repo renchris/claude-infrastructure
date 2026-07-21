@@ -273,12 +273,17 @@ bounded commit, content-identical import + one appended rule).
   tests + 10 existing boot-resume cases green. Nothing was deleted or bulk-closed;
   the `doc_classifier` sessions were never touched. Landed on `main` — see the
   table above for per-commit detail.
-  **Open follow-up (named, not silently carried):** there is **no deploy script**
-  for the `~/.claude` per-file symlinks. Every new tracked script under
-  `scripts/**` must be hand-linked into `~/.claude/scripts/**` or it is landed but
-  not deployed. That is a systemic gap of the class memory
-  `desk-whack-a-mole-means-file-systemic-fix` says to file rather than hand-clear —
-  a `scripts/link-live.sh` that reconciles checkout → live and reports drift.
+  **Open follow-up — already filed twice, this is the THIRD occurrence.** There is
+  no deploy step that creates `~/.claude` symlinks for NEW tracked files, so every
+  new script under `scripts/**` must be hand-linked or it is landed-but-inert.
+  Existing backlog items: **`761a546f939c`** ("DEPLOY-NOW ff-sync never symlinks
+  NEW files — landed code silently inert in the live layer") and **`d83b624354af`**
+  ("deploy/symlink-sync gap … new/renamed scripts go live on deploy"). Both are
+  **blocked on worker-landing thrash, not on the gap being unknown** — so the
+  correct action here was to add evidence, not a fourth duplicate (a fourth was
+  opened and immediately withdrawn as `843ba1c25df1`; grep the ledger before
+  filing). Three independent occurrences is the signal that unblocking those two
+  is worth more than another report of the same thing.
 - **2026-07-21** — Plan created. Root cause identified and evidenced (batch-spawn
   signature, `LR_*` expect wrappers, no dedup/cap in `lr-fire-resume.sh`,
   selection left to model judgment in the skill). Cleanup of the 14 `voiceink`
