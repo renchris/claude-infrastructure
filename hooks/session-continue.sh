@@ -89,6 +89,26 @@ cwd=$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null)
 [ -n "$cwd" ] || cwd="$PWD"
 f=$(sentinel_for "$cwd")
 
+# ── v2 comms LAG-ACK (UNCONDITIONAL — must run on EVERY Stop, before the exits below) ────────────────
+# A Stop proves a turn ran, so whatever the drain SURFACED last cycle (.seen) is now CONSUMED (.acked).
+# Since mailbox-drain acks nothing (ack_now=0), .acked advances ONLY here — and a Stop with NO armed
+# continuation is the COMMON case, so gating this on the sentinel (as the mail FOLD below is) would leave
+# .acked lagging .seen forever and make cc-inbox-guard false-alarm on already-consumed mail. Promoting is
+# safe unconditionally: it only advances .acked→.seen (never past what was emitted), so it can never mark
+# undelivered mail consumed. TAKING new mail stays gated in the fold (a take whose body is NOT delivered
+# in a decision:block reason would advance .seen and silently DROP the mail). Missing lib ⇒ skip; never block.
+_mbxlib="$_scd/lib/mailbox-pending.sh"
+[ -f "$_mbxlib" ] || _mbxlib="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/mailbox-pending.sh"
+[ -f "$_mbxlib" ] || _mbxlib="$HOME/.claude/hooks/lib/mailbox-pending.sh"
+_ouid="${ITERM_SESSION_ID:-}"; _ouid="${_ouid##*:}"
+if [ -f "$_mbxlib" ] && command -v jq >/dev/null 2>&1; then
+  # shellcheck source=lib/mailbox-pending.sh
+  # shellcheck disable=SC1091
+  if . "$_mbxlib" 2>/dev/null; then
+    case "$_ouid" in ''|*[!0-9A-Fa-f-]*) : ;; *) mailbox_promote_acked "$_ouid" ;; esac
+  fi
+fi
+
 # No sentinel → the agent did NOT request continuation → allow the stop.
 if [ ! -f "$f" ]; then
   rm -f "${f}.count" "${f}.sid" 2>/dev/null
@@ -150,23 +170,13 @@ printf '%s' "$n" > "${f}.count"
 # ── v2 comms fold (critique B): carry any pending inbox mail in THIS block reason. ───────────────────
 # session-continue is the ONE hook already blocking the in-loop desk, so folding delivery here means NO
 # competing Stop blocker (no standalone mailbox-drain Stop hook, no 4-hook yield-guards, no wall-clock
-# TTL). Lag-ack: promote last cycle's emitted mail to .acked (this Stop proves a turn ran), then take
-# this cycle's mail with ack_now=0 (the Stop channel is less certain than additionalContext, so the
-# cc-inbox-guard's .acked watch is the backstop). A missing lib just skips the fold — never blocks.
+# TTL). The lag-ack (promote .acked=.seen) already ran UNCONDITIONALLY above; here we only TAKE this
+# cycle's NEW mail with ack_now=0 (the Stop channel is less certain than additionalContext, so the
+# cc-inbox-guard's .acked watch is the backstop). The lib is already sourced and $_ouid computed above;
+# a take is confined HERE because its body is about to be delivered in the decision:block reason below.
 mail=""
-_mbxlib="$_scd/lib/mailbox-pending.sh"
-[ -f "$_mbxlib" ] || _mbxlib="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/mailbox-pending.sh"
-[ -f "$_mbxlib" ] || _mbxlib="$HOME/.claude/hooks/lib/mailbox-pending.sh"
-if [ -f "$_mbxlib" ] && command -v jq >/dev/null 2>&1; then
-  # shellcheck source=lib/mailbox-pending.sh
-  # shellcheck disable=SC1091
-  if . "$_mbxlib" 2>/dev/null; then
-    _ouid="${ITERM_SESSION_ID:-}"; _ouid="${_ouid##*:}"
-    case "$_ouid" in ''|*[!0-9A-Fa-f-]*) : ;; *)
-      mailbox_promote_acked "$_ouid"
-      mail="$(mailbox_take "$_ouid" 0)"
-    ;; esac
-  fi
+if command -v mailbox_take >/dev/null 2>&1; then
+  case "$_ouid" in ''|*[!0-9A-Fa-f-]*) : ;; *) mail="$(mailbox_take "$_ouid" 0)" ;; esac
 fi
 
 step=$(cat "$f")

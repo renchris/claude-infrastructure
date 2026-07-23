@@ -15,6 +15,10 @@ setup() {
   HOOK="$REPO/hooks/session-continue.sh"
   export CLAUDE_CONFIG_DIR="$BATS_TEST_TMPDIR/cfg"     # isolate the state dir from any real sentinel
   mkdir -p "$CLAUDE_CONFIG_DIR"
+  # isolate the inbox too: the Stop-fold promotes .acked / takes mail for $ITERM_SESSION_ID's box, so
+  # without this the actuation would mutate the REAL ~/.claude/mailbox of whatever pane runs the suite.
+  export CC_MAILBOX_DIR="$BATS_TEST_TMPDIR/mbox"
+  mkdir -p "$CC_MAILBOX_DIR"
   CWD="$BATS_TEST_TMPDIR/wt"; mkdir -p "$CWD"
 }
 
@@ -212,4 +216,31 @@ mkuser_tx_string() {
   arm "step" sidA
   run actuate sidA "/no/such/transcript.jsonl"
   [ "$status" -eq 0 ]; fired "$output"
+}
+
+# ── v2 comms LAG-ACK (the promote must fire on EVERY Stop, not only an armed continuation) ───────────
+@test "lag-ack: the promote runs on a NO-sentinel Stop too — .acked folds to .seen (no guard false-alarm)" {
+  local U="DDDDDDDD-1111-2222-3333-444444444444"
+  printf 'page one\npage two\n' > "$CC_MAILBOX_DIR/$U.md"
+  printf '2\n' > "$CC_MAILBOX_DIR/$U.seen"       # drain already SURFACED both (emitted); acked still behind
+  printf '0\n' > "$CC_MAILBOX_DIR/$U.acked"
+  # NO sentinel armed ⇒ the stop is allowed — but the promote MUST still fold .acked=.seen BEFORE that
+  # exit, else a common unarmed Stop leaves .acked lagging forever and cc-inbox-guard false-alarms.
+  run bash -c "printf '{\"cwd\":\"%s\",\"session_id\":\"sidA\",\"transcript_path\":\"\"}' '$CWD' \
+                 | ITERM_SESSION_ID='w0t0p0:$U' bash '$HOOK' 2>/dev/null"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]                                # no decision:block — the sentinel gate still allows the stop
+  [ "$(cat "$CC_MAILBOX_DIR/$U.acked")" -eq 2 ]   # …yet .acked was promoted to .seen unconditionally
+}
+
+@test "lag-ack discriminator: an unarmed Stop does NOT take (advance .seen) undelivered mail" {
+  local U="EEEEEEEE-1111-2222-3333-444444444444"
+  printf 'unseen page\n' > "$CC_MAILBOX_DIR/$U.md"    # a fresh line the drain has NOT surfaced (.seen=0)
+  run bash -c "printf '{\"cwd\":\"%s\",\"session_id\":\"sidA\",\"transcript_path\":\"\"}' '$CWD' \
+                 | ITERM_SESSION_ID='w0t0p0:$U' bash '$HOOK' 2>/dev/null"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  # promote clamps to .seen (=0), so .acked stays 0; the take is gated to the armed path, so .seen is
+  # NOT advanced here — the line stays pending for a real delivery boundary (no silent drop).
+  [ "$(cat "$CC_MAILBOX_DIR/$U.acked" 2>/dev/null || echo 0)" -eq 0 ]
+  [ "$(cat "$CC_MAILBOX_DIR/$U.seen" 2>/dev/null || echo 0)" -eq 0 ]
 }
