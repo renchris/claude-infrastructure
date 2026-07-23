@@ -1,6 +1,30 @@
 #!/bin/bash
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Session ended" >> ~/.claude/logs/sessions.log
 
+# ── clean-exit watchdog + checkpoint cleanup ───────────────────────────────────
+# Remove THIS session's watchdog pid/id + teammate-checkpoint counter on a clean
+# SessionEnd so that:
+#   1. the lead-crash-watchdog daemon takes its "pid file gone => clean shutdown"
+#      branch instead of logging a FALSE "LEAD CRASH" — every clean /exit, ⌘W,
+#      handoff and recycle previously left the pid file in place, so the daemon's
+#      "lead pid dead + pid file present => crash" branch fired on 93% of all
+#      session ends (3011/3244). The signal is only meaningful once clean exits
+#      stop tripping it.
+#   2. the per-session files under ~/.claude/watchdog/ (<sid>.pid, <sid>.id, and
+#      cp-<sid>.count written by teammate-checkpoint.sh) do not accumulate
+#      unbounded — no reaper GCs that directory (cc-reaper does not touch it).
+# A genuine crash / OOM / SIGKILL does NOT run SessionEnd, so its pid file
+# persists and the daemon still correctly detects and classifies the crash.
+# stdin is the SessionEnd hook JSON (same `cat` pattern as lead-crash-watchdog.sh);
+# sid is validated to a safe charset before any rm (defense-in-depth).
+_se_input=$(cat 2>/dev/null || echo '{}')
+_se_sid=$(printf '%s' "$_se_input" | jq -r '.session_id // empty' 2>/dev/null || echo "")
+if [[ -n "$_se_sid" && "$_se_sid" =~ ^[A-Za-z0-9._-]+$ ]]; then
+  rm -f "$HOME/.claude/watchdog/$_se_sid.pid" \
+        "$HOME/.claude/watchdog/$_se_sid.id" \
+        "$HOME/.claude/watchdog/cp-$_se_sid.count" 2>/dev/null || true
+fi
+
 # Secondary GC trigger: clean stale Claude versions on session end (background, non-blocking)
 # Primary trigger is in claude-latest (threshold-based). This catches any accumulation
 # that slipped below threshold or when updates happened outside claude-latest.
