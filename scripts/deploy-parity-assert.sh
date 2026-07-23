@@ -20,7 +20,22 @@
 # CC_PARITY_BINDIR / CC_PARITY_STRICT / CC_PARITY_COPY (fully hermetic — no host deps).
 set -uo pipefail
 
-REPO="${CC_PARITY_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+if [ -n "${CC_PARITY_REPO:-}" ]; then
+  REPO="$CC_PARITY_REPO"
+else
+  # A linked worktree must assert the CANONICAL checkout (the live symlink source),
+  # not itself: live ~/bin links target the shared checkout, so a self-rooted
+  # comparison from a worktree reads every correct link as drift (gate red on
+  # every worktree land). --git-common-dir is ".git" in the main checkout and an
+  # absolute main-.git path in a linked worktree; outside git, fall back to self.
+  _self_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+  _common="$(git -C "$_self_root" rev-parse --git-common-dir 2>/dev/null || true)"
+  case "$_common" in
+    "")  REPO="$_self_root" ;;
+    /*)  REPO="$(cd "$_common/.." && pwd)" ;;
+    *)   REPO="$(cd "$_self_root/$_common/.." && pwd)" ;;
+  esac
+fi
 BINDIR="${CC_PARITY_BINDIR:-$HOME/bin}"
 
 # Tools that MUST be symlinks into the repo (drift is structurally impossible once linked).
