@@ -4,15 +4,15 @@
 
 **Make one machine behave like a fleet — dozens of parallel Claude Code sessions across four accounts, versioned so updates never break a running session, with every Write recoverable and every past session one search away.**
 
-[![Sessions](https://img.shields.io/badge/sessions-4%2C300%2B-d4af37?style=flat-square)](#find-any-past-session-in-milliseconds)
-[![Lifecycle hooks](https://img.shields.io/badge/lifecycle%20hooks-30%2B-d4af37?style=flat-square)](#lifecycle-hooks-on-every-tool-call)
+[![Sessions](https://img.shields.io/badge/sessions-5%2C200%2B-d4af37?style=flat-square)](#find-any-past-session-in-milliseconds)
+[![Lifecycle hooks](https://img.shields.io/badge/lifecycle%20hooks-59-d4af37?style=flat-square)](#lifecycle-hooks-on-every-tool-call)
 [![Deploy](https://img.shields.io/badge/deploy-symlink%20%2B%20install.sh-d4af37?style=flat-square)](#deploy-model)
 
 [Deploy model](#deploy-model) · [Parallel sessions](#run-unlimited-parallel-sessions) · [Updates](#never-break-a-running-session-on-update) · [Hooks](#lifecycle-hooks-on-every-tool-call) · [Backups](#every-write-is-recoverable) · [Search](#find-any-past-session-in-milliseconds) · [Install](#install)
 
 </div>
 
-Custom infrastructure for [Claude Code](https://claude.ai/code) — **11,500+ lines across 90+ files** that turn `~/.claude` from a pile of machine state into a deployable, version-controlled system. Parallel sessions never corrupt each other, updates never break a running session, every Write is recoverable, and any past session is one search away. Battle-tested across **4,300+ sessions**.
+Custom infrastructure for [Claude Code](https://claude.ai/code) — **43,000+ lines across 470+ files, held to ground truth by a 1,398-test bats suite** — that turns `~/.claude` from a pile of machine state into a deployable, version-controlled system. Parallel sessions never corrupt each other, updates never break a running session, every Write is recoverable, and any past session is one search away. Battle-tested across **5,200+ sessions**.
 
 ---
 
@@ -52,14 +52,14 @@ flowchart LR
 
 ~/.claude-versions/   current -> 2.1.114      # atomically-symlinked installs
 ~/bin/                claude-latest · claude-update · claude-versions
-~/Library/LaunchAgents/   session-search sweep (60s) + backfill (weekly)
+~/Library/LaunchAgents/   12 daemons — dispatcher · discovery · reapers · log-rotation · session-search · …
 ```
 
 </details>
 
 ## What's inside
 
-Six subsystems, each fixing one way a single-machine Claude workflow breaks down:
+Seven subsystems, each fixing one way a single-machine Claude workflow breaks down:
 
 | Subsystem | The problem it removes | Entry point |
 |---|---|---|
@@ -69,6 +69,7 @@ Six subsystems, each fixing one way a single-machine Claude workflow breaks down
 | **Backup & recovery** | An overwrite loses work silently | [`backup-before-write.sh`](hooks/backup-before-write.sh) |
 | **Plan & task persistence** | Plans and tasks scatter and get lost | [`plan-version-commit.sh`](hooks/plan-version-commit.sh) |
 | **Session search** | `/resume` is a flat, unsearchable list | [claude-session-search](https://github.com/renchris/claude-session-search) |
+| **Autonomous fleet ops** | 24/7 operation strands, leaks, and silently loses sessions | [`bin/`](bin/) `cc-*` suite · [`ship-land.sh`](scripts/ship-land.sh) |
 
 ---
 
@@ -98,7 +99,7 @@ flowchart LR
 Three traps make naive automation fail; the tooling defeats each:
 
 - **Concurrent sessions share one git index** → bare commits sweep another session's staged files, ref-lock races, clobber. Fix: every writer gets its own **worktree**, and a warm **pool** (`worktree-pool.sh`) hands one out in ~3 s pre-provisioned (node_modules, codegen, `.env.local`, seeded DB).
-- **Launchers are zsh functions** (`claude-next*`, `claude-fable*`, carrying per-account isolation) that no script can `exec`. Fix: `handoff-fire.sh` **types** the launch command into a fresh iTerm2 surface via osascript — anchored to the **firing agent's own window** (via `$ITERM_SESSION_ID`), so the split lands where you're looking, not in whatever window happens to be frontmost.
+- **Launchers are zsh functions** (`claude-next*`, `claude-fable*`, carrying per-account isolation) that no script can `exec`. Fix: `handoff-fire.sh` **types** the launch command into a fresh iTerm2 surface via the it2 python API with echo-verified keystrokes (osascript write-text was retired as unreliable) — anchored to the **firing agent's own window** (via `$ITERM_SESSION_ID`), so the split lands where you're looking, not in whatever window happens to be frontmost.
 - **A hot trunk means N landers race**, each re-running the gate. Fix: `/ship` folds fetch → reconcile → gate → push into ONE machine-wide-locked child (`land-lock.sh`), so exactly one gate runs per landing and the trunk can't move under the push; reconcile is migration-journal-aware (rebase vs reset + cherry-pick + renumber).
 
 | Command | What it does | Detail |
@@ -107,9 +108,9 @@ Three traps make naive automation fail; the tooling defeats each:
 | `handoff-fire.sh --split-right` | Split the firing window; launch account + model + effort + prompt | script header |
 | `handoff-fire.sh --recycle` | Exit + relaunch the CURRENT pane in place | script header |
 | `handoff-fire.sh self-close` | Retire this session's pane once its work is away | script header |
-| `/ship` *(project-side)* | Reconcile onto `origin/main` + push `HEAD:main`, serialized | [WORKTREE_WORKFLOW.md](docs/WORKTREE_WORKFLOW.md) |
+| `/ship` | Fail-closed land: escalation-scan → machine-wide lock → rebase → full gate → push → **content-verify** → stranded-sweep | [`scripts/ship-land.sh`](scripts/ship-land.sh) |
 
-> **Portable vs project-specific.** `handoff-fire.sh`, the isolation policy, and the workflow doc are the **portable** half and live here. The pool, `/ship`, and `land-lock` are **project-specific** (trunk, tenants, migrations) and live in the project repo — this workflow just documents how they connect. Account/model/effort routing reads `~/.claude/model-config.yaml` (per-machine, not synced).
+> **Portable vs project-specific.** `handoff-fire.sh`, the isolation policy, the workflow doc, **and this repo's own fail-closed landing rail** (`ship-land.sh` + `land-lock.sh` + `land-verify.sh` + `stranded-sweep.sh` — machine-wide lock, escalation scan, content-level verification born of a 2026-07-11 silent-drop incident) are the **portable** half and live here. App repos keep their own warm pool and migration-aware `/ship` variants (trunk, tenants, migrations) — this workflow documents how they connect. Account/model/effort routing reads `~/.claude/model-config.yaml` (per-machine, not synced).
 
 ---
 
@@ -162,18 +163,20 @@ Shell aliases (`~/.zshrc`): `claude` (auto-update + auto mode + task-list persis
 
 ## Lifecycle hooks on every tool call
 
-30+ hooks across 8 lifecycle events. All are non-blocking (`exit 0`) — a hook failure never prevents tool execution, except deliberate `PreToolUse` denials.
+59 hooks (+7 shared libs) across 12 lifecycle events. All are non-blocking (`exit 0`) — a hook failure never prevents tool execution — except deliberate `PreToolUse` denials and fact-bound `Stop` blocks (a false "done" is refused against the live git ledger).
 
 ```
-SessionStart   session-start · setup-plan-symlinks · setup-task-symlinks · session-index-start
-PreToolUse     validate-bash (block rm -rf /, sudo rm, fork bombs) · backup-before-write (OVERWRITE GUARD)
-PostToolUse    post-file-edit (auto-format) · plan-index-update · validate-plan-structure ·
-               plan-version-commit · log-bash · task-mutation-index
-TaskCompleted  task-completed-index
-TeammateIdle   teammate-auto-shutdown (exit 2 = force shutdown, zero orphan panes)
-SessionEnd     session-end · session-index-end (rich metadata)
-Notification   notify (audio + desktop)
-PreCompact     log auto/manual compact events
+SessionStart      session-start · session-register · desk-brief-inject · setup-plan/task-symlinks · session-index-start
+UserPromptSubmit  handoff-intent-nudge · research-precognition-nudge · cache-expiry-warning
+PreToolUse        validate-bash · backup-before-write (OVERWRITE GUARD) · git-worktree-guard · agent-teams-enforce ·
+                  smart-bash-allowlist · reset-hard-shadow-allow · ship-rail-push-allow · cc-unattended-ask-guard
+PostToolUse       post-file-edit · plan-index-update · plan-version-commit · log-bash · task-mutation-index · waiting-recycle
+Stop              completion-assert (blocks false "done") · operator-readout (runnable close-block) · session-continue ·
+                  boundary-handoff · anti-deference-nudge
+TaskCompleted     task-completed-index          TeammateIdle   teammate-auto-shutdown (exit 2 = force shutdown)
+SessionEnd        session-end (watchdog handshake) · session-deregister · session-index-end
+Notification      notify (audio + desktop) · push-critical     PermissionRequest   cc-permission-beacon
+PreCompact        compact-event logging          WorktreeCreate  worktree provisioning
 ```
 
 | Hook | Trigger | Key feature |
@@ -183,6 +186,8 @@ PreCompact     log auto/manual compact events
 | [`plan-version-commit.sh`](hooks/plan-version-commit.sh) | Write/Edit on plans | Dual-layer: `MANIFEST.jsonl` + git-repo snapshots |
 | [`teammate-auto-shutdown.sh`](hooks/teammate-auto-shutdown.sh) | TeammateIdle | Exit code 2 → immediate shutdown; zero orphan panes |
 | [`validate-bash.sh`](hooks/validate-bash.sh) | Bash | Pattern-block dangerous commands + audit log |
+| [`completion-assert.sh`](hooks/completion-assert.sh) | Stop | Refuses a false "done" that contradicts the live git/gate ledger |
+| [`operator-readout.sh`](hooks/operator-readout.sh) | Stop | Renders every operator-owned step as a `▶ runnable command` from disk truth |
 
 ---
 
@@ -249,7 +254,21 @@ Three hooks keep the index self-maintaining: `session-index-start` (crash-safe s
 - **Teammate auto-shutdown** — the `TeammateIdle` hook exits code 2 on idle, forcing immediate shutdown (no orphaned panes).
 - **iTerm2 integration** — [`bin/it2-wrapper`](bin/it2-wrapper) (deployed as `~/.claude/bin/it2`) injects `--profile Claude-Teammate` on `session split` and forces modal-free `async_close(force=True)` on forced closes, so teammate panes close cleanly from the UI and from the auto-shutdown hook.
 - **Custom agents** — `schema-migration` (Drizzle, worktree-isolated), `visual-design-iterator`, `north-star-design-agent`, `fresh-eyes-evaluator`.
-- **Custom commands** — `/commit`, `/deploy-status`, `/amplify-build`, `/cleanup-team`, `/handoff`, `/harvest-skill`, and more (see [`commands/`](commands/)).
+- **Custom commands** — `/handoff`, `/ship`, `/wrap`, `/desk`, `/accounts`, `/limit-recover`, `/research`, `/commit`, `/harvest-skill`, and more (see [`commands/`](commands/)).
+
+---
+
+## Autonomous fleet operations
+
+The newest layer (2026-07): the machine runs itself between human check-ins. A standing **desk** session orchestrates; launchd daemons dispatch and watch; anything only the human can do surfaces as a `▶ runnable command`, never a paragraph.
+
+- **Work ledger + dispatch** — [`cc-backlog`](bin/cc-backlog) (append-only JSONL work ledger: event-keyed idempotent ids, claim/reap/thrash guards) feeds [`cc-dispatch`](bin/cc-dispatch) (quota-aware wave planning via [`cc-wave-plan`](bin/cc-wave-plan) + [`claude-accounts`](bin/claude-accounts) ranking across the four accounts).
+- **2-way session comms** — [`cc-notify`](bin/cc-notify) v2 delivers to per-pane file inboxes drained at safe boundaries (never keystrokes into a live prompt); `.forward` chains + role files follow handoffs; [`cc-inbox-guard`](bin/cc-inbox-guard) fail-louds undelivered mail.
+- **Session lifecycle** — every session self-registers ([`session-register.sh`](hooks/session-register.sh), with [`cc-reconcile`](bin/cc-reconcile) backfill healing); [`cc-reaper`](bin/cc-reaper) classifies idle sessions against a cause taxonomy with never-reap defaults, and only identity-pinned, landed, clean panes are closed via [`cc-teardown`](bin/cc-teardown); [`handoff-fire.sh`](scripts/handoff-fire.sh) opens, recycles, and retires sessions with engagement verified by real assistant turns.
+- **Crash supervision** — [`lead-crash-watchdog.sh`](hooks/lead-crash-watchdog.sh) (per-session death classification incl. binary-version telemetry), [`lead-supervisor.sh`](scripts/lead-supervisor.sh) (stall / permission / past-threshold paging daemon), [`cc-crash-report`](bin/cc-crash-report) (crash ledger + dashboard).
+- **Operator surface** — [`cc-decide`](bin/cc-decide) (durable decision packets that survive recycles) and [`cc-digest`](bin/cc-digest) (daily digest + phone push), joined by the blocked-item ledger in [`cc-backlog`](bin/cc-backlog).
+
+Reliability posture: this layer is audited adversarially — most recently a 15-agent verified audit, [`docs/research/infra-reliability-audit-2026-07-22/`](docs/research/infra-reliability-audit-2026-07-22/synthesis.md).
 
 ---
 
@@ -271,9 +290,9 @@ Teammate models must be on the Max auto-mode allowlist (currently `claude-opus-4
 
 | Tier | Behavior |
 |---|---|
-| `allow` (340+) | Auto-approved (read-only commands, WebFetch domains, Edit/Write, MCP tools) |
-| `ask` (45) | Prompt the user (git commit/push, curl, deploy, rm, install) |
-| `deny` (19) | Hard block (force push, sudo, eval/exec, git clean, secrets) |
+| `allow` (350) | Auto-approved (read-only commands, WebFetch domains, Edit/Write, MCP tools) |
+| `ask` (6) | Prompt the user — collapsed from 45 as autonomy moved routine calls behind classifier + hook rails |
+| `deny` (41) | Hard block (force push, sudo, eval/exec, git clean, secrets, raw teardown paths) — doubled as kill authority grew |
 
 Key deny rules (always enforced, even in auto mode): `git push --force`, `sudo`/`su`, `eval`/`exec`, `git clean`, `wget`, `dd`, and reads of `.env*` / `*.key` / `*.pem`.
 
@@ -283,10 +302,20 @@ Key deny rules (always enforced, even in auto mode): `git push --force`, `sudo`/
 
 | Plist | Schedule | Purpose |
 |---|---|---|
-| `com.claude.session-search-sweep` | every 60 s | catch missed session transcripts |
-| `com.claude.session-search-backfill` | Sunday 3 am | full backfill of all sessions |
+| `com.claude.dispatcher` | 15 min | pull open backlog items → quota-aware wave plan → fire worker sessions |
+| `com.claude.discovery` | 60 min | scan ledgers, plans, and gates for new work → feed the backlog |
+| `com.chrisren.autonomy-sweep` | 5 min | alarms / pages / decision-packet sweep → operator escalation |
+| `com.claude.desk-invariant` | 5 min | desk liveness + recycle-armedness fail-loud monitor |
+| `com.claude.boot-resume` | 5 min | post-reboot ghost-session detection + consolidated resume |
+| `com.claude.team-orphan-reaper` | 10 min | archive dead teammate panes/worktrees (identity-pinned) |
+| `com.claude.log-rotation` | 60 min | size-gated rotation of `idl.jsonl` + bash command logs |
+| `com.claude.caffeinate-floor` | KeepAlive | sleep-prevention floor while sessions run |
+| `com.claude.power-policy-verify` | 60 min | assert pmset/caffeinate continuity posture |
+| `com.claude.nightly-regression` | 4 am | full bats suite against the live deployment |
+| `com.claude.session-search-sweep` | 60 s | catch missed session transcripts |
+| `com.claude.session-search-backfill` | weekly | full backfill of all sessions |
 
-Both are low-priority. Install via `launchctl load ~/Library/LaunchAgents/com.claude.*.plist` (the installer does this).
+All low-priority; `install.sh` copies and loads them.
 
 ---
 
@@ -311,7 +340,7 @@ cd claude-infrastructure
 ./install.sh             # idempotent — safe to re-run
 ```
 
-The installer **symlinks** hooks, commands, and scripts into `~/.claude` (edits go live and stay in version control), **copies** bin tools + `statusline.sh` + LaunchAgents, loads the daemons, and validates `settings.json`. For an alternate account: `./install.sh --config-dir ~/.claude-secondary` (copies instead of symlinks, skips global items).
+The installer **symlinks** hooks, commands, and scripts into `~/.claude` (edits go live and stay in version control), **copies** bin tools + `statusline.sh` + LaunchAgents, loads the daemons, and validates `settings.json`. For an alternate account: `./install.sh --config-dir ~/.claude-secondary` (copies instead of symlinks, skips global items). Re-run it after every trunk fast-forward — it links brand-new files (closing the per-file-symlink deploy gap) and refreshes stale copies; `--wire-hooks` additively merges the template hook roster into a live `settings.json` (backup + validation included).
 
 ## Sync
 
@@ -325,8 +354,9 @@ Symlinked surfaces (hooks, commands, scripts on the primary) need no sync — ed
 
 ## Stats
 
-- **11,500+ lines** of infrastructure across **90+ files**
-- **30+ hooks** across 8 lifecycle events; **19 deny / 45 ask / 340+ allow** rules
+- **43,000+ lines** of infrastructure across **470+ files**, plus a **16,500-line test suite (1,398 bats tests)**
+- **59 hooks** across 12 lifecycle events; **41 deny / 6 ask / 350 allow** rules
+- **39 `bin/` tools** (the `cc-*` fleet-ops suite) + **12 launchd daemons**
 - **Atomic** version swap (`rename(2)`) + dual-trigger auto-GC
-- **4,300+ sessions** indexed and FTS5-searchable (<5 ms)
+- **5,200+ sessions** indexed and FTS5-searchable (<5 ms)
 - **4 isolated accounts** + unlimited worktree-isolated parallel sessions
