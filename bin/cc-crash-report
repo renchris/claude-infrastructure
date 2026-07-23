@@ -38,7 +38,7 @@ summarize_ledger() {
   echo "── claude crash ledger: $LEDGER ──"
   python3 - "$LEDGER" <<'PY'
 import json, sys, collections
-cls=collections.Counter(); cause=collections.Counter(); crashes=[]
+cls=collections.Counter(); cause=collections.Counter(); ver=collections.Counter(); crashes=[]
 for line in open(sys.argv[1], errors="ignore"):
     line=line.strip()
     if not line: continue
@@ -46,15 +46,18 @@ for line in open(sys.argv[1], errors="ignore"):
     except: continue
     cls[r.get("class","?")]+=1; cause[r.get("cause","?")]+=1
     if r.get("class")=="CRASH":
-        crashes.append(r)
+        crashes.append(r); ver[r.get("claude_version","?")]+=1
 tot=sum(cls.values())
 print(f"deaths recorded: {tot}   ({cls.get('CRASH',0)} CRASH · {cls.get('RECYCLE',0)} RECYCLE)")
 print("cause:")
 for k,v in cause.most_common(): print(f"   {k:28s} {v}")
+if ver:
+    print("crash by claude_version (the version-regression signal):")
+    for k,v in ver.most_common(): print(f"   {k:12s} {v}")
 if crashes:
     print("\nmost recent crashes:")
     for r in crashes[-12:]:
-        print(f"   {r.get('ts','?')}  {str(r.get('sid',''))[:8]}  {r.get('cause','?'):26s} "
+        print(f"   {r.get('ts','?')}  {str(r.get('sid',''))[:8]}  v{str(r.get('claude_version','?')):8s} {r.get('cause','?'):24s} "
               f"{r.get('transcript_kb','?')}KB  mem_free={r.get('mem_free_pct','?')}%  n_claude={r.get('concurrent_claude','?')}")
 PY
 }
