@@ -92,7 +92,21 @@ scan_stale_permissions() {
 
     log "auto-deny $count stale permission_request(s) for $team_name/$member"
 
-    # Append one deny envelope per stale request
+    # Append one deny envelope per stale request — UNDER A MUTEX. The crash-watchdog
+    # (lead-crash-watchdog.sh) appends shutdown/deny envelopes to this SAME inbox; two read-modify-write
+    # cycles with last-mv-wins would silently drop one side's envelope. An inline mkdir lock (portable —
+    # macOS has no flock) whose dir name is SHARED VERBATIM with the watchdog ("$inbox.lock.d") makes the
+    # two exclude each other. Acquire ≤2s (0.1s steps), self-break a stale lock (holder died) >10s old,
+    # and on give-up proceed lock-free — dup-biased: a duplicate deny is harmless, a hung reaper is not.
+    local lockd="$inbox.lock.d" waited=0 lmt lnow lage
+    while ! mkdir "$lockd" 2>/dev/null; do
+      lmt=$(stat -f %m "$lockd" 2>/dev/null || stat -c %Y "$lockd" 2>/dev/null || echo 0)
+      lnow=$(date +%s 2>/dev/null || echo 0)
+      lage=$(( lnow - lmt ))
+      if [[ "$lage" -ge 10 ]]; then rm -rf "$lockd" 2>/dev/null; continue; fi   # stale → holder died, break it
+      [[ "$waited" -ge 2000 ]] && break                                          # gave up → proceed lock-free
+      sleep 0.1 2>/dev/null || sleep 1; waited=$(( waited + 100 ))
+    done
     local tmp
     tmp=$(mktemp)
     jq --argjson stale "$stale" --arg ts "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" '
@@ -104,6 +118,7 @@ scan_stale_permissions() {
         read: false
       }))
     ' "$inbox" > "$tmp" && mv "$tmp" "$inbox" || rm -f "$tmp"
+    rmdir "$lockd" 2>/dev/null || true
   done
 }
 
