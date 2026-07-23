@@ -10,7 +10,11 @@
 # blocker, no 4-hook yield-guards, no wall-clock TTL. Idle/mid-turn mail is caught by the target's armed
 # cc-await-ping watcher (seeded from .seen so it never misses a pending line); the cc-inbox-guard is the
 # fail-loud backstop. SessionStart + UserPromptSubmit are the harness's two RELIABLE additionalContext
-# boundaries, so a delivery here is immediately ack'd (mailbox_take …1) — the guard need never chase it.
+# boundaries, so a delivery here advances ONLY the .seen (emitted) cursor (mailbox_take …0) — never the
+# .acked (consumed) cursor. .acked is promoted one cycle later at the next Stop fold (session-continue.sh
+# → mailbox_promote_acked), the moment a turn PROVABLY carried the mail. Dup-biased BY DESIGN: a death
+# after drain but before that Stop re-surfaces the mail next boundary (a visible dup) — acking at drain
+# would instead have marked it consumed and SILENTLY LOST it on a mid-turn death the guard can't see.
 #
 # The inbox is ~/.claude/mailbox/<own-pane-uuid>.md; delivery is exactly-once via the split cursor
 # (.seen emitted / .acked consumed) under a lock — see hooks/lib/mailbox-pending.sh.
@@ -40,10 +44,11 @@ case "$MODE" in
   *)             exit 0 ;;   # Stop / unknown are not handled here (see fix B)
 esac
 
-# LOCKED atomic take on a RELIABLE boundary → advance both cursors (ack_now=1). Body on stdout; rc 1 =
-# nothing new; rc 2 = delivered-but-cursor-write-failed (still surface the body — better a dup next turn
-# than a drop; the re-deliver is bounded and the guard sees the un-advanced .acked).
-body="$(mailbox_take "$own_uuid" 1)"; rc=$?
+# LOCKED atomic take on a RELIABLE boundary → advance ONLY .seen (ack_now=0); .acked is promoted at the
+# next Stop fold (session-continue.sh → mailbox_promote_acked) once a turn provably consumed the mail.
+# Body on stdout; rc 1 = nothing new; rc 2 = delivered-but-.seen-write-failed (still surface the body —
+# better a dup next turn than a drop; the re-deliver is bounded and the guard sees the un-advanced .acked).
+body="$(mailbox_take "$own_uuid" 0)"; rc=$?
 
 # ── ADOPTION (v3 D1) — SessionStart only: inherit what a predecessor pane never consumed ──────────
 # A pane that self-closed with a successor left `<old>.forward` → us. Its inbox may still hold lines
@@ -72,7 +77,7 @@ if [ "$MODE" = "session-start" ] && command -v mailbox_migrate >/dev/null 2>&1; 
     _adopted=$(( _adopted + _n ))
   done
   if [ "$_adopted" -gt 0 ]; then
-    _more="$(mailbox_take "$own_uuid" 1)"                      # surface the adopted lines NOW
+    _more="$(mailbox_take "$own_uuid" 0)"                      # surface the adopted lines NOW
     [ -n "$_more" ] && body="$([ -n "$body" ] && printf '%s\n' "$body"; printf '%s' "$_more")"
   fi
 fi
