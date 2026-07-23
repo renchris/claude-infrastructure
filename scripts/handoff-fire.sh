@@ -2020,6 +2020,9 @@ recycle_fire() {
   fi
   echo "→ recycle armed for $SID: watcher pid $WATCHER_PID (session-detached, heartbeat verified) relaunches $LAUNCHER once claude exits (log: $log)"
   echo "  manual fallback if no relaunch appears: $CMD"
+  # Teardown marker BEFORE the first /exit — the crash watchdog must read a planned recycle, not a
+  # CRASH (the /exit interrupt kills this pane mid-Bash). Guarded: never blocks the close.
+  write_teardown_marker "$SID" recycle || true
   wrote=0
   for _ in 1 2 3; do
     if as_write "$SID" "/exit" 2>/dev/null; then wrote=1; break; fi
