@@ -180,7 +180,7 @@ log "registered session=$SESSION_ID pid=$LEAD_PID"
     # grep -c exits 1 on zero matches (true when the dead session was the LAST claude proc);
     # `|| true` keeps that from tripping `set -e` and aborting handle_crash before the crash
     # record AND the team-recovery below run. grep still prints "0" to stdout.
-    concurrent=$(ps aux 2>/dev/null | grep -c '[c]laude\.exe' || true)
+    concurrent=$(ps aux 2>/dev/null | grep -cE '[c]laude\.exe|[n]ode_modules/\.bin/claude' || true)
     # claude_version — THE decisive field: the crash rate is version-correlated (a regression
     # onset at 2.1.207: 2.1.183=0.02% → 2.1.207=4.76% → 2.1.215=1.56%, all mid-Bash in-process
     # deaths, NOT transcript size). Read from the transcript tail (every record carries it), cheap.
