@@ -86,6 +86,7 @@ disown 2>/dev/null || true
     [[ "$v" == "current" || "$v" == .* ]] && continue
     versions+=("$v")
   done
+  # shellcheck disable=SC2207  # intentional word-split of sorted version list (pre-existing)
   IFS=$'\n' sorted=($(printf '%s\n' "${versions[@]}" | sort -t. -k1,1rn -k2,2rn -k3,3rn))
   unset IFS
 
@@ -103,6 +104,7 @@ disown 2>/dev/null || true
   for v in "${sorted[@]}"; do
     [[ -n "${keep_set[$v]:-}" ]] && continue
     pgrep -f "claude-versions/$v" >/dev/null 2>&1 && continue
+    # shellcheck disable=SC2115  # VERSIONS_DIR is always set (top of block); guard is defensive (pre-existing)
     rm -rf "$VERSIONS_DIR/$v" 2>/dev/null && \
       echo "[$(date '+%Y-%m-%d %H:%M:%S')] SessionEnd GC: removed $v" >> "$HOME/.claude/.update-versions.log"
   done
