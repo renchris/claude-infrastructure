@@ -28,6 +28,59 @@ log() {
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG_FILE" 2>/dev/null || true
 }
 
+# ── death classification helpers (top-level so the daemon subshell inherits them,
+#    and so `lead-crash-watchdog.sh --classify <sid>` is unit-testable) ───────────
+# A pid death with the pid-file still present is EITHER a deliberate self-recycle
+# (handoff-fire --recycle / self-close kills the pane with no clean SessionEnd) OR a
+# genuine crash (jetsam OOM, abort, external kill). kill -0 cannot tell them apart, so
+# thousands of "LEAD CRASH" lines accumulated conflating both. This separates them from
+# disk truth and, on a real crash, attributes the cause. Bias: unsure ⇒ CRASH (a hidden
+# crash is worse than a spurious alert).
+find_transcript() {
+  local sid="$1" base hit
+  # account roots are env-overridable for tests (default: the 4 live account dirs)
+  local bases="${CC_ACCOUNT_BASES:-$HOME/.claude $HOME/.claude-secondary $HOME/.claude-tertiary $HOME/.claude-quaternary}"
+  # shellcheck disable=SC2086  # intentional word-split over space-separated bases
+  for base in $bases; do
+    hit=$(ls "$base"/projects/*/"$sid"*.jsonl 2>/dev/null | head -1)
+    [[ -n "$hit" ]] && { printf '%s' "$hit"; return 0; }
+  done
+  return 1
+}
+
+classify_death() {
+  # prints: CLASS<TAB>CAUSE<TAB>transcript_kb<TAB>records   (CLASS = RECYCLE|CRASH)
+  local sid="$1" t body kb=0 recs=0
+  t=$(find_transcript "$sid") || { printf 'CRASH\tno-transcript\t0\t0'; return 0; }
+  kb=$(( $(stat -f%z "$t" 2>/dev/null || echo 0) / 1024 ))
+  recs=$(wc -l < "$t" 2>/dev/null | tr -d ' ')
+  # 1) JETSAM FIRST — a JetsamEvent report within ~6 min is an unambiguous system OOM
+  #    kill and OUTRANKS any recycle text (a kill mid-recycle is still a kill).
+  local jdirs="${CC_JETSAM_DIRS:-/Library/Logs/DiagnosticReports $HOME/Library/Logs/DiagnosticReports}"
+  # shellcheck disable=SC2086  # intentional word-split over space-separated dirs
+  if find $jdirs -name 'JetsamEvent-*.ips' -mmin -6 2>/dev/null | grep -q .; then
+    printf 'CRASH\tjetsam-oom\t%s\t%s' "${kb:-0}" "${recs:-0}"; return 0
+  fi
+  # 2) DELIBERATE RECYCLE — the disposition/self-close phrases and the successor-brief
+  #    text a session emits when it CHOOSES to recycle (incl. the brief written into the
+  #    trailing last-prompt record). Bare "handoff-fire"/"self-close" are excluded —
+  #    infra-dev sessions discuss them without firing, which would mask a real crash.
+  body=$(tail -c 16000 "$t" 2>/dev/null || true)
+  if printf '%s' "$body" | grep -qiE 'DISPOSITION: *CLOSE|Firing as the last action|the recycle IS the continuation|retiring this pane|becomes the successor|a recycle keeps|recycle keeps (this|the) pane|recycled at [0-9]+%|— recycled|Context Stewardship free-win'; then
+    printf 'RECYCLE\tdeliberate-self-close\t%s\t%s' "${kb:-0}" "${recs:-0}"; return 0
+  fi
+  # 3) otherwise a genuine but un-attributed crash (large context ⇒ likely OOM)
+  local cause="abrupt-unknown"
+  [[ "${kb:-0}" -gt 4096 ]] && cause="suspected-oom-large-context"
+  printf 'CRASH\t%s\t%s\t%s' "$cause" "${kb:-0}" "${recs:-0}"
+}
+
+# Test/debug entrypoint (CC never passes args to this SessionStart hook): classify a
+# session id and exit, without spawning the daemon or reading stdin.
+if [[ "${1:-}" == "--classify" ]]; then
+  classify_death "${2:-}"; echo; exit 0
+fi
+
 # Parse hook JSON stdin
 INPUT=$(cat 2>/dev/null || echo '{}')
 SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // empty' 2>/dev/null || echo '')
@@ -70,9 +123,34 @@ log "registered session=$SESSION_ID pid=$LEAD_PID"
     done
   }
 
+  CRASH_JSONL="$HOME/.claude/logs/claude-crashes.jsonl"
+
   handle_crash() {
     local pid="$1" sid="$2"
     local affected_team_dirs=()
+
+    # Classify the death + snapshot cause BEFORE team handling, so solo AND team
+    # deaths land in the structured crash ledger honestly (classify_death + find_transcript
+    # are defined at top level and inherited by this subshell).
+    local _cls class cause kb recs mem_free concurrent
+    _cls=$(classify_death "$sid")
+    class=$(printf '%s' "$_cls" | cut -f1)
+    cause=$(printf '%s' "$_cls" | cut -f2)
+    kb=$(printf '%s' "$_cls" | cut -f3)
+    recs=$(printf '%s' "$_cls" | cut -f4)
+    mem_free=$(/usr/bin/memory_pressure 2>/dev/null | awk -F'[: ]+' '/free percentage/{print $(NF)}' | tr -d '%' || true)
+    # grep -c exits 1 on zero matches (true when the dead session was the LAST claude proc);
+    # `|| true` keeps that from tripping `set -e` and aborting handle_crash before the crash
+    # record AND the team-recovery below run. grep still prints "0" to stdout.
+    concurrent=$(ps aux 2>/dev/null | grep -c '[c]laude\.exe' || true)
+    printf '{"ts":"%s","sid":"%s","pid":%s,"class":"%s","cause":"%s","transcript_kb":%s,"records":%s,"mem_free_pct":"%s","concurrent_claude":%s}\n' \
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$sid" "${pid:-0}" "$class" "$cause" "${kb:-0}" "${recs:-0}" "${mem_free:-?}" "${concurrent:-0}" \
+      >> "$CRASH_JSONL" 2>/dev/null || true
+    echo "[watchdog $sid] death class=$class cause=$cause (${kb}KB/${recs}recs mem_free=${mem_free:-?}% concurrent=${concurrent})"
+    # A deliberate recycle is not a crash — only alert on a genuine crash.
+    if [[ "$class" == "CRASH" ]]; then
+      osascript -e "display notification \"Session ${sid:0:8} crashed — ${cause}. See claude-crashes.jsonl\" with title \"Claude Crash\" sound name \"Basso\"" 2>/dev/null || true
+    fi
 
     # Which teams had this session as lead? Scan ALL team roots — CC writes
     # $CLAUDE_CONFIG_DIR/teams/<team>/, so *2/*3-launcher leads (claude-next2 /
