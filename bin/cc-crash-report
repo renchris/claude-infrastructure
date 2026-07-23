@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+# cc-crash-report — turn the lead-crash-watchdog signal into an honest answer.
+#
+# The watchdog logs "LEAD CRASH detected" whenever a lead pid dies while its pid-file
+# survives — which conflates a deliberate self-recycle, a genuine crash (jetsam OOM /
+# abort), and an operator pane-close. This reads the de-conflated ledger that
+# lead-crash-watchdog.sh now writes (~/.claude/logs/claude-crashes.jsonl) and, with
+# --backfill, reclassifies recent historical deaths whose transcripts still exist.
+#
+# Usage:
+#   cc-crash-report                 # summarize the going-forward ledger
+#   cc-crash-report --backfill [N]  # reclassify the last N (default 90) logged deaths
+#   cc-crash-report --crashes       # list only genuine CRASHes from the ledger
+#
+# Read-only. Cause = jetsam-oom (a JetsamEvent within ~6 min of death — highest
+# confidence) | suspected-oom-large-context (>4MB transcript) | abrupt-unknown | ...
+set -euo pipefail
+
+# lead-crash-watchdog.sh writes its logs to ~/.claude/logs REGARDLESS of which account
+# (CLAUDE_CONFIG_DIR) a session runs on — it hardcodes $HOME/.claude — so the ledger is
+# centralized there, not per-account.
+LOGDIR="${CC_LOG_DIR:-$HOME/.claude/logs}"
+LEDGER="${CC_CRASH_JSONL:-$LOGDIR/claude-crashes.jsonl}"
+WD_LOG="${CC_WD_LOG:-$LOGDIR/lead-crash-watchdog.log}"
+# resolve the watchdog hook (for --backfill --classify). Prefer the repo-local SIBLING —
+# cc-crash-report and lead-crash-watchdog.sh always ship from the same commit, so the
+# sibling is guaranteed --classify-capable. This resolves correctly both in a worktree and
+# when symlinked into ~/.claude/bin (../hooks then points at the repo's hooks).
+HOOK="${CC_WATCHDOG_HOOK:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd)/hooks/lead-crash-watchdog.sh}"
+[[ -f "$HOOK" ]] || HOOK="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lead-crash-watchdog.sh"
+
+summarize_ledger() {
+  if [[ ! -s "$LEDGER" ]]; then
+    echo "No crash ledger yet at $LEDGER"
+    echo "(the de-conflated ledger populates as lead-crash-watchdog.sh detects deaths — run --backfill for history)"
+    return 0
+  fi
+  echo "── claude crash ledger: $LEDGER ──"
+  python3 - "$LEDGER" <<'PY'
+import json, sys, collections
+cls=collections.Counter(); cause=collections.Counter(); crashes=[]
+for line in open(sys.argv[1], errors="ignore"):
+    line=line.strip()
+    if not line: continue
+    try: r=json.loads(line)
+    except: continue
+    cls[r.get("class","?")]+=1; cause[r.get("cause","?")]+=1
+    if r.get("class")=="CRASH":
+        crashes.append(r)
+tot=sum(cls.values())
+print(f"deaths recorded: {tot}   ({cls.get('CRASH',0)} CRASH · {cls.get('RECYCLE',0)} RECYCLE)")
+print("cause:")
+for k,v in cause.most_common(): print(f"   {k:28s} {v}")
+if crashes:
+    print("\nmost recent crashes:")
+    for r in crashes[-12:]:
+        print(f"   {r.get('ts','?')}  {str(r.get('sid',''))[:8]}  {r.get('cause','?'):26s} "
+              f"{r.get('transcript_kb','?')}KB  mem_free={r.get('mem_free_pct','?')}%  n_claude={r.get('concurrent_claude','?')}")
+PY
+}
+
+backfill() {
+  local n="${1:-90}"
+  [[ -f "$WD_LOG" ]] || { echo "no watchdog log at $WD_LOG"; return 1; }
+  [[ -f "$HOOK" ]] || { echo "cannot resolve watchdog hook for --classify"; return 1; }
+  # HARD GUARD: never invoke a hook that lacks --classify — an old copy would ignore the
+  # arg, read stdin, and spawn a watchdog daemon per call (log pollution + stray daemons).
+  grep -q -- '--classify' "$HOOK" || { echo "watchdog hook $HOOK has no --classify support (stale?) — refusing to avoid spawning daemons"; return 1; }
+  echo "── backfill: reclassifying the last $n watchdog-detected deaths ──"
+  # unique recent crashed sids, most-recent order
+  local sids
+  sids=$(grep -aoE '\[watchdog [0-9a-f-]{36}\] LEAD CRASH detected' "$WD_LOG" \
+         | grep -oE '[0-9a-f-]{36}' | tail -"$n" | awk '!seen[$0]++')
+  local R=0 C=0 gone=0
+  local tmp; tmp=$(mktemp)
+  local sid out cl ca kb
+  for sid in $sids; do
+    out=$(bash "$HOOK" --classify "$sid" 2>/dev/null)
+    cl=$(printf '%s' "$out" | cut -f1); ca=$(printf '%s' "$out" | cut -f2); kb=$(printf '%s' "$out" | cut -f3)
+    [[ "$ca" == "no-transcript" ]] && { gone=$((gone+1)); continue; }
+    if [[ "$cl" == "RECYCLE" ]]; then R=$((R+1)); else C=$((C+1)); printf '%s\t%s\t%s\n' "${sid:0:8}" "$ca" "$kb" >> "$tmp"; fi
+  done
+  echo "analyzed (transcript on disk): $((R+C))   ·   aged-out (skipped): $gone"
+  echo "   RECYCLE (deliberate self-close): $R"
+  echo "   CRASH   (genuine, upper bound):  $C"
+  echo "   note: abrupt-unknown conflates real crashes with operator pane-closes;"
+  echo "         the large-context and jetsam-oom rows are the hard OOM signal."
+  echo
+  echo "── genuine CRASHes by cause (largest first) ──"
+  sort -t$'\t' -k3 -rn "$tmp" | awk -F'\t' '{printf "   %-9s %-28s %6sKB\n",$1,$2,$3}'
+  rm -f "$tmp"
+}
+
+case "${1:-}" in
+  --backfill) backfill "${2:-90}" ;;
+  --crashes)
+    [[ -s "$LEDGER" ]] && grep -a '"class":"CRASH"' "$LEDGER" || echo "no crashes in ledger" ;;
+  -h|--help) sed -n '2,20p' "$0" ;;
+  "") summarize_ledger ;;
+  *) echo "unknown arg: $1 (use --backfill [N] | --crashes | --help)" >&2; exit 2 ;;
+esac
