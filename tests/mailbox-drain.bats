@@ -60,13 +60,18 @@ add()  { printf '%s\n' "$@" >> "$MBOX"; }
   [ ! -f "$SEEN" ]               # and it did NOT consume the mail (session-continue / watcher will)
 }
 
-@test "reliable channel advances BOTH cursors → guard's unacked_count is 0 (fix A: split cursor)" {
+@test "ack-on-consume: a reliable drain advances ONLY .seen; .acked waits for the Stop fold (no mid-turn loss)" {
   seed "page one" "page two"
   echo '{}' | "$DRAIN" prompt >/dev/null
-  [ "$(cat "$SEEN")" -eq 2 ]
-  [ "$(cat "$CC_MAILBOX_DIR/$UUID.acked")" -eq 2 ]   # additionalContext is reliable → immediate ack
-  # the cc-inbox-guard keys on unacked (lines-acked); after a reliable drain it is 0 → no false alarm
+  [ "$(cat "$SEEN")" -eq 2 ]                          # emitted cursor advanced at the boundary
+  [ ! -f "$CC_MAILBOX_DIR/$UUID.acked" ]              # consumed cursor NOT advanced at drain (deferred)
   source "$REPO/hooks/lib/mailbox-pending.sh"
+  # the cc-inbox-guard keys on unacked (lines-acked): still 2 right after the drain — the model has not
+  # yet provably taken a turn carrying this mail, so a mid-turn death here re-surfaces it (dup, not loss).
+  [ "$(CC_MAILBOX_DIR="$CC_MAILBOX_DIR" mailbox_unacked_count "$UUID")" -eq 2 ]
+  # the next Stop fold promotes .acked=.seen → unacked drops to 0 (no false alarm on already-consumed mail)
+  CC_MAILBOX_DIR="$CC_MAILBOX_DIR" mailbox_promote_acked "$UUID"
+  [ "$(cat "$CC_MAILBOX_DIR/$UUID.acked")" -eq 2 ]
   [ "$(CC_MAILBOX_DIR="$CC_MAILBOX_DIR" mailbox_unacked_count "$UUID")" -eq 0 ]
 }
 
