@@ -109,6 +109,7 @@ scan_stale_permissions() {
     done
     local tmp
     tmp=$(mktemp)
+    # shellcheck disable=SC2015  # deliberate A&&B||C: tmp is rm'd on either jq-or-mv failure; a successful mv cannot reach the rm
     jq --argjson stale "$stale" --arg ts "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" '
       . + ($stale | map({
         from: "reaper",
