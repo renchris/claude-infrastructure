@@ -23,13 +23,16 @@ does not duplicate — [`session-crash-diagnosis-2026-07-22.md`](session-crash-d
    watchdog's `LEAD_PID` — so the next crash **names** the mechanism and joins straight to its
    session + crash-ledger row.
 
-2. **The 520 MB-RSS puzzle keeps the leak/spike hypothesis live.** The prior doc concluded
-   *per-session bloat → single-process OOM* from genuinely enormous transcripts (65 MB / 16,963
-   records). But its own evidence — **peak RSS ~520 MB** — cannot OOM a 64 GB box and sits far
-   below any V8/JSC heap ceiling (~1.5–4 GB), and the operator has run **100%-context sessions
-   with zero crashes**. So transcript size *alone* does not explain it; a **leak/spike** (the
-   operator's hypothesis) remains open. The stderr capture is the discriminator — it resolves
-   "JS-heap-OOM vs internal-limit vs `/compact`-crash" on the next event, not by theory.
+2. **RESOLVED — the crashes are a Claude Code VERSION REGRESSION, not per-session bloat/OOM.** An
+   8,637-transcript scan across all 4 account roots (axis C) puts the genuine-crash rate at
+   **0.02% on 2.1.183 → 4.76% on 2.1.207 → 1.56% on 2.1.215** (regression onset ~July 11),
+   **100/100 dying mid-`Bash` tool-call** (the `tool_result` never arrives), median transcript
+   **1.27 MB** — small. This **dissolves the 520 MB-RSS puzzle: it was never an OOM** (jetsam never
+   takes `claude.exe`; `mem_free` ~87% at crash time). It also explains the operator's paradox —
+   100%-context sessions on 2.1.183 never crashed; low-context sessions on 2.1.207+ do. **The
+   primary prevention lever is the CC binary version, not session size** (see operator decisions).
+   The stderr capture will name the exact 2.1.215 fault on the next event; the ledger now records
+   `claude_version` so the regression is one grep.
 
 3. **The "LEAD CRASH" signal was 93% false at the ROOT.** No `SessionEnd` hook removed the
    watchdog pid-file, so the daemon's clean-exit branch (`pid file gone`) was **never taken** on a
@@ -146,44 +149,128 @@ and green.
 
 ---
 
-## Part 4 — `/handoff` mechanism audit  *(integrating axis A)*
+## Part 4 — `/handoff` mechanism audit (axis A) — NOT the OOM culprit
 
-_Pending research-workflow synthesis: orphaned watchers/daemons, unbounded per-fire state, temp-file
-and fd leaks in `scripts/handoff-fire.sh` (2127 lines), `handoff-disposition.sh`, the handoff skill,
-and the `cc-await-ping` / `cc-notify` / mailbox back-channels._
+Adversarially verified (12/13 A/B findings CONFIRMED; B5 REFUTED). The handoff path is well-behaved
+and does **not** retain memory in the CC node process:
 
----
+- **A3 (confirmed):** every handoff-spawned watcher is **bounded + self-terminating** — `detach()`
+  uses `start_new_session=True` so watchers survive the `/exit` group-SIGKILL by design, but each
+  exits on its own (`__selfclose` ≤180 s, `__recycle` ≤600 s; `cc-await-ping` is foreground with a
+  1800 s timeout + `trap … EXIT` watchfile cleanup). No leaking daemon, no fd leak.
+- **A4 (confirmed):** the self-close / `--recycle` common path types a foreground `/exit` →
+  SessionEnd runs → (post-root-fix) the pidfile is removed cleanly. `classify_death` remains needed
+  only for genuine OOM + the rare 180 s-hung force-close fallback.
+- **A1/A2/A6 (confirmed, FIXED):** per-fire `/tmp` litter (`handoff-selfclose-*.log`,
+  `handoff-recycle-*`, `handoff-prompt-nb-*`; ~740 in 5 d, ~80 % test-fixture) had **no reaper** —
+  now age-swept by the session-end straggler pass (`b2e8e1f`).
+- **A5 (confirmed, SURFACED):** dead-pane `mailbox/*.md` inboxes (73 files, largest 208 KB) are
+  append-only with a read-cursor, never GC'd. Safe fix is age/dead-pane GC — **not** `.acked`-based
+  (that cursor is a line count; deleting on it loses unread mail — the B4 verify caught this).
 
-## Part 5 — Genuine-crash isolation  *(integrating axis C)*
+**Bottom line: axis A is not the RSS-OOM source.** The crash lives in the CC binary (Part 5).
 
-_Pending: the defensible real-crash count/rate (transcripts truncated mid-tool_use, api-error
-records, no-final-assistant) across the 4 account roots, and any common factor (version / operation
-/ hook / account / time), cross-referenced with JetsamEvent timing._
+## Part 5 — Genuine-crash isolation (axis C) — the version regression
 
----
+A Python classifier scanned all **8,637** transcripts across the 4 account roots (realpath-deduped),
+classifying each end clean vs abnormal (last record an assistant `tool_use` with no matching
+`tool_result`; api-error records; abrupt EOF), then version-normalized the abnormal rate.
 
-## Part 6 — Telemetry design (concise, zero-bloat)  *(integrating axis D)*
+- **7,662 clean ends; ~100 genuine abnormal in-process deaths** over the 30-day window.
+- **The dominant factor is a CC version regression, not size or memory:**
 
-_Pending: the exact one-line-per-handoff and one-line-per-crash schemas, reconciled with the existing
-`claude-crashes.jsonl` + `cc-crash-report`, emit points, and the one-grep recipes._
+  | version | active | crash rate |
+  |---|---|---|
+  | 2.1.183 | 06-22…07-11 | **0.02 %** (1/5170) — safe |
+  | 2.1.207 | 07-11…07-22 | **4.76 %** (80/1682) |
+  | 2.1.215 | 07-19…now | **1.56 %** (19/1220, ~6/day — still broken) |
 
----
+- **100/100 died mid-`Bash`** (Read/Edit/Grep finish in ms and never truncate; only Bash holds the
+  death-window open). 0/100 interrupt markers, 0/100 sidechains, **median 1.27 MB**.
+- **Jetsam-correlation zero** — 2 JetsamEvents in the window, both `qemu`, never `claude.exe`;
+  `mem_free` ~87 % at crash time. Not an OS memory kill, not an OOM.
 
-## Part 7 — Frontier (Fable) unknown-unknowns  *(integrating)*
+This is the operator's "crash to shell," and it is **version-caused**. The stderr capture (`0eed887`)
+will name the exact 2.1.215 fault on the next event.
 
-_Pending: baseline-blind derivation of retention/lifecycle seams (daemon double-spawn across
-in-place recycle, pid-reuse false-alive, O(n) inbox rewrites) beyond the Opus-visible findings._
+**Live corroboration + a second false-positive class.** The ledger gained **16 CRASH rows in a 6-min
+window tonight** (`n_claude` 9→0, `mem_free` 87 %). These are **not** the regression (which spreads
+over days) — the frontier (Part 7) identified them as **workflow subagents completing**: an agent
+runs the full watchdog at SessionStart but never fires SessionEnd, so its pidfile persists and the
+daemon logs a false CRASH. A distinct false-positive class the SessionEnd root fix cannot cover —
+surfaced below.
+
+## Part 6 — Telemetry (concise, zero-bloat) — SHIPPED
+
+Two structured lines, both self-bounded, no per-turn cost (written only on a fire or a death):
+
+- **Per-crash** — extend the existing `claude-crashes.jsonl` (do NOT fork): `handle_crash` now
+  records **`claude_version`** (the decisive regression signal) + **`stderr_log`** (joins the crash
+  to the launcher's captured stderr by pid). `cc-crash-report` renders a **crash-by-version
+  histogram** + version per row. Readers tolerate the additive keys — zero reader change. (`4d7dd2f`)
+- **Per-handoff** — new `~/.claude/logs/handoffs.jsonl`, one line per real fire
+  (`ts, firing_sid, class, engaged, target_pane, account, firing_rss_kb`), self-bounded to 500.
+  (`9d722fb`)
+
+One-grep answers: *did THIS handoff engage?* `grep '"firing_sid":"<sid>"' handoffs.jsonl`; *crash —
+why + what version?* `grep '"class":"CRASH"' claude-crashes.jsonl | jq '[.ts,.claude_version,.cause,.stderr_log]'`;
+*the regression* → `cc-crash-report`'s histogram. Bloat: ~190 B/handoff-line, ~230 B/crash-line;
+0–600 B per session, usually one line or zero.
+
+## Part 7 — Frontier (Fable) unknown-unknowns — the delta above Opus
+
+The bounded Fable derivation panel found watchdog-subsystem defects the Opus audit + verify missed.
+**Fixed here** (safe, small, verified):
+
+- **rm-race disarm (critical, confirmed — 125 instances) → FIXED (`4d7dd2f`):** `handle_crash`
+  deleted `<sid>.pid` without checking it still held its own pid; a resume/re-fire overwrites it with
+  the successor's live pid → deletion silently disarms a LIVE session. Now guarded.
+- **`/clear` regression in the root fix (confirmed on the reaper side) → FIXED (`b2e8e1f`):**
+  SessionEnd also fires on `/clear` while the process survives; removing the pidfile flips
+  `team-orphan-reaper` to "lead dead" and could archive a live team. Now skipped on `reason=clear`.
+
+**Surfaced (larger / riskier — the clean solution is ONE campaign, not point-fixes):**
+
+- **Watchdog daemon stacking (high, confirmed):** SessionStart is source-blind + spawn-unguarded →
+  `/clear`//compact//resume stack N daemons per process (3262 spawns vs 3098 sids); all N fire at
+  death → N duplicate crash records + **N racing jq inbox rewrites = lost-message races**. Needs a
+  per-sid spawn guard / single-instance lock.
+- **Subagent false-crashes (high, confirmed):** agents run the full watchdog but never fire
+  SessionEnd → every completing subagent writes a false CRASH + Basso (tonight's 16-cluster). Fix:
+  the watchdog should not arm for agent invocations (detect `--agent-id` / `isSidechain`).
+- **`idl.jsonl` rotation deadlock (high, confirmed):** the 72 MB / 370 K-line audit log's
+  `rotate-autonomy-logs.sh` has zero callers AND `cc-idl`'s hash-seal chain makes rotation
+  tamper-fault — a design conflict (rotation must become a seal-chain epoch).
+- **Others:** `cc-reaper` has no single-instance lock (concurrent sweeps race); `session-index`
+  re-parses active transcripts in full every 60 s (O(size²), only 1 of 4 roots); `refs/checkpoints`
+  grows unbounded (1842 refs, no pruner); a SessionStart mailbox-drain can inject a stranded 200 KB+
+  inbox as one `additionalContext` blob — a candidate **context-spike-at-birth** (the operator's
+  "leak/spike," adjacent to the version regression).
+- **Campaign candidate (`/frontier-campaign`):** a **registered-state-family contract** — every
+  producer of per-session/-event files or refs registers `(glob, key-epoch, TTL, owner)` in one
+  manifest enforced by ONE sweeper — dissolves cp-count / nudge-count / watchdog / mailbox / refs GC
+  **and** the idl deadlock as no-ops. Every leak here is the same defect: keyed state minted with no
+  enumerated owner/TTL.
 
 ---
 
 ## Fixes shipped (this branch — `feat/handoff-memory-review`)
 
-1. **`b026894`** `fix(session-end)` — clean-exit watchdog + checkpoint reap (root fix for the 93%
-   false signal + the pid/id/cp accumulation). Tests: `tests/session-end.bats` (5, green).
-2. **`0eed887`** `feat(claude-latest)` — per-session stderr capture (crash-mechanism forensics).
-   Tests: `tests/claude-latest-stderr.bats` (4, green).
+| commit | change | tests |
+|---|---|---|
+| `b026894` | `session-end` clean-exit watchdog + checkpoint reap (root fix for the 93 % false signal) | session-end.bats |
+| `0eed887` | `claude-latest` per-session stderr capture (crash forensics) | claude-latest-stderr.bats |
+| `b2e8e1f` | `session-end` straggler/backlog GC + `/clear` regression guard | session-end.bats |
+| `4d7dd2f` | `lead-crash-watchdog` `claude_version`+`stderr_log` telemetry + rm-race guard; `cc-crash-report` version histogram | lead-crash-watchdog.bats |
+| `7dd2ccf` | `.fired` latch-set GC (completion-assert + anti-deference) | — |
+| `9d722fb` | `handoff-fire` per-handoff telemetry line | — |
 
-_(Further fixes — backlog sweep / log rotation / telemetry — appended below as they land.)_
+All gated: `bash -n` + `shellcheck` clean on new code, 21 bats green.
+
+**Deploy (deploy-symlink gap):** `hooks/*` + `bin/cc-crash-report` are symlinks into the checkout →
+live on the trunk fast-forward. `bin/claude-latest` is a **real-file copy** in `~/bin` (a
+`deploy-parity-assert.sh` COPY_TOOL) → must be `cp`'d after landing, then exercised. New log files
+(`handoffs.jsonl`, `logs/stderr/`) are created on first write.
 
 **Deploy notes (deploy-symlink gap):** `hooks/session-end.sh` is a symlink into the checkout → live
 on the trunk fast-forward. `bin/claude-latest` is a **real-file copy** in `~/bin` (a `COPY_TOOLS`
@@ -194,9 +281,17 @@ path exercised.
 
 ## Open decisions surfaced to the operator (not built here)
 
-1. **PRIMARY prevention — cap session SIZE before the per-process ceiling** (reaffirmed from the
-   prior doc). Today's auto-recycle fires on context% (`used_pct`), blind to the transcript/RSS bloat
-   that precedes the crash. A size trigger (auto-recycle-on-size / a size page / earlier forced
-   `/compact`) is a session-lifecycle change on a **live-armed hook** → operator's call. The stderr
-   capture now lets us confirm whether size is even the true cause before changing lifecycle
-   behavior.
+1. **PRIMARY — pin / hold the CC binary version.** The crashes are a **2.1.207+ regression**
+   (Part 5), so the decisive lever is the binary, not session size. `claude-next*` already pin the
+   safe **2.1.183**; the interactive `claude` → `claude-latest` **auto-updates to the broken
+   2.1.215**. Options: pin `claude-latest` to 2.1.183 (`CLAUDE_SKIP_UPDATE=1` + point
+   `~/.claude-versions/current` at 2.1.183) until a fixed release, or hold upgrades past 2.1.207. A
+   toolchain decision → operator's call; the stderr capture will hand Anthropic the exact fault.
+2. **Watchdog subsystem redesign** — the frontier's registered-state-family campaign (Part 7):
+   promote via `/frontier-campaign`. Subsumes the stacking / subagent-arming / idl-deadlock /
+   mailbox-GC / refs-pruning items into one supervised, identity-pinned sweeper.
+3. **Log-rotation activation (C10):** `launchd/com.claude.log-rotation.plist` exists but is
+   **unloaded** and `rotate-autonomy-logs.sh` has zero callers. `launchctl load` it + broaden
+   `DEFAULT_TARGETS` to the 9 unrotated logs (safe for 7; 2 hold persistent fds — copytruncate them).
+4. **Size-recycle (from the prior doc)** — now **secondary** to the version pin; keep as
+   defense-in-depth, still an operator lifecycle decision.
