@@ -61,6 +61,27 @@ classify_death() {
   if find $jdirs -name 'JetsamEvent-*.ips' -mmin -6 2>/dev/null | grep -q .; then
     printf 'CRASH\tjetsam-oom\t%s\t%s' "${kb:-0}" "${recs:-0}"; return 0
   fi
+  # 1.5) DELIBERATE TEARDOWN — a fresh marker handoff-fire.sh writes the moment a session
+  #      CHOOSES to recycle/self-close: the durable structured signal that supersedes the
+  #      brittle prose-grep below (incident 2026-07-23: a real self-close read as a false
+  #      CRASH). Keyed by session id, else pane uuid (resolved via the registry). Fresh =
+  #      mtime <30 min. Jetsam (above) still outranks — a kill mid-teardown is still a kill.
+  local tdir="${CC_TEARDOWN_DIR:-$HOME/.claude/watchdog/teardown}"
+  local reg_dir="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"
+  local reg_hit pane
+  if find "$tdir" -maxdepth 1 -name "$sid.json" -mmin -30 2>/dev/null | grep -q .; then
+    printf 'RECYCLE\tdeliberate-teardown\t%s\t%s' "${kb:-0}" "${recs:-0}"; return 0
+  fi
+  # registry row is pretty-printed ("session_id": "<sid>" — note the space); match it
+  # whitespace-tolerantly. head -1 + `|| true`: a no-match grep must not trip set -e/pipefail
+  # (classify_death runs bare at the --classify entrypoint, not in an || context).
+  reg_hit=$(grep -lE "\"session_id\":[[:space:]]*\"$sid\"" "$reg_dir"/*.json 2>/dev/null | head -1) || true
+  if [[ -n "$reg_hit" ]]; then
+    pane=$(basename "$reg_hit" .json)
+    if find "$tdir" -maxdepth 1 -name "$pane.json" -mmin -30 2>/dev/null | grep -q .; then
+      printf 'RECYCLE\tdeliberate-teardown\t%s\t%s' "${kb:-0}" "${recs:-0}"; return 0
+    fi
+  fi
   # 2) DELIBERATE RECYCLE — the disposition/self-close phrases and the successor-brief
   #    text a session emits when it CHOOSES to recycle (incl. the brief written into the
   #    trailing last-prompt record). Bare "handoff-fire"/"self-close" are excluded —
