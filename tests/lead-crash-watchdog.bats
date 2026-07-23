@@ -13,10 +13,12 @@
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   HOOK="$REPO/hooks/lead-crash-watchdog.sh"
-  # sandbox account root + jetsam dir — no live paths touched
+  # sandbox account root + jetsam + teardown-marker + registry dirs — no live paths touched
   export CC_ACCOUNT_BASES="$BATS_TEST_TMPDIR/acct"
   export CC_JETSAM_DIRS="$BATS_TEST_TMPDIR/jetsam"
-  mkdir -p "$CC_ACCOUNT_BASES/projects/proj" "$CC_JETSAM_DIRS"
+  export CC_TEARDOWN_DIR="$BATS_TEST_TMPDIR/teardown"
+  export CC_REGISTRY_DIR="$BATS_TEST_TMPDIR/registry"
+  mkdir -p "$CC_ACCOUNT_BASES/projects/proj" "$CC_JETSAM_DIRS" "$CC_TEARDOWN_DIR" "$CC_REGISTRY_DIR"
 }
 
 # write a fixture transcript for <sid> whose tail contains <body-text>, padded to <kb> KB
@@ -65,4 +67,45 @@ cause() { classify "$1" | cut -f2; }      # CAUSE field
 @test "missing transcript degrades to CRASH / no-transcript (bias: unsure ⇒ CRASH)" {
   [ "$(cls s_absent_xyz)" = "CRASH" ]
   [ "$(cause s_absent_xyz)" = "no-transcript" ]
+}
+
+# ── teardown-marker classification (the durable signal handoff-fire.sh writes on a chosen
+#    recycle/self-close, superseding the brittle prose-grep). Sandboxed via CC_TEARDOWN_DIR +
+#    CC_REGISTRY_DIR (setup). A marker is fresh iff its mtime is within 30 min.
+
+@test "fresh sid-keyed teardown marker → RECYCLE / deliberate-teardown" {
+  mk_tx s_td_sid "mid-tool output, nothing conclusive here"
+  : > "$CC_TEARDOWN_DIR/s_td_sid.json"                        # fresh marker keyed by session id
+  [ "$(cls s_td_sid)" = "RECYCLE" ]
+  [ "$(cause s_td_sid)" = "deliberate-teardown" ]
+}
+
+@test "pane-keyed teardown marker resolved via registry → RECYCLE / deliberate-teardown" {
+  mk_tx s_td_pane "mid-tool output, nothing conclusive here"
+  # no sid-keyed marker; a registry row maps sid → pane uuid, and the marker is keyed by pane
+  printf '{"paneUUID":"PANE-AAA","session_id":"s_td_pane"}\n' > "$CC_REGISTRY_DIR/PANE-AAA.json"
+  : > "$CC_TEARDOWN_DIR/PANE-AAA.json"                        # fresh marker keyed by pane uuid
+  [ "$(cls s_td_pane)" = "RECYCLE" ]
+  [ "$(cause s_td_pane)" = "deliberate-teardown" ]
+}
+
+@test "teardown marker older than 30 min is ignored → CRASH" {
+  mk_tx s_td_stale "mid-tool output, nothing conclusive here"
+  : > "$CC_TEARDOWN_DIR/s_td_stale.json"
+  touch -mt "$(date -v-40M +%Y%m%d%H%M)" "$CC_TEARDOWN_DIR/s_td_stale.json"   # backdate 40 min
+  [ "$(cls s_td_stale)" = "CRASH" ]
+}
+
+@test "no teardown marker (empty dirs) → CRASH, marker path does not false-positive" {
+  mk_tx s_td_none "mid-tool output, nothing conclusive here"
+  [ "$(cls s_td_none)" = "CRASH" ]
+  [ "$(cause s_td_none)" = "abrupt-unknown" ]
+}
+
+@test "jetsam within 6 min OUTRANKS a fresh teardown marker → CRASH / jetsam-oom" {
+  mk_tx s_td_jetsam "mid-tool output, nothing conclusive here"
+  : > "$CC_TEARDOWN_DIR/s_td_jetsam.json"                     # fresh teardown marker...
+  : > "$CC_JETSAM_DIRS/JetsamEvent-2099-01-01-000001.ips"     # ...but jetsam still outranks it
+  [ "$(cls s_td_jetsam)" = "CRASH" ]
+  [ "$(cause s_td_jetsam)" = "jetsam-oom" ]
 }
