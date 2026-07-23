@@ -96,6 +96,38 @@ form at `lib/cc-upgrade-gate`, which has no live counterpart). Full report, prob
 NEW/CONFIRMED/REFUTED tagging: `docs/research/inert-mechanism-generator-panel-2026-07-30.md`.
 Cost: 3 Fable spawns of a 6-spawn session budget; 0 panelist writes.
 → generator-class ⇒ promoted to **C-INERT-1** under `## Campaign Candidates`.
+### H-SEC-1 — Content→action trust chains / injection threat model (never swept) · OPEN (2026-07-23, not re-verified)
+The 07-20 wave's fr-08-collapse (the adversarial axis owning T-D: worker-authored text → desk
+actuation / fired prompts / `--run` commands / long-lived memory, with no provenance typing) is
+the ONE report never recovered from the stranded checkpoint — the seam remains never-derivation-swept.
+A 24/7 self-driving system with land access, WebFetch, and self-writing memory has zero documented
+attack-surface analysis (grep: no threat/security doc; fp-K #2). Panel brief: derive the
+injection/confused-deputy/memory-poisoning chains from the system model, then confirm/refute in code.
+
+### H-VER-1 — Limits of runtime self-attestation · OPEN (2026-07-23, not re-verified)
+FP-4 (frontier-problems-2026-07-23) proposes live-wiring attestation + fire-ratio census +
+typed findings. Unknown-unknown: which failure classes can a self-attesting layer STILL not see
+(the attestor shares fate/store/clock with the attested)? 64/105 bats are mocks; the tamper chain
+is decorative; heartbeats have no reader — what is the fixed point of "who watches the watchers"
+short of an external machine? (fp-K CFP-1; fp-L candidate 2.)
+
+### H-ECON-1 — Context-utility attribution · OPEN (2026-07-23, not re-verified)
+The dominant cost base is 249K cache-read tok/turn (97.24% cache-read; fp-H). Trimming carried
+context is unsafe without knowing which cached segments a turn actually used. Is per-segment
+utility attribution feasible (probe-based? attention-proxy? ablation sampling?) at acceptable
+cost, to make recycle/trim evidence-based instead of threshold-asserted?
+
+### H-KNOW-1 — Measuring rule adherence under context load · OPEN (2026-07-23, not re-verified)
+The resident rule layer (~18.8K tok/turn, duplicated) has never been adherence-tested; the
+lazyload review asserted "no behavior change" untested (fp-K #4). Unknown: a practical harness
+that measures per-rule compliance at 3 context-load tiers and detects rule-conflict — so
+knowledge-layer edits become falsifiable (FP-9's missing instrument).
+
+### H-RESTORE-1 — Backup scope + restore drill · OPEN (2026-07-23, not re-verified)
+restic protects only `~/.claude/archives/claude-code/` (frozen binaries); the autonomy stores,
+memory corpus, session index, and repo have no backup and NO restore has ever been drilled
+(fp-K #3). Unknown-unknowns live in the restore path (key custody, partial-restore ordering,
+store consistency across dirs). Panel: derive the loss scenarios and the minimal drill.
 
 ## In-Panel
 
@@ -176,6 +208,8 @@ design: `desk-self-handoff-2026-07-19/synthesis.md`. → CORE implemented on the
 | desk self-recycle spine | `waiting-recycle.sh` · `handoff-fire.sh --recycle` · `/tmp/cc-telemetry` · `wait-contracts` | 2026-07-19 | Fable design panel (H-DSH-1/2), 2 panelists, probes P1/P4/FM-D/FM-F confirmed | SOLVED-PATH-KNOWN → core built |
 | session-closure surface (all closers) | `cc-reaper`·`cc-classify`·`cc-teardown`·`reap-guard.sh`·`teammate-auto-shutdown.sh`·`waiting-recycle.sh`·`team-orphan-reaper.sh`·`lead-crash-watchdog.sh`·`lead-supervisor.sh`·`session-end.sh`·launchd | 2026-07-25 | Fable enumeration panel (2 panelists, baseline-blind), full closer inventory, all findings lead-verified at file:line | 3 closers FIXED (092e823 reap-guard R-d + sibling 24722de orphan-reaper + the reaper gaps); 3 residuals → C-SC-1, **all CLOSED 2026-07-29** (no campaign — see C-SC-1 § RESOLVED) |
 | land→activate→deploy→exercise lifecycle | `commands/ship.md`·`scripts/ship-land.sh`·`docs/activation/pending-activation/*`·`hooks/activation-watch.sh`·`scripts/settings-drift-assert.sh`·`scripts/settings-hooks-lint.sh`·`scripts/deploy-link-parity.sh`·`install.sh`·`launchd/fleet.manifest`·5×`settings.json` | 2026-07-30 | Fable panel (3 panelists, baseline-blind: lifecycle-derivability / separability / adversarial+negative-space), 8 panel predictions re-probed by the lead | **CONFIRMED-BY-PANEL** → C-INERT-1. Expectation is imperative, never declared ⇒ `LIVE` not derivable. Live at sweep: detection layer wired 0/5 · 4 settings drifts · 11/23 launchd loaded · 57/89 registry dead-pid · MEMORY.md 4KB over the loader cap · `lib/cc-upgrade-gate` unlinked |
+| whole-system architecture (13+14 axes) | hooks · bin/scripts · stores · comms · econ · succession · GC · daemons · permissions | 2026-07-23 (not re-verified) | 14-agent wave (2 adversarial) + Fable-max synthesis over 4 audits; live re-verification | portfolio: `frontier-problems-2026-07-23/SYNTHESIS.md` (FP-1..FP-9) |
+| content→action trust chains (T-D) | worker text → actuation/prompts/`--run`/memory | **never** (fr-08 stranded, unrecovered) — as of 2026-07-23, not re-verified | — | **H-SEC-1 OPEN** |
 
 ## Campaign Candidates
 
@@ -301,3 +335,30 @@ promote via `/frontier-campaign`. The shipped CORE is FN-safe without it (mailbo
 Run on every binary bump: typed-`/exit` interrupt + plain-text-steering + slash-hold assertions.
 Dissolves the catnav/FM-F regression class permanently and retires the file's self-contradictory prose
 (`handoff-fire.sh:63/:657/:1121` "holds to turn end" vs `:554/:1141` "interrupts, does NOT enqueue").
+2026-07-23 status: still unbuilt; the crash-forensics episode (a version scare that was ~92%
+teardown artifact) is the cost exhibit — folded into FP-4's per-version conformance canary
+(frontier-problems-2026-07-23).
+
+### C-RSF-1 — Registered-state family: identity/attestation kernel + universal receipts (extends C-DSH-1)
+Charter from the 2026-07-23 portfolio (FP-2 + FP-3): one registered-state record per actor
+`{id: sid|label, pid+starttime generation, role, owner, intent/teardown-marker, heartbeat, TTL}`,
+write-before-act, consumed by watchdog/reaper/supervisor/cc-notify/claims — **scoped to the
+non-launchd tier** (launchd already owns labels/KeepAlive for its 15 jobs; fp-L §d) — plus the
+receipt verbs: every async op appends `receipt{op, predicate, check_cmd, deadline}`; one generic
+verifier refires/escalates. Dissolves (named): pid-recycle daemon immortality, source-blind
+stacking, subagent false-arming, role→dead-pane flooding (423 pending), claim-liveness blindness
+(V1), fired-never-engaged (incl. --recycle, verify-off today), sent≠delivered mail races,
+supervisor wedge-invisibility (heartbeat with no reader), duplicate crash rows. C-DSH-1's
+recycle-lifecycle record is this kernel's first instance; the teardown-marker contract (built,
+landing) is its first intent field. GENERATOR-class → promote via `/frontier-campaign`.
+
+### C-DEPLOY-1 — Compiled, versioned, atomically-switched deploy/activation substrate (T-G matured)
+Charter from FP-1: one manifest declares every live surface {path, mode: symlink|copy|
+settings-wiring|launchd, source}; builder materializes; wiring-assert fails closed on tracked-but-
+unlinked files, unwired hooks, version-drifted daemons; `.done` markers replaced by live-state
+probes; the agent-untouchable settings tier compiles to ONE idempotent operator-run activation
+script with a content-verified receipt. Evidence mass: permission layer built-and-wired-0/5
+(fp-M F1), skills/ real-copies unasserted, wiring un-versioned (fp-D FP-4), 39 unlinked tracked
+files (infra-audit RC1), activation-that-disarmed-the-reaper (fp-A P2), false 19-crash storm from
+an undeployed fix + stale daemons. Dissolves the deploy-lag class filed 4×-all-blocked (fp-C).
+GENERATOR-class → promote via `/frontier-campaign`.
