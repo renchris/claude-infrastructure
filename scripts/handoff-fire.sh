@@ -562,18 +562,34 @@ write_forward_for() { # $1=old-pane $2=new-pane
 # a fire that never engages leaves no telemetry. This drops DETERMINISTIC teardown evidence
 # immediately BEFORE the first /exit keystroke so the reader classifies a planned teardown, not a
 # crash. KEY = $SESSION_ID (the CC session id the watchdog keys on — the same var FIRING_SID prefers
-# at line 1596) when non-empty, else the pane uuid; key_kind records which, and BOTH pane+sid go in
-# the body so the reader can match on either. FULLY GUARDED — a marker write can NEVER block or fail
-# a close. Writers never delete markers; the reader GCs them.
+# at line 1596) when non-empty; when empty (the REAL self-close path — line 192 blanks it), the sid
+# is recovered from the pane's registry row, which at write time still holds the DYING session's
+# session_id (an in-place recycle's successor overwrites that row seconds later, which would strand
+# a pane-only marker — the reader's reverse-lookup would then resolve the SUCCESSOR's sid). When a
+# sid is known (either way) BOTH <sid>.json and <pane>.json are written so the reader's direct sid
+# check hits regardless of registry churn; key_kind records each file's own key, and BOTH pane+sid
+# go in the body so the reader can match on either. FULLY GUARDED — a marker write can NEVER block
+# or fail a close. Writers never delete markers; the reader GCs them.
 write_teardown_marker() { # $1=pane-uuid  $2=mode (terminal|successor|recycle)
-  local _pane="${1:-}" _mode="${2:-}" _sid _key _kind _dir="$HOME/.claude/watchdog/teardown"
+  local _pane="${1:-}" _mode="${2:-}" _sid _dir="$HOME/.claude/watchdog/teardown" _ts
   _sid="${SESSION_ID:-}"
-  if [ -n "$_sid" ]; then _key="$_sid"; _kind="sid"; else _key="$_pane"; _kind="pane"; fi
-  [ -n "$_key" ] || return 0
+  if [ -z "$_sid" ] && [ -n "$_pane" ]; then
+    # registry rows are pretty-printed ("session_id": "<sid>" — note the space): match tolerantly
+    _sid=$(grep -oE '"session_id":[[:space:]]*"[^"]+"' \
+             "${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}/$_pane.json" 2>/dev/null \
+           | head -1 | sed -E 's/.*"([^"]+)"$/\1/') || true
+  fi
+  { [ -n "$_sid" ] || [ -n "$_pane" ]; } || return 0
   mkdir -p "$_dir" 2>/dev/null || true
-  printf '{"key_kind":"%s","pane":"%s","sid":"%s","mode":"%s","ts":"%s"}\n' \
-    "$_kind" "$_pane" "$_sid" "$_mode" "$(date -u +%FT%TZ)" \
-    > "$_dir/$_key.json" 2>/dev/null || true
+  _ts="$(date -u +%FT%TZ)"
+  if [ -n "$_sid" ]; then
+    printf '{"key_kind":"sid","pane":"%s","sid":"%s","mode":"%s","ts":"%s"}\n' \
+      "$_pane" "$_sid" "$_mode" "$_ts" > "$_dir/$_sid.json" 2>/dev/null || true
+  fi
+  if [ -n "$_pane" ]; then
+    printf '{"key_kind":"pane","pane":"%s","sid":"%s","mode":"%s","ts":"%s"}\n' \
+      "$_pane" "$_sid" "$_mode" "$_ts" > "$_dir/$_pane.json" 2>/dev/null || true
+  fi
   return 0
 }
 
