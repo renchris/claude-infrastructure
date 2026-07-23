@@ -331,4 +331,42 @@ update_if_needed
 validate_or_recover
 
 export DISABLE_AUTOUPDATER=1
+
+# --- Per-session stderr capture (crash forensics) -----------------------------
+# A hard crash (JS heap OOM, JSC/bun abort, an internal limit, a fatal during
+# /compact) prints its final diagnostic to stderr and then the process is gone —
+# the operator's "error text -> bare shell". The launcher and the claude() shell
+# function discarded that stderr, so the crash MECHANISM was captured nowhere
+# (no autologging, no .ips). Tee it to a bounded per-process log while still
+# showing it live in the terminal (tee ->&2, so UX is unchanged). The log is
+# keyed by $$ which, because exec preserves the pid, is the claude.exe pid ==
+# the LEAD_PID that lead-crash-watchdog records in ~/.claude/watchdog/<sid>.pid
+# — so a crash log joins directly to its session id and its crash-ledger row.
+# Only crashes/warnings write bytes; a clean run leaves a 0-byte file that the
+# NEXT launch garbage-collects (dead pid + empty). Kill switch:
+# CLAUDE_STDERR_CAPTURE=0. Fail-safe: any setup failure falls through to the
+# original plain exec below, so this can never block a launch.
+if [[ "${CLAUDE_STDERR_CAPTURE:-1}" != "0" ]] && mkdir -p "$HOME/.claude/logs/stderr" 2>/dev/null; then
+  _sd="$HOME/.claude/logs/stderr"
+  # GC clean-exit litter: drop empty logs whose owning process is gone. Never
+  # touch a live pid's file (its session may still crash) or a non-empty log
+  # (that IS the crash evidence we are keeping).
+  for _f in "$_sd"/*.log; do
+    [[ -e "$_f" ]] || continue
+    _p=$(basename "$_f" .log); _p=${_p##*-}
+    if [[ "$_p" =~ ^[0-9]+$ ]] && kill -0 "$_p" 2>/dev/null; then
+      continue
+    fi
+    if [[ ! -s "$_f" ]]; then
+      rm -f "$_f" 2>/dev/null || true
+    fi
+  done
+  # Cap non-empty survivors to the newest 200 (defensive bound; crashes are rare).
+  # ls -1t is safe here: filenames are launcher-controlled (<ts>-<pid>.log, no
+  # spaces/newlines), and macOS find lacks -printf for an mtime sort.
+  # shellcheck disable=SC2012
+  { ls -1t "$_sd"/*.log 2>/dev/null | tail -n +201 | while IFS= read -r _f; do rm -f "$_f" 2>/dev/null || true; done; } || true
+  _sl="$_sd/$(date +%Y%m%dT%H%M%S)-$$.log"
+  exec "$CURRENT_LINK/node_modules/.bin/claude" "$@" 2> >(tee -a "$_sl" >&2)
+fi
 exec "$CURRENT_LINK/node_modules/.bin/claude" "$@"
