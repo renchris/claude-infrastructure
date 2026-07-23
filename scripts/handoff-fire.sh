@@ -556,6 +556,27 @@ write_forward_for() { # $1=old-pane $2=new-pane
   return 0
 }
 
+# ---- teardown marker (MARKER CONTRACT v1; reader = tm-watchdog) -------------------------------
+# A self-close/recycle types /exit, which INTERRUPTS the in-flight turn and kills the pane mid-Bash
+# — to the crash watchdog that death is indistinguishable from a real CC crash (false CRASHes), and
+# a fire that never engages leaves no telemetry. This drops DETERMINISTIC teardown evidence
+# immediately BEFORE the first /exit keystroke so the reader classifies a planned teardown, not a
+# crash. KEY = $SESSION_ID (the CC session id the watchdog keys on — the same var FIRING_SID prefers
+# at line 1596) when non-empty, else the pane uuid; key_kind records which, and BOTH pane+sid go in
+# the body so the reader can match on either. FULLY GUARDED — a marker write can NEVER block or fail
+# a close. Writers never delete markers; the reader GCs them.
+write_teardown_marker() { # $1=pane-uuid  $2=mode (terminal|successor|recycle)
+  local _pane="${1:-}" _mode="${2:-}" _sid _key _kind _dir="$HOME/.claude/watchdog/teardown"
+  _sid="${SESSION_ID:-}"
+  if [ -n "$_sid" ]; then _key="$_sid"; _kind="sid"; else _key="$_pane"; _kind="pane"; fi
+  [ -n "$_key" ] || return 0
+  mkdir -p "$_dir" 2>/dev/null || true
+  printf '{"key_kind":"%s","pane":"%s","sid":"%s","mode":"%s","ts":"%s"}\n' \
+    "$_kind" "$_pane" "$_sid" "$_mode" "$(date -u +%FT%TZ)" \
+    > "$_dir/$_key.json" 2>/dev/null || true
+  return 0
+}
+
 # ---- P0-16 /goal >4000-char guard (a19 D-11) -------------------------------------------------
 # A /goal payload line whose condition exceeds the harness's 4000-char cap is a SILENT dead fire —
 # the successor spawns task-less and idles believing nothing to do (observed 2026-07-10). Hard-fail
@@ -1150,6 +1171,9 @@ MSG
     fi
     echo "→ self-close armed for $SC_SID: watcher pid $SC_WATCHER session-detached, heartbeat verified (log: $SC_LOG)"
     [ -n "$SC_SUCCESSOR" ] && echo "→ post-close: operator focus hands to successor $SC_SUCCESSOR" || echo "→ post-close: terminal (nothing continues this session's work)"
+    # Teardown marker BEFORE the first /exit — the crash watchdog must read a planned self-close,
+    # not a CRASH (the /exit interrupt kills this pane mid-Bash). Guarded: never blocks the close.
+    write_teardown_marker "$SC_SID" "$([ "$SC_TERMINAL" = 1 ] && echo terminal || echo successor)" || true
     wrote=0
     for _ in 1 2 3; do
       if as_write "$SC_SID" "/exit" 2>/dev/null; then wrote=1; break; fi
