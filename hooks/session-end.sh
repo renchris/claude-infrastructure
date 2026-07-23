@@ -19,11 +19,44 @@ echo "[$(date '+%Y-%m-%d %H:%M:%S')] Session ended" >> ~/.claude/logs/sessions.l
 # sid is validated to a safe charset before any rm (defense-in-depth).
 _se_input=$(cat 2>/dev/null || echo '{}')
 _se_sid=$(printf '%s' "$_se_input" | jq -r '.session_id // empty' 2>/dev/null || echo "")
-if [[ -n "$_se_sid" && "$_se_sid" =~ ^[A-Za-z0-9._-]+$ ]]; then
+_se_reason=$(printf '%s' "$_se_input" | jq -r '.reason // empty' 2>/dev/null || echo "")
+# Skip the per-sid pidfile removal on reason=clear: /clear ends the sid but the PROCESS and pane
+# SURVIVE, and team-orphan-reaper reads a missing pidfile as lead-death — removing it mid-team-wave
+# would archive a LIVE team and shutdown-deny its teammates. Real exits (logout / prompt_input_exit
+# / other) proceed normally. The cp-count is still safe to drop on clear (it just re-creates).
+if [[ -n "$_se_sid" && "$_se_sid" =~ ^[A-Za-z0-9._-]+$ && "$_se_reason" != "clear" ]]; then
   rm -f "$HOME/.claude/watchdog/$_se_sid.pid" \
         "$HOME/.claude/watchdog/$_se_sid.id" \
         "$HOME/.claude/watchdog/cp-$_se_sid.count" 2>/dev/null || true
 fi
+
+# Opportunistic straggler GC (backgrounded, non-blocking). The per-session rm above only reaps
+# THIS clean exit; it cannot reach files orphaned by a crash/OOM/reboot (no SessionEnd ran) or the
+# historical backlog (1900+ cp-*.count + stale pids, back to Apr — no reaper covers this dir, nor
+# the per-fire /tmp handoff watcher logs). Reap them here, liveness- and age-gated so a long-lived
+# session's OWN live files are never touched:
+#   • <sid>.pid/.id  — removed only when the recorded pid is dead (a live session keeps its pair).
+#   • cp-<sid>.count — a live session bumps its mtime every tool use, so +2d ⇒ a dead session.
+#   • /tmp handoff-*  — a live fire's watcher log is seconds old; +2d ⇒ long finished.
+(
+  _wd="$HOME/.claude/watchdog"
+  for _pf in "$_wd"/*.pid; do
+    [[ -f "$_pf" ]] || continue
+    _p=$(cat "$_pf" 2>/dev/null)
+    if [[ "$_p" =~ ^[0-9]+$ ]] && kill -0 "$_p" 2>/dev/null; then continue; fi
+    _sid=$(basename "$_pf" .pid)
+    rm -f "$_wd/$_sid.pid" "$_wd/$_sid.id" "$_wd/cp-$_sid.count" 2>/dev/null || true
+  done
+  find "$_wd" -name 'cp-*.count' -mtime +2 -delete 2>/dev/null || true
+  # tmp sweep dirs are env-overridable so tests stay hermetic (never touch the real /tmp).
+  # shellcheck disable=SC2086  # intentional word-split over space-separated dirs
+  for _td in ${CC_TMP_SWEEP_DIRS:-${TMPDIR:-/tmp} /private/tmp}; do
+    [[ -d "$_td" ]] || continue
+    find "$_td" -maxdepth 1 \( -name 'handoff-selfclose-*.log' -o -name 'handoff-recycle-*' \
+         -o -name 'handoff-prompt-nb-*' \) -mtime +2 -delete 2>/dev/null || true
+  done
+) &
+disown 2>/dev/null || true
 
 # Secondary GC trigger: clean stale Claude versions on session end (background, non-blocking)
 # Primary trigger is in claude-latest (threshold-based). This catches any accumulation

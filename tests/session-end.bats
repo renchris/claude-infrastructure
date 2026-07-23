@@ -16,12 +16,15 @@ setup() {
   export HOME="$BATS_TEST_TMPDIR/home"
   WD="$HOME/.claude/watchdog"
   mkdir -p "$WD" "$HOME/.claude/logs"
+  export CC_TMP_SWEEP_DIRS="$BATS_TEST_TMPDIR/tmp"   # hermetic tmp sweep — never the real /tmp
+  mkdir -p "$CC_TMP_SWEEP_DIRS"
 }
 
 end_for() { echo "{\"session_id\":\"$1\"}" | bash "$HOOK"; }
 
-seed_session() { # $1=sid
-  echo 12345 > "$WD/$1.pid"
+seed_session() { # $1=sid — LIVE pid so the background straggler sweep keeps it; only the ENDING
+                 # session's own files are removed synchronously (by sid, regardless of liveness)
+  echo $$     > "$WD/$1.pid"
   echo "$1"   > "$WD/$1.id"
   echo 3      > "$WD/cp-$1.count"
 }
@@ -60,4 +63,28 @@ seed_session() { # $1=sid
 @test "still logs 'Session ended'" {
   end_for AAA
   grep -q 'Session ended' "$HOME/.claude/logs/sessions.log"
+}
+
+@test "reason=clear keeps the pidfile (process survives /clear — no team-archive regression)" {
+  seed_session AAA
+  echo '{"session_id":"AAA","reason":"clear"}' | bash "$HOOK"
+  [ -e "$WD/AAA.pid" ]   # kept — /clear ends the sid but the process/pane live on
+  [ -e "$WD/AAA.id" ]
+}
+
+@test "straggler sweep reaps dead-pid pairs + aged cp, keeps live + fresh" {
+  echo $$     > "$WD/LIVE.pid"; echo LIVE > "$WD/LIVE.id"; echo 1 > "$WD/cp-LIVE.count"
+  echo 999999 > "$WD/DEAD.pid"; echo DEAD > "$WD/DEAD.id"; echo 1 > "$WD/cp-DEAD.count"
+  touch -t 202601010000 "$WD/cp-OLDORPHAN.count"   # aged orphan (no pid), > 2 days
+  echo 1 > "$WD/cp-FRESH.count"                     # fresh orphan (no pid)
+  : > "$CC_TMP_SWEEP_DIRS/handoff-selfclose-x.log"; touch -t 202601010000 "$CC_TMP_SWEEP_DIRS/handoff-selfclose-x.log"
+  : > "$CC_TMP_SWEEP_DIRS/handoff-selfclose-fresh.log"
+  end_for ZZZ
+  sleep 1                                           # let the backgrounded sweep finish
+  [ -e "$WD/LIVE.pid" ] && [ -e "$WD/LIVE.id" ] && [ -e "$WD/cp-LIVE.count" ]   # live kept
+  [ ! -e "$WD/DEAD.pid" ] && [ ! -e "$WD/DEAD.id" ] && [ ! -e "$WD/cp-DEAD.count" ]  # dead reaped
+  [ ! -e "$WD/cp-OLDORPHAN.count" ]                 # aged reaped
+  [ -e "$WD/cp-FRESH.count" ]                       # fresh kept
+  [ ! -e "$CC_TMP_SWEEP_DIRS/handoff-selfclose-x.log" ]      # aged tmp reaped
+  [ -e "$CC_TMP_SWEEP_DIRS/handoff-selfclose-fresh.log" ]    # fresh tmp kept
 }
