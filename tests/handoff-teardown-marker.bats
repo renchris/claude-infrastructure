@@ -76,6 +76,28 @@ json_ok() { # $1 = file → assert it parses as one JSON object (skip if no pyth
   [ ! -e "$TD" ] || [ -z "$(ls -A "$TD" 2>/dev/null)" ]   # no garbage marker
 }
 
+@test "marker: SESSION_ID empty + registry row present → DUAL-key, sid recovered from the pane row" {
+  # The in-place-recycle residual: a successor re-registers the SAME pane seconds after the close,
+  # so a pane-only marker becomes unreachable for the DYING sid via reverse-lookup. At write time
+  # the pane's registry row still holds the dying session's sid → recover it and write BOTH keys.
+  unset SESSION_ID || true
+  export CC_REGISTRY_DIR="$BATS_TEST_TMPDIR/reg"
+  mkdir -p "$CC_REGISTRY_DIR"
+  # production-shaped row: pretty-printed with a space after the colon, as session-register writes
+  printf '{\n  "session_id": "cc-sid-recovered"\n}\n' > "$CC_REGISTRY_DIR/pane-FFF.json"
+  write_teardown_marker "pane-FFF" recycle
+  [ -f "$TD/cc-sid-recovered.json" ]                  # direct sid hit for the reader
+  [ -f "$TD/pane-FFF.json" ]                          # pane alias kept
+  run cat "$TD/cc-sid-recovered.json"
+  [[ "$output" == *'"key_kind":"sid"'* ]]
+  [[ "$output" == *'"sid":"cc-sid-recovered"'* ]]
+  [[ "$output" == *'"pane":"pane-FFF"'* ]]
+  run cat "$TD/pane-FFF.json"
+  [[ "$output" == *'"key_kind":"pane"'* ]]
+  [[ "$output" == *'"sid":"cc-sid-recovered"'* ]]
+  json_ok "$TD/cc-sid-recovered.json"
+}
+
 # ---- never-engaged telemetry ------------------------------------------------------------------
 
 @test "telemetry: emit 0 appends an engaged=0 line to handoffs.jsonl (failed engagement)" {
