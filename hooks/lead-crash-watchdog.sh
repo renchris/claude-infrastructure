@@ -143,8 +143,16 @@ log "registered session=$SESSION_ID pid=$LEAD_PID"
     # `|| true` keeps that from tripping `set -e` and aborting handle_crash before the crash
     # record AND the team-recovery below run. grep still prints "0" to stdout.
     concurrent=$(ps aux 2>/dev/null | grep -c '[c]laude\.exe' || true)
-    printf '{"ts":"%s","sid":"%s","pid":%s,"class":"%s","cause":"%s","transcript_kb":%s,"records":%s,"mem_free_pct":"%s","concurrent_claude":%s}\n' \
-      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$sid" "${pid:-0}" "$class" "$cause" "${kb:-0}" "${recs:-0}" "${mem_free:-?}" "${concurrent:-0}" \
+    # claude_version — THE decisive field: the crash rate is version-correlated (a regression
+    # onset at 2.1.207: 2.1.183=0.02% → 2.1.207=4.76% → 2.1.215=1.56%, all mid-Bash in-process
+    # deaths, NOT transcript size). Read from the transcript tail (every record carries it), cheap.
+    local cver="?" tpath sterr=""
+    tpath=$(find_transcript "$sid" 2>/dev/null || true)
+    [[ -n "$tpath" ]] && cver=$(tail -c 65536 "$tpath" 2>/dev/null | grep -oE '"version":"[0-9]+\.[0-9]+\.[0-9]+"' | tail -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "?")
+    # stderr_log — join to the launcher's per-pid stderr capture (names the exact mechanism).
+    sterr=$(ls -1t "$HOME/.claude/logs/stderr/"*"-${pid}.log" 2>/dev/null | head -1 || true)
+    printf '{"ts":"%s","sid":"%s","pid":%s,"class":"%s","cause":"%s","claude_version":"%s","transcript_kb":%s,"records":%s,"mem_free_pct":"%s","concurrent_claude":%s,"stderr_log":"%s"}\n' \
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$sid" "${pid:-0}" "$class" "$cause" "${cver:-?}" "${kb:-0}" "${recs:-0}" "${mem_free:-?}" "${concurrent:-0}" "${sterr:-}" \
       >> "$CRASH_JSONL" 2>/dev/null || true
     echo "[watchdog $sid] death class=$class cause=$cause (${kb}KB/${recs}recs mem_free=${mem_free:-?}% concurrent=${concurrent})"
     # A deliberate recycle is not a crash — only alert on a genuine crash.
@@ -174,7 +182,12 @@ log "registered session=$SESSION_ID pid=$LEAD_PID"
 
     if [[ ${#affected_team_dirs[@]} -eq 0 ]]; then
       echo "[watchdog $sid] crash — no teams affected (lead had no active team)"
-      rm -f "$WATCHDOG_DIR/$sid.pid" "$WATCHDOG_DIR/$sid.id"
+      # rm-race guard: only reap the pidfile if it still holds OUR pid — a resume/re-fire may have
+      # overwritten it with the successor incarnation's LIVE pid, and deleting that silently disarms
+      # a live session (frontier finding: 125 proven cross-incarnation disarms).
+      if [[ "$(cat "$WATCHDOG_DIR/$sid.pid" 2>/dev/null)" == "$pid" ]]; then
+        rm -f "$WATCHDOG_DIR/$sid.pid" "$WATCHDOG_DIR/$sid.id"
+      fi
       return 0
     fi
 
@@ -188,7 +201,10 @@ log "registered session=$SESSION_ID pid=$LEAD_PID"
     osascript -e "display notification \"Lead crashed. ${#affected_team_dirs[@]} team(s) affected. See CRASH_REPORT.md\" with title \"Claude Code Watchdog\" sound name \"Basso\"" 2>/dev/null || true
     printf '\a' >/dev/tty 2>/dev/null || true
 
-    rm -f "$WATCHDOG_DIR/$sid.pid" "$WATCHDOG_DIR/$sid.id"
+    # rm-race guard (see above): never delete a pidfile a successor incarnation now owns.
+    if [[ "$(cat "$WATCHDOG_DIR/$sid.pid" 2>/dev/null)" == "$pid" ]]; then
+      rm -f "$WATCHDOG_DIR/$sid.pid" "$WATCHDOG_DIR/$sid.id"
+    fi
   }
 
   write_crash_report() {
