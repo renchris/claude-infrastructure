@@ -2096,9 +2096,26 @@ else
   spawn
   # P0-11: prove the fired session ingested the brief before claiming success. A cold fire that
   # raced CC boot sits at an empty composer (INC-4) — re-send once, then FAIL LOUD.
+  # per-handoff telemetry — one JSONL line per real fire so "did this handoff engage / leak / at
+  # what firing-session RSS" is answerable in one grep (~/.claude/logs/handoffs.jsonl, self-bounded
+  # to 500). Fully guarded: a telemetry hiccup can never affect the fire.
+  emit_handoff_telemetry() { # $1 = engaged (1|0)
+    local _hf_log="$HOME/.claude/logs/handoffs.jsonl" _hf_pid _hf_rss _hf_class
+    _hf_pid=$(cat "$HOME/.claude/watchdog/$FIRING_SID.pid" 2>/dev/null || true)
+    _hf_rss=$(ps -o rss= -p "${_hf_pid:-0}" 2>/dev/null | tr -d ' ' || true)
+    _hf_class=$([ "${WANT_SELF_RETIRE:-0}" = 1 ] && echo self-retire-peer || echo handoff)
+    mkdir -p "$HOME/.claude/logs" 2>/dev/null || true
+    printf '{"ts":"%s","firing_sid":"%s","class":"%s","engaged":%s,"target_pane":"%s","account":"%s","firing_rss_kb":%s}\n' \
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${FIRING_SID:-?}" "$_hf_class" "${1:-0}" "${SPAWNED_PANE:-}" "${CHOSEN:-?}" "${_hf_rss:-0}" \
+      >> "$_hf_log" 2>/dev/null || true
+    if [ -f "$_hf_log" ] && [ "$(wc -l < "$_hf_log" 2>/dev/null || echo 0)" -gt 600 ]; then
+      tail -500 "$_hf_log" > "$_hf_log.tmp" 2>/dev/null && mv "$_hf_log.tmp" "$_hf_log" 2>/dev/null || true
+    fi
+  }
   if [ "$ENGAGE_VERIFY" = 1 ]; then
     PROJ_DIR="$(config_dir_for_launcher "$LAUNCHER")/projects"
     if verify_engagement "$PROJ_DIR" "$FIRE_MARKER" "$REG_DIR" "$SPAWNED_PANE" "$REAL_IT2" "$(cat "$PROMPT_FILE")"; then
+      emit_handoff_telemetry 1
       echo "→ engagement confirmed for the fired session (transcript/registry birth)" >&2
       # P0-12: guarantee a registry row so the reaper/board can see the fired pane.
       FIRE_NAME="$(basename "$LAUNCH_DIR")-${SPAWNED_PANE%%-*}"
