@@ -2128,7 +2128,9 @@ else
   # to 500). Fully guarded: a telemetry hiccup can never affect the fire.
   emit_handoff_telemetry() { # $1 = engaged (1|0)
     local _hf_log="$HOME/.claude/logs/handoffs.jsonl" _hf_pid _hf_rss _hf_class
-    _hf_pid=$(cat "$HOME/.claude/watchdog/$FIRING_SID.pid" 2>/dev/null || true)
+    # Prefer the CC session id (SESSION_ID) — watchdog pidfiles are keyed by it; FIRING_SID is a
+    # PANE uuid when SESSION_ID is unset, which never matches a session-keyed pidfile.
+    _hf_pid=$(cat "$HOME/.claude/watchdog/${SESSION_ID:-$FIRING_SID}.pid" 2>/dev/null || true)
     _hf_rss=$(ps -o rss= -p "${_hf_pid:-0}" 2>/dev/null | tr -d ' ' || true)
     _hf_class=$([ "${WANT_SELF_RETIRE:-0}" = 1 ] && echo self-retire-peer || echo handoff)
     mkdir -p "$HOME/.claude/logs" 2>/dev/null || true
