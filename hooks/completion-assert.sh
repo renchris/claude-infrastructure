@@ -105,6 +105,9 @@ contra=0; facts=""
 
 # ── Latch-set + hard cap (RED-proofed L + C). ──
 mkdir -p "$STATE_DIR" 2>/dev/null || true
+# GC stale per-session .fired latch-sets — SKEY embeds SID, so each is per-session and otherwise
+# never reaped (mirrors memory-nudge.sh:26). A live session recreates its own on the next fire.
+find "$STATE_DIR" -name '*.fired' -mtime +7 -delete 2>/dev/null || true
 SKEY="$(printf '%s|%s|%s' "$CFG" "$SID" "$CWD" | shasum 2>/dev/null | cut -c1-16)"
 [ -n "$SKEY" ] || abstain "no-skey"
 HASH="$(printf '%s' "$MSG" | shasum 2>/dev/null | cut -c1-16)"
