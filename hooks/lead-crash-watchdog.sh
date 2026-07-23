@@ -96,6 +96,23 @@ classify_death() {
   printf 'CRASH\t%s\t%s\t%s' "$cause" "${kb:-0}" "${recs:-0}"
 }
 
+# GC the teardown marker(s) for a session. Called ONLY from the owner-guarded pidfile-rm
+# blocks below — we just deleted OUR pid's pidfile, so the recycle/self-close is fully handled
+# and the marker has served its purpose. Removes the sid-keyed marker and, if cheaply resolvable
+# via the session registry, its pane-keyed alias. Never call elsewhere: a stale marker is
+# harmless (30-min freshness window), but deleting one mid-recycle could unmask a real crash.
+gc_teardown_marker() {
+  local sid="$1"
+  local tdir="${CC_TEARDOWN_DIR:-$HOME/.claude/watchdog/teardown}"
+  local reg_dir="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"
+  local reg_hit pane
+  rm -f "$tdir/$sid.json" 2>/dev/null || true
+  reg_hit=$(grep -lE "\"session_id\":[[:space:]]*\"$sid\"" "$reg_dir"/*.json 2>/dev/null | head -1) || true
+  [[ -n "$reg_hit" ]] || return 0
+  pane=$(basename "$reg_hit" .json)
+  rm -f "$tdir/$pane.json" 2>/dev/null || true
+}
+
 # Test/debug entrypoint (CC never passes args to this SessionStart hook): classify a
 # session id and exit, without spawning the daemon or reading stdin.
 if [[ "${1:-}" == "--classify" ]]; then
@@ -208,6 +225,7 @@ log "registered session=$SESSION_ID pid=$LEAD_PID"
       # a live session (frontier finding: 125 proven cross-incarnation disarms).
       if [[ "$(cat "$WATCHDOG_DIR/$sid.pid" 2>/dev/null)" == "$pid" ]]; then
         rm -f "$WATCHDOG_DIR/$sid.pid" "$WATCHDOG_DIR/$sid.id"
+        gc_teardown_marker "$sid" || true
       fi
       return 0
     fi
@@ -225,6 +243,7 @@ log "registered session=$SESSION_ID pid=$LEAD_PID"
     # rm-race guard (see above): never delete a pidfile a successor incarnation now owns.
     if [[ "$(cat "$WATCHDOG_DIR/$sid.pid" 2>/dev/null)" == "$pid" ]]; then
       rm -f "$WATCHDOG_DIR/$sid.pid" "$WATCHDOG_DIR/$sid.id"
+      gc_teardown_marker "$sid" || true
     fi
   }
 
