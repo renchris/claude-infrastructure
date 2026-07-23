@@ -307,7 +307,23 @@ log "registered session=$SESSION_ID pid=$LEAD_PID"
         --arg ts "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" \
         '{from:$from, text:$text, summary:$summary, timestamp:$ts, read:false}')
 
-      # Append to inbox array — use jq to avoid races
+      # Append to inbox array. jq read-modify-write is NOT atomic, and team-orphan-reaper.sh
+      # appends to the SAME inbox under the SAME lock name ("$inbox.lock.d") — an unguarded
+      # race drops one append. mkdir is atomic → use it as the mutex: acquire ≤2s (20×0.1s);
+      # a lock dir older than 10s ⇒ a crashed holder, reclaim it; on give-up append lock-free
+      # (a duplicate shutdown_request is harmless, a hung watchdog is not). rmdir after mv.
+      local lockd="$inbox.lock.d" have_lock=0 i lock_age lock_mtime now_s
+      for (( i=0; i<20; i++ )); do
+        if mkdir "$lockd" 2>/dev/null; then have_lock=1; break; fi
+        lock_mtime=$(stat -f%m "$lockd" 2>/dev/null || echo 0)
+        now_s=$(date +%s)
+        lock_age=$(( now_s - lock_mtime ))
+        if (( lock_mtime > 0 && lock_age >= 10 )); then
+          rmdir "$lockd" 2>/dev/null || true   # stale holder — reclaim on the next iteration
+        fi
+        sleep 0.1
+      done
+
       local tmp
       tmp=$(mktemp)
       if jq --argjson env "$envelope" '. += [$env]' "$inbox" > "$tmp" 2>/dev/null; then
@@ -317,6 +333,7 @@ log "registered session=$SESSION_ID pid=$LEAD_PID"
         rm -f "$tmp"
         echo "[watchdog] WARN: failed to inject shutdown_request for $member"
       fi
+      if (( have_lock )); then rmdir "$lockd" 2>/dev/null || true; fi
     done
   }
 
