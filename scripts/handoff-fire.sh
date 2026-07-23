@@ -2157,6 +2157,9 @@ else
       if [ -n "$AS_ROLE" ] && [ -n "$SPAWNED_PANE" ]; then write_role "$CC_ROLES_DIR" "$AS_ROLE" "$SPAWNED_PANE"; fi
     else
       echo "!! FIRE FAILED — never engaged: $LAUNCHER at ${SPAWNED_PANE:-<pane?>} did not ingest the brief within the engagement window (re-sent once). The pane is live but TASK-LESS — recover with a WARM re-fire (--cwd <existing-worktree>); do NOT trust this as a working session (INC-4 / cold-worktree-fire-autosubmit-race)." >&2
+      # Record the FAILED engagement (symmetry with the engaged=1 path) so "did this handoff engage"
+      # is answerable in one grep. Guarded so a telemetry hiccup can never preempt the exit 1.
+      emit_handoff_telemetry 0 || true
       exit 1
     fi
   fi
