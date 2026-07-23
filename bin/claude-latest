@@ -109,6 +109,7 @@ cleanup_stale_versions() {
 
   # Sort by semver descending (newest first)
   local sorted
+  # shellcheck disable=SC2207  # intentional word-split of sorted version list (pre-existing)
   IFS=$'\n' sorted=($(printf '%s\n' "${versions[@]}" | sort -t. -k1,1rn -k2,2rn -k3,3rn))
   unset IFS
 
@@ -134,6 +135,7 @@ cleanup_stale_versions() {
       continue
     fi
 
+    # shellcheck disable=SC2115  # VERSIONS_DIR is always set (top of file); guard is defensive (pre-existing)
     rm -rf "$VERSIONS_DIR/$v" 2>/dev/null && {
       deleted=$((deleted + 1))
       log "GC removed $v"
@@ -258,6 +260,7 @@ update_if_needed() {
   echo "Installing Claude Code $available..."
   if ! npm install --prefix "$version_dir" @anthropic-ai/claude-code@"$available" >> "$LOG_FILE" 2>&1; then
     echo "✗ Install failed, using $installed"
+    # shellcheck disable=SC2320  # informational $? in a log line, not a control decision (pre-existing)
     log "Install $available FAILED (npm exit $?)"
     rm -rf "$version_dir" "$install_lock"
     return 1
@@ -298,6 +301,7 @@ validate_or_recover() {
   log "RECOVERY: current symlink target invalid"
 
   # Scan for any working version (newest first)
+  # shellcheck disable=SC2045  # newest-first mtime order needed; version dirs have no spaces (pre-existing)
   for dir in $(ls -dt "$VERSIONS_DIR"/*/ 2>/dev/null); do
     local v
     v=$(basename "$dir")
