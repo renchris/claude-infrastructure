@@ -42,6 +42,7 @@ find_transcript() {
   local bases="${CC_ACCOUNT_BASES:-$HOME/.claude $HOME/.claude-secondary $HOME/.claude-tertiary $HOME/.claude-quaternary}"
   # shellcheck disable=SC2086  # intentional word-split over space-separated bases
   for base in $bases; do
+    # shellcheck disable=SC2012  # glob-ls + head -1 is deliberate (fixed sid-keyed pattern, no exotic names)
     hit=$(ls "$base"/projects/*/"$sid"*.jsonl 2>/dev/null | head -1)
     [[ -n "$hit" ]] && { printf '%s' "$hit"; return 0; }
   done
@@ -180,6 +181,7 @@ log "registered session=$SESSION_ID pid=$LEAD_PID"
     # grep -c exits 1 on zero matches (true when the dead session was the LAST claude proc);
     # `|| true` keeps that from tripping `set -e` and aborting handle_crash before the crash
     # record AND the team-recovery below run. grep still prints "0" to stdout.
+    # shellcheck disable=SC2009  # ps|grep is deliberate: one pattern counts BOTH binary names portably
     concurrent=$(ps aux 2>/dev/null | grep -cE '[c]laude\.exe|[n]ode_modules/\.bin/claude' || true)
     # claude_version — THE decisive field: the crash rate is version-correlated (a regression
     # onset at 2.1.207: 2.1.183=0.02% → 2.1.207=4.76% → 2.1.215=1.56%, all mid-Bash in-process
@@ -188,6 +190,7 @@ log "registered session=$SESSION_ID pid=$LEAD_PID"
     tpath=$(find_transcript "$sid" 2>/dev/null || true)
     [[ -n "$tpath" ]] && cver=$(tail -c 65536 "$tpath" 2>/dev/null | grep -oE '"version":"[0-9]+\.[0-9]+\.[0-9]+"' | tail -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "?")
     # stderr_log — join to the launcher's per-pid stderr capture (names the exact mechanism).
+    # shellcheck disable=SC2012  # ls -1t is deliberate (newest-first mtime order on our own fixed pattern)
     sterr=$(ls -1t "$HOME/.claude/logs/stderr/"*"-${pid}.log" 2>/dev/null | head -1 || true)
     printf '{"ts":"%s","sid":"%s","pid":%s,"class":"%s","cause":"%s","claude_version":"%s","transcript_kb":%s,"records":%s,"mem_free_pct":"%s","concurrent_claude":%s,"stderr_log":"%s"}\n' \
       "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$sid" "${pid:-0}" "$class" "$cause" "${cver:-?}" "${kb:-0}" "${recs:-0}" "${mem_free:-?}" "${concurrent:-0}" "${sterr:-}" \
