@@ -29,7 +29,15 @@ EOF
   # hermetic wait-system inputs: absent by default (per-test opt-in), never the real machine state
   export CC_CLASSIFY_WAIT_CONTRACTS_DIR="$D/wait-contracts"
   export CC_CLASSIFY_DESK_ROLE_FILE="$D/cc-roles-desk"
+  # ── 2026-07-24 fired-peer stamp + operator-interaction hold: hermetic marker dir, EMPTY by default
+  #    (⇒ operator pane ⇒ finished/finished-teammate can never apply); tests opt in with stamp. Hold
+  #    pinned explicitly so env drift can't change the fixtures' meaning. ──
+  export CC_FIRED_DIR="$D/fired"
+  export CC_CLASSIFY_INTERACTIVE_HOLD_S=21600
+  export CC_CLASSIFY_FIRE_PROMPT_SLACK_S=300
 }
+# fired_peer refuses non-UUID panes as path fragments, so stamped tests need a UUID-shaped pane.
+UP="4EC4DA5D-0000-4000-8000-000000000001"
 
 # write a single-session registry; args: paneUUID pid cwd sid [startedAt]
 reg() { printf '[{"name":"t","paneUUID":"%s","account":"next","cwd":"%s","pid":%s,"session_id":"%s","startedAt":%s}]\n' \
@@ -42,6 +50,14 @@ add() { jq --arg p "$1" --arg pid "$2" --arg cwd "$3" --arg sid "$4" --argjson s
 tx() { local sid="$1" ago="$2"; local ts; ts="$(TZ=UTC date -j -f %s "$((NOW-ago))" +%Y-%m-%dT%H:%M:%S 2>/dev/null).000Z"
        printf '{"type":"assistant","isSidechain":false,"timestamp":"%s","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}\n' "$ts" > "$D/proj/slug/$sid.jsonl"; }
 cause() { "$C" "$1" --json 2>/dev/null | jq -r '.cause'; }
+# a REAL operator-typed prompt <ago> seconds before NOW (string content, no isMeta); args: sid ago [text]
+utx() { local sid="$1" ago="$2" text="${3:-please do the thing}"; local ts
+        ts="$(TZ=UTC date -j -f %s "$((NOW-ago))" +%Y-%m-%dT%H:%M:%S 2>/dev/null).000Z"
+        printf '{"type":"user","timestamp":"%s","message":{"role":"user","content":"%s"}}\n' "$ts" "$text" >> "$D/proj/slug/$sid.jsonl"; }
+# the spawner's fired-peer stamp (handoff-fire mark_fired_peer shape); args: paneUUID [fired-ago-seconds]
+stamp() { local pane="$1" ago="${2:-50000}"; mkdir -p "$D/fired"; local iso
+          iso="$(TZ=UTC date -j -u -f %s "$((NOW-ago))" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)"
+          printf '{"paneUUID":"%s","cwd":"x","firedBy":"t","firedAt":"%s","selfRetire":true}\n' "$pane" "$iso" > "$D/fired/$pane.json"; }
 # a real git repo whose HEAD == origin/main (work LANDED). `dirty` arg (any value) leaves the tree dirty.
 mkrepo() { local r="$1" dirty="${2:-}"; mkdir -p "$r"; git -C "$r" init -q
            git -C "$r" config user.email t@t; git -C "$r" config user.name t
@@ -104,15 +120,31 @@ solo_team_cfg() { mkdir -p "$D/teams/session-$1"
   [ "$(cause PANE-A)" != handed-off-lead ]
 }
 
-@test "finished-teammate — an idle worktree session" {
-  reg PANE-A "$LIVE" /tmp/wt-feature-x sidA; tx sidA 9000
-  [ "$(cause PANE-A)" = finished-teammate ]
+@test "finished-teammate — an idle SPAWNER-STAMPED worktree worker" {
+  reg "$UP" "$LIVE" /tmp/wt-feature-x sidA; tx sidA 9000; stamp "$UP"
+  [ "$(cause "$UP")" = finished-teammate ]
 }
 
-@test "finished — idle solo session (implicit team only) + work LANDED → reapable" {
-  # the done-lifecycle session: idle, only the phantom team-lead member, tree clean & on trunk.
-  mkrepo "$D/landed"; reg PANE-A "$LIVE" "$D/landed" sidDone; tx sidDone 9000; solo_team_cfg sidDone
-  [ "$(cause PANE-A)" = finished ]
+@test "finished-teammate REQUIRES the stamp: an unstamped idle worktree session is NOT a teammate (2026-07-24)" {
+  # the Danny-Studio-60 shape minus the conversation: a worktree cwd alone must not brand a session
+  # a reapable worker — without the spawner's cc-fired stamp it falls to the never-reap default.
+  reg PANE-A "$LIVE" /tmp/wt-feature-x sidU; tx sidU 9000
+  c="$(cause PANE-A)"
+  [ "$c" != finished-teammate ]
+  [ "$c" = owned-wait ]
+}
+
+@test "finished — idle STAMPED worker (implicit team only) + work LANDED → reapable" {
+  # the done-lifecycle worker: idle, only the phantom team-lead member, tree clean & on trunk, stamped.
+  mkrepo "$D/landed"; reg "$UP" "$LIVE" "$D/landed" sidDone; tx sidDone 9000; solo_team_cfg sidDone; stamp "$UP"
+  [ "$(cause "$UP")" = finished ]
+}
+
+@test "finished-operator — landed idle solo WITHOUT the stamp → surfaced for confirm-close, never reapable (2026-07-24 Opus-5 shape)" {
+  # the Opus-5-upgrade session's steady state: operator-launched, Q&A finished hours ago, clean &
+  # 0 ahead (it never wrote anything). "Done"-looking, but the pane is the operator's to close.
+  mkrepo "$D/opq"; reg PANE-A "$LIVE" "$D/opq" sidOp; tx sidOp 9000; solo_team_cfg sidOp
+  [ "$(cause PANE-A)" = finished-operator ]
 }
 
 @test "finished REQUIRES landed — idle solo session on a DIRTY tree stays owned-wait (never-reap)" {
@@ -225,15 +257,15 @@ solo_team_cfg() { mkdir -p "$D/teams/session-$1"
 
 @test "in-flight guard does NOT fire once the tool_result has landed (matched tool_use → finished)" {
   # same tool call but its tool_result HAS landed (user record) and a final text turn closed the turn →
-  # not in-flight → the normal finished path applies (clean+landed solo).
-  mkrepo "$D/done"; reg PANE-A "$LIVE" "$D/done" sidDone3; solo_team_cfg sidDone3
+  # not in-flight → the normal finished path applies (clean+landed stamped worker).
+  mkrepo "$D/done"; reg "$UP" "$LIVE" "$D/done" sidDone3; solo_team_cfg sidDone3; stamp "$UP"
   ts="$(TZ=UTC date -j -f %s "$((NOW-9000))" +%Y-%m-%dT%H:%M:%S 2>/dev/null).000Z"
   {
     printf '{"type":"assistant","isSidechain":false,"timestamp":"%s","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_x","name":"Bash","input":{"command":"pnpm -s test"}}]}}\n' "$ts"
     printf '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_x","content":"ok"}]}}\n'
     printf '{"type":"assistant","isSidechain":false,"timestamp":"%s","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}\n' "$ts"
   } > "$D/proj/slug/sidDone3.jsonl"
-  [ "$(cause PANE-A)" = finished ]
+  [ "$(cause "$UP")" = finished ]
 }
 
 # ── P0-13 task 3: wait-contract + desk-role never-reap (a17 S-3) ─────────────────────────────────
@@ -248,11 +280,11 @@ solo_team_cfg() { mkdir -p "$D/teams/session-$1"
   [ "$c" != finished ]
 }
 
-@test "wait-contract: a CLOSED contract confers no protection (landed solo still finished — never weakens)" {
-  mkrepo "$D/desk2"; reg PANE-A "$LIVE" "$D/desk2" sidDesk2; tx sidDesk2 9000; solo_team_cfg sidDesk2
+@test "wait-contract: a CLOSED contract confers no protection (landed stamped worker still finished — never weakens)" {
+  mkrepo "$D/desk2"; reg "$UP" "$LIVE" "$D/desk2" sidDesk2; tx sidDesk2 9000; solo_team_cfg sidDesk2; stamp "$UP"
   mkdir -p "$D/wait-contracts"
   printf '{"id":"c2","waiter":"sidDesk2","waitee":"peer","status":"SATISFIED"}\n' > "$D/wait-contracts/c2.json"
-  [ "$(cause PANE-A)" = finished ]
+  [ "$(cause "$UP")" = finished ]
 }
 
 @test "desk-role never-reap: the desk-role file resolving to this pane → owned-wait, not finished (a17 S-3)" {
@@ -267,8 +299,8 @@ solo_team_cfg() { mkdir -p "$D/teams/session-$1"
 @test "landed-by-content: a squash-landed repo (content on trunk, count>0) → finished, not owned-wait (a18 L-10)" {
   # rev-list count says 1 ahead, but the branch content is durably on trunk (squash-land). Count-based
   # work_landed reads not-landed → owned-wait forever; content-based reads landed → finished (reapable).
-  mksquashland "$D/squash"; reg PANE-A "$LIVE" "$D/squash" sidSq; tx sidSq 9000; solo_team_cfg sidSq
-  [ "$(cause PANE-A)" = finished ]
+  mksquashland "$D/squash"; reg "$UP" "$LIVE" "$D/squash" sidSq; tx sidSq 9000; solo_team_cfg sidSq; stamp "$UP"
+  [ "$(cause "$UP")" = finished ]
 }
 
 @test "landed-by-content does NOT mislabel a genuinely-ahead branch (real WIP stays owned-wait)" {
@@ -287,4 +319,56 @@ solo_team_cfg() { mkdir -p "$D/teams/session-$1"
   mkrepo "$D/capped"; reg PANE-A "$LIVE" "$D/capped" sidCap; tx sidCap 9000; solo_team_cfg sidCap
   printf '{"type":"assistant","isApiErrorMessage":true,"message":{"role":"assistant","content":[{"type":"text","text":"You'\''ve hit your monthly spend limit"}]}}\n' >> "$D/proj/slug/sidCap.jsonl"
   [ "$(cause PANE-A)" = rate-limited ]
+}
+
+# ── 2026-07-24: operator-interaction hold + fired-peer stamp gating (Danny-Studio-60 / Opus-5) ────
+# The incident: two sessions the operator had typed into 12-14 min earlier were reaped as
+# finished-teammate / finished — "idle + clean + landed" is every interactive conversation's steady
+# state between prompts, so the classifier must read WHO drove the last turn, not only WHEN.
+@test "operator hold: a recent REAL prompt holds even a STAMPED landed worker → owned-wait (adoption)" {
+  # the Danny-Studio-60 shape: a desk-fired pool worker the operator started conversing with. Fired
+  # long ago (stamp 50000s old), landed, idle past threshold — but the operator typed 950s ago.
+  mkrepo "$D/adopt"; reg "$UP" "$LIVE" "$D/adopt" sidAd; tx sidAd 900; utx sidAd 950; stamp "$UP" 50000
+  c="$(cause "$UP")"
+  [ "$c" = owned-wait ]
+  [ "$c" != finished ]
+}
+
+@test "operator hold expires: a prompt OLDER than the hold no longer holds (stamped worker GC resumes)" {
+  mkrepo "$D/old"; reg "$UP" "$LIVE" "$D/old" sidOld; tx sidOld 9000; utx sidOld 30000; solo_team_cfg sidOld; stamp "$UP" 50000
+  [ "$(cause "$UP")" = finished ]
+}
+
+@test "the fire-time brief is NOT adoption: a prompt within slack of firedAt leaves the worker reapable" {
+  # a fired worker's brief arrives as a REAL user prompt at fire time (it2 keystroke injection).
+  # firedAt 1000s ago, brief 950s ago (inside the 300s slack) → spawn traffic, not operator adoption.
+  mkrepo "$D/brief"; reg "$UP" "$LIVE" "$D/brief" sidBr; tx sidBr 900; utx sidBr 950; solo_team_cfg sidBr; stamp "$UP" 1000
+  [ "$(cause "$UP")" = finished ]
+}
+
+@test "operator hold protects the UNSTAMPED interactive session (the Opus-5 mid-conversation shape)" {
+  # operator-launched (no stamp), landed, idle 675s — the operator asked a question 720s ago. Must be
+  # owned-wait via the hold (and could never be `finished` anyway — unstamped ⇒ finished-operator).
+  mkrepo "$D/conv"; reg PANE-A "$LIVE" "$D/conv" sidConv; tx sidConv 675; utx sidConv 720; solo_team_cfg sidConv
+  c="$(cause PANE-A)"
+  [ "$c" = owned-wait ]
+  [ "$c" != finished ]
+  [ "$c" != finished-teammate ]
+}
+
+@test "meta/auto traffic is NOT adoption: isMeta + Stop-hook feedback do not hold a stamped worker" {
+  # auto-drive re-prompts arrive isMeta:true and/or "Stop hook feedback:"-prefixed — both excluded,
+  # so a self-driving worker still reads finished (the conversation-hold deadlock guard).
+  mkrepo "$D/auto"; reg "$UP" "$LIVE" "$D/auto" sidAuto; tx sidAuto 9000; solo_team_cfg sidAuto; stamp "$UP" 50000
+  ts="$(TZ=UTC date -j -f %s "$((NOW-100))" +%Y-%m-%dT%H:%M:%S 2>/dev/null).000Z"
+  printf '{"type":"user","isMeta":true,"timestamp":"%s","message":{"role":"user","content":"auto-driven continuation"}}\n' "$ts" >> "$D/proj/slug/sidAuto.jsonl"
+  printf '{"type":"user","timestamp":"%s","message":{"role":"user","content":"Stop hook feedback: continue the loop"}}\n' "$ts" >> "$D/proj/slug/sidAuto.jsonl"
+  [ "$(cause "$UP")" = finished ]
+}
+
+@test "a tool_result user record is NOT adoption (tool traffic never reads as an operator prompt)" {
+  mkrepo "$D/toolt"; reg "$UP" "$LIVE" "$D/toolt" sidTool; tx sidTool 9000; solo_team_cfg sidTool; stamp "$UP" 50000
+  ts="$(TZ=UTC date -j -f %s "$((NOW-100))" +%Y-%m-%dT%H:%M:%S 2>/dev/null).000Z"
+  printf '{"type":"user","timestamp":"%s","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_z","content":"ok"}]}}\n' "$ts" >> "$D/proj/slug/sidTool.jsonl"
+  [ "$(cause "$UP")" = finished ]
 }

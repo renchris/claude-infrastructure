@@ -190,17 +190,53 @@ td_called() { [ -f "$D/td-calls" ]; }
   echo "$output" | grep -q 'settle'
 }
 
-@test "finished-teammate + landed + idle>settle → teardown called" {
-  mock_classify finished-teammate "$D/clean" 999 yes PANE-T
+@test "finished-teammate (stamped) + landed + idle>settle → teardown called" {
+  mark_fired
+  mock_classify finished-teammate "$D/clean" 999 yes "$WPANE"
   run "$R" sweep --reap
-  td_called; grep -q PANE-T "$D/td-calls"
+  td_called; grep -q "$WPANE" "$D/td-calls"
 }
 
-@test "finished + landed + idle>settle + --reap → teardown called (new reapable cause)" {
-  mock_classify finished "$D/clean" 999 yes PANE-F
+@test "finished (stamped) + landed + idle>settle + --reap → teardown called (new reapable cause)" {
+  mark_fired
+  mock_classify finished "$D/clean" 999 yes "$WPANE"
   run "$R" sweep --reap
   [ "$status" -eq 0 ]
-  td_called; grep -q PANE-F "$D/td-calls"
+  td_called; grep -q "$WPANE" "$D/td-calls"
+}
+
+# ── 2026-07-24 belt (Danny-Studio-60 / Opus-5 incident): finished/finished-teammate may only
+#    auto-reap a SPAWNER-STAMPED fired peer — an unstamped pane is operator-launched/adopted and is
+#    surfaced for confirm-close, even when a (stale/foreign) classifier labels it reapable. ──
+
+@test "2026-07-24 belt: finished WITHOUT the fired-peer stamp → surfaced, never torn down" {
+  mock_classify finished "$D/clean" 999 yes "$WPANE"   # UUID pane, deliberately NO marker
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  ! td_called
+  echo "$output" | grep -qi 'unstamped'
+}
+
+@test "2026-07-24 belt: finished-teammate WITHOUT the stamp → surfaced, never torn down" {
+  mock_classify finished-teammate "$D/clean" 999 yes "$WPANE"
+  run "$R" sweep --reap
+  ! td_called
+  echo "$output" | grep -qi 'unstamped'
+}
+
+@test "2026-07-24 belt: handed-off-lead is EXEMPT (live-successor evidence needs no stamp)" {
+  mock_classify handed-off-lead "$D/clean" 999 yes PANE-A
+  run "$R" sweep --reap
+  td_called
+}
+
+@test "2026-07-24 belt: finished-operator (classify's surface cause) pages the desk, never reaps" {
+  set_desk
+  mock_classify finished-operator "$D/clean" 9000 yes PANE-OP
+  run "$R" sweep --reap
+  ! td_called
+  notified
+  grep -q 'finished-operator' "$D/notify-calls"
 }
 
 @test "finished + work NOT landed → DEFER, no teardown (idle alone never reaps)" {
@@ -210,8 +246,9 @@ td_called() { [ -f "$D/td-calls" ]; }
   echo "$output" | grep -q 'NOT landed'
 }
 
-@test "finished DRY-RUN surfaces WOULD-REAP, never tears down" {
-  mock_classify finished "$D/clean" 999 yes PANE-F
+@test "finished (stamped) DRY-RUN surfaces WOULD-REAP, never tears down" {
+  mark_fired
+  mock_classify finished "$D/clean" 999 yes "$WPANE"
   run "$R" sweep
   [ "$status" -eq 0 ]
   ! td_called
@@ -236,9 +273,10 @@ td_called() { [ -f "$D/td-calls" ]; }
 @test "identity pin (a17 S-4): classify-time pid+lstart are forwarded to cc-teardown as --expect-*" {
   # cc-classify emits pid+lstart; cc-reaper must thread them to cc-teardown so a classify→act recycle
   # is caught. A mock classify supplies both; the teardown call must carry --expect-pid/--expect-lstart.
+  mark_fired
   cat > "$D/bin/classify" <<EOF
 #!/bin/bash
-jq -nc '[{name:"t",paneUUID:"PANE-A",account:"next",cwd:"$D/clean",cause:"finished",idle_s:999,work_landed:"yes",pid:4242,lstart:"Fri Jul 18 10:00:00 2026",successor:"PANE-SUCC",detail:"x"}]'
+jq -nc '[{name:"t",paneUUID:"$WPANE",account:"next",cwd:"$D/clean",cause:"finished",idle_s:999,work_landed:"yes",pid:4242,lstart:"Fri Jul 18 10:00:00 2026",successor:"PANE-SUCC",detail:"x"}]'
 EOF
   chmod +x "$D/bin/classify"; export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
   run "$R" sweep --reap
@@ -250,7 +288,8 @@ EOF
 }
 
 @test "identity pin: no pid/lstart from classify → no --expect-* args (back-compat, no crash)" {
-  mock_classify finished "$D/clean" 999 yes PANE-A   # legacy classify JSON: no pid/lstart fields
+  mark_fired
+  mock_classify finished "$D/clean" 999 yes "$WPANE"   # legacy classify JSON: no pid/lstart fields
   run "$R" sweep --reap
   [ "$status" -eq 0 ]
   td_called
@@ -260,11 +299,12 @@ EOF
 @test "landed-by-content (P0-17): cc-reaper's re-check reaps a squash-landed repo (content on trunk, count>0)" {
   # classify says finished+landed; the cwd is squash-landed (count>0). The COUNT-based re-check ABORTed
   # (permanent DEFER); the CONTENT-based re-check sees the work on trunk and reaps.
-  mock_classify finished "$D/squash" 999 yes PANE-A
+  mark_fired
+  mock_classify finished "$D/squash" 999 yes "$WPANE"
   run "$R" sweep --reap
   [ "$status" -eq 0 ]
   td_called
-  grep -q PANE-A "$D/td-calls"
+  grep -q "$WPANE" "$D/td-calls"
 }
 
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -275,7 +315,8 @@ EOF
   # THE BUG: work_landed used a bare `status --porcelain`, so ONE stray untracked file in a shared
   # cwd (a live sibling's scratch output — never this session's uncommitted work) made every co-cwd
   # session permanently "dirty". The post-classify re-check ABORTed forever and nothing could close.
-  mock_classify finished "$D/untracked" 999 yes PANE-U
+  mark_fired
+  mock_classify finished "$D/untracked" 999 yes "$WPANE"
   run "$R" sweep --reap
   [ "$status" -eq 0 ]
   td_called                                          # reaped, not ABORTed
@@ -283,7 +324,8 @@ EOF
 }
 
 @test "a TRACKED modification still reads dirty → ABORT (the relaxation removes no real safety)" {
-  mock_classify finished "$D/dirty" 999 yes PANE-D
+  mark_fired
+  mock_classify finished "$D/dirty" 999 yes "$WPANE"
   run "$R" sweep --reap
   ! td_called
   echo "$output" | grep -q ABORT
@@ -420,7 +462,8 @@ mkworktree() { # <main-repo> <wt-path> — a real LINKED worktree under a */.wor
 
 @test "worktree_cleanup REMOVES a fully clean linked worktree after a reap" {
   mkworktree "$D/main" "$D/.worktrees/wt-clean"
-  mock_classify finished-teammate "$D/.worktrees/wt-clean" 999 yes PANE-W
+  mark_fired
+  mock_classify finished-teammate "$D/.worktrees/wt-clean" 999 yes "$WPANE"
   run "$R" sweep --reap
   td_called
   echo "$output" | grep -q 'worktree removed'
@@ -432,7 +475,8 @@ mkworktree() { # <main-repo> <wt-path> — a real LINKED worktree under a */.wor
   # work_landed would let an uncommitted research report be deleted by `worktree remove --force`.
   mkworktree "$D/main2" "$D/.worktrees/wt-litter"
   echo "uncommitted research report" > "$D/.worktrees/wt-litter/REPORT.md"
-  mock_classify finished-teammate "$D/.worktrees/wt-litter" 999 yes PANE-W2
+  mark_fired
+  mock_classify finished-teammate "$D/.worktrees/wt-litter" 999 yes "$WPANE"
   run "$R" sweep --reap
   td_called                                          # pane reaped
   echo "$output" | grep -q 'LEFT INTACT'

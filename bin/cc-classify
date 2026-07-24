@@ -13,13 +13,23 @@
 #   owned-wait        pid alive, idle, a legitimate wait (live teammates / user)    → NEVER reap
 #   coordination-hang pid alive, idle, had REAL teammates but none alive / no prog  → NEVER reap (surface)
 #   handed-off-lead   idle, fired a /handoff, a live successor exists elsewhere      → reap IFF work landed
-#   finished-teammate a teammate/worktree session, idle, done                        → reap IFF work landed
-#   finished          idle past threshold, NO live teammates, work LANDED (committed + on trunk) → reap
+#   finished-teammate a SPAWNER-STAMPED fired worker in a worktree, idle, done       → reap IFF work landed
+#   finished          a SPAWNER-STAMPED fired worker, idle past threshold, work LANDED (on trunk) → reap
+#   finished-operator an OPERATOR pane (no fired stamp), idle, landed — looks done   → NEVER reap (surface)
 #   crashed           owning process is DEAD                                         → NEVER auto-reap (surface)
 #
 # SAFETY: the three REAPABLE causes (handed-off-lead, finished-teammate, finished) demand POSITIVE
-# evidence (a fired handoff + a live successor; a teammate context + idleness; work durably landed +
-# idle). Every ambiguous/idle case falls to a NEVER-reap cause. The implicit-team model (CC 2.1.178+)
+# evidence (a fired handoff + a live successor; a spawner fired-stamp + worktree + idleness; a
+# spawner fired-stamp + work durably landed + idle). Every ambiguous/idle case falls to a NEVER-reap
+# cause. 2026-07-24 (Danny-Studio-60 / Opus-5 incident): "done" additionally requires the pane not be
+# OPERATOR-HELD — between prompts a live operator conversation is indistinguishable from "done" by
+# idle+clean+landed alone (a Q&A session that writes nothing is ALWAYS clean & 0 ahead), so two
+# sessions the operator had typed into 12-14 min earlier were reaped as finished/finished-teammate.
+# Two structural guards close it: (1) a REAL operator-typed prompt within INTERACTIVE_HOLD_S reads
+# owned-wait (operator ADOPTION — for a fired worker only prompts AFTER firedAt+slack count; the fire
+# brief itself arrives as a user prompt); (2) finished/finished-teammate require the spawner's
+# cc-fired stamp — an unstamped "done" pane is finished-operator, surfaced for confirm-close, never
+# auto-reaped (the reaper's north star: an idle handed-off lead never lingers, NOTHING else is killed). The implicit-team model (CC 2.1.178+)
 # writes a team config for EVERY session — a config alone is NOT a coordination context; only a member
 # beyond the in-process `team-lead` placeholder is (else every idle solo session read as coordination-hang
 # and nothing could ever be `finished`). Work-landed and the final teardown gate are re-checked by the reaper
@@ -40,6 +50,10 @@ TRUNK="${CC_CLASSIFY_TRUNK:-origin/main}"
 TEAMS_GLOB="${CC_CLASSIFY_TEAMS_GLOB:-$HOME/.claude*/teams}"
 WAIT_CONTRACTS_DIR="${CC_CLASSIFY_WAIT_CONTRACTS_DIR:-$HOME/.claude/wait-contracts}"   # L2 wait system (a17 S-3)
 DESK_ROLE_FILE="${CC_CLASSIFY_DESK_ROLE_FILE:-$HOME/.claude/cc-roles/desk}"            # desk-role never-reap (a17 S-3)
+FIRED_DIR="${CC_FIRED_DIR:-$HOME/.claude/cc-fired}"          # spawner↔reaper fired-peer contract (T-P3-4; shared name with cc-reaper)
+INTERACTIVE_HOLD_S="${CC_CLASSIFY_INTERACTIVE_HOLD_S:-21600}"  # operator prompt within this ⇒ ADOPTED pane, never-reap (2026-07-24)
+FIRE_PROMPT_SLACK_S="${CC_CLASSIFY_FIRE_PROMPT_SLACK_S:-300}"  # prompts within this of firedAt = the spawn brief, not adoption
+INTERACTIVE_TAIL_BYTES="${CC_CLASSIFY_INTERACTIVE_TAIL_BYTES:-2000000}"  # recency needs the tail only (mirrors CC_CE_TAIL_BYTES)
 
 die(){ printf 'cc-classify: %s\n' "$*" >&2; exit 2; }
 command -v jq >/dev/null || die "jq required"
@@ -239,6 +253,52 @@ is_desk_role() { # <sid> <pane> <name> → 0 if the desk-role file resolves to t
   [ "$t" = "$pane" ] || [ "$t" = "$sid" ] || [ "$t" = "$name" ]
 }
 
+# ── fired-peer stamp + operator-interaction recency (2026-07-24, Danny-Studio-60 / Opus-5) ─────
+fired_peer() { # <paneUUID> → 0 if the SPAWNER stamped this pane a self-retiring fired worker.
+  # Mirrors cc-reaper's fired_peer: the only writer is handoff-fire.sh mark_fired_peer, at fire time.
+  # FAIL-SAFE BY CONSTRUCTION — no marker ⇒ operator/role session ⇒ the "done" causes never apply.
+  local pane="${1:-}"
+  [ -n "$pane" ] || return 1
+  case "$pane" in *[!0-9A-Fa-f-]*) return 1 ;; esac   # UUID-shaped only — never a path fragment
+  [ -f "$FIRED_DIR/$pane.json" ]
+}
+
+fired_at_epoch() { # <paneUUID> → epoch of the fire (marker firedAt; fallback: marker file mtime)
+  local pane="${1:-}" f iso ep
+  f="$FIRED_DIR/$pane.json"; [ -f "$f" ] || return 1
+  iso="$(jq -r '.firedAt // ""' "$f" 2>/dev/null)"
+  ep="$(iso_to_epoch "$iso")"
+  [ -n "$ep" ] || ep="$(stat -f %m "$f" 2>/dev/null)"
+  [ -n "$ep" ] || return 1
+  printf '%s' "$ep"
+}
+
+last_interactive_epoch() { # <jsonl> → epoch of the last REAL operator-typed prompt (empty-fail if none in tail)
+  # Semantics mirror hooks/lib/context-econ.sh ce_last_interactive_age (ground-truthed against
+  # production transcripts 2026-07-20; keep in sync): type==user AND isMeta!=true AND content is a
+  # string (or text blocks with NO tool_result) AND not auto-traffic (task-notifications, Stop-hook
+  # feedback, interrupt markers, our own ⟳/⚑/⚠ advisories). Operator slash-commands COUNT — the
+  # operator is present. Inlined (not sourced) so the classifier stays self-contained and the epoch
+  # is comparable against the seam-pinned $NOW (the lib returns an age vs the REAL clock).
+  local f="${1:-}" rx ep
+  [ -n "$f" ] && [ -f "$f" ] || return 1
+  rx="${CC_CLASSIFY_AUTO_RX:-^<task-notification>|^<local-command-stdout>|^Stop hook feedback:|^\\[Request interrupted|^⟳|^⚑|^⚠}"
+  ep="$(tail -c "$INTERACTIVE_TAIL_BYTES" "$f" 2>/dev/null | jq -Rr --arg rx "$rx" '
+      fromjson? | objects
+      | select(.type=="user") | select(.isMeta != true)
+      | (.message.content) as $c
+      | ( if ($c|type)=="string" then $c
+          elif ($c|type)=="array" and ([$c[]? | select(.type?=="tool_result")] | length)==0
+          then ([$c[]? | select(.type?=="text") | .text] | join("\n"))
+          else empty end ) as $t
+      | select(($t|length) > 0)
+      | select($t | test($rx) | not)
+      | (.timestamp | strings | sub("\\.[0-9]+Z$"; "Z") | try fromdateiso8601 catch empty)
+    ' 2>/dev/null | tail -1)"
+  case "$ep" in ''|*[!0-9]*) return 1 ;; esac
+  printf '%s' "$ep"
+}
+
 work_landed() { # <cwd> → 0 if clean AND the branch's content is on trunk (P0-17 landed-by-CONTENT).
   # a18 L-10: landed was a rev-list COUNT — a squash/cherry-pick land (different sha, same content)
   # left HEAD "N ahead" though the work was durably on trunk, so a finished session DEFERred every 300s
@@ -330,9 +390,34 @@ classify_entry() { # <entry-json> <all-sessions-json>
     CAUSE=owned-wait; DETAIL="idle ${IDLE}s, the desk-role file resolves to this session — desk-role (never-reap)"; return 0
   fi
 
-  # 5. finished-teammate: a worktree/teammate session, idle, no live successor needed
-  if is_worktree_session "$cwd"; then
-    CAUSE=finished-teammate; DETAIL="worktree/teammate session, idle ${IDLE}s; work-landed=$LANDED"; return 0
+  # 4.7 operator-interaction hold (2026-07-24, Danny-Studio-60 / Opus-5): a REAL operator-typed
+  #     prompt marks the pane operator-ADOPTED. Between prompts an interactive conversation is
+  #     indistinguishable from "done" by every durable signal below (idle since the last assistant
+  #     turn + clean + landed — a Q&A session that writes nothing is ALWAYS clean & 0 ahead), so two
+  #     live operator conversations were reaped 12-14 min after the operator's last prompt. The hold
+  #     reads the one signal "done" cannot fake: WHO drove the last turn. For a spawner-stamped fired
+  #     worker the fire-time brief (and its immediate retries) arrives as a real user prompt — only
+  #     interaction AFTER firedAt+slack is adoption, so worker GC is not held by the brief itself.
+  #     Placed AFTER handed-off-lead: a fired self-handoff's live successor carries the conversation,
+  #     so the predecessor pane reaps regardless of how recently the operator typed into it.
+  local iep
+  if [ "$INTERACTIVE_HOLD_S" -gt 0 ] 2>/dev/null && [ -n "$tj" ] && iep="$(last_interactive_epoch "$tj")"; then
+    local iage=$(( NOW - iep )); [ "$iage" -lt 0 ] && iage=0
+    if [ "$iage" -lt "$INTERACTIVE_HOLD_S" ]; then
+      local fep=""
+      if fired_peer "$pane"; then fep="$(fired_at_epoch "$pane" || true)"; fi
+      if [ -z "$fep" ] || [ "$iep" -gt $(( fep + FIRE_PROMPT_SLACK_S )) ]; then
+        CAUSE=owned-wait; DETAIL="operator prompt ${iage}s ago (< hold ${INTERACTIVE_HOLD_S}s) — operator-adopted pane (never-reap)"; return 0
+      fi
+    fi
+  fi
+
+  # 5. finished-teammate: a SPAWNER-STAMPED fired worker in a worktree, idle. The cwd path alone is
+  #    NOT teammate evidence (2026-07-24: an operator conversing inside a wt-pool worktree was reaped
+  #    as finished-teammate 14 min after their prompt) — the stamp is the spawner's own "self-retiring
+  #    worker" contract; an unstamped worktree session falls through to the operator-safe branches.
+  if is_worktree_session "$cwd" && fired_peer "$pane"; then
+    CAUSE=finished-teammate; DETAIL="spawner-stamped fired worker in a worktree, idle ${IDLE}s; work-landed=$LANDED"; return 0
   fi
 
   # 6. REAL team coordination — ONLY when the team actually spawned a teammate (a member beyond the
@@ -359,9 +444,15 @@ classify_entry() { # <entry-json> <all-sessions-json>
 
   # 7. finished: idle past threshold, no live teammates, and work is LANDED (clean tree AND nothing
   #    ahead of trunk). POSITIVE, durable done-evidence (committed + on trunk), never inferred from
-  #    silence. Reapable — the reaper re-verifies landed + settle window and checkpoints WIP first.
+  #    silence. Reapable ONLY for a spawner-stamped fired worker — an unstamped pane is the
+  #    OPERATOR's (or predates the marker): it is surfaced as finished-operator for confirm-close,
+  #    never auto-reaped (2026-07-24; "clean & landed & idle" is every interactive Q&A session's
+  #    steady state, not proof the operator is done with the pane).
   if [ "$LANDED" = yes ]; then
-    CAUSE=finished; DETAIL="idle ${IDLE}s, no live teammates, work landed (clean & 0 ahead of $TRUNK) — done, reapable"; return 0
+    if fired_peer "$pane"; then
+      CAUSE=finished; DETAIL="idle ${IDLE}s, no live teammates, work landed (clean & 0 ahead of $TRUNK), spawner-stamped worker — done, reapable"; return 0
+    fi
+    CAUSE=finished-operator; DETAIL="idle ${IDLE}s, work landed, but operator-launched (no fired-peer stamp) — surface for confirm-close, never auto-reap"; return 0
   fi
 
   # Gap B (2026-07-17): a solo idle session whose OWN commits are landed (0 ahead of trunk) but whose

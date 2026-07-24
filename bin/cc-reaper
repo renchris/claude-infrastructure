@@ -27,6 +27,12 @@
 #      finished (idle past settle + no live teammates + work landed) OR coordination-abandoned
 #      (a dead-partner coordination-hang idle past COORD_HANG_DEAD_REAP_S WITH a live co-cwd owner
 #      that owns the shared tree — still landed-gated at step 2, so ahead/dirty ones DEFER not reap).
+#   1b. 2026-07-24 (Danny-Studio-60 / Opus-5): finished/finished-teammate additionally require the
+#      SPAWNER's cc-fired stamp, checked HERE as an independent leg (and in cc-classify, which also
+#      holds any pane the operator typed into within its interactive-hold window). "idle + clean +
+#      landed" is every interactive conversation's steady state between operator prompts — it is
+#      worker-done evidence only when the spawner stamped the pane a self-retiring worker. An
+#      unstamped "done" pane is surfaced for operator confirm-close, never auto-reaped.
 #   2. work is LANDED (clean tree AND nothing ahead of origin/trunk) — re-verified here, post-classify.
 #   3. it has been idle >= the SETTLE window (the primary --recycle / TeammateIdle self-close had its
 #      chance first; the reaper is the BACKSTOP, never the first mover).
@@ -83,7 +89,9 @@ PAGE_TO="${CC_PAGE_TO:-}"                                               # explic
 PAGE_TO_FILE="${CC_PAGE_TO_FILE:-$HOME/.claude/cc-roles/desk}"          # DEFAULT: the ROLE file cc-notify --role resolves
 # never-reap causes that WARRANT a desk page (a human must re-engage / close / confirm-close). active,
 # owned-wait, rate-limited are DELIBERATELY excluded: healthy or self-healing, a page would be noise.
-SURFACE_PAGE_RE='^(coordination-hang|crashed|finished-shared-review)$'
+# finished-operator (2026-07-24): an operator-launched pane that looks done — confirm-close is the
+# operator's call, never the reaper's (the Danny-Studio-60 / Opus-5 reaps).
+SURFACE_PAGE_RE='^(coordination-hang|crashed|finished-shared-review|finished-operator)$'
 # ── T-P3-4: auto-reap the DESK-FIRED WORKER pile ───────────────────────────────────────────────
 # Every finished session sharing a cwd with a live sibling was SURFACED for operator confirm-close
 # (finished-shared-review) and 0 were auto-reaped, so 13+ finished desk-fired workers piled up and
@@ -411,6 +419,21 @@ sweep() {
     fi
     if ! [ "$idle" -ge "$SETTLE_S" ] 2>/dev/null; then
       say "  keep   $name [$cause] — idle ${idle}s < settle ${SETTLE_S}s (self-close still has its chance)"; continue
+    fi
+    # ── 2026-07-24 belt (Danny-Studio-60 / Opus-5 incident): finished/finished-teammate may only
+    #    auto-reap a SPAWNER-STAMPED fired peer. An unstamped pane is operator-launched/adopted (or
+    #    predates the marker) — surface it for confirm-close instead, even if a stale or foreign
+    #    classifier labeled it reapable (cc-classify enforces the same gate; this is the reaper's own
+    #    independent leg). handed-off-lead (live successor) and coordination-abandoned (dead-partner
+    #    horizon + live co-cwd owner) rest on their own positive evidence and are exempt.
+    if [[ "$cause" =~ ^(finished|finished-teammate)$ ]] && ! fired_peer "$pane"; then
+      say "  keep   $name [$cause] — unstamped operator pane (no fired-peer marker): auto-reap refused (2026-07-24 belt)"
+      log "belt-refuse $name [$cause] pane=$pane: no fired-peer marker"
+      surfaced=$((surfaced+1))
+      local bkey; bkey="$(sanitize_key "${pane:-$name}")"
+      surfaced_keys="$surfaced_keys$bkey "
+      handle_surface "$reap" "$bkey" "$name" "$cause" "$pane" "unstamped operator pane (no fired-peer marker) — auto-reap refused; confirm-close if truly done"
+      continue
     fi
     candidates=$((candidates+1))
     if [ $reap = 0 ]; then
