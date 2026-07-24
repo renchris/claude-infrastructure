@@ -103,7 +103,10 @@ EOF
 # Pane UUIDs must be UUID-SHAPED ([0-9A-Fa-f-]) — cc-reaper's fired_peer refuses anything else as a
 # path fragment, so the legacy "PANE-A" labels deliberately cannot carry a marker.
 WPANE="2BE82E97-1111-4222-8333-444455556666"
-mark_fired()   { mkdir -p "$D/fired"; echo '{"selfRetire":true}' > "$D/fired/${1:-$WPANE}.json"; }
+# mark_fired writes a firedAt=now stamp; paired with mock_classify's startedAt=now default this is
+# TENANCY-VALID by construction (rule 2). Tests exercising staleness set firedAt/startedAt explicitly.
+mark_fired()   { mkdir -p "$D/fired"; local iso; iso="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)"
+                 printf '{"paneUUID":"%s","cwd":"x","firedBy":"t","firedAt":"%s","selfRetire":true}\n' "${1:-$WPANE}" "$iso" > "$D/fired/${1:-$WPANE}.json"; }
 fired_marked() { [ -f "$D/fired/${1:-$WPANE}.json" ]; }
 notified()  { [ -s "$D/notify-calls" ]; }
 reconciled() { [ -f "$D/reconcile-calls" ]; }
@@ -111,12 +114,14 @@ backlog_reaped() { grep -q '^BACKLOG reap' "$D/backlog-calls" 2>/dev/null; }
 set_desk()  { echo "DESK-UUID" > "$D/desk"; }
 set_live()  { echo "$1" > "$D/nlive"; }
 
-# emit a mock cc-classify --all --json with ONE session; args: cause cwd idle landed [pane]
+# emit a mock cc-classify --all --json with ONE session; args: cause cwd idle landed [pane] [startedAt-ms]
+# startedAt defaults to NOW-in-ms so a fresh mark_fired stamp is tenancy-VALID (rule 2); the stale-
+# tenancy test overrides it to a value beyond firedAt+BOOT_MAX.
 mock_classify() {
-  local cause="$1" cwd="$2" idle="$3" landed="$4" pane="${5:-PANE-X}"
+  local cause="$1" cwd="$2" idle="$3" landed="$4" pane="${5:-PANE-X}" started="${6:-$(( $(date +%s) * 1000 ))}"
   cat > "$D/bin/classify" <<EOF
 #!/bin/bash
-jq -nc '[{name:"t",paneUUID:"$pane",account:"next",cwd:"$cwd",cause:"$cause",idle_s:$idle,work_landed:"$landed",successor:"PANE-SUCC",detail:"x"}]'
+jq -nc '[{name:"t",paneUUID:"$pane",account:"next",cwd:"$cwd",cause:"$cause",idle_s:$idle,work_landed:"$landed",startedAt:$started,successor:"PANE-SUCC",detail:"x"}]'
 EOF
   chmod +x "$D/bin/classify"; export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
 }
@@ -288,9 +293,10 @@ td_called() { [ -f "$D/td-calls" ]; }
   # cc-classify emits pid+lstart; cc-reaper must thread them to cc-teardown so a classify→act recycle
   # is caught. A mock classify supplies both; the teardown call must carry --expect-pid/--expect-lstart.
   mark_fired
+  local now_ms=$(( $(date +%s) * 1000 ))          # tenancy-valid startedAt (rule 2) vs the fresh stamp
   cat > "$D/bin/classify" <<EOF
 #!/bin/bash
-jq -nc '[{name:"t",paneUUID:"$WPANE",account:"next",cwd:"$D/clean",cause:"finished",idle_s:999,work_landed:"yes",pid:4242,lstart:"Fri Jul 18 10:00:00 2026",successor:"PANE-SUCC",detail:"x"}]'
+jq -nc '[{name:"t",paneUUID:"$WPANE",account:"next",cwd:"$D/clean",cause:"finished",idle_s:999,work_landed:"yes",pid:4242,lstart:"Fri Jul 18 10:00:00 2026",startedAt:$now_ms,successor:"PANE-SUCC",detail:"x"}]'
 EOF
   chmod +x "$D/bin/classify"; export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
   run "$R" sweep --reap
@@ -319,6 +325,24 @@ EOF
   [ "$status" -eq 0 ]
   td_called
   grep -q "$WPANE" "$D/td-calls"
+}
+
+# ── stamp tenancy binding (2026-07-24 rule 2): a stamp gates a pane's CURRENT session only if that
+#    session booted within firedAt+BOOT_MAX. A later tenant reusing a previously-fired pane inherits a
+#    STALE stamp — never auto-reaped, and the stamp is GC'd. ──────────────────────────────────────────
+@test "stale-tenancy stamp: a pane whose current session booted long after the fire is NOT reaped + stamp GC'd (rule 2)" {
+  # firedAt = 2h ago; the current session started NOW (startedAt ≫ firedAt+BOOT_MAX=+1800). Pre-fix:
+  # file-exists ⇒ belt passes ⇒ reaped. Post-fix: stale tenancy ⇒ auto-reap refused AND the stamp GC'd.
+  set_desk; set_live 1
+  local old_iso; old_iso="$(date -u -r "$(( $(date +%s) - 7200 ))" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)"
+  mkdir -p "$D/fired"; printf '{"paneUUID":"%s","cwd":"x","firedBy":"t","firedAt":"%s","selfRetire":true}\n' "$WPANE" "$old_iso" > "$D/fired/$WPANE.json"
+  mock_classify finished "$D/clean" 9000 yes "$WPANE" "$(( $(date +%s) * 1000 ))"   # tenant booted NOW
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  ! td_called                                        # NOT reaped (stale stamp rejected by the belt)
+  [ ! -f "$D/fired/$WPANE.json" ]                     # stamp GC'd
+  grep -q 'stale-tenancy stamp GC' "$D/reaper.log"
+  echo "$output" | grep -qi 'unstamped/stale'
 }
 
 # ─────────────────────────────────────────────────────────────────────────────────────────────────

@@ -38,6 +38,8 @@ EOF
 }
 # fired_peer refuses non-UUID panes as path fragments, so stamped tests need a UUID-shaped pane.
 UP="4EC4DA5D-0000-4000-8000-000000000001"
+# a second UUID for a firedBy-stamped SUCCESSOR pane (change 4 positive-handoff link).
+SUCC="4EC4DA5D-0000-4000-8000-000000000002"
 
 # write a single-session registry; args: paneUUID pid cwd sid [startedAt]
 reg() { printf '[{"name":"t","paneUUID":"%s","account":"next","cwd":"%s","pid":%s,"session_id":"%s","startedAt":%s}]\n' \
@@ -55,9 +57,22 @@ utx() { local sid="$1" ago="$2" text="${3:-please do the thing}"; local ts
         ts="$(TZ=UTC date -j -f %s "$((NOW-ago))" +%Y-%m-%dT%H:%M:%S 2>/dev/null).000Z"
         printf '{"type":"user","timestamp":"%s","message":{"role":"user","content":"%s"}}\n' "$ts" "$text" >> "$D/proj/slug/$sid.jsonl"; }
 # the spawner's fired-peer stamp (handoff-fire mark_fired_peer shape); args: paneUUID [fired-ago-seconds]
-stamp() { local pane="$1" ago="${2:-50000}"; mkdir -p "$D/fired"; local iso
-          iso="$(TZ=UTC date -j -u -f %s "$((NOW-ago))" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)"
-          printf '{"paneUUID":"%s","cwd":"x","firedBy":"t","firedAt":"%s","selfRetire":true}\n' "$pane" "$iso" > "$D/fired/$pane.json"; }
+# ALSO binds the registered startedAt for this pane to the fire epoch so the stamp is tenancy-VALID by
+# default (rule 2: a real fired worker boots ~at the fire) — must be called AFTER reg/add wrote the row.
+stamp() { local pane="$1" ago="${2:-50000}"; mkdir -p "$D/fired"; local iso fire_ep=$((NOW-ago))
+          iso="$(TZ=UTC date -j -u -f %s "$fire_ep" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)"
+          printf '{"paneUUID":"%s","cwd":"x","firedBy":"t","firedAt":"%s","selfRetire":true}\n' "$pane" "$iso" > "$D/fired/$pane.json"
+          [ -f "$D/sessions.json" ] && jq --arg p "$pane" --argjson s "$((fire_ep*1000))" \
+            '(.[]|select(.paneUUID==$p)|.startedAt)|=$s' "$D/sessions.json" > "$D/sessions.json.t" 2>/dev/null \
+            && mv "$D/sessions.json.t" "$D/sessions.json"; return 0; }
+# a fired stamp whose firedBy names the PREDECESSOR sid (change 4 positive-handoff link), sitting on the
+# SUCCESSOR pane; binds the successor's startedAt to the fire epoch (tenancy-valid). args: succ-pane pred-sid [ago]
+stamp_by() { local pane="$1" by="$2" ago="${3:-200}"; mkdir -p "$D/fired"; local iso fire_ep=$((NOW-ago))
+             iso="$(TZ=UTC date -j -u -f %s "$fire_ep" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)"
+             printf '{"paneUUID":"%s","cwd":"x","firedBy":"%s","firedAt":"%s","selfRetire":true}\n' "$pane" "$by" "$iso" > "$D/fired/$pane.json"
+             [ -f "$D/sessions.json" ] && jq --arg p "$pane" --argjson s "$((fire_ep*1000))" \
+               '(.[]|select(.paneUUID==$p)|.startedAt)|=$s' "$D/sessions.json" > "$D/sessions.json.t" 2>/dev/null \
+               && mv "$D/sessions.json.t" "$D/sessions.json"; return 0; }
 # a real git repo whose HEAD == origin/main (work LANDED). `dirty` arg (any value) leaves the tree dirty.
 mkrepo() { local r="$1" dirty="${2:-}"; mkdir -p "$r"; git -C "$r" init -q
            git -C "$r" config user.email t@t; git -C "$r" config user.name t
@@ -99,10 +114,11 @@ solo_team_cfg() { mkdir -p "$D/teams/session-$1"
   [ "$(cause PANE-A)" = rate-limited ]
 }
 
-@test "handed-off-lead — idle + fired /handoff + a LIVE successor in the same cwd" {
+@test "handed-off-lead — idle + fired /handoff + a LIVE firedBy-stamped successor (change 4)" {
   reg PANE-A "$LIVE" /work sidA 500
   printf '{"type":"assistant","isSidechain":false,"timestamp":"2001-09-08T00:00:00.000Z","message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{"command":"~/.claude/scripts/handoff-fire.sh --recycle"}}]}}\n' >> "$D/proj/slug/sidA.jsonl"
-  add PANE-B "$LIVE" /work sidB 999999900000   # successor: same cwd, alive pid, newer (epoch-ms)
+  add "$SUCC" "$LIVE" /work sidB 999999900000   # successor: same cwd, alive pid, newer (epoch-ms)
+  stamp_by "$SUCC" sidA                          # the spawner stamped the successor pane firedBy=sidA
   [ "$(cause PANE-A)" = handed-off-lead ]
 }
 
@@ -389,4 +405,90 @@ solo_team_cfg() { mkdir -p "$D/teams/session-$1"
   ts="$(TZ=UTC date -j -f %s "$((NOW-100))" +%Y-%m-%dT%H:%M:%S 2>/dev/null).000Z"
   printf '{"type":"user","timestamp":"%s","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_z","content":"ok"}]}}\n' "$ts" >> "$D/proj/slug/sidTool.jsonl"
   [ "$(cause "$UP")" = finished ]
+}
+
+# ── 2026-07-24 residual fixes (adversarial audit of c063ca0): tenancy binding · tail fallback ·
+#    image paste · hold-before-handoff · positive successor link · hold floor ──────────────────────
+
+@test "stale-tenancy stamp: an operator session reusing a previously-fired pane is NOT reapable (rule 2)" {
+  # a pane was fired as a worker long ago (firedAt = NOW-50000). That worker closed; the OPERATOR later
+  # opened a fresh session in the SAME pane (startedAt = NOW-40000, well past firedAt+BOOT_MAX=+1800).
+  # The pane-keyed stamp must NOT brand the current tenant a reapable worker. Pre-fix: file-exists ⇒
+  # finished (reapable). Post-fix: tenancy-stale stamp rejected ⇒ finished-operator (surface).
+  mkrepo "$D/tenancy"; reg "$UP" "$LIVE" "$D/tenancy" sidT; tx sidT 9000; solo_team_cfg sidT
+  local fiso; fiso="$(TZ=UTC date -j -u -f %s "$((NOW-50000))" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)"
+  mkdir -p "$D/fired"; printf '{"paneUUID":"%s","cwd":"x","firedBy":"t","firedAt":"%s","selfRetire":true}\n' "$UP" "$fiso" > "$D/fired/$UP.json"
+  # current tenant booted 40000s ago — 8200s AFTER firedAt+1800 → tenancy STALE (do NOT auto-patch)
+  jq --arg p "$UP" --argjson s "$(( (NOW-40000)*1000 ))" '(.[]|select(.paneUUID==$p)|.startedAt)|=$s' "$D/sessions.json" > "$D/sessions.json.t" && mv "$D/sessions.json.t" "$D/sessions.json"
+  c="$(cause "$UP")"
+  [ "$c" = finished-operator ]
+  [ "$c" != finished ]
+}
+
+@test "tail-window fallback: an interactive turn buried BEYOND the tail window still holds (whole-file scan)" {
+  # a long transcript: the operator prompt is early, then filler pushes it past a small tail window. The
+  # tail scan misses it; the file exceeds the window ⇒ the whole-file fallback finds it → still holds.
+  export CC_CLASSIFY_INTERACTIVE_TAIL_BYTES=4096
+  mkrepo "$D/bury"; reg PANE-A "$LIVE" "$D/bury" sidBury; solo_team_cfg sidBury
+  utx sidBury 950                                    # operator prompt FIRST (recent), then filler
+  local pad; pad="$(printf 'x%.0s' $(seq 1 200))"
+  local i; for i in $(seq 1 40); do
+    printf '{"type":"assistant","isSidechain":false,"timestamp":"2001-09-08T00:00:00.000Z","message":{"role":"assistant","content":[{"type":"text","text":"%s"}]}}\n' "$pad" >> "$D/proj/slug/sidBury.jsonl"
+  done
+  [ "$(wc -c < "$D/proj/slug/sidBury.jsonl")" -gt 4096 ]   # guard: the fixture really exceeds the window
+  c="$(cause PANE-A)"
+  [ "$c" = owned-wait ]
+  [ "$c" != finished-operator ]
+}
+
+@test "image-only operator paste holds (interactive with no text) → owned-wait" {
+  # an operator pastes ONLY a screenshot (⌘V): content is an array with an image block, no text. Still
+  # operator presence → the hold reads it interactive → owned-wait. Pre-fix (text-only): finished-operator.
+  mkrepo "$D/img"; reg PANE-A "$LIVE" "$D/img" sidImg; tx sidImg 900; solo_team_cfg sidImg
+  local ts; ts="$(TZ=UTC date -j -f %s "$((NOW-950))" +%Y-%m-%dT%H:%M:%S 2>/dev/null).000Z"
+  printf '{"type":"user","timestamp":"%s","message":{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBOR"}}]}}\n' "$ts" >> "$D/proj/slug/sidImg.jsonl"
+  c="$(cause PANE-A)"
+  [ "$c" = owned-wait ]
+  [ "$c" != finished-operator ]
+}
+
+@test "hold beats handed-off-lead: a recent operator prompt holds even with a live successor → owned-wait (change 3)" {
+  # a lead that fired a /handoff AND has a live successor, but the operator just typed into it → adopted,
+  # not spent. Pre-fix (hold after handed-off-lead): handed-off-lead (reapable). Post-fix: owned-wait.
+  reg PANE-A "$LIVE" /work sidA 500
+  printf '{"type":"assistant","isSidechain":false,"timestamp":"2001-09-08T00:00:00.000Z","message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{"command":"handoff-fire.sh --recycle"}}]}}\n' >> "$D/proj/slug/sidA.jsonl"
+  utx sidA 200                                        # operator typed 200s ago (well within hold)
+  add "$SUCC" "$LIVE" /work sidB 999999900000         # live successor
+  stamp_by "$SUCC" sidA                               # even firedBy-stamped, the hold still wins
+  c="$(cause PANE-A)"
+  [ "$c" = owned-wait ]
+  [ "$c" != handed-off-lead ]
+}
+
+@test "unstamped successor ⇒ NO handed-off-lead (operator-driven /handoff surfaces, never auto-reaps) (change 4)" {
+  # fired a /handoff with a LIVE successor in the same cwd, but NO cc-fired stamp names sidA as firedBy →
+  # the handoff was operator-driven. Must NOT be handed-off-lead; falls through to finished-operator.
+  mkrepo "$D/uns"; reg PANE-A "$LIVE" "$D/uns" sidA 500
+  {
+    printf '{"type":"assistant","isSidechain":false,"timestamp":"2001-09-08T00:00:00.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_ho","name":"Bash","input":{"command":"handoff-fire.sh --recycle"}}]}}\n'
+    printf '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_ho","content":"fired"}]}}\n'
+  } >> "$D/proj/slug/sidA.jsonl"
+  add "$SUCC" "$LIVE" "$D/uns" sidB 999999900000     # live successor, but no firedBy stamp
+  c="$(cause PANE-A)"
+  [ "$c" != handed-off-lead ]
+  [ "$c" = finished-operator ]
+}
+
+@test "hold floor: HOLD_S=0 falls back to the 21600 default (+ warns), still holds a recent prompt (rule 5)" {
+  export CC_CLASSIFY_INTERACTIVE_HOLD_S=0
+  mkrepo "$D/floor"; reg PANE-A "$LIVE" "$D/floor" sidF; tx sidF 900; utx sidF 950; solo_team_cfg sidF
+  run bash -c "'$C' PANE-A --json 2>&1 >/dev/null"   # capture stderr only
+  echo "$output" | grep -qi 'flooring to 21600'
+  [ "$(cause PANE-A)" = owned-wait ]                  # floored hold (21600) holds the 950s prompt
+}
+
+@test "hold DISABLE=1 turns the hold OFF (a recent prompt no longer holds a stamped landed worker) (rule 5)" {
+  export CC_CLASSIFY_INTERACTIVE_HOLD_DISABLE=1
+  mkrepo "$D/dis"; reg "$UP" "$LIVE" "$D/dis" sidD; tx sidD 900; utx sidD 950; solo_team_cfg sidD; stamp "$UP" 50000
+  [ "$(cause "$UP")" = finished ]                     # hold disabled ⇒ the recent prompt does not hold
 }
