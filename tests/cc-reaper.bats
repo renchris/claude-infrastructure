@@ -782,3 +782,66 @@ EOF
   td_called
   grep -q "$pane" "$D/td-calls"
 }
+
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+# Gap-3 suspend-guard (2026-07-25): a sweep whose wall-clock crossed a machine SUSPEND must reap
+# nothing (the classify idle values are stale across the jump). Clock seamed via CC_REAPER_NOW_FILE —
+# a durable value, not a file mtime. The reapable candidate is a handed-off-lead with a live successor
+# (passes every other gate) so ONLY the suspend-guard can defer it.
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+@test "Gap-3 suspend-guard: inter-sweep gap > threshold (machine slept between sweeps) → reap DEFERRED" {
+  local NOW=1900000000
+  export CC_REAPER_NOW_FILE="$D/now"; echo "$NOW" > "$D/now"
+  export CC_REAPER_BEAT_FILE="$D/beat"; echo "$((NOW-10000))" > "$D/beat"   # last sweep ended 10000s ago
+  export CC_REAPER_SUSPEND_S=900
+  mock_classify_handoff "$D/clean" 9999 yes PANE-A
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  ! td_called
+  grep -q 'suspend-defer' "$D/reaper.log"
+}
+
+@test "Gap-3 suspend-guard: intra-sweep span > threshold (slept mid-sweep) → reap DEFERRED" {
+  local NOW=1900000000
+  export CC_REAPER_NOW_FILE="$D/now"; echo "$NOW" > "$D/now"
+  export CC_REAPER_BEAT_FILE="$D/beat"; echo "$((NOW-60))" > "$D/beat"       # recent last sweep (no inter-suspend)
+  export CC_REAPER_SUSPEND_S=900
+  # classify BUMPS the clock +10000s while running → simulates a suspend DURING classify
+  cat > "$D/bin/classify" <<EOF
+#!/bin/bash
+echo "$((NOW+10000))" > "$D/now"
+jq -nc '[{name:"lead",paneUUID:"PANE-A",account:"next",cwd:"$D/clean",cause:"handed-off-lead",idle_s:9999,work_landed:"yes",successor:"$HSUCC",detail:"x"},
+         {name:"succ",paneUUID:"$HSUCC",account:"next",cwd:"$D/clean",cause:"active",idle_s:5,work_landed:"no",successor:null,pid:$$,detail:"x"}]'
+EOF
+  chmod +x "$D/bin/classify"; export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  ! td_called
+  grep -q 'suspend-defer' "$D/reaper.log"
+}
+
+@test "Gap-3 suspend-guard: a normal sweep (no suspend) still reaps a valid candidate (no over-block)" {
+  local NOW=1900000000
+  export CC_REAPER_NOW_FILE="$D/now"; echo "$NOW" > "$D/now"
+  export CC_REAPER_BEAT_FILE="$D/beat"; echo "$((NOW-60))" > "$D/beat"
+  export CC_REAPER_SUSPEND_S=900
+  mock_classify_handoff "$D/clean" 9999 yes PANE-A
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  td_called
+  grep -q 'PANE-A' "$D/td-calls"
+}
+
+@test "Gap-3 suspend-guard: --reap writes the sweep-end heartbeat; DRY-RUN writes none" {
+  local NOW=1900000000
+  export CC_REAPER_NOW_FILE="$D/now"; echo "$NOW" > "$D/now"
+  export CC_REAPER_BEAT_FILE="$D/beat"; rm -f "$D/beat"
+  mock_classify active "$D/clean" 5 no PANE-Z
+  run "$R" sweep                                # DRY-RUN → writes nothing
+  [ "$status" -eq 0 ]
+  [ ! -f "$D/beat" ]
+  run "$R" sweep --reap                         # --reap → heartbeat = this sweep's clock (durable)
+  [ "$status" -eq 0 ]
+  [ "$(cat "$D/beat")" = "$NOW" ]
+}

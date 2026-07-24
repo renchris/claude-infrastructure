@@ -81,6 +81,15 @@ say(){ printf '%s\n' "$*"; }
 
 # ── surface-cause desk paging (T-P3-3) + enumerated≈live-panes self-check (P0-12b) config ──
 PAGEDIR="${CC_REAPER_PAGEDIR:-$HOME/.claude/autonomy/pages/reaper}"     # damping/state (autonomy/pages namespace)
+# ── Gap-3 suspend-guard (2026-07-25): the laptop sleeps every ~15min on battery; a single sweep was
+#    observed spanning 19:37→22:03Z (2h26m) across a suspend, and 00:02→15:35Z overnight. Across a
+#    suspend the classify idle values are untrustworthy (a session idle 9min pre-sleep reads idle 3h
+#    post-wake) AND the settle window bought zero real self-close running-time. A sweep whose wall-clock
+#    span (intra-sweep) OR gap since the last sweep's end (inter-sweep) exceeds SUSPEND_S ⇒ reap NOTHING
+#    this sweep — surface/defer only; the next fresh sweep reaps normally. >> the ~4min normal sweep.
+#    Strictly narrowing, fail-closed. CC_REAPER_NOW_FILE seams the clock for tests (durable, not mtime).
+SUSPEND_S="${CC_REAPER_SUSPEND_S:-900}"
+BEAT_FILE="${CC_REAPER_BEAT_FILE:-$PAGEDIR/last-sweep.beat}"            # persisted wall-clock of the last sweep's end
 # D7 send-damping state lives BESIDE this pager's own state, so it inherits every existing test
 # isolation seam (CC_REAPER_PAGEDIR) automatically — a damp dir defaulting to the live ~/.claude tree
 # would have tests writing real markers and contaminating each other.
@@ -237,6 +246,9 @@ find_transcript(){ # <sid> → its .jsonl path (first match across the account r
   done
   return 1
 }
+# Gap-3: the reaper's wall-clock. A file seam (CC_REAPER_NOW_FILE) lets a test advance it across the
+# sweep deterministically (durable product, not an mtime); in production it is just `date +%s`.
+reaper_now(){ if [ -n "${CC_REAPER_NOW_FILE:-}" ] && [ -r "$CC_REAPER_NOW_FILE" ]; then cat "$CC_REAPER_NOW_FILE" 2>/dev/null; else date +%s; fi; }
 clear_fired_marker(){ # <paneUUID> — the pane is gone; drop its marker so the dir cannot grow forever
   local pane="${1:-}"
   [ -n "$pane" ] || return 0
@@ -381,6 +393,13 @@ sweep() {
   local mode; mode=$([ $reap = 1 ] && echo REAP || echo DRY-RUN)
   say "cc-reaper sweep ($mode) — settle=${SETTLE_S}s trunk=$TRUNK"
   log "sweep start mode=$mode settle=$SETTLE_S"
+  # Gap-3 suspend-guard: capture the sweep-start clock + the gap since the last sweep's end. A large
+  # gap ⇒ the machine slept BETWEEN sweeps; a large start→act span (checked per-candidate below) ⇒ it
+  # slept DURING this sweep. Either poisons the classify idle values → no reaps this sweep.
+  local sweep_t0 last_beat inter_gap
+  sweep_t0="$(reaper_now)"; case "$sweep_t0" in ''|*[!0-9]*) sweep_t0="$(date +%s)" ;; esac
+  last_beat="$(cat "$BEAT_FILE" 2>/dev/null || echo 0)"; case "$last_beat" in ''|*[!0-9]*) last_beat=0 ;; esac
+  inter_gap=0; [ "$last_beat" -gt 0 ] && inter_gap=$(( sweep_t0 - last_beat ))
   # Self-heal the registry BEFORE enumerating, so a pane that missed SessionStart is backfilled and
   # ENUMERATED this same sweep (delta closes) rather than only surfaced. Additive + idempotent; gated on
   # --reap so a DRY-RUN sweep still writes nothing (its self-check then reports the true pre-heal delta).
@@ -515,6 +534,18 @@ sweep() {
         continue
       fi
     fi
+    # ── Gap-3 suspend-guard: reap NOTHING on a sweep whose wall-clock crossed a machine SUSPEND. Two
+    #    detectors — inter-sweep gap (slept BETWEEN sweeps) + intra-sweep span (slept DURING this sweep,
+    #    so classify's idle values sit on the far side of the jump). Checked HERE (after all surface/
+    #    belt/leg paging above, so a suspend never suppresses a surface) and only for a would-be reap.
+    local now_act intra
+    now_act="$(reaper_now)"; case "$now_act" in ''|*[!0-9]*) now_act="$(date +%s)" ;; esac
+    intra=$(( now_act - sweep_t0 ))
+    if [ "$inter_gap" -gt "$SUSPEND_S" ] || [ "$intra" -gt "$SUSPEND_S" ]; then
+      say "  keep   $name [$cause] — post-suspend cooldown (sweep spans a machine sleep: inter-gap ${inter_gap}s / intra ${intra}s > ${SUSPEND_S}s) → DEFER (never reap on stale idle)"
+      log "suspend-defer $name [$cause] pane=$pane: inter_gap=${inter_gap}s intra=${intra}s > ${SUSPEND_S}s"
+      continue
+    fi
     candidates=$((candidates+1))
     if [ $reap = 0 ]; then
       say "  WOULD-REAP $name [$cause] pane=$pane idle=${idle}s landed=yes"; log "would-reap $name [$cause]"; continue
@@ -561,6 +592,14 @@ sweep() {
 
   say "cc-reaper: $n classified · $candidates safe candidate(s) · $reaped reaped · $surfaced surfaced"
   log "sweep end: $n classified $candidates candidates $reaped reaped $surfaced surfaced"
+
+  # Gap-3: record this sweep's end wall-clock so the NEXT sweep can detect an inter-sweep suspend.
+  # Gated on --reap (a DRY-RUN sweep writes nothing, preserving its contract) — the live launchd loop
+  # always runs --reap, so inter-sweep detection is unaffected.
+  if [ "$reap" = 1 ]; then
+    mkdir -p "$(dirname "$BEAT_FILE")" 2>/dev/null || true
+    printf '%s\n' "$(reaper_now)" > "$BEAT_FILE" 2>/dev/null || true
+  fi
 
   # ── P0-12b: the blind-spot self-check runs once per sweep, AFTER classification (enum = what we saw). ──
   self_check "$reap" "$n"
