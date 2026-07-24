@@ -302,10 +302,16 @@ frontier_discovery_budget:
 #     the session, /effort stays adjustable, and an explicit --effort passed by the
 #     caller wins (Commander last-wins). Tier wrappers (claude-x/-h, claude-fable-h/-q)
 #     append their own --effort.
-#   - Settings floor: ~/.claude/settings.json "effortLevel": "xhigh" (symlinked into
-#     every CLAUDE_CONFIG_DIR) covers non-wrapped surfaces: IDE extension, teammate
-#     pane spawns, bare binary calls. The settings schema enum caps at xhigh — `max`
-#     is expressible ONLY via --effort or the env var, so xhigh is the persistable floor.
+#   - Settings floor (INTENDED xhigh; effort_defaults.settings_floor): each CLAUDE_CONFIG_DIR's
+#     settings.json "effortLevel" is the floor for non-wrapped surfaces — IDE extension, teammate
+#     pane spawns, bare binary calls. The schema enum caps at xhigh — `max` is expressible ONLY via
+#     --effort or the env var, so xhigh is the persistable floor. These settings.json are NOT
+#     symlinked: they are FIVE INDEPENDENT REAL files that drift apart. As of 2026-07-24 the live
+#     state is BELOW the floor — ~/.claude=high, ~/.claude-{next,secondary,tertiary,quaternary}=low
+#     — so every non-wrapped surface on the four accounts resolves `low`, not xhigh, until realigned
+#     (a class-C operator settings edit). scripts/effort-parity-assert.sh now ASSERTS the live dirs
+#     against effort_defaults.settings_floor (exit 1 on drift); neither claude-lint-models.sh (a
+#     model-id text lint) nor settings-drift-assert.sh (permissions.{deny,ask}+hooks only) caught it.
 #   - CLAUDE_CODE_EFFORT_LEVEL is BANNED from exports/settings-env: the binary re-reads
 #     it every turn AHEAD of session state, so it locks /effort for the whole session
 #     and cannot be unset from inside. session-start.sh has a tripwire that warns any
@@ -318,7 +324,9 @@ frontier_discovery_budget:
 #     forwarded; no --effort in pane argv). Mechanism:
 #     `~/.claude/scripts/set-teammate-effort.sh <worktree> low|medium|high|xhigh`
 #     run during worktree setup, before spawn. Capped at xhigh (settings schema);
-#     user-settings floor (xhigh) applies when no worktree override is written.
+#     the CLAUDE_CONFIG_DIR settings floor applies when no worktree override is written (INTENDED
+#     xhigh — see the Settings-floor note above; currently drifted low/high, asserted by
+#     scripts/effort-parity-assert.sh).
 #   - In-process SUBAGENTS (Agent tool, no team_name): inherit the lead's LIVE
 #     effort with NO override surface (AgentInput has no effort field; frontmatter
 #     `effort` not parsed — GH #25591/#25669/#31536/#65598 open). Fable panels
@@ -357,6 +365,11 @@ effort_defaults:
                                             # barrel / the untyped fn) stays at default max — xhigh hallucinated a
                                             # fabricated edit there. xhigh is safe only when the targets are given.
   frontier: max                             # novel algorithm, security audit (= default tier)
+  # settings_floor: the persistable "effortLevel" floor for every CLAUDE_CONFIG_DIR's settings.json
+  # (non-wrapped surfaces: IDE ext, teammate panes, bare-binary calls). The settings schema enum caps
+  # at xhigh, so xhigh is the floor. These are NOT symlinked — five independent real files that drift
+  # apart; scripts/effort-parity-assert.sh asserts the live dirs against this key (exit 1 on drift).
+  settings_floor: xhigh
   # Fable-5 SURFACES follow a DIFFERENT ladder (Anthropic "Prompting Claude Fable 5"
   # guide, 2026-06-11 audit). The binary's live-session effort enum is
   # low < medium < high < xhigh < max — `max` is the absolute ceiling, ABOVE xhigh.
