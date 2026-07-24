@@ -1,0 +1,155 @@
+#!/usr/bin/env bash
+# cc-close-attrib — session close-attribution capture (exec-wrapper).
+#
+#   cc-close-attrib <real-claude-binary> [args...]
+#
+# WHY THIS EXISTS: a 7-day forensics sweep found 0 organic CC crashes — but ALSO that
+# if one ever happens it is UNATTRIBUTABLE. No launcher path captures an exit code or
+# stderr; every stderr log is 0 bytes; the crash watchdog records claude_version:"?" and
+# stderr_log:"". This wrapper closes that gap: it runs the real binary unchanged, tees its
+# stderr to a per-run capture file (while stderr still reaches the terminal), and on exit
+# writes a small JSON close-record keyed by the binary's PID. The crash watchdog
+# (hooks/lead-crash-watchdog.sh) joins that record to the dead PID and finally attributes
+# the death (clean-exit vs killed-oom-or-force vs binary-crash vs error-exit).
+#
+# PID SEMANTICS (load-bearing): the watchdog keys on LEAD_PID = PPID of the SessionStart
+# hook = the claude binary's PID. To make the record's filename PID match, we CANNOT exec
+# the binary (we'd lose the exit code) and we CANNOT run it in the plain foreground (bash
+# never exposes a foreground child's PID). Instead we background a brace-group that execs
+# the binary: `{ exec "$bin" ...; } &`. Backgrounding forks the group; `exec` then replaces
+# that fork WITHOUT changing its PID, so `$!` IS the binary's PID — exactly LEAD_PID — and
+# `wait` still yields the true exit status (128+n on signal). exec-chain PID preservation
+# also means wrapping `claude-latest` (which itself execs the versioned node binary) still
+# lands the SAME PID the watchdog sees.
+#
+# HARD RULE — FAIL OPEN EVERYWHERE. Capture must never delay or break a session. There is
+# no `set -e`; every capture step is individually guarded; the worst case is a plain exec
+# with no record. Kill switch: export CC_CLOSE_ATTRIB_DISABLED=1 (⇒ plain exec, no capture).
+#
+# NO HARD DEPENDENCIES beyond bash + coreutils. JSON is emitted with printf (never jq) so a
+# minimal launcher PATH cannot break it. jq is neither called nor required.
+
+REAL_BIN="${1:-}"
+if [[ -z "$REAL_BIN" ]]; then
+  echo "usage: cc-close-attrib <real-claude-binary> [args...]" >&2
+  exit 64
+fi
+shift
+BIN_ARGV=("$@")   # the real binary's args (for argv[first 3] in the record)
+
+RECORDS_DIR="${CC_CLOSE_RECORDS_DIR:-$HOME/.claude/logs/close-records}"
+
+# ── best-effort setup — none of this may ever be fatal ──────────────────────────────────
+mkdir -p "$RECORDS_DIR" 2>/dev/null || true
+# self-GC: drop close-records >30 days and any orphaned stderr temp >1 day (a temp is only
+# leaked when the wrapper itself was force-killed before it could unlink one). Best-effort.
+find "$RECORDS_DIR" -maxdepth 1 -type f -name '*.json'   -mtime +30 -delete 2>/dev/null || true
+find "$RECORDS_DIR" -maxdepth 1 -type f -name '.stderr.*' -mtime +1  -delete 2>/dev/null || true
+
+# version — best-effort, CACHED, and NEVER blocking start. Fire `--version` fully detached
+# and only when the cache is missing or stale (>1 day); the record reader picks up whatever
+# landed. CLAUDE_SKIP_UPDATE guards against a launcher's --version triggering a self-update.
+VER_KEY="$(printf '%s' "$REAL_BIN" | tr -c 'A-Za-z0-9' '_')"
+VER_CACHE="$RECORDS_DIR/.ver_$VER_KEY"
+if [[ ! -e "$VER_CACHE" ]] || [[ -n "$(find "$VER_CACHE" -mtime +1 2>/dev/null)" ]]; then
+  (
+    if CLAUDE_SKIP_UPDATE=1 "$REAL_BIN" --version >"$VER_CACHE.tmp.$$" 2>/dev/null; then
+      mv -f "$VER_CACHE.tmp.$$" "$VER_CACHE" 2>/dev/null || rm -f "$VER_CACHE.tmp.$$" 2>/dev/null
+    else
+      rm -f "$VER_CACHE.tmp.$$" 2>/dev/null
+    fi
+  ) </dev/null >/dev/null 2>&1 &
+  disown 2>/dev/null || true
+fi
+
+START_EPOCH="$(date +%s 2>/dev/null || echo 0)"
+STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '')"
+
+# ── capability gate: kill-switch, bash, and a runtime process-substitution probe. Any doubt
+#    ⇒ plain exec (fail-open). The probe confirms /dev/fd `>(...)` actually works here. ─────
+PROCSUB_OK=0
+if [[ -z "${CC_CLOSE_ATTRIB_DISABLED:-}" && -n "${BASH_VERSION:-}" ]]; then
+  if ( : 2> >(cat >/dev/null) ) 2>/dev/null; then PROCSUB_OK=1; fi
+fi
+[[ "$PROCSUB_OK" -eq 1 ]] || exec "$REAL_BIN" "$@"
+
+# per-run stderr capture file (kept out of the *.json GC namespace)
+CAPTURE="$(mktemp "$RECORDS_DIR/.stderr.XXXXXX" 2>/dev/null)" || CAPTURE=""
+[[ -n "$CAPTURE" ]] || exec "$REAL_BIN" "$@"
+
+# ── JSON string escaper: stdin → JSON-safe body (no surrounding quotes), pure sed/tr/awk.
+#    Strips ANSI CSI + control bytes (claude writes color codes to stderr → invalid JSON),
+#    escapes \ and ", then joins lines with \n. Tab preserved as \t. ───────────────────────
+_json_escape() {
+  LC_ALL=C sed "s/$(printf '\033')\[[0-9;?]*[A-Za-z]//g" 2>/dev/null \
+    | LC_ALL=C tr -d '\000-\010\013-\037\177' 2>/dev/null \
+    | LC_ALL=C sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/	/\\t/g' 2>/dev/null \
+    | awk 'BEGIN{ORS=""} NR>1{printf "\\n"} {printf "%s",$0}' 2>/dev/null
+}
+
+# ── write the close-record atomically (tmp+mv). Fully guarded — returns 0 no matter what so
+#    it can never affect the session's exit path. ──────────────────────────────────────────
+write_record() {
+  local rpid="$1" rcode="$2"
+  local rsig=""
+  [[ "$rcode" =~ ^[0-9]+$ && "$rcode" -gt 128 ]] && rsig=$(( rcode - 128 ))
+
+  local rver=""
+  if [[ -s "$VER_CACHE" ]]; then
+    rver="$(grep -oE '[0-9]+\.[0-9]+\.[0-9]+' "$VER_CACHE" 2>/dev/null | head -1)"
+    [[ -z "$rver" ]] && rver="$(head -1 "$VER_CACHE" 2>/dev/null | _json_escape)"
+  fi
+
+  local a0 a1 a2
+  a0="$(printf '%s' "$REAL_BIN"          | _json_escape)"
+  a1="$(printf '%s' "${BIN_ARGV[0]:-}"   | _json_escape)"
+  a2="$(printf '%s' "${BIN_ARGV[1]:-}"   | _json_escape)"
+
+  # stderr tail: last 40 lines, secret-bearing lines dropped first, then escaped. grep -v
+  # exits 1 on an all-stripped/empty tail → `|| true` so it never trips the pipeline.
+  local tail_json=""
+  if [[ -s "$CAPTURE" ]]; then
+    tail_json="$( { tail -n 40 "$CAPTURE" 2>/dev/null \
+      | grep -ivE '(key|token|authorization|bearer|secret|password)' \
+      || true; } | _json_escape )"
+  fi
+
+  local out="$RECORDS_DIR/${rpid:-0}-${START_EPOCH}.json"
+  local tmp="$out.tmp.$$"
+  if printf '{"pid":%s,"ppid":%s,"argv":["%s","%s","%s"],"started_at":"%s","ended_at":"%s","exit_code":%s,"signal":"%s","stderr_tail":"%s","version":"%s"}\n' \
+    "${rpid:-0}" "$$" "$a0" "$a1" "$a2" "$STARTED_AT" "$ENDED_AT" "${rcode:-0}" "$rsig" "$tail_json" "$rver" \
+    > "$tmp" 2>/dev/null; then
+    mv -f "$tmp" "$out" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+  else
+    rm -f "$tmp" 2>/dev/null
+  fi
+  return 0
+}
+
+# ── run the real binary as a backgrounded exec (see PID SEMANTICS). <&0 keeps the child's
+#    stdin on the terminal (bash otherwise reassigns an async command's stdin to /dev/null);
+#    job control is off in a script, so the child stays in the foreground process group and
+#    reads/writes the tty without SIGTTIN/SIGTTOU. Traps forward terminal signals to the
+#    child and keep the wrapper alive to reap + record. ─────────────────────────────────────
+child=""
+# shellcheck disable=SC2329  # invoked indirectly by the traps below (shellcheck can't see it)
+_forward() { [[ -n "$child" ]] && kill -"$1" "$child" 2>/dev/null || true; }
+trap '_forward INT'  INT
+trap '_forward TERM' TERM
+trap '_forward HUP'  HUP
+
+{ exec "$REAL_BIN" "$@" 2> >(tee -a "$CAPTURE" >&2); } <&0 &
+child=$!
+
+code=0
+# a trapped signal makes `wait` return early → loop until the child is truly gone.
+while kill -0 "$child" 2>/dev/null; do
+  wait "$child"; code=$?
+done
+trap - INT TERM HUP
+
+ENDED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '')"
+
+write_record "$child" "$code" || true
+rm -f "$CAPTURE" 2>/dev/null || true   # the (secret-safe) tail now lives inside the record
+exit "$code"
