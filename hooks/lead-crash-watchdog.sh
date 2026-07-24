@@ -49,9 +49,74 @@ find_transcript() {
   return 1
 }
 
+# ── close-record join (bin/cc-close-attrib) ─────────────────────────────────────────────
+# The launcher's exec-wrapper writes ~/.claude/logs/close-records/<pid>-<epoch>.json on exit
+# with the binary's REAL exit_code/signal. Keyed by the SAME pid the watchdog sees as the dead
+# lead (PPID of SessionStart), it turns an "abrupt-unknown" GUESS into an attributed FACT.
+find_close_record() {
+  local pid="$1" dir="${CC_CLOSE_RECORDS_DIR:-$HOME/.claude/logs/close-records}"
+  [[ -n "$pid" ]] || return 1
+  # shellcheck disable=SC2012  # ls -1t is deliberate (newest-first mtime on a fixed pid pattern)
+  ls -1t "$dir/${pid}-"*.json 2>/dev/null | head -1
+}
+
+# Read one scalar field from a close-record without requiring jq (matches "key":123 or "key":"v").
+close_record_field() {
+  local f="$1" key="$2" v
+  [[ -f "$f" ]] || return 0
+  v=$(grep -oE "\"$key\":(\"[^\"]*\"|[0-9]+)" "$f" 2>/dev/null | head -1)
+  v=${v#*:}; v=${v#\"}; v=${v%\"}
+  printf '%s' "$v"
+}
+
+# EXIT<TAB>SIGNAL<TAB>RECORD_PATH<TAB>VERSION for a pid's newest close-record (empty if none).
+# Used by handle_crash to enrich the crash row AND by the --close-fields test entrypoint.
+close_record_summary() {
+  local pid="$1" cr
+  [[ -n "$pid" ]] || return 0
+  cr=$(find_close_record "$pid") || return 0
+  [[ -n "$cr" ]] || return 0
+  printf '%s\t%s\t%s\t%s' \
+    "$(close_record_field "$cr" exit_code)" \
+    "$(close_record_field "$cr" signal)" \
+    "$cr" \
+    "$(close_record_field "$cr" version)"
+}
+
+# exit code → CLASS<TAB>CAUSE (ground truth). Non-numeric/absent ⇒ return 1 (no override).
+#   0/130/143 (SIGINT/SIGTERM) = clean-exit · 137 (SIGKILL) = killed-oom-or-force ·
+#   139 (SIGSEGV) = binary-crash · any other nonzero = error-exit.
+map_exit_class() {
+  case "$1" in
+    0|130|143)    printf 'RECYCLE\tclean-exit' ;;
+    137)          printf 'CRASH\tkilled-oom-or-force' ;;
+    139)          printf 'CRASH\tbinary-crash' ;;
+    ''|*[!0-9]*)  return 1 ;;
+    *)            printf 'CRASH\terror-exit' ;;
+  esac
+}
+
 classify_death() {
   # prints: CLASS<TAB>CAUSE<TAB>transcript_kb<TAB>records   (CLASS = RECYCLE|CRASH)
-  local sid="$1" t body kb=0 recs=0
+  local sid="$1" pid="${2:-}" t body kb=0 recs=0
+  # 0) CLOSE-RECORD FIRST — per-pid ground truth OUTRANKS every heuristic below (incl. jetsam:
+  #    137 already IS the SIGKILL/OOM case; a clean exit for THIS pid is clean even if some other
+  #    process tripped a JetsamEvent). Absent record ⇒ fall through to the existing ladder.
+  if [[ -n "$pid" ]]; then
+    local cr ec cls
+    cr=$(find_close_record "$pid") || cr=""
+    if [[ -n "$cr" ]]; then
+      ec=$(close_record_field "$cr" exit_code)
+      if cls=$(map_exit_class "$ec"); then
+        t=$(find_transcript "$sid" 2>/dev/null || true)
+        if [[ -n "$t" ]]; then
+          kb=$(( $(stat -f%z "$t" 2>/dev/null || echo 0) / 1024 ))
+          recs=$(wc -l < "$t" 2>/dev/null | tr -d ' ')
+        fi
+        printf '%s\t%s\t%s' "$cls" "${kb:-0}" "${recs:-0}"; return 0
+      fi
+    fi
+  fi
   t=$(find_transcript "$sid") || { printf 'CRASH\tno-transcript\t0\t0'; return 0; }
   kb=$(( $(stat -f%z "$t" 2>/dev/null || echo 0) / 1024 ))
   recs=$(wc -l < "$t" 2>/dev/null | tr -d ' ')
@@ -115,9 +180,14 @@ gc_teardown_marker() {
 }
 
 # Test/debug entrypoint (CC never passes args to this SessionStart hook): classify a
-# session id and exit, without spawning the daemon or reading stdin.
+# session id (+ optional pid, to join its close-record) and exit, without spawning the
+# daemon or reading stdin.
 if [[ "${1:-}" == "--classify" ]]; then
-  classify_death "${2:-}"; echo; exit 0
+  classify_death "${2:-}" "${3:-}"; echo; exit 0
+fi
+# Debug/test entrypoint: print a pid's close-record enrichment (EXIT<TAB>SIGNAL<TAB>PATH<TAB>VERSION).
+if [[ "${1:-}" == "--close-fields" ]]; then
+  close_record_summary "${2:-}"; echo; exit 0
 fi
 
 # Parse hook JSON stdin
@@ -172,7 +242,7 @@ log "registered session=$SESSION_ID pid=$LEAD_PID"
     # deaths land in the structured crash ledger honestly (classify_death + find_transcript
     # are defined at top level and inherited by this subshell).
     local _cls class cause kb recs mem_free concurrent
-    _cls=$(classify_death "$sid")
+    _cls=$(classify_death "$sid" "$pid")
     class=$(printf '%s' "$_cls" | cut -f1)
     cause=$(printf '%s' "$_cls" | cut -f2)
     kb=$(printf '%s' "$_cls" | cut -f3)
@@ -192,8 +262,20 @@ log "registered session=$SESSION_ID pid=$LEAD_PID"
     # stderr_log — join to the launcher's per-pid stderr capture (names the exact mechanism).
     # shellcheck disable=SC2012  # ls -1t is deliberate (newest-first mtime order on our own fixed pattern)
     sterr=$(ls -1t "$HOME/.claude/logs/stderr/"*"-${pid}.log" 2>/dev/null | head -1 || true)
-    printf '{"ts":"%s","sid":"%s","pid":%s,"class":"%s","cause":"%s","claude_version":"%s","transcript_kb":%s,"records":%s,"mem_free_pct":"%s","concurrent_claude":%s,"stderr_log":"%s"}\n' \
-      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$sid" "${pid:-0}" "$class" "$cause" "${cver:-?}" "${kb:-0}" "${recs:-0}" "${mem_free:-?}" "${concurrent:-0}" "${sterr:-}" \
+    # close-record enrichment (bin/cc-close-attrib): the per-pid exit_code/signal/version + the
+    # path to the (secret-safe) stderr_tail. exit_code/signal are the decisive attribution fields;
+    # when the transcript never carried a version, the close-record's fills the "?".
+    local cr_summary cr_exit="" cr_sig="" cr_path="" cr_ver=""
+    cr_summary=$(close_record_summary "$pid")
+    if [[ -n "$cr_summary" ]]; then
+      cr_exit=$(printf '%s' "$cr_summary" | cut -f1)
+      cr_sig=$(printf '%s' "$cr_summary" | cut -f2)
+      cr_path=$(printf '%s' "$cr_summary" | cut -f3)
+      cr_ver=$(printf '%s' "$cr_summary" | cut -f4)
+      [[ "$cver" == "?" && -n "$cr_ver" ]] && cver="$cr_ver"
+    fi
+    printf '{"ts":"%s","sid":"%s","pid":%s,"class":"%s","cause":"%s","claude_version":"%s","transcript_kb":%s,"records":%s,"mem_free_pct":"%s","concurrent_claude":%s,"stderr_log":"%s","exit_code":"%s","signal":"%s","stderr_tail_path":"%s","version":"%s"}\n' \
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$sid" "${pid:-0}" "$class" "$cause" "${cver:-?}" "${kb:-0}" "${recs:-0}" "${mem_free:-?}" "${concurrent:-0}" "${sterr:-}" "${cr_exit:-}" "${cr_sig:-}" "${cr_path:-}" "${cr_ver:-}" \
       >> "$CRASH_JSONL" 2>/dev/null || true
     echo "[watchdog $sid] death class=$class cause=$cause (${kb}KB/${recs}recs mem_free=${mem_free:-?}% concurrent=${concurrent})"
     # A deliberate recycle is not a crash — only alert on a genuine crash.
