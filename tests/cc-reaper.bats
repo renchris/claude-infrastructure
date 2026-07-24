@@ -604,6 +604,32 @@ mkworktree() { # <main-repo> <wt-path> — a real LINKED worktree under a */.wor
   ! notified
 }
 
+@test "P0-12b: live_pane_count counts claude.exe panes (eval-track binary), not only claude" {
+  # The eval-track (2.1.x claude-next) install's binary is .../bin/claude.exe as argv0 — NOT `claude`.
+  # session-register.sh:63 registers it (matches claude|claude.exe|claude-*), so it IS enumerated; but
+  # the self-check's INDEPENDENT truth signal (live_pane_count) matched only claude/*/claude/cli.js and
+  # SILENTLY DROPPED every claude.exe pane. Result: live undercounts, the live−enum delta is biased, and
+  # the blind-spot detector is desensitized (and false-pages at other session mixes). RED before the fix:
+  # 3 live claude.exe panes read as 0 live ⇒ "reaper sees all live panes" ⇒ no page (blind to the blind spot).
+  set_desk
+  cat > "$D/bin/ps" <<'PSEOF'
+#!/bin/bash
+echo "/Users/x/.claude-183/node_modules/@anthropic-ai/claude-code/bin/claude.exe --permission-mode auto --model claude-opus-4-8"
+echo "claude.exe --permission-mode auto --effort max"
+echo "/opt/claude/bin/claude.exe --model claude-opus-4-8"
+PSEOF
+  chmod +x "$D/bin/ps"
+  cat > "$D/bin/classify" <<'CLEOF'
+#!/bin/bash
+echo '[]'
+CLEOF
+  chmod +x "$D/bin/classify"; export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  notified
+  grep -q 'BLIND to 3' "$D/notify-calls"            # all 3 claude.exe panes counted as live
+}
+
 @test "reconcile runs on --reap (heals the registry before the self-check surfaces a delta)" {
   mock_classify active "$D/clean" 10 no PANE-1
   run "$R" sweep --reap

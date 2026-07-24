@@ -71,6 +71,16 @@ add_pane() {
       "$pid" "$sidjson" "$cwd" "$started" "$kind" > "$D/sessions/$pid.json"
   fi
 }
+# like add_pane but argv0 = …/bin/claude.exe (the eval-track / claude-next install's OWN binary name).
+# session-register.sh:63 registers it (claude|claude.exe|claude-*), so reconcile MUST also be able to
+# heal one that missed SessionStart — its live_claude_pids argv scan has to accept the .exe form too.
+add_pane_exe() {
+  local pid="$1" pane="$2" ccd="$3" sid="$4" cwd="$5" started="${6:-1699000000000}" kind="${7:-interactive}"
+  printf '%s /Users/x/.claude-183/node_modules/@anthropic-ai/claude-code/bin/claude.exe --permission-mode auto --model claude-opus-4-8 --effort max\n' "$pid" >> "$D/pslist"
+  printf 'claude.exe --permission-mode auto ITERM_SESSION_ID=w1t0p0:%s CLAUDE_CONFIG_DIR=%s TERM_PROGRAM=iTerm.app\n' "$pane" "$ccd" > "$D/psenv/$pid"
+  printf '{"pid":%s,"sessionId":"%s","cwd":"%s","startedAt":%s,"kind":"%s","status":"idle"}\n' \
+    "$pid" "$sid" "$cwd" "$started" "$kind" > "$D/sessions/$pid.json"
+}
 # a pane whose env carries NO ITERM_SESSION_ID (unaddressable).
 add_pane_no_iterm() {
   local pid="$1"
@@ -83,6 +93,17 @@ rows() { ls "$CC_REGISTRY_DIR"/*.json 2>/dev/null | wc -l | tr -d ' '; }
 # The heal decision uses a REAL kill -0 on the row's recorded pid (aligned with cc-sessions), so a
 # "present" row needs a live pid ($$) and a "stale" row needs a dead one. Mirrors session-registry.bats.
 deadpid() { sleep 1 & local p=$!; kill "$p" 2>/dev/null; wait "$p" 2>/dev/null || true; echo "$p"; }
+
+@test "backfills a live claude.exe pane (eval-track binary), not only bare claude" {
+  # RED before the argv-scan fix: live_claude_pids matched only claude/*/claude/cli.js, so a live
+  # …/bin/claude.exe pane with no registry row was never iterated ⇒ never backfilled (rows stay 0),
+  # leaving it double-blind (invisible to the reaper self-check too). GREEN: it gets its row.
+  add_pane_exe 4321 EE501111-2222-3333-4444-555566667777 /Users/x/.claude-next sid-exe /tmp/wt-pool-e
+  run "$CCR"
+  [ "$status" -eq 0 ]
+  [ "$(rows)" = 1 ]
+  [ -f "$CC_REGISTRY_DIR/EE501111-2222-3333-4444-555566667777.json" ]
+}
 
 @test "backfills a live pane that has no registry row" {
   add_pane 1234 AAAA1111-2222-3333-4444-555566667777 /Users/x/.claude-next sid-abc /tmp/wt-pool-9 1699111111000

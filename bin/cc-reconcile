@@ -95,11 +95,15 @@ uniq_sessions_dirs() {
 }
 
 # LIVE interactive claude pids — the SAME argv scan cc-reaper's live_pane_count uses (argv0 is claude /
-# */claude / *cli.js; a print/version invocation is not a session). Emits one pid per line.
+# */claude / claude.exe / */claude.exe / *cli.js; a print/version invocation is not a session). Emits one
+# pid per line. The `.exe` form is the eval-track (claude-next) install's own binary name — a first-class
+# interactive session session-register.sh:63 registers (claude|claude.exe|claude-*); omitting it here
+# would leave a claude.exe pane that missed SessionStart un-healable (double-blind). Keep in lockstep with
+# cc-reaper live_pane_count — the two MUST share one process-identity definition.
 live_claude_pids() {
   "$PS_BIN" -wwo pid=,command= 2>/dev/null | awk '
     { pid=$1; a=$2
-      if (a!="claude" && a !~ /\/claude$/ && a !~ /cli\.js/) next
+      if (a!="claude" && a!="claude.exe" && a !~ /\/claude$/ && a !~ /\/claude\.exe$/ && a !~ /cli\.js/) next
       for (i=3; i<=8 && i<=NF; i++) if ($i=="-p" || $i=="--print" || $i=="--version") next
       print pid }'
 }

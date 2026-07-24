@@ -221,10 +221,17 @@ clear_fired_marker(){ # <paneUUID> — the pane is gone; drop its marker so the 
 # claude-accounts.concurrency(): argv0 is the claude binary (or its cli.js), excluding headless one-shots
 # (-p/--print/--version) and env-inherited node/MCP children. Deliberately NOT read from the cc-registry —
 # the whole point is to catch panes the registry (hence cc-classify) never enumerated.
+# argv0 forms accepted: `claude`, `*/claude`, `claude.exe`, `*/claude.exe`, `*cli.js`. The `.exe` binary is
+# the eval-track (2.1.x claude-next) install's own name (…/@anthropic-ai/claude-code/bin/claude.exe) — a
+# FIRST-CLASS interactive session, registered by session-register.sh:63 (claude|claude.exe|claude-*).
+# Omitting it made this signal undercount live panes, biasing the live−enum delta in BOTH directions (a
+# false-negative that desensitizes the blind-spot detector here, a false-positive Δ at other session mixes)
+# — so this MUST stay in lockstep with the register/reconcile process-identity definition (cc-reconcile
+# live_claude_pids carries the identical clause).
 live_pane_count(){
   "$PS_BIN" -wwEo command= 2>/dev/null | awk '
     { t0=$1
-      if (t0!="claude" && t0 !~ /\/claude$/ && t0 !~ /cli\.js/) next
+      if (t0!="claude" && t0!="claude.exe" && t0 !~ /\/claude$/ && t0 !~ /\/claude\.exe$/ && t0 !~ /cli\.js/) next
       for (i=2; i<=7 && i<=NF; i++) if ($i=="-p" || $i=="--print" || $i=="--version") next
       c++ }
     END { print c+0 }'
