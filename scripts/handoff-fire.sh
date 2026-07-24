@@ -105,7 +105,7 @@
 #
 # Subcommand:
 #   self-close (--successor UUID | --terminal) [--session-id UUID] [--no-notify]
-#              [--dirty-owner successor] [--allow-dirty] [--dry-run]
+#              [--dirty-owner successor] [--successor-assume-engaged] [--allow-dirty] [--dry-run]
 #                       Close the CURRENT session end-to-end once its work is done — the Agent
 #                       Teams assignee pattern for peer sessions. Arms the watcher FIRST, then
 #                       types /exit (INTERRUPTS any in-flight turn and exits in seconds — E2E
@@ -120,10 +120,16 @@
 #                       SUCCESSION CONTRACT (2026-07-13, third "where did my session go"
 #                       incident): a pane close is operator-visible surface — the caller MUST
 #                       declare what continues the work. --successor <pane-uuid> is verified
-#                       ALIVE (pane resolvable + claude on its tty) BEFORE /exit is typed and
-#                       the succession is announced INTO the successor via cc-notify (the
-#                       report emitted in the dying pane dies with it; the surviving
-#                       transcript is where the operator will look). --terminal declares
+#                       ALIVE — pane resolvable + claude on its tty AND its transcript shows a
+#                       real assistant turn (ENGAGED, not merely booted; a cold-fire that never
+#                       ingested work would strand both panes) — BEFORE /exit is typed, and the
+#                       successor is re-verified alive again at the close INSTANT (a death in the
+#                       arm→close window leaves the predecessor alive, pages the desk). The
+#                       succession is announced INTO the successor via cc-notify (the report
+#                       emitted in the dying pane dies with it; the surviving transcript is where
+#                       the operator will look). --successor-assume-engaged SKIPS only the
+#                       assistant-turn check (retains the liveness checks) for a successor whose
+#                       transcript is unreadable from this account. --terminal declares
 #                       end-of-line (nothing continues). Bare self-close exits 2.
 #                       Guard: refuses on a DIRTY git tree in cwd (exit 1). On a SHARED
 #                       checkout where the dirt is a live successor's in-flight work, pass
@@ -160,6 +166,11 @@ MODEL_CONFIG="$HOME/.claude/model-config.yaml"
 REG_DIR="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"
 CC_ROLES_DIR="${CC_ROLES_DIR:-$HOME/.claude/cc-roles}"
 FIRED_DIR="${CC_FIRED_DIR:-$HOME/.claude/cc-fired}"   # T-P3-4 fired-peer markers (read by bin/cc-reaper)
+# Projects dirs searched to resolve a SUCCESSOR pane's transcript for the self-close engagement gate.
+# The successor's ACCOUNT is unknown at self-close time and the session_id is a globally-unique UUID,
+# so we try every account's projects dir. Space-separated, env-overridable for tests. Mirrors
+# proj_dir()'s account map (account 1 mirrors projects/ back into ~/.claude — hence the first entry).
+CC_PROJECTS_DIRS="${CC_PROJECTS_DIRS:-$HOME/.claude/projects $HOME/.claude-next/projects $HOME/.claude-secondary/projects $HOME/.claude-tertiary/projects $HOME/.claude-quaternary/projects}"
 
 # This script is symlinked into ~/.claude/scripts; resolve its REAL dir so the sibling comms-safety
 # tools it now wires — payload-lint.sh (F3, T-P2-5) and completion-push.sh (F5, T-P2-1) — are found
@@ -446,6 +457,25 @@ verify_engagement() { # $1=projects $2=marker $3=regdir $4=pane $5=it2-bin $6=re
   return 1
 }
 
+# Self-close SUCCESSOR-engagement predicate. Reuses the spawn-path engagement check (engagement_seen
+# path b: cc-registry row → .session_id → the <sid>.jsonl transcript → assistant_turn_in) — a fired
+# successor is registered by ensure_registration, so its row resolves the transcript. The successor's
+# ACCOUNT is unknown here, so try every projects dir (session_id is globally unique). An assistant
+# turn at ANY time qualifies — a long-lived adopted operator pane passes trivially; only a born-but-
+# never-run transcript (cold-fire auto-submit race / /goal-length rejection) fails. 0 = engaged ·
+# 1 = process-alive-but-never-engaged OR the transcript is unresolvable/unreadable from this account
+# (fail-closed — --successor-assume-engaged is the documented escape for the unreadable case).
+successor_engaged() { # $1=registry-dir $2=successor-pane → 0 engaged / 1 not
+  local regdir="$1" pane="$2" pdir
+  [ -n "$pane" ] && [ -n "$regdir" ] || return 1
+  # shellcheck disable=SC2086  # CC_PROJECTS_DIRS is an intentional space-separated dir list
+  for pdir in $CC_PROJECTS_DIRS; do
+    [ -d "$pdir" ] || continue
+    engagement_seen "$pdir" "" "$regdir" "$pane" && return 0
+  done
+  return 1
+}
+
 # ---- P0-12 registration guarantee ------------------------------------------------------------
 # After engagement, guarantee the fired pane is VISIBLE in the cross-account registry so the
 # reaper/board can see it (a never-registered pane is invisible to the whole classify/reap stack —
@@ -553,6 +583,53 @@ write_forward_for() { # $1=old-pane $2=new-pane
   done
   command -v mailbox_write_forward >/dev/null 2>&1 || return 0
   mailbox_write_forward "$old" "$new" 2>/dev/null || true
+  return 0
+}
+
+# Light pre-close inventory (best-effort, WARN-only — NEVER blocks the close). A self-closing session
+# should not SILENTLY abandon two loose-end classes; each nonzero count emits ONE WARN line to stderr
+# AND the close log. Ambiguity ⇒ count nothing and skip (per the light-touch contract):
+#   (a) UNREAD MAIL — undrained lines in THIS session's own inbox (~/.claude/mailbox/<sid>.md), read
+#       through the shared .seen cursor (mailbox_pending_count). Lib unavailable ⇒ skip.
+#   (b) ORPHANED FIRES — cc-fired stamps this session wrote (.firedBy == our sid) whose fired pane has
+#       no live session left (the peer we spawned is gone) — a fire with no live continuation.
+selfclose_inventory_warn() { # $1=our-session-id $2=logfile(optional)
+  local sid="$1" log="${2:-}" pending fired_orphans=0 f fb fp ftty lib have_mpc=0
+  [ -n "$sid" ] || return 0
+  _inv_warn() { echo "$1" >&2; [ -n "$log" ] && { printf '%s\n' "$1" >> "$log" 2>/dev/null || true; }; }
+  # (a) unread mail — reuse the mailbox-pending lib's cursor primitive (lazily sourced like
+  #     write_forward_for). If it never loads, count nothing.
+  command -v mailbox_pending_count >/dev/null 2>&1 && have_mpc=1
+  if [ "$have_mpc" = 0 ]; then
+    for lib in "${HF_DIR:-}/../hooks/lib/mailbox-pending.sh" \
+               "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/mailbox-pending.sh" \
+               "$HOME/.claude/hooks/lib/mailbox-pending.sh"; do
+      # shellcheck disable=SC1090,SC1091
+      [ -f "$lib" ] && { . "$lib" 2>/dev/null || true; break; }
+    done
+    command -v mailbox_pending_count >/dev/null 2>&1 && have_mpc=1
+  fi
+  if [ "$have_mpc" = 1 ]; then
+    pending="$(mailbox_pending_count "$sid" 2>/dev/null)"
+    case "$pending" in ''|*[!0-9]*) pending=0 ;; esac
+    [ "${pending:-0}" -gt 0 ] 2>/dev/null && \
+      _inv_warn "⚠ WARN pre-close inventory: $pending unread message(s) in this session's inbox (~/.claude/mailbox/$sid.md) — closing leaves them undrained"
+  fi
+  # (b) orphaned fires — stamps WE wrote whose fired pane is no longer alive (as_tty is set-e-safe /
+  #     AppleEvent-foreground here; an unresolvable/dead pane counts as an orphan).
+  if command -v jq >/dev/null 2>&1 && [ -n "${FIRED_DIR:-}" ] && [ -d "$FIRED_DIR" ]; then
+    for f in "$FIRED_DIR"/*.json; do
+      [ -e "$f" ] || continue
+      fb="$(jq -r '.firedBy // empty' "$f" 2>/dev/null)"; [ "$fb" = "$sid" ] || continue
+      fp="$(jq -r '.paneUUID // empty' "$f" 2>/dev/null)"; [ -n "$fp" ] || continue
+      ftty="$(as_tty "$fp" 2>/dev/null || true)"
+      if [ -z "$ftty" ] || ! ps -o comm= -t "$(basename "$ftty")" 2>/dev/null | grep -qE 'node|claude'; then
+        fired_orphans=$((fired_orphans + 1))
+      fi
+    done
+    [ "$fired_orphans" -gt 0 ] && \
+      _inv_warn "⚠ WARN pre-close inventory: $fired_orphans peer(s) fired by this session ($sid) have no live session — their work may be stranded (see ~/.claude/cc-fired/; reopen any incomplete items)"
+  fi
   return 0
 }
 
@@ -695,7 +772,9 @@ if [ "${1:-}" = "__selfclose" ]; then
   SID="${2:?__selfclose needs a session id}"
   TTY_PATH="${3:-}"                                # acquired foreground at arm time — trustworthy
   SUCCESSOR="${4:-}"                               # verified-alive pane to focus after the close
-  echo "→ armed: __selfclose pid=$$ sid=$SID tty=${TTY_PATH:-none} successor=${SUCCESSOR:-none}"
+  SUCCESSOR_TTY="${5:-}"                            # successor's tty, RESOLVED FOREGROUND at arm time
+                                                   # (never re-resolve here — AppleEvents fail detached)
+  echo "→ armed: __selfclose pid=$$ sid=$SID tty=${TTY_PATH:-none} successor=${SUCCESSOR:-none} successor_tty=${SUCCESSOR_TTY:-none}"
   cc_alive() { ps -o comm= -t "$(basename "$TTY_PATH")" 2>/dev/null | grep -qE 'node|claude'; }
   if [ -z "$TTY_PATH" ]; then
     # Truly blind (no tty handed over): NEVER instant-close on a blind read — fixed grace lets
@@ -714,6 +793,21 @@ if [ "${1:-}" = "__selfclose" ]; then
       [ "$waited" = 60 ] && "$HOME/.claude/bin/it2" session send -s "$SID" $'\r' >/dev/null 2>&1 || true
     done
     cc_alive && echo "⚠ CC still alive after ${waited}s — teammate-style force-close" >&2
+  fi
+  # CLOSE-INSTANT RE-VERIFY. The successor was verified alive+engaged at ARM time, but this watcher
+  # closes up to ~180s later — a successor that DIED in that window would strand BOTH panes (the very
+  # failure the arm-time gate exists to prevent, just deferred). Cheap ps re-check on the successor's
+  # tty (resolved foreground at arm time and handed over as $5 — NO AppleEvents here, they fail
+  # detached; no engagement re-check needed). Dead ⇒ DO NOT close: page the desk (best-effort), leave
+  # the predecessor ALIVE, exit nonzero. Skipped when there is no successor (--terminal) or no tty was
+  # handed over (can't cheaply re-verify → defer to the arm-time proof, never block a close on it).
+  if [ -n "$SUCCESSOR" ] && [ -n "$SUCCESSOR_TTY" ] && \
+     ! ps -o comm= -t "$(basename "$SUCCESSOR_TTY")" 2>/dev/null | grep -qE 'node|claude'; then
+    echo "!! self-close ABORTED at close-instant: successor $SUCCESSOR ($SUCCESSOR_TTY) is NO LONGER ALIVE — NOT closing predecessor $SID (closing now would strand BOTH panes). Predecessor left alive." >&2
+    if [ -x "$HOME/.claude/bin/cc-notify" ]; then
+      "$HOME/.claude/bin/cc-notify" --role "${CC_COMPLETION_ROLE:-desk}" "HANDOFF-STRAND-RISK: self-close of $SID was aborted — its successor $SUCCESSOR died before the close instant. Predecessor left ALIVE to avoid stranding the work; the succession did NOT complete. Re-drive the handoff (re-fire a warm successor, then self-close again)." >/dev/null 2>&1 || true
+    fi
+    exit 1
   fi
   "$HOME/.claude/bin/it2" session close -f -s "$SID"
   if [ -n "$SUCCESSOR" ]; then
@@ -1035,10 +1129,11 @@ fi
 # self-close — arm the detached watcher that retires this session once the calling turn ends.
 if [ "${1:-}" = "self-close" ]; then
   shift
-  SC_SID="" SC_ALLOW_DIRTY=0 SC_DRY=0 SC_SUCCESSOR="" SC_TERMINAL=0 SC_NO_NOTIFY=0 SC_DIRTY_OWNER=""
+  SC_SID="" SC_ALLOW_DIRTY=0 SC_DRY=0 SC_SUCCESSOR="" SC_TERMINAL=0 SC_NO_NOTIFY=0 SC_DIRTY_OWNER="" SC_ASSUME_ENGAGED=0
   while [ $# -gt 0 ]; do case "$1" in
     --session-id)  SC_SID="${2:?--session-id needs a value}"; shift 2 ;;
     --successor)   SC_SUCCESSOR="${2:?--successor needs a pane uuid}"; shift 2 ;;
+    --successor-assume-engaged) SC_ASSUME_ENGAGED=1; shift ;;
     --terminal)    SC_TERMINAL=1; shift ;;
     --no-notify)   SC_NO_NOTIFY=1; shift ;;
     --dirty-owner) SC_DIRTY_OWNER="${2:?--dirty-owner needs a value (successor)}"; shift 2 ;;
@@ -1088,6 +1183,23 @@ USAGE
       exit 3
     fi
     echo "→ successor verified alive: $SC_SUCCESSOR (tty $SUC_TTY)"
+    # ENGAGEMENT gate (BIRTH IS NOT ENGAGEMENT, item ff2d6609a33e — the same lesson the spawn path
+    # learned). Process-alive proves the pane BOOTED, not that it INGESTED work: a cold-fire whose
+    # first prompt was never submitted (auto-submit race) or was rejected (/goal >4000-char cap)
+    # sits alive-but-idle forever. Closing the predecessor onto such a successor strands the work in
+    # BOTH panes. So also require the successor's transcript to show ≥1 real assistant turn (at ANY
+    # time — a long-lived adopted operator pane passes trivially). --successor-assume-engaged skips
+    # ONLY this half (retains the liveness check above) for a successor whose transcript is
+    # unreadable from this account.
+    if [ "$SC_ASSUME_ENGAGED" = 1 ]; then
+      echo "→ successor engagement check SKIPPED (--successor-assume-engaged): $SC_SUCCESSOR assumed engaged (transcript unreadable from this account)"
+    elif successor_engaged "$REG_DIR" "$SC_SUCCESSOR"; then
+      echo "→ successor engagement verified: $SC_SUCCESSOR transcript shows ≥1 assistant turn"
+    else
+      echo "!! self-close ABORTED: successor $SC_SUCCESSOR is process-alive but NEVER ENGAGED — its transcript shows no assistant turn (a cold-fire that booted but never ingested work, or a transcript unreadable from this account). Refusing to close a predecessor whose continuation has not actually started work." >&2
+      echo "!!   recover: re-fire the successor WARM (handoff-fire --cwd <its-worktree> …) or nudge it (cc-notify $SC_SUCCESSOR '<re-engage prompt>'); or, if its transcript is simply unreadable from this account, pass --successor-assume-engaged to skip ONLY the engagement check." >&2
+      exit 3
+    fi
   fi
   # A session about to evaporate must not hold un-persisted work. (Committed-not-pushed is fine —
   # commits survive the pane; uncommitted edits do too, but silently, which is how work gets lost.)
@@ -1129,6 +1241,10 @@ MSG
     fi
     exit 0
   fi
+  # Pre-close inventory (light, best-effort, WARN-only): a closing session should not silently abandon
+  # unread mail or peers it fired that have no live continuation. Runs in the REAL close path only
+  # (before arming the watcher); zero counts are silent. NEVER blocks — the close proceeds regardless.
+  selfclose_inventory_warn "$SC_SID" "$SC_LOG" || true
   # T-P2-1 (F5 / G-P2-1): a --terminal close is a PROGRAM-TERMINAL completion — nothing continues this
   # session's work — so push it to the desk via completion-push (F5 → cc-announce F1). Until this caller
   # NOTHING fired completion-push (it was DEAD in the loop, p02 §2c): a terminal event reached the desk
@@ -1177,9 +1293,9 @@ MSG
     # No CC on the pane (shell-only, or still launching): typing /exit would hit the SHELL and
     # vanish (observed). Nothing to exit gracefully — the watcher closes the pane directly.
     echo "→ no CC on $SC_TTY — skipping /exit, closing pane directly" >&2
-    detach "$SC_LOG" "$0" __selfclose "$SC_SID" "$SC_TTY" "$SC_SUCCESSOR" >/dev/null
+    detach "$SC_LOG" "$0" __selfclose "$SC_SID" "$SC_TTY" "$SC_SUCCESSOR" "$SUC_TTY" >/dev/null
   else
-    SC_WATCHER="$(detach "$SC_LOG" "$0" __selfclose "$SC_SID" "$SC_TTY" "$SC_SUCCESSOR")"
+    SC_WATCHER="$(detach "$SC_LOG" "$0" __selfclose "$SC_SID" "$SC_TTY" "$SC_SUCCESSOR" "$SUC_TTY")"
     if ! await_armed "$SC_LOG"; then
       kill "$SC_WATCHER" 2>/dev/null || true
       echo "!! self-close ABORTED: watcher heartbeat never appeared ($SC_LOG) — /exit NOT typed, session stays alive" >&2
