@@ -1,4 +1,9 @@
 #!/bin/bash
+# shellcheck disable=SC2009,SC2015
+# ^ file-wide, matching scripts/handoff-fire.sh's own convention: SC2009 — `ps -o comm= -t <tty>` is a
+#   controlling-TTY process lookup (pgrep -t is not equivalent); SC2015 — `<cond> && ok "…" || bad "…"`
+#   is the intentional test-assertion idiom here (ok/bad are 0-returning counters, so `|| bad` runs
+#   only when <cond> is false, never as a side effect of ok failing).
 # E2E for `handoff-fire.sh self-close` — the SUCCESSION CONTRACT (2026-07-13).
 #
 # Live-fire proof of the full chain on REAL panes with a fake `claude` binary:
@@ -100,8 +105,7 @@ await_shell() { # $1=uuid — the typed launch is LOST if it lands before zsh fi
 }
 
 start_fake() { # $1=uuid — launch fake claude; one retry (a first send can be redraw-eaten)
-  local try
-  for try in 1 2; do
+  for _ in 1 2; do
     "$IT2" session run -s "$1" "$FAKE_CMD" >/dev/null 2>&1
     local n=0
     while [ "$n" -lt 6 ]; do
@@ -122,7 +126,7 @@ cleanup() {
 trap cleanup EXIT
 
 say "── handoff self-close succession E2E ──────────────────"
-mkdir -p "$WORK" && cd "$WORK"
+mkdir -p "$WORK" && cd "$WORK" || exit 1
 ln -sf /bin/bash "$WORK/claude"
 FAKE_CMD="$WORK/claude -c 'while read -r l; do case \"\$l\" in /exit) exit 0;; esac; done'"
 
