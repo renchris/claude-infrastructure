@@ -407,6 +407,14 @@ cmd_reap() {
     group_by(.id)
     | map(
         (sort_by(.ts)) as $g
+        # Thrash window resets at the LATEST block/unblock record: fastFail counts only claim→reopen
+        # pairs occurring AFTER it. Without this, a deliberate `unblock` (status→open) is re-blocked by
+        # the very next reap on pre-unblock history that still folds ≥ MAX_THRASH — the dispatcher-
+        # starvation bug (unblock never survives cc-reaper). A genuinely NEW post-unblock thrash still
+        # blocks (the counter only ever narrows here, never widens what the blocker acts on). Default
+        # cut = -1 (no block/unblock in trail) preserves the original whole-trail fold.
+        | ([ range(0; ($g|length)) as $j
+             | select($g[$j].event=="unblock" or $g[$j].event=="block") | $j ] | last // -1) as $cut
         | ($g[-1]) as $last
         | { id: $last.id,
             status: st($last.event),
@@ -414,7 +422,8 @@ cmd_reap() {
             claimTs: ([$g[] | select(.event=="claim")] | last | .ts // ""),
             totalClaims: ([$g[] | select(.event=="claim")] | length),
             fastFail: ([ range(0; ($g|length)-1) as $i
-                | select($g[$i].event=="claim" and $g[$i+1].event=="reopen"
+                | select($i > $cut
+                         and $g[$i].event=="claim" and $g[$i+1].event=="reopen"
                          and (($g[$i+1].ts|fromdateiso8601) - ($g[$i].ts|fromdateiso8601)) <= $window) ]
               | length) }
         | .claimAgeS = (if .claimTs=="" then -1 else ($now - (.claimTs|fromdateiso8601)) end)
