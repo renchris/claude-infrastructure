@@ -331,6 +331,26 @@ status_of() { bash "$CB" list --all --json | jq -r --arg i "$1" '.[]|select(.id=
   bash "$CB" list --all --json | jq -e --arg i thrashaaaa01 '.[]|select(.id==$i)|.needs|test("thrash")'
 }
 
+@test "reap: unblock resets the thrash window — the next reap does NOT re-block (dispatcher-starvation fix)" {
+  # RED-proof for the reap→unblock→reap refold: pre-fix, reap folds fastFail over the WHOLE trail with
+  # no awareness of a later `unblock`, so the very next sweep re-blocks anything the desk unblocks — the
+  # dispatcher reads "backlog empty" while 21 rows sit blocked. The window must reset at the unblock.
+  reap_env
+  rec '{"id":"unblkreap001","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"Unblock"}'
+  rec '{"id":"unblkreap001","ts":"2026-01-01T00:00:10Z","event":"claim","by":"h-1"}'
+  rec '{"id":"unblkreap001","ts":"2026-01-01T00:00:14Z","event":"reopen"}'   # cycle 1: 4s < window
+  rec '{"id":"unblkreap001","ts":"2026-01-01T00:00:20Z","event":"claim","by":"h-2"}'
+  rec '{"id":"unblkreap001","ts":"2026-01-01T00:00:24Z","event":"reopen"}'   # cycle 2: 4s < window ⇒ thrash
+  run bash "$CB" reap                                   # persistent thrash → blocked
+  [ "$status" -eq 0 ]
+  [ "$(status_of unblkreap001)" = blocked ]
+  bash "$CB" unblock unblkreap001 >/dev/null            # desk/operator unblocks after investigating
+  [ "$(status_of unblkreap001)" = open ]
+  run bash "$CB" reap                                   # the VERY NEXT sweep must respect the unblock
+  [ "$status" -eq 0 ]
+  [ "$(status_of unblkreap001)" = open ]                # pre-fix: pre-unblock history re-blocks ⇒ blocked (RED)
+}
+
 @test "reap: ONE fast cycle (< MAX_THRASH) does NOT block — stays as it folded (open)" {
   reap_env
   rec '{"id":"onecyc00bb01","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"One"}'
