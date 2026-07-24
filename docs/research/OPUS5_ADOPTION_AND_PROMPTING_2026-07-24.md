@@ -55,13 +55,23 @@ run (it would flip not-yet-allowlisted teammate briefs → spawn refusal / silen
 Opus 4.8 is still fully served (it is Opus 5's own cyber-refusal fallback), so no `opus-4-8` ref
 is "stale."
 
-**Where Opus 5 IS usable right now (day 0):** the API directly, and explicit **non-auto**
-`--model claude-opus-5` sessions. The frontier tier (Fable 5) and all Fable roles are unchanged.
+**Where Opus 5 IS usable right now (day 0):** the **API directly** (any client, any CC version).
+On the CC eval track it needs the 2.1.219 bump in step 0a below — the current 2.1.215 binary does
+not register `claude-opus-5`. The frontier tier (Fable 5) and all Fable roles are unchanged.
 
 ### Operator activation checklist (the one human step, then the agent finishes)
 
-0. **Live-test:** start a real interactive `--permission-mode auto --model claude-opus-5`
-   session on the `claude-next` eval track. Engages autonomously ⇒ allowlisted.
+0a. **Prereq — bump the eval track to CC 2.1.219.** The current eval binary (2.1.215) does
+   **not register `claude-opus-5`** (CC support was added in 2.1.219; the API needs no bump).
+   Parallel-install (`npm i --prefix ~/.claude-219 @anthropic-ai/claude-code@2.1.219`, keeping
+   2.1.215 for one-line rollback) and set `export CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=1` in
+   `~/.zshrc` `claude-next()` — 2.1.219's depth-3 nested-spawn default reverses 2.1.217's
+   containment of the still-open runaway #68619 — **before** repointing `:383/:387` → `~/.claude-219`.
+   (Details + rollback floor 2.1.217: `~/.claude-versions/MANIFEST.jsonl` 2.1.219.)
+0b. **Live-test** on the `~/.claude-219` binary: `CLAUDE_NEXT_MODEL=claude-opus-5 claude-next`
+   (= `--permission-mode auto --model claude-opus-5`). Engages autonomously ⇒ allowlisted **and**
+   entitled — entitlement may be server-date-gated (like Fable 5 was), so smoke
+   `--model claude-opus-5 --print "ok"` first.
 1. Flip the versions map: `opus_latest → claude-opus-5`, `opus_prior → claude-opus-4-8`, clear
    `opus_staged`; run `claude-bump-models --apply` (NOW safe); add `claude-opus-5` to
    `auto_mode_allowlist.non_firstParty_max` **alongside** 4.8.

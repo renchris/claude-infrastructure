@@ -52,8 +52,18 @@ versions:
 # cyber-refusal fallback), so no ref to it is "stale".
 #
 # OPERATOR ACTIVATION (the one human step) — then agent completes the sweep:
-#   0. Live-test: start a real interactive `--permission-mode auto --model claude-opus-5`
-#      session on the claude-next eval track. Engages autonomously ⇒ allowlisted.
+#   0a. PREREQ — bump the eval track to CC 2.1.219: `claude-opus-5` is NOT registered by the
+#       current eval binary (2.1.215); CC support was ADDED in 2.1.219 (API usage needs no bump).
+#       PARALLEL-install (`npm i --prefix ~/.claude-219 @anthropic-ai/claude-code@2.1.219`, keep
+#       2.1.215 intact for 1-line rollback) AND `export CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=1` in
+#       ~/.zshrc claude-next() — 219's depth-3 nested-spawn default REVERSES 2.1.217's containment of
+#       the still-open #68619 runaway (4M tok/5min) on our spawn-heavy shared binary — BEFORE
+#       repointing :383/:387 → ~/.claude-219. MANIFEST 2.1.219 + [[claude-code-2.1.219-opus5-eval]].
+#   0b. Live-test on the ~/.claude-219 binary (this IS the operator gate): `CLAUDE_NEXT_MODEL=claude-opus-5
+#       claude-next` (= `--permission-mode auto --model claude-opus-5`). Engages autonomously ⇒
+#       allowlisted AND entitled. NB entitlement may be SERVER-date-gated (like Fable 5 was — a binary
+#       bump alone may not unlock it; relaunch/re-login fetches it) → first smoke `--model claude-opus-5
+#       --print "ok"` returns a real completion + `claude-accounts` shows a live budget.
 #   1. flip versions map: opus_latest → claude-opus-5, opus_prior → claude-opus-4-8, clear opus_staged;
 #      run `claude-bump-models --apply` (NOW safe — sweeps opus-4-8→opus-5); add claude-opus-5 to
 #      auto_mode_allowlist.non_firstParty_max ALONGSIDE 4.8.
