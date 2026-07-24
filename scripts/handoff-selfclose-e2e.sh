@@ -134,7 +134,11 @@ start_fake "$A" && start_fake "$B" || { bad "fake claude did not start on both p
 ok "fake claude alive on both panes (A=$A B=$B)"
 
 say "→ T-live-1: self-close A with successor B (full chain)"
-OUT="$("$HF" self-close --session-id "$A" --successor "$B" 2>&1)"; RC=$?
+# --successor-assume-engaged: the fake successor is a bash read-loop with NO Claude transcript, so the
+# assistant-turn engagement gate (added 2026-07-24) has nothing to read — this flag skips ONLY that
+# check (the liveness + close-instant re-verify still run against B's real live process). Engagement
+# itself is unit-covered in tests/handoff-selfclose.bats; this E2E proves the succession-legibility chain.
+OUT="$("$HF" self-close --session-id "$A" --successor "$B" --successor-assume-engaged 2>&1)"; RC=$?
 say "$OUT" | sed 's/^/    │ /'
 [ "$RC" = 0 ] && ok "self-close returned 0" || bad "self-close returned $RC"
 grep -q "successor verified alive: $B" <<<"$OUT" && ok "successor liveness verified pre-/exit" || bad "missing successor verification"
