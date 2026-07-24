@@ -82,6 +82,32 @@ not register `claude-opus-5`. The frontier tier (Fable 5) and all Fable roles ar
 4. **Re-sweep effort** (see §2 — this is the load-bearing change, not a formality).
 5. `claude-lint-models --all` green; spot-check one teammate's live model (silent-demotion).
 
+### Activation status — verified 2026-07-24 (session continuation; artifacts, not narration)
+
+The 0a groundwork is DONE and effect-verified; the flip is **staged, not executed**:
+
+- **0a groundwork ✅** — `~/.claude-219` = 2.1.219 parallel-installed (stable `claude`/`cc` @ 2.1.114
+  + eval `.claude-183` @ 2.1.215 both untouched). `export CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=1` is
+  present in **both** `claude-next()` and `claude-opus5()` and **effect-read confirmed**: a spawned
+  child inherits `=1` (a stub-binary run of the real launcher body, not a launcher grep).
+- **Opus 5 reachable TODAY ✅** — smoke on 2.1.219 / acct 1: `--model claude-opus-5 --print` → exit 0,
+  `modelUsage:['claude-opus-5']`, `$0.43` (real Opus-5 latency, **not** the ~600 ms access-reject
+  shape). Entitlement is **not** server-gated for that account. **Day-0 surface = the `claude-opus5`
+  launcher** (219 binary · effort high · interactive) — Opus 5 works right now via it.
+- **`claude-next` still opens at Opus 4.8 — by design.** Repointing the shared 4-account + fable eval
+  binary onto <1-day-soaked 219 is the wider-adoption move the MANIFEST gates on "green Step-6"
+  (auto-mode live-test + teammate smoke); it is **not** auto-done. Rollback floor: 2.1.217.
+
+**To make `claude-next` itself open at Opus 5** — the operator runs the one live-test, then one command:
+1. `CLAUDE_OPUS5_PERM=auto claude-opus5-2` — must engage autonomously (the auto-mode gate; agent-refused).
+2. `LIVE_TEST_PASSED=1 REPOINT_NEXT=1 CONFIRM=1 bash ~/.claude/autonomy/pending-activation/10-opus5-activate.sh`
+   (omit `REPOINT_NEXT=1` for routing-adoption only, leaving the everyday launcher on 4.8).
+
+`10-opus5-activate.sh` runs the anchored SSOT flip + `claude-bump-models --apply` + lint (auto-rollback
+on red) + (phase B) the `claude-next` repoint — all fail-closed, idempotent, backed-up — then prints
+the `templates/model-config.yaml` resync + `/ship`. Both flip phases were proven against throwaway
+SSOT/zshrc copies (exact diff · no collateral refs · idempotent) before staging.
+
 ---
 
 ## 2. Effort — the "max is best" prior is WRONG for Opus 5 (highest-leverage change)
