@@ -58,6 +58,17 @@ INTERACTIVE_TAIL_BYTES="${CC_CLASSIFY_INTERACTIVE_TAIL_BYTES:-2000000}"  # recen
 die(){ printf 'cc-classify: %s\n' "$*" >&2; exit 2; }
 command -v jq >/dev/null || die "jq required"
 
+# ── shared interactive-recency primitive (the ONE WHO-drove-the-last-turn signal) ──────────────
+# hooks/lib/cc-interactive.sh owns ci_last_interactive_epoch; last_interactive_epoch (below) is a thin
+# wrapper. Same resolve order as cc-reaper's libs: beside-script → CLAUDE_CONFIG_DIR → ~/.claude.
+_CI_HERE="$(cd "$(dirname "$0")" && pwd)"
+for _c in "$_CI_HERE/../hooks/lib/cc-interactive.sh" \
+          "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/cc-interactive.sh" \
+          "$HOME/.claude/hooks/lib/cc-interactive.sh"; do
+  # shellcheck disable=SC1090,SC1091
+  [ -f "$_c" ] && { . "$_c" 2>/dev/null || true; break; }
+done
+
 # ── input helpers (all read-only) ─────────────────────────────────────────────────────────────
 iso_to_epoch() { # <iso8601 e.g. 2026-07-16T22:46:27.449Z> → epoch seconds (empty on parse fail)
   local s="${1%%.*}"; s="${s%Z}"                    # drop fractional seconds + trailing Z
@@ -273,30 +284,14 @@ fired_at_epoch() { # <paneUUID> → epoch of the fire (marker firedAt; fallback:
   printf '%s' "$ep"
 }
 
-last_interactive_epoch() { # <jsonl> → epoch of the last REAL operator-typed prompt (empty-fail if none in tail)
-  # Semantics mirror hooks/lib/context-econ.sh ce_last_interactive_age (ground-truthed against
-  # production transcripts 2026-07-20; keep in sync): type==user AND isMeta!=true AND content is a
-  # string (or text blocks with NO tool_result) AND not auto-traffic (task-notifications, Stop-hook
-  # feedback, interrupt markers, our own ⟳/⚑/⚠ advisories). Operator slash-commands COUNT — the
-  # operator is present. Inlined (not sourced) so the classifier stays self-contained and the epoch
-  # is comparable against the seam-pinned $NOW (the lib returns an age vs the REAL clock).
-  local f="${1:-}" rx ep
-  [ -n "$f" ] && [ -f "$f" ] || return 1
-  rx="${CC_CLASSIFY_AUTO_RX:-^<task-notification>|^<local-command-stdout>|^Stop hook feedback:|^\\[Request interrupted|^⟳|^⚑|^⚠}"
-  ep="$(tail -c "$INTERACTIVE_TAIL_BYTES" "$f" 2>/dev/null | jq -Rr --arg rx "$rx" '
-      fromjson? | objects
-      | select(.type=="user") | select(.isMeta != true)
-      | (.message.content) as $c
-      | ( if ($c|type)=="string" then $c
-          elif ($c|type)=="array" and ([$c[]? | select(.type?=="tool_result")] | length)==0
-          then ([$c[]? | select(.type?=="text") | .text] | join("\n"))
-          else empty end ) as $t
-      | select(($t|length) > 0)
-      | select($t | test($rx) | not)
-      | (.timestamp | strings | sub("\\.[0-9]+Z$"; "Z") | try fromdateiso8601 catch empty)
-    ' 2>/dev/null | tail -1)"
-  case "$ep" in ''|*[!0-9]*) return 1 ;; esac
-  printf '%s' "$ep"
+last_interactive_epoch() { # <jsonl> → epoch of the last REAL operator-typed prompt (empty-fail if none)
+  # Thin wrapper over the shared ci_last_interactive_epoch primitive (hooks/lib/cc-interactive.sh —
+  # the ONE WHO-drove-the-last-turn signal; semantics mirror context-econ.sh ce_last_interactive_age
+  # plus the image-only-paste case + the whole-file fallback beyond the tail window). Returns an EPOCH
+  # (not an age) so it is comparable against the seam-pinned $NOW. If the lib failed to source (should
+  # never happen — it ships beside this script), fail closed to "no interactive turn" (never-reap wins).
+  command -v ci_last_interactive_epoch >/dev/null 2>&1 || return 1
+  ci_last_interactive_epoch "${1:-}"
 }
 
 work_landed() { # <cwd> → 0 if clean AND the branch's content is on trunk (P0-17 landed-by-CONTENT).
