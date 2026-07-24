@@ -2,10 +2,15 @@
 # team-orphan-reaper.sh — Archive dead teams + auto-deny stale permission
 # requests. Invoked by launchd every 10 minutes.
 #
-# A team is orphaned when:
-#   - ~/.claude/teams/<name>/config.json exists
-#   - leadSessionId has no live pid file in ~/.claude/watchdog/
-#   - OR the recorded pid is dead
+# A team is ARCHIVED only on POSITIVE evidence of death:
+#   - ~/.claude/teams/<name>/config.json exists with a leadSessionId, AND
+#   - that lead has an EXISTING watchdog pid file whose pid fails `kill -0` (dead), AND
+#   - no live session (cc-sessions registry) occupies a member worktree or matches a member/lead name.
+# A MISSING or empty watchdog pid file is UNKNOWN, not dead — the watchdog may not have written it yet,
+# or an in-place /handoff of a named team left a stale leadSessionId whose pid file is gone while a
+# SUCCESSOR actively drives the team. Such teams are SURFACED (logged + best-effort operator page),
+# never archived: archiving a LIVE team erases cc-classify's owned-wait / coordination-hold signals and
+# cascades toward the pane reaper. Absence of a pid file is not evidence of death.
 #
 # Also: for LIVE teams, scan inboxes for permission_request envelopes older
 # than PERM_TIMEOUT_MIN (default 5); append a permission_response deny envelope
@@ -19,11 +24,19 @@ if [[ "${TEAM_ORPHAN_REAPER_DISABLED:-0}" == "1" ]]; then
   exit 0
 fi
 
-readonly TEAMS_DIR="$HOME/.claude/teams"
-readonly WATCHDOG_DIR="$HOME/.claude/watchdog"
+readonly TEAMS_DIR="${TEAM_REAPER_TEAMS_DIR:-$HOME/.claude/teams}"
+readonly WATCHDOG_DIR="${TEAM_REAPER_WATCHDOG_DIR:-$HOME/.claude/watchdog}"
 readonly ARCHIVE_DIR="$TEAMS_DIR/_archive"
-readonly LOG_FILE="$HOME/.claude/logs/team-reaper.log"
+readonly LOG_FILE="${TEAM_REAPER_LOG_FILE:-$HOME/.claude/logs/team-reaper.log}"
 readonly PERM_TIMEOUT_MIN="${TEAM_REAPER_PERM_TIMEOUT_MIN:-5}"
+
+# Helper CLIs for the archive-safety gate: cc-sessions (live-session registry cross-check) and
+# cc-notify (operator page for an UNKNOWN-liveness team). Resolve PATH-first so a test PATH-shim wins,
+# then fall back to the standard install path; empty ⇒ unavailable, and the caller degrades gracefully
+# (a missing registry only forfeits its extra KEEP evidence — it never fails the sweep).
+_reaper_bin() { command -v "$1" 2>/dev/null || { [ -x "$HOME/.claude/bin/$1" ] && printf '%s\n' "$HOME/.claude/bin/$1"; }; }
+readonly CC_SESSIONS_BIN="${CC_SESSIONS_BIN:-$(_reaper_bin cc-sessions)}"
+readonly CC_NOTIFY_BIN="${CC_NOTIFY_BIN:-$(_reaper_bin cc-notify)}"
 
 mkdir -p "$ARCHIVE_DIR" "$(dirname "$LOG_FILE")" 2>/dev/null || true
 
@@ -31,16 +44,53 @@ log() {
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG_FILE" 2>/dev/null || true
 }
 
-is_lead_alive() {
+# Three-state liveness of the recorded lead:
+#   0 = ALIVE   (pid file present, pid answers kill -0 — keep existing semantics: ANY live pid ⇒ alive,
+#                including a recycled non-claude pid; we do NOT add pid-identity checking here)
+#   1 = DEAD    (pid file present, pid fails kill -0 — POSITIVE evidence of death; may proceed to archive)
+#   2 = UNKNOWN (no pid file, or an empty one — absence of evidence, NOT evidence of death; surface it)
+lead_liveness() {
   local sid="$1"
   local pid_file="$WATCHDOG_DIR/$sid.pid"
-  if [[ ! -f "$pid_file" ]]; then
-    return 1  # no record — assume dead
-  fi
+  [[ -f "$pid_file" ]] || return 2          # no watchdog record — UNKNOWN (was wrongly "assume dead")
   local pid
   pid=$(cat "$pid_file" 2>/dev/null || echo "")
-  [[ -z "$pid" ]] && return 1
-  kill -0 "$pid" 2>/dev/null
+  [[ -z "$pid" ]] && return 2               # empty pid file — no pid to test ⇒ UNKNOWN, not dead
+  kill -0 "$pid" 2>/dev/null && return 0     # a live pid ⇒ alive (existing semantics preserved)
+  return 1                                   # pid file present + pid dead ⇒ DEAD (positive evidence)
+}
+
+# Best-effort operator page (never fails the sweep). Addresses the operator ROLE so a recycled desk is
+# followed automatically; a missing role / unavailable cc-notify is a silent no-op.
+cc_notify_page() { # $1=message
+  [[ -n "$CC_NOTIFY_BIN" ]] || return 0
+  "$CC_NOTIFY_BIN" --role operator "$1" >/dev/null 2>&1 || true
+}
+
+# Registry cross-check before archiving a DEAD-lead team: a dead lead pid is not a dead TEAM. An
+# in-place /handoff or a crash-respawn mints a successor session that drives the team from a member
+# worktree (its cwd sits inside one) or under a member/lead name. Return 0 (KEEP) iff cc-sessions
+# reports a live session matching either signal; 1 otherwise. cc-sessions unavailable / unreadable ⇒ 1
+# (no extra KEEP evidence — the sweep falls back to the pid-death verdict it already has).
+team_has_live_session() { # $1=team_dir
+  local cfg="$1/config.json" rows
+  [[ -f "$cfg" ]] || return 1
+  [[ -n "$CC_SESSIONS_BIN" ]] || { log "registry cross-check skipped ($1): cc-sessions unavailable"; return 1; }
+  rows="$("$CC_SESSIONS_BIN" --json 2>/dev/null)" || return 1
+  case "$rows" in '['*) ;; *) return 1 ;; esac          # not a JSON array ⇒ ignore, no false KEEP
+  # One jq pass: a live session KEEPs the team if its .name is a member/lead name OR its .cwd is inside
+  # a member worktree (.worktree or .cwd). --slurpfile tolerates a malformed config (parse error ⇒ empty
+  # stream ⇒ jq -e exits non-zero ⇒ no false KEEP). Member names include "team-lead", so the lead is covered.
+  printf '%s' "$rows" | jq -e --slurpfile cfg "$cfg" '
+    ($cfg[0] // {}) as $c
+    | ([ ($c.members // [])[]? | (.worktree, .cwd) | select(type == "string" and . != "") ]) as $wts
+    | ([ ($c.members // [])[]? | .name              | select(type == "string" and . != "") ]) as $names
+    | any(.[]?;
+        ((.name // "") as $n | $n != "" and ($names | index($n) != null))
+        or
+        ((.cwd  // "") as $d | $d != "" and (any($wts[]; . as $w | $d == $w or ($d | startswith($w + "/")))))
+      )
+  ' >/dev/null 2>&1
 }
 
 archive_team() {
@@ -128,6 +178,7 @@ main() {
 
   local live_count=0
   local archived_count=0
+  local unknown_count=0
 
   for team_dir in "$TEAMS_DIR"/*/; do
     team_dir=${team_dir%/}
@@ -144,17 +195,32 @@ main() {
       continue
     fi
 
-    if is_lead_alive "$lead_sid"; then
+    local liveness
+    lead_liveness "$lead_sid"; liveness=$?
+    if [[ "$liveness" -eq 0 ]]; then
       scan_stale_permissions "$team_dir"
       live_count=$((live_count + 1))
+    elif [[ "$liveness" -eq 2 ]]; then
+      # UNKNOWN — no/empty watchdog pid file. NOT death (watchdog not yet written, or an in-place
+      # /handoff left a stale leadSessionId whose pid file is gone while a successor drives the team).
+      # Surface it and move on — archiving a live team erases cc-classify's hold signals.
+      log "unknown-liveness $team_name (no watchdog pid file) — surfacing"
+      cc_notify_page "team-orphan-reaper: unknown-liveness for '$team_name' (lead $lead_sid has no live watchdog pid file) — NOT archiving; if the team is truly dead, clean up $TEAMS_DIR/$team_name"
+      unknown_count=$((unknown_count + 1))
     else
-      # Optionally: verify no iTerm panes alive (osascript) — skip for v1, archive is idempotent
-      archive_team "$team_dir"
-      archived_count=$((archived_count + 1))
+      # DEAD by positive evidence (pid file present, pid fails kill -0). Cross-check the live-session
+      # registry first: a successor may drive the team from a member worktree/name (KEEP), else archive.
+      if team_has_live_session "$team_dir"; then
+        log "keep $team_name: lead pid dead but a live session matches a member worktree/name (successor-driven)"
+        live_count=$((live_count + 1))
+      else
+        archive_team "$team_dir"
+        archived_count=$((archived_count + 1))
+      fi
     fi
   done
 
-  log "reaper sweep — done: $live_count live, $archived_count archived"
+  log "reaper sweep — done: $live_count live, $archived_count archived, $unknown_count unknown"
 }
 
 main "$@"
