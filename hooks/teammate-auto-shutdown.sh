@@ -347,17 +347,19 @@ if $TREE_DIRTY && (( DEFER_COUNT < MAX_DEFERS )); then
   exit 0
 fi
 
-# ── reap-safety birth-grace + effect-read gate (P0-13 reap-guard R-a/R-b) ──────────────────────────
-# The LAST gate before reap: a just-born teammate (within grace) or a clean tree with NO work products
-# since spawn is indistinguishable from a finished one by tree-state alone — DEFER, do not shut down.
+# ── reap-safety birth-grace + effect-read + operator-adoption gate (P0-13 reap-guard R-a/R-b + R-d) ──
+# The LAST gate before reap: a just-born teammate (within grace), a clean tree with NO work products
+# since spawn (indistinguishable from finished by tree-state alone), OR a pane the OPERATOR adopted
+# (typed into after its spawn brief — the 2026-07-24 reaper incident class, which this hook otherwise
+# reaps who-blind) — DEFER, do not shut down. --session-id lets reap-guard read WHO drove the last turn.
 REAP_GUARD="${CC_REAP_GUARD_BIN:-$HOME/.claude/scripts/reap-guard.sh}"
 if [[ -n "$WORKTREE" && -x "$REAP_GUARD" ]]; then
   # spawn-time = registry startedAt (epoch-MILLISECONDS) / 1000; unresolvable → now → DEFER (fail-safe)
   _started_ms="$(cc-sessions --json 2>/dev/null \
      | jq -r --arg s "$SESSION_ID" '.[] | select((.session_id // .sessionId)==$s) | .startedAt // empty' 2>/dev/null | head -1)"
   if [[ "$_started_ms" =~ ^[0-9]+$ ]]; then _spawn_s=$(( _started_ms / 1000 )); else _spawn_s="$(date +%s)"; fi
-  if ! "$REAP_GUARD" decide --worktree "$WORKTREE" --member "$TEAMMATE_NAME" --spawn-time "$_spawn_s" >/dev/null 2>&1; then
-    log "defer $TEAMMATE_NAME (team=$TEAM_NAME): reap-guard DEFER (birth-grace / no-products-since-spawn)"
+  if ! "$REAP_GUARD" decide --worktree "$WORKTREE" --member "$TEAMMATE_NAME" --spawn-time "$_spawn_s" --session-id "$SESSION_ID" >/dev/null 2>&1; then
+    log "defer $TEAMMATE_NAME (team=$TEAM_NAME): reap-guard DEFER (birth-grace / no-products / operator-adopted)"
     # Do NOT emit {"continue": false}; let the just-born teammate keep working.
     exit 0
   fi

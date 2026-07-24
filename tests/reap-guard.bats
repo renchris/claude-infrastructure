@@ -16,11 +16,11 @@ mkgit() { # <dir> [<committer-epoch>]
   else git -C "$1" commit -qm seed; fi
 }
 
-@test "selftest passes and runs all 6 checks (a zero-check suite must not 'pass')" {
+@test "selftest passes and runs all 8 checks (a zero-check suite must not 'pass')" {
   run "$G" --selftest
   [ "$status" -eq 0 ]
   n_ok="$(printf '%s' "$output" | grep -c '^  ok ')"
-  [ "$n_ok" -eq 6 ]
+  [ "$n_ok" -eq 8 ]
 }
 
 @test "R-a: a just-born teammate (clean tree, within grace) → DEFER (exit 10), not reaped" {
@@ -57,4 +57,50 @@ mkgit() { # <dir> [<committer-epoch>]
   mkgit "$BATS_TEST_TMPDIR/dirty"; echo change >> "$BATS_TEST_TMPDIR/dirty/a.txt"
   run "$G" decide --worktree "$BATS_TEST_TMPDIR/dirty" --member dirty --spawn-time "$((NOW-1000))" --grace-s 60
   [ "$status" -eq 10 ]
+}
+
+# ── R-d operator-adoption hold (2026-07-25): the 2026-07-24 reaper incident class, on the TeammateIdle
+#    path the c063ca0 fix never touched. Reads WHO drove the last turn (ce_last_interactive_age). ──
+utx() { # <transcript> <ago-seconds> — append a real operator user prompt <ago>s before now
+  local f="$1" ago="$2" ts
+  ts="$(date -u -v-"${ago}"S +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@$(( $(date +%s) - ago ))" +%Y-%m-%dT%H:%M:%SZ)"
+  printf '{"type":"user","isMeta":false,"message":{"role":"user","content":"operator here"},"timestamp":"%s"}\n' "$ts" >> "$f"
+}
+
+@test "R-d: adopted teammate (operator prompt AFTER spawn, within hold) → DEFER even with products" {
+  mkgit "$BATS_TEST_TMPDIR/adopt"                                   # products since spawn (commit now)
+  export CC_REAP_PROJECT_ROOTS="$BATS_TEST_TMPDIR/proj"; mkdir -p "$BATS_TEST_TMPDIR/proj/slug"
+  utx "$BATS_TEST_TMPDIR/proj/slug/sid-adopt.jsonl" 120            # operator typed 120s ago
+  run "$G" decide --worktree "$BATS_TEST_TMPDIR/adopt" --member adopt --spawn-time "$((NOW-3600))" --grace-s 60 --session-id sid-adopt
+  [ "$status" -eq 10 ]
+  [ "$output" = "DEFER" ]
+}
+
+@test "R-d: finished teammate (only the spawn brief, no post-spawn operator prompt) → REAP" {
+  mkgit "$BATS_TEST_TMPDIR/fin"                                     # products since spawn
+  export CC_REAP_PROJECT_ROOTS="$BATS_TEST_TMPDIR/proj"; mkdir -p "$BATS_TEST_TMPDIR/proj/slug"
+  utx "$BATS_TEST_TMPDIR/proj/slug/sid-fin.jsonl" 3600             # the ONLY prompt is the brief, at ~spawn
+  run "$G" decide --worktree "$BATS_TEST_TMPDIR/fin" --member fin --spawn-time "$((NOW-3600))" --grace-s 60 --session-id sid-fin
+  [ "$status" -eq 0 ]
+  [ "$output" = "REAP" ]
+}
+
+@test "R-d: --session-id given but transcript UNRESOLVABLE → DEFER (fail-closed)" {
+  mkgit "$BATS_TEST_TMPDIR/unres"                                   # products, clean, past grace
+  export CC_REAP_PROJECT_ROOTS="$BATS_TEST_TMPDIR/proj-empty"; mkdir -p "$BATS_TEST_TMPDIR/proj-empty"
+  run "$G" decide --worktree "$BATS_TEST_TMPDIR/unres" --member unres --spawn-time "$((NOW-3600))" --grace-s 60 --session-id sid-missing
+  [ "$status" -eq 10 ]
+}
+
+@test "R-d: no --session-id → hold skipped, existing REAP path intact (back-compat)" {
+  mkgit "$BATS_TEST_TMPDIR/nocid"                                   # products, clean, past grace
+  run "$G" decide --worktree "$BATS_TEST_TMPDIR/nocid" --member nocid --spawn-time "$((NOW-1000))" --grace-s 60
+  [ "$status" -eq 0 ]
+  [ "$output" = "REAP" ]
+}
+
+@test "wiring: teammate-auto-shutdown.sh passes --session-id to reap-guard (R-d cannot be bypassed by the hook)" {
+  # R-d engages only when a --session-id is supplied. If the live hook stops passing it, every adopted
+  # teammate silently reverts to who-blind reaping — so pin the wiring here.
+  grep -qE 'decide .*--session-id "\$SESSION_ID"' "$REPO/hooks/teammate-auto-shutdown.sh"
 }
