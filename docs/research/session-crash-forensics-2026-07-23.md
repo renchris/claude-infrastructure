@@ -233,3 +233,54 @@ the same deploy.)
   frequency-backed *hazard*, not a present incident.
 - The desk memory `session-crash-per-session-bloat` requires its second correction (this doc is
   the source of truth); done alongside this landing.
+
+---
+
+## 2026-07-24 addendum — "resolved yesterday" was only half the story: the reaper reaps live operator conversations
+
+Yesterday's verdict ("the crashes were 0 real — teardown artifacts, sanctioned self-closes") fixed
+the SIGNAL: closures are now correctly attributed. What it did not fix is that one class of those
+"sanctioned" closures was **not sanctioned by the operator**: `com.chrisren.cc-reaper` (launchd,
+every 300 s) tore down two sessions the operator was actively conversing with:
+
+| session | operator's last prompt | reaped | cause | idle at reap |
+|---|---|---|---|---|
+| Danny-Studio-60 (wt-pool-1-4EC4DA5D, drafting a message to Danny re Studio 60 nightclub) | 17:58:41Z ("Provide final message to Danny"; draft delivered 17:59) | 18:13:15Z | finished-teammate | 817 s |
+| Opus-5-upgrade (claude-infrastructure-D6BE7CE7, "do we need to upgrade Claude Code?" answered 18:28) | ~18:27 | 18:40:22Z | finished | 675 s |
+
+(The third teardown today — CC91E257, coordination-abandoned, idle 26 h — was legitimate.)
+
+**Root cause (structural, not a bug in any one gate):** every gate held exactly as designed.
+`cc-classify`'s notion of idle is *seconds since the last assistant turn*, and its "done" evidence
+is *clean tree + content on trunk*. Between operator prompts an interactive conversation satisfies
+all of it — a Q&A session that writes nothing is ALWAYS clean & 0 ahead — and `wt-pool-1`'s cwd
+alone branded it a teammate (`*/.worktrees/*` ⇒ finished-teammate, no fired-peer stamp required).
+The classifier read WHEN the last turn happened, never WHO drove it. The reaper's 600 s settle
+window then made any >10-min coffee break fatal.
+
+**Fix (landed as `fix(session-reaper)`, this branch):**
+1. *Operator-interaction hold* (cc-classify step 4.7): a REAL operator-typed prompt (isMeta/auto-
+   traffic/tool_result excluded — semantics mirror `ce_last_interactive_age`) within
+   `CC_CLASSIFY_INTERACTIVE_HOLD_S` (default 21600 s = 6 h) ⇒ `owned-wait`, never-reap. For a
+   spawner-stamped fired worker only prompts AFTER `firedAt`+300 s count (the fire brief itself
+   arrives as a user prompt via it2 keystrokes and must not hold worker GC). Placed after
+   handed-off-lead so a fired self-handoff with a live successor still reaps its dead pane.
+2. *Stamp gate* (cc-classify): `finished`/`finished-teammate` now require the spawner's
+   `cc-fired/<pane>.json` stamp. An unstamped "done" pane is the new **`finished-operator`** —
+   surfaced to the desk for confirm-close, never auto-reaped (extends T-P3-4's own principle:
+   "an operator/role session carries no marker and is NEVER promoted" — previously applied only
+   to the finished-shared-review promotion, now to all done-causes).
+3. *Reaper belt* (cc-reaper): independently refuses finished/finished-teammate reaps without the
+   stamp (guards against a stale/foreign classifier); `finished-operator` joins SURFACE_PAGE_RE.
+
+**Known accepted tradeoffs:** a desk-nudged stamped worker (cc-notify arrives as a real user
+prompt) now lingers up to the 6 h hold after its last nudge instead of 10 min — lingering panes
+are strictly cheaper than killed operator conversations; tune via `CC_CLASSIFY_INTERACTIVE_HOLD_S`.
+Unstamped genuinely-finished workers (spawn paths that bypass handoff-fire) surface for
+confirm-close rather than auto-GC. `coordination-abandoned` keeps its own multi-legged basis
+(dead partner + 2 h horizon + live co-cwd owner + landed) and is not stamp-gated.
+
+**Ops note:** the fix was applied to the live shared checkout's working tree at ~18:55Z (the live
+`~/.claude/bin/cc-{classify,reaper}` are per-file symlinks into it), so the daemon has run the
+safe code since then; the landing makes it durable. RED-proof: 36/36 cc-classify.bats +
+54/54 cc-reaper.bats.
