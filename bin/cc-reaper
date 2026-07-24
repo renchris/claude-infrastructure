@@ -122,6 +122,7 @@ AUTOREAP_FIRED="${CC_REAPER_AUTOREAP_FIRED:-1}"          # operator kill-switch:
 # this reads). Deliberately NOT a cc-registry field: SessionStart's register() rewrites that row
 # wholesale and would clobber it.
 FIRED_DIR="${CC_FIRED_DIR:-$HOME/.claude/cc-fired}"
+FIRED_BOOT_MAX_S="${CC_FIRED_BOOT_MAX_S:-1800}"        # stamp tenancy: a fired worker boots within this of firedAt (mirrors cc-classify); a later tenant is a stale stamp (2026-07-24)
 PANE_DELTA_TOL="${CC_REAPER_PANE_DELTA_TOL:-0}"                         # live−enumerated > tol ⇒ blind-spot surface
 SELFCHECK_MIN_PERSIST="${CC_REAPER_SELFCHECK_MIN_PERSIST:-2}"          # delta must persist N sweeps (kills a race)
 PS_BIN="${CC_REAPER_PS_BIN:-/bin/ps}"
@@ -228,11 +229,44 @@ sanitize_key(){ printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_'; }   # marker-filena
 # state, so it cannot be forged by a session's own behaviour — an idle, clean, landed operator pane
 # looks identical to a worker and is still never promoted. An operator's shell launch, `claude -w`,
 # a --recycle continuation and a --no-self-retire fire all leave no marker.
-fired_peer(){ # <paneUUID> → 0 if the spawner stamped this pane
-  local pane="${1:-}"
-  [ -n "$pane" ] || return 1
-  case "$pane" in *[!0-9A-Fa-f-]*) return 1 ;; esac   # UUID-shaped only — never a path fragment
-  [ -f "$FIRED_DIR/$pane.json" ]
+# TENANCY (2026-07-24 rule 2): the stamp is pane-keyed and never expired with tenancy, so a later
+# session reusing a previously-fired pane (a worker closed, the operator reopened it) inherited the
+# stale "self-retiring worker" contract and could be auto-reaped. The stamp gates the CURRENT session
+# only if that session BOOTED within CC_FIRED_BOOT_MAX_S of the fire; a startedAt beyond firedAt+boot-max
+# is a different tenant → stale stamp (GC'd in the sweep). Unknown startedAt ⇒ INVALID (surface, not reap).
+iso_to_epoch_r(){ # <iso8601> → epoch seconds (empty on parse fail). Mirrors cc-classify iso_to_epoch.
+  local s="${1%%.*}"; s="${s%Z}"
+  [ -z "$s" ] && return 0
+  TZ=UTC date -j -f "%Y-%m-%dT%H:%M:%S" "$s" +%s 2>/dev/null || true
+}
+fired_at_epoch_r(){ # <paneUUID> → fire epoch (marker firedAt; fallback: marker file mtime)
+  local f="$FIRED_DIR/${1:-}.json" iso ep
+  [ -f "$f" ] || return 1
+  iso="$(jq -r '.firedAt // ""' "$f" 2>/dev/null)"
+  ep="$(iso_to_epoch_r "$iso")"
+  [ -n "$ep" ] || ep="$(stat -f %m "$f" 2>/dev/null)"
+  [ -n "$ep" ] || return 1
+  printf '%s' "$ep"
+}
+# fired_stamp_state <paneUUID> <startedAt-ms> → prints none|invalid|stale|valid (always exit 0):
+#   none    no UUID / no marker file · invalid marker present but startedAt unknown or firedAt
+#   unparseable (fail to surface) · stale tenant booted > firedAt+BOOT_MAX after the fire (GC it) ·
+#   valid   tenant booted within firedAt+BOOT_MAX (the fired worker itself).
+fired_stamp_state(){
+  local pane="${1:-}" started_ms="${2:-}" fep started_s
+  [ -n "$pane" ] || { printf none; return 0; }
+  case "$pane" in *[!0-9A-Fa-f-]*) printf none; return 0 ;; esac   # UUID-shaped only
+  [ -f "$FIRED_DIR/$pane.json" ] || { printf none; return 0; }
+  case "$started_ms" in ''|*[!0-9]*) printf invalid; return 0 ;; esac  # unknown startedAt ⇒ INVALID
+  [ "$started_ms" -gt 0 ] || { printf invalid; return 0; }
+  fep="$(fired_at_epoch_r "$pane" || true)"
+  case "$fep" in ''|*[!0-9]*) printf invalid; return 0 ;; esac         # unparseable firedAt ⇒ INVALID
+  started_s=$(( started_ms / 1000 ))
+  if [ "$started_s" -le $(( fep + FIRED_BOOT_MAX_S )) ]; then printf valid; else printf stale; fi
+  return 0
+}
+fired_peer(){ # <paneUUID> [startedAt-ms] → 0 iff a TENANCY-VALID spawner stamp gates this session
+  [ "$(fired_stamp_state "${1:-}" "${2:-}")" = valid ]
 }
 # Gap-2 helpers for the coordination-abandoned / handed-off-lead second legs.
 alive(){ [ -n "${1:-}" ] && kill -0 "$1" 2>/dev/null; }
@@ -423,7 +457,7 @@ sweep() {
   local n; n="$(printf '%s' "$cj" | jq 'length' 2>/dev/null || echo 0)"
   local reaped=0 candidates=0 surfaced=0 surfaced_keys=" " i
   for ((i=0; i<n; i++)); do
-    local o cause name pane cwd idle landed xpid xlstart
+    local o cause name pane cwd idle landed xpid xlstart started fstate
     o="$(printf '%s' "$cj" | jq -c ".[$i]")"
     cause="$(printf '%s' "$o" | jq -r '.cause // "?"')"
     name="$(printf '%s'  "$o" | jq -r '.name // .paneUUID // "?"')"
@@ -433,6 +467,20 @@ sweep() {
     landed="$(printf '%s' "$o" | jq -r '.work_landed // "no"')"
     xpid="$(printf '%s'  "$o" | jq -r '.pid // ""')"        # classify-time identity pin (a17 S-4)
     xlstart="$(printf '%s' "$o" | jq -r '.lstart // ""')"
+    started="$(printf '%s' "$o" | jq -r '.startedAt // ""')"   # epoch-MS; stamp-tenancy input (rule 2)
+
+    # ── stamp tenancy (2026-07-24 rule 2): a fired stamp gates a pane's CURRENT session only if that
+    #    session booted within FIRED_BOOT_MAX_S of the fire. A stamp found STALE by this rule (a later
+    #    tenant reused the pane) is GC'd HERE so the dir cannot carry a dead worker's contract forever
+    #    and so both fired_peer legs below (promotion, belt) see it gone. INVALID (unknown startedAt) is
+    #    NOT GC'd — it may just be a transiently-missing registry field; it only fails toward surface.
+    fstate="$(fired_stamp_state "$pane" "$started")"
+    if [ "$fstate" = stale ]; then
+      local _fa; _fa="$(jq -r '.firedAt // ""' "$FIRED_DIR/$pane.json" 2>/dev/null || true)"
+      rm -f "$FIRED_DIR/$pane.json" 2>/dev/null || true
+      say "  gc     $name — stale-tenancy fired stamp dropped (tenant booted > ${FIRED_BOOT_MAX_S}s after fire)"
+      log "stale-tenancy stamp GC pane=$pane firedAt=${_fa} startedAt=${started}"
+    fi
 
     # ── T-P3-4 PROMOTION: a desk-fired peer worker that is finished + landed + tracked-clean is
     #    auto-reaped instead of paged for confirm-close. THREE independent gates, all required:
@@ -444,7 +492,7 @@ sweep() {
     #    A promoted session then faces every ORIGINAL gate too: settle window, checkpoint-first,
     #    the post-classify work_landed re-check, and cc-teardown's own independent gate.
     local promoted=0
-    if [ "$AUTOREAP_FIRED" = 1 ] && [[ "$cause" =~ $AUTOREAP_FIRED_RE ]] && fired_peer "$pane"; then
+    if [ "$AUTOREAP_FIRED" = 1 ] && [[ "$cause" =~ $AUTOREAP_FIRED_RE ]] && fired_peer "$pane" "$started"; then
       if work_landed "$cwd"; then
         promoted=1; landed=yes
         say "  promote $name [$cause] — desk-fired peer, own TRACKED tree clean + landed → auto-reap (no confirm-close)"
@@ -474,14 +522,16 @@ sweep() {
       say "  keep   $name [$cause] — idle ${idle}s < settle ${SETTLE_S}s (self-close still has its chance)"; continue
     fi
     # ── 2026-07-24 belt (Danny-Studio-60 / Opus-5 incident): finished/finished-teammate may only
-    #    auto-reap a SPAWNER-STAMPED fired peer. An unstamped pane is operator-launched/adopted (or
-    #    predates the marker) — surface it for confirm-close instead, even if a stale or foreign
-    #    classifier labeled it reapable (cc-classify enforces the same gate; this is the reaper's own
-    #    independent leg). handed-off-lead (live successor) and coordination-abandoned (dead-partner
-    #    horizon + live co-cwd owner) rest on their own positive evidence and are exempt.
-    if [[ "$cause" =~ ^(finished|finished-teammate)$ ]] && ! fired_peer "$pane"; then
-      say "  keep   $name [$cause] — unstamped operator pane (no fired-peer marker): auto-reap refused (2026-07-24 belt)"
-      log "belt-refuse $name [$cause] pane=$pane: no fired-peer marker"
+    #    auto-reap a SPAWNER-STAMPED fired peer whose stamp is TENANCY-VALID (rule 2 — a later tenant's
+    #    stale stamp was GC'd above and reads unstamped here). An unstamped/stale pane is operator-
+    #    launched/adopted (or predates the marker) — surface it for confirm-close instead, even if a
+    #    stale or foreign classifier labeled it reapable (cc-classify enforces the same gate; this is the
+    #    reaper's own independent leg). handed-off-lead (live firedBy-stamped successor) and
+    #    coordination-abandoned (dead-partner horizon + live co-cwd owner) rest on their own positive
+    #    evidence and are exempt.
+    if [[ "$cause" =~ ^(finished|finished-teammate)$ ]] && ! fired_peer "$pane" "$started"; then
+      say "  keep   $name [$cause] — unstamped/stale operator pane (no tenancy-valid fired-peer marker): auto-reap refused (2026-07-24 belt)"
+      log "belt-refuse $name [$cause] pane=$pane: no tenancy-valid fired-peer marker"
       surfaced=$((surfaced+1))
       local bkey; bkey="$(sanitize_key "${pane:-$name}")"
       surfaced_keys="$surfaced_keys$bkey "

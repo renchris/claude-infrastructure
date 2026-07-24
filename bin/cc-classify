@@ -51,12 +51,29 @@ TEAMS_GLOB="${CC_CLASSIFY_TEAMS_GLOB:-$HOME/.claude*/teams}"
 WAIT_CONTRACTS_DIR="${CC_CLASSIFY_WAIT_CONTRACTS_DIR:-$HOME/.claude/wait-contracts}"   # L2 wait system (a17 S-3)
 DESK_ROLE_FILE="${CC_CLASSIFY_DESK_ROLE_FILE:-$HOME/.claude/cc-roles/desk}"            # desk-role never-reap (a17 S-3)
 FIRED_DIR="${CC_FIRED_DIR:-$HOME/.claude/cc-fired}"          # spawner↔reaper fired-peer contract (T-P3-4; shared name with cc-reaper)
+FIRED_BOOT_MAX_S="${CC_FIRED_BOOT_MAX_S:-1800}"             # stamp tenancy: a fired worker boots within this of firedAt; a later tenant is a stale stamp (2026-07-24)
 INTERACTIVE_HOLD_S="${CC_CLASSIFY_INTERACTIVE_HOLD_S:-21600}"  # operator prompt within this ⇒ ADOPTED pane, never-reap (2026-07-24)
+INTERACTIVE_HOLD_DISABLE="${CC_CLASSIFY_INTERACTIVE_HOLD_DISABLE:-0}"  # tests-only: 1 turns the operator-adoption hold OFF deliberately
 FIRE_PROMPT_SLACK_S="${CC_CLASSIFY_FIRE_PROMPT_SLACK_S:-300}"  # prompts within this of firedAt = the spawn brief, not adoption
-INTERACTIVE_TAIL_BYTES="${CC_CLASSIFY_INTERACTIVE_TAIL_BYTES:-2000000}"  # recency needs the tail only (mirrors CC_CE_TAIL_BYTES)
+INTERACTIVE_TAIL_BYTES="${CC_CLASSIFY_INTERACTIVE_TAIL_BYTES:-2000000}"  # recency needs the tail only (mirrors CC_CE_TAIL_BYTES); consumed by the lib via env
 
 die(){ printf 'cc-classify: %s\n' "$*" >&2; exit 2; }
 command -v jq >/dev/null || die "jq required"
+
+# HOLD FLOOR (2026-07-24 rule 5): a too-small hold (unset/0/<60) is almost certainly a mis-set env, and
+# a near-zero hold silently disables the operator-adoption guard — the exact reap this fix closes. Floor
+# to the 21600 default and WARN (stderr, so --json stdout stays clean). An explicit
+# CC_CLASSIFY_INTERACTIVE_HOLD_DISABLE=1 (tests only) turns the hold off on purpose (no warning).
+if [ "$INTERACTIVE_HOLD_DISABLE" != 1 ]; then
+  case "$INTERACTIVE_HOLD_S" in
+    ''|*[!0-9]*) _hold_bad=1 ;;
+    *) [ "$INTERACTIVE_HOLD_S" -lt 60 ] 2>/dev/null && _hold_bad=1 || _hold_bad=0 ;;
+  esac
+  if [ "${_hold_bad:-0}" = 1 ]; then
+    printf 'cc-classify: INTERACTIVE_HOLD_S=%s invalid (<60s) — flooring to 21600\n' "${INTERACTIVE_HOLD_S:-unset}" >&2
+    INTERACTIVE_HOLD_S=21600
+  fi
+fi
 
 # ── shared interactive-recency primitive (the ONE WHO-drove-the-last-turn signal) ──────────────
 # hooks/lib/cc-interactive.sh owns ci_last_interactive_epoch; last_interactive_epoch (below) is a thin
@@ -265,13 +282,46 @@ is_desk_role() { # <sid> <pane> <name> → 0 if the desk-role file resolves to t
 }
 
 # ── fired-peer stamp + operator-interaction recency (2026-07-24, Danny-Studio-60 / Opus-5) ─────
-fired_peer() { # <paneUUID> → 0 if the SPAWNER stamped this pane a self-retiring fired worker.
+fired_peer() { # <paneUUID> [startedAt-ms] → 0 iff a TENANCY-VALID spawner stamp gates THIS session.
   # Mirrors cc-reaper's fired_peer: the only writer is handoff-fire.sh mark_fired_peer, at fire time.
   # FAIL-SAFE BY CONSTRUCTION — no marker ⇒ operator/role session ⇒ the "done" causes never apply.
-  local pane="${1:-}"
+  # TENANCY (2026-07-24 rule 2): the stamp is pane-keyed and never expired with tenancy, so a later
+  # session reusing a previously-fired pane (a worker closed, the operator reopened it) inherited the
+  # stale "self-retiring worker" contract and could be auto-reaped. The stamp gates the CURRENT session
+  # only if that session BOOTED within CC_FIRED_BOOT_MAX_S of the fire (a real worker boots ~at fire);
+  # a startedAt beyond firedAt+boot-max is a different tenant → stamp does NOT apply. Unknown startedAt
+  # (0/absent/unparseable) ⇒ INVALID: fail toward surface, never toward reap.
+  local pane="${1:-}" started_ms="${2:-}" fep started_s
   [ -n "$pane" ] || return 1
   case "$pane" in *[!0-9A-Fa-f-]*) return 1 ;; esac   # UUID-shaped only — never a path fragment
-  [ -f "$FIRED_DIR/$pane.json" ]
+  [ -f "$FIRED_DIR/$pane.json" ] || return 1
+  case "$started_ms" in ''|*[!0-9]*) return 1 ;; esac  # unknown startedAt ⇒ INVALID (surface, not reap)
+  [ "$started_ms" -gt 0 ] || return 1
+  fep="$(fired_at_epoch "$pane" || true)"
+  case "$fep" in ''|*[!0-9]*) return 1 ;; esac         # unparseable firedAt ⇒ INVALID
+  started_s=$(( started_ms / 1000 ))
+  [ "$started_s" -le $(( fep + FIRED_BOOT_MAX_S )) ]
+}
+
+find_fired_successor_stamp() { # <predecessor-sid> <all-json> → 0 iff a TENANCY-VALID cc-fired stamp
+  # exists whose firedBy == the predecessor's session_id. change 4 (2026-07-24): handed-off-lead needs
+  # a POSITIVE link, not merely "a live session shares my cwd" — a real /handoff fire stamps the
+  # SUCCESSOR pane with firedBy=<my sid> (scripts/handoff-fire.sh mark_fired_peer). Absent that stamp
+  # the handoff was operator-driven/unstamped, so the predecessor surfaces (finished-operator) rather
+  # than auto-reaping. The stamp sits on the successor's OWN paneUUID → scan FIRED_DIR for firedBy match,
+  # tenancy-valid per rule 2 (the successor booted ~at fire).
+  local sid="$1" all="$2" f pane fb started
+  [ -n "$sid" ] || return 1
+  [ -d "$FIRED_DIR" ] || return 1
+  for f in "$FIRED_DIR"/*.json; do
+    [ -f "$f" ] || continue
+    fb="$(jq -r '.firedBy // ""' "$f" 2>/dev/null)"
+    [ "$fb" = "$sid" ] || continue
+    pane="$(basename "$f" .json)"
+    started="$(printf '%s' "$all" | jq -r --arg p "$pane" '.[] | select(.paneUUID==$p) | (.startedAt // "")' 2>/dev/null | head -1)"
+    fired_peer "$pane" "$started" && return 0
+  done
+  return 1
 }
 
 fired_at_epoch() { # <paneUUID> → epoch of the fire (marker firedAt; fallback: marker file mtime)
@@ -320,12 +370,13 @@ work_landed() { # <cwd> → 0 if clean AND the branch's content is on trunk (P0-
 # sets: CAUSE, IDLE (seconds or -1), LANDED (yes/no/na), SUCCESSOR (uuid|""), DETAIL
 classify_entry() { # <entry-json> <all-sessions-json>
   local e="$1" all="$2"
-  local sid pid cwd pane name
+  local sid pid cwd pane name started
   sid="$(printf '%s' "$e"  | jq -r '.session_id // .sessionId // ""')"
   pid="$(printf '%s' "$e"  | jq -r '.pid // ""')"
   cwd="$(printf '%s' "$e"  | jq -r '.cwd // ""')"
   pane="$(printf '%s' "$e" | jq -r '.paneUUID // ""')"
   name="$(printf '%s' "$e" | jq -r '.name // ""')"
+  started="$(printf '%s' "$e" | jq -r '.startedAt // ""')"   # epoch-MS; stamp-tenancy input (rule 2)
   CAUSE=""; IDLE=-1; LANDED=na; SUCCESSOR=""; DETAIL=""
 
   # 1. owning process dead → crashed (idle-linger targets are ALIVE; a dead pid is a separate cleanup)
@@ -349,7 +400,39 @@ classify_entry() { # <entry-json> <all-sessions-json>
   # --- pid alive, provably idle (>= IDLE_S), not rate-limited ---
   LANDED=no; work_landed "$cwd" && LANDED=yes
 
-  # 4. handed-off-lead: fired a /handoff AND a LIVE successor session exists in the same cwd
+  # 4.0 operator-interaction hold (2026-07-24, Danny-Studio-60 / Opus-5): a REAL operator-typed prompt
+  #     marks the pane operator-ADOPTED. Between prompts an interactive conversation is indistinguishable
+  #     from "done" by every durable signal below (idle since the last assistant turn + clean + landed —
+  #     a Q&A session that writes nothing is ALWAYS clean & 0 ahead), so two live operator conversations
+  #     were reaped 12-14 min after the operator's last prompt. The hold reads the one signal "done"
+  #     cannot fake: WHO drove the last turn. For a spawner-stamped fired worker the fire-time brief (and
+  #     its immediate retries) arrives as a real user prompt — only interaction AFTER firedAt+slack is
+  #     adoption, so worker GC is not held by the brief itself.
+  #     PLACED BEFORE handed-off-lead (change 3, 2026-07-24): a recent operator prompt is owned-wait even
+  #     when a live successor exists — a lead that fired a /handoff but is STILL being typed into is
+  #     adopted, not spent. The fired-self-handoff case the old ordering protected (the successor carries
+  #     the conversation, so the predecessor should reap) is preserved by the firedAt EXCLUSION below, not
+  #     by ordering: a stamped worker's fire-brief prompts (< firedAt+slack) don't count as adoption, so a
+  #     self-recycled predecessor still reaps; only a genuine post-fire operator prompt holds it.
+  local iep
+  if [ "$INTERACTIVE_HOLD_DISABLE" != 1 ] && [ -n "$tj" ] && iep="$(last_interactive_epoch "$tj")"; then
+    local iage=$(( NOW - iep )); [ "$iage" -lt 0 ] && iage=0
+    if [ "$iage" -lt "$INTERACTIVE_HOLD_S" ]; then
+      local fep=""
+      if fired_peer "$pane" "$started"; then fep="$(fired_at_epoch "$pane" || true)"; fi
+      if [ -z "$fep" ] || [ "$iep" -gt $(( fep + FIRE_PROMPT_SLACK_S )) ]; then
+        CAUSE=owned-wait; DETAIL="operator prompt ${iage}s ago (< hold ${INTERACTIVE_HOLD_S}s) — operator-adopted pane (never-reap)"; return 0
+      fi
+    fi
+  fi
+
+  # 4. handed-off-lead: fired a /handoff, a LIVE successor session exists in the same cwd, AND a cc-fired
+  #    stamp positively LINKS them (change 4, 2026-07-24). The old test — "a distinct live session shares
+  #    my cwd" — mislabeled any operator who happened to open a second pane in the same checkout as a
+  #    handoff successor and auto-reaped the first. A real /handoff fire stamps the SUCCESSOR pane with
+  #    firedBy=<my sid> (handoff-fire.sh mark_fired_peer); requiring that stamp (tenancy-valid) makes the
+  #    link positive. No stamped successor ⇒ handed-off-lead NOT assigned — an operator-driven unstamped
+  #    handoff then falls through to finished-operator (surface for confirm-close), never auto-reaping.
   if [ -n "$tj" ] && handoff_fired "$tj"; then
     local cand spid found=""
     while IFS= read -r cand; do
@@ -357,18 +440,18 @@ classify_entry() { # <entry-json> <all-sessions-json>
       spid="$(printf '%s' "$cand" | jq -r '.pid // ""' 2>/dev/null)"
       if alive "$spid"; then found="$(printf '%s' "$cand" | jq -r '.paneUUID // ""' 2>/dev/null)"; break; fi
     done < <(find_successor "$sid" "$cwd" "${lat:-0}" "$all")
-    if [ -n "$found" ]; then
+    if [ -n "$found" ] && find_fired_successor_stamp "$sid" "$all"; then
       SUCCESSOR="$found"
-      CAUSE=handed-off-lead; DETAIL="fired /handoff; LIVE successor $found in cwd; work-landed=$LANDED"; return 0
+      CAUSE=handed-off-lead; DETAIL="fired /handoff; LIVE firedBy-stamped successor $found in cwd; work-landed=$LANDED"; return 0
     fi
-    DETAIL="fired /handoff but NO live successor found — not safe to reap"
+    DETAIL="fired /handoff but no stamped+live successor — surface, not auto-reap"
   fi
 
   # 4.5 in-flight tool → active (a18 L-13). A single long tool call (12-min build/test) leaves the
   #     transcript's LAST record an assistant tool_use timestamped at call START; IDLE crosses 300s
   #     mid-call and the session otherwise reads `finished`/`finished-teammate`. A running tool ⇒ NOT
-  #     idle ⇒ never-reap. Checked BEFORE the finished/finished-teammate branches (after handed-off-lead,
-  #     whose own last record is the handoff tool_use with its tool_result already landed).
+  #     idle ⇒ never-reap. Checked BEFORE the finished/finished-teammate branches (and after
+  #     handed-off-lead, whose own last record is the handoff tool_use with its tool_result already landed).
   if [ -n "$tj" ] && tool_in_flight "$tj"; then
     CAUSE=active; DETAIL="in-flight tool call (unmatched trailing tool_use) — running, not idle (never-reap)"; return 0
   fi
@@ -385,33 +468,12 @@ classify_entry() { # <entry-json> <all-sessions-json>
     CAUSE=owned-wait; DETAIL="idle ${IDLE}s, the desk-role file resolves to this session — desk-role (never-reap)"; return 0
   fi
 
-  # 4.7 operator-interaction hold (2026-07-24, Danny-Studio-60 / Opus-5): a REAL operator-typed
-  #     prompt marks the pane operator-ADOPTED. Between prompts an interactive conversation is
-  #     indistinguishable from "done" by every durable signal below (idle since the last assistant
-  #     turn + clean + landed — a Q&A session that writes nothing is ALWAYS clean & 0 ahead), so two
-  #     live operator conversations were reaped 12-14 min after the operator's last prompt. The hold
-  #     reads the one signal "done" cannot fake: WHO drove the last turn. For a spawner-stamped fired
-  #     worker the fire-time brief (and its immediate retries) arrives as a real user prompt — only
-  #     interaction AFTER firedAt+slack is adoption, so worker GC is not held by the brief itself.
-  #     Placed AFTER handed-off-lead: a fired self-handoff's live successor carries the conversation,
-  #     so the predecessor pane reaps regardless of how recently the operator typed into it.
-  local iep
-  if [ "$INTERACTIVE_HOLD_S" -gt 0 ] 2>/dev/null && [ -n "$tj" ] && iep="$(last_interactive_epoch "$tj")"; then
-    local iage=$(( NOW - iep )); [ "$iage" -lt 0 ] && iage=0
-    if [ "$iage" -lt "$INTERACTIVE_HOLD_S" ]; then
-      local fep=""
-      if fired_peer "$pane"; then fep="$(fired_at_epoch "$pane" || true)"; fi
-      if [ -z "$fep" ] || [ "$iep" -gt $(( fep + FIRE_PROMPT_SLACK_S )) ]; then
-        CAUSE=owned-wait; DETAIL="operator prompt ${iage}s ago (< hold ${INTERACTIVE_HOLD_S}s) — operator-adopted pane (never-reap)"; return 0
-      fi
-    fi
-  fi
-
   # 5. finished-teammate: a SPAWNER-STAMPED fired worker in a worktree, idle. The cwd path alone is
   #    NOT teammate evidence (2026-07-24: an operator conversing inside a wt-pool worktree was reaped
   #    as finished-teammate 14 min after their prompt) — the stamp is the spawner's own "self-retiring
-  #    worker" contract; an unstamped worktree session falls through to the operator-safe branches.
-  if is_worktree_session "$cwd" && fired_peer "$pane"; then
+  #    worker" contract (tenancy-valid); an unstamped worktree session falls through to the operator-safe
+  #    branches.
+  if is_worktree_session "$cwd" && fired_peer "$pane" "$started"; then
     CAUSE=finished-teammate; DETAIL="spawner-stamped fired worker in a worktree, idle ${IDLE}s; work-landed=$LANDED"; return 0
   fi
 
@@ -444,10 +506,10 @@ classify_entry() { # <entry-json> <all-sessions-json>
   #    never auto-reaped (2026-07-24; "clean & landed & idle" is every interactive Q&A session's
   #    steady state, not proof the operator is done with the pane).
   if [ "$LANDED" = yes ]; then
-    if fired_peer "$pane"; then
+    if fired_peer "$pane" "$started"; then
       CAUSE=finished; DETAIL="idle ${IDLE}s, no live teammates, work landed (clean & 0 ahead of $TRUNK), spawner-stamped worker — done, reapable"; return 0
     fi
-    CAUSE=finished-operator; DETAIL="idle ${IDLE}s, work landed, but operator-launched (no fired-peer stamp) — surface for confirm-close, never auto-reap"; return 0
+    CAUSE=finished-operator; DETAIL="idle ${IDLE}s, work landed, but operator-launched (no tenancy-valid fired-peer stamp) — surface for confirm-close, never auto-reap"; return 0
   fi
 
   # Gap B (2026-07-17): a solo idle session whose OWN commits are landed (0 ahead of trunk) but whose
@@ -476,7 +538,7 @@ emit_one() { # <entry-json> <all-json> <json?>
     jq -nc --argjson e "$1" --arg cause "$CAUSE" --arg idle "$IDLE" --arg landed "$LANDED" \
        --arg succ "$SUCCESSOR" --arg detail "$DETAIL" --arg lstart "$_lstart" \
        '{name:$e.name, paneUUID:$e.paneUUID, account:$e.account, cwd:$e.cwd,
-         pid:($e.pid // null),
+         pid:($e.pid // null), startedAt:($e.startedAt // null),
          session_id:($e.session_id // $e.sessionId // null),
          cause:$cause, idle_s:($idle|tonumber? // -1), work_landed:$landed,
          lstart:(if $lstart=="" then null else $lstart end),
