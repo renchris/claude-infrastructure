@@ -120,10 +120,24 @@ jq -nc '[{name:"t",paneUUID:"$pane",account:"next",cwd:"$cwd",cause:"$cause",idl
 EOF
   chmod +x "$D/bin/classify"; export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
 }
+# handed-off-lead mock that mirrors REALITY: emits the lead PLUS a LIVE successor session (pid=$$,
+# active) in the SAME enumerated set. cc-classify only labels a session handed-off-lead when
+# find_successor found a live successor drawn from that same set, so the reaper's Gap-2 successor-
+# liveness leg (2026-07-25) requires the named successor to be a live row here. args: cwd idle landed [lead-pane]
+HSUCC="5CC00000-1111-4222-8333-444455556666"
+mock_classify_handoff() {
+  local cwd="$1" idle="$2" landed="$3" pane="${4:-PANE-A}"
+  cat > "$D/bin/classify" <<EOF
+#!/bin/bash
+jq -nc '[{name:"lead",paneUUID:"$pane",account:"next",cwd:"$cwd",cause:"handed-off-lead",idle_s:$idle,work_landed:"$landed",successor:"$HSUCC",detail:"x"},
+         {name:"succ",paneUUID:"$HSUCC",account:"next",cwd:"$cwd",cause:"active",idle_s:5,work_landed:"no",successor:null,pid:$$,detail:"x"}]'
+EOF
+  chmod +x "$D/bin/classify"; export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
+}
 td_called() { [ -f "$D/td-calls" ]; }
 
 @test "handed-off-lead + landed + idle>settle + --reap → teardown IS called with the pane" {
-  mock_classify handed-off-lead "$D/clean" 999 yes PANE-A
+  mock_classify_handoff "$D/clean" 999 yes PANE-A
   run "$R" sweep --reap
   [ "$status" -eq 0 ]
   td_called
@@ -132,14 +146,14 @@ td_called() { [ -f "$D/td-calls" ]; }
 }
 
 @test "checkpoint runs BEFORE teardown (checkpoint-first)" {
-  mock_classify handed-off-lead "$D/clean" 999 yes PANE-A
+  mock_classify_handoff "$D/clean" 999 yes PANE-A
   run "$R" sweep --reap
   [ "$(head -1 "$D/order")" = CKPT ]
   grep -q '^TD ' "$D/order"
 }
 
 @test "DRY-RUN (no --reap) never calls teardown even for a valid candidate" {
-  mock_classify handed-off-lead "$D/clean" 999 yes
+  mock_classify_handoff "$D/clean" 999 yes
   run "$R" sweep
   [ "$status" -eq 0 ]
   ! td_called
@@ -225,7 +239,7 @@ td_called() { [ -f "$D/td-calls" ]; }
 }
 
 @test "2026-07-24 belt: handed-off-lead is EXEMPT (live-successor evidence needs no stamp)" {
-  mock_classify handed-off-lead "$D/clean" 999 yes PANE-A
+  mock_classify_handoff "$D/clean" 999 yes PANE-A
   run "$R" sweep --reap
   td_called
 }
@@ -256,7 +270,7 @@ td_called() { [ -f "$D/td-calls" ]; }
 }
 
 @test "post-classify RACE: classify says landed but cwd is dirty at act-time → ABORT, WIP checkpointed, no teardown" {
-  mock_classify handed-off-lead "$D/dirty" 999 yes
+  mock_classify_handoff "$D/dirty" 999 yes
   run "$R" sweep --reap
   ! td_called                       # teardown NOT called
   [ -f "$D/ckpt-payloads" ]          # but checkpoint DID run first (WIP snapshotted)
@@ -264,7 +278,7 @@ td_called() { [ -f "$D/td-calls" ]; }
 }
 
 @test "cc-teardown DEFER (rc10) → reaper reports not-reaped, no crash" {
-  mock_classify handed-off-lead "$D/clean" 999 yes PANE-A
+  mock_classify_handoff "$D/clean" 999 yes PANE-A
   TEARDOWN_RC=10 run "$R" sweep --reap
   [ "$status" -eq 0 ]
   echo "$output" | grep -q 'NOT reaped'
@@ -683,4 +697,88 @@ CLEOF
   [ -n "$epoch" ]
   [ "$epoch" -ge "$((before - 120))" ]               # the 5h (18000s) mislabel dwarfs the ±120s slack
   [ "$epoch" -le "$((after + 120))" ]
+}
+
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+# Gap-2 independent second legs (2026-07-25): coordination-abandoned + handed-off-lead each get an
+# act-time leg of their own (the stamp belt above only covers finished/finished-teammate). Both fail
+# CLOSED — any ambiguity ⇒ surface, never reap.
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+@test "Gap-2 leg: coordination-abandoned with a RECENT operator prompt → auto-reap REFUSED (surfaced)" {
+  set_desk
+  local sid="11111111-2222-3333-4444-555566667777" pane="A0A02222-1111-4333-8444-555566667777"
+  mkdir -p "$D/proj/slug"; export CC_REAPER_PROJECT_ROOTS="$D/proj"
+  local ts; ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"       # operator prompt ~now (< 6h hold)
+  printf '{"type":"user","isMeta":false,"message":{"role":"user","content":"keep going please"},"timestamp":"%s"}\n' "$ts" > "$D/proj/slug/$sid.jsonl"
+  cat > "$D/bin/classify" <<EOF
+#!/bin/bash
+jq -nc '[{name:"lead",paneUUID:"$pane",account:"next",cwd:"$D/clean",session_id:"$sid",cause:"coordination-abandoned",idle_s:9999,work_landed:"yes",successor:null,detail:"x"}]'
+EOF
+  chmod +x "$D/bin/classify"; export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  ! td_called                                          # never reaped — the operator is present
+  grep -q 'operator prompt' "$D/reaper.log"
+}
+
+@test "Gap-2 leg: coordination-abandoned with an OLD operator prompt (>hold) → still reaped (no over-block)" {
+  local sid="99999999-2222-3333-4444-555566667777" pane="B0B02222-1111-4333-8444-555566667777"
+  mkdir -p "$D/proj/slug"; export CC_REAPER_PROJECT_ROOTS="$D/proj"
+  local ts; ts="$(date -u -v-10H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '10 hours ago' +%Y-%m-%dT%H:%M:%SZ)"
+  printf '{"type":"user","isMeta":false,"message":{"role":"user","content":"old prompt"},"timestamp":"%s"}\n' "$ts" > "$D/proj/slug/$sid.jsonl"
+  cat > "$D/bin/classify" <<EOF
+#!/bin/bash
+jq -nc '[{name:"lead",paneUUID:"$pane",account:"next",cwd:"$D/clean",session_id:"$sid",cause:"coordination-abandoned",idle_s:9999,work_landed:"yes",successor:null,detail:"x"}]'
+EOF
+  chmod +x "$D/bin/classify"; export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  td_called                                            # 10h-old prompt → not adopted → reaps
+  grep -q "$pane" "$D/td-calls"
+}
+
+@test "Gap-2 leg: coordination-abandoned with an UNRESOLVABLE transcript → surfaced, never reaped (fail-closed)" {
+  set_desk
+  local pane="C0C02222-1111-4333-8444-555566667777"
+  export CC_REAPER_PROJECT_ROOTS="$D/proj-empty"; mkdir -p "$D/proj-empty"
+  cat > "$D/bin/classify" <<EOF
+#!/bin/bash
+jq -nc '[{name:"lead",paneUUID:"$pane",account:"next",cwd:"$D/clean",session_id:"no-such-sid",cause:"coordination-abandoned",idle_s:9999,work_landed:"yes",successor:null,detail:"x"}]'
+EOF
+  chmod +x "$D/bin/classify"; export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  ! td_called
+  grep -q 'fail-closed' "$D/reaper.log"
+}
+
+@test "Gap-2 leg: handed-off-lead whose successor is NOT live at act time → auto-reap REFUSED (surfaced)" {
+  set_desk
+  local pane="D0D02222-1111-4333-8444-555566667777" succ="D5D53333-1111-4333-8444-555566667777"
+  # the named successor pane is ABSENT from the classify set → its pid is unknown → continuity unproven
+  cat > "$D/bin/classify" <<EOF
+#!/bin/bash
+jq -nc '[{name:"lead",paneUUID:"$pane",account:"next",cwd:"$D/clean",session_id:"sid-h",cause:"handed-off-lead",idle_s:9999,work_landed:"yes",successor:"$succ",detail:"x"}]'
+EOF
+  chmod +x "$D/bin/classify"; export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  ! td_called
+  grep -q 'not alive at act time' "$D/reaper.log"
+}
+
+@test "Gap-2 leg: handed-off-lead with a LIVE successor in the classify set → still reaped (no over-block)" {
+  local pane="E0E02222-1111-4333-8444-555566667777" succ="E5E53333-1111-4333-8444-555566667777"
+  # the successor row carries pid=$$ (this test proc, alive) → continuity proven → reaps normally
+  cat > "$D/bin/classify" <<EOF
+#!/bin/bash
+jq -nc '[{name:"lead",paneUUID:"$pane",account:"next",cwd:"$D/clean",session_id:"sid-h",cause:"handed-off-lead",idle_s:9999,work_landed:"yes",successor:"$succ",detail:"x"},
+         {name:"succ",paneUUID:"$succ",account:"next",cwd:"$D/clean",session_id:"sid-s",cause:"active",idle_s:5,work_landed:"no",successor:null,pid:$$,detail:"x"}]'
+EOF
+  chmod +x "$D/bin/classify"; export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  td_called
+  grep -q "$pane" "$D/td-calls"
 }
