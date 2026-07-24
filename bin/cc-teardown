@@ -14,7 +14,7 @@
 #   cc-teardown <pane-uuid|name> --done-evidence <text>
 #       exit 0  = torn down + BOTH legs effect-verified (or idempotent already-gone)
 #       exit 10 = DEFER  (work-unsafe: dirty | committed-not-pushed | tty-busy | tty-indeterminate)
-#       exit 2  = REFUSE (fail-closed: unknown target | self | --self literal | no done-evidence)
+#       exit 2  = REFUSE (fail-closed: unknown target | self | --self literal | no done-evidence | operator-adopted)
 #       exit 5  = FAIL LOUD (acted, but effect-verify says the pane/process SURVIVED — never a false success)
 #   cc-teardown --selftest        (RED-proves every branch with mock panes/pids + temp git; no real session)
 #
@@ -57,10 +57,17 @@ TERM_GRACE_S="${CC_TEARDOWN_TERM_GRACE_S:-5}"
 _sid="${CC_TEARDOWN_SELF_UUID:-${ITERM_SESSION_ID:-}}"
 SELF_UUID="${_sid##*:}"   # ITERM_SESSION_ID = "wNtMpK:<UUID>" → <UUID>; an injected bare UUID passes through
 
+# ── operator-adoption belt config (2026-07-24; mirrors cc-classify 4.7 env family) ─────────────────
+INTERACTIVE_HOLD_S="${CC_CLASSIFY_INTERACTIVE_HOLD_S:-21600}"   # a real operator prompt within this ⇒ ADOPTED pane
+FIRE_PROMPT_SLACK_S="${CC_CLASSIFY_FIRE_PROMPT_SLACK_S:-300}"   # a prompt within spawn+this = the spawn brief, not adoption
+PROJECT_ROOTS="${CC_CLASSIFY_PROJECT_ROOTS:-$HOME/.claude/projects $HOME/.claude-secondary/projects $HOME/.claude-tertiary/projects $HOME/.claude-quaternary/projects}"
+INTERACTIVE_LIB="${CC_INTERACTIVE_LIB:-$HERE/../hooks/lib/cc-interactive.sh}"
+
 command -v jq >/dev/null 2>&1 || { echo "cc-teardown: jq required" >&2; exit 2; }
 
 # resolved-handle globals (populated by resolve / parse)
 TARGET=""; paneUUID=""; pid=""; cwd=""; sname=""; done_ev=""; git_state=""
+sess_id=""; started_ms=""          # 1c operator-adoption belt (2026-07-24): transcript + spawn source
 EXPECT_PID=""; EXPECT_LSTART=""   # classify-time identity pin (a17 S-4); empty = no pin (back-compat)
 
 iso()  { date -u +%Y-%m-%dT%H:%M:%SZ; }
@@ -68,8 +75,9 @@ say()  { echo "cc-teardown: $*" >&2; }
 die()  { say "$*"; exit 2; }
 usage() {
   cat >&2 <<'U'
-cc-teardown <pane-uuid|name> --done-evidence <text>
+cc-teardown <pane-uuid|name> --done-evidence <text> [--force-adopted]
   0 torn-down+verified · 10 DEFER · 2 REFUSE · 5 FAIL(pane survived)
+  --force-adopted   operator CLI ONLY — skip the operator-adoption belt (no autonomous caller passes it)
 cc-teardown --selftest
 U
 }
@@ -154,17 +162,31 @@ resolve() { # <target> → sets paneUUID/pid/cwd/sname; rc1 = unknown. Matches p
   pid="$(printf '%s'      "$obj" | jq -r '.pid // empty')"
   cwd="$(printf '%s'      "$obj" | jq -r '.cwd // empty')"
   sname="$(printf '%s'    "$obj" | jq -r '.name // empty')"
+  sess_id="$(printf '%s'   "$obj" | jq -r '(.session_id // .sessionId) // empty')"
+  started_ms="$(printf '%s' "$obj" | jq -r '.startedAt // empty')"
   [ -n "$paneUUID" ] || return 1
   return 0
 }
 
+find_transcript() { # <sid> → its .jsonl (first match across the account project roots; mirror cc-classify)
+  local sid="${1:-}" r f
+  [ -n "$sid" ] || return 1
+  for r in $PROJECT_ROOTS; do
+    [ -d "$r" ] || continue
+    f="$(find "$r" -maxdepth 2 -name "$sid.jsonl" 2>/dev/null | head -1)"
+    [ -n "$f" ] && { printf '%s' "$f"; return 0; }
+  done
+  return 1
+}
+
 main() {
-  local args=()
+  local args=() FORCE_ADOPTED=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --done-evidence|--done) [ $# -ge 2 ] && { done_ev="$2"; shift 2; } || shift ;;
       --expect-pid)    [ $# -ge 2 ] && { EXPECT_PID="$2"; shift 2; } || shift ;;
       --expect-lstart) [ $# -ge 2 ] && { EXPECT_LSTART="$2"; shift 2; } || shift ;;
+      --force-adopted) FORCE_ADOPTED=1; shift ;;
       --self) TARGET="--self"
               record REFUSE self-literal "'--self' is never a valid teardown target — refusing self-teardown" 0
               say "REFUSE — '--self' is not a valid target (exit 2)"; exit 2 ;;
@@ -211,6 +233,46 @@ main() {
     if [ "$pp0" = 1 ]; then
       record ALREADY-GONE idempotent "pid $pid already dead AND pane $paneUUID already absent — nothing to do" 1
       say "OK — already gone (pid dead + pane absent); idempotent success (exit 0)"; exit 0
+    fi
+  fi
+
+  # ── 1c. OPERATOR-ADOPTION belt (2026-07-24; mirrors cc-classify 4.7 / hooks/lib/cc-interactive.sh) ──
+  # A pane a human OPERATOR has typed real prompts into is ADOPTED — never auto-close it, even when it
+  # looks work-safe + done: between prompts an interactive conversation is idle + clean + landed, the
+  # exact "done" shape (cc-reaper closed two live operator conversations this way, 2026-07-24). The one
+  # signal "done" cannot fake is WHO drove the last turn — ci_last_interactive_epoch returns the epoch
+  # of the last REAL operator-typed prompt; newer than spawn+SLACK (the spawn brief is a user prompt
+  # too) AND within the hold window ⇒ adopted → REFUSE (exit 2), joining the REFUSE family. Placed
+  # before the work-safety gate so an adopted pane REFUSEs (never) rather than DEFERs (later). The
+  # WHO-primitive is hooks/lib/cc-interactive.sh (lands separately) — absent ⇒ one WARN + skip
+  # (graceful degradation). --force-adopted (operator command-line ONLY; NO autonomous caller — never
+  # cc-reaper — passes it) skips just this belt. Kill switch: CC_CLASSIFY_INTERACTIVE_HOLD_DISABLE=1.
+  local hold_on=1
+  [ "$FORCE_ADOPTED" = 1 ] && hold_on=0
+  [ "${CC_CLASSIFY_INTERACTIVE_HOLD_DISABLE:-0}" = 1 ] && hold_on=0
+  case "$INTERACTIVE_HOLD_S" in ''|*[!0-9]*|0) hold_on=0 ;; esac
+  if [ "$hold_on" = 1 ]; then
+    # shellcheck source=/dev/null
+    if [ -f "$INTERACTIVE_LIB" ]; then . "$INTERACTIVE_LIB" 2>/dev/null || true; fi
+    if ! type -t ci_last_interactive_epoch >/dev/null 2>&1; then
+      say "WARN — cc-interactive.sh absent ($INTERACTIVE_LIB); skipping operator-adoption belt (degraded)"
+    else
+      local atj="" iep="" now_s="" spawn_s="" iage=""
+      atj="$(find_transcript "$sess_id" 2>/dev/null || true)"
+      if [ -n "$atj" ]; then
+        iep="$(ci_last_interactive_epoch "$atj" 2>/dev/null || true)"
+        case "${iep:-}" in ''|*[!0-9]*) iep="" ;; esac
+        if [ -n "$iep" ]; then
+          now_s="${CC_CLASSIFY_NOW:-$(date +%s)}"
+          case "${started_ms:-}" in ''|*[!0-9]*) spawn_s=0 ;; *) spawn_s=$(( started_ms / 1000 )) ;; esac
+          iage=$(( now_s - iep )); [ "$iage" -lt 0 ] && iage=0
+          if [ "$iage" -lt "$INTERACTIVE_HOLD_S" ] && [ "$iep" -gt "$(( spawn_s + FIRE_PROMPT_SLACK_S ))" ]; then
+            record REFUSE operator-adopted "target pane is operator-adopted — a REAL operator prompt ${iage}s ago (< hold ${INTERACTIVE_HOLD_S}s, past spawn+${FIRE_PROMPT_SLACK_S}s); refusing to auto-close a live operator conversation (pass --force-adopted to override)" 0
+            say "REFUSE — operator-adopted pane: real prompt ${iage}s ago; refusing auto-close (exit 2). Pass --force-adopted to override."
+            exit 2
+          fi
+        fi
+      fi
     fi
   fi
 
