@@ -150,6 +150,34 @@ on_branch_with() {  # $1=branch $2=file $3=content  → commit a change on a fre
   [ -z "$(git ls-tree origin/main -- migration.sql)" ]
 }
 
+@test "esc-scan FAIL-CLOSED: option-like SHIP_LAND_ESC_RE ('-foo') is applied via -- → exit 3, not fail-open" {
+  # RED-proof for the `--` half. Pre-fix: grep parses '-foo' as an option (rc 2), `|| true` swallows it,
+  # the scan reads CLEAN and the one landing rail fails OPEN. Post-fix: `--` makes '-foo' a PATTERN that
+  # matches the planted line ⇒ PARK (exit 3). The escalation regex must never be silently un-applied.
+  git checkout -q -b feat/escopt main
+  printf 'alpha-foo bravo\n' > note.txt
+  git add note.txt && git commit -q -m "feat: note"
+
+  export SHIP_LAND_ESC_RE='-foo'
+  run bash "$SHIPLAND" --trunk main --dry-run
+  [ "$status" -eq 3 ]
+  echo "$output" | grep -qi "PARKED"
+}
+
+@test "esc-scan FAIL-CLOSED: an invalid SHIP_LAND_ESC_RE (grep rc≥2) → exit 3, never CLEAN" {
+  # RED-proof for the rc-capture half. Pre-fix: an invalid regex makes grep exit 2, `|| true` collapses it
+  # to empty (indistinguishable from rc 1 no-match) and the rail fails OPEN. Post-fix: rc≥2 emits a
+  # synthetic hit ⇒ PARK (exit 3). A malformed security pattern must fail closed, never land.
+  git checkout -q -b feat/escbad main
+  printf 'benign change\n' > note.txt
+  git add note.txt && git commit -q -m "feat: note"
+
+  export SHIP_LAND_ESC_RE='['
+  run bash "$SHIPLAND" --trunk main --dry-run
+  [ "$status" -eq 3 ]
+  echo "$output" | grep -qi "PARKED"
+}
+
 @test "dry-run: reconcile + gate, no push → exit 0, trunk unchanged" {
   on_branch_with feat/dry dry.txt content
 

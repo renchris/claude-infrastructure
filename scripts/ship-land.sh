@@ -65,11 +65,21 @@ is_python_file() {  # *.py OR a python shebang (the extensionless-glob-miss fix)
   head -1 "$1" 2>/dev/null | grep -qiE '^#!.*python'
 }
 
-esc_scan() {  # $1=range → prints matched escalation lines (empty ⇒ clean)
-  local range="$1" re body
+esc_scan() {  # $1=range → prints matched escalation lines (empty ⇒ clean). FAIL CLOSED: if grep cannot
+              # evaluate the pattern (rc≥2: invalid regex, or an option-like $re), emit a synthetic hit
+              # so the caller PARKS. The one fail-closed landing rail must NEVER read a malformed
+              # SHIP_LAND_ESC_RE as clean. `--` stops an $re beginning with `-` being parsed as an option;
+              # the explicit rc capture (not `|| true`) stops rc 2 being swallowed as rc 1 (no match).
+  local range="$1" re body out rc
   re="${SHIP_LAND_ESC_RE:-$ESC_RE_DEFAULT}"
   body="$(git diff "$range" 2>/dev/null | grep -E '^[-+]' | grep -Ev '^(\+\+\+|---) ' || true)"
-  printf '%s\n' "$body" | grep -inE "$re" || true
+  out="$(printf '%s\n' "$body" | grep -inE -- "$re")"; rc=$?
+  if [[ "$rc" -ge 2 ]]; then
+    printf 'ESC-SCAN-ERROR: grep rc=%s — SHIP_LAND_ESC_RE uninterpretable (invalid regex / option-like); failing closed, PARK\n' "$rc"
+    return 0
+  fi
+  [[ -n "$out" ]] && printf '%s\n' "$out"
+  return 0
 }
 
 write_decision_packet() {  # $1=id $2=branch $3=range $4=hits
