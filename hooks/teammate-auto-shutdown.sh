@@ -38,6 +38,9 @@
 #
 # Kill switch: export TEAMMATE_SHUTDOWN_DISABLED=1
 # Tuning:      export TEAMMATE_MAX_DEFERS=<N>   (default 3)
+#              export CC_CLASSIFY_INTERACTIVE_HOLD_S=<sec>  (default 21600) — operator-adoption hold window
+#              export CC_CLASSIFY_INTERACTIVE_HOLD_DISABLE=1 — disable the operator-adoption hold
+#              export TEAMMATE_CLOSE_GRACE_S=<sec>          (default 3) — grace before the detached pane close
 
 set -uo pipefail
 
@@ -50,6 +53,16 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # declare/assign spli
 readonly HOOK_DIR
 readonly LOG_DIR="$HOME/.claude/logs"
 readonly WATCHDOG_DIR="$HOME/.claude/watchdog"
+
+# ── operator-adoption hold config (2026-07-24; mirrors cc-classify 4.7 env family) ───────────────
+# The WHO-primitive ci_last_interactive_epoch lives in hooks/lib/cc-interactive.sh, which LANDS
+# SEPARATELY — sourced IF PRESENT, else one WARN + skip (graceful degradation for a partial deploy).
+readonly INTERACTIVE_HOLD_S="${CC_CLASSIFY_INTERACTIVE_HOLD_S:-21600}"   # a real operator prompt within this ⇒ ADOPTED pane
+readonly FIRE_PROMPT_SLACK_S="${CC_CLASSIFY_FIRE_PROMPT_SLACK_S:-300}"   # a prompt within spawn+this = the spawn brief, not adoption
+readonly INTERACTIVE_LIB="${CC_INTERACTIVE_LIB:-$HOOK_DIR/lib/cc-interactive.sh}"
+readonly PROJECT_ROOTS="${CC_CLASSIFY_PROJECT_ROOTS:-$HOME/.claude/projects $HOME/.claude-secondary/projects $HOME/.claude-tertiary/projects $HOME/.claude-quaternary/projects}"
+readonly CC_NOTIFY_BIN="${CC_NOTIFY_BIN:-$HOME/.claude/bin/cc-notify}"
+readonly CLOSE_GRACE_S="${TEAMMATE_CLOSE_GRACE_S:-3}"
 
 # Team-state roots. CC writes $CLAUDE_CONFIG_DIR/teams/<team>/config.json with
 # each member's tmuxPaneId — including on the 2.1.183 IMPLICIT-team model (teams
@@ -212,6 +225,32 @@ except Exception:
 PY
 }
 
+# ── operator-adoption helpers (2026-07-24) ──────────────────────────────────────────────────────
+# Transcript .jsonl for a session id — first match across the account project roots (mirror cc-classify).
+_find_transcript() {
+  local sid="${1:-}" r f
+  [[ -n "$sid" ]] || return 1
+  for r in $PROJECT_ROOTS; do
+    [[ -d "$r" ]] || continue
+    f="$(find "$r" -maxdepth 2 -name "$sid.jsonl" 2>/dev/null | head -1)"
+    [[ -n "$f" ]] && { printf '%s' "$f"; return 0; }
+  done
+  return 1
+}
+
+# Spawn epoch (seconds) for a session id from the registry startedAt (epoch-ms); empty on miss.
+_spawn_epoch() {
+  local sid="${1:-}" ms
+  [[ -n "$sid" ]] || return 1
+  ms="$(cc-sessions --json 2>/dev/null | jq -r --arg s "$sid" \
+        '.[] | select((.session_id // .sessionId)==$s) | .startedAt // empty' 2>/dev/null | head -1)"
+  [[ "$ms" =~ ^[0-9]+$ ]] || return 1
+  printf '%s' "$(( ms / 1000 ))"
+}
+
+# Best-effort desk page (never fatal).
+_page_desk() { "$CC_NOTIFY_BIN" --role desk "$1" >/dev/null 2>&1 || true; }
+
 INPUT=$(cat)
 TEAMMATE_NAME=$(echo "$INPUT" | jq -r '.teammate_name // "unknown"' 2>/dev/null)
 TEAM_NAME=$(echo "$INPUT" | jq -r '.team_name // "unknown"' 2>/dev/null)
@@ -365,6 +404,26 @@ if [[ -n "$WORKTREE" && -x "$REAP_GUARD" ]]; then
   fi
 fi
 
+# ── FAIL-CLOSED on unresolved WORKTREE (2026-07-24) ──────────────────────────────────────────────
+# Every safety gate above (busy-marker, dirty-defer, reap-guard) AND the checkpoint below is
+# conditioned on -n "$WORKTREE". When worktree resolution misses (a branch-named path we could not
+# map, or a config-write race), ALL of them silently no-op and the close below would proceed with
+# ZERO gates evaluated and NO checkpoint — the ungated-close defect. Fail closed: DEFER on the SAME
+# counter (same MAX_DEFERS), and after the last defer SURFACE (loud log + best-effort desk page)
+# rather than ever closing ungated. A close with zero gates evaluated must be impossible.
+if [[ -z "$WORKTREE" ]]; then
+  if (( DEFER_COUNT < MAX_DEFERS )); then
+    DEFER_COUNT=$((DEFER_COUNT + 1))
+    echo "$DEFER_COUNT" > "$DEFER_COUNTER"
+    log "defer $TEAMMATE_NAME ($DEFER_COUNT/$MAX_DEFERS): WORKTREE unresolved — no safety gate could run, refusing ungated close"
+    # Do NOT emit {"continue": false}; leave the teammate's turn untouched.
+    exit 0
+  fi
+  log "⚑ SURFACE $TEAMMATE_NAME (team=$TEAM_NAME): WORKTREE unresolved after $MAX_DEFERS defers — refusing ungated close, paging desk (session=$SESSION_ID)"
+  _page_desk "teammate-auto-shutdown SURFACE: cannot resolve worktree for $TEAMMATE_NAME (team $TEAM_NAME, session $SESSION_ID) after $MAX_DEFERS defers — pane NOT closed (would be ungated). Confirm-close manually."
+  exit 0
+fi
+
 # Clear defer counter — we're proceeding to reap
 rm -f "$DEFER_COUNTER" 2>/dev/null || true
 
@@ -438,6 +497,54 @@ if [[ -z "$PANEID" ]]; then
   fi
 fi
 
+# ── OPERATOR-ADOPTION hold (2026-07-24; mirrors cc-classify 4.7 / hooks/lib/cc-interactive.sh) ────
+# BELT+SUSPENDERS (2026-07-25): a SECOND, independent belt COMPLEMENTING scripts/reap-guard.sh guard
+# R-d (fc633b5) — same predicate family (a real operator prompt after the spawn brief, within the
+# hold ⇒ hold), but lib-based here (ci_last_interactive_epoch, distinct envs CC_CLASSIFY_INTERACTIVE_
+# HOLD_S/_DISABLE) vs R-d's context-econ ce_last_interactive_age via the reap-guard --session-id
+# wiring. Classify-hold + reaper-belt precedent — two guards, not one; reap-guard.sh is single-owned.
+# A teammate pane a human OPERATOR has typed real prompts into is ADOPTED — never force-close it on
+# TeammateIdle. Between prompts an adopted pane is indistinguishable from a finished teammate by
+# tree-state alone (idle + clean), so the ONE signal we trust is WHO drove the last turn:
+# ci_last_interactive_epoch returns the epoch of the last REAL operator-typed prompt. Newer than
+# spawn+SLACK (the spawn brief arrives as a user prompt and must NOT count as adoption) AND within
+# the hold window ⇒ adopted → surface (page), never close. The WHO-primitive lives in
+# hooks/lib/cc-interactive.sh (lands separately) — absent ⇒ one WARN + skip (graceful degradation).
+# Kill switch: CC_CLASSIFY_INTERACTIVE_HOLD_DISABLE=1.
+_hold_on=1
+[[ "${CC_CLASSIFY_INTERACTIVE_HOLD_DISABLE:-0}" == "1" ]] && _hold_on=0
+{ [[ "$INTERACTIVE_HOLD_S" =~ ^[0-9]+$ ]] && (( INTERACTIVE_HOLD_S > 0 )); } || _hold_on=0
+if (( _hold_on )); then
+  if [[ -f "$INTERACTIVE_LIB" ]]; then
+    # shellcheck source=/dev/null
+    . "$INTERACTIVE_LIB" 2>/dev/null || true
+  fi
+  if ! type -t ci_last_interactive_epoch >/dev/null 2>&1; then
+    log "  WARN: cc-interactive.sh absent ($INTERACTIVE_LIB) — skipping operator-adoption check (degraded)"
+  else
+    _adopt_tj="$(_find_transcript "$SESSION_ID" || true)"
+    if [[ -z "$_adopt_tj" && -n "$PANEID" ]]; then
+      _alt_sid="$(cc-sessions --json 2>/dev/null | jq -r --arg p "$PANEID" \
+                  '.[] | select(.paneUUID==$p) | (.session_id // .sessionId) // empty' 2>/dev/null | head -1)"
+      [[ -n "$_alt_sid" ]] && _adopt_tj="$(_find_transcript "$_alt_sid" || true)"
+    fi
+    if [[ -n "$_adopt_tj" ]]; then
+      _iep="$(ci_last_interactive_epoch "$_adopt_tj" 2>/dev/null || true)"
+      if [[ "$_iep" =~ ^[0-9]+$ ]]; then
+        _now="${CC_CLASSIFY_NOW:-$(date +%s)}"
+        _spawn_s="$(_spawn_epoch "$SESSION_ID" || echo 0)"; [[ "$_spawn_s" =~ ^[0-9]+$ ]] || _spawn_s=0
+        _iage=$(( _now - _iep )); (( _iage < 0 )) && _iage=0
+        if (( _iage < INTERACTIVE_HOLD_S )) && (( _iep > _spawn_s + FIRE_PROMPT_SLACK_S )); then
+          log "  ⚑ operator-adopted: real prompt ${_iage}s ago (< hold ${INTERACTIVE_HOLD_S}s, past spawn+${FIRE_PROMPT_SLACK_S}s) — NOT closing pane [$PANEID] ($MEMBER_NAME); paging desk"
+          _page_desk "teammate-auto-shutdown HELD: pane $PANEID ($MEMBER_NAME, team $TEAM_NAME) is operator-adopted — real prompt ${_iage}s ago; left open, confirm-close manually."
+          # Do NOT emit {"continue": false}; leave the operator's turn untouched.
+          exit 0
+        fi
+      fi
+    fi
+  fi
+fi
+
 # PPID-forensic (logs only; no kill). On the classic 2.1.114 LEAD-side model
 # $PPID was the dead/recycled /bin/sh shim (the retired `kill -TERM $PPID` bug);
 # on the 2.1.183 implicit-team model $PPID is the idle teammate's own claude.exe
@@ -453,7 +560,7 @@ echo '{"continue": false, "stopReason": "Idle teammate auto-shutdown (work prese
 #   pane → remove the worktree. Work is already checkpointed above, so removing
 #   the worktree here cannot lose work.
 (
-  sleep 3
+  sleep "$CLOSE_GRACE_S"
   if [[ -n "$PANEID" ]]; then
     close_and_log "$PANEID" "$MEMBER_NAME"
   else
