@@ -482,6 +482,7 @@ emit_one() { # <entry-json> <all-json> <json?>
        --arg succ "$SUCCESSOR" --arg detail "$DETAIL" --arg lstart "$_lstart" \
        '{name:$e.name, paneUUID:$e.paneUUID, account:$e.account, cwd:$e.cwd,
          pid:($e.pid // null),
+         session_id:($e.session_id // $e.sessionId // null),
          cause:$cause, idle_s:($idle|tonumber? // -1), work_landed:$landed,
          lstart:(if $lstart=="" then null else $lstart end),
          successor:(if $succ=="" then null else $succ end), detail:$detail}'

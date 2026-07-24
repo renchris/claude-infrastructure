@@ -202,6 +202,24 @@ solo_team_cfg() { mkdir -p "$D/teams/session-$1"
   [ "$(cause PANE-A)" = coordination-abandoned ]
 }
 
+@test "branch-order guard: §4.7 operator hold PRECEDES the coordination-abandoned branch (recent operator prompt wins → owned-wait)" {
+  # LOAD-BEARING ORDERING (2026-07-25 Gap 2): a session that is BOTH a coordination-abandoned candidate
+  # (dead partner + idle past horizon + live co-cwd owner) AND carries a RECENT operator prompt MUST read
+  # owned-wait — because cc-classify evaluates the §4.7 interactive hold (returns ~:404) BEFORE the
+  # coordination-abandoned branch (~:440). That ordering was undefended: if the branches are ever
+  # reordered (or §4.7's early-return removed), a live operator conversation reads coordination-abandoned
+  # (REAPABLE) and this test flips to that value and FAILS. It is the classifier-side twin of cc-reaper's
+  # independent second leg for the same cause.
+  export CC_CLASSIFY_PS_BIN="$D/bin/ps-none"          # partner dead
+  export CC_CLASSIFY_COORD_HANG_DEAD_REAP_S=7200
+  mkdir -p "$D/teams/teamO"
+  reg PANE-A "$LIVE" /shared sidBoth; tx sidBoth 50000   # last assistant turn 50000s ago → idle past horizon
+  utx sidBoth 600                                         # BUT the operator typed 600s ago (< 6h hold)
+  printf '{"leadSessionId":"sidBoth","members":[{"name":"worker-dead"}]}\n' > "$D/teams/teamO/config.json"
+  add PANE-LIVE "$LIVE" /shared sidOwner 999999900       # live co-cwd owner (coordination-abandoned needs it)
+  [ "$(cause PANE-A)" = owned-wait ]
+}
+
 @test "coordination-hang STAYS never-reap under the horizon even with a live co-cwd owner (Gap A safety)" {
   export CC_CLASSIFY_PS_BIN="$D/bin/ps-none"
   export CC_CLASSIFY_COORD_HANG_DEAD_REAP_S=7200
