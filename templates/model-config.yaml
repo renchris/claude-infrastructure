@@ -2,60 +2,391 @@
 # Updated whenever Anthropic ships a new model or allowlist changes.
 # Pair with claude-bump-models + claude-lint-models (see ~/bin/ + ~/.claude/scripts/).
 #
-# Last updated: 2026-04-17
+# Last updated: 2026-07-24  (Opus 5 lateral bump: claude-opus-5 → opus_latest, ADOPTION STAGED behind
+#              the auto-mode gate — see § Opus 5 adoption. Prior 2026-07-17: Fable 5 PERMANENT — in ALL Max + Team
+#                            Premium plans at 50% of limits from 2026-07-20; the "window" era is
+#                            CLOSED, no more downgrade. Prior: 2026-06-30 Sonnet 5 lateral bump +
+#                            Fable redeploy.)
 
 versions:
-  opus_latest: claude-opus-4-7
-  opus_prior: claude-opus-4-6
-  sonnet_latest: claude-sonnet-4-6
-  sonnet_prior: claude-sonnet-4-5
+  frontier_latest: claude-fable-5           # NEW TIER ABOVE OPUS (2026-06-09) — not an opus rename
+  frontier_prior: ""                        # first frontier-tier model; no prior to sweep from
+  # opus_latest is HELD at claude-opus-4-8 during Opus 5 staging (see § Opus 5 adoption + opus_staged
+  # below). It is the operational sweep-target/latest for the CC harness. Flipping it to claude-opus-5
+  # (+ opus_prior → claude-opus-4-8, then `claude-bump-models --apply`) is the FINAL activation step,
+  # done ONLY after the operator's auto-mode live-test passes — flipping it now makes the lint demand a
+  # sweep that refuses / silently-demotes not-yet-allowlisted teammate spawns (Sonnet-5 lesson).
+  opus_latest: claude-opus-4-8
+  opus_prior: claude-opus-4-7
+  opus_staged: claude-opus-5              # STAGED latest (2026-07-24), pending auto-mode activation. The
+                                          # new Opus default per platform docs ("start with Opus 5 for
+                                          # complex agentic coding + enterprise work"); ≈ Fable 5 on most
+                                          # benchmarks at HALF the cost; Fable 5 REMAINS the frontier tier.
+                                          # Same $5/$25, 1M ctx, 128K out, adaptive-thinking API surface as
+                                          # 4.8 — one new delta: thinking:disabled + effort xhigh/max → 400.
+                                          # Ignored by claude-lint/bump-models (not a *_latest/_prior key) —
+                                          # a pure staging marker. Behavioral + routing + activation guide:
+                                          # docs/research/OPUS5_ADOPTION_AND_PROMPTING_2026-07-24.md
+  sonnet_latest: claude-sonnet-5            # LATERAL 2026-06-30 (was claude-sonnet-4-6); 1M ctx, 128K out
+  sonnet_prior: claude-sonnet-4-6
   haiku_latest: claude-haiku-4-5
+
+# ─────────────────────────────────────────────────────────────────────────────
+# § OPUS 5 ADOPTION (lateral bump 2026-07-24) — STAGED, not a blind sweep.
+# Opus 5 (claude-opus-5) replaces Opus 4.8 as opus_latest at the SAME $5/$25 and an
+# identical adaptive-thinking API surface (1M ctx, 128K out; the ONE new API delta is
+# thinking:disabled + effort xhigh/max → 400 — n/a to our harness). It is materially
+# stronger than 4.8 (SWE-bench Pro 79 vs 69, FrontierBench 43 vs 19, OSWorld 71 vs 56,
+# ARC-AGI-2 90 vs 72, GDPval-AA 1861 vs 1593) and ≈ Fable 5 on MOST benchmarks — at
+# HALF Fable's cost. Full behavioral + routing analysis + operator checklist:
+#   docs/research/OPUS5_ADOPTION_AND_PROMPTING_2026-07-24.md
+#
+# WHY STAGED (Sonnet-5 precedent, applied verbatim): CC HARNESS surfaces (auto-mode
+# leads + ALL teammate spawns) are gated by auto_mode_allowlist, and new models lag
+# ~2 weeks into Max auto mode. An agent CANNOT self-verify auto-mode membership (a probe
+# of `--permission-mode auto --model claude-opus-5` is refused by the classifier). So
+# until an OPERATOR live-interactive test confirms Opus 5 in auto mode, EVERY opus-4-8
+# role / allowlist / launcher default below STAYS on opus-4-8. Do NOT run
+# `claude-bump-models --apply` (it would flip not-yet-allowlisted harness surfaces →
+# spawn refusal / silent demotion). Opus 4.8 is still fully served (it is Opus 5's own
+# cyber-refusal fallback), so no ref to it is "stale".
+#
+# OPERATOR ACTIVATION (the one human step) — then agent completes the sweep:
+#   0. Live-test: start a real interactive `--permission-mode auto --model claude-opus-5`
+#      session on the claude-next eval track. Engages autonomously ⇒ allowlisted.
+#   1. flip versions map: opus_latest → claude-opus-5, opus_prior → claude-opus-4-8, clear opus_staged;
+#      run `claude-bump-models --apply` (NOW safe — sweeps opus-4-8→opus-5); add claude-opus-5 to
+#      auto_mode_allowlist.non_firstParty_max ALONGSIDE 4.8.
+#   2. flip the eval-track default: ~/.zshrc claude-next() --model / CLAUDE_NEXT_MODEL
+#      default claude-opus-4-8 → claude-opus-5.
+#   3. move the opus-4-8 ROLES below → claude-opus-5: lead_default, default_teammate,
+#      teammate_mechanical, teammate_research, research_worker, frontier_access.fallback.
+#   4. RE-SWEEP effort (see effort_defaults § opus5): Opus 5's own default is `high`, NOT
+#      max — `max` over-thinks + self-correction/re-verification loops; medium/low are
+#      STRONGER than on 4.8. Our global default:max is WRONG-SIGNED for Opus 5.
+#   5. re-run claude-lint-models; spot-check one teammate's live model (silent-demotion).
+# Until then: Opus 5 IS usable via explicit non-auto `--model claude-opus-5` sessions and
+# the API directly; the frontier tier (Fable 5) and all Fable roles are UNCHANGED.
+#
+# ROUTING NOTE (record now; act on adoption): Opus 5 ≈ Fable 5 at HALF cost collapses
+# Fable's "delta above the default" for MOST work. On adoption, reconsider whether the
+# call-time frontier roles (research_adversarial / workflow_judge / eval_judge /
+# teammate_frontier) still warrant Fable's 2×. Fable retains an edge only on the hardest
+# pure-reasoning (HLE no-tools, DeepSWE) + a couple coding slices; Mythos 5 still leads
+# cyber + health. Opus 5 becomes the new frontier-role FALLBACK once allowlisted.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Frontier access — PERMANENT as of 2026-07-20. Anthropic (2026-07-17) made Fable 5 a STANDING
+# inclusion in ALL Max + Team Premium plans at 50% of limits — no longer a window. The repeated
+# extensions (07-07 → 07-09 → 07-14 → 07-19) were Anthropic securing capacity in stages ("demand
+# for Fable has been challenging to predict"); that staging is now resolved to permanent access.
+# ⇒ The "when the window ends, run /model-upgrade --downgrade" flow is now OBSOLETE for Fable:
+#   `active` stays true, `permanent: true`, no downgrade.
+#
+# [history — kept for record] REDEPLOYED 2026-07-01 (anthropic.com/news/redeploying-fable-5, after
+# the US lifted export controls on Fable/Mythos 2026-06-30): Fable 5 INCLUDED in plan usage up to
+# 50% of weekly limits 2026-07-01 → 2026-07-07, then usage-credit-only. PRIOR window 2026-06-09 →
+# 2026-06-23 (pulled early 06-12).
+#
+# STILL BINDING (unchanged by permanence): Fable exists ONLY on the claude-next eval track
+# (CC 2.1.170+); the held stable 2.1.114 track does not know the model — never pin it there. The
+# now-obsolete downgrade recipe (kept only as the mechanism if Anthropic ever reverses — not
+# expected): `/model-upgrade --downgrade` flipped active:false + retired the `claude-fable` wrapper
+# in ~/.zshrc (claude-next() defaults to $CLAUDE_NEXT_MODEL:-claude-opus-4-8), then claude-lint-models.
+#
+# 2026-06-09 (same day as launch): lead_default REVERTED to Opus 4.8 — Fable as the
+# everyday default at effort max exhausted 5-hour plan windows prematurely. The window
+# stays active for OPT-IN surfaces only: `claude-fable` launcher, /frontier-run
+# discovery panels, and the call-time research_adversarial / workflow_judge /
+# eval_judge / teammate_frontier slots (bounded, judgment-dense — kept on Fable).
+frontier_access:
+  model: claude-fable-5
+  tracks: [claude-next]                     # NEVER the stable `claude` 2.1.114 track
+  source: plan-usage                        # PERMANENT plan inclusion: Fable 5 is included in ALL Max +
+                                            # Team Premium plans at ≤50% of limits (Anthropic 2026-07-17,
+                                            # effective 2026-07-20). No longer credits-only after a window.
+  start: "2026-07-01"
+  permanent: true                           # 2026-07-17 — FABLE IS HERE TO STAY. Anthropic made Fable 5 a
+                                            # standing Max/Team-Premium inclusion at 50% of limits from
+                                            # 2026-07-20. The staged extensions below (07-07→07-19) were
+                                            # capacity-securing, now resolved to permanent inclusion — the
+                                            # "window" era is CLOSED. This flag is the truth; `end` is a
+                                            # sentinel only. No more /model-upgrade --downgrade for Fable.
+  end: "2099-12-31"                         # SENTINEL (far-future) — Fable no longer expires. Kept as a valid
+                                            # date ONLY so date-based consumers + claude-lint-models never
+                                            # raise a false "expired-but-active"; read `permanent: true` first.
+                                            # History: windowed 07-01→07-19 (operator-extended 07-07→09→14→19),
+                                            # made PERMANENT 2026-07-20. (Prior window 06-09→06-23, pulled 06-12.)
+  active: true                              # PERMANENTLY true — Fable is standard Max inclusion from 2026-07-20.
+                                            # [history] FLIPPED true 2026-07-02 (H-002 panel; window Jul 1–7). Historically kept false
+                                            # tonight [June 30 ~22:00 PT] because Fable is not yet live — a
+                                            # premature spawn would API-reject AND burn a per-session spawn-count
+                                            # slot the gate can't refund). TURNKEY FLIP (playbook step 1):
+                                            #   sed -i '' 's/^  active: false/  active: true/' ~/.claude/model-config.yaml
+                                            # then PROBE before real panels: spawn ONE throwaway
+                                            # frontier-derivation Agent(model:"fable"); returns ⇒ live; API-reject
+                                            # (~600ms/0 tokens) ⇒ not up yet, revert to false + wait; then run
+                                            # claude-lint-models. Playbook: docs/research/FABLE5_WINDOW_PLAYBOOK_2026-07-01.md
+                                            # Toggle history: open 06-09 → pulled-early 06-12 → residual 06-12 →
+                                            # SHUT 06-12 (exhausted) → REDEPLOYED 07-01 (this window, Jul 1–7).
+  fallback: claude-opus-4-8                 # what frontier roles degrade to when inactive
+
+# Pricing per MTok, input/output USD (source: claude-api skill catalog, 2026-06-09).
+# Used by research-subagents.md cost math — Fable slots cost 2× Opus slots.
+pricing_per_mtok:
+  claude-fable-5: [10, 50]
+  claude-opus-5: [5, 25]                     # NEW 2026-07-24 — same price as Opus 4.8, ≈Fable quality on
+                                             # most benchmarks ⇒ Fable's cost-justified delta has collapsed
+                                             # for most work (routing note in § Opus 5 adoption above).
+  claude-opus-4-8: [5, 25]                   # still served (Opus 5 fallback); kept for prior-pinned cost math
+  claude-sonnet-5: [3, 15]                  # standard; INTRO $2/$10 through 2026-08-31 then $3/$15
+  claude-sonnet-4-6: [3, 15]                # still served — kept for prior-pinned cost math
+  claude-haiku-4-5: [1, 5]
 
 # Auto-mode model allowlist, derived from decompile of Dk6(G5()) in cli.js 2.1.112.
 # Server-side truth may shift — verify via `claude auto-mode config` after each
 # Anthropic release. tengu_auto_mode_config.allowModels (Statsig) overrides this.
+# Sonnet 5 (launched 2026-06-30): NOT added yet — new models lag ~2wk into Max auto
+# mode, and the CC `sonnet` alias still resolves to 4.6 at launch (platform docs). Keep
+# claude-sonnet-4-6 (still served + allowed); add claude-sonnet-5 once `auto-mode config` confirms.
+# 2026-07-10 (verified on 2.1.183): harness RECOGNIZES claude-sonnet-5 (settings default +
+#   permission-classifier entries + /model accepts it) with NO silent-demotion evidence in logs —
+#   BUT auto-mode allowlist membership is STILL UNCONFIRMED. An agent-run probe of
+#   `--permission-mode auto --model claude-sonnet-5` was refused by the auto-mode classifier
+#   (an agent can't self-verify this), so the live INTERACTIVE-session test (per the
+#   non_firstParty_max note below: "the live session IS the test") is the only confirmation path.
+#   Keep 4.6 in these three lists until that live test passes, then add claude-sonnet-5 alongside it.
+# OPUS 5 (2026-07-24): NOT added to non_firstParty_max below — new models lag ~2wk into Max
+# auto mode; an agent-probe of `--permission-mode auto --model claude-opus-5` is classifier-refused.
+# Add claude-opus-5 ALONGSIDE claude-opus-4-8 ONLY after an operator live-interactive test passes
+# (§ Opus 5 adoption). Keep claude-opus-4-8 (Opus 5's own fallback) in every list meanwhile.
 auto_mode_allowlist:
   firstParty: [claude-opus-4-7, claude-opus-4-6, claude-sonnet-4-6]
   anthropicAws: [claude-opus-4-7, claude-opus-4-6, claude-sonnet-4-6]
-  non_firstParty_max: [claude-opus-4-7]     # STRICTER — our account
+  non_firstParty_max: [claude-opus-4-8, claude-fable-5]   # STRICTER — our account. 4-8 confirmed in auto mode 2026-06-09. claude-fable-5 VERIFIED in auto mode 2026-06-09: the claude-next lead session itself runs `--permission-mode auto --model claude-fable-5` and operates fully autonomously (that live session IS the test — `auto-mode config` doesn't print allowModels). Fable teammates: eval-track (2.1.170) teams only — the stable 2.1.114 binary doesn't know the model and fails LOUDLY at spawn (not a silent demotion, so allowlisting it here is safe for both tracks).
   non_firstParty_non_max: [claude-opus-4-7, claude-opus-4-6, claude-sonnet-4-6]
 
 # Hardcoded by Anthropic in cli.js — not user-configurable (as of 2.1.112).
+# Sonnet 5 (2026-06-30): the CC `sonnet` alias still resolves to Sonnet 4.6 on the Anthropic
+# API at launch (platform docs), so the hardcoded classifier stays 4.6 — re-verify with
+# `claude auto-mode config` / on the next CC bump before moving to claude-sonnet-5.
 classifier_model: claude-sonnet-4-6
 
-# Role → model mapping. Universal Opus 4.7 for all teammates on Max plan (auto-mode
-# allowlist is opus-4-7 ONLY; Sonnet/older Opus silently demote). Docs, team briefs,
-# and scripts reference role aliases via claude-bump-models — when a role's optimal
-# model changes, update the alias here + run `claude-bump-models --apply`.
+# Role → model mapping — the DYNAMIC LADDER. Most-intelligent by default, stepped
+# down per task class. Frontier roles are CONDITIONAL on frontier_access (active +
+# eval track); when inactive or on the stable track they degrade to .fallback.
+# Docs, team briefs, and scripts reference role aliases via claude-bump-models —
+# when a role's optimal model changes, update here + run `claude-bump-models --apply`.
 roles:
-  default_teammate: claude-opus-4-7         # code-writing + auto mode
-  teammate_mechanical: claude-opus-4-7      # same model; effort differentiates (see effort_defaults)
-  teammate_research: claude-opus-4-7        # same model; effort differentiates (see effort_defaults)
+  lead_default: claude-opus-4-8             # lead/orchestrator sessions — Opus 4.8 @ effort max.
+                                            # REVERTED from claude-fable-5 2026-06-09 (launch day):
+                                            # Fable-by-default at max effort exhausted 5-hour plan
+                                            # windows prematurely. Fable 5 is OPT-IN ONLY while
+                                            # frontier_access.active — `claude-fable` launcher or
+                                            # /frontier-run (unknown-unknown discovery over the
+                                            # project's docs/research/FRONTIER_HOLES.md ledger).
+                                            # Stable-track leads ride auto mode (claude-opus-4-8).
+  frontier_discovery: claude-fable-5        # the ONLY default surface for Fable: /frontier-run
+                                            # baseline-blind derivation panels — AGENT-INITIATED
+                                            # under the bounded-autonomy policy (CLAUDE.md
+                                            # § Frontier Tier Routing + frontier_discovery_budget;
+                                            # human never model-switches/starts — user 2026-06-09).
+                                            # `claude-fable` launcher remains as an optional human
+                                            # surface. Conditional on frontier_access; post-window
+                                            # degrades to fallback (say so in reports).
+  default_teammate: claude-opus-4-8         # Agent Teams run BOTH tracks (stable 2.1.114 AND
+                                            # claude-next 2.1.170 — empirically fine 2.1.156+).
+                                            # Teammate gate = auto_mode_allowlist, NOT the track.
+                                            # DEFAULT stays Opus 4.8 (cost-effective workhorse;
+                                            # effort differentiates). Fable 5 is allowlisted
+                                            # (verified 2026-06-09) — pin teammate_frontier
+                                            # per-member where judgment density warrants 2×,
+                                            # eval-track teams only (2.1.114 errors loudly).
+  teammate_frontier: claude-fable-5         # per-member for judgment-heavy eval-track teammates
+                                            # (architecture, security, review-gates). While
+                                            # frontier_access.active this is the DEFAULT for
+                                            # judgment-dense HARD tasks (2026-06-11 routing
+                                            # verdict: fresh-context panes get benchmark
+                                            # cost-parity + the full quality delta — CursorBench
+                                            # Fable@high 70.6%/$11 vs Opus@max 63.8%); mechanical/
+                                            # routine teammates stay Opus (quality-saturated).
+                                            # Effort per member: ~/.claude/scripts/
+                                            # set-teammate-effort.sh <worktree> high|xhigh
+                                            # (panes re-resolve worktree settings.local.json —
+                                            # binary-verified 2.1.170). Spot-check one member's
+                                            # model via billing/transcript per team (GH #43869
+                                            # silent-demotion risk). Else fallback 4-8.
+  teammate_mechanical: claude-opus-4-8      # same model; effort differentiates (see effort_defaults)
+  teammate_research: claude-opus-4-8        # same model; effort differentiates (see effort_defaults)
+  research_worker: claude-opus-4-8          # IN-PROCESS / teammate synthesis-worker default = GA ceiling (Opus 4.8).
+                                            # In-process /research inherits LEAD effort (can't pin max, GH #25591) and
+                                            # Sonnet 5 is NOT teammate-allowlisted → those two surfaces stay Opus 4.8.
+                                            # HISTORY: T2 (probe wf_771c1e9f-644, 2026-06-30, on Sonnet 4.6) + re-probe
+                                            # (wf_fe2b1218-297, 2026-07-01, on Sonnet 5): Sonnet @ low/med/high/xhigh
+                                            # LOSES the synthesis-worker floor — satisfices on stale rule-doc citations
+                                            # / wrong-file cites vs Opus's source-verified grounding. So Sonnet is NOT
+                                            # a safe in-process worker (effort there is uncontrollable → could land in
+                                            # the rejected band). The ONE exception is EQUAL-MAX effort in a Workflow
+                                            # (see workflow_synthesis_worker). (research_retrieval stays Haiku.)
+  workflow_synthesis_worker: claude-sonnet-5  # CERTIFIED FREE WIN (2026-07-01, adopt-confirmed) — Workflow-run bulk
+                                            # synthesis / breadth-first worker slots ONLY. Spawn:
+                                            #   agent(brief, {model: 'claude-sonnet-5', effort: 'max'})
+                                            # Ties Opus-4.8@max QUALITY across easy AND hard synthesis briefs (0 reliable
+                                            # Opus wins; blind 4-judge default-to-refute panels — probes wf_fe2b1218-297
+                                            # / wf_53759023 / wf_18a92ab8) at ~2-3× LIGHTER quota-draw ($3/$15 vs $5/$25
+                                            # + ~5× lighter/token). TWO HARD REQUIREMENTS (probe-verified):
+                                            #  (1) effort MUST be `max` — low/med/high/xhigh all drop BELOW the grounding
+                                            #      floor on hard briefs (wrong-file citations / fabrication); max is
+                                            #      load-bearing. Opus @ med/low also fail hard briefs → no cheap shortcut.
+                                            #  (2) briefs MUST carry a saturation bound (~15-25 tool calls, stop when
+                                            #      answerable) — unbounded max-effort Sonnet 5 overflowed context once.
+                                            # NOT for in-process /research (effort uncontrollable) or teammates (not
+                                            # allowlisted) — those use research_worker (Opus 4.8). Intro $2/$10 → std
+                                            # $3/$15 on 2026-08-31 (win holds at std). SSOT: ~/.claude/model-routing-freewin-probe.md.
+  research_retrieval: claude-haiku-4-5      # Explore tier (25% slot, codebase/file:line lookups)
+  research_adversarial: claude-fable-5      # adversarial/red-team/judge/depth-coordination slots
+                                            # (10-15%); call-time Agent `model: "fable"` override,
+                                            # eval track + active window only; else fallback
+  workflow_judge: claude-fable-5            # Dynamic Workflow judge/synthesis agents — same
+                                            # conditionality as research_adversarial
   classifier: claude-sonnet-4-6             # hardcoded by Anthropic (not user-configurable)
-  eval_judge: claude-opus-4-7               # highest-quality judge
+  eval_judge: claude-fable-5                # highest-quality judge during window; else fallback
 
-# Reasoning effort per role profile. Universal Opus 4.7 means model-eligibility
-# constraints are out; effort is the only tuning axis. Lead judges mundane-ness
-# during Phase 0 and opts into `xhigh` via `claude --effort xhigh` (or the claude-x
-# wrapper). Effort defaults ride the launchers' injected `--effort` flag
-# (zshrc CLAUDE_DEFAULT_EFFORT, default max) + settings.json "effortLevel" floor —
-# NEVER `export CLAUDE_CODE_EFFORT_LEVEL`: the env var is re-read every turn,
-# outranks /effort for the whole session, and cannot be unset from inside
-# (2026-06-11 redesign). Per-teammate effort is NOT supported by the Agent tool
-# (GH #25591) — teammate panes resolve the settings floor.
+# Bounded-autonomy budget for frontier escalation (2026-06-09 policy: the human
+# NEVER model-switches or starts frontier sessions — the agent escalates itself,
+# within these hook-enforced bounds). frontier-spawn-gate.sh reads this block.
+frontier_discovery_budget:
+  max_fable_spawns_per_session: 6           # TIGHTENED 8→6 for the scarce 2026-07-01→07-07 window
+                                            # ("Prompting Fable 5" pacing: 4-6 high-leverage spawns/
+                                            # session, not the ceiling; headroom + Fable@xhigh is
+                                            # expensive). FRONT-LOAD Days 1-2 — the PRIOR window opened
+                                            # 06-09 and was pulled early 06-12 (3 of 14 days); treat
+                                            # Days 3-7 as gravy. hard cap, all fable spawns (panels +
+                                            # teammate_frontier); blocked spawn = park the hole, never
+                                            # retry. (Was 8 on 2026-06-11: teammate_frontier members run
+                                            # high/xhigh via worktree settings, cheaper per spawn —
+                                            # restore to 8 for an open-ended / campaign window.)
+  reserve_dates: ""                         # no known live-event reserve in the 2026-07-01→07-07 window
+                                            # (FIFA cancelled; the prior "2026-06-13/14/15" FIFA-week reserve
+                                            # is retired). production-support reserve HALVES the spawn cap on
+                                            # listed dates — a mid-incident window exhaustion is a solo-operator
+                                            # catastrophe no per-task economics offsets. Re-add dates here if a
+                                            # live event lands in the window.
+  inline_blocking_max: 2                    # per blocking-wall inline escalation (prose-enforced)
+  batch_min_open_holes: 2                   # auto-batch at wrap-up only at/above this queue depth
+  max_concurrent_campaigns: 1               # long-horizon campaigns (/frontier-campaign): Fable =
+                                            # ARCHITECT/JUDGE in bounded phases over default-tier
+                                            # implementer teammates — NEVER an autonomous Fable
+                                            # implementation monolith (re-creates the 4 documented
+                                            # teammate crashes at 2×). Launch gate: Sonnet red-team
+                                            # pass + spec doc with per-campaign token/wall-clock
+                                            # budget + abort rubric. Governance = ledger status
+                                            # (multi-session; session spawn-cap can't see it).
+
+# Reasoning effort per role profile. Within a tier (e.g. universal Opus 4.8 for
+# teammates) effort is the tuning axis; ACROSS tiers the ladder above is the axis
+# (Fable 5 → Opus 4.8 → Sonnet 5 → Haiku 4.5).
+# MECHANISM (2026-06-11 redesign — replaces the old `export CLAUDE_CODE_EFFORT_LEVEL=max`):
+#   - zshrc launchers (claude / claude-default / claude-next / firewall wrappers)
+#     inject `--effort ${CLAUDE_DEFAULT_EFFORT:-max}` before "$@" — the flag SEEDS
+#     the session, /effort stays adjustable, and an explicit --effort passed by the
+#     caller wins (Commander last-wins). Tier wrappers (claude-x/-h, claude-fable-h/-q)
+#     append their own --effort.
+#   - Settings floor: ~/.claude/settings.json "effortLevel": "xhigh" (symlinked into
+#     every CLAUDE_CONFIG_DIR) covers non-wrapped surfaces: IDE extension, teammate
+#     pane spawns, bare binary calls. The settings schema enum caps at xhigh — `max`
+#     is expressible ONLY via --effort or the env var, so xhigh is the persistable floor.
+#   - CLAUDE_CODE_EFFORT_LEVEL is BANNED from exports/settings-env: the binary re-reads
+#     it every turn AHEAD of session state, so it locks /effort for the whole session
+#     and cannot be unset from inside. session-start.sh has a tripwire that warns any
+#     session starting with it set.
+# Lead judges mundane-ness during Phase 0 and opts into `xhigh` via `claude-x` (or
+# `claude --effort xhigh`).
+# PER-SPAWN EFFORT (corrected 2026-06-11, binary-verified on 2.1.170 — two classes):
+#   - Teammate PANES: per-member effort IS settable — panes launch fresh processes
+#     that re-resolve <worktree>/.claude/settings.local.json (lead's effort is NOT
+#     forwarded; no --effort in pane argv). Mechanism:
+#     `~/.claude/scripts/set-teammate-effort.sh <worktree> low|medium|high|xhigh`
+#     run during worktree setup, before spawn. Capped at xhigh (settings schema);
+#     user-settings floor (xhigh) applies when no worktree override is written.
+#   - In-process SUBAGENTS (Agent tool, no team_name): inherit the lead's LIVE
+#     effort with NO override surface (AgentInput has no effort field; frontmatter
+#     `effort` not parsed — GH #25591/#25669/#31536/#65598 open). Fable panels
+#     fired from an Opus@max lead therefore run @max: an accepted, BOUNDED premium
+#     (CursorBench $18-vs-$15 band per task, capped by max_fable_spawns_per_session)
+#     — do NOT ask the user to /effort-dip around waves; that's manual steering.
+#     ⚠️ SCARCE-WINDOW CARVE-OUT (2026-06-30, "Prompting Fable 5" guide): the line above
+#     is COST-framed and holds for an OPEN-ENDED window. During a PLAN-USAGE-CAPPED window
+#     (2026-07-01→07-07, ≤50% weekly then unaffordable) it is WRONG-SIGNED: Fable@max
+#     over-deliberates + burns the window, and Fable@high already beats Opus@xhigh. For
+#     that window PREFER running the derivation/judge spawn WAVE from a `claude-fable-h`
+#     launcher OR a deliberate one-time `/effort xhigh` on the lead (restore after),
+#     keeping the orchestrating lead on Opus otherwise — the ONE case where the /effort-dip
+#     is correct, not manual steering. See docs/research/FABLE5_PROMPTING_PLAYBOOK_2026-06-30.md.
 # Rule doc: memory/feedback-agent-team-models.md (2026-04-17 revision).
 effort_defaults:
-  default: max                              # implementer, reviewer, doctor, lead, researcher
-  mundane: xhigh                            # opt-in: rename sweep, mechanical edit, reformat
+  default: max                              # implementer, reviewer, doctor, lead, researcher, CODING, SYNTHESIS,
+                                            # mechanical-with-search. CERTIFIED 2026-06-30 (freewin probe T1,
+                                            # wf_771c1e9f-644, blind default-to-equivalent judge panels over real
+                                            # reso briefs): xhigh does NOT tie max on grounding-heavy classes —
+                                            # synthesis (max surfaced a VERIFIED SUPERSET of findings xhigh missed)
+                                            # and mechanical-search (xhigh HALLUCINATED a fabricated diff against a
+                                            # non-existent file + misclassified an internal alias) both show real
+                                            # xhigh quality regressions; coding marginal (xhigh's only miss was a
+                                            # git-apply-tolerant cosmetic hunk-header). Keep max. Probe § CERTIFIED.
+  verify_judge: xhigh                       # CERTIFIED FREE WIN (T1, wf_771c1e9f-644): LLM-judge / adversarial-
+                                            # verify tasks with BOUNDED grounding (verify ONE specific claim) tie max
+                                            # on quality (2/2 briefs TIE, one cheaper-lean) at lower cost — the
+                                            # bounded-grounding task doesn't need max's extra exploration turns.
+                                            # Workflow-tunable slots ONLY (in-process subagents inherit lead effort,
+                                            # GH #25591). Coincides with fable_capability_sensitive: xhigh → the
+                                            # workflow_judge / eval_judge / research_adversarial slots use xhigh
+                                            # whether on Fable (in-window) or Opus-fallback (window shut).
+  mundane: xhigh                            # opt-in: rename sweep, reformat, KNOWN-TARGET mechanical edit. CAVEAT
+                                            # (T1 mech-d1): mechanical work that must SEARCH for the site (find the
+                                            # barrel / the untyped fn) stays at default max — xhigh hallucinated a
+                                            # fabricated edit there. xhigh is safe only when the targets are given.
   frontier: max                             # novel algorithm, security audit (= default tier)
+  # Fable-5 SURFACES follow a DIFFERENT ladder (Anthropic "Prompting Claude Fable 5"
+  # guide, 2026-06-11 audit). The binary's live-session effort enum is
+  # low < medium < high < xhigh < max — `max` is the absolute ceiling, ABOVE xhigh.
+  # The article: `high` is the DEFAULT, `xhigh` for the most capability-sensitive work,
+  # `medium`/`low` for routine — and Fable @ a LOWER level ≈ Opus @ max quality, so
+  # max-everywhere over-deliberates and burns the 5-hour window (the very cost that
+  # reverted lead_default off Fable on 2026-06-09). The lever is the launcher's
+  # --effort flag (per-spawn effort unsupported, GH #25591): claude-fable-h (high) /
+  # claude-fable-q (medium) vs claude-fable (max) — /effort re-tiers live. Applies to
+  # the claude-fable launcher, /frontier-run panels, and the call-time
+  # research_adversarial / workflow_judge / eval_judge / teammate_frontier slots.
+  fable_default: high                       # Fable surfaces — NOT max (article 2026-06-11)
+  fable_capability_sensitive: xhigh         # derivation panels, security/arch judgment
+  fable_routine: medium                     # routine claude-fable use (was implicitly max)
+  # Opus 5 SURFACES (on adoption) follow their OWN ladder — do NOT inherit default:max.
+  # Anthropic migration guide + Opus 5 system card: `high` is Opus 5's default; `max` is
+  # "prone to overthinking" and shows self-correction / re-verification loops at high effort
+  # (FrontierCode peaks at MEDIUM; FrontierBench best at xhigh, max within-noise). low/medium
+  # are STRONGER on Opus 5 than any prior Opus. Lowering effort does NOT reliably shorten the
+  # VISIBLE response — prompt for concision explicitly. ⇒ when opus_latest becomes the active
+  # model, RE-SWEEP effort_defaults.default (max is wrong-signed for Opus 5) per docs/research/
+  # OPUS5_ADOPTION_AND_PROMPTING_2026-07-24.md. Starting points:
+  opus5_default: high                       # coding / agentic / lead — Opus 5's own API default
+  opus5_capability_sensitive: xhigh         # hardest long-horizon agentic (set max_tokens ≥64k)
+  opus5_coding_agentic: medium              # FrontierCode peaks here; test medium vs high per task
+  opus5_routine: low                        # scoped / latency-sensitive (low is strong on Opus 5)
 
 # Upcoming retirement dates (from Anthropic model-deprecations page).
 # Bump this list + re-run claude-lint-models when Anthropic announces changes.
 deprecations:
   claude-3-haiku: "2026-04-20"              # 3 days out — urgent if referenced
-  claude-opus-4: "2026-06-15"               # undated 4.0 variants
-  claude-sonnet-4: "2026-06-15"
+  claude-opus-4: "2026-06-15"               # undated 4.0 variants (PAST — retired)
+  claude-sonnet-4: "2026-06-15"             # (PAST — retired)
+  claude-opus-4-1: "2026-08-05"             # → migrate to claude-opus-5 (platform docs 2026-07-24);
+                                            # not referenced in this toolchain, listed for completeness.
 
-# Roadmap note: when Opus 4.8 / Sonnet 5 / Haiku 5 ships, update versions map
-# above + run `claude-bump-models --apply`. Expect ~2-week lag before new model
-# enters Max-plan auto-mode allowlist (pattern observed with 4.7 in 2.1.111).
+# Roadmap note: on ANY model release, run the `/model-upgrade` skill
+# (~/.claude/skills/model-upgrade/SKILL.md). It distinguishes the three cases:
+#   lateral (4.8→4.9): update versions map → claude-bump-models --apply → lint
+#   tier-insertion (Fable 5): frontier_access block + canonical reference list edits
+#   downgrade (window end): flip active: false → drop zshrc --model → lint
+# Expect ~2-week lag before a new model enters Max-plan auto-mode allowlist
+# (pattern observed with 4.7 in 2.1.111). Fable 5 never enters the stable track.
