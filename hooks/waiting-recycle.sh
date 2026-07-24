@@ -83,7 +83,9 @@
 #        • S6 CONVERSATION-HOLD (SOFT) — a fresh INTERACTIVE turn (< CONV_HOLD_S) marks a live 2-way
 #          exchange: HIGH-VALUE context that leaves NO git/mailbox trace (the "74% mid-conversation"
 #          incident — S1–S5 read it as idle). Auto-drive re-prompts (session-continue 🔧 / goal Stop
-#          feedback) are excluded on two axes, so an auto-driven desk still free-wins.
+#          feedback) are excluded on two axes, so an auto-driven desk still free-wins. Just ABOVE that
+#          window (CONV_HOLD_S ≤ age < CONV_RECENT_S) the exchange only just quieted, so the IDLE
+#          Stage-2 fire waits the longer RECENT_GRACE_S (not GRACE_S=180) before discarding it.
 #        • FORECAST-EARLY busy trigger — used ≥ T_BUSY_MIN AND burn-forecast ≤ LEAD_MIN minutes to the
 #          wall ⇒ the busy ladder (advisory→drain) starts BEFORE T_BUSY; at high burn the wall arrives
 #          first. Exec gating unchanged (--live --busy-force).
@@ -114,7 +116,7 @@
 #                    CC_WR_STATE_DIR · CC_WR_MAX · CC_WR_COOLDOWN_S · CC_WR_KILL · CC_WR_ROT_FLOOR ·
 #                    CC_WR_GRACE_S · CC_WR_COORD_DIR · CC_WR_UUID · CC_WR_QUIET_S · CC_WR_FIRE_DIR ·
 #                    CC_WR_HANDOFF_FIRE · CC_WR_DESK_ROLE · CC_WR_NOTIFY · CC_WR_PUSH · CC_WR_ESCALATE_DEDUP_S ·
-#                    CC_WR_CONV_HOLD_S · CC_WR_T_BUSY_MIN · CC_WR_LEAD_MIN · CC_WR_T_NUDGE · CC_WR_NUDGE_REARM ·
+#                    CC_WR_CONV_HOLD_S · CC_WR_CONV_RECENT_S · CC_WR_RECENT_GRACE_S · CC_WR_T_BUSY_MIN · CC_WR_LEAD_MIN · CC_WR_T_NUDGE · CC_WR_NUDGE_REARM ·
 #                    CC_CE_* (context-econ lib: WIN_S / WALL / MIN_SPAN_S / HIST_MAX / TAIL_BYTES / AUTO_RX)
 #
 # NOTE: deliberately NO `set -e` — a hook must fail SAFE (abstain), and a stray non-zero from a grep
@@ -156,6 +158,9 @@ T_BUSY_MIN="${CC_WR_T_BUSY_MIN:-60}"                       # forecast-early busy
 LEAD_MIN="${CC_WR_LEAD_MIN:-20}"                           # burn-forecast ≤ this many minutes to the wall ⇒ act early while BUSY
 T_NUDGE="${CC_WR_T_NUDGE:-50}"                             # BUSY pause-point-planning advisory from this fill upward
 NUDGE_REARM="${CC_WR_NUDGE_REARM:-10}"                     # re-nudge per +N pct fill climb (B-2 shape)
+CONV_RECENT_S="${CC_WR_CONV_RECENT_S:-7200}"              # recent-conversation grace window: an interactive turn within this
+                                                          #   (but past CONV_HOLD_S — S6 no longer holds) extends the idle Stage-2 grace
+RECENT_GRACE_S="${CC_WR_RECENT_GRACE_S:-900}"            # …to THIS (vs GRACE_S=180) — don't discard a just-quieted exchange too fast
 
 # Per-cwd key (arm + cooldown survive a recycle since cwd is stable across it); per-session key (cap
 # resets on the fresh successor). Mirrors session-continue.sh's config-dir|path hash.
@@ -302,6 +307,31 @@ wr_push_page() { # $1=msg — Pushover break-through; no-op (return 0) when the 
   jq -cn --arg m "$1" --arg c "$CWD" '{message:$m,cwd:$c}' | "$PUSH_BIN" >/dev/null 2>&1 || true
 }
 
+# ── BATS-POLLUTION GC ─────────────────────────────────────────────────────────────────────────────
+# waiting-recycle's own bats suite keys arm markers by a fixture cwd. A run that forgot to override
+# CC_WR_STATE_DIR — or a helper that armed under the REAL config root — leaves arm/live/brief markers in
+# the REAL state dir whose recorded cwd is a defunct /var/folders/…bats-run tmpdir; that litter also
+# reads as "armed" to `status`. Sweep it: an arm marker whose recorded cwd has the bats-run tmpdir shape
+# AND no longer exists on disk is test pollution. A LIVE bats run's own fixture cwd STILL EXISTS, so the
+# existence gate makes this safe to run every poll — it never touches an in-flight run's own markers.
+gc_bats_pollution() {
+  [ -d "$STATE_DIR" ] || return 0
+  local f firstline cwd hash sib
+  for f in "$STATE_DIR"/arm-*; do
+    [ -f "$f" ] || continue
+    IFS= read -r firstline < "$f" 2>/dev/null || continue      # arm content line 1: "<iso-ts> <cwd>"
+    cwd="${firstline#* }"                                        # drop the ts token → the recorded cwd
+    case "$cwd" in
+      /var/folders/*bats-run*|/private/var/folders/*bats-run*) ;;
+      *) continue ;;
+    esac
+    [ -d "$cwd" ] && continue                                   # a LIVE test's fixture cwd still exists ⇒ keep
+    hash="${f##*/arm-}"                                          # sweep the whole cwd-keyed family for this key
+    for sib in arm live brief cooldown disarm busyforce; do rm -f "$STATE_DIR/$sib-$hash" 2>/dev/null; done
+    log_idl gc "bats-pollution" "$(jq -cn --arg cwd "$cwd" --arg key "$hash" '{gc:"arm-family",cwd:$cwd,key:$key}')"
+  done
+}
+
 command -v jq >/dev/null 2>&1 || { SID="?"; abstain "no-jq"; }
 
 SID="$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null || true)"
@@ -310,6 +340,11 @@ CWD="$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null || true)"
 CMD="$(printf '%s' "$input" | jq -r '.tool_input.command // empty' 2>/dev/null || true)"
 
 [ -n "$SID" ] || abstain "no-session-id"
+
+# Housekeeping (cheap, every poll): sweep bats-run pollution markers so a forgotten CC_WR_STATE_DIR
+# override in a test can never leave the REAL state dir armed by a defunct fixture cwd. Existence-gated,
+# so an in-flight bats run's own markers survive. Runs even under global-kill (pure hygiene).
+gc_bats_pollution
 
 # 2. GLOBAL kill-switch — blanket opt-out for every session.
 [ -f "$KILL" ] && abstain "global-kill"
@@ -690,6 +725,24 @@ fi
 
 # ════ STAGE 2 — deterministic FIRE (cooldown+cap EXEMPT; bound = one-fire-per-SID latch) ════
 if [ "$stage2_pending" = 1 ]; then
+  # ── RECENT-CONVERSATION GRACE (context-econ, header §8) ──────────────────────────────────────────
+  # S6 HOLDS a fresh interactive turn (conv_age < CONV_HOLD_S). Just ABOVE that window a real 2-way
+  # exchange has only just quieted — discarding it on the standard GRACE_S=180 is too eager. When an
+  # interactive turn exists in [CONV_HOLD_S, CONV_RECENT_S), the IDLE Stage-2 fire waits the longer
+  # RECENT_GRACE_S from the first advisory before it may fire (or shadow-fire). Idle-only: a BUSY+high
+  # desk is genuinely context-starved and must not linger. conv_age unknown/"" ⇒ legacy grace (no hold).
+  extended_grace=0
+  if [ "$fire_mode" = idle ] && [ -n "$conv_age" ] \
+     && [ "$conv_age" -ge "$CONV_HOLD_S" ] && [ "$conv_age" -lt "$CONV_RECENT_S" ]; then
+    extended_grace=1
+    est_rg="$(cat "$escf" 2>/dev/null)"; case "$est_rg" in ''|*[!0-9]*) est_rg=0 ;; esac
+    if [ "$est_rg" -gt 0 ] && [ "$(( $(date +%s) - est_rg ))" -lt "$RECENT_GRACE_S" ]; then
+      log_idl abstained "recent-conversation-grace" \
+        "$(jq -cn --argjson used "$used" --arg conv "$conv_age" --argjson grace "$RECENT_GRACE_S" \
+            '{used_pct:$used,conv_age_s:$conv,extended_grace_s:$grace,mode:"idle"}')"
+      exit 0
+    fi
+  fi
   : > "$firedf" 2>/dev/null                                   # latch FIRST — at-most-once per SID even on re-entry
   # Compose the successor brief ATOMICALLY (tmp+mv). NEVER empty/partial → no task-less successor (FM-D):
   #   standing --brief template (if armed) + frozen DoD + (busy) the drained ping queue + a re-derive directive.
@@ -720,8 +773,8 @@ if [ "$stage2_pending" = 1 ]; then
     date +%s > "$cf" 2>/dev/null || true                      # anchor the cross-generation loop-breaker on the FIRE
     log_idl fired "stage2-live" \
       "$(jq -cn --argjson used "$used" --arg trigger "$tk" --arg mode "$fire_mode" --arg prompt_file "$pf" --argjson grace_s "$GRACE_S" \
-          --argjson burn "$burn_x100" --argjson fc "$forecast_min" --argjson early "$early_busy" \
-          '{used_pct:$used,trigger:$trigger,mode:$mode,prompt_file:$prompt_file,grace_s:$grace_s,burn_x100:$burn,forecast_min:$fc,early_busy:($early==1)}')"
+          --argjson burn "$burn_x100" --argjson fc "$forecast_min" --argjson early "$early_busy" --argjson eg "$extended_grace" \
+          '{used_pct:$used,trigger:$trigger,mode:$mode,prompt_file:$prompt_file,grace_s:$grace_s,burn_x100:$burn,forecast_min:$fc,early_busy:($early==1),extended_grace:($eg==1)}')"
     # Sanctioned actuator: it arms a DETACHED watcher BEFORE typing /exit (order load-bearing), so the
     # recycle completes even when the /exit interrupt SIGKILLs this hook's process group.
     "$HANDOFF_FIRE" --recycle --prompt-file "$pf" ${UUID:+--session-id "$UUID"} </dev/null >/dev/null 2>&1 || true
@@ -734,8 +787,8 @@ if [ "$stage2_pending" = 1 ]; then
   # BUSY shadow is more urgent than idle (mid-work AND high), so it ALSO pages out-of-band.
   log_idl fired "stage2-shadow" \
     "$(jq -cn --argjson used "$used" --arg trigger "$tk" --arg mode "$fire_mode" --arg prompt_file "$pf" --argjson grace_s "$GRACE_S" \
-        --argjson burn "$burn_x100" --argjson fc "$forecast_min" --argjson early "$early_busy" \
-        '{used_pct:$used,would_fire:true,trigger:$trigger,mode:$mode,prompt_file:$prompt_file,grace_s:$grace_s,burn_x100:$burn,forecast_min:$fc,early_busy:($early==1)}')"
+        --argjson burn "$burn_x100" --argjson fc "$forecast_min" --argjson early "$early_busy" --argjson eg "$extended_grace" \
+        '{used_pct:$used,would_fire:true,trigger:$trigger,mode:$mode,prompt_file:$prompt_file,grace_s:$grace_s,burn_x100:$burn,forecast_min:$fc,early_busy:($early==1),extended_grace:($eg==1)}')"
   if [ "$fire_mode" = busy ]; then
     wr_os_notify "Claude desk BUSY+HIGH would-recycle" "desk ${UUID:-$SID} at ${used}% mid-work (${hold_reason}); drained brief at ${pf}"
     wr_push_page "BUSY+HIGH would-recycle (${DESK_ROLE}) ${used}%: drained brief at ${pf} — /handoff now or arm --busy-force"

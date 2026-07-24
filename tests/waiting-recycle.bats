@@ -840,3 +840,68 @@ mk_hist() { local now; now=$(date +%s)
   [ "$status" -eq 0 ]; fired "$output"
   tail -1 "$CC_WR_IDL" | jq -e 'select(.reason=="waiting-recycle") | has("burn_x100") and has("forecast_min") and has("conv_age_s")' >/dev/null
 }
+
+# ── RECENT-CONVERSATION GRACE (context-econ) — extend the idle Stage-2 grace past a just-quieted turn ─
+# Force Stage-2 pending by pre-writing the advisory escalate-stamp (SID-keyed) aged past GRACE_S (=180).
+@test "recent-conv grace: a just-quieted exchange HOLDS the idle Stage-2 fire past GRACE_S" {
+  mk_tel rg1 60
+  printf '%s' "$(( $(date +%s) - 300 ))" > "$CC_WR_STATE_DIR/escalate-rg1"      # ≥ GRACE_S=180, < RECENT_GRACE_S=900
+  # a real interactive turn 1800s ago: past CONV_HOLD_S (S6 released) but within CONV_RECENT_S=7200
+  run drive rg1 "$(mk_tx_conv a 1800)"
+  [ "$status" -eq 0 ]; [ -z "$output" ]                                         # neither fires nor shadow-fires — it waits
+  grep -q '"reason":"recent-conversation-grace"' "$CC_WR_IDL"
+  [ ! -f "$CC_WR_STATE_DIR/fired-rg1" ]                                         # not latched — a later poll can still fire
+}
+@test "recent-conv grace: once RECENT_GRACE_S elapses the idle Stage-2 fire proceeds (extended_grace tagged)" {
+  mk_tel rg2 60
+  printf '%s' "$(( $(date +%s) - 1000 ))" > "$CC_WR_STATE_DIR/escalate-rg2"     # ≥ RECENT_GRACE_S=900
+  run drive rg2 "$(mk_tx_conv a 1800)"
+  [ "$status" -eq 0 ]; fired "$output"
+  echo "$output" | grep -q "SHADOW"                                            # armed SHADOW ⇒ would-fire, no exec
+  grep '"reason":"stage2-shadow"' "$CC_WR_IDL" | tail -1 | jq -e '.extended_grace == true' >/dev/null
+}
+@test "recent-conv grace: NO recent interactive turn ⇒ standard GRACE_S fire (guard is scoped)" {
+  mk_tel rg3 60
+  printf '%s' "$(( $(date +%s) - 300 ))" > "$CC_WR_STATE_DIR/escalate-rg3"      # same age as rg1, but…
+  run drive rg3 "$(mk_tx 9 "$WAIT")"                                            # …an assistant-only transcript ⇒ conv_age=""
+  [ "$status" -eq 0 ]; fired "$output"                                         # fires at 180s — extended grace does NOT apply
+  echo "$output" | grep -q "SHADOW"
+}
+@test "recent-conv grace: an ANCIENT turn (older than CONV_RECENT_S) does NOT extend the grace" {
+  mk_tel rg4 60
+  printf '%s' "$(( $(date +%s) - 300 ))" > "$CC_WR_STATE_DIR/escalate-rg4"
+  run drive rg4 "$(mk_tx_conv a 9000)"                                          # 9000s > CONV_RECENT_S=7200 ⇒ not "recent"
+  [ "$status" -eq 0 ]; fired "$output"                                         # fires at the standard grace
+}
+
+# ── FIXTURE HYGIENE (change 5): bats-pollution GC + single-root isolation ────────────────────────────
+@test "bats-pollution GC: an arm-family with a defunct /var/folders bats-run cwd is swept + logged" {
+  local h="pollute0000000ab"
+  printf '2026-01-01T00:00:00Z /var/folders/zz/T/bats-run-GONE/test/9/t/deskcwd\n' > "$CC_WR_STATE_DIR/arm-$h"
+  : > "$CC_WR_STATE_DIR/live-$h"; printf 'stale\n' > "$CC_WR_STATE_DIR/brief-$h"; : > "$CC_WR_STATE_DIR/cooldown-$h"
+  mk_tel gcp 60
+  run drive gcp "$(mk_tx 1 "$WAIT")"
+  [ "$status" -eq 0 ]
+  [ ! -f "$CC_WR_STATE_DIR/arm-$h" ]                                            # the whole cwd-keyed family is removed
+  [ ! -f "$CC_WR_STATE_DIR/live-$h" ]
+  [ ! -f "$CC_WR_STATE_DIR/brief-$h" ]
+  [ ! -f "$CC_WR_STATE_DIR/cooldown-$h" ]
+  grep -q '"disposition":"gc"' "$CC_WR_IDL"                                     # the sweep was recorded
+}
+@test "bats-pollution GC: a live in-flight marker (cwd still exists) SURVIVES the sweep" {
+  local armf; armf="$(ls "$CC_WR_STATE_DIR"/arm-* 2>/dev/null | head -1)"       # setup's arm for \$DESK (bats-run cwd that EXISTS)
+  [ -n "$armf" ] && [ -f "$armf" ]
+  mk_tel gcs 60
+  run drive gcs "$(mk_tx 1 "$WAIT")"
+  [ "$status" -eq 0 ]
+  [ -f "$armf" ]                                                                # existence gate ⇒ never nukes a live run's marker
+}
+@test "fixture isolation: an actuation writes state ONLY under CC_WR_STATE_DIR (never a real dir)" {
+  local ch="$BATS_TEST_TMPDIR/canary-home"; mkdir -p "$ch"
+  mk_tel iso 60
+  HOME="$ch" run drive iso "$(mk_tx 1 "$WAIT")"
+  [ "$status" -eq 0 ]; fired "$output"                                         # Stage-1 advisory
+  ls "$CC_WR_STATE_DIR"/cooldown-* >/dev/null 2>&1                             # advisory state landed in the fixture root
+  [ ! -e "$ch/.claude" ]                                                       # nothing under the canary HOME
+  [ ! -e "$CLAUDE_CONFIG_DIR/state/waiting-recycle" ]                          # CC_WR_STATE_DIR overrides the CFG-derived default
+}

@@ -13,6 +13,10 @@ setup() {
   DRI="$REPO/scripts/desk-recycle-invariant.sh"
   TMP="$BATS_TEST_TMPDIR/t"
   mkdir -p "$TMP"
+  # Fixture HOME so a test that invokes the hook / arm helper WITHOUT its own HOME or CLAUDE_CONFIG_DIR
+  # override can never fall back to the REAL ~/.claude state dir (the bats-pollution leak). Per-command
+  # HOME= / CLAUDE_CONFIG_DIR= / DRI_HOME overrides below still win where a test sets them.
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   DESK_CWD="$TMP/deskcwd"; mkdir -p "$DESK_CWD"
   BRIEF="$TMP/brief.md"; printf 'canonical desk boot brief\n' > "$BRIEF"
 }
