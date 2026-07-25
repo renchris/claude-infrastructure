@@ -40,8 +40,30 @@ design: `desk-self-handoff-2026-07-19/synthesis.md`. → CORE implemented on the
 | Seam | Components | Last swept | Depth | Verdict |
 |---|---|---|---|---|
 | desk self-recycle spine | `waiting-recycle.sh` · `handoff-fire.sh --recycle` · `/tmp/cc-telemetry` · `wait-contracts` | 2026-07-19 | Fable design panel (H-DSH-1/2), 2 panelists, probes P1/P4/FM-D/FM-F confirmed | SOLVED-PATH-KNOWN → core built |
+| session-closure surface (all closers) | `cc-reaper`·`cc-classify`·`cc-teardown`·`reap-guard.sh`·`teammate-auto-shutdown.sh`·`waiting-recycle.sh`·`team-orphan-reaper.sh`·`lead-crash-watchdog.sh`·`lead-supervisor.sh`·`session-end.sh`·launchd | 2026-07-25 | Fable enumeration panel (2 panelists, baseline-blind), full closer inventory, all findings lead-verified at file:line | 3 closers FIXED (092e823 reap-guard R-d + sibling 24722de orphan-reaper + the reaper gaps); 3 residuals → C-SC-1 |
 
 ## Campaign Candidates
+
+### C-SC-1 — One "who-drove-the-last-turn" session-ownership oracle for every closer (GENERATOR)
+BOTH 2026-07-25 enumeration panelists CONVERGED: extend `cc-classify`/`reap-guard` into the single
+callable EVERY session-closing actuator must consult pre-disruption — adoption-hold + fired-stamp +
+birth-grace + products + a **sticky adoption marker** (so an operator prompt evicted past the 2 MB
+transcript tail is not lost) + composer-unknowable ⇒ HOLD. Dissolves ≥3 named residuals from the
+2026-07-25 shutdown-hardening pass (see `session-crash-forensics-2026-07-23.md` § 2026-07-25 addendum):
+(1) **waiting-recycle S6** — the 900 s-SOFT-vs-21600 s-hard window fork collapses to one constant, and
+the desk self-recycle stays live because the oracle answers from the marker, not a re-read of the
+tail that would deadlock it; (2) **R1 tail-eviction** — the sticky marker replaces the bounded
+`tail -c 2000000` read that §4.7 + the new Gap-2 leg + reap-guard R-d all depend on; (3) **cc-teardown
+caller-trust** — the final actuator (G-b accepts any non-empty string; its selftest passes literal
+`"x"`) requires a fresh machine verdict ≤N-min old at the kill. Every FUTURE closer inherits the guard
+instead of re-deriving the incident (retires the whack-a-mole class the memory already flagged). The
+repo's own C10 module pattern (`reap-guard`, `exit-deadline`) is the template. Point-fixes were
+deliberately deferred: naively hardening waiting-recycle's empty-tail case deadlocks the desk's own
+self-recycle, and a rushed multi-file tail-fallback in just-shipped safety code is the exact risk the
+hardening constraints guard against. GENERATOR-class (one primitive dissolves ≥3 items) → promote via
+`/frontier-campaign`. Also filed as negative space: the consent-free `it2 close -f` transport (nobody
+owns "which closes deserve the iTerm2 modal back"), composer-draft invisibility fleet-wide, and
+`leadSessionId` having no lifecycle owner.
 
 ### C-DSH-1 — Unifying recycle-lifecycle + watch-state attestation primitive
 BOTH panels' top campaign idea CONVERGED: one SID/cwd-keyed write-before-act record
