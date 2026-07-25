@@ -132,6 +132,29 @@ The relogin build's own five suites are clean — the two classes were found *be
 teammate broke its own implementation and watched the suite stay green, then went looking
 for the sibling class.
 
+## Root cause — the gate has never linted a single `.bats` file
+
+Found by `tm/relogin-exec`, verified by lead. `scripts/ship-land.sh:85`:
+
+```bash
+is_shell_file() {  # *.sh/*.bash OR a shell shebang
+  case "$1" in *.sh|*.bash) return 0 ;; esac
+  [[ -f "$1" ]] || return 1
+  head -1 "$1" 2>/dev/null | grep -qiE '^#!.*(bash|zsh|ksh|dash|(/| )sh)'
+}
+```
+
+A bats file's shebang is `#!/usr/bin/env bats`, which matches **neither** that regex
+**nor** the `*.sh|*.bash` case. So the `/ship` gate's `shellcheck` pass has **never run on
+any test file in this repo** — which is exactly why 212 dead assertions accumulated across
+51 files with a permanently green suite. This is the mechanism, not just an exposure.
+
+**But fixing `is_shell_file()` alone is NOT sufficient**, and this is the trap: SC2314
+covers only the bare-`!` class (89). It does not flag non-final `[[ ]]` at all (123 — the
+majority). Wiring bats into the existing shellcheck pass would fix 42% of the problem
+while reporting a confidently green gate. The lint is necessary; the analyzer below is
+what actually closes the class.
+
 ## Detection
 
 `shellcheck -S error tests/*.bats | grep -c SC2314` catches **only the `!` class** and
