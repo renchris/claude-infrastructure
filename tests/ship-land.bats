@@ -127,6 +127,21 @@ on_branch_with() {  # $1=branch $2=file $3=content  → commit a change on a fre
   [ "$status" -eq 6 ]
 }
 
+@test "deletion skip does NOT disable the gate: dirty ADD alongside a delete → exit 6" {
+  # The skip must drop ONLY the absent path, never the whole gate. Delete one tracked shell file AND
+  # add a shellcheck-dirty one in the same commit → the surviving file must still fail the gate.
+  printf '#!/usr/bin/env bash\necho "keep"\n' > old.sh
+  git add old.sh && git commit -q -m "seed old.sh" && git push -q origin main
+
+  git checkout -q -b feat/mixed
+  git rm -q old.sh
+  printf '#!/usr/bin/env bash\ncd /tmp/nope\necho ok\n' > new.sh   # SC2164 → shellcheck RED
+  git add new.sh && git commit -q -m "chore: swap old.sh for new.sh"
+
+  run bash "$SHIPLAND" --trunk main --dry-run
+  [ "$status" -eq 6 ]
+}
+
 @test "push non-ff: rejected push → exit 7, loud" {
   # server-side hook rejects the main update (simulated non-fast-forward)
   printf '#!/bin/sh\n[ "$1" = "refs/heads/main" ] && { echo "simulated non-ff" >&2; exit 1; }\nexit 0\n' > "$ORIGIN/hooks/update"
