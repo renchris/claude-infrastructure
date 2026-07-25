@@ -149,7 +149,11 @@ if $IS_GLOBAL; then
   echo ""
   echo "Bin tools → ~/bin/"
   mkdir -p "$HOME/bin"
-  for tool in claude-latest claude-update claude-versions browsermcp-wrapper.sh claude-kimi; do
+  # claude-bump-models + screenshot-to-clipboard.sh were in NEITHER this list nor sync.sh's, so
+  # nothing reconciled them in either direction — ~/bin/claude-bump-models silently gained the
+  # frontier family while the repo copy could not bump that tier at all (audit 02, 2026-07-25).
+  for tool in claude-latest claude-update claude-versions browsermcp-wrapper.sh claude-kimi \
+              claude-bump-models screenshot-to-clipboard.sh; do
     [[ -f "$REPO_DIR/bin/$tool" ]] || continue
     copy_file "$REPO_DIR/bin/$tool" "$HOME/bin/$tool"
   done

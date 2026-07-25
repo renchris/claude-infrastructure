@@ -69,7 +69,11 @@ done
 
 # Bin tools
 echo "Bin tools:"
-for tool in claude-latest claude-update claude-versions browsermcp-wrapper.sh claude-accounts; do
+# claude-kimi, claude-bump-models and screenshot-to-clipboard.sh were MISSING from this list —
+# and claude-bump-models is exactly the file that drifted (live gained the frontier family; the
+# repo copy could not bump that tier), so the one leg that could have caught it did not look.
+for tool in claude-latest claude-update claude-versions browsermcp-wrapper.sh claude-accounts \
+            claude-kimi claude-bump-models screenshot-to-clipboard.sh; do
   [[ -f "$HOME/bin/$tool" ]] || continue
   sync_file "$HOME/bin/$tool" "$REPO_DIR/bin/$tool"
 done

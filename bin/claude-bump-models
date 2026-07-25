@@ -62,7 +62,7 @@ trap "rm -f $BUMP_PAIRS_FILE" EXIT
 if [[ -n "$OLD_LITERAL" && -n "$NEW_LITERAL" ]]; then
   echo "$OLD_LITERAL|$NEW_LITERAL" > "$BUMP_PAIRS_FILE"
 else
-  for family in opus sonnet haiku; do
+  for family in frontier opus sonnet haiku; do
     prior=$(yq -r ".versions.${family}_prior // \"\"" "$CONFIG" 2>/dev/null)
     latest=$(yq -r ".versions.${family}_latest // \"\"" "$CONFIG" 2>/dev/null)
     if [[ -n "$prior" && -n "$latest" && "$prior" != "$latest" ]]; then
