@@ -1,0 +1,295 @@
+#!/usr/bin/env bats
+# postland-verify.sh — the ASYNC POST-LAND VERIFICATION NET.
+#
+# RED-PROOF suite written against the FROZEN CONTRACT, never against the script:
+# every expected value below is derived from a contract clause quoted in a comment
+# beside the assertion. Nothing here was obtained by running the SUT first.
+#
+# CONTRACT (the clause each test binds to):
+#   C1 verbs    --run-if-needed | --run <sha> | bisect <file> <good> <bad> |
+#               is-green <sha> (0 stamped-green / 1 not) | status | --selftest
+#   C2 killsw   POSTLAND_VERIFY=off  =>  immediate exit 0
+#   C3 state    $CC_POSTLAND_DIR/{stamps/<tree-sha>.json,last-green,queue,
+#               run.lock.d/,flakes.jsonl,runner.log}   (the SUT owns creation)
+#   C4 stamp    {tree,commit,verdict:"green"|"red",failing[],ts,run_s,retries,
+#               checks,shellcheck_advisory}
+#   C5 target   origin/main of $CC_POSTLAND_REPO; ABSTAIN (exit 0) when that
+#               TREE already has a stamp
+#   C6 mutex    run.lock.d mkdir+pid — a second LIVE instance exits 0 quietly;
+#               a DEAD-pid lock is reaped and the run proceeds
+#   C7 verdict  `bats tests/` inside the once-created DETACHED $CC_POSTLAND_WORKTREE
+#   C8 retries  the failing FILE is re-run alone up to 2 more times;
+#               >=2/3 fails => reproducible RED; 1/3 => flake (flakes.jsonl,
+#               EXCLUDED from the verdict); all-flake => verdict green
+#   C9 green    stamp green + last-green advances to the commit sha
+#   C10 red     stamp red, last-green NOT advanced,
+#               $CC_PAGES_DIR/postland-red-<culprit12>.page (line 1 = epoch),
+#               backlog add attempted via $CC_BACKLOG_BIN, osascript attempted
+#   C11 idl     EVERY invocation appends a line to $CC_IDL with
+#               check:"postland-verify", decision:"fired"|"abstained"
+#   C12 requeue after a run it re-resolves origin/main and loops once if it moved
+#
+# ISOLATION: scratch bare origin + clone under $BATS_TEST_TMPDIR, fresh $HOME, and
+# argv-recording stubs for cc-backlog/osascript/cc-notify on PATH. No real repo, no
+# real ~/.claude state, no network. Exit codes are asserted ONLY where the contract
+# fixes them (0 for kill-switch/abstain/lock-skip/green); a RED run's exit code is
+# unspecified by the contract, so it is deliberately NOT asserted.
+
+setup() {
+  REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
+  SUT="${CC_POSTLAND_BIN:-$REPO/scripts/postland-verify.sh}"
+  [ -f "$SUT" ] || skip "postland-verify.sh not present in this worktree"
+
+  export HOME="$BATS_TEST_TMPDIR/home"
+  export CC_POSTLAND_DIR="$BATS_TEST_TMPDIR/state"     # C3 — SUT creates it
+  export CC_POSTLAND_REPO="$BATS_TEST_TMPDIR/repo"
+  export CC_POSTLAND_WORKTREE="$BATS_TEST_TMPDIR/pv-worktree"
+  export CC_PAGES_DIR="$BATS_TEST_TMPDIR/pages"        # externally owned dir
+  export CC_IDL="$BATS_TEST_TMPDIR/idl.jsonl"
+  STUB="$BATS_TEST_TMPDIR/bin"; REC="$BATS_TEST_TMPDIR/rec"
+  export CC_BACKLOG_BIN="$STUB/cc-backlog"
+  mkdir -p "$HOME" "$CC_PAGES_DIR" "$STUB" "$REC"
+  local s
+  for s in cc-backlog osascript cc-notify; do
+    printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s/%s.argv"\nexit 0\n' "$REC" "$s" > "$STUB/$s"
+    chmod +x "$STUB/$s"
+  done
+  export PATH="$STUB:$PATH"
+
+  ORIGIN="$BATS_TEST_TMPDIR/origin.git"
+  R="$CC_POSTLAND_REPO"
+  git init -q --bare "$ORIGIN"
+  git clone -q "$ORIGIN" "$R" 2>/dev/null
+  git -C "$R" symbolic-ref HEAD refs/heads/main
+  git -C "$R" config user.email tester@example.com
+  git -C "$R" config user.name tester
+  mkdir -p "$R/tests"
+  printf '@test "p" { true; }\n' > "$R/tests/ok.bats"   # a passing suite => green
+  printf '#!/bin/bash\nexit 0\n' > "$R/foo.sh"; chmod +x "$R/foo.sh"
+  push_commit base
+}
+
+teardown() {
+  # `|| true` matters: an already-exited sleep makes kill the FAILING last command
+  # of the && list, which errexit would turn into a spurious test failure.
+  [ -f "$BATS_TEST_TMPDIR/live.pid" ] \
+    && kill "$(cat "$BATS_TEST_TMPDIR/live.pid")" 2>/dev/null || true
+  true
+}
+
+# ── fixture helpers ─────────────────────────────────────────────────────────────
+push_commit() { git -C "$R" add -A; git -C "$R" commit -q -m "$1"; git -C "$R" push -qf origin HEAD:main; }
+origin_head() { git -C "$R" rev-parse origin/main; }
+origin_tree() { git -C "$R" rev-parse "origin/main^{tree}"; }
+stamps_n()    { find "$CC_POSTLAND_DIR/stamps" -name '*.json' 2>/dev/null | wc -l | tr -d ' '; }
+idl_last()    { tail -n1 "$CC_IDL" | jq -r "$1"; }
+pages_n()     { find "$CC_PAGES_DIR" -name 'postland-red-*.page' 2>/dev/null | wc -l | tr -d ' '; }
+
+# a tests/ helper whose exit code is driven by an out-of-worktree state file, so it
+# survives the SUT's fresh checkout and its per-file retry ladder (C8)
+add_stateful_test() {   # $1 = basename, $2 = body of the helper script
+  printf '%s\n' "$2" > "$R/tests/$1-helper.sh"
+  chmod +x "$R/tests/$1-helper.sh"
+  printf '@test "%s" { run bash "$BATS_TEST_DIRNAME/%s-helper.sh"; [ "$status" -eq 0 ]; }\n' \
+    "$1" "$1" > "$R/tests/$1.bats"
+}
+
+# ── C2 kill switch ──────────────────────────────────────────────────────────────
+@test "POSTLAND_VERIFY=off is an immediate no-op exit 0" {
+  run env POSTLAND_VERIFY=off bash "$SUT" --run-if-needed
+  [ "$status" -eq 0 ]                    # C2
+  [ "$(stamps_n)" = "0" ]                # no verification happened...
+  [ ! -e "$CC_POSTLAND_WORKTREE" ]       # ...not even the C7 worktree
+}
+
+# ── C9 green ────────────────────────────────────────────────────────────────────
+@test "green run stamps the target TREE green, full schema, and advances last-green" {
+  target="$(origin_head)"; tree="$(origin_tree)"
+  run bash "$SUT" --run-if-needed
+  [ "$status" -eq 0 ]
+  s="$CC_POSTLAND_DIR/stamps/$tree.json"          # C3: stamps/<tree-sha>.json
+  [ -f "$s" ]
+  run jq -r '.verdict' "$s"; [ "$output" = "green" ]     # C9 (tests/ok.bats passes)
+  run jq -r '.tree'    "$s"; [ "$output" = "$tree" ]     # C4
+  run jq -r '.commit'  "$s"; [ "$output" = "$target" ]   # C4
+  # C4 — the full stamp field set, so a partial writer goes RED here
+  run jq -e 'has("tree") and has("commit") and has("verdict") and has("failing")
+             and has("ts") and has("run_s") and has("retries") and has("checks")
+             and has("shellcheck_advisory")' "$s"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$CC_POSTLAND_DIR/last-green")" = "$target" ] # C9: last-green = commit sha
+}
+
+# ── C1 is-green ─────────────────────────────────────────────────────────────────
+@test "is-green: 0 for a stamped-green sha, 1 for an unverified one" {
+  target="$(origin_head)"
+  run bash "$SUT" --run-if-needed
+  [ "$status" -eq 0 ]
+  run bash "$SUT" is-green "$target"
+  [ "$status" -eq 0 ]                              # C1: stamped green => 0
+  # an unverified commit: real sha, real (different) tree, never run through the net
+  echo change >> "$R/foo.sh"
+  git -C "$R" add -A; git -C "$R" commit -q -m unverified
+  run bash "$SUT" is-green "$(git -C "$R" rev-parse HEAD)"
+  [ "$status" -eq 1 ]                              # C1: not stamped => 1
+}
+
+# ── C5 abstain ──────────────────────────────────────────────────────────────────
+@test "re-invocation on an already-stamped tree abstains without re-running" {
+  run bash "$SUT" --run-if-needed
+  [ "$status" -eq 0 ]
+  before="$(stamps_n)"
+  run bash "$SUT" --run-if-needed
+  [ "$status" -eq 0 ]                              # C5: abstain is exit 0
+  [ "$(stamps_n)" = "$before" ]                    # no second verification
+  [ "$(idl_last '.decision')" = "abstained" ]      # C11
+}
+
+# ── C11 IDL ─────────────────────────────────────────────────────────────────────
+@test "every invocation appends one postland-verify IDL line" {
+  run bash "$SUT" --run-if-needed
+  [ "$status" -eq 0 ]
+  [ -f "$CC_IDL" ]
+  # grep -c '' (not wc -l) so a final unterminated line still counts
+  [ "$(grep -c '' "$CC_IDL")" = "1" ]              # C11: one line per invocation
+  [ "$(idl_last '.check')" = "postland-verify" ]
+  [ "$(idl_last '.decision')" = "fired" ]          # C11: it ran
+  run bash "$SUT" --run-if-needed
+  [ "$(grep -c '' "$CC_IDL")" = "2" ]              # the abstain also records
+}
+
+# ── C1 status ───────────────────────────────────────────────────────────────────
+@test "status is a read-only report that exits 0" {
+  run bash "$SUT" --run-if-needed
+  [ "$status" -eq 0 ]
+  before="$(stamps_n)"
+  run bash "$SUT" status
+  [ "$status" -eq 0 ]                              # C1
+  [ "$(stamps_n)" = "$before" ]                    # reporting verifies nothing
+}
+
+# ── C7 worktree ─────────────────────────────────────────────────────────────────
+@test "verification runs in a DETACHED worktree, leaving CC_POSTLAND_REPO untouched" {
+  target="$(origin_head)"
+  repo_head_before="$(git -C "$R" rev-parse HEAD)"
+  run bash "$SUT" --run-if-needed
+  [ "$status" -eq 0 ]
+  [ -d "$CC_POSTLAND_WORKTREE" ]                                     # C7
+  [ "$(git -C "$CC_POSTLAND_WORKTREE" rev-parse HEAD)" = "$target" ] # checked out the target
+  run git -C "$CC_POSTLAND_WORKTREE" symbolic-ref -q HEAD
+  [ "$status" -ne 0 ]                                              # C7: detached
+  git -C "$R" worktree list | grep -q "$(basename "$CC_POSTLAND_WORKTREE")"
+  # ...and the repo's own checkout is not where tests ran
+  [ "$(git -C "$R" rev-parse HEAD)" = "$repo_head_before" ]
+  [ -z "$(git -C "$R" status --porcelain)" ]
+}
+
+# ── C5 tree-keying ──────────────────────────────────────────────────────────────
+@test "stamps key on TREE: an amended commit (same tree, new sha) abstains" {
+  run bash "$SUT" --run-if-needed
+  [ "$status" -eq 0 ]
+  before="$(stamps_n)"; tree_before="$(origin_tree)"; head_before="$(origin_head)"
+  # --amend with no staged change => identical tree, different commit sha
+  git -C "$R" commit -q --amend -m "same tree, new sha"
+  git -C "$R" push -qf origin HEAD:main
+  [ "$(origin_tree)" = "$tree_before" ]            # fixture invariant: tree unchanged
+  [ "$(origin_head)" != "$head_before" ]           # fixture invariant: sha changed
+  run bash "$SUT" --run-if-needed
+  [ "$status" -eq 0 ]
+  [ "$(stamps_n)" = "$before" ]                    # C5: keyed on tree, not commit
+  [ "$(idl_last '.decision')" = "abstained" ]      # C11
+}
+
+# ── C12 requeue ─────────────────────────────────────────────────────────────────
+@test "a target that moved after a green run is verified on the next invocation" {
+  run bash "$SUT" --run-if-needed
+  [ "$status" -eq 0 ]
+  [ "$(stamps_n)" = "1" ]
+  echo moved >> "$R/foo.sh"                        # new tree => supersession
+  push_commit "superseding commit"
+  moved_tree="$(origin_tree)"
+  run bash "$SUT" --run-if-needed
+  [ "$status" -eq 0 ]
+  [ "$(stamps_n)" = "2" ]                          # C12: the new tree is verified too
+  [ -f "$CC_POSTLAND_DIR/stamps/$moved_tree.json" ]
+}
+
+# ── C6 mutex ────────────────────────────────────────────────────────────────────
+@test "a LIVE run.lock.d holder makes the second instance exit 0 without running" {
+  mkdir -p "$CC_POSTLAND_DIR/run.lock.d"
+  sleep 300 >/dev/null 2>&1 &
+  live=$!
+  echo "$live" > "$BATS_TEST_TMPDIR/live.pid"      # teardown kills it
+  echo "$live" > "$CC_POSTLAND_DIR/run.lock.d/pid" # a lock held by a LIVE pid
+  run bash "$SUT" --run-if-needed
+  [ "$status" -eq 0 ]                              # C6: quiet exit 0
+  [ "$(stamps_n)" = "0" ]                          # it did NOT verify
+  [ ! -f "$CC_POSTLAND_DIR/last-green" ]
+}
+
+@test "a DEAD-pid run.lock.d is reaped and the run proceeds" {
+  mkdir -p "$CC_POSTLAND_DIR/run.lock.d"
+  bash -c 'exit 0' & dead=$!; wait "$dead" 2>/dev/null || true
+  echo "$dead" > "$CC_POSTLAND_DIR/run.lock.d/pid"   # pid is gone => stale lock
+  run bash "$SUT" --run-if-needed
+  [ "$status" -eq 0 ]
+  [ "$(stamps_n)" = "1" ]                          # C6: reaped, verification ran
+  [ -f "$CC_POSTLAND_DIR/stamps/$(origin_tree).json" ]
+}
+
+# ── C10 red ─────────────────────────────────────────────────────────────────────
+@test "RED run: red stamp, last-green FROZEN, page file + backlog add fired" {
+  run bash "$SUT" --run-if-needed                  # establish a green baseline
+  [ "$status" -eq 0 ]
+  green="$(cat "$CC_POSTLAND_DIR/last-green")"
+  printf '@test "f" { false; }\n' > "$R/tests/bad.bats"   # fails 3/3 => C8 red
+  push_commit "the culprit"
+  bad="$(origin_head)"; badtree="$(origin_tree)"
+  run bash "$SUT" --run-if-needed                  # exit code on RED: unspecified
+  s="$CC_POSTLAND_DIR/stamps/$badtree.json"
+  [ -f "$s" ]
+  run jq -r '.verdict' "$s"; [ "$output" = "red" ]                 # C10
+  run jq -e '.failing | length > 0' "$s"; [ "$status" -eq 0 ]      # C4: names the file
+  [ "$(cat "$CC_POSTLAND_DIR/last-green")" = "$green" ]            # C10: NOT advanced
+  # C10: $CC_PAGES_DIR/postland-red-<culprit12>.page, line 1 = epoch seconds
+  page="$CC_PAGES_DIR/postland-red-${bad:0:12}.page"
+  [ -f "$page" ]
+  head -n1 "$page" | grep -qE '^[0-9]{10,}$'
+  grep -q "${bad:0:12}" "$REC/cc-backlog.argv"                     # C10: backlog add
+  [ -f "$REC/osascript.argv" ]                                     # C10: notify attempt
+}
+
+# ── C8 flake ────────────────────────────────────────────────────────────────────
+@test "1-of-3 flake is excluded from the verdict: green stamp, flakes.jsonl, no page" {
+  # fails only on its FIRST ever run => 1 fail / 3 attempts => flake, not red
+  m="$BATS_TEST_TMPDIR/flake-marker"
+  add_stateful_test flaky "$(printf '#!/bin/bash\nM="%s"\n[ -f "$M" ] && exit 0\ntouch "$M"\nexit 1\n' "$m")"
+  push_commit "flaky suite"
+  tree="$(origin_tree)"; target="$(origin_head)"
+  run bash "$SUT" --run-if-needed
+  [ "$status" -eq 0 ]
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ "$output" = "green" ]                          # C8: all-flake => green
+  [ -s "$CC_POSTLAND_DIR/flakes.jsonl" ]           # C8: the flake is recorded...
+  grep -q flaky "$CC_POSTLAND_DIR/flakes.jsonl"    # ...and names the file
+  [ "$(pages_n)" = "0" ]                           # C10 pages are RED-only
+  [ "$(cat "$CC_POSTLAND_DIR/last-green")" = "$target" ] # C9 still advances
+}
+
+@test "2-of-3 failures are reproducible RED, not a flake" {
+  run bash "$SUT" --run-if-needed                  # green baseline => a bisect floor
+  [ "$status" -eq 0 ]
+  green="$(cat "$CC_POSTLAND_DIR/last-green")"
+  # fails attempts 1 and 2, passes attempt 3 => 2/3 => RED (the C8 boundary case;
+  # a SUT that short-circuits at 2 fails never reaches attempt 3 — still RED)
+  c="$BATS_TEST_TMPDIR/counter"
+  add_stateful_test twofail "$(printf '#!/bin/bash\nC="%s"\nn=$(cat "$C" 2>/dev/null || echo 0)\nn=$((n+1))\necho "$n" > "$C"\n[ "$n" -ge 3 ] && exit 0\nexit 1\n' "$c")"
+  push_commit "reproducibly failing suite"
+  tree="$(origin_tree)"
+  run bash "$SUT" --run-if-needed
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ "$output" = "red" ]                            # C8: >=2/3 => reproducible RED
+  [ "$(pages_n)" = "1" ]                           # C10
+  [ "$(cat "$CC_POSTLAND_DIR/last-green")" = "$green" ]   # C10: NOT advanced
+  [ ! -s "$CC_POSTLAND_DIR/flakes.jsonl" ] || ! grep -q twofail "$CC_POSTLAND_DIR/flakes.jsonl"
+}
