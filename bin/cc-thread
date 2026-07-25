@@ -1,0 +1,96 @@
+#!/bin/bash
+# cc-thread — the HUMAN-visible view of cross-session mail (the v2 inbox channel).
+#
+# Why this exists: `cc-notify` v2 replaced keystroke injection with an inbox drained as
+# `additionalContext` (hooks/mailbox-drain.sh). That fixed a real hazard — mail can no longer
+# corrupt a live input line — but it cost the operator ALL visibility: additionalContext reaches
+# the MODEL, and nothing renders it to the human. The existing surfaces only make FAILURE loud
+# (`cc-inbox-guard` alarms on unconsumed mail); a conversation that works is invisible.
+#
+# So: successes were silent and only failures were visible. This makes both visible, read-only.
+#
+#   cc-thread                 all inboxes that have ever carried mail, newest activity first
+#   cc-thread <uuid|name>     one inbox, full thread
+#   cc-thread --pending       only inboxes with UNDRAINED lines (someone is being ignored)
+#   cc-thread --me            this session's own inbox
+#
+# Read-only by construction: it never writes a cursor, never marks anything delivered, never
+# mutates an inbox. Reading your mail here does NOT consume it — the owning session still gets it.
+set -uo pipefail
+
+MBOX="${CC_MAILBOX_DIR:-$HOME/.claude/mailbox}"
+[ -d "$MBOX" ] || { echo "no mailbox dir at $MBOX" >&2; exit 1; }
+
+_count() { [ -f "$1" ] && grep -c '' "$1" 2>/dev/null || echo 0; }
+_cursor() { cat "$1" 2>/dev/null | tr -dc '0-9' | head -c 9; }
+
+# pane-uuid → friendly name, via cc-sessions when it is available (best-effort, never fatal).
+_name_of() {
+  local u="$1" short="${1:0:8}"
+  command -v cc-sessions >/dev/null 2>&1 || { echo "$short"; return; }
+  cc-sessions --json 2>/dev/null |
+    python3 -c "
+import json,sys
+try: d=json.load(sys.stdin)
+except Exception: print('$short'); sys.exit()
+rows = d if isinstance(d,list) else d.get('sessions',[])
+for r in rows if isinstance(rows,list) else []:
+    if str(r.get('uuid','')).upper().startswith('${short}'.upper()):
+        print(r.get('name') or '$short'); sys.exit()
+print('$short')
+" 2>/dev/null || echo "$short"
+}
+
+_thread() { # _thread <uuid>
+  local u="$1"
+  local f="$MBOX/$u.md"   # separate `local`: the same statement would not see `u` yet (SC2318)
+  local lines seen acked
+  lines=$(_count "$f"); seen=$(_cursor "$MBOX/$u.seen"); acked=$(_cursor "$MBOX/$u.acked")
+  seen=${seen:-0}; acked=${acked:-0}
+  echo "── $(_name_of "$u")  [$u]"
+  echo "   lines=$lines  seen=$seen  acked=$acked$([ "$lines" -gt "$seen" ] 2>/dev/null && echo '   ⚠ UNDRAINED — target has not taken a turn since it arrived')"
+  [ "$lines" -gt 0 ] || { echo "   (empty)"; return; }
+  # Mark each line by cursor position so the operator can see what landed vs what is still waiting.
+  awk -v seen="$seen" -v acked="$acked" '
+    { mark = (NR <= acked) ? "  ✓" : (NR <= seen) ? "  ·" : "  ⚠"
+      # collapse to one screen line; the .md holds the full text
+      line = $0; if (length(line) > 168) line = substr(line, 1, 165) "…"
+      print mark " " line }
+  ' "$f"
+}
+
+case "${1:-}" in
+  --me)
+    u="${ITERM_SESSION_ID:-}"; u="${u##*:}"
+    [ -n "$u" ] || { echo "not inside a registered session (ITERM_SESSION_ID unset)" >&2; exit 1; }
+    _thread "$u" ;;
+  --pending)
+    found=0
+    for f in "$MBOX"/*.md; do
+      [ -e "$f" ] || continue
+      u=$(basename "$f" .md); s=$(_cursor "$MBOX/$u.seen"); s=${s:-0}
+      [ "$(_count "$f")" -gt "$s" ] 2>/dev/null || continue
+      found=1; _thread "$u"; echo
+    done
+    [ "$found" = 1 ] || echo "no undrained mail — every inbox is caught up." ;;
+  -h|--help)
+    sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//' ;;
+  "")
+    # Newest activity first; only inboxes that have ever carried mail.
+    # newest-first without parsing `ls` (SC2012): stat emits an mtime key we sort on
+    find "$MBOX" -maxdepth 1 -name '*.md' -exec stat -f '%m %N' {} + 2>/dev/null |
+      sort -rn | cut -d' ' -f2- | while read -r f; do
+      [ "$(_count "$f")" -gt 0 ] 2>/dev/null || continue
+      _thread "$(basename "$f" .md)"; echo
+    done ;;
+  *)
+    # Accept a full uuid, a short prefix, or a friendly name.
+    key="${1##*-}"; hit=""
+    for f in "$MBOX"/*.md; do
+      [ -e "$f" ] || continue
+      u=$(basename "$f" .md)
+      case "${u^^}" in "${1^^}"*|*"${key^^}"*) hit="$u"; break ;; esac
+    done
+    [ -n "$hit" ] || { echo "no inbox matching '$1'" >&2; exit 1; }
+    _thread "$hit" ;;
+esac

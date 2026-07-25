@@ -90,6 +90,14 @@ for hook in "$REPO_DIR"/hooks/*.sh; do
   [[ -f "$hook" ]] || continue
   link_file "$hook" "$CONFIG_DIR/hooks/$(basename "$hook")"
 done
+# *.py hooks too: settings.json wires curl-gate.py and enforce-email-formatting.py by path, but
+# this loop globbed *.sh only, so a python hook could never be deployed FROM the repo — which is
+# why both lived live-only and unversioned until 2026-07-25. Same failure shape as the missing
+# agents/ leg: a brand-new tracked file is not linked at all, however current the checkout.
+for hook in "$REPO_DIR"/hooks/*.py; do
+  [[ -f "$hook" ]] || continue
+  link_file "$hook" "$CONFIG_DIR/hooks/$(basename "$hook")"
+done
 for lib in "$REPO_DIR"/hooks/lib/*.sh; do
   [[ -f "$lib" ]] || continue
   link_file "$lib" "$CONFIG_DIR/hooks/lib/$(basename "$lib")"
