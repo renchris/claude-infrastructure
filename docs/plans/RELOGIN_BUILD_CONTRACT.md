@@ -123,6 +123,35 @@ cc-authbrowser <acct> --status [--json]
 `4` BROWSER-FAILED (chrome binary missing · CDP not up in time · port held by a
 foreign process).
 
+**Ratified during the build (lead, 2026-07-25) — six points §3 left underspecified:**
+
+1. 🚨 **`--status` exits 0 whether or not a browser is running.** A successful query is
+   exit 0; the frozen codes reserve nonzero for failure. **Consumers MUST read `.running`
+   (bool) from `--status --json` and MUST NOT branch on the exit status.**
+2. `--start` **always** emits the frozen JSON; `--json` is accepted as a no-op there and
+   is meaningful on `--status`. Both call shapes therefore agree.
+3. Hidden internal subcommand `--watchdog --pid N --ttl S --match STR` (argparse-suppressed,
+   absent from `--help`). The TTL watchdog is a **detached re-exec of the script itself** —
+   that is how it survives the caller's death — and it makes the pid-recycle guard directly
+   testable. Not part of the frozen `--start|--stop|--status` surface.
+4. (a) If the watchdog fails to arm, `--start` tears the browser down and exits 4 rather
+   than leave an unbounded CDP port. (b) If CDP answers but our direct child has exited
+   (re-exec / hand-off), the port-holding pid is re-resolved via `lsof` — otherwise
+   `--stop` would leave a listening port, which §3 forbids.
+5. `--start` when the port is held by **our own** recorded pid → idempotent re-emit of the
+   state JSON, exit 0. Exit 4 is for a **foreign** holder only.
+6. SSOT validation is `--start`-only: `--stop`/`--status` validate against the frozen port
+   map alone, so a browser can always be shut down even if `claude-accounts` is broken. A
+   missing/erroring `claude-accounts` on `--start` is exit 2 (fail-closed).
+
+### Test discipline — bare `!` assertions are DEAD (repo-wide defect, verified)
+
+A bare `! cmd` in a bats `@test` is a **silent no-op unless it is the last statement** —
+POSIX exempts `!`-inverted pipelines from errexit. 89 such assertions across 28 files in
+this repo are structurally dead. Use `refute() { run "$@"; [ "$status" -ne 0 ]; }`, and
+prove the fix by breaking the implementation and confirming the test goes RED. Full
+finding + reproduction + file list: `docs/research/BATS_DEAD_ASSERTIONS_2026-07-25.md`.
+
 **Test-injection env:** `CC_AUTHBROWSER_CHROME_BIN` · `CC_AUTHBROWSER_PROFILE_ROOT`
 (default `~/.claude/auth-profiles`) · `CC_AUTHBROWSER_STATE_DIR` (default `/tmp`) ·
 `CC_AUTHBROWSER_ACCOUNTS_BIN` (default `claude-accounts`). Tests MUST drive a fake
