@@ -20,6 +20,27 @@ source "$HELPERS"
 # Fast exit if no DB
 [ -f "$SESSION_INDEX_DB" ] || exit 0
 
+# ─── Retention verb ───────────────────────────────────────
+# `--retention` reports (reads only); `--retention-apply` deletes + VACUUMs. The index
+# outlives its subject ~4× — 5,453 session rows against ~1,600 transcripts, because CC's
+# cleanupPeriodDays removes transcripts at 30 d and nothing ever removed the matching
+# rows (audit 03 §1c: no retention, no VACUUM, 717 free pages). A hit whose transcript is
+# gone is a search result you cannot open.
+case "${1:-}" in
+  --retention|--retention-apply)
+    session_index_init_db
+    session_index_init_tracking
+    session_index_trylock || { echo "session-index-retention: index is locked, skipping"; exit 0; }
+    if [ "$1" = "--retention-apply" ]; then
+        read -r _b _a _d <<< "$(session_index_retention --apply)"
+    else
+        read -r _b _a _d <<< "$(session_index_retention)"
+    fi
+    echo "session-index-retention: sessions before=$_b after=$_a deletable=$_d db=$(du -h "$SESSION_INDEX_DB" 2>/dev/null | cut -f1)"
+    exit 0
+    ;;
+esac
+
 # ─── Cadence knob ─────────────────────────────────────────
 # The plist stays at StartInterval 60. That is deliberate: with the batched change
 # detection below, a tick with nothing to do is 3 processes and a few ms, so 60 s
@@ -154,6 +175,31 @@ SQL
 
     WORK_DONE=$((WORK_DONE + 1))
 done < <(session_index_changed_files "$CLAUDE_PROJECTS_DIR")
+
+# ─── Weekly retention (self-damped; no new launchd job) ───
+# Wired here rather than into the weekly backfill plist because that plist invokes
+# `~/.claude/bin/session-index-backfill.sh`, which is a symlink into the SEPARATE
+# claude-session-search repo — appending to it would put half of this feature in a repo
+# this branch cannot atomically commit. This sweep is already loaded, already holds the
+# lock, and already owns the index, so it carries the cadence itself: a marker file, one
+# `find -mmin` test per tick, and the pass runs at most once every 7 days.
+# SESSION_INDEX_RETENTION_DAYS=0 disables it.
+SESSION_INDEX_RETENTION_DAYS="${SESSION_INDEX_RETENTION_DAYS:-7}"
+RETENTION_STAMP="${SESSION_INDEX_RETENTION_STAMP:-$HOME/.claude/state/session-index-retention.last}"
+if [ "$SESSION_INDEX_RETENTION_DAYS" -gt 0 ] 2>/dev/null; then
+    _due=0
+    if [ ! -f "$RETENTION_STAMP" ]; then
+        _due=1
+    elif [ -n "$(find "$RETENTION_STAMP" -maxdepth 0 -mtime +"$((SESSION_INDEX_RETENTION_DAYS - 1))" 2>/dev/null)" ]; then
+        _due=1
+    fi
+    if [ "$_due" -eq 1 ]; then
+        mkdir -p "$(dirname "$RETENTION_STAMP")" 2>/dev/null || true
+        date -u +"%Y-%m-%dT%H:%M:%SZ" > "$RETENTION_STAMP" 2>/dev/null || true
+        read -r _rb _ra _rd <<< "$(session_index_retention --apply)"
+        [ "${_rd:-0}" -gt 0 ] && session_index_log "Weekly retention: $_rb -> $_ra sessions ($_rd removed)"
+    fi
+fi
 
 # ─── Log only when work was done ──────────────────────────
 if [ "$WORK_DONE" -gt 0 ]; then

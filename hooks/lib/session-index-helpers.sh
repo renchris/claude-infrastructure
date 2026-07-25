@@ -10,11 +10,14 @@
 #   The `echo "$v" | sed "s/'/''/g"` SQL single-quote doubling is deliberate and applied
 #   uniformly to every column of the INSERT statements below. ${v//\'/\'\'} is equivalent,
 #   but rewriting 20 call sites in the index write path is not a lint pass's business.
-
-SESSION_INDEX_DB="$HOME/.claude/session-index.db"
-SESSION_INDEX_LOG="$HOME/.claude/logs/session-index.log"
-CLAUDE_PROJECTS_DIR="$HOME/.claude/projects"
-CLAUDE_HISTORY="$HOME/.claude/history.jsonl"
+#
+# Env seams (same defaults as before). Needed so a retention/sweep run can be REHEARSED
+# against a copy of the index over the real transcript tree before anything destructive
+# touches the live DB — and so a test can point at a fixture without moving $HOME.
+SESSION_INDEX_DB="${SESSION_INDEX_DB:-$HOME/.claude/session-index.db}"
+SESSION_INDEX_LOG="${SESSION_INDEX_LOG:-$HOME/.claude/logs/session-index.log}"
+CLAUDE_PROJECTS_DIR="${CLAUDE_PROJECTS_DIR:-$HOME/.claude/projects}"
+CLAUDE_HISTORY="${CLAUDE_HISTORY:-$HOME/.claude/history.jsonl}"
 
 # Resolve repo root (follows symlink if helpers are symlinked from ~/.claude/hooks/)
 _helpers_real=$(readlink "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")
@@ -808,45 +811,106 @@ sys.stdout.write(ctx + '\t' + at + '\t' + fc + '\t' + cr + '\t' + str(user_count
 # The predicate is deliberately narrow: a row is dropped ONLY when we positively
 # resolved a path for it and that path is absent. A row whose path cannot be resolved
 # at all is KEPT — "I could not find it" must never be read as "it does not exist".
+#
+# TWO predicates, both "positively resolved absent":
+#   P1  a file_tracking row whose recorded file_path no longer exists.
+#   P2  a sessions row whose session_id matches NO transcript on disk. P2 is the one that
+#       matters — file_tracking has only ~498 rows for 5,453 sessions (it stopped being
+#       written when the sweep wedged in April), so P1 alone can judge <10% of the index.
+#
+# FAIL-CLOSED: if the on-disk scan finds ZERO transcripts, the projects dir is missing or
+# unreadable, not empty — deleting the whole index on that reading is the catastrophic
+# failure mode. Nothing is deleted and the caller is told.
 session_index_retention() { # [--apply]  → prints "<before> <after> <deleted>"
     local apply=0
     [ "${1:-}" = "--apply" ] && apply=1
     [ -f "$SESSION_INDEX_DB" ] || { echo "0 0 0"; return 0; }
 
-    local before dead=0 sid path
+    local before
     before=$(session_index_sql "SELECT COUNT(*) FROM sessions;" 2>/dev/null || echo 0)
 
-    # file_tracking carries the real path per session; that is the only authoritative
-    # session_id → file mapping in the schema.
-    local victims=""
+    # The on-disk universe: every session UUID that still has a transcript, across EVERY
+    # config dir — not just this one. MEASURED 2026-07-25: 1,087 of 5,494 indexed sessions
+    # have their transcript under ~/.claude-{secondary,tertiary,quaternary}/projects. A
+    # predicate that searched only $CLAUDE_PROJECTS_DIR would have called all 1,087 "gone"
+    # and deleted live, openable sessions. Absence is only absence after looking everywhere.
+    # maxdepth 3 is the right bound and was verified, not assumed: 0 UUID-named transcripts
+    # exist deeper than that (the 1,295 deeper files are `agent-<hash>.jsonl` subagent
+    # transcripts, which this index never contained).
+    local roots ondisk n_ondisk r
+    roots="${SESSION_INDEX_PROJECT_ROOTS:-$CLAUDE_PROJECTS_DIR $HOME/.claude-secondary/projects $HOME/.claude-tertiary/projects $HOME/.claude-quaternary/projects}"
+    ondisk=""
+    # shellcheck disable=SC2086  # roots is an intentional space-separated list
+    for r in $roots; do
+        [ -d "$r" ] || continue
+        ondisk="$ondisk
+$(find "$r" -maxdepth 3 -type f -name '*.jsonl' 2>/dev/null \
+        | while IFS= read -r f; do
+              b=$(basename "$f" .jsonl)
+              [ "$b" = "transcript" ] && b=$(basename "$(dirname "$f")")
+              printf '%s\n' "$b"
+          done)"
+    done
+    ondisk=$(printf '%s\n' "$ondisk" | grep . | sort -u)
+    n_ondisk=$(printf '%s\n' "$ondisk" | grep -c . || true)
+    if [ "${n_ondisk:-0}" -lt 1 ]; then
+        session_index_log "Retention REFUSED: 0 transcripts found under [$roots] (unreadable, not empty)"
+        echo "$before $before 0"
+        return 0
+    fi
+
+    # Victims = indexed sessions absent from the on-disk universe (P2), plus tracked files
+    # whose path is gone (P1). `comm` needs both sides sorted.
+    local indexed victims dead
+    indexed=$(session_index_sql "SELECT session_id FROM sessions;" 2>/dev/null | sort -u)
+    victims=$(comm -23 <(printf '%s\n' "$indexed" | grep .) <(printf '%s\n' "$ondisk" | grep .))
     while IFS=$'\t' read -r sid path; do
         [ -n "$sid" ] && [ -n "$path" ] || continue
         [ -e "$path" ] && continue
-        victims="$victims$sid
-"
-        dead=$((dead + 1))
+        victims="$victims
+$sid"
     done < <(session_index_sql \
         "SELECT session_id || char(9) || file_path FROM file_tracking;" 2>/dev/null || true)
+    victims=$(printf '%s\n' "$victims" | grep . | sort -u)
+    dead=$(printf '%s\n' "$victims" | grep -c . || true)
 
-    if [ "$apply" -eq 1 ] && [ "$dead" -gt 0 ]; then
-        local sql="" s
+    if [ "$apply" -eq 1 ] && [ "${dead:-0}" -gt 0 ]; then
+        # CHUNKED, deliberately. The obvious "one big transaction" builds ~1.8 MB of SQL for
+        # 5,128 victims and session_index_sql passes it as a single argv string — which blows
+        # past ARG_MAX, so sqlite3 never runs and `|| true` reports success while deleting
+        # nothing. (Observed exactly that in rehearsal: deletable=5128, after=before.) Batching
+        # keeps every invocation small, and each batch's status is CHECKED, not swallowed.
+        local chunk="" n=0 failed=0 quoted
+        _flush_chunk() {
+            [ -n "$chunk" ] || return 0
+            session_index_sql "BEGIN;
+DELETE FROM session_chunks WHERE session_id IN ($chunk);
+DELETE FROM chunks_fts    WHERE session_id IN ($chunk);
+DELETE FROM sessions_fts  WHERE session_id IN ($chunk);
+DELETE FROM sessions      WHERE session_id IN ($chunk);
+DELETE FROM file_tracking WHERE session_id IN ($chunk);
+COMMIT;" >/dev/null 2>&1 || failed=$((failed + 1))
+            chunk=""; n=0
+        }
         while IFS= read -r s; do
             [ -n "$s" ] || continue
-            s=$(printf '%s' "$s" | sed "s/'/''/g")
-            sql="$sql
-DELETE FROM session_chunks WHERE session_id = '$s';
-DELETE FROM chunks_fts    WHERE session_id = '$s';
-DELETE FROM sessions_fts  WHERE session_id = '$s';
-DELETE FROM sessions      WHERE session_id = '$s';
-DELETE FROM file_tracking WHERE session_id = '$s';"
+            quoted="'$(printf '%s' "$s" | sed "s/'/''/g")'"
+            if [ -z "$chunk" ]; then chunk="$quoted"; else chunk="$chunk,$quoted"; fi
+            n=$((n + 1))
+            [ "$n" -ge 400 ] && _flush_chunk
         done <<< "$victims"
-        printf 'BEGIN;%s\nCOMMIT;\n' "$sql" | session_index_sql >/dev/null 2>&1 || true
+        _flush_chunk
+        unset -f _flush_chunk
+        if [ "$failed" -gt 0 ]; then
+            session_index_log "Retention: $failed delete batch(es) FAILED — index partially pruned"
+        fi
         session_index_sql "VACUUM;" >/dev/null 2>&1 || true
+        session_index_log "Retention: removed $dead session(s) with no transcript on disk; VACUUM done"
     fi
 
     local after
     after=$(session_index_sql "SELECT COUNT(*) FROM sessions;" 2>/dev/null || echo 0)
-    echo "$before $after $dead"
+    echo "$before $after ${dead:-0}"
 }
 
 # ─── Stats ─────────────────────────────────────────────────

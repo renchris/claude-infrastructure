@@ -205,3 +205,82 @@ JSONL
   [ "$status" -eq 0 ]
   echo "$output" | grep -q 'collapse the three parses'
 }
+
+# ══ (4) retention: the index must not outlive its subject ══════════════════════════════════════
+# 5,453 session rows indexed ~1,600 transcripts because CC deletes transcripts at 30 d and nothing
+# deleted the rows (audit 03 §1c). L4: every delete case is paired with a keep case, and the
+# fail-closed case is the one that matters most — a wrong reading of "0 transcripts" would wipe
+# the whole index.
+
+@test "a session whose transcript is gone is reported, then deleted with --retention-apply" {
+  mk_transcript "$HOME/.claude/projects/-Users-x-proj/$SID_A.jsonl"
+  mk_transcript "$HOME/.claude/projects/-Users-x-proj/$SID_B.jsonl"
+  bash "$SWEEP"
+  rm -f "$HOME/.claude/projects/-Users-x-proj/$SID_B.jsonl"
+
+  run bash "$SWEEP" --retention
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "before=2"
+  echo "$output" | grep -q "deletable=1"
+  run sqlite3 "$HOME/.claude/session-index.db" "SELECT COUNT(*) FROM sessions;"
+  [ "$output" = "2" ]                     # report-only really did not delete
+
+  run bash "$SWEEP" --retention-apply
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "after=1"
+  run sqlite3 "$HOME/.claude/session-index.db" "SELECT session_id FROM sessions;"
+  [ "$output" = "$SID_A" ]                # the surviving one is the one still on disk
+}
+
+@test "retention also clears the FTS and tracking rows, not just sessions" {
+  mk_transcript "$HOME/.claude/projects/-Users-x-proj/$SID_A.jsonl"   # survivor: keeps the
+  mk_transcript "$HOME/.claude/projects/-Users-x-proj/$SID_B.jsonl"   # on-disk set non-empty
+  bash "$SWEEP"
+  rm -f "$HOME/.claude/projects/-Users-x-proj/$SID_B.jsonl"
+  bash "$SWEEP" --retention-apply
+  run sqlite3 "$HOME/.claude/session-index.db" "SELECT COUNT(*) FROM sessions_fts WHERE session_id='$SID_B';"
+  [ "$output" = "0" ]
+  run sqlite3 "$HOME/.claude/session-index.db" "SELECT COUNT(*) FROM file_tracking WHERE session_id='$SID_B';"
+  [ "$output" = "0" ]
+}
+
+@test "FAIL-CLOSED: an unreadable projects dir deletes NOTHING (not 'the index is all stale')" {
+  mk_transcript "$HOME/.claude/projects/-Users-x-proj/$SID_A.jsonl"
+  bash "$SWEEP"
+  rm -rf "$HOME/.claude/projects"
+  run bash "$SWEEP" --retention-apply
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "deletable=0"
+  run sqlite3 "$HOME/.claude/session-index.db" "SELECT COUNT(*) FROM sessions;"
+  [ "$output" = "1" ]
+}
+
+@test "the weekly pass is self-damped: it runs once, then not again inside the window" {
+  mk_transcript "$HOME/.claude/projects/-Users-x-proj/$SID_A.jsonl"
+  bash "$SWEEP"
+  local st="$HOME/.claude/state/session-index-retention.last"
+  [ -f "$st" ]
+  # Damping is keyed on the stamp's MTIME, so that is what the assertions read (two runs
+  # inside the same second write an identical ISO string — content proves nothing here).
+  local m1 m2
+  m1=$(stat -f %m "$st")
+  touch -t "$(date -v-9d +%Y%m%d%H%M)" "$st"     # pretend the last pass was 9 days ago
+  bash "$SWEEP"
+  m2=$(stat -f %m "$st")
+  [ "$m2" -ge "$m1" ]                            # due ⇒ the stamp was refreshed to now
+  [ -z "$(find "$st" -maxdepth 0 -mtime +6 2>/dev/null)" ]
+
+  # ...and now that it is fresh, a further tick must NOT re-run it
+  touch -t "$(date -v-9d +%Y%m%d%H%M)" "$st"
+  bash "$SWEEP"                                  # this one IS due → refreshes
+  local m3; m3=$(stat -f %m "$st")
+  bash "$SWEEP"                                  # this one is NOT due → must not touch it
+  [ "$(stat -f %m "$st")" = "$m3" ]
+}
+
+@test "SESSION_INDEX_RETENTION_DAYS=0 disables the weekly pass entirely" {
+  mk_transcript "$HOME/.claude/projects/-Users-x-proj/$SID_A.jsonl"
+  SESSION_INDEX_RETENTION_DAYS=0 run bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  [ ! -f "$HOME/.claude/state/session-index-retention.last" ]
+}
