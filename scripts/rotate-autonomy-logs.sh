@@ -1,7 +1,9 @@
 #!/bin/bash
 # rotate-autonomy-logs.sh — size-gated rotation for the append-only autonomy/audit logs that
 # grow UNBOUNDED (T-P10-2: idl.jsonl hit 183 MB live; bash-commands.log + bash-execution.log
-# ~90 MB each). None of the writers cap their files, and every writer appends per-line via `>>`
+# ~90 MB each; teammate-checkpoint.log 13.6 MB / 104k lines, joined 2026-07-25 — it was the one
+# >5MB log this list did not name, so nothing bounded it at all). None of the writers cap their
+# files, and every writer appends per-line via `>>`
 # — lead-supervisor.sh:61, hooks/log-bash.sh, hooks/validate-bash.sh all open→write→close on
 # EACH call, holding NO persistent fd — so the SAFE rotation is logrotate's `create` mode:
 # rename the fat file aside, let the next `>>` recreate it in place (zero data loss, no writer
@@ -118,10 +120,16 @@ log_idl() { # <extra-json-fragment>
     >> "$IDL" 2>/dev/null || true
 }
 
-# ── resolve the target list: positional args > ROTATE_TARGETS > the three defaults ──
+# ── resolve the target list: positional args > ROTATE_TARGETS > the defaults ──
+# teammate-checkpoint.log joined 2026-07-25: teammate-checkpoint.sh is registered on PostToolUse
+# with an EMPTY matcher (every tool, every session) plus Stop, making it one of the highest-frequency
+# appenders on the box — and it was the only >5MB log outside this list, so nothing bounded it. It had
+# reached 13.6 MB / 104k lines accumulating since 2026-04-17. Same append-per-call, no-persistent-fd
+# shape as the others, so the existing `create`-mode rotation applies unchanged.
 DEFAULT_TARGETS="$HOME/.claude/autonomy/idl.jsonl
 $HOME/.claude/logs/bash-commands.log
-$HOME/.claude/logs/bash-execution.log"
+$HOME/.claude/logs/bash-execution.log
+$HOME/.claude/logs/teammate-checkpoint.log"
 
 TARGETS=()
 if [ "$#" -gt 0 ]; then
