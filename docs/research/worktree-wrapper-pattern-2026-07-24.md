@@ -168,9 +168,8 @@ structural. **This is the operator's call, not an auto-continue.**
 4. **Ship a deploy step in the same change.** Land → ff-sync the shared checkout → link any
    brand-new tracked file into `~/.claude/`. Without it, always-isolate converts an occasional
    deploy-lag into the default state.
-5. **Operator decision required:** does the desk keep its shared-checkout cwd (exempt via
-   `HARNESS_GC_KEEP` / `WH_ISOLATION_SKIP=1` in the desk launcher), or does it isolate too and
-   retire the `desk-land.sh` workaround?
+5. ~~**Operator decision required:** does the desk keep its shared-checkout cwd?~~ **RESOLVED
+   2026-07-25 — exempt the desk. See §5 below for the derivation.**
 
 ### What would argue against
 
@@ -179,3 +178,104 @@ Honest counterweights, none of which I judge decisive: the pattern's benefit sca
 (this is exactly what the global CLAUDE.md "CONDITIONAL, not always" rule protects) — but 6
 concurrent sessions in the shared checkout today says that is not the regime we are in. And the
 symlink-liveness change is a real workflow cost that must be absorbed by (4), not ignored.
+
+---
+
+## 5. The desk question — resolved (2026-07-25)
+
+**Verdict: exempt the desk. The exemption is narrow, cheap, and reversible, and it does not block
+adoption of anything else.** Two of the three candidate objections turned out to be false; the
+third is real, specific, and load-bearing.
+
+### 5.1 The reaper objection — FALSE, already mitigated
+
+Hypothesis: an isolated desk sitting in a worktree would be mis-classified and reaped, since
+`bin/cc-classify:185` decides teammate-hood by **cwd shape alone** —
+`is_worktree_session()` matches `/tmp/wt-*`, `/private/tmp/wt-*`, `*/.worktrees/*`,
+`/tmp/worktree-*`, all of which an isolated desk would live under.
+
+It does not hold, for two independent reasons:
+
+- **Ordering.** Desk-role never-reap fires at step 4.6 (`cc-classify:390`, *"the desk-role file
+  resolves to this session — desk-role (never-reap)"*), which is checked **before** the
+  finished-teammate branch at `:419`.
+- **The 2026-07-24 fix.** That branch now requires `is_worktree_session "$cwd" && fired_peer
+  "$pane"` — the spawner's own stamp. Its comment records exactly this bug being fixed: *"The cwd
+  path alone is NOT teammate evidence (2026-07-24: an operator conversing inside a wt-pool
+  worktree was reaped as finished-teammate 14 min after their prompt)."*
+
+The desk's identity is a **file**, not a path — `~/.claude/cc-roles/desk` holds a pane UUID, and
+`bin/desk-register` is explicit that every role-addressed consumer follows it. Isolation cannot
+move that. **Not a blocker.**
+
+### 5.2 The hardcoded-path objection — WEAK
+
+All five shared-checkout call sites are env-overridable (`CC_SHARED_CHECKOUT`,
+`SHIP_LAND_SHARED_CHECKOUT`, `DESK_INVARIANT_CANNED_CWD`, `CC_DISPATCH_REPO`). Configuration, not
+structure. **Not a blocker.**
+
+### 5.3 The real blocker — six pieces of desk state are cwd-keyed
+
+`hooks/waiting-recycle.sh:160-176` keys six sentinels on `hash(config_dir | cwd)` via `key_cwd()`:
+`arm`, `cooldown`, `live`, `brief`, `disarm`, `busyforce`. **The code states the premise it
+depends on, in a comment, at `:161`:**
+
+> Per-cwd key (arm + cooldown survive a recycle **since cwd is stable across it**)
+
+**Per-instance isolation falsifies that stated premise.** Every recycle mints a fresh worktree →
+a fresh cwd → all six sentinels revert to default, permanently and silently, with no way to
+durably re-arm (you would have to re-run `arm --live` after every single recycle).
+
+Verified empirically — sentinel probe across both config dirs:
+
+| cwd | `live` | `arm` |
+|---|---|---|
+| `~/Development/claude-infrastructure` (shared) | **YES** | **YES** |
+| `/tmp/wt-worktree-pattern` (a worktree) | no | no |
+
+What each loss costs:
+
+- **`live`** is the switch between *actually firing* the deterministic self-handoff and
+  **SHADOW / log-only** (`:169`). An isolated desk would silently degrade to shadow on every
+  recycle — it would log that it *would* have fired, forever, and never fire. This is precisely
+  the silent fail-closed class this repo keeps getting bitten by (cf.
+  `deploy-lag-checkout-behind-origin`, where an autofiring poller nearly shipped dead).
+- **`cooldown`** is the documented **cross-session loop-breaker** (`:49`: *"a fresh recycled desk
+  (same cwd) sees the predecessor's cooldown"*). Losing it per recycle admits recycle thrash.
+- **`brief`** is the standing successor-brief; **`disarm`** the per-desk opt-out; **`busyforce`**
+  the Tier-3 forced-recycle opt-in.
+
+Fragmentation is already observable rather than theoretical: **28 distinct `arm`/`live`/`brief`
+sentinel triples** exist in `state/waiting-recycle`, one set per cwd that has ever been armed.
+
+### 5.4 The condition that would flip this verdict
+
+Re-key those six sentinels onto the **role file** instead of cwd. The code already knows this is
+the better anchor — `:322` observes that `COORD` is a fixed path so arm-by-default keys on the
+role *"regardless of which config dir the desk migrates to (**unlike the (cfg,cwd) arm
+sentinel**)"*. It is a contained change: six `*_for()` helpers plus a migration for existing
+sentinels. **After that, the desk can isolate like everything else and the exemption retires.**
+Until then, exempting it is the correct call — not a concession.
+
+### 5.5 Why the exemption costs almost nothing
+
+Exactly **one** session needs it: the role-holder. A live registry tally shows **6 live sessions
+in the shared checkout**, and the desk-role pane is **not among them**. The other five are
+ordinary sessions that carry all the index-contention risk and should isolate. So the exemption
+carves out one session and leaves the entire benefit of the change intact.
+
+### 5.6 Finding discovered en route — there is no live desk, and has not been for ~41 hours
+
+Not part of the worktree question, but it surfaced from the same registry reads and is
+operator-facing:
+
+- `~/.claude/cc-roles/desk` points at pane `D08B4FC0-…`, written **2026-07-20**.
+- That pane has **no registry row** and no live process.
+- `com.claude.desk-invariant` **is** loaded in launchd (exit 0), and is correctly detecting this:
+  **499 `no live desk process resolves…` abstention records**, spanning
+  **2026-07-23T07:35Z → 2026-07-25T00:15Z (continuous, still firing)**.
+- Its replacement path is failing, not succeeding: `handoff-fire returned nonzero;
+  no-registry-row pane=D08B4FC0-…`.
+
+So the desk-existence invariant — the organ whose whole purpose is that nothing else can *create*
+a desk — has been in a failing respawn loop for ~41 hours. This wants its own investigation.
