@@ -117,8 +117,9 @@ render_block() {
     if [ "$sbr" = "main" ] || [ "$sbr" = "master" ]; then
       behind="$(git -C "$SHARED" rev-list --count "HEAD..origin/$sbr" 2>/dev/null || echo 0)"
       case "$behind" in ''|*[!0-9]*) behind=0 ;; esac
-      [ "$behind" -gt 0 ] && printf '▶\tgit -C %s pull --ff-only   [deploy: live layer %s behind origin/%s]\n' \
-        "$(tildify "$SHARED")" "$behind" "$sbr" >> "$steps_file"
+      # green-stamp-gated deploy (never a raw pull — that ships whatever is on origin, verified or not)
+      [ "$behind" -gt 0 ] && printf '▶\tbash ~/.claude/scripts/deploy-live.sh   [deploy: live layer %s behind origin/%s]\n' \
+        "$behind" "$sbr" >> "$steps_file"
     fi
   fi
 

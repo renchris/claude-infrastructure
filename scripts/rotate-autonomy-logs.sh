@@ -129,7 +129,9 @@ log_idl() { # <extra-json-fragment>
 DEFAULT_TARGETS="$HOME/.claude/autonomy/idl.jsonl
 $HOME/.claude/logs/bash-commands.log
 $HOME/.claude/logs/bash-execution.log
-$HOME/.claude/logs/teammate-checkpoint.log"
+$HOME/.claude/logs/teammate-checkpoint.log
+$HOME/.claude/autonomy/postland/flakes.jsonl
+$HOME/.claude/autonomy/postland/runner.log"
 
 TARGETS=()
 if [ "$#" -gt 0 ]; then
