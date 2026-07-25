@@ -79,15 +79,29 @@ PATH_FILE="${BACKUP_DIR}/${BASENAME}__${TIMESTAMP}.path"
 if cp -L "$FILE" "$BACKUP_FILE" 2>/dev/null; then
   echo "$FILE" > "$PATH_FILE" 2>/dev/null || true
 
-  # === AUTO-PRUNE: keep only last 10 backups per basename ===
-  BACKUP_COUNT=$(find "$BACKUP_DIR" -maxdepth 1 -name "${BASENAME}__*.bak" 2>/dev/null | wc -l | tr -d ' ')
-  if [ "$BACKUP_COUNT" -gt 10 ]; then
-    find "$BACKUP_DIR" -maxdepth 1 -name "${BASENAME}__*.bak" -print0 2>/dev/null \
-      | xargs -0 ls -t 2>/dev/null \
-      | tail -n +11 \
-      | while IFS= read -r old_bak; do
-          old_path="${old_bak%.bak}.path"
-          rm -f "$old_bak" "$old_path"
+  # === AUTO-PRUNE: keep the last 10 backups PER SOURCE PATH (audit 09 D-8) ===
+  # Keyed by the `.path` sidecar identity, NOT the basename. Under the old basename bucket every
+  # repo's CLAUDE.md / SKILL.md / README.md / page.tsx shared ONE 10-slot bucket, so a busy repo
+  # could evict another repo's ONLY backup — the exact loss this guard exists to prevent. The
+  # sidecar already recorded the identity; the prune just ignored it.
+  # Ordering now comes from ONE sort over the whole matched set: the old
+  # `find -print0 | xargs -0 ls -t | tail -n +11` re-sorted per xargs BATCH, so past a batch
+  # boundary it deleted from the wrong end. Backup names embed a fixed-width stamp
+  # (<basename>__YYYYmmdd-HHMMSS-PID), so a lexical reverse sort IS newest-first — and unlike
+  # mtime it stays deterministic when several backups land inside the same second.
+  KEEP_PER_SOURCE=10
+  SAME_SOURCE=""
+  for pf in "$BACKUP_DIR/${BASENAME}__"*.path; do
+    [ -f "$pf" ] || continue
+    [ "$(cat "$pf" 2>/dev/null)" = "$FILE" ] || continue
+    SAME_SOURCE="${SAME_SOURCE}${pf}
+"
+  done
+  if [ -n "$SAME_SOURCE" ]; then
+    printf '%s' "$SAME_SOURCE" | sort -r | tail -n "+$((KEEP_PER_SOURCE + 1))" \
+      | while IFS= read -r old_path; do
+          [ -n "$old_path" ] || continue
+          rm -f "${old_path%.path}.bak" "$old_path"
         done
   fi
 
