@@ -305,6 +305,20 @@ $HOME/.claude/logs/teammate-checkpoint.log
 $HOME/.claude/autonomy/postland/flakes.jsonl
 $HOME/.claude/autonomy/postland/runner.log"
 
+# cc-relogin*.log joined 2026-07-25: the autonomous relogin loop (cc-relogin-poll on an hourly
+# LaunchAgent + the cc-relogin executor it invokes) appends per run and caps nothing, and the
+# launchd StandardOut/StandardError paths land beside them under the same prefix. Enumerated by
+# GLOB rather than named literally, because the exact leaf names are the poller's to choose —
+# a literal that never matches would rotate nothing and look like it was covered. The list is
+# rebuilt every run, so a log created later is picked up on the next tick (a file that does not
+# exist needs no rotation). Same append-per-call, no-persistent-fd shape as the others, so the
+# existing `create`-mode rotation applies unchanged. Idiom mirrors prune_one's glob: the -f test
+# absorbs the no-match case, so no shopt/nullglob and no `ls` parsing.
+for _rl in "$HOME"/.claude/logs/cc-relogin*.log; do
+  [ -f "$_rl" ] && DEFAULT_TARGETS="$DEFAULT_TARGETS
+$_rl"
+done
+
 TARGETS=()
 if [ "$#" -gt 0 ]; then
   TARGETS=("$@")
