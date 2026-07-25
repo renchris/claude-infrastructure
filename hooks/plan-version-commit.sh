@@ -39,7 +39,13 @@ LINES=$(wc -l < "$FILE" | tr -d ' ')
 HASH=$(shasum -a 256 "$FILE" | awk '{print $1}')
 SIZE=$(wc -c < "$FILE" | tr -d ' ')
 TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-SESSION_ID="${CLAUDE_SESSION_ID:-unknown}"
+# Session identity comes from the stdin JSON, never from the environment: CLAUDE_SESSION_ID is
+# NOT a hook env var (CC exports only CLAUDE_PROJECT_DIR among the ones this repo relies on), so
+# the old `${CLAUDE_SESSION_ID:-unknown}` stamped every MANIFEST record "unknown" and the version
+# log could not be joined to a session. `.session_id` is first-class on stdin — 22 hooks already
+# read it (pattern: hooks/completion-assert.sh:54). Audit 09 D-9.
+SESSION_ID=$(printf '%s' "$INPUT" | jq -r '.session_id // "unknown"' 2>/dev/null)
+[ -n "$SESSION_ID" ] || SESSION_ID="unknown"
 TOOL=$(echo "$INPUT" | jq -r '.tool_name // empty')
 
 # === LAYER 1: MANIFEST (append-only metadata log) ===
@@ -63,7 +69,9 @@ jq -nc \
   PLAN_REPO="$HOME/.claude/plan-history"
   [ ! -d "$PLAN_REPO/.git" ] && exit 0
 
-  cd "$PLAN_REPO"
+  # `|| exit 0` is load-bearing, not lint appeasement: a failed cd would leave the subshell in the
+  # session's cwd and the `cp -L "$FILE" "plans/$BASENAME"` below would write into THAT repo.
+  cd "$PLAN_REPO" || exit 0
 
   # Copy plan file (follow symlinks with -L)
   cp -L "$FILE" "plans/$BASENAME" 2>/dev/null || exit 0
