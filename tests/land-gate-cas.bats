@@ -49,6 +49,8 @@ setup() {
   export SHIP_LAND_DECISIONS_DIR="$BATS_TEST_TMPDIR/decisions"
   export SHIP_LAND_SHARED_CHECKOUT="$BATS_TEST_TMPDIR/nope"
   export CLAUDE_CODE_SESSION_ID="test-sid-cas"
+  export POSTLAND_DIR="$BATS_TEST_TMPDIR/postland"
+  export POSTLAND_VERIFY=off                     # never spawn a real post-land child from tests
 
   GATE_OBS="$BATS_TEST_TMPDIR/gate-obs"
   MOVER_ARMED="$BATS_TEST_TMPDIR/mover-armed"    # content = max sibling lands to inject
@@ -232,4 +234,55 @@ LOCKED" ]
   [ -z "$(git -C "$WORK"  diff HEAD origin/main -- a.sh)" ]   # content-identical, not just present
   [ -z "$(git -C "$WORKB" diff HEAD origin/main -- b.sh)" ]
   [ "$(grep -c '"verify":"ok"' "$LAND_LOG")" = "2" ]          # BOTH lands content-verified
+}
+
+@test "scoped gate: CAS semantics preserved — sibling mid-gate ⇒ stale-gate re-gate, both contents land" {
+  # Scoping changes WHICH suites run, never the CAS contract. A sibling landing during the
+  # unlocked SCOPED gate must still trip exit 42 inside the lock and force an unlocked RE-gate of
+  # the new final tree (2 observations, both UNLOCKED) — and the re-gate must itself be scoped.
+  cat > "$SHIMDIR/bats" <<EOF
+#!/bin/bash
+printf '%s\n' "\$*" >> "$BATS_TEST_TMPDIR/bats-argv"
+exit 0
+EOF
+  chmod +x "$SHIMDIR/bats"
+  sel="$BATS_TEST_TMPDIR/gate-select.sh"
+  cat > "$sel" <<EOF
+#!/bin/bash
+printf '%s\n' "\$*" >> "$BATS_TEST_TMPDIR/sel-argv"
+case "\$1" in lint) exit 0 ;; --direct) exit 0 ;; esac
+echo tests/a.bats
+EOF
+  chmod +x "$sel"
+  mkdir -p tests                                   # the fixture has no suites; the gate needs one
+  printf '#!/usr/bin/env bats\n@test "a" { true; }\n' > tests/a.bats
+  git add tests && git commit -q -m "seed suite" && git push -q origin HEAD:main
+  git fetch -q origin main
+  gc="$(git rev-parse --git-common-dir)"; rm -f "$gc/gate-green"
+
+  echo 1 > "$MOVER_ARMED"                          # exactly one sibling land, during our gate
+  our_branch feat/scoped-cas scoped-cas.sh
+
+  run env SHIP_LAND_GATE_SCOPE=scoped SHIP_LAND_GATE_SELECT="$sel" bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "STALE GATE"                             # CAS fired…
+  [ "$(wc -l < "$GATE_OBS" | tr -d ' ')" = "2" ]                    # …and it re-gated…
+  [ "$(sort -u "$GATE_OBS")" = "UNLOCKED" ]                         # …still never in the lock
+  [ "$(sort -u "$BATS_TEST_TMPDIR/bats-argv")" = "tests/a.bats" ]   # both gates scoped, not full
+  [ ! -f "$gc/gate-green" ]                                         # scoped ⇒ marker untouched
+
+  git fetch -q origin main
+  [ -n "$(git ls-tree origin/main -- scoped-cas.sh)" ]              # no drop, either side
+  [ -n "$(git ls-tree origin/main -- sib-0.txt)" ]
+  grep -q '"gate_scope":"scoped"' "$LAND_LOG"
+
+  # UNION SCOPE — the amendment. Round 1 selects on our delta alone; the re-gate must ALSO hand
+  # the selector the trunk delta the sibling landed while we gated (FIRST_BASE..new base), or
+  # the re-gate is scoped blind to the composed tree's only novelty.
+  grep -v -e '^--direct' -e '^lint' "$BATS_TEST_TMPDIR/sel-argv" > "$BATS_TEST_TMPDIR/sel-only"
+  [ "$(wc -l < "$BATS_TEST_TMPDIR/sel-only" | tr -d ' ')" = "2" ]                   # two rounds
+  [ "$(head -1 "$BATS_TEST_TMPDIR/sel-only" | awk '{print gsub(/\.\./,"")}')" = "1" ]  # r1: 1 range
+  [ "$(tail -1 "$BATS_TEST_TMPDIR/sel-only" | awk '{print gsub(/\.\./,"")}')" = "2" ]  # r2: + union
+  fb="$(sed 's/\.\..*//' < "$BATS_TEST_TMPDIR/sel-only" | head -1)"                  # round 1's base
+  tail -1 "$BATS_TEST_TMPDIR/sel-only" | grep -q " $fb\.\."       # the union range is anchored there
 }

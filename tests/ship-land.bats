@@ -26,6 +26,8 @@ setup() {
   export SHIP_LAND_DECISIONS_DIR="$BATS_TEST_TMPDIR/decisions"
   export SHIP_LAND_SHARED_CHECKOUT="$BATS_TEST_TMPDIR/nope"   # never matches the work repo
   export CLAUDE_CODE_SESSION_ID="test-sid-123"
+  export POSTLAND_DIR="$BATS_TEST_TMPDIR/postland"            # flakes.jsonl + queue, sandboxed
+  export POSTLAND_VERIFY=off                                  # never spawn a real post-land child
 }
 
 on_branch_with() {  # $1=branch $2=file $3=content  → commit a change on a fresh branch
@@ -309,4 +311,238 @@ EOF
   [ ! -d "$WORK/.git/rebase-merge" ]
   [ ! -d "$WORK/.git/rebase-apply" ]
   [ -z "$(git status --porcelain)" ]
+}
+
+# ---- gate scope modes · flake exoneration · attestation fields --------------
+#
+# The fixture repo has no tests/ dir, so the gate's bats step never fires by default. These
+# tests SEED suites onto trunk and PATH-shim `bats`: the shim's recorded argv is the durable
+# product ("which suites actually ran"), and it injects a first-run-only failure for the flake
+# fixture. A nested REAL bats run is deliberately avoided — argv is what is under test.
+
+scope_fixture() {   # seed tests/{a,b}.bats onto trunk + shim bats + default to an ABSENT policy
+  SHIMDIR="$BATS_TEST_TMPDIR/shims"; mkdir -p "$SHIMDIR"
+  export BATS_ARGV="$BATS_TEST_TMPDIR/bats-argv"
+  export FLAKE_ONCE="$BATS_TEST_TMPDIR/flake-once"   # suite file that fails its FIRST run only
+  : > "$FLAKE_ONCE"
+  cat > "$SHIMDIR/bats" <<EOF
+#!/bin/bash
+printf '%s\n' "\$*" >> "$BATS_ARGV"
+f="\$(cat "$FLAKE_ONCE" 2>/dev/null)"
+if [ -n "\$f" ] && [ "\$1" = "\$f" ]; then
+  m="$BATS_TEST_TMPDIR/flaked-\$(basename "\$1")"
+  if [ ! -f "\$m" ]; then : > "\$m"; exit 1; fi
+fi
+exit 0
+EOF
+  chmod +x "$SHIMDIR/bats"
+  export PATH="$SHIMDIR:$PATH"
+  export SHIP_LAND_GATE_POLICY="$BATS_TEST_TMPDIR/no-such-policy.sh"   # absent ⇒ hardcoded full
+  mkdir -p tests
+  printf '#!/usr/bin/env bats\n@test "a" { true; }\n' > tests/a.bats
+  printf '#!/usr/bin/env bats\n@test "b" { true; }\n' > tests/b.bats
+  git add tests && git commit -q -m "seed suites" && git push -q origin HEAD:main
+  git fetch -q origin main
+}
+
+stub_selector() {  # $1=plain-call stdout, $2=--direct stdout (either may be empty/multi-line)
+  local sel="$BATS_TEST_TMPDIR/gate-select.sh"
+  {
+    echo '#!/bin/bash'
+    echo 'if [ "$1" = "--direct" ]; then'
+    printf 'cat <<SELEOF\n%s\nSELEOF\n' "$2"
+    echo 'else'
+    printf 'cat <<SELEOF\n%s\nSELEOF\n' "$1"
+    echo 'fi'
+  } > "$sel"
+  chmod +x "$sel"
+  export SHIP_LAND_GATE_SELECT="$sel"
+}
+
+landable() {  # $1=branch $2=shell file — a commit the gate always lints
+  git checkout -q -b "$1" main
+  printf '#!/usr/bin/env bash\necho ok\n' > "$2"
+  git add "$2" && git commit -q -m "feat: $2"
+}
+
+@test "scope: ABSENT policy file ⇒ full mode (bats tests/ runs, gate-green advances)" {
+  scope_fixture
+  stub_selector "tests/a.bats" ""        # selector exists but MUST be ignored in full mode
+  gc="$(git rev-parse --git-common-dir)"; rm -f "$gc/gate-green"
+  landable feat/scope-full sf.sh
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  [ "$(cat "$BATS_ARGV")" = "tests/" ]                       # the WHOLE suite, one invocation
+  [ "$(cat "$gc/gate-green")" = "$(git rev-parse HEAD)" ]     # full proof ⇒ marker advances
+}
+
+@test "scope: scoped + selector picks ONE suite ⇒ only that suite runs, gate-green NOT advanced" {
+  scope_fixture
+  stub_selector "tests/a.bats" ""
+  gc="$(git rev-parse --git-common-dir)"; rm -f "$gc/gate-green"
+  landable feat/scope-one so.sh
+
+  run env SHIP_LAND_GATE_SCOPE=scoped bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  [ "$(cat "$BATS_ARGV")" = "tests/a.bats" ]                 # b.bats never ran; no `tests/` run
+  [ ! -f "$gc/gate-green" ]                                  # scoped ≠ full-suite claim
+  echo "$output" | grep -q "gate-green NOT advanced"
+  grep -q '"gate_scope":"scoped"' "$LAND_LOG"
+  grep -q '"selected_n":1' "$LAND_LOG"
+}
+
+@test "scope: scoped + selector says FULL ⇒ full run, gate-green advances" {
+  scope_fixture
+  stub_selector "FULL" ""
+  gc="$(git rev-parse --git-common-dir)"; rm -f "$gc/gate-green"
+  landable feat/scope-fullsel sfs.sh
+
+  run env SHIP_LAND_GATE_SCOPE=scoped bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  [ "$(cat "$BATS_ARGV")" = "tests/" ]
+  [ "$(cat "$gc/gate-green")" = "$(git rev-parse HEAD)" ]
+}
+
+@test "scope: scoped + selector picks NOTHING ⇒ bats skipped, land still proceeds" {
+  scope_fixture
+  stub_selector "" ""
+  landable feat/scope-none sn.sh
+
+  run env SHIP_LAND_GATE_SCOPE=scoped bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "0 suites"
+  [ ! -s "$BATS_ARGV" ]                                      # bats never invoked at all
+  git fetch -q origin main
+  [ -n "$(git ls-tree origin/main -- sn.sh)" ]               # lint-only land still lands
+}
+
+@test "scope: unknown SHIP_LAND_GATE_SCOPE ⇒ exit 2 (fail-closed on a typo'd policy)" {
+  run env SHIP_LAND_GATE_SCOPE=bogus bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 2 ]
+  echo "$output" | grep -q "unknown SHIP_LAND_GATE_SCOPE"
+}
+
+@test "attest: UNLOCKED gate-red now writes an exit-6 land.log line (the flake-rate denominator)" {
+  git checkout -q -b feat/red-attest main
+  printf '#!/usr/bin/env bash\ncd /tmp/nope\necho ok\n' > bad-attest.sh   # SC2164 ⇒ gate RED
+  git add bad-attest.sh && git commit -q -m "feat: bad-attest"
+  head="$(git rev-parse HEAD)"
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 6 ]
+  grep -q '"exit":6' "$LAND_LOG"
+  grep -q "\"head\":\"$head\"" "$LAND_LOG"                   # replayable: WHICH tree went red
+}
+
+@test "flake exoneration: NON-direct suite passes on retry ⇒ land GREEN + flakes.jsonl entry" {
+  scope_fixture
+  stub_selector "tests/a.bats" "tests/b.bats"   # a is selected but is NOT a direct suite
+  echo "tests/a.bats" > "$FLAKE_ONCE"           # fails once, passes the fresh-TMPDIR re-run
+  landable feat/flake fl.sh
+
+  run env SHIP_LAND_GATE_SCOPE=scoped bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  [ "$(grep -c . "$BATS_ARGV")" -eq 2 ]                      # first run + one exoneration re-run
+  echo "$output" | grep -q "EXONERATED"
+  grep -q '"outcome":"pass-on-retry"' "$POSTLAND_DIR/flakes.jsonl"
+  grep -q '"file":"tests/a.bats"' "$POSTLAND_DIR/flakes.jsonl"
+  grep -q '"phase":"land-gate"' "$POSTLAND_DIR/flakes.jsonl"
+}
+
+@test "flake exoneration: a DIRECT suite passing on retry is still RED ⇒ exit 6, nothing logged" {
+  scope_fixture
+  stub_selector "tests/a.bats" "tests/a.bats"   # same suite, now DIRECT to the change
+  echo "tests/a.bats" > "$FLAKE_ONCE"
+  landable feat/flake-direct fld.sh
+
+  run env SHIP_LAND_GATE_SCOPE=scoped bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 6 ]
+  echo "$output" | grep -q "finding, not a flake"
+  [ ! -f "$POSTLAND_DIR/flakes.jsonl" ]                      # never exonerated ⇒ never logged
+  git fetch -q origin main
+  [ -z "$(git ls-tree origin/main -- fld.sh)" ]              # and NOT landed
+}
+
+@test "attest: land.log carries head/base/tree/gate_scope/selected_n" {
+  landable feat/attest-fields af.sh
+  base="$(git rev-parse origin/main)"
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  grep -q "\"head\":\"$(git rev-parse HEAD)\"" "$LAND_LOG"
+  grep -q "\"tree\":\"$(git rev-parse 'HEAD^{tree}')\"" "$LAND_LOG"
+  grep -q "\"base\":\"$base\"" "$LAND_LOG"
+  grep -qE '"gate_scope":"(full|scoped|shadow)"' "$LAND_LOG"
+  grep -q '"selected_n":' "$LAND_LOG"
+}
+
+@test "scope: scoped with an ABSENT selector ⇒ FULL suite (fail-closed, the pre-T1 repo state)" {
+  scope_fixture
+  export SHIP_LAND_GATE_SELECT="$BATS_TEST_TMPDIR/no-such-selector.sh"
+  landable feat/scope-nosel sns.sh
+
+  run env SHIP_LAND_GATE_SCOPE=scoped bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "missing/not executable"
+  [ "$(cat "$BATS_ARGV")" = "tests/" ]        # narrowing is NEVER the failure mode
+}
+
+@test "scope: scoped + RED suite-map lint ⇒ degrades to FULL (lint never blocks a land)" {
+  scope_fixture
+  sel="$BATS_TEST_TMPDIR/gate-select.sh"
+  printf '#!/bin/bash\n[ "$1" = lint ] && exit 1\n[ "$1" = --direct ] && exit 0\necho tests/a.bats\n' > "$sel"
+  chmod +x "$sel"
+  export SHIP_LAND_GATE_SELECT="$sel"
+  landable feat/lint-red lr.sh
+
+  run env SHIP_LAND_GATE_SCOPE=scoped bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]                            # a red MAP lint is never a red LAND
+  echo "$output" | grep -q "suite-map lint RED"
+  [ "$(cat "$BATS_ARGV")" = "tests/" ]           # …it buys proof, it does not block
+}
+
+@test "scope: INERT post-land net (stale green stamp) ⇒ scoped degrades to the FULL gate" {
+  scope_fixture
+  stub_selector "tests/a.bats" ""
+  mkdir -p "$POSTLAND_DIR/stamps"
+  : > "$POSTLAND_DIR/stamps/deadbee.green"
+  touch -t 202001010000 "$POSTLAND_DIR/stamps/deadbee.green"   # net ran once, then went cold
+  landable feat/stale-net stn.sh
+
+  run env SHIP_LAND_GATE_SCOPE=scoped bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "post-land net appears INERT"
+  [ "$(cat "$BATS_ARGV")" = "tests/" ]
+}
+
+@test "scope: staleness guard — fresh stamp ⇒ scoped; kill switch ⇒ scoped despite a stale stamp" {
+  scope_fixture
+  stub_selector "tests/a.bats" ""
+  mkdir -p "$POSTLAND_DIR/stamps"
+  : > "$POSTLAND_DIR/stamps/fresh.green"                       # today ⇒ net is live
+  landable feat/fresh-net frn.sh
+  run env SHIP_LAND_GATE_SCOPE=scoped bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  [ "$(cat "$BATS_ARGV")" = "tests/a.bats" ]
+
+  : > "$BATS_ARGV"
+  touch -t 202001010000 "$POSTLAND_DIR/stamps/fresh.green"     # now cold, but guard disabled
+  landable feat/killswitch ks.sh
+  run env SHIP_LAND_GATE_SCOPE=scoped POSTLAND_STALENESS_GUARD=off bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  [ "$(cat "$BATS_ARGV")" = "tests/a.bats" ]
+  ! echo "$output" | grep -q "INERT"
+}
+
+@test "flake ledger: the entry carries a signal field (what failed), not just 'it flaked'" {
+  scope_fixture
+  stub_selector "tests/a.bats" "tests/b.bats"
+  echo "tests/a.bats" > "$FLAKE_ONCE"
+  landable feat/flake-signal fs.sh
+
+  run env SHIP_LAND_GATE_SCOPE=scoped bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  grep -q '"signal":"' "$POSTLAND_DIR/flakes.jsonl"
+  grep -qv '"signal":""' "$POSTLAND_DIR/flakes.jsonl"          # populated, never empty
 }
