@@ -49,12 +49,27 @@ STUB
 }
 
 # ── (a) selftest contract ─────────────────────────────────────────────────────────────────────────────
-@test "selftest passes and runs all 27 checks (a zero-check suite must not 'pass')" {
+@test "selftest passes and runs all 29 checks (a zero-check suite must not 'pass')" {
   run "$WP" selftest
   [ "$status" -eq 0 ]
   n_ok="$(printf '%s' "$output" | grep -c '^  ok ')"
-  [ "$n_ok" -eq 27 ]
+  [ "$n_ok" -eq 29 ]
   ! printf '%s' "$output" | grep -q '^  FAIL'
+}
+
+# ── surface by anchor context (drain incident 2026-07-25: headless split-right = 100%-dead wave) ──
+@test "headless plan (no ITERM_SESSION_ID) emits --window, never the anchored --split-right" {
+  run bash -c "env -u ITERM_SESSION_ID '$WP' --items '[{\"id\":\"h\",\"slot\":\"lead\"}]' --json"
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.[0].fire_line | test("--window")'
+  echo "$output" | jq -e '.[0].fire_line | test("--split-right") | not'
+  echo "$output" | jq -e '.[0].fire_line | test("--surface-reason headless-dispatch-no-anchor-pane")'
+}
+
+@test "anchored plan (ITERM_SESSION_ID present) keeps the --split-right ⌘D default" {
+  ITERM_SESSION_ID="w0t0p0:TEST" run "$WP" --items '[{"id":"a","slot":"lead"}]' --json
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.[0].fire_line | test("--split-right")'
 }
 
 @test "unknown flag → exit 2 (fail-loud, no silent no-op)" {

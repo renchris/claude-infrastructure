@@ -256,6 +256,18 @@ cmd_plan() {
   # Build the plan; track whether any frontier slot degraded (→ abstained), and account fan-out.
   local objs=() any_fb=0 fire model eff
   local seen_accts=""
+  # SURFACE by anchor context (drain incident 2026-07-25). --split-right ANCHORS on the firing
+  # pane via $ITERM_SESSION_ID; under launchd (cc-dispatch, the ONLY cron consumer) that var never
+  # exists and handoff-fire REFUSES the anchorless split (its safety against firing into a random
+  # window — handoff-fire.sh:2073, untouched here). A hardcoded --split-right therefore killed
+  # EVERY headless spawn silently: the dispatcher had 0 `fired` IDL records EVER and 408 `failed`
+  # on 2026-07-25 alone, each failure claim→reopening its item — "36 open items under a live 900s
+  # dispatcher". Headless plans emit --window, the sanctioned anchor-free surface the refusal
+  # message itself names; --surface-reason records why (single hyphenated token — the fire_line is
+  # word-split by cc-dispatch, a spaced value would shear).
+  local surface
+  if [ -n "${ITERM_SESSION_ID:-}" ]; then surface="--split-right"
+  else surface="--window --surface-reason headless-dispatch-no-anchor-pane"; fi
   for i in "${!ids[@]}"; do
     memo_get "${slots[$i]}"; model="$R_MODEL"; eff="$R_EFF"
     [ "$R_FALLBACK" -eq 1 ] && any_fb=1
@@ -272,7 +284,7 @@ cmd_plan() {
     # (memory cold-worktree-fire-autosubmit-race). cc-dispatch, the ACTUATOR, creates this path warm
     # before firing; cc-wave-plan stays a pure planner and emits only the path.
     # shellcheck disable=SC2088
-    fire="~/.claude/scripts/handoff-fire.sh --prompt-file /tmp/fire-${ids[$i]}.txt --cwd ${WTROOT}/wt-${ids[$i]} --account ${accts[$i]} --model ${model} --effort ${eff} --split-right"
+    fire="~/.claude/scripts/handoff-fire.sh --prompt-file /tmp/fire-${ids[$i]}.txt --cwd ${WTROOT}/wt-${ids[$i]} --account ${accts[$i]} --model ${model} --effort ${eff} ${surface}"
     objs+=("$(jq -cn --arg id "${ids[$i]}" --arg slot "${slots[$i]}" --arg acct "${accts[$i]}" \
         --arg model "$model" --arg eff "$eff" --arg fire "$fire" \
         '{id:$id, slot:$slot, account:$acct, model:$model, effort:$eff, fire_line:$fire}')")
@@ -370,6 +382,15 @@ STUB
   # PURE PLANNER: emitting the path must create nothing on disk.
   check "worktree: planning CREATES nothing (cc-wave-plan never actuates)" 0 \
     bash -c "CC_WAVE_WTROOT='$tmp/wtroot' '$SELF' --items '[{\"id\":\"zz\",\"slot\":\"lead\"}]' --json >/dev/null; [ ! -e '$tmp/wtroot' ]"
+
+  # (s) SURFACE by anchor context (drain incident 2026-07-25): headless (no ITERM_SESSION_ID —
+  # the launchd cc-dispatch reality) must emit the anchor-free --window, NEVER --split-right —
+  # handoff-fire refuses an anchorless split, so a headless split-right plan is a 100%-dead wave
+  # (0 fired ever; 408 failed/day). An anchored (interactive) plan keeps the ⌘D split default.
+  check "surface: HEADLESS plan emits --window and NEVER --split-right" 0 \
+    bash -c "env -u ITERM_SESSION_ID '$SELF' --items '[{\"id\":\"zz\",\"slot\":\"lead\"}]' --json | jq -e '.[0].fire_line|(test(\"--window\") and (test(\"--split-right\")|not))'"
+  check "surface: anchored (ITERM_SESSION_ID set) plan keeps --split-right" 0 \
+    bash -c "ITERM_SESSION_ID=w0t0p0:TEST '$SELF' --items '[{\"id\":\"zz\",\"slot\":\"lead\"}]' --json | jq -e '.[0].fire_line|test(\"--split-right\")'"
 
   # (b) Fable-window STRADDLE — within-guard window → Opus fallback carrying reason; NO fable id.
   check "straddle: window 10m<guard -> judgment-dense falls back to opus" 0 \
