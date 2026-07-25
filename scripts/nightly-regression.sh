@@ -101,7 +101,18 @@ run_check() { # <name> -- <cmd...>
   fi
 }
 
-supports_selftest() { grep -qE -- '--selftest|selftest\)' "$1" 2>/dev/null; }
+# S4 (audit 08): the old form `grep -qE -- '--selftest|selftest\)'` was a false-positive machine and
+# TWO of the eight 2026-07-24 REDs were pure artifacts of it: it matched (a) a bare-verb case arm
+# (`selftest)` in gate-manifest) → the runner passed a flag the CLI rejects (exit 2 "unknown verb"),
+# and (b) the literal string appearing in PROSE inside a todo/ok message (premortem-gate:72,
+# reaper-safety-gate:45) or in a mid-line call to a DIFFERENT script (wait-safety-gate:78,93,118,
+# session-lifecycle-safety-gate:70, comms-safety-gate:39) → a cosmetic `--selftest` in the log name
+# for gates that ignore argv entirely. Now: a literal `--selftest` must appear as a real DISPATCH —
+# a case pattern (own line, or on the `case … in` line) or an option comparison. Nothing else counts.
+supports_selftest() {
+  grep -vE '^[[:space:]]*#' "$1" 2>/dev/null | grep -qE -- \
+    '^[[:space:]]*\(?[-|A-Za-z0-9_*."]*--selftest[-|A-Za-z0-9_*."]*\)|(^|[^[:alnum:]_])case[[:space:]].*[[:space:]]in[[:space:]].*--selftest[-|A-Za-z0-9_*."]*\)|==?[[:space:]]*"?--selftest"?'
+}
 
 # Blind-check law: an INERT net must page. If the post-land verification net exists (stamps dir
 # present) but the newest settled trunk commit (older than POSTLAND_AGE) carries NO stamp for its
@@ -242,6 +253,22 @@ selftest() {
   # green night clears a prior standing page
   run_inv "$d/pages" "$d/clear.log" "$d/goodtests" "$d/plists/good.plist"
   [ ! -f "$d/pages/nightly-regression.page" ] && okp "green night clears the standing page" || badp "green night left a stale page"
+
+  # S4: supports_selftest must fire on a real DISPATCH and NEVER on prose / a call to another script
+  mkdir -p "$d/detect"
+  # shellcheck disable=SC2016  # the ${1:-} below is LITERAL fixture script text, never an expansion
+  {
+  printf '#!/bin/bash\ncase "${1:-}" in\n  --selftest|selftest) run ;;\nesac\n'  > "$d/detect/arm.sh"
+  printf '#!/bin/bash\ncase "${1:-}" in --selftest) run ;; esac\n'               > "$d/detect/inline.sh"
+  printf '#!/bin/bash\nif [ "${1:-}" = "--selftest" ]; then run; fi\n'           > "$d/detect/opt.sh"
+  printf '#!/bin/bash\n# usage: x.sh --selftest\ntodo "A" "module with --selftest). prose"\n./other.sh --selftest >/dev/null && ok\n' > "$d/detect/prose.sh"
+  printf '#!/bin/bash\ncase "${1:-}" in\n  selftest) run ;;\nesac\n'             > "$d/detect/bareverb.sh"
+  }
+  supports_selftest "$d/detect/arm.sh"      && okp "S4: detects a case arm (--selftest|selftest)" || badp "S4: missed a case arm"
+  supports_selftest "$d/detect/inline.sh"   && okp "S4: detects an inline \`case … in --selftest)\`" || badp "S4: missed an inline case arm"
+  supports_selftest "$d/detect/opt.sh"      && okp "S4: detects an option comparison" || badp "S4: missed an option comparison"
+  supports_selftest "$d/detect/prose.sh"    && badp "S4: matched PROSE / another script's flag" || okp "S4: ignores prose + calls to other scripts"
+  supports_selftest "$d/detect/bareverb.sh" && badp "S4: matched a BARE-verb arm (would pass a rejected flag)" || okp "S4: ignores a bare-verb arm"
 
   echo "nightly-regression --selftest: $PASS passed, $FAIL failed"
   [ "$FAIL" -eq 0 ] || exit 1
