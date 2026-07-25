@@ -94,6 +94,14 @@ install_version() {
 
   atomic_symlink "$VERSION_DIR" "$CURRENT_LINK"
   echo "✓ Installed and switched to $VERSION"
+
+  # ~/.npm/_cacache is the largest single directory on this machine: 11.2 GB, 10,079 content
+  # files spanning 2025-12 → 2026-07, and npm never self-prunes (audit 03 §1d rank 2). 224 of
+  # its index entries name claude-code — this script's own version churn is a direct feeder, so
+  # the reclaim belongs on the path that causes it. `verify` is the safe verb: it garbage-
+  # collects unreferenced content and repairs the index, it does not blow the cache away.
+  # Best-effort — a cache hiccup must never fail an install that already succeeded.
+  npm cache verify --silent >/dev/null 2>&1 || true
 }
 
 # Main
