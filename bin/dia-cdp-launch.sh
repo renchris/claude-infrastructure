@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2034,SC2012  # verbatim live capture (repo=SSOT for the real ~/bin file) — pre-existing style kept byte-stable; only this directive line differs from the pre-capture original
 # dia-cdp-launch.sh — Launch or reattach to a CLEAN, dedicated agent Dia CDP session.
 #
 # Entry-point for an "agent-controlled Dia browser": launches Dia (Chromium 149)

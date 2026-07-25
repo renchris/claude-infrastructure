@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=SC2034,SC2012  # verbatim live capture (repo=SSOT for the real ~/bin file) — pre-existing style kept byte-stable; only this directive line differs from the pre-capture original
 # screenshot-to-clipboard — auto-copy a NEW screenshot to the clipboard so ⌘⇧4 (save-to-file)
 # captures can be pasted directly (⌘V) into any app, with NO Finder-copy detour. Triggered by a
 # launchd WatchPaths agent (com.chrisren.screenshot-clipboard) on the Screenshots dir. macOS only.
