@@ -15,6 +15,9 @@
 #                                          BLIND abstention (an inert no-check, T-P6-4); healthy-dormant is quiet.
 #   4. every scripts/*gate*.sh + *lint*.sh: `--selftest` where supported, else a bare read-only run.
 #      SKIPS *-e2e.sh (side-effectful — would spawn panes/sessions) — the skip is LOGGED, never silent.
+#   5. postland_inertness — the post-land verification net's OWN liveness: stamps dir present but a
+#      settled (>2h) trunk commit unstamped = the net stopped stamping (blind-check law). Abstains
+#      green when the net isn't adopted (no stamps dir). Env seam: CC_NIGHTLY_POSTLAND_DIR/_AGE.
 #
 # ON RED: write a page file to autonomy/pages/ (drainable by the P0-15 SO-5 desk-role consumer) +
 # osascript notification. ALWAYS append a one-line result to autonomy/regression.log.
@@ -33,6 +36,8 @@ LINT_GLOB="${CC_NIGHTLY_LINT_GLOB:-$REPO/scripts/*lint*.sh}"
 NEVERSTUCK="${CC_NIGHTLY_NEVERSTUCK:-$REPO/scripts/never-stuck-gate.sh}"   # live systematic invariant; stubbable for --selftest
 ABSTAIN="${CC_NIGHTLY_ABSTAIN:-$REPO/scripts/idl-abstain-alarm.sh}"        # live IDL abstention monitor (T-P6-4); stubbable for --selftest
 PAGE_KEY="${CC_NIGHTLY_PAGE_KEY:-nightly-regression}"
+POSTLAND_DIR="${CC_NIGHTLY_POSTLAND_DIR:-$HOME/.claude/autonomy/postland}"   # post-land verification net; stubbable
+POSTLAND_AGE="${CC_NIGHTLY_POSTLAND_AGE:-7200}"                              # a trunk commit older than this MUST be stamped
 
 now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 now_epoch() { date +%s; }
@@ -48,10 +53,22 @@ REDS=()          # names of failing checks
 SKIPS=()         # names of skipped (e2e) checks — logged, never silent
 NCHECK=0
 
+# Per-check output capture: a page naming only the FAILING CHECK is un-actionable (7 straight RED
+# nights went unactioned on name-only pages). Each check's output lands in RUNDIR; the RED page
+# quotes the failing tail. Capture-only — the console/green path is unchanged.
+RUNDIR="$(mktemp -d "${TMPDIR:-/tmp}/nightly-reg.XXXXXX" 2>/dev/null)" || RUNDIR=""
+# shellcheck disable=SC2064
+[ -n "$RUNDIR" ] && trap "rm -rf '$RUNDIR'" EXIT
+outfile() { # <check-name> → capture path ("" when no tmpdir)
+  [ -n "$RUNDIR" ] || return 0
+  printf '%s/%s.out' "$RUNDIR" "$(printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_')"
+}
+
 run_check() { # <name> -- <cmd...>
   local name="$1"; shift
   NCHECK=$((NCHECK+1))
-  if "$@" >/dev/null 2>&1; then
+  local out; out="$(outfile "$name")"; [ -n "$out" ] || out=/dev/null
+  if "$@" >"$out" 2>&1; then
     printf '  ok   %s\n' "$name"
   else
     printf '  RED  %s (exit %d)\n' "$name" "$?"
@@ -60,6 +77,25 @@ run_check() { # <name> -- <cmd...>
 }
 
 supports_selftest() { grep -qE -- '--selftest|selftest\)' "$1" 2>/dev/null; }
+
+# Blind-check law: an INERT net must page. If the post-land verification net exists (stamps dir
+# present) but the newest settled trunk commit (older than POSTLAND_AGE) carries NO stamp for its
+# tree, the net stopped stamping — deploys are silently frozen and nobody was told. RED.
+# Abstains GREEN when the net is not adopted yet (no stamps dir) or trunk can't be resolved.
+postland_inertness() {
+  local stamps="$POSTLAND_DIR/stamps" cutoff sha tree
+  [ -d "$stamps" ] || return 0                                   # net not adopted → abstain
+  git -C "$REPO" fetch origin main >/dev/null 2>&1 || true        # best-effort freshness
+  cutoff=$(( $(now_epoch) - POSTLAND_AGE ))
+  sha="$(git -C "$REPO" rev-list -n 1 "--before=@$cutoff" origin/main 2>/dev/null || true)"
+  [ -n "$sha" ] || return 0                                      # no settled trunk commit → abstain
+  tree="$(git -C "$REPO" rev-parse "$sha^{tree}" 2>/dev/null || true)"
+  [ -n "$tree" ] || return 0
+  [ -f "$stamps/$tree.json" ] && return 0                        # stamped → the net is alive
+  printf 'postland net INERT: trunk %.12s (tree %.12s), settled >%ss ago, has NO stamp under %s\n' \
+    "$sha" "$tree" "$POSTLAND_AGE" "$stamps"                     # captured → quoted on the RED page
+  return 1
+}
 
 regress() {
   mkdir -p "$PAGEDIR" "$(dirname "$LOG")" 2>/dev/null || true
@@ -103,6 +139,9 @@ regress() {
     else                            run_check "$b" "$f"; fi
   done
 
+  # 5. the post-land net's own liveness: exists-but-stopped-stamping is an INERT check (pages).
+  run_check "postland-inertness" postland_inertness
+
   # ── verdict ──
   local n_red="${#REDS[@]}" summary
   if [ "$n_red" -gt 0 ]; then
@@ -110,6 +149,12 @@ regress() {
     local pf="$PAGEDIR/$PAGE_KEY.page"
     { now_epoch; printf 'nightly-regression RED @ %s: %s\n' "$(now_iso)" "${REDS[*]}"; \
       printf 'see %s ; re-run: scripts/nightly-regression.sh\n' "$LOG"; } > "$pf"
+    local rn rf                                   # …and WHY: the failing tail, not just the name
+    for rn in "${REDS[@]}"; do
+      rf="$(outfile "$rn")"; [ -n "$rf" ] && [ -s "$rf" ] || continue
+      printf -- '--- %s ---\n' "$rn" >> "$pf"
+      { grep -E '^not ok' "$rf" 2>/dev/null || tail -15 "$rf"; } | tail -15 >> "$pf"
+    done
     notify "Claude nightly-regression RED" "$n_red check(s) failed: ${REDS[*]}"
   else
     summary="GREEN ($NCHECK checks)"
@@ -131,7 +176,7 @@ badp() { printf '  FAIL %-52s\n' "$1"; FAIL=$((FAIL+1)); }
 selftest() {
   local d; d="$(mktemp -d "${TMPDIR:-/tmp}/nightly-reg-selftest.XXXXXX")" || { echo mktemp failed; exit 1; }
   # shellcheck disable=SC2064
-  trap "rm -rf '$d'" EXIT
+  trap "rm -rf '$d' '${RUNDIR:-/nonexistent}'" EXIT   # keep the capture dir cleaned too
   mkdir -p "$d/pages" "$d/goodtests" "$d/badtests" "$d/plists" "$d/emptygl"
   printf '#!/usr/bin/env bats\n@test "pass" { true; }\n' > "$d/goodtests/ok.bats"
   printf '#!/usr/bin/env bats\n@test "fail" { false; }\n' > "$d/badtests/no.bats"
@@ -142,6 +187,7 @@ selftest() {
   # run the invariant with a stubbed check-set (NO eval — env-scoped overrides). <pagedir> <log> <batsdir> <plistglob>
   run_inv() {
     env CC_NIGHTLY_NOTIFY=/usr/bin/true CC_NIGHTLY_NEVERSTUCK=/usr/bin/true CC_NIGHTLY_ABSTAIN=/usr/bin/true \
+        CC_NIGHTLY_POSTLAND_DIR="$d/nopostland" \
         CC_NIGHTLY_GATE_GLOB="$d/emptygl/*.sh" CC_NIGHTLY_LINT_GLOB="$d/emptygl/*.sh" \
         CC_NIGHTLY_PAGEDIR="$1" CC_NIGHTLY_LOG="$2" CC_NIGHTLY_BATS_DIR="$3" CC_NIGHTLY_PLIST_GLOB="$4" \
         "$SELF" >/dev/null 2>&1
@@ -160,6 +206,7 @@ selftest() {
   [ -f "$d/pages/nightly-regression.page" ] && okp "red-bats: page file written to pages/" || badp "red-bats: no page written"
   grep -q 'RED' "$d/redb.log" && okp "red-bats: regression.log records RED" || badp "red-bats: log missing RED"
   head -1 "$d/pages/nightly-regression.page" | grep -qE '^[0-9]+$' && okp "page: first line is an epoch (convention-compatible)" || badp "page: first line not an epoch"
+  grep -q 'not ok' "$d/pages/nightly-regression.page" && okp "red-bats: page quotes the FAILING detail, not just the name" || badp "red-bats: page carries no failing detail"
   rm -f "$d/pages/nightly-regression.page"
 
   # red path (plutil): deliberately-bad fixture plist → page + RED

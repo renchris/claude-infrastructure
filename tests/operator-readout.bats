@@ -138,13 +138,13 @@ EOS
   echo "$output" | grep -q '▶ launchctl load ~/L/dispatcher.plist   \[backlog abc123def456: Load the dispatcher\]'
 }
 
-@test "deploy-lag: shared checkout on main behind origin/main renders the exact ff-sync command" {
+@test "deploy-lag: shared checkout on main behind origin/main renders the green-stamp-gated deploy command" {
   w="$(mkrepo_landed d)"
   ( cd "$w"; echo z > z.txt; git add z.txt; git commit -q -m more; git push -q origin main
     git reset -q --hard HEAD~1 ) >/dev/null 2>&1   # local main now 1 behind its origin/main
   export CC_SHARED_CHECKOUT="$w"
   run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
-  echo "$output" | grep -q "▶ git -C $w pull --ff-only   \[deploy: live layer 1 behind origin/main\]"
+  echo "$output" | grep -q "▶ bash ~/.claude/scripts/deploy-live.sh   \[deploy: live layer 1 behind origin/main\]"
 }
 
 @test "class-B is never itemized; ≤24h deadline appears only as the veto summary line" {
