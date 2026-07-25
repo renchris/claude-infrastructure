@@ -100,8 +100,23 @@ build. Measuring and documenting is cheap and collision-free; the sweep is neith
 1. Enumerate with the grep above and triage by *nullability of the schema*, not by call
    count — a site with three always-present fields is safe; one reading an optional
    `refusal`/`reason`/`detail` is not.
-2. Fix at the **producer** (add `// "—"` in the `jq @tsv`) wherever the producer is in the
-   same repo — one change protects every consumer of that stream.
+2. **Fix at the EMITTER, never the reader — and do every column, not the one that broke.**
+   The read side is unfixable (a non-whitespace IFS does not split at all on bash 3.2), so
+   the only durable fix is guaranteeing non-empty cells at the `@tsv` boundary. Use **one
+   shared `cell(ph)` def per script, applied to every column**, rather than a per-field
+   patch on whichever field happened to surface the bug:
+
+   ```jq
+   def cell(ph): (. // "") | tostring | gsub("[\\t\\r\\n]"; " ")
+                 | if . == "" then ph else . end;
+   ```
+
+   The `if . == ""` arm is load-bearing: `//` substitutes only for `null`/`false`, so a key
+   that is **present but an empty string** still slips through — which is exactly how the
+   live `cc-blockers` bug survived a first fix that used `// ""`. Covering every column also
+   neutralises embedded tabs/newlines everywhere (a `recover_cmd` containing a tab would
+   otherwise split the row), and a single shared def keeps multiple renderers in one script
+   from drifting apart.
 3. Add a test per site with a deliberately empty middle field. That test fails today.
 4. Consider a shared `tsv_read` helper in `lib/` so the sentinel convention is declared
    once rather than re-derived 22 times.

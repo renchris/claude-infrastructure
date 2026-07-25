@@ -186,6 +186,28 @@ for f in sorted(glob.glob('tests/*.bats')):
             i += 1
 ```
 
+## The general shape: a false guarantee is worse than a missing one
+
+A missing test is a **known gap**. A dead test is a **false guarantee** — and it also hides
+its own incorrectness. The sharpest demonstration came from `tm/relogin-obs`: making the
+dead `§2 UNKNOWN` assertion live proved the assertion was **also wrong**. It read
+`! grep -qE '\bOK\b'` over the whole output blob, which could never have held, because the
+tool's own warning text ends *"Reporting UNKNOWN, NOT OK."* It had been passing for two
+independent wrong reasons simultaneously, and neither was visible while it was dead.
+
+The same shape recurs one layer down, at the **fixture** layer, and is worth checking for
+whenever a test asserts that something did *not* happen:
+
+> **Self-validating spies.** A spy asserting `heal_calls == 0` proves nothing if the spy is
+> mis-wired — an unhooked spy also reports zero. The no-heal test therefore asserts both
+> that `--relogin-status` calls `heal` **0×** *and* that the same stubs under plain `--json`
+> call it **≥1×**. Without that positive control, a green result is indistinguishable from a
+> broken fixture.
+
+Generalisation: **every negative assertion needs a positive control** — a nearby case that
+must exercise the same machinery and produce the opposite result. Without one, "it didn't
+happen" and "we never looked" are the same green.
+
 ## Suggested sequencing
 
 1. `tests/cc-reaper.bats` first (31, safety-critical destructive actor), then
