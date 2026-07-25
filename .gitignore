@@ -25,6 +25,17 @@
 # ad-hoc token-usage snapshot dumps (cross-account transcript analysis, 2026-07-16) — generated, never source
 usage/
 
+# agents/ — name-invoked subagent definitions; this repo IS their source of truth.
+# The global gitignore's RESEARCH-*.md rule (meant for UPPERCASE research OUTPUT docs) also
+# matches lowercase research-*.md on macOS's case-insensitive filesystem. It already had to
+# hand-negate one casualty by name (!research-subagents.md), and it silently swallowed
+# agents/research-decomposition-critic.md on 2026-07-25 — `git add agents/` staged 3 of 4 files
+# and reported no error. Un-ignore this repo's own agent surface structurally, by path, so the
+# next research-named agent is not lost the same way. (Repo .gitignore is read AFTER the global
+# excludesFile, so this negation wins; agents/ itself was never excluded — only the *.md
+# pattern was — so re-inclusion is legal here.)
+!agents/*.md
+
 # python bytecode cache (bin/*.py, cc-wave-plan, claude-accounts, etc.)
 __pycache__/
 *.pyc
