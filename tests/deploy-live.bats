@@ -7,6 +7,7 @@ setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   DL="$REPO/scripts/deploy-live.sh"
   NIGHTLY="$REPO/scripts/nightly-regression.sh"
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"   # hermetic: never touch the live ~/
   ORIGIN="$BATS_TEST_TMPDIR/origin.git"
   SHARED="$BATS_TEST_TMPDIR/shared"
   STAMPS="$BATS_TEST_TMPDIR/postland/stamps"
