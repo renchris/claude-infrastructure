@@ -45,9 +45,29 @@ STUB
   export HANDOFF_ACCOUNT_SWEEP_STAMP="$BATS_TEST_TMPDIR/stamp.json"
   export CC_HEAL_LOCK_PREFIX="$BATS_TEST_TMPDIR/lock-"
   export HANDOFF_ACCOUNT_SWEEP_THROTTLE_S=0     # no throttle unless a test opts in
+
+  # The sweep filters on .auth_actionable — the CLI's own verdict, derived there from
+  # ACTIONABLE_AUTH. Read that list OUT OF THE CLI so these fixtures cannot claim an emission
+  # shape the producer does not actually have, and inject it in rows() rather than hand-writing
+  # it into every literal: a hand-copied state list is the precise drift this field removed.
+  CC_ACTIONABLE_JSON="$(python3 - "$REPO/bin/claude-accounts" <<'PY'
+import importlib.machinery, json, sys
+loader = importlib.machinery.SourceFileLoader("ca", sys.argv[1])
+mod = importlib.util.module_from_spec(importlib.util.spec_from_loader("ca", loader))
+loader.exec_module(mod)
+print(json.dumps(list(mod.ACTIONABLE_AUTH)))
+PY
+)"
+  export CC_ACTIONABLE_JSON
 }
 
-rows() { printf '%s' "$1" > "$BATS_TEST_TMPDIR/rows.json"; export CC_STUB_ROWS_JSON="$BATS_TEST_TMPDIR/rows.json"; }
+rows() {
+  local f="$BATS_TEST_TMPDIR/rows.json"
+  printf '%s' "$1" | jq -c --argjson act "$CC_ACTIONABLE_JSON" \
+    '.rows |= map(. + {auth_actionable: (.auth as $a | ($act | index($a)) != null)})' > "$f" \
+    || printf '%s' "$1" > "$f"     # a deliberately malformed fixture stays verbatim
+  export CC_STUB_ROWS_JSON="$f"
+}
 info() { printf '%s' "$2" > "$CC_STUB_INFO_DIR/$1.json"; }
 
 @test "all accounts healthy → no bridge, exit 0, stderr reports healthy" {
@@ -192,4 +212,43 @@ info() { printf '%s' "$2" > "$CC_STUB_INFO_DIR/$1.json"; }
   HANDOFF_ACCOUNT_SWEEP=off run bash "$HF" --dry-run --prompt-file "$pf" --session-id "fake:UUID" --account next
   [ "$status" -eq 0 ]
   echo "$output" | grep -q "account sweep OFF"
+}
+
+@test "an EXPIRED refresh token skips Phase-1 (it cannot succeed) and goes straight to the bridge" {
+  # has_refresh_token is true and every other precondition holds — but the token is past its
+  # own expiry, so the grant returns invalid_grant by construction. claude-heal-ok would
+  # otherwise report success here, which is exactly what makes this fixture the discriminator:
+  # a pass means the gate read the expiry, not the mere presence of a token.
+  rows '{"rows":[{"acct":"next2","auth":"login-required","k":0}]}'
+  info next2 "{\"config_dir\":\"/x\",\"keychain_service\":\"svc\",\"keychain_state\":\"present\",\"claude_bin\":\"$BIN/claude-heal-ok\",\"oauth_scopes\":\"a b\",\"has_refresh_token\":true,\"refresh_token_expired\":true}"
+  run bash "$HF" account-sweep
+  [ "$status" -eq 0 ]
+  ! echo "$output" | grep -q "healed via Phase-1"     # the 90s subprocess was never spent
+  echo "$output" | grep -q "## ACCOUNT STATE"
+  echo "$output" | grep -q "next2 — login-required"
+  echo "$output" | grep -q "stranded=1"
+}
+
+@test "login-required is gated as actionable — a state added after the old hand-copied list" {
+  # The retired filter named three auth states literally, so every state introduced later
+  # (no-oauth-blob, probe-error, and now login-required) silently passed the gate as healthy.
+  rows '{"rows":[{"acct":"next","auth":"ok","k":0},{"acct":"next2","auth":"login-required","k":0}]}'
+  info next2 '{"config_dir":"/x","keychain_service":"svc","keychain_state":"present","claude_bin":"/x/claude","oauth_scopes":"a b","has_refresh_token":true,"refresh_token_expired":true}'
+  run bash "$HF" account-sweep
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "next2 — login-required"
+  ! echo "$output" | grep -q "accounts healthy"
+}
+
+@test "version skew: rows without .auth_actionable are NAMED, never read as a healthy fleet" {
+  # Written past rows() on purpose — this is the shape an older claude-accounts emits. The
+  # filter would match nothing, so the danger is not a crash but a confident "all healthy"
+  # over a fleet that cannot authenticate. The gate must announce that it did not run.
+  printf '%s' '{"rows":[{"acct":"next3","auth":"logged-out","k":0}]}' > "$BATS_TEST_TMPDIR/rows.json"
+  export CC_STUB_ROWS_JSON="$BATS_TEST_TMPDIR/rows.json"
+  run bash "$HF" account-sweep
+  [ "$status" -eq 0 ]                                  # degrade, never block a fire
+  echo "$output" | grep -q "version skew"
+  echo "$output" | grep -q "auth gate SKIPPED"
+  ! echo "$output" | grep -q "accounts healthy"        # the claim it must NOT make
 }

@@ -18,7 +18,16 @@ claude-accounts --relogin-info <acct>          # keychain_state + has_refresh_to
 CLAUDE_CONFIG_DIR=$CFG $BIN auth status        # "Not logged in..." = confirmed
 ```
 
-- `keychain_state: present` + `has_refresh_token: true` → Phase 1 (no browser needed).
+- `keychain_state: present` + `has_refresh_token: true` + `refresh_token_expired: false`
+  → Phase 1 (no browser needed).
+- `refresh_token_expired: true` → **skip Phase 1 entirely, go to Phase 2.** Present is not
+  usable: past its own expiry the refresh grant returns `invalid_grant` by construction, so
+  Phase 1 can only spend ~90s confirming what `refresh_token_expires_at` already said. That
+  stamp is anchored to the last interactive login and a refresh does NOT extend it, so every
+  account reaches this state on a roughly monthly cycle — it is the normal end of a login,
+  not evidence that anything broke.
+- `auth: login-required` with an unexpired stamp → the grant was REJECTED (revoked
+  server-side). Also Phase 2; the stamp looking healthy does not make Phase 1 viable.
 - `no-keychain-item` (a real `/logout` deletes the item) or Phase 1 fails
   `invalid_grant` → Phase 2.
 - A false "logged-out" can be a transient rotation race — if the account has live

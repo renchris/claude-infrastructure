@@ -38,7 +38,7 @@ json.dump({
   # the moment a constant is added, and the suite then certifies math production never runs;
   # cache_grace_s was added later and a hand-copied fixture missed it immediately).
   "cache_ttl_s": r["cache_ttl_s"], "lock_wait_s": r["lock_wait_s"],
-  "cache_grace_s": r["cache_grace_s"],
+  "cache_grace_s": r["cache_grace_s"], "login_warn_h": r["login_warn_h"],
   "frontier": r["frontier"], "router": r["router"],
   "accounts": [{"name": "next3", "config_dir": "/tmp/ca-test-nonexistent-xyz",
                 "launcher": "claude-next3", "fable_launcher": "claude-fable3",
@@ -694,5 +694,162 @@ nfd = unicodedata.normalize("NFD", "/Users/x/.claude-café")
 assert nfc != nfd                                   # genuinely different byte sequences
 assert ca.keychain_service(nfc) == ca.keychain_service(nfd)
 print("OK")'
+  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]]
+}
+
+# ---- the login cliff (refreshTokenExpiresAt) -------------------------------------------------
+#
+# The refresh token carries its OWN expiry, anchored to the last INTERACTIVE login and not
+# extended by a refresh grant. Past it only /login recovers the account. These pin the two
+# halves of the 2026-07-24 gap: the deadline was never read at all, and a heal the server had
+# REJECTED was reported as benign "stale".
+
+@test "_heal_rejected: classifies on the HTTP status, not on the words invalid/revoked" {
+  run python3 -c "$LOAD"'
+# the exact string the official binary emitted for next3, 2026-07-24 — no "invalid", no
+# "revoked", and the substring hunt it replaced scored it as benign.
+assert ca._heal_rejected("Login failed: Request failed with status code 400") is True
+assert ca._heal_rejected("Login failed: Request failed with status code 401") is True
+assert ca._heal_rejected("invalid_grant") is True
+assert ca._heal_rejected("refresh token revoked") is True
+# NOT a verdict on the credentials — transport, load, or a heal that never ran. Treating any
+# of these as terminal would demand an interactive login the account does not need.
+assert ca._heal_rejected("skipped: 2 live session(s) — CC owns the token lifecycle") is False
+assert ca._heal_rejected("skipped: no refresh token in keychain") is False
+assert ca._heal_rejected("heal timed out") is False
+assert ca._heal_rejected("Request failed with status code 500") is False
+assert ca._heal_rejected("Request failed with status code 429") is False
+assert ca._heal_rejected("") is False
+assert ca._heal_rejected(None) is False
+print("OK")'
+  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]]
+}
+
+@test "collect: a REJECTED heal is login-required, never benign stale" {
+  run python3 -c "$LOAD"'
+ca.LASTGOOD_PATH = os.environ["CA_LEDGER"]
+ca.concurrency = lambda c: {"next3": 0}                     # zero sessions ⇒ heal is attempted
+ca.read_creds = lambda d, k: ({"accessToken": "t", "refreshToken": "r", "expiresAt": 1000},
+                              "present")
+ca.heal = lambda *a, **k: (False, "Login failed: Request failed with status code 400")
+ca.fetch_usage = lambda *a, **k: (401, {})
+r = ca.collect(cfg)[0]
+assert r["auth"] == "login-required", r
+assert "/login" in r["error"], r                            # names the ONE action that works
+assert r["auth_actionable"] is True and r["login_fixable"] is True, r
+# a heal that merely did not happen stays stale — the distinction is the whole point
+ca.heal = lambda *a, **k: (False, "heal timed out")
+r = ca.collect(cfg)[0]
+assert r["auth"] == "stale", r
+print("OK")'
+  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]]
+}
+
+@test "collect: an EXPIRED refresh token skips the futile heal and keeps quota readable" {
+  run python3 -c "$LOAD"'
+import time
+ca.LASTGOOD_PATH = os.environ["CA_LEDGER"]
+ca.concurrency = lambda c: {"next3": 0}
+tripped = []
+ca.heal = lambda *a, **k: (tripped.append(1), (False, "should never run"))[1]
+# access token stale AND the refresh token past its own expiry
+ca.read_creds = lambda d, k: ({"accessToken": "t", "refreshToken": "r", "expiresAt": 1000,
+                               "refreshTokenExpiresAt": (time.time() - 3600) * 1000}, "present")
+ca.fetch_usage = lambda *a, **k: (200, {"limits": [
+    {"kind": "session", "percent": 12, "resets_at": "2099-01-01T00:00:00Z"},
+    {"kind": "weekly_all", "percent": 40, "resets_at": "2099-01-01T00:00:00Z"}]})
+r = ca.collect(cfg)[0]
+assert not tripped, "heal was attempted past the refresh-token expiry (cannot succeed)"
+assert r["auth"] == "login-required", r
+assert r["login_expired"] is True, r
+# the account needs a login, but its quota is NOT blanked — that is a different claim
+assert r["weekly_pct"] == 40, r
+print("OK")'
+  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]]
+}
+
+@test "collect: the login deadline is recorded on HEALTHY rows — lead time is the point" {
+  run python3 -c "$LOAD"'
+import time
+ca.LASTGOOD_PATH = os.environ["CA_LEDGER"]
+ca.concurrency = lambda c: {"next3": 0}
+ca.read_creds = lambda d, k: ({"accessToken": "t", "expiresAt": 9e12,
+                               "refreshTokenExpiresAt": (time.time() + 20 * 3600) * 1000},
+                              "present")
+ca.fetch_usage = lambda *a, **k: (200, {"limits": [
+    {"kind": "weekly_all", "percent": 10, "resets_at": "2099-01-01T00:00:00Z"}]})
+r = ca.collect(cfg)[0]
+assert r["auth"] == "ok" and r["weekly_pct"] == 10, r          # fully healthy RIGHT NOW...
+assert r["login_expired"] is False, r
+assert 19 < r["login_expires_h"] < 21, r          # ...and 20h from needing an interactive login
+assert r["login_expires_at"], r
+# a payload with no such stamp (older CC / API-key blob) must not be read as never-expiring
+ca.read_creds = lambda d, k: ({"accessToken": "t", "expiresAt": 9e12}, "present")
+r = ca.collect(cfg)[0]
+assert "login_expires_h" not in r and "login_expired" not in r, r
+print("OK")'
+  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]]
+}
+
+@test "auth predicates: the CLI owns them, so a consumer never re-derives the state list" {
+  run python3 -c "$LOAD"'
+# handoff-fire.sh hand-copied this list and matched 3 of 5. Every ACTIONABLE state must set
+# the boolean, and every /login-fixable state must be a subset of it.
+assert set(ca.LOGIN_FIXABLE) <= set(ca.ACTIONABLE_AUTH), (ca.LOGIN_FIXABLE, ca.ACTIONABLE_AUTH)
+assert "login-required" in ca.ACTIONABLE_AUTH and "login-required" in ca.LOGIN_FIXABLE
+# keychain-error and probe-error are NOT credential states — pointing the operator at /login
+# would send them at the wrong problem
+assert "keychain-error" not in ca.LOGIN_FIXABLE and "probe-error" not in ca.LOGIN_FIXABLE
+# every actionable state renders with a glyph (an unmapped state falls back to a gray dot,
+# which reads as a healthy row)
+for s in ca.ACTIONABLE_AUTH:
+    assert s in ca.AUTH_GLYPH, s
+ca.LASTGOOD_PATH = os.environ["CA_LEDGER"]
+ca.concurrency = lambda c: {"next3": 0}
+ca.read_creds = lambda d, k: (None, "no-keychain-item")
+r = ca.collect(cfg)[0]
+assert r["auth"] == "logged-out" and r["auth_actionable"] is True and r["login_fixable"] is True
+ca.read_creds = lambda d, k: (None, "keychain-error")
+r = ca.collect(cfg)[0]
+assert r["auth_actionable"] is True and r["login_fixable"] is False, r
+print("OK")'
+  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]]
+}
+
+@test "_fmt_when: absolute local wall-clock, dated once a bare weekday turns ambiguous" {
+  run python3 -c "$LOAD"'
+from datetime import datetime, timezone, timedelta
+now = datetime.now(timezone.utc)
+soon = ca._fmt_when((now + timedelta(hours=20)).isoformat())
+assert ":" in soon and len(soon.split()) == 2, soon           # "Sat 12:39"
+far = ca._fmt_when((now + timedelta(days=14)).isoformat())
+assert len(far.split()) == 3, far                             # "Sat Aug 08" — dated
+assert ca._fmt_when(None) == "" and ca._fmt_when("not-a-date") == ""
+print("OK")'
+  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]]
+}
+
+@test "e2e --login-status: the exit code IS the answer, and 0 stays silent" {
+  # the fixture account has no keychain item ⇒ logged-out ⇒ /login-fixable ⇒ action required
+  run python3 "$CA_BIN" --login-status --fresh --no-heal
+  [ "$status" -eq 2 ]
+  [[ "${lines[0]}" == next3*REQUIRED* ]]
+  # the deadline columns stay blank: this verdict is NOT driven by a deadline, and printing a
+  # future expiry beside REQUIRED reads as "required, and it expires later"
+  [[ "${lines[0]}" == *"—"*"—"* ]]
+  [[ "${lines[0]}" == *claude-next3* ]]
+  # all-clear is silent AND exit 0 — a check that always prints stops being read
+  CLAUDE_ACCOUNTS_JSON="$CA_CFG" run python3 - "$CA_BIN" <<'PY'
+import importlib.machinery, importlib.util, os, subprocess, sys, time
+src = open(sys.argv[1]).read().replace(
+    'rows, wj, cached, prev = get_data(cfg, fresh=fresh, no_heal=no_heal)',
+    'rows = [{"acct": "next3", "auth": "ok", "launcher": "claude-next3",\n'
+    '         "login_expires_h": 500.0, "login_expires_at": "2099-01-01T00:00:00+00:00",\n'
+    '         "login_fixable": False}]\n    wj, cached, prev = {}, False, None')
+p = subprocess.run([sys.executable, "-c", src, "--login-status"], capture_output=True, text=True)
+assert p.returncode == 0, (p.returncode, p.stdout, p.stderr)
+assert p.stdout.strip() == "", p.stdout
+print("OK")
+PY
   [ "$status" -eq 0 ] && [[ "$output" == *OK* ]]
 }

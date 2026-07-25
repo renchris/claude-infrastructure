@@ -68,6 +68,16 @@ One entrypoint over the 4-account fleet. The mechanism is `~/bin/claude-accounts
      assume 85) · weekly at 100% **LIMITED** · Fable exhausted
      (`route_reasons.fable == "fable-exhausted"`) · `¢` extra-usage credits ON (+ `credits_used`)
      · `auth` ≠ ok · stale/throttled rows per the rule above. Row order = the CLI's own order.
+   - **The login cliff — carry it whenever the CLI does.** Every row has `login_expires_at` /
+     `login_expires_h` / `login_expired`: the refresh token's OWN expiry, which a refresh does
+     NOT extend, so it is a hard per-account deadline that only an interactive `/login` clears.
+     Report any account inside the warn window (`login_warn_h` in the SSOT, default 72h) as a
+     bullet — absolute local time first, then the remaining — and say the fix is
+     `<launcher>` → `/login`. Never present it as a quota or reset number; it is neither.
+     If the ROUTED winner is inside that window, say so on the routing line too: the account is
+     still the correct pick on headroom, but a long session fired onto it outlives its
+     credentials. Do not warn about it on a row already reported as `login-required` — that is
+     the same fact, arrived.
    - Close with the router footer (`➤ general → X` · `➤ fable → Y`) + the Fable window line.
      When the window is **permanent**, there is no countdown to report — say "permanent",
      never a date-derived time remaining.
@@ -88,15 +98,27 @@ One entrypoint over the 4-account fleet. The mechanism is `~/bin/claude-accounts
      prose string, is what to reason from.
    - **`auth` column**: `ok` fine · `healed` was stale, self-repaired via headless
      `claude auth login` (logged to `~/.claude/logs/claude-accounts.log`) · `stale`
-     expired access token, heal skipped (live sessions own the token lifecycle) ·
+     expired access token, not healed (live sessions own the token lifecycle) ·
+     `login-required` the refresh token is past its expiry, or the refresh grant was
+     REJECTED — no headless path can recover this one, only an interactive `/login` ·
      `logged-out` / `token-invalid` / `keychain-error` / `no-oauth-blob` (item present but
-     carries no OAuth credentials) → step 4. `probe-error` means that one account's probe
+     carries no OAuth credentials) → step 4.
+     Filter on **`auth_actionable`** (needs an operator action) and **`login_fixable`**
+     (an interactive `/login` is what fixes it — excludes `keychain-error` and `probe-error`,
+     which are not credential states). Never re-derive either from a list of auth strings:
+     a hand-copied list in `handoff-fire.sh` had already drifted to 3 of 5 states. `probe-error` means that one account's probe
      raised unexpectedly and was contained; the traceback is in
      `~/.claude/logs/claude-accounts.log` and the other rows are unaffected.
    - **`stale` with live sessions is NOT a problem** — it is the designed state. The heal is
      deliberately skipped while `k > 0` because the running CC owns the token lifecycle and a
      concurrent refresh could rotate the token out from under it. Report it as benign; do not
      recommend a relogin for it. Only the step-4 states need action.
+     **But read `heal_note` before calling any `stale` row benign.** That benign reading holds
+     for a heal that was *skipped* (`heal_note` starts with `skipped:`). A heal that RAN and
+     FAILED is a different fact on an identical-looking row — the table now says `heal FAILED`
+     rather than `heal skipped`, and a rejected grant is promoted out of `stale` to
+     `login-required` outright. A residual `stale` + `heal FAILED` (a timeout or a 5xx) is
+     transient: say so, and that `--fresh` retries it. Never restate it as the designed state.
    - **Fable window** comes LIVE from `~/.claude/model-config.yaml frontier_access`
      — if it reads `UNKNOWN`, fix the SSOT parse before trusting any Fable routing.
      `window.permanent: true` means Fable is a standing plan inclusion with NO expiry —
@@ -109,16 +131,27 @@ One entrypoint over the 4-account fleet. The mechanism is `~/bin/claude-accounts
      never fall back to a remembered static account order (both historical static
      lists went stale within 48h — endpoint data is the only SSOT).
 
-4. **Logged-out account?** The table prints its email + Dia profile. Get the full
+4. **Account needs a login?** The table prints its email + Dia profile. Get the full
    identity block and invoke the re-login runbook:
 
    ```bash
-   claude-accounts --relogin-info <acct>   # email, mailbox, Dia profile+dir, keychain, RT presence
+   claude-accounts --relogin-info <acct>   # email, mailbox, Dia profile+dir, keychain, RT state
+   claude-accounts --login-status          # every account needing /login now or soon
    ```
 
    Then use the **account-relogin skill** (Skill tool: `account-relogin`) — it
    covers the headless refresh-token path (no browser) and the browser-assisted
    OAuth path via the account's Dia profile, including the email-code fallback.
+   **Check `refresh_token_expired` first.** Phase 1 (the headless refresh-token grant)
+   cannot succeed once that stamp has passed — go straight to Phase 2 (browser OAuth)
+   rather than spending 90s proving what the keychain already stated. The same is true for
+   `auth: login-required` reached via a rejected grant, where the stamp still looks healthy.
+
+   `--login-status` is the surface for hooks and pollers: TSV lines
+   (`acct · REQUIRED|EXPIRING · reason · expiry · remaining · launcher`) and the **exit code
+   is the answer** — `0` all clear (and it prints nothing), `1` a login expires within
+   `login_warn_h`, `2` action required now. It reads the shared cache, so it is safe to call
+   on a cadence; it never forces a sweep.
 
 5. **Routing-only asks** (`/accounts route fable`, "which account for X"): run
    `claude-accounts --route <kind>` — it stays the authoritative router; never re-derive the
