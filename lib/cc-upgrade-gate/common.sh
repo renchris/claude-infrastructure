@@ -42,8 +42,10 @@ gate_primary_account() { set -- $GATE_ACCOUNTS; printf '%s\n' "$1"; }
 gate_headless() {
   local cfg="$1" model="$2" prompt="$3"; shift 3
   local out
+  # </dev/null is load-bearing: without it `--print` blocks ~3s waiting on stdin (and can hang a
+  # tool-driving turn entirely). Redirecting makes every probe deterministic and prompt.
   out="$(CLAUDE_CONFIG_DIR="$cfg" DISABLE_AUTOUPDATER=1 CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=1 \
-         "$GATE_BIN" --model "$model" --print --output-format json "$@" "$prompt" 2>/dev/null)"
+         "$GATE_BIN" --model "$model" --print --output-format json "$@" "$prompt" </dev/null 2>/dev/null)"
   printf '%s' "$out"
   # transport check: did we get a JSON object back at all?
   printf '%s' "$out" | head -c 1 | grep -q '{'
@@ -149,15 +151,18 @@ need() { command -v "$1" >/dev/null 2>&1; }
 
 # emit_result <n> <slug> <PASS|FAIL|SKIP> <evidence> [detail]
 # Appends one JSON line to $GATE_RESULTS (machine truth) and prints a colored one-liner to stderr.
+# NOTE: the status arg uses a local named `st`, NOT `status` — `status` is a read-only special var in
+# zsh, so `local status` aborts the function when these helpers are sourced into a zsh shell (as the
+# verify path does). The gate itself runs under bash, but keep this zsh-safe for source-based checks.
 emit_result() {
-  local n="$1" slug="$2" status="$3" evidence="$4" detail="${5:-}"
-  python3 - "$n" "$slug" "$status" "$evidence" "$detail" >>"$GATE_RESULTS" <<'PY'
+  local n="$1" slug="$2" st="$3" evidence="$4" detail="${5:-}"
+  python3 - "$n" "$slug" "$st" "$evidence" "$detail" >>"$GATE_RESULTS" <<'PY'
 import json, sys
 n, slug, status, evidence, detail = sys.argv[1:6]
 print(json.dumps({"check": int(n), "slug": slug, "status": status,
                   "evidence": evidence, "detail": detail}))
 PY
-  case "$status" in
+  case "$st" in
     PASS) ok   "#$n $slug — $evidence" ;;
     FAIL) bad  "#$n $slug — $evidence" ;;
     SKIP) skip "#$n $slug — $evidence" ;;

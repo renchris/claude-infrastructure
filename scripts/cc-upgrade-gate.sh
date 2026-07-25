@@ -28,6 +28,9 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/.." && pwd)"
 LIB="$REPO/lib/cc-upgrade-gate"
+# common.sh always loads from the real LIB; the CHECK-discovery dir is overridable so hermetic tests
+# can point at a temp dir of stub probes without globbing the real (or half-written) sibling checks.
+CHECKS_DIR="${CC_UPGRADE_GATE_CHECKS:-$LIB}"
 
 usage() {
   sed -n '2,30p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
@@ -71,9 +74,9 @@ echo "  accounts: $GATE_ACCOUNTS" >&2
 echo "  spawn:    $([ "$GATE_SPAWN" = 1 ] && echo 'live (#7/#8/#9 exercised)' || echo 'SKIP (#7/#8/#9)')" >&2
 echo >&2
 
-# ---- source every probe file (auto-discovery) ------------------------------------------------------
+# ---- source every probe file (auto-discovery from CHECKS_DIR) --------------------------------------
 shopt -s nullglob
-for f in "$LIB"/check*.sh; do
+for f in "$CHECKS_DIR"/check*.sh; do
   # shellcheck source=/dev/null
   . "$f" || echo "⚠️  failed to source $(basename "$f") — its check will register as MISSING" >&2
 done
