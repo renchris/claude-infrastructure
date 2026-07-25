@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  PERMANENTLY DISABLED — 2026-07-09 incident
+
+  This LaunchAgent caused a 2-minute retry storm that:
+  - Launched agent Dia instances via open -n from launchd (GUI registration abort)
+  - Raced with personal Dia SingletonLock, preventing personal Dia from opening
+  - Left ~14k lines of failure noise in dia-cdp.log
+  - Contributed to profile wipe (only "Work" profile remained)
+
+  DO NOT re-enable. Use on-demand foreground supervise instead:
+    ~/bin/dia-cdp-launch.sh supervise 3600
+    ~/bin/dia-cdp-launch.sh kill   # when done
+
+  Original plist preserved here for reference only.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.chrisren.dia-cdp</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/chrisren/bin/dia-cdp-launch.sh</string>
+        <string>launch</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin</string>
+        <key>HOME</key>
+        <string>/Users/chrisren</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StartInterval</key>
+    <integer>120</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/chrisren/Library/Logs/dia-cdp.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/chrisren/Library/Logs/dia-cdp.log</string>
+
+    <key>ProcessType</key>
+    <string>Interactive</string>
+</dict>
+</plist>
