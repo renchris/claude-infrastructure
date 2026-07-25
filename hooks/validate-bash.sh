@@ -211,7 +211,12 @@ fi
 # no-op; the reso-writer-lock.py + concurrent-writer-guard.sh stack was deleted. See the
 # parallel-sessions-simple plan / memory parallel-sessions-simple-2026-06-03.)
 
-# Log command for audit
+# Log command for audit — ISO timestamp + session id prefix (D-3). The bare `echo "$CMD"` left a
+# 13 MB log with no attribution and no line anchor: nothing was greppable by session, and a
+# multi-line command shredded the line structure with no way to tell a continuation line from a
+# new entry. `.session_id` comes from stdin (never CLAUDE_SESSION_ID — CC does not export it, D-9).
+SID=$(printf '%s' "$INPUT" | jq -r '.session_id // "-"' 2>/dev/null)
+[ -n "$SID" ] || SID="-"
 mkdir -p ~/.claude/logs
-echo "$CMD" >> ~/.claude/logs/bash-commands.log
+echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] [$SID] $CMD" >> ~/.claude/logs/bash-commands.log
 exit 0
