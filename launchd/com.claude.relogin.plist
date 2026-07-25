@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.claude.relogin — hourly cadence for `cc-relogin-poll`: catch the T−7d login-renewal window
+  and escalate at T−48h if no k==0 moment was ever caught.
+
+  WHY launchd and not a Claude hook: a hook dies with its session and only ever runs while a
+  session is alive. The login deadline does not care — it can fall on a weekend, mid-reboot, or
+  any stretch with no session running at all. Only a launchd job ticks when nothing is alive,
+  which is exactly the window this cadence exists to cover.
+
+  WHY `export PATH="$HOME/.claude/bin:$PATH"` in the command: `zsh -lc` runs a LOGIN shell, which
+  sources .zprofile/.zlogin but NOT .zshrc — where the ~/.claude/bin PATH entry lives. Without the
+  explicit export, `cc-relogin-poll` (and the `cc-relogin` / `claude-accounts` it shells out to) is
+  not on PATH and the job fails silently every hour. Previously observed; do not remove.
+
+  RunAtLoad is FALSE deliberately: loading the job must not fire an immediate re-login attempt.
+  The first tick comes one StartInterval (1h) later, on the normal schedule.
+
+  🚨 STAGED, NOT LOADED. This file ships inert — loading it is C10 OPERATOR ACTIVATION and is
+  explicitly out of scope for the build that authored it. No agent may run launchctl on it.
+
+  OPERATOR ACTIVATION (your call, when you want the cadence live):
+      cp launchd/com.claude.relogin.plist ~/Library/LaunchAgents/com.claude.relogin.plist
+      launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.claude.relogin.plist
+      launchctl list | grep com.claude.relogin          # verify it is registered
+  Dry-run it first (invokes nothing, mutates nothing):
+      cc-relogin-poll --dry-run --json
+  Deactivate:
+      launchctl bootout gui/$(id -u)/com.claude.relogin
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>            <string>com.claude.relogin</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>-lc</string>
+    <string>export PATH="$HOME/.claude/bin:$PATH"; cc-relogin-poll --once</string>
+  </array>
+  <key>StartInterval</key>    <integer>3600</integer>
+  <key>RunAtLoad</key>        <false/>
+  <key>ProcessType</key>      <string>Background</string>
+  <key>LowPriorityIO</key>    <true/>
+  <key>Nice</key>             <integer>10</integer>
+  <key>StandardOutPath</key>  <string>/Users/chrisren/.claude/logs/cc-relogin-poll.out.log</string>
+  <key>StandardErrorPath</key><string>/Users/chrisren/.claude/logs/cc-relogin-poll.err.log</string>
+</dict>
+</plist>

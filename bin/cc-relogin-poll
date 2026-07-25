@@ -1,0 +1,249 @@
+#!/usr/bin/env bash
+# cc-relogin-poll — the CADENCE layer for autonomous re-login. One tick per hour (launchd,
+# StartInterval 3600); each tick picks AT MOST ONE account and hands it to `cc-relogin`.
+#
+#   cc-relogin-poll [--json] [--dry-run] [--once] [--trigger-days N] [--escalate-hours N]
+#
+#   --json               machine-readable result object on stdout
+#   --dry-run            decide + report, invoke NOTHING (no cc-relogin, no board row, no state)
+#   --once               run exactly one tick and exit — the DEFAULT; accepted so a hand
+#                        invocation reads like the launchd one. This tool never loops/daemonizes.
+#   --trigger-days N     start attempting at T−N days (default 7)
+#   --escalate-hours N   raise the class-C blocker at T−N hours (default 48)
+#
+# WHY T−7d, not the 72h warn: `cc-relogin` can only act when the account has ZERO live sessions
+# (k==0), so a login deadline is otherwise one fragile attempt. A 7-day window turns it into
+# ~168 hourly chances to catch a k==0 moment on a busy account.
+#
+# WHY T−48h escalation: if days of hourly chances never caught a window, silence until the
+# deadline IS the failure. At T−48h the poller stops being quiet and raises a class-C
+# `relogin-blocked` row on the IDL board carrying the exact runnable recovery command — LOUD
+# BEFORE the deadline, never after. The row is raised BEFORE this tick's attempt, so a hung or
+# crashing attempt can never swallow the escalation. A row whose `deadline` has since moved is
+# historical (dedup key is acct+deadline: one row per deadline, never a per-tick page).
+#
+# 🚨 The poller NEVER takes /tmp/claude-accounts-heal-<acct>.lock — `cc-relogin` holds it for its
+# whole run, so a poller that took it would deadlock its own child. `k` is read only as a cheap
+# pre-filter to skip a doomed invocation; the authoritative gate lives inside `cc-relogin`.
+#
+# Counts ATTEMPTS, not successes (a counter that only moves on success never trips while the
+# thing is failing): CC_RELOGIN_POLL_MAX_ATTEMPTS attempts against one deadline escalate early.
+#
+# Detection ladder — never treat "cannot detect" as "nothing to do":
+#   1. `claude-accounts --login-status` (TSV: acct state reason when hours launcher) — support is
+#      probed POSITIVELY from the help text, never assumed: on `main` the unknown flag falls
+#      through to the human table WITH EXIT 0, which an exit-code check would read as "all clear".
+#   2. `claude-accounts --no-heal --fresh --json` → rows[] login_expires_at / login_expires_h /
+#      login_expired. `--no-heal` is NOT optional: a bare `--fresh --json` may run the headless
+#      heal (`claude auth login`, a token ROTATION) and it takes the very
+#      /tmp/claude-accounts-heal-<acct>.lock this poller must never hold. Detection must stay
+#      pure-read-only — credentials are `cc-relogin`'s exclusive business.
+#   3. neither surface → exit 3 DETECTION-UNAVAILABLE, naming what was missing.
+#
+# Exit: 0 nothing due / attempted / renewed · 1 poller error (bad args, missing jq, unwritable
+# state) · 3 DETECTION-UNAVAILABLE · 5 ESCALATED. A child `cc-relogin` failure is DATA, not a
+# poller error — it is logged, counted, and exits 0; the escalation is the loud channel.
+#
+# Env (test injection): CC_RELOGIN_POLL_LOG · CC_RELOGIN_POLL_STATE_DIR · CC_REAPER_IDL ·
+# CC_RELOGIN_POLL_ACCOUNTS_BIN · CC_RELOGIN_POLL_RELOGIN_BIN · CC_RELOGIN_POLL_NOW (fixed clock) ·
+# CC_RELOGIN_POLL_MAX_ATTEMPTS (24) · CC_RELOGIN_POLL_TIMEOUT_S (900, child watchdog).
+set -uo pipefail
+
+JSON=0 DRYRUN=0 TRIG_DAYS=7 ESC_HOURS=48
+while [ $# -gt 0 ]; do case "$1" in
+  --json)           JSON=1; shift ;;
+  --dry-run)        DRYRUN=1; shift ;;
+  --once)           shift ;;
+  --trigger-days)   TRIG_DAYS="${2:-}"; shift 2 ;;
+  --escalate-hours) ESC_HOURS="${2:-}"; shift 2 ;;
+  -h|--help)        sed -n '2,12p;29,45p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  *) echo "cc-relogin-poll: unknown arg $1 (usage: cc-relogin-poll [--json] [--dry-run] [--once] [--trigger-days N] [--escalate-hours N])" >&2; exit 1 ;;
+esac; done
+case "$TRIG_DAYS" in ''|*[!0-9]*) echo "cc-relogin-poll: --trigger-days needs a non-negative integer" >&2; exit 1 ;; esac
+case "$ESC_HOURS" in ''|*[!0-9]*) echo "cc-relogin-poll: --escalate-hours needs a non-negative integer" >&2; exit 1 ;; esac
+command -v jq >/dev/null || { echo "cc-relogin-poll: jq required" >&2; exit 1; }
+
+LOG="${CC_RELOGIN_POLL_LOG:-$HOME/.claude/logs/cc-relogin-poll.log}"
+STATE_DIR="${CC_RELOGIN_POLL_STATE_DIR:-$HOME/.claude/autonomy/relogin-poll}"
+IDL_FILE="${CC_REAPER_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
+ACCOUNTS_BIN="${CC_RELOGIN_POLL_ACCOUNTS_BIN:-claude-accounts}"
+RELOGIN_BIN="${CC_RELOGIN_POLL_RELOGIN_BIN:-cc-relogin}"
+MAX_ATTEMPTS="${CC_RELOGIN_POLL_MAX_ATTEMPTS:-24}"
+TIMEOUT_S="${CC_RELOGIN_POLL_TIMEOUT_S:-900}"
+
+# Tab is IFS *whitespace*, so `IFS=$'\t' read` collapses a RUN of tabs into one delimiter: an
+# EMPTY field silently shifts every later field left (a launcher landing in `k` reads as "account
+# busy" → the account is never attempted, silently, forever). A non-whitespace IFS is not the fix
+# either — macOS ships bash 3.2, whose `read` does not split on \001 at all. So: no field is ever
+# allowed to be empty. `norm <n>` pads every row to n fields and fills the empties with "-", which
+# each consumer maps back. Every row parsed here — both surfaces AND the state file — goes through it.
+norm() { awk -F'\t' -v n="$1" 'BEGIN{OFS="\t"} {if(NF<n)NF=n; for(i=1;i<=n;i++) if($i=="") $i="-"; NF=n; print}'; }
+dash() { [ "$1" = "-" ] && printf '' || printf '%s' "$1"; }   # sentinel → empty
+
+now()  { printf '%s' "${CC_RELOGIN_POLL_NOW:-$(date +%s 2>/dev/null || echo 0)}"; }
+utc()  { date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo ''; }
+log()  { mkdir -p "$(dirname "$LOG")" 2>/dev/null || true; printf '%s %s\n' "$(utc)" "$*" >> "$LOG" 2>/dev/null || true; }
+# ISO → epoch. BSD `date -j -f` first (both Z and ±hhmm forms), then GNU `date -d`. 0 = unparseable.
+iso_epoch() {
+  local iso="$1" e
+  [ -n "$iso" ] || { printf '0'; return; }
+  e="$(TZ=UTC date -j -f '%Y-%m-%dT%H:%M:%SZ' "$iso" +%s 2>/dev/null)" && { printf '%s' "$e"; return; }
+  e="$(date -j -f '%Y-%m-%dT%H:%M:%S%z' "$iso" +%s 2>/dev/null)" && { printf '%s' "$e"; return; }
+  e="$(date -d "$iso" +%s 2>/dev/null)" && { printf '%s' "$e"; return; }
+  printf '0'
+}
+epoch_iso() { date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo ''; }
+# "41.5" / "-3" → seconds. Empty when not a number (callers must not fabricate a deadline).
+hours_secs() { local h="${1%%.*}"; case "$h" in ''|-|*[!0-9-]*) printf '' ;; *) printf '%s' "$((h * 3600))" ;; esac; }
+
+# ── detection ladder ────────────────────────────────────────────────────────────────────────
+# ROWS lines (tab-separated, NO empty fields — "-" stands in): acct, deadline_epoch, k, launcher
+NOW="$(now)"; ROWS=""; DETECT="unavailable"; MISSING=""
+if "$ACCOUNTS_BIN" -h 2>/dev/null | grep -q -- '--login-status'; then
+  LS_OUT="$("$ACCOUNTS_BIN" --login-status 2>/dev/null)"; LS_RC=$?
+  if [ "$LS_RC" -le 2 ]; then
+    DETECT="login-status"
+    # norm 6 first: the frozen TSV carries an optional `reason`, and an empty one would otherwise
+    # collapse with its neighbour and slide `when`/`hours` into the wrong variables.
+    while IFS=$'\t' read -r a state _reason when hours launcher; do
+      case "${state:-}" in REQUIRED|EXPIRING) ;; *) continue ;; esac   # shape-validated, not trusted
+      dl="$(iso_epoch "$(dash "$when")")"
+      if [ "$dl" = 0 ]; then
+        s="$(hours_secs "$(dash "$hours")")"
+        if [ -n "$s" ]; then dl=$((NOW + s)); else continue; fi   # no parseable deadline → never fabricate one
+      fi
+      ROWS+="$a	$dl	-	$launcher"$'\n'   # k is not in the TSV — resolved lazily, only if we act
+    done < <(printf '%s\n' "$LS_OUT" | norm 6)
+  else
+    MISSING="claude-accounts --login-status advertised but exited $LS_RC"
+  fi
+else
+  MISSING="claude-accounts --login-status"
+fi
+if [ "$DETECT" = unavailable ]; then
+  JS="$("$ACCOUNTS_BIN" --no-heal --fresh --json 2>/dev/null)"
+  if printf '%s' "$JS" | jq -e '[.rows[]? | select(type=="object")
+        | select(has("login_expires_at") or has("login_expires_h") or has("login_expired"))] | length > 0' >/dev/null 2>&1; then
+    DETECT="json-fields"
+    while IFS=$'\t' read -r a at hrs expired k launcher; do
+      [ -n "$a" ] && [ "$a" != "-" ] || continue
+      dl="$(iso_epoch "$(dash "$at")")"
+      if [ "$dl" = 0 ]; then
+        s="$(hours_secs "$(dash "$hrs")")"
+        if [ -n "$s" ]; then dl=$((NOW + s)); elif [ "$expired" = true ]; then dl="$NOW"; else continue; fi
+      fi
+      ROWS+="$a	$dl	$k	$launcher"$'\n'
+    done < <(printf '%s' "$JS" | jq -r '.rows[]? | select(type=="object") | [(.acct//""),(.login_expires_at//""),
+              ((.login_expires_h // "")|tostring),((.login_expired//false)|tostring),((.k // "")|tostring),(.launcher//"")]
+              | @tsv' 2>/dev/null | norm 6)
+  else
+    MISSING="$MISSING + claude-accounts --fresh --json login_expires_at/login_expires_h/login_expired"
+  fi
+fi
+if [ "$DETECT" = unavailable ]; then
+  log "DETECTION-UNAVAILABLE no login-deadline surface: $MISSING — cannot tell whether a re-login is due; NOT treating this as nothing-to-do"
+  echo "cc-relogin-poll: DETECTION-UNAVAILABLE — missing: $MISSING" >&2
+  [ "$JSON" = 1 ] && jq -nc --arg m "$MISSING" '{ts:(now|todate),detection:"unavailable",missing:$m,action:"none",exit:3}'
+  exit 3
+fi
+
+# ── select: inside the T−trigger window, nearest deadline first, AT MOST ONE per tick ────────
+TRIG_EPOCH=$((NOW + TRIG_DAYS * 86400))
+CAND="$(printf '%s' "$ROWS" | awk -F'\t' -v lim="$TRIG_EPOCH" 'NF>=2 && $1!="" && $2 ~ /^-?[0-9]+$/ && $2+0 <= lim' \
+        | sort -t$'\t' -k2,2n)"
+NCAND="$(printf '%s' "$CAND" | grep -c . || true)"
+if [ "${NCAND:-0}" -eq 0 ]; then
+  log "no account inside the T-${TRIG_DAYS}d window (detection=$DETECT) — nothing due"
+  [ "$JSON" = 1 ] && jq -nc --arg d "$DETECT" --argjson td "$TRIG_DAYS" \
+    '{ts:(now|todate),detection:$d,trigger_days:$td,candidates:0,action:"none",exit:0}'
+  exit 0
+fi
+IFS=$'\t' read -r ACCT DL K LAUNCHER <<< "$(printf '%s' "$CAND" | head -1)"
+K="$(dash "$K")"; LAUNCHER="$(dash "$LAUNCHER")"
+SECS_LEFT=$((DL - NOW)); HOURS_LEFT=$((SECS_LEFT / 3600)); DL_ISO="$(epoch_iso "$DL")"
+
+# ── state: attempts + escalation are keyed to THIS deadline; a moved deadline resets both ────
+SFILE="$STATE_DIR/relogin-poll-$ACCT.json"; S_DL=""; S_ATT=0; S_ESC=""
+if [ -f "$SFILE" ]; then
+  IFS=$'\t' read -r S_DL S_ATT S_ESC < <(jq -r '[(.deadline//""),(.attempts//0),(.escalated_for//"")]|@tsv' "$SFILE" 2>/dev/null | norm 3)
+  S_DL="$(dash "$S_DL")"; S_ESC="$(dash "$S_ESC")"
+fi
+case "${S_ATT:-}" in ''|*[!0-9]*) S_ATT=0 ;; esac
+if [ "$S_DL" != "$DL" ]; then S_ATT=0; S_ESC=""; fi   # deadline moved (or first sighting) → fresh cycle
+write_state() { # <attempts> <escalated_for> <result>
+  mkdir -p "$STATE_DIR" 2>/dev/null || { echo "cc-relogin-poll: cannot create state dir $STATE_DIR" >&2; exit 1; }
+  jq -nc --arg dl "$DL" --argjson att "$1" --arg esc "$2" --arg res "$3" --arg ts "$(utc)" \
+    '{deadline:$dl,attempts:$att,escalated_for:$esc,last_ts:$ts,last_result:$res}' > "$SFILE" \
+    || { echo "cc-relogin-poll: cannot write state $SFILE" >&2; exit 1; }
+}
+
+# ── escalate FIRST (loud before the deadline — a hung attempt must not swallow it) ───────────
+RECOVER_CMD="cc-relogin $ACCT"
+ESC_NOW=0; ESC_REASON=""
+if [ "$SECS_LEFT" -le $((ESC_HOURS * 3600)) ]; then
+  ESC_NOW=1; ESC_REASON="T-${HOURS_LEFT}h to the login deadline ($DL_ISO) and no k==0 window caught in $S_ATT attempt(s)"
+elif [ "$S_ATT" -ge "$MAX_ATTEMPTS" ]; then
+  ESC_NOW=1; ESC_REASON="$S_ATT attempt(s) against deadline $DL_ISO all failed (cap $MAX_ATTEMPTS) — re-login is not self-healing"
+fi
+ESCALATED=0
+if [ "$ESC_NOW" = 1 ]; then
+  ESCALATED=1
+  if [ "$DRYRUN" = 1 ]; then
+    log "DRY-RUN would raise relogin-blocked for $ACCT: $ESC_REASON (recover: $RECOVER_CMD)"
+  elif [ "$S_ESC" = "$DL" ]; then
+    log "ESCALATED(already) $ACCT deadline=$DL_ISO — row already on the board for this deadline, not re-raising"
+  else
+    mkdir -p "$(dirname "$IDL_FILE")" 2>/dev/null || true
+    if jq -nc --arg ts "$(utc)" --arg acct "$ACCT" --arg dl "$DL_ISO" --arg reason "$ESC_REASON" \
+              --arg cmd "$RECOVER_CMD" --arg launcher "${LAUNCHER:-}" \
+         '{ts:$ts,actor:"cc-relogin-poll",kind:"relogin-blocked",acct:$acct,account:$acct,
+           deadline:$dl,launcher:$launcher,reason:$reason,recover_cmd:$cmd}' >> "$IDL_FILE"
+    then
+      S_ESC="$DL"; log "ESCALATED $ACCT deadline=$DL_ISO reason=$ESC_REASON recover=$RECOVER_CMD"
+    else
+      log "ESCALATION-WRITE-FAILED $ACCT board=$IDL_FILE — recover: $RECOVER_CMD"
+      echo "cc-relogin-poll: could not write the class-C row to $IDL_FILE — recover: $RECOVER_CMD" >&2
+    fi
+  fi
+fi
+
+# ── attempt: k is only a cheap pre-filter; cc-relogin owns the authoritative gate + the lock ──
+# (login-status has no k column, so resolve it from the CACHED sweep — never --fresh, an hourly
+# job must not force an endpoint sweep just to decide whether to skip.)
+[ -n "$K" ] || K="$("$ACCOUNTS_BIN" --no-heal --json 2>/dev/null | jq -r --arg a "$ACCT" '.rows[]? | select(.acct==$a) | (.k // "") | tostring' 2>/dev/null | head -1)"
+# ONLY a positive integer counts as busy. Unknown/garbage k → attempt anyway and let cc-relogin's
+# authoritative gate refuse: an unreadable pre-filter must never become a silent permanent skip.
+case "$K" in ''|0|*[!0-9]*) K_BUSY=0 ;; *) K_BUSY=1 ;; esac
+ACTION="invoked"; CHILD_RC=""
+if [ "$DRYRUN" = 1 ]; then
+  ACTION="dry-run"
+  log "DRY-RUN $ACCT deadline=$DL_ISO (T-${HOURS_LEFT}h, k=${K:-?}, attempts=$S_ATT) would run: $RELOGIN_BIN $ACCT"
+elif [ "$K_BUSY" = 1 ]; then
+  ACTION="skipped-busy"     # NOT an attempt: nothing was invoked, so the attempt cap must not move
+  log "SKIP $ACCT k=$K (>0) — cc-relogin would refuse; deadline=$DL_ISO T-${HOURS_LEFT}h attempts=$S_ATT"
+  write_state "$S_ATT" "$S_ESC" "skipped-busy"
+else
+  S_ATT=$((S_ATT + 1))
+  log "ATTEMPT #$S_ATT $ACCT deadline=$DL_ISO T-${HOURS_LEFT}h k=${K:-?} → $RELOGIN_BIN $ACCT (child stdout+stderr below)"
+  "$RELOGIN_BIN" "$ACCT" >>"$LOG" 2>>"$LOG" &
+  cp=$!
+  ( sleep "$TIMEOUT_S"; kill -TERM "$cp" 2>/dev/null ) >/dev/null 2>&1 &
+  wp=$!
+  wait "$cp"; CHILD_RC=$?
+  kill "$wp" 2>/dev/null; wait "$wp" 2>/dev/null
+  log "RESULT $ACCT attempt=$S_ATT exit=$CHILD_RC$([ "$CHILD_RC" = 0 ] && echo ' PROVEN — deadline should move')"
+  write_state "$S_ATT" "$S_ESC" "exit=$CHILD_RC"
+fi
+
+if [ "$JSON" = 1 ]; then
+  jq -nc --arg d "$DETECT" --arg a "$ACCT" --arg dl "$DL_ISO" --arg act "$ACTION" --arg k "${K:-}" \
+         --arg rc "${CHILD_RC:-}" --arg reason "$ESC_REASON" --arg cmd "$RECOVER_CMD" \
+         --argjson td "$TRIG_DAYS" --argjson eh "$ESC_HOURS" --argjson hl "$HOURS_LEFT" \
+         --argjson att "$S_ATT" --argjson cand "$NCAND" --argjson esc "$ESCALATED" --argjson dry "$DRYRUN" \
+    '{ts:(now|todate),detection:$d,trigger_days:$td,escalate_hours:$eh,candidates:$cand,acct:$a,
+      deadline:$dl,hours_left:$hl,k:$k,attempts:$att,action:$act,child_exit:$rc,
+      escalated:($esc==1),escalation_reason:$reason,recover_cmd:$cmd,dry_run:($dry==1),
+      exit:(if ($esc==1 and $dry==0) then 5 else 0 end)}'
+fi
+[ "$ESCALATED" = 1 ] && [ "$DRYRUN" = 0 ] && exit 5
+exit 0
