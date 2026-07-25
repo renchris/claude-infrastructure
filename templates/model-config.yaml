@@ -16,9 +16,9 @@ versions:
   # (+ opus_prior → claude-opus-4-8, then `claude-bump-models --apply`) is the FINAL activation step,
   # done ONLY after the operator's auto-mode live-test passes — flipping it now makes the lint demand a
   # sweep that refuses / silently-demotes not-yet-allowlisted teammate spawns (Sonnet-5 lesson).
-  opus_latest: claude-opus-4-8
-  opus_prior: claude-opus-4-7
-  opus_staged: claude-opus-5              # STAGED latest (2026-07-24), pending auto-mode activation. The
+  opus_latest: claude-opus-5
+  opus_prior: claude-opus-4-8
+  opus_staged: ""              # STAGED latest (2026-07-24), pending auto-mode activation. The
                                           # new Opus default per platform docs ("start with Opus 5 for
                                           # complex agentic coding + enterprise work"); ≈ Fable 5 on most
                                           # benchmarks at HALF the cost; Fable 5 REMAINS the frontier tier.
@@ -139,7 +139,7 @@ frontier_access:
                                             # claude-lint-models. Playbook: docs/research/FABLE5_WINDOW_PLAYBOOK_2026-07-01.md
                                             # Toggle history: open 06-09 → pulled-early 06-12 → residual 06-12 →
                                             # SHUT 06-12 (exhausted) → REDEPLOYED 07-01 (this window, Jul 1–7).
-  fallback: claude-opus-4-8                 # what frontier roles degrade to when inactive
+  fallback: claude-opus-5                 # what frontier roles degrade to when inactive
 
 # Pricing per MTok, input/output USD (source: claude-api skill catalog, 2026-06-09).
 # Used by research-subagents.md cost math — Fable slots cost 2× Opus slots.
@@ -173,7 +173,7 @@ pricing_per_mtok:
 auto_mode_allowlist:
   firstParty: [claude-opus-4-7, claude-opus-4-6, claude-sonnet-4-6]
   anthropicAws: [claude-opus-4-7, claude-opus-4-6, claude-sonnet-4-6]
-  non_firstParty_max: [claude-opus-4-8, claude-fable-5]   # STRICTER — our account. 4-8 confirmed in auto mode 2026-06-09. claude-fable-5 VERIFIED in auto mode 2026-06-09: the claude-next lead session itself runs `--permission-mode auto --model claude-fable-5` and operates fully autonomously (that live session IS the test — `auto-mode config` doesn't print allowModels). Fable teammates: eval-track (2.1.170) teams only — the stable 2.1.114 binary doesn't know the model and fails LOUDLY at spawn (not a silent demotion, so allowlisting it here is safe for both tracks).
+  non_firstParty_max: [claude-opus-4-8, claude-opus-5, claude-fable-5]   # STRICTER — our account. 4-8 confirmed in auto mode 2026-06-09. claude-fable-5 VERIFIED in auto mode 2026-06-09: the claude-next lead session itself runs `--permission-mode auto --model claude-fable-5` and operates fully autonomously (that live session IS the test — `auto-mode config` doesn't print allowModels). Fable teammates: eval-track (2.1.170) teams only — the stable 2.1.114 binary doesn't know the model and fails LOUDLY at spawn (not a silent demotion, so allowlisting it here is safe for both tracks).
   non_firstParty_non_max: [claude-opus-4-7, claude-opus-4-6, claude-sonnet-4-6]
 
 # Hardcoded by Anthropic in cli.js — not user-configurable (as of 2.1.112).
@@ -188,7 +188,7 @@ classifier_model: claude-sonnet-4-6
 # Docs, team briefs, and scripts reference role aliases via claude-bump-models —
 # when a role's optimal model changes, update here + run `claude-bump-models --apply`.
 roles:
-  lead_default: claude-opus-4-8             # lead/orchestrator sessions — Opus 4.8 @ effort max.
+  lead_default: claude-opus-5             # lead/orchestrator sessions — Opus 4.8 @ effort max.
                                             # REVERTED from claude-fable-5 2026-06-09 (launch day):
                                             # Fable-by-default at max effort exhausted 5-hour plan
                                             # windows prematurely. Fable 5 is OPT-IN ONLY while
@@ -204,7 +204,7 @@ roles:
                                             # `claude-fable` launcher remains as an optional human
                                             # surface. Conditional on frontier_access; post-window
                                             # degrades to fallback (say so in reports).
-  default_teammate: claude-opus-4-8         # Agent Teams run BOTH tracks (stable 2.1.114 AND
+  default_teammate: claude-opus-5         # Agent Teams run BOTH tracks (stable 2.1.114 AND
                                             # claude-next 2.1.170 — empirically fine 2.1.156+).
                                             # Teammate gate = auto_mode_allowlist, NOT the track.
                                             # DEFAULT stays Opus 4.8 (cost-effective workhorse;
@@ -226,9 +226,9 @@ roles:
                                             # binary-verified 2.1.170). Spot-check one member's
                                             # model via billing/transcript per team (GH #43869
                                             # silent-demotion risk). Else fallback 4-8.
-  teammate_mechanical: claude-opus-4-8      # same model; effort differentiates (see effort_defaults)
-  teammate_research: claude-opus-4-8        # same model; effort differentiates (see effort_defaults)
-  research_worker: claude-opus-4-8          # IN-PROCESS / teammate synthesis-worker default = GA ceiling (Opus 4.8).
+  teammate_mechanical: claude-opus-5      # same model; effort differentiates (see effort_defaults)
+  teammate_research: claude-opus-5        # same model; effort differentiates (see effort_defaults)
+  research_worker: claude-opus-5          # IN-PROCESS / teammate synthesis-worker default = GA ceiling (Opus 4.8).
                                             # In-process /research inherits LEAD effort (can't pin max, GH #25591) and
                                             # Sonnet 5 is NOT teammate-allowlisted → those two surfaces stay Opus 4.8.
                                             # HISTORY: T2 (probe wf_771c1e9f-644, 2026-06-30, on Sonnet 4.6) + re-probe
@@ -302,16 +302,10 @@ frontier_discovery_budget:
 #     the session, /effort stays adjustable, and an explicit --effort passed by the
 #     caller wins (Commander last-wins). Tier wrappers (claude-x/-h, claude-fable-h/-q)
 #     append their own --effort.
-#   - Settings floor (INTENDED xhigh; effort_defaults.settings_floor): each CLAUDE_CONFIG_DIR's
-#     settings.json "effortLevel" is the floor for non-wrapped surfaces — IDE extension, teammate
-#     pane spawns, bare binary calls. The schema enum caps at xhigh — `max` is expressible ONLY via
-#     --effort or the env var, so xhigh is the persistable floor. These settings.json are NOT
-#     symlinked: they are FIVE INDEPENDENT REAL files that drift apart. As of 2026-07-24 the live
-#     state is BELOW the floor — ~/.claude=high, ~/.claude-{next,secondary,tertiary,quaternary}=low
-#     — so every non-wrapped surface on the four accounts resolves `low`, not xhigh, until realigned
-#     (a class-C operator settings edit). scripts/effort-parity-assert.sh now ASSERTS the live dirs
-#     against effort_defaults.settings_floor (exit 1 on drift); neither claude-lint-models.sh (a
-#     model-id text lint) nor settings-drift-assert.sh (permissions.{deny,ask}+hooks only) caught it.
+#   - Settings floor: ~/.claude/settings.json "effortLevel": "xhigh" (symlinked into
+#     every CLAUDE_CONFIG_DIR) covers non-wrapped surfaces: IDE extension, teammate
+#     pane spawns, bare binary calls. The settings schema enum caps at xhigh — `max`
+#     is expressible ONLY via --effort or the env var, so xhigh is the persistable floor.
 #   - CLAUDE_CODE_EFFORT_LEVEL is BANNED from exports/settings-env: the binary re-reads
 #     it every turn AHEAD of session state, so it locks /effort for the whole session
 #     and cannot be unset from inside. session-start.sh has a tripwire that warns any
@@ -324,9 +318,7 @@ frontier_discovery_budget:
 #     forwarded; no --effort in pane argv). Mechanism:
 #     `~/.claude/scripts/set-teammate-effort.sh <worktree> low|medium|high|xhigh`
 #     run during worktree setup, before spawn. Capped at xhigh (settings schema);
-#     the CLAUDE_CONFIG_DIR settings floor applies when no worktree override is written (INTENDED
-#     xhigh — see the Settings-floor note above; currently drifted low/high, asserted by
-#     scripts/effort-parity-assert.sh).
+#     user-settings floor (xhigh) applies when no worktree override is written.
 #   - In-process SUBAGENTS (Agent tool, no team_name): inherit the lead's LIVE
 #     effort with NO override surface (AgentInput has no effort field; frontmatter
 #     `effort` not parsed — GH #25591/#25669/#31536/#65598 open). Fable panels
