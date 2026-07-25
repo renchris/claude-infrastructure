@@ -190,3 +190,96 @@ wait_for() { local i=0; while [ ! -e "$1" ] && [ "$i" -lt 60 ]; do sleep 0.05; i
   wait_for "$D/tmux-calls.log"
   grep -q "kill-pane -t %60" "$D/tmux-calls.log"
 }
+
+# ── teardown markers (2026-07-25) — an auto-shutdown must not read as a CRASH ─────────────────────
+# lead-crash-watchdog is a SessionStart hook with NO matcher: it arms on EVERY session, teammates
+# included. Closing a teammate's pane therefore kills a session whose own watchdog then runs the
+# classify ladder — no close-record (C10-pending), no jetsam, and no self-close prose (this teammate
+# never chose to close) — landing on CRASH. handoff-fire got its marker 2026-07-23 and cc-teardown
+# 2026-07-25; this is the same class on the TeammateIdle closer.
+
+@test "marker: a completed auto-shutdown writes the dual-keyed contract-v1 marker (sid + pane)" {
+  local sid=sidM team=teamM member=wkrMarker pane=%55 wt="$D/wtM"
+  mkdir -p "$wt"; worktreetsv "$team" "$member" "$wt"; teamcfg "$team" "$member" "$pane"
+  reg "$sid" PANE-M "$wt" 3600
+  tx "$sid" 9000                                      # idle, unadopted → closes
+  run hookrun "$member" "$team" "$sid" "$wt"
+  [ "$status" -eq 0 ]
+  wait_for "$D/tmux-calls.log"
+  TD="$HOME/.claude/watchdog/teardown"
+  wait_for "$TD/$sid.json"
+  [ -f "$TD/$sid.json" ]                              # keyed by the TEAMMATE's session id
+  [ -f "$TD/$pane.json" ]                             # …and by the pane it closed
+  run cat "$TD/$sid.json"
+  [[ "$output" == *'"key_kind":"sid"'* ]]
+  [[ "$output" == *"\"sid\":\"$sid\""* ]]
+  [[ "$output" == *"\"pane\":\"$pane\""* ]]
+  [[ "$output" == *'"mode":"teammate-idle"'* ]]       # the discriminator vs handoff-fire / cc-teardown
+  run cat "$TD/$pane.json"
+  [[ "$output" == *'"key_kind":"pane"'* ]]
+  run python3 -c "import json,sys; json.loads(open(sys.argv[1]).read().strip())" "$TD/$sid.json"
+  [ "$status" -eq 0 ]
+}
+
+@test "marker: a HELD (operator-adopted) teammate gets NO marker — a live pane is never masked" {
+  # The placement invariant: the marker goes in only once the close is inevitable. Writing it at any
+  # earlier decision point would mask a genuine crash of a teammate we then chose to KEEP.
+  local sid=sidN team=teamN member=wkrHeld pane=%56 wt="$D/wtN"
+  mkdir -p "$wt"; worktreetsv "$team" "$member" "$wt"; teamcfg "$team" "$member" "$pane"
+  reg "$sid" PANE-N "$wt" 3600
+  tx "$sid" 700; utx "$sid" 60                        # operator typed 60s ago → ADOPTED → held
+  run hookrun "$member" "$team" "$sid" "$wt"
+  [ "$status" -eq 0 ]
+  grep -q "operator-adopted" "$LOGF"
+  sleep 0.3
+  TD="$HOME/.claude/watchdog/teardown"
+  [ ! -e "$TD" ] || [ -z "$(ls -A "$TD" 2>/dev/null)" ]
+}
+
+@test "marker: an unresolved-WORKTREE SURFACE gets NO marker (the ungated-close guard stays clean)" {
+  export TEAMMATE_MAX_DEFERS=1
+  local sid=sidO team=teamO member=wkrSurface
+  tx "$sid" 9000
+  hookrun "$member" "$team" "$sid" /nonexistent-cwd >/dev/null   # defer
+  hookrun "$member" "$team" "$sid" /nonexistent-cwd >/dev/null   # SURFACE + page, no close
+  grep -q "SURFACE" "$LOGF"
+  sleep 0.3
+  TD="$HOME/.claude/watchdog/teardown"
+  [ ! -e "$TD" ] || [ -z "$(ls -A "$TD" 2>/dev/null)" ]
+}
+
+@test "marker: SESSION_ID literal \"unknown\" never becomes a marker filename (pane key only)" {
+  # The hook parses session_id with a `// "unknown"` default. An unknown.json marker would mask a
+  # genuine crash of whatever session the reader next asks about — it must never be written.
+  local team=teamP member=wkrNoSid pane=%57 wt="$D/wtP"
+  mkdir -p "$wt"; worktreetsv "$team" "$member" "$wt"; teamcfg "$team" "$member" "$pane"
+  printf '{"teammate_name":"%s","team_name":"%s","cwd":"%s"}' "$member" "$team" "$wt" | "$H" >/dev/null
+  wait_for "$D/tmux-calls.log"
+  TD="$HOME/.claude/watchdog/teardown"
+  wait_for "$TD/$pane.json"
+  [ -f "$TD/$pane.json" ]                             # pane-keyed marker still written
+  [ ! -e "$TD/unknown.json" ]                         # …but never the sentinel-keyed one
+  run cat "$TD/$pane.json"
+  [[ "$output" == *'"sid":""'* ]]
+}
+
+@test "marker contract: the REAL watchdog classifies an auto-shutdown as RECYCLE/deliberate-teardown" {
+  # End-to-end across the file boundary: drive the REAL hook, then the REAL reader. Neither side can
+  # drift into a green-but-wrong fixture.
+  local sid=sidQ team=teamQ member=wkrContract pane=%58 wt="$D/wtQ"
+  mkdir -p "$wt"; worktreetsv "$team" "$member" "$wt"; teamcfg "$team" "$member" "$pane"
+  reg "$sid" PANE-Q "$wt" 3600
+  tx "$sid" 9000
+  run hookrun "$member" "$team" "$sid" "$wt"
+  [ "$status" -eq 0 ]
+  TD="$HOME/.claude/watchdog/teardown"
+  wait_for "$TD/$sid.json"
+  W="$REPO/hooks/lead-crash-watchdog.sh"
+  mkdir -p "$D/wdbase/projects/slug" "$D/reg" "$D/nojetsam"
+  cp "$D/proj/slug/$sid.jsonl" "$D/wdbase/projects/slug/$sid.jsonl"   # the reader needs a transcript
+  CC_ACCOUNT_BASES="$D/wdbase" CC_REGISTRY_DIR="$D/reg" CC_JETSAM_DIRS="$D/nojetsam" \
+    run "$W" --classify "$sid"
+  [ "$status" -eq 0 ]
+  [[ "$output" == RECYCLE* ]]
+  [[ "$output" == *deliberate-teardown* ]]
+}
