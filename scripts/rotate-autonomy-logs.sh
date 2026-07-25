@@ -19,9 +19,11 @@
 # summary IDL record is emitted per run (rotated >= 0), so "ran but rotated nothing" stays
 # distinguishable from "never ran" (the autonomy-sweep B-3 convention).
 #
-# Targets: default = the three unbounded autonomy logs; override/extend via ROTATE_TARGETS
-#   (whitespace/newline-separated absolute paths, no spaces WITHIN a path) or positional args.
-#   A missing target is skipped, not an error (its writer may not have created it yet).
+# Targets: default = every unbounded autonomy/audit log (13, see DEFAULT_TARGETS below);
+#   override/extend via ROTATE_TARGETS (whitespace/newline-separated absolute paths, no spaces
+#   WITHIN a path) or positional args. A missing target is skipped, not an error (its writer may
+#   not have created it yet). Sibling files that share a target's prefix but are NOT rotations
+#   (the `<idl>.chain` hash chain) are excluded from the prune glob — see prune_one.
 #
 # ── IDL HASH-CHAIN EPOCHS (the cc-idl coupling) ──────────────────────────────────────────────
 # The IDL is the auditability substrate, sealed by a tamper-evident hash chain in a sidecar
@@ -311,15 +313,27 @@ repair_chain_epoch() {
 case "${1:-}" in --repair-chain-epoch) repair_chain_epoch; exit $? ;; esac
 
 # ── resolve the target list: positional args > ROTATE_TARGETS > the defaults ──
-# teammate-checkpoint.log joined 2026-07-25: teammate-checkpoint.sh is registered on PostToolUse
-# with an EMPTY matcher (every tool, every session) plus Stop, making it one of the highest-frequency
-# appenders on the box — and it was the only >5MB log outside this list, so nothing bounded it. It had
-# reached 13.6 MB / 104k lines accumulating since 2026-04-17. Same append-per-call, no-persistent-fd
-# shape as the others, so the existing `create`-mode rotation applies unchanged.
+# The plist (com.claude.log-rotation) invokes this with NO args and NO env, so DEFAULT_TARGETS *is*
+# the live coverage. It listed 3 files while ~/.claude/logs stood at 96 MB with nine unbounded
+# writers outside the list (audit 09 §4 / 03): teammate-checkpoint.log 13.6 MB · sessions.log
+# 2.8 MB · cc-reaper.log 2.0 MB · teammate-lifecycle.log 1.9 MB · session-index.log 1.7 MB ·
+# team-reaper.log 1.3 MB · lead-crash-watchdog.log 1.2 MB · cc-reaper.out.log 1.0 MB ·
+# task-quality-gate.log 707 KB — plus autonomy/supervisor.log. Every one is an append-only
+# `>>`-per-line writer holding no persistent fd, so they satisfy the same create-mode contract as
+# the original three; semantics (>=ROTATE_MAX_BYTES → rotate, keep ROTATE_KEEP) are unchanged.
 DEFAULT_TARGETS="$HOME/.claude/autonomy/idl.jsonl
 $HOME/.claude/logs/bash-commands.log
 $HOME/.claude/logs/bash-execution.log
+$HOME/.claude/autonomy/supervisor.log
 $HOME/.claude/logs/teammate-checkpoint.log
+$HOME/.claude/logs/task-quality-gate.log
+$HOME/.claude/logs/cc-reaper.log
+$HOME/.claude/logs/session-index.log
+$HOME/.claude/logs/sessions.log
+$HOME/.claude/logs/lead-crash-watchdog.log
+$HOME/.claude/logs/cc-reaper.out.log
+$HOME/.claude/logs/teammate-lifecycle.log
+$HOME/.claude/logs/team-reaper.log
 $HOME/.claude/autonomy/postland/flakes.jsonl
 $HOME/.claude/autonomy/postland/runner.log"
 

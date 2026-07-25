@@ -169,3 +169,72 @@ rot_count() { # <path>
   [ "$status" -eq 0 ]
   [ "$(rot_count "$T")" -eq 1 ]
 }
+
+# ══ DEFAULT_TARGETS coverage (audit 09 §4 / 03) ═══════════════════════════════════════════════
+# The plist (com.claude.log-rotation) invokes this with NO args and NO env, so DEFAULT_TARGETS IS
+# the live coverage. It listed 3 files while ~/.claude/logs stood at 96 MB with nine unbounded
+# writers outside the list. These tests drive the REAL default path (HOME redirected, no args, no
+# ROTATE_TARGETS) so a target dropped from the list goes RED.
+
+# the files the default list must cover, relative to $HOME
+DEFAULT_RELPATHS='.claude/autonomy/idl.jsonl
+.claude/logs/bash-commands.log
+.claude/logs/bash-execution.log
+.claude/autonomy/supervisor.log
+.claude/logs/teammate-checkpoint.log
+.claude/logs/task-quality-gate.log
+.claude/logs/cc-reaper.log
+.claude/logs/session-index.log
+.claude/logs/sessions.log
+.claude/logs/lead-crash-watchdog.log
+.claude/logs/cc-reaper.out.log
+.claude/logs/teammate-lifecycle.log
+.claude/logs/team-reaper.log'
+
+@test "DEFAULT_TARGETS covers every unbounded autonomy/log writer the audit named" {
+  export HOME="$BATS_TEST_TMPDIR/home"
+  mkdir -p "$HOME/.claude/autonomy" "$HOME/.claude/logs"
+  local rel n=0
+  while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    mkbytes "$HOME/$rel" 250            # 250 >= ROTATE_MAX_BYTES(100) → must rotate
+    n=$((n + 1))
+  done <<< "$DEFAULT_RELPATHS"
+  [ "$n" -eq 13 ]
+  run bash "$ROT"                        # no args, no ROTATE_TARGETS → the default list
+  [ "$status" -eq 0 ]
+  while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    [ "$(rot_count "$HOME/$rel")" -eq 1 ]
+    [ "$(wc -c < "$HOME/$rel" | tr -d ' ')" -eq 0 ]   # recreated empty in place
+  done <<< "$DEFAULT_RELPATHS"
+  grep -q '"rotated":13' "$CC_IDL"
+  grep -q '"skipped":0' "$CC_IDL"
+}
+
+@test "keep-8 / 25 MiB defaults are unchanged by the wider target list" {
+  # assert the SHIPPED defaults, not this suite's overrides
+  grep -q 'ROTATE_MAX_BYTES:-26214400' "$ROT"
+  grep -q 'ROTATE_KEEP:-8' "$ROT"
+}
+
+# ══ .chain glob collision (audit 03 §1b) ══════════════════════════════════════════════════════
+# `prune_one` globs `<f>.*`, which also matches the sibling tamper-evident hash chain
+# `idl.jsonl.chain` (bin/cc-idl:43). It sorted newest-first so it survived — but it consumed one
+# of the KEEP slots, leaving rotation history one short of the configured retention.
+@test "the .chain sibling is never pruned and never consumes a KEEP slot" {
+  local i kept=0 g
+  mkbytes "$T" 250
+  printf 'sealed-chain-bytes\n' > "$T.chain"
+  for i in 1 2 3 4; do printf 'old\n' > "$T.2026010${i}T000000Z"; done
+  run bash "$ROT" "$T"                   # rotates once → 5 rotations present, KEEP=3
+  [ "$status" -eq 0 ]
+  [ -f "$T.chain" ]                      # chain survives
+  grep -q 'sealed-chain-bytes' "$T.chain"
+  # exactly KEEP real rotations survive — the chain did not eat one of the slots
+  for g in "$T".*; do
+    case "$g" in *.chain) continue ;; esac
+    [ -e "$g" ] && kept=$((kept + 1))
+  done
+  [ "$kept" -eq 3 ]
+}
