@@ -54,6 +54,10 @@ STUB
 
   export PATH="$BATS_TEST_TMPDIR/stubs:$PATH"
 
+  # launcher dir seam — production writes the resume launcher to the SHARED /tmp under a sid-prefix
+  # name, so two concurrent runs of this suite race the same path. Per-test dir ⇒ no collision.
+  export LR_POLLER_LAUNCH_DIR="$BATS_TEST_TMPDIR/launchers"; mkdir -p "$LR_POLLER_LAUNCH_DIR"
+
   # claude-accounts stub — headroom by default; ACCTS_CAPPED=1 flips next4 to capped.
   cat > "$HOME/bin/claude-accounts" <<'STUB'
 #!/bin/bash
@@ -180,7 +184,7 @@ mk_spend_teammate_transcript() {
   [ "$status" -eq 0 ]
   [ "$(grep -c 'display notification' "$OSA_LOG")" -eq 1 ]           # notify-once, no per-tick spam
   [ "$(grep -c 'create window' "$OSA_LOG")" -eq 0 ]                  # nothing spawned
-  [ ! -e "/tmp/lr-poller-launch-dddddddd.sh" ]
+  [ ! -e "$LR_POLLER_LAUNCH_DIR/lr-poller-launch-dddddddd.sh" ]
   grep -q "READY dddddddd" "$STATE/poller.log"
 }
 
@@ -189,14 +193,14 @@ mk_spend_teammate_transcript() {
   LR_POLLER_AUTOFIRE=1 run bash "$POLLER" --once
   [ "$status" -eq 0 ]
   [ "$(grep -c 'create window' "$OSA_LOG")" -eq 1 ]
-  [ -x "/tmp/lr-poller-launch-eeeeeeee.sh" ]
-  grep -q "lr-fire-resume.sh" "/tmp/lr-poller-launch-eeeeeeee.sh"
+  [ -x "$LR_POLLER_LAUNCH_DIR/lr-poller-launch-eeeeeeee.sh" ]
+  grep -q "lr-fire-resume.sh" "$LR_POLLER_LAUNCH_DIR/lr-poller-launch-eeeeeeee.sh"
   [ -f "$STATE/resumed/eeeeeeee-1111-2222-3333-444444444444.json" ]
   [ ! -e "$STATE/parked/eeeeeeee-1111-2222-3333-444444444444.json" ]
   grep -q "RESUMED eeeeeeee" "$STATE/poller.log"
   LR_POLLER_AUTOFIRE=1 run bash "$POLLER" --once                     # idempotency: ledger moved ⇒ no re-fire
   [ "$(grep -c 'create window' "$OSA_LOG")" -eq 1 ]
-  rm -f "/tmp/lr-poller-launch-eeeeeeee.sh"
+  rm -f "$LR_POLLER_LAUNCH_DIR/lr-poller-launch-eeeeeeee.sh"
 }
 
 @test "LR-f: 5 ready rows, MAX_PER_RUN=4 → exactly 4 fire, CAP logged, 5th deferred" {
@@ -213,7 +217,7 @@ mk_spend_teammate_transcript() {
   [ "$(grep -c 'create window' "$OSA_LOG")" -eq 4 ]
   grep -q "CAP " "$STATE/poller.log"
   [ "$(ls "$STATE/parked" | grep -c '^ffffff0.*\.json$')" -eq 1 ]    # exactly one deferred to next tick
-  rm -f /tmp/lr-poller-launch-ffffff0*.sh
+  rm -f "$LR_POLLER_LAUNCH_DIR"/lr-poller-launch-ffffff0*.sh
 }
 
 @test "LR-g: LR_POLLER_DISABLED=1 → exit 0 immediately, zero writes, zero fires" {
@@ -234,7 +238,7 @@ mk_spend_teammate_transcript() {
   LR_POLLER_AUTOFIRE=1 run bash "$POLLER" --once
   [ "$status" -eq 0 ]
   grep -qE '^[0-9T:Z-]+ RESUMED hhhhhhhh' "$STATE/poller.log"        # timestamped, greppable outcome
-  rm -f /tmp/lr-poller-launch-hhhhhhhh.sh
+  rm -f "$LR_POLLER_LAUNCH_DIR"/lr-poller-launch-hhhhhhhh.sh
 }
 
 @test "LR-i: recurrence — a NEWER limit event re-parks a previously-resumed sid (marker is event-keyed, not forever)" {
@@ -271,12 +275,12 @@ mk_spend_teammate_transcript() {
   grep -q "lr-poller-launch-aaaa000j.sh" "$TMUX_LOG"
   # and NO iTerm2 window was opened (the GUI path was never taken)
   [ "$(grep -c 'create window' "$OSA_LOG")" -eq 0 ]
-  [ -x "/tmp/lr-poller-launch-aaaa000j.sh" ]
-  grep -q "lr-fire-resume.sh" "/tmp/lr-poller-launch-aaaa000j.sh"
+  [ -x "$LR_POLLER_LAUNCH_DIR/lr-poller-launch-aaaa000j.sh" ]
+  grep -q "lr-fire-resume.sh" "$LR_POLLER_LAUNCH_DIR/lr-poller-launch-aaaa000j.sh"
   [ -f "$STATE/resumed/aaaa000j-1111-2222-3333-444444444444.json" ]
   [ ! -e "$STATE/parked/aaaa000j-1111-2222-3333-444444444444.json" ]
   grep -qE 'RESUMED aaaa000j.*tmux' "$STATE/poller.log"              # mechanism recorded in the outcome
-  rm -f "/tmp/lr-poller-launch-aaaa000j.sh"
+  rm -f "$LR_POLLER_LAUNCH_DIR/lr-poller-launch-aaaa000j.sh"
 }
 
 @test "LR-k: monthly-spend kill (no reset) → class-B decision packet opened, NEVER silent-parked" {
@@ -314,7 +318,7 @@ mk_spend_teammate_transcript() {
   grep -q "lr-poller-launch-aaaa000m.sh" "$TMUX_LOG"
   [ -f "$STATE/resumed/aaaa000m-1111-2222-3333-444444444444.json" ]
   grep -qE 'RESUMED aaaa000m.*tmux' "$STATE/poller.log"
-  rm -f "/tmp/lr-poller-launch-aaaa000m.sh"
+  rm -f "$LR_POLLER_LAUNCH_DIR/lr-poller-launch-aaaa000m.sh"
 }
 
 @test "LR-n: teammate monthly-spend session → NO packet (lead-owned recovery), teammate-skip logged" {
