@@ -17,7 +17,29 @@ if [[ "${VALIDATE_BASH_DISABLED:-0}" == "1" ]]; then
 fi
 
 INPUT=$(cat)
-CMD=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
+
+# === JQ / PAYLOAD GUARD — fail OPEN, but never SILENTLY (audit 09 D-4) ===
+# Every other PreToolUse hook guards jq (backup-before-write.sh:17, git-worktree-guard.sh,
+# check-edit-boundary.sh, agent-teams-enforce.sh, frontier-spawn-gate.sh,
+# cc-unattended-ask-guard.sh, plan-agent-teams-default.sh). This one did not: with jq absent or
+# the payload unparseable, CMD went empty, EVERY danger pattern missed, and the hook exited 0 —
+# the bash validator silently disabled itself. Fail-open is the right availability posture for a
+# gate that can block a tool call; failing open with ZERO signal is the defect. So: still exit 0,
+# but leave one loud line behind (the keychain-guard.sh:19-21 documented-fail-open posture).
+# Sink + TSV shape (ts \t kind \t detail) are shared with lib/is-true-flag.sh:200-205, which
+# already logs its own "could not decide" case there — one file, one shape, one meaning:
+# "the bash validator did not actually validate this".
+abstain_unclear() { # <reason>
+  mkdir -p "$HOME/.claude/logs" 2>/dev/null || true
+  printf '%s\t%s\t%s\n' "$(date -u +%FT%TZ 2>/dev/null || echo '?')" \
+    'validate-bash-ABSTAIN' "fail-open, command NOT validated: $1" \
+    >> "$HOME/.claude/logs/validate-bash-unclear.log" 2>/dev/null || true
+  exit 0
+}
+command -v jq >/dev/null 2>&1 || abstain_unclear "jq unavailable on PATH"
+if ! CMD=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null); then
+  abstain_unclear "unparseable PreToolUse payload on stdin"
+fi
 
 # Source the argv-aware flag detector. If unavailable, caller can force
 # legacy mode; otherwise fall back silently on a per-call basis below.

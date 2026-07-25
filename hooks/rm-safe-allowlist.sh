@@ -21,8 +21,24 @@
 set -uo pipefail
 
 INPUT=$(cat)
-# Fail-open on malformed input (let validate-bash.sh handle it)
-CMD=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // ""' 2>/dev/null) || exit 0
+
+# ── JQ / PAYLOAD GUARD — fail OPEN, but never SILENTLY (audit 09 D-4) ──────────────────────
+# Fail-open on a missing jq / malformed payload stays correct (defer to the ask prompt + the deny
+# array + validate-bash.sh) — but the old `… 2>/dev/null) || exit 0` did it with ZERO signal, so a
+# jq-less environment disabled the gate invisibly. Same abstain log as validate-bash.sh: one loud
+# line per abstain, still exit 0, never a block. Mirrors keychain-guard.sh:19-21.
+# Sink + TSV shape (ts \t kind \t detail) are shared with validate-bash.sh and
+# lib/is-true-flag.sh:200-205 — one file, one shape: "the bash validator did not validate this".
+abstain_unclear() { # <reason>
+  mkdir -p "$HOME/.claude/logs" 2>/dev/null || true
+  printf '%s\t%s\t%s\n' "$(date -u +%FT%TZ 2>/dev/null || echo '?')" \
+    'rm-safe-allowlist-ABSTAIN' "fail-open, rm NOT auto-allowed: $1" \
+    >> "$HOME/.claude/logs/validate-bash-unclear.log" 2>/dev/null || true
+  exit 0
+}
+command -v jq >/dev/null 2>&1 || abstain_unclear "jq unavailable on PATH"
+CMD=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // ""' 2>/dev/null) \
+  || abstain_unclear "unparseable PreToolUse payload on stdin"
 [[ -z "$CMD" ]] && exit 0
 
 # ── Catastrophic danger re-check: on match, DEFER (exit 0, no allow) ───────────────────────
