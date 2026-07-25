@@ -492,3 +492,81 @@ solo_team_cfg() { mkdir -p "$D/teams/session-$1"
   mkrepo "$D/dis"; reg "$UP" "$LIVE" "$D/dis" sidD; tx sidD 900; utx sidD 950; solo_team_cfg sidD; stamp "$UP" 50000
   [ "$(cause "$UP")" = finished ]                     # hold disabled ⇒ the recent prompt does not hold
 }
+
+# ── safeguard-blocked (2026-07-25) — the model-content-refusal DOA fixtures. Built with jq (not printf)
+#    so the LITERAL refusal text — apostrophes ("can't"), quotes, URLs — round-trips without escaping hell.
+#    sgtx mirrors the REAL transcript shape: empty-thinking assistant → system(model_refusal_no_fallback)
+#    → isApiErrorMessage assistant carrying the refusal text (the shape captured from pane 725A269A). ──
+sgtx() { local sid="$1" ago="$2" model="${3:-Fable 5}"; local ts txt jf="$D/proj/slug/$sid.jsonl"
+  ts="$(TZ=UTC date -j -f %s "$((NOW-ago))" +%Y-%m-%dT%H:%M:%S 2>/dev/null).948Z"
+  txt="API Error: ${model}'s safeguards flagged this message (https://www.anthropic.com/legal/aup). They may flag safe, normal content as well. Claude Code can't respond to this request with ${model}."
+  jq -nc --arg ts "$ts" '{type:"assistant",isSidechain:false,timestamp:$ts,message:{role:"assistant",content:[{type:"thinking",thinking:""}]}}' > "$jf"
+  jq -nc '{type:"system",subtype:"model_refusal_no_fallback",content:""}' >> "$jf"
+  jq -nc --arg ts "$ts" --arg t "$txt" '{type:"assistant",isApiErrorMessage:true,isSidechain:false,timestamp:$ts,message:{role:"assistant",content:[{type:"text",text:$t}]}}' >> "$jf"
+  jq -nc '{type:"system",subtype:"turn_duration",content:"null"}' >> "$jf"
+}
+# a refusal that was then RECOVERED: a real user re-prompt + a real assistant answer AFTER the refusal.
+sgtx_recovered() { sgtx "$1" "$2" "${3:-Fable 5}"; local ts jf="$D/proj/slug/$1.jsonl"
+  ts="$(TZ=UTC date -j -f %s "$((NOW-$2+10))" +%Y-%m-%dT%H:%M:%S 2>/dev/null).000Z"
+  jq -nc --arg ts "$ts" '{type:"user",isMeta:false,timestamp:$ts,message:{role:"user",content:"try again please"}}' >> "$jf"
+  jq -nc --arg ts "$ts" '{type:"assistant",isSidechain:false,timestamp:$ts,message:{role:"assistant",content:[{type:"text",text:"sure — here is the answer"}]}}' >> "$jf"
+}
+# a text-only refusal (NO system subtype marker) — proves the CONFIGURABLE text signature alone triggers.
+sgtx_textonly() { local sid="$1" ago="$2" txt="$3"; local ts jf="$D/proj/slug/$sid.jsonl"
+  ts="$(TZ=UTC date -j -f %s "$((NOW-ago))" +%Y-%m-%dT%H:%M:%S 2>/dev/null).000Z"
+  jq -nc --arg ts "$ts" '{type:"user",isMeta:false,timestamp:$ts,message:{role:"user",content:"do the thing"}}' > "$jf"
+  jq -nc --arg ts "$ts" --arg t "$txt" '{type:"assistant",isApiErrorMessage:true,isSidechain:false,timestamp:$ts,message:{role:"assistant",content:[{type:"text",text:$t}]}}' >> "$jf"
+}
+# a subtype-only refusal (NO matching text) — proves the STRUCTURAL model_refusal_no_fallback signal alone triggers.
+sgtx_subtypeonly() { local sid="$1" ago="$2"; local ts jf="$D/proj/slug/$sid.jsonl"
+  ts="$(TZ=UTC date -j -f %s "$((NOW-ago))" +%Y-%m-%dT%H:%M:%S 2>/dev/null).000Z"
+  jq -nc --arg ts "$ts" '{type:"assistant",isSidechain:false,timestamp:$ts,message:{role:"assistant",content:[{type:"thinking",thinking:""}]}}' > "$jf"
+  jq -nc '{type:"system",subtype:"model_refusal_no_fallback",content:""}' >> "$jf"
+}
+
+@test "safeguard-blocked — refusal is the terminal event, idle past threshold" {
+  reg "$UP" "$LIVE" /repo sidSG; sgtx sidSG 200
+  [ "$(cause "$UP")" = safeguard-blocked ]
+}
+
+@test "safeguard-blocked — blocked_model + refusal text emitted in JSON" {
+  reg "$UP" "$LIVE" /repo sidSG; sgtx sidSG 200 "Fable 5"
+  run "$C" "$UP" --json
+  [ "$(printf '%s' "$output" | jq -r '.blocked_model')" = "Fable 5" ]
+  printf '%s' "$output" | jq -e '.refusal | test("safeguards flagged this message")' >/dev/null
+}
+
+@test "safeguard-blocked — idle below threshold stays active (transient churn tolerance)" {
+  reg "$UP" "$LIVE" /repo sidSG; sgtx sidSG 30            # < 120s default
+  [ "$(cause "$UP")" = active ]
+  run "$C" "$UP" --json                                   # and does NOT leak the refusal field
+  [ "$(printf '%s' "$output" | jq -r '.refusal')" = null ]
+}
+
+@test "no safeguard-blocked — a normal completed turn (no refusal)" {
+  mkrepo "$D/n"; reg "$UP" "$LIVE" "$D/n" sidN; tx sidN 500
+  [ "$(cause "$UP")" != safeguard-blocked ]
+}
+
+@test "no safeguard-blocked — transient churn then RECOVERED (a real turn after the refusal)" {
+  reg "$UP" "$LIVE" /repo sidR; sgtx_recovered sidR 500
+  [ "$(cause "$UP")" != safeguard-blocked ]
+}
+
+@test "safeguard-blocked BEATS finished-teammate — a stamped fired peer in a worktree, blocked on turn 1" {
+  # WITHOUT the 2.5 check this reads finished-teammate → the reaper auto-reaps it as if the work was done.
+  mkrepo "$D/.worktrees/wt"; reg "$UP" "$LIVE" "$D/.worktrees/wt" sidSG; sgtx sidSG 200; stamp "$UP" 50000
+  [ "$(cause "$UP")" = safeguard-blocked ]
+}
+
+@test "safeguard-blocked — CONFIGURABLE signature: a custom marker triggers; defaults do NOT match it" {
+  reg "$UP" "$LIVE" /repo sidC; sgtx_textonly sidC 200 "A novel refusal WOMBAT no default matches"
+  [ "$(cause "$UP")" != safeguard-blocked ]                       # default signatures miss it
+  run env CC_CLASSIFY_SAFEGUARD_SIGNATURES="wombat" "$C" "$UP" --json
+  [ "$(printf '%s' "$output" | jq -r '.cause')" = safeguard-blocked ]   # case-insensitive custom match
+}
+
+@test "safeguard-blocked — STRUCTURAL subtype alone (model_refusal_no_fallback) triggers" {
+  reg "$UP" "$LIVE" /repo sidS; sgtx_subtypeonly sidS 200
+  [ "$(cause "$UP")" = safeguard-blocked ]
+}

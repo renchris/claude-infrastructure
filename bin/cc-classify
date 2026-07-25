@@ -57,6 +57,18 @@ INTERACTIVE_HOLD_DISABLE="${CC_CLASSIFY_INTERACTIVE_HOLD_DISABLE:-0}"  # tests-o
 FIRE_PROMPT_SLACK_S="${CC_CLASSIFY_FIRE_PROMPT_SLACK_S:-300}"  # prompts within this of firedAt = the spawn brief, not adoption
 # CC_CLASSIFY_INTERACTIVE_TAIL_BYTES (tail window, default 2000000; recency needs the tail only) is read
 # DIRECTLY by hooks/lib/cc-interactive.sh — no shell var here, since last_interactive_epoch just wraps the lib.
+# ── safeguard-blocked detection (2026-07-25) — a model CONTENT-safeguard refusal that is the tail's
+#    TERMINAL conversational event (no real user/assistant turn after it) is a dead-on-arrival block,
+#    NOT "finished". A fired peer blocked on its first turn leaves an EMPTY thinking block as its last
+#    non-error assistant record, so last_assistant_ts computes an idle and it would otherwise read
+#    finished-teammate → auto-reaped as if it did its work (it did NOTHING). Signatures are CONFIGURABLE
+#    + case-insensitive (matched against the isApiErrorMessage text); the model_refusal_no_fallback
+#    system subtype is an independent STRUCTURAL corroborator (the cleanest deterministic marker).
+# default built in a single-quoted var — bash 3.2 (macOS) mishandles a literal apostrophe inside "${x:-…}"
+_SG_SIG_DEFAULT='safeguards flagged this message|can'\''t respond to this request with|may flag safe, normal content'
+SAFEGUARD_SIGNATURES="${CC_CLASSIFY_SAFEGUARD_SIGNATURES:-$_SG_SIG_DEFAULT}"
+SAFEGUARD_REFUSAL_SUBTYPE="${CC_CLASSIFY_SAFEGUARD_SUBTYPE:-model_refusal_no_fallback}"
+SAFEGUARD_IDLE_S="${CC_CLASSIFY_SAFEGUARD_IDLE_S:-120}"   # refusal terminal AND idle >= this ⇒ blocked
 
 die(){ printf 'cc-classify: %s\n' "$*" >&2; exit 2; }
 command -v jq >/dev/null || die "jq required"
@@ -126,6 +138,52 @@ recent_api_limit() { # <jsonl> → 0 if a structured USAGE-CAP api error is amon
   tail -n 60 "$f" 2>/dev/null \
     | jq -rc 'select((.isApiErrorMessage//false)==true) | (.message.content // [] | map(.text // "") | join(" "))' 2>/dev/null \
     | grep -qiE 'session limit|weekly limit|usage limit|limit ·|resets|monthly spend limit|spend limit|billing'
+}
+
+parse_blocked_model() { # <refusal-text> → best-effort model name (e.g. "Fable 5"), empty if unparseable
+  local t="$1" m
+  # "…can't respond to this request with <Model>." — the authoritative phrasing.
+  m="$(printf '%s' "$t" | sed -nE 's/.*[Rr]espond to this request with ([A-Za-z][A-Za-z0-9]*( [0-9]+(\.[0-9]+)*)?).*/\1/p' | head -1)"
+  # fallback: "API Error: <Model>'s safeguards …"
+  [ -z "$m" ] && m="$(printf '%s' "$t" | sed -nE "s/^API Error: ([A-Za-z][A-Za-z0-9]*( [0-9]+(\.[0-9]+)*)?)'s safeguards.*/\1/p" | head -1)"
+  printf '%s' "$m"
+}
+
+safeguard_blocked() { # <jsonl> → prints "<refusal-iso>\t<refusal-text>", returns 0 if the tail's TERMINAL
+  # conversational event is a model CONTENT-safeguard refusal (nothing real after it). A refusal is either
+  # a system record with subtype==$SAFEGUARD_REFUSAL_SUBTYPE OR an isApiErrorMessage assistant whose text
+  # matches a configured (case-insensitive) signature. A "real turn" that would mean RECOVERY is a genuine
+  # user prompt or a content-bearing NON-error assistant turn. Blocked ⟺ the last of these two kinds is a
+  # refusal. Terminal-refusal grabs the informative (text-bearing) refusal's ts+text.
+  local f="$1" tagged tb="${CC_CLASSIFY_INTERACTIVE_TAIL_BYTES:-2000000}"
+  [ -f "$f" ] || return 1
+  tagged="$(tail -c "$tb" "$f" 2>/dev/null | jq -Rrc \
+      --arg sub "$SAFEGUARD_REFUSAL_SUBTYPE" --arg sig "$SAFEGUARD_SIGNATURES" '
+      ($sig | ascii_downcase | split("|")) as $sigs
+      | fromjson? | objects | . as $r
+      | ([ (($r.message.content) // []) | if type=="array" then .[]? else empty end
+           | select(.type=="text") | (.text // "") ] | join(" ") | gsub("[\\t\\r\\n]"; " ")) as $txt
+      | ($txt | ascii_downcase) as $lc
+      | if ($r.type=="system" and (($r.subtype // "") == $sub)) then "REFUSAL\t\t"
+        elif ($r.type=="assistant" and (($r.isApiErrorMessage // false) == true)
+              and (any($sigs[]; . as $s | ($s|length) > 0 and ($lc | contains($s))))) then
+          "REFUSAL\t" + ($r.timestamp // "") + "\t" + $txt
+        elif ($r.type=="user" and ($r.isMeta != true)
+              and ((($r.message.content|type) == "string" and (($r.message.content|length) > 0))
+                   or (($r.message.content|type) == "array"
+                       and ([$r.message.content[]? | select(.type=="tool_result")] | length) == 0
+                       and ([$r.message.content[]? | select(.type=="text" and ((.text//"")|length) > 0)] | length) > 0))
+              ) then "TURN"
+        elif ($r.type=="assistant" and (($r.isApiErrorMessage // false) != true)
+              and ([ (($r.message.content) // [])[]? | select(.type=="text" and ((.text//"")|length) > 0) ] | length) > 0
+              ) then "TURN"
+        else empty end
+    ' 2>/dev/null)"
+  [ -n "$tagged" ] || return 1
+  printf '%s\n' "$tagged" | awk -F'\t' '
+      { if ($1=="REFUSAL") { last="R"; if ($2!="" || $3!="") { rts=$2; rtxt=$3 } }
+        else if ($1=="TURN") { last="T" } }
+      END { if (last=="R") { print rts "\t" rtxt; exit 0 } exit 1 }'
 }
 
 handoff_fired() { # <jsonl> → 0 if the session actually FIRED a SELF-/handoff near the end
@@ -378,7 +436,7 @@ classify_entry() { # <entry-json> <all-sessions-json>
   pane="$(printf '%s' "$e" | jq -r '.paneUUID // ""')"
   name="$(printf '%s' "$e" | jq -r '.name // ""')"
   started="$(printf '%s' "$e" | jq -r '.startedAt // ""')"   # epoch-MS; stamp-tenancy input (rule 2)
-  CAUSE=""; IDLE=-1; LANDED=na; SUCCESSOR=""; DETAIL=""
+  CAUSE=""; IDLE=-1; LANDED=na; SUCCESSOR=""; DETAIL=""; SG_MODEL=""; SG_TEXT=""
 
   # 1. owning process dead → crashed (idle-linger targets are ALIVE; a dead pid is a separate cleanup)
   if ! alive "$pid"; then CAUSE=crashed; DETAIL="pid ${pid:-?} not alive"; return 0; fi
@@ -390,6 +448,31 @@ classify_entry() { # <entry-json> <all-sessions-json>
 
   # 2. structured usage-cap in the transcript tail → rate-limited (resumes on reset; never reap)
   if [ -n "$tj" ] && recent_api_limit "$tj"; then CAUSE=rate-limited; DETAIL="structured usage-cap api error"; return 0; fi
+
+  # 2.5 safeguard-blocked: a model CONTENT-safeguard refusal that is the tail's TERMINAL conversational
+  #     event. Checked BEFORE `active`/the no-ts fail-safe and the finished-teammate branch: a fired peer
+  #     blocked on its FIRST turn leaves an EMPTY thinking block as its last non-error assistant record,
+  #     so last_assistant_ts computes an idle and the session otherwise reads finished-teammate → gets
+  #     auto-reaped as if it had done its work (it did NOTHING). Idle is anchored to the REFUSAL's OWN
+  #     timestamp so it works even with no prior assistant turn. NEVER-REAP (a surface cause); the reaper
+  #     notifies the ORIGINATOR (firedBy) and offers opt-in recovery (re-fire on a different model).
+  if [ -n "$tj" ]; then
+    local _sg _sgts _sgtxt _sgep _sgidle
+    if _sg="$(safeguard_blocked "$tj")"; then
+      _sgts="${_sg%%$'\t'*}"; _sgtxt="${_sg#*$'\t'}"
+      _sgep="$(iso_to_epoch "$_sgts")"
+      if [ -n "$_sgep" ]; then _sgidle=$(( NOW - _sgep )); else _sgidle="$IDLE"; fi
+      [ "$_sgidle" -ge 0 ] 2>/dev/null || _sgidle=0
+      if [ "$_sgidle" -ge "$SAFEGUARD_IDLE_S" ] 2>/dev/null; then
+        SG_TEXT="${_sgtxt:0:240}"                                    # bound the surfaced/board text
+        SG_MODEL="$(parse_blocked_model "$_sgtxt")"
+        IDLE="$_sgidle"
+        CAUSE=safeguard-blocked
+        DETAIL="model safeguards refused the last turn ${_sgidle}s ago (terminal — no turn since)${SG_MODEL:+ — blocked model: $SG_MODEL}"
+        return 0
+      fi
+    fi
+  fi
 
   # 3. recent assistant turn → active
   if [ "$IDLE" -ge 0 ] 2>/dev/null && [ "$IDLE" -lt "$IDLE_S" ]; then
@@ -538,11 +621,14 @@ emit_one() { # <entry-json> <all-json> <json?>
     _lstart="$(pid_lstart "$_pid")"
     jq -nc --argjson e "$1" --arg cause "$CAUSE" --arg idle "$IDLE" --arg landed "$LANDED" \
        --arg succ "$SUCCESSOR" --arg detail "$DETAIL" --arg lstart "$_lstart" \
+       --arg sgmodel "$SG_MODEL" --arg sgtext "$SG_TEXT" \
        '{name:$e.name, paneUUID:$e.paneUUID, account:$e.account, cwd:$e.cwd,
          pid:($e.pid // null), startedAt:($e.startedAt // null),
          session_id:($e.session_id // $e.sessionId // null),
          cause:$cause, idle_s:($idle|tonumber? // -1), work_landed:$landed,
          lstart:(if $lstart=="" then null else $lstart end),
+         blocked_model:(if $sgmodel=="" then null else $sgmodel end),
+         refusal:(if $sgtext=="" then null else $sgtext end),
          successor:(if $succ=="" then null else $succ end), detail:$detail}'
   else
     printf '%-18s %-17s %-8s idle=%-7s landed=%-3s %s\n' \
