@@ -14,8 +14,8 @@
 |---|---|
 | Source | memory `cc-notify-session-pane-mapping.md`; session `4bee0fc1` (tertiary) [grounded: transcript exists, desk-spawn prompt @ line 14] |
 | Signal desk had | `cc-notify --list` friendly name `doc_classifier-D52E76B7` + pane age + cwd |
-| Conclusion drawn | "successor session is in pane D52E76B7" → nudged it 3× (un-stick/take-over/escalate) |
-| Ground truth | `--json` showed D52E76B7 = the **fix-w6 teammate** (session 35c6b6ce); the successor (ec3450bd) was in pane **51609A98** (the prior lead's pane, kept across in-place `/handoff`). Every nudge hit the hung teammate; successor sat 33-min owned-wait receiving nothing [grounded: memory §Why, transcript-confirmed spawn context] |
+| Conclusion drawn | "successor session is in pane D52E76B7" → nudged it 3× (un-stick/take-over/escalate) | <!-- pane-id-lint:allow -->
+| Ground truth | `--json` showed D52E76B7 = the **fix-w6 teammate** (session 35c6b6ce); the successor (ec3450bd) was in pane **51609A98** (the prior lead's pane, kept across in-place `/handoff`). Every nudge hit the hung teammate; successor sat 33-min owned-wait receiving nothing [grounded: memory §Why, transcript-confirmed spawn context] | <!-- pane-id-lint:allow -->
 | Root cause | **Pane identity ≠ session identity** after in-place recycle; mtime bump on `bridge-session`/`mode` entries misread as "it woke" |
 | Current asset that would catch it | **NONE structural.** Discipline only: resolve via `--list --json` sessionId. `cc-notify` has no guard forcing sessionId resolution. Recurs if a successor desk skips the discipline. |
 

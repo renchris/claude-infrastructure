@@ -105,7 +105,7 @@ enforcement legs are inert in the live loop because F1/F3 have no callers.
 | ID | file:line | FM | Sev | Failure scenario | Fix sketch |
 |---|---|---|---|---|---|
 | G-P2-1 | completion-push.sh (no caller); notify.sh:40-44; handoff-fire.sh:393; commands/ship.md | FM1 | **P0** | a spawned/terminal session completes or ships → nothing fires completion-push → desk never woken → believes work ongoing, or learns 50 min late on reload/from operator (W5, live-unfixed) | wire `completion-push fire` into handoff-fire `--terminal` close-chain + /ship land-success + a Stop-hook path |
-| G-P2-2 | ~/.claude/cc-roles/desk = `1EB2C679…` (ABSENT from live cc-sessions, ran 2026-07-18); activation doc "rebind when a pane recycles" (manual) | FM2 | **P0** | `cc-announce desk` today → dead/reused pane → alarm nobody reads, or (on UUID reuse) completion misrouted into a WRONG session reported VERIFIED (the 3-misrouted-nudge class, memory 2026-07-16) | resolve role→friendly-name→LIVE paneUUID at announce time via cc-sessions sessionId; never store a frozen uuid; auto-rebind |
+| G-P2-2 | ~/.claude/cc-roles/desk = `1EB2C679…` (ABSENT from live cc-sessions, ran 2026-07-18); activation doc "rebind when a pane recycles" (manual) | FM2 | **P0** | `cc-announce desk` today → dead/reused pane → alarm nobody reads, or (on UUID reuse) completion misrouted into a WRONG session reported VERIFIED (the 3-misrouted-nudge class, memory 2026-07-16) | resolve role→friendly-name→LIVE paneUUID at announce time via cc-sessions sessionId; never store a frozen uuid; auto-rebind | <!-- pane-id-lint:allow -->
 | G-P2-3 | cc-announce-alarms/ + completion-push/ records — reader grep hits only never-stuck-gate.sh (attestation) | FM1 | P1 | a LOUD alarm/degrade is loud only on disk; desk/operator never sees it → "never silent" is silent-in-practice | statusline badge + lead-reconciler sweep surfacing unread alarms; delete-on-read |
 | G-P2-4 | exit-deadline.sh (no caller); cc-wait:15 (caller-supplied deadline); flag never touched | FM2 | P1 | exit-window sweep never tightens 3600→900 → desk detects a stalled/finished exit up to an hour late (the exact W5 window, still open) | cc-wait/lead-reconciler default `--deadline "$(exit-deadline resolve)"`; touch/rm flag in exit + ship recipes |
 | G-P2-5 | payload-lint.sh (no caller); handoff-fire.sh never lints PROMPT_FILE | FM1 | P1 | a successor/handoff payload missing the back-channel block fires un-gated (the W5 ROOT) → successor cannot announce → silent completion | lint `PROMPT_FILE` in handoff-fire.sh pre-fire; block on RED |
@@ -150,7 +150,7 @@ enforcement legs are inert in the live loop because F1/F3 have no callers.
   nobody). Confirmed dead.
 - "The composer-wake IS the consumer — so there's no gap." Correct that the wake path works; the gap is
   PRODUCER-side (no trigger fires completion-push), not consumer-side. Reframed the FM1 root accordingly.
-- "cc-roles is fine if UUIDs are stable." Ran cc-sessions live 2026-07-18: `1EB2C679` (cc-roles/desk) is
+- "cc-roles is fine if UUIDs are stable." Ran cc-sessions live 2026-07-18: `1EB2C679` (cc-roles/desk) is <!-- pane-id-lint:allow -->
   ABSENT from the live list. Empirically stale — not a hypothetical.
 - "lead-supervisor/reconciler probably consumes the alarms." Read it: reconciles pid rosters, pages on
   divergence (lead-reconciler.sh:10-23); does NOT read mailbox/alarms/completion. Confirmed no consumer.

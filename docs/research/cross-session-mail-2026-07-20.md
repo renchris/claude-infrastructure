@@ -48,12 +48,12 @@ background task**; a Stop `decision:block` continuation does **not** re-fire Use
 
 - **42** mail-carrying inboxes · **1,788** lines · **~1,401 unacked (78%)** · **39** of 42 boxes
   belong to dead panes. 57 files in the dir (boxes + cursors + junk), no GC ever.
-- **Former-desk flooding:** `1EB2C679` 631 lines (570 from `[claude]` automated pagers, Jul 15→18);
-  `D5D419C8` 206 (179 `[claude]`; its last line is the SUCCESSOR-LIVE announce for the current desk);
-  `99261468` 155. Producers kept paging stale desk UUIDs for days; each box died with everything
+- **Former-desk flooding:** `1EB2C679` 631 lines (570 from `[claude]` automated pagers, Jul 15→18); <!-- pane-id-lint:allow -->
+  `D5D419C8` 206 (179 `[claude]`; its last line is the SUCCESSOR-LIVE announce for the current desk); <!-- pane-id-lint:allow -->
+  `99261468` 155. Producers kept paging stale desk UUIDs for days; each box died with everything <!-- pane-id-lint:allow -->
   unacked. **Root cause is addressing, not transport** — pane-UUID-keyed boxes + producers that
   don't re-resolve after a recycle.
-- **Live-but-idle rot:** the CURRENT desk `D08B4FC0` — live pane, lines=443, seen=acked=386, **57
+- **Live-but-idle rot:** the CURRENT desk `D08B4FC0` — live pane, lines=443, seen=acked=386, **57 <!-- pane-id-lint:allow -->
   pending accumulating since 14:43** (reaper surfaces, supervisor pages, desk-sweep notes) because
   no human typed, the continuation loop wasn't armed, and no watcher was armed. **0 `.watching`
   heartbeats across 16 live sessions** — the entire fleet currently has no wake path.

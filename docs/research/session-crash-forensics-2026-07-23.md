@@ -248,7 +248,7 @@ every 300 s) tore down two sessions the operator was actively conversing with:
 | Danny-Studio-60 (wt-pool-1-4EC4DA5D, drafting a message to Danny re Studio 60 nightclub) | 17:58:41Z ("Provide final message to Danny"; draft delivered 17:59) | 18:13:15Z | finished-teammate | 817 s |
 | Opus-5-upgrade (claude-infrastructure-D6BE7CE7, "do we need to upgrade Claude Code?" answered 18:28) | ~18:27 | 18:40:22Z | finished | 675 s |
 
-(The third teardown today — CC91E257, coordination-abandoned, idle 26 h — was legitimate.)
+(The third teardown today — CC91E257, coordination-abandoned, idle 26 h — was legitimate.) <!-- pane-id-lint:allow -->
 
 **Root cause (structural, not a bug in any one gate):** every gate held exactly as designed.
 `cc-classify`'s notion of idle is *seconds since the last assistant turn*, and its "done" evidence

@@ -36,15 +36,32 @@ SCAN="${1:-$ROOT/docs}"
 # NOTE: deliberately NO keyword filter. A first cut only flagged lines that themselves said
 # "pane"/"orchestrator"/etc., and it MISSED 4 real violations whose context word sat on the
 # PREVIOUS line — a detector with false negatives is the D9 bug in miniature. Scanning every
-# bare token costs nothing: across the whole corpus this matches exactly two distinct tokens and
-# zero dates/counts, so the precision was never worth the blind spot.
+# bare token costs nothing.
+#
+# PRECISION, 2026-07-25 (audit 08 §7). The original claim here — "across the whole corpus this
+# matches exactly two distinct tokens and zero dates/counts" — ROTTED as the corpus grew: 7 distinct
+# pane tokens and 4 pure-decimal non-tokens. The intuitive fix (require ≥1 hex LETTER in the token)
+# is REJECTED and must never be reintroduced: `99261468` — the very truncation that motivated this
+# lint — is all digits, so that trade buys 4 fewer false positives at the cost of a false NEGATIVE
+# on a real one (tests/pane-id-lint.bats pins this).
+# Instead: three NARROW numeric shapes that are provably not pane ids are scrubbed from a COPY of
+# the line, and the line is re-tested. Scrubbing a copy (rather than a line-level `grep -v`) keeps a
+# line that carries BOTH a benign number and a real pane id flagged.
+PANE_RE='(^|[^-0-9A-Za-z])[0-9A-F]{8}([^-0-9A-Za-z]|$)'
+scrub_benign() { # <line> — drop (a) 20xxxxxx dates, (b) size-unit-suffixed counts, (c) support.claude.com article ids
+  printf '%s' "$1" | sed -E \
+    -e 's#support\.claude\.com/[^[:space:]]*#<support-url>#g' \
+    -e 's#(^|[^-0-9A-Za-z])20[0-9]{6}([^-0-9A-Za-z]|$)#\1<date>\2#g' \
+    -e 's#(^|[^-0-9A-Za-z])[0-9]{8}([[:space:]]*(bytes|MB|MiB|KB|KiB|GB|GiB))#\1<size>\2#g'
+}
 viol=0
 while IFS= read -r hit; do
   case "$hit" in *pane-id-lint:allow*) continue ;; esac
+  scrub_benign "$hit" | grep -qE "$PANE_RE" || continue
   printf '  %s\n' "$hit"
   viol=$((viol + 1))
 done < <(
-  grep -rnE '(^|[^-0-9A-Za-z])[0-9A-F]{8}([^-0-9A-Za-z]|$)' "$SCAN" 2>/dev/null \
+  grep -rnE "$PANE_RE" "$SCAN" 2>/dev/null \
     | grep -vE '[0-9A-F]{8}-' || true
 )
 
