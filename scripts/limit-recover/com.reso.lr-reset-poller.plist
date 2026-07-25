@@ -1,9 +1,17 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!-- Install:  cp this to ~/Library/LaunchAgents/  &&  launchctl load -w ~/Library/LaunchAgents/com.reso.lr-reset-poller.plist
-     Default = NOTIFY-ONLY (safe): it detects limit-parked sessions + macOS-notifies once, spawns nothing.
-     To ENABLE unattended auto-resume AFTER reviewing ~/.reso/limit-recover/poller.log, add the
-     EnvironmentVariables block below (LR_POLLER_AUTOFIRE=1) and `launchctl unload && load` it.
+
+     STATE: AUTO-RESUME IS LIVE. Unattended auto-resume was activated live 2026-07-21 and this file
+     is now reconciled to match the installed plist byte-for-behaviour — the installed file is
+     LIVE-AUTHORITATIVE. Until 2026-07-25 this SSOT still carried LR_POLLER_AUTOFIRE commented out,
+     so reinstalling from the repo would have SILENTLY KILLED unattended auto-resume (limit-parked
+     sessions would notify once and then sit forever). Do NOT re-comment the EnvironmentVariables
+     block: any edit here that disables autofire is a behaviour regression on the next reinstall.
+     scripts/launchd-parity-lint.sh now asserts live == this file and fails the nightly on drift.
+
+     Original default was NOTIFY-ONLY (detect limit-parked sessions + macOS-notify once, spawn
+     nothing); that is no longer the shipped posture.
      Kill switch: set LR_POLLER_DISABLED=1 (or unload).
 
      HEADLESS (P0-8): this LaunchAgent runs in the Aqua session, so the default LR_POLLER_SPAWN=auto
@@ -24,12 +32,13 @@
   <key>RunAtLoad</key><true/>
   <key>StandardOutPath</key><string>/Users/chrisren/.reso/limit-recover/poller.launchd.out</string>
   <key>StandardErrorPath</key><string>/Users/chrisren/.reso/limit-recover/poller.launchd.err</string>
-  <!-- Auto-resume is OFF by default. To enable, uncomment (add LR_POLLER_SPAWN=tmux for headless):
+  <!-- Auto-resume: LIVE since 2026-07-21. Mirrors the installed plist exactly.
+       LR_POLLER_SPAWN is deliberately ABSENT (live does not set it; the script's own default is
+       `auto` = try GUI, fall back to tmux). Add LR_POLLER_SPAWN=tmux ONLY for a headless /
+       pre-login install, and change the installed plist in the same step. -->
   <key>EnvironmentVariables</key>
   <dict>
     <key>LR_POLLER_AUTOFIRE</key><string>1</string>
-    <key>LR_POLLER_SPAWN</key><string>auto</string>
   </dict>
-  -->
 </dict>
 </plist>
