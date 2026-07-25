@@ -489,6 +489,38 @@ the new pipeline.
    ledger (postland RED ∧ suite ∉ selected). Any measured false-skip ⇒ tighten the rule (add
    the missing clause) — the map is code, reviewed like code.
 
+### Implementation record (2026-07-25, same session)
+
+All six teammates delivered; branches squash-merged onto `fix/gate-reliability` in
+dependency order. Notables from the build:
+
+- **The hermeticity ratchet caught its first two leaks at merge time** — the two NEW suites
+  (`gate-select.bats`, `deploy-live.bats`), written by teammates who never saw the lint.
+  Fixed lead-side (fixture `HOME` in setup()); lint clean at 121 suites, 109 grandfathered.
+- **bats 1.13.0 swallows mid-body `[[ ]]` failures** (T1, probed): a failing `[[ ]]` that is
+  not the test's last command does NOT fail the test — `false` and `[ ]` do. Assertions in
+  this repo's 19K-line bats corpus can be silently decorative; T1's suites use `has()`/
+  `lacks()` helper functions and reason-level `--explain` assertions instead, and
+  mutation-tested all selection rules RED-proof (removed each rule; confirmed its test reds).
+- **End-to-end dry-run validation**: with the merged pipeline, `ship-land.sh --dry-run` on
+  this very train resolved scope=scoped (policy file), ran the map lint green (0/118
+  unreachable, 0.5 s), and the selector returned `FULL <- added-unmapped:docs/activation/
+  pending-activation/09-postland-verify-activate.sh` — the train that installs scoped gating
+  correctly full-gates itself (new files are a fail-closed FULL trigger).
+- The union-scope re-gate (M1) is derived from the range at all three gate call sites
+  (`FIRST_BASE..range-base` as the sibling delta), so the stale-42 path, the in-lock
+  fallback, and the post-drop re-gate all get it structurally.
+- Live-IDL leakage fix measured: 294 fixture-sid rows had leaked into the real
+  `autonomy/idl.jsonl`; after the `CC_IDL` pin a full suite run adds zero.
+- **Cross-teammate seam caught at merge**: the staleness guard first matched stamp files
+  named `*green*`, but the runner stamps `<tree>.json` with the verdict INSIDE — the guard
+  would silently never fire (fail-open). Repointed at `last-green`'s mtime (touched on every
+  green full verdict), which also upgrades the semantics: a trunk red for >24 h now degrades
+  scoped landing to FULL even while the runner itself is alive.
+- **Contract-first testing vindicated**: T4 wrote the runner's 14-test RED-proof suite
+  against the frozen contract, in a worktree where the runner did not exist (verified 11/14
+  fail against a do-nothing stub); on first contact with T3's real runner: 14/14 green.
+
 ### Out of scope (backlogged, with owners-when-picked-up)
 
 bats shard-parallelism (blocked on the remaining /tmp literals); `cc-reaper.bats` 4-way
