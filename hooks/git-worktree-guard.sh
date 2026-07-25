@@ -25,16 +25,23 @@ else
 fi
 [ -n "${cmd:-}" ] || exit 0
 
+# `git -C <repo> worktree remove …` is the audit-prescribed form and the desk's standard shape —
+# the literal matches below never saw it (2026-07-25 defect: every §7 cleanup ran unguarded).
+# Normalize for MATCHING (strip `-C <path>` runs after `git`) and capture the repo for the
+# worktree-list check, which must interrogate the -C target, not the hook's own cwd.
+crepo="$(printf '%s' "$cmd" | sed -nE 's/.*git[[:space:]]+-C[[:space:]]+([^[:space:]]+).*/\1/p')"
+ncmd="$(printf '%s' "$cmd" | sed -E 's/git([[:space:]]+-C[[:space:]]+[^[:space:]]+)+/git/g')"
+
 # Fast pass-through: only inspect branch-delete / worktree-remove.
-case "$cmd" in
+case "$ncmd" in
   *"git worktree remove"*|*"git branch -d"*|*"git branch -D"*|*"git branch --delete"*) ;;
   *) exit 0 ;;
 esac
 
 # (1) branch -d/-D guard — refuse to delete a branch that has a worktree.
-if printf '%s' "$cmd" | grep -qE 'git branch([[:space:]]|.)*-(d|D|-delete)'; then
-  wtlist="$(git worktree list 2>/dev/null)"
-  for tok in $(printf '%s' "$cmd" | sed -E 's/.*git branch//' | tr ' ' '\n' | grep -vE '^-'); do
+if printf '%s' "$ncmd" | grep -qE 'git branch([[:space:]]|.)*-(d|D|-delete)'; then
+  if [ -n "$crepo" ]; then wtlist="$(git -C "$crepo" worktree list 2>/dev/null)"; else wtlist="$(git worktree list 2>/dev/null)"; fi
+  for tok in $(printf '%s' "$ncmd" | sed -E 's/.*git branch//' | tr ' ' '\n' | grep -vE '^-'); do
     [ -n "$tok" ] || continue
     if printf '%s\n' "$wtlist" | grep -qF "[$tok]"; then
       echo "git-worktree-guard: BLOCKED 'git branch -D $tok' — branch '$tok' has a checked-out worktree. Branches with worktrees are NEVER force-deleted (a live Claude session may depend on it; the worktree-gc janitor preserves branches by design — a vanished worktree must stay recoverable via its branch). If the worktree is genuinely idle, reap it with 'bash scripts/worktree-gc.sh --prune' (it gates on live-claude-cwd/lsof/idle>30m and KEEPS the branch)." >&2
@@ -44,8 +51,8 @@ if printf '%s' "$cmd" | grep -qE 'git branch([[:space:]]|.)*-(d|D|-delete)'; the
 fi
 
 # (2) worktree remove guard — refuse if a live claude is cwd'd in the path (or it's open).
-if printf '%s' "$cmd" | grep -qE 'git worktree remove'; then
-  wt="$(printf '%s' "$cmd" | sed -E 's/.*git worktree remove//' | tr ' ' '\n' | grep -vE '^-' | tail -1)"
+if printf '%s' "$ncmd" | grep -qE 'git worktree remove([[:space:]]|$)'; then
+  wt="$(printf '%s' "$ncmd" | sed -E 's/.*git worktree remove//' | tr ' ' '\n' | grep -vE '^-' | tail -1)"
   [ -n "${wt:-}" ] || exit 0
   wtabs="$(cd "$wt" 2>/dev/null && pwd -P || echo "$wt")"
   live=0
