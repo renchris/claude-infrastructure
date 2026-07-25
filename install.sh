@@ -118,6 +118,24 @@ for cmd in "$REPO_DIR"/commands/*.md; do
   link_file "$cmd" "$CONFIG_DIR/commands/$(basename "$cmd")"
 done
 
+# --- Agents (custom subagent types) ---
+# Same per-file symlink model as commands above: agents are NAME-invoked model surfaces
+# (`subagent_type: "deep-research"`), so they have zero grep-able callers and drift silently.
+# Until 2026-07-25 install.sh had NO agents leg at all — every $REPO_DIR/<dir> it touched was
+# hooks/commands/skills/bin/launchd/statusline, never agents — so the repo's four agent files
+# were spawnable NOWHERE while all five config dirs carried a DIFFERENT, unversioned set. That
+# is not deploy-lag (there was no leg to lag); it was an inverse orphan in both directions.
+# Only touches agent NAMES present in the repo — other live agents are left untouched.
+if [[ -d "$REPO_DIR/agents" ]]; then
+  echo ""
+  echo "Agents → $CONFIG_DIR/agents/"
+  ensure_real_dir "$CONFIG_DIR/agents"
+  for agent in "$REPO_DIR"/agents/*.md; do
+    [[ -f "$agent" ]] || continue
+    link_file "$agent" "$CONFIG_DIR/agents/$(basename "$agent")"
+  done
+fi
+
 # --- Bin tools (global only) ---
 if $IS_GLOBAL; then
   echo ""
