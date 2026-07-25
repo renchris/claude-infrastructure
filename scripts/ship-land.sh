@@ -84,7 +84,7 @@
 # SHIP_LAND_GATE_ROUNDS (default 3; 0 = gate fully in-lock, the pre-optimistic kill switch) ·
 # SHIP_LAND_GATE_SCOPE / SHIP_LAND_GATE_POLICY / SHIP_LAND_GATE_SELECT (see GATE SCOPE above) ·
 # POSTLAND_DIR (flake + post-land queue + stamps dir) · POSTLAND_VERIFY=off (skip the post-land
-# spawn) · POSTLAND_STALENESS_GUARD=off · POSTLAND_MAX_STAMP_AGE_H (24) · POSTLAND_STAMP_GLOB.
+# spawn) · POSTLAND_STALENESS_GUARD=off · POSTLAND_MAX_STAMP_AGE_H (24).
 #
 # bash 3.2-safe (no declare -A / mapfile; empty-array expansion guarded under `set -u`).
 # `pipefail` load-bearing; NO `set -e`.
@@ -221,22 +221,25 @@ detect_trunk() {
 
 postland_net_live() {  # 0 = trust the post-land net (or it is not adopted yet) / 1 = INERT
   # ABSENCE IS LOUD. A scoped land is only safe because the FULL suite is re-proven off the
-  # critical path. The signal is postland-verify.sh's `last-green` file — touched on EVERY
-  # green full-suite verdict (stamps themselves are `<tree>.json` with the verdict INSIDE,
-  # so a filename glob can never see them — integration finding, 2026-07-25). last-green
-  # absent ⇒ the net is not adopted yet (the bootstrap land) — never brick that. last-green
-  # gone cold ⇒ the net is dead OR trunk has been red for that long; either way this land
-  # must not narrow.
+  # critical path. If the net HAS run here (stamps exist) but its newest green stamp has gone
+  # cold, the net is inert and this land must NOT narrow. No stamps dir / no green stamp yet ⇒
+  # the net simply is not adopted (the bootstrap land) — never brick that.
   [[ "${POSTLAND_STALENESS_GUARD:-on}" = "off" ]] && return 0
-  local lg age max m
-  lg="${POSTLAND_DIR:-$HOME/.claude/autonomy/postland}/last-green"
-  [[ -f "$lg" ]] || return 0
-  m="$(stat -f %m "$lg" 2>/dev/null || stat -c %Y "$lg" 2>/dev/null || echo 0)"
-  [[ "$m" -gt 0 ]] || return 0
+  local dir age max newest=0 m p
+  dir="${POSTLAND_DIR:-$HOME/.claude/autonomy/postland}/stamps"
+  [[ -d "$dir" ]] || return 0
+  # A stamp is GREEN by CONTENT ("verdict":"green"), not by filename — the naming is T3's to
+  # choose and must not be a hidden coupling. Newest green stamp's mtime is the liveness clock.
+  while IFS= read -r p; do
+    grep -qs '"verdict"[[:space:]]*:[[:space:]]*"green"' "$p" || continue
+    m="$(stat -f %m "$p" 2>/dev/null || stat -c %Y "$p" 2>/dev/null || echo 0)"
+    [[ "$m" -gt "$newest" ]] && newest="$m"
+  done < <(find "$dir" -type f 2>/dev/null)
+  [[ "$newest" -gt 0 ]] || return 0
   max="${POSTLAND_MAX_STAMP_AGE_H:-24}"
-  age=$(( ( $(date +%s) - m ) / 3600 ))
+  age=$(( ( $(date +%s) - newest ) / 3600 ))
   [[ "$age" -lt "$max" ]] && return 0
-  echo "⚠ gate[scoped]: post-land net appears INERT — last green full verify was ${age}h ago (max ${max}h). Degrading this land to the FULL gate. (kill switch: POSTLAND_STALENESS_GUARD=off)" >&2
+  echo "⚠ gate[scoped]: post-land net appears INERT — newest green stamp is ${age}h old (max ${max}h). Degrading this land to the FULL gate. (kill switch: POSTLAND_STALENESS_GUARD=off)" >&2
   return 1
 }
 
@@ -347,7 +350,9 @@ run_gate() {  # $1=range → 0 green / 1 red
       echo "→ gate[scoped]: selector picked 0 suites — skipping bats (lint-only land)" >&2
       GATE_EFFECTIVE_FULL=0; SELECTED_N=0
     else
-      direct="$("$GATE_SELECT" --direct "$range" 2>/dev/null || true)"
+      # --direct MIRRORS the selection's ranges (operator ruling): the composed tree is what we
+      # push, so a sibling-mapped suite is direct to THIS land too and must not be exonerated.
+      direct="$("$GATE_SELECT" --direct "$range" ${EXTRA_RANGE:+"$EXTRA_RANGE"} 2>/dev/null || true)"
       GATE_EFFECTIVE_FULL=0; SELECTED_N=0
       while IFS= read -r f; do
         [[ -z "$f" ]] && continue
@@ -605,6 +610,9 @@ main_outer() {
   fi
 
   git fetch origin "$TRUNK" 2>/dev/null || echo "⚠ ship-land: preflight fetch failed — using local origin/$TRUNK" >&2
+  # UNION-SCOPE anchor: the trunk tip our FIRST gate will run against. Every later round unions
+  # FIRST_BASE..<that round's base> into the selection — the delta siblings landed while we gated.
+  FIRST_BASE="$(git rev-parse "origin/$TRUNK" 2>/dev/null || echo '')"
   local BASE RANGE
   BASE="$(git merge-base "origin/$TRUNK" HEAD 2>/dev/null || true)"
   if [[ -z "$BASE" ]]; then

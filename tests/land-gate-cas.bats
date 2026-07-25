@@ -285,4 +285,9 @@ EOF
   [ "$(tail -1 "$BATS_TEST_TMPDIR/sel-only" | awk '{print gsub(/\.\./,"")}')" = "2" ]  # r2: + union
   fb="$(sed 's/\.\..*//' < "$BATS_TEST_TMPDIR/sel-only" | head -1)"                  # round 1's base
   tail -1 "$BATS_TEST_TMPDIR/sel-only" | grep -q " $fb\.\."       # the union range is anchored there
+
+  # --direct MIRRORS the selection ranges: the composed tree is what we push, so a sibling-mapped
+  # suite is direct to THIS land and must not be exonerable.
+  grep '^--direct' "$BATS_TEST_TMPDIR/sel-argv" > "$BATS_TEST_TMPDIR/direct-only"
+  [ "$(tail -1 "$BATS_TEST_TMPDIR/direct-only" | awk '{print gsub(/\.\./,"")}')" = "2" ]
 }

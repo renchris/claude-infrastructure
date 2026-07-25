@@ -502,12 +502,13 @@ landable() {  # $1=branch $2=shell file — a commit the gate always lints
   [ "$(cat "$BATS_ARGV")" = "tests/" ]           # …it buys proof, it does not block
 }
 
-@test "scope: INERT post-land net (cold last-green) ⇒ scoped degrades to the FULL gate" {
+@test "scope: INERT post-land net (stale green stamp) ⇒ scoped degrades to the FULL gate" {
   scope_fixture
   stub_selector "tests/a.bats" ""
-  mkdir -p "$POSTLAND_DIR"
-  : > "$POSTLAND_DIR/last-green"
-  touch -t 202001010000 "$POSTLAND_DIR/last-green"   # net ran once, then went cold
+  mkdir -p "$POSTLAND_DIR/stamps"
+  printf '{"head":"deadbee","verdict":"green"}\n' > "$POSTLAND_DIR/stamps/deadbee.json"
+  printf '{"head":"newer","verdict":"red"}\n' > "$POSTLAND_DIR/stamps/newer.json"   # red ≠ liveness
+  touch -t 202001010000 "$POSTLAND_DIR/stamps/deadbee.json"    # net ran once, then went cold
   landable feat/stale-net stn.sh
 
   run env SHIP_LAND_GATE_SCOPE=scoped bash "$SHIPLAND" --trunk main
@@ -516,18 +517,18 @@ landable() {  # $1=branch $2=shell file — a commit the gate always lints
   [ "$(cat "$BATS_ARGV")" = "tests/" ]
 }
 
-@test "scope: staleness guard — fresh last-green ⇒ scoped; kill switch ⇒ scoped despite a cold one" {
+@test "scope: staleness guard — fresh stamp ⇒ scoped; kill switch ⇒ scoped despite a stale stamp" {
   scope_fixture
   stub_selector "tests/a.bats" ""
-  mkdir -p "$POSTLAND_DIR"
-  : > "$POSTLAND_DIR/last-green"                       # touched today ⇒ net is live
+  mkdir -p "$POSTLAND_DIR/stamps"
+  printf '{"head":"fresh","verdict":"green"}\n' > "$POSTLAND_DIR/stamps/fresh.json"   # live net
   landable feat/fresh-net frn.sh
   run env SHIP_LAND_GATE_SCOPE=scoped bash "$SHIPLAND" --trunk main
   [ "$status" -eq 0 ]
   [ "$(cat "$BATS_ARGV")" = "tests/a.bats" ]
 
   : > "$BATS_ARGV"
-  touch -t 202001010000 "$POSTLAND_DIR/last-green"     # now cold, but guard disabled
+  touch -t 202001010000 "$POSTLAND_DIR/stamps/fresh.json"      # now cold, but guard disabled
   landable feat/killswitch ks.sh
   run env SHIP_LAND_GATE_SCOPE=scoped POSTLAND_STALENESS_GUARD=off bash "$SHIPLAND" --trunk main
   [ "$status" -eq 0 ]
@@ -545,4 +546,18 @@ landable() {  # $1=branch $2=shell file — a commit the gate always lints
   [ "$status" -eq 0 ]
   grep -q '"signal":"' "$POSTLAND_DIR/flakes.jsonl"
   grep -qv '"signal":""' "$POSTLAND_DIR/flakes.jsonl"          # populated, never empty
+}
+
+@test "scope: stamps dir with NO green stamp yet ⇒ no guard (the bootstrap land must not brick)" {
+  scope_fixture
+  stub_selector "tests/a.bats" ""
+  mkdir -p "$POSTLAND_DIR/stamps"
+  printf '{"head":"only","verdict":"red"}\n' > "$POSTLAND_DIR/stamps/only.json"
+  touch -t 202001010000 "$POSTLAND_DIR/stamps/only.json"       # ancient, but never green
+  landable feat/bootstrap bs.sh
+
+  run env SHIP_LAND_GATE_SCOPE=scoped bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  ! echo "$output" | grep -q "INERT"                           # a net that never went green
+  [ "$(cat "$BATS_ARGV")" = "tests/a.bats" ]                   # is "not adopted", not "inert"
 }
