@@ -115,10 +115,15 @@ The "K3 > Fable 5 on frontend" claim is **narrowly-true / broadly-overstated** (
 a second design board ranks Fable *above* K3). So confirm it on **your** tasks before routing design
 work to Kimi — cheap, metered, real:
 
+The dedicated `scripts/kimi-frontend-ab.sh` scaffold/runner was **retired 2026-07-25** (dead code:
+one commit, never run — no `KIMI_BURNIN_DIR` ever existed on disk — and its verdict already shipped
+with the launcher, `f3ec254`). Run the A/B by hand instead; the shape is the point, not the harness:
+
 ```bash
-scripts/kimi-frontend-ab.sh new           # scaffold an A/B: same brief → Fable arm + Kimi arm
-#   → prints a run dir with brief.md, SCORECARD.md, RUN.md, A-fable/, B-kimi/
-scripts/kimi-frontend-ab.sh run <run-dir> # (optional) execute both arms headless; open both, score BLIND
+# same brief, two arms, only the model differs — score BLIND
+mkdir -p /tmp/kimi-ab/{A-fable,B-kimi} && $EDITOR /tmp/kimi-ab/brief.md
+(cd /tmp/kimi-ab/A-fable && claude-fable  -p "$(cat ../brief.md)")   # arm A
+(cd /tmp/kimi-ab/B-kimi  && claude-kimi   -p "$(cat ../brief.md)")   # arm B
 ```
 
 Each arm produces one self-contained `index.html` from the identical brief (only the model differs).
@@ -155,9 +160,8 @@ only. Record the outcome back into memory `project-tokenomics-plan-swap-verdict`
 | path | what |
 |---|---|
 | `bin/claude-kimi` | the launcher (`status` / `set-key` / `selftest` / launch) |
-| `scripts/kimi-frontend-ab.sh` | the burn-in A/B harness |
 | `settings-templates/kimi-settings.example.json` | reference for the isolated session seed |
-| `tests/claude-kimi.bats`, `tests/kimi-frontend-ab.bats` | regression tests |
+| `tests/claude-kimi.bats` | regression tests |
 
 ### Sources (primary)
 
