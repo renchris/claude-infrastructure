@@ -5,13 +5,29 @@
 # (item 9b183d78c723). This wrapper puts that suite into the gated `bats tests/` run — lead-supervisor was
 # the one tool whose --selftest nothing gated (its e2e ran only on a manual `--selftest`).
 
+# The e2e is ONE ~15s run of the same 36-check suite; every @test below only greps a different string
+# out of its output. Running it per-test cost 5× the wall-clock AND 5× the flake exposure (each run
+# spawns real processes + touches real clocks). setup_file runs it ONCE and caches output+status; the
+# tests assert on the cache. Bats runs setup_file once per FILE, before any test in it.
+setup_file() {
+  REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
+  SUP="$REPO/scripts/lead-supervisor.sh"
+  # $BATS_FILE_TMPDIR is created by bats before setup_file and survives for every test in the file.
+  export E2E_OUT="$BATS_FILE_TMPDIR/e2e.out"
+  export E2E_STATUS="$BATS_FILE_TMPDIR/e2e.status"
+  local st=0
+  bash "$SUP" --selftest > "$E2E_OUT" 2>&1 || st=$?
+  printf '%s\n' "$st" > "$E2E_STATUS"
+}
+
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   SUP="$REPO/scripts/lead-supervisor.sh"
+  status="$(cat "$E2E_STATUS")"     # the cached exit code of the single e2e run
+  output="$(cat "$E2E_OUT")"        # ...and its combined stdout+stderr
 }
 
 @test "supervisor-e2e --selftest is GREEN (0 failed) and runs a non-trivial suite" {
-  run bash "$SUP" --selftest
   [ "$status" -eq 0 ]
   # the summary line is the un-fakeable outcome: "N passed, 0 failed"
   echo "$output" | grep -qE 'supervisor-e2e: [0-9]+ passed, 0 failed'
@@ -21,7 +37,6 @@ setup() {
 }
 
 @test "clean-completion reap + stranded-death page are both exercised (item 9b183d78c723)" {
-  run bash "$SUP" --selftest
   [ "$status" -eq 0 ]
   echo "$output" | grep -q 'T11 CLEAN COMPLETION'
   echo "$output" | grep -q 'T12 STRANDED (dirty)'
@@ -29,7 +44,6 @@ setup() {
 }
 
 @test "PermissionRequest beacon sweep — page/threshold/reap/damping all exercised (item 08d514250031)" {
-  run bash "$SUP" --selftest
   [ "$status" -eq 0 ]
   echo "$output" | grep -q 'T14 PERMISSION-PENDING'
   echo "$output" | grep -q 'T15 THRESHOLD GATE'
@@ -39,13 +53,11 @@ setup() {
 }
 
 @test "same-sweep guard: a page created this sweep is never same-sweep resolved (second-boundary race, 2026-07-25 flaky-gate incident)" {
-  run bash "$SUP" --selftest
   [ "$status" -eq 0 ]
   echo "$output" | grep -q 'T22b SAME-SWEEP GUARD'
 }
 
 @test "registered-desk STALL? exemption — role=sid, role=pane→registry, desk-specific, dead-still-DEAD (item ff95faea46c8)" {
-  run bash "$SUP" --selftest
   [ "$status" -eq 0 ]
   echo "$output" | grep -q 'T23 REGISTERED-DESK EXEMPTION (role=sid)'
   echo "$output" | grep -q 'T24 REGISTERED-DESK EXEMPTION (role=pane→registry)'

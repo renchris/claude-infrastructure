@@ -979,10 +979,25 @@ hold_lock() { mkdir -p "$CC_REAPER_LOCKDIR"; printf '%s\n' "$1" > "$CC_REAPER_LO
 @test "sweep lock: an UNSTAMPED fresh lock is a racer mid-acquire — skipped, never broken" {
   mock_classify active "$D/clean" 10 no PANE-1
   mkdir -p "$CC_REAPER_LOCKDIR"                        # no pid file yet, dir just created
-  run "$R" sweep --reap
+  # Pin the grace WIDE: what's under test is the SKIP behavior for an unstamped lock inside the
+  # grace, not the 5s default. Under load >5s can elapse between the mkdir above and the reaper's
+  # age check, which flips this into the break branch and fails a correct implementation.
+  CC_REAPER_LOCK_STAMP_GRACE_S=60 run "$R" sweep --reap
   [ "$status" -eq 0 ]
   echo "$output" | grep -q 'skipping this tick'
   [ -d "$CC_REAPER_LOCKDIR" ]                          # the racer's lock survived (else BOTH would run)
+}
+
+@test "sweep lock: an unstamped lock PAST the stamp grace is stale — broken, sweep proceeds" {
+  mock_classify active "$D/clean" 10 no PANE-1
+  mkdir -p "$CC_REAPER_LOCKDIR"                        # same fixture: unstamped, no pid file
+  # ...and grace=0 makes ANY unstamped lock past the window, deterministically (no clock dependence).
+  # The companion branch to the test above: the grace must be a WINDOW, not a permanent exemption —
+  # an unstamped lock left behind by a crashed racer must never dormant the reaper forever.
+  CC_REAPER_LOCK_STAMP_GRACE_S=0 run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'classified'                # it broke the lock and did the work
+  grep -q 'sweep lock: stale (pid=none' "$D/reaper.log"
 }
 
 @test "sweep lock: a HUNG holder past LOCK_MAX_AGE_S is broken (liveness alone cannot wedge it)" {

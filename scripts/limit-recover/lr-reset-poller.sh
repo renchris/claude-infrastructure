@@ -345,7 +345,7 @@ for k in ('sid','acct','cfg','cwd','reset_at_utc'):
   if ! account_has_headroom "$acct"; then log "WAIT  $sid — $acct still capped, retry next tick"; continue; fi
   (( fired >= MAX_PER_RUN )) && { log "CAP   per-run resume cap ($MAX_PER_RUN) reached; deferring rest"; break; }
   if [[ "$AUTOFIRE" == "1" && $DRY -eq 0 ]]; then
-    launcher="/tmp/lr-poller-launch-${sid:0:8}.sh"
+    launcher="${LR_POLLER_LAUNCH_DIR:-/tmp}/lr-poller-launch-${sid:0:8}.sh"   # seam: tests redirect off the shared /tmp (concurrent-suite write collision)
     { echo '#!/bin/bash'; printf 'exec "%s/lr-fire-resume.sh" "%s" "%s" "%s" --prompt %q\n' \
         "$LR" "$acct" "$cwd" "$sid" "/limit-recover"; } > "$launcher"; chmod +x "$launcher"
     if mech=$(spawn_resume "$launcher" "$sid"); then

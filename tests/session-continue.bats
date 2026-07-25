@@ -19,6 +19,10 @@ setup() {
   # without this the actuation would mutate the REAL ~/.claude/mailbox of whatever pane runs the suite.
   export CC_MAILBOX_DIR="$BATS_TEST_TMPDIR/mbox"
   mkdir -p "$CC_MAILBOX_DIR"
+  # isolate the IDL too: the Stop-fold's abstain/decision rows append to the audit trail, so without
+  # this every test writes to the LIVE ~/.claude/autonomy/idl.jsonl (404 leaked lines found 2026-07-25).
+  # Only one test previously exported its own ($BATS_TEST_TMPDIR/bidl.jsonl) — that override still wins.
+  export CC_IDL="$BATS_TEST_TMPDIR/idl.jsonl"
   CWD="$BATS_TEST_TMPDIR/wt"; mkdir -p "$CWD"
 }
 
