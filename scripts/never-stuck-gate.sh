@@ -53,7 +53,11 @@ ok(){   printf '  ✅ %-8s %s\n' "$1" "$2"; PASS=$((PASS+1)); }
 bad(){  printf '  ⛔ %-8s %s\n' "$1" "$2"; FAIL=$((FAIL+1)); }
 info(){ printf '  · %-10s %s\n' "$1" "$2"; }
 
-COMPONENT_GATES="wait-safety-gate reaper-safety-gate comms-safety-gate limit-reset-safety-gate respawn-safety-gate route-safety-gate premortem-gate"
+# session-lifecycle-safety-gate joined 2026-07-25 (audit 08): its own header declares it a "Sibling of
+# route/wait/reaper/comms/limit-reset/respawn-safety gates" — every one of those siblings was composed
+# here and it was not, so the autonomous-reap bar was the one sibling nothing enforced. It is the
+# slowest member (it runs bats suites via bats_green), which is why LEG-1 is not a cheap loop.
+COMPONENT_GATES="wait-safety-gate reaper-safety-gate comms-safety-gate limit-reset-safety-gate respawn-safety-gate route-safety-gate premortem-gate session-lifecycle-safety-gate"
 
 run_leg1() {
   echo "LEG 1 — component gates (live runs; a missing bar is a broken bar):"
