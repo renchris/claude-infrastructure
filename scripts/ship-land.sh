@@ -221,22 +221,22 @@ detect_trunk() {
 
 postland_net_live() {  # 0 = trust the post-land net (or it is not adopted yet) / 1 = INERT
   # ABSENCE IS LOUD. A scoped land is only safe because the FULL suite is re-proven off the
-  # critical path. If the net HAS run here (stamps exist) but its newest green stamp has gone
-  # cold, the net is inert and this land must NOT narrow. No stamps dir / no green stamp yet ⇒
-  # the net simply is not adopted (the bootstrap land) — never brick that.
+  # critical path. The signal is postland-verify.sh's `last-green` file — touched on EVERY
+  # green full-suite verdict (stamps themselves are `<tree>.json` with the verdict INSIDE,
+  # so a filename glob can never see them — integration finding, 2026-07-25). last-green
+  # absent ⇒ the net is not adopted yet (the bootstrap land) — never brick that. last-green
+  # gone cold ⇒ the net is dead OR trunk has been red for that long; either way this land
+  # must not narrow.
   [[ "${POSTLAND_STALENESS_GUARD:-on}" = "off" ]] && return 0
-  local dir age max newest=0 m p
-  dir="${POSTLAND_DIR:-$HOME/.claude/autonomy/postland}/stamps"
-  [[ -d "$dir" ]] || return 0
-  while IFS= read -r p; do
-    m="$(stat -f %m "$p" 2>/dev/null || stat -c %Y "$p" 2>/dev/null || echo 0)"
-    [[ "$m" -gt "$newest" ]] && newest="$m"
-  done < <(find "$dir" -type f -name "${POSTLAND_STAMP_GLOB:-*green*}" 2>/dev/null)
-  [[ "$newest" -gt 0 ]] || return 0
+  local lg age max m
+  lg="${POSTLAND_DIR:-$HOME/.claude/autonomy/postland}/last-green"
+  [[ -f "$lg" ]] || return 0
+  m="$(stat -f %m "$lg" 2>/dev/null || stat -c %Y "$lg" 2>/dev/null || echo 0)"
+  [[ "$m" -gt 0 ]] || return 0
   max="${POSTLAND_MAX_STAMP_AGE_H:-24}"
-  age=$(( ( $(date +%s) - newest ) / 3600 ))
+  age=$(( ( $(date +%s) - m ) / 3600 ))
   [[ "$age" -lt "$max" ]] && return 0
-  echo "⚠ gate[scoped]: post-land net appears INERT — newest green stamp is ${age}h old (max ${max}h). Degrading this land to the FULL gate. (kill switch: POSTLAND_STALENESS_GUARD=off)" >&2
+  echo "⚠ gate[scoped]: post-land net appears INERT — last green full verify was ${age}h ago (max ${max}h). Degrading this land to the FULL gate. (kill switch: POSTLAND_STALENESS_GUARD=off)" >&2
   return 1
 }
 
