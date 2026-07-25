@@ -146,7 +146,7 @@ All five components implemented + bats-tested, each an atomic commit, gate `bats
 
 **C1 verified against the REAL blocked transcript** (`a402c9f3`): idle≥120 → `safeguard-blocked`,
 `blocked_model:"Fable 5"`, refusal captured; idle<120 → `active` (transient tolerance).
-**C4 dry-run verified against the REAL blocked pane** `725A269A`: brief carried verbatim,
+**C4 dry-run verified against the REAL blocked pane** `725A269A`: brief carried verbatim, <!-- pane-id-lint:allow: historical verification record, not a send target -->
 model swap opus≠Fable, sanctioned self-close constructed.
 
 ### Implementation decisions / learnings (durable)

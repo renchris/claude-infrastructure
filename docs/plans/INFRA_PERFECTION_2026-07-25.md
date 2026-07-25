@@ -49,8 +49,8 @@ Land: project-local /ship (standing-land authorized in this repo). Deploy: OPERA
 - 2026-07-25 00:55 incident: a peer session's `plutil -extract StartCalendarInterval json <f>`
   (no -o) destroyed all 5 calendar plists; RESTORED 01:10 from loaded launchd defs + repo SSOT
   (memory: plutil-extract-clobbers-input). Fragments + captures: scratchpad/launchd-rescue/.
-- cc-reaper sweep: 0 safe candidates; 2 surfaced finished-operator (panes 52DCAB5E pid 31459,
-  8D4878D1 pid 87542); fleet is operator-owned panes → platter, not auto-kill.
+- cc-reaper sweep: 0 safe candidates; 2 surfaced finished-operator (panes 52DCAB5E pid 31459, <!-- pane-id-lint:allow: historical sweep record, not a send target -->
+  8D4878D1 pid 87542); fleet is operator-owned panes → platter, not auto-kill. <!-- pane-id-lint:allow: historical sweep record, not a send target -->
 
 ### 01 dead-scripts (landed)
 - Tier-1 safe-delete: scripts/auto-revert-getAppState-patch.sh · scripts/record-version.sh ·
@@ -188,7 +188,7 @@ Land: project-local /ship (standing-land authorized in this repo). Deploy: OPERA
 ## Wave-2 roster (spawn as wave-1 slots free; cap 6 concurrent)
 | Teammate | Owns |
 |---|---|
-| tm-gates | 08 F4 (pane-id allow ×17 + narrow numeric filter + 99261468 fixture) + F5 (run_check tee) + S3 transitive-e2e assert + S4 supports_selftest hardening + premortem stale header + D-12 SubagentStop v1 hook + settings_floor live-sync (report diff) |
+| tm-gates | 08 F4 (pane-id allow ×17 + narrow numeric filter + 99261468 fixture <!-- pane-id-lint:allow: quoting the bad form to name the fixture -->) + F5 (run_check tee) + S3 transitive-e2e assert + S4 supports_selftest hardening + premortem stale header + D-12 SubagentStop v1 hook + settings_floor live-sync (report diff) |
 | tm-growth | 03 #1 scratchpad reaper (live-gated, ≥6000s) + #2 npm cache verify wiring + #5 autonomy age-reaps ×6 + #6 session-index.db retention+VACUUM + #7 plan-history keep-policy + #9 growth-coverage lint (the dual) + #10 mailbox/watchdog/state GC + 06 session-index overhaul-then-unlock + statusline slim |
 | tm-proclife | 04 G1 owned-wait idle-horizon page + G2 defer-N page + G3 watchdog team-member stamp + G4 pane-less inventory rows + G5 live_pane_count -Ao/claude.exe/negative-Δ + G6 orphan-reaper multi-root+configless + G7 live-member page-not-archive + G11 registry prune + 06 supervisor-storm fix + waiting-recycle:449 fail-safe bound. SEQUENCED AFTER closure-a/b merge (file overlap: cc-reaper, cc-classify, team-orphan-reaper). |
 ### 07 closure (landed — code CLOSED + red-proven; deployment is the open front)
@@ -233,7 +233,7 @@ Land: project-local /ship (standing-land authorized in this repo). Deploy: OPERA
   :93 --selftest alias for --all (never ran; Opus-5-staging hypothesis REFUTED — --all exits 0
   clean under launchd env; model-config is PRESERVE-classified). F1-F3 → tm-launchd addendum
   (file ownership). F4 pane-id-lint: 17 historical allow-appends (~10 docs) + narrow numeric-shape
-  filter + 99261468 all-digit-real-pane fixture — do NOT require-hex-letter (real blind spot).
+  filter + 99261468 all-digit-real-pane fixture — do NOT require-hex-letter (real blind spot). <!-- pane-id-lint:allow: quoting the bad form to name the fixture -->
   F5 nightly run_check tee per-check output (S1 = highest-value: 6-day-old reds undiagnosable by
   construction). F4/F5 + S3 transitive-e2e-skip assert + S4 supports_selftest hardening → tm-gates.
 - bats:tests class (c): 1460/1460 green at HEAD interactively; 07-19 red was SIGTERM 143; causes
@@ -321,7 +321,7 @@ three-state UNKNOWN (:51-58), waiting-recycle S6 soft (residual → C-SC-1 campa
 1. Deploy: `git -C ~/Development/claude-infrastructure merge --ff-only origin/main` + symlink new
    files (hooks/lib/cc-interactive.sh, scripts/cc-upgrade-gate.sh, skills/cc-upgrade-gate/) +
    `launchctl kickstart -k gui/501/com.claude.lead-supervisor`.
-2. Close stale panes (frees RAM + iTerm/WindowServer load): finished-operator 52DCAB5E/8D4878D1;
+2. Close stale panes (frees RAM + iTerm/WindowServer load): finished-operator 52DCAB5E/8D4878D1; <!-- pane-id-lint:allow: historical sweep record, not a send target -->
    aged owned-waits (personal ×5 up to 9d, lakehouse 2d, life-decision cluster ~1.9GB/46h,
    stripe-research 6d, jose-resume) — close after review; reboot obviates individually.
 3. Reboot (13d uptime; resets WindowServer/iTerm/swap). Prereq DONE: plists restored+valid;
@@ -356,7 +356,7 @@ BEFORE run_gate, masking the gate state). Land is DOUBLY blocked: run_gate RED +
   - `not ok 64` autonomy-sweep "event horizon 7d ≥ lint floor" (on-origin, 579d21c touched) — config/lint.
   - `not ok 1457` scratchpad-reaper "horizon -mmin +N ≥ 6000s floor" (BRANCH-NEW e2daa0a) — config/lint.
   - `not ok 1320` pane-id-lint "live docs corpus clean" (BRANCH-NEW ef34be8) — flags truncated pane-ids
-    in THIS plan doc (52DCAB5E/8D4878D1/99261468) + SAFEGUARD_BLOCKED_VISIBILITY.md:149 (725A269A). Fix:
+    in THIS plan doc (52DCAB5E/8D4878D1/99261468) + SAFEGUARD_BLOCKED_VISIBILITY.md:149 (725A269A). Fix: <!-- pane-id-lint:allow: the lint's own diagnosis, quoting the flagged forms -->
     `pane-id-lint:allow` markers (they are historical references, not send targets).
 - **NOT a machine-wide blocker** (earlier hypothesis REFUTED): origin/main lands every ~20min (738
   passes from the main checkout); 3/6 failing test files are branch-new lints only this branch carries.
