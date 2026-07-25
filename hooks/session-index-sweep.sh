@@ -15,6 +15,7 @@ if [ ! -f "$HELPERS" ]; then
     HELPERS="$HOME/.claude/hooks/lib/session-index-helpers.sh"
 fi
 [ -f "$HELPERS" ] || exit 0
+# shellcheck source=hooks/lib/session-index-helpers.sh
 source "$HELPERS"
 
 # Fast exit if no DB

@@ -36,6 +36,9 @@ cleanup_old_versions() {
   done
 
   # Sort by semver descending
+  # shellcheck disable=SC2207  # IFS is pinned to newline immediately above, so the split is on
+  # newlines only — the exact deliberate word-split SC2207 warns about when IFS is NOT controlled.
+  # Version dirnames cannot contain newlines (they come from basename over VERSIONS_DIR/*/).
   IFS=$'\n' versions=($(printf '%s\n' "${versions[@]}" | sort -t. -k1,1rn -k2,2rn -k3,3rn))
   unset IFS
 
@@ -62,7 +65,9 @@ cleanup_old_versions() {
         continue
       fi
       echo "  Removing $v..."
-      rm -rf "$VERSIONS_DIR/$v" 2>/dev/null || echo "  ⚠ Could not fully remove $v"
+      # ${VERSIONS_DIR:?} — fail loudly rather than expanding to `rm -rf /$v` if VERSIONS_DIR is
+      # ever unset/empty. $v is non-empty by construction, but the ROOT is the dangerous half here.
+      rm -rf "${VERSIONS_DIR:?}/$v" 2>/dev/null || echo "  ⚠ Could not fully remove $v"
       deleted=$((deleted + 1))
     fi
   done
