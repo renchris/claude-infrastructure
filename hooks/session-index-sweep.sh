@@ -4,6 +4,8 @@
 # extracts context + enriched data, and upserts into the index.
 # Designed to run every 60s via launchd with low priority I/O.
 # Performance target: <500ms when no changes detected.
+#
+# Also the entry point for index RETENTION: `session-index-sweep.sh --retention[-apply]`.
 set -euo pipefail
 
 # Resolve helpers — follow symlink to repo
@@ -18,101 +20,129 @@ source "$HELPERS"
 # Fast exit if no DB
 [ -f "$SESSION_INDEX_DB" ] || exit 0
 
+# ─── Cadence knob ─────────────────────────────────────────
+# The plist stays at StartInterval 60. That is deliberate: with the batched change
+# detection below, a tick with nothing to do is 3 processes and a few ms, so 60 s
+# costs almost nothing and keeps index lag at 60 s instead of 300 s. This knob exists
+# for the operator who wants to trade lag for load WITHOUT editing (and reloading) the
+# plist: set SESSION_INDEX_SWEEP_MIN_INTERVAL_S=300 in the environment and every tick
+# inside that window exits before touching the DB. Default 0 = run every tick.
+SESSION_INDEX_SWEEP_MIN_INTERVAL_S="${SESSION_INDEX_SWEEP_MIN_INTERVAL_S:-0}"
+SWEEP_STAMP="${SESSION_INDEX_SWEEP_STAMP:-$HOME/.claude/state/session-index-sweep.last}"
+if [ "$SESSION_INDEX_SWEEP_MIN_INTERVAL_S" -gt 0 ] 2>/dev/null; then
+    if [ -f "$SWEEP_STAMP" ]; then
+        _last=$(cat "$SWEEP_STAMP" 2>/dev/null || echo 0)
+        _now=$(date +%s)
+        if [ $((_now - _last)) -lt "$SESSION_INDEX_SWEEP_MIN_INTERVAL_S" ] 2>/dev/null; then
+            exit 0
+        fi
+    fi
+fi
+
 # Init DB + tracking tables (idempotent)
 session_index_init_db
 session_index_init_tracking
 
-# Non-blocking lock — skip if backfill/tagger/another sweep is running
+# Non-blocking lock — skip if backfill/tagger/another sweep is running.
+# The trylock is now staleness-aware: an abandoned mkdir-lock (dead owner, or unstamped
+# and older than 30 min) is taken over instead of wedging the sweep forever. One such
+# orphan silently stopped session indexing for 107 days (audit 06 §4.1).
 if ! session_index_trylock; then
     exit 0
 fi
 
+mkdir -p "$(dirname "$SWEEP_STAMP")" 2>/dev/null || true
+date +%s > "$SWEEP_STAMP" 2>/dev/null || true
+
 UUID_RE='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
 NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 WORK_DONE=0
+SKIPPED_BY_CAP=0
 
-# ─── Scan all project directories ────────────────────────
-for project_dir in "$CLAUDE_PROJECTS_DIR"/*/; do
-    [ -d "$project_dir" ] || continue
+# Per-tick work cap. The first unblocked sweep after the 107-day wedge has ~1,100
+# never-indexed transcripts to parse; without a cap that single tick runs for minutes
+# while launchd fires the next one (which then trylock-skips). The cap turns the
+# catch-up into a handful of bounded ticks. NOT silent — a capped tick logs what it
+# left behind, because a truncation nobody can see reads as "fully indexed".
+SESSION_INDEX_SWEEP_MAX_FILES="${SESSION_INDEX_SWEEP_MAX_FILES:-200}"
+
+# ─── ONE batched change-detection pass ────────────────────
+# Was: for every transcript, 2× `stat` + 1× `sqlite3` SELECT, then 3 full-file python3
+# parses of the same file — ~4,900 processes for 1,631 transcripts, and every active
+# session's growing transcript re-parsed three times a minute (audit 06 §3, §5.3).
+# Now: 3 processes for the whole scan (find+stat / sqlite3 / awk), then ONE python3 pass
+# per *changed* file.
+while IFS=$'\t' read -r transcript file_mtime file_size; do
+    [ -n "$transcript" ] || continue
+    [ -f "$transcript" ] || continue
+
+    if [ "$WORK_DONE" -ge "$SESSION_INDEX_SWEEP_MAX_FILES" ]; then
+        SKIPPED_BY_CAP=$((SKIPPED_BY_CAP + 1))
+        continue
+    fi
+
+    base=$(basename "$transcript")
+    if [ "$base" = "transcript.jsonl" ]; then
+        # Nested layout: {project_dir}/{session_id}/transcript.jsonl
+        sid=$(basename "$(dirname "$transcript")")
+        project_dir="$(dirname "$(dirname "$transcript")")/"
+        # Prefer the flat file when both exist (same content) — unchanged behaviour.
+        [ -f "$project_dir${sid}.jsonl" ] && continue
+    else
+        # Flat layout: {project_dir}/{session_id}.jsonl
+        sid="${base%.jsonl}"
+        project_dir="$(dirname "$transcript")/"
+    fi
+
+    # Skip non-UUID files (sessions-index.json and friends also end in .jsonl)
+    [[ "$sid" =~ $UUID_RE ]] || continue
 
     dir_name=$(basename "$project_dir")
     proj_path=$(echo "$dir_name" | sed 's/^-/\//' | sed 's/-/\//g')
     proj_name=$(session_index_project_name "$proj_path")
 
-    # ─── Flat layout: {project_dir}/{session_id}.jsonl ────
-    for transcript in "$project_dir"*.jsonl; do
-        [ -f "$transcript" ] || continue
+    # ─── ONE parse: context, assistant text, files, commands, message count ───
+    extracted=$(session_index_extract_all "$transcript" 5 2>/dev/null || printf '\t\t\t\t0')
+    IFS=$'\t' read -r context_text assistant_text files_changed commands_run msg_count <<< "$extracted"
 
-        sid=$(basename "$transcript" .jsonl)
-        # Skip non-UUID files (sessions-index.json produces .jsonl too)
-        [[ "$sid" =~ $UUID_RE ]] || continue
+    # Build first_prompt from context_text (fallback for stub rows)
+    first_prompt=""
+    if [ -n "$context_text" ]; then
+        first_prompt=$(printf '%s' "$context_text" | head -c 500)
+    fi
 
-        # Stat file: mtime + size (macOS stat)
-        file_mtime=$(stat -f "%m" "$transcript" 2>/dev/null || echo 0)
-        file_size=$(stat -f "%z" "$transcript" 2>/dev/null || echo 0)
+    keywords=$(session_index_extract_keywords "$first_prompt $context_text" 2>/dev/null || echo "")
 
-        # Check tracking table for changes
-        tracked=$(session_index_sql "SELECT last_mtime, last_size FROM file_tracking WHERE file_path = '$(echo "$transcript" | sed "s/'/''/g")' LIMIT 1;" 2>/dev/null || echo "")
+    # File mtime as ISO8601 for created_at/modified_at
+    file_mtime_iso=$(date -r "$file_mtime" -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || echo "$NOW")
 
-        if [ -n "$tracked" ]; then
-            IFS='|' read -r tracked_mtime tracked_size <<< "$tracked"
-            # No change — skip
-            if [ "$file_mtime" = "$tracked_mtime" ] && [ "$file_size" = "$tracked_size" ]; then
-                continue
-            fi
-        fi
+    # Upsert session — 'sweep' source is lower priority than 'sessions-index'
+    session_index_upsert_with_fts \
+        "$sid" \
+        "$proj_path" \
+        "$proj_name" \
+        "" \
+        "$first_prompt" \
+        "" \
+        "$file_mtime_iso" \
+        "$file_mtime_iso" \
+        "${msg_count:-0}" \
+        "" \
+        "$keywords" \
+        "session-sweep" \
+        "$context_text" \
+        "$assistant_text" \
+        "$files_changed" \
+        "$commands_run" \
+        ""
 
-        # ─── New or changed file: extract and upsert ──────
-        # Extract context text from transcript (first 5 user messages)
-        context_text=$(session_index_extract_context "$transcript" 5 2>/dev/null || echo "")
+    sid_escaped=$(echo "$sid" | sed "s/'/''/g")
+    transcript_escaped=$(echo "$transcript" | sed "s/'/''/g")
+    proj_dir_escaped=$(echo "$project_dir" | sed "s/'/''/g")
 
-        # Extract enriched data (assistant text, file paths, commands)
-        enriched_data=$(session_index_extract_enriched "$transcript" 2>/dev/null || printf '\t\t')
-        IFS=$'\t' read -r assistant_text files_changed commands_run <<< "$enriched_data"
-
-        # Extract message count
-        msg_count=$(session_index_extract_transcript_meta "$transcript" 2>/dev/null || echo "0")
-
-        # Build first_prompt from context_text (fallback for stub rows)
-        first_prompt=""
-        if [ -n "$context_text" ]; then
-            first_prompt=$(printf '%s' "$context_text" | head -c 500)
-        fi
-
-        # Extract keywords
-        keywords=$(session_index_extract_keywords "$first_prompt $context_text" 2>/dev/null || echo "")
-
-        # File mtime as ISO8601 for created_at/modified_at
-        file_mtime_iso=$(date -r "$file_mtime" -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || echo "$NOW")
-
-        # Upsert session — 'sweep' source is lower priority than 'sessions-index'
-        session_index_upsert_with_fts \
-            "$sid" \
-            "$proj_path" \
-            "$proj_name" \
-            "" \
-            "$first_prompt" \
-            "" \
-            "$file_mtime_iso" \
-            "$file_mtime_iso" \
-            "${msg_count:-0}" \
-            "" \
-            "$keywords" \
-            "session-sweep" \
-            "$context_text" \
-            "$assistant_text" \
-            "$files_changed" \
-            "$commands_run" \
-            ""
-
-        # Update sweep columns on sessions
-        sid_escaped=$(echo "$sid" | sed "s/'/''/g")
-        session_index_sql "UPDATE sessions SET sweep_mtime = $file_mtime, sweep_size = $file_size WHERE session_id = '$sid_escaped';"
-
-        # Upsert file_tracking
-        transcript_escaped=$(echo "$transcript" | sed "s/'/''/g")
-        proj_dir_escaped=$(echo "$project_dir" | sed "s/'/''/g")
-        session_index_sql <<SQL
+    # Both writes in ONE sqlite3 process (was two).
+    session_index_sql <<SQL
+UPDATE sessions SET sweep_mtime = $file_mtime, sweep_size = $file_size WHERE session_id = '$sid_escaped';
 INSERT INTO file_tracking (file_path, session_id, project_dir, last_mtime, last_size, last_swept_at, sweep_count, is_active)
 VALUES ('$transcript_escaped', '$sid_escaped', '$proj_dir_escaped', $file_mtime, $file_size, '$NOW', 1, 1)
 ON CONFLICT(file_path) DO UPDATE SET
@@ -122,91 +152,16 @@ ON CONFLICT(file_path) DO UPDATE SET
     sweep_count = file_tracking.sweep_count + 1;
 SQL
 
-        WORK_DONE=$((WORK_DONE + 1))
-    done
-
-    # ─── Subdirectory layout: {project_dir}/{session_id}/transcript.jsonl ──
-    for subdir in "$project_dir"*/; do
-        [ -d "$subdir" ] || continue
-
-        sid=$(basename "$subdir")
-        [[ "$sid" =~ $UUID_RE ]] || continue
-
-        transcript="$subdir/transcript.jsonl"
-        [ -f "$transcript" ] || continue
-
-        # Skip if flat file exists (prefer flat — same content)
-        [ -f "$project_dir${sid}.jsonl" ] && continue
-
-        # Stat file
-        file_mtime=$(stat -f "%m" "$transcript" 2>/dev/null || echo 0)
-        file_size=$(stat -f "%z" "$transcript" 2>/dev/null || echo 0)
-
-        # Check tracking table
-        tracked=$(session_index_sql "SELECT last_mtime, last_size FROM file_tracking WHERE file_path = '$(echo "$transcript" | sed "s/'/''/g")' LIMIT 1;" 2>/dev/null || echo "")
-
-        if [ -n "$tracked" ]; then
-            IFS='|' read -r tracked_mtime tracked_size <<< "$tracked"
-            if [ "$file_mtime" = "$tracked_mtime" ] && [ "$file_size" = "$tracked_size" ]; then
-                continue
-            fi
-        fi
-
-        # Extract and upsert (same pattern as flat layout)
-        context_text=$(session_index_extract_context "$transcript" 5 2>/dev/null || echo "")
-        enriched_data=$(session_index_extract_enriched "$transcript" 2>/dev/null || printf '\t\t')
-        IFS=$'\t' read -r assistant_text files_changed commands_run <<< "$enriched_data"
-        msg_count=$(session_index_extract_transcript_meta "$transcript" 2>/dev/null || echo "0")
-
-        first_prompt=""
-        if [ -n "$context_text" ]; then
-            first_prompt=$(printf '%s' "$context_text" | head -c 500)
-        fi
-
-        keywords=$(session_index_extract_keywords "$first_prompt $context_text" 2>/dev/null || echo "")
-        file_mtime_iso=$(date -r "$file_mtime" -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || echo "$NOW")
-
-        session_index_upsert_with_fts \
-            "$sid" \
-            "$proj_path" \
-            "$proj_name" \
-            "" \
-            "$first_prompt" \
-            "" \
-            "$file_mtime_iso" \
-            "$file_mtime_iso" \
-            "${msg_count:-0}" \
-            "" \
-            "$keywords" \
-            "session-sweep" \
-            "$context_text" \
-            "$assistant_text" \
-            "$files_changed" \
-            "$commands_run" \
-            ""
-
-        sid_escaped=$(echo "$sid" | sed "s/'/''/g")
-        session_index_sql "UPDATE sessions SET sweep_mtime = $file_mtime, sweep_size = $file_size WHERE session_id = '$sid_escaped';"
-
-        transcript_escaped=$(echo "$transcript" | sed "s/'/''/g")
-        proj_dir_escaped=$(echo "$project_dir" | sed "s/'/''/g")
-        session_index_sql <<SQL
-INSERT INTO file_tracking (file_path, session_id, project_dir, last_mtime, last_size, last_swept_at, sweep_count, is_active)
-VALUES ('$transcript_escaped', '$sid_escaped', '$proj_dir_escaped', $file_mtime, $file_size, '$NOW', 1, 1)
-ON CONFLICT(file_path) DO UPDATE SET
-    last_mtime = $file_mtime,
-    last_size = $file_size,
-    last_swept_at = '$NOW',
-    sweep_count = file_tracking.sweep_count + 1;
-SQL
-
-        WORK_DONE=$((WORK_DONE + 1))
-    done
-done
+    WORK_DONE=$((WORK_DONE + 1))
+done < <(session_index_changed_files "$CLAUDE_PROJECTS_DIR")
 
 # ─── Log only when work was done ──────────────────────────
 if [ "$WORK_DONE" -gt 0 ]; then
-    session_index_log "Sweep: indexed $WORK_DONE new/changed transcripts"
+    if [ "$SKIPPED_BY_CAP" -gt 0 ]; then
+        session_index_log "Sweep: indexed $WORK_DONE new/changed transcripts; DEFERRED $SKIPPED_BY_CAP to the next tick (cap=$SESSION_INDEX_SWEEP_MAX_FILES)"
+    else
+        session_index_log "Sweep: indexed $WORK_DONE new/changed transcripts"
+    fi
 fi
 
 exit 0

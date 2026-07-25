@@ -69,7 +69,6 @@ session_index_sql() {
 
 SESSION_INDEX_LOCKFILE="$HOME/.claude/session-index.lock"
 _SESSION_INDEX_LOCK_FD=""
-
 # ─── Stale-holder recovery for the mkdir lock (a15/D1) ────────────────────────────────
 # WHY THIS EXISTS, measured rather than predicted. `flock` is ABSENT on macOS (verified:
 # `command -v flock` → nothing), so every path below falls through to the mkdir fallback, and that
@@ -643,6 +642,211 @@ except MemoryError:
     sys.stdout.write(' \t \t ')
     sys.exit(0)
 " 2>/dev/null || printf ' \t \t '
+}
+
+# ─── Batched change detection (the sweep's hot path) ───────
+# Emits ONE tab-separated row per NEW-or-CHANGED transcript: <path>\t<mtime>\t<size>.
+#
+# Replaces the per-file cost that made the sweep a 59 s-per-60 s-tick scanner once
+# unblocked (audit 06 §3/§5.3): 2× `stat` AND one `sqlite3` process **per transcript**
+# — ~4,900 processes for 1,631 files. This is 3 processes total, whatever the count:
+#   1. one `find … -exec stat +`  — batched stat, so also the single-pass replacement
+#                                   for the old mtime+size stat pair
+#   2. one `sqlite3`              — the whole file_tracking table, once
+#   3. one `awk`                  — the join, in-memory
+# maxdepth 3 preserves the two layouts the sweep has always handled: flat
+# `<project>/<sid>.jsonl` and nested `<project>/<sid>/transcript.jsonl`.
+session_index_changed_files() {
+    local projects_dir="${1:-$CLAUDE_PROJECTS_DIR}"
+    [ -d "$projects_dir" ] || return 0
+    local tracking
+    tracking=$(session_index_sql \
+        "SELECT file_path || char(9) || last_mtime || char(9) || last_size FROM file_tracking;" \
+        2>/dev/null || true)
+    # %m mtime, %z size, %N path — path LAST so a path containing spaces still parses.
+    find "$projects_dir" -maxdepth 3 -type f -name '*.jsonl' -exec stat -f '%m%t%z%t%N' {} + 2>/dev/null \
+      | awk -F'\t' -v tracking="$tracking" '
+          BEGIN {
+              n = split(tracking, rows, "\n")
+              for (i = 1; i <= n; i++) {
+                  if (rows[i] == "") continue
+                  split(rows[i], c, "\t")
+                  seen[c[1]] = c[2] SUBSEP c[3]
+              }
+          }
+          {
+              path = $3
+              if ((path in seen) && seen[path] == ($1 SUBSEP $2)) next
+              print path "\t" $1 "\t" $2
+          }'
+}
+
+# ─── One-pass transcript extraction ────────────────────────
+# ONE python3 process per changed transcript, emitting every field the sweep needs:
+#   context_text \t assistant_text \t files_changed \t commands_run \t message_count
+#
+# The sweep used to call session_index_extract_context + _extract_enriched +
+# _extract_transcript_meta, i.e. **three full-file JSON parses of the same file** — on a
+# 60 s tick that re-read every active session's growing transcript three times a minute
+# (audit 06 §5.3). Semantics are preserved field-for-field; the three single-purpose
+# functions above are kept for their other callers.
+session_index_extract_all() {
+    local transcript_path="$1"
+    local max_messages="${2:-5}"
+    local max_assistant_chars="${3:-3000}"
+    local max_files="${4:-100}"
+    [ -f "$transcript_path" ] || { printf '\t\t\t\t0'; return 0; }
+
+    # Same >50MB OOM guard the enriched extractor has always had.
+    local file_size
+    file_size=$(stat -f%z "$transcript_path" 2>/dev/null || stat -c%s "$transcript_path" 2>/dev/null || echo 0)
+    if [ "$file_size" -gt 52428800 ]; then
+        session_index_log "Skipping large transcript ($file_size bytes): $transcript_path"
+        printf '\t\t\t\t0'
+        return 0
+    fi
+
+    TRANSCRIPT_PATH="$transcript_path" \
+    MAX_MESSAGES="$max_messages" \
+    MAX_ASSISTANT_CHARS="$max_assistant_chars" \
+    MAX_FILES="$max_files" \
+    python3 -c "
+import json, os, re, sys
+# Path/limits arrive through the ENVIRONMENT, not string interpolation: a transcript path
+# is attacker-adjacent data and the older extractors spliced it straight into the program
+# text, where a quote would break the parse (or worse).
+path = os.environ['TRANSCRIPT_PATH']
+max_messages = int(os.environ['MAX_MESSAGES'])
+max_assistant_chars = int(os.environ['MAX_ASSISTANT_CHARS'])
+max_files = int(os.environ['MAX_FILES'])
+
+msgs, assistant_texts, commands = [], [], []
+files = set()
+user_count = 0
+line_count = 0
+MAX_LINES = 10000
+try:
+    with open(path) as f:
+        for line in f:
+            line_count += 1
+            try:
+                d = json.loads(line)
+            except Exception:
+                continue
+            t = d.get('type')
+            if t == 'user':
+                # ── context_text: identical rules to session_index_extract_context ──
+                user_count += 1
+                if len(msgs) < max_messages:
+                    content = d.get('message', {}).get('content', '')
+                    if isinstance(content, list):
+                        text = ' '.join(c.get('text','') for c in content
+                                        if isinstance(c, dict) and c.get('type') == 'text')
+                    else:
+                        text = str(content)
+                    text = text.strip()
+                    if text and not text.startswith('<') and len(text) >= 10:
+                        substantive = []
+                        for ln in text.split('\n'):
+                            ln = ln.strip()
+                            if not ln: continue
+                            if re.match(r'^#{1,4}\s', ln) or ln.startswith('---') or ln.startswith('\`\`\`'):
+                                continue
+                            if re.match(r'^[-*]\s\*\*\w+\*\*:', ln): continue
+                            substantive.append(ln)
+                        text = ' '.join(substantive)[:400]
+                        if len(text) >= 10:
+                            msgs.append(text)
+            elif line_count <= MAX_LINES:
+                # ── enriched: identical rules to session_index_extract_enriched, which
+                #    stops at 10,000 lines. user_count above must NOT stop there — the old
+                #    _extract_transcript_meta counted the whole file.
+                if t == 'assistant':
+                    for block in d.get('message', {}).get('content', []):
+                        if not isinstance(block, dict): continue
+                        if block.get('type') == 'text':
+                            text = block.get('text', '').strip()
+                            if len(text) > 30 and not text.startswith('<'):
+                                assistant_texts.append(text[:500])
+                        elif block.get('type') == 'tool_use':
+                            name = block.get('name', '')
+                            inp = block.get('input', {})
+                            if name in ('Read', 'Write', 'Edit'):
+                                fp = inp.get('file_path', '')
+                                if fp: files.add(fp)
+                            elif name in ('Glob', 'Grep'):
+                                p = inp.get('path', ''); pat = inp.get('pattern', '')
+                                if p: files.add(p)
+                                if pat: files.add(pat)
+                            elif name == 'Bash':
+                                cmd = inp.get('command', '')
+                                if cmd and len(cmd) < 500: commands.append(cmd)
+                elif t == 'file-history-snapshot':
+                    files.update(d.get('snapshot', {}).get('trackedFileBackups', {}).keys())
+except MemoryError:
+    sys.stdout.write('\t\t\t\t0'); sys.exit(0)
+except Exception:
+    sys.stdout.write('\t\t\t\t0'); sys.exit(0)
+
+def flat(s):
+    return s.replace('\t', ' ').replace('\n', ' ').replace('\r', ' ')
+
+ctx = flat(' '.join(msgs)[:2500])
+at  = flat(' '.join(assistant_texts)[:max_assistant_chars])
+fc  = flat(' '.join(sorted(files)[:max_files]))
+cr  = flat(' '.join(commands[:50]))
+sys.stdout.write(ctx + '\t' + at + '\t' + fc + '\t' + cr + '\t' + str(user_count))
+" 2>/dev/null || printf '\t\t\t\t0'
+}
+
+# ─── Retention: drop rows whose transcript no longer exists ────────────────────
+# The index outlives its subject ~4× (audit 03 §1c): 5,453 session rows for ~1,600
+# transcripts, because CC's cleanupPeriodDays deletes transcripts at 30 d and NOTHING
+# ever deleted the corresponding index rows — no retention, no VACUUM, 717 free pages.
+# Searching a session whose transcript is gone returns a result you cannot open.
+#
+# The predicate is deliberately narrow: a row is dropped ONLY when we positively
+# resolved a path for it and that path is absent. A row whose path cannot be resolved
+# at all is KEPT — "I could not find it" must never be read as "it does not exist".
+session_index_retention() { # [--apply]  → prints "<before> <after> <deleted>"
+    local apply=0
+    [ "${1:-}" = "--apply" ] && apply=1
+    [ -f "$SESSION_INDEX_DB" ] || { echo "0 0 0"; return 0; }
+
+    local before dead=0 sid path
+    before=$(session_index_sql "SELECT COUNT(*) FROM sessions;" 2>/dev/null || echo 0)
+
+    # file_tracking carries the real path per session; that is the only authoritative
+    # session_id → file mapping in the schema.
+    local victims=""
+    while IFS=$'\t' read -r sid path; do
+        [ -n "$sid" ] && [ -n "$path" ] || continue
+        [ -e "$path" ] && continue
+        victims="$victims$sid
+"
+        dead=$((dead + 1))
+    done < <(session_index_sql \
+        "SELECT session_id || char(9) || file_path FROM file_tracking;" 2>/dev/null || true)
+
+    if [ "$apply" -eq 1 ] && [ "$dead" -gt 0 ]; then
+        local sql="" s
+        while IFS= read -r s; do
+            [ -n "$s" ] || continue
+            s=$(printf '%s' "$s" | sed "s/'/''/g")
+            sql="$sql
+DELETE FROM session_chunks WHERE session_id = '$s';
+DELETE FROM chunks_fts    WHERE session_id = '$s';
+DELETE FROM sessions_fts  WHERE session_id = '$s';
+DELETE FROM sessions      WHERE session_id = '$s';
+DELETE FROM file_tracking WHERE session_id = '$s';"
+        done <<< "$victims"
+        printf 'BEGIN;%s\nCOMMIT;\n' "$sql" | session_index_sql >/dev/null 2>&1 || true
+        session_index_sql "VACUUM;" >/dev/null 2>&1 || true
+    fi
+
+    local after
+    after=$(session_index_sql "SELECT COUNT(*) FROM sessions;" 2>/dev/null || echo 0)
+    echo "$before $after $dead"
 }
 
 # ─── Stats ─────────────────────────────────────────────────
