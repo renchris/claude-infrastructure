@@ -55,7 +55,8 @@ FIRED_BOOT_MAX_S="${CC_FIRED_BOOT_MAX_S:-1800}"             # stamp tenancy: a f
 INTERACTIVE_HOLD_S="${CC_CLASSIFY_INTERACTIVE_HOLD_S:-21600}"  # operator prompt within this ⇒ ADOPTED pane, never-reap (2026-07-24)
 INTERACTIVE_HOLD_DISABLE="${CC_CLASSIFY_INTERACTIVE_HOLD_DISABLE:-0}"  # tests-only: 1 turns the operator-adoption hold OFF deliberately
 FIRE_PROMPT_SLACK_S="${CC_CLASSIFY_FIRE_PROMPT_SLACK_S:-300}"  # prompts within this of firedAt = the spawn brief, not adoption
-INTERACTIVE_TAIL_BYTES="${CC_CLASSIFY_INTERACTIVE_TAIL_BYTES:-2000000}"  # recency needs the tail only (mirrors CC_CE_TAIL_BYTES); consumed by the lib via env
+# CC_CLASSIFY_INTERACTIVE_TAIL_BYTES (tail window, default 2000000; recency needs the tail only) is read
+# DIRECTLY by hooks/lib/cc-interactive.sh — no shell var here, since last_interactive_epoch just wraps the lib.
 
 die(){ printf 'cc-classify: %s\n' "$*" >&2; exit 2; }
 command -v jq >/dev/null || die "jq required"
