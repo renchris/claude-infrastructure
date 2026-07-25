@@ -1,0 +1,112 @@
+# growth-layer-reference — the REVIEWED inventory of growth surfaces the checked-in SSOT
+# (scripts/growth-coverage.conf) must classify. One relative path per line; a trailing `.jsonl`
+# or `.log` names an append-only FILE, everything else a DIRECTORY.
+#
+# WHY THIS FILE EXISTS: tests/growth-coverage-lint.bats used to assert the SSOT against the LIVE
+# ~/.claude layer. That is not a gate-able input — it is shared, concurrently-mutating machine
+# state. `autonomy/cc-reaper.sweep.lock.d` is the proof: bin/cc-reaper mkdir-locks it for the
+# duration of every sweep, so the same assertion passed and failed minutes apart on an unchanged
+# tree. A land gate whose verdict depends on whether a cron job happens to be mid-sweep is a coin
+# flip, and a flaky gate teaches people to re-run until green.
+#
+# WHAT IS PRESERVED: the bats assertion still checks real SSOT-vs-reference parity — a surface
+# added here without a disposition fails the gate — and the reaper-claim leg still greps the
+# BRANCH's own bin/ hooks/ scripts/, which is deterministic and is where a renamed reaper shows up.
+#
+# WHAT MOVED: "does the SSOT still describe the REAL host?" is now the nightly's job, not the
+# gate's. scripts/growth-coverage-lint.sh with no GROWTH_ROOT override still reads ~/.claude, and
+# the nightly `scripts/*lint*.sh` glob still runs it — a real live drift is caught there, where the
+# answer is actionable and a red does not block an unrelated land.
+#
+# REGENERATE (after reviewing every added line — this is a reviewed artifact, not a dump):
+#   G=~/.claude; { for d in "$G"/*/; do [ -d "$d" ] && basename "$d"; done
+#     for d in "$G"/autonomy/*/; do [ -d "$d" ] && echo "autonomy/$(basename "$d")"; done
+#     for f in "$G"/*.jsonl "$G"/*.log "$G"/autonomy/*.jsonl "$G"/autonomy/*.log; do
+#       [ -f "$f" ] && echo "${f#"$G"/}"; done; } | sort -u
+#
+# Snapshot taken 2026-07-25 (infra-perfection wave), 85 surfaces, 0 unclassified against the SSOT.
+agents
+archives
+autonomy
+autonomy/abstain-alarm.log
+autonomy/backlog.jsonl
+autonomy/boundary-latch
+autonomy/caffeinate-floor.log
+autonomy/cc-reaper.sweep.lock.d
+autonomy/comms-alarms
+autonomy/decisions
+autonomy/desk-invariant
+autonomy/digests
+autonomy/dod
+autonomy/idl.jsonl
+autonomy/inbox-guard
+autonomy/pages
+autonomy/pending-activation
+autonomy/power-policy.log
+autonomy/push-records
+autonomy/regression.log
+autonomy/supervisor.err.log
+autonomy/supervisor.log
+autonomy/supervisor.out.log
+autonomy/sweep-push-seen
+autonomy/sweep-seen
+backups
+bin
+cache
+cc-announce-alarms
+cc-fired
+cc-registry
+cc-roles
+cc-teardown
+chrome
+commands
+completion-push
+deathwatch
+debug
+docclf-scrub
+docclf-standing-corpus
+docclf-standing-corpus-pdfs
+docclf-uncommitted-worktree-snapshot-20260722
+drafts
+file-history
+handoff-briefs
+history.jsonl
+hooks
+ide
+land.log
+lib
+logs
+mailbox
+memory
+paste-cache
+patches
+plan-history
+plan-versions
+plans
+plugins
+projects
+repo-ref-manifests
+research
+research-artifacts
+route
+rules
+run
+scripts
+session-env
+session-index.lock.d
+sessions
+shell-snapshots
+skills
+skills-pending
+staging
+state
+statsig
+tasks
+teams
+telemetry
+todos
+trailer-fix-backups
+voiceink
+wait-contracts
+watchdog
+workflows
