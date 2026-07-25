@@ -1,0 +1,183 @@
+#!/usr/bin/env python3
+"""cc-config-slot — resolve the CLAUDE_CONFIG_DIR a session should use for an account.
+
+  cc-config-slot <acct> [--class NAME] [--json]
+  cc-config-slot --status [--json]
+
+PHASE 5 (token de-sharing, Variant A) SCAFFOLDING — INERT BY DEFAULT.
+
+WHY THIS EXISTS. The keychain credential item is
+`Claude Code-credentials-<sha256(config_dir)[:8]>` — derived from the config dir. Each
+account has exactly ONE config dir today, so all 5-6 concurrent sessions on an account
+share ONE rotating refresh token with NO cross-process lock (Claude Code single-flights
+refreshes in-process only). A loser of that race gets `invalid_grant`; under RFC-6819
+reuse detection a replayed token can revoke the whole family — logging every session out
+weeks before the ~30-day calendar deadline.
+
+Variant A removes the SHARING rather than coordinating it: give each session CLASS a
+distinct CLAUDE_CONFIG_DIR, and it gets a distinct credential item and an independent
+refresh chain. Sessions in different classes then cannot rotate each other's token — the
+race is gone by construction, with ZERO capability loss (every slot holds a real,
+full-scope login).
+
+  ⚠️ NOT DECIDED YET. Variant A rests on one unverified assumption: that a second
+  full-scope login for the same account (into a different config dir) does NOT invalidate
+  the first. Experiment E1 settles it (scripts/relogin-probes/e1-concurrent-logins.sh).
+  If E1 shows logins do NOT coexist, Variant A collapses and the fallback is Variant B —
+  a setup-token supplement, which is a DIFFERENT mechanism entirely (CLAUDE_CODE_OAUTH_TOKEN
+  in the env, inference-only scope, no config dir involved). In that case this file is dead
+  code to DELETE, not to activate.
+
+DEFAULT OFF — AND THE OFF PATH IS A PROVABLE NO-OP. With de-sharing disabled (the
+default), this resolves to the account's canonical config dir from accounts.json — byte
+-identical to what the launchers already export. Nothing changes until an operator
+explicitly enables it AND E1 has returned Variant A.
+
+ACTIVATION IS C10 (operator-only). Enabling it is a two-step the operator owns:
+  1. write the enable flag  (see --status for the exact path + shape)
+  2. apply the staged launcher change (scripts/relogin-desharing-activate.sh)
+Nothing here mutates a launcher, a credential, or an account.
+
+Slot count: 3 per account. Against an observed 5-6 concurrent and KMAX 8, race
+probability falls roughly with the SQUARE of the sharing factor — 3 slots cut it by about
+an order of magnitude while keeping renewals at 4 accounts x 3 slots = 12/month,
+staggered, trivially inside the hourly poller's capacity. Do NOT go to one-dir-per-session:
+that is unbounded stores and unbounded re-auths.
+
+Env: CC_CONFIG_SLOT_ACCOUNTS_JSON (default: the repo accounts.json)
+     CC_CONFIG_SLOT_FLAG_FILE     (default: ~/.claude/autonomy/relogin-desharing.json)
+
+Exit: 0 resolved · 1 error · 2 unknown account / bad args
+"""
+from __future__ import annotations
+
+import json
+import os
+import sys
+from typing import Any
+
+HOME = os.path.expanduser("~")
+SLOTS_PER_ACCOUNT = 3
+DEFAULT_CLASS = "default"
+FLAG_FILE = os.environ.get(
+    "CC_CONFIG_SLOT_FLAG_FILE", os.path.join(HOME, ".claude/autonomy/relogin-desharing.json")
+)
+
+
+def _accounts_json_path() -> str:
+    env = os.environ.get("CC_CONFIG_SLOT_ACCOUNTS_JSON")
+    if env:
+        return env
+    return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "accounts.json")
+
+
+def load_accounts() -> dict[str, dict[str, Any]]:
+    """Account name -> record, from the accounts.json SSOT."""
+    with open(_accounts_json_path()) as fh:
+        cfg = json.load(fh)
+    return {a["name"]: a for a in cfg.get("accounts", [])}
+
+
+def desharing_enabled() -> bool:
+    """True only when an operator has explicitly enabled de-sharing.
+
+    Fail CLOSED: a missing, unreadable, or malformed flag file means DISABLED. This
+    resolver sits in the launch path of every session — an ambiguous flag must never
+    silently re-point a session at a different credential store.
+    """
+    try:
+        with open(FLAG_FILE) as fh:
+            return json.load(fh).get("enabled") is True
+    except (OSError, json.JSONDecodeError, AttributeError):
+        return False
+
+
+def slot_for_class(class_name: str) -> int:
+    """Stable slot index for a session class. Same class -> same slot, always.
+
+    Hashed rather than assigned from a table so an unrecognised class still lands
+    somewhere deterministic instead of erroring in a launch path.
+    """
+    return sum(class_name.encode()) % SLOTS_PER_ACCOUNT
+
+
+def resolve(acct: str, class_name: str = DEFAULT_CLASS) -> dict[str, Any]:
+    accounts = load_accounts()
+    rec = accounts.get(acct)
+    if rec is None:
+        raise KeyError(acct)
+    canonical = os.path.expanduser(rec["config_dir"])
+    enabled = desharing_enabled()
+    if not enabled:
+        # The provable no-op: byte-identical to today's launcher behaviour.
+        return {"acct": acct, "class": class_name, "enabled": False, "slot": None,
+                "config_dir": canonical, "canonical_config_dir": canonical}
+    slot = slot_for_class(class_name)
+    # Slot 0 keeps the canonical dir so the account's existing, already-authenticated
+    # credential remains in service — enabling de-sharing must never orphan the store
+    # that is working today.
+    config_dir = canonical if slot == 0 else f"{canonical}-s{slot}"
+    return {"acct": acct, "class": class_name, "enabled": True, "slot": slot,
+            "config_dir": config_dir, "canonical_config_dir": canonical}
+
+
+def status() -> dict[str, Any]:
+    accounts = load_accounts()
+    enabled = desharing_enabled()
+    return {
+        "enabled": enabled,
+        "variant": "A (per-session-class CLAUDE_CONFIG_DIR isolation)",
+        "gated_on": "E1 verdict (concurrent same-account logins coexist?) + operator 4.4 call",
+        "flag_file": FLAG_FILE,
+        "enable_with": '{"enabled": true} written to the flag file (C10 operator step)',
+        "slots_per_account": SLOTS_PER_ACCOUNT,
+        "accounts": sorted(accounts),
+        "renewals_per_month_if_enabled": len(accounts) * SLOTS_PER_ACCOUNT,
+    }
+
+
+def main() -> int:
+    args = sys.argv[1:]
+    if not args or args[0] in ("-h", "--help"):
+        print(__doc__)
+        return 0 if args else 2
+    as_json = "--json" in args
+    if "--status" in args:
+        st = status()
+        if as_json:
+            print(json.dumps(st, indent=2))
+        else:
+            print(f"de-sharing: {'ENABLED' if st['enabled'] else 'DISABLED (default)'}")
+            print(f"variant:    {st['variant']}")
+            print(f"gated on:   {st['gated_on']}")
+            print(f"flag file:  {st['flag_file']}")
+            print(f"slots:      {st['slots_per_account']} per account "
+                  f"({st['renewals_per_month_if_enabled']} renewals/month if enabled)")
+        return 0
+
+    acct = args[0]
+    if acct.startswith("-"):
+        print(f"cc-config-slot: expected an account name, got {acct!r}", file=sys.stderr)
+        return 2
+    class_name = DEFAULT_CLASS
+    if "--class" in args:
+        i = args.index("--class")
+        if i + 1 >= len(args):
+            print("cc-config-slot: --class requires a value", file=sys.stderr)
+            return 2
+        class_name = args[i + 1]
+    try:
+        res = resolve(acct, class_name)
+    except KeyError:
+        known = "|".join(sorted(load_accounts()))
+        print(f"cc-config-slot: unknown account: {acct} ({known})", file=sys.stderr)
+        return 2
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"cc-config-slot: cannot read accounts SSOT: {exc}", file=sys.stderr)
+        return 1
+    print(json.dumps(res, indent=2) if as_json else res["config_dir"])
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
