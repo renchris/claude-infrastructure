@@ -9,11 +9,19 @@
 # Correct, and it is this project's own law turned back on its authors (audit §3i). So the pre-mortems
 # live here as ASSERTIONS, not paragraphs.
 #
-# ⚠️ THIS GATE IS RED TODAY, BY DESIGN. The boundary hook and the supervisor do not exist; the criteria
-# they must satisfy therefore cannot pass. That redness IS the statement "the runtime phase is not ready",
-# and turning it green IS the definition of ready. It is deliberately NOT wired into pre-commit: a gate
-# that is red on every commit teaches people to ignore it (the cry-wolf failure — the same reason cc-board
-# has a grace window). Run it when someone proposes to un-hold.
+# ⚠️ STATUS (2026-07-25, audit 08): EVERY registered criterion is now MECHANICALLY SATISFIABLE. The
+# boundary hook (hooks/boundary-handoff.sh) and the supervisor (scripts/lead-supervisor.sh) both exist
+# and 0 criteria report NOT BUILT. A ⛔ here is therefore a REAL REGRESSION on a NAMED criterion — fix
+# the criterion; do not read this header as "expected redness". It is still deliberately NOT wired into
+# pre-commit; it is composed instead by wait-safety-gate L0, never-stuck-gate LEG-1, cc-discover C4 and
+# the nightly, which is where its redness surfaces. Run it directly when someone proposes to un-hold.
+#
+# HISTORY (from 2026-07-14, until the runtime primitives landed — kept because the rationale still
+# explains this file's shape): this gate WAS red by design. The boundary hook and the supervisor did
+# not exist, so the criteria they must satisfy could not pass; that redness WAS the statement "the
+# runtime phase is not ready", and turning it green WAS the definition of ready. It was kept out of
+# pre-commit because a gate that is red on every commit teaches people to ignore it (the cry-wolf
+# failure — the same reason cc-board has a grace window).
 #
 # Exit: 0 = every criterion met (⇒ un-hold is defensible) · 1 = not ready (with the reasons)
 set -uo pipefail
@@ -85,7 +93,7 @@ echo "  blind' are the same observation. (This alone would have caught cc-notify
 echo
 printf 'premortem-gate: %d met · %d failed · %d NOT BUILT\n' "$PASS" "$FAIL" "$TODO"
 if [ "$FAIL" -gt 0 ] || [ "$TODO" -gt 0 ]; then
-  echo "⇒ RUNTIME PHASE: NOT READY TO UN-HOLD. (Red here is not a bug — it is the bar.)"
+  echo "⇒ RUNTIME PHASE: NOT READY TO UN-HOLD — every ⛔/⏳ above is a real, named, fixable criterion."
   exit 1
 fi
 echo "⇒ every registered pre-mortem is mechanically satisfied; un-hold is defensible."
