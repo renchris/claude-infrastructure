@@ -81,12 +81,36 @@ Accounts: `next` (~/.claude-next) · `next2` (~/.claude-secondary) ·
 `feat/accounts-login-cliff`. **Consumers MUST degrade explicitly, never silently:**
 
 1. Try `claude-accounts --login-status` (TSV, exit 0 clear / 1 expiring / 2 required).
-2. Absent/unsupported → `claude-accounts --fresh --json`, read the login_* fields.
+2. Absent/unsupported → `claude-accounts --fresh --no-heal --json`, read the login_* fields.
 3. Fields absent too → **exit 3 DETECTION-UNAVAILABLE** with a loud log line naming
    the missing surface. Never treat "cannot detect" as "nothing to do".
 
 `--login-status` TSV columns (when present):
 `acct \t state(REQUIRED|EXPIRING) \t reason \t when \t hours \t launcher`
+
+### 🚨 AMENDMENT (lead, 2026-07-25) — `--no-heal` is MANDATORY on every read
+
+The originally-frozen ladder-2 string `claude-accounts --fresh --json` was **wrong and
+unsafe**. Verified: `get_data(fresh, no_heal)` → `collect` → `probe_account` →
+`if stale and not no_heal:` → `heal()`, and `heal()` (`bin/claude-accounts:345`) runs
+`subprocess.run([cbin, "auth", "login"], ...)` — **a real credential write** — and takes
+`/tmp/claude-accounts-heal-<acct>.lock`.
+
+So the literal frozen command could (a) authenticate and rotate a token, violating §0
+outright, and (b) make the poller hold the very lock §5 forbids it to hold, arriving
+through the detection side door. **Every read in this build — poller detection,
+`--relogin-status`, and `cc-relogin`'s before/after verify reads — uses `--no-heal`.**
+
+For `cc-relogin` specifically this also protects the *proof*: verify-by-effect is only
+evidence if the measuring read cannot itself move the state being measured.
+
+Surfaced by `tm/relogin-sched`, which flagged rather than silently complying. Enforced by
+regression tests in each consumer's suite.
+
+**Probe detection support POSITIVELY, from the help text — never from an exit code.** On
+`main` an unknown flag falls through to the human table with **exit 0**, which an
+exit-code check reads as "all clear" — exactly the silent-inert failure this section
+exists to prevent.
 
 ## 3. `bin/cc-authbrowser` — the substrate (FROZEN by lead)
 
