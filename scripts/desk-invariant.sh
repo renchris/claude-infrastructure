@@ -72,6 +72,13 @@ RESPAWN_MAX="${DESK_INVARIANT_RESPAWN_MAX:-2}"
 RESPAWN_WINDOW_S="${DESK_INVARIANT_RESPAWN_WINDOW_S:-21600}"               # 6h
 DEDUP_WINDOW_S="${DESK_INVARIANT_DEDUP_WINDOW_S:-3600}"                    # re-page at most 1/h per (sid,state)
 REPROMPT_TEXT="${DESK_INVARIANT_REPROMPT_TEXT:-resume: read /wrap, run cc-backlog list --open, continue per /goal}"
+# handoff-fire writes cc-fired/<pane>.json keyed by the NEW pane on a confirmed self-retiring fire
+# (T-P3-4, mark_fired_peer) — the fired-pane SOURCE for the no-desk role heal below. Overridable for
+# hermetic tests.
+FIRED_DIR="${DESK_INVARIANT_FIRED_DIR:-$HOME/.claude/cc-fired}"
+# Age past which paged-*-stale damping markers are pruned (7d). The (sid,state) dedup markers are never
+# otherwise cleaned — paged-*-stale.marker files pile up in the state dir over time.
+STALE_MARKER_MAX_AGE_S="${DESK_INVARIANT_MARKER_MAX_AGE_S:-604800}"
 
 STALE_S=$(( STALE_MIN * 60 ))
 PANE=""; SID=""; PID=""   # resolved per run; SID/PANE flow into idl()
@@ -223,6 +230,62 @@ respawn_budget_ok() { # 0 if < RESPAWN_MAX fires in the last RESPAWN_WINDOW_S (a
 }
 respawn_marker_write() { : > "$STATE_DIR/respawn-$(now_epoch).marker" 2>/dev/null || true; }
 
+# ── role heal (no-desk) ─────────────────────────────────────────────────────────────────────────
+# The no-desk branch fires precisely because the role pointer is stale/dead. After a SUCCESSFUL fire we
+# heal it from disk truth: handoff-fire writes cc-fired/<pane>.json keyed by the NEW pane (mark_fired_peer,
+# on a confirmed self-retiring fire — and THIS caller's --window fire IS one: SELF_RETIRE default + no
+# --recycle ⇒ WANT_SELF_RETIRE=1, handoff-fire.sh:1612/2287), so the newest such stamp IS the desk we
+# just fired. Newest-by-mtime is race-safe enough here — this daemon is the only headless-respawn firer
+# and fires <=RESPAWN_MAX/6h; a rare wrong pick self-corrects on the next sweep. Healing means the NEXT
+# sweep sees the new desk instead of re-firing against the same stale pointer that put us here. This is
+# also defense-in-depth alongside handoff-fire's own --as-role write_role: desk-invariant does NOT export
+# CC_ROLES_DIR to the fire, so this heal is what guarantees ITS $ROLES_DIR is the one repointed.
+newest_fired_pane() { # → echo the UUID of handoff-fire's most-recent cc-fired stamp, or nothing
+  local f newest="" newest_mt=0 mt pane
+  [ -d "$FIRED_DIR" ] || return 0
+  for f in "$FIRED_DIR"/*.json; do                          # glob loop (not `ls`) — mtime-max, filename-safe
+    [ -f "$f" ] || continue
+    mt="$(stat -f %m "$f" 2>/dev/null || echo 0)"
+    case "$mt" in ''|*[!0-9]*) mt=0 ;; esac
+    [ "$mt" -ge "$newest_mt" ] && { newest_mt="$mt"; newest="$f"; }
+  done
+  [ -n "$newest" ] || return 0
+  pane="$(basename "$newest" .json)"
+  case "$pane" in ""|*[!0-9A-Fa-f-]*) return 0 ;; esac       # UUID-shaped only — never a stray filename
+  printf '%s' "$pane"
+}
+heal_role() { # <pane> — atomically repoint $ROLES_DIR/$ROLE at pane (tmp+mv); best-effort, always 0
+  local pane="$1" tmp
+  [ -n "$pane" ] || return 0
+  mkdir -p "$ROLES_DIR" 2>/dev/null || return 0
+  tmp="$ROLES_DIR/.$ROLE.$$"
+  if printf '%s\n' "$pane" > "$tmp" 2>/dev/null; then
+    mv -f "$tmp" "$ROLES_DIR/$ROLE" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+  else
+    rm -f "$tmp" 2>/dev/null
+  fi
+}
+
+# ── stale-marker sweep ──────────────────────────────────────────────────────────────────────────
+# The (sid,state) dedup markers (dedup_write) are never pruned; paged-*-stale.marker files pile up in
+# the state dir over time. Sweep any older than STALE_MARKER_MAX_AGE_S (mtime) on each run and log the
+# count via idl. Literal-glob-safe (no nullglob): the [ -f ] guard skips the unexpanded pattern.
+sweep_stale_markers() {
+  local now f mt cnt=0
+  [ -d "$STATE_DIR" ] || return 0
+  now="$(now_epoch)"
+  for f in "$STATE_DIR"/paged-*-stale.marker; do
+    [ -f "$f" ] || continue
+    mt="$(stat -f %m "$f" 2>/dev/null || echo "$now")"
+    case "$mt" in ''|*[!0-9]*) mt="$now" ;; esac
+    if [ $(( now - mt )) -gt "$STALE_MARKER_MAX_AGE_S" ]; then
+      rm -f "$f" 2>/dev/null && cnt=$((cnt+1))
+    fi
+  done
+  [ "$cnt" -gt 0 ] && idl maintenance marker-sweep "swept $cnt stale damping marker(s) >${STALE_MARKER_MAX_AGE_S}s from $STATE_DIR"
+  return 0
+}
+
 # ── branch handlers ───────────────────────────────────────────────────────────────────────────────
 handle_stunned() { # <idle_s>
   local idle="$1" act="page"
@@ -279,7 +342,15 @@ handle_no_desk() { # <reason>
   # written BEFORE the attempt and both outcomes consume it.
   respawn_marker_write
   if fire_replacement; then
-    idl no-desk fire "fired replacement desk from canned brief (--window, headless); ${reason}"
+    # Heal the role pointer at the freshly fired desk (read from handoff-fire's cc-fired stamp) so the
+    # NEXT sweep sees the new desk instead of re-firing against the stale pointer that put us here.
+    local pane; pane="$(newest_fired_pane)"
+    if [ -n "$pane" ]; then
+      heal_role "$pane"
+      idl no-desk fire "fired replacement desk from canned brief (--window, headless); role $ROLE healed -> $pane; ${reason}"
+    else
+      idl no-desk fire "fired replacement desk from canned brief (--window, headless); no cc-fired stamp yet to heal role; ${reason}"
+    fi
   else
     idl no-desk fire-failed "handoff-fire returned nonzero: ${FIRE_ERR:-<no stderr captured>}; ${reason}"
   fi
@@ -288,6 +359,8 @@ handle_no_desk() { # <reason>
 evaluate() {
   mkdir -p "$STATE_DIR" 2>/dev/null || true
   mkdir -p "$(dirname "$IDL")" 2>/dev/null || true
+
+  sweep_stale_markers   # hygiene: prune paged-*-stale damping markers >7d (best-effort; logs iff >0)
 
   PANE="$(head -1 "$ROLES_DIR/$ROLE" 2>/dev/null | tr -d '[:space:]')"
   [ -n "$PANE" ] || { handle_no_desk "role-file-missing-or-empty ($ROLES_DIR/$ROLE)"; return; }
@@ -342,7 +415,7 @@ mk_transcript() { # <file> <iso-ts> [<cap-tail-text>]
 # shellcheck disable=SC2317
 setup_case() { # <casedir> — build stubs+dirs, export the full override surface
   local c="$1"
-  mkdir -p "$c/roles" "$c/registry" "$c/projects/p" "$c/wait" "$c/state" "$c/stubs"
+  mkdir -p "$c/roles" "$c/registry" "$c/projects/p" "$c/wait" "$c/state" "$c/stubs" "$c/fired"
   mkstub "$c/stubs/it2"; mkstub "$c/stubs/notify"; mkstub "$c/stubs/push"; mkstub "$c/stubs/fire"
   # cc-notify stub (F7 inbox transport): log argv AND emit the "wake-path armed" verdict handle_stale greps.
   { printf '#!/bin/bash\n'; printf 'printf "%%s\\n" "$*" >> "%s/stubs/ccnotify.log"\n' "$c"
@@ -355,7 +428,7 @@ setup_case() { # <casedir> — build stubs+dirs, export the full override surfac
     DESK_INVARIANT_IT2="$c/stubs/it2" DESK_INVARIANT_NOTIFY="$c/stubs/notify" DESK_INVARIANT_PUSH="$c/stubs/push" \
     DESK_INVARIANT_NOTIFY_BIN="$c/stubs/ccnotify" \
     DESK_INVARIANT_FIRE_BIN="$c/stubs/fire" DESK_INVARIANT_CANNED_CWD="$c" DESK_INVARIANT_BRIEF="$c/brief.md" \
-    DESK_INVARIANT_STALE_MIN=45
+    DESK_INVARIANT_FIRED_DIR="$c/fired" DESK_INVARIANT_STALE_MIN=45
 }
 # shellcheck disable=SC2317
 disp_of() { tail -1 "$1/idl.jsonl" 2>/dev/null | "$JQ" -r '.disposition' 2>/dev/null; }

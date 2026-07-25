@@ -8,7 +8,7 @@ setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   DI="$REPO/scripts/desk-invariant.sh"
   C="$BATS_TEST_TMPDIR/case"
-  mkdir -p "$C/roles" "$C/registry" "$C/projects/p" "$C/wait" "$C/state" "$C/stubs"
+  mkdir -p "$C/roles" "$C/registry" "$C/projects/p" "$C/wait" "$C/state" "$C/stubs" "$C/fired"
   for s in it2 notify push; do
     { printf '#!/bin/bash\n'; printf 'printf "%%s\\n" "$*" >> "%s/stubs/%s.log"\nexit 0\n' "$C" "$s"; } > "$C/stubs/$s"
     chmod +x "$C/stubs/$s"
@@ -51,7 +51,7 @@ FIRE
     DESK_INVARIANT_IT2="$C/stubs/it2" DESK_INVARIANT_NOTIFY="$C/stubs/notify" DESK_INVARIANT_PUSH="$C/stubs/push" \
     DESK_INVARIANT_NOTIFY_BIN="$C/stubs/ccnotify" \
     DESK_INVARIANT_FIRE_BIN="$C/stubs/fire" DESK_INVARIANT_CANNED_CWD="$C" DESK_INVARIANT_BRIEF="$C/brief.md" \
-    DESK_INVARIANT_STALE_MIN=45
+    DESK_INVARIANT_FIRED_DIR="$C/fired" DESK_INVARIANT_STALE_MIN=45
   : > "$C/brief.md"
 }
 row() { # <uuid> <sid> <pid> — write a registry row
@@ -170,4 +170,69 @@ FIRE
   run "$DI" --once
   [ "$(disp)" = budget-exhausted ]
   [ ! -f "$C/stubs/fire.log" ]
+}
+
+@test "no-desk: a successful fire HEALS cc-roles/desk to the fired pane (atomic tmp+mv)" {
+  # After a successful respawn, desk-invariant reads the NEW pane from handoff-fire's cc-fired stamp
+  # (mark_fired_peer writes cc-fired/<newpane>.json on a self-retiring fire) and atomically repoints
+  # the role at it — so the NEXT sweep sees the new desk instead of re-firing against the stale pointer
+  # that put us here (the 41h no-desk loop). Fire stub below ALSO models mark_fired_peer.
+  printf 'USTALE-ORIG\n' > "$C/roles/desk"
+  cat > "$C/stubs/fire" <<'FIRE'
+#!/bin/bash
+orig="$*"; pf=""; anchor=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --prompt-file) pf="${2:-}"; shift 2 ;;
+    --window)      anchor=window; shift ;;
+    --session-id)  anchor="${2:-}"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+[ -n "$pf" ] && [ -f "$pf" ] || exit 1
+[ -n "$anchor" ] || { echo "handoff-fire: no anchor — REFUSING" >&2; exit 1; }
+printf '%s\n' "$orig" >> "$(dirname "$0")/fire.log"
+fired="$(dirname "$0")/../fired"; mkdir -p "$fired"
+printf '{"paneUUID":"abcdef01-2345-6789-abcd-ef0123456789","selfRetire":true}\n' \
+  > "$fired/abcdef01-2345-6789-abcd-ef0123456789.json"
+exit 0
+FIRE
+  chmod +x "$C/stubs/fire"
+  run "$DI" --once
+  [ "$(disp)" = no-desk ]
+  [ -f "$C/stubs/fire.log" ]
+  [ "$(cat "$C/roles/desk")" = "abcdef01-2345-6789-abcd-ef0123456789" ]   # role HEALED to fired pane
+  grep -q 'healed -> abcdef01-2345-6789-abcd-ef0123456789' "$C/idl.jsonl"
+  ! ls "$C"/roles/.desk.* >/dev/null 2>&1                                 # ATOMIC: no temp dotfile left
+}
+
+@test "no-desk: a fire that leaves NO cc-fired stamp does NOT corrupt the role file" {
+  # The default fire stub succeeds but writes no cc-fired stamp. newest_fired_pane returns nothing →
+  # the heal is a no-op → the role file is left exactly as it was (never truncated or half-written).
+  printf 'USTALE-KEEP\n' > "$C/roles/desk"
+  run "$DI" --once
+  [ "$(disp)" = no-desk ]
+  [ -f "$C/stubs/fire.log" ]                              # fire succeeded...
+  [ -z "$(ls -A "$C/fired" 2>/dev/null)" ]                # ...but wrote no cc-fired stamp
+  [ "$(cat "$C/roles/desk")" = "USTALE-KEEP" ]            # role file UNCORRUPTED
+  grep -q 'no cc-fired stamp yet to heal role' "$C/idl.jsonl"
+  ! ls "$C"/roles/.desk.* >/dev/null 2>&1
+}
+
+@test "stale-marker sweep: paged-*-stale >7d pruned, <7d kept, count logged via idl" {
+  # The (sid,state) dedup markers are otherwise never cleaned. Each run prunes paged-*-stale markers
+  # older than 7d (mtime) and logs the count. Healthy desk so the run itself is a clean no-op branch.
+  printf 'UH\n' > "$C/roles/desk"
+  sleep 60 & local sp=$!
+  row UH SH "$sp"
+  transcript SH "$(date -u -v-1M +%Y-%m-%dT%H:%M:%SZ)"
+  : > "$C/state/paged-FRESHSID-stale.marker"                                   # mtime = now → kept
+  : > "$C/state/paged-OLDSID-stale.marker"
+  touch -t "$(date -v-8d +%Y%m%d%H%M)" "$C/state/paged-OLDSID-stale.marker"   # 8d old → swept
+  run "$DI" --once
+  kill "$sp" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  [ ! -f "$C/state/paged-OLDSID-stale.marker" ]           # >7d swept
+  [ -f "$C/state/paged-FRESHSID-stale.marker" ]           # <7d kept
+  grep -q 'swept 1 stale damping marker' "$C/idl.jsonl"   # count logged via idl
 }
