@@ -15,10 +15,12 @@
 #   boundary-handoff advises handoff). Bare-systemMessage-on-Stop is the proven channel
 #   (session-continue.sh cap message precedent).
 #
-# ── FIRE PREDICATE ── steps>0 ∨ RUNG=📦. Silent otherwise: 🔧 with no operator step is the
-#   MODEL's job (auto-continue), ✅/read-only needs no block (protocol: suppress on read-only).
-#   📦 always renders — committed-but-unlanded is the invisible-risk state (parked work is lost
-#   work if never surfaced).
+# ── FIRE PREDICATE ── steps>0 ∨ RUNG=📦 ∨ open-queue>0. Silent otherwise: 🔧 with no operator
+#   step is the MODEL's job (auto-continue), ✅/read-only needs no block (protocol: suppress on
+#   read-only). 📦 always renders — committed-but-unlanded is the invisible-risk state (parked
+#   work is lost work if never surfaced). open-queue>0 (cwd project's OPEN cc-backlog items)
+#   renders one counted line — operator crux 2026-07-25: a full auto-drain queue was invisible at
+#   every close (only BLOCKED items rendered), reading as "sitting on todo items" in prose.
 #
 # ── DAMPING (boundary-handoff B-2 lesson: never quiet in the dangerous state) ── latch on
 #   hash(rendered block): ANY change re-renders immediately; unchanged re-asserts only after TTL
@@ -37,6 +39,10 @@
 #                (`bash <p>`) → first-sentence prose fallback. Open class-B is NEVER itemized —
 #                one summary line only when defaults auto-fire within 24h (the early-veto window).
 #   backlog      cc-backlog list --blocked --json → run/run_command if present, else needs-prose.
+#   queue        cc-backlog OPEN items for the cwd project (git-toplevel basename, the same
+#                normalization cc-dispatch applies) → one COUNTED line, never itemized (open items
+#                are the dispatcher's work, not operator steps). Header when it is the only signal,
+#                footer otherwise.
 #   Line marks: `▶` = run this exact command · `◆` = judgment/decision (no single command exists).
 #
 # ── SAFETY (house pattern) ── every hook path exits 0; jq/read failure → abstain; B-3 one IDL
@@ -95,9 +101,10 @@ tildify() { printf '%s' "${1/#$HOME/~}"; }   # display+paste-safe: the shell re-
 epoch_to_iso() { date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
                  || date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo ''; }
 
-# ── the ONE renderer: prints the block (or nothing) for cwd=$1. Sets RUNG + TOTAL for the caller —
-#    so hook mode must invoke it via redirection in THIS shell, never `$(…)` (subshell loses them).
-RUNG="?"; TOTAL=0
+# ── the ONE renderer: prints the block (or nothing) for cwd=$1. Sets RUNG + TOTAL + Q_N for the
+#    caller — so hook mode must invoke it via redirection in THIS shell, never `$(…)` (subshell
+#    loses them).
+RUNG="?"; TOTAL=0; Q_N=0
 render_block() {
   local cwd="$1"
   local steps_file; steps_file="$(mktemp "${TMPDIR:-/tmp}/opreadout.XXXXXX")" || return 0
@@ -166,6 +173,27 @@ render_block() {
         else "◆\t[backlog \(.id // "?")] \($t) — needs: \($n)" end' 2>/dev/null >> "$steps_file"
   fi
 
+  # 5 · open-queue visibility (operator crux 2026-07-25: "we are just sitting here on todo items…
+  #     not clearly surfaced"). OPEN (auto-drainable) items rendered NOWHERE — only blocked ones
+  #     did — so a full queue was invisible at every close. One COUNTED line, scoped to the cwd
+  #     project (git-toplevel basename — cc-dispatch's own normalization), never itemized: open
+  #     items are the dispatcher's work, not operator steps. status=="open" exactly — claimed is
+  #     in flight, blocked is itemized above.
+  local q_proj="" q_line=""
+  Q_N=0
+  if [ -n "$cwd" ] && [ -d "$cwd" ]; then
+    q_proj="$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null || true)"
+    [ -n "$q_proj" ] || q_proj="$cwd"
+    q_proj="$(basename "$q_proj")"
+  fi
+  if [ -n "$q_proj" ] && [ -n "$blg" ] && [ -f "$BLG_FILE" ]; then
+    Q_N="$("$blg" list --open --json 2>/dev/null \
+      | jq --arg p "$q_proj" '[ .[]? | select(.status=="open" and .project==$p) ] | length' \
+          2>/dev/null || echo 0)"
+    case "$Q_N" in ''|*[!0-9]*) Q_N=0 ;; esac
+    [ "$Q_N" -gt 0 ] && q_line="queue: ${Q_N} open (${q_proj}) — cc-dispatch auto-drains · cc-backlog list --open --project ${q_proj}"
+  fi
+
   # ── state line from the un-fakeable ledger (cwd repo; skipped cleanly outside a repo) ──
   local state="" wrap="" led="" branch ahead shas dirty_n gate remainder parts
   RUNG="?"
@@ -225,11 +253,12 @@ render_block() {
   local total shown=0 over
   total="$(grep -c . "$steps_file" 2>/dev/null || echo 0)"; case "$total" in ''|*[!0-9]*) total=0 ;; esac
   TOTAL="$total"
-  if [ "$total" -eq 0 ] && [ "$RUNG" != "📦" ]; then rm -f "$steps_file"; return 0; fi
+  if [ "$total" -eq 0 ] && [ "$RUNG" != "📦" ] && [ "$Q_N" -eq 0 ]; then rm -f "$steps_file"; return 0; fi
 
   local hdr
   if [ "$total" -gt 0 ]; then hdr="OPERATOR ▸ ${total} manual step(s)${state:+ · $state}"
-  else hdr="OPERATOR ▸ ${state}"; fi
+  elif [ "$RUNG" = "📦" ]; then hdr="OPERATOR ▸ ${state}"
+  else hdr="OPERATOR ▸ ${q_line}"; fi   # queue-only render: the queue IS the governing line
   printf '%s\n' "$hdr"
 
   local n=0 mark text
@@ -245,6 +274,10 @@ render_block() {
   local foot=""
   [ "$over" -gt 0 ] && foot="+${over} more"
   [ -n "$b_line" ] && foot="${foot:+$foot · }${b_line}"
+  # queue rides the footer whenever it is not already the header (steps or 📦 govern the headline).
+  if [ -n "$q_line" ] && { [ "$total" -gt 0 ] || [ "$RUNG" = "📦" ]; }; then
+    foot="${foot:+$foot · }${q_line}"
+  fi
   if [ "$total" -gt 0 ]; then
     if command -v cc-blockers >/dev/null 2>&1; then foot="${foot:+$foot · }board: cc-blockers"
     else foot="${foot:+$foot · }detail: cc-decide list --open · cc-backlog list --blocked"; fi
@@ -312,8 +345,9 @@ fi
 NSTEPS="$(printf '%s\n' "$BLOCK" | grep -cE '^ [0-9]+ (▶|◆)' 2>/dev/null)"
 case "$NSTEPS" in ''|*[!0-9]*) NSTEPS=0 ;; esac
 case "$TOTAL"  in ''|*[!0-9]*) TOTAL=0  ;; esac
+case "$Q_N"    in ''|*[!0-9]*) Q_N=0    ;; esac
 log_idl fired "steps-surfaced" \
-  "$(jq -cn --arg rung "$RUNG" --argjson total "$TOTAL" --argjson shown "$NSTEPS" \
-      '{rung:$rung,steps_total:$total,steps_shown:$shown}' 2>/dev/null || echo '{}')"
+  "$(jq -cn --arg rung "$RUNG" --argjson total "$TOTAL" --argjson shown "$NSTEPS" --argjson q "$Q_N" \
+      '{rung:$rung,steps_total:$total,steps_shown:$shown,queue_open:$q}' 2>/dev/null || echo '{}')"
 jq -nc --arg m "$BLOCK" '{systemMessage:$m}' 2>/dev/null || true
 exit 0
