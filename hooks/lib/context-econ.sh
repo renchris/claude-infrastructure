@@ -156,39 +156,72 @@ ce_transcript_visible() {
 #                 DESTRUCTIVE act (reap, close, archive) MUST treat this as DEFER — never as "no
 #                 adoption". Advisory consumers (waiting-recycle S6, boundary-handoff wording) already
 #                 sanitize any non-numeric answer to "" and are unaffected by the split.
-# The scan itself stays bounded to the tail (CC_CE_TAIL_BYTES, default 2MB — recency needs the tail
-# only; an interactive turn older than the tail is old enough not to hold).
+# The scan reads the tail (CC_CE_TAIL_BYTES, default 2MB) and, on a tail-MISS over a file bigger than
+# that window, re-scans the whole file with the identical program (see FALLBACK below).
 #
 # INTERACTIVE (ground-truthed against production transcripts, 2026-07-20):
-#   type=="user" AND isMeta != true AND content is a string (or text blocks with NO tool_result)
+#   type=="user" AND isMeta != true AND the content is one of
+#     • a string (the ordinary typed prompt), OR
+#     • an array with NO tool_result whose text blocks join to a non-empty string, OR
+#     • an array with NO tool_result carrying an image block — an image-only paste (⌘V of a
+#       screenshot) is operator PRESENCE even with no text (parity upgrade 2026-07-25),
 #   AND the text does not match the auto-traffic regex. Auto-drive re-prompts (session-continue 🔧
 #   loops, /goal Stop hooks) arrive as isMeta:true AND "Stop hook feedback:"-prefixed — excluded on
 #   two independent axes, so an auto-driven desk still reads as NON-interactive (load-bearing: a
 #   conversation-hold that counted its own auto-drive would deadlock every free-win recycle).
 #   Operator slash-commands (<command-name>) COUNT (the operator is present); their paired
 #   <local-command-stdout> echo, task-notifications, interrupt markers, and our own ⟳/⚑/⚠ hook
-#   advisories do not.
+#   advisories do not. A tool_result inside a user record is tool traffic, never a prompt.
+#
+# PARITY (2026-07-25): this predicate is the BACKSTOP for cc-classify §4.7's
+# ci_last_interactive_epoch (hooks/lib/cc-interactive.sh) — the reaper's Gap-2 leg, reap-guard R-d and
+# waiting-recycle S6 all gate on THIS one. It was strictly WEAKER than the gate it backs up (no
+# image-only paste, no whole-file fallback), so an operator whose last turn was a screenshot paste, or
+# whose prompt sat past the tail window, was invisible to every backstop. Both capabilities are now
+# mirrored here — SAFER DIRECTION ONLY: each makes MORE turns count as operator presence ⇒ more holds,
+# never fewer. tests/interactive-parity.bats pins the two implementations to shared fixtures.
+# FALLBACK: when the bounded tail yields nothing AND the file is LARGER than the tail window, the whole
+# file is re-scanned with the IDENTICAL program. done-evidence scans the whole file, so the hold must
+# too — else a buried operator turn silently stops holding (the R1 tail-eviction residual).
 ce_last_interactive_age() {
-  local tp="${1:-}" tailb rx ep now
+  local tp="${1:-}" tailb rx prog ep fsz now
   tailb="${CC_CE_TAIL_BYTES:-2000000}"
   # NOT "no operator turn" — we cannot read the file at all. Fail-closed answer, rc 2.
   { [ -n "$tp" ] && [ -f "$tp" ] && [ -r "$tp" ]; } || { printf 'unreadable'; return 2; }
   command -v jq >/dev/null 2>&1 || { printf 'unreadable'; return 2; }
   rx="${CC_CE_AUTO_RX:-^<task-notification>|^<local-command-stdout>|^Stop hook feedback:|^\\[Request interrupted|^⟳|^⚑|^⚠}"
-  # fromjson? drops the (possibly partial) first tailed line; `objects`/`strings` guard scalar lines
-  # so one odd line can never abort the scan (jq runtime errors are per-program, not per-line).
-  ep="$(tail -c "$tailb" "$tp" 2>/dev/null | jq -Rr --arg rx "$rx" '
+  # The predicate, applied IDENTICALLY to the tail and (on a tail-miss) the whole file — held in
+  # lockstep with cc-interactive.sh's ci_last_interactive_epoch by tests/interactive-parity.bats.
+  # fromjson? drops the (possibly partial) first tailed line; `objects`/`strings` guard scalar lines so
+  # one odd line can never abort the scan (jq runtime errors are per-program, not per-line). $ntr/$nimg
+  # gate the array cases: a tool_result anywhere ⇒ $t is jq `empty` (row dropped — tool traffic, and a
+  # tool-returned image is not an operator paste); an image with no tool_result counts even when the
+  # joined text is empty.
+  # shellcheck disable=SC2016  # $c/$ntr/$nimg/$t/$rx are jq variables — single quotes are REQUIRED
+  prog='
       fromjson? | objects
       | select(.type=="user") | select(.isMeta != true)
       | (.message.content) as $c
+      | (if ($c|type)=="array" then ([$c[]? | select(.type?=="tool_result")] | length) else 0 end) as $ntr
+      | (if ($c|type)=="array" then ([$c[]? | select(.type?=="image")]       | length) else 0 end) as $nimg
       | ( if ($c|type)=="string" then $c
-          elif ($c|type)=="array" and ([$c[]? | select(.type?=="tool_result")] | length)==0
+          elif ($c|type)=="array" and $ntr==0
           then ([$c[]? | select(.type?=="text") | .text] | join("\n"))
           else empty end ) as $t
-      | select(($t|length) > 0)
+      | select( ($t|length) > 0 or $nimg > 0 )
       | select($t | test($rx) | not)
-      | (.timestamp | strings | sub("\\.[0-9]+Z$"; "Z") | try fromdateiso8601 catch empty)
-    ' 2>/dev/null | tail -1)"
+      | (.timestamp | strings | sub("\\.[0-9]+Z$"; "Z") | try fromdateiso8601 catch empty)'
+  ep="$(tail -c "$tailb" "$tp" 2>/dev/null | jq -Rr --arg rx "$rx" "$prog" 2>/dev/null | tail -1)"
+  case "$ep" in
+    ''|*[!0-9]*)
+      # tail-miss over a file bigger than the window ⇒ an operator turn may be buried before it. The
+      # hold must reach as far as done-evidence does, so re-scan the whole file with the same program.
+      fsz="$(wc -c < "$tp" 2>/dev/null | tr -d ' ')"; case "$fsz" in ''|*[!0-9]*) fsz=0 ;; esac
+      if [ "$fsz" -gt "$tailb" ]; then
+        ep="$(jq -Rr --arg rx "$rx" "$prog" "$tp" 2>/dev/null | tail -1)"
+      fi
+      ;;
+  esac
   case "$ep" in
     ''|*[!0-9]*)
       # No interactive turn in the answer — but WHICH world? A parseable transcript with no operator
