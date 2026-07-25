@@ -29,11 +29,22 @@ One entrypoint over the 4-account fleet. The mechanism is `~/bin/claude-accounts
    `now + *_reset_h` arithmetic (the `_h` countdowns decay from the moment the sweep was
    cached, and go NEGATIVE on an inherited stamp):
 
-   | account | live | 5h used | 5h resets | weekly used | Fable used | weekly resets |
-   |---|---|---|---|---|---|---|
-   | next4 ← you | 6 | 8% | Sat 07:21 (in 4.7h) | 25% | 22% | Sat 02:00 (in 23.4h) |
+   | account | live | 5h used | 5h resets | weekly used | Fable used | weekly resets | login expires |
+   |---|---|---|---|---|---|---|---|
+   | next4 ← you | 6 | 8% | Sat 07:21 (in 4.7h) | 25% | 22% | Sat 02:00 (in 23.4h) | Sat 12:39 (in 18.8h) |
 
-   - Column set is FIXED — both reset columns present in EVERY row, absolute first.
+   - Column set is FIXED — both reset columns AND `login expires` present in EVERY row,
+     absolute first.
+   - **`login expires` is a COLUMN, not a flag** (operator directive 2026-07-24: "we don't
+     show the next login required in the table?"). It was first shipped as a bullet under the
+     "flags are bullets, never extra columns" rule — wrong call: that rule is for CONDITIONAL
+     flags, and a login deadline is not conditional. Every account always has one, from
+     `login_expires_at`, exactly like the two reset columns. Same class of fact, same
+     treatment. Render it with the same absolute-first rule; a row whose `auth` is
+     `login-required` shows **`⊘ REQUIRED`** instead of a stamp — the deadline is not what
+     is driving it (the grant was rejected, or it has already lapsed), so a future date there
+     would read as "fine until then". Keep the ⚠ bullet as well when a row is inside
+     `login_warn_h`: the column states the fact, the bullet states the action.
    - Absolutes beyond ~6 days carry the DATE (`EEE MMM D HH:MM`, e.g. `Sat Jul 18 03:59`) —
      a bare weekday a week out is ambiguous with today.
    - ONE weekly-resets column: the weekly and weekly-Fable buckets reset at the same instant —
