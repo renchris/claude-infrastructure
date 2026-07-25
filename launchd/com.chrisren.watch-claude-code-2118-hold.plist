@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.chrisren.watch-claude-code-2118-hold — daily 09:12 check of the Claude Code 2.1.18 hold
+  (scripts/watch-claude-code-2118-hold.sh). RESTORED 2026-07-25 after the plutil -extract clobber
+  (see com.chrisren.restic-claude-archive comment). Reconstructed from the loaded launchd definition.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.chrisren.watch-claude-code-2118-hold</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>source $HOME/.zshrc 2>/dev/null; PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin $HOME/.claude/scripts/watch-claude-code-2118-hold.sh</string>
+    </array>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>9</integer>
+        <key>Minute</key>
+        <integer>12</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>LowPriorityIO</key>
+    <true/>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <key>StandardOutPath</key>
+    <string>/Users/chrisren/.claude/logs/launchd-watch-2118-stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/chrisren/.claude/logs/launchd-watch-2118-stderr.log</string>
+</dict>
+</plist>
