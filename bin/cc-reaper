@@ -74,6 +74,26 @@ REAPABLE_RE='^(handed-off-lead|finished-teammate|finished|coordination-abandoned
 INTERACTIVE_HOLD_S="${CC_REAPER_INTERACTIVE_HOLD_S:-${CC_CLASSIFY_INTERACTIVE_HOLD_S:-21600}}"
 PROJECT_ROOTS="${CC_REAPER_PROJECT_ROOTS:-$HOME/.claude/projects $HOME/.claude-secondary/projects $HOME/.claude-tertiary/projects $HOME/.claude-quaternary/projects}"
 
+# ── single-instance sweep lock (2026-07-25) ──────────────────────────────────────────────────────
+# A --reap sweep's runtime (reconcile + backlog-reap + inbox-guard + classify + per-session git) had
+# grown to the same order as the 300s launchd StartInterval, and NOTHING serialized the ticks. Two
+# sweeps then contended on the same git trees, marker dirs and disk, each slowing the other, so the
+# overlap COMPOUNDED instead of settling: measured 2026-07-25 across one morning, sweep durations ran
+# 291s → 1534s with up to 5 concurrent — 5x the CPU/disk for strictly ONE sweep's worth of work.
+# Every reap decision is independently re-gated by cc-teardown's identity pin, so the overlap was never
+# UNSAFE — it was pure amplification, and a top contributor to machine-wide lag.
+#
+# SKIP-not-queue: a tick that finds a live sweep exits 0 immediately. Queueing would rebuild the very
+# pile-up this prevents, and the next tick is only one interval away — a skipped sweep costs nothing.
+# The holder is pinned by pid+lstart (a17 S-4), so a RECYCLED pid can never masquerade as a live holder
+# and wedge the reaper into permanent dormancy. Belts for the two ways that pin can fail: an unstamped
+# lock younger than the stamp grace belongs to a racer mid-acquire (breaking it would hand BOTH sweeps
+# the lock — the exact overlap this guard exists to stop), and a lock older than LOCK_MAX_AGE_S is stale
+# by definition even if its pid still resolves (a hung sweep must never dormant the reaper permanently).
+LOCKDIR="${CC_REAPER_LOCKDIR:-$HOME/.claude/autonomy/cc-reaper.sweep.lock.d}"
+LOCK_MAX_AGE_S="${CC_REAPER_LOCK_MAX_AGE_S:-3600}"       # a sweep still holding past this is hung, not working
+LOCK_STAMP_GRACE_S="${CC_REAPER_LOCK_STAMP_GRACE_S:-5}"  # mkdir → pid-stamp window; below it, assume a racer
+
 command -v jq >/dev/null || { echo "cc-reaper: jq required" >&2; exit 2; }
 mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
 log(){ printf '[%s] %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null)" "$*" >> "$LOG_FILE" 2>/dev/null || true; }  # -u: true UTC — a bare `date` stamps LOCAL time under the Z suffix, reading TZ-offset hours stale to any freshness check (false 'reaper DORMANT'); matches utc() + cc-reconcile/cc-teardown
@@ -739,8 +759,52 @@ sweep() {
   return 0
 }
 
+proc_lstart(){ ps -o lstart= -p "$1" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//'; }
+
+# 0 iff THAT EXACT process is still running. `kill -0` alone answers "some process holds this pid",
+# which a recycled pid satisfies forever — the failure mode that turns a crash into permanent dormancy.
+lock_holder_alive(){ # <pid> <lstart>
+  local pid="${1:-}" want="${2:-}" now
+  [ -n "$pid" ] || return 1
+  kill -0 "$pid" 2>/dev/null || return 1
+  [ -n "$want" ] || return 0                       # no pin recorded → pid liveness is all we have
+  now="$(proc_lstart "$pid")"
+  [ -n "$now" ] && [ "$now" = "$want" ]
+}
+
+# 0 = lock held by us (caller proceeds) · 1 = another sweep owns this tick (caller exits 0, no work).
+acquire_sweep_lock(){
+  local breaks=0 pid lstart age lmt lnow
+  mkdir -p "$(dirname "$LOCKDIR")" 2>/dev/null || true
+  while ! mkdir "$LOCKDIR" 2>/dev/null; do
+    pid="$(cat "$LOCKDIR/pid" 2>/dev/null || true)"
+    lstart="$(cat "$LOCKDIR/lstart" 2>/dev/null || true)"
+    lmt="$(stat -f %m "$LOCKDIR" 2>/dev/null || stat -c %Y "$LOCKDIR" 2>/dev/null || echo 0)"
+    lnow="$(date +%s 2>/dev/null || echo 0)"
+    age=$(( lnow - lmt ))
+    if [ -z "$pid" ] && [ "$age" -lt "$LOCK_STAMP_GRACE_S" ]; then
+      say "cc-reaper: another sweep is starting — skipping this tick"
+      log "sweep skip: lock held (stamp pending, age ${age}s)"; return 1
+    fi
+    if lock_holder_alive "$pid" "$lstart" && [ "$age" -lt "$LOCK_MAX_AGE_S" ]; then
+      say "cc-reaper: sweep already running (pid $pid, ${age}s in) — skipping this tick"
+      log "sweep skip: lock held by live pid $pid (age ${age}s)"; return 1
+    fi
+    breaks=$(( breaks + 1 ))
+    # Never fall through to an UNLOCKED sweep: proceeding is what the overlap costs us. Skipping is free.
+    [ "$breaks" -gt 3 ] && { log "sweep lock: contended past $breaks break(s) — skipping this tick"; return 1; }
+    log "sweep lock: stale (pid=${pid:-none} age=${age}s) — breaking"
+    rm -rf "$LOCKDIR" 2>/dev/null || true
+  done
+  printf '%s\n' "$$" > "$LOCKDIR/pid" 2>/dev/null || true
+  proc_lstart "$$" > "$LOCKDIR/lstart" 2>/dev/null || true
+  # shellcheck disable=SC2064  # expand now: the trap must remove THIS sweep's dir, not a re-pointed var
+  trap "rm -rf '$LOCKDIR' 2>/dev/null || true" EXIT INT TERM HUP
+  return 0
+}
+
 case "${1:-}" in
-  sweep)        sweep "${2:-}" ;;
+  sweep)        acquire_sweep_lock || exit 0; sweep "${2:-}" ;;
   selftest)     exec bats "$HERE/../tests/cc-reaper.bats" ;;
   -h|--help|"") sed -n '2,20p' "$0"; exit 0 ;;
   *)            echo "cc-reaper: unknown command '$1' (sweep | selftest)" >&2; exit 2 ;;

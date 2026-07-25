@@ -46,6 +46,9 @@ EOF
   export CC_REAPER_SETTLE_S=100
   export CC_REAPER_TRUNK=origin/main
   export CC_REAPER_LOG="$D/reaper.log"
+  # Hermetic sweep lock: without this every test would contend on the LIVE lockdir shared with the
+  # launchd reaper — a real sweep mid-flight would make an arbitrary test skip its sweep and fail.
+  export CC_REAPER_LOCKDIR="$D/sweep.lock.d"
   # ── hermetic paging (T-P3-3) + self-check (P0-12b): mock cc-notify + ps so no test can hit the LIVE
   #    desk or count REAL panes. Desk target is absent by default (→ no notify); surface/self-check tests
   #    opt in with set_desk. Live-pane count comes from $D/nlive (default 1 → matches the common 1-session
@@ -926,4 +929,79 @@ set_recover() { printf '#!/bin/bash\necho "RECOVER $*" >> "%s"\n' "$D/recover-ca
   ! td_called
   grep -q '"kind":"safeguard-blocked"' "$D/idl.jsonl"      # board row still written
   grep -q 'REAPER SURFACE' "$D/notify-calls"               # desk still paged
+}
+
+# ── single-instance sweep lock ───────────────────────────────────────────────────────────────────
+# A --reap sweep can outrun its own launchd StartInterval; unserialized, the ticks overlapped and
+# CONTENDED, so each overlap made the next sweep slower (measured 291s → 1534s, up to 5 concurrent).
+# These pin the two properties that matter: overlap is impossible, and no lock state can ever wedge
+# the reaper into permanent dormancy (which would silently stop ALL reaping — a worse failure).
+
+# stamp a lock as held by <pid>, pinned with that pid's REAL lstart (what a true holder writes)
+hold_lock() { mkdir -p "$CC_REAPER_LOCKDIR"; printf '%s\n' "$1" > "$CC_REAPER_LOCKDIR/pid"
+              ps -o lstart= -p "$1" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//' > "$CC_REAPER_LOCKDIR/lstart"; }
+
+@test "sweep lock: a second sweep SKIPS while a live holder owns the tick (never overlaps)" {
+  mock_classify active "$D/clean" 10 no PANE-1
+  sleep 60 & local holder=$!
+  hold_lock "$holder"
+  run "$R" sweep --reap
+  kill "$holder" 2>/dev/null || true
+  [ "$status" -eq 0 ]                                  # a skip is a normal tick, NOT a launchd failure
+  echo "$output" | grep -q 'skipping this tick'
+  echo "$output" | grep -qv 'classified' || true
+  [ ! -f "$D/td-calls" ]                               # skipped => did no work at all
+}
+
+@test "sweep lock: a DEAD holder's lock is broken, the sweep proceeds (a crash cannot dormant it)" {
+  mock_classify active "$D/clean" 10 no PANE-1
+  mkdir -p "$CC_REAPER_LOCKDIR"; printf '999998\n' > "$CC_REAPER_LOCKDIR/pid"
+  printf 'Fri Jan  1 00:00:00 2027\n' > "$CC_REAPER_LOCKDIR/lstart"
+  touch -t 202601010000 "$CC_REAPER_LOCKDIR"           # age past the stamp grace
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'classified'                # it ran, rather than skipping forever
+  grep -q 'breaking' "$D/reaper.log"
+}
+
+@test "sweep lock: a RECYCLED pid (alive, WRONG lstart) is not a live holder (no permanent dormancy)" {
+  mock_classify active "$D/clean" 10 no PANE-1
+  sleep 60 & local other=$!                            # a real live process that is NOT our sweep
+  mkdir -p "$CC_REAPER_LOCKDIR"; printf '%s\n' "$other" > "$CC_REAPER_LOCKDIR/pid"
+  printf 'Thu Jan  1 00:00:00 2000\n' > "$CC_REAPER_LOCKDIR/lstart"   # pin cannot match
+  touch -t 202601010000 "$CC_REAPER_LOCKDIR"
+  run "$R" sweep --reap
+  kill "$other" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'classified'                # kill -0 alone would have skipped here forever
+}
+
+@test "sweep lock: an UNSTAMPED fresh lock is a racer mid-acquire — skipped, never broken" {
+  mock_classify active "$D/clean" 10 no PANE-1
+  mkdir -p "$CC_REAPER_LOCKDIR"                        # no pid file yet, dir just created
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'skipping this tick'
+  [ -d "$CC_REAPER_LOCKDIR" ]                          # the racer's lock survived (else BOTH would run)
+}
+
+@test "sweep lock: a HUNG holder past LOCK_MAX_AGE_S is broken (liveness alone cannot wedge it)" {
+  mock_classify active "$D/clean" 10 no PANE-1
+  sleep 60 & local holder=$!
+  hold_lock "$holder"                                  # genuinely alive AND correctly pinned
+  touch -t 202601010000 "$CC_REAPER_LOCKDIR"           # ...but holding far past the max age
+  CC_REAPER_LOCK_MAX_AGE_S=60 run "$R" sweep --reap
+  kill "$holder" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'classified'
+}
+
+@test "sweep lock: released when the sweep ends (the next tick is never blocked by the last)" {
+  mock_classify active "$D/clean" 10 no PANE-1
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  [ ! -d "$CC_REAPER_LOCKDIR" ]
+  run "$R" sweep --reap                                # and the very next tick runs for real
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'classified'
 }
