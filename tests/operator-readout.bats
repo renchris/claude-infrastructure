@@ -225,3 +225,47 @@ EOS
   [ "$status" -eq 0 ]
   [ "$output" = "OPERATOR ▸ no manual steps pending." ]
 }
+
+# ── open-queue visibility (operator crux 2026-07-25: a full auto-drain queue was invisible) ──
+
+@test "queue-only: OPEN backlog items for the cwd project fire the render as the governing line" {
+  w="$(mkrepo_landed q1)"
+  "$BACKLOG" add --title "narrated follow-on pass" --project "$(basename "$w")" >/dev/null
+  run hookrun "$w"
+  [ "$status" -eq 0 ]
+  msg="$(printf '%s' "$output" | jq -r '.systemMessage')"
+  printf '%s' "$msg" | grep -q "OPERATOR ▸ queue: 1 open ($(basename "$w"))"
+  printf '%s' "$msg" | grep -q "cc-backlog list --open --project $(basename "$w")"
+  grep -q '"queue_open":1' "$CC_IDL"
+}
+
+@test "queue rides the FOOTER when manual steps exist (steps stay the governing line)" {
+  w="$(mkrepo_landed q2)"
+  printf '#!/bin/bash\necho hi\n' > "$CC_ACTIVATION_DIR/30-q-activate.sh"
+  "$BACKLOG" add --title "queued item" --project "$(basename "$w")" >/dev/null
+  run hookrun "$w"
+  msg="$(printf '%s' "$output" | jq -r '.systemMessage')"
+  printf '%s' "$msg" | head -1 | grep -q '1 manual step(s)'
+  printf '%s' "$msg" | grep -q 'queue: 1 open'
+}
+
+@test "queue counts ONLY status==open of the cwd project: claimed, blocked and other-project items excluded" {
+  w="$(mkrepo_landed q3)"
+  local p; p="$(basename "$w")"
+  id1="$("$BACKLOG" add --title "claimed one" --project "$p")"; "$BACKLOG" claim "$id1" --by tq3 >/dev/null
+  id2="$("$BACKLOG" add --title "blocked one" --project "$p")"; "$BACKLOG" block "$id2" --needs "operator: key" >/dev/null
+  "$BACKLOG" add --title "other project" --project elsewhere >/dev/null
+  run hookrun "$w"
+  msg="$(printf '%s' "$output" | jq -r '.systemMessage')"
+  # the blocked item still renders as its ◆ step; NO queue line (0 open for this project)
+  printf '%s' "$msg" | grep -q 'blocked one'
+  ! printf '%s' "$msg" | grep -q 'queue:'
+}
+
+@test "pull-surface parity: --render shows the same queue line (one renderer)" {
+  w="$(mkrepo_landed q4)"
+  "$BACKLOG" add --title "parity item" --project "$(basename "$w")" >/dev/null
+  run "$HOOK" --render --cwd "$w"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "queue: 1 open ($(basename "$w"))"
+}
