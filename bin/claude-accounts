@@ -54,6 +54,13 @@ Usage:
       stdout" is a tool failure, not an expiring login. The collision is fail-SAFE either way:
       only exit 0 means all-clear, and no failure path can produce it.
   claude-accounts --relogin-info NAME     JSON identity block for the account-relogin skill
+  claude-accounts --relogin-status        per-account login-renewal board (+ --json)
+      One row per account: state (OK|DUE|ESCALATED|UNKNOWN) · login_expires_at · hours · the
+      last cc-relogin attempt (from the poller's log) · the exact next command. Cache-first
+      and NEVER heals — a recurring check must not sweep both oauth endpoints every tick.
+      Exit: 0 all clear · 1 a renewal is DUE · 2 ESCALATED/overdue · 3 DETECTION-UNAVAILABLE.
+      Version tolerance: the login_expires_* fields are not on every build, and a build that
+      cannot see them reports UNKNOWN + a loud stderr line — never a confident wrong "OK".
   claude-accounts --fresh             bypass the shared cache
   claude-accounts --no-heal           never run the headless heal (pure read-only)
   claude-accounts --no-color          plain output (also: NO_COLOR env, pipes, TERM=dumb;
@@ -1420,6 +1427,113 @@ def render_table(rows, cfg, win, cached, prev=None):
     print()
 
 
+# ---- relogin status board (RELOGIN_BUILD_CONTRACT §6) -----------------------------------------
+# Thresholds mirror cc-relogin-poll's defaults (§5): the loop starts attempting at T-7d so one
+# fragile attempt becomes ~168 chances to catch a k==0 window, and escalates at T-48h — loud
+# BEFORE the deadline, never after. Read-only by construction: this surface never heals, never
+# forces a sweep, and never touches a credential.
+RELOGIN_TRIGGER_H = 7 * 24
+RELOGIN_ESCALATE_H = 48
+RELOGIN_POLL_LOG = os.environ.get(
+    "CC_RELOGIN_POLL_LOG", os.path.join(HOME, ".claude", "logs", "cc-relogin-poll.log"))
+# The detection surface (--login-status / the login_expires_* row fields) is NOT on every build.
+# When it is missing the answer is UNKNOWN + exit 3, never OK + exit 0: "cannot detect" must
+# never read as "nothing to do". Precedence when accounts disagree — act-now beats cannot-see
+# beats all-clear; UNKNOWN deliberately outranks OK.
+RELOGIN_EXIT = {"ESCALATED": 2, "DUE": 1, "UNKNOWN": 3, "OK": 0}
+RELOGIN_PRECEDENCE = ("ESCALATED", "DUE", "UNKNOWN", "OK")
+RELOGIN_UNKNOWN_ACTION = "land feat/accounts-login-cliff (adds --login-status)"
+
+
+def relogin_last_attempt(acct: str, path: str = "") -> dict:
+    """Last cc-relogin attempt for ONE account, from the poller's log; {} when unknowable.
+
+    The line format belongs to cc-relogin-poll, so parse tolerantly: JSONL objects first (the
+    house convention), else a plain-text line naming the account. Last match wins. A missing or
+    unreadable log is UNKNOWN, never an error — the poller may simply never have run yet."""
+    hit: dict = {}
+    try:
+        with open(path or RELOGIN_POLL_LOG, errors="replace") as f:
+            for raw in f:
+                line = raw.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    row = None
+                if isinstance(row, dict):
+                    if str(row.get("acct") or row.get("account") or row.get("name") or "") != acct:
+                        continue
+                    hit = {"ts": row.get("ts"),
+                           "result": str(row.get("result") or row.get("outcome")
+                                         or row.get("status") or "?")}
+                elif re.search(r"\b%s\b" % re.escape(acct), line):
+                    m = re.search(r"\d{4}-\d{2}-\d{2}[T ][0-9:]{5,8}\S*", line)
+                    hit = {"ts": m.group(0) if m else None, "result": line}
+    except OSError:
+        return {}
+    return hit
+
+
+def relogin_row(r: dict) -> dict:
+    """One account's renewal state, derived ONLY from fields actually present on this build."""
+    acct = r["acct"]
+    at, h = r.get("login_expires_at"), r.get("login_expires_h")
+    if r.get("auth") in ("logged-out", "token-invalid"):
+        # Already past the cliff, and visible from a field that exists on EVERY build — an
+        # account that IS signed out must never render as UNKNOWN.
+        state, reason = "ESCALATED", f"auth={r['auth']} — sign-in required now"
+    elif at is None and h is None:
+        state, reason = "UNKNOWN", "login_expires_* absent — detection surface missing"
+    elif r.get("login_expired") or (h is not None and h <= 0):
+        state, reason = "ESCALATED", "login window already expired"
+    elif h is None:
+        state, reason = "UNKNOWN", "login_expires_at without login_expires_h — cannot age it"
+    elif h <= RELOGIN_ESCALATE_H:
+        state, reason = "ESCALATED", f"T-{h:.0f}h — inside the {RELOGIN_ESCALATE_H}h escalation window"
+    elif h <= RELOGIN_TRIGGER_H:
+        state, reason = "DUE", f"T-{h:.0f}h — inside the {RELOGIN_TRIGGER_H // 24}d attempt window"
+    else:
+        state, reason = "OK", f"T-{h:.0f}h"
+    last = relogin_last_attempt(acct)
+    return {"acct": acct, "state": state, "reason": reason, "auth": r.get("auth"),
+            "login_expires_at": at, "login_expires_h": h,
+            "login_fixable": r.get("login_fixable"),
+            "last_attempt_ts": last.get("ts"), "last_attempt_result": last.get("result"),
+            "next_action": ("-" if state == "OK" else RELOGIN_UNKNOWN_ACTION
+                            if state == "UNKNOWN" else f"cc-relogin {acct}")}
+
+
+def render_relogin_status(rows: list, args: list) -> int:
+    """Render the board (plain always — a machine surface) and return the process exit code."""
+    out = [relogin_row(r) for r in rows]
+    worst = next((s for s in RELOGIN_PRECEDENCE if any(o["state"] == s for o in out)), "OK")
+    code = RELOGIN_EXIT[worst]
+    blind = [o["acct"] for o in out if o["state"] == "UNKNOWN"]
+    if "--json" in args:
+        print(json.dumps({"exit": code, "state": worst,
+                          "detection": "unavailable" if blind else "available",
+                          "rows": out}, indent=2))
+    else:
+        print(f"{'ACCT':<8} {'STATE':<10} {'EXPIRES':<26} {'HOURS':>6}  "
+              f"{'LAST ATTEMPT':<32} NEXT ACTION")
+        for o in out:
+            h = "-" if o["login_expires_h"] is None else f"{o['login_expires_h']:.0f}"
+            last = ("never" if not (o["last_attempt_ts"] or o["last_attempt_result"])
+                    else f"{o['last_attempt_ts'] or '?'} {o['last_attempt_result'] or '?'}")
+            print(f"{o['acct']:<8} {o['state']:<10} {str(o['login_expires_at'] or '-'):<26} "
+                  f"{h:>6}  {last[:32]:<32} {o['next_action']}")
+    if blind:
+        # Loud, every run, naming the missing surface. The whole point of this mode is that a
+        # status board which cannot see is worse than useless if it claims "all clear".
+        print("claude-accounts --relogin-status: DETECTION-UNAVAILABLE — login_expires_at/"
+              "login_expires_h absent for " + ", ".join(blind)
+              + "; `claude-accounts --login-status` is not on this build (branch "
+                "feat/accounts-login-cliff). Reporting UNKNOWN, NOT OK.", file=sys.stderr)
+    return code
+
+
 def main():
     args = sys.argv[1:]
     if "-h" in args or "--help" in args:
@@ -1427,7 +1541,9 @@ def main():
         return
     cfg = load_cfg()
     fresh = "--fresh" in args
-    no_heal = "--no-heal" in args
+    # --relogin-status is a read-only status surface: it reports what the renewal loop should
+    # do, so it must never perform an account operation itself as a side effect of being read.
+    no_heal = "--no-heal" in args or "--relogin-status" in args
 
     if "--relogin-info" in args:
         if args.index("--relogin-info") + 1 >= len(args):
@@ -1463,6 +1579,11 @@ def main():
     mark_self(rows, cfg)                          # per-invocation: MUST be after the cache read
     refresh_login_countdown(rows)                 # ditto — a cached countdown is a stale one
     win = win_from_json(wj)
+
+    # Before the generic --json branch: `--relogin-status --json` is its own shape, not the
+    # dashboard's rows.
+    if "--relogin-status" in args:
+        sys.exit(render_relogin_status(rows, args))
 
     if "--json" in args:
         for r in rows:
