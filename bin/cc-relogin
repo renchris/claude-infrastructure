@@ -1,580 +1,412 @@
 #!/usr/bin/env python3
-"""cc-relogin — re-authenticate ONE Claude Max account, most-automated path first.
+"""cc-relogin — unattended OAuth re-authentication for ONE Claude Max account.
 
-The executable form of skills/account-relogin. `claude-accounts --login-status` detects the
-login cliff; this closes it. Contract frozen 2026-07-24 in
-docs/plans/RELOGIN_AUTOMATION_PLAN.md — exit codes are a consumer API, do not renumber.
+Re-auths an account that genuinely needs it, never racing a live Claude Code session (a
+relogin that rotates the token out from under a running CC has its rotation discarded —
+and a discarded rotation IS a logout). Two phases, cheapest first:
+  phase 1  headless refresh grant via `claude auth login` (browser-free). Does NOT move
+           the ~30-day login deadline, so it never substitutes for phase 2.
+  phase 2  browser OAuth over CDP in the account's dedicated Chrome profile
+           (`cc-authbrowser <acct> --start` -> Target.createTarget -> Authorize).
+Success is proven by EFFECT, never by report: `claude-accounts --fresh --json` must come
+back auth=="ok" AND the login deadline must have MOVED. "Login successful." is a claim;
+the moved deadline is the proof.
 
-  cc-relogin <acct> [--dry-run] [--no-browser] [--json] [--url-timeout N] [--debug]
-
-Exit: 0 PROVEN · 1 ERROR · 2 REFUSED · 3 HEADLESS-EXHAUSTED · 4 BROWSER-FAILED
-      5 UNVERIFIED · 6 FALLBACK-REQUIRED · 7 CONSENT-GATE
-
-Why an interactive `/login` cannot simply be scripted: `/login` is a TUI slash command inside a
-running Claude Code session, and nothing can type into that session's own TUI. The automatable
-surface is `claude auth login` as a SUBPROCESS with piped stdin — a different mechanism. Phase 1
-drives the headless refresh grant; Phase 2 drives the browser leg over CDP against the account's
-own Dia profile, whose warm claude.ai session is what keeps the email-code leg off the critical
-path (measured 2026-07-25: all four profiles hold claude.ai cookies valid to 2027-08-14).
-
-SAFETY INVARIANTS — every one of these mirrors a rule the surrounding system already enforces:
-  * NEVER `/logout` as a fix: it revokes the grant AND deletes the keychain item.
-  * NEVER raw-POST a refresh token and discard the response. Tokens may rotate
-    (GH anthropics/claude-code#54443) and a discarded rotation IS a logout. Only the official
-    binary is allowed to touch tokens; this driver just supplies env and reads the result.
-  * NEVER act on an account with live sessions (k>0) — that CC owns the token lifecycle, and a
-    concurrent refresh can rotate the token out from under it. Checked twice: once from the
-    dashboard row, once again UNDER the lock (a session can start during the gate).
-  * ALWAYS hold `/tmp/claude-accounts-heal-<acct>.lock` for the whole run — the SAME lock
-    claude-accounts' heal() takes, so the two can never race.
-  * NEVER widen oauth_scopes: they are passed verbatim from the SSOT via --relogin-info.
-  * VERIFY BY EFFECT. "Login successful." is a claim the child process makes about itself; a
-    refresh-token expiry stamp that moved FORWARD is evidence. Only the latter closes this out.
+Exit: 0 PROVEN · 1 ERROR · 2 REFUSED · 3 HEADLESS-EXHAUSTED · 4 BROWSER-FAILED ·
+5 UNVERIFIED · 6 FALLBACK-REQUIRED · 7 CONSENT-GATE (retained, never emitted).
+Test-injection env: CC_RELOGIN_{ACCOUNTS_BIN,TMP,WARN_H,PS_BIN,SECURITY_BIN,
+AUTHBROWSER_BIN,LOG}. Identity (claude binary, config dir, email, scopes) comes ONLY from
+`claude-accounts --relogin-info`; scopes are passed verbatim, NEVER widened.
 """
+from __future__ import annotations
+
 import argparse
 import fcntl
 import json
 import os
 import re
-import shutil
-import signal
 import subprocess
 import sys
 import time
+from typing import Any
 
-PROVEN, ERROR, REFUSED, HEADLESS_EXHAUSTED = 0, 1, 2, 3
-BROWSER_FAILED, UNVERIFIED, FALLBACK_REQUIRED, CONSENT_GATE = 4, 5, 6, 7
-RESULT_NAME = {
-    PROVEN: "proven", ERROR: "error", REFUSED: "refused",
-    HEADLESS_EXHAUSTED: "headless-exhausted", BROWSER_FAILED: "browser-failed",
-    UNVERIFIED: "unverified", FALLBACK_REQUIRED: "fallback-required",
-    CONSENT_GATE: "consent-gate",
-}
-# auth states an interactive login actually fixes. Mirrors claude-accounts' LOGIN_FIXABLE:
-# keychain-error and probe-error are NOT credential states, so a relogin is the wrong action.
+HOME = os.path.expanduser("~")
+EXIT_PROVEN, EXIT_ERROR, EXIT_REFUSED = 0, 1, 2
+EXIT_HEADLESS_EXHAUSTED, EXIT_BROWSER_FAILED = 3, 4
+EXIT_UNVERIFIED, EXIT_FALLBACK_REQUIRED = 5, 6
+# Retained ONLY for consumer compatibility: the dedicated-profile substrate (cc-authbrowser,
+# contract §3) makes a per-connection consent dialog structurally impossible, so nothing
+# below emits 7. Do not wire it up.
+EXIT_CONSENT_GATE = 7
+RESULT_BY_EXIT = {0: "proven", 1: "error", 2: "refused", 3: "headless-exhausted",
+                  4: "browser-failed", 5: "unverified", 6: "fallback-required",
+                  7: "consent-gate"}
+# auth states a relogin can actually fix (claude-accounts row["auth"] vocabulary).
 LOGIN_FIXABLE = ("logged-out", "token-invalid", "no-oauth-blob", "login-required")
+AUTH_ACTIONABLE = LOGIN_FIXABLE + ("keychain-error",)
 
-ACCOUNTS_BIN = os.environ.get("CC_RELOGIN_ACCOUNTS_BIN", "claude-accounts")
-TMP = os.environ.get("CC_RELOGIN_TMP", "/tmp")
-WARN_H = float(os.environ.get("CC_RELOGIN_WARN_H", "72"))
-PORT_FILE = os.environ.get(
-    "CC_RELOGIN_DEVTOOLS_PORT_FILE",
-    os.path.expanduser("~/Library/Application Support/Dia/User Data/DevToolsActivePort"))
 
+def _env(name: str, default: str) -> str:
+    return os.environ.get(name) or default
+
+
+ACCOUNTS_BIN = _env("CC_RELOGIN_ACCOUNTS_BIN", "claude-accounts")
+AUTHBROWSER_BIN = _env("CC_RELOGIN_AUTHBROWSER_BIN", "cc-authbrowser")
+TMP = _env("CC_RELOGIN_TMP", "/tmp")
+PS_BIN = _env("CC_RELOGIN_PS_BIN", "ps")
+SECURITY_BIN = _env("CC_RELOGIN_SECURITY_BIN", "/usr/bin/security")
+LOG_PATH = _env("CC_RELOGIN_LOG", os.path.join(HOME, ".claude", "logs", "cc-relogin.log"))
+try:
+    WARN_H = float(_env("CC_RELOGIN_WARN_H", "72"))
+except ValueError:
+    WARN_H = 72.0
 DEBUG = False
 
 
-def dbg(msg):
-    if DEBUG:
-        print(f"[cc-relogin] {msg}", file=sys.stderr)
+class Bail(Exception):
+    """Terminate the run with a specific exit code and an operator-readable detail."""
 
-
-class Outcome(Exception):
-    """A terminal verdict with its exit code. Raised rather than returned so that the single
-    `finally` in main() owns cleanup for every path — the fifo, the child and the socket must
-    be released identically whether we succeeded, refused, or crashed."""
-
-    def __init__(self, code, detail, phase="gate"):
+    def __init__(self, code: int, detail: str, phase: str = "gate") -> None:
         super().__init__(detail)
         self.code, self.detail, self.phase = code, detail, phase
 
 
-def run(cmd, **kw):
-    kw.setdefault("capture_output", True)
-    kw.setdefault("text", True)
-    return subprocess.run(cmd, **kw)
+def dbg(msg: str) -> None:
+    if DEBUG:
+        print(f"[cc-relogin] {msg}", file=sys.stderr)
 
 
-def accounts_json(fresh=False):
-    # --no-heal is MANDATORY, not a preference. Without it, claude-accounts heals a stale row
-    # on the way out: probe_account() -> `elif stale and not no_heal:` -> heal(), which runs
-    # `claude auth login`. Two consequences, and the second is the serious one:
-    #
-    #   1. A READ mutates credentials. Every call below is a measurement (the `before`
-    #      baseline, the `after` snapshot, and verify()), and this driver's own contract is
-    #      that only the official binary touches tokens, under OUR control — not as a side
-    #      effect of looking. It can also rotate a token out from under a live session, which
-    #      is exactly what the k>0 live-session guard exists to prevent.
-    #   2. It manufactures its own proof. verify() treats "a refresh-token expiry that moved
-    #      FORWARD" as the observable effect of a real grant — and `claude auth login` is
-    #      precisely what moves that stamp forward. A heal fired by the measuring read would
-    #      therefore produce a PROVEN verdict for work the verification did itself. A measure-
-    #      ment that can move the quantity it measures is not evidence.
-    #
-    # Every caller here is a measurement, so the flag belongs at this single choke point.
-    cmd = [ACCOUNTS_BIN, "--json", "--no-heal"] + (["--fresh"] if fresh else [])
-    p = run(cmd, timeout=180)
-    if p.returncode != 0:
-        raise Outcome(ERROR, f"{ACCOUNTS_BIN} --json failed (rc={p.returncode}): {p.stderr.strip()[:200]}")
+_SECRET_RE = re.compile(r"(?:sk-[A-Za-z0-9_-]{8,}|[A-Za-z0-9_-]{40,})")
+
+
+def redact(s: str) -> str:
+    """Child output rides into the result object AND the log — never let a token ride with it."""
+    return _SECRET_RE.sub("[REDACTED]", s)
+
+
+def log(msg: str) -> None:
+    """Append-only operational journal. Best-effort — never fatal, never account state."""
     try:
-        return json.loads(p.stdout)
-    except json.JSONDecodeError as e:
-        raise Outcome(ERROR, f"{ACCOUNTS_BIN} --json emitted non-JSON: {e}")
+        os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
+        with open(LOG_PATH, "a") as fh:
+            fh.write(f"{time.strftime('%Y-%m-%dT%H:%M:%S%z')} {msg}\n")
+    except OSError:
+        pass
 
 
-def relogin_info(acct):
-    p = run([ACCOUNTS_BIN, "--relogin-info", acct], timeout=60)
-    if p.returncode != 0:
-        raise Outcome(REFUSED, f"unknown account {acct!r}: {p.stderr.strip()[:200]}")
+# ---- claude-accounts: the identity + state SSOT ------------------------------------------------
+
+def accounts_run(args: list[str], timeout: float = 180.0) -> tuple[int, str, str]:
     try:
-        return json.loads(p.stdout)
-    except json.JSONDecodeError as e:
-        raise Outcome(ERROR, f"--relogin-info emitted non-JSON: {e}")
+        p = subprocess.run([ACCOUNTS_BIN, *args], capture_output=True, text=True, timeout=timeout)
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        raise Bail(EXIT_ERROR, f"claude-accounts {' '.join(args)}: {exc}") from exc
+    return p.returncode, p.stdout, p.stderr
 
 
-def row_for(data, acct):
-    for r in data.get("rows", []):
-        if r.get("acct") == acct:
-            return r
-    raise Outcome(REFUSED, f"account {acct!r} not present in the dashboard")
+def relogin_info(acct: str) -> dict[str, Any]:
+    rc, out, err = accounts_run(["--relogin-info", acct], timeout=60.0)
+    if rc != 0:
+        raise Bail(EXIT_REFUSED, f"unknown account {acct!r}: {(err or out).strip()[:200]}")
+    try:
+        info = json.loads(out)
+    except json.JSONDecodeError as exc:
+        raise Bail(EXIT_ERROR, "--relogin-info emitted non-JSON") from exc
+    if not isinstance(info, dict):
+        raise Bail(EXIT_ERROR, "--relogin-info emitted a non-object")
+    return info
 
 
-def needs_relogin(row, info):
-    """Does this account actually need an interactive login? Returns (bool, why).
-
-    Ordered most-certain first. The login_* fields only exist on a claude-accounts that carries
-    the login-cliff work; on an older one they are simply absent, so the auth-state and keychain
-    signals below still decide. Absence is treated as 'no evidence', never as 'not expiring' —
-    the same rule claude-accounts applies to a missing expiry stamp."""
-    auth = row.get("auth")
-    if auth in LOGIN_FIXABLE:
-        return True, f"auth={auth}"
-    if row.get("login_expired") is True:
-        return True, "login_expired"
-    h = row.get("login_expires_h")
-    if h is not None and h <= WARN_H:
-        return True, f"login expires in {h:.1f}h (warn {WARN_H:.0f}h)"
-    if info.get("keychain_state") == "no-keychain-item":
-        return True, "no keychain item"
-    if info.get("refresh_token_expired") is True:
-        return True, "refresh token past its expiry"
-    return False, f"auth={auth}, no cliff within {WARN_H:.0f}h"
+def fresh_row(acct: str) -> dict[str, Any]:
+    """The account's live row from `claude-accounts --fresh --json` (forces a live sweep)."""
+    rc, out, _ = accounts_run(["--fresh", "--json"])
+    try:
+        rows = json.loads(out).get("rows", [])
+    except (json.JSONDecodeError, AttributeError) as exc:
+        raise Bail(EXIT_ERROR, f"--fresh --json emitted non-JSON (rc={rc})") from exc
+    row = next((r for r in rows if isinstance(r, dict) and r.get("acct") == acct), None)
+    if row is None:
+        raise Bail(EXIT_ERROR, f"account {acct!r} absent from --fresh --json rows")
+    return row
 
 
-def live_sessions(acct, info):
-    """Count live CC processes for this account — re-derived HERE rather than trusted from the
-    dashboard row, because the row can be up to a cache TTL old and this is the invariant that
-    protects a running session's tokens. Mirrors claude-accounts' concurrency(): match the
-    account's claude binary as argv[0] with its CLAUDE_CONFIG_DIR in the environment, and skip
-    one-shot `-p/--print` invocations, which are not interactive owners of the token."""
-    cfg = info.get("config_dir", "")
-    cbin = info.get("claude_bin", "")
-    if not cfg:
-        return 0
-    p = run(["ps", "-wwEo", "command="], timeout=30)
+def snapshot(row: dict[str, Any], info: dict[str, Any]) -> dict[str, Any]:
+    return {"auth": row.get("auth"), "has_refresh_token": info.get("has_refresh_token"),
+            "login_expires_at": row.get("login_expires_at")}
+
+
+# ---- the gate ----------------------------------------------------------------------------------
+
+def live_sessions(config_dir: str) -> int:
+    """Live interactive-session count for ONE account; -1 when it cannot be determined.
+
+    Mirrors claude-accounts concurrency() (bin/claude-accounts:225-259) exactly: argv[0] must
+    be the claude binary; headless one-shots (-p/--print/--version in the first few argv slots)
+    are skipped; attribution uses the LAST CLAUDE_CONFIG_DIR= match because `ps -E` appends the
+    environment AFTER argv (an earlier match could be prompt text merely mentioning it). Bare
+    `claude` counts toward the ~/.claude-next account — ~/.claude mirrors it.
+    """
+    target = os.path.expanduser(config_dir or "").rstrip("/")
+    default_dir = os.path.join(HOME, ".claude")
+    mirrors_default = target.endswith(".claude-next")
+    try:
+        out = subprocess.run([PS_BIN, "-wwEo", "command="], capture_output=True,
+                             text=True, timeout=10).stdout
+    except (subprocess.TimeoutExpired, OSError):
+        return -1
     n = 0
-    for line in p.stdout.splitlines():
-        if f"CLAUDE_CONFIG_DIR={cfg}" not in line:
+    for line in out.splitlines():
+        toks = line.split()
+        if not toks:
             continue
-        head = line.split(" ", 1)[0]
-        if cbin and head != cbin and not head.endswith("/claude"):
+        t0 = toks[0]
+        if not (t0 == "claude" or t0.endswith("/claude") or "cli.js" in t0):
             continue
-        if re.search(r"\s-p(\s|$)|\s--print(\s|$)", line):
+        head = [t for t in toks[1:7] if t.startswith("-")]
+        if "-p" in head or "--print" in head or "--version" in head:
             continue
-        n += 1
+        cfgs = re.findall(r"CLAUDE_CONFIG_DIR=(\S+)", line)
+        d = os.path.expanduser(cfgs[-1]).rstrip("/") if cfgs else default_dir
+        if d == target or (mirrors_default and d == default_dir):
+            n += 1
     return n
 
 
-def keychain_refresh_token(info):
-    svc, kacct = info.get("keychain_service"), info.get("keychain_account") or "chrisren"
-    if not svc:
+def need_relogin(row: dict[str, Any], info: dict[str, Any]) -> tuple[bool, str]:
+    """Is a re-auth GENUINELY needed?
+
+    §2 version tolerance: login_expired / login_expires_h / login_expires_at exist only on the
+    unlanded feat/accounts-login-cliff claude-accounts. When absent we degrade EXPLICITLY to the
+    keychain / refresh-token / auth-actionable signals and SAY SO — "cannot detect" is never
+    silently reported as "nothing to do".
+    """
+    auth = row.get("auth")
+    if auth in AUTH_ACTIONABLE:
+        return True, f"auth={auth}"
+    if row.get("login_expired") is True:
+        return True, "login_expired"
+    hours = row.get("login_expires_h")
+    if isinstance(hours, (int, float)) and not isinstance(hours, bool) and hours <= WARN_H:
+        return True, f"login_expires_h={hours} <= warn {WARN_H}"
+    if any(k in row for k in ("login_expired", "login_expires_h", "login_expires_at")):
+        return False, f"healthy (auth={auth}, login_expires_h={hours})"
+    if info.get("keychain_state") != "present":
+        return True, f"DEGRADED detection: keychain_state={info.get('keychain_state')}"
+    if not info.get("has_refresh_token"):
+        return True, "DEGRADED detection: no refresh token in keychain"
+    return False, (f"healthy on the signals available (auth={auth}) — but login-deadline "
+                   "detection is UNAVAILABLE: this claude-accounts emits no login_expires_* "
+                   "fields (contract §2). Cannot prove a renewal is due.")
+
+
+# ---- phase 1: headless refresh grant -----------------------------------------------------------
+
+def phase1_blocked(info: dict[str, Any], row: dict[str, Any]) -> str | None:
+    """None when phase 1 is possible, else the reason it is not."""
+    if not info.get("has_refresh_token"):
+        return "no refresh token in keychain"
+    if row.get("refresh_token_expired") is True:
+        return "refresh token expired"
+    return None
+
+
+def read_refresh_token(info: dict[str, Any]) -> str | None:
+    """claudeAiOauth.refreshToken out of the account's keychain item (read-only)."""
+    service = info.get("keychain_service")
+    if not service:
         return None
-    p = run(["/usr/bin/security", "find-generic-password", "-s", svc, "-a", kacct, "-w"], timeout=30)
+    cmd = [SECURITY_BIN, "find-generic-password", "-s", service]
+    # --relogin-info does not emit keychain_account today; the service string already embeds
+    # sha256(config_dir)[:8], so it is unique on its own. Narrow with -a only if a future
+    # claude-accounts starts emitting the field.
+    if info.get("keychain_account"):
+        cmd += ["-a", str(info["keychain_account"])]
+    cmd.append("-w")
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+    except (subprocess.TimeoutExpired, OSError):
+        return None
     if p.returncode != 0:
         return None
     try:
         blob = json.loads(p.stdout)
     except json.JSONDecodeError:
         return None
-    if not isinstance(blob, dict):
-        return None
-    return ((blob.get("claudeAiOauth") or {}) or {}).get("refreshToken")
+    return (blob.get("claudeAiOauth") or {}).get("refreshToken") if isinstance(blob, dict) else None
 
 
-# ---- Phase 1: headless refresh grant ----------------------------------------------------------
-
-def phase1(info):
-    """Delegate the refresh grant to the official binary — it performs the grant AND persists
-    whatever (possibly rotated) tokens come back. Returns (ok, detail)."""
-    rt = keychain_refresh_token(info)
-    if not rt:
-        return False, "no refresh token in keychain"
-    cbin = info.get("claude_bin")
+def phase1(info: dict[str, Any]) -> tuple[bool, str]:
+    """Headless grant. Returns (binary CLAIMED success, detail) — the claim is not proof."""
+    token = read_refresh_token(info)
+    if not token:
+        return False, "refresh token unreadable from keychain"
+    cbin = os.path.expanduser(info.get("claude_bin") or "")
     if not cbin or not os.path.exists(cbin):
-        return False, f"claude binary missing at {cbin}"
+        return False, f"claude binary missing at {cbin!r}"
     env = os.environ.copy()
-    env["CLAUDE_CONFIG_DIR"] = info["config_dir"]
-    env["CLAUDE_CODE_OAUTH_REFRESH_TOKEN"] = rt
-    if info.get("oauth_scopes"):
-        env["CLAUDE_CODE_OAUTH_SCOPES"] = info["oauth_scopes"]   # verbatim; never widened
+    env["CLAUDE_CONFIG_DIR"] = os.path.expanduser(info.get("config_dir") or "")
+    env["CLAUDE_CODE_OAUTH_REFRESH_TOKEN"] = token
+    env["CLAUDE_CODE_OAUTH_SCOPES"] = info.get("oauth_scopes") or ""   # verbatim, never widened
     try:
-        p = run([cbin, "auth", "login"], env=env, timeout=90)
+        p = subprocess.run([cbin, "auth", "login"], env=env, capture_output=True,
+                           text=True, timeout=90)
     except subprocess.TimeoutExpired:
-        return False, "phase 1 timed out after 90s"
-    out = (p.stdout + p.stderr).strip()
-    ok = p.returncode == 0 and "Login successful" in out
-    return ok, (out.splitlines()[-1] if out else f"rc={p.returncode}")
+        return False, "phase 1 timed out (90s)"
+    except OSError as exc:
+        return False, f"phase 1 exec failed: {exc}"
+    out = redact((p.stdout + p.stderr).strip().replace("\n", " "))[-200:]
+    return p.returncode == 0, out or f"exit {p.returncode}"
 
 
-# ---- Phase 2: browser-assisted OAuth over CDP -------------------------------------------------
+# ---- phase 2: browser OAuth over CDP -----------------------------------------------------------
 
-URL_RE = re.compile(r"https://\S*oauth\S*")
-CODE_RE = re.compile(r"\b([A-Za-z0-9_-]{16,})#([A-Za-z0-9_-]{6,})\b")
+def phase2(info: dict[str, Any], url_timeout: float) -> tuple[int, str]:
+    """PHASE B — cc-authbrowser substrate + CDP Authorize drive. Returns (exit code, detail).
+
+    Teardown (login child, WS, fifo, `cc-authbrowser <acct> --stop`) belongs in this
+    function's own finally block: no CDP port may outlive a run, success or failure.
+    """
+    return EXIT_BROWSER_FAILED, ("phase 2 (browser OAuth drive) is not implemented in this "
+                                 f"build — substrate would be `{AUTHBROWSER_BIN} "
+                                 f"{info.get('name')} --start` (url timeout {url_timeout:g}s)")
 
 
-def cdp_connect():
-    """ONE raw WebSocket to the browser endpoint. Dia's port file names a WS-ONLY endpoint —
-    there is no `/json` HTTP discovery to fall back on, so the port file IS the only address.
+# ---- verify by EFFECT --------------------------------------------------------------------------
 
-    A hung handshake is the CONSENT dialog, not a dead browser: Dia gates the first connect
-    after each remote-debugging toggle cycle on a human approving it. That is a distinct
-    operator action from "turn the toggle on", so it gets its own exit code rather than being
-    folded into BROWSER_FAILED, which would send the operator looking for the wrong problem."""
-    # Remote-debugging-OFF is diagnosed FIRST, before the optional import. It is the operator's
-    # real blocker whether or not THIS interpreter can speak WebSocket, and a fault in our own
-    # environment must never mask the cheaper, more specific verdict underneath it.
-    if not os.path.exists(PORT_FILE):
-        raise Outcome(CONSENT_GATE,
-                      f"no DevToolsActivePort at {PORT_FILE} — remote debugging is OFF. "
-                      "Recovery: open dia://inspect#remote-debugging, enable it, re-run.",
-                      "phase2")
+def verify(acct: str, before: dict[str, Any]) -> tuple[bool, str, dict[str, Any]]:
+    """Proof, not report: auth=="ok", a refresh token present, and the deadline MOVED."""
     try:
-        import websocket                                  # noqa: PLC0415 — optional dep
-    except ImportError:
-        # NOT browser-failed: nothing has been asked of the browser yet. This is OUR interpreter
-        # missing OUR dependency, and the distinction is load-bearing precisely where it is
-        # hardest to see. `#!/usr/bin/env python3` resolves by PATH, and under launchd — which is
-        # how the staged poller will run this — PATH carries neither Homebrew nor the Python
-        # Framework, so it lands on /usr/bin/python3: the ONE interpreter on this machine without
-        # websocket-client (Framework 3.11, Homebrew and /usr/local all have it, which is why the
-        # plan's "installed system-wide" read as true). Reported as BROWSER_FAILED this sent the
-        # operator to toggle Dia for what is a pip problem, so it names the interpreter itself.
-        raise Outcome(ERROR,
-                      f"websocket-client is not installed for {sys.executable} — phase 2 cannot "
-                      "open a CDP socket. This is a dependency fault in this driver's own "
-                      f"interpreter, NOT a browser failure. Recovery: {sys.executable} -m pip "
-                      "install websocket-client (launchd resolves /usr/bin/python3).",
-                      "phase2")
-    try:
-        with open(PORT_FILE) as f:
-            lines = f.read().splitlines()
-        port, path = lines[0].strip(), (lines[1].strip() if len(lines) > 1 else "")
-    except (OSError, IndexError) as e:
-        raise Outcome(BROWSER_FAILED, f"unreadable port file: {e}", "phase2")
-    url = f"ws://127.0.0.1:{port}{path}"
-    dbg(f"CDP connect {url}")
-    try:
-        return websocket.create_connection(url, timeout=8, suppress_origin=True)
-    except Exception as e:                                 # noqa: BLE001 — any handshake failure
-        raise Outcome(CONSENT_GATE,
-                      f"CDP handshake did not complete within 8s ({type(e).__name__}). This is "
-                      "the Dia consent dialog, not a dead browser. Recovery: cycle "
-                      "dia://inspect#remote-debugging off then on — the first connect after a "
-                      "cycle is consent-free — then re-run.",
-                      "phase2")
-
-
-class CDP:
-    def __init__(self, ws):
-        self.ws, self._id = ws, 0
-
-    def send(self, method, params=None, session=None, timeout=20):
-        self._id += 1
-        mid = self._id
-        msg = {"id": mid, "method": method, "params": params or {}}
-        if session:
-            msg["sessionId"] = session
-        self.ws.send(json.dumps(msg))
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            self.ws.settimeout(max(0.5, deadline - time.time()))
-            try:
-                got = json.loads(self.ws.recv())
-            except Exception:                              # noqa: BLE001 — recv timeout/close
-                break
-            if got.get("id") == mid:
-                if "error" in got:
-                    raise Outcome(BROWSER_FAILED,
-                                  f"CDP {method} error: {got['error']}", "phase2")
-                return got.get("result", {})
-        raise Outcome(BROWSER_FAILED, f"CDP {method} timed out", "phase2")
-
-    def attach(self, target_id):
-        return self.send("Target.attachToTarget",
-                         {"targetId": target_id, "flatten": True}).get("sessionId")
-
-    def eval(self, session, expr, timeout=20):
-        r = self.send("Runtime.evaluate",
-                      {"expression": expr, "returnByValue": True, "awaitPromise": True},
-                      session=session, timeout=timeout)
-        return (r.get("result") or {}).get("value")
-
-
-def find_profile_context(cdp, profile_dir):
-    """Map browserContextId → Dia profile by opening chrome://version in each context and
-    reading #profile_path. Resolved by the profile's DIRECTORY as given by --relogin-info,
-    which itself resolves the directory from the profile NAME at runtime — profile dirs drift
-    and renumber, so a remembered directory is a stale-by-design lookup."""
-    ctxs = cdp.send("Target.getBrowserContexts").get("browserContextIds", [])
-    dbg(f"{len(ctxs)} browser contexts")
-    for ctx in ctxs:
-        try:
-            t = cdp.send("Target.createTarget",
-                         {"url": "chrome://version", "browserContextId": ctx})
-        except Outcome:
-            continue                                       # -32602/-32000: context not usable
-        tid = t.get("targetId")
-        try:
-            sess = cdp.attach(tid)
-            time.sleep(0.6)
-            path = cdp.eval(sess, "document.querySelector('#profile_path')?.textContent || ''")
-            if path and os.path.basename(str(path).rstrip("/")) == os.path.basename(profile_dir.rstrip("/")):
-                return ctx
-        except Outcome:
-            pass
-        finally:
-            try:
-                cdp.send("Target.closeTarget", {"targetId": tid})
-            except Outcome:
-                pass
-    return None
-
-
-AUTHORIZE_JS = """
-(() => {
-  const want = t => /^(authorize|allow|approve|continue|yes)\\b/i.test((t||'').trim());
-  const els = [...document.querySelectorAll('button,[role=button],a,input[type=submit]')];
-  const el = els.find(e => want(e.innerText || e.value || e.getAttribute('aria-label')));
-  if (!el) return null;
-  const r = el.getBoundingClientRect();
-  return {x: r.x + r.width/2, y: r.y + r.height/2};
-})()
-"""
-
-
-def phase2(cdp, cdp_ws, info, child, outpath, url_timeout):
-    """Drive the browser leg. Returns the child's final combined output on success."""
-    oauth_url = None
-    deadline = time.time() + url_timeout
-    while time.time() < deadline:
-        if os.path.exists(outpath):
-            text = open(outpath, errors="replace").read()
-            m = URL_RE.search(text)
-            if m:
-                oauth_url = m.group(0)
-                break
-            if "Login successful" in text:
-                return text                                # warm callback finished it already
-        if child.poll() is not None and not os.path.exists(outpath):
-            break
-        time.sleep(0.5)
-    if not oauth_url:
-        raise Outcome(BROWSER_FAILED,
-                      f"no OAuth URL printed within {url_timeout}s (see {outpath})", "phase2")
-    dbg(f"oauth url: {oauth_url[:60]}…")
-
-    ctx = find_profile_context(cdp, info["dia_profile_dir"] or "")
-    if not ctx:
-        raise Outcome(BROWSER_FAILED,
-                      f"no Dia browser context matched profile dir "
-                      f"{info.get('dia_profile_dir')!r} (profile {info.get('dia_profile')!r})",
-                      "phase2")
-    tid = cdp.send("Target.createTarget", {"url": oauth_url, "browserContextId": ctx}).get("targetId")
-    sess = cdp.attach(tid)
-    time.sleep(2.5)
-
-    href = cdp.eval(sess, "location.href") or ""
-    if "/login" in href:
-        raise Outcome(FALLBACK_REQUIRED,
-                      "the authorize URL landed on claude.ai /login — that profile's web "
-                      f"session is cold, so the email-code leg is required. Remaining step: "
-                      f"sign in as {info.get('email')} (code goes to {info.get('mailbox')}), "
-                      "then re-run.", "phase2")
-
-    pt = cdp.eval(sess, AUTHORIZE_JS)
-    if pt:
-        for typ in ("mousePressed", "mouseReleased"):
-            cdp.send("Input.dispatchMouseEvent",
-                     {"type": typ, "x": pt["x"], "y": pt["y"], "button": "left",
-                      "clickCount": 1}, session=sess)
-        dbg("dispatched trusted click on the authorize control")
-    else:
-        # Documented fallback. A synthesised .click() is untrusted and some flows ignore it,
-        # which is exactly why the real mouse event above is attempted first.
-        cdp.eval(sess, AUTHORIZE_JS.replace("return {x:", "el.click(); return {x:"))
-    time.sleep(3.0)
-
-    # (a) warm session + localhost callback ⇒ the child finished on its own.
-    for _ in range(20):
-        if os.path.exists(outpath) and "Login successful" in open(outpath, errors="replace").read():
-            return open(outpath, errors="replace").read()
-        if child.poll() is not None:
-            break
-        time.sleep(1.0)
-    # (b) paste path ⇒ the callback page shows code#state; feed it to the held-open fifo.
-    body = cdp.eval(sess, "document.body ? document.body.innerText : ''") or ""
-    m = CODE_RE.search(body)
-    if not m:
-        raise Outcome(BROWSER_FAILED,
-                      "authorize completed but neither the localhost callback nor a "
-                      f"code#state blob appeared (see {outpath})", "phase2")
-    return m.group(0)
-
-
-# ---- verification -----------------------------------------------------------------------------
-
-def verify(acct, before):
-    """Proof, not report. The child process saying "Login successful." is a claim about itself;
-    a refresh-token expiry that moved FORWARD is an observable effect of a real grant."""
-    row = row_for(accounts_json(fresh=True), acct)
-    info = relogin_info(acct)
-    after = {"auth": row.get("auth"),
-             "has_refresh_token": info.get("has_refresh_token"),
-             "login_expires_at": row.get("login_expires_at")}
+        row, info = fresh_row(acct), relogin_info(acct)
+    except Bail as exc:
+        return False, f"post-check unavailable: {exc.detail}", {}
+    after = snapshot(row, info)
     if row.get("auth") != "ok":
-        return False, after, f"auth is {row.get('auth')!r}, not ok"
+        return False, f"auth={row.get('auth')!r} (expected 'ok')", after
     if not info.get("has_refresh_token"):
-        return False, after, "no refresh token present after the grant"
-    b, a = before.get("login_expires_at"), after.get("login_expires_at")
-    if b and a and not (a > b):
-        return False, after, f"login expiry did not advance ({b} → {a})"
-    return True, after, "auth ok and the login expiry advanced"
-
-
-# ---- main -------------------------------------------------------------------------------------
-
-def main():
-    global DEBUG
-    ap = argparse.ArgumentParser(prog="cc-relogin", add_help=True,
-                                 description="Re-authenticate one Claude Max account.")
-    ap.add_argument("acct")
-    ap.add_argument("--dry-run", action="store_true")
-    ap.add_argument("--no-browser", action="store_true")
-    ap.add_argument("--json", action="store_true")
-    ap.add_argument("--url-timeout", type=int, default=30)
-    ap.add_argument("--debug", action="store_true")
-    args = ap.parse_args()
-    DEBUG = args.debug
-
-    acct = args.acct
-    before, phase, lock, fifo, child, ws = {}, "gate", None, None, None, None
+        return False, "no refresh token in the keychain after the attempt", after
+    old, new = before.get("login_expires_at"), after.get("login_expires_at")
+    if old is None:
+        return True, ("auth ok + refresh token present; deadline-move UNVERIFIABLE — this "
+                      "claude-accounts emits no login_expires_at (contract §2)"), after
     try:
-        info = relogin_info(acct)
-        row = row_for(accounts_json(fresh=False), acct)
-        before = {"auth": row.get("auth"),
-                  "has_refresh_token": info.get("has_refresh_token"),
-                  "login_expires_at": row.get("login_expires_at")}
+        moved = new is not None and new > old
+    except TypeError:
+        return False, f"login_expires_at incomparable ({old!r} -> {new!r})", after
+    if not moved:
+        return False, f"login deadline did NOT move ({old!r} -> {new!r})", after
+    return True, f"login deadline moved ({old!r} -> {new!r})", after
 
-        need, why = needs_relogin(row, info)
-        if not need:
-            raise Outcome(REFUSED, f"{acct} does not need a relogin ({why})")
-        k = live_sessions(acct, info)
-        if k > 0:
-            raise Outcome(REFUSED,
-                          f"{acct} has {k} live session(s) — that CC owns the token lifecycle")
 
-        lock_path = os.path.join(TMP, f"claude-accounts-heal-{acct}.lock")
-        lock = open(lock_path, "w")
+# ---- driver ------------------------------------------------------------------------------------
+
+def emit(state: dict[str, Any], code: int, detail: str, phase: str, as_json: bool,
+         result: str | None = None) -> int:
+    state.update(result=result or RESULT_BY_EXIT[code], exit=code,
+                 phase_reached=phase, detail=detail)
+    log(f"{state['acct']} {state['result']} exit={code} phase={phase} :: {detail}")
+    if as_json:
+        print(json.dumps(state, indent=2))
+    else:
+        print(f"cc-relogin {state['acct']}: {state['result'].upper()} ({code}) — {detail}")
+    return code
+
+
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    """argparse exits 2 on a usage error, which IS the frozen REFUSED code — bad args refuse."""
+    p = argparse.ArgumentParser(prog="cc-relogin", description=(__doc__ or "").strip(),
+                                formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("acct", help="account name (next | next2 | next3 | next4)")
+    p.add_argument("--dry-run", action="store_true", help="gate + phase plan only; mutate nothing")
+    p.add_argument("--no-browser", action="store_true", help="phase 1 only; never open a browser")
+    p.add_argument("--json", action="store_true", help="emit the result object on stdout")
+    p.add_argument("--url-timeout", type=float, default=30.0, metavar="N")
+    p.add_argument("--debug", action="store_true", help="progress to stderr")
+    return p.parse_args(argv)
+
+
+def run(acct: str, o: argparse.Namespace, state: dict[str, Any]) -> int:
+    """The gate, the phase ladder, and verification. The heal lock is held for the WHOLE run."""
+    as_json = bool(o.json)
+    info = relogin_info(acct)
+    row = fresh_row(acct)
+    state["before"] = before = snapshot(row, info)
+    need, why = need_relogin(row, info)
+    state["need_reason"] = why
+    if not need:
+        raise Bail(EXIT_REFUSED, f"no re-auth needed — {why}")
+    dbg(f"need: {why}")
+    k = live_sessions(info.get("config_dir", ""))
+    if k != 0:
+        raise Bail(EXIT_REFUSED, f"{k} live session(s) — CC owns the token lifecycle" if k > 0
+                   else "live-session count UNKNOWN (ps failed) — refusing")
+    lock_path = os.path.join(TMP, f"claude-accounts-heal-{acct}.lock")
+    lock = open(lock_path, "w")
+    try:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            raise Outcome(REFUSED, "another heal/relogin is in flight for this account")
-        # k again, UNDER the lock: the gate above raced anything that started meanwhile.
-        if live_sessions(acct, info) > 0:
-            raise Outcome(REFUSED, "a session started during the gate — CC owns the token")
-
-        # ASCII on purpose: this string travels inside --json, where json.dumps escapes any
-        # non-ASCII to \uXXXX. A consumer grepping for the plan would then have to match an
-        # escape sequence rather than the words it sees in the human output.
-        plan = ("phase1 then phase2" if (info.get("has_refresh_token")
-                                         and info.get("refresh_token_expired") is not True)
-                else "phase2 (phase 1 cannot succeed)")
-        if args.dry_run:
-            raise Outcome(REFUSED, f"dry-run: would relogin {acct} ({why}); plan: {plan}")
-
-        if info.get("has_refresh_token") and info.get("refresh_token_expired") is not True:
-            phase = "phase1"
-            ok, detail = phase1(info)
-            dbg(f"phase1: {'OK' if ok else 'FAIL'} — {detail}")
-            if ok:
-                phase = "verify"
-                good, after, vd = verify(acct, before)
-                raise Outcome(PROVEN if good else UNVERIFIED, vd, phase)
-            if args.no_browser:
-                raise Outcome(HEADLESS_EXHAUSTED, f"phase 1 failed and --no-browser: {detail}",
-                              "phase1")
-        elif args.no_browser:
-            raise Outcome(HEADLESS_EXHAUSTED,
-                          "phase 1 is impossible (no usable refresh token) and --no-browser",
-                          "phase1")
-
-        phase = "phase2"
-        ws = cdp_connect()
-        cdp = CDP(ws)
-        fifo = os.path.join(TMP, f"cc-relogin-{acct}.in")
-        outpath = os.path.join(TMP, f"cc-relogin-{acct}.out")
-        for p in (fifo, outpath):
-            if os.path.exists(p):
-                os.unlink(p)
-        os.mkfifo(fifo)
-        # O_RDWR: the driver is simultaneously reader and writer, so the child's open() never
-        # blocks waiting for a writer AND the fifo never EOFs between writes. The skill's
-        # "hold a sleep writer open" recipe is the shell workaround for the same problem.
-        fifo_fd = os.open(fifo, os.O_RDWR | os.O_NONBLOCK)
-        env = os.environ.copy()
-        env["CLAUDE_CONFIG_DIR"] = info["config_dir"]
-        with open(outpath, "w") as out:
-            child = subprocess.Popen(
-                [info["claude_bin"], "auth", "login", "--claudeai", "--email", info["email"]],
-                stdin=fifo_fd, stdout=out, stderr=subprocess.STDOUT, env=env,
-                start_new_session=True)
-        res = phase2(cdp, ws, info, child, outpath, args.url_timeout)
-        if "Login successful" not in res:
-            os.write(fifo_fd, (res + "\n").encode())       # code#state → the child's stdin
-            try:
-                child.wait(timeout=60)
-            except subprocess.TimeoutExpired:
-                raise Outcome(BROWSER_FAILED, "child did not finish after the code was fed",
-                              "phase2")
-        phase = "verify"
-        good, after, vd = verify(acct, before)
-        raise Outcome(PROVEN if good else UNVERIFIED, vd, phase)
-
-    except Outcome as o:
-        code, detail, phase = o.code, o.detail, o.phase
-    except KeyboardInterrupt:
-        code, detail = ERROR, "interrupted"
-    except Exception as e:                                 # noqa: BLE001 — never a traceback
-        code, detail = ERROR, f"{type(e).__name__}: {e}"
+        except BlockingIOError as exc:
+            raise Bail(EXIT_REFUSED,
+                       f"heal lock busy ({lock_path}) — another heal/relogin in flight") from exc
+        # Re-check liveness UNDER the lock: the snapshot above is already stale by the time we
+        # hold the lock, and a relogin racing a running CC has its rotation discarded — which
+        # IS a logout. Mirrors claude-accounts heal() (bin/claude-accounts:314-350).
+        k = live_sessions(info.get("config_dir", ""))
+        if k != 0:
+            raise Bail(EXIT_REFUSED, f"a session appeared under the lock (k={k}) — "
+                                     "CC owns the token lifecycle")
+        blocked = phase1_blocked(info, row)
+        state["plan"] = [f"phase1: SKIP ({blocked})" if blocked
+                         else "phase1: headless refresh grant (claude auth login)",
+                         "phase2: SKIP (--no-browser)" if o.no_browser
+                         else f"phase2: browser OAuth via {AUTHBROWSER_BIN}"]
+        if o.dry_run:
+            return emit(state, EXIT_PROVEN, "gate passed; lock probed (taken + released); "
+                        "nothing mutated", "gate", as_json, result="dry-run")
+        if not blocked:
+            claimed, detail = phase1(info)
+            state["phase1"] = {"ran": True, "claimed_success": claimed, "detail": detail}
+            dbg(f"phase1 claimed={claimed} :: {detail}")
+            if claimed:
+                ok, vdetail, state["after"] = verify(acct, before)
+                if ok:
+                    return emit(state, EXIT_PROVEN,
+                                f"phase 1 headless refresh PROVEN — {vdetail}", "verify", as_json)
+                if o.no_browser:
+                    return emit(state, EXIT_UNVERIFIED, "phase 1 reported success but the "
+                                f"effect check failed — {vdetail}", "verify", as_json)
+                # A refresh grant does not move the login deadline, so an unproven phase 1 is
+                # EXPECTED when the deadline is what expired. Escalate, never stop here.
+                dbg("phase 1 unproven — escalating to phase 2")
+            elif o.no_browser:
+                return emit(state, EXIT_HEADLESS_EXHAUSTED,
+                            f"phase 1 failed and --no-browser given — {detail}", "phase1", as_json)
+        elif o.no_browser:
+            return emit(state, EXIT_HEADLESS_EXHAUSTED,
+                        f"phase 1 impossible and --no-browser given — {blocked}", "phase1", as_json)
+        code, detail = phase2(info, float(o.url_timeout))
+        if code != EXIT_PROVEN:
+            return emit(state, code, detail, "phase2", as_json)
+        ok, vdetail, state["after"] = verify(acct, before)
+        return emit(state, EXIT_PROVEN if ok else EXIT_UNVERIFIED,
+                    (f"phase 2 browser OAuth PROVEN — {vdetail}" if ok else
+                     f"phase 2 reported success but the effect check failed — {vdetail}"),
+                    "verify", as_json)
     finally:
-        if child and child.poll() is None:
-            try:
-                os.killpg(os.getpgid(child.pid), signal.SIGTERM)
-            except (ProcessLookupError, PermissionError):
-                pass
-        if ws:
-            try:
-                ws.close()
-            except Exception:                              # noqa: BLE001
-                pass
-        if fifo and os.path.exists(fifo):
-            os.unlink(fifo)
-        if lock:
-            lock.close()                                   # releases the flock
+        lock.close()          # closing releases the flock — held until here, always
 
-    after = {}
-    if code in (PROVEN, UNVERIFIED):
-        try:
-            after = {"auth": row_for(accounts_json(), acct).get("auth")}
-        except Outcome:
-            pass
-    if args.json:
-        print(json.dumps({"acct": acct, "result": RESULT_NAME[code], "exit": code,
-                          "phase_reached": phase, "before": before, "after": after,
-                          "detail": detail}))
-    else:
-        print(f"{RESULT_NAME[code]}: {detail}")
-    return code
+
+def main() -> int:
+    global DEBUG
+    o = parse_args(sys.argv[1:])
+    DEBUG = bool(o.debug)
+    acct = str(o.acct)
+    state: dict[str, Any] = {"acct": acct, "dry_run": bool(o.dry_run), "before": {}, "after": {}}
+    try:
+        return run(acct, o, state)
+    except Bail as exc:
+        return emit(state, exc.code, exc.detail, exc.phase, bool(o.json))
+    except Exception as exc:                              # noqa: BLE001 — reported, never lost
+        return emit(state, EXIT_ERROR, f"{type(exc).__name__}: {exc}", "gate", bool(o.json))
 
 
 if __name__ == "__main__":

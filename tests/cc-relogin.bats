@@ -1,10 +1,8 @@
 #!/usr/bin/env bats
-# cc-relogin — the gate, the phase ladder, the CDP consent gate, and verify-by-effect.
-#
-# Hermetic: a stub claude-accounts, a scratch TMP for the lock/fifo, and a port-file path that
-# does not exist. Nothing touches the real keychain, the real accounts, or Dia. The account
-# identity in the stub uses a config_dir that cannot appear in a real `ps` line, so the live
-# session count is genuinely 0 rather than mocked away.
+# cc-relogin — the unattended OAuth re-auth executor. These tests are HERMETIC by construction:
+# every external surface is a stub (claude-accounts, ps, /usr/bin/security, the claude binary,
+# cc-authbrowser) and the heal lock lives under CC_RELOGIN_TMP. Nothing here ever performs a real
+# sign-in, reads a real keychain item, or launches a real browser — that is a human-gated step.
 
 setup() {
   # HERMETIC $HOME (scripts/test-hermeticity-lint.sh — the ratchet that binds every NEW suite).
@@ -13,321 +11,357 @@ setup() {
   # writes the operator's live layer. Free here — nothing below reads $HOME.
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
-  # Hermeticity (scripts/test-hermeticity-lint.sh): cc-relogin resolves keychain/profile paths
-  # and would otherwise read the live ~/. Every other path this suite touches is already
-  # fixtured under $BATS_TEST_TMPDIR; $HOME was the one remaining leak.
-  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
-  export BIN="$REPO/bin/cc-relogin"
-  export STUB="$BATS_TEST_TMPDIR/claude-accounts"
-  export CC_RELOGIN_ACCOUNTS_BIN="$STUB"
-  export CC_RELOGIN_TMP="$BATS_TEST_TMPDIR"
-  export CC_RELOGIN_DEVTOOLS_PORT_FILE="$BATS_TEST_TMPDIR/nonexistent-DevToolsActivePort"
-  export ROWS="$BATS_TEST_TMPDIR/rows.json"
-  export INFO="$BATS_TEST_TMPDIR/info.json"
-  export STUB_ARGV="$BATS_TEST_TMPDIR/accounts-argv.log"
+  C="$REPO/bin/cc-relogin"
+  D="$BATS_TEST_TMPDIR"
+  CFG="$D/cfg-next3"
+  LOCK="$D/claude-accounts-heal-next3.lock"
+  export CC_RELOGIN_TMP="$D"
+  export CC_RELOGIN_WARN_H=72
+  export CC_RELOGIN_LOG="$D/cc-relogin.log"
+  export CC_RELOGIN_ACCOUNTS_BIN="$D/stub-accounts"
+  export CC_RELOGIN_PS_BIN="$D/stub-ps"
+  export CC_RELOGIN_SECURITY_BIN="$D/stub-security"
+  export CC_RELOGIN_AUTHBROWSER_BIN="$D/stub-authbrowser"
 
-  cat > "$STUB" <<'STUBEOF'
-#!/usr/bin/env bash
-set -euo pipefail
-printf '%s\n' "$*" >> "${STUB_ARGV:-/dev/null}"
-for a in "$@"; do
-  case "$a" in
-    --relogin-info) mode=relogin ;;
-    *) : ;;
-  esac
-done
-if [ "${mode:-}" = relogin ]; then cat "$INFO"; exit 0; fi
-cat "$ROWS"; exit 0
-STUBEOF
-  chmod +x "$STUB"
+  # --- stubs: each serves a per-CALL fixture (foo.1.json, foo.2.json, …) so a "before" and an
+  # --- "after" sweep can differ, falling back to foo.json when no per-call file exists.
+  hdr() { { echo '#!/usr/bin/env bash'; echo "FIX=\"$D\""; } > "$1"; }
 
-  # A STUB websocket module, ahead of site-packages on PYTHONPATH. Two reasons, both about the
-  # suite certifying something real:
-  #   1. Hermeticity. `import websocket` resolved against whichever python3 the PATH gave us —
-  #      every interpreter here has websocket-client EXCEPT /usr/bin/python3, so the consent-gate
-  #      tests went RED with exit 4 under a minimal PATH (launchd's, notably). The suite's green
-  #      was reporting the ambient environment, not the code.
-  #   2. Determinism. The unreachable-port test previously depended on 127.0.0.1:59999 genuinely
-  #      refusing a connection — a real network dependency, and silently vacuous the day anything
-  #      binds that port. The stub raises on connect, which is the condition under test.
-  # It records the URL it was handed, so a test can prove the port file was parsed and USED
-  # rather than that some earlier error happened to produce the same verdict.
-  export WS_STUB_DIR="$BATS_TEST_TMPDIR/wsstub"
-  export WS_URL_LOG="$BATS_TEST_TMPDIR/ws-url.log"
-  mkdir -p "$WS_STUB_DIR"
-  cat > "$WS_STUB_DIR/websocket.py" <<'WSEOF'
-import os
+  hdr "$D/stub-accounts"
+  cat >> "$D/stub-accounts" <<'STUB'
+bump() { local f="$FIX/n-$1" n; n=$(cat "$f" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" > "$f"; echo "$n"; }
+if [[ "$*" == *--relogin-info* ]]; then
+  n=$(bump info)
+  if [ -f "$FIX/info.rc" ]; then echo "unknown account: bogus (next|next2|next3|next4)" >&2; exit "$(cat "$FIX/info.rc")"; fi
+  p="$FIX/info.$n.json"; [ -f "$p" ] || p="$FIX/info.json"; cat "$p"; exit 0
+fi
+if [[ "$*" == *--fresh* ]]; then
+  n=$(bump fresh); p="$FIX/fresh.$n.json"; [ -f "$p" ] || p="$FIX/fresh.json"; cat "$p"; exit 0
+fi
+exit 1
+STUB
 
+  hdr "$D/stub-ps"
+  cat >> "$D/stub-ps" <<'STUB'
+n=$(cat "$FIX/n-ps" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" > "$FIX/n-ps"
+p="$FIX/ps.$n"; [ -f "$p" ] || p="$FIX/ps"
+if [ -f "$p" ]; then cat "$p"; fi
+exit 0
+STUB
 
-def create_connection(url, **kw):
-    with open(os.environ["WS_URL_LOG"], "a") as f:
-        f.write(url + "\n")
-    raise ConnectionRefusedError("stub: nothing is listening")
-WSEOF
-  export PYTHONPATH="$WS_STUB_DIR${PYTHONPATH:+:$PYTHONPATH}"
+  hdr "$D/stub-security"
+  cat >> "$D/stub-security" <<'STUB'
+echo "security $*" >> "$FIX/security-calls"
+[ -f "$FIX/creds.json" ] || exit 44
+cat "$FIX/creds.json"
+STUB
 
-  # default fixture: an account that genuinely needs a login, no live sessions
-  rows '{"rows":[{"acct":"next3","auth":"login-required","k":0,"login_expires_at":"2026-08-08T01:07:00+00:00","login_expires_h":300.0}]}'
-  info '{"config_dir":"/tmp/cc-relogin-test-nonexistent-xyz","claude_bin":"/nonexistent/claude","email":"t@example.com","mailbox":"t@example.com","dia_profile":"T","dia_profile_dir":"/nonexistent/Profile T","keychain_service":"svc","keychain_account":"tester","oauth_scopes":"a b","keychain_state":"present","has_refresh_token":false,"refresh_token_expired":false}'
-}
+  hdr "$D/stub-claude"
+  cat >> "$D/stub-claude" <<'STUB'
+{ echo "argv=$*"; echo "CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR"
+  echo "CLAUDE_CODE_OAUTH_SCOPES=$CLAUDE_CODE_OAUTH_SCOPES"
+  echo "RT_LEN=${#CLAUDE_CODE_OAUTH_REFRESH_TOKEN}"; } >> "$FIX/claude-calls"
+echo "Login successful."
+if [ -f "$FIX/claude.out" ]; then cat "$FIX/claude.out"; fi
+exit "$(cat "$FIX/claude.rc" 2>/dev/null || echo 0)"
+STUB
 
-rows() { printf '%s' "$1" > "$ROWS"; }
-info() { printf '%s' "$1" > "$INFO"; }
+  hdr "$D/stub-authbrowser"
+  echo 'echo "authbrowser $*" >> "$FIX/authbrowser-calls"' >> "$D/stub-authbrowser"
+  chmod +x "$D"/stub-*
 
-LOAD='
-import importlib.machinery, importlib.util, os
-loader = importlib.machinery.SourceFileLoader("ccr", os.environ["BIN"])
-ccr = importlib.util.module_from_spec(importlib.util.spec_from_loader("ccr", loader))
-loader.exec_module(ccr)
-'
-
-# ---- read-only posture -----------------------------------------------------------------------
-
-@test "every accounts READ carries --no-heal — a measurement must not move what it measures" {
-  # claude-accounts heals a stale row on the way out (probe_account -> `stale and not no_heal`
-  # -> heal() -> `claude auth login`). Two failures if a read omits --no-heal: a READ mutates
-  # credentials (and can rotate a token out from under a live session, which the k>0 guard
-  # exists to prevent), and — worse — verify() treats "refresh-token expiry moved FORWARD" as
-  # the observable effect proving a real grant, which is exactly what `claude auth login` does.
-  # A heal fired BY the measuring read would therefore manufacture a PROVEN verdict for work
-  # the verification did itself. Pinned here because no other test would notice the regression.
-  run "$BIN" next3 --dry-run
-  [ -s "$STUB_ARGV" ]                       # positive control: reads actually happened
-  local saw_read=0
-  while IFS= read -r line; do
-    case "$line" in
-      *--relogin-info*) continue ;;         # identity lookup, not a status read
-    esac
-    saw_read=1
-    case "$line" in
-      *--no-heal*) ;;
-      *) echo "accounts read WITHOUT --no-heal: $line" >&2; return 1 ;;
-    esac
-  done < "$STUB_ARGV"
-  [ "$saw_read" -eq 1 ]                      # and at least one was a status read
-}
-
-# ---- the gate --------------------------------------------------------------------------------
-
-@test "gate: a HEALTHY account is refused — never re-login what is not broken" {
-  rows '{"rows":[{"acct":"next3","auth":"ok","k":0,"login_expires_h":500.0}]}'
-  run "$BIN" next3 --json
-  [ "$status" -eq 2 ]
-  [[ "$output" == *'"result": "refused"'* ]]
-  [[ "$output" == *"does not need a relogin"* ]]
-}
-
-@test "gate: an unknown account is refused, not crashed" {
-  cat > "$STUB" <<'EOF'
-#!/usr/bin/env bash
-echo "unknown account: nope" >&2; exit 1
+  # --- fixture writers -------------------------------------------------------------------------
+  mk_info() { # <n|all> <has_refresh_token> [keychain_state] [config_dir]
+    local f="$D/info.$1.json"; [ "$1" = all ] && f="$D/info.json"
+    cat > "$f" <<EOF
+{"name":"next3","config_dir":"${4:-$CFG}","launcher":"claude-next3","email":"e@example.test",
+ "dia_profile":"Claude3","dia_profile_dir":"/p",
+ "keychain_service":"Claude Code-credentials-deadbeef","keychain_state":"${3:-present}",
+ "claude_bin":"$D/stub-claude","oauth_scopes":"user:profile user:inference",
+ "has_refresh_token":$2}
 EOF
-  chmod +x "$STUB"
-  run "$BIN" nope --json
+  }
+  mk_fresh() { # <n|all> <auth> [login_expires_at] [login_expires_h]
+    local f="$D/fresh.$1.json" extra=""
+    [ "$1" = all ] && f="$D/fresh.json"
+    [ -n "${3:-}" ] && extra="$extra,\"login_expires_at\":\"$3\""
+    [ -n "${4:-}" ] && extra="$extra,\"login_expires_h\":$4"
+    cat > "$f" <<EOF
+{"window":{},"cached":false,"rows":[{"acct":"next3","email":"e@example.test",
+ "launcher":"claude-next3","k":0,"auth":"$2"$extra}]}
+EOF
+  }
+  mk_creds() { echo '{"claudeAiOauth":{"refreshToken":"rt-FIXTURE-not-a-real-token"}}' > "$D/creds.json"; }
+  ps_live() { printf '%s\n' "/opt/c/bin/claude --resume  CLAUDE_CONFIG_DIR=$CFG" > "$D/ps.$1"; }
+  # The common "needs a relogin, phase 1 available, no live sessions" fixture set.
+  needy() { mk_info all true; mk_fresh 1 logged-out "2026-08-01T00:00:00Z"; mk_creds; }
+  hold_lock() { # background holder of the heal lock -> pid in $HOLDER. NOT via $(…): a command
+                # substitution would block on the backgrounded child's inherited stdout pipe.
+    python3 -c 'import fcntl,sys,time;f=open(sys.argv[1],"w");fcntl.flock(f,fcntl.LOCK_EX|fcntl.LOCK_NB);time.sleep(30)' \
+      "$LOCK" >/dev/null 2>&1 &
+    HOLDER=$!
+    sleep 0.5
+  }
+}
+
+# ---- arg surface ----------------------------------------------------------------------------
+
+@test "--help exits 0 and documents the CLI" {
+  run "$C" --help
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q -- '--no-browser'
+  echo "$output" | grep -q 'PROVEN'
+}
+
+@test "no account name → REFUSED (2)" {
+  run "$C"
   [ "$status" -eq 2 ]
-  [[ "$output" == *'"result": "refused"'* ]]
 }
 
-@test "gate: live sessions block the relogin — that CC owns the token lifecycle" {
-  run python3 -c "$LOAD"'
-import json, os
-# a ps line carrying this account'"'"'s CLAUDE_CONFIG_DIR = a live interactive owner
-info = {"config_dir": "/x/.claude-tertiary", "claude_bin": "/x/bin/claude"}
-ccr.run = lambda *a, **k: type("P", (), {
-    "stdout": "/x/bin/claude --model opus CLAUDE_CONFIG_DIR=/x/.claude-tertiary\n",
-    "stderr": "", "returncode": 0})()
-assert ccr.live_sessions("next3", info) == 1
-# a one-shot -p invocation is NOT an interactive owner of the token
-ccr.run = lambda *a, **k: type("P", (), {
-    "stdout": "/x/bin/claude -p hello CLAUDE_CONFIG_DIR=/x/.claude-tertiary\n",
-    "stderr": "", "returncode": 0})()
-assert ccr.live_sessions("next3", info) == 0
-# another account'"'"'s sessions never count toward this one
-ccr.run = lambda *a, **k: type("P", (), {
-    "stdout": "/x/bin/claude CLAUDE_CONFIG_DIR=/x/.claude-secondary\n",
-    "stderr": "", "returncode": 0})()
-assert ccr.live_sessions("next3", info) == 0
-print("OK")'
-  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]]
-}
-
-@test "gate: a held heal lock refuses — the SAME lock claude-accounts heal() takes" {
-  # hold the exact lock path the driver will try
-  python3 -c "
-import fcntl, time, sys
-f = open('$BATS_TEST_TMPDIR/claude-accounts-heal-next3.lock', 'w')
-fcntl.flock(f, fcntl.LOCK_EX)
-time.sleep(5)" &
-  local holder=$!
-  sleep 0.7
-  run "$BIN" next3 --json
-  kill "$holder" 2>/dev/null || true
+@test "unexpected argument → REFUSED (2)" {
+  run "$C" next3 --wat
   [ "$status" -eq 2 ]
-  [[ "$output" == *"another heal/relogin is in flight"* ]]
 }
 
-@test "gate: --dry-run names the plan and mutates nothing" {
-  run "$BIN" next3 --dry-run --json
+# ---- the gate -------------------------------------------------------------------------------
+
+@test "unknown account → REFUSED (2)" {
+  echo 1 > "$D/info.rc"
+  run "$C" bogus
   [ "$status" -eq 2 ]
-  [[ "$output" == *"dry-run"* ]]
-  [[ "$output" == *"phase2 (phase 1 cannot succeed)"* ]]   # no refresh token in the fixture
-  [ ! -e "$BATS_TEST_TMPDIR/cc-relogin-next3.in" ]         # no fifo created
-  # the lock was probed and RELEASED, not left held
-  run python3 -c "
-import fcntl
-f = open('$BATS_TEST_TMPDIR/claude-accounts-heal-next3.lock', 'w')
-fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
-print('lock free')"
-  [ "$status" -eq 0 ] && [[ "$output" == *"lock free"* ]]
+  echo "$output" | grep -qi 'unknown account'
 }
 
-# ---- the need predicate ----------------------------------------------------------------------
-
-@test "needs_relogin: fires on the fixable states and the cliff, stays quiet otherwise" {
-  run python3 -c "$LOAD"'
-i = {}
-for s in ("logged-out", "token-invalid", "no-oauth-blob", "login-required"):
-    assert ccr.needs_relogin({"auth": s}, i)[0] is True, s
-# keychain-error is NOT a credential state — a relogin is the wrong action for it
-assert ccr.needs_relogin({"auth": "keychain-error"}, i)[0] is False
-assert ccr.needs_relogin({"auth": "probe-error"}, i)[0] is False
-assert ccr.needs_relogin({"auth": "ok", "login_expired": True}, i)[0] is True
-assert ccr.needs_relogin({"auth": "ok", "login_expires_h": 20.0}, i)[0] is True
-assert ccr.needs_relogin({"auth": "ok", "login_expires_h": 500.0}, i)[0] is False
-# an OLDER claude-accounts emits no login_* fields at all: absence is NOT "not expiring",
-# so the keychain/identity signals still decide
-assert ccr.needs_relogin({"auth": "ok"}, {"keychain_state": "no-keychain-item"})[0] is True
-assert ccr.needs_relogin({"auth": "ok"}, {"refresh_token_expired": True})[0] is True
-assert ccr.needs_relogin({"auth": "ok"}, {})[0] is False
-print("OK")'
-  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]]
+@test "healthy account (deadline far away) → REFUSED (2), nothing attempted" {
+  mk_info all true; mk_fresh all ok "2027-01-01T00:00:00Z" 900
+  run "$C" next3
+  [ "$status" -eq 2 ]
+  echo "$output" | grep -q 'no re-auth needed'
+  [ ! -f "$D/claude-calls" ]
 }
 
-# ---- verify by EFFECT ------------------------------------------------------------------------
-
-@test "verify: a claimed success with no moved expiry is UNVERIFIED, not proven" {
-  run python3 -c "$LOAD"'
-before = {"login_expires_at": "2026-08-08T01:07:00+00:00"}
-# auth ok, token present, but the expiry did NOT advance ⇒ the grant did not really happen
-ccr.accounts_json = lambda fresh=False: {"rows": [{"acct": "a", "auth": "ok",
-    "login_expires_at": "2026-08-08T01:07:00+00:00"}]}
-ccr.relogin_info = lambda a: {"has_refresh_token": True}
-ok, after, detail = ccr.verify("a", before)
-assert ok is False and "did not advance" in detail, (ok, detail)
-# expiry moved forward ⇒ proven
-ccr.accounts_json = lambda fresh=False: {"rows": [{"acct": "a", "auth": "ok",
-    "login_expires_at": "2026-09-01T00:00:00+00:00"}]}
-assert ccr.verify("a", before)[0] is True
-# auth not ok ⇒ never proven, whatever the binary said
-ccr.accounts_json = lambda fresh=False: {"rows": [{"acct": "a", "auth": "stale",
-    "login_expires_at": "2026-09-01T00:00:00+00:00"}]}
-assert ccr.verify("a", before)[0] is False
-# token vanished ⇒ never proven
-ccr.accounts_json = lambda fresh=False: {"rows": [{"acct": "a", "auth": "ok",
-    "login_expires_at": "2026-09-01T00:00:00+00:00"}]}
-ccr.relogin_info = lambda a: {"has_refresh_token": False}
-assert ccr.verify("a", before)[0] is False
-print("OK")'
-  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]]
+@test "login_expires_h inside the warn window → NOT refused (proceeds past the need gate)" {
+  mk_info all true; mk_fresh 1 ok "2026-08-01T00:00:00Z" 10; mk_creds
+  run "$C" next3 --dry-run --json
+  [ "$status" -eq 0 ]
+  [ "$(echo "$output" | jq -r .need_reason)" = "login_expires_h=10 <= warn 72.0" ]
 }
 
-# ---- phase ladder ----------------------------------------------------------------------------
+@test "§2 degraded detection: no login_* fields and nothing else wrong → REFUSED, loudly" {
+  mk_info all true; mk_fresh all ok
+  run "$C" next3
+  [ "$status" -eq 2 ]
+  echo "$output" | grep -q 'UNAVAILABLE'
+}
 
-@test "--no-browser: phase 1 impossible ⇒ HEADLESS-EXHAUSTED (3), never a silent browser fire" {
-  run "$BIN" next3 --no-browser --json
+@test "k>0 at the pre-lock snapshot → REFUSED (2), never touches the token" {
+  needy; ps_live 1
+  run "$C" next3
+  [ "$status" -eq 2 ]
+  echo "$output" | grep -q 'live session'
+  [ ! -f "$D/claude-calls" ]
+}
+
+@test "heal lock already held → REFUSED (2)" {
+  needy
+  hold_lock
+  run "$C" next3
+  kill "$HOLDER" 2>/dev/null || true
+  [ "$status" -eq 2 ]
+  echo "$output" | grep -q 'heal lock busy'
+  [ ! -f "$D/claude-calls" ]
+}
+
+@test "under-lock re-check: k==0 at snapshot, k>0 under the lock → REFUSED (2)" {
+  needy; ps_live 2                      # first ps call clean, second (under the lock) live
+  run "$C" next3
+  [ "$status" -eq 2 ]
+  echo "$output" | grep -q 'under the lock'
+  [ ! -f "$D/claude-calls" ]
+}
+
+@test "headless one-shots (claude -p) are NOT live sessions — mirrors concurrency()" {
+  needy
+  printf '%s\n' "/opt/c/bin/claude -p hello  CLAUDE_CONFIG_DIR=$CFG" > "$D/ps"
+  run "$C" next3 --dry-run
+  [ "$status" -eq 0 ]
+}
+
+@test "attribution uses the LAST CLAUDE_CONFIG_DIR= on the line (ps -E appends env after argv)" {
+  needy
+  printf '%s\n' "/opt/c/bin/claude --resume CLAUDE_CONFIG_DIR=/decoy  CLAUDE_CONFIG_DIR=$CFG" > "$D/ps"
+  run "$C" next3
+  [ "$status" -eq 2 ]
+  echo "$output" | grep -q 'live session'
+}
+
+@test "bare claude counts toward the ~/.claude-next account (~/.claude mirrors it)" {
+  mk_info all true "present" "$D/.claude-next"; mk_fresh 1 logged-out; mk_creds
+  printf '%s\n' "/opt/c/bin/claude --resume" > "$D/ps"
+  run "$C" next3
+  [ "$status" -eq 2 ]
+  echo "$output" | grep -q 'live session'
+}
+
+@test "ps unavailable → live count UNKNOWN → REFUSED, never assumed idle" {
+  needy
+  export CC_RELOGIN_PS_BIN="$D/no-such-ps"
+  run "$C" next3
+  [ "$status" -eq 2 ]
+  echo "$output" | grep -q 'UNKNOWN'
+}
+
+# ---- --dry-run ------------------------------------------------------------------------------
+
+@test "--dry-run: gate + plan, exit 0, mutates nothing, releases the lock" {
+  needy
+  run "$C" next3 --dry-run
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'nothing mutated'
+  [ ! -f "$D/claude-calls" ]            # no `claude auth login`
+  [ ! -f "$D/security-calls" ]          # no keychain read
+  [ ! -f "$D/authbrowser-calls" ]       # no browser
+  run python3 -c 'import fcntl,sys;f=open(sys.argv[1],"w");fcntl.flock(f,fcntl.LOCK_EX|fcntl.LOCK_NB)' "$LOCK"
+  [ "$status" -eq 0 ]                   # the lock was released on exit
+}
+
+@test "--dry-run --json: result is 'dry-run', never a false 'proven'" {
+  needy
+  run "$C" next3 --dry-run --json
+  [ "$status" -eq 0 ]
+  [ "$(echo "$output" | jq -r .result)" = "dry-run" ]
+  [ "$(echo "$output" | jq -r .dry_run)" = "true" ]
+  [ "$(echo "$output" | jq -r '.plan | length')" -eq 2 ]
+}
+
+# ---- phase 1 + verify-by-effect ---------------------------------------------------------------
+
+@test "phase 1 + moved deadline → PROVEN (0)" {
+  mk_info all true; mk_creds
+  mk_fresh 1 logged-out "2026-08-01T00:00:00Z"
+  mk_fresh 2 ok         "2026-09-01T00:00:00Z"
+  run "$C" next3
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'deadline moved'
+}
+
+@test "phase 1 passes the account's scopes VERBATIM and its own config dir" {
+  mk_info all true; mk_creds
+  mk_fresh 1 logged-out "2026-08-01T00:00:00Z"; mk_fresh 2 ok "2026-09-01T00:00:00Z"
+  run "$C" next3
+  [ "$status" -eq 0 ]
+  grep -q 'argv=auth login' "$D/claude-calls"
+  grep -qx "CLAUDE_CODE_OAUTH_SCOPES=user:profile user:inference" "$D/claude-calls"
+  grep -qx "CLAUDE_CONFIG_DIR=$CFG" "$D/claude-calls"
+  grep -q 'RT_LEN=2[0-9]' "$D/claude-calls"
+}
+
+@test "report-only success (deadline did NOT move) with --no-browser → UNVERIFIED (5)" {
+  mk_info all true; mk_creds
+  mk_fresh 1 logged-out "2026-08-01T00:00:00Z"
+  mk_fresh 2 ok         "2026-08-01T00:00:00Z"     # binary said "Login successful." — deadline stuck
+  run "$C" next3 --no-browser
+  [ "$status" -eq 5 ]
+  echo "$output" | grep -q 'did NOT move'
+}
+
+@test "report-only success while auth is still broken → UNVERIFIED (5)" {
+  mk_info all true; mk_creds
+  mk_fresh 1 logged-out "2026-08-01T00:00:00Z"; mk_fresh 2 token-invalid "2026-09-01T00:00:00Z"
+  run "$C" next3 --no-browser
+  [ "$status" -eq 5 ]
+  echo "$output" | grep -q "expected 'ok'"
+}
+
+@test "phase 1 never substitutes for phase 2: unmoved deadline escalates (→ 4, not 0/5)" {
+  mk_info all true; mk_creds
+  mk_fresh 1 logged-out "2026-08-01T00:00:00Z"; mk_fresh 2 ok "2026-08-01T00:00:00Z"
+  run "$C" next3
+  [ "$status" -eq 4 ]                   # reached phase 2 rather than declaring victory
+  [ "$(echo "$output" | grep -c .)" -ge 1 ]
+}
+
+@test "§2 tolerance: no login_expires_at anywhere → PROVEN but the gap is named" {
+  mk_info all true; mk_creds
+  mk_fresh 1 logged-out; mk_fresh 2 ok
+  run "$C" next3
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'UNVERIFIABLE'
+}
+
+@test "phase 1 binary failure + --no-browser → HEADLESS-EXHAUSTED (3)" {
+  needy; echo 1 > "$D/claude.rc"
+  run "$C" next3 --no-browser
   [ "$status" -eq 3 ]
-  [[ "$output" == *'"result": "headless-exhausted"'* ]]
-  [[ "$output" == *'"phase_reached": "phase1"'* ]]
+  echo "$output" | grep -q 'phase 1 failed'
 }
 
-@test "an EXPIRED refresh token skips phase 1 — it cannot succeed by construction" {
-  info '{"config_dir":"/tmp/cc-relogin-test-nonexistent-xyz","claude_bin":"/nonexistent/claude","email":"t@e","mailbox":"t@e","dia_profile":"T","dia_profile_dir":"/nonexistent/P","keychain_service":"svc","keychain_account":"tester","oauth_scopes":"a b","keychain_state":"present","has_refresh_token":true,"refresh_token_expired":true}'
-  run "$BIN" next3 --dry-run --json
+@test "no refresh token + --no-browser → HEADLESS-EXHAUSTED (3)" {
+  mk_info all false; mk_fresh 1 logged-out
+  run "$C" next3 --no-browser
+  [ "$status" -eq 3 ]
+  echo "$output" | grep -q 'no refresh token'
+  [ ! -f "$D/claude-calls" ]
+}
+
+@test "keychain item unreadable + --no-browser → HEADLESS-EXHAUSTED (3), no login attempted" {
+  mk_info all true; mk_fresh 1 logged-out          # no creds.json → stub-security exits 44
+  run "$C" next3 --no-browser
+  [ "$status" -eq 3 ]
+  [ ! -f "$D/claude-calls" ]
+}
+
+# ---- phase 2 + error + shape -------------------------------------------------------------------
+
+@test "phase 2 is reached when phase 1 is impossible and a browser is allowed → 4" {
+  mk_info all false; mk_fresh 1 logged-out
+  run "$C" next3
+  [ "$status" -eq 4 ]
+  echo "$output" | grep -qi 'phase 2'
+}
+
+@test "malformed --fresh --json → ERROR (1)" {
+  mk_info all true; echo 'not json' > "$D/fresh.json"
+  run "$C" next3
+  [ "$status" -eq 1 ]
+}
+
+@test "--json emits the frozen result object" {
+  mk_info all true; mk_creds
+  mk_fresh 1 logged-out "2026-08-01T00:00:00Z"; mk_fresh 2 ok "2026-09-01T00:00:00Z"
+  run "$C" next3 --json
+  [ "$status" -eq 0 ]
+  [ "$(echo "$output" | jq -r .acct)" = "next3" ]
+  [ "$(echo "$output" | jq -r .result)" = "proven" ]
+  [ "$(echo "$output" | jq -r .exit)" = "0" ]
+  [ "$(echo "$output" | jq -r .phase_reached)" = "verify" ]
+  [ "$(echo "$output" | jq -r .before.auth)" = "logged-out" ]
+  [ "$(echo "$output" | jq -r .after.auth)" = "ok" ]
+  [ "$(echo "$output" | jq -r .before.login_expires_at)" = "2026-08-01T00:00:00Z" ]
+  [ "$(echo "$output" | jq -r .after.login_expires_at)" = "2026-09-01T00:00:00Z" ]
+  [ -n "$(echo "$output" | jq -r .detail)" ]
+}
+
+@test "--json on a refusal carries the same shape" {
+  mk_info all true; mk_fresh all ok "2027-01-01T00:00:00Z" 900
+  run "$C" next3 --json
   [ "$status" -eq 2 ]
-  [[ "$output" == *"phase2 (phase 1 cannot succeed)"* ]]
-  # ...whereas a LIVE refresh token plans phase 1 first (cheaper, browser-free)
-  info '{"config_dir":"/tmp/cc-relogin-test-nonexistent-xyz","claude_bin":"/nonexistent/claude","email":"t@e","mailbox":"t@e","dia_profile":"T","dia_profile_dir":"/nonexistent/P","keychain_service":"svc","keychain_account":"tester","oauth_scopes":"a b","keychain_state":"present","has_refresh_token":true,"refresh_token_expired":false}'
-  run "$BIN" next3 --dry-run --json
-  [[ "$output" == *"phase1 then phase2"* ]]
+  [ "$(echo "$output" | jq -r .result)" = "refused" ]
+  [ "$(echo "$output" | jq -r .phase_reached)" = "gate" ]
 }
 
-# ---- the CDP consent gate --------------------------------------------------------------------
-
-@test "CONSENT-GATE (7): a missing port file is distinct from a browser failure" {
-  # phase 1 impossible + browser allowed ⇒ straight to phase 2, where CDP is unreachable.
-  # It must NOT be reported as BROWSER-FAILED: the recovery is a human toggling dia://inspect,
-  # and a wrong code sends the operator looking for the wrong problem.
-  run "$BIN" next3 --json
-  [ "$status" -eq 7 ]
-  [[ "$output" == *'"result": "consent-gate"'* ]]
-  [[ "$output" == *"dia://inspect"* ]]                     # the recovery is named, not implied
-  [[ "$output" == *'"phase_reached": "phase2"'* ]]
+@test "a token in the child's output is redacted out of the result object and the log" {
+  mk_info all true; mk_creds; echo 1 > "$D/claude.rc"
+  mk_fresh 1 logged-out "2026-08-01T00:00:00Z"
+  echo 'oauth failed for sk-ant-oat01-AAAAAAAAAAAAAAAAAAAAAAAA' > "$D/claude.out"
+  run "$C" next3 --no-browser --json
+  [ "$status" -eq 3 ]
+  echo "$output" | grep -q 'REDACTED'
+  ! echo "$output" | grep -q 'sk-ant-oat01-A'
+  ! grep -q 'sk-ant-oat01-A' "$CC_RELOGIN_LOG"
 }
 
-@test "CONSENT-GATE (7): an unreachable port ALSO reads as consent, with the cycle recovery" {
-  printf '59999\n/devtools/browser/deadbeef\n' > "$CC_RELOGIN_DEVTOOLS_PORT_FILE"
-  run "$BIN" next3 --json
-  [ "$status" -eq 7 ]
-  [[ "$output" == *"consent-free"* ]]                      # names the toggle-cycle property
-  # positive control: the verdict came from a REFUSED HANDSHAKE, not from some earlier error that
-  # happens to land on the same code. The stub logs what it was asked to dial, so this also pins
-  # that both lines of the port file were parsed into the address.
-  [ -s "$WS_URL_LOG" ] || false
-  grep -qx 'ws://127.0.0.1:59999/devtools/browser/deadbeef' "$WS_URL_LOG" || false
-}
-
-@test "a missing websocket-client is OUR dependency fault (1), never browser-failed (4)" {
-  # The regression this pins: `import websocket` used to sit ABOVE the port-file check, so an
-  # interpreter without websocket-client turned every phase-2 verdict into browser-failed —
-  # including the two consent-gate cases above, whose real recovery is a human toggling
-  # dia://inspect. That is the exact misdirection this file's own docstring argues against, and
-  # it is not hypothetical: `#!/usr/bin/env python3` under launchd resolves /usr/bin/python3,
-  # the one interpreter here WITHOUT the dep. So: remote-debugging-OFF still wins (it is the
-  # operator's real blocker either way), and a genuinely absent dep reports as ERROR naming pip.
-  local poison="$BATS_TEST_TMPDIR/wspoison"
-  mkdir -p "$poison"
-  printf 'raise ImportError("no websocket-client (test)")\n' > "$poison/websocket.py"
-
-  # port file ABSENT ⇒ still the consent gate: a dep fault must not mask the cheaper verdict
-  PYTHONPATH="$poison" run "$BIN" next3 --json
-  [ "$status" -eq 7 ]
-  [[ "$output" == *'"result": "consent-gate"'* ]]
-
-  # port file PRESENT ⇒ the dep is now genuinely load-bearing, and it is reported as ours
-  printf '59999\n/devtools/browser/deadbeef\n' > "$CC_RELOGIN_DEVTOOLS_PORT_FILE"
-  PYTHONPATH="$poison" run "$BIN" next3 --json
-  [ "$status" -eq 1 ]
-  [[ "$output" == *'"result": "error"'* ]]
-  [[ "$output" == *"websocket-client is not installed"* ]]
-  [[ "$output" == *"pip install websocket-client"* ]]      # the remedy is runnable, not implied
-  [[ "$output" == *"NOT a browser failure"* ]]             # and it refuses the wrong attribution
-  [[ "$output" == *'"phase_reached": "phase2"'* ]]
-}
-
-# ---- the JSON contract -----------------------------------------------------------------------
-
-@test "--json: every frozen contract field is present on a terminal verdict" {
-  run "$BIN" next3 --json
-  echo "$output" | python3 -c '
-import json, sys
-d = json.load(sys.stdin)
-for k in ("acct", "result", "exit", "phase_reached", "before", "after", "detail"):
-    assert k in d, k
-assert d["exit"] in range(8), d["exit"]
-assert d["result"] in ("proven","refused","headless-exhausted","browser-failed","unverified",
-                       "fallback-required","consent-gate","error"), d["result"]
-assert set(d["before"]) >= {"auth","has_refresh_token","login_expires_at"}, d["before"]
-print("OK")'
-}
-
-@test "no path prints a traceback — a crash is exit 1 with a one-line reason" {
-  cat > "$STUB" <<'EOF'
-#!/usr/bin/env bash
-echo 'not json at all'
-EOF
-  chmod +x "$STUB"
-  run "$BIN" next3 --json
-  [ "$status" -eq 1 ]
-  [[ "$output" != *"Traceback"* ]]
-  [[ "$output" == *'"result": "error"'* ]]
+@test "exit 7 CONSENT-GATE is retained for consumers but no code path emits it" {
+  [ "$(grep -c 'EXIT_CONSENT_GATE' "$C")" -eq 1 ]     # the definition only — never passed to emit()
+  grep -q '7: "consent-gate"' "$C"
 }
