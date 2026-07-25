@@ -131,3 +131,40 @@ short, `/handoff` with this doc as the contract. Rationale recorded here per Ses
 - **Reaper disposition:** `safeguard-blocked` is surfaced, never reaped; originator notified
   (firedBy), IDL row written; autorecover OFF by default (helper not invoked).
 - **Board:** `cc-blockers` renders a safeguard row; empty when none.
+
+## Status — LANDED (2026-07-25)
+
+All five components implemented + bats-tested, each an atomic commit, gate `bats tests/` green:
+
+| # | Component | Commit | Tests |
+|---|-----------|--------|-------|
+| C1 | `bin/cc-classify` — `safeguard-blocked` cause | `f0cf468` | +8 in `cc-classify.bats` (52 total) |
+| C2 | `bin/cc-reaper` — surface disposition | `7507dc6` | +5 in `cc-reaper.bats` (70 total) |
+| C3 | `scripts/handoff-fire.sh` — brief persistence | `e4de989` | +2 in `fire-engagement.bats` (23 total) |
+| C4 | `bin/cc-recover-safeguard` (new) | `f237f37` | 12 in `cc-recover-safeguard.bats` |
+| C5 | `bin/cc-blockers` (new) | `dbc7646` | 8 in `cc-blockers.bats` |
+
+**C1 verified against the REAL blocked transcript** (`a402c9f3`): idle≥120 → `safeguard-blocked`,
+`blocked_model:"Fable 5"`, refusal captured; idle<120 → `active` (transient tolerance).
+**C4 dry-run verified against the REAL blocked pane** `725A269A`: brief carried verbatim,
+model swap opus≠Fable, sanctioned self-close constructed.
+
+### Implementation decisions / learnings (durable)
+- **Re-fire uses `--no-self-retire`**: the carried brief (persisted `.prompt` or transcript
+  first-user-message) is the *post-trailer* payload — it already holds the original fire's
+  self-retire + notify-back directives, so re-adding would duplicate them. The recovered session
+  self-retires + pings the same originator via the carried directives.
+- **New bins auto-deploy**: `install.sh` globs `"$REPO_DIR"/bin/cc-*` (line ~256) → `cc-recover-safeguard`
+  + `cc-blockers` symlink into `~/.claude/bin/` on the next `install.sh` run. No registration edit needed.
+- **macOS bash 3.2 quirk**: a literal apostrophe (`can't`) inside `"${VAR:-default}"` breaks parsing
+  → build the signature default in a single-quoted var first (`_SG_SIG_DEFAULT`), then reference it.
+- **jq `$arr | index(.)` rebinds `.`** to the array — bind the pane to a named var
+  (`.paneUUID as $pu | … ($seen | index($pu))`) for the new-pane discovery in `--execute`.
+
+### Operator activation (C10 — agent stages, operator runs)
+1. **Deploy the new bins**: run `install.sh` (globs `bin/cc-*` → `~/.claude/bin/`), so `cc-blockers`
+   and `cc-recover-safeguard` are on PATH and the reaper can resolve the recovery helper.
+2. **(Optional) enable auto-recovery**: set `CC_REAPER_SAFEGUARD_AUTORECOVER=1` in the reaper's
+   launchd env ONLY if the desk wants automatic re-fire+close. Default OFF = surface-and-decide.
+Until step 1, detection + originator/desk paging + the board row all work from the repo checkout;
+only the operator-run `cc-blockers` glance and opt-in auto-recovery need the deployed symlinks.
