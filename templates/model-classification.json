@@ -1,6 +1,6 @@
 {
-  "_doc": "Classification of files for claude-bump-models. UPDATE paths get the sweep; PRESERVE paths are skipped (historical claims, research attributions, deprecated-plan records). Globs relative to claude-bump-models' configured roots.",
-  "_last_updated": "2026-04-17",
+  "_doc": "Classification of files for claude-bump-models. UPDATE paths get the literal-ID sweep; PRESERVE paths are skipped (historical claims, research attributions, deprecated-plan records); REVIEW paths hold mixed content — current routing guidance interleaved with historical benchmark/incident citations — so they are NEVER auto-rewritten: the model-upgrade skill walks them with per-line judgment (the scripts ignore this key). Note the sweep only matches full model-ID literals (claude-opus-4-7); prose forms ('Opus 4.7') are invisible to it — REVIEW files are where prose refs live. Globs relative to claude-bump-models' configured roots.",
+  "_last_updated": "2026-06-30",
   "roots": [
     "/Users/chrisren/.claude",
     "/Users/chrisren/Development/reso-management-app",
@@ -19,10 +19,22 @@
     "Development/claude-infrastructure/README.md",
     "Development/claude-infrastructure/agents/*.md"
   ],
+  "review": [
+    ".claude/model-config.yaml",
+    ".claude/rules/research-subagents.md",
+    ".claude/commands/research.md",
+    ".claude/agents/deep-research.md",
+    ".claude/agents/deep-research-sonnet.md",
+    "Development/reso-management-app/.claude/commands/project-pass.md",
+    "Development/reso-management-app/docs/research/CONTEXT_EXHAUSTION_GUARDRAILS.md"
+  ],
   "preserve": [
     "Development/reso-management-app/docs/research/AUTONOMOUS_VISUAL_DESIGN_ARCHITECTURE.md",
     "**/memory/feedback-agent-team-models.md",
     "**/memory/feedback-claude-code-2.1.111-112-regression.md",
+    "**/memory/auto-mode-setup.md",
+    "**/memory/MEMORY.md",
+    "**/team-briefs/routines-v1/platform-scaffolding.md",
     "**/plan-history/**",
     "**/backups/**",
     "**/logs/**",
@@ -35,6 +47,9 @@
     "AUTONOMOUS_VISUAL_DESIGN_ARCHITECTURE.md": "Design Arena Feb 2026 ranking claims are historical facts; rewriting falsifies research record",
     "feedback-agent-team-models.md": "Rule intentionally documents deprecated models (opus-4-6, sonnet-4-6) so future agents recognize which models are banned from Max-plan auto mode — sweeping these refs would strip the pedagogical content",
     "feedback-claude-code-2.1.111-112-regression.md": "Incident memory references specific version histories that must not be rewritten",
+    "auto-mode-setup.md": "Binary-registry doc: documents the cli.js 2.1.114 hardcoded classifier (claude-sonnet-4-6) + decompiled auto-mode allowlist. Facts about the INSTALLED binary — updated only on a verified binary change (decompile / `claude auto-mode config`), never auto-swept on a model release. Sonnet 5 (2026-06-30) did not change the pinned binary's classifier or the auto-mode `sonnet` alias (still resolves to 4.6 at launch).",
+    "MEMORY.md": "Auto-memory index = historical provenance log; model refs in entries are timestamped records ('shipped X using model Y on date Z'). Auto-sweeping model IDs would corrupt the historical record (invariant: never rewrite provenance). Update entries deliberately, not via bump.",
+    "platform-scaffolding.md": "routines-v1 team-brief = completed-work artifact documenting the SHIPPED routine config schema enum (model: haiku-4-5 | sonnet-4-6). Bumping the enum would diverge the brief from the actual shipped code; it is historical. Refresh only alongside a verified schema/code change.",
     "plan-history": "git-backed point-in-time snapshots; preserve as-is",
     "backups": "recovery artifacts from backup-before-write hook",
     "logs / jsonl / tool-results": "session transcripts + telemetry; read-only history"
