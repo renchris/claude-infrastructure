@@ -5,7 +5,7 @@ The build is **complete, RED-proven, and landed**: `scripts/session-lifecycle-sa
 (the safe sweep, 13 RED-proofs incl. all 5 never-reap guarantees), and the effect-verified `bin/cc-teardown`
 actuator. What remains is **activation** — loading the standing loop — **which is C10 (human-only)**: an agent
 must never self-install a daemon that can close sessions. The agent built + tested + wrote this runbook +
-`docs/activation/autonomous-reaper.plist`; **the operator loads it.** The agent NEVER runs `launchctl load`.
+`launchd/com.chrisren.cc-reaper.plist`; **the operator loads it.** The agent NEVER runs `launchctl load`.
 
 ## What it fixes
 
@@ -22,7 +22,7 @@ handed-off lead is detected and closed **unattended, within minutes**, and *noth
 | classify | `bin/cc-classify` | WHY idle → 1 of 7 causes from durable signals | successor/hang precision → the reaper re-checks work-landed + cc-teardown re-gates |
 | decide+act | `bin/cc-reaper` | reap ONLY safe causes, checkpoint-first, dry-run default | a post-classify race → work-landed RE-checked at act-time; abort + WIP checkpointed |
 | actuate | `bin/cc-teardown` | kill+close+**re-observe**, FAIL-LOUD on survivor | a blind 0-list → INDETERMINATE, never false "gone" (the fix) |
-| standing loop | `docs/activation/autonomous-reaper.plist` | fire `cc-reaper sweep --reap` every 5 min | — (this file activates it) |
+| standing loop | `launchd/com.chrisren.cc-reaper.plist` | fire `cc-reaper sweep --reap` every 5 min | — (this file activates it) |
 
 ## Why launchd (not a hook, not the desk loop)
 
@@ -58,7 +58,7 @@ scripts/session-lifecycle-safety-gate.sh          # ⇒ 3 met · 0 failed · 0 N
 cc-reaper sweep                                    # expect: all live sessions → "keep … never-reap cause"
 
 # 2. Install + load the standing loop (C10):
-cp docs/activation/autonomous-reaper.plist ~/Library/LaunchAgents/com.chrisren.cc-reaper.plist
+cp launchd/com.chrisren.cc-reaper.plist ~/Library/LaunchAgents/com.chrisren.cc-reaper.plist
 launchctl load  ~/Library/LaunchAgents/com.chrisren.cc-reaper.plist
 
 # 3. (optional) trigger one sweep immediately instead of waiting for the 5-min interval:
