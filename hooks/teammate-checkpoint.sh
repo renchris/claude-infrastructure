@@ -80,6 +80,40 @@ if [[ -d "$CWD/.git/rebase-merge" || -d "$CWD/.git/rebase-apply" || -f "$CWD/.gi
   exit 0
 fi
 
+# ── Damped GC (audit 09 D-10) ────────────────────────────────────────────────────────────────
+# This hook is the fixed per-tool-call tax (`matcher: ""` = every tool, every session) and it GC'd
+# nothing, unlike memory-nudge.sh:26 (`-mtime +1 -delete`) or completion-assert.sh (`.fired`,
+# `-mtime +7`): 76 orphan cp-*.count files were live and this repo alone exceeded 1000 append-only
+# refs/checkpoints/** refs — a measurable git cost on every ref walk.
+#
+# Damped to at most once/day at ONE fork on the common path: `find` tests existence AND age in a
+# single process, so an already-swept stamp (<1 day) prints its own path and we skip immediately.
+GC_STAMP="$WATCHDOG_DIR/.gc-stamp"
+if [[ -z "$(find "$GC_STAMP" -mtime -1 2>/dev/null)" ]]; then
+  : > "$GC_STAMP" 2>/dev/null || true   # stamp FIRST — a failing sweep must not retry every call
+  # (a) orphan per-session counters — a crashed or reaped teammate never reaches a session-end
+  #     path, so this is the belt for everything session-end misses.
+  find "$WATCHDOG_DIR" -maxdepth 1 -name 'cp-*.count' -mtime +2 -delete 2>/dev/null || true
+  # (b) checkpoint refs — drop anything older than 14 days but ALWAYS keep the newest 3 per member
+  #     (respawn needs a recent snapshot however stale the worktree). Ref names carry a fixed-width
+  #     UTC stamp, so `--sort=-refname` is newest-first per member in a single pass.
+  GC_CUTOFF=$(( $(date -u +%s) - 14 * 86400 ))
+  GC_PREV=""; GC_KEPT=0
+  while IFS=' ' read -r _rn _rd; do
+    [[ -n "$_rn" ]] || continue
+    case "$_rd" in ''|*[!0-9]*) _rd=0 ;; esac
+    _m="${_rn#refs/checkpoints/}"; _m="${_m%/*}"
+    if [[ "$_m" != "$GC_PREV" ]]; then GC_PREV="$_m"; GC_KEPT=0; fi
+    GC_KEPT=$((GC_KEPT + 1))
+    (( GC_KEPT <= 3 )) && continue
+    [[ "$_rd" -ge "$GC_CUTOFF" ]] && continue
+    git -C "$CWD" update-ref -d "$_rn" 2>/dev/null && log "gc: dropped $_rn"
+  done <<EOF
+$(git -C "$CWD" for-each-ref --sort=-refname --format='%(refname) %(committerdate:unix)' refs/checkpoints/ 2>/dev/null)
+EOF
+  log "gc: swept $WATCHDOG_DIR cp-*.count (>2d) + $CWD checkpoint refs (>14d, keep 3/member)"
+fi
+
 # Per-session counter (avoid collisions across parallel teammates)
 COUNTER_FILE="$WATCHDOG_DIR/cp-$SESSION_ID.count"
 COUNT=0
@@ -123,8 +157,10 @@ if [[ -n "$PAYLOAD_MEMBER" ]]; then
 elif [[ -n "$PAYLOAD_TEAM" ]]; then
   # Strip either "wt-<team>-" or "worktree-<team>-" prefix
   MEMBER="$BASENAME"
-  MEMBER="${MEMBER#wt-$PAYLOAD_TEAM-}"
-  MEMBER="${MEMBER#worktree-$PAYLOAD_TEAM-}"
+  # quote the expansion separately: unquoted it is a glob PATTERN, so a team name carrying
+  # *, ?, [ ] would strip the wrong prefix (or none at all)
+  MEMBER="${MEMBER#wt-"$PAYLOAD_TEAM"-}"
+  MEMBER="${MEMBER#worktree-"$PAYLOAD_TEAM"-}"
 else
   # Last-resort fallback: strip prefix + assume single-segment member.
   # For multi-segment conventions, the caller should pass PAYLOAD_TEAM.
