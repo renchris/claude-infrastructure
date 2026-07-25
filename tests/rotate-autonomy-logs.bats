@@ -1,6 +1,7 @@
 #!/usr/bin/env bats
 # rotate-autonomy-logs.sh — size-gated `create`-mode rotation for the unbounded append-only
-# autonomy/audit logs (idl.jsonl + bash-commands.log + bash-execution.log). Rename fat file
+# autonomy/audit logs (idl.jsonl + bash-commands.log + bash-execution.log +
+# teammate-checkpoint.log). Rename fat file
 # aside → recreate empty in place (the per-line `>>` writers reopen the path, zero data loss)
 # → gzip the rotated copy → prune to ROTATE_KEEP. Every assertion derives its expected value
 # from the script's contract, never from the script's own output.
@@ -134,6 +135,31 @@ rot_count() { # <path>
   run bash "$ROT" "$T"                  # T is now 0 bytes → under threshold
   [ "$status" -eq 0 ]
   [ "$(rot_count "$T")" -eq 1 ]         # still just the one rotation
+}
+
+# ── the DEFAULT list IS the contract: an unbounded log that is not in it is bounded by NOTHING.
+#    teammate-checkpoint.log was exactly that case — 13.6 MB / 104k lines accumulating since
+#    2026-04-17, written by a hook registered on PostToolUse with an EMPTY matcher (every tool, every
+#    session) plus Stop, and the only >5MB log outside this list. Asserted BEHAVIOURALLY via a stubbed
+#    HOME, not by grepping the source, so this reds if a path is dropped OR if the list stops being
+#    consulted at all. ──
+@test "default target list covers every unbounded append-only log" {
+  local h="$BATS_TEST_TMPDIR/home"
+  mkdir -p "$h/.claude/autonomy" "$h/.claude/logs"
+  local expected=(
+    "$h/.claude/autonomy/idl.jsonl"
+    "$h/.claude/logs/bash-commands.log"
+    "$h/.claude/logs/bash-execution.log"
+    "$h/.claude/logs/teammate-checkpoint.log"
+  )
+  local f
+  for f in "${expected[@]}"; do mkbytes "$f" 250; done
+  HOME="$h" run bash "$ROT"             # no args, no ROTATE_TARGETS → the DEFAULT list
+  [ "$status" -eq 0 ]
+  for f in "${expected[@]}"; do
+    [ "$(rot_count "$f")" -eq 1 ] || { echo "not rotated by the default list: $f"; false; }
+    [ ! -s "$f" ]                       # and recreated empty in place
+  done
 }
 
 # ── ROTATE_TARGETS env override drives the target list ──
