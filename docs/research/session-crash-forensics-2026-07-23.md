@@ -284,3 +284,141 @@ confirm-close rather than auto-GC. `coordination-abandoned` keeps its own multi-
 `~/.claude/bin/cc-{classify,reaper}` are per-file symlinks into it), so the daemon has run the
 safe code since then; the landing makes it durable. RED-proof: 36/36 cc-classify.bats +
 54/54 cc-reaper.bats.
+
+## 2026-07-25 addendum — hardening the CLASS: it was never just the reaper
+
+The 2026-07-24 fix (`c063ca0`) closed the reaper *instance*. This pass closes the **class**:
+"a session closed itself for no reason." Branch `fix/shutdown-hardening`, based on `origin/main`
+at `0098a41`. Every change below either narrows what can be closed or leaves it unchanged; every
+new guard fails CLOSED on ambiguity; each landed with a `.bats` test seen RED before and green
+after.
+
+### Why the 2026-07-23 pass did not cover it — the durable lesson
+
+The 2026-07-23 pass landed ~20 commits between 00:00 and 03:00 PDT, and **every one of them was
+crash-signal INTEGRITY, not closure PREVENTION**: `lead-crash-watchdog` teardown-marker
+classification (`4d0c85a`, `75283a7`, `7c67321`, `f63e712`); `handoff-fire` teardown markers for
+self-close/recycle (`97db72a`, `8ec9bb7`); `session-end` GC (`b2e8e1f`, `b026894`); `afdca00`
+concluding "tonight's 19 crashes were 0; the version regression is ~92% teardown artifact." Every
+change made the *measurement* more honest and **not one of them could prevent a session from being
+closed.** Worse, by teaching the watchdog to file marker-carrying teardowns as deliberate/benign,
+that pass made the reaper's own closures *more* invisible: a reaper close IS a deliberate teardown,
+so it filed as expected behavior and vanished from the crash signal. The pass answered "were there
+crashes?" (correctly: no) while the operator's symptom was "sessions keep closing" (correctly: yes —
+deliberately, by the reaper). **The lesson: a false-DONE is not a crash. "Is the crash signal
+honest?" and "can anything close a live conversation?" are orthogonal questions; a session-lifecycle
+audit must ask the second, over the whole set of closers, not just the one that paged.**
+
+### The three residual gaps (brief-scoped) — closed
+
+**Gap 1 — the blind-spot self-check mis-counts (`936b857`).** The brief's premise (a live pane not
+registering, Δ+1) did **not** reproduce on disk (2026-07-24 ~15:2x PDT): `cc-reconcile --dry-run`
+accounted for all 18 live panes (17 present + 1 healed, **0 backfilled**) — no unregistered pane
+existed. The real defect was the opposite and durable: `cc-reaper`'s `live_pane_count` and
+`cc-reconcile`'s `live_claude_pids` (the self-check's *independent* truth signal) matched only
+`claude`/`*/claude`/`cli.js` as an interactive argv0, **silently dropping every `claude.exe`** — the
+eval-track (`.claude-183`, claude-next) install's own binary (`…/@anthropic-ai/claude-code/bin/claude.exe`).
+Ground truth: **18 `claude` + 6 `claude.exe`** live procs, but `live_pane_count` reported 18.
+`session-register.sh:63` *does* register `claude.exe` (`claude|claude.exe|claude-*`), so those panes
+were enumerated but the self-check under-counted them — biasing the `live−enum` delta in BOTH
+directions (a false-negative here that desensitizes the blind-spot detector; a false-positive Δ at a
+different session mix, which is what the brief observed). Fix: align both argv scans to the register's
+process-identity definition. Touches **no reap path** (self-check + reconcile only page/backfill).
+*Method note: the brief's Gap-1 hypothesis was a moment-in-time symptom; disk truth reclassified it.*
+
+**Gap 2 — independent second legs for `coordination-abandoned` + `handed-off-lead` (`7c286ea`).**
+The `cc-reaper` stamp belt gated only `finished`/`finished-teammate`. `coordination-abandoned` rested
+on cc-classify's decision alone — and specifically on the §4.7 operator hold being *ordered before*
+the `coordination-abandoned` branch (returns at `cc-classify:404`, before `:440`): load-bearing and
+undefended. `handed-off-lead` rested on the classifier's live-successor finding with no act-time
+re-verify. Each now gets its own leg: `coordination-abandoned` → the reaper re-reads operator adoption
+via `ce_last_interactive_age` (a *separate* implementation from cc-classify's inlined copy, so the two
+legs can't share a bug), fail-closed on an unresolvable transcript; `handed-off-lead` → the reaper
+re-verifies the named successor is *still a live row* in the same classify set at act time. Plus a
+classifier branch-order guard test that fails if §4.7 is moved after (or its early-return removed
+from) the `coordination-abandoned` branch (RED-proven by neutering it). Both legs strictly narrow.
+
+**Gap 3 — suspend-guard: never reap on a sweep that spans machine sleep (`454a711`).** `pmset -g log`
+confirmed the machine sleeps every ~15-17 min on battery (Sleep Service / Maintenance / Clamshell);
+`cc-reaper.log` shows a single sweep spanning **19:37→22:03Z (2h26m)** across a suspend and a 15.5 h
+overnight gap. Across a suspend the classify idle values are untrustworthy (a session idle 9 min
+pre-sleep reads idle 3 h post-wake) AND the settle window bought zero real self-close running-time —
+so a session can be reaped on the first post-wake sweep before the operator (lid just opened) can
+touch it. The guard detects an inter-sweep gap (persisted sweep-end heartbeat) OR an intra-sweep span
+exceeding `CC_REAPER_SUSPEND_S` (900 s, ≫ the ~4 min normal sweep) and reaps nothing that sweep —
+surface/defer only; the next fresh sweep reaps normally. RED-proven with a file-seamed clock (a
+durable value, not an mtime; the classify mock advances it mid-sweep to simulate the intra case).
+
+### The derivation — every closer, not just the reaper (frontier tier)
+
+The mission's core: `cc-reaper` was one closure mechanism; **enumerate every code path that can
+terminate a session and prove operator-adoption protection for each.** Escalated to Fable 5 via
+`/frontier-run` (2 baseline-blind `frontier-derivation` panelists, ~$5-12; fed the mechanism list +
+the "reads WHEN never WHO" failure shape). **Both panels independently converged** — convergence =
+high confidence. Every finding below was re-verified against disk by the lead (not relayed):
+
+| Closer | Predicate | Operator-conversation verdict | Disposition |
+|---|---|---|---|
+| **`hooks/teammate-auto-shutdown.sh` (TeammateIdle)** | clean tree + no busy-marker + reap-guard pass; then modal-suppressed `it2 close -f` + `worktree remove --force` | **VULNERABLE — both panels' #1.** 0 who-check tokens (vs cc-classify 16); reap-guard reads WHEN/WHAT, never WHO. Wired LIVE. | **FIXED `092e823`** |
+| **`scripts/team-orphan-reaper.sh`** | `is_lead_alive` false (no watchdog pidfile ⇒ "assume dead") → `mv` whole team dir incl. live inboxes | **VULNERABLE — both panels' #3.** `leadSessionId` rebound by nothing; a recycle-in-place makes a LIVE team read dead. `:151` pane check "skip for v1". | **FIXED (sibling `24722de`)** |
+| **`hooks/waiting-recycle.sh` Stage-2** | fill ≥ idle threshold; S6 conversation hold = **900 s SOFT** (vs reaper 21600 s) + blind past a 2 MB transcript tail | **VULNERABLE — both panels' #2.** Armed live for 22 desk cwds; `/exit`-recycles the operator's own desk mid-compose. | **CAMPAIGN** (see below) |
+| **cc-classify §4.7 + the new Gap-2 leg + reap-guard R-d — R1** | operator-adoption read from `tail -c 2000000` | **RESIDUAL (panel R1).** >2 MB of records after the operator's prompt evicts it ⇒ hold silently absent ⇒ a stamped adopted worker reaps. | **CAMPAIGN** |
+| **`bin/cc-teardown` (the final actuator)** | G-b done-evidence = any non-empty caller string (selftest passes literal `"x"`) | **VULNERABLE-BY-CALLER (negative space).** The only who-check in the whole stack is cc-classify §4.7; nothing forces a fresh machine verdict at the kill. | **CAMPAIGN** |
+| `bin/cc-reconcile` prune · `scripts/lead-supervisor.sh` · `hooks/lead-crash-watchdog.sh` (pid death) · `hooks/session-end.sh` · `hooks/boundary-handoff.sh` · `scripts/lead-deathwatch.sh` · `scripts/boot-resume.sh` | fail-closed prune / page-only / real pid death / dead-pid GC / advisory-only / kqueue NOTE_EXIT / pre-boot ghosts | **PROTECTED** (both panels; several refuted their own predictions here) | — |
+
+Falsifiable probes the lead ran to confirm (not relay): `grep -c` who-tokens on
+teammate-auto-shutdown.sh + reap-guard.sh = **0/0** (baseline cc-classify = 16); `waiting-recycle.sh`
+`CONV_HOLD_S=900` + `hold soft`; `cc-classify:56` + `context-econ.sh:110` `tail -c 2000000`;
+`team-orphan-reaper.sh:38` "no record — assume dead" + `:151` "skip for v1".
+
+### Derivation fixes landed
+
+**Fix #1 (the CRITICAL one) — operator-adoption hold R-d on the TeammateIdle path (`092e823`).**
+The incident class *verbatim* on a hook the c063ca0 fix never touched. Added guard **R-d** to
+`scripts/reap-guard.sh` (the pluggable reap-decision module — extends its gate without editing the
+hook's close logic, the repo's own C10 pattern), reading operator interaction via
+`ce_last_interactive_age`. A real operator prompt AFTER the spawn brief (excluded via
+`spawn+BRIEF_SLACK`) and within the interactive hold ⇒ DEFER. Fail-closed on an unresolvable
+transcript. Engages only when the hook passes the teammate's `--session-id` (now wired at
+`teammate-auto-shutdown.sh:359`, pinned by a wiring test). RED-proof: `tests/reap-guard.bats`
+(adopted→DEFER, brief-only→REAP, unresolvable→fail-closed, no-sid→back-compat) + 2 inline `--selftest`
+checks (6→8). **This is the single highest-value change in the pass** — it was the unguarded twin of
+the reaper the whole investigation started from.
+
+**Fix #3 — orphan-reaper live-team protection (CONVERGENCE — landed as sibling `24722de`).** A
+*second* session independently reached the same finding and landed the more-thorough fix on
+origin/main first: three-state liveness where a **missing/empty watchdog pidfile is UNKNOWN, not
+"assume dead"** (surfaced + operator-paged, never archived — the common recycle-in-place shape), plus
+a cc-sessions **registry cross-check** (a live session whose cwd sits inside a member worktree OR whose
+name matches a member/lead ⇒ KEEP) and malformed-config/degradation tolerance. This branch's own
+`a8b9fb8` (a `team_has_live_member` **process** witness — an `--agent-name` process for a member ⇒
+KEEP) was **dropped at rebase** as redundant and *slightly less safe* (it still archived the
+no-pidfile case that `24722de` correctly surfaces). Two sessions converging on "a dead lead pid is not
+a dead team" is strong confirmation. **Narrow residual/follow-up:** `24722de`'s registry cross-check
+misses a live-but-**unregistered** teammate process (registration-timing gap) under a dead-lead
+*pidfile*; adding the dropped process-liveness witness as an additional OR-signal to `24722de` closes
+that last edge — filed as a small follow-up, not a mid-rebase merge of two safety-critical fixes.
+
+### Residuals → frontier campaign candidate (recorded in `FRONTIER_HOLES.md`)
+
+Both panels converged on ONE elegant fix for the remaining three (waiting-recycle S6, R1 tail-eviction,
+cc-teardown caller-trust): **a single "who-drove-the-last-turn" / session-ownership oracle** that every
+actuator MUST consult pre-disruption — adoption-hold + fired-stamp + a sticky adoption marker (so
+eviction past the 2 MB tail can't lose it) + composer-unknowable ⇒ hold. It dissolves R1 (sticky
+marker replaces the tail read), #2 (the 900 s-vs-21600 s window collapses to one constant), and the
+caller-trust gap (a machine verdict ≤N-min old required at the kill), and every FUTURE closer inherits
+it. Deliberately NOT point-fixed here: naively hardening waiting-recycle's empty-tail case would
+*deadlock the desk's own self-recycle* (its reason to exist), and a rushed multi-file tail-fallback in
+just-shipped safety code is the exact risk these constraints guard against. **R1 is a known residual in
+the guards shipped this pass** (§4.7, the Gap-2 leg, and reap-guard R-d all read the 2 MB-bounded
+signal) — surfaced here so it is not silently lost. Negative-space items also filed: the consent-free
+`it2 close -f` transport (nobody owns "which closes deserve the modal back"), composer-draft
+invisibility fleet-wide, and `leadSessionId` having no lifecycle owner.
+
+### Ops note
+
+All changed files (`bin/cc-{classify,reaper,reconcile}`, `scripts/reap-guard.sh`,
+`scripts/team-orphan-reaper.sh`, `hooks/teammate-auto-shutdown.sh`) are existing per-file symlinks
+into the shared checkout — landing on the trunk fast-forward deploys them; there is no new tracked
+*runtime* file to link (the new `tests/*.bats` are not deployed). Post-land: verify the symlinks
+resolve to the landed content and exercise the live path.
