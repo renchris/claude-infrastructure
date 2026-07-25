@@ -174,3 +174,11 @@ mkintra() {
   [ "$status" -eq 0 ]
   [ "$(jq '.hooks.SessionStart | length' "$D/e.json")" -eq 1 ]
 }
+
+@test "--apply preserves the original file mode (a 0600 settings.json must not widen to 0644)" {
+  mkintra "$D/m.json"
+  chmod 600 "$D/m.json"
+  run "$S" --apply "$D/m.json"
+  [ "$status" -eq 0 ]
+  [ "$(stat -f '%Lp' "$D/m.json" 2>/dev/null || stat -c '%a' "$D/m.json")" = "600" ]
+}
