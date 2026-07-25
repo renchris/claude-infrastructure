@@ -124,9 +124,40 @@ EOF
   return 0
 }
 
-# ce_last_interactive_age <transcript_path> — echo the age in seconds of the last INTERACTIVE turn,
-# or the empty string when none is visible in the bounded tail (CC_CE_TAIL_BYTES, default 2MB —
-# recency needs the tail only; an interactive turn older than the tail is old enough not to hold).
+# ce_transcript_visible <path> <tail_bytes> — 0 iff at least ONE well-formed JSON object is visible
+# in the same reach the scan below uses (the tail; then the whole file when the file is bigger than
+# the tail window). This is the DISCRIMINATOR behind the three-valued answer of
+# ce_last_interactive_age: a transcript we CAN parse but that holds no operator turn is a FACT
+# ("nobody typed"); a transcript we cannot parse at all is an ABSENCE OF EVIDENCE — and a reap
+# consumer must never read the second as the first.
+ce_transcript_visible() {
+  local p="${1:-}" tb="${2:-2000000}" hit fsz
+  hit="$(tail -c "$tb" "$p" 2>/dev/null | jq -Rr 'fromjson? | objects | "1"' 2>/dev/null | head -1)"
+  [ -n "$hit" ] && return 0
+  fsz="$(wc -c < "$p" 2>/dev/null | tr -d ' ')"; case "$fsz" in ''|*[!0-9]*) fsz=0 ;; esac
+  if [ "$fsz" -gt "$tb" ]; then
+    hit="$(jq -Rr 'fromjson? | objects | "1"' "$p" 2>/dev/null | head -1)"
+    [ -n "$hit" ] && return 0
+  fi
+  return 1
+}
+
+# ce_last_interactive_age <transcript_path> — echo the age in seconds of the last INTERACTIVE turn.
+# THREE-VALUED (2026-07-25 — the empty-answer split). The old contract answered "" for three
+# different worlds — no operator turn, jq missing, unreadable/corrupt transcript — and both reap
+# consumers (bin/cc-reaper's Gap-2 coordination-abandoned leg, scripts/reap-guard.sh R-d) read that
+# one "" as "no adoption" and fell through to REAP. Absence of evidence became evidence of absence
+# on the two legs that back up cc-classify §4.7, whose own rule is stricter ("no readable transcript
+# → active"). So:
+#   "<digits>"    the age in seconds of the last interactive turn (0 when the clock reads backwards)
+#   ""      rc 0  GENUINELY NO OPERATOR TURN — the transcript parsed, nobody typed. A fact.
+#   "unreadable"  rc 2  we could not READ the answer: no path / not a regular file / unreadable /
+#                 no jq / not one well-formed JSON object anywhere in reach. Consumers that gate a
+#                 DESTRUCTIVE act (reap, close, archive) MUST treat this as DEFER — never as "no
+#                 adoption". Advisory consumers (waiting-recycle S6, boundary-handoff wording) already
+#                 sanitize any non-numeric answer to "" and are unaffected by the split.
+# The scan itself stays bounded to the tail (CC_CE_TAIL_BYTES, default 2MB — recency needs the tail
+# only; an interactive turn older than the tail is old enough not to hold).
 #
 # INTERACTIVE (ground-truthed against production transcripts, 2026-07-20):
 #   type=="user" AND isMeta != true AND content is a string (or text blocks with NO tool_result)
@@ -139,9 +170,10 @@ EOF
 #   advisories do not.
 ce_last_interactive_age() {
   local tp="${1:-}" tailb rx ep now
-  { [ -n "$tp" ] && [ -f "$tp" ]; } || { printf ''; return 0; }
-  command -v jq >/dev/null 2>&1 || { printf ''; return 0; }
   tailb="${CC_CE_TAIL_BYTES:-2000000}"
+  # NOT "no operator turn" — we cannot read the file at all. Fail-closed answer, rc 2.
+  { [ -n "$tp" ] && [ -f "$tp" ] && [ -r "$tp" ]; } || { printf 'unreadable'; return 2; }
+  command -v jq >/dev/null 2>&1 || { printf 'unreadable'; return 2; }
   rx="${CC_CE_AUTO_RX:-^<task-notification>|^<local-command-stdout>|^Stop hook feedback:|^\\[Request interrupted|^⟳|^⚑|^⚠}"
   # fromjson? drops the (possibly partial) first tailed line; `objects`/`strings` guard scalar lines
   # so one odd line can never abort the scan (jq runtime errors are per-program, not per-line).
@@ -157,7 +189,16 @@ ce_last_interactive_age() {
       | select($t | test($rx) | not)
       | (.timestamp | strings | sub("\\.[0-9]+Z$"; "Z") | try fromdateiso8601 catch empty)
     ' 2>/dev/null | tail -1)"
-  case "$ep" in ''|*[!0-9]*) printf ''; return 0 ;; esac
+  case "$ep" in
+    ''|*[!0-9]*)
+      # No interactive turn in the answer — but WHICH world? A parseable transcript with no operator
+      # turn is the fact ""; a transcript that yields not one well-formed record (corrupt, truncated,
+      # binary, empty) is "unreadable". Splitting them here is the whole point of the three-valued
+      # contract: only the first may ever license a reap.
+      if ce_transcript_visible "$tp" "$tailb"; then printf ''; return 0; fi
+      printf 'unreadable'; return 2
+      ;;
+  esac
   now="$(date +%s)"
   if [ "$now" -ge "$ep" ]; then printf '%s' $(( now - ep )); else printf '0'; fi
   return 0

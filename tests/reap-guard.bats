@@ -92,6 +92,29 @@ utx() { # <transcript> <ago-seconds> — append a real operator user prompt <ago
   [ "$status" -eq 10 ]
 }
 
+@test "R-d: transcript RESOLVES but is CORRUPT → DEFER (fail-closed — the empty-answer split)" {
+  # Before the 2026-07-25 split, ce_last_interactive_age answered "" for an unreadable transcript
+  # exactly as it does for "nobody typed", so this teammate was REAPED on absence of evidence. The path
+  # RESOLVES here (so :140-143's unresolvable leg never fires) — only the split catches this world.
+  mkgit "$BATS_TEST_TMPDIR/corrupt"                                 # products, clean, past grace
+  export CC_REAP_PROJECT_ROOTS="$BATS_TEST_TMPDIR/proj"; mkdir -p "$BATS_TEST_TMPDIR/proj/slug"
+  printf 'not json at all\nhalf a record {"type":"user"\n\001\002 binary junk\n' \
+    > "$BATS_TEST_TMPDIR/proj/slug/sid-corrupt.jsonl"
+  run "$G" decide --worktree "$BATS_TEST_TMPDIR/corrupt" --member corrupt --spawn-time "$((NOW-3600))" --grace-s 60 --session-id sid-corrupt
+  [ "$status" -eq 10 ]
+  [ "$output" = "DEFER" ]
+  rec="$(find "$CC_REAP_RECORDS_DIR" -name 'reap-corrupt-*.json' | head -1)"
+  [ "$(jq -r '.reason_kind' "$rec")" = "adoption-unreadable" ]      # R-c: the refusal is auditable
+}
+
+@test "R-d: an EMPTY transcript → DEFER (zero records proves nothing about operator presence)" {
+  mkgit "$BATS_TEST_TMPDIR/empty"
+  export CC_REAP_PROJECT_ROOTS="$BATS_TEST_TMPDIR/proj"; mkdir -p "$BATS_TEST_TMPDIR/proj/slug"
+  : > "$BATS_TEST_TMPDIR/proj/slug/sid-empty.jsonl"
+  run "$G" decide --worktree "$BATS_TEST_TMPDIR/empty" --member empty --spawn-time "$((NOW-3600))" --grace-s 60 --session-id sid-empty
+  [ "$status" -eq 10 ]
+}
+
 @test "R-d: no --session-id → hold skipped, existing REAP path intact (back-compat)" {
   mkgit "$BATS_TEST_TMPDIR/nocid"                                   # products, clean, past grace
   run "$G" decide --worktree "$BATS_TEST_TMPDIR/nocid" --member nocid --spawn-time "$((NOW-1000))" --grace-s 60

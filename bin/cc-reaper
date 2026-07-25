@@ -705,6 +705,16 @@ sweep() {
         continue
       fi
       cah_age="$(ce_last_interactive_age "$cah_tj" 2>/dev/null || true)"
+      # 'unreadable' (the 2026-07-25 empty-answer split): the transcript RESOLVED but could not be read
+      # (corrupt / truncated / empty / no jq) — absence of evidence, not "nobody typed". Same fail-closed
+      # disposition as the unresolvable case above; before the split this fell through to reap.
+      if [ "$cah_age" = unreadable ]; then
+        say "  keep   $name [$cause] — cannot prove no operator adoption (transcript unreadable) → surface (fail-closed)"
+        log "belt-refuse $name [$cause] pane=$pane: transcript unreadable (fail-closed)"
+        surfaced=$((surfaced+1)); surfaced_keys="$surfaced_keys$cah_key "
+        handle_surface "$reap" "$cah_key" "$name" "$cause" "$pane" "cannot prove no operator adoption (transcript unreadable) — auto-reap refused; confirm-close if truly abandoned"
+        continue
+      fi
       if [ -n "$cah_age" ] && [ "$cah_age" -lt "$INTERACTIVE_HOLD_S" ] 2>/dev/null; then
         say "  keep   $name [$cause] — operator prompt ${cah_age}s ago (< hold ${INTERACTIVE_HOLD_S}s): operator-adopted, auto-reap refused (Gap-2 leg)"
         log "belt-refuse $name [$cause] pane=$pane: operator prompt ${cah_age}s ago < hold ${INTERACTIVE_HOLD_S}s"

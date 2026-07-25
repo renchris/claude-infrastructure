@@ -810,6 +810,28 @@ EOF
   grep -q 'fail-closed' "$D/reaper.log"
 }
 
+@test "Gap-2 leg: coordination-abandoned whose transcript is CORRUPT → surfaced, never reaped (empty-answer split)" {
+  # The transcript RESOLVES (so the unresolvable leg above never fires) but holds not one well-formed
+  # record. Before the 2026-07-25 split ce_last_interactive_age answered "" — indistinguishable from
+  # "nobody typed" — and this pane was REAPED on absence of evidence.
+  set_desk
+  local sid="c0ffee11-2222-3333-4444-555566667777" pane="F0F02222-1111-4333-8444-555566667777"
+  mkdir -p "$D/proj/slug"; export CC_REAPER_PROJECT_ROOTS="$D/proj"
+  printf 'not json at all\nhalf a record {"type":"user"\n\001\002 binary junk\n' > "$D/proj/slug/$sid.jsonl"
+  cat > "$D/bin/classify" <<EOF
+#!/bin/bash
+jq -nc '[{name:"lead",paneUUID:"$pane",account:"next",cwd:"$D/clean",session_id:"$sid",cause:"coordination-abandoned",idle_s:9999,work_landed:"yes",successor:null,detail:"x"}]'
+EOF
+  chmod +x "$D/bin/classify"; export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  # `[ ! -f … ]`, NOT `! td_called`: bash exempts a `!`-inverted command from errexit, so a MID-test
+  # `! td_called` can never fail a bats test (verified, bats 1.13) — a negative that must BITE has to be
+  # a plain test command or the test's last line.
+  [ ! -f "$D/td-calls" ]                               # never reaped — adoption is UNKNOWN, not absent
+  grep -q 'transcript unreadable (fail-closed)' "$D/reaper.log"
+}
+
 @test "Gap-2 leg: handed-off-lead whose successor is NOT live at act time → auto-reap REFUSED (surfaced)" {
   set_desk
   local pane="D0D02222-1111-4333-8444-555566667777" succ="D5D53333-1111-4333-8444-555566667777"

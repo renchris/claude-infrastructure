@@ -131,12 +131,53 @@ mk_assist()   { printf '{"type":"assistant","message":{"role":"assistant","conte
   age="$(ce_last_interactive_age "$TX")"
   [ -n "$age" ] && [ "$age" -le 70 ]
 }
-@test "recency: missing/empty transcript and no-timestamp lines → empty (never errors)" {
-  [ -z "$(ce_last_interactive_age "$T/absent.jsonl")" ]
-  : > "$TX"; [ -z "$(ce_last_interactive_age "$TX")" ]
+@test "recency: a PARSEABLE transcript with no usable turn → empty (never errors)" {
+  # a well-formed record with no timestamp + one garbage line: the file PARSES, so the answer is the
+  # FACT "" (nobody typed a usable turn) — not the unreadable verdict below.
   printf '{"type":"user","message":{"role":"user","content":"hello"}}\n' >> "$TX"   # no timestamp
   printf 'garbage not json\n' >> "$TX"
-  [ -z "$(ce_last_interactive_age "$TX")" ]
+  run ce_last_interactive_age "$TX"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+}
+
+# ── the EMPTY-ANSWER SPLIT (2026-07-25) ───────────────────────────────────────────────────────────
+# "" used to mean any of {no operator turn, jq missing, unreadable/corrupt transcript}, and both reap
+# consumers (cc-reaper's Gap-2 leg, reap-guard R-d) read that one "" as "no adoption" → fall through
+# to REAP. The contract is now three-valued: "" = a FACT (parsed, nobody typed) · "unreadable" (rc 2)
+# = ABSENCE OF EVIDENCE, which a destructive consumer must treat as DEFER.
+@test "split: a MISSING transcript path → 'unreadable' (rc 2), never '' " {
+  run ce_last_interactive_age "$T/absent.jsonl"
+  [ "$status" -eq 2 ]; [ "$output" = "unreadable" ]
+}
+@test "split: an EMPTY transcript → 'unreadable' (rc 2) — zero records proves nothing about presence" {
+  : > "$TX"
+  run ce_last_interactive_age "$TX"
+  [ "$status" -eq 2 ]; [ "$output" = "unreadable" ]
+}
+@test "split: a CORRUPT transcript (not one well-formed record) → 'unreadable' (rc 2)" {
+  printf 'not json at all\nhalf a line {"type":"user"\n\001\002 binary junk\n' > "$TX"
+  run ce_last_interactive_age "$TX"
+  [ "$status" -eq 2 ]; [ "$output" = "unreadable" ]
+}
+@test "split: no jq → 'unreadable' (rc 2), not the silent '' the reap legs read as no-adoption" {
+  now=$(date +%s); mk_human "$(( now - 30 ))" "operator here"
+  run env PATH=/var/empty /bin/bash -c '. "'"$REPO"'/hooks/lib/context-econ.sh"; ce_last_interactive_age "'"$TX"'"'
+  [ "$status" -eq 2 ]; [ "$output" = "unreadable" ]
+}
+@test "split: THE DISCRIMINATOR PAIR — corrupt-only ⇒ unreadable vs corrupt+one good record ⇒ ''" {
+  printf 'garbage not json\n' > "$TX"
+  run ce_last_interactive_age "$TX"; [ "$output" = "unreadable" ]
+  printf '{"type":"assistant","message":{"role":"assistant","content":[]},"timestamp":"x"}\n' >> "$TX"
+  run ce_last_interactive_age "$TX"; [ "$status" -eq 0 ]; [ -z "$output" ]
+}
+@test "split: the visibility probe reaches PAST the tail window (a big file with a corrupt tail)" {
+  # tail window deliberately tiny: the tail is pure garbage, but the file is larger than the window and
+  # its head holds a well-formed record ⇒ the file IS readable ⇒ "" (fact), not 'unreadable'.
+  printf '{"type":"assistant","message":{"role":"assistant","content":[]},"timestamp":"x"}\n' > "$TX"
+  head -c 400 /dev/zero | tr '\0' 'x' >> "$TX"
+  export CC_CE_TAIL_BYTES=64
+  run ce_last_interactive_age "$TX"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
 }
 @test "recency: CC_CE_AUTO_RX override extends the exclusion set" {
   now=$(date +%s)
