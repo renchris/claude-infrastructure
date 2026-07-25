@@ -160,7 +160,21 @@ for cfg in "$HOME"/.claude-next "$HOME"/.claude-secondary "$HOME"/.claude-tertia
     #    (nothing to wait for), and the session|weekly pre-filter below would DROP it silently
     #    (the pre-2026-07-19 gap). Per P0-8 / I-LIVE-1: surface a class-B packet, never park.
     #    Teammates are lead-owned (their lead's own spend kill carries the packet) — skip.
-    if printf '%s' "$tail_bytes" | grep -qiE "$SPEND_RE"; then
+    #
+    #    SPEND TEXT IS NOT EVIDENCE — REQUIRE THE ENVELOPE (2026-07-25). A bare text match opened
+    #    FALSE class-B packets against two healthy next4 sessions: the limit-recover SKILL
+    #    DESCRIPTION itself contains the example string "Teammate @x failed - You've hit your
+    #    monthly spend limit", and that description rides in the skill_listing attachment of EVERY
+    #    session — so `grep -E "$SPEND_RE"` matches sessions that never hit anything. The transcript
+    #    is JSONL (one record per line), so a genuine kill puts the text and "isApiErrorMessage"[[:space:]]*:[[:space:]]*true
+    #    on the SAME line; the skill-listing attachment never does. That conjunct is the cheap
+    #    structural pre-filter (measured on the 2026-07-25 incident: genuine 3 text lines / 1 with
+    #    envelope; both false sessions 1 text line / 0 with envelope). lr-audit then confirms
+    #    authoritatively, as the session|weekly branch below already does.
+    #    On no confirmation, FALL THROUGH (never `continue`): a short transcript can carry the
+    #    skill-listing text in its tail AND a genuine session|weekly kill, and an unconditional
+    #    continue here shadowed the auto-resume path for it.
+    if printf '%s' "$tail_bytes" | grep -iE "$SPEND_RE" | grep -q '"isApiErrorMessage"[[:space:]]*:[[:space:]]*true'; then
       if head -c 8000 "$tx" 2>/dev/null | grep -q '"agentName"'; then
         if [[ ! -f "$STATE/teammate-skip/$sid" ]]; then
           mkdir -p "$STATE/teammate-skip"; : > "$STATE/teammate-skip/$sid"
@@ -168,11 +182,29 @@ for cfg in "$HOME"/.claude-next "$HOME"/.claude-secondary "$HOME"/.claude-tertia
         fi
         continue
       fi
-      open_spend_packet "$sid" "$acct" "$(cwd_of "$tx")"
-      continue
+      spend_cwd=$(cwd_of "$tx")
+      spend_aj=$(mktemp)
+      python3 "$AUDIT" --config-dir "$cfg" --session "$sid" --cwd "${spend_cwd:-$HOME}" \
+          --json "$spend_aj" --quiet >/dev/null 2>&1 || true
+      spend_ok=$(python3 -c "
+import json,sys
+try: es=json.load(open(sys.argv[1])).get('limit_events',[])
+except Exception: es=[]
+print('1' if any(e.get('kind')=='monthly_spend' for e in es) else '')
+" "$spend_aj" 2>/dev/null); rm -f "$spend_aj"
+      if [[ -n "$spend_ok" ]]; then
+        open_spend_packet "$sid" "$acct" "$spend_cwd"
+        continue
+      fi
+      log "SKIP  $sid ($acct) — spend envelope present but lr-audit found no monthly_spend event; falling through"
     fi
-    # cheap pre-filter: a genuine limit line near the tail (isApiErrorMessage confirmed by lr-audit)
-    printf '%s' "$tail_bytes" | grep -qE "You've hit your (session|weekly) limit" || continue
+    # cheap pre-filter: a genuine limit line near the tail (isApiErrorMessage confirmed by lr-audit).
+    # The envelope conjunct is part of the PRE-filter, not just lr-audit's job (2026-07-25): the
+    # limit-recover skill description quotes "You've hit your session/weekly limit" verbatim and
+    # ships in every session's skill_listing, so the bare text matched universally and paid for an
+    # lr-audit subprocess on EVERY session, EVERY tick. lr-audit still rules on the verdict below.
+    printf '%s' "$tail_bytes" | grep -E "You've hit your (session|weekly) limit" \
+      | grep -q '"isApiErrorMessage"[[:space:]]*:[[:space:]]*true' || continue
     # teammate sessions (implicit-team assignees carry "agentName" on their early
     # records; leads never do) are recovered by their LEAD via the team-aware
     # lr-audit — a bare --resume here would detach them from team semantics

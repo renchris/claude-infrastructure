@@ -35,7 +35,7 @@ todo(){ printf '  ⏳ %-7s %s\n' "$1" "$2"; TODO=$((TODO+1)); }
 SUITE=tests/lr-reset-poller.bats
 POLLER=scripts/limit-recover/lr-reset-poller.sh
 
-echo "limit-reset-safety-gate — never-park-forever bar (LR-a..LR-n registered; RED until $SUITE proves them)"
+echo "limit-reset-safety-gate — never-park-forever bar (LR-a..LR-p registered; RED until $SUITE proves them)"
 echo
 
 if [ ! -f "$POLLER" ]; then
@@ -55,12 +55,14 @@ elif [ ! -f "$SUITE" ]; then
   todo "LR-l" "NOT PROVEN — SPEND IDEMPOTENCY: the class-B spend packet is opened EXACTLY ONCE across N ticks (marker-keyed under spend-packet/) — no per-tick cc-decide spam."
   todo "LR-m" "NOT PROVEN — AUTO FALLBACK: LR_POLLER_SPAWN=auto with the GUI unavailable (osascript window-open fails) → the resume FALLS BACK to tmux rather than logging ERROR and stranding the session — a resume is never silently failed when a headless path exists."
   todo "LR-n" "NOT PROVEN — SPEND TEAMMATE-SKIP: a teammate (agentName) monthly-spend session opens NO packet (recovery is lead-owned; the lead's own spend kill carries the packet) — teammate-skip logged."
+  todo "LR-o" "NOT PROVEN — TEXT IS NOT EVIDENCE: a HEALTHY session whose only limit text is the limit-recover skill description (skill_listing attachment, no isApiErrorMessage envelope) opens NO packet, parks nothing, and is not misfiled as a teammate. RED-provable: the pre-2026-07-25 poller opened a false class-B packet off that text alone (incident: fb1d3fc8 + a402c9f3 on next4)."
+  todo "LR-p" "NOT PROVEN — NO SPEND SHADOWING: a session carrying BOTH the skill-listing text and a genuine reset-bearing session|weekly kill is still PARKED. RED-provable: the spend branch matched the listing text and hit an unconditional 'continue', so the real kill was never evaluated."
 else
   if command -v bats >/dev/null 2>&1; then
     if bats "$SUITE" >/dev/null 2>&1; then
-      ok "LR-a..n" "$SUITE GREEN — detect+ledger, no-fire-before-reset, headroom guard, notify-only default + notify-once, autofire idempotency, runaway cap, kill-switch, outcome records, event-keyed recurrence, headless tmux spawn (LR-j) + auto→tmux fallback (LR-m), monthly-spend class-B packet (LR-k) + idempotency (LR-l) + teammate-skip (LR-n) all proven (fixtures = real transcript bytes; stubs for claude-accounts/osascript/tmux/cc-decide; suite RED-proven against the as-shipped poller: LR-c blind headroom + LR-i forever-skip fired, and LR-j/k RED against the GUI-only + session|weekly-only poller)"
+      ok "LR-a..p" "$SUITE GREEN — detect+ledger, no-fire-before-reset, headroom guard, notify-only default + notify-once, autofire idempotency, runaway cap, kill-switch, outcome records, event-keyed recurrence, headless tmux spawn (LR-j) + auto→tmux fallback (LR-m), monthly-spend class-B packet (LR-k) + idempotency (LR-l) + teammate-skip (LR-n), and the 2026-07-25 false-positive pair — envelope-required detection (LR-o) + no spend-branch shadowing of a real kill (LR-p) — all proven (fixtures = real transcript bytes; stubs for claude-accounts/osascript/tmux/cc-decide; suite RED-proven against the as-shipped poller: LR-c blind headroom + LR-i forever-skip fired, and LR-j/k RED against the GUI-only + session|weekly-only poller)"
     else
-      bad "LR-a..n" "$SUITE RED — a registered limit-reset criterion fails (run: bats $SUITE)"
+      bad "LR-a..p" "$SUITE RED — a registered limit-reset criterion fails (run: bats $SUITE)"
     fi
   else
     bad "LR-*" "bats unavailable — the proof cannot run (install bats-core)"
