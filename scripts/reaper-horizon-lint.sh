@@ -82,7 +82,16 @@ EVIDENCE_GREP='cc-telemetry|cc-registry|CC_TELEMETRY_DIR|CC_REGISTRY_DIR'
 # lead-reconciler.sh + waiting-recycle.sh above. Declared = reviewed (2026-07-25 infra-perfection pass,
 # adopted from the stranded 101ab269; line refs re-derived 2026-07-29 after the singleton/jetsam work,
 # and the +2d sweeps of .daemon / *.death-*.d live in hooks/session-end.sh, which owns that dir's GC).
-DECLARED='bin/cc-context bin/cc-board bin/cc-sessions bin/cc-notify bin/cc-reaper bin/cc-value bin/cc-reconcile hooks/session-register.sh hooks/session-deregister.sh statusline.sh scripts/lead-supervisor.sh scripts/lead-reconciler.sh hooks/waiting-recycle.sh scripts/handoff-fire.sh hooks/lead-crash-watchdog.sh'
+# scripts/scratchpad-reaper.sh READS CC_REGISTRY_DIR (the liveness roster) and `rm -rf`s, so section-3
+# flags it — and unlike the entries above it IS a genuine age reaper, so it belongs here on the merits.
+# What it reaps is NOT supervisor evidence: `/private/tmp/claude-501/<project>/<sessionUUID>/` is the CC
+# harness's DERIVED per-session temp scratchpad (audit 03 §1d rank 1 — 10.67 GB, +810 MB/day, bounded
+# only by reboot). No supervisor, page, or gate reads it; the durable evidence for a session is its
+# transcript + registry row + IDL, none of which this script can touch (it only ever READS the registry,
+# never deletes a row). Its horizon is a LITERAL `-mmin +2880` (48 h = 172,800 s), scored by §1 below —
+# 28× the 6,000 s floor — and liveness (live pid OR a transcript touched inside the horizon) outranks
+# age, so a long-running session's scratchpad survives regardless. Declared = reviewed (2026-07-25).
+DECLARED='bin/cc-context bin/cc-board bin/cc-sessions bin/cc-notify bin/cc-reaper bin/cc-value bin/cc-reconcile hooks/session-register.sh hooks/session-deregister.sh statusline.sh scripts/lead-supervisor.sh scripts/lead-reconciler.sh hooks/waiting-recycle.sh scripts/handoff-fire.sh hooks/lead-crash-watchdog.sh scripts/scratchpad-reaper.sh'
 
 viol=0
 say(){ printf '  %s\n' "$1"; }
