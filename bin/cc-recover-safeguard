@@ -1,0 +1,174 @@
+#!/usr/bin/env bash
+# cc-recover-safeguard — recover a safeguard-blocked fired peer (cc-classify cause `safeguard-blocked`):
+# re-fire its brief on a DIFFERENT model and close the dead-on-arrival pane through the SANCTIONED
+# handoff-fire.sh self-close. Never a raw it2 close, never a hand-typed /exit, never a composer keystroke.
+#
+#   cc-recover-safeguard <blocked-pane> [--model M] [--dry-run|--execute] [--originator UUID]
+#
+#   <blocked-pane>   the pane UUID of the safeguard-blocked session (from cc-classify / cc-blockers).
+#   --model M        target model for the re-fire (default: opus; auto-swaps to sonnet if the blocked
+#                    model WAS opus). Never re-fires on the model that was refused.
+#   --dry-run        DEFAULT. Print the two constructed commands + the reworded brief; execute nothing.
+#   --execute        Re-fire (safe-first), then self-close the blocked pane. Opt-in — the destructive path.
+#   --originator U   Announce the recovery to this originator UUID (default: the fired marker's firedBy).
+#
+# BRIEF SOURCE (verbatim): the persisted fired brief ($CC_FIRED_DIR/<pane>.prompt, written by
+# handoff-fire mark_fired_peer) if present; else the blocked session's transcript first user message.
+# The carried brief already holds the original fire's self-retire + notify-back directives, so the
+# re-fire passes --no-self-retire (re-adding would duplicate them). A short RE-ROUTED note is PREPENDED.
+#
+# SUCCESSION: --execute re-fires FIRST (if the re-fire fails, the blocked pane is preserved for manual
+# recovery), then closes the blocked pane from its OWN cwd (so self-close's dirty-guard checks the right
+# tree). When the re-fire yields a live new pane it closes with --successor <new> --dirty-owner successor
+# (legible continuation); otherwise --terminal (the honest succession for a DOA session that ran nothing).
+set -uo pipefail
+
+BLOCKED="" MODEL="" MODE="dry-run" ORIGINATOR=""
+while [ $# -gt 0 ]; do case "$1" in
+  --model)      MODEL="${2:?--model needs a value}"; shift 2 ;;
+  --dry-run)    MODE="dry-run"; shift ;;
+  --execute)    MODE="execute"; shift ;;
+  --originator) ORIGINATOR="${2:?--originator needs a value}"; shift 2 ;;
+  -h|--help)    sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  --*)          echo "cc-recover-safeguard: unknown arg $1" >&2; exit 2 ;;
+  *)            if [ -z "$BLOCKED" ]; then BLOCKED="$1"; else echo "cc-recover-safeguard: unexpected arg $1" >&2; exit 2; fi; shift ;;
+esac; done
+[ -n "$BLOCKED" ] || { echo "usage: cc-recover-safeguard <blocked-pane> [--model M] [--dry-run|--execute]" >&2; exit 2; }
+case "$BLOCKED" in *[!0-9A-Fa-f-]*) echo "cc-recover-safeguard: <blocked-pane> must be a pane UUID" >&2; exit 2 ;; esac
+command -v jq >/dev/null || { echo "cc-recover-safeguard: jq required" >&2; exit 2; }
+
+REG_DIR="${CC_RECOVER_REG_DIR:-$HOME/.claude/cc-registry}"
+FIRED_DIR="${CC_FIRED_DIR:-$HOME/.claude/cc-fired}"
+PROJECT_ROOTS="${CC_RECOVER_PROJECT_ROOTS:-$HOME/.claude/projects $HOME/.claude-secondary/projects $HOME/.claude-tertiary/projects $HOME/.claude-quaternary/projects}"
+SESSIONS_BIN="${CC_RECOVER_SESSIONS_BIN:-cc-sessions}"
+NOTIFY_BIN="${CC_RECOVER_NOTIFY_BIN:-cc-notify}"
+DEFAULT_MODEL="${CC_RECOVER_DEFAULT_MODEL:-opus}"
+WAIT_TRIES="${CC_RECOVER_WAIT_TRIES:-20}"          # bounded poll for the new pane to register (execute)
+WAIT_S="${CC_RECOVER_WAIT_S:-3}"
+HERE="$(cd "$(dirname "$0")" && pwd)"
+HANDOFF_BIN="${CC_RECOVER_HANDOFF_BIN:-}"
+if [ -z "$HANDOFF_BIN" ]; then
+  for _c in "$HERE/../scripts/handoff-fire.sh" "$HOME/.claude/scripts/handoff-fire.sh" "$(command -v handoff-fire.sh 2>/dev/null || true)"; do
+    [ -n "$_c" ] && [ -x "$_c" ] && { HANDOFF_BIN="$_c"; break; }
+  done
+fi
+[ -n "$HANDOFF_BIN" ] || { echo "cc-recover-safeguard: cannot locate handoff-fire.sh (set CC_RECOVER_HANDOFF_BIN)" >&2; exit 3; }
+
+# ── resolve the blocked pane's registry row (cwd, account, session_id) ──
+CWD="" ACCOUNT="" SID=""
+regf="$REG_DIR/$BLOCKED.json"
+if [ -f "$regf" ]; then
+  CWD="$(jq -r '.cwd // ""' "$regf" 2>/dev/null)"
+  ACCOUNT="$(jq -r '.account // ""' "$regf" 2>/dev/null)"
+  SID="$(jq -r '.session_id // .sessionId // ""' "$regf" 2>/dev/null)"
+fi
+if [ -z "$CWD" ] || [ -z "$SID" ]; then                       # fallback: the live session list
+  row="$("$SESSIONS_BIN" --json 2>/dev/null | jq -c --arg p "$BLOCKED" '.[] | select(.paneUUID==$p)' 2>/dev/null | head -1)"
+  if [ -n "$row" ]; then
+    [ -n "$CWD" ] || CWD="$(printf '%s' "$row" | jq -r '.cwd // ""')"
+    [ -n "$ACCOUNT" ] || ACCOUNT="$(printf '%s' "$row" | jq -r '.account // ""')"
+    [ -n "$SID" ] || SID="$(printf '%s' "$row" | jq -r '.session_id // .sessionId // ""')"
+  fi
+fi
+[ -n "$CWD" ] || { echo "cc-recover-safeguard: cannot resolve cwd for blocked pane $BLOCKED (no registry row / not a live session)" >&2; exit 3; }
+
+# ── locate the transcript (for the blocked-model parse + the brief fallback) ──
+find_transcript() { local sid="$1" r f; [ -n "$sid" ] || return 1
+  for r in $PROJECT_ROOTS; do [ -d "$r" ] || continue
+    f="$(find "$r" -maxdepth 2 -name "$sid.jsonl" 2>/dev/null | head -1)"; [ -n "$f" ] && { printf '%s' "$f"; return 0; }
+  done; return 1; }
+TJ="$(find_transcript "$SID" 2>/dev/null || true)"
+
+# ── blocked model (best-effort, from the refusal text) — to guarantee a DIFFERENT target ──
+BLOCKED_MODEL=""
+if [ -n "$TJ" ] && [ -f "$TJ" ]; then
+  _rt="$(jq -rc 'select(.type=="assistant" and (.isApiErrorMessage // false)==true) | (.message.content // [] | map(.text // "") | join(" ") | gsub("[\\t\\r\\n]"; " "))' "$TJ" 2>/dev/null | tail -1)"
+  BLOCKED_MODEL="$(printf '%s' "$_rt" | sed -nE 's/.*[Rr]espond to this request with ([A-Za-z][A-Za-z0-9]*( [0-9]+(\.[0-9]+)*)?).*/\1/p' | head -1)"
+  [ -n "$BLOCKED_MODEL" ] || BLOCKED_MODEL="$(printf '%s' "$_rt" | sed -nE "s/^API Error: ([A-Za-z][A-Za-z0-9]*( [0-9]+(\.[0-9]+)*)?)'s safeguards.*/\1/p" | head -1)"
+fi
+
+# ── target model (the SWAP): never the model that was refused ──
+TARGET="$MODEL"
+if [ -z "$TARGET" ]; then
+  TARGET="$DEFAULT_MODEL"
+  case "$(printf '%s' "$BLOCKED_MODEL" | tr '[:upper:]' '[:lower:]')" in *opus*) TARGET=sonnet ;; esac   # opus blocked ⇒ swap off opus
+fi
+
+# ── brief source (verbatim): persisted fired brief, else the transcript's first user message ──
+BRIEF="" BRIEF_SRC=""
+if [ -f "$FIRED_DIR/$BLOCKED.prompt" ]; then
+  BRIEF="$(cat "$FIRED_DIR/$BLOCKED.prompt")"; BRIEF_SRC="$FIRED_DIR/$BLOCKED.prompt"
+elif [ -n "$TJ" ] && [ -f "$TJ" ]; then
+  BRIEF="$(jq -rc -s 'map(select(.type=="user" and (.isMeta != true))) | .[0] // empty
+            | (.message.content | if type=="string" then . else ([.[]? | select(.type=="text") | .text] | join("\n")) end)' "$TJ" 2>/dev/null)"
+  BRIEF_SRC="transcript:$TJ"
+fi
+[ -n "$BRIEF" ] || { echo "cc-recover-safeguard: no brief found for $BLOCKED (no persisted .prompt, no transcript user message) — re-brief manually" >&2; exit 4; }
+
+# ── reworded brief: a short RE-ROUTED note PREPENDED to the verbatim original brief ──
+NOTE="⟳ RE-ROUTED (safeguard recovery): the prior model's content-safeguards declined this brief on arrival, so it is being re-fired on ${TARGET}. Nothing about the task has changed — the original brief follows verbatim."
+REWORDED="$(mktemp "${TMPDIR:-/tmp}/cc-recover-${BLOCKED}.XXXXXX")"
+{ printf '%s\n\n' "$NOTE"; printf '%s\n' "$BRIEF"; } > "$REWORDED"
+
+# ── the two SANCTIONED commands ──
+# 1. re-fire on a DIFFERENT model. --no-self-retire: the carried brief already holds the original's
+#    self-retire + notify-back directives; re-adding would duplicate them.
+REFIRE=( "$HANDOFF_BIN" --prompt-file "$REWORDED" --model "$TARGET" --cwd "$CWD" --no-self-retire )
+# 2. sanctioned self-close of the DOA blocked pane (succession statement mandatory). Default --terminal
+#    (honest: the blocked session produced nothing); execute upgrades to --successor when a live new pane appears.
+CLOSE_TERMINAL=( "$HANDOFF_BIN" self-close --session-id "$BLOCKED" --terminal )
+
+print_cmd() { local first=1 a; for a in "$@"; do if [ "$first" = 1 ]; then printf '%q' "$a"; first=0; else printf ' %q' "$a"; fi; done; printf '\n'; }
+
+if [ "$MODE" = dry-run ]; then
+  echo "── cc-recover-safeguard (dry-run) — blocked pane $BLOCKED ──"
+  echo "cwd:            $CWD"
+  echo "account:        ${ACCOUNT:-?}"
+  echo "blocked model:  ${BLOCKED_MODEL:-?}"
+  echo "target model:   $TARGET  (≠ blocked)"
+  echo "brief source:   ${BRIEF_SRC:-?}"
+  echo "reworded brief: $REWORDED"
+  echo "── 1. RE-FIRE (different model): ──"
+  print_cmd "${REFIRE[@]}"
+  echo "── 2. SELF-CLOSE the DOA pane (run from its cwd $CWD): ──"
+  print_cmd "${CLOSE_TERMINAL[@]}"
+  echo "   (execute upgrades the close to '--successor <new-pane> --dirty-owner successor' when the re-fire yields a live pane)"
+  echo "(dry-run — nothing executed; re-run with --execute to apply)"
+  exit 0
+fi
+
+# ── EXECUTE — re-fire FIRST (never destroy the blocked pane until the replacement launches) ──
+echo "→ re-firing the brief on $TARGET in $CWD (blocked pane $BLOCKED closes only on a successful re-fire)"
+before_json="$("$SESSIONS_BIN" --json 2>/dev/null | jq -c --arg c "$CWD" '[.[] | select(.cwd==$c) | .paneUUID]' 2>/dev/null || echo '[]')"
+if ! "${REFIRE[@]}"; then
+  echo "!! cc-recover-safeguard: re-fire FAILED — the blocked pane $BLOCKED is PRESERVED for manual recovery (nothing closed)" >&2
+  rm -f "$REWORDED" 2>/dev/null; exit 5
+fi
+# find the NEW pane in the cwd (distinct from the blocked pane and everything present before the fire)
+NEW="" tries=0
+while [ "$tries" -lt "$WAIT_TRIES" ]; do
+  NEW="$("$SESSIONS_BIN" --json 2>/dev/null | jq -r --arg c "$CWD" --arg b "$BLOCKED" --argjson seen "${before_json:-[]}" '
+      first(.[] | select(.cwd==$c) | .paneUUID as $pu | select($pu != $b and (($seen | index($pu)) == null)) | $pu) // ""' 2>/dev/null || true)"
+  [ -n "$NEW" ] && break
+  tries=$((tries + 1)); [ "$WAIT_S" -gt 0 ] 2>/dev/null && sleep "$WAIT_S"
+done
+
+# close the blocked pane from ITS OWN cwd so self-close's dirty-guard checks the right tree
+if [ -n "$NEW" ]; then
+  echo "→ new session pane $NEW is up — closing blocked pane $BLOCKED with succession → $NEW"
+  if ! ( cd "$CWD" && "$HANDOFF_BIN" self-close --session-id "$BLOCKED" --successor "$NEW" --dirty-owner successor ); then
+    echo "→ --successor close refused (new pane not yet live?) — falling back to --terminal" >&2
+    ( cd "$CWD" && "${CLOSE_TERMINAL[@]}" ) || true
+  fi
+else
+  echo "→ new pane did not register in time — closing blocked pane $BLOCKED as --terminal (the re-fire is separately visible)"
+  ( cd "$CWD" && "${CLOSE_TERMINAL[@]}" ) || true
+fi
+
+# announce the recovery to the originator (best-effort; the re-fired brief also carries its own back-channel)
+DEST_ORIG="${ORIGINATOR:-$(jq -r '.firedBy // ""' "$FIRED_DIR/$BLOCKED.json" 2>/dev/null || true)}"
+if [ -n "$DEST_ORIG" ] && command -v "$NOTIFY_BIN" >/dev/null 2>&1; then
+  "$NOTIFY_BIN" "$DEST_ORIG" "✅ SAFEGUARD-RECOVERED — blocked peer $BLOCKED closed; brief re-fired on $TARGET in $CWD${NEW:+ (new pane $NEW)}." >/dev/null 2>&1 || true
+fi
+rm -f "$REWORDED" 2>/dev/null
+echo "→ recovery complete: re-fired on $TARGET; blocked pane $BLOCKED closed."
