@@ -38,6 +38,33 @@ RESERVED_TOKENS=97000
 INPUT=$(cat)
 OUTPUT=""
 
+# --- ONE payload read (audit 06 §5.2) ---------------------------------------------
+# This script rendered at 0.15-0.37 Hz *per pane* and spent 109 ms of CPU each time, of
+# which the dominant term was **eight separate `echo "$INPUT" | jq` pipelines** — sixteen
+# processes to read six scalars out of one JSON object. They are now one `jq … | @tsv`
+# plus a `read`. The four blocks below consume these variables and are otherwise
+# untouched, so the rendered line is byte-identical (tests/statusline-identity.bats
+# diffs this script's output against the pre-slim version on fixture payloads).
+# The remaining jq calls are the two that genuinely need jq: the telemetry EMIT (it
+# writes JSON) and the memoized pid read from the prior telemetry file.
+# The separator is US (0x1f), NOT a tab. `read` COLLAPSES runs of IFS *whitespace*, so with
+# IFS=$'\t' an absent middle field silently shifts every later field left by one — a payload
+# with no `used_percentage` then read remaining_percentage AS used_percentage and rendered 70%
+# where the real answer was 78%. A non-whitespace IFS keeps empty fields positional.
+PAY_SID=""; PAY_TPATH=""; PAY_EFFORT=""; PAY_USED=""; PAY_REMAINING=""; PAY_WINDOW=""
+if [ -n "$INPUT" ] && command -v jq &>/dev/null; then
+    IFS=$'\x1f' read -r PAY_SID PAY_TPATH PAY_EFFORT PAY_USED PAY_REMAINING PAY_WINDOW <<< "$(
+        printf '%s' "$INPUT" | jq -r '[
+            (.session_id // ""),
+            (.transcript_path // ""),
+            (.effort.level // ""),
+            (.context_window.used_percentage // ""),
+            (.context_window.remaining_percentage // ""),
+            (.context_window.context_window_size // "")
+        ] | map(tostring) | join("\u001f")' 2>/dev/null
+    )"
+fi
+
 # --- Telemetry export (session self-knowledge; SESSION_AUTONOMY_PLAN 2026-07-14) ----
 # Persist the payload's context/identity fields so the SESSION ITSELF (and peers /
 # supervisors / the orchestrator) can read live context % programmatically — /context
@@ -55,11 +82,13 @@ OUTPUT=""
 # quota-join key. Fail-safe: on jq failure the PRIOR good file survives (old `>` truncated
 # it to empty). Best-effort throughout: never blocks rendering.
 if [ -n "$INPUT" ] && command -v jq &>/dev/null; then
-    TDIR=/tmp/cc-telemetry
+    # CC_TELEMETRY_DIR is the seam bin/cc-context, bin/cc-board and bin/cc-value already
+    # honour; the writer was the only side still hardcoding the path.
+    TDIR="${CC_TELEMETRY_DIR:-/tmp/cc-telemetry}"
     mkdir -p "$TDIR" 2>/dev/null
-    _sid=$(echo "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
+    _sid="$PAY_SID"
     if [ -n "$_sid" ]; then
-        _tp=$(echo "$INPUT" | jq -r '.transcript_path // empty' 2>/dev/null)
+        _tp="$PAY_TPATH"
         _cfg="${_tp%%/projects/*}"
         if [ -z "$_cfg" ] || [ "$_cfg" = "$_tp" ]; then _cfg="${CLAUDE_CONFIG_DIR:-}"; fi
         # pid (P9/P3) — the OWNING claude process, so a reader can `kill -0` it. WITHOUT this,
@@ -107,13 +136,33 @@ GLYPH_PREFIX=""
 # worktree folder, show it ONCE (dirty marker folded onto the dir) and drop the
 # duplicate branch segment. Non-worktree checkouts keep the original
 # `DIR (COMMIT)  BRANCH*` format, where dir (repo) and branch are distinct signals.
+#
+# Four git invocations became two (audit 06 §5.2). `git branch --show-current` and the two
+# `git diff --quiet` probes — the latter two each walking the index — collapse into ONE
+# `git status --porcelain=v2`, which reports branch and worktree state together.
+#   · --untracked-files=no  preserves the old semantics exactly (git diff never counted
+#     untracked files as dirty) AND skips the most expensive part of a status walk.
+#   · `1`/`2`/`u` records are the tracked changes the two diffs used to detect: staged,
+#     unstaged, renamed, unmerged. `?`/`!` cannot appear with -uno.
+#   · porcelain v2 says `(detached)` where `--show-current` prints nothing; mapped back.
+# `git rev-parse --short HEAD` STAYS a separate call on purpose: porcelain v2's
+# `# branch.oid` is the full 40-hex, and abbreviating it here would hardcode a length that
+# core.abbrev is free to change — which is exactly the byte-identity this refactor promises.
+# It is also the cheap one: no index walk.
 DIR=$(basename "$(pwd)")
 COMMIT=$(git rev-parse --short HEAD 2>/dev/null)
-BRANCH=$(git branch --show-current 2>/dev/null)
 
+BRANCH=""
 DIRTY=""
-if ! git diff --quiet 2>/dev/null || ! git diff --cached --quiet 2>/dev/null; then
-    DIRTY="*"
+GIT_STATUS=$(git status --porcelain=v2 --branch --no-ahead-behind --untracked-files=no 2>/dev/null)
+if [ -n "$GIT_STATUS" ]; then
+    while IFS= read -r _line; do
+        case "$_line" in
+            '# branch.head '*) BRANCH="${_line#\# branch.head }" ;;
+            '1 '*|'2 '*|'u '*) DIRTY="*" ;;
+        esac
+    done <<< "$GIT_STATUS"
+    [ "$BRANCH" = "(detached)" ] && BRANCH=""
 fi
 
 # A feature branch carries signal; main/master/detached does not.
@@ -147,7 +196,7 @@ fi
 # supports effort; silently absent on older tracks). Live observability for
 # the launcher-injected default and in-session /effort changes.
 if [ -n "$INPUT" ] && command -v jq &>/dev/null; then
-    EFFORT=$(echo "$INPUT" | jq -r '.effort.level // empty' 2>/dev/null)
+    EFFORT="$PAY_EFFORT"
     if [ -n "$EFFORT" ]; then
         # ` · ` separator (matches the effort↔context% delimiter) so all three
         # top-level groups — location, effort, context% — read as uniform, MECE
@@ -181,7 +230,7 @@ if [ -n "$INPUT" ] && command -v jq &>/dev/null; then
         NIDX="$CLAUDE_INSTANCE_N"
     fi
     if [ -z "$NIDX" ]; then
-        TPATH=$(echo "$INPUT" | jq -r '.transcript_path // empty' 2>/dev/null)
+        TPATH="$PAY_TPATH"
         CFG="${TPATH%%/projects/*}"
         if [ -z "$CFG" ] || [ "$CFG" = "$TPATH" ]; then CFG="$CLAUDE_CONFIG_DIR"; fi
         case "$CFG" in
@@ -216,9 +265,9 @@ fi
 # Fallback for older payloads: the window-aware reserved-space ESTIMATE (margins, not
 # precision — the exact effective-context params were never exposed in that era).
 if [ -n "$INPUT" ] && command -v jq &>/dev/null; then
-    USED=$(echo "$INPUT" | jq -r '.context_window.used_percentage // empty' 2>/dev/null)
-    REMAINING=$(echo "$INPUT" | jq -r '.context_window.remaining_percentage // empty' 2>/dev/null)
-    WINDOW=$(echo "$INPUT" | jq -r '.context_window.context_window_size // empty' 2>/dev/null)
+    USED="$PAY_USED"
+    REMAINING="$PAY_REMAINING"
+    WINDOW="$PAY_WINDOW"
 
     if [ -n "$USED" ] && [ "$USED" != "null" ]; then
         PCT="${USED%%.*}"                              # /context-parity display
