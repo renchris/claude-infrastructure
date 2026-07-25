@@ -61,7 +61,7 @@ fi
 # S-2 is a PRECONDITION and it is checkable today: the supervisor reads telemetry + the registry, both of
 # whose reapers were found erasing evidence. A supervisor on a spine that deletes its own evidence reports
 # "all clear" into a fire. So: the evidence-separation suites must be green BEFORE b is built.
-if bash scripts/telemetry-e2e.sh >/dev/null 2>&1 && ./scripts/p8-e2e.sh >/dev/null 2>&1; then
+if bash scripts/telemetry-e2e.sh >/dev/null 2>&1 && ./scripts/p8-e2e.sh >/dev/null 2>&1; then  # e2e:reviewed-hermetic (audit 08 S3, 2026-07-25 — both sandbox in mktemp, no live ~/.claude writes)
   ok  "S-2" "evidence separation proven upstream (telemetry-e2e + p8-e2e green) — the spine no longer deletes its own evidence"
 else
   bad "S-2" "evidence-separation suites are NOT green — do not build the supervisor on a spine that erases what it must detect"
