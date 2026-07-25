@@ -36,15 +36,14 @@ One entrypoint over the 4-account fleet. The mechanism is `~/bin/claude-accounts
    - Column set is FIXED — both reset columns AND `login expires` present in EVERY row,
      absolute first.
    - **`login expires` is a COLUMN, not a flag** (operator directive 2026-07-24: "we don't
-     show the next login required in the table?"). It was first shipped as a bullet under the
-     "flags are bullets, never extra columns" rule — wrong call: that rule is for CONDITIONAL
-     flags, and a login deadline is not conditional. Every account always has one, from
-     `login_expires_at`, exactly like the two reset columns. Same class of fact, same
-     treatment. Render it with the same absolute-first rule; a row whose `auth` is
-     `login-required` shows **`⊘ REQUIRED`** instead of a stamp — the deadline is not what
-     is driving it (the grant was rejected, or it has already lapsed), so a future date there
-     would read as "fine until then". Keep the ⚠ bullet as well when a row is inside
-     `login_warn_h`: the column states the fact, the bullet states the action.
+     show the next login required in the table?"). Source `login_expires_at` — the refresh
+     token's OWN expiry, which a refresh does NOT extend, so it is a hard per-account deadline
+     that only an interactive `/login` clears. A column rather than a flag because the
+     bullets-not-columns rule below is for CONDITIONAL flags and this is not conditional:
+     every account always has one, exactly like the two reset columns. Never render it as a
+     quota or a reset — it is neither. A row whose `auth` is `login-required` shows
+     **`⊘ REQUIRED`** instead of a stamp: the deadline is not what drives that row (the grant
+     was rejected, or it already lapsed), so a future date would read as "fine until then".
    - Absolutes beyond ~6 days carry the DATE (`EEE MMM D HH:MM`, e.g. `Sat Jul 18 03:59`) —
      a bare weekday a week out is ambiguous with today.
    - ONE weekly-resets column: the weekly and weekly-Fable buckets reset at the same instant —
@@ -79,16 +78,12 @@ One entrypoint over the 4-account fleet. The mechanism is `~/bin/claude-accounts
      assume 85) · weekly at 100% **LIMITED** · Fable exhausted
      (`route_reasons.fable == "fable-exhausted"`) · `¢` extra-usage credits ON (+ `credits_used`)
      · `auth` ≠ ok · stale/throttled rows per the rule above. Row order = the CLI's own order.
-   - **The login cliff — carry it whenever the CLI does.** Every row has `login_expires_at` /
-     `login_expires_h` / `login_expired`: the refresh token's OWN expiry, which a refresh does
-     NOT extend, so it is a hard per-account deadline that only an interactive `/login` clears.
-     Report any account inside the warn window (`login_warn_h` in the SSOT, default 72h) as a
-     bullet — absolute local time first, then the remaining — and say the fix is
-     `<launcher>` → `/login`. Never present it as a quota or reset number; it is neither.
-     If the ROUTED winner is inside that window, say so on the routing line too: the account is
-     still the correct pick on headroom, but a long session fired onto it outlives its
-     credentials. Do not warn about it on a row already reported as `login-required` — that is
-     the same fact, arrived.
+   - **Login-cliff bullet** (in ADDITION to the column above): any row inside `login_warn_h`
+     (SSOT, default 72h) gets one, naming `<launcher>` → `/login`; and when the ROUTED winner
+     is one, say it on the routing line too — still the correct pick on headroom, but a long
+     session fired onto it outlives its credentials. `login_expired: true` with `auth: ok` is
+     the case to never drop: the stamp lapsed inside the cache TTL, so no other field on that
+     row says so. Skip the bullet on a `login-required` row — it already carries its own.
    - Close with the router footer (`➤ general → X` · `➤ fable → Y`) + the Fable window line.
      When the window is **permanent**, there is no countdown to report — say "permanent",
      never a date-derived time remaining.
@@ -117,9 +112,9 @@ One entrypoint over the 4-account fleet. The mechanism is `~/bin/claude-accounts
      Filter on **`auth_actionable`** (needs an operator action) and **`login_fixable`**
      (an interactive `/login` is what fixes it — excludes `keychain-error` and `probe-error`,
      which are not credential states). Never re-derive either from a list of auth strings:
-     a hand-copied list in `handoff-fire.sh` had already drifted to 3 of 5 states. `probe-error` means that one account's probe
-     raised unexpectedly and was contained; the traceback is in
-     `~/.claude/logs/claude-accounts.log` and the other rows are unaffected.
+     a hand-copied list in `handoff-fire.sh` had already drifted to 3 of 5 states.
+     `probe-error` means that one account's probe raised unexpectedly and was contained; the
+     traceback is in `~/.claude/logs/claude-accounts.log` and the other rows are unaffected.
    - **`stale` with live sessions is NOT a problem** — it is the designed state. The heal is
      deliberately skipped while `k > 0` because the running CC owns the token lifecycle and a
      concurrent refresh could rotate the token out from under it. Report it as benign; do not

@@ -853,3 +853,119 @@ print("OK")
 PY
   [ "$status" -eq 0 ] && [[ "$output" == *OK* ]]
 }
+
+@test "_heal_rejected: 'invalid' must qualify a CREDENTIAL, not any noun in a transport error" {
+  run python3 -c "$LOAD"'
+# the word appears, but about a RESPONSE — demanding an interactive login here would send the
+# operator at a problem that does not exist
+assert ca._heal_rejected("Invalid response from server") is False
+assert ca._heal_rejected("invalid JSON in reply") is False
+assert ca._heal_rejected("Login failed: invalid response, retrying") is False
+# ...and it still catches the credential phrasings, in either word order
+assert ca._heal_rejected("invalid_grant") is True
+assert ca._heal_rejected("Invalid refresh token") is True
+assert ca._heal_rejected("the refresh token is invalid") is True
+assert ca._heal_rejected("invalid credentials") is True
+print("OK")'
+  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]]
+}
+
+@test "refresh_login_countdown: a cached countdown is re-derived, never replayed" {
+  run python3 -c "$LOAD"'
+from datetime import datetime, timezone, timedelta
+now = datetime.now(timezone.utc)
+# what a cache round-trip serves: an absolute stamp (durable) beside an _h frozen at sweep
+# time. The grace path serves this up to cache_grace_s old, and _prev_snapshot ignores the TTL.
+rows = [{"acct": "a", "login_expires_at": (now + timedelta(hours=2)).isoformat(),
+         "login_expires_h": 99.0, "login_expired": False},
+        # lapsed DURING the TTL: the stale row still claims a positive countdown, which is the
+        # boundary --login-status classifies REQUIRED vs EXPIRING on
+        {"acct": "b", "login_expires_at": (now - timedelta(hours=1)).isoformat(),
+         "login_expires_h": 5.0, "login_expired": False},
+        {"acct": "c"}]                                  # no stamp ⇒ untouched, not invented
+ca.refresh_login_countdown(rows)
+assert 1.9 < rows[0]["login_expires_h"] < 2.1, rows[0]   # 99.0 discarded
+assert rows[0]["login_expired"] is False
+assert rows[1]["login_expires_h"] < 0, rows[1]
+assert rows[1]["login_expired"] is True, rows[1]
+assert "login_expires_h" not in rows[2] and "login_expired" not in rows[2], rows[2]
+# the reset countdowns are deliberately NOT touched — they feed the verified router
+rows = [{"acct": "a", "weekly_reset_at": (now + timedelta(hours=3)).isoformat(),
+         "weekly_reset_h": 77.0}]
+ca.refresh_login_countdown(rows)
+assert rows[0]["weekly_reset_h"] == 77.0, rows[0]
+print("OK")'
+  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]]
+}
+
+@test "e2e: a CACHED row has its login countdown re-derived, and --login-status re-classifies" {
+  # The exact regression: login_expires_h is serialized into the shared cache and, replayed
+  # verbatim, a login that lapsed DURING the TTL keeps reporting a positive countdown for the
+  # rest of it. Seeded straight into the cache because that is the only hermetic way to reach
+  # the real binary's post-cache path — the alternative needs a keychain this fixture cannot
+  # own, which is why the first version of this test skipped every row and asserted nothing.
+  python3 - "$CA_BIN" "$CA_CFG" <<'SEED'
+import importlib.machinery, importlib.util, json, sys, time
+from datetime import datetime, timezone, timedelta
+loader = importlib.machinery.SourceFileLoader("ca", sys.argv[1])
+ca = importlib.util.module_from_spec(importlib.util.spec_from_loader("ca", loader))
+loader.exec_module(ca)
+cfg = json.load(open(sys.argv[2]))
+now = datetime.now(timezone.utc)
+rows = [{"acct": "next3", "auth": "ok", "k": 0, "launcher": "claude-next3",
+         "email": "t@e", "dia_profile": "T", "session_pct": 5, "weekly_pct": 10,
+         "fable_pct": 5, "auth_actionable": False, "login_fixable": False,
+         "login_expires_at": (now - timedelta(hours=1)).isoformat(),   # lapsed an hour ago...
+         "login_expires_h": 5.0, "login_expired": False}]              # ...cache still says +5h
+ca.cache_write(cfg, {"ts": time.time(), "cfg_key": ca._cfg_key(cfg), "rows": rows,
+                     "window": {"active": True, "end": "2099-12-31", "permanent": True,
+                                "deadline": None}, "no_heal": False})
+SEED
+  run python3 "$CA_BIN" --json                     # cache HIT — no --fresh
+  [ "$status" -eq 0 ]
+  echo "$output" | python3 -c '
+import json, sys
+r = json.load(sys.stdin)["rows"][0]
+assert r["login_expires_h"] < 0, r["login_expires_h"]     # the replayed 5.0 was discarded
+assert r["login_expired"] is True, r
+print("OK")
+'
+  [ "$status" -eq 0 ]
+  # ...and the verdict follows the corrected number: EXPIRING is what the replayed one gives
+  run python3 "$CA_BIN" --login-status
+  [ "$status" -eq 2 ]
+  [[ "$output" == *REQUIRED* ]]
+  ! [[ "$output" == *EXPIRING* ]]
+}
+
+@test "render: a login that lapsed INSIDE the cache TTL still surfaces (auth is still 'ok')" {
+  run python3 -c "$LOAD"'
+from datetime import datetime, timezone, timedelta
+import io, contextlib
+now = datetime.now(timezone.utc)
+ca.COLOR = False
+def render(h):
+    r = row(acct="next4", auth="ok", launcher="claude-next4", email="e", dia_profile="D",
+            login_expires_at=(now + timedelta(hours=h)).isoformat(), login_expires_h=h,
+            login_expired=h <= 0)
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        ca.render_table([r], cfg, WIN_OPEN, False)
+    return buf.getvalue()
+# inside the warn window ⇒ a warning
+assert "login expires" in render(20.0), render(20.0)
+# LAPSED since the sweep: auth is still "ok" and there is no error, so this row has no other
+# signal at all — the guard that required a POSITIVE countdown dropped precisely this case.
+out = render(-1.0)
+# assert the BULLET specifically, not just the substring: the routing footer below carries
+# the same words, so a loose "login EXPIRED" in out passes even with the bullet suppressed —
+# it did exactly that on the first attempt at this test.
+assert "\u2298 next4 login EXPIRED" in out, out
+assert "claude-next4 \u2192 /login" in out, out
+# ...and it reaches the routing footer too: such a row is still fully routable, so it can WIN
+assert "is the pick, but its login EXPIRED" in out, out
+# comfortably outside the window ⇒ silence (a check that always fires stops being read)
+assert "login exp" not in render(500.0).lower(), render(500.0)
+print("OK")'
+  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]]
+}
