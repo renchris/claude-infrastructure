@@ -48,6 +48,11 @@ Usage:
       the last three are "—" when the verdict is not driven by the deadline.
       The EXIT CODE is the answer, so a hook can gate without parsing:
       0 all clear · 1 a login expires within login_warn_h · 2 action required NOW.
+      Disambiguator: this tool's own hard failures (unreadable SSOT, bad router block) also
+      exit 1, via sys.exit("message") — but they print NOTHING on stdout and a diagnostic on
+      stderr, whereas exit 1 here always prints at least one TSV line. So "exit 1 with empty
+      stdout" is a tool failure, not an expiring login. The collision is fail-SAFE either way:
+      only exit 0 means all-clear, and no failure path can produce it.
   claude-accounts --relogin-info NAME     JSON identity block for the account-relogin skill
   claude-accounts --fresh             bypass the shared cache
   claude-accounts --no-heal           never run the headless heal (pure read-only)
@@ -366,6 +371,9 @@ def heal(cfg, acct, refresh_token, k_live):
 
 
 _HEAL_STATUS_RE = re.compile(r"status code (\d{3})")
+_HEAL_INVALID_RE = re.compile(
+    r"invalid[_ ]?(grant|token|credential|refresh)"      # invalid_grant · "Invalid refresh token"
+    r"|(grant|token|credential)\s+(is\s+)?invalid")      # ...and the reversed phrasing
 
 
 def _heal_rejected(detail):
@@ -387,7 +395,12 @@ def _heal_rejected(detail):
     d = (detail or "").lower()
     if d.startswith("skipped:") or "timed out" in d:
         return False
-    if "invalid_grant" in d or "invalid" in d or "revoked" in d:
+    # "invalid" must qualify a CREDENTIAL, not anything at all. The predecessor tested for a
+    # bare substring, which fires on ordinary transport noise — "Invalid response from server",
+    # "invalid JSON" — and the verdict it now reaches is "your account needs an interactive
+    # login", so a false positive sends the operator at a problem that does not exist. Match
+    # the OAuth error code and the credential nouns; leave every other use of the word alone.
+    if _HEAL_INVALID_RE.search(d) or "revoked" in d:
         return True
     m = _HEAL_STATUS_RE.search(d)
     return bool(m and m.group(1) in ("400", "401", "403"))
@@ -963,6 +976,34 @@ def mark_self(rows, cfg):
     return rows
 
 
+def refresh_login_countdown(rows):
+    """Re-derive login_expires_h/_expired from the ABSOLUTE stamp — ALWAYS after get_data(),
+    for the same reason mark_self is.
+
+    A countdown decays from the instant it is serialized, and these rows are replayed from a
+    shared cache: 90s on the normal path, up to cache_grace_s (600s) on the lock-degrade path,
+    and _prev_snapshot ignores the TTL altogether. So a served login_expires_h is an
+    as-of-the-sweep number, and --login-status classifies REQUIRED vs EXPIRING on exactly that
+    boundary — an account that lapsed during the TTL would still be reported as expiring, with
+    a positive number next to it. This codebase already learned the rule on the reset
+    countdowns (inherit_lastgood re-derives *_reset_h from the stored absolute stamps, and the
+    /accounts readout is forbidden from doing `now + *_reset_h` arithmetic); the absolute
+    stamp is the durable form and the only thing worth trusting after a cache round-trip.
+
+    Deliberately scoped to the login fields. The *_reset_h countdowns have the same staleness,
+    but they FEED THE ROUTER (score_general/score_fable consume weekly_reset_h through
+    horizon()), so re-deriving them would shift scores mid-TTL on a scorer that was verified
+    against the current semantics — a separate change needing its own verification, not a
+    drive-by."""
+    for r in rows:
+        at = r.get("login_expires_at")
+        if at:
+            h = hrs_until(at)
+            r["login_expires_h"] = h
+            r["login_expired"] = h is not None and h <= 0
+    return rows
+
+
 def win_from_json(wj):
     d = None
     if wj.get("deadline"):
@@ -1232,11 +1273,18 @@ def render_table(rows, cfg, win, cached, prev=None):
                           + c(f" · {note or r.get('error', '')}", GRAY, dim=True))
         # The login cliff, with lead time. Suppressed once auth is already login-required —
         # that row's own red bullet is the same message, arrived.
+        # A stamp that lapsed since the sweep is the case with no `auth` signal at all: the row
+        # was probed as ok and its credentials died inside the cache TTL, so nothing else on
+        # this row is going to say so. An earlier `0 < lxh` guard silently dropped exactly that
+        # row — the one moment the warning is no longer a warning.
         lxh = r.get("login_expires_h")
-        if a != "login-required" and lxh is not None and 0 < lxh <= login_warn_h:
-            alerts.append(c("⚠ ", AMBER)
-                          + c(f"{r['acct']} login expires {_fmt_when(r.get('login_expires_at'))}"
-                              f" ({fmt_h(lxh)})", AMBER, bold=True)
+        if a != "login-required" and lxh is not None and lxh <= login_warn_h:
+            gone = lxh <= 0
+            alerts.append(c("⊘ " if gone else "⚠ ", RED if gone else AMBER)
+                          + c(f"{r['acct']} login {'EXPIRED' if gone else 'expires'} "
+                              f"{_fmt_when(r.get('login_expires_at'))}"
+                              + ("" if gone else f" ({fmt_h(lxh)})"),
+                              RED if gone else AMBER, bold=True)
                           + c(" — a refresh does NOT renew it", GRAY)
                           + c(f" · {r['launcher']} → /login", GRAY, dim=True))
         if r.get("stale_quota"):
@@ -1357,12 +1405,15 @@ def render_table(rows, cfg, win, cached, prev=None):
     for lst in (g, f):
         w = lst[0][1] if lst else None
         lxh = w.get("login_expires_h") if w else None
-        if w and lxh is not None and 0 < lxh <= login_warn_h and w["acct"] not in seen:
+        if w and lxh is not None and lxh <= login_warn_h and w["acct"] not in seen:
             seen.add(w["acct"])
+            # Same lapsed-inside-the-TTL case: such a row keeps auth=ok and no error, so it is
+            # still fully routable and can BE the winner. That is the loudest moment to say it.
             print("  " + c("  ⚠ ", AMBER)
-                  + c(f"{w['acct']} is the pick, but its login expires "
-                      f"{_fmt_when(w.get('login_expires_at'))} ({fmt_h(lxh)})"
-                      " — /login first, or a long session outlives its credentials", AMBER))
+                  + c(f"{w['acct']} is the pick, but its login "
+                      + (f"EXPIRED {_fmt_when(w.get('login_expires_at'))}" if lxh <= 0 else
+                         f"expires {_fmt_when(w.get('login_expires_at'))} ({fmt_h(lxh)})")
+                      + " — /login first, or a long session outlives its credentials", AMBER))
     if cached:
         print("  " + c(f"cache ≤{cfg.get('cache_ttl_s', 90)}s old · --fresh for a live sweep",
                        GRAY, dim=True))
@@ -1410,6 +1461,7 @@ def main():
 
     rows, wj, cached, prev = get_data(cfg, fresh=fresh, no_heal=no_heal)
     mark_self(rows, cfg)                          # per-invocation: MUST be after the cache read
+    refresh_login_countdown(rows)                 # ditto — a cached countdown is a stale one
     win = win_from_json(wj)
 
     if "--json" in args:

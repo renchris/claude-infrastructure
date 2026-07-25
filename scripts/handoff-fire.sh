@@ -1064,11 +1064,16 @@ pre_fire_account_sweep() {
   # A CLI too old to emit the field would make the filter match NOTHING, i.e. report a
   # fleet of broken accounts as healthy — silent fail-open, the worst failure this gate has.
   # Name the skew instead, in the same voice as the empty-output degrade just above.
-  if [ "$(printf '%s' "$json" | jq -r '[.rows[] | has("auth_actionable")] | all' 2>/dev/null)" != true ]; then
+  # One jq pass, not two: the skew probe and the filter read the same document, and the sweep
+  # already re-invokes jq per broken account below. SKEW on line 1 when any row lacks the field.
+  broken="$(printf '%s' "$json" | jq -r '
+    if ([.rows[] | has("auth_actionable")] | all) then
+      .rows[] | select(.auth_actionable == true) | [.acct, .auth, (.k // 0)] | @tsv
+    else "SKEW" end' 2>/dev/null || true)"
+  if [ "$broken" = SKEW ]; then
     echo "⚠ pre-fire account sweep: claude-accounts emits no .auth_actionable (version skew) — auth gate SKIPPED (fire proceeds)" >&2
     return 0
   fi
-  broken="$(printf '%s' "$json" | jq -r '.rows[] | select(.auth_actionable == true) | [.acct, .auth, (.k // 0)] | @tsv' 2>/dev/null || true)"
   if [ -z "$broken" ]; then
     echo "→ pre-fire account sweep: ${total:-?}/${total:-?} accounts healthy (or auto-healed)" >&2
     _sweep_write_stamp "$now" ""
