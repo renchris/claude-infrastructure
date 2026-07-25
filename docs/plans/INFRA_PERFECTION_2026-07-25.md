@@ -326,3 +326,41 @@ three-state UNKNOWN (:51-58), waiting-recycle S6 soft (residual → C-SC-1 campa
    stripe-research 6d, jose-resume) — close after review; reboot obviates individually.
 3. Reboot (13d uptime; resets WindowServer/iTerm/swap). Prereq DONE: plists restored+valid;
    boot-resume + resume-sessions cover recovery. Land this pass first.
+
+## Landing attempt — desk 2026-07-25 ~12:40 PDT (AUTHORITATIVE gate diagnosis)
+
+**Status: rebased onto origin/main, but NOT gate-green — the wave was committed but never passed
+a full gate (the prior driver DEADLOCKED before completing; worker reached esc-PARK, which runs
+BEFORE run_gate, masking the gate state). Land is DOUBLY blocked: run_gate RED + esc operator-gate.**
+
+- **Rebase (DONE):** `git rebase origin/main` from `/private/tmp/wt-infra-perfect` — 2 conflicts,
+  both resolved keep-both/superset and rerere-recorded (survive re-rebase): `tests/cc-classify.bats`
+  (safeguard-blocked fixtures ⊕ G1 interactive-lib tests) + `scripts/rotate-autonomy-logs.sh` (branch's
+  13-log DEFAULT_TARGETS subsumes origin's 4-log). Branch = origin/main + 48, clean tree.
+- **esc_scan PARK (operator-gate, unchanged):** destructive-SQL `DELETE FROM session_chunks/
+  chunks_fts/sessions_fts/sessions/file_tracking` (local, rebuildable session-index cache — the
+  retention/GC deliverable, commits 20c165b/5d2bf1d). No desk override exists. Operator land command:
+  narrow `SHIP_LAND_ESC_RE` to exclude `DELETE FROM` (keeps DROP/TRUNCATE/key detection + all other
+  ship-land protections), review the 5 DELETEs, then `/ship`. Systemic gap filed: backlog 97148f9ea7e2
+  (same gate also parks feat/autonomy-100 → shipland-esc-c661813).
+- **run_gate RED (real `ship-land --dry-run` w/ narrowed esc → exit 6):** 1807 ok, 6 not-ok + shellcheck:
+  - shellcheck RED — SC2001×23 (session-index-helpers.sh, session-index-sweep.sh) + SC2015×6
+    (premortem-gate.sh) + SC1090/SC2115/SC2207. PRE-EXISTING debt (origin/main's own files fail the
+    same) — the gate scans the whole changed file, so the wave inherits it. Fix: `.shellcheckrc`
+    (severity=warning OR disable those codes) — a repo-policy call, NOT done unilaterally.
+  - `not ok 738` deploy-parity (on-origin) — deploy-lag coupled: passes from the MAIN checkout, fails
+    from this worktree (branch's tracked runtime files not linked live). Needs operator `install.sh`.
+  - `not ok 991` growth-coverage-lint "SSOT green vs LIVE layer" (BRANCH-NEW e438361) — self-blocking:
+    checks the live layer for the wave's own not-yet-deployed files → can't pass pre-land. Hermeticize.
+  - `not ok 992` growth-coverage-lint "--selftest each failure fires" (BRANCH-NEW) — investigate.
+  - `not ok 64` autonomy-sweep "event horizon 7d ≥ lint floor" (on-origin, 579d21c touched) — config/lint.
+  - `not ok 1457` scratchpad-reaper "horizon -mmin +N ≥ 6000s floor" (BRANCH-NEW e2daa0a) — config/lint.
+  - `not ok 1320` pane-id-lint "live docs corpus clean" (BRANCH-NEW ef34be8) — flags truncated pane-ids
+    in THIS plan doc (52DCAB5E/8D4878D1/99261468) + SAFEGUARD_BLOCKED_VISIBILITY.md:149 (725A269A). Fix:
+    `pane-id-lint:allow` markers (they are historical references, not send targets).
+- **NOT a machine-wide blocker** (earlier hypothesis REFUTED): origin/main lands every ~20min (738
+  passes from the main checkout); 3/6 failing test files are branch-new lints only this branch carries.
+  These are the WAVE'S OWN gate-green debt, not a fleet outage.
+- **Finishing work (named, backlogged — F4-unbounded so NOT auto-driven):** make the wave's own new
+  lints pass (hermeticize 991/738, satisfy 64/992/1457 config, allow-mark 1320 docs) + `.shellcheckrc`
+  policy + operator `install.sh` (738) + operator esc-approval. Then `/ship`. → backlog + board.
