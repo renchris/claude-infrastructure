@@ -42,6 +42,17 @@ ROWS="$(jq -Rn '[ inputs | fromjson? | select(type=="object") ] as $all
 
 if [ "$JSON" = 1 ]; then printf '%s\n' "$ROWS"; exit 0; fi
 
+# Every @tsv cell is padded to a NON-EMPTY, tab/newline-free value before it reaches `read`.
+# Load-bearing, not cosmetic: tab is IFS-*whitespace*, so `IFS=$'\t' read` collapses a run of
+# tabs and ANY empty field shifts every later field LEFT — a row with no .refusal used to slide
+# recover_cmd into the refusal variable and render the RECOVER column blank, i.e. the operator's
+# one-glance board silently dropping the exact command it exists to hand over. (A non-whitespace
+# IFS is NOT the fix — $'\001' does not split at all on macOS bash 3.2.) `//` alone is not enough
+# either: it substitutes for null/false, never for an empty string, so the ""-default on .refusal
+# was the live case. Placeholder is chosen per column so the rendered table is unchanged for every
+# row that HAS the field.
+CELL='def cell(ph): (. // "") | tostring | gsub("[\\t\\r\\n]"; " ") | if . == "" then ph else . end; '
+
 n="$(printf '%s' "$ROWS" | jq '[.[] | select(.kind=="safeguard-blocked")] | length' 2>/dev/null || echo 0)"
 nr="$(printf '%s' "$ROWS" | jq '[.[] | select(.kind=="relogin-blocked")] | length' 2>/dev/null || echo 0)"
 if [ "${n:-0}" = 0 ] && [ "${nr:-0}" = 0 ]; then echo "no safeguard-blocked sessions surfaced"; exit 0; fi
@@ -49,12 +60,12 @@ if [ "${n:-0}" = 0 ] && [ "${nr:-0}" = 0 ]; then echo "no safeguard-blocked sess
 if [ "${n:-0}" != 0 ]; then
   echo "SAFEGUARD-BLOCKED — $n fired peer(s) refused by model safeguards (re-fire with the RECOVER command):"
   printf '%-22s %-18s %-9s %-40s %s\n' SLUG ACCT MODEL REFUSAL RECOVER
-  printf '%s' "$ROWS" | jq -r '.[] | select(.kind=="safeguard-blocked") | [
-      (.name // .pane // "?"),
-      (.account // "?"),
-      (.blocked_model // "?"),
-      ((.refusal // "") | gsub("[\\t\\r\\n]"; " ")),
-      (.recover_cmd // "?")
+  printf '%s' "$ROWS" | jq -r "$CELL"'.[] | select(.kind=="safeguard-blocked") | [
+      ((.name // .pane) | cell("?")),
+      (.account       | cell("?")),
+      (.blocked_model | cell("?")),
+      (.refusal       | cell("-")),
+      (.recover_cmd   | cell("?"))
     ] | @tsv' | while IFS=$'\t' read -r slug acct model refusal cmd; do
       printf '%-22s %-18s %-9s %-40s %s\n' "${slug:0:22}" "${acct:0:18}" "${model:0:9}" "${refusal:0:40}" "$cmd"
     done
@@ -64,11 +75,11 @@ if [ "${nr:-0}" != 0 ]; then
   [ "${n:-0}" != 0 ] && echo
   echo "RELOGIN-BLOCKED — $nr account(s) escalated by cc-relogin-poll (run the RECOVER command):"
   printf '%-10s %-12s %-26s %s\n' ACCT STATE DEADLINE RECOVER
-  printf '%s' "$ROWS" | jq -r '.[] | select(.kind=="relogin-blocked") | [
-      (.acct // .account // "?"),
-      (.state // .reason // "ESCALATED"),
-      (.login_expires_at // .deadline // .when // "?"),
-      (.recover_cmd // "?")
+  printf '%s' "$ROWS" | jq -r "$CELL"'.[] | select(.kind=="relogin-blocked") | [
+      ((.acct // .account)                     | cell("?")),
+      ((.state // .reason)                     | cell("ESCALATED")),
+      ((.login_expires_at // .deadline // .when) | cell("?")),
+      (.recover_cmd                            | cell("?"))
     ] | @tsv' | while IFS=$'\t' read -r acct state when cmd; do
       printf '%-10s %-12s %-26s %s\n' "${acct:0:10}" "${state:0:12}" "${when:0:26}" "$cmd"
     done

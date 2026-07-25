@@ -11,6 +11,27 @@
 # The load-bearing case is §2 version tolerance: the login_expires_* fields are NOT on every build,
 # and a board that cannot see them must say UNKNOWN — a confident wrong "OK" is worse than useless.
 
+# NEGATIVE ASSERTIONS GO THROUGH THESE — never a bare `!`. A bare `! cmd` is a SILENT NO-OP
+# unless it is the final line of a @test: POSIX exempts `!`-inverted pipelines from errexit, so
+# bats' set -e never trips and the assertion is dead (shellcheck SC2314). Probed on this box:
+# `@test { ! true; [ 1 -eq 1 ]; }` PASSES. These helpers are plain simple commands, so a
+# non-zero return aborts the test from ANY position, and they do NOT call `run` — a helper that
+# did would clobber $output/$status for every assertion after it.
+refute_grep() { # <extended-regex> <text> — the pattern must NOT appear
+  if grep -qE -- "$1" <<<"$2"; then
+    echo "refute_grep: pattern '$1' unexpectedly PRESENT in: $2" >&2
+    return 1
+  fi
+  return 0
+}
+refute_glob() { # <glob...> — no matching path may exist (unmatched glob arrives literal ⇒ pass)
+  local g
+  for g in "$@"; do
+    [ -e "$g" ] && { echo "refute_glob: '$g' unexpectedly exists" >&2; return 1; }
+  done
+  return 0
+}
+
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   export CA_BIN="$REPO/bin/claude-accounts"
@@ -123,10 +144,25 @@ sg() { # append a safeguard-blocked row (the pre-existing kind): <ts> <pane> <na
   [ "$status" -ne 0 ]                       # the load-bearing assertion: never 0-with-a-wrong-OK
   [ "$status" -eq 3 ]                       # DETECTION-UNAVAILABLE
   echo "$output" | grep -q 'UNKNOWN'
-  ! echo "$output" | grep -qE '\bOK\b'      # the word OK must not appear anywhere
+  # Assert the STATE COLUMN, not the blob: the §2 warning itself ends "Reporting UNKNOWN, NOT
+  # OK", so a blob-wide `no OK anywhere` check is simply wrong. (It was also DEAD as a bare
+  # non-final `!` — it passed for both reasons at once, which is the whole hazard.)
+  refute_grep '^[a-z0-9]+ +OK ' "$output"   # no account row may render state OK
+  echo "$output" | grep -qE '^next +UNKNOWN '
+  echo "$output" | grep -qE '^next2 +UNKNOWN '
   echo "$output" | grep -q 'DETECTION-UNAVAILABLE'
   echo "$output" | grep -q 'login_expires_h' # names the missing surface (§2)
   echo "$output" | grep -q 'feat/accounts-login-cliff'
+}
+
+@test "UNKNOWN: the machine surface agrees — zero OK rows, every row UNKNOWN" {
+  # The positive form of the assertion above, on the surface a consumer actually parses.
+  seed '[{"acct":"next","auth":"ok"},{"acct":"next2","auth":"healed"}]'
+  run bash -c '"$CA_BIN" --relogin-status --json 2>/dev/null'
+  [ "$status" -eq 3 ]
+  [ "$(echo "$output" | jq '[.rows[] | select(.state=="OK")] | length')" = "0" ]
+  [ "$(echo "$output" | jq '[.rows[] | select(.state=="UNKNOWN")] | length')" = "2" ]
+  [ "$(echo "$output" | jq -r '.state')" = "UNKNOWN" ]
 }
 
 @test "UNKNOWN outranks OK: a partially-blind board never reports all-clear" {
@@ -210,7 +246,7 @@ sg() { # append a safeguard-blocked row (the pre-existing kind): <ts> <pane> <na
   [ "$(echo "$output" | jq -r '.rows[0].state')" = "UNKNOWN" ]
   [ "$(echo "$output" | jq -r '.rows[0].login_expires_at')" = "null" ]
   grep -q 'DETECTION-UNAVAILABLE' "$D/err.txt"
-  ! grep -q 'DETECTION-UNAVAILABLE' <<<"$output"
+  refute_grep 'DETECTION-UNAVAILABLE' "$output"
 }
 
 @test "read-only: a cache hit is served as-is — no re-sweep, no cache rewrite" {
@@ -221,11 +257,58 @@ sg() { # append a safeguard-blocked row (the pre-existing kind): <ts> <pane> <na
   [ "$(cat "$CACHE")" = "$before" ]         # byte-identical ⇒ collect() never ran
 }
 
+@test "read-only: --relogin-status NEVER reaches heal() — a status read must not authenticate" {
+  # Behavioural, not grep-based. heal() shells out to `claude auth login` — a real credential
+  # write — and takes the per-account heal lock, so a status surface that reaches it would
+  # authenticate as a side effect of being LOOKED AT (§0: nothing in this build may
+  # authenticate, refresh, revoke or write a credential). Stub read_creds to return the exact
+  # precondition probe_account heals on (a stale token) and spy on heal().
+  # SELF-VALIDATING: the same stubs under plain --json MUST call heal — otherwise the spy is
+  # wired wrong and a green result would prove nothing at all.
+  rm -f "$CACHE"                      # force a real collect(); a cache hit never probes
+  run python3 - "$CA_BIN" "$CACHE" <<'PY'
+import importlib.machinery, importlib.util, os, sys
+bin_, cache = sys.argv[1], sys.argv[2]
+loader = importlib.machinery.SourceFileLoader("ca", bin_)
+ca = importlib.util.module_from_spec(importlib.util.spec_from_loader("ca", loader))
+loader.exec_module(ca)
+
+calls = []
+ca.heal = lambda *a, **k: (calls.append(a), (False, "stubbed — never actually run"))[1]
+ca.read_creds = lambda cd, kc: ({"accessToken": "t", "refreshToken": "r",
+                                 "expiresAt": 0}, "present")   # expiresAt 0 ⇒ stale ⇒ heal branch live
+ca.fetch_usage = lambda cfg, tok: (None, None)
+
+def drive(argv):
+    calls.clear()
+    try:
+        os.remove(cache)
+    except OSError:
+        pass
+    sys.argv = ["claude-accounts"] + argv
+    try:
+        ca.main()
+    except SystemExit:
+        pass
+    return len(calls)
+
+status_heals = drive(["--relogin-status"])
+json_heals = drive(["--json"])
+sys.stderr.write("status_heals=%d json_heals=%d\n" % (status_heals, json_heals))
+assert status_heals == 0, "--relogin-status invoked heal() — a status read authenticated"
+assert json_heals > 0, "spy never fired even where heal IS reachable — this test proves nothing"
+PY
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'status_heals=0'          # the guarantee
+  refute_grep 'json_heals=0' "$output"               # …and the spy demonstrably fires
+}
+
 @test "plain output always: no ANSI escapes on a machine surface" {
   seed '[{"acct":"next","auth":"ok","login_expires_at":"2026-07-26T00:00:00Z","login_expires_h":12}]'
   FORCE_COLOR=1 run "$CA_BIN" --relogin-status
   [ "$status" -eq 2 ]
-  ! printf '%s' "$output" | grep -q $'\033'
+  refute_grep $'\033' "$output"
+  echo "$output" | grep -q 'ESCALATED'      # positive control: the row really did render
 }
 
 # ── 2. cc-blockers — the class-C relogin row (additive) ────────────────────────────────────────
@@ -289,6 +372,32 @@ sg() { # append a safeguard-blocked row (the pre-existing kind): <ts> <pane> <na
   echo "$output" | grep -qF 'cc-relogin next'
 }
 
+@test "cc-blockers: an EMPTY middle field never shifts recover_cmd out of its column" {
+  # Tab is IFS-*whitespace*, so `IFS=$'\t' read` collapses a run of tabs: any empty field
+  # slides every later field LEFT. Verified raw: 'slug\tacct\tmodel\t\tCMD' parses as
+  # refusal=[CMD] cmd=[] — the operator's board dropping the exact command it exists to hand
+  # over. Both kinds are padded to non-empty cells, so both must survive an empty field.
+  printf '%s\n' '{"ts":"2026-07-25T09:00:00Z","kind":"safeguard-blocked","pane":"P1","name":"peer-1","account":"","blocked_model":"","refusal":"","recover_cmd":"cc-recover-safeguard P1"}' \
+    >> "$CC_REAPER_IDL"
+  printf '%s\n' '{"ts":"2026-07-25T09:10:00Z","kind":"relogin-blocked","acct":"next3","state":"","login_expires_at":"","recover_cmd":"cc-relogin next3 --debug"}' \
+    >> "$CC_REAPER_IDL"
+  run "$C"
+  [ "$status" -eq 0 ]
+  # Each command must arrive WHOLE and in the RECOVER column — i.e. at end of its line.
+  echo "$output" | grep -qE 'cc-recover-safeguard P1$'
+  echo "$output" | grep -qE 'cc-relogin next3 --debug$'
+  refute_grep 'cc-recover-safeguard P1 ' "$output"   # not padded mid-row ⇒ not in REFUSAL
+}
+
+@test "cc-blockers: a field containing a tab/newline cannot break the row either" {
+  printf '%s\n' '{"ts":"2026-07-25T09:00:00Z","kind":"safeguard-blocked","pane":"P2","name":"peer-2","account":"acct","blocked_model":"Fable 5","refusal":"line one\ttabbed\nline two","recover_cmd":"cc-recover-safeguard P2"}' \
+    >> "$CC_REAPER_IDL"
+  run "$C"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qE 'cc-recover-safeguard P2$'
+  [ "$(echo "$output" | grep -c 'peer-2')" -eq 1 ]   # one row, not split across lines
+}
+
 @test "cc-blockers: a relogin row missing optional fields still shows acct + command" {
   printf '%s\n' '{"ts":"2026-07-25T09:00:00Z","kind":"relogin-blocked","acct":"next4","recover_cmd":"cc-relogin next4"}' \
     >> "$CC_REAPER_IDL"
@@ -330,13 +439,13 @@ sg() { # append a safeguard-blocked row (the pre-existing kind): <ts> <pane> <na
   CC_IDL="$D/rot-idl.jsonl" ROTATE_MAX_BYTES=100 HOME="$H" run bash "$ROT"
   [ "$status" -eq 0 ]
   [ "$(wc -c < "$H/.claude/logs/cc-relogin-poll.log" | tr -d ' ')" -eq 50 ]
-  ! ls "$H/.claude/logs/cc-relogin-poll.log".* >/dev/null 2>&1
+  refute_glob "$H/.claude/logs/cc-relogin-poll.log".*
 }
 
 @test "rotation: absent cc-relogin logs are a no-op, never a literal unmatched-glob target" {
   H="$D/home"; mkdir -p "$H/.claude/logs" "$H/.claude/autonomy"
   CC_IDL="$D/rot-idl.jsonl" ROTATE_MAX_BYTES=100 HOME="$H" run bash "$ROT"
   [ "$status" -eq 0 ]
-  ! ls "$H/.claude/logs/cc-relogin"* >/dev/null 2>&1   # no file named after the glob was created
-  echo "$output" | grep -q 'skipped=4'                 # the 4 literal defaults only
+  refute_glob "$H/.claude/logs/cc-relogin"*   # no file named after the literal glob was created
+  echo "$output" | grep -q 'skipped=4'        # the 4 literal defaults only
 }
