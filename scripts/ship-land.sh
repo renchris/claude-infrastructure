@@ -57,11 +57,34 @@
 # <sid>` can recover only own-drops. ship-land stamps land.log with the sid (a
 # post-hoc commit trailer is impossible), and adds the trailer to any commit IT makes.
 #
+# GATE SCOPE (scripts/gate-policy.sh; env SHIP_LAND_GATE_SCOPE overrides it, and a missing or
+# corrupt policy file falls back to `full` — narrowing is never the failure mode):
+#   full    `bats tests/` every land (the pre-scoping behavior; SHIP_LAND_GATE_SCOPE=full is the
+#           KILL SWITCH — byte-identical to before scoping).
+#   shadow  full suite still decides; gate-select.sh runs alongside for observability only.
+#   scoped  run only the suites gate-select.sh maps to the landing range, each as its OWN
+#           `bats <file>` (per-file attribution). Selector says FULL ⇒ full suite; missing or
+#           non-executable selector ⇒ FULL (fail-closed); selects nothing ⇒ lint-only land.
+#           A failing NON-direct suite gets ONE exoneration re-run in a fresh TMPDIR — green on
+#           retry ⇒ logged to postland/flakes.jsonl and the land continues; a DIRECT suite of the
+#           change never gets exonerated (intermittence in changed code is a finding, not a flake).
+#           A scoped run NEVER advances the gate-green marker (it cannot make the full-suite claim
+#           its consumers read it as) — boundary-handoff / wrap-ledger then degrade correctly.
+#   Three more ways scoped degrades to FULL, all fail-closed: a red `gate-select.sh lint` (the
+#   suite map is untrustworthy — but lint NEVER blocks a land), an INERT post-land net (stamps
+#   exist yet the newest green one is older than POSTLAND_MAX_STAMP_AGE_H — absence-is-loud; no
+#   stamps at all = not adopted yet, no guard), and a stale-gate re-round, which hands the
+#   selector a SECOND range (FIRST_BASE..new base) so the union covers what siblings landed
+#   while we gated — the composed tree's only novelty.
+#
 # Env overrides (mostly for tests): SHIP_LAND_SHARED_CHECKOUT · SHIP_LAND_SESSION_BRANCH_RE
 # · SHIP_LAND_ALLOW_SHARED=1 · SHIP_LAND_ESC_RE · SHIP_LAND_DECISIONS_DIR · LAND_LOG ·
 # LAND_LOCK_DIR (see land-lock.sh) · SHIP_LAND_VERIFY_RETRIES (default 2; 0 = single-shot,
 # the pre-T-P9-7 kill switch — one push, one verify, no auto-retry) ·
-# SHIP_LAND_GATE_ROUNDS (default 3; 0 = gate fully in-lock, the pre-optimistic kill switch).
+# SHIP_LAND_GATE_ROUNDS (default 3; 0 = gate fully in-lock, the pre-optimistic kill switch) ·
+# SHIP_LAND_GATE_SCOPE / SHIP_LAND_GATE_POLICY / SHIP_LAND_GATE_SELECT (see GATE SCOPE above) ·
+# POSTLAND_DIR (flake + post-land queue + stamps dir) · POSTLAND_VERIFY=off (skip the post-land
+# spawn) · POSTLAND_STALENESS_GUARD=off · POSTLAND_MAX_STAMP_AGE_H (24) · POSTLAND_STAMP_GLOB.
 #
 # bash 3.2-safe (no declare -A / mapfile; empty-array expansion guarded under `set -u`).
 # `pipefail` load-bearing; NO `set -e`.
@@ -73,6 +96,29 @@ LAND_LOCK="${SCRIPT_DIR}/land-lock.sh"
 LAND_VERIFY="${SCRIPT_DIR}/land-verify.sh"
 STRANDED_SWEEP="${SCRIPT_DIR}/stranded-sweep.sh"
 GATE_MANIFEST="${SCRIPT_DIR}/gate-manifest.sh"
+GATE_SELECT="${SHIP_LAND_GATE_SELECT:-${SCRIPT_DIR}/gate-select.sh}"
+
+# ---- gate scope (committed policy file; env always wins) --------------------
+# Hardcoded `full` fallback: an absent/corrupt policy file degrades SAFE (never narrows).
+GATE_POLICY="${SHIP_LAND_GATE_POLICY:-${SCRIPT_DIR}/gate-policy.sh}"
+# shellcheck source=/dev/null
+[[ -r "$GATE_POLICY" ]] && . "$GATE_POLICY"
+SCOPE="${SHIP_LAND_GATE_SCOPE:-${SHIP_LAND_GATE_SCOPE_DEFAULT:-full}}"
+case "$SCOPE" in
+  full|scoped|shadow) ;;
+  *) echo "✗ ship-land: unknown SHIP_LAND_GATE_SCOPE '$SCOPE' (want full|scoped|shadow)" >&2; exit 2 ;;
+esac
+# What the gate ACTUALLY did. Seeded from the env because the locked phase is a separate
+# process (re-exec'd under land-lock) that, in CAS mode, does not re-run the gate — without the
+# handoff its land.log line would understate a scoped run as n/a. INTERNAL vars, not a UI.
+GATE_EFFECTIVE_FULL="${SHIP_LAND_GATE_EFFECTIVE_FULL:-1}"  # 1 ⇒ full suite PROVED (gate-green may advance)
+SELECTED_N="${SHIP_LAND_SELECTED_N:--1}"                   # suites selected (-1 = n/a: full/shadow run)
+ATTEST_HEAD="?"; ATTEST_BASE="?"; ATTEST_TREE="?"
+# UNION SCOPE: on a stale-gate re-round the composed tree's ONLY novelty is what siblings landed
+# while we gated, so the selector is given that trunk delta as a SECOND range. FIRST_BASE anchors
+# it (the base our first gate ran against); seeded from the env for the in-lock fallback child.
+FIRST_BASE="${SHIP_LAND_FIRST_BASE:-}"
+EXTRA_RANGE=""
 
 ESC_RE_DEFAULT='DROP[[:space:]]+TABLE|DROP[[:space:]]+COLUMN|DROP[[:space:]]+DATABASE|DROP[[:space:]]+SCHEMA|TRUNCATE[[:space:]]+TABLE|DELETE[[:space:]]+FROM|ALTER[[:space:]]+TABLE[[:space:]].+[[:space:]]DROP|-----BEGIN[[:space:]A-Z]*PRIVATE[[:space:]]+KEY'
 # NOTE: auth/session/navigation code lands are ALSO escalation-worthy (operator ruling),
@@ -140,12 +186,23 @@ print(sys.argv[1])
 PY
 }
 
+attest_refs() {  # $1=base — pin the gated/landed IDENTITY for the next attest_land line
+  ATTEST_BASE="${1:-?}"
+  ATTEST_HEAD="$(git rev-parse HEAD 2>/dev/null || echo '?')"
+  ATTEST_TREE="$(git rev-parse 'HEAD^{tree}' 2>/dev/null || echo '?')"
+}
+
 attest_land() {  # $1=verify $2=sweep $3=esc $4=exit — self-attesting land.log line
+  # Schema GROWTH is safe: land.log's only reader is a raw tail. head/base/tree make a line
+  # replayable (which tree was gated) and gate_scope/selected_n make "was this a full-suite
+  # proof?" answerable per land — the denominator flake-rate claims need.
   local log; log="${LAND_LOG:-$HOME/.claude/land.log}"
   mkdir -p "$(dirname "$log")" 2>/dev/null || true
-  printf '{"ts":"%s","tool":"ship-land","repo":"%s","branch":"%s","sid":"%s","verify":"%s","sweep":"%s","esc_scan":"%s","exit":%s}\n' \
+  printf '{"ts":"%s","tool":"ship-land","repo":"%s","branch":"%s","sid":"%s","verify":"%s","sweep":"%s","esc_scan":"%s","exit":%s,"head":"%s","base":"%s","tree":"%s","gate_scope":"%s","selected_n":%s}\n' \
     "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${REPO_ROOT}" "${BRANCH}" "${CLAUDE_CODE_SESSION_ID:-}" \
-    "$1" "$2" "$3" "$4" >> "$log" 2>/dev/null || true
+    "$1" "$2" "$3" "$4" \
+    "${ATTEST_HEAD:-?}" "${ATTEST_BASE:-?}" "${ATTEST_TREE:-?}" "${SCOPE}" "${SELECTED_N:--1}" \
+    >> "$log" 2>/dev/null || true
 }
 
 rollback_clean() {  # T-P9-7: abort any in-progress rebase so ship-land never exits on a wedged tree.
@@ -162,8 +219,79 @@ detect_trunk() {
   printf '%s' "$t"
 }
 
+postland_net_live() {  # 0 = trust the post-land net (or it is not adopted yet) / 1 = INERT
+  # ABSENCE IS LOUD. A scoped land is only safe because the FULL suite is re-proven off the
+  # critical path. If the net HAS run here (stamps exist) but its newest green stamp has gone
+  # cold, the net is inert and this land must NOT narrow. No stamps dir / no green stamp yet ⇒
+  # the net simply is not adopted (the bootstrap land) — never brick that.
+  [[ "${POSTLAND_STALENESS_GUARD:-on}" = "off" ]] && return 0
+  local dir age max newest=0 m p
+  dir="${POSTLAND_DIR:-$HOME/.claude/autonomy/postland}/stamps"
+  [[ -d "$dir" ]] || return 0
+  while IFS= read -r p; do
+    m="$(stat -f %m "$p" 2>/dev/null || stat -c %Y "$p" 2>/dev/null || echo 0)"
+    [[ "$m" -gt "$newest" ]] && newest="$m"
+  done < <(find "$dir" -type f -name "${POSTLAND_STAMP_GLOB:-*green*}" 2>/dev/null)
+  [[ "$newest" -gt 0 ]] || return 0
+  max="${POSTLAND_MAX_STAMP_AGE_H:-24}"
+  age=$(( ( $(date +%s) - newest ) / 3600 ))
+  [[ "$age" -lt "$max" ]] && return 0
+  echo "⚠ gate[scoped]: post-land net appears INERT — newest green stamp is ${age}h old (max ${max}h). Degrading this land to the FULL gate. (kill switch: POSTLAND_STALENESS_GUARD=off)" >&2
+  return 1
+}
+
+run_bats_all() {  # the FULL suite — the ONLY run that earns the gate-green claim
+  echo "→ gate: bats tests/" >&2
+  bats tests/ >&2 || { echo "✗ gate: bats RED" >&2; return 1; }
+  return 0
+}
+
+run_scoped_suite() {  # $1=suite file $2=newline-list of DIRECT suites → 0 green / 1 red
+  # FLAKE EXONERATION (scoped mode only): a suite that fails and then passes on ONE re-run in a
+  # fresh TMPDIR was environmental (tmp collision / load), UNLESS it is a DIRECT suite of this
+  # change — intermittence in code you are landing is a FINDING, not a flake. Never silent: every
+  # exoneration is appended to postland/flakes.jsonl for the flake-rate denominator.
+  local f="$1" direct="$2" td rc1 rc2 fdir log sig
+  # tee (not capture-then-print): the failing run stays LIVE on stderr while its output is kept,
+  # so the ledger can record WHAT failed — a bare "it flaked" line is unactionable.
+  log="$(mktemp)"
+  bats "$f" 2>&1 | tee "$log" >&2; rc1="${PIPESTATUS[0]}"
+  if [[ "$rc1" -eq 0 ]]; then rm -f "$log"; return 0; fi
+  sig="$(grep -m1 -aE '^not ok|Terminated|Killed|signal|timed? ?out' "$log" 2>/dev/null | sed 's/["\]//g' | cut -c1-160)"
+  [[ -z "$sig" ]] && sig="exit $rc1"
+  rm -f "$log"
+  echo "↻ gate[scoped]: $f RED — one exoneration re-run in a fresh TMPDIR…" >&2
+  td="$(mktemp -d)"
+  TMPDIR="$td" bats "$f" >&2; rc2=$?
+  rm -rf "$td" 2>/dev/null || true
+  [[ "$rc2" -ne 0 ]] && { echo "✗ gate: bats RED: $f (failed twice)" >&2; return 1; }
+  if printf '%s\n' "$direct" | grep -qxF -- "$f"; then
+    echo "✗ gate: bats RED: $f — pass-on-retry in a DIRECT suite of this change; intermittence in changed code is a finding, not a flake." >&2
+    return 1
+  fi
+  fdir="${POSTLAND_DIR:-$HOME/.claude/autonomy/postland}"
+  mkdir -p "$fdir" 2>/dev/null || true
+  printf '{"ts":"%s","file":"%s","sha":"%s","phase":"land-gate","outcome":"pass-on-retry","signal":"%s","loadavg":"%s"}\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$f" "$(git rev-parse --short HEAD 2>/dev/null || echo '?')" \
+    "$sig" "$(uptime 2>/dev/null | sed 's/.*averages*: //' | awk -F'[, ]+' '{print $1}')" \
+    >> "$fdir/flakes.jsonl" 2>/dev/null || true
+  echo "✓ gate[scoped]: $f EXONERATED (green on re-run, not a direct suite) — logged to flakes.jsonl" >&2
+  return 0
+}
+
+stamp_gate_green() {  # gate-green asserts "the FULL suite proved THIS tree" — its consumers
+  # (boundary-handoff.sh:122, wrap-ledger.sh:79) read it exactly that way, so a SCOPED run must
+  # leave the marker STALE rather than overstate; stale ⇒ they degrade correctly (abstain / n/a).
+  if [[ "${GATE_EFFECTIVE_FULL:-1}" != "1" ]]; then
+    echo "→ gate[$SCOPE]: gate-green NOT advanced — a scoped run cannot make the full-suite claim." >&2
+    return 0
+  fi
+  git rev-parse HEAD > "$(git rev-parse --git-common-dir)/gate-green" 2>/dev/null || true
+}
+
 run_gate() {  # $1=range → 0 green / 1 red
   local range="$1" p rc=0
+  GATE_EFFECTIVE_FULL=1; SELECTED_N=-1
   local shellfiles=() pyfiles=()
   while IFS= read -r -d '' p; do
     [[ -z "$p" ]] && continue
@@ -188,8 +316,46 @@ run_gate() {  # $1=range → 0 green / 1 red
     python3 -m py_compile "${pyfiles[@]}" >&2 || { echo "✗ gate: py_compile RED" >&2; rc=1; }
   fi
   if [[ -d tests ]] && ls tests/*.bats >/dev/null 2>&1; then
-    echo "→ gate: bats tests/" >&2
-    bats tests/ >&2 || { echo "✗ gate: bats RED" >&2; rc=1; }
+    local sel="" n direct f rbase
+    # UNION SCOPE: FIRST_BASE..<this range's base> is the trunk delta siblings landed since our
+    # FIRST gate — empty on round 1, non-empty on every stale-gate re-round / in-lock fallback /
+    # post-drop re-gate. Derived from the range so all three gate call sites get it for free.
+    rbase="${range%%..*}"
+    if [[ -n "$FIRST_BASE" && "$FIRST_BASE" != "$rbase" ]]; then EXTRA_RANGE="$FIRST_BASE..$rbase"; else EXTRA_RANGE=""; fi
+    if [[ "$SCOPE" != "full" ]]; then
+      if [[ ! -x "$GATE_SELECT" ]]; then
+        echo "⚠ gate[$SCOPE]: selector '$GATE_SELECT' missing/not executable — treating as FULL (fail-closed)." >&2
+        sel="FULL"
+      elif [[ "$SCOPE" = "scoped" ]] && ! "$GATE_SELECT" lint >/dev/null 2>&1; then
+        # A red map lint means the selection is untrustworthy, NOT that the land is bad: force
+        # FULL (~2s of extra proof), never block. Lint red must never be a landing failure.
+        echo "⚠ gate[scoped]: suite-map lint RED — selection untrustworthy; running the FULL gate for this land." >&2
+        sel="FULL"
+      elif [[ "$SCOPE" = "scoped" ]] && ! postland_net_live; then
+        sel="FULL"
+      else
+        sel="$("$GATE_SELECT" "$range" ${EXTRA_RANGE:+"$EXTRA_RANGE"} 2>/dev/null)"
+      fi
+    fi
+    if [[ "$SCOPE" = "shadow" ]]; then
+      if [[ "$sel" = "FULL" ]]; then n="all"; else n="$(printf '%s' "$sel" | grep -c '[^[:space:]]' || true)"; fi
+      echo "→ gate[shadow]: would select $n suites" >&2
+    fi
+    if [[ "$SCOPE" != "scoped" || "$sel" = "FULL" ]]; then
+      run_bats_all || rc=1
+    elif [[ -z "${sel//[[:space:]]/}" ]]; then
+      echo "→ gate[scoped]: selector picked 0 suites — skipping bats (lint-only land)" >&2
+      GATE_EFFECTIVE_FULL=0; SELECTED_N=0
+    else
+      direct="$("$GATE_SELECT" --direct "$range" 2>/dev/null || true)"
+      GATE_EFFECTIVE_FULL=0; SELECTED_N=0
+      while IFS= read -r f; do
+        [[ -z "$f" ]] && continue
+        SELECTED_N=$(( SELECTED_N + 1 ))
+        run_scoped_suite "$f" "$direct" || rc=1
+      done <<< "$sel"
+      echo "→ gate[scoped]: ran $SELECTED_N selected suite(s) — gate-green stays where it was." >&2
+    fi
   fi
   return "$rc"
 }
@@ -209,6 +375,8 @@ unlocked_reconcile_and_gate() {  # $1=trunk $2=dry_run → sets GATE_BASE/GATE_H
   fi
 
   GATE_BASE="$(git rev-parse "origin/$TRUNK")"
+  [[ -z "$FIRST_BASE" ]] && FIRST_BASE="$GATE_BASE"   # round 1 anchors the union scope
+
   if [[ -z "$(git rev-list "$GATE_BASE..HEAD" 2>/dev/null)" ]]; then
     echo "✓ ship-land: nothing to land (origin/$TRUNK already contains HEAD)."
     exit 0
@@ -216,6 +384,10 @@ unlocked_reconcile_and_gate() {  # $1=trunk $2=dry_run → sets GATE_BASE/GATE_H
 
   if ! run_gate "$GATE_BASE..HEAD"; then
     echo "✗ ship-land: GATE RED — not pushing." >&2
+    # Post-fix gate-REDs were invisible in land.log (only the locked phase attested), leaving
+    # flake-rate / gate-health claims without a denominator. Attest the red, then exit.
+    attest_refs "$GATE_BASE"
+    attest_land "n/a" "n/a" "clean" 6
     exit 6
   fi
 
@@ -223,8 +395,9 @@ unlocked_reconcile_and_gate() {  # $1=trunk $2=dry_run → sets GATE_BASE/GATE_H
   # "handoff before auto-compact eats the DoD" advisory only when gate-green == HEAD on a clean tree.
   # Before this, the sole gate-green writers were test fixtures, so boundary abstained 100% in production
   # (the FM1(b) advisory sat inert). Path matches wrap-ledger.sh:79 + boundary-handoff.sh:118 (readers).
-  # Fires on the green path for BOTH --dry-run (proven-green, unpushed) and a real land.
-  git rev-parse HEAD > "$(git rev-parse --git-common-dir)/gate-green" 2>/dev/null || true
+  # Fires on the green path for BOTH --dry-run (proven-green, unpushed) and a real land — but
+  # ONLY when the run proved the FULL suite (stamp_gate_green enforces that).
+  stamp_gate_green
 
   if [[ "$DRY_RUN" = "1" ]]; then
     echo "→ ship-land --dry-run: reconciled onto origin/$TRUNK + gate GREEN; STOPPING before push (no lock taken — a dry run never queues a real land)."
@@ -280,7 +453,7 @@ main_locked() {
       exit 6
     fi
     # P0-1 gate-green producer (see unlocked_reconcile_and_gate for the full rationale).
-    git rev-parse HEAD > "$(git rev-parse --git-common-dir)/gate-green" 2>/dev/null || true
+    stamp_gate_green
 
     if [[ "$DRY_RUN" = "1" ]]; then
       echo "→ ship-land --dry-run: reconciled onto origin/$TRUNK + gate GREEN; STOPPING before push."
@@ -305,6 +478,7 @@ main_locked() {
   local MAX_RETRIES; MAX_RETRIES="${SHIP_LAND_VERIFY_RETRIES:-2}"
   local attempt=0 LANDED_HEAD
 
+  attest_refs "$LAND_BASE"
   LANDED_HEAD="$(git rev-parse HEAD)"
   if ! git push origin "HEAD:$TRUNK" >&2; then
     echo "✗ ship-land: push to origin/$TRUNK REJECTED (non-fast-forward — a sibling beat you inside the window). Re-run /ship to re-fetch+rebase+re-verify. Backup ref intact." >&2
@@ -335,6 +509,7 @@ main_locked() {
       exit 5
     fi
     LAND_BASE="$(git rev-parse "origin/$TRUNK")"
+    attest_refs "$LAND_BASE"
     if [[ -z "$(git rev-list "$LAND_BASE..HEAD" 2>/dev/null)" ]]; then
       echo "✓ ship-land: after reconcile, origin/$TRUNK already contains HEAD — the drop self-healed (a sibling landed our content)."
       attest_land "ok" "n/a" "clean" 0
@@ -345,8 +520,9 @@ main_locked() {
       attest_land "n/a" "n/a" "clean" 6
       exit 6
     fi
-    git rev-parse HEAD > "$(git rev-parse --git-common-dir)/gate-green" 2>/dev/null || true
+    stamp_gate_green
 
+    attest_refs "$LAND_BASE"
     LANDED_HEAD="$(git rev-parse HEAD)"
     if ! git push origin "HEAD:$TRUNK" >&2; then
       # a sibling advanced trunk again inside the retry window — reconcilable. The next loop iteration's
@@ -368,6 +544,20 @@ main_locked() {
   fi
 
   attest_land "ok" "$sweep_field" "clean" 0
+
+  # --- post-land verification (async, detached) ---
+  # A scoped land proved only the selected suites, so the FULL suite is re-proven off the critical
+  # path: queue the landed head and hand it to postland-verify.sh. start_new_session is MANDATORY —
+  # nohup/disown children share our process group and are reaped by the harness's group SIGKILL.
+  # Guarded: absent verifier (or POSTLAND_VERIFY=off) is a no-op, never a land failure.
+  if [[ "${POSTLAND_VERIFY:-on}" != "off" && -x "$SCRIPT_DIR/postland-verify.sh" ]]; then
+    local pdir; pdir="${POSTLAND_DIR:-$HOME/.claude/autonomy/postland}"
+    mkdir -p "$pdir" 2>/dev/null || true
+    printf '%s\n' "$LANDED_HEAD" > "$pdir/queue" 2>/dev/null || true
+    python3 -c 'import subprocess,sys; subprocess.Popen([sys.argv[1],"--run-if-needed"],start_new_session=True)' \
+      "$SCRIPT_DIR/postland-verify.sh" 2>/dev/null || true
+  fi
+
   echo "✓ ship-land: LANDED $(git rev-parse --short "$LANDED_HEAD") → origin/$TRUNK; content-verified; sweep=$sweep_field."
   exit 0
 }
@@ -457,6 +647,8 @@ main_outer() {
   while [[ "$round" -lt "$ROUNDS" ]]; do
     round=$(( round + 1 ))
     unlocked_reconcile_and_gate "$TRUNK" "$DRY_RUN"   # exits on 5/6/dry-run/nothing-to-land
+    export SHIP_LAND_GATE_EFFECTIVE_FULL="$GATE_EFFECTIVE_FULL" SHIP_LAND_SELECTED_N="$SELECTED_N" \
+           SHIP_LAND_FIRST_BASE="$FIRST_BASE"
     "$LAND_LOCK" -- "$SELF" __locked "$TRUNK" "$DRY_RUN" "$GATE_BASE" "$GATE_HEAD"
     rc=$?
     [[ "$rc" -ne 42 ]] && exit "$rc"   # landed (0) or a real failure (incl. land-lock's 75) — propagate
