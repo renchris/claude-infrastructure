@@ -1,0 +1,382 @@
+#!/usr/bin/env python3
+"""cc-authbrowser -- the dedicated per-account Chrome substrate for autonomous re-login.
+
+  cc-authbrowser <acct> --start [--ttl N] [--headless] [--json]
+  cc-authbrowser <acct> --stop
+  cc-authbrowser <acct> --status [--json]
+
+ONE isolated Chrome per account (frozen port/profile map, contract SS1), started by
+DIRECT-EXEC of the Chrome binary -- never `open -n` / LaunchServices. That is the whole
+finding this design rests on: a directly-executed Chrome survives the detached / launchd
+context that reaps a LaunchServices-launched browser.
+
+Posture is headed-OFFSCREEN by default (--window-position=-32000,-32000). `--headless`
+is opt-in ONLY -- `--headless=new` advertises a HeadlessChrome user-agent, the wrong
+posture for an OAuth sign-in. The flag exists so the E2 verdict is a config flip.
+
+An open CDP port must NEVER outlive a run, so --start arms a DETACHED TTL watchdog that
+hard-kills the browser even if the caller dies. EVERY kill here is gated on a pid-recycle
+guard -- the live command line must still match the Chrome we launched -- so a recycled
+pid is never killed (house precedent: bin/cc-deathwatch-kqueue's {pid,start} guard).
+
+Exit: 0 OK - 1 ERROR - 2 REFUSED (unknown acct / bad args) - 4 BROWSER-FAILED (chrome
+binary missing - CDP not up in time - port held by a foreign process). --status is a
+QUERY: it exits 0 either way; read `running` from --status --json to branch.
+
+Test-injection env: CC_AUTHBROWSER_CHROME_BIN - CC_AUTHBROWSER_PROFILE_ROOT (default
+~/.claude/auth-profiles) - CC_AUTHBROWSER_STATE_DIR (default /tmp) -
+CC_AUTHBROWSER_ACCOUNTS_BIN (default claude-accounts). Tests MUST drive a fake chrome-bin
+stub -- never launch real Chrome under bats.
+"""
+import argparse
+import json
+import os
+import signal
+import socket
+import subprocess
+import sys
+import time
+import urllib.request
+from typing import Any, Dict, List, Optional
+
+# Frozen port/profile map (contract SS1) -- explicit, NOT accounts.json file order.
+PORT_MAP: Dict[str, int] = {"next": 9341, "next2": 9342, "next3": 9343, "next4": 9344}
+CHROME_DEFAULT = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+CDP_TIMEOUT_S = 15.0
+DEFAULT_TTL_S = 300
+TERM_GRACE_S = 3.0
+
+EXIT_OK, EXIT_ERROR, EXIT_REFUSED, EXIT_BROWSER = 0, 1, 2, 4
+
+
+def warn(msg: str) -> None:
+    """Human/diagnostic output. stdout stays clean JSON for machine consumers."""
+    sys.stderr.write("cc-authbrowser: %s\n" % msg)
+
+
+def chrome_bin() -> str:
+    return os.environ.get("CC_AUTHBROWSER_CHROME_BIN") or CHROME_DEFAULT
+
+
+def profile_dir(acct: str) -> str:
+    root = os.environ.get("CC_AUTHBROWSER_PROFILE_ROOT") or os.path.expanduser(
+        "~/.claude/auth-profiles")
+    return os.path.join(root, acct)
+
+
+def state_path(acct: str) -> str:
+    return os.path.join(os.environ.get("CC_AUTHBROWSER_STATE_DIR") or "/tmp",
+                        "cc-authbrowser-%s.json" % acct)
+
+
+def read_state(acct: str) -> Optional[Dict[str, Any]]:
+    try:
+        with open(state_path(acct)) as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+def write_state(acct: str, data: Dict[str, Any]) -> None:
+    path = state_path(acct)
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "w") as fh:
+        json.dump(data, fh, indent=2)
+
+
+def clear_state(acct: str) -> None:
+    try:
+        os.unlink(state_path(acct))
+    except OSError:
+        pass
+
+
+def pid_cmdline(pid: int) -> Optional[str]:
+    """Live command line of <pid>, or None if the pid is gone. `-ww` defeats truncation."""
+    try:
+        out = subprocess.run(["ps", "-ww", "-o", "command=", "-p", str(pid)],
+                             capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    line = out.stdout.strip()
+    return line or None
+
+
+def cmdline_matches(pid: int, marker: str) -> bool:
+    """THE pid-recycle guard. False (never kill) when the pid is gone, unreadable, or is
+    now some OTHER process that merely inherited the number. Fail-closed by construction."""
+    if pid <= 0 or not marker:
+        return False
+    line = pid_cmdline(pid)
+    return bool(line) and marker in line
+
+
+def kill_pid(pid: int, marker: str) -> bool:
+    """SIGTERM -> grace -> SIGKILL, gated on the recycle guard. True if we killed it."""
+    if not cmdline_matches(pid, marker):
+        return False
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
+        return False
+    deadline = time.time() + TERM_GRACE_S
+    while time.time() < deadline:
+        if pid_cmdline(pid) is None:
+            return True
+        time.sleep(0.1)
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+    return True
+
+
+def port_listening(port: int) -> bool:
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+            return True
+    except OSError:
+        return False
+
+
+def port_listener_pids(port: int) -> List[int]:
+    """Pids holding <port> in LISTEN. Empty on any failure -- callers fail CLOSED, so an
+    unreadable listener is treated as foreign and is never adopted or killed."""
+    try:
+        out = subprocess.run(["lsof", "-nP", "-iTCP:%d" % port, "-sTCP:LISTEN", "-t"],
+                             capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return [int(tok) for tok in out.stdout.split() if tok.isdigit()]
+
+
+def cdp_version(port: int, deadline: float,
+                child: Optional["subprocess.Popen[bytes]"] = None) -> Optional[Dict[str, Any]]:
+    """Poll http://127.0.0.1:<port>/json/version until it answers or <deadline>. Bails
+    early when the launched child is already dead -- a dead Chrome never answers."""
+    url = "http://127.0.0.1:%d/json/version" % port
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(url, timeout=1.0) as resp:
+                data = json.loads(resp.read().decode("utf-8", "replace"))
+            if isinstance(data, dict):
+                return data
+        except (OSError, ValueError):
+            pass
+        if child is not None and child.poll() is not None:
+            return None
+        time.sleep(0.25)
+    return None
+
+
+def require_known(acct: str) -> int:
+    """Frozen-map membership. Unknown account is REFUSED, not an error."""
+    if acct not in PORT_MAP:
+        warn("unknown account: %s (%s)" % (acct, "|".join(sorted(PORT_MAP))))
+        sys.exit(EXIT_REFUSED)
+    return PORT_MAP[acct]
+
+
+def require_ssot(acct: str) -> None:
+    """Account identity is the SSOT's to confirm, never ours to assume. Fail CLOSED: a
+    missing/erroring claude-accounts is REFUSED, never a silent degrade (contract SS2's
+    spirit -- 'cannot detect' is never 'nothing to do'). --start only; --stop/--status
+    stay usable when the SSOT binary is broken."""
+    binname = os.environ.get("CC_AUTHBROWSER_ACCOUNTS_BIN") or "claude-accounts"
+    try:
+        out = subprocess.run([binname, "--relogin-info", acct],
+                             capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError) as exc:
+        warn("cannot consult account SSOT via '%s': %s" % (binname, exc))
+        sys.exit(EXIT_REFUSED)
+    if out.returncode != 0:
+        warn("account SSOT refused '%s': %s" % (acct, out.stderr.strip() or "exit %d" % out.returncode))
+        sys.exit(EXIT_REFUSED)
+
+
+def public_view(st: Dict[str, Any]) -> Dict[str, Any]:
+    """The frozen --start JSON shape -- exactly these keys, no superset."""
+    return {k: st.get(k) for k in
+            ("acct", "pid", "port", "ws_url", "profile_dir", "user_agent", "headless")}
+
+
+def is_running(st: Optional[Dict[str, Any]]) -> bool:
+    return bool(st) and cmdline_matches(int(st.get("pid") or 0), str(st.get("chrome_bin") or ""))
+
+
+def do_start(acct: str, ttl: int, headless: bool) -> int:
+    port = require_known(acct)
+    require_ssot(acct)
+    binpath = chrome_bin()
+    if not (os.path.isfile(binpath) and os.access(binpath, os.X_OK)):
+        warn("chrome binary missing or not executable: %s" % binpath)
+        return EXIT_BROWSER
+
+    if port_listening(port):
+        st = read_state(acct)
+        owners = port_listener_pids(port)
+        if st and int(st.get("pid") or 0) in owners and is_running(st):
+            print(json.dumps(public_view(st), indent=2))  # already ours: idempotent
+            return EXIT_OK
+        warn("port %d is held by a foreign process (pids=%s) -- refusing to adopt or kill it"
+             % (port, owners or "unknown"))
+        return EXIT_BROWSER
+
+    pdir = profile_dir(acct)
+    os.makedirs(pdir, exist_ok=True)
+    argv = [binpath,
+            "--user-data-dir=%s" % pdir,
+            "--remote-debugging-port=%d" % port,
+            "--remote-debugging-address=127.0.0.1",
+            "--window-position=-32000,-32000",
+            "--no-first-run",
+            "--no-default-browser-check"]
+    if headless:
+        argv.append("--headless=new")
+    argv.append("about:blank")
+
+    try:
+        # start_new_session: its own session+process group, so the browser outlives this
+        # caller (and any launchd job that reaped the caller's group).
+        child = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL, start_new_session=True,
+                                 close_fds=True)
+    except OSError as exc:
+        warn("failed to exec chrome: %s" % exc)
+        return EXIT_BROWSER
+
+    ver = cdp_version(port, time.time() + CDP_TIMEOUT_S, child)
+    if ver is None:
+        warn("CDP did not answer on port %d within %gs -- killing the browser we launched"
+             % (port, CDP_TIMEOUT_S))
+        kill_pid(child.pid, binpath)
+        clear_state(acct)
+        return EXIT_BROWSER
+
+    pid = child.pid
+    if child.poll() is not None:
+        # Chrome answered but our direct child exited (re-exec/hand-off). Record the pid
+        # that actually holds the port, or --stop would leave a listening port behind.
+        owners = [p for p in port_listener_pids(port) if cmdline_matches(p, binpath)]
+        if owners:
+            pid = owners[0]
+
+    st: Dict[str, Any] = {
+        "acct": acct, "pid": pid, "port": port,
+        "ws_url": ver.get("webSocketDebuggerUrl"),
+        "profile_dir": pdir,
+        "user_agent": ver.get("User-Agent"),
+        "headless": headless,
+        "chrome_bin": binpath, "ttl": ttl, "started_at": int(time.time()),
+    }
+    write_state(acct, st)
+
+    try:
+        watchdog = subprocess.Popen(
+            [sys.executable, os.path.abspath(__file__), acct, "--watchdog",
+             "--pid", str(pid), "--ttl", str(ttl), "--match", binpath],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True, close_fds=True)
+        st["watchdog_pid"] = watchdog.pid
+        write_state(acct, st)
+    except OSError as exc:
+        # An unwatched browser could outlive the run with an open CDP port. Refuse to
+        # leave one behind: tear down rather than ship an unbounded session.
+        warn("could not arm the TTL watchdog (%s) -- tearing down rather than leaving an "
+             "unbounded CDP port" % exc)
+        kill_pid(pid, binpath)
+        clear_state(acct)
+        return EXIT_BROWSER
+
+    print(json.dumps(public_view(st), indent=2))
+    return EXIT_OK
+
+
+def do_stop(acct: str) -> int:
+    require_known(acct)
+    st = read_state(acct)
+    if st is None:
+        print("cc-authbrowser: %s not running" % acct)
+        return EXIT_OK  # idempotent
+    marker = str(st.get("chrome_bin") or "")
+    killed = kill_pid(int(st.get("pid") or 0), marker)
+    wd = int(st.get("watchdog_pid") or 0)
+    if wd:
+        kill_pid(wd, "%s %s --watchdog" % (os.path.abspath(__file__), acct))
+    clear_state(acct)
+    print("cc-authbrowser: %s stopped%s" % (acct, "" if killed else " (nothing alive)"))
+    port = int(st.get("port") or 0)
+    if port and port_listening(port):
+        warn("port %d still has a listener after stop -- not ours to kill, leaving it" % port)
+    return EXIT_OK
+
+
+def do_status(acct: str, as_json: bool) -> int:
+    require_known(acct)
+    st = read_state(acct)
+    running = is_running(st)
+    if as_json:
+        out: Dict[str, Any] = {"acct": acct, "running": running}
+        if running and st is not None:
+            out.update(public_view(st))
+        print(json.dumps(out, indent=2))
+    elif running and st is not None:
+        print("cc-authbrowser: %s running pid=%s port=%s headless=%s"
+              % (acct, st.get("pid"), st.get("port"), str(bool(st.get("headless"))).lower()))
+    else:
+        print("cc-authbrowser: %s not running" % acct)
+    return EXIT_OK
+
+
+def do_watchdog(acct: str, pid: int, ttl: int, match: str) -> int:
+    """Internal (re-exec'd detached by --start). Hard-kills the browser after <ttl>s even
+    if the caller died. The recycle guard is load-bearing: after a long TTL the pid may
+    belong to an unrelated process, which must NEVER be killed."""
+    time.sleep(max(0, ttl))
+    if not cmdline_matches(pid, match):
+        return EXIT_OK  # gone, or recycled into a stranger -- leave it alone
+    kill_pid(pid, match)
+    st = read_state(acct)
+    if st and int(st.get("pid") or 0) == pid:
+        clear_state(acct)
+    return EXIT_OK
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(
+        prog="cc-authbrowser", description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("acct", help="account name (%s)" % "|".join(sorted(PORT_MAP)))
+    mode = ap.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--start", action="store_true")
+    mode.add_argument("--stop", action="store_true")
+    mode.add_argument("--status", action="store_true")
+    mode.add_argument("--watchdog", action="store_true", help=argparse.SUPPRESS)
+    ap.add_argument("--ttl", type=int, default=DEFAULT_TTL_S,
+                    help="seconds before the watchdog hard-kills the browser (default %d)"
+                         % DEFAULT_TTL_S)
+    ap.add_argument("--headless", action="store_true",
+                    help="opt-in --headless=new; DEFAULT is headed-offscreen")
+    ap.add_argument("--json", action="store_true", help="machine-readable output")
+    ap.add_argument("--pid", type=int, default=0, help=argparse.SUPPRESS)
+    ap.add_argument("--match", default="", help=argparse.SUPPRESS)
+    args = ap.parse_args()  # argparse exits 2 on bad args == EXIT_REFUSED
+
+    if args.ttl < 0:
+        warn("--ttl must be >= 0")
+        return EXIT_REFUSED
+    if args.watchdog:
+        return do_watchdog(args.acct, args.pid, args.ttl, args.match)
+    if args.start:
+        return do_start(args.acct, args.ttl, args.headless)
+    if args.stop:
+        return do_stop(args.acct)
+    return do_status(args.acct, args.json)
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        sys.exit(EXIT_ERROR)
