@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.claude.postland-verify — the ASYNC post-land full-suite net. Every 5 min: is origin/main's
+  TREE already stamped green? If yes it abstains in ~1s; else it runs the full check-set (bash -n +
+  bats tests/) in a DISPOSABLE detached worktree and, on a reproducible red, bisects the culprit +
+  pages. StartInterval (not calendar) closes the window "a red landed at 09:00 sits unseen until the
+  04:00 nightly"; RunAtLoad false — a login must not kick off a full suite. PATH prepends
+  ~/.claude/bin AND /opt/homebrew/bin (bats/shellcheck/jq) via bash -c so $HOME expands at runtime.
+  C10: OPERATOR loads it. Kill switch: POSTLAND_VERIFY=off (or bootout).
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.claude.postland-verify</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"; exec "$HOME/.claude/scripts/postland-verify.sh" --run-if-needed</string>
+    </array>
+
+    <key>StartInterval</key>
+    <integer>300</integer>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>LowPriorityIO</key>
+    <true/>
+
+    <key>Nice</key>
+    <integer>10</integer>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/claude-postland-verify.stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/tmp/claude-postland-verify.stderr.log</string>
+</dict>
+</plist>
