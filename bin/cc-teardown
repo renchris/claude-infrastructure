@@ -37,7 +37,9 @@
 # ACTIVATION.md). The /tmp/cc-teardown-activate.sh runbook is the operator's OPTIONAL layer — never self-activated.
 #
 # Env (overridable for tests): CC_TEARDOWN_SESSIONS_BIN, IT2_BIN, CC_TEARDOWN_GATE_BIN, CC_TEARDOWN_PS_BIN,
-#   CC_TEARDOWN_RECORDS_DIR, CC_TEARDOWN_SELF_UUID, CC_TEARDOWN_TERM_GRACE_S.
+#   CC_TEARDOWN_RECORDS_DIR, CC_TEARDOWN_SELF_UUID, CC_TEARDOWN_TERM_GRACE_S, CC_TEARDOWN_DIR
+#   (the crash-watchdog MARKER dir — the READER's own env var, steered in lockstep for tests; distinct
+#   from CC_TEARDOWN_RECORDS_DIR, which is this script's decision-record sink).
 set -uo pipefail
 
 # Resolve $0 THROUGH symlinks (no readlink -f on macOS) so a `~/.claude/bin/cc-teardown` symlink still finds
@@ -98,6 +100,36 @@ record() { # <decision> <reason_kind> <reason> <both_legs_verified 0|1>
       done_evidence:$ev, git_state:(if $gs=="" then null else $gs end),
       both_legs_verified:($blv=="1"), at:$at}' \
     > "$RECORDS_DIR/${ts}.json" 2>/dev/null || true
+}
+
+# ── teardown marker (MARKER CONTRACT v1; reader = hooks/lead-crash-watchdog.sh classify_death) ─────
+# cc-teardown kills the TARGET's claude process and closes its pane — to that target's OWN crash
+# watchdog the death is indistinguishable from a real CC crash, so every desk/reaper teardown logged a
+# false CRASH (the same class that made handoff-fire self-closes read as crashes, incident 2026-07-23;
+# handoff-fire got its marker then, the DELEGATED close never did). This writes the SAME contract-v1
+# marker for the TARGET (its sid + its pane), so the reader classifies RECYCLE/deliberate-teardown.
+# Dual-keyed: the reader checks <sid>.json directly and, via the session registry, <pane>.json — a
+# torn-down session's registry row can be overwritten by a successor, so both keys are written and
+# key_kind records each file's own key. Emission is byte-identical in shape to handoff-fire's writer
+# (mode is the only discriminator: only cc-teardown ever writes mode=teardown). Self-contained (its
+# own date, no iso() helper) so tests can source it VERBATIM and assert its literal emission.
+# FULLY GUARDED — a marker write can NEVER block or fail a close. Writers never delete markers; the
+# reader GCs them.
+write_teardown_marker() { # $1=target pane-uuid  $2=target sid  $3=mode
+  local _tm_pane="${1:-}" _tm_sid="${2:-}" _tm_mode="${3:-teardown}" _tm_dir _tm_ts
+  _tm_dir="${CC_TEARDOWN_DIR:-$HOME/.claude/watchdog/teardown}"
+  { [ -n "$_tm_sid" ] || [ -n "$_tm_pane" ]; } || return 0
+  mkdir -p "$_tm_dir" 2>/dev/null || true
+  _tm_ts="$(date -u +%FT%TZ)"
+  if [ -n "$_tm_sid" ]; then
+    printf '{"key_kind":"sid","pane":"%s","sid":"%s","mode":"%s","ts":"%s"}\n' \
+      "$_tm_pane" "$_tm_sid" "$_tm_mode" "$_tm_ts" > "$_tm_dir/$_tm_sid.json" 2>/dev/null || true
+  fi
+  if [ -n "$_tm_pane" ]; then
+    printf '{"key_kind":"pane","pane":"%s","sid":"%s","mode":"%s","ts":"%s"}\n' \
+      "$_tm_pane" "$_tm_sid" "$_tm_mode" "$_tm_ts" > "$_tm_dir/$_tm_pane.json" 2>/dev/null || true
+  fi
+  return 0
 }
 
 pid_alive()  { [ -n "${1:-}" ] && kill -0 "$1" 2>/dev/null; }
@@ -302,6 +334,12 @@ main() {
     fi
   fi
 
+  # ── 2d. TEARDOWN MARKER — drop the deterministic evidence the TARGET's crash watchdog reads, at the
+  # moment the close becomes inevitable: EVERY gate has passed and the first kill is the next statement.
+  # Deliberately NOT written earlier: a REFUSE/DEFER leaves the target ALIVE, and a stale marker would
+  # mask a genuine crash of that live session for the reader's whole 30-min freshness window.
+  write_teardown_marker "$paneUUID" "$sess_id" teardown
+
   # ── 3. ACT both legs ───────────────────────────────────────────────────────────────────────────────
   local lstart_before; lstart_before="$(pid_lstart "$pid")"
 
@@ -423,6 +461,7 @@ EOF
     CC_TEARDOWN_GATE_BIN="$GATE_SELF" CC_TEARDOWN_PS_BIN="$psbin" \
     CC_TEARDOWN_RECORDS_DIR="$d/rec" CC_TEARDOWN_SELF_UUID="SELF-0000" \
     IT2_PANES_FILE="$d/state/panes.json" CC_TEARDOWN_TERM_GRACE_S=2 \
+    CC_TEARDOWN_DIR="$d/tdmark" \
     "$@"
   }
   # each scenario rm's records first + every cc-teardown run writes exactly one → find gives that record.
@@ -433,12 +472,20 @@ EOF
   echo "cc-teardown --selftest — every teardown RED-proof must fire (mock panes/pids + temp git; NO real session):"
 
   # 1. clean+shipped + done-evidence + pane closes → TEARDOWN, BOTH legs effect-verified (exit 0)
-  rm -f "$d/rec"/*.json; mkrepo "$d/r1"; spawn; set_session "$P" "$d/r1"; set_panes "[\"$U\"]"
+  rm -f "$d/rec"/*.json; rm -rf "$d/tdmark"; mkrepo "$d/r1"; spawn; set_session "$P" "$d/r1"; set_panes "[\"$U\"]"
   rc=0; IT2_CLOSE_REMOVES=1 IT2_CLOSE_RC=0 run_td "$d/bin/ps_clean" "$SELF" "$U" --done-evidence "shipped d283997" >/dev/null 2>&1 || rc=$?
   blv="$(last_blv)"
   [ "$rc" = 0 ] && [ "$(last_decision)" = TEARDOWN ] && [ "$blv" = true ] \
     && okp "clean+shipped + done → TEARDOWN, BOTH legs effect-verified (exit 0)" \
     || badp "clean+shipped teardown failed (rc=$rc dec=$(last_decision) blv=$blv; want 0/TEARDOWN/true)"
+  # 1b. …and it dropped the contract-v1 crash-watchdog marker for the TARGET, dual-keyed (sid "s" +
+  #     pane $U). Without it the target's OWN watchdog logs this deliberate close as a CRASH.
+  [ -f "$d/tdmark/s.json" ] && [ -f "$d/tdmark/$U.json" ] \
+    && [ "$(jq -r '.mode' "$d/tdmark/s.json" 2>/dev/null)" = teardown ] \
+    && [ "$(jq -r '.key_kind' "$d/tdmark/s.json" 2>/dev/null)" = sid ] \
+    && [ "$(jq -r '.key_kind' "$d/tdmark/$U.json" 2>/dev/null)" = pane ] \
+    && okp "TEARDOWN wrote the dual-keyed marker (mode=teardown) — no false CRASH downstream" \
+    || badp "TEARDOWN left NO valid marker (sid=$(jq -r '.mode' "$d/tdmark/s.json" 2>/dev/null) pane=$(jq -r '.key_kind' "$d/tdmark/$U.json" 2>/dev/null)) — the close reads as a crash"
   reap
 
   # 2. pane SURVIVES the close → FAIL LOUD (exit 5), never a false success  [the anti-keystroke-faith proof]
@@ -450,7 +497,7 @@ EOF
   reap
 
   # 3. dirty tree → DEFER (exit 10), pane left intact
-  rm -f "$d/rec"/*.json; mkrepo "$d/r3"; echo change >> "$d/r3/f"; spawn; set_session "$P" "$d/r3"; set_panes "[\"$U\"]"
+  rm -f "$d/rec"/*.json; rm -rf "$d/tdmark"; mkrepo "$d/r3"; echo change >> "$d/r3/f"; spawn; set_session "$P" "$d/r3"; set_panes "[\"$U\"]"
   rc=0; run_td "$d/bin/ps_clean" "$SELF" "$U" --done-evidence "x" >/dev/null 2>&1 || rc=$?
   [ "$rc" = 10 ] && [ "$(last_decision)" = DEFER ] \
     && okp "dirty tree → DEFER (exit 10)" \
@@ -458,6 +505,11 @@ EOF
   present_after="$(jq -r --arg u "$U" 'index($u)!=null' "$d/state/panes.json" 2>/dev/null)"
   [ "$present_after" = true ] && okp "DEFER left the pane intact (a deferred close has NO side effect)" \
     || badp "DEFER still closed the pane (panes.json lost $U)"
+  # …and wrote NO marker: the target is still ALIVE, so a marker would mask a genuine crash of it for
+  # the reader's whole 30-min freshness window. Markers are written ONLY once a close is inevitable.
+  [ -z "$(ls -A "$d/tdmark" 2>/dev/null)" ] \
+    && okp "DEFER wrote NO marker (a LIVE pane is never masked from its crash watchdog)" \
+    || badp "DEFER dropped a teardown marker on a LIVE pane — would mask a genuine crash for 30 min"
   reap
 
   # 4. committed-not-pushed → DEFER (exit 10)

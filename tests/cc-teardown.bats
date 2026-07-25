@@ -9,11 +9,11 @@ setup() {
   export CC_TEARDOWN_SELF_UUID="none"   # deterministic self-guard in a headless test
 }
 
-@test "selftest passes and runs all 15 checks (a zero-check suite must not 'pass')" {
+@test "selftest passes and runs all 17 checks (a zero-check suite must not 'pass')" {
   run "$T" --selftest
   [ "$status" -eq 0 ]
   n_ok="$(printf '%s' "$output" | grep -c '^  ok ')"
-  [ "$n_ok" -eq 15 ]
+  [ "$n_ok" -eq 17 ]
 }
 
 @test "identity-pin: --expect-pid mismatch (pane recycled) → REFUSE (exit 2), records identity-pin (a17 S-4)" {
@@ -103,6 +103,7 @@ IT2
   export CC_TEARDOWN_SESSIONS_BIN="$D/bin/cc-sessions" IT2_BIN="$D/bin/it2" CC_TEARDOWN_GATE_BIN="$D/bin/gate"
   export CC_TEARDOWN_SELF_UUID="none" CC_TEARDOWN_RECORDS_DIR="$D/rec" IT2_PANES_FILE="$D/panes.json"
   export CC_INTERACTIVE_LIB="$D/cc-interactive-stub.sh" CC_CLASSIFY_PROJECT_ROOTS="$D/proj" CC_CLASSIFY_NOW="$now"
+  export CC_TEARDOWN_DIR="$D/tdmark"          # crash-watchdog marker sink (the READER's env var)
 }
 
 @test "operator-adoption belt: adopted target (real operator prompt 60s ago) → REFUSE operator-adopted (exit 2)" {
@@ -133,4 +134,60 @@ IT2
   rec="$(find "$CC_TEARDOWN_RECORDS_DIR" -name '*.json' | head -1)"
   [ "$(jq -r '.decision' "$rec")" = "TEARDOWN" ]
   [[ "$output" == *"cc-interactive.sh absent"* ]]               # the degradation WARN (stderr, merged by run)
+}
+
+# ── teardown markers (2026-07-25) — a DELEGATED close must not read as a CRASH ────────────────────
+# cc-teardown kills the target and closes its pane; to the target's OWN lead-crash-watchdog that death
+# looked exactly like a real CC crash (handoff-fire got its marker on 2026-07-23, the delegated close
+# never did). These drive the REAL binary end-to-end and then the REAL reader, so the assertion is the
+# live cross-file contract — not a hand-written fixture that could pass while either side drifts.
+
+@test "marker: TEARDOWN writes the dual-keyed contract-v1 marker for the TARGET (sid + pane)" {
+  adopted_fixture
+  run "$T" U-AD --done-evidence "looks done" --force-adopted
+  [ "$status" -eq 0 ]
+  [ -f "$CC_TEARDOWN_DIR/sidAD.json" ]                       # keyed by the TARGET's session id
+  [ -f "$CC_TEARDOWN_DIR/U-AD.json" ]                        # …and by its pane uuid
+  run cat "$CC_TEARDOWN_DIR/sidAD.json"
+  [[ "$output" == *'"key_kind":"sid"'* ]]
+  [[ "$output" == *'"sid":"sidAD"'* ]]
+  [[ "$output" == *'"pane":"U-AD"'* ]]
+  [[ "$output" == *'"mode":"teardown"'* ]]                   # the discriminator vs handoff-fire's modes
+  run cat "$CC_TEARDOWN_DIR/U-AD.json"
+  [[ "$output" == *'"key_kind":"pane"'* ]]
+  run python3 -c "import json,sys; json.loads(open(sys.argv[1]).read().strip())" "$CC_TEARDOWN_DIR/sidAD.json"
+  [ "$status" -eq 0 ]
+}
+
+@test "marker: REFUSE (operator-adopted) writes NO marker — a LIVE pane is never masked" {
+  # The placement invariant: markers go in only once a close is inevitable. A pre-gate write would
+  # mask a genuine crash of the still-live target for the reader's whole 30-min freshness window.
+  adopted_fixture
+  run "$T" U-AD --done-evidence "looks done"
+  [ "$status" -eq 2 ]
+  [ ! -e "$CC_TEARDOWN_DIR" ] || [ -z "$(ls -A "$CC_TEARDOWN_DIR" 2>/dev/null)" ]
+}
+
+@test "marker contract: the REAL watchdog classifies a cc-teardown close as RECYCLE/deliberate-teardown" {
+  adopted_fixture
+  W="$REPO/hooks/lead-crash-watchdog.sh"
+  D="$BATS_TEST_TMPDIR"
+  mkdir -p "$D/wdbase/projects/slug" "$D/reg" "$D/nojetsam"
+  cp "$D/proj/slug/sidAD.jsonl" "$D/wdbase/projects/slug/sidAD.jsonl"   # the reader needs a transcript
+  run "$T" U-AD --done-evidence "looks done" --force-adopted
+  [ "$status" -eq 0 ]
+  # sid-keyed hit (the direct path)
+  CC_ACCOUNT_BASES="$D/wdbase" CC_REGISTRY_DIR="$D/reg" CC_JETSAM_DIRS="$D/nojetsam" \
+    run "$W" --classify sidAD
+  [ "$status" -eq 0 ]
+  [[ "$output" == RECYCLE* ]]
+  [[ "$output" == *deliberate-teardown* ]]
+  # pane-keyed alias (what remains when cc-sessions carried no session_id): drop the sid marker and
+  # give the registry the pane→sid row the reader reverse-looks-up.
+  rm -f "$CC_TEARDOWN_DIR/sidAD.json"
+  printf '{\n  "session_id": "sidAD"\n}\n' > "$D/reg/U-AD.json"
+  CC_ACCOUNT_BASES="$D/wdbase" CC_REGISTRY_DIR="$D/reg" CC_JETSAM_DIRS="$D/nojetsam" \
+    run "$W" --classify sidAD
+  [[ "$output" == RECYCLE* ]]
+  [[ "$output" == *deliberate-teardown* ]]
 }
