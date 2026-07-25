@@ -46,6 +46,10 @@ done
 mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG_FILE"; }
 
+# Homebrew (Apple Silicon /opt/homebrew/bin · Intel /usr/local/bin) is ABSENT from non-interactive /
+# launchd / harness shells, so a bare `command -v yq` false-fails "not installed" though yq is present
+# — this false-failed the opus-5 activation 2026-07-25. Put the brew bins on PATH before the tool check.
+case ":$PATH:" in *:/opt/homebrew/bin:*) : ;; *) PATH="/opt/homebrew/bin:/usr/local/bin:$PATH" ;; esac
 command -v yq >/dev/null 2>&1 || { echo "ERROR: yq not installed (brew install yq)" >&2; exit 2; }
 command -v jq >/dev/null 2>&1 || { echo "ERROR: jq not installed" >&2; exit 2; }
 [[ -f "$CONFIG" ]] || { echo "ERROR: missing $CONFIG" >&2; exit 2; }
