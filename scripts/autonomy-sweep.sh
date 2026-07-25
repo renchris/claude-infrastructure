@@ -15,10 +15,23 @@
 #   3. If anything NEW exists → ONE cc-notify to the desk ROLE (cc-roles/desk, resolved at
 #      send-time — SO-1 role indirection), then mark those records .seen.
 #   4. Write ONE {fired|abstained} IDL record (B-3: didn't-fire ≠ never-ran).
-# EVIDENCE law (inv7): source records are NEVER deleted; only the .seen markers age-compact.
+#   5. Age-compact: the .seen markers AND the six write-only event dirs (see below).
+#
+# EVIDENCE law (inv7), amended 2026-07-25 (audit 03 §1b/§1c, fix 5): source records used to be
+# NEVER deleted. That made every event dir unbounded — `comms-alarms/` had *zero* rm sites of any
+# kind, `pages/` 389 files, `push-records/` 318 — and the audit's systemic finding was that the
+# reaper lint has a FLOOR but no CEILING, so nothing could ever notice. The law is now: a source
+# record is never deleted while it can still be READ AS LIVE, and ages out at CC_EVENT_TTL_DAYS
+# (7 d = 604,800 s, ~1000× the reaper-horizon-lint floor) once it cannot. Seven days is two orders
+# of magnitude past the 300 s sweep that drains these dirs, so no observer can miss a record.
+# `decisions/` and `backlog.jsonl` are deliberately EXCLUDED — they are durable ledgers, not events.
+# `inbox-guard/` is a DAMPING marker store, not an event log, so age alone must not clear it (that
+# would re-fire the escalation it damps); it reaps only when its mailbox subject is also gone.
 #
 # Env (tests): CC_PAGES_DIR · CC_ANNOUNCE_ALARM_DIR · CC_COMPLETION_RECORDS_DIR · CC_DECISIONS_DIR
 #   · CC_ROLES_DIR · CC_IDL · CC_SWEEP_SEEN_DIR · CC_SWEEP_SEEN_TTL_DAYS (default 7)
+#   · CC_COMMS_ALARM_DIR · CC_PUSH_RECORDS_DIR · CC_TEARDOWN_RECORDS_DIR
+#   · CC_INBOX_GUARD_STATE_DIR · CC_MAILBOX_DIR · CC_EVENT_TTL_DAYS (default 7)
 #   · CC_NOTIFY_BIN · CC_DECIDE_BIN · CC_BACKLOG_BIN.  BSD+GNU portable, no eval, fail-loud.
 set -uo pipefail
 
@@ -30,6 +43,14 @@ ROLES_DIR="${CC_ROLES_DIR:-$HOME/.claude/cc-roles}"
 IDL="${CC_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
 SEEN_DIR="${CC_SWEEP_SEEN_DIR:-$HOME/.claude/autonomy/sweep-seen}"
 SEEN_TTL="${CC_SWEEP_SEEN_TTL_DAYS:-7}"
+# The six write-only event dirs this sweep now age-reaps (defaults match each PRODUCER's own env
+# name, so a test that redirects the producer redirects the reaper with it).
+COMMS_ALARM_DIR="${CC_COMMS_ALARM_DIR:-$HOME/.claude/autonomy/comms-alarms}"
+PUSH_RECORDS_DIR="${CC_PUSH_RECORDS_DIR:-$HOME/.claude/autonomy/push-records}"
+TEARDOWN_DIR="${CC_TEARDOWN_RECORDS_DIR:-$HOME/.claude/cc-teardown}"
+INBOX_GUARD_DIR="${CC_INBOX_GUARD_STATE_DIR:-$HOME/.claude/autonomy/inbox-guard}"
+MAILBOX_DIR="${CC_MAILBOX_DIR:-$HOME/.claude/mailbox}"
+EVENT_TTL="${CC_EVENT_TTL_DAYS:-7}"
 
 usage() { sed -n '2,/^set -uo/p' "$0" | sed 's/^# \{0,1\}//; /^set -uo/d'; }
 case "${1:-}" in -h|--help) usage; exit 0 ;; esac
@@ -109,8 +130,33 @@ done
 
 total_new=$((new_pages + new_alarms + new_pushfailed + open_decisions + fired_defaults))
 
-# ── age-compact the .seen markers (never the source records — inv7) ──
+# ── age-compact the .seen markers ──
 find "$SEEN_DIR" -type f -mtime +"$SEEN_TTL" -delete 2>/dev/null || true
+
+# ── age-reap the six write-only EVENT dirs (audit 03 fix 5; see the EVIDENCE law above) ──
+# One horizon, six paths, `-maxdepth 1 -type f` so a nested subdir is never walked into. Each dir
+# is drained by THIS sweep on a 300 s tick, so a 7-day-old record has been surfaced ~2,000 times.
+reap_event_dir() { # <dir>
+  [ -d "$1" ] || return 0
+  find "$1" -maxdepth 1 -type f -mtime +"$EVENT_TTL" -delete 2>/dev/null || true
+}
+reap_event_dir "$PAGES_DIR"          # supervisor page stamps  (389 files, oldest 07-14)
+reap_event_dir "$COMMS_ALARM_DIR"    # comms safety gate       (395 files, ZERO rm sites before this)
+reap_event_dir "$PUSH_RECORDS_DIR"   # push-send verdicts      (318 files)
+reap_event_dir "$COMPLETION_DIR"     # completion-push records (77 files)
+reap_event_dir "$TEARDOWN_DIR"       # cc-teardown records     (154 files)
+# inbox-guard is DAMPING state, not an event log: `<key>.escalated` suppresses a repeat escalation
+# for mailbox <key>. Age alone must not clear it — that would re-fire the very page it damps (the
+# 216-page storm lesson). Reap only when the marker is BOTH past the horizon AND its mailbox
+# subject is gone, at which point the marker can no longer damp anything.
+if [ -d "$INBOX_GUARD_DIR" ]; then
+  while IFS= read -r mk; do
+    [ -n "$mk" ] || continue
+    key="$(basename "$mk" .escalated)"
+    [ -n "$(find "$MAILBOX_DIR" -maxdepth 1 -name "$key*" -print 2>/dev/null | head -1)" ] && continue
+    rm -f "$mk" 2>/dev/null || true
+  done < <(find "$INBOX_GUARD_DIR" -maxdepth 1 -type f -name '*.escalated' -mtime +"$EVENT_TTL" 2>/dev/null)
+fi
 
 log_idl() { # <disposition> <extra JSON OBJECT (optional, jq-built {…}; default {})>
   mkdir -p "$(dirname "$IDL")" 2>/dev/null || true

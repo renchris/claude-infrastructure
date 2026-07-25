@@ -18,8 +18,18 @@ setup() {
   export CC_BACKLOG_FILE="$BATS_TEST_TMPDIR/backlog.jsonl"
   export CC_DECIDE_BIN="$REPO/bin/cc-decide"
   export CC_BACKLOG_BIN="$REPO/bin/cc-backlog"
+  # ⚠️ EVERY dir the sweep can DELETE from must be redirected here. The sweep age-reaps six event
+  # dirs; any one left unexported falls back to its $HOME default and the suite becomes a reaper
+  # against LIVE state. (It did: an unexported CC_TEARDOWN_RECORDS_DIR let a test run delete 6 real
+  # ~/.claude/cc-teardown records, 2026-07-25. A destructive default is the harness's bug.)
+  export CC_COMMS_ALARM_DIR="$BATS_TEST_TMPDIR/comms-alarms"
+  export CC_PUSH_RECORDS_DIR="$BATS_TEST_TMPDIR/push-records"
+  export CC_TEARDOWN_RECORDS_DIR="$BATS_TEST_TMPDIR/cc-teardown"
+  export CC_INBOX_GUARD_STATE_DIR="$BATS_TEST_TMPDIR/inbox-guard"
+  export CC_MAILBOX_DIR="$BATS_TEST_TMPDIR/mailbox"
   mkdir -p "$CC_PAGES_DIR" "$CC_ANNOUNCE_ALARM_DIR" "$CC_COMPLETION_RECORDS_DIR" \
-           "$CC_DECISIONS_DIR" "$CC_ROLES_DIR"
+           "$CC_DECISIONS_DIR" "$CC_ROLES_DIR" "$CC_COMMS_ALARM_DIR" "$CC_PUSH_RECORDS_DIR" \
+           "$CC_TEARDOWN_RECORDS_DIR" "$CC_INBOX_GUARD_STATE_DIR" "$CC_MAILBOX_DIR"
   # stub cc-notify: log every call to <stub>.log, exit 0.
   export CC_NOTIFY_BIN="$BATS_TEST_TMPDIR/stub-notify"
   cat > "$CC_NOTIFY_BIN" <<'SH'
@@ -115,5 +125,71 @@ notify_count() { [ -f "$CC_NOTIFY_BIN.log" ] && wc -l < "$CC_NOTIFY_BIN.log" | t
 # ── launchd/supervisor-callable: runs standalone, exit 0, no args ──────────────
 @test "runs standalone with no args and exits 0" {
   run bash "$SWEEP"
+  [ "$status" -eq 0 ]
+}
+
+# ══ age-reap of the six write-only event dirs (audit 03 §1b/§1c fix 5) ═════════════════════════
+# L2: each case asserts the failure-DISTINCT pair — OLD reaped AND YOUNG kept. Asserting only the
+# reap would stay green if the horizon collapsed to 0 and ate live records; asserting only the keep
+# would stay green if the reaper never ran at all.
+
+mk_old()   { mkdir -p "$(dirname "$1")"; printf 'x\n' > "$1"; touch -t "$(date -v-9d +%Y%m%d%H%M)" "$1"; }
+mk_young() { mkdir -p "$(dirname "$1")"; printf 'x\n' > "$1"; }
+
+@test "all six event dirs: records past the horizon are reaped, young ones kept" {
+  mk_old   "$CC_PAGES_DIR/old.page";                 mk_young "$CC_PAGES_DIR/new.page"
+  mk_old   "$CC_COMMS_ALARM_DIR/old.json";           mk_young "$CC_COMMS_ALARM_DIR/new.json"
+  mk_old   "$CC_PUSH_RECORDS_DIR/old.json";          mk_young "$CC_PUSH_RECORDS_DIR/new.json"
+  mk_old   "$CC_COMPLETION_RECORDS_DIR/old.json";    mk_young "$CC_COMPLETION_RECORDS_DIR/new.json"
+  mk_old   "$CC_TEARDOWN_RECORDS_DIR/old.json";      mk_young "$CC_TEARDOWN_RECORDS_DIR/new.json"
+
+  run bash "$SWEEP"
+  [ "$status" -eq 0 ]
+
+  [ ! -f "$CC_PAGES_DIR/old.page" ];              [ -f "$CC_PAGES_DIR/new.page" ]
+  [ ! -f "$CC_COMMS_ALARM_DIR/old.json" ];        [ -f "$CC_COMMS_ALARM_DIR/new.json" ]
+  [ ! -f "$CC_PUSH_RECORDS_DIR/old.json" ];       [ -f "$CC_PUSH_RECORDS_DIR/new.json" ]
+  [ ! -f "$CC_COMPLETION_RECORDS_DIR/old.json" ]; [ -f "$CC_COMPLETION_RECORDS_DIR/new.json" ]
+  [ ! -f "$CC_TEARDOWN_RECORDS_DIR/old.json" ];   [ -f "$CC_TEARDOWN_RECORDS_DIR/new.json" ]
+}
+
+# ── the durable ledgers are NEVER age-reaped (they are the exclusion, not an oversight) ────────
+@test "decisions/ is exempt: an old decision packet survives the reap" {
+  mk_old "$CC_DECISIONS_DIR/old.json"
+  printf '{"status":"open"}\n' > "$CC_DECISIONS_DIR/old.json"
+  touch -t "$(date -v-30d +%Y%m%d%H%M)" "$CC_DECISIONS_DIR/old.json"
+  run bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  [ -f "$CC_DECISIONS_DIR/old.json" ]
+}
+
+# ── inbox-guard is DAMPING state: age alone must not clear it (that re-fires the page it damps) ─
+@test "an old .escalated marker whose mailbox still exists is KEPT (damping preserved)" {
+  mk_old "$CC_INBOX_GUARD_STATE_DIR/PANE-A.escalated"
+  printf 'msg\n' > "$CC_MAILBOX_DIR/PANE-A.md"
+  run bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  [ -f "$CC_INBOX_GUARD_STATE_DIR/PANE-A.escalated" ]
+}
+
+@test "an old .escalated marker whose mailbox is gone IS reaped (it can damp nothing)" {
+  mk_old "$CC_INBOX_GUARD_STATE_DIR/PANE-B.escalated"
+  run bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  [ ! -f "$CC_INBOX_GUARD_STATE_DIR/PANE-B.escalated" ]
+}
+
+@test "a YOUNG .escalated marker with no mailbox is still kept (horizon, not lifecycle)" {
+  mk_young "$CC_INBOX_GUARD_STATE_DIR/PANE-C.escalated"
+  run bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  [ -f "$CC_INBOX_GUARD_STATE_DIR/PANE-C.escalated" ]
+}
+
+# ── the horizon must outlive the reaper-horizon-lint floor (600 s sweep × 10 = 6,000 s) ────────
+@test "the event horizon is 7 days — three orders of magnitude above the lint floor" {
+  run bash -c "grep -c 'CC_EVENT_TTL_DAYS:-7' '$SWEEP'"
+  [ "$status" -eq 0 ]
+  run bash "$REPO/scripts/reaper-horizon-lint.sh"
   [ "$status" -eq 0 ]
 }
