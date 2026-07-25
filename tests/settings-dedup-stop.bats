@@ -21,11 +21,84 @@ mklive() {
     ]}}' > "$1"
 }
 
-@test "selftest passes and runs all 10 checks (a zero-check suite must not 'pass')" {
+@test "selftest passes and runs all 17 checks (a zero-check suite must not 'pass')" {
   run "$S" --selftest
   [ "$status" -eq 0 ]
-  [ "$(printf '%s' "$output" | grep -c '^  ok   ')" -eq 10 ]
+  [ "$(printf '%s' "$output" | grep -c '^  ok   ')" -eq 17 ]
   ! printf '%s' "$output" | grep -q '^  FAIL'
+}
+
+# ══ RULE A — intra-object dedup (audit 09 D-2) ════════════════════════════════════════════════
+# The cross-object rule is STRUCTURALLY blind to a hook registered twice inside ONE object's
+# hooks[] array — which is the live case: `notify.sh complete` sits at index 0 AND index 5 of
+# Stop obj-0 in all five config dirs (one spelling machine-absolute, one tilde), so every turn
+# close fires a double afplay behind a racy 2-second mtime debounce (hooks/notify.sh:15-22).
+
+# the live Stop obj-0 shape: the same hook at two indices, two path spellings, same timeout
+mkintra() {
+  jq -n '{hooks:{Stop:[{hooks:[
+      {type:"command",command:"/Users/x/.claude/hooks/notify.sh complete",timeout:5},
+      {type:"command",command:"~/.claude/hooks/cache-expiry-tracker.sh",timeout:5},
+      {type:"command",command:"~/.claude/hooks/notify.sh complete",timeout:5}]}]}}' > "$1"
+}
+
+@test "dry-run reports an intra-object dup and changes nothing" {
+  mkintra "$D/i.json"
+  run "$S" "$D/i.json"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q 'DEDUP  Stop obj#0 hooks\[\]'
+  [ "$(jq '.hooks.Stop[0].hooks | length' "$D/i.json")" -eq 3 ]
+}
+
+@test "--apply collapses the intra-object dup, keeping the FIRST registration" {
+  mkintra "$D/i.json"
+  run "$S" --apply "$D/i.json"
+  [ "$status" -eq 0 ]
+  [ "$(jq '.hooks.Stop[0].hooks | length' "$D/i.json")" -eq 2 ]
+  [ "$(jq -r '.hooks.Stop[0].hooks[0].command' "$D/i.json")" = "/Users/x/.claude/hooks/notify.sh complete" ]
+  [ "$(jq -r '[.hooks.Stop[0].hooks[].command | select(test("notify.sh"))] | length' "$D/i.json")" -eq 1 ]
+  [ -f "$D/i.json.dedup.bak" ]
+}
+
+@test "intra-object dedup is idempotent" {
+  mkintra "$D/i.json"
+  "$S" --apply "$D/i.json" >/dev/null
+  run "$S" --apply "$D/i.json"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q 'clean'
+}
+
+@test "the same hook with DIFFERENT timeouts is never collapsed" {
+  jq -n '{hooks:{Stop:[{hooks:[
+      {type:"command",command:"~/.claude/hooks/n.sh",timeout:5},
+      {type:"command",command:"~/.claude/hooks/n.sh",timeout:30}]}]}}' > "$D/t.json"
+  run "$S" --apply "$D/t.json"
+  [ "$status" -eq 0 ]
+  [ "$(jq '.hooks.Stop[0].hooks | length' "$D/t.json")" -eq 2 ]
+}
+
+@test "both rules apply in one pass: intra dup removed AND the redundant object dropped" {
+  jq -n '{hooks:{Stop:[
+      {hooks:[
+        {type:"command",command:"/abs/notify.sh complete",timeout:5},
+        {type:"command",command:"~/.claude/hooks/notify.sh complete",timeout:5},
+        {type:"command",command:"~/.claude/hooks/boundary-handoff.sh",timeout:5}]},
+      {hooks:[{type:"command",command:"/abs/boundary-handoff.sh",timeout:5}]}]}}' > "$D/b.json"
+  run "$S" --apply "$D/b.json"
+  [ "$status" -eq 0 ]
+  [ "$(jq '.hooks.Stop | length' "$D/b.json")" -eq 1 ]
+  [ "$(jq '.hooks.Stop[0].hooks | length' "$D/b.json")" -eq 2 ]
+}
+
+@test "an object with no dups at all is not rewritten" {
+  jq -n '{hooks:{Stop:[{hooks:[
+      {type:"command",command:"~/.claude/hooks/a.sh",timeout:5},
+      {type:"command",command:"~/.claude/hooks/b.sh",timeout:5}]}]}}' > "$D/c.json"
+  cp "$D/c.json" "$D/c.orig"
+  run "$S" --apply "$D/c.json"
+  [ "$status" -eq 0 ]
+  cmp -s "$D/c.json" "$D/c.orig"
+  [ ! -f "$D/c.json.dedup.bak" ]
 }
 
 @test "unknown arg → exit 2" {
