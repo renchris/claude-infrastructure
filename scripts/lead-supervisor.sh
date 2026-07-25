@@ -385,8 +385,17 @@ assess(){ # $1=telemetry-json-file → prints 1 if it produced a finding, else 0
   if pid_alive_owner "$pid" && [ "$age" -ge "$STALL_S" ] && ! is_registered_desk "$sid"; then
     local tage; tage="$(transcript_age "$cwd" "$cfg" "$sid")"
     if [ "$tage" -ge "$STALL_S" ]; then
+      # SAME-SWEEP GUARD (2026-07-25 flaky-gate incident): resolve only a PRE-EXISTING page. page()
+      # stamps paged_at in integer seconds, so a page created at X.99s read by resolve_page at
+      # X+1.00s computes deadline-elapsed=1 — with a 1s deadline the page "expires" inside its own
+      # sweep ⇒ phantom same-sweep ESCALATE (a 2-notify storm the e2e catches as a sporadic,
+      # load-sensitive flake — T22b forces it deterministically). The deadline clock starts AT the
+      # page; re-observation belongs to a later sweep. Deferred, never dropped: the next sweep's
+      # re-page finds the file pre-existing and resolves normally.
+      local had_page=0; [ -f "$PAGEDIR/$sid.page" ] && had_page=1
       page "$sid" "STALL?" "pid alive but telemetry ${age}s + transcript ${tage}s stale — CANDIDATE; re-observing effects at deadline"
-      resolve_page "$sid" "$cwd"; echo 1; return
+      [ "$had_page" = 1 ] && resolve_page "$sid" "$cwd"
+      echo 1; return
     fi
   fi
   # B-1 — PAST-THRESHOLD ∧ NOT-STOPPING: fill ≥ T but the session is live and fresh (still working, never

@@ -276,6 +276,19 @@ idl_has '"kind":"page_void","sid":"osc"' && ok "fresh effects past deadline ⇒ 
 CC_NOTIFY_CAPTURE="$SBX/notify.log" CC_PAGE_TO_FILE="$SBX/desk-role" CC_NOTIFY_BIN="$SBX/bin/cc-notify" bash "$SUP" --once >/dev/null 2>&1
 [ "$(wc -l < "$SBX/notify.log")" -eq 1 ] && ok "re-STALL? after void ⇒ NO re-notify (marker retained — storm fixed)" || no "void dropped the marker ⇒ re-notify storm (lines=$(wc -l < "$SBX/notify.log"))"
 
+echo "T22b SAME-SWEEP GUARD — a page created THIS sweep is never same-sweep resolved (second-boundary race: page at X.99s, resolve at X+1.00s reads deadline-passed → phantom ESCALATE, the 2026-07-25 flaky-gate incident)"
+reset; permreset; rm -f "$CC_TELEMETRY_DIR"/*.json "$SBX/notify.log" "$REPO/osc.txt"   # T22's osc.txt can share the page-stamp second ⇒ false-fresh ⇒ VOID not ESCALATE
+mktel osc2 40 100 "$ALIVE" "$REPO"
+# DEADLINE_S=0 forces what the integer-second race produces sporadically: the deadline reads as
+# already-passed in the very sweep that created the page. Pre-guard: page + same-sweep ESCALATE
+# (2 notifies, the flake). Post-guard: the deadline clock starts AT the page; re-observe belongs
+# to a LATER sweep (deadline ≥ sweep interval in prod).
+CC_SUP_PAGE_DEADLINE_S=0 CC_NOTIFY_CAPTURE="$SBX/notify.log" CC_PAGE_TO_FILE="$SBX/desk-role" CC_NOTIFY_BIN="$SBX/bin/cc-notify" bash "$SUP" --once >/dev/null 2>&1
+[ "$(wc -l < "$SBX/notify.log")" -eq 1 ] && ok "first sweep: page only — no same-sweep escalate" || no "same-sweep escalate leaked (lines=$(wc -l < "$SBX/notify.log")) — the second-boundary race"
+# a LATER sweep still escalates (re-observe intact — the guard defers, never drops, the disposition)
+CC_SUP_PAGE_DEADLINE_S=0 CC_NOTIFY_CAPTURE="$SBX/notify.log" CC_PAGE_TO_FILE="$SBX/desk-role" CC_NOTIFY_BIN="$SBX/bin/cc-notify" bash "$SUP" --once >/dev/null 2>&1
+{ [ "$(wc -l < "$SBX/notify.log")" -eq 2 ] && idl_has '"kind":"page_escalate","sid":"osc2"'; } && ok "next sweep past deadline ⇒ ESCALATED (disposition deferred, not lost)" || no "deadline escalation lost after the guard (lines=$(wc -l < "$SBX/notify.log"); escalate-idl=$(idl_has '"kind":"page_escalate","sid":"osc2"' && echo yes || echo no))"
+
 echo "T23 REGISTERED-DESK EXEMPTION (role=sid) — a pid-alive idle desk with STALE telemetry+transcript is NOT a STALL? candidate (item ff95faea46c8)"
 reset; permreset; rm -f "$CC_TELEMETRY_DIR"/*.json
 printf '%s' "deskA" > "$SBX/desk-role"                            # role file holds the desk's sid DIRECTLY
