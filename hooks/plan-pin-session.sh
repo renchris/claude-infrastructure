@@ -1,7 +1,9 @@
 #!/bin/bash
 # ~/.claude/hooks/plan-pin-session.sh — PostToolUse hook on ExitPlanMode.
 # Pins the session's plan file path to ~/.claude/sessions/<session-id>.plan
-# so `current-session-plan.sh` L1 resolves in O(1).
+# for an O(1) "what plan is this session on?" lookup. (Its former reader,
+# scripts/current-session-plan.sh, was retired 2026-07-25 — never adopted, zero
+# callers; the pin file is kept as the cheap session→plan breadcrumb.)
 #
 # Mechanism: when ExitPlanMode succeeds, the harness writes the plan to
 # a new ~/.claude/plans/<adjective-word-noun>.md file. We content-hash

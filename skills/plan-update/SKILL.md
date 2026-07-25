@@ -299,8 +299,8 @@ git worktree add /tmp/worktree-agent1 feat/stream1/initials
 git worktree add /tmp/worktree-agent2 feat/stream2/initials
 # ... repeat for each agent
 
-# 4. Verify custom agent exists (if needed)
-ls -lh .claude/agents/schema-migration.md
+# 4. Verify a custom agent exists before naming it as subagent_type (if needed)
+ls -lh ~/.claude/agents/            # deep-research, deep-research-sonnet, frontier-derivation, …
 ```
 
 ### Team Roster
@@ -394,11 +394,23 @@ pnpm dev       # Verify app starts
 
 ### Cleanup After Completion
 
+Tear down every teammate FIRST, then the worktrees/branches. The teardown call is
+**runtime-conditional** — see `skills/agent-teams/SKILL.md` § "Runtime assumption":
+
+- **Stable (CC 2.1.114)** — the classic `TeamCreate`/`TeamDelete` tools exist: call `TeamDelete`.
+- **Eval track (CC 2.1.178+, implicit-team model)** — there is **no `TeamDelete` tool**. Send each
+  teammate a structured `shutdown_request` (`SendMessage`); plain-text broadcasts do NOT close panes
+  → orphaned panes + worktrees. Absence of `TeamDelete` means *use the implicit-team model*, never
+  "teams are unavailable".
+
+Detect the running runtime by tool availability (or `CLAUDE_CODE_EXECPATH`), **not** by
+`claude --version` — `claude` is a shell function pinned to the stable launcher, so it reports
+2.1.114 even inside an eval-track session.
+
 ```bash
-# After all agents shut down and merge loop completes:
+# After every teammate has shut down (per the runtime-conditional call above) and the merge loop completes:
 git worktree list | grep /tmp/worktree | awk '{print $1}' | xargs -I{} git worktree remove {}
 git branch -d feat/[stream1]/cr feat/[stream2]/cr ...
-TeamDelete
 ```
 
 ### Estimated Timeline

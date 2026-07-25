@@ -118,7 +118,7 @@ fi
 
 # If this is a known read-only subagent type, allow silently
 case "$SUBAGENT_TYPE" in
-  Explore|Plan|claude-code-guide|fresh-eyes-evaluator|north-star-design-agent|visual-design-iterator) exit 0 ;;
+  Explore|Plan|claude-code-guide|research-decomposition-critic) exit 0 ;;
 esac
 
 # === RESEARCH ESCAPE HATCH ===
