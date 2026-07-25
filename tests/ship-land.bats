@@ -502,12 +502,12 @@ landable() {  # $1=branch $2=shell file — a commit the gate always lints
   [ "$(cat "$BATS_ARGV")" = "tests/" ]           # …it buys proof, it does not block
 }
 
-@test "scope: INERT post-land net (stale green stamp) ⇒ scoped degrades to the FULL gate" {
+@test "scope: INERT post-land net (cold last-green) ⇒ scoped degrades to the FULL gate" {
   scope_fixture
   stub_selector "tests/a.bats" ""
-  mkdir -p "$POSTLAND_DIR/stamps"
-  : > "$POSTLAND_DIR/stamps/deadbee.green"
-  touch -t 202001010000 "$POSTLAND_DIR/stamps/deadbee.green"   # net ran once, then went cold
+  mkdir -p "$POSTLAND_DIR"
+  : > "$POSTLAND_DIR/last-green"
+  touch -t 202001010000 "$POSTLAND_DIR/last-green"   # net ran once, then went cold
   landable feat/stale-net stn.sh
 
   run env SHIP_LAND_GATE_SCOPE=scoped bash "$SHIPLAND" --trunk main
@@ -516,18 +516,18 @@ landable() {  # $1=branch $2=shell file — a commit the gate always lints
   [ "$(cat "$BATS_ARGV")" = "tests/" ]
 }
 
-@test "scope: staleness guard — fresh stamp ⇒ scoped; kill switch ⇒ scoped despite a stale stamp" {
+@test "scope: staleness guard — fresh last-green ⇒ scoped; kill switch ⇒ scoped despite a cold one" {
   scope_fixture
   stub_selector "tests/a.bats" ""
-  mkdir -p "$POSTLAND_DIR/stamps"
-  : > "$POSTLAND_DIR/stamps/fresh.green"                       # today ⇒ net is live
+  mkdir -p "$POSTLAND_DIR"
+  : > "$POSTLAND_DIR/last-green"                       # touched today ⇒ net is live
   landable feat/fresh-net frn.sh
   run env SHIP_LAND_GATE_SCOPE=scoped bash "$SHIPLAND" --trunk main
   [ "$status" -eq 0 ]
   [ "$(cat "$BATS_ARGV")" = "tests/a.bats" ]
 
   : > "$BATS_ARGV"
-  touch -t 202001010000 "$POSTLAND_DIR/stamps/fresh.green"     # now cold, but guard disabled
+  touch -t 202001010000 "$POSTLAND_DIR/last-green"     # now cold, but guard disabled
   landable feat/killswitch ks.sh
   run env SHIP_LAND_GATE_SCOPE=scoped POSTLAND_STALENESS_GUARD=off bash "$SHIPLAND" --trunk main
   [ "$status" -eq 0 ]
