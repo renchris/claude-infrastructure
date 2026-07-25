@@ -804,7 +804,13 @@ acquire_sweep_lock(){
 }
 
 case "${1:-}" in
-  sweep)        acquire_sweep_lock || exit 0; sweep "${2:-}" ;;
+  # Only --reap is serialized. A DRY-RUN neither takes the lock nor respects it: it writes nothing
+  # (reconcile / backlog-reap / inbox-guard are all --reap-gated), so it has no state to race on, and
+  # gating it was wrong in BOTH directions — a human running the diagnostic could suppress a real reap
+  # tick for the duration, and the diagnostic became unavailable during exactly the long sweep that
+  # made someone want to run it. Its ~12s of read-only git I/O is not worth either.
+  sweep)        [ "${2:-}" = "--reap" ] && { acquire_sweep_lock || exit 0; }
+                sweep "${2:-}" ;;
   selftest)     exec bats "$HERE/../tests/cc-reaper.bats" ;;
   -h|--help|"") sed -n '2,20p' "$0"; exit 0 ;;
   *)            echo "cc-reaper: unknown command '$1' (sweep | selftest)" >&2; exit 2 ;;
