@@ -44,6 +44,7 @@ ci_last_interactive_epoch() { # <jsonl> → epoch seconds on stdout (empty + ret
   # abort the scan (jq runtime errors are per-program, not per-line). $ntr/$nimg gate the array cases:
   # a tool_result anywhere ⇒ $t is jq `empty` (row dropped — tool traffic, and a tool-returned image is
   # not an operator paste); an image with no tool_result counts even when the joined text is empty.
+  # shellcheck disable=SC2016  # $c/$ntr/$nimg/$t/$rx are jq variables — single quotes are REQUIRED (no shell expansion)
   prog='
       fromjson? | objects
       | select(.type=="user") | select(.isMeta != true)
