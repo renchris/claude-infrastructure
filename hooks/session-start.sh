@@ -39,6 +39,19 @@ if [ -x "$PRUNE_SCRIPT" ]; then
   fi
 fi
 
+# === DAILY PLAN-HISTORY PRUNING (background, non-blocking) ===
+# Same daily-marker shape as the backup prune above — that wiring is the reference
+# (audit 03 §1c calls backups/ "the reference-quality wiring"; plan-history had none).
+# Bounds MANIFEST.jsonl to keep-10-per-plan + 90 d and `git gc`s the plan-history repo.
+PLAN_PRUNE_SCRIPT="$HOME/.claude/scripts/prune-plan-history.sh"
+LAST_PLAN_PRUNE_FILE="$HOME/.claude/.last-plan-history-prune"
+if [ -x "$PLAN_PRUNE_SCRIPT" ]; then
+  if [ ! -f "$LAST_PLAN_PRUNE_FILE" ] || [ "$(cat "$LAST_PLAN_PRUNE_FILE" 2>/dev/null)" != "$TODAY" ]; then
+    echo "$TODAY" > "$LAST_PLAN_PRUNE_FILE"
+    "$PLAN_PRUNE_SCRIPT" >/dev/null 2>&1 &  # Background, non-blocking
+  fi
+fi
+
 # Check MCP server status with exponential backoff
 MAX_ATTEMPTS=3
 ATTEMPT=0
