@@ -310,14 +310,19 @@ if [[ -d "$REPO_DIR/vendor" ]]; then
   done
 fi
 
-# --- Global instructions (CLAUDE.md + rules/) — repo is the source of truth ---
+# --- Global instructions (CLAUDE.md) — repo is the source of truth ---
 # The lean resident knowledge layer. CLAUDE.md is COPIED as a real file (CC reads ~/.claude/CLAUDE.md
-# as user memory; a symlink into the repo would break across branch switches). rules/ is kept in sync:
-# stale live rule files no longer tracked in the repo are removed (agent-teams.md + research-subagents.md
-# were relocated to skills). PROJECT-only memory stays in the repo at .claude/CLAUDE.md and is NEVER
-# deployed globally — ~/.claude/CLAUDE.md remains the pure global core.
+# as user memory; a symlink into the repo would break across branch switches). PROJECT-only memory
+# stays in the repo at .claude/CLAUDE.md and is NEVER deployed globally — ~/.claude/CLAUDE.md remains
+# the pure global core.
+#
+# The rules/ leg was REMOVED 2026-07-25. rules/ itself was deleted from the repo in 270baf8 (its two
+# files were relocated into skills/), so the one-shot stale-rule sweep had nothing left to sweep in
+# any of the 5 config dirs and the deploy loop nothing to deploy — all the leg still did was
+# ensure_real_dir an empty ~/.claude/rules on every run, recreating the very directory the migration
+# had emptied. The migration is complete; the live empty dirs were removed with this commit.
 echo ""
-echo "Global instructions → $CONFIG_DIR/CLAUDE.md + rules/"
+echo "Global instructions → $CONFIG_DIR/CLAUDE.md"
 if ! diff -q "$REPO_DIR/CLAUDE.md" "$CONFIG_DIR/CLAUDE.md" >/dev/null 2>&1; then
   [[ -L "$CONFIG_DIR/CLAUDE.md" ]] && run rm "$CONFIG_DIR/CLAUDE.md"
   run cp "$REPO_DIR/CLAUDE.md" "$CONFIG_DIR/CLAUDE.md"
@@ -325,18 +330,6 @@ if ! diff -q "$REPO_DIR/CLAUDE.md" "$CONFIG_DIR/CLAUDE.md" >/dev/null 2>&1; then
   installed=$((installed + 1))
 else
   skipped=$((skipped + 1))
-fi
-ensure_real_dir "$CONFIG_DIR/rules"
-for live in "$CONFIG_DIR"/rules/*.md; do
-  [[ -f "$live" ]] || continue
-  base="$(basename "$live")"
-  [[ -f "$REPO_DIR/rules/$base" ]] || { run rm -f "$live"; echo "  ✓ removed stale rule $base (relocated to a skill)"; installed=$((installed + 1)); }
-done
-if [[ -d "$REPO_DIR/rules" ]]; then
-  for rf in "$REPO_DIR"/rules/*.md; do
-    [[ -f "$rf" ]] || continue
-    copy_file "$rf" "$CONFIG_DIR/rules/$(basename "$rf")"
-  done
 fi
 
 # --- Status line ---
@@ -352,17 +345,23 @@ if [[ -f "$REPO_DIR/bin/it2-wrapper" ]]; then
   copy_file "$REPO_DIR/bin/it2-wrapper" "$CONFIG_DIR/bin/it2"
 fi
 
-# --- Cross-session comms tools (global only) → ~/.claude/bin/ ---
-# cc-notify / cc-sessions / cc-await-ping — the two-way session-comms CLIs.
+# --- PATH tools (global only) → ~/.claude/bin/ ---
+# cc-* (the two-way session-comms + orchestration CLIs) and desk-* (the desk role tools).
 # SYMLINKED (like scripts/) so live edits land in the repo and can't drift out of
 # version control. ~/.claude/bin is on PATH and holds it2, beside which these sit —
 # the /handoff --notify-back back-channel trailer references $HOME/.claude/bin/cc-notify
 # by absolute path, so this location is load-bearing.
+#
+# desk-* is NOT covered by the cc-* glob, and nothing else linked it: ~/.claude/bin/desk-register
+# did not exist on this machine at all, so the live /desk command — whose whole first step is
+# `desk-register` (commands/desk.md:25,37) — invoked a nonexistent binary (audit 02 BROKEN-DEPLOY).
+# desk-assert was live only because someone linked it BY HAND on 2026-07-18. Glob both families
+# rather than naming files, so a new desk-* tool deploys without another install.sh edit.
 if $IS_GLOBAL; then
   echo ""
-  echo "Comms tools → $CONFIG_DIR/bin/"
+  echo "PATH tools → $CONFIG_DIR/bin/"
   mkdir -p "$CONFIG_DIR/bin"
-  for tool in "$REPO_DIR"/bin/cc-*; do
+  for tool in "$REPO_DIR"/bin/cc-* "$REPO_DIR"/bin/desk-*; do
     [[ -f "$tool" ]] || continue
     link_file "$tool" "$CONFIG_DIR/bin/$(basename "$tool")"
   done
