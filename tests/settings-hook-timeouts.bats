@@ -157,3 +157,13 @@ mklive() {
   run jq -e '.hooks.PostToolUse' "$F"
   [ "$status" -eq 0 ]
 }
+
+@test "--apply preserves the original file mode (a 0600 settings.json must not widen to 0644)" {
+  chmod 600 "$F"
+  run "$S" --event PostToolUse --set-timeout waiting-recycle --timeout 30 --apply "$F"
+  [ "$status" -eq 0 ]
+  [ "$(stat -f '%Lp' "$F" 2>/dev/null || stat -c '%a' "$F")" = "600" ]
+  run "$S" --event PreCompact --matcher manual --ensure '~/.claude/hooks/dod-persist.sh' --timeout 10 --apply "$F"
+  [ "$status" -eq 0 ]
+  [ "$(stat -f '%Lp' "$F" 2>/dev/null || stat -c '%a' "$F")" = "600" ]
+}

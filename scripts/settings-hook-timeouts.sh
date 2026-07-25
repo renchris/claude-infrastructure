@@ -66,15 +66,29 @@ JQ_COUNT_SET_NEEDED='[ (.hooks[$ev] // [])[] | (.hooks // [])[]
   | select((.command // "") | contains($sub)) | select((.timeout // null) != $to) ] | length'
 JQ_COUNT_MATCHER='[ (.hooks[$ev] // [])[] | select(if $mnull then (.matcher == null) else ((.matcher // null) == $m) end) ] | length'
 
+# portable octal mode — BSD stat first, GNU stat next (same idiom as rotate-autonomy-logs.sh:52-58)
+filemode() { # <path>
+  local m
+  m="$(stat -f '%Lp' "$1" 2>/dev/null)" || m=""
+  [ -n "$m" ] || m="$(stat -c '%a' "$1" 2>/dev/null)" || m=""
+  printf '%s' "$m"
+}
+
 # write_result <file> <new-json> <label> — validate, back up, replace. Returns 0 ok / 3 refused.
 write_result() {
-  local f="$1" new="$2" label="$3"
+  local f="$1" new="$2" label="$3" mode
   if [ -z "$new" ] || ! printf '%s' "$new" | "$JQ" -e '.hooks' >/dev/null 2>&1; then
     printf 'settings-hook-timeouts: refusing to write — result malformed for %s\n' "$f" >&2
     return 3
   fi
+  # Capture the mode BEFORE the write: `mv` of a fresh temp file replaces the inode, so the result
+  # would inherit the umask instead of the original's permissions. Four of the five live
+  # settings.json files are 0600 — a rewrite that silently widened them to 0644 would be a real
+  # permission regression on files that carry API config.
+  mode="$(filemode "$f")"
   cp "$f" "$f.timeouts.bak" || return 3
   printf '%s\n' "$new" > "$f.tmp" && mv "$f.tmp" "$f" || return 3
+  [ -n "$mode" ] && chmod "$mode" "$f" 2>/dev/null
   printf '  APPLY  %s — %s; backup: %s\n' "$f" "$label" "$f.timeouts.bak"
   return 0
 }
