@@ -18,6 +18,8 @@
 #   5. postland_inertness — the post-land verification net's OWN liveness: stamps dir present but a
 #      settled (>2h) trunk commit unstamped = the net stopped stamping (blind-check law). Abstains
 #      green when the net isn't adopted (no stamps dir). Env seam: CC_NIGHTLY_POSTLAND_DIR/_AGE.
+#   6. e2e-transitive-skip — the step-4 skip must hold TRANSITIVELY: a declared gate may not run an
+#      e2e suite from inside itself unless that call carries an inline `# e2e:reviewed-hermetic`.
 #
 # ON RED: write a page file to autonomy/pages/ (drainable by the P0-15 SO-5 desk-role consumer) +
 # osascript notification. ALWAYS append a one-line result to autonomy/regression.log.
@@ -133,6 +135,38 @@ postland_inertness() {
   return 1
 }
 
+# S3 (audit 08): step 4 SKIPS *-e2e.sh as side-effectful — but the skip is NOT TRANSITIVE.
+# premortem-gate.sh:64 runs telemetry-e2e.sh AND p8-e2e.sh from inside itself. Both were verified
+# hermetic (mktemp sandboxes, no live ~/.claude writes), so the skip's intent is not violated TODAY —
+# but nothing enforced it, and the next e2e appended to that line would run against the live fleet at
+# 04:00, unnoticed. Every direct e2e invocation inside a DECLARED gate/lint must carry an inline
+# `# e2e:reviewed-hermetic` marker; an unmarked one is RED (fail-closed — review it, then mark it).
+transitive_e2e_assert() {
+  local f b hit rc=0 n=0
+  # shellcheck disable=SC2086  # GATE_GLOB/LINT_GLOB are intentional globs
+  for f in $GATE_GLOB $LINT_GLOB; do
+    [ -f "$f" ] || continue
+    b="$(basename "$f")"
+    case "$b" in *-e2e.sh) continue ;; esac   # the e2e suites themselves are skipped wholesale
+    while IFS= read -r hit; do
+      [ -n "$hit" ] || continue
+      case "$hit" in *e2e:reviewed-hermetic*) n=$((n+1)); continue ;; esac
+      printf '⛔ UNMARKED transitive e2e call: %s:%s\n' "$b" "$hit"
+      rc=1
+    done < <(
+      grep -nE '(\./|bash[[:space:]]+|sh[[:space:]]+|\$\{?[A-Za-z_][A-Za-z0-9_]*\}?/)[A-Za-z0-9_./-]*-e2e\.sh' "$f" 2>/dev/null \
+        | grep -vE '^[0-9]+:[[:space:]]*#' || true
+    )
+  done
+  if [ "$rc" -eq 0 ]; then
+    printf 'e2e-transitive-skip: clean — %d reviewed-hermetic call(s), 0 unmarked\n' "$n"
+  else
+    printf 'Each line above runs an e2e suite from inside a gate the nightly believes it SKIPPED.\n'
+    printf 'Fix: verify the suite is hermetic (no live ~/.claude writes), then append  # e2e:reviewed-hermetic\n'
+  fi
+  return "$rc"
+}
+
 regress() {
   mkdir -p "$PAGEDIR" "$(dirname "$LOG")" 2>/dev/null || true
   echo "nightly-regression @ $(now_iso) — repo=$REPO"
@@ -177,6 +211,9 @@ regress() {
 
   # 5. the post-land net's own liveness: exists-but-stopped-stamping is an INERT check (pages).
   run_check "postland-inertness" postland_inertness
+
+  # 6. the e2e skip must be TRANSITIVE (S3) — a gate may not smuggle an unreviewed e2e past step 4.
+  run_check "e2e-transitive-skip" transitive_e2e_assert
 
   # ── verdict ──
   local n_red="${#REDS[@]}" summary
@@ -269,6 +306,17 @@ selftest() {
   supports_selftest "$d/detect/opt.sh"      && okp "S4: detects an option comparison" || badp "S4: missed an option comparison"
   supports_selftest "$d/detect/prose.sh"    && badp "S4: matched PROSE / another script's flag" || okp "S4: ignores prose + calls to other scripts"
   supports_selftest "$d/detect/bareverb.sh" && badp "S4: matched a BARE-verb arm (would pass a rejected flag)" || okp "S4: ignores a bare-verb arm"
+
+  # S3: an unmarked transitive e2e call inside a declared gate must go RED; a reviewed one must not
+  mkdir -p "$d/e2egates"
+  printf '#!/bin/bash\nbash scripts/telemetry-e2e.sh >/dev/null 2>&1  # e2e:reviewed-hermetic\n' > "$d/e2egates/marked-gate.sh"
+  printf '#!/bin/bash\n./scripts/newthing-e2e.sh >/dev/null 2>&1 && ok\n'                        > "$d/e2egates/unmarked-gate.sh"
+  ( GATE_GLOB="$d/e2egates/marked-gate.sh"; LINT_GLOB="$d/emptygl/*.sh"; transitive_e2e_assert >/dev/null 2>&1 ) \
+    && okp "S3: a  # e2e:reviewed-hermetic  call is accepted" || badp "S3: rejected a reviewed-hermetic call"
+  ( GATE_GLOB="$d/e2egates/unmarked-gate.sh"; LINT_GLOB="$d/emptygl/*.sh"; transitive_e2e_assert >/dev/null 2>&1 ) \
+    && badp "S3: an UNMARKED transitive e2e call passed (the skip is not enforced)" || okp "S3: an unmarked transitive e2e call goes RED"
+  ( GATE_GLOB="$REPO/scripts/*gate*.sh"; LINT_GLOB="$REPO/scripts/*lint*.sh"; transitive_e2e_assert >/dev/null 2>&1 ) \
+    && okp "S3: the live gate corpus carries no unmarked e2e call" || badp "S3: an unmarked e2e call exists in scripts/"
 
   echo "nightly-regression --selftest: $PASS passed, $FAIL failed"
   [ "$FAIL" -eq 0 ] || exit 1
