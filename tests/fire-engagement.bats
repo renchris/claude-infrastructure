@@ -242,3 +242,26 @@ STUB
   [ "$status" -eq 0 ]
   echo "$output" | grep -q 'if \[ "$WANT_SELF_RETIRE" = 1 \]; then'
 }
+
+@test "mark_fired_peer: persists the final fired brief beside the marker (recovery brief source)" {
+  # cc-recover-safeguard re-fires THIS exact brief on a different model when a fire is refused DOA.
+  FPANE="2BE82E97-1111-4222-8333-444455556666"; FDIR="$BATS_TEST_TMPDIR/firedP"
+  PFB="$BATS_TEST_TMPDIR/final-brief.txt"
+  printf 'You are a FRONTIER session.\nGoal: converge.\nPing back on completion.\n' > "$PFB"
+  run mark_fired_peer "$FDIR" "$FPANE" "/work/cwd" "ORIG-0000-0000-0000-000000000009" "$PFB"
+  [ "$status" -eq 0 ]
+  [ -f "$FDIR/$FPANE.prompt" ]
+  run diff "$PFB" "$FDIR/$FPANE.prompt"                 # byte-identical brief carried
+  [ "$status" -eq 0 ]
+}
+
+@test "mark_fired_peer: omitted/absent prompt-file → marker written, no .prompt (fail-safe)" {
+  FPANE="2BE82E97-1111-4222-8333-444455556666"; FDIR="$BATS_TEST_TMPDIR/firedQ"
+  run mark_fired_peer "$FDIR" "$FPANE" "/work/cwd" "by"           # 4 args — no prompt-file
+  [ "$status" -eq 0 ]
+  [ -f "$FDIR/$FPANE.json" ]
+  [ ! -f "$FDIR/$FPANE.prompt" ]
+  run mark_fired_peer "$FDIR" "$FPANE" "/cwd" "by" "$BATS_TEST_TMPDIR/does-not-exist.txt"  # missing file
+  [ "$status" -eq 0 ]
+  [ ! -f "$FDIR/$FPANE.prompt" ]
+}
