@@ -38,6 +38,12 @@ setup() {
   echo "$output" | grep -q 'T18 DAMPING'
 }
 
+@test "same-sweep guard: a page created this sweep is never same-sweep resolved (second-boundary race, 2026-07-25 flaky-gate incident)" {
+  run bash "$SUP" --selftest
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'T22b SAME-SWEEP GUARD'
+}
+
 @test "registered-desk STALL? exemption — role=sid, role=pane→registry, desk-specific, dead-still-DEAD (item ff95faea46c8)" {
   run bash "$SUP" --selftest
   [ "$status" -eq 0 ]
