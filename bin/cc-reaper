@@ -134,6 +134,17 @@ if [ -z "$NOTIFY_BIN" ]; then
     [ -n "$_c" ] && [ -x "$_c" ] && { NOTIFY_BIN="$_c"; break; }
   done
 fi
+# ── safeguard-blocked recovery (2026-07-25) — a fired peer refused by model content-safeguards is
+# SURFACED (originator page + board row + desk page), NEVER reaped. Auto-recovery (re-fire on another
+# model + sanctioned self-close) is OPT-IN: default OFF, so the desk decides. When on, the sweep invokes
+# cc-recover-safeguard --execute. Same resolve order as NOTIFY_BIN; used only when autorecover=1.
+SAFEGUARD_AUTORECOVER="${CC_REAPER_SAFEGUARD_AUTORECOVER:-0}"
+RECOVER_BIN="${CC_REAPER_RECOVER_BIN:-}"
+if [ -z "$RECOVER_BIN" ]; then
+  for _c in "$HERE/cc-recover-safeguard" "$HOME/.claude/bin/cc-recover-safeguard" "$(command -v cc-recover-safeguard 2>/dev/null || true)"; do
+    [ -n "$_c" ] && [ -x "$_c" ] && { RECOVER_BIN="$_c"; break; }
+  done
+fi
 # D7 send-damping (best-effort: absent lib ⇒ undamped, i.e. today's behaviour, never a lost page).
 for _c in "$HERE/../hooks/lib/page-damp.sh" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/page-damp.sh" \
           "$HOME/.claude/hooks/lib/page-damp.sh"; do
@@ -194,6 +205,14 @@ idl_selfcheck(){ # <live> <enumerated> <delta>
   mkdir -p "$(dirname "$IDL_FILE")" 2>/dev/null || true
   jq -nc --arg ts "$(utc)" --argjson live "$1" --argjson enum "$2" --argjson delta "$3" \
     '{ts:$ts, actor:"cc-reaper", kind:"selfcheck-page", live:$live, enumerated:$enum, delta:$delta}' \
+    2>/dev/null >> "$IDL_FILE" || true
+}
+idl_safeguard(){ # <pane> <name> <account> <model> <refusal> <firedBy> <recover_cmd> — the blockers-board row
+  mkdir -p "$(dirname "$IDL_FILE")" 2>/dev/null || true
+  jq -nc --arg ts "$(utc)" --arg pane "$1" --arg name "$2" --arg account "$3" \
+    --arg model "$4" --arg refusal "$5" --arg firedBy "$6" --arg cmd "$7" \
+    '{ts:$ts, actor:"cc-reaper", kind:"safeguard-blocked", pane:$pane, name:$name, account:$account,
+      blocked_model:$model, refusal:$refusal, firedBy:$firedBy, recover_cmd:$cmd}' \
     2>/dev/null >> "$IDL_FILE" || true
 }
 # <message> [state-fingerprint] — best-effort desk page. ROLE-ADDRESSED by default (D2): cc-notify
@@ -267,6 +286,12 @@ fired_stamp_state(){
 }
 fired_peer(){ # <paneUUID> [startedAt-ms] → 0 iff a TENANCY-VALID spawner stamp gates this session
   [ "$(fired_stamp_state "${1:-}" "${2:-}")" = valid ]
+}
+fired_by(){ # <paneUUID> → the ORIGINATOR uuid that fired this pane (marker firedBy; empty if unmarked)
+  local pane="${1:-}"
+  [ -n "$pane" ] || return 0
+  case "$pane" in *[!0-9A-Fa-f-]*) return 0 ;; esac                 # UUID-shaped only — never a path fragment
+  jq -r '.firedBy // ""' "$FIRED_DIR/$pane.json" 2>/dev/null || true
 }
 # Gap-2 helpers for the coordination-abandoned / handed-off-lead second legs.
 alive(){ [ -n "${1:-}" ] && kill -0 "$1" 2>/dev/null; }
@@ -391,6 +416,53 @@ handle_surface() { # <reap> <key> <name> <cause> <pane> <detail>
   log "surface-page $name [$cause] pane=$pane"
 }
 
+# ── safeguard-blocked (2026-07-25): surface a fired peer that model content-safeguards refused on
+#    arrival — a dead-on-arrival block, never a "done" session. Four things, none of which the generic
+#    desk-only handle_surface does: (1) notify the ORIGINATOR (firedBy — the pane that fired it, read
+#    from the fired marker) so the session that spawned it learns the brief never ran; (2) page the
+#    desk (damped, same cadence as other surface causes); (3) write a blockers-board row carrying the
+#    recovery command; (4) ONLY if the operator opted in (CC_REAPER_SAFEGUARD_AUTORECOVER=1), invoke
+#    the recovery helper. NEVER reaps — recovery is a re-fire on a different model + a sanctioned
+#    self-close, not a teardown. Both pages are D7-damped (one per (target, pane) inside the TTL).
+handle_safeguard_blocked(){ # <reap> <obj-json>
+  local reap="$1" o="$2"
+  local pane name account model refusal firedBy recover_cmd
+  pane="$(printf '%s' "$o" | jq -r '.paneUUID // ""')"
+  name="$(printf '%s' "$o" | jq -r '.name // .paneUUID // "?"')"
+  account="$(printf '%s' "$o" | jq -r '.account // "?"')"
+  model="$(printf '%s' "$o" | jq -r '.blocked_model // ""')"
+  refusal="$(printf '%s' "$o" | jq -r '.refusal // ""')"
+  firedBy="$(fired_by "$pane")"
+  recover_cmd="cc-recover-safeguard $pane"
+  if [ "$reap" = 0 ]; then
+    say "  WOULD-SURFACE $name [safeguard-blocked] — notify originator ${firedBy:-<none>} + board row + desk page (in --reap); recover: $recover_cmd"
+    return 0
+  fi
+  # 1. ORIGINATOR page (firedBy), damped by (originator, pane) — the session that fired this needs to know.
+  if [ -n "$firedBy" ] && [ -n "$NOTIFY_BIN" ]; then
+    if ! command -v damp_should_send >/dev/null 2>&1 || damp_should_send "$firedBy" "safeguard:$pane"; then
+      "$NOTIFY_BIN" "$firedBy" "⚠️ SAFEGUARD-BLOCKED — your fired peer ${name} (${account}${model:+, ${model}}) was refused by model content-safeguards on arrival and is idle DOA — its brief never ran. Refusal: ${refusal}. Recover (re-fire on another model): ${recover_cmd}" >/dev/null 2>&1 || true
+      log "safeguard originator-paged $firedBy for $pane"
+    else
+      log "safeguard originator page damped [$firedBy:$pane]"
+    fi
+  else
+    log "safeguard-blocked $pane has no firedBy originator — desk + board only"
+  fi
+  # 2. desk page (damped) — same cadence as other surface causes.
+  notify_desk "⚠️ REAPER SURFACE — ${name} is safeguard-blocked (${account}${model:+, ${model}}): model content-safeguards refused its first turn — idle DOA, brief never ran. Originator ${firedBy:-<unknown>} notified. Recover: ${recover_cmd}. cc-reaper never auto-acts on this." "surface:${name}:safeguard-blocked"
+  # 3. blockers-board row (carries the recovery command for the one-glance operator view).
+  idl_safeguard "$pane" "$name" "$account" "$model" "$refusal" "$firedBy" "$recover_cmd"
+  # 4. opt-in auto-recovery (default OFF — surface-and-let-the-desk-decide).
+  if [ "$SAFEGUARD_AUTORECOVER" = 1 ] && [ -n "$RECOVER_BIN" ]; then
+    say "  AUTO-RECOVER $name [safeguard-blocked] → $RECOVER_BIN $pane --execute (operator opted in)"
+    log "safeguard auto-recover $pane via $RECOVER_BIN"
+    "$RECOVER_BIN" "$pane" --execute >/dev/null 2>&1 || log "safeguard auto-recover FAILED for $pane"
+  fi
+  say "  SURFACE $name [safeguard-blocked] → originator ${firedBy:-<none>} + desk + board (autorecover=$SAFEGUARD_AUTORECOVER)"
+  log "safeguard-blocked surfaced $name pane=$pane firedBy=${firedBy:-none} autorecover=$SAFEGUARD_AUTORECOVER"
+}
+
 # ── P0-12b: enumerated≈live-panes self-check. `enum` = what cc-classify saw this sweep; `live` = the
 #    independent interactive-pane count. A positive delta past tolerance, PERSISTED, pages the desk once. ──
 self_check() { # <reap> <enumerated>
@@ -500,6 +572,17 @@ sweep() {
       else
         say "  keep   $name [$cause] — desk-fired peer but TRACKED tree dirty / not landed → surface (never auto-reap)"
       fi
+    fi
+
+    # ── safeguard-blocked: a fired peer refused by model content-safeguards on arrival. A DEDICATED
+    #    surface (originator page + board row + desk page + opt-in auto-recover), intercepted BEFORE the
+    #    generic desk-only surface path. NEVER reaped.
+    if [ "$promoted" = 0 ] && [ "$cause" = safeguard-blocked ]; then
+      surfaced=$((surfaced+1))
+      local sgkey; sgkey="$(sanitize_key "${pane:-$name}")"
+      surfaced_keys="$surfaced_keys$sgkey "
+      handle_safeguard_blocked "$reap" "$o"
+      continue
     fi
 
     # ── disposition (never-reap is the default; a reap needs every gate) ──

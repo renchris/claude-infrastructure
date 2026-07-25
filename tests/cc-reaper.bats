@@ -869,3 +869,61 @@ EOF
   [ "$status" -eq 0 ]
   [ "$(cat "$D/beat")" = "$NOW" ]
 }
+
+# ── safeguard-blocked disposition (2026-07-25): SURFACE (originator page + board row + desk page),
+#    NEVER reap; auto-recovery is OPT-IN (default OFF). Refusal text carries apostrophes → the mock
+#    classify writes JSON via jq --arg to a file (never bakes the text into a single-quoted jq string).
+mock_classify_safeguard() { # [pane] [cwd] [model] [refusal]
+  local pane="${1:-$WPANE}" cwd="${2:-x}" model="${3:-Fable 5}" \
+        refusal="${4:-API Error: Fable 5's safeguards flagged this message. Claude Code can't respond to this request with Fable 5.}"
+  jq -nc --arg p "$pane" --arg c "$cwd" --arg m "$model" --arg r "$refusal" \
+    '[{name:"peer",paneUUID:$p,account:"claude-quaternary",cwd:$c,cause:"safeguard-blocked",idle_s:200,work_landed:"na",blocked_model:$m,refusal:$r,successor:null,detail:"model safeguards refused"}]' > "$D/classify.json"
+  printf '#!/bin/bash\ncat "%s"\n' "$D/classify.json" > "$D/bin/classify"
+  chmod +x "$D/bin/classify"; export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
+}
+set_recover() { printf '#!/bin/bash\necho "RECOVER $*" >> "%s"\n' "$D/recover-calls" > "$D/bin/recover"
+                chmod +x "$D/bin/recover"; export CC_REAPER_RECOVER_BIN="$D/bin/recover"; }
+
+@test "safeguard-blocked --reap → SURFACED not reaped: originator paged, desk paged, board row, recover cmd" {
+  mock_classify_safeguard "$WPANE" "$D/clean"; mark_fired "$WPANE"; set_desk
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  ! td_called                                              # NEVER reaped
+  grep -q '"kind":"safeguard-blocked"' "$D/idl.jsonl"      # blockers-board row
+  grep -q "NOTIFY t .*SAFEGUARD-BLOCKED" "$D/notify-calls" # ORIGINATOR (firedBy=t) paged
+  grep -q "cc-recover-safeguard $WPANE" "$D/notify-calls"  # recovery command surfaced
+  grep -q 'REAPER SURFACE' "$D/notify-calls"               # desk paged too
+}
+
+@test "safeguard-blocked — auto-recovery is OFF by default (helper NOT invoked)" {
+  mock_classify_safeguard "$WPANE" "$D/clean"; mark_fired "$WPANE"; set_desk; set_recover
+  run "$R" sweep --reap                                    # CC_REAPER_SAFEGUARD_AUTORECOVER unset → 0
+  [ "$status" -eq 0 ]
+  [ ! -f "$D/recover-calls" ]                              # surface-only; desk decides
+}
+
+@test "safeguard-blocked — auto-recovery ON (opt-in) invokes the helper with the pane + --execute" {
+  mock_classify_safeguard "$WPANE" "$D/clean"; mark_fired "$WPANE"; set_desk; set_recover
+  export CC_REAPER_SAFEGUARD_AUTORECOVER=1
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  grep -q "RECOVER $WPANE --execute" "$D/recover-calls"
+}
+
+@test "safeguard-blocked — DRY-RUN sweep sends nothing (would-surface only)" {
+  mock_classify_safeguard "$WPANE" "$D/clean"; mark_fired "$WPANE"; set_desk
+  run "$R" sweep                                           # no --reap
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qi 'WOULD-SURFACE.*safeguard-blocked'
+  [ ! -f "$D/notify-calls" ]                               # nothing paged
+  [ ! -f "$D/idl.jsonl" ]                                  # no board row
+}
+
+@test "safeguard-blocked — no firedBy marker: desk + board still surface (no originator page, no crash)" {
+  mock_classify_safeguard "$WPANE" "$D/clean"; set_desk    # NO mark_fired → no firedBy originator
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  ! td_called
+  grep -q '"kind":"safeguard-blocked"' "$D/idl.jsonl"      # board row still written
+  grep -q 'REAPER SURFACE' "$D/notify-calls"               # desk still paged
+}
