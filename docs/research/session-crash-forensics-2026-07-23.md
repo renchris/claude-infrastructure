@@ -458,8 +458,27 @@ verify pass earned its keep by finding that the *published* fix was necessary bu
 | **U5** | `1937ed7` `6c9bd6e` `8b7bba7` `05aa8cf` | Close attribution: `bin/cc-close-attrib` exit-code+stderr wrapper (fail-open, kill-switch `CC_CLOSE_ATTRIB_DISABLED`); `lead-crash-watchdog` close-record join (clean-exit / killed-oom-or-force / binary-crash / error-exit); C10 activation `10-close-attrib-activate.sh` (PATH shim; **operator runs**). |
 | **U6** | `f19e8bd` (+ sibling `e34ab65`) | Desk self-restore completion on top of `e34ab65`'s `--window`+`FIRE_ERR`: role-file heal from the cc-fired stamp on a successful replacement fire + `paged-*-stale` >7 d sweep. Ends the 41 h silent no-desk fire-failed loop for good. |
 | **U7** | `83cf353` | `cc-teardown` teardown-markers: a DELEGATED close now drops the same contract-v1 marker `handoff-fire` got on 2026-07-23, so deliberate closes stop reading as CRASHes. |
+| **U8** | `f8dc6b7` | `teammate-auto-shutdown` teardown-markers (`mode=teammate-idle`): the TeammateIdle closer was the last *unmarked* one. `lead-crash-watchdog` is a SessionStart hook with **no matcher** — it arms on every session, teammates included — so every idle-teammate close fell through the whole classify ladder to CRASH. |
+| **U9** | `d8e36fa` | `lead-crash-watchdog`: a pane-keyed marker must **name** the session it absolves. An in-place `--recycle` leaves the predecessor's marker on a pane the registry now resolves to the *successor*, so a genuine successor crash inside the 30-min window was classified RECYCLE — a **silent** miss. Empty-sid markers stay honoured (the 2026-07-23 self-close shape). |
 
-**U7 detail** (the last leg of the class). `handoff-fire` was fixed on 2026-07-23 for the *self*-close
+**U8/U9 — and the move that found them.** U1-U7 all came from the 8-axis audit's closer list. U8 and
+U9 came from *refusing to trust that list*: a sweep of every pane-closing / process-killing call site
+in `bin/ hooks/ scripts/` (twice, with two different pattern families), then walking the reader's
+ladder against each writer. That surfaced the one live closer nobody had enumerated (TeammateIdle)
+and the one case where the reader trusts a marker that was never about the session it is judging.
+
+U9 is the more interesting of the two because it is the **mirror** of the bug this whole class is
+about. Everything up to U8 fixed *false CRASHes* — noisy, self-announcing, and therefore eventually
+noticed. U9 fixes a *false RECYCLE*: a real crash quietly absolved by someone else's teardown marker
+and never surfaced at all. A detection system's dangerous failure is the silent one, so
+"every close class is attributable" was not true until the reader stopped accepting evidence that was
+never about the session in front of it.
+
+**Generalisable:** an audit that enumerates *mechanisms* will miss an actuator — enumerate *call
+sites*. And when you add a producer to a contract, re-check the **consumer's** logic against every
+producer, not just the one you added.
+
+**U7 detail** (the last leg of the *writer* side). `handoff-fire` was fixed on 2026-07-23 for the *self*-close
 path; the *delegated* close — desk or reaper calling `cc-teardown`, which kills the target's process
 and closes its pane — still looked exactly like a crash to the **target's own** watchdog. `cc-teardown`
 now writes the dual-keyed marker (`<sid>.json` + `<pane>.json`, `mode=teardown`) that
@@ -492,15 +511,38 @@ full-suite-inside-the-lock cost (~17 min/land, queues >40 min) was fixed separat
 (`190c839` gate-outside-the-lock + CAS push window; backlog `ee453a792903`). The generalized lesson is
 recorded as the `parallel-stream-convergence-protocol` memory.
 
-### Detection coverage now
+### Detection coverage now — the closer inventory
 
-Every close class is attributable: reaper closes (logged + gated), deliberate teardowns (markers, now
-including `cc-teardown`), involuntary deaths (close-record exit-code join — **pending its C10
-activation**), orphan archives (surface-first). The next "a session closed by itself" report has a
-named cause within one watchdog sweep, or it is iTerm/hardware.
+The completeness claim is only worth as much as the enumeration behind it, so here is the full list
+of paths that can end a session, each with its attribution status (swept twice over `bin/ hooks/
+scripts/` with two different pattern families; every other `kill`/`close` hit in the repo targets a
+script's own helper or fixture pid, never a session):
+
+| Closer | Marker | Status |
+|---|---|---|
+| `handoff-fire` self-close (`__selfclose`) | ✓ written by the parent for `SC_SID` before the first `/exit` | landed 2026-07-23 |
+| `handoff-fire --recycle` | ✓ `mode=recycle` | landed 2026-07-23 |
+| `handoff-fire` focus-restore failure | n/a — closes an UNTYPED child pane; nothing launched, no session, no watchdog | correct by construction |
+| `cc-teardown` (desk + `cc-reaper` delegated close) | ✓ `mode=teardown` | **U7** |
+| `teammate-auto-shutdown` (TeammateIdle) | ✓ `mode=teammate-idle` | **U8** |
+| `session-register` `kill -9` | n/a — kills its own watchdog helper, never a session | correct by construction |
+| `handoff-selfclose-e2e.sh`, `reaper-e2e.sh` | n/a — test-fixture cleanup | correct by construction |
+
+With the writer side complete and the reader no longer accepting another session's marker (**U9**),
+every close class is attributable: reaper closes (logged + gated), deliberate teardowns (markers on
+**all three** closers), involuntary deaths (close-record exit-code join — **pending its C10
+activation**, the one real gap left), orphan archives (surface-first). The next "a session closed by
+itself" report has a named cause within one watchdog sweep, or it is iTerm/hardware.
 
 ### Ops note (addendum II)
 
-`bin/cc-teardown` is an existing per-file symlink into the shared checkout — the trunk fast-forward
-deploys it; no new tracked runtime file needs linking (`tests/cc-teardown.bats` is not deployed).
-The one operator-owned step this wave leaves open is U5's `10-close-attrib-activate.sh` (C10).
+`bin/cc-teardown`, `hooks/teammate-auto-shutdown.sh` and `hooks/lead-crash-watchdog.sh` are all
+existing per-file symlinks into the shared checkout — the trunk fast-forward deploys them; no new
+tracked runtime file needs linking (the `tests/*.bats` are not deployed). Landed ≠ deployed: the
+shared checkout lags `origin/main` between ff-syncs, so confirm with
+`git -C ~/Development/claude-infrastructure rev-list --count HEAD..origin/main` (expect 0) before
+concluding a fix is live.
+
+The operator-owned steps this wave leaves open are U5's `10-close-attrib-activate.sh` (C10) — until
+it runs, the close-record rung of the ladder is inert and involuntary deaths stay unattributed — and
+the ff-sync above whenever the checkout has drifted.
