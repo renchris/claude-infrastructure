@@ -332,7 +332,7 @@ main() {
     stamp)    cmd_stamp "$@" ;;
     current)  cmd_current "$@" ;;
     backstop) cmd_backstop "$@" ;;
-    selftest) cmd_selftest ;;
+    --selftest|selftest) cmd_selftest ;;  # flag form = what nightly-regression passes (audit 08 §3: verb-only meant this gate never once ran in the nightly)
     *) die2 "unknown verb '$verb' — try: classes | sign | check | stamp | current | backstop | selftest (-h for help)" ;;
   esac
 }

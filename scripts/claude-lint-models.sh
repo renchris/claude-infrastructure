@@ -94,7 +94,7 @@ lint_file() {
 if [[ $# -eq 0 ]]; then
   echo "Usage: $(basename "$0") <file> | --all" >&2
   exit 2
-elif [[ "$1" == "--all" ]]; then
+elif [[ "$1" == "--all" || "$1" == "--selftest" ]]; then  # --selftest = nightly alias for --all (audit 08 §6); bare invocation stays a usage error — the single-file form is the pre-commit entry point
   fail_count=0
   while IFS= read -r root; do
     [[ -d "$root" ]] || continue
