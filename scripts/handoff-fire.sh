@@ -520,8 +520,8 @@ ensure_registration() { # $1=regdir $2=pane $3=name $4=cwd $5=cmd → best-effor
 # auto-reaped. An operator's shell launch, `claude -w`, a --recycle continuation and a
 # --no-self-retire fire all leave no marker, and nothing anywhere infers one from session state —
 # so a session cannot earn the marker by behaving like a worker.
-mark_fired_peer() { # $1=fired-dir $2=fired-pane $3=cwd $4=firing-pane → best-effort, always 0
-  local dir="$1" pane="$2" cwd="$3" by="$4" tmp
+mark_fired_peer() { # $1=fired-dir $2=fired-pane $3=cwd $4=firing-pane [$5=prompt-file] → best-effort, always 0
+  local dir="$1" pane="$2" cwd="$3" by="$4" pf="${5:-}" tmp
   [ -n "$dir" ] && [ -n "$pane" ] || return 0
   case "$pane" in *[!0-9A-Fa-f-]*) return 0 ;; esac    # UUID-shaped only — never a path fragment
   command -v jq >/dev/null 2>&1 || return 0
@@ -534,6 +534,18 @@ mark_fired_peer() { # $1=fired-dir $2=fired-pane $3=cwd $4=firing-pane → best-
     mv -f "$tmp" "$dir/$pane.json" 2>/dev/null || rm -f "$tmp" 2>/dev/null
   else
     rm -f "$tmp" 2>/dev/null
+  fi
+  # Persist the FINAL fired prompt (post-trailers) beside the marker as the ROBUST brief source for
+  # cc-recover-safeguard: if this fire is refused dead-on-arrival by model content-safeguards, recovery
+  # re-fires THIS exact brief on a different model. Best-effort + atomic; never blocks the fire. (The
+  # blocked session's transcript first-user-message is the recovery fallback when this file is absent.)
+  if [ -n "$pf" ] && [ -f "$pf" ]; then
+    local ptmp="$dir/.$pane.prompt.$$"
+    if cp "$pf" "$ptmp" 2>/dev/null; then
+      mv -f "$ptmp" "$dir/$pane.prompt" 2>/dev/null || rm -f "$ptmp" 2>/dev/null
+    else
+      rm -f "$ptmp" 2>/dev/null
+    fi
   fi
   return 0
 }
@@ -2285,7 +2297,7 @@ else
       # An `if` block, NOT `[ … ] && …`: a false test would return 1 and `set -e` would abort the
       # fire right before the "→ fired" summary (the same trap noted at the stranded-account line).
       if [ "$WANT_SELF_RETIRE" = 1 ]; then
-        mark_fired_peer "$FIRED_DIR" "$SPAWNED_PANE" "$LAUNCH_DIR" "$FIRING_SID"
+        mark_fired_peer "$FIRED_DIR" "$SPAWNED_PANE" "$LAUNCH_DIR" "$FIRING_SID" "$PROMPT_FILE"
       fi
       # P0-15: publish the fired pane under its role so role-addressed pings reach it.
       if [ -n "$AS_ROLE" ] && [ -n "$SPAWNED_PANE" ]; then write_role "$CC_ROLES_DIR" "$AS_ROLE" "$SPAWNED_PANE"; fi
