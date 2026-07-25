@@ -8,9 +8,10 @@ and a discarded rotation IS a logout). Two phases, cheapest first:
            the ~30-day login deadline, so it never substitutes for phase 2.
   phase 2  browser OAuth over CDP in the account's dedicated Chrome profile
            (`cc-authbrowser <acct> --start` -> Target.createTarget -> Authorize).
-Success is proven by EFFECT, never by report: `claude-accounts --fresh --json` must come
-back auth=="ok" AND the login deadline must have MOVED. "Login successful." is a claim;
-the moved deadline is the proof.
+Success is proven by EFFECT, never by report: `claude-accounts --fresh --no-heal --json`
+must come back auth=="ok" AND the login deadline must have MOVED. "Login successful." is a
+claim; the moved deadline is the proof. The measurement reads are --no-heal so they cannot
+move the very state they measure.
 
 Exit: 0 PROVEN · 1 ERROR · 2 REFUSED · 3 HEADLESS-EXHAUSTED · 4 BROWSER-FAILED ·
 5 UNVERIFIED · 6 FALLBACK-REQUIRED · 7 CONSENT-GATE (retained, never emitted).
@@ -118,8 +119,16 @@ def relogin_info(acct: str) -> dict[str, Any]:
 
 
 def fresh_row(acct: str) -> dict[str, Any]:
-    """The account's live row from `claude-accounts --fresh --json` (forces a live sweep)."""
-    rc, out, _ = accounts_run(["--fresh", "--json"])
+    """The account's live row from `claude-accounts --fresh --no-heal --json`.
+
+    --no-heal is LOAD-BEARING, not hygiene. Without it, probe_account() runs heal() on a stale
+    row (bin/claude-accounts:500) — which is `claude auth login`, a credential WRITE. Verify-by-
+    effect would then be measuring its own read's side effect instead of the Authorize it exists
+    to prove, and independent evidence that can move state is not independent. (It would also
+    hit our own heal lock non-blocking and no-op confusingly.) Both the before and after reads
+    take this path, so both are pure measurement.
+    """
+    rc, out, _ = accounts_run(["--fresh", "--no-heal", "--json"])
     try:
         rows = json.loads(out).get("rows", [])
     except (json.JSONDecodeError, AttributeError) as exc:
@@ -265,6 +274,9 @@ def phase2(info: dict[str, Any], url_timeout: float) -> tuple[int, str]:
 
     Teardown (login child, WS, fifo, `cc-authbrowser <acct> --stop`) belongs in this
     function's own finally block: no CDP port may outlive a run, success or failure.
+    NEVER branch on `cc-authbrowser --status` EXIT STATUS — it exits 0 whether or not a
+    browser is running (a successful query is 0; nonzero is reserved for failure). Read
+    `.running` out of `--status --json` instead.
     """
     return EXIT_BROWSER_FAILED, ("phase 2 (browser OAuth drive) is not implemented in this "
                                  f"build — substrate would be `{AUTHBROWSER_BIN} "
