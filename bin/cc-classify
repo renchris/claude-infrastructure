@@ -88,6 +88,25 @@ if [ "$INTERACTIVE_HOLD_DISABLE" != 1 ]; then
   fi
 fi
 
+# G9 (2026-07-25) — a LIVE hold-disable must not be SILENT. CC_CLASSIFY_INTERACTIVE_HOLD_DISABLE=1 is
+# the tests-only kill switch for the §4.7 operator-adoption hold — i.e. it removes the single guard the
+# 2026-07-24 Danny-Studio-60 / Opus-5 incident added, and the floor above deliberately exempts it, so
+# set live it reproduces the pre-incident reaper exactly and nothing anywhere says so. It stays HONORED
+# (a floor cannot police an explicit override, and the bats suite depends on it), but outside bats it
+# now leaves evidence: one loud stderr line + ONE IDL record, in the same append-only ledger cc-audit
+# and cc-idl already read, so "why was that pane reaped" stays answerable after the fact. Behavior is
+# otherwise unchanged. stdout stays clean (--json consumers unaffected); every write is best-effort.
+if [ "$INTERACTIVE_HOLD_DISABLE" = 1 ] && [ -z "${BATS_TEST_FILENAME:-}" ]; then
+  printf 'cc-classify: ⚠ CC_CLASSIFY_INTERACTIVE_HOLD_DISABLE=1 outside tests — the §4.7 operator-adoption hold is OFF; an operator-adopted pane can be classified REAPABLE (the 2026-07-24 incident shape). Unset it unless you are running tests.\n' >&2
+  _idl="${CC_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
+  mkdir -p "$(dirname "$_idl")" 2>/dev/null || true
+  # jq-encode every field: one malformed line aborts cc-audit's `jq -rs` slurp (which reads as "no
+  # records" and silently flips the alarm green) — the same rule hooks/completion-assert.sh log_idl uses.
+  jq -cn --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '?')" --arg target "${1:-?}" \
+    '{ts:$ts,hook:"cc-classify",sid:"?",disposition:"warned",reason:"interactive-hold-disabled",target:$target}' \
+    >> "$_idl" 2>/dev/null || true
+fi
+
 # ── shared interactive-recency primitive (the ONE WHO-drove-the-last-turn signal) ──────────────
 # hooks/lib/cc-interactive.sh owns ci_last_interactive_epoch; last_interactive_epoch (below) is a thin
 # wrapper. Same resolve order as cc-reaper's libs: beside-script → CLAUDE_CONFIG_DIR → ~/.claude.

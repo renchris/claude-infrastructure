@@ -617,3 +617,40 @@ nolib_run() { HOME="$D/live" CLAUDE_CONFIG_DIR="$D/live/.claude" "$(nolib_bin)" 
   run bash -c "'$C' '$UP' --json 2>&1 >/dev/null"
   [[ "$output" != *"unresolvable"* ]]                                    # and no warning is emitted
 }
+
+# ── G9 (2026-07-25) — a LIVE hold-disable is loud + leaves an IDL record ─────────────────────────
+# CC_CLASSIFY_INTERACTIVE_HOLD_DISABLE=1 removes the §4.7 operator-adoption hold entirely (the hold
+# FLOOR deliberately exempts it), so set outside tests it reproduces the pre-2026-07-24 reaper with no
+# trace anywhere. It stays honored — but it can no longer be silent.
+
+@test "G9 hold DISABLE=1 outside bats ⇒ loud stderr + exactly one IDL record (behavior unchanged)" {
+  mkrepo "$D/g9"; reg "$UP" "$LIVE" "$D/g9" sidG9; tx sidG9 900; utx sidG9 950; solo_team_cfg sidG9; stamp "$UP" 50000
+  export CC_IDL="$D/idl.jsonl"
+  # BATS_TEST_FILENAME emptied = "not running under bats" as the script sees it
+  run bash -c "BATS_TEST_FILENAME= CC_CLASSIFY_INTERACTIVE_HOLD_DISABLE=1 CC_IDL='$D/idl.jsonl' '$C' '$UP' --json 2>&1 >/dev/null"
+  [[ "$output" == *"INTERACTIVE_HOLD_DISABLE=1 outside tests"* ]]
+  [[ "$output" == *"REAPABLE"* ]]
+  [ "$(grep -c . "$D/idl.jsonl")" -eq 1 ]                       # exactly ONE record per invocation
+  run jq -e '.hook=="cc-classify" and .disposition=="warned" and .reason=="interactive-hold-disabled" and .target==$t' --arg t "$UP" "$D/idl.jsonl"
+  [ "$status" -eq 0 ]
+  # BEHAVIOR UNCHANGED: the disable still disables — this fixture is still classified finished.
+  c="$(BATS_TEST_FILENAME= CC_CLASSIFY_INTERACTIVE_HOLD_DISABLE=1 CC_IDL="$D/idl.jsonl" "$C" "$UP" --json 2>/dev/null | jq -r '.cause')"
+  [ "$c" = finished ]
+}
+
+@test "G9 hold DISABLE=1 UNDER bats ⇒ silent, no IDL record (the suite is not self-alarming)" {
+  mkrepo "$D/g9b"; reg "$UP" "$LIVE" "$D/g9b" sidG9b; tx sidG9b 900; utx sidG9b 950; solo_team_cfg sidG9b; stamp "$UP" 50000
+  export CC_IDL="$D/idlb.jsonl" CC_CLASSIFY_INTERACTIVE_HOLD_DISABLE=1
+  run bash -c "'$C' '$UP' --json 2>&1 >/dev/null"               # BATS_TEST_FILENAME is set + inherited
+  [ -z "$output" ]
+  [ ! -e "$D/idlb.jsonl" ]
+  [ "$(cause "$UP")" = finished ]
+}
+
+@test "G9 hold ENABLED (the normal case) ⇒ no warning, no IDL record at all" {
+  mkrepo "$D/g9c"; reg "$UP" "$LIVE" "$D/g9c" sidG9c; tx sidG9c 900; solo_team_cfg sidG9c; stamp "$UP" 50000
+  export CC_IDL="$D/idlc.jsonl"
+  run bash -c "BATS_TEST_FILENAME= CC_IDL='$D/idlc.jsonl' '$C' '$UP' --json 2>&1 >/dev/null"
+  [ -z "$output" ]
+  [ ! -e "$D/idlc.jsonl" ]
+}
