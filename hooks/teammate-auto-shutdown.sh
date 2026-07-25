@@ -119,9 +119,47 @@ close_pane() {
   fi
 }
 
+# ── teardown marker (MARKER CONTRACT v1; reader = hooks/lead-crash-watchdog.sh classify_death) ─────
+# Closing a teammate's pane kills a LIVE CC session, and lead-crash-watchdog is a SessionStart hook
+# with NO matcher — it arms on EVERY session, teammates included. Without deterministic evidence the
+# teammate's own watchdog runs the classify ladder, finds no close-record (C10-pending), no jetsam and
+# no self-close prose (this teammate never chose to close — we closed it), and lands on CRASH. So every
+# idle-teammate shutdown logged a false crash. handoff-fire got this marker on 2026-07-23 (self-close)
+# and cc-teardown on 2026-07-25 (delegated close); the TeammateIdle closer is the same class.
+#
+# Dual-keyed exactly like the other two writers: the reader checks <sid>.json directly, else resolves
+# pane→sid through the session registry — a torn-down teammate's registry row can be overwritten, so
+# both keys are written and key_kind records each file's own key. `mode=teammate-idle` is the
+# discriminator. SESSION_ID defaults to the literal "unknown" (see the hook-input parse), which must
+# NEVER become a marker filename — an "unknown.json" marker would mask a genuine crash of whatever
+# session the reader next asks about. FULLY GUARDED: a marker write can never fail or delay a close.
+# Writers never delete markers; the reader GCs them.
+write_teardown_marker() { # $1=pane-uuid  $2=sid ("" / "unknown" ⇒ pane-key only)  $3=mode
+  local _tm_pane="${1:-}" _tm_sid="${2:-}" _tm_mode="${3:-teammate-idle}" _tm_dir _tm_ts
+  _tm_dir="${CC_TEARDOWN_DIR:-$HOME/.claude/watchdog/teardown}"
+  [[ "$_tm_sid" == "unknown" ]] && _tm_sid=""
+  [[ -n "$_tm_sid" || -n "$_tm_pane" ]] || return 0
+  mkdir -p "$_tm_dir" 2>/dev/null || true
+  _tm_ts="$(date -u +%FT%TZ)"
+  if [[ -n "$_tm_sid" ]]; then
+    printf '{"key_kind":"sid","pane":"%s","sid":"%s","mode":"%s","ts":"%s"}\n' \
+      "$_tm_pane" "$_tm_sid" "$_tm_mode" "$_tm_ts" > "$_tm_dir/$_tm_sid.json" 2>/dev/null || true
+  fi
+  if [[ -n "$_tm_pane" ]]; then
+    printf '{"key_kind":"pane","pane":"%s","sid":"%s","mode":"%s","ts":"%s"}\n' \
+      "$_tm_pane" "$_tm_sid" "$_tm_mode" "$_tm_ts" > "$_tm_dir/$_tm_pane.json" 2>/dev/null || true
+  fi
+  return 0
+}
+
 # Close + log one pane (shared by the config-resolved AND implicit-team paths).
 close_and_log() {
   local pane="$1" who="$2"
+  # Drop the marker HERE — close_and_log is reached only from the detached close block, i.e. only
+  # once every gate (busy-marker, dirty-defer, reap-guard, worktree-resolve, operator-adoption) has
+  # already passed and the close is inevitable. A marker written at any earlier decision point would
+  # mask a genuine crash of a teammate we then chose to KEEP for the reader's whole freshness window.
+  write_teardown_marker "$pane" "${SESSION_ID:-}" teammate-idle
   close_pane "$pane"
   local rc=$?
   local err="${CLOSE_ERR//$'\n'/ ; }"
