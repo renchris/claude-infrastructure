@@ -40,6 +40,36 @@
 # compose-guard computes the IDENTICAL path (it used to hardcode a path this hook never writes →
 # a dead no-op guard). Resolve the lib next to this script (works for the repo AND a symlinked
 # ~/.claude/hooks/ install), then fall back to the config-dir / ~/.claude hooks/lib.
+
+# ── B-3 telemetry — one IDL record + one log line per DECISION (audit 09 D-11) ────────────────
+# This is the hook that drives the loop: it emits {decision:"block"} up to CLAUDE_CONTINUE_MAX
+# times per chain, and it was the ONLY Stop hook writing nothing at all (completion-assert,
+# boundary-handoff and anti-deference-nudge all write IDL), so a runaway continuation or a wrongly
+# SUPPRESSED one was forensically invisible. Record shape + jq-encoding of every field mirrors
+# hooks/completion-assert.sh:39-49 — a step string carrying a quote/newline must never emit a
+# malformed IDL line, because one malformed line aborts cc-audit's `jq -rs` slurp and that reads
+# as "no records" (silently flipping the un-gameable detector green).
+#
+# Deliberately NOT logged: the disarmed steady state (actuation with no sentinel). That is the
+# common case on EVERY Stop of EVERY session, and the sentinel's absence is itself the record —
+# logging it would add a line per turn-close to an already-18 MB IDL while telling us nothing the
+# D-11 forensics need. Every state CHANGE is logged: armed · cleared (cli / kill-switch /
+# sid-mismatch / cap) · fired.
+IDL="${CONTINUE_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
+CLOG="${CONTINUE_LOG:-$HOME/.claude/logs/session-continue.log}"
+SC_SID="?"
+log_idl() { # $1=disposition $2=reason $3=extra JSON OBJECT (optional, jq-built {…}; default {})
+  local ts extra
+  ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '?')"
+  extra="${3:-}"; [ -n "$extra" ] || extra='{}'
+  mkdir -p "${IDL%/*}" "${CLOG%/*}" 2>/dev/null || true
+  printf '[%s] %s sid=%s reason=%s\n' "$ts" "$1" "$SC_SID" "$2" >> "$CLOG" 2>/dev/null || true
+  command -v jq >/dev/null 2>&1 || return 0
+  jq -cn --arg ts "$ts" --arg sid "$SC_SID" --arg disp "$1" --arg reason "$2" --argjson extra "$extra" \
+    '{ts:$ts,hook:"session-continue",sid:$sid,disposition:$disp,reason:$reason} + $extra' \
+    >> "$IDL" 2>/dev/null || true
+}
+
 _scd="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
 _lib="$_scd/lib/continue-sentinel.sh"
 [ -f "$_lib" ] || _lib="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/continue-sentinel.sh"
@@ -51,6 +81,7 @@ if ! . "$_lib" 2>/dev/null; then
   # Fail LOUD but SAFE: a missing path-SSOT is a misconfig, not a runtime state. A Stop hook must
   # never block on error (→ exit 0 allow); a CLI mode signals the failure to the agent (→ exit 2).
   printf 'session-continue: FATAL — cannot source %s (continuation loop inert).\n' "$_lib" >&2
+  log_idl abstained "no-sentinel-lib"
   case "${1:-}" in set|clear|status) exit 2 ;; *) exit 0 ;; esac
 fi
 mkdir -p "$(continue_state_dir)" 2>/dev/null
@@ -69,11 +100,16 @@ case "${1:-}" in
     csid="${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
     if [ -n "$csid" ]; then printf '%s' "$csid" > "${f}.sid"; else rm -f "${f}.sid" 2>/dev/null; fi
     echo "armed → $f"
+    SC_SID="${csid:-?}"
+    log_idl armed "cli-set" "$(jq -cn --arg s "${2:-Continue the in-scope work.}" --arg c "$PWD" \
+      '{step:$s,cwd:$c}' 2>/dev/null)"
     exit 0 ;;
   clear)
     f=$(sentinel_for "$PWD")
     rm -f "$f" "${f}.count" "${f}.sid" 2>/dev/null
     echo "cleared"
+    SC_SID="${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-?}}"
+    log_idl cleared "cli-clear" "$(jq -cn --arg c "$PWD" '{cwd:$c}' 2>/dev/null)"
     exit 0 ;;
   status)
     f=$(sentinel_for "$PWD")
@@ -90,6 +126,10 @@ cwd=$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null)
 f=$(sentinel_for "$cwd")
 cur_sid=$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null)
 [ -n "$cur_sid" ] || cur_sid="${CLAUDE_CODE_SESSION_ID:-}"
+# SC_SID — the telemetry's sid field. Aliased to $cur_sid rather than re-parsed: the cherry-picked
+# commit (cd064644) computed its own SC_SID from the same stdin, but trunk had since hoisted
+# $cur_sid for the SID-BIND path. Two independent parses of one value is how they drift.
+SC_SID="${cur_sid:-?}"
 
 # ── SHARED kill-switch detection (hoisted for the WAKE FLOOR) ─────────────────────────────────────
 # Was inline in the sentinel path only. The wake floor below can also BLOCK a stop, so it must honour
@@ -265,8 +305,16 @@ fi
 if kill_switch_active; then
   rm -f "$f" "${f}.count" "${f}.sid" 2>/dev/null
   printf 'session-continue: kill-switch phrase in last user message — cleared sentinel, allowing stop.\n' >&2
+  log_idl cleared "kill-switch"
   exit 0
 fi
+# NOTE ON THIS RESOLUTION (cherry-pick cd064644): the picked commit carried its own INLINE copy of
+# the kill-phrase detection here. Trunk had since hoisted that logic into the shared
+# kill_switch_active() above — deliberately, so the WAKE FLOOR consults the same predicate and can
+# never block a stop the operator asked for. Trunk's structure is kept and only the telemetry line
+# (`log_idl cleared "kill-switch"`) is grafted on; re-introducing the inline copy would have
+# resurrected a second, drifting definition of the one predicate that must never disagree with
+# itself.
 
 # ── (b) SID-BIND — a same-cwd successor must not inherit a predecessor's sentinel (S-12) ──
 # Clear + allow when the stored arming-sid differs from the actuating session's sid. Acts ONLY when
@@ -275,6 +323,8 @@ stored_sid=$(cat "${f}.sid" 2>/dev/null || true)
 if [ -n "$stored_sid" ] && [ -n "$cur_sid" ] && [ "$stored_sid" != "$cur_sid" ]; then
   rm -f "$f" "${f}.count" "${f}.sid" 2>/dev/null
   printf 'session-continue: sentinel sid=%s ≠ session sid=%s (inherited across succession) — cleared, allowing stop.\n' "$stored_sid" "$cur_sid" >&2
+  log_idl cleared "sid-mismatch" "$(jq -cn --arg a "$stored_sid" --arg b "$cur_sid" \
+    '{stored_sid:$a,session_sid:$b}' 2>/dev/null)"
   exit 0
 fi
 
@@ -289,6 +339,8 @@ if [ "$n" -ge "$MAX" ]; then
   capmsg="session-continue: hit the continuation cap (${MAX}); allowing this stop. If in-scope work genuinely remains, re-arm with \`session-continue.sh set \"<next step>\"\` (a fresh set zeroes .count). Last step was: ${step}"
   printf '%s\n' "$capmsg" >&2
   jq -nc --arg m "$capmsg" '{systemMessage:$m}' 2>/dev/null || true
+  log_idl cleared "cap-reached" "$(jq -cn --argjson n "$n" --argjson m "$MAX" --arg s "$step" \
+    '{count:$n,max:$m,step:$s}' 2>/dev/null)"
   exit 0   # non-2 exit → does NOT block; the cap is a backstop, not a wedge
 fi
 n=$((n + 1))
@@ -325,4 +377,7 @@ fi
 
 # decision:block blocks the stop; reason is fed back to the model as the next turn.
 jq -nc --arg r "$reason" '{decision:"block",reason:$r}'
+log_idl fired "continue" "$(jq -cn --argjson n "$n" --argjson m "$MAX" --arg s "$step" \
+  --argjson mail "$([ -n "$mail" ] && printf 'true' || printf 'false')" \
+  '{count:$n,max:$m,step:$s,mail_folded:$mail}' 2>/dev/null)"
 exit 0
