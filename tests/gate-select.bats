@@ -12,6 +12,7 @@
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   SEL="$REPO/scripts/gate-select.sh"
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"   # hermetic: never touch the live ~/
   FIX="$BATS_TEST_TMPDIR/fix"
   mkdir -p "$FIX/scripts" "$FIX/tests" "$FIX/hooks/lib" "$FIX/bin" "$FIX/lib" "$FIX/docs" \
            "$FIX/settings-templates"
