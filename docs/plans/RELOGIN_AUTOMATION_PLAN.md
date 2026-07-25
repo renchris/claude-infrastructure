@@ -106,6 +106,67 @@ autofire behind a flag until it has succeeded manually several times.
 
 ---
 
+## bin/cc-relogin — CLI contract (FROZEN 2026-07-24, pre-spawn)
+
+`cc-relogin <acct> [--dry-run] [--no-browser] [--json] [--url-timeout N] [--debug]`
+Python 3, one executable file. Deps: stdlib + `websocket-client` (1.6.1, installed system-wide).
+
+**Exit codes** (consumers key on these — frozen):
+
+| exit | name | meaning |
+|---|---|---|
+| 0 | PROVEN | re-auth verified by EFFECT (below), never by the binary's report |
+| 1 | ERROR | unexpected failure |
+| 2 | REFUSED | gate: unknown acct · account healthy · `k > 0` · heal lock busy |
+| 3 | HEADLESS-EXHAUSTED | `--no-browser` given and Phase 1 impossible or failed |
+| 4 | BROWSER-FAILED | Phase 2 mechanics: no OAuth URL within `--url-timeout` (default 30s) · CDP unreachable · profile ctx unmatched · no Authorize control · callback timeout |
+| 5 | UNVERIFIED | binary claimed success but the effect check failed — treat as NOT re-authed |
+| 6 | FALLBACK-REQUIRED | authorize URL landed on claude.ai `/login` (web session cold) — email-code leg not automated; stdout carries the exact remaining human step incl. mailbox |
+| 7 | CONSENT-GATE | CDP blocked: `DevToolsActivePort` absent (toggle off) or WS handshake hung >8s (consent dialog pending); stdout names the recovery: cycle `dia://inspect#remote-debugging` off→on, re-run — first connect after a cycle is consent-free |
+
+**`--json`** → single object on stdout:
+`{"acct","result":"proven|refused|headless-exhausted|browser-failed|unverified|fallback-required|consent-gate|error","exit":N,"phase_reached":"gate|phase1|phase2|verify","before":{"auth","has_refresh_token","login_expires_at"},"after":{…},"detail":"…"}`
+
+**Test-injection env**: `CC_RELOGIN_ACCOUNTS_BIN` (default `claude-accounts`),
+`CC_RELOGIN_DEVTOOLS_PORT_FILE` (default Dia's `DevToolsActivePort`), `CC_RELOGIN_TMP`
+(default `/tmp`), `CC_RELOGIN_WARN_H` (default 72). claude binary, config dir, email,
+scopes come ONLY from `--relogin-info` (SSOT; scopes passed verbatim, never widened).
+
+**Gate**: relogin-info → identity; need-relogin predicate from `--fresh --json` row —
+`auth ∈ LOGIN_FIXABLE {logged-out, token-invalid, no-oauth-blob, login-required}` OR
+`login_expired` OR `login_expires_h ≤ warn` (fields absent on a pre-cliff claude-accounts →
+fall back to keychain/has_refresh_token/auth-actionable); `k == 0`; then
+`flock(LOCK_EX|LOCK_NB)` on `/tmp/claude-accounts-heal-<acct>.lock` HELD for the whole run,
+with k re-checked UNDER the lock via `ps -wwEo command=` (argv[0]==claude_bin +
+`CLAUDE_CONFIG_DIR`, skip `-p/--print` — mirrors `concurrency()`).
+
+**Phase 1** iff `has_refresh_token && refresh_token_expired != true`: RT from
+`security find-generic-password -s <keychain_service> -a <keychain_account> -w` →
+`claudeAiOauth.refreshToken`; `CLAUDE_CONFIG_DIR` + `CLAUDE_CODE_OAUTH_REFRESH_TOKEN` +
+`CLAUDE_CODE_OAUTH_SCOPES` → `<claude_bin> auth login`, 90s timeout (mirrors `heal()`).
+
+**Phase 2**: fifo `/tmp/cc-relogin-<acct>.in` opened **O_RDWR by the driver** (never blocks,
+never EOFs) → `<claude_bin> auth login --claudeai --email <email>` stdin=fifo,
+out→`/tmp/cc-relogin-<acct>.out` → poll for the printed manual OAuth URL (the CLI also
+auto-opens a localhost variant in the default browser — ignore, shared state+PKCE) →
+ONE raw WS to `ws://127.0.0.1:<port><path>` from the port file, `suppress_origin=True`,
+handshake timeout 8s (WS-only endpoint — NO `/json` discovery) → flat sessions
+(`Target.attachToTarget flatten:true`): map browserContextId→profile by `createTarget
+chrome://version` + `#profile_path` endswith `dia_profile_dir`, close probe tab →
+`createTarget(<oauth url>, ctx)` → find Authorize button → `DOM.getBoxModel` +
+`Input.dispatchMouseEvent` press/release (`el.click()` fallback). Outcomes: (a) child
+prints success (warm session, localhost callback) → verify; (b) page shows `code#state` →
+scrape → write to fifo → wait child → verify; (c) lands on `/login` → exit 6.
+Cleanup ALWAYS: kill child, close WS, rm fifo; keep `.out` on failure (path printed).
+
+**Verify by EFFECT**: `--fresh --json` row `auth == "ok"` AND relogin-info
+`has_refresh_token == true` AND (`before.login_expires_at` null OR
+`after.login_expires_at > before.login_expires_at`) → 0, else 5.
+
+**`--dry-run`**: gate reads + phase plan printed, lock probed (take+release), nothing mutated.
+
+---
+
 ## Hard constraints
 
 - **Never `/logout`** as a "fix" — it revokes the grant and deletes the keychain item.
@@ -136,3 +197,16 @@ autofire behind a flag until it has succeeded manually several times.
 - **2026-07-25** — plan created. Feasibility established (facts 1-6 above); the decisive
   finding is (1): warm profile sessions remove the mail dependency from the critical path, so
   the missing MS365 MCP does not block the design. Nothing built yet.
+- **2026-07-24 (build session)** — branch `relogin` rebased onto `feat/accounts-login-cliff`
+  (the wiring consumes its `--login-status` / `refresh_token_expires_*` surfaces; that branch
+  also already updated `skills/account-relogin/SKILL.md`, avoiding a land-time conflict — the
+  chain lands together via `/ship`). CLI contract frozen above. Two live findings beyond the
+  plan's facts: (a) the 9222 CDP endpoint is the **WS-only** flavor — no `/json` HTTP
+  discovery, everything rides one raw WS to `/devtools/browser/<id>` with flat sessions;
+  (b) a fresh WS connect **hangs in handshake on the Dia consent dialog** (the plan's
+  feasibility session consumed the consent-free first connect) → exit 7 CONSENT-GATE added to
+  the contract; recovery = toggle off→on cycle, then ONE persistent connection per batch
+  (dia-agent skill, verified 2026-06-17). Live fleet re-check: next3 `k=0`,
+  `has_refresh_token: false`, keychain present → Phase 2 is the only path (as designed);
+  next4 `k=4` → cc-relogin's k-guard rightly refuses it, operator handles next4 manually
+  before its 2026-07-25 12:39 deadline.
