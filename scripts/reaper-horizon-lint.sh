@@ -91,7 +91,16 @@ EVIDENCE_GREP='cc-telemetry|cc-registry|CC_TELEMETRY_DIR|CC_REGISTRY_DIR'
 # never deletes a row). Its horizon is a LITERAL `-mmin +2880` (48 h = 172,800 s), scored by §1 below —
 # 28× the 6,000 s floor — and liveness (live pid OR a transcript touched inside the horizon) outranks
 # age, so a long-running session's scratchpad survives regardless. Declared = reviewed (2026-07-25).
-DECLARED='bin/cc-context bin/cc-board bin/cc-sessions bin/cc-notify bin/cc-reaper bin/cc-value bin/cc-reconcile hooks/session-register.sh hooks/session-deregister.sh statusline.sh scripts/lead-supervisor.sh scripts/lead-reconciler.sh hooks/waiting-recycle.sh scripts/handoff-fire.sh hooks/lead-crash-watchdog.sh scripts/scratchpad-reaper.sh'
+# bin/cc-recover-safeguard READS CC_REGISTRY_DIR (:40 CC_RECOVER_REG_DIR, :59 — a single `jq` read of
+# the blocked pane's row to resolve cwd/account/session_id) and has `rm -f` sites, so section-3 flags
+# it — but BOTH sites (:145 the re-fire-failed path, :173 the success path) remove the SAME thing: its
+# own `mktemp` reworded-brief file $REWORDED (:110), scaffolding handed to handoff-fire --prompt-file
+# and consumed within the run. Exactly the handoff-fire.sh / cc-value temp-scaffold shape declared
+# above. It never deletes a registry row, and it is not an age reaper at all — no -mmin / RETAIN_H /
+# CC_SUP_GC_S, so sections 1/2/2b find nothing to bound. The durable evidence of a recovery is the
+# re-fired session's transcript + its new registry row + the announce to the originator, none of which
+# this script can touch. Declared = reviewed (2026-07-25 infra-perfection pass).
+DECLARED='bin/cc-context bin/cc-board bin/cc-sessions bin/cc-notify bin/cc-reaper bin/cc-value bin/cc-reconcile bin/cc-recover-safeguard hooks/session-register.sh hooks/session-deregister.sh statusline.sh scripts/lead-supervisor.sh scripts/lead-reconciler.sh hooks/waiting-recycle.sh scripts/handoff-fire.sh hooks/lead-crash-watchdog.sh scripts/scratchpad-reaper.sh'
 
 viol=0
 say(){ printf '  %s\n' "$1"; }
