@@ -56,7 +56,11 @@ teardown() {
 
 @test "DEAD holder reaped — acquires" {
   mkdir -p "$LOCK"
-  sleep 1 & dead=$!; kill "$dead" 2>/dev/null; wait "$dead" 2>/dev/null || true
+  # `|| true` on the kill too: under load (a concurrent full gate) >1s can pass before the kill,
+  # the sleep has already exited, and kill returns 1 — the test only needs $dead to BE dead, which
+  # an already-exited pid satisfies. Flaked exactly this way in the 2026-07-25 land (not ok 1102,
+  # bats-retry green ⇒ gate RED on the retry-count mismatch).
+  sleep 1 & dead=$!; kill "$dead" 2>/dev/null || true; wait "$dead" 2>/dev/null || true
   echo "$dead" > "$LOCK/pid"
   run env LAND_LOCK_WAIT=5 bash "$LL" -- bash -c 'exit 0'
   [ "$status" -eq 0 ]
