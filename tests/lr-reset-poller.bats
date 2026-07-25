@@ -113,6 +113,12 @@ future_iso() { python3 -c "from datetime import datetime,timezone,timedelta;prin
 
 # A REAL-shape MONTHLY-SPEND kill: the billing-plane isApiErrorMessage carries the verbatim
 # "You've hit your monthly spend limit" text and NO reset time. $1=sid $2=event-epoch.
+# The `"error":"rate_limit"` field and the "· raise it at claude.ai/settings/usage?from=…" suffix are
+# NOT decoration — they are the real producer's bytes, captured from session e0bd7f43 on 2026-07-25.
+# lr-audit.py gates limit_events on `obj.get("error") == "rate_limit"`, so the earlier fixture (which
+# omitted it) was a shape-mismatched contract claim: it stayed green only because the poller trusted
+# a bare text grep, and it went red the moment the poller started confirming via lr-audit — which is
+# exactly the failure this fixture is supposed to catch (memory: fixture-shape-parity-with-real-producer).
 mk_spend_transcript() {
   local sid="$1" ev_epoch="$2"
   local proj="$HOME/.claude-quaternary/projects/-test-proj"
@@ -120,7 +126,7 @@ mk_spend_transcript() {
   local ev_iso; ev_iso="$(python3 -c "from datetime import datetime,timezone;import sys;print(datetime.fromtimestamp(int(sys.argv[1]),tz=timezone.utc).isoformat().replace('+00:00','Z'))" "$ev_epoch")"
   {
     printf '{"type":"user","cwd":"%s","timestamp":"%s","message":{"role":"user","content":"go"}}\n' "$CWD" "$ev_iso"
-    printf '{"type":"assistant","isApiErrorMessage":true,"timestamp":"%s","message":{"role":"assistant","model":"claude-opus-4-8","content":[{"type":"text","text":"You'\''ve hit your monthly spend limit"}]}}\n' "$ev_iso"
+    printf '{"type":"assistant","isApiErrorMessage":true,"error":"rate_limit","timestamp":"%s","message":{"role":"assistant","model":"claude-opus-4-8","content":[{"type":"text","text":"You'\''ve hit your monthly spend limit \\u00b7 raise it at claude.ai/settings/usage?from=cc_cli_limit_message"}]}}\n' "$ev_iso"
   } > "$proj/$sid.jsonl"
 }
 # Same, but a TEAMMATE (agentName in an early record) — recovery is lead-owned, so no packet.
@@ -131,7 +137,7 @@ mk_spend_teammate_transcript() {
   local ev_iso; ev_iso="$(python3 -c "from datetime import datetime,timezone;import sys;print(datetime.fromtimestamp(int(sys.argv[1]),tz=timezone.utc).isoformat().replace('+00:00','Z'))" "$ev_epoch")"
   {
     printf '{"type":"user","cwd":"%s","agentName":"worker-3","timestamp":"%s","message":{"role":"user","content":"go"}}\n' "$CWD" "$ev_iso"
-    printf '{"type":"assistant","isApiErrorMessage":true,"timestamp":"%s","message":{"role":"assistant","model":"claude-opus-4-8","content":[{"type":"text","text":"You'\''ve hit your monthly spend limit"}]}}\n' "$ev_iso"
+    printf '{"type":"assistant","isApiErrorMessage":true,"error":"rate_limit","timestamp":"%s","message":{"role":"assistant","model":"claude-opus-4-8","content":[{"type":"text","text":"You'\''ve hit your monthly spend limit \\u00b7 raise it at claude.ai/settings/usage?from=cc_cli_limit_message"}]}}\n' "$ev_iso"
   } > "$proj/$sid.jsonl"
 }
 
@@ -319,4 +325,76 @@ mk_spend_teammate_transcript() {
   [ ! -s "$CCD_LOG" ]                                                # cc-decide never called for a teammate
   [ ! -e "$STATE/spend-packet/aaaa000n-1111-2222-3333-444444444444" ]
   grep -q "SKIP  aaaa000n" "$STATE/poller.log"
+}
+
+# ── LR-o/LR-p (2026-07-25): TEXT IS NOT EVIDENCE ────────────────────────────────────────────────
+# A HEALTHY session that merely LISTS the limit-recover skill. That skill's own description quotes
+# BOTH limit strings as usage examples — "You've hit your session/weekly limit" and "Teammate @x
+# failed - You've hit your monthly spend limit" — and rides in the skill_listing attachment of EVERY
+# session, with NO isApiErrorMessage envelope. This is the real producer's literal emission (memory:
+# fixture-shape-parity-with-real-producer), captured from incident 2026-07-25: sessions fb1d3fc8 and
+# a402c9f3 on next4 each got a FALSE class-B "monthly spend limit" packet off this text alone, while
+# lr-audit read limit_events:[] for both. Measured discriminator on that incident — genuine session:
+# 3 text-matching lines, 1 carrying the envelope; both false sessions: 1 text line, 0 envelope.
+mk_skill_listing_transcript() {
+  local sid="$1" extra="${2:-}"
+  local proj="$HOME/.claude-quaternary/projects/-test-proj"
+  mkdir -p "$proj"
+  python3 - "$proj/$sid.jsonl" "$CWD" "$extra" <<'PY'
+import json, sys
+from datetime import datetime, timezone
+out, cwd, extra = sys.argv[1], sys.argv[2], sys.argv[3]
+ts = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
+desc = ("- limit-recover: Recover perfectly from a usage-limit interruption (5-hour / weekly / "
+        "model-scoped Fable / monthly-spend cap) — disk-truth audit of every Dynamic Workflow slot, "
+        "subagent, task, AND Agent-Team assignee session. Use when: a session was killed by "
+        "\"You've hit your session/weekly limit\", when teammates died mid-wave (\"Teammate @x "
+        "failed - You've hit your monthly spend limit\"), when resuming after a limit (\"continue, "
+        "we hit our limit\"), or when the reset is too far away.")
+recs = [{"type": "user", "cwd": cwd, "timestamp": ts,
+         "message": {"role": "user", "content": "go"}},
+        {"parentUuid": "p1", "isSidechain": False,
+         "attachment": {"type": "skill_listing", "content": desc}},
+        {"type": "assistant", "timestamp": ts,
+         "message": {"role": "assistant", "model": "claude-opus-4-8",
+                     "content": [{"type": "text", "text": "done"}]}}]
+if extra:   # a GENUINE reset-bearing session kill, appended AFTER the skill listing
+    recs.append({"type": "assistant", "isApiErrorMessage": True, "error": "rate_limit",
+                 "timestamp": ts, "message": {"role": "assistant", "model": "claude-opus-4-8",
+                 "content": [{"type": "text",
+                              "text": "You've hit your session limit · resets %s (UTC)" % extra}]}})
+# compact separators — Claude Code writes transcripts WITHOUT spaces after ':'. json.dumps' default
+# ("key": true) silently defeated a `"isApiErrorMessage":true` grep here, so the fixture must carry
+# the producer's real encoding, not merely its real fields. (The poller's own predicate was hardened
+# to tolerate either spacing at the same time — a guard whose failure mode is fail-CLOSED on the
+# session|weekly branch must not hinge on a writer's whitespace.)
+with open(out, "w") as f:
+    for r in recs:
+        f.write(json.dumps(r, separators=(",", ":")) + "\n")
+PY
+}
+
+@test "LR-o: skill-listing text WITHOUT the isApiErrorMessage envelope → NO packet, NO park (false-positive guard)" {
+  mk_skill_listing_transcript "aaaa000o-1111-2222-3333-444444444444"
+  run bash "$POLLER" --once
+  [ "$status" -eq 0 ]
+  # the whole point: a session that never hit anything must not reach the operator's decision queue
+  [ ! -s "$CCD_LOG" ]
+  [ ! -e "$STATE/spend-packet/aaaa000o-1111-2222-3333-444444444444" ]
+  [ ! -e "$STATE/parked/aaaa000o-1111-2222-3333-444444444444.json" ]
+  # and it must not be misfiled as a teammate either (the only other silencing path)
+  ! grep -q "aaaa000o" "$STATE/poller.log"
+}
+
+@test "LR-p: skill-listing text AND a genuine session kill → still PARKED (spend branch must not shadow it)" {
+  # The pre-fix spend branch matched the skill-listing text and then `continue`d unconditionally,
+  # so a real reset-bearing kill in the same tail was never evaluated. Parking here proves the
+  # fall-through: the spend text is present, the spend envelope is not, the session kill still lands.
+  mk_skill_listing_transcript "aaaa000p-1111-2222-3333-444444444444" "$(future_disp)"
+  run bash "$POLLER" --once
+  [ "$status" -eq 0 ]
+  [ ! -s "$CCD_LOG" ]                                                # not a spend event
+  [ ! -e "$STATE/spend-packet/aaaa000p-1111-2222-3333-444444444444" ]
+  [ -f "$STATE/parked/aaaa000p-1111-2222-3333-444444444444.json" ]    # the real kill was still seen
+  grep -q "PARKED aaaa000p" "$STATE/poller.log"
 }
