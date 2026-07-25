@@ -120,15 +120,44 @@ setup() {
   ! echo "$output" | grep -q "clean"
 }
 
-# ── the shipped SSOT must describe the real live layer ─────────────────────────────────────────
-@test "the checked-in SSOT is green against the LIVE layer" {
-  run env -u GROWTH_ROOT -u GROWTH_COVERAGE_SSOT bash "$LINT"
+# ── the shipped SSOT must describe the reviewed reference layer ────────────────────────────────
+# These two used to run against the LIVE ~/.claude layer. That input is shared, concurrently-
+# mutating machine state: bin/cc-reaper mkdir-locks autonomy/cc-reaper.sweep.lock.d for the
+# duration of every sweep, so the identical assertion passed and failed minutes apart on an
+# unchanged tree. Both legs are driven from tests/fixtures/growth-layer-reference.txt instead —
+# real SSOT-vs-reference parity (a surface added there without a disposition still fails the gate)
+# and the reaper-claim leg still greps the BRANCH's own bin/ hooks/ scripts/. The "does the SSOT
+# still describe the REAL host?" question moved to the nightly, which runs the lint with no
+# GROWTH_ROOT override; see the reference file's header for the full rationale.
+materialize_reference() {  # $1=reference file  $2=root to build
+  mkdir -p "$2"
+  while IFS= read -r rel; do
+    case "$rel" in ''|'#'*) continue ;; esac
+    case "$rel" in
+      *.jsonl|*.log) mkdir -p "$2/$(dirname "$rel")"; : > "$2/$rel" ;;
+      *)             mkdir -p "$2/$rel" ;;
+    esac
+  done < "$1"
+}
+
+@test "the checked-in SSOT is green against the checked-in reference layer" {
+  materialize_reference "$REPO/tests/fixtures/growth-layer-reference.txt" "$BATS_TEST_TMPDIR/refroot"
+  run env GROWTH_ROOT="$BATS_TEST_TMPDIR/refroot" \
+          GROWTH_COVERAGE_SSOT="$REPO/scripts/growth-coverage.conf" bash "$LINT"
   [ "$status" -eq 0 ]
   echo "$output" | grep -q "0 unclassified"
+  # failure-distinct (L2): an unclassified surface in the reference root must still fail
+  mkdir -p "$BATS_TEST_TMPDIR/refroot/surface-with-no-row"
+  run env GROWTH_ROOT="$BATS_TEST_TMPDIR/refroot" \
+          GROWTH_COVERAGE_SSOT="$REPO/scripts/growth-coverage.conf" bash "$LINT"
+  [ "$status" -eq 1 ]
+  echo "$output" | grep -q "surface-with-no-row"
 }
 
 @test "--selftest proves each failure mode fires, and nightly picks it up by name" {
-  run env -u GROWTH_ROOT -u GROWTH_COVERAGE_SSOT bash "$LINT" --selftest
+  materialize_reference "$REPO/tests/fixtures/growth-layer-reference.txt" "$BATS_TEST_TMPDIR/refroot"
+  run env GROWTH_ROOT="$BATS_TEST_TMPDIR/refroot" \
+          GROWTH_COVERAGE_SSOT="$REPO/scripts/growth-coverage.conf" bash "$LINT" --selftest
   [ "$status" -eq 0 ]
   echo "$output" | grep -q "an unclassified dir fails the gate"
   echo "$output" | grep -q "a dangling reaper claim fails the gate"
