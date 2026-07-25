@@ -8,7 +8,7 @@
 # WHY THIS EXISTS (T-P15-4, desk-audit 2026-07-18 §U2/G-P15-3): `defaultMode:auto` still
 # HALTS on the `ask` array, and `Bash(git push:*)` sits there — so a model-issued land push
 # strands with no human to approve (page unconfigured / prompt blocks the turn). The infra
-# ship rail's own push escapes this because `scripts/ship-land.sh:186` runs `git push` as a
+# ship rail's own push escapes this because `scripts/ship-land.sh` runs `git push` as a
 # SUBPROCESS (non-Bash-tool path) — resolving U2: it is already ask-exempt. The strand is the
 # MODEL-ISSUED land push (`commands/ship.md:43` "on trunk directly → git push origin HEAD:<trunk>";
 # a rebased feature branch fast-forward-land), which surfaces as a Bash tool call. This hook
