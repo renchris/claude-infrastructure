@@ -23,7 +23,7 @@
 #
 # ── BUILD-vs-ACTIVATION SPLIT (C10) ─────────────────────────────────────────────────────────────────────
 # This gate proves the machinery. The STANDING-LOOP deployment (launchd running `cc-reaper sweep --reap`)
-# is C10 (human-only) — docs/AUTONOMOUS-REAPER-ACTIVATION.md + docs/activation/autonomous-reaper.plist.
+# is C10 (human-only) — docs/AUTONOMOUS-REAPER-ACTIVATION.md + launchd/com.chrisren.cc-reaper.plist.
 #
 # Exit: 0 = every criterion met (ready) · 1 = not ready (any FAIL/TODO) · 2 = internal error.
 set -uo pipefail

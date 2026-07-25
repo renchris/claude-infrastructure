@@ -30,7 +30,7 @@ Empirical runtime state captured 2026-07-18 ~03:2x PT: BOTH reapers loaded + swe
 | `scripts/team-orphan-reaper.sh` | TEAM-level: archive dead team dirs + auto-deny stale perms | **launchd-scheduled** `com.claude.team-orphan-reaper` @600s (LOADED, running; log "3 live, 0 archived") | ~/.claude/teams, ~/.claude/watchdog, jq | none (no .bats) | b | G-P3-4,9 |
 | `hooks/teammate-auto-shutdown.sh` | LIVE TeammateIdle reaper (checkpoint→defer×3→close pane) | **hook-enforced** (settings.json:834-839 TeammateIdle, timeout 5) | teammate-checkpoint.sh, it2 | none inline | b | G-P3-2 |
 | `launchd/com.claude.team-orphan-reaper.plist` | team-reaper standing loop | **installed+loaded** (~/Library/LaunchAgents) | team-orphan-reaper.sh | live | c | G-P3-9 |
-| `docs/activation/autonomous-reaper.plist` | cc-reaper standing loop (the 36f9d64 PATH fix lives HERE) | **installed+loaded** as com.chrisren.cc-reaper.plist (1521B, 2026-07-17) | cc-reaper | live (log active) | c | — |
+| `docs/activation/autonomous-reaper.plist` (moved 2026-07-25 → `launchd/com.chrisren.cc-reaper.plist`) | cc-reaper standing loop (the 36f9d64 PATH fix lives HERE) | **installed+loaded** as com.chrisren.cc-reaper.plist (1521B, 2026-07-17) | cc-reaper | live (log active) | c | — |
 | `docs/AUTONOMOUS-REAPER-ACTIVATION.md` | C10 runbook — cc-reaper activation (DONE by operator) | doc | — | n/a | c | G-P3-5 |
 | `docs/REAPER-SAFETY-ACTIVATION.md` | C10 runbook — reap-guard wiring (NOT DONE) | doc | — | n/a | b | G-P3-2 |
 | `scripts/session-lifecycle-safety-gate.sh` | cc-reaper build gate (RP-a/b/c/d+CL+TD) | **manual** | cc-classify, cc-reaper, cc-teardown | self (GREEN 3 met) | c | G-P3-5 |
@@ -44,7 +44,7 @@ Goal legend: a=exhaustive-task-discovery, b=parallel-session-mgmt, c=self-renewa
 ### 2.1 Two independent reaper systems (NOT redundant — complementary; answers Q3)
 
 - **Session reaper** = `cc-reaper` (launchd `com.chrisren.cc-reaper`, 300s,
-  `docs/activation/autonomous-reaper.plist:22`). Granularity: an individual idle SESSION
+  `docs/activation/autonomous-reaper.plist:22` — now `launchd/com.chrisren.cc-reaper.plist:22`). Granularity: an individual idle SESSION
   (iTerm2 pane). Actuation: classify → gate → checkpoint → `cc-teardown` (kill+close). This
   is the NEW autonomous lifecycle reaper.
 - **Team reaper** = `team-orphan-reaper.sh` (launchd `com.claude.team-orphan-reaper`, 600s,
