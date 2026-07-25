@@ -142,6 +142,13 @@ cmd_decide() {
       echo DEFER; return 10
     fi
     iage="$(ce_last_interactive_age "$tj" 2>/dev/null || true)"
+    # 'unreadable' (the 2026-07-25 empty-answer split): the transcript RESOLVED but could not be read
+    # (corrupt / truncated / empty / no jq). That is absence of evidence, not "nobody typed" — the same
+    # world :140-143 already fails closed on. Before the split it returned "" and fell through to REAP.
+    if [ "$iage" = unreadable ]; then
+      emit_record "$member" "$wt" DEFER adoption-unreadable "cannot prove no operator adoption (transcript unreadable — corrupt/truncated/no jq) — fail-closed" "$age" "$spawn" "$grace"
+      echo DEFER; return 10
+    fi
     if [ -n "$iage" ] && [ "$iage" -lt "$HOLD_S" ] 2>/dev/null; then
       local last_prompt=$(( now - iage ))
       if [ "$last_prompt" -gt $(( spawn + BRIEF_SLACK )) ]; then
