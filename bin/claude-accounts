@@ -21,6 +21,12 @@ Auth policy (rotation-safe by construction):
     rotate (GH anthropics/claude-code#54443, unanswered) and a discarded rotation = logged out.
   - "logged-out" is only declared after a fresh keychain re-read (no item, or the binary's heal
     reports an invalid refresh token).
+  - The LOGIN CLIFF (refreshTokenExpiresAt) is surfaced with lead time, not discovered on
+    impact. A refresh grant renews the ACCESS token but does NOT extend the refresh token's
+    expiry, so every account walks a hard, roughly-monthly, perfectly-predictable deadline at
+    which only an interactive /login recovers it. Past it, healing cannot succeed by
+    construction (invalid_grant), so the heal is skipped rather than burned. See login_warn_h
+    in the SSOT.
   - Token-exposure note (decided trade-off): access tokens travel only in-process (urllib
     header — never curl argv). The ONE exception is the heal child's env
     (CLAUDE_CODE_OAUTH_REFRESH_TOKEN), visible to same-user `ps -E` for the <=90s heal — the
@@ -37,6 +43,11 @@ Usage:
       Exit: 0 routable · 2 data was fine but nothing routable by POLICY (exhausted / 5h
       cutoff / window — callers must NOT fire blind) · 3 data unavailable for every account
       (callers may degrade to a proxy). A non-zero exit is an ANSWER, not a tool failure.
+  claude-accounts --login-status      accounts needing an interactive /login, now or soon.
+      TSV: acct, REQUIRED|EXPIRING, reason, absolute local expiry, remaining, launcher —
+      the last three are "—" when the verdict is not driven by the deadline.
+      The EXIT CODE is the answer, so a hook can gate without parsing:
+      0 all clear · 1 a login expires within login_warn_h · 2 action required NOW.
   claude-accounts --relogin-info NAME     JSON identity block for the account-relogin skill
   claude-accounts --fresh             bypass the shared cache
   claude-accounts --no-heal           never run the headless heal (pure read-only)
@@ -354,7 +365,57 @@ def heal(cfg, acct, refresh_token, k_live):
         return ok, detail
 
 
+_HEAL_STATUS_RE = re.compile(r"status code (\d{3})")
+
+
+def _heal_rejected(detail):
+    """Was the refresh grant REJECTED (only an interactive /login recovers), or did the heal
+    merely not happen (skipped / timed out / transport / server-side)?
+
+    The old test was a substring hunt for "invalid"/"revoked" in the official binary's
+    message. The message that binary actually emits for a dead refresh token contains
+    NEITHER word — observed live on next3, 2026-07-24:
+
+        Login failed: Request failed with status code 400
+
+    so the row stayed auth="stale", whose documented reading is *benign*, and an account that
+    genuinely needed /login was reported as fine. Classify on the HTTP status the string
+    carries instead: per RFC 6749 §5.2 the token endpoint answers a bad, expired or revoked
+    refresh token with 400 invalid_grant, and rejects bad client auth with 401. A 5xx, a 429
+    or a timeout is transport, not a verdict — never terminal, or one flaky minute would
+    demand an interactive login the account does not need."""
+    d = (detail or "").lower()
+    if d.startswith("skipped:") or "timed out" in d:
+        return False
+    if "invalid_grant" in d or "invalid" in d or "revoked" in d:
+        return True
+    m = _HEAL_STATUS_RE.search(d)
+    return bool(m and m.group(1) in ("400", "401", "403"))
+
+
 # ---- collection ------------------------------------------------------------------------------
+
+def _iso_ms(ms):
+    """Epoch MILLISECONDS (the keychain payload's units) → ISO-8601 UTC, else None."""
+    if not ms:
+        return None
+    try:
+        return datetime.fromtimestamp(float(ms) / 1000.0, timezone.utc).isoformat()
+    except (ValueError, TypeError, OSError, OverflowError):
+        return None
+
+
+def _expired_ms(ms):
+    """Has a millisecond stamp passed? None when there is NO stamp — an absent expiry is not
+    an unexpired one, and collapsing the two would report a payload that never carried the
+    field (an older CC, an API-key blob) as safely in-date forever."""
+    if not ms:
+        return None
+    try:
+        return float(ms) / 1000.0 <= time.time()
+    except (ValueError, TypeError):
+        return None
+
 
 def hrs_until(iso):
     if not iso:
@@ -497,15 +558,32 @@ def probe_account(cfg, acct, kc, k_live, ledger, prev, no_heal):
     expires_ms = creds.get("expiresAt") or 0
     stale = expires_ms / 1000.0 <= time.time() + 60
     row["auth"] = "stale" if stale else "ok"
-    if stale and not no_heal:
+    # The LOGIN cliff, read from the same payload the access-token expiry comes from — no
+    # network, no inference. Recorded on EVERY row (not only failing ones) because its whole
+    # value is lead time: by the time it is a failure there is nothing left to warn about.
+    rt_iso = _iso_ms(creds.get("refreshTokenExpiresAt"))
+    if rt_iso:
+        row["login_expires_at"] = rt_iso
+        row["login_expires_h"] = hrs_until(rt_iso)
+        row["login_expired"] = bool(_expired_ms(creds.get("refreshTokenExpiresAt")))
+    if row.get("login_expired"):
+        # Past the cliff every refresh grant answers invalid_grant, so a heal cannot succeed
+        # by construction — skipping it saves a guaranteed-futile 90s subprocess and, more
+        # importantly, reports the ONE action that works instead of a failure detail. The
+        # usage fetch below still runs: the access token can be valid for hours yet, and
+        # keeping quota readable right up to the cliff is the difference between an account
+        # that needs a login and an account that has been blanked.
+        row["auth"] = "login-required"
+        row["error"] = "login EXPIRED — run /login (refresh token past expiry)"
+    elif stale and not no_heal:
         ok, detail = heal(cfg, acct, creds.get("refreshToken"), k_live)
         if ok:
             creds, kstate = read_creds(acct["config_dir"], kc)
             token = (creds or {}).get("accessToken")
             row["auth"] = "healed"
-        elif "invalid" in detail.lower() or "revoked" in detail.lower():
-            row["auth"] = "logged-out"
-            row["error"] = "logged-out"
+        elif _heal_rejected(detail):
+            row["auth"] = "login-required"
+            row["error"] = f"refresh REJECTED — run /login ({detail})"
             inherit_lastgood(row, ledger, prev)
             return row, None
         else:
@@ -517,7 +595,9 @@ def probe_account(cfg, acct, kc, k_live, ledger, prev, no_heal):
         token = (creds or {}).get("accessToken")
         status, u = fetch_usage(cfg, token) if token else (None, None)
         if status == 401:
-            if row["auth"] == "stale":
+            if row["auth"] == "login-required":
+                pass                             # row["error"] already names the real cause
+            elif row["auth"] == "stale":
                 row["error"] = ("stale (expired token; --no-heal)" if no_heal
                                 else "stale (expired token; heal skipped/failed — see heal_note)")
             else:
@@ -595,6 +675,13 @@ def collect(cfg, no_heal=False, prev=None):
         rows.append(row)
     if lastgood_dirty:
         save_lastgood(ledger)
+    # One CLI-owned verdict per row for "does this need an operator action", so consumers stop
+    # re-deriving it from a hand-copied auth-state list. handoff-fire.sh's copy had already
+    # drifted — it matched 3 of the 5 actionable states, silently treating no-oauth-blob and
+    # probe-error accounts as healthy — and any state added later un-covers every such copy.
+    for r in rows:
+        r["auth_actionable"] = r.get("auth") in ACTIONABLE_AUTH
+        r["login_fixable"] = r.get("auth") in LOGIN_FIXABLE
     return rows
 
 
@@ -1019,14 +1106,35 @@ def _fmt_asof(iso):
     return dt.strftime("%H:%M") if dt.date() == now.date() else dt.strftime("%a %d")
 
 
+def _fmt_when(iso):
+    """A FUTURE stamp → absolute LOCAL wall-clock: 'Sat 19:39' inside a week, 'Sat Aug 08'
+    beyond it. Same rule the /accounts chat readout applies to resets, and for the same
+    reason: a bare weekday a week out is ambiguous with today. Absolute, not a countdown,
+    because a login deadline is something the operator has to find a slot for."""
+    if not iso:
+        return ""
+    try:
+        dt = datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return ""
+    if dt.tzinfo is not None:
+        dt = dt.astimezone()
+    return (dt.strftime("%a %H:%M")
+            if (dt - datetime.now(dt.tzinfo)).days < 6 else dt.strftime("%a %b %d"))
+
+
 AUTH_GLYPH = {
     "ok": ("●", GREEN), "healed": ("●", PERI), "stale": ("◐", AMBER),
     "logged-out": ("○", RED), "token-invalid": ("✕", RED), "keychain-error": ("△", AMBER),
-    "no-oauth-blob": ("△", AMBER), "probe-error": ("✕", RED),
+    "no-oauth-blob": ("△", AMBER), "probe-error": ("✕", RED), "login-required": ("⊘", RED),
 }
 # auth states that need an operator ACTION, surfaced as a bullet under the table
 ACTIONABLE_AUTH = ("logged-out", "token-invalid", "keychain-error", "no-oauth-blob",
-                   "probe-error")
+                   "probe-error", "login-required")
+# ...of which THESE are the ones an interactive /login actually fixes. keychain-error (locked
+# keychain / ACL) and probe-error (a bug in this tool) are not credential states, and telling
+# the operator to log in would send them at the wrong problem.
+LOGIN_FIXABLE = ("logged-out", "token-invalid", "no-oauth-blob", "login-required")
 
 
 def render_table(rows, cfg, win, cached, prev=None):
@@ -1042,6 +1150,7 @@ def render_table(rows, cfg, win, cached, prev=None):
     # the 5h header self-documents the ┆ tick: "5h session ┆85%" (router cutoff);
     # ↻5h heads the per-row 5-hour-window reset countdown — it was invisible until a
     # window silently rolled 81%→0% between sweeps (2026-07-11 feedback).
+    login_warn_h = float(cfg.get("login_warn_h", 72.0))
     cutlbl = f"{int(cfg['router']['S_CUT'] * 100)}%"
     h5 = c("5h session ", GRAY) + c("┆", RED, dim=True) + c(cutlbl, GRAY, dim=True)
     h5 += " " * (cell - 12 - len(cutlbl))                 # pad "5h session ┆85%" to the cell
@@ -1100,16 +1209,36 @@ def render_table(rows, cfg, win, cached, prev=None):
                   + c(f"{fmt_h(wrh):>6}", reset_rgb, dim=(wrh is None)))
         # conditional detail — only states that need action surface below the table
         if a in ACTIONABLE_AUTH:
+            # Name the operator's OWN lever first. For a credential state that is exactly
+            # `<launcher>` then `/login` — one command, guaranteed, no agent in the loop —
+            # and the relogin skill is the agent-driven alternative, not the headline.
+            fix = (f"{r['launcher']} → /login  (or: account-relogin skill)"
+                   if a in LOGIN_FIXABLE else f"claude-accounts --relogin-info {r['acct']}")
             alerts.append(c("○ ", RED) + c(f"{r['acct']} {a}", RED, bold=True)
                           + c(f" → {r['email']} · Dia “{r['dia_profile']}”", GRAY)
-                          + c(f" · fix: claude-accounts --relogin-info {r['acct']} → account-relogin skill",
-                              GRAY, dim=True))
+                          + c(f" · fix: {fix}", GRAY, dim=True))
         elif a == "healed":
             alerts.append(c("↻ ", PERI) + c(f"{r['acct']} token was stale — healed headlessly", PERI)
                           + c(" · ~/.claude/logs/claude-accounts.log", GRAY, dim=True))
         elif a == "stale":
-            alerts.append(c("◐ ", AMBER) + c(f"{r['acct']} token stale — heal skipped", AMBER)
-                          + c(f" · {r.get('heal_note', r.get('error', ''))}", GRAY, dim=True))
+            # "heal skipped" was printed unconditionally, including when the heal RAN and the
+            # server REFUSED it (next3, 2026-07-24). "Skipped" reads as a choice we made and
+            # therefore as benign; "FAILED" reads as a fact about the account. Same row, same
+            # colour, opposite operator response — so the label has to track what happened.
+            note = r.get("heal_note") or ""
+            what = ("heal skipped" if note.startswith("skipped:")
+                    else "heal FAILED" if note else "not healed")
+            alerts.append(c("◐ ", AMBER) + c(f"{r['acct']} token stale — {what}", AMBER)
+                          + c(f" · {note or r.get('error', '')}", GRAY, dim=True))
+        # The login cliff, with lead time. Suppressed once auth is already login-required —
+        # that row's own red bullet is the same message, arrived.
+        lxh = r.get("login_expires_h")
+        if a != "login-required" and lxh is not None and 0 < lxh <= login_warn_h:
+            alerts.append(c("⚠ ", AMBER)
+                          + c(f"{r['acct']} login expires {_fmt_when(r.get('login_expires_at'))}"
+                              f" ({fmt_h(lxh)})", AMBER, bold=True)
+                          + c(" — a refresh does NOT renew it", GRAY)
+                          + c(f" · {r['launcher']} → /login", GRAY, dim=True))
         if r.get("stale_quota"):
             # The numbers on this row are historical AND the row is router-excluded (every
             # inheritance path leaves row["error"] set, which _excluded() bails on). Say both
@@ -1219,6 +1348,21 @@ def render_table(rows, cfg, win, cached, prev=None):
     print("  " + route_line("general", g, gre, lambda r:
           f"5h {r['session_pct']:.0f}% · weekly {r['weekly_pct']:.0f}% ↻ {fmt_h(r.get('weekly_reset_h'))}"))
     print("  " + route_line("fable", f, fre, fable_why))
+    # A winner whose LOGIN dies inside the warn window is still the correct routing answer —
+    # it genuinely has the headroom, and quota is what the scorer is for. But a session fired
+    # onto it now can outlive its own credentials. The alert above states the fact; this
+    # states the CONSEQUENCE, at the point where the decision is actually taken. Kept off the
+    # route lines themselves: those are inside the 82-col budget and already carry a clause.
+    seen = set()
+    for lst in (g, f):
+        w = lst[0][1] if lst else None
+        lxh = w.get("login_expires_h") if w else None
+        if w and lxh is not None and 0 < lxh <= login_warn_h and w["acct"] not in seen:
+            seen.add(w["acct"])
+            print("  " + c("  ⚠ ", AMBER)
+                  + c(f"{w['acct']} is the pick, but its login expires "
+                      f"{_fmt_when(w.get('login_expires_at'))} ({fmt_h(lxh)})"
+                      " — /login first, or a long session outlives its credentials", AMBER))
     if cached:
         print("  " + c(f"cache ≤{cfg.get('cache_ttl_s', 90)}s old · --fresh for a live sweep",
                        GRAY, dim=True))
@@ -1252,7 +1396,16 @@ def main():
                           "keychain_service": keychain_service(acct["config_dir"]),
                           "keychain_state": kstate, "claude_bin": cfg["claude_bin"],
                           "oauth_scopes": cfg["oauth_scopes"],
-                          "has_refresh_token": bool(creds and creds.get("refreshToken"))}, indent=2))
+                          "has_refresh_token": bool(creds and creds.get("refreshToken")),
+                          # PRESENT is not USABLE. The relogin skill's Phase 1 (headless
+                          # refresh-token grant) cannot succeed once this stamp has passed,
+                          # so a caller that gates only on has_refresh_token spends 90s
+                          # proving what this field already knows. Phase 2 (browser OAuth)
+                          # is the only path from here.
+                          "refresh_token_expires_at": _iso_ms(
+                              creds and creds.get("refreshTokenExpiresAt")),
+                          "refresh_token_expired": _expired_ms(
+                              creds and creds.get("refreshTokenExpiresAt"))}, indent=2))
         return
 
     rows, wj, cached, prev = get_data(cfg, fresh=fresh, no_heal=no_heal)
@@ -1277,6 +1430,39 @@ def main():
         print(json.dumps({"window": wj, "cached": cached,
                           "s_cut": cfg["router"]["S_CUT"], "rows": rows}, indent=2))
         return
+
+    if "--login-status" in args:
+        # The one fact a dashboard read cannot be relied on to carry, because it is only
+        # actionable BEFORE it becomes visible as a failure. The exit code is the answer so a
+        # hook or poller can gate on it without parsing, and it reads the shared cache like
+        # every other mode — a recurring check must never force an endpoint sweep.
+        warn_h = float(cfg.get("login_warn_h", 72.0))
+        worst = 0
+        for r in rows:
+            lxh = r.get("login_expires_h")
+            if r.get("login_fixable"):
+                state = "REQUIRED"
+            elif lxh is not None and lxh <= warn_h:
+                # <=0 with a still-working auth state: the stamp says the grant is dead but
+                # the access token has not been rejected yet. Still REQUIRED — the account is
+                # living on borrowed minutes and no refresh will follow.
+                state = "REQUIRED" if lxh <= 0 else "EXPIRING"
+            else:
+                continue
+            worst = max(worst, 2 if state == "REQUIRED" else 1)
+            # An account can need /login for a reason that is NOT its deadline — next3 was
+            # REQUIRED (refresh grant rejected) with 14 days still on its stamp, and printing
+            # that stamp beside REQUIRED read as "required, and it expires in 14 days". The
+            # deadline columns are therefore filled only when the deadline is what is driving
+            # the verdict; otherwise the reason column carries the cause and they read "—".
+            reason = ("login-expired" if r.get("login_expired")
+                      else r.get("auth") if r.get("login_fixable") else "login-expiry")
+            by_deadline = lxh is not None and lxh <= warn_h
+            print("\t".join([r["acct"], state, reason,
+                             (_fmt_when(r.get("login_expires_at")) or "?") if by_deadline else "—",
+                             fmt_h(lxh) if by_deadline else "—",
+                             r.get("launcher") or "?"]))
+        sys.exit(worst)
 
     if "--route" in args or "--rank" in args:
         if "--route" in args and "--rank" in args:

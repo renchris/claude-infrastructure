@@ -1056,7 +1056,19 @@ pre_fire_account_sweep() {
   json="$("$CC_ACCOUNTS_BIN" --fresh --json 2>/dev/null || true)"
   [ -n "$json" ] || { echo "⚠ pre-fire account sweep: '$CC_ACCOUNTS_BIN --fresh --json' returned nothing — skipping (fire proceeds)" >&2; return 0; }
   total="$(printf '%s' "$json" | jq -r '.rows | length' 2>/dev/null || echo 0)"
-  broken="$(printf '%s' "$json" | jq -r '.rows[] | select(.auth=="logged-out" or .auth=="token-invalid" or .auth=="keychain-error") | [.acct, .auth, (.k // 0)] | @tsv' 2>/dev/null || true)"
+  # .auth_actionable is the CLI's own verdict. This used to be a hand-copied list of auth
+  # states, and it had already drifted: it matched 3 of the 5 the CLI classes as actionable,
+  # so a no-oauth-blob or probe-error account passed this gate as healthy and the fire went
+  # ahead against an account that could not authenticate. One owner for the predicate.
+  #
+  # A CLI too old to emit the field would make the filter match NOTHING, i.e. report a
+  # fleet of broken accounts as healthy — silent fail-open, the worst failure this gate has.
+  # Name the skew instead, in the same voice as the empty-output degrade just above.
+  if [ "$(printf '%s' "$json" | jq -r '[.rows[] | has("auth_actionable")] | all' 2>/dev/null)" != true ]; then
+    echo "⚠ pre-fire account sweep: claude-accounts emits no .auth_actionable (version skew) — auth gate SKIPPED (fire proceeds)" >&2
+    return 0
+  fi
+  broken="$(printf '%s' "$json" | jq -r '.rows[] | select(.auth_actionable == true) | [.acct, .auth, (.k // 0)] | @tsv' 2>/dev/null || true)"
   if [ -z "$broken" ]; then
     echo "→ pre-fire account sweep: ${total:-?}/${total:-?} accounts healthy (or auto-healed)" >&2
     _sweep_write_stamp "$now" ""
@@ -1065,7 +1077,7 @@ pre_fire_account_sweep() {
 
   # 2. per broken account: Phase-1 headless relogin when eligible, else a bridge line
   local healed=0 stranded=0 stranded_lines="" summary=""
-  local acct auth k info hrt kstate cfgdir svc cbin scopes kca lastknown rc detail why
+  local acct auth k info hrt rtexp kstate cfgdir svc cbin scopes kca lastknown rc detail why
   while IFS="$(printf '\t')" read -r acct auth k; do
     [ -n "$acct" ] || continue
     info="$("$CC_ACCOUNTS_BIN" --relogin-info "$acct" 2>/dev/null || true)"
@@ -1081,7 +1093,11 @@ pre_fire_account_sweep() {
     # Phase-1 eligibility: refresh token present + keychain readable + ZERO live sessions (a live CC
     # owns the token lifecycle — never relogin under it; heal()'s k==0 gate). logged-out/keychain-error
     # inherently fail has_refresh_token, so this branch is reached only by a recoverable token-invalid.
-    if [ "$hrt" = true ] && [ "$kstate" = present ] && [ "${k:-0}" = 0 ] && [ -n "$cfgdir$svc$cbin" ]; then
+    # ...and the refresh token must not be PAST ITS OWN EXPIRY. Present is not usable: past
+    # that stamp the grant returns invalid_grant by construction, so Phase 1 would spend 90s
+    # proving what the keychain already stated. Straight to the bridge line instead.
+    rtexp="$(printf '%s' "$info" | jq -r '.refresh_token_expired // false' 2>/dev/null || echo false)"
+    if [ "$hrt" = true ] && [ "$rtexp" != true ] && [ "$kstate" = present ] && [ "${k:-0}" = 0 ] && [ -n "$cfgdir$svc$cbin" ]; then
       rc=0; detail="$(phase1_relogin "$acct" "$cfgdir" "$svc" "$kca" "$cbin" "$scopes")" || rc=$?
       if [ "$rc" = 0 ]; then
         healed=$((healed+1)); summary="$summary ✓$acct(healed)"

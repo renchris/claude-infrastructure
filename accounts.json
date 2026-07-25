@@ -16,6 +16,8 @@
   "_lock": "lock_wait_s = how long a caller waits for the single-flight lock before serving a grace-TTL cache instead of blocking (the holder can own it for minutes: 4 accounts x keychain + 90s heal + retry ladders). cache_grace_s = the widened TTL used ONLY on that degrade path. --fresh NEVER degrades — handoff-fire relies on it forcing a live sweep with auto-heal.",
   "lock_wait_s": 5,
   "cache_grace_s": 600,
+  "_login": "login_warn_h = how far ahead the LOGIN cliff is surfaced. The cliff is the keychain payload's refreshTokenExpiresAt: once it passes, every refresh grant returns invalid_grant and only an interactive /login recovers the account. It is anchored to the last INTERACTIVE login and is NOT extended by a refresh — observed 2026-07-24: next and next2 were both refreshed within the same minute yet carried refresh-token expiries 15 days apart. So it is a hard, unavoidable, perfectly-predictable, roughly-monthly-per-account cliff, and lead time is the only defence. 72h ~= three sweeps of warning; Claude Code's own startup banner does not warn until 24h.",
+  "login_warn_h": 72.0,
   "frontier": {
     "_": "Window end/active are READ LIVE from model_config_ssot frontier_access (never hardcode a date — the reso-quota JUL7 lesson). coupling = fable_cap/weekly_cap per SSOT '<=50% of weekly usage limits'. end_date_inclusive: SSOT 'end:' means available THROUGH that date. credits_authorized: keep scoring Fable past the window deadline (deprioritized by CF) instead of hard-excluding — flip only on explicit operator authorization.",
     "scoped_display_name": "Fable",
