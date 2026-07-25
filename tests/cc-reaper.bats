@@ -1005,3 +1005,28 @@ hold_lock() { mkdir -p "$CC_REAPER_LOCKDIR"; printf '%s\n' "$1" > "$CC_REAPER_LO
   [ "$status" -eq 0 ]
   echo "$output" | grep -q 'classified'
 }
+
+# ── the lock binds --reap ONLY ────────────────────────────────────────────────────────────────────
+# A DRY-RUN writes nothing (reconcile / backlog-reap / inbox-guard are all --reap-gated), so it has
+# no state to race on. Gating it was wrong in BOTH directions: a human running the diagnostic would
+# suppress a real reap tick for its duration, and the diagnostic went unavailable during exactly the
+# long sweep that prompted it. These pin both halves so neither can regress.
+
+@test "sweep lock: a DRY-RUN does not take the lock (it cannot suppress a real reap tick)" {
+  mock_classify active "$D/clean" 10 no PANE-1
+  run "$R" sweep                                       # no --reap
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'classified'                # it really ran
+  [ ! -d "$CC_REAPER_LOCKDIR" ]                        # ...and never created the lock
+}
+
+@test "sweep lock: a DRY-RUN runs even while a live --reap holds the lock (diagnostic stays usable)" {
+  mock_classify active "$D/clean" 10 no PANE-1
+  sleep 60 & local holder=$!
+  hold_lock "$holder"                                  # a live, correctly-pinned --reap holder
+  run "$R" sweep                                       # the diagnostic must NOT skip
+  kill "$holder" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'classified'
+  [ -d "$CC_REAPER_LOCKDIR" ]                          # and it left the holder's lock untouched
+}
