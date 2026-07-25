@@ -4,25 +4,53 @@
 #
 #   scripts/ship-land.sh [--trunk <branch>] [--dry-run]
 #
+# INVARIANT (land-gate serialization fix, 2026-07-25): the GATE proves the FINAL rebased
+# tree green; the LOCK covers ONLY the race window (fetch-compare → push → content-verify —
+# the 2026-07-11 anti-drop guarantee). The full gate runs UNLOCKED and therefore in PARALLEL
+# across concurrent landing sessions; the machine-wide mutex is held for seconds, not the
+# full-suite duration (pre-fix: N concurrent landers serialized at ~N × suite-time, observed
+# 40-min queues).
+#
 # Pipeline (fail-closed at every step):
 #   preflight (OUTSIDE lock): shared-checkout refusal · dirty-tree refusal ·
 #     escalation-scan (destructive SQL / credential patterns ⇒ PARK a decision packet,
 #     exit 3, never auto-land) · safety backup ref
-#   → land-lock'd child (serialized machine-wide per repo via land-lock.sh):
-#       last-moment `git fetch` → `git rebase` (conflict ⇒ exit 5) → GATE (shellcheck +
-#       bats + `bash -n` + py_compile for changed shell/python INCLUDING extensionless
-#       by shebang; red ⇒ exit 6) → `git push HEAD:<trunk>` (non-ff ⇒ exit 7) →
-#       land-verify.sh → on a content-drop, BOUNDED AUTO-RETRY + ROLLBACK (T-P9-7):
-#       re-fetch + rebase onto the moved trunk + re-gate + re-push, up to
-#       SHIP_LAND_VERIFY_RETRIES times; a retry rebase-conflict rolls back (rebase --abort)
-#       ⇒ exit 5, retries exhausted (still not intact) ⇒ clean tree + exit 8 →
-#       stranded-sweep (exit 1 ⇒ REVIEW verdict, surfaced, never auto-recovered) →
-#       self-attesting land.log line {verify,sweep,esc_scan,sid}.
+#   → optimistic rounds, up to SHIP_LAND_GATE_ROUNDS (default 3), each:
+#       UNLOCKED: `git fetch` → `git rebase` (conflict ⇒ exit 5) → FULL GATE on the rebased
+#       tree (shellcheck + bats + `bash -n` + py_compile for changed shell/python INCLUDING
+#       extensionless by shebang; red ⇒ exit 6); record (GATE_BASE = origin/<trunk>,
+#       GATE_HEAD = HEAD) — the exact tree the gate proved green. --dry-run stops here
+#       (a dry run never takes the lock).
+#       → land-lock'd child (serialized machine-wide per repo via land-lock.sh):
+#         last-moment `git fetch` → CAS check: origin/<trunk> still == GATE_BASE AND
+#         HEAD still == GATE_HEAD? If NOT (a sibling landed mid-gate): release the lock,
+#         exit 42 (internal STALE-GATE code), and the outer loop re-rebases + RE-GATES the
+#         new final tree UNLOCKED (the re-gate fires IFF origin moved in the window). If
+#         yes: the gated tree IS the pushed tree → `git push HEAD:<trunk>` (non-ff ⇒
+#         exit 7) → land-verify.sh (content-verify, IN the lock, after the push) → on a
+#         content-drop, BOUNDED AUTO-RETRY + ROLLBACK (T-P9-7): re-fetch + rebase onto the
+#         moved trunk + re-gate (in-lock — rare incident-recovery path) + re-push, up to
+#         SHIP_LAND_VERIFY_RETRIES times; a retry rebase-conflict rolls back
+#         (rebase --abort) ⇒ exit 5, retries exhausted (still not intact) ⇒ clean tree +
+#         exit 8 → stranded-sweep (exit 1 ⇒ REVIEW verdict, surfaced, never auto-recovered)
+#         → self-attesting land.log line {verify,sweep,esc_scan,sid}.
+#   → rounds exhausted (sustained contention — every unlocked gate was invalidated by a
+#     sibling land): GUARANTEED-PROGRESS FALLBACK — rebase + full gate INSIDE the lock (the
+#     pre-fix behavior; a held mutex stops further pipeline movement, so this terminates).
+#     SHIP_LAND_GATE_ROUNDS=0 skips the optimistic rounds entirely (the kill switch back to
+#     the pre-fix always-in-lock behavior).
 #
-# --dry-run stops after the gate (no push). Exit codes: 0 landed · 2 preflight refusal ·
-# 3 escalation PARK · 4 shared-checkout refusal · 5 rebase conflict (initial OR an auto-retry
-# rebase, the latter rolled back) · 6 gate red · 7 push non-ff · 8 content-verify failed
-# after exhausting the bounded auto-retries.
+# WHY the stale path re-runs the FULL gate (not a delta-scoped subset): green(our tree) +
+# green(sibling's landed tree) does NOT imply green(our tree rebased onto theirs) — semantic
+# conflicts need no file overlap, and this repo's tests read docs/prose too, so no
+# changed-path test map is conservatively sufficient. The full gate on the final tree is the
+# only provably-sufficient re-check; the fix is WHERE it runs (unlocked), never WHETHER.
+#
+# --dry-run stops after the gate (no push, no lock). Exit codes: 0 landed · 2 preflight
+# refusal · 3 escalation PARK · 4 shared-checkout refusal · 5 rebase conflict (initial OR an
+# auto-retry rebase, the latter rolled back) · 6 gate red · 7 push non-ff · 8 content-verify
+# failed after exhausting the bounded auto-retries. (42 is INTERNAL — locked child →
+# outer-loop stale-gate signal; it never escapes ship-land.)
 #
 # TRAILER CONVENTION (ownership-decidable sweep, T-P9-4): a session's commits should
 # carry a `Session-Id: <CLAUDE_CODE_SESSION_ID>` trailer so `stranded-sweep.sh --mine
@@ -32,7 +60,8 @@
 # Env overrides (mostly for tests): SHIP_LAND_SHARED_CHECKOUT · SHIP_LAND_SESSION_BRANCH_RE
 # · SHIP_LAND_ALLOW_SHARED=1 · SHIP_LAND_ESC_RE · SHIP_LAND_DECISIONS_DIR · LAND_LOG ·
 # LAND_LOCK_DIR (see land-lock.sh) · SHIP_LAND_VERIFY_RETRIES (default 2; 0 = single-shot,
-# the pre-T-P9-7 kill switch — one push, one verify, no auto-retry).
+# the pre-T-P9-7 kill switch — one push, one verify, no auto-retry) ·
+# SHIP_LAND_GATE_ROUNDS (default 3; 0 = gate fully in-lock, the pre-optimistic kill switch).
 #
 # bash 3.2-safe (no declare -A / mapfile; empty-array expansion guarded under `set -u`).
 # `pipefail` load-bearing; NO `set -e`.
@@ -165,14 +194,13 @@ run_gate() {  # $1=range → 0 green / 1 red
   return "$rc"
 }
 
-# ---- locked phase (re-exec'd under land-lock) ------------------------------
+# ---- unlocked reconcile + gate (one optimistic round; parallel across sessions) ----
 
-main_locked() {
+unlocked_reconcile_and_gate() {  # $1=trunk $2=dry_run → sets GATE_BASE/GATE_HEAD globals;
+                                 # exits internally on rebase-conflict(5) / gate-red(6) /
+                                 # nothing-to-land(0) / --dry-run(0).
   local TRUNK="$1" DRY_RUN="$2"
-  REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-  BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')"
-
-  echo "→ ship-land[locked]: last-moment fetch origin/$TRUNK" >&2
+  echo "→ ship-land[unlocked]: fetch + rebase + FULL gate — no lock held; concurrent landers gate in parallel" >&2
   git fetch origin "$TRUNK" 2>/dev/null || echo "⚠ ship-land: fetch failed — using local origin/$TRUNK" >&2
 
   if ! git rebase "origin/$TRUNK" >&2; then
@@ -180,16 +208,13 @@ main_locked() {
     exit 5
   fi
 
-  local LAND_BASE RANGE
-  LAND_BASE="$(git rev-parse "origin/$TRUNK")"
-  RANGE="$LAND_BASE..HEAD"
-
-  if [[ -z "$(git rev-list "$RANGE" 2>/dev/null)" ]]; then
+  GATE_BASE="$(git rev-parse "origin/$TRUNK")"
+  if [[ -z "$(git rev-list "$GATE_BASE..HEAD" 2>/dev/null)" ]]; then
     echo "✓ ship-land: nothing to land (origin/$TRUNK already contains HEAD)."
     exit 0
   fi
 
-  if ! run_gate "$RANGE"; then
+  if ! run_gate "$GATE_BASE..HEAD"; then
     echo "✗ ship-land: GATE RED — not pushing." >&2
     exit 6
   fi
@@ -202,10 +227,67 @@ main_locked() {
   git rev-parse HEAD > "$(git rev-parse --git-common-dir)/gate-green" 2>/dev/null || true
 
   if [[ "$DRY_RUN" = "1" ]]; then
-    echo "→ ship-land --dry-run: reconciled onto origin/$TRUNK + gate GREEN; STOPPING before push."
+    echo "→ ship-land --dry-run: reconciled onto origin/$TRUNK + gate GREEN; STOPPING before push (no lock taken — a dry run never queues a real land)."
     echo "  would push HEAD ($(git rev-parse --short HEAD)) → origin/$TRUNK:"
-    git diff --stat "$RANGE"
+    git diff --stat "$GATE_BASE..HEAD"
     exit 0
+  fi
+
+  GATE_HEAD="$(git rev-parse HEAD)"
+}
+
+# ---- locked phase (re-exec'd under land-lock) ------------------------------
+
+main_locked() {
+  # CAS mode ($3/$4 non-empty): the full gate already ran GREEN, UNLOCKED, on exactly
+  # (HEAD=GATE_HEAD, base=GATE_BASE). Hold the lock only for fetch-compare → push →
+  # content-verify — the 2026-07-11 race window. A moved origin/HEAD ⇒ exit 42 (stale
+  # gate, INTERNAL): the outer loop re-gates the new final tree unlocked.
+  # FULL mode ($3/$4 empty — SHIP_LAND_GATE_ROUNDS=0 kill switch, or optimistic rounds
+  # exhausted under sustained contention): rebase + full gate INSIDE the lock (pre-fix
+  # behavior) — guaranteed progress, since a held mutex stops further pipeline movement.
+  local TRUNK="$1" DRY_RUN="$2" GATE_BASE="${3:-}" GATE_HEAD="${4:-}"
+  REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+  BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')"
+
+  echo "→ ship-land[locked]: last-moment fetch origin/$TRUNK" >&2
+  git fetch origin "$TRUNK" 2>/dev/null || echo "⚠ ship-land: fetch failed — using local origin/$TRUNK" >&2
+
+  local LAND_BASE
+  if [[ -n "$GATE_BASE" ]]; then
+    local now_base now_head
+    now_base="$(git rev-parse "origin/$TRUNK" 2>/dev/null || echo '?')"
+    now_head="$(git rev-parse HEAD 2>/dev/null || echo '?')"
+    if [[ "$now_base" != "$GATE_BASE" || "$now_head" != "$GATE_HEAD" ]]; then
+      echo "↻ ship-land[locked]: STALE GATE — origin/$TRUNK or HEAD moved during the unlocked gate (base ${GATE_BASE:0:7}→${now_base:0:7}, head ${GATE_HEAD:0:7}→${now_head:0:7}). Releasing the lock; re-reconciling + re-gating the new final tree unlocked." >&2
+      exit 42
+    fi
+    LAND_BASE="$GATE_BASE"
+  else
+    if ! git rebase "origin/$TRUNK" >&2; then
+      echo "✗ ship-land: rebase onto origin/$TRUNK hit a conflict — resolve it, then re-run /ship. Rebase left in progress; backup ref intact." >&2
+      exit 5
+    fi
+
+    LAND_BASE="$(git rev-parse "origin/$TRUNK")"
+    if [[ -z "$(git rev-list "$LAND_BASE..HEAD" 2>/dev/null)" ]]; then
+      echo "✓ ship-land: nothing to land (origin/$TRUNK already contains HEAD)."
+      exit 0
+    fi
+
+    if ! run_gate "$LAND_BASE..HEAD"; then
+      echo "✗ ship-land: GATE RED — not pushing." >&2
+      exit 6
+    fi
+    # P0-1 gate-green producer (see unlocked_reconcile_and_gate for the full rationale).
+    git rev-parse HEAD > "$(git rev-parse --git-common-dir)/gate-green" 2>/dev/null || true
+
+    if [[ "$DRY_RUN" = "1" ]]; then
+      echo "→ ship-land --dry-run: reconciled onto origin/$TRUNK + gate GREEN; STOPPING before push."
+      echo "  would push HEAD ($(git rev-parse --short HEAD)) → origin/$TRUNK:"
+      git diff --stat "$LAND_BASE..HEAD"
+      exit 0
+    fi
   fi
 
   # --- push + content-verify, with bounded auto-retry + rollback on a concurrent drop (T-P9-7) ---
@@ -366,8 +448,26 @@ main_outer() {
   # --- safety backup ref (rollback point) ---
   git branch -f "ship/backup-$(git rev-parse --short HEAD)" HEAD >/dev/null 2>&1 || true
 
-  # --- launch the locked pipeline as ONE child under the machine-wide landing lock ---
-  exec "$LAND_LOCK" -- "$SELF" __locked "$TRUNK" "$DRY_RUN"
+  # --- optimistic rounds: FULL gate UNLOCKED (parallel across sessions); the lock holds
+  #     ONLY fetch-compare → push → content-verify. A stale gate (exit 42: a sibling
+  #     landed mid-gate) releases the lock and re-gates the new final tree out here. ---
+  local ROUNDS round rc
+  ROUNDS="${SHIP_LAND_GATE_ROUNDS:-3}"
+  round=0
+  while [[ "$round" -lt "$ROUNDS" ]]; do
+    round=$(( round + 1 ))
+    unlocked_reconcile_and_gate "$TRUNK" "$DRY_RUN"   # exits on 5/6/dry-run/nothing-to-land
+    "$LAND_LOCK" -- "$SELF" __locked "$TRUNK" "$DRY_RUN" "$GATE_BASE" "$GATE_HEAD"
+    rc=$?
+    [[ "$rc" -ne 42 ]] && exit "$rc"   # landed (0) or a real failure (incl. land-lock's 75) — propagate
+    echo "↻ ship-land: optimistic round ${round}/${ROUNDS} invalidated (sibling land mid-gate) — re-gating the new final tree unlocked." >&2
+  done
+
+  # --- rounds exhausted (sustained contention) or SHIP_LAND_GATE_ROUNDS=0: guaranteed
+  #     progress — rebase + full gate INSIDE the lock (pre-fix behavior; a held mutex
+  #     stops further pipeline movement, so this round cannot be invalidated). ---
+  [[ "$ROUNDS" -gt 0 ]] && echo "→ ship-land: ${ROUNDS} optimistic round(s) exhausted — falling back to the in-lock full gate (guaranteed progress)." >&2
+  exec "$LAND_LOCK" -- "$SELF" __locked "$TRUNK" "$DRY_RUN" "" ""
 }
 
 # ---- dispatch --------------------------------------------------------------
