@@ -27,8 +27,14 @@ setup() {
   # --- "after" sweep can differ, falling back to foo.json when no per-call file exists.
   hdr() { { echo '#!/usr/bin/env bash'; echo "FIX=\"$D\""; } > "$1"; }
 
+  # A bare `! cmd` is a SILENT NO-OP in bats unless it is the last line of the @test (POSIX
+  # exempts !-inverted pipelines from errexit; shellcheck SC2314). Verified on bats 1.13.0.
+  # Every negative assertion goes through this helper instead.
+  refute() { run "$@"; [ "$status" -ne 0 ]; }
+
   hdr "$D/stub-accounts"
   cat >> "$D/stub-accounts" <<'STUB'
+echo "accounts $*" >> "$FIX/accounts-calls"
 bump() { local f="$FIX/n-$1" n; n=$(cat "$f" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" > "$f"; echo "$n"; }
 if [[ "$*" == *--relogin-info* ]]; then
   n=$(bump info)
@@ -342,6 +348,17 @@ EOF
   [ -n "$(echo "$output" | jq -r .detail)" ]
 }
 
+@test "both measurement reads are --fresh --no-heal: a read that can heal is not independent" {
+  mk_info all true; mk_creds
+  mk_fresh 1 logged-out "2026-08-01T00:00:00Z"; mk_fresh 2 ok "2026-09-01T00:00:00Z"
+  run "$C" next3
+  [ "$status" -eq 0 ]
+  # before + after, and NEITHER may re-enter probe_account's heal() -> `claude auth login`
+  [ "$(grep -c -- '--fresh' "$D/accounts-calls")" -eq 2 ]
+  [ "$(grep -- '--fresh' "$D/accounts-calls" | grep -c -- '--no-heal')" -eq 2 ]
+  refute grep -e '--fresh --json' -e '--fresh$' "$D/accounts-calls"
+}
+
 @test "--json on a refusal carries the same shape" {
   mk_info all true; mk_fresh all ok "2027-01-01T00:00:00Z" 900
   run "$C" next3 --json
@@ -357,8 +374,9 @@ EOF
   run "$C" next3 --no-browser --json
   [ "$status" -eq 3 ]
   echo "$output" | grep -q 'REDACTED'
-  ! echo "$output" | grep -q 'sk-ant-oat01-A'
-  ! grep -q 'sk-ant-oat01-A' "$CC_RELOGIN_LOG"
+  echo "$output" > "$D/out.txt"
+  refute grep -q 'sk-ant-oat01-A' "$D/out.txt"
+  refute grep -q 'sk-ant-oat01-A' "$CC_RELOGIN_LOG"
 }
 
 @test "exit 7 CONSENT-GATE is retained for consumers but no code path emits it" {
