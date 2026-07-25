@@ -1,8 +1,10 @@
 # Land-gate serialization — gate outside the lock (2026-07-25)
 
-**Status: LANDED** (fix + RED-proof suite: `2f91866`). Brief filed by the shutdown-hardening
-session (2026-07-25) after hitting the pathology first-hand; forensics in
-`docs/research/session-crash-forensics-2026-07-23.md` § 2026-07-25.
+**Status: LANDED on trunk** — fix + RED-proof suite `190c839`, this doc + ship.md prose
+`efd54bb` (worktree commits `2f91866`/`6804a8a`, SHAs rewritten by the dogfood land's own
+round-2 rebase). Brief filed by the shutdown-hardening session (2026-07-25) after hitting the
+pathology first-hand; forensics in `docs/research/session-crash-forensics-2026-07-23.md`
+§ 2026-07-25.
 
 ## Problem
 
@@ -135,6 +137,38 @@ sessions, and in the common case (arrivals spread wider than one suite-duration)
 serialization tax is zero — the lock is held for the seconds the push+verify actually need.
 Bench harness: session scratchpad `bench-land-gate.sh` (fixture recipe reproduced in
 `tests/land-gate-cas.bats`'s shim pattern).
+
+## Live dogfood trace (2026-07-25, the fix landing itself)
+
+The fix landed **via the pipeline it fixes**, under real concurrency with a sibling session
+(`fix/desk-invariant-headless-respawn`) still landing on the **old** code — the worst
+transition-period topology (an old-style lander holds the lock through its entire suite).
+From this session's land output + `land.log` telemetry:
+
+- **Round 1:** full gate ran unlocked, in parallel with the sibling's in-lock gate (pre-fix,
+  this session would have queued behind it for the whole suite before even starting its own).
+  CAS child then queued 231 s for the mutex (the sibling's old-style hold); on acquire it read
+  the trunk moved (`893cd58 → e34ab65` — the sibling had landed) and released with
+  **`hold_s: 0`, exit 42**.
+- **Round 2:** re-gated the new final tree unlocked (full suite); CAS acquired with **no
+  wait**, held **14 s** total for push + content-verify + stranded-sweep (277 branches), and
+  landed `190c839` + `efd54bb`, `verify: ok`.
+
+Both stale-detection (zero-hold release) and the fast path (14 s hold) exercised live on the
+first production land; the 231 s queue was behind an old-code holder — the last such queue,
+since every subsequent lander picks the fix up from trunk.
+
+## Follow-on surfaced by concurrent gating (fixed same-day)
+
+The first post-fix land attempt went gate-RED on a **pre-existing** sporadic flake that the old
+serialization had been masking by rarely running suites under load: `lead-supervisor.sh`'s
+STALL? branch called `resolve_page` in the same sweep that created the page, so with
+integer-second stamps a page born at X.99s read as deadline-elapsed at X+1.00s
+(fixture deadline 1s) ⇒ phantom same-sweep ESCALATE ⇒ a 2-notify count the e2e asserts
+against. Concurrent unlocked gates raise machine load and suite-run frequency, so this class
+of load-sensitive test flake now surfaces more — each is a real defect to fix at root
+(same-sweep guard + deterministic T22b forcing the race via `CC_SUP_PAGE_DEADLINE_S=0`),
+never to retry past.
 
 ## Operational notes
 
