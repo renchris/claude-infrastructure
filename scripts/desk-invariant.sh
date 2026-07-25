@@ -75,6 +75,7 @@ REPROMPT_TEXT="${DESK_INVARIANT_REPROMPT_TEXT:-resume: read /wrap, run cc-backlo
 
 STALE_S=$(( STALE_MIN * 60 ))
 PANE=""; SID=""; PID=""   # resolved per run; SID/PANE flow into idl()
+FIRE_ERR=""               # fire_replacement's captured stderr; flows into the fire-failed idl record
 
 JQ="$(command -v jq || true)"
 [ -n "$JQ" ] || { printf 'desk-invariant: jq required\n' >&2; exit 3; }
@@ -179,8 +180,26 @@ fire_replacement() { # fire a fresh desk from the canned brief (role-tagged). Re
   # --prompt-file UNCONDITIONALLY required (handoff-fire.sh:617-618) — the old `DESK_BOOT_BRIEF=… --as-role
   # --cwd` argv (no --prompt-file; env var unconsumed) exited 1 in prod, so a fully-dead desk was NEVER
   # respawned (a17's "nothing can CREATE a desk" organ, silently broken). Pass the brief as --prompt-file.
-  [ -f "$BRIEF" ] || { echo "desk-invariant: boot brief missing, cannot respawn: $BRIEF" >&2; return 1; }
-  "$FIRE_BIN" --prompt-file "$BRIEF" --as-role "$ROLE" --cwd "$CANNED_CWD" >/dev/null 2>&1
+  #
+  # ANCHOR fix (2026-07-25): the SAME organ was still broken for a DIFFERENT argument. handoff-fire
+  # anchors a fire to the FIRING pane and REFUSES when it cannot resolve one ("no $ITERM_SESSION_ID/
+  # --session-id — would REFUSE to fire; pass --session-id or --window", handoff-fire.sh:2084/2090/2096).
+  # That fail-loud is CORRECT for an interactive fire (never app-frontmost drift), but this caller is a
+  # LAUNCHD job — it can never have a firing pane, so every respawn exited nonzero. Prod evidence:
+  # 266 `handoff-fire returned nonzero; no-registry-row` records over 41h (2026-07-23T07:35Z →
+  # 2026-07-25T01:02Z) with no desk alive the whole time. `--window` is documented as "the ONLY surface
+  # that deliberately does NOT anchor to the firing pane" (handoff-fire.sh:66-68) and, without --follow,
+  # is created WITHOUT activating iTerm2 — exactly the headless-respawn surface. --surface-reason
+  # silences the override advisory and records WHY a non-default surface was chosen.
+  #
+  # STDERR IS CAPTURED, not discarded: the old `2>&1 >/dev/null` is why 41h of identical failures were
+  # undiagnosable from the IDL. The caller puts $FIRE_ERR into the fire-failed record.
+  [ -f "$BRIEF" ] || { FIRE_ERR="boot brief missing: $BRIEF"; echo "desk-invariant: $FIRE_ERR" >&2; return 1; }
+  FIRE_ERR="$("$FIRE_BIN" --prompt-file "$BRIEF" --as-role "$ROLE" --cwd "$CANNED_CWD" \
+      --window --surface-reason "headless respawn: a launchd caller has no anchor pane" 2>&1 >/dev/null)"
+  local rc=$?
+  FIRE_ERR="$(printf '%s' "$FIRE_ERR" | tr '\n' ' ' | cut -c1-300)"
+  return "$rc"
 }
 
 dedup_fresh() { # <state> → 0 if we already paged (sid,state) within DEDUP_WINDOW_S
@@ -237,17 +256,32 @@ handle_stale() { # <idle_s>
 
 handle_no_desk() { # <reason>
   local reason="$1"
-  notify "Claude desk MISSING" "no live desk (${reason}) — bounded replacement"
-  push_page "NO DESK (${ROLE}): ${reason} — firing a budgeted replacement"
+  # PAGE DEDUP: no-desk is a RECURRING 5-min poll, so an unpaced page here is a storm — the stunned/
+  # stale branches already dedup (dedup_fresh/dedup_write) and this one did not. SID is empty in the
+  # no-desk branch (no registry row to read one from), so the marker keys on the PANE — the only stable
+  # identifier a missing desk has. Cf. memory blind-check-generators-stdin-and-sid-keys: an idempotency
+  # marker for a RECURRING event must be event-keyed, never subject-keyed-by-something-absent.
+  local dkey="nodesk-${PANE:-none}"
+  if ! dedup_fresh "$dkey"; then
+    notify "Claude desk MISSING" "no live desk (${reason}) — bounded replacement"
+    push_page "NO DESK (${ROLE}): ${reason} — firing a budgeted replacement"
+    dedup_write "$dkey"
+  fi
   if ! respawn_budget_ok; then
     idl budget-exhausted page "respawn budget exhausted (>=${RESPAWN_MAX}/${RESPAWN_WINDOW_S}s); paged only; ${reason}"
     return
   fi
+  # BUDGET CONSUMES ON ATTEMPT, NOT ON SUCCESS (2026-07-25). The marker used to be written only inside
+  # the success branch, so a PERMANENTLY-FAILING fire consumed no budget and respawn_budget_ok never
+  # tripped — the exact opposite of the DESIGN LAW ("a BOUNDED re-prompt/respawn budget only … NEVER a
+  # respawn loop"). Prod: 266 attempts against a designed ceiling of RESPAWN_MAX=2 per 6h, because every
+  # one of them failed. The bound must cover the failure mode it exists to bound, so the marker is
+  # written BEFORE the attempt and both outcomes consume it.
+  respawn_marker_write
   if fire_replacement; then
-    respawn_marker_write
-    idl no-desk fire "fired replacement desk from canned brief; ${reason}"
+    idl no-desk fire "fired replacement desk from canned brief (--window, headless); ${reason}"
   else
-    idl no-desk fire-failed "handoff-fire returned nonzero; ${reason}"
+    idl no-desk fire-failed "handoff-fire returned nonzero: ${FIRE_ERR:-<no stderr captured>}; ${reason}"
   fi
 }
 

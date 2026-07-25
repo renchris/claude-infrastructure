@@ -16,11 +16,27 @@ setup() {
   # fire stub REPLICATES handoff-fire's hard contract (handoff-fire.sh:617-618): --prompt-file is
   # REQUIRED and its file must exist, else exit 1 with NO log. This RED-proves P0-14 — a fire_replacement
   # that omits --prompt-file leaves no fire.log (the dead-desk recreate silently fails), exactly as prod.
+  # ANCHOR CONTRACT (2026-07-25): the stub now ALSO models handoff-fire's refusal to fire without a
+  # resolvable anchor. The real producer refuses when there is no $ITERM_SESSION_ID and neither
+  # --session-id nor --window was passed (handoff-fire.sh:2084/2090/2096) — a launchd caller NEVER has
+  # one. The old stub validated only --prompt-file, so it exited 0 where prod exited 1: the suite stayed
+  # green through 41h/266 failed respawns. Cf. memory fixture-shape-parity-with-real-producer — a fixture
+  # is a contract CLAIM, so it must model the producer's literal refusal, not a convenient subset.
   cat > "$C/stubs/fire" <<'FIRE'
 #!/bin/bash
-orig="$*"; pf=""
-while [ $# -gt 0 ]; do case "$1" in --prompt-file) pf="${2:-}"; shift 2 ;; *) shift ;; esac; done
+orig="$*"; pf=""; anchor=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --prompt-file) pf="${2:-}"; shift 2 ;;
+    --window)      anchor=window; shift ;;
+    --session-id)  anchor="${2:-}"; shift 2 ;;
+    *) shift ;;
+  esac
+done
 [ -n "$pf" ] && [ -f "$pf" ] || exit 1
+# No inherited pane in this env (ITERM_SESSION_ID is unset in the harness), so an explicit anchor is
+# mandatory — mirrors the real refusal, and prints to STDERR as the real one does.
+[ -n "$anchor" ] || { echo "handoff-fire: no \$ITERM_SESSION_ID/--session-id — REFUSING to fire" >&2; exit 1; }
 printf '%s\n' "$orig" >> "$(dirname "$0")/fire.log"
 exit 0
 FIRE
@@ -98,6 +114,53 @@ disp() { tail -1 "$C/idl.jsonl" | jq -r '.disposition'; }
   grep -q -- '--prompt-file' "$C/stubs/fire.log"
   grep -q -- "$C/brief.md" "$C/stubs/fire.log"
   ls "$C/state"/respawn-*.marker >/dev/null 2>&1
+}
+
+@test "no-desk: the respawn passes an ANCHOR (--window) — a launchd caller has no firing pane" {
+  # RED before the fix: fire_replacement passed neither --session-id nor --window, so the anchor-aware
+  # stub refuses exactly as prod did and no fire.log is written. This is the 41h/266-failure defect.
+  printf 'UANCHOR\n' > "$C/roles/desk"
+  run "$DI" --once
+  [ "$(disp)" = no-desk ]
+  [ -f "$C/stubs/fire.log" ]
+  grep -q -- '--window' "$C/stubs/fire.log"
+}
+
+@test "no-desk: a FAILING fire still consumes respawn budget (no unbounded loop)" {
+  # RED before the fix: respawn_marker_write ran ONLY in the success branch, so a permanently-failing
+  # fire never consumed budget — 266 attempts against a ceiling of 2. The bound must cover the failure
+  # mode it exists to bound. Force failure by making the brief unreadable to the stub's -f check.
+  printf 'UFAIL\n' > "$C/roles/desk"
+  rm -f "$C/brief.md"
+  run "$DI" --once
+  [ "$(disp)" = no-desk ]
+  [ ! -f "$C/stubs/fire.log" ]                          # the fire did NOT succeed
+  ls "$C/state"/respawn-*.marker >/dev/null 2>&1        # ...and budget was consumed anyway
+}
+
+@test "no-desk: the fire-failed record carries the captured stderr (not a bare 'nonzero')" {
+  # RED before the fix: fire_replacement discarded stderr (>/dev/null 2>&1), which is why 41h of
+  # identical failures were undiagnosable from the IDL alone.
+  printf 'USTDERR\n' > "$C/roles/desk"
+  cat > "$C/stubs/fire" <<'FIRE'
+#!/bin/bash
+echo "handoff-fire: DISTINCTIVE-STDERR-MARKER" >&2
+exit 1
+FIRE
+  chmod +x "$C/stubs/fire"
+  run "$DI" --once
+  grep -q 'DISTINCTIVE-STDERR-MARKER' "$C/idl.jsonl"
+}
+
+@test "no-desk: the page is deduped across polls (a 5-min recurring event is not a storm)" {
+  # RED before the fix: handle_no_desk paged on EVERY poll with no dedup, unlike the stunned/stale
+  # branches. Two consecutive runs must produce exactly one page.
+  printf 'UDEDUP\n' > "$C/roles/desk"
+  run "$DI" --once
+  local first; first="$(wc -l < "$C/stubs/push.log" | tr -d ' ')"
+  run "$DI" --once
+  local second; second="$(wc -l < "$C/stubs/push.log" | tr -d ' ')"
+  [ "$first" = "$second" ]
 }
 
 @test "budget-exhausted: no-desk + 2 fresh respawn markers → page only, NO fire (loop refused)" {
