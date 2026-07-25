@@ -69,6 +69,28 @@ close_record_field() {
   printf '%s' "$v"
 }
 
+# marker_owns_sid <marker-file> <sid> → 0 iff this teardown marker is evidence about THIS session.
+#
+# A marker body carries the sid it was written FOR. That matters only on the pane-keyed lookup: an
+# in-place `handoff-fire --recycle` keeps the SAME pane and registers a NEW session on it, so for up
+# to the 30-min freshness window the pane carries the PREDECESSOR's marker while the registry row
+# already resolves to the SUCCESSOR. Accepting it blind classifies a GENUINE crash of the successor
+# as a deliberate teardown — a SILENT miss, strictly worse than the false CRASH this ladder exists to
+# prevent (a false CRASH pages; a false RECYCLE is swallowed). So a marker naming a DIFFERENT
+# non-empty sid is not evidence here.
+#
+# An EMPTY sid is the legitimate pane-only case and is still ACCEPTED: the real self-close path blanks
+# SESSION_ID and the writer's registry recovery can miss, which is exactly the 2026-07-23 incident
+# shape — rejecting it would regress that fix. Unreadable/absent field ⇒ empty ⇒ accepted (fail-open,
+# matching this ladder's bias: never invent a crash).
+marker_owns_sid() {
+  local f="$1" want="$2" got
+  [[ -f "$f" ]] || return 1
+  got=$(grep -oE '"sid":"[^"]*"' "$f" 2>/dev/null | head -1)
+  got=${got#*:}; got=${got#\"}; got=${got%\"}
+  [[ -z "$got" || "$got" == "$want" ]]
+}
+
 # EXIT<TAB>SIGNAL<TAB>RECORD_PATH<TAB>VERSION for a pid's newest close-record (empty if none).
 # Used by handle_crash to enrich the crash row AND by the --close-fields test entrypoint.
 close_record_summary() {
@@ -144,7 +166,10 @@ classify_death() {
   reg_hit=$(grep -lE "\"session_id\":[[:space:]]*\"$sid\"" "$reg_dir"/*.json 2>/dev/null | head -1) || true
   if [[ -n "$reg_hit" ]]; then
     pane=$(basename "$reg_hit" .json)
-    if find "$tdir" -maxdepth 1 -name "$pane.json" -mmin -30 2>/dev/null | grep -q .; then
+    # marker_owns_sid: an in-place --recycle leaves the PREDECESSOR's marker on a pane the registry
+    # now resolves to the SUCCESSOR — a marker naming a different session must not absolve this one.
+    if find "$tdir" -maxdepth 1 -name "$pane.json" -mmin -30 2>/dev/null | grep -q . \
+       && marker_owns_sid "$tdir/$pane.json" "$sid"; then
       printf 'RECYCLE\tdeliberate-teardown\t%s\t%s' "${kb:-0}" "${recs:-0}"; return 0
     fi
   fi

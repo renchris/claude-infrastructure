@@ -109,3 +109,41 @@ cause() { classify "$1" | cut -f2; }      # CAUSE field
   [ "$(cls s_td_jetsam)" = "CRASH" ]
   [ "$(cause s_td_jetsam)" = "jetsam-oom" ]
 }
+
+# ── pane-keyed marker OWNERSHIP (2026-07-25) — the in-place-recycle residue must not absolve a
+#    successor's genuine crash. `handoff-fire --recycle` keeps the SAME pane and registers a NEW
+#    session on it, so for up to the 30-min freshness window that pane carries the PREDECESSOR's
+#    marker while the registry row already resolves to the SUCCESSOR. Accepting it blind turns a real
+#    crash into a silent "deliberate teardown" — the mirror of the false-CRASH bug this ladder exists
+#    to fix, and worse: a false CRASH pages, a false RECYCLE is swallowed.
+
+@test "pane-keyed marker naming a DIFFERENT sid (recycle residue) does NOT absolve → CRASH" {
+  mk_tx s_succ "mid-tool output, nothing conclusive here"
+  # the pane the successor now owns…
+  printf '{"paneUUID":"PANE-RC","session_id":"s_succ"}\n' > "$CC_REGISTRY_DIR/PANE-RC.json"
+  # …still carries the PREDECESSOR's marker, written seconds earlier for a different session
+  printf '{"key_kind":"pane","pane":"PANE-RC","sid":"s_pred","mode":"recycle","ts":"2026-07-25T00:00:00Z"}\n' \
+    > "$CC_TEARDOWN_DIR/PANE-RC.json"
+  [ "$(cls s_succ)" = "CRASH" ]
+  [ "$(cause s_succ)" = "abrupt-unknown" ]
+}
+
+@test "pane-keyed marker naming THIS sid still classifies → RECYCLE / deliberate-teardown" {
+  mk_tx s_own "mid-tool output, nothing conclusive here"
+  printf '{"paneUUID":"PANE-OWN","session_id":"s_own"}\n' > "$CC_REGISTRY_DIR/PANE-OWN.json"
+  printf '{"key_kind":"pane","pane":"PANE-OWN","sid":"s_own","mode":"teardown","ts":"2026-07-25T00:00:00Z"}\n' \
+    > "$CC_TEARDOWN_DIR/PANE-OWN.json"
+  [ "$(cls s_own)" = "RECYCLE" ]
+  [ "$(cause s_own)" = "deliberate-teardown" ]
+}
+
+@test "pane-keyed marker with an EMPTY sid is still honoured → RECYCLE (2026-07-23 self-close shape)" {
+  # The real self-close path blanks SESSION_ID and the writer's registry recovery can miss, leaving
+  # a legitimate pane-only marker. Rejecting it would regress the incident this ladder was built for.
+  mk_tx s_anon "mid-tool output, nothing conclusive here"
+  printf '{"paneUUID":"PANE-ANON","session_id":"s_anon"}\n' > "$CC_REGISTRY_DIR/PANE-ANON.json"
+  printf '{"key_kind":"pane","pane":"PANE-ANON","sid":"","mode":"terminal","ts":"2026-07-25T00:00:00Z"}\n' \
+    > "$CC_TEARDOWN_DIR/PANE-ANON.json"
+  [ "$(cls s_anon)" = "RECYCLE" ]
+  [ "$(cause s_anon)" = "deliberate-teardown" ]
+}
