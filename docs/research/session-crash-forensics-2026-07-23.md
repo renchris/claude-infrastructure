@@ -422,3 +422,85 @@ All changed files (`bin/cc-{classify,reaper,reconcile}`, `scripts/reap-guard.sh`
 into the shared checkout — landing on the trunk fast-forward deploys them; there is no new tracked
 *runtime* file to link (the new `tests/*.bats` are not deployed). Post-land: verify the symlinks
 resolve to the landed content and exercise the live path.
+
+---
+
+## 2026-07-25 addendum II — the ocean-boil: full closer audit, residual fixes, and the convergence
+
+The operator escalated "sessions abruptly close by themselves" to a boil-the-ocean goal. An 8-axis
+parallel audit (6 mechanism auditors + an adversarial verify of the `c063ca0` fix + a negative-space
+sweep) established the following.
+
+### Verdict on causes — the organic rate is zero
+
+The negative-space sweep over 1,826 transcripts / 7 days / all 4 account roots found **TRUE-ORGANIC =
+0**: zero CC-binary crashes (0 DiagnosticReports), zero OOM victims (JetsamEvents hit only non-CC
+processes), zero quota-kills that closed a session, and 1 iTerm2 crash (undetectable in-band). Every
+abnormal end was our own infrastructure: sanctioned teardown/recycle (83) or the reaper class.
+"Sessions close by themselves" was **entirely first-party** — which is the good case, because
+first-party closers are all fixable.
+
+### Adversarial verify of `c063ca0` — 4 residual paths, all CONFIRMED, all now fixed
+
+R1 stale pane-keyed stamp + the 2 MB interactive-tail asymmetry (re-opens the incident on heavy
+transcripts) · R2 `handed-off-lead` bypasses the hold + stamp · R3 the 6 h expiry is by-design ·
+R4 `env=0` silently disables the hold. Each was confirmed against code before being fixed — the
+verify pass earned its keep by finding that the *published* fix was necessary but not sufficient.
+
+### What landed (this wave)
+
+| Unit | Commits | Fix |
+|---|---|---|
+| **U1** | `8705318` `2508319` `8cf3fec` | `hooks/lib/cc-interactive.sh` — THE shared who-drove-the-last-turn primitive (tail fast-path + whole-file fallback + image-only pastes); fired-stamp tenancy binding (`CC_FIRED_BOOT_MAX_S`, stale-tenancy stamps GC'd); hold evaluated BEFORE `handed-off-lead`; `handed-off-lead` successor requires a `firedBy`-linked stamp; hold floor (<60 s ⇒ default+warn). |
+| **U2** | `f9f2ed0` `e2a1def` | `teammate-auto-shutdown`: fail-closed on an unresolved WORKTREE (defer→surface, never an ungated close) + operator-adoption hold via the lib. `cc-teardown`: adoption belt REFUSE rc=2 (+ `--force-adopted`, operator-CLI-only). |
+| **U3** | `ca03d41` `e009799` | `handoff-fire` self-close: successor ENGAGEMENT gate (birth ≠ engagement), close-instant successor re-verify in `__selfclose` (dead successor ⇒ no close), pre-close inventory WARN. |
+| **U4** | `24722de` `7791209` | `team-orphan-reaper`: three-state liveness (no pidfile = UNKNOWN-surface, never archive) + cc-sessions registry cross-check. `waiting-recycle`: recent-conversation extended grace (`CC_WR_CONV_RECENT_S` / `CC_WR_RECENT_GRACE_S`), bats-pollution GC + fixture isolation. |
+| **U5** | `1937ed7` `6c9bd6e` `8b7bba7` `05aa8cf` | Close attribution: `bin/cc-close-attrib` exit-code+stderr wrapper (fail-open, kill-switch `CC_CLOSE_ATTRIB_DISABLED`); `lead-crash-watchdog` close-record join (clean-exit / killed-oom-or-force / binary-crash / error-exit); C10 activation `10-close-attrib-activate.sh` (PATH shim; **operator runs**). |
+| **U6** | `f19e8bd` (+ sibling `e34ab65`) | Desk self-restore completion on top of `e34ab65`'s `--window`+`FIRE_ERR`: role-file heal from the cc-fired stamp on a successful replacement fire + `paged-*-stale` >7 d sweep. Ends the 41 h silent no-desk fire-failed loop for good. |
+| **U7** | `83cf353` | `cc-teardown` teardown-markers: a DELEGATED close now drops the same contract-v1 marker `handoff-fire` got on 2026-07-23, so deliberate closes stop reading as CRASHes. |
+
+**U7 detail** (the last leg of the class). `handoff-fire` was fixed on 2026-07-23 for the *self*-close
+path; the *delegated* close — desk or reaper calling `cc-teardown`, which kills the target's process
+and closes its pane — still looked exactly like a crash to the **target's own** watchdog. `cc-teardown`
+now writes the dual-keyed marker (`<sid>.json` + `<pane>.json`, `mode=teardown`) that
+`lead-crash-watchdog.sh` `classify_death` already reads. Placement is the load-bearing decision:
+**after every gate, immediately before the first kill**. A REFUSE/DEFER leaves the target ALIVE, and a
+pre-gate marker would mask a genuine crash of that live session for the reader's whole 30-minute
+freshness window — so the invariant "no marker on a pane that survives" is itself RED-proven, not just
+the happy path. The cross-file contract is asserted end-to-end: the bats drive the REAL `cc-teardown`
+and then the REAL watchdog, sid-keyed and pane-keyed (registry reverse-lookup), so neither side can
+drift into a green-but-wrong fixture.
+
+### C-SC-1 status — the oracle exists now
+
+The campaign's target ("one shared who-drove-the-last-turn oracle every actuator consults + a sticky
+adoption marker") is **substantially BUILT**: the oracle nucleus is `hooks/lib/cc-interactive.sh`,
+consumed by `cc-classify`, `teammate-auto-shutdown`, and the `cc-teardown` belt; the 2 MB-tail blinding
+is closed by the whole-file fallback; `cc-teardown` caller-trust is closed by the belt; waiting-recycle
+S6 got the extended-grace hold. **Remaining for the campaign:** migrate reap-guard R-d from
+`ce_last_interactive_age` to the lib (they coexist today by design), a STICKY adoption marker surviving
+transcript rotation, and unifying context-econ's `ce_` with `ci_`.
+
+### Convergence note (process)
+
+THREE independent streams fixed this class in one night: this goal session's wave; the
+shutdown-harden crew (`fc633b5` / `6aeea93` / `a47bef7` / `893cd58`); the desk-respawn crew
+(`e34ab65`). Reconciliation was by **COMPOSITION** — keep both behaviour sets, single-owner-per-file,
+the pre-existing `--window` surface beat a proposed new flag, and duplicate holds coexist as
+belt+suspenders. The landing lock serialized ~10 lands without a bad merge; its
+full-suite-inside-the-lock cost (~17 min/land, queues >40 min) was fixed separately in-flight
+(`190c839` gate-outside-the-lock + CAS push window; backlog `ee453a792903`). The generalized lesson is
+recorded as the `parallel-stream-convergence-protocol` memory.
+
+### Detection coverage now
+
+Every close class is attributable: reaper closes (logged + gated), deliberate teardowns (markers, now
+including `cc-teardown`), involuntary deaths (close-record exit-code join — **pending its C10
+activation**), orphan archives (surface-first). The next "a session closed by itself" report has a
+named cause within one watchdog sweep, or it is iTerm/hardware.
+
+### Ops note (addendum II)
+
+`bin/cc-teardown` is an existing per-file symlink into the shared checkout — the trunk fast-forward
+deploys it; no new tracked runtime file needs linking (`tests/cc-teardown.bats` is not deployed).
+The one operator-owned step this wave leaves open is U5's `10-close-attrib-activate.sh` (C10).
