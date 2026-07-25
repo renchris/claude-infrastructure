@@ -570,3 +570,50 @@ sgtx_subtypeonly() { local sid="$1" ago="$2"; local ts jf="$D/proj/slug/$sid.jso
   reg "$UP" "$LIVE" /repo sidS; sgtx_subtypeonly sidS 200
   [ "$(cause "$UP")" = safeguard-blocked ]
 }
+
+# ── G1 (2026-07-25) — the interactive lib must FAIL CLOSED when it cannot be resolved ────────────
+# Live, cc-classify runs as ~/.claude/bin/cc-classify (a per-file symlink dir), so $0's dirname IS
+# $CLAUDE_CONFIG_DIR/bin and ALL THREE resolve candidates collapse onto ~/.claude/hooks/lib/. A newly
+# landed hooks/lib/cc-interactive.sh that the ff-sync never linked therefore misses every candidate at
+# once. `nolib_bin` reproduces that EXACTLY (relocated script + bare config dir, no hooks/lib anywhere)
+# — the repo layout every other test in this file runs under can never exercise it.
+nolib_bin() {                      # → path of a cc-classify with NO resolvable cc-interactive.sh
+  mkdir -p "$D/live/.claude/bin"   # bare config dir: no hooks/, no hooks/lib/
+  cp "$C" "$D/live/.claude/bin/cc-classify"; chmod +x "$D/live/.claude/bin/cc-classify"
+  printf '%s' "$D/live/.claude/bin/cc-classify"
+}
+nolib_run() { HOME="$D/live" CLAUDE_CONFIG_DIR="$D/live/.claude" "$(nolib_bin)" "$@"; }
+
+@test "G1 lib UNRESOLVABLE ⇒ adoption-unknown ⇒ owned-wait (fail-closed; pre-fix read 'finished')" {
+  # the incident fixture verbatim (test 32's shape): stamped 50000s ago, landed, idle 900s, a REAL
+  # operator prompt 950s ago. With the lib it is owned-wait. Without it, pre-fix, §4.7 silently never
+  # ran and this read `finished` = REAPABLE — a live operator conversation killed by a deploy step.
+  mkrepo "$D/nolib"; reg "$UP" "$LIVE" "$D/nolib" sidNL; tx sidNL 900; utx sidNL 950; stamp "$UP" 50000
+  c="$(nolib_run "$UP" --json 2>/dev/null | jq -r '.cause')"
+  [ "$c" = owned-wait ]
+  [ "$c" != finished ]
+  nolib_run "$UP" --json 2>/dev/null | jq -e '.detail | test("adoption-unknown, fail-closed")' >/dev/null
+}
+
+@test "G1 lib unresolvable warns ONCE on stderr (damped per invocation), stdout JSON stays clean" {
+  mkrepo "$D/nolibw"; reg "$UP" "$LIVE" "$D/nolibw" sidW1; tx sidW1 900; utx sidW1 950; stamp "$UP" 50000
+  add "$SUCC" "$LIVE" "$D/nolibw" sidW2 0; tx sidW2 900                 # a 2nd idle session in --all
+  b="$(nolib_bin)"
+  run bash -c "HOME='$D/live' CLAUDE_CONFIG_DIR='$D/live/.claude' '$b' --all --json 2>&1 >/dev/null"
+  [ "$(printf '%s\n' "$output" | grep -c 'cc-interactive.sh unresolvable')" -eq 1 ]   # damped: 1, not 2
+  [[ "$output" == *"fail-closed"* ]]
+  [[ "$output" == *"./install.sh"* ]]                                    # the remediation is handed over
+  # stdout alone is still parseable JSON, and BOTH panes fell closed to owned-wait
+  run bash -c "HOME='$D/live' CLAUDE_CONFIG_DIR='$D/live/.claude' '$b' --all --json 2>/dev/null"
+  [ "$(printf '%s' "$output" | jq -r '[.[].cause] | unique | join(",")')" = owned-wait ]
+}
+
+@test "G1 lib PRESENT ⇒ behavior unchanged (both directions pinned: repo layout still classifies finished)" {
+  # the same fixture WITHOUT the operator prompt: with the lib resolvable the hold correctly does NOT
+  # engage, so a stamped+landed+idle worker is still `finished`. This is the guard that the fail-closed
+  # leg above narrows ONLY the unresolvable case and never widens/blocks normal GC.
+  mkrepo "$D/withlib"; reg "$UP" "$LIVE" "$D/withlib" sidWL; tx sidWL 900; solo_team_cfg sidWL; stamp "$UP" 50000
+  [ "$(cause "$UP")" = finished ]
+  run bash -c "'$C' '$UP' --json 2>&1 >/dev/null"
+  [[ "$output" != *"unresolvable"* ]]                                    # and no warning is emitted
+}
