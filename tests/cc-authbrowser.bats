@@ -417,7 +417,7 @@ EOF
   run "$B" next --start --ttl 600
   [ "$status" -eq 0 ]
   WD="$(jq -r '.watchdog_pid' "$CC_AUTHBROWSER_STATE_DIR/cc-authbrowser-next.json")"
-  [ -n "$WD" ] && [ "$WD" != "null" ]
+  [ -n "$WD" ] && [ "$WD" != "null" ] || false
   alive "$WD"
   # its own session => not in the caller's process group, so the caller's death cannot reap it
   [ "$(ps -o pgid= -p "$WD" | tr -d ' ')" != "$(ps -o pgid= -p $$ | tr -d ' ')" ]
