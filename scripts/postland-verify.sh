@@ -16,6 +16,14 @@
 # 1/3 = flake (→ flakes.jsonl, excluded from the verdict; all-flake ⇒ GREEN-WITH-FLAKES).
 # ON REPRODUCIBLE RED: `git bisect run` FIRST (culprit sha), then a STATE-KEYED page + backlog item
 # + notification (a fixed page key gets path-dedup-swallowed for 7 days). last-green stays put.
+# STATES: GREEN · RED (a named, reproducible failure) · HUNG (the suite never returned AND the
+# suspect file wedges again ALONE on a pristine checkout — a proven property of the TREE: stamped,
+# paged at that file, fix = timeout-wrap the un-stubbed seam, never a bisect) · CUT (truncated by a
+# MACHINE event — a peer pkill, OOM, starvation: nothing was proven, never stamped green or red,
+# retried next sweep, honest page + cool-off at CUT_MAX). HUNG vs CUT is the load-bearing split:
+# "retry when quieter" is the right answer to one and the one answer guaranteed never to clear the
+# other. Bounds: POSTLAND_SUITE_TIMEOUT_S (2700) · POSTLAND_FILE_TIMEOUT_S (300); unbounded, HUNG is
+# UNPROVABLE (nothing can return 124) so every hang candidate honestly degrades to a CUT.
 # Verbs: --run-if-needed (launchd) · --run <sha> · bisect <file> <good> <bad> · is-green <sha> ·
 #        status · --selftest.   Kill switch: POSTLAND_VERIFY=off (runtime-read ⇒ instantly inert).
 # C10: OPERATOR loads the plist (docs/activation/pending-activation/09-postland-verify-activate.sh).
@@ -43,6 +51,35 @@ fi
 plv_osa() {
   if [ -z "$PLV_OSA_TB" ] || [ ! -x "$PLV_OSA_TB" ]; then "$@"; return $?; fi
   "$PLV_OSA_TB" -k 3 "$PLV_OSA_TIMEOUT_S" "$@"
+}
+
+# ── bounding the CHECK-SET itself ────────────────────────────────────────────────────────────────
+# Separate from plv_osa above, which bounds only the notification fork. Unbounded, a suite that
+# WEDGES never returns: it holds this runner's mutex until LOCK_TTL, emits no verdict, and the job
+# just disappears — there is no rc to classify, so a hang is not merely misfiled, it is INVISIBLE.
+# rc 124 is the bound firing, and it is the primary HUNG discriminator below. PATH alone is not
+# enough: this runs under launchd, whose PATH has no Homebrew — exactly where coreutils installs
+# timeout(1). Same resolution ladder as bin/it2-wrapper.
+_resolve_timeout() {
+  local c
+  for c in "$(command -v timeout 2>/dev/null || true)" \
+           "$(command -v gtimeout 2>/dev/null || true)" \
+           /opt/homebrew/bin/timeout /usr/local/bin/timeout \
+           /opt/homebrew/bin/gtimeout /usr/local/bin/gtimeout; do
+    if [ -n "$c" ] && [ -x "$c" ]; then printf '%s' "$c"; return 0; fi
+  done
+  return 1
+}
+# UNSET ⇒ resolve one. SET (including set to EMPTY) ⇒ honored verbatim, so CC_POSTLAND_TIMEOUT_BIN=
+# genuinely disables bounding — `${VAR:-}` cannot tell unset from set-empty, and a seam that cannot
+# turn a thing OFF is not a seam.
+if [ -n "${CC_POSTLAND_TIMEOUT_BIN+set}" ]; then TIMEOUT_BIN="$CC_POSTLAND_TIMEOUT_BIN"
+else TIMEOUT_BIN="$(_resolve_timeout || true)"; fi
+
+bounded() { # <secs> <cmd…> — rc 124 = OUR bound fired. Unbounded (never blocked) with no timeout(1).
+  local secs="$1"; shift
+  if [ -z "$TIMEOUT_BIN" ] || [ ! -x "$TIMEOUT_BIN" ]; then "$@"; return $?; fi
+  "$TIMEOUT_BIN" -k 10 "$secs" "$@"   # no --foreground ⇒ its own process group ⇒ the whole bats tree
 }
 
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
@@ -85,6 +122,8 @@ else
 fi
 export PATH
 LOCK_TTL="${CC_POSTLAND_LOCK_TTL:-3600}"
+SUITE_TO="${POSTLAND_SUITE_TIMEOUT_S:-2700}"   # full-suite bound — makes a HUNG observable at all
+FILE_TO="${POSTLAND_FILE_TIMEOUT_S:-300}"      # per-file bound (retry ladder + the hang confirm)
 STAMPS="$STATE/stamps"
 LOCK="$STATE/run.lock.d"
 LOG="$STATE/runner.log"
@@ -96,6 +135,11 @@ CUT_MAX="${CC_POSTLAND_CUT_MAX:-3}"                    # consecutive cuts on one
 CUT_COOLOFF="${CC_POSTLAND_CUT_COOLOFF:-1800}"         # ...and before the box is fed another suite
 
 FAILING=(); SYNTAX_BAD=(); RETRIES=0; NFLAKE=0; FAILTEST=""; RUN_TMP=""; IDL_DONE=0; ENV_FP='{}'; CUT=0
+# ── hang evidence (reset per run_target) ─────────────────────────────────────────────────────────
+DEATH_SIG=""         # sig:9 | timeout:2700s | exit:1 — what ended the run
+WEDGE_AT=""          # "<completed>/<planned>" at the moment it stopped making progress
+SUSPECT=""           # tests/<file>.bats the run wedged IN (best effort — see the CONFIRM note)
+REPRODUCED=false     # did the suspect file wedge AGAIN, alone, in this pristine worktree?
 
 now_iso()   { date -u +%Y-%m-%dT%H:%M:%SZ; }
 now_epoch() { date +%s; }
@@ -197,6 +241,87 @@ record_flake() { # <file> <test> <rc>
     "$(now_iso)" "$1" "$2" "${CUR_SHA:-}" "$sig" "${load:-0}" >> "$FLAKES" 2>/dev/null || true
   NFLAKE=$((NFLAKE+1))
 }
+# ════ HUNG — the one state a CUT cannot express ═══════════════════════════════════════════════════
+# A CUT says "the run was truncated, nothing was proven, retry next sweep". That is exactly right for
+# a peer's pkill, an OOM, or load starvation — a MACHINE event: unactionable, self-clearing, and its
+# own honest page names no test. It is exactly WRONG for a suite that simply never returns. That is a
+# property OF THE TREE (an un-stubbed external seam), it reproduces on a quiet box, and retrying it
+# every sweep forever is the precise opposite of the right response — the tree is never verified and
+# the box burns a full suite per tick on it. So HUNG is carved OUT of the cut population as a real
+# verdict: stamped (the tree is decided), paged at the FILE that wedged, routed to the seam owner.
+# Everything else that reaches here stays a CUT, with trunk's ledger and cool-off untouched.
+int_or_zero() { case "${1:-}" in ''|*[!0-9]*) printf 0 ;; *) printf '%s' "$1" ;; esac; }
+tap_plan() { # <tap> → N from the `1..N` plan line (0 when it never even planned)
+  int_or_zero "$(sed -n 's/^1\.\.\([0-9][0-9]*\).*$/\1/p' "$1" 2>/dev/null | head -1 | tr -d '\n')"
+}
+tap_done() { # <tap> → completed tests. bats emits `ok`/`not ok` only AFTER a test returns, so this
+  # is exactly "how far did it get". (`grep -c` prints 0 AND exits 1 on no-match — never `|| printf 0`.)
+  int_or_zero "$(grep -acE '^(ok|not ok) [0-9]+' "$1" 2>/dev/null | head -1 | tr -d '\n')"
+}
+tap_signal() { # <tap> → the job-control death line, if the shell printed one. `# `-prefixed lines
+  # are a TEST'S OWN captured output (this repo has reaper/kill suites that print those very words),
+  # so they are excluded — the needle is the shell's `Killed: 9` / `Terminated: 15` shape. Needed
+  # because bats can OUTLIVE the child it lost and exit 1, so rc alone never sees that signal.
+  grep -aE '^[^#]*(Killed|Terminated): *[0-9]+' "$1" 2>/dev/null | head -1 \
+    | grep -oE '(Killed|Terminated): *[0-9]+' | head -1 | tr -d '\n'
+}
+suite_files() { # the suite in the order `bats tests/` runs it — bats' OWN expansion (bats:480 is
+  # `find -L … -type f -name "*.bats" -print0 | sort -z`; no test filename here contains a newline,
+  # so the line-delimited form is byte-equivalent and stays readable).
+  find -L "$WORKTREE/tests" -type f -name '*.bats' 2>/dev/null | sort
+}
+suite_file_at() { # <1-based test index> → tests/<file>.bats (empty when unmappable)
+  local want="$1" f n acc=0
+  case "$want" in ''|*[!0-9]*) return 1 ;; esac
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    n="$(int_or_zero "$(bounded 20 "$BATS_BIN" --count "$f" 2>/dev/null | tr -d '\n')")"  # parses, never executes
+    acc=$(( acc + n ))
+    if [ "$want" -le "$acc" ]; then printf '%s\n' "${f#"$WORKTREE"/}"; return 0; fi
+  done <<EOF
+$(suite_files)
+EOF
+  return 1
+}
+confirm_hang() { # <suspect-file> — THE clean discriminator: the file, ALONE, bounded, right here in
+  # the pristine detached worktree. 0 = it wedged again (HUNG); 1 = it completed, so the wedge was
+  # environmental and we refuse to invent a verdict from it.
+  local rc=0
+  # `bounded` is a FUNCTION, so it must be the outer call — `nice` execs a binary and could never
+  # run it. timeout-then-nice also keeps the bound owning the process group.
+  ( cd "$WORKTREE" && TMPDIR="$RUN_TMP" bounded "$FILE_TO" nice -n 10 "$BATS_BIN" "$1" ) >/dev/null 2>&1 || rc=$?
+  RETRIES=$((RETRIES+1))
+  [ "$rc" -eq 124 ]
+}
+classify_hang() { # <tapfile> <rc> — 0 = HUNG (sets SUSPECT/WEDGE_AT/DEATH_SIG/REPRODUCED), 1 = CUT
+  local tap="$1" rc="$2" plan ndone sig
+  plan="$(tap_plan "$tap")"; ndone="$(tap_done "$tap")"; sig="$(tap_signal "$tap")"
+  WEDGE_AT="$ndone/$plan"; SUSPECT=""; REPRODUCED=false
+  # (1) OUR bound. FIRST, and the ordering is the whole point: timeout(1) SIGTERMs the group, so a
+  #     hang's own TAP carries `Terminated: 15` — a signal-first ladder files every hang as a kill.
+  if [ "$rc" -eq 124 ]; then DEATH_SIG="timeout:${SUITE_TO}s"
+  # (2)/(3) an EXTERNAL signal — either straight through as rc-128, or seen only in the TAP because
+  #     bats outlived the child it lost. Either way a MACHINE event ⇒ trunk's CUT, not a hang.
+  elif [ "$rc" -gt 128 ]; then DEATH_SIG="sig:$(( rc - 128 ))"; return 1
+  elif [ -n "$sig" ]; then DEATH_SIG="${sig// /}"; return 1
+  # (4) it planned and then completed NOTHING, with nobody to blame — fe21305312ec's signature.
+  elif [ "$plan" -gt 0 ] && [ "$ndone" -eq 0 ]; then DEATH_SIG="exit:$rc"
+  # (5) neither shape fits ⇒ undecidable, which is what a CUT already says honestly.
+  else DEATH_SIG="exit:$rc"; return 1
+  fi
+  SUSPECT="$(suite_file_at "$(( ndone + 1 ))" 2>/dev/null || true)"
+  if [ -n "$SUSPECT" ]; then
+    # CONFIRM. A mis-mapped suspect can therefore only LOSE a hang (it degrades to a CUT and is
+    # retried), never invent one — the failure mode we can afford.
+    if confirm_hang "$SUSPECT"; then REPRODUCED=true; return 0; fi
+    DEATH_SIG="$DEATH_SIG/not-reproduced"; SUSPECT=""; return 1
+  fi
+  # Unmappable suspect. Our own bound firing is still direct evidence the run never returned, so
+  # HUNG stands — flagged unreproduced, because nothing was re-run to prove it. Without the bound
+  # (CC_POSTLAND_TIMEOUT_BIN=) nothing can ever return 124, so a hang is simply unprovable and
+  # degrades to a CUT: no bound, no hang verdict. We never fabricate one.
+  [ "$rc" -eq 124 ]
+}
 classify_failures() { # <tapfile> — retry ladder: >=2/3 = REPRODUCIBLE, 1/3 = flake
   local pairs f t rc i tdir fails notok
   # TAP: `not ok N <name>` followed by a `# (in test file tests/X.bats, line N)` diagnostic.
@@ -238,7 +363,9 @@ classify_failures() { # <tapfile> — retry ladder: >=2/3 = REPRODUCIBLE, 1/3 = 
       # actually changed — the complement to CUT ≠ RED, which stops a cut from lying about itself.
       gate_admit "retry $i of $f"
       tdir="$(mktemp -d "$RUN_TMP/retry.XXXXXX")"
-      ( cd "$WORKTREE" && TMPDIR="$tdir" nice -n 10 "$BATS_BIN" "$f" ) >/dev/null 2>&1
+      # BOUNDED for the same reason the full suite is: a file that WEDGES would hold the ladder —
+      # and this runner's mutex — open forever, turning one hung test into a dead post-land net.
+      ( cd "$WORKTREE" && TMPDIR="$tdir" bounded "$FILE_TO" nice -n 10 "$BATS_BIN" "$f" ) >/dev/null 2>&1
       rc=$?; RETRIES=$((RETRIES+1)); [ "$rc" -eq 0 ] || fails=$((fails+1)); rm -rf "$tdir"
     done
     if [ "$fails" -ge 2 ]; then FAILING+=("$f"); [ -n "$FAILTEST" ] || FAILTEST="$t"
@@ -333,6 +460,32 @@ red_actions() { # <sha> <file> — bisect, page, backlog, notify. Every side cha
     && "$NOTIFY_BIN" "$sid" "post-land RED: $file::${FAILTEST:-?} at $c12 (your land) — see $pf" >/dev/null 2>&1
   return 0
 }
+hung_actions() { # <sha> <tree> — page + backlog + notify, routed to the SEAM owner.
+  # Deliberately NO bisect: a hang is a latent un-stubbed seam that surfaced when contention eased,
+  # not a recent regression — and every bisect step would itself wedge for the full bound.
+  local sha="$1" tree="$2" slug pf sid file="${SUSPECT:-tests/}"
+  slug="$(printf '%s' "$file" | sed 's#.*/##; s/\.bats$//; s/[^A-Za-z0-9_-]/-/g')"
+  [ -n "$slug" ] || slug=suite                        # unmappable suspect ⇒ still a keyable name
+  pf="$PAGES/postland-hung-$slug-$(sha12 "$tree").page"
+  { now_epoch
+    printf 'post-land HUNG @ %s\n' "$(now_iso)"
+    printf 'suite:   %s (tree %s)\n' "$(sha12 "$sha")" "$(sha12 "$tree")"
+    printf 'wedged:  %s at %s completed — %s\n' "$file" "$WEDGE_AT" "$DEATH_SIG"
+    printf 'proof:   re-ran %s ALONE in this pristine detached worktree; wedged again: %s\n' "$file" "$REPRODUCED"
+    printf 'NOT a cut: no signal reached this run (a peer pkill shows rc>128 / a job-control line).\n'
+    printf 'FIX:     find the un-stubbed external seam and timeout-wrap it (or stub it in setup()).\n'
+    printf 're-run:  cd %s && git checkout --detach %s && %s %s\n' "$WORKTREE" "$(sha12 "$sha")" "${TIMEOUT_BIN:-timeout} $FILE_TO bats" "$file"
+    printf 'env:     %s\n' "$ENV_FP"
+  } > "$pf" 2>/dev/null || true
+  [ -x "$BACKLOG_BIN" ] && "$BACKLOG_BIN" add \
+    --title "post-land HUNG: $file wedged at $WEDGE_AT @ $(sha12 "$tree") — un-stubbed external seam, timeout-wrap it (NOT a peer pkill)" \
+    --project claude-infrastructure --source postland-verify >/dev/null 2>&1   # tree defeats wasDone
+  notify "Claude post-land HUNG" "$file wedges at $WEDGE_AT — un-stubbed seam, see $pf"
+  sid="$(grep -F "$sha" "$LANDLOG" 2>/dev/null | tail -1 | sed -n 's/.*"sid":"\([^"]*\)".*/\1/p')"
+  [ -n "$sid" ] && [ -x "$NOTIFY_BIN" ] \
+    && "$NOTIFY_BIN" "$sid" "post-land HUNG: $file wedged at $WEDGE_AT on your land — un-stubbed external seam, see $pf" >/dev/null 2>&1
+  return 0
+}
 run_target() { # <sha> — the whole check-set + verdict for ONE sha
   local sha="$1" tree tap rc adv t0 run_s n
   CUR_SHA="$sha"
@@ -342,15 +495,28 @@ run_target() { # <sha> — the whole check-set + verdict for ONE sha
   t0="$(now_epoch)"; env_fingerprint            # captured at run START — a green is env-relative
   RUN_TMP="$(mktemp -d "${TMPDIR:-/tmp}/postland-run.XXXXXX")" || return 1
   FAILING=(); FAILTEST=""; RETRIES=0; NFLAKE=0; CUT=0
+  DEATH_SIG=""; WEDGE_AT=""; SUSPECT=""; REPRODUCED=false
   syntax_check
   tap="$RUN_TMP/bats.tap"
   gate_admit "full suite @ $(sha12 "$sha")"
-  ( cd "$WORKTREE" && TMPDIR="$RUN_TMP" nice -n 10 "$BATS_BIN" tests/ ) > "$tap" 2>&1; rc=$?
+  # BOUNDED: unbounded, a wedged suite holds the mutex until LOCK_TTL and no hang is ever observable
+  # — the runner just disappears. rc 124 is the bound firing and is the primary HUNG discriminator.
+  ( cd "$WORKTREE" && TMPDIR="$RUN_TMP" bounded "$SUITE_TO" nice -n 10 "$BATS_BIN" tests/ ) > "$tap" 2>&1; rc=$?
   adv="$(sc_count)"
   [ "$rc" -eq 0 ] || classify_failures "$tap"
   [ "${#SYNTAX_BAD[@]}" -eq 0 ] || FAILING+=("${SYNTAX_BAD[@]}")
   run_s="$(( $(now_epoch) - t0 ))"
-  if [ "$CUT" = "1" ] && [ "${#FAILING[@]}" -eq 0 ]; then
+  if [ "$CUT" = "1" ] && [ "${#FAILING[@]}" -eq 0 ] && classify_hang "$tap" "$rc"; then
+    # HUNG is carved out of the cut population and IS a verdict about the tree: it reproduced here,
+    # at this load, on a pristine detached checkout. Stamp it so the tree is not re-run forever, and
+    # page the FILE with the fix that actually applies (timeout-wrap the seam), not "retry when
+    # quieter" — which is the one response guaranteed never to clear it.
+    write_stamp "$tree" "$sha" hung "$run_s" "$RETRIES" "$adv" "${SUSPECT:-tests/}"
+    cut_clear                                   # a verdict was reached: the cut streak is over
+    log "HUNG $(sha12 "$sha") tree=$(sha12 "$tree") suspect=${SUSPECT:-?} wedge_at=$WEDGE_AT sig=$DEATH_SIG reproduced=$REPRODUCED run_s=$run_s"
+    hung_actions "$sha" "$tree"
+    echo "postland-verify: HUNG $(sha12 "$sha") — ${SUSPECT:-tests/} wedged at $WEDGE_AT ($DEATH_SIG)"
+  elif [ "$CUT" = "1" ] && [ "${#FAILING[@]}" -eq 0 ]; then
     # A cut proves NOTHING — do not stamp green (unearned) and do not stamp red (a lie that
     # blocks deploy forever). Stamp `cut` for diagnosability: the tree stays unstamped-green,
     # so C5's abstain does not fire and the NEXT sweep retries it. No bisect, no page — you
@@ -364,7 +530,8 @@ run_target() { # <sha> — the whole check-set + verdict for ONE sha
     write_stamp "$tree" "$sha" green "$run_s" "$RETRIES" "$adv"
     printf '%s\n' "$sha" > "$LASTGREEN"
     cut_clear                                   # a verdict was reached: the cut streak is over
-    rm -f "$PAGES"/postland-red-*.page "$PAGES"/postland-cut-*.page 2>/dev/null || true  # now-passing state clears standing pages
+    rm -f "$PAGES"/postland-red-*.page "$PAGES"/postland-cut-*.page \
+          "$PAGES"/postland-hung-*.page 2>/dev/null || true  # now-passing state clears standing pages
     log "GREEN $(sha12 "$sha") tree=$(sha12 "$tree") run_s=$run_s retries=$RETRIES flakes=$NFLAKE sc_adv=$adv"
     echo "postland-verify: GREEN $(sha12 "$sha") (${run_s}s, flakes=$NFLAKE)"
   else
@@ -433,8 +600,12 @@ verb_bisect() { # <file> <good> <bad>
 # existence-keyed abstain fires on every later sweep and the suite never runs again. That also keeps
 # is-green false, which drives ship-land to declare the whole post-land net INERT and degrade every
 # gate scoped→FULL — more full suites, more load, more cuts. Only a real verdict earns an abstain.
-stamp_is_verdict() { # <tree> — 0 when the tree carries a REAL verdict (green|red), 1 for cut/absent
-  grep -qE '"verdict":"(green|red)"' "$STAMPS/$1.json" 2>/dev/null
+# `hung` IS a verdict and belongs here: unlike a cut it is a proven property of the TREE (the suspect
+# file wedged again, alone, on a pristine checkout), so re-running it every sweep re-proves a decided
+# fact and burns a full suite per tick doing it. It is paged at the file, and the fix lands as a new
+# tree — which carries a new stamp key, so the abstain releases by construction.
+stamp_is_verdict() { # <tree> — 0 when the tree carries a REAL verdict (green|red|hung), 1 cut/absent
+  grep -qE '"verdict":"(green|red|hung)"' "$STAMPS/$1.json" 2>/dev/null
 }
 cut_bump() { # <tree> → the new CONSECUTIVE cut count for this tree
   local pt pn n

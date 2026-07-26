@@ -306,6 +306,82 @@ Key decisions (all evidence-anchored):
 - Page volume estimate: ~7 runs/day, **≈1 page/day majority-real** with the ladder (vs ~6/day
   unusable without it) [R8 §6].
 
+#### 3.7a Refinement (2026-07-26): HUNG is carved OUT of the cut population
+
+`c605a2e2` established *a truncated run is not a RED* and gave it the `cut` state. That settled the
+**RED/not-RED** question. It left a second one open **inside** the cut population, because two very
+different things produce zero attributable `not ok`, and they need **opposite** repairs:
+
+| | CUT (machine event) | HUNG (tree property) |
+|---|---|---|
+| signal | present — rc>128, `Killed: 9` / `Terminated: 15` | **none** |
+| progress | partial completions, then death | plan line `1..N`, then a **reproducible** wedge count |
+| load | **correlated** (dies under contention) | **anti**correlated (surfaces once contention *eases*) |
+| cause | a peer's worktree-unscoped `pkill -9 -f bats` (`a0718a5d78b3`) | an un-stubbed external seam with no timeout (`fe21305312ec`) |
+| fix | admission control + worktree-scoped pkill; retry on a quiet box | find the seam and timeout-wrap/stub it (`11c7797f2e99`, `c6d5111a9123`) |
+
+Credit `761a546f939c`, which asked explicitly that `fe21305312ec` not be filed into the pkill
+bucket — it wedged **twice at the same 340/347**, and reproduced on a clean detached `origin/main`
+worktree at load 11.5 (`55c8afa`). That reproduction is **the clean discriminator**: a hang
+reproduces on a pristine detached checkout at low load; a peer-kill does not. "Retry when quieter"
+is the right answer to a cut and the one answer **guaranteed never to clear** a hang.
+
+Implemented in `scripts/postland-verify.sh` (`classify_hang`), consulted only on the cut path:
+
+- **The suite run is now bounded** (`POSTLAND_SUITE_TIMEOUT_S`, default 2700; per-file
+  `POSTLAND_FILE_TIMEOUT_S`, default 300, also applied to the retry ladder). This is the load-bearing
+  gap: unbounded, a wedge is not merely unclassified — it is **unobservable**. The runner blocks,
+  holds the mutex to `LOCK_TTL`, and emits nothing at all. `timeout(1)` is resolved by absolute path
+  (launchd's PATH has no Homebrew); `CC_POSTLAND_TIMEOUT_BIN=` (set-but-EMPTY) disables it verbatim.
+- **Ladder order is load-bearing and empirically forced**: `rc 124` (our own bound) is tested
+  **before** any signal match, because `timeout` SIGTERMs the process group and a hang's own TAP can
+  therefore carry `Terminated: 15`. Signal-first would misfile **every** such hang as a machine cut.
+  Pinned by a mutation-proved ordering test (swap the branches ⇒ the verdict becomes `cut`).
+  `# `-prefixed TAP signal lines are ignored: that is a test's own output, and this repo has reaper
+  suites that print those exact words. `tap_signal` exists because bats can **outlive** the child it
+  lost and exit a plain 1 — rc alone never sees that signal.
+- **Suspect file, then confirm.** The wedged test is index `done+1`, mapped through bats' own
+  directory expansion (`find -L … -name '*.bats' | sort`, `bats:480`) via `bats --count`; that file
+  is then re-run **alone, bounded, in the pristine detached worktree**. Wedges again ⇒ HUNG.
+  Completes ⇒ we refuse to invent a verdict and it **degrades to a CUT**. A mis-mapped suspect can
+  therefore only **lose** a HUNG, never manufacture one.
+- **Divergent routing.** HUNG is a real verdict about the tree: stamp `hung` (with the suspect in
+  `failing[]`), a `postland-hung-<slug>-<tree12>.page` naming the file and the timeout-wrap repair,
+  and **no bisect** — a hang is a latent seam, not a recent regression, and every bisect step would
+  itself wedge for the full bound. It joins `stamp_is_verdict`, so a decided tree is not re-proved
+  every sweep; the fix lands as a new tree, whose new stamp key releases the abstain by construction.
+- **Everything else stays a CUT**, on the existing ledger — `cut_bump` / `cut_page` / `in_cut_cooloff`
+  unchanged. Unbounded, HUNG is **unprovable** (nothing can return 124), so every hang candidate
+  honestly degrades to a cut: no bound, no hang verdict.
+- Consumers are unaffected: `is-green` and ship-land's staleness guard key on `"verdict":"green"`
+  **by content**, so a `hung` stamp correctly never reads as green.
+
+**Soundness — re-derived, not inherited (bats 1.13.0).** The worry with any "no `not ok` ⇒ not a
+verdict" rule is a genuine red that fails to name a test. Both candidate modes were probed directly:
+a **syntax-broken `.bats`** and a **failing `setup_file`** each emit `not ok 1 setup_file failed`
+*with* a `# (… in test file tests/X.bats, line N)` diagnostic, which `classify_failures` attributes
+— so they exit as RED and provably cannot reach the ladder. (A stranded sibling draft asserted the
+syntax case "exits 0 with `1..0`"; that is **wrong on 1.13.0** — the conclusion held, the stated
+reason did not. Re-deriving handed-down claims earned its keep again.)
+
+**Convergence record — this refinement was PARTIALLY SUPERSEDED before it landed.** It was authored
+against a base predating `c605a2e2`, `56ea34be`, `7333849b` and `f4c17255`, and originally shipped
+its **own** parallel non-verdict ledger (`nonverdict.jsonl`, `POSTLAND_KILLED_MAX`,
+`in_nv_cooloff`, `killed_actions`) plus a *never stamp a non-verdict* stance, because at authoring
+time trunk had none of that. Trunk solved the same problem first, with the `cut` ledger. Reconciled
+by **composition against the landed design**: the duplicate ledger was **dropped entirely** (KILLED
+and UNDECIDABLE both route to `cut`), and only the genuinely-absent delta was kept — the bound, the
+TAP readers, the suspect-confirm, and HUNG itself. `56ea34be`'s NAME-CARRY branch is untouched: a
+`not ok` with no file diagnostic is still a RED that carries the test name, and never reaches this
+ladder. A parallel fix that arrives second **conforms**; landing its own ledger alongside trunk's
+would have double-counted every streak.
+
+**Parallel-stream reconciliation (earlier half).** `d1ba434f6239` had a stranded 191-line draft in
+`wt-d1ba434f6239` editing this same file toward a single-state `ABORT` design. Its **cool-off** was
+adopted; its quiet-box wait was **not**, because `pgrep -f bats-core/bats` matches any process whose
+argv merely *mentions* the pattern (every session carrying this incident's brief does), so it would
+read the box as hostile forever. Whoever revives that half must match the **executable**, not argv.
+
 ### 3.8 Policy surface + reso non-regression [R9]
 
 - `/ship` dispatch is fully per-repo: infra's project `ship.md` → `scripts/ship-land.sh`

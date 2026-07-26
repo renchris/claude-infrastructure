@@ -511,3 +511,204 @@ printf '1..1\nok 1 p\n'")"
   [ "$status" -eq 0 ]
   [[ "$output" != *"$HOME/bin:"* ]]
 }
+
+# ── C15–C17 HUNG: the one state carved OUT of the cut population ────────────────
+# C13 above settled "a truncated run is not a RED". These settle the split INSIDE that
+# population: a MACHINE event (peer pkill / OOM / starvation) stays a CUT — unactionable,
+# retried, cooled off — while a suite that genuinely never RETURNS, and whose suspect file
+# wedges AGAIN alone on a pristine checkout, is a proven property of the TREE. Retrying is
+# the right answer to the first and the one answer guaranteed never to clear the second.
+# A stub `bats` on the SUT's own $CC_POSTLAND_BATS seam gives the death SHAPES exactly; the
+# real signal (a genuine SIGKILL) and the real bound (a genuine timeout(1) expiry) are NOT
+# stubbed, and the first test is a positive control against the REAL producer.
+stub_bats_mode() {   # $1 = mode; writes $BATS_TEST_TMPDIR/stub-bats and exports the seam
+  cat > "$BATS_TEST_TMPDIR/stub-bats" <<'STUB'
+#!/bin/bash
+case "$1" in --version) echo "Bats 0.0.0-stub"; exit 0 ;; --count) echo 1; exit 0 ;; esac
+case "${PV_STUB_MODE:-}" in
+  # the plan line and then nothing — only the SUT's own bound can end it
+  hung)     echo "1..3"; sleep 60 ;;
+  # a hang whose TAP ALSO carries a job-control line — the C16 ordering case. On some
+  # bats/shell combinations timeout(1)'s own SIGTERM makes the hang print exactly this,
+  # so a signal-first ladder would misfile every such hang as a machine cut.
+  hungsig)  echo "1..3"; echo "bats: line 336: 42124 Terminated: 15   exec bats-exec-suite"; sleep 60 ;;
+  # planned, completed nothing, exit 1, NOBODY signalled it (the no-timeout leg)
+  stall)    echo "1..3"; exit 1 ;;
+  # wedges as a SUITE, completes as a FILE => the confirm re-run must exonerate it
+  flaky)    if [ "${1:-}" = "tests/" ]; then echo "1..3"; sleep 60; else echo "1..1"; echo "ok 1 a"; exit 0; fi ;;
+  # bats OUTLIVED the child it lost: rc is a plain 1, the only trace is the shell's
+  # job-control line. This is the literal 9c5d0ba74e79 observation.
+  survivor) echo "1..3"; echo "ok 1 a"
+            echo "bats: line 336: 42124 Killed: 9   exec bats-exec-suite"; exit 1 ;;
+  # the SAME words, but as a TEST'S OWN captured output (`# `-prefixed) — this repo has
+  # reaper suites that print exactly this, and it must NOT read as a signal.
+  reaper)   echo "1..3"; echo "ok 1 a"; echo "# Killed: 9"; exit 1 ;;
+  *)        echo "1..3"; echo "ok 1 a"; exit 1 ;;
+esac
+exit 0
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/stub-bats"
+  export CC_POSTLAND_BATS="$BATS_TEST_TMPDIR/stub-bats" PV_STUB_MODE="$1"
+}
+hung_pages_n() { find "$CC_PAGES_DIR" -name 'postland-hung-*.page' 2>/dev/null | wc -l | tr -d ' '; }
+
+@test "C15/C16 REAL hang (real bats, real timeout): HUNG naming the file, not a CUT" {
+  run bash "$SUT" --run-if-needed                  # green baseline
+  [ "$status" -eq 0 ]
+  green="$(cat "$CC_POSTLAND_DIR/last-green")"
+  printf '@test "wedge" { sleep 60; }\n' > "$R/tests/wedge.bats"
+  push_commit "a suite that wedges"
+  tree="$(origin_tree)"
+  POSTLAND_SUITE_TIMEOUT_S=6 POSTLAND_FILE_TIMEOUT_S=6 run bash "$SUT" --run-if-needed
+  s="$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ -f "$s" ]
+  run jq -r '.verdict' "$s"; [ "$output" = "hung" ]                 # C15
+  run jq -r '.failing[0]' "$s"; [ "$output" = "tests/wedge.bats" ]  # names the FILE that wedged
+  [ "$(cat "$CC_POSTLAND_DIR/last-green")" = "$green" ]             # C15: last-green frozen
+  [ "$(pages_n)" = "0" ]                                            # C13: NOT a RED
+  [ "$(cut_pages_n)" = "0" ]                                        # ...and NOT a machine cut
+  [ -n "$(find "$CC_PAGES_DIR" -name 'postland-hung-wedge-*.page' 2>/dev/null)" ]
+  # POSITIVE CONTROL on the REAL producer: real bats, real wedge, real timeout(1) — the
+  # bound genuinely fires rather than the 124 arriving from somewhere in the fixture.
+  tb="$(command -v timeout || command -v gtimeout || echo /opt/homebrew/bin/timeout)"
+  run env -u TMPDIR "$tb" -k 2 4 bats "$CC_POSTLAND_WORKTREE/tests/wedge.bats"
+  [ "$status" -eq 124 ]
+}
+
+@test "C16: rc 124 outranks a job-control line in the TAP — hang, not cut" {
+  # THE ORDERING GUARD. timeout(1) SIGTERMs the whole group, so on some bats/shell
+  # combinations a hang's own TAP carries `Terminated: 15`; a signal-first ladder would
+  # then misfile every hang as a machine cut and send it to the wrong owner forever.
+  # Asserted as a CODE property: this TAP has both, and rc 124 must win. Swap the two
+  # branches in classify_hang and this test goes red (verdict becomes "cut").
+  run bash "$SUT" --run-if-needed
+  [ "$status" -eq 0 ]
+  echo hsf > "$R/hungsig-fixture"; push_commit "hang that also prints a signal line"
+  tree="$(origin_tree)"
+  stub_bats_mode hungsig
+  POSTLAND_SUITE_TIMEOUT_S=4 POSTLAND_FILE_TIMEOUT_S=4 run bash "$SUT" --run-if-needed
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ "$output" = "hung" ]
+  page="$(find "$CC_PAGES_DIR" -name 'postland-hung-*.page' | head -1)"
+  [ -n "$page" ]
+  grep -q 'timeout:4s' "$page"                      # attributed to OUR bound, not to sig:15
+}
+
+@test "C15: a HUNG tree is ABSTAINED as a real verdict, never re-run forever" {
+  # the counterpart to C13's "a cut tree is RETRIED": a hang is PROVEN about the tree, so
+  # re-running it every sweep re-proves a decided fact and burns a full suite per tick.
+  run bash "$SUT" --run-if-needed
+  [ "$status" -eq 0 ]
+  printf '@test "wedge" { sleep 60; }\n' > "$R/tests/wedge.bats"
+  push_commit "a suite that wedges"
+  POSTLAND_SUITE_TIMEOUT_S=6 POSTLAND_FILE_TIMEOUT_S=6 run bash "$SUT" --run-if-needed
+  n1="$(stamps_n)"
+  POSTLAND_SUITE_TIMEOUT_S=6 run bash "$SUT" --run-if-needed
+  [ "$status" -eq 0 ]
+  [ "$(idl_last '.reason')" = "already-stamped" ]   # abstained, unlike a cut
+  [ "$(stamps_n)" = "$n1" ]
+}
+
+@test "C15: cut and hung route to DIFFERENT owners (cut=quiet box, hung=timeout-wrap)" {
+  run bash "$SUT" --run-if-needed
+  [ "$status" -eq 0 ]
+  echo hf > "$R/hung-fixture"; push_commit "hung fixture"
+  tree="$(origin_tree)"
+  stub_bats_mode hung
+  POSTLAND_SUITE_TIMEOUT_S=4 POSTLAND_FILE_TIMEOUT_S=4 run bash "$SUT" --run-if-needed
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ "$output" = "hung" ]
+  page="$(find "$CC_PAGES_DIR" -name 'postland-hung-*.page' | head -1)"
+  [ -n "$page" ]
+  grep -q 'un-stubbed external seam' "$page"        # the HUNG repair...
+  grep -q 'timeout-wrap' "$page"
+  grep -q 'NOT a cut' "$page"
+  run grep -ci 'Re-run on a quiet box' "$page"      # ...and NOT the CUT repair
+  [ "$status" -eq 1 ]                               # 1 = matched nothing (2 = no such file)
+  [ -f "$REC/cc-backlog.argv" ]
+  grep -q 'HUNG' "$REC/cc-backlog.argv"
+  run grep -c 'post-land RED' "$REC/cc-backlog.argv"
+  [ "$status" -eq 1 ]                               # C13: never filed as a RED
+}
+
+@test "C15: a hang candidate whose file does NOT wedge alone degrades to a CUT" {
+  run bash "$SUT" --run-if-needed
+  [ "$status" -eq 0 ]
+  echo ff > "$R/flaky-fixture"; push_commit "suite wedges, file does not"
+  tree="$(origin_tree)"
+  stub_bats_mode flaky
+  POSTLAND_SUITE_TIMEOUT_S=4 POSTLAND_FILE_TIMEOUT_S=4 run bash "$SUT" --run-if-needed
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ "$output" = "cut" ]                             # unproven => we refuse to invent a hang
+  [ "$(hung_pages_n)" = "0" ]
+  [ "$(pages_n)" = "0" ]
+}
+
+@test "C15: a job-control death line stays a CUT even when bats itself exits 1" {
+  # the live 9c5d0ba74e79 shape: the suite ran, the child was SIGKILLed, bats survived and
+  # returned a plain 1 — so rc alone says nothing and only the TAP carries the evidence.
+  # A signal is a MACHINE event: it must reach the cut path, never be promoted to a hang.
+  run bash "$SUT" --run-if-needed
+  [ "$status" -eq 0 ]
+  echo svf > "$R/survivor-fixture"; push_commit "survivor fixture"
+  tree="$(origin_tree)"
+  stub_bats_mode survivor
+  run bash "$SUT" --run-if-needed
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ "$output" = "cut" ]
+  [ "$(hung_pages_n)" = "0" ]                       # named from the TAP, not from rc
+  [ "$(pages_n)" = "0" ]                            # and emphatically not the RED it used to be
+}
+
+@test "C15: a test's OWN '# Killed: 9' output is not mistaken for a signal" {
+  # the false-positive guard: this repo has reaper/kill suites that print those words, and
+  # bats prefixes captured test output with '# '. Reading it as a signal is harmless HERE
+  # (both roads end at a cut) but it would silently disarm the hang ladder's ordering.
+  run bash "$SUT" --run-if-needed
+  [ "$status" -eq 0 ]
+  echo rf > "$R/reaper-fixture"; push_commit "reaper-output fixture"
+  tree="$(origin_tree)"
+  stub_bats_mode reaper
+  run bash "$SUT" --run-if-needed
+  [ "$status" -eq 0 ]
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ "$output" = "cut" ]                             # partial progress, no real signal
+  # POSITIVE CONTROL on the discriminator itself: the same words WITHOUT the '# ' prefix
+  # must match, so this test cannot pass by the regex simply never matching anything.
+  printf '1..3\nok 1 a\n# Killed: 9\n' > "$BATS_TEST_TMPDIR/reaper.tap"
+  run grep -aE '^[^#]*(Killed|Terminated): *[0-9]+' "$BATS_TEST_TMPDIR/reaper.tap"
+  [ "$status" -eq 1 ]                               # the test's OWN output: NOT a signal
+  printf '1..3\nok 1 a\nbats: 42 Killed: 9 exec\n' > "$BATS_TEST_TMPDIR/real.tap"
+  run grep -aE '^[^#]*(Killed|Terminated): *[0-9]+' "$BATS_TEST_TMPDIR/real.tap"
+  [ "$status" -eq 0 ]                               # the shell's job-control line: IS a signal
+}
+
+@test "C17: the suite run is really bounded, with the configured seconds" {
+  # a RECORDING timeout(1) — proves the bound is actually applied and carries
+  # POSTLAND_SUITE_TIMEOUT_S, rather than trusting that a 124 came from somewhere.
+  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s/timeout.argv"\nexec %s "$@"\n' \
+    "$REC" "$(command -v timeout || command -v gtimeout || echo /opt/homebrew/bin/timeout)" \
+    > "$STUB/rec-timeout"
+  chmod +x "$STUB/rec-timeout"
+  CC_POSTLAND_TIMEOUT_BIN="$STUB/rec-timeout" POSTLAND_SUITE_TIMEOUT_S=77 run bash "$SUT" --run-if-needed
+  [ "$status" -eq 0 ]
+  [ -f "$REC/timeout.argv" ]                        # C17: the bound was applied at all...
+  grep -q -- '-k 10 77 ' "$REC/timeout.argv"        # ...with the configured budget
+}
+
+@test "C17: unbounded, a hang candidate degrades to a CUT — HUNG is never fabricated" {
+  run bash "$SUT" --run-if-needed
+  [ "$status" -eq 0 ]
+  green="$(cat "$CC_POSTLAND_DIR/last-green")"
+  echo sf > "$R/stall-fixture"; push_commit "stall fixture"
+  tree="$(origin_tree)"
+  stub_bats_mode stall                              # planned 3, completed 0, exit 1, NO signal
+  # set-but-EMPTY is honored verbatim => no timeout(1) at all => nothing can ever return 124
+  CC_POSTLAND_TIMEOUT_BIN= run bash "$SUT" --run-if-needed
+  [ "$status" -eq 0 ]
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ "$output" = "cut" ]                             # C17: unprovable => never a hang verdict
+  [ "$(pages_n)" = "0" ]                            # C13: and emphatically not a RED
+  [ "$(hung_pages_n)" = "0" ]
+  [ "$(cat "$CC_POSTLAND_DIR/last-green")" = "$green" ]
+}
