@@ -15,6 +15,11 @@
 # errexit-EXEMPT in bats and would be a DEAD assertion (memory: bats-dead-assertions).
 
 setup() {
+  # HERMETIC $HOME — required, and not a formality here: `decision()` below runs the REAL
+  # validate-bash.sh, whose last act is `mkdir -p ~/.claude/logs; echo "$CMD" >> …/bash-commands.log`.
+  # Unfixtured, every probe in this file appends to the OPERATOR'S live command-audit log. Caught by
+  # scripts/test-hermeticity-lint.sh, which is exactly the leak class it was built to ratchet out.
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   CLEANUP="$REPO/scripts/gate-cleanup.sh"
   HOOK="$REPO/hooks/validate-bash.sh"
