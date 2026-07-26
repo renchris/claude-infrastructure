@@ -24,11 +24,23 @@ CMD=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
 LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib"
 if [[ -f "$LIB_DIR/is-true-flag.sh" && "${VALIDATE_BASH_LEGACY:-0}" != "1" ]]; then
   # shellcheck source=lib/is-true-flag.sh
+  # shellcheck disable=SC1091  # resolved at RUNTIME from BASH_SOURCE; the static path is only
+  #                              valid when shellcheck is run from hooks/ (the land gate is not)
   source "$LIB_DIR/is-true-flag.sh"
   HAVE_IS_TRUE_FLAG=1
 else
   HAVE_IS_TRUE_FLAG=0
 fi
+
+# json_escape — a decision is only enforced if the harness can PARSE it. Every reason below used
+# to be interpolated raw into the JSON body, so the first message to contain a `"` (or a quote
+# echoed back from the user's own command, as the pkill clause does) emitted malformed JSON and the
+# deny silently became a no-op — a guard that reports blocking while not blocking. Escape order is
+# load-bearing: backslashes BEFORE quotes, else the added backslashes get re-escaped. Control
+# characters are stripped: a literal newline is not legal inside a JSON string.
+json_escape() {  # <string> → a safe JSON string BODY (no surrounding quotes)
+  printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr -d '\000-\037'
+}
 
 deny() {
   cat <<EOF
@@ -36,7 +48,7 @@ deny() {
   "hookSpecificOutput": {
     "hookEventName": "PreToolUse",
     "permissionDecision": "deny",
-    "permissionDecisionReason": "$1"
+    "permissionDecisionReason": "$(json_escape "$1")"
   }
 }
 EOF
@@ -49,7 +61,7 @@ warn() {
   "hookSpecificOutput": {
     "hookEventName": "PreToolUse",
     "permissionDecision": "ask",
-    "permissionDecisionReason": "$1"
+    "permissionDecisionReason": "$(json_escape "$1")"
   }
 }
 EOF
@@ -78,8 +90,47 @@ check_real_flag() {
 # ── Hard deny: catastrophic or rule-violating patterns ────────────────
 
 # System damage
+# shellcheck disable=SC2016  # $HOME is a LITERAL to match in the command TEXT, not an expansion
 if echo "$CMD" | grep -qE '(rm[[:space:]]+-rf[[:space:]]+/[^a-zA-Z]|rm[[:space:]]+-rf[[:space:]]+\$HOME|rm[[:space:]]+-rf[[:space:]]+~(/|$|[[:space:]])|sudo[[:space:]]+rm|:\(\)\{[[:space:]]*:\|:&[[:space:]]*\};:)'; then
   deny "Dangerous command pattern blocked: potential system damage (rm -rf /, rm -rf ~, sudo rm, or fork bomb)."
+fi
+
+# ── Worktree-UNSCOPED pkill/killall of gate processes ─────────────────
+# ROOT CAUSE of the 2026-07-26 false-RED epidemic (backlog a0718a5d78b3). Peer sessions were
+# SIGKILLing each other's landing gates:
+#     pkill -9 -f bats-core/bats                  ← every bats cmdline on this box contains that
+#     pkill -f "ship-land.sh --trunk main"
+# The desk tied victim gates to actor commands with a 3-5s lag twice over; >=8 broad-pkill events
+# across 5 sessions in 24h. Victims mis-read their own SIGKILL as OOM/jetsam (REFUTED: 68% memory
+# free, zero memorystatus kills) and propagated that wrong theory into their block reasons.
+# These patterns are machine-wide BY CONSTRUCTION, not by accident, so this is a deny and not an
+# ask: a correct scoped form exists, and a helper implements it — both are named in the message.
+# Scoped forms pass untouched. Kill switch: the whole hook's VALIDATE_BASH_DISABLED=1.
+# COMMAND POSITION, not substring: `git commit -m "fix: do not pkill bats"` merely MENTIONS the
+# thing. Deciding on raw text is the exact defect this clause exists to stop, one level down (a
+# `pkill -f bats` pattern matches peers because it matches TEXT). So the position test runs on a
+# quote-STRIPPED copy — killing message bodies — while the target/scope tests below still read the
+# ORIGINAL, because that is where the real pattern lives (`pkill -f "bats tests/"`).
+CMD_NOQ=$(printf '%s' "$CMD" | sed -e "s/'[^']*'/''/g" -e 's/"[^"]*"/""/g')
+if printf '%s' "$CMD_NOQ" | sed 's/[&|()]/;/g' | tr ';' '\n' | sed 's/^[[:space:]]*//' \
+     | grep -qE '^(sudo[[:space:]]+)?(pkill|killall)([[:space:]]|$)'; then
+  PK_OCCURRENCES=$(echo "$CMD" | grep -oE '(pkill|killall)[^;&|]*' || true)
+  while IFS= read -r pk; do
+    [[ -z "$pk" ]] && continue
+    # Does this occurrence target a GATE program at all? Otherwise it is none of our business.
+    echo "$pk" | grep -qE '(bats|ship-land|postland-verify)' || continue
+    # Is it scoped to ONE worktree? Any of: a $PWD-derived expression, a -P (parent-pid) scope,
+    # or an explicitly named worktree (a .worktrees/ path or a wt-* directory name).
+    # shellcheck disable=SC2016  # $PWD / $(pwd) are LITERALS to match in the command TEXT, by design
+    if echo "$pk" | grep -qE '\$PWD|\$\{PWD|\$\(pwd|`pwd|\$\(basename|(^|[[:space:]])-P[[:space:]]|\.worktrees/|(^|[^a-zA-Z0-9])wt-[a-zA-Z0-9]'; then
+      continue
+    fi
+    # …or it names THIS session's own worktree directory literally.
+    if [[ -n "${PWD##*/}" ]] && echo "$pk" | grep -qF -- "${PWD##*/}"; then
+      continue
+    fi
+    deny "Worktree-UNSCOPED kill of gate processes blocked: '$(echo "$pk" | cut -c1-60)'. Every bats command line on this box contains '/libexec/bats-core/bats', so this pattern SIGKILLs EVERY concurrent session's landing gate machine-wide, not just yours — the measured root cause of the 2026-07-26 false-RED epidemic (backlog a0718a5d78b3): the victim reports the kill as a gate RED, its item re-blocks, the dispatcher retries, load climbs, more gates die. Use the scoped helper: 'scripts/gate-cleanup.sh --dry-run' to see the selection, then the same without --dry-run. It signals only processes whose cwd is inside THIS worktree, plus their descendants. To scope a pattern by hand, name the worktree in it: pkill -f \"bats.*\${PWD##*/}\"."
+  done <<<"$PK_OCCURRENCES"
 fi
 
 # DDL via any mechanism (turso shell, sqlite3, echo|pipe, etc.) — only
@@ -150,6 +201,7 @@ if [[ -n "$RM_OCCURRENCES" ]]; then
     target_stripped=$(echo "$target" | sed -E 's|^\./||; s|^/||')
     if ! echo "$target_stripped" | grep -qE "^${SAFE_RM_TARGETS}(/|$)"; then
       warn "rm -rf on non-build-artifact target: '$target'. Verify intentional."
+      # shellcheck disable=SC2317  # reachable: warn() exits, so this only runs if warn is stubbed
       break
     fi
   done <<<"$RM_OCCURRENCES"
