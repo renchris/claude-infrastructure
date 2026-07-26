@@ -1,0 +1,176 @@
+#!/usr/bin/env bats
+# handoff-fire.sh self-close — LIVE-TEAMMATE GATE + HUSK-PANE RETRY (2026-07-26).
+#
+# THE INCIDENT THAT IS THE SPEC (team session-a3f68174, 2026-07-26T01:36Z):
+#   A lead finished its own work, force-removed its assignees' worktrees
+#   (`git worktree remove --force /private/tmp/wt-gr-t{1..6}`), and one tool call later ran
+#   `handoff-fire.sh self-close --terminal`. Its EIGHT assignees were still running. Four hours
+#   later all eight were alive, holding 3.4 GB, their lead gone, every final report reachable only
+#   by digging its transcript off disk. The pre-close inventory saw none of it: it counts unread
+#   mail and orphaned FIRES, and it only ever WARNs.
+#   Then the second half failed too — `it2 session close` returned "There was a problem connecting
+#   to iTerm2" (1 of 16 real self-closes that day), so `/exit` had already killed CC but the pane
+#   stayed open at a shell prompt. That husk is precisely what an operator reads as "my session
+#   ended abruptly", and it strands a FRESH teardown marker on a reusable pane — the precondition
+#   for the crash-watchdog false-absolution class (marker_owns_sid).
+#
+# G1-G4 lock the gate (blocking, not warning). H1-H3 lock the retry + the loud husk page.
+#
+# Isolation: `ps` is PATH-shimmed to serve a synthetic process table (the argv oracle
+# `--team-name session-<sid8>` is the whole contract); the registry dir is redirected via
+# CC_REGISTRY_DIR; `sleep` is shimmed to a no-op so the retry ladder costs no wall-clock. The
+# helper units are sed-extracted and sourced, mirroring tests/handoff-selfclose.bats.
+
+setup() {
+  REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
+  HF="$REPO/scripts/handoff-fire.sh"
+  SHIM="$BATS_TEST_TMPDIR/shim"; mkdir -p "$SHIM"
+
+  export PSTAB="$BATS_TEST_TMPDIR/pstab"; : > "$PSTAB"
+  # ps shim: `-Ao pid=,args=` emits the synthetic table; `-o comm= -t <tty>` reports the pane
+  # liveness the watcher polls (empty ⇒ CC already gone ⇒ close immediately, no 180s loop).
+  cat > "$SHIM/ps" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  *"-Ao"*) cat "${PSTAB:-/dev/null}" ;;
+  *"-t"*)  [ "${PS_CC_ALIVE:-0}" = 1 ] && echo claude ;;
+  *)       : ;;
+esac
+exit 0
+SH
+  chmod +x "$SHIM/ps"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$SHIM/sleep"; chmod +x "$SHIM/sleep"
+  export PATH="$SHIM:$PATH"
+
+  export CC_REGISTRY_DIR="$BATS_TEST_TMPDIR/registry"; mkdir -p "$CC_REGISTRY_DIR"
+  PANE="1FBFCD05-FF27-4B8E-958C-47753BC90D2A"
+  CCSID="a3f68174-77a6-425b-b499-b2b7d4c86a0e"
+  export PANE CCSID
+  printf '{\n    "paneUUID": "%s",\n    "session_id": "%s"\n}\n' "$PANE" "$CCSID" \
+    > "$CC_REGISTRY_DIR/$PANE.json"
+
+  # sed-extract the two helpers so the units are testable without running the whole script.
+  HELPERS="$BATS_TEST_TMPDIR/helpers.sh"
+  sed -n '/^cc_sid_for_pane() {/,/^}/p;/^live_teammates_of() {/,/^}/p' "$HF" > "$HELPERS"
+  # shellcheck disable=SC1090
+  . "$HELPERS"
+}
+
+seed_teammate() { # $1=agent-name $2=pid $3=team-sid8
+  printf '%s /Users/x/.claude-219/node_modules/@anthropic-ai/claude-code/bin/claude.exe --agent-id %s@session-%s --agent-name %s --team-name session-%s --model opus\n' \
+    "$2" "$1" "$3" "$1" "$3" >> "$PSTAB"
+}
+
+# ── G1: the argv oracle finds live assignees ──────────────────────────────────────────────
+@test "G1: live_teammates_of returns one name+pid line per live assignee" {
+  seed_teammate t2-shipland 5375 a3f68174
+  seed_teammate t6-flakefixes 51563 a3f68174
+  run live_teammates_of "$CCSID"
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s\n' "$output" | grep -c .)" -eq 2 ]
+  printf '%s\n' "$output" | grep -q "^t2-shipland	5375$"
+  printf '%s\n' "$output" | grep -q "^t6-flakefixes	51563$"
+}
+
+# ── G2: a foreign team must never count as ours ───────────────────────────────────────────
+@test "G2: assignees of a DIFFERENT team are not attributed to this session" {
+  seed_teammate x1-other 4242 deadbeef
+  run live_teammates_of "$CCSID"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+# ── G3: the pane→CC-sid recovery the gate depends on ──────────────────────────────────────
+@test "G3: cc_sid_for_pane recovers the CC session id from the registry row" {
+  run cc_sid_for_pane "$PANE"
+  [ "$status" -eq 0 ]
+  [ "$output" = "$CCSID" ]
+}
+
+# ── G4: THE GATE — self-close REFUSES while assignees live, and names them ────────────────
+# RED before the fix: self-close proceeded (the inventory only WARNed), exit 0 under --dry-run.
+@test "G4: self-close is REFUSED (exit 4) with live teammates, and names each one" {
+  seed_teammate t2-shipland 5375 a3f68174
+  seed_teammate t5-deploy   26319 a3f68174
+  run bash "$HF" self-close --terminal --session-id "$PANE" --dry-run
+  [ "$status" -eq 4 ]
+  [[ "$output" == *"REFUSED"* ]]
+  [[ "$output" == *"2 LIVE teammate(s)"* ]]
+  [[ "$output" == *"t2-shipland"* ]]
+  [[ "$output" == *"t5-deploy"* ]]
+}
+
+# ── G5: the escape hatch works, and is LOUD ───────────────────────────────────────────────
+# G5/G6 run from a NON-git cwd: past the gate, self-close still applies its dirty-tree guard,
+# and the bats worktree itself is dirty — that refusal is a different (pre-existing) contract.
+@test "G5: --allow-live-teammates proceeds but announces the deliberate orphaning" {
+  seed_teammate t2-shipland 5375 a3f68174
+  cd "$BATS_TEST_TMPDIR"
+  run bash "$HF" self-close --terminal --session-id "$PANE" --dry-run --allow-live-teammates
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"ORPHANED deliberately"* ]]
+}
+
+# ── G6: no team ⇒ the gate is invisible (no behaviour change for solo sessions) ────────────
+@test "G6: a session with no live teammates self-closes exactly as before" {
+  cd "$BATS_TEST_TMPDIR"
+  run bash "$HF" self-close --terminal --session-id "$PANE" --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"REFUSED"* ]]
+  [[ "$output" == *"dry run (self-close)"* ]]
+}
+
+# ── H1-H3: the husk-pane retry ────────────────────────────────────────────────────────────
+_arm_watcher_home() { # builds a $HOME with recording it2 + cc-notify stubs
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME/.claude/bin"
+  export IT2_LOG="$BATS_TEST_TMPDIR/it2.log";     : > "$IT2_LOG"
+  export NOTIFY_LOG="$BATS_TEST_TMPDIR/notify.log"; : > "$NOTIFY_LOG"
+  # it2 stub: fails the first $IT2_FAIL_N `session close` calls, then succeeds.
+  cat > "$HOME/.claude/bin/it2" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${IT2_LOG:?}"
+case "$*" in
+  *"session close"*)
+    n=$(grep -c "session close" "$IT2_LOG")
+    if [ "$n" -le "${IT2_FAIL_N:-0}" ]; then
+      echo "There was a problem connecting to iTerm2." >&2; exit 1
+    fi ;;
+esac
+exit 0
+SH
+  chmod +x "$HOME/.claude/bin/it2"
+  cat > "$HOME/.claude/bin/cc-notify" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${NOTIFY_LOG:?}"
+exit 0
+SH
+  chmod +x "$HOME/.claude/bin/cc-notify"
+  export PS_CC_ALIVE=0   # CC already exited ⇒ watcher goes straight to the close
+}
+
+@test "H1: a transient it2 failure is retried and the pane still closes" {
+  _arm_watcher_home; export IT2_FAIL_N=2
+  run bash "$HF" __selfclose "$PANE" /dev/ttys022 "" ""
+  [ "$status" -eq 0 ]
+  [ "$(grep -c 'session close' "$IT2_LOG")" -eq 3 ]   # 2 failures + 1 success
+  [[ "$output" == *"retrying in 2s"* ]]
+  [ ! -s "$NOTIFY_LOG" ]                              # recovered ⇒ no page
+}
+
+@test "H2: 4/4 it2 failures page the desk LOUD instead of leaving a silent husk" {
+  _arm_watcher_home; export IT2_FAIL_N=99
+  run bash "$HF" __selfclose "$PANE" /dev/ttys022 "" ""
+  [ "$(grep -c 'session close' "$IT2_LOG")" -eq 4 ]   # bounded — exactly 4 attempts
+  [[ "$output" == *"PANE CLOSE FAILED"* ]]
+  [[ "$output" == *"HUSK"* ]]
+  grep -q "HANDOFF-HUSK-PANE" "$NOTIFY_LOG"
+}
+
+@test "H3: the happy path still closes on the FIRST attempt (no added latency)" {
+  _arm_watcher_home; export IT2_FAIL_N=0
+  run bash "$HF" __selfclose "$PANE" /dev/ttys022 "" ""
+  [ "$status" -eq 0 ]
+  [ "$(grep -c 'session close' "$IT2_LOG")" -eq 1 ]
+  [[ "$output" != *"retrying"* ]]
+  [ ! -s "$NOTIFY_LOG" ]
+}
