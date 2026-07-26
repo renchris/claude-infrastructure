@@ -37,18 +37,18 @@ set -uo pipefail
 # (set-but-EMPTY disables verbatim; `${VAR:-}` cannot tell unset from set-empty).
 ICS_TIMEOUT_S="${ICS_TIMEOUT_S:-20}"
 if [ -n "${ICS_TIMEOUT_BIN+set}" ]; then
-  ICS_TIMEOUT_BIN="$ICS_TIMEOUT_BIN"
+  ICS_TB="$ICS_TIMEOUT_BIN"
 else
-  ICS_TIMEOUT_BIN=""
+  ICS_TB=""
   for _c in "$(command -v timeout 2>/dev/null || true)" "$(command -v gtimeout 2>/dev/null || true)" \
             /opt/homebrew/bin/timeout /usr/local/bin/timeout \
             /opt/homebrew/bin/gtimeout /usr/local/bin/gtimeout; do
-    [ -n "$_c" ] && [ -x "$_c" ] && { ICS_TIMEOUT_BIN="$_c"; break; }
+    [ -n "$_c" ] && [ -x "$_c" ] && { ICS_TB="$_c"; break; }
   done
 fi
 ics_bounded() {
-  if [ -z "$ICS_TIMEOUT_BIN" ] || [ ! -x "$ICS_TIMEOUT_BIN" ]; then "$@"; return $?; fi
-  "$ICS_TIMEOUT_BIN" -k 3 "$ICS_TIMEOUT_S" "$@"
+  if [ -z "$ICS_TB" ] || [ ! -x "$ICS_TB" ]; then "$@"; return $?; fi
+  "$ICS_TB" -k 3 "$ICS_TIMEOUT_S" "$@"
 }
 
 
