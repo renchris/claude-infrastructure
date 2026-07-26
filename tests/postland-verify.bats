@@ -464,3 +464,47 @@ printf '1..1\nok 1 p\n'")"
   # and the page is actionable: TAP named the test, so the page must not say "(unattributed)".
   grep -q 'boom' "$CC_PAGES_DIR"/postland-red-*.page || false
 }
+
+# ── PATH NORMALIZATION (the 0-green-stamp root cause, reproduced 2026-07-26) ────────────────────
+# The verdict is only meaningful if the suite runs in the environment a real session runs in. Driven
+# from a daemon/launchd-ish context, PATH lacked $HOME/.claude/bin and $HOME/bin, so suites shelling
+# out to cc-* helpers failed; the retry ladder then convicted them at >=2/3 (a PATH-dependent
+# failure reproduces every time), writing a HARD red. 15/15 stamps were red while trunk measured
+# 2096 ok / 0 not-ok. These lock the normalization in — and lock in that it never SUBTRACTS.
+
+@test "PATH normalization: a daemon-like PATH gains \$HOME/.claude/bin before bats runs" {
+  grep -q 'PATH NORMALIZATION' "$SUT"          # block must EXIST — else this test is vacuous
+  mkdir -p "$HOME/.claude/bin" "$HOME/bin"
+  run env -i HOME="$HOME" PATH="/usr/bin:/bin" TERM=dumb bash -c \
+    "sed -n '/PATH NORMALIZATION/,/^export PATH\$/p' '$SUT' > '$BATS_TEST_TMPDIR/norm.sh'; . '$BATS_TEST_TMPDIR/norm.sh'; printf '%s' \"\$PATH\""
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"$HOME/.claude/bin"* ]]
+  [[ "$output" == *"$HOME/bin"* ]]
+  [[ "$output" == *"/usr/bin"* ]]                     # PREPEND-only: the original entries survive
+}
+
+@test "PATH normalization: idempotent — an already-normalized PATH is not duplicated" {
+  grep -q 'PATH NORMALIZATION' "$SUT"          # block must EXIST — else this test is vacuous
+  mkdir -p "$HOME/.claude/bin"
+  run env -i HOME="$HOME" PATH="$HOME/.claude/bin:/usr/bin:/bin" TERM=dumb bash -c \
+    "sed -n '/PATH NORMALIZATION/,/^export PATH\$/p' '$SUT' > '$BATS_TEST_TMPDIR/norm.sh'; . '$BATS_TEST_TMPDIR/norm.sh'; printf '%s' \"\$PATH\" | tr ':' '\n' | grep -c \"^$HOME/.claude/bin\$\""
+  [ "$status" -eq 0 ]
+  [ "$output" = "1" ]                                 # exactly once, not twice
+}
+
+@test "PATH normalization: CC_POSTLAND_PATH overrides wholesale (explicit beats inferred)" {
+  grep -q 'PATH NORMALIZATION' "$SUT"          # block must EXIST — else this test is vacuous
+  run env -i HOME="$HOME" PATH="/usr/bin:/bin" CC_POSTLAND_PATH="/only/this" TERM=dumb bash -c \
+    "sed -n '/PATH NORMALIZATION/,/^export PATH\$/p' '$SUT' > '$BATS_TEST_TMPDIR/norm.sh'; . '$BATS_TEST_TMPDIR/norm.sh'; printf '%s' \"\$PATH\""
+  [ "$status" -eq 0 ]
+  [ "$output" = "/only/this" ]
+}
+
+@test "PATH normalization: a nonexistent dir is never added (no phantom entries)" {
+  grep -q 'PATH NORMALIZATION' "$SUT"          # block must EXIST — else this test is vacuous
+  rm -rf "$HOME/bin"
+  run env -i HOME="$HOME" PATH="/usr/bin:/bin" TERM=dumb bash -c \
+    "sed -n '/PATH NORMALIZATION/,/^export PATH\$/p' '$SUT' > '$BATS_TEST_TMPDIR/norm.sh'; . '$BATS_TEST_TMPDIR/norm.sh'; printf '%s' \"\$PATH\""
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"$HOME/bin:"* ]]
+}
