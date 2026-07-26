@@ -47,11 +47,18 @@
 #
 # GUARDS (fail-closed, LOUD). desk-land preflight uses sysexits-style codes so they NEVER collide
 # with ship-land's land-phase codes (0 landed · 2 dirty/preflight · 3 escalation-park · 5 rebase
-# conflict · 6 gate-red · 7 push non-ff · 8 verify-fail · 9 GATE-KILLED), which are passed through
-# VERBATIM. 9 is the one a caller should treat differently from every other non-zero: the gate died
-# without earning a verdict (signal-kill / no failing test named), so it is a statement about the
-# MACHINE, not the tree — re-running is correct, ideally once load has fallen. Every other code is
-# a real finding and must not be blind-retried (backlog 9c5d0ba74e79 / f8e40b4c577d):
+# conflict · 6 gate-red · 7 push non-ff · 8 verify-fail · 9 GATE-KILLED · 75 LOCK-STARVED), which
+# are passed through VERBATIM. 9 and 75 are the two a caller should treat differently from every
+# other non-zero — both are statements about the MACHINE, not the tree, so re-running IS correct:
+#   9  the gate died without earning a verdict (signal-kill / no failing test named).
+#   75 the landing lock was never acquired within LAND_LOCK_WAIT (land-lock.sh's EX_TEMPFAIL). The
+#      gate may well have run GREEN and nothing was ever pushed — observed 2026-07-26 at 9-13-way
+#      fleet contention, where the lock is a mkdir race with no FIFO fairness, so an unlucky waiter
+#      starves for the whole budget while holders rotate. Re-run with SHIP_LAND_GATE_ROUNDS=0 (full
+#      gate INSIDE the lock — guaranteed progress) and a larger LAND_LOCK_WAIT; every lander that
+#      actually landed in that window used that path, while optimistic rounds lost every race.
+# Every other code is a real finding and must not be blind-retried (backlog 9c5d0ba74e79 /
+# f8e40b4c577d):
 #   64 usage · 65 target refusal (not a worktree / the shared checkout / a non-session branch /
 #   no ship-land.sh / branch not found / worktree-create failed) · 66 kill-switch.
 #
@@ -184,6 +191,6 @@ rc=$?
 if [ "$rc" -eq 0 ]; then
   echo "✓ desk-land: '$TARGET_BRANCH' $([ "$DRY_RUN" = 1 ] && echo 'passed dry-run (NOT pushed)' || echo 'LANDED') via the ship rail."
 else
-  echo "✗ desk-land: ship rail exited $rc for '$TARGET_BRANCH' — surfaced verbatim (2 dirty/preflight · 3 escalation-PARK · 5 rebase-conflict · 6 gate-red · 7 push non-ff · 8 verify-fail). NOT retrying blindly." >&2
+  echo "✗ desk-land: ship rail exited $rc for '$TARGET_BRANCH' — surfaced verbatim (2 dirty/preflight · 3 escalation-PARK · 5 rebase-conflict · 6 gate-red · 7 push non-ff · 8 verify-fail · 9 GATE-KILLED · 75 LOCK-STARVED). NOT retrying blindly — but 9 and 75 are statements about the MACHINE, not findings about the tree: those two ARE the retryable ones (see the code map at the top of this file)." >&2
 fi
 exit "$rc"
