@@ -99,9 +99,9 @@ seed_teammate() { # $1=agent-name $2=pid $3=team-sid8
   seed_teammate t5-deploy   26319 a3f68174
   run bash "$HF" self-close --terminal --session-id "$PANE" --dry-run
   [ "$status" -eq 4 ]
-  [[ "$output" == *"REFUSED"* ]]
-  [[ "$output" == *"2 LIVE teammate(s)"* ]]
-  [[ "$output" == *"t2-shipland"* ]]
+  [[ "$output" == *"REFUSED"* ]] || false
+  [[ "$output" == *"2 LIVE teammate(s)"* ]] || false
+  [[ "$output" == *"t2-shipland"* ]] || false
   [[ "$output" == *"t5-deploy"* ]]
 }
 
@@ -121,7 +121,7 @@ seed_teammate() { # $1=agent-name $2=pid $3=team-sid8
   cd "$BATS_TEST_TMPDIR"
   run bash "$HF" self-close --terminal --session-id "$PANE" --dry-run
   [ "$status" -eq 0 ]
-  [[ "$output" != *"REFUSED"* ]]
+  [[ "$output" != *"REFUSED"* ]] || false
   [[ "$output" == *"dry run (self-close)"* ]]
 }
 
@@ -199,7 +199,7 @@ SH
   run bash "$HF" __selfclose "$PANE" /dev/ttys022 "" ""
   [ "$status" -eq 0 ]
   [ "$(grep -c 'session close' "$IT2_LOG")" -eq 3 ]   # 2 failures + 1 success
-  [[ "$output" == *"retrying in 2s"* ]]
+  [[ "$output" == *"retrying in 2s"* ]] || false
   [ ! -s "$NOTIFY_LOG" ]                              # recovered ⇒ no page
 }
 
@@ -207,8 +207,8 @@ SH
   _arm_watcher_home; export IT2_FAIL_N=99
   run bash "$HF" __selfclose "$PANE" /dev/ttys022 "" ""
   [ "$(grep -c 'session close' "$IT2_LOG")" -eq 4 ]   # bounded — exactly 4 attempts
-  [[ "$output" == *"PANE CLOSE FAILED"* ]]
-  [[ "$output" == *"HUSK"* ]]
+  [[ "$output" == *"PANE CLOSE FAILED"* ]] || false
+  [[ "$output" == *"HUSK"* ]] || false
   grep -q "HANDOFF-HUSK-PANE" "$NOTIFY_LOG"
 }
 
@@ -217,6 +217,6 @@ SH
   run bash "$HF" __selfclose "$PANE" /dev/ttys022 "" ""
   [ "$status" -eq 0 ]
   [ "$(grep -c 'session close' "$IT2_LOG")" -eq 1 ]
-  [[ "$output" != *"retrying"* ]]
+  [[ "$output" != *"retrying"* ]] || false
   [ ! -s "$NOTIFY_LOG" ]
 }

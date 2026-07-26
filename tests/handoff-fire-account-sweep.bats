@@ -244,7 +244,7 @@ time.sleep(10)" &
   info next2 "{\"config_dir\":\"/x\",\"keychain_service\":\"svc\",\"keychain_state\":\"present\",\"claude_bin\":\"$BIN/claude-heal-ok\",\"oauth_scopes\":\"a b\",\"has_refresh_token\":true,\"refresh_token_expired\":true}"
   run bash "$HF" account-sweep
   [ "$status" -eq 0 ]
-  ! echo "$output" | grep -q "healed via Phase-1"     # the 90s subprocess was never spent
+  ! echo "$output" | grep -q "healed via Phase-1" || false # the 90s subprocess was never spent
   echo "$output" | grep -q "## ACCOUNT STATE"
   echo "$output" | grep -q "next2 — login-required"
   echo "$output" | grep -q "stranded=1"

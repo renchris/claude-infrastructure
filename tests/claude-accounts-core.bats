@@ -813,7 +813,7 @@ ca.read_creds = lambda d, k: (None, "keychain-error")
 r = ca.collect(cfg)[0]
 assert r["auth_actionable"] is True and r["login_fixable"] is False, r
 print("OK")'
-  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]]
+  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]] || false
 }
 
 @test "_fmt_when: absolute local wall-clock, dated once a bare weekday turns ambiguous" {
@@ -833,11 +833,11 @@ print("OK")'
   # the fixture account has no keychain item ⇒ logged-out ⇒ /login-fixable ⇒ action required
   run python3 "$CA_BIN" --login-status --fresh --no-heal
   [ "$status" -eq 2 ]
-  [[ "${lines[0]}" == next3*REQUIRED* ]]
+  [[ "${lines[0]}" == next3*REQUIRED* ]] || false
   # the deadline columns stay blank: this verdict is NOT driven by a deadline, and printing a
   # future expiry beside REQUIRED reads as "required, and it expires later"
-  [[ "${lines[0]}" == *"—"*"—"* ]]
-  [[ "${lines[0]}" == *claude-next3* ]]
+  [[ "${lines[0]}" == *"—"*"—"* ]] || false
+  [[ "${lines[0]}" == *claude-next3* ]] || false
   # all-clear is silent AND exit 0 — a check that always prints stops being read
   CLAUDE_ACCOUNTS_JSON="$CA_CFG" run python3 - "$CA_BIN" <<'PY'
 import importlib.machinery, importlib.util, os, subprocess, sys, time
@@ -934,7 +934,7 @@ print("OK")
   # ...and the verdict follows the corrected number: EXPIRING is what the replayed one gives
   run python3 "$CA_BIN" --login-status
   [ "$status" -eq 2 ]
-  [[ "$output" == *REQUIRED* ]]
+  [[ "$output" == *REQUIRED* ]] || false
   ! [[ "$output" == *EXPIRING* ]]
 }
 
