@@ -294,7 +294,7 @@ EOF
 
   run env SHIP_LAND_VERIFY_RETRIES=0 bash "$SHIPLAND" --trunk main
   [ "$status" -eq 8 ]
-  ! echo "$output" | grep -qi "auto-retry"               # zero retries attempted (single-shot)
+  ! echo "$output" | grep -qi "auto-retry" || false      # zero retries attempted (single-shot)
   grep -q '"exit":8' "$LAND_LOG"
 }
 
@@ -596,7 +596,7 @@ landable() {  # $1=branch $2=shell file — a commit the gate always lints
 
   run env SHIP_LAND_GATE_SCOPE=scoped bash "$SHIPLAND" --trunk main
   [ "$status" -eq 0 ]
-  ! echo "$output" | grep -q "INERT"                           # a net that never went green
+  ! echo "$output" | grep -q "INERT" || false                  # a net that never went green
   [ "$(cat "$BATS_ARGV")" = "tests/a.bats" ]                   # is "not adopted", not "inert"
 }
 

@@ -208,7 +208,7 @@ setup_stage2() { export CC_WR_GRACE_S=0; export CC_WR_FIRE_DIR="$BATS_TEST_TMPDI
   mk_tel s6d 60; run drive s6d "$(mk_tx 6 "$WAIT")"; fired "$output"        # advisory 1
   mk_tel s6d 61; run drive s6d "$(mk_tx 6 "$WAIT")"                         # poll 2: grace not elapsed → advisory
   [ "$status" -eq 0 ]; fired "$output"
-  ! echo "$output" | grep -qi "SHADOW"
+  ! echo "$output" | grep -qi "SHADOW" || false
   ! grep -q 'stage2' "$CC_WR_IDL"
 }
 @test "stage2 LIVE: arm --brief --live → escalation EXECS handoff-fire --recycle --prompt-file" {
@@ -890,7 +890,7 @@ mk_hist() { local now; now=$(date +%s)
 }
 @test "bats-pollution GC: a live in-flight marker (cwd still exists) SURVIVES the sweep" {
   local armf; armf="$(ls "$CC_WR_STATE_DIR"/arm-* 2>/dev/null | head -1)"       # setup's arm for \$DESK (bats-run cwd that EXISTS)
-  [ -n "$armf" ] && [ -f "$armf" ]
+  [ -n "$armf" ] && [ -f "$armf" ] || false
   mk_tel gcs 60
   run drive gcs "$(mk_tx 1 "$WAIT")"
   [ "$status" -eq 0 ]

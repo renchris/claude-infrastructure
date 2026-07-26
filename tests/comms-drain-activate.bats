@@ -114,7 +114,7 @@ drain_count() { # $1=file $2=hook key
   act --rollback
   [ "$status" -eq 0 ]
   for d in "$A" "$B"; do
-    ! grep -q 'mailbox-drain' "$d/settings.json"
+    ! grep -q 'mailbox-drain' "$d/settings.json" || false
     [ ! -f "$d/settings.json.pre-comms-drain.bak" ]
     jq -e '[.hooks.SessionStart[]?.hooks[]?.command?] | any(contains("session-start.sh"))' "$d/settings.json"
   done

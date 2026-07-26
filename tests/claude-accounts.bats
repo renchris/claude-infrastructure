@@ -158,7 +158,7 @@ assert "T" in e["quota_as_of"]
 print("OK")
 PY
   [ "$status" -eq 0 ]
-  [[ "$output" == *OK* ]]
+  [[ "$output" == *OK* ]] || false
 }
 
 @test "collect: capture round-trips into inherit (persist then re-read as a broken sweep)" {
@@ -192,7 +192,7 @@ assert rows[0]["weekly_pct"] == 44
 print("OK")
 PY
   [ "$status" -eq 0 ]
-  [[ "$output" == *OK* ]]
+  [[ "$output" == *OK* ]] || false
 }
 
 # ---- e2e: the real binary, --json inheritance on a logged-out account ------------------------

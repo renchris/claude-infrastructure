@@ -73,7 +73,7 @@ cmd_prompt_of() { printf '%s\n' "$1" | sed -n 's/.*cat \([^)]*\)).*/\1/p'; }
   copy="$(copy_of "$output")"
   grep -q 'v2 INBOX transport' "$copy"          # names the transport
   grep -q 'NO keystrokes' "$copy"               # the v1 composer-inject claim is gone for good
-  ! grep -q 'r submit, not' "$copy"             # the \r-not-\n note is historical (v2 plan Phase 3)
+  ! grep -q 'r submit, not' "$copy" || false    # the \r-not-\n note is historical (v2 plan Phase 3)
   grep -q 'do NOT hand-write mailbox files' "$copy"  # the "durable fallback" invitation is gone
 }
 
@@ -81,7 +81,7 @@ cmd_prompt_of() { printf '%s\n' "$1" | sed -n 's/.*cat \([^)]*\)).*/\1/p'; }
   run env ITERM_SESSION_ID="w1t0p0:AAAAAAAA-0000-0000-0000-000000000004" \
     bash "$HF" --prompt-file "$PF" --launcher claude-test --no-self-retire --dry-run
   [ "$status" -eq 0 ]
-  ! printf '%s\n' "$output" | grep -q 'notify-back:'
+  ! printf '%s\n' "$output" | grep -q 'notify-back:' || false
   printf '%s\n' "$output" | grep -qF "cat $PF"  # command reads the original prompt directly
 }
 
@@ -89,8 +89,8 @@ cmd_prompt_of() { printf '%s\n' "$1" | sed -n 's/.*cat \([^)]*\)).*/\1/p'; }
   run env ITERM_SESSION_ID="w1t0p0:AAAAAAAA-0000-0000-0000-000000000005" \
     bash "$HF" --prompt-file "$PF" --launcher claude-test --dry-run
   [ "$status" -eq 0 ]
-  ! printf '%s\n' "$output" | grep -q 'notify-back:'          # no back-channel (no --notify-back)
-  ! printf '%s\n' "$output" | grep -qF "cat $PF"              # NOT the original — self-retire wrapped it
+  ! printf '%s\n' "$output" | grep -q 'notify-back:' || false # no back-channel (no --notify-back)
+  ! printf '%s\n' "$output" | grep -qF "cat $PF" || false     # NOT the original — self-retire wrapped it
   copy="$(cmd_prompt_of "$output")"
   [ -n "$copy" ]; [ -f "$copy" ]
   [ "$copy" != "$PF" ]                                        # a distinct copy, never the caller's file

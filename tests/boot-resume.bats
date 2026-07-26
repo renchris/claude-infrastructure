@@ -136,7 +136,7 @@ SH
   [ "$status" -eq 0 ]
   [ "$(notify_count)" -eq 1 ]
   grep -q 'wt-fresh-P'  "$CC_NOTIFY_BIN.log"           # recent transcript → reported
-  ! grep -q 'wt-crufty-P' "$CC_NOTIFY_BIN.log"         # stale transcript → filtered out
+  ! grep -q 'wt-crufty-P' "$CC_NOTIFY_BIN.log" || false # stale transcript → filtered out
   grep -q '"n_open":1' "$CC_IDL"                       # exactly the fresh one
 }
 
@@ -174,7 +174,7 @@ SH
   grep -qi 'boot' "$CC_NOTIFY_BIN.log"                    # it is a boot-delta page
   grep -q 'wt-alpha-P' "$CC_NOTIFY_BIN.log"
   grep -q 'wt-reso-P' "$CC_NOTIFY_BIN.log"
-  ! grep -q 'wt-live' "$CC_NOTIFY_BIN.log"                # the live session is not in the delta
+  ! grep -q 'wt-live' "$CC_NOTIFY_BIN.log" || false       # the live session is not in the delta
   grep -q '"disposition":"fired"' "$CC_IDL"
   grep -q '"mode":"page"' "$CC_IDL"
   grep -q '"n_open":2' "$CC_IDL"

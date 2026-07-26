@@ -149,12 +149,12 @@ IT2
   [ -f "$CC_TEARDOWN_DIR/sidAD.json" ]                       # keyed by the TARGET's session id
   [ -f "$CC_TEARDOWN_DIR/U-AD.json" ]                        # …and by its pane uuid
   run cat "$CC_TEARDOWN_DIR/sidAD.json"
-  [[ "$output" == *'"key_kind":"sid"'* ]]
-  [[ "$output" == *'"sid":"sidAD"'* ]]
-  [[ "$output" == *'"pane":"U-AD"'* ]]
-  [[ "$output" == *'"mode":"teardown"'* ]]                   # the discriminator vs handoff-fire's modes
+  [[ "$output" == *'"key_kind":"sid"'* ]] || false
+  [[ "$output" == *'"sid":"sidAD"'* ]] || false
+  [[ "$output" == *'"pane":"U-AD"'* ]] || false
+  [[ "$output" == *'"mode":"teardown"'* ]] || false          # the discriminator vs handoff-fire's modes
   run cat "$CC_TEARDOWN_DIR/U-AD.json"
-  [[ "$output" == *'"key_kind":"pane"'* ]]
+  [[ "$output" == *'"key_kind":"pane"'* ]] || false
   run python3 -c "import json,sys; json.loads(open(sys.argv[1]).read().strip())" "$CC_TEARDOWN_DIR/sidAD.json"
   [ "$status" -eq 0 ]
 }
@@ -180,14 +180,14 @@ IT2
   CC_ACCOUNT_BASES="$D/wdbase" CC_REGISTRY_DIR="$D/reg" CC_JETSAM_DIRS="$D/nojetsam" \
     run "$W" --classify sidAD
   [ "$status" -eq 0 ]
-  [[ "$output" == RECYCLE* ]]
-  [[ "$output" == *deliberate-teardown* ]]
+  [[ "$output" == RECYCLE* ]] || false
+  [[ "$output" == *deliberate-teardown* ]] || false
   # pane-keyed alias (what remains when cc-sessions carried no session_id): drop the sid marker and
   # give the registry the pane→sid row the reader reverse-looks-up.
   rm -f "$CC_TEARDOWN_DIR/sidAD.json"
   printf '{\n  "session_id": "sidAD"\n}\n' > "$D/reg/U-AD.json"
   CC_ACCOUNT_BASES="$D/wdbase" CC_REGISTRY_DIR="$D/reg" CC_JETSAM_DIRS="$D/nojetsam" \
     run "$W" --classify sidAD
-  [[ "$output" == RECYCLE* ]]
+  [[ "$output" == RECYCLE* ]] || false
   [[ "$output" == *deliberate-teardown* ]]
 }

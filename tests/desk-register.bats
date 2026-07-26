@@ -22,7 +22,7 @@ role_file() { cat "$CC_ROLES_DIR/${1:-desk}" 2>/dev/null; }
 @test "fresh: parses the pane UUID out of \$ITERM_SESSION_ID and writes it" {
   run "$DR"
   [ "$status" -eq 0 ]
-  [[ "$output" == "registered desk → $PANE" ]]
+  [[ "$output" == "registered desk → $PANE" ]] || false
   [ "$(role_file)" = "$PANE" ]
 }
 
@@ -31,7 +31,7 @@ role_file() { cat "$CC_ROLES_DIR/${1:-desk}" 2>/dev/null; }
   before="$(stat -f %m "$CC_ROLES_DIR/desk")"
   run "$DR"
   [ "$status" -eq 0 ]
-  [[ "$output" == already\ desk\ →\ * ]]
+  [[ "$output" == already\ desk\ →\ * ]] || false
   [ "$(stat -f %m "$CC_ROLES_DIR/desk")" = "$before" ]   # untouched, not rewritten
   [ "$(role_file)" = "$PANE" ]
 }
@@ -40,7 +40,7 @@ role_file() { cat "$CC_ROLES_DIR/${1:-desk}" 2>/dev/null; }
   printf 'OLD-PANE-UUID\n' > "$CC_ROLES_DIR/desk" 2>/dev/null || { mkdir -p "$CC_ROLES_DIR"; printf 'OLD-PANE-UUID\n' > "$CC_ROLES_DIR/desk"; }
   run "$DR"
   [ "$status" -eq 0 ]
-  [[ "$output" == "reassigned desk: OLD-PANE-UUID → $PANE" ]]
+  [[ "$output" == "reassigned desk: OLD-PANE-UUID → $PANE" ]] || false
   [ "$(role_file)" = "$PANE" ]
 }
 
@@ -48,7 +48,7 @@ role_file() { cat "$CC_ROLES_DIR/${1:-desk}" 2>/dev/null; }
   export ITERM_SESSION_ID="garbage-no-colon"
   run "$DR"
   [ "$status" -eq 1 ]
-  [[ "$output" == *"did not yield a pane UUID"* ]]
+  [[ "$output" == *"did not yield a pane UUID"* ]] || false
   [ ! -f "$CC_ROLES_DIR/desk" ]        # the whole point: no garbage role file
 }
 
@@ -56,7 +56,7 @@ role_file() { cat "$CC_ROLES_DIR/${1:-desk}" 2>/dev/null; }
   unset ITERM_SESSION_ID
   run "$DR"
   [ "$status" -eq 1 ]
-  [[ "$output" == *"cannot tell which pane"* ]]
+  [[ "$output" == *"cannot tell which pane"* ]] || false
   [ ! -f "$CC_ROLES_DIR/desk" ]
 }
 

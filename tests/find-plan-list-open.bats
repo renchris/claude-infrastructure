@@ -42,7 +42,7 @@ list_open() { bash "$FP" --list-open; }
 
 @test "complete and superseded plans are EXCLUDED" {
   run list_open
-  ! echo "$output" | grep -q 'done\.md'
+  ! echo "$output" | grep -q 'done\.md' || false
   ! echo "$output" | grep -q 'old\.md'
 }
 

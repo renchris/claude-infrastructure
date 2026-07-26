@@ -65,7 +65,7 @@ stage() { printf '#!/bin/bash\n' > "$Q/$1"; [ -n "${2:-}" ] && touch -t "$2" "$Q
   stage "done-c.sh" "$OLD"; : > "$Q/done-c.sh.done"
   CC_ACTIVATION_DIR="$Q" run "$H"
   printf '%s' "$output" | grep -q 'stale-a.sh'
-  ! printf '%s' "$output" | grep -q 'fresh-b.sh'
+  ! printf '%s' "$output" | grep -q 'fresh-b.sh' || false
   ! printf '%s' "$output" | grep -q 'done-c.sh'
 }
 

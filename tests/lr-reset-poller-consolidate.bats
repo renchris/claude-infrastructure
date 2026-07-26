@@ -63,7 +63,7 @@ park() {
   park future next "$BATS_TEST_TMPDIR/wt/a" "2099-01-01T00:00:00Z"
   run bash "$SCRIPT" --once
   [ "$status" -eq 0 ]
-  [ ! -f "$LR_SELECT_BIN.log" ] || ! grep -q 'future' "$LR_SELECT_BIN.log"
+  [ ! -f "$LR_SELECT_BIN.log" ] || ! grep -q 'future' "$LR_SELECT_BIN.log" || false
   [ -f "$PARKED/future.json" ]                              # still parked, untouched
 }
 
@@ -99,10 +99,10 @@ SH
   [ "$status" -eq 0 ]
   # per-worktree loser → retired
   grep -q 'LISTED wtloser' "$LOG"
-  [ -f "$RESUMED/wtloser.json" ] && [ ! -f "$PARKED/wtloser.json" ]
+  [ -f "$RESUMED/wtloser.json" ] && [ ! -f "$PARKED/wtloser.json" ] || false
   # total-ceiling loser → deferred, still parked for the next tick
   grep -q 'CAP   capped' "$LOG"
-  [ -f "$PARKED/capped.json" ] && [ ! -f "$RESUMED/capped.json" ]
+  [ -f "$PARKED/capped.json" ] && [ ! -f "$RESUMED/capped.json" ] || false
 }
 
 @test "the LISTED log carries lr-select's REAL reason, not an assumed one" {
@@ -118,7 +118,7 @@ SH
   run bash "$SCRIPT" --once
   [ "$status" -eq 0 ]
   grep -q 'LISTED mate .* teammate-session (lead-owned recovery)' "$LOG"
-  ! grep -q 'LISTED mate .* not the per-worktree winner' "$LOG"
+  ! grep -q 'LISTED mate .* not the per-worktree winner' "$LOG" || false
 }
 
 @test "consolidation is logged with the counts, never silent" {
@@ -136,7 +136,7 @@ SH
   printf 'next\twin\t%s/wt/shared\t\n' "$BATS_TEST_TMPDIR" > "$LR_SELECT_BIN.winners"
   run bash "$SCRIPT" --once
   [ "$status" -eq 0 ]
-  ! grep -q 'LISTED win' "$LOG"                             # not consolidated away
+  ! grep -q 'LISTED win' "$LOG" || false                    # not consolidated away
   grep -q 'READY win' "$LOG"                                # reached the notify/fire branch
 }
 

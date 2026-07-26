@@ -38,7 +38,7 @@ setup() {
   cp "$CC_PARITY_REPO/bin/toolB" "$CC_PARITY_BINDIR/toolB"
   run "$ASSERT"
   [ "$status" -eq 1 ]
-  [[ "$output" == *"STALE"* ]]
+  [[ "$output" == *"STALE"* ]] || false
   [[ "$output" == *"toolA"* ]]
 }
 
@@ -62,7 +62,7 @@ setup() {
   printf 'echo B v0\n' > "$CC_PARITY_BINDIR/toolB"
   run "$ASSERT"
   [ "$status" -eq 1 ]
-  [[ "$output" == *"LINKED"* ]]
+  [[ "$output" == *"LINKED"* ]] || false
   [[ "$output" == *"STALE"*  ]]
 }
 

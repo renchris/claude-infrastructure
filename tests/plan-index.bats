@@ -125,7 +125,7 @@ sym_ctx() {
   run sym_ctx "$proj"
   [ "$status" -eq 0 ]
   echo "$output" | grep -qE 'Plans: 5/5'          # status-less plans count as open
-  ! echo "$output" | grep -qE 'Plans: 0'
+  ! echo "$output" | grep -qE 'Plans: 0' || false
 }
 
 @test "count: complete/superseded plans are not counted as open" {

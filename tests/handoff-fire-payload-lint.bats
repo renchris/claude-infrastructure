@@ -24,8 +24,8 @@ setup() {
   printf 'Continue the build.\nOn completion, cc-notify the desk when finished.\n' > "$P"
   run timeout 25 bash "$HF" --prompt-file "$P" --cwd "$WT" --launcher claude-next --session-id "$SID"
   [ "$status" -eq 4 ]
-  [[ "$output" == *"ABORTED (F3 / T-P2-5)"* ]]
-  [[ "$output" == *"BACK-CHANNEL BLOCK missing"* ]]
+  [[ "$output" == *"ABORTED (F3 / T-P2-5)"* ]] || false
+  [[ "$output" == *"BACK-CHANNEL BLOCK missing"* ]] || false
   # aborted BEFORE the spawn — no "→ fired" success line
   [[ "$output" != *"→ fired"* ]]
 }
@@ -42,7 +42,7 @@ setup() {
   printf 'Continue.\nOn completion cc-notify "$(cat ~/.claude/cc-roles/desk)".\n' > "$P"
   run timeout 25 bash "$HF" --prompt-file "$P" --cwd "$WT" --launcher claude-next --session-id "$SID" --dry-run
   [ "$status" -eq 0 ]
-  [[ "$output" != *"WOULD BLOCK"* ]]
+  [[ "$output" != *"WOULD BLOCK"* ]] || false
   [[ "$output" == *"command:"* ]]     # reached the end of the dry readout — the gate let it through
 }
 
@@ -52,7 +52,7 @@ setup() {
   printf 'Go build feature X. Fire and forget.\n' > "$P"
   run timeout 25 bash "$HF" --prompt-file "$P" --cwd "$WT" --launcher claude-next --session-id "$SID" --dry-run
   [ "$status" -eq 0 ]
-  [[ "$output" == *"payload-lint (advisory): one-way fire"* ]]
+  [[ "$output" == *"payload-lint (advisory): one-way fire"* ]] || false
   [[ "$output" != *"WOULD BLOCK"* ]]
 }
 

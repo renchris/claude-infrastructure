@@ -104,7 +104,7 @@ cls() { bash "$GC" "$@" | awk '{print $1}'; }
 @test "always emits exactly one of A|B|C as the first token" {
   for t in "ship at green" "edit the plist" "maybe refactor this someday" "need your token"; do
     first="$(cls "$t")"
-    [[ "$first" =~ ^[ABC]$ ]]
+    [[ "$first" =~ ^[ABC]$ ]] || false
   done
 }
 

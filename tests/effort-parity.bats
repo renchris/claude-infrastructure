@@ -55,9 +55,9 @@ set_all() {  # $1 = effortLevel written to every fake dir's settings.json
   for d in two three four five; do printf '{"effortLevel":"low"}\n' > "$D/$d/settings.json"; done
   run "$ASSERT"
   [ "$status" -eq 1 ]
-  [[ "$output" == *"BELOW"* ]]
-  [[ "$output" == *"high < floor xhigh"* ]]
-  [[ "$output" == *"low < floor xhigh"* ]]
+  [[ "$output" == *"BELOW"* ]] || false
+  [[ "$output" == *"high < floor xhigh"* ]] || false
+  [[ "$output" == *"low < floor xhigh"* ]] || false
 }
 
 @test "zshrc launcher --effort default drifted below SSOT (high, not max) ⇒ exit 1" {

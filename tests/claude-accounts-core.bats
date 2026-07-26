@@ -218,7 +218,7 @@ for payload in ("null", "[1]", "\"s\"", "42"):
 P.stdout = "{\"claudeAiOauth\": {\"accessToken\": \"t\"}}"
 assert ca.read_creds("/x", "t")[1] == "present"
 print("OK")'
-  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]]
+  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]] || false
 }
 
 @test "collect: a keychain item with no OAuth blob degrades to one labelled row, not a traceback" {
@@ -252,7 +252,7 @@ by = {r["acct"]: r for r in rows}
 assert by["bad"]["auth"] == "probe-error" and "error" in by["bad"]
 assert by["good"]["auth"] == "ok" and by["good"]["weekly_pct"] == 11
 print("OK")'
-  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]]
+  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]] || false
 }
 
 @test "cache_read: a valid-JSON non-dict cache degrades to a miss instead of wedging the tool" {
@@ -261,7 +261,7 @@ print("OK")'
   run python3 -c "$LOAD"'
 assert ca.cache_read(cfg) is None
 print("OK")'
-  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]]
+  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]] || false
   echo '[]' > "$CACHE"
   run python3 -c "$LOAD"'
 assert ca.cache_read(cfg) is None
@@ -321,7 +321,7 @@ assert ca.fmt_h(0.5) == "30m" and ca.fmt_h(2.0) == "2.0h" and ca.fmt_h(96.0) == 
 for h in (-41.0, None, 0.0, 0.5, 2.0, 96.0, 1e5):
     assert len("↻" + ca.fmt_h(h)) <= 5, (h, ca.fmt_h(h))
 print("OK")'
-  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]]
+  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]] || false
 }
 
 @test "render_table: a stale row is glyph-marked and declared, never shown as live" {
@@ -372,7 +372,7 @@ print("OK")'
   for bad in fabel FABLE general_ ""; do
     run python3 "$CA_BIN" --route "$bad" --no-heal
     [ "$status" -eq 1 ]
-    [[ "$output" == *"requires general|fable"* ]]
+    [[ "$output" == *"requires general|fable"* ]] || false
   done
   run python3 "$CA_BIN" --route --no-heal          # value missing entirely
   [ "$status" -eq 1 ]
@@ -438,13 +438,13 @@ PY
   [ "${#lines[@]}" -eq 1 ]
   [ "${lines[0]}" = "next3" ]
   run bash -c "python3 '$CA_BIN' --route general 2>&1 >/dev/null"
-  [[ "$output" == *"excluded"* && "$output" == *"gone"* ]]
+  [[ "$output" == *"excluded"* && "$output" == *"gone"* ]] || false
 
   run bash -c "python3 '$CA_BIN' --rank general 2>/dev/null"
   [ "$status" -eq 0 ]
   [ "${#lines[@]}" -eq 2 ]                       # the throttled row is absent from the ranking
-  [[ "${lines[0]}" =~ ^[a-z0-9]+\ [0-9]+\.[0-9]{6}$ ]]
-  [[ "${lines[0]}" == next3* ]]
+  [[ "${lines[0]}" =~ ^[a-z0-9]+\ [0-9]+\.[0-9]{6}$ ]] || false
+  [[ "${lines[0]}" == next3* ]] || false
   first=$(echo "${lines[0]}" | cut -d' ' -f2); second=$(echo "${lines[1]}" | cut -d' ' -f2)
   run python3 -c "import sys; sys.exit(0 if float('$first') >= float('$second') else 1)"
   [ "$status" -eq 0 ]
@@ -462,16 +462,16 @@ r = d['rows'][0]
 for f in ('acct', 'auth', 'k', 'is_self', 'route_reasons', 'route_reason_class'):
     assert f in r, f
 print('OK')" <<< "$output"
-  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]]
+  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]] || false
 }
 
 @test "--relogin-info: rejects a missing value and an unknown account" {
   run python3 "$CA_BIN" --relogin-info
   [ "$status" -eq 1 ]
-  [[ "$output" == *"requires an account name"* ]]
+  [[ "$output" == *"requires an account name"* ]] || false
   run python3 "$CA_BIN" --relogin-info nosuch
   [ "$status" -eq 1 ]
-  [[ "$output" == *"unknown account"* ]]
+  [[ "$output" == *"unknown account"* ]] || false
   run python3 "$CA_BIN" --relogin-info next3
   [ "$status" -eq 0 ]
   [[ "$output" == *keychain_service* ]]
@@ -545,8 +545,8 @@ json.dump(c, open(sys.argv[1], "w"))
 PY
   run python3 "$CA_BIN" --route general --no-heal
   [ "$status" -ne 0 ]
-  [[ "$output" == *"invalid router constants"* ]]
-  [[ "$output" != *Traceback* ]]
+  [[ "$output" == *"invalid router constants"* ]] || false
+  [[ "$output" != *Traceback* ]] || false
 
   python3 - "$CA_CFG" <<'PY'
 import json, sys
@@ -555,7 +555,7 @@ json.dump(c, open(sys.argv[1], "w"))
 PY
   run python3 "$CA_BIN" --json --no-heal
   [ "$status" -ne 0 ]
-  [[ "$output" == *"missing or non-numeric"* ]]
+  [[ "$output" == *"missing or non-numeric"* ]] || false
   [[ "$output" == *EPS_H* ]]
 }
 
@@ -570,7 +570,7 @@ importlib.machinery.SourceFileLoader(\"ca\", os.environ[\"CA_BIN\"]).exec_module
 real = os.path.join(os.path.expanduser(\"~\"), \".claude/logs/claude-accounts-lastgood.json\")
 assert ca.LASTGOOD_PATH != real, ca.LASTGOOD_PATH
 print(\"OK\")'"
-  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]]
+  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]] || false
 
   # ...while the DEFAULT SSOT keeps the canonical path, so the accumulated ledger is never orphaned
   run bash -c "unset CLAUDE_ACCOUNTS_LASTGOOD CLAUDE_ACCOUNTS_JSON; python3 -c '
@@ -605,7 +605,7 @@ assert reads["n"] == 2, reads          # exactly ONE fresh re-read, not a loop
 assert seen == ["tok1", "tok2"], seen  # retried with the NEW token
 assert rows[0]["weekly_pct"] == 9 and "error" not in rows[0], rows[0]
 print("OK")'
-  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]]
+  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]] || false
 }
 
 @test "collect: a persistent 401 on a stale token is reported as stale, not as token-invalid" {
@@ -674,7 +674,7 @@ assert ca.cut_marker(100, CUT) == "▲"
 # and it degrades cleanly with no data / no cutoff
 assert ca.cut_marker(None, CUT) == " " and ca.cut_marker(50, None) == " "
 print("OK")'
-  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]]
+  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]] || false
 }
 
 @test "keychain_service: the CC 2.1.183 service-name contract, incl. NFC normalisation" {
@@ -694,7 +694,7 @@ nfd = unicodedata.normalize("NFD", "/Users/x/.claude-café")
 assert nfc != nfd                                   # genuinely different byte sequences
 assert ca.keychain_service(nfc) == ca.keychain_service(nfd)
 print("OK")'
-  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]]
+  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]] || false
 }
 
 # ---- the login cliff (refreshTokenExpiresAt) -------------------------------------------------

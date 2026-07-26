@@ -81,8 +81,8 @@ seed_session() { # $1=sid — LIVE pid so the background straggler sweep keeps i
   : > "$CC_TMP_SWEEP_DIRS/handoff-selfclose-fresh.log"
   end_for ZZZ
   sleep 1                                           # let the backgrounded sweep finish
-  [ -e "$WD/LIVE.pid" ] && [ -e "$WD/LIVE.id" ] && [ -e "$WD/cp-LIVE.count" ]   # live kept
-  [ ! -e "$WD/DEAD.pid" ] && [ ! -e "$WD/DEAD.id" ] && [ ! -e "$WD/cp-DEAD.count" ]  # dead reaped
+  [ -e "$WD/LIVE.pid" ] && [ -e "$WD/LIVE.id" ] && [ -e "$WD/cp-LIVE.count" ] || false # live kept
+  [ ! -e "$WD/DEAD.pid" ] && [ ! -e "$WD/DEAD.id" ] && [ ! -e "$WD/cp-DEAD.count" ] || false # dead reaped
   [ ! -e "$WD/cp-OLDORPHAN.count" ]                 # aged reaped
   [ -e "$WD/cp-FRESH.count" ]                       # fresh kept
   [ ! -e "$CC_TMP_SWEEP_DIRS/handoff-selfclose-x.log" ]      # aged tmp reaped

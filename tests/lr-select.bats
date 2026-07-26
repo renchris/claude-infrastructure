@@ -38,12 +38,23 @@ SH
   chmod +x "$LR_SELECT_PGREP_BIN"
 
   # git stub: `status --porcelain` emits N dirty lines per <cwd> recorded in .dirty ("<cwd> <n>").
+  # Keys are compared PHYSICALLY (pwd -P), not as strings: $BATS_TEST_TMPDIR is /var/folders/…
+  # while the producer groups on the resolved /private/var/folders/… form, so an exact-string
+  # lookup silently matched nothing and every dirty count came back 0. Real git accepts either
+  # spelling, so that was pure fixture skew — it went unnoticed only because the assertion that
+  # would have caught it was a non-final `[[ ]]`, i.e. dead.
   cat > "$LR_SELECT_GIT_BIN" <<'SH'
 #!/bin/bash
 # args: -C <cwd> status --porcelain
-cwd="$2"
+phys() { (cd "$1" 2>/dev/null && pwd -P) || printf '%s' "$1"; }
+cwd="$(phys "$2")"
 n=0
-[ -f "$0.dirty" ] && n=$(awk -v c="$cwd" '$1==c{print $2}' "$0.dirty")
+if [ -f "$0.dirty" ]; then
+  while read -r k v; do
+    [ -n "$k" ] || continue
+    [ "$(phys "$k")" = "$cwd" ] && n="$v"
+  done < "$0.dirty"
+fi
 [ -z "$n" ] && n=0
 i=0; while [ "$i" -lt "$n" ]; do echo " M file$i.txt"; i=$((i+1)); done
 exit 0
@@ -99,7 +110,7 @@ run_sel() { run python3 "$SEL" "$@" --quiet; }
   done
   run python3 "$SEL" --scan --recency-min 0 2>&1
   [ "$status" -eq 0 ]
-  [[ "$output" == *"firing 1; 13 listed-not-spawned"* ]]
+  [[ "$output" == *"firing 1; 13 listed-not-spawned"* ]] || false
   [ "$(echo "$output" | grep -c 'per-worktree cap (1)')" -eq 13 ]
 }
 
@@ -110,7 +121,7 @@ run_sel() { run python3 "$SEL" "$@" --quiet; }
   mk .claude-next fresh-but-thin "$wt" "2026-07-21T09:00:00Z" 3
   run_sel --scan --recency-min 0
   [ "$status" -eq 0 ]
-  [[ "$output" == *"fresh-but-thin"* ]]
+  [[ "$output" == *"fresh-but-thin"* ]] || false
   [[ "$output" != *"stale-but-deep"* ]]
 }
 
@@ -120,7 +131,7 @@ run_sel() { run python3 "$SEL" "$@" --quiet; }
   mk .claude-next deep "$wt" "2026-07-21T09:00:00Z" 400
   run_sel --scan --recency-min 0
   [ "$status" -eq 0 ]
-  [[ "$output" == *"deep"* ]]
+  [[ "$output" == *"deep"* ]] || false
   [[ "$output" != *"thin"* ]]
 }
 
@@ -132,7 +143,7 @@ run_sel() { run python3 "$SEL" "$@" --quiet; }
   echo "$wt 322" > "$LR_SELECT_GIT_BIN.dirty"
   run python3 "$SEL" --scan --recency-min 0 2>&1
   [ "$status" -eq 0 ]
-  [[ "$output" == *"322 uncommitted"* ]]     # annotated
+  [[ "$output" == *"322 uncommitted"* ]] || false # annotated
   [[ "$output" == *"▶ RESUME  newer"* ]]     # recency still decided
 }
 
@@ -161,7 +172,7 @@ run_sel() { run python3 "$SEL" "$@" --quiet; }
   mk .claude-next cold "$BATS_TEST_TMPDIR/wt/cold" "2026-07-01T01:00:00Z" 5
   run_sel --scan --recency-min 0 --max-total 1
   [ "$status" -eq 0 ]
-  [[ "$output" == *"wt/hot"* ]]
+  [[ "$output" == *"wt/hot"* ]] || false
   [[ "$output" != *"wt/cold"* ]]
 }
 
@@ -186,7 +197,7 @@ run_sel() { run python3 "$SEL" "$@" --quiet; }
     mk .claude-next "sid-$i" "$BATS_TEST_TMPDIR/wt/p$i" "2026-07-21T0$i:00:00Z" 5
   done
   run python3 "$SEL" --scan --recency-min 0 2>&1
-  [[ "$output" == *"total-ceiling (4) reached"* ]]
+  [[ "$output" == *"total-ceiling (4) reached"* ]] || false
   [[ "$output" == *"firing 4; 2 listed-not-spawned"* ]]
 }
 
@@ -196,7 +207,7 @@ run_sel() { run python3 "$SEL" "$@" --quiet; }
   mk .claude-next mate "$wt" "2026-07-21T09:00:00Z" 5 teammate
   mk .claude-next lead "$wt" "2026-07-21T01:00:00Z" 5
   run python3 "$SEL" --scan --recency-min 0 2>&1
-  [[ "$output" == *"teammate-session"* ]]
+  [[ "$output" == *"teammate-session"* ]] || false
   [[ "$output" == *"▶ RESUME  lead"* ]]   # the older LEAD wins; the newer teammate never competes
 }
 
@@ -206,7 +217,7 @@ run_sel() { run python3 "$SEL" "$@" --quiet; }
   mk .claude-next idle "$wt" "2026-07-21T01:00:00Z" 5
   echo "live" > "$LR_SELECT_PGREP_BIN.running"
   run python3 "$SEL" --scan --recency-min 0 2>&1
-  [[ "$output" == *"already-running"* ]]
+  [[ "$output" == *"already-running"* ]] || false
   [[ "$output" == *"▶ RESUME  idle"* ]]
 }
 
@@ -226,7 +237,7 @@ run_sel() { run python3 "$SEL" "$@" --quiet; }
 @test "a candidate whose cwd no longer exists is filtered, not fired" {
   run python3 "$SEL" --candidate "next:ghost:/nonexistent/worktree" 2>&1
   [ "$status" -eq 0 ]
-  [[ "$output" == *"ghost"* ]]
+  [[ "$output" == *"ghost"* ]] || false
   [[ "$output" == *"no-transcript"* || "$output" == *"cwd-missing"* ]]
 }
 
@@ -238,7 +249,7 @@ run_sel() { run python3 "$SEL" "$@" --quiet; }
   mk .claude-next ghost "$wt" "2026-07-21T09:00:00Z" 5
   rmdir "$wt"
   run python3 "$SEL" --scan --recency-min 0 2>&1
-  [[ "$output" == *"cwd-missing"* ]]
+  [[ "$output" == *"cwd-missing"* ]] || false
   run_sel --scan --recency-min 0 --allow-missing-cwd
   [ "$status" -eq 0 ]
   [[ "$output" == *"ghost"* ]]
@@ -258,7 +269,7 @@ run_sel() { run python3 "$SEL" "$@" --quiet; }
   run bash -c "python3 '$SEL' --scan --recency-min 0 2>/dev/null"
   [ "$status" -eq 0 ]
   [ "$(echo "$output" | wc -l | tr -d ' ')" -eq 1 ]
-  [[ "$output" != *"RESUME TRIAGE"* ]]
+  [[ "$output" != *"RESUME TRIAGE"* ]] || false
   [ "$(printf '%s' "$output" | awk -F'\t' '{print NF}')" -eq 4 ]
 }
 
@@ -271,7 +282,7 @@ run_sel() { run python3 "$SEL" "$@" --quiet; }
   run jq -r '.winners[0].sid' "$BATS_TEST_TMPDIR/out.json"
   [ "$output" = "win" ]
   run jq -r '.listed[0].reason' "$BATS_TEST_TMPDIR/out.json"
-  [[ "$output" == *"per-worktree cap"* ]]
+  [[ "$output" == *"per-worktree cap"* ]] || false
   run jq -r '.policy.max_per_worktree' "$BATS_TEST_TMPDIR/out.json"
   [ "$output" = "1" ]
 }

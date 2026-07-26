@@ -41,7 +41,7 @@ setup() {
 @test "rubric prints the beat-margin decision rule" {
   run "$T" rubric
   [ "$status" -eq 0 ]
-  [[ "$output" == *"beat Arm A"* ]]
+  [[ "$output" == *"beat Arm A"* ]] || false
   [[ "$output" == *"hedge only"* ]]
 }
 

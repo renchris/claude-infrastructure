@@ -104,7 +104,7 @@ mkrepo_unlanded() {
   "$DECIDE" open --class A --what "Auto-decided audit trail entry. Never operator-facing." >/dev/null
   run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
   echo "$output" | grep -q '◆ \[decision C .*\] Choose the reboot posture'
-  ! echo "$output" | grep -q 'Long tail of context'
+  ! echo "$output" | grep -q 'Long tail of context' || false
   ! echo "$output" | grep -q 'audit trail entry'
 }
 
@@ -154,8 +154,8 @@ EOS
     --default "proceed" --deadline "2099-01-01T00:00:00Z" >/dev/null
   printf '#!/bin/bash\n' > "$CC_ACTIVATION_DIR/13-x-activate.sh"   # ensure the block fires
   CC_OPREADOUT_NOW=1784894400 run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"                  # 2026-07-23T12:00:00Z epoch-ish
-  ! echo "$output" | grep -q 'Imminent default'
-  ! echo "$output" | grep -q 'Far-future default'
+  ! echo "$output" | grep -q 'Imminent default' || false
+  ! echo "$output" | grep -q 'Far-future default' || false
   echo "$output" | grep -q '1 class-B default(s) auto-fire ≤24h (earliest 2026-07-20T12:00:00Z) — veto: cc-decide veto <id>'
 }
 
@@ -166,7 +166,7 @@ EOS
   CC_OPREADOUT_MAX=2 run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
   echo "$output" | grep -q 'OPERATOR ▸ 3 manual step(s)'
   echo "$output" | grep -q ' 2 ▶ '
-  ! echo "$output" | grep -q ' 3 ▶ '
+  ! echo "$output" | grep -q ' 3 ▶ ' || false
   echo "$output" | grep -q '+1 more'
 }
 

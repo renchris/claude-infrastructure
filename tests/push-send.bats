@@ -36,7 +36,7 @@ EOF
     PUSHOVER_TOKEN=SECRET_TOK PUSHOVER_USER=SECRET_USR run "$P" send --title T --message M
   [ "$status" -eq 5 ]
   echo "$output" | grep -qi 'user key is invalid'
-  ! echo "$output" | grep -q 'SECRET_TOK'
+  ! echo "$output" | grep -q 'SECRET_TOK' || false
   ! echo "$output" | grep -q 'SECRET_USR'
 }
 

@@ -28,7 +28,7 @@ has()      { printf '%s' "$1" | grep -q "$2"; }
   run run_hook "wave-1" "$(brief 10)"
   [ "$status" -eq 0 ]
   [ "$(decision "$output")" = allow ]
-  ! has "$output" "OVER CAP"
+  ! has "$output" "OVER CAP" || false
   printf '%s' "$output" | jq -e . >/dev/null          # well-formed JSON
 }
 

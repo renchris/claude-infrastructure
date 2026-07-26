@@ -123,7 +123,7 @@ set_mode() { printf '%s' "$1" > "$MODE_FILE"; }
   set_mode garbage
   run it2_type_verified "$FAKE_IT2" SID "$CMD"
   [ "$status" -ne 0 ]                      # fail-loud
-  ! grep -q '^CR$' "$EVENTS"               # the load-bearing invariant: no Enter on an unverified line
+  ! grep -q '^CR$' "$EVENTS" || false      # the load-bearing invariant: no Enter on an unverified line
   grep -q '^PASTE$' "$EVENTS"              # it DID try (bracketed paste)
   grep -q '^CTRLU$' "$EVENTS"              # and scrubbed the mangled line
 }

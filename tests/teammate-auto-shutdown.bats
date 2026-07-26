@@ -104,15 +104,15 @@ wait_for() { local i=0; while [ ! -e "$1" ] && [ "$i" -lt 60 ]; do sleep 0.05; i
   tx "$sid" 9000                                    # idle transcript; NO worktree mapping ⇒ WORKTREE=""
   run hookrun "$member" "$team" "$sid" /nonexistent-cwd   # fire 1 → defer (1/2)
   [ "$status" -eq 0 ]
-  [[ "$output" != *'"continue": false'* ]]
+  [[ "$output" != *'"continue": false'* ]] || false
   [ ! -e "$D/notify-calls.log" ]
   run hookrun "$member" "$team" "$sid" /nonexistent-cwd   # fire 2 → defer (2/2)
   [ "$status" -eq 0 ]
-  [[ "$output" != *'"continue": false'* ]]
+  [[ "$output" != *'"continue": false'* ]] || false
   [ ! -e "$D/notify-calls.log" ]
   run hookrun "$member" "$team" "$sid" /nonexistent-cwd   # fire 3 → SURFACE (page), still no close
   [ "$status" -eq 0 ]
-  [[ "$output" != *'"continue": false'* ]]
+  [[ "$output" != *'"continue": false'* ]] || false
   [ -e "$D/notify-calls.log" ]                      # desk paged
   grep -q "SURFACE" "$LOGF"
   [ ! -e "$D/tmux-calls.log" ]                       # and no pane was ever closed
@@ -126,7 +126,7 @@ wait_for() { local i=0; while [ ! -e "$1" ] && [ "$i" -lt 60 ]; do sleep 0.05; i
   tx "$sid" 700; utx "$sid" 60                       # idle, but the operator typed 60s ago → ADOPTED
   run hookrun "$member" "$team" "$sid" "$wt"
   [ "$status" -eq 0 ]
-  [[ "$output" != *'"continue": false'* ]]          # NOT closed (no turn-stop emitted)
+  [[ "$output" != *'"continue": false'* ]] || false # NOT closed (no turn-stop emitted)
   [ -e "$D/notify-calls.log" ]                       # surfaced to the desk
   grep -q "operator-adopted" "$LOGF"
   sleep 0.3
@@ -141,7 +141,7 @@ wait_for() { local i=0; while [ ! -e "$1" ] && [ "$i" -lt 60 ]; do sleep 0.05; i
   tx "$sid" 9000                                     # idle, only assistant turns — no operator prompt
   run hookrun "$member" "$team" "$sid" "$wt"
   [ "$status" -eq 0 ]
-  [[ "$output" == *'"continue": false'* ]]           # close-decision emitted → proceeds to close
+  [[ "$output" == *'"continue": false'* ]] || false  # close-decision emitted → proceeds to close
   [ ! -e "$D/notify-calls.log" ]                     # no adoption page
   wait_for "$D/tmux-calls.log"                        # detached close fired (grace=0)
   grep -q "kill-pane -t %88" "$D/tmux-calls.log"
@@ -156,7 +156,7 @@ wait_for() { local i=0; while [ ! -e "$1" ] && [ "$i" -lt 60 ]; do sleep 0.05; i
   tx "$sid" 700; utx "$sid" 60                        # even WITH an operator prompt, an absent lib can't check
   run hookrun "$member" "$team" "$sid" "$wt"
   [ "$status" -eq 0 ]
-  [[ "$output" == *'"continue": false'* ]]           # close proceeds (degraded)
+  [[ "$output" == *'"continue": false'* ]] || false  # close proceeds (degraded)
   grep -q "WARN" "$LOGF"
   [ ! -e "$D/notify-calls.log" ]                     # adoption never evaluated → no page
   wait_for "$D/tmux-calls.log"
@@ -171,7 +171,7 @@ wait_for() { local i=0; while [ ! -e "$1" ] && [ "$i" -lt 60 ]; do sleep 0.05; i
   tx "$sid" 700; utx "$sid" 60                        # would be adopted, but the hold is disabled
   run hookrun "$member" "$team" "$sid" "$wt"
   [ "$status" -eq 0 ]
-  [[ "$output" == *'"continue": false'* ]]
+  [[ "$output" == *'"continue": false'* ]] || false
   [ ! -e "$D/notify-calls.log" ]
   wait_for "$D/tmux-calls.log"
   grep -q "kill-pane -t %70" "$D/tmux-calls.log"
@@ -185,7 +185,7 @@ wait_for() { local i=0; while [ ! -e "$1" ] && [ "$i" -lt 60 ]; do sleep 0.05; i
   tx "$sid" 3400; utx "$sid" 3500                     # only prompt is 3500s ago = spawn+100s (inside 300s slack)
   run hookrun "$member" "$team" "$sid" "$wt"
   [ "$status" -eq 0 ]
-  [[ "$output" == *'"continue": false'* ]]           # brief ≠ adoption → closes
+  [[ "$output" == *'"continue": false'* ]] || false  # brief ≠ adoption → closes
   [ ! -e "$D/notify-calls.log" ]
   wait_for "$D/tmux-calls.log"
   grep -q "kill-pane -t %60" "$D/tmux-calls.log"
@@ -211,12 +211,12 @@ wait_for() { local i=0; while [ ! -e "$1" ] && [ "$i" -lt 60 ]; do sleep 0.05; i
   [ -f "$TD/$sid.json" ]                              # keyed by the TEAMMATE's session id
   [ -f "$TD/$pane.json" ]                             # …and by the pane it closed
   run cat "$TD/$sid.json"
-  [[ "$output" == *'"key_kind":"sid"'* ]]
-  [[ "$output" == *"\"sid\":\"$sid\""* ]]
-  [[ "$output" == *"\"pane\":\"$pane\""* ]]
-  [[ "$output" == *'"mode":"teammate-idle"'* ]]       # the discriminator vs handoff-fire / cc-teardown
+  [[ "$output" == *'"key_kind":"sid"'* ]] || false
+  [[ "$output" == *"\"sid\":\"$sid\""* ]] || false
+  [[ "$output" == *"\"pane\":\"$pane\""* ]] || false
+  [[ "$output" == *'"mode":"teammate-idle"'* ]] || false # the discriminator vs handoff-fire / cc-teardown
   run cat "$TD/$pane.json"
-  [[ "$output" == *'"key_kind":"pane"'* ]]
+  [[ "$output" == *'"key_kind":"pane"'* ]] || false
   run python3 -c "import json,sys; json.loads(open(sys.argv[1]).read().strip())" "$TD/$sid.json"
   [ "$status" -eq 0 ]
 }
@@ -280,6 +280,6 @@ wait_for() { local i=0; while [ ! -e "$1" ] && [ "$i" -lt 60 ]; do sleep 0.05; i
   CC_ACCOUNT_BASES="$D/wdbase" CC_REGISTRY_DIR="$D/reg" CC_JETSAM_DIRS="$D/nojetsam" \
     run "$W" --classify "$sid"
   [ "$status" -eq 0 ]
-  [[ "$output" == RECYCLE* ]]
+  [[ "$output" == RECYCLE* ]] || false
   [[ "$output" == *deliberate-teardown* ]]
 }
