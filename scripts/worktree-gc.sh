@@ -27,6 +27,45 @@
 # `git branch -d` — NEVER -D. Those two refusals are git's own second gate on our evidence;
 # a refusal is a KEEP, never something to force through (audit §8-H).
 #
+# THE DISPOSE CLASS — abandoned-but-UNLANDED (backlog c7bdab960795, 2026-07-26).
+# Gate 6 protects live WIP correctly, but it is UNCONDITIONAL: a worktree whose work was
+# deliberately never landed can never satisfy it, so nothing reaps it — not this janitor, and
+# not `cc-reaper`, which reaps only a `work_landed()`-true cwd (bin/cc-reaper:361-382, the same
+# patch-equivalence test). Measured 2026-07-26: 24 tracked-clean, genuinely-unlanded worktrees
+# sat in that permanent-KEEP bucket. (A further 13 of the 37 originally filed were simply LIVE;
+# gate 4 rules those correctly, and that half of the filed number was never the gap.)
+#
+# A worktree DISPOSES only when every gate above passes AND all three of:
+#   A1. the branch tip is older than CC_WTGC_ABANDON_HOURS (default 72 h) — a horizon far past
+#       any inter-turn gap. The 30 min idle floor is calibrated for LANDED work and is far too
+#       short to mean "abandoned",
+#   A2. the OWNER is TERMINAL — finished, or provably gone. TWO oracles, either sufficient,
+#       both fail-closed: (i) basename `wt-<id>` folded to status `done` by cc-backlog; (ii) a
+#       teammate worktree `wt-tm-<m>` whose owning TEAM registry entry is DEAD (`.dead-*`) or
+#       ARCHIVED (`_archive/`). Oracle (ii) is not a widening — it is what makes A2 reach
+#       reality: a teammate worktree has no backlog id at all, and an item only goes `done`
+#       when work LANDS, which gate 6 already reaps. Measured on the live checkout 2026-07-26:
+#       of 21 dispose-eligible worktrees, 0 had a `done` item and 7 belonged to one dead team,
+#       so oracle (i) alone carves out a near-empty set and the class stays stuck. Unparseable
+#       name, unknown id, non-`done` status, a `wasDone` item somebody reopened, an unreadable
+#       ledger, a LIVE owning team, or no owning team at all are each NOT-terminal ⇒ KEEP.
+#       This is the discriminator that separates abandoned from merely-idle; age alone NEVER
+#       disposes. Note what (ii) does and does not claim: a dead team proves the owner is not
+#       coming back, NEVER that the work succeeded — which is exactly the DISPOSE claim,
+#   A3. the commits are provably preserved at a durable ref — the branch resolves to the
+#       worktree HEAD and `git for-each-ref --points-at` names it BEFORE removal, and AFTER
+#       removal the ref still points at that sha and `git cherry` still yields the SAME unlanded
+#       patch SET. Set identity, never a rev-list count: a count is blind to shared history,
+#       same-patch shas and rebase-landed work. A verification miss is reported and exits 4.
+# Disposal therefore removes a DIRECTORY, never a commit — the branch IS the durable ref and is
+# preserved exactly as in the landed path, so a disposed worktree is restored with one
+# `git worktree add <path> <branch>`. Acting requires --dispose-abandoned; WITHOUT it the class
+# is still classified and printed (`DISPOSE?`), so a dispose plan citing this script can never
+# silently mean "nothing happens" — the failure mode the class was filed for. Every disposal
+# appends an intent record to CC_WTGC_DISPOSAL_LOG; that record is what later distinguishes an
+# abandoned-BY-DECISION worktree from a dropped-BY-ACCIDENT one, which git alone cannot do
+# (docs/research/STRANDED_EXPOSURE_2026-07-26.md §7).
+#
 # Branches are KEPT by default (a vanished worktree must stay recoverable via its branch).
 # --prune-branches deletes only landed, worktree-less, unprotected branches.
 #
@@ -34,12 +73,18 @@
 #   worktree-gc.sh --prune              # identical (the invocation git-worktree-guard.sh prints)
 #   worktree-gc.sh --dry-run            # print the plan, mutate nothing
 #   worktree-gc.sh --prune-branches     # also delete landed worktree-less branches (-d only)
+#   worktree-gc.sh --dispose-abandoned  # also reap the DISPOSE class (branch always preserved)
 #
 # Env seams (all optional; the CC_WTGC_* bins exist so bats can fixture the oracles):
 #   CC_WTGC_EXCLUDE       colon-separated paths never touched (also covers nested worktrees)
 #   CC_WTGC_REPO          repo to sweep (default: the repo containing $PWD)
 #   CC_WTGC_TRUNK         landedness base (default: origin/main)
 #   CC_WTGC_IDLE_MIN      idle floor in minutes (default: 30)
+#   CC_WTGC_ABANDON_HOURS DISPOSE-class age floor in hours (default: 72)
+#   CC_WTGC_BACKLOG       ownership oracle 1 — backlog ledger (default: ~/.claude/bin/cc-backlog)
+#   CC_WTGC_TEAMS_DIR     ownership oracle 2 — team registry (default: ~/.claude/teams)
+#   CC_WTGC_DISPOSAL_LOG  append-only disposal ledger
+#                         (default: ~/.claude/autonomy/worktree-disposals.jsonl)
 #   CC_WTGC_CC_NOTIFY / CC_WTGC_LSOF / CC_WTGC_PGREP / CC_WTGC_JQ    oracle binaries
 #   CC_WTGC_REGISTRY_DIR  live-session registry (default: ~/.reso/live-sessions)
 #   CC_WTGC_LOCK          mutex dir (default: ~/.claude/state/worktree-gc.lock)
@@ -49,16 +94,18 @@ set -uo pipefail
 
 DRY_RUN=0
 PRUNE_BRANCHES=0
+DISPOSE_ABANDONED=0
 for arg in "$@"; do
   case "$arg" in
-    --dry-run|-n)      DRY_RUN=1 ;;
-    --prune-branches)  PRUNE_BRANCHES=1 ;;
-    --prune)           : ;;   # compat alias: the guard hook's advertised invocation == default
+    --dry-run|-n)         DRY_RUN=1 ;;
+    --prune-branches)     PRUNE_BRANCHES=1 ;;
+    --dispose-abandoned)  DISPOSE_ABANDONED=1 ;;
+    --prune)              : ;;   # compat alias: the guard hook's advertised invocation == default
     -h|--help)
-      sed -n '2,46p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,/^# bash 3\.2-safe/p' "$0" | sed 's/^# \{0,1\}//'
       exit 0 ;;
     *) echo "worktree-gc: unknown flag '$arg'" >&2
-       echo "usage: worktree-gc.sh [--prune-branches] [--dry-run]" >&2
+       echo "usage: worktree-gc.sh [--prune-branches] [--dispose-abandoned] [--dry-run]" >&2
        exit 2 ;;
   esac
 done
@@ -72,6 +119,10 @@ REGISTRY_DIR="${CC_WTGC_REGISTRY_DIR:-$HOME/.reso/live-sessions}"
 TRUNK="${CC_WTGC_TRUNK:-origin/main}"
 IDLE_MIN="${CC_WTGC_IDLE_MIN:-30}"
 LOCK_DIR="${CC_WTGC_LOCK:-$HOME/.claude/state/worktree-gc.lock}"
+ABANDON_HOURS="${CC_WTGC_ABANDON_HOURS:-72}"
+BACKLOG_BIN="${CC_WTGC_BACKLOG:-$HOME/.claude/bin/cc-backlog}"
+TEAMS_DIR="${CC_WTGC_TEAMS_DIR:-$HOME/.claude/teams}"
+DISPOSAL_LOG="${CC_WTGC_DISPOSAL_LOG:-$HOME/.claude/autonomy/worktree-disposals.jsonl}"
 
 MAIN="$("$GIT_BIN" -C "${CC_WTGC_REPO:-$PWD}" rev-parse --show-toplevel 2>/dev/null)"
 if [ -z "$MAIN" ]; then
@@ -91,6 +142,19 @@ canon() {
   [ -n "$r" ] && p="$r"
   case "$p" in /private/tmp/*) p="/tmp/${p#/private/tmp/}" ;; esac
   printf '%s' "$p"
+}
+
+# claude_cwds — raw cwd of every live `claude` process. Factored out of the oracle block below
+# so the pre-mutation re-check can re-read the SAME truth: the classify→act window is minutes
+# wide on a 65-worktree sweep, and a session that starts inside it would otherwise be reaped
+# from under (the 2026-06-12 incident that git-worktree-guard.sh exists for).
+claude_cwds() {
+  command -v "$PGREP_BIN" >/dev/null 2>&1 || return 0
+  command -v "$LSOF_BIN"  >/dev/null 2>&1 || return 0
+  local cpid
+  for cpid in $("$PGREP_BIN" -f claude 2>/dev/null | sort -u); do
+    "$LSOF_BIN" -a -p "$cpid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p'
+  done
 }
 
 # ── Mutex: serialize every MUTATING pass (audit §8-D — cc-reaper:267, desk-land.sh,
@@ -134,10 +198,7 @@ fi
 CLAUDE_CWDS=""
 if command -v "$PGREP_BIN" >/dev/null 2>&1 && command -v "$LSOF_BIN" >/dev/null 2>&1; then
   ORACLES=$((ORACLES + 1))
-  for cpid in $("$PGREP_BIN" -f claude 2>/dev/null | sort -u); do
-    CLAUDE_CWDS="$CLAUDE_CWDS
-$("$LSOF_BIN" -a -p "$cpid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')"
-  done
+  CLAUDE_CWDS="$(claude_cwds)"
 fi
 LIVE_CWDS="$(printf '%s\n%s\n' "$NOTIFY_CWDS" "$CLAUDE_CWDS" | while IFS= read -r c; do
   [ -n "$c" ] || continue
@@ -172,6 +233,162 @@ landed() { # <branch> → 0 iff every commit since the merge-base is on the trun
   ! printf '%s\n' "$out" | grep -q '^+'
 }
 
+# ── DISPOSE class: abandoned-but-unlanded (A1 age · A2 owning item terminal · A3 preserved) ──
+
+unlanded_set() { # <branch> → the SET of unlanded commit shas, one per line, sorted
+  # `git cherry` '+' rows only — patch-equivalence, so a rebase/squash landing is excluded.
+  # The SET (not its cardinality) is the disposal invariant: a count cannot tell a preserved
+  # branch from one that was rewritten under us into a different N commits.
+  "$GIT_BIN" -C "$MAIN" cherry "$TRUNK" "$1" 2>/dev/null | awk '/^\+ /{print $2}' | sort
+}
+
+durable_refs() { # <sha> → every ref pointing AT this commit (the preservation proof)
+  "$GIT_BIN" -C "$MAIN" for-each-ref --points-at "$1" --format='%(refname)' 2>/dev/null
+}
+
+op_in_progress() { # <path> → 0 iff a rebase/merge/cherry-pick/bisect is parked in this worktree
+  # A stopped-but-CLEAN rebase leaves `git status --porcelain` empty, so the dirty gate misses
+  # it — and `git worktree remove` would discard the parked operation with no way back.
+  local gd m
+  gd="$("$GIT_BIN" -C "$1" rev-parse --absolute-git-dir 2>/dev/null)" || return 1
+  [ -n "$gd" ] || return 1
+  for m in rebase-merge rebase-apply MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD BISECT_LOG; do
+    if [ -e "$gd/$m" ]; then OP_KIND="$m"; return 0; fi
+  done
+  return 1
+}
+
+# The ownership oracle. Loaded lazily (only a DISPOSE candidate pays for it) and memoised as a
+# TRI-STATE: an unreadable ledger must stay unreadable for the whole pass, never silently
+# re-read as "fine" on the second lookup.
+BACKLOG_STATE=0; BACKLOG_TABLE=""; BACKLOG_ERR=""; ITEM_ID=""; ITEM_WHY=""; OP_KIND=""
+TEAM_WHY=""; OWNER_KIND=""
+load_backlog() {
+  case "$BACKLOG_STATE" in 1) return 0 ;; 2) return 1 ;; esac
+  BACKLOG_STATE=2
+  [ -x "$BACKLOG_BIN" ] || { BACKLOG_ERR="cc-backlog not executable at $BACKLOG_BIN"; return 1; }
+  command -v "$JQ_BIN" >/dev/null 2>&1 || { BACKLOG_ERR="jq unavailable"; return 1; }
+  local raw
+  raw="$("$BACKLOG_BIN" list --all --json 2>/dev/null)" \
+    || { BACKLOG_ERR="cc-backlog list --all --json failed"; return 1; }
+  BACKLOG_TABLE="$(printf '%s' "$raw" | "$JQ_BIN" -r '.[]? | [.id, .status, (.wasDone|tostring)] | @tsv' 2>/dev/null)" \
+    || { BACKLOG_ERR="cc-backlog JSON unparseable"; return 1; }
+  [ -n "$BACKLOG_TABLE" ] || { BACKLOG_ERR="cc-backlog ledger is empty"; return 1; }
+  BACKLOG_STATE=1
+  return 0
+}
+
+item_terminal() { # <worktree-basename> → 0 iff its owning backlog item folds to `done`
+  ITEM_ID=""; ITEM_WHY=""
+  local base="$1" id row st wd
+  case "$base" in wt-?*) id="${base#wt-}" ;; *) id="$base" ;; esac
+  load_backlog || { ITEM_WHY="ownership unprovable — $BACKLOG_ERR"; return 1; }
+  row="$(printf '%s\n' "$BACKLOG_TABLE" | awk -F'\t' -v k="$id" '$1==k{print;exit}')"
+  [ -n "$row" ] || { ITEM_WHY="no owning backlog item '$id'"; return 1; }
+  st="$(printf '%s' "$row" | cut -f2)"; wd="$(printf '%s' "$row" | cut -f3)"
+  if [ "$st" = "done" ]; then ITEM_ID="$id"; return 0; fi
+  if [ "$wd" = "true" ]; then ITEM_WHY="owning item $id was REOPENED (now '$st')"
+  else                        ITEM_WHY="owning item $id is '$st', not terminal"; fi
+  return 1
+}
+
+team_terminal() { # <worktree-basename> → 0 iff the owning TEAM has concluded
+  # The SECOND ownership oracle, and the one that makes A2 reach reality. A teammate worktree
+  # (`wt-tm-<m>`, branch `tm/<m>`) is owned by a TEAM, never by a backlog row — cc-backlog has no
+  # id for it, so oracle 1 can only ever answer "no owning backlog item" and the whole tm/* class
+  # stays permanently un-reapable. Measured 2026-07-26 on the live checkout: of 21 dispose-
+  # eligible worktrees, 0 had a `done` backlog item (an item goes done when work LANDS, and
+  # landed work is already reaped by gate 6 — so oracle 1 alone carves out a near-empty set),
+  # while 7 were teammate worktrees of ONE dead team.
+  #
+  # A team registry entry that is DEAD (`.dead-*`) or ARCHIVED (`_archive/`) proves the OWNER IS
+  # GONE. It deliberately does NOT claim the work succeeded — that is exactly the DISPOSE claim:
+  # nobody is coming back, and the branch keeps every commit either way.
+  # Fails closed in both unknown directions: named by a LIVE team ⇒ an active wave ⇒ KEEP; named
+  # by no team at all ⇒ ownership unprovable ⇒ KEEP.
+  TEAM_WHY=""
+  local base="$1" member cfg d name live_hit=0 dead_hit=""
+  case "$base" in
+    wt-tm-?*) member="${base#wt-}" ;;      # wt-tm-gates → member tm-gates → branch tm/gates
+    *) TEAM_WHY="not a teammate worktree — this oracle does not apply"; return 1 ;;
+  esac
+  [ -d "$TEAMS_DIR" ] || { TEAM_WHY="ownership unprovable — no team registry at $TEAMS_DIR"; return 1; }
+  command -v "$JQ_BIN" >/dev/null 2>&1 || { TEAM_WHY="ownership unprovable — jq unavailable"; return 1; }
+  # Three globs: live teams, DEAD teams (dot-prefixed ⇒ invisible to `*`), archived teams.
+  for cfg in "$TEAMS_DIR"/*/config.json "$TEAMS_DIR"/.[!.]*/config.json "$TEAMS_DIR"/_archive/*/config.json; do
+    [ -f "$cfg" ] || continue
+    # shellcheck disable=SC2016  # $m is a JQ variable bound by --arg, never a shell expansion
+    "$JQ_BIN" -e --arg m "$member" \
+      '[.members[]?|(.name//.agentName//"")]|index($m)!=null' "$cfg" >/dev/null 2>&1 || continue
+    d="$(dirname "$cfg")"; name="$(basename "$d")"
+    case "$d" in
+      "$TEAMS_DIR"/_archive/*) dead_hit="owning team $name is ARCHIVED" ;;
+      *) case "$name" in
+           .dead-*) dead_hit="owning team ${name#.dead-} is DEAD" ;;
+           *)       live_hit=1 ;;
+         esac ;;
+    esac
+  done
+  if [ "$live_hit" = "1" ]; then TEAM_WHY="teammate of a LIVE team — an active wave"; return 1; fi
+  [ -n "$dead_hit" ] || { TEAM_WHY="no owning team names teammate '$member'"; return 1; }
+  ITEM_ID="$member"; TEAM_WHY="$dead_hit"
+  return 0
+}
+
+owner_terminal() { # <worktree-basename> → 0 iff ANY oracle proves the owner is finished or gone
+  # Both oracles must be consulted before a KEEP: the backlog one answers for `wt-<id>` worktrees,
+  # the team one for `wt-tm-<m>`. ITEM_WHY is left holding the verdict of the oracle that was
+  # actually APPLICABLE, so the KEEP line names a real reason instead of the wrong oracle's miss.
+  OWNER_KIND=""
+  if item_terminal "$1"; then OWNER_KIND="backlog item $ITEM_ID done"; return 0; fi
+  local bl_why="$ITEM_WHY"
+  if team_terminal "$1"; then OWNER_KIND="$TEAM_WHY"; return 0; fi
+  case "$1" in
+    wt-tm-?*) ITEM_WHY="$TEAM_WHY" ;;
+    *)        ITEM_WHY="$bl_why" ;;
+  esac
+  return 1
+}
+
+recheck_live() { # <path> <canon-path> → 0 iff something looks live HERE, right now
+  # Re-read at ACT time, not classify time. Deliberately narrower than the startup union (it
+  # skips cc-notify, whose registry is derived from these same processes) — it exists to catch a
+  # session BORN inside the classify→act window, and over-matching here can only cause a KEEP.
+  local path="$1" cpath="$2" c
+  registry_live "$(basename "$path")" "$cpath" && return 0
+  while IFS= read -r c; do
+    [ -n "$c" ] || continue
+    [ "$(canon "$c")" = "$cpath" ] && return 0
+  done <<EOF
+$(claude_cwds)
+EOF
+  if command -v "$LSOF_BIN" >/dev/null 2>&1 && "$LSOF_BIN" -- "$path" 2>/dev/null | grep -q .; then
+    return 0
+  fi
+  return 1
+}
+
+verify_preserved() { # <branch> <head-sha> <unlanded-set-before> → 0 iff nothing moved
+  local branch="$1" head="$2" before="$3" now
+  now="$("$GIT_BIN" -C "$MAIN" rev-parse --verify --quiet "refs/heads/$branch" 2>/dev/null)"
+  [ -n "$now" ] && [ "$now" = "$head" ] || return 1
+  durable_refs "$head" | grep -q . || return 1
+  [ "$(unlanded_set "$branch")" = "$before" ]
+}
+
+json_esc() { printf '%s' "${1:-}" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+
+log_disposal() { # <path> <branch> <head> <n> <patch-shas> <item> <idle-h> <verified> <owner-proof>
+  # `owner_proof` records WHICH oracle authorised the disposal (a done backlog item vs a dead or
+  # archived team). Without it the ledger cannot answer, months later, why this directory went.
+  local dir; dir="$(dirname "$DISPOSAL_LOG")"
+  mkdir -p "$dir" 2>/dev/null || return 0
+  printf '{"ts":"%s","event":"worktree-disposed","path":"%s","branch":"%s","head":"%s","unlanded_patches":%s,"patch_shas":"%s","owner_item":"%s","owner_proof":"%s","idle_hours":%s,"preserved_at":"refs/heads/%s","verified":"%s"}\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(json_esc "$1")" "$(json_esc "$2")" "$3" "$4" \
+    "$(json_esc "$5")" "$(json_esc "$6")" "$(json_esc "${9:-}")" "$7" "$(json_esc "$2")" "$8" \
+    >> "$DISPOSAL_LOG" 2>/dev/null || true
+}
+
 excluded() { # <canon-path> → 0 iff hard-excluded by CC_WTGC_EXCLUDE (exact or ancestor)
   local p="$1" e rest="${CC_WTGC_EXCLUDE:-}"
   [ -n "$rest" ] || return 1
@@ -194,8 +411,58 @@ protected_branch() { # never deleted, whatever the evidence says
   return 1
 }
 
-N_REMOVED=0; N_KEPT=0; N_BR_DELETED=0; N_REFUSED=0
+N_REMOVED=0; N_KEPT=0; N_BR_DELETED=0; N_REFUSED=0; N_DISPOSED=0; N_DISPOSE_CAND=0; VERIFY_FAIL=0
+N_UNOWNED=0
 PREFIX=""; [ "$DRY_RUN" = "1" ] && PREFIX="would "
+
+dispose_record() { # <path> <canon> <branch> <base> <idle-hours> <n-unlanded> — the DISPOSE action
+  # Reached only once A1 (age) and A2 (owning item terminal) hold and every KEEP gate has passed.
+  # A3 (durable-ref preservation) is proved HERE, twice: before removal and again after it.
+  local path="$1" cpath="$2" branch="$3" base="$4" idle_h="$5" n="$6"
+  local head wt_head before shas note
+  head="$("$GIT_BIN" -C "$MAIN" rev-parse --verify --quiet "refs/heads/$branch" 2>/dev/null)"
+  wt_head="$("$GIT_BIN" -C "$path" rev-parse HEAD 2>/dev/null)"
+  before="$(unlanded_set "$branch")"
+  if [ -z "$head" ] || [ "$head" != "$wt_head" ] || ! durable_refs "$head" | grep -qx "refs/heads/$branch"; then
+    echo "KEEP    $path [$branch] — DISPOSE refused: no durable ref proves the commits survive removal"
+    N_KEPT=$((N_KEPT + 1)); N_REFUSED=$((N_REFUSED + 1))
+    return 0
+  fi
+  shas="$(printf '%s\n' "$before" | tr '\n' ',' | sed 's/,$//')"
+  note="abandoned-unlanded · $n patch(es) preserved on refs/heads/$branch · $OWNER_KIND · idle ${idle_h}h"
+
+  if [ "$DISPOSE_ABANDONED" = "0" ]; then
+    echo "DISPOSE? $path [$branch] — $note — pass --dispose-abandoned to reap (branch KEPT)"
+    N_DISPOSE_CAND=$((N_DISPOSE_CAND + 1))
+    return 0
+  fi
+  if [ "$DRY_RUN" = "1" ]; then
+    echo "would dispose  $path [$branch] — $note"
+    N_DISPOSED=$((N_DISPOSED + 1))
+    return 0
+  fi
+  if recheck_live "$path" "$cpath"; then
+    echo "KEEP    $path [$branch] — LIVE at act time (a session started inside the classify window)"
+    N_KEPT=$((N_KEPT + 1))
+    return 0
+  fi
+  # NEVER --force, exactly as on the landed path: git's refusal is the second gate on our evidence.
+  if ! "$GIT_BIN" -C "$MAIN" worktree remove "$path" 2>/dev/null; then
+    echo "KEEP    $path [$branch] — git REFUSED 'worktree remove' (it changed since the gates ran)"
+    N_KEPT=$((N_KEPT + 1)); N_REFUSED=$((N_REFUSED + 1))
+    return 0
+  fi
+  if verify_preserved "$branch" "$head" "$before"; then
+    log_disposal "$path" "$branch" "$head" "$n" "$shas" "$ITEM_ID" "$idle_h" "points-at+cherry-set" "$OWNER_KIND"
+    echo "dispose $path [$branch] — $note · VERIFIED preserved (restore: git worktree add <path> $branch)"
+    N_DISPOSED=$((N_DISPOSED + 1))
+  else
+    log_disposal "$path" "$branch" "$head" "$n" "$shas" "$ITEM_ID" "$idle_h" "FAILED" "$OWNER_KIND"
+    echo "worktree-gc: PRESERVATION UNVERIFIED after removing $path [$branch] — the unlanded patch set at" >&2
+    echo "worktree-gc: refs/heads/$branch no longer matches what was there. Recover from $head." >&2
+    N_DISPOSED=$((N_DISPOSED + 1)); VERIFY_FAIL=$((VERIFY_FAIL + 1))
+  fi
+}
 
 # ── 1. Broken admin records (dir gone, .git link gone) — pure bookkeeping, zero content. ──
 if [ "$DRY_RUN" = "1" ]; then
@@ -219,6 +486,7 @@ process_record() {
   elif [ "$locked" = "1" ];                                  then reason="locked worktree"
   elif [ -f "$path/.teammate-busy" ];                        then reason=".teammate-busy marker present"
   elif [ -n "$("$GIT_BIN" -C "$path" status --porcelain 2>/dev/null)" ]; then reason="dirty tree (removal would need --force ⇒ data loss)"
+  elif op_in_progress "$path";                               then reason="a git operation is parked here ($OP_KIND) — removal would discard it"
   elif is_live_cwd "$cpath";                                 then reason="LIVE — a registered session / running claude is cwd'd here"
   elif registry_live "$base" "$cpath";                       then reason="LIVE — live-session-registry PID still alive"
   elif command -v "$LSOF_BIN" >/dev/null 2>&1 && "$LSOF_BIN" -- "$path" 2>/dev/null | grep -q .; then
@@ -236,8 +504,22 @@ process_record() {
       if [ "$age" -lt "$IDLE_MIN" ]; then
         reason="branch tip is ${age}m old (< ${IDLE_MIN}m idle floor)"
       elif ! landed "$branch"; then
-        local n; n="$("$GIT_BIN" -C "$MAIN" rev-list --count "$TRUNK..$branch" 2>/dev/null || echo '?')"
-        reason="$n commit(s) not on $TRUNK by patch-id (unlanded — ship first)"
+        # Unlanded. Live WIP or abandoned? Age alone cannot tell them apart — A2, the owner's
+        # terminality, is the discriminator. Any miss falls through to the same permanent KEEP as
+        # before, now NAMING which abandonment gate held it — and, when it is A2 that held it, the
+        # worktree is counted into the un-ownable residue so the total is reported, not buried.
+        local n why=""
+        n="$(unlanded_set "$branch" | grep -c . | tr -d ' ')"
+        if [ "$((age / 60))" -lt "$ABANDON_HOURS" ]; then
+          why="idle $((age / 60))h < ${ABANDON_HOURS}h abandon horizon"
+        elif ! owner_terminal "$base"; then
+          why="$ITEM_WHY"
+          N_UNOWNED=$((N_UNOWNED + 1))
+        else
+          dispose_record "$path" "$cpath" "$branch" "$base" "$((age / 60))" "$n"
+          return 0
+        fi
+        reason="$n commit(s) not on $TRUNK by patch-id (unlanded — ship first; not abandoned: $why)"
       fi
     fi
   fi
@@ -252,6 +534,11 @@ process_record() {
     echo "${PREFIX}remove  $path [$branch] — clean · idle · landed on $TRUNK"
     N_REMOVED=$((N_REMOVED + 1))
     printf '%s\n' "$branch" >> "$REMOVED_BR"
+    return 0
+  fi
+  if recheck_live "$path" "$cpath"; then
+    echo "KEEP    $path [$branch] — LIVE at act time (a session started inside the classify window)"
+    N_KEPT=$((N_KEPT + 1))
     return 0
   fi
   # NEVER --force: git's refusal is the second gate on our evidence.
@@ -307,6 +594,22 @@ if [ "$PRUNE_BRANCHES" = "1" ]; then
 fi
 
 SUFFIX=""; [ "$DRY_RUN" = "1" ] && SUFFIX="   [DRY-RUN — nothing was mutated]"
-echo "worktree-gc: removed $N_REMOVED worktree(s) · kept $N_KEPT · deleted $N_BR_DELETED branch(es) · $N_REFUSED refusal(s)$SUFFIX"
+echo "worktree-gc: removed $N_REMOVED worktree(s) · disposed $N_DISPOSED abandoned · kept $N_KEPT · deleted $N_BR_DELETED branch(es) · $N_REFUSED refusal(s)$SUFFIX"
 [ "$PRUNE_BRANCHES" = "0" ] && echo "worktree-gc: branches preserved (pass --prune-branches to delete landed, worktree-less ones)"
+# Absence must be LOUD: a dispose plan that cites this script has to see the class it asked about,
+# whether or not it passed the flag that acts on it.
+if [ "$N_DISPOSE_CAND" -gt 0 ]; then
+  echo "worktree-gc: $N_DISPOSE_CAND abandoned-unlanded worktree(s) are reapable — pass --dispose-abandoned to reap them (every branch is preserved; disposals are logged to $DISPOSAL_LOG)"
+fi
+# The un-ownable RESIDUE. These are past the abandon horizon and clean, and NO oracle can prove
+# their owner is finished or gone — so no automatic path will ever reap them, by design. Reporting
+# the count is what keeps that permanent-KEEP bucket from silently regrowing into the 2026-07-26
+# measurement (37 stuck, invisible because every one was just another KEEP line among dozens).
+if [ "$N_UNOWNED" -gt 0 ]; then
+  echo "worktree-gc: $N_UNOWNED unlanded worktree(s) are past the ${ABANDON_HOURS}h horizon but have NO provable owner — never auto-reaped. Land the branch, or record the owner terminal (cc-backlog done <id> / tear the team down), then re-run."
+fi
+if [ "$VERIFY_FAIL" -gt 0 ]; then
+  echo "worktree-gc: $VERIFY_FAIL disposal(s) could NOT be verified as preserved — see $DISPOSAL_LOG" >&2
+  exit 4
+fi
 exit 0
