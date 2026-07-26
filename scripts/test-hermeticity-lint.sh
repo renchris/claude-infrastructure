@@ -137,7 +137,6 @@ rotate-autonomy-logs.bats
 session-continue.bats
 session-registry.bats
 settings-dedup-stop.bats
-settings-drift.bats
 ship-land.bats
 ship-rail-push-allow.bats
 stranded-sweep.bats

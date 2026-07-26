@@ -4,6 +4,11 @@
 # independent CLI-level regression on the exit contract (0 = agree, 1 = drift) and the report lines.
 
 setup() {
+  # HERMETIC $HOME (scripts/test-hermeticity-lint.sh — the ratchet only shrinks, and it reached this
+  # suite once siblings fixed theirs). The subject resolves config dirs under ~, so unfixtured this
+  # suite reads the operator's LIVE settings and its verdict depends on the machine it runs on.
+  # CC_DRIFT_DIRS already redirects what the tests assert; this closes the residue.
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   S="$REPO/scripts/settings-drift-assert.sh"
   D="$BATS_TEST_TMPDIR"
