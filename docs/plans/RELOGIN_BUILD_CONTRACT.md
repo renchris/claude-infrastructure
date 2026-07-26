@@ -46,9 +46,22 @@ code; a land-lock failure never presents as "bats RED" at all.
 
 **Two caveats to carry:**
 
-- `d158011` (fork-retry on the `cc-authbrowser` spawns) is committed but **not
-  independently verified** — the box was too saturated to trust a local run. The ship gate
-  is its verification; if it reddens, fix it there.
+- ~~`d158011` (fork-retry on the `cc-authbrowser` spawns) is committed but **not
+  independently verified**~~ — **NOW VERIFIED, and it was BROKEN. Fixed here.**
+  Running the suite alone (ports free, load ~13) hung at test 13 and was killed by
+  `timeout` at 300s: `EXIT=124`, 12/26 done, **0 failures** — a hang, not a test failure.
+  Cause: `d158011` replaced `cmd & ; PID=$!` with `PID=$(spawn_bg cmd)`, and a **command
+  substitution blocks until every holder of its stdout pipe closes it** — the backgrounded
+  child inherits that pipe. So `FOREIGN=$(spawn_bg "$D/foreign-listener" 9341)` blocked for
+  the listener's full `time.sleep(600)`, and each `spawn_bg sleep 4x` for its own lifetime:
+  ~825 s of dead wait injected across the six call sites. Proven in isolation —
+  `X=$(spawn_bg sleep 6)` takes 6 s, the same with the child's stdout redirected takes 0 s.
+  Fix: redirect the child's stdout inside `spawn_bg` (no test reads it). After: **26/26 ok,
+  0 not ok**, ports released, no orphans. **The lesson generalises:** this suite's own
+  header now carries it, because the obvious "cleanup" is to drop the redirect.
+  Note the failure *shape* — rc≠0 with **zero `not ok` lines** — is the SAME signature as
+  the fleet's `cc-inbox-guard` hang and as an external SIGKILL. Three distinct causes, one
+  indistinguishable surface; always separate them by `grep -ac '^not ok'` plus `Killed:`.
 - `tests/cc-authbrowser.bats` binds **frozen, un-overridable ports 9341-9344**, so it is
   structurally **non-concurrent**: never run it beside itself, and after killing a run
   reap the `PPID 1` orphan stubs still holding the port

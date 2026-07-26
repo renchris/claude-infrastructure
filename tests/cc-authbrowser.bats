@@ -11,10 +11,18 @@
 # landing while proving nothing. Observed 2026-07-25: `sleep 45 &' failed at ~57 concurrent
 # bats processes, then passed on the next gate round. Every one of these tests needs SOME pid,
 # never a specific one, so retrying the spawn preserves the semantics exactly.
+#
+# The child's stdout MUST be redirected. Callers use `pid=$(spawn_bg ...)`, and a command
+# substitution blocks until EVERY holder of its stdout pipe closes it — not merely until the
+# function returns. A backgrounded child inherits that pipe, so without this redirect
+# `FOREIGN=$(spawn_bg "$D/foreign-listener" 9341)` blocks for the listener's full 600s sleep
+# (and each `spawn_bg sleep 4x` for its own lifetime) — ~825s box-wide, hanging the suite long
+# before any assertion runs. The pre-retry form (`cmd &` then `PID=$!`) had no pipe and so no
+# block; keeping the retry means keeping this redirect. No test reads a spawned child's stdout.
 spawn_bg() {   # usage: pid=$(spawn_bg <cmd...>)
   local i pid
   for i in 1 2 3 4 5 6 7 8; do
-    if { "$@" & } 2>/dev/null; then pid=$!; if [ -n "$pid" ]; then echo "$pid"; return 0; fi; fi
+    if { "$@" >/dev/null 2>&1 & } 2>/dev/null; then pid=$!; if [ -n "$pid" ]; then echo "$pid"; return 0; fi; fi
     sleep 0.25
   done
   return 1
