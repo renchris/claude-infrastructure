@@ -248,6 +248,34 @@ mkuser_tx_string() {
   [ "$(cat "$CC_MAILBOX_DIR/$U.acked")" -eq 2 ]   # …yet .acked was promoted to .seen unconditionally
 }
 
+# ── v3 D11 — the in-loop fold must be HUMAN-visible too ──────────────────────────────────────────────
+# The desk's continuation loop is the heaviest mail consumer in the fleet, and its deliveries ride
+# decision:block — which the model sees but which renders nothing NAMING the delivery to the operator.
+# Without a systemMessage here, D11 would light up the two drain boundaries and leave the busiest
+# channel of all still invisible (U-1). The block itself must survive alongside it.
+@test "D11 fold: an armed Stop carrying mail emits systemMessage AND still blocks" {
+  local U="FFFFFFFF-1111-2222-3333-444444444444"
+  printf '2026-07-25T10:00:00+0000 [cc-reaper] a page\n' > "$CC_MAILBOX_DIR/$U.md"
+  arm "next step"
+  run bash -c "printf '{\"cwd\":\"%s\",\"session_id\":\"sidA\",\"transcript_path\":\"\"}' '$CWD' \
+                 | ITERM_SESSION_ID='w0t0p0:$U' bash '$HOOK' 2>/dev/null"
+  [ "$status" -eq 0 ]
+  fired "$output"                                            # the continuation still blocks
+  sm="$(printf '%s' "$output" | jq -r '.systemMessage')"
+  printf '%s' "$sm" | grep -q '📬 1 message'
+  printf '%s' "$sm" | grep -q 'cc-reaper'
+  printf '%s' "$output" | jq -r '.reason' | grep -q 'a page'  # …and the mail is still in the reason
+}
+
+@test "D11 fold: an armed Stop with NO mail emits NO systemMessage (notice on delivery only)" {
+  local U="99999999-1111-2222-3333-444444444444"
+  arm "next step"
+  run bash -c "printf '{\"cwd\":\"%s\",\"session_id\":\"sidA\",\"transcript_path\":\"\"}' '$CWD' \
+                 | ITERM_SESSION_ID='w0t0p0:$U' bash '$HOOK' 2>/dev/null"
+  [ "$status" -eq 0 ]; fired "$output"
+  [ "$(printf '%s' "$output" | jq -r '.systemMessage // "none"')" = "none" ]
+}
+
 @test "lag-ack discriminator: an unarmed Stop does NOT take (advance .seen) undelivered mail" {
   local U="EEEEEEEE-1111-2222-3333-444444444444"
   printf 'unseen page\n' > "$CC_MAILBOX_DIR/$U.md"    # a fresh line the drain has NOT surfaced (.seen=0)
