@@ -21,6 +21,7 @@ command -v jq >/dev/null 2>&1 || exit 0
 
 INDEX="${CC_PLAN_INDEX:-$HOME/.claude/plans-index.json}"
 PLANS_DIR="${CC_PLANS_DIR:-$HOME/.claude/plans}"
+TSV_PAD=$'\037'   # empty-cell sentinel — see the guard note in reconcile()
 
 # classify_path <abspath> → sets PROJ / PN / NS (namespace) globals.
 classify_path() {
@@ -54,8 +55,20 @@ reconcile() {
 
   local lines; lines=$(mktemp)
   # 1. Existing entries whose file still exists (phantom ⇒ dropped by omission).
-  jq -r '.plans | to_entries[] | [ (.value.path // .key), (.value.firstIndexed // "") ] | @tsv' \
+  # TSV field-collapse guard (docs/research/TSV_FIELD_COLLAPSE_2026-07-25.md): tab is
+  # IFS-*whitespace*, so `IFS=$'\t' read` collapses a RUN of tabs and an empty `.value.path` would
+  # slide firstIndexed into $p — re-dating an existing plan entry to now on every reconcile. Padded
+  # at the emitter, un-padded here because BOTH emptinesses are read (`[ -n "$p" ]` gates the row,
+  # and the fold below keys firstIndexed's carry-forward on `$e[4] != ""`). NB the fold itself is
+  # safe: jq's `split("\t")` does not collapse runs — only `read` does.
+  jq -r --arg pad "$TSV_PAD" '
+     def cell: (if . == null then "" else . end) | tostring
+               | gsub("[\\t\\r\\n]"; " ") | if . == "" then $pad else . end;
+     .plans | to_entries[]
+     | [ ((.value.path // .key) | cell), ((.value.firstIndexed // "") | cell) ] | @tsv' \
      "$INDEX" 2>/dev/null | while IFS=$'\t' read -r p first; do
+       [ "$p"     = "$TSV_PAD" ] && p=""
+       [ "$first" = "$TSV_PAD" ] && first=""
        [ -n "$p" ] || continue
        case "$p" in /*) ;; *) p="$PLANS_DIR/$p" ;; esac   # legacy basename ⇒ global sink
        [ -f "$p" ] || continue
