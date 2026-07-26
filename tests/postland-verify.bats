@@ -438,3 +438,25 @@ printf '1..1\nok 1 p\n'")"
   run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$moved_tree.json"
   [ "$output" = "green" ]
 }
+
+# The control above emits a `# (in test file …)` diagnostic, so it exercises the ATTRIBUTED
+# path and leaves the boundary itself unguarded. This is the boundary: `not ok` present,
+# diagnostic ABSENT. Both cases reach classify_failures with an EMPTY `pairs`, so a predicate
+# keyed on attribution ("no failing FILE ⇒ no verdict") collapses them and silently discards a
+# real regression — no stamp, no page, the tree re-verified forever. Only a predicate keyed on
+# the `not ok` COUNT keeps them apart. Guarding it here is the point: the collapse was live
+# once, and nothing in the suite would have caught its return.
+@test "C13b: a not-ok with NO file diagnostic stays RED and carries the test NAME" {
+  fake="$BATS_TEST_TMPDIR/bats-nodiag"
+  printf '#!/bin/bash\n[ "$1" = --version ] && { echo "Bats 1.13.0"; exit 0; }\necho "1..1"\necho "not ok 1 boom"\nexit 1\n' > "$fake"
+  chmod +x "$fake"                                    # a NAMED failure, with nothing to attribute it to
+  tree="$(origin_tree)"
+  run env CC_POSTLAND_BATS="$fake" bash "$SUT" --run-if-needed
+  s="$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ -f "$s" ]                                         # NOT the cut path: a stamp must exist
+  run jq -r '.verdict' "$s"; [ "$output" = "red" ]    # C10 — a named failure is a verdict
+  [ ! -f "$CC_POSTLAND_DIR/last-green" ]              # C10 — last-green NOT advanced
+  [ "$(pages_n)" = "1" ]                              # C10 — it PAGES (the swallow paged nothing)
+  # and the page is actionable: TAP named the test, so the page must not say "(unattributed)".
+  grep -q 'boom' "$CC_PAGES_DIR"/postland-red-*.page || false
+}
