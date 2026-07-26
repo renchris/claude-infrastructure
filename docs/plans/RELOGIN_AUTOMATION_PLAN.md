@@ -244,3 +244,33 @@ no deadline pressure.
 **Re-entry note:** next3 was the intended first live test and is now `auth: ok`, so the
 convenient always-broken test target is gone. Either wait for the next cliff, or test against
 a deliberately-staled account with the k-guard and the heal lock both exercised.
+
+---
+
+## 2026-07-25 — BUILT (`feat/cc-relogin`)
+
+`bin/cc-relogin` implements the frozen contract; `/relogin` (`commands/relogin.md`) is the
+command surface; `skills/account-relogin` now points at the tool and keeps ownership of the two
+human-gated exits; `commands/accounts.md` step 4 routes to it. 13 new tests
+(`tests/cc-relogin.bats`), 81/81 across the four affected suites.
+
+**Proven:** the gate end-to-end against the REAL fleet — all four live accounts refuse with
+exit 2 ("does not need a relogin"), reading the real dashboard and real `--relogin-info`. The
+k>0 guard, the shared heal-lock interlock, verify-by-effect and the CONSENT-GATE classification
+are each RED-proofed (each guard removed in turn ⇒ its test fails; restored ⇒ passes).
+
+**NOT proven — the honest gap:** no account has needed a real re-auth since the tool existed,
+so **Phase 2 has never driven a live OAuth flow**. Unexercised: the CDP context→profile match,
+the Authorize click, the `code#state` scrape, and the fifo hand-back. Treat the first real run
+as a supervised test, not a routine one. Next natural window is the ~2026-08-23 cliff.
+
+**Fixed on the way:** `tests/handoff-fire-account-sweep.bats`'s lock-contention test used a
+fixed `sleep 0.5` before asserting the contended path. On a loaded machine python had not yet
+acquired the lock, so the sweep healed instead of deferring and the test failed — it asserted
+the outcome without asserting its own precondition. Now the holder writes a marker on
+acquisition and the test waits for it, then asserts it. A concurrency test that does not
+confirm the contended state is testing the uncontended one.
+
+**Deliberately NOT done:** `--login-status` exit 2 does not auto-fire `cc-relogin`. Credentials
+are the one place an unattended retry loop must not be invented; the wiring offers it, a human
+or an explicit `/relogin` pulls the trigger. Revisit only after several unattended successes.
