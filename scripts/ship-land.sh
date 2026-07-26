@@ -17,8 +17,9 @@
 #     exit 3, never auto-land) · safety backup ref
 #   → optimistic rounds, up to SHIP_LAND_GATE_ROUNDS (default 3), each:
 #       UNLOCKED: `git fetch` → `git rebase` (conflict ⇒ exit 5) → FULL GATE on the rebased
-#       tree (shellcheck + bats + `bash -n` + py_compile for changed shell/python INCLUDING
-#       extensionless by shebang; red ⇒ exit 6); record (GATE_BASE = origin/<trunk>,
+#       tree (shellcheck + `bash -n` + py_compile for changed shell/python INCLUDING
+#       extensionless by shebang, then the test-hermeticity ratchet, then bats; red ⇒ exit 6);
+#       record (GATE_BASE = origin/<trunk>,
 #       GATE_HEAD = HEAD) — the exact tree the gate proved green. --dry-run stops here
 #       (a dry run never takes the lock).
 #       → land-lock'd child (serialized machine-wide per repo via land-lock.sh):
@@ -78,6 +79,10 @@
 #           change never gets exonerated (intermittence in changed code is a finding, not a flake).
 #           A scoped run NEVER advances the gate-green marker (it cannot make the full-suite claim
 #           its consumers read it as) — boundary-handoff / wrap-ledger then degrade correctly.
+#   The test-hermeticity ratchet is OUTSIDE this scope machinery on purpose — it runs on every
+#   land in every mode, before bats, because selection can never reach it (a new tests/*.bats maps
+#   to itself, never to the ratchet) and because its subject is a whole-tree property, not a
+#   changed-path one. See run_gate.
 #   Three more ways scoped degrades to FULL, all fail-closed: a red `gate-select.sh lint` (the
 #   suite map is untrustworthy — but lint NEVER blocks a land), an INERT post-land net (stamps
 #   exist yet the newest green one is older than POSTLAND_MAX_STAMP_AGE_H — absence-is-loud; no
@@ -91,6 +96,8 @@
 # the pre-T-P9-7 kill switch — one push, one verify, no auto-retry) ·
 # SHIP_LAND_GATE_ROUNDS (default 3; 0 = gate fully in-lock, the pre-optimistic kill switch) ·
 # SHIP_LAND_GATE_SCOPE / SHIP_LAND_GATE_POLICY / SHIP_LAND_GATE_SELECT (see GATE SCOPE above) ·
+# SHIP_LAND_HERM_LINT (test-hermeticity ratchet path; default the landing tree's own
+# scripts/test-hermeticity-lint.sh — see run_gate) ·
 # POSTLAND_DIR (flake + post-land queue + stamps dir) · POSTLAND_VERIFY=off (skip the post-land
 # spawn) · POSTLAND_STALENESS_GUARD=off · POSTLAND_MAX_STAMP_AGE_H (24) ·
 # CC_GATE_MAX_LOAD / CC_GATE_ADMIT_MAX_WAIT / CC_GATE_ADMIT_POLL (admission control; 0|off = the
@@ -483,7 +490,7 @@ stamp_gate_green() {  # gate-green asserts "the FULL suite proved THIS tree" —
 }
 
 run_gate() {  # $1=range → 0 green / 1 red
-  local range="$1" p rc=0
+  local range="$1" p rc=0 HERM_LINT
   GATE_EFFECTIVE_FULL=1; SELECTED_N=-1; GATE_RED=0; GATE_KILLED=0
   local shellfiles=() pyfiles=()
   while IFS= read -r -d '' p; do
@@ -508,6 +515,46 @@ run_gate() {  # $1=range → 0 green / 1 red
     echo "→ gate: py_compile on ${#pyfiles[@]} python file(s) (incl. extensionless-by-shebang)" >&2
     python3 -m py_compile "${pyfiles[@]}" >&2 || { echo "✗ gate: py_compile RED" >&2; rc=1; GATE_RED=1; }
   fi
+
+  # ── test-hermeticity ratchet — BEFORE the bats block, in EVERY scope (~1s) ──────────────────
+  # The ratchet already existed, but ONLY as tests/test-hermeticity-lint.bats, which made it
+  # post-hoc detection rather than a landing gate. Two independent holes let a leak land twice in
+  # one session (cc-relogin.bats → 469e654, handoff-selfclose-teammate-gate.bats → 828816d), each
+  # a 2-line fix whose whole cost was detection latency and fleet-wide blast radius:
+  #   1. SCOPE. The committed default is `scoped`, and gate-select maps that suite from exactly one
+  #      edge — scripts/test-hermeticity-lint.sh. So ADDING tests/foo.bats never selects the
+  #      ratchet (verified: gate-select on 828816d picks 58 suites, not this one). The author's own
+  #      land could not see the breach it was creating.
+  #   2. POSITION. In a FULL run it sits at test ~1706 of ~1707, and a full gate that gets
+  #      SIGKILLed by machine-wide contention dies long before reaching it.
+  # So the leak landed, and every LATER lander whose gate did reach 1706 paid a ~40-minute gate to
+  # be told about someone else's file. Running the lint here inverts that: scope-independent, ~1s,
+  # and it names the file to the session that wrote it — un-landable at the source instead of
+  # fleet-blocking after the fact.
+  #
+  # Resolved repo-root-relative, NOT from SCRIPT_DIR: the tree being landed must be gated by its
+  # OWN ratchet + allowlist (a land that legitimately deletes an allowlist line is then judged by
+  # the script it ships). A repo with no ratchet has nothing to enforce; deleting ours stays loud
+  # via tests/test-hermeticity-lint.bats, which execs it by path.
+  #
+  # FAIL-FAST (return, not rc=1-and-continue) is deliberate and not merely about latency: a suite
+  # that does not fixture $HOME reads AND writes the operator's live ~/, so every other result in
+  # the same bats run is contaminated. There is no value in spending 40 minutes collecting them.
+  HERM_LINT="${SHIP_LAND_HERM_LINT:-scripts/test-hermeticity-lint.sh}"
+  if [[ -d tests ]] && ls tests/*.bats >/dev/null 2>&1 && [[ -x "$HERM_LINT" ]]; then
+    echo "→ gate: test-hermeticity ratchet (before bats — seconds, and it names the file)" >&2
+    if ! "$HERM_LINT" tests >&2; then
+      echo "✗ gate: test-hermeticity RED — a bats suite runs against the operator's live ~/." >&2
+      echo "  Not running bats: an unfixtured suite mutates live state, so the whole run's results" >&2
+      echo "  would be untrustworthy. Fix the file named above (2 lines), then re-run /ship." >&2
+      # A REAL verdict, never a non-verdict: the ratchet names a file and is deterministic, so it
+      # must exit 6 (fix your tree) and never 9 (GATE-KILLED, "re-run when the box is quieter").
+      # Without this flag a bats CUT elsewhere in the same run could soften it into a retryable 9.
+      GATE_RED=1
+      return 1
+    fi
+  fi
+
   if [[ -d tests ]] && ls tests/*.bats >/dev/null 2>&1; then
     local sel="" n direct f rbase
     # UNION SCOPE: FIRST_BASE..<this range's base> is the trunk delta siblings landed since our

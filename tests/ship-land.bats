@@ -862,3 +862,98 @@ STUB
   # and the scrub must not eat the arguments
   echo "$output" | grep -q 'ARGS=\[tests/foo.bats\]' || false
 }
+
+# ---- test-hermeticity ratchet: enforced by the LAND, not only by suite ~1706 -----------------
+#
+# A suite that does not fixture $HOME runs against the operator's live ~/. Before this, the only
+# enforcement was tests/test-hermeticity-lint.bats, and it caught nothing at land time: `scoped`
+# (the committed default) maps a new tests/*.bats to ITSELF, never to the ratchet, and a FULL run
+# reaches the ratchet at test ~1706 — after the point machine-wide contention SIGKILLs most gates.
+# Two suites landed leaky in one session that way, each fleet-blocking every later lander.
+#
+# These use the REAL scripts/test-hermeticity-lint.sh (a stub would only prove ship-land can call
+# a stub), with CC_HERM_ALLOWLIST="" so the verdict comes from the fixture tree alone and never
+# from the real repo's 109 grandfathered names.
+herm_fixture() {   # shim bats (argv = "did bats run at all"), install the REAL ratchet, seed trunk
+  SHIMDIR="$BATS_TEST_TMPDIR/shims"; mkdir -p "$SHIMDIR"
+  export BATS_ARGV="$BATS_TEST_TMPDIR/bats-argv"; : > "$BATS_ARGV"
+  cat > "$SHIMDIR/bats" <<EOF
+#!/bin/bash
+printf '%s\n' "\$*" >> "$BATS_ARGV"
+exit 0
+EOF
+  chmod +x "$SHIMDIR/bats"
+  export PATH="$SHIMDIR:$PATH"
+  export SHIP_LAND_GATE_POLICY="$BATS_TEST_TMPDIR/no-such-policy.sh"   # absent ⇒ hardcoded full
+  export CC_HERM_ALLOWLIST=""                                          # nothing grandfathered here
+  mkdir -p scripts tests
+  cp "$REPO/scripts/test-hermeticity-lint.sh" scripts/test-hermeticity-lint.sh
+  chmod +x scripts/test-hermeticity-lint.sh
+  printf '#!/usr/bin/env bats\nsetup() {\n  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"\n}\n@test "a" { true; }\n' \
+    > tests/a.bats
+  git add scripts tests && git commit -q -m "seed ratchet + a hermetic suite" \
+    && git push -q origin HEAD:main
+  git fetch -q origin main
+}
+
+add_suite() {   # $1=branch $2=suite basename $3=setup() body
+  git checkout -q -b "$1" main
+  { echo '#!/usr/bin/env bats'; echo 'setup() {'; echo "  $3"; echo '}'; echo '@test "x" { true; }'; } \
+    > "tests/$2"
+  git add "tests/$2" && git commit -q -m "test: $2"
+}
+
+@test "hermeticity: a NEW suite without a \$HOME fixture does NOT land → exit 6, file named, bats never ran" {
+  herm_fixture
+  add_suite feat/leak leak.bats 'REPO="$(pwd)"'          # no fixture HOME ⇒ runs against live ~/
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 6 ]
+  echo "$output" | grep -q 'LEAK'
+  echo "$output" | grep -q 'leak.bats'                   # names the offending file, not a summary
+  echo "$output" | grep -q 'test-hermeticity RED'
+  # The whole point: it fails BEFORE the ~1700-test run, so the author sees it in seconds rather
+  # than at test ~1706 of a gate that contention usually kills first.
+  [ ! -s "$BATS_ARGV" ]
+  git fetch -q origin main
+  [ -z "$(git ls-tree origin/main -- tests/leak.bats)" ] # never reached trunk
+}
+
+@test "hermeticity: the SAME suite WITH a fixtured \$HOME lands green and bats still runs" {
+  herm_fixture
+  add_suite feat/herm leak.bats 'export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"'
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]                                    # positive control: the ratchet discriminates
+  [ "$(cat "$BATS_ARGV")" = "tests/" ]                   # and does not short-circuit a clean tree
+  git fetch -q origin main
+  [ -n "$(git ls-tree origin/main -- tests/leak.bats)" ]
+}
+
+@test "hermeticity: it fires in SCOPED mode too, even when the selector picks nothing" {
+  # The hole that let both leaks land: gate-select maps a changed tests/X.bats to X.bats, and the
+  # ratchet suite only to scripts/test-hermeticity-lint.sh — so no selection can ever reach it.
+  # A lint-only land (selector picks 0 suites) is the extreme case and must STILL be blocked.
+  herm_fixture
+  stub_selector "" ""
+  add_suite feat/leak-scoped leak.bats 'REPO="$(pwd)"'
+
+  run env SHIP_LAND_GATE_SCOPE=scoped bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 6 ]
+  echo "$output" | grep -q 'leak.bats'
+  [ ! -s "$BATS_ARGV" ]
+  git fetch -q origin main
+  [ -z "$(git ls-tree origin/main -- tests/leak.bats)" ]
+}
+
+@test "hermeticity: a tree whose ratchet script is absent still lands (nothing to enforce)" {
+  # Resolution is repo-root-relative on purpose — the tree being landed is judged by the ratchet it
+  # SHIPS. A repo without one must not become unlandable; deleting ours stays loud via
+  # tests/test-hermeticity-lint.bats, which execs it by path.
+  scope_fixture                                          # seeds tests/ but no scripts/ ratchet
+  landable feat/no-ratchet nr.sh
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  [ "$(echo "$output" | grep -c 'test-hermeticity RED')" -eq 0 ]   # -qv would pass on ANY other line
+}
