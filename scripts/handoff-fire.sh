@@ -613,15 +613,25 @@ cc_sid_for_pane() { # $1=pane-uuid -> echoes the CC session id, or nothing
 # `--team-name session-<sid8>` (verified live 2026-07-26: 8 assignees of session-a3f68174 still
 # running after their lead retired). Prints one "<agent-name>\t<pid>" line per LIVE assignee;
 # empty output = no live team. ps-only: no AppleEvents, safe from a detached context.
+# SELF-MATCH IS THE TRAP (caught live 2026-07-26, invisible to the unit tests): the tag must not
+# appear in this pipeline's OWN argv. `awk -v tag="--team-name session-<sid8>"` puts it there
+# verbatim, so awk matches ITSELF — the function then returns >=1 for EVERY session and the gate
+# below would refuse every self-close, including solo sessions with no team. A shimmed `ps`
+# fixture hides this completely (the fixture has no pipeline in it), so only a run against the
+# REAL process table exposes it. Passing the tag through the environment keeps it out of argv
+# structurally — the awk program text contains no "--team-name" at all — and the explicit
+# self-pid skip is the belt.
 live_teammates_of() { # $1=CC session id -> "<name>\t<pid>" lines
   local _sid8="${1:0:8}"
   [ -n "$_sid8" ] || return 0
-  ps -Ao pid=,args= 2>/dev/null | awk -v tag="--team-name session-$_sid8" '
-    index($0, tag) {
-      pid=$1; name="<unnamed>"
+  CC_TM_TAG="--team-name session-$_sid8" \
+  awk -v self="$$" 'index($0, ENVIRON["CC_TM_TAG"]) {
+      pid=$1
+      if (pid == self) next
+      name="<unnamed>"
       for (i=1;i<=NF;i++) if ($i=="--agent-name" && (i+1)<=NF) name=$(i+1)
       printf "%s\t%s\n", name, pid
-    }'
+    }' < <(ps -Ao pid=,args= 2>/dev/null)
 }
 
 # Light pre-close inventory (best-effort, WARN-only — NEVER blocks the close). A self-closing session
