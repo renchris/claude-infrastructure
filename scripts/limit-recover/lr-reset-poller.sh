@@ -131,9 +131,21 @@ for ln in open(sys.argv[1],encoding='utf-8'):
 # ── headless-capable resume spawn (P0-8) ───────────────────────────────────────────────
 SPAWN_MECH="${LR_POLLER_SPAWN:-auto}"
 # spawn_gui <launcher> — open an iTerm2 window (needs an Aqua session). 0 = opened.
+# ⚠️ NEVER `create window with default profile command "X"` (incident 2026-07-25): iTerm2 keeps X as
+# a SESSION-SCOPED PROFILE OVERRIDE, and ⌘D copies the current session's profile — so every split off
+# the spawned window silently re-ran the launcher (concurrent duplicate `claude --resume` of one
+# transcript) where the operator expected a plain shell. Create a bare window, then `write text` the
+# launcher; `exec` keeps the old lifecycle. Repair pre-fix panes: scripts/iterm-clear-sticky-command.sh
 spawn_gui() {
   command -v osascript >/dev/null 2>&1 || return 1
-  osascript -e "tell application \"iTerm2\" to create window with default profile command \"/bin/bash $1\"" >/dev/null 2>&1
+  # Multi `-e` (not a heredoc) on purpose: the AppleScript stays in ARGV, which is where
+  # tests/lr-reset-poller.bats' osascript stub observes the spawn — a heredoc would move it to
+  # stdin and silently blind three GUI-spawn assertions (fixture-shape parity).
+  osascript >/dev/null 2>&1 \
+    -e 'tell application "iTerm2"' \
+    -e 'set newWin to (create window with default profile)' \
+    -e "tell current session of newWin to write text \"exec /bin/bash $1\"" \
+    -e 'end tell'
 }
 # spawn_tmux <launcher> <sid> — run the launcher in a DETACHED tmux session (headless PTY). 0 = created.
 spawn_tmux() {
