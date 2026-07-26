@@ -148,6 +148,23 @@ STATE_DIR="${CC_WR_STATE_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/state/waiting-
 KILL="${CC_WR_KILL:-$STATE_DIR/OFF}"                        # global blanket kill-switch
 CFG="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 DESK_ROLE="${CC_WR_DESK_ROLE:-desk}"                       # G-P11-7: role a monitoring desk holds → arm-by-default
+# Desk-identity roots — HOISTED above the CLI dispatch (2026-07-26) because the sentinel resolver below
+# now consults the role, and `arm`/`clear`/`status` run BEFORE the hook path parses stdin. Left where it
+# was, `waiting-recycle.sh arm --live` from a desk would not see the role and would write a cwd-keyed
+# sentinel — the exact fragility this change removes. COORD is a FIXED path (cc-roles lives at
+# $HOME/.claude, NOT $CLAUDE_CONFIG_DIR) so identity survives a config-dir migration.
+COORD="${CC_WR_COORD_DIR:-$HOME/.claude}"                    # root of wait-contracts/ mailbox/ cc-roles/
+UUID="${CC_WR_UUID:-${ITERM_SESSION_ID:-}}"; UUID="${UUID##*:}"   # this desk's iTerm pane uuid (survives recycle)
+SID="${SID:-}"                                               # set by the hook path; empty on the CLI path
+# G-P11-7: is THIS session the monitoring desk? (cc-roles/<DESK_ROLE> resolves to its uuid or sid).
+# UUID is resolved lazily too, so this answers correctly on BOTH the CLI and hook paths.
+is_monitoring_desk() {
+  local rf="$COORD/cc-roles/$DESK_ROLE" rv u="$UUID"
+  [ -n "$u" ] || { u="${CC_WR_UUID:-${ITERM_SESSION_ID:-}}"; u="${u##*:}"; }
+  [ -f "$rf" ] || return 1
+  rv="$(head -1 "$rf" 2>/dev/null | tr -d '[:space:]')"; [ -n "$rv" ] || return 1
+  { [ -n "$SID" ] && [ "$rv" = "$SID" ]; } || { [ -n "$u" ] && [ "$rv" = "$u" ]; }
+}
 NOTIFY_CMD="${CC_WR_NOTIFY:-}"                              # T-P1-8: empty → builtin osascript operator page
 PUSH_BIN="${CC_WR_PUSH:-$CFG/hooks/push-critical.sh}"      # T-P1-8: Pushover break-through (INERT unless armed)
 ESCALATE_DEDUP_S="${CC_WR_ESCALATE_DEDUP_S:-900}"          # T-P1-8: page-once cadence while a desk stays wedged
@@ -165,20 +182,43 @@ RECENT_GRACE_S="${CC_WR_RECENT_GRACE_S:-900}"            # …to THIS (vs GRACE_
 # Per-cwd key (arm + cooldown survive a recycle since cwd is stable across it); per-session key (cap
 # resets on the fresh successor). Mirrors session-continue.sh's config-dir|path hash.
 key_cwd() { printf '%s|%s' "$CFG" "$1" | shasum 2>/dev/null | cut -c1-16; }
-arm_for()      { printf '%s/arm-%s'      "$STATE_DIR" "$(key_cwd "$1")"; }
-cooldown_for() { printf '%s/cooldown-%s' "$STATE_DIR" "$(key_cwd "$1")"; }
+# ROLE-KEYED identity (2026-07-26). The desk's identity is a ROLE FILE, not a directory — but these six
+# sentinels were keyed on (cfg,cwd), so they only resolved because desk-invariant happens to respawn with
+# a fixed `--cwd $CANNED_CWD`. A desk started by hand (`desk-register` exists precisely for that) from any
+# other directory found NO sentinel and silently fell back to the default — and the default for `live` is
+# SHADOW, i.e. log the recycle it would have fired and do nothing. Silent, and off.
+#
+# Keyed on the ROLE NAME (not the pane uuid) so every pane that ever holds the role shares one setting.
+#
+# READ ORDER IS FAIL-SAFE AND DELIBERATE: role-keyed first, then the legacy (cfg,cwd) path. That makes the
+# resolver strictly MORE likely to find existing state, never less — so this change cannot silently switch
+# off an opt-in that was on. It is safe in the same direction for all six: `live`/`arm` finding state means
+# armed; `disarm`/`cooldown` finding state means SUPPRESSED. Both directions err toward the status quo.
+# New writes go role-keyed, so state migrates forward as it is touched (no migration script, no flag day).
+key_role() { printf '%s|role:%s' "$CFG" "$DESK_ROLE" | shasum 2>/dev/null | cut -c1-16; }
+sentinel_for() { # <prefix> <cwd> → path to USE (role-keyed for a role-holder, else legacy cwd-keyed)
+  local pfx="$1" cwd="$2" rp cp
+  cp="$STATE_DIR/$pfx-$(key_cwd "$cwd")"
+  is_monitoring_desk || { printf '%s' "$cp"; return; }
+  rp="$STATE_DIR/$pfx-$(key_role)"
+  [ -f "$rp" ] && { printf '%s' "$rp"; return; }   # already migrated
+  [ -f "$cp" ] && { printf '%s' "$cp"; return; }   # legacy opt-in still honored — never silently dropped
+  printf '%s' "$rp"                                 # nothing yet → new state is role-keyed
+}
+arm_for()      { sentinel_for arm      "$1"; }
+cooldown_for() { sentinel_for cooldown "$1"; }
 cap_for()      { printf '%s/cap-%s'      "$STATE_DIR" "$1"; }               # keyed by session_id
 # Stage-2 deterministic-fire state (Fable panel 2026-07-19):
 escalate_for() { printf '%s/escalate-%s' "$STATE_DIR" "$1"; }              # SID-keyed: first-advisory time (grace clock)
 fired_for()    { printf '%s/fired-%s'    "$STATE_DIR" "$1"; }              # SID-keyed: one-fire-per-SID latch (Stage-2 bound)
-live_for()     { printf '%s/live-%s'     "$STATE_DIR" "$(key_cwd "$1")"; } # cwd-keyed: live-fire opt-in (else SHADOW/log-only)
-brief_for()    { printf '%s/brief-%s'    "$STATE_DIR" "$(key_cwd "$1")"; } # cwd-keyed: standing successor-brief template
-disarm_for()   { printf '%s/disarm-%s'   "$STATE_DIR" "$(key_cwd "$1")"; } # cwd-keyed: per-desk opt-out (suppresses arm-by-default, G-P11-7)
+live_for()     { sentinel_for live      "$1"; } # cwd-keyed: live-fire opt-in (else SHADOW/log-only)
+brief_for()    { sentinel_for brief     "$1"; } # cwd-keyed: standing successor-brief template
+disarm_for()   { sentinel_for disarm    "$1"; } # cwd-keyed: per-desk opt-out (suppresses arm-by-default, G-P11-7)
 escalated_for(){ printf '%s/escalated-%s' "$STATE_DIR" "$1"; }             # SID-keyed: T-P1-8 wedge page-once pacer
 # Tiered-refresh state (4ce6ffc0194f, 2026-07-19):
 idlewatch_for(){ printf '%s/idlewatch-%s' "$STATE_DIR" "$1"; }             # SID-keyed: first sub-T_IDLE fresh poll (adaptive-decay clock)
 queued_for()   { printf '%s/queued-%s'    "$STATE_DIR" "$1"; }             # SID-keyed: Tier-2 refresh-queued marker (busy@medium wants a refresh)
-busyforce_for(){ printf '%s/busyforce-%s' "$STATE_DIR" "$(key_cwd "$1")"; } # cwd-keyed: Tier-3 forced-recycle EXEC opt-in (beyond --live; default OFF ⇒ shadow+page)
+busyforce_for(){ sentinel_for busyforce "$1"; } # cwd-keyed: Tier-3 forced-recycle EXEC opt-in (beyond --live; default OFF ⇒ shadow+page)
 # Context-econ state (2026-07-20):
 nudged_for()   { printf '%s/nudged-%s'    "$STATE_DIR" "$1"; }             # SID-keyed: busy pause-point-nudge pacer (fill at last nudge; re-arm per +NUDGE_REARM)
 
@@ -351,19 +391,6 @@ gc_bats_pollution
 
 # cwd is needed for the arm / cooldown / clean-tree checks — no cwd, nothing to reason about.
 { [ -n "$CWD" ] && [ -d "$CWD" ]; } || abstain "no-cwd"
-
-# Desk-identity roots — shared by arm-by-default (below) + the S3/S4/S5 coordination holds. COORD is a
-# FIXED path (cc-roles lives at $HOME/.claude, NOT $CLAUDE_CONFIG_DIR), so arm-by-default keys on the
-# role regardless of which config dir the desk migrates to (unlike the (cfg,cwd) arm sentinel).
-COORD="${CC_WR_COORD_DIR:-$HOME/.claude}"                    # root of wait-contracts/ mailbox/ cc-roles/
-UUID="${CC_WR_UUID:-${ITERM_SESSION_ID:-}}"; UUID="${UUID##*:}"   # this desk's iTerm pane uuid (survives recycle)
-# G-P11-7: is THIS session the monitoring desk? (cc-roles/<DESK_ROLE> resolves to its uuid or sid).
-is_monitoring_desk() {
-  local rf="$COORD/cc-roles/$DESK_ROLE" rv
-  [ -f "$rf" ] || return 1
-  rv="$(head -1 "$rf" 2>/dev/null | tr -d '[:space:]')"; [ -n "$rv" ] || return 1
-  [ "$rv" = "$SID" ] || { [ -n "$UUID" ] && [ "$rv" = "$UUID" ]; }
-}
 
 # 1. OPT-IN (ARM-BY-DEFAULT, G-P11-7): a builder is never touched, but a MONITORING DESK is armed
 # without the manual `arm` step. A per-desk `clear` disarm marker suppresses BOTH the sentinel and the

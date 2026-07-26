@@ -905,3 +905,46 @@ mk_hist() { local now; now=$(date +%s)
   [ ! -e "$ch/.claude" ]                                                       # nothing under the canary HOME
   [ ! -e "$CLAUDE_CONFIG_DIR/state/waiting-recycle" ]                          # CC_WR_STATE_DIR overrides the CFG-derived default
 }
+
+# ── ROLE-KEYED SENTINELS (2026-07-26) ────────────────────────────────────────────────────────────
+# The desk's identity is the ROLE FILE (cc-roles/<role>), but arm/cooldown/live/brief/disarm/busyforce
+# were keyed on (cfg,cwd). That resolved only because desk-invariant respawns with a fixed
+# `--cwd $CANNED_CWD`; a desk started BY HAND (bin/desk-register exists precisely for that) from any
+# other directory found no sentinel and fell back to the default — and `live`'s default is SHADOW.
+# Silent, and off. These pin the fix and its fail-safe migration property.
+
+_wr_role_desk() { printf 'DESK-UUID-0001\n' > "$CC_WR_COORD_DIR/cc-roles/desk"; }
+_wr_key_cwd()  { printf '%s|%s'      "$CLAUDE_CONFIG_DIR" "$1" | shasum | cut -c1-16; }
+_wr_key_role() { printf '%s|role:%s' "$CLAUDE_CONFIG_DIR" desk | shasum | cut -c1-16; }
+_wr_repo() { mkdir -p "$1"; git -C "$1" init -q; git -C "$1" config user.email t@t
+             git -C "$1" config user.name t; echo s > "$1/f"; git -C "$1" add -A; git -C "$1" commit -qm init; }
+
+@test "role-keyed: a desk that MOVES cwd keeps its --live opt-in (was a silent SHADOW fallback)" {
+  rm -f "$CC_WR_STATE_DIR"/*                      # drop setup()'s cwd-keyed arm — start from clean state
+  _wr_role_desk
+  printf 'standing brief\n' > "$BATS_TEST_TMPDIR/b.md"
+  ( cd "$DESK" && bash "$HOOK" arm --brief "$BATS_TEST_TMPDIR/b.md" --live >/dev/null )
+  local D2="$BATS_TEST_TMPDIR/desk2"; _wr_repo "$D2"     # SAME desk, hand-started somewhere else
+  run bash -c "cd '$D2' && bash '$HOOK' status"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "mode: LIVE"           # RED before the fix: resolves to SHADOW (or unarmed)
+}
+
+@test "role-keyed: a pre-existing (cfg,cwd) opt-in is still honored — migration never drops state" {
+  rm -f "$CC_WR_STATE_DIR"/*
+  _wr_role_desk
+  local k; k="$(_wr_key_cwd "$DESK")"             # legacy-only state, as it exists on disk today
+  : > "$CC_WR_STATE_DIR/arm-$k"; printf 'b\n' > "$CC_WR_STATE_DIR/brief-$k"; : > "$CC_WR_STATE_DIR/live-$k"
+  run bash -c "cd '$DESK' && bash '$HOOK' status"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "mode: LIVE"           # role-first read must FALL BACK, never silently re-shadow
+}
+
+@test "role-keyed: a NON-role session is unaffected — still cwd-keyed, no role bleed" {
+  rm -f "$CC_WR_STATE_DIR"/*
+  printf 'SOME-OTHER-PANE\n' > "$CC_WR_COORD_DIR/cc-roles/desk"   # role held by a different pane
+  printf 'standing brief\n' > "$BATS_TEST_TMPDIR/b.md"
+  ( cd "$DESK" && bash "$HOOK" arm --brief "$BATS_TEST_TMPDIR/b.md" --live >/dev/null )
+  [ ! -f "$CC_WR_STATE_DIR/live-$(_wr_key_role)" ] || false      # must NOT claim the shared role key
+  [ -f "$CC_WR_STATE_DIR/live-$(_wr_key_cwd "$DESK")" ]
+}
