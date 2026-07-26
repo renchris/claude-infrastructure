@@ -162,8 +162,7 @@ EOF
   [ "$(calls)" -eq 2 ] || false
   grep -q "PANE-A" "$TD_LOG" || false
   grep -q "PANE-C" "$TD_LOG" || false
-  grep -q "PANE-B" "$TD_LOG" && false
-  true
+  ! grep -q "PANE-B" "$TD_LOG" || false
 }
 
 @test "(xii) cc-teardown unavailable ⇒ abstain and say so, never fall back to raw it2/osascript" {
@@ -171,6 +170,5 @@ EOF
   LCW_TEARDOWN_BIN= LCW_ORPHAN_CLOSE=1 run bash "$WD" --close-panes "$TEAM" sid-1
   [ "$status" -eq 0 ] || false
   [[ "$output" == *"cc-teardown-unavailable"* ]] || false
-  [[ "$output" == *"osascript"* ]] && false
-  true
+  ! [[ "$output" == *"osascript"* ]] || false
 }
