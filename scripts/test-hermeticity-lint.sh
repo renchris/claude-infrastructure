@@ -60,7 +60,6 @@ cc-teardown-safety-gate.bats
 cc-teardown.bats
 cc-unattended-ask-guard.bats
 cc-upgrade-gate.bats
-cc-wait.bats
 cc-wave-plan.bats
 claude-accounts-core.bats
 claude-accounts.bats

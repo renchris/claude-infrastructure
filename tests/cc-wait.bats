@@ -4,6 +4,11 @@
 # CLI-level regression (a real contract file on disk, the real cc-await-ping signal path).
 
 setup() {
+  # HERMETIC $HOME (scripts/test-hermeticity-lint.sh — the ratchet that binds every NEW suite, and
+  # which shrank in 0d23ec67 to reach this one). The subject resolves its own state under ~, so
+  # unfixtured this suite reads and writes the operator's LIVE layer. Everything it asserts is
+  # already redirected via CC_WAIT_CONTRACTS_DIR / CC_MAILBOX_DIR; this closes the residue.
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   WAIT="$REPO/bin/cc-wait"
   export CC_WAIT_CONTRACTS_DIR="$BATS_TEST_TMPDIR/contracts"
