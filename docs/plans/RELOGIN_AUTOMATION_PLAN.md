@@ -324,7 +324,7 @@ per tick, fires at **T−7d** because the `k == 0` window needs days of chances 
 escalates to the operator board at **T−48h**), the substrate (`cc-authbrowser`),
 `claude-accounts --relogin-status`, the class-C blocker row, log rotation, `cc-config-slot`
 (inert Variant-A token de-sharing), the E1-E3 probe harness,
-`docs/runbooks/RELOGIN_ACTIVATION.md`, and the staged `launchd/com.claude.relogin.plist`.
+`docs/runbooks/RELOGIN_ACTIVATION.md`, and the staged `launchd/staged/com.claude.relogin.plist`.
 
 **Two defects found in the convergence itself** — both would have shipped silently:
 

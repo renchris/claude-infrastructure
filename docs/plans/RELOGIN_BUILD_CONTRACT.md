@@ -270,7 +270,7 @@ run** · re-check `k==0` UNDER the lock), Phase 1 headless-first, **verify by EF
 (`--fresh --json` `auth=="ok"` AND `after.login_expires_at > before.login_expires_at`),
 the `--json` result object, and cleanup-always.
 
-## 5. `bin/cc-relogin-poll` + `launchd/com.claude.relogin.plist` — cadence
+## 5. `bin/cc-relogin-poll` + `launchd/staged/com.claude.relogin.plist` — cadence
 
 Owner: `tm/relogin-sched`.
 

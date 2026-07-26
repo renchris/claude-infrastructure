@@ -421,7 +421,7 @@ attempts() { jq -r '.attempts' "$CC_RELOGIN_POLL_STATE_DIR/relogin-poll-$1.json"
 # ── the staged LaunchAgent ──────────────────────────────────────────────────────────────────
 
 @test "plist is valid, staged-not-loaded, and carries the PATH export + RunAtLoad false" {
-  PL="$REPO/launchd/com.claude.relogin.plist"
+  PL="$REPO/launchd/staged/com.claude.relogin.plist"
   plutil -lint "$PL" >/dev/null
   grep -q 'export PATH="$HOME/.claude/bin:$PATH"' "$PL"     # zsh -lc does NOT source .zshrc
   plutil -extract RunAtLoad raw "$PL" | grep -qx false
@@ -440,6 +440,6 @@ attempts() { jq -r '.attempts' "$CC_RELOGIN_POLL_STATE_DIR/relogin-poll-$1.json"
   [ "$output" -eq 0 ]
   # the plist names launchctl ONLY inside its leading XML comment (the operator runbook); the
   # executable body after the comment close must be free of it
-  run bash -c "sed -n '/-->/,\$p' '$REPO/launchd/com.claude.relogin.plist' | grep -c launchctl"
+  run bash -c "sed -n '/-->/,\$p' '$REPO/launchd/staged/com.claude.relogin.plist' | grep -c launchctl"
   [ "$output" -eq 0 ]
 }

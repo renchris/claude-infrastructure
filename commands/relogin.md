@@ -90,7 +90,9 @@ board at **T−48h**. It fires early on purpose — `cc-relogin` can only act wh
 zero live sessions, so it needs days of chances, not hours. It never takes the heal lock itself
 (`cc-relogin` owns that) and never touches a credential.
 
-It ships **inert**: `launchd/com.claude.relogin.plist` is staged, not loaded. Loading a LaunchAgent
+It ships **inert**: `launchd/staged/com.claude.relogin.plist` is staged, not loaded — it sits in
+`staged/` precisely so `install.sh`'s `launchd/*.plist` glob cannot reach it, because that glob
+bootstraps what it finds. Loading a LaunchAgent
 is an operator-only step — see `docs/runbooks/RELOGIN_ACTIVATION.md` for the ordered list, and
 `claude-accounts --relogin-status` for where each account stands right now.
 

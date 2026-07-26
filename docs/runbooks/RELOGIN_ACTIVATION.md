@@ -80,7 +80,7 @@ Do not proceed to step 3 until an exit `0` has been observed at least once.
 
 The plist is **staged, not loaded**. Loading it is the operator's activation:
 
-▶ `cp launchd/com.claude.relogin.plist ~/Library/LaunchAgents/`
+▶ `cp launchd/staged/com.claude.relogin.plist ~/Library/LaunchAgents/`
 ▶ `launchctl load ~/Library/LaunchAgents/com.claude.relogin.plist`
 
 Hourly poll · renew at **T−7d** (not the 72 h warn — that converts one fragile attempt into
