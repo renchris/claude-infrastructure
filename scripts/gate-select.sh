@@ -91,6 +91,11 @@ INSTALL_RE = re.compile(r'^(hooks/[^/]+\.sh|hooks/lib/[^/]+\.sh|commands/[^/]+\.
                         r'|scripts/[^/]+\.sh|scripts/limit-recover/.+|skills/.+'
                         r'|bin/cc-[^/]+|launchd/[^/]+\.plist)$')
 INSTALL_SUITE = "tests/install-wire-hooks.bats"
+# Clause (g) — the dead-assertion ratchet. A changed suite selects only ITSELF, so a
+# reintroduced dead assertion would land green: the edited file's own tests still pass
+# (that is precisely the failure mode — the assertion is discarded, not failed). Only the
+# liveness analyzer sees it, so any .bats edit must also run its ratchet.
+LIVENESS_SUITE = "tests/bats-assert-liveness.bats"
 # Clause (e) — stems measured to match half the corpus as ordinary English/shell words.
 STOPLIST = ("run", "common", "main", "test", "commit")
 SCRIPTY = (".sh", ".bash", ".zsh", ".py")
@@ -303,6 +308,8 @@ def main():
 
         if path.startswith("tests/") and path.endswith(".bats"):
             take(set([path]), "suite", direct=True)
+            if LIVENESS_SUITE in tset and path != LIVENESS_SUITE:                        # (g)
+                take(set([LIVENESS_SUITE]), "assert-liveness")
         elif is_prose(path):           # no suite builds a doc path dynamically — literal or inert
             take(set(s for s in suites if path in text.get(s, "")), "prose-literal", direct=True)
         else:

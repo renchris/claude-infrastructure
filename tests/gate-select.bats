@@ -56,6 +56,10 @@ seed() {
   suite tests/lead-supervisor.bats '# drives scripts/supervisor-e2e.sh end to end'
   suite tests/docs-owner.bats 'documents docs/named.md'
   suite tests/install-wire-hooks.bats 'install wiring'
+  # The ratchet suite plus the analyzer it owns — mirroring the real repo, so the suite is
+  # reachable by the naming clause and the map lint stays green on this fixture.
+  printf '#!/usr/bin/env python3\nprint("liveness")\n' > scripts/bats-assert-liveness.py
+  suite tests/bats-assert-liveness.bats 'the dead-assertion ratchet'
 }
 
 bump() { printf 'echo touched\n' >> "$1"; git add -A; git commit -q -m change; }
@@ -191,10 +195,29 @@ lacks() { ! printf '%s\n' "$output" | grep -qxF -- "$1"; }
   [ "$output" = "tests/bar.bats" ]
 }
 
-@test "changed suite selects itself only" {
+@test "changed suite selects itself (+ the dead-assertion ratchet, clause g)" {
+  # Clause (g): a changed suite must ALSO run the liveness ratchet. Selecting only itself
+  # let a reintroduced dead assertion land green — the edited file's own tests still pass,
+  # because a dead assertion is discarded rather than failed.
   bump tests/foo.bats
   gs
-  [ "$output" = "tests/foo.bats" ]
+  has "tests/foo.bats"
+  has "tests/bats-assert-liveness.bats"
+  gse
+  has "tests/bats-assert-liveness.bats <- assert-liveness:tests/foo.bats"
+}
+
+@test "clause g does not fire for the ratchet's OWN edit (no self-selection loop)" {
+  bump tests/bats-assert-liveness.bats
+  gs
+  [ "$output" = "tests/bats-assert-liveness.bats" ]
+}
+
+@test "clause g does not drag the ratchet into a NON-suite change" {
+  bump scripts/foo.sh
+  gs
+  has "tests/foo.bats"
+  lacks "tests/bats-assert-liveness.bats"
 }
 
 @test "code file no clause maps ⇒ FULL (the unmapped rung)" {

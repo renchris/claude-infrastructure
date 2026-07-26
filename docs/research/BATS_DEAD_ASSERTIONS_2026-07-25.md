@@ -1,136 +1,284 @@
+# bats dead assertions — census, mechanism, fix, ratchet
+
+**Date:** 2026-07-25 · **Backlog item:** `94edb2fa9f14` · **Project:** claude-infrastructure
+**Detector:** `scripts/bats-assert-liveness.py` · **Fixer:** `scripts/bats-assert-liveness-fix.py`
+**Ratchet:** `tests/bats-assert-liveness.bats`
+
+A **dead assertion** is one whose failure cannot reach its test's exit status. It is evaluated,
+its false result is discarded, and the test reports `ok`. The suite looks green while asserting
+nothing. 226 of them were live in this repo across 51 of 124 files.
+
+This doc is the SSOT for the mechanism and for what was actually measured. Every liveness claim
+below was derived by running `bash`/`bats` in this worktree — none is inherited.
+
 ---
-status: open
-found-by: relogin-build session, 2026-07-25 (surfaced by tm/relogin-browser, verified by lead)
-scope: FINDING + REPRODUCTION ONLY — deliberately NOT swept in this session (see "Why not fixed here")
+
+## 1. Mechanism — three errexit exemptions, plus position
+
+bats runs each test body under `set -eET` (`bats-exec-test:2`), so a failing command normally
+aborts the test. But POSIX requires `-e` to be **ignored** for a command whose status is
+inverted with `!`, and for any command of an AND-OR list **other than the last**. Bash also
+exempts its own compound-command keywords. The result: for three construct families, the *only*
+thing that still fails a test is being the body's **final** command.
+
+Measured grid (`bash -ec '<form>'$'\nechoR'` — DEAD = execution continued past the false form).
+Both `bash` on PATH and `/bin/bash` here are **3.2.57**, the macOS system bash; no newer bash is
+installed, so this is the behaviour the suite actually runs under:
+
+| Form | Verdict | Why |
+|---|---|---|
+| `[[ 1 -eq 2 ]]` | **DEAD** | `[[` is a shell **keyword** (compound command) — exempt |
+| `[[ x == y ]]`, `[[ x =~ ^y ]]`, `[[ -z x ]]` | **DEAD** | same |
+| `(( 0 ))`, `(( 1 == 2 ))` | **DEAD** | arithmetic compound command — exempt |
+| `! true`, `! [[ x ]]`, `! [ x ]` | **DEAD** | status inverted with `!` — exempt |
+| `[ 1 -eq 2 ]` | live | `[` is a **builtin** — an ordinary simple command |
+| `test 1 -eq 2` | live | builtin |
+| `false`, `echo x \| grep -q y` | live | simple command / pipeline |
+| `[[ 1 -eq 2 ]] \|\| false` | live | list's last element is `false`, un-negated |
+| `! true \|\| false` | live | same |
+| `[ 1 -eq 1 ] && [ 1 -eq 2 ]` | live | failing element **is** last |
+| `[ 1 -eq 2 ] && echo hi` | **DEAD** | failing element is **not** last — exempt |
+| `false && echo hi` | **DEAD** | same — holds for *any* left-hand command |
+| `[[ 1 -eq 1 ]] \|\| [[ 1 -eq 2 ]]` | **DEAD** | last element is a keyword |
+| `{ [[ 1 -eq 2 ]]; }` | **DEAD** | group is not a separate command |
+| `( [[ 1 -eq 2 ]] )` | live | subshell's status propagates as a simple command |
+| `[ -n "$x" ] && [ -f "$x" ] \|\| exit 1` | live | trailing `\|\| exit 1` catches every path |
+| `[ -n "$x" ] && [ -f "$x" ] \|\| echo benign` | **DEAD** | benign handler swallows the failure |
+
+**The load-bearing asymmetry:** `[[ ]]` dies where `[ ]` survives, because one is a keyword and
+the other a builtin. That is invisible at the line level and is why the census needed an analyzer
+rather than a grep.
+
+### The `&&` class nobody was looking for
+
+`A && B` in non-final position discards A's failure for **any** A — `false && echo hi` and
+`[ 1 -eq 2 ] && echo hi` are both dead. This is a *third* silent class, independent of `[[ ]]`
+and `!`, and it was absent from the original survey. 6 live instances were found.
+
+### Why shellcheck is not the detector
+
+shellcheck does not flag `[[ ]]` or `(( ))` deadness at all — there is no such check; the
+construct is perfectly valid shell, and its deadness depends on where it sits in the enclosing
+block. `SC2251` addresses only some `!` uses. Any grep- or shellcheck-shaped survey therefore
+under-counts by construction. The detector must be a **block-position analyzer**, which is what
+`scripts/bats-assert-liveness.py` is.
+
 ---
 
-# 212 bats assertions in this repo are structurally dead
+## 2. Census (derived 2026-07-25, this worktree)
 
-## The defect — TWO classes, not one
+**226 dead assertions across 51 of 124 test files** (1726 `@test` blocks total).
 
-An assertion inside a bats `@test` is a **silent no-op unless it is the last statement of
-the test**, if it takes either of these two forms. The assertion runs, evaluates false,
-and the test passes anyway.
+| Class | Count | Shape |
+|---|---:|---|
+| `cond-keyword` | 131 | non-final `[[ ... ]]` |
+| `negation` | 89 | non-final `! cmd` |
+| `and-absorbed` | 6 | non-final `assertion && ...` |
 
-| Form | Why it is exempt | Non-final behaviour |
-|---|---|---|
-| `! cmd` | POSIX exempts a `!`-inverted pipeline from `errexit` | **DEAD** |
-| `[[ ... ]]` | bash keyword — the `ERR` trap bats relies on is skipped | **DEAD** |
-| `[ ... ]` | ordinary command | correctly fails ✓ |
-| plain command | ordinary command | correctly fails ✓ |
+Top files:
 
-**The `[[ ]]` class is the more dangerous of the two** — it is the idiomatic bash
-conditional, so it is far more common than `!`, and unlike `!` there is no shellcheck rule
-that flags it. shellcheck flags only the `!` form, as **SC2314** (error severity).
+| Count | File | What was silently unasserted |
+|---:|---|---|
+| 31 | `cc-reaper.bats` | every `! td_called` — "this pane was **not** torn down" |
+| 20 | `handoff-teardown-marker.bats` | teardown-marker attribution |
+| 18 | `claude-accounts-core.bats` | `[ "$status" -eq 0 ] && [[ "$output" == *OK* ]]` — both halves dead |
+| 16 | `claude-kimi.bats` | launcher/endpoint assertions |
+| 14 | `teammate-auto-shutdown.bats` | shutdown-path assertions |
+| 12 | `lr-select.bats` | limit-recover selection |
+| 8 | `cc-teardown.bats` | teardown safety |
 
-> The `[[ ]]` class was found by `tm/relogin-sched` while fixing the `!` class, and is why
-> the count in this document more than doubled. Finding one silent-assertion class is a
-> reason to go looking for its siblings, not a reason to declare victory.
+The `cc-reaper.bats` block is the sharpest risk in the repo: 31 assertions of the form
+`! td_called` / `! notified`, each asserting that a **pane was not killed** or an operator was
+not paged. Dead, they cannot fail — a regression that tears down a live pane on a dry run would
+have landed green.
 
-## Reproduction (verified on bats 1.13.0, this machine, 2026-07-25)
+### Corrections to the handed-down figures
+
+The backlog item's numbers came from a survey whose doc was never written. Re-derived:
+
+| Claim | Handed down | Measured | Note |
+|---|---:|---:|---|
+| total | 212 | **226** | |
+| files | 51 | **51** | agrees |
+| `[[ ]]` | 123 | **131** | |
+| bare-`!` | 89 | **89** | agrees |
+| `&&`-absorbed | — | **6** | class absent from the survey |
+| `cc-reaper.bats` | 31 | **31** | agrees |
+| `handoff-teardown-marker.bats` | 19 | **20** | |
+| `cc-notify.bats` | 17 | **0** | **already fixed** — see below |
+
+`cc-notify.bats` was reported as the third-worst file and is in fact **clean**: it already
+applies `|| false` to every `[[ ]]`, and its header comment (line 9) documents this exact bug —
+*"`|| false` on EVERY bare `[[ ]]` — bats does not trap a bare `[[ ]]` failure mid-body"*. The
+fix idiom adopted below is therefore this repo's own prior art, not an import.
+
+---
+
+## 3. The fix — a uniform `|| false`, and why the two obvious fixes are wrong
+
+**Applied fix:** append ` || false` to the offending statement. For a non-final statement `S`:
+
+- `S` succeeds → `||` short-circuits → status 0, body continues (behaviour unchanged)
+- `S` fails → `false` runs as the list's **last**, un-negated element → errexit applies → the
+  test fails, as was intended all along
+
+One token, no semantic change, `$output`/`$status` untouched, and idempotent (a statement already
+ending in `|| false` is never reported, so never re-touched).
+
+### `[[ ]]` → `[ ]` would have broken 98% of the call sites
+
+Of the 131 `[[ ]]` findings, **127 use glob matching** (`== *"text"*`) and **2 use regex**
+(`=~`) — 129 of 131, or 98%. POSIX `[ ]` can express neither. `[ "$output" == *"delivered"* ]` is a
+*literal* comparison against the string `*"delivered"*`, so the rewrite does not weaken the
+assertion, it silently replaces it with a different, near-always-false one (and leaves an
+unquoted `*` exposed to pathname expansion). Verified:
+
+```
+output="delivered to inbox"
+[  "$output" == *"delivered"* ]   → NO MATCH   ← rewrite breaks it
+[[ "$output" == *"delivered"* ]]  → MATCH      ← correct
+```
+
+### `! cmd` → `run cmd; [ "$status" -ne 0 ]` clobbers `$output`
+
+These negations routinely sit **between** a `run` and a later assertion on that run's output.
+`run` overwrites `$output`/`$status`, so the rewrite breaks the *following* assertion. The
+canonical shape, `cc-reaper.bats:167-169`:
 
 ```bash
-@test "non-final bare ! — should fail, does not" {
-  ! true          # FALSE. Should fail the test here.
-  [ 1 -eq 1 ]     # any assertion after it
-}
-@test "final-position bare ! — correctly fails" {
-  [ 1 -eq 1 ]
-  ! true
-}
+run "$R" sweep
+[ "$status" -eq 0 ]
+! td_called                              # ← the dead assertion
+echo "$output" | grep -q WOULD-REAP      # ← depends on the ORIGINAL run
 ```
 
-```
-1..2
-ok 1 non-final bare ! should FAIL but may silently pass     <-- DEAD
-not ok 2 final-position bare ! correctly fails
-```
+Verified with a two-test fixture: the `run`+status rewrite **fails** the following `$output`
+assertion; `! td_called || false` **passes** it. Hence `|| false` for negations too.
 
-And the second class, isolated against two controls:
+---
+
+## 4. How the detector was validated
+
+Deadness is not taken on faith anywhere: **bats itself is the oracle.** Each fixture asserts
+something false, so a fixture bats reports `ok` proves the assertion was discarded (dead), and
+one bats reports `not ok` proves it was honoured (live). The analyzer's verdict is then compared
+against that.
+
+- **Agreement on the form grid** — analyzer flagged exactly the forms bats passed, and stayed
+  silent on every form bats failed. Zero false positives, zero false negatives.
+- **Both controls asserted every run** — a guaranteed-false body must fail, a true body must
+  pass. Without these the oracle could be vacuous.
+- **RED-proof of the fix** — a dead assertion passes; after the fixer it fails; the analyzer then
+  reports zero.
+- **Fixtures built with `printf`, never a heredoc.** bats' preprocessor strips `@test` inside a
+  heredoc, which yields a vacuously green suite (prior incident; see the `fixture-shape-parity`
+  memory).
+
+Four analyzer defects were found and fixed *by* this validation, all in the false-all-clear
+direction that matters:
+
+1. `for ((i=0; i<n; i++))` read as an arithmetic assertion → loop headers exempted.
+2. `[[ A && B ]]` split as an AND-OR list → `[[ ]]` depth now tracked, so it is one element.
+3. **Quoted bats source analyzed as code.** A test that builds a fixture by passing source as
+   arguments (`mkblock "$f" '[[ 1 -eq 2 ]]'`) tripped false positives, and a quoted `<<EOF`
+   started a heredoc skip that never terminated — **silently swallowing the rest of the block**.
+   Construct detection is now quote-aware (`strip_quoted`).
+4. `A && B || exit 1` reported as absorbed, when the trailing handler catches every failure
+   path → a `||` handler that reliably fails (`false`/`exit N`/`return N`) now clears the
+   finding, while a *benign* handler (`|| echo missing`) still reports, because it swallows.
+
+Finality is judged **conservatively**: live only when provably the last top-level statement of
+the body. Anything nested in `if`/`while`/`for`/`case`/`{ }` is reported, since reachability is
+data-dependent. A false report costs one mechanical edit; a false all-clear is absorbed forever.
+
+---
+
+## 5. The ratchet
+
+`tests/bats-assert-liveness.bats` re-derives all of the above on every gate run: the class
+grid against the bats oracle, both controls, the live forms that must stay unflagged, the
+fixer's revive/idempotence/`$output` properties, and a final **RATCHET** case asserting the real
+suite is at zero. Because the commit gate runs `bats tests/`, a reintroduced dead assertion now
+fails the gate with the exact fix command in the failure output.
+
+Re-run by hand:
 
 ```bash
-@test "non-final [[ ]] false — should fail"          { [[ 1 -eq 2 ]]; [ 1 -eq 1 ]; }
-@test "non-final [ ] false — should fail"            { [ 1 -eq 2 ];   [ 1 -eq 1 ]; }
-@test "non-final plain command false — should fail"  { false;         [ 1 -eq 1 ]; }
+python3 scripts/bats-assert-liveness.py --summary      # census; exit 1 if any
+python3 scripts/bats-assert-liveness-fix.py --dry-run  # what would change
+python3 scripts/bats-assert-liveness-fix.py            # apply, then re-verify at 0
 ```
 
-```
-ok 1     non-final [[ ]] false — should fail          <-- DEAD
-not ok 2 non-final [ ] false — should fail            <-- correct
-not ok 3 non-final plain command false — should fail  <-- correct
-```
+## 6. What the revival exposed — one real defect, hidden by a dead assertion
 
-> A synthetic probe in *final* position **refutes** the bug — it fails correctly. That is
-> why this survived: the only way to expose it is a non-final position, or by breaking the
-> implementation under test and watching the suite stay green.
+Reviving 226 assertions turned exactly **one** test red, and it was a genuine latent defect
+rather than a stale expectation: `tests/lr-select.bats` — *"uncommitted work annotates the
+group but does NOT pick the winner"*.
 
-## Exposure, measured
+The assertion `[[ "$output" == *"322 uncommitted"* ]]` had **never once matched**. Root cause
+is a `/var` vs `/private/var` path-resolution skew in the test's own `git` stub:
 
-| form | total in `@test` blocks | **non-final ⇒ DEAD** |
-|---|---|---|
-| `! cmd` | 186 | **89** |
-| `[[ ... ]]` | 213 | **123** |
-| **combined** | **399** | **212, across 51 files** |
+- `$BATS_TEST_TMPDIR` is `/var/folders/…`, so the fixture recorded its dirty-count key there.
+- The producer groups candidates on the **physically resolved** `/private/var/folders/…`.
+- The stub matched keys by exact string (`awk '$1==c'`), so the lookup silently found nothing,
+  `dirty_count()` returned 0, and no annotation was ever emitted.
 
-51 of 119 test files — **43% of the suite** — contain at least one assertion that can
-never fail.
+Real `git -C` accepts either spelling, so **the product was never broken** — this was pure
+fixture skew. It survived because the one assertion that would have caught it was a non-final
+`[[ ]]`, i.e. dead. Fixed by comparing keys physically (`pwd -P`) in the stub, which also
+makes every future dirty-count fixture robust to the same skew.
 
-Worst offenders:
+This is another instance of the fixture-shape-parity class: *a fixture is a contract claim
+about the real producer's shape, and a dead assertion means nothing ever checked the claim.*
+The assertion is now mutation-proved load-bearing — substituting a wrong count fails the test,
+the correct count passes.
 
-| count | file |
-|---|---|
-| 31 | `tests/cc-reaper.bats` |
-| 19 | `tests/handoff-teardown-marker.bats` |
-| 17 | `tests/cc-notify.bats` |
-| 16 | `tests/claude-kimi.bats` |
-| 12 | `tests/lr-select.bats` |
-| 9 | `tests/claude-accounts-core.bats` |
-| 8 | `tests/teammate-auto-shutdown.bats` |
-| 6 | `tests/handoff-fire-account-sweep.bats`, `handoff-selfclose.bats`, `team-orphan-reaper.bats` |
+That 225 of 226 revived assertions passed is the reassuring half of the result: the suite's
+*intent* was overwhelmingly correct: it simply was not being enforced.
 
-**`cc-reaper.bats` carries 31, and cc-reaper kills panes.** Its negative assertions
-("does NOT reap when …") are precisely the shape that dies silently — so the guard rails
-on an autonomous destructive actor may be materially less tested than the green suite
-implies. `teammate-auto-shutdown` and `team-orphan-reaper` are the same story. Start there.
+### Collateral: a pre-existing HANG that blocked the gate
 
-## The fix
+Not caused by the revival — found by running the suites it touched, and fixed here because a
+hanging suite blocks every land whose diff selects it (this one is in the diff).
 
-Two rules:
+`tests/comms-drain-activate.bats` hung at test 1 of 14, **also at clean HEAD**, with no
+`sed`/subprocess activity. Traced to `bin/cc-inbox-guard --selftest` → its recursive
+`sweep` → a shell-out to the real `bin/cc-reconcile`, i.e. live session reconciliation.
 
-1. **Never use `[[ ]]` as a bats assertion — use `[ ]`.** It is a drop-in for nearly every
-   comparison in these suites and it is actually enforced. (`[[ ]]` remains fine in
-   non-assertion contexts, e.g. inside an `if`.)
-2. **For negations, use `run` + an explicit status check**, never a bare `!`:
+The seam that was supposed to prevent exactly that could not express "off":
 
 ```bash
-refute() { run "$@"; [ "$status" -ne 0 ]; }
+RECONCILE_BIN="${CC_INBOX_GUARD_RECONCILE_BIN:-}"   # "" ⇒ empty
+if [ -z "$RECONCILE_BIN" ]; then                    # …and empty ⇒ AUTODISCOVER
+  for _c in "$_bd/cc-reconcile" …                   # …which finds the real tool
 ```
 
-Portable, no bats-version floor, and `run` captures status explicitly instead of relying
-on errexit. (`refute_output` / `assert_failure` from `bats-assert` would also work but add
-a dependency this repo does not currently take.)
+Both this file's own `--selftest` (line 313) and `tests/cc-inbox-guard.bats` (line 16) set
+`CC_INBOX_GUARD_RECONCILE_BIN=""` to isolate. Empty resolved to *autodiscover* — the exact
+opposite of the intent — so both ran the live tool. Fixed by distinguishing **unset**
+(⇒ autodiscover) from **explicitly set, empty included** (⇒ disabled) via `${VAR+set}`.
+`PUSH_BIN` had the identical shape and was fixed with it. Production behaviour is unchanged:
+only an explicitly-exported value behaves differently, and nothing but tests exports one.
 
-⚠️ **shellcheck will NOT catch the `[[ ]]` class** — SC2314 covers only the `!` form. A
-lint-only gate is therefore insufficient; the block-position analyzer below is the real
-detector.
+After the fix: `--selftest` GREEN (3/3), `comms-drain-activate.bats` 14/14,
+`cc-inbox-guard.bats` 19/19.
 
-**Verification discipline that actually proves the fix:** converting the assertion is not
-enough — break the implementation under test once and confirm the test goes RED. A suite
-that stays green against a deliberately broken implementation is proving nothing. That is
-how this was found: `tm/relogin-browser` neutered its own `--headless` handling, the test
-still passed, and that was the tell.
+## 7. Known limits
 
-## Why not fixed here
+- **Line-oriented, not a shell parser.** Multi-line AND-OR lists are judged at their head line;
+  the analyzer skips continuation lines rather than joining them. No finding in this repo is
+  currently a continuation head (verified: 0).
+- **Conservative finality** over-reports a `[[ ]]` that is last inside a final `if` body. The
+  cost is a harmless `|| false`.
+- **`[ ]` inside `[[ ]]`-free `&&` chains** is only reported when the left element looks like an
+  assertion (`[`, `[[`, `test`, `grep`, `diff`, `cmp`, `!`, or a pipeline ending in one), so
+  genuine setup chains (`mkdir -p "$D" && cd "$D"`) stay quiet. A novel assertion helper called
+  bare on the left of `&&` would be missed; naming it `assert_*` would not help until added here.
+- **bash 3.2 is what was measured.** Bash ≥4.1 narrows some of these exemptions, so on a modern
+  bash several of these assertions would newly *fire*. That makes the fix strictly more valuable,
+  not less, and `|| false` is correct under both.
 
-The Follow-On Gate fails on **boundedness**: 212 assertions across 51 files — 43% of the
-suite — and this repo currently has many concurrent writer sessions holding those same
-test files in their own worktrees. A 51-file sweep from this session would collide with
-in-flight work and drag unrelated files into a landing whose scope is the relogin build.
-The measurement is cheap and collision-free; the sweep is neither.
-
-The relogin build's own five suites are clean — the two classes were found *because* a
-teammate broke its own implementation and watched the suite stay green, then went looking
-for the sibling class.
+---
 
 ## Root cause — the gate has never linted a single `.bats` file
 
@@ -155,127 +303,10 @@ majority). Wiring bats into the existing shellcheck pass would fix 42% of the pr
 while reporting a confidently green gate. The lint is necessary; the analyzer below is
 what actually closes the class.
 
-## Detection
-
-`shellcheck -S error tests/*.bats | grep -c SC2314` catches **only the `!` class** and
-will report a falsely reassuring number. Use the block-position analyzer, which finds
-both — it parses `@test` blocks by brace depth and flags any `!` or `[[` that is not the
-last meaningful statement:
-
-```python
-import re, glob
-for f in sorted(glob.glob('tests/*.bats')):
-    lines = open(f, encoding='utf-8', errors='replace').read().split('\n')
-    i, n = 0, len(lines)
-    while i < n:
-        if re.match(r'\s*@test\b', lines[i]):
-            depth = lines[i].count('{') - lines[i].count('}'); body = []; j = i + 1
-            while j < n and depth > 0:
-                depth += lines[j].count('{') - lines[j].count('}')
-                if depth > 0: body.append((j, lines[j]))
-                j += 1
-            mean = [k for k, (ln, t) in enumerate(body)
-                    if t.strip() and not t.strip().startswith('#')]
-            last = mean[-1] if mean else -1
-            for k, (ln, t) in enumerate(body):
-                s = t.strip()
-                if (re.match(r'!\s+\S', s) or s.startswith('[[')) and k != last:
-                    print(f"{f}:{ln+1}: DEAD  {s[:70]}")
-            i = j
-        else:
-            i += 1
-```
-
-## Four masks of one defect — a green result that never asserted anything
-
-Every finding on this build was the same defect wearing a different mask. Listed because
-the *last two* are invisible to any lint and were each found only by forcing a green thing
-to go red:
-
-| # | Mask | Found by | Detectable by lint? |
-|---|---|---|---|
-| 1 | non-final `! cmd` — assertion cannot fail | `tm/relogin-browser` | yes (SC2314) |
-| 2 | non-final `[[ ... ]]` — same, and the majority (123 of 212) | `tm/relogin-sched` | **no** |
-| 3 | a dead assertion which, once made live, proved **also wrong** | `tm/relogin-obs` | no |
-| 4 | a **passing mutation** ⇒ the test never reached the code path | `tm/relogin-exec` | no |
-
-**Mask 4 deserves its own rule: a mutation that comes back GREEN indicts the TEST, not the
-code.** `tm/relogin-exec` deleted a loopback filter in `await_oauth_url` and nothing broke —
-because its decoy was `http://localhost` while `OAUTH_URL_RE` is https-only, so the regex
-excluded the decoy and the filter under test was never exercised at all. The suite was green
-for a reason unrelated to the thing it claimed to check.
-
-**Mask 1's mechanism, precisely** (from `tm/relogin-browser`, verified): the exempt forms are
-shell-level **compounds** — `! cmd` and `[[ ... ]]`. `[ ! -f x ]` is a **simple command** (the
-`!` is an argument to `test`), so errexit applies normally and it is **live**. The rule is not
-"avoid `!`"; it is "avoid `!`-inverted pipelines and `[[ ]]` as bare assertions". Do not tell
-people to rewrite `[ ! -f x ]`.
-
-## A lead-side hazard: a mutation sweep looks exactly like a bug-and-fix from outside
-
-Recorded because the lead (me) got this wrong and published the error. While polling a
-teammate's worktree I twice caught its mutation harness mid-sweep — once with `child.kill()`
-replaced by `pass` in a teardown `finally`, and saw the matching teardown test go red. I
-reported that as "the teammate found and fixed a real orphaned-process leak." **It was not.**
-`child.kill()` was present in every committed version; what I observed was mutation P3 being
-applied and then restored. The teammate refused the credit and corrected me.
-
-That false narrative also reached the commit message of `6bb2092`, which claims *"the
-wait-without-kill left an orphaned process, caught by its own test"* — **that clause is
-wrong**; there was no leak and no such catch. The code is correct; only the provenance story
-was fabricated. It is corrected here rather than by amending a commit that was already in a
-landing pipeline.
-
-**The generalisable hazard:** an external observer sampling a worktree cannot distinguish
-*a bug being introduced and repaired* from *a bug being found and fixed* — both look like
-"red test, then edit, then green." A lead monitoring teammates by polling must ask before
-attributing a find, and must treat a teammate's correction of the record as authoritative
-over its own inference from snapshots.
-
-## Absolute counts of other work's data are rebase-fragile
-
-A related brittleness, caught by the landing gate rather than by review. A test in this build
-asserted `skipped=4` — an absolute count of the **literal default log targets** in
-`scripts/rotate-autonomy-logs.sh`, a list owned by other work. A sibling landed a 6th default
-mid-rebase, so the composed tree went red while **both branches were green alone** — exactly
-the case `ship-land.sh` documents as *"green(ours)+green(theirs) never implies
-green(composed)"*, and precisely why its CAS re-gate re-runs the full suite on the final
-rebased tree instead of trusting either branch's own result.
-
-**Rule: assert the delta you own, never an absolute over data someone else maintains.** The
-fix asserts that an absent `cc-relogin` log adds **zero** targets and a present one adds
-**exactly one** — a differential that cannot rot when the default list changes.
-
-## The general shape: a false guarantee is worse than a missing one
-
-A missing test is a **known gap**. A dead test is a **false guarantee** — and it also hides
-its own incorrectness. The sharpest demonstration came from `tm/relogin-obs`: making the
-dead `§2 UNKNOWN` assertion live proved the assertion was **also wrong**. It read
-`! grep -qE '\bOK\b'` over the whole output blob, which could never have held, because the
-tool's own warning text ends *"Reporting UNKNOWN, NOT OK."* It had been passing for two
-independent wrong reasons simultaneously, and neither was visible while it was dead.
-
-The same shape recurs one layer down, at the **fixture** layer, and is worth checking for
-whenever a test asserts that something did *not* happen:
-
-> **Self-validating spies.** A spy asserting `heal_calls == 0` proves nothing if the spy is
-> mis-wired — an unhooked spy also reports zero. The no-heal test therefore asserts both
-> that `--relogin-status` calls `heal` **0×** *and* that the same stubs under plain `--json`
-> call it **≥1×**. Without that positive control, a green result is indistinguishable from a
-> broken fixture.
-
-Generalisation: **every negative assertion needs a positive control** — a nearby case that
-must exercise the same machinery and produce the opposite result. Without one, "it didn't
-happen" and "we never looked" are the same green.
-
-## Suggested sequencing
-
-1. `tests/cc-reaper.bats` first (31, safety-critical destructive actor), then
-   `teammate-auto-shutdown` and `team-orphan-reaper` — the same "does NOT reap" shape.
-2. Then the handoff cluster (`handoff-teardown-marker` 19, `handoff-selfclose`,
-   `handoff-fire-account-sweep`) — these gate pane closure.
-3. Then the rest, **one file per commit** so a conversion that turns a test red is
-   bisectable. Expect real failures: some of these assertions were never true, and the
-   only reason the suite was green is that they never ran.
-4. Gate against regression with the analyzer above (not shellcheck alone — it misses the
-   `[[ ]]` class entirely).
+*(Section preserved from the original finding doc, which this file supersedes. It is the
+COVERAGE mechanism — why the debt accumulated unseen — and complements §1, which is the
+LANGUAGE mechanism. Neither alone explains 226: bash made the assertions dead, and a gate
+that never linted a `.bats` file made them invisible. Note the trap it names is exactly the
+one §1 confirms: wiring bats into the shellcheck pass would close the 89 bare-`!` findings
+via SC2314 and report a confident green over the 131 `[[ ]]` ones. The block-position
+analyzer is what actually closes the class.)*
