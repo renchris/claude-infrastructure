@@ -55,7 +55,7 @@ either *what pushes lands into the FULL tier* or *what kills them once they are 
 |---|---|---|---|---|
 | 3 | `f8e40b4c577d` — fail-closed degradation **amplifies** load | **REAL — DOMINANT** | ~62 % | Confirmed, but **not** via the path it was filed under. See below. |
 | 2 | `a0718a5d78b3` — peers kill each other's gates | **REAL — DOMINANT among killers** | ≥54 % of REDs are externally cut; true rate unmeasurable (no signal trap) | Live killer captured (PID 26727, argv below). Documented sweeps killed ≥11 drivers; 2 were logged. |
-| 1 | `77738605376f` — concurrent suites **OOM**-kill each other | **REFUTED — 0 %** | 0 % | **`memorystatus: killing` events in the last 4 h: ZERO**, with a passing positive control (the same predicate returns 2,568 `memorystatus` lines, so the query works and the zero is real). 64 GB RAM, 5 TiB swap headroom, `page_free_wanted: 0`, `memorystatus_level` 47–59. Live footprint: 62 bats processes = **3.2 GB**, versus 27 `claude` processes = **11.1 GB** — bats is not even the major consumer. The observed `Killed: 9` is therefore a **peer's `kill -9` escalation, not jetsam**: the same phenomenon as #2 with the killer misattributed. |
+| 1 | `77738605376f` — concurrent suites **OOM**-kill each other | **REFUTED — 0 %** | 0 % | **`memorystatus: killing` events in the last 4 h: ZERO**, with a passing positive control (the same predicate returns 2,568 `memorystatus` lines, so the query works and the zero is real). 64 GB RAM, 5 TiB swap headroom, `page_free_wanted: 0`, `memorystatus_level` 47–59. Live footprint: 62 bats processes = **3.2 GB**, versus 27 `claude` processes = **11.1 GB** — bats is not even the major consumer. The observed `Killed: 9` is therefore **not jetsam**; see *The killer, sharpened* below — the leading suspect is `cc-teardown`'s TERM→KILL ladder driven by a timer, not a peer and not memory. |
 | 4 | `3c6bf04ba842` — it2 API wedged machine-wide | **ARTIFACT — already fixed** | 0 % | Refuted by 8 direct probes; fixed by `8edac69`+`5a80a64`. |
 | — | `9c5d0ba74e79` — a signal-killed gate is misreported RED | **SAME CAUSE, DIFFERENT MASK** | — | Not independent: it is the *reporting organ* of #1, #2 and #3. Two lenses converged on this independently. |
 
@@ -124,6 +124,47 @@ for genuine test failures — those are machine-wide cut events. Independently: 
 full-suite runs on disk reached **1,460 / 1,588 / 1,608 / 1,643 `ok` with ZERO `not ok`**, and
 `fullbats.out` completed **1,643/1,643 at EXIT=0**. **The suite is green when it is allowed to
 finish.**
+
+### The killer, sharpened — it is probably neither peers nor jetsam (STRONG LEAD, 2026-07-26)
+
+The 30-agent wave's OOM lens refuted jetsam **and** named a better suspect. Three measurements,
+each independently checked by the lead:
+
+1. **Every SIGKILL on this machine targets ONE file: `tests/cc-reaper.bats`.** `flakes.jsonl`
+   now holds 3 × `exit 137` entries, all that suite; plus the `Killed: 9` at
+   `ship-land.sh:252`. **Jetsam cannot be suite-specific** — it selects by priority band and
+   footprint, and would take the 26 `claude` processes holding 14 GB long before a 2.8 MB
+   `bash bats` script. It took neither.
+2. **The load correlation is INVERTED.** The three `exit 137` rows sit at loadavg
+   **15.10 / 15.32 / 15.32** — the *lowest* in the file — while the SIGTERM and genuine
+   `not ok` rows sit at **19.23 / 19.36 / 20.92 / 21.10**. `77738605376f` predicts SIGKILL at
+   load 17-20; the measurement says the opposite.
+3. **A TERM→KILL ladder is live on this machine, on a timer.** `cc-teardown:345-353` is exactly
+   `kill -TERM` → grace poll → `kill -KILL`, and `cc-reaper sweep --reap` runs continuously
+   (2 live sweeps observed; the wave additionally caught worktree-local copies sweeping
+   machine-wide). A timer-driven killer explains the low-load correlation that neither jetsam
+   nor a human-typed peer command does.
+
+**The most parsimonious reading: `tests/cc-reaper.bats` builds fixture sessions that a
+concurrently-sweeping live `cc-reaper --reap` classifies as reapable and tears down through
+cc-teardown's ladder — the reaper reaping its own test suite.** This is the exact failure the
+`109-of-124 non-hermetic suites` fact predicts: the suite mutates and is mutated by the
+operator's live `~/.claude` state.
+
+Note `cc-reaper` *does* carry the right guards in principle — `cc-reaper:44,138`: "active /
+owned-wait / coordination-hang / rate-limited / crashed are NEVER reaped". So the defect is not
+a missing rule; it is that a **test fixture is indistinguishable from a real reapable session**.
+
+**Status: STRONG LEAD, not proven** — the correlation is tight and the mechanism is present,
+but nobody has caught the ladder in the act against a bats PID. The OOM *refutation* is proven;
+this replacement is not. **Do not file it as fact.** The cheap decisive probe: have
+`cc-teardown` log every PID it TERMs with that PID's argv, run the fleet an hour, and grep for
+`bats`. If it appears, the remedy is a hermeticity fix (fixture PIDs outside the reaper's
+candidate set), not scheduling and not a standing instruction — which would make it a **fourth**
+independent path to the same "gate dies → cut → laundered as RED" outcome.
+
+*(Ownership note: `bin/cc-reaper` / `bin/cc-teardown` have an active owner who landed
+`ce17de1`+`b494439` in this area today. Hand off, do not edit.)*
 
 ### Reconciliation verdict
 
