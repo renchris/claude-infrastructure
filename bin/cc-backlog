@@ -60,6 +60,13 @@
 # STALE_CLAIM_S whose claimer is not live — BOUNDED, so after MAX_ATTEMPTS dispatch claims a
 # still-stale item is BLOCKED instead (never a slow-reopen loop). cc-reaper calls it each
 # --reap sweep. All thresholds env-tunable (see the reap body).
+#
+# OWNED WAIT (Rule A re-verify): "not live" is asked of the CLAIMER, and a dispatched claim's `by` is
+# cc-dispatch's own spent pid — so before any dead verdict, reap re-verifies against the item's
+# WORKTREE: a live process tree there (a running gate / ship-land / queued land-lock), or the land
+# lock held for its branch, is an OWNED WAIT — alive, merely slow — and is never called dead. A wait
+# still present past OWNED_WAIT_MAX_S is a WEDGE: blocked (never reopened — its worktree is occupied)
+# and named as such. See the owned_wait body for the full rationale and the incident it came from.
 set -uo pipefail
 
 BACKLOG="${CC_BACKLOG_FILE:-$HOME/.claude/autonomy/backlog.jsonl}"
@@ -387,6 +394,71 @@ claimer_live() {
     | jq -e --arg b "$by" 'any(.[]?; (.paneUUID==$b) or (.name==$b) or (.sessionId==$b))' >/dev/null 2>&1
 }
 
+# item_worktree <id> → the dispatch worktree an item's worker runs in, by the SAME convention
+# cc-wave-plan builds its --cwd from ($WTROOT/wt-<id>, cc-wave-plan:45). Env seam mirrors that name.
+item_worktree() { printf '%s/wt-%s' "${CC_BACKLOG_WT_ROOT:-$HOME/Development/.worktrees}" "$1"; }
+
+# owned_wait <id> — is the item's WORKER in an OWNED WAIT (alive, merely slow) rather than DEAD?
+# Echoes a short reason and returns 0 when alive; returns 1 (silent) when there is no evidence.
+#
+# WHY THIS EXISTS (2026-07-26, backlog 2d36e63d16a2). `claimer_live` alone cannot see a dispatched
+# worker: cc-dispatch claims with `--by $SID` where SID is its OWN `$$` (cc-dispatch:58), then spawns
+# the session and EXITS. Its pid is gone within seconds while the worker it spawned runs for hours —
+# so past STALE_CLAIM_S, `claimer_live` is false BY CONSTRUCTION for every dispatched item and Rule A
+# degrades to a pure idle-time verdict. Three items with live gates were blocked "dead-worker stall
+# … not auto-completable" that way (02ba4e52389a / 761a546f939c / 6cab0ab3cb2f), which is not benign:
+# a false dead verdict pulls the item OFF the auto-drive path and feeds dispatcher re-spawn. This is
+# the same class as memory desk-wave-monitor-lead-idle-is-owned-wait (a lead's JSONL freeze during a
+# wave is waiting on teammates, not a stall) and desk-verify-fresh-before-mutating-backlog (the claim
+# `by` is the DISPATCHER, not the worker — check WORKTREE liveness). Dead-evidence must read whether
+# a wait is OWNED, never merely how long it has been quiet.
+#
+# The claim's `by` cannot be fixed at the source instead: cc-dispatch has no worker identity to claim
+# with (the spawned session's sid does not exist until it registers), so liveness has to be keyed on
+# the worktree — the one durable handle that outlives the dispatcher.
+#
+# Signals (any ⇒ owned):
+#   S1  a live process whose command line names the item's worktree — the full-suite gate
+#       (bats-exec-suite/-file/-test), ship-land, a queued land-lock, a task-output wait loop.
+#   S2  the machine-wide land lock held for THIS item's branch by a live holder. Distinct from S1,
+#       not redundant: a land re-run from the shared checkout (or any other cwd) on branch wt-<id>
+#       names no worktree path in its argv, yet is the most owned wait there is.
+#
+# Deliberately NOT filtered: reap's own process tree. A process inside wt-<id> is evidence that work
+# in wt-<id> is live — including a worker session that ran `cc-backlog reap` itself. The real hazard
+# is an ORPHANED wait pinning an item forever, and the caller's OWNED_WAIT_MAX_S ceiling is what
+# bounds that (a 6h "gate" is pathological, not owned). In production the reaper resolves cc-backlog
+# through ~/.claude/bin → the shared checkout, so its argv never carries a wt-<id> path at all.
+owned_wait() {
+  local id="$1" wt; wt="$(item_worktree "$id")"
+  [ -d "$wt" ] || return 1
+
+  # S1 — live process tree in the worktree. `pgrep -f` excludes itself; one fork, only ever reached
+  # for a claim already past the stale gate, so this costs nothing on a healthy ledger.
+  local procs; procs="$(pgrep -f "$wt" 2>/dev/null | wc -l | tr -d ' ')"
+  if [ -n "$procs" ] && [ "$procs" -gt 0 ] 2>/dev/null; then
+    printf 'live process tree in %s (%s proc)' "$wt" "$procs"; return 0
+  fi
+
+  # S2 — land lock held for this item's branch. The lock dir is a hash of the repo's common git dir,
+  # so ask land-lock.sh itself (`--print-lock-dir` is its documented pure read) from inside the
+  # worktree rather than duplicating the hash. Holder liveness uses the pid+lstart rule land-lock
+  # uses, because a dead holder's pid can be RECYCLED (memory: periodic-job-self-overlap).
+  local ll="$wt/scripts/land-lock.sh"
+  [ -x "$ll" ] || return 1
+  local lockdir; lockdir="$(cd "$wt" && "$ll" --print-lock-dir 2>/dev/null)" || return 1
+  [ -n "$lockdir" ] || return 1
+  local lock="$lockdir/lock.d"
+  [ "$(cat "$lock/branch" 2>/dev/null)" = "wt-$id" ] || return 1
+  local holder; holder="$(cat "$lock/pid" 2>/dev/null)"
+  [ -n "$holder" ] && kill -0 "$holder" 2>/dev/null || return 1
+  local rec_lstart cur_lstart
+  rec_lstart="$(cat "$lock/lstart" 2>/dev/null || true)"
+  cur_lstart="$(ps -o lstart= -p "$holder" 2>/dev/null || true)"
+  [ -z "$rec_lstart" ] || [ "$rec_lstart" = "$cur_lstart" ] || return 1
+  printf 'land lock held for wt-%s by live pid %s' "$id" "$holder"
+}
+
 # cmd_reap — the stale-claim maintenance sweep (see the REAP header block). Append-only, idempotent,
 # and safe to run every cc-reaper sweep. Terminal (done) and already-blocked items are never touched.
 # --dry-run classifies + prints WOULD-* and writes NOTHING.
@@ -397,6 +469,11 @@ claimer_live() {
 #   CC_BACKLOG_MAX_THRASH       (2)     >= this many fast claim→reopen cycles ⇒ thrash → block
 #   CC_BACKLOG_MAX_ATTEMPTS     (3)     >= this many total dispatch claims on a still-stale item ⇒ block
 #   CC_BACKLOG_THRASH_WINDOW_S  (90)    a claim→reopen within this gap counts as one fast-fail cycle
+#   CC_BACKLOG_OWNED_WAIT_MAX_S (21600) ceiling past which even a live worktree wait stops absolving
+#                                       — an orphaned watcher must not pin an item forever (6h; a
+#                                       full ~1630-test suite is 25-40min nominal, hours under the
+#                                       load-20 contention that produced the false verdicts)
+#   CC_BACKLOG_WT_ROOT          (~/Development/.worktrees)  dispatch worktree parent (see owned_wait)
 #   CC_BACKLOG_NOW              (now)   epoch "now" seam (deterministic age/window math in tests)
 cmd_reap() {
   local dry=0
@@ -412,6 +489,7 @@ cmd_reap() {
   local maxthrash="${CC_BACKLOG_MAX_THRASH:-2}"
   local maxattempts="${CC_BACKLOG_MAX_ATTEMPTS:-3}"
   local window="${CC_BACKLOG_THRASH_WINDOW_S:-90}"
+  local ownedmax="${CC_BACKLOG_OWNED_WAIT_MAX_S:-21600}"
   local now="${CC_BACKLOG_NOW:-$(date +%s)}"
 
   # Per non-terminal id → TSV [id, status, claimBy, claimAgeS, totalClaims, fastFailCycles].
@@ -476,12 +554,30 @@ cmd_reap() {
         [ "$dry" = 1 ] && printf 'cc-backlog reap: keep %s [claimed %ss — claimer %s LIVE]\n' "$id" "$ageS" "$by"
         continue
       fi
-      if [ "$claims" -ge "$maxattempts" ]; then
+      # RE-VERIFY before any dead verdict: the claim's `by` is the dispatcher's spent pid, so
+      # claimer_live cannot see the worker (see owned_wait). Ask the WORKTREE whether the wait is
+      # OWNED. Printed in BOTH modes on purpose — a silent absolve is indistinguishable from an
+      # inert oracle (memory: feature-durability-mechanism-not-memory).
+      local owned; owned="$(owned_wait "$id" || true)"
+      if [ -n "$owned" ] && [ "$ageS" -le "$ownedmax" ]; then
+        printf 'cc-backlog reap: KEEP %s [owned wait — %s; claimed %ss]\n' "$id" "$owned" "$ageS"
+        continue
+      fi
+      # A WEDGED owned wait (live worktree, but past the ceiling) BLOCKS regardless of the attempt
+      # count — it never reopens. Reopening would fire a second worker into a worktree the first one
+      # still occupies, which is the very double-dispatch this oracle exists to prevent; and the
+      # verdict is a wedge to diagnose, not a death to re-run.
+      local why="stall, $claims attempts"
+      if [ "$claims" -ge "$maxattempts" ] || [ -n "$owned" ]; then
         local smsg="dead-worker stall after ${claims} dispatch attempt(s) (idle ${ageS}s) — not auto-completable. Investigate, then \`cc-backlog unblock ${id}\`."
+        if [ -n "$owned" ]; then
+          why="wedged owned wait"
+          smsg="wedged owned wait past the ${ownedmax}s ceiling — ${owned} — after ${claims} dispatch attempt(s) (claimed ${ageS}s). The worker is NOT dead and its worktree is still occupied, so this was NOT reopened: find what the wait is blocked on, then \`cc-backlog unblock ${id}\`."
+        fi
         if [ "$dry" = 1 ]; then
-          printf 'cc-backlog reap: WOULD-BLOCK %s [stall, %s attempts]\n' "$id" "$claims"
+          printf 'cc-backlog reap: WOULD-BLOCK %s [%s]\n' "$id" "$why"
         elif cmd_transition block "$id" --needs "$smsg" --by cc-backlog-reap >/dev/null; then
-          blocked=$((blocked + 1)); printf 'cc-backlog reap: BLOCK %s [stall, %s attempts]\n' "$id" "$claims"
+          blocked=$((blocked + 1)); printf 'cc-backlog reap: BLOCK %s [%s]\n' "$id" "$why"
         fi
       elif [ "$dry" = 1 ]; then
         printf 'cc-backlog reap: WOULD-REOPEN %s [dead-worker, claimed %ss, %s attempt(s)]\n' "$id" "$ageS" "$claims"
