@@ -244,9 +244,52 @@ postland_net_live() {  # 0 = trust the post-land net (or it is not adopted yet) 
 }
 
 run_bats_all() {  # the FULL suite — the ONLY run that earns the gate-green claim
+  # CUT ≠ RED. bats exits non-zero for BOTH a real `not ok` and a death by signal (a peer's
+  # kill, a starved fork, a truncated stream) — and the second case reports ZERO `not ok`.
+  # Branching on the exit code alone turned every machine-wide cut into a false "gate RED"
+  # (exit 6): measured 2026-07-26, 21 of 39 attested gate-REDs fired in 7 same-second clusters
+  # spanning 2-4 DIFFERENT worktrees — synchronization no genuine test failure can produce —
+  # and all 21 were FULL-tier runs. run_scoped_suite (:252) already absorbs exactly this via one
+  # fresh-TMPDIR re-run; FULL mode had no such appeal, which is why it failed 33 of its 34 runs.
+  #
+  # NOT by exit code: bats's own pipeline masks the signal. `bats:517-524` runs
+  # `exec bats-exec-suite | bats_test_count_validator | formatter` under `set -o pipefail`
+  # (`bats:501`), and the validator returns 1 on a truncated TAP — so under pipefail the
+  # rightmost non-zero wins and a SIGKILLed suite surfaces as plain `1`, never 137/143.
+  # The TAP BODY is the only honest discriminator.
+  local log rc notok td rc2
+  log="$(mktemp)"
   echo "→ gate: bats tests/" >&2
-  bats tests/ >&2 || { echo "✗ gate: bats RED" >&2; return 1; }
-  return 0
+  bats tests/ 2>&1 | tee "$log" >&2; rc="${PIPESTATUS[0]}"
+  if [[ "$rc" -eq 0 ]]; then rm -f "$log"; return 0; fi
+  notok="$(grep -c '^not ok' "$log" 2>/dev/null || true)"; notok="${notok:-0}"
+  if [[ "$notok" -gt 0 ]]; then
+    echo "✗ gate: bats RED — $notok failing test(s)" >&2
+    rm -f "$log"; return 1
+  fi
+  echo "↻ gate: bats exited $rc with ZERO 'not ok' — CUT, not RED. One re-run in a fresh TMPDIR…" >&2
+  record_gate_cut "$rc" "$log"
+  rm -f "$log"
+  td="$(mktemp -d)"; TMPDIR="$td" bats tests/ >&2; rc2=$?
+  rm -rf "$td" 2>/dev/null || true
+  if [[ "$rc2" -eq 0 ]]; then
+    echo "✓ gate: FULL suite green on re-run — the first run was cut, not red." >&2
+    return 0
+  fi
+  echo "✗ gate: bats RED (or cut twice) — re-run exited $rc2" >&2
+  return 1
+}
+
+record_gate_cut() {  # $1=rc $2=logfile — a CUT must be LEGIBLE, never silently a "flake"
+  local fdir sig
+  fdir="${POSTLAND_DIR:-$HOME/.claude/autonomy/postland}"
+  mkdir -p "$fdir" 2>/dev/null || true
+  sig="$(grep -m1 -aE 'Terminated|Killed|signal' "$2" 2>/dev/null | sed 's/["\]//g' | cut -c1-160)"
+  [[ -z "$sig" ]] && sig="exit $1 / notok=0"
+  printf '{"ts":"%s","file":"tests/","sha":"%s","phase":"land-gate","outcome":"cut-not-red","signal":"%s","loadavg":"%s"}\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(git rev-parse --short HEAD 2>/dev/null || echo '?')" \
+    "$sig" "$(uptime 2>/dev/null | sed 's/.*averages*: //' | awk -F'[, ]+' '{print $1}')" \
+    >> "$fdir/flakes.jsonl" 2>/dev/null || true
 }
 
 run_scoped_suite() {  # $1=suite file $2=newline-list of DIRECT suites → 0 green / 1 red

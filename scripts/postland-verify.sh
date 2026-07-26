@@ -39,7 +39,7 @@ FLAKES="$STATE/flakes.jsonl"
 LASTGREEN="$STATE/last-green"
 QUEUE="$STATE/queue"
 
-FAILING=(); SYNTAX_BAD=(); RETRIES=0; NFLAKE=0; FAILTEST=""; RUN_TMP=""; IDL_DONE=0; ENV_FP='{}'
+FAILING=(); SYNTAX_BAD=(); RETRIES=0; NFLAKE=0; FAILTEST=""; RUN_TMP=""; IDL_DONE=0; ENV_FP='{}'; CUT=0
 
 now_iso()   { date -u +%Y-%m-%dT%H:%M:%SZ; }
 now_epoch() { date +%s; }
@@ -142,12 +142,26 @@ record_flake() { # <file> <test> <rc>
   NFLAKE=$((NFLAKE+1))
 }
 classify_failures() { # <tapfile> — retry ladder: >=2/3 = REPRODUCIBLE, 1/3 = flake
-  local pairs f t rc i tdir fails
+  local pairs f t rc i tdir fails notok
   # TAP: `not ok N <name>` followed by a `# (in test file tests/X.bats, line N)` diagnostic.
   pairs="$(awk '/^not ok /{p=1; n=$0; sub(/^not ok [0-9]+ /,"",n); next}
                 /^#/ && p { if (match($0, /[A-Za-z0-9_.\/-]+\.bats/)) { print substr($0,RSTART,RLENGTH) "\t" n; p=0 } }' "$1" \
              | awk -F'\t' '!seen[$1]++')"
-  if [ -z "$pairs" ]; then FAILING=("tests/"); FAILTEST="(unattributed)"; return 0; fi
+  if [ -z "$pairs" ]; then
+    # CUT ≠ RED. No attributable pair has TWO causes, and they need opposite handling:
+    #   (a) the TAP contains ZERO `not ok` at all  ⇒ the run was TRUNCATED (killed / starved),
+    #       so nothing failed — stamping it red is a LIE, and a costly one: the red stamp is
+    #       what `deploy-live.sh` and `ship-land.sh:postland_net_live` read. With every run
+    #       cut, NO GREEN STAMP CAN EVER EXIST, so deploy-live refuses forever ("no GREEN
+    #       stamp among the newest 200 commits") and the liveness guard silently reads
+    #       "net not adopted ⇒ trust". Verified 2026-07-26: 4 of the last 5 runner.log
+    #       verdicts were `failing=tests/ retries=0` — i.e. all four were cuts, not reds.
+    #   (b) `not ok` lines exist but carry no `# (in test file …)` diagnostic ⇒ a GENUINE red
+    #       we merely cannot attribute to a file. That keeps the old sentinel.
+    notok="$(grep -c '^not ok' "$1" 2>/dev/null || true)"; notok="${notok:-0}"
+    if [ "$notok" -eq 0 ]; then CUT=1; return 0; fi
+    FAILING=("tests/"); FAILTEST="(unattributed)"; return 0
+  fi
   while IFS="$(printf '\t')" read -r f t; do
     [ -n "$f" ] || continue
     fails=1; rc=1
@@ -224,7 +238,7 @@ run_target() { # <sha> — the whole check-set + verdict for ONE sha
   prepare_worktree "$sha" || { log "worktree prepare FAILED for $(sha12 "$sha")"; return 1; }
   t0="$(now_epoch)"; env_fingerprint            # captured at run START — a green is env-relative
   RUN_TMP="$(mktemp -d "${TMPDIR:-/tmp}/postland-run.XXXXXX")" || return 1
-  FAILING=(); FAILTEST=""; RETRIES=0; NFLAKE=0
+  FAILING=(); FAILTEST=""; RETRIES=0; NFLAKE=0; CUT=0
   syntax_check
   tap="$RUN_TMP/bats.tap"
   ( cd "$WORKTREE" && TMPDIR="$RUN_TMP" nice -n 10 "$BATS_BIN" tests/ ) > "$tap" 2>&1; rc=$?
@@ -232,7 +246,15 @@ run_target() { # <sha> — the whole check-set + verdict for ONE sha
   [ "$rc" -eq 0 ] || classify_failures "$tap"
   [ "${#SYNTAX_BAD[@]}" -eq 0 ] || FAILING+=("${SYNTAX_BAD[@]}")
   run_s="$(( $(now_epoch) - t0 ))"
-  if [ "${#FAILING[@]}" -eq 0 ]; then
+  if [ "$CUT" = "1" ] && [ "${#FAILING[@]}" -eq 0 ]; then
+    # A cut proves NOTHING — do not stamp green (unearned) and do not stamp red (a lie that
+    # blocks deploy forever). Stamp `cut` for diagnosability: the tree stays unstamped-green,
+    # so C5's abstain does not fire and the NEXT sweep retries it. No bisect, no page — you
+    # cannot bisect a machine event, and paging on one trains the operator to ignore pages.
+    write_stamp "$tree" "$sha" cut "$run_s" "$RETRIES" "$adv"
+    log "CUT $(sha12 "$sha") tree=$(sha12 "$tree") run_s=$run_s retries=$RETRIES sc_adv=$adv (zero not-ok in a non-zero run - truncated; will retry)"
+    echo "postland-verify: CUT $(sha12 "$sha") (${run_s}s) - run truncated, not red; retrying next sweep"
+  elif [ "${#FAILING[@]}" -eq 0 ]; then
     write_stamp "$tree" "$sha" green "$run_s" "$RETRIES" "$adv"
     printf '%s\n' "$sha" > "$LASTGREEN"
     rm -f "$PAGES"/postland-red-*.page 2>/dev/null || true   # now-passing state clears standing pages

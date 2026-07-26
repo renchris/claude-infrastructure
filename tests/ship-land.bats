@@ -566,3 +566,52 @@ landable() {  # $1=branch $2=shell file — a commit the gate always lints
   ! echo "$output" | grep -q "INERT"                           # a net that never went green
   [ "$(cat "$BATS_ARGV")" = "tests/a.bats" ]                   # is "not adopted", not "inert"
 }
+
+# ── CUT ≠ RED on the FULL tier (run_bats_all) ────────────────────────────────────────────────
+# bats masks a signal death: `bats:517-524` pipes exec bats-exec-suite through
+# bats_test_count_validator under `set -o pipefail` (:501), and the validator returns 1 on a
+# truncated TAP — so a killed suite surfaces as plain `1`, never 137/143. The TAP BODY is the
+# only honest discriminator, which is what these two tests pin.
+cut_fixture() {   # shim `bats` that can produce EITHER a cut (rc!=0, zero output) or a real red
+  SHIMDIR="$BATS_TEST_TMPDIR/shims-cut"; mkdir -p "$SHIMDIR"
+  export BATS_ARGV="$BATS_TEST_TMPDIR/bats-argv-cut"
+  export CUT_MODE="$BATS_TEST_TMPDIR/cut-mode"
+  cat > "$SHIMDIR/bats" <<EOF
+#!/bin/bash
+printf '%s\n' "\$*" >> "$BATS_ARGV"
+if [ "\$(cat "$CUT_MODE" 2>/dev/null)" = red ]; then
+  echo "1..1"; echo "not ok 1 a genuine failure"; exit 1      # a REAL red: a not-ok IS present
+fi
+if [ ! -f "$BATS_TEST_TMPDIR/cut-done" ]; then
+  : > "$BATS_TEST_TMPDIR/cut-done"; exit 1                    # a CUT: rc!=0 with ZERO output
+fi
+echo "1..1"; echo "ok 1 green on the re-run"; exit 0
+EOF
+  chmod +x "$SHIMDIR/bats"
+  export PATH="$SHIMDIR:$PATH"
+  export SHIP_LAND_GATE_POLICY="$BATS_TEST_TMPDIR/no-such-policy.sh"   # absent ⇒ full tier
+  mkdir -p tests
+  printf '#!/usr/bin/env bats\n@test "a" { true; }\n' > tests/a.bats
+  git add tests && git commit -q -m "seed suites" && git push -q origin HEAD:main
+  git fetch -q origin main
+}
+
+@test "FULL gate: a CUT (non-zero exit, ZERO 'not ok') is re-run once and CAN land green" {
+  cut_fixture
+  echo cut > "$CUT_MODE"
+  landable feat/cut cut.sh
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]                                     # a cut must NOT be a landing failure
+  echo "$output" | grep -q "CUT, not RED"
+  [ "$(grep -cx 'tests/' "$BATS_ARGV")" -eq 2 ]           # ran twice: original + exoneration
+}
+
+@test "FULL gate: a REAL red (a 'not ok' line) is NOT re-run and does NOT land" {
+  cut_fixture
+  echo red > "$CUT_MODE"
+  landable feat/red red.sh
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 6 ]                                     # gate RED ⇒ exit 6, unchanged
+  echo "$output" | grep -q "bats RED"
+  [ "$(grep -cx 'tests/' "$BATS_ARGV")" -eq 1 ]           # exactly ONE run — no free retry on red
+}

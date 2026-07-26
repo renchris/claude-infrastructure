@@ -293,3 +293,35 @@ add_stateful_test() {   # $1 = basename, $2 = body of the helper script
   [ "$(cat "$CC_POSTLAND_DIR/last-green")" = "$green" ]   # C10: NOT advanced
   [ ! -s "$CC_POSTLAND_DIR/flakes.jsonl" ] || ! grep -q twofail "$CC_POSTLAND_DIR/flakes.jsonl"
 }
+
+# ── C13 CUT ≠ RED ────────────────────────────────────────────────────────────────────────────
+# A TAP with ZERO `not ok` in a non-zero run was TRUNCATED (killed/starved), not failed.
+# Stamping it red is a lie with teeth: the red stamp is what deploy-live.sh and ship-land's
+# postland_net_live read, so with every run cut NO GREEN STAMP CAN EVER EXIST — deploy-live
+# refuses forever and the liveness guard silently reads "not adopted ⇒ trust". (Measured
+# 2026-07-26: 4 of the last 5 runner.log verdicts were `failing=tests/ retries=0` — all cuts.)
+@test "C13: a TRUNCATED run (non-zero, ZERO not-ok) stamps CUT — not red — and never pages" {
+  fake="$BATS_TEST_TMPDIR/bats-cut"
+  # NOTE: must answer --version — env_fingerprint() parses it into the stamp's JSON, and a
+  # fake that echoes TAP there corrupts the stamp (cost one red test to learn).
+  printf '#!/bin/bash\n[ "$1" = --version ] && { echo "Bats 1.13.0"; exit 0; }\nexit 1\n' > "$fake"
+  chmod +x "$fake"                                                 # rc=1 with ZERO output
+  tree="$(origin_tree)"
+  run env CC_POSTLAND_BATS="$fake" bash "$SUT" --run-if-needed
+  s="$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ -f "$s" ]
+  run jq -r '.verdict' "$s"; [ "$output" = "cut" ]               # NOT "red"
+  [ ! -f "$CC_POSTLAND_DIR/last-green" ]                          # a cut earns nothing
+  [ "$(find "$CC_PAGES_DIR" -name 'postland-red-*' | wc -l | tr -d ' ')" = "0" ]
+}
+
+@test "C13 control: a run with a REAL not-ok still stamps RED (the cut path must not swallow it)" {
+  fake="$BATS_TEST_TMPDIR/bats-red"
+  printf '#!/bin/bash\n[ "$1" = --version ] && { echo "Bats 1.13.0"; exit 0; }\necho "1..1"\necho "not ok 1 boom"\necho "# (in test file tests/ok.bats, line 2)"\nexit 1\n' > "$fake"
+  chmod +x "$fake"
+  tree="$(origin_tree)"
+  run env CC_POSTLAND_BATS="$fake" bash "$SUT" --run-if-needed
+  s="$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ -f "$s" ]
+  run jq -r '.verdict' "$s"; [ "$output" = "red" ]
+}
