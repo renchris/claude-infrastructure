@@ -139,6 +139,14 @@ Python 3, one executable file. Deps: stdlib + `websocket-client` (1.6.1).
 | 6 | FALLBACK-REQUIRED | authorize URL landed on claude.ai `/login` (web session cold) — email-code leg not automated; stdout carries the exact remaining human step incl. mailbox |
 | 7 | CONSENT-GATE | CDP blocked: `DevToolsActivePort` absent (toggle off) or WS handshake hung >8s (consent dialog pending); stdout names the recovery: cycle `dia://inspect#remote-debugging` off→on, re-run — first connect after a cycle is consent-free |
 
+> ⚠️ **Rows 4 and 7 are superseded as of 2026-07-26 — the table stays for provenance, not as
+> current behaviour.** The dedicated-browser substrate removed the Dia dependency, so **nothing
+> emits 7** any more (it is retained only so consumers keying on it still compile), and row 4's
+> "profile ctx unmatched" is gone with it — a 4 now means `cc-authbrowser --start` failed, emitted
+> no `ws_url`, CDP was unreachable, no Authorize control, or the callback deadline passed.
+> Likewise `CC_RELOGIN_DEVTOOLS_PORT_FILE` below no longer exists (no consumer ever passed it);
+> the substrate's seam is `CC_RELOGIN_AUTHBROWSER_BIN`. See the 2026-07-26 section for why.
+
 **`--json`** → single object on stdout:
 `{"acct","result":"proven|refused|headless-exhausted|browser-failed|unverified|fallback-required|consent-gate|error","exit":N,"phase_reached":"gate|phase1|phase2|verify","before":{"auth","has_refresh_token","login_expires_at"},"after":{…},"detail":"…"}`
 
