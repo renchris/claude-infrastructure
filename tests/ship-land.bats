@@ -30,9 +30,18 @@ setup() {
   export POSTLAND_VERIFY=off                                  # never spawn a real post-land child
   # env-bleed immunity: when THIS suite runs inside an outer ship-land gate, the outer
   # pipeline's scope resolution must not leak into the fixture pipelines under test.
+  # SHIP_LAND_GATE_ROUNDS / _VERIFY_RETRIES were the two gaps here, and the omission was
+  # load-bearing: landing this branch with ship.md's own lock-starvation remedy
+  # (SHIP_LAND_GATE_ROUNDS=0 — "run the gate INSIDE the lock") bled that 0 into every fixture
+  # pipeline below, so "attest: UNLOCKED gate-red …" was asserting against a code path the outer
+  # flag had deliberately disabled. Reproduced clean on an otherwise 46/46-green tree: ROUNDS=0 in
+  # the outer env ⇒ 45 ok / 1 not ok; unset ⇒ 46 ok / 0 not ok. A verdict about the tree must never
+  # be a function of how the operator tuned the land (ship-land.sh's gate_bats scrubs the same set
+  # at the gate; this is the half that also holds when someone runs bats directly).
   unset SHIP_LAND_GATE_SCOPE SHIP_LAND_GATE_SCOPE_DEFAULT SHIP_LAND_GATE_POLICY \
         SHIP_LAND_GATE_SELECT SHIP_LAND_FIRST_BASE SHIP_LAND_GATE_EFFECTIVE_FULL \
-        SHIP_LAND_SELECTED_N POSTLAND_STALENESS_GUARD 2>/dev/null || true
+        SHIP_LAND_SELECTED_N POSTLAND_STALENESS_GUARD \
+        SHIP_LAND_GATE_ROUNDS SHIP_LAND_VERIFY_RETRIES 2>/dev/null || true
   # Admission control OFF for the whole suite. The full-mode fixtures below really do reach
   # run_bats_all → gate_admit, and this suite runs on exactly the loaded box that makes it defer;
   # left on, every such test stalls for CC_GATE_ADMIT_MAX_WAIT and the suite reads as hung. These
@@ -807,4 +816,49 @@ admit_probe() {  # $@ = env assignments → runs gate_admit once, echoes its std
   # was 6, so the exit code alone cannot distinguish the trees. This asserts the kill was actually
   # DETECTED and then outranked — not that detection never happened.
   echo "$output" | grep -q "GATE-KILLED" || false
+}
+
+@test "env hygiene: gate_bats scrubs LANDER tuning so a flag cannot forge a verdict" {
+  # Regression for the defect that produced this test: landing with ship.md's own lock-starvation
+  # remedy (SHIP_LAND_GATE_ROUNDS=0) bled into the gate's bats subprocess and turned a 46/46-green
+  # tree into an exit-6 "GATE RED". A verdict about the TREE must never be a function of how the
+  # operator tuned THIS land. Asserts the contract at the gate boundary, where it protects every
+  # suite — setup()'s unset list is the same guarantee from the suite side.
+  #
+  # A stub `bats` reports exactly what the gate handed the suite; real bats never runs (this test
+  # lives INSIDE bats, so invoking it for real would recurse).
+  mkdir -p "$BATS_TEST_TMPDIR/bin"
+  cat > "$BATS_TEST_TMPDIR/bin/bats" <<'STUB'
+#!/bin/bash
+printf 'ROUNDS=[%s] RETRIES=[%s] SCOPE=[%s] LOCKWAIT=[%s] LOCKTTL=[%s] MAXLOAD=[%s] ARGS=[%s]\n' \
+  "${SHIP_LAND_GATE_ROUNDS-unset}" "${SHIP_LAND_VERIFY_RETRIES-unset}" \
+  "${SHIP_LAND_GATE_SCOPE-unset}" "${LAND_LOCK_WAIT-unset}" "${LAND_LOCK_TTL-unset}" \
+  "${CC_GATE_MAX_LOAD-unset}" "$*"
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/bats"
+
+  # Extract the function rather than sourcing ship-land.sh (sourcing would RUN the pipeline) —
+  # same idiom postland-verify.sh's selftest uses for gate_admit.
+  sed -n '/^gate_bats() {/,/^}/p' "$SHIPLAND" > "$BATS_TEST_TMPDIR/probe.sh"
+  # Positive control: a silent sed miss (function renamed/moved) would leave an empty probe that
+  # "passes" every unset assertion vacuously. Require the function to actually be there.
+  grep -q 'env -u SHIP_LAND_GATE_ROUNDS' "$BATS_TEST_TMPDIR/probe.sh" || false
+  printf 'gate_bats tests/foo.bats\n' >> "$BATS_TEST_TMPDIR/probe.sh"
+
+  run env PATH="$BATS_TEST_TMPDIR/bin:$PATH" \
+      SHIP_LAND_GATE_ROUNDS=0 SHIP_LAND_VERIFY_RETRIES=9 SHIP_LAND_GATE_SCOPE=full \
+      LAND_LOCK_WAIT=10800 LAND_LOCK_TTL=99 CC_GATE_MAX_LOAD=31 \
+      bash "$BATS_TEST_TMPDIR/probe.sh"
+  [ "$status" -eq 0 ]
+  # every LANDER knob the tests assert against arrives UNSET, whatever the operator set
+  echo "$output" | grep -q 'ROUNDS=\[unset\]'   || false
+  echo "$output" | grep -q 'RETRIES=\[unset\]'  || false
+  echo "$output" | grep -q 'SCOPE=\[unset\]'    || false
+  echo "$output" | grep -q 'LOCKWAIT=\[unset\]' || false
+  echo "$output" | grep -q 'LOCKTTL=\[unset\]'  || false
+  # FORCED to 0, deliberately NOT unset: a test must never sit in admission control (it would
+  # stall the gate up to CC_GATE_ADMIT_MAX_WAIT per call and read as a hang).
+  echo "$output" | grep -q 'MAXLOAD=\[0\]'      || false
+  # and the scrub must not eat the arguments
+  echo "$output" | grep -q 'ARGS=\[tests/foo.bats\]' || false
 }

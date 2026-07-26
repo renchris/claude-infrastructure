@@ -344,6 +344,30 @@ gate_admit() {  # $1=what — defer the start of an expensive suite until load f
 # which trunk could not decide because it did not capture the re-run's TAP (its own message says
 # "RED (or cut twice)"), and (b) a distinct EXIT CODE for the non-verdict, so the caller learns
 # "retry when quieter" instead of "your code is broken".
+# ---- gate env hygiene: tuning THIS land must never change the VERDICT -------
+# Found by landing this very branch with the remedy ship.md itself recommends for lock starvation
+# (SHIP_LAND_GATE_ROUNDS=0, plus a raised LAND_LOCK_WAIT): a tests/ship-land.bats that is 46/46
+# green went RED — 7 CAS / unlocked-gate / lock-hold tests, and since they are DIRECT suites of
+# this change the flake-exoneration correctly refused to absolve them, so the land exited 6 on a
+# tree that was never broken. Cause: these knobs are plain env vars, so every bats subprocess
+# INHERITS them, and those particular tests assert the very behaviour the knobs change.
+# Controlled three-way, all on the same tree:
+#     clean env      + free lock              → 46 ok /  0 not ok   (the truth)
+#     ROUNDS=0       + free lock              → 45 ok /  1 not ok
+#     ROUNDS=0       + held lock + contention →         7 not ok  (×2 re-runs = 14)
+# That is a fail-closed degradation manufacturing a VERDICT about the tree out of a fact about
+# the operator's flags — the same class as CUT ≠ RED (f8e40b4c577d), and worse, it fires on the
+# documented escape hatch, so the fix for starvation caused a false red for anyone who took it.
+# CC_GATE_MAX_LOAD is FORCED to 0 rather than unset: a test must never sit in admission control,
+# which would stall the gate up to CC_GATE_ADMIT_MAX_WAIT per call (and gate_admit is a no-op
+# under the lock anyway). Only LANDER tuning is scrubbed — a test that wants any of these sets it
+# itself, per-test, which is unaffected.
+gate_bats() {  # run bats with the operator's lander tuning scrubbed; args pass through verbatim
+  env -u SHIP_LAND_GATE_ROUNDS -u SHIP_LAND_VERIFY_RETRIES -u SHIP_LAND_GATE_SCOPE \
+      -u LAND_LOCK_WAIT -u LAND_LOCK_TTL \
+      CC_GATE_MAX_LOAD=0 bats "$@"
+}
+
 run_bats_all() {  # the FULL suite — the ONLY run that earns the gate-green claim
   # CUT ≠ RED. bats exits non-zero for BOTH a real `not ok` and a death by signal (a peer's
   # kill, a starved fork, a truncated stream) — and the second case reports ZERO `not ok`.
@@ -362,7 +386,7 @@ run_bats_all() {  # the FULL suite — the ONLY run that earns the gate-green cl
   gate_admit "the FULL bats suite"
   log="$(mktemp)"
   echo "→ gate: bats tests/" >&2
-  bats tests/ 2>&1 | tee "$log" >&2; rc="${PIPESTATUS[0]}"
+  gate_bats tests/ 2>&1 | tee "$log" >&2; rc="${PIPESTATUS[0]}"
   if [[ "$rc" -eq 0 ]]; then rm -f "$log"; return 0; fi
   notok="$(grep -c '^not ok' "$log" 2>/dev/null || true)"; notok="${notok:-0}"
   if [[ "$notok" -gt 0 ]]; then
@@ -380,7 +404,7 @@ run_bats_all() {  # the FULL suite — the ONLY run that earns the gate-green cl
   # hence the pre-existing "RED (or cut twice)", which handed the caller a guess at precisely the
   # moment the answer decides what to do next. Same discriminator as the first run: the TAP body.
   td="$(mktemp -d)"; log="$(mktemp)"
-  TMPDIR="$td" bats tests/ 2>&1 | tee "$log" >&2; rc2="${PIPESTATUS[0]}"
+  TMPDIR="$td" gate_bats tests/ 2>&1 | tee "$log" >&2; rc2="${PIPESTATUS[0]}"
   rm -rf "$td" 2>/dev/null || true
   if [[ "$rc2" -eq 0 ]]; then
     rm -f "$log"
@@ -421,7 +445,7 @@ run_scoped_suite() {  # $1=suite file $2=newline-list of DIRECT suites → 0 gre
   # tee (not capture-then-print): the failing run stays LIVE on stderr while its output is kept,
   # so the ledger can record WHAT failed — a bare "it flaked" line is unactionable.
   log="$(mktemp)"
-  bats "$f" 2>&1 | tee "$log" >&2; rc1="${PIPESTATUS[0]}"
+  gate_bats "$f" 2>&1 | tee "$log" >&2; rc1="${PIPESTATUS[0]}"
   if [[ "$rc1" -eq 0 ]]; then rm -f "$log"; return 0; fi
   sig="$(grep -m1 -aE '^not ok|Terminated|Killed|signal|timed? ?out' "$log" 2>/dev/null | sed 's/["\]//g' | cut -c1-160)"
   [[ -z "$sig" ]] && sig="exit $rc1"
@@ -431,7 +455,7 @@ run_scoped_suite() {  # $1=suite file $2=newline-list of DIRECT suites → 0 gre
   # experiment, not a retry — the exoneration only means something if the environment changed.
   gate_admit "exoneration re-run of $f"
   td="$(mktemp -d)"
-  TMPDIR="$td" bats "$f" >&2; rc2=$?
+  TMPDIR="$td" gate_bats "$f" >&2; rc2=$?
   rm -rf "$td" 2>/dev/null || true
   [[ "$rc2" -ne 0 ]] && { echo "✗ gate: bats RED: $f (failed twice)" >&2; return 1; }
   if printf '%s\n' "$direct" | grep -qxF -- "$f"; then
