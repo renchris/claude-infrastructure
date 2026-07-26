@@ -69,12 +69,62 @@ STUB
   echo "RT_LEN=${#CLAUDE_CODE_OAUTH_REFRESH_TOKEN}"; } >> "$FIX/claude-calls"
 echo "Login successful."
 if [ -f "$FIX/claude.out" ]; then cat "$FIX/claude.out"; fi
+# `exec` so the recorded pid IS the long-lived process — killing it must kill the whole child
+if [ -f "$FIX/claude.sleep" ]; then echo $$ > "$FIX/claude.pid"; exec sleep 60; fi
 exit "$(cat "$FIX/claude.rc" 2>/dev/null || echo 0)"
 STUB
 
   hdr "$D/stub-authbrowser"
-  echo 'echo "authbrowser $*" >> "$FIX/authbrowser-calls"' >> "$D/stub-authbrowser"
+  cat >> "$D/stub-authbrowser" <<'STUB'
+echo "authbrowser $*" >> "$FIX/authbrowser-calls"
+case "$*" in
+  *--start*)
+    if [ -f "$FIX/ab.start.json" ]; then cat "$FIX/ab.start.json"; fi
+    exit "$(cat "$FIX/ab.start.rc" 2>/dev/null || echo 0)" ;;
+esac
+exit 0
+STUB
   chmod +x "$D"/stub-*
+
+  # --- python unit-test harness: loads bin/cc-relogin as module `ccr` and drives its pure
+  # --- seams (drive/click_authorize/await_oauth_url) with a duck-typed fake CDP. No socket,
+  # --- no browser, no keychain — the CDP client is a constructor arg precisely so this works.
+  cat > "$D/prelude.py" <<'PY'
+import importlib.util, os, sys
+from importlib.machinery import SourceFileLoader
+# cc-relogin is extensionless (shebang-dispatched), so spec_from_file_location cannot infer a
+# loader from the suffix and returns None — name SourceFileLoader explicitly.
+spec = importlib.util.spec_from_file_location(
+    "ccr", sys.argv[1], loader=SourceFileLoader("ccr", sys.argv[1]))
+ccr = importlib.util.module_from_spec(spec); spec.loader.exec_module(ccr)
+ccr.CALLBACK_TIMEOUT_S, ccr.POLL_S = 2.0, 0.02
+
+class FakeChild:
+    def __init__(self, rc=None): self._rc = rc; self.returncode = rc
+    def poll(self): return self._rc
+    def wait(self, timeout=None): self._rc = self.returncode = 0; return 0
+
+class FakeCDP:
+    def __init__(self, states=(), boxmodel=True, has_el=True):
+        self.states, self.sent = list(states), []
+        self.boxmodel, self.has_el = boxmodel, has_el
+    def send(self, method, params=None, session=None):
+        self.sent.append((method, params or {}))
+        if method == "Runtime.evaluate":
+            if "location.href" in (params or {}).get("expression", ""):
+                return {"result": {"value": self.states.pop(0) if self.states else ""}}
+            return {"result": {"objectId": "OID"} if self.has_el else {}}
+        if method == "DOM.getBoxModel":
+            if not self.boxmodel: raise RuntimeError("not rendered")
+            return {"model": {"content": [10, 20, 30, 20, 30, 40, 10, 40]}}
+        return {}
+    def methods(self): return [m for m, _ in self.sent]
+PY
+  pyt() {  # body on stdin -> run against the loaded module; nonzero exit fails the test
+    { cat "$D/prelude.py"; cat; } > "$D/t.py"
+    run python3 "$D/t.py" "$C"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+  }
 
   # --- fixture writers -------------------------------------------------------------------------
   mk_info() { # <n|all> <has_refresh_token> [keychain_state] [config_dir]
@@ -323,7 +373,160 @@ EOF
   mk_info all false; mk_fresh 1 logged-out
   run "$C" next3
   [ "$status" -eq 4 ]
-  echo "$output" | grep -qi 'phase 2'
+  echo "$output" | grep -q 'no OAuth URL printed'
+}
+
+# ---- phase 2 seams (real subprocesses; stub browser, never a real one) --------------------------
+
+@test "phase 2: no OAuth URL printed → BROWSER-FAILED (4), transcript kept and named" {
+  mk_info all false; mk_fresh 1 logged-out
+  run "$C" next3 --url-timeout 2
+  [ "$status" -eq 4 ]
+  echo "$output" | grep -q 'login transcript kept'
+  [ -f "$D/cc-relogin-next3.out" ]
+  [ ! -e "$D/cc-relogin-next3.in" ]            # the fifo never outlives the run
+}
+
+@test "phase 2: cc-authbrowser --start failing → 4, and --stop is NOT called (never started)" {
+  mk_info all false; mk_fresh 1 logged-out
+  echo 'https://claude.ai/oauth/authorize?code_challenge=xyz' > "$D/claude.out"
+  echo 4 > "$D/ab.start.rc"
+  run "$C" next3 --url-timeout 5
+  [ "$status" -eq 4 ]
+  echo "$output" | grep -q 'cc-authbrowser --start exit 4'
+  grep -q -- '--start' "$D/authbrowser-calls"
+  refute grep -q -- '--stop' "$D/authbrowser-calls"
+}
+
+@test "phase 2: --start emitting no ws_url → 4, and teardown still stops the browser" {
+  mk_info all false; mk_fresh 1 logged-out
+  echo 'https://claude.ai/oauth/authorize?code_challenge=xyz' > "$D/claude.out"
+  echo '{"acct":"next3","pid":123,"port":9343}' > "$D/ab.start.json"
+  run "$C" next3 --url-timeout 5
+  [ "$status" -eq 4 ]
+  echo "$output" | grep -q 'no ws_url'
+  grep -q -- '--stop' "$D/authbrowser-calls"
+}
+
+@test "phase 2: CDP unreachable → 4, and the browser is STILL stopped (teardown is unconditional)" {
+  mk_info all false; mk_fresh 1 logged-out
+  echo 'https://claude.ai/oauth/authorize?code_challenge=xyz' > "$D/claude.out"
+  echo '{"ws_url":"ws://127.0.0.1:1/devtools/browser/dead"}' > "$D/ab.start.json"
+  run "$C" next3 --url-timeout 5
+  [ "$status" -eq 4 ]
+  grep -q -- '--stop' "$D/authbrowser-calls"
+  [ ! -e "$D/cc-relogin-next3.in" ]
+}
+
+@test "phase 2: the login child is killed on teardown, never left running" {
+  mk_info all false; mk_fresh 1 logged-out
+  echo 'https://claude.ai/oauth/authorize?code_challenge=xyz' > "$D/claude.out"
+  : > "$D/claude.sleep"
+  echo 4 > "$D/ab.start.rc"
+  run "$C" next3 --url-timeout 5
+  [ "$status" -eq 4 ]
+  [ -s "$D/claude.pid" ]
+  refute kill -0 "$(cat "$D/claude.pid")"
+}
+
+@test "phase 2 never branches on cc-authbrowser --status exit code" {
+  refute grep -qE '(if|&&|\|\|).*--status' "$C"
+  grep -q 'NEVER branch on .*--status' "$C"
+}
+
+# ---- phase 2 driver unit tests (fake CDP — no socket, no browser) -------------------------------
+
+@test "drive(): child already exited 0 (warm session, localhost callback) → PROVEN" {
+  pyt <<'PY'
+code, detail = ccr.drive(FakeCDP(), "s", FakeChild(0), 1, {"email": "e@x"})
+assert code == 0, (code, detail)
+PY
+}
+
+@test "drive(): code#state on the page is scraped and written to the fifo → PROVEN" {
+  pyt <<'PY'
+r, w = os.pipe()
+page = "https://claude.ai/oauth/authorize\x00Your code:\nABCDEFGHIJKLMNOP1234#statevalue1\n"
+code, detail = ccr.drive(FakeCDP([page]), "s", FakeChild(None), w, {"email": "e@x"})
+assert code == 0, (code, detail)
+os.close(w)
+got = os.read(r, 400).decode()
+assert "ABCDEFGHIJKLMNOP1234#statevalue1\n" in got, got
+PY
+}
+
+@test "drive(): landing on /login → FALLBACK-REQUIRED (6) naming the exact human step + mailbox" {
+  pyt <<'PY'
+page = "https://claude.ai/login?return=1\x00Sign in to continue"
+info = {"email": "acct@example.test", "mailbox": "mbox@example.test"}
+code, detail = ccr.drive(FakeCDP([page]), "s", FakeChild(None), 1, info)
+assert code == 6, (code, detail)
+assert "mbox@example.test" in detail and "acct@example.test" in detail, detail
+assert "claude.ai/login" in detail, detail
+PY
+}
+
+@test "drive(): no outcome before the callback deadline → BROWSER-FAILED (4)" {
+  pyt <<'PY'
+ccr.CALLBACK_TIMEOUT_S = 0.3
+code, detail = ccr.drive(FakeCDP(), "s", FakeChild(None), 1, {"email": "e@x"})
+assert code == 4, (code, detail)
+assert "callback timeout" in detail, detail
+PY
+}
+
+@test "click_authorize(): dispatches a real press/release at the box-model centre" {
+  pyt <<'PY'
+cdp = FakeCDP()
+assert ccr.click_authorize(cdp, "s") is True
+kinds = [p["type"] for m, p in cdp.sent if m == "Input.dispatchMouseEvent"]
+assert kinds == ["mousePressed", "mouseReleased"], kinds
+pressed = [p for m, p in cdp.sent if m == "Input.dispatchMouseEvent"][0]
+assert (pressed["x"], pressed["y"]) == (20.0, 30.0), pressed   # centre of the fixture quad
+PY
+}
+
+@test "click_authorize(): falls back to el.click() when the box model is unavailable" {
+  pyt <<'PY'
+cdp = FakeCDP(boxmodel=False)
+assert ccr.click_authorize(cdp, "s") is True
+assert "Runtime.callFunctionOn" in cdp.methods(), cdp.methods()
+assert "Input.dispatchMouseEvent" not in cdp.methods(), cdp.methods()
+PY
+}
+
+@test "click_authorize(): no Authorize control → False (caller keeps polling, never claims a click)" {
+  pyt <<'PY'
+cdp = FakeCDP(has_el=False)
+assert ccr.click_authorize(cdp, "s") is False
+assert "DOM.getBoxModel" not in cdp.methods(), cdp.methods()
+PY
+}
+
+@test "await_oauth_url(): takes the MANUAL url and ignores the auto-opened localhost variant" {
+  pyt <<'PY'
+import tempfile
+p = os.path.join(tempfile.mkdtemp(), "out")
+# Both loopback decoys come FIRST, so a driver that failed to skip them would return one.
+# The https ones matter: an http:// decoy is excluded by the https-only regex rather than by
+# the loopback filter, so it alone would leave that filter untested (caught by mutation P4).
+open(p, "w").write(
+    "Opening http://localhost:45123/oauth/authorize?code_challenge=plain in your browser\n"
+    "Callback https://localhost:45123/oauth/authorize?code_challenge=loop1\n"
+    "Callback https://127.0.0.1:45123/oauth/authorize?code_challenge=loop2\n"
+    "Or visit: https://claude.ai/oauth/authorize?code_challenge=MANUAL&state=s1\n")
+url = ccr.await_oauth_url(p, 2.0, FakeChild(None))
+assert url == "https://claude.ai/oauth/authorize?code_challenge=MANUAL&state=s1", url
+PY
+}
+
+@test "await_oauth_url(): child dies without printing a url → None (no 30s stall)" {
+  pyt <<'PY'
+import tempfile
+p = os.path.join(tempfile.mkdtemp(), "out")
+open(p, "w").write("error: could not reach the auth service\n")
+assert ccr.await_oauth_url(p, 30.0, FakeChild(1)) is None
+PY
 }
 
 @test "malformed --fresh --json → ERROR (1)" {

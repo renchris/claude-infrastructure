@@ -269,18 +269,215 @@ def phase1(info: dict[str, Any]) -> tuple[bool, str]:
 
 # ---- phase 2: browser OAuth over CDP -----------------------------------------------------------
 
-def phase2(info: dict[str, Any], url_timeout: float) -> tuple[int, str]:
-    """PHASE B — cc-authbrowser substrate + CDP Authorize drive. Returns (exit code, detail).
+CALLBACK_TIMEOUT_S = 90.0            # module-level so tests can shorten them
+POLL_S = 1.0
+# The login CLI prints a MANUAL authorize URL and also auto-opens a localhost variant in the
+# default browser. Drive the manual one only: the auto-opened tab lives in a different browser
+# with different PKCE/session state, so clicking it authorizes nothing we can observe.
+OAUTH_URL_RE = re.compile(r"https://\S*?(?:oauth/authorize|/authorize\?)\S*")
+CODE_STATE_RE = re.compile(r"\b[A-Za-z0-9_-]{16,}#[A-Za-z0-9_-]{8,}\b")
+AUTHORIZE_JS = """(() => {
+  const els = [...document.querySelectorAll('button,a,input[type=submit],[role=button]')];
+  return els.find((e) => /authorize|approve|allow/i.test((e.innerText || e.value || '').trim()))
+      || null;
+})()"""
+# NUL-joined so a href containing a newline cannot be confused for the body boundary.
+PAGE_STATE_JS = "location.href + '\\u0000' + (document.body ? document.body.innerText : '')"
 
-    Teardown (login child, WS, fifo, `cc-authbrowser <acct> --stop`) belongs in this
-    function's own finally block: no CDP port may outlive a run, success or failure.
-    NEVER branch on `cc-authbrowser --status` EXIT STATUS — it exits 0 whether or not a
-    browser is running (a successful query is 0; nonzero is reserved for failure). Read
-    `.running` out of `--status --json` instead.
-    """
-    return EXIT_BROWSER_FAILED, ("phase 2 (browser OAuth drive) is not implemented in this "
-                                 f"build — substrate would be `{AUTHBROWSER_BIN} "
-                                 f"{info.get('name')} --start` (url timeout {url_timeout:g}s)")
+
+class CDP:
+    """Minimal flat-session CDP client over one websocket (`websocket-client`)."""
+
+    def __init__(self, url: str) -> None:
+        import websocket                       # lazy: nothing else in this file leaves stdlib
+        self.ws = websocket.create_connection(url, suppress_origin=True, timeout=20)
+        self.n = 0
+
+    def send(self, method: str, params: dict[str, Any] | None = None,
+             session: str | None = None) -> dict[str, Any]:
+        self.n += 1
+        msg: dict[str, Any] = {"id": self.n, "method": method, "params": params or {}}
+        if session:
+            msg["sessionId"] = session
+        self.ws.send(json.dumps(msg))
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            frame = json.loads(self.ws.recv())          # events (no "id") just fall through
+            if frame.get("id") == self.n:
+                if "error" in frame:
+                    raise RuntimeError(f"{method}: {frame['error']}")
+                return frame.get("result", {})
+        raise RuntimeError(f"{method}: no reply within 20s")
+
+    def close(self) -> None:
+        try:
+            self.ws.close()
+        except Exception:                # noqa: BLE001 — teardown must not mask the real failure
+            pass
+
+
+def authbrowser(acct: str, *args: str) -> tuple[int, str]:
+    """Run cc-authbrowser. NEVER branch on `--status` exit status (it is 0 whether or not a
+    browser runs — nonzero is reserved for failure); read `.running` from `--status --json`."""
+    try:
+        p = subprocess.run([AUTHBROWSER_BIN, acct, *args], capture_output=True,
+                           text=True, timeout=60)
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        return EXIT_ERROR, str(exc)
+    return p.returncode, p.stdout
+
+
+def await_oauth_url(path: str, timeout: float, child: Any) -> str | None:
+    """Poll the login child's transcript for the printed MANUAL authorize URL."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            with open(path) as fh:
+                text = fh.read()
+        except OSError:
+            text = ""
+        for m in OAUTH_URL_RE.finditer(text):
+            url = m.group(0).rstrip('."\')')
+            if "localhost" not in url and "127.0.0.1" not in url:
+                return url
+        if child.poll() is not None:
+            return None                       # child died before printing one
+        time.sleep(0.25)
+    return None
+
+
+def click_authorize(cdp: Any, session: str) -> bool:
+    """Real press/release on the Authorize control; `el.click()` is the documented fallback."""
+    handle = cdp.send("Runtime.evaluate",
+                      {"expression": AUTHORIZE_JS, "returnByValue": False}, session)
+    oid = (handle.get("result") or {}).get("objectId")
+    if not oid:
+        return False
+    try:
+        quad = cdp.send("DOM.getBoxModel", {"objectId": oid}, session)["model"]["content"]
+        x, y = (quad[0] + quad[4]) / 2, (quad[1] + quad[5]) / 2
+        for kind in ("mousePressed", "mouseReleased"):
+            cdp.send("Input.dispatchMouseEvent",
+                     {"type": kind, "x": x, "y": y, "button": "left", "clickCount": 1}, session)
+    except (RuntimeError, KeyError, IndexError, TypeError):
+        cdp.send("Runtime.callFunctionOn",
+                 {"objectId": oid, "functionDeclaration": "function(){this.click()}"}, session)
+    return True
+
+
+def drive(cdp: Any, session: str, child: Any, fifo_fd: int,
+          info: dict[str, Any]) -> tuple[int, str]:
+    """Watch the authorize page to one of the three contract outcomes."""
+    clicked = False
+    deadline = time.monotonic() + CALLBACK_TIMEOUT_S
+    while time.monotonic() < deadline:
+        if child.poll() is not None and child.returncode == 0:
+            return EXIT_PROVEN, "login child completed (warm session, localhost callback)"
+        state = (cdp.send("Runtime.evaluate",
+                          {"expression": PAGE_STATE_JS, "returnByValue": True},
+                          session).get("result") or {}).get("value") or ""
+        href, _, body = str(state).partition("\0")
+        if "/login" in href:
+            mailbox = info.get("mailbox") or info.get("email")
+            return EXIT_FALLBACK_REQUIRED, (
+                f"landed on {href} — the claude.ai web session is cold and the email-code leg is "
+                f"NOT automated. REMAINING HUMAN STEP: open that URL, sign in as "
+                f"{info.get('email')}, take the emailed code from mailbox {mailbox}, "
+                "then re-run this command.")
+        m = CODE_STATE_RE.search(body)
+        if m:
+            os.write(fifo_fd, (m.group(0) + "\n").encode())
+            try:
+                child.wait(timeout=60)
+            except subprocess.TimeoutExpired:
+                return EXIT_BROWSER_FAILED, "login child hung after the code was delivered"
+            if child.returncode == 0:
+                return EXIT_PROVEN, "authorization code delivered to the login child"
+            return EXIT_BROWSER_FAILED, f"login child exited {child.returncode} after the code"
+        if not clicked:
+            clicked = click_authorize(cdp, session)
+        time.sleep(POLL_S)
+    return EXIT_BROWSER_FAILED, ("callback timeout: no success, no code#state and no /login "
+                                 f"within {CALLBACK_TIMEOUT_S:g}s")
+
+
+def phase2_drive(info: dict[str, Any], url_timeout: float, acct: str,
+                 outp: str) -> tuple[int, str]:
+    """Phase 2 mechanics. Teardown is unconditional — no CDP port, child or fifo outlives a run."""
+    fifo = os.path.join(TMP, f"cc-relogin-{acct}.in")
+    child = cdp = out_fh = None
+    fifo_fd = None
+    started = False
+    try:
+        cbin = os.path.expanduser(info.get("claude_bin") or "")
+        if not cbin or not os.path.exists(cbin):
+            return EXIT_BROWSER_FAILED, f"claude binary missing at {cbin!r}"
+        if os.path.exists(fifo):
+            os.unlink(fifo)
+        os.mkfifo(fifo, 0o600)
+        # O_RDWR by the driver: open never blocks and the reader never sees EOF, so the login
+        # child's stdin stays alive for the whole flow even before we have anything to write.
+        fifo_fd = os.open(fifo, os.O_RDWR)
+        out_fh = open(outp, "w+")
+        env = os.environ.copy()
+        env["CLAUDE_CONFIG_DIR"] = os.path.expanduser(info.get("config_dir") or "")
+        env["CLAUDE_CODE_OAUTH_SCOPES"] = info.get("oauth_scopes") or ""   # verbatim
+        child = subprocess.Popen(
+            [cbin, "auth", "login", "--claudeai", "--email", str(info.get("email") or "")],
+            env=env, stdin=fifo_fd, stdout=out_fh, stderr=subprocess.STDOUT)
+        url = await_oauth_url(outp, url_timeout, child)
+        if not url:
+            return EXIT_BROWSER_FAILED, f"no OAuth URL printed within {url_timeout:g}s"
+        rc, out = authbrowser(acct, "--start", "--json")
+        if rc != 0:
+            return EXIT_BROWSER_FAILED, f"cc-authbrowser --start exit {rc}: {out.strip()[:160]}"
+        started = True
+        try:
+            ws_url = json.loads(out)["ws_url"]
+        except (json.JSONDecodeError, KeyError, TypeError):
+            return EXIT_BROWSER_FAILED, "cc-authbrowser --start emitted no ws_url"
+        cdp = CDP(ws_url)
+        # No browserContextId mapping: the dedicated profile IS the browser (contract §3 delta).
+        tid = cdp.send("Target.createTarget", {"url": url})["targetId"]
+        session = cdp.send("Target.attachToTarget",
+                           {"targetId": tid, "flatten": True})["sessionId"]
+        return drive(cdp, session, child, fifo_fd, info)
+    finally:
+        if child is not None and child.poll() is None:
+            child.kill()
+            try:
+                child.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                pass
+        if cdp is not None:
+            cdp.close()
+        if fifo_fd is not None:
+            os.close(fifo_fd)
+        if out_fh is not None:
+            out_fh.close()
+        try:
+            os.unlink(fifo)
+        except OSError:
+            pass
+        if started:
+            authbrowser(acct, "--stop")       # idempotent; no CDP port may outlive the run
+
+
+def phase2(info: dict[str, Any], url_timeout: float) -> tuple[int, str]:
+    """PHASE B — cc-authbrowser substrate + CDP Authorize drive. Returns (exit code, detail)."""
+    acct = str(info.get("name") or "")
+    outp = os.path.join(TMP, f"cc-relogin-{acct}.out")
+    try:
+        code, detail = phase2_drive(info, url_timeout, acct, outp)
+    except Exception as exc:              # noqa: BLE001 — any phase-2 mechanic failure is a 4
+        code, detail = EXIT_BROWSER_FAILED, f"{type(exc).__name__}: {exc}"
+    if code == EXIT_PROVEN:
+        try:
+            os.unlink(outp)
+        except OSError:
+            pass
+        return code, detail
+    return code, f"{detail} [login transcript kept: {outp}]"
 
 
 # ---- verify by EFFECT --------------------------------------------------------------------------
