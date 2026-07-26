@@ -119,7 +119,7 @@ setup() {
   id=$(bash "$CD" open --class B --what "future" --default "d" --deadline "2099-01-01T00:00:00Z")
   run bash "$CD" expire-sweep
   [ "$status" -eq 0 ]
-  ! echo "$output" | grep -q "$id"
+  ! echo "$output" | grep -q "$id" || false
   run jq -r '.status' "$CC_DECISIONS_DIR/$id.json"
   [ "$output" = "open" ]
 }
@@ -128,7 +128,7 @@ setup() {
   id=$(bash "$CD" open --class C --what "waits forever" --staged-artifact /tmp/x.sh)
   run bash "$CD" expire-sweep
   [ "$status" -eq 0 ]
-  ! echo "$output" | grep -q "$id"
+  ! echo "$output" | grep -q "$id" || false
   run jq -r '.status' "$CC_DECISIONS_DIR/$id.json"
   [ "$output" = "open" ]
 }
@@ -148,7 +148,7 @@ setup() {
   bash "$CD" veto "$id" --by operator >/dev/null
   run jq -r '.status' "$CC_DECISIONS_DIR/$id.json"; [ "$output" = "vetoed" ]
   run bash "$CD" expire-sweep
-  ! echo "$output" | grep -q "$id"
+  ! echo "$output" | grep -q "$id" || false
   run jq -r '.status' "$CC_DECISIONS_DIR/$id.json"; [ "$output" = "vetoed" ]
 }
 

@@ -154,7 +154,7 @@ mk_spend_teammate_transcript() {
   [ "$status" -eq 0 ]
   [ -f "$STATE/parked/aaaaaaaa-1111-2222-3333-444444444444.json" ]
   run jq -r '.kind + " " + .reset_at_utc' "$STATE/parked/aaaaaaaa-1111-2222-3333-444444444444.json"
-  [[ "$output" == session\ 20*Z ]]
+  [[ "$output" == session\ 20*Z ]] || false
   grep -q "PARKED aaaaaaaa" "$STATE/poller.log"   # LR-h leg: the decision is recorded
 }
 

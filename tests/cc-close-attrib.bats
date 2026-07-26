@@ -92,9 +92,9 @@ rec() { ls -1t "$CC_CLOSE_RECORDS_DIR"/*.json 2>/dev/null | head -1; }
   local r; r="$(rec)"
   grep -q "normal diagnostic line" "$r"
   grep -q "another normal line"    "$r"
-  ! grep -qi "bearer"        "$r"
-  ! grep -qi "SUPERSECRET"   "$r"
-  ! grep -qi "authorization" "$r"
+  ! grep -qi "bearer"        "$r" || false
+  ! grep -qi "SUPERSECRET"   "$r" || false
+  ! grep -qi "authorization" "$r" || false
   ! grep -qi "token"         "$r"
 }
 

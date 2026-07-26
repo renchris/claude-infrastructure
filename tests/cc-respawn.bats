@@ -32,7 +32,7 @@ mkwt() {
   echo wip > "$BATS_TEST_TMPDIR/wt/wip.txt"
   run "$T" prepare --member m2 --worktree "$BATS_TEST_TMPDIR/wt" --go "GO: RULING-7 binds" --brief-out "$BATS_TEST_TMPDIR/brief.md"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"$BATS_TEST_TMPDIR/brief.md"* ]]
+  [[ "$output" == *"$BATS_TEST_TMPDIR/brief.md"* ]] || false
   grep -q "RULING-7" "$BATS_TEST_TMPDIR/brief.md"
   grep -q "refs/respawn/m2/" "$BATS_TEST_TMPDIR/brief.md"
   git -C "$BATS_TEST_TMPDIR/wt" rev-parse --verify -q refs/wip/m2/LAST

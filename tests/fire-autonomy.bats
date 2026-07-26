@@ -72,7 +72,7 @@ STUB
   echo '{"projects":{"/x":{"allowedTools":["Bash"],"hasTrustDialogAccepted":false}}}' > "$cfg/.claude.json"
   pre_trust /x "$cfg"
   run jq -c '.projects["/x"]' "$cfg/.claude.json"
-  [[ "$output" == *'"allowedTools":["Bash"]'* ]]
+  [[ "$output" == *'"allowedTools":["Bash"]'* ]] || false
   [[ "$output" == *'"hasTrustDialogAccepted":true'* ]]
 }
 

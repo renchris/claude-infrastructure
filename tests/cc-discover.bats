@@ -153,7 +153,7 @@ EOF
   # dead-guard (12/12 blind, never fired) is added; rare-guard (fired in-horizon) is not
   [ "$(count_src wiring-inert)" -eq 1 ]
   grep -q 'inert hook dead-guard' "$CC_BACKLOG_FILE"
-  ! grep -q 'rare-guard' "$CC_BACKLOG_FILE"
+  ! grep -q 'rare-guard' "$CC_BACKLOG_FILE" || false
 }
 
 # Regression (117bf1aea7b7, fix a): PER-HOOK windowing. A high-frequency hook's own eval churn is
@@ -173,8 +173,8 @@ EOF
   [ "$status" -eq 0 ]
   # rare-guard's fire survives per-hook (not crowded out); noisy's not-armed churn is DORMANT → 0 adds
   [ "$(count_src wiring-inert)" -eq 0 ]
-  ! grep -q 'rare-guard' "$CC_BACKLOG_FILE"
-  ! grep -q 'inert hook noisy' "$CC_BACKLOG_FILE"
+  ! grep -q 'rare-guard' "$CC_BACKLOG_FILE" || false
+  ! grep -q 'inert hook noisy' "$CC_BACKLOG_FILE" || false
 }
 
 # ── C4 gate-red (CLI-level) ──────────────────────────────────────────────────

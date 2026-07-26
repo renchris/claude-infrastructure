@@ -24,9 +24,9 @@ run_wire() { run bash "$REPO/install.sh" --wire-hooks --config-dir "$CFG"; }
 @test "within-event union: boundary + completion-assert land at Stop obj-1 tail, order preserved" {
   run_wire; [ "$status" -eq 0 ]
   run jq -r '[.hooks.Stop[0].hooks[].command] | join("|")' "$CFG/settings.json"
-  [[ "$output" == *"notify.sh complete|"*"session-continue.sh|"*"anti-deference-nudge.sh"* ]]
-  [[ "$output" == *"completion-assert.sh"* ]]
-  [[ "$output" == *"boundary-handoff.sh"* ]]
+  [[ "$output" == *"notify.sh complete|"*"session-continue.sh|"*"anti-deference-nudge.sh"* ]] || false
+  [[ "$output" == *"completion-assert.sh"* ]] || false
+  [[ "$output" == *"boundary-handoff.sh"* ]] || false
   # pre-existing order intact (notify before continue before anti-def)
   [[ "$output" =~ notify.*session-continue.*anti-deference ]]
 }
@@ -36,7 +36,7 @@ run_wire() { run bash "$REPO/install.sh" --wire-hooks --config-dir "$CFG"; }
   run jq '[.hooks.PreToolUse[] | select(.matcher=="Bash")] | length' "$CFG/settings.json"
   [ "$output" -eq 1 ]   # no duplicate Bash object created
   run jq -r '[.hooks.PreToolUse[] | select(.matcher=="Bash") | .hooks[].command] | join("|")' "$CFG/settings.json"
-  [[ "$output" == *"validate-bash.sh"* && "$output" == *"keychain-guard.sh"* ]]
+  [[ "$output" == *"validate-bash.sh"* && "$output" == *"keychain-guard.sh"* ]] || false
   run jq -r '[.hooks.PreCompact[] | select(.matcher=="auto") | .hooks[].command] | join("|")' "$CFG/settings.json"
   [[ "$output" == *"echo x"* && "$output" == *"dod-persist.sh"* ]]
 }

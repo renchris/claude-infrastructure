@@ -26,6 +26,6 @@ setup() {
   local pf="$BATS_TEST_TMPDIR/ok.txt"; echo "resume the desk" > "$pf"
   run bash "$HF" --recycle --prompt-file "$pf" --session-id "fake:UUID"
   # It will fail downstream (no real iTerm/account in the test env) — but NOT on the empty/missing guards.
-  ! echo "$output" | grep -qi "empty prompt file"
+  ! echo "$output" | grep -qi "empty prompt file" || false
   ! echo "$output" | grep -qi "missing prompt file"
 }

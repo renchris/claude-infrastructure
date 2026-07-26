@@ -164,7 +164,7 @@ td_called() { [ -f "$D/td-calls" ]; }
   mock_classify_handoff "$D/clean" 999 yes
   run "$R" sweep
   [ "$status" -eq 0 ]
-  ! td_called
+  ! td_called || false
   echo "$output" | grep -q WOULD-REAP
 }
 
@@ -201,14 +201,14 @@ td_called() { [ -f "$D/td-calls" ]; }
 @test "reapable cause but work NOT landed → DEFER, no teardown" {
   mock_classify handed-off-lead "$D/clean" 999 no
   run "$R" sweep --reap
-  ! td_called
+  ! td_called || false
   echo "$output" | grep -q 'NOT landed'
 }
 
 @test "reapable + landed but idle < settle → not yet (self-close window), no teardown" {
   mock_classify handed-off-lead "$D/clean" 50 yes
   run "$R" sweep --reap
-  ! td_called
+  ! td_called || false
   echo "$output" | grep -q 'settle'
 }
 
@@ -235,14 +235,14 @@ td_called() { [ -f "$D/td-calls" ]; }
   mock_classify finished "$D/clean" 999 yes "$WPANE"   # UUID pane, deliberately NO marker
   run "$R" sweep --reap
   [ "$status" -eq 0 ]
-  ! td_called
+  ! td_called || false
   echo "$output" | grep -qi 'unstamped'
 }
 
 @test "2026-07-24 belt: finished-teammate WITHOUT the stamp → surfaced, never torn down" {
   mock_classify finished-teammate "$D/clean" 999 yes "$WPANE"
   run "$R" sweep --reap
-  ! td_called
+  ! td_called || false
   echo "$output" | grep -qi 'unstamped'
 }
 
@@ -256,7 +256,7 @@ td_called() { [ -f "$D/td-calls" ]; }
   set_desk
   mock_classify finished-operator "$D/clean" 9000 yes PANE-OP
   run "$R" sweep --reap
-  ! td_called
+  ! td_called || false
   notified
   grep -q 'finished-operator' "$D/notify-calls"
 }
@@ -264,7 +264,7 @@ td_called() { [ -f "$D/td-calls" ]; }
 @test "finished + work NOT landed → DEFER, no teardown (idle alone never reaps)" {
   mock_classify finished "$D/clean" 999 no
   run "$R" sweep --reap
-  ! td_called
+  ! td_called || false
   echo "$output" | grep -q 'NOT landed'
 }
 
@@ -273,14 +273,14 @@ td_called() { [ -f "$D/td-calls" ]; }
   mock_classify finished "$D/clean" 999 yes "$WPANE"
   run "$R" sweep
   [ "$status" -eq 0 ]
-  ! td_called
+  ! td_called || false
   echo "$output" | grep -q WOULD-REAP
 }
 
 @test "post-classify RACE: classify says landed but cwd is dirty at act-time → ABORT, WIP checkpointed, no teardown" {
   mock_classify_handoff "$D/dirty" 999 yes
   run "$R" sweep --reap
-  ! td_called                       # teardown NOT called
+  ! td_called || false              # teardown NOT called
   [ -f "$D/ckpt-payloads" ]          # but checkpoint DID run first (WIP snapshotted)
   echo "$output" | grep -q ABORT
 }
@@ -342,7 +342,7 @@ EOF
   mock_classify finished "$D/clean" 9000 yes "$WPANE" "$(( $(date +%s) * 1000 ))"   # tenant booted NOW
   run "$R" sweep --reap
   [ "$status" -eq 0 ]
-  ! td_called                                        # NOT reaped (stale stamp rejected by the belt)
+  ! td_called || false                               # NOT reaped (stale stamp rejected by the belt)
   [ ! -f "$D/fired/$WPANE.json" ]                     # stamp GC'd
   grep -q 'stale-tenancy stamp GC' "$D/reaper.log"
   echo "$output" | grep -qi 'unstamped/stale'
@@ -368,7 +368,7 @@ EOF
   mark_fired
   mock_classify finished "$D/dirty" 999 yes "$WPANE"
   run "$R" sweep --reap
-  ! td_called
+  ! td_called || false
   echo "$output" | grep -q ABORT
 }
 
@@ -384,7 +384,7 @@ EOF
   mock_classify finished-shared-review "$D/untracked" 9000 no "$WPANE"    # no mark_fired
   run "$R" sweep --reap
   [ "$status" -eq 0 ]
-  ! td_called                                        # NOT reaped
+  ! td_called || false                               # NOT reaped
   notified; grep -q 'finished-shared-review' "$D/notify-calls"   # surfaced exactly as before
 }
 
@@ -397,7 +397,7 @@ EOF
     mock_classify "$c" "$D/untracked" 9000 yes "$WPANE"
     run "$R" sweep --reap
     [ "$status" -eq 0 ]
-    ! td_called
+    ! td_called || false
   done
 }
 
@@ -405,7 +405,7 @@ EOF
   set_desk; set_live 1; mark_fired "$WPANE"
   mock_classify finished-shared-review "$D/dirty" 9000 no "$WPANE"
   run "$R" sweep --reap
-  ! td_called
+  ! td_called || false
   echo "$output" | grep -q 'TRACKED tree dirty'
   notified                                           # falls through to the surface path
 }
@@ -415,7 +415,7 @@ EOF
   set_desk; set_live 1; mark_fired "$WPANE"
   mock_classify finished-shared-review "$D/ahead" 9000 no "$WPANE"
   run "$R" sweep --reap
-  ! td_called
+  ! td_called || false
   notified
 }
 
@@ -427,7 +427,7 @@ EOF
   [ "$status" -eq 0 ]
   td_called; grep -q "$WPANE" "$D/td-calls"
   echo "$output" | grep -q 'promote'
-  ! notified                                         # auto-reaped SILENTLY — the operator is not paged
+  ! notified || false                                # auto-reaped SILENTLY — the operator is not paged
   # the DURABLE audit string must state the basis it actually has (fired peer + tracked-clean),
   # not the generic "clean & 0 ahead" evidence a promoted reap does NOT rest on
   grep -q 'T-P3-4 auto-reap' "$D/td-calls"
@@ -438,7 +438,7 @@ EOF
   set_desk; set_live 1; mark_fired "$WPANE"
   mock_classify finished-shared-review "$D/untracked" 50 no "$WPANE"   # idle < settle(100)
   run "$R" sweep --reap
-  ! td_called
+  ! td_called || false
   echo "$output" | grep -q 'settle'
 }
 
@@ -447,7 +447,7 @@ EOF
   mock_classify finished-shared-review "$D/untracked" 9000 no "$WPANE"
   run "$R" sweep
   [ "$status" -eq 0 ]
-  ! td_called
+  ! td_called || false
   echo "$output" | grep -q WOULD-REAP
 }
 
@@ -473,7 +473,7 @@ EOF
   export CC_REAPER_AUTOREAP_FIRED=0
   mock_classify finished-shared-review "$D/untracked" 9000 no "$WPANE"
   run "$R" sweep --reap
-  ! td_called
+  ! td_called || false
   notified
 }
 
@@ -483,7 +483,7 @@ EOF
   mkdir -p "$D/fired"; echo '{"selfRetire":true}' > "$D/fired/../fired/PANE-X.json"
   mock_classify finished-shared-review "$D/untracked" 9000 no PANE-X
   run "$R" sweep --reap
-  ! td_called
+  ! td_called || false
   notified
 }
 
@@ -557,7 +557,7 @@ mkworktree() { # <main-repo> <wt-path> — a real LINKED worktree under a */.wor
   : > "$D/notify-calls"
   run "$R" sweep --reap                             # identical second sweep
   [ "$status" -eq 0 ]
-  ! notified                                        # damped — no second notify
+  ! notified || false                               # damped — no second notify
   echo "$output" | grep -q 'damped'
 }
 
@@ -578,7 +578,7 @@ mkworktree() { # <main-repo> <wt-path> — a real LINKED worktree under a */.wor
     mock_classify "$c" "$D/clean" 9000 no PANE-X
     run "$R" sweep --reap
     [ "$status" -eq 0 ]
-    ! notified
+    ! notified || false
   done
 }
 
@@ -621,7 +621,7 @@ mkworktree() { # <main-repo> <wt-path> — a real LINKED worktree under a */.wor
   mock_classify active "$D/clean" 10 no PANE-1
   run "$R" sweep --reap
   [ "$status" -eq 0 ]
-  ! notified
+  ! notified || false
   echo "$output" | grep -q 'reaper sees all live panes'
 }
 
@@ -630,7 +630,7 @@ mkworktree() { # <main-repo> <wt-path> — a real LINKED worktree under a */.wor
   export CC_REAPER_SELFCHECK_MIN_PERSIST=2
   mock_classify active "$D/clean" 10 no PANE-1
   run "$R" sweep --reap                             # sweep 1 → persist 1/2, observe only
-  ! notified
+  ! notified || false
   echo "$output" | grep -q 'persist 1/2'
   run "$R" sweep --reap                             # sweep 2 → persist 2/2, page
   notified; grep -q 'SELF-CHECK' "$D/notify-calls"
@@ -745,7 +745,7 @@ EOF
   chmod +x "$D/bin/classify"; export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
   run "$R" sweep --reap
   [ "$status" -eq 0 ]
-  ! td_called                                          # never reaped — the operator is present
+  ! td_called || false                                 # never reaped — the operator is present
   grep -q 'operator prompt' "$D/reaper.log"
 }
 
@@ -776,7 +776,7 @@ EOF
   chmod +x "$D/bin/classify"; export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
   run "$R" sweep --reap
   [ "$status" -eq 0 ]
-  ! td_called
+  ! td_called || false
   grep -q 'fail-closed' "$D/reaper.log"
 }
 
@@ -791,7 +791,7 @@ EOF
   chmod +x "$D/bin/classify"; export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
   run "$R" sweep --reap
   [ "$status" -eq 0 ]
-  ! td_called
+  ! td_called || false
   grep -q 'not alive at act time' "$D/reaper.log"
 }
 
@@ -825,7 +825,7 @@ EOF
   mock_classify_handoff "$D/clean" 9999 yes PANE-A
   run "$R" sweep --reap
   [ "$status" -eq 0 ]
-  ! td_called
+  ! td_called || false
   grep -q 'suspend-defer' "$D/reaper.log"
 }
 
@@ -844,7 +844,7 @@ EOF
   chmod +x "$D/bin/classify"; export CC_REAPER_CLASSIFY_BIN="$D/bin/classify"
   run "$R" sweep --reap
   [ "$status" -eq 0 ]
-  ! td_called
+  ! td_called || false
   grep -q 'suspend-defer' "$D/reaper.log"
 }
 
@@ -891,7 +891,7 @@ set_recover() { printf '#!/bin/bash\necho "RECOVER $*" >> "%s"\n' "$D/recover-ca
   mock_classify_safeguard "$WPANE" "$D/clean"; mark_fired "$WPANE"; set_desk
   run "$R" sweep --reap
   [ "$status" -eq 0 ]
-  ! td_called                                              # NEVER reaped
+  ! td_called || false                                     # NEVER reaped
   grep -q '"kind":"safeguard-blocked"' "$D/idl.jsonl"      # blockers-board row
   grep -q "NOTIFY t .*SAFEGUARD-BLOCKED" "$D/notify-calls" # ORIGINATOR (firedBy=t) paged
   grep -q "cc-recover-safeguard $WPANE" "$D/notify-calls"  # recovery command surfaced
@@ -926,7 +926,7 @@ set_recover() { printf '#!/bin/bash\necho "RECOVER $*" >> "%s"\n' "$D/recover-ca
   mock_classify_safeguard "$WPANE" "$D/clean"; set_desk    # NO mark_fired → no firedBy originator
   run "$R" sweep --reap
   [ "$status" -eq 0 ]
-  ! td_called
+  ! td_called || false
   grep -q '"kind":"safeguard-blocked"' "$D/idl.jsonl"      # board row still written
   grep -q 'REAPER SURFACE' "$D/notify-calls"               # desk still paged
 }

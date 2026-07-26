@@ -54,7 +54,7 @@ archived()     { ls -d "$TEAMS/_archive/$1-"* >/dev/null 2>&1; }  # 0 iff an arc
   run bash "$REAPER"
   [ "$status" -eq 0 ]
   [ -d "$TEAMS/t-nopid" ]                                                    # still live on disk
-  ! archived t-nopid                                                        # never moved to _archive
+  ! archived t-nopid || false                                               # never moved to _archive
   grep -q "unknown-liveness t-nopid (no watchdog pid file) — surfacing" "$LOG"
   grep -q "t-nopid" "$NOTIFY_LOG"                                           # operator was paged
 }
@@ -64,7 +64,7 @@ archived()     { ls -d "$TEAMS/_archive/$1-"* >/dev/null 2>&1; }  # 0 iff an arc
   : > "$WD/sid-empty.pid"                                                    # present but empty ⇒ no pid to test
   run bash "$REAPER"
   [ "$status" -eq 0 ]
-  ! archived t-empty
+  ! archived t-empty || false
   grep -q "unknown-liveness t-empty" "$LOG"
 }
 
@@ -76,7 +76,7 @@ archived()     { ls -d "$TEAMS/_archive/$1-"* >/dev/null 2>&1; }  # 0 iff an arc
   jq -nc --arg c "$wt/nested" '[{paneUUID:"u1",name:"Successor-Desk",cwd:$c,pid:1}]' > "$SESS_JSON"
   run bash "$REAPER"
   [ "$status" -eq 0 ]
-  ! archived t-live                                                         # positive life evidence ⇒ kept
+  ! archived t-live || false                                                # positive life evidence ⇒ kept
   [ -d "$TEAMS/t-live" ]
   grep -q "keep t-live:" "$LOG"
 }
@@ -88,7 +88,7 @@ archived()     { ls -d "$TEAMS/_archive/$1-"* >/dev/null 2>&1; }  # 0 iff an arc
   jq -nc '[{paneUUID:"u2","name":"worker-1",cwd:"/unrelated/path",pid:1}]' > "$SESS_JSON"
   run bash "$REAPER"
   [ "$status" -eq 0 ]
-  ! archived t-name
+  ! archived t-name || false
   grep -q "keep t-name:" "$LOG"
 }
 
@@ -116,7 +116,7 @@ archived()     { ls -d "$TEAMS/_archive/$1-"* >/dev/null 2>&1; }  # 0 iff an arc
   [ "$status" -eq 0 ]
   [ -d "$TEAMS/_archive/old-123" ]                                          # _archive left untouched
   [ -d "$TEAMS/t-bad" ]                                                     # malformed team not archived
-  ! archived t-bad
+  ! archived t-bad || false
   grep -q "skip t-bad: no leadSessionId" "$LOG"
 }
 
@@ -126,7 +126,7 @@ archived()     { ls -d "$TEAMS/_archive/$1-"* >/dev/null 2>&1; }  # 0 iff an arc
   mk_pid_alive sid-al
   run bash "$REAPER"
   [ "$status" -eq 0 ]
-  ! archived t-alive
+  ! archived t-alive || false
   [ -d "$TEAMS/t-alive" ]
 }
 

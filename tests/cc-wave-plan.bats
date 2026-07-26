@@ -110,7 +110,7 @@ STUB
   [ "$status" -eq 0 ]
   echo "$output" | jq -e '.[0]|select(.slot=="judgment-dense" and .model=="claude-opus-4-8" and .effort=="max")'
   echo "$output" | jq -e '.[1]|select(.slot=="adversarial" and .model=="claude-opus-4-8" and .effort=="xhigh")'
-  ! printf '%s' "$output" | grep -q fable
+  ! printf '%s' "$output" | grep -q fable || false
   # the invocation is recorded as an abstention (fable-straddle-fallback)
   tail -1 "$CC_WAVE_IDL" | jq -e 'select(.action=="abstained" and .actor=="cc-wave-plan")'
 }
@@ -127,7 +127,7 @@ STUB
   export STUB_RANK=''
   run "$WP" --items '[{"id":"a","slot":"lead"}]'
   [ "$status" -eq 4 ]
-  [ -z "$output" ] || ! printf '%s' "$output" | jq -e . >/dev/null 2>&1   # no JSON plan emitted
+  [ -z "$output" ] || ! printf '%s' "$output" | jq -e . >/dev/null 2>&1 || false # no JSON plan emitted
   run bash -c "'$WP' --items '[{\"id\":\"a\",\"slot\":\"lead\"}]' 2>&1 1>/dev/null"
   printf '%s' "$output" | grep -q limit-recover
 }

@@ -79,8 +79,8 @@ STUB
   [ -z "$output" ]
   # the offer is surfaced on stderr (Kimi named, WIRED, alongside /limit-recover)
   run bash -c "STUB_GENERAL_RC=2 CC_ROUTE_KIMI_BIN='$BATS_TEST_TMPDIR/kimi-wired' '$T' lead 2>&1 1>/dev/null"
-  [[ "$output" == *"claude-kimi"* ]]
-  [[ "$output" == *"Kimi hedge is WIRED"* ]]
+  [[ "$output" == *"claude-kimi"* ]] || false
+  [[ "$output" == *"Kimi hedge is WIRED"* ]] || false
   [[ "$output" == *"limit-recover"* ]]
 }
 

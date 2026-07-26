@@ -42,8 +42,8 @@ setup() {
 @test "no key → activation notice on stderr, exit 0, ~\$0 idle (claude never invoked)" {
   run "$T"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"NOT yet activated"* ]]
-  [[ "$output" == *"platform.moonshot.ai"* ]]
+  [[ "$output" == *"NOT yet activated"* ]] || false
+  [[ "$output" == *"platform.moonshot.ai"* ]] || false
   # the stub claude must NOT have run
   ! [[ "$output" == *"STUB-CLAUDE"* ]]
 }
@@ -51,7 +51,7 @@ setup() {
 @test "no key, even WITH claude-args → still just the notice, exit 0 (cannot launch keyless)" {
   run "$T" --permission-mode auto "build me a UI"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"NOT yet activated"* ]]
+  [[ "$output" == *"NOT yet activated"* ]] || false
   ! [[ "$output" == *"STUB-CLAUDE"* ]]
 }
 
@@ -61,15 +61,15 @@ setup() {
   run "$T" --resume xyz "a prompt"
   [ "$status" -eq 0 ]
   # verified endpoint + auth model + isolation, line-for-line
-  [[ "$output" == *"ANTHROPIC_BASE_URL=https://api.moonshot.ai/anthropic"* ]]
-  [[ "$output" == *"ANTHROPIC_AUTH_TOKEN=<key-present>"* ]]
-  [[ "$output" == *"ANTHROPIC_MODEL=kimi-k3[1m]"* ]]
-  [[ "$output" == *"CLAUDE_CODE_SUBAGENT_MODEL=kimi-k3[1m]"* ]]
-  [[ "$output" == *"ENABLE_TOOL_SEARCH=false"* ]]
-  [[ "$output" == *"CLAUDE_CODE_MAX_CONTEXT_TOKENS=1048576"* ]]
-  [[ "$output" == *"CLAUDE_CONFIG_DIR=$BATS_TEST_TMPDIR/cfg"* ]]
+  [[ "$output" == *"ANTHROPIC_BASE_URL=https://api.moonshot.ai/anthropic"* ]] || false
+  [[ "$output" == *"ANTHROPIC_AUTH_TOKEN=<key-present>"* ]] || false
+  [[ "$output" == *"ANTHROPIC_MODEL=kimi-k3[1m]"* ]] || false
+  [[ "$output" == *"CLAUDE_CODE_SUBAGENT_MODEL=kimi-k3[1m]"* ]] || false
+  [[ "$output" == *"ENABLE_TOOL_SEARCH=false"* ]] || false
+  [[ "$output" == *"CLAUDE_CODE_MAX_CONTEXT_TOKENS=1048576"* ]] || false
+  [[ "$output" == *"CLAUDE_CONFIG_DIR=$BATS_TEST_TMPDIR/cfg"* ]] || false
   # caller args are forwarded to the (would-be) exec line
-  [[ "$output" == *"--resume xyz a prompt"* ]]
+  [[ "$output" == *"--resume xyz a prompt"* ]] || false
   # the contract must NOT carry a conflicting ANTHROPIC_API_KEY
   ! [[ "$output" == *"ANTHROPIC_API_KEY="* ]]
 }
@@ -82,7 +82,7 @@ setup() {
   run "$T"
   [ "$status" -eq 0 ]
   cfg_line="$(printf '%s\n' "$output" | grep '^CLAUDE_CONFIG_DIR=')"
-  [[ "$cfg_line" != *"/.claude"$'\n' ]]
+  [[ "$cfg_line" != *"/.claude"$'\n' ]] || false
   # not the source or any Max account dir
   for d in "$HOME/.claude" "$HOME/.claude-next" "$HOME/.claude-secondary" "$HOME/.claude-tertiary" "$HOME/.claude-quaternary"; do
     [ "$cfg_line" != "CLAUDE_CONFIG_DIR=$d" ]
@@ -97,7 +97,7 @@ setup() {
   run "$T"
   [ "$status" -eq 0 ]
   # a wired key → contract emitted (not the activation notice)
-  [[ "$output" == *"ANTHROPIC_BASE_URL="* ]]
+  [[ "$output" == *"ANTHROPIC_BASE_URL="* ]] || false
   ! [[ "$output" == *"NOT yet activated"* ]]
 }
 
@@ -112,7 +112,7 @@ setup() {
 @test "status distinguishes metered (Moonshot) from SUBSCRIPTION (kimi.com/coding)" {
   export KIMI_API_KEY='sk-test'
   run "$T" status
-  [[ "$output" == *"metered pay-per-token"* ]]
+  [[ "$output" == *"metered pay-per-token"* ]] || false
   KIMI_BASE_URL='https://api.kimi.com/coding/' run "$T" status
   [[ "$output" == *"SUBSCRIPTION"* ]]
 }
@@ -123,7 +123,7 @@ setup() {
   export KIMI_BASE_URL='https://api.kimi.com/coding/'
   export KIMI_MODEL='k3'
   run "$T"
-  [[ "$output" == *"ANTHROPIC_BASE_URL=https://api.kimi.com/coding/"* ]]
+  [[ "$output" == *"ANTHROPIC_BASE_URL=https://api.kimi.com/coding/"* ]] || false
   [[ "$output" == *"ANTHROPIC_MODEL=k3"* ]]
 }
 
@@ -140,7 +140,7 @@ setup() {
 @test "help prints usage and the activation steps" {
   run "$T" help
   [ "$status" -eq 0 ]
-  [[ "$output" == *"claude-kimi"* ]]
+  [[ "$output" == *"claude-kimi"* ]] || false
   [[ "$output" == *"ACTIVATION"* ]]
 }
 

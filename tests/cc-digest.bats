@@ -119,14 +119,14 @@ chmod +x "$p"; echo "$p"; }
   printf '{"hook":"healthy-guard","disposition":"fired","ts":"%s"}\n' "$now" >> "$CC_IDL"
   printf '{"hook":"healthy-guard","disposition":"fired","ts":"%s"}\n' "$now" >> "$CC_IDL"
   run bash "$DIGEST"
-  ! echo "$output" | grep -q "healthy-guard"
+  ! echo "$output" | grep -q "healthy-guard" || false
 }
 
 @test "D9: a hook with fewer than 10 evals does NOT alarm (below the window)" {
   now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   for i in $(seq 1 5); do printf '{"hook":"quiet-guard","disposition":"abstained","ts":"%s"}\n' "$now" >> "$CC_IDL"; done
   run bash "$DIGEST"
-  ! echo "$output" | grep -q "quiet-guard"
+  ! echo "$output" | grep -q "quiet-guard" || false
 }
 
 @test "D9: a healthy 'no alarms' line appears when nothing is inert" {
@@ -152,7 +152,7 @@ chmod +x "$p"; echo "$p"; }
   run bash "$DIGEST"
   [ "$status" -eq 0 ]
   # the false positive being fixed: rare-guard fired in-horizon → NOT flagged
-  ! echo "$output" | grep -q "rare-guard"
+  ! echo "$output" | grep -q "rare-guard" || false
   # the check still works despite the flood: dead-guard never fired → still flagged
   echo "$output" | grep -q "dead-guard"
 }
@@ -166,8 +166,8 @@ chmod +x "$p"; echo "$p"; }
   for i in $(seq 1 4); do printf '{"hook":"quiet-cond","disposition":"abstained","reason":"not-armed","ts":"%s"}\n' "$now" >> "$CC_IDL"; done
   run bash "$DIGEST"
   [ "$status" -eq 0 ]
-  ! echo "$output" | grep -q "ALARM"
-  ! echo "$output" | grep -q "quiet-cond"
+  ! echo "$output" | grep -q "ALARM" || false
+  ! echo "$output" | grep -q "quiet-cond" || false
 }
 
 # ── push wiring (T-P15-6 delivery) ─────────────────────────────────────────────────────────────
@@ -227,8 +227,8 @@ chmod +x "$p"; echo "$p"; }
 @test "bare cc-digest (no subcommand) does NOT deliver — default path unchanged (exit 0)" {
   CC_PUSH_SEND_BIN="$(mkpush 5)" CC_ANNOUNCE_BIN="$(mkann 5)" run bash "$DIGEST"
   [ "$status" -eq 0 ]
-  ! echo "$output" | grep -q 'phone push'
-  ! echo "$output" | grep -q 'desk-role wake'
+  ! echo "$output" | grep -q 'phone push' || false
+  ! echo "$output" | grep -q 'desk-role wake' || false
   [ ! -f "$BATS_TEST_TMPDIR/push-args" ]
 }
 

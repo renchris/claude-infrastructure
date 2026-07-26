@@ -168,7 +168,7 @@ mk_branch_no_wt() {  # $1=branch
   # ship rail ran from a throwaway worktree under DESK_LAND_WTROOT
   grep -q "CWD=.*/\.desk-land-feat-orphan-" "$SHIP_LAND_STUB_LOG"
   # and the throwaway worktree is gone afterwards (no leak)
-  ! git -C "$MAIN" worktree list | grep -q "desk-land-feat-orphan"
+  ! git -C "$MAIN" worktree list | grep -q "desk-land-feat-orphan" || false
   ! ls -d "$DESK_LAND_WTROOT"/.desk-land-feat-orphan-* 2>/dev/null
 }
 

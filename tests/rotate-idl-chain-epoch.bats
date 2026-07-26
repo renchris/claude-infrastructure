@@ -91,7 +91,7 @@ nl_of() { [ -f "$1" ] && wc -l < "$1" | tr -d ' ' || echo 0; }
   local body chain_arch bstamp cstamp
   body="$(ls "$CC_IDL".* | grep -v '\.chain' | head -1)"
   chain_arch="$(ls "$CHAIN".* | head -1)"
-  [ -n "$body" ] && [ -n "$chain_arch" ]
+  [ -n "$body" ] && [ -n "$chain_arch" ] || false
   bstamp="${body##*.}"; cstamp="${chain_arch##*.}"
   [ "$bstamp" = "$cstamp" ]                        # joined forever, never orphaned
 }

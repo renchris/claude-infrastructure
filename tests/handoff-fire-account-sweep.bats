@@ -83,7 +83,7 @@ info() { printf '%s' "$2" > "$CC_STUB_INFO_DIR/$1.json"; }
   rows '{"rows":[{"acct":"next","auth":"ok","k":0},{"acct":"next2","auth":"healed","k":1},{"acct":"next3","auth":"stale","k":2},{"acct":"next4","auth":"ok","k":0}]}'
   run bash "$HF" account-sweep
   [ "$status" -eq 0 ]
-  ! echo "$output" | grep -q "## ACCOUNT STATE"       # no bridge = all routable
+  ! echo "$output" | grep -q "## ACCOUNT STATE" || false # no bridge = all routable
   echo "$output" | grep -q "accounts healthy"
 }
 
@@ -104,7 +104,7 @@ info() { printf '%s' "$2" > "$CC_STUB_INFO_DIR/$1.json"; }
   info next2 "{\"config_dir\":\"/x\",\"keychain_service\":\"svc\",\"keychain_state\":\"present\",\"claude_bin\":\"$BIN/claude-heal-ok\",\"oauth_scopes\":\"a b\",\"has_refresh_token\":true}"
   run bash "$HF" account-sweep
   [ "$status" -eq 0 ]
-  ! echo "$output" | grep -q "## ACCOUNT STATE"       # healed → nothing stranded to embed
+  ! echo "$output" | grep -q "## ACCOUNT STATE" || false # healed → nothing stranded to embed
   echo "$output" | grep -q "healed via Phase-1 headless relogin"
   echo "$output" | grep -q "stranded=0"
 }
@@ -125,7 +125,7 @@ info() { printf '%s' "$2" > "$CC_STUB_INFO_DIR/$1.json"; }
   run bash "$HF" account-sweep
   [ "$status" -eq 0 ]
   echo "$output" | grep -q "live session(s)"
-  ! echo "$output" | grep -q "FAILED"                 # relogin was NOT attempted
+  ! echo "$output" | grep -q "FAILED" || false        # relogin was NOT attempted
   echo "$output" | grep -q "stranded=1"
 }
 
@@ -151,7 +151,7 @@ time.sleep(10)" &
   run bash "$HF" account-sweep
   kill "$holder" 2>/dev/null || true
   [ "$status" -eq 0 ]
-  ! echo "$output" | grep -q "## ACCOUNT STATE"       # deferred ≠ stranded → no bridge
+  ! echo "$output" | grep -q "## ACCOUNT STATE" || false # deferred ≠ stranded → no bridge
   echo "$output" | grep -qi "deferred"
   echo "$output" | grep -q "stranded=0"
 }
@@ -167,7 +167,7 @@ time.sleep(10)" &
   run bash "$HF" account-sweep --throttled
   [ "$status" -eq 0 ]
   echo "$output" | grep -q "reused"
-  ! echo "$output" | grep -q "POISON"                 # proves no re-poll
+  ! echo "$output" | grep -q "POISON" || false        # proves no re-poll
   echo "$output" | grep -q "## ACCOUNT STATE"         # cached bridge still surfaced
 }
 
@@ -185,7 +185,7 @@ time.sleep(10)" &
   rows '{"rows":[{"acct":"next3","auth":"logged-out","k":0}]}'
   HANDOFF_ACCOUNT_SWEEP=off run bash "$HF" account-sweep
   [ "$status" -eq 0 ]
-  ! echo "$output" | grep -q "## ACCOUNT STATE"
+  ! echo "$output" | grep -q "## ACCOUNT STATE" || false
   echo "$output" | grep -q "OFF"
 }
 

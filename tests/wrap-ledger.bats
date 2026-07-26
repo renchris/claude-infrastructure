@@ -46,7 +46,7 @@ field() { printf '%s' "$1" | grep -E "^$2=" | head -1 | cut -d= -f2-; }
   [ "$status" -eq 0 ]
   printf '%s' "$output" | grep -q "📦"
   printf '%s' "$output" | grep -qi "ship"
-  ! printf '%s' "$output" | grep -q "✅"
+  ! printf '%s' "$output" | grep -q "✅" || false
   [ "$(printf '%s\n' "$output" | grep -c .)" -eq 1 ]   # exactly one line
 }
 

@@ -57,7 +57,7 @@ setup() {
 
 @test "the \$ESC AppleScript-string escaping is fully removed (no write-text path survives)" {
   # The whole file: no ESC= definition and no "$ESC" interpolation into an osascript string literal.
-  ! grep -qE '^ESC=' "$HF"
+  ! grep -qE '^ESC=' "$HF" || false
   ! grep -qF '"$ESC"' "$HF"
 }
 

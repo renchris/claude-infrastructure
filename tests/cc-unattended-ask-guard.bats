@@ -46,9 +46,9 @@ setup() {
 @test "block reason routes to a cc-decide class-B packet + standing-value default" {
   run env CC_UNATTENDED=1 "$HOOK" <<<"$ASK"
   [ "$status" -eq 2 ]
-  [[ "$output" == *"cc-decide open --class B"* ]]
-  [[ "$output" == *"gate-classify.sh"* ]]
-  [[ "$output" == *"--default"* ]]
+  [[ "$output" == *"cc-decide open --class B"* ]] || false
+  [[ "$output" == *"gate-classify.sh"* ]] || false
+  [[ "$output" == *"--default"* ]] || false
   [[ "$output" == *"PROCEED"* ]]
 }
 

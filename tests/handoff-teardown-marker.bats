@@ -42,11 +42,11 @@ json_ok() { # $1 = file → assert it parses as one JSON object (skip if no pyth
   SESSION_ID="cc-sid-123" write_teardown_marker "pane-AAA" terminal
   [ -f "$TD/cc-sid-123.json" ]                        # keyed by the CC session id, not the pane
   run cat "$TD/cc-sid-123.json"
-  [[ "$output" == *'"key_kind":"sid"'* ]]
-  [[ "$output" == *'"pane":"pane-AAA"'* ]]
-  [[ "$output" == *'"sid":"cc-sid-123"'* ]]
-  [[ "$output" == *'"mode":"terminal"'* ]]
-  [[ "$output" == *'"ts":"'* ]]
+  [[ "$output" == *'"key_kind":"sid"'* ]] || false
+  [[ "$output" == *'"pane":"pane-AAA"'* ]] || false
+  [[ "$output" == *'"sid":"cc-sid-123"'* ]] || false
+  [[ "$output" == *'"mode":"terminal"'* ]] || false
+  [[ "$output" == *'"ts":"'* ]] || false
   json_ok "$TD/cc-sid-123.json"
 }
 
@@ -56,10 +56,10 @@ json_ok() { # $1 = file → assert it parses as one JSON object (skip if no pyth
   [ -f "$TD/pane-BBB.json" ]                          # keyed by the pane uuid
   [ ! -e "$TD/.json" ]                               # empty-key file never created
   run cat "$TD/pane-BBB.json"
-  [[ "$output" == *'"key_kind":"pane"'* ]]
-  [[ "$output" == *'"pane":"pane-BBB"'* ]]
-  [[ "$output" == *'"sid":""'* ]]
-  [[ "$output" == *'"mode":"recycle"'* ]]
+  [[ "$output" == *'"key_kind":"pane"'* ]] || false
+  [[ "$output" == *'"pane":"pane-BBB"'* ]] || false
+  [[ "$output" == *'"sid":""'* ]] || false
+  [[ "$output" == *'"mode":"recycle"'* ]] || false
   json_ok "$TD/pane-BBB.json"
 }
 
@@ -89,12 +89,12 @@ json_ok() { # $1 = file → assert it parses as one JSON object (skip if no pyth
   [ -f "$TD/cc-sid-recovered.json" ]                  # direct sid hit for the reader
   [ -f "$TD/pane-FFF.json" ]                          # pane alias kept
   run cat "$TD/cc-sid-recovered.json"
-  [[ "$output" == *'"key_kind":"sid"'* ]]
-  [[ "$output" == *'"sid":"cc-sid-recovered"'* ]]
-  [[ "$output" == *'"pane":"pane-FFF"'* ]]
+  [[ "$output" == *'"key_kind":"sid"'* ]] || false
+  [[ "$output" == *'"sid":"cc-sid-recovered"'* ]] || false
+  [[ "$output" == *'"pane":"pane-FFF"'* ]] || false
   run cat "$TD/pane-FFF.json"
-  [[ "$output" == *'"key_kind":"pane"'* ]]
-  [[ "$output" == *'"sid":"cc-sid-recovered"'* ]]
+  [[ "$output" == *'"key_kind":"pane"'* ]] || false
+  [[ "$output" == *'"sid":"cc-sid-recovered"'* ]] || false
   json_ok "$TD/cc-sid-recovered.json"
 }
 
@@ -105,11 +105,11 @@ json_ok() { # $1 = file → assert it parses as one JSON object (skip if no pyth
     emit_handoff_telemetry 0
   [ -f "$HJ" ]
   run cat "$HJ"
-  [[ "$output" == *'"engaged":0'* ]]
-  [[ "$output" == *'"firing_sid":"cc-sid-x"'* ]]
-  [[ "$output" == *'"target_pane":"pane-DDD"'* ]]
-  [[ "$output" == *'"account":"next2"'* ]]
-  [[ "$output" == *'"class":"handoff"'* ]]
+  [[ "$output" == *'"engaged":0'* ]] || false
+  [[ "$output" == *'"firing_sid":"cc-sid-x"'* ]] || false
+  [[ "$output" == *'"target_pane":"pane-DDD"'* ]] || false
+  [[ "$output" == *'"account":"next2"'* ]] || false
+  [[ "$output" == *'"class":"handoff"'* ]] || false
   json_ok "$HJ"
 }
 
@@ -121,6 +121,6 @@ json_ok() { # $1 = file → assert it parses as one JSON object (skip if no pyth
   FIRING_SID="pane-NOMATCH" SESSION_ID="cc-sid-rss" SPAWNED_PANE="pane-EEE" CHOSEN="next" \
     emit_handoff_telemetry 1
   run cat "$HJ"
-  [[ "$output" == *'"engaged":1'* ]]
+  [[ "$output" == *'"engaged":1'* ]] || false
   [[ "$output" != *'"firing_rss_kb":0}'* ]]          # rss found ⇒ lookup used SESSION_ID
 }

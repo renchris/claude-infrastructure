@@ -81,7 +81,7 @@ armkey() { printf '%s|%s' "$1" "$2" | shasum | cut -c1-16; }
   cd "$DESK_CWD"
   CLAUDE_CONFIG_DIR="$cfg" run "$WR" arm --live
   [ "$status" -eq 2 ]
-  [[ "$output" == *"--live requires a non-empty --brief"* ]]
+  [[ "$output" == *"--live requires a non-empty --brief"* ]] || false
 
   # THE REGRESSION THIS PINS: no half-armed residue of any kind
   local k; k="$(armkey "$cfg" "$DESK_CWD")"
@@ -100,7 +100,7 @@ armkey() { printf '%s|%s' "$1" "$2" | shasum | cut -c1-16; }
 
   CLAUDE_CONFIG_DIR="$cfg" run "$WR" arm --brief "$TMP/does-not-exist.md" --live
   [ "$status" -eq 2 ]
-  [[ "$output" == *"missing/empty"* ]]
+  [[ "$output" == *"missing/empty"* ]] || false
   # the refusal must not have promoted the desk to a live-but-briefless state
   [ ! -f "$cfg/state/waiting-recycle/live-$k" ]
 }

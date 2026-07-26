@@ -101,7 +101,7 @@ our_branch() {  # $1=branch $2=shell-file — a landable commit that always trip
   run bash "$SHIPLAND" --trunk main
   [ "$status" -eq 0 ]
   echo "$output" | grep -q "LANDED"
-  [[ "$output" != *"STALE GATE"* ]]
+  [[ "$output" != *"STALE GATE"* ]] || false
 
   # THE core claim, as a durable product: exactly one gate run, and it held NO lock.
   [ "$(wc -l < "$GATE_OBS" | tr -d ' ')" = "1" ]

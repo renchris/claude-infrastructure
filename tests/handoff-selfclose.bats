@@ -110,8 +110,8 @@ SH
     '{"type":"system","subtype":"init"}' > "$PROJDIR/$SUCC_SESS.jsonl"   # born, never ran
   run bash "$HF" self-close --dry-run --session-id "$PRED" --successor "$SUCC"
   [ "$status" -eq 3 ]
-  [[ "$output" == *"NEVER ENGAGED"* ]]
-  [[ "$output" == *"--successor-assume-engaged"* ]]   # recovery hint present
+  [[ "$output" == *"NEVER ENGAGED"* ]] || false
+  [[ "$output" == *"--successor-assume-engaged"* ]] || false # recovery hint present
   ! [[ "$output" == *"dry run (self-close)"* ]]        # aborted BEFORE the plan → no close side of it
 }
 
@@ -121,7 +121,7 @@ SH
     '{"type":"assistant","message":{"content":"on it — starting the task"}}' > "$PROJDIR/$SUCC_SESS.jsonl"
   run bash "$HF" self-close --dry-run --session-id "$PRED" --successor "$SUCC"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"successor engagement verified"* ]]
+  [[ "$output" == *"successor engagement verified"* ]] || false
   [[ "$output" == *"dry run (self-close)"* ]]          # reached the plan → gate passed
 }
 
@@ -129,7 +129,7 @@ SH
   # No transcript at all → engagement would fail, but the flag skips ONLY that half.
   run bash "$HF" self-close --dry-run --session-id "$PRED" --successor "$SUCC" --successor-assume-engaged
   [ "$status" -eq 0 ]
-  [[ "$output" == *"engagement check SKIPPED"* ]]
+  [[ "$output" == *"engagement check SKIPPED"* ]] || false
   [[ "$output" == *"dry run (self-close)"* ]]
 }
 
@@ -148,8 +148,8 @@ SH
   : > "$PS_DEAD_DIR/TTY-B"                              # successor DIED before the close instant
   run env HOME="$H" bash "$HF" __selfclose PREDSID TTY-A SUCC-B TTY-B
   [ "$status" -ne 0 ]
-  [[ "$output" == *"ABORTED at close-instant"* ]]
-  [[ "$output" == *"NO LONGER ALIVE"* ]]
+  [[ "$output" == *"ABORTED at close-instant"* ]] || false
+  [[ "$output" == *"NO LONGER ALIVE"* ]] || false
   [ ! -f "$H/it2-calls.log" ]                          # it2 close NEVER invoked → predecessor alive
   grep -q "HANDOFF-STRAND-RISK" "$H/ccnotify-calls.log"  # desk paged (best-effort)
 }

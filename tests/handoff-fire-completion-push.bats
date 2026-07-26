@@ -27,8 +27,8 @@ setup() {
 @test "--terminal --dry-run → shows the completion-push PLAN, fires nothing (stub not called)" {
   run env CC_COMPLETION_PUSH_BIN="$STUB" bash "$HF" self-close --terminal --session-id "fake:AAAA-1111" --dry-run
   [ "$status" -eq 0 ]
-  [[ "$output" == *"completion:"* ]]
-  [[ "$output" == *"F5 / T-P2-1"* ]]
+  [[ "$output" == *"completion:"* ]] || false
+  [[ "$output" == *"F5 / T-P2-1"* ]] || false
   [ ! -f "$MARK" ]     # dry-run must not fire a real push
 }
 
@@ -41,8 +41,8 @@ setup() {
 
 @test "--terminal + push FAILS (exit 5) → LOUD 'did NOT verify', close is NOT aborted by it" {
   run bash -c "cd '$WORK' && CC_COMPLETION_PUSH_BIN='$STUB' STUB_RC=5 timeout 6 bash '$HF' self-close --terminal --session-id 'fake:CCCC-3333' 2>&1"
-  [[ "$output" == *"did NOT verify"* ]]
-  [[ "$output" == *"proceeding with the close"* ]]
+  [[ "$output" == *"did NOT verify"* ]] || false
+  [[ "$output" == *"proceeding with the close"* ]] || false
   grep -q 'CALLED' "$MARK"     # the push WAS attempted (recorded LOUD, never silent)
 }
 

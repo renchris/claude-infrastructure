@@ -94,7 +94,7 @@ seed_two_owned_strands() {
   run bash "$SWEEP" --mine SID-A main
   [ "$status" -eq 1 ]
   echo "$output" | grep -q "fileA.txt"
-  ! echo "$output" | grep -q "fileB.txt"
+  ! echo "$output" | grep -q "fileB.txt" || false
   echo "$output" | grep -q "SID-A"
 }
 
