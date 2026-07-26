@@ -39,10 +39,10 @@ Mechanism: `~/.claude/bin/cc-relogin` (repo `bin/cc-relogin`; `install.sh` symli
 | exit | result | what it means / what to do |
 |---|---|---|
 | 0 | `proven` | re-authed AND verified by effect. Nothing further. |
-| 1 | `error` | unexpected. One-line reason on stdout; never a traceback. |
+| 1 | `error` | unexpected. One-line reason on stdout; never a traceback. Includes **`websocket-client` not installed for this interpreter** — a dep fault in the driver, not the browser; the reason names the interpreter and the exact `pip install`. Run it and re-run. |
 | 2 | `refused` | the GATE declined: unknown account · already healthy · `k > 0` live sessions · another heal in flight · `--dry-run`. **Not a failure** — the guard working. |
 | 3 | `headless-exhausted` | `--no-browser` and the refresh grant could not run or failed. Re-run without `--no-browser`. |
-| 4 | `browser-failed` | Phase-2 mechanics broke (no OAuth URL, profile context unmatched, no Authorize control). The child's output path is printed — read it. |
+| 4 | `browser-failed` | Phase-2 mechanics broke (no OAuth URL, profile context unmatched, no Authorize control). The child's output path is printed — read it. Never a missing local dep (→ 1); never a pending consent (→ 7). |
 | 5 | `unverified` | 🚨 the binary CLAIMED success but the effect check failed. **Treat as NOT re-authenticated.** Investigate before re-running. |
 | 6 | `fallback-required` | that Dia profile's claude.ai session is cold, so the email-code leg is needed. stdout names the mailbox and the remaining step. |
 | 7 | `consent-gate` | CDP is blocked — remote debugging off, or Dia's consent dialog pending. Recovery: cycle `dia://inspect#remote-debugging` off→on (the first connect after a cycle is consent-free), then re-run. **A human action, not a code fix.** |
