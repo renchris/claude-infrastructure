@@ -3,6 +3,14 @@
 # Source: . "$(dirname "$0")/lib/session-index-helpers.sh"
 # Or:    . "$REPO_DIR/hooks/lib/session-index-helpers.sh"
 
+# shellcheck disable=SC2034
+#   Library globals. CLAUDE_PROJECTS_DIR is read by session-index-sweep.sh and
+#   session-index-end.sh *after* sourcing this file, which shellcheck cannot follow.
+# shellcheck disable=SC2001
+#   The `echo "$v" | sed "s/'/''/g"` SQL single-quote doubling is deliberate and applied
+#   uniformly to every column of the INSERT statements below. ${v//\'/\'\'} is equivalent,
+#   but rewriting 20 call sites in the index write path is not a lint pass's business.
+
 SESSION_INDEX_DB="$HOME/.claude/session-index.db"
 SESSION_INDEX_LOG="$HOME/.claude/logs/session-index.log"
 CLAUDE_PROJECTS_DIR="$HOME/.claude/projects"
