@@ -306,8 +306,15 @@ def main():
         elif is_prose(path):           # no suite builds a doc path dynamically — literal or inert
             take(set(s for s in suites if path in text.get(s, "")), "prose-literal", direct=True)
         else:
-            if code == "A":
-                emit_full("added-unmapped:%s" % path)
+            # An ADDED file gets NO special rung: it runs the same clauses as a modified one,
+            # and the `unmapped` rung below still fails it closed if nothing maps it. The old
+            # `code == "A" ⇒ FULL` fired BEFORE the clauses, so it was "added ⇒ FULL", not the
+            # "added-unmapped" its label claimed — and since this fleet's dominant change shape
+            # is `bin/cc-foo` + `tests/cc-foo.bats` added together, nearly every land widened to
+            # the full 1,749-test suite. That cost is also pure: no pre-existing test can cover
+            # a path that did not exist, so FULL bought no coverage the clauses do not already
+            # buy. (Measured 2026-07-26: 33 of 39 scoped-era gate failures ran with
+            # selected_n=-1 — i.e. widened to FULL — while every land that stayed narrow landed.)
             if path not in tset:
                 emit_full("absent-at-head:%s" % path)
             stem = os.path.splitext(os.path.basename(path))[0]
