@@ -294,7 +294,11 @@ EOF
 
   run env SHIP_LAND_VERIFY_RETRIES=0 bash "$SHIPLAND" --trunk main
   [ "$status" -eq 8 ]
-  ! echo "$output" | grep -qi "auto-retry" || false      # zero retries attempted (single-shot)
+  # Assert zero retries were ATTEMPTED. A bare "auto-retry" substring test cannot say that: the
+  # exit-8 summary legitimately reads "after 0 auto-retry attempt(s)". The attempt marker is the
+  # "auto-retry <n>/<max>" progress line, so key on that — and positively confirm the count is 0.
+  ! echo "$output" | grep -qF 'auto-retry 1/' || false
+  echo "$output" | grep -qF 'after 0 auto-retry attempt(s)'
   grep -q '"exit":8' "$LAND_LOG"
 }
 
