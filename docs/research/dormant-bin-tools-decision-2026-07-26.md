@@ -124,6 +124,53 @@ that proves it.
 discriminator pair (the green case *and* the case that must go red), including the rc-7 regression
 pin, archive independent-verifiability, archive-tamper-still-caught, and both anti-launder refusals.
 
+### Dogfood trace — an epoch transition over 800 real IDL records
+
+```
+run 1 (under threshold)   rotate-autonomy-logs: rotated=0 skipped=1 seal=ok
+                          cc-idl verify → OK: 800 sealed line(s) intact          rc 0
+run 2 (forced rotation)   rotate-autonomy-logs: rotated=1 skipped=0 seal=ok
+  artifacts               idl.jsonl                             ← successor epoch
+                          idl.jsonl.chain                       ← fresh genesis chain
+                          idl.jsonl.20260726T022853Z            ┐ same stamp:
+                          idl.jsonl.chain.20260726T022853Z      ┘ body + its proof
+  live verify             OK: 1 sealed line(s) intact                            rc 0
+```
+
+The three properties that matter, each read off the trace:
+
+- **Live verify stays green across the rotation** — `rc 0`, where the pre-fix world returned `rc 7`
+  forever.
+- **The retired epoch still proves itself.** Verifying the archived pair alone:
+  `OK: 801 sealed line(s) intact · head ccf45e8b`, `rc 0`. Evidence is retired, not weakened.
+- **The epochs are genuinely continuous.** The successor's first record reads
+  `"prev_head":"ccf45e8bfe3bb65087df87d5a4c85dcbc3b0381439a1586b7fc45e74f000780c"` — the exact head
+  of the archive it replaced, and itself sealed into the new chain.
+
+And the guarantee survives retirement rather than merely relocating: rewriting one record inside the
+**archived** body still trips the chain — `TAMPER: chain diverges at line 400 … rc 7`.
+
+### Live state, repaired
+
+The code fix alone would have been inert. On the live box the chain sealed 6,910 links against a
+1,734-line IDL, and in that state `cc-idl seal` **silently no-ops** — it reports `sealed 0 new` and
+exits 0, because there is no positive tail to seal. So the periodic seal would have run hourly and
+done nothing, forever.
+
+`--repair-chain-epoch` was therefore run against live state:
+
+```
+repair: retired orphaned chain (6910 links, head 3c1aa303) → idl.jsonl.chain.20260726T013419Z
+repair: successor epoch opened and sealed (seal=ok); prior head is recorded in the IDL, not discarded.
+
+$ cc-idl verify
+OK: 1760 sealed line(s) intact · 108 unsealed tail line(s)     rc 0
+```
+
+The 6,910-link chain is retired to `idl.jsonl.chain.20260726T013419Z.gz` (277 KB, intact), and its
+final head is recorded in the IDL as an `idl_epoch_repair` record. **The autonomy substrate has
+verifiable tamper-evidence again for the first time since 2026-07-19.**
+
 ## 3. The gates were the defect for everything else
 
 For the five episodic tools, "never invoked" is not a wiring defect — it is a *usage* fact about a
