@@ -242,6 +242,21 @@ obvious one — a policy fork, not a bug fix. Options, recommendation first:
    `waiting-recycle`). §2 already records that postland's retry ladder "convicts six suites that
    pass cleanly on a quiet box" — so some are likely the same false-RED class Phase 1 dissolves.
    Re-measure them under the per-suite runner **before** treating any as a genuine failure.
+
+   **START HERE, not with load (found 2026-07-26, after §7 was first written).** The timing points
+   at a cause that has nothing to do with contention:
+
+   | when | what |
+   |---|---|
+   | 13:30 PDT | `575a55ea` — "revive 226 dead assertions across 51 suites" |
+   | 14:11 PDT | the red stamp: 7 failing suites, 41 min later |
+
+   **3 of the 7 — `deploy-parity`, `desk-recycle-durable`, `waiting-recycle` — were touched by that
+   very commit.** A revived assertion is one that *could never fail before*; making it live can
+   legitimately expose a real failure. So the first move on those three is **diff them against
+   `575a55ea` and judge each newly-live assertion on its merits** — re-running them under a quiet
+   box or the per-suite runner cannot distinguish "load flake" from "assertion that was dead and is
+   now correctly failing", and would wrongly exonerate the second.
 2. **Teach the guard the third state** — distinguish "never ran" from "ran, never green"; fail
    closed on the latter. Correct, but makes every land FULL until (1) is done.
 3. **Record and defer** — Phase 2's `$HOME` isolation may independently dissolve several of the 7
@@ -293,3 +308,61 @@ same wrong PATH three times and called the agreement "reproducible".
 **Status of the §4 embargo:** lift it once a green stamp actually exists for a trunk tree — the
 embargo was always about the *absence of a real proof*, and that absence is now a scheduling
 problem, not a correctness one.
+---
+
+## 8. FIXED — the liveness ratchet false-positives on `A && false`, and the fixer then breaks it
+
+Found 2026-07-26 by running the fixer, as the ratchet's own failure message instructs, on a parked
+branch. **Two defects, and the first is in the ANALYZER, not the fixer.**
+
+**(1) `A && false` is not dead.** The negative-assertion idiom `A && false` ("fail if A matches") is
+already correct in non-final position: `false` is the command following the final `&&`, so errexit
+is **not** exempt for it. Verified directly, both directions:
+
+    bash -ec 'echo hit   | grep -q hit  && false; echo TAIL'   → exit 1, TAIL unreached
+    bash -ec 'echo clean | grep -q NOPE && false; echo TAIL'   → exit 0, TAIL reached
+
+The analyzer flags it `and-absorbed` anyway. Its model — "`A` is the assertion, and a non-last
+element of an `&&` list has its failure swallowed" — is right for `A && <cmd>` and **inverted when
+the RHS is literally `false`**, where A *failing* is the success case.
+
+**(2) The fixer then converts the false positive into a real failure.** It appends a uniform
+`|| false`, arguing that is semantics-preserving: *"S succeeds → `||` short-circuits → status 0,
+test continues (unchanged)"*. But `S = A && false` can never succeed — if A succeeds `false` runs,
+and if A fails the `&&` list is already non-zero. Both paths reach the appended `|| false`:
+
+    echo "$out" | grep -q X && false            # correct, but flagged
+    echo "$out" | grep -q X && false || false   # what the fixer produced — fails on BOTH paths
+
+So a **passing test becomes permanently red**. Reproduced: 2 green tests → 2 red, and with the
+ratchet now running inside `run_gate`, it blocked the land outright.
+
+**Why its own suite missed it.** `tests/bats-assert-liveness.bats:151` ("fixer revives a dead
+assertion — the test then FAILS as intended") fixes `[[ 1 -eq 2 ]]` — a condition that is *already
+false*, so "correctly live" and "always fails" are indistinguishable under it. **A revival test
+needs a TRUE condition**: only a statement that should PASS after revival can tell the two apart.
+Same shape as `effect-read-predicate-red-proof` — an assertion that cannot fail is not a test.
+
+**Blast radius was luck, not design.** `575a55ea` ran this across 51 suites / 226 assertions and
+produced no degenerate output, because the `A && false` shape happened to be absent from trunk (its
+226 were `! cmd` and `[ ] && [ ]` forms, which `|| false` revives correctly). The shape is a natural
+way to write a negative assertion, the analyzer does flag it, and since the ratchet now runs **inside
+`run_gate`** a recurrence blocks the land outright — as it did here.
+
+**Fix (landed with this section):** `RE_SWALLOWED` in `bats-assert-liveness-fix.py` already knew the
+right transform — `! A || false`, "the negation the author meant" — but its regex **required** a
+trailing `|| true` / `|| :`, so the bare `A && false` fell through to the destructive append. The
+trailing handler is now optional, so both members of the family are rewritten rather than appended
+to. `! A || false` is equivalent for a match, correct for a non-match, and — unlike the original —
+also correct in FINAL position, where `A && false` returns A's non-zero status.
+
+Two regression tests pin **both directions** (matching ⇒ still fails; non-matching ⇒ still passes).
+One-directional testing is what let this through: the pre-existing revival test fixes
+`[[ 1 -eq 2 ]]`, an already-FALSE condition, under which "correctly live" and "always fails" are
+the same observation. **A revival test needs a condition that must still PASS afterwards** — the
+same lesson as `effect-read-predicate-red-proof`: an assertion that cannot fail is not a test.
+
+**Still open (analyzer, not fixer):** defect (1) — the `and-absorbed` false positive — remains. It
+is now harmless, because the fixer emits a correct rewrite for the flagged shape, but a suite
+author who "fixes" it by hand from the analyzer's message alone is still being told a working
+assertion is dead.
