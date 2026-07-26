@@ -229,6 +229,142 @@ gc_teardown_marker() {
   rm -f "$tdir/$pane.json" 2>/dev/null || true
 }
 
+# ── ASSIGNEE HARVEST (leg a) ─────────────────────────────────────────────────────
+# HARVEST BEFORE TEARDOWN. When the lead dies, its assignees' final reports exist in exactly one
+# place: their own transcript JSONL on disk. They are NOT in any inbox and never will be — a
+# named assignee's final text is "the return to lead", and the lead only ever receives
+# `idle_notification {idleReason: available}`; the report itself is never delivered as a message
+# (memory: wave-report-harvest-from-disk, measured across a full 16-agent wave). A crashed lead
+# cannot receive even that. So the ONLY correct source is disk truth, and the ONLY correct
+# ordering is harvest-then-teardown: cc-teardown closes the pane, and a closed pane's session is
+# gone — a report not harvested first is a report lost. Observed 2026-07-26 on team
+# session-a3f68174: 8 assignees, every final report reachable only by hand-digging transcripts.
+#
+# member_transcript <name> <cwd> → path of the assignee's transcript, or empty.
+# TWO ordered strategies, both keyed on disk truth, never on a notification:
+#   1. CWD-SLUG (cheap, targeted). CC stores a session's transcript under
+#      <account>/projects/<cwd-with-slashes-turned-to-dashes>/<sessionId>.jsonl, and a team member
+#      carries its own `.cwd`. That maps straight to the directory to search, so this never walks
+#      the 5638-session corpus. Within it, the file is disambiguated by `"agentName":"<name>"` —
+#      several assignees can share one worktree (measured: wt-pool-3 held sq-a1 and sq-c1).
+#   2. BOUNDED MACHINE-WIDE (fallback) for an assignee whose cwd was force-removed by the dying
+#      lead — exactly the observed incident — so the slug dir may not resolve. Time-capped, and a
+#      cap that expires yields NO path: it ABSTAINS rather than guessing a wrong transcript.
+# NEWEST wins: an assignee that was re-fired has more than one transcript and only the last one
+# carries its final report.
+#
+# Returns empty for BOTH "proven absent" and "could not look" — the CALLER distinguishes them
+# (see harvest_member), because a missing transcript is a real outcome (bsm-schema, joined
+# 2026-06-07: worktree and transcript both long rotated away) while an unreadable probe is not.
+LCW_ACCOUNT_BASES_DEFAULT="$HOME/.claude $HOME/.claude-secondary $HOME/.claude-tertiary $HOME/.claude-quaternary"
+member_transcript() {
+  local name="$1" cwd="${2:-}" base slug d hit newest="" bases
+  bases="${CC_ACCOUNT_BASES:-$LCW_ACCOUNT_BASES_DEFAULT}"
+  [[ -n "$name" ]] || return 0
+  # 1 — cwd-slug dirs. Both the raw cwd and its PHYSICAL resolution are tried: the transcript dir
+  # is named from the cwd CC recorded, and a worktree reached through a symlinked parent records
+  # differently than `pwd -P` reports. Trying both only ever ADDS a candidate.
+  if [[ -n "$cwd" ]]; then
+    local pcwd; pcwd=$(cd "$cwd" 2>/dev/null && pwd -P 2>/dev/null) || pcwd=""
+    # SLUG ENCODING: CC replaces BOTH '/' and '.' with '-'. The dot matters here and is easy to
+    # miss — every dispatch worktree lives under `.worktrees`, which encodes to `--worktrees`, so a
+    # slash-only slug resolves NOTHING for exactly the paths this harvest runs against. Measured
+    # against a real assignee (sq-c1-registers, wt-pool-3): slash-only → no match, slash+dot →
+    # the transcript. A detector that silently finds nothing looks identical to "no report exists"
+    # (memory: effect-read-predicate-red-proof — positive-control every detector).
+    local dcwd="${cwd//\//-}" dpcwd="${pcwd//\//-}"
+    for base in $bases; do
+      for slug in "${dcwd//./-}" "${dpcwd//./-}"; do
+        [[ -n "$slug" ]] || continue
+        d="$base/projects/$slug"
+        [[ -d "$d" ]] || continue
+        while IFS= read -r hit; do
+          [[ -n "$hit" ]] || continue
+          if [[ -z "$newest" || "$hit" -nt "$newest" ]]; then newest="$hit"; fi
+        done < <(grep -l "\"agentName\":\"$name\"" "$d"/*.jsonl 2>/dev/null || true)
+      done
+    done
+  fi
+  [[ -n "$newest" ]] && { printf '%s\n' "$newest"; return 0; }
+  # 2 — bounded machine-wide fallback (the lead force-removed the cwd). BOUNDED: this grep walks
+  # every account's project corpus, and an unbounded walk inside a crash path would hang the
+  # watchdog exactly when it is most needed (memory: bounding-external-calls). A cut yields no
+  # path ⇒ abstain, never a wrong one.
+  #
+  # Seam: LCW_HARVEST_FALLBACK — UNSET ⇒ fallback runs. SET, including set to EMPTY ⇒ honored
+  # verbatim, so `LCW_HARVEST_FALLBACK=` genuinely disables the corpus walk. `${VAR:-}` cannot tell
+  # unset from set-empty, and a seam that cannot turn a thing OFF is not a seam (memory:
+  # claimed-outcome-vs-checked-outcome). This also lets strategy 1 be tested in ISOLATION — without
+  # it the fallback silently rescues a broken slug encoding and the dot-encoding bug looks fixed.
+  if [[ -n "${LCW_HARVEST_FALLBACK+set}" && -z "${LCW_HARVEST_FALLBACK}" ]]; then return 0; fi
+  local roots=() found
+  for base in $bases; do [[ -d "$base/projects" ]] && roots+=("$base/projects"); done
+  [[ ${#roots[@]} -gt 0 ]] || return 0
+  if [[ -n "$LCW_OSA_TB" && -x "$LCW_OSA_TB" ]]; then
+    found=$("$LCW_OSA_TB" -k 5 "${LCW_HARVEST_SCAN_TIMEOUT_S:-20}" \
+      grep -rl --include='*.jsonl' "\"agentName\":\"$name\"" "${roots[@]}" 2>/dev/null || true)
+  else
+    found=$(grep -rl --include='*.jsonl' "\"agentName\":\"$name\"" "${roots[@]}" 2>/dev/null || true)
+  fi
+  while IFS= read -r hit; do
+    [[ -n "$hit" ]] || continue
+    if [[ -z "$newest" || "$hit" -nt "$newest" ]]; then newest="$hit"; fi
+  done <<< "$found"
+  [[ -n "$newest" ]] && printf '%s\n' "$newest"
+  return 0
+}
+
+# last_assistant_text <transcript> — the assignee's FINAL report: the last assistant message's
+# joined text blocks. One streaming pass in python3 (a transcript runs to hundreds of MB and must
+# never be slurped). Prints nothing when the file holds no assistant text.
+#
+# Why the LAST assistant record and not a tail-grep: a mid-run harvest catches interim narration
+# rather than the report (measured 442 chars mid-run vs 16,152 final), and tool_use/thinking
+# blocks carry no `.text`, so only `content[].text` on `message.role=="assistant"` is joined.
+last_assistant_text() {
+  local t="$1"
+  [[ -n "$t" && -f "$t" ]] || return 0
+  "${LCW_PYTHON_BIN:-python3}" - "$t" <<'PY' 2>/dev/null || true
+import json, sys
+last = ""
+try:
+    with open(sys.argv[1], "r", errors="replace") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line or '"assistant"' not in line:
+                continue
+            try:
+                rec = json.loads(line)
+            except Exception:
+                continue
+            msg = rec.get("message") or {}
+            if msg.get("role") != "assistant":
+                continue
+            content = msg.get("content")
+            if isinstance(content, str):
+                text = content
+            elif isinstance(content, list):
+                text = "\n".join(
+                    b.get("text", "") for b in content
+                    if isinstance(b, dict) and b.get("type") == "text" and b.get("text")
+                )
+            else:
+                continue
+            if text.strip():
+                last = text
+except Exception:
+    pass
+sys.stdout.write(last)
+PY
+}
+
+# Test/debug entrypoint: resolve+print one member's harvested report (name, cwd).
+if [[ "${1:-}" == "--harvest-member" ]]; then
+  _t=$(member_transcript "${2:-}" "${3:-}")
+  [[ -n "$_t" ]] || { echo "NO-TRANSCRIPT"; exit 0; }
+  echo "TRANSCRIPT $_t"; last_assistant_text "$_t"; echo; exit 0
+fi
+
 # Test/debug entrypoint (CC never passes args to this SessionStart hook): classify a
 # session id (+ optional pid, to join its close-record) and exit, without spawning the
 # daemon or reading stdin.
@@ -367,8 +503,12 @@ log "registered session=$SESSION_ID pid=$LEAD_PID"
 
     echo "[watchdog $sid] crash affects ${#affected_team_dirs[@]} team(s): ${affected_team_dirs[*]}"
 
+    # ORDER IS LOAD-BEARING: harvest (a) → shutdown_request → close panes (b). cc-teardown kills
+    # the process and closes the pane, and a closed pane cannot be harvested — so the reports come
+    # off disk FIRST, unconditionally, and only then is anything reaped.
     for team_dir in "${affected_team_dirs[@]}"; do
       write_crash_report "$team_dir" "$pid" "$sid"
+      harvest_team_reports "$team_dir" "$sid"
       send_shutdown_requests "$team_dir" "$sid"
     done
 
@@ -380,6 +520,79 @@ log "registered session=$SESSION_ID pid=$LEAD_PID"
       rm -f "$WATCHDOG_DIR/$sid.pid" "$WATCHDOG_DIR/$sid.id"
       gc_teardown_marker "$sid" || true
     fi
+  }
+
+  # harvest_team_reports <team_dir> <sid> — leg (a). Enumerate the team's assignees from
+  # config.json and write each one's final report out of its transcript into <team_dir>/HARVEST/.
+  #
+  # RUNS BEFORE ANY TEARDOWN, and that ordering is the whole point: cc-teardown closes the pane and
+  # kills the process, and a closed pane cannot be harvested. Harvest is also strictly
+  # non-destructive — it only ever creates files under <team_dir>/HARVEST/ — so it is safe to run
+  # unconditionally on a positive death verdict, and it is what makes the close leg safe to run at
+  # all (the report is already on disk before anything is reaped).
+  #
+  # Emits status.tsv: member <TAB> paneId <TAB> state <TAB> bytes <TAB> transcript. THREE states,
+  # because "no report" has two different causes and only one of them is a real outcome:
+  #   HARVESTED     report text recovered and written.
+  #   EMPTY         transcript found, but it holds no assistant text (assignee died before its
+  #                 first turn) — a real, proven outcome.
+  #   NO-TRANSCRIPT no transcript resolved: either genuinely rotated away (bsm-schema, joined
+  #                 2026-06-07) or the probe could not look. NOT proof a report never existed.
+  # Leg (b) reads this file and closes ONLY panes whose row is HARVESTED or EMPTY — a
+  # NO-TRANSCRIPT member is never torn down, because tearing it down would destroy the last place
+  # its report could still be found.
+  harvest_team_reports() {
+    local team_dir="$1" sid="$2"
+    local cfg="$team_dir/config.json"
+    [[ -f "$cfg" ]] || { echo "[watchdog $sid] harvest: no config.json in $team_dir"; return 0; }
+    local hdir="$team_dir/HARVEST"
+    mkdir -p "$hdir" 2>/dev/null || true
+    local status="$hdir/status.tsv"
+    : > "$status" 2>/dev/null || true
+
+    local n_h=0 n_e=0 n_n=0 name pane cwd
+    while IFS=$'\t' read -r name pane cwd; do
+      [[ -n "$name" ]] || continue
+      [[ "$name" == "team-lead" ]] && continue
+      local tpath report_file text bytes=0 state
+      tpath=$(member_transcript "$name" "$cwd" 2>/dev/null || true)
+      if [[ -z "$tpath" ]]; then
+        state="NO-TRANSCRIPT"; n_n=$((n_n + 1))
+      else
+        text=$(last_assistant_text "$tpath" 2>/dev/null || true)
+        if [[ -n "$text" ]]; then
+          report_file="$hdir/$name.md"
+          {
+            echo "# Final report — $name"
+            echo
+            echo "- **Team**: $(basename "$team_dir")"
+            echo "- **Lead session**: $sid (crashed)"
+            echo "- **Pane**: ${pane:-?}"
+            echo "- **Worktree (cwd)**: ${cwd:-?}"
+            echo "- **Transcript**: $tpath"
+            echo "- **Harvested**: $(date '+%Y-%m-%d %H:%M:%S') — from DISK TRUTH (last assistant"
+            echo "  message in the transcript), never from a notification: a named assignee's final"
+            echo "  text is never delivered as a message, and this lead crashed before it could"
+            echo "  receive even an idle notification."
+            echo
+            echo "---"
+            echo
+            printf '%s\n' "$text"
+          } > "$report_file" 2>/dev/null || true
+          bytes=$(wc -c < "$report_file" 2>/dev/null | tr -d ' ') || bytes=0
+          state="HARVESTED"; n_h=$((n_h + 1))
+        else
+          state="EMPTY"; n_e=$((n_e + 1))
+        fi
+      fi
+      printf '%s\t%s\t%s\t%s\t%s\n' "$name" "${pane:-}" "$state" "${bytes:-0}" "${tpath:-}" \
+        >> "$status" 2>/dev/null || true
+      echo "[watchdog $sid] harvest $name → $state (${bytes:-0}B)"
+    done < <(jq -r '.members[]? | select(.name != "team-lead")
+                    | [.name, (.tmuxPaneId // ""), (.cwd // "")] | @tsv' "$cfg" 2>/dev/null || true)
+
+    echo "[watchdog $sid] harvest complete: $n_h harvested, $n_e empty, $n_n no-transcript → $hdir"
+    return 0
   }
 
   write_crash_report() {
@@ -412,6 +625,14 @@ log "registered session=$SESSION_ID pid=$LEAD_PID"
         jq -r '.[-5:] | .[] | "- [\(.timestamp // "?")] from=\(.from // "?"): \(.summary // (.text | tostring | .[0:200]))"' \
           "$inbox" 2>/dev/null || echo "(unable to parse)"
       done
+      echo ""
+      echo "## Harvested assignee reports"
+      echo ""
+      echo "Final reports are recovered from DISK TRUTH (each assignee's transcript) into"
+      echo "\`$team_dir/HARVEST/\` — one \`<member>.md\` per assignee, plus \`status.tsv\`."
+      echo "They are NOT in any inbox: a named assignee's final text is never delivered as a"
+      echo "message, so the transcript is the only place it exists. Read these BEFORE respawning —"
+      echo "finished work must never be re-run."
       echo ""
       echo "## Recovery"
       echo ""
