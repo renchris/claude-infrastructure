@@ -61,6 +61,9 @@ if [ -z "$RECONCILE_BIN" ]; then
   done
 fi
 
+NL='
+'          # a literal newline, for exact whole-line `case` matching (bash 3.2-safe; == grep -qxF)
+
 now()  { printf '%s' "${CC_INBOX_GUARD_NOW:-$(date +%s 2>/dev/null || echo 0)}"; }
 utc()  { date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo ''; }
 stamp(){ date -u +%Y%m%dT%H%M%SZ 2>/dev/null || echo "$$"; }
@@ -74,24 +77,98 @@ iso_epoch() {
 }
 
 # owner liveness by PANE existence (F8): live=0 · dead=1 · indeterminate=2. Test override wins.
+#
+# The pane list is probed ONCE PER SWEEP and memoized (P1). It used to be re-forked per overdue inbox —
+# `it2 session list --json` costs ~0.57 s, so at live scale (47 overdue boxes) that ONE avoidable fork
+# was ~27 s of every sweep, and it grew with the backlog. A sweep is a point-in-time classification, so
+# one snapshot is not merely cheaper but MORE coherent than 47 probes taken seconds apart. The FAILURE
+# verdict is memoized too: if it2 is unreadable it is unreadable for the whole sweep, and re-asking 47
+# times cannot change that — every box still returns INDETERMINATE, so fail-loud is untouched.
+_LIVE_STATE=""   # '' = not yet probed · ok = have a pane list · bad = it2 unreadable (INDETERMINATE)
+_LIVE_IDS=""     # newline-DELIMITED and newline-BRACKETED, so a case-glob match == `grep -qxF`
 owner_liveness() {
   local u="$1"
   if [ -n "${CC_INBOX_GUARD_LIVE_UUIDS:-}" ]; then
     case " $CC_INBOX_GUARD_LIVE_UUIDS " in *" $u "*) return 0 ;; *) return 1 ;; esac
   fi
-  local raw; raw="$("$IT2" session list --json 2>/dev/null || true)"
-  if [ -n "$raw" ] && printf '%s' "$raw" | jq -e 'type=="array"' >/dev/null 2>&1; then
-    printf '%s' "$raw" | jq -r '.[].id // empty' 2>/dev/null | grep -qxF "$u" && return 0
-    return 1
+  if [ -z "$_LIVE_STATE" ]; then
+    local raw; raw="$("$IT2" session list --json 2>/dev/null || true)"
+    if [ -n "$raw" ] && printf '%s' "$raw" | jq -e 'type=="array"' >/dev/null 2>&1; then
+      # bracket in TWO steps: `x="$(printf '\n%s\n' …)"` would strip the trailing newline it just added
+      # (command substitution eats trailing newlines), leaving the LAST pane in the list unmatchable —
+      # i.e. one live session per sweep mis-escalated as a NOW-DEAD pane. Assignment does not strip.
+      _LIVE_IDS="$(printf '%s' "$raw" | jq -r '.[].id // empty' 2>/dev/null)"
+      _LIVE_IDS="$NL$_LIVE_IDS$NL"
+      _LIVE_STATE=ok
+    else
+      _LIVE_STATE=bad
+    fi
   fi
-  return 2   # it2 unavailable → cannot prove the pane gone → INDETERMINATE (escalate, never assume dead)
+  [ "$_LIVE_STATE" = ok ] || return 2   # it2 unavailable → cannot prove the pane gone → INDETERMINATE
+  case "$_LIVE_IDS" in *"$NL$u$NL"*) return 0 ;; esac
+  return 1
 }
 
-class_deadline() { # <from-tag> → the deadline seconds for this message class (F12)
-  case "$1" in
-    *reaper*|*supervisor*|*desk-invariant*|*deathwatch*|*PAGE*|*permission*) printf '%s' "$URGENT_S" ;;
-    *) printf '%s' "$DEADLINE_S" ;;
-  esac
+# ── the unacked-window scan (P2) ──────────────────────────────────────────────────────────────────
+# ONE awk pass replaces a per-MESSAGE bash loop that forked ~5 processes per line — `sed -n Np` to
+# read the line (which also re-read the file from line 1, so an O(n²) scan), two more `sed`s to split
+# ts/from-tag, a `date` to epoch it, and a subshell for the class. At live scale (2006 unacked lines)
+# that was ~68 s of a ~5-minute reap tick, and it grew with the backlog; the awk pass is ~0.01 s.
+#
+# EXACTNESS over speed: awk only does the arithmetic for a STRICTLY canonical, in-range
+# `YYYY-MM-DDTHH:MM:SS±HHMM`. Anything else non-empty is emitted as an `FB` record and resolved by the
+# original `date`-backed iso_epoch, so odd/legacy input keeps the OLD code path verbatim rather than
+# inheriting new arithmetic. An EMPTY ts needs no fallback: `date` cannot parse "" either, so the old
+# path always landed on ep=now ⇒ age 0, which is what awk scores directly.
+#
+# Prints `FB <deadline> <ts>` per unresolved line, then exactly one `R <overdue> <oldest_age>`.
+scan_window() { # <file> <acked> <lines> <now>
+  awk -v ack="$2" -v lim="$3" -v now="$4" -v urg="$URGENT_S" -v dfl="$DEADLINE_S" '
+    function dim(y, m) {                       # days in month (proleptic Gregorian)
+      if (m==1||m==3||m==5||m==7||m==8||m==10||m==12) return 31
+      if (m==4||m==6||m==9||m==11) return 30
+      return ((y%4==0 && y%100!=0) || y%400==0) ? 29 : 28
+    }
+    function dfc(y, m, d,   era, yoe, doy, doe) {   # days from 1970-01-01 (Hinnant days_from_civil)
+      if (m <= 2) y = y - 1
+      era = int((y >= 0 ? y : y - 399) / 400)
+      yoe = y - era * 400
+      doy = int((153 * (m + (m > 2 ? -3 : 9)) + 2) / 5) + d - 1
+      doe = yoe * 365 + int(yoe/4) - int(yoe/100) + doy
+      return era * 146097 + doe - 719468
+    }
+    BEGIN { od = 0; oldest = 0 }
+    NR <= ack { next }
+    NR >  lim { exit }                         # never read past the line count the caller measured
+    $0 == ""  { next }
+    {
+      n = 0; L = length($0)                    # ts = leading run of [0-9T:+-]  (== the old sed)
+      while (n < L) { c = substr($0, n+1, 1); if (c ~ /^[0-9T:+-]$/) n++; else break }
+      ts = substr($0, 1, n)
+      tag = ""; p = index($0, "[")             # from-tag = the FIRST [...] pair (== the old sed)
+      if (p > 0) { r = substr($0, p+1); q = index(r, "]"); if (q > 0) tag = substr(r, 1, q-1) }
+      # F12 class deadline — THE classifier (it replaced a class_deadline() shell fn; edit it HERE)
+      dl = (tag ~ /reaper|supervisor|desk-invariant|deathwatch|PAGE|permission/) ? urg : dfl
+      age = -1                                 # -1 = undecided ⇒ hand to the shell fallback
+      if (ts == "") age = 0
+      else if (ts ~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9][+-][0-9][0-9][0-9][0-9]$/) {
+        Y=substr(ts,1,4)+0; M=substr(ts,6,2)+0; D=substr(ts,9,2)+0
+        h=substr(ts,12,2)+0; mi=substr(ts,15,2)+0; s=substr(ts,18,2)+0
+        sg=substr(ts,20,1); oh=substr(ts,21,2)+0; om=substr(ts,23,2)+0
+        if (M>=1 && M<=12 && D>=1 && D<=dim(Y,M) && h<=23 && mi<=59 && s<=59 && oh<=23 && om<=59) {
+          ep = dfc(Y,M,D)*86400 + h*3600 + mi*60 + s - (oh*3600 + om*60) * (sg == "-" ? -1 : 1)
+          # ep<0 (pre-1970) stays UNDECIDED on purpose: BSD date rejects 1900-01-01 and returns -1 for
+          # 1600-02-29, so arithmetic here would out-escalate the old path. Let the date path decide.
+          if (ep == 0) age = 0                 # ep==0 ⇒ the old path substituted now ⇒ age 0
+          else if (ep > 0) { age = now - ep; if (age < 0) age = 0 }
+        }
+      }
+      if (age < 0) { print "FB", dl, ts; next }
+      if (age > oldest) oldest = age
+      if (age >= dl) od = 1
+    }
+    END { print "R", od+0, oldest+0 }
+  ' "$1" 2>/dev/null
 }
 
 idl_rec() { # <uuid> <kind> <detail-json-obj>
@@ -112,11 +189,17 @@ phone() { # <title> <msg> — best-effort VERIFIED phone; records the leg's outc
 }
 
 DRY=0
-escalate() { # <uuid> <reason> <phone-msg>
-  local u="$1" reason="$2" pmsg="$3"
+escalate() { # <uuid> <acked> <lines> <reason> <phone-msg>
+  local u="$1" reason="$4" pmsg="$5"
   # damping: one escalation per (uuid, acked:lines); new mail / partial progress changes the key → re-fire.
+  #
+  # The cursors are PASSED IN, not re-read (P4). Re-deriving them here re-`grep -c`'d the same inbox a
+  # third and fourth time per box — and worse, keyed the damp marker on a state the verdict was never
+  # computed from: a message appended between the scan and this call moved the key, so the next sweep
+  # damped a verdict that had never been raised for that key. Passing the scanned values makes the
+  # marker mean exactly "this reason was raised for THIS state" — cheaper AND race-free.
   local key ackln mk last
-  ackln="$(mailbox_acked "$u"):$(mailbox_lines "$u")"
+  ackln="$2:$3"
   key="$(printf '%s' "$u" | tr -c 'A-Za-z0-9._-' '_')"
   mk="$STATE_DIR/$key.escalated"
   last="$(cat "$mk" 2>/dev/null || true)"
@@ -161,12 +244,15 @@ sweep() {
     u="$(basename "$f" .md)"
     case "$u" in *[!0-9A-Fa-f-]*|'') continue ;; esac
     lines="$(mailbox_lines "$u")"; acked="$(mailbox_acked "$u")"
-    unacked="$(mailbox_unacked_count "$u")"
+    # `lines - acked` IS mailbox_unacked_count, computed from the two values already in hand (P3).
+    # Calling the helper re-derived both cursors from scratch — mailbox_acked → mailbox_seen →
+    # mailbox_lines — re-`grep -c`-ing the same file a third and fourth time, per box, for no new fact.
+    unacked=$(( lines - acked )); [ "$unacked" -lt 0 ] && unacked=0
 
     # F11: a raw cursor PAST EOF (before the lib clamp) = rotation/GC/recycle that can silently drop mail.
     local raw_seen; raw_seen="$(head -n1 "$MBOX_DIR/$u.seen" 2>/dev/null | tr -dc '0-9')"; raw_seen="${raw_seen:-0}"
     if [ "${raw_seen:-0}" -gt "$lines" ] 2>/dev/null; then
-      escalate "$u" "cursor past EOF (.seen=$raw_seen > lines=$lines) — mailbox rotated/truncated under a live cursor; mail may have been dropped" \
+      escalate "$u" "$acked" "$lines" "cursor past EOF (.seen=$raw_seen > lines=$lines) — mailbox rotated/truncated under a live cursor; mail may have been dropped" \
         "inbox $u cursor past EOF ($raw_seen>$lines) — possible dropped mail"
       n_esc=$((n_esc+1))
     fi
@@ -174,30 +260,33 @@ sweep() {
     [ "$unacked" -gt 0 ] 2>/dev/null || continue   # nothing unconsumed → fine
 
     # the oldest unacked line (line acked+1) and its class deadline; escalate if ANY unacked line is overdue.
-    local overdue=0 oldest_age=0 fromtag=""
-    local i line ts ep age dl
-    i="$acked"
-    while [ "$i" -lt "$lines" ]; do
-      i=$((i+1))
-      line="$(sed -n "${i}p" "$f" 2>/dev/null)"
-      [ -n "$line" ] || continue
-      ts="$(printf '%s' "$line" | sed -n 's/^\([0-9T:+-]*\).*/\1/p')"
-      fromtag="$(printf '%s' "$line" | sed -n 's/^[^[]*\[\([^]]*\)\].*/\1/p')"
-      ep="$(iso_epoch "$ts")"; [ "$ep" = 0 ] && ep="$now"     # unparseable ts → treat as now (fail toward NOT over-alarming a fresh line)
-      age=$(( now - ep )); [ "$age" -lt 0 ] && age=0
-      dl="$(class_deadline "$fromtag")"
-      [ "$age" -gt "$oldest_age" ] && oldest_age="$age"
-      [ "$age" -ge "$dl" ] 2>/dev/null && overdue=1
-    done
+    local overdue=0 oldest_age=0 scanres
+    local kind a1 a2 ep age
+    scanres="$(scan_window "$f" "$acked" "$lines" "$now")"
+    # a here-doc (NOT a pipe) so the loop runs in THIS shell and its verdict actually survives
+    while read -r kind a1 a2; do
+      case "$kind" in
+        R)  # a1=overdue a2=oldest_age, over every line awk resolved itself
+            [ "$a1" = 1 ] && overdue=1
+            [ "${a2:-0}" -gt "$oldest_age" ] 2>/dev/null && oldest_age="$a2" ;;
+        FB) # a1=class deadline a2=ts — awk declined it, so resolve on the ORIGINAL date path verbatim
+            ep="$(iso_epoch "$a2")"; [ "$ep" = 0 ] && ep="$now"   # unparseable ts → treat as now (fail toward NOT over-alarming a fresh line)
+            age=$(( now - ep )); [ "$age" -lt 0 ] && age=0
+            [ "$age" -gt "$oldest_age" ] && oldest_age="$age"
+            [ "$age" -ge "$a1" ] 2>/dev/null && overdue=1 ;;
+      esac
+    done <<SCANEOF
+$scanres
+SCANEOF
     [ "$overdue" = 1 ] || { echo "  ok     $u — $unacked unacked but within deadline (oldest ${oldest_age}s)"; continue; }
 
     owner_liveness "$u"; local lv=$?
     case "$lv" in
-      0) escalate "$u" "LIVE session, $unacked message(s) unconsumed for ${oldest_age}s past deadline — its watcher lapsed / it never took a turn to drain" \
+      0) escalate "$u" "$acked" "$lines" "LIVE session, $unacked message(s) unconsumed for ${oldest_age}s past deadline — its watcher lapsed / it never took a turn to drain" \
                   "desk/session $u: $unacked message(s) undrained ${oldest_age}s (live but not consuming) — re-engage it" ;;
-      1) escalate "$u" "$unacked message(s) enqueued to a NOW-DEAD pane ($u) — the target died with mail undelivered" \
+      1) escalate "$u" "$acked" "$lines" "$unacked message(s) enqueued to a NOW-DEAD pane ($u) — the target died with mail undelivered" \
                   "session $u died with $unacked undelivered message(s) — the page never reached anyone" ;;
-      *) escalate "$u" "$unacked message(s) unconsumed ${oldest_age}s AND owner liveness INDETERMINATE (it2 unreadable) — cannot prove delivery" \
+      *) escalate "$u" "$acked" "$lines" "$unacked message(s) unconsumed ${oldest_age}s AND owner liveness INDETERMINATE (it2 unreadable) — cannot prove delivery" \
                   "inbox $u: $unacked undelivered ${oldest_age}s, liveness unknown — fail-loud escalate" ;;
     esac
     n_esc=$((n_esc+1))
