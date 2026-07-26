@@ -52,6 +52,17 @@ usage() { sed -n '2,/^set -uo/p' "$0" | sed 's/^# \{0,1\}//; /^set -uo/d'; }
 
 now_iso() { echo "${CC_NOW:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"; }
 
+# TSV field-collapse guard — docs/research/TSV_FIELD_COLLAPSE_2026-07-25.md. Tab is IFS-*whitespace*,
+# so `IFS=$'\t' read` collapses a RUN of tabs and ANY empty cell shifts every later field LEFT. The
+# only nullable column in the abstain row is `.hook` (a group key, `""` if a record carries one), and
+# it shifting would slide the COUNTS one place left — an inert-detector reporting the wrong hook's
+# numbers, i.e. exactly the silent-green this tool exists to catch. `.hook` pads to $'\037' rather
+# than a visible placeholder because the reader tests it for emptiness (`[ -n "$hook" ] || continue`)
+# and the --json branch must emit a real "" — both un-pad below.
+CELL='def cell(ph): (if . == null then "" else . end) | tostring
+      | gsub("[\\t\\r\\n]"; " ") | if . == "" then ph else . end; '
+TSV_PAD=$'\037'
+
 # cutoff <hours-back> → ISO-Z (BSD `date -v` then GNU `date -d`). Anchored on CC_NOW when set
 # (tests inject a fixed now); otherwise the real clock. ISO-Z is fixed-width UTC, so a jq string
 # `>=` compare on it IS a correct time compare.
@@ -113,7 +124,7 @@ cmd_abstain() {
   # no longer abort the slurp → no silent-green); warn_malformed already reported the skip count.
   local rows
   rows="$(grep -F '"disposition"' "$IDL" 2>/dev/null | grep -F '"hook"' | tail -n "$TAIL" \
-    | jq -Rrn --arg cutoff "$cut" --argjson n "$MIN" '[inputs | fromjson?]
+    | jq -Rrn --arg cutoff "$cut" --argjson n "$MIN" --arg pad "$TSV_PAD" "$CELL"'[inputs | fromjson?]
       | map(select(type=="object" and .hook and .disposition and .ts))
       | group_by(.hook)
       | map({hook: .[0].hook,
@@ -122,14 +133,15 @@ cmd_abstain() {
              nonabstained: (map(select(.ts >= $cutoff and .disposition!="abstained")) | length),
              last_fired:   (map(select(.disposition!="abstained")) | if length>0 then max_by(.ts).ts else "never" end)})
       | .[]
-      | [ .hook, (.total|tostring), (.abstained|tostring), (.nonabstained|tostring),
-          (if (.total >= $n and .nonabstained == 0) then "1" else "0" end), .last_fired ] | @tsv
+      | [ (.hook | cell($pad)), (.total|tostring), (.abstained|tostring), (.nonabstained|tostring),
+          (if (.total >= $n and .nonabstained == 0) then "1" else "0" end),
+          (.last_fired | cell("never")) ] | @tsv
     ' 2>/dev/null || true)"
 
   if [ "$json" -eq 1 ]; then
     if [ -z "$rows" ]; then echo "[]"; else
-      printf '%s\n' "$rows" | jq -Rs 'split("\n") | map(select(length>0) | split("\t")
-        | {hook:.[0], total:(.[1]|tonumber), abstained:(.[2]|tonumber),
+      printf '%s\n' "$rows" | jq -Rs --arg pad "$TSV_PAD" 'split("\n") | map(select(length>0) | split("\t")
+        | {hook:(if .[0]==$pad then "" else .[0] end), total:(.[1]|tonumber), abstained:(.[2]|tonumber),
            nonabstained:(.[3]|tonumber), alarm:(.[4]=="1"), last_fired:.[5]})'
     fi
   fi
@@ -137,6 +149,7 @@ cmd_abstain() {
   local alarms=0
   if [ -n "$rows" ]; then
     while IFS=$'\t' read -r hook total abst nonabst alarm last; do
+      [ "$hook" = "$TSV_PAD" ] && hook=""       # un-pad: "" still means "no hook key", so skip
       [ -n "$hook" ] || continue
       if [ "$alarm" = "1" ]; then
         alarms=$((alarms + 1))

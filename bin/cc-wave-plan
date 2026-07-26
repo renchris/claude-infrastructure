@@ -52,6 +52,14 @@ cliff()       { idl failed "quota-cliff: $*"; echo "cc-wave-plan: ⛔ QUOTA CLIF
 
 now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
+# TSV field-collapse guard — docs/research/TSV_FIELD_COLLAPSE_2026-07-25.md. Tab is IFS-*whitespace*,
+# so `IFS=$'\t' read` collapses a RUN of tabs and ANY empty cell shifts every later field LEFT. The
+# item read below is guarded upstream by the `jq -e 'all(...)'` schema check (non-empty id + enum
+# slot), so this padding is belt-not-brace TODAY — it is here so the guarantee lives at the emitter
+# next to the read rather than 20 lines away in a validation that a later edit could relax.
+CELL='def cell(ph): (if . == null then "" else . end) | tostring
+      | gsub("[\\t\\r\\n]"; " ") | if . == "" then ph else . end; '
+
 # IDL (one record per invocation): action ∈ fired|passed|abstained|failed.
 idl() { # <action> <detail>
   mkdir -p "$(dirname "$IDL")" 2>/dev/null || true
@@ -229,7 +237,7 @@ cmd_plan() {
   # Read items in order into parallel arrays.
   local ids=() slots=() line id slot
   while IFS=$'\t' read -r id slot; do ids+=("$id"); slots+=("$slot"); done \
-    < <(printf '%s' "$items" | jq -r '.[] | [.id, .slot] | @tsv')
+    < <(printf '%s' "$items" | jq -r "$CELL"'.[] | [(.id | cell("?")), (.slot | cell("?"))] | @tsv')
 
   # Decide the Fable STRADDLE once (window state is uniform across the wave).
   local has_frontier=0 i
