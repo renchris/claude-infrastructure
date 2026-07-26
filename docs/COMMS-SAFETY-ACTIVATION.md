@@ -19,8 +19,12 @@ operator runs it.** The agent NEVER edits `scripts/handoff-fire.sh`, `bin/cc-wai
   **900s during an exit sequence** (`CC_EXIT_SEQUENCE` truthy OR the flag file
   `~/.claude/exit-sequence.flag`, `CC_EXIT_SEQUENCE_FLAG`), the default otherwise.
 - **F5 `scripts/completion-push.sh`** `fire --event <desc>` — a program-terminal completion → an OPERATOR
-  push via cc-announce; a record is captured BEFORE the push (`~/.claude/completion-push/`); a non-verified
-  push exits non-zero (LOUD).
+  push via cc-announce; a record is captured BEFORE the push (`~/.claude/completion-push/`). Three
+  outcomes, kept distinct because cc-announce returns **0 for both a confirmed wake and a degrade**:
+  `verified` (wake confirmed, exit 0) · `degraded` (delivered to a live inbox but no watcher armed, so it
+  drains on that session's next turn — exit 0, cc-inbox-guard backstops it) · `push-failed` (exit 5, LOUD).
+  The outcome is read from cc-announce's machine-readable `verdict=VERIFIED|DEGRADED|ALARM(<v>)` stderr
+  token, never its prose; `autonomy-sweep` surfaces every record whose verdict is not `verified`.
 
 ## Activation (run `/tmp/comms-safety-activate.sh`, opened in Cursor)
 
