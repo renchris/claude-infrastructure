@@ -397,3 +397,67 @@ post-fix green could have distinguished from a genuine revival.
 
 `cc-relogin.bats:146` doubles as the proof for the `and-absorbed` class: mutating the **left**
 element of `A && B` fails the test, so both halves are now load-bearing.
+
+---
+
+## 9. A false all-clear, after all — the `A && false || true` shape
+
+A second rebase (10 more commits) produced 6 findings, and working them exposed **three defects
+in the tooling itself**, one of which breaks §4's central claim.
+
+### 9a. Finality does not rescue a chain that cannot fail
+
+```bash
+echo "$output" | grep -q 2000 && false || true     # "2000 must NOT be selected"
+```
+
+The author put `false` there to signal the failure; the trailing `|| true` swallows it. Status is
+0 whether 2000 matched or not — so this is dead in **every** position, including a body's last
+statement. The analyzer skipped final statements unconditionally, so **4 of these were invisible**
+(`pkill-scope.bats:98,108,115,126`). That is a **false all-clear**, the failure direction §4
+asserted was structurally impossible. It was impossible only for the constructs §4 enumerated;
+finality was never conditioned on the statement being *able* to fail.
+
+Worse, the fixer's uniform append is a **no-op** here — `A && false || true || false` is still 0
+on every path (verified: `bash -ec '… && false || true || false'` → status 0). Appending would
+have reported 6 revived while reviving none. The shape is now rewritten to `! A || false`.
+
+**Where they were matters:** `pkill-scope.bats` guards the worktree-scoped kill contract — the fix
+for the 2026-07-26 fleet-wide gate-kill incident. Its "never selects another worktree's gate" and
+"refuses to select itself" assertions could not fail, in the suite protecting the mechanism that
+several sessions' landings depend on.
+
+### 9b. A false positive the fixer would have weaponised
+
+`[ -z "$line" ] && continue` and `[ "$x" = DENY ] && bad="$bad$line"` are if-statements, not
+absorbed assertions. Here over-reporting is **not** the harmless direction §4 assumes: appending
+` || false` inverts the guard and fails the test on its ordinary path. Loop control and assignment
+are now exempt. The §4 trade holds only where the mechanical edit is inert — worth stating,
+because it is the premise the whole conservative-finality design rests on.
+
+### 9c. What the revival exposed — a fixture that severed the mechanism it tested
+
+Reviving 9a's assertions turned *"cleanup: refuses to select itself or any ancestor"* RED.
+Product was correct; the **fixture** was not — the §6a class again.
+
+`gate-cleanup.sh` protects itself by walking its own ancestry through the `ps` table. This suite
+substitutes that table wholesale and never put the cleanup process in it, so `ppid_of "$$"` found
+nothing, the ancestor walk never ran, and `EXCLUDE` stayed `{ self }`. The assertions had been
+passing for the wrong reason: the script was not being spared, it was being asked about processes
+it could not relate to itself.
+
+Emitting a self-row required **discovering** the pid, and two plausible ways were wrong:
+
+| Attempt | Result | Why |
+|---|---|---|
+| `$PPID` of the fake `ps` | 24531 vs real `$$` 24727 | `ps_all` is a function ⇒ bash forks for `$(…)` |
+| first ancestor whose argv says `gate-cleanup.sh` | 96975, which then appeared in the selection | a fork **inherits argv** — argv is not identity |
+| topmost consecutive argv match | correct | the script's own parent is the bats shell, which no longer matches |
+
+The middle row is the same defect `gate-cleanup.sh` exists to fix, reproduced inside its own test
+while trying to test it. Mutation-proved two ways — severing the parent link, and breaking the
+discovery loop — each turns the suite RED.
+
+**The through-line:** a detector, a fixer, and a fixture each certified something they could not
+see. A green suite, a "revived 6", and a passing self-preservation assertion were all true
+statements about artifacts that were not doing the work claimed of them.
