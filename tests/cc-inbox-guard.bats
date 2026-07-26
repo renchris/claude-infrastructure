@@ -279,3 +279,42 @@ forks() { local f="$BATS_TEST_TMPDIR/forks"; [ -f "$f" ] && wc -c < "$f" | tr -d
   run "$G" sweep                                      # line 2 has never been alarmed for
   pushed
 }
+
+# ── the reconcile disable-seam: set-but-EMPTY must genuinely disable the fork ──────────────────
+#
+# Staged into a TMP bin/ so the auto-resolve fall-through is OBSERVABLE. Resolution order is
+# "$_bd/cc-reconcile" first, and _bd is the guard's own directory — running the repo copy would
+# always resolve the repo's REAL cc-reconcile (which forks `it2 session list --json` and, against
+# a wedged iTerm2, stalls the sweep). Copying the guard beside a MARKER-WRITING fixture makes
+# "did it fall through?" a file-existence question instead of a timing one.
+_stage_guard_with_fixture_reconcile() {  # → echoes the staged guard path
+  local d="$BATS_TEST_TMPDIR/stage"
+  mkdir -p "$d/bin" "$d/hooks/lib"
+  cp "$G" "$d/bin/cc-inbox-guard"
+  cp "$REPO/hooks/lib/mailbox-pending.sh" "$d/hooks/lib/mailbox-pending.sh"
+  { printf '#!/bin/bash\n'; printf ': > "%s/reconcile.ran"\n' "$BATS_TEST_TMPDIR"; } > "$d/bin/cc-reconcile"
+  chmod +x "$d/bin/cc-inbox-guard" "$d/bin/cc-reconcile"
+  printf '%s' "$d/bin/cc-inbox-guard"
+}
+
+@test "reconcile seam: UNSET auto-resolves and FORKS (positive control for the pin below)" {
+  local g; g="$(_stage_guard_with_fixture_reconcile)"
+  msg_aged 3600 peer
+  unset CC_INBOX_GUARD_RECONCILE_BIN
+  run "$g" sweep
+  [ "$status" -eq 0 ]
+  # Without this control, the pin below could pass because the fork never happens for ANY reason.
+  [ -f "$BATS_TEST_TMPDIR/reconcile.ran" ] || false
+}
+
+@test "reconcile seam: set-but-EMPTY genuinely DISABLES the fork (no fall-through to auto-resolve)" {
+  local g; g="$(_stage_guard_with_fixture_reconcile)"
+  msg_aged 3600 peer
+  export CC_INBOX_GUARD_RECONCILE_BIN=""
+  run "$g" sweep
+  [ "$status" -eq 0 ]
+  # Pre-fix this file EXISTED: `${VAR:-}` read set-empty as unset, fell into the auto-resolve loop
+  # and ran cc-reconcile — the fork that hung this whole suite (and every full-scope landing gate)
+  # against a wedged it2 API. RED-proven 2026-07-26 by reverting the resolution block.
+  [ ! -f "$BATS_TEST_TMPDIR/reconcile.ran" ] || false
+}
