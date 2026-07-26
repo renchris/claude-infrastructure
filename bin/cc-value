@@ -69,6 +69,19 @@ map_acct() { case "$1" in
   */.claude-tertiary)   echo next3 ;;  */.claude-quaternary) echo next4 ;;  *) echo "" ;;
 esac ; }
 
+# TSV field-collapse guard — docs/research/TSV_FIELD_COLLAPSE_2026-07-25.md. Tab is IFS-*whitespace*,
+# so `IFS=$'\t' read` collapses a RUN of tabs and ANY empty cell shifts every later field LEFT. This
+# read is the live case cc-board documents at its own telemetry read: `.config_dir` is EMPTY on any
+# telemetry row that never carried one, which slid `pid` into `cfg`, the freshness BOOLEAN into
+# `pid`, and left `fresh` blank — so `[ "$fresh" = "true" ]` was false for every such row and the
+# session counted as INACTIVE in the value ledger. Padded at the emitter, un-padded at the reader
+# (this is a DATA path, not a display one — all four fields are read for their emptiness).
+# `if . == null` rather than `// ""` is load-bearing here: `.fresh` is a boolean and `false // ""`
+# would render the pad instead of "false".
+CELL='def cell(ph): (if . == null then "" else . end) | tostring
+      | gsub("[\\t\\r\\n]"; " ") | if . == "" then ph else . end; '
+TSV_PAD=$'\037'
+
 # ── telemetry → { uuid→acct } and the set of ACTIVE sessions/accounts ─────────────────────────
 # One pass over the telemetry dir. Emits TSV lines: <uuid>\t<acct>\t<used_pct>\t<active(0|1)>.
 # active = fresh (age ≤ STALE_S) AND pid alive — the honest "is this session spending right now".
@@ -77,13 +90,19 @@ telemetry_rows() {
   local f nowt; nowt="$(now)"
   for f in "$TDIR"/*.json; do
     [ -f "$f" ] || continue
-    jq -r --argjson now "$nowt" --argjson stale "$STALE_S" '
-      [ (.session_id // ""),
-        (.config_dir // ""),
-        ((.used_pct // 0)|floor|tostring),
-        (.pid // ""),
-        (($now - (.ts // 0)) <= $stale) ] | @tsv' "$f" 2>/dev/null
+    jq -r --argjson now "$nowt" --argjson stale "$STALE_S" --arg pad "$TSV_PAD" "$CELL"'
+      [ ((.session_id // "")            | cell($pad)),
+        ((.config_dir // "")            | cell($pad)),
+        (((.used_pct // 0)|floor|tostring) | cell("0")),
+        ((.pid // "")                   | cell($pad)),
+        ((($now - (.ts // 0)) <= $stale) | cell($pad)) ] | @tsv' "$f" 2>/dev/null
   done | while IFS=$'\t' read -r sid cfg used pid fresh; do
+    # un-pad: every one of these four is read for its EMPTINESS below (sid gates the row, cfg maps
+    # to "" for an unknown account, pid must stay non-numeric-empty, fresh is a real boolean).
+    [ "$sid"   = "$TSV_PAD" ] && sid=""
+    [ "$cfg"   = "$TSV_PAD" ] && cfg=""
+    [ "$pid"   = "$TSV_PAD" ] && pid=""
+    [ "$fresh" = "$TSV_PAD" ] && fresh=""
     [ -n "$sid" ] || continue
     local acct active=0
     acct="$(map_acct "$cfg")"

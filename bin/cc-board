@@ -29,10 +29,19 @@ esac ; }
 # ONE cached accounts read (never --fresh: 90s single-flight); joined per row below.
 ACCTS_JSON=""
 command -v claude-accounts >/dev/null 2>&1 && ACCTS_JSON=$(claude-accounts --json 2>/dev/null)
+# TSV field-collapse guard — docs/research/TSV_FIELD_COLLAPSE_2026-07-25.md. Tab is IFS-*whitespace*,
+# so `IFS=$'\t' read` collapses a RUN of tabs and ANY empty cell shifts every later field LEFT. An
+# account row missing `.weekly_pct` (absent key → @tsv renders null as EMPTY) used to slide the Fable
+# percentage into the WK column and blank FABLE — i.e. the LIMIT state below computed off the wrong
+# quota. Padded at the emitter with the same "?" this function already returns when the read fails,
+# so a partial row renders exactly like an absent one instead of a plausible-looking wrong number.
+CELL='def cell(ph): (if . == null then "" else . end) | tostring
+      | gsub("[\\t\\r\\n]"; " ") | if . == "" then ph else . end; '
 qrow() {  # $1=acct → "5h<TAB>wk<TAB>fable"  (or "?\t?\t?")
   local r=""
   [ -n "$ACCTS_JSON" ] && [ -n "$1" ] && r=$(printf '%s' "$ACCTS_JSON" | jq -r --arg a "$1" \
-    '(.rows//[])[]|select(.acct==$a)|[.session_pct,.weekly_pct,.fable_pct]|@tsv' 2>/dev/null | head -1)
+    "$CELL"'(.rows//[])[]|select(.acct==$a)
+     |[(.session_pct|cell("?")),(.weekly_pct|cell("?")),(.fable_pct|cell("?"))]|@tsv' 2>/dev/null | head -1)
   [ -n "$r" ] && printf '%s' "$r" || printf '?\t?\t?'
 }
 

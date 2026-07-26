@@ -47,6 +47,17 @@ mk_id() { printf '%s\037%s\037%s' "$1" "$2" "$3" | shasum -a 256 | cut -c1-12; }
 
 ensure_dir() { mkdir -p "$DECISIONS_DIR" 2>/dev/null || true; }
 
+# ── TSV field-collapse guard — docs/research/TSV_FIELD_COLLAPSE_2026-07-25.md ──────────────────
+# Tab is IFS-*whitespace*, so `IFS=$'\t' read` collapses a RUN of tabs: ANY empty cell shifts every
+# later field one position LEFT, silently and with a zero exit status. Padding at the `@tsv`
+# EMITTER is the only durable fix — the read side cannot be repaired (a non-whitespace IFS would
+# have to be $'\037'; $'\001' is bash's internal CTLESC and does not split at all on bash 3.2).
+# `//` alone is NOT enough: it substitutes for null/false only, never for a present-but-empty
+# string — which is exactly the live case (`.veto_deadline // ""` on every class-C packet).
+# `if . == null` rather than `// ""` so a legitimate `false` still renders "false", not the pad.
+CELL='def cell(ph): (if . == null then "" else . end) | tostring
+      | gsub("[\\t\\r\\n]"; " ") | if . == "" then ph else . end; '
+
 # Best-effort audit line; NEVER fails the command.
 log_idl() { # <verb> <id> <class> <status>
   mkdir -p "$(dirname "$IDL")" 2>/dev/null || true
@@ -168,14 +179,15 @@ cmd_list() {
   local f
   for f in "$DECISIONS_DIR"/*.json; do
     [ -e "$f" ] || continue
-    jq -r --arg mode "$mode" --arg classf "$classf" '
+    jq -r --arg mode "$mode" --arg classf "$classf" "$CELL"'
       select($classf == "" or .class == $classf)
       | select(
           $mode == "all"
           or ($mode == "open"     and .status == "open")
           or ($mode == "expiring" and .status == "open" and .class == "B" and .veto_deadline != "")
         )
-      | [.status, .class, .id, (.veto_deadline // ""), .what_plain] | @tsv
+      | [ (.status | cell("?")), (.class | cell("?")), (.id | cell("?")),
+          (.veto_deadline | cell("-")), (.what_plain | cell("?")) ] | @tsv
     ' "$f" 2>/dev/null
   done | sort | while IFS=$'\t' read -r st cl id dl what; do
       printf '%-16s | %s | %s | %-20s | %s\n' "$st" "$cl" "$id" "$dl" "$what"
