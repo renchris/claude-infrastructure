@@ -13,6 +13,10 @@ setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   DR="$REPO/bin/desk-register"
   export CC_ROLES_DIR="$BATS_TEST_TMPDIR/roles"
+  # A reassignment now also writes the crash-path mailbox `.forward`, so the mailbox dir must be
+  # isolated too — otherwise a test would write a pointer into the LIVE ~/.claude/mailbox.
+  export CC_MAILBOX_DIR="$BATS_TEST_TMPDIR/mbox"
+  mkdir -p "$CC_MAILBOX_DIR"
   PANE="8B90BC66-9853-4F63-9C1C-39B161174221"
   export ITERM_SESSION_ID="w2t0p3:$PANE"
   unset SESSION_ID
@@ -116,4 +120,44 @@ role_file() { cat "$CC_ROLES_DIR/${1:-desk}" 2>/dev/null; }
   run "$DR"
   [ "$status" -eq 0 ]
   [ "$(role_file)" = "EXPLICIT-SID" ]
+}
+
+# ── CRASH-PATH SUCCESSION: only handoff-fire's graceful self-close used to write a `.forward` ──────
+@test "reassign writes the mailbox .forward — a crashed holder's box becomes a POINTER, not a strand" {
+  OLD="AAAAAAAA-1111-2222-3333-444444444444"
+  mkdir -p "$CC_ROLES_DIR"; printf '%s\n' "$OLD" > "$CC_ROLES_DIR/desk"
+  run "$DR"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$CC_MAILBOX_DIR/$OLD.forward")" = "$PANE" ]
+  [[ "$output" == *"mail forwarded: $OLD → $PANE"* ]] || false
+}
+
+@test "the forward makes raw-uuid mail follow the succession (the 631-line stranding class)" {
+  OLD="AAAAAAAA-1111-2222-3333-444444444444"
+  mkdir -p "$CC_ROLES_DIR"; printf '%s\n' "$OLD" > "$CC_ROLES_DIR/desk"
+  run "$DR"; [ "$status" -eq 0 ]
+  # a peer still holding the dead pane's RAW uuid now resolves to the successor
+  . "$REPO/hooks/lib/mailbox-pending.sh"
+  [ "$(mailbox_forward_of "$OLD")" = "$PANE" ]
+}
+
+@test "a FRESH registration writes no forward (there is no predecessor to point away from)" {
+  run "$DR"
+  [ "$status" -eq 0 ]
+  [ "$(find "$CC_MAILBOX_DIR" -name '*.forward' 2>/dev/null | wc -l | tr -d ' ')" -eq 0 ]
+}
+
+@test "an idempotent re-register writes no forward (a self-forward would hide a real bug)" {
+  mkdir -p "$CC_ROLES_DIR"; printf '%s\n' "$PANE" > "$CC_ROLES_DIR/desk"
+  run "$DR"
+  [ "$status" -eq 0 ]
+  [ "$(find "$CC_MAILBOX_DIR" -name '*.forward' 2>/dev/null | wc -l | tr -d ' ')" -eq 0 ]
+}
+
+@test "a NON-canonical previous holder gets no pointer, and the registration still succeeds" {
+  mkdir -p "$CC_ROLES_DIR"; printf 'OLD-PANE-UUID\n' > "$CC_ROLES_DIR/desk"
+  run "$DR"
+  [ "$status" -eq 0 ]
+  [ "$(role_file)" = "$PANE" ]
+  [ "$(find "$CC_MAILBOX_DIR" -name '*.forward' 2>/dev/null | wc -l | tr -d ' ')" -eq 0 ]
 }

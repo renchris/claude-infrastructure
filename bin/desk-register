@@ -34,8 +34,20 @@
 # Writes are atomic (tmp + mv, mirroring handoff-fire.sh write_role) so a concurrent reader never
 # sees a half-written role file.
 #
+# ── CRASH-PATH SUCCESSION: a REASSIGNMENT also leaves a mailbox `.forward` ────────────────────────
+# Repointing the role file only re-addresses ROLE-addressed mail. Every back-channel ping ever fired
+# carries a RAW pane uuid, and those keep enqueuing into the predecessor's box — the class that
+# stranded 631/206/155 unread lines in former-desk boxes. handoff-fire writes a `.forward` to close
+# that, but ONLY on a graceful self-close (write_forward_for, its sole caller): a desk that CRASHES,
+# OOMs or is hard-reaped never runs that chain, so its replacement inherited the role and none of the
+# mail. This is where the crash path becomes observable — someone claiming a role another pane held —
+# so the pointer is written here too, making the dead box a pointer and letting the successor's
+# SessionStart adopt the predecessor's unconsumed tail. Best-effort by construction: a missing lib or
+# an unwritable dir must NEVER fail a registration, and mailbox_write_forward itself refuses anything
+# that is not a canonical uuid (a role holding a name/session-id simply gets no pointer).
+#
 # Env overrides (tests):
-#   CC_ROLES_DIR   (default ~/.claude/cc-roles)
+#   CC_ROLES_DIR   (default ~/.claude/cc-roles) · CC_MAILBOX_DIR (the forward pointer's dir)
 set -uo pipefail
 
 ROLES_DIR="${CC_ROLES_DIR:-$HOME/.claude/cc-roles}"
@@ -100,11 +112,30 @@ if [ "$prev" = "$PANE" ]; then
   exit 0
 fi
 
+# The mailbox twin of the role repoint (see CRASH-PATH SUCCESSION above). Sourced lazily and guarded
+# by a function-exists check, exactly as handoff-fire's write_forward_for does — a missing lib degrades
+# to "no pointer written", never a failed registration.
+write_forward() { # <old-pane> <new-pane> → 0 iff a pointer was written
+  local old="$1" new="$2" lib
+  [ -n "$old" ] && [ -n "$new" ] && [ "$old" != "$new" ] || return 1
+  for lib in "$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)/hooks/lib/mailbox-pending.sh" \
+             "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/mailbox-pending.sh" \
+             "$HOME/.claude/hooks/lib/mailbox-pending.sh"; do
+    # shellcheck disable=SC1090,SC1091
+    [ -f "$lib" ] && { . "$lib" 2>/dev/null || true; break; }
+  done
+  command -v mailbox_write_forward >/dev/null 2>&1 || return 1
+  mailbox_write_forward "$old" "$new" 2>/dev/null || return 1
+  return 0
+}
+
 mkdir -p "$ROLES_DIR" 2>/dev/null || { echo "desk-register: cannot create roles dir: $ROLES_DIR" >&2; exit 1; }
 tmp="$ROLES_DIR/.$ROLE.$$"
 if printf '%s\n' "$PANE" > "$tmp" 2>/dev/null && mv -f "$tmp" "$ROLES_DIR/$ROLE" 2>/dev/null; then
+  fwd=""
+  if [ -n "$prev" ]; then write_forward "$prev" "$PANE" && fwd=" (mail forwarded: $prev → $PANE)"; fi
   if [ "$QUIET" != 1 ]; then
-    if [ -n "$prev" ]; then printf 'reassigned %s: %s → %s\n' "$ROLE" "$prev" "$PANE"
+    if [ -n "$prev" ]; then printf 'reassigned %s: %s → %s%s\n' "$ROLE" "$prev" "$PANE" "$fwd"
     else                    printf 'registered %s → %s\n' "$ROLE" "$PANE"; fi
   fi
   exit 0
