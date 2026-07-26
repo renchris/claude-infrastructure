@@ -84,3 +84,30 @@ setup() {
   run damp_should_send "$T" "DEAD at 10:00:02"
   [ "$status" -eq 0 ]        # undamped — which is why producers must fingerprint STATE, not time
 }
+
+# ── damp_forget: the marker is an INTENT to send; a refused send must not burn its TTL ────────────
+@test "damp_forget drops the marker so the very next call sends again" {
+  damp_should_send "$T" "DEAD:pid-gone"
+  run damp_should_send "$T" "DEAD:pid-gone"; [ "$status" -eq 1 ]   # damped, as designed…
+  damp_forget "$T" "DEAD:pid-gone"                                 # …until the send is retracted
+  run damp_should_send "$T" "DEAD:pid-gone"
+  [ "$status" -eq 0 ]
+}
+
+@test "damp_forget is SCOPED — it clears only its own (target,fingerprint), never the neighbours" {
+  damp_should_send "$T" "DEAD:pid-gone"
+  damp_should_send "$T" "STALL?:stale-telemetry"
+  damp_should_send "BBBBBBBB-1111-2222-3333-444444444444" "DEAD:pid-gone"
+  damp_forget "$T" "DEAD:pid-gone"
+  run damp_should_send "$T" "DEAD:pid-gone";                                  [ "$status" -eq 0 ]
+  run damp_should_send "$T" "STALL?:stale-telemetry";                         [ "$status" -eq 1 ]
+  run damp_should_send "BBBBBBBB-1111-2222-3333-444444444444" "DEAD:pid-gone"; [ "$status" -eq 1 ]
+}
+
+@test "damp_forget is fail-open and total — empty args, an unknown key and a missing dir all rc 0" {
+  run damp_forget "" "some-state";        [ "$status" -eq 0 ]
+  run damp_forget "$T" "";                [ "$status" -eq 0 ]
+  run damp_forget "$T" "never-sent";      [ "$status" -eq 0 ]
+  rm -rf "$CC_PAGE_DAMP_DIR"
+  run damp_forget "$T" "DEAD:pid-gone";   [ "$status" -eq 0 ]
+}

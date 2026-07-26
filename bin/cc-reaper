@@ -246,18 +246,28 @@ idl_safeguard(){ # <pane> <name> <account> <model> <refusal> <firedBy> <recover_
 #
 # When a fingerprint is supplied, D7 damping suppresses an identical (target,fingerprint) re-send
 # inside the TTL — a state CHANGE always gets through. A missing cc-notify is silent, never fatal.
+#
+# COMMS TRUTHFULNESS: the cc-notify RC is the outcome, and `|| true` is not a delivery. This used to
+# discard it, so a page cc-notify REFUSED (rc 3 unresolvable target / rc 5 unwritable inbox) vanished
+# with no log line, no IDL row and no retry — while the D7 marker written just before the attempt
+# suppressed the next 30 min of re-sends. A refused page is now LOGGED and the marker dropped, so the
+# next sweep re-sends. Exit: 0 = enqueued (or damped) · 1 = no cc-notify · 2 = the transport refused it.
 notify_desk(){ # <message> [fingerprint]
-  local msg="$1" fp="${2:-}" rdir rname
-  [ -n "$NOTIFY_BIN" ] || return 0
+  local msg="$1" fp="${2:-}" rdir rname rc=0
+  [ -n "$NOTIFY_BIN" ] || return 1
   if [ -n "$fp" ] && command -v damp_should_send >/dev/null 2>&1; then
     damp_should_send "${PAGE_TO:-role:$PAGE_TO_FILE}" "$fp" || { log "page-damped [$fp]"; return 0; }
   fi
   if [ -n "$PAGE_TO" ]; then
-    "$NOTIFY_BIN" "$PAGE_TO" "$msg" >/dev/null 2>&1 || true
+    "$NOTIFY_BIN" "$PAGE_TO" "$msg" >/dev/null 2>&1; rc=$?
   else
     rdir="$(dirname "$PAGE_TO_FILE")"; rname="$(basename "$PAGE_TO_FILE")"
-    CC_ROLES_DIR="$rdir" "$NOTIFY_BIN" --role "$rname" "$msg" >/dev/null 2>&1 || true
+    CC_ROLES_DIR="$rdir" "$NOTIFY_BIN" --role "$rname" "$msg" >/dev/null 2>&1; rc=$?
   fi
+  [ "$rc" = 0 ] && return 0
+  [ -n "$fp" ] && command -v damp_forget >/dev/null 2>&1 && damp_forget "${PAGE_TO:-role:$PAGE_TO_FILE}" "$fp"
+  log "page SEND FAILED rc=$rc target=${PAGE_TO:-role:$(basename "$PAGE_TO_FILE")} — NOT delivered (cc-notify refused it); damping marker dropped so the next sweep retries"
+  return 2
 }
 sanitize_key(){ printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_'; }   # marker-filename-safe damping key
 
@@ -428,12 +438,34 @@ handle_surface() { # <reap> <key> <name> <cause> <pane> <detail>
   fi
   # fingerprint = the STATE words only (session + cause). ${detail} is deliberately excluded: it
   # carries volatile text (times, counts) that would change every sweep and silently defeat damping.
+  local nrc=0
   notify_desk "⚠️ REAPER SURFACE — session ${name} is ${cause}: ${detail} (never-reap; desk/operator resolves — re-engage a hang · close a crashed pane · confirm-close a shared-review). cc-reaper never auto-acts on this." \
-              "surface:${name}:${cause}"
-  printf '%s\n' "$cause" > "$mk" 2>/dev/null || true
+              "surface:${name}:${cause}" || nrc=$?
+  # The FINDING is recorded either way — the classification is true whether or not anyone was reached.
+  # The DELIVERY claim is not, and $mk is this sweep's "already paged this cause" damper. Three
+  # outcomes, deliberately NOT collapsed:
+  #   0 REFUSED-BY-TRANSPORT is the only one that withholds the marker — the send is retryable and
+  #     damping it would suppress every retry of a page the desk never got (the F1 defect class).
+  #   · NO-CHANNEL-WIRED keeps the marker (unchanged): a missing cc-notify is static config, not a
+  #     transient fault, so retrying it every sweep only floods the IDL — but the line must stop
+  #     saying "→ desk", because nothing went there.
+  # Retry cost is bounded by the sweep cadence (launchd, 300s): a standing refusal costs ~12 attempts
+  # + IDL rows an hour, which is the correct volume for "the desk role is unset and a session needs
+  # attention" — the same S-4 posture as the supervisor's per-sweep page record.
   idl_surface "$cause" "$name" "$pane"
-  say "  PAGE   $name [$cause] → desk (surfaced, never-reap)"
-  log "surface-page $name [$cause] pane=$pane"
+  if [ "$nrc" = 2 ]; then
+    say "  PAGE!  $name [$cause] — surfaced, but the desk page was REFUSED (cc-notify rc=2); retrying next sweep"
+    log "surface-page UNDELIVERED $name [$cause] pane=$pane — cc-notify refused it; marker withheld, will retry"
+    return 0
+  fi
+  printf '%s\n' "$cause" > "$mk" 2>/dev/null || true
+  if [ "$nrc" = 0 ]; then
+    say "  PAGE   $name [$cause] → desk (surfaced, never-reap)"
+    log "surface-page $name [$cause] pane=$pane"
+  else
+    say "  SURFACE $name [$cause] — recorded, NOT paged (no desk channel wired)"
+    log "surface-page NO-CHANNEL $name [$cause] pane=$pane — cc-notify unavailable; recorded to the IDL only"
+  fi
 }
 
 # ── safeguard-blocked (2026-07-25): surface a fired peer that model content-safeguards refused on

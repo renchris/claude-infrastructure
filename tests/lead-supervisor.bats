@@ -64,3 +64,12 @@ setup() {
   echo "$output" | grep -q 'T25 EXEMPTION IS DESK-SPECIFIC'
   echo "$output" | grep -q 'T26 DEAD DESK'
 }
+
+@test "T29: a cc-notify-REFUSED page is IDL-loud and retried, never damping-marked (comms truthfulness)" {
+  run bash "$SUP" --selftest
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'T29 SEND-RC HONORED'
+  echo "$output" | grep -q 'refused send leaves NO damping marker'
+  echo "$output" | grep -q 'refused send is IDL-recorded'
+  echo "$output" | grep -q 'refused page RETRIED on the next sweep'
+}

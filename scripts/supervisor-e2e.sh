@@ -127,6 +127,9 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$role" ] && target="$(head -n1 "${CC_ROLES_DIR:-$HOME/.claude/cc-roles}/$role" 2>/dev/null | tr -d '[:space:]')"
 printf '%s\n' "$target" >> "${CC_NOTIFY_CAPTURE:?}"
+# The ATTEMPT is captured above, then the scripted rc decides the OUTCOME — that split is what lets
+# T29 count re-attempts of a page the transport refused. Default 0 keeps every other test unchanged.
+exit "${CC_NOTIFY_STUB_RC:-0}"
 STUB
 chmod +x "$SBX/bin/cc-notify"
 printf '%s' "ROLE-UUID-T9" > "$SBX/desk-role"
@@ -342,6 +345,28 @@ once
 kill "$NONOWNER" 2>/dev/null
 idl_has '"state":"STALL?"'              && no "a recycled (non-owner) alive pid was paged STALL? (kill -0 trusted blindly)" || ok "recycled pid NOT paged STALL?"
 idl_has '"kind":"page".*"state":"DEAD"' && ok "recycled-pid death routed to DEAD (owner-identity check)"                    || no "recycled pid not classified DEAD"
+
+echo "T29 SEND-RC HONORED — a cc-notify-REFUSED page is IDL-loud and RETRIED, never damping-marked (comms truthfulness)"
+# The defect: send_page `|| true`'d the cc-notify call and always returned 0, so page() wrote the
+# .notified damping marker for a send the transport REFUSED (rc 3 unresolvable / rc 5 unwritable
+# inbox). The page was then damped forever — the supervisor's ONE operator-facing act, silent for the
+# life of the incident, while the IDL showed a page. An ATTEMPT is not a send.
+reset; permreset; rm -f "$CC_TELEMETRY_DIR"/*.json "$SBX/notify.log" "$CC_SUPERVISOR_PAGEDIR"/*.notified
+rm -rf "$CC_SUPERVISOR_PAGEDIR/damp"                              # fresh D7 state for this scenario
+sendrc(){ CC_NOTIFY_STUB_RC="$1" CC_NOTIFY_CAPTURE="$SBX/notify.log" CC_PAGE_TO_FILE="$SBX/desk-role" \
+          CC_NOTIFY_BIN="$SBX/bin/cc-notify" bash "$SUP" --once >/dev/null 2>&1; }
+ncap(){ wc -l < "$SBX/notify.log" 2>/dev/null | tr -d ' '; }
+mktel refused 40 100 99999999 "$REPO"                             # pid gone + unlanded cwd ⇒ DEAD ⇒ page every sweep
+sendrc 3                                                          # sweep 1 — the transport refuses it
+[ -f "$CC_SUPERVISOR_PAGEDIR/refused.notified" ] && no "a REFUSED send wrote the damping marker (page damped out of existence)" || ok "refused send leaves NO damping marker"
+idl_has '"kind":"page_send_failed"' && ok "refused send is IDL-recorded (never silent)"                || no "refused send left no IDL record (silent failure)"
+sendrc 3                                                          # sweep 2 — must RE-ATTEMPT, not stay damped
+[ "$(ncap)" -eq 2 ] && ok "refused page RETRIED on the next sweep (D7 marker dropped, not burned)"     || no "refused page was not retried (attempts=$(ncap), expected 2)"
+sendrc 0                                                          # sweep 3 — channel recovers ⇒ a CONFIRMED enqueue
+[ -f "$CC_SUPERVISOR_PAGEDIR/refused.notified" ] && ok "a CONFIRMED (rc 0) send DOES record the marker" || no "a confirmed send did not record the damping marker"
+[ "$(ncap)" -eq 3 ] && ok "the recovered send went out exactly once"                                    || no "recovered send count wrong (attempts=$(ncap), expected 3)"
+sendrc 0                                                          # sweep 4 — same state, now genuinely sent ⇒ quiet
+[ "$(ncap)" -eq 3 ] && ok "DISCRIMINATES: confirmed⇒damped vs refused⇒retried (damping intact, only the lie removed)" || no "damping broke after a confirmed send (attempts=$(ncap), expected 3)"
 
 echo ""
 echo "supervisor-e2e: $P passed, $F failed"
