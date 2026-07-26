@@ -418,6 +418,25 @@ EOF
   [ ! -e "$D/cc-relogin-next3.in" ]
 }
 
+@test "a missing websocket-client is OUR dependency fault (1), never browser-failed (4)" {
+  # Regression, carried over from trunk's b6961d5 when this executor replaced the Dia-CDP
+  # driver. launchd's PATH has neither Homebrew nor the Framework, so the staged poller runs
+  # on /usr/bin/python3 — the one interpreter here WITHOUT websocket-client. Reported as a 4
+  # it sends the operator to fix a browser that started perfectly, for a pip problem.
+  # The dep is stubbed ABSENT on PYTHONPATH (never skipped on) so this is machine-independent.
+  mkdir -p "$D/pystub"
+  echo 'raise ImportError("stubbed absent for this test")' > "$D/pystub/websocket.py"
+  mk_info all false; mk_fresh 1 logged-out
+  echo 'https://claude.ai/oauth/authorize?code_challenge=xyz' > "$D/claude.out"
+  echo '{"ws_url":"ws://127.0.0.1:9341/devtools/browser/live"}' > "$D/ab.start.json"
+  PYTHONPATH="$D/pystub" run "$C" next3 --url-timeout 5
+  [ "$status" -eq 1 ]                        # ERROR — ours; NOT 4 BROWSER-FAILED
+  echo "$output" | grep -q 'websocket-client is not installed'
+  echo "$output" | grep -q 'NOT a browser failure'
+  echo "$output" | grep -q 'pip install websocket-client'
+  grep -q -- '--stop' "$D/authbrowser-calls"   # teardown is unconditional even on a dep fault
+}
+
 @test "phase 2: the login child is killed on teardown, never left running" {
   mk_info all false; mk_fresh 1 logged-out
   echo 'https://claude.ai/oauth/authorize?code_challenge=xyz' > "$D/claude.out"

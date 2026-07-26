@@ -289,7 +289,20 @@ class CDP:
     """Minimal flat-session CDP client over one websocket (`websocket-client`)."""
 
     def __init__(self, url: str) -> None:
-        import websocket                       # lazy: nothing else in this file leaves stdlib
+        try:
+            import websocket                   # lazy: nothing else in this file leaves stdlib
+        except ImportError:
+            # OUR dependency fault, never a browser failure. It matters which interpreter:
+            # launchd's PATH carries neither Homebrew nor the Python Framework, so the staged
+            # poller lands on /usr/bin/python3 — the ONE interpreter on this machine WITHOUT
+            # websocket-client. Classified as a 4 this sends the operator to fix a browser that
+            # started perfectly, for what is a pip problem. So name the interpreter itself.
+            raise Bail(EXIT_ERROR,
+                       f"websocket-client is not installed for {sys.executable} — phase 2 "
+                       "cannot open a CDP socket. This is a dependency fault in this driver's "
+                       "own interpreter, NOT a browser failure. Recovery: "
+                       f"{sys.executable} -m pip install websocket-client "
+                       "(launchd resolves /usr/bin/python3).", "phase2") from None
         self.ws = websocket.create_connection(url, suppress_origin=True, timeout=20)
         self.n = 0
 
@@ -469,6 +482,8 @@ def phase2(info: dict[str, Any], url_timeout: float) -> tuple[int, str]:
     outp = os.path.join(TMP, f"cc-relogin-{acct}.out")
     try:
         code, detail = phase2_drive(info, url_timeout, acct, outp)
+    except Bail as exc:                   # a NAMED fault keeps its own code (e.g. a dep fault
+        code, detail = exc.code, exc.detail    # is a 1, not a 4) — must precede the broad catch
     except Exception as exc:              # noqa: BLE001 — any phase-2 mechanic failure is a 4
         code, detail = EXIT_BROWSER_FAILED, f"{type(exc).__name__}: {exc}"
     if code == EXIT_PROVEN:
