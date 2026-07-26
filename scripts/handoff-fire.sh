@@ -598,6 +598,32 @@ write_forward_for() { # $1=old-pane $2=new-pane
   return 0
 }
 
+# Resolve the CC session id for a pane uuid (registry row). Shared by write_teardown_marker's
+# recovery path and the live-teammate gate below — both need the CC sid, and the REAL self-close
+# path blanks $SESSION_ID (line 192), so the registry row is the only source.
+cc_sid_for_pane() { # $1=pane-uuid -> echoes the CC session id, or nothing
+  local _pane="${1:-}"
+  [ -n "$_pane" ] || return 0
+  grep -oE '"session_id":[[:space:]]*"[^"]+"' \
+    "${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}/$_pane.json" 2>/dev/null \
+    | head -1 | sed -E 's/.*"([^"]+)"$/\1/' || true
+}
+
+# LIVE TEAMMATES of a lead session — the argv oracle. Every Agent-Team assignee is exec'd with
+# `--team-name session-<sid8>` (verified live 2026-07-26: 8 assignees of session-a3f68174 still
+# running after their lead retired). Prints one "<agent-name>\t<pid>" line per LIVE assignee;
+# empty output = no live team. ps-only: no AppleEvents, safe from a detached context.
+live_teammates_of() { # $1=CC session id -> "<name>\t<pid>" lines
+  local _sid8="${1:0:8}"
+  [ -n "$_sid8" ] || return 0
+  ps -Ao pid=,args= 2>/dev/null | awk -v tag="--team-name session-$_sid8" '
+    index($0, tag) {
+      pid=$1; name="<unnamed>"
+      for (i=1;i<=NF;i++) if ($i=="--agent-name" && (i+1)<=NF) name=$(i+1)
+      printf "%s\t%s\n", name, pid
+    }'
+}
+
 # Light pre-close inventory (best-effort, WARN-only — NEVER blocks the close). A self-closing session
 # should not SILENTLY abandon two loose-end classes; each nonzero count emits ONE WARN line to stderr
 # AND the close log. Ambiguity ⇒ count nothing and skip (per the light-touch contract):
@@ -821,7 +847,27 @@ if [ "${1:-}" = "__selfclose" ]; then
     fi
     exit 1
   fi
-  "$HOME/.claude/bin/it2" session close -f -s "$SID"
+  # PANE CLOSE — retried. The /exit half has already landed (CC is gone), so a failure here is not
+  # "the close didn't happen": it leaves a HUSK pane — a dead session's pane sitting at a shell
+  # prompt, which is exactly what an operator reads as "my session ended abruptly" (observed
+  # 2026-07-26: pane 1FBFCD05, `it2 session close` returned "There was a problem connecting to
+  # iTerm2", 1 of 16 real self-closes). The iTerm2 Python-API socket is occasionally unavailable
+  # for a moment; a single unretried call turns that blip into a permanent husk. Worse, the husk
+  # keeps a FRESH teardown marker on a pane that may be reused — the precondition for the
+  # crash-watchdog false-absolution class (see hooks/lead-crash-watchdog.sh marker_owns_sid).
+  # 4 attempts, 2s apart. Exhausted ⇒ LOUD: log line + desk page, never a silent husk.
+  _close_ok=0
+  for _try in 1 2 3 4; do
+    if "$HOME/.claude/bin/it2" session close -f -s "$SID" 2>&1; then _close_ok=1; break; fi
+    echo "⚠ it2 session close attempt $_try/4 failed for $SID — retrying in 2s" >&2
+    sleep 2
+  done
+  if [ "$_close_ok" = 0 ]; then
+    echo "!! PANE CLOSE FAILED after 4 attempts — pane $SID is a HUSK (claude exited, pane still open). Close it by hand; the session is already gone." >&2
+    if [ -x "$HOME/.claude/bin/cc-notify" ]; then
+      "$HOME/.claude/bin/cc-notify" --role "${CC_COMPLETION_ROLE:-desk}" "HANDOFF-HUSK-PANE: self-close of $SID typed /exit successfully (session is gone) but 'it2 session close' failed 4/4 — the pane is still open at a shell prompt. It reads to the operator as an abrupt crash. Close the pane; no work is at risk." >/dev/null 2>&1 || true
+    fi
+  fi
   if [ -n "$SUCCESSOR" ]; then
     # Succession legibility: land the operator's view ON the continuation. it2 python-API CLI
     # only (AppleEvent-free — proven detached); best-effort: the announce already sits in the
@@ -1162,7 +1208,7 @@ fi
 # self-close — arm the detached watcher that retires this session once the calling turn ends.
 if [ "${1:-}" = "self-close" ]; then
   shift
-  SC_SID="" SC_ALLOW_DIRTY=0 SC_DRY=0 SC_SUCCESSOR="" SC_TERMINAL=0 SC_NO_NOTIFY=0 SC_DIRTY_OWNER="" SC_ASSUME_ENGAGED=0
+  SC_SID="" SC_ALLOW_DIRTY=0 SC_DRY=0 SC_SUCCESSOR="" SC_TERMINAL=0 SC_NO_NOTIFY=0 SC_DIRTY_OWNER="" SC_ASSUME_ENGAGED=0 SC_ALLOW_LIVE_TM=0
   while [ $# -gt 0 ]; do case "$1" in
     --session-id)  SC_SID="${2:?--session-id needs a value}"; shift 2 ;;
     --successor)   SC_SUCCESSOR="${2:?--successor needs a pane uuid}"; shift 2 ;;
@@ -1171,6 +1217,7 @@ if [ "${1:-}" = "self-close" ]; then
     --no-notify)   SC_NO_NOTIFY=1; shift ;;
     --dirty-owner) SC_DIRTY_OWNER="${2:?--dirty-owner needs a value (successor)}"; shift 2 ;;
     --allow-dirty) SC_ALLOW_DIRTY=1; shift ;;
+    --allow-live-teammates) SC_ALLOW_LIVE_TM=1; shift ;;
     --dry-run)     SC_DRY=1; shift ;;
     *) echo "!! unknown self-close arg: $1" >&2; exit 1 ;;
   esac; done
@@ -1200,6 +1247,29 @@ USAGE
   fi
   if [ "$SC_SUCCESSOR" = "$SC_SID" ]; then
     echo "!! self-close: successor must be a DIFFERENT pane than the one closing (use --recycle for in-place continuation)" >&2; exit 2
+  fi
+  # ---- LIVE-TEAMMATE GATE (blocking) ------------------------------------------------------------
+  # A lead that retires while its Agent-Team assignees are STILL RUNNING orphans them: the assignees
+  # keep their panes and RAM, no one harvests their final reports, and (observed 2026-07-26, team
+  # session-a3f68174) the lead may already have force-removed their worktrees — 8 assignees left
+  # alive, 3.4 GB held, every report reachable only by digging its transcript off disk. The
+  # inventory below WARNS about unread mail and orphaned fires; a live team is a strictly worse
+  # loss, so this one BLOCKS. Runs BEFORE any side effect, like the successor gate above.
+  # Override: --allow-live-teammates (deliberate abandonment; recorded LOUD, never silent).
+  SC_CC_SID="$(cc_sid_for_pane "$SC_SID")"
+  SC_LIVE_TM="$(live_teammates_of "$SC_CC_SID")"
+  if [ -n "$SC_LIVE_TM" ]; then
+    SC_TM_N=$(printf '%s\n' "$SC_LIVE_TM" | grep -c .)
+    if [ "$SC_ALLOW_LIVE_TM" = 0 ]; then
+      { echo "!! self-close REFUSED: $SC_TM_N LIVE teammate(s) of session ${SC_CC_SID:0:8} are still running —"
+        printf '%s\n' "$SC_LIVE_TM" | sed 's/^/!!     /'
+        echo "!! Closing now orphans them: no lead to harvest their reports, panes+RAM held indefinitely."
+        echo "!!   shut the team down first (structured shutdown_request per teammate), then self-close; or"
+        echo "!!   --allow-live-teammates   deliberate abandonment — their work must already be harvested"
+      } >&2
+      exit 4
+    fi
+    echo "⚠ self-close proceeding with $SC_TM_N LIVE teammate(s) — --allow-live-teammates asserted; they are being ORPHANED deliberately" >&2
   fi
   # Successor liveness gate — BEFORE any side effect: pane resolvable AND a claude on its tty.
   # The irreversible step is gated on positive proof the survivor is alive (same rule as the
