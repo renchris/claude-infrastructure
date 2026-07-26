@@ -126,12 +126,23 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ -n "$role" ] && target="$(head -n1 "${CC_ROLES_DIR:-$HOME/.claude/cc-roles}/$role" 2>/dev/null | tr -d '[:space:]')"
-printf '%s\n' "$target" >> "${CC_NOTIFY_CAPTURE:?}"
+# Capture is OPTIONAL (`:-/dev/null`, not `:?`): the stub is now the sandbox-wide default cc-notify, so
+# tests that page without asserting on the capture must not make it fail — a stub that errors would be
+# read by send_page's rc check as "the transport refused it" and change the very behaviour under test.
+printf '%s\n' "$target" >> "${CC_NOTIFY_CAPTURE:-/dev/null}"
 # The ATTEMPT is captured above, then the scripted rc decides the OUTCOME — that split is what lets
 # T29 count re-attempts of a page the transport refused. Default 0 keeps every other test unchanged.
 exit "${CC_NOTIFY_STUB_RC:-0}"
 STUB
 chmod +x "$SBX/bin/cc-notify"
+# HERMETICITY (2026-07-25): export it for the WHOLE suite, not per-invocation. The supervisor resolves
+# cc-notify beside-script (repo bin/) BEFORE PATH, so any sweep that pages with a real role file and no
+# override reaches the LIVE cc-notify → cc-sessions → `it2 session list`. T23-T26 (added later, for the
+# registered-desk exemption) each did exactly that: with the iTerm2 API wedged, the it2 call never
+# returns and the sweep — and the whole gate behind it — hangs indefinitely. Observed twice, both runs
+# parked at the same test. A per-test override is a rule every future test must remember; a suite-wide
+# export is one that cannot be forgotten.
+export CC_NOTIFY_BIN="$SBX/bin/cc-notify"
 printf '%s' "ROLE-UUID-T9" > "$SBX/desk-role"
 reset; rm -f "$CC_TELEMETRY_DIR"/*.json; mktel dead9 40 100 99999999 "$REPO"   # pid gone ⇒ DEAD ⇒ page
 # CC_NOTIFY_BIN (not PATH): the supervisor resolves beside-script repo bin/ BEFORE PATH, so only
