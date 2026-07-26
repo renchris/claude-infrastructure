@@ -56,6 +56,34 @@ NOTIFY_CMD="${CC_POSTLAND_NOTIFY:-}"                                   # empty �
 IDL="${CC_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
 LANDLOG="${CC_POSTLAND_LANDLOG:-${LAND_LOG:-$HOME/.claude/land.log}}"
 BATS_BIN="${CC_POSTLAND_BATS:-bats}"
+# ── PATH NORMALIZATION — the 0-green-stamp root cause (reproduced 2026-07-26) ────────────────────
+# The verdict is only meaningful if the suite runs in the environment a real session runs in. When
+# this script is driven from a daemon/launchd-ish context its PATH lacks $HOME/.claude/bin and
+# $HOME/bin, so every suite that shells out to a cc-* helper fails — and because the retry ladder
+# (:216) re-runs each red FILE alone twice and convicts at >=2/3, a PATH-dependent failure
+# reproduces deterministically and is written as a HARD red, not a flake. That is the mechanism
+# behind 15/15 red stamps and deploy-live sitting fail-closed at 0 green while trunk was in fact
+# green (measured: full 137-suite clean-room run at 03606baf = 2096 ok / 0 not-ok).
+#
+# REPRO (10s):  env -i HOME=$HOME PATH=/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin TERM=dumb \
+#                 bash -c 'cd <worktree> && bats tests/deploy-parity.bats'
+#               => "not ok 8 the real repo passes its own assertion" — 8/8 under a session PATH.
+#
+# Why normalize rather than make the suites PATH-hermetic: the affected assertions are HOST checks
+# by design ("the real repo passes its own assertion (guards the live host deployment)"), so
+# stubbing their tools would delete the thing they verify. This mirrors the prescription already
+# carried in the infra-green brief. Prepend-only and idempotent: an explicitly-set CC_POSTLAND_PATH
+# wins, entries already present are not duplicated, and nothing is ever removed — so an
+# interactive run (which already has these) is completely unaffected.
+if [ -n "${CC_POSTLAND_PATH:-}" ]; then
+  PATH="$CC_POSTLAND_PATH"
+else
+  for _p in "$HOME/.claude/bin" "$HOME/bin" /opt/homebrew/bin /usr/local/bin; do
+    [ -d "$_p" ] || continue
+    case ":$PATH:" in *":$_p:"*) ;; *) PATH="$_p:$PATH" ;; esac
+  done
+fi
+export PATH
 LOCK_TTL="${CC_POSTLAND_LOCK_TTL:-3600}"
 STAMPS="$STATE/stamps"
 LOCK="$STATE/run.lock.d"
