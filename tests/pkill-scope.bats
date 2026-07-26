@@ -43,7 +43,34 @@ setup() {
 mk_ps() {  # writes the ps fixture; $1..$n = extra "pid ppid command" rows
   {
     echo '#!/bin/bash'
+    # SELF-ROW — the cleanup process's OWN pid, parented at $CLEANUP_PARENT (default 1).
+    # Without it the fixture severs gate-cleanup from its own ancestry: `ppid_of "$$"` finds
+    # nothing in the fake table, the ancestor walk never runs, and EXCLUDE stays { self }. Every
+    # self-preservation assertion in this file then passes for the wrong reason — the script is
+    # not being spared, it is being asked about processes it cannot relate to itself.
+    #
+    # The pid is DISCOVERED, not assumed. `$PPID` alone is wrong: gate-cleanup reads the table via
+    # `PS_SNAPSHOT="$(ps_all)"`, and because ps_all is a function bash forks a subshell for the
+    # substitution — so the fake ps's parent is that subshell, not the script. Measured: the fake
+    # ps saw 24531 while the script's own $$ was 24727, and the un-excluded 24727 then appeared in
+    # the selection.
+    #
+    # Nor is "first ancestor whose argv says gate-cleanup.sh" enough: a forked subshell INHERITS
+    # its parent's argv, so that match returns the subshell (measured: 96975, which then showed up
+    # in the selection). Argv is not identity — the same lesson gate-cleanup.sh itself is built on.
+    # So walk the whole chain and keep the TOPMOST consecutive match: the real script, whose own
+    # parent is the bats test shell and no longer matches. Empty ⇒ no self-row, which fails the
+    # assertions loudly rather than naming the wrong process.
+    echo 'CC_CUR=$PPID; CC_SELF=""; CC_HOPS=0'
+    echo 'while [ "$CC_HOPS" -lt 12 ]; do'
+    echo '  CC_HOPS=$(( CC_HOPS + 1 ))'
+    echo '  case "$(ps -o command= -p "$CC_CUR" 2>/dev/null)" in *gate-cleanup.sh*) CC_SELF="$CC_CUR" ;; esac'
+    echo '  CC_NEXT="$(ps -o ppid= -p "$CC_CUR" 2>/dev/null | tr -d " ")"'
+    echo '  [ -n "$CC_NEXT" ] && [ "$CC_NEXT" != 1 ] || break'
+    echo '  CC_CUR="$CC_NEXT"'
+    echo 'done'
     echo 'cat <<TABLE'
+    printf '$CC_SELF %s bash %s/scripts/gate-cleanup.sh\n' "${CLEANUP_PARENT:-1}" "$REPO"
     printf '1000 1 bash %s/bats tests/\n'                      "$BATS_BIN_PATH"
     printf '1001 1000 bash %s/bats-exec-suite --dummy-flag\n'  "$BATS_BIN_PATH"
     printf '1002 1001 sleep 30\n'
@@ -94,8 +121,8 @@ selection() { "$CLEANUP" --worktree "$WT" --dry-run --quiet 2>/dev/null | sort -
   mk_ps; mk_cwd
   run selection
   echo "$output" | grep -q 1000 || false                # positive control: selection is non-empty
-  echo "$output" | grep -q 2000 && false || true
-  echo "$output" | grep -q 2001 && false || true
+  ! echo "$output" | grep -q 2000 || false
+  ! echo "$output" | grep -q 2001 || false
 }
 
 @test "cleanup: NEVER selects a claude session whose PROMPT merely names ship-land/bats" {
@@ -105,25 +132,29 @@ selection() { "$CLEANUP" --worktree "$WT" --dry-run --quiet 2>/dev/null | sort -
   mk_ps; mk_cwd
   run selection
   echo "$output" | grep -q 1000 || false                # positive control: selection is non-empty
-  echo "$output" | grep -q 3000 && false || true
+  ! echo "$output" | grep -q 3000 || false
 }
 
 @test "cleanup: a non-gate program in this worktree is not selected for MENTIONING bats" {
   mk_ps; mk_cwd
   run selection
   echo "$output" | grep -q 1000 || false                # positive control: selection is non-empty
-  echo "$output" | grep -q 5000 && false || true
+  ! echo "$output" | grep -q 5000 || false
 }
 
 @test "cleanup: refuses to select itself or any ancestor" {
   # Inject the running shell as a would-be gate root in this worktree. A bare `pkill -f bats` run
   # from inside a bats suite kills its own caller — one way the observed events cascaded.
   mk_cwd
+  # Parent the cleanup at 99999, so the real chain is cleanup → 99999 → $$ and the ancestor walk
+  # has something to walk. This is the scenario in the comment above: cleanup running INSIDE the
+  # suite it would otherwise select.
+  CLEANUP_PARENT=99999
   mk_ps "$$ 1 bash $BATS_BIN_PATH/bats tests/" "99999 $$ bash $BATS_BIN_PATH/bats-exec-test"
   run selection
   echo "$output" | grep -q 1000 || false              # positive control: selection is non-empty
-  echo "$output" | grep -qw "$$" && false || true
-  echo "$output" | grep -qw 99999 && false || true    # nor a descendant reached only through us
+  ! echo "$output" | grep -qw "$$" || false
+  ! echo "$output" | grep -qw 99999 || false          # nor a descendant reached only through us
 }
 
 @test "cleanup: an empty selection is exit 0 with a clear line, never a failure" {
