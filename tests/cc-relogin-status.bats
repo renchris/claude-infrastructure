@@ -38,6 +38,7 @@ setup() {
   # operator's LIVE layer. Everything this suite asserts is already redirected elsewhere.
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"   # never resolve ~ to the operator's tree
   export CA_BIN="$REPO/bin/claude-accounts"
   C="$REPO/bin/cc-blockers"
   ROT="$REPO/scripts/rotate-autonomy-logs.sh"
