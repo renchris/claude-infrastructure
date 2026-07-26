@@ -50,8 +50,17 @@ STUB
   # ACTIONABLE_AUTH. Read that list OUT OF THE CLI so these fixtures cannot claim an emission
   # shape the producer does not actually have, and inject it in rows() rather than hand-writing
   # it into every literal: a hand-copied state list is the precise drift this field removed.
+  #
+  # importlib.util is imported EXPLICITLY below. Importing importlib.machinery binds the parent
+  # package but NOT this sibling submodule, so reaching importlib.util worked only where
+  # something else on the interpreter startup path had already imported it. Framework 3.11 does;
+  # /usr/bin/python3 does not, and there every test in this file died in setup() with
+  # "AttributeError: module importlib has no attribute util" — a suite whose green was an
+  # accident of which python3 the PATH happened to resolve. Keep the heredoc body free of
+  # apostrophes and backticks: it is nested inside "$( ... )", where an odd quote silently
+  # breaks the enumeration of the whole file (bats then reports 1..0 rather than a failure).
   CC_ACTIONABLE_JSON="$(python3 - "$REPO/bin/claude-accounts" <<'PY'
-import importlib.machinery, json, sys
+import importlib.machinery, importlib.util, json, sys
 loader = importlib.machinery.SourceFileLoader("ca", sys.argv[1])
 mod = importlib.util.module_from_spec(importlib.util.spec_from_loader("ca", loader))
 loader.exec_module(mod)
