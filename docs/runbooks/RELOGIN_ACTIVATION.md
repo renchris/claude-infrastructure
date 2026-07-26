@@ -91,11 +91,24 @@ Watch it with:
 ▶ `claude-accounts --relogin-status`
 ▶ `cc-blockers`   (a `relogin-blocked` row carries the exact runnable recovery command)
 
-⚠️ **Known gap — see step 5.** Until `feat/accounts-login-cliff` lands, the detection SSOT
-`claude-accounts --login-status` does not exist on `main`. The poller degrades **loudly**
-(exit 3 DETECTION-UNAVAILABLE) rather than silently doing nothing, and `--relogin-status`
-reports `UNKNOWN` rather than a confident wrong `OK` — but the system is **inert until that
-branch lands**.
+✅ **The step-5 gap is CLOSED (verified 2026-07-26).** `feat/accounts-login-cliff` has landed:
+`--login-status` and all four cliff fields (`login_expires_at` / `_h` / `login_expired` /
+`login_fixable`) are on `main`, and the branch is gone. The poller resolves real detection —
+`cc-relogin-poll --dry-run --json` returns `"detection":"login-status"`, not
+`DETECTION-UNAVAILABLE`. Nothing here is inert-by-dependency any more; the only thing keeping the
+cadence off is that this plist is not loaded.
+
+✅ **The interpreter prerequisite is already satisfied — measured, not assumed.** The CLI contract
+warns that `/usr/bin/python3` lacks `websocket-client` and launchd's PATH resolves exactly that
+interpreter. It does not apply to this plist: `ProgramArguments` runs `/bin/zsh -lc`, and a
+**login** shell picks up `/etc/zprofile`'s `path_helper`, which puts the Framework 3.11 (which
+HAS the dep) ahead of `/usr/bin/python3`. Confirm before loading:
+
+▶ `/bin/zsh -lc 'export PATH="$HOME/.claude/bin:$PATH"; command -v python3; python3 -c "import websocket"'`
+
+Expect a Framework/Homebrew path and **no output** from the import. ⚠️ This is a property of the
+**login shell**, not of launchd — do not "simplify" the plist to a bare exec or drop the `-l`, or
+the `/usr/bin/python3` fault the contract warns about comes back.
 
 ---
 
@@ -119,15 +132,21 @@ would multiply an unproven process — which is why the design puts this phase l
 
 ---
 
-## Step 5 — the one landing dependency
+## Step 5 — the one landing dependency ✅ RESOLVED 2026-07-26
 
 `claude-accounts --login-status` and the `login_expires_at` / `login_expires_h` /
-`login_expired` / `login_fixable` fields live on the **unlanded local branch**
-`feat/accounts-login-cliff` (3 commits, no remote branch). This build consumes them
-version-tolerantly and never fabricates a verdict without them, but the cadence layer
-cannot actually trigger until they are on `main`.
+`login_expired` / `login_fixable` fields were on the unlanded local branch
+`feat/accounts-login-cliff`. **They are now on `main`** and that branch no longer exists —
+verified by content, not by count:
 
-▶ land `feat/accounts-login-cliff` (owned by another session — not swept into this build)
+▶ `git show origin/main:bin/claude-accounts | grep -c login_expires_at`   # non-zero
+▶ `cc-relogin-poll --dry-run --json`   # "detection":"login-status" ⇒ real detection resolved
+
+The version-tolerant degradation path (exit 3 DETECTION-UNAVAILABLE, `--relogin-status`
+reporting `UNKNOWN` instead of a confident wrong `OK`) stays in the code deliberately — it is
+what a *future* SSOT change degrades into. It is simply no longer the live path.
+
+**No landing dependency remains.** Steps 1-3 are the whole activation.
 
 ---
 

@@ -123,11 +123,34 @@ guaranteed rebase conflicts against their own superset.
 | `tm/closure-a` | 13 | `tm/gates` |
 | `tm/wtgc` | 9 | `fix/infra-perfection` |
 | `tm/launchd` | 7 | `fix/infra-perfection` |
-| `feat/relogin-executor` | 4 | `feat/relogin-build` |
+| ~~`feat/relogin-executor`~~ | 4 | ~~`feat/relogin-build`~~ — **WRONG, see correction** |
 | `feat/relogin-browser` | 2 | `feat/relogin-build` |
 | `feat/relogin-probes` | 2 | `feat/relogin-build` |
 | `feat/relogin-schedule` | 2 | `feat/relogin-build` |
 | `wt-f8e40b4c577d` | 1 | `fix/gate-runaway-loop` |
+
+> **CORRECTION 2026-07-26 — `feat/relogin-executor` was NOT redundant.** This row is the one
+> false verdict in the table, and it would have deleted the load-bearing patch of the whole
+> `/relogin` item. `feat/relogin-build` does not touch `bin/cc-relogin` **at all**, so it cannot
+> contain an executor rewrite of it; `git cherry feat/relogin-build feat/relogin-executor` in fact
+> printed `+` (absent) for 3 of its 4 commits. The row was written from the shared *stem* commit
+> (`5673657`, the contract doc, genuinely in build) and generalised to the branch.
+>
+> The 3 unique commits replace trunk's Dia-CDP driver with a dedicated per-account browser
+> substrate — which is precisely what makes exit 7 CONSENT-GATE (a human cycling
+> `dia://inspect`) unreachable, i.e. what makes the item *autonomous* at all. Deleting them
+> would have silently reverted the item to human-gated while every doc claimed otherwise.
+>
+> Inverted too: **`feat/relogin-observability` (listed to LAND at #13) is the redundant one** —
+> `bin/cc-blockers` is byte-identical to build's, and build's other three files are strictly
+> NEWER on the same lines (its `b5fcd0e` + four follow-ups supersede obs's `7765814`). Patch-id
+> called it unique only because those follow-ups rewrote the same hunks.
+>
+> **Method note — the rule this cost:** `git cherry` / patch-id is a SCREEN, not a verdict. Both
+> errors here are the same mistake in opposite directions: a `+` was read as "unique work" and a
+> `-` on one shared commit as "branch contained". Adjudicate containment by **content** — for a
+> claimed superset, diff the actual file trees and confirm the superset even *touches* the file
+> the subset's headline patch modifies. Landed as part of item `38a8fdc28453`.
 
 *Note:* `tm/growth` is itself redundant (0 unique patches) but `tm/hygiene` carries **4
 patches** that `fix/infra-perfection` does not. Land `fix/infra-perfection` + `tm/hygiene`
@@ -146,13 +169,13 @@ uncovered by this set. `LINES` = insertions+deletions vs `origin/main`.
 | 4 | `wt-a186c7d48637` | 1 | 3 | 207 |
 | 5 | `feat/activation-ssot-parity` | 1 | 2 | 255 |
 | 6 | `wt-2d36e63d16a2` | 2 | 2 | 298 |
-| 7 | `docs/relogin-research` | 1 | 1 | 393 |
+| 7 | ~~`docs/relogin-research`~~ **LANDED** (item `38a8fdc28453`) | 1 | 1 | 393 |
 | 8 | `wt-0c93f779ecfa` | 1 | 3 | 415 |
 | 9 | `tm/closure-b` | 3 | 8 | 451 |
-| 10 | `relogin-design2` | 1 | 1 | 464 |
+| 10 | ~~`relogin-design2`~~ **LANDED** (item `38a8fdc28453`) | 1 | 1 | 464 |
 | 11 | `wt-a3d505ff2cef` | 8 | 22 | 670 |
 | 12 | `wt-761a546f939c` | 1 | 5 | 692 |
-| 13 | `feat/relogin-observability` | 3 | 5 | 881 |
+| 13 | ~~`feat/relogin-observability`~~ **DO NOT LAND** — superseded by build (see correction) | 3 | 5 | 881 |
 | 14 | `wt-1a941c28a079` | 8 | 15 | 1046 |
 | 15 | `feat/board-runnable-commands` | 19 | 23 | 1152 |
 | 16 | `wt-63929c8d6072` | 7 | 53 | 1415 |
@@ -161,7 +184,7 @@ uncovered by this set. `LINES` = insertions+deletions vs `origin/main`.
 | 19 | `wt-6cab0ab3cb2f` | 8 | 13 | 1935 |
 | 20 | `wt-02ba4e52389a` | 8 | 29 | 2467 |
 | 21 | `docs/frontier-problems-2026-07-23` | 2 | 32 | 4021 |
-| 22 | `feat/relogin-build` | 21 | 23 | 5441 |
+| 22 | ~~`feat/relogin-build`~~ **LANDED** + `feat/relogin-executor`'s 3 unique commits (item `38a8fdc28453`) | 21 | 23 | 5441 |
 | 23 | `tm/hygiene` | 29 | 85 | 6913 |
 | 24 | `fix/infra-perfection` | 55 | 125 | 10694 |
 

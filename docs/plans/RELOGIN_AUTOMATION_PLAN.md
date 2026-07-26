@@ -1,8 +1,14 @@
 ---
-status: open
+status: in-progress
 ---
 
 # /relogin — fully autonomous account re-authentication
+
+> **State 2026-07-26:** all code LANDED and gate-green (see the last section). Deliberately NOT
+> `complete`: the autonomous loop is not yet *live*. Three C10 operator steps remain — warm each
+> auth-profile once, run E1-E3 (`CONFIRM=1`), load the LaunchAgent. Kept `in-progress` so it stays
+> on the open list until the cadence actually ticks; marking it complete would assert an
+> unattended re-auth that has never run.
 
 **Goal.** Turn `skills/account-relogin` (a human-followed runbook) into a command that
 re-authenticates one Claude Max account end-to-end with no human step, and wire it to the
@@ -283,3 +289,116 @@ confirm the contended state is testing the uncontended one.
 **Deliberately NOT done:** `--login-status` exit 2 does not auto-fire `cc-relogin`. Credentials
 are the one place an unattended retry loop must not be invented; the wiring offers it, a human
 or an explicit `/relogin` pulls the trigger. Revisit only after several unattended successes.
+
+---
+
+## 2026-07-26 — CONVERGED + LANDED (backlog item `38a8fdc28453`)
+
+**Scope (frozen):** drive this ONE backlog item to finished-verified-landed.
+
+The item's work existed but sat **unlanded across 10 branches**. This session adjudicated them
+and landed the union: `feat/relogin-build` (19 commits), `feat/relogin-executor`'s 3 unique
+commits, `docs/relogin-research`, `relogin-design2`, plus the 3 new commits below. 229 tests
+green across the 9 affected suites (0 not-ok, 0 skipped, every TAP plan complete — no truncation).
+
+**The decisive finding — the consent gate is gone, and that is what makes this autonomous.**
+The 2026-07-25 build drives the *shared warm Dia* over CDP on 9222, so it depends on the
+`dia://inspect` consent dialog — a human action, and precisely why exit 7 CONSENT-GATE had to be
+invented. `feat/relogin-executor` + `bin/cc-authbrowser` replace that with a **dedicated
+per-account Chrome**: persistent profile `~/.claude/auth-profiles/<acct>`, frozen port,
+direct-exec (survives a launchd context, unlike `open -n`), detached TTL watchdog with a
+pid-recycle guard. A dedicated profile has **no per-connection consent dialog**, so exit 7 became
+structurally unreachable (retained for consumers; a suite assertion pins that nothing emits it).
+That is the difference between a tool a human must babysit and one a LaunchAgent can run.
+
+**Now on trunk beyond the old build:** the cadence layer (`cc-relogin-poll` — hourly, ≤1 account
+per tick, fires at **T−7d** because the `k == 0` window needs days of chances rather than hours,
+escalates to the operator board at **T−48h**), the substrate (`cc-authbrowser`),
+`claude-accounts --relogin-status`, the class-C blocker row, log rotation, `cc-config-slot`
+(inert Variant-A token de-sharing), the E1-E3 probe harness,
+`docs/runbooks/RELOGIN_ACTIVATION.md`, and the staged `launchd/com.claude.relogin.plist`.
+
+**Two defects found in the convergence itself** — both would have shipped silently:
+
+1. **The executor rewrite dropped trunk's `b6961d5`.** `phase2()`'s broad `except Exception`
+   swallowed a missing-`websocket-client` `ImportError` into exit **4 BROWSER-FAILED**, sending
+   the operator to fix a browser that had started perfectly, for a pip problem — the exact
+   misdirection `b6961d5` was written to end. Fixed by raising a named `Bail(EXIT_ERROR)` at the
+   import and giving a NAMED fault precedence over the broad catch. RED-proofed both ways (drop
+   the `except Bail`, drop the `ImportError` catch → the test fails each time); the dep is
+   stubbed absent on `PYTHONPATH`, never skipped on, so the test is machine-independent.
+2. **All three consumer surfaces advertised a FALSE human gate.** `/relogin`, `/accounts` step 4
+   and the skill still told the operator to cycle `dia://inspect` on exit 7 — a hand-step for a
+   path that can no longer fire, on the surfaces read while an account is locked out. Rewritten
+   to name the real substrate, keep **exit 6 as the one genuine human gate**, and mark 7
+   retained-but-unreachable. The Dia route survives in the skill, relabelled as the by-hand
+   fallback it now is.
+
+**The interpreter prerequisite is already satisfied — measured, not assumed.** The contract note
+at §CLI contract says to install `websocket-client` for `/usr/bin/python3` or pin the interpreter
+before activating the LaunchAgent. Probed directly: the plist invokes `/bin/zsh -lc`, and a login
+shell picks up `/etc/zprofile`'s `path_helper`, which puts the Framework 3.11 on PATH ahead of
+`/usr/bin/python3` — and that interpreter HAS the dep. Re-verify with:
+
+```bash
+/bin/zsh -lc 'export PATH="$HOME/.claude/bin:$PATH"; command -v python3; python3 -c "import websocket"'
+```
+
+⚠️ This is a property of the **login shell**, not of launchd. Do not "simplify" the plist to a
+bare `ProgramArguments` exec or drop `-l` — that reintroduces the `/usr/bin/python3` fault the
+contract warns about. Recorded so the operator does not do unnecessary work, and so nobody
+removes the thing that is silently load-bearing.
+
+**Corrected a false verdict in my own triage** (`docs/research/STRANDED_EXPOSURE_2026-07-26.md`):
+it listed `feat/relogin-executor` as "wholly contained in `feat/relogin-build`" and slated it for
+deletion. `feat/relogin-build` does not touch `bin/cc-relogin` **at all**, so it cannot contain a
+rewrite of it — the row was generalised from the shared *stem* commit. Deleting it would have
+reverted the item to human-gated while every doc claimed autonomy. Inverted too:
+`feat/relogin-observability`, slated to LAND, is the genuinely redundant one (build is strictly
+newer on the same lines). **Rule: patch-id is a SCREEN, not a verdict** — for a claimed superset,
+confirm by content that it even *touches* the file the subset's headline patch modifies.
+
+**Newly proven against the REAL fleet this session** (beyond the stub suites — these are live
+reads, no mutation):
+
+- `claude-accounts --relogin-status` reads all four accounts with real deadlines and states.
+- `cc-relogin-poll --dry-run --json` → `{"detection":"login-status","trigger_days":7,
+  "candidates":0,"action":"none","exit":0}`. That resolves the cadence layer's detection against
+  the live SSOT — **not** the `DETECTION-UNAVAILABLE` degradation — plus the T−7d arithmetic and
+  the no-op path. The step-5 landing dependency in the activation runbook is therefore CLOSED:
+  `feat/accounts-login-cliff` has landed and the branch is gone (verified by content on `main`).
+
+**Still NOT proven — unchanged and honest.** No live OAuth flow has ever run. Every account reads
+`auth: ok`, so the gate correctly refuses all four (exit 2), and the CDP drive, the Authorize
+click, the `code#state` scrape and the fifo hand-back remain exercised only against stubs.
+`scripts/relogin-probes/e3-warm-profile-authorize.sh` is the harness built to settle exactly this
+and is deliberately `CONFIRM=1`-gated and **unrun** — it spends a real re-auth.
+
+🚨 **The next cliff is much sooner than this plan assumed — correct the date.** Earlier entries
+say "~2026-08-23". Live `--relogin-status` on 2026-07-26 says otherwise:
+
+| acct | refresh-token deadline | hours out | at T−7d trigger? |
+|---|---|---|---|
+| **next** | **2026-08-02T20:21Z** | **175** | **~7h away** |
+| next2 | 2026-08-17T19:52Z | 534 | no |
+| next4 | 2026-08-23T20:24Z | 679 | no |
+| next3 | 2026-08-24T02:22Z | 685 | no |
+
+`next` is ~7 hours from becoming the poller's first candidate — which is why `candidates` reads 0
+right now and would not tomorrow. So the supervised first run has a **natural target within a
+week, not a month**: warm `next`'s auth-profile and run E3 against it before 2026-08-02. The
+2026-08-23 window is next4/next3, not the first opportunity.
+
+**Remaining work is operator-only (C10) by construction — not an agent gap:**
+
+1. **Warm each auth-profile once.** A fresh `~/.claude/auth-profiles/<acct>` has no claude.ai
+   cookies, so phase 2 lands on `/login` → exit 6. One interactive sign-in per account converts
+   this from "works when warm" to unattended. The profile is persistent by design, so it is once
+   per account, not once per run. (Fact 1 above — the warm cookies to 2027-08-14 — is about the
+   **Dia** profiles, which the substrate no longer uses. It does not transfer.)
+2. **Run E1-E3** with `CONFIRM=1`, E3 last — the only thing that proves the pieces compose.
+3. **Load the LaunchAgent** per `docs/runbooks/RELOGIN_ACTIVATION.md`. `launchctl` activation is
+   classifier-blocked from agents; the poller ships inert until a human loads it. No landing
+   dependency remains, and the interpreter prerequisite is already satisfied (both above).
+
+Target window: **before 2026-08-02** (`next`'s deadline), not 2026-08-23 — see the table above.
