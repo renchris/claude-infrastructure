@@ -86,7 +86,23 @@ def run(cmd, **kw):
 
 
 def accounts_json(fresh=False):
-    cmd = [ACCOUNTS_BIN, "--json"] + (["--fresh"] if fresh else [])
+    # --no-heal is MANDATORY, not a preference. Without it, claude-accounts heals a stale row
+    # on the way out: probe_account() -> `elif stale and not no_heal:` -> heal(), which runs
+    # `claude auth login`. Two consequences, and the second is the serious one:
+    #
+    #   1. A READ mutates credentials. Every call below is a measurement (the `before`
+    #      baseline, the `after` snapshot, and verify()), and this driver's own contract is
+    #      that only the official binary touches tokens, under OUR control — not as a side
+    #      effect of looking. It can also rotate a token out from under a live session, which
+    #      is exactly what the k>0 live-session guard exists to prevent.
+    #   2. It manufactures its own proof. verify() treats "a refresh-token expiry that moved
+    #      FORWARD" as the observable effect of a real grant — and `claude auth login` is
+    #      precisely what moves that stamp forward. A heal fired by the measuring read would
+    #      therefore produce a PROVEN verdict for work the verification did itself. A measure-
+    #      ment that can move the quantity it measures is not evidence.
+    #
+    # Every caller here is a measurement, so the flag belongs at this single choke point.
+    cmd = [ACCOUNTS_BIN, "--json", "--no-heal"] + (["--fresh"] if fresh else [])
     p = run(cmd, timeout=180)
     if p.returncode != 0:
         raise Outcome(ERROR, f"{ACCOUNTS_BIN} --json failed (rc={p.returncode}): {p.stderr.strip()[:200]}")

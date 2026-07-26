@@ -15,10 +15,12 @@ setup() {
   export CC_RELOGIN_DEVTOOLS_PORT_FILE="$BATS_TEST_TMPDIR/nonexistent-DevToolsActivePort"
   export ROWS="$BATS_TEST_TMPDIR/rows.json"
   export INFO="$BATS_TEST_TMPDIR/info.json"
+  export STUB_ARGV="$BATS_TEST_TMPDIR/accounts-argv.log"
 
   cat > "$STUB" <<'STUBEOF'
 #!/usr/bin/env bash
 set -euo pipefail
+printf '%s\n' "$*" >> "${STUB_ARGV:-/dev/null}"
 for a in "$@"; do
   case "$a" in
     --relogin-info) mode=relogin ;;
@@ -44,6 +46,32 @@ loader = importlib.machinery.SourceFileLoader("ccr", os.environ["BIN"])
 ccr = importlib.util.module_from_spec(importlib.util.spec_from_loader("ccr", loader))
 loader.exec_module(ccr)
 '
+
+# ---- read-only posture -----------------------------------------------------------------------
+
+@test "every accounts READ carries --no-heal — a measurement must not move what it measures" {
+  # claude-accounts heals a stale row on the way out (probe_account -> `stale and not no_heal`
+  # -> heal() -> `claude auth login`). Two failures if a read omits --no-heal: a READ mutates
+  # credentials (and can rotate a token out from under a live session, which the k>0 guard
+  # exists to prevent), and — worse — verify() treats "refresh-token expiry moved FORWARD" as
+  # the observable effect proving a real grant, which is exactly what `claude auth login` does.
+  # A heal fired BY the measuring read would therefore manufacture a PROVEN verdict for work
+  # the verification did itself. Pinned here because no other test would notice the regression.
+  run "$BIN" next3 --dry-run
+  [ -s "$STUB_ARGV" ]                       # positive control: reads actually happened
+  local saw_read=0
+  while IFS= read -r line; do
+    case "$line" in
+      *--relogin-info*) continue ;;         # identity lookup, not a status read
+    esac
+    saw_read=1
+    case "$line" in
+      *--no-heal*) ;;
+      *) echo "accounts read WITHOUT --no-heal: $line" >&2; return 1 ;;
+    esac
+  done < "$STUB_ARGV"
+  [ "$saw_read" -eq 1 ]                      # and at least one was a status read
+}
 
 # ---- the gate --------------------------------------------------------------------------------
 
