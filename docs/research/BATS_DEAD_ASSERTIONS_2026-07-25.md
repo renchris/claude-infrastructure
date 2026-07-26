@@ -186,6 +186,66 @@ for f in sorted(glob.glob('tests/*.bats')):
             i += 1
 ```
 
+## Four masks of one defect — a green result that never asserted anything
+
+Every finding on this build was the same defect wearing a different mask. Listed because
+the *last two* are invisible to any lint and were each found only by forcing a green thing
+to go red:
+
+| # | Mask | Found by | Detectable by lint? |
+|---|---|---|---|
+| 1 | non-final `! cmd` — assertion cannot fail | `tm/relogin-browser` | yes (SC2314) |
+| 2 | non-final `[[ ... ]]` — same, and the majority (123 of 212) | `tm/relogin-sched` | **no** |
+| 3 | a dead assertion which, once made live, proved **also wrong** | `tm/relogin-obs` | no |
+| 4 | a **passing mutation** ⇒ the test never reached the code path | `tm/relogin-exec` | no |
+
+**Mask 4 deserves its own rule: a mutation that comes back GREEN indicts the TEST, not the
+code.** `tm/relogin-exec` deleted a loopback filter in `await_oauth_url` and nothing broke —
+because its decoy was `http://localhost` while `OAUTH_URL_RE` is https-only, so the regex
+excluded the decoy and the filter under test was never exercised at all. The suite was green
+for a reason unrelated to the thing it claimed to check.
+
+**Mask 1's mechanism, precisely** (from `tm/relogin-browser`, verified): the exempt forms are
+shell-level **compounds** — `! cmd` and `[[ ... ]]`. `[ ! -f x ]` is a **simple command** (the
+`!` is an argument to `test`), so errexit applies normally and it is **live**. The rule is not
+"avoid `!`"; it is "avoid `!`-inverted pipelines and `[[ ]]` as bare assertions". Do not tell
+people to rewrite `[ ! -f x ]`.
+
+## A lead-side hazard: a mutation sweep looks exactly like a bug-and-fix from outside
+
+Recorded because the lead (me) got this wrong and published the error. While polling a
+teammate's worktree I twice caught its mutation harness mid-sweep — once with `child.kill()`
+replaced by `pass` in a teardown `finally`, and saw the matching teardown test go red. I
+reported that as "the teammate found and fixed a real orphaned-process leak." **It was not.**
+`child.kill()` was present in every committed version; what I observed was mutation P3 being
+applied and then restored. The teammate refused the credit and corrected me.
+
+That false narrative also reached the commit message of `6bb2092`, which claims *"the
+wait-without-kill left an orphaned process, caught by its own test"* — **that clause is
+wrong**; there was no leak and no such catch. The code is correct; only the provenance story
+was fabricated. It is corrected here rather than by amending a commit that was already in a
+landing pipeline.
+
+**The generalisable hazard:** an external observer sampling a worktree cannot distinguish
+*a bug being introduced and repaired* from *a bug being found and fixed* — both look like
+"red test, then edit, then green." A lead monitoring teammates by polling must ask before
+attributing a find, and must treat a teammate's correction of the record as authoritative
+over its own inference from snapshots.
+
+## Absolute counts of other work's data are rebase-fragile
+
+A related brittleness, caught by the landing gate rather than by review. A test in this build
+asserted `skipped=4` — an absolute count of the **literal default log targets** in
+`scripts/rotate-autonomy-logs.sh`, a list owned by other work. A sibling landed a 6th default
+mid-rebase, so the composed tree went red while **both branches were green alone** — exactly
+the case `ship-land.sh` documents as *"green(ours)+green(theirs) never implies
+green(composed)"*, and precisely why its CAS re-gate re-runs the full suite on the final
+rebased tree instead of trusting either branch's own result.
+
+**Rule: assert the delta you own, never an absolute over data someone else maintains.** The
+fix asserts that an absent `cc-relogin` log adds **zero** targets and a present one adds
+**exactly one** — a differential that cannot rot when the default list changes.
+
 ## The general shape: a false guarantee is worse than a missing one
 
 A missing test is a **known gap**. A dead test is a **false guarantee** — and it also hides
