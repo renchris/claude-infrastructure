@@ -5,8 +5,12 @@
 # WHAT: two idempotent steps.
 #   1  symlink hooks/operator-readout.sh into the live ~/.claude/hooks/ layer (per-file topology).
 #   2  register it LAST in the Stop obj-0 chain of EVERY config dir's settings.json
-#      (~/.claude, -secondary, -tertiary, -quaternary — the G-P6-5b lesson: a hook wired on one
-#      dir via an abs path never evaluates for the desk accounts), portable `~/.claude/…` path.
+#      (~/.claude, -next, -secondary, -tertiary, -quaternary — the G-P6-5b lesson: a hook wired on
+#      one dir via an abs path never evaluates for the desk accounts), portable `~/.claude/…` path.
+#      ⚠️ ~/.claude-next was ADDED 2026-07-25 and is the load-bearing one: it is the EVAL TRACK,
+#      where sessions actually run. Omitting it is exactly why the sibling Stop hooks show 0 fires
+#      against siblings' 345 (audit 09 D-1) — the hook was wired on dirs nothing runs on. Any
+#      future config dir must be added to all THREE lists below (preview, wire, verify).
 #
 # WHY: manual operator steps (pending activations · open class-C decisions · blocked backlog ·
 #   deploy-lag) were surfaced only as model PROSE at turn close — a discipline, not a construction;
@@ -51,7 +55,7 @@ echo
 echo "Will do:"
 echo "  1  symlink hooks/operator-readout.sh → $CFG/hooks/"
 echo "  2  append $HOOK_CMD to Stop obj-0 (timeout 10) in settings.json of:"
-for d in "$HOME/.claude" "$HOME/.claude-secondary" "$HOME/.claude-tertiary" "$HOME/.claude-quaternary"; do
+for d in "$HOME/.claude" "$HOME/.claude-next" "$HOME/.claude-secondary" "$HOME/.claude-tertiary" "$HOME/.claude-quaternary"; do
   [ -f "$d/settings.json" ] && echo "       $d"
 done
 echo "  backups → $BAK"
@@ -80,7 +84,7 @@ fi
 # ---- 2: Stop wiring on EVERY config dir --------------------------------------------------------
 echo "[2] settings.json Stop wiring (all config dirs)"
 fail=0
-for d in "$HOME/.claude" "$HOME/.claude-secondary" "$HOME/.claude-tertiary" "$HOME/.claude-quaternary"; do
+for d in "$HOME/.claude" "$HOME/.claude-next" "$HOME/.claude-secondary" "$HOME/.claude-tertiary" "$HOME/.claude-quaternary"; do
   S="$d/settings.json"
   [ -f "$S" ] || { echo "  - $d: no settings.json (skip)"; continue; }
   if jq -e --arg c "$HOOK_CMD" '.hooks.Stop[]?.hooks[]?|select(.command==$c)' "$S" >/dev/null 2>&1; then
@@ -104,7 +108,7 @@ done
 # ---- verify -------------------------------------------------------------------------------------
 echo
 echo "== verify =="
-for d in "$HOME/.claude" "$HOME/.claude-secondary" "$HOME/.claude-tertiary" "$HOME/.claude-quaternary"; do
+for d in "$HOME/.claude" "$HOME/.claude-next" "$HOME/.claude-secondary" "$HOME/.claude-tertiary" "$HOME/.claude-quaternary"; do
   S="$d/settings.json"; [ -f "$S" ] || continue
   if jq -e --arg c "$HOOK_CMD" '[.hooks.Stop[]?.hooks[]?.command]|any(.==$c)' "$S" >/dev/null 2>&1; then
     echo "  ✓ $d carries $HOOK_CMD"
