@@ -715,7 +715,7 @@ admit_probe() {  # $@ = env assignments → runs gate_admit once, echoes its std
   run bash "$SHIPLAND" --trunk main
   [ "$status" -eq 9 ]                                          # 9 = no verdict, NOT 6 = red
   echo "$output" | grep -q "GATE-KILLED" || false
-  ! echo "$output" | grep -q "GATE RED"                        # never both, never the wrong one
+  ! echo "$output" | grep -q "GATE RED" || false               # never both, never the wrong one
   [ "$(grep -c . "$BATS_ARGV")" -eq 2 ]                        # first run + ONE bounded re-run
   [ ! -f "$gc/gate-green" ]                                    # a kill proves nothing ⇒ no marker
   git fetch -q origin main
@@ -754,7 +754,7 @@ admit_probe() {  # $@ = env assignments → runs gate_admit once, echoes its std
   run bash "$SHIPLAND" --trunk main
   [ "$status" -eq 6 ]
   echo "$output" | grep -q "GATE RED" || false
-  ! echo "$output" | grep -q "GATE-KILLED"
+  ! echo "$output" | grep -q "GATE-KILLED" || false
   [ "$(grep -c . "$BATS_ARGV")" -eq 1 ]                        # a RED is never re-run
 }
 
