@@ -59,6 +59,31 @@
 #   DRI_PGREP · DRI_HOME · DRI_STATE_SUBDIR · DRI_PAGE_DEDUP_S
 set -uo pipefail
 
+# Bound the OS-notification fork (machine-wide iTerm2/AppleEvent wedge, 2026-07-26). This one
+# targets NotificationCenter rather than iTerm2, so it is not the root cause — but it is an
+# AppleEvent fork inside an automated path, and an unbounded one turns a best-effort page into a
+# stalled job. Every call site here is already best-effort (`|| true`), so a cut costs at most
+# one missed notification and never a wrong verdict. timeout(1) is resolved by ABSOLUTE PATH as
+# well as PATH — hooks and launchd jobs run without Homebrew on PATH, where coreutils installs it.
+# No timeout(1) ⇒ run unbounded rather than lose notifications entirely.
+# Seams: DRI_OSA_TIMEOUT_S · DRI_OSA_TIMEOUT_BIN (set-but-EMPTY disables verbatim).
+DRI_OSA_TIMEOUT_S="${DRI_OSA_TIMEOUT_S:-5}"
+if [ -n "${DRI_OSA_TIMEOUT_BIN+set}" ]; then
+  DRI_OSA_TB="${DRI_OSA_TIMEOUT_BIN}"
+else
+  DRI_OSA_TB=""
+  for _c in "$(command -v timeout 2>/dev/null || true)" "$(command -v gtimeout 2>/dev/null || true)" \
+            /opt/homebrew/bin/timeout /usr/local/bin/timeout \
+            /opt/homebrew/bin/gtimeout /usr/local/bin/gtimeout; do
+    [ -n "$_c" ] && [ -x "$_c" ] && { DRI_OSA_TB="$_c"; break; }
+  done
+fi
+dri_osa() {
+  if [ -z "$DRI_OSA_TB" ] || [ ! -x "$DRI_OSA_TB" ]; then "$@"; return $?; fi
+  "$DRI_OSA_TB" -k 3 "$DRI_OSA_TIMEOUT_S" "$@"
+}
+
+
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 
 ROLE="${DRI_ROLE:-desk}"
@@ -102,7 +127,7 @@ page() { # $1=verdict $2=message $3=remediation-command
   # out-of-band (API-independent) operator surfaces
   if [ -n "$NOTIFY_CMD" ]; then "$NOTIFY_CMD" "Desk recycle INERT ($1)" "$2" >/dev/null 2>&1 || true
   else command -v osascript >/dev/null 2>&1 && \
-    osascript -e "display notification \"${2//\"/}\" with title \"Desk recycle INERT (${1//\"/})\"" >/dev/null 2>&1 || true
+    dri_osa osascript -e "display notification \"${2//\"/}\" with title \"Desk recycle INERT (${1//\"/})\"" >/dev/null 2>&1 || true
   fi
   [ -x "$PUSH" ] && "$JQ" -cn --arg m "$2" '{message:$m}' | "$PUSH" >/dev/null 2>&1
   return 0

@@ -211,7 +211,7 @@ open_spend_packet() {
   deadline="$(python3 -c "from datetime import datetime,timezone,timedelta;import sys;print((datetime.now(timezone.utc)+timedelta(hours=float(sys.argv[1]))).isoformat(timespec='seconds').replace('+00:00','Z'))" "$SPEND_VETO_HOURS" 2>/dev/null)"
   if [[ -z "$CC_DECIDE_BIN" ]]; then                   # never silent: surface via notify, mark once
     log "ERROR $sid ($acct) — monthly-spend kill but cc-decide unavailable; packet NOT opened (notified)"
-    osascript -e "display notification \"${sid:0:8} ($acct) hit the monthly spend limit — cross-account continuation needed (cc-decide missing).\" with title \"lr-reset-poller\"" >/dev/null 2>&1 || true
+    lrp_bounded osascript -e "display notification \"${sid:0:8} ($acct) hit the monthly spend limit — cross-account continuation needed (cc-decide missing).\" with title \"lr-reset-poller\"" >/dev/null 2>&1 || true
     : > "$marker"; return 0
   fi
   id="$("$CC_DECIDE_BIN" open --class B \
@@ -443,7 +443,7 @@ for k in ('sid','acct','cfg','cwd','reset_at_utc'):
   elif [[ ! -f "$PARKED/$sid.notified" ]]; then    # notify ONCE per parked session (no per-tick spam)
     mode=$([[ "$AUTOFIRE" == "1" ]] && echo "dry-run" || echo "notify-only")
     # headless-safe user alert (a LaunchAgent runs in the Aqua session ⇒ notifications work)
-    osascript -e "display notification \"${sid:0:8} ($acct) limit reset — resumable. Set LR_POLLER_AUTOFIRE=1 to auto-resume.\" with title \"lr-reset-poller\"" >/dev/null 2>&1 || true
+    lrp_bounded osascript -e "display notification \"${sid:0:8} ($acct) limit reset — resumable. Set LR_POLLER_AUTOFIRE=1 to auto-resume.\" with title \"lr-reset-poller\"" >/dev/null 2>&1 || true
     : > "$PARKED/$sid.notified"
     log "READY $sid on $acct — $mode, notified once (LR_POLLER_AUTOFIRE=1 to auto-resume)"
   fi

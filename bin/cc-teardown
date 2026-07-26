@@ -42,6 +42,33 @@
 #   from CC_TEARDOWN_RECORDS_DIR, which is this script's decision-record sink).
 set -uo pipefail
 
+# Bound every fork that reaches the iTerm2 API (machine-wide wedge, 2026-07-26: a bare
+# `it2 session list --json` returned rc 124 with zero output while blocked forks piled up across
+# ~110 sessions). The ~/.claude/bin/it2 shim self-bounds at 30s, but 30s of dead wait per call is
+# still a stall this caller should not absorb — and teardown re-observes both legs, and
+# an unreadable list is already INDETERMINATE (rc 2) rather than a "pane gone" verdict.
+# timeout(1) is resolved by ABSOLUTE PATH as well as PATH: hooks and launchd jobs run with a
+# minimal PATH excluding Homebrew, exactly where coreutils installs it, so a PATH-only lookup would
+# leave the AUTOMATED callers unbounded while interactive shells stayed safe. No timeout(1) ⇒ run
+# unbounded rather than break the call. Seams: CCT_IT2_TIMEOUT_S · CCT_IT2_TIMEOUT_BIN
+# (set-but-EMPTY disables verbatim; `${VAR:-}` cannot tell unset from set-empty).
+CCT_TIMEOUT_S="${CCT_IT2_TIMEOUT_S:-10}"
+if [ -n "${CCT_IT2_TIMEOUT_BIN+set}" ]; then
+  CCT_TIMEOUT_BIN="${CCT_IT2_TIMEOUT_BIN}"
+else
+  CCT_TIMEOUT_BIN=""
+  for _c in "$(command -v timeout 2>/dev/null || true)" "$(command -v gtimeout 2>/dev/null || true)" \
+            /opt/homebrew/bin/timeout /usr/local/bin/timeout \
+            /opt/homebrew/bin/gtimeout /usr/local/bin/gtimeout; do
+    [ -n "$_c" ] && [ -x "$_c" ] && { CCT_TIMEOUT_BIN="$_c"; break; }
+  done
+fi
+cct_bounded() {
+  if [ -z "$CCT_TIMEOUT_BIN" ] || [ ! -x "$CCT_TIMEOUT_BIN" ]; then "$@"; return $?; fi
+  "$CCT_TIMEOUT_BIN" -k 3 "$CCT_TIMEOUT_S" "$@"
+}
+
+
 # Resolve $0 THROUGH symlinks (no readlink -f on macOS) so a `~/.claude/bin/cc-teardown` symlink still finds
 # its cc-teardown-safety-gate.sh + cc-sessions siblings in the repo bin/ — deploy only this one file.
 _src="${BASH_SOURCE[0]:-$0}"
@@ -144,7 +171,7 @@ pid_lstart() { "$PS_BIN" -o lstart= -p "$1" 2>/dev/null | tr -s ' ' | sed 's/^ *
 # would read as a false ALREADY-GONE (line ~180) or a false TEARDOWN-verified success (line ~239).
 pane_present() {
   local uuid="$1" lst n ids
-  lst="$("$IT2" session list --json 2>/dev/null)" || return 2
+  lst="$(cct_bounded "$IT2" session list --json 2>/dev/null)" || return 2
   [ -n "$lst" ] || return 2
   n="$(printf '%s' "$lst" | jq -r 'if type=="array" then length else -1 end' 2>/dev/null)" || return 2
   { [ -z "$n" ] || [ "$n" = -1 ]; } && return 2   # non-array / unparseable ⇒ unreadable
@@ -354,7 +381,7 @@ main() {
   fi
 
   # leg 2 — pane: forced no-modal close (0 closed · 3 not-found/idempotent · 4 timeout · other = error).
-  local close_rc; "$IT2" session close -f -s "$paneUUID" >/dev/null 2>&1; close_rc=$?
+  local close_rc; cct_bounded "$IT2" session close -f -s "$paneUUID" >/dev/null 2>&1; close_rc=$?
 
   # ── 4. EFFECT-VERIFY both legs, RE-OBSERVED (never trust the keystroke/exit code) ──────────────────
   local proc_gone=0 pane_gone=0 lstart_now

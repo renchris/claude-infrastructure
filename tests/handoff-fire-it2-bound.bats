@@ -101,7 +101,12 @@ IN
   # substitution. Passing the binary as an ARGUMENT to an already-bounded helper
   # (`it2_type_verified "$REAL_IT2" …`) or testing it (`[ -n "$REAL_IT2" ]`) is not a fork and must
   # not trip the sweep, or the guard would be noise and get deleted.
-  local tok='(osascript|"\$REAL_IT2"|"\$PYTHON_BIN"|"\$it2")'
+  # Matches ANY variable whose name contains IT2 or PYTHON — deliberately wider than a fixed list.
+  # Three sweeps of this incident each used a different pattern family and each found sites the
+  # previous missed: family 1 ("$it2"/"$REAL_IT2") missed :989 "$IT2"; family 2 missed :2098
+  # "$IT2_SHIM". A fixed token list encodes the last reader's blind spot, so the guard matches the
+  # NAME SHAPE instead (memory: enumerate-call-sites-not-mechanisms).
+  local tok='(osascript|"\$[A-Za-z_]*([Ii][Tt]2|PYTHON)[A-Za-z_]*")'
   local unbounded
   unbounded="$(grep -nE "(^[[:space:]]*|[|;&]{1,2}[[:space:]]*|\\\$\\()${tok}[[:space:]]" "$HF" \
     | grep -v 'hf_bounded' \

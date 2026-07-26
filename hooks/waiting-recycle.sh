@@ -124,6 +124,31 @@
 # on for hygiene; every path ends `exit 0`.
 set -uo pipefail
 
+# Bound the OS-notification fork (machine-wide iTerm2/AppleEvent wedge, 2026-07-26). This one
+# targets NotificationCenter rather than iTerm2, so it is not the root cause — but it is an
+# AppleEvent fork inside an automated path, and an unbounded one turns a best-effort page into a
+# stalled hook. Every call site here is already best-effort (`|| true`), so a cut costs at most
+# one missed notification and never a wrong verdict. timeout(1) is resolved by ABSOLUTE PATH as
+# well as PATH — hooks and launchd jobs run without Homebrew on PATH, where coreutils installs it.
+# No timeout(1) ⇒ run unbounded rather than lose notifications entirely.
+# Seams: WRC_OSA_TIMEOUT_S · WRC_OSA_TIMEOUT_BIN (set-but-EMPTY disables verbatim).
+WRC_OSA_TIMEOUT_S="${WRC_OSA_TIMEOUT_S:-5}"
+if [ -n "${WRC_OSA_TIMEOUT_BIN+set}" ]; then
+  WRC_OSA_TB="${WRC_OSA_TIMEOUT_BIN}"
+else
+  WRC_OSA_TB=""
+  for _c in "$(command -v timeout 2>/dev/null || true)" "$(command -v gtimeout 2>/dev/null || true)" \
+            /opt/homebrew/bin/timeout /usr/local/bin/timeout \
+            /opt/homebrew/bin/gtimeout /usr/local/bin/gtimeout; do
+    [ -n "$_c" ] && [ -x "$_c" ] && { WRC_OSA_TB="$_c"; break; }
+  done
+fi
+wrc_osa() {
+  if [ -z "$WRC_OSA_TB" ] || [ ! -x "$WRC_OSA_TB" ]; then "$@"; return $?; fi
+  "$WRC_OSA_TB" -k 3 "$WRC_OSA_TIMEOUT_S" "$@"
+}
+
+
 # ── TIERED CONTEXT THRESHOLDS (operator 2026-07-19, cc-backlog 4ce6ffc0194f) ──────────────────────
 # A monitoring desk fills with low-value watch noise; recycling at an IDLE (just-waiting) boundary is
 # a FREE WIN — no work in hand to lose (state is disk-reconstructible), and it sheds the rot BEFORE it
@@ -340,7 +365,7 @@ abstain() { log_idl abstained "$1"; exit 0; }
 wr_os_notify() { # $1=title $2=msg — OS notification (osascript, or a stub in tests via CC_WR_NOTIFY)
   if [ -n "$NOTIFY_CMD" ]; then "$NOTIFY_CMD" "$1" "$2" >/dev/null 2>&1 || true; return 0; fi
   command -v osascript >/dev/null 2>&1 && \
-    osascript -e "display notification \"${2//\"/}\" with title \"${1//\"/}\"" >/dev/null 2>&1 || true
+    wrc_osa osascript -e "display notification \"${2//\"/}\" with title \"${1//\"/}\"" >/dev/null 2>&1 || true
 }
 wr_push_page() { # $1=msg — Pushover break-through; no-op (return 0) when the hook is missing/INERT
   [ -x "$PUSH_BIN" ] || return 0
