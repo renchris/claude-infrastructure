@@ -87,8 +87,7 @@ mk_assistant() { # $1=file $2=agentName $3=text
   mk_assistant "$PROJ/s1.jsonl" "cc-worker" "THE FINAL REPORT"
   run bash "$WD" --harvest-member "cc-worker" "$CWD"
   [[ "$output" == *"THE FINAL REPORT"* ]] || false
-  [[ "$output" == *"interim narration"* ]] && false
-  true
+  ! [[ "$output" == *"interim narration"* ]] || false
 }
 
 @test "(iv) tool_use and thinking blocks carry no text and are skipped" {
@@ -97,8 +96,7 @@ mk_assistant() { # $1=file $2=agentName $3=text
   printf '{"message":{"role":"assistant","content":[{"type":"thinking","thinking":"pondering"}]},"agentName":"dd-worker"}\n' >> "$PROJ/s1.jsonl"
   run bash "$WD" --harvest-member "dd-worker" "$CWD"
   [[ "$output" == *"REAL TEXT REPORT"* ]] || false
-  [[ "$output" == *"pondering"* ]] && false
-  true
+  ! [[ "$output" == *"pondering"* ]] || false
 }
 
 @test "(v) several assignees share one worktree — disambiguated by agentName" {
@@ -106,8 +104,7 @@ mk_assistant() { # $1=file $2=agentName $3=text
   mk_assistant "$PROJ/s2.jsonl" "ee-two" "REPORT TWO"
   run bash "$WD" --harvest-member "ee-two" "$CWD"
   [[ "$output" == *"REPORT TWO"* ]] || false
-  [[ "$output" == *"REPORT ONE"* ]] && false
-  true
+  ! [[ "$output" == *"REPORT ONE"* ]] || false
 }
 
 @test "(vi) an assignee re-fired twice harvests the NEWEST transcript" {
@@ -116,8 +113,7 @@ mk_assistant() { # $1=file $2=agentName $3=text
   touch -t 202001010000 "$PROJ/old.jsonl"
   run bash "$WD" --harvest-member "ff-worker" "$CWD"
   [[ "$output" == *"LATEST RUN REPORT"* ]] || false
-  [[ "$output" == *"STALE FIRST RUN"* ]] && false
-  true
+  ! [[ "$output" == *"STALE FIRST RUN"* ]] || false
 }
 
 @test "(vii) an assignee with no transcript anywhere reports NO-TRANSCRIPT, not a silent empty" {
