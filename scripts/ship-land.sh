@@ -369,6 +369,116 @@ gate_admit() {  # $1=what — defer the start of an expensive suite until load f
 # which trunk could not decide because it did not capture the re-run's TAP (its own message says
 # "RED (or cut twice)"), and (b) a distinct EXIT CODE for the non-verdict, so the caller learns
 # "retry when quieter" instead of "your code is broken".
+# ---- per-gate $HOME isolation: the gate proves the TREE, not the desk's state ----------------
+# WHY (GATE_ARCHITECTURE_PLAN §4, "honest coupling"): 109 of 126 suites are grandfathered
+# non-hermetic (scripts/test-hermeticity-lint.sh) — they READ and WRITE the operator's live
+# ~/.claude while ~40 sessions mutate it. Today that buys intermittence. The moment a content-
+# addressed proof CACHE lands (Phase 2b) it buys something strictly worse: a green produced under
+# cross-talk gets KEYED and REPLAYED, so a transient false green becomes a DURABLE one. Isolation
+# is therefore the correctness PRECONDITION for that cache, and it is only that — §2 measured
+# hermeticity as NOT the driver of gate flakiness (no enrichment, wrong failure shape, 2-point
+# ceiling), so this change makes no claim on `q` and none on P(green). Do not re-litigate it here.
+#
+# MECHANISM: APFS clonefile, measured on this box, not designed in the abstract. `cp -Rc` copies by
+# REFERENCE — the whole 2.1 GB / 18.8k-file ~/.claude clones in ~9 s at ZERO space cost, ~/.reso in
+# ~1.2 s (`diskutil info /` ⇒ APFS; $HOME and $TMPDIR are both on /dev/disk3s5, and clonefile is
+# same-volume). Every top-level entry the clone list does NOT name is SYMLINKED to the real one, so
+# every path that resolves today still resolves — an ABSENT path would manufacture a false RED,
+# the one outcome this must never cause. Isolation is thus bounded and honest: writes to ~/.claude
+# and ~/.reso are contained; writes THROUGH a symlinked entry are not, and were not before either.
+# (Deliberate non-goal: the exoneration re-run reuses the same clone rather than taking a fresh
+# one. A per-suite clone would cost ~10 s per failing suite to buy a cleanliness the live-$HOME
+# status quo never had.)
+#
+# FAIL OPEN, ALWAYS. Any failure — no mktemp, no clonefile, an unreadable file mid-copy — drops
+# isolation and runs the gate exactly as it runs today. A broken clone must never block a land;
+# that would make this a new fail-closed amplifier, the precise defect class §1 is about.
+# GATE_HOME_ISOLATED records which happened, so Phase 2b can refuse to CACHE a non-isolated green
+# rather than inherit the lie. SHIP_LAND_GATE_HOME_ISO: `off` = kill switch · `on` = force even for
+# a fixture pipeline under bats · unset/`auto` = isolate real lands only (see gate_home_setup).
+#
+# The isolation is applied at gate_bats — the single chokepoint BOTH the monolithic run_bats_all
+# and the per-suite run_scoped_suite already funnel through — so ship-land's OWN bookkeeping
+# (record_gate_cut / run_scoped_suite writing $HOME/.claude/autonomy/postland/flakes.jsonl) still
+# lands in the operator's REAL ledger. Isolating that too would silently delete the flake
+# denominator at teardown.
+GATE_HOME=""            # non-empty ⇒ the gate's bats children run under this cloned $HOME
+# EXPORTED, not local: the cacheability of a green is a fact about the RUN, so it must be legible
+# to whatever decides to key it — Phase 2b's cache writer, and today the suites and the operator.
+export GATE_HOME_ISOLATED=0    # 1 = isolated (a Phase-2b proof from this run is cacheable) · 0 = fell open
+
+gate_home_teardown() {  # idempotent · NEVER fails · refuses to remove anything it did not create
+  local d="${GATE_HOME:-}"
+  GATE_HOME=""; export GATE_HOME_ISOLATED=0
+  [[ -n "$d" ]] || return 0
+  # The dir is a symlink FARM over the operator's real $HOME, so this `rm -rf` is one bad variable
+  # away from the worst possible outcome. Two independent brakes: `rm -rf` unlinks symlinks and
+  # never follows them (so it cannot reach ~/Library, ~/Development, ~/.claude-secondary …), AND
+  # the name guard below means a GATE_HOME we did not mint removes nothing at all.
+  case "$d" in
+    */gate-home.??????) [[ -d "$d" ]] && { rm -rf "$d" 2>/dev/null || true; } ;;
+    *) echo "⚠ gate: refusing to remove an unrecognized \$HOME-isolation dir '$d' (left in place)." >&2 ;;
+  esac
+  return 0
+}
+
+gate_home_setup() {     # NEVER returns non-zero — isolation is best-effort BY CONTRACT
+  local root dest entry name clone_list
+  gate_home_teardown    # re-entrant: run_gate is called again on every stale-gate re-round
+  if [[ "${SHIP_LAND_GATE_HOME_ISO:-auto}" = "off" ]]; then
+    echo "⚠ gate: \$HOME isolation OFF (SHIP_LAND_GATE_HOME_ISO=off) — bats runs against the live ~/, so a green here is NOT cacheable." >&2
+    return 0
+  fi
+  # NOT A REAL LAND ⇒ nothing to isolate. A ship-land invoked from inside bats is a FIXTURE
+  # pipeline: the suite driving it already sandboxed everything it asserts on, and its gate's
+  # verdict is an assertion target, not a claim about the operator's repo. Measured, not guessed —
+  # tests/ship-land.bats drives 50 such pipelines and tests/land-gate-cas.bats 11, so cloning for
+  # each took that suite from 115 s to >8 min, and inside a real FULL gate the same suites would
+  # have added ~10 min of pure waste. This also covers the NESTED case for free (a fixture pipeline
+  # running under an outer gate is already inside that gate's clone). `=on` forces isolation
+  # anyway — that is how tests/gate-home-isolation.bats exercises the real thing.
+  if [[ -n "${BATS_TEST_TMPDIR:-}${BATS_SUITE_TMPDIR:-}" && "${SHIP_LAND_GATE_HOME_ISO:-auto}" != "on" ]]; then
+    echo "→ gate: \$HOME isolation skipped — fixture pipeline under bats (force with SHIP_LAND_GATE_HOME_ISO=on)." >&2
+    return 0
+  fi
+  root="${SHIP_LAND_GATE_HOME_ROOT:-${TMPDIR:-/tmp}}"
+  clone_list="${SHIP_LAND_GATE_HOME_CLONE:-.claude .reso}"
+  # Reap clones orphaned by a SIGKILLed gate — 83% of observed gate deaths are kills (§2), and a
+  # killed shell runs no EXIT trap. Bounded at 8 h, ~9× the longest observed gate (3217 s), so a
+  # live sibling's clone can never be caught by it.
+  find "$root" -mindepth 1 -maxdepth 1 -type d -name 'gate-home.??????' -mmin +480 -exec rm -rf {} + 2>/dev/null || true
+  dest="$(mktemp -d "${root%/}/gate-home.XXXXXX" 2>/dev/null)" || dest=""
+  if [[ -z "$dest" || ! -d "$dest" ]]; then
+    echo "⚠ gate: could not create a \$HOME-isolation dir under '$root' — running against the live ~/ (fail-open)." >&2
+    return 0
+  fi
+  # 1. SYMLINK every top-level entry of $HOME we are not cloning: ~/.gitconfig (one suite commits
+  #    with no local identity), ~/.zshrc, ~/.config, the sibling ~/.claude-* account trees (4.1 GB
+  #    — cloning those would cost more than the gate saves). Links are free and preserve resolution.
+  while IFS= read -r entry; do
+    name="${entry##*/}"
+    case " $clone_list " in *" $name "*) continue ;; esac
+    ln -s "$entry" "$dest/$name" 2>/dev/null || true
+  done < <(find "$HOME" -mindepth 1 -maxdepth 1 2>/dev/null)
+  # 2. CLONE the mutation surface. A PARTIAL clone is worse than none — it is isolated but missing
+  #    read state, which is how you manufacture a false RED — so any error drops isolation whole.
+  for name in $clone_list; do    # deliberate word-split: clone_list is a space-separated list
+    [[ -e "$HOME/$name" ]] || continue
+    if ! cp -Rc "$HOME/$name" "$dest/$name" 2>/dev/null; then
+      echo "⚠ gate: APFS clone of ~/$name failed — running against the live ~/ (fail-open). A green from this run is NOT cacheable." >&2
+      GATE_HOME="$dest"; gate_home_teardown
+      return 0
+    fi
+  done
+  GATE_HOME="$dest"; export GATE_HOME_ISOLATED=1
+  # EXIT only. Trapping INT/TERM would swallow them (a handler without a re-raise turns Ctrl-C into
+  # "keep going"), and the reaper above already covers the signal-death case this script actually
+  # sees. There is no other EXIT trap in this file; adding one must compose with this.
+  trap gate_home_teardown EXIT
+  echo "→ gate: \$HOME isolated — APFS clone of ${clone_list// /, } at $dest (bats mutations cannot reach the operator's live ~/)." >&2
+  return 0
+}
+
 # ---- gate env hygiene: tuning THIS land must never change the VERDICT -------
 # Found by landing this very branch with the remedy ship.md itself recommends for lock starvation
 # (SHIP_LAND_GATE_ROUNDS=0, plus a raised LAND_LOCK_WAIT): a tests/ship-land.bats that is 46/46
@@ -393,9 +503,15 @@ gate_admit() {  # $1=what — defer the start of an expensive suite until load f
 # per-suite tests would silently exercise the monolith and go red on a tree that is fine — the
 # ROUNDS=0 defect verbatim, on the flag this very change introduces.
 gate_bats() {  # run bats with the operator's lander tuning scrubbed; args pass through verbatim
+  # …and under the isolated $HOME when gate_home_setup got one. THE chokepoint: both run_bats_all
+  # (monolithic) and run_scoped_suite (per-suite, incl. its exoneration re-run) reach bats only
+  # through here, so isolation covers every path without either of them knowing about it.
+  # An EMPTY GATE_HOME passes HOME through untouched — that is the fail-open branch, not a bug.
+  local homeenv=()
+  [[ -n "${GATE_HOME:-}" ]] && homeenv=(HOME="$GATE_HOME")
   env -u SHIP_LAND_GATE_ROUNDS -u SHIP_LAND_VERIFY_RETRIES -u SHIP_LAND_GATE_SCOPE \
       -u LAND_LOCK_WAIT -u LAND_LOCK_TTL -u SHIP_LAND_FULL_PER_SUITE \
-      CC_GATE_MAX_LOAD=0 bats "$@"
+      CC_GATE_MAX_LOAD=0 ${homeenv[@]+"${homeenv[@]}"} bats "$@"
 }
 
 run_bats_all() {  # $1=newline-list of DIRECT suites — the FULL corpus, one process per suite
@@ -703,6 +819,7 @@ run_gate() {  # $1=range → 0 green / 1 red
       # a FINDING, not a flake). Same --direct call the scoped branch makes below; best-effort —
       # an empty list simply means "exonerate nothing is unknown", which is the safe direction.
       direct="$("$GATE_SELECT" --direct "$range" ${EXTRA_RANGE:+"$EXTRA_RANGE"} 2>/dev/null || true)"
+      gate_home_setup
       run_bats_all "$direct" || rc=1
     elif [[ -z "${sel//[[:space:]]/}" ]]; then
       echo "→ gate[scoped]: selector picked 0 suites — skipping bats (lint-only land)" >&2
@@ -712,6 +829,9 @@ run_gate() {  # $1=range → 0 green / 1 red
       # push, so a sibling-mapped suite is direct to THIS land too and must not be exonerated.
       direct="$("$GATE_SELECT" --direct "$range" ${EXTRA_RANGE:+"$EXTRA_RANGE"} 2>/dev/null || true)"
       GATE_EFFECTIVE_FULL=0; SELECTED_N=0
+      # ONE clone for the whole selection, not one per suite — and deliberately NOT hoisted above
+      # the 0-suite branch: a lint-only land must keep paying zero for a proof it never runs.
+      gate_home_setup
       while IFS= read -r f; do
         [[ -z "$f" ]] && continue
         SELECTED_N=$(( SELECTED_N + 1 ))
@@ -727,6 +847,9 @@ run_gate() {  # $1=range → 0 green / 1 red
       echo "→ gate[scoped]: ran $SELECTED_N selected suite(s) — gate-green stays where it was." >&2
     fi
   fi
+  # Unconditional, and BEFORE the return so it runs on red and on GATE-KILLED alike — the EXIT trap
+  # is only the backstop for a mid-gate `exit`. Both are no-ops when isolation fell open.
+  gate_home_teardown
   return "$rc"
 }
 
