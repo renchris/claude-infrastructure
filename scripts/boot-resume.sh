@@ -137,6 +137,19 @@ if [ -f "$MARKER" ] && [ "$(cat "$MARKER" 2>/dev/null)" = "$BOOT" ]; then
   exit 0
 fi
 
+# ── TSV field-collapse guard — docs/research/TSV_FIELD_COLLAPSE_2026-07-25.md ──────────────────
+# Tab is IFS-*whitespace*, so `IFS=$'\t' read` collapses a RUN of tabs and ANY empty cell shifts
+# every later field one position LEFT — silently, with a zero exit status. This bites the ghost
+# scan hard: `.account` and `.name` are absent on plenty of registry entries, so an entry with no
+# account read cwd as the account, sid as the cwd and name as the sid — `[ -n "$g_sid" ]` then
+# passed on the NAME, and transcript_mtime was called with all three arguments wrong, so the
+# session failed its recency test and was never resumed. A reboot silently dropping the sessions
+# it exists to bring back. Padded at the emitter (the only durable fix — `//` produces the ""),
+# and re-padded into GHOSTS because GHOSTS is itself re-read with `IFS=$'\t' read` twice below.
+TSV_PAD=$'\037'
+pad()   { [ -n "$1" ] && printf '%s' "$1" || printf '%s' "$TSV_PAD"; }
+unpad() { [ "$1" = "$TSV_PAD" ] || printf '%s' "$1"; }
+
 # ── DETECT: a session "open at last boot" = a durable registry entry whose process predates this
 #    boot (startedAt/1000 < boottime → killed by the reboot) AND whose transcript was written within
 #    RECENCY_WINDOW before the boot (the resume-sessions "written just before that boot" rule, which
@@ -146,17 +159,24 @@ n_open=0
 if [ -d "$REGISTRY_DIR" ]; then
   for f in "$REGISTRY_DIR"/*.json; do
     [ -e "$f" ] || continue
-    row="$(jq -r '[(.startedAt // 0), (.account // ""), (.cwd // ""), (.session_id // ""), (.name // "")] | @tsv' "$f" 2>/dev/null)" || continue
+    row="$(jq -r --arg pad "$TSV_PAD" '
+             def cell: (if . == null then "" else . end) | tostring
+                       | gsub("[\\t\\r\\n]"; " ") | if . == "" then $pad else . end;
+             [((.startedAt // 0) | cell), ((.account // "") | cell), ((.cwd // "") | cell),
+              ((.session_id // "") | cell), ((.name // "") | cell)] | @tsv' "$f" 2>/dev/null)" || continue
     [ -n "$row" ] || continue
     IFS=$'\t' read -r started_ms g_acct g_cwd g_sid g_name <<GHOST_ROW
 $row
 GHOST_ROW
+    started_ms="$(unpad "$started_ms")"; g_acct="$(unpad "$g_acct")"; g_cwd="$(unpad "$g_cwd")"
+    g_sid="$(unpad "$g_sid")";           g_name="$(unpad "$g_name")"
     case "$started_ms" in ''|*[!0-9]*) continue ;; esac
     [ "$((started_ms / 1000))" -lt "$BOOT" ] || continue     # live/post-boot session → not a ghost
     [ -n "$g_sid" ] || continue
     mt="$(transcript_mtime "$g_acct" "$g_sid" "$g_cwd")"     # stale/absent transcript → cruft, skip
     { [ -n "$mt" ] && [ "$mt" -gt "$((BOOT - RECENCY_WINDOW))" ]; } || continue
-    GHOSTS="${GHOSTS}${g_acct}	${g_cwd}	${g_sid}	${g_name}
+    # GHOSTS is itself re-read with `IFS=$'\t' read` twice below, so it stores the PADDED cells.
+    GHOSTS="${GHOSTS}$(pad "$g_acct")	$(pad "$g_cwd")	$(pad "$g_sid")	$(pad "$g_name")
 "
     n_open=$((n_open + 1))
   done
@@ -203,6 +223,7 @@ if [ "$MODE" = "resume" ]; then
   # into two argv entries and silently skip that session. bash 3.2 supports indexed arrays.
   SEL_ARGS=()
   while IFS=$'\t' read -r acct cwd sid _name; do
+    acct="$(unpad "$acct")"; cwd="$(unpad "$cwd")"; sid="$(unpad "$sid")"
     [ -n "$sid" ] || continue
     SEL_ARGS[${#SEL_ARGS[@]}]="--candidate"
     SEL_ARGS[${#SEL_ARGS[@]}]="$(map_account "$acct"):$sid:$cwd"
@@ -221,7 +242,10 @@ EOF
   [ -n "$WINNERS" ] && n_fire="$(printf '%s\n' "$WINNERS" | grep -c . || true)"
 
   # Resume each WINNER through the (TTY-coupled) launcher seam. Order is irrelevant; each is independent.
+  # lr-select pads its winner cells for the same field-collapse reason (its `branch` is routinely "",
+  # and a winner with no cwd would otherwise slide the BRANCH NAME into $cwd and launch there).
   while IFS=$'\t' read -r alias sid cwd _br; do
+    alias="$(unpad "$alias")"; sid="$(unpad "$sid")"; cwd="$(unpad "$cwd")"
     [ -n "$sid" ] || continue
     branch=""
     [ -n "$cwd" ] && [ -d "$cwd" ] && branch="$(git -C "$cwd" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
@@ -246,6 +270,7 @@ boot_h="$(date -u -r "$BOOT" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || printf '%s' "$BO
 listing=""
 shown=0
 while IFS=$'\t' read -r acct cwd sid name; do
+  acct="$(unpad "$acct")"; cwd="$(unpad "$cwd")"; sid="$(unpad "$sid")"; name="$(unpad "$name")"
   [ -n "$sid" ] || continue
   if [ "$shown" -lt 8 ]; then
     listing="${listing}  - ${name:-$sid} [$(map_account "$acct")] $(basename "${cwd:-?}") (${sid:0:8})

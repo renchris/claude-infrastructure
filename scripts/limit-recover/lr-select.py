@@ -396,8 +396,21 @@ def main() -> int:
         uniq, a.max_per_worktree, a.max_total, not a.no_liveness, a.allow_missing_cwd
     )
 
+    # TSV field-collapse guard — docs/research/TSV_FIELD_COLLAPSE_2026-07-25.md. The consumer
+    # (scripts/boot-resume.sh) reads these rows with `IFS=$'\t' read`, and tab is IFS-*whitespace*:
+    # `read` collapses a RUN of tabs, so any empty cell shifts every later field one position LEFT.
+    # `branch` is routinely "" and `cwd` can be under --allow-missing-cwd, which would slide the
+    # BRANCH NAME into $cwd and resume the session in a directory that does not exist. Pad every
+    # cell to the \x1f sentinel the consumer un-pads; \x1f cannot occur in an acct/sid/path/ref.
+    def _cell(v: str) -> str:
+        v = str(v if v is not None else "").replace("\t", " ").replace("\n", " ")
+        return v if v else "\x1f"
+
     for w in winners:
-        print(f"{w['acct']}\t{w['sid']}\t{w['cwd']}\t{w.get('branch', '')}")
+        print(
+            f"{_cell(w['acct'])}\t{_cell(w['sid'])}\t"
+            f"{_cell(w['cwd'])}\t{_cell(w.get('branch', ''))}"
+        )
 
     text = render(report, winners, dropped, filtered, a.max_per_worktree, a.max_total)
     if not a.quiet:
