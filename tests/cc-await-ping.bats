@@ -103,3 +103,50 @@ setup() {
   run "$AWAIT" --role desk SOME-UUID --timeout 3 --interval 1
   [ "$status" -eq 2 ]
 }
+
+# ── PROVEN WAKE: the .watching claim must be falsifiable, not merely fresh ────────────────────────
+@test "the .watching heartbeat records the watcher's OWN pid (a claim its readers can check)" {
+  ( sleep 3; printf '2026-07-10T10:00:00+0000 [peer] ping\n' >> "$MB" ) & writer=$!
+  "$AWAIT" "$UUID" --interval 1 --timeout 10 >/dev/null 2>&1 & watcher=$!
+  sleep 2
+  wf="$CC_MAILBOX_DIR/$UUID.watching"
+  [ -f "$wf" ]
+  wpid="$(sed -n 's/^pid=\([0-9][0-9]*\).*/\1/p' "$wf" | head -n1)"
+  [ -n "$wpid" ]
+  kill -0 "$wpid"                                  # the recorded pid is a LIVE process…
+  [ "$wpid" -eq "$watcher" ]                       # …and it is this watcher, not some other
+  wait "$watcher" 2>/dev/null || true
+  wait "$writer" 2>/dev/null || true
+}
+
+@test "the marker is removed on exit, so a finished watcher stops claiming a wake path" {
+  ( sleep 1; printf '2026-07-10T10:00:00+0000 [peer] ping\n' >> "$MB" ) & writer=$!
+  run "$AWAIT" "$UUID" --interval 1 --timeout 10
+  wait "$writer" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  [ ! -f "$CC_MAILBOX_DIR/$UUID.watching" ]
+}
+
+@test "F9: cursor-write failure still DELIVERS but exits LOUD (4) + alarms — never a silent clean take" {
+  # mailbox_take rc 2 = "body printed, but the cursor write FAILED — the caller must escalate + still
+  # deliver, never silently drop". cc-await-ping exited 0 regardless, so the lib's one escalation
+  # contract had NO honorer: a broken cursor looked exactly like a clean take, and the same mail would
+  # be re-delivered forever with nobody told. Exercised by standing the tool up beside a lib that
+  # returns rc 2 (cc-await-ping resolves the lib relative to its own path, so a temp bin/+hooks/lib
+  # tree drives the real code down its real rc-2 branch).
+  local root="$BATS_TEST_TMPDIR/tree"
+  mkdir -p "$root/bin" "$root/hooks/lib"
+  cp "$AWAIT" "$root/bin/cc-await-ping"
+  cat > "$root/hooks/lib/mailbox-pending.sh" <<'LIB'
+mailbox_lines() { echo 1; }
+mailbox_has_pending() { return 0; }
+mailbox_take() { printf '%s\n' "2026-07-10T10:00:00+0000 [peer] undroppable ping"; return 2; }
+LIB
+  export CC_COMMS_ALARM_DIR="$BATS_TEST_TMPDIR/comms-alarms"
+  printf '2026-07-10T10:00:00+0000 [peer] undroppable ping\n' > "$MB"
+  run "$root/bin/cc-await-ping" "$UUID" --interval 1 --timeout 5
+  [ "$status" -eq 4 ]
+  [[ "$output" == *"undroppable ping"* ]] || false                 # still DELIVERED, never dropped
+  [[ "$output" == *"cursor could NOT be advanced"* ]] || false     # …and said so
+  [ -n "$(find "$CC_COMMS_ALARM_DIR" -name 'cursor-fail-*.json' 2>/dev/null | head -1)" ]
+}

@@ -19,8 +19,11 @@
 #   --interval <s>  poll cadence in seconds (default 15)
 #   -h, --help
 #
-# Exit: 0 = new line(s) arrived (printed to stdout); 2 = timed out; 3 = no uuid/role.
-# Env overrides (tests): CC_MAILBOX_DIR, CC_ROLES_DIR.
+# Exit: 0 = new line(s) arrived (printed to stdout); 2 = timed out; 3 = no uuid/role;
+#       4 = line(s) DELIVERED but the shared cursor could not be advanced (F9 — you WILL see this mail
+#           again; that is a dup, not a loss). Loud on purpose: a cursor-write failure that exits 0 is
+#           indistinguishable from a clean take.
+# Env overrides (tests): CC_MAILBOX_DIR, CC_ROLES_DIR, CC_COMMS_ALARM_DIR.
 set -uo pipefail
 
 MAILBOX_DIR="${CC_MAILBOX_DIR:-$HOME/.claude/mailbox}"
@@ -85,7 +88,15 @@ echo "cc-await-ping: watching $CUR_UUID inbox ($([ "$_have_lib" = 1 ] && echo 's
 # Wake-path HEARTBEAT (critique F5): touch <uuid>.watching each poll so cc-notify/cc-announce can tell a
 # live session that WILL be woken (a fresh watcher heartbeat) from a live-but-idle one that only drains on
 # its next turn. Cleaned on exit. Works for uuid- AND role-watchers (both resolve to a concrete uuid).
+#
+# PROVEN WAKE (not merely a claimed one): the heartbeat now carries the WATCHER'S PID, so the claim it
+# makes is FALSIFIABLE by its readers. An empty marker asserted "a watcher exists" and could only be
+# checked for freshness — so a watcher killed by SIGKILL (no EXIT trap, marker left behind) kept earning
+# "wake-path armed" for a full CC_WATCH_FRESH_S window, and cc-announce stamped VERIFIED on a wake that
+# could not happen. Recording the pid lets cc-notify / mailbox-drain require it to be ALIVE. Format is
+# one `pid=<n>` line; a legacy/empty marker still reads as armed-by-freshness, so nothing regresses.
 _watchfile() { printf '%s/%s.watching' "$MAILBOX_DIR" "$CUR_UUID"; }
+_beat() { printf 'pid=%s\n' "$$" > "$(_watchfile)" 2>/dev/null || true; }
 trap 'rm -f "$(_watchfile)" 2>/dev/null || true' EXIT
 
 elapsed=0
@@ -96,11 +107,25 @@ while [ "$elapsed" -lt "$TIMEOUT" ]; do
     CUR_UUID="$next_uuid"; MBOX="$MAILBOX_DIR/$CUR_UUID.md"; baseline="$(_lc)"
     echo "cc-await-ping: role re-pointed → now watching $CUR_UUID" >&2
   fi
-  mkdir -p "$MAILBOX_DIR" 2>/dev/null || true; : > "$(_watchfile)" 2>/dev/null || true   # heartbeat
+  mkdir -p "$MAILBOX_DIR" 2>/dev/null || true; _beat                                     # heartbeat
 
   if [ "$_have_lib" = 1 ]; then
     if mailbox_has_pending "$CUR_UUID"; then
       mailbox_take "$CUR_UUID" 1    # print the new line(s) + advance the shared cursor (reliable delivery)
+      _trc=$?
+      # F9: rc 2 = the body WAS printed but the cursor write FAILED — "the caller must escalate + still
+      # deliver, never silently drop". This caller used to exit 0 regardless, so the lib's one escalation
+      # contract had no honorer: a broken cursor looked exactly like a clean take. Deliver, alarm, exit loud.
+      if [ "$_trc" = 2 ]; then
+        _adir="${CC_COMMS_ALARM_DIR:-$HOME/.claude/autonomy/comms-alarms}"
+        if mkdir -p "$_adir" 2>/dev/null && command -v jq >/dev/null 2>&1; then
+          jq -nc --arg u "$CUR_UUID" --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)" \
+            '{kind:"cursor-write-failed", uuid:$u, actor:"cc-await-ping", reason:"mailbox_take delivered the body but could not advance .seen — the same mail will be re-delivered (dup, not loss); the guard cannot key on a cursor that is not moving", ts:$ts}' \
+            > "$_adir/cursor-fail-$(date -u +%Y%m%dT%H%M%SZ 2>/dev/null)-$$.json" 2>/dev/null || true
+        fi
+        echo "cc-await-ping: ⚠ delivered, but the shared cursor could NOT be advanced for $CUR_UUID — you will see this mail again (a dup, never a loss); alarm recorded" >&2
+        exit 4
+      fi
       exit 0
     fi
   else

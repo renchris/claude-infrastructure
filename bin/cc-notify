@@ -500,13 +500,23 @@ EOF
 # target only drains on its NEXT turn (fine for a routine ping, but NOT a guaranteed wake for a terminal
 # announce — cc-announce treats no-watcher as a degrade, never "wake confirmed"). Never equate live+idle
 # with a wake (that WAS the W5 incident).
+#
+# PROVEN, not merely CLAIMED: freshness alone cannot falsify the claim. cc-await-ping removes its marker
+# from an EXIT trap, which SIGKILL does not run — so a killed watcher left a marker that stayed "fresh"
+# for a full WATCH_FRESH_S, cc-notify reported "wake-path armed", and cc-announce stamped VERIFIED on a
+# wake that could not happen. The marker therefore carries the watcher's pid, and the claim is only
+# honored while that pid is ALIVE. A legacy/empty marker (no pid recorded) falls back to freshness-only,
+# so an older watcher still reads as armed rather than being wrongly downgraded.
 WATCH_FRESH_S="${CC_WATCH_FRESH_S:-90}"
 wake_path_armed() {
-  local u="$1" wf mt now
+  local u="$1" wf mt now wpid
   wf="$MAILBOX_DIR/$u.watching"; [ -f "$wf" ] || return 1
   mt="$(stat -f %m "$wf" 2>/dev/null || stat -c %Y "$wf" 2>/dev/null || echo 0)"
   now="$(date +%s 2>/dev/null || echo 0)"; case "$mt" in ''|*[!0-9]*) mt=0 ;; esac
-  [ "$(( now - mt ))" -le "$WATCH_FRESH_S" ]
+  [ "$(( now - mt ))" -le "$WATCH_FRESH_S" ] || return 1
+  wpid="$(sed -n 's/^pid=\([0-9][0-9]*\).*/\1/p' "$wf" 2>/dev/null | head -n1)"
+  [ -n "$wpid" ] || return 0                  # legacy marker: freshness is all there is to go on
+  kill -0 "$wpid" 2>/dev/null                 # a dead watcher cannot wake anyone — NOT armed
 }
 
 target_live "$uuid"; _lv=$?

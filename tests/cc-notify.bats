@@ -615,3 +615,22 @@ secs() { local s e; s=$(date +%s); "$@" >/dev/null 2>&1; e=$(date +%s); echo $((
   [[ "$output" == *"delivered to inbox [$UUID]"* ]] || false
   [ "$(sent_count)" -eq 0 ]
 }
+
+@test "wake-path is PROVEN, not claimed: a marker naming a DEAD watcher is NOT armed (F5 falsifiability)" {
+  # cc-await-ping clears its marker from an EXIT trap, which SIGKILL never runs — so a killed watcher
+  # left a marker that stayed "fresh" and kept earning VERIFIED for a wake that could not happen.
+  sleep 30 & wpid=$!
+  printf 'pid=%s\n' "$wpid" > "$CC_MAILBOX_DIR/$UUID.watching"
+  run "$NOTIFY" "$UUID" "live watcher"
+  [[ "$output" == *"wake-path armed"* ]] || false          # alive pid → armed
+  kill "$wpid" 2>/dev/null; wait "$wpid" 2>/dev/null || true
+  touch "$CC_MAILBOX_DIR/$UUID.watching"                    # still perfectly FRESH — only the pid died
+  run "$NOTIFY" "$UUID" "dead watcher"
+  [[ "$output" == *"NO watcher armed"* ]] || false          # dead pid → NOT armed (the fix)
+}
+
+@test "a LEGACY (pid-less) .watching marker still reads as armed — no regression on older watchers" {
+  : > "$CC_MAILBOX_DIR/$UUID.watching"
+  run "$NOTIFY" "$UUID" "legacy marker"
+  [[ "$output" == *"wake-path armed"* ]] || false
+}

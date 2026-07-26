@@ -92,6 +92,10 @@ warn=""; [ "$rc" = 2 ] && warn=' (⚠ cursor write failed — you may see this a
 # session — only the model can arm its own watcher. So the one moment we can fix that is HERE, when we
 # have the model's attention and can see (by the absence of a fresh `.watching` heartbeat) that it has
 # no wake path. One line, only when actually unwatched — a nudge on every drain would be noise.
+# Same predicate as cc-notify's wake_path_armed, deliberately: the two consumers of this marker must not
+# disagree about whether a wake path exists. A marker carrying a DEAD watcher's pid (SIGKILL skips
+# cc-await-ping's EXIT cleanup) is not a wake path — nudge the model to re-arm rather than let it idle
+# behind a watcher that no longer runs. No pid recorded ⇒ legacy marker ⇒ freshness-only, as before.
 nudge=""
 _wf="${CC_MAILBOX_DIR:-$HOME/.claude/mailbox}/$own_uuid.watching"
 _fresh_s="${CC_WATCH_FRESH_S:-90}"
@@ -100,7 +104,10 @@ if [ -f "$_wf" ]; then
   _mt="$(stat -f %m "$_wf" 2>/dev/null || stat -c %Y "$_wf" 2>/dev/null || echo 0)"
   _now="$(date +%s 2>/dev/null || echo 0)"
   case "$_mt" in ''|*[!0-9]*) _mt=0 ;; esac
-  [ "$(( _now - _mt ))" -le "$_fresh_s" ] 2>/dev/null && _watched=1
+  if [ "$(( _now - _mt ))" -le "$_fresh_s" ] 2>/dev/null; then
+    _wpid="$(sed -n 's/^pid=\([0-9][0-9]*\).*/\1/p' "$_wf" 2>/dev/null | head -n1)"
+    if [ -z "$_wpid" ] || kill -0 "$_wpid" 2>/dev/null; then _watched=1; fi
+  fi
 fi
 [ "$_watched" = 1 ] || nudge='
 (no watcher armed — arm cc-await-ping via Bash run_in_background before idling, or mail waits for your next boundary)'
