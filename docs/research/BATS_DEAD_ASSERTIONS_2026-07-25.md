@@ -209,11 +209,14 @@ python3 scripts/bats-assert-liveness-fix.py --dry-run  # what would change
 python3 scripts/bats-assert-liveness-fix.py            # apply, then re-verify at 0
 ```
 
-## 6. What the revival exposed — one real defect, hidden by a dead assertion
+## 6. What the revival exposed — two assertions that were never true
 
-Reviving 226 assertions turned exactly **one** test red, and it was a genuine latent defect
-rather than a stale expectation: `tests/lr-select.bats` — *"uncommitted work annotates the
-group but does NOT pick the winner"*.
+Reviving 226 assertions turned **two** tests red. Neither was a product bug: both were
+assertions that could not have passed as written, and both were unfalsifiable while dead.
+
+### 6a. A fixture that never matched — `tests/lr-select.bats`
+
+*"uncommitted work annotates the group but does NOT pick the winner"*.
 
 The assertion `[[ "$output" == *"322 uncommitted"* ]]` had **never once matched**. Root cause
 is a `/var` vs `/private/var` path-resolution skew in the test's own `git` stub:
@@ -233,8 +236,28 @@ about the real producer's shape, and a dead assertion means nothing ever checked
 The assertion is now mutation-proved load-bearing — substituting a wrong count fails the test,
 the correct count passes.
 
-That 225 of 226 revived assertions passed is the reassuring half of the result: the suite's
-*intent* was overwhelmingly correct: it simply was not being enforced.
+### 6b. An assertion that could not express its own claim — `tests/ship-land.bats`
+
+*"T-P9-7 kill-switch: SHIP_LAND_VERIFY_RETRIES=0 → single-shot exit 8, no auto-retry"*
+asserted `! echo "$output" | grep -qi "auto-retry"`. With retries disabled, ship-land
+correctly reports `post-push CONTENT-VERIFY FAILED after 0 auto-retry attempt(s)` — a
+sentence the bare substring test matches. So the assertion could never distinguish "no retry
+happened" from "a retry happened"; it passed only because it was dead. Retargeted at the
+per-attempt marker (`auto-retry <n>/<max>`, ship-land.sh:507) plus a positive check that the
+reported count is 0 — strictly stronger than the original intent.
+
+The two failures are different species, and both matter:
+
+| | `lr-select` | `ship-land` |
+|---|---|---|
+| Wrong thing | the **fixture** (path-resolution skew) | the **assertion** (imprecise predicate) |
+| Product correct? | yes | yes |
+| Could it ever pass? | no — key never matched | no — substring always present |
+
+That 224 of 226 revived assertions passed is the reassuring half of the result: the suite's
+*intent* was overwhelmingly correct; it simply was not being enforced. The unreassuring half
+is that both failures were *permanently* false, not flaky — evidence that a dead assertion is
+not merely unenforced but actively rots, because nothing ever contradicts it.
 
 ### Collateral: a pre-existing HANG that blocked the gate
 
