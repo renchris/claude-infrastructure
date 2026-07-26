@@ -54,12 +54,49 @@ if [ -z "$PUSH_BIN" ]; then
     [ -n "$_c" ] && [ -x "$_c" ] && { PUSH_BIN="$_c"; break; }
   done
 fi
-RECONCILE_BIN="${CC_INBOX_GUARD_RECONCILE_BIN:-}"
-if [ -z "$RECONCILE_BIN" ]; then
+# UNSET ⇒ auto-resolve a cc-reconcile. SET — including set to EMPTY ⇒ honored verbatim, so
+# `CC_INBOX_GUARD_RECONCILE_BIN=` genuinely disables the backfill fork. `${VAR:-}` could not tell
+# unset from set-empty, so the documented "" disable did NOT disable: it fell straight into the
+# auto-resolve below and ran the REAL cc-reconcile, which forks `it2 session list --json`
+# (cc-reconcile:237). Against a wedged iTerm2 API that fork costs the shim's full 30s bound PER
+# SWEEP — and tests/cc-inbox-guard.bats sets exactly this "" to stay hermetic, so all 19 tests
+# paid it: the suite printed `1..19`, completed 2, and timed out (rc 124, measured 2026-07-26).
+# Because it lives in tests/, that hung the FULL-scope landing gate for every session on this box
+# — the wedge's most expensive symptom. Same seam defect as IT2_WRAPPER_TIMEOUT_BIN (it2-wrapper)
+# and the earlier cc-inbox-guard fix 02c3de8: a seam that cannot turn a thing OFF is not a seam.
+if [ -n "${CC_INBOX_GUARD_RECONCILE_BIN+set}" ]; then
+  RECONCILE_BIN="$CC_INBOX_GUARD_RECONCILE_BIN"
+else
+  RECONCILE_BIN=""
   for _c in "$_bd/cc-reconcile" "$HOME/.claude/bin/cc-reconcile" "$(command -v cc-reconcile 2>/dev/null || true)"; do
     [ -n "$_c" ] && [ -x "$_c" ] && { RECONCILE_BIN="$_c"; break; }
   done
 fi
+
+# Bound every external fork that can reach the iTerm2 API. The it2 shim self-bounds at 30s, but
+# 30s of dead wait per sweep is still a wedge the guard should not absorb: both consumers here
+# ALREADY treat an empty/failed probe as INDETERMINATE and escalate (fail-loud), so a short cap
+# converts an indefinite block into the degradation they were built for. PATH alone is not enough
+# to find timeout(1) — the launchd jobs that run this sweep have a minimal PATH without Homebrew,
+# exactly where coreutils installs it, so an absolute-path fallback list is required or the
+# AUTOMATED callers stay unbounded while interactive shells look fine (same resolution as
+# it2-wrapper's _resolve_timeout). No timeout(1) anywhere ⇒ run unbounded rather than break the
+# call. Seams: CC_INBOX_GUARD_TIMEOUT_S · CC_INBOX_GUARD_TIMEOUT_BIN (set-but-EMPTY disables).
+_IG_TIMEOUT_S="${CC_INBOX_GUARD_TIMEOUT_S:-8}"
+if [ -n "${CC_INBOX_GUARD_TIMEOUT_BIN+set}" ]; then
+  _IG_TIMEOUT_BIN="$CC_INBOX_GUARD_TIMEOUT_BIN"
+else
+  _IG_TIMEOUT_BIN=""
+  for _c in "$(command -v timeout 2>/dev/null || true)" "$(command -v gtimeout 2>/dev/null || true)" \
+            /opt/homebrew/bin/timeout /usr/local/bin/timeout \
+            /opt/homebrew/bin/gtimeout /usr/local/bin/gtimeout; do
+    [ -n "$_c" ] && [ -x "$_c" ] && { _IG_TIMEOUT_BIN="$_c"; break; }
+  done
+fi
+_ig_bounded() { # run "$@" under the cap; unbounded only when no timeout(1) exists
+  if [ -z "$_IG_TIMEOUT_BIN" ] || [ ! -x "$_IG_TIMEOUT_BIN" ]; then "$@"; return $?; fi
+  "$_IG_TIMEOUT_BIN" -k 3 "$_IG_TIMEOUT_S" "$@"
+}
 
 NL='
 '          # a literal newline, for exact whole-line `case` matching (bash 3.2-safe; == grep -qxF)
@@ -92,7 +129,7 @@ owner_liveness() {
     case " $CC_INBOX_GUARD_LIVE_UUIDS " in *" $u "*) return 0 ;; *) return 1 ;; esac
   fi
   if [ -z "$_LIVE_STATE" ]; then
-    local raw; raw="$("$IT2" session list --json 2>/dev/null || true)"
+    local raw; raw="$(_ig_bounded "$IT2" session list --json 2>/dev/null || true)"
     if [ -n "$raw" ] && printf '%s' "$raw" | jq -e 'type=="array"' >/dev/null 2>&1; then
       # bracket in TWO steps: `x="$(printf '\n%s\n' …)"` would strip the trailing newline it just added
       # (command substitution eats trailing newlines), leaving the LAST pane in the list unmatchable —
@@ -219,7 +256,7 @@ sweep() {
   [ "${1:-}" = "--dry-run" ] && DRY=1
   echo "cc-inbox-guard sweep$([ "$DRY" = 1 ] && echo ' (DRY-RUN)') — deadline=${DEADLINE_S}s urgent=${URGENT_S}s"
   # backfill the registry first so a live-but-unregistered pane is classifiable (F8), gated off dry-run.
-  [ "$DRY" = 0 ] && [ -n "$RECONCILE_BIN" ] && "$RECONCILE_BIN" >/dev/null 2>&1 || true
+  [ "$DRY" = 0 ] && [ -n "$RECONCILE_BIN" ] && _ig_bounded "$RECONCILE_BIN" >/dev/null 2>&1 || true
   local now; now="$(now)"; local n_esc=0
 
   # F4: enqueue-FAILED records — a message that could not even persist. Escalate + consume the record.
