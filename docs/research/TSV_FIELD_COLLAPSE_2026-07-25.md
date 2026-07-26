@@ -240,11 +240,27 @@ and fails unless each file pads at its emitter, un-pads as a consumer, or appear
 exemption table **with a reason**. A companion case fails when an exemption goes stale. That
 covers site 25 without a runtime dependency.
 
+**The guard itself needed a guard.** Its sentinel-byte case originally scanned with
+`grep -rlP '\x1f' … 2>/dev/null || true`. `-P` is **not portable** — stock BSD `/usr/bin/grep`
+on macOS rejects it outright (exit 2) — and the `|| true` folded that error straight into a
+PASS. Under any stock-`PATH` invocation the case would therefore report "clean" precisely when
+it had never run at all; it passed here only because `grep` on this box happens to be ugrep.
+That is this document's own defect one layer up: a silent all-clear, in the direction nobody
+checks. It now scans with `git grep`, asserts **exit 1** (ran, matched nothing) rather than
+exit 0, and plants a sentinel in a scratch file to prove the scan can still see one — silence
+is evidence only once the detector is known live. `git grep` also corrects the scope: the case
+claims *tracked* source, and a plain `-r` scan trips over the untracked
+`__pycache__/lr-select.cpython-311.pyc`, which legitimately contains a `0x1f` byte. Verified
+both directions — RED on a `0x1f` planted in tracked `bin/cc-value`, green once reverted.
+
 ## Verification
 
-- `tests/tsv-field-collapse.bats` — 25 cases. **16 of the 20 site cases fail on `origin/main`**
-  and pass after; the 4 that pass on both are labelled in-file as contract / no-regression
-  guards rather than presented as defect regressions.
+- `tests/tsv-field-collapse.bats` — 25 cases. **15 of the 20 non-mechanism cases fail on
+  `origin/main`** and pass after; the 5 that pass on both (14, 19, 21, 24, 25) are labelled
+  in-file as contract / no-regression guards rather than presented as defect regressions.
+  Re-measured 2026-07-26 by running the *committed* suite inside a detached `origin/main`
+  worktree: 15 fail / 10 pass, the 5 §1 mechanism cases being green on both by construction.
+  An earlier "16 of 20 / 4 pass" in this bullet was an off-by-one against that measurement.
 - Finding the discriminator was the hard part. A first pass had 12 of 20 green on `origin/main`
   too — i.e. proving nothing, the same failure mode as the repo's 212 dead assertions. Cases
   that looked reasonable but could not fail: asserting on a cell that is **last** in its row
