@@ -15,6 +15,8 @@
 # Every assertion below is a `[ ]`, a helper call, or a pipeline.
 
 setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"   # hermetic: never touch the live ~/
+
   REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   DN="$REPO_ROOT/scripts/deploy-now.sh"
 
