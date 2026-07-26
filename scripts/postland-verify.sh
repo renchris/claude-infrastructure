@@ -160,10 +160,18 @@ classify_failures() { # <tapfile> — retry ladder: >=2/3 = REPRODUCIBLE, 1/3 = 
     #       "net not adopted ⇒ trust". Verified 2026-07-26: 4 of the last 5 runner.log
     #       verdicts were `failing=tests/ retries=0` — i.e. all four were cuts, not reds.
     #   (b) `not ok` lines exist but carry no `# (in test file …)` diagnostic ⇒ a GENUINE red
-    #       we merely cannot attribute to a file. That keeps the old sentinel.
+    #       we merely cannot attribute to a file. It stays RED — see C13b.
     notok="$(grep -c '^not ok' "$1" 2>/dev/null || true)"; notok="${notok:-0}"
     if [ "$notok" -eq 0 ]; then CUT=1; return 0; fi
-    FAILING=("tests/"); FAILTEST="(unattributed)"; return 0
+    # NAME-CARRY (b): TAP names the TEST on the `not ok` line even when it never names the
+    # FILE. Recording the opaque "(unattributed)" threw that name away, leaving a page that
+    # reads exactly like the signal-death case (a) it was just separated from — the operator
+    # cannot tell "a real failure we could not attribute" from "no verdict at all", which is
+    # the whole distinction this branch exists to draw. Keep the sentinel only as a fallback.
+    FAILING=("tests/")
+    FAILTEST="$(sed -n 's/^not ok [0-9]* //p' "$1" 2>/dev/null | head -1 | cut -c1-120)"
+    [ -n "$FAILTEST" ] || FAILTEST="(unattributed)"
+    return 0
   fi
   while IFS="$(printf '\t')" read -r f t; do
     [ -n "$f" ] || continue
