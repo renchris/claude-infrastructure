@@ -143,17 +143,19 @@ One entrypoint over the 4-account fleet. The mechanism is `~/bin/claude-accounts
    ```bash
    claude-accounts --relogin-info <acct>   # email, mailbox, Dia profile+dir, keychain, RT state
    claude-accounts --login-status          # every account needing /login now or soon
+   claude-accounts --relogin-status        # per-account countdown + what the poller would do
    ```
 
    Then run **`/relogin <acct>`** (`bin/cc-relogin`) — the automated ladder: headless refresh
-   grant, else browser-assisted OAuth in that account's Dia profile, proven by effect. Its exit
-   code is the answer: `0` proven · `2` refused by the gate (already healthy / live sessions /
-   lock held — the guard working, not a failure) · `5` the binary CLAIMED success but the
-   effect check failed, so treat it as NOT re-authed · `6` cold web session, email leg needed ·
-   `7` Dia consent gate, needs the operator to cycle `dia://inspect`. Do NOT auto-fire it from
+   grant, else unattended OAuth in a dedicated per-account Chrome (`cc-authbrowser`), proven by
+   effect. Its exit code is the answer: `0` proven · `2` refused by the gate (already healthy /
+   live sessions / lock held — the guard working, not a failure) · `5` the binary CLAIMED success
+   but the effect check failed, so treat it as NOT re-authed · `6` that account's auth-profile has
+   no live claude.ai session, email leg needed — **the one human gate**. Exit `7` (Dia consent) is
+   retained for consumers but unreachable: the tool no longer drives Dia. Do NOT auto-fire it from
    a `--login-status` exit 2; credentials are the one place a retry loop must not be invented.
    Fall back to the **account-relogin skill** (Skill tool: `account-relogin`) for the manual
-   and email-code paths — it stays the reference for exits 6 and 7.
+   and email-code paths — it stays the reference for exit 6.
    **Check `refresh_token_expired` first.** Phase 1 (the headless refresh-token grant)
    cannot succeed once that stamp has passed — go straight to Phase 2 (browser OAuth)
    rather than spending 90s proving what the keychain already stated. The same is true for
