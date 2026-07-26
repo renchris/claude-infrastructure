@@ -7,6 +7,11 @@
 # session count is genuinely 0 rather than mocked away.
 
 setup() {
+  # HERMETIC $HOME (scripts/test-hermeticity-lint.sh — the ratchet that binds every NEW suite).
+  # The header above already claims hermeticity, and every seam this suite KNOWS about is stubbed;
+  # but bin/cc-relogin resolves its own state under ~, so unfixtured the subject still reads and
+  # writes the operator's live layer. Free here — nothing below reads $HOME.
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   # Hermeticity (scripts/test-hermeticity-lint.sh): cc-relogin resolves keychain/profile paths
   # and would otherwise read the live ~/. Every other path this suite touches is already
