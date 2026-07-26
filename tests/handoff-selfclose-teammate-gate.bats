@@ -27,6 +27,10 @@ setup() {
   # operator's LIVE layer. Everything this suite asserts is already redirected elsewhere.
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
+  # $HOME must be fixtured or every path handoff-fire resolves under ~/ (roles, mailbox, registry,
+  # fired stamps) reads and WRITES the live tree. test-hermeticity-lint ratchets on this, so leaving
+  # it unfixtured reds the lint for every session on the machine, not just this suite.
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   HF="$REPO/scripts/handoff-fire.sh"
   SHIM="$BATS_TEST_TMPDIR/shim"; mkdir -p "$SHIM"
 
