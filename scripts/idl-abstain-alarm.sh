@@ -98,8 +98,16 @@ sweep() {
   malformed="$(( raw - parsed ))"; [ "$malformed" -lt 0 ] && malformed=0
 
   # one jq pass → one TSV row per hook: hook total abstained productive failed blind
-  local agg
-  agg="$(jq -Rrn --argjson cutoff "$cutoff" --argjson blind "$BLIND_JSON" '
+  # TSV field-collapse guard (docs/research/TSV_FIELD_COLLAPSE_2026-07-25.md): tab is
+  # IFS-*whitespace*, so `IFS=$'\t' read` collapses a RUN of tabs and an empty `.hook` group key
+  # would shift all five COUNTS one place left — an inert-hook detector reporting another hook's
+  # numbers, which is precisely the silent-green this alarm exists to catch. Only `.hook` can be
+  # empty (the rest are `length`), and it pads to $'\037' rather than a visible placeholder
+  # because the reader tests it for emptiness (`[ -n "$hook" ] || continue`).
+  local agg TSV_PAD=$'\037'
+  agg="$(jq -Rrn --argjson cutoff "$cutoff" --argjson blind "$BLIND_JSON" --arg pad "$TSV_PAD" '
+    def cell: (if . == null then "" else . end) | tostring
+              | gsub("[\\t\\r\\n]"; " ") | if . == "" then $pad else . end;
     [ inputs
       | (fromjson? // null) | select(. != null)
       | select((.hook? != null) and (.disposition? != null))
@@ -115,13 +123,14 @@ sweep() {
         blind:      ([ $g[] | select(.disp=="abstained")
                             | select(.rt as $x | ($blind | index($x)) != null) ] | length) })
     | .[]
-    | [ .hook, .total, .abstained, .productive, .failed, .blind ] | @tsv
+    | [ (.hook | cell), .total, .abstained, .productive, .failed, .blind ] | @tsv
   ' "$IDL" 2>/dev/null || true)"
 
   local -a inert=() dormant100=()
   local nhooks=0 healthy=0
   local hook total abst prod failed blind pct verdict
   while IFS=$'\t' read -r hook total abst prod failed blind; do
+    [ "$hook" = "$TSV_PAD" ] && hook=""       # un-pad: "" still means "no hook key", so skip
     [ -n "$hook" ] || continue
     nhooks=$(( nhooks + 1 ))
     pct=0; [ "$abst" -gt 0 ] && pct=$(( blind * 100 / abst ))
