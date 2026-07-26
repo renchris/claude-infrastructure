@@ -307,17 +307,34 @@ postland_net_live() {  # 0 = trust the post-land net (or it is not adopted yet) 
 #                one. main_locked sets IN_LAND_LOCK=1 and this becomes a no-op there.
 IN_LAND_LOCK="${IN_LAND_LOCK:-0}"
 gate_admit() {  # $1=what — defer the start of an expensive suite until load falls below a ceiling
-  local what="${1:-suite}" max budget step waited=0 load jit
+  local what="${1:-suite}" max budget step waited=0 load jit total spent
   [[ "$IN_LAND_LOCK" = "1" ]] && return 0
   max="${CC_GATE_MAX_LOAD:-8}"; budget="${CC_GATE_ADMIT_MAX_WAIT:-600}"; step="${CC_GATE_ADMIT_POLL:-15}"
   [[ "$max" = "0" || "$max" = "off" ]] && return 0
   case "$max" in ''|*[!0-9.]*) return 0 ;; esac                      # ceiling: numeric (awk-compared)
   case "$budget$step" in ''|*[!0-9]*) return 0 ;; esac               # waits: INTEGER seconds
   [[ "$step" -gt 0 ]] || return 0                                    # a 0 poll would spin ⇒ fail OPEN
+  # RUN-WIDE CEILING. The per-call bound was written for a caller that ran it twice; the per-suite
+  # runner calls it once per corpus PLUS once per failing suite's re-run, so a 600s per-call bound
+  # MULTIPLIES — 126 suites × 600s is 21 h of "bounded" waiting. Every bound must cover the failure
+  # mode it bounds. Fail-OPEN like the rest of this function: a non-integer total falls back to the
+  # default rather than blocking, and once the run-wide budget is spent, shedding simply stops.
+  total="${CC_GATE_ADMIT_TOTAL_WAIT:-1200}"
+  case "$total" in ''|*[!0-9]*) total=1200 ;; esac
+  spent="${GATE_ADMIT_SPENT:-0}"
+  if [[ "$spent" -ge "$total" ]]; then
+    if [[ "${GATE_ADMIT_CAPPED:-0}" != "1" ]]; then
+      GATE_ADMIT_CAPPED=1
+      echo "▶ gate: run-wide admission budget ${total}s spent — no further shedding this run (override CC_GATE_ADMIT_TOTAL_WAIT)" >&2
+    fi
+    return 0
+  fi
+  [[ $(( total - spent )) -lt "$budget" ]] && budget=$(( total - spent ))
   while [[ "$waited" -lt "$budget" ]]; do
     load="$(sysctl -n vm.loadavg 2>/dev/null | awk '{print $2}')"
-    [[ -n "$load" ]] || return 0                                     # unreadable sensor ⇒ fail OPEN
+    [[ -n "$load" ]] || { GATE_ADMIT_SPENT=$(( spent + waited )); return 0; }   # sensor ⇒ fail OPEN
     if awk -v l="$load" -v m="$max" 'BEGIN{exit !(l+0 < m+0)}'; then
+      GATE_ADMIT_SPENT=$(( spent + waited ))
       [[ "$waited" -gt 0 ]] && echo "✓ gate: admitted after ${waited}s (load $load < $max) — starting $what" >&2
       return 0
     fi
@@ -329,6 +346,7 @@ gate_admit() {  # $1=what — defer the start of an expensive suite until load f
     jit=$(( RANDOM % 8 ))
     sleep "$(( step + jit ))"; waited=$(( waited + step + jit ))
   done
+  GATE_ADMIT_SPENT=$(( spent + waited ))
   echo "▶ gate: admission budget ${budget}s exhausted (load $load ≥ $max) — proceeding anyway with $what (bounded by design)" >&2
   return 0
 }
@@ -369,13 +387,71 @@ gate_admit() {  # $1=what — defer the start of an expensive suite until load f
 # which would stall the gate up to CC_GATE_ADMIT_MAX_WAIT per call (and gate_admit is a no-op
 # under the lock anyway). Only LANDER tuning is scrubbed — a test that wants any of these sets it
 # itself, per-test, which is unaffected.
+# SHIP_LAND_FULL_PER_SUITE joins the scrub list for exactly the same reason: it is LANDER tuning,
+# and tests/ship-land.bats asserts against BOTH runner modes. Left unscrubbed, an operator landing
+# with the kill switch on would bleed `off` into every fixture pipeline in that suite, so the
+# per-suite tests would silently exercise the monolith and go red on a tree that is fine — the
+# ROUNDS=0 defect verbatim, on the flag this very change introduces.
 gate_bats() {  # run bats with the operator's lander tuning scrubbed; args pass through verbatim
   env -u SHIP_LAND_GATE_ROUNDS -u SHIP_LAND_VERIFY_RETRIES -u SHIP_LAND_GATE_SCOPE \
-      -u LAND_LOCK_WAIT -u LAND_LOCK_TTL \
+      -u LAND_LOCK_WAIT -u LAND_LOCK_TTL -u SHIP_LAND_FULL_PER_SUITE \
       CC_GATE_MAX_LOAD=0 bats "$@"
 }
 
-run_bats_all() {  # the FULL suite — the ONLY run that earns the gate-green claim
+run_bats_all() {  # $1=newline-list of DIRECT suites — the FULL corpus, one process per suite
+  # PHASE 1 of docs/plans/GATE_ARCHITECTURE_PLAN.md. SAME suites, SAME verdict rule; what changes
+  # is BLAST RADIUS. The governing law, MLE'd over all 55 real gate runs with a suite count
+  # (~/.claude/land.log): P(gate green) = (1-q)^n at q=2.94% PER SUITE — n=1 → 2/2 green,
+  # n=126 → 1/39 green, 5.0e5x more likely than a constant per-run model. So `n` is the lever.
+  # `bats tests/` handed all 126 files to ONE bats-exec-suite for 20-53 min, so a kill at suite 120
+  # lost all 126 and was attested exit:6 RED. Per suite, a kill costs ONE suite and run_scoped_suite
+  # re-runs it in a fresh TMPDIR — the mechanism that already absorbed 5 signal-kills
+  # (flakes.jsonl: 3x `exit 137`, 2x `Terminated: 15`) without redding a gate.
+  # Measured retry-failure rate 17% ⇒ q_eff 0.49% ⇒ P(green|n=126) 2.3% → 49.9% (21.5x), at a
+  # measured +3.0% wall time (bats startup 0.46s x 126 = 58s on a 1957s run).
+  # A DIRECT suite is still never exonerated and GATE_EFFECTIVE_FULL stays 1, so the full-suite
+  # claim is unchanged. This COMPOSES with the CUT≠RED body below (c605a2e) and gate_admit — the
+  # monolithic path keeps both; neither is replaced.
+  # KILL SWITCH — an env flag, NOT a revert: a revert would itself need the gate, which is the
+  # bootstrap deadlock this whole plan exists to escape.
+  if [[ "${SHIP_LAND_FULL_PER_SUITE:-on}" != "off" ]]; then
+    local _direct="${1:-}" _f _n=0 _red=0 _killed=0 _srv
+    echo "→ gate: bats tests/ — full corpus, one process per suite (SHIP_LAND_FULL_PER_SUITE=off restores the monolith)" >&2
+    gate_admit "the FULL bats suite (per-suite)"
+    for _f in tests/*.bats; do
+      [[ -e "$_f" ]] || continue
+      _n=$(( _n + 1 ))
+      _srv=0; run_scoped_suite "$_f" "$_direct" || _srv=$?
+      case "$_srv" in
+        0) ;;
+        2) _killed=$(( _killed + 1 )) ;;
+        *) _red=$(( _red + 1 )) ;;
+      esac
+    done
+    if [[ "$_n" -eq 0 ]]; then
+      echo "✗ gate: no suites matched tests/*.bats — refusing to claim green on an empty corpus" >&2
+      GATE_RED=1; return 1
+    fi
+    if [[ "$_red" -eq 0 && "$_killed" -eq 0 ]]; then
+      echo "✓ gate: FULL corpus green — $_n suites, one process each" >&2; return 0
+    fi
+    # NO FAIL-FAST, deliberately. The loop must finish the corpus so "did ANY suite name a real
+    # failure?" is answerable from evidence. Stopping at the first CUT would report a non-verdict
+    # (exit 9 ⇒ "retry when the box is quieter") for a corpus that also contained a genuine red —
+    # the dispatcher would then retry a tree that is actually broken, which is f8e40b4c577d in
+    # miniature. Finishing costs wall time on an already-doomed run and buys every failing suite
+    # named in ONE cycle instead of one per 20-minute gate.
+    if [[ "$_killed" -gt 0 ]]; then
+      GATE_KILLED=1
+      echo "⛔ gate: GATE-KILLED — $_killed of $_n suite(s) were cut TWICE with ZERO 'not ok'; they earned no verdict. Free a stuck gate with scripts/gate-cleanup.sh (worktree-scoped), never a bare pkill." >&2
+    fi
+    if [[ "$_red" -gt 0 ]]; then
+      GATE_RED=1
+      echo "✗ gate: bats RED — $_red of $_n suite(s) failed" >&2
+    fi
+    return 1
+  fi
+  echo "→ gate: bats tests/ (monolithic — SHIP_LAND_FULL_PER_SUITE=off)" >&2
   # CUT ≠ RED. bats exits non-zero for BOTH a real `not ok` and a death by signal (a peer's
   # kill, a starved fork, a truncated stream) — and the second case reports ZERO `not ok`.
   # Branching on the exit code alone turned every machine-wide cut into a false "gate RED"
@@ -431,24 +507,41 @@ run_bats_all() {  # the FULL suite — the ONLY run that earns the gate-green cl
   return 1
 }
 
-record_gate_cut() {  # $1=rc $2=logfile — a CUT must be LEGIBLE, never silently a "flake"
-  local fdir sig
+record_gate_cut() {  # $1=rc $2=logfile [$3=file — default the whole corpus] — a CUT must be
+                     # LEGIBLE, never silently a "flake". Per-suite mode names the actual file,
+                     # so the ledger says WHICH suite ran out of machine rather than "tests/".
+  local fdir sig file="${3:-tests/}"
   fdir="${POSTLAND_DIR:-$HOME/.claude/autonomy/postland}"
   mkdir -p "$fdir" 2>/dev/null || true
   sig="$(grep -m1 -aE 'Terminated|Killed|signal' "$2" 2>/dev/null | sed 's/["\]//g' | cut -c1-160)"
   [[ -z "$sig" ]] && sig="exit $1 / notok=0"
-  printf '{"ts":"%s","file":"tests/","sha":"%s","phase":"land-gate","outcome":"cut-not-red","signal":"%s","loadavg":"%s"}\n' \
-    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(git rev-parse --short HEAD 2>/dev/null || echo '?')" \
+  printf '{"ts":"%s","file":"%s","sha":"%s","phase":"land-gate","outcome":"cut-not-red","signal":"%s","loadavg":"%s"}\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$file" "$(git rev-parse --short HEAD 2>/dev/null || echo '?')" \
     "$sig" "$(uptime 2>/dev/null | sed 's/.*averages*: //' | awk -F'[, ]+' '{print $1}')" \
     >> "$fdir/flakes.jsonl" 2>/dev/null || true
 }
 
-run_scoped_suite() {  # $1=suite file $2=newline-list of DIRECT suites → 0 green / 1 red
-  # FLAKE EXONERATION (scoped mode only): a suite that fails and then passes on ONE re-run in a
-  # fresh TMPDIR was environmental (tmp collision / load), UNLESS it is a DIRECT suite of this
-  # change — intermittence in code you are landing is a FINDING, not a flake. Never silent: every
+run_scoped_suite() {  # $1=suite file $2=newline-list of DIRECT suites
+                      # → 0 green · 1 RED (a named failure) · 2 KILLED (cut twice — NO verdict)
+  # FLAKE EXONERATION: a suite that fails and then passes on ONE re-run in a fresh TMPDIR was
+  # environmental (tmp collision / load), UNLESS it is a DIRECT suite of this change —
+  # intermittence in code you are landing is a FINDING, not a flake. Never silent: every
   # exoneration is appended to postland/flakes.jsonl for the flake-rate denominator.
-  local f="$1" direct="$2" td rc1 rc2 fdir log sig
+  #
+  # RETURN 2 = KILLED is Phase 1's one design step (docs/plans/GATE_ARCHITECTURE_PLAN.md §3).
+  # This function is now the FULL tier's runner too, so collapsing "cut twice" into the same 1
+  # that means "a test failed" would silently undo c605a2e: the caller could no longer exit 9,
+  # and every machine-wide cut would go back to reading as "your code is broken" — the middle
+  # link of the 2026-07-26 runaway (kills → "RED" → lands fail → items re-block → the dispatcher
+  # retries → more load → more kills). The two tiers now share ONE discriminator, so they cannot
+  # disagree about what a cut is.
+  # DISCRIMINATOR = c605a2e's, unchanged: the TAP BODY, never the exit code. bats masks the
+  # signal (bats:517-524 pipes bats-exec-suite through bats_test_count_validator under pipefail),
+  # so a SIGKILLed suite surfaces as plain `1`, never 137/143.
+  # PRECEDENCE: a named `not ok` in EITHER run outranks a cut in the other — a verdict always
+  # beats a non-verdict, and softening a real failure into "retry when quieter" is the one
+  # direction this split must never fail in.
+  local f="$1" direct="$2" td rc1 rc2 fdir log sig notok1 notok2
   # tee (not capture-then-print): the failing run stays LIVE on stderr while its output is kept,
   # so the ledger can record WHAT failed — a bare "it flaked" line is unactionable.
   log="$(mktemp)"
@@ -456,15 +549,38 @@ run_scoped_suite() {  # $1=suite file $2=newline-list of DIRECT suites → 0 gre
   if [[ "$rc1" -eq 0 ]]; then rm -f "$log"; return 0; fi
   sig="$(grep -m1 -aE '^not ok|Terminated|Killed|signal|timed? ?out' "$log" 2>/dev/null | sed 's/["\]//g' | cut -c1-160)"
   [[ -z "$sig" ]] && sig="exit $rc1"
+  notok1="$(grep -c '^not ok' "$log" 2>/dev/null || true)"; notok1="${notok1:-0}"
   rm -f "$log"
-  echo "↻ gate[scoped]: $f RED — one exoneration re-run in a fresh TMPDIR…" >&2
+  if [[ "$notok1" -gt 0 ]]; then
+    echo "↻ gate: $f RED — $notok1 failing test(s); one exoneration re-run in a fresh TMPDIR…" >&2
+  else
+    echo "↻ gate: $f exited $rc1 with ZERO 'not ok' — CUT, not RED. One re-run in a fresh TMPDIR…" >&2
+  fi
   # SHED FIRST: a re-run under the SAME sustained load that failed the first one is the same
   # experiment, not a retry — the exoneration only means something if the environment changed.
   gate_admit "exoneration re-run of $f"
-  td="$(mktemp -d)"
-  TMPDIR="$td" gate_bats "$f" >&2; rc2=$?
+  # CAPTURE THE RE-RUN'S TAP TOO — c605a2e's own lesson, applied to the per-file runner. Without
+  # it "failed twice" cannot say WHICH twice, and a cut-then-real-failure would be handed to the
+  # caller as a retryable non-verdict at exactly the moment the answer decides what to do next.
+  td="$(mktemp -d)"; log="$(mktemp)"
+  TMPDIR="$td" gate_bats "$f" 2>&1 | tee "$log" >&2; rc2="${PIPESTATUS[0]}"
   rm -rf "$td" 2>/dev/null || true
-  [[ "$rc2" -ne 0 ]] && { echo "✗ gate: bats RED: $f (failed twice)" >&2; return 1; }
+  if [[ "$rc2" -ne 0 ]]; then
+    notok2="$(grep -c '^not ok' "$log" 2>/dev/null || true)"; notok2="${notok2:-0}"
+    if [[ "$notok1" -eq 0 && "$notok2" -gt 0 ]]; then
+      rm -f "$log"
+      echo "✗ gate: bats RED: $f — $notok2 failing test(s) on the re-run (the first run was cut)" >&2
+      return 1
+    fi
+    if [[ "$notok1" -gt 0 || "$notok2" -gt 0 ]]; then
+      rm -f "$log"; echo "✗ gate: bats RED: $f (failed twice)" >&2; return 1
+    fi
+    record_gate_cut "$rc2" "$log" "$f"
+    rm -f "$log"
+    echo "⛔ gate: GATE-KILLED: $f — cut TWICE (exit $rc1 then $rc2, ZERO 'not ok' both times). It never earned a verdict, so it is NOT a red and NOT evidence about your tree." >&2
+    return 2
+  fi
+  rm -f "$log"
   if printf '%s\n' "$direct" | grep -qxF -- "$f"; then
     echo "✗ gate: bats RED: $f — pass-on-retry in a DIRECT suite of this change; intermittence in changed code is a finding, not a flake." >&2
     return 1
@@ -556,7 +672,7 @@ run_gate() {  # $1=range → 0 green / 1 red
   fi
 
   if [[ -d tests ]] && ls tests/*.bats >/dev/null 2>&1; then
-    local sel="" n direct f rbase
+    local sel="" n direct f rbase srv
     # UNION SCOPE: FIRST_BASE..<this range's base> is the trunk delta siblings landed since our
     # FIRST gate — empty on round 1, non-empty on every stale-gate re-round / in-lock fallback /
     # post-drop re-gate. Derived from the range so all three gate call sites get it for free.
@@ -582,7 +698,12 @@ run_gate() {  # $1=range → 0 green / 1 red
       echo "→ gate[shadow]: would select $n suites" >&2
     fi
     if [[ "$SCOPE" != "scoped" || "$sel" = "FULL" ]]; then
-      run_bats_all || rc=1
+      # DIRECT suites matter in FULL mode too now that FULL runs per-suite: run_scoped_suite must
+      # never exonerate a suite belonging to THIS change (intermittence in code you are landing is
+      # a FINDING, not a flake). Same --direct call the scoped branch makes below; best-effort —
+      # an empty list simply means "exonerate nothing is unknown", which is the safe direction.
+      direct="$("$GATE_SELECT" --direct "$range" ${EXTRA_RANGE:+"$EXTRA_RANGE"} 2>/dev/null || true)"
+      run_bats_all "$direct" || rc=1
     elif [[ -z "${sel//[[:space:]]/}" ]]; then
       echo "→ gate[scoped]: selector picked 0 suites — skipping bats (lint-only land)" >&2
       GATE_EFFECTIVE_FULL=0; SELECTED_N=0
@@ -594,7 +715,14 @@ run_gate() {  # $1=range → 0 green / 1 red
       while IFS= read -r f; do
         [[ -z "$f" ]] && continue
         SELECTED_N=$(( SELECTED_N + 1 ))
-        run_scoped_suite "$f" "$direct" || rc=1
+        # The SCOPED tier gets the same honest split as FULL. Before this it discarded the
+        # distinction: any failure left GATE_RED/GATE_KILLED at 0, so gate_nonzero_code's else
+        # branch reported a signal-killed scoped land as exit 6 "your code is broken". The two
+        # tiers must not disagree about what a cut is (c605a2e's premise); this is the half of
+        # that promise the scoped path never actually kept.
+        srv=0; run_scoped_suite "$f" "$direct" || srv=$?
+        if [[ "$srv" -eq 2 ]]; then GATE_KILLED=1; rc=1
+        elif [[ "$srv" -ne 0 ]]; then GATE_RED=1; rc=1; fi
       done <<< "$sel"
       echo "→ gate[scoped]: ran $SELECTED_N selected suite(s) — gate-green stays where it was." >&2
     fi

@@ -344,6 +344,23 @@ EOF
 # tests SEED suites onto trunk and PATH-shim `bats`: the shim's recorded argv is the durable
 # product ("which suites actually ran"), and it injects a first-run-only failure for the flake
 # fixture. A nested REAL bats run is deliberately avoided — argv is what is under test.
+#
+# ── MONOLITH-PINNED ──────────────────────────────────────────────────────────────────────────
+# Phase 1 (docs/plans/GATE_ARCHITECTURE_PLAN.md §3) made the FULL tier run ONE bats process per
+# suite, so `bats tests/` is no longer a shape the gate can emit. Ten tests below observe the
+# runner through the shim's recorded ARGV, and those assertions — and ONLY those — are calibrated
+# to the monolith. Two irreducible classes:
+#   (a) the literal string `tests/` (`= "tests/"`, `grep -cx 'tests/'`) — per-suite mode never
+#       invokes it, by construction;
+#   (b) an invocation COUNT that assumes one process for the whole corpus (2 = run + re-run,
+#       1 = "a red is never re-run"). Per-suite the SEMANTIC is unchanged — still exactly one
+#       bounded re-run — but it is one per suite, so a 2-suite corpus counts 4, not 2.
+# Every OTHER assertion in those tests (exit code, operator text, landed / not-landed, gate-green)
+# passes unmodified against the per-suite runner; nothing about the verdict rule was re-pointed.
+# They are pinned to `SHIP_LAND_FULL_PER_SUITE=off` rather than rewritten, which also fixes a real
+# gap: the kill switch is the documented escape hatch back to the monolith, and an UNTESTED escape
+# hatch rots exactly when it is needed. The per-suite twins of every semantic below live in
+# "PER-SUITE RUNNER".
 
 scope_fixture() {   # seed tests/{a,b}.bats onto trunk + shim bats + default to an ABSENT policy
   SHIMDIR="$BATS_TEST_TMPDIR/shims"; mkdir -p "$SHIMDIR"
@@ -415,7 +432,7 @@ landable() {  # $1=branch $2=shell file — a commit the gate always lints
   gc="$(git rev-parse --git-common-dir)"; rm -f "$gc/gate-green"
   landable feat/scope-full sf.sh
 
-  run bash "$SHIPLAND" --trunk main
+  run env SHIP_LAND_FULL_PER_SUITE=off bash "$SHIPLAND" --trunk main   # MONOLITH-PINNED (a)
   [ "$status" -eq 0 ]
   [ "$(cat "$BATS_ARGV")" = "tests/" ]                       # the WHOLE suite, one invocation
   [ "$(cat "$gc/gate-green")" = "$(git rev-parse HEAD)" ]     # full proof ⇒ marker advances
@@ -442,7 +459,8 @@ landable() {  # $1=branch $2=shell file — a commit the gate always lints
   gc="$(git rev-parse --git-common-dir)"; rm -f "$gc/gate-green"
   landable feat/scope-fullsel sfs.sh
 
-  run env SHIP_LAND_GATE_SCOPE=scoped bash "$SHIPLAND" --trunk main
+  # MONOLITH-PINNED (a) — the selector saying FULL is what is under test, not the runner shape.
+  run env SHIP_LAND_GATE_SCOPE=scoped SHIP_LAND_FULL_PER_SUITE=off bash "$SHIPLAND" --trunk main
   [ "$status" -eq 0 ]
   [ "$(cat "$BATS_ARGV")" = "tests/" ]
   [ "$(cat "$gc/gate-green")" = "$(git rev-parse HEAD)" ]
@@ -526,7 +544,8 @@ landable() {  # $1=branch $2=shell file — a commit the gate always lints
   export SHIP_LAND_GATE_SELECT="$BATS_TEST_TMPDIR/no-such-selector.sh"
   landable feat/scope-nosel sns.sh
 
-  run env SHIP_LAND_GATE_SCOPE=scoped bash "$SHIPLAND" --trunk main
+  # MONOLITH-PINNED (a) — the fail-closed WIDENING is under test, not the runner shape.
+  run env SHIP_LAND_GATE_SCOPE=scoped SHIP_LAND_FULL_PER_SUITE=off bash "$SHIPLAND" --trunk main
   [ "$status" -eq 0 ]
   echo "$output" | grep -q "missing/not executable"
   [ "$(cat "$BATS_ARGV")" = "tests/" ]        # narrowing is NEVER the failure mode
@@ -540,7 +559,8 @@ landable() {  # $1=branch $2=shell file — a commit the gate always lints
   export SHIP_LAND_GATE_SELECT="$sel"
   landable feat/lint-red lr.sh
 
-  run env SHIP_LAND_GATE_SCOPE=scoped bash "$SHIPLAND" --trunk main
+  # MONOLITH-PINNED (a) — the lint-red DEGRADATION is under test, not the runner shape.
+  run env SHIP_LAND_GATE_SCOPE=scoped SHIP_LAND_FULL_PER_SUITE=off bash "$SHIPLAND" --trunk main
   [ "$status" -eq 0 ]                            # a red MAP lint is never a red LAND
   echo "$output" | grep -q "suite-map lint RED"
   [ "$(cat "$BATS_ARGV")" = "tests/" ]           # …it buys proof, it does not block
@@ -555,7 +575,8 @@ landable() {  # $1=branch $2=shell file — a commit the gate always lints
   touch -t 202001010000 "$POSTLAND_DIR/stamps/deadbee.json"    # net ran once, then went cold
   landable feat/stale-net stn.sh
 
-  run env SHIP_LAND_GATE_SCOPE=scoped bash "$SHIPLAND" --trunk main
+  # MONOLITH-PINNED (a) — the INERT-net degradation is under test, not the runner shape.
+  run env SHIP_LAND_GATE_SCOPE=scoped SHIP_LAND_FULL_PER_SUITE=off bash "$SHIPLAND" --trunk main
   [ "$status" -eq 0 ]
   echo "$output" | grep -q "post-land net appears INERT"
   [ "$(cat "$BATS_ARGV")" = "tests/" ]
@@ -639,7 +660,7 @@ EOF
   cut_fixture
   echo cut > "$CUT_MODE"
   landable feat/cut cut.sh
-  run bash "$SHIPLAND" --trunk main
+  run env SHIP_LAND_FULL_PER_SUITE=off bash "$SHIPLAND" --trunk main   # MONOLITH-PINNED (a)
   [ "$status" -eq 0 ]                                     # a cut must NOT be a landing failure
   echo "$output" | grep -q "CUT, not RED"
   [ "$(grep -cx 'tests/' "$BATS_ARGV")" -eq 2 ]           # ran twice: original + exoneration
@@ -649,7 +670,12 @@ EOF
   cut_fixture
   echo red > "$CUT_MODE"
   landable feat/red red.sh
-  run bash "$SHIPLAND" --trunk main
+  # MONOLITH-PINNED (a)+(b). "No free retry on red" is genuinely monolith-only SEMANTICS, not just
+  # shape: the per-suite tier routes every failure through run_scoped_suite, whose ONE exoneration
+  # re-run is the measured basis of Phase 1's q_eff 0.49% (and is fenced by the DIRECT carve-out,
+  # so a suite belonging to this change is never exonerated). The per-suite twin below asserts the
+  # property that replaces it: a named failure stays RED however many times it is re-run.
+  run env SHIP_LAND_FULL_PER_SUITE=off bash "$SHIPLAND" --trunk main
   [ "$status" -eq 6 ]                                     # gate RED ⇒ exit 6, unchanged
   echo "$output" | grep -q "bats RED"
   [ "$(grep -cx 'tests/' "$BATS_ARGV")" -eq 1 ]           # exactly ONE run — no free retry on red
@@ -714,7 +740,7 @@ admit_probe() {  # $@ = env assignments → runs gate_admit once, echoes its std
   gc="$(git rev-parse --git-common-dir)"; rm -f "$gc/gate-green"
   landable feat/killed gk.sh
 
-  run bash "$SHIPLAND" --trunk main
+  run env SHIP_LAND_FULL_PER_SUITE=off bash "$SHIPLAND" --trunk main   # MONOLITH-PINNED (b)
   [ "$status" -eq 9 ]                                          # 9 = no verdict, NOT 6 = red
   echo "$output" | grep -q "GATE-KILLED" || false
   ! echo "$output" | grep -q "GATE RED" || false               # never both, never the wrong one
@@ -753,7 +779,7 @@ admit_probe() {  # $@ = env assignments → runs gate_admit once, echoes its std
   echo red > "$KILL_MODE"
   landable feat/really-red gr.sh
 
-  run bash "$SHIPLAND" --trunk main
+  run env SHIP_LAND_FULL_PER_SUITE=off bash "$SHIPLAND" --trunk main   # MONOLITH-PINNED (b)
   [ "$status" -eq 6 ]
   echo "$output" | grep -q "GATE RED" || false
   ! echo "$output" | grep -q "GATE-KILLED" || false
@@ -783,7 +809,7 @@ admit_probe() {  # $@ = env assignments → runs gate_admit once, echoes its std
   echo sig-once > "$KILL_MODE"                                 # cut once, then normal
   landable feat/kill-then-green kg.sh
 
-  run bash "$SHIPLAND" --trunk main
+  run env SHIP_LAND_FULL_PER_SUITE=off bash "$SHIPLAND" --trunk main   # MONOLITH-PINNED (b)
   [ "$status" -eq 0 ]
   echo "$output" | grep -q "CUT, not RED" || false             # it named the non-verdict…
   [ "$(grep -c . "$BATS_ARGV")" -eq 2 ]                        # …re-ran…
@@ -836,10 +862,10 @@ admit_probe() {  # $@ = env assignments → runs gate_admit once, echoes its std
   mkdir -p "$BATS_TEST_TMPDIR/bin"
   cat > "$BATS_TEST_TMPDIR/bin/bats" <<'STUB'
 #!/bin/bash
-printf 'ROUNDS=[%s] RETRIES=[%s] SCOPE=[%s] LOCKWAIT=[%s] LOCKTTL=[%s] MAXLOAD=[%s] ARGS=[%s]\n' \
+printf 'ROUNDS=[%s] RETRIES=[%s] SCOPE=[%s] LOCKWAIT=[%s] LOCKTTL=[%s] MAXLOAD=[%s] PERSUITE=[%s] ARGS=[%s]\n' \
   "${SHIP_LAND_GATE_ROUNDS-unset}" "${SHIP_LAND_VERIFY_RETRIES-unset}" \
   "${SHIP_LAND_GATE_SCOPE-unset}" "${LAND_LOCK_WAIT-unset}" "${LAND_LOCK_TTL-unset}" \
-  "${CC_GATE_MAX_LOAD-unset}" "$*"
+  "${CC_GATE_MAX_LOAD-unset}" "${SHIP_LAND_FULL_PER_SUITE-unset}" "$*"
 STUB
   chmod +x "$BATS_TEST_TMPDIR/bin/bats"
 
@@ -853,7 +879,7 @@ STUB
 
   run env PATH="$BATS_TEST_TMPDIR/bin:$PATH" \
       SHIP_LAND_GATE_ROUNDS=0 SHIP_LAND_VERIFY_RETRIES=9 SHIP_LAND_GATE_SCOPE=full \
-      LAND_LOCK_WAIT=10800 LAND_LOCK_TTL=99 CC_GATE_MAX_LOAD=31 \
+      LAND_LOCK_WAIT=10800 LAND_LOCK_TTL=99 CC_GATE_MAX_LOAD=31 SHIP_LAND_FULL_PER_SUITE=off \
       bash "$BATS_TEST_TMPDIR/probe.sh"
   [ "$status" -eq 0 ]
   # every LANDER knob the tests assert against arrives UNSET, whatever the operator set
@@ -862,6 +888,10 @@ STUB
   echo "$output" | grep -q 'SCOPE=\[unset\]'    || false
   echo "$output" | grep -q 'LOCKWAIT=\[unset\]' || false
   echo "$output" | grep -q 'LOCKTTL=\[unset\]'  || false
+  # Phase 1's kill switch is LANDER tuning too. Unscrubbed, an operator landing with the monolith
+  # restored would bleed `off` into every fixture pipeline in this suite, so the per-suite tests
+  # below would silently exercise the monolith and go red on a tree that is fine.
+  echo "$output" | grep -q 'PERSUITE=\[unset\]' || false
   # FORCED to 0, deliberately NOT unset: a test must never sit in admission control (it would
   # stall the gate up to CC_GATE_ADMIT_MAX_WAIT per call and read as a hang).
   echo "$output" | grep -q 'MAXLOAD=\[0\]'      || false
@@ -929,7 +959,11 @@ add_suite() {   # $1=branch $2=suite basename $3=setup() body
   herm_fixture
   add_suite feat/herm leak.bats 'export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"'
 
-  run bash "$SHIPLAND" --trunk main
+  # MONOLITH-PINNED (a) — landed from a sibling branch against the monolith, which was the runner
+  # at the time it was written. The property under test is the RATCHET's (it discriminates, and it
+  # does not short-circuit a clean tree), not the runner's; only the argv SHAPE it reads that
+  # through changed. Its per-suite equivalent is asserted in "PER-SUITE RUNNER" below.
+  run env SHIP_LAND_FULL_PER_SUITE=off bash "$SHIPLAND" --trunk main
   [ "$status" -eq 0 ]                                    # positive control: the ratchet discriminates
   [ "$(cat "$BATS_ARGV")" = "tests/" ]                   # and does not short-circuit a clean tree
   git fetch -q origin main
@@ -962,4 +996,206 @@ add_suite() {   # $1=branch $2=suite basename $3=setup() body
   run bash "$SHIPLAND" --trunk main
   [ "$status" -eq 0 ]
   [ "$(echo "$output" | grep -c 'test-hermeticity RED')" -eq 0 ]   # -qv would pass on ANY other line
+}
+# ════ PER-SUITE RUNNER — the DEFAULT tier since Phase 1 ════════════════════════════════════════
+# docs/plans/GATE_ARCHITECTURE_PLAN.md §3: the FULL corpus now runs ONE bats process per suite, so
+# a kill costs ONE suite instead of all 126 (governing law P(green) = (1-q)^n at q=2.94%/suite ⇒
+# P(green|n=126) 2.3% → 49.9%, at +3.0% wall). These are the per-suite TWINS of the MONOLITH-PINNED
+# tests above — identical semantics, per-suite arithmetic — plus the two properties only this tier
+# can express (a corpus mixing a kill with a real red, and the kill switch itself).
+# RED-PROOF: every exit-9 assertion here fails against the pre-fix per-suite loop, which collapsed
+# KILLED into GATE_RED=1 ⇒ exit 6 and would have silently undone c605a2e.
+persuite_fixture() {  # seed tests/{a,b}.bats + a shim whose behaviour is keyed PER SUITE FILE —
+                      # the monolith could not express a mixed-outcome corpus at all, and that is
+                      # exactly where "a verdict outranks a non-verdict" has to arbitrate.
+  SHIMDIR="$BATS_TEST_TMPDIR/shims-ps"; mkdir -p "$SHIMDIR"
+  export BATS_ARGV="$BATS_TEST_TMPDIR/bats-argv-ps"
+  export MODE_DIR="$BATS_TEST_TMPDIR/modes"; mkdir -p "$MODE_DIR"
+  # Shapes are byte-wise what real bats emits: `sig` = executing, then killed (plan + ok lines,
+  # then 137 — the live 2026-07-26 signature, ZERO `not ok`); `red` = a NAMED failure, the positive
+  # control that must never be softened; `sig-once` = cut on the first run only. Default: green.
+  cat > "$SHIMDIR/bats" <<EOF
+#!/bin/bash
+printf '%s\n' "\$*" >> "$BATS_ARGV"
+b="\$(basename "\${1:-none}")"
+case "\$(cat "$MODE_DIR/\$b" 2>/dev/null)" in
+  sig)  echo "1..3"; echo "ok 1 alpha"; echo "ok 2 beta"; exit 137 ;;
+  red)  echo "1..1"; echo "not ok 1 boom"; exit 1 ;;
+  sig-once) if [ ! -f "$BATS_TEST_TMPDIR/ps-cut-\$b" ]; then
+              : > "$BATS_TEST_TMPDIR/ps-cut-\$b"; echo "1..3"; echo "ok 1 alpha"; exit 137
+            fi ;;
+esac
+echo "1..1"; echo "ok 1 fine"; exit 0
+EOF
+  chmod +x "$SHIMDIR/bats"
+  export PATH="$SHIMDIR:$PATH"
+  export SHIP_LAND_GATE_POLICY="$BATS_TEST_TMPDIR/no-such-policy.sh"   # absent ⇒ full tier
+  mkdir -p tests
+  printf '#!/usr/bin/env bats\n@test "a" { true; }\n' > tests/a.bats
+  printf '#!/usr/bin/env bats\n@test "b" { true; }\n' > tests/b.bats
+  git add tests && git commit -q -m "seed suites" && git push -q origin HEAD:main
+  git fetch -q origin main
+}
+
+@test "per-suite: FULL tier runs EVERY suite as its own process — and still makes the full claim" {
+  persuite_fixture
+  stub_selector "tests/a.bats" ""          # a selector EXISTS but full mode must ignore it
+  gc="$(git rev-parse --git-common-dir)"; rm -f "$gc/gate-green"
+  landable feat/ps-full psf.sh
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  [ "$(grep -cx 'tests/a.bats' "$BATS_ARGV")" -eq 1 ]      # the WHOLE corpus…
+  [ "$(grep -cx 'tests/b.bats' "$BATS_ARGV")" -eq 1 ]
+  [ "$(grep -c . "$BATS_ARGV")" -eq 2 ]                    # …nothing else, nothing twice
+  [ "$(grep -cx 'tests/' "$BATS_ARGV")" -eq 0 ]            # and NEVER the monolithic invocation
+  # THE INVARIANT Phase 1 must not spend: same suites ⇒ same claim. Only blast radius changed.
+  [ "$(cat "$gc/gate-green")" = "$(git rev-parse HEAD)" ]
+  grep -q '"gate_scope":"full"' "$LAND_LOG"
+}
+
+@test "per-suite: a CUT suite is re-run ONCE in a fresh TMPDIR and can land green" {
+  persuite_fixture
+  stub_selector "" ""                      # no DIRECT suites — exoneration is what is under test
+  echo sig-once > "$MODE_DIR/a.bats"
+  landable feat/ps-cut psc.sh
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "CUT, not RED"
+  [ "$(grep -cx 'tests/a.bats' "$BATS_ARGV")" -eq 2 ]      # the cut suite: run + ONE re-run
+  # THE WHOLE POINT OF PHASE 1, as an assertion: the neighbour paid nothing for a's kill. Under the
+  # monolith that same kill discarded the entire corpus and was attested exit:6 RED.
+  [ "$(grep -cx 'tests/b.bats' "$BATS_ARGV")" -eq 1 ]
+  grep -q '"outcome":"pass-on-retry"' "$POSTLAND_DIR/flakes.jsonl"
+  grep -q '"file":"tests/a.bats"' "$POSTLAND_DIR/flakes.jsonl"
+  git fetch -q origin main
+  [ -n "$(git ls-tree origin/main -- psc.sh)" ]
+}
+
+@test "per-suite: a corpus of CUT suites is a NON-VERDICT (exit 9), never a red" {
+  persuite_fixture
+  stub_selector "" ""
+  echo sig > "$MODE_DIR/a.bats"
+  echo sig > "$MODE_DIR/b.bats"
+  gc="$(git rev-parse --git-common-dir)"; rm -f "$gc/gate-green"
+  landable feat/ps-killed psk.sh
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 9 ]                                      # c605a2e's non-verdict, PRESERVED
+  echo "$output" | grep -q "GATE-KILLED"
+  [ "$(echo "$output" | grep -c "GATE RED")" -eq 0 ]       # never both, never the wrong one
+  [ "$(grep -c . "$BATS_ARGV")" -eq 4 ]                    # 2 suites × (run + ONE bounded re-run)
+  [ ! -f "$gc/gate-green" ]                                # a kill proves nothing ⇒ no marker
+  grep -q '"exit":9' "$LAND_LOG"                           # …and is not in the red denominator
+  grep -q '"outcome":"cut-not-red"' "$POSTLAND_DIR/flakes.jsonl"
+  grep -q '"file":"tests/a.bats"' "$POSTLAND_DIR/flakes.jsonl"   # WHICH suite ran out of machine
+  git fetch -q origin main
+  [ -z "$(git ls-tree origin/main -- psk.sh)" ]            # fail-closed: nothing landed
+}
+
+@test "per-suite POSITIVE CONTROL: a suite that NAMES a failing test is RED (6), re-run or not" {
+  # If this ever goes green-by-accident the whole split is worthless. The per-suite tier grants one
+  # exoneration re-run the monolith did not; a NAMED failure must survive it unchanged.
+  persuite_fixture
+  stub_selector "" ""
+  echo red > "$MODE_DIR/a.bats"
+  landable feat/ps-red psr.sh
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 6 ]
+  echo "$output" | grep -q "GATE RED"
+  echo "$output" | grep -q "failed twice"
+  [ "$(echo "$output" | grep -c "GATE-KILLED")" -eq 0 ]    # a verdict is never softened into one
+  git fetch -q origin main
+  [ -z "$(git ls-tree origin/main -- psr.sh)" ]
+}
+
+@test "per-suite: one suite CUT + another RED ⇒ exit 6 — a verdict outranks a non-verdict" {
+  # Only the per-suite tier can even produce this corpus, and it is the case that decides whether
+  # the loop may fail-fast: it may not. Stopping at a's kill would report 9 ("retry when quieter")
+  # for a tree that is genuinely broken — the dispatcher would retry it forever (f8e40b4c577d).
+  persuite_fixture
+  stub_selector "" ""
+  echo sig > "$MODE_DIR/a.bats"            # no verdict…
+  echo red > "$MODE_DIR/b.bats"            # …and a real one, AFTER it in glob order
+  landable feat/ps-mixed psm.sh
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 6 ]
+  echo "$output" | grep -q "GATE-KILLED"                   # the cut WAS detected…
+  echo "$output" | grep -q "GATE RED"                      # …and then outranked
+  git fetch -q origin main
+  [ -z "$(git ls-tree origin/main -- psm.sh)" ]
+}
+
+@test "per-suite kill switch: SHIP_LAND_FULL_PER_SUITE=off restores the ONE-process monolith" {
+  # The escape hatch is an env flag, NOT a revert — a revert would itself need the gate, which is
+  # the bootstrap deadlock Phase 1 exists to escape. So the flag has to keep working, which is only
+  # true if something asserts it. This is the ONE test that proves the MONOLITH-PINNED tests above
+  # are still exercising a reachable path.
+  persuite_fixture
+  stub_selector "" ""
+  landable feat/ps-off pso.sh
+
+  run env SHIP_LAND_FULL_PER_SUITE=off bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  [ "$(cat "$BATS_ARGV")" = "tests/" ]                     # one invocation for the whole corpus
+  echo "$output" | grep -q "monolithic"
+}
+
+@test "scoped tier: a twice-CUT selected suite is a non-verdict (exit 9), not a red" {
+  # The half of c605a2e's promise the SCOPED path never kept. Before this, every scoped failure
+  # left GATE_RED/GATE_KILLED at 0, so gate_nonzero_code's else branch reported a signal-killed
+  # scoped land as exit 6 "your code is broken" — the two tiers disagreeing about what a cut is,
+  # which is precisely what sharing one discriminator was supposed to make impossible.
+  persuite_fixture
+  stub_selector "tests/a.bats" ""
+  echo sig > "$MODE_DIR/a.bats"
+  landable feat/ps-scoped-cut pssc.sh
+
+  run env SHIP_LAND_GATE_SCOPE=scoped bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 9 ]
+  echo "$output" | grep -q "GATE-KILLED"
+  [ "$(echo "$output" | grep -c "GATE RED")" -eq 0 ]
+  [ "$(grep -cx 'tests/b.bats' "$BATS_ARGV")" -eq 0 ]      # still scoped: b was never selected
+  grep -q '"exit":9' "$LAND_LOG"
+}
+
+@test "per-suite: the FULL tier still never exonerates a DIRECT suite of this change" {
+  # THE correctness fence on Phase 1, and the whole of the difference from the monolith it
+  # replaces: the monolith gave a named red no retry at all, while the per-suite tier routes every
+  # suite through run_scoped_suite's one exoneration re-run. What stops that being a WEAKER gate is
+  # the DIRECT carve-out — intermittence in code you are landing is a FINDING, not a flake — which
+  # is why run_gate now computes --direct for FULL mode too, not just for scoped selection.
+  persuite_fixture
+  stub_selector "" "tests/a.bats"          # a IS a direct suite of this change…
+  echo sig-once > "$MODE_DIR/a.bats"       # …and it goes green on the re-run
+  landable feat/ps-direct psd.sh
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 6 ]                                      # pass-on-retry is NOT a pass here
+  echo "$output" | grep -q "finding, not a flake"
+  [ ! -f "$POSTLAND_DIR/flakes.jsonl" ]                    # never exonerated ⇒ never logged
+  git fetch -q origin main
+  [ -z "$(git ls-tree origin/main -- psd.sh)" ]            # and NOT landed
+}
+
+@test "per-suite: a GREEN hermeticity ratchet hands the whole corpus to the per-suite runner" {
+  # The per-suite half of "hermeticity: the SAME suite WITH a fixtured \$HOME lands green and bats
+  # still runs", which is MONOLITH-PINNED (a) above. The ratchet returns EARLY on red — fail-fast,
+  # because an unfixtured suite contaminates every other result in the run — so the composition
+  # that actually needs pinning is the green one: ratchet passes ⇒ the runner still gets every
+  # suite, one process each. A sibling landed the ratchet into run_gate during this session; this
+  # is the seam between the two changes.
+  herm_fixture
+  add_suite feat/herm-ps leak.bats 'export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"'
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  [ "$(grep -cx 'tests/a.bats' "$BATS_ARGV")" -eq 1 ]      # the suite herm_fixture seeded…
+  [ "$(grep -cx 'tests/leak.bats' "$BATS_ARGV")" -eq 1 ]   # …and the one this land adds
+  [ "$(grep -cx 'tests/' "$BATS_ARGV")" -eq 0 ]            # never the monolithic invocation
+  git fetch -q origin main
+  [ -n "$(git ls-tree origin/main -- tests/leak.bats)" ]
 }
