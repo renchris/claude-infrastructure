@@ -1,6 +1,6 @@
 #!/bin/bash
-# it2 wrapper — two surgical interceptions for Claude Code teammate panes;
-# every other invocation passes through to the real it2 CLI verbatim.
+# it2 wrapper — three surgical interceptions for Claude Code teammate panes;
+# every other invocation passes through to the real it2 CLI, process-bounded (3).
 #
 #   1. `session split …` → inject `-p Claude-Teammate` (never-prompt dynamic
 #      profile) so teammate panes close cleanly from the UI (⌘W).
@@ -18,14 +18,89 @@
 #      Non-forced / no-id close shapes keep the real CLI's interactive
 #      semantics and fall through.
 #
+#   3. EVERY fork of the real CLI is process-BOUNDED (default 30s). `exec
+#      "$REAL_IT2" "$@"` used to be unbounded, and `session list` is the fleet's
+#      hot liveness probe — cc-sessions, cc-notify, cc-inbox-guard, cc-reconcile,
+#      cc-teardown, handoff-fire and teammate-auto-shutdown all fork it. iTerm2
+#      serializes API requests, so when the Python API congests the queue is
+#      SELF-AMPLIFYING: N unbounded probes make the N+1th wait behind all of
+#      them. Observed 2026-07-25/26 as a fleet-wide deadlock — clients piling up
+#      5-8 min apart, load 17, `bats tests/` unrunnable, so no worktree could
+#      land the very fix that would end it, and finished panes could not even
+#      self-retire (self-close and cc-reaper both resolve panes through here).
+#      Nothing broke the deadlock; it drained only by exhausting its callers.
+#
+#      This invents no failure mode: every caller ALREADY treats an empty/failed
+#      probe as INDETERMINATE and escalates (fail-loud), a path each one tests.
+#      The bound converts an unbounded hang into the degradation they were built
+#      for. It is also the ONLY bound covering a hang in the API CONNECT —
+#      interception 2 self-bounds its RPC at 20s, but not the connect before it.
+#
+#      `monitor` is exempt — the one subcommand that streams by design.
+#      Seams: IT2_WRAPPER_TIMEOUT_S · IT2_WRAPPER_TIMEOUT_BIN (set-but-EMPTY
+#      disables bounding verbatim) · IT2_WRAPPER_REAL · IT2_WRAPPER_PYTHON.
+#
 # Real binary: /Users/chrisren/Library/Python/3.11/bin/it2
 
+# ⚠ These two lines are a PARSED CONTRACT, not just assignments. handoff-fire.sh reads the
+# real paths out of this file with an anchored `sed -n 's/^REAL_IT2="\(.*\)"$/\1/p'` (and the
+# same for PYTHON_BIN), treating the shim as their single source of truth so a Python-version
+# bump stays a one-file edit here. So each must stay a BARE LITERAL in double quotes: writing
+# the seam inline as `REAL_IT2="${IT2_WRAPPER_REAL:-…}"` still MATCHES that regex and hands
+# handoff-fire the unexpanded string `${IT2_WRAPPER_REAL:-…}`, which is not executable — it
+# would silently degrade handoff splits to this shim (injecting the WRONG, teammate profile)
+# and PYTHON_BIN to bare `python3`. Verified 2026-07-26; tests/it2-wrapper.bats pins it.
+# The seams are therefore applied on their own lines BELOW, where the regex cannot see them.
 REAL_IT2="/Users/chrisren/Library/Python/3.11/bin/it2"
 PYTHON_BIN="/Library/Frameworks/Python.framework/Versions/3.11/bin/python3.11"
+REAL_IT2="${IT2_WRAPPER_REAL:-$REAL_IT2}"
+PYTHON_BIN="${IT2_WRAPPER_PYTHON:-$PYTHON_BIN}"
+TIMEOUT_S="${IT2_WRAPPER_TIMEOUT_S:-30}"
+
+# Resolve a timeout(1). PATH alone is NOT enough: the hooks and launchd jobs that
+# fork this wrapper run with a minimal PATH that excludes Homebrew — exactly where
+# coreutils installs it — so a PATH-only lookup would leave the AUTOMATED callers
+# (the ones that built the pile-up) unbounded while interactive shells stayed safe.
+_resolve_timeout() {
+  local c
+  for c in "$(command -v timeout 2>/dev/null || true)" \
+           "$(command -v gtimeout 2>/dev/null || true)" \
+           /opt/homebrew/bin/timeout /usr/local/bin/timeout \
+           /opt/homebrew/bin/gtimeout /usr/local/bin/gtimeout; do
+    if [[ -n "$c" && -x "$c" ]]; then printf '%s' "$c"; return 0; fi
+  done
+  return 1
+}
+# UNSET ⇒ resolve one. SET — including set to EMPTY ⇒ honored verbatim, so
+# `IT2_WRAPPER_TIMEOUT_BIN=` genuinely disables bounding. `${VAR:-}` cannot tell
+# unset from empty, and a seam that cannot turn a thing OFF is not a seam (the
+# same defect fixed in cc-inbox-guard, 02c3de8).
+if [[ -n "${IT2_WRAPPER_TIMEOUT_BIN+set}" ]]; then
+  TIMEOUT_BIN="$IT2_WRAPPER_TIMEOUT_BIN"
+else
+  TIMEOUT_BIN="$(_resolve_timeout || true)"
+fi
+
+# Run the real CLI under the bound. On expiry: rc 124 AND a named stderr line —
+# an unattributed 124 cost real triage time during the incident, where it collides
+# with an external SIGKILL and with a command-substitution pipe-block. With no
+# timeout(1) anywhere, exec unbounded rather than break every it2 call.
+_run_bounded() {
+  if [[ -z "$TIMEOUT_BIN" || ! -x "$TIMEOUT_BIN" ]]; then
+    exec "$@"
+  fi
+  local rc=0
+  "$TIMEOUT_BIN" -k 5 "$TIMEOUT_S" "$@" || rc=$?
+  if (( rc == 124 )); then
+    printf 'it2-wrapper: bounded out after %ss — iTerm2 API unresponsive (%s)\n' \
+      "$TIMEOUT_S" "$*" >&2
+  fi
+  exit "$rc"
+}
 
 if [[ "$1" == "session" && "$2" == "split" ]]; then
   # Inject --profile before remaining args
-  exec "$REAL_IT2" session split -p "Claude-Teammate" "${@:3}"
+  _run_bounded "$REAL_IT2" session split -p "Claude-Teammate" "${@:3}"
 fi
 
 if [[ "$1" == "session" && "$2" == "close" ]]; then
@@ -47,7 +122,7 @@ if [[ "$1" == "session" && "$2" == "close" ]]; then
     i=$((i+1))
   done
   if (( FORCE )) && [[ -n "$SID" && "$SID" != "active" ]]; then
-    exec "$PYTHON_BIN" - "$SID" <<'PY'
+    _run_bounded "$PYTHON_BIN" - "$SID" <<'PY'
 import asyncio
 import sys
 
@@ -92,4 +167,9 @@ PY
   fi
 fi
 
-exec "$REAL_IT2" "$@"
+# `monitor` streams events by design — it must never be bounded.
+if [[ "${1:-}" == "monitor" ]]; then
+  exec "$REAL_IT2" "$@"
+fi
+
+_run_bounded "$REAL_IT2" "$@"
