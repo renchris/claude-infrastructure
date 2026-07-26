@@ -478,8 +478,11 @@ printf '1..1\nok 1 p\n'")"
   run env -i HOME="$HOME" PATH="/usr/bin:/bin" TERM=dumb bash -c \
     "sed -n '/PATH NORMALIZATION/,/^export PATH\$/p' '$SUT' > '$BATS_TEST_TMPDIR/norm.sh'; . '$BATS_TEST_TMPDIR/norm.sh'; printf '%s' \"\$PATH\""
   [ "$status" -eq 0 ]
-  [[ "$output" == *"$HOME/.claude/bin"* ]]
-  [[ "$output" == *"$HOME/bin"* ]]
+  # `|| false` on every NON-FINAL [[ ]]: `[[` is a bash KEYWORD, so the ERR trap never fires for it
+  # and a bare non-final [[ ]] is a DEAD assertion that can never fail the test. Only the LAST one
+  # is live unaided, being the test's exit status. tests/bats-assert-liveness.bats ratchets this.
+  [[ "$output" == *"$HOME/.claude/bin"* ]] || false
+  [[ "$output" == *"$HOME/bin"* ]] || false
   [[ "$output" == *"/usr/bin"* ]]                     # PREPEND-only: the original entries survive
 }
 
