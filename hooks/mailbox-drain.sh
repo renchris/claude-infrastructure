@@ -114,5 +114,34 @@ fi
 
 ctx="$(printf '📬 INBOX — %s new %s from other Claude sessions (delivered as CONTEXT via the non-keystroke inbox channel, never typed into your input line)%s:\n%s\n(Already marked delivered. Triage/act as appropriate; reply to a peer with cc-notify <uuid> "…". This is a message TO you, not something you typed.)%s' \
   "$n" "$plural" "$warn" "$body" "$nudge")"
-jq -nc --arg e "$EVENT" --arg c "$ctx" '{hookSpecificOutput:{hookEventName:$e, additionalContext:$c}}'
+# ── OPERATOR-VISIBLE LINE (2026-07-26) ──────────────────────────────────────────────────────────
+# additionalContext is MODEL-ONLY: it reaches the agent and is never rendered in the conversation,
+# so until now every inbox delivery was invisible to the human. Operator-reported: "I can't see
+# these 2-way communication mailbox pings in the UI so I'm at a loss for visibility" — with 751
+# messages crossing the substrate in 12 h, that is a large silent channel. systemMessage IS the
+# human lever (the same key hooks/session-continue.sh uses for its cap notice), and BOTH keys are
+# legal in one object, so the agent still gets full bodies while the operator gets a digest.
+#
+# Deliberately a ONE-LINE DIGEST, never the bodies: this fires on every UserPromptSubmit, and
+# reprinting messages would bury the operator's own turn. Senders are deduped and capped at 3 so a
+# 40-message drain cannot emit a 40-name line. Fixture/lifecycle noise (the non-hermetic suites
+# that page REAL pages — HANDOFF-HUSK-PANE / REAPER SURFACE / desk-sweep) is COUNTED but not NAMED,
+# so a burst of test traffic can never crowd out one real peer report. Counting rather than hiding
+# it matters: "0 peer messages, 12 fixture" is itself the signal that a suite is leaking.
+_names="$(printf '%s\n' "$body" \
+  | grep -v 'HANDOFF-HUSK-PANE\|REAPER SURFACE\|\[desk-sweep\]' \
+  | sed -n 's/^[0-9TZ:+-]* \[\([^]]*\)\].*/\1/p' \
+  | awk '!seen[$0]++' | head -3 | paste -sd, - 2>/dev/null)"
+_noise="$(printf '%s\n' "$body" | grep -c 'HANDOFF-HUSK-PANE\|REAPER SURFACE\|\[desk-sweep\]' || true)"
+case "$_noise" in ''|*[!0-9]*) _noise=0 ;; esac
+_sig=$(( n - _noise )); [ "$_sig" -lt 0 ] && _sig=0
+if [ "$_sig" -gt 0 ]; then
+  msg="📬 ${_sig} peer message(s)${_names:+ from ${_names}}"
+  [ "$_noise" -gt 0 ] && msg="${msg} · ${_noise} fixture/lifecycle suppressed"
+  msg="${msg} — full text: cc-mail"
+else
+  msg="📬 ${n} lifecycle/fixture message(s), no peer traffic — cc-mail --all"
+fi
+jq -nc --arg e "$EVENT" --arg c "$ctx" --arg m "$msg" \
+  '{hookSpecificOutput:{hookEventName:$e, additionalContext:$c}, systemMessage:$m}'
 exit 0
