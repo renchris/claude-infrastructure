@@ -155,7 +155,7 @@ seed_teammate() { # $1=agent-name $2=pid $3=team-sid8
   cd "$BATS_TEST_TMPDIR"
   run bash "$HF" self-close --terminal --session-id "$PANE" --dry-run
   [ "$status" -eq 0 ]                             # fail-OPEN: the close proceeds
-  [[ "$output" == *"live-teammate check SKIPPED"* ]]   # …but never silently
+  [[ "$output" == *"live-teammate check SKIPPED"* ]] || false # …but never silently
   [[ "$output" == *"ORPHANS"* ]]
 }
 
