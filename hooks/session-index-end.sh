@@ -22,6 +22,7 @@ if [ ! -f "$HELPERS" ]; then
     HELPERS="$HOME/.claude/hooks/lib/session-index-helpers.sh"
 fi
 [ -f "$HELPERS" ] || exit 0
+# shellcheck source=/dev/null  # $HELPERS is resolved at runtime (repo checkout or ~/.claude fallback)
 source "$HELPERS"
 
 # Init DB (idempotent)
@@ -39,7 +40,7 @@ if [ -n "$TRANSCRIPT_PATH" ]; then
     PROJECT_DIR=$(dirname "$TRANSCRIPT_PATH")
 elif [ -n "$CWD" ]; then
     # Encode cwd to project dir name: /Users/chrisren/Dev/foo → -Users-chrisren-Dev-foo
-    encoded=$(echo "$CWD" | sed 's|/|-|g')
+    encoded="${CWD//\//-}"
     PROJECT_DIR="$CLAUDE_PROJECTS_DIR/$encoded"
 fi
 
