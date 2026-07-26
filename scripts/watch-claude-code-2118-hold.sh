@@ -23,6 +23,31 @@
 
 set -euo pipefail
 
+# Bound the OS-notification fork (machine-wide iTerm2/AppleEvent wedge, 2026-07-26). This one
+# targets NotificationCenter rather than iTerm2, so it is not the root cause — but it is an
+# AppleEvent fork inside an automated path, and an unbounded one turns a best-effort page into a
+# stalled job. Every call site here is already best-effort (`|| true`), so a cut costs at most
+# one missed notification and never a wrong verdict. timeout(1) is resolved by ABSOLUTE PATH as
+# well as PATH — hooks and launchd jobs run without Homebrew on PATH, where coreutils installs it.
+# No timeout(1) ⇒ run unbounded rather than lose notifications entirely.
+# Seams: WCH_OSA_TIMEOUT_S · WCH_OSA_TIMEOUT_BIN (set-but-EMPTY disables verbatim).
+WCH_OSA_TIMEOUT_S="${WCH_OSA_TIMEOUT_S:-5}"
+if [ -n "${WCH_OSA_TIMEOUT_BIN+set}" ]; then
+  WCH_OSA_TB="${WCH_OSA_TIMEOUT_BIN}"
+else
+  WCH_OSA_TB=""
+  for _c in "$(command -v timeout 2>/dev/null || true)" "$(command -v gtimeout 2>/dev/null || true)" \
+            /opt/homebrew/bin/timeout /usr/local/bin/timeout \
+            /opt/homebrew/bin/gtimeout /usr/local/bin/gtimeout; do
+    [ -n "$_c" ] && [ -x "$_c" ] && { WCH_OSA_TB="$_c"; break; }
+  done
+fi
+wch_osa() {
+  if [ -z "$WCH_OSA_TB" ] || [ ! -x "$WCH_OSA_TB" ]; then "$@"; return $?; fi
+  "$WCH_OSA_TB" -k 3 "$WCH_OSA_TIMEOUT_S" "$@"
+}
+
+
 readonly ISSUES=(52251 52522 51798)
 readonly PRIMARY_ISSUE=52251
 readonly REPO="anthropics/claude-code"
@@ -38,7 +63,7 @@ log() {
 
 notify() {
   local title="$1" message="$2"
-  osascript -e "display notification \"$message\" with title \"$title\" sound name \"Glass\"" 2>/dev/null || true
+  wch_osa osascript -e "display notification \"$message\" with title \"$title\" sound name \"Glass\"" 2>/dev/null || true
   say "$title" 2>/dev/null || true
   log "NOTIFY: $title — $message"
 }

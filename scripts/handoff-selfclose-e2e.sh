@@ -28,6 +28,33 @@
 # Exit codes: 0 all assertions pass · 4 no iTerm2 session to split from · 1 assertion failure.
 set -u
 
+# Bound every fork that reaches the iTerm2 API (machine-wide wedge, 2026-07-26: a bare
+# `it2 session list --json` returned rc 124 with zero output while blocked forks piled up across
+# ~110 sessions). The ~/.claude/bin/it2 shim self-bounds at 30s, but 30s of dead wait per call is
+# still a stall this caller should not absorb — and these osascript calls
+# `tell application "iTerm2"` directly — the exact wedged surface — inside a gate script.
+# timeout(1) is resolved by ABSOLUTE PATH as well as PATH: hooks and launchd jobs run with a
+# minimal PATH excluding Homebrew, exactly where coreutils installs it, so a PATH-only lookup would
+# leave the AUTOMATED callers unbounded while interactive shells stayed safe. No timeout(1) ⇒ run
+# unbounded rather than break the call. Seams: E2E_OSA_TIMEOUT_S · E2E_OSA_TIMEOUT_BIN
+# (set-but-EMPTY disables verbatim; `${VAR:-}` cannot tell unset from set-empty).
+E2E_TIMEOUT_S="${E2E_OSA_TIMEOUT_S:-15}"
+if [ -n "${E2E_OSA_TIMEOUT_BIN+set}" ]; then
+  E2E_TIMEOUT_BIN="${E2E_OSA_TIMEOUT_BIN}"
+else
+  E2E_TIMEOUT_BIN=""
+  for _c in "$(command -v timeout 2>/dev/null || true)" "$(command -v gtimeout 2>/dev/null || true)" \
+            /opt/homebrew/bin/timeout /usr/local/bin/timeout \
+            /opt/homebrew/bin/gtimeout /usr/local/bin/gtimeout; do
+    [ -n "$_c" ] && [ -x "$_c" ] && { E2E_TIMEOUT_BIN="$_c"; break; }
+  done
+fi
+e2e_bounded() {
+  if [ -z "$E2E_TIMEOUT_BIN" ] || [ ! -x "$E2E_TIMEOUT_BIN" ]; then "$@"; return $?; fi
+  "$E2E_TIMEOUT_BIN" -k 3 "$E2E_TIMEOUT_S" "$@"
+}
+
+
 HF="$(cd "$(dirname "$0")" && pwd)/handoff-fire.sh"
 IT2="$HOME/.claude/bin/it2"
 WORK="/tmp/hfe2e.$$"
@@ -42,7 +69,7 @@ bad()  { FAIL=$((FAIL+1)); say "  ✗ $*"; }
 BASE="${ITERM_SESSION_ID##*:}"
 
 list_uuids() {
-  osascript <<'AS' 2>/dev/null
+  e2e_bounded osascript <<'AS' 2>/dev/null
 tell application "iTerm2"
   set out to ""
   repeat with w in windows
@@ -58,7 +85,7 @@ AS
 }
 
 pane_tty() { # $1=uuid → tty path or empty
-  osascript - "$1" <<'AS' 2>/dev/null
+  e2e_bounded osascript - "$1" <<'AS' 2>/dev/null
 on run argv
   tell application "iTerm2"
     repeat with w in windows
@@ -82,7 +109,7 @@ fake_alive() { # $1=uuid → 0 when a `claude` process sits on the pane's tty
 split_pane() { # → new pane uuid on stdout (split prints "Created new pane: <id>"; diff fallback)
   local before out new
   before="$(list_uuids)"
-  out="$("$IT2" session split -s "$BASE" 2>/dev/null)"
+  out="$(e2e_bounded "$IT2" session split -s "$BASE" 2>/dev/null)"
   new="$(grep -oE '[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}' <<<"$out" | head -1)"
   if [ -z "$new" ]; then
     sleep 2
@@ -106,7 +133,7 @@ await_shell() { # $1=uuid — the typed launch is LOST if it lands before zsh fi
 
 start_fake() { # $1=uuid — launch fake claude; one retry (a first send can be redraw-eaten)
   for _ in 1 2; do
-    "$IT2" session run -s "$1" "$FAKE_CMD" >/dev/null 2>&1
+    e2e_bounded "$IT2" session run -s "$1" "$FAKE_CMD" >/dev/null 2>&1
     local n=0
     while [ "$n" -lt 6 ]; do
       fake_alive "$1" && return 0
@@ -118,7 +145,7 @@ start_fake() { # $1=uuid — launch fake claude; one retry (a first send can be 
 
 cleanup() {
   for p in "$A" "$B"; do
-    [ -n "$p" ] && [ -n "$(pane_tty "$p")" ] && "$IT2" session close -f -s "$p" >/dev/null 2>&1
+    [ -n "$p" ] && [ -n "$(pane_tty "$p")" ] && e2e_bounded "$IT2" session close -f -s "$p" >/dev/null 2>&1
   done
   [ -n "${B:-}" ] && rm -f "$HOME/.claude/mailbox/$B.md"
   rm -rf "$WORK"

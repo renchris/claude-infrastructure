@@ -15,6 +15,31 @@
 
 set -euo pipefail
 
+# Bound the OS-notification fork (machine-wide iTerm2/AppleEvent wedge, 2026-07-26). This one
+# targets NotificationCenter rather than iTerm2, so it is not the root cause — but it is an
+# AppleEvent fork inside an automated path, and an unbounded one turns a best-effort page into a
+# stalled hook. Every call site here is already best-effort (`|| true`), so a cut costs at most
+# one missed notification and never a wrong verdict. timeout(1) is resolved by ABSOLUTE PATH as
+# well as PATH — hooks and launchd jobs run without Homebrew on PATH, where coreutils installs it.
+# No timeout(1) ⇒ run unbounded rather than lose notifications entirely.
+# Seams: LCW_OSA_TIMEOUT_S · LCW_OSA_TIMEOUT_BIN (set-but-EMPTY disables verbatim).
+LCW_OSA_TIMEOUT_S="${LCW_OSA_TIMEOUT_S:-5}"
+if [ -n "${LCW_OSA_TIMEOUT_BIN+set}" ]; then
+  LCW_OSA_TB="${LCW_OSA_TIMEOUT_BIN}"
+else
+  LCW_OSA_TB=""
+  for _c in "$(command -v timeout 2>/dev/null || true)" "$(command -v gtimeout 2>/dev/null || true)" \
+            /opt/homebrew/bin/timeout /usr/local/bin/timeout \
+            /opt/homebrew/bin/gtimeout /usr/local/bin/gtimeout; do
+    [ -n "$_c" ] && [ -x "$_c" ] && { LCW_OSA_TB="$_c"; break; }
+  done
+fi
+lcw_osa() {
+  if [ -z "$LCW_OSA_TB" ] || [ ! -x "$LCW_OSA_TB" ]; then "$@"; return $?; fi
+  "$LCW_OSA_TB" -k 3 "$LCW_OSA_TIMEOUT_S" "$@"
+}
+
+
 if [[ "${LEAD_CRASH_WATCHDOG_DISABLED:-0}" == "1" ]]; then
   exit 0
 fi
@@ -305,7 +330,7 @@ log "registered session=$SESSION_ID pid=$LEAD_PID"
     echo "[watchdog $sid] death class=$class cause=$cause (${kb}KB/${recs}recs mem_free=${mem_free:-?}% concurrent=${concurrent})"
     # A deliberate recycle is not a crash — only alert on a genuine crash.
     if [[ "$class" == "CRASH" ]]; then
-      osascript -e "display notification \"Session ${sid:0:8} crashed — ${cause}. See claude-crashes.jsonl\" with title \"Claude Crash\" sound name \"Basso\"" 2>/dev/null || true
+      lcw_osa osascript -e "display notification \"Session ${sid:0:8} crashed — ${cause}. See claude-crashes.jsonl\" with title \"Claude Crash\" sound name \"Basso\"" 2>/dev/null || true
     fi
 
     # Which teams had this session as lead? Scan ALL team roots — CC writes
@@ -347,7 +372,7 @@ log "registered session=$SESSION_ID pid=$LEAD_PID"
       send_shutdown_requests "$team_dir" "$sid"
     done
 
-    osascript -e "display notification \"Lead crashed. ${#affected_team_dirs[@]} team(s) affected. See CRASH_REPORT.md\" with title \"Claude Code Watchdog\" sound name \"Basso\"" 2>/dev/null || true
+    lcw_osa osascript -e "display notification \"Lead crashed. ${#affected_team_dirs[@]} team(s) affected. See CRASH_REPORT.md\" with title \"Claude Code Watchdog\" sound name \"Basso\"" 2>/dev/null || true
     printf '\a' >/dev/tty 2>/dev/null || true
 
     # rm-race guard (see above): never delete a pidfile a successor incarnation now owns.

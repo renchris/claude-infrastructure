@@ -12,6 +12,30 @@
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 IT2="$HOME/.claude/bin/it2"
+
+# Bound every fork that reaches the iTerm2 API (machine-wide wedge, 2026-07-26: a bare
+# `it2 session list --json` returned rc 124 with zero output while blocked forks piled up). The
+# ~/.claude/bin/it2 shim self-bounds at 30s, but this is an E2E driver that forks it repeatedly, so
+# the bound MULTIPLIES across call sites; a short cap keeps the script's total inside its own
+# patience. Every call here is already best-effort or checked, so a cut degrades, never lies.
+# timeout(1) is resolved by ABSOLUTE PATH as well as PATH (launchd/hooks have no Homebrew on PATH).
+# Seams: RPE_TIMEOUT_S · RPE_TIMEOUT_BIN (set-but-EMPTY disables verbatim).
+RPE_TIMEOUT_S="${RPE_TIMEOUT_S:-10}"
+if [ -n "${RPE_TIMEOUT_BIN+set}" ]; then
+  RPE_TB="${RPE_TIMEOUT_BIN}"
+else
+  RPE_TB=""
+  for _c in "$(command -v timeout 2>/dev/null || true)" "$(command -v gtimeout 2>/dev/null || true)" \
+            /opt/homebrew/bin/timeout /usr/local/bin/timeout \
+            /opt/homebrew/bin/gtimeout /usr/local/bin/gtimeout; do
+    [ -n "$_c" ] && [ -x "$_c" ] && { RPE_TB="$_c"; break; }
+  done
+fi
+rpe_bounded() {
+  if [ -z "$RPE_TB" ] || [ ! -x "$RPE_TB" ]; then "$@"; return $?; fi
+  "$RPE_TB" -k 3 "$RPE_TIMEOUT_S" "$@"
+}
+
 LABEL="ccreaper_e2e_$$"
 D="$(mktemp -d "${TMPDIR:-/tmp}/reaper-e2e.XXXXXX")"
 PANE=""; VICTIM_PID=""; SUCC_PID=""
@@ -20,14 +44,14 @@ ok(){ printf '  ✅ %s\n' "$1"; PASS=$((PASS+1)); }
 bad(){ printf '  ⛔ %s\n' "$1"; FAIL=$((FAIL+1)); }
 
 cleanup() {
-  [ -n "$PANE" ] && "$IT2" session close -f -s "$PANE" >/dev/null 2>&1 || true
+  [ -n "$PANE" ] && rpe_bounded "$IT2" session close -f -s "$PANE" >/dev/null 2>&1 || true
   pkill -f "$LABEL" 2>/dev/null || true
   [ -n "$SUCC_PID" ] && kill "$SUCC_PID" 2>/dev/null || true
   rm -rf "$D" 2>/dev/null || true
 }
 trap cleanup EXIT
 
-pane_present() { "$IT2" session list --json 2>/dev/null | jq -e --arg u "$1" 'any(.[]; .id==$u)' >/dev/null 2>&1; }
+pane_present() { rpe_bounded "$IT2" session list --json 2>/dev/null | jq -e --arg u "$1" 'any(.[]; .id==$u)' >/dev/null 2>&1; }
 
 echo "reaper-e2e — REAL orphan reproduction + reap (throwaway window; fixtured registry; trap cleanup)"
 
@@ -39,12 +63,12 @@ git -C "$REPO" update-ref refs/remotes/origin/main HEAD
 git -C "$REPO" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
 
 # ── the throwaway pane = the "orphaned lead" ────────────────────────────────────────────────────
-BEFORE="$("$IT2" session list --json 2>/dev/null | jq -r '.[].id' | sort)"
-"$IT2" window new >/dev/null 2>&1; sleep 1
-AFTER="$("$IT2" session list --json 2>/dev/null | jq -r '.[].id' | sort)"
+BEFORE="$(rpe_bounded "$IT2" session list --json 2>/dev/null | jq -r '.[].id' | sort)"
+rpe_bounded "$IT2" window new >/dev/null 2>&1; sleep 1
+AFTER="$(rpe_bounded "$IT2" session list --json 2>/dev/null | jq -r '.[].id' | sort)"
 PANE="$(comm -13 <(echo "$BEFORE") <(echo "$AFTER") | head -1)"
 [ -n "$PANE" ] || { echo "FATAL: could not create a throwaway window"; exit 1; }
-"$IT2" session run -s "$PANE" "exec -a $LABEL sleep 3000" >/dev/null 2>&1; sleep 1
+rpe_bounded "$IT2" session run -s "$PANE" "exec -a $LABEL sleep 3000" >/dev/null 2>&1; sleep 1
 VICTIM_PID="$(pgrep -f "$LABEL" | head -1)"
 [ -n "$VICTIM_PID" ] || { echo "FATAL: victim process did not start"; exit 1; }
 

@@ -21,6 +21,31 @@
 # C10: OPERATOR loads the plist (RunAtLoad + hourly re-check). Selftest: `--selftest` (fixture-driven).
 set -uo pipefail
 
+# Bound the OS-notification fork (machine-wide iTerm2/AppleEvent wedge, 2026-07-26). This one
+# targets NotificationCenter rather than iTerm2, so it is not the root cause — but it is an
+# AppleEvent fork inside an automated path, and an unbounded one turns a best-effort page into a
+# stalled job. Every call site here is already best-effort (`|| true`), so a cut costs at most
+# one missed notification and never a wrong verdict. timeout(1) is resolved by ABSOLUTE PATH as
+# well as PATH — hooks and launchd jobs run without Homebrew on PATH, where coreutils installs it.
+# No timeout(1) ⇒ run unbounded rather than lose notifications entirely.
+# Seams: PPV_OSA_TIMEOUT_S · PPV_OSA_TIMEOUT_BIN (set-but-EMPTY disables verbatim).
+PPV_OSA_TIMEOUT_S="${PPV_OSA_TIMEOUT_S:-5}"
+if [ -n "${PPV_OSA_TIMEOUT_BIN+set}" ]; then
+  PPV_OSA_TB="${PPV_OSA_TIMEOUT_BIN}"
+else
+  PPV_OSA_TB=""
+  for _c in "$(command -v timeout 2>/dev/null || true)" "$(command -v gtimeout 2>/dev/null || true)" \
+            /opt/homebrew/bin/timeout /usr/local/bin/timeout \
+            /opt/homebrew/bin/gtimeout /usr/local/bin/gtimeout; do
+    [ -n "$_c" ] && [ -x "$_c" ] && { PPV_OSA_TB="$_c"; break; }
+  done
+fi
+ppv_osa() {
+  if [ -z "$PPV_OSA_TB" ] || [ ! -x "$PPV_OSA_TB" ]; then "$@"; return $?; fi
+  "$PPV_OSA_TB" -k 3 "$PPV_OSA_TIMEOUT_S" "$@"
+}
+
+
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
@@ -42,7 +67,7 @@ notify() { # <title> <msg> — OS-level, API-independent
   local title="$1" msg="$2"
   if [ -n "$NOTIFY_CMD" ]; then "$NOTIFY_CMD" "$title" "$msg" >/dev/null 2>&1 || true; return 0; fi
   command -v osascript >/dev/null 2>&1 && \
-    osascript -e "display notification \"${msg//\"/}\" with title \"${title//\"/}\"" >/dev/null 2>&1 || true
+    ppv_osa osascript -e "display notification \"${msg//\"/}\" with title \"${title//\"/}\"" >/dev/null 2>&1 || true
 }
 
 # ac_block — print the body lines of the "AC Power:" section of a pmset -g custom capture (<file>).

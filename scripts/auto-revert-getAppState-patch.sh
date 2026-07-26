@@ -24,6 +24,31 @@
 
 set -euo pipefail
 
+# Bound the OS-notification fork (machine-wide iTerm2/AppleEvent wedge, 2026-07-26). This one
+# targets NotificationCenter rather than iTerm2, so it is not the root cause — but it is an
+# AppleEvent fork inside an automated path, and an unbounded one turns a best-effort page into a
+# stalled job. Every call site here is already best-effort (`|| true`), so a cut costs at most
+# one missed notification and never a wrong verdict. timeout(1) is resolved by ABSOLUTE PATH as
+# well as PATH — hooks and launchd jobs run without Homebrew on PATH, where coreutils installs it.
+# No timeout(1) ⇒ run unbounded rather than lose notifications entirely.
+# Seams: ARG_OSA_TIMEOUT_S · ARG_OSA_TIMEOUT_BIN (set-but-EMPTY disables verbatim).
+ARG_OSA_TIMEOUT_S="${ARG_OSA_TIMEOUT_S:-5}"
+if [ -n "${ARG_OSA_TIMEOUT_BIN+set}" ]; then
+  ARG_OSA_TB="${ARG_OSA_TIMEOUT_BIN}"
+else
+  ARG_OSA_TB=""
+  for _c in "$(command -v timeout 2>/dev/null || true)" "$(command -v gtimeout 2>/dev/null || true)" \
+            /opt/homebrew/bin/timeout /usr/local/bin/timeout \
+            /opt/homebrew/bin/gtimeout /usr/local/bin/gtimeout; do
+    [ -n "$_c" ] && [ -x "$_c" ] && { ARG_OSA_TB="$_c"; break; }
+  done
+fi
+arg_osa() {
+  if [ -z "$ARG_OSA_TB" ] || [ ! -x "$ARG_OSA_TB" ]; then "$@"; return $?; fi
+  "$ARG_OSA_TB" -k 3 "$ARG_OSA_TIMEOUT_S" "$@"
+}
+
+
 readonly VERSIONS_DIR="$HOME/.claude-versions"
 readonly MANIFEST="$VERSIONS_DIR/MANIFEST.jsonl"
 readonly LOG_FILE="$HOME/.claude/logs/auto-revert.log"
@@ -93,4 +118,4 @@ fi
 log "promoted $new_version — patched 2.1.112 retained as fallback"
 
 # Desktop notification
-osascript -e "display notification \"Auto-reverted to $new_version. GH #49253 appears fixed upstream.\" with title \"Claude Code upgraded\" sound name \"Glass\"" 2>/dev/null || true
+arg_osa osascript -e "display notification \"Auto-reverted to $new_version. GH #49253 appears fixed upstream.\" with title \"Claude Code upgraded\" sound name \"Glass\"" 2>/dev/null || true

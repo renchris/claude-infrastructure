@@ -986,7 +986,7 @@ if [ "${1:-}" = "__recycle" ]; then
     echo "→ relaunched + CONFIRMED in $RSID (claude process on tty)"
     exit 0
   fi
-  "$IT2" session run -s "$RSID" "# HANDOFF RELAUNCH FAILED — run manually: $(cat "$CMDFILE")" >/dev/null 2>&1 || true
+  hf_bounded "$IT2" session run -s "$RSID" "# HANDOFF RELAUNCH FAILED — run manually: $(cat "$CMDFILE")" >/dev/null 2>&1 || true
   echo "!! relaunch typed but no claude process appeared within 90s — fallback comment typed into pane" >&2
   exit 1
 fi
@@ -2105,7 +2105,7 @@ restore_focus_or_fail() {
   local before="$1" front="$2" newid="$3" label="$4"
   [ -n "$before" ] || return 0
   it2py restore "$before" "$front" >/dev/null 2>&1 && return 0
-  "$IT2_SHIM" session close -f -s "$newid" >/dev/null 2>&1 || true
+  hf_bounded "$IT2_SHIM" session close -f -s "$newid" >/dev/null 2>&1 || true
   echo "!! FOCUS-STOLEN ($label): could not restore the operator's focus ($before) after the fire." >&2
   echo "   Closed the untyped pane $newid — NOTHING launched (C1: a background fire must not move focus)." >&2
   echo "   Pass --follow to intentionally land your view on the continuation, else re-fire." >&2

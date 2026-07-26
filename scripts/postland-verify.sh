@@ -20,6 +20,31 @@
 #        status · --selftest.   Kill switch: POSTLAND_VERIFY=off (runtime-read ⇒ instantly inert).
 # C10: OPERATOR loads the plist (docs/activation/pending-activation/09-postland-verify-activate.sh).
 set -uo pipefail
+
+# Bound the OS-notification fork (machine-wide iTerm2/AppleEvent wedge, 2026-07-26). This one
+# targets NotificationCenter rather than iTerm2, so it is not the root cause — but it is an
+# AppleEvent fork inside an automated path, and an unbounded one turns a best-effort page into a
+# stalled job. Every call site here is already best-effort (`|| true`), so a cut costs at most
+# one missed notification and never a wrong verdict. timeout(1) is resolved by ABSOLUTE PATH as
+# well as PATH — hooks and launchd jobs run without Homebrew on PATH, where coreutils installs it.
+# No timeout(1) ⇒ run unbounded rather than lose notifications entirely.
+# Seams: PLV_OSA_TIMEOUT_S · PLV_OSA_TIMEOUT_BIN (set-but-EMPTY disables verbatim).
+PLV_OSA_TIMEOUT_S="${PLV_OSA_TIMEOUT_S:-5}"
+if [ -n "${PLV_OSA_TIMEOUT_BIN+set}" ]; then
+  PLV_OSA_TB="${PLV_OSA_TIMEOUT_BIN}"
+else
+  PLV_OSA_TB=""
+  for _c in "$(command -v timeout 2>/dev/null || true)" "$(command -v gtimeout 2>/dev/null || true)" \
+            /opt/homebrew/bin/timeout /usr/local/bin/timeout \
+            /opt/homebrew/bin/gtimeout /usr/local/bin/gtimeout; do
+    [ -n "$_c" ] && [ -x "$_c" ] && { PLV_OSA_TB="$_c"; break; }
+  done
+fi
+plv_osa() {
+  if [ -z "$PLV_OSA_TB" ] || [ ! -x "$PLV_OSA_TB" ]; then "$@"; return $?; fi
+  "$PLV_OSA_TB" -k 3 "$PLV_OSA_TIMEOUT_S" "$@"
+}
+
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 STATE="${CC_POSTLAND_DIR:-$HOME/.claude/autonomy/postland}"
 REPO="${CC_POSTLAND_REPO:-$HOME/Development/claude-infrastructure}"
@@ -59,7 +84,7 @@ idl() { # <fired|abstained> <reason> [sha]
 notify() { # <title> <msg> — OS-level, API-independent
   if [ -n "$NOTIFY_CMD" ]; then "$NOTIFY_CMD" "$1" "$2" >/dev/null 2>&1 || true; return 0; fi
   command -v osascript >/dev/null 2>&1 && \
-    osascript -e "display notification \"${2//\"/}\" with title \"${1//\"/}\"" >/dev/null 2>&1 || true
+    plv_osa osascript -e "display notification \"${2//\"/}\" with title \"${1//\"/}\"" >/dev/null 2>&1 || true
 }
 json_array() { local out="" i; for i in "$@"; do out="$out,\"$i\""; done; printf '[%s]' "${out#,}"; }
 sha12() { printf '%s' "$1" | cut -c1-12; }
