@@ -12,6 +12,32 @@
 # Output: bundle dir path on the last stdout line. Exit 0 ok, 2 error.
 set -euo pipefail
 
+# Bound every call that reaches the iTerm2 / AppleEvent surface (machine-wide API wedge,
+# 2026-07-26: a bare `it2 session list --json` returned rc 124 with zero output while blocked forks
+# piled up). Both call sites `tell application "iTerm2"` — the exact wedged surface; each already has a
+# manual-fallback message on failure, so a cut degrades into a path that exists.
+# timeout(1) is resolved by ABSOLUTE PATH as well as PATH — launchd jobs and hooks run with a
+# minimal PATH excluding Homebrew, exactly where coreutils installs it, so a PATH-only lookup would
+# leave the AUTOMATED callers unbounded while interactive shells stayed safe. No timeout(1) ⇒ run
+# unbounded rather than break the call. Seams: LRH_OSA_TIMEOUT_S · LRH_OSA_TIMEOUT_BIN
+# (set-but-EMPTY disables verbatim; `${VAR:-}` cannot tell unset from set-empty).
+LRH_TIMEOUT_S="${LRH_OSA_TIMEOUT_S:-15}"
+if [ -n "${LRH_OSA_TIMEOUT_BIN+set}" ]; then
+  LRH_TIMEOUT_BIN="$LRH_OSA_TIMEOUT_BIN"
+else
+  LRH_TIMEOUT_BIN=""
+  for _c in "$(command -v timeout 2>/dev/null || true)" "$(command -v gtimeout 2>/dev/null || true)" \
+            /opt/homebrew/bin/timeout /usr/local/bin/timeout \
+            /opt/homebrew/bin/gtimeout /usr/local/bin/gtimeout; do
+    [ -n "$_c" ] && [ -x "$_c" ] && { LRH_TIMEOUT_BIN="$_c"; break; }
+  done
+fi
+lrh_bounded() {
+  if [ -z "$LRH_TIMEOUT_BIN" ] || [ ! -x "$LRH_TIMEOUT_BIN" ]; then "$@"; return $?; fi
+  "$LRH_TIMEOUT_BIN" -k 3 "$LRH_TIMEOUT_S" "$@"
+}
+
+
 LR="$HOME/.claude/scripts/limit-recover"
 TARGET="auto" MODEL="opus" SID="${CLAUDE_CODE_SESSION_ID:-}" CFG="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 CWD="$(pwd)" CONTEXT="" LAUNCH=0 PRINT_ONLY=0 NO_TRANSPLANT=0 KEEP_SOURCE=0 FORCE=0
@@ -158,7 +184,7 @@ if [[ $LAUNCH -eq 1 && $PRINT_ONLY -ne 1 ]]; then
   OWN_PANE="${ITERM_SESSION_ID##*:}"
   FIRED=""
   if [[ -n "${ITERM_SESSION_ID:-}" ]]; then
-    FIRED=$(osascript 2>/dev/null <<OSA || true
+    FIRED=$(lrh_bounded osascript 2>/dev/null <<OSA || true
 tell application "iTerm2"
   repeat with w in windows
     repeat with t in tabs of w
@@ -181,7 +207,7 @@ OSA
   if [[ "$FIRED" == "split" ]]; then
     echo "lr-handoff: fired split pane (right of invoking pane) on '$TARGET' (manual fallback: $LAUNCHER)" >&2
   else
-    osascript >/dev/null 2>&1 <<OSA || { echo "lr-handoff: iTerm2 launch failed — run manually: $LAUNCHER" >&2; }
+    lrh_bounded osascript >/dev/null 2>&1 <<OSA || { echo "lr-handoff: iTerm2 launch failed — run manually: $LAUNCHER" >&2; }
 tell application "iTerm2"
   set newWin to (create window with default profile)
   tell current session of newWin to write text "exec /bin/bash $LAUNCHER"

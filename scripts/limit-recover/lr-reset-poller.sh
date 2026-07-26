@@ -29,6 +29,32 @@
 # Usage: lr-reset-poller.sh [--dry-run] [--once]   (launchd runs it bare every ~10 min)
 set -uo pipefail
 
+# Bound every call that reaches the iTerm2 / AppleEvent surface (machine-wide API wedge,
+# 2026-07-26: a bare `it2 session list --json` returned rc 124 with zero output while blocked forks
+# piled up). spawn_gui drives iTerm2 directly and this poller is a launchd job, so an unbounded AppleEvent
+# wedges the job forever; the caller already falls back to tmux when the GUI spawn fails (LR-m).
+# timeout(1) is resolved by ABSOLUTE PATH as well as PATH — launchd jobs and hooks run with a
+# minimal PATH excluding Homebrew, exactly where coreutils installs it, so a PATH-only lookup would
+# leave the AUTOMATED callers unbounded while interactive shells stayed safe. No timeout(1) ⇒ run
+# unbounded rather than break the call. Seams: LRP_OSA_TIMEOUT_S · LRP_OSA_TIMEOUT_BIN
+# (set-but-EMPTY disables verbatim; `${VAR:-}` cannot tell unset from set-empty).
+LRP_TIMEOUT_S="${LRP_OSA_TIMEOUT_S:-15}"
+if [ -n "${LRP_OSA_TIMEOUT_BIN+set}" ]; then
+  LRP_TIMEOUT_BIN="$LRP_OSA_TIMEOUT_BIN"
+else
+  LRP_TIMEOUT_BIN=""
+  for _c in "$(command -v timeout 2>/dev/null || true)" "$(command -v gtimeout 2>/dev/null || true)" \
+            /opt/homebrew/bin/timeout /usr/local/bin/timeout \
+            /opt/homebrew/bin/gtimeout /usr/local/bin/gtimeout; do
+    [ -n "$_c" ] && [ -x "$_c" ] && { LRP_TIMEOUT_BIN="$_c"; break; }
+  done
+fi
+lrp_bounded() {
+  if [ -z "$LRP_TIMEOUT_BIN" ] || [ ! -x "$LRP_TIMEOUT_BIN" ]; then "$@"; return $?; fi
+  "$LRP_TIMEOUT_BIN" -k 3 "$LRP_TIMEOUT_S" "$@"
+}
+
+
 [[ -n "${LR_POLLER_DISABLED:-}" ]] && exit 0
 
 LR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -141,7 +167,7 @@ spawn_gui() {
   # Multi `-e` (not a heredoc) on purpose: the AppleScript stays in ARGV, which is where
   # tests/lr-reset-poller.bats' osascript stub observes the spawn — a heredoc would move it to
   # stdin and silently blind three GUI-spawn assertions (fixture-shape parity).
-  osascript >/dev/null 2>&1 \
+  lrp_bounded osascript >/dev/null 2>&1 \
     -e 'tell application "iTerm2"' \
     -e 'set newWin to (create window with default profile)' \
     -e "tell current session of newWin to write text \"exec /bin/bash $1\"" \

@@ -26,6 +26,32 @@
 #   --dry-run  list what would be cleared, change nothing
 set -uo pipefail
 
+# Bound every call that reaches the iTerm2 / AppleEvent surface (machine-wide API wedge,
+# 2026-07-26: a bare `it2 session list --json` returned rc 124 with zero output while blocked forks
+# piled up). Forks the iterm2 Python API directly, so it is not covered by the it2 shim's own 30s bound.
+# It already fails OPEN (exit 0) when the API is unusable, which is exactly where a cut lands.
+# timeout(1) is resolved by ABSOLUTE PATH as well as PATH — launchd jobs and hooks run with a
+# minimal PATH excluding Homebrew, exactly where coreutils installs it, so a PATH-only lookup would
+# leave the AUTOMATED callers unbounded while interactive shells stayed safe. No timeout(1) ⇒ run
+# unbounded rather than break the call. Seams: ICS_TIMEOUT_S · ICS_TIMEOUT_BIN
+# (set-but-EMPTY disables verbatim; `${VAR:-}` cannot tell unset from set-empty).
+ICS_TIMEOUT_S="${ICS_TIMEOUT_S:-20}"
+if [ -n "${ICS_TIMEOUT_BIN+set}" ]; then
+  ICS_TIMEOUT_BIN="$ICS_TIMEOUT_BIN"
+else
+  ICS_TIMEOUT_BIN=""
+  for _c in "$(command -v timeout 2>/dev/null || true)" "$(command -v gtimeout 2>/dev/null || true)" \
+            /opt/homebrew/bin/timeout /usr/local/bin/timeout \
+            /opt/homebrew/bin/gtimeout /usr/local/bin/gtimeout; do
+    [ -n "$_c" ] && [ -x "$_c" ] && { ICS_TIMEOUT_BIN="$_c"; break; }
+  done
+fi
+ics_bounded() {
+  if [ -z "$ICS_TIMEOUT_BIN" ] || [ ! -x "$ICS_TIMEOUT_BIN" ]; then "$@"; return $?; fi
+  "$ICS_TIMEOUT_BIN" -k 3 "$ICS_TIMEOUT_S" "$@"
+}
+
+
 DRY=0 ALL=0
 for a in "$@"; do
   case "$a" in
@@ -38,10 +64,10 @@ done
 
 # Fail OPEN and quiet on a machine with no iTerm2 python API (headless/CI) — this is a repair
 # convenience, never a gate. Exit 0 so a caller chaining it is not broken by its absence.
-python3 -c 'import iterm2' 2>/dev/null || {
+ics_bounded python3 -c 'import iterm2' 2>/dev/null || {
   echo "iterm-clear-sticky-command: iterm2 python module unavailable — nothing to do" >&2; exit 0; }
 
-DRY="$DRY" ALL="$ALL" python3 <<'PY'
+DRY="$DRY" ALL="$ALL" ics_bounded python3 <<'PY'
 import os, re, sys
 import iterm2
 
