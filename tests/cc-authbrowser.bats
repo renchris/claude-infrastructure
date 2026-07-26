@@ -6,6 +6,20 @@
 # The one un-fakeable resource is the frozen CDP port (contract §1 hardcodes it, so there is no
 # override knob) — stubs bind 127.0.0.1:934x and teardown always frees it.
 
+# Fork can transiently fail (EAGAIN) when this box is running dozens of concurrent bats suites,
+# and a bare `cmd &` then aborts the whole test under errexit — a spurious RED that blocks a
+# landing while proving nothing. Observed 2026-07-25: `sleep 45 &' failed at ~57 concurrent
+# bats processes, then passed on the next gate round. Every one of these tests needs SOME pid,
+# never a specific one, so retrying the spawn preserves the semantics exactly.
+spawn_bg() {   # usage: pid=$(spawn_bg <cmd...>)
+  local i pid
+  for i in 1 2 3 4 5 6 7 8; do
+    if { "$@" & } 2>/dev/null; then pid=$!; if [ -n "$pid" ]; then echo "$pid"; return 0; fi; fi
+    sleep 0.25
+  done
+  return 1
+}
+
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   B="$REPO/bin/cc-authbrowser"
@@ -244,8 +258,7 @@ EOF
 
 @test "a FOREIGN process on the port is BROWSER-FAILED (exit 4) and is NOT killed" {
   if port_open 9341; then skip "port 9341 already in use on this machine"; fi
-  "$D/foreign-listener" 9341 &
-  FOREIGN=$!
+  FOREIGN=$(spawn_bg "$D/foreign-listener" 9341)
   for _ in 1 2 3 4 5 6 7 8 9 10; do port_open 9341 && break; sleep 0.2; done
   port_open 9341
 
@@ -368,8 +381,7 @@ EOF
 }
 
 @test "watchdog KILLS a pid whose command line still matches the browser we launched" {
-  sleep 41 &
-  VICTIM=$!
+  VICTIM=$(spawn_bg sleep 41)
   run "$B" next --watchdog --pid "$VICTIM" --ttl 0 --match "sleep 41"
   [ "$status" -eq 0 ]
   refute alive "$VICTIM"
@@ -377,8 +389,7 @@ EOF
 }
 
 @test "PID-RECYCLE GUARD: a pid whose command line no longer matches is NOT killed" {
-  sleep 43 &
-  STRANGER=$!
+  STRANGER=$(spawn_bg sleep 43)
   run "$B" next --watchdog --pid "$STRANGER" --ttl 0 \
     --match "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
   [ "$status" -eq 0 ]
@@ -388,8 +399,7 @@ EOF
 }
 
 @test "PID-RECYCLE GUARD: an already-dead pid is a no-op, not an error" {
-  sleep 45 &
-  DEAD=$!
+  DEAD=$(spawn_bg sleep 45)
   kill "$DEAD" 2>/dev/null || true
   wait "$DEAD" 2>/dev/null || true
   run "$B" next --watchdog --pid "$DEAD" --ttl 0 --match "sleep 45"
@@ -397,8 +407,7 @@ EOF
 }
 
 @test "watchdog clears the state file only when it still names the pid it killed" {
-  sleep 47 &
-  VICTIM=$!
+  VICTIM=$(spawn_bg sleep 47)
   printf '{"acct":"next3","pid":%d,"port":9343,"chrome_bin":"sleep 47"}\n' "$VICTIM" \
     > "$CC_AUTHBROWSER_STATE_DIR/cc-authbrowser-next3.json"
   run "$B" next3 --watchdog --pid "$VICTIM" --ttl 0 --match "sleep 47"
@@ -407,8 +416,7 @@ EOF
   wait "$VICTIM" 2>/dev/null || true
 
   # a state file naming a DIFFERENT pid belongs to a newer session — leave it alone
-  sleep 49 &
-  V2=$!
+  V2=$(spawn_bg sleep 49)
   printf '{"acct":"next4","pid":123456,"port":9344,"chrome_bin":"sleep 49"}\n' \
     > "$CC_AUTHBROWSER_STATE_DIR/cc-authbrowser-next4.json"
   run "$B" next4 --watchdog --pid "$V2" --ttl 0 --match "sleep 49"
