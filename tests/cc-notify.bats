@@ -287,14 +287,49 @@ sent_count() { if [ -f "$IT2_LOG" ]; then grep -c '^SEND' "$IT2_LOG"; else echo 
 # a registry-direct resolver apart from the it2-shelling one it replaced.
 
 # it2 stub that hangs far longer than any bound — stands in for iTerm2 under pane load 13-16.
+# It also SPIES: every invocation is appended to $IT2_SPY before the stub does anything else, so a test
+# can assert the strong claim ("this path never touches it2") DIRECTLY rather than inferring it from
+# elapsed time. Timing alone is not sufficient here, and a green suite proved it: with the it2 call
+# bounded at CC_IT2_TIMEOUT_S=5 and the hang tests asserting <10s, disabling the registry-direct
+# target_live() — the SECOND of the two hang sites, and the one whose fix this suite exists to pin —
+# still passed 40/40, because the fallback merely degraded to a 5s bounded call. The bound was pinned;
+# the fix was not.
 hanging_it2() {
   cat > "$BATS_TEST_TMPDIR/it2-hang" <<'SH'
 #!/bin/bash
+# Record FIRST — the assertion is "never invoked", so the spy must fire even on paths that then hang.
+# `:?` rather than a default: a spy that silently failed to record would make every it2_untouched
+# assertion pass vacuously, which is the exact failure mode this fixture exists to end.
+printf '%s\n' "$*" >> "${IT2_SPY:?it2 stub invoked with no spy ledger wired}"
 if [ "$1" = "session" ] && [ "$2" = "list" ]; then sleep 300; exit 0; fi
 exit 0
 SH
   chmod +x "$BATS_TEST_TMPDIR/it2-hang"
   export IT2_BIN="$BATS_TEST_TMPDIR/it2-hang"
+  export IT2_SPY="$BATS_TEST_TMPDIR/it2-calls"
+  : > "$IT2_SPY"
+}
+
+# Same spy, but it does NOT hang: records, then returns a valid (empty) pane list immediately. For the
+# positive control, where the claim is only "the spy records" — never "it records within a bound".
+spying_it2() {
+  cat > "$BATS_TEST_TMPDIR/it2-spy" <<'SH'
+#!/bin/bash
+printf '%s\n' "$*" >> "${IT2_SPY:?it2 stub invoked with no spy ledger wired}"
+if [ "$1" = "session" ] && [ "$2" = "list" ]; then printf '[]\n'; exit 0; fi
+exit 0
+SH
+  chmod +x "$BATS_TEST_TMPDIR/it2-spy"
+  export IT2_BIN="$BATS_TEST_TMPDIR/it2-spy"
+  export IT2_SPY="$BATS_TEST_TMPDIR/it2-calls"
+  : > "$IT2_SPY"
+}
+
+# Effect-read of "off the blocking path entirely". Asserts the ledger EXISTS before asserting it is
+# empty — an absent ledger would mean the fixture was never wired, not that it2 went untouched.
+it2_untouched() {
+  [ -f "$IT2_SPY" ] || { echo "spy ledger $IT2_SPY missing — hanging_it2 was not called"; return 1; }
+  [ ! -s "$IT2_SPY" ] || { echo "it2 WAS invoked: $(cat "$IT2_SPY")"; return 1; }
 }
 secs() { local s e; s=$(date +%s); "$@" >/dev/null 2>&1; e=$(date +%s); echo $(( e - s )); }
 
@@ -302,6 +337,7 @@ secs() { local s e; s=$(date +%s); "$@" >/dev/null 2>&1; e=$(date +%s); echo $((
   hanging_it2
   local t; t="$(secs "$NOTIFY" peer "under load")"
   [ "$t" -lt 10 ] || { echo "took ${t}s — the resolver is still going through the blocking it2 call"; false; }
+  it2_untouched || false          # the actual claim: not merely "fast", but never on the IPC at all
   run "$NOTIFY" peer "under load 2"
   [ "$status" -eq 0 ]
   [[ "$output" == *"delivered to inbox"* ]] || false
@@ -315,6 +351,10 @@ secs() { local s e; s=$(date +%s); "$@" >/dev/null 2>&1; e=$(date +%s); echo $((
   hanging_it2
   local t; t="$(secs "$NOTIFY" "$UUID" "full uuid under load")"
   [ "$t" -lt 10 ] || { echo "took ${t}s — target_live() is still on the blocking it2 call"; false; }
+  # Load-bearing: a registered row must be decided from the REGISTRY, not via a bounded-but-still-taken
+  # it2 call. Elapsed time cannot see that difference (a 5s bound also lands under 10s), so reverting
+  # registry-direct target_live() is caught ONLY here.
+  it2_untouched || false
   grep -q 'full uuid under load' "$CC_MAILBOX_DIR/$UUID.md"
 }
 
@@ -328,6 +368,20 @@ secs() { local s e; s=$(date +%s); "$@" >/dev/null 2>&1; e=$(date +%s); echo $((
   [ "$status" -eq 0 ]
   [[ "$output" == *"UNVERIFIABLE"* ]] || false      # a timeout is 'unknown', never a false not-live
   grep -q 'bounded' "$CC_MAILBOX_DIR/$GHOST.md"
+}
+
+@test "v4: POSITIVE CONTROL — the it2 spy really records, so it2_untouched cannot pass vacuously" {
+  # Without this, the two "never touches it2" assertions above could be green because the stub never
+  # writes at all rather than because the resolver stayed off the IPC. An UNREGISTERED target has no
+  # registry row to decide liveness from, so it2 MUST be consulted here. Deliberately NOT the hanging
+  # stub: a 1s bound racing the stub's own process startup made this assertion flaky under suite load,
+  # and a flaky control is worse than none. The claim is "the spy records", not "it records fast".
+  spying_it2
+  local GHOST="FFFFFFFF-1234-5678-9999-000000000000"
+  run "$NOTIFY" "$GHOST" "positive control"
+  [ "$status" -eq 0 ]
+  [ -s "$IT2_SPY" ] || { echo "spy recorded nothing even where it2 IS expected — the spy is blind"; false; }
+  grep -q 'session list' "$IT2_SPY" || { echo "spy ledger holds: $(cat "$IT2_SPY")"; false; }
 }
 
 @test "v4: RESOLVER UNAVAILABLE (registry unreadable) → exit 4, NOT exit 3 — the target is unverified, not invalid" {
