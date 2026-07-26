@@ -35,8 +35,51 @@ LR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AUDIT="$LR/lr-audit.py"
 STATE="$HOME/.reso/limit-recover"
 PARKED="$STATE/parked"; RESUMED="$STATE/resumed"; LOG="$STATE/poller.log"
-mkdir -p "$PARKED" "$RESUMED"
+CLAIMS="$STATE/fire-claims"
+mkdir -p "$PARKED" "$RESUMED" "$CLAIMS"
 DRY=0; [[ "${1:-}" == "--dry-run" ]] && DRY=1
+
+# ── SELF-OVERLAP LOCK (skip, never queue) ──────────────────────────────────────────────
+# launchd fires this every ~10 min, but a tick does per-session lr-audit subprocesses and
+# claude-accounts calls; on a loaded box a tick can outrun its own interval. Overlapping
+# ticks each pass the "already running" guard below and fire the SAME session twice —
+# observed 2026-07-26: FOUR concurrent `--resume 076a1186-…`, three spawned within ~90 s,
+# ~1.9 GB and four processes appending to ONE transcript. Same class as the cc-reaper
+# self-overlap. SKIP (not queue): a missed tick costs 10 minutes; a doubled tick costs a
+# duplicate session. Holder identity is pid+lstart — `kill -0` alone wedges forever on a
+# recycled pid. Seam: LR_POLLER_LOCK_DIR lets the suite stay off the real state dir.
+LOCKD="${LR_POLLER_LOCK_DIR:-$STATE/poller.lock}"
+_lstart_of() { ps -o lstart= -p "$1" 2>/dev/null | tr -s ' '; }
+if ! mkdir "$LOCKD" 2>/dev/null; then
+  _hp=$(cat "$LOCKD/pid" 2>/dev/null || echo "")
+  _hl=$(cat "$LOCKD/lstart" 2>/dev/null || echo "")
+  if [[ "$_hp" =~ ^[0-9]+$ ]] && kill -0 "$_hp" 2>/dev/null && [[ "$(_lstart_of "$_hp")" == "$_hl" ]]; then
+    exit 0                                   # a genuine live tick holds it — skip this one
+  fi
+  rm -rf "$LOCKD" 2>/dev/null || true         # stale (dead or pid recycled) — steal it
+  mkdir "$LOCKD" 2>/dev/null || exit 0        # lost the race to another tick — skip
+fi
+echo $$ > "$LOCKD/pid"; _lstart_of $$ > "$LOCKD/lstart"
+trap 'rm -rf "$LOCKD" 2>/dev/null || true' EXIT INT TERM
+
+# ── FIRE CLAIM (closes the pgrep race) ─────────────────────────────────────────────────
+# The "already running" guard is `pgrep -f "resume <sid>"` — it looks for the claude CHILD.
+# But the spawn chain is launcher → lr-fire-resume.sh → expect → claude: for the seconds
+# that chain takes (longer on a loaded box), NO process carries `--resume <sid>` yet, so a
+# following tick sees "not running" and fires a second one. The claim is written BEFORE the
+# spawn, so the sid is reserved for the whole chain, not just once the child exists.
+# TTL-bounded (15 min ≈ 1.5 ticks): a spawn that genuinely failed must not wedge the session
+# out of recovery forever.
+CLAIM_TTL_MIN="${LR_CLAIM_TTL_MIN:-15}"
+sid_claimed() { # $1=sid -> 0 if a FRESH claim exists
+  local c="$CLAIMS/$1"
+  [[ -f "$c" ]] || return 1
+  if [[ -n $(find "$c" -mmin "+$CLAIM_TTL_MIN" 2>/dev/null) ]]; then
+    rm -f "$c" 2>/dev/null || true; return 1   # expired — reclaimable
+  fi
+  return 0
+}
+claim_sid() { : > "$CLAIMS/${1:?claim_sid needs a sid}" 2>/dev/null || true; }
 AUTOFIRE="${LR_POLLER_AUTOFIRE:-0}"
 RECENCY_MIN=$(( 48 * 60 ))          # only sessions touched in the last 48h
 MAX_PER_RUN=4                       # runaway guard (per TICK — see consolidation below)
@@ -216,7 +259,8 @@ print('1' if any(e.get('kind')=='monthly_spend' for e in es) else '')
       fi
       continue
     fi
-    pgrep -f "resume $sid" >/dev/null 2>&1 && continue        # already running
+    # already running, OR a fresh claim from an in-flight spawn chain (see FIRE CLAIM above)
+    { pgrep -f "resume $sid" >/dev/null 2>&1 || sid_claimed "$sid"; } && continue
     # cwd from the transcript itself (avoids lossy slug-decoding)
     cwd=$(cwd_of "$tx")
     [[ -n "$cwd" && -d "$cwd" ]] || continue
@@ -317,7 +361,7 @@ for k in ('sid','acct','cfg','cwd','reset_at_utc'):
   # shellcheck disable=SC2154
   reset_epoch=$(python3 -c "import sys,calendar,time; from datetime import datetime; print(int(calendar.timegm(datetime.fromisoformat(sys.argv[1].replace('Z','+00:00')).utctimetuple())))" "$reset_at_utc" 2>/dev/null || echo 0)
   (( now < reset_epoch )) && continue                        # reset not reached yet
-  pgrep -f "resume $sid" >/dev/null 2>&1 && { mv "$pf" "$RESUMED/$(basename "$pf")" 2>/dev/null; rm -f "$PARKED/$sid.notified"; continue; }
+  { pgrep -f "resume $sid" >/dev/null 2>&1 || sid_claimed "$sid"; } && { mv "$pf" "$RESUMED/$(basename "$pf")" 2>/dev/null; rm -f "$PARKED/$sid.notified"; continue; }
   # Not the winner for its worktree → LIST it and retire THIS limit event. Leaving it parked
   # would just re-elect it next tick once the winner is running (already-running filters the
   # winner out) — sprawl at 10-minute cadence. The session is not lost: resume it explicitly by
@@ -348,10 +392,14 @@ for k in ('sid','acct','cfg','cwd','reset_at_utc'):
     launcher="${LR_POLLER_LAUNCH_DIR:-/tmp}/lr-poller-launch-${sid:0:8}.sh"   # seam: tests redirect off the shared /tmp (concurrent-suite write collision)
     { echo '#!/bin/bash'; printf 'exec "%s/lr-fire-resume.sh" "%s" "%s" "%s" --prompt %q\n' \
         "$LR" "$acct" "$cwd" "$sid" "/limit-recover"; } > "$launcher"; chmod +x "$launcher"
+    # Claim BEFORE spawning: the claude child does not carry `--resume <sid>` until the
+    # launcher→expect→claude chain completes, and until then pgrep cannot see it.
+    claim_sid "$sid"
     if mech=$(spawn_resume "$launcher" "$sid"); then
       log "RESUMED $sid on $acct (autofire, $mech) — pane opened"
       mv "$pf" "$RESUMED/$(basename "$pf")"; rm -f "$PARKED/$sid.notified"; fired=$((fired+1))
     else
+      rm -f "$CLAIMS/$sid" 2>/dev/null || true   # spawn failed ⇒ release immediately, don't wait out the TTL
       log "ERROR  $sid — resume spawn failed (LR_POLLER_SPAWN=$SPAWN_MECH; no GUI and no tmux)"
     fi
   elif [[ ! -f "$PARKED/$sid.notified" ]]; then    # notify ONCE per parked session (no per-tick spam)
