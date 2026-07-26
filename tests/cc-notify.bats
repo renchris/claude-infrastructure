@@ -424,6 +424,59 @@ secs() { local s e; s=$(date +%s); "$@" >/dev/null 2>&1; e=$(date +%s); echo $((
   grep -q 'lower-case prefix' "$CC_MAILBOX_DIR/$UUID.md"
 }
 
+@test "v4: a DASHED partial resolves — the paste shape a full-uuid column actually produces" {
+  # The listing prints the 36-char DASHED uuid, so a trimmed selection carries dashes (a double-click
+  # tends to stop at a dash boundary). The old gate demanded pure hex yet compared against a dashed
+  # uuid, so every dash-bearing partial returned rc=3 "target genuinely UNKNOWN" — this item's own
+  # defect class, made MORE likely by the very column change that was supposed to fix round-tripping.
+  for t in "AAAAAAAA-1111" "AAAAAAAA-1111-2222" "AAAAAAAA-1111-2222-3333"; do
+    run "$NOTIFY" "$t" "dashed $t"
+    [ "$status" -eq 0 ] || { echo "dashed partial '$t' refused with $status: $output"; false; }
+    grep -q "dashed $t" "$CC_MAILBOX_DIR/$UUID.md" || false
+  done
+}
+
+@test "v4: a DASH-STRIPPED partial resolves too, including all 32 hex digits" {
+  # The mirror failure: hand-stripping the dashes yields >8 hex, which the old gate ACCEPTED and then
+  # could not match, because the stored uuid is dashed — so 9..32-hex pastes died as "UNKNOWN" as well.
+  # Dashes are normalised out of BOTH sides now, so every shape of one address resolves to it.
+  for t in "AAAAAAAA1" "AAAAAAAA1111" "AAAAAAAA111122223333444444444444"; do
+    run "$NOTIFY" "$t" "stripped $t"
+    [ "$status" -eq 0 ] || { echo "stripped partial '$t' refused with $status: $output"; false; }
+    grep -q "stripped $t" "$CC_MAILBOX_DIR/$UUID.md" || false
+  done
+}
+
+@test "v4: dash-tolerance does NOT weaken the guards — too-short and non-hex still exit 3" {
+  # Counted with the dashes removed, <8 hex digits is still too weak to address a pane, and a non-hex
+  # body is still not a uuid. Admitting dashes makes both easy to loosen by accident — "AAAA----" is
+  # the specific trap: 8 characters, but only 4 hex DIGITS, so padding with dashes must not buy its way
+  # past the bar. (A LEADING dash is deliberately not tested here: it is an option by construction and
+  # the parser rejects it with usage/rc 2, which is correct and has nothing to do with prefix matching.)
+  for t in "AAAAAAA" "AAAA-AAA" "AAAA----" "ZZZZZZZZ" "AAAAAAAA-11ZZ"; do
+    run "$NOTIFY" "$t" "x"
+    [ "$status" -eq 3 ] || { echo "'$t' should be UNKNOWN (3), got $status: $output"; false; }
+  done
+}
+
+@test "v4: an AMBIGUOUS DASHED prefix still fails LOUD (exit 6), enqueueing nothing" {
+  local TWIN="AAAAAAAA-5555-6666-7777-888888888888"
+  printf '{"paneUUID":"%s","name":"twin","cwd":"/tmp","account":"next","pid":%s,"startedAt":1}' \
+    "$TWIN" "$$" > "$CC_REGISTRY_DIR/$TWIN.json"
+  run "$NOTIFY" "AAAAAAAA-" "who am i for"
+  [ "$status" -eq 6 ]
+  [[ "$output" == *"AMBIGUOUS"* ]] || false
+  [ ! -f "$CC_MAILBOX_DIR/$UUID.md" ]
+  [ ! -f "$CC_MAILBOX_DIR/$TWIN.md" ]
+  # …and a longer prefix disambiguates in EITHER shape, onto the correct pane of the two
+  run "$NOTIFY" "AAAAAAAA-5555" "to the twin"
+  [ "$status" -eq 0 ]
+  grep -q 'to the twin' "$CC_MAILBOX_DIR/$TWIN.md"
+  run "$NOTIFY" "AAAAAAAA1111" "to the original"
+  [ "$status" -eq 0 ]
+  grep -q 'to the original' "$CC_MAILBOX_DIR/$UUID.md"
+}
+
 @test "v4: an AMBIGUOUS prefix fails LOUD (exit 6) and enqueues NOTHING — never a silent wrong pane" {
   local TWIN="AAAAAAAA-5555-6666-7777-888888888888"
   printf '{"paneUUID":"%s","name":"twin","cwd":"/tmp","account":"next","pid":%s,"startedAt":1}' \

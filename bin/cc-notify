@@ -176,10 +176,13 @@ EOF
 registry_prefix_to_uuid() {
   local want="$1" n p u lc_w lc_u hits="" live_hits="" n_hits=0 n_live=0
   registry_load || return 2
-  lc_w="$(printf '%s' "$want" | tr '[:upper:]' '[:lower:]')"
+  # Both sides are compared DASH-STRIPPED and lower-cased, so "AAAAAAAA-1111", "aaaaaaaa1111" and the
+  # full 32 hex digits all address the same pane. The value RETURNED is still the canonical dashed
+  # uuid ($u), because that is what every downstream consumer (mailbox path, it2) expects.
+  lc_w="$(printf '%s' "${want//-/}" | tr '[:upper:]' '[:lower:]')"
   while IFS="$(printf '\t')" read -r n p u; do
     [ -n "$u" ] || continue
-    lc_u="$(printf '%s' "$u" | tr '[:upper:]' '[:lower:]')"
+    lc_u="$(printf '%s' "${u//-/}" | tr '[:upper:]' '[:lower:]')"
     case "$lc_u" in
       "$lc_w"*) hits="${hits}${u}
 "; n_hits=$(( n_hits + 1 ))
@@ -265,8 +268,16 @@ resolve() {
   if [[ "$t" =~ ^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$ ]]; then
     echo "$t"; return 0
   fi
-  # 3. unambiguous UUID prefix (>=8 hex) — makes the `--list` column round-trip into its own input.
-  if [[ "$t" =~ ^[0-9A-Fa-f]{8,}$ ]]; then
+  # 3. unambiguous UUID prefix — makes the `--list` column round-trip into its own input. DASHES ARE
+  #    OPTIONAL, on both sides. The column prints the full 36-char DASHED uuid, so a trimmed paste is
+  #    normally dash-bearing ("AAAAAAAA-1111" — a double-click selection tends to stop at a dash
+  #    boundary), while a hand-stripped one is not ("AAAAAAAA1111", or all 32 hex digits). Those are
+  #    the SAME address, and a pure-hex gate rejected BOTH of the latter shapes: it demanded hex-only
+  #    yet compared against a dashed uuid, so anything past the 8th character could not match. Every
+  #    such paste returned "target genuinely UNKNOWN" — the precise lie this rewrite exists to end,
+  #    made MORE likely by widening the column. The bar is unchanged: >=8 HEX DIGITS, counted with the
+  #    dashes removed.
+  if [[ "${t//-/}" =~ ^[0-9A-Fa-f]{8,}$ ]]; then
     u="$(registry_prefix_to_uuid "$t")"; local prc=$?
     case "$prc" in
       0) echo "$u"; return 0 ;;
