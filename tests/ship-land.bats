@@ -294,7 +294,13 @@ EOF
 
   run env SHIP_LAND_VERIFY_RETRIES=0 bash "$SHIPLAND" --trunk main
   [ "$status" -eq 8 ]
-  ! echo "$output" | grep -qi "auto-retry" || false      # zero retries attempted (single-shot)
+  # NOT a bare "auto-retry" substring: with retries disabled ship-land correctly reports
+  # `post-push CONTENT-VERIFY FAILED after 0 auto-retry attempt(s)`, which that substring
+  # matches — so it could never distinguish "no retry happened" from "a retry happened",
+  # and passed only while it was dead. Assert the PER-ATTEMPT marker instead (`auto-retry
+  # <n>/<max>`, ship-land.sh), plus a positive check that the reported count is 0.
+  ! echo "$output" | grep -qE "auto-retry [0-9]+/[0-9]+" || false
+  echo "$output" | grep -q "after 0 auto-retry attempt" || false
   grep -q '"exit":8' "$LAND_LOG"
 }
 
