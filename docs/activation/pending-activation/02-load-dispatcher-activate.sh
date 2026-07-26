@@ -22,11 +22,17 @@ echo "Pre-flight (do by hand first): cc-dispatch --once --dry-run"
 echo "Load:"
 echo "    cp $REPO/launchd/$PLIST ~/Library/LaunchAgents/$PLIST"
 echo "    plutil -lint ~/Library/LaunchAgents/$PLIST"
-echo "    launchctl bootstrap gui/\$(id -u) ~/Library/LaunchAgents/$PLIST"
+echo "    launchctl enable gui/\$(id -u)/${PLIST%.plist} && launchctl bootstrap gui/\$(id -u) ~/Library/LaunchAgents/$PLIST"
 echo "    launchctl print gui/\$(id -u)/com.claude.dispatcher | grep -E 'state|program'"
 echo
 
 if [ "${CONFIRM:-0}" = 1 ]; then
+  # A label in launchd's DISABLED database refuses bootstrap with a bare EIO naming neither cause
+  # nor cure; all 13 com.claude.* labels are disabled on this host (legacy `unload -w` sets that
+  # bit and `bootout` never clears it). `enable` clears it, no-ops otherwise, and stays OUT of the
+  # && chain so bootstrap remains the verdict.
+  launchctl enable "gui/$(id -u)/${PLIST%.plist}" \
+    || echo "  (enable rc=$? — continuing; the bootstrap below is the verdict)"
   if cp "$REPO/launchd/$PLIST" "$HOME/Library/LaunchAgents/$PLIST" \
        && plutil -lint "$HOME/Library/LaunchAgents/$PLIST" \
        && launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/$PLIST"; then

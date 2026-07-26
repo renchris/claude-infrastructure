@@ -22,7 +22,7 @@ echo "== 09-postland-verify =="
 [ -f "$SRC" ] || { echo "✗ missing in checkout: $SRC (is the checkout on a trunk with this commit?)" >&2; exit 1; }
 echo "Will do: [0] $SRC --selftest (proves both verdict paths, side-effect-free)"
 echo "         [1] symlink $SRC → $DEST"
-echo "         [2] cp launchd/$PLIST ~/Library/LaunchAgents/ ; plutil -lint ; launchctl bootstrap gui/\$(id -u)"
+echo "         [2] cp launchd/$PLIST ~/Library/LaunchAgents/ ; plutil -lint ; launchctl enable ; launchctl bootstrap gui/\$(id -u)"
 
 if [ "${CONFIRM:-0}" != 1 ]; then
   echo "(dry run — re-run with CONFIRM=1 to apply:)"
@@ -37,6 +37,15 @@ elif ln -sfn "$SRC" "$DEST"; then echo "  → $DEST"
 else echo "  ✗ failed: $DEST" >&2; exit 1; fi
 
 echo "[2] load the launchd job"
+# A label sitting in launchd's DISABLED database refuses bootstrap with a bare
+# "Bootstrap failed: 5: Input/output error" that names neither the cause nor the cure. Observed
+# on this host 2026-07-26: all 13 com.claude.* labels are disabled (legacy `launchctl unload -w`
+# writes that bit; `bootout` does not clear it), so every one of these activators would fail EIO
+# on a re-load while reporting nothing an operator could act on. `enable` clears the bit and is a
+# no-op when it is not set. Deliberately NOT in the && chain below: bootstrap is the verdict, and
+# an enable that fails for a benign reason must not mask a load that would have worked.
+launchctl enable "gui/$(id -u)/${PLIST%.plist}" \
+  || echo "  (enable rc=$? — continuing; the bootstrap below is the verdict)"
 if cp "$REPO/launchd/$PLIST" "$HOME/Library/LaunchAgents/$PLIST" \
      && plutil -lint "$HOME/Library/LaunchAgents/$PLIST" \
      && launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/$PLIST"; then

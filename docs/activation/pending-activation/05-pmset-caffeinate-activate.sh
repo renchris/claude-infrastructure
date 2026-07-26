@@ -27,7 +27,7 @@ echo "    ${PMSET_APPLY[*]}"
 echo "Step 3 — load the two LaunchAgents (floor first, then the verifier):"
 for L in "$FLOOR" "$VERIFY"; do
   echo "    cp $REPO/launchd/$L ~/Library/LaunchAgents/$L"
-  echo "    plutil -lint ~/Library/LaunchAgents/$L && launchctl bootstrap gui/$UID_N ~/Library/LaunchAgents/$L"
+  echo "    plutil -lint ~/Library/LaunchAgents/$L && launchctl enable gui/$UID_N/${L%.plist} && launchctl bootstrap gui/$UID_N ~/Library/LaunchAgents/$L"
 done
 echo
 
@@ -38,6 +38,12 @@ if [ "${CONFIRM:-0}" = 1 ]; then
   fi
   for L in "$FLOOR" "$VERIFY"; do
     label="${L%.plist}"
+    # A label in launchd's DISABLED database refuses bootstrap with a bare EIO naming neither
+    # cause nor cure; all 13 com.claude.* labels are disabled on this host (legacy `unload -w`
+    # sets that bit and the bootout below never clears it). `enable` clears it, no-ops otherwise,
+    # and stays OUT of the && chain so bootstrap remains the verdict.
+    launchctl enable "gui/$UID_N/$label" \
+      || echo "  (enable rc=$? — continuing; the bootstrap below is the verdict)"
     if cp "$REPO/launchd/$L" "$HOME/Library/LaunchAgents/$L" \
          && plutil -lint "$HOME/Library/LaunchAgents/$L" \
          && { launchctl bootout "gui/$UID_N/$label" 2>/dev/null || true; \
