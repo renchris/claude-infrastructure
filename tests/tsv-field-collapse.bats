@@ -21,6 +21,13 @@
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
+  # HERMETIC $HOME (scripts/test-hermeticity-lint.sh). Not box-ticking: the session-index cases
+  # source hooks/lib/session-index-helpers.sh, whose SESSION_INDEX_DB / SESSION_INDEX_LOG resolve
+  # to $HOME/.claude/… — so an un-fixtured run of this very file can write the LIVE search index.
+  # Proven during this sweep: an end-to-end smoke of hooks/session-index-end.sh under the real
+  # $HOME reached the live DB path before an early exit happened to spare it. Fixture, don't hope.
+  export HOME="$BATS_TEST_TMPDIR/home"
+  mkdir -p "$HOME/.claude/logs"
   C="$BATS_TEST_TMPDIR/case"
   mkdir -p "$C"
   PAD=$'\037'
@@ -413,6 +420,7 @@ bin/cc-blockers|already padded on feat/relogin-observability (0dac237) — that 
 hooks/session-index-sweep.sh|consumer only; its producer (session_index_extract_enriched) pads at the emitter. The file is being rewritten on fix/infra-perfection, which deletes both reads
 scripts/lead-deathwatch.sh|reads a watch-file and the kqueue helper's output — neither is a jq producer, and both emit fixed-arity rows
 scripts/desk-recycle-invariant.sh|resolve_desk guarantees all three cells non-empty before printing (cfg falls back to the CC default root; an empty cwd returns 1)
+scripts/relogin-probes/e1-concurrent-logins.sh|producer REFUSES on an empty identity field rather than emitting one (all four are required), so non-empty is guaranteed at the source instead of padded — the same discharge as desk-recycle-invariant above
 EOF
 }
 
@@ -426,6 +434,11 @@ EOF
     # greppable statement that the author considered the collapse; neither is accidental.
     if grep -qE 'def cell(\(ph\))?:|def _cell' "$f"; then continue; fi
     if grep -qE 'session_index_unpad|unpad\(\)|TSV_PAD' "$f"; then continue; fi
+    # bin/cc-relogin-poll pads with an equivalent awk idiom instead of a jq def — `norm <n>` right-
+    # fills the row to n fields and substitutes "-" for every empty, `dash` un-pads on read. That is
+    # the same guarantee reached another way, and the recognizer must not demand one house style:
+    # this guard exists to catch UNPADDED readers, not to enforce a spelling.
+    if grep -qE '^norm\(\)|^dash\(\)' "$f"; then continue; fi
     if tsv_exemptions | grep -q "^$f|"; then continue; fi
     unpadded="$unpadded $f"
   done

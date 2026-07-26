@@ -37,8 +37,20 @@ d = json.load(open(os.path.expanduser(sys.argv[1])))
 a = next((x for x in d["accounts"] if x["name"] == sys.argv[2]), None)
 if a is None:
     sys.exit("no such account: " + sys.argv[2])
-print("\t".join([os.path.expanduser(a["config_dir"]), a["email"],
-                 d["keychain_account"], os.path.expanduser(d["claude_bin"])]))
+fields = [os.path.expanduser(a["config_dir"]), a["email"],
+          d["keychain_account"], os.path.expanduser(d["claude_bin"])]
+# REFUSE on an empty identity field rather than emit it. The reader is `IFS=$'\t' read`, and tab is
+# IFS-*whitespace*: an empty cell does not yield an empty variable, it shifts every later field one
+# position LEFT. An account with a blank `email` would put keychain_account into $EMAIL and the
+# claude binary into $KC_ACCT, so kc_svc() would hash the wrong string and every keychain lookup in
+# this probe would silently address the wrong service. These four are all REQUIRED identity values,
+# so failing loud is right where padding would only make a wrong run look plausible.
+# See docs/research/TSV_FIELD_COLLAPSE_2026-07-25.md.
+names = ["config_dir", "email", "keychain_account", "claude_bin"]
+empty = [n for n, v in zip(names, fields) if not str(v).strip()]
+if empty:
+    sys.exit("empty identity field(s) for '%s': %s" % (sys.argv[2], ", ".join(empty)))
+print("\t".join(fields))
 PY
 )" || { echo "e1: REFUSED — cannot resolve '$ACCT' in $ACCOUNTS_JSON" >&2; exit 2; }
 IFS=$'\t' read -r PRIMARY_DIR EMAIL KC_ACCT CLAUDE_BIN <<<"$IDENT"
