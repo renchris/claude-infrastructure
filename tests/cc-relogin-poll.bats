@@ -5,6 +5,10 @@
 # authenticates, mutates an account, or loads a LaunchAgent — the real binaries are never invoked.
 
 setup() {
+  # HERMETIC $HOME (scripts/test-hermeticity-lint.sh — the ratchet that binds every NEW suite):
+  # the subject resolves its own state under ~, so unfixtured this suite reads/writes the
+  # operator's LIVE layer. Everything this suite asserts is already redirected elsewhere.
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   P="$REPO/bin/cc-relogin-poll"
   D="$BATS_TEST_TMPDIR"

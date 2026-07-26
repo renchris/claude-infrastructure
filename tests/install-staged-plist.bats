@@ -18,6 +18,10 @@
 # Both read install.sh and the plists off disk — nothing here restates a constant it checks.
 
 setup() {
+  # HERMETIC $HOME (scripts/test-hermeticity-lint.sh — the ratchet that binds every NEW suite).
+  # Free here: every path below is under $REPO and nothing reads ~. Set anyway so the suite can
+  # never start depending on the operator's live layer.
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   INSTALL="$REPO/install.sh"
   MARKER='STAGED, NOT LOADED'
