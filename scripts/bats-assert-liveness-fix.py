@@ -78,11 +78,13 @@ def split_trailing_comment(line: str) -> tuple[str, str]:
         i += 1
     return line.rstrip(), ""
 
-    # `A && false || true`
+    # `A && false`, with or without a trailing always-true handler
 
 
+# The trailing `|| true` / `|| :` is OPTIONAL. Both shapes mean "A must not match", and for BOTH
+# the ` || false` append is wrong — see revive().
 RE_SWALLOWED = re.compile(
-    r"^(?P<indent>\s*)(?P<a>.+?)\s*&&\s*false\s*\|\|\s*(?:true|:)\s*$"
+    r"^(?P<indent>\s*)(?P<a>.+?)\s*&&\s*false\s*(?:\|\|\s*(?:true|:)\s*)?$"
 )
 
 
@@ -92,14 +94,25 @@ def revive(code: str) -> str | None:
     The default transform APPENDS ` || false`: the statement's failure then lands in the
     list's last, un-negated element, where errexit applies.
 
-    That append is a NO-OP for one shape. `A && false || true` reads as "A must not
-    match", but the trailing always-true handler already pins the status to 0 — appending
-    yields `A && false || true || false`, which is still 0 on every path. Verified:
+    That append is WRONG for the negative-assertion family `A && false` ("A must not match"),
+    with or without a trailing always-true handler. Both members are rewritten, not appended to.
 
-        bash -ec 'echo hit | grep -q hit && false || true || false'   → status 0
+      * `A && false || true` — the trailing handler already pins the status to 0, so appending
+        yields `A && false || true || false`, still 0 on every path. The append is a NO-OP and
+        the assertion stays dead. Verified:
 
-    So that shape is REWRITTEN rather than appended to, into the negation the author
-    meant: `! A || false`. Same intent, and its failure is now reachable.
+            bash -ec 'echo hit | grep -q hit && false || true || false'   → status 0
+
+      * `A && false` (bare) — worse than a no-op. `S = A && false` can NEVER succeed: if A
+        succeeds `false` runs, and if A fails the `&&` list is already non-zero. So both paths
+        reach the appended `|| false` and the assertion fails UNCONDITIONALLY, turning a passing
+        test into a permanently failing one. This shape blocked a real land on 2026-07-26 (the
+        ratchet now runs inside run_gate), and the append had gone unnoticed because the fixer's
+        own revival test used an already-FALSE condition (`[[ 1 -eq 2 ]]`), under which "correctly
+        live" and "always fails" are indistinguishable. A revival test needs a TRUE condition.
+
+    Both become the negation the author meant: `! A || false` — same intent, failure reachable,
+    and it still PASSES when A does not match.
     """
     if re.search(r"\|\|\s*false$", code):
         return None  # already revived
