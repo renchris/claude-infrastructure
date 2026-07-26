@@ -90,8 +90,29 @@
 # `pipefail` load-bearing; NO `set -e`.
 set -uo pipefail
 
-SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# SELF/SCRIPT_DIR resolve THROUGH symlinks — load-bearing, not hygiene. ~/.claude/scripts/ is a
+# REAL directory of PER-FILE symlinks into the checkout, so an unresolved `dirname "$0"` made a
+# LIVE-PATH land look for its siblings in ~/.claude/scripts/ — where a BRAND-NEW tracked file has
+# no symlink yet (the deploy ff-sync does not create them; backlog d83b624354af / 761a546f939c).
+# gate-select.sh + gate-policy.sh were exactly that: landed on origin/main, unlinked live. So a
+# live-path land silently lost BOTH the scoped default (policy unsourced ⇒ `full`) and the
+# selector ⇒ the "missing/not executable — treating as FULL (fail-closed)" branch below, running
+# the whole ~1630-test suite on EVERY land, unserialized across every landing worktree. That is
+# the amplifier in the 2026-07-26 machine-wide gate runaway (backlog f8e40b4c577d), and it is why
+# the degradation looked INTERMITTENT: `./scripts/ship-land.sh` from a worktree found its sibling
+# and went scoped; the same land via the live symlink went FULL. Same bug family as
+# deploy-parity-assert.sh (816015ecb30b). macOS `readlink` has no -f on older bases ⇒ manual loop.
+_resolve_self() {  # <path> → absolute path, every symlink hop resolved (bash 3.2 / POSIX-safe)
+  local p="$1" d
+  while [[ -L "$p" ]]; do
+    d="$(cd "$(dirname "$p")" && pwd)"
+    p="$(readlink "$p")"
+    case "$p" in /*) ;; *) p="$d/$p" ;; esac
+  done
+  printf '%s/%s\n' "$(cd "$(dirname "$p")" && pwd)" "$(basename "$p")"
+}
+SELF="$(_resolve_self "${BASH_SOURCE[0]:-$0}")"
+SCRIPT_DIR="$(dirname "$SELF")"
 LAND_LOCK="${SCRIPT_DIR}/land-lock.sh"
 LAND_VERIFY="${SCRIPT_DIR}/land-verify.sh"
 STRANDED_SWEEP="${SCRIPT_DIR}/stranded-sweep.sh"
