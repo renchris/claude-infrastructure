@@ -101,7 +101,11 @@ for issue in "${ISSUES[@]}"; do
       blocker_closed_count=$((blocker_closed_count + 1))
     fi
   fi
-  status_details="$status_details #$issue:$is/mc=$mc"
+  # Report the close REASON, not just the state. `sr` was fetched but never used, so a
+  # `not_planned` close (upstream declined it) was indistinguishable from `completed` (upstream
+  # fixed it) — and this watcher exists precisely to decide whether the hold can lift. A declined
+  # issue is NOT a fix, so the distinction has to survive into the status line.
+  status_details="$status_details #$issue:$is${sr:+/$sr}/mc=$mc"
 done
 
 member_comments=$total_member_comments
