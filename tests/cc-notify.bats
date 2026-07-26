@@ -277,6 +277,151 @@ sent_count() { if [ -f "$IT2_LOG" ]; then grep -c '^SEND' "$IT2_LOG"; else echo 
   [ ! -f "$CC_MAILBOX_DIR/$UUID.md" ] || ! grep -q 'unknown liveness' "$CC_MAILBOX_DIR/$UUID.md"
 }
 
+# ── v4 RESOLVER AVAILABILITY: no blocking subprocess · honest rc · a round-tripping listing ───────
+# These pin the class that cost 6 non-delivered advisories across 3 attempts and 2 wrong diagnoses:
+# `it2 session list --json` (iTerm2 IPC) exceeded 120s under pane load, and BOTH cc-notify hot paths
+# went through it — so a valid target came back as rc=3 "not a live session name or a pane UUID".
+# The wrong diagnoses ("it times out", then "the short UUID is not accepted") were both symptoms; the
+# fault was that the resolver could block at all, and that its failure was indistinguishable from a
+# bad address. A stub that HANGS is therefore the load-bearing fixture here — a fast stub cannot tell
+# a registry-direct resolver apart from the it2-shelling one it replaced.
+
+# it2 stub that hangs far longer than any bound — stands in for iTerm2 under pane load 13-16.
+hanging_it2() {
+  cat > "$BATS_TEST_TMPDIR/it2-hang" <<'SH'
+#!/bin/bash
+if [ "$1" = "session" ] && [ "$2" = "list" ]; then sleep 300; exit 0; fi
+exit 0
+SH
+  chmod +x "$BATS_TEST_TMPDIR/it2-hang"
+  export IT2_BIN="$BATS_TEST_TMPDIR/it2-hang"
+}
+secs() { local s e; s=$(date +%s); "$@" >/dev/null 2>&1; e=$(date +%s); echo $(( e - s )); }
+
+@test "v4: a NAME send to a registered pane never touches it2 — completes fast even while it2 HANGS" {
+  hanging_it2
+  local t; t="$(secs "$NOTIFY" peer "under load")"
+  [ "$t" -lt 10 ] || { echo "took ${t}s — the resolver is still going through the blocking it2 call"; false; }
+  run "$NOTIFY" peer "under load 2"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"delivered to inbox"* ]] || false
+  grep -q '\] under load' "$CC_MAILBOX_DIR/$UUID.md"
+}
+
+@test "v4: a full-UUID send to a registered pane is fast too (the liveness path was the SECOND hang)" {
+  # The documented workaround — 'pass the full 36-char UUID' — only ever LOOKED reliable: resolution
+  # short-circuits, but target_live() then shelled into the same it2 call. The enqueue had already
+  # happened, so mail landed while the process hung. Both call sites must be off the blocking path.
+  hanging_it2
+  local t; t="$(secs "$NOTIFY" "$UUID" "full uuid under load")"
+  [ "$t" -lt 10 ] || { echo "took ${t}s — target_live() is still on the blocking it2 call"; false; }
+  grep -q 'full uuid under load' "$CC_MAILBOX_DIR/$UUID.md"
+}
+
+@test "v4: an UNREGISTERED target still consults it2, but BOUNDED — degrades to UNVERIFIABLE, never hangs" {
+  hanging_it2
+  export CC_IT2_TIMEOUT_S=1
+  local GHOST="FFFFFFFF-9999-8888-7777-666666666666"
+  local t; t="$(secs "$NOTIFY" "$GHOST" "bounded")"
+  [ "$t" -lt 20 ] || { echo "took ${t}s — the it2 call is unbounded"; false; }
+  run "$NOTIFY" "$GHOST" "bounded 2"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"UNVERIFIABLE"* ]] || false      # a timeout is 'unknown', never a false not-live
+  grep -q 'bounded' "$CC_MAILBOX_DIR/$GHOST.md"
+}
+
+@test "v4: RESOLVER UNAVAILABLE (registry unreadable) → exit 4, NOT exit 3 — the target is unverified, not invalid" {
+  export CC_REGISTRY_DIR="$BATS_TEST_TMPDIR/no-such-registry"
+  run "$NOTIFY" peer "x"
+  [ "$status" -eq 4 ]
+  [[ "$output" == *"RESOLVER UNAVAILABLE"* ]] || false
+  [[ "$output" == *"UNVERIFIED, not invalid"* ]] || false
+  # the OLD lie must be gone: never blame the address when the resolver is what failed
+  [[ "$output" != *"not a live session name or a pane UUID"* ]] || false
+}
+
+@test "v4: an existing-but-UNREADABLE registry is exit 4, not a phantom 'empty registry' exit 3" {
+  local ro="$BATS_TEST_TMPDIR/ro-reg"; mkdir -p "$ro"; chmod 000 "$ro"
+  CC_REGISTRY_DIR="$ro" run "$NOTIFY" peer "x"
+  chmod 700 "$ro"
+  [ "$status" -eq 4 ]
+  [[ "$output" == *"RESOLVER UNAVAILABLE"* ]] || false
+}
+
+@test "v4: a genuinely UNKNOWN name is still exit 3, and says the registry WAS readable" {
+  run "$NOTIFY" "not-a-name-or-uuid" "x"
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"is UNKNOWN"* ]] || false
+  [[ "$output" == *"readable"* ]] || false          # the distinguishing claim vs exit 4
+  [[ "$output" != *"RESOLVER UNAVAILABLE"* ]] || false
+}
+
+@test "v4: the 8-char UUID prefix that --list prints ROUND-TRIPS into cc-notify's own input" {
+  # `cc-sessions` printed .paneUUID[0:8] for years; cc-notify's own resolver rejected it.
+  run "$NOTIFY" "AAAAAAAA" "prefix addressed"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"delivered to inbox"* ]] || false
+  grep -q '\] prefix addressed' "$CC_MAILBOX_DIR/$UUID.md"
+}
+
+@test "v4: a prefix is matched case-insensitively (registry uuids are upper-case)" {
+  run "$NOTIFY" "aaaaaaaa" "lower-case prefix"
+  [ "$status" -eq 0 ]
+  grep -q 'lower-case prefix' "$CC_MAILBOX_DIR/$UUID.md"
+}
+
+@test "v4: an AMBIGUOUS prefix fails LOUD (exit 6) and enqueues NOTHING — never a silent wrong pane" {
+  local TWIN="AAAAAAAA-5555-6666-7777-888888888888"
+  printf '{"paneUUID":"%s","name":"twin","cwd":"/tmp","account":"next","pid":%s,"startedAt":1}' \
+    "$TWIN" "$$" > "$CC_REGISTRY_DIR/$TWIN.json"
+  run "$NOTIFY" "AAAAAAAA" "who am i for"
+  [ "$status" -eq 6 ]
+  [[ "$output" == *"AMBIGUOUS"* ]] || false
+  [ ! -f "$CC_MAILBOX_DIR/$UUID.md" ]
+  [ ! -f "$CC_MAILBOX_DIR/$TWIN.md" ]
+}
+
+@test "v4: a name matching only a DEAD row stays unresolvable (the live-only addressing contract holds)" {
+  local DEADROW="BBBBBBBB-1111-2222-3333-444444444444"
+  printf '{"paneUUID":"%s","name":"ghostpeer","cwd":"/tmp","account":"next","pid":999999,"startedAt":1}' \
+    "$DEADROW" > "$CC_REGISTRY_DIR/$DEADROW.json"
+  run "$NOTIFY" ghostpeer "x"
+  [ "$status" -eq 3 ]
+  [ ! -f "$CC_MAILBOX_DIR/$DEADROW.md" ]
+}
+
+@test "v4: ONE corrupt registry row cannot take the whole resolver down" {
+  # `jq -s` over the set fails wholesale on a single bad file; without the per-file fallback that
+  # would turn one unparseable row into a total addressing outage.
+  printf 'not json at all {{{' > "$CC_REGISTRY_DIR/CORRUPT.json"
+  run "$NOTIFY" peer "resolved despite corruption"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"delivered to inbox"* ]] || false
+  grep -q 'resolved despite corruption' "$CC_MAILBOX_DIR/$UUID.md"
+}
+
+@test "v4: cc-sessions prints the FULL paneUUID, and that column feeds straight back into cc-notify" {
+  # The round-trip proven end to end: take what the listing prints, paste it in, and it must resolve.
+  local out col
+  out="$("$REPO/bin/cc-sessions" 2>/dev/null)"
+  [[ "$out" == *"$UUID"* ]] || { echo "listing did not print the full uuid: $out"; false; }
+  col="$(printf '%s\n' "$out" | awk '$1=="peer"{print $2}')"
+  [ "$col" = "$UUID" ] || { echo "UUID column was '$col', not the full '$UUID'"; false; }
+  run "$NOTIFY" "$col" "round-tripped from the listing"
+  [ "$status" -eq 0 ]
+  grep -q 'round-tripped from the listing' "$CC_MAILBOX_DIR/$UUID.md"
+}
+
+@test "v4: cc-sessions itself does not hang when it2 does (--list must work under the load that broke it)" {
+  hanging_it2
+  export CC_IT2_TIMEOUT_S=1
+  local t; t="$(secs "$REPO/bin/cc-sessions" --json)"
+  [ "$t" -lt 20 ] || { echo "cc-sessions took ${t}s — its it2 call is still unbounded"; false; }
+  # and a timed-out pane list must NOT be read as 'no panes' → the live row survives on pid truth
+  run "$REPO/bin/cc-sessions" --json
+  [[ "$output" == *"$UUID"* ]] || false
+}
+
 @test "a REROUTE follows the desk's OWN forward chain (never tees into a self-closed desk box)" {
   # Without this the anti-stranding mechanism would itself strand mail: the desk role can name a pane
   # that has since self-closed, leaving a .forward to its successor.
