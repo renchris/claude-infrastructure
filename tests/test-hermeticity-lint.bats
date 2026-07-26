@@ -31,6 +31,33 @@ mk_suite() {
   echo "$output" | grep -qE -e '--selftest: [0-9]+/[0-9]+'
 }
 
+@test "--selftest is GREEN through a SYMLINK to the script (the DEPLOYED ~/.claude path)" {
+  # ~/.claude/scripts/test-hermeticity-lint.sh is a per-file symlink into this checkout, and that is
+  # the path an agent naturally reaches for. Before $0 was resolved through symlinks, ROOT became
+  # ~/.claude — which has no tests/ — so the real-tree case failed and reported it as "the embedded
+  # allowlist is stale": a false RED on a self-evidencing proof, misnaming its own cause. Found
+  # 2026-07-26 by running the deployed copy immediately after landing it.
+  ln -s "$LINT" "$FIX/linked-lint.sh"
+  run bash "$FIX/linked-lint.sh" --selftest
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qE -e '--selftest: [0-9]+/[0-9]+'
+}
+
+@test "a bad ROOT is reported as a NON-VERDICT, never as a stale allowlist" {
+  # The discrimination that makes the failure above self-explaining rather than misleading: exit 2
+  # (could not scan) and exit 1 (allowlist really is stale) are different claims. CC_HERM_SELFTEST_ROOT
+  # is not a seam the script has — so drive it the honest way, through a symlink whose parent has no
+  # tests/ dir, which is exactly the real-world shape.
+  mkdir -p "$FIX/noroot/scripts"
+  ln -s "$LINT" "$FIX/noroot/scripts/test-hermeticity-lint.sh"
+  # $FIX/noroot has no tests/ ⇒ case (e) gets exit 2. Resolution now follows the symlink to the real
+  # checkout, so this must still be GREEN — the assertion is that we do not fabricate a stale-allowlist
+  # verdict out of a path problem.
+  run bash "$FIX/noroot/scripts/test-hermeticity-lint.sh" --selftest
+  [ "$status" -eq 0 ]
+  [ "$(echo "$output" | grep -c 'allowlist is stale')" -eq 0 ]
+}
+
 @test "RED: a NEW non-hermetic suite fails (an unlisted suite must fixture \$HOME)" {
   mk_suite leak 'REPO="$(pwd)"'
   CC_HERM_ALLOWLIST="" run bash "$LINT" "$FIX/leak"
