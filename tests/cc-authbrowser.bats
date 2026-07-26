@@ -19,6 +19,47 @@
 # (and each `spawn_bg sleep 4x` for its own lifetime) — ~825s box-wide, hanging the suite long
 # before any assertion runs. The pre-retry form (`cmd &` then `PID=$!`) had no pipe and so no
 # block; keeping the retry means keeping this redirect. No test reads a spawned child's stdout.
+# ── machine-wide mutex on the frozen CDP ports (backlog e5e102446d6c) ────────────────────────
+# The header above is right that 934x cannot be faked — but it does not follow that only ONE copy
+# of this suite ever wants it. This box routinely runs 5+ concurrent landers, each gating the full
+# tree, so two copies of THIS FILE overlap and fight for 127.0.0.1:9341. Proven 2026-07-26: run it
+# twice simultaneously and BOTH go red with 6 named `--start` failures each, while a sequential run
+# is 26/26 green. That is a fleet-wide false RED — it burns ship-land's single exoneration re-run
+# and blocks a land while proving nothing about the tree.
+#
+# Serializing is the only correct answer while the port map is frozen (a real override seam in
+# bin/cc-authbrowser is the proper fix and is filed as e5e102446d6c). mkdir is the atomic primitive
+# — macOS ships no flock(1).
+#
+# It NEVER fails the suite: a wedged or SIGKILLed holder leaves a lock dir behind and teardown_file
+# never runs for it, so the wait reaps a lock whose pid is dead or which has aged past the TTL, and
+# a full timeout force-takes rather than aborting. A lock that can turn a green tree red is worse
+# than the collision it prevents.
+CDP_LOCK="${TMPDIR:-/tmp}/cc-authbrowser-cdp-port.lock"
+
+setup_file() {
+  local waited=0 holder
+  while ! mkdir "$CDP_LOCK" 2>/dev/null; do
+    holder="$(cat "$CDP_LOCK/pid" 2>/dev/null || echo '')"
+    # Reap a dead holder (SIGKILLed mid-suite ⇒ no teardown_file) or one past the TTL.
+    if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then
+      rm -rf "$CDP_LOCK"; continue
+    fi
+    if [ "$waited" -ge 900 ]; then
+      # `|| true`: FD 3 is not guaranteed open here, and errexit must never turn the diagnostic
+      # into the abort this whole block exists to prevent.
+      echo "# cc-authbrowser: CDP-port lock held ${waited}s — force-taking (never fail on the lock)" >&3 2>/dev/null || true
+      rm -rf "$CDP_LOCK"; continue
+    fi
+    sleep 2; waited=$((waited + 2))
+  done
+  echo $$ > "$CDP_LOCK/pid" 2>/dev/null || true
+}
+
+teardown_file() {
+  rm -rf "$CDP_LOCK" 2>/dev/null || true
+}
+
 spawn_bg() {   # usage: pid=$(spawn_bg <cmd...>)
   local i pid
   for i in 1 2 3 4 5 6 7 8; do
