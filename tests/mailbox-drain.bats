@@ -202,3 +202,67 @@ add()  { printf '%s\n' "$@" >> "$MBOX"; }
   run bash -c "echo '{}' | ITERM_SESSION_ID='w0t0p0:$UUID' '$DRAIN' prompt"
   printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext' | grep -q 'no watcher armed'
 }
+
+# ── OPERATOR-VISIBLE systemMessage (2026-07-26) ──────────────────────────────────────────────────
+# additionalContext is MODEL-ONLY, so before this the operator saw NOTHING of a 751-msg/12h channel.
+# These pin the human-facing line: it must exist, name real senders, and never let fixture noise
+# crowd out a real peer report — while additionalContext keeps carrying the full bodies unchanged.
+
+@test "operator line: a peer message emits systemMessage ALONGSIDE additionalContext" {
+  seed "2026-07-26T10:00:00+0000 [wt-keystone] Phase 1 landed 1bc02f6f"
+  run bash -c 'echo "{}" | "$0" prompt' "$DRAIN"
+  [ "$status" -eq 0 ]
+  msg="$(printf '%s' "$output" | jq -r '.systemMessage')"
+  [ "$msg" != "null" ] || false                       # the whole point: the human can see it
+  printf '%s' "$msg" | grep -q '1 peer message'
+  printf '%s' "$msg" | grep -q 'wt-keystone'
+  # …and the model still gets the FULL body, unchanged
+  ctx="$(printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext')"
+  printf '%s' "$ctx" | grep -q 'Phase 1 landed 1bc02f6f'
+}
+
+@test "operator line: fixture noise is COUNTED but never NAMED (cannot crowd out a real peer)" {
+  seed "2026-07-26T10:00:00+0000 [wt-a] HANDOFF-HUSK-PANE: self-close of fake:BBBB-2222 failed" \
+       "2026-07-26T10:00:01+0000 [wt-b] HANDOFF-HUSK-PANE: self-close of fake:CCCC-3333 failed" \
+       "2026-07-26T10:00:02+0000 [real-peer] ROOT CAUSE REPRODUCED — the actual finding"
+  run bash -c 'echo "{}" | "$0" prompt' "$DRAIN"
+  msg="$(printf '%s' "$output" | jq -r '.systemMessage')"
+  printf '%s' "$msg" | grep -q '1 peer message'       # only the real one counts as signal
+  printf '%s' "$msg" | grep -q 'real-peer'
+  printf '%s' "$msg" | grep -q '2 fixture/lifecycle suppressed'
+  printf '%s' "$msg" | grep -qv 'wt-a' || true
+  [[ "$msg" != *"HANDOFF-HUSK-PANE"* ]] || false      # never reprint fixture bodies at the operator
+}
+
+@test "operator line: an all-noise drain says so plainly instead of claiming peer traffic" {
+  seed "2026-07-26T10:00:00+0000 [claude] ⚠️ REAPER SURFACE — session x is finished-operator" \
+       "2026-07-26T10:00:01+0000 [claude] [desk-sweep] NEW: 1 page(s)"
+  run bash -c 'echo "{}" | "$0" prompt' "$DRAIN"
+  msg="$(printf '%s' "$output" | jq -r '.systemMessage')"
+  printf '%s' "$msg" | grep -q 'no peer traffic'
+  printf '%s' "$msg" | grep -q 'cc-mail --all'        # the escape hatch is named, so nothing is lost
+}
+
+@test "operator line: senders are deduped and capped — a burst cannot emit a wall of names" {
+  seed "2026-07-26T10:00:00+0000 [p1] a" "2026-07-26T10:00:01+0000 [p1] b" \
+       "2026-07-26T10:00:02+0000 [p2] c" "2026-07-26T10:00:03+0000 [p3] d" \
+       "2026-07-26T10:00:04+0000 [p4] e" "2026-07-26T10:00:05+0000 [p5] f"
+  run bash -c 'echo "{}" | "$0" prompt' "$DRAIN"
+  msg="$(printf '%s' "$output" | jq -r '.systemMessage')"
+  printf '%s' "$msg" | grep -q '6 peer message'       # count is honest…
+  [ "$(printf '%s' "$msg" | tr ',' '\n' | grep -c 'p[0-9]')" -le 3 ]   # …names are capped at 3
+  [[ "$msg" != *"p5"* ]] || false                     # the cap actually bites
+}
+
+@test "operator line: the message is ONE line — it must never bury the operator's own turn" {
+  seed "2026-07-26T10:00:00+0000 [peer] a body with
+an embedded newline that must not leak into the operator line"
+  run bash -c 'echo "{}" | "$0" prompt' "$DRAIN"
+  msg="$(printf '%s' "$output" | jq -r '.systemMessage')"
+  # `jq -r` prints the literal "null" for a MISSING key, and "null" is ALSO one line — so a
+  # line-count assertion alone would pass against a hook that emits no systemMessage at all. Pin
+  # presence first, or this test cannot fail (the dead-assertion class this repo runs a ratchet for).
+  [ "$msg" != "null" ] || false
+  printf '%s' "$msg" | grep -q '📬'
+  [ "$(printf '%s' "$msg" | grep -c '')" -eq 1 ]
+}
