@@ -495,3 +495,87 @@ comms-alarms on the Operator Blocker Board.
     timestamped fingerprint disables damping while looking correctly wired (pinned by a test).
   - Damp state lives under each pager's own `PAGEDIR/damp`, inheriting existing test-isolation
     seams; a live-tree default would have tests writing real markers.
+
+---
+
+# § v4 — Delivery under machine load (2026-07-25/26)
+
+**Backlog:** `0298535c1584` (cc-notify times out under load). Two sessions converged on this incident
+independently; the record below is the COMPOSED result, and names which half came from where.
+
+## The incident
+
+2026-07-26T04:40-04:45Z, load 13-14. Three `cc-notify` sends to LIVE peers (`E057D768`, `6AABD5A3`,
+`F6D8D465`) each exceeded a 90s caller timeout and delivered **nothing** — verified by grepping each
+target's transcript for the message body (0 hits). `cc-notify --list --json` exceeded 120s. The desk
+could not warn the fleet at the exact moment contention made warning necessary: the advisory silently
+no-op'd and peers kept burning cycles on a theory already refuted. The durable backlog was the only
+channel that worked.
+
+## Half 1 — RESOLVER AVAILABILITY (landed by the sibling session: `6991dfa3`, `1bc3cc97`, `65e6bb54`)
+
+Measured root cause: `it2 session list --json` is an IPC call into iTerm2's Python API, which
+serializes requests; it exceeded 120s at 2% CPU (blocked, not computing). cc-notify reached it on
+**both** hot paths — name resolution and the liveness verdict — so even the documented workaround
+("pass the full 36-char UUID") still blocked. Fixed by reading `~/.claude/cc-registry/*.json`
+**directly** (liveness by `kill -0`, no fork, no IPC), bounding every remaining it2 call
+(`CC_IT2_TIMEOUT_S`, default 5s), and splitting the exit codes so an outage stops being reported as a
+user error: **3** = target genuinely unknown · **4** = resolver unavailable · **6** = ambiguous uuid
+prefix. Measured 72s+ → 0.048s by name; `--list` 72s+ → 6.5s.
+
+## Half 2 — THE CALLER CONTRACT (this session)
+
+Half 1 made cc-notify's **own** rc honest. It cannot make the rc a **caller** sees honest: `timeout`
+reports 124 whatever the child exits with. Reproduced against the post-rewrite binary:
+
+```
+$ CC_IT2_TIMEOUT_S=60 timeout -s TERM 3 cc-notify <uuid> "killed mid-send"
+rc=124 · stderr: (nothing) · message actually persisted: YES
+```
+
+A caller could only guess, and both guesses are wrong in a different direction: "undelivered" re-sends
+a message that landed, "delivered" loses one that did not. So every terminal path now prints a
+machine-parseable token ahead of the (unchanged) human sentence, and a TERM/INT/HUP trap prints it too
+— stderr being the only channel a bound leaves open:
+
+```
+cc-notify: verdict=<delivered|mailbox-only|unverified|unresolvable|degraded|ambiguous|undelivered
+                    |interrupted> enqueued=<0|1> uuid=<u> [reason=…]
+```
+
+`enqueued=1` is the load-bearing field: the message is durably in the inbox whatever happened to the
+liveness verdict or to the process. `cc-announce` reads it — rc 124 + `enqueued=1` → recorded degrade
+(the delivery stands); without it → alarm as undelivered. Neither retries: whatever killed the send is
+not undone by repeating it a second later, and a caller whose own bound just expired has no budget for
+a second attempt. `rc 6` (ambiguous) likewise alarms without a retry. **`rc 4` deliberately KEEPS its
+retry** — an unreadable registry is transient in a way a wrong name is not, matching cc-notify's own
+"retry, do NOT treat as a bad address" guidance. All four are pinned, plus a control proving the retry
+loop still exists where a retry can help.
+
+## v4 Status log
+
+- **2026-07-25/26** — Half 1 landed by the sibling session (see the three SHAs above; registry-direct
+  resolution, bounded it2, rc 3/4/6, partial-uuid round-tripping).
+- **2026-07-26** — Half 2 built here: `verdict=`/`enqueued=` token on every terminal path + the signal
+  trap (`bin/cc-notify`), and the rc-124/4/6 classifier + scoped no-retry (`bin/cc-announce`,
+  selftest 7 → 12). 10 tests added; 8 RED-proofed against trunk, 2 are controls that must pass on
+  both trees.
+
+  **Learnings:**
+  - **The convergence itself is the lesson.** This session built a full competing mechanism — bounded
+    + memoised + disk-cached probes over `cc-sessions` — before discovering the sibling had landed a
+    registry-direct rewrite that removes the IPC entirely. Theirs is strictly better (0.048s vs a
+    bounded 5s degrade), so the mechanism half was **stood down**, preserved on
+    `wt-0298535c1584-superseded-mechanism`, and only the genuinely-additive half was composed on top.
+    Adjudicated the way the parallel-fixer protocol says: by running this session's own tests against
+    the sibling's landed code, not by comparing intentions.
+  - **The exit codes collided.** Both sessions independently invented an exit code for "the resolver
+    did not run" — this one used **6**, the sibling used **4** and gave **6** to ambiguous prefixes.
+    A merge that had "resolved" cleanly would have shipped two contradictory meanings for one code.
+    Re-fetch and READ the trunk delta before assuming a conflict is textual.
+  - **An honest rc is not a reachable rc.** Fixing exit-code semantics inside a tool does nothing for
+    a caller that bounds it — `timeout` overwrites the rc unconditionally. Any tool a caller may bound
+    needs its outcome on a channel the bound cannot overwrite; stderr plus a trap is that channel.
+  - **Verify a bounded-caller claim by REPRODUCING it against the current binary.** The rc-124 gap was
+    confirmed by running the sibling's landed code under `timeout -s TERM`, not inferred from reading
+    it — which is also how the "message actually persisted: YES" half was established.
