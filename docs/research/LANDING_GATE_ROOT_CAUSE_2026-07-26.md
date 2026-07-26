@@ -150,6 +150,21 @@ test failure?"** — which is what the keystone and K2 answer.
 
 ---
 
+## Status at end of session (2026-07-26)
+
+| | state |
+|---|---|
+| **Keystone** — `added ⇒ FULL` deleted | ✅ **LANDED `19a2cfe`**, content-verified on `origin/main` |
+| **K2** — a CUT is not a RED (both layers) | ✅ **LANDED `c605a2e`**, content-verified; 390 ok / 0 not-ok |
+| This findings doc | ✅ on trunk (`095665f`, updated here) |
+| K3 closure bound · K4 union cap · K5 in-lock bound | specified with measured numbers, **not built** |
+
+Both landed changes went through the **normal scoped gate** — no full gate, no kill switch, no
+operator command. The bootstrap deadlock is broken: the pipeline that could not repair itself
+has now repaired itself twice.
+
+---
+
 ## 2. THE KEYSTONE — landed
 
 **Change:** delete the two lines at `scripts/gate-select.sh:309-310`. An added file then runs
@@ -201,13 +216,45 @@ decorative.
 The keystone is **necessary but not sufficient** — the narrow tier still fails 46 % of the time.
 Ordered by dependency; each step is independently landable through a scoped gate.
 
-**K2 — make `run_bats_all` CUT-aware** (`ship-land.sh:246-249`, ~10 LOC). Capture the run, then
-branch on the **`not ok` count**, not the exit code; on `rc != 0 && notok == 0`, do exactly what
-the scoped path already does (`:266-268`) — one re-run in a fresh TMPDIR — and log the cut as a
-cut. Dissolves `9c5d0ba74e79`, removes the false-RED half of `a0718a5d78b3` and
-`77738605376f`, and stops the FULL tier from converting every machine-wide event into 33 lost
-lands. Apply the identical fix at `postland-verify.sh:150` so the net can finally write a green
-stamp — which re-arms the `postland_net_live` guard that is currently inert.
+**K2 — a CUT is not a RED. ✅ LANDED `c605a2e` (2026-07-26), content-verified.**
+Both layers now take the verdict from the **TAP body**, never the exit code.
+
+**Why the obvious patch would have failed silently.** The natural implementation — treat
+`rc == 137 || rc == 143` as a cut — **cannot work**, and would have looked correct while doing
+nothing. bats runs `exec bats-exec-suite | bats_test_count_validator | formatter` under
+`set -o pipefail` (`bats:501,517-524`), and `bats_test_count_validator` returns **1** on a
+truncated TAP stream; under `pipefail` the rightmost non-zero status wins, so a **SIGKILLed
+suite surfaces as plain `1`** — never 137 or 143. Exit-code cut-detection is impossible here.
+The `not ok` count is the only honest discriminator. *(This was surfaced by a keystone panelist
+and corrected the lead's own drafted patch, which had used the signal test.)*
+
+- `ship-land.sh` `run_bats_all`: `rc != 0 && notok == 0` ⇒ one exoneration re-run in a fresh
+  TMPDIR — the appeal `run_scoped_suite:252` always had and the FULL tier lacked, which is why
+  the FULL tier failed 33 of its 34 runs. The cut is recorded to `flakes.jsonl` as
+  `cut-not-red` so it stays legible rather than vanishing. A real `not ok` is still RED with no
+  free retry.
+- `postland-verify.sh:150`: the same TAP stamped `verdict:"red"` via the fabricated
+  `failing=tests/` sentinel. A cut now stamps `cut` — unearned-green avoided,
+  deploy-blocking-red avoided, and the tree stays unstamped-green so the **next sweep retries
+  it**. No bisect, no page: you cannot bisect a machine event, and paging on one trains the
+  operator to ignore pages.
+
+> **THE THIRD SYMPTOM — this defect also froze DEPLOYMENT, which nobody had connected.**
+> The red stamp is what `deploy-live.sh` reads. With every post-land run cut and stamped red,
+> **no green stamp could ever exist**, so the sanctioned deploy path refused permanently.
+> Measured verbatim before the fix:
+> ```
+> deploy-live: REFUSED — no GREEN stamp among the newest 200 commits of origin/main
+>              — nothing is safe to deploy
+> ```
+> `~/.claude` symlinks the shared checkout, so the **live hooks and scripts of the whole fleet
+> could not advance** — landing and deploying were both blocked by one misread exit code.
+> (The keystone itself did not need this: `GATE_SELECT` resolves to `${SCRIPT_DIR}/gate-select.sh`
+> — the landing worktree's own copy — so it takes effect for every session on its next rebase.)
+
+Tests are **sabotage-proven** on both layers: reverting either detection reddens exactly the
+CUT test and leaves the real-red control green (`ship-land.bats` 34/34,
+`postland-verify.bats` 16/16).
 
 **K3 — bound or split the `closure` clause (the second widening path — M-shaped changes).**
 The keystone fixes **A**-shaped changes (added files). It does nothing for **M**-shaped ones,
