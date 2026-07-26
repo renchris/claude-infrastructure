@@ -298,7 +298,10 @@ do_run_if_needed() {
     new="$(git -C "$REPO" rev-parse origin/main 2>/dev/null || printf '%s' "$target")"
     [ "$new" = "$target" ] && break
     tree="$(tree_of "$new")"
-    [ -n "$tree" ] && [ -f "$STAMPS/$tree.json" ] && break
+    # SAME predicate as the entry gate above, and for the same reason: a `cut` stamp on the
+    # moved-to tree means nothing was proven there, so breaking on its mere EXISTENCE hands the
+    # new head straight back to the next sweep unverified. Only a real verdict ends the requeue.
+    [ -n "$tree" ] && stamp_is_verdict "$tree" && break
     target="$new"
   done
   : > "$QUEUE" 2>/dev/null || true

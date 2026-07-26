@@ -36,7 +36,9 @@
 #               is-green false, which makes ship-land call the net INERT). Bounded:
 #               after $CC_POSTLAND_CUT_MAX consecutive cuts on one tree an honest
 #               postland-cut-<tree12>.page that names no test + a cool-off; any real
-#               verdict clears both the streak and the page.
+#               verdict clears both the streak and the page. BOTH stamp-consulting
+#               call sites are verdict-aware — the entry gate AND C12's requeue-loop
+#               break — so a mid-sweep move onto a cut tree is verified, not dropped.
 #
 # ISOLATION: scratch bare origin + clone under $BATS_TEST_TMPDIR, fresh $HOME, and
 # argv-recording stubs for cc-backlog/osascript/cc-notify on PATH. No real repo, no
@@ -407,4 +409,32 @@ add_stateful_test() {   # $1 = basename, $2 = body of the helper script
   [ "$output" = "green" ]                                # the cut stamp is superseded
   [ "$(cut_pages_n)" = "0" ]                             # standing cut page cleared
   [ ! -f "$CC_POSTLAND_DIR/cuts" ]                       # streak reset
+}
+
+# The entry gate is not the only place the stamp is consulted: C12's requeue loop asks the same
+# question about the tree the target MOVED to, and asked it by EXISTENCE. Fixing only the gate
+# leaves the second actuator keyed on the old predicate — the moved head is dropped unverified
+# for that sweep. Enumerate call sites, not mechanisms.
+@test "C13: the REQUEUE loop is verdict-aware too — a move onto a CUT tree is still verified" {
+  base_head="$(origin_head)"
+  # 1. a REAL cut stamp for the moved-to tree, written by the real producer (never hand-forged)
+  echo moved >> "$R/foo.sh"
+  push_commit "the superseding commit"
+  moved_head="$(origin_head)"; moved_tree="$(origin_tree)"
+  b="$(stub_bats killed "printf '1..3\nok 1 a\n'; exit 137")"
+  CC_POSTLAND_BATS="$b" run bash "$SUT" --run-if-needed
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$moved_tree.json"
+  [ "$output" = "cut" ]                                  # precondition, asserted not assumed
+  # 2. rewind origin so the sweep STARTS on the unstamped base and the move lands on the cut tree
+  git -C "$R" push -qf origin "$base_head:main"
+  rm -f "$CC_POSTLAND_DIR/cuts"                          # isolate the loop from the cool-off path
+  # 3. a stub that moves origin/main DURING the run — the C12 race, reproduced by the producer
+  b2="$(stub_bats mover "git -C '$R' push -qf origin '$moved_head:main' >/dev/null 2>&1
+printf '1..1\nok 1 p\n'")"
+  CC_POSTLAND_BATS="$b2" run bash "$SUT" --run-if-needed
+  [ "$status" -eq 0 ]
+  [ "$(origin_head)" = "$moved_head" ]                   # the move really happened mid-sweep
+  # THE regression: an existence-keyed break leaves this "cut" — the head lands unverified.
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$moved_tree.json"
+  [ "$output" = "green" ]
 }
