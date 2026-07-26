@@ -486,6 +486,33 @@ else
   fi
 fi
 
+# --- Python deps (global only: they back bin/, which --config-dir does not deploy) ---
+# Delegated to scripts/python-deps.sh so the step is testable without a global install
+# (see the header there). Read the VERDICT TOKEN, not the exit code — "already fine" and
+# "installed it just now" are different facts and the summary should not conflate them.
+# A dep failure WARNS and never aborts: a missing optional module must not cost the
+# operator their hooks and launchers. `|| true` guards the installer's own set -e.
+if $IS_GLOBAL && [[ -x "$REPO_DIR/scripts/python-deps.sh" ]]; then
+  dep_args=(); $DRY_RUN && dep_args=(--dry-run)
+  dep_out="$("$REPO_DIR/scripts/python-deps.sh" "${dep_args[@]+"${dep_args[@]}"}" 2>&1)" || true
+  dep_verdict="$(printf '%s\n' "$dep_out" | sed -n 's/.*verdict=\([a-z-]*\).*/\1/p' | head -1)"
+  case "$dep_verdict" in
+    satisfied) : ;;                                  # silent: nothing changed, nothing to report
+    installed)
+      echo ""; echo "Python deps → $REPO_DIR/requirements.txt"
+      echo "  ✓ $(printf '%s\n' "$dep_out" | sed -n 's/.*modules=//p' | head -1)"
+      installed=$((installed + 1)) ;;
+    dry-run)
+      echo ""; echo "Python deps → $REPO_DIR/requirements.txt"
+      echo "  [dry-run] would install: $(printf '%s\n' "$dep_out" | sed -n 's/.*modules=//p' | head -1)" ;;
+    *)
+      echo ""; echo "Python deps → $REPO_DIR/requirements.txt"
+      echo "  ⚠ ${dep_out//$'\n'/$'\n'  }"
+      echo "    cc-relogin will report BROWSER-FAILED(4) where the true verdict is CONSENT-GATE(7)."
+      warnings=$((warnings + 1)) ;;
+  esac
+fi
+
 # --- Validation ---
 echo ""
 echo "Validating..."
