@@ -21,6 +21,8 @@
 # are live in any position.
 
 setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"   # hermetic: never touch the live ~/
+
   REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   LP="$REPO_ROOT/scripts/deploy-link-parity.sh"
 
