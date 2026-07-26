@@ -134,6 +134,78 @@ run_leg4() {
   if launchctl list 2>/dev/null | grep -q 'com.reso.lr-reset-poller'; then
     info "ACTIVE" "lr-reset-poller launchd loaded"
   else info "C10-PEND" "lr-reset-poller launchd NOT loaded (plist install + LR_POLLER_AUTOFIRE=1 = operator hand-steps)"; fi
+  run_leg4_exercise
+}
+
+# ── LEG 4b — EXERCISE (effect-read): deployed ≠ invoked ──────────────────────────────────────
+# LEGS 2-3 attest each state/class by the EXISTENCE of its guardian, and LEG 4 by its
+# DEPLOYMENT. Neither can see whether the thing has ever actually run — so a primitive could sit
+# green on every bar while nothing on the box ever called it. That gap is not hypothetical: the
+# 2026-07-25 dead-bin audit found seven primitives "built + gate-attested + never invoked", and
+# `cc-idl`'s sealer had been inert long enough for its chain to freeze while the substrate it
+# guards rotated three times underneath.
+#
+# The same audit also shows why this is a REPORT and never a bar: it graded by grepping for
+# callers, and on that oracle `cc-route` read as dead — while its record file showed 187 routes,
+# nine of them that day. These are agent-invoked CLIs; an agent reaching for a tool leaves no
+# call site to grep. The only sound oracle is the DURABLE ARTIFACT each tool writes, and even a
+# true NEVER is not automatically a defect (an episodic primitive is idle until its moment). So:
+# surface last-use, name it, and leave the judgment to the reader.
+run_leg4_exercise() {
+  echo
+  echo "LEG 4b — exercise (effect-read; deployed ≠ invoked. READ-ONLY, never a failure):"
+  local t art age shown
+  # tool:artifact — the durable product only a real invocation can leave behind. NOTE the oracle
+  # must live OUTSIDE the working tree: a tracked path's mtime is set by `git checkout`, so
+  # docs/rulings would read "used today" on every fresh clone. cc-bind is therefore read from the
+  # `Acked-Ruling:` commit trailers in history, which carry their own durable timestamps.
+  for t in \
+    "cc-wait:$HOME/.claude/wait-contracts" \
+    "cc-run:$HOME/.claude/cc-run" \
+    "cc-bind:git-trailer" \
+    "cc-respawn:$HOME/.claude/respawn" \
+    "cc-route:$HOME/.claude/route/route.jsonl" \
+    "cc-digest:$HOME/.claude/autonomy/digests" \
+    "cc-idl:$HOME/.claude/autonomy/idl.jsonl.chain" \
+  ; do
+    art="${t#*:}"; t="${t%%:*}"
+    if [ "$art" = "git-trailer" ]; then
+      age="$(acked_ruling_age_days)"; shown="Acked-Ruling: trailers in git history"
+    else
+      age="$(newest_age_days "$art")"; shown="${art/#$HOME/~}"
+    fi
+    if [ -z "$age" ]; then info "NEVER" "$t → no artifact at $shown (never invoked, or episodic and still idle)"
+    elif [ "$age" -le 2 ]; then info "USED"  "$t → last effect ${age}d ago"
+    else info "DORMANT" "$t → last effect ${age}d ago (idle, not necessarily broken — judge by whether its moment has come)"; fi
+  done
+}
+
+# acked_ruling_age_days — whole days since the newest commit carrying a cc-bind ack trailer.
+# Empty = the ruling channel has never been exercised in this history.
+acked_ruling_age_days() {
+  local ts
+  ts="$(git -C "$REPO" log --all -1 --format=%ct --grep='^Acked-Ruling:' 2>/dev/null)" || ts=""
+  [ -n "$ts" ] || return 0
+  printf '%d' "$(( ( $(date +%s) - ts ) / 86400 ))"
+}
+
+# newest_age_days <path> — whole days since the newest mtime at <path> (a file, or the newest
+# entry in a directory). Empty output = no artifact at all. BSD stat first, then GNU.
+newest_age_days() {
+  local p="$1" newest="" f m best=0
+  [ -e "$p" ] || return 0
+  if [ -d "$p" ]; then
+    for f in "$p"/*; do
+      [ -e "$f" ] || continue
+      m="$(stat -f %m "$f" 2>/dev/null || stat -c %Y "$f" 2>/dev/null)" || m=""
+      [ -n "$m" ] && [ "$m" -gt "$best" ] && best="$m"
+    done
+    [ "$best" -gt 0 ] && newest="$best"
+  else
+    newest="$(stat -f %m "$p" 2>/dev/null || stat -c %Y "$p" 2>/dev/null)" || newest=""
+  fi
+  [ -n "$newest" ] || return 0
+  printf '%d' "$(( ( $(date +%s) - newest ) / 86400 ))"
 }
 
 selftest() {
