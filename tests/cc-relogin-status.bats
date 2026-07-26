@@ -447,5 +447,18 @@ PY
   CC_IDL="$D/rot-idl.jsonl" ROTATE_MAX_BYTES=100 HOME="$H" run bash "$ROT"
   [ "$status" -eq 0 ]
   refute_glob "$H/.claude/logs/cc-relogin"*   # no file named after the literal glob was created
-  echo "$output" | grep -q 'skipped=4'        # the 4 literal defaults only
+
+  # The invariant: an ABSENT cc-relogin log contributes ZERO targets (the glob must not survive
+  # as a literal unmatched path). Prove it DIFFERENTIALLY rather than against a hardcoded count.
+  # The literal-default list belongs to other work, so any absolute number here turns a sibling
+  # adding a default into a spurious red in THIS file — which is exactly what happened: a 6th
+  # default landed mid-rebase and reddened the composed tree while both branches were green alone.
+  # A differential cannot rot: it only asserts the delta this file is actually responsible for.
+  base="$(echo "$output" | sed -n 's/.*skipped=\([0-9]*\).*/\1/p')"
+  [ -n "$base" ]                              # guard: the readout shape must still be parseable
+
+  : > "$H/.claude/logs/cc-relogin-poll.log"   # now ONE cc-relogin log exists
+  CC_IDL="$D/rot-idl.jsonl" ROTATE_MAX_BYTES=100 HOME="$H" run bash "$ROT"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "skipped=$((base + 1))"   # glob adds exactly one, only when present
 }
