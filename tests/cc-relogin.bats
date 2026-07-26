@@ -8,6 +8,10 @@
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
+  # Hermeticity (scripts/test-hermeticity-lint.sh): cc-relogin resolves keychain/profile paths
+  # and would otherwise read the live ~/. Every other path this suite touches is already
+  # fixtured under $BATS_TEST_TMPDIR; $HOME was the one remaining leak.
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   export BIN="$REPO/bin/cc-relogin"
   export STUB="$BATS_TEST_TMPDIR/claude-accounts"
   export CC_RELOGIN_ACCOUNTS_BIN="$STUB"
