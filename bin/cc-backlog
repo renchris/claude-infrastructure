@@ -390,7 +390,24 @@ claimer_live() {
   fi
   local sb; sb="$(_resolve_sessions_bin)"
   [ -n "$sb" ] || return 1
-  "$sb" --json 2>/dev/null \
+  # TIME-CAP the registry fork. cc-sessions resolves pane liveness through `it2 session list --json`
+  # (cc-sessions:57) with no timeout of its own, and a WEDGED it2 API hangs that call indefinitely —
+  # measured 2026-07-26 during a machine-wide wedge: `timeout 60 cc-sessions --json` → rc 124, and a
+  # bare `it2 session list --json` → rc 124 with no output. Unwrapped, one session-shaped claimer
+  # would hang `reap` forever and take the whole `cc-reaper --reap` sweep down with it — and the
+  # owned-wait re-verify below would never be REACHED, leaving this fix inert by construction in
+  # exactly the incident where correct stall verdicts matter most (memory:
+  # feature-durability-mechanism-not-memory). A cap composes cleanly with the documented contract: a
+  # timed-out oracle is UNRESOLVED ⇒ reads not-live, and owned_wait then re-verifies against the
+  # worktree, so a capped probe costs a slower path, never a false dead verdict.
+  local sessions_json
+  if command -v timeout >/dev/null 2>&1; then
+    sessions_json="$(timeout "${CC_BACKLOG_ORACLE_TIMEOUT_S:-10}" "$sb" --json 2>/dev/null || true)"
+  else
+    sessions_json="$("$sb" --json 2>/dev/null || true)"
+  fi
+  [ -n "$sessions_json" ] || return 1
+  printf '%s' "$sessions_json" \
     | jq -e --arg b "$by" 'any(.[]?; (.paneUUID==$b) or (.name==$b) or (.sessionId==$b))' >/dev/null 2>&1
 }
 

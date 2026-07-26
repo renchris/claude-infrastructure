@@ -565,6 +565,25 @@ status_of() { bash "$CB" list --all --json | jq -r --arg i "$1" '.[]|select(.id=
   [ "$(status_of deadlck0ff01)" = open ]               # a dead holder is a stale lock, not a live wait
 }
 
+@test "reap: a HUNG session-registry oracle is time-capped, not waited on (a wedged it2 must not stall the sweep)" {
+  # RED-proof for the durability hole this session measured: cc-sessions resolves pane liveness via
+  # `it2 session list --json` with no timeout, so a wedged it2 API hangs `claimer_live` — and with it
+  # every `cc-reaper --reap` sweep — forever. Pre-fix this test times out at the bats level; post-fix
+  # reap returns inside the cap and the item takes the ordinary dead-worker path.
+  reap_env
+  export CC_BACKLOG_ORACLE_TIMEOUT_S=2
+  printf '#!/bin/bash\nsleep 300\n' > "$BATS_TEST_TMPDIR/hungsess"; chmod +x "$BATS_TEST_TMPDIR/hungsess"
+  export CC_BACKLOG_SESSIONS_BIN="$BATS_TEST_TMPDIR/hungsess"
+  rec '{"id":"hungorc0ii01","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"Hung"}'
+  rec '{"id":"hungorc0ii01","ts":"2026-01-01T00:00:00Z","event":"claim","by":"PANE-SHAPED-CLAIMER"}'  # session-shaped ⇒ registry path
+  start="$(date +%s)"
+  run timeout 30 bash "$CB" reap
+  elapsed=$(( $(date +%s) - start ))
+  [ "$status" -eq 0 ]                                  # pre-fix: 124 (bats-level timeout) ⇒ RED
+  [ "$elapsed" -lt 25 ]                                # bounded by the cap, not by the hung fork
+  [ "$(status_of hungorc0ii01)" = open ]               # unresolved oracle ⇒ not-live ⇒ dead-worker recovery
+}
+
 @test "reap: no worktree at all for the id ⇒ oracle abstains, dead-worker path unchanged" {
   # The oracle must never fail OPEN into "alive" when it simply has nothing to read (an item worked
   # in-place, or a worktree already torn down). Absence of evidence is not evidence of life.
