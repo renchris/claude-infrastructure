@@ -342,6 +342,32 @@ owned_wait_fixture() {
   for i in 1 2 3 4 5 6 7 8 9 10; do pgrep -f "$wt" >/dev/null 2>&1 && return 0; sleep 0.2; done
   return 0
 }
+# cwd_wait_fixture <id> [subdir] — a fake dispatch worktree occupied by a LIVE process whose CWD is
+# the worktree (or <subdir> below it) and whose ARGV DOES NOT NAME IT. That is the shape the real
+# producer emits, and it is the whole point: cc-wave-plan fires
+# `handoff-fire.sh --cwd $WTROOT/wt-<id>` (cc-wave-plan:287), the launcher carries the path in ITS
+# argv and EXITS, and the surviving `claude` inherits only the cwd — so `pgrep -f <wt>` reads 0 while
+# the worker is very much alive. Deliberately NOT the argv shape owned_wait_fixture builds: a fixture
+# that named the path would be absolved by S1 and could never discriminate S1b
+# (memory fixture-shape-parity-with-real-producer). Sets OWNED_PID.
+cwd_wait_fixture() {
+  local wt="$CC_BACKLOG_WT_ROOT/wt-$1" sub="${2:-}" dir i
+  dir="$wt${sub:+/$sub}"; mkdir -p "$dir"
+  ( cd "$dir" && exec sleep 30 ) &                 # argv is bare `sleep 30` — no worktree path in it
+  OWNED_PID=$!
+  # The fixture's own contract, asserted not assumed: argv must NOT name the worktree, or this test
+  # would pass through S1 and certify nothing.
+  pgrep -f "$wt" >/dev/null 2>&1 && { echo "fixture broken: argv names $wt" >&2; return 1; }
+  # Never return before the cwd is actually observable, or the assertion races the fork. FAIL LOUD if
+  # it never becomes observable: a fixture that returns 0 on timeout makes every downstream failure
+  # ambiguous ("did the probe break, or did the worker never start?") and can certify nothing.
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    /usr/sbin/lsof -a -d cwd -w -t -- "$dir" 2>/dev/null | grep -q "^$OWNED_PID$" && return 0
+    sleep 0.2
+  done
+  echo "fixture broken: pid $OWNED_PID never became observable with cwd $dir" >&2
+  return 1
+}
 owned_wait_cleanup() {
   if [ -n "${OWNED_PID:-}" ]; then
     kill "$OWNED_PID" 2>/dev/null || true
@@ -496,6 +522,92 @@ status_of() { bash "$CB" list --all --json | jq -r --arg i "$1" '.[]|select(.id=
   echo "$output" | grep -q 'REOPEN deadwt0bb01'
 }
 
+@test "reap: a live worker whose CWD is the worktree but whose ARGV never names it → KEEP (S1b: the dispatched-worker shape)" {
+  # THE regression. Pre-fix this reopened — `status=open` is cc-dispatch's fire predicate, so a false
+  # dead verdict on a live worker spawns a DUPLICATE PEER into the worktree the first one is using.
+  # Measured against a real dispatched session 2026-07-26 (backlog b1b7a425e169): `pgrep -f <wt>` → 0,
+  # processes with cwd in <wt> → 6.
+  reap_env
+  cwd_wait_fixture cwdwt00aa01
+  rec '{"id":"cwdwt00aa01","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"Cwd"}'
+  rec "{\"id\":\"cwdwt00aa01\",\"ts\":\"2026-01-01T00:00:00Z\",\"event\":\"claim\",\"by\":\"$HOST-2147483647\"}"
+  run bash "$CB" reap
+  owned_wait_cleanup
+  [ "$status" -eq 0 ]
+  [ "$(status_of cwdwt00aa01)" = claimed ]             # pre-fix: reopened ⇒ open (RED)
+  echo "$output" | grep -q 'KEEP cwdwt00aa01'
+  echo "$output" | grep -q 'live process cwd'          # via S1b specifically, not S1/S2
+}
+
+@test "reap: a live worker that has cd'd into a SUBDIRECTORY of the worktree is still owned (prefix, not equality)" {
+  # An exact-path probe misses this: passing the path to lsof matches the cwd EXACTLY, so a worker
+  # sitting in <wt>/bin reads as dead. Verified against the real producer — the same measurement that
+  # found the argv gap also found a subdirectory process invisible to the path-argument form.
+  reap_env
+  cwd_wait_fixture subwt000aa01 bin
+  rec '{"id":"subwt000aa01","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"Sub"}'
+  rec "{\"id\":\"subwt000aa01\",\"ts\":\"2026-01-01T00:00:00Z\",\"event\":\"claim\",\"by\":\"$HOST-2147483647\"}"
+  run bash "$CB" reap
+  owned_wait_cleanup
+  [ "$status" -eq 0 ]
+  [ "$(status_of subwt000aa01)" = claimed ]
+  echo "$output" | grep -q 'live process cwd'
+}
+
+@test "reap: a live cwd worker in a SIBLING worktree does NOT absolve this item (prefix must not over-match)" {
+  # The anti-over-match control. wt-<id> is a prefix of wt-<id>xyz as a STRING, so a naive substring
+  # test would let any sibling worktree absolve this one — and an oracle that absolves everything is
+  # exactly as broken as one that convicts everything, just silently.
+  reap_env
+  cwd_wait_fixture sibwt000aa01xyz
+  mkdir -p "$CC_BACKLOG_WT_ROOT/wt-sibwt000aa01"       # THIS item's worktree: exists, unoccupied
+  rec '{"id":"sibwt000aa01","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"Sib"}'
+  rec "{\"id\":\"sibwt000aa01\",\"ts\":\"2026-01-01T00:00:00Z\",\"event\":\"claim\",\"by\":\"$HOST-2147483647\"}"
+  run bash "$CB" reap
+  owned_wait_cleanup
+  [ "$status" -eq 0 ]
+  [ "$(status_of sibwt000aa01)" = open ]               # a genuinely empty worktree still reopens
+  echo "$output" | grep -q 'REOPEN sibwt000aa01'
+}
+
+@test "reap: a SYMLINKED worktree root still sees the live worker (lsof reports cwd physically resolved)" {
+  # RED-proof for a false-dead one level down inside the fix itself. lsof reports a process's cwd
+  # PHYSICALLY RESOLVED — a worker in /var/… is reported under /private/var/… — so a prefix match
+  # against the RAW worktree path finds NOTHING the moment any component of the root is a symlink:
+  # the probe reads "no processes", every oracle abstains, and reap convicts a live worker. Measured
+  # 2026-07-26: with the raw-path match, this exact shape reopened.
+  # Held EXPLICITLY rather than relying on BATS_TEST_TMPDIR happening to live under the /var symlink
+  # — incidental coverage evaporates the day the harness or platform changes tmpdir (memory:
+  # effect-read-predicate-red-proof).
+  reap_env
+  real="$BATS_TEST_TMPDIR/realroot"; mkdir -p "$real"
+  ln -s "$real" "$BATS_TEST_TMPDIR/linkroot"
+  export CC_BACKLOG_WT_ROOT="$BATS_TEST_TMPDIR/linkroot"      # reap resolves wt-<id> THROUGH the symlink
+  [ "$(cd "$CC_BACKLOG_WT_ROOT" && pwd -P)" != "$CC_BACKLOG_WT_ROOT" ] || false   # the fixture's own premise
+  cwd_wait_fixture symwt000aa01
+  rec '{"id":"symwt000aa01","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"Sym"}'
+  rec "{\"id\":\"symwt000aa01\",\"ts\":\"2026-01-01T00:00:00Z\",\"event\":\"claim\",\"by\":\"$HOST-2147483647\"}"
+  run bash "$CB" reap
+  owned_wait_cleanup
+  [ "$status" -eq 0 ]
+  [ "$(status_of symwt000aa01)" = claimed ]                   # pre-fix: reopened ⇒ open (RED)
+  echo "$output" | grep -q 'live process cwd'
+}
+
+@test "reap: CC_BACKLOG_LSOF_BIN= genuinely disables S1b (the seam turns the probe OFF, and the oracle says so)" {
+  # A seam that cannot turn a thing off is not a seam. This also pins WHICH signal did the absolving
+  # in the test above: same fixture, probe disabled ⇒ the verdict flips to REOPEN.
+  reap_env
+  export CC_BACKLOG_LSOF_BIN=
+  cwd_wait_fixture offwt000aa01
+  rec '{"id":"offwt000aa01","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"Off"}'
+  rec "{\"id\":\"offwt000aa01\",\"ts\":\"2026-01-01T00:00:00Z\",\"event\":\"claim\",\"by\":\"$HOST-2147483647\"}"
+  run bash "$CB" reap
+  owned_wait_cleanup
+  [ "$status" -eq 0 ]
+  [ "$(status_of offwt000aa01)" = open ]
+}
+
 @test "reap: owned wait past OWNED_WAIT_MAX_S is a WEDGE — blocked (never reopened, worktree still occupied)" {
   # The anti-inversion bound: without a ceiling an orphaned watcher would pin an item as "alive"
   # forever. Past it the item leaves the wave, but as a WEDGE named for what it is — and it must not
@@ -565,11 +677,15 @@ status_of() { bash "$CB" list --all --json | jq -r --arg i "$1" '.[]|select(.id=
   [ "$(status_of deadlck0ff01)" = open ]               # a dead holder is a stale lock, not a live wait
 }
 
-@test "reap: a HUNG session-registry oracle is time-capped, not waited on (a wedged it2 must not stall the sweep)" {
-  # RED-proof for the durability hole this session measured: cc-sessions resolves pane liveness via
-  # `it2 session list --json` with no timeout, so a wedged it2 API hangs `claimer_live` — and with it
-  # every `cc-reaper --reap` sweep — forever. Pre-fix this test times out at the bats level; post-fix
-  # reap returns inside the cap and the item takes the ordinary dead-worker path.
+@test "reap: a HUNG session-registry oracle is time-capped AND abstains — our own timeout must not forge the kill evidence" {
+  # TWO properties, one fixture. (a) BOUND: cc-sessions resolves pane liveness via `it2 session list
+  # --json` with no timeout of its own, so a wedged it2 API hangs `claimer_live` — and with it every
+  # `cc-reaper --reap` sweep — forever. Pre-cap this test times out at the bats level.
+  # (b) VERDICT: the cap makes the probe RETURN, it does not make it ANSWER. A timeout is a
+  # non-verdict (rc 2), and it is OUR timeout — convicting on it is forging the kill evidence
+  # (memory: gate-never-ran-vs-gate-red). The item therefore stays `claimed` and the abstention is
+  # PRINTED. Previously this asserted `open`: the sweep reopened on a probe that never answered, and
+  # `open` is cc-dispatch's fire predicate ⇒ a duplicate peer onto possibly-live work.
   reap_env
   export CC_BACKLOG_ORACLE_TIMEOUT_S=2
   printf '#!/bin/bash\nsleep 300\n' > "$BATS_TEST_TMPDIR/hungsess"; chmod +x "$BATS_TEST_TMPDIR/hungsess"
@@ -579,9 +695,46 @@ status_of() { bash "$CB" list --all --json | jq -r --arg i "$1" '.[]|select(.id=
   start="$(date +%s)"
   run timeout 30 bash "$CB" reap
   elapsed=$(( $(date +%s) - start ))
-  [ "$status" -eq 0 ]                                  # pre-fix: 124 (bats-level timeout) ⇒ RED
+  [ "$status" -eq 0 ]                                  # pre-cap: 124 (bats-level timeout) ⇒ RED
   [ "$elapsed" -lt 25 ]                                # bounded by the cap, not by the hung fork
-  [ "$(status_of hungorc0ii01)" = open ]               # unresolved oracle ⇒ not-live ⇒ dead-worker recovery
+  [ "$(status_of hungorc0ii01)" = claimed ]            # pre-fix: reopened ⇒ open (RED)
+  echo "$output" | grep -q 'KEEP hungorc0ii01'
+  echo "$output" | grep -q 'claimer UNRESOLVED'        # and it says so — a silent abstain is an inert oracle
+}
+
+@test "reap: a registry that ANSWERS and does not list the claimer is a REAL verdict → reopen (not-live ≠ unresolved)" {
+  # The control that keeps the abstention honest. Without it, "abstain when unresolved" could be
+  # satisfied by an oracle that abstains on EVERYTHING — which strands every dead worker forever and
+  # would still pass the hung-registry test above. Same session-shaped claimer, same registry path;
+  # the ONLY difference is that the registry replies. A reply of "not in my list" is evidence.
+  reap_env                                             # reap_env's stub answers `[]` — a real, empty answer
+  rec '{"id":"answered0j01","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"Answered"}'
+  rec '{"id":"answered0j01","ts":"2026-01-01T00:00:00Z","event":"claim","by":"PANE-SHAPED-CLAIMER"}'
+  run bash "$CB" reap
+  [ "$status" -eq 0 ]
+  [ "$(status_of answered0j01)" = open ]
+  echo "$output" | grep -q 'REOPEN answered0j01'
+}
+
+@test "reap: an UNRESOLVED claimer past UNRESOLVED_MAX_S is BLOCKED, never reopened (abstention is bounded, but never flips to death)" {
+  # Abstention must not be permanent — a registry that is broken for good would otherwise pin every
+  # session-shaped claim as undecidable forever (the same inversion the owned-wait ceiling bounds).
+  # Past the ceiling the item leaves the wave, but as `blocked` (a human decides), NEVER as `open`:
+  # no amount of elapsed time turns an unanswered probe into proof of death.
+  # Second UNRESOLVED shape on purpose — here the registry REPLIES but with garbage jq cannot parse,
+  # which must be read the same way as no reply at all.
+  reap_env
+  export CC_BACKLOG_UNRESOLVED_MAX_S=60                # claim is 7200s old ⇒ far past the ceiling
+  printf '#!/bin/bash\necho "not json at all"\n' > "$BATS_TEST_TMPDIR/junksess"; chmod +x "$BATS_TEST_TMPDIR/junksess"
+  export CC_BACKLOG_SESSIONS_BIN="$BATS_TEST_TMPDIR/junksess"
+  rec '{"id":"unresolv0k01","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"Unresolved"}'
+  rec '{"id":"unresolv0k01","ts":"2026-01-01T00:00:00Z","event":"claim","by":"PANE-SHAPED-CLAIMER"}'  # 1st claim only
+  run bash "$CB" reap
+  [ "$status" -eq 0 ]
+  [ "$(status_of unresolv0k01)" = blocked ]            # NOT open — and blocked on 1 attempt, under MAX_ATTEMPTS
+  echo "$output" | grep -q 'BLOCK unresolv0k01'
+  echo "$output" | grep -q 'unresolvable claimer'
+  refute_match "$output" 'REOPEN unresolv0k01'
 }
 
 @test "reap: no worktree at all for the id ⇒ oracle abstains, dead-worker path unchanged" {
