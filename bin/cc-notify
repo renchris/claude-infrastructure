@@ -72,6 +72,27 @@
 #        "unknown liveness" branch this tool already models — never into a hang.
 #     3. "RESOLVER UNAVAILABLE" IS ITS OWN EXIT CODE (4), distinct from "target unknown" (3).
 #
+# ── THE CALLER CONTRACT (2026-07-26): an exit code the CALLER never gets to see ─────────────────────
+#   The resolver-availability rewrite above made cc-notify's OWN rc honest. It cannot make the rc a
+#   caller sees honest, because a caller that BOUNDS this tool overwrites it: the desk's
+#   `timeout 90 cc-notify …` during the 04:40Z incident returned 124 and NOTHING on stderr, while the
+#   message had in fact already been enqueued (reproduced against the post-rewrite binary: rc 124,
+#   empty stderr, the line present in the target's inbox). A caller could only guess, and guessing
+#   "undelivered" means re-sending a message that landed; guessing "delivered" means losing one that
+#   did not. Backlog 0298535c1584 fix direction (c).
+#
+#   So every terminal path prints a machine-parseable token FIRST, ahead of the human sentence (which
+#   is unchanged — cc-announce, completion-push.sh and desk-invariant.sh all grep the prose):
+#
+#     cc-notify: verdict=<delivered|mailbox-only|unverified|unresolvable|degraded|ambiguous
+#                         |undelivered|interrupted> enqueued=<0|1> uuid=<u> [reason=…]
+#
+#   `enqueued=1` is the load-bearing field: the message is DURABLY in the inbox, whatever happened to
+#   the liveness verdict or to this process. A TERM/INT/HUP trap prints the same token, which is what
+#   makes the bounded-caller case readable at all — `timeout` reports 124 regardless of what the child
+#   exits with, so stderr is the ONLY channel left. Callers MUST read `enqueued=` before treating a
+#   non-zero rc as a lost message; cc-announce does.
+#
 # Resolution order: --role (cc-roles) -> friendly name (exact, cc-registry, LIVE rows) -> raw pane
 #   UUID passthrough -> unambiguous UUID PREFIX (>=8 hex — what `--list` prints) -> --self; then the
 #   forward chain.
@@ -82,7 +103,9 @@
 #   (the registry was readable and holds no such name/uuid; incl. a missing/empty --role file);
 #   4 = RESOLVER UNAVAILABLE (the registry could not be read — the target may well be valid; retry,
 #   do NOT treat as a bad address); 6 = AMBIGUOUS uuid prefix (>1 pane matches — name one exactly);
-#   5 = inbox UNWRITABLE (LOUD — a message that cannot even persist must alarm, never a silent drop).
+#   5 = inbox UNWRITABLE (LOUD — a message that cannot even persist must alarm, never a silent drop);
+#   124 = killed by a signal mid-send (a caller's own bound fired) — read `enqueued=` on stderr to
+#   learn whether the message persisted; the rc alone cannot tell you.
 set -uo pipefail
 
 MAILBOX_DIR="${CC_MAILBOX_DIR:-$HOME/.claude/mailbox}"
@@ -224,6 +247,32 @@ it2_list_bounded() {   # raw --json on stdout; rc != 0 on timeout/error
   cat "$tmp" 2>/dev/null; rm -f "$tmp"; return "$rc"
 }
 
+# --- the caller contract: one machine-parseable line per terminal outcome --------------------------
+# Printed BEFORE the human sentence, never instead of it. `uuid` may not exist yet on the early
+# failure paths, hence ${uuid:-}.
+ENQUEUED=0
+verdict() { # <verdict> [k=v ...]
+  local v="$1"; shift
+  printf 'cc-notify: verdict=%s enqueued=%s uuid=%s' "$v" "$ENQUEUED" "${uuid:-}" >&2
+  while [ $# -gt 0 ]; do printf ' %s' "$1" >&2; shift; done
+  printf '\n' >&2
+}
+
+# `timeout` reports 124 whatever the child exits with, so on a bounded-caller kill this stderr line is
+# the ONLY thing that can distinguish a persisted message from a lost one. Without it the incident's
+# `timeout 90 cc-notify …` returned 124 and total silence over a message that HAD been enqueued.
+# shellcheck disable=SC2329  # invoked indirectly by the `trap` below, which shellcheck cannot see
+_on_signal() {
+  verdict interrupted reason=signal
+  if [ "$ENQUEUED" = 1 ]; then
+    echo "cc-notify: killed by a signal mid-send — the message IS persisted in the target's inbox (the delivery stands; only the liveness verdict is missing)" >&2
+  else
+    echo "cc-notify: killed by a signal BEFORE the message was persisted — treat as UNDELIVERED" >&2
+  fi
+  exit 124
+}
+trap _on_signal TERM INT HUP
+
 # --- parse args ---
 FROM=""; MAILBOX_ONLY=0; TARGET=""; MSG=""; HAVE_TARGET=0; HAVE_MSG=0; ROLE=""; ROLE_GIVEN=0
 while [ $# -gt 0 ]; do
@@ -304,6 +353,7 @@ role_uuid() { # <role-name> → current pane uuid (empty + rc 1 if the role is u
 
 if [ -n "$ROLE" ]; then
   if ! uuid="$(role_uuid "$ROLE")"; then
+    verdict unresolvable reason=role-unset "target=--role $ROLE"
     echo "cc-notify: role '$ROLE' is not set — no live pane at $ROLES_DIR/$ROLE (missing or empty)" >&2
     echo "  a role is pointed at a pane by handoff-fire (--as-role) / cc-register; check: ls $ROLES_DIR" >&2
     exit 3
@@ -316,6 +366,7 @@ else
   case "$_rrc" in
     0) : ;;
     6) # AMBIGUOUS prefix — never guess which pane the operator meant.
+       verdict ambiguous reason=ambiguous-prefix "target=$TARGET"
        echo "cc-notify: uuid prefix '$TARGET' is AMBIGUOUS — it matches more than one pane:" >&2
        printf '%s\n' "$uuid" | sed '/^$/d; s/^/    /' >&2
        echo "  name one of them exactly (or use its friendly name)." >&2
@@ -323,14 +374,17 @@ else
     4) # RESOLVER UNAVAILABLE — the registry could not be read. Saying "not a live session name"
        # here is the exact lie this exit code exists to end: we do not KNOW that. The target is
        # unverified, not invalid.
+       verdict degraded reason=resolver-unavailable "target=$TARGET"
        echo "cc-notify: RESOLVER UNAVAILABLE — could not read the session registry at $REG_DIR" >&2
        echo "  '$TARGET' is UNVERIFIED, not invalid — do not treat this as a bad address; retry, or" >&2
        echo "  address the target by its full 36-char pane UUID (that path needs no registry)." >&2
        exit 4 ;;
     *)
        if [ "$TARGET" = "__self__" ]; then
+         verdict unresolvable reason=no-iterm-session target=--self
          echo "cc-notify: --self needs \$ITERM_SESSION_ID (not in an iTerm2 pane)" >&2
        else
+         verdict unresolvable reason=no-such-target "target=$TARGET"
          echo "cc-notify: target '$TARGET' is UNKNOWN — the registry ($REG_DIR) is readable and holds" >&2
          echo "  no live session by that name, and it is not a pane UUID or a known uuid prefix." >&2
          echo "  try: cc-notify --list" >&2
@@ -388,12 +442,16 @@ if ! mailbox_write; then
   for _p in "$_sd/../scripts/push-send.sh" "$HOME/.claude/scripts/push-send.sh" "$(command -v push-send.sh 2>/dev/null || true)"; do
     [ -n "$_p" ] && [ -x "$_p" ] && { "$_p" send --title "cc-notify enqueue FAILED" --message "inbox unwritable for $uuid; NOT delivered: $MSG_1LINE" >/dev/null 2>&1 || true; break; }
   done
+  verdict undelivered reason=inbox-unwritable
   echo "cc-notify: FAILED to write inbox $MAILBOX_DIR/$uuid.md — message NOT delivered; alarm recorded + phone paged (check permissions/disk)" >&2
   exit 5
 fi
 
+ENQUEUED=1     # from here on the message is DURABLE — a kill can cost the verdict, never the delivery
+
 # --mailbox-only: caller explicitly wants a pure record, no liveness verdict.
 if [ "$MAILBOX_ONLY" = 1 ]; then
+  verdict mailbox-only reason=requested
   echo "cc-notify: [$uuid] recorded to inbox ($MAILBOX_DIR/$uuid.md; --mailbox-only)" >&2
   exit 0
 fi
@@ -455,12 +513,15 @@ target_live "$uuid"; _lv=$?
 case "$_lv" in
   0)
     if [ "$uuid" = "$own_uuid" ] || wake_path_armed "$uuid"; then
+      verdict delivered reason=wake-path-armed
       echo "cc-notify: delivered to inbox [$uuid] (live session, wake-path armed — its cc-await-ping watcher wakes it within a poll)" >&2
     else
+      verdict delivered reason=no-watcher
       echo "cc-notify: delivered to inbox [$uuid] (live session, NO watcher armed — drains on its NEXT turn; delivered but not a guaranteed instant wake)" >&2
     fi
     exit 0 ;;
   1)
+    verdict mailbox-only reason=target-not-live
     echo "cc-notify: [$uuid] mailbox only — target is NOT a live session (closed/recycled pane); no drain will run. The message is recorded but unread until/unless that pane returns." >&2
     # D3 REROUTE — a dead, unforwarded target is the silent-loop class (570 pages into one dead box for
     # three days). The line stays in the original box (forensics are never moved), and a COPY goes to
@@ -492,5 +553,6 @@ case "$_lv" in
       fi
     fi
     exit 0 ;;
-  *) echo "cc-notify: delivered to inbox [$uuid] (liveness UNVERIFIABLE — no session registry/pane list; recorded, will drain if the pane is live)" >&2; exit 0 ;;
+  *) verdict unverified reason=liveness-unverifiable
+     echo "cc-notify: delivered to inbox [$uuid] (liveness UNVERIFIABLE — no session registry/pane list; recorded, will drain if the pane is live)" >&2; exit 0 ;;
 esac
