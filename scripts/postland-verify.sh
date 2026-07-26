@@ -177,6 +177,13 @@ classify_failures() { # <tapfile> — retry ladder: >=2/3 = REPRODUCIBLE, 1/3 = 
     [ -n "$f" ] || continue
     fails=1; rc=1
     for i in 1 2; do                                     # each re-run gets a FRESH private TMPDIR
+      # SHED BEFORE EACH RETRY. The ladder's whole premise is that a re-run discriminates a real
+      # failure from an environmental one — but it re-ran under the SAME sustained load that caused
+      # the first failure, so a load-sensitive test fails all three times and is promoted to
+      # "REPRODUCIBLE". That is how the 2026-07-26 genuine-looking stamp (retries=12) convicted six
+      # suites that each pass cleanly on a quiet box. Re-running is only evidence if the environment
+      # actually changed — the complement to CUT ≠ RED, which stops a cut from lying about itself.
+      gate_admit "retry $i of $f"
       tdir="$(mktemp -d "$RUN_TMP/retry.XXXXXX")"
       ( cd "$WORKTREE" && TMPDIR="$tdir" nice -n 10 "$BATS_BIN" "$f" ) >/dev/null 2>&1
       rc=$?; RETRIES=$((RETRIES+1)); [ "$rc" -eq 0 ] || fails=$((fails+1)); rm -rf "$tdir"
@@ -187,6 +194,38 @@ classify_failures() { # <tapfile> — retry ladder: >=2/3 = REPRODUCIBLE, 1/3 = 
 $pairs
 EOF
 }
+# ════ admission control — bounded, fail-OPEN load shedding ════════════════════════════════════════
+# Deliberately SELF-CONTAINED (a near-twin lives in ship-land.sh) rather than a shared sibling lib:
+# this whole incident began with a sibling file that could not be resolved, and a load shedder that
+# silently no-ops because its lib is missing would re-arm the exact herd it exists to damp.
+# CONTRACT: bounded (always proceeds by CC_GATE_ADMIT_MAX_WAIT) · env-overridable
+# (CC_GATE_MAX_LOAD=0|off is the kill switch) · fail-OPEN on an unreadable sensor · never called
+# while a lock is held that another runner needs — postland holds only its OWN single-slot mutex,
+# and a second instance abstains instantly rather than queueing, so waiting here blocks nobody.
+gate_admit() { # <what>
+  local what="${1:-suite}" max budget step waited=0 load jit
+  max="${CC_GATE_MAX_LOAD:-8}"; budget="${CC_GATE_ADMIT_MAX_WAIT:-600}"; step="${CC_GATE_ADMIT_POLL:-15}"
+  { [ "$max" = "0" ] || [ "$max" = "off" ]; } && return 0
+  case "$max" in ''|*[!0-9.]*) return 0 ;; esac                        # ceiling: numeric (awk-compared)
+  case "$budget$step" in ''|*[!0-9]*) return 0 ;; esac                 # waits: INTEGER seconds
+  [ "$step" -gt 0 ] || return 0                                        # a 0 poll would spin ⇒ fail OPEN
+  while [ "$waited" -lt "$budget" ]; do
+    load="$(sysctl -n vm.loadavg 2>/dev/null | awk '{print $2}')"
+    [ -n "$load" ] || return 0                                         # unreadable sensor ⇒ fail OPEN
+    if awk -v l="$load" -v m="$max" 'BEGIN{exit !(l+0 < m+0)}'; then
+      [ "$waited" -gt 0 ] && log "ADMIT ok after ${waited}s (load $load < $max) — starting $what"
+      return 0
+    fi
+    [ "$waited" -eq 0 ] && log "ADMIT-DEFER $what — load $load >= ceiling $max (waiting up to ${budget}s)"
+    # JITTER (see ship-land.sh's twin): de-synchronise wakeups so deferred runners do not all
+    # restart on the same boundary and re-form the herd the shedder exists to break up.
+    jit=$(( RANDOM % 8 ))
+    sleep "$(( step + jit ))"; waited=$(( waited + step + jit ))
+  done
+  log "ADMIT-PROCEED $what — budget ${budget}s exhausted (load $load >= $max), starting anyway (bounded by design)"
+  return 0
+}
+
 do_bisect() { # <file> <good> <bad> → prints the first-bad sha (empty when undecidable)
   local file="$1" good="$2" bad="$3" runner out culprit
   [ -n "$good" ] && [ -n "$bad" ] && [ "$good" != "$bad" ] || return 1
@@ -252,6 +291,7 @@ run_target() { # <sha> — the whole check-set + verdict for ONE sha
   FAILING=(); FAILTEST=""; RETRIES=0; NFLAKE=0; CUT=0
   syntax_check
   tap="$RUN_TMP/bats.tap"
+  gate_admit "full suite @ $(sha12 "$sha")"
   ( cd "$WORKTREE" && TMPDIR="$RUN_TMP" nice -n 10 "$BATS_BIN" tests/ ) > "$tap" 2>&1; rc=$?
   adv="$(sc_count)"
   [ "$rc" -eq 0 ] || classify_failures "$tap"
@@ -419,7 +459,11 @@ selftest() {
     git -C "$d/src" fetch -q origin >/dev/null 2>&1
   }
   run_fixture() {
-    env POSTLAND_VERIFY="${POSTLAND_VERIFY:-on}" CC_POSTLAND_DIR="$d/state" CC_POSTLAND_REPO="$d/src" \
+    # CC_GATE_MAX_LOAD=0 — the selftest must never sit in admission control; it is proving verdict
+    # logic, not shedding behaviour, and it frequently runs on exactly the busy box that motivated
+    # the shedder. (The shedder's own contract is asserted directly, below.)
+    env POSTLAND_VERIFY="${POSTLAND_VERIFY:-on}" CC_GATE_MAX_LOAD=0 \
+        CC_POSTLAND_DIR="$d/state" CC_POSTLAND_REPO="$d/src" \
         CC_POSTLAND_WORKTREE="$d/wt" CC_PAGES_DIR="$d/pages" CC_IDL="$d/idl.jsonl" \
         CC_BACKLOG_BIN=/usr/bin/true CC_POSTLAND_NOTIFY=/usr/bin/true CC_POSTLAND_NOTIFY_BIN=/usr/bin/true \
         CC_POSTLAND_LANDLOG="$d/land.log" "$SELF" "$@"
@@ -456,6 +500,22 @@ selftest() {
     | grep -qE '^[0-9]+$' && okp "red: page line 1 is an epoch" || badp "red: page line 1 not an epoch"
   find "$d/pages" -name "postland-red-$(sha12 "$red_sha").page" 2>/dev/null | grep -q . \
     && okp "red: page keyed to the bisected culprit sha" || badp "red: page not culprit-keyed"
+
+  # ── admission control contract: bounded + fail-open + kill switch (no sleeping in the selftest)
+  # a separate PROCESS, not a ( ) subshell: the probe must set LOG/CC_* without shadowing this
+  # script's own globals (shellcheck SC2030/SC2031, and the gate treats any finding as red).
+  { sed -n '/^gate_admit() {/,/^}/p' "$SELF"
+    # shellcheck disable=SC2016  # authoring a script: $1 must NOT expand here
+    printf 'log() { printf "%%s\\n" "$1" >> "%s"; }\n' "$d/admit.log"
+    printf 'CC_GATE_MAX_LOAD=0 gate_admit killswitch || exit 1\n'                     # kill switch
+    printf 'CC_GATE_MAX_LOAD=bogus gate_admit nonnumeric || exit 1\n'                 # fail OPEN
+    printf 'CC_GATE_MAX_LOAD=0.001 CC_GATE_ADMIT_MAX_WAIT=1 CC_GATE_ADMIT_POLL=1 gate_admit bounded || exit 1\n'
+  } > "$d/admit-probe.sh"
+  timeout 30 bash "$d/admit-probe.sh" >/dev/null 2>&1; rc=$?
+  [ "$rc" -eq 0 ] && okp "admit: kill switch + non-numeric + bounded all return 0" || badp "admit: contract violated (rc=$rc)"
+  grep -q 'ADMIT-PROCEED bounded' "$d/admit.log" 2>/dev/null \
+    && okp "admit: an unsatisfiable ceiling PROCEEDS after the budget (never blocks a land)" \
+    || badp "admit: budget exhaustion did not proceed"
 
   echo "postland-verify selftest: $PASS passed, $FAIL failed"
   [ "$FAIL" -eq 0 ] || exit 1
