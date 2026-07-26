@@ -285,6 +285,43 @@ def is_hard_fail(elem: str) -> bool:
     return bool(re.search(r"\b(exit|return)\s+[1-9]", e))
 
 
+def is_always_true(elem: str) -> bool:
+    """True when `elem` cannot fail — `true` or `:`.
+
+    As the right-hand side of the chain's final `||`, such a handler pins the whole
+    list's status to 0. See `chain_cannot_fail`.
+    """
+    return bool(re.match(r"^(true|:)(\s|$)", strip_quoted(elem).strip()))
+
+
+def is_conditional_action(elem: str) -> bool:
+    """True when `elem` is an ACTION taken when a guard holds, not an assertion.
+
+    `[ -z "$line" ] && continue` and `[ "$x" = DENY ] && bad="$bad$line"` are
+    if-statements written as AND-OR lists: the left side is a predicate whose FALSE
+    branch is the normal path, not a defect. Reporting them is not merely noise —
+    the fixer's ` || false` would invert the guard and fail the test on the ordinary
+    path, so this exemption is load-bearing rather than cosmetic.
+
+    Deliberately narrow: loop control and assignment only. `exit`/`return` are left
+    reportable, since over-reporting there is harmless while a missed assertion is not.
+    """
+    e = strip_quoted(elem).strip()
+    return bool(re.match(r"^(continue|break)(\s|$)", e) or re.match(r"^\w+\+?=", e))
+
+
+def chain_cannot_fail(code: str) -> bool:
+    """True when `code`'s status is 0 on every path, so POSITION cannot revive it.
+
+    `A && false || true` is the shape that motivated this: it reads as "A must not
+    match", but the trailing `|| true` swallows the `false` the author put there to
+    signal the failure. Its status is 0 whether A matches or not, so it is dead even
+    as a test body's LAST statement — the one place finality normally rescues.
+    """
+    elems = split_and_or(code)
+    return len(elems) > 1 and elems[-2][1] == "||" and is_always_true(elems[-1][0])
+
+
 def elem_dead_class(elem: str) -> str | None:
     """Dead-class of an element in STATUS-DETERMINING position, else None."""
     elem = strip_quoted(elem).strip()
@@ -324,6 +361,11 @@ def classify(code: str) -> str | None:
     # itself reliably fails the list is LIVE and nothing is absorbed.
     has_handler = len(elems) > 1 and elems[-2][1] == "||"
     if has_handler and is_hard_fail(elems[-1][0]):
+        return None
+
+    # A conditional ACTION (`&& continue`, `&& x=y`) is an if-statement, not an
+    # absorbed assertion — the guard's false branch is the normal path.
+    if is_conditional_action(elems[-1][0]):
         return None
 
     for elem, op in elems[:-1]:
@@ -369,8 +411,15 @@ def analyze_file(path: str) -> list[dict]:
             cls = classify(s.text)
             if cls is None:
                 continue
-            if s.depth == 0 and s.lineno == final_lineno:
-                continue  # provably final ⇒ its status IS the test's status
+            if (
+                s.depth == 0
+                and s.lineno == final_lineno
+                and not chain_cannot_fail(s.text)
+            ):
+                # Provably final ⇒ its status IS the test's status — UNLESS the chain
+                # cannot produce a non-zero status at all, in which case being last
+                # rescues nothing.
+                continue
             findings.append(
                 {
                     "path": path,
