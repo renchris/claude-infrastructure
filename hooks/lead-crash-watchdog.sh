@@ -358,6 +358,195 @@ sys.stdout.write(last)
 PY
 }
 
+# harvest_team_reports <team_dir> <sid> — leg (a). Enumerate the team's assignees from
+# config.json and write each one's final report out of its transcript into <team_dir>/HARVEST/.
+#
+# RUNS BEFORE ANY TEARDOWN, and that ordering is the whole point: cc-teardown closes the pane and
+# kills the process, and a closed pane cannot be harvested. Harvest is also strictly
+# non-destructive — it only ever creates files under <team_dir>/HARVEST/ — so it is safe to run
+# unconditionally on a positive death verdict, and it is what makes the close leg safe to run at
+# all (the report is already on disk before anything is reaped).
+#
+# Emits status.tsv: member <TAB> paneId <TAB> state <TAB> bytes <TAB> transcript. THREE states,
+# because "no report" has two different causes and only one of them is a real outcome:
+#   HARVESTED     report text recovered and written.
+#   EMPTY         transcript found, but it holds no assistant text (assignee died before its
+#                 first turn) — a real, proven outcome.
+#   NO-TRANSCRIPT no transcript resolved: either genuinely rotated away (bsm-schema, joined
+#                 2026-06-07) or the probe could not look. NOT proof a report never existed.
+# Leg (b) reads this file and closes ONLY panes whose row is HARVESTED or EMPTY — a
+# NO-TRANSCRIPT member is never torn down, because tearing it down would destroy the last place
+# its report could still be found.
+harvest_team_reports() {
+  local team_dir="$1" sid="$2"
+  local cfg="$team_dir/config.json"
+  [[ -f "$cfg" ]] || { echo "[watchdog $sid] harvest: no config.json in $team_dir"; return 0; }
+  local hdir="$team_dir/HARVEST"
+  mkdir -p "$hdir" 2>/dev/null || true
+  local status="$hdir/status.tsv"
+  : > "$status" 2>/dev/null || true
+
+  local n_h=0 n_e=0 n_n=0 name pane cwd
+  while IFS=$'\t' read -r name pane cwd; do
+    [[ -n "$name" ]] || continue
+    [[ "$name" == "team-lead" ]] && continue
+    [[ "$pane" == "-" ]] && pane=""      # '-' is jq's placeholder for absent (see the query above)
+    [[ "$cwd"  == "-" ]] && cwd=""
+    local tpath report_file text bytes=0 state
+    tpath=$(member_transcript "$name" "$cwd" 2>/dev/null || true)
+    if [[ -z "$tpath" ]]; then
+      state="NO-TRANSCRIPT"; n_n=$((n_n + 1))
+    else
+      text=$(last_assistant_text "$tpath" 2>/dev/null || true)
+      if [[ -n "$text" ]]; then
+        report_file="$hdir/$name.md"
+        {
+          echo "# Final report — $name"
+          echo
+          echo "- **Team**: $(basename "$team_dir")"
+          echo "- **Lead session**: $sid (crashed)"
+          echo "- **Pane**: ${pane:-?}"
+          echo "- **Worktree (cwd)**: ${cwd:-?}"
+          echo "- **Transcript**: $tpath"
+          echo "- **Harvested**: $(date '+%Y-%m-%d %H:%M:%S') — from DISK TRUTH (last assistant"
+          echo "  message in the transcript), never from a notification: a named assignee's final"
+          echo "  text is never delivered as a message, and this lead crashed before it could"
+          echo "  receive even an idle notification."
+          echo
+          echo "---"
+          echo
+          printf '%s\n' "$text"
+        } > "$report_file" 2>/dev/null || true
+        bytes=$(wc -c < "$report_file" 2>/dev/null | tr -d ' ') || bytes=0
+        state="HARVESTED"; n_h=$((n_h + 1))
+      else
+        state="EMPTY"; n_e=$((n_e + 1))
+      fi
+    fi
+    # '-' placeholders, never an EMPTY field: `IFS=$'\t' read` COALESCES consecutive whitespace-IFS
+    # runs (tab included), so an in-process member with no pane would emit two adjacent tabs, drop
+    # the empty column and shift every later field LEFT — the reader would see state="HARVESTED" as
+    # the PANE and try to tear it down. Caught by test (ix).
+    printf '%s\t%s\t%s\t%s\t%s\n' "$name" "${pane:--}" "$state" "${bytes:-0}" "${tpath:--}" \
+      >> "$status" 2>/dev/null || true
+    echo "[watchdog $sid] harvest $name → $state (${bytes:-0}B)"
+  # jq emits '-' for an absent/empty field rather than "" for the SAME reason the writer below does:
+  # `IFS=$'\t' read` coalesces adjacent tabs, so a member with no tmuxPaneId (an in-process
+  # assignee) would have its CWD read as its PANE and handed to cc-teardown as a teardown target.
+  # Caught by test (ix-b) asserting the producer's literal emission.
+  done < <(jq -r '.members[]? | select(.name != "team-lead")
+                  | [ .name,
+                      ((.tmuxPaneId // "") | if . == "" then "-" else . end),
+                      ((.cwd        // "") | if . == "" then "-" else . end) ] | @tsv' \
+                 "$cfg" 2>/dev/null || true)
+
+  echo "[watchdog $sid] harvest complete: $n_h harvested, $n_e empty, $n_n no-transcript → $hdir"
+  return 0
+}
+
+# close_orphaned_panes <team_dir> <sid> — leg (b). Close each orphaned assignee's pane through
+# bin/cc-teardown, never raw it2/osascript: only cc-teardown re-observes both legs and treats a
+# surviving pane as FAIL LOUD rather than a false success (a close that returns 0 is not a closed
+# pane). Observed cost of not doing this: 8 assignees alive holding 3.4GB after their lead died.
+#
+# STRUCTURAL PRECONDITION — harvest first. This reads leg (a)'s status.tsv and refuses outright
+# when it is missing: no harvest ⇒ no teardown, because a closed pane cannot be harvested. A
+# NO-TRANSCRIPT member is NEVER closed either — its pane is the last place its report could still
+# be found, and "we could not look" is not "there was nothing there".
+#
+# DEFAULT OFF — armed only by LCW_ORPHAN_CLOSE=1. cc-teardown's own header bars wiring it RAW into
+# any hook/settings/launchd (that fires it with no gate in front = C10); cc-reaper is the one
+# sanctioned PRE-GATED autonomous caller. This watchdog is spawned FROM a SessionStart hook, so
+# arming an automatic pane-killer here by default is precisely the wiring that rule forbids — and
+# a newly-wired MUTATING step defaults OFF regardless (memory: append-only-store-safety-rules).
+# Arming is therefore an operator step, staged in autonomy/pending-activation/.
+#
+# UNARMED IS NOT SILENT. The enumeration, the eligibility gate and the plan all still run and are
+# logged and written to close-plan.tsv, so the un-reaped panes are visible and countable instead
+# of the feature looking done while abstaining ~100% of the time (memory:
+# feature-durability-mechanism-not-memory — a built feature must FAIL LOUD when inert).
+close_orphaned_panes() {
+  local team_dir="$1" sid="$2"
+  local hdir="$team_dir/HARVEST" status="$team_dir/HARVEST/status.tsv"
+  if [[ ! -f "$status" ]]; then
+    echo "[watchdog $sid] close: REFUSE — no HARVEST/status.tsv (harvest never ran); a closed pane cannot be harvested"
+    return 0
+  fi
+  local armed=0
+  [[ "${LCW_ORPHAN_CLOSE:-0}" == "1" ]] && armed=1
+  # Seam: LCW_TEARDOWN_BIN — UNSET ⇒ resolve one. SET, including set to EMPTY ⇒ honored verbatim, so
+  # `LCW_TEARDOWN_BIN=` genuinely disables the actuator. `${VAR:-}` cannot tell unset from set-empty
+  # (memory: claimed-outcome-vs-checked-outcome), and here that gap is not cosmetic: a `${VAR:-}`
+  # read falls through to `command -v cc-teardown`, which resolves the operator's REAL
+  # ~/.claude/bin/cc-teardown — so a caller intending to DISABLE the actuator would instead fire it
+  # at live panes. Caught by test (xii) doing exactly that.
+  local tdbin
+  if [[ -n "${LCW_TEARDOWN_BIN+set}" ]]; then
+    tdbin="$LCW_TEARDOWN_BIN"
+  else
+    tdbin=$(command -v cc-teardown 2>/dev/null || true)
+    [[ -n "$tdbin" ]] || { [[ -x "$HOME/.claude/bin/cc-teardown" ]] && tdbin="$HOME/.claude/bin/cc-teardown"; }
+  fi
+  local plan="$hdir/close-plan.tsv"; : > "$plan" 2>/dev/null || true
+  local n_elig=0 n_skip=0 n_ok=0 n_defer=0 n_refuse=0 n_fail=0
+  local member pane state bytes tpath
+
+  while IFS=$'\t' read -r member pane state bytes tpath; do
+    [[ -n "$member" ]] || continue
+    # '-' is the writer's placeholder for an absent value (see harvest_team_reports: an EMPTY TSV
+    # field would be coalesced away by `read` and shift every later column left).
+    [[ "$pane"  == "-" ]] && pane=""
+    [[ "$tpath" == "-" ]] && tpath=""
+    # Not a closable pane: the lead's own sentinel, or an in-process assignee with no pane.
+    if [[ -z "$pane" || "$pane" == "leader" ]]; then
+      echo "[watchdog $sid] close: skip $member (no pane / in-process)"
+      n_skip=$((n_skip + 1)); continue
+    fi
+    # NEVER close what was not harvested — the pane is the last place the report survives.
+    if [[ "$state" == "NO-TRANSCRIPT" ]]; then
+      echo "[watchdog $sid] close: SKIP $member pane=$pane — NO-TRANSCRIPT (report unrecovered; refusing to destroy the last copy)"
+      printf '%s\t%s\t%s\t%s\n' "$member" "$pane" "SKIP-UNHARVESTED" "" >> "$plan" 2>/dev/null || true
+      n_skip=$((n_skip + 1)); continue
+    fi
+    n_elig=$((n_elig + 1))
+    # POSITIVE done-evidence, derived — never inferred from silence. Names the death evidence and
+    # the harvest that already happened, so cc-teardown's gate is judging facts, not a claim.
+    local ev="lead-crash-watchdog: lead session $sid DEAD (positive evidence: watchdog pid failed kill -0); assignee '$member' orphaned with no lead to report to; final report HARVESTED to $hdir/$member.md (${bytes:-0}B, state=$state) from $tpath BEFORE teardown"
+    if (( armed )) && [[ -n "$tdbin" ]]; then
+      local trc=0
+      "$tdbin" "$pane" --done-evidence "$ev" >/dev/null 2>&1 || trc=$?
+      case "$trc" in
+        0)  n_ok=$((n_ok + 1));     echo "[watchdog $sid] close: $member pane=$pane TORN DOWN + effect-verified (rc 0)" ;;
+        10) n_defer=$((n_defer + 1)); echo "[watchdog $sid] close: $member pane=$pane DEFER — cc-teardown's gate says work-unsafe (rc 10); left alone" ;;
+        2)  n_refuse=$((n_refuse + 1)); echo "[watchdog $sid] close: $member pane=$pane REFUSE (rc 2); left alone" ;;
+        5)  n_fail=$((n_fail + 1)); echo "[watchdog $sid] close: $member pane=$pane FAIL LOUD — acted but the pane SURVIVED (rc 5)" ;;
+        *)  n_fail=$((n_fail + 1)); echo "[watchdog $sid] close: $member pane=$pane cc-teardown rc=$trc (unexpected); left alone" ;;
+      esac
+      printf '%s\t%s\t%s\t%s\n' "$member" "$pane" "rc=$trc" "$ev" >> "$plan" 2>/dev/null || true
+    else
+      local why="unarmed"; [[ -n "$tdbin" ]] || why="cc-teardown-unavailable"
+      echo "[watchdog $sid] close: WOULD-CLOSE $member pane=$pane ($why — set LCW_ORPHAN_CLOSE=1 to arm)"
+      printf '%s\t%s\t%s\t%s\n' "$member" "$pane" "WOULD-CLOSE($why)" "$ev" >> "$plan" 2>/dev/null || true
+    fi
+  done < "$status"
+
+  if (( armed )); then
+    echo "[watchdog $sid] close complete: $n_ok torn down, $n_defer defer, $n_refuse refuse, $n_fail FAIL, $n_skip skipped"
+  else
+    echo "[watchdog $sid] close UNARMED: $n_elig orphaned pane(s) left RUNNING, $n_skip skipped — plan in $plan (arm: LCW_ORPHAN_CLOSE=1)"
+  fi
+  return 0
+}
+
+# Test/debug entrypoints for the two team-level legs (both are top-level for the same reason the
+# classify helpers are: the daemon subshell inherits them AND they stay unit-testable).
+if [[ "${1:-}" == "--harvest-team" ]]; then
+  harvest_team_reports "${2:-}" "${3:-}"; exit 0
+fi
+if [[ "${1:-}" == "--close-panes" ]]; then
+  close_orphaned_panes "${2:-}" "${3:-}"; exit 0
+fi
+
 # Test/debug entrypoint: resolve+print one member's harvested report (name, cwd).
 if [[ "${1:-}" == "--harvest-member" ]]; then
   _t=$(member_transcript "${2:-}" "${3:-}")
@@ -510,6 +699,7 @@ log "registered session=$SESSION_ID pid=$LEAD_PID"
       write_crash_report "$team_dir" "$pid" "$sid"
       harvest_team_reports "$team_dir" "$sid"
       send_shutdown_requests "$team_dir" "$sid"
+      close_orphaned_panes "$team_dir" "$sid"
     done
 
     lcw_osa osascript -e "display notification \"Lead crashed. ${#affected_team_dirs[@]} team(s) affected. See CRASH_REPORT.md\" with title \"Claude Code Watchdog\" sound name \"Basso\"" 2>/dev/null || true
@@ -522,78 +712,6 @@ log "registered session=$SESSION_ID pid=$LEAD_PID"
     fi
   }
 
-  # harvest_team_reports <team_dir> <sid> — leg (a). Enumerate the team's assignees from
-  # config.json and write each one's final report out of its transcript into <team_dir>/HARVEST/.
-  #
-  # RUNS BEFORE ANY TEARDOWN, and that ordering is the whole point: cc-teardown closes the pane and
-  # kills the process, and a closed pane cannot be harvested. Harvest is also strictly
-  # non-destructive — it only ever creates files under <team_dir>/HARVEST/ — so it is safe to run
-  # unconditionally on a positive death verdict, and it is what makes the close leg safe to run at
-  # all (the report is already on disk before anything is reaped).
-  #
-  # Emits status.tsv: member <TAB> paneId <TAB> state <TAB> bytes <TAB> transcript. THREE states,
-  # because "no report" has two different causes and only one of them is a real outcome:
-  #   HARVESTED     report text recovered and written.
-  #   EMPTY         transcript found, but it holds no assistant text (assignee died before its
-  #                 first turn) — a real, proven outcome.
-  #   NO-TRANSCRIPT no transcript resolved: either genuinely rotated away (bsm-schema, joined
-  #                 2026-06-07) or the probe could not look. NOT proof a report never existed.
-  # Leg (b) reads this file and closes ONLY panes whose row is HARVESTED or EMPTY — a
-  # NO-TRANSCRIPT member is never torn down, because tearing it down would destroy the last place
-  # its report could still be found.
-  harvest_team_reports() {
-    local team_dir="$1" sid="$2"
-    local cfg="$team_dir/config.json"
-    [[ -f "$cfg" ]] || { echo "[watchdog $sid] harvest: no config.json in $team_dir"; return 0; }
-    local hdir="$team_dir/HARVEST"
-    mkdir -p "$hdir" 2>/dev/null || true
-    local status="$hdir/status.tsv"
-    : > "$status" 2>/dev/null || true
-
-    local n_h=0 n_e=0 n_n=0 name pane cwd
-    while IFS=$'\t' read -r name pane cwd; do
-      [[ -n "$name" ]] || continue
-      [[ "$name" == "team-lead" ]] && continue
-      local tpath report_file text bytes=0 state
-      tpath=$(member_transcript "$name" "$cwd" 2>/dev/null || true)
-      if [[ -z "$tpath" ]]; then
-        state="NO-TRANSCRIPT"; n_n=$((n_n + 1))
-      else
-        text=$(last_assistant_text "$tpath" 2>/dev/null || true)
-        if [[ -n "$text" ]]; then
-          report_file="$hdir/$name.md"
-          {
-            echo "# Final report — $name"
-            echo
-            echo "- **Team**: $(basename "$team_dir")"
-            echo "- **Lead session**: $sid (crashed)"
-            echo "- **Pane**: ${pane:-?}"
-            echo "- **Worktree (cwd)**: ${cwd:-?}"
-            echo "- **Transcript**: $tpath"
-            echo "- **Harvested**: $(date '+%Y-%m-%d %H:%M:%S') — from DISK TRUTH (last assistant"
-            echo "  message in the transcript), never from a notification: a named assignee's final"
-            echo "  text is never delivered as a message, and this lead crashed before it could"
-            echo "  receive even an idle notification."
-            echo
-            echo "---"
-            echo
-            printf '%s\n' "$text"
-          } > "$report_file" 2>/dev/null || true
-          bytes=$(wc -c < "$report_file" 2>/dev/null | tr -d ' ') || bytes=0
-          state="HARVESTED"; n_h=$((n_h + 1))
-        else
-          state="EMPTY"; n_e=$((n_e + 1))
-        fi
-      fi
-      printf '%s\t%s\t%s\t%s\t%s\n' "$name" "${pane:-}" "$state" "${bytes:-0}" "${tpath:-}" \
-        >> "$status" 2>/dev/null || true
-      echo "[watchdog $sid] harvest $name → $state (${bytes:-0}B)"
-    done < <(jq -r '.members[]? | select(.name != "team-lead")
-                    | [.name, (.tmuxPaneId // ""), (.cwd // "")] | @tsv' "$cfg" 2>/dev/null || true)
-
-    echo "[watchdog $sid] harvest complete: $n_h harvested, $n_e empty, $n_n no-transcript → $hdir"
-    return 0
-  }
 
   write_crash_report() {
     local team_dir="$1" pid="$2" sid="$3"
