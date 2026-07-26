@@ -83,6 +83,14 @@ SH
 
   SUCC="SUCC-PANE"; PRED="PRED-PANE"; SUCC_SESS="succ-sess-0"
   printf '{"session_id":"%s"}\n' "$SUCC_SESS" > "$REGDIR/$SUCC.json"   # registry row → transcript name
+
+  # ORIGIN GATE (2026-07-26): self-close is available ONLY to a session that was FIRED BY an
+  # originator. Every test below models a fired PEER retiring — the only legitimate self-close —
+  # so stamp $PRED as one. This was previously implicit; the gate makes it explicit.
+  # The gate's own behaviour (refuse/allow/override) is covered by the tests at the end of this file.
+  export CC_FIRED_DIR="$BATS_TEST_TMPDIR/cc-fired"; mkdir -p "$CC_FIRED_DIR"
+  printf '{"paneUUID":"%s","cwd":"/tmp","firedBy":"ORIGINATOR","firedAt":"2026-07-26T18:00:00Z","selfRetire":true}\n' \
+    "$PRED" > "$CC_FIRED_DIR/$PRED.json"
 }
 
 # a fake HOME with it2 + cc-notify stubs that RECORD their args (for the watcher tests).
@@ -196,4 +204,54 @@ SH
   run selfclose_inventory_warn "MYSID" ""
   [ "$status" -eq 0 ]
   [ -z "$output" ]
+}
+
+# ── ORIGIN GATE (operator invariant, 2026-07-26) ────────────────────────────────────────────────
+# "A main session should and wouldn't self-close on itself, the same way a team LEAD never self
+# closes itself while in progress or when its done." Self-close belongs ONLY to a session with an
+# ORIGINATOR to hand back to. cc-classify:596 already refuses to REAP an unstamped (operator-launched)
+# pane; until this gate, that same pane could still kill ITSELF via --terminal. Oracle = the
+# fired-peer stamp handoff-fire writes at fire time (mark_fired_peer).
+
+@test "origin gate: an UNSTAMPED (operator-launched) session is REFUSED --terminal" {
+  export CC_FIRED_DIR="$BATS_TEST_TMPDIR/fired-none"; mkdir -p "$CC_FIRED_DIR"
+  run bash "$HF" self-close --terminal --session-id "ORIGIN-1111" --dry-run
+  [ "$status" -eq 2 ] || false
+  echo "$output" | grep -qi "ORIGIN session" || false
+  echo "$output" | grep -qi "no fired-peer stamp" || false
+}
+
+@test "origin gate: an unstamped session is refused --successor too (not just --terminal)" {
+  export CC_FIRED_DIR="$BATS_TEST_TMPDIR/fired-none2"; mkdir -p "$CC_FIRED_DIR"
+  run bash "$HF" self-close --successor "SOMEPANE-9999" --session-id "ORIGIN-2222" --dry-run
+  [ "$status" -eq 2 ] || false
+  echo "$output" | grep -qi "ORIGIN session" || false
+}
+
+@test "origin gate: a FIRED PEER (stamp present) passes the origin gate" {
+  export CC_FIRED_DIR="$BATS_TEST_TMPDIR/fired-yes"; mkdir -p "$CC_FIRED_DIR"
+  printf '{"paneUUID":"PEER-3333","cwd":"/tmp","firedBy":"ORIGIN-1111","firedAt":"2026-07-26T18:00:00Z","selfRetire":true}\n' \
+    > "$CC_FIRED_DIR/PEER-3333.json"
+  run bash "$HF" self-close --terminal --session-id "PEER-3333" --dry-run
+  # It may still stop at a LATER gate (dirty tree, registry) — it must NOT stop at the origin gate.
+  # `[ ]` form, not `&& false`: a non-final `A && B` is errexit-EXEMPT, so the original could never
+  # fail. `[ ]` is live in ANY position, which is what the liveness ratchet is asking for.
+  [ "$(echo "$output" | grep -ci "ORIGIN session")" -eq 0 ]
+  [ "$status" -ne 2 ] || echo "$output" | grep -qvi "ORIGIN session" || false
+}
+
+@test "origin gate: an EMPTY stamp file is treated as absent (fail-safe, refuse)" {
+  export CC_FIRED_DIR="$BATS_TEST_TMPDIR/fired-empty-stamp"; mkdir -p "$CC_FIRED_DIR"
+  : > "$CC_FIRED_DIR/PEER-4444.json"          # zero-byte ⇒ unusable ⇒ must NOT authorise a close
+  run bash "$HF" self-close --terminal --session-id "PEER-4444" --dry-run
+  [ "$status" -eq 2 ] || false
+  echo "$output" | grep -qi "ORIGIN session" || false
+}
+
+@test "origin gate: --allow-origin-close is the documented, loud override" {
+  export CC_FIRED_DIR="$BATS_TEST_TMPDIR/fired-none3"; mkdir -p "$CC_FIRED_DIR"
+  run bash "$HF" self-close --terminal --session-id "ORIGIN-5555" --allow-origin-close --dry-run
+  # Was `&& false` followed by a bare `true` — dead twice over: errexit-exempt in non-final
+  # position, and the trailing `true` reset the status even if it had not been.
+  [ "$(echo "$output" | grep -ci "ORIGIN session")" -eq 0 ]
 }
