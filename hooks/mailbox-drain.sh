@@ -2,25 +2,49 @@
 # mailbox-drain.sh — v2 non-keystroke delivery on the RELIABLE boundaries: drain this session's inbox
 # and surface it as additionalContext (never keystrokes, never the live input line).
 #
-#   mailbox-drain.sh session-start   (SessionStart hook)  → additionalContext
-#   mailbox-drain.sh prompt          (UserPromptSubmit)   → additionalContext
+#   mailbox-drain.sh session-start   (SessionStart hook)     → additionalContext
+#   mailbox-drain.sh prompt          (UserPromptSubmit)      → additionalContext
+#   mailbox-drain.sh post-tool       (PostToolUse, v3 D5)    → additionalContext, MID-TURN
 #
 # The Stop channel is DELIBERATELY not here (critique fix B): in-loop mail delivery is folded into
 # session-continue.sh — the ONE hook already blocking the in-loop desk — so there is no competing Stop
-# blocker, no 4-hook yield-guards, no wall-clock TTL. Idle/mid-turn mail is caught by the target's armed
+# blocker, no 4-hook yield-guards, no wall-clock TTL. Idle mail is caught by the target's armed
 # cc-await-ping watcher (seeded from .seen so it never misses a pending line); the cc-inbox-guard is the
-# fail-loud backstop. SessionStart + UserPromptSubmit are the harness's two RELIABLE additionalContext
-# boundaries, so a delivery here advances ONLY the .seen (emitted) cursor (mailbox_take …0) — never the
+# fail-loud backstop. Deliveries here advance ONLY the .seen (emitted) cursor (ack_now=0) — never the
 # .acked (consumed) cursor. .acked is promoted one cycle later at the next Stop fold (session-continue.sh
 # → mailbox_promote_acked), the moment a turn PROVABLY carried the mail. Dup-biased BY DESIGN: a death
 # after drain but before that Stop re-surfaces the mail next boundary (a visible dup) — acking at drain
 # would instead have marked it consumed and SILENTLY LOST it on a mid-turn death the guard can't see.
 #
+# ── MID-TURN BOUNDARY (v3 D5) ─────────────────────────────────────────────────────────────────────
+# SessionStart + UserPromptSubmit are RELIABLE but both are session/human-gated: a session in an
+# hours-long autonomous turn passes NEITHER, which is R-2 (live forensics: the desk sat on 57 unacked
+# pages for 2 h while working). PostToolUse fires on every tool call, so it is the boundary those turns
+# actually have. GATED ON A LIVE SMOKE-PROBE, not on the docs — Stop `additionalContext` is documented
+# and is nonetheless INERT on the running binary (boundary-handoff.sh:21-22), so a citation proves the
+# contract, never the binary. Probe (2026-07-25, CC 2.1.219 + claude-opus-5): a throwaway PostToolUse
+# hook emitting a sentinel `additionalContext` was echoed back VERBATIM by the model in a headless
+# --print turn. Gate open; recorded in the research doc §4.
+#
+# Because it rides EVERY tool call it is damped three ways — all cheap, all fail-open:
+#   • only-when-pending  (the common case is a 3-file stat and an exit 0)
+#   • at most one drain per CC_POSTTOOL_DRAIN_MIN_S (default 20 s — well inside the guard's 60 s urgent
+#     deadline, so mid-turn mail still beats its own alarm)
+#   • at most CC_POSTTOOL_DRAIN_MAX_LINES (default 20) lines per drain, via mailbox_take_n — the cursor
+#     advances by exactly what was shown, so the remainder is deferred, never dropped.
+#
 # The inbox is ~/.claude/mailbox/<own-pane-uuid>.md; delivery is exactly-once via the split cursor
 # (.seen emitted / .acked consumed) under a lock — see hooks/lib/mailbox-pending.sh.
 #
+# ── HUMAN VISIBILITY (v3 D11) ─────────────────────────────────────────────────────────────────────
+# additionalContext reaches the MODEL ONLY — operator-confirmed "you see nothing" when sessions talk
+# (U-1). Every drain therefore ALSO emits the universal top-level `systemMessage`, which renders as a
+# TUI notice to the human (precedent: session-continue.sh:144 ships one today). Success becomes visible,
+# not just failure (U-4). The line names the count and the senders — never the message bodies, which
+# stay in the model's context where they belong.
+#
 # FAIL-SAFE: missing uuid / jq / lib → exit 0 (deliver nothing; the guard backstops). Every path exits 0.
-# Env seams (tests): CC_MAILBOX_DIR · ITERM_SESSION_ID.
+# Env seams (tests): CC_MAILBOX_DIR · ITERM_SESSION_ID · CC_POSTTOOL_DRAIN_MIN_S · CC_POSTTOOL_DRAIN_MAX_LINES.
 
 MODE="${1:-}"
 
@@ -67,17 +91,41 @@ else
   own_uuid="$own_pane"
 fi
 
+MAXLINES=0        # 0 = unlimited (the reliable boundaries take the whole window)
 case "$MODE" in
   session-start) EVENT=SessionStart ;;
   prompt)        EVENT=UserPromptSubmit ;;
+  post-tool)     EVENT=PostToolUse
+                 MAXLINES="${CC_POSTTOOL_DRAIN_MAX_LINES:-20}"
+                 case "$MAXLINES" in ''|*[!0-9]*) MAXLINES=20 ;; esac ;;
   *)             exit 0 ;;   # Stop / unknown are not handled here (see fix B)
 esac
 
-# LOCKED atomic take on a RELIABLE boundary → advance ONLY .seen (ack_now=0); .acked is promoted at the
+# ── D5 rate limit — checked BEFORE the take, so a throttled tool call never advances a cursor ────────
+# The marker is stamped only when a drain actually HAPPENS (below), not on every tool call: stamping here
+# would let a burst of pending-free tool calls hold the floor open and delay the first real delivery.
+_mdir="${CC_MAILBOX_DIR:-$HOME/.claude/mailbox}"
+if [ "$MODE" = "post-tool" ]; then
+  _min="${CC_POSTTOOL_DRAIN_MIN_S:-20}"; case "$_min" in ''|*[!0-9]*) _min=20 ;; esac
+  # cheap pre-gate: no pending mail ⇒ the overwhelmingly common path exits without a lock or a take.
+  command -v mailbox_has_pending >/dev/null 2>&1 || exit 0
+  mailbox_has_pending "$own_uuid" || exit 0
+  _pt="$_mdir/$own_uuid.posttool"
+  if [ -f "$_pt" ] && [ "$_min" -gt 0 ]; then
+    _ptm="$(stat -f %m "$_pt" 2>/dev/null || stat -c %Y "$_pt" 2>/dev/null || echo 0)"
+    case "$_ptm" in ''|*[!0-9]*) _ptm=0 ;; esac
+    _ptnow="$(date +%s 2>/dev/null || echo 0)"
+    [ "$(( _ptnow - _ptm ))" -lt "$_min" ] 2>/dev/null && exit 0
+  fi
+fi
+
+# LOCKED atomic take on a delivery boundary → advance ONLY .seen (ack_now=0); .acked is promoted at the
 # next Stop fold (session-continue.sh → mailbox_promote_acked) once a turn provably consumed the mail.
 # Body on stdout; rc 1 = nothing new; rc 2 = delivered-but-.seen-write-failed (still surface the body —
 # better a dup next turn than a drop; the re-deliver is bounded and the guard sees the un-advanced .acked).
-body="$(mailbox_take "$own_uuid" 0)"; rc=$?
+# take_n's cap advances the cursor by exactly what it printed, so a capped drain defers, never drops.
+body="$(mailbox_take_n "$own_uuid" 0 "$MAXLINES")"; rc=$?
+[ "$MODE" = "post-tool" ] && [ -n "$body" ] && : > "$_mdir/$own_uuid.posttool" 2>/dev/null
 
 # ── ADOPTION (v3 D1) — SessionStart only: inherit what a predecessor pane never consumed ──────────
 # A pane that self-closed with a successor left `<old>.forward` → us. Its inbox may still hold lines
@@ -93,7 +141,6 @@ body="$(mailbox_take "$own_uuid" 0)"; rc=$?
 # resolved by the SENDER; here we adopt only what points directly at us — a multi-hop predecessor is
 # adopted by ITS successor, transitively, as each one starts). Every path exits 0.
 if [ "$MODE" = "session-start" ] && command -v mailbox_migrate >/dev/null 2>&1; then
-  _mdir="${CC_MAILBOX_DIR:-$HOME/.claude/mailbox}"
   _adopted=0
   for _f in "$_mdir"/*.forward; do
     [ -f "$_f" ] || continue                                   # unmatched glob
@@ -182,8 +229,14 @@ _armcmd="$HOME/.claude/bin/cc-await-ping --timeout ${CC_DRAIN_ARM_TIMEOUT_S:-144
 # no wake path. Arming here is the whole point (see the hoist note above), so emit the nudge alone.
 # additionalContext only: this fires on every prompt, and a systemMessage per turn would bury the
 # operator's own output. When a watcher IS armed there is nothing to say, so we exit silently.
+#
+# post-tool (v3 D5) NEVER takes this path: it rides EVERY tool call, so one nudge here would repeat
+# tens of times per turn — the exact burial this comment warns about, amplified. The mode's own
+# only-when-pending pre-gate (:108) already exits before the take, so this is the local re-assert of
+# that invariant rather than a second policy — a lost race on the take must stay silent, not nudge.
 if [ -z "$body" ]; then
   [ "$_watched" = 1 ] && exit 0
+  [ "$MODE" = "post-tool" ] && exit 0
   jq -nc --arg e "$EVENT" --arg c "🔔 No inbox wake path armed.${nudge}" \
     '{hookSpecificOutput:{hookEventName:$e, additionalContext:$c}}'
   exit 0
@@ -192,6 +245,16 @@ fi
 n="$(printf '%s\n' "$body" | grep -c '')"; plural=$([ "$n" = 1 ] && echo message || echo messages)
 warn=""; [ "$rc" = 2 ] && warn=' (⚠ cursor write failed — you may see this again; that is a dup, not a loss)'
 
+# A capped (D5) drain leaves a remainder. SAY SO — silence would read as "that was all your mail", which
+# is the reading that turns a deferral into a perceived drop. The remainder is still (seen, EOF]; the very
+# next boundary takes it. Only the capped mode can leave one, so MAXLINES=0 renders nothing.
+rest=""
+if [ "$MAXLINES" -gt 0 ] && command -v mailbox_pending_count >/dev/null 2>&1; then
+  _left="$(mailbox_pending_count "$own_uuid")"; case "$_left" in ''|*[!0-9]*) _left=0 ;; esac
+  [ "$_left" -gt 0 ] && rest="
+     (+$_left more pending — capped at $MAXLINES per mid-turn drain; the rest arrives at your next tool boundary. Nothing is lost.)"
+fi
+
 # ── BLOCK RENDERING (operator request 2026-07-28) ───────────────────────────────────────────────
 # Peer mail used to arrive as a bare paragraph, visually identical to every other scrap of
 # context. Render the bodies as a BLOCK behind a left rule so the channel is unmistakable at a
@@ -199,8 +262,8 @@ warn=""; [ "$rc" = 2 ] && warn=' (⚠ cursor write failed — you may see this a
 # PRESENTATION ONLY: every body line is reproduced verbatim, and the tokens the suites pin
 # ("as CONTEXT", "no watcher armed") are preserved.
 _block="$(printf '%s\n' "$body" | sed 's/^/  │ /')"
-ctx="$(printf '📬 peer mail ◀ %s new %s from other Claude sessions%s\n  ╭─\n%s\n  ╰─ delivered as CONTEXT via the non-keystroke inbox channel — never typed into your input line.\n     Already marked delivered. Triage/act as appropriate; reply to a peer with cc-notify <uuid> "…". This is a message TO you, not something you typed.%s' \
-  "$n" "$plural" "$warn" "$_block" "$nudge")"
+ctx="$(printf '📬 peer mail ◀ %s new %s from other Claude sessions%s\n  ╭─\n%s\n  ╰─ delivered as CONTEXT via the non-keystroke inbox channel — never typed into your input line.\n     Already marked delivered. Triage/act as appropriate; reply to a peer with cc-notify <uuid> "…". This is a message TO you, not something you typed.%s%s' \
+  "$n" "$plural" "$warn" "$_block" "$rest" "$nudge")"
 # ── OPERATOR-VISIBLE LINE (2026-07-26) ──────────────────────────────────────────────────────────
 # additionalContext is MODEL-ONLY: it reaches the agent and is never rendered in the conversation,
 # so until now every inbox delivery was invisible to the human. Operator-reported: "I can't see

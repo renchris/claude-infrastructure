@@ -31,6 +31,8 @@
 #                                    ack_now=1 also acked=EOF. Return 0 = delivered+committed · 1 = nothing
 #                                    new (no body) · 2 = body printed but the cursor WRITE FAILED — the
 #                                    caller must escalate + still deliver, never silently drop (F9).
+#   mailbox_take_n <uuid> [ack] [max]  same, but delivers AT MOST <max> lines and advances the cursor by
+#                                    exactly what it printed (max=0/absent ⇒ unlimited ⇒ mailbox_take).
 #   mailbox_promote_acked  <uuid>    LOCKED: acked=seen (the Stop-fold lag: last cycle's emitted is now consumed)
 #
 # ── FORWARD CHAINS (v3 D1 — succession must not strand an inbox) ──────────────────────────────────
@@ -266,13 +268,30 @@ mailbox_wake_armed() { # <uuid> → 0 = a live watcher will wake this session, 1
 # safe (F1 atomicity) without needing emit-before-advance for the reliable path. Returns 1 if the seen
 # write FAILED (F9): the caller must escalate, not re-loop on the same mail.
 mailbox_take() { # <uuid> [ack_now]  (ack_now=1 ⇒ reliable channel: advance acked too)
-  local u="${1:-}" ack_now="${2:-0}" f prev cur body rc=0
+  mailbox_take_n "${1:-}" "${2:-0}" 0
+}
+
+# BOUNDED take (v3 D5). Identical to mailbox_take except it delivers at most <max> lines and advances the
+# cursor by EXACTLY what it printed — never by the window it could have taken.
+#
+# Why a cap needs its own primitive rather than a caller-side `head`: mailbox_take advances seen=EOF, so a
+# caller that printed only the first N lines of a larger window would mark the unshown remainder DELIVERED
+# and silently lose it — the precise failure class this whole substrate exists to make impossible. The cap
+# lives INSIDE the lock, beside the cursor write, so "shown" and "advanced" cannot diverge.
+#
+# The cap matters because D5 drains between tool calls: a 600-line box must not be dumped into a tool
+# result. Whatever is left over is not lost — it is still (seen, EOF] and the very next boundary takes it.
+mailbox_take_n() { # <uuid> [ack_now] [max]  (max 0/absent ⇒ unlimited)
+  local u="${1:-}" ack_now="${2:-0}" max="${3:-0}" f prev cur want body rc=0
   _mbx_valid_uuid "$u" || return 1
+  case "$max" in ''|*[!0-9]*) max=0 ;; esac
   f="$(mailbox_file "$u")"
   _mbx_lock "$u" || true                       # gave up ⇒ proceed lock-free (dup-risk, never a hang)
   prev="$(mailbox_seen "$u")"; cur="$(mailbox_lines "$u")"
   if [ "$cur" -le "$prev" ]; then _mbx_unlock "$u"; return 1; fi   # nothing new
-  body="$(tail -n +"$((prev + 1))" "$f" 2>/dev/null | head -n "$(( cur - prev ))")"
+  want=$(( cur - prev ))
+  if [ "$max" -gt 0 ] && [ "$want" -gt "$max" ]; then want="$max"; cur=$(( prev + want )); fi
+  body="$(tail -n +"$((prev + 1))" "$f" 2>/dev/null | head -n "$want")"
   printf '%s' "$body"
   if ! _mbx_write_int "$(_mbx_dir)/$u.seen" "$cur"; then rc=2; fi   # F9: body printed, cursor write FAILED
   [ "$ack_now" = 1 ] && [ "$rc" = 0 ] && _mbx_write_int "$(_mbx_dir)/$u.acked" "$cur"

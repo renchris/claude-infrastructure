@@ -591,6 +591,7 @@ Re-arm each 🔧 turn: run \`~/.claude/hooks/session-continue.sh set \"<next ste
 
 # v2 fold: PREPEND pending peer mail (higher priority than self-continuation — a peer is trying to reach
 # you). The re-arm reminder stays in $reason below it, so folding never starves the continuation counter (F14).
+_sysmsg=""
 if [ -n "$mail" ]; then
   _mn="$(printf '%s\n' "$mail" | grep -c '')"
   reason="📬 INBOX — ${_mn} new peer message(s), delivered as CONTEXT (never typed into your input):
@@ -599,10 +600,23 @@ ${mail}
 Triage these first (a reaper/supervisor page, a back-channel ping, a peer) — reply with cc-notify <uuid> \"…\" — THEN continue the loop below.
 
 ${reason}"
+  # v3 D11 — the SAME human-visible line the drain hook emits, so a delivery is visible to the operator
+  # on EVERY channel, not just the two additionalContext boundaries. Without this the in-loop desk (the
+  # heaviest mail consumer of all) would be the one place mail still arrived invisibly.
+  _mfrom="$(printf '%s\n' "$mail" | sed -n 's/^[^[]*\[\([^]]*\)\].*$/\1/p' \
+            | awk '!seen[$0]++' | head -3 | paste -sd, - 2>/dev/null)"
+  [ -n "$_mfrom" ] || _mfrom="peer session"
+  _sysmsg="📬 ${_mn} message(s) from ${_mfrom} — delivered to this session's context (cc-thread --me to read the thread)"
 fi
 
-# decision:block blocks the stop; reason is fed back to the model as the next turn.
-jq -nc --arg r "$reason" '{decision:"block",reason:$r}'
+# decision:block blocks the stop; reason is fed back to the model as the next turn. systemMessage rides
+# ALONGSIDE the block (a universal top-level field, precedent at :502) so the human sees the delivery the
+# model just got — without it the in-loop desk, the heaviest mail consumer, stays the one silent channel.
+if [ -n "$_sysmsg" ]; then
+  jq -nc --arg r "$reason" --arg s "$_sysmsg" '{decision:"block",reason:$r,systemMessage:$s}'
+else
+  jq -nc --arg r "$reason" '{decision:"block",reason:$r}'
+fi
 log_idl fired "continue" "$(jq -cn --argjson n "$n" --argjson m "$MAX" --arg s "$step" \
   --argjson mail "$([ -n "$mail" ] && printf 'true' || printf 'false')" \
   '{count:$n,max:$m,step:$s,mail_folded:$mail}' 2>/dev/null)"
