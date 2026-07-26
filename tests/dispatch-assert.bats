@@ -13,6 +13,7 @@ setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   HOOK="$REPO/hooks/dispatch-assert.sh"
   BACKLOG="$REPO/bin/cc-backlog"
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"   # hermetic: never touch the live ~/
   export DISPATCH_ASSERT_STATE_DIR="$BATS_TEST_TMPDIR/state"
   export DISPATCH_ASSERT_IDL="$BATS_TEST_TMPDIR/idl.jsonl"
   export DISPATCH_ASSERT_MAX=2
