@@ -14,6 +14,13 @@ setup() {
   export CC_BACKLOG_FILE="$BATS_TEST_TMPDIR/backlog.jsonl"
 }
 
+# NEGATIVE assertions must NOT be written `! cmd`: bash exempts a `!`-inverted command from set -e, so
+# such a line only ever fails the test when it is the LAST line of the body — 4 of this file's were
+# silently vacuous (audited 2026-07-25). These return non-zero directly, so errexit catches them anywhere.
+refute_match()   { [ "$(printf '%s' "$1" | grep -c "$2")"  -eq 0 ]; }
+refute_imatch()  { [ "$(printf '%s' "$1" | grep -ci "$2")" -eq 0 ]; }
+refute_in_file() { [ "$(grep -c "$1" "$2")" -eq 0 ]; }
+
 @test "add creates an open item; list --open shows it; id echoed" {
   run bash "$CB" add --project /repo/a --title "wire the thing" --source p14
   [ "$status" -eq 0 ]
@@ -56,7 +63,7 @@ setup() {
   echo "$output" | grep -q 'claimed'
   bash "$CB" done "$id" --evidence ref:1 >/dev/null
   run bash "$CB" list --open
-  ! echo "$output" | grep -q "$id"
+  refute_match "$output" "$id"
   run bash "$CB" list --all
   echo "$output" | grep -q "$id"
   echo "$output" | grep -q 'done'
@@ -194,7 +201,7 @@ st_of() { bash "$CB" list --all --json | jq -r --arg i "$1" '.[]|select(.id==$i)
   bash "$CB" add --project /r --title T --source S >/dev/null
   run bash -c "bash '$CB' add --project /r --title T --source S 2>&1"
   [ "$status" -eq 0 ]
-  ! echo "$output" | grep -qi 'already done'
+  refute_imatch "$output" 'already done'
 }
 
 # ── blocked-on-operator (parks an item OUT of the dispatch wave) ────────────────
@@ -231,7 +238,7 @@ st_of() { bash "$CB" list --all --json | jq -r --arg i "$1" '.[]|select(.id==$i)
   bash "$CB" block "$b" --needs "operator: set the API key" >/dev/null
   run bash "$CB" list --blocked
   echo "$output" | grep -q "$b"
-  ! echo "$output" | grep -q "$a"                # open item excluded
+  refute_match "$output" "$a"                     # open item excluded
   run bash "$CB" list --blocked --json
   echo "$output" | jq -e --arg i "$b" 'length==1 and (.[0].id==$i) and (.[0].needs=="operator: set the API key")'
 }
@@ -252,7 +259,7 @@ st_of() { bash "$CB" list --all --json | jq -r --arg i "$1" '.[]|select(.id==$i)
   bash "$CB" add --project /r/b --title Bee --source S >/dev/null
   run bash "$CB" list --project /r/a
   echo "$output" | grep -q 'Aye'
-  ! echo "$output" | grep -q 'Bee'
+  refute_match "$output" 'Bee'
 }
 
 @test "claim/done/reopen on an unknown id fail loud (non-zero + stderr)" {
@@ -280,7 +287,7 @@ st_of() { bash "$CB" list --all --json | jq -r --arg i "$1" '.[]|select(.id==$i)
   printf '{"id":"cccccccccccc","ts":"2099-01-02T00:00:00Z","event":"done","evidence":"ref"}\n'                                >> "$CC_BACKLOG_FILE"
   run bash "$CB" compact --older-than-days 30
   [ "$status" -eq 0 ]
-  ! grep -q 'aaaaaaaaaaaa' "$CC_BACKLOG_FILE"     # aged terminal dropped
+  refute_in_file 'aaaaaaaaaaaa' "$CC_BACKLOG_FILE"  # aged terminal dropped
   grep -q 'bbbbbbbbbbbb' "$CC_BACKLOG_FILE"       # open kept
   [ "$(grep -c 'cccccccccccc' "$CC_BACKLOG_FILE")" -eq 2 ]   # recent terminal: both records kept
 }
@@ -463,7 +470,7 @@ status_of() { bash "$CB" list --all --json | jq -r --arg i "$1" '.[]|select(.id=
   run bash "$CB" reap
   [ "$status" -eq 0 ]
   echo "$output" | grep -q '0 reopened, 0 blocked'
-  ! echo "$output" | grep -qi 'integer expression'   # empty claimBy must not shift columns
+  refute_imatch "$output" 'integer expression'      # empty claimBy must not shift columns
 }
 
 @test "reap: a claimless open item (empty claimBy) does NOT misalign later columns" {
@@ -477,7 +484,7 @@ status_of() { bash "$CB" list --all --json | jq -r --arg i "$1" '.[]|select(.id=
   rec "{\"id\":\"mixstale0z01\",\"ts\":\"2026-01-01T00:00:00Z\",\"event\":\"claim\",\"by\":\"$HOST-2147483647\"}"
   run bash "$CB" reap
   [ "$status" -eq 0 ]
-  ! echo "$output" | grep -qi 'integer expression'   # no misalignment error on the empty field
+  refute_imatch "$output" 'integer expression'      # no misalignment error on the empty field
   [ "$(status_of mixstale0z01)" = open ]             # the stale claim still reopened (columns aligned)
 }
 
