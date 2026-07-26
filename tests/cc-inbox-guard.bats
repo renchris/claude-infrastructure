@@ -31,6 +31,11 @@ msg_aged() {
   printf '%s [%s] a message\n' "$ts" "$from" >> "$CC_MAILBOX_DIR/$U.md"
 }
 pushed() { [ -s "$PUSHLOG" ]; }
+# NEGATIVE assertions must NOT be written `! pushed`: bash exempts a `!`-inverted command from set -e,
+# so such a line only ever fails the test when it is the LAST line of the body — 3 of this file's were
+# silently vacuous (audited 2026-07-25). These return non-zero directly, so errexit catches them anywhere.
+not_pushed()   { [ ! -s "$PUSHLOG" ]; }
+refute_match() { [ "$(printf '%s' "$1" | grep -c "$2")" -eq 0 ]; }
 n_alarms() { find "$CC_COMMS_ALARM_DIR" -name 'undelivered-*.json' 2>/dev/null | wc -l | tr -d ' '; }
 
 @test "selftest passes 3/3 (a zero-check suite must not 'pass')" {
@@ -54,7 +59,7 @@ n_alarms() { find "$CC_COMMS_ALARM_DIR" -name 'undelivered-*.json' 2>/dev/null |
   export CC_INBOX_GUARD_LIVE_UUIDS="$U"
   run "$G" sweep
   [ "$status" -eq 0 ]
-  ! pushed
+  not_pushed
   [ "$(n_alarms)" -eq 0 ]
 }
 
@@ -62,7 +67,7 @@ n_alarms() { find "$CC_COMMS_ALARM_DIR" -name 'undelivered-*.json' 2>/dev/null |
   msg_aged 60 peer            # 60s < 600s deadline for a peer ping
   export CC_INBOX_GUARD_LIVE_UUIDS="$U"
   run "$G" sweep
-  ! pushed
+  not_pushed
 }
 
 @test "F12: a reaper PAGE is urgent — overdue at 60s where a peer ping is not" {
@@ -97,7 +102,7 @@ n_alarms() { find "$CC_COMMS_ALARM_DIR" -name 'undelivered-*.json' 2>/dev/null |
   "$G" sweep >/dev/null
   : > "$PUSHLOG"     # clear the phone log; the state marker persists
   run "$G" sweep
-  ! pushed           # same (acked:lines) → damped
+  not_pushed         # same (acked:lines) → damped
 }
 
 @test "damping RE-ARMS on new mail (a fresh undelivered line escalates again)" {
@@ -132,7 +137,7 @@ n_alarms() { find "$CC_COMMS_ALARM_DIR" -name 'undelivered-*.json' 2>/dev/null |
   export CC_INBOX_GUARD_LIVE_UUIDS="$U"
   run "$G" sweep --dry-run
   [ "$status" -eq 0 ]
-  ! pushed
+  not_pushed
   [ "$(n_alarms)" -eq 0 ]
   printf '%s' "$output" | grep -qi 'WOULD-ESCALATE'
 }
