@@ -320,7 +320,36 @@ reap_env() {
   # default liveness oracle: an EMPTY live registry ⇒ no session-shaped claimer is ever live.
   printf '#!/bin/bash\necho "[]"\n' > "$BATS_TEST_TMPDIR/nosess"; chmod +x "$BATS_TEST_TMPDIR/nosess"
   export CC_BACKLOG_SESSIONS_BIN="$BATS_TEST_TMPDIR/nosess"
+  # HERMETIC worktree root: the owned-wait oracle resolves $CC_BACKLOG_WT_ROOT/wt-<id>. Pointing it
+  # at an empty tmpdir keeps every pre-existing reap test off the REAL ~/Development/.worktrees (a
+  # live dispatch worktree there must never decide a unit test's verdict) and makes "no worktree ⇒ no
+  # owned wait" the default, so the dead-worker cases stay genuine NEGATIVE controls for the oracle.
+  export CC_BACKLOG_WT_ROOT="$BATS_TEST_TMPDIR/wtroot"; mkdir -p "$CC_BACKLOG_WT_ROOT"
   HOST="$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo localhost)"
+}
+
+# owned_wait_fixture <id> — a fake dispatch worktree holding a LIVE process whose argv NAMES it: the
+# shape the real producer emits (bats runs `bats-exec-test … <wt>/tests/x.bats`; ship-land re-execs
+# `<wt>/scripts/land-lock.sh`; a task-output wait loop polls a `<wt>`-derived path). Sets OWNED_PID.
+# (memory fixture-shape-parity-with-real-producer — a fixture is a contract claim about the producer.)
+owned_wait_fixture() {
+  local wt="$CC_BACKLOG_WT_ROOT/wt-$1" i
+  mkdir -p "$wt/tests"
+  printf '#!/bin/bash\nsleep 30\n' > "$wt/tests/gate.sh"; chmod +x "$wt/tests/gate.sh"
+  bash "$wt/tests/gate.sh" &                       # argv carries the worktree path ⇒ pgrep -f sees it
+  OWNED_PID=$!
+  # Never return before pgrep can actually see it, or the assertion races the fork.
+  for i in 1 2 3 4 5 6 7 8 9 10; do pgrep -f "$wt" >/dev/null 2>&1 && return 0; sleep 0.2; done
+  return 0
+}
+owned_wait_cleanup() {
+  if [ -n "${OWNED_PID:-}" ]; then
+    kill "$OWNED_PID" 2>/dev/null || true
+    # A SIGTERM'd child reports 143; unguarded, `wait` propagates it and errexit fails the TEST in
+    # its teardown — a green subject reported as red. Reap the child, never adopt its exit code.
+    wait "$OWNED_PID" 2>/dev/null || true
+  fi
+  OWNED_PID=""; return 0
 }
 rec() { printf '%s\n' "$1" >> "$CC_BACKLOG_FILE"; }
 status_of() { bash "$CB" list --all --json | jq -r --arg i "$1" '.[]|select(.id==$i)|.status'; }
@@ -432,6 +461,135 @@ status_of() { bash "$CB" list --all --json | jq -r --arg i "$1" '.[]|select(.id=
   [ "$status" -eq 0 ]
   [ "$(status_of bound000hh01)" = blocked ]            # totalClaims≥3 ⇒ block instead of a 4th reopen
   bash "$CB" list --all --json | jq -e --arg i bound000hh01 '.[]|select(.id==$i)|.needs|test("dead-worker stall")'
+}
+
+# ── reap Rule A re-verify: an OWNED WAIT is not a dead worker ────────────────────────────────────
+# RED-proof for the false "dead-worker stall … not auto-completable" verdict (backlog 2d36e63d16a2,
+# items 02ba4e52389a / 761a546f939c / 6cab0ab3cb2f — each blocked while its worktree ran a live
+# gate). cc-dispatch claims with `--by <host>-$$` and then EXITS, so a dispatched claim's pid is
+# ALWAYS dead past the stale gate and `claimer_live` cannot see the worker at all: Rule A degrades to
+# a pure idle-time verdict. Pre-fix these two cases reopen/block (RED); post-fix reap re-verifies
+# against the WORKTREE and keeps the claim. The paired no-process test is the positive control that
+# proves the oracle can still say DEAD (an always-alive oracle would strand every real dead worker).
+
+@test "reap: stale claim + dead claimer pid but a LIVE process tree in the item's worktree → KEEP (owned wait, not dead)" {
+  reap_env
+  owned_wait_fixture ownedwt0aa01
+  rec '{"id":"ownedwt0aa01","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"Owned"}'
+  rec "{\"id\":\"ownedwt0aa01\",\"ts\":\"2026-01-01T00:00:00Z\",\"event\":\"claim\",\"by\":\"$HOST-2147483647\"}"  # 7200s, dispatcher pid dead
+  run bash "$CB" reap
+  owned_wait_cleanup
+  [ "$status" -eq 0 ]
+  [ "$(status_of ownedwt0aa01)" = claimed ]            # pre-fix: reopened ⇒ open (RED)
+  echo "$output" | grep -q 'KEEP ownedwt0aa01'         # and it says so — a silent absolve == an inert oracle
+  echo "$output" | grep -q 'owned wait'
+}
+
+@test "reap: SAME setup with NO live process in the worktree → still reopened (positive control: the oracle can say DEAD)" {
+  reap_env
+  mkdir -p "$CC_BACKLOG_WT_ROOT/wt-deadwt0bb01/tests"   # worktree EXISTS, nothing running in it
+  rec '{"id":"deadwt0bb01","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"Dead"}'
+  rec "{\"id\":\"deadwt0bb01\",\"ts\":\"2026-01-01T00:00:00Z\",\"event\":\"claim\",\"by\":\"$HOST-2147483647\"}"
+  run bash "$CB" reap
+  [ "$status" -eq 0 ]
+  [ "$(status_of deadwt0bb01)" = open ]                # a real dead worker must STILL be recovered
+  echo "$output" | grep -q 'REOPEN deadwt0bb01'
+}
+
+@test "reap: owned wait past OWNED_WAIT_MAX_S is a WEDGE — blocked (never reopened, worktree still occupied)" {
+  # The anti-inversion bound: without a ceiling an orphaned watcher would pin an item as "alive"
+  # forever. Past it the item leaves the wave, but as a WEDGE named for what it is — and it must not
+  # reopen even below MAX_ATTEMPTS, because reopening fires a second worker into an occupied worktree.
+  reap_env
+  export CC_BACKLOG_OWNED_WAIT_MAX_S=60                # 60s ceiling ⇒ the 7200s claim is way past it
+  owned_wait_fixture wedgewt0cc01
+  rec '{"id":"wedgewt0cc01","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"Wedge"}'
+  rec "{\"id\":\"wedgewt0cc01\",\"ts\":\"2026-01-01T00:00:00Z\",\"event\":\"claim\",\"by\":\"$HOST-2147483647\"}"  # 1st claim only
+  run bash "$CB" reap
+  owned_wait_cleanup
+  [ "$status" -eq 0 ]
+  [ "$(status_of wedgewt0cc01)" = blocked ]            # not reopened, despite totalClaims(1) < MAX_ATTEMPTS
+  bash "$CB" list --all --json | jq -e --arg i wedgewt0cc01 '.[]|select(.id==$i)|.needs|test("wedged owned wait")'
+  bash "$CB" list --all --json | jq -e --arg i wedgewt0cc01 '.[]|select(.id==$i)|.needs|test("NOT dead")'
+}
+
+@test "reap: the land lock held for the item's branch by a live pid → KEEP (owned wait with no process in the worktree)" {
+  # S2, and NOT redundant with S1: a land re-run from the shared checkout on branch wt-<id> names no
+  # worktree path in its argv. Uses the REAL scripts/land-lock.sh via its documented --print-lock-dir
+  # read + LAND_LOCK_DIR seam, so the lock-dir resolution under test is the producer's own.
+  reap_env
+  wt="$CC_BACKLOG_WT_ROOT/wt-locked0dd01"; mkdir -p "$wt/scripts"
+  ln -s "$BATS_TEST_DIRNAME/../scripts/land-lock.sh" "$wt/scripts/land-lock.sh"
+  export LAND_LOCK_DIR="$BATS_TEST_TMPDIR/lockparent"
+  mkdir -p "$LAND_LOCK_DIR/lock.d"
+  printf 'wt-locked0dd01\n' > "$LAND_LOCK_DIR/lock.d/branch"
+  printf '%s\n' "$$" > "$LAND_LOCK_DIR/lock.d/pid"                    # OUR pid: provably live
+  ps -o lstart= -p "$$" > "$LAND_LOCK_DIR/lock.d/lstart" 2>/dev/null || true
+  rec '{"id":"locked0dd01","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"Locked"}'
+  rec "{\"id\":\"locked0dd01\",\"ts\":\"2026-01-01T00:00:00Z\",\"event\":\"claim\",\"by\":\"$HOST-2147483647\"}"
+  run bash "$CB" reap
+  [ "$status" -eq 0 ]
+  [ "$(status_of locked0dd01)" = claimed ]             # actively landing ⇒ the most owned wait there is
+  echo "$output" | grep -q 'land lock held for wt-locked0dd01'
+}
+
+@test "reap: land lock held for a DIFFERENT branch does NOT absolve this item (lock is machine-wide)" {
+  # The lock is repo-keyed and machine-wide, so it is almost always held by SOMEONE. Only a hold on
+  # THIS item's branch is evidence about THIS item — else one landing would absolve every stale claim.
+  reap_env
+  wt="$CC_BACKLOG_WT_ROOT/wt-otherbr0ee01"; mkdir -p "$wt/scripts"
+  ln -s "$BATS_TEST_DIRNAME/../scripts/land-lock.sh" "$wt/scripts/land-lock.sh"
+  export LAND_LOCK_DIR="$BATS_TEST_TMPDIR/lockparent2"
+  mkdir -p "$LAND_LOCK_DIR/lock.d"
+  printf 'wt-someoneelse01\n' > "$LAND_LOCK_DIR/lock.d/branch"        # a DIFFERENT branch holds it
+  printf '%s\n' "$$" > "$LAND_LOCK_DIR/lock.d/pid"
+  rec '{"id":"otherbr0ee01","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"Other"}'
+  rec "{\"id\":\"otherbr0ee01\",\"ts\":\"2026-01-01T00:00:00Z\",\"event\":\"claim\",\"by\":\"$HOST-2147483647\"}"
+  run bash "$CB" reap
+  [ "$status" -eq 0 ]
+  [ "$(status_of otherbr0ee01)" = open ]               # no evidence for THIS item ⇒ dead-worker recovery
+}
+
+@test "reap: land lock held for the item's branch by a DEAD pid does NOT absolve (stale lock dir)" {
+  reap_env
+  wt="$CC_BACKLOG_WT_ROOT/wt-deadlck0ff01"; mkdir -p "$wt/scripts"
+  ln -s "$BATS_TEST_DIRNAME/../scripts/land-lock.sh" "$wt/scripts/land-lock.sh"
+  export LAND_LOCK_DIR="$BATS_TEST_TMPDIR/lockparent3"
+  mkdir -p "$LAND_LOCK_DIR/lock.d"
+  printf 'wt-deadlck0ff01\n' > "$LAND_LOCK_DIR/lock.d/branch"
+  printf '2147483647\n' > "$LAND_LOCK_DIR/lock.d/pid"                 # holder is DEAD
+  rec '{"id":"deadlck0ff01","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"DeadLock"}'
+  rec "{\"id\":\"deadlck0ff01\",\"ts\":\"2026-01-01T00:00:00Z\",\"event\":\"claim\",\"by\":\"$HOST-2147483647\"}"
+  run bash "$CB" reap
+  [ "$status" -eq 0 ]
+  [ "$(status_of deadlck0ff01)" = open ]               # a dead holder is a stale lock, not a live wait
+}
+
+@test "reap: no worktree at all for the id ⇒ oracle abstains, dead-worker path unchanged" {
+  # The oracle must never fail OPEN into "alive" when it simply has nothing to read (an item worked
+  # in-place, or a worktree already torn down). Absence of evidence is not evidence of life.
+  reap_env
+  rec '{"id":"nowtree0gg01","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"NoWt"}'
+  rec "{\"id\":\"nowtree0gg01\",\"ts\":\"2026-01-01T00:00:00Z\",\"event\":\"claim\",\"by\":\"$HOST-2147483647\"}"
+  run bash "$CB" reap
+  [ "$status" -eq 0 ]
+  [ "$(status_of nowtree0gg01)" = open ]
+}
+
+@test "reap --dry-run: an owned wait writes NOTHING and reports the KEEP" {
+  reap_env
+  owned_wait_fixture drykeep0hh01
+  rec '{"id":"drykeep0hh01","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"DryKeep"}'
+  rec "{\"id\":\"drykeep0hh01\",\"ts\":\"2026-01-01T00:00:00Z\",\"event\":\"claim\",\"by\":\"$HOST-2147483647\"}"
+  before="$(wc -l < "$CC_BACKLOG_FILE" | tr -d ' ')"
+  run bash "$CB" reap --dry-run
+  owned_wait_cleanup
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'KEEP drykeep0hh01'
+  # this file's own `refute_match` — NOT `grep -qv` (passes whenever ANY line fails to match, i.e.
+  # always) and NOT a bare `! cmd` (errexit-exempt mid-body ⇒ vacuous; see the header note).
+  refute_match "$output" 'WOULD-REOPEN drykeep0hh01'
+  [ "$(wc -l < "$CC_BACKLOG_FILE" | tr -d ' ')" -eq "$before" ]
 }
 
 @test "reap --dry-run: classifies but writes NOTHING (append-only file unchanged)" {
