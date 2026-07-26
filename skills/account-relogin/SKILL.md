@@ -1,6 +1,6 @@
 ---
 name: account-relogin
-description: Agentically re-authenticate a logged-out Claude Max account (next/next2/next3/next4) — headless refresh-token path first, then browser-assisted OAuth in the account's mapped Dia profile, with the outlook email-code fallback. Use when claude-accounts / /accounts reports auth logged-out, token-invalid, or keychain-error; when a launcher greets with "Not logged in · Please run /login"; or when the user says "re-login next3", "fix the logged-out account", "re-auth the account".
+description: Agentically re-authenticate a logged-out Claude Max account (next/next2/next3/next4) — headless refresh-token path first, then unattended OAuth in the account's own dedicated auth-browser profile, with the outlook email-code fallback. Use when claude-accounts / /accounts reports auth logged-out, token-invalid, or keychain-error; when a launcher greets with "Not logged in · Please run /login"; or when the user says "re-login next3", "fix the logged-out account", "re-auth the account".
 ---
 
 # account-relogin — re-authenticate one account, most-automated path first
@@ -12,12 +12,17 @@ refresh token survives. All commands below use `$CFG` (config_dir), `$EMAIL`,
 never while another heal/login is in flight** (`/tmp/claude-accounts-heal-<acct>.lock`).
 
 > **Try the automated ladder FIRST: `cc-relogin <acct>` (`/relogin`).** It executes Phases 0-2
-> below — gate, headless refresh grant, browser-assisted OAuth over CDP in the account's own
-> Dia profile — and proves the result by effect. Come back to this runbook when it exits **6**
-> (that profile's claude.ai session is cold ⇒ Phase 2b's email-code leg) or **7** (Dia's consent
-> dialog is pending ⇒ a human cycles `dia://inspect#remote-debugging`), or when you need to
-> understand a step it reports as failed. Everything below remains the reference; the tool is
-> the shortcut, not a replacement.
+> below — gate, headless refresh grant, then OAuth over CDP in a **dedicated per-account Chrome**
+> that `cc-authbrowser <acct> --start` owns (persistent profile `~/.claude/auth-profiles/<acct>`,
+> frozen port, TTL watchdog) — and proves the result by effect. Come back to this runbook when it
+> exits **6** (that auth-profile has no live claude.ai session ⇒ Phase 2b's email-code leg), or
+> when you need to understand a step it reports as failed. Everything below remains the
+> reference; the tool is the shortcut, not a replacement.
+>
+> ⚠️ **The Dia steps below are the manual fallback, not what the tool does.** `cc-relogin` no
+> longer drives Dia at all — that is why exit **7** (`consent-gate`, Dia's per-connection consent
+> dialog) is retained for consumers but structurally unreachable: a dedicated profile has no such
+> dialog. Follow the Dia route only when driving this by hand.
 
 ## Phase 0 — Confirm the state (never re-login a healthy account)
 

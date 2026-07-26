@@ -1,6 +1,6 @@
 ---
 name: relogin
-description: Re-authenticate one Claude Max account (next/next2/next3/next4) through the automated ladder — headless refresh grant first, then browser-assisted OAuth in the account's own Dia profile — and prove it by effect. Use when /accounts reports login-required / logged-out / token-invalid, when `claude-accounts --login-status` exits non-zero, or when the user says "re-login next3", "fix the logged-out account", "the login expired".
+description: Re-authenticate one Claude Max account (next/next2/next3/next4) through the automated ladder — headless refresh grant first, then unattended OAuth in that account's own dedicated auth-browser profile — and prove it by effect. Use when /accounts reports login-required / logged-out / token-invalid, when `claude-accounts --login-status` or `--relogin-status` exits non-zero, or when the user says "re-login next3", "fix the logged-out account", "the login expired".
 allowed-tools: Bash, Read, Skill
 argument-hint: "<acct> [--dry-run] [--no-browser]"
 ---
@@ -42,10 +42,10 @@ Mechanism: `~/.claude/bin/cc-relogin` (repo `bin/cc-relogin`; `install.sh` symli
 | 1 | `error` | unexpected. One-line reason on stdout; never a traceback. Includes **`websocket-client` not installed for this interpreter** — a dep fault in the driver, not the browser; the reason names the interpreter and the exact `pip install`. Run it and re-run. |
 | 2 | `refused` | the GATE declined: unknown account · already healthy · `k > 0` live sessions · another heal in flight · `--dry-run`. **Not a failure** — the guard working. |
 | 3 | `headless-exhausted` | `--no-browser` and the refresh grant could not run or failed. Re-run without `--no-browser`. |
-| 4 | `browser-failed` | Phase-2 mechanics broke (no OAuth URL, profile context unmatched, no Authorize control). The child's output path is printed — read it. Never a missing local dep (→ 1); never a pending consent (→ 7). |
+| 4 | `browser-failed` | Phase-2 mechanics broke (no OAuth URL · `cc-authbrowser --start` failed or emitted no `ws_url` · CDP unreachable · no Authorize control · callback deadline). The child's output path is printed — read it. Never a missing local dep (→ 1). |
 | 5 | `unverified` | 🚨 the binary CLAIMED success but the effect check failed. **Treat as NOT re-authenticated.** Investigate before re-running. |
-| 6 | `fallback-required` | that Dia profile's claude.ai session is cold, so the email-code leg is needed. stdout names the mailbox and the remaining step. |
-| 7 | `consent-gate` | CDP is blocked — remote debugging off, or Dia's consent dialog pending. Recovery: cycle `dia://inspect#remote-debugging` off→on (the first connect after a cycle is consent-free), then re-run. **A human action, not a code fix.** |
+| 6 | `fallback-required` | this account's dedicated auth-profile has no live claude.ai web session (never warmed, or it went cold), so the authorize URL landed on `/login`. stdout names the mailbox and the remaining step. **The one real human gate** — see below. |
+| 7 | `consent-gate` | **Retained for consumers; no code path emits it.** It described Dia's per-connection consent dialog, and the dedicated-profile substrate makes that dialog structurally impossible. A 7 from anything means a stale binary. |
 
 **Exit 5 is the one to never wave through.** "Login successful." is a claim the child process
 makes about itself; the tool only reports `proven` when `auth` came back `ok` AND the
@@ -62,16 +62,41 @@ refresh-token expiry moved FORWARD. A 5 means those disagreed.
 - It holds `/tmp/claude-accounts-heal-<acct>.lock`, the SAME lock `claude-accounts` heal()
   takes, so the two can never race.
 
+## Where the browser comes from
+
+Phase 2 does **not** drive your Dia. It asks `cc-authbrowser <acct> --start` for a dedicated
+per-account Chrome on a frozen port, with a persistent profile at
+`~/.claude/auth-profiles/<acct>`, direct-exec'd (never `open -n`, so it survives a launchd
+context) and hard-killed by a detached TTL watchdog even if the caller dies. That substrate is
+what makes this unattendable: no shared browser state, and no per-connection consent dialog to
+approve — which is why exit 7 is now unreachable.
+
+The profile is **persistent by design**. Warming it costs one interactive claude.ai sign-in per
+account, once; every re-auth after that renders Authorize directly and needs no human.
+
 ## When it hands back
 
-Exit **6** (cold web session) and exit **7** (consent gate) are the two genuine human gates.
-For 6, use the **account-relogin skill** (Skill tool: `account-relogin`) — Phase 2b covers the
-email-code fetch, including which mailbox the plus-address folds into. For 7, the operator
-cycles the Dia toggle; nothing in software can approve that dialog.
+Exit **6** is the single genuine human gate: that account's auth-profile has no live claude.ai
+web session, so there is nothing to click Authorize on. Use the **account-relogin skill**
+(Skill tool: `account-relogin`) — Phase 2b covers the email-code fetch, including which mailbox
+the plus-address folds into. A first-ever 6 for an account usually just means its profile was
+never warmed.
+
+## The cadence layer — built, staged, NOT running
+
+`cc-relogin-poll` is the unattended trigger: one tick per hour, at most ONE account per tick,
+firing `cc-relogin` at **T−7d** before the refresh-token deadline and escalating to the operator
+board at **T−48h**. It fires early on purpose — `cc-relogin` can only act when the account has
+zero live sessions, so it needs days of chances, not hours. It never takes the heal lock itself
+(`cc-relogin` owns that) and never touches a credential.
+
+It ships **inert**: `launchd/com.claude.relogin.plist` is staged, not loaded. Loading a LaunchAgent
+is an operator-only step — see `docs/runbooks/RELOGIN_ACTIVATION.md` for the ordered list, and
+`claude-accounts --relogin-status` for where each account stands right now.
 
 ## Not yet automatic
 
 `claude-accounts --login-status` exit 2 does NOT auto-fire this. That stays deliberate until
 the browser leg has succeeded unattended several times — an auto-relogin that misfires touches
 credentials, which is the one place a retry loop must never be invented. Offer it; let the
-operator or an explicit `/relogin` pull the trigger.
+operator, the (activated) poller, or an explicit `/relogin` pull the trigger.
