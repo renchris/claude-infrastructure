@@ -40,6 +40,7 @@ exit 0
 SH
   chmod +x "$SHIM/ps"
   printf '#!/usr/bin/env bash\nexit 0\n' > "$SHIM/sleep"; chmod +x "$SHIM/sleep"
+  export BATS_SAVED_PATH="$PATH"     # G7 drops the shim to hit the REAL process table
   export PATH="$SHIM:$PATH"
 
   export CC_REGISTRY_DIR="$BATS_TEST_TMPDIR/registry"; mkdir -p "$CC_REGISTRY_DIR"
@@ -118,6 +119,26 @@ seed_teammate() { # $1=agent-name $2=pid $3=team-sid8
   [ "$status" -eq 0 ]
   [[ "$output" != *"REFUSED"* ]]
   [[ "$output" == *"dry run (self-close)"* ]]
+}
+
+# ── G7: SELF-MATCH — the one every shimmed test is blind to ───────────────────────────────
+# The first implementation used `awk -v tag="--team-name session-<sid8>"`, which puts the tag
+# verbatim into awk's OWN argv — so awk matched itself and the function returned >=1 for EVERY
+# session. The gate would then have refused every self-close, including solo sessions. G2/G6
+# stayed GREEN throughout, because a shimmed `ps` serves a static fixture that contains no
+# pipeline. Only the REAL process table exposes it. This test therefore drops the shim on
+# purpose — it is the fixture-parity guard for this function (cf. tests/*: a fixture is a
+# contract claim; assert once against the producer's literal live emission).
+@test "G7: against the REAL process table, a session with no team returns EXACTLY zero (no self-match)" {
+  PATH="$BATS_SAVED_PATH" run live_teammates_of "cd122396-8ed1-4f29-92be-20dad7b4c6c7"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "G7b: against the REAL process table, a nonexistent team returns zero" {
+  PATH="$BATS_SAVED_PATH" run live_teammates_of "deadbeef-0000-0000-0000-000000000000"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
 }
 
 # ── H1-H3: the husk-pane retry ────────────────────────────────────────────────────────────
