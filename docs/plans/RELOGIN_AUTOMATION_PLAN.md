@@ -203,10 +203,44 @@ Cleanup ALWAYS: kill child, close WS, rm fifo; keep `.out` on failure (path prin
   chain lands together via `/ship`). CLI contract frozen above. Two live findings beyond the
   plan's facts: (a) the 9222 CDP endpoint is the **WS-only** flavor — no `/json` HTTP
   discovery, everything rides one raw WS to `/devtools/browser/<id>` with flat sessions;
-  (b) a fresh WS connect **hangs in handshake on the Dia consent dialog** (the plan's
-  feasibility session consumed the consent-free first connect) → exit 7 CONSENT-GATE added to
+  (b) a fresh WS connect **hangs in handshake on the Dia consent dialog** (CAUSE UNATTRIBUTED —
+  see the 2026-07-25 correction below) → exit 7 CONSENT-GATE added to
   the contract; recovery = toggle off→on cycle, then ONE persistent connection per batch
   (dia-agent skill, verified 2026-06-17). Live fleet re-check: next3 `k=0`,
   `has_refresh_token: false`, keychain present → Phase 2 is the only path (as designed);
   next4 `k=4` → cc-relogin's k-guard rightly refuses it, operator handles next4 manually
   before its 2026-07-25 12:39 deadline.
+
+---
+
+## 2026-07-25 correction + session post-mortem (from the originator, F598FC1F)
+
+**The consent-gate CAUSE was misattributed.** The entry above originally read "the plan's
+feasibility session consumed the consent-free first connect". That is false. The feasibility
+session never opened a CDP or WebSocket connection at all — its only Dia reads were `cat` of
+`DevToolsActivePort` and `sqlite3` reads of each profile's `Cookies` file, neither of which
+touches CDP. `DevToolsActivePort` still held `9222` with an mtime PREDATING those reads.
+
+The CONSENT-GATE finding itself stands and exit 7 should be kept — a fresh WS connect really
+does hang in handshake. Only its cause is unknown. **Do not design the recovery around a
+consumer that has not been identified**: establish who or what actually holds the consent
+state first. (A correction was sent to the fired session's inbox via `cc-notify` but the
+session ended before draining it — hence this durable edit.)
+
+**Session outcome: the build did NOT happen.** The fired session (`relogin-9BFAFBBB`,
+Fable 5 @ xhigh) produced this plan's contract section and then ended without a completion
+ping — no `bin/cc-relogin`, no `commands/relogin.md`, no tests. What survives is real and
+worth keeping: the frozen CLI contract, the result-JSON shape, and the two CDP findings.
+Everything downstream of "freeze the contract" is still TODO.
+
+**The deadline resolved WITHOUT this automation.** By 2026-07-25 22:35 all four accounts read
+`auth: ok` and `claude-accounts --login-status` exits 0, with next4 and next3 both carrying
+refresh-token expiries ~28 days out. There are NO heal or login events in
+`~/.claude/logs/claude-accounts.log` for that window and `cc-relogin` was never built, so this
+was an operator-driven interactive `/login`, not an automated re-auth. The cliff is closed
+until roughly 2026-08-23 — which is the next natural window to prove cc-relogin against, with
+no deadline pressure.
+
+**Re-entry note:** next3 was the intended first live test and is now `auth: ok`, so the
+convenient always-broken test target is gone. Either wait for the next cliff, or test against
+a deliberately-staled account with the k-guard and the heal lock both exercised.
