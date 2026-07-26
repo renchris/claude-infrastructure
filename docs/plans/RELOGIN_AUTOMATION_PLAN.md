@@ -109,17 +109,26 @@ autofire behind a flag until it has succeeded manually several times.
 ## bin/cc-relogin — CLI contract (FROZEN 2026-07-24, pre-spawn)
 
 `cc-relogin <acct> [--dry-run] [--no-browser] [--json] [--url-timeout N] [--debug]`
-Python 3, one executable file. Deps: stdlib + `websocket-client` (1.6.1, installed system-wide).
+Python 3, one executable file. Deps: stdlib + `websocket-client` (1.6.1).
+
+> **Correction 2026-07-26 — "installed system-wide" was false where it matters.** The Framework
+> 3.11, Homebrew and `/usr/local` interpreters all carry `websocket-client`, which is why the
+> claim read as true; `/usr/bin/python3` does NOT. The shebang is `#!/usr/bin/env python3`, so
+> PATH decides — and under **launchd**, which is how the staged poller will run this, PATH carries
+> neither Homebrew nor the Framework and resolves exactly the one interpreter without the dep.
+> Before activating the LaunchAgent, either install the dep for `/usr/bin/python3` or pin the
+> interpreter in the plist. A missing dep is now reported as exit **1** naming the interpreter and
+> the `pip install` (see the exit table), not as `browser-failed`.
 
 **Exit codes** (consumers key on these — frozen):
 
 | exit | name | meaning |
 |---|---|---|
 | 0 | PROVEN | re-auth verified by EFFECT (below), never by the binary's report |
-| 1 | ERROR | unexpected failure |
+| 1 | ERROR | unexpected failure · **also: `websocket-client` absent for the running interpreter** — a dependency fault in this driver's own environment, deliberately NOT `browser-failed` (nothing was asked of the browser); the detail names `sys.executable` and the `pip install` |
 | 2 | REFUSED | gate: unknown acct · account healthy · `k > 0` · heal lock busy |
 | 3 | HEADLESS-EXHAUSTED | `--no-browser` given and Phase 1 impossible or failed |
-| 4 | BROWSER-FAILED | Phase 2 mechanics: no OAuth URL within `--url-timeout` (default 30s) · CDP unreachable · profile ctx unmatched · no Authorize control · callback timeout |
+| 4 | BROWSER-FAILED | Phase 2 mechanics: no OAuth URL within `--url-timeout` (default 30s) · CDP unreachable · profile ctx unmatched · no Authorize control · callback timeout. **Not** a missing local dep (→ 1) and **not** a blocked consent (→ 7) |
 | 5 | UNVERIFIED | binary claimed success but the effect check failed — treat as NOT re-authed |
 | 6 | FALLBACK-REQUIRED | authorize URL landed on claude.ai `/login` (web session cold) — email-code leg not automated; stdout carries the exact remaining human step incl. mailbox |
 | 7 | CONSENT-GATE | CDP blocked: `DevToolsActivePort` absent (toggle off) or WS handshake hung >8s (consent dialog pending); stdout names the recovery: cycle `dia://inspect#remote-debugging` off→on, re-run — first connect after a cycle is consent-free |

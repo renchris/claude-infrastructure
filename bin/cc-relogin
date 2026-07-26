@@ -230,14 +230,30 @@ def cdp_connect():
     after each remote-debugging toggle cycle on a human approving it. That is a distinct
     operator action from "turn the toggle on", so it gets its own exit code rather than being
     folded into BROWSER_FAILED, which would send the operator looking for the wrong problem."""
-    try:
-        import websocket                                  # noqa: PLC0415 — optional dep
-    except ImportError:
-        raise Outcome(BROWSER_FAILED, "websocket-client is not installed", "phase2")
+    # Remote-debugging-OFF is diagnosed FIRST, before the optional import. It is the operator's
+    # real blocker whether or not THIS interpreter can speak WebSocket, and a fault in our own
+    # environment must never mask the cheaper, more specific verdict underneath it.
     if not os.path.exists(PORT_FILE):
         raise Outcome(CONSENT_GATE,
                       f"no DevToolsActivePort at {PORT_FILE} — remote debugging is OFF. "
                       "Recovery: open dia://inspect#remote-debugging, enable it, re-run.",
+                      "phase2")
+    try:
+        import websocket                                  # noqa: PLC0415 — optional dep
+    except ImportError:
+        # NOT browser-failed: nothing has been asked of the browser yet. This is OUR interpreter
+        # missing OUR dependency, and the distinction is load-bearing precisely where it is
+        # hardest to see. `#!/usr/bin/env python3` resolves by PATH, and under launchd — which is
+        # how the staged poller will run this — PATH carries neither Homebrew nor the Python
+        # Framework, so it lands on /usr/bin/python3: the ONE interpreter on this machine without
+        # websocket-client (Framework 3.11, Homebrew and /usr/local all have it, which is why the
+        # plan's "installed system-wide" read as true). Reported as BROWSER_FAILED this sent the
+        # operator to toggle Dia for what is a pip problem, so it names the interpreter itself.
+        raise Outcome(ERROR,
+                      f"websocket-client is not installed for {sys.executable} — phase 2 cannot "
+                      "open a CDP socket. This is a dependency fault in this driver's own "
+                      f"interpreter, NOT a browser failure. Recovery: {sys.executable} -m pip "
+                      "install websocket-client (launchd resolves /usr/bin/python3).",
                       "phase2")
     try:
         with open(PORT_FILE) as f:

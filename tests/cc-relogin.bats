@@ -36,6 +36,31 @@ cat "$ROWS"; exit 0
 STUBEOF
   chmod +x "$STUB"
 
+  # A STUB websocket module, ahead of site-packages on PYTHONPATH. Two reasons, both about the
+  # suite certifying something real:
+  #   1. Hermeticity. `import websocket` resolved against whichever python3 the PATH gave us —
+  #      every interpreter here has websocket-client EXCEPT /usr/bin/python3, so the consent-gate
+  #      tests went RED with exit 4 under a minimal PATH (launchd's, notably). The suite's green
+  #      was reporting the ambient environment, not the code.
+  #   2. Determinism. The unreachable-port test previously depended on 127.0.0.1:59999 genuinely
+  #      refusing a connection — a real network dependency, and silently vacuous the day anything
+  #      binds that port. The stub raises on connect, which is the condition under test.
+  # It records the URL it was handed, so a test can prove the port file was parsed and USED
+  # rather than that some earlier error happened to produce the same verdict.
+  export WS_STUB_DIR="$BATS_TEST_TMPDIR/wsstub"
+  export WS_URL_LOG="$BATS_TEST_TMPDIR/ws-url.log"
+  mkdir -p "$WS_STUB_DIR"
+  cat > "$WS_STUB_DIR/websocket.py" <<'WSEOF'
+import os
+
+
+def create_connection(url, **kw):
+    with open(os.environ["WS_URL_LOG"], "a") as f:
+        f.write(url + "\n")
+    raise ConnectionRefusedError("stub: nothing is listening")
+WSEOF
+  export PYTHONPATH="$WS_STUB_DIR${PYTHONPATH:+:$PYTHONPATH}"
+
   # default fixture: an account that genuinely needs a login, no live sessions
   rows '{"rows":[{"acct":"next3","auth":"login-required","k":0,"login_expires_at":"2026-08-08T01:07:00+00:00","login_expires_h":300.0}]}'
   info '{"config_dir":"/tmp/cc-relogin-test-nonexistent-xyz","claude_bin":"/nonexistent/claude","email":"t@example.com","mailbox":"t@example.com","dia_profile":"T","dia_profile_dir":"/nonexistent/Profile T","keychain_service":"svc","keychain_account":"tester","oauth_scopes":"a b","keychain_state":"present","has_refresh_token":false,"refresh_token_expired":false}'
@@ -239,6 +264,39 @@ print("OK")'
   run "$BIN" next3 --json
   [ "$status" -eq 7 ]
   [[ "$output" == *"consent-free"* ]]                      # names the toggle-cycle property
+  # positive control: the verdict came from a REFUSED HANDSHAKE, not from some earlier error that
+  # happens to land on the same code. The stub logs what it was asked to dial, so this also pins
+  # that both lines of the port file were parsed into the address.
+  [ -s "$WS_URL_LOG" ] || false
+  grep -qx 'ws://127.0.0.1:59999/devtools/browser/deadbeef' "$WS_URL_LOG" || false
+}
+
+@test "a missing websocket-client is OUR dependency fault (1), never browser-failed (4)" {
+  # The regression this pins: `import websocket` used to sit ABOVE the port-file check, so an
+  # interpreter without websocket-client turned every phase-2 verdict into browser-failed —
+  # including the two consent-gate cases above, whose real recovery is a human toggling
+  # dia://inspect. That is the exact misdirection this file's own docstring argues against, and
+  # it is not hypothetical: `#!/usr/bin/env python3` under launchd resolves /usr/bin/python3,
+  # the one interpreter here WITHOUT the dep. So: remote-debugging-OFF still wins (it is the
+  # operator's real blocker either way), and a genuinely absent dep reports as ERROR naming pip.
+  local poison="$BATS_TEST_TMPDIR/wspoison"
+  mkdir -p "$poison"
+  printf 'raise ImportError("no websocket-client (test)")\n' > "$poison/websocket.py"
+
+  # port file ABSENT ⇒ still the consent gate: a dep fault must not mask the cheaper verdict
+  PYTHONPATH="$poison" run "$BIN" next3 --json
+  [ "$status" -eq 7 ]
+  [[ "$output" == *'"result": "consent-gate"'* ]]
+
+  # port file PRESENT ⇒ the dep is now genuinely load-bearing, and it is reported as ours
+  printf '59999\n/devtools/browser/deadbeef\n' > "$CC_RELOGIN_DEVTOOLS_PORT_FILE"
+  PYTHONPATH="$poison" run "$BIN" next3 --json
+  [ "$status" -eq 1 ]
+  [[ "$output" == *'"result": "error"'* ]]
+  [[ "$output" == *"websocket-client is not installed"* ]]
+  [[ "$output" == *"pip install websocket-client"* ]]      # the remedy is runnable, not implied
+  [[ "$output" == *"NOT a browser failure"* ]]             # and it refuses the wrong attribution
+  [[ "$output" == *'"phase_reached": "phase2"'* ]]
 }
 
 # ---- the JSON contract -----------------------------------------------------------------------
