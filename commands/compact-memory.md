@@ -26,15 +26,26 @@ minus the autonomous fork.
 2. Move each such entry VERBATIM (tombstone intact — keep its SHA + date) into
    `memory/archive/MEMORY_ARCHIVE_<YEAR>-H<half>.md` (create dir/file if absent; **append**, never overwrite).
 3. Remove ONLY those moved index lines from `MEMORY.md`. Topic `.md` files are NEVER deleted.
-4. Report: N archived, lines/bytes reclaimed, new `MEMORY.md` line count.
+4. **Orphan re-index** (additive, never lossy): every topic `.md` in the memory dir must have an
+   index line, and every index link must resolve to a file on disk. A topic file with no index
+   line is INVISIBLE at session load — silently decayed memory. Re-index it (write a hook from its
+   `description:`) and report it; a dangling link is reported, never auto-removed.
+5. Report: N archived, N re-indexed, lines/bytes reclaimed, new `MEMORY.md` line count.
    > Reality check: in a dense, active memory most "resolved" entries carry a tail, so SAFE-AUTO
    > alone rarely clears the warning. That is by design — say so; the real lever is PROPOSE-ONLY.
 
 ## PROPOSE-ONLY (lossy-at-glance — NEVER auto-apply)
-5. **Oversized index lines**: any `## Project State` entry whose index line exceeds ~200 chars
+6. **Oversized index lines**: any `## Project State` entry whose index line exceeds ~200 chars
    while its detail already lives in the linked topic file. Propose a shortened <=200-char line
    (preserve the load-bearing hook + SHA + `[link]`). Show before/after; apply only on approval.
-6. **Near-duplicates**: pairs of topic files whose rule overlaps. Show both descriptions side by
+   🚨 **REWRITE each line semantically — NEVER character-truncate.** A mechanical cut (`hook[:N]`,
+   even on a clause boundary, even with a trailing `…`) severs the load-bearing rule while leaving
+   a line that still reads as prose. 2026-07-26: a blind 300-char pass over 44 entries reduced
+   *"done-evidence must read WHO drove the last turn, not WHEN"* to *"…must read WHO drove …"* —
+   the rule was gone but the index looked healthy. Every shortened line must be a hand-written
+   sentence that still STATES its rule; a trailing `…` is the tell that it does not. Rebuild from
+   the full-fidelity text (`archive/`), never from an already-shortened index.
+7. **Near-duplicates**: pairs of topic files whose rule overlaps. Show both descriptions side by
    side + a one-line rationale; the human picks merge / keep-both / supersede. NEVER auto-merge.
    HARD CONSTRAINT: entries sharing an `originSessionId` or cross-referenced via `[[...]]` are
    PRESUMED DISTINCT (e.g. `scope-freeze-at-intake` vs `mvp-ban-is-per-feature` encode different
