@@ -3,11 +3,13 @@
 Impact measurement for backlog `915a3fa56361`, closing out the raw estimate filed against
 the gate runaway loop (`f8e40b4c577d` mechanism, `a0718a5d78b3` root cause).
 
-**Verdict — the loop's cost is real and structural, but the headline number was wrong in
-both directions at once.** True exposure is **164 distinct patches**, not ~290: the raw
-per-worktree sum simultaneously *over*counted content (branches re-carrying each other's
-commits) and *under*counted the worktree set. The sweep the item proposes must NOT run
-yet — both of its stated preconditions are verified UNLANDED on trunk, and the loop was
+**Verdict — the loop's cost is real and structural, but every raw count of it has been
+wrong, in both directions at once.** True exposure is **209 distinct patches** repo-wide —
+**164 on live worktree branches** (the actionable slice, §1-§4) plus **45 orphaned on
+branches whose worktree is gone** (§6). Not ~290, and emphatically not the
+~1,500-commit figure the raw metric produces: 1,525 raw rows across 241 branches collapse
+to 209 distinct patches, a 7.3× overcount. The sweep the item proposes must NOT run yet —
+both of its stated preconditions are verified UNLANDED on trunk, and the loop was
 measurably ACTIVE while this measurement was taken.
 
 ## 1. The corrected number — four overlapping detectors
@@ -198,6 +200,13 @@ git rev-list --no-merges $ALL_REFS --not origin/main | sort -u | wc -l
 while read -r sha; do
   git diff-tree -p --no-commit-id "$sha" | git patch-id --stable | awk '{print $1}'
 done < union.txt | sort -u | wc -l
+
+# §6 repo-wide — branches with no worktree. `git cherry` splits the two classes:
+#   '+' = content NOT on trunk · '-' = rebase-landed (SHA unreachable, content IS on trunk)
+git for-each-ref --format='%(refname:short)' refs/heads/ > all.txt
+git worktree list --porcelain | awk '/^branch /{sub(/^refs\/heads\//,"",$2); print $2}' | sort -u > wt.txt
+comm -23 <(sort -u all.txt) wt.txt | while read -r b; do git cherry origin/main "$b"; done \
+  | awk '/^\+/{print $2}' > nowt-plus.txt      # then patch-id-dedupe as in D4
 ```
 
 **Relationship to the existing tooling — complementary, not a duplicate.** Trunk already
@@ -217,7 +226,39 @@ demonstrably did (290 → 342 in roughly an hour). It is held back only because 
 **Ship it as the first commit of the sweep, once `fix/gate-runaway-loop` has landed and the
 gate can be trusted.**
 
-## 6. What this measurement does NOT claim
+## 6. Scope correction — branches with no worktree
+
+§1-§4 scope to *worktree-attached* branches, matching how the item was filed ("across 25
+worktrees"). That is the right scope for the sweep — a live worktree is the signal that the
+work is live — but it is **not** the repo's full exposure. The `stranded-sweep.sh` run at the
+end of this doc's own landing reported "311 commits across 374 branches", which forced the
+wider scan:
+
+| | Branches | Raw rows | Not upstream by content | Distinct patch-ids |
+|---|---|---|---|---|
+| Worktree-attached | 36 | 342 | 342 | **164** |
+| No worktree | 205 | 1,183 | 887 (`git cherry` `+`) | 195 |
+| **Repo-wide** | **241** | **1,525** | 1,229 | **209** |
+
+Three things fall out, and they matter more than the totals:
+
+1. **296 rows on no-worktree branches are already on trunk by content** (`git cherry` `-`)
+   — rebase-landed, so their original SHAs are unreachable and `origin/main..$b` still
+   counts them. Any exposure metric built on `rev-list` alone inflates by exactly this
+   amount, permanently. This is the mechanism behind the "~223 branches / 1,491 commits
+   unlanded" figure carried in prior notes: it is a *row* count, not a work count.
+2. **150 of the 195 no-worktree patches are stale duplicates of the live 164** — the same
+   work, left behind on branches whose worktrees were GC'd. Only **45 patches exist
+   exclusively** on a branch with no worktree.
+3. Those **45 are the genuinely at-risk set**: no worktree means no session, so nothing is
+   driving them, and `stranded-sweep.sh`'s review verdict is the only thing surfacing them.
+   They need **triage (abandon vs. recover), not a land sweep** — a different task from §4,
+   and deliberately not folded into it. 107 no-worktree branches carry at least one.
+
+The 324 branches with no worktree are also the standing worktree/branch-GC backlog: 98 of
+the 205 carrying raw commits carry **zero** unlanded content and are pure delete candidates.
+
+## 7. What this measurement does NOT claim
 
 - **Not a claim that all 164 patches are finished or green.** It bounds *exposure* —
   work that exists only outside trunk. Per-branch readiness is unaudited; some branches
@@ -227,5 +268,10 @@ gate can be trusted.**
 - **Ordering is by diff size, a proxy for gate cost**, not by risk or dependency. A small
   diff to a shared surface (`install.sh`, `settings-templates/`) triggers a FULL gate —
   see `gate-select.sh` Rule 2 — and costs far more than its line count suggests.
+- **The 45 no-worktree-only patches (§6) are unaudited for intent.** "Content not on trunk"
+  is not "work someone still wants". Abandoned-by-decision and dropped-by-accident are
+  indistinguishable from git alone — that set needs a human ruling per branch, which is why
+  §4 excludes it.
 - **The scan is a point-in-time snapshot** (`origin/main` = `1f19ac0`). Re-run §5 before
-  acting; do not hand these numbers forward as fact.
+  acting; do not hand these numbers forward as fact. The exposure moved twice *during* this
+  measurement (290 → 342 raw in an hour; contention 78 → 105 bats procs in ~15 min).
