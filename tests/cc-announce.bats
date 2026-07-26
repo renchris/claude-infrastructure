@@ -30,11 +30,11 @@ stub() { # <mode>
 n_alarm() { find "$CC_ANNOUNCE_ALARM_DIR" -name 'announce-alarm-*.json' 2>/dev/null | wc -l | tr -d ' '; }
 n_degrade() { find "$CC_ANNOUNCE_ALARM_DIR" -name 'announce-degrade-*.json' 2>/dev/null | wc -l | tr -d ' '; }
 
-@test "selftest passes and runs all 7 never-silent checks (a zero-check suite must not 'pass')" {
+@test "selftest passes and runs all 12 never-silent checks (a zero-check suite must not 'pass')" {
   run "$A" --selftest
   [ "$status" -eq 0 ]
   n_ok="$(printf '%s' "$output" | grep -c '^  ok ')"
-  [ "$n_ok" -eq 7 ]
+  [ "$n_ok" -eq 12 ]
 }
 
 @test "wake-path armed → VERIFIED, exit 0, no alarm" {
@@ -93,4 +93,64 @@ n_degrade() { find "$CC_ANNOUNCE_ALARM_DIR" -name 'announce-degrade-*.json' 2>/d
 @test "missing message → usage error (exit 2)" {
   CC_NOTIFY_BIN="$(stub verified)" run "$A" only-a-target
   [ "$status" -eq 2 ]
+}
+
+# ── the CALLER CONTRACT (incident 2026-07-26, backlog 0298535c1584) ──────────────────────────────────
+# The resolver-availability rewrite made cc-notify's OWN rc honest. It cannot make the rc a CALLER sees
+# honest: `timeout` reports 124 whatever the child exits with. Reproduced against the post-rewrite
+# binary — rc 124, EMPTY stderr, and the message already in the target's inbox. `enqueued=` is the only
+# thing that can separate those two worlds, and this is where it gets read.
+
+# a stub cc-notify that emits <stderr-line> and exits <rc>, logging one line per invocation
+rcstub() { # <name> <rc> <stderr-line>
+  local p="$BATS_TEST_TMPDIR/stub-$1.sh"
+  { echo '#!/bin/bash'
+    echo "printf '%s\\n' \"\$*\" >> \"$BATS_TEST_TMPDIR/stub.log\""
+    echo "echo '$3' >&2"
+    echo "exit $2"; } > "$p"
+  chmod +x "$p"; echo "$p"
+}
+n_calls() { grep -c '' "$BATS_TEST_TMPDIR/stub.log" 2>/dev/null || echo 0; }
+
+@test "rc 124 with enqueued=1 → recorded DEGRADE (exit 0, no alarm): the delivery stands, the verdict does not" {
+  local p; p="$(rcstub killedenq 124 'cc-notify: verdict=interrupted enqueued=1 uuid=T reason=signal')"
+  CC_NOTIFY_BIN="$p" run "$A" loaded-peer "incident advisory"
+  [ "$status" -eq 0 ]
+  [ "$(n_alarm)" -eq 0 ]
+  [ "$(n_degrade)" -ge 1 ]
+  [ "$(n_calls)" -eq 1 ]              # no retry: the send was killed, not merely slow
+}
+
+@test "rc 124 WITHOUT enqueued=1 → LOUD alarm + non-zero: undelivered stays undelivered" {
+  local p; p="$(rcstub killednoenq 124 'cc-notify: verdict=interrupted enqueued=0 uuid=T reason=signal')"
+  CC_NOTIFY_BIN="$p" run "$A" loaded-peer "incident advisory"
+  [ "$status" -ne 0 ]
+  [ "$(n_alarm)" -ge 1 ]
+  [ "$(n_calls)" -eq 1 ]
+}
+
+@test "rc 4 RESOLVER UNAVAILABLE is not read as a bad address — it alarms, and it KEEPS its retry" {
+  # cc-notify's own guidance for rc 4 is "retry, do NOT treat as a bad address": an unreadable registry
+  # is transient in a way a wrong name is not. The no-retry rule must not swallow this case.
+  local p; p="$(rcstub resolverdown 4 'cc-notify: verdict=degraded enqueued=0 uuid= reason=resolver-unavailable')"
+  CC_NOTIFY_BIN="$p" run "$A" loaded-peer "incident advisory"
+  [ "$status" -ne 0 ]
+  [ "$(n_alarm)" -ge 1 ]
+  [ "$(n_calls)" -eq 2 ]
+}
+
+@test "rc 6 AMBIGUOUS prefix → alarm with NO retry (an ambiguous address does not resolve itself)" {
+  local p; p="$(rcstub ambiguous 6 'cc-notify: verdict=ambiguous enqueued=0 uuid= reason=ambiguous-prefix')"
+  CC_NOTIFY_BIN="$p" run "$A" loaded-peer "incident advisory"
+  [ "$status" -ne 0 ]
+  [ "$(n_alarm)" -ge 1 ]
+  [ "$(n_calls)" -eq 1 ]
+}
+
+@test "CONTROL: the retry loop still exists where a retry can help (no-watcher degrade costs 2 calls)" {
+  # Without this control, the four tests above would also pass on a build that simply deleted retries.
+  local p; p="$(stub nowatch)"
+  CC_NOTIFY_BIN="$p" run "$A" idle-desk "routine ping"
+  [ "$status" -eq 0 ]
+  [ "$(n_calls)" -eq 2 ]
 }
