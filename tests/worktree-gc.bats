@@ -220,7 +220,7 @@ has_br() { git -C "$R" rev-parse --verify --quiet "refs/heads/$1" >/dev/null; }
   p="$(wt wt-broken feat/broken)"
   rm -rf "$p"
   run_gc
-  ! has_wt "$p"
+  ! has_wt "$p" || false
   has_br feat/broken
 }
 
@@ -448,7 +448,7 @@ SH
 q=0; for a in "$@"; do [ "$a" = "cwd" ] && q=1; done
 [ "$q" = 1 ] || exit 0
 n=$(( $(cat "$LSOF_N" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$LSOF_N"
-[ "$n" -gt 1 ] && printf 'p1\nn%s\n' "$BORN_CWD"
+[ "$n" -gt 1 ] && printf 'p1\nn%s\n' "$BORN_CWD" || false
 exit 0
 SH
   chmod +x "$BORN"
