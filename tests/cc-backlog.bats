@@ -499,3 +499,57 @@ status_of() { bash "$CB" list --all --json | jq -r --arg i "$1" '.[]|select(.id=
   echo "$output" | grep -q '0 reopened, 0 blocked'
   [ "$(wc -l < "$CC_BACKLOG_FILE" | tr -d ' ')" -eq "$n1" ]   # no further appends
 }
+
+# ── COST BOUNDING (2026-07-25) — valid_records forked one `jq` PER LEDGER RECORD, so at 1552 lines it
+# cost ~9s of every `cc-reaper --reap` tick, and the ledger is APPEND-ONLY (it only ever grows). These
+# pin the single-pass shape and the contract it has to keep. ────────────────────────────────────────
+
+@test "P5: a 3000-record ledger is validated in one pass, not one fork per record" {
+  # measured: the per-record loop spends 3002 jq forks on exactly this input; the single pass spends 3.
+  # Counting forks, not seconds — a wall-clock bound is load-dependent, and 3000 records sat close
+  # enough to any tolerable threshold to still pass with the per-record shape intact.
+  local i=0
+  while [ "$i" -lt 3000 ]; do
+    printf '{"id":"bulk%04d0kk01","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"T"}\n' "$i" >> "$CC_BACKLOG_FILE"
+    i=$((i + 1))
+  done
+  local d="$BATS_TEST_TMPDIR/stub" rj; mkdir -p "$d"; rj="$(command -v jq)"
+  printf '#!/bin/bash\nprintf x >> "%s/jqf"\nexec %s "$@"\n' "$BATS_TEST_TMPDIR" "$rj" > "$d/jq"; chmod +x "$d/jq"
+  local old_path n; old_path="$PATH"; PATH="$d:$PATH"
+  run bash "$CB" list --open
+  n="$([ -f "$BATS_TEST_TMPDIR/jqf" ] && wc -c < "$BATS_TEST_TMPDIR/jqf" | tr -d ' ' || echo 0)"
+  PATH="$old_path"
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s\n' "$output" | grep -c 'bulk')" -eq 3000 ]   # every record still reported…
+  [ "$n" -lt 50 ]                                              # …off a bounded number of processes
+}
+
+@test "P5: a BLANK ledger line is skipped silently, never reported as malformed" {
+  rec '{"id":"blank000kk01","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"T"}'
+  printf '\n' >> "$CC_BACKLOG_FILE"
+  run bash "$CB" list --open
+  [ "$status" -eq 0 ]
+  refute_match "$output" 'malformed'
+  printf '%s' "$output" | grep -q 'blank000kk01'
+}
+
+@test "P5: malformed-line NUMBERS stay exact when the last line has no trailing newline" {
+  # jq's own input_line_number counts newlines CONSUMED, so it would report the unterminated final
+  # line as line 2 here, not 3 — off-by-one in the only pointer back to the offending record.
+  printf '{"id":"numok000kk01","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"T"}\n' > "$CC_BACKLOG_FILE"
+  printf 'garbage-line-two\n' >> "$CC_BACKLOG_FILE"
+  printf 'garbage-line-three-with-no-newline' >> "$CC_BACKLOG_FILE"
+  run bash "$CB" list --open
+  printf '%s' "$output" | grep -q 'malformed line 2 skipped'
+  printf '%s' "$output" | grep -q 'malformed line 3 skipped'
+}
+
+@test "P5: a FAILED validation pass is loud, never a silently empty ledger" {
+  # one jq now covers the whole file, so a jq failure would report "no records" — which reads as a
+  # clean, empty backlog and makes reap a silent no-op. Per-record forking could not fail that way.
+  rec '{"id":"loud0000kk01","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"T"}'
+  mkdir -p "$BATS_TEST_TMPDIR/stub"
+  printf '#!/bin/bash\nexit 1\n' > "$BATS_TEST_TMPDIR/stub/jq"; chmod +x "$BATS_TEST_TMPDIR/stub/jq"
+  PATH="$BATS_TEST_TMPDIR/stub:$PATH" run bash "$CB" list --open
+  printf '%s' "$output" | grep -q 'record scan INCOMPLETE'
+}

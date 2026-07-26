@@ -89,17 +89,35 @@ ensure_file() {
 # lines to stderr (fail-loud). Never removes them from the file.
 valid_records() {
   [ -f "$BACKLOG" ] || return 0
-  local n=0 bad=0 line
-  while IFS= read -r line || [ -n "$line" ]; do
+  # ONE jq pass, not one fork PER RECORD. jq startup (~6 ms) × a 1552-line APPEND-ONLY ledger was ~9 s
+  # of every `cc-reaper --reap` tick — the second-largest cost in that sweep after the inbox guard —
+  # and being append-only it could only ever grow. Contract is unchanged: well-formed lines VERBATIM
+  # on stdout, malformed ones reported BY LINE NUMBER on stderr, nothing ever removed from the file.
+  #
+  # The line number is counted HERE rather than taken from jq's input_line_number, which counts
+  # newlines CONSUMED — a final line with no trailing newline would share its predecessor's number.
+  # One tag per input record (E/G/B) keeps the count exact and keeps a blank line "skipped", never
+  # "malformed", exactly as the per-line loop did.
+  local tagged n=0 bad=0 want
+  while IFS= read -r tagged; do
     n=$((n + 1))
-    [ -z "$line" ] && continue
-    if printf '%s' "$line" | jq -e 'has("id") and has("event")' >/dev/null 2>&1; then
-      printf '%s\n' "$line"
-    else
-      printf 'cc-backlog: malformed line %d skipped (still in file)\n' "$n" >&2
-      bad=$((bad + 1))
-    fi
-  done < "$BACKLOG"
+    case "$tagged" in
+      G*) printf '%s\n' "${tagged#G}" ;;
+      E*) : ;;                       # blank line — skipped silently, still counted (as before)
+      *)  printf 'cc-backlog: malformed line %d skipped (still in file)\n' "$n" >&2; bad=$((bad + 1)) ;;
+    esac
+  done < <(jq -Rr 'if . == "" then "E"
+                   elif (try (fromjson | (has("id") and has("event"))) catch false) then "G" + .
+                   else "B" end' "$BACKLOG")
+  # Fail LOUD on a short read. One jq covering the whole file means a jq failure would otherwise
+  # report an EMPTY ledger — a silent "nothing to reap" instead of an error. Per-line forking could
+  # not fail this way, so the check is what buys back that safety.
+  # NB `grep -c ''` prints 0 and EXITS 1 on an empty file, so `|| echo 0` would append a second 0 and
+  # make `want` the two-word "0 0" — which fails the -eq and cries INCOMPLETE on every empty ledger.
+  want="$(grep -c '' "$BACKLOG" 2>/dev/null || true)"
+  case "$want" in ''|*[!0-9]*) want=0 ;; esac
+  [ "$n" -eq "$want" ] 2>/dev/null || \
+    printf 'cc-backlog: record scan INCOMPLETE — %s of %s line(s) read; ledger NOT fully reported\n' "$n" "$want" >&2
   [ "$bad" -eq 0 ] || printf 'cc-backlog: %d malformed line(s) reported above\n' "$bad" >&2
   return 0
 }
