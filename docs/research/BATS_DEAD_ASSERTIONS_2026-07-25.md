@@ -333,3 +333,67 @@ that never linted a `.bats` file made them invisible. Note the trap it names is 
 one §1 confirms: wiring bats into the shellcheck pass would close the 89 bare-`!` findings
 via SC2314 and report a confident green over the 131 `[[ ]]` ones. The block-position
 analyzer is what actually closes the class.)*
+
+---
+
+## 8. The ratchet's first catch — 30 more, one day later (2026-07-26)
+
+Rebasing this branch onto `origin/main` pulled in **34 commits** written while the census was
+being taken. The analyzer immediately reported **30 new dead assertions across 4 files**:
+
+| Count | File | Class |
+|---:|---|---|
+| 16 | `cc-relogin.bats` | 16 `cond-keyword` |
+| 8 | `handoff-selfclose-teammate-gate.bats` | 8 `cond-keyword` |
+| 5 | `claude-accounts-core.bats` | 5 `cond-keyword` |
+| 1 | `handoff-fire-account-sweep.bats` | 1 `negation` |
+
+This is the result that justifies the ratchet: **dead assertions are not a one-time debt, they
+are a continuous inflow.** 30 arrived in roughly one day of other sessions' work — a rate that
+would have re-accumulated the original 226 within a month. A one-shot cleanup would have decayed;
+only the gate-wired ratchet holds the line. `cc-relogin.bats` alone silently unasserted the
+consent-gate result and the `pip install websocket-client` remedy — the operator's exact recovery
+step, and the one assertion distinguishing a missing dependency from a browser failure.
+
+All 87 tests in those 4 suites were green **before and after** revival, so unlike §6 nothing here
+was masking a false assertion. Same uniform `|| false`.
+
+### Measured false-positive rate: 3 of 30, all harmless
+
+§4 promised finality would be judged conservatively — *"a false report costs one mechanical edit;
+a false all-clear is absorbed forever."* That trade was measured here rather than assumed. Of the
+30 findings, **3 sat in final position** and were therefore already live:
+
+- `cc-relogin.bats:146`, `cc-relogin.bats:198`, `claude-accounts-core.bats:816`
+
+All three are the same shape — `[ "$status" -eq 0 ] && [[ "$output" == *OK* ]]` as the body's last
+statement, where the list's non-zero status becomes the body's return status and bats fails the
+test. The analyzer misses their finality because a preceding multi-line `python3 -c '…'` block
+defeats its line-oriented block tracking (§7, limit 1). The `|| false` is semantically inert on
+these, so the cost is exactly the predicted one mechanical edit.
+
+**27 of 30 were genuinely dead. 0 false all-clears.** The error is entirely in the safe direction.
+
+### How that was established — mutation, with a negative control
+
+A green post-fix suite proves nothing on its own: an assertion that is unreachable also never
+fails. Each sampled assertion was therefore **mutated to a guaranteed-false predicate** and the
+suite required to go RED (`not ok` counted from the TAP body, never the exit code — a piped or
+truncated run reports the wrong rc):
+
+| Site | Mutation | Post-fix | Pre-fix (control) |
+|---|---|---|---|
+| `cc-relogin.bats:111` | `"refused"` → `"ZZIMPOSSIBLE"` | **RED** ✓ | GREEN — truly dead |
+| `cc-relogin.bats:146` | `-eq 0` → `-eq 99` | **RED** ✓ | RED — *already live* (over-report) |
+| `cc-relogin.bats:326` | `!=` → `==` | **RED** ✓ | — |
+| `claude-accounts-core.bats:836` | `next3*REQUIRED*` → `next3*ZZIMPOSSIBLE*` | **RED** ✓ | GREEN — truly dead |
+| `handoff-fire-account-sweep.bats:247` | drop the `!` | **RED** ✓ | — |
+| `handoff-selfclose-teammate-gate.bats:99` | `2 LIVE` → `9 LIVE` | **RED** ✓ | — |
+
+The **pre-fix control column is what makes this a proof rather than a demonstration**: it shows
+the same mutation passing unnoticed before the fix, so the `|| false` — and nothing else — is what
+made the assertion fail-able. It is also what exposed the 3 over-reports, which no amount of
+post-fix green could have distinguished from a genuine revival.
+
+`cc-relogin.bats:146` doubles as the proof for the `and-absorbed` class: mutating the **left**
+element of `A && B` fails the test, so both halves are now load-bearing.
