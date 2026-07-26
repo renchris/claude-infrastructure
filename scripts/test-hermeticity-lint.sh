@@ -23,7 +23,20 @@
 #
 # Env seam (selftest only): CC_HERM_ALLOWLIST overrides the embedded allowlist.
 set -uo pipefail
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# Resolve $0 THROUGH symlinks before deriving ROOT. Everything under ~/.claude/scripts/ is a per-file
+# symlink into this checkout, so a bare `dirname "$0"` yields ~/.claude — which has no tests/ — and the
+# --selftest case that lints the real tree then fails for a reason that has nothing to do with the
+# ratchet. Observed 2026-07-26 running the DEPLOYED path right after landing it. (No `readlink -f`:
+# that is GNU-only and this box ships the BSD userland.)
+SELF="$0"
+while [ -L "$SELF" ]; do
+  _link="$(readlink "$SELF")"
+  case "$_link" in
+    /*) SELF="$_link" ;;
+    *)  SELF="$(dirname "$SELF")/$_link" ;;
+  esac
+done
+ROOT="$(cd "$(dirname "$SELF")/.." && pwd)"
 
 # ── the ratchet: suites grandfathered as non-hermetic. ONLY EVER DELETE LINES FROM THIS LIST. ──
 EMBEDDED_ALLOWLIST="$(cat <<'ALLOW'
@@ -209,7 +222,16 @@ F
   lint_dir "$d/herm" "zz-fixture.bats" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a fixed-but-still-allowlisted suite did not go RED (ratchet not shrinking)"; fails=1; }
   lint_dir "$d/herm" ""                >/dev/null 2>&1 || { echo "SELFTEST FAIL: a hermetic suite did not go GREEN"; fails=1; }
   lint_dir "$d/leak" "zz-fixture.bats"  >/dev/null 2>&1 || { echo "SELFTEST FAIL: a grandfathered suite did not go GREEN"; fails=1; }
-  lint_dir "$ROOT/tests" "$EMBEDDED_ALLOWLIST" >/dev/null 2>&1 || { echo "SELFTEST FAIL: the embedded allowlist is stale — the real tree is not clean"; fails=1; }
+  # Case (e) must tell its two failure codes APART. A stale allowlist is a VERDICT about the tree
+  # (exit 1). An unscannable dir is a NON-VERDICT (exit 2) and says nothing whatever about the
+  # allowlist. Collapsing them is how the ROOT bug above surfaced as "your ratchet is stale" —
+  # the same verdict/non-verdict conflation ship-land keeps apart as gate-red 6 vs gate-killed 9.
+  lint_dir "$ROOT/tests" "$EMBEDDED_ALLOWLIST" >/dev/null 2>&1; rc_real=$?
+  case "$rc_real" in
+    0) ;;
+    2) echo "SELFTEST FAIL: could not scan $ROOT/tests — a NON-VERDICT (bad ROOT?), NOT a stale allowlist"; fails=1 ;;
+    *) echo "SELFTEST FAIL: the embedded allowlist is stale — the real tree is not clean"; fails=1 ;;
+  esac
   lint_dir "$d/nope" ""               >/dev/null 2>&1; [ "$?" -eq 2 ] || { echo "SELFTEST FAIL: a missing scan dir did not exit 2 (LOUD)"; fails=1; }
   if [ "$fails" -eq 0 ]; then
     echo "test-hermeticity-lint --selftest: 6/6 — RED on a new leak + on a stuck ratchet entry, GREEN on hermetic + grandfathered, GREEN on the real tree, LOUD on a bad dir."
