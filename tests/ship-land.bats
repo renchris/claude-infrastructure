@@ -28,6 +28,11 @@ setup() {
   export CLAUDE_CODE_SESSION_ID="test-sid-123"
   export POSTLAND_DIR="$BATS_TEST_TMPDIR/postland"            # flakes.jsonl + queue, sandboxed
   export POSTLAND_VERIFY=off                                  # never spawn a real post-land child
+  # env-bleed immunity: when THIS suite runs inside an outer ship-land gate, the outer
+  # pipeline's scope resolution must not leak into the fixture pipelines under test.
+  unset SHIP_LAND_GATE_SCOPE SHIP_LAND_GATE_SCOPE_DEFAULT SHIP_LAND_GATE_POLICY \
+        SHIP_LAND_GATE_SELECT SHIP_LAND_FIRST_BASE SHIP_LAND_GATE_EFFECTIVE_FULL \
+        SHIP_LAND_SELECTED_N POSTLAND_STALENESS_GUARD 2>/dev/null || true
 }
 
 on_branch_with() {  # $1=branch $2=file $3=content  → commit a change on a fresh branch
