@@ -78,6 +78,38 @@ def split_trailing_comment(line: str) -> tuple[str, str]:
         i += 1
     return line.rstrip(), ""
 
+    # `A && false || true`
+
+
+RE_SWALLOWED = re.compile(
+    r"^(?P<indent>\s*)(?P<a>.+?)\s*&&\s*false\s*\|\|\s*(?:true|:)\s*$"
+)
+
+
+def revive(code: str) -> str | None:
+    """Rewrite `code` so its failure reaches the test's exit status, or None if unfixable.
+
+    The default transform APPENDS ` || false`: the statement's failure then lands in the
+    list's last, un-negated element, where errexit applies.
+
+    That append is a NO-OP for one shape. `A && false || true` reads as "A must not
+    match", but the trailing always-true handler already pins the status to 0 — appending
+    yields `A && false || true || false`, which is still 0 on every path. Verified:
+
+        bash -ec 'echo hit | grep -q hit && false || true || false'   → status 0
+
+    So that shape is REWRITTEN rather than appended to, into the negation the author
+    meant: `! A || false`. Same intent, and its failure is now reachable.
+    """
+    if re.search(r"\|\|\s*false$", code):
+        return None  # already revived
+    m = RE_SWALLOWED.match(code)
+    if m:
+        # Indentation is re-applied explicitly: the block's shape is how these
+        # assertion runs are read, and a de-indented line reviews as unrelated.
+        return f"{m.group('indent')}! {m.group('a').strip()}{SUFFIX}"
+    return code + SUFFIX
+
 
 def fix_file(path: str, lines_to_fix: list[int], dry_run: bool) -> int:
     src = Path(path).read_text(encoding="utf-8")
@@ -87,9 +119,9 @@ def fix_file(path: str, lines_to_fix: list[int], dry_run: bool) -> int:
         idx = ln - 1
         original = lines[idx]
         code, comment = split_trailing_comment(original)
-        if re.search(r"\|\|\s*false$", code):
+        new_code = revive(code)
+        if new_code is None:
             continue  # already revived
-        new_code = code + SUFFIX
         if comment:
             # Keep a trailing comment at its original column when the longer code still
             # leaves room, so annotated assertion blocks hold their shape; otherwise fall
