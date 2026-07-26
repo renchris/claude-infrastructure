@@ -56,13 +56,31 @@ teardown() {
 
 @test "DEAD holder reaped — acquires" {
   mkdir -p "$LOCK"
-  # `|| true` on the kill too: under load (a concurrent full gate) >1s can pass before the kill,
-  # the sleep has already exited, and kill returns 1 — the test only needs $dead to BE dead, which
-  # an already-exited pid satisfies. Flaked exactly this way in the 2026-07-25 land (not ok 1102,
-  # bats-retry green ⇒ gate RED on the retry-count mismatch).
-  sleep 1 & dead=$!; kill "$dead" 2>/dev/null || true; wait "$dead" 2>/dev/null || true
+  # A crashed holder wrote pid+lstart then died. Capture lstart WHILE it is alive, then kill
+  # it. Under load its pid may be recycled to a live process (kill -0 sees "alive"), but the
+  # recorded lstart won't match the impostor → land-lock still identifies the ORIGINAL holder
+  # as dead and reaps. The prior bare-pid fixture flaked exactly here (2026-07-25 land: not ok
+  # 1081/1102 — recycled pid read as a live holder, gate wedged RED).
+  sleep 5 & dead=$!
+  lstart="$(ps -o lstart= -p "$dead" 2>/dev/null)"
+  kill "$dead" 2>/dev/null || true; wait "$dead" 2>/dev/null || true
   echo "$dead" > "$LOCK/pid"
+  printf '%s\n' "$lstart" > "$LOCK/lstart"
   run env LAND_LOCK_WAIT=5 bash "$LL" -- bash -c 'exit 0'
+  [ "$status" -eq 0 ]
+}
+
+@test "recycled-pid holder reaped — lstart mismatch, deterministic (no load needed)" {
+  mkdir -p "$LOCK"
+  # Positive control for the pid-reuse fix, made DETERMINISTIC: the holder pid is genuinely
+  # ALIVE (a live sleep), but the recorded lstart does NOT match it — exactly the state a
+  # recycled pid produces. land-lock must treat the original holder as dead (lstart mismatch)
+  # and reap + acquire, WITHOUT relying on the OS actually recycling a pid under load.
+  sleep 30 & live=$!
+  echo "$live" > "$LOCK/pid"
+  printf '%s\n' "Thu Jan  1 00:00:00 2020" > "$LOCK/lstart"   # stale, non-matching lstart
+  run env LAND_LOCK_WAIT=5 bash "$LL" -- bash -c 'exit 0'
+  kill "$live" 2>/dev/null || true
   [ "$status" -eq 0 ]
 }
 

@@ -20,7 +20,8 @@
 # Introspect the resolved dir without landing:  scripts/land-lock.sh --print-lock-dir
 # pid-liveness is MEANINGFUL because THIS process runs <cmd> as a child and waits: the
 # pid written into the lock is alive for the entire hold, so a crashed holder is reaped
-# by the kill -0 check.
+# by the pid+lstart liveness check (a bare `kill -0` is fooled when the OS recycles a dead
+# holder's pid to a new live process under load — the lock records lstart to catch that).
 #
 # Kill switch:  LAND_SERIALIZE=off scripts/land-lock.sh -- <cmd>   → run <cmd> unlocked.
 # Tunables:     LAND_LOCK_TTL (empty/wedged-reap age, default 1200s) ·
@@ -80,14 +81,20 @@ if [[ "${LAND_SERIALIZE:-on}" = "off" ]]; then
   exec "$@"
 fi
 
-write_owner() { printf '%s\n' "$$" > "${LOCK}/pid"; printf '%s\n' "${BRANCH}" > "${LOCK}/branch" 2>/dev/null || true; }
+write_owner() {
+  printf '%s\n' "$$" > "${LOCK}/pid"
+  # Record OUR start-time next to the pid so a later acquirer can distinguish a live holder
+  # from a DEAD holder whose pid the OS has recycled to a new process (see try_acquire).
+  ps -o lstart= -p "$$" 2>/dev/null > "${LOCK}/lstart" || true
+  printf '%s\n' "${BRANCH}" > "${LOCK}/branch" 2>/dev/null || true
+}
 
 # REAP RULE — correctness core; DIVERGES from reso deliberately (acceptance gate 3).
 # A LIVE holder pid is NEVER reaped, even past TTL: a silently-dropped commit costs more
 # than a wedged-lock wait, and LAND_SERIALIZE=off is the escape hatch.
 try_acquire() {
   mkdir "${LOCK}" 2>/dev/null && { write_owner; return 0; }
-  local holder stale age
+  local holder stale age rec_lstart cur_lstart
   holder="$(cat "${LOCK}/pid" 2>/dev/null || true)"
   age="$(( $(date +%s) - $(stat -f %m "${LOCK}" 2>/dev/null || echo 0) ))"
   stale=0
@@ -95,7 +102,18 @@ try_acquire() {
     # mkdir'd but pid not yet written — a real owner mid-acquire; grace 5s, else TTL.
     { [[ "${age}" -ge 5 ]] || [[ "${age}" -gt "${TTL}" ]]; } && stale=1
   elif kill -0 "${holder}" 2>/dev/null; then
-    stale=0                                          # holder ALIVE → NEVER stale (wait it out)
+    # pid is alive — but under load a DEAD holder's pid can be RECYCLED to a new process,
+    # which kill -0 alone cannot detect (it flaked exactly this way, wedging every landing:
+    # 2026-07-25). Verify identity by start-time: a recycled pid belongs to a different
+    # process with a different lstart → the original holder is dead → reap. pid+lstart rule
+    # (memory: periodic-job-self-overlap — kill -0 alone is insufficient under pid reuse).
+    rec_lstart="$(cat "${LOCK}/lstart" 2>/dev/null || true)"
+    cur_lstart="$(ps -o lstart= -p "${holder}" 2>/dev/null || true)"
+    if [[ -n "${rec_lstart}" && "${rec_lstart}" != "${cur_lstart}" ]]; then
+      stale=1                                        # pid REUSED (lstart mismatch) → original holder DEAD → reap
+    else
+      stale=0                                        # same live process (lstart matches / none recorded) → NEVER stale
+    fi
   else
     stale=1                                          # holder pid DEAD → reap immediately
   fi
