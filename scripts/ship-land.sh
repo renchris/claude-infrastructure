@@ -49,8 +49,16 @@
 # --dry-run stops after the gate (no push, no lock). Exit codes: 0 landed · 2 preflight
 # refusal · 3 escalation PARK · 4 shared-checkout refusal · 5 rebase conflict (initial OR an
 # auto-retry rebase, the latter rolled back) · 6 gate red · 7 push non-ff · 8 content-verify
-# failed after exhausting the bounded auto-retries. (42 is INTERNAL — locked child →
-# outer-loop stale-gate signal; it never escapes ship-land.)
+# failed after exhausting the bounded auto-retries · 9 GATE-KILLED. (42 is INTERNAL — locked
+# child → outer-loop stale-gate signal; it never escapes ship-land.)
+#
+# 6 vs 9 — a VERDICT vs a NON-VERDICT, and the distinction is load-bearing (backlog 9c5d0ba74e79):
+# 6 says "the gate ran and this tree is red" — a claim about YOUR CODE, actionable, do not retry
+# unchanged. 9 says the suite died to a signal (or exited naming no failing test) and therefore
+# proved NOTHING — a claim about the MACHINE. Nothing is pushed either way and gate-green is never
+# advanced, so 9 is still fail-closed; what changes is that a retry is the CORRECT response to 9
+# and the wrong one to 6. Collapsing them into 6 is what let a load spike read as a code failure
+# and drove the 2026-07-26 kill → "RED" → re-block → dispatcher-retry runaway (f8e40b4c577d).
 #
 # TRAILER CONVENTION (ownership-decidable sweep, T-P9-4): a session's commits should
 # carry a `Session-Id: <CLAUDE_CODE_SESSION_ID>` trailer so `stranded-sweep.sh --mine
@@ -84,7 +92,9 @@
 # SHIP_LAND_GATE_ROUNDS (default 3; 0 = gate fully in-lock, the pre-optimistic kill switch) ·
 # SHIP_LAND_GATE_SCOPE / SHIP_LAND_GATE_POLICY / SHIP_LAND_GATE_SELECT (see GATE SCOPE above) ·
 # POSTLAND_DIR (flake + post-land queue + stamps dir) · POSTLAND_VERIFY=off (skip the post-land
-# spawn) · POSTLAND_STALENESS_GUARD=off · POSTLAND_MAX_STAMP_AGE_H (24).
+# spawn) · POSTLAND_STALENESS_GUARD=off · POSTLAND_MAX_STAMP_AGE_H (24) ·
+# CC_GATE_MAX_LOAD / CC_GATE_ADMIT_MAX_WAIT / CC_GATE_ADMIT_POLL (admission control; 0|off = the
+# kill switch).
 #
 # bash 3.2-safe (no declare -A / mapfile; empty-array expansion guarded under `set -u`).
 # `pipefail` load-bearing; NO `set -e`.
@@ -140,6 +150,12 @@ ATTEST_HEAD="?"; ATTEST_BASE="?"; ATTEST_TREE="?"
 # it (the base our first gate ran against); seeded from the env for the in-lock fallback child.
 FIRST_BASE="${SHIP_LAND_FIRST_BASE:-}"
 EXTRA_RANGE=""
+# GATE VERDICT vs NON-VERDICT (backlog 9c5d0ba74e79 / f8e40b4c577d). run_gate returns 1 for BOTH
+# "the tree is red" and "the run died without earning a verdict"; these two flags separate them so
+# the exit code can. GATE_RED wins a mixed run — a named failure is strictly more informative than
+# a kill, and must never be softened into a retryable non-verdict.
+GATE_RED=0        # ≥1 check produced a REAL verdict and it was red
+GATE_KILLED=0     # ≥1 bats run died to a signal / produced no attributable failure
 
 ESC_RE_DEFAULT='DROP[[:space:]]+TABLE|DROP[[:space:]]+COLUMN|DROP[[:space:]]+DATABASE|DROP[[:space:]]+SCHEMA|TRUNCATE[[:space:]]+TABLE|DELETE[[:space:]]+FROM|ALTER[[:space:]]+TABLE[[:space:]].+[[:space:]]DROP|-----BEGIN[[:space:]A-Z]*PRIVATE[[:space:]]+KEY'
 # NOTE: auth/session/navigation code lands are ALSO escalation-worthy (operator ruling),
@@ -310,6 +326,24 @@ gate_admit() {  # $1=what — defer the start of an expensive suite until load f
   return 0
 }
 
+# ---- GATE-KILLED: signal death is a THIRD state, never RED -------------------
+# WHY (backlog 9c5d0ba74e79, observed live): a gate ran green through 1359 tests, then
+# `bats tests/ Killed: 9`, and ship-land printed "gate: bats RED / not pushing". A real red and a
+# dead carrier were BYTE-INDISTINGUISHABLE in the output, so the retry read as flaky tests instead
+# of "we ran out of machine". That misreading is the middle link of the 2026-07-26 runaway
+# (f8e40b4c577d): kills → "RED" → lands fail → items re-block → the dispatcher retries → more load
+# → more kills. And the killers were PEERS: worktree-UNSCOPED `pkill -9 -f bats-core/bats` matches
+# every concurrent session's gate machine-wide (a0718a5d78b3) — see scripts/gate-cleanup.sh.
+# A killed run earned NO verdict, so it must not push, must not stamp gate-green, and must not be
+# reported as evidence about the tree. It exits 9, distinct from 6.
+#
+# The DETECTION below is trunk's, not this branch's: an earlier draft here keyed on `rc > 128`,
+# which is simply wrong — bats masks the signal (see run_bats_all), so a SIGKILLed suite surfaces
+# as plain `1`. The TAP body is the only honest discriminator, and that half was already landed by
+# a sibling working the same incident. What this branch adds on top is (a) the twice-cut case,
+# which trunk could not decide because it did not capture the re-run's TAP (its own message says
+# "RED (or cut twice)"), and (b) a distinct EXIT CODE for the non-verdict, so the caller learns
+# "retry when quieter" instead of "your code is broken".
 run_bats_all() {  # the FULL suite — the ONLY run that earns the gate-green claim
   # CUT ≠ RED. bats exits non-zero for BOTH a real `not ok` and a death by signal (a peer's
   # kill, a starved fork, a truncated stream) — and the second case reports ZERO `not ok`.
@@ -333,7 +367,7 @@ run_bats_all() {  # the FULL suite — the ONLY run that earns the gate-green cl
   notok="$(grep -c '^not ok' "$log" 2>/dev/null || true)"; notok="${notok:-0}"
   if [[ "$notok" -gt 0 ]]; then
     echo "✗ gate: bats RED — $notok failing test(s)" >&2
-    rm -f "$log"; return 1
+    rm -f "$log"; GATE_RED=1; return 1
   fi
   echo "↻ gate: bats exited $rc with ZERO 'not ok' — CUT, not RED. One re-run in a fresh TMPDIR…" >&2
   record_gate_cut "$rc" "$log"
@@ -342,13 +376,27 @@ run_bats_all() {  # the FULL suite — the ONLY run that earns the gate-green cl
   # a retry, it is the same experiment — and the postland retry ladder made exactly this mistake,
   # convicting six suites that pass cleanly on a quiet box.
   gate_admit "the FULL bats re-run"
-  td="$(mktemp -d)"; TMPDIR="$td" bats tests/ >&2; rc2=$?
+  # CAPTURE THE RE-RUN'S TAP TOO. Without it the two ways a re-run can fail are indistinguishable —
+  # hence the pre-existing "RED (or cut twice)", which handed the caller a guess at precisely the
+  # moment the answer decides what to do next. Same discriminator as the first run: the TAP body.
+  td="$(mktemp -d)"; log="$(mktemp)"
+  TMPDIR="$td" bats tests/ 2>&1 | tee "$log" >&2; rc2="${PIPESTATUS[0]}"
   rm -rf "$td" 2>/dev/null || true
   if [[ "$rc2" -eq 0 ]]; then
+    rm -f "$log"
     echo "✓ gate: FULL suite green on re-run — the first run was cut, not red." >&2
     return 0
   fi
-  echo "✗ gate: bats RED (or cut twice) — re-run exited $rc2" >&2
+  notok="$(grep -c '^not ok' "$log" 2>/dev/null || true)"; notok="${notok:-0}"
+  if [[ "$notok" -gt 0 ]]; then
+    rm -f "$log"
+    echo "✗ gate: bats RED — $notok failing test(s) on the re-run (the first run was cut)" >&2
+    GATE_RED=1; return 1
+  fi
+  record_gate_cut "$rc2" "$log"
+  rm -f "$log"
+  GATE_KILLED=1
+  echo "⛔ gate: GATE-KILLED — cut TWICE (exit $rc then $rc2, ZERO 'not ok' both times). The suite never earned a verdict, so this is NOT a red and NOT evidence about your tree: nothing is pushed and gate-green is untouched. Re-run /ship when the box is quieter, and free a stuck gate with scripts/gate-cleanup.sh (worktree-scoped), never a bare pkill." >&2
   return 1
 }
 
@@ -379,6 +427,9 @@ run_scoped_suite() {  # $1=suite file $2=newline-list of DIRECT suites → 0 gre
   [[ -z "$sig" ]] && sig="exit $rc1"
   rm -f "$log"
   echo "↻ gate[scoped]: $f RED — one exoneration re-run in a fresh TMPDIR…" >&2
+  # SHED FIRST: a re-run under the SAME sustained load that failed the first one is the same
+  # experiment, not a retry — the exoneration only means something if the environment changed.
+  gate_admit "exoneration re-run of $f"
   td="$(mktemp -d)"
   TMPDIR="$td" bats "$f" >&2; rc2=$?
   rm -rf "$td" 2>/dev/null || true
@@ -409,7 +460,7 @@ stamp_gate_green() {  # gate-green asserts "the FULL suite proved THIS tree" —
 
 run_gate() {  # $1=range → 0 green / 1 red
   local range="$1" p rc=0
-  GATE_EFFECTIVE_FULL=1; SELECTED_N=-1
+  GATE_EFFECTIVE_FULL=1; SELECTED_N=-1; GATE_RED=0; GATE_KILLED=0
   local shellfiles=() pyfiles=()
   while IFS= read -r -d '' p; do
     [[ -z "$p" ]] && continue
@@ -424,14 +475,14 @@ run_gate() {  # $1=range → 0 green / 1 red
 
   if [[ ${#shellfiles[@]} -gt 0 ]]; then
     echo "→ gate: shellcheck + bash -n on ${#shellfiles[@]} shell file(s)" >&2
-    shellcheck "${shellfiles[@]}" >&2 || { echo "✗ gate: shellcheck RED" >&2; rc=1; }
+    shellcheck "${shellfiles[@]}" >&2 || { echo "✗ gate: shellcheck RED" >&2; rc=1; GATE_RED=1; }
     for p in "${shellfiles[@]}"; do
-      bash -n "$p" 2>&1 >&2 || { echo "✗ gate: bash -n RED: $p" >&2; rc=1; }
+      bash -n "$p" 2>&1 >&2 || { echo "✗ gate: bash -n RED: $p" >&2; rc=1; GATE_RED=1; }
     done
   fi
   if [[ ${#pyfiles[@]} -gt 0 ]]; then
     echo "→ gate: py_compile on ${#pyfiles[@]} python file(s) (incl. extensionless-by-shebang)" >&2
-    python3 -m py_compile "${pyfiles[@]}" >&2 || { echo "✗ gate: py_compile RED" >&2; rc=1; }
+    python3 -m py_compile "${pyfiles[@]}" >&2 || { echo "✗ gate: py_compile RED" >&2; rc=1; GATE_RED=1; }
   fi
   if [[ -d tests ]] && ls tests/*.bats >/dev/null 2>&1; then
     local sel="" n direct f rbase
@@ -480,6 +531,20 @@ run_gate() {  # $1=range → 0 green / 1 red
   return "$rc"
 }
 
+gate_nonzero_code() {  # $1=optional context → prints the operator line on stderr, echoes 6 or 9
+  # THE SPLIT that 9c5d0ba74e79 asked for: a red is a claim ABOUT THE TREE; a kill is a claim about
+  # the MACHINE. Same exit code for both taught every caller — the dispatcher included — to treat
+  # "we ran out of machine" as "your code is broken", which is how a load spike turned into a
+  # re-block/retry loop. GATE_RED wins a mixed run: a named failure outranks a non-verdict.
+  if [[ "${GATE_KILLED:-0}" = "1" && "${GATE_RED:-0}" != "1" ]]; then
+    echo "⛔ ship-land: GATE-KILLED${1:+ $1} — the gate died without earning a verdict, so this is NOT a red and NOT evidence about your tree. Nothing pushed; gate-green untouched; branch + backup ref intact. Re-run /ship when the box is quieter (exit 9)." >&2
+    printf '9'
+  else
+    echo "✗ ship-land: GATE RED${1:+ $1} — not pushing." >&2
+    printf '6'
+  fi
+}
+
 # ---- unlocked reconcile + gate (one optimistic round; parallel across sessions) ----
 
 unlocked_reconcile_and_gate() {  # $1=trunk $2=dry_run → sets GATE_BASE/GATE_HEAD globals;
@@ -503,12 +568,13 @@ unlocked_reconcile_and_gate() {  # $1=trunk $2=dry_run → sets GATE_BASE/GATE_H
   fi
 
   if ! run_gate "$GATE_BASE..HEAD"; then
-    echo "✗ ship-land: GATE RED — not pushing." >&2
+    local code; code="$(gate_nonzero_code)"
     # Post-fix gate-REDs were invisible in land.log (only the locked phase attested), leaving
-    # flake-rate / gate-health claims without a denominator. Attest the red, then exit.
+    # flake-rate / gate-health claims without a denominator. Attest the outcome, then exit.
+    # exit 9 attests as 9, so a land.log reader can subtract non-verdicts from the red denominator.
     attest_refs "$GATE_BASE"
-    attest_land "n/a" "n/a" "clean" 6
-    exit 6
+    attest_land "n/a" "n/a" "clean" "$code"
+    exit "$code"
   fi
 
   # P0-1 gate-green producer: the gate ran GREEN on HEAD, so mark it — boundary-handoff.sh:122 fires its
@@ -572,8 +638,8 @@ main_locked() {
     fi
 
     if ! run_gate "$LAND_BASE..HEAD"; then
-      echo "✗ ship-land: GATE RED — not pushing." >&2
-      exit 6
+      local code; code="$(gate_nonzero_code)"
+      exit "$code"
     fi
     # P0-1 gate-green producer (see unlocked_reconcile_and_gate for the full rationale).
     stamp_gate_green
@@ -639,9 +705,10 @@ main_locked() {
       exit 0
     fi
     if ! run_gate "$LAND_BASE..HEAD"; then
-      echo "✗ ship-land: GATE RED on the re-reconciled range — not re-pushing. Backup ref ship/backup-* intact." >&2
-      attest_land "n/a" "n/a" "clean" 6
-      exit 6
+      local code; code="$(gate_nonzero_code "on the re-reconciled range")"
+      echo "  (backup ref ship/backup-* intact — not re-pushing)" >&2
+      attest_land "n/a" "n/a" "clean" "$code"
+      exit "$code"
     fi
     stamp_gate_green
 
