@@ -543,3 +543,75 @@ secs() { local s e; s=$(date +%s); "$@" >/dev/null 2>&1; e=$(date +%s); echo $((
   grep -q "\[for:$DEAD\] reroute me" "$CC_MAILBOX_DIR/$UUID.md"
   [ ! -f "$CC_MAILBOX_DIR/$OLDDESK.md" ]                        # nothing written to the dead desk box
 }
+
+# ── THE CALLER CONTRACT (incident 2026-07-26T04:40Z, backlog 0298535c1584) ───────────────────────────
+# The resolver-availability rewrite above made cc-notify's OWN rc honest. It cannot make the rc a
+# CALLER sees honest: `timeout` reports 124 whatever the child exits with, so the desk's
+# `timeout 90 cc-notify …` returned 124 and TOTAL SILENCE over a message that had already been
+# enqueued. Guessing "undelivered" re-sends a message that landed; guessing "delivered" loses one that
+# did not. stderr is the only channel left, so every terminal path now carries a parseable token and
+# `enqueued=` is the field that settles it.
+
+@test "CALLER CONTRACT: a caller's own bound fires mid-send → rc 124 AND stderr says the message persisted" {
+  # The incident verbatim. A hung it2 parks the send inside the (bounded) liveness probe, long past the
+  # enqueue; the caller's bound then fires. Pre-token this printed nothing at all.
+  printf '#!/bin/bash\nsleep 120\n' > "$BATS_TEST_TMPDIR/it2-hang"; chmod +x "$BATS_TEST_TMPDIR/it2-hang"
+  local GHOST="BBBBBBBB-1111-2222-3333-444444444444"      # unregistered ⇒ the it2 fallback is reached
+  IT2_BIN="$BATS_TEST_TMPDIR/it2-hang" CC_IT2_TIMEOUT_S=60 \
+    run timeout -s TERM 4 "$NOTIFY" "$GHOST" "killed mid-send"
+  [ "$status" -eq 124 ]
+  [[ "$output" == *"verdict=interrupted"* ]] || false
+  [[ "$output" == *"enqueued=1"* ]] || false
+  grep -q 'killed mid-send' "$CC_MAILBOX_DIR/$GHOST.md"   # the delivery stands; only the verdict is lost
+}
+
+@test "CALLER CONTRACT: a kill BEFORE the enqueue reports enqueued=0 — the token never over-claims" {
+  # The mirror case, and the one that makes enqueued= worth reading: an interrupted send must be able
+  # to say the message did NOT persist. Kept honest by an unwritable inbox, so the enqueue cannot
+  # succeed no matter where the signal lands.
+  export CC_MAILBOX_DIR="$BATS_TEST_TMPDIR/ro/deeper"
+  mkdir -p "$BATS_TEST_TMPDIR/ro"; chmod 500 "$BATS_TEST_TMPDIR/ro"
+  run "$NOTIFY" "$UUID" "cannot persist"
+  chmod 700 "$BATS_TEST_TMPDIR/ro"
+  [ "$status" -eq 5 ]
+  [[ "$output" == *"verdict=undelivered"* ]] || false
+  [[ "$output" == *"enqueued=0"* ]] || false
+}
+
+@test "every terminal path prints a machine-parseable verdict= token (callers must not glob prose)" {
+  run "$NOTIFY" "$UUID" "a"
+  [[ "$output" == *"cc-notify: verdict=delivered enqueued=1 uuid=$UUID "* ]] || false
+  run "$NOTIFY" --mailbox-only "$UUID" "b"
+  [[ "$output" == *"cc-notify: verdict=mailbox-only enqueued=1 uuid=$UUID reason=requested"* ]] || false
+  run "$NOTIFY" "DDDDDDDD-9999-8888-7777-666666666666" "c"
+  [[ "$output" == *"verdict=mailbox-only"* ]] || false
+  [[ "$output" == *"reason=target-not-live"* ]] || false
+  run "$NOTIFY" nope-not-a-name "d"
+  [[ "$output" == *"verdict=unresolvable"* ]] || false
+  [[ "$output" == *"reason=no-such-target"* ]] || false
+  [[ "$output" == *"enqueued=0"* ]] || false
+}
+
+@test "the token distinguishes RESOLVER-UNAVAILABLE (4) from target-UNKNOWN (3) and AMBIGUOUS (6)" {
+  # The three now-distinct exit codes must be distinguishable from stderr alone, so a caller that only
+  # captures output (or has its rc overwritten by its own bound) still gets the right answer.
+  run "$NOTIFY" nope-not-a-name "x"
+  [ "$status" -eq 3 ]; [[ "$output" == *"reason=no-such-target"* ]] || false
+  printf '{"paneUUID":"AAAAAAAA-1111-2222-3333-555555555555","name":"peer2","cwd":"/tmp","account":"next","pid":%s,"startedAt":1}' $$ \
+    > "$CC_REGISTRY_DIR/AAAAAAAA-1111-2222-3333-555555555555.json"
+  run "$NOTIFY" "AAAAAAAA-1111-2222-3333" "y"
+  [ "$status" -eq 6 ]; [[ "$output" == *"reason=ambiguous-prefix"* ]] || false
+  chmod 000 "$CC_REGISTRY_DIR"
+  run "$NOTIFY" some-name "z"
+  chmod 755 "$CC_REGISTRY_DIR"
+  [ "$status" -eq 4 ]; [[ "$output" == *"reason=resolver-unavailable"* ]] || false
+}
+
+@test "the token never contradicts the prose the existing consumers grep (both are emitted)" {
+  # cc-announce, completion-push.sh and desk-invariant.sh all match on the human sentence. The token is
+  # ADDITIVE — a build that replaced the prose with the token would break every one of them silently.
+  run "$NOTIFY" "$UUID" "both surfaces"
+  [[ "$output" == *"verdict=delivered"* ]] || false
+  [[ "$output" == *"delivered to inbox [$UUID]"* ]] || false
+  [ "$(sent_count)" -eq 0 ]
+}
