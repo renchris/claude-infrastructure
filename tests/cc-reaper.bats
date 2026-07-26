@@ -58,9 +58,12 @@ EOF
   # index silently records the wrong field the moment the real tool's argv shape changes. Capturing
   # "$*" keeps every message-content assertion below working under BOTH shapes and additionally lets a
   # test assert the addressing form itself.
+  # The ATTEMPT is recorded first, then CC_TEST_NOTIFY_RC scripts the OUTCOME — the split lets a test
+  # count re-attempts of a page the transport REFUSED. Default 0 keeps every other test unchanged.
   cat > "$D/bin/notify" <<EOF
 #!/bin/bash
 printf 'NOTIFY %s\n' "\$*" >> "$D/notify-calls"
+exit \${CC_TEST_NOTIFY_RC:-0}
 EOF
   cat > "$D/bin/ps" <<EOF
 #!/bin/bash
@@ -548,6 +551,33 @@ mkworktree() { # <main-repo> <wt-path> — a real LINKED worktree under a */.wor
   mock_classify finished-shared-review "$D/clean" 9000 no PANE-R
   run "$R" sweep --reap
   notified; grep -q 'finished-shared-review' "$D/notify-calls"
+}
+
+@test "T-P3-3 truthfulness: a REFUSED page is NOT damped — no cause marker, and it retries next sweep" {
+  # The defect class (F1): notify_desk `|| true`'d cc-notify and handle_surface wrote the per-cause
+  # damping marker + said "PAGE → desk" regardless. A page the transport REFUSED (rc 3 unresolvable
+  # role / rc 5 unwritable inbox) was therefore claimed as delivered AND damped forever.
+  set_desk; set_live 1
+  mock_classify coordination-hang "$D/clean" 9000 no PANE-H
+  CC_TEST_NOTIFY_RC=3 run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  [ -n "$(grep -c 'NOTIFY' "$D/notify-calls" 2>/dev/null)" ]
+  [ "$(grep -c 'NOTIFY' "$D/notify-calls")" -eq 1 ]        # one attempt was made…
+  run grep -q 'PAGE   ' "$D/reaper.log"                    # …but never claimed as a delivered page
+  [ "$status" -ne 0 ]
+  # the per-cause damping marker must NOT exist, else the retry is suppressed forever
+  [ "$(find "$D/pages" -name '*.cause' 2>/dev/null | wc -l | tr -d ' ')" -eq 0 ]
+  run grep -q 'UNDELIVERED' "$D/reaper.log"
+  [ "$status" -eq 0 ]
+  # next sweep, channel still refusing → RE-ATTEMPTED (2 attempts), not damped out of existence
+  CC_TEST_NOTIFY_RC=3 run "$R" sweep --reap
+  [ "$(grep -c 'NOTIFY' "$D/notify-calls")" -eq 2 ]
+  # channel recovers → delivered, marker recorded, and the next identical sweep is damped
+  run "$R" sweep --reap
+  [ "$(grep -c 'NOTIFY' "$D/notify-calls")" -eq 3 ]
+  [ "$(find "$D/pages" -name '*.cause' 2>/dev/null | wc -l | tr -d ' ')" -eq 1 ]
+  run "$R" sweep --reap
+  [ "$(grep -c 'NOTIFY' "$D/notify-calls")" -eq 3 ]        # damping intact — only the lie was removed
 }
 
 @test "T-P3-3 damping: the SAME surface cause pages ONCE across sweeps (no per-sweep composer storm)" {

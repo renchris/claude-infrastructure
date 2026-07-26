@@ -8,6 +8,7 @@
 # rather than a stream.
 #
 #   damp_should_send <target> <state-fingerprint>   exit 0 = SEND (new or TTL-expired) · 1 = SUPPRESS
+#   damp_forget      <target> <state-fingerprint>   drop the marker — the send did NOT happen
 #
 # CONTRACT — the fingerprint is the page's STATE, never its timestamp. A fingerprint that embeds a
 # clock, a counter, an elapsed-time phrase or a pid changes every sweep and silently disables damping
@@ -46,5 +47,19 @@ damp_should_send() { # <target> <state-fingerprint> → 0 send, 1 suppress
     [ "$(( now - last ))" -lt "$ttl" ] 2>/dev/null && return 1
   fi
   printf '%s\n' "$now" > "$mk" 2>/dev/null || true    # record-fail → still SEND (fail-open)
+  return 0
+}
+
+# ── damp_forget — the marker records an INTENT to send, written before the send is attempted. When ──
+# the send then FAILS (the transport refused it: an unresolvable target, an unwritable inbox), that
+# optimistic marker would burn the whole TTL suppressing the RETRY of a page nobody ever received —
+# damping a message out of existence, the one thing this lib promises never to do ("a damping layer
+# must never be the reason a page is lost"). A pager that honors its transport's return code calls
+# this on failure so the next cycle re-sends. Same fail-open posture: always rc 0, never fatal.
+damp_forget() { # <target> <state-fingerprint>
+  local target="${1:-}" fp="${2:-}" dir
+  [ -n "$target" ] && [ -n "$fp" ] || return 0
+  dir="$(_damp_dir)"
+  rm -f "$dir/$(_damp_key "$target").$(_damp_key "$fp")" 2>/dev/null || true
   return 0
 }

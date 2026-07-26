@@ -82,10 +82,21 @@ done
 # DERIVED from PAGE_TO_FILE (dirname → CC_ROLES_DIR, basename → role), so every existing seam keeps
 # working unchanged (default → cc-roles/desk; the E2E's custom path → its own dir; /dev/null → not a
 # regular file ⇒ no send). CC_PAGE_TO still forces one explicit pane.
-# Returns 0 = a send was ATTEMPTED (caller records its own damping marker) · 1 = no channel wired
-# (marker NOT recorded, so a later-wired channel still gets its first notify — the pre-existing rule).
+#
+# ── COMMS TRUTHFULNESS: the cc-notify RC IS the outcome; an ATTEMPT is not a send. ──
+# This function used to `|| true` the cc-notify call and unconditionally `return 0`, i.e. it reported
+# "sent" for an outcome it never looked at. Its callers write the `.notified` DAMPING marker on that
+# 0 — so a page cc-notify REFUSED (rc 3: the role file holds a target that resolves to nothing; rc 5:
+# the inbox is unwritable) was recorded as notified and NEVER RE-SENT. The supervisor's one
+# operator-facing act would then be silent for the life of the incident, while the IDL showed a page.
+# Now the rc decides, and a failure is LOUD (an IDL record) and RETRIED (no marker ⇒ the next sweep
+# re-sends). Enqueue — not drain — is the bar cc-notify's rc 0 actually certifies; the dead-inbox
+# case (rc 0, "mailbox only") is cc-notify's own reroute-to-desk path plus cc-inbox-guard's backstop,
+# deliberately NOT re-paged here (a per-sweep re-page of an undrainable box is the 2026-07-19 storm).
+# Returns 0 = ENQUEUED (or damping-suppressed) ⇒ caller records its marker · 1 = no channel wired ·
+# 2 = send attempted and cc-notify FAILED ⇒ marker NOT recorded, so the next sweep retries.
 send_page(){ # $1=message [$2=state-fingerprint]
-  local msg="$1" fp="${2:-}" target rdir rname
+  local msg="$1" fp="${2:-}" target rdir rname rc=0
   [ -n "$NOTIFY_BIN" ] || return 1
   # resolved only to GATE on "is a channel wired at all" — the ADDRESS used below is the role itself
   target="$PAGE_TO"; [ -n "$target" ] || target="$(head -n1 "$PAGE_TO_FILE" 2>/dev/null | tr -d '[:space:]')"
@@ -94,12 +105,19 @@ send_page(){ # $1=message [$2=state-fingerprint]
     damp_should_send "${PAGE_TO:-role:$PAGE_TO_FILE}" "$fp" || return 0   # suppressed, but still "handled"
   fi
   if [ -n "$PAGE_TO" ]; then
-    "$NOTIFY_BIN" "$PAGE_TO" "$msg" >/dev/null 2>&1 || true
+    "$NOTIFY_BIN" "$PAGE_TO" "$msg" >/dev/null 2>&1; rc=$?
   else
     rdir="$(dirname "$PAGE_TO_FILE")"; rname="$(basename "$PAGE_TO_FILE")"
-    CC_ROLES_DIR="$rdir" "$NOTIFY_BIN" --role "$rname" "$msg" >/dev/null 2>&1 || true
+    CC_ROLES_DIR="$rdir" "$NOTIFY_BIN" --role "$rname" "$msg" >/dev/null 2>&1; rc=$?
   fi
-  return 0
+  [ "$rc" = 0 ] && return 0
+  # The D7 marker was written BEFORE the attempt (an intent to send). A failed send must not burn its
+  # TTL suppressing the retry — drop it, so the next sweep genuinely re-sends rather than re-damping.
+  [ -n "$fp" ] && command -v damp_forget >/dev/null 2>&1 && damp_forget "${PAGE_TO:-role:$PAGE_TO_FILE}" "$fp"
+  # NEVER silent: the page the operator did not get is itself an incident record (S-4).
+  idl page_send_failed "\"target\":$(json_str "${PAGE_TO:-role:$(basename "$PAGE_TO_FILE")}"),\"notify_rc\":$rc,\"why\":\"cc-notify refused the page (rc $rc: 3=unresolvable target, 5=inbox unwritable) — NOT delivered; damping marker withheld so the next sweep retries\""
+  printf '%s  page SEND FAILED rc=%s target=%s\n' "$(utc)" "$rc" "${PAGE_TO:-role:$(basename "$PAGE_TO_FILE")}" >> "$SUPLOG" 2>/dev/null || true
+  return 2
 }
 
 now(){ date +%s; }
@@ -141,9 +159,9 @@ page(){ # $1=sid $2=state $3=detail
   # redirects pages with no plist edit and no daemon restart. D7 fingerprint = sid+state ONLY —
   # $3 (detail) carries volatile text that would change every sweep and silently defeat damping.
   if send_page "⚠️ SUPERVISOR PAGE — session $1 is $2: $3 (operator/delegated-live-session recovers; supervisor never auto-acts)" "page:$1:$2"; then
-    printf '%s\n' "$2" > "$nf"                             # recorded only on an attempted send — a
-  fi                                                       # later-wired channel still gets its first notify
-}
+    printf '%s\n' "$2" > "$nf"                             # recorded only on a cc-notify-CONFIRMED enqueue
+  fi                                                       # (rc 0). No channel wired (1) or a refused send
+}                                                          # (2) leaves the marker off ⇒ the next sweep retries.
 clear_page(){ rm -f "$PAGEDIR/$1.page" "$PAGEDIR/$1.notified" 2>/dev/null || true; }
 # ── void a page WITHOUT resetting the notify-damping marker (item 1c324d9fcc32). ──
 # A VOID means "alive + working, no escalation" — NOT "incident cleared, re-arm the alarm". The
@@ -168,7 +186,7 @@ page_permpend(){ # $1=sid $2=cmd $3=beacon_ts $4=age_s
   # D7 fingerprint = the EPISODE (sid + beacon ts): a new prompt is a new ts ⇒ new fingerprint ⇒ sends.
   # ${age} is excluded — it grows every sweep and would defeat damping while looking wired.
   if send_page "⛔ PERMISSION-PENDING — session $sid blocked ${age}s on a permission prompt: ${cmd} (since $(fmt_since "$ts")). Nothing in-session can answer; operator/live-session must approve or deny." "permpend:$sid:$ts"; then
-    printf '%s\n' "$ts" > "$nf"                             # recorded only on an attempted send
+    printf '%s\n' "$ts" > "$nf"                             # recorded only on a CONFIRMED enqueue (send_page rc 0)
   fi
 }
 clear_permpend(){ rm -f "$PAGEDIR/$1.permpend.notified" 2>/dev/null || true; }
