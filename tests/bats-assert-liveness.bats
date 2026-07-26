@@ -202,3 +202,44 @@ bats_passes() { bats "$1" >/dev/null 2>&1; }
     return 1
   }
 }
+
+# ── the negative-assertion family: `A && false` ───────────────────────────────────────────────
+# `A && false` means "fail if A matches", and in NON-FINAL position it ALREADY WORKS: `false` is
+# the command following the final `&&`, so errexit is NOT exempt for it. Verified directly:
+#     bash -ec 'echo hit   | grep -q hit  && false; echo TAIL'  → exit 1, TAIL unreached
+#     bash -ec 'echo clean | grep -q NOPE && false; echo TAIL'  → exit 0, TAIL reached
+# The analyzer flags it `and-absorbed` anyway — a FALSE POSITIVE, because it reads `A` as the
+# assertion being swallowed, which is true for `A && <cmd>` but inverted when the RHS is `false`.
+# That made the uniform ` || false` append actively destructive: `A && false || false` fails on
+# BOTH paths, turning a passing test permanently red (it blocked a real land, 2026-07-26).
+# The rewrite `! A || false` is equivalent for a match, correct for a non-match, and — unlike the
+# original — also correct in FINAL position, where `A && false` returns A's non-zero status.
+#
+# These fixtures pin BOTH directions. A one-directional test is what let the defect through: the
+# revival test above uses an already-FALSE condition, under which "correct" and "always fails"
+# are the same observation.
+
+@test "fixer: 'A && false' with a NON-matching condition still PASSES after the rewrite" {
+  mkblock "$D/t.bats" 'echo clean | grep -q NOPE && false' nonfinal
+  run bats_passes "$D/t.bats"
+  [ "$status" -eq 0 ]                                                    # correct BEFORE
+  run python3 "$FIX" "$D/t.bats"
+  [ "$status" -eq 0 ]
+  grep -qF '! echo clean | grep -q NOPE || false' "$D/t.bats"            # negation, not an append
+  [ "$(grep -cF '&& false || false' "$D/t.bats")" -eq 0 ]                # the destructive form
+  run bats_passes "$D/t.bats"
+  [ "$status" -eq 0 ]                                                    # STILL correct AFTER
+  [ "$(findings "$D/t.bats")" -eq 0 ]
+}
+
+@test "fixer: 'A && false' with a MATCHING condition still FAILS after the rewrite" {
+  mkblock "$D/t.bats" 'echo hit | grep -q hit && false' nonfinal
+  run bats_passes "$D/t.bats"
+  [ "$status" -ne 0 ]                                                    # already live BEFORE
+  run python3 "$FIX" "$D/t.bats"
+  [ "$status" -eq 0 ]
+  grep -qF '! echo hit | grep -q hit || false' "$D/t.bats"
+  run bats_passes "$D/t.bats"
+  [ "$status" -ne 0 ]                                                    # still fails AFTER
+  [ "$(findings "$D/t.bats")" -eq 0 ]
+}
