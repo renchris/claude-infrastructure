@@ -48,15 +48,22 @@ mk_pid_alive() { printf '%s\n' "$$"   > "$WD/$1.pid"; }   # pid file present, pi
 archived()     { ls -d "$TEAMS/_archive/$1-"* >/dev/null 2>&1; }  # 0 iff an archive entry exists
 
 # ── (i) UNKNOWN-liveness: no watchdog pid file ──────────────────────────────────────────────────────
-@test "unknown-liveness: a team with NO watchdog pid file is surfaced, NOT archived" {
+@test "unknown-liveness: a team with NO watchdog pid file abstains (bounded), NOT archived" {
   mk_team t-nopid '{"leadSessionId":"sid-nopid","members":[{"name":"team-lead","cwd":"/somewhere"}]}'
   # (deliberately no pid file ⇒ UNKNOWN, the common in-place-/handoff shape)
   run bash "$REAPER"
   [ "$status" -eq 0 ]
   [ -d "$TEAMS/t-nopid" ]                                                    # still live on disk
+  # COMPOSED resolution: this session's contract change, kept under 575a55ea's `|| false`
+  # dead-assertion discipline (a non-final `!` is errexit-EXEMPT and therefore cannot fail).
   ! archived t-nopid || false                                               # never moved to _archive
-  grep -q "unknown-liveness t-nopid (no watchdog pid file) — surfacing" "$LOG"
-  grep -q "t-nopid" "$NOTIFY_LOG"                                           # operator was paged
+  grep -q "unknown-liveness t-nopid" "$LOG"                                 # still surfaced in the log
+  grep -q "abstaining" "$LOG"                                               # and explicitly bounded
+  # CONTRACT CHANGE: the operator is NOT paged on a fresh UNKNOWN. The old behaviour paged every
+  # sweep forever (measured: 77 identical pages for one team, 11 for another), which is the
+  # permanent manual step this bounded-abstain replaces. A page now happens at most ONCE, and only
+  # for an UNRESOLVED probe past its ceiling — see the leg-(c) suite.
+  ! grep -q "t-nopid" "$NOTIFY_LOG" || false
 }
 
 @test "unknown-liveness: an EMPTY watchdog pid file is also UNKNOWN (not dead)" {
