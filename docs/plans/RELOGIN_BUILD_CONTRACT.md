@@ -11,6 +11,51 @@ scope: Phases 0-4 CODE ONLY. No live sign-in, no account mutation, no launchd jo
 Lead freezes every cross-teammate interface HERE so no teammate blocks on another's
 internals. **If reality contradicts this doc, STOP and message lead — do not improvise.**
 
+## LANDING STATUS (read this first if you are picking this up)
+
+**Build: COMPLETE. Landing: BLOCKED on fleet conditions, not on this code.**
+
+State as of 2026-07-25 ~21:45: 19 commits on `feat/relogin-build` in
+`/private/tmp/wt-relogin-build`, tree clean, all five teammates delivered/reviewed/merged
+and shut down. **Nothing is on `origin/main` yet** — verify with
+`git cat-file -e origin/main:bin/cc-relogin`.
+
+**To finish — one command, after the box is calm:**
+
+```bash
+cd /private/tmp/wt-relogin-build
+git fetch origin main && git rebase origin/main
+scripts/ship-land.sh            # ONCE. Do not retry-spam.
+```
+
+Then **verify by CONTENT, never by count**: every changed path present on trunk
+(`git ls-tree`) *and* `git diff <your-sha> origin/main -- <paths>` empty.
+
+**Landing history — three attempts, three different causes (all diagnosed):**
+
+| # | Result | Cause |
+|---|---|---|
+| 1 | `SHIP_EXIT=6` | **Real gate-red in our own file** — a hardcoded `skipped=4` vs a sibling's newly-landed 6th default. Fixed `295851a`, sabotage-proven. The CAS re-gate caught a composed-tree defect neither branch had alone. |
+| 2 | `SHIP_EXIT=6` | **458 ok, 0 fail** — `bats` SIGKILLed (`Killed: 9`) under load 47. Not OOM (67% mem free), not proc-cap (9%), no repo `pkill`. Cause unattributed; saturation is the fleet-wide explanation. |
+| 3 | stopped by us | Fleet coordinator called a fleet-wide landing storm and asked all sessions to stand down. |
+
+**Triage rule earned here — an exit 6 has (at least) three distinct causes.** Grep the log
+before attributing: `'✗ gate: bats RED'` **with** `^not ok` lines = a real test failure;
+the same message with **zero** `^not ok` plus `Killed:` = an external kill under load, not
+code; a land-lock failure never presents as "bats RED" at all.
+
+**Two caveats to carry:**
+
+- `d158011` (fork-retry on the `cc-authbrowser` spawns) is committed but **not
+  independently verified** — the box was too saturated to trust a local run. The ship gate
+  is its verification; if it reddens, fix it there.
+- `tests/cc-authbrowser.bats` binds **frozen, un-overridable ports 9341-9344**, so it is
+  structurally **non-concurrent**: never run it beside itself, and after killing a run
+  reap the `PPID 1` orphan stubs still holding the port
+  (`ps -eo pid,ppid,command | awk '$2==1' | grep foreign-listener`). A leaked listener makes
+  the *next* run fail on assertions that look unrelated to it (`argv.log: No such file`),
+  which reads as "my newest edit broke it".
+
 ## Phase 0 — Agent Team orchestration
 
 Five worktree-isolated teammates. Wave 1 = all five (see the de-block note). Single
