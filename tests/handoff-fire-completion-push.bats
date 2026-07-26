@@ -22,6 +22,16 @@ setup() {
     printf 'exit "${STUB_RC:-0}"\n'; } > "$STUB"
   chmod +x "$STUB"
   cd "$WORK"   # self-close operates in $PWD — a non-git dir skips the dirty-tree guard (the worktree is dirty during dev)
+
+  # ORIGIN GATE (2026-07-26): self-close is available ONLY to a session FIRED BY an originator.
+  # Completion-push IS the fired-peer path by definition — a peer finishing its assignment and
+  # pushing completion back to whoever fired it — so stamp every pane id this suite drives.
+  # Without this the origin gate refuses first (exit 2) and no push side effect is ever reached.
+  export CC_FIRED_DIR="$BATS_TEST_TMPDIR/cc-fired"; mkdir -p "$CC_FIRED_DIR"
+  for _p in fake:AAAA-1111 fake:BBBB-2222 fake:CCCC-3333 fake:DDDD-4444 fake:EEEE-5555 fake:FFFF-5150; do
+    printf '{"paneUUID":"%s","cwd":"/tmp","firedBy":"ORIGINATOR","firedAt":"2026-07-26T18:00:00Z","selfRetire":true}\n' \
+      "$_p" > "$CC_FIRED_DIR/$_p.json"
+  done
 }
 
 @test "--terminal --dry-run → shows the completion-push PLAN, fires nothing (stub not called)" {

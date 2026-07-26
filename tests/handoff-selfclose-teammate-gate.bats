@@ -54,6 +54,15 @@ SH
   printf '{\n    "paneUUID": "%s",\n    "session_id": "%s"\n}\n' "$PANE" "$CCSID" \
     > "$CC_REGISTRY_DIR/$PANE.json"
 
+  # ORIGIN GATE (2026-07-26): only a session FIRED BY an originator may self-close. This suite
+  # exercises the LIVE-TEAMMATE gate on a peer that is legitimately entitled to retire, so stamp
+  # $PANE as a fired peer — otherwise the origin gate refuses first and masks what these tests
+  # assert. (An unstamped LEAD is exactly what the origin gate is meant to stop; that is covered
+  # in tests/handoff-selfclose.bats.)
+  export CC_FIRED_DIR="$BATS_TEST_TMPDIR/cc-fired"; mkdir -p "$CC_FIRED_DIR"
+  printf '{"paneUUID":"%s","cwd":"/tmp","firedBy":"ORIGINATOR","firedAt":"2026-07-26T18:00:00Z","selfRetire":true}\n' \
+    "$PANE" > "$CC_FIRED_DIR/$PANE.json"
+
   # sed-extract the two helpers so the units are testable without running the whole script.
   HELPERS="$BATS_TEST_TMPDIR/helpers.sh"
   sed -n '/^cc_sid_for_pane() {/,/^}/p;/^live_teammates_of() {/,/^}/p' "$HF" > "$HELPERS"

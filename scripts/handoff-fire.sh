@@ -1265,7 +1265,7 @@ fi
 # self-close — arm the detached watcher that retires this session once the calling turn ends.
 if [ "${1:-}" = "self-close" ]; then
   shift
-  SC_SID="" SC_ALLOW_DIRTY=0 SC_DRY=0 SC_SUCCESSOR="" SC_TERMINAL=0 SC_NO_NOTIFY=0 SC_DIRTY_OWNER="" SC_ASSUME_ENGAGED=0 SC_ALLOW_LIVE_TM=0
+  SC_SID="" SC_ALLOW_DIRTY=0 SC_DRY=0 SC_SUCCESSOR="" SC_TERMINAL=0 SC_NO_NOTIFY=0 SC_DIRTY_OWNER="" SC_ASSUME_ENGAGED=0 SC_ALLOW_LIVE_TM=0 SC_ALLOW_ORIGIN_CLOSE=0
   while [ $# -gt 0 ]; do case "$1" in
     --session-id)  SC_SID="${2:?--session-id needs a value}"; shift 2 ;;
     --successor)   SC_SUCCESSOR="${2:?--successor needs a pane uuid}"; shift 2 ;;
@@ -1275,6 +1275,7 @@ if [ "${1:-}" = "self-close" ]; then
     --dirty-owner) SC_DIRTY_OWNER="${2:?--dirty-owner needs a value (successor)}"; shift 2 ;;
     --allow-dirty) SC_ALLOW_DIRTY=1; shift ;;
     --allow-live-teammates) SC_ALLOW_LIVE_TM=1; shift ;;
+    --allow-origin-close) SC_ALLOW_ORIGIN_CLOSE=1; shift ;;
     --dry-run)     SC_DRY=1; shift ;;
     *) echo "!! unknown self-close arg: $1" >&2; exit 1 ;;
   esac; done
@@ -1304,6 +1305,40 @@ USAGE
   fi
   if [ "$SC_SUCCESSOR" = "$SC_SID" ]; then
     echo "!! self-close: successor must be a DIFFERENT pane than the one closing (use --recycle for in-place continuation)" >&2; exit 2
+  fi
+  # ---- ORIGIN GATE (blocking) — an ORIGIN session never retires itself ---------------------------
+  # INVARIANT (operator, 2026-07-26): self-close belongs ONLY to a session that has an ORIGINATOR to
+  # hand back to. A fired peer finishes → pings its originator → self-closes. An ORIGIN session — the
+  # operator's own main session, or an Agent-Team LEAD — has nobody to return to, so "nothing
+  # continues" is not an end-of-line it may declare; it is a session that must simply STAY UP.
+  #
+  # WHY THIS GATE EXISTS (the asymmetry it closes): cc-classify/cc-reaper ALREADY enforce this on the
+  # EXTERNAL path — a pane with no tenancy-valid fired-peer stamp classifies `finished-operator` and is
+  # "surface for confirm-close, NEVER auto-reap" (bin/cc-classify:596). So an origin session cannot be
+  # reaped from outside — yet until now it could still KILL ITSELF via `--terminal`, walking straight
+  # through the protection built for it. The reaper had the rule; the self-killer did not.
+  # Observed cost: a 30-agent Fable-5+Opus-5 workflow carrier called `self-close --terminal` after
+  # landing 4 commits; to the operator the session simply vanished and 3M tokens looked lost.
+  #
+  # ORACLE: the fired-peer stamp handoff-fire itself writes at fire time (mark_fired_peer, :523) —
+  # $FIRED_DIR/<paneUUID>.json with selfRetire:true. Present ⇒ this pane was fired as a peer and MAY
+  # retire. Absent ⇒ operator-launched origin ⇒ REFUSE. Fail-SAFE by construction: an unreadable or
+  # missing stamp refuses the close, and refusing to close never loses work while closing wrongly does.
+  # The LIVE-TEAMMATE gate below already blocks a lead mid-flight; this blocks it when DONE too.
+  SC_FIRED_STAMP="${CC_FIRED_DIR:-$HOME/.claude/cc-fired}/$SC_SID.json"
+  if [ "${SC_ALLOW_ORIGIN_CLOSE:-0}" != 1 ] && [ ! -s "$SC_FIRED_STAMP" ]; then
+    cat >&2 <<USAGE
+!! self-close REFUSED: this is an ORIGIN session, not a fired peer.
+!!   pane $SC_SID has no fired-peer stamp at:
+!!     $SC_FIRED_STAMP
+!!   Only a session that was FIRED BY an originator may retire itself — it pings that
+!!   originator, then closes. An operator's main session and an Agent-Team LEAD have no
+!!   originator to hand back to, so they NEVER self-close: not in progress, not when done.
+!!   A finished origin session STAYS UP and reports; the operator closes it.
+!! If work remains, hand it forward instead:  handoff-fire.sh --recycle   (continue in place)
+!! Override (deliberate, loud, almost never right):  --allow-origin-close
+USAGE
+    exit 2
   fi
   # ---- LIVE-TEAMMATE GATE (blocking) ------------------------------------------------------------
   # A lead that retires while its Agent-Team assignees are STILL RUNNING orphans them: the assignees
