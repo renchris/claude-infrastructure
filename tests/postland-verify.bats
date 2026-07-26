@@ -28,6 +28,15 @@
 #   C11 idl     EVERY invocation appends a line to $CC_IDL with
 #               check:"postland-verify", decision:"fired"|"abstained"
 #   C12 requeue after a run it re-resolves origin/main and loops once if it moved
+#   C13 cut     a non-zero run emitting ZERO `not ok` named no failing test => it was
+#               TRUNCATED (killed/starved), not red. It stamps verdict "cut" for
+#               diagnosability, but a cut is a DIAGNOSTIC, never a verdict: C5's
+#               abstain fires only on green|red, so a cut tree is RE-RUN next sweep
+#               (abstaining on it strands the tree unverified forever and keeps
+#               is-green false, which makes ship-land call the net INERT). Bounded:
+#               after $CC_POSTLAND_CUT_MAX consecutive cuts on one tree an honest
+#               postland-cut-<tree12>.page that names no test + a cool-off; any real
+#               verdict clears both the streak and the page.
 #
 # ISOLATION: scratch bare origin + clone under $BATS_TEST_TMPDIR, fresh $HOME, and
 # argv-recording stubs for cc-backlog/osascript/cc-notify on PATH. No real repo, no
@@ -84,6 +93,17 @@ origin_tree() { git -C "$R" rev-parse "origin/main^{tree}"; }
 stamps_n()    { find "$CC_POSTLAND_DIR/stamps" -name '*.json' 2>/dev/null | wc -l | tr -d ' '; }
 idl_last()    { tail -n1 "$CC_IDL" | jq -r "$1"; }
 pages_n()     { find "$CC_PAGES_DIR" -name 'postland-red-*.page' 2>/dev/null | wc -l | tr -d ' '; }
+cut_pages_n() { find "$CC_PAGES_DIR" -name 'postland-cut-*.page' 2>/dev/null | wc -l | tr -d ' '; }
+
+# A `bats` stand-in on $CC_POSTLAND_BATS reproducing the fingerprint of a REAL truncation — the
+# peer `pkill -9 -f bats-core/bats` this clause exists for: a plan promising N results, fewer
+# emitted, ZERO `not ok`, exit 137 (128+SIGKILL). Stubbing the PRODUCER, not the symptom.
+stub_bats() {   # $1 = name, $2 = body after the --version guard; echoes the stub's path
+  printf '#!/bin/bash\n[ "$1" = "--version" ] && { echo "Bats 1.13.0"; exit 0; }\n%s\n' "$2" \
+    > "$STUB/bats-$1"
+  chmod +x "$STUB/bats-$1"
+  printf '%s' "$STUB/bats-$1"
+}
 
 # a tests/ helper whose exit code is driven by an out-of-worktree state file, so it
 # survives the SUT's fresh checkout and its per-file retry ladder (C8)
@@ -324,4 +344,67 @@ add_stateful_test() {   # $1 = basename, $2 = body of the helper script
   s="$CC_POSTLAND_DIR/stamps/$tree.json"
   [ -f "$s" ]
   run jq -r '.verdict' "$s"; [ "$output" = "red" ]
+}
+
+# ── C13 a CUT stamp is a DIAGNOSTIC, never a verdict ────────────────────────────
+# c605a2e correctly reclassified signal-death as CUT rather than RED, and stamps
+# `cut` for diagnosability. But C5's abstain keyed on stamp EXISTENCE, so the very
+# next sweep abstained and the tree was NEVER re-verified — is-green stayed false,
+# which drives ship-land to call the whole net INERT and degrade gates scoped→FULL.
+# ASSERTION FORM: bats runs under errexit, where a non-final `[[ ]]`/`!`/`A && B` is
+# errexit-EXEMPT and therefore DEAD. Everything below is a live `[ ]` or `run` + `[ ]`.
+
+@test "C13: a cut tree is RETRIED on the next sweep, never abstained as already-stamped" {
+  b="$(stub_bats killed "printf '1..3\nok 1 a\n'; exit 137")"
+  export CC_POSTLAND_BATS="$b"
+  tree="$(origin_tree)"
+  run bash "$SUT" --run-if-needed                        # sweep 1 → the cut
+  [ "$status" -eq 0 ]
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ "$output" = "cut" ]                                  # trunk's diagnostic stamp is kept
+  run bash "$SUT" --run-if-needed                        # sweep 2 → MUST re-run
+  [ "$status" -eq 0 ]
+  [ "$(idl_last '.reason')" != "already-stamped" ]       # THE regression: it stranded here
+  [ "$(pages_n)" = "0" ]                                 # a cut is still never a RED page
+}
+
+@test "C13: a REAL verdict (green/red) still abstains — the fix must not disable C5" {
+  run bash "$SUT" --run-if-needed                        # real bats → green
+  [ "$status" -eq 0 ]
+  before="$(stamps_n)"
+  run bash "$SUT" --run-if-needed
+  [ "$status" -eq 0 ]
+  [ "$(stamps_n)" = "$before" ]                          # C5 intact: no second verification
+  [ "$(idl_last '.reason')" = "already-stamped" ]
+}
+
+@test "C13: after CUT_MAX consecutive cuts an HONEST page is written, then the box cools off" {
+  b="$(stub_bats killed "printf '1..3\nok 1 a\n'; exit 137")"
+  export CC_POSTLAND_BATS="$b" CC_POSTLAND_CUT_MAX=1
+  run bash "$SUT" --run-if-needed
+  [ "$(cut_pages_n)" = "1" ]
+  p="$(find "$CC_PAGES_DIR" -name 'postland-cut-*.page' | head -1)"
+  head -1 "$p" | grep -qE '^[0-9]+$'                     # page protocol: line 1 is an epoch
+  grep -q 'NOT a test failure' "$p"
+  run grep -c '^failing:' "$p"
+  [ "$output" = "0" ]                                    # it never claims a named failing test
+  run bash "$SUT" --run-if-needed                        # a hostile box is not re-fed every tick
+  [ "$status" -eq 0 ]
+  [ "$(idl_last '.reason')" = "cut-cooloff" ]
+}
+
+@test "C13: a green after cuts clears the streak and the standing cut page" {
+  b="$(stub_bats killed "printf '1..3\nok 1 a\n'; exit 137")"
+  # CUT_COOLOFF=0 so the streak still PAGES at CUT_MAX but the next sweep is not deferred —
+  # this test is about a green superseding a cut, not about the cool-off (covered above).
+  export CC_POSTLAND_CUT_MAX=1 CC_POSTLAND_CUT_COOLOFF=0
+  CC_POSTLAND_BATS="$b" run bash "$SUT" --run-if-needed
+  [ "$(cut_pages_n)" = "1" ]
+  run bash "$SUT" --run-if-needed                        # real bats now → a genuine green
+  [ "$status" -eq 0 ]
+  tree="$(origin_tree)"
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ "$output" = "green" ]                                # the cut stamp is superseded
+  [ "$(cut_pages_n)" = "0" ]                             # standing cut page cleared
+  [ ! -f "$CC_POSTLAND_DIR/cuts" ]                       # streak reset
 }

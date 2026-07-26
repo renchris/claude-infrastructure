@@ -38,6 +38,9 @@ LOG="$STATE/runner.log"
 FLAKES="$STATE/flakes.jsonl"
 LASTGREEN="$STATE/last-green"
 QUEUE="$STATE/queue"
+CUTS="$STATE/cuts"                                     # "<tree> <consecutive-n> <epoch>"
+CUT_MAX="${CC_POSTLAND_CUT_MAX:-3}"                    # consecutive cuts on one tree before paging
+CUT_COOLOFF="${CC_POSTLAND_CUT_COOLOFF:-1800}"         # ...and before the box is fed another suite
 
 FAILING=(); SYNTAX_BAD=(); RETRIES=0; NFLAKE=0; FAILTEST=""; RUN_TMP=""; IDL_DONE=0; ENV_FP='{}'; CUT=0
 
@@ -231,7 +234,7 @@ red_actions() { # <sha> <file> — bisect, page, backlog, notify. Every side cha
   return 0
 }
 run_target() { # <sha> — the whole check-set + verdict for ONE sha
-  local sha="$1" tree tap rc adv t0 run_s
+  local sha="$1" tree tap rc adv t0 run_s n
   CUR_SHA="$sha"
   tree="$(tree_of "$sha")"
   [ -n "$tree" ] || { log "cannot resolve tree for $sha"; return 1; }
@@ -252,16 +255,20 @@ run_target() { # <sha> — the whole check-set + verdict for ONE sha
     # so C5's abstain does not fire and the NEXT sweep retries it. No bisect, no page — you
     # cannot bisect a machine event, and paging on one trains the operator to ignore pages.
     write_stamp "$tree" "$sha" cut "$run_s" "$RETRIES" "$adv"
-    log "CUT $(sha12 "$sha") tree=$(sha12 "$tree") run_s=$run_s retries=$RETRIES sc_adv=$adv (zero not-ok in a non-zero run - truncated; will retry)"
+    n="$(cut_bump "$tree")"
+    [ "$n" -ge "$CUT_MAX" ] && cut_page "$sha" "$tree" "$n"
+    log "CUT $(sha12 "$sha") tree=$(sha12 "$tree") run_s=$run_s retries=$RETRIES sc_adv=$adv consecutive=$n (zero not-ok in a non-zero run - truncated; will retry)"
     echo "postland-verify: CUT $(sha12 "$sha") (${run_s}s) - run truncated, not red; retrying next sweep"
   elif [ "${#FAILING[@]}" -eq 0 ]; then
     write_stamp "$tree" "$sha" green "$run_s" "$RETRIES" "$adv"
     printf '%s\n' "$sha" > "$LASTGREEN"
-    rm -f "$PAGES"/postland-red-*.page 2>/dev/null || true   # now-passing state clears standing pages
+    cut_clear                                   # a verdict was reached: the cut streak is over
+    rm -f "$PAGES"/postland-red-*.page "$PAGES"/postland-cut-*.page 2>/dev/null || true  # now-passing state clears standing pages
     log "GREEN $(sha12 "$sha") tree=$(sha12 "$tree") run_s=$run_s retries=$RETRIES flakes=$NFLAKE sc_adv=$adv"
     echo "postland-verify: GREEN $(sha12 "$sha") (${run_s}s, flakes=$NFLAKE)"
   else
     write_stamp "$tree" "$sha" red "$run_s" "$RETRIES" "$adv" "${FAILING[@]}"
+    cut_clear                                   # a verdict was reached: the cut streak is over
     log "RED $(sha12 "$sha") failing=${FAILING[*]} run_s=$run_s retries=$RETRIES flakes=$NFLAKE sc_adv=$adv"
     red_actions "$sha" "${FAILING[0]}"
     echo "postland-verify: RED $(sha12 "$sha") — ${FAILING[*]}"
@@ -277,7 +284,10 @@ do_run_if_needed() {
   target="$(git -C "$REPO" rev-parse origin/main 2>/dev/null || true)"
   [ -n "$target" ] || { idl abstained no-origin-main; return 0; }
   tree="$(tree_of "$target")"
-  if [ -n "$tree" ] && [ -f "$STAMPS/$tree.json" ]; then idl abstained already-stamped "$(sha12 "$target")"; return 0; fi
+  if [ -n "$tree" ] && stamp_is_verdict "$tree"; then idl abstained already-stamped "$(sha12 "$target")"; return 0; fi
+  # A tree the box has cut CUT_MAX times running is hostile: re-running a full suite on it every
+  # tick amplifies the contention doing the cutting. Cool off (already paged), then resume retrying.
+  if [ -n "$tree" ] && in_cut_cooloff "$tree"; then idl abstained cut-cooloff "$(sha12 "$target")"; return 0; fi
   try_acquire || { idl abstained lock-held "$(sha12 "$target")"; return 0; }   # 2nd instance: quiet 0
   trap release_lock EXIT
   while [ "$loops" -lt 2 ]; do                                # single-slot self-requeue, never a queue
@@ -312,6 +322,43 @@ verb_bisect() { # <file> <good> <bad>
   c="$(do_bisect "$1" "$2" "$3")"; idl fired "bisect:$1"
   [ -n "$c" ] || { echo "postland-verify: bisect undecidable" >&2; return 1; }
   echo "$c"
+}
+# ════ a CUT stamp is a DIAGNOSTIC, never a verdict ════════════════════════════════════════════════
+# `cut` records that a run was truncated (killed / starved) — no test ever said no, so nothing was
+# proven. Abstaining on it strands the tree UNVERIFIED FOREVER: the stamp file exists, so an
+# existence-keyed abstain fires on every later sweep and the suite never runs again. That also keeps
+# is-green false, which drives ship-land to declare the whole post-land net INERT and degrade every
+# gate scoped→FULL — more full suites, more load, more cuts. Only a real verdict earns an abstain.
+stamp_is_verdict() { # <tree> — 0 when the tree carries a REAL verdict (green|red), 1 for cut/absent
+  grep -qE '"verdict":"(green|red)"' "$STAMPS/$1.json" 2>/dev/null
+}
+cut_bump() { # <tree> → the new CONSECUTIVE cut count for this tree
+  local pt pn n
+  read -r pt pn _ < "$CUTS" 2>/dev/null || true
+  if [ "${pt:-}" = "$1" ]; then n=$(( ${pn:-0} + 1 )); else n=1; fi
+  printf '%s %s %s\n' "$1" "$n" "$(now_epoch)" > "$CUTS" 2>/dev/null || true
+  printf '%s' "$n"
+}
+cut_clear() { rm -f "$CUTS" 2>/dev/null || true; }
+in_cut_cooloff() { # <tree> — 0 = still cooling off
+  local pt pn pts
+  read -r pt pn pts < "$CUTS" 2>/dev/null || return 1
+  [ "${pt:-}" = "$1" ] || return 1
+  [ "${pn:-0}" -ge "$CUT_MAX" ] || return 1
+  [ "$(( $(now_epoch) - ${pts:-0} ))" -lt "$CUT_COOLOFF" ]
+}
+cut_page() { # <sha> <tree> <n> — an HONEST page: names no test, asks for no bisect
+  local pf t12
+  t12="$(sha12 "$2")"; pf="$PAGES/postland-cut-$t12.page"
+  { now_epoch
+    printf 'post-land CUT (no verdict) @ %s\n' "$(now_iso)"
+    printf 'target:  %s (tree %s)\n' "$(sha12 "$1")" "$t12"
+    printf 'cut:     %s consecutive runs — the suite emitted ZERO "not ok" lines, so NO test failed.\n' "$3"
+    printf '         Each run was TRUNCATED before reaching a verdict (peer pkill / OOM / load).\n'
+    printf 'NOT a test failure — do not bisect. Re-run on a quiet box:\n'
+    printf 're-run:  cd %s && git checkout --detach %s && bats tests/\n' "$WORKTREE" "$(sha12 "$1")"
+    printf 'env:     %s\n' "$ENV_FP"
+  } > "$pf" 2>/dev/null || true
 }
 verb_is_green() { # <sha> — exit 0 green-stamped, 1 not
   local tree sha
