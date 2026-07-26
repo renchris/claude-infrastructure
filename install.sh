@@ -267,6 +267,16 @@ if $IS_GLOBAL; then
   for plist in "$REPO_DIR"/launchd/*.plist; do
     [[ -f "$plist" ]] || continue
     name=$(basename "$plist")
+    # STAGED plists are NOT installed at all — not copied, not bootstrapped. A plist that
+    # declares itself C10-operator-activation must not be activated by running the installer,
+    # and copying alone is NOT harmless: launchd bootstraps everything in ~/Library/LaunchAgents
+    # at the next login, so the copy IS the activation. The marker lives in the plist itself so
+    # this can never drift from the file it governs (first case: com.claude.relogin, which fires
+    # credential re-auth — the one thing that must never start because someone ran install.sh).
+    if grep -q 'STAGED, NOT LOADED' "$plist"; then
+      echo "  ⏸ $name — STAGED, not installed (C10 operator activation; see docs/runbooks/)"
+      continue
+    fi
     copy_file "$plist" "$HOME/Library/LaunchAgents/$name"
     if ! $DRY_RUN; then
       label="${name%.plist}"
