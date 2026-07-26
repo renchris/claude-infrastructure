@@ -20,6 +20,18 @@ setup() {
   export CC_INBOX_GUARD_PUSH_BIN="$BATS_TEST_TMPDIR/push"
   { printf '#!/bin/bash\n'; printf 'printf "%%s\\n" "$*" >> "%s"\nexit 0\n' "$PUSHLOG"; } > "$CC_INBOX_GUARD_PUSH_BIN"
   chmod +x "$CC_INBOX_GUARD_PUSH_BIN"
+  # DEFAULT it2 stub. The header above claims this suite is isolated from it2, but setup() installed
+  # NEITHER override, so every test that did not set its own stub fell through to the REAL
+  # ~/.claude/bin/it2 — which blocks forever against a saturated iTerm2. That hung the suite (1..19
+  # printed, 0 completed) and, because it is in tests/, every FULL-scope landing gate on this box.
+  # `[]` is a valid but EMPTY pane list, so _LIVE_STATE=ok and the synthetic U is simply not live —
+  # exactly what the real binary yielded for a fake UUID, now deterministic and instant. Tests that
+  # need other liveness behaviour override CC_INBOX_GUARD_IT2 / CC_INBOX_GUARD_LIVE_UUIDS after
+  # setup(), as several already do; a later export wins, so this default never masks them.
+  export CC_INBOX_GUARD_IT2="$BATS_TEST_TMPDIR/it2-default"
+  { printf '#!/bin/bash\n'; printf 'echo "[]"\n'; } > "$CC_INBOX_GUARD_IT2"
+  chmod +x "$CC_INBOX_GUARD_IT2"
+
   # a fixed "now" and a helper to stamp a message N seconds in the past
   NOW=1784544000   # 2026-07-20T00:00:00Z-ish, fixed
   export CC_INBOX_GUARD_NOW="$NOW"
