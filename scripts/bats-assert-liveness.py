@@ -1,0 +1,436 @@
+#!/usr/bin/env python3
+"""bats-assert-liveness.py — block-position analyzer for DEAD bats assertions.
+
+An assertion in a bats test body is DEAD when its failure cannot reach the test's
+exit status. bats runs each body under `set -eET`, so *most* failing commands abort
+the test — but bash exempts three construct families from `errexit`, and for those
+the only thing that still fails the test is being the body's FINAL command:
+
+  1. `[[ ... ]]`   bash conditional keyword   (POSIX `test`/`[ ]` is NOT exempt)
+  2. `(( ... ))`   arithmetic evaluation
+  3. `! cmd`       any command whose status is inverted with `!`
+
+Non-final occurrences of these are silently no-ops: the assertion is evaluated, its
+false result is discarded, and the test passes. shellcheck does NOT flag classes 1
+and 2 at all (SC2251 covers only some `!` uses), which is why this analyzer exists:
+deadness is a function of BLOCK POSITION, not of the line in isolation.
+
+Why `[ ]` survives where `[[ ]]` dies: `[` is a builtin — an ordinary simple command,
+fully subject to errexit. `[[` and `((` are shell keywords/compound commands, which
+bash 3.2 (the macOS system bash this suite runs under) exempts. See the empirical
+grid in docs/research/BATS_DEAD_ASSERTIONS_2026-07-25.md.
+
+Finality is judged CONSERVATIVELY, in the safe direction: an occurrence is treated as
+live only when it is provably the last meaningful statement at the top level of its
+`@test` body. Anything nested inside `if`/`while`/`for`/`case`/`{ }` is reported, since
+whether it is reached — and whether its status survives — is data-dependent. A false
+report costs one mechanical edit; a false all-clear is absorbed forever.
+
+Occurrences in *condition* position (`if [[ ... ]]`, `while ! cmd`, and non-final
+elements of `&&`/`||` lists) are NOT assertions and are never reported.
+
+Usage:
+  bats-assert-liveness.py [--format text|tsv|count] [--summary] [PATH ...]
+
+PATH defaults to tests/*.bats. Exit status: 0 = no dead assertions, 1 = findings,
+2 = usage/IO error. Intended to run in the commit gate, so 1 is a hard failure.
+"""
+
+from __future__ import annotations
+
+import argparse
+import glob
+import os
+import re
+import sys
+
+# ---------------------------------------------------------------- construct classes
+
+CLASS_COND = "cond-keyword"  # [[ ... ]]
+CLASS_ARITH = "arith"  # (( ... ))
+CLASS_NEG = "negation"  # ! cmd
+CLASS_AND_ABSORBED = (
+    "and-absorbed"  # assertion && ...  (non-last element of AND-OR list)
+)
+
+# Commands whose failure in an `A && B` left position reads as an intended assertion, as
+# opposed to setup like `mkdir -p x && cd x` whose absorption is not a test defect.
+RE_ASSERTIONISH = re.compile(r"^(\[\[?|test|grep|diff|cmp|!)(\s|$)")
+
+# A leading `!` as a whole-command negation: `! foo`, `!  [ x ]`, `! [[ x ]]`.
+# Requires whitespace after `!` so `!=` and history-ish `!$` never match.
+RE_NEG = re.compile(r"^!\s+\S")
+RE_COND_OPEN = re.compile(r"(?<![\[\w$])\[\[(?=\s|$)")
+RE_ARITH_OPEN = re.compile(r"(?<![\w$])\(\((?=[\s\w$!+-])")
+
+# Statement keywords that open a nesting level.
+RE_OPENER = re.compile(r"^(if|while|until|for|case)\b")
+# Words that close / continue a nesting level; never assertions themselves.
+RE_CLOSER = re.compile(r"^(fi|done|esac|else|elif\b|;;|\}|\))\s*$")
+# Condition-position prefixes: the construct's status is consumed by the keyword.
+RE_COND_CTX = re.compile(r"^(if|elif|while|until)\s+")
+# A `for` header is never an assertion — notably `for ((i=0; i<n; i++)); do`, whose `((`
+# must not be read as an arithmetic assertion.
+RE_FOR_HDR = re.compile(r"^for\b")
+
+RE_TEST_OPEN = re.compile(r"^@test\b")
+
+
+def strip_comment(line: str) -> str:
+    """Remove a trailing `#` comment, respecting quotes. Cheap but adequate here."""
+    out = []
+    quote = None
+    i = 0
+    while i < len(line):
+        c = line[i]
+        if quote:
+            if c == "\\" and quote == '"':
+                out.append(c)
+                i += 1
+                if i < len(line):
+                    out.append(line[i])
+                    i += 1
+                continue
+            if c == quote:
+                quote = None
+            out.append(c)
+        else:
+            if c in "'\"":
+                quote = c
+                out.append(c)
+            elif c == "#":
+                # `#` starts a comment only at a word boundary.
+                if not out or out[-1].isspace():
+                    break
+                out.append(c)
+            else:
+                out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def strip_quoted(s: str) -> str:
+    """Blank out the CONTENTS of quoted spans, preserving length and structure.
+
+    Construct detection must see shell structure, not string data: a test that builds a
+    fixture by passing bats source as arguments — `mkblock "$D/t.bats" '[[ 1 -eq 2 ]]'` —
+    contains `[[` only inside quotes and asserts nothing. Blanking contents (rather than
+    deleting spans) keeps every offset usable for reporting.
+    """
+    out = list(s)
+    quote = None
+    i = 0
+    while i < len(s):
+        c = s[i]
+        if quote:
+            if c == "\\" and quote == '"':
+                out[i] = " "
+                if i + 1 < len(s):
+                    out[i + 1] = " "
+                i += 2
+                continue
+            if c == quote:
+                quote = None
+            else:
+                out[i] = " "
+        elif c in "'\"":
+            quote = c
+        i += 1
+    return "".join(out)
+
+
+class Stmt:
+    """One meaningful (non-blank, non-comment) source line inside a @test body."""
+
+    __slots__ = ("lineno", "depth", "text", "raw", "continued_from")
+
+    def __init__(
+        self, lineno: int, depth: int, text: str, raw: str, continued_from: bool
+    ):
+        self.lineno = lineno
+        self.depth = depth
+        self.text = text
+        self.raw = raw
+        self.continued_from = continued_from
+
+
+def parse_block(lines: list[str], start: int, end: int) -> list[Stmt]:
+    """Collect meaningful statements between body lines (start, end) exclusive.
+
+    Skips heredoc bodies entirely — a fixture that *writes* bats source must never be
+    analyzed as if it were this file's own assertions.
+    """
+    stmts: list[Stmt] = []
+    depth = 0
+    heredoc: str | None = None
+    heredoc_tabs = False
+    prev_continues = False
+
+    for ln in range(start, end):
+        raw = lines[ln]
+
+        if heredoc is not None:
+            probe = raw.lstrip("\t") if heredoc_tabs else raw
+            if probe.strip() == heredoc:
+                heredoc = None
+            continue
+
+        code = strip_comment(raw).strip()
+
+        # Opening a heredoc: remember the delimiter, skip its body.
+        bare = strip_quoted(raw)
+        m = re.search(r"<<(-?)\s*([A-Za-z_][A-Za-z0-9_]*)", bare)
+        if m and "<<<" not in bare:
+            heredoc = m.group(2)
+            heredoc_tabs = m.group(1) == "-"
+
+        if not code:
+            prev_continues = False
+            continue
+
+        continued_from = prev_continues
+        # This line continues onto the next if it ends with `\`, `&&`, `||`, or `|`.
+        prev_continues = bool(re.search(r"(\\|&&|\|\||\|)$", code))
+
+        if RE_CLOSER.match(code):
+            depth = max(0, depth - 1)
+            continue
+
+        stmts.append(Stmt(ln + 1, depth, code, raw, continued_from))
+
+        if RE_OPENER.match(code):
+            depth += 1
+        # A trailing `{` (function/group) also opens a level.
+        elif code.endswith("{") and not RE_TEST_OPEN.match(code):
+            depth += 1
+
+    return stmts
+
+
+def split_and_or(code: str) -> list[tuple[str, str]]:
+    """Split an AND-OR list into (element, following-operator) pairs, quote-aware.
+
+    The trailing element's operator is "". `&&`/`||` inside quotes or `$(...)` are not
+    separators. Returns a single pair for a plain command.
+    """
+    elems: list[tuple[str, str]] = []
+    buf: list[str] = []
+    quote: str | None = None
+    par = 0
+    brack = 0  # `[[ ... ]]` depth — `[[ A && B ]]` is ONE element, not a list
+    i = 0
+    while i < len(code):
+        c = code[i]
+        if quote:
+            buf.append(c)
+            if c == quote:
+                quote = None
+            i += 1
+            continue
+        if c in "'\"":
+            quote = c
+            buf.append(c)
+            i += 1
+            continue
+        if code.startswith("[[", i):
+            brack += 1
+            buf.append("[[")
+            i += 2
+            continue
+        if code.startswith("]]", i):
+            brack = max(0, brack - 1)
+            buf.append("]]")
+            i += 2
+            continue
+        if c == "(":
+            par += 1
+        elif c == ")":
+            par = max(0, par - 1)
+        if par == 0 and brack == 0 and code.startswith(("&&", "||"), i):
+            elems.append(("".join(buf).strip(), code[i : i + 2]))
+            buf = []
+            i += 2
+            continue
+        buf.append(c)
+        i += 1
+    elems.append(("".join(buf).strip(), ""))
+    return elems
+
+
+def is_assertionish(elem: str) -> bool:
+    """True when `elem`'s failure reads as an intended assertion.
+
+    Checks the element itself AND its final pipeline stage, so the common bats idiom
+    `echo "$output" | grep -q X && ...` is recognised (a pipeline's status is its last
+    stage's). Narrowing to assertion-shaped commands keeps genuine setup chains such as
+    `mkdir -p "$D" && cd "$D"` out of the report — their absorption is not a test defect.
+    """
+    elem = strip_quoted(elem).strip()
+    if RE_ASSERTIONISH.match(elem):
+        return True
+    last_stage = elem.rsplit("|", 1)[-1].strip() if "|" in elem else ""
+    return bool(last_stage and RE_ASSERTIONISH.match(last_stage))
+
+
+def is_hard_fail(elem: str) -> bool:
+    """True when `elem` reliably fails the test — a usable `||` failure handler.
+
+    Covers `false`, `exit N`/`return N` for non-zero N, and a `{ ...; return 1; }` group.
+    A benign handler (`|| echo missing`) is deliberately NOT one: it swallows the failure,
+    which leaves the assertion just as unenforced.
+    """
+    e = strip_quoted(elem).strip()
+    if re.match(r"^false(\s|$)", e):
+        return True
+    return bool(re.search(r"\b(exit|return)\s+[1-9]", e))
+
+
+def elem_dead_class(elem: str) -> str | None:
+    """Dead-class of an element in STATUS-DETERMINING position, else None."""
+    elem = strip_quoted(elem).strip()
+    if RE_NEG.match(elem):
+        return CLASS_NEG
+    if RE_COND_OPEN.search(elem):
+        return CLASS_COND
+    if RE_ARITH_OPEN.search(elem):
+        return CLASS_ARITH
+    return None
+
+
+def classify(code: str) -> str | None:
+    """Return the dead-class of `code` as a non-final assertion, or None.
+
+    Two independent ways a non-final statement's failure is discarded:
+
+    1. The list's LAST element — the status-determining one — is an errexit-exempt
+       construct (`[[ ]]`, `(( ))`, `! cmd`).
+    2. An element joined by `&&` FAILS: POSIX exempts every non-last element of an
+       AND-OR list from errexit, so the list yields that element's non-zero status and
+       the test sails on. This holds for ANY command, `[ ]` and `false` included —
+       verified empirically. `||` is NOT this case: a failing left side routes into the
+       right side, which is a handled branch rather than a discarded assertion.
+    """
+    elems = split_and_or(code)
+
+    # (1) status-determining tail
+    tail_cls = elem_dead_class(elems[-1][0])
+    if tail_cls is not None:
+        return tail_cls
+
+    # (2) assertion absorbed by a following `&&`.
+    #
+    # A trailing `|| <handler>` rescues the whole chain: in `A && B || exit 1` every
+    # failure path — A's and B's alike — routes into the handler, so when the handler
+    # itself reliably fails the list is LIVE and nothing is absorbed.
+    has_handler = len(elems) > 1 and elems[-2][1] == "||"
+    if has_handler and is_hard_fail(elems[-1][0]):
+        return None
+
+    for elem, op in elems[:-1]:
+        if op == "&&" and is_assertionish(elem):
+            return CLASS_AND_ABSORBED
+
+    return None
+
+
+def analyze_file(path: str) -> list[dict]:
+    try:
+        text = open(path, encoding="utf-8", errors="replace").read()
+    except OSError as exc:  # pragma: no cover - surfaced to caller
+        print(f"{path}: cannot read: {exc}", file=sys.stderr)
+        return []
+
+    lines = text.split("\n")
+    findings: list[dict] = []
+    i = 0
+    while i < len(lines):
+        if not RE_TEST_OPEN.match(lines[i]):
+            i += 1
+            continue
+        # Body runs from the line after `@test ... {` to the closing `}` at column 0.
+        j = i + 1
+        while j < len(lines) and lines[j] != "}":
+            j += 1
+        name = lines[i].strip()
+        stmts = parse_block(lines, i + 1, j)
+
+        # The body's exit status is the status of the last TOP-LEVEL statement.
+        final_lineno = None
+        for s in reversed(stmts):
+            if s.depth == 0:
+                final_lineno = s.lineno
+                break
+
+        for s in stmts:
+            if s.continued_from:
+                continue  # part of a multi-line list already judged at its head
+            if RE_COND_CTX.match(s.text) or RE_FOR_HDR.match(s.text):
+                continue  # condition / loop-header position — not an assertion
+            cls = classify(s.text)
+            if cls is None:
+                continue
+            if s.depth == 0 and s.lineno == final_lineno:
+                continue  # provably final ⇒ its status IS the test's status
+            findings.append(
+                {
+                    "path": path,
+                    "line": s.lineno,
+                    "cls": cls,
+                    "test": name,
+                    "code": s.text,
+                    "nested": s.depth > 0,
+                }
+            )
+        i = j + 1
+    return findings
+
+
+def main(argv: list[str]) -> int:
+    ap = argparse.ArgumentParser(add_help=True, description=__doc__.split("\n")[0])
+    ap.add_argument("paths", nargs="*", help="bats files (default: tests/*.bats)")
+    ap.add_argument("--format", choices=("text", "tsv", "count"), default="text")
+    ap.add_argument(
+        "--summary", action="store_true", help="append per-file/per-class totals"
+    )
+    args = ap.parse_args(argv)
+
+    paths = args.paths or sorted(glob.glob("tests/*.bats"))
+    if not paths:
+        print("bats-assert-liveness: no bats files found", file=sys.stderr)
+        return 2
+
+    findings: list[dict] = []
+    for p in paths:
+        findings.extend(analyze_file(p))
+
+    if args.format == "count":
+        print(len(findings))
+        return 1 if findings else 0
+
+    for f in findings:
+        if args.format == "tsv":
+            print(f"{f['path']}\t{f['line']}\t{f['cls']}\t{f['code']}")
+        else:
+            print(f"{f['path']}:{f['line']}: DEAD [{f['cls']}] {f['code']}")
+
+    if args.summary:
+        by_file: dict[str, int] = {}
+        by_cls: dict[str, int] = {}
+        for f in findings:
+            by_file[f["path"]] = by_file.get(f["path"], 0) + 1
+            by_cls[f["cls"]] = by_cls.get(f["cls"], 0) + 1
+        print("", file=sys.stderr)
+        print(
+            f"── {len(findings)} dead assertion(s) in {len(by_file)} of {len(paths)} file(s)",
+            file=sys.stderr,
+        )
+        for cls in sorted(by_cls):
+            print(f"   {cls:<14} {by_cls[cls]}", file=sys.stderr)
+        for p in sorted(by_file, key=lambda k: (-by_file[k], k)):
+            print(f"   {by_file[p]:>4}  {os.path.basename(p)}", file=sys.stderr)
+
+    return 1 if findings else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
