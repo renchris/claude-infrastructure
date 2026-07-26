@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+# cc-mail — the OPERATOR read surface for cross-session mail.
+#
+# WHY THIS EXISTS: cc-notify has a SEND surface and delivers to the receiving AGENT as
+# additionalContext, which is model-only — the human never sees it. cc-digest covers land.log,
+# backlog, decisions and pages, but NOT mail. So two-way session traffic has been invisible to the
+# operator by construction (operator-reported 2026-07-26: "I can't see these mailbox pings in the
+# UI so I'm at a loss for visibility"). This reads the same substrate the agents read.
+#
+#   cc-mail                     signal-only, last 2h, newest last
+#   cc-mail --all               include husk-spam / routine reaper surfaces (the noise)
+#   cc-mail --since 30m|6h|2d   time window (default 2h)
+#   cc-mail --pane <uuid|name>  only mail delivered TO that pane
+#   cc-mail --from <text>       only mail whose sender matches
+#   cc-mail --grep <text>       only lines containing text
+#   cc-mail --full              do not truncate message bodies
+#   cc-mail --count             one-line volume summary, no bodies
+#
+# Store: ~/.claude/mailbox/<recipient-paneUUID>.md, one "<ts> [sender] <body>" line per message.
+set -uo pipefail
+
+MB="${CC_MAILBOX_DIR:-$HOME/.claude/mailbox}"
+REG="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"
+SINCE=2h; ALL=0; PANE=""; FROM=""; GREP=""; FULL=0; COUNT=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --all)   ALL=1; shift ;;
+    --since) SINCE="${2:-2h}"; shift 2 ;;
+    --pane)  PANE="${2:-}"; shift 2 ;;
+    --from)  FROM="${2:-}"; shift 2 ;;
+    --grep)  GREP="${2:-}"; shift 2 ;;
+    --full)  FULL=1; shift ;;
+    --count) COUNT=1; shift ;;
+    -h|--help) sed -n '2,/^set -uo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) echo "cc-mail: unknown option '$1' (try --help)" >&2; exit 2 ;;
+  esac
+done
+
+[ -d "$MB" ] || { echo "cc-mail: no mailbox dir at $MB" >&2; exit 3; }
+
+MB="$MB" REG="$REG" SINCE="$SINCE" ALL="$ALL" PANE="$PANE" FROM="$FROM" \
+GREP_T="$GREP" FULL="$FULL" COUNT="$COUNT" python3 <<'PY'
+import os,re,glob,json,time,datetime
+
+MB=os.environ['MB']; REG=os.environ['REG']
+ALL=os.environ['ALL']=='1'; FULL=os.environ['FULL']=='1'; COUNT=os.environ['COUNT']=='1'
+PANE=os.environ['PANE'].strip(); FROM=os.environ['FROM'].strip(); GT=os.environ['GREP_T'].strip()
+
+m=re.match(r'^(\d+)\s*([mhd]?)$', os.environ['SINCE'].strip())
+mult={'m':60,'h':3600,'d':86400,'':3600}
+window=int(m.group(1))*mult[m.group(2)] if m else 7200
+cutoff=time.time()-window
+
+# pane UUID -> friendly name
+names={}
+for f in glob.glob(os.path.join(REG,'*.json')):
+    try: d=json.load(open(f))
+    except Exception: continue
+    if d.get('paneUUID'): names[d['paneUUID']]=d.get('name') or d['paneUUID'][:8]
+def nm(u): return names.get(u, u[:8] if u else '?')
+
+# noise: fixture pages from non-hermetic suites + routine lifecycle surfaces
+NOISE=('HANDOFF-HUSK-PANE','⚠️ REAPER SURFACE','[desk-sweep]')
+LINE=re.compile(r'^(\d{4}-\d{2}-\d{2}T[\d:]{8}[+-]\d{4})\s+\[([^\]]*)\]\s*(.*)$')
+
+rows=[]; noise=0; total=0
+for f in glob.glob(os.path.join(MB,'*.md')):
+    to=os.path.basename(f)[:-3]
+    if PANE and PANE.lower() not in to.lower() and PANE.lower() not in nm(to).lower(): continue
+    try: fh=open(f,errors='replace')
+    except Exception: continue
+    with fh:
+        for ln in fh:
+            g=LINE.match(ln.rstrip('\n'))
+            if not g: continue
+            ts,snd,body=g.groups()
+            try: t=datetime.datetime.strptime(ts,'%Y-%m-%dT%H:%M:%S%z').timestamp()
+            except Exception: continue
+            if t<cutoff: continue
+            total+=1
+            isn=any(k in body for k in NOISE)
+            if isn: noise+=1
+            if isn and not ALL: continue
+            if FROM and FROM.lower() not in snd.lower(): continue
+            if GT and GT.lower() not in body.lower(): continue
+            rows.append((t,ts[11:19],snd,to,body))
+
+rows.sort()
+if COUNT:
+    print(f"cc-mail: {total} message(s) in the last {os.environ['SINCE']} · {noise} noise · {total-noise} signal · {len(rows)} shown")
+    raise SystemExit
+
+if not rows:
+    print(f"cc-mail: no signal mail in the last {os.environ['SINCE']}"
+          + (f" ({noise} noise suppressed — use --all)" if noise else ""))
+    raise SystemExit
+
+W=int(os.environ.get('COLUMNS') or 0) or 150
+for _,hhmmss,snd,to,body in rows:
+    head=f"{hhmmss}  {snd[:26]:<26} → {nm(to)[:26]:<26} "
+    if FULL:
+        print(head+body)
+    else:
+        avail=max(40,W-len(head))
+        print(head+(body if len(body)<=avail else body[:avail-1]+'…'))
+print()
+print(f"— {len(rows)} shown · {noise} noise suppressed"
+      + ("" if ALL else " (--all to include)") + f" · window {os.environ['SINCE']} · --full for whole bodies")
+PY
