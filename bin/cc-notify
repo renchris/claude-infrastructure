@@ -53,13 +53,36 @@
 #   A reroute does NOT upgrade that verdict to "delivered": stderr stays honest ("mailbox only …
 #   rerouted to desk"), because the ORIGINAL addressee still did not receive it.
 #
-# Resolution order: --role (cc-roles) -> friendly name (exact, cc-registry) -> raw pane UUID
-#   passthrough -> --self; then the forward chain.
-# Env overrides (tests): CC_REGISTRY_DIR, CC_MAILBOX_DIR, CC_ROLES_DIR, CC_COMMS_ALARM_DIR, IT2_BIN.
+# ── RESOLVER AVAILABILITY (v4, 2026-07-25): the resolver must not depend on a BLOCKING subprocess ──
+#   Measured: `it2 session list --json` — an IPC call into iTerm2's Python API — exceeded 120s under
+#   pane load 13-16, at 2% CPU (blocked on IPC, not computing; `cc-sessions --json` clocked 72s wall
+#   for 1.86s of CPU). cc-notify reached that call on BOTH of its hot paths — name resolution (via
+#   `cc-sessions --json`) and the liveness verdict (via cc-sessions AND a direct call of its own) — so
+#   under load a send either hung or returned rc=3 "cannot resolve target … not a live session name or
+#   a pane UUID". That message names the TARGET as the fault when the target was valid and the RESOLVER
+#   had simply timed out: an infrastructure outage reported as a user error. It cost this desk 6
+#   non-delivered advisories across 3 attempts and 2 successively-wrong diagnoses.
+#   Three properties now hold, at any load:
+#     1. NAME RESOLUTION READS THE REGISTRY DIRECTLY (~/.claude/cc-registry/*.json — the same files
+#        cc-sessions itself reads). One local `jq -s` over the set, liveness by `kill -0` (a bash
+#        builtin, no fork). No IPC, so nothing to block on. The live-rows-only ADDRESSING contract
+#        (cc-sessions' W4 property: a name never resolves onto a dead pane) is preserved on the pid
+#        signal, and a name matching only dead rows stays unresolvable.
+#     2. EVERY REMAINING it2 CALL IS BOUNDED (CC_IT2_TIMEOUT_S, default 5s) and degrades into the
+#        "unknown liveness" branch this tool already models — never into a hang.
+#     3. "RESOLVER UNAVAILABLE" IS ITS OWN EXIT CODE (4), distinct from "target unknown" (3).
+#
+# Resolution order: --role (cc-roles) -> friendly name (exact, cc-registry, LIVE rows) -> raw pane
+#   UUID passthrough -> unambiguous UUID PREFIX (>=8 hex — what `--list` prints) -> --self; then the
+#   forward chain.
+# Env overrides (tests): CC_REGISTRY_DIR, CC_MAILBOX_DIR, CC_ROLES_DIR, CC_COMMS_ALARM_DIR, IT2_BIN,
+#   CC_IT2_TIMEOUT_S.
 # bash 3.2-safe. Exit: 0 = enqueued (delivered to a live inbox, OR mailbox-only to a not-live/unknown-
-#   liveness target, possibly rerouted — stderr says which); 2 = usage; 3 = unresolvable target
-#   (incl. a missing/empty --role file); 5 = inbox UNWRITABLE
-#   (LOUD — a message that cannot even persist must alarm, never a silent drop).
+#   liveness target, possibly rerouted — stderr says which); 2 = usage; 3 = target genuinely UNKNOWN
+#   (the registry was readable and holds no such name/uuid; incl. a missing/empty --role file);
+#   4 = RESOLVER UNAVAILABLE (the registry could not be read — the target may well be valid; retry,
+#   do NOT treat as a bad address); 6 = AMBIGUOUS uuid prefix (>1 pane matches — name one exactly);
+#   5 = inbox UNWRITABLE (LOUD — a message that cannot even persist must alarm, never a silent drop).
 set -uo pipefail
 
 MAILBOX_DIR="${CC_MAILBOX_DIR:-$HOME/.claude/mailbox}"
@@ -92,6 +115,112 @@ fi
 
 command -v jq >/dev/null 2>&1 || { echo "cc-notify: jq required" >&2; exit 1; }
 
+REG_DIR="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"
+
+# --- the registry, read DIRECTLY (v4) — the resolver's only input, and it cannot block ------------
+# cc-sessions reads these same files; going straight to them removes the it2 IPC hop that was the
+# measured hang. Cached in one variable so a single send parses the set at most once.
+# Rows are "<name>\t<pid>\t<paneUUID>". REG_RC: 0 = read OK (a miss is then a REAL unknown target),
+# 1 = the registry could not be read (a miss means NOTHING — that is exit 4, never exit 3).
+REG_ROWS=""; REG_RC=-1
+registry_load() {
+  [ "$REG_RC" -ge 0 ] && return "$REG_RC"      # parse once per invocation
+  local f any=0 out
+  # -r and -x both matter: without them the glob below silently yields nothing, and an UNREADABLE
+  # registry would masquerade as an EMPTY one — i.e. a resolver outage reported as "unknown target",
+  # the precise conflation this version exists to end.
+  if [ ! -d "$REG_DIR" ] || [ ! -r "$REG_DIR" ] || [ ! -x "$REG_DIR" ]; then REG_RC=1; return 1; fi
+  for f in "$REG_DIR"/*.json; do [ -e "$f" ] && { any=1; break; }; done
+  if [ "$any" = 0 ]; then REG_ROWS=""; REG_RC=0; return 0; fi   # readable but EMPTY: a real "unknown"
+  # Fast path: ONE jq over the whole set. A single corrupt row fails `jq -s` wholesale, which would
+  # turn one bad file into a total resolver outage — so fall back to per-file parsing (N forks, but
+  # only ever on the degraded path) and simply skip the rows that will not parse.
+  if out="$(jq -s -r '.[] | select(type=="object")
+                    | [(.name // ""), (.pid // ""), (.paneUUID // "")] | @tsv' \
+              "$REG_DIR"/*.json 2>/dev/null)"; then
+    REG_ROWS="$out"; REG_RC=0; return 0
+  fi
+  out=""
+  for f in "$REG_DIR"/*.json; do
+    [ -e "$f" ] || continue
+    local row
+    row="$(jq -r 'select(type=="object")
+                | [(.name // ""), (.pid // ""), (.paneUUID // "")] | @tsv' "$f" 2>/dev/null)" || continue
+    [ -n "$row" ] && out="${out}${row}
+"
+  done
+  REG_ROWS="$out"; REG_RC=0; return 0
+}
+
+# `kill -0` is a bash BUILTIN — liveness for the whole registry costs zero forks.
+pid_live() { local p="$1"; case "$p" in ''|*[!0-9]*) return 1 ;; esac; kill -0 "$p" 2>/dev/null; }
+
+# name → pane uuid, LIVE rows only (the W4 addressing contract: never resolve a name onto a dead
+# pane). rc 0 = hit, 1 = readable-but-absent, 2 = registry unreadable.
+registry_name_to_uuid() {
+  local want="$1" n p u
+  registry_load || return 2
+  while IFS="$(printf '\t')" read -r n p u; do
+    [ "$n" = "$want" ] && [ -n "$u" ] && pid_live "$p" && { printf '%s' "$u"; return 0; }
+  done <<EOF
+$REG_ROWS
+EOF
+  return 1
+}
+
+# uuid PREFIX → full uuid. `cc-notify --list` printed an 8-char column for years that its OWN input
+# rejected; accepting the prefix closes that round-trip from the other side. Prefer a live pane, but
+# a prefix names a PANE (like the full-uuid passthrough, which has always accepted dead ones), so a
+# unique dead match still resolves — and the liveness verdict below stays honest about it.
+# rc 0 = unique hit, 1 = no match, 2 = registry unreadable, 3 = AMBIGUOUS (never guess).
+registry_prefix_to_uuid() {
+  local want="$1" n p u lc_w lc_u hits="" live_hits="" n_hits=0 n_live=0
+  registry_load || return 2
+  lc_w="$(printf '%s' "$want" | tr '[:upper:]' '[:lower:]')"
+  while IFS="$(printf '\t')" read -r n p u; do
+    [ -n "$u" ] || continue
+    lc_u="$(printf '%s' "$u" | tr '[:upper:]' '[:lower:]')"
+    case "$lc_u" in
+      "$lc_w"*) hits="${hits}${u}
+"; n_hits=$(( n_hits + 1 ))
+                if pid_live "$p"; then live_hits="${live_hits}${u}
+"; n_live=$(( n_live + 1 )); fi ;;
+    esac
+  done <<EOF
+$REG_ROWS
+EOF
+  [ "$n_live" = 1 ] && { printf '%s' "$live_hits" | head -n1 | tr -d '\n'; return 0; }
+  [ "$n_live" -gt 1 ] && { printf '%s' "$live_hits"; return 3; }
+  [ "$n_hits" = 1 ] && { printf '%s' "$hits" | head -n1 | tr -d '\n'; return 0; }
+  [ "$n_hits" -gt 1 ] && { printf '%s' "$hits"; return 3; }
+  return 1
+}
+
+# --- BOUNDED it2 (v4) ------------------------------------------------------------------------------
+# The one IPC call left on this path. It is the MEASURED hang (>120s alone under load), so it is
+# bounded and a timeout degrades into the "unknown liveness" branch target_live() already models.
+# Not factored into a shared lib on purpose: a brand-new tracked file is not symlinked into the live
+# ~/.claude layer, so a shared helper would ship BROKEN until someone noticed. Twelve duplicated
+# lines beat a new deploy unit (the twin lives in cc-sessions).
+IT2_TIMEOUT_S="${CC_IT2_TIMEOUT_S:-5}"
+_TO=""; for _c in timeout gtimeout; do command -v "$_c" >/dev/null 2>&1 && { _TO="$_c"; break; }; done
+it2_list_bounded() {   # raw --json on stdout; rc != 0 on timeout/error
+  [ -n "$IT2" ] && [ -x "$IT2" ] || return 1
+  if [ -n "$_TO" ]; then "$_TO" "$IT2_TIMEOUT_S" "$IT2" session list --json 2>/dev/null; return $?; fi
+  # No coreutils `timeout` on this box: bound it in pure bash rather than let the hang back in.
+  local tmp bpid rc ticks=0 max=$(( IT2_TIMEOUT_S * 5 ))
+  tmp="$(mktemp 2>/dev/null)" || return 1
+  "$IT2" session list --json >"$tmp" 2>/dev/null & bpid=$!
+  while kill -0 "$bpid" 2>/dev/null; do
+    if [ "$ticks" -ge "$max" ]; then
+      kill -TERM "$bpid" 2>/dev/null; wait "$bpid" 2>/dev/null; rm -f "$tmp"; return 1
+    fi
+    sleep 0.2 2>/dev/null || sleep 1; ticks=$(( ticks + 1 ))
+  done
+  wait "$bpid" 2>/dev/null; rc=$?
+  cat "$tmp" 2>/dev/null; rm -f "$tmp"; return "$rc"
+}
+
 # --- parse args ---
 FROM=""; MAILBOX_ONLY=0; TARGET=""; MSG=""; HAVE_TARGET=0; HAVE_MSG=0; ROLE=""; ROLE_GIVEN=0
 while [ $# -gt 0 ]; do
@@ -117,21 +246,37 @@ done
 
 # --- resolve target -> pane UUID ---
 own_uuid="${ITERM_SESSION_ID:-}"; own_uuid="${own_uuid##*:}"
+# rc 0 = resolved (uuid on stdout) · 1 = target genuinely UNKNOWN · 4 = RESOLVER UNAVAILABLE
+# · 6 = AMBIGUOUS prefix (candidates on stdout). The caller MUST branch on these: reporting a
+# resolver outage as "not a live session name or a pane UUID" is what sent this desk chasing the
+# target for three attempts. (Status travels by RETURN CODE, never a global — resolve() runs inside
+# a command substitution, so a variable set in here would never reach the caller.)
 resolve() {
-  local t="$1" u=""
+  local t="$1" u="" rc=0
   if [ "$t" = "__self__" ]; then
     [ -n "$own_uuid" ] || return 1
     echo "$own_uuid"; return 0
   fi
-  # exact friendly-name match (registry, via cc-sessions --json)
-  if [ -n "$CCS" ]; then
-    u="$("$CCS" --json 2>/dev/null | jq -r --arg n "$t" 'map(select(.name==$n)) | .[0].paneUUID // empty' 2>/dev/null)"
-    [ -n "$u" ] && { echo "$u"; return 0; }
-  fi
-  # raw UUID passthrough
+  # 1. exact friendly-name match — read STRAIGHT from the registry (no it2 IPC, so no hang).
+  u="$(registry_name_to_uuid "$t")"; rc=$?
+  [ "$rc" = 0 ] && [ -n "$u" ] && { echo "$u"; return 0; }
+  # 2. raw full UUID passthrough — needs no registry at all, so it works even when the registry does
+  #    not. Tried BEFORE surfacing any resolver-unavailable verdict.
   if [[ "$t" =~ ^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$ ]]; then
     echo "$t"; return 0
   fi
+  # 3. unambiguous UUID prefix (>=8 hex) — makes the `--list` column round-trip into its own input.
+  if [[ "$t" =~ ^[0-9A-Fa-f]{8,}$ ]]; then
+    u="$(registry_prefix_to_uuid "$t")"; local prc=$?
+    case "$prc" in
+      0) echo "$u"; return 0 ;;
+      3) echo "$u"; return 6 ;;                       # ambiguous — candidates on stdout
+      2) return 4 ;;
+    esac
+  fi
+  # 4. no match. If the registry itself could not be read, the target may be perfectly valid — that
+  #    is an infrastructure fault (4), NOT a bad address (1).
+  [ "$rc" = 2 ] && return 4
   return 1
 }
 
@@ -155,14 +300,32 @@ if [ -n "$ROLE" ]; then
   TARGET="--role $ROLE"          # for human-readable messages only
 elif [ "$ROLE_GIVEN" = 1 ]; then
   echo "cc-notify: --role needs a role name (e.g. --role desk)" >&2; usage >&2; exit 2
-elif ! uuid="$(resolve "$TARGET")"; then
-  if [ "$TARGET" = "__self__" ]; then
-    echo "cc-notify: --self needs \$ITERM_SESSION_ID (not in an iTerm2 pane)" >&2
-  else
-    echo "cc-notify: cannot resolve target '$TARGET' — not a live session name or a pane UUID" >&2
-    echo "  try: cc-notify --list" >&2
-  fi
-  exit 3
+else
+  uuid="$(resolve "$TARGET")"; _rrc=$?
+  case "$_rrc" in
+    0) : ;;
+    6) # AMBIGUOUS prefix — never guess which pane the operator meant.
+       echo "cc-notify: uuid prefix '$TARGET' is AMBIGUOUS — it matches more than one pane:" >&2
+       printf '%s\n' "$uuid" | sed '/^$/d; s/^/    /' >&2
+       echo "  name one of them exactly (or use its friendly name)." >&2
+       exit 6 ;;
+    4) # RESOLVER UNAVAILABLE — the registry could not be read. Saying "not a live session name"
+       # here is the exact lie this exit code exists to end: we do not KNOW that. The target is
+       # unverified, not invalid.
+       echo "cc-notify: RESOLVER UNAVAILABLE — could not read the session registry at $REG_DIR" >&2
+       echo "  '$TARGET' is UNVERIFIED, not invalid — do not treat this as a bad address; retry, or" >&2
+       echo "  address the target by its full 36-char pane UUID (that path needs no registry)." >&2
+       exit 4 ;;
+    *)
+       if [ "$TARGET" = "__self__" ]; then
+         echo "cc-notify: --self needs \$ITERM_SESSION_ID (not in an iTerm2 pane)" >&2
+       else
+         echo "cc-notify: target '$TARGET' is UNKNOWN — the registry ($REG_DIR) is readable and holds" >&2
+         echo "  no live session by that name, and it is not a pane UUID or a known uuid prefix." >&2
+         echo "  try: cc-notify --list" >&2
+       fi
+       exit 3 ;;
+  esac
 fi
 
 # FORWARD CHAIN (v3 D1) — a resolved uuid may be a pane that has since self-closed with a successor.
@@ -233,20 +396,34 @@ target_live() {
   local u="$1"
   # self is always live (it is us)
   [ "$u" = "$own_uuid" ] && [ -n "$own_uuid" ] && return 0
-  # registered live (cc-sessions --json lists LIVE rows only: pid alive + pane present)
-  if [ -n "$CCS" ]; then
-    local hit; hit="$("$CCS" --json 2>/dev/null | jq -r --arg u "$u" 'map(select(.paneUUID==$u)) | length' 2>/dev/null)"
-    [ -n "$hit" ] && [ "$hit" != 0 ] && return 0
+  # registered? Decide from the REGISTRY DIRECTLY (v4) — this used to shell to `cc-sessions --json`,
+  # i.e. into the same it2 IPC that hangs, so even a full-UUID send (the "reliable" address) blocked
+  # here. It only ever LOOKED reliable because the enqueue above already happened.
+  # `kill -0` is cc-sessions' own authoritative liveness signal, so a registered row decides outright:
+  #   dead pid → not-live · live pid → live. The one behaviour change is a pid that outlives its pane
+  #   (a transient window at close): formerly not-live via it2, now live — and the verdict below still
+  #   says "NO watcher armed → drains on its NEXT turn", so nothing claims a wake that will not happen.
+  local n p ruuid
+  if registry_load; then
+    while IFS="$(printf '\t')" read -r n p ruuid; do
+      if [ -n "$ruuid" ] && [ "$ruuid" = "$u" ]; then
+        pid_live "$p" && return 0
+        return 1
+      fi
+    done <<EOF
+$REG_ROWS
+EOF
   fi
-  # else a live (possibly unregistered) iTerm2 pane — read-only `session list`, never `session send`.
+  # else a live (possibly unregistered) iTerm2 pane — read-only `session list`, never `session send`,
+  # and BOUNDED so a slow iTerm2 degrades to "unknown" instead of hanging the send.
   # A VALID JSON array (even []) means the list is READABLE → membership is authoritative (a `[]` means
-  # zero live panes → not-live, NOT "unknown"). Only a non-array / errored output is "unknown".
-  local raw; raw="$("$IT2" session list --json 2>/dev/null || true)"
+  # zero live panes → not-live, NOT "unknown"). Only a non-array / errored / TIMED-OUT output is unknown.
+  local raw; raw="$(it2_list_bounded || true)"
   if [ -n "$raw" ] && printf '%s' "$raw" | jq -e 'type=="array"' >/dev/null 2>&1; then
     printf '%s' "$raw" | jq -r '.[].id // empty' 2>/dev/null | grep -qxF "$u" && return 0
     return 1       # list readable AND uuid absent → authoritatively not-live
   fi
-  return 2         # it2 unavailable / errored → no liveness oracle → unknown
+  return 2         # it2 unavailable / errored / timed out → no liveness oracle → unknown
 }
 
 # F5: a WAKE PATH — not mere registered-liveness — is what makes a delivery a wake. A fresh cc-await-ping
