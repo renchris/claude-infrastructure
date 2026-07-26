@@ -31,11 +31,25 @@ dry() { bash "$HF" --prompt-file "$PF" --session-id "w1t0p0:FAKE-UUID" --account
   ! echo "$output" | grep -qi "unknown arg"
 }
 
-@test "AUTONOMOUS default (no surface flag) resolves to a background tab, no raise" {
+# CONTRACT CHANGED 2026-07-26 (operator directive). This used to assert bg-tab. C1 is about FOCUS,
+# not PLACEMENT: the raise is gated independently at it2_land, so an autonomous fire can be VISIBLE
+# without stealing focus — which test "explicit --split-right WITHOUT --follow" below already
+# proves. Defaulting to a background tab bought no safety the raise-gate did not already provide,
+# and cost the operator sight of dispatched work. The no-raise half is the C1 invariant and is
+# asserted here unchanged; only the placement moved.
+@test "AUTONOMOUS default (no surface flag) is VISIBLE (split-right) but still never raises" {
   run dry
   [ "$status" -eq 0 ]
-  echo "$output" | grep -qE "surface: +bg-tab"
-  echo "$output" | grep -qiE "follow: +no"
+  echo "$output" | grep -qE "surface: +split-right"
+  echo "$output" | grep -qiE "follow: +no"          # C1: visible, but focus is NOT stolen
+}
+
+@test "C1 REGRESSION: making the default visible did not make it raise" {
+  # The whole risk of this change is that 'visible' quietly becomes 'focus-stealing'. Pin them
+  # apart: the default surface is a split AND follow is off, in the same assertion.
+  run dry
+  echo "$output" | grep -qE "surface: +split-right"
+  [[ "$output" != *"follow: YES"* ]] || false
 }
 
 @test "--follow keeps the split-right (⌘D) preference and raises" {

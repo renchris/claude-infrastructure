@@ -1572,13 +1572,24 @@ if [ -n "$WORKTREE" ] && ! git check-ref-format --branch "$WORKTREE" >/dev/null 
   echo "!! invalid branch name for --worktree: $WORKTREE" >&2; exit 1
 fi
 
-# ---- C1 (no-focus-steal): autonomous default surface --------------------------------------
-# An AUTONOMOUS fire (no --follow) must NEVER split/raise the operator's active pane (the ttys018
-# mis-inject, 2026-07-19). So when the operator is not following: the DEFAULT surface (no explicit
-# flag) becomes a BACKGROUND tab, and an EXPLICIT --tab is likewise that background surface. Explicit
-# --split-right/--split-down/--window stay as chosen but are fired without a raise + focus-asserted
-# (see spawn). --follow (manual /handoff) keeps the split-right ⌘D preference + the raise, unchanged.
-if [ "$RECYCLE" = 0 ] && [ "$FOLLOW" = 0 ] && { [ "$SURFACE_EXPLICIT" = 0 ] || [ "$SURFACE" = tab ]; }; then
+# ---- C1 (no-focus-steal): autonomous surface ----------------------------------------------
+# C1 (the ttys018 mis-inject, 2026-07-19) is about FOCUS, not PLACEMENT — and those are two
+# different things that this branch used to conflate. The focus half is already enforced
+# independently and unconditionally at it2_land: an autonomous fire (FOLLOW=0) NEVER raises, never
+# calls `session focus`, and the operator's focused pane is captured before and asserted unchanged
+# after. Splitting does not move focus; only the raise does.
+#
+# So the old rule — downgrade the DEFAULT surface to a background tab whenever FOLLOW=0 — bought no
+# extra safety over the raise gate, and cost the thing the operator actually asked for: dispatched
+# work they can SEE. Fires landed in background tabs the operator never found, which is the same
+# invisibility class as mail delivered to a pane that never drains it. Operator directive, restated
+# 2026-07-26 after a desk wave landed 3 landers in background tabs: "I don't care as much about the
+# immediate one-time fix but making sure this behavior happens long-horizon."
+#
+# NOW: placement defaults to split-right (VISIBLE) for autonomous fires too; ONLY an EXPLICIT --tab
+# opts into the background surface. --follow additionally raises, unchanged. A memory the agent has
+# to remember is not a mechanism — this is the mechanism.
+if [ "$RECYCLE" = 0 ] && [ "$FOLLOW" = 0 ] && [ "$SURFACE_EXPLICIT" = 1 ] && [ "$SURFACE" = tab ]; then
   SURFACE="bg-tab"
 fi
 
