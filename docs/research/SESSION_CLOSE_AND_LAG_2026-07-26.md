@@ -86,7 +86,8 @@ one.
 ## 2. The lag
 
 **Claude Code memory is real waste but is not the lag driver.** Instantaneous sampling (`top`, not
-`ps` lifetime averages):
+`ps` lifetime averages — `ps -o %cpu` reports a *lifetime* average and made a 14-day-old iTerm2
+look like a live hog before the cross-check):
 
 ```
 load average: 18.80        (10 cores — ~1.9× oversubscribed)   ← this is the lag
@@ -95,6 +96,42 @@ XprotectService    93.0 % CPU   (scanning the worktree/node_modules churn)
 WindowServer       63.8 % CPU
 kernel_task        40.6 % CPU
 ```
+
+### 2.1 CORRECTION — what actually dominates that load
+
+The above ranks iTerm2 first; **it is second**. Measured an hour later, from a landing attempt of
+*this very branch* that the phenomenon killed: a **machine-wide gate runaway** — **six sibling
+sessions each running a full ~120-suite landing gate concurrently**, load **20.96** on 10 cores,
+1244 processes. Filed by a sibling as backlog `f8e40b4c577d`.
+
+The loop is self-feeding:
+
+1. load makes a gate suite slow → it is killed or times out
+2. fail-closed degradation escalates **scoped → FULL** suite → *more* load
+3. sessions try to unstick themselves with machine-wide `pkill -f 'bats-core/bats'` /
+   `pkill -f bats-exec` — which kills **sibling** sessions' gates
+   (`bash-execution.log` 20:42:27, 20:45, 169721)
+4. those sessions retry → step 1
+
+Evidence it is not code: this branch's `ship-land` exited 6 with **zero assertion failures** —
+`tests/cc-reaper.bats` died `Killed: 9`, `tests/handoff-fire-validate.bats` `Terminated: 15`
+mid-suite, the latter passing **3/3** on the exoneration re-run. No jetsam events; the kernel was
+not OOM-killing. That is the third state this repo already names: **gate-never-ran ≠ gate-red** —
+and it is *not* landing clearance either.
+
+**Framing for the fix (owner: the `f8e40b4c577d` stream, not this one).** Parallel gates are
+**deliberate** — `ship-land.sh`'s own header: *"The full gate runs UNLOCKED and therefore in
+PARALLEL"*, the lock intentionally covering only the fetch→push→content-verify race. So the fix is
+**not** serialization (that trades away the designed throughput) but **admission control**: cap
+concurrent gates (~2–3) and queue beyond, plus scope those `pkill` patterns to the caller's own
+worktree/PGID — a machine-wide `pkill -f bats` can never be correct with N sessions running.
+Single-owner-per-file: this stream did **not** touch `ship-land.sh`; the evidence was sent to the
+desk role instead.
+
+*Counting caveat recorded because it nearly became a false claim:* a first pass reported "559 bats
+processes across 5 worktrees". That was `grep -oE` counting path **occurrences inside single
+command lines**, not processes. The true figure is **6 concurrent suites**. Count processes with
+`pgrep`/line-wise `ps`, never by substring frequency.
 
 Memory is *not* critical: **72 % free**, 2.56 GB of 4 GB swap.
 
