@@ -335,9 +335,28 @@ scope_fixture() {   # seed tests/{a,b}.bats onto trunk + shim bats + default to 
   export BATS_ARGV="$BATS_TEST_TMPDIR/bats-argv"
   export FLAKE_ONCE="$BATS_TEST_TMPDIR/flake-once"   # suite file that fails its FIRST run only
   : > "$FLAKE_ONCE"
+  # GATE-KILLED fixtures. The shim reproduces each shape BYTE-WISE as real bats emits it, because
+  # the RED-vs-KILLED split reads the TAP: `sig` = a run that was executing and then died (plan +
+  # ok lines, then 137 — the live 2026-07-26 signature); `unattrib` = the same event seen from the
+  # TAP side (non-zero, zero `not ok`); `startup` = bats never ran at all (NO TAP), which is a REAL
+  # red and must stay one; `red` = a named failure, the positive control that must NOT be softened.
+  export KILL_MODE="$BATS_TEST_TMPDIR/kill-mode"
+  : > "$KILL_MODE"
   cat > "$SHIMDIR/bats" <<EOF
 #!/bin/bash
 printf '%s\n' "\$*" >> "$BATS_ARGV"
+case "\$(cat "$KILL_MODE" 2>/dev/null)" in
+  sig)       echo "1..3"; echo "ok 1 alpha"; echo "ok 2 beta"; exit 137 ;;
+  unattrib)  echo "1..3"; echo "ok 1 alpha"; exit 1 ;;
+  startup)   exit 1 ;;
+  red)       echo "1..1"; echo "not ok 1 boom"; exit 1 ;;
+  sig-once)  if [ ! -f "$BATS_TEST_TMPDIR/killed-once" ]; then
+               : > "$BATS_TEST_TMPDIR/killed-once"; echo "1..3"; echo "ok 1 alpha"; exit 137
+             fi ;;
+  cut-then-red) if [ ! -f "$BATS_TEST_TMPDIR/cut-once" ]; then
+               : > "$BATS_TEST_TMPDIR/cut-once"; echo "1..3"; echo "ok 1 alpha"; exit 137
+             else echo "1..1"; echo "not ok 1 boom"; exit 1; fi ;;
+esac
 f="\$(cat "$FLAKE_ONCE" 2>/dev/null)"
 if [ -n "\$f" ] && [ "\$1" = "\$f" ]; then
   m="$BATS_TEST_TMPDIR/flaked-\$(basename "\$1")"
@@ -664,4 +683,128 @@ admit_probe() {  # $@ = env assignments → runs gate_admit once, echoes its std
   [ "$status" -eq 0 ]                                # bounded: it PROCEEDS, it does not fail
   echo "$output" | grep -q "DEFERRING" || false      # it announced the deferral
   echo "$output" | grep -q "proceeding anyway" || false
+}
+
+# ════ GATE-KILLED — signal death is a THIRD state, never RED (backlog 9c5d0ba74e79) ════════════
+# The live signature these reproduce: a gate ran green through 1359 tests, then `bats tests/
+# Killed: 9`, and ship-land printed "gate: bats RED / not pushing" — byte-indistinguishable from a
+# real red, so the retry read as flaky tests instead of "we ran out of machine".
+# RED-PROOF: every assertion below fails against the pre-fix tree, where EVERY non-zero bats exit
+# produced "GATE RED" + exit 6. The `red` and `startup` cases are the positive controls — if the
+# kill path ever starts swallowing genuine failures, those two go red.
+
+@test "gate-killed: a SIGNAL-killed full suite exits 9 (not 6), pushes nothing, retries once" {
+  scope_fixture
+  echo sig > "$KILL_MODE"
+  gc="$(git rev-parse --git-common-dir)"; rm -f "$gc/gate-green"
+  landable feat/killed gk.sh
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 9 ]                                          # 9 = no verdict, NOT 6 = red
+  echo "$output" | grep -q "GATE-KILLED" || false
+  ! echo "$output" | grep -q "GATE RED"                        # never both, never the wrong one
+  [ "$(grep -c . "$BATS_ARGV")" -eq 2 ]                        # first run + ONE bounded re-run
+  [ ! -f "$gc/gate-green" ]                                    # a kill proves nothing ⇒ no marker
+  git fetch -q origin main
+  [ -z "$(git ls-tree origin/main -- gk.sh)" ]                 # fail-closed: nothing landed
+}
+
+@test "gate-killed: land.log attests exit 9, so a kill is not counted in the red denominator" {
+  scope_fixture
+  echo sig > "$KILL_MODE"
+  landable feat/killed-log gkl.sh
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 9 ]
+  grep -q '"exit":9' "$LAND_LOG" || false
+  ! grep -q '"exit":6' "$LAND_LOG"
+}
+
+@test "gate-killed: a non-zero suite that names NO failing test is a kill, not a red" {
+  # The exact shape of the two poisoned live stamps: failing=["tests/"], retries=0. The retry
+  # ladder identified ZERO failing FILES — the signature of signal-kill, not test failure.
+  scope_fixture
+  echo unattrib > "$KILL_MODE"
+  landable feat/unattrib gu.sh
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 9 ]
+  echo "$output" | grep -q "GATE-KILLED" || false
+}
+
+@test "gate-killed POSITIVE CONTROL: a suite that NAMES a failing test still exits 6" {
+  # If this ever goes green-by-accident the whole split is worthless — a real red MUST stay a red.
+  scope_fixture
+  echo red > "$KILL_MODE"
+  landable feat/really-red gr.sh
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 6 ]
+  echo "$output" | grep -q "GATE RED" || false
+  ! echo "$output" | grep -q "GATE-KILLED"
+  [ "$(grep -c . "$BATS_ARGV")" -eq 1 ]                        # a RED is never re-run
+}
+
+@test "gate-killed: a suite that emits NO TAP at all is ALSO a non-verdict (exit 9, fail-closed)" {
+  # An earlier draft of this branch split "never got going" from "died mid-run" and called the
+  # former a RED. Retired deliberately on reconciliation: the ONE discriminator is `not ok` in the
+  # TAP — shared by the FULL and SCOPED tiers so they cannot disagree about what a cut is — and a
+  # second rule keyed on a plan line buys nothing, since a suite that never starts also names no
+  # failing test and both outcomes are equally fail-closed. This test PINS that choice rather than
+  # leaving it implicit.
+  scope_fixture
+  echo startup > "$KILL_MODE"
+  landable feat/no-tap gn.sh
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 9 ]
+  echo "$output" | grep -q "GATE-KILLED" || false
+  git fetch -q origin main
+  [ -z "$(git ls-tree origin/main -- gn.sh)" ]                 # the property that actually matters
+}
+
+@test "gate-killed: a cut-then-green re-run LANDS (the whole point of the single re-run)" {
+  scope_fixture
+  echo sig-once > "$KILL_MODE"                                 # cut once, then normal
+  landable feat/kill-then-green kg.sh
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "CUT, not RED" || false             # it named the non-verdict…
+  [ "$(grep -c . "$BATS_ARGV")" -eq 2 ]                        # …re-ran…
+  git fetch -q origin main
+  [ -n "$(git ls-tree origin/main -- kg.sh)" ]                 # …and landed
+}
+
+@test "gate-killed: a cut re-run that turns up REAL failures is a red (6), not a kill (9)" {
+  # The re-run's TAP is now captured precisely so this case is decidable. Before, both outcomes
+  # printed "RED (or cut twice)" — a guess handed to the caller at the moment the answer decides
+  # whether retrying is correct. A real failure surfacing on the re-run must win.
+  scope_fixture
+  echo cut-then-red > "$KILL_MODE"
+  landable feat/cut-then-red ctr.sh
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 6 ]
+  echo "$output" | grep -q "on the re-run" || false
+  ! echo "$output" | grep -q "GATE-KILLED"
+}
+
+@test "gate-killed: a REAL red alongside a kill exits 6 — a verdict outranks a non-verdict" {
+  # Mixed run: shellcheck names a genuine defect while the suite dies. Reporting 9 would tell the
+  # caller "just retry", losing a real finding. GATE_RED wins.
+  scope_fixture
+  echo sig > "$KILL_MODE"
+  git checkout -q -b feat/mixed main
+  printf '#!/usr/bin/env bash\nfoo=$(ls)\necho $foo\n' > mixed.sh    # SC2086 ⇒ shellcheck red
+  git add mixed.sh && git commit -q -m "feat: mixed"
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 6 ]
+  echo "$output" | grep -q "shellcheck RED" || false
+  echo "$output" | grep -q "GATE RED" || false
+  # Load-bearing, and what makes this RED-PROVABLE rather than tautological: pre-fix EVERY failure
+  # was 6, so the exit code alone cannot distinguish the trees. This asserts the kill was actually
+  # DETECTED and then outranked — not that detection never happened.
+  echo "$output" | grep -q "GATE-KILLED" || false
 }
