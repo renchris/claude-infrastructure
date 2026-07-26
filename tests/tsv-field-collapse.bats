@@ -447,10 +447,30 @@ EOF
 }
 
 @test "guard: no padding sentinel is ever left in a tracked source file as a raw byte" {
-  cd "$REPO"
   # The sentinel belongs in a shell $'\037' / jq $pad / python "\x1f" literal — never as a raw
   # control byte pasted into source, which is invalid inside a JSON string literal for jq.
-  run bash -c "grep -rlP '\x1f' bin hooks scripts tests 2>/dev/null || true"
-  [ "$status" -eq 0 ]
+  #
+  # NOT `grep -rlP`: BSD grep (/usr/bin/grep on macOS) rejects -P outright with exit 2, and the
+  # `2>/dev/null || true` this case used to carry swallowed that straight into a PASS — the scan
+  # would report "clean" under a stock PATH precisely when it had never run at all. It only ever
+  # worked here because `grep` on this box happens to be ugrep. That is the same silent direction
+  # as the defect this whole file exists to pin, one layer up in the guard itself.
+  #
+  # `git grep` is portable, and it scopes the scan to TRACKED files — which is what the claim is
+  # actually about. A plain `-r` scan also trips over untracked build artefacts: the working
+  # __pycache__/lr-select.cpython-311.pyc legitimately contains a 0x1f byte.
+  #
+  # Exit 1 is the PASS: 0 = a sentinel IS present, 1 = ran and found none, >1 = the scan failed.
+  cd "$REPO"
+  run git grep -lF -- "$PAD" -- bin hooks scripts tests
+  [ "$status" -eq 1 ]
   [ -z "$output" ]
+
+  # …and prove that same scan can still SEE a raw sentinel, so the silence above is evidence of
+  # absence rather than evidence of a detector that stopped detecting.
+  printf 'x%sy\n' "$PAD" > "$C/planted.txt"
+  cd "$C"
+  run git grep --no-index -lF -- "$PAD"
+  [ "$status" -eq 0 ]
+  [ -n "$output" ]
 }
