@@ -198,6 +198,19 @@ if $IS_GLOBAL && [[ ! -L "$HOME/bin/restore-file" ]]; then
   installed=$((installed + 1))
 fi
 
+# DEPLOY-NOW compat symlink (global only) — the operator entrypoint is `bash ~/.claude/DEPLOY-NOW.sh`
+# and must keep working. It existed for months as an UNVERSIONED real file at that path (no repo
+# copy, unrecoverable if lost); scripts/deploy-now.sh is now its SSOT. A pre-existing real file is
+# backed up before being replaced, so the one-time migration can never drop unreviewed content.
+if $IS_GLOBAL; then
+  deploy_now_link="$CONFIG_DIR/DEPLOY-NOW.sh"
+  if [[ -f "$deploy_now_link" && ! -L "$deploy_now_link" ]]; then
+    run cp -a "$deploy_now_link" "$deploy_now_link.pre-ssot.bak"
+    echo "  ✓ backed up the unversioned $deploy_now_link → .pre-ssot.bak"
+  fi
+  link_file "$CONFIG_DIR/scripts/deploy-now.sh" "$deploy_now_link"
+fi
+
 # --- Skills ---
 # Same symlink model as hooks/commands: version each repo skill dir and deploy it live.
 # Only touches skill NAMES present in the repo — other ~/.claude/skills are left untouched.
