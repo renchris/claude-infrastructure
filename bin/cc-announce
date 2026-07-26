@@ -33,8 +33,20 @@
 #   else the token passes straight to cc-notify (friendly-name via registry, or raw-uuid). Recipes say
 #   `cc-announce desk "…"`; the role→uuid binding is written at ACTIVATION (C10), never hard-coded here.
 #
+# ── THE VERDICT IS MACHINE-READABLE (never prose) ──────────────────────────────────────────────────────
+# Exit 0 covers TWO different outcomes — VERIFIED (a wake was confirmed) and DEGRADED (delivered to a
+# live inbox, but no watcher was armed / liveness was unconfirmed, so it only drains on the target's
+# next turn). A caller that reads only the exit code cannot tell them apart and will stamp "VERIFIED"
+# on a push that was never wake-confirmed — the W5 silent-degrade, one layer up. So every terminal
+# branch prints a stable token as its LAST stderr line:
+#
+#     cc-announce: verdict=VERIFIED | verdict=DEGRADED | verdict=ALARM(<VERDICT>)
+#
+# Callers key on that token, never on the prose or the emoji (prose is for humans and changes; a
+# vendor/tool status is the thing to key on). Exit codes are UNCHANGED — this is additive.
+#
 # Env overrides (tests): CC_NOTIFY_BIN, CC_ROLES_DIR, CC_ANNOUNCE_ALARM_DIR, CC_ANNOUNCE_RETRY_SLEEP.
-# bash 3.2-safe. Exit: 0 = VERIFIED (or delivered-but-unverifiable to a busy-alive target, RECORDED) ·
+# bash 3.2-safe. Exit: 0 = VERIFIED *or* DEGRADED (read verdict= to tell them apart; both are RECORDED) ·
 #       2 = usage · 5 = NOT verified after one retry — a LOUD alarm record was written (never silent).
 set -uo pipefail
 
@@ -144,6 +156,7 @@ announce() { # <role-token> <message>
     case "$VERDICT" in
       VERIFIED)
         echo "cc-announce: ✅ $ROLE_LABEL — VERIFIED announce (composer wake confirmed)" >&2
+        echo "cc-announce: verdict=VERIFIED" >&2
         return 0 ;;
       USAGE)
         die "cc-notify usage error delivering to $target: $out" ;;
@@ -151,6 +164,7 @@ announce() { # <role-token> <message>
         if [ "$last" = 1 ]; then
           write_degrade "delivered to inbox but NOT a confirmed wake after retry (no watcher armed, or liveness unconfirmed — drains on the target's next turn; cc-inbox-guard escalates if it never does): $out" "$token" "$target"
           echo "cc-announce: ⚠️  $ROLE_LABEL — delivered to inbox but NOT a confirmed wake after retry (no watcher / liveness unconfirmed); RECORDED, guard backstops" >&2
+          echo "cc-announce: verdict=DEGRADED" >&2
           return 0
         fi ;;
       *)  # MAILBOX (dead inbox) | UNRESOLVED | WRITEFAIL | RESOLVER_DOWN | AMBIGUOUS | UNKNOWN —
@@ -158,6 +172,7 @@ announce() { # <role-token> <message>
         if [ "$last" = 1 ]; then
           write_alarm "announce-not-verified" "announce to $target NOT verified after one retry (verdict=$VERDICT): $out" "$token" "$target" "$VERDICT"
           echo "cc-announce: ⛔ ALARM — $ROLE_LABEL announce NOT verified (verdict=$VERDICT) after one retry; an inbox no live session drains is a RELOAD not a WAKE. Alarm recorded in $ALARM_DIR." >&2
+          echo "cc-announce: verdict=ALARM($VERDICT)" >&2
           return 5
         fi ;;
     esac

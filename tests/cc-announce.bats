@@ -154,3 +154,25 @@ n_calls() { grep -c '' "$BATS_TEST_TMPDIR/stub.log" 2>/dev/null || echo 0; }
   [ "$status" -eq 0 ]
   [ "$(n_calls)" -eq 2 ]
 }
+
+# ── the machine-readable verdict token: callers must key on status, never on prose ────────────────
+@test "verdict token: wake-path armed → verdict=VERIFIED on stderr" {
+  CC_NOTIFY_BIN="$(stub verified)" run "$A" desk "done"
+  [ "$status" -eq 0 ]
+  run grep -q '^cc-announce: verdict=VERIFIED$' <<<"$output"
+  [ "$status" -eq 0 ]
+}
+
+@test "verdict token: live-but-no-watcher → verdict=DEGRADED (the exit code alone cannot say this)" {
+  CC_NOTIFY_BIN="$(stub nowatch)" run "$A" desk "done"
+  [ "$status" -eq 0 ]                                   # SAME exit code as VERIFIED — that is the point
+  run grep -q '^cc-announce: verdict=DEGRADED$' <<<"$output"
+  [ "$status" -eq 0 ]
+}
+
+@test "verdict token: an alarmed announce reports verdict=ALARM(<verdict>)" {
+  CC_NOTIFY_BIN="$(stub mailbox)" run "$A" desk "done"
+  [ "$status" -eq 5 ]
+  run grep -q '^cc-announce: verdict=ALARM(MAILBOX)$' <<<"$output"
+  [ "$status" -eq 0 ]
+}
