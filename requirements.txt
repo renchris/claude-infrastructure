@@ -1,0 +1,20 @@
+# Third-party Python packages the bin/ tools import. Everything else in this repo is
+# stdlib-only by design — this file exists so the exceptions are ENUMERABLE rather than
+# rediscovered as a red test on a fresh host.
+#
+# Installed by scripts/python-deps.sh (called from install.sh on global installs only —
+# these back bin/, which an --config-dir install does not deploy). Kept as a file, not a
+# literal inside the installer, so `pip3 install --break-system-packages -r requirements.txt`
+# stays a runnable recovery the operator can paste verbatim.
+#
+# The trailing `# import: <name>` is PARSED by scripts/python-deps.sh — it is the probe
+# name, which pip cannot derive (websocket-client installs the `websocket` module). Adding
+# a dep here without that marker leaves it installed-but-unprobed, so the marker is
+# required, not decorative.
+
+# cc-relogin phase 2 opens ONE raw WebSocket to Dia's CDP endpoint (bin/cc-relogin
+# cdp_connect). Its absence is not a soft degradation: the import guard raises
+# BROWSER_FAILED(4), which MASKS the CONSENT_GATE(7) verdict the operator actually
+# needs — sending them after the wrong problem (a dead browser) instead of the real
+# one (an un-toggled dia://inspect consent gate).
+websocket-client>=1.6.1  # import: websocket
