@@ -123,10 +123,22 @@ info() { printf '%s' "$2" > "$CC_STUB_INFO_DIR/$1.json"; }
 @test "another heal/login in flight (lock held) → relogin DEFERRED, not counted stranded" {
   rows '{"rows":[{"acct":"next2","auth":"token-invalid","k":0}]}'
   info next2 "{\"config_dir\":\"/x\",\"keychain_service\":\"svc\",\"keychain_state\":\"present\",\"claude_bin\":\"$BIN/claude-heal-ok\",\"oauth_scopes\":\"a b\",\"has_refresh_token\":true}"
-  # hold the EXACT lock claude-accounts heal() would take (interlock proof)
-  /usr/bin/python3 -c "import fcntl,time; f=open('${CC_HEAL_LOCK_PREFIX}next2.lock','w'); fcntl.flock(f,fcntl.LOCK_EX); time.sleep(3)" &
+  # Hold the EXACT lock claude-accounts heal() would take (interlock proof). The holder
+  # announces acquisition with a marker file and we WAIT for it: a fixed `sleep 0.5` raced
+  # python's startup on a loaded machine, the sweep then found the lock free, healed instead
+  # of deferring, and this test failed while asserting nothing about its own precondition.
+  # A concurrency test that does not confirm the contended state is testing the uncontended one.
+  local marker="$BATS_TEST_TMPDIR/holder.acquired"
+  /usr/bin/python3 -c "
+import fcntl, time
+f = open('${CC_HEAL_LOCK_PREFIX}next2.lock', 'w')
+fcntl.flock(f, fcntl.LOCK_EX)
+open('$marker', 'w').close()
+time.sleep(10)" &
   local holder=$!
-  sleep 0.5
+  local waited=0
+  while [ ! -e "$marker" ] && [ "$waited" -lt 100 ]; do sleep 0.1; waited=$((waited+1)); done
+  [ -e "$marker" ]                                    # precondition, asserted not assumed
   run bash "$HF" account-sweep
   kill "$holder" 2>/dev/null || true
   [ "$status" -eq 0 ]

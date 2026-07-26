@@ -11,6 +11,14 @@ refresh token survives. All commands below use `$CFG` (config_dir), `$EMAIL`,
 `$BIN` (claude_bin) from that JSON. **Serialize: one re-login per account at a time,
 never while another heal/login is in flight** (`/tmp/claude-accounts-heal-<acct>.lock`).
 
+> **Try the automated ladder FIRST: `cc-relogin <acct>` (`/relogin`).** It executes Phases 0-2
+> below — gate, headless refresh grant, browser-assisted OAuth over CDP in the account's own
+> Dia profile — and proves the result by effect. Come back to this runbook when it exits **6**
+> (that profile's claude.ai session is cold ⇒ Phase 2b's email-code leg) or **7** (Dia's consent
+> dialog is pending ⇒ a human cycles `dia://inspect#remote-debugging`), or when you need to
+> understand a step it reports as failed. Everything below remains the reference; the tool is
+> the shortcut, not a replacement.
+
 ## Phase 0 — Confirm the state (never re-login a healthy account)
 
 ```bash
