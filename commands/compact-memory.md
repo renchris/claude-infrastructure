@@ -35,6 +35,21 @@ minus the autonomous fork.
    > alone rarely clears the warning. That is by design — say so; the real lever is PROPOSE-ONLY.
 
 ## PROPOSE-ONLY (lossy-at-glance — NEVER auto-apply)
+
+🚨 **PRECONDITION for every shortening — audit for INDEX-ONLY detail first. "its detail already
+lives in the topic file" is an ASSUMPTION, and it is routinely false.** An index line accretes
+corrections across sessions (`**CORRECTED**`, `**4th CORRECTION**`, a landed SHA, a build status)
+that were appended to `MEMORY.md` and never written back to the topic file. Shortening such a line
+is the only truly irreversible act in this command. Before proposing ANY shortened line, extract its
+hard tokens — backticked code spans, 7-hex SHAs, numbers, ALL-CAPS terms — and grep each against the
+linked topic file. Anything absent is index-only: **INTEGRATE it into the topic file first (Edit,
+never Write), then shorten.** Re-run the audit against the proposal and report it CLEAN; a token
+that survives only as a hyphenation/format variant is fine, a missing fact is not.
+2026-07-26 (pass 2), this caught three facts that a semantic rewrite would still have destroyed:
+the landed SHA `828816d`, an entire 3rd-instance root-cause finding (`c3edb2d`), and a whole
+`P2-P4 BUILT / LAND-BLOCKED` build status. Also snapshot the pre-compaction index verbatim into
+`archive/` so any hook can be restored word-for-word.
+
 6. **Oversized index lines**: any `## Project State` entry whose index line exceeds ~200 chars
    while its detail already lives in the linked topic file. Propose a shortened <=200-char line
    (preserve the load-bearing hook + SHA + `[link]`). Show before/after; apply only on approval.
