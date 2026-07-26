@@ -108,6 +108,39 @@ already carves out DIRECT suites. **Delete the monolith's body; loop `run_scoped
 Compose with what already landed — do not replace it: `c605a2e` (CUT ≠ RED, TAP-body verdict) and
 `gate_admit` (bounded fail-OPEN load shedding) are both on trunk and both stay.
 
+### LANDED `1bc02f6f` (2026-07-26) — what the build actually taught
+
+**The one design step, as built.** `run_scoped_suite` returned 0/1 and never told its caller which.
+It now returns **0 green / 1 RED (a named failure) / 2 KILLED (cut twice, ZERO `not ok` both runs)**
+on c605a2e's own discriminator — the TAP body, never the exit code. The per-suite loop counts the
+two separately, so a corpus with ≥1 killed and 0 `not ok` stays the exit-9 non-verdict.
+
+- **No fail-fast, and it is not an optimisation question.** The loop must finish the corpus so "did
+  ANY suite name a real failure?" is answerable from evidence. Stopping at the first CUT would
+  report 9 ("retry when quieter") for a tree that is genuinely broken — `f8e40b4c577d` in miniature.
+- **The SCOPED tier never kept c605a2e's promise.** Its premise is that both tiers share one
+  discriminator, but any scoped failure left `GATE_RED`/`GATE_KILLED` at 0, so `gate_nonzero_code`'s
+  else branch reported a signal-killed *scoped* land as exit 6. Fixed in the same change.
+- **A per-call bound multiplies across a loop.** `gate_admit`'s 600 s was written for a caller that
+  ran it twice; per-suite it runs once per corpus **plus** once per failing suite's re-run — 126 ×
+  600 s is 21 h of "bounded" waiting. Added run-wide `CC_GATE_ADMIT_TOTAL_WAIT` (1200 s, fail-OPEN).
+- **The new kill switch had to join `gate_bats`'s scrub list.** Unscrubbed, an operator landing with
+  `SHIP_LAND_FULL_PER_SUITE=off` bleeds it into every fixture pipeline in `tests/ship-land.bats` —
+  the `SHIP_LAND_GATE_ROUNDS=0` defect verbatim, on the flag this change introduces.
+
+**Tests: 60/60.** 11 pre-existing tests were re-pointed to `SHIP_LAND_FULL_PER_SUITE=off` and not
+otherwise touched. Each failed on a `$BATS_ARGV` assertion **and nothing else** — exit codes,
+operator text, and landed/not-landed all pass against the per-suite runner unmodified. Two
+irreducible classes: **(a)** the literal string `tests/`, which per-suite mode cannot emit by
+construction; **(b)** an invocation COUNT calibrated to one process for the whole corpus. Pinning
+them also closes a real gap — the kill switch is the documented escape hatch (an env flag, **not** a
+revert, because a revert would itself need the gate) and an untested escape hatch rots exactly when
+it is needed. 8 per-suite twins added; 4 are RED against the parked WIP for the right reason.
+
+**Blocker found while landing, NOT fixed — see §7.** This land ran the **scoped** tier (the repo's
+committed default; the selector picked 25 suites), so it did not exercise `run_bats_all` in
+production. The per-suite runner is proven by the suite, not by its own land.
+
 ---
 
 ## 4. Phase 2 — content-addressed per-suite proof cache (the durable architecture)
@@ -165,9 +198,55 @@ design being the defect, and its premise is stale.
 | 0 | CUT ≠ RED (TAP-body verdict) | labelling | **LANDED** `c605a2e` |
 | 0 | `gate_admit` bounded load shedding | q | **LANDED** |
 | 0 | selector: added file runs same clauses | n (7→3 FULL of 40) | **LANDED** `19a2cfe` |
-| **1** | **per-suite runner** | **n: P 2.3% → 49.9%** | **THIS PLAN** |
+| **1** | **per-suite runner** (+ KILLED/RED split in `run_scoped_suite`, both tiers) | **n: P 2.3% → 49.9%** | **LANDED** `1bc02f6f` |
 | 2 | `$HOME` isolation per gate (APFS clone) | precondition | next |
 | 2 | content-addressed proof cache | work: 5.5× fewer executions | next |
 | 3 | hermeticity for ~20 hot cacheable suites | enables caching | after |
 
 Judge every future proposal against §1: **does it reduce `n`, or is it another `q` fix?**
+
+---
+
+## 7. OPEN — the scoped tier's safety premise has never once been true
+
+Found 2026-07-26 while landing Phase 1, by reading the post-land net's own stamps. **Not fixed: the
+obvious fix is a landing-POLICY change with a real downside, and it needs an operator ruling.**
+
+A scoped land is only safe because the FULL suite is re-proven off the critical path. `ship-land.sh`
+enforces that with `postland_net_live()`, which finds the newest **green** stamp and degrades to
+FULL if it has gone cold. Disk truth in `~/.claude/autonomy/postland/stamps`:
+
+    15 stamps · verdict distribution:  15 red,  0 green  (ever)
+    newest: 2026-07-26T21:11:46Z — run_s 13248 (3.7 h), retries 16, 7 failing suites
+
+With no green stamp the guard returns *"the net simply is not adopted (the bootstrap land) — never
+brick that"* and **permits the scoped land**. But the net IS adopted — it ran 3.7 h ago. The oracle
+collapses two states that need different answers, and they are byte-identical as `newest_green == 0`:
+
+| state | correct action | what the guard does |
+|---|---|---|
+| the net has never run (bootstrap) | allow scoped | allow scoped ✓ |
+| the net runs constantly and is **always red** | degrade to FULL — the property does not exist | allow scoped ✗ |
+
+**This is the plan's own defect one level up:** a non-verdict about the *net's* health read as a
+benign absence, exactly as a signal-kill was read as RED. Every scoped land on this box — including
+Phase 1's own — has landed on a premise that has never held.
+
+**Why it was not just fixed.** Failing closed would degrade every land to FULL until the net goes
+green, and the net is always red ⇒ landing becomes FULL-only. That is *survivable only because
+Phase 1 just moved P(green|FULL) 2.3% → 49.9%*, which makes it a defensible trade rather than an
+obvious one — a policy fork, not a bug fix. Options, recommendation first:
+
+1. **Fix the net, not the guard.** The 7 suites keeping it red (`deploy-parity`, `desk-arm-live`,
+   `desk-recycle-durable`, `lr-team-audit`, `session-continue`, `test-hermeticity-lint`,
+   `waiting-recycle`). §2 already records that postland's retry ladder "convicts six suites that
+   pass cleanly on a quiet box" — so some are likely the same false-RED class Phase 1 dissolves.
+   Re-measure them under the per-suite runner **before** treating any as a genuine failure.
+2. **Teach the guard the third state** — distinguish "never ran" from "ran, never green"; fail
+   closed on the latter. Correct, but makes every land FULL until (1) is done.
+3. **Record and defer** — Phase 2's `$HOME` isolation may independently dissolve several of the 7
+   (they are the live-`~/.claude` readers), so (1) may partly solve itself.
+
+**Do not adopt the proof cache (§4) while this is open.** A cached GREEN keyed on a tree whose
+full-suite proof never actually ran would make the false premise *durable* — §4's "honest coupling"
+warning applies to this too, not only to `$HOME` isolation.
