@@ -208,9 +208,56 @@ ACCOUNT_SWEEP_BRIDGE=""    # Part A2: embeddable "## ACCOUNT STATE" section (non
 # Print the header comment up to (excluding) the first non-comment sentinel — growth-proof range.
 usage() { sed -n '2,/^set -euo pipefail/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
+# ---- external iTerm2 call bound (machine-wide API wedge, 2026-07-26) -------------------------
+# EVERY call below leaves this process and reaches iTerm2 — via AppleEvents (osascript), the it2
+# CLI, or the iterm2 Python API. All three funnel into the SAME serialized API surface, so when it
+# wedges they all block indefinitely. Measured during the wedge: a bare `it2 session list --json`
+# → rc 124 with zero output, and `handoff-fire.sh self-close --terminal` stalling ~100s on a clean
+# tree, so finished panes could not retire and piled up as false STALL/DEAD pages.
+#
+# This script is the WORST exposure of the fleet for two compounding reasons:
+#   1. It deliberately forks $REAL_IT2 — the raw binary, NOT the ~/.claude/bin/it2 shim — to get
+#      the firing pane's own profile on split (see the REAL_IT2 block below). That is correct for
+#      profile inheritance but it also OPTS OUT of the shim's 30s bound, leaving these forks
+#      completely unbounded.
+#   2. it2_type_verified RETRIES: up to 4 attempts x ~4 forks. A per-fork bound MULTIPLIES, so even
+#      on the shim path the aggregate worst case is ~16 x 30s ≈ 8 minutes. Bounding the primitive
+#      is necessary but not sufficient — the cap here is deliberately short (10s) so the retry
+#      product stays inside the caller's own patience.
+#
+# This invents no failure mode: every caller already classifies a failed osascript/it2 call and
+# fails loud (as_tty retries then returns empty; it2_split returns 1 and the caller retries-then-
+# fails-loud; it2_type_verified degrades to a plain send then reports "run manually"). The bound
+# converts an indefinite block into the degradation each was built for.
+#
+# timeout(1) is resolved by ABSOLUTE PATH as well as PATH: the launchd jobs and hooks that fire
+# this script run with a minimal PATH excluding Homebrew — exactly where coreutils installs it —
+# so a PATH-only lookup would leave the AUTOMATED callers (the ones that built the pile-up)
+# unbounded while interactive shells stayed safe. No timeout(1) anywhere ⇒ run unbounded rather
+# than break every handoff. Seams: HANDOFF_IT2_TIMEOUT_S · HANDOFF_IT2_TIMEOUT_BIN (set-but-EMPTY
+# disables bounding verbatim — `${VAR:-}` cannot tell unset from set-empty, and a seam that cannot
+# turn a thing OFF is not a seam; same defect fixed in cc-inbox-guard c3edb2d and it2-wrapper).
+HF_TIMEOUT_S="${HANDOFF_IT2_TIMEOUT_S:-10}"
+if [ -n "${HANDOFF_IT2_TIMEOUT_BIN+set}" ]; then
+  HF_TIMEOUT_BIN="$HANDOFF_IT2_TIMEOUT_BIN"
+else
+  HF_TIMEOUT_BIN=""
+  for _c in "$(command -v timeout 2>/dev/null || true)" "$(command -v gtimeout 2>/dev/null || true)" \
+            /opt/homebrew/bin/timeout /usr/local/bin/timeout \
+            /opt/homebrew/bin/gtimeout /usr/local/bin/gtimeout; do
+    [ -n "$_c" ] && [ -x "$_c" ] && { HF_TIMEOUT_BIN="$_c"; break; }
+  done
+fi
+# Run an external iTerm2-reaching command under the bound. Returns the command's own rc, or 124 on
+# expiry — which every caller here already treats as "that call failed", its fail-loud path.
+hf_bounded() {
+  if [ -z "$HF_TIMEOUT_BIN" ] || [ ! -x "$HF_TIMEOUT_BIN" ]; then "$@"; return $?; fi
+  "$HF_TIMEOUT_BIN" -k 3 "$HF_TIMEOUT_S" "$@"
+}
+
 # Shared single-lookup writer: find the session once, type one line into it.
 as_write() { # $1=session-uuid $2=text
-  osascript - "$1" "$2" <<'AS'
+  hf_bounded osascript - "$1" "$2" <<'AS'
 on run argv
   tell application "iTerm2"
     repeat with w in windows
@@ -264,7 +311,7 @@ _as_tty_query() { # $1=session-uuid → tty on stdout; non-zero when the query i
       return 1
     fi
   fi
-  osascript - "$1" <<'AS' 2>/dev/null
+  hf_bounded osascript - "$1" <<'AS' 2>/dev/null
 on run argv
   tell application "iTerm2"
     repeat with w in windows
@@ -346,19 +393,19 @@ it2_type_verified() { # $1=it2-bin $2=session-id $3=command → 0 verified+submi
     # Final attempt degrades to a plain (un-bracketed) char-send — covers the exotic case of a shell
     # with bracketed paste disabled; echo-verify still gates the CR so the fallback is never unsafe.
     mode="paste"; [ "$attempt" -ge "$attempts" ] && mode="plain"
-    "$it2" session send -s "$id" $'\x15' >/dev/null 2>&1 || true    # Ctrl-U: scrub any partial line
+    hf_bounded "$it2" session send -s "$id" $'\x15' >/dev/null 2>&1 || true    # Ctrl-U: scrub any partial line
     /bin/sleep "$presettle"
     if [ "$mode" = "paste" ]; then
-      "$it2" session send -s "$id" "${BP_START}${cmd}${BP_END}" >/dev/null 2>&1 || { /bin/sleep "$settle"; continue; }
+      hf_bounded "$it2" session send -s "$id" "${BP_START}${cmd}${BP_END}" >/dev/null 2>&1 || { /bin/sleep "$settle"; continue; }
     else
-      "$it2" session send -s "$id" "$cmd" >/dev/null 2>&1 || { /bin/sleep "$settle"; continue; }
+      hf_bounded "$it2" session send -s "$id" "$cmd" >/dev/null 2>&1 || { /bin/sleep "$settle"; continue; }
     fi
     /bin/sleep "$settle"
-    reread="$("$it2" session read -s "$id" -n "$nlines" 2>/dev/null | tr -d '[:space:]' || true)"
+    reread="$(hf_bounded "$it2" session read -s "$id" -n "$nlines" 2>/dev/null | tr -d '[:space:]' || true)"
     if printf '%s' "$reread" | grep -qF -- "$want"; then
-      "$it2" session send -s "$id" $'\r' >/dev/null 2>&1 && return 0   # verified → submit
+      hf_bounded "$it2" session send -s "$id" $'\r' >/dev/null 2>&1 && return 0   # verified → submit
     fi
-    "$it2" session send -s "$id" $'\x15' >/dev/null 2>&1 || true    # scrub the mangled/half line
+    hf_bounded "$it2" session send -s "$id" $'\x15' >/dev/null 2>&1 || true    # scrub the mangled/half line
     /bin/sleep "$settle"
   done
   return 1
@@ -371,9 +418,9 @@ it2_type_verified() { # $1=it2-bin $2=session-id $3=command → 0 verified+submi
 # but bracketed paste alone removes the flood. CR submits (Ink binds Enter to CR).
 it2_paste_submit() { # $1=it2-bin $2=session-id $3=text → 0 pasted+submitted / 1 send failed
   local it2="$1" id="$2" text="$3"
-  "$it2" session send -s "$id" "${BP_START}${text}${BP_END}" >/dev/null 2>&1 || return 1
+  hf_bounded "$it2" session send -s "$id" "${BP_START}${text}${BP_END}" >/dev/null 2>&1 || return 1
   /bin/sleep "${FIRE_TYPE_SETTLE:-0.5}"
-  "$it2" session send -s "$id" $'\r' >/dev/null 2>&1
+  hf_bounded "$it2" session send -s "$id" $'\r' >/dev/null 2>&1
 }
 
 # ---- P0-11 engagement verification (FM2 / INC-4 cold-fire auto-submit race) -------------------
@@ -1910,7 +1957,7 @@ PYTHON_BIN="$(sed -n 's/^PYTHON_BIN="\(.*\)"$/\1/p' "$IT2_SHIM" 2>/dev/null | he
 # surface — restoring the OPERATOR's own focus is the mechanism that makes "active-session unchanged"
 # hold. The frontmost-app re-focus undoes any transient iTerm2 raise for an operator in another app.
 it2py() {
-  "$PYTHON_BIN" - "$@" <<'PY'
+  hf_bounded "$PYTHON_BIN" - "$@" <<'PY'
 import subprocess
 import sys
 
@@ -2070,7 +2117,7 @@ restore_focus_or_fail() {
 # gone or iTerm2 errors — the caller retries-then-fails-loud, and NEVER drifts to another window.
 it2_split() { # $1=firing-uuid  $2=vertically|horizontally  → echoes new session id | returns 1
   local vflag=""; [ "$2" = vertically ] && vflag="-v"
-  local out; out="$("$REAL_IT2" session split -s "$1" $vflag 2>&1)" || return 1
+  local out; out="$(hf_bounded "$REAL_IT2" session split -s "$1" $vflag 2>&1)" || return 1
   case "$out" in
     "Created new pane: "*) printf '%s' "${out#Created new pane: }"; return 0 ;;
     *) return 1 ;;
@@ -2093,7 +2140,7 @@ it2_land() { # $1=new-session-id  → 0 on typed, 1 (loud) if the pane exists bu
   done
   [ "$ok" = 1 ] || { echo "!! pane $id created but typing the launch command failed (2×) — run manually in it: $CMD" >&2; return 1; }
   if [ "$FOLLOW" = 1 ]; then
-    "$REAL_IT2" session focus "$id" >/dev/null 2>&1 || true   # --follow: land the operator's view on the continuation
+    hf_bounded "$REAL_IT2" session focus "$id" >/dev/null 2>&1 || true   # --follow: land the operator's view on the continuation
   fi
   return 0
 }
@@ -2107,7 +2154,7 @@ it2_land() { # $1=new-session-id  → 0 on typed, 1 (loud) if the pane exists bu
 # deliberate --window does that). No `write text` char-stream here → no ttys018 mis-inject (the
 # --tab half of item 0b878805bc27; the split/bg-tab half is e4c7e7fb41bd).
 as_tab() { # $1=session-uuid  → echoes "OK <new-session-id>" | "NOTFOUND"
-  osascript - "$1" <<'AS'
+  hf_bounded osascript - "$1" <<'AS'
 on run argv
   set sid to item 1 of argv
   tell application "iTerm2"
@@ -2148,13 +2195,13 @@ spawn_frontmost() { # → echoes the new session id on stdout | empty on failure
   # created in the background and never pulls the operator off their current app/window (C1). The
   # raise + focus on --follow is completed by it2_land (session focus); autonomous stays background.
   if [ "$FOLLOW" = 1 ]; then
-    osascript -e 'tell application "iTerm2"' \
+    hf_bounded osascript -e 'tell application "iTerm2"' \
               -e 'activate' \
               -e 'set newWin to (create window with default profile)' \
               -e 'return id of current session of newWin' \
               -e 'end tell'
   else
-    osascript -e 'tell application "iTerm2"' \
+    hf_bounded osascript -e 'tell application "iTerm2"' \
               -e 'set newWin to (create window with default profile)' \
               -e 'return id of current session of newWin' \
               -e 'end tell'

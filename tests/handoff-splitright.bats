@@ -16,6 +16,14 @@
 # like the real CLI); spawn_frontmost / it2_land / as_tab are stubbed to record which path ran.
 
 setup() {
+  # handoff-fire.sh bounds every external iTerm2 call (osascript / it2 CLI / iterm2 python) through
+  # hf_bounded — a timeout(1) wrapper — because a wedged iTerm2 API blocks them indefinitely. These
+  # suites EXTRACT individual functions instead of sourcing the script, so that helper is not in
+  # scope and an extracted function would die with "hf_bounded: command not found". A passthrough
+  # keeps the extracted behaviour byte-identical and deterministic; the helper's OWN semantics
+  # (bound applied, expiry -> 124, set-but-empty disable seam) are covered by
+  # tests/handoff-fire-it2-bound.bats against the real definition.
+  hf_bounded() { "$@"; }
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   HF="$REPO/scripts/handoff-fire.sh"
 

@@ -103,6 +103,29 @@ log() {
 # on every live teammate pane (memory: it2-session-close-force-modal-2026-06-09).
 _it2_bin() { command -v it2 2>/dev/null || echo "$HOME/.claude/bin/it2"; }
 
+# Bound every fork that reaches the iTerm2 API (machine-wide wedge, 2026-07-26). The shim
+# self-bounds its own CLI forks at 30s, but this hook must return inside its 5s hook budget and
+# close_pane is called PER TEAMMATE, so 30s each is already too slow; _pane_from_tty forks python
+# directly and is not covered by the shim at all. timeout(1) is resolved by ABSOLUTE PATH too —
+# hooks run with a minimal PATH excluding Homebrew, where coreutils installs it. No timeout(1)
+# ⇒ run unbounded rather than break teardown. Seam: TAS_IT2_TIMEOUT_S · TAS_IT2_TIMEOUT_BIN
+# (set-but-EMPTY disables verbatim; `${VAR:-}` cannot tell unset from set-empty).
+TAS_TIMEOUT_S="${TAS_IT2_TIMEOUT_S:-8}"
+if [[ -n "${TAS_IT2_TIMEOUT_BIN+set}" ]]; then
+  TAS_TIMEOUT_BIN="$TAS_IT2_TIMEOUT_BIN"
+else
+  TAS_TIMEOUT_BIN=""
+  for _c in "$(command -v timeout 2>/dev/null || true)" "$(command -v gtimeout 2>/dev/null || true)" \
+            /opt/homebrew/bin/timeout /usr/local/bin/timeout \
+            /opt/homebrew/bin/gtimeout /usr/local/bin/gtimeout; do
+    [[ -n "$_c" && -x "$_c" ]] && { TAS_TIMEOUT_BIN="$_c"; break; }
+  done
+fi
+tas_bounded() {
+  if [[ -z "$TAS_TIMEOUT_BIN" || ! -x "$TAS_TIMEOUT_BIN" ]]; then "$@"; return $?; fi
+  "$TAS_TIMEOUT_BIN" -k 3 "$TAS_TIMEOUT_S" "$@"
+}
+
 # Close one teammate pane by its recorded id. Idempotent: closing an
 # already-gone pane fails with "not found" (the caller logs it as such).
 # iTerm2 session UUIDs are never recycled, so a stale id can only no-op — it
@@ -115,7 +138,7 @@ close_pane() {
   if [[ "$pane" =~ ^%[0-9]+$ ]]; then
     CLOSE_ERR=$(tmux kill-pane -t "$pane" 2>&1 >/dev/null)   # tmux backend: synchronous, no prompt
   else
-    CLOSE_ERR=$("$(_it2_bin)" session close -f -s "$pane" 2>&1 >/dev/null)  # shim → python force=True
+    CLOSE_ERR=$(tas_bounded "$(_it2_bin)" session close -f -s "$pane" 2>&1 >/dev/null)  # shim → python force=True
   fi
 }
 
@@ -227,14 +250,21 @@ _pane_from_env() {
 }
 
 # iTerm2 session UUID from a pid via its controlling tty (API enumeration).
-# Echoes UUID; empty on failure. Bounded 3s so even a detached call can't wedge.
+# Echoes UUID; empty on failure.
+#
+# The inner `asyncio.wait_for(_find(), timeout=3)` bounds only the RPC — it cannot fire if the API
+# CONNECT before it never completes, which is exactly what a wedged iTerm2 does (the same gap the
+# it2 shim documents for its own force-close interception). So the "bounded 3s" this comment used
+# to claim was FALSE in the one failure mode it was written for, and a false bound is worse than
+# none: callers trusted it and skipped their own cap. The outer process bound below is what makes
+# the claim true.
 _pane_from_tty() {
   local pid="$1" tty
   [[ -n "$pid" ]] || return 1
   [[ -x "$PANE_PYTHON_BIN" ]] || return 1
   tty=$(ps -o tty= -p "$pid" 2>/dev/null | tr -d ' ')
   [[ -n "$tty" && "$tty" != "??" ]] || return 1
-  "$PANE_PYTHON_BIN" - "/dev/$tty" <<'PY' 2>/dev/null
+  tas_bounded "$PANE_PYTHON_BIN" - "/dev/$tty" <<'PY' 2>/dev/null
 import asyncio, sys
 try:
     import iterm2

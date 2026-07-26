@@ -15,6 +15,32 @@
 # Never reuses the current pane (resume-sessions off-by-one rule); always a new window. Fail-loud.
 set -uo pipefail
 
+# Bound every call that reaches the iTerm2 / AppleEvent surface (machine-wide API wedge,
+# 2026-07-26: a bare `it2 session list --json` returned rc 124 with zero output while blocked forks
+# piled up). This runs at BOOT to drive iTerm2; unbounded, a wedged API strands the whole resume with no
+# operator feedback. The existing rc-4 'osascript failed' path already reports a cut.
+# timeout(1) is resolved by ABSOLUTE PATH as well as PATH — launchd jobs and hooks run with a
+# minimal PATH excluding Homebrew, exactly where coreutils installs it, so a PATH-only lookup would
+# leave the AUTOMATED callers unbounded while interactive shells stayed safe. No timeout(1) ⇒ run
+# unbounded rather than break the call. Seams: CC_OSA_TIMEOUT_S · CC_OSA_TIMEOUT_BIN
+# (set-but-EMPTY disables verbatim; `${VAR:-}` cannot tell unset from set-empty).
+BRL_TIMEOUT_S="${CC_OSA_TIMEOUT_S:-20}"
+if [ -n "${CC_OSA_TIMEOUT_BIN+set}" ]; then
+  BRL_TIMEOUT_BIN="$CC_OSA_TIMEOUT_BIN"
+else
+  BRL_TIMEOUT_BIN=""
+  for _c in "$(command -v timeout 2>/dev/null || true)" "$(command -v gtimeout 2>/dev/null || true)" \
+            /opt/homebrew/bin/timeout /usr/local/bin/timeout \
+            /opt/homebrew/bin/gtimeout /usr/local/bin/gtimeout; do
+    [ -n "$_c" ] && [ -x "$_c" ] && { BRL_TIMEOUT_BIN="$_c"; break; }
+  done
+fi
+brl_bounded() {
+  if [ -z "$BRL_TIMEOUT_BIN" ] || [ ! -x "$BRL_TIMEOUT_BIN" ]; then "$@"; return $?; fi
+  "$BRL_TIMEOUT_BIN" -k 3 "$BRL_TIMEOUT_S" "$@"
+}
+
+
 DRYRUN="${CC_LAUNCH_DRYRUN:-0}"
 case "${1:-}" in
   -h|--help) sed -n '2,/^set -uo/p' "$0" | sed 's/^# \{0,1\}//; /^set -uo/d'; exit 0 ;;
@@ -63,5 +89,5 @@ command -v "${OSASCRIPT%% *}" >/dev/null 2>&1 || { echo "boot-resume-launch: osa
 
 # ensure iTerm2 is up (post-login it may not be running yet), then drive it.
 open -a iTerm 2>/dev/null || true
-printf '%s' "$OSA" | "$OSASCRIPT" - >/dev/null 2>&1 || { echo "boot-resume-launch: osascript failed for $sid" >&2; exit 4; }
+printf '%s' "$OSA" | brl_bounded "$OSASCRIPT" - >/dev/null 2>&1 || { echo "boot-resume-launch: osascript failed for $sid" >&2; exit 4; }
 exit 0
