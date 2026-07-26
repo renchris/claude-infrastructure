@@ -29,6 +29,17 @@ readonly WATCHDOG_DIR="${TEAM_REAPER_WATCHDOG_DIR:-$HOME/.claude/watchdog}"
 readonly ARCHIVE_DIR="$TEAMS_DIR/_archive"
 readonly LOG_FILE="${TEAM_REAPER_LOG_FILE:-$HOME/.claude/logs/team-reaper.log}"
 readonly PERM_TIMEOUT_MIN="${TEAM_REAPER_PERM_TIMEOUT_MIN:-5}"
+# Where the bounded-abstain clock and the page-damping markers live (see the UNKNOWN branch).
+readonly STATE_DIR="${TEAM_REAPER_STATE_DIR:-$HOME/.claude/autonomy/team-reaper-state}"
+# Ceiling past which an UNKNOWN team stops abstaining. The legitimate reasons for UNKNOWN are
+# short-lived (the watchdog has not written its pid file yet) or covered by the positive oracles
+# (an in-place /handoff left a stale leadSessionId while a successor drives the team — caught by
+# occupancy or the registry). 6h matches the repo's other owned-wait ceiling; a team UNKNOWN and
+# UNOCCUPIED for longer is not a team anyone is waiting on.
+readonly UNKNOWN_MAX_S="${TEAM_REAPER_UNKNOWN_MAX_S:-21600}"
+# Separate ceiling for an UNRESOLVED probe (no lsof). Past it the operator is paged ONCE; it never
+# archives at any age, because an unanswered probe is not proof of death.
+readonly UNRESOLVED_MAX_S="${TEAM_REAPER_UNRESOLVED_MAX_S:-$UNKNOWN_MAX_S}"
 
 # Helper CLIs for the archive-safety gate: cc-sessions (live-session registry cross-check) and
 # cc-notify (operator page for an UNKNOWN-liveness team). Resolve PATH-first so a test PATH-shim wins,
@@ -93,6 +104,135 @@ team_has_live_session() { # $1=team_dir
   ' >/dev/null 2>&1
 }
 
+# procs_cwd_under <dir> → pids of live processes whose CWD is at or below <dir>, one per line.
+#
+# THE POSITIVE LIVENESS ORACLE. Everything above it asks whether a RECORD of the lead exists; this
+# asks whether anyone is actually WORKING. macOS has no /proc, so a process's cwd is only readable
+# through lsof(8) — a SYSTEM binary (/usr/sbin/lsof), present under the bare PATH a launchd sweep
+# runs with. `-d cwd -F pn` is the terse form: a `p<pid>` line, then the `n<path>` for that cwd.
+#
+# NOT keyed on argv. cc-wave-plan fires the launcher with the worktree path in ITS argv and the
+# launcher then exits; the surviving worker inherits only the cwd. So `pgrep -f "$wt"` is blind to
+# the actual worker while it thinks — measured against a live dispatched session: pgrep → 0,
+# processes with cwd in the worktree → 6. That exact blindness reaped a live claim and
+# double-dispatched a peer onto occupied work (memory: argv-is-sampling-cwd-is-durable). Occupancy
+# is durable; a mention in argv is sampling.
+#
+# PREFIX, not equality: a worker that cd'd into a subdirectory is still working, and an lsof path
+# ARGUMENT matches the cwd EXACTLY, so the prefix match lives in awk instead.
+#
+# PHYSICAL, not logical: lsof reports a cwd physically resolved (a process in /var/… is reported
+# under /private/var/…), so a prefix match against the RAW path alone sees NOTHING whenever any
+# component of the worktree root is a symlink — blind while looking like it works. Both forms are
+# compared; they are identical when nothing is symlinked, so this only ever ADDS a match.
+#
+# BOUNDED: lsof can block indefinitely on an unresponsive mount and this runs inside a sweep. A
+# timed-out probe yields no pids, which the CALLER must read as UNRESOLVED (a non-verdict), never
+# as "nobody is there" — our own timeout must not forge the death evidence.
+#
+# Seam: TEAM_REAPER_LSOF_BIN — UNSET ⇒ resolve one. SET, including set to EMPTY ⇒ honored verbatim,
+# so `TEAM_REAPER_LSOF_BIN=` genuinely disables the probe. `${VAR:-}` cannot tell unset from
+# set-empty, and a seam that cannot turn a thing OFF is not a seam.
+procs_cwd_under() {
+  local dir="$1" bin out pdir
+  [[ -n "$dir" ]] || return 0
+  pdir="$(cd "$dir" 2>/dev/null && pwd -P 2>/dev/null)" || pdir=""
+  if [[ -n "${TEAM_REAPER_LSOF_BIN+set}" ]]; then
+    bin="$TEAM_REAPER_LSOF_BIN"
+  else
+    bin=/usr/sbin/lsof
+    [[ -x "$bin" ]] || bin="$(command -v lsof 2>/dev/null || true)"
+  fi
+  [[ -n "$bin" ]] && [[ -x "$bin" ]] || return 0
+  if command -v timeout >/dev/null 2>&1; then
+    out="$(timeout "${TEAM_REAPER_ORACLE_TIMEOUT_S:-10}" "$bin" -a -d cwd -w -F pn 2>/dev/null || true)"
+  else
+    out="$("$bin" -a -d cwd -w -F pn 2>/dev/null || true)"
+  fi
+  [[ -n "$out" ]] || return 0
+  printf '%s\n' "$out" | awk -v d="$dir" -v pd="$pdir" '
+    function under(n, base) { return base != "" && (n == base || index(n, base "/") == 1) }
+    /^p/ { p = substr($0, 2); next }
+    /^n/ { n = substr($0, 2); if (under(n, d) || under(n, pd)) print p }' | sort -u
+}
+
+# team_occupied <team_dir> — is anyone actually WORKING in this team's worktrees?
+#   0 OCCUPIED   positive evidence of life: a live process's cwd is at/below a member worktree.
+#   1 UNOCCUPIED the probe ANSWERED and found nobody. A real verdict.
+#   2 UNRESOLVED the probe could not be run at all (no lsof binary, or the seam disabled it). A
+#                NON-VERDICT — the absence of an answer, not the answer "dead". Callers must
+#                ABSTAIN on this and must never archive on it at any age.
+# The three states are the whole point: folding UNRESOLVED into UNOCCUPIED would let a missing
+# lsof archive every team on the machine (memory: gate-never-ran-vs-gate-red — one exit code for
+# two outcomes forces every caller to lie).
+team_occupied() {
+  local cfg="$1/config.json" wt n
+  [[ -f "$cfg" ]] || return 2
+  # Can we probe at all? Resolve exactly as procs_cwd_under does, so the answer matches reality.
+  local bin
+  if [[ -n "${TEAM_REAPER_LSOF_BIN+set}" ]]; then bin="$TEAM_REAPER_LSOF_BIN"
+  else bin=/usr/sbin/lsof; [[ -x "$bin" ]] || bin="$(command -v lsof 2>/dev/null || true)"; fi
+  [[ -n "$bin" ]] && [[ -x "$bin" ]] || return 2
+  while IFS= read -r wt; do
+    [[ -n "$wt" ]] || continue
+    [[ -d "$wt" ]] || continue
+    # SKIP A SHARED CHECKOUT. Occupancy is only evidence about THIS team when the directory is a
+    # dedicated per-team worktree. A main checkout is shared by every session on the machine, so
+    # processes sitting in it say nothing about any particular team — counting them is a FALSE
+    # ALIVE that would pin a dead team forever, re-creating the very stall this leg removes.
+    # Measured 2026-07-26 on the actually-stalled session-85cf3b06: its only member cwd is
+    # ~/Development/claude-infrastructure (the shared checkout, and this repo's symlink source),
+    # where 45 live processes legitimately sat.
+    # The test is self-describing and needs no path list: git makes `.git` a DIRECTORY in a main
+    # checkout and a FILE in a linked worktree. So `.git`-is-a-dir ⇒ shared ⇒ no signal here.
+    # Limit, stated honestly: this skips the checkout TOPLEVEL, which is the shape members
+    # actually carry; a member cwd pointing at a SUBDIRECTORY of a shared checkout would still be
+    # probed. A team with no dedicated worktree therefore yields "unoccupied" rather than
+    # "unresolved" — occupancy is INAPPLICABLE, not unanswerable, and the registry cross-check and
+    # the age ceiling below are then what decide it.
+    [[ -d "$wt/.git" ]] && { log "occupancy: skipping shared checkout $wt (main checkout — not a per-team worktree)"; continue; }
+    n="$(procs_cwd_under "$wt" | wc -l | tr -d ' ')"
+    if [[ -n "$n" ]] && [[ "$n" -gt 0 ]] 2>/dev/null; then
+      log "occupancy: $n live process(es) with cwd under $wt — team is ALIVE"
+      return 0
+    fi
+  done < <(jq -r '[ (.members[]? | (.worktree, .cwd)) ] | map(select(type=="string" and . != "")) | unique[]' \
+             "$cfg" 2>/dev/null || true)
+  return 1
+}
+
+# unknown_since <team> → epoch when this team was FIRST seen UNKNOWN (stamping it on first sight).
+# The abstain has to be bounded, and bounding it needs a clock that survives across sweeps.
+unknown_since() {
+  local team="$1"
+  local f="$STATE_DIR/$team.unknown-since" now v
+  now=$(date +%s)
+  mkdir -p "$STATE_DIR" 2>/dev/null || true
+  if [[ -f "$f" ]]; then
+    v=$(cat "$f" 2>/dev/null || echo "")
+    case "$v" in ''|*[!0-9]*) v="$now"; echo "$v" > "$f" 2>/dev/null || true ;; esac
+    printf '%s' "$v"
+  else
+    echo "$now" > "$f" 2>/dev/null || true
+    printf '%s' "$now"
+  fi
+}
+
+# Forget a team's UNKNOWN bookkeeping (it resolved, went live, or was archived).
+unknown_clear() { rm -f "$STATE_DIR/$1.unknown-since" "$STATE_DIR/$1.paged" 2>/dev/null || true; }
+
+# Page the operator AT MOST ONCE per team per unknown-episode. The un-damped page is what turned a
+# correct abstention into an infinite manual step: 77 identical "unknown-liveness session-85cf3b06"
+# pages for ONE team, plus 11 for another, every sweep, forever. A repeated page is not more
+# information — it is the same information, and it trains the operator to ignore the channel.
+page_once() { # $1=team  $2=message
+  local m="$STATE_DIR/$1.paged"
+  mkdir -p "$STATE_DIR" 2>/dev/null || true
+  [[ -f "$m" ]] && return 0
+  cc_notify_page "$2"
+  : > "$m" 2>/dev/null || true
+}
+
 archive_team() {
   local team_dir="$1"
   local team_name
@@ -103,6 +243,7 @@ archive_team() {
 
   if mv "$team_dir" "$dest" 2>/dev/null; then
     log "archived orphan team: $team_name → $dest"
+    unknown_clear "$team_name"   # the episode is over; never leave a stale clock or page-damp behind
 
     # Clean up associated watchdog files
     local lead_sid
@@ -199,18 +340,69 @@ main() {
     lead_liveness "$lead_sid"; liveness=$?
     if [[ "$liveness" -eq 0 ]]; then
       scan_stale_permissions "$team_dir"
+      unknown_clear "$team_name"   # a live pid file ends any prior UNKNOWN episode + its page damp
       live_count=$((live_count + 1))
     elif [[ "$liveness" -eq 2 ]]; then
-      # UNKNOWN — no/empty watchdog pid file. NOT death (watchdog not yet written, or an in-place
-      # /handoff left a stale leadSessionId whose pid file is gone while a successor drives the team).
-      # Surface it and move on — archiving a live team erases cc-classify's hold signals.
-      log "unknown-liveness $team_name (no watchdog pid file) — surfacing"
-      cc_notify_page "team-orphan-reaper: unknown-liveness for '$team_name' (lead $lead_sid has no live watchdog pid file) — NOT archiving; if the team is truly dead, clean up $TEAMS_DIR/$team_name"
-      unknown_count=$((unknown_count + 1))
+      # UNKNOWN — no/empty watchdog pid file. Absence of a RECORD is not evidence of death, so this
+      # must never archive on the pid file alone. But the previous behaviour — log + page, every
+      # sweep, forever — turned a correct abstention into a PERMANENT MANUAL STEP: measured 77
+      # identical pages for session-85cf3b06 and 11 for session-69dfb701, each re-emitting
+      # "if the team is truly dead, clean up <dir>". An abstention that never resolves is not a
+      # safety property, it is an unbounded operator debt.
+      #
+      # So: ask a POSITIVE oracle (is anyone actually working?), damp the page to once, and BOUND
+      # the abstain so it terminates.
+      local occ since age
+      team_occupied "$team_dir"; occ=$?
+      since=$(unknown_since "$team_name"); age=$(( $(date +%s) - since ))
+
+      if [[ "$occ" -eq 0 ]]; then
+        # POSITIVE evidence of life — someone is working in a member worktree right now. This is
+        # the common case behind the 77 pages, and it needs no operator at all.
+        log "keep $team_name: unknown pid file, but worktree OCCUPIED (live process cwd) — alive"
+        unknown_clear "$team_name"
+        live_count=$((live_count + 1))
+      elif [[ "$occ" -eq 2 ]]; then
+        # NON-VERDICT: the probe could not run (no lsof). Never archive on this at any age — our
+        # own inability to look is not evidence of death. Bound it so it still terminates: past the
+        # ceiling the operator is paged ONCE and the team is left for a human.
+        if [[ "$age" -ge "$UNRESOLVED_MAX_S" ]]; then
+          log "unknown-liveness $team_name: liveness probe UNRESOLVED for ${age}s (no lsof) — paging once, NOT archiving"
+          page_once "$team_name" "team-orphan-reaper: '$team_name' — cannot probe liveness (no lsof) after ${age}s; NOT archiving on a non-verdict. Decide manually: $TEAMS_DIR/$team_name"
+        else
+          log "unknown-liveness $team_name: probe UNRESOLVED, abstaining (${age}s of ${UNRESOLVED_MAX_S}s)"
+        fi
+        unknown_count=$((unknown_count + 1))
+      elif team_has_live_session "$team_dir"; then
+        # The probe answered "unoccupied", but the registry knows a successor driving the team by
+        # member/lead name. Still alive.
+        log "keep $team_name: unknown pid file, unoccupied worktrees, but a live session matches a member/lead name"
+        unknown_clear "$team_name"
+        live_count=$((live_count + 1))
+      elif [[ "$age" -ge "$UNKNOWN_MAX_S" ]]; then
+        # RESOLVED. Every oracle has answered and none of them found life: no watchdog record, no
+        # process occupying any member worktree, no live session in the registry — for longer than
+        # the ceiling. Archiving is reversible (mv into _archive/), which is what makes resolving
+        # here the right side to err on: the alternative is paging forever.
+        log "archive $team_name: UNKNOWN + unoccupied + no live session for ${age}s (≥${UNKNOWN_MAX_S}s) — resolving"
+        archive_team "$team_dir"
+        unknown_clear "$team_name"
+        archived_count=$((archived_count + 1))
+      else
+        # Within the grace window — the watchdog may simply not have written its pid file yet.
+        log "unknown-liveness $team_name: unoccupied, abstaining (${age}s of ${UNKNOWN_MAX_S}s)"
+        unknown_count=$((unknown_count + 1))
+      fi
     else
       # DEAD by positive evidence (pid file present, pid fails kill -0). Cross-check the live-session
       # registry first: a successor may drive the team from a member worktree/name (KEEP), else archive.
-      if team_has_live_session "$team_dir"; then
+      # The occupancy oracle is asked here too — a dead LEAD pid is not a dead TEAM, and an assignee
+      # still working in its worktree is the most direct evidence of that. It can only ever PREVENT
+      # an archive, never cause one, so it is strictly the conservative direction.
+      if team_occupied "$team_dir"; then
+        log "keep $team_name: lead pid dead but a member worktree is OCCUPIED (live process cwd) — assignees still working"
+        live_count=$((live_count + 1))
+      elif team_has_live_session "$team_dir"; then
         log "keep $team_name: lead pid dead but a live session matches a member worktree/name (successor-driven)"
         live_count=$((live_count + 1))
       else
