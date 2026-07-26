@@ -118,7 +118,6 @@ payload-lint.bats
 plan-index.bats
 power-policy.bats
 pre-session-validate.bats
-push-send.bats
 reap-guard.bats
 reset-hard-shadow-allow.bats
 rm-safe-allowlist.bats

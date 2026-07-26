@@ -4,6 +4,9 @@
 # Uses a stub curl (no network, no phone). The tool's --selftest RED-proves the whole discriminator.
 
 setup() {
+  # $HOME must be fixtured or the subject reads/writes the LIVE ~/ tree; the ratchet
+  # (now run BEFORE bats) reds the whole fleet on an unfixtured suite.
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   P="$REPO/scripts/push-send.sh"
   export CC_PUSH_RECORDS_DIR="$BATS_TEST_TMPDIR/rec"
