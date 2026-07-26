@@ -51,6 +51,10 @@ setup() {
   export CLAUDE_CODE_SESSION_ID="test-sid-cas"
   export POSTLAND_DIR="$BATS_TEST_TMPDIR/postland"
   export POSTLAND_VERIFY=off                     # never spawn a real post-land child from tests
+  # env-bleed immunity (see ship-land.bats setup): an outer gate's scope must not leak in.
+  unset SHIP_LAND_GATE_SCOPE SHIP_LAND_GATE_SCOPE_DEFAULT SHIP_LAND_GATE_POLICY \
+        SHIP_LAND_GATE_SELECT SHIP_LAND_FIRST_BASE SHIP_LAND_GATE_EFFECTIVE_FULL \
+        SHIP_LAND_SELECTED_N POSTLAND_STALENESS_GUARD 2>/dev/null || true
 
   GATE_OBS="$BATS_TEST_TMPDIR/gate-obs"
   MOVER_ARMED="$BATS_TEST_TMPDIR/mover-armed"    # content = max sibling lands to inject

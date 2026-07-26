@@ -16,5 +16,9 @@
 #           invocation, with one flake-exoneration re-run per failing NON-direct suite.
 #           A scoped run never advances the gate-green marker — that marker asserts "the FULL
 #           suite proved this tree", a claim a scoped run cannot make.
+# shellcheck disable=SC2034  # consumed by the SOURCING script (ship-land.sh), not here
 SHIP_LAND_GATE_SCOPE_DEFAULT=scoped
-export SHIP_LAND_GATE_SCOPE_DEFAULT
+# NO `export` — ship-land SOURCES this file, so a plain assignment is fully visible to it.
+# Exporting leaked the value into every child process, including the gate's own `bats tests/`
+# run, where it contaminated tests/ship-land.bats' inner fixture pipelines (the dry-run of the
+# very train that added scoping caught this: fixture "ABSENT policy ⇒ full" resolved scoped).
