@@ -141,6 +141,27 @@ seed_teammate() { # $1=agent-name $2=pid $3=team-sid8
   [ -z "$output" ]
 }
 
+# ── G8: fail-open must never be SILENT ────────────────────────────────────────────────────
+# The oracle needs the CC session id, and only the pane's registry row carries it. With no row
+# the gate passes — correct (fail-closed would deadlock every self-close when the registry is
+# unavailable) but it must SAY SO, or a lead silently orphans its team on a false all-clear.
+@test "G8: a missing registry row WARNS that the teammate check could not run (fail-open, never silent)" {
+  rm -f "$CC_REGISTRY_DIR/$PANE.json"
+  seed_teammate t2-shipland 5375 a3f68174        # a team IS live, but unresolvable from the pane
+  cd "$BATS_TEST_TMPDIR"
+  run bash "$HF" self-close --terminal --session-id "$PANE" --dry-run
+  [ "$status" -eq 0 ]                             # fail-OPEN: the close proceeds
+  [[ "$output" == *"live-teammate check SKIPPED"* ]]   # …but never silently
+  [[ "$output" == *"ORPHANS"* ]]
+}
+
+@test "G8b: with a registry row present, no skip-warning is emitted (no false noise)" {
+  cd "$BATS_TEST_TMPDIR"
+  run bash "$HF" self-close --terminal --session-id "$PANE" --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"SKIPPED"* ]]
+}
+
 # ── H1-H3: the husk-pane retry ────────────────────────────────────────────────────────────
 _arm_watcher_home() { # builds a $HOME with recording it2 + cc-notify stubs
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME/.claude/bin"

@@ -1267,6 +1267,16 @@ USAGE
   # loss, so this one BLOCKS. Runs BEFORE any side effect, like the successor gate above.
   # Override: --allow-live-teammates (deliberate abandonment; recorded LOUD, never silent).
   SC_CC_SID="$(cc_sid_for_pane "$SC_SID")"
+  # FAIL-OPEN, BUT NEVER SILENT. The oracle needs the CC session id, which only the pane's
+  # registry row carries. A missing/stale row makes live_teammates_of return nothing, so the
+  # gate would PASS and say nothing — a false all-clear, and a lead could still orphan its team.
+  # Fail-CLOSED is not the answer (an unavailable registry would then deadlock every self-close
+  # on the machine — precisely the outage the self-match bug would have caused). So: proceed,
+  # but announce that the check could not run. A false alarm gets fixed; a silent all-clear is
+  # absorbed forever.
+  if [ -z "$SC_CC_SID" ]; then
+    echo "⚠ WARN: live-teammate check SKIPPED — no CC session id for pane $SC_SID in ${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry} (missing/stale registry row). If this session owns an Agent Team, closing now ORPHANS it. Verify with: pgrep -fl -- '--team-name session-<sid8>'" >&2
+  fi
   SC_LIVE_TM="$(live_teammates_of "$SC_CC_SID")"
   if [ -n "$SC_LIVE_TM" ]; then
     SC_TM_N=$(printf '%s\n' "$SC_LIVE_TM" | grep -c .)
