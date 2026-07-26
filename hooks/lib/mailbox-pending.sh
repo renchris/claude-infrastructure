@@ -57,7 +57,24 @@
 # bash 3.2-safe. No `set -e`.
 
 _mbx_dir() { printf '%s' "${CC_MAILBOX_DIR:-$HOME/.claude/mailbox}"; }
-_mbx_valid_uuid() { case "${1:-}" in ''|*[!0-9A-Fa-f-]*) return 1 ;; *) return 0 ;; esac; }
+# A mailbox KEY is a safe filename component, not necessarily a UUID. This used to be a hex-and-dashes
+# check, which silently made every NAME-keyed box invisible to the whole library: `mailbox_lines`
+# returned 0, so `mailbox_unacked_count` returned 0, so cc-inbox-guard's fail-loud backstop saw nothing
+# to alarm about. And name-keyed boxes are REAL — a role file legitimately holds "a uuid, a session id,
+# or a pane name" (desk-register; cc-announce says the same), and `cc-notify --role` uses that value
+# VERBATIM as the mailbox key. Mail addressed that way could therefore go undelivered forever with the
+# guard structurally unable to see it. Widened to any safe component: non-empty, no path separator, no
+# leading dot (which would collide with the .lock/.tmp namespace), and no `.`/`..` traversal. Every
+# previously-valid key still passes; only the blind spot closes. Address-shaped values (`.forward`
+# pointers) stay on the STRICT canonical-UUID check below — that one is deliberately narrow.
+_mbx_valid_uuid() {
+  case "${1:-}" in
+    ''|.|..) return 1 ;;
+    .*) return 1 ;;
+    *[!A-Za-z0-9._-]*) return 1 ;;
+    *) return 0 ;;
+  esac
+}
 mailbox_file() { printf '%s/%s.md' "$(_mbx_dir)" "${1:-}"; }
 _mbx_int() { case "${1:-}" in ''|*[!0-9]*) echo 0 ;; *) echo "$1" ;; esac; }
 

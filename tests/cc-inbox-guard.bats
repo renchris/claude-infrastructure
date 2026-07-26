@@ -318,3 +318,48 @@ _stage_guard_with_fixture_reconcile() {  # → echoes the staged guard path
   # against a wedged it2 API. RED-proven 2026-07-26 by reverting the resolution block.
   [ ! -f "$BATS_TEST_TMPDIR/reconcile.ran" ] || false
 }
+
+# ── NAME-KEYED boxes: cc-notify --role writes the role file's value verbatim as the mailbox key ────
+@test "a NAME-keyed inbox with overdue unacked mail ESCALATES (it used to be skipped entirely)" {
+  local N="desk-drive"
+  local ts; ts="$(date -u -r "$((NOW - 3600))" +%Y-%m-%dT%H:%M:%S+0000 2>/dev/null || date -u -d "@$((NOW-3600))" +%Y-%m-%dT%H:%M:%S+0000)"
+  printf '%s [reaper] crashed pane needs triage\n' "$ts" > "$CC_MAILBOX_DIR/$N.md"
+  run "$G" sweep
+  [ "$status" -eq 0 ]
+  pushed
+  [ "$(n_alarms)" -ge 1 ]
+  run grep -q "$N" "$PUSHLOG"
+  [ "$status" -eq 0 ]
+}
+
+@test "a NAME-keyed box is INDETERMINATE, never reported as a dead pane (it2 lists uuids, not names)" {
+  local N="desk-drive"
+  local ts; ts="$(date -u -r "$((NOW - 3600))" +%Y-%m-%dT%H:%M:%S+0000 2>/dev/null || date -u -d "@$((NOW-3600))" +%Y-%m-%dT%H:%M:%S+0000)"
+  printf '%s [reaper] triage me\n' "$ts" > "$CC_MAILBOX_DIR/$N.md"
+  run "$G" sweep
+  echo "$output" | grep -q 'INDETERMINATE'
+  echo "$output" | grep -q 'NAME-keyed box'
+  run grep -q 'NOW-DEAD pane' <<<"$output"
+  [ "$status" -ne 0 ]
+}
+
+@test "a CONSUMED name-keyed box does NOT escalate — the cursors work for name keys too" {
+  local N="desk-drive"
+  local ts; ts="$(date -u -r "$((NOW - 3600))" +%Y-%m-%dT%H:%M:%S+0000 2>/dev/null || date -u -d "@$((NOW-3600))" +%Y-%m-%dT%H:%M:%S+0000)"
+  printf '%s [reaper] triage me\n' "$ts" > "$CC_MAILBOX_DIR/$N.md"
+  printf '1\n' > "$CC_MAILBOX_DIR/$N.seen"; printf '1\n' > "$CC_MAILBOX_DIR/$N.acked"
+  run "$G" sweep
+  [ "$status" -eq 0 ]
+  run grep -q "$N" "$PUSHLOG"
+  [ "$status" -ne 0 ]
+}
+
+@test "path-unsafe basenames are still refused (traversal / dotfiles never become mailbox keys)" {
+  local ts; ts="$(date -u -r "$((NOW - 3600))" +%Y-%m-%dT%H:%M:%S+0000 2>/dev/null || date -u -d "@$((NOW-3600))" +%Y-%m-%dT%H:%M:%S+0000)"
+  printf '%s [reaper] hidden\n' "$ts" > "$CC_MAILBOX_DIR/.hidden.md"
+  printf '%s [reaper] spaced\n' "$ts" > "$CC_MAILBOX_DIR/bad name.md"
+  run "$G" sweep
+  [ "$status" -eq 0 ]
+  run grep -qE '(\.hidden|bad name)' "$PUSHLOG"
+  [ "$status" -ne 0 ]
+}

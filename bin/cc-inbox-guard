@@ -12,6 +12,12 @@
 #     only on proven consumption, so unacked>0 past the deadline = the model never took a turn carrying it.
 #   • F8: owner liveness by PANE existence (it2 session list) after a cc-reconcile backfill — NOT registry
 #     membership. An INDETERMINATE owner (can't prove the pane gone) ESCALATES — silence is not fail-loud.
+#   • NAME-KEYED boxes, not just uuid-keyed ones. `cc-notify --role` writes the role file's value
+#     VERBATIM as the mailbox key, and a role legitimately holds "a uuid, a session id, or a pane name"
+#     (desk-register / cc-announce). The sweep used to skip any non-hex basename, so mail sent that way
+#     sat undelivered with the fail-loud backstop structurally blind to it. Such a box is not
+#     adjudicable by `it2 session list` (which lists pane uuids), so its liveness is INDETERMINATE —
+#     escalated with that stated, never dressed up as "the pane died".
 #   • F12: class-specific deadlines — a reaper/supervisor PAGE ([from] tag) is urgent (short); a peer ping
 #     is routine (long). v1's instant keystroke gave confirmed-stuck classes an urgency floor; preserve it.
 #   • F11: cursor-past-EOF (.seen or .acked > line count — rotation/GC/recycle can drop mail) alarms too.
@@ -113,6 +119,26 @@ iso_epoch() {
   printf '0'
 }
 
+# a mailbox KEY: any safe filename component, not just a UUID (mirrors the lib's _mbx_valid_uuid). The
+# guard used to skip every non-hex box outright, so a NAME-keyed inbox — the shape `cc-notify --role`
+# produces whenever a role file holds a name rather than a pane uuid, which desk-register and
+# cc-announce both document as legal — was never swept and its undelivered mail could never alarm.
+valid_key() {
+  case "${1:-}" in
+    ''|.|..) return 1 ;;
+    .*) return 1 ;;
+    *[!A-Za-z0-9._-]*) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+# canonical 8-4-4-4-12 — the shape `it2 session list` can actually adjudicate.
+canonical_uuid() {
+  case "${1:-}" in
+    [0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]-[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]-[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]-[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]-[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 # owner liveness by PANE existence (F8): live=0 · dead=1 · indeterminate=2. Test override wins.
 #
 # The pane list is probed ONCE PER SWEEP and memoized (P1). It used to be re-forked per overdue inbox —
@@ -128,6 +154,11 @@ owner_liveness() {
   if [ -n "${CC_INBOX_GUARD_LIVE_UUIDS:-}" ]; then
     case " $CC_INBOX_GUARD_LIVE_UUIDS " in *" $u "*) return 0 ;; *) return 1 ;; esac
   fi
+  # A NAME-keyed box is not addressable in `it2 session list` (that lists pane UUIDs), so absence there
+  # proves nothing about it. Reporting "the pane died" would be a fabricated cause on a real backlog of
+  # mail — INDETERMINATE is the honest verdict, and it escalates just the same. Answered BEFORE the
+  # probe, so a name-keyed box also costs nothing (it can never be resolved by the pane list anyway).
+  canonical_uuid "$u" || return 2
   if [ -z "$_LIVE_STATE" ]; then
     local raw; raw="$(_ig_bounded "$IT2" session list --json 2>/dev/null || true)"
     if [ -n "$raw" ] && printf '%s' "$raw" | jq -e 'type=="array"' >/dev/null 2>&1; then
@@ -279,7 +310,7 @@ sweep() {
   for f in "$MBOX_DIR"/*.md; do
     [ -e "$f" ] || continue
     u="$(basename "$f" .md)"
-    case "$u" in *[!0-9A-Fa-f-]*|'') continue ;; esac
+    valid_key "$u" || continue
     lines="$(mailbox_lines "$u")"; acked="$(mailbox_acked "$u")"
     # `lines - acked` IS mailbox_unacked_count, computed from the two values already in hand (P3).
     # Calling the helper re-derived both cursors from scratch — mailbox_acked → mailbox_seen →
@@ -323,7 +354,7 @@ SCANEOF
                   "desk/session $u: $unacked message(s) undrained ${oldest_age}s (live but not consuming) — re-engage it" ;;
       1) escalate "$u" "$acked" "$lines" "$unacked message(s) enqueued to a NOW-DEAD pane ($u) — the target died with mail undelivered" \
                   "session $u died with $unacked undelivered message(s) — the page never reached anyone" ;;
-      *) escalate "$u" "$acked" "$lines" "$unacked message(s) unconsumed ${oldest_age}s AND owner liveness INDETERMINATE (it2 unreadable) — cannot prove delivery" \
+      *) escalate "$u" "$acked" "$lines" "$unacked message(s) unconsumed ${oldest_age}s AND owner liveness INDETERMINATE ($(canonical_uuid "$u" && echo 'it2 unreadable' || echo "'$u' is a NAME-keyed box — not a pane uuid it2 can adjudicate")) — cannot prove delivery" \
                   "inbox $u: $unacked undelivered ${oldest_age}s, liveness unknown — fail-loud escalate" ;;
     esac
     n_esc=$((n_esc+1))
