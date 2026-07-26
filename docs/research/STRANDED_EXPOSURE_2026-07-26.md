@@ -490,6 +490,21 @@ it feeds cannot start.
 - **12 branches carry ≥1 RECOVER patch** — keep until recovered: `infra-green-v2`,
   `infra-green`, `wt-d46bb5fbdb8f`, `park/gc-session-index`, `cc/reobserve-waiting-recycle`,
   and the backup refs `ship/backup-{20ee3d0,3f348e3,6b554ca,7dd3af7,b52c3ac,preconverge,v2}`.
+**The 8 human/session branches, ruled individually** — the machine-generated 73 are dispositioned
+as a class above, but these are the ones a person may go looking for, so each gets a named
+verdict:
+
+| Branch | Orphan-exclusive patch | Ruling |
+|---|---|---|
+| `infra-green-v2` | `f696dbbb` python-deps | **RECOVER** — cherry-pick `6a5caea41` (preferred source) |
+| `infra-green` | `f696dbbb` + `f17382df` + `bc5f7b84` | **RECOVER the first only** — the other two are SUPERSEDED; do **not** land this branch |
+| `wt-d46bb5fbdb8f` | `4a8b2b51` activation SSOT | **RECOVER** — cherry-pick `b52c3ac77` |
+| `park/gc-session-index` | `8030d997` shellcheck directives | **RECOVER that one commit** — its other 8 patches are covered elsewhere |
+| `cc/reobserve-waiting-recycle` | `aa7bcfed` research doc | **RECOVER** — cherry-pick `3f348e3d1` (its only commit) |
+| `wt-d1ba434f6239` | `8e5480c4` unattributed-RED | **ABANDON** — trunk's CUT ≠ RED split (`postland-verify.sh:154-165`) is deliberately stricter |
+| `fix/cc-discover-c3-reason-aware` | `fe223af2` reason-aware D9 | **ABANDON** — landed differently; `bin/cc-discover:199-202,366` |
+| `feat/session-scoped-close` | `886352b5` session-scoped rungs | **ABANDON** — the 📦≠✅ doctrine is on trunk in CLAUDE.md and `completion-assert.sh` is session-aware (`:54`); only the un-extracted `hooks/lib/session-evidence.sh` and the vocabulary lint are absent, which is a fresh-build item if wanted, not a recovery |
+
 - **69 branches carry only ABANDON-class patches** — GC-eligible, **and not deleted here.**
   Per the item's own rail and §7's `⊆` caveat, a delete needs a re-verify immediately before
   it, because the set moves (it moved twice during this triage). The safe predicate for a
