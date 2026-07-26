@@ -2,7 +2,9 @@
 # gate-select.bats — RED-proofs for the changed-scope test selector. Every test asserts a
 # FAIL-CLOSED or a coupling the naive selector misses:
 #   * lib/ + hooks/lib/  → FULL   (a `^lib/`-only rule misses two thirds of shared helpers)
-#   * delete / rename / new-file → FULL (the map cannot describe a path that just appeared)
+#   * delete / rename → FULL (the map cannot describe a path that moved out from under it)
+#   * new file        → the SAME clauses as a modified one; FULL only via the `unmapped` rung
+#                       (a blanket `added ⇒ FULL` widened nearly every land to 1,749 tests)
 #   * suite-comment refs → DIRECT (comments are evidence: real suites name their script only there)
 #   * 3-hop chain       → selected via CLOSURE, and provably NOT via a direct clause
 #                         (a depth-2 walk drops it — this is the fixpoint proof)
@@ -101,14 +103,43 @@ lacks() { ! printf '%s\n' "$output" | grep -qxF -- "$1"; }
   has "FULL <- renamed:scripts/renamed.sh"
 }
 
-@test "new unmapped script ⇒ FULL" {
+@test "new unmapped script ⇒ FULL (via the unmapped rung, not a blanket added ⇒ FULL)" {
   printf '#!/bin/bash\necho new\n' > scripts/brand-new.sh
   git add -A
   git commit -q -m add
   gs
   [ "$output" = FULL ]
   gse
-  has "FULL <- added-unmapped:scripts/brand-new.sh"
+  has "FULL <- unmapped:scripts/brand-new.sh"
+}
+
+@test "new script ADDED WITH the suite that names it ⇒ that suite, NOT FULL" {
+  # The fleet's dominant change shape. Under the old blanket `added ⇒ FULL` rung this widened
+  # to all 124 suites, so nearly every land ran 1,749 tests and was cut under concurrency.
+  printf '#!/bin/bash\necho brandnew\n' > bin/cc-brandnew
+  suite tests/cc-brandnew.bats 'run bash bin/cc-brandnew'
+  git add -A
+  git commit -q -m add-pair
+  gs
+  [ "$status" -eq 0 ]
+  [ "$output" != FULL ]
+  has tests/cc-brandnew.bats
+  # …and it is DIRECT (no flake exoneration for code you are landing)
+  run bash "$SEL" --direct HEAD~1..HEAD
+  has tests/cc-brandnew.bats
+}
+
+@test "added file mapped ONLY by an existing suite ⇒ that suite, NOT FULL" {
+  # No new test file — the coupling is an EXISTING suite whose text names the new path.
+  suite tests/adopter.bats 'run bash scripts/adopted.sh'
+  git add -A
+  git commit -q -m adopter
+  printf '#!/bin/bash\necho adopted\n' > scripts/adopted.sh
+  git add -A
+  git commit -q -m add-adopted
+  gs
+  [ "$output" != FULL ]
+  printf '%s\n' "$output" | grep -qxF -- tests/adopter.bats
 }
 
 @test "install.sh and settings-templates ⇒ FULL" {
