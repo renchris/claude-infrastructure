@@ -179,8 +179,15 @@ sg() { # append a safeguard-blocked row (the pre-existing kind): <ts> <pane> <na
   [ "$status" -eq 1 ]
 }
 
-@test "login_expires_at without login_expires_h → UNKNOWN (cannot age it), not OK" {
-  seed '[{"acct":"next","auth":"ok","login_expires_at":"2026-09-01T00:00:00Z"}]'
+# An UNAGEABLE stamp, not merely a missing _h. refresh_login_countdown() (landed on trunk in
+# e4ed592) now re-derives login_expires_h from login_expires_at after EVERY get_data(), because a
+# served countdown decays from the instant it is cached. So "at present, h absent" is no longer a
+# state the classifier can observe for a PARSEABLE stamp — it self-heals. The branch under test is
+# still live, and still matters: hrs_until() returns None on an unparseable stamp, so an `at` we
+# cannot age must read UNKNOWN rather than silently OK. That is the invariant this test always
+# meant; only the seed needed to move to the case that still reaches it.
+@test "an UNAGEABLE login_expires_at → UNKNOWN (cannot age it), not OK" {
+  seed '[{"acct":"next","auth":"ok","login_expires_at":"not-a-timestamp"}]'
   run "$CA_BIN" --relogin-status
   [ "$status" -eq 3 ]
   echo "$output" | grep -q 'UNKNOWN'
@@ -232,7 +239,12 @@ sg() { # append a safeguard-blocked row (the pre-existing kind): <ts> <pane> <na
   [ "$(echo "$output" | jq -r '.rows[0].state')" = "DUE" ]
   [ "$(echo "$output" | jq -r '.rows[0].next_action')" = "cc-relogin next" ]
   [ "$(echo "$output" | jq -r '.rows[1].state')" = "OK" ]
-  [ "$(echo "$output" | jq -r '.rows[0].login_expires_h')" = "100" ]
+  # login_expires_h is DERIVED from login_expires_at on every read (refresh_login_countdown,
+  # e4ed592), so the seeded 100 is deliberately overwritten and asserting that literal would be
+  # asserting the seed rather than the behaviour. Assert the contract that survives: the field is
+  # present and numeric. Its VALUE is a function of now(), so pinning a number here would also be
+  # a clock-dependent flake. The semantic claim this row makes is `.state == "DUE"`, asserted above.
+  echo "$output" | jq -e '.rows[0].login_expires_h | numbers' >/dev/null
   echo "$output" | jq -e '.rows[0] | has("last_attempt_ts") and has("reason")' >/dev/null
 }
 
