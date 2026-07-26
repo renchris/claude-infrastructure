@@ -21,6 +21,7 @@
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   HF="$REPO/scripts/handoff-fire.sh"
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"    # hermeticity ratchet: never the live ~/
   # Extract the helper AND its two configuration lines the same way the sibling suites extract
   # functions. Sourcing the whole script is not an option: it has top-level side effects.
   eval "$(sed -n '/^hf_bounded() {/,/^}/p' "$HF")"
