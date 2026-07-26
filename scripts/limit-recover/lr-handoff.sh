@@ -145,6 +145,16 @@ if [[ $LAUNCH -eq 1 && $PRINT_ONLY -ne 1 ]]; then
   # Split a pane to the RIGHT of the invoking pane (⌘D equivalent) so the recovered
   # session lands beside its recovery operator. New window ONLY when there is no
   # invoking pane (headless/cron) or the split fails. Validated live 2026-07-11.
+  #
+  # ⚠️ NEVER `… with default profile command "X"` (incident 2026-07-25). That form does not run X
+  # once — iTerm2 records it as a SESSION-SCOPED PROFILE OVERRIDE (use_custom_command=Yes), and ⌘D
+  # ("Split with Current Profile") copies the current session's profile, override included. So every
+  # ⌘D off this pane re-ran the launcher: one fire at 01:28 left 4 pinned panes, and three ⌘D presses
+  # spawned three concurrent `claude --resume` of the SAME transcript where the operator expected a
+  # plain shell. Create a BARE pane and `write text` the launcher instead — the same create-then-type
+  # pattern handoff-fire.sh already uses. `exec` preserves the old lifecycle (pane dies with the
+  # launcher); the pane's profile stays clean, so ⌘D yields a login shell.
+  # Repair for panes created before this fix: scripts/iterm-clear-sticky-command.sh
   OWN_PANE="${ITERM_SESSION_ID##*:}"
   FIRED=""
   if [[ -n "${ITERM_SESSION_ID:-}" ]]; then
@@ -154,7 +164,10 @@ tell application "iTerm2"
     repeat with t in tabs of w
       repeat with s in sessions of t
         if id of s is "$OWN_PANE" then
-          tell s to split vertically with default profile command "/bin/bash $LAUNCHER"
+          tell s
+            set newPane to (split vertically with default profile)
+            tell newPane to write text "exec /bin/bash $LAUNCHER"
+          end tell
           return "split"
         end if
       end repeat
@@ -170,7 +183,8 @@ OSA
   else
     osascript >/dev/null 2>&1 <<OSA || { echo "lr-handoff: iTerm2 launch failed — run manually: $LAUNCHER" >&2; }
 tell application "iTerm2"
-  create window with default profile command "/bin/bash $LAUNCHER"
+  set newWin to (create window with default profile)
+  tell current session of newWin to write text "exec /bin/bash $LAUNCHER"
 end tell
 OSA
     echo "lr-handoff: no invoking pane / split failed — fired new iTerm2 window on '$TARGET' (manual fallback: $LAUNCHER)" >&2
