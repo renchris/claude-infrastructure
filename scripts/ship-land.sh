@@ -264,6 +264,52 @@ postland_net_live() {  # 0 = trust the post-land net (or it is not adopted yet) 
   return 1
 }
 
+# ---- admission control: bounded, fail-OPEN load shedding --------------------
+# WHY: nothing in the land path deferred on load — loadavg was RECORDED for forensics only
+# (here and postland-verify.sh). So every landing worktree started its FULL suite at once; the
+# kernel starved/killed them; the cuts were misread as RED; the reblocks made the dispatcher
+# retry. Fail-closed was AMPLIFYING the contention it guards (backlog f8e40b4c577d). CUT ≠ RED
+# (below) stops a cut from LYING; this stops the cut happening. They are complements, not
+# alternatives — the re-run below is only evidence if the environment actually changed.
+# CONTRACT — all four are load-bearing:
+#   bounded      never waits longer than CC_GATE_ADMIT_MAX_WAIT, then PROCEEDS (a land must never
+#                be starved by a busy box; shedding is a courtesy, not a gate).
+#   overridable  CC_GATE_MAX_LOAD (ceiling) · CC_GATE_ADMIT_MAX_WAIT · CC_GATE_ADMIT_POLL;
+#                CC_GATE_MAX_LOAD=0|off is the kill switch.
+#   fail-OPEN    unreadable sensor or non-numeric ceiling ⇒ return immediately. A broken load
+#                sensor must never block a land — that would be a new fail-closed amplifier.
+#   lock-free    NEVER called while the land-lock is held. The gate sits OUTSIDE the lock BY
+#                DESIGN (190c839, for the CAS push window); waiting inside it would serialize
+#                every lander behind one sleep and convert a load problem into a deadlock-shaped
+#                one. main_locked sets IN_LAND_LOCK=1 and this becomes a no-op there.
+IN_LAND_LOCK="${IN_LAND_LOCK:-0}"
+gate_admit() {  # $1=what — defer the start of an expensive suite until load falls below a ceiling
+  local what="${1:-suite}" max budget step waited=0 load jit
+  [[ "$IN_LAND_LOCK" = "1" ]] && return 0
+  max="${CC_GATE_MAX_LOAD:-8}"; budget="${CC_GATE_ADMIT_MAX_WAIT:-600}"; step="${CC_GATE_ADMIT_POLL:-15}"
+  [[ "$max" = "0" || "$max" = "off" ]] && return 0
+  case "$max" in ''|*[!0-9.]*) return 0 ;; esac                      # ceiling: numeric (awk-compared)
+  case "$budget$step" in ''|*[!0-9]*) return 0 ;; esac               # waits: INTEGER seconds
+  [[ "$step" -gt 0 ]] || return 0                                    # a 0 poll would spin ⇒ fail OPEN
+  while [[ "$waited" -lt "$budget" ]]; do
+    load="$(sysctl -n vm.loadavg 2>/dev/null | awk '{print $2}')"
+    [[ -n "$load" ]] || return 0                                     # unreadable sensor ⇒ fail OPEN
+    if awk -v l="$load" -v m="$max" 'BEGIN{exit !(l+0 < m+0)}'; then
+      [[ "$waited" -gt 0 ]] && echo "✓ gate: admitted after ${waited}s (load $load < $max) — starting $what" >&2
+      return 0
+    fi
+    [[ "$waited" -eq 0 ]] && echo "⏸ gate: DEFERRING $what — load $load ≥ ceiling $max (waiting up to ${budget}s; override CC_GATE_MAX_LOAD / CC_GATE_ADMIT_MAX_WAIT, 0=off)" >&2
+    # JITTER is load-bearing, not polish: without it every lander that deferred at the same moment
+    # also WAKES at the same moment and they all start their suites together — a fresh thundering
+    # herd precisely when load dips. Spreading the restarts lets the first waker in while the rest
+    # re-observe the load it just created.
+    jit=$(( RANDOM % 8 ))
+    sleep "$(( step + jit ))"; waited=$(( waited + step + jit ))
+  done
+  echo "▶ gate: admission budget ${budget}s exhausted (load $load ≥ $max) — proceeding anyway with $what (bounded by design)" >&2
+  return 0
+}
+
 run_bats_all() {  # the FULL suite — the ONLY run that earns the gate-green claim
   # CUT ≠ RED. bats exits non-zero for BOTH a real `not ok` and a death by signal (a peer's
   # kill, a starved fork, a truncated stream) — and the second case reports ZERO `not ok`.
@@ -279,6 +325,7 @@ run_bats_all() {  # the FULL suite — the ONLY run that earns the gate-green cl
   # rightmost non-zero wins and a SIGKILLed suite surfaces as plain `1`, never 137/143.
   # The TAP BODY is the only honest discriminator.
   local log rc notok td rc2
+  gate_admit "the FULL bats suite"
   log="$(mktemp)"
   echo "→ gate: bats tests/" >&2
   bats tests/ 2>&1 | tee "$log" >&2; rc="${PIPESTATUS[0]}"
@@ -291,6 +338,10 @@ run_bats_all() {  # the FULL suite — the ONLY run that earns the gate-green cl
   echo "↻ gate: bats exited $rc with ZERO 'not ok' — CUT, not RED. One re-run in a fresh TMPDIR…" >&2
   record_gate_cut "$rc" "$log"
   rm -f "$log"
+  # SHED BEFORE THE RE-RUN. Re-running under the same sustained load that cut the first run is not
+  # a retry, it is the same experiment — and the postland retry ladder made exactly this mistake,
+  # convicting six suites that pass cleanly on a quiet box.
+  gate_admit "the FULL bats re-run"
   td="$(mktemp -d)"; TMPDIR="$td" bats tests/ >&2; rc2=$?
   rm -rf "$td" 2>/dev/null || true
   if [[ "$rc2" -eq 0 ]]; then
@@ -481,6 +532,9 @@ unlocked_reconcile_and_gate() {  # $1=trunk $2=dry_run → sets GATE_BASE/GATE_H
 # ---- locked phase (re-exec'd under land-lock) ------------------------------
 
 main_locked() {
+  # We hold the land-lock from here on ⇒ admission control becomes a NO-OP (see gate_admit):
+  # sleeping under the lock would serialize every other lander behind this one's wait.
+  IN_LAND_LOCK=1
   # CAS mode ($3/$4 non-empty): the full gate already ran GREEN, UNLOCKED, on exactly
   # (HEAD=GATE_HEAD, base=GATE_BASE). Hold the lock only for fetch-compare → push →
   # content-verify — the 2026-07-11 race window. A moved origin/HEAD ⇒ exit 42 (stale

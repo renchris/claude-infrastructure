@@ -33,6 +33,11 @@ setup() {
   unset SHIP_LAND_GATE_SCOPE SHIP_LAND_GATE_SCOPE_DEFAULT SHIP_LAND_GATE_POLICY \
         SHIP_LAND_GATE_SELECT SHIP_LAND_FIRST_BASE SHIP_LAND_GATE_EFFECTIVE_FULL \
         SHIP_LAND_SELECTED_N POSTLAND_STALENESS_GUARD 2>/dev/null || true
+  # Admission control OFF for the whole suite. The full-mode fixtures below really do reach
+  # run_bats_all → gate_admit, and this suite runs on exactly the loaded box that makes it defer;
+  # left on, every such test stalls for CC_GATE_ADMIT_MAX_WAIT and the suite reads as hung. These
+  # tests assert VERDICT logic, never shedding behaviour (that has its own dedicated tests below).
+  export CC_GATE_MAX_LOAD=0
 }
 
 on_branch_with() {  # $1=branch $2=file $3=content  → commit a change on a fresh branch
@@ -614,4 +619,49 @@ EOF
   [ "$status" -eq 6 ]                                     # gate RED ⇒ exit 6, unchanged
   echo "$output" | grep -q "bats RED"
   [ "$(grep -cx 'tests/' "$BATS_ARGV")" -eq 1 ]           # exactly ONE run — no free retry on red
+}
+
+# ════ admission control (gate_admit) ═══════════════════════════════════════════════════════════
+# Extracted and driven directly: the contract is about WAITING, and a fixture that actually waits
+# would make this suite the slow thing it exists to prevent. Assertions use `|| false` because a
+# non-final [[ ]] is errexit-EXEMPT in bats and would be a DEAD assertion.
+admit_probe() {  # $@ = env assignments → runs gate_admit once, echoes its stderr, returns its rc
+  { sed -n '/^gate_admit() {/,/^}/p' "$SHIPLAND"
+    printf 'gate_admit "the FULL bats suite"\n'
+  } > "$BATS_TEST_TMPDIR/admit.sh"
+  env "$@" bash "$BATS_TEST_TMPDIR/admit.sh" 2>&1
+}
+
+@test "admit: NEVER waits while the land-lock is held (IN_LAND_LOCK=1 ⇒ instant no-op)" {
+  # The load-bearing one. The gate sits OUTSIDE the lock BY DESIGN (190c839); sleeping inside it
+  # would serialize every other lander behind this one's wait.
+  run timeout 10 bash -c "$(declare -f admit_probe); SHIPLAND='$SHIPLAND' BATS_TEST_TMPDIR='$BATS_TEST_TMPDIR' \
+    admit_probe IN_LAND_LOCK=1 CC_GATE_MAX_LOAD=0.0001 CC_GATE_ADMIT_MAX_WAIT=300 CC_GATE_ADMIT_POLL=30"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]                                   # not even a DEFERRING line under the lock
+}
+
+@test "admit: kill switch CC_GATE_MAX_LOAD=0 returns immediately" {
+  run timeout 10 bash -c "$(declare -f admit_probe); SHIPLAND='$SHIPLAND' BATS_TEST_TMPDIR='$BATS_TEST_TMPDIR' \
+    admit_probe CC_GATE_MAX_LOAD=0 CC_GATE_ADMIT_MAX_WAIT=300 CC_GATE_ADMIT_POLL=30"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "admit: fails OPEN on a non-numeric ceiling and on a zero poll (never blocks a land)" {
+  run timeout 10 bash -c "$(declare -f admit_probe); SHIPLAND='$SHIPLAND' BATS_TEST_TMPDIR='$BATS_TEST_TMPDIR' \
+    admit_probe CC_GATE_MAX_LOAD=bogus CC_GATE_ADMIT_MAX_WAIT=300 CC_GATE_ADMIT_POLL=30"
+  [ "$status" -eq 0 ]
+  run timeout 10 bash -c "$(declare -f admit_probe); SHIPLAND='$SHIPLAND' BATS_TEST_TMPDIR='$BATS_TEST_TMPDIR' \
+    admit_probe CC_GATE_MAX_LOAD=0.0001 CC_GATE_ADMIT_MAX_WAIT=300 CC_GATE_ADMIT_POLL=0"
+  [ "$status" -eq 0 ]
+}
+
+@test "admit: an unsatisfiable ceiling DEFERS, then PROCEEDS when the budget expires (bounded)" {
+  # 0.0001 is below any real loadavg ⇒ the wait can never be satisfied; a 1s budget bounds it.
+  run timeout 30 bash -c "$(declare -f admit_probe); SHIPLAND='$SHIPLAND' BATS_TEST_TMPDIR='$BATS_TEST_TMPDIR' \
+    admit_probe CC_GATE_MAX_LOAD=0.0001 CC_GATE_ADMIT_MAX_WAIT=1 CC_GATE_ADMIT_POLL=1"
+  [ "$status" -eq 0 ]                                # bounded: it PROCEEDS, it does not fail
+  echo "$output" | grep -q "DEFERRING" || false      # it announced the deferral
+  echo "$output" | grep -q "proceeding anyway" || false
 }

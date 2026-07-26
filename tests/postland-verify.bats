@@ -57,6 +57,10 @@ setup() {
   export CC_POSTLAND_WORKTREE="$BATS_TEST_TMPDIR/pv-worktree"
   export CC_PAGES_DIR="$BATS_TEST_TMPDIR/pages"        # externally owned dir
   export CC_IDL="$BATS_TEST_TMPDIR/idl.jsonl"
+  # Admission control OFF: every --run-if-needed below reaches run_target → gate_admit, and this
+  # suite runs on exactly the loaded box that makes it defer. Left on, each of those stalls for
+  # CC_GATE_ADMIT_MAX_WAIT and the suite reads as hung. Shedding has its own tests (--selftest).
+  export CC_GATE_MAX_LOAD=0
   STUB="$BATS_TEST_TMPDIR/bin"; REC="$BATS_TEST_TMPDIR/rec"
   export CC_BACKLOG_BIN="$STUB/cc-backlog"
   mkdir -p "$HOME" "$CC_PAGES_DIR" "$STUB" "$REC"
