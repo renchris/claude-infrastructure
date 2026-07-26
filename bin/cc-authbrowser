@@ -25,8 +25,9 @@ QUERY: it exits 0 either way; read `running` from --status --json to branch.
 
 Test-injection env: CC_AUTHBROWSER_CHROME_BIN - CC_AUTHBROWSER_PROFILE_ROOT (default
 ~/.claude/auth-profiles) - CC_AUTHBROWSER_STATE_DIR (default /tmp) -
-CC_AUTHBROWSER_ACCOUNTS_BIN (default claude-accounts). Tests MUST drive a fake chrome-bin
-stub -- never launch real Chrome under bats.
+CC_AUTHBROWSER_PORT_BASE (default 9341) - CC_AUTHBROWSER_ACCOUNTS_BIN (default
+claude-accounts). Tests MUST drive a fake chrome-bin stub -- never launch real Chrome
+under bats.
 """
 import argparse
 import json
@@ -37,10 +38,13 @@ import subprocess
 import sys
 import time
 import urllib.request
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
-# Frozen port/profile map (contract SS1) -- explicit, NOT accounts.json file order.
-PORT_MAP: Dict[str, int] = {"next": 9341, "next2": 9342, "next3": 9343, "next4": 9344}
+# Frozen account order (contract SS1) -- explicit, NOT accounts.json file order. An account's
+# CDP port is PORT_BASE_DEFAULT + its index HERE, so the frozen map is unchanged:
+# next=9341 - next2=9342 - next3=9343 - next4=9344.
+ACCOUNTS: Tuple[str, ...] = ("next", "next2", "next3", "next4")
+PORT_BASE_DEFAULT = 9341
 CHROME_DEFAULT = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 CDP_TIMEOUT_S = 15.0
 DEFAULT_TTL_S = 300
@@ -56,6 +60,42 @@ def warn(msg: str) -> None:
 
 def chrome_bin() -> str:
     return os.environ.get("CC_AUTHBROWSER_CHROME_BIN") or CHROME_DEFAULT
+
+
+def port_base() -> int:
+    """CDP port of the FIRST frozen account; the rest follow in ACCOUNTS order.
+
+    Unset -> PORT_BASE_DEFAULT, so the frozen SS1 map is byte-identical to what shipped.
+    The seam exists because 127.0.0.1:934x is a MACHINE-WIDE singleton -- the one global
+    the STATE_DIR / PROFILE_ROOT seams could not isolate, so two concurrent runs of the
+    test suite fought over it and BOTH went red (proven, not inferred: 20/6 and 21/5
+    against 26/26 solo). It also keeps the suite off the ports a REAL account browser
+    holds.
+
+    SET-but-EMPTY is honoured VERBATIM and REFUSED, never laundered into the default:
+    `os.environ.get(X) or DEFAULT` cannot tell unset from set-empty, and silently serving
+    9341 to a caller that asked to be moved is precisely how a run that believes it is
+    isolated reaches the real singleton anyway. Same for junk and out-of-range: REFUSED,
+    because a port this process cannot bind must never degrade into one it can.
+    """
+    raw = os.environ.get("CC_AUTHBROWSER_PORT_BASE")
+    if raw is None:
+        return PORT_BASE_DEFAULT
+    if not raw.isdigit():          # "" / " 9341" / "9341x" all land here, by design
+        warn("CC_AUTHBROWSER_PORT_BASE is set but is not a plain integer: %r" % raw)
+        sys.exit(EXIT_REFUSED)
+    base, span = int(raw), len(ACCOUNTS)
+    if base < 1024 or base + span - 1 > 65535:
+        warn("CC_AUTHBROWSER_PORT_BASE=%d puts the %d-port block %d-%d outside 1024-65535"
+             % (base, span, base, base + span - 1))
+        sys.exit(EXIT_REFUSED)
+    return base
+
+
+def port_map() -> Dict[str, int]:
+    """The acct->port map for THIS process: contract-SS1 order, seam-shifted base."""
+    base = port_base()
+    return {acct: base + idx for idx, acct in enumerate(ACCOUNTS)}
 
 
 def profile_dir(acct: str) -> str:
@@ -171,11 +211,13 @@ def cdp_version(port: int, deadline: float,
 
 
 def require_known(acct: str) -> int:
-    """Frozen-map membership. Unknown account is REFUSED, not an error."""
-    if acct not in PORT_MAP:
-        warn("unknown account: %s (%s)" % (acct, "|".join(sorted(PORT_MAP))))
+    """Frozen-map membership. Unknown account is REFUSED, not an error. Membership is
+    checked BEFORE the port is resolved, so an unknown account reports itself rather than
+    a bad CC_AUTHBROWSER_PORT_BASE it never reached."""
+    if acct not in ACCOUNTS:
+        warn("unknown account: %s (%s)" % (acct, "|".join(sorted(ACCOUNTS))))
         sys.exit(EXIT_REFUSED)
-    return PORT_MAP[acct]
+    return port_map()[acct]
 
 
 def require_ssot(acct: str) -> None:
@@ -347,7 +389,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(
         prog="cc-authbrowser", description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("acct", help="account name (%s)" % "|".join(sorted(PORT_MAP)))
+    ap.add_argument("acct", help="account name (%s)" % "|".join(sorted(ACCOUNTS)))
     mode = ap.add_mutually_exclusive_group(required=True)
     mode.add_argument("--start", action="store_true")
     mode.add_argument("--stop", action="store_true")

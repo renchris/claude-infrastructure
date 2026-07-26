@@ -3,8 +3,27 @@
 # chrome-bin stub (a python script that records its argv and optionally serves a stub CDP endpoint)
 # via CC_AUTHBROWSER_CHROME_BIN, with state + profiles redirected into BATS_TEST_TMPDIR. Real Chrome
 # is NEVER launched; ~/.claude/auth-profiles is NEVER touched; nothing authenticates anything.
-# The one un-fakeable resource is the frozen CDP port (contract §1 hardcodes it, so there is no
-# override knob) — stubs bind 127.0.0.1:934x and teardown always frees it.
+#
+# PORTS ARE ISOLATED TOO (backlog e280bbc8b6e4 / e5e102446d6c). A TCP port is machine-wide, so it
+# was the ONE global the STATE_DIR / PROFILE_ROOT seams above could not cover: this file used to
+# bind the frozen 127.0.0.1:9341-9344 directly, and since this box runs 5+ concurrent landers each
+# gating the full tree, two copies of THIS FILE overlapped and fought. Proven on pristine main
+# 2026-07-26 — two simultaneous copies went 20 ok/6 not ok and 21 ok/5 not ok, with a DIFFERENT
+# failing subset each time, while a solo run was 26/26. That is a fleet-wide FALSE red: it burns
+# ship-land's single exoneration re-run and blocks a land while proving nothing about the tree.
+# It also collided with any REAL auth browser the operator had running on 9341.
+#
+# The header this replaces said the port was un-fakeable because contract §1 hardcodes it. True of
+# the old code, but the conclusion was the wrong way round: the fix belonged in the SUBJECT, not in
+# a lock. bin/cc-authbrowser now resolves its port block through CC_AUTHBROWSER_PORT_BASE (default
+# 9341 ⇒ the frozen map is unchanged), so setup_file below leases this run a PRIVATE block and no
+# two runs can meet. Never reintroduce a bare 934x literal here — use $P_NEXT..$P_NEXT4.
+#
+# This REPLACES the interim machine-wide mutex that landed for e5e102446d6c while the seam was
+# being built (that commit named this seam as the proper fix). The two must not coexist: a mutex
+# serializes every lander on the box behind one copy of this suite, which is the cost the lease
+# exists to remove — and two `setup_file` definitions in one file silently resolve to whichever
+# is defined last, so keeping both leaves a landmine that a reorder would arm.
 
 # Fork can transiently fail (EAGAIN) when this box is running dozens of concurrent bats suites,
 # and a bare `cmd &` then aborts the whole test under errexit — a spurious RED that blocks a
@@ -15,51 +34,10 @@
 # The child's stdout MUST be redirected. Callers use `pid=$(spawn_bg ...)`, and a command
 # substitution blocks until EVERY holder of its stdout pipe closes it — not merely until the
 # function returns. A backgrounded child inherits that pipe, so without this redirect
-# `FOREIGN=$(spawn_bg "$D/foreign-listener" 9341)` blocks for the listener's full 600s sleep
+# `FOREIGN=$(spawn_bg "$D/foreign-listener" "$P_NEXT")` blocks for the listener's full 600s sleep
 # (and each `spawn_bg sleep 4x` for its own lifetime) — ~825s box-wide, hanging the suite long
 # before any assertion runs. The pre-retry form (`cmd &` then `PID=$!`) had no pipe and so no
 # block; keeping the retry means keeping this redirect. No test reads a spawned child's stdout.
-# ── machine-wide mutex on the frozen CDP ports (backlog e5e102446d6c) ────────────────────────
-# The header above is right that 934x cannot be faked — but it does not follow that only ONE copy
-# of this suite ever wants it. This box routinely runs 5+ concurrent landers, each gating the full
-# tree, so two copies of THIS FILE overlap and fight for 127.0.0.1:9341. Proven 2026-07-26: run it
-# twice simultaneously and BOTH go red with 6 named `--start` failures each, while a sequential run
-# is 26/26 green. That is a fleet-wide false RED — it burns ship-land's single exoneration re-run
-# and blocks a land while proving nothing about the tree.
-#
-# Serializing is the only correct answer while the port map is frozen (a real override seam in
-# bin/cc-authbrowser is the proper fix and is filed as e5e102446d6c). mkdir is the atomic primitive
-# — macOS ships no flock(1).
-#
-# It NEVER fails the suite: a wedged or SIGKILLed holder leaves a lock dir behind and teardown_file
-# never runs for it, so the wait reaps a lock whose pid is dead or which has aged past the TTL, and
-# a full timeout force-takes rather than aborting. A lock that can turn a green tree red is worse
-# than the collision it prevents.
-CDP_LOCK="${TMPDIR:-/tmp}/cc-authbrowser-cdp-port.lock"
-
-setup_file() {
-  local waited=0 holder
-  while ! mkdir "$CDP_LOCK" 2>/dev/null; do
-    holder="$(cat "$CDP_LOCK/pid" 2>/dev/null || echo '')"
-    # Reap a dead holder (SIGKILLed mid-suite ⇒ no teardown_file) or one past the TTL.
-    if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then
-      rm -rf "$CDP_LOCK"; continue
-    fi
-    if [ "$waited" -ge 900 ]; then
-      # `|| true`: FD 3 is not guaranteed open here, and errexit must never turn the diagnostic
-      # into the abort this whole block exists to prevent.
-      echo "# cc-authbrowser: CDP-port lock held ${waited}s — force-taking (never fail on the lock)" >&3 2>/dev/null || true
-      rm -rf "$CDP_LOCK"; continue
-    fi
-    sleep 2; waited=$((waited + 2))
-  done
-  echo $$ > "$CDP_LOCK/pid" 2>/dev/null || true
-}
-
-teardown_file() {
-  rm -rf "$CDP_LOCK" 2>/dev/null || true
-}
-
 spawn_bg() {   # usage: pid=$(spawn_bg <cmd...>)
   local i pid
   for i in 1 2 3 4 5 6 7 8; do
@@ -69,19 +47,106 @@ spawn_bg() {   # usage: pid=$(spawn_bg <cmd...>)
   return 1
 }
 
+# ── the CDP port lease ────────────────────────────────────────────────────────────────────────
+# This run leases ONE private block of 4 consecutive ports and drives the subject onto it with
+# CC_AUTHBROWSER_PORT_BASE. `mkdir` is the claim: it is atomic and macOS ships no flock(1), so two
+# concurrent runs racing the same block index cannot both win. Deliberately an ALLOCATOR, not a
+# mutex — a mutex serializes every lander behind one suite; a lease lets them all run at once,
+# which is the actual goal. The range starts well above the frozen 9341-9344 so a lease can never
+# disturb a REAL account browser.
+CDP_LEASE_ROOT="${TMPDIR:-/tmp}/cc-authbrowser-cdp-lease"
+CDP_LEASE_BASE0=19341      # echoes 9341; far from the 49152+ ephemeral range
+CDP_LEASE_SPAN=4           # one port per frozen account (contract §1 has four)
+CDP_LEASE_SLOTS=64         # 64 concurrent copies of this suite; the fleet runs ~5
+CDP_LEASE_WAIT_S=600       # only ever reached if all 64 are held by LIVE holders
+
+block_free() {  # <base> — true when every port in the block is unbound right now
+  local b="$1" i
+  for i in $(seq 0 $((CDP_LEASE_SPAN - 1))); do
+    port_open $((b + i)) && return 1     # something (foreign or a peer) already has it
+  done
+  return 0
+}
+
+try_lease() {   # claim the first block that is both unclaimed and actually free; 0 on success
+  local n claim holder base
+  for n in $(seq 0 $((CDP_LEASE_SLOTS - 1))); do
+    claim="$CDP_LEASE_ROOT/$n"
+    if ! mkdir "$claim" 2>/dev/null; then
+      holder="$(cat "$claim/pid" 2>/dev/null || echo '')"
+      if [ -z "$holder" ]; then
+        # EMPTY is not DEAD. The winner of `mkdir` writes its pid on the very next line, so
+        # a pidless claim is almost always a peer that won the race microseconds ago —
+        # reaping it here would hand the SAME block to two suites, which is exactly the
+        # collision this lease exists to prevent. Only a pidless claim that has AGED is
+        # garbage (a death inside that one-syscall window).
+        [ -n "$(find "$claim" -maxdepth 0 -mmin +1 2>/dev/null)" ] || continue
+      elif kill -0 "$holder" 2>/dev/null; then
+        continue
+      fi
+      # A SIGKILLed run never reaches teardown_file, so a claim whose holder is gone is
+      # garbage, not an owner. Reaping it is what stops one killed lander wedging a slot
+      # forever. (A recycled pid only makes us SKIP a free block — the safe direction.)
+      rm -rf "$claim" 2>/dev/null || true
+      mkdir "$claim" 2>/dev/null || continue
+    fi
+    echo "${BATS_ROOT_PID:-$$}" > "$claim/pid" 2>/dev/null || true
+    base=$((CDP_LEASE_BASE0 + n * CDP_LEASE_SPAN))
+    if block_free "$base"; then
+      export CC_AUTHBROWSER_PORT_BASE="$base"
+      export CDP_LEASE_HELD="$claim"
+      return 0
+    fi
+    rm -rf "$claim" 2>/dev/null || true   # a foreign process squats here — try the next slot
+  done
+  return 1
+}
+
+setup_file() {
+  mkdir -p "$CDP_LEASE_ROOT" 2>/dev/null || true
+  local waited=0
+  until try_lease; do
+    # Exhaustion means 64 LIVE copies of this one suite. Unreachable at fleet scale, and
+    # transient by construction (every holder is a running suite that will finish), so WAIT
+    # rather than fail — a lease that can turn a green tree red would be worse than the
+    # collision it prevents. `>&3` is not guaranteed open here, hence the `|| true`.
+    if [ "$waited" -ge "$CDP_LEASE_WAIT_S" ]; then
+      echo "# cc-authbrowser: no free CDP block after ${waited}s across $CDP_LEASE_SLOTS slots" \
+        >&3 2>/dev/null || true
+      export CC_AUTHBROWSER_PORT_BASE=$((CDP_LEASE_BASE0 + (${BATS_ROOT_PID:-$$} % CDP_LEASE_SLOTS) * CDP_LEASE_SPAN))
+      export CDP_LEASE_HELD=""
+      return 0
+    fi
+    sleep 2; waited=$((waited + 2))
+  done
+}
+
+teardown_file() {
+  [ -n "${CDP_LEASE_HELD:-}" ] && rm -rf "$CDP_LEASE_HELD" 2>/dev/null
+  return 0
+}
+
 setup() {
   # HERMETIC $HOME (scripts/test-hermeticity-lint.sh — the ratchet that binds every NEW suite):
   # the subject resolves its own state under ~, so unfixtured this suite reads/writes the
   # operator's LIVE layer. Everything this suite asserts is already redirected elsewhere.
-  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
-  REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"   # never resolve ~ to the operator's tree
+  REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   B="$REPO/bin/cc-authbrowser"
   D="$BATS_TEST_TMPDIR"
   export CC_AUTHBROWSER_STATE_DIR="$D/state"
   export CC_AUTHBROWSER_PROFILE_ROOT="$D/profiles"
   export STUB_ARGV_LOG="$D/argv.log"
   mkdir -p "$CC_AUTHBROWSER_STATE_DIR" "$CC_AUTHBROWSER_PROFILE_ROOT"
+
+  # This run's leased ports, in contract §1 account order. A lease that failed to reach us
+  # would leave the subject on its frozen 9341-9344 default — silently reinstating the exact
+  # collision this file exists to prevent — so an absent lease is LOUD, never a fallback.
+  [ -n "${CC_AUTHBROWSER_PORT_BASE:-}" ] || { echo "no CDP lease from setup_file" >&2; return 1; }
+  P_NEXT=$((CC_AUTHBROWSER_PORT_BASE))
+  P_NEXT2=$((CC_AUTHBROWSER_PORT_BASE + 1))
+  P_NEXT3=$((CC_AUTHBROWSER_PORT_BASE + 2))
+  P_NEXT4=$((CC_AUTHBROWSER_PORT_BASE + 3))
 
   # --- account SSOT stub: `claude-accounts --relogin-info <acct>` ------------------------
   cat > "$D/accounts" <<'EOF'
@@ -183,6 +248,21 @@ sys.exit(0 if s.connect_ex(("127.0.0.1", int(sys.argv[1]))) == 0 else 1)' "$1"
 
 argv_has() { grep -qxF -- "$1" "$STUB_ARGV_LOG"; }
 
+port_map_of() { # <base>|--unset — the subject's OWN acct→port map, read without binding anything.
+  # Loads bin/cc-authbrowser as a module (its `__main__` guard means nothing executes), so the
+  # frozen map can be asserted against the REAL 9341-9344 while peers are running: no listener,
+  # no race. Insertion order is ACCOUNTS order, so the joined string pins the ORDER too.
+  local prog='import importlib.machinery as m, importlib.util as u, sys
+ld = m.SourceFileLoader("ccab", sys.argv[1]); sp = u.spec_from_loader("ccab", ld)
+mod = u.module_from_spec(sp); ld.exec_module(mod)
+print(",".join("%s=%d" % kv for kv in mod.port_map().items()))'
+  if [ "$1" = "--unset" ]; then
+    env -u CC_AUTHBROWSER_PORT_BASE python3 -c "$prog" "$B"
+  else
+    CC_AUTHBROWSER_PORT_BASE="$1" python3 -c "$prog" "$B"
+  fi
+}
+
 refute() { # <cmd…> — assert the command FAILS.
   # NEVER write a bare `! cmd` assertion: POSIX exempts `!`-prefixed pipelines from
   # errexit, so outside the FINAL line of a @test it is silently ignored and the
@@ -200,24 +280,124 @@ refute() { # <cmd…> — assert the command FAILS.
   [ "$(echo "$output" | jq -r 'keys_unsorted|sort|join(",")')" = \
     "acct,headless,pid,port,profile_dir,user_agent,ws_url" ]
   [ "$(echo "$output" | jq -r '.acct')" = "next" ]
-  [ "$(echo "$output" | jq -r '.port')" = "9341" ]
+  [ "$(echo "$output" | jq -r '.port')" = "$P_NEXT" ]
   [ "$(echo "$output" | jq -r '.headless')" = "false" ]
-  [ "$(echo "$output" | jq -r '.ws_url')" = "ws://127.0.0.1:9341/devtools/browser/stub" ]
+  [ "$(echo "$output" | jq -r '.ws_url')" = "ws://127.0.0.1:$P_NEXT/devtools/browser/stub" ]
   [ "$(echo "$output" | jq -r '.user_agent')" = "Mozilla/5.0 StubChrome/999" ]
   echo "$output" | jq -e '.pid > 0'
 }
 
-@test "--start honours the frozen per-account port map (next2 -> 9342, not file order)" {
+@test "--start honours the frozen per-account port map (next2 -> base+1, not file order)" {
   run "$B" next2 --start
   [ "$status" -eq 0 ]
-  [ "$(echo "$output" | jq -r '.port')" = "9342" ]
-  argv_has "--remote-debugging-port=9342"
+  [ "$(echo "$output" | jq -r '.port')" = "$P_NEXT2" ]
+  argv_has "--remote-debugging-port=$P_NEXT2"
 }
 
 @test "--start --json is accepted and still emits the frozen shape" {
   run "$B" next --start --json
   [ "$status" -eq 0 ]
-  [ "$(echo "$output" | jq -r '.port')" = "9341" ]
+  [ "$(echo "$output" | jq -r '.port')" = "$P_NEXT" ]
+}
+
+# ------------------------------------------------------- CC_AUTHBROWSER_PORT_BASE (the seam)
+
+@test "FROZEN SS1 MAP is unchanged: with no base set the map is exactly next=9341..next4=9344" {
+  # The contract the seam must not break. Read from the subject itself, so it stays true even
+  # if the default is ever refactored again.
+  run port_map_of --unset
+  [ "$status" -eq 0 ]
+  [ "$output" = "next=9341,next2=9342,next3=9343,next4=9344" ]
+}
+
+@test "the seam shifts the WHOLE block: every account keeps its contract offset from the base" {
+  run port_map_of 23456
+  [ "$status" -eq 0 ]
+  [ "$output" = "next=23456,next2=23457,next3=23458,next4=23459" ]
+}
+
+@test "SET-but-EMPTY base is REFUSED verbatim — never laundered into the frozen default" {
+  # The load-bearing half of the convention. `os.environ.get(X) or DEFAULT` cannot tell unset
+  # from set-empty, so it would silently serve 9341 here — and a run that believes it is
+  # isolated would bind the REAL account port. Empty is a caller bug; it must say so.
+  export CC_AUTHBROWSER_PORT_BASE=""
+  run "$B" next --start
+  [ "$status" -eq 2 ]
+  echo "$output" | grep -q "CC_AUTHBROWSER_PORT_BASE"
+  [ ! -f "$STUB_ARGV_LOG" ]     # the chrome stub never ran ⇒ no port was bound anywhere
+  [ ! -f "$CC_AUTHBROWSER_STATE_DIR/cc-authbrowser-next.json" ]
+}
+
+@test "a junk or out-of-range base is REFUSED (exit 2), never degraded to a bindable port" {
+  export CC_AUTHBROWSER_PORT_BASE="${P_NEXT}x"
+  run "$B" next --start
+  [ "$status" -eq 2 ]
+  export CC_AUTHBROWSER_PORT_BASE=" $P_NEXT"    # leading space — not a plain integer
+  run "$B" next --start
+  [ "$status" -eq 2 ]
+  export CC_AUTHBROWSER_PORT_BASE=100           # privileged
+  run "$B" next --start
+  [ "$status" -eq 2 ]
+  export CC_AUTHBROWSER_PORT_BASE=65535         # the 4-port block would run past 65535
+  run "$B" next --start
+  [ "$status" -eq 2 ]
+  [ ! -f "$STUB_ARGV_LOG" ]
+}
+
+@test "an invalid base fails CLOSED on --stop and --status too, not just --start" {
+  export CC_AUTHBROWSER_PORT_BASE="not-a-port"
+  run "$B" next --stop
+  [ "$status" -eq 2 ]
+  run "$B" next --status
+  [ "$status" -eq 2 ]
+  # …but an UNKNOWN account still reports itself: membership is checked before the port
+  run "$B" bogus --status
+  [ "$status" -eq 2 ]
+  echo "$output" | grep -qi "unknown account"
+}
+
+# The three below assert the CLAIM PROTOCOL, not port probing, so they stub block_free out.
+# Left live they would probe real ports and could fail on whatever a peer happens to hold —
+# a test for an anti-flake mechanism must not itself be a flake.
+
+@test "LEASE RACE: a claim whose pid is not written YET is never stolen (the mkdir→echo window)" {
+  block_free() { return 0; }
+  CDP_LEASE_ROOT="$D/lease"; mkdir -p "$CDP_LEASE_ROOT/0"   # a peer won it microseconds ago
+  try_lease
+  [ "$CC_AUTHBROWSER_PORT_BASE" -ne "$CDP_LEASE_BASE0" ]    # we took a DIFFERENT slot
+  [ -d "$CDP_LEASE_ROOT/0" ]                                # and left theirs standing
+}
+
+@test "LEASE: an AGED pidless claim IS reaped — a death in that window must not wedge a slot" {
+  block_free() { return 0; }
+  CDP_LEASE_ROOT="$D/lease"; mkdir -p "$CDP_LEASE_ROOT/0"
+  touch -t 202601010000 "$CDP_LEASE_ROOT/0"                 # older than the grace window
+  try_lease
+  [ "$CC_AUTHBROWSER_PORT_BASE" -eq "$CDP_LEASE_BASE0" ]    # slot 0 reclaimed
+}
+
+@test "LEASE: a LIVE holder is skipped, a DEAD one is reclaimed" {
+  block_free() { return 0; }
+  CDP_LEASE_ROOT="$D/lease"
+  mkdir -p "$CDP_LEASE_ROOT/0"; echo $$ > "$CDP_LEASE_ROOT/0/pid"          # us: alive
+  mkdir -p "$CDP_LEASE_ROOT/1"; echo 999999 > "$CDP_LEASE_ROOT/1/pid"      # nobody: dead
+  try_lease
+  [ "$CC_AUTHBROWSER_PORT_BASE" -eq $((CDP_LEASE_BASE0 + CDP_LEASE_SPAN)) ]  # skipped 0, took 1
+  [ -d "$CDP_LEASE_ROOT/0" ]
+}
+
+@test "POSITIVE CONTROL: this run really is leased off the frozen ports (isolation not inert)" {
+  # If the lease ever silently stops working, every assertion above still passes while the
+  # suite quietly returns to fighting peers on 9341. This is the test that notices.
+  [ -n "${CC_AUTHBROWSER_PORT_BASE:-}" ]
+  [ "$CC_AUTHBROWSER_PORT_BASE" -ge 19341 ]
+  [ "$P_NEXT" -ne 9341 ]
+  [ "$P_NEXT4" -ne 9344 ]
+  run "$B" next --start
+  [ "$status" -eq 0 ]
+  [ "$(echo "$output" | jq -r '.port')" = "$P_NEXT" ]
+  argv_has "--remote-debugging-port=$P_NEXT"
+  refute argv_has "--remote-debugging-port=9341"
 }
 
 # ------------------------------------------------------------------- launch posture (argv)
@@ -226,7 +406,7 @@ refute() { # <cmd…> — assert the command FAILS.
   run "$B" next --start
   [ "$status" -eq 0 ]
   argv_has "--user-data-dir=$CC_AUTHBROWSER_PROFILE_ROOT/next"
-  argv_has "--remote-debugging-port=9341"
+  argv_has "--remote-debugging-port=$P_NEXT"
   argv_has "--remote-debugging-address=127.0.0.1"
   argv_has "--window-position=-32000,-32000"
   argv_has "--no-first-run"
@@ -307,20 +487,20 @@ EOF
   run pgrep -f "$D/stub-chrome-silent"
   [ "$status" -ne 0 ]                       # the browser we launched was killed
   [ ! -f "$CC_AUTHBROWSER_STATE_DIR/cc-authbrowser-next.json" ]
-  refute port_open 9341
+  refute port_open "$P_NEXT"
 }
 
 @test "a FOREIGN process on the port is BROWSER-FAILED (exit 4) and is NOT killed" {
-  if port_open 9341; then skip "port 9341 already in use on this machine"; fi
-  FOREIGN=$(spawn_bg "$D/foreign-listener" 9341)
-  for _ in 1 2 3 4 5 6 7 8 9 10; do port_open 9341 && break; sleep 0.2; done
-  port_open 9341
+  if port_open "$P_NEXT"; then skip "leased port $P_NEXT already in use on this machine"; fi
+  FOREIGN=$(spawn_bg "$D/foreign-listener" "$P_NEXT")
+  for _ in 1 2 3 4 5 6 7 8 9 10; do port_open "$P_NEXT" && break; sleep 0.2; done
+  port_open "$P_NEXT"
 
   run "$B" next --start
   [ "$status" -eq 4 ]
   echo "$output" | grep -qi "foreign"
   alive "$FOREIGN"                           # never kill a browser/process we did not launch
-  port_open 9341                             # never steal the port either
+  port_open "$P_NEXT"                             # never steal the port either
   [ ! -f "$CC_AUTHBROWSER_STATE_DIR/cc-authbrowser-next.json" ]
 
   { kill "$FOREIGN" && wait "$FOREIGN"; } 2>/dev/null || true
@@ -341,13 +521,13 @@ EOF
   [ "$status" -eq 0 ]
   PID="$(echo "$output" | jq -r '.pid')"
   [ -f "$CC_AUTHBROWSER_STATE_DIR/cc-authbrowser-next.json" ]
-  port_open 9341
+  port_open "$P_NEXT"
 
   run "$B" next --stop
   [ "$status" -eq 0 ]
   [ ! -f "$CC_AUTHBROWSER_STATE_DIR/cc-authbrowser-next.json" ]
   refute alive "$PID"
-  refute port_open 9341
+  refute port_open "$P_NEXT"
 }
 
 @test "--stop also reaps the armed watchdog (no stale killer left behind)" {
@@ -381,19 +561,19 @@ EOF
   [ "$status" -eq 0 ]
   [ "$(echo "$output" | jq -r '.running')" = "true" ]
   [ "$(echo "$output" | jq -r '.pid')" = "$PID" ]
-  [ "$(echo "$output" | jq -r '.port')" = "9341" ]
+  [ "$(echo "$output" | jq -r '.port')" = "$P_NEXT" ]
   [ "$(echo "$output" | jq -r '.headless')" = "false" ]
 
   run "$B" next --status
   [ "$status" -eq 0 ]
-  echo "$output" | grep -q "running pid=$PID port=9341 headless=false"
+  echo "$output" | grep -q "running pid=$PID port=$P_NEXT headless=false"
 }
 
 @test "--status reports not-running once the recorded pid is gone (stale state file)" {
   run "$B" next --start
   [ "$status" -eq 0 ]
   run "$B" next --stop
-  printf '{"acct":"next","pid":999999,"port":9341,"chrome_bin":"%s"}\n' \
+  printf '{"acct":"next","pid":999999,"port":'"$P_NEXT"',"chrome_bin":"%s"}\n' \
     "$CC_AUTHBROWSER_CHROME_BIN" > "$CC_AUTHBROWSER_STATE_DIR/cc-authbrowser-next.json"
   run "$B" next --status --json
   [ "$status" -eq 0 ]
@@ -427,10 +607,10 @@ EOF
   run "$B" next --start --ttl 1
   [ "$status" -eq 0 ]
   PID="$(echo "$output" | jq -r '.pid')"
-  port_open 9341
+  port_open "$P_NEXT"
   for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do alive "$PID" || break; sleep 0.5; done
   refute alive "$PID"
-  refute port_open 9341
+  refute port_open "$P_NEXT"
   [ ! -f "$CC_AUTHBROWSER_STATE_DIR/cc-authbrowser-next.json" ]
 }
 
@@ -462,7 +642,7 @@ EOF
 
 @test "watchdog clears the state file only when it still names the pid it killed" {
   VICTIM=$(spawn_bg sleep 47)
-  printf '{"acct":"next3","pid":%d,"port":9343,"chrome_bin":"sleep 47"}\n' "$VICTIM" \
+  printf '{"acct":"next3","pid":%d,"port":'"$P_NEXT3"',"chrome_bin":"sleep 47"}\n' "$VICTIM" \
     > "$CC_AUTHBROWSER_STATE_DIR/cc-authbrowser-next3.json"
   run "$B" next3 --watchdog --pid "$VICTIM" --ttl 0 --match "sleep 47"
   [ "$status" -eq 0 ]
@@ -471,7 +651,7 @@ EOF
 
   # a state file naming a DIFFERENT pid belongs to a newer session — leave it alone
   V2=$(spawn_bg sleep 49)
-  printf '{"acct":"next4","pid":123456,"port":9344,"chrome_bin":"sleep 49"}\n' \
+  printf '{"acct":"next4","pid":123456,"port":'"$P_NEXT4"',"chrome_bin":"sleep 49"}\n' \
     > "$CC_AUTHBROWSER_STATE_DIR/cc-authbrowser-next4.json"
   run "$B" next4 --watchdog --pid "$V2" --ttl 0 --match "sleep 49"
   [ "$status" -eq 0 ]

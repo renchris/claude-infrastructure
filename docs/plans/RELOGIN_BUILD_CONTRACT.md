@@ -62,11 +62,18 @@ code; a land-lock failure never presents as "bats RED" at all.
   Note the failure *shape* — rc≠0 with **zero `not ok` lines** — is the SAME signature as
   the fleet's `cc-inbox-guard` hang and as an external SIGKILL. Three distinct causes, one
   indistinguishable surface; always separate them by `grep -ac '^not ok'` plus `Killed:`.
-- `tests/cc-authbrowser.bats` binds **frozen, un-overridable ports 9341-9344**, so it is
-  structurally **non-concurrent**: never run it beside itself, and after killing a run
-  reap the `PPID 1` orphan stubs still holding the port
-  (`ps -eo pid,ppid,command | awk '$2==1' | grep foreign-listener`). A leaked listener makes
-  the *next* run fail on assertions that look unrelated to it (`argv.log: No such file`),
+- ~~`tests/cc-authbrowser.bats` binds **frozen, un-overridable ports 9341-9344**, so it is
+  structurally **non-concurrent**: never run it beside itself~~ — **FIXED 2026-07-26, and the
+  "un-overridable" premise was the bug.** The suite was never non-concurrent by nature; it was
+  non-concurrent because the port had no seam while state and profiles had two. Proven on
+  pristine `main`: two simultaneous copies went **20 ok/6 not ok** and **21 ok/5 not ok**, a
+  *different* failing subset each time (collision, not logic), against **26/26** solo. Because
+  gate-select returns FULL for unrelated diffs, that redded **every** land on the box.
+  `bin/cc-authbrowser` now resolves its block through **`CC_AUTHBROWSER_PORT_BASE`** (§1) and
+  the suite leases a private block per run — **4 concurrent copies now go 32/32 each**. Still
+  true and still worth doing after killing a run: reap the `PPID 1` orphan stubs
+  (`ps -eo pid,ppid,command | awk '$2==1' | grep foreign-listener`), since a leaked listener
+  makes the *next* run fail on assertions that look unrelated to it (`argv.log: No such file`),
   which reads as "my newest edit broke it".
 
 ## Phase 0 — Agent Team orchestration
@@ -131,6 +138,19 @@ Accounts: `next` (~/.claude-next) · `next2` (~/.claude-secondary) ·
 | next2 | 9342 | `~/.claude/auth-profiles/next2` |
 | next3 | 9343 | `~/.claude/auth-profiles/next3` |
 | next4 | 9344 | `~/.claude/auth-profiles/next4` |
+
+> ⚠️ **Still frozen, but as a DEFAULT rather than a literal, since 2026-07-26.** The table above
+> is exactly what every caller gets and the ports are unchanged — but a TCP port is a machine-wide
+> singleton, and freezing it *as a constant* made the suite that exercises it unrunnable beside
+> itself, which redded every land on this box (see the second caveat above). `bin/cc-authbrowser`
+> now derives the block as **base + the account's index in this table**, with the base read from
+> **`CC_AUTHBROWSER_PORT_BASE`** (unset ⇒ `9341`, so the frozen map is byte-identical). The
+> ordering here is therefore load-bearing in a way it was not before: it is the offset contract,
+> not just documentation. **Set-but-EMPTY is REFUSED (exit 2), never laundered into the default** —
+> `os.environ.get(X) or DEFAULT` cannot tell unset from set-empty, and silently serving `9341` to
+> a caller that asked to be moved is exactly how a run that believes it is isolated ends up on the
+> real account's port. Junk and out-of-range are refused the same way, on `--stop`/`--status` too.
+> **Production callers pass nothing and are unaffected**; the seam is for test isolation.
 
 ## 2. ⚠️ Version tolerance — `--login-status` is NOT on `main`
 
@@ -236,8 +256,10 @@ finding + reproduction + file list: `docs/research/BATS_DEAD_ASSERTIONS_2026-07-
 
 **Test-injection env:** `CC_AUTHBROWSER_CHROME_BIN` · `CC_AUTHBROWSER_PROFILE_ROOT`
 (default `~/.claude/auth-profiles`) · `CC_AUTHBROWSER_STATE_DIR` (default `/tmp`) ·
-`CC_AUTHBROWSER_ACCOUNTS_BIN` (default `claude-accounts`). Tests MUST drive a fake
-chrome-bin stub — **never launch real Chrome in `bats`.**
+`CC_AUTHBROWSER_PORT_BASE` (default `9341` — see §1; set-but-empty/junk/out-of-range is
+REFUSED, never defaulted) · `CC_AUTHBROWSER_ACCOUNTS_BIN` (default `claude-accounts`).
+Tests MUST drive a fake chrome-bin stub — **never launch real Chrome in `bats`**, and
+never bind a frozen 934x port: `tests/cc-authbrowser.bats` leases a private block per run.
 
 ## 4. `bin/cc-relogin` — the OAuth executor
 
