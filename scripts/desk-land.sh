@@ -47,7 +47,11 @@
 #
 # GUARDS (fail-closed, LOUD). desk-land preflight uses sysexits-style codes so they NEVER collide
 # with ship-land's land-phase codes (0 landed · 2 dirty/preflight · 3 escalation-park · 5 rebase
-# conflict · 6 gate-red · 7 push non-ff · 8 verify-fail), which are passed through VERBATIM:
+# conflict · 6 gate-red · 7 push non-ff · 8 verify-fail · 9 GATE-KILLED), which are passed through
+# VERBATIM. 9 is the one a caller should treat differently from every other non-zero: the gate died
+# without earning a verdict (signal-kill / no failing test named), so it is a statement about the
+# MACHINE, not the tree — re-running is correct, ideally once load has fallen. Every other code is
+# a real finding and must not be blind-retried (backlog 9c5d0ba74e79 / f8e40b4c577d):
 #   64 usage · 65 target refusal (not a worktree / the shared checkout / a non-session branch /
 #   no ship-land.sh / branch not found / worktree-create failed) · 66 kill-switch.
 #
