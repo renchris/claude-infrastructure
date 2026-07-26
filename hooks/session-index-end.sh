@@ -57,6 +57,16 @@ if [ -n "$PROJECT_DIR" ]; then
     ENTRY=$(session_index_lookup_sessions_index "$PROJECT_DIR" "$SESSION_ID" 2>/dev/null || echo "")
     if [ -n "$ENTRY" ]; then
         IFS=$'\t' read -r SUMMARY FIRST_PROMPT GIT_BRANCH CREATED_AT MODIFIED_AT MSG_COUNT <<< "$ENTRY"
+        # Un-pad the empty-cell sentinel the emitter uses to stop `IFS=$'\t' read` collapsing a run
+        # of tabs (docs/research/TSV_FIELD_COLLAPSE_2026-07-25.md). The real "" matters below:
+        # [ -z "$SUMMARY" ] is the transcript-fallback predicate, and the CREATED_AT/MODIFIED_AT/
+        # MSG_COUNT defaults are all keyed on emptiness.
+        SUMMARY=$(session_index_unpad "$SUMMARY")
+        FIRST_PROMPT=$(session_index_unpad "$FIRST_PROMPT")
+        GIT_BRANCH=$(session_index_unpad "$GIT_BRANCH")
+        CREATED_AT=$(session_index_unpad "$CREATED_AT")
+        MODIFIED_AT=$(session_index_unpad "$MODIFIED_AT")
+        MSG_COUNT=$(session_index_unpad "$MSG_COUNT")
     fi
 fi
 

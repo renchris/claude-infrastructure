@@ -372,6 +372,16 @@ session_index_project_name() {
 }
 
 # ─── Lookup sessions-index.json ───────────────────────────
+# TSV field-collapse guard — docs/research/TSV_FIELD_COLLAPSE_2026-07-25.md. The caller reads this
+# with `IFS=$'\t' read`, and tab is IFS-*whitespace*: `read` collapses a RUN of tabs, so ANY empty
+# cell shifts every later field one position LEFT — silently, with a zero exit status. EVERY column
+# here defaults to "" and several are routinely empty on real entries (`.gitBranch` for any session
+# outside a repo, `.summary` before one is written), so the row was landing gitBranch in CREATED_AT
+# and messageCount in MODIFIED_AT — corrupting the session-search index that claude-search reads.
+# `//` is what produces the "" — it substitutes for null, so it cannot also be the fix. Each cell is
+# padded to $'\037' at the emitter and un-padded by the caller, which needs the real ""
+# (`[ -z "$SUMMARY" ]` is its transcript-fallback predicate). SESSION_INDEX_TSV_PAD is the SSOT.
+SESSION_INDEX_TSV_PAD=$'\037'
 
 session_index_lookup_sessions_index() {
     local project_dir="$1"
@@ -382,12 +392,20 @@ session_index_lookup_sessions_index() {
         return 1
     fi
 
-    jq -r --arg sid "$session_id" '
+    jq -r --arg sid "$session_id" --arg pad "$SESSION_INDEX_TSV_PAD" '
+        def cell: (if . == null then "" else . end) | tostring
+                  | gsub("[\\t\\r\\n]"; " ") | if . == "" then $pad else . end;
         .entries[] | select(.sessionId == $sid) |
-        [.summary // "", .firstPrompt // "", .gitBranch // "",
-         .created // "", .modified // "", (.messageCount // 0 | tostring)] |
+        [(.summary | cell), (.firstPrompt | cell), (.gitBranch | cell),
+         (.created | cell), (.modified | cell), ((.messageCount // 0) | cell)] |
         join("\t")
     ' "$index_file" 2>/dev/null
+}
+
+# session_index_unpad <value> → the value, or "" if it is the empty-cell sentinel.
+session_index_unpad() {
+    [ "$1" = "$SESSION_INDEX_TSV_PAD" ] && return 0
+    printf '%s' "$1"
 }
 
 # ─── Extract Context Text from Transcript ─────────────────
@@ -460,19 +478,29 @@ print(user_count)
 # ─── Extract Enriched Data from Transcript ─────────────────
 # Extracts assistant text, file paths, and commands from transcript JSONL.
 # Output: tab-separated assistant_text\tfiles_changed\tcommands_run
+#
+# TSV field-collapse guard — docs/research/TSV_FIELD_COLLAPSE_2026-07-25.md. Every caller reads this
+# with `IFS=$'\t' read`, and tab is IFS-*whitespace*: `read` collapses a RUN of tabs, so ANY empty
+# cell shifts every later field one position LEFT. A transcript with no qualifying assistant text but
+# real tool calls (an all-tool_use session) emitted "\t<files>\t<cmds>" and the reader stored the FILE
+# LIST as assistant_text and the COMMANDS as files_changed — corrupting the search index silently.
+# Each cell is padded to a single SPACE, deliberately NOT the $'\037' sentinel used elsewhere: a
+# space is not in IFS here so it holds the column open, and it is inert if a caller does not un-pad
+# it (" " indexes as nothing). That matters because one caller — hooks/session-index-sweep.sh — is
+# being rewritten on the in-flight fix/infra-perfection wave and must not be edited from here.
 
 session_index_extract_enriched() {
     local transcript_path="$1"
     local max_assistant_chars="${2:-3000}"
     local max_files="${3:-100}"
-    [ -f "$transcript_path" ] || { printf '\t\t'; return; }
+    [ -f "$transcript_path" ] || { printf ' \t \t '; return; }
 
     # Skip very large transcripts (>50MB) to prevent OOM
     local file_size
     file_size=$(stat -f%z "$transcript_path" 2>/dev/null || stat -c%s "$transcript_path" 2>/dev/null || echo 0)
     if [ "$file_size" -gt 52428800 ]; then
         session_index_log "Skipping large transcript ($file_size bytes): $transcript_path"
-        printf '\t\t'
+        printf ' \t \t '
         return 0
     fi
 
@@ -521,11 +549,13 @@ try:
     at = ' '.join(assistant_texts)[:$max_assistant_chars].replace('\t', ' ').replace('\n', ' ').replace('\r', ' ')
     fc = ' '.join(sorted(files)[:$max_files]).replace('\t', ' ').replace('\n', ' ')
     cr = ' '.join(commands[:50]).replace('\t', ' ').replace('\n', ' ').replace('\r', ' ')
-    sys.stdout.write(at + '\t' + fc + '\t' + cr)
+    # Hold every column open — an empty cell would shift the later ones left in the caller's
+    # \`IFS=\$'\t' read\` (see the header note). A space is inert wherever it is not un-padded.
+    sys.stdout.write((at or ' ') + '\t' + (fc or ' ') + '\t' + (cr or ' '))
 except MemoryError:
-    sys.stdout.write('\t\t')
+    sys.stdout.write(' \t \t ')
     sys.exit(0)
-" 2>/dev/null || printf '\t\t'
+" 2>/dev/null || printf ' \t \t '
 }
 
 # ─── Stats ─────────────────────────────────────────────────
@@ -570,8 +600,19 @@ session_index_load_synonyms() {
         return 1
     fi
 
-    jq -r '.[] | .term as $term | .category as $cat | .expansions[] | [$term, ., $cat] | @tsv' "$synonyms_file" | \
+    # TSV field-collapse guard (docs/research/TSV_FIELD_COLLAPSE_2026-07-25.md): a synonyms entry
+    # with no `.category` — or an empty `.term`/expansion — emitted an empty cell, which
+    # `IFS=$'\t' read` collapses into the surrounding tab run, shifting the later fields LEFT and
+    # inserting the EXPANSION under the term column. Padded at the emitter, un-padded here.
+    jq -r --arg pad "$SESSION_INDEX_TSV_PAD" '
+        def cell: (if . == null then "" else . end) | tostring
+                  | gsub("[\\t\\r\\n]"; " ") | if . == "" then $pad else . end;
+        .[] | .term as $term | .category as $cat | .expansions[]
+        | [($term | cell), (. | cell), ($cat | cell)] | @tsv' "$synonyms_file" | \
     while IFS=$'\t' read -r term expansion category; do
+        term=$(session_index_unpad "$term")
+        expansion=$(session_index_unpad "$expansion")
+        category=$(session_index_unpad "$category")
         session_index_sql "INSERT OR IGNORE INTO synonyms (term, expansion, category) VALUES ('$(echo "$term" | sed "s/'/''/g")', '$(echo "$expansion" | sed "s/'/''/g")', '$(echo "$category" | sed "s/'/''/g")');"
     done
 }
