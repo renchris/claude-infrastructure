@@ -17,11 +17,19 @@
   RunAtLoad is FALSE deliberately: loading the job must not fire an immediate re-login attempt.
   The first tick comes one StartInterval (1h) later, on the normal schedule.
 
+  WHY this file lives in launchd/staged/ and not launchd/: install.sh globs `launchd/*.plist` and
+  bootstraps every match, so a staged plist in that directory is activated by anyone merely
+  RUNNING THE INSTALLER. Copying-without-bootstrapping is not a safe middle ground either —
+  launchd bootstraps everything in ~/Library/LaunchAgents at the next login, so the copy IS the
+  activation. A plain glob cannot descend into a subdirectory, so this location is immune BY
+  CONSTRUCTION. Do not move this file up a level, and do not make that glob recursive;
+  tests/install-staged-plist.bats pins both halves.
+
   🚨 STAGED, NOT LOADED. This file ships inert — loading it is C10 OPERATOR ACTIVATION and is
   explicitly out of scope for the build that authored it. No agent may run launchctl on it.
 
   OPERATOR ACTIVATION (your call, when you want the cadence live):
-      cp launchd/com.claude.relogin.plist ~/Library/LaunchAgents/com.claude.relogin.plist
+      cp launchd/staged/com.claude.relogin.plist ~/Library/LaunchAgents/com.claude.relogin.plist
       launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.claude.relogin.plist
       launchctl list | grep com.claude.relogin          # verify it is registered
   Dry-run it first (invokes nothing, mutates nothing):
