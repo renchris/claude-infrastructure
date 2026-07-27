@@ -99,14 +99,14 @@ tx() {
   local t; t="$(tx 'looks good, stop here')"
   run actuate sidA "$t"
   [ "$status" -eq 0 ]
-  ! blocked "$output"
+  ! blocked "$output" || false
   printf '%s' "$output" | jq -r .systemMessage | grep -q 'No inbox wake path armed'
 }
 
 @test "after ONE declined attempt with no mail waiting, the floor stops nagging" {
   run actuate sidA; blocked "$output"                # first idle of the session: always try
   run actuate sidA                                   # nothing is waiting ⇒ leave the session alone
-  ! blocked "$output"
+  ! blocked "$output" || false
   [ -z "$output" ]                                   # not even a warning: there is nothing to lose yet
 }
 
@@ -118,7 +118,7 @@ tx() {
   run actuate sidA; blocked "$output"                # 2 (CC_WAKE_FLOOR_MAX default 2)
   run actuate sidA                                   # 3 — must give up, loudly
   [ "$status" -eq 0 ]
-  ! blocked "$output"
+  ! blocked "$output" || false
   printf '%s' "$output" | jq -r .systemMessage | grep -q 'cc-await-ping'
   printf '%s' "$output" | jq -r .systemMessage | grep -q 'waiting and NO wake path'
 }
@@ -133,7 +133,7 @@ tx() {
 @test "a NEW session in the same pane gets a fresh budget (no inherited exhaustion)" {
   mail 1
   run actuate sidA; run actuate sidA                 # spend sidA's whole budget (mail pending)
-  run actuate sidA; ! blocked "$output"              # sidA is now exhausted
+  run actuate sidA; ! blocked "$output" || false     # sidA is now exhausted (|| false: `!` is errexit-exempt)
   run actuate sidB                                   # a successor in the same pane must not inherit it
   blocked "$output"
 }
@@ -165,8 +165,8 @@ tx() {
   git -C "$REPO" archive origin/main hooks | tar -x -C "$old" || skip "origin/main unavailable"
   [ -f "$old/hooks/session-continue.sh" ]
   # sanity: the control must genuinely predate the change
-  ! grep -q 'WAKE FLOOR' "$old/hooks/session-continue.sh"
-  ! grep -q 'mailbox_wake_armed' "$old/hooks/lib/mailbox-pending.sh"
+  ! grep -q 'WAKE FLOOR' "$old/hooks/session-continue.sh" || false
+  ! grep -q 'mailbox_wake_armed' "$old/hooks/lib/mailbox-pending.sh" || false
   run bash -c "printf '{\"cwd\":\"%s\",\"session_id\":\"sidA\",\"transcript_path\":\"\"}' '$CWD' | bash '$old/hooks/session-continue.sh' 2>/dev/null"
   [ "$status" -eq 0 ]
   ! blocked "$output"                                # RED: the defect this change closes
