@@ -104,3 +104,52 @@ mk_suite() {
   case "$(basename "$LINT")" in *lint*.sh) ;; *) false ;; esac    # scripts/*lint*.sh glob
   grep -qE -- '--selftest|selftest\)' "$LINT"                     # nightly's supports_selftest() probe
 }
+
+# ── OWN-SCOPE: the ratchet binds on what YOU changed, not on what trunk happens to contain ────────
+# Regression cover for the fleet-wide hard stop measured 2026-07-27 (GATE_ARCHITECTURE_PLAN §9):
+# a docs-only land was refused by five leaking suites it does not touch. The rule "do not ADD a
+# leak" is preserved exactly; only "answerable for everyone else's leak" is removed.
+
+@test "own-scope: a leak OUTSIDE the lander's diff is advisory, not blocking" {
+  mk_suite leak 'REPO=x'
+  CC_HERM_OWN="tests/something-else.bats" CC_HERM_ALLOWLIST="" run bash "$LINT" "$FIX/leak"
+  [ "$status" -eq 0 ] || false
+  echo "$output" | grep -q 'advisory, not blocking' || false
+}
+
+@test "own-scope: the SAME leak INSIDE the lander's diff still blocks (the rule is intact)" {
+  mk_suite leak 'REPO=x'
+  CC_HERM_OWN="tests/zz-fixture.bats" CC_HERM_ALLOWLIST="" run bash "$LINT" "$FIX/leak"
+  [ "$status" -eq 1 ] || false
+  echo "$output" | grep -q 'LEAK' || false
+}
+
+# THE case the fix exists for, and the one a `${VAR:-}` collapse silently breaks: a land that
+# changes NO suite supplies an own-set that is SET BUT EMPTY. That must mean "nothing is mine",
+# never "strict".
+@test "own-scope: a docs-only land (CC_HERM_OWN set but EMPTY) is not blocked by a foreign leak" {
+  mk_suite leak 'REPO=x'
+  CC_HERM_OWN="" CC_HERM_ALLOWLIST="" run bash "$LINT" "$FIX/leak"
+  [ "$status" -eq 0 ] || false
+}
+
+@test "own-scope: UNSET CC_HERM_OWN keeps whole-tree strictness (postland + bare runs unchanged)" {
+  mk_suite leak 'REPO=x'
+  CC_HERM_ALLOWLIST="" run env -u CC_HERM_OWN bash "$LINT" "$FIX/leak"
+  [ "$status" -eq 1 ] || false
+}
+
+@test "own-scope: a stuck ratchet entry outside the diff is advisory; inside it still blocks" {
+  mk_suite herm 'export HOME="$BATS_TEST_TMPDIR/home"'
+  CC_HERM_OWN="tests/other.bats" CC_HERM_ALLOWLIST="zz-fixture.bats" run bash "$LINT" "$FIX/herm"
+  [ "$status" -eq 0 ] || false
+  CC_HERM_OWN="tests/zz-fixture.bats" CC_HERM_ALLOWLIST="zz-fixture.bats" run bash "$LINT" "$FIX/herm"
+  [ "$status" -eq 1 ] || false
+}
+
+@test "own-scope: ship-land passes its OWN diff and the kill switch restores strictness" {
+  grep -q 'CC_HERM_OWN=' "$REPO/scripts/ship-land.sh" || false
+  grep -q "SHIP_LAND_HERM_OWN_SCOPE" "$REPO/scripts/ship-land.sh" || false
+  # the own-set must come from the landing RANGE, never from the working tree
+  grep -q 'git diff --name-only "\$range" -- .tests/\*\.bats' "$REPO/scripts/ship-land.sh" || false
+}
