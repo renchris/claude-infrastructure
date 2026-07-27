@@ -774,9 +774,24 @@ run_gate() {  # $1=range → 0 green / 1 red
   # the same bats run is contaminated. There is no value in spending 40 minutes collecting them.
   HERM_LINT="${SHIP_LAND_HERM_LINT:-scripts/test-hermeticity-lint.sh}"
   if [[ -d tests ]] && ls tests/*.bats >/dev/null 2>&1 && [[ -x "$HERM_LINT" ]]; then
+    # OWN-SCOPE (2026-07-27, GATE_ARCHITECTURE_PLAN §9). The paragraph above is the ORIGINAL
+    # rationale and it was correct until Phase 2a: an unfixtured suite contaminated the run, so
+    # stopping the whole corpus was right. `d9b934ee` now clones $HOME per gate, so a leak dirties
+    # the CLONE. What remained was a fleet-wide hard stop with no upside — measured this session, a
+    # DOCS-ONLY land was refused by five leaking suites it does not touch. The ratchet still binds
+    # absolutely on suites THIS land changes (its actual rule: do not ADD a leak); everything else
+    # is reported and stepped over. Whole-tree strictness is still enforced off the critical path
+    # by the postland net, which passes no own-set.
+    local own=""
+    if [[ "${SHIP_LAND_HERM_OWN_SCOPE:-on}" != "off" ]]; then
+      # Basenames are matched, so a path form is fine. Failure to resolve the range yields an EMPTY
+      # own-set, which the lint treats as STRICT — the fail-closed direction, never fail-open.
+      own="$(git diff --name-only "$range" -- 'tests/*.bats' 2>/dev/null || true)"
+      [[ -n "$own" ]] && echo "→ gate: hermeticity own-scope — blocking on $(printf '%s\n' "$own" | grep -c .) suite(s) in this land's diff; others advisory." >&2
+    fi
     echo "→ gate: test-hermeticity ratchet (before bats — seconds, and it names the file)" >&2
-    if ! "$HERM_LINT" tests >&2; then
-      echo "✗ gate: test-hermeticity RED — a bats suite runs against the operator's live ~/." >&2
+    if ! CC_HERM_OWN="$own" "$HERM_LINT" tests >&2; then
+      echo "✗ gate: test-hermeticity RED — a bats suite THIS LAND CHANGES runs against the operator's live ~/." >&2
       echo "  Not running bats: an unfixtured suite mutates live state, so the whole run's results" >&2
       echo "  would be untrustworthy. Fix the file named above (2 lines), then re-run /ship." >&2
       # A REAL verdict, never a non-verdict: the ratchet names a file and is deterministic, so it
