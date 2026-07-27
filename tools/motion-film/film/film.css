@@ -1,0 +1,273 @@
+/*
+ * film.css — static appearance only.
+ *
+ * HARD RULE: no `animation`, no `transition`, no `@keyframes` anywhere in this
+ * file. CSS animations run on their own private schedule and cannot answer the
+ * only question the capture loop asks — "what do you look like at exactly
+ * 12.4s?". Every value that changes over time is written by film.js from a
+ * single render(t). This file only says what things look like when still.
+ *
+ * Palette is reso's own: brand gold #D4AF37 on charcoal #1a1a1a.
+ * Type is the system UI stack — zero font files, zero network requests.
+ */
+
+:root {
+  --gold: #d4af37;
+  --gold-light: #e5c048;
+  --gold-pale: #f5e6a3;
+  --gold-deep: #9c7a1e;
+  --purple: #7c3aed;
+  --charcoal: #1a1a1a;
+  --ink: #0b0b0c;
+  --paper: #f4f1e8;
+  --green: #22c55e;
+  --red: #ef4444;
+  --stage-w: 1280px;
+  --stage-h: 720px;
+  --ui: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', system-ui, sans-serif;
+  --mono: 'SF Mono', ui-monospace, Menlo, Consolas, monospace;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body {
+  width: var(--stage-w);
+  height: var(--stage-h);
+  overflow: hidden;
+  background: var(--ink);
+}
+
+#stage {
+  position: relative;
+  width: var(--stage-w);
+  height: var(--stage-h);
+  overflow: hidden;
+  background: var(--ink);
+  font-family: var(--ui);
+  color: #fff;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---------------------------------------------------------- background ---- */
+/* Four blurred circles. They never stop moving, under every scene, which is
+   what makes eleven hard cuts read as one continuous film. */
+#bg { position: absolute; inset: -20%; z-index: 0; }
+.blob { position: absolute; border-radius: 50%; filter: blur(110px); will-change: transform; }
+#b0 { width: 500px; height: 500px; background: rgba(212, 175, 55, 0.20); }
+#b1 { width: 420px; height: 420px; background: rgba(124, 58, 237, 0.15); }
+#b2 { width: 560px; height: 560px; background: rgba(229, 192, 72, 0.10); }
+#b3 { width: 380px; height: 380px; background: rgba(156, 122, 30, 0.17); }
+
+/* Vignette. Pulls the eye to centre frame and stops the corner glow from
+   washing the type out — the single cheapest way to make a flat CSS gradient
+   read as lit rather than muddy. */
+#stage::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background: radial-gradient(ellipse 78% 70% at 50% 48%, transparent 30%, rgba(6, 6, 7, 0.72) 100%);
+}
+
+/* One CSS dot pattern. Breaks up the gradient banding and reads as film grain. */
+#grain {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  opacity: 0.055;
+  mix-blend-mode: overlay;
+  background-image: radial-gradient(rgba(255, 255, 255, 0.9) 0.5px, transparent 0.5px);
+  background-size: 3px 3px;
+}
+
+/* -------------------------------------------------------------- scenes ---- */
+.scene {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  visibility: hidden;
+}
+
+/* 1 · open */
+.stamp {
+  font-family: var(--mono);
+  font-size: 13px;
+  letter-spacing: 0.34em;
+  color: rgba(245, 230, 163, 0.82);
+  margin-bottom: 26px;
+}
+.open-line { font-size: 46px; font-weight: 600; letter-spacing: -0.022em; }
+.open-line .w { display: inline-block; white-space: pre; }
+
+/* 2 · the door problem */
+.door-wrap { display: flex; align-items: center; gap: 76px; }
+.clipboard { width: 300px; transform-origin: 50% 50%; }
+.clip-top {
+  width: 92px; height: 16px; margin: 0 auto -6px;
+  background: #8a8a8a; border-radius: 4px 4px 2px 2px;
+}
+.paper {
+  background: var(--paper); color: #2a2622;
+  border-radius: 3px; padding: 18px 20px 22px;
+  box-shadow: 0 26px 60px rgba(0, 0, 0, 0.55);
+}
+.paper-head {
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.2em;
+  color: #8a8175; border-bottom: 1px solid #d8d2c4; padding-bottom: 8px; margin-bottom: 10px;
+}
+.paper-rows { display: flex; flex-direction: column; gap: 9px; }
+.prow { display: flex; align-items: center; gap: 9px; font-size: 12.5px; }
+.prow .nm { flex: 1; }
+.prow .strike { position: relative; }
+.prow .strike::after {
+  content: ''; position: absolute; left: -2px; top: 52%; height: 1.5px;
+  background: #b8433f; width: var(--sw, 0%);
+}
+.prow .scribble { font-family: var(--mono); font-size: 10px; color: #b8433f; }
+
+.queue { text-align: left; }
+.queue-num {
+  font-size: 104px; font-weight: 700; letter-spacing: -0.045em;
+  font-variant-numeric: tabular-nums; line-height: 1; color: var(--red);
+}
+.queue-cap { font-size: 13px; color: rgba(255, 255, 255, 0.5); margin-top: 8px; }
+
+/* 3 · chapter card */
+.chapter { background: var(--ink); }
+.chapter-word {
+  font-size: 132px; font-weight: 700; letter-spacing: -0.05em;
+  color: #fff; white-space: nowrap;
+}
+/* `white-space: pre` is load-bearing: splitWords() emits the gaps between words
+   as their own spans, and an inline-block span collapses its whitespace. Without
+   this the chapter card reads "THEDOOR". */
+.chapter-word .w { display: inline-block; white-space: pre; }
+
+/* 4 · headline */
+.headline {
+  font-size: 74px; font-weight: 650; letter-spacing: -0.035em;
+  line-height: 1.04; text-align: center; white-space: nowrap;
+}
+.headline .w { display: inline-block; white-space: pre; }
+.gold { color: var(--gold); }
+.sub { margin-top: 22px; font-size: 17px; color: rgba(255, 255, 255, 0.56); }
+
+/* 5 · check-in */
+.phone {
+  width: 420px; border-radius: 18px; overflow: hidden;
+  background: rgba(22, 22, 24, 0.86);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  backdrop-filter: blur(28px);
+  box-shadow: 0 34px 90px rgba(0, 0, 0, 0.6);
+  transform-origin: 50% 50%;
+}
+.phone-bar {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 14px 18px; border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.phone-title { font-size: 12.5px; color: rgba(255, 255, 255, 0.62); }
+.phone-count {
+  font-family: var(--mono); font-size: 12.5px; color: var(--gold);
+  font-variant-numeric: tabular-nums;
+}
+.rows { padding: 10px; display: flex; flex-direction: column; gap: 7px; }
+.row {
+  display: flex; align-items: center; gap: 11px;
+  padding: 11px 13px; border-radius: 11px;
+  background: rgba(255, 255, 255, 0.045);
+}
+.row .av {
+  width: 27px; height: 27px; border-radius: 50%;
+  display: grid; place-items: center;
+  font-size: 11px; font-weight: 600; color: #10100f;
+  background: var(--gold-pale);
+}
+.row .nm { flex: 1; font-size: 13.5px; }
+.row .pax { font-family: var(--mono); font-size: 11.5px; color: rgba(255, 255, 255, 0.4); }
+.row .tick {
+  width: 21px; height: 21px; border-radius: 50%;
+  display: grid; place-items: center;
+  font-size: 12px; font-weight: 700; color: #06240f;
+  background: var(--green);
+}
+.cursor { position: absolute; z-index: 4; }
+.cursor svg { fill: #fff; filter: drop-shadow(0 3px 7px rgba(0, 0, 0, 0.7)); }
+
+/* 6 · sync */
+.sync-row { display: flex; align-items: center; gap: 0; }
+.dev {
+  width: 128px; height: 92px; border-radius: 13px;
+  border: 1.5px solid rgba(255, 255, 255, 0.55);
+  background: rgba(255, 255, 255, 0.11);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 11px;
+}
+.dev-label {
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.22em;
+  color: rgba(255, 255, 255, 0.5);
+}
+.dev-dot { width: 11px; height: 11px; border-radius: 50%; background: rgba(255, 255, 255, 0.22); }
+.wire { position: relative; width: 260px; height: 2px; background: rgba(255, 255, 255, 0.13); }
+.pulse {
+  position: absolute; top: -3px; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--gold);
+  box-shadow: 0 0 18px 5px rgba(212, 175, 55, 0.65);
+}
+.sync-ms {
+  margin-top: 42px; font-size: 60px; font-weight: 700; letter-spacing: -0.04em;
+  font-variant-numeric: tabular-nums; color: var(--gold);
+}
+.sync-cap { margin-top: 8px; font-size: 14px; color: rgba(255, 255, 255, 0.5); }
+
+/* 7 · floor plan */
+.floor {
+  position: relative; width: 660px; height: 380px;
+  border: 1px solid rgba(255, 255, 255, 0.18); border-radius: 15px;
+  background: rgba(255, 255, 255, 0.04);
+}
+.tbl {
+  position: absolute; border-radius: 50%;
+  border: 1.5px solid rgba(255, 255, 255, 0.34);
+  display: grid; place-items: center;
+  font-family: var(--mono); font-size: 10px; color: rgba(255, 255, 255, 0.72);
+}
+.floor-cap { margin-top: 26px; font-size: 14px; color: rgba(255, 255, 255, 0.5); }
+
+/* 8 · numbers */
+.big {
+  font-size: 168px; font-weight: 700; letter-spacing: -0.055em;
+  font-variant-numeric: tabular-nums; line-height: 1; color: #fff;
+}
+.big-cap { margin-top: 14px; font-size: 16px; color: rgba(255, 255, 255, 0.55); }
+.pills { position: absolute; inset: 0; pointer-events: none; }
+.pill {
+  position: absolute; padding: 8px 15px; border-radius: 999px;
+  font-family: var(--mono); font-size: 12.5px; font-weight: 600; color: #241b02;
+  background: linear-gradient(160deg, var(--gold-light), var(--gold-deep));
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.45);
+  white-space: nowrap;
+}
+
+/* 9 · close */
+.mark { font-size: 116px; font-weight: 700; letter-spacing: -0.055em; color: var(--gold); }
+.mark-sub {
+  margin-top: 12px; font-family: var(--mono); font-size: 14px;
+  letter-spacing: 0.3em; color: rgba(255, 255, 255, 0.45);
+}
+
+/* --------------------------------------------------------------- scrub ---- */
+/* Authoring aid. The capture run sets html.capturing, which removes it, so it
+   can never appear in a frame. */
+#scrub {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 99;
+  display: flex; align-items: center; gap: 12px;
+  padding: 9px 14px; background: rgba(0, 0, 0, 0.72);
+  font-family: var(--mono); font-size: 12px; color: #ddd;
+}
+#scrub-range { flex: 1; }
+html.capturing #scrub { display: none; }
