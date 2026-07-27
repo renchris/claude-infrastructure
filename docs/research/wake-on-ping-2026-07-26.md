@@ -153,7 +153,122 @@ a loop — a repeating Stop hook is not evidence that more work exists
 
 ## 5 · What to absorb from AgentMail
 
-*(filled in from the recursive org investigation — see § Absorb list)*
+**Method:** the 32-repo org read recursively — docs (real-time + data model), `agentmail-mcp`,
+`agentmail-skills` + `openclaw-plugin`, the Python/TS/Go SDKs, `agentmail-examples`, `openclaw`
+itself, and the CLI/schemas/convex/langchain surfaces — each surface deep-read, then passed through
+a second stage that kept only what maps onto a file/hook world with no server.
+
+### 5.0 The shape of their answer
+
+AgentMail has exactly **one** true wake primitive: a WebSocket channel at `wss://ws.agentmail.to/v0`
+with a `subscribe` frame (`{type:"subscribe", event_types:[…], inbox_ids:[…]}`), server events
+carrying `type:"event"` + `event_type` (10 types: `message.received`, `.sent`, `.delivered`,
+`.bounced`, …). Everything else is HTTP webhooks or hand-rolled polling. Notably:
+
+- **Their MCP server — the Claude Code integration — has NO wake primitive at all.** No blocking
+  "wait for next message" tool, no way to surface a message to a running agent. Whatever we build
+  here, we cannot buy it from them.
+- **Their Go SDK and CLI have no streaming at all** — no `watch`/`tail`/`listen`.
+- **Their WebSocket has no cursor, no sequence number, no backfill and no dedupe.** A dropped
+  connection loses its whole window. Our `.seen`/`.acked` split cursor under a lock, `.forward`
+  chains, and SessionStart `mailbox_migrate` adoption are **strictly ahead** — we cannot lose a
+  line; they can lose a reconnect window.
+
+So the transferable value is narrow and concentrated in one place — **the arm/re-arm lifecycle** —
+plus one architectural idea from `openclaw` that is genuinely bigger than anything we have.
+
+### 5.1 Ranked absorb list
+
+| # | Take | Closes | Effort | wake_impact | Status |
+|---|---|---|---|---|---|
+| A1 | **Subscribe on OPEN, not on message.** Their SDK docs mandate `on("open") → sendSubscribe` precisely because subscribing once after the first connect silently stops delivering after any reconnect. Our re-arm nudge lived on the "message arrived" path — below `[ -n "$body" ] \|\| exit 0` — so a session with an empty inbox was never told to arm. | R-1 | S | **HIGH** | **DONE** `cca3b3c9` |
+| A2 | **A supervised re-arm loop, made mechanical.** Their Python client does *not* auto-reconnect; the skill mandates a `while True:` + backoff + **re-subscribe** loop. We cannot run a loop across idle, so the equivalent is an actuator at the idle boundary. | R-1 | M | **HIGH** | **DONE** (wake floor, `57cc374a`) |
+| A3 | **A host-driven turn.** `openclaw`'s `channelRuntime.inbound.run` with `admission:"exclusive"` and `activation:{onStartup:true}`: an inbound message *creates* an agent turn, and the **host** starts the ingress worker — the agent never has to be looping. This is the one idea strictly bigger than ours: it converts "landed" into "read" for a session that is already idle and unarmed. | R-1, R-2 | **L** | **HIGH** | **SPECIFIED, NOT BUILT** — §5.2 |
+| A4 | **Redeliver, don't just page.** `openclaw` runs a REST catch-up (60 s overlap / 900 s deep sweep) *concurrently with* the live socket, on the principle that the durable sweep is not a fallback. Our `cc-inbox-guard` has exactly the right shape and the wrong terminal action: it classifies overdue boxes and escalates to the phone. **Our sweeper pages the human about a session it is standing right next to.** | R-1, S-2 | M | MED-HIGH | backlog |
+| A5 | **Class filtering at subscribe time** (`Subscribe{event_types:[…]}`). `cc-await-ping` wakes on *any* line, so a routine reaper page burns a wake the same as a blocking decision request. A `--class urgent` filter makes a standing watcher affordable. | S-3 | S | MED | backlog |
+| A6 | **`minUptime` before declaring health.** Their reconnecting socket refuses to reset its backoff until a connection has survived 5 s, so a flapping endpoint cannot masquerade as healthy. Nothing of ours records whether an armed watcher *survived* — "arming is broken" and "never armed" look identical on disk. A one-line-per-exit `watch-log.jsonl` + a guard alarm for "≥3 arms under 60 s" converts an invisible failure into a loud one. | new | S | MED | backlog |
+| A7 | **Capacity: reject NEW, never evict old** (their `450` cap + 30 d TTL raising a typed capacity error). Our store has no cap at all and no GC — 74 boxes, 120 orphan cursors, oldest lines from Jul 15. D6 `cc-mailbox-gc` (parked branch) is the archive half; the *refusal* half is the part to take. | R-4 | S | LOW | with D6 |
+| A8 | **Content-addressed event id** — `sha256(account\ninbox\nmessage)` as the cross-transport identity, so the same message arriving by socket and by sweep dedupes. Directly relevant the moment A4 gives us a second delivery path. | new | S | LOW (HIGH once A4 lands) | with A4 |
+| A9 | **Baseline fencing + a poison ceiling** — replay never reaches before the monitoring baseline; a message terminally fails after N attempts rather than retrying forever. | R-4 | S | LOW | backlog |
+
+**Explicitly NOT taken:** hosted webhooks with signature verification (no server, no public endpoint —
+the file *is* the durable path); Pods/multi-tenancy (one operator); IMAP/SMTP; labels as a general
+state machine (our two-cursor model is simpler and already exactly-once); `agentmail-schemas` (stale,
+superseded by the Fern definitions); their reconnect semantics wholesale — a normal close (code 1000)
+*permanently disables* reconnection in their client, which is a bug shape worth naming, not copying:
+a graceful termination indistinguishable from a deliberate stop silently retires the recovery path.
+
+### 5.2 A3 — the host-driven turn (specified, deliberately not built here)
+
+This is the only remaining mechanism that reaches a session which is **already idle and unarmed** —
+the ~1,300 lines sitting in boxes today, which the wake floor cannot retroactively help.
+
+**The finding that shapes it:** `openclaw` has everything our substrate lacks — a persistent daemon,
+a live socket to a long-running agent process, an in-process plugin — and it *still* cannot wake an
+idle agent from a message. Its only proactive wake is `agents.*.heartbeat`: **a scheduled cron job
+that starts an agent turn.** Everything else in its stack (webhook → durable journal → dispatch →
+adoption) is about not *losing* the message; the read happens when a turn runs. That is our harness
+floor restated by a system that had every reason to beat it — which means the answer is not a
+cleverer transport, it is **a scheduler that creates turns**, and we already own one.
+
+Two candidate implementations, and the research changed the ranking:
+
+**A3a — fire a session (PREFERRED).** `cc-inbox-guard` promotes from *alarm* to *reader of last
+resort*: on `unacked > 0` past deadline with the owner pane dead-or-idle, it fires a session via
+`scripts/handoff-fire.sh --window` — the documented non-anchoring surface that
+`scripts/desk-invariant.sh:fire_replacement()` already drives headlessly from launchd — with the
+brief "drain `<uuid>`, act, report". The human is paged only if the fire fails. This touches **no
+live composer**, so it cannot re-open the v1 race at all; its costs are tokens and session sprawl,
+so it needs hard damping (per-uuid TTL, a fleet-wide concurrent-fire cap, and the existing
+`cc-teardown` lifecycle).
+
+**A3b — drive the existing pane (riskier, keep in reserve).** Reuse `handoff-fire.sh`'s composer
+transport (`async_send_text` + CR — the Ink-safe submit the recycle path relies on, explicitly *not*
+the AppleScript `write text` char-stream behind the ttys018 mis-inject) against an *existing* pane,
+gated by a file analogue of openclaw's `admission:"exclusive"`: `<uuid>.idle` written at Stop and
+cleared at UserPromptSubmit, required present AND newer than the transcript mtime AND quiet ≥ N s,
+under a `<uuid>.driving` mkdir lock. Payload is one line ("you have N unread"), never the body, so
+delivery still runs through the audited `mailbox_take` path.
+
+**Why neither is built in this pass:** A3b re-opens the exact race that killed v1 mail, and its
+admission gate *is* the whole safety argument — it needs a RED-proof against a half-typed composer
+and a permission modal, plus a shadow-default arm (`scripts/desk-arm-live.sh` pattern). A3a is
+safe by construction but spends real tokens per fire and needs its damping designed before it runs
+unattended. Both are builds with their own gates, not riders on this one.
+
+### 5.3 The detector this exposes
+
+`.watching` is our `listChanged`: a capability flag that two independent consumers branch on, that
+was **universally false fleet-wide**, and that nothing announced. AgentMail ships the same shape —
+`listChanged: true` advertised by a bridge that structurally cannot deliver the notification. The
+lesson is not about either flag; it is that **a capability every consumer trusts needs a detector
+that fires when it is false everywhere at once**. A per-session nudge (A1) cannot see "0 of 74". The
+fleet-level check — `cc-inbox-guard` or the Operator Board reporting *armed watchers / live
+sessions* — is what would have made the 0-watcher state loud on day one instead of on day six.
+
+## 6 · Checked assumptions (things that could have made this wrong)
+
+- **The heartbeat is not racy.** The floor's budget would be wasted if `.watching` appeared slowly
+  after arming — a freshly-armed session would read as unarmed at the next Stop. Measured: the
+  heartbeat lands **0.15 s** after launch (`_beat` runs on the first loop iteration, before the
+  first `sleep`). A single 400 ms probe under load 143 did miss it, which is interpreter + lib
+  startup, not the poll interval. The next Stop is a full model turn away, so the race is not
+  material.
+- **The floor cannot override an operator stop.** Kill-switch detection was hoisted out of the
+  sentinel path specifically so the floor consults it; pinned by a test.
+- **The floor cannot loop.** Bounded by attempts × TTL, and the exhausted branch *allows* the stop
+  with a `systemMessage`. A repeating Stop hook is not evidence that more work exists.
+- **The existing suites were pane-dependent.** `tests/session-continue.bats` was hermetic in paths
+  and stubs yet still keyed `$_ouid` on whichever pane ran it; adding the floor turned that latent
+  leak into four failures. Pinned now.
+- **Only D11 of the parked branch is superseded**, not D4. The operator-visible `systemMessage`
+  landed on main today via the `bin/cc-mail` work (`hooks/mailbox-drain.sh` greps 2 hits), so D11 is
+  genuinely redundant. D4 is **not**: main's only `armed` hits in `bin/cc-await-ping` are two
+  *comments*, no `.armed` file is ever written, and `bin/cc-wait` has zero `wake_path` hits — the
+  durable arm-stamp and its certification exist only on `wt-02ba4e52389a`. (A research agent
+  reported "D4/D11 superseded"; checked against `origin/main` directly, that is half right, and the
+  half that is wrong would silently drop a wanted feature during reconciliation.) The branch's
+  still-valuable set is therefore **D4 + D5/D6/D9/D10/D12/D13**.
 
 ## Status log
 
@@ -161,3 +276,10 @@ a loop — a repeating Stop hook is not evidence that more work exists
   at 46% / 1,300 lines / 0 watchers (§1). Found the unrunnable `12-mailbox-posttool` activation on
   main (§3a) and the `cc-wait` vs standing-listener shape gap (Verdict). Wake-ladder design frozen
   (§4). Work branch `feat/wake-on-ping`.
+- **2026-07-26** — agentmail-to investigated recursively (32 repos, 19-agent workflow). Absorb list
+  §5. **A1 + A2 BUILT and landed from this branch** — the arm-on-open fix and the wake floor, the
+  two HIGH-impact rows. A3 (host-driven turn) specified but deliberately unbuilt (§5.2); A4–A9
+  backlogged. The single most useful external finding: **openclaw, with a daemon and a live socket,
+  still cannot wake an idle agent from a message** — its only proactive wake is a scheduled turn.
+  Our harness floor is therefore not a Claude Code deficiency; it is the shape of the problem, and
+  the answer is a scheduler that creates turns, which we already own.
