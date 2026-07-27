@@ -15,6 +15,10 @@
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   HOOK="$REPO/hooks/session-continue.sh"
+  # Fixture $HOME before anything else: the floor builds its arm command from $HOME and falls back to
+  # $HOME/.claude for the lib, so an unfixtured suite reads (and could write under) the operator's
+  # live home. Assertions below match the command SHAPE, never an absolute prefix, so they hold here.
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME/.claude/bin"
   export CLAUDE_CONFIG_DIR="$BATS_TEST_TMPDIR/cfg"; mkdir -p "$CLAUDE_CONFIG_DIR"
   export CC_MAILBOX_DIR="$BATS_TEST_TMPDIR/mbox";   mkdir -p "$CC_MAILBOX_DIR"
   export CC_IDL="$BATS_TEST_TMPDIR/idl.jsonl"

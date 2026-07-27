@@ -6,6 +6,9 @@
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   REC="$REPO/scripts/lead-reconciler.sh"
+  # Fixture $HOME: the rosters and page command are stubbed, but any seam left at its default still
+  # resolves under ~/.claude, so an unfixtured run reads the operator's live home.
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME/.claude"
   export CC_RECON_DIR="$BATS_TEST_TMPDIR/state"
   printf '#!/bin/bash\nprintf "%%s\\n" "$2" >> "%s/pages.log"\n' "$BATS_TEST_TMPDIR" > "$BATS_TEST_TMPDIR/page"
   chmod +x "$BATS_TEST_TMPDIR/page"
