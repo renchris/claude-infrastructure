@@ -266,3 +266,47 @@ an embedded newline that must not leak into the operator line"
   printf '%s' "$msg" | grep -q '📬'
   [ "$(printf '%s' "$msg" | grep -c '')" -eq 1 ]
 }
+
+# ── ARM-ON-OPEN (2026-07-26) — the nudge must reach a session whose inbox is EMPTY ───────────────
+# The wake nudge used to sit BELOW `[ -n "$body" ] || exit 0`, so it could only fire once mail was
+# already pending — i.e. only after a wake had already been missed. The boundary that matters is the
+# one where the box is EMPTY and the session is about to idle. Same defect as a WebSocket client that
+# subscribes once after its first connect rather than from its on-open handler.
+@test "arm-on-open: EMPTY inbox + no watcher ⇒ still nudged, with the exact arm command" {
+  run bash -c 'echo "{}" | "$0" prompt' "$DRAIN"
+  [ "$status" -eq 0 ]
+  ctx="$(printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext')"
+  [ "$ctx" != "null" ] || false
+  printf '%s' "$ctx" | grep -q "cc-await-ping $UUID --timeout" || false
+  printf '%s' "$ctx" | grep -q 'run_in_background=true' || false
+}
+
+@test "arm-on-open: EMPTY inbox + ARMED watcher ⇒ silent (nothing to say)" {
+  printf 'pid=%s\n' "$$" > "$CC_MAILBOX_DIR/$UUID.watching"
+  run bash -c 'echo "{}" | "$0" prompt' "$DRAIN"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ] || false
+}
+
+@test "arm-on-open: EMPTY inbox + a watcher whose pid is DEAD ⇒ nudged (freshness alone is not a wake path)" {
+  printf 'pid=999999\n' > "$CC_MAILBOX_DIR/$UUID.watching"
+  run bash -c 'echo "{}" | "$0" prompt' "$DRAIN"
+  ctx="$(printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext')"
+  [ "$ctx" != "null" ] || false
+  printf '%s' "$ctx" | grep -q 'No inbox wake path armed' || false
+}
+
+@test "arm-on-open: the empty-inbox nudge is model-only — no systemMessage per turn" {
+  run bash -c 'echo "{}" | "$0" prompt' "$DRAIN"
+  msg="$(printf '%s' "$output" | jq -r '.systemMessage // "ABSENT"')"
+  [ "$msg" = "ABSENT" ] || false   # a per-turn human line would bury the operator's own output
+}
+
+@test "RED-PROOF: the pre-fix drain from origin/main emits NOTHING on an empty unwatched inbox" {
+  local old="$BATS_TEST_TMPDIR/pre"; mkdir -p "$old"
+  git -C "$REPO" archive origin/main hooks | tar -x -C "$old" || skip "origin/main unavailable"
+  grep -q 'HOISTED ABOVE THE EMPTY-INBOX EXIT' "$old/hooks/mailbox-drain.sh" && skip "control is not pre-fix"
+  run bash -c 'echo "{}" | "$0" prompt' "$old/hooks/mailbox-drain.sh"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ] || false        # RED: the arm nudge was unreachable with an empty box
+}
