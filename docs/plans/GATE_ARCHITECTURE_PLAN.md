@@ -199,8 +199,8 @@ design being the defect, and its premise is stale.
 | 0 | `gate_admit` bounded load shedding | q | **LANDED** |
 | 0 | selector: added file runs same clauses | n (7→3 FULL of 40) | **LANDED** `19a2cfe` |
 | **1** | **per-suite runner** (+ KILLED/RED split in `run_scoped_suite`, both tiers) | **n: P 2.3% → 49.9%** | **LANDED** `1bc02f6f` |
-| 2 | `$HOME` isolation per gate (APFS clone) | precondition | next |
-| 2 | content-addressed proof cache | work: 5.5× fewer executions | next |
+| **2a** | `$HOME` isolation per gate (APFS clone) | precondition | **LANDED** `d9b934ee` — effect-read verified: `gate_home_setup` ×5 in both `origin/main` and live `~/.claude` |
+| 2b | content-addressed proof cache | work: 5.5× fewer executions | **precondition met**; still gated on §7's embargo — needs one real green stamp first |
 | 3 | hermeticity for ~20 hot cacheable suites | enables caching | after |
 
 Judge every future proposal against §1: **does it reduce `n`, or is it another `q` fix?**
@@ -314,6 +314,26 @@ the only contributor; treat the residue as ordinary work, not as a standing bloc
 environment) was again read as a verdict about the tree. The generalisation worth keeping:
 *re-running is evidence only if the environment actually changed* — the ladder re-ran under the
 same wrong PATH three times and called the agreement "reproducible".
+
+**DO NOT read the `2026-07-27T01:00:54Z` stamp as "the PATH fix failed."** It came back red on the
+same 6 suites (plus `cc-relogin-status`, an unrelated time bomb) *after* `5abe5934` landed, which
+reads as a refutation and is not one. **A stamp's validity is a property of the RUNNER's version,
+not of the tree it grades.** That run's tree (`873e646b`) contained the fix; its *runner* did not —
+postland executes from whatever worktree invoked it, here `wt-9cc78e748e7e`, created for the
+`f37a84cf` land, which **precedes** `5abe5934` on trunk. The net has therefore still never run
+post-fix; the first genuinely post-fix run is the real test, and until then the stamp is evidence
+for neither side.
+
+Two controls were run this session before drawing any conclusion, and both refute the alternatives:
+the 6 suites pass **alone** (147 `ok`, 0 `not ok`) and pass **together in one `bats` process**, the
+way postland invokes them (147 `ok`, 0 `not ok`), on current trunk. So neither the tree nor
+cross-suite contamination explains the red — only the runner's environment is left.
+
+*Generalisation, and it is the same shape as the bug itself:* when a verdict is produced by a
+long-lived out-of-tree runner, **pin and record the runner's own version in the stamp**, or every
+verdict silently answers a question about some earlier commit. `env_fingerprint()` already records
+`bats`/`cc`/`load`; it does not record the runner's sha, which is the one field that would have
+made this self-evident.
 
 **Two live hazards this leaves:**
 
