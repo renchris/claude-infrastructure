@@ -250,3 +250,46 @@ obvious one — a policy fork, not a bug fix. Options, recommendation first:
 **Do not adopt the proof cache (§4) while this is open.** A cached GREEN keyed on a tree whose
 full-suite proof never actually ran would make the false premise *durable* — §4's "honest coupling"
 warning applies to this too, not only to `$HOME` isolation.
+
+### ROOT-CAUSED + FIXED `5abe5934` (2026-07-26) — it was PATH, and option 1 was the right call
+
+**The 6 suites were never broken.** Measured before touching anything: all 6 pass on current trunk
+**and** on `5d85e916`, the exact tree postland graded red — 147 `ok`, **0 `not ok`**, both trees.
+Recommendation 1 ("fix the net, not the guard") was correct, and it cost far less than feared: not
+six suite fixes, but **one line of the runner**.
+
+**Mechanism.** `postland-verify.sh` runs under a daemon/launchd-ish PATH that lacks
+`$HOME/.claude/bin` and `$HOME/bin`, so every suite shelling out to a `cc-*` helper fails. Because
+the retry ladder (`:216`) re-runs each red file alone and convicts at ≥2/3, a **PATH-dependent
+failure reproduces deterministically** and is written as a HARD red, never a flake. That is the
+whole of "15 red, 0 green (ever)" — while trunk was in fact green.
+
+Independently reproduced here in 10 s, and note it is *selective*, which is why it read as a stable
+6-suite set rather than as environment:
+
+    env -i HOME=$HOME PATH=/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin TERM=dumb \
+      bash -c 'cd <worktree> && bats tests/deploy-parity.bats'
+    ⇒ not ok 8 the real repo passes its own assertion     (8/8 under a session PATH)
+
+`desk-arm-live` and `lr-team-audit` pass even under the stripped PATH — so PATH is the driver, not
+the only contributor; treat the residue as ordinary work, not as a standing blocker.
+
+**Corollary — this is §1's own lesson at the second call site.** A non-verdict (wrong interpreter
+environment) was again read as a verdict about the tree. The generalisation worth keeping:
+*re-running is evidence only if the environment actually changed* — the ladder re-ran under the
+same wrong PATH three times and called the agreement "reproducible".
+
+**Two live hazards this leaves:**
+
+1. **`postland-verify.sh:320` still runs the MONOLITH** (`bats tests/`, now 141 suites). Phase 1's
+   per-suite runner was applied to `ship-land.sh` only, never to postland's call site. By §1 that
+   is P(green) ≈ 1.5% per attempt on blast radius alone. PATH was the *driver*; this is the
+   remaining `n` term, and porting Phase 1 here is the obvious follow-on.
+2. **Nothing drives the net.** Its 5-min launchd sweep is among the 13 deliberately-disabled
+   `com.claude` jobs, so green stamps only appear when a session runs `--run-if-needed` by hand.
+   A guard whose premise depends on a stamp nobody produces fails the same way whether the bug is
+   fixed or not.
+
+**Status of the §4 embargo:** lift it once a green stamp actually exists for a trunk tree — the
+embargo was always about the *absence of a real proof*, and that absence is now a scheduling
+problem, not a correctness one.
