@@ -88,6 +88,37 @@ input=$(cat 2>/dev/null || printf '{}')
 cwd=$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null)
 [ -n "$cwd" ] || cwd="$PWD"
 f=$(sentinel_for "$cwd")
+cur_sid=$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null)
+[ -n "$cur_sid" ] || cur_sid="${CLAUDE_CODE_SESSION_ID:-}"
+
+# ── SHARED kill-switch detection (hoisted for the WAKE FLOOR) ─────────────────────────────────────
+# Was inline in the sentinel path only. The wake floor below can also BLOCK a stop, so it must honour
+# the same operator override — a floor that blocks after the operator typed "stop" would be the D-8
+# bug in a new place. One definition, two callers.
+# Kill phrases (resident CLAUDE.md kill-switch + explicit-pause list):
+#   …and [then] stop · no auto-continue · just do X · stop here · come back to this · bare stop/halt
+KILL_RE='(^|[^[:alnum:]])and( then)? stop([^[:alnum:]]|$)|no[ _-]?auto[ _-]?continue|(^|[^[:alnum:]])just do [^[:space:]]|(^|[^[:alnum:]])stop here([^[:alnum:]]|$)|come back to this|^[[:space:]]*(stop|halt)[[:space:].!]*$'
+# Read the LAST genuine user message (string content, or array-of-text; tool_result-only records
+# carry no text and are skipped). No transcript path ⇒ can't read ⇒ caller falls through.
+last_user_msg() {
+  local tp
+  tp=$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null)
+  case "$tp" in "~"*) tp="$HOME${tp#\~}" ;; esac
+  [ -n "$tp" ] && [ -f "$tp" ] || return 1
+  jq -r 'select(.type=="user")
+         | .message.content
+         | if type=="string" then .
+           elif type=="array" then ([.[]?|select(.type=="text")|.text]|join("\n"))
+           else empty end
+         | select(. != "")' "$tp" 2>/dev/null | tail -1
+}
+# Bias to DETECT: a false positive merely allows one stop the model re-arms on its next 🔧 turn; a
+# false negative is the D-8 bug (forcing work when told to stop).
+kill_switch_active() {
+  local m; m="$(last_user_msg)" || return 1
+  [ -n "$m" ] || return 1
+  printf '%s' "$m" | grep -iqE "$KILL_RE"
+}
 
 # ── v2 comms LAG-ACK (UNCONDITIONAL — must run on EVERY Stop, before the exits below) ────────────────
 # A Stop proves a turn ran, so whatever the drain SURFACED last cycle (.seen) is now CONSUMED (.acked).
@@ -109,41 +140,137 @@ if [ -f "$_mbxlib" ] && command -v jq >/dev/null 2>&1; then
   fi
 fi
 
-# No sentinel → the agent did NOT request continuation → allow the stop.
+# ── WAKE FLOOR (v3 R1) — a session must not reach IDLE without a wake path ────────────────────────
+# THE DEFECT IT CLOSES: the wake mechanism works (proved end-to-end 2026-07-26 on CC 2.1.219 —
+# armed watcher → cc-notify write → detected in one poll → exit → harness task-completion
+# notification re-invoked the model), but NOTHING actuated it. Every cc-await-ping call site in the
+# repo was a doc telling the model to arm, or a lint detecting that it hadn't. Measured result:
+# 0 armed watchers across 74 mailboxes holding 1,300 unacked lines. A capability that depends on an
+# agent choosing to invoke it before every idle is inert by construction.
+#
+# WHY HERE and not a new hook: mailbox-drain.sh:8-10 (critique fix B) forbids a COMPETING Stop
+# blocker — in-loop mail delivery was deliberately folded into this hook, the ONE that already
+# blocks at Stop. The floor folds into the same place for the same reason.
+#
+# WHY IT MUST RECUR: cc-await-ping deletes its own .watching in its EXIT trap (correctly — a stale
+# heartbeat would make cc-notify promise a wake that cannot happen). So a session is deaf again the
+# instant it has been woken. Arming once per session is insufficient BY CONSTRUCTION; the floor
+# re-checks at every idle transition.
+#
+# BOUNDED, and it degrades to LOUD rather than looping (the session-continue.sh:33 shape):
+#   · only a pane with an inbox identity, only when the lib+jq are present  → else silently allow
+#   · only when NOT already armed                                          → armed clears the budget
+#   · only on the FIRST idle of this session, or when mail is actually pending
+#   · at most CC_WAKE_FLOOR_MAX attempts per session, no sooner than CC_WAKE_FLOOR_TTL_S apart
+#   · NEVER after an operator kill-switch phrase (kill_switch_active) — that stop was asked for
+#   · budget exhausted ⇒ a human-visible systemMessage naming the lever, then ALLOW the stop
+# A repeating Stop hook is not evidence that more work exists, so this one can only ever fire a
+# bounded number of times and then get out of the way.
+#
+# TIMEOUT CHOICE: the suggested arm uses a LONG timeout on purpose. cc-await-ping's timeout exit is
+# itself a task completion, so it also wakes the model — a short timeout would churn every idle
+# session in the fleet on a fixed period. Long timeout ⇒ a timeout-wake is a rare, self-healing
+# re-arm rather than a treadmill.
+# Seams (tests): CC_WAKE_FLOOR (0 disables) · CC_WAKE_FLOOR_MAX · CC_WAKE_FLOOR_TTL_S ·
+#                CC_WAKE_FLOOR_TIMEOUT_S · CC_MAILBOX_DIR.
+wake_floor() { # → echoes JSON on stdout when it wants to BLOCK; otherwise silent. Never fails.
+  [ "${CC_WAKE_FLOOR:-1}" = 1 ] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  command -v mailbox_wake_armed >/dev/null 2>&1 || return 0
+  case "$_ouid" in ''|*[!0-9A-Fa-f-]*) return 0 ;; esac
+
+  local mbxd sf now cnt ts prev_sid maxa ttl pend armcmd reason warnmsg
+  mbxd="${CC_MAILBOX_DIR:-$HOME/.claude/mailbox}"
+  sf="$mbxd/$_ouid.wakefloor"
+
+  # Already reachable → clear the budget so a LATER unarmed episode starts fresh (self-healing).
+  if mailbox_wake_armed "$_ouid"; then rm -f "$sf" 2>/dev/null; return 0; fi
+
+  now="$(date +%s 2>/dev/null || echo 0)"
+  cnt=0; ts=0; prev_sid=""
+  if [ -f "$sf" ]; then
+    prev_sid="$(sed -n 's/^sid=//p' "$sf" 2>/dev/null | head -n1)"
+    cnt="$(sed -n 's/^count=//p' "$sf" 2>/dev/null | head -n1)"
+    ts="$(sed -n 's/^ts=//p'    "$sf" 2>/dev/null | head -n1)"
+  fi
+  case "$cnt" in ''|*[!0-9]*) cnt=0 ;; esac
+  case "$ts"  in ''|*[!0-9]*) ts=0  ;; esac
+  # A new session in the same pane gets a FRESH budget (the .sid discipline of the sentinel, applied
+  # here: a successor must not inherit a predecessor's exhausted attempts).
+  [ -n "$prev_sid" ] && [ -n "$cur_sid" ] && [ "$prev_sid" != "$cur_sid" ] && { cnt=0; ts=0; }
+
+  pend="$(mailbox_pending_count "$_ouid" 2>/dev/null || echo 0)"
+  case "$pend" in ''|*[!0-9]*) pend=0 ;; esac
+
+  # Fire on the first idle of the session, or any idle where mail is actually waiting. Otherwise a
+  # session that already declined once is left alone.
+  [ "$cnt" -eq 0 ] || [ "$pend" -gt 0 ] || return 0
+
+  maxa="${CC_WAKE_FLOOR_MAX:-2}"; case "$maxa" in ''|*[!0-9]*) maxa=2 ;; esac
+  ttl="${CC_WAKE_FLOOR_TTL_S:-600}"; case "$ttl" in ''|*[!0-9]*) ttl=600 ;; esac
+  # Absolute, not "~/…": the model pastes this verbatim, and a tilde inside a quoted string is not a
+  # path (SC2088). $HOME also keeps the message truthful under a fixture $HOME in the suites.
+  armcmd="$HOME/.claude/bin/cc-await-ping $_ouid --timeout ${CC_WAKE_FLOOR_TIMEOUT_S:-14400} --interval 15"
+
+  # Budget exhausted → do NOT block. Say it where a human can see it, then allow the stop.
+  if [ "$cnt" -ge "$maxa" ]; then
+    warnmsg="⚠ No inbox wake path armed — peers can write to this session but nothing will wake it. Mail will sit until your next turn. Arm it with: ${armcmd}"
+    [ "$pend" -gt 0 ] && warnmsg="⚠ ${pend} message(s) waiting and NO wake path armed — nothing will wake this session. Arm it with: ${armcmd}"
+    printf 'session-continue: wake floor exhausted (%s/%s) — allowing stop, unarmed.\n' "$cnt" "$maxa" >&2
+    jq -nc --arg m "$warnmsg" '{systemMessage:$m}' 2>/dev/null || true
+    return 0
+  fi
+  # Re-attempt no sooner than the TTL (a burst of short turns must not re-block every one of them).
+  [ "$(( now - ts ))" -ge "$ttl" ] 2>/dev/null || return 0
+  # The operator asked to stop → never block; the exhausted-branch warning is the right surface.
+  if kill_switch_active; then
+    jq -nc --arg m "⚠ No inbox wake path armed — this session will not be woken by peer mail. Arm: ${armcmd}" '{systemMessage:$m}' 2>/dev/null || true
+    return 0
+  fi
+
+  printf 'sid=%s\ncount=%s\nts=%s\n' "$cur_sid" "$(( cnt + 1 ))" "$now" > "$sf" 2>/dev/null || true
+
+  reason="🔔 WAKE FLOOR — you are about to go idle with NO wake path armed, so a peer's message would land in your inbox and sit there unread until someone types at you.
+
+Arm your inbox watcher NOW, then stop. Run it as a Bash tool call with run_in_background=true:
+
+  ${armcmd}
+
+It blocks until a line lands in your inbox, prints it, and exits — and that exit rides the harness's task-completion notification back into you. That IS the wake; it is the only way an external write can reach an idle session.
+
+Re-arm after every wake: the watcher removes its own heartbeat when it exits, so once it has woken you, you are deaf again until you arm a new one."
+  [ "$pend" -gt 0 ] && reason="📬 ${pend} message(s) are pending in your inbox RIGHT NOW.
+
+${reason}"
+  jq -nc --arg r "$reason" --arg m "🔔 Wake floor: arming this session's inbox watcher (no wake path was armed)." \
+    '{decision:"block",reason:$r,systemMessage:$m}'
+  return 1
+}
+
+# No sentinel → the agent did NOT request continuation → the session is going IDLE. This is the one
+# transition the wake floor guards; a sentinel-blocked stop is not idle, so it needs no floor.
 if [ ! -f "$f" ]; then
   rm -f "${f}.count" "${f}.sid" 2>/dev/null
+  if ! _wf_json="$(wake_floor)"; then
+    printf '%s' "$_wf_json"
+    exit 0        # decision:block travels in the JSON; the hook itself always exits 0
+  fi
+  [ -n "${_wf_json:-}" ] && printf '%s' "$_wf_json"
   exit 0
 fi
 
 # ── (a) KILL-SWITCH — operator stop ALWAYS wins over a stale sentinel (I-2 / D-8) ──
-# Read the LAST genuine user message (string content, or array-of-text; tool_result-only records
-# carry no text and are skipped). A kill phrase ⇒ clear + allow. Bias to DETECT: a false positive
-# merely allows one stop the model re-arms on its next 🔧 turn; a false negative is the D-8 bug
-# (forcing work when told to stop). No transcript path ⇒ skip (can't read) and fall through.
-tp=$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null)
-case "$tp" in "~"*) tp="$HOME${tp#\~}" ;; esac
-if [ -n "$tp" ] && [ -f "$tp" ]; then
-  last_user=$(jq -r 'select(.type=="user")
-                     | .message.content
-                     | if type=="string" then .
-                       elif type=="array" then ([.[]?|select(.type=="text")|.text]|join("\n"))
-                       else empty end
-                     | select(. != "")' "$tp" 2>/dev/null | tail -1)
-  # Kill phrases (resident CLAUDE.md kill-switch + explicit-pause list):
-  #   …and [then] stop · no auto-continue · just do X · stop here · come back to this · bare stop/halt
-  if [ -n "$last_user" ] && printf '%s' "$last_user" | grep -iqE \
-      '(^|[^[:alnum:]])and( then)? stop([^[:alnum:]]|$)|no[ _-]?auto[ _-]?continue|(^|[^[:alnum:]])just do [^[:space:]]|(^|[^[:alnum:]])stop here([^[:alnum:]]|$)|come back to this|^[[:space:]]*(stop|halt)[[:space:].!]*$'; then
-    rm -f "$f" "${f}.count" "${f}.sid" 2>/dev/null
-    printf 'session-continue: kill-switch phrase in last user message — cleared sentinel, allowing stop.\n' >&2
-    exit 0
-  fi
+# A kill phrase ⇒ clear + allow. (Detection is the shared kill_switch_active above, which the wake
+# floor also consults so it can never block a stop the operator asked for.)
+if kill_switch_active; then
+  rm -f "$f" "${f}.count" "${f}.sid" 2>/dev/null
+  printf 'session-continue: kill-switch phrase in last user message — cleared sentinel, allowing stop.\n' >&2
+  exit 0
 fi
 
 # ── (b) SID-BIND — a same-cwd successor must not inherit a predecessor's sentinel (S-12) ──
 # Clear + allow when the stored arming-sid differs from the actuating session's sid. Acts ONLY when
-# BOTH sids are known (a missing sid = no evidence = never a wrong clear).
-cur_sid=$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null)
-[ -n "$cur_sid" ] || cur_sid="${CLAUDE_CODE_SESSION_ID:-}"
+# BOTH sids are known (a missing sid = no evidence = never a wrong clear). $cur_sid is computed above.
 stored_sid=$(cat "${f}.sid" 2>/dev/null || true)
 if [ -n "$stored_sid" ] && [ -n "$cur_sid" ] && [ "$stored_sid" != "$cur_sid" ]; then
   rm -f "$f" "${f}.count" "${f}.sid" 2>/dev/null
