@@ -120,3 +120,44 @@ only by the embargo) → **Phase 3** (hermeticity for ~20 hot suites; already in
   ratchet (set-but-empty = "I change no suite" = nothing blocks).
 - **A red with zero `not ok` lines is not always a non-verdict** — shellcheck is a real verdict that
   emits no TAP.
+
+---
+
+## 6. CORRECTION (02:10) — "load is the blockage" is HALF right
+
+The decisive post-repair stamp landed after §1 was written, and it splits the diagnosis in two.
+
+    verdict: red   commit: f94d9631   run_s: 6606 (1h50m)   load: 9.34
+    failing: deploy-parity, desk-arm-live, desk-recycle-durable,
+             lr-team-audit, session-continue, waiting-recycle
+
+That is **current trunk** — carrying both the PATH fix and the 21:56 deploy repair — at **load 9.34**,
+essentially the same quiet window in which `wt-1a941c28a079` landed 2307 tests with 0 not-ok. The
+same six suites are still convicted.
+
+| Claim | Verdict |
+|---|---|
+| Load explains why **LANDS** kept failing | **HOLDS.** 37 REDs → landed first attempt at load 9. |
+| Load explains **postland's 6 red suites** | **REFUTED.** They fail at load 9.34 too. |
+
+**So the 0-green-stamp deadlock is NOT the load story.** The remaining uncontrolled variable is the
+one the `session-close-hardening` peer named: postland runs the FULL corpus in **its own reused
+`ci-postland` worktree**, and that specific cell — full-137 × reused-worktree — is the only
+combination that reproduces. My own clean-box control (147 ok / 0 not-ok, twice) was run in a
+DIFFERENT worktree, so it never tested that cell; it is evidence about the suites, not about
+postland.
+
+**Next measurement, and it is cheap** — bisect the cell rather than the tree:
+
+```bash
+# does the corpus fail because it is FULL, or because the worktree is REUSED?
+cd ~/Development/.worktrees/ci-postland && TMPDIR=$(mktemp -d) nice -n 10 bats tests/   # reused wt
+git worktree add /tmp/wt-fresh-postland origin/main && cd /tmp/wt-fresh-postland \
+  && TMPDIR=$(mktemp -d) nice -n 10 bats tests/                                          # fresh wt
+```
+Same corpus, same load, one variable. If fresh passes and reused fails, the cause is accumulated
+worktree state, not the suites and not the tree — and `postland-verify.sh` should mint a clean
+worktree per run (or reset it) rather than reusing one.
+
+Backlog `da18f179ac50` (0-green-stamp deadlock) remains the owner of this; `e65d45027b3d` can now be
+answered: the stamp came back RED, and it did NOT share the deployed-path shape.
