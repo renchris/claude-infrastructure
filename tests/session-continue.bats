@@ -23,6 +23,17 @@ setup() {
   # this every test writes to the LIVE ~/.claude/autonomy/idl.jsonl (404 leaked lines found 2026-07-25).
   # Only one test previously exported its own ($BATS_TEST_TMPDIR/bidl.jsonl) — that override still wins.
   export CC_IDL="$BATS_TEST_TMPDIR/idl.jsonl"
+  # PIN THE PANE. Without this, $_ouid is whatever pane RAN the suite — the suite is hermetic in its
+  # paths and stubs yet still encodes the caller's identity, so a verdict can flip by pane. Two tests
+  # already pinned it inline; those local exports still win.
+  export ITERM_SESSION_ID="w0t0p0:CCCCCCCC-1111-2222-3333-444444444444"
+  # SCOPE: this suite owns the SENTINEL actuator's contract (no sentinel ⇒ allow the stop). The WAKE
+  # FLOOR is a second, independent reason the same hook may block a stop, and it deliberately fires on
+  # exactly that no-sentinel path — so leaving it on here would make four base-behaviour assertions
+  # test the floor instead of the sentinel. It is disabled here and owned end-to-end by
+  # tests/wake-floor.bats. NOTE for a future reader: with the floor at its LIVE default (on), a
+  # no-sentinel Stop in an unarmed session does NOT simply "allow" — see that suite.
+  export CC_WAKE_FLOOR=0
   CWD="$BATS_TEST_TMPDIR/wt"; mkdir -p "$CWD"
 }
 
