@@ -90,3 +90,100 @@ setup() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"claude-accounts"* ]]
 }
+
+# ── EXISTENCE PARITY (2026-07-25) — the bare-ff deploy hole ──────────────────────────────────────
+# ~/.claude/{hooks,hooks/lib,commands,scripts,bin} are real dirs of PER-FILE symlinks, so a
+# BRAND-NEW tracked file is never linked at all, however current the checkout — only ./install.sh
+# links it, and the operator's documented deploy step (ff-sync) cannot. That shipped live:
+# hooks/lib/cc-interactive.sh landed unlinked, collapsing all three of cc-classify's resolve
+# candidates and silently disabling the operator-adoption hold (a reaper fail-OPEN).
+# Still fully hermetic: a throwaway git checkout + a fake live root under BATS_TEST_TMPDIR.
+
+_livefix() {   # real checkout + empty live root; ~/bin legs made to PASS so exit code isolates this leg
+  ln -sfn "$CC_PARITY_REPO/bin/toolA" "$CC_PARITY_BINDIR/toolA"
+  cp "$CC_PARITY_REPO/bin/toolB" "$CC_PARITY_BINDIR/toolB"
+  export CC_PARITY_LIVE="$BATS_TEST_TMPDIR/live"; mkdir -p "$CC_PARITY_LIVE"
+  git -C "$CC_PARITY_REPO" init -q
+  git -C "$CC_PARITY_REPO" config user.email t@t
+  git -C "$CC_PARITY_REPO" config user.name t
+}
+_track() { git -C "$CC_PARITY_REPO" add -A >/dev/null 2>&1; }   # ls-files reads the INDEX; no commit needed
+
+@test "existence: a tracked runtime file with NO live counterpart ⇒ the exact ln -sf, exit 1" {
+  _livefix
+  mkdir -p "$CC_PARITY_REPO/hooks/lib"
+  printf '#!/bin/bash\n' > "$CC_PARITY_REPO/hooks/lib/cc-interactive.sh"     # the real 2026-07-25 landmine
+  _track
+  run "$ASSERT"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"MISSING: ln -sf $CC_PARITY_REPO/hooks/lib/cc-interactive.sh $CC_PARITY_LIVE/hooks/lib/cc-interactive.sh"* ]]
+}
+
+@test "existence: the same file symlinked live ⇒ no miss, exit 0" {
+  _livefix
+  mkdir -p "$CC_PARITY_REPO/hooks/lib" "$CC_PARITY_LIVE/hooks/lib"
+  printf '#!/bin/bash\n' > "$CC_PARITY_REPO/hooks/lib/cc-interactive.sh"
+  ln -sfn "$CC_PARITY_REPO/hooks/lib/cc-interactive.sh" "$CC_PARITY_LIVE/hooks/lib/cc-interactive.sh"
+  _track
+  run "$ASSERT"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"MISSING: ln -sf"* ]]
+}
+
+@test "existence: a DANGLING live symlink still counts as missing (resolving, not merely present)" {
+  _livefix
+  mkdir -p "$CC_PARITY_REPO/hooks/lib" "$CC_PARITY_LIVE/hooks/lib"
+  printf '#!/bin/bash\n' > "$CC_PARITY_REPO/hooks/lib/cc-interactive.sh"
+  ln -sfn "$CC_PARITY_REPO/hooks/lib/gone.sh" "$CC_PARITY_LIVE/hooks/lib/cc-interactive.sh"   # target absent
+  _track
+  run "$ASSERT"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"MISSING: ln -sf"* ]] || false
+  [[ "$output" == *"cc-interactive.sh"* ]]
+}
+
+@test "existence: all six install.sh-linked classes are asserted (hooks, hooks/lib, commands, scripts, limit-recover, bin/cc-*)" {
+  _livefix
+  mkdir -p "$CC_PARITY_REPO"/{hooks/lib,commands,scripts/limit-recover,bin}
+  printf 'x\n' > "$CC_PARITY_REPO/hooks/a-hook.sh"
+  printf 'x\n' > "$CC_PARITY_REPO/hooks/lib/a-lib.sh"
+  printf 'x\n' > "$CC_PARITY_REPO/commands/a-cmd.md"
+  printf 'x\n' > "$CC_PARITY_REPO/scripts/a-script.sh"
+  printf 'x\n' > "$CC_PARITY_REPO/scripts/limit-recover/lr-any-ext.py"     # limit-recover globs ALL types
+  printf 'x\n' > "$CC_PARITY_REPO/bin/cc-thing"
+  _track
+  run "$ASSERT"
+  [ "$status" -eq 1 ]
+  [ "$(printf '%s\n' "$output" | grep -c '^MISSING: ln -sf')" -eq 6 ]
+  for f in hooks/a-hook.sh hooks/lib/a-lib.sh commands/a-cmd.md scripts/a-script.sh \
+           scripts/limit-recover/lr-any-ext.py bin/cc-thing; do
+    [[ "$output" == *"$CC_PARITY_REPO/$f $CC_PARITY_LIVE/$f"* ]] || false
+  done
+}
+
+@test "existence: files install.sh does NOT link are never asserted (no false demands)" {
+  _livefix
+  mkdir -p "$CC_PARITY_REPO"/{hooks/other,commands/sub,scripts/sub,scripts/limit-recover/deep,bin/cc-dir}
+  printf 'x\n' > "$CC_PARITY_REPO/hooks/README.md"                  # hooks/*.md — not globbed
+  printf 'x\n' > "$CC_PARITY_REPO/hooks/other/nested.sh"            # hooks/<subdir>/ — not globbed
+  printf 'x\n' > "$CC_PARITY_REPO/commands/sub/nested.md"           # commands/<subdir>/ — not globbed
+  printf 'x\n' > "$CC_PARITY_REPO/scripts/sub/nested.sh"            # scripts/ is top-level only
+  printf 'x\n' > "$CC_PARITY_REPO/scripts/limit-recover/deep/x.sh"  # limit-recover is top-level only
+  printf 'x\n' > "$CC_PARITY_REPO/bin/cc-dir/nested"                # bin/cc-*/ subdir — not a file link
+  printf 'x\n' > "$CC_PARITY_REPO/bin/other-tool"                   # bin/ non-cc-* — not globbed
+  _track
+  run "$ASSERT"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"MISSING: ln -sf"* ]]
+}
+
+@test "existence: a fixture repo that is not a checkout skips the leg (keeps the ~/bin cases hermetic)" {
+  ln -sfn "$CC_PARITY_REPO/bin/toolA" "$CC_PARITY_BINDIR/toolA"
+  cp "$CC_PARITY_REPO/bin/toolB" "$CC_PARITY_BINDIR/toolB"
+  export CC_PARITY_LIVE="$BATS_TEST_TMPDIR/live"; mkdir -p "$CC_PARITY_LIVE"
+  mkdir -p "$CC_PARITY_REPO/hooks/lib"                              # present but NOT tracked (no .git)
+  printf 'x\n' > "$CC_PARITY_REPO/hooks/lib/cc-interactive.sh"
+  run "$ASSERT"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"MISSING: ln -sf"* ]]
+}
