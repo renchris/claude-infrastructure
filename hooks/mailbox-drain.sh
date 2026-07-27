@@ -96,19 +96,13 @@ warn=""; [ "$rc" = 2 ] && warn=' (⚠ cursor write failed — you may see this a
 # disagree about whether a wake path exists. A marker carrying a DEAD watcher's pid (SIGKILL skips
 # cc-await-ping's EXIT cleanup) is not a wake path — nudge the model to re-arm rather than let it idle
 # behind a watcher that no longer runs. No pid recorded ⇒ legacy marker ⇒ freshness-only, as before.
+# The predicate itself is now the lib's mailbox_wake_armed (SSOT). This block's own comment above
+# demanded that "the two consumers of this marker must not disagree" — which two copies could not
+# enforce; the wake FLOOR (session-continue.sh) would have been a third. The lib is sourced at :33
+# (a missing lib already exited 0), so no fallback is needed here.
 nudge=""
-_wf="${CC_MAILBOX_DIR:-$HOME/.claude/mailbox}/$own_uuid.watching"
-_fresh_s="${CC_WATCH_FRESH_S:-90}"
 _watched=0
-if [ -f "$_wf" ]; then
-  _mt="$(stat -f %m "$_wf" 2>/dev/null || stat -c %Y "$_wf" 2>/dev/null || echo 0)"
-  _now="$(date +%s 2>/dev/null || echo 0)"
-  case "$_mt" in ''|*[!0-9]*) _mt=0 ;; esac
-  if [ "$(( _now - _mt ))" -le "$_fresh_s" ] 2>/dev/null; then
-    _wpid="$(sed -n 's/^pid=\([0-9][0-9]*\).*/\1/p' "$_wf" 2>/dev/null | head -n1)"
-    if [ -z "$_wpid" ] || kill -0 "$_wpid" 2>/dev/null; then _watched=1; fi
-  fi
-fi
+mailbox_wake_armed "$own_uuid" && _watched=1
 [ "$_watched" = 1 ] || nudge='
 (no watcher armed — arm cc-await-ping via Bash run_in_background before idling, or mail waits for your next boundary)'
 

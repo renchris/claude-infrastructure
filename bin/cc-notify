@@ -520,8 +520,14 @@ EOF
 # wake that could not happen. The marker therefore carries the watcher's pid, and the claim is only
 # honored while that pid is ALIVE. A legacy/empty marker (no pid recorded) falls back to freshness-only,
 # so an older watcher still reads as armed rather than being wrongly downgraded.
+#
+# SSOT: the predicate itself now lives ONCE, as mailbox_wake_armed in hooks/lib/mailbox-pending.sh —
+# a third consumer (the wake FLOOR in hooks/session-continue.sh) is what made two copies untenable.
+# The body below is retained ONLY as the lib-absent fallback, per this file's standing rule that a
+# missing lib degrades a feature and never hard-fails the send path. Both read CC_WATCH_FRESH_S.
 WATCH_FRESH_S="${CC_WATCH_FRESH_S:-90}"
 wake_path_armed() {
+  if command -v mailbox_wake_armed >/dev/null 2>&1; then mailbox_wake_armed "$1"; return $?; fi
   local u="$1" wf mt now wpid
   wf="$MAILBOX_DIR/$u.watching"; [ -f "$wf" ] || return 1
   mt="$(stat -f %m "$wf" 2>/dev/null || stat -c %Y "$wf" 2>/dev/null || echo 0)"
