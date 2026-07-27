@@ -163,9 +163,15 @@ JSON
 
 @test "cc-board: an accounts row missing weekly_pct does not slide FABLE into the WK column" {
   mkdir -p "$C/bin" "$C/tele"
+  # `if` rather than `[ … ] && …`: scripts/bats-assert-liveness.py scans .bats files line-wise and
+  # does not track heredocs, so the `&&` form inside this STUB body is counted as a non-final
+  # dead assertion in a @test and turns the dead-assertion RATCHET red. It is stub code, not an
+  # assertion — but the analyser cannot know that, and an `if` is equally clear either way.
   cat > "$C/bin/claude-accounts" <<'STUB'
 #!/bin/bash
-[ "${1:-}" = "--json" ] && printf '%s\n' '{"rows":[{"acct":"next","session_pct":3,"fable_pct":24}]}'
+if [ "${1:-}" = "--json" ]; then
+  printf '%s\n' '{"rows":[{"acct":"next","session_pct":3,"fable_pct":24}]}'
+fi
 exit 0
 STUB
   chmod +x "$C/bin/claude-accounts"
@@ -434,11 +440,14 @@ EOF
     # greppable statement that the author considered the collapse; neither is accidental.
     if grep -qE 'def cell(\(ph\))?:|def _cell' "$f"; then continue; fi
     if grep -qE 'session_index_unpad|unpad\(\)|TSV_PAD' "$f"; then continue; fi
-    # bin/cc-relogin-poll pads with an equivalent awk idiom instead of a jq def — `norm <n>` right-
-    # fills the row to n fields and substitutes "-" for every empty, `dash` un-pads on read. That is
-    # the same guarantee reached another way, and the recognizer must not demand one house style:
-    # this guard exists to catch UNPADDED readers, not to enforce a spelling.
+    # Other spellings of the SAME guarantee. This guard exists to catch UNPADDED readers, not to
+    # enforce one house style, so the recognizer accepts any emitter that provably fills empties:
+    #   norm()/dash()   bin/cc-relogin-poll — awk right-fills to n fields, "-" for empty, dash un-pads
+    #   ${var:--}       hooks/lead-crash-watchdog.sh — writes "-" for an absent cell and compares
+    #                   back to "-" on read (its own comment describes this exact collapse)
+    # Both were flagged here first and turned out to be correct; the recognizer was the thing wrong.
     if grep -qE '^norm\(\)|^dash\(\)' "$f"; then continue; fi
+    if grep -qE '\$\{[A-Za-z_][A-Za-z0-9_]*:--\}' "$f"; then continue; fi
     if tsv_exemptions | grep -q "^$f|"; then continue; fi
     unpadded="$unpadded $f"
   done
