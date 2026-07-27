@@ -157,11 +157,52 @@ setup_bodies() {
        inb{print}' "$1" 2>/dev/null
 }
 
-# 0 = hermetic (fixtures $HOME in setup) · 1 = not
-# shellcheck disable=SC2016  # the pattern matches the LITERAL string $BATS…; expansion would break it
-is_hermetic() { setup_bodies "$1" | grep -qE '(export[[:space:]]+HOME=|HOME="\$BATS)'; }
+# ── COULD-NOT-CHECK is a THIRD state, never a verdict ─────────────────────────────────────────
+# Both predicates below are `… | grep -q …`, and grep answers 0=found / 1=not-found / >1=I FAILED.
+# Collapsing >1 into "not found" makes a grep that could not RUN indistinguishable from a real
+# answer — so under fork pressure (a loaded box, or another session's unscoped pkill reaping this
+# lint's children) the ratchet FABRICATES leaks for whichever suites were mid-check.
+#
+# Measured 2026-07-26 on an unchanged tree: ship-land's ratchet named cc-reconcile.bats +
+# kimi-frontend-ab.bats as new leaks while both were allowlisted on that exact tree AND on trunk,
+# and 3 direct runs of this same lint reported clean. Earlier the same day it produced four other
+# disjoint subsets of already-allowlisted suites (rotate-autonomy-logs; cc-idl+gate-manifest+…;
+# cc-crash-report+fire-engagement; find-plan-list-open+lead-crash-watchdog+rm-safe-allowlist).
+#
+# This is worse than a bare non-verdict because the message NAMES FILES: it reads as an
+# attributable RED and sends people to "fix" suites that were never broken (it nearly cost a
+# 14-file migration of other streams' tests). ship-land runs this fail-fast BEFORE bats, so one
+# fabricated leak kills a land in seconds — repeatedly, and invisibly.
+#
+# Fix: keep 0 and 1 as answers, and make >1 set CHECK_FAILED so the run exits 2 (LOUD, unusable)
+# instead of reporting a violation. Same discipline as the unusable-scan-dir path already here,
+# and the repo's standing rule that gate-never-ran is not gate-red.
+CHECK_FAILED=0
 
-in_allowlist() { printf '%s\n' "$2" | grep -qxF "$1"; }
+# 0 = hermetic (fixtures $HOME in setup) · 1 = not · sets CHECK_FAILED if the check could not run
+# shellcheck disable=SC2016  # the pattern matches the LITERAL string $BATS…; expansion would break it
+is_hermetic() {
+  setup_bodies "$1" | grep -qE '(export[[:space:]]+HOME=|HOME="\$BATS)'
+  case "$?" in
+    0) return 0 ;;
+    1) return 1 ;;
+    *) CHECK_FAILED=1
+       echo "test-hermeticity-lint: ⛔ hermeticity check could not RUN for $1 (grep rc>1)" >&2
+       return 0 ;;   # fail-SAFE: 'hermetic' cannot fabricate a LEAK; the run exits 2 regardless
+  esac
+}
+
+# 0 = present · 1 = absent · sets CHECK_FAILED if the check could not run
+in_allowlist() {
+  printf '%s\n' "$2" | grep -qxF "$1"
+  case "$?" in
+    0) return 0 ;;
+    1) return 1 ;;
+    *) CHECK_FAILED=1
+       echo "test-hermeticity-lint: ⛔ allowlist check could not RUN for $1 (grep rc>1)" >&2
+       return 0 ;;   # fail-SAFE: 'allowlisted' cannot fabricate a LEAK
+  esac
+}
 
 # OWN-SCOPE (2026-07-27) — which violations may BLOCK, as distinct from which are REPORTED.
 #
@@ -201,6 +242,7 @@ in_own() {  # $1=basename · $2=own-set text · $3=1 if an own-set was supplied 
 lint_dir() {
   local dir="$1" allow="$2" own="${3:-}" own_scoped=0 f base new_leak=0 stuck=0 seen=0 other=0
   [ "$#" -ge 3 ] && own_scoped=1
+  CHECK_FAILED=0
   [ -d "$dir" ] || { echo "test-hermeticity-lint: ⛔ not a directory: $dir" >&2; return 2; }
   for f in "$dir"/*.bats; do
     [ -e "$f" ] || continue
@@ -229,6 +271,15 @@ lint_dir() {
   done
   [ "$seen" -gt 0 ] || { echo "test-hermeticity-lint: ⛔ no .bats suites under $dir" >&2; return 2; }
   [ "$other" -eq 0 ] || echo "test-hermeticity-lint: $other pre-existing violation(s) NOT in your diff — reported, not blocking (own-scope)."
+  # A run whose own predicates could not execute has no verdict to give. Exit 2 (unusable), the
+  # same code as a bad scan dir — NOT 1, which a caller reads as "your tree is dirty". Checked
+  # AFTER the own-scope report so a killed predicate cannot masquerade as a clean own-scope pass:
+  # own-scope narrows WHICH violations block, it does not make an unrunnable check trustworthy.
+  if [ "$CHECK_FAILED" -ne 0 ]; then
+    echo "test-hermeticity-lint: ⛔ UNUSABLE — a predicate failed to run (see above); no verdict." >&2
+    echo "  This is NOT a leak report. Re-run when the box is quieter; do not 'fix' any suite on it." >&2
+    return 2
+  fi
 
   if [ "$new_leak" -gt 0 ]; then
     echo "test-hermeticity-lint: ⛔ $new_leak new non-hermetic suite(s) above."
@@ -299,8 +350,26 @@ F
   # (m) entrypoint-level parity for the same distinction, via the real CC_HERM_OWN seam.
   ( unset CC_HERM_OWN; CC_HERM_ALLOWLIST="" "$SELF" "$d/leak" >/dev/null 2>&1 ); [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: CC_HERM_OWN unset did not block at the entrypoint"; fails=1; }
   ( CC_HERM_OWN="" CC_HERM_ALLOWLIST="" "$SELF" "$d/leak" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: CC_HERM_OWN set-but-empty blocked at the entrypoint"; fails=1; }
+  # (n) COULD-NOT-CHECK is a non-verdict, not a leak — and own-scope must not paper over it.
+  # Simulates the real incident: a `grep` that cannot RUN (rc>1). Shadowing grep in a subshell
+  # reproduces exactly what fork exhaustion / a reaped child does to these predicates. Before the
+  # fix this reported a LEAK naming a perfectly good suite; the contract is exit 2 and no leak line.
+  ( grep() { return 2; }
+    out="$(lint_dir "$d/leak" "" 2>&1)"; rc=$?
+    [ "$rc" -eq 2 ] || { echo "SELFTEST FAIL: an unrunnable predicate did not exit 2 (got $rc) — a killed check must never be a verdict"; exit 1; }
+    printf '%s' "$out" | grep -q 'LEAK' && { echo "SELFTEST FAIL: an unrunnable predicate still fabricated a LEAK line"; exit 1; }
+    exit 0
+  ) || fails=1
+  # (o) …and it stays a non-verdict WITH an own-set supplied: own-scope narrows which violations
+  # BLOCK, it never makes an unrunnable check trustworthy. Guards the composition of the two fixes.
+  ( grep() { return 2; }
+    lint_dir "$d/leak" "" "zz-fixture.bats" >/dev/null 2>&1
+    [ "$?" -eq 2 ] || { echo "SELFTEST FAIL: an unrunnable predicate under own-scope did not exit 2"; exit 1; }
+    exit 0
+  ) || fails=1
+
   if [ "$fails" -eq 0 ]; then
-    echo "test-hermeticity-lint --selftest: 15/15 — RED on a new leak + on a stuck ratchet entry, GREEN on hermetic + grandfathered, GREEN on the real tree, LOUD on a bad dir, and own-scope blocks INSIDE / advises OUTSIDE for both violation kinds (path-form accepted)."
+    echo "test-hermeticity-lint --selftest: 17/17 — RED on a new leak + on a stuck ratchet entry, GREEN on hermetic + grandfathered, GREEN on the real tree, LOUD on a bad dir, own-scope blocks INSIDE / advises OUTSIDE for both violation kinds (path-form accepted), and NON-VERDICT on an unrunnable check (with and without an own-set)."
     exit 0
   fi
   echo "test-hermeticity-lint --selftest: FAILED — the ratchet does not discriminate."
