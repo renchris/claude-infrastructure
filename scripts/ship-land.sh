@@ -802,6 +802,27 @@ run_gate() {  # $1=range → 0 green / 1 red
     fi
   fi
 
+  # ── wall-clock time-bomb ratchet (GATE_ARCHITECTURE_PLAN §9) ──────────────────────────────────
+  # Same shape and same own-scope contract as the hermeticity ratchet above, for the second
+  # DETERMINISTIC blocker class: a fixture that seeds a FUTURE absolute date silently changes
+  # meaning as the clock advances and takes the fleet's gate down on a calendar boundary with no
+  # code change (2026-07-27T00:00Z, four tests, every lander). Cheap (a grep over tests/), names the
+  # file, and deterministic — so like the ratchet it is a REAL verdict: exit 6, never a retryable 9.
+  WALL_LINT="${SHIP_LAND_WALL_LINT:-scripts/test-walltime-lint.sh}"
+  if [[ -d tests ]] && ls tests/*.bats >/dev/null 2>&1 && [[ -x "$WALL_LINT" ]]; then
+    local wown=""
+    if [[ "${SHIP_LAND_WALL_OWN_SCOPE:-on}" != "off" ]]; then
+      wown="$(git diff --name-only "$range" -- 'tests/*.bats' 2>/dev/null || true)"
+    fi
+    echo "→ gate: wall-clock time-bomb ratchet (future absolute dates in fixtures)" >&2
+    if ! CC_WALLTIME_OWN="$wown" "$WALL_LINT" tests >&2; then
+      echo "✗ gate: wall-clock RED — a fixture THIS LAND CHANGES seeds a future absolute date." >&2
+      echo "  Seed relative to now instead; the file and dates are named above." >&2
+      GATE_RED=1
+      return 1
+    fi
+  fi
+
   if [[ -d tests ]] && ls tests/*.bats >/dev/null 2>&1; then
     local sel="" n direct f rbase srv
     # UNION SCOPE: FIRST_BASE..<this range's base> is the trunk delta siblings landed since our
