@@ -187,3 +187,26 @@ _track() { git -C "$CC_PARITY_REPO" add -A >/dev/null 2>&1; }   # ls-files reads
   [ "$status" -eq 0 ]
   [[ "$output" != *"MISSING: ln -sf"* ]]
 }
+
+# Regression, measured 2026-07-27 minutes after the existence leg landed: invoked by its DEPLOYED
+# path the assert returned RC=1 "claude-accounts must be a symlink" while the same file returned
+# RC=0 from the checkout — opposite verdicts, and the DRIFT claim was the false one. Cause: a bare
+# dirname "$0" yields ~/.claude (not a git repo), so REPO became ~/.claude and every correctly
+# linked tool was compared against ~/.claude/bin/<tool>. A guard that false-REDs through its own
+# deployed path trains readers to ignore it — which is how the drift it exists to catch survived.
+@test "the assert agrees with itself through a DEPLOYED symlink (\$0 resolved, not dirname'd)" {
+  # CC_PARITY_REPO must be UNSET here: it short-circuits the very derivation under test.
+  # The bin/ link is what makes the two verdicts DIVERGE under the bug: without it the strict-tool
+  # comparison is skipped and both invocations agree trivially, so the assertion could not fail.
+  d="$BATS_TEST_TMPDIR/dep"; mkdir -p "$d/scripts" "$d/bin"
+  ln -s "$REPO_ROOT/bin/claude-accounts" "$d/bin/claude-accounts"
+  ln -s "$ASSERT" "$d/scripts/deploy-parity-assert.sh"
+  run env -u ITERM_SESSION_ID -u CC_PARITY_REPO -u CC_PARITY_BINDIR -u CC_PARITY_STRICT -u CC_PARITY_COPY -u CC_PARITY_LIVE bash "$d/scripts/deploy-parity-assert.sh"
+  via_symlink="$status"
+  run env -u ITERM_SESSION_ID -u CC_PARITY_REPO -u CC_PARITY_BINDIR -u CC_PARITY_STRICT -u CC_PARITY_COPY -u CC_PARITY_LIVE bash "$ASSERT"
+  [ "$via_symlink" -eq "$status" ] || false
+}
+
+@test "resolving \$0 through symlinks is present (the mechanism, not just the outcome)" {
+  grep -q 'while \[ -L "\$_self" \]' "$ASSERT" || false
+}

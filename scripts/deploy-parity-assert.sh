@@ -40,7 +40,25 @@ else
   # comparison from a worktree reads every correct link as drift (gate red on
   # every worktree land). --git-common-dir is ".git" in the main checkout and an
   # absolute main-.git path in a linked worktree; outside git, fall back to self.
-  _self_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+  # RESOLVE $0 THROUGH SYMLINKS FIRST. Everything under ~/.claude/scripts/ is a per-file symlink
+  # into this checkout, so invoked by its DEPLOYED path a bare dirname yields ~/.claude — which is
+  # not a git repo, so the fallback sets REPO=~/.claude, and every correctly-linked tool is then
+  # compared against ~/.claude/bin/<tool> and reported UNLINKED. Measured 2026-07-27 immediately
+  # after this leg landed: RC=0 via the checkout path, RC=1 "claude-accounts must be a symlink" via
+  # the deployed path — the same script, opposite verdicts, and the DRIFT claim was the false one.
+  # A guard that false-REDs through its own deployed path is worse than no guard: it trains readers
+  # to ignore it, which is exactly how the deploy drift this leg exists to catch went unnoticed.
+  # tests/test-hermeticity-lint.bats already carries this scar ("a false RED on a self-evidencing
+  # proof, misnaming its own cause"); same loop, same reason. No `readlink -f` — GNU-only, BSD box.
+  _self="${BASH_SOURCE[0]}"
+  while [ -L "$_self" ]; do
+    _link="$(readlink "$_self")"
+    case "$_link" in
+      /*) _self="$_link" ;;
+      *)  _self="$(dirname "$_self")/$_link" ;;
+    esac
+  done
+  _self_root="$(cd "$(dirname "$_self")/.." && pwd)"
   _common="$(git -C "$_self_root" rev-parse --git-common-dir 2>/dev/null || true)"
   case "$_common" in
     "")  REPO="$_self_root" ;;
