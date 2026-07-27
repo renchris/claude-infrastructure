@@ -74,16 +74,36 @@ PY
 
 # seed the SHARED CACHE with exactly these rows — the board then reads them like any other mode,
 # with zero network, zero keychain and zero heal. <rows-json>
+# RELATIVE EXPIRIES, NOT ABSOLUTE DATES. `login_expires_at` may be written as `+<N>h` / `-<N>h`
+# and is resolved to now±N hours at seed time.
+#
+# WHY (trunk went red 2026-07-27T01:00Z, blocking every FULL-selection land): these fixtures used
+# to pin absolute instants — `2026-07-29T00:00:00Z` annotated "100h", `2026-07-26T00:00:00Z`
+# annotated "12h". claude-accounts RE-DERIVES login_expires_h from login_expires_at on every read
+# (see the note above the JSON test), so the annotation is decorative and WALL-CLOCK decides the
+# assertion. The suite therefore passed only while real time sat in the intended band: 2026-07-29
+# drifted to T-47h, crossed RELOGIN_ESCALATE_H=48, and the "DUE" cases began reporting ESCALATE —
+# permanently, since the date only gets closer. A test whose verdict depends on the day it is run
+# is not a test; anchoring to now makes the band the fixture claims the band it actually gets.
 seed() {
   python3 - "$CA_BIN" "$CACHE" "$1" <<'PY'
-import importlib.machinery, importlib.util, json, sys, time
+import importlib.machinery, importlib.util, json, re, sys, time
+from datetime import datetime, timedelta, timezone
 bin_, cache, rows_json = sys.argv[1], sys.argv[2], sys.argv[3]
 loader = importlib.machinery.SourceFileLoader("ca", bin_)
 ca = importlib.util.module_from_spec(importlib.util.spec_from_loader("ca", loader))
 loader.exec_module(ca)
 cfg = ca.load_cfg()
+rows = json.loads(rows_json)
+now = datetime.now(timezone.utc)
+for r in rows:
+    m = re.fullmatch(r"([+-]\d+(?:\.\d+)?)h", str(r.get("login_expires_at", "")))
+    if m:
+        hours = float(m.group(1))
+        r["login_expires_at"] = (now + timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        r["login_expires_h"] = hours
 json.dump({"ts": time.time(), "cfg_key": ca._cfg_key(cfg), "no_heal": True,
-           "rows": json.loads(rows_json), "prev": None,
+           "rows": rows, "prev": None,
            "window": {"active": False, "end": None, "permanent": False, "deadline": None}},
           open(cache, "w"))
 PY
@@ -103,15 +123,18 @@ sg() { # append a safeguard-blocked row (the pre-existing kind): <ts> <pane> <na
 # ── 1. claude-accounts --relogin-status ────────────────────────────────────────────────────────
 
 @test "OK: every account outside the attempt window → exit 0, no next action" {
-  seed '[{"acct":"next","auth":"ok","login_expires_at":"2026-09-01T00:00:00Z","login_expires_h":400}]'
+  seed '[{"acct":"next","auth":"ok","login_expires_at":"+400h"}]'
   run "$CA_BIN" --relogin-status
   [ "$status" -eq 0 ]
   echo "$output" | grep -q 'next .*OK'
-  echo "$output" | grep -q '2026-09-01T00:00:00Z'
+  # The contract is "the board SURFACES the expiry instant", not which instant — the fixture is
+  # now relative, so assert the shape (ISO-8601 Z) rather than a literal that would re-pin the
+  # suite to a wall-clock date.
+  echo "$output" | grep -qE '[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z'
 }
 
 @test "DUE: inside the 7d attempt window → exit 1 + the exact cc-relogin command" {
-  seed '[{"acct":"next2","auth":"ok","login_expires_at":"2026-07-29T00:00:00Z","login_expires_h":100}]'
+  seed '[{"acct":"next2","auth":"ok","login_expires_at":"+100h"}]'
   run "$CA_BIN" --relogin-status
   [ "$status" -eq 1 ]                       # 100h < 168h trigger, > 48h escalate
   echo "$output" | grep -q 'DUE'
@@ -119,7 +142,7 @@ sg() { # append a safeguard-blocked row (the pre-existing kind): <ts> <pane> <na
 }
 
 @test "ESCALATED: inside the 48h escalation window → exit 2" {
-  seed '[{"acct":"next3","auth":"ok","login_expires_at":"2026-07-26T00:00:00Z","login_expires_h":12}]'
+  seed '[{"acct":"next3","auth":"ok","login_expires_at":"+12h"}]'
   run "$CA_BIN" --relogin-status
   [ "$status" -eq 2 ]
   echo "$output" | grep -q 'ESCALATED'
@@ -127,7 +150,7 @@ sg() { # append a safeguard-blocked row (the pre-existing kind): <ts> <pane> <na
 }
 
 @test "ESCALATED: an already-expired login window (login_expired) → exit 2" {
-  seed '[{"acct":"next","auth":"ok","login_expires_at":"2026-07-01T00:00:00Z","login_expires_h":-5,"login_expired":true}]'
+  seed '[{"acct":"next","auth":"ok","login_expires_at":"-5h","login_expired":true}]'
   run "$CA_BIN" --relogin-status
   [ "$status" -eq 2 ]
   echo "$output" | grep -q 'ESCALATED'
@@ -170,14 +193,14 @@ sg() { # append a safeguard-blocked row (the pre-existing kind): <ts> <pane> <na
 }
 
 @test "UNKNOWN outranks OK: a partially-blind board never reports all-clear" {
-  seed '[{"acct":"next","auth":"ok","login_expires_at":"2026-09-01T00:00:00Z","login_expires_h":400},
+  seed '[{"acct":"next","auth":"ok","login_expires_at":"+400h"},
          {"acct":"next2","auth":"ok"}]'
   run "$CA_BIN" --relogin-status
   [ "$status" -eq 3 ]                       # one blind account is enough to withhold "all clear"
 }
 
 @test "act-now outranks cannot-see: DUE + UNKNOWN → exit 1" {
-  seed '[{"acct":"next","auth":"ok","login_expires_at":"2026-07-29T00:00:00Z","login_expires_h":100},
+  seed '[{"acct":"next","auth":"ok","login_expires_at":"+100h"},
          {"acct":"next2","auth":"ok"}]'
   run "$CA_BIN" --relogin-status
   [ "$status" -eq 1 ]
@@ -203,7 +226,7 @@ sg() { # append a safeguard-blocked row (the pre-existing kind): <ts> <pane> <na
   printf '%s\n' '{"ts":"2026-07-24T10:00:00Z","acct":"next","result":"FALLBACK-REQUIRED"}' \
                 '{"ts":"2026-07-25T11:00:00Z","acct":"next","result":"PROVEN"}' \
                 '{"ts":"2026-07-25T11:30:00Z","acct":"next2","result":"ERROR"}' > "$CC_RELOGIN_POLL_LOG"
-  seed '[{"acct":"next","auth":"ok","login_expires_at":"2026-07-29T00:00:00Z","login_expires_h":100}]'
+  seed '[{"acct":"next","auth":"ok","login_expires_at":"+100h"}]'
   run "$CA_BIN" --relogin-status --json
   [ "$status" -eq 1 ]
   [ "$(echo "$output" | jq -r '.rows[0].last_attempt_result')" = "PROVEN" ]
@@ -212,7 +235,7 @@ sg() { # append a safeguard-blocked row (the pre-existing kind): <ts> <pane> <na
 
 @test "last attempt: a missing poller log is UNKNOWN ('never'), never an error" {
   rm -f "$CC_RELOGIN_POLL_LOG"
-  seed '[{"acct":"next","auth":"ok","login_expires_at":"2026-09-01T00:00:00Z","login_expires_h":400}]'
+  seed '[{"acct":"next","auth":"ok","login_expires_at":"+400h"}]'
   run "$CA_BIN" --relogin-status
   [ "$status" -eq 0 ]                       # absent log does not change the renewal state
   echo "$output" | grep -q 'never'
@@ -221,7 +244,7 @@ sg() { # append a safeguard-blocked row (the pre-existing kind): <ts> <pane> <na
 @test "last attempt: a plain-text (non-JSON) poller line is still read" {
   printf '%s\n' 'THIS IS NOT JSON' '2026-07-25T12:00:00Z next3 attempt failed: BROWSER-FAILED' \
     > "$CC_RELOGIN_POLL_LOG"
-  seed '[{"acct":"next3","auth":"ok","login_expires_at":"2026-07-26T00:00:00Z","login_expires_h":12}]'
+  seed '[{"acct":"next3","auth":"ok","login_expires_at":"+12h"}]'
   run "$CA_BIN" --relogin-status --json
   [ "$status" -eq 2 ]
   [ "$(echo "$output" | jq -r '.rows[0].last_attempt_ts')" = "2026-07-25T12:00:00Z" ]
@@ -231,8 +254,8 @@ sg() { # append a safeguard-blocked row (the pre-existing kind): <ts> <pane> <na
 # ── --json shape + read-only posture ───────────────────────────────────────────────────────────
 
 @test "--json: documented shape (exit, state, detection, per-account rows)" {
-  seed '[{"acct":"next","auth":"ok","login_expires_at":"2026-07-29T00:00:00Z","login_expires_h":100},
-         {"acct":"next2","auth":"ok","login_expires_at":"2026-09-01T00:00:00Z","login_expires_h":400}]'
+  seed '[{"acct":"next","auth":"ok","login_expires_at":"+100h"},
+         {"acct":"next2","auth":"ok","login_expires_at":"+400h"}]'
   run "$CA_BIN" --relogin-status --json
   [ "$status" -eq 1 ]
   [ "$(echo "$output" | jq -r '.exit')" = "1" ]            # the exit code is DATA too
@@ -266,7 +289,7 @@ sg() { # append a safeguard-blocked row (the pre-existing kind): <ts> <pane> <na
 }
 
 @test "read-only: a cache hit is served as-is — no re-sweep, no cache rewrite" {
-  seed '[{"acct":"next","auth":"ok","login_expires_at":"2026-09-01T00:00:00Z","login_expires_h":400}]'
+  seed '[{"acct":"next","auth":"ok","login_expires_at":"+400h"}]'
   before="$(cat "$CACHE")"
   run "$CA_BIN" --relogin-status
   [ "$status" -eq 0 ]
@@ -320,7 +343,7 @@ PY
 }
 
 @test "plain output always: no ANSI escapes on a machine surface" {
-  seed '[{"acct":"next","auth":"ok","login_expires_at":"2026-07-26T00:00:00Z","login_expires_h":12}]'
+  seed '[{"acct":"next","auth":"ok","login_expires_at":"+12h"}]'
   FORCE_COLOR=1 run "$CA_BIN" --relogin-status
   [ "$status" -eq 2 ]
   refute_grep $'\033' "$output"
