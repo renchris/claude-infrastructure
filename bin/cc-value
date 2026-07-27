@@ -19,7 +19,9 @@
 #   • tasks-closed — folded from the cc-backlog JSONL (status==done, done-transition in window).
 #     The `claim.by` field is a SHELL pid (`<host>-<pid>`), NOT the claude session UUID, so tasks
 #     are counted at FLEET level only — never split per-account (that would be fabrication).
-#   • spend — Max plans meter no dollars (credits_used==0), so spend is the quota proxy:
+#   • spend — Max plans usually meter no dollars, so spend is the quota proxy (but do NOT read
+#     credits_used==0 as guaranteed: a Max account carried $176.91 of extra-usage spend on
+#     2026-07-26 — see set_credits() in claude-accounts; the field is CENTS):
 #     per-account session_pct (5h) / weekly_pct (7d) from claude-accounts; per-session the live
 #     context input_tokens. Reported as-is, labeled; no synthetic dollar figure is invented.
 # Freshness caveat: origin/main is the LOCAL ref (advances on fetch/push); the ledger is a TREND

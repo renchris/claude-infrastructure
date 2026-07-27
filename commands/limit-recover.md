@@ -110,7 +110,8 @@ model that was interrupted.
    `claude-opus-4-8` and mark each `(tier-fallback)` in the report.
    **`monthly_spend` limit events have NO reset** (extra-usage credits cap, not plan quota —
    incident 2026-07-18: teammates 429'd on the cap while the lead kept working). Decision rule:
-   read `credits_on`/`credits_used` + `session_pct`/`weekly_pct` from `claude-accounts --json` —
+   read `credits_on`/`credits_used_usd` (dollars; raw `credits_used` is CENTS) +
+   `session_pct`/`weekly_pct` from `claude-accounts --json` —
    plan-quota headroom present → re-runs proceed on the SAME account (they bill plan quota; the
    cap only blocks credit-billed overflow); no plan headroom either → handoff to another account,
    or the user raises the cap at claude.ai/settings/usage (their call — surface both).
