@@ -470,6 +470,24 @@ def pick(u, kind, scope_name=None):
 # in-memory `prev` inheritance (≤ cache TTL) to a durable, TTL-free store.
 
 
+def set_credits(row, is_enabled, used_credits):
+    """Stamp the extra-usage (pay-as-you-go) fields on a row, in agreed units.
+
+    `extra_usage.used_credits` from the oauth endpoint is denominated in CENTS, not in
+    "credits" — verified 2026-07-26 against the claude.ai Usage panel, where an endpoint
+    reading of 17691 rendered as "$176.91 spent". Every consumer that showed the raw number
+    was therefore reporting a dollar figure inflated 100x with no unit label, so the derived
+    `credits_used_usd` is emitted alongside it and is what human-facing surfaces must use.
+
+    `credits_on` (is_enabled) is the TOGGLE, and it is NOT a proxy for whether money moved:
+    the same 2026-07-26 account read false while $176.91 sat on the meter. Spend is
+    `credits_used > 0`, independent of the toggle — see the alert in render_table().
+    """
+    row["credits_on"] = bool(is_enabled)
+    row["credits_used"] = used_credits or 0.0
+    row["credits_used_usd"] = row["credits_used"] / 100.0
+
+
 def load_lastgood():
     """-> {acct: {quota fields + quota_as_of}}. Never raises (missing/corrupt ⇒ {})."""
     try:
@@ -523,8 +541,7 @@ def inherit_lastgood(row, ledger, prev):
                 row[f"{pfx}_reset_h"] = h
         if rolled:
             row["rolled_since"] = rolled
-        row["credits_on"] = bool(e.get("credits_on"))
-        row["credits_used"] = e.get("credits_used") or 0.0
+        set_credits(row, e.get("credits_on"), e.get("credits_used"))
         row["stale_quota"] = True
         row["quota_as_of"] = e.get("quota_as_of")
         return True
@@ -652,8 +669,8 @@ def probe_account(cfg, acct, kc, k_live, ledger, prev, no_heal):
         "session_pct": sp, "session_reset_h": hrs_until(sr), "session_reset_at": sr,
         "weekly_pct": wp, "weekly_reset_h": hrs_until(wr), "weekly_reset_at": wr,
         "fable_pct": fp, "fable_reset_h": hrs_until(fr), "fable_reset_at": fr,
-        "credits_on": bool(eu.get("is_enabled")), "credits_used": eu.get("used_credits") or 0.0,
     })
+    set_credits(row, eu.get("is_enabled"), eu.get("used_credits"))
     # capture last-good (weekly is the durable stranded-quota signal; skip data-less rows).
     # Absolute reset stamps are stored (NOT the decaying *_reset_h) — inherit re-derives them.
     entry = None
@@ -663,6 +680,7 @@ def probe_account(cfg, acct, kc, k_live, ledger, prev, no_heal):
             "weekly_pct": wp, "weekly_reset_at": wr,
             "fable_pct": fp, "fable_reset_at": fr,
             "credits_on": bool(eu.get("is_enabled")), "credits_used": eu.get("used_credits") or 0.0,
+            "credits_used_usd": (eu.get("used_credits") or 0.0) / 100.0,
             "quota_as_of": datetime.now(timezone.utc).isoformat(),
         }
     return row, entry
@@ -1315,9 +1333,16 @@ def render_table(rows, cfg, win, cached, prev=None):
         if sp is not None and sp >= 85 and not r.get("stale_quota"):
             alerts.append(c("▲ ", RED) + c(f"{r['acct']} 5h window at {sp:.0f}% — routing cutoff", RED)
                           + c(f" · resets in {fmt_h(r.get('session_reset_h'))}", GRAY, dim=True))
-        if r.get("credits_on") and not r.get("stale_quota"):
-            alerts.append(c("¢ ", AMBER) + c(f"{r['acct']} extra-usage credits ON", AMBER)
-                          + c(f" · used {r.get('credits_used', 0):.0f}", GRAY, dim=True))
+        # Fire on SPEND or on the toggle — never on the toggle alone. `credits_on` is only the
+        # switch's current position, so keying the alert on it hid $176.91 of metered spend on
+        # an account reading is_enabled=false (2026-07-26). Money that has already moved is the
+        # louder fact of the two, and it stays true after the toggle is flipped back off.
+        spend_usd = r.get("credits_used_usd") or 0.0
+        if (r.get("credits_on") or spend_usd > 0) and not r.get("stale_quota"):
+            state = "ON" if r.get("credits_on") else "off"
+            alerts.append(c("¢ ", AMBER)
+                          + c(f"{r['acct']} extra-usage spend ${spend_usd:,.2f}", AMBER)
+                          + c(f" · toggle {state}", GRAY, dim=True))
     if alerts:
         print()
         for a in alerts:

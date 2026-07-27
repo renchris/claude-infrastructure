@@ -76,8 +76,15 @@ One entrypoint over the 4-account fleet. The mechanism is `~/bin/claude-accounts
    - Flags are bullets BELOW the table, never extra columns. Enumerate by SOURCE, not by
      literal: ▲ 5h at/over the routing cutoff (the cutoff is `s_cut` in `--json` — never
      assume 85) · weekly at 100% **LIMITED** · Fable exhausted
-     (`route_reasons.fable == "fable-exhausted"`) · `¢` extra-usage credits ON (+ `credits_used`)
-     · `auth` ≠ ok · stale/throttled rows per the rule above. Row order = the CLI's own order.
+     (`route_reasons.fable == "fable-exhausted"`) · `¢` extra-usage spend · `auth` ≠ ok ·
+     stale/throttled rows per the rule above. Row order = the CLI's own order.
+   - **`¢` keys on SPEND (`credits_used > 0`), never on the `credits_on` toggle alone**, and
+     always renders **`credits_used_usd`** (dollars) — never the raw `credits_used`, which is
+     in **CENTS**. Both rules are earned: on 2026-07-26 an account reported `credits_on: false`
+     with `credits_used: 17691` while its claude.ai Usage panel read **"$176.91 spent"** — so
+     a toggle-keyed flag hid real metered money, and a raw-number flag would have misreported
+     it 100x. Money already spent stays true after the toggle is switched back off; say the
+     dollar figure and the toggle state, in that order.
    - **Login-cliff bullet** (in ADDITION to the column above): any row inside `login_warn_h`
      (SSOT, default 72h) gets one, naming `<launcher>` → `/login`; and when the ROUTED winner
      is one, say it on the routing line too — still the correct pick on headroom, but a long

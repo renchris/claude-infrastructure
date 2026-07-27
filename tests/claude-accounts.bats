@@ -242,3 +242,76 @@ print("OK")
 '
   [ "$status" -eq 0 ]
 }
+
+# --- extra-usage spend surfacing (2026-07-26 incident) ------------------------------------
+# An account carried $176.91 of metered extra-usage spend while the endpoint reported
+# is_enabled=false. The ¢ alert keyed on that toggle, so the money was invisible on every
+# /accounts readout; and used_credits is CENTS, so any surface printing it raw reported 100x.
+# These pin both halves. Mutation-proved: reverting the alert to `if r.get("credits_on")`
+# makes the first test RED, and dropping the /100 makes the second RED.
+
+@test "credits: used_credits is CENTS ⇒ credits_used_usd is the dollar figure" {
+  run python3 - <<'PY'
+import importlib.machinery, importlib.util, os
+ca = importlib.util.module_from_spec(importlib.util.spec_from_loader(
+    "ca", importlib.machinery.SourceFileLoader("ca", os.environ["CA_BIN"])))
+importlib.machinery.SourceFileLoader("ca", os.environ["CA_BIN"]).exec_module(ca)
+
+r = {}
+ca.set_credits(r, False, 17691)          # the live 2026-07-26 reading
+assert r["credits_used"] == 17691, r     # raw field preserved, still cents
+assert abs(r["credits_used_usd"] - 176.91) < 1e-9, r
+assert r["credits_on"] is False, r       # toggle is reported independently of spend
+
+z = {}
+ca.set_credits(z, None, None)            # no-data path must not invent spend
+assert z == {"credits_on": False, "credits_used": 0.0, "credits_used_usd": 0.0}, z
+print("OK")
+PY
+  [ "$status" -eq 0 ]
+  [[ "$output" == *OK* ]] || false
+}
+
+@test "credits: the ¢ alert fires on SPEND with the toggle off, and stays silent at zero" {
+  run python3 - <<'PY'
+import importlib.machinery, importlib.util, os, json
+ca = importlib.util.module_from_spec(importlib.util.spec_from_loader(
+    "ca", importlib.machinery.SourceFileLoader("ca", os.environ["CA_BIN"])))
+importlib.machinery.SourceFileLoader("ca", os.environ["CA_BIN"]).exec_module(ca)
+cfg = json.load(open(os.environ["CA_CFG"]))
+
+def row(acct, on, cents, stale=False):
+    r = {"acct": acct, "k": 0, "auth": "ok", "session_pct": 1, "session_reset_h": 3.0,
+         "session_reset_at": None, "weekly_pct": 10, "weekly_reset_h": 40.0,
+         "weekly_reset_at": None, "fable_pct": 0, "fable_reset_h": None,
+         "fable_reset_at": None, "login_expires_h": 400.0, "login_expires_at": None,
+         "is_self": False}
+    ca.set_credits(r, on, cents)
+    if stale:
+        r["stale_quota"] = True
+    return r
+
+import io, contextlib
+buf = io.StringIO()
+with contextlib.redirect_stdout(buf):
+    ca.render_table([row("spend_off", False, 17691),   # the incident shape
+                     row("on_zero", True, 0),
+                     row("clean", False, 0),
+                     row("stale", False, 50000, stale=True)],
+                    cfg, {"active": True, "end": "2099-12-31", "permanent": True,
+                          "deadline": None}, True)
+out = buf.getvalue()
+cent = [l for l in out.splitlines() if "¢" in l]
+
+# the load-bearing one: spend visible despite the toggle reading off, and in DOLLARS
+assert any("spend_off" in l and "$176.91" in l for l in cent), cent
+assert not any("17691" in l for l in cent), cent          # never the raw cents figure
+# a positive control — an unfired alert would also satisfy the negatives below
+assert any("on_zero" in l for l in cent), cent            # toggle ON still surfaces
+assert not any("clean" in l for l in cent), cent          # no toggle, no spend ⇒ silent
+assert not any("stale" in l for l in cent), cent          # stale rows never assert money
+print("OK")
+PY
+  [ "$status" -eq 0 ]
+  [[ "$output" == *OK* ]] || false
+}
