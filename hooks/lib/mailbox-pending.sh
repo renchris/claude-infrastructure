@@ -132,6 +132,36 @@ mailbox_pending_count() { local d=$(( $(mailbox_lines "${1:-}") - $(mailbox_seen
 mailbox_unacked_count() { local d=$(( $(mailbox_lines "${1:-}") - $(mailbox_acked "${1:-}") )); [ "$d" -lt 0 ] && d=0; echo "$d"; }
 mailbox_has_pending()   { [ "$(mailbox_pending_count "${1:-}")" -gt 0 ]; }
 
+# ── WAKE-PATH PREDICATE — the ONE definition (v3 D4 / wake-floor) ─────────────────────────────────
+# "Is <uuid> reachable RIGHT NOW by a write to its inbox?" i.e. does it have a live cc-await-ping
+# whose exit will ride the harness task-completion notification back into the model.
+#
+# WHY IT LIVES HERE: this predicate had TWO independent copies — bin/cc-notify's wake_path_armed
+# (:511-520) and hooks/mailbox-drain.sh's inline block (:100-111) — and mailbox-drain's own comment
+# already stated the invariant those copies exist to satisfy: "the two consumers of this marker must
+# not disagree about whether a wake path exists." Two copies cannot enforce that; one definition can.
+# The wake FLOOR (hooks/session-continue.sh) would have been a third copy, which is what forced the
+# extraction. Both original copies read the identical CC_WATCH_FRESH_S:-90 seam, so hoisting them is
+# behaviour-preserving by construction, not a re-derivation.
+#
+# TWO conditions, both required:
+#   freshness — the heartbeat is re-stamped every poll, so a stale one means the watcher is gone.
+#   pid alive — a SIGKILLed watcher skips cc-await-ping's EXIT cleanup and leaves the marker behind.
+#               A marker naming a DEAD pid is NOT a wake path; treating it as one is exactly the
+#               false promise cc-notify's verdict must never make.
+# No pid recorded ⇒ legacy marker ⇒ freshness is all there is to go on (never fail a legacy arm).
+mailbox_wake_armed() { # <uuid> → 0 = a live watcher will wake this session, 1 = it will not
+  local u="${1:-}" wf mt now wpid
+  wf="$(_mbx_dir)/$u.watching"; [ -f "$wf" ] || return 1
+  mt="$(stat -f %m "$wf" 2>/dev/null || stat -c %Y "$wf" 2>/dev/null || echo 0)"
+  now="$(date +%s 2>/dev/null || echo 0)"
+  case "$mt" in ''|*[!0-9]*) mt=0 ;; esac
+  [ "$(( now - mt ))" -le "${CC_WATCH_FRESH_S:-90}" ] 2>/dev/null || return 1
+  wpid="$(sed -n 's/^pid=\([0-9][0-9]*\).*/\1/p' "$wf" 2>/dev/null | head -n1)"
+  [ -n "$wpid" ] || return 0
+  kill -0 "$wpid" 2>/dev/null
+}
+
 # LOCKED atomic take: snapshot the window (seen, EOF], print it, advance seen=EOF (never regress), and —
 # for a reliable channel — acked=EOF too. Emitting is the CALLER's job (it wraps the body in JSON); the
 # guard's acked cursor is what makes a post-print emit-failure loud, so advancing seen inside the lock is
