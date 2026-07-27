@@ -177,31 +177,47 @@ setup_bodies() {
 # Fix: keep 0 and 1 as answers, and make >1 set CHECK_FAILED so the run exits 2 (LOUD, unusable)
 # instead of reporting a violation. Same discipline as the unusable-scan-dir path already here,
 # and the repo's standing rule that gate-never-ran is not gate-red.
+#
+# PREDICATE RETRY. Exiting 2 is honest but still stops a land, and measured over 14 consecutive
+# ship-land attempts at load 46-88 EVERY one died here — an honest non-verdict is no more landable
+# than a fabricated leak. Both predicates are PURE and CHEAP (a grep over a string / a small file),
+# so re-running one is free and side-effect-free, and the failure being retried is transient by
+# definition. Three tries, 1s apart, before the run is condemned: that turns the common case
+# (a momentarily unavailable fork) into a correct answer, and reserves CHECK_FAILED for a box
+# genuinely unable to run a grep three times in a row.
 CHECK_FAILED=0
 
 # 0 = hermetic (fixtures $HOME in setup) · 1 = not · sets CHECK_FAILED if the check could not run
 # shellcheck disable=SC2016  # the pattern matches the LITERAL string $BATS…; expansion would break it
 is_hermetic() {
-  setup_bodies "$1" | grep -qE '(export[[:space:]]+HOME=|HOME="\$BATS)'
-  case "$?" in
-    0) return 0 ;;
-    1) return 1 ;;
-    *) CHECK_FAILED=1
-       echo "test-hermeticity-lint: ⛔ hermeticity check could not RUN for $1 (grep rc>1)" >&2
-       return 0 ;;   # fail-SAFE: 'hermetic' cannot fabricate a LEAK; the run exits 2 regardless
-  esac
+  local rc
+  for _ in 1 2 3; do
+    setup_bodies "$1" | grep -qE '(export[[:space:]]+HOME=|HOME="\$BATS)'; rc=$?
+    case "$rc" in
+      0) return 0 ;;
+      1) return 1 ;;
+    esac
+    sleep 1                       # transient fork pressure — see PREDICATE RETRY above
+  done
+  CHECK_FAILED=1
+  echo "test-hermeticity-lint: ⛔ hermeticity check could not RUN for $1 after 3 tries (grep rc=$rc)" >&2
+  return 0                        # fail-SAFE: 'hermetic' cannot fabricate a LEAK
 }
 
 # 0 = present · 1 = absent · sets CHECK_FAILED if the check could not run
 in_allowlist() {
-  printf '%s\n' "$2" | grep -qxF "$1"
-  case "$?" in
-    0) return 0 ;;
-    1) return 1 ;;
-    *) CHECK_FAILED=1
-       echo "test-hermeticity-lint: ⛔ allowlist check could not RUN for $1 (grep rc>1)" >&2
-       return 0 ;;   # fail-SAFE: 'allowlisted' cannot fabricate a LEAK
-  esac
+  local rc
+  for _ in 1 2 3; do
+    printf '%s\n' "$2" | grep -qxF "$1"; rc=$?
+    case "$rc" in
+      0) return 0 ;;
+      1) return 1 ;;
+    esac
+    sleep 1                       # transient fork pressure — see PREDICATE RETRY above
+  done
+  CHECK_FAILED=1
+  echo "test-hermeticity-lint: ⛔ allowlist check could not RUN for $1 after 3 tries (grep rc=$rc)" >&2
+  return 0                        # fail-SAFE: 'allowlisted' cannot fabricate a LEAK
 }
 
 # OWN-SCOPE (2026-07-27) — which violations may BLOCK, as distinct from which are REPORTED.
