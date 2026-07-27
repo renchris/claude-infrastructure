@@ -82,29 +82,45 @@ if [ "$MODE" = "session-start" ] && command -v mailbox_migrate >/dev/null 2>&1; 
   fi
 fi
 
-[ -n "$body" ] || exit 0        # rc 1: nothing pending
-
-n="$(printf '%s\n' "$body" | grep -c '')"; plural=$([ "$n" = 1 ] && echo message || echo messages)
-warn=""; [ "$rc" = 2 ] && warn=' (⚠ cursor write failed — you may see this again; that is a dup, not a loss)'
-
 # ── WAKE NUDGE (v3 D4) — the fleet-wide finding: 0 armed watchers across 16 live sessions, and the
 # desk sat on 57 unacked pages for 2 h. The harness floor is that NOTHING external can wake an idle
 # session — only the model can arm its own watcher. So the one moment we can fix that is HERE, when we
 # have the model's attention and can see (by the absence of a fresh `.watching` heartbeat) that it has
-# no wake path. One line, only when actually unwatched — a nudge on every drain would be noise.
-# Same predicate as cc-notify's wake_path_armed, deliberately: the two consumers of this marker must not
-# disagree about whether a wake path exists. A marker carrying a DEAD watcher's pid (SIGKILL skips
-# cc-await-ping's EXIT cleanup) is not a wake path — nudge the model to re-arm rather than let it idle
-# behind a watcher that no longer runs. No pid recorded ⇒ legacy marker ⇒ freshness-only, as before.
-# The predicate itself is now the lib's mailbox_wake_armed (SSOT). This block's own comment above
-# demanded that "the two consumers of this marker must not disagree" — which two copies could not
-# enforce; the wake FLOOR (session-continue.sh) would have been a third. The lib is sourced at :33
-# (a missing lib already exited 0), so no fallback is needed here.
+# no wake path. Only when actually unwatched — a nudge at an armed boundary would be noise.
+# The predicate is the lib's mailbox_wake_armed (SSOT): a marker carrying a DEAD watcher's pid (SIGKILL
+# skips cc-await-ping's EXIT cleanup) is not a wake path — nudge the model to re-arm rather than let it
+# idle behind a watcher that no longer runs. The lib is sourced at :33 (a missing lib already exited 0).
+#
+# 🚨 HOISTED ABOVE THE EMPTY-INBOX EXIT (2026-07-26). This block used to sit BELOW
+# `[ -n "$body" ] || exit 0`, so the nudge could only ever fire when mail was ALREADY pending — i.e.
+# only after a wake had already been missed. A session reaching a boundary with an EMPTY inbox (the
+# exact moment before it goes idle, and the only moment at which arming is still cheap) was never told
+# to arm at all. That is a mechanical cause of the 0-watcher fleet: the re-arm lived on the
+# "message arrived" path instead of the "connection opened" path. The same defect, and the same fix,
+# as a WebSocket client that calls subscribe() once after its first connect instead of from its
+# on-open handler — it silently stops receiving after the first reconnect. SessionStart is our
+# "on open"; UserPromptSubmit is the per-turn re-assert. Self-limiting: it stops the moment a watcher
+# is armed.
 nudge=""
 _watched=0
 mailbox_wake_armed "$own_uuid" && _watched=1
-[ "$_watched" = 1 ] || nudge='
-(no watcher armed — arm cc-await-ping via Bash run_in_background before idling, or mail waits for your next boundary)'
+_armcmd="$HOME/.claude/bin/cc-await-ping $own_uuid --timeout ${CC_DRAIN_ARM_TIMEOUT_S:-14400} --interval 15"
+[ "$_watched" = 1 ] || nudge="
+(no watcher armed — before you go idle, run this as a Bash tool call with run_in_background=true, or peer mail will sit unread until someone types at you: $_armcmd)"
+
+# EMPTY INBOX — nothing to deliver, but this is still a boundary at which we can see the session has
+# no wake path. Arming here is the whole point (see the hoist note above), so emit the nudge alone.
+# additionalContext only: this fires on every prompt, and a systemMessage per turn would bury the
+# operator's own output. When a watcher IS armed there is nothing to say, so we exit silently.
+if [ -z "$body" ]; then
+  [ "$_watched" = 1 ] && exit 0
+  jq -nc --arg e "$EVENT" --arg c "🔔 No inbox wake path armed.${nudge}" \
+    '{hookSpecificOutput:{hookEventName:$e, additionalContext:$c}}'
+  exit 0
+fi
+
+n="$(printf '%s\n' "$body" | grep -c '')"; plural=$([ "$n" = 1 ] && echo message || echo messages)
+warn=""; [ "$rc" = 2 ] && warn=' (⚠ cursor write failed — you may see this again; that is a dup, not a loss)'
 
 # ── BLOCK RENDERING (operator request 2026-07-28) ───────────────────────────────────────────────
 # Peer mail used to arrive as a bare paragraph, visually identical to every other scrap of
