@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>reso — motion film</title>
+    <link rel="stylesheet" href="film.css" />
+  </head>
+  <body>
+    <!--
+      Every scene is present in the DOM at all times. render(t) decides which one
+      is visible and poses its contents. Nothing is created or destroyed while the
+      film runs, so frame N never depends on frame N-1 having been drawn.
+    -->
+    <div id="stage">
+      <!-- background: four blurred circles drifting on slow sine waves, under everything -->
+      <div id="bg">
+        <div class="blob" id="b0"></div>
+        <div class="blob" id="b1"></div>
+        <div class="blob" id="b2"></div>
+        <div class="blob" id="b3"></div>
+      </div>
+      <div id="grain"></div>
+
+      <!-- 1 · open ------------------------------------------------------- -->
+      <section class="scene" id="s-open">
+        <div class="stamp" id="open-stamp">FRIDAY &middot; 23:47</div>
+        <div class="open-line" id="open-line"></div>
+      </section>
+
+      <!-- 2 · the door problem ------------------------------------------- -->
+      <section class="scene" id="s-door">
+        <div class="door-wrap">
+          <div class="clipboard" id="clipboard">
+            <div class="clip-top"></div>
+            <div class="paper">
+              <div class="paper-head">GUEST LIST &mdash; SAT</div>
+              <div class="paper-rows" id="paper-rows"></div>
+            </div>
+          </div>
+          <div class="queue" id="queue">
+            <div class="queue-num" id="queue-num">0</div>
+            <div class="queue-cap">people waiting at the door</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 3 · chapter word ------------------------------------------------ -->
+      <section class="scene chapter" id="s-chapter">
+        <div class="chapter-word" id="chapter-word">THE DOOR</div>
+      </section>
+
+      <!-- 4 · headline ---------------------------------------------------- -->
+      <section class="scene" id="s-headline">
+        <h1 class="headline"><span id="hl-a"></span><span id="hl-b" class="gold"></span></h1>
+        <div class="sub" id="hl-sub">every device, every doorman, one list</div>
+      </section>
+
+      <!-- 5 · check-in ---------------------------------------------------- -->
+      <section class="scene" id="s-checkin">
+        <div class="phone" id="checkin-cam">
+          <div class="phone-bar">
+            <span class="phone-title">Tonight &middot; Main Room</span>
+            <span class="phone-count" id="checkin-count">0/240</span>
+          </div>
+          <div class="rows" id="checkin-rows"></div>
+        </div>
+        <div class="cursor" id="checkin-cursor">
+          <svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true">
+            <path d="M4 2 L4 20 L9 15.5 L12.2 22 L15.4 20.4 L12.2 14 L19 14 Z" />
+          </svg>
+        </div>
+      </section>
+
+      <!-- 6 · sync -------------------------------------------------------- -->
+      <section class="scene" id="s-sync">
+        <div class="sync-row">
+          <div class="dev" id="dev-a"><div class="dev-label">DOOR</div><div class="dev-dot"></div></div>
+          <div class="wire"><div class="pulse" id="sync-pulse"></div></div>
+          <div class="dev" id="dev-b"><div class="dev-label">FLOOR</div><div class="dev-dot"></div></div>
+        </div>
+        <div class="sync-ms" id="sync-ms">0 ms</div>
+        <div class="sync-cap">every change, on every screen</div>
+      </section>
+
+      <!-- 7 · floor plan -------------------------------------------------- -->
+      <section class="scene" id="s-floor">
+        <div class="floor" id="floor"></div>
+        <div class="floor-cap" id="floor-cap">the room, live</div>
+      </section>
+
+      <!-- 8 · numbers ----------------------------------------------------- -->
+      <section class="scene" id="s-numbers">
+        <div class="big" id="big-num">0</div>
+        <div class="big-cap">guests through the door tonight</div>
+        <div class="pills" id="pills"></div>
+      </section>
+
+      <!-- 9 · close ------------------------------------------------------- -->
+      <section class="scene" id="s-close">
+        <div class="mark" id="mark">reso</div>
+        <div class="mark-sub" id="mark-sub">reso.gl</div>
+      </section>
+    </div>
+
+    <!-- Scrub bar: present for human authoring, invisible to the capture run.
+         Arrow keys step one frame at a time — the fastest way to inspect a beat. -->
+    <div id="scrub">
+      <input type="range" id="scrub-range" min="0" max="1000" value="0" step="1" />
+      <span id="scrub-time">0.00s</span>
+    </div>
+
+    <script src="film.js"></script>
+  </body>
+</html>

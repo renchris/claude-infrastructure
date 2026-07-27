@@ -1,0 +1,10 @@
+# Generated output. Deliberately not committed.
+#
+# The entire point of this technique is that the SOURCE is the artifact: ~40 KB
+# of HTML/CSS/JS deterministically reproduces the film byte-for-byte via
+# `./render.sh`. Committing a 5.8 MB MP4 (and 2,124 JPEGs) would bloat history
+# to store something the repo already fully describes.
+frames/
+frames-review/
+review/
+*.mp4
