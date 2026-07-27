@@ -407,3 +407,66 @@ same lesson as `effect-read-predicate-red-proof`: an assertion that cannot fail 
 is now harmless, because the fixer emits a correct rewrite for the flagged shape, but a suite
 author who "fixes" it by hand from the analyzer's message alone is still being told a working
 assertion is dead.
+
+---
+
+## 9. MEASURED — Phase 1 did not unblock landing, and §1 does not describe why
+
+Operator challenge, 2026-07-27: *"wasn't the whole point to unblock the gate?"* It was, and the
+outcome data says we did not. Measured from `~/.claude/land.log`, every real `ship-land` attempt:
+
+| Window | attempts | landed | gate-red |
+|---|---:|---:|---:|
+| BEFORE Phase 1 | 226 | 150 (**66%**) | 67 (30%) |
+| AFTER Phase 1 (`1bc02f6f`) | 64 | 19 (**30%**) | 44 (**69%**) |
+
+**The success rate HALVED.** Phase 1's arithmetic is not wrong — it is aimed at a tier that real
+traffic does not use.
+
+**The scoping error.** All **64 of 64** post-Phase-1 lands ran `gate_scope=scoped`, `selected_n`
+median **29**, max 102 — **zero FULL runs**. Phase 1 rewrote `run_bats_all`, the FULL-tier
+monolith. §2 asserted "≈75% of real lands still run ≥55 suites" from a *replay* of 48 historical
+ranges; the live distribution refutes it. The headline "P(green|n=126) 2.3% → 49.9%" is therefore
+true and inapplicable — **the fix landed on the path we measured, not the path we take.** Phase 1's
+runner is proven by its own 60/60 suite, never by a real land.
+
+**The time bomb is not the excuse.** Disaggregating the post-Phase-1 window by
+`cc-relogin-status`'s wall-clock detonation (`2026-07-27T00:00Z`) and its fix (`87f0f51c`):
+
+| sub-window | attempts | landed |
+|---|---:|---:|
+| post-Phase-1, **pre**-bomb | 50 | 12 (**24%**) |
+| bomb live | 8 | 4 (50%) |
+| post-bomb-fix | 6 | 3 (50%) |
+
+The **worst** window precedes the bomb entirely.
+
+**The real blocking class is DETERMINISTIC, and §1's model does not contain it.**
+`P(green) = (1-q)^n` describes an independent per-suite *probabilistic* hazard. Every blocker
+actually observed tonight is a hard stop that no amount of `n`-reduction or retry can clear:
+
+1. **The hermeticity ratchet** — monotonically shrinking, so each land exposes the next leaking
+   suite as a fleet-wide hard stop, *including on files the lander never touched*. Four hit tonight
+   (`push-send`, `cc-wait`, `settings-drift`, then `handoff-splitright` mid-gate).
+2. **Wall-clock fixtures** — `cc-relogin-status` crossed a calendar boundary. Retrying can never
+   clear it; it would have stayed red past 2026-07-29 too.
+3. **Deploy drift** — 4 scripts on trunk never symlinked into live `~/.claude` (per-file symlink
+   dirs never link a BRAND-NEW file). Invisible to trunk's own parity assert by construction.
+4. **The escalation PARK** — unconditional at preflight, no resolved-packet path in the code.
+
+**Consequence for §4:** the proof cache addresses none of these. A cached GREEN is worthless when
+the ratchet refuses to *start* the run. 2b is still worth building for cost, but it must stop being
+described as the thing that unblocks landing.
+
+**Honest limit of this measurement.** `land.log` records `exit` but NOT the failing suite, so the
+44 reds cannot be attributed cause-by-cause — the 24% window is *consistent* with the ratchet's
+shrink pattern, not proven to be it. **Cheapest next measurement: log the failing suite name on
+exit 6.** Until that exists, every post-mortem here is inference over an exit code, which is the
+same blindness §1 was written to escape.
+
+**Revised remaining program** (supersedes "2b then 3" as the unblocking path):
+
+1. The ratchet must not hard-stop a lander over a suite outside its diff (fix-forward or carve-out).
+2. A lint forbidding absolute dates in fixtures, so wall-clock bombs cannot be authored.
+3. Deploy-parity existence leg — **already built** in `tm/growth`, currently operator-blocked.
+4. Attribute-the-red logging (above) before any further probabilistic modelling.
