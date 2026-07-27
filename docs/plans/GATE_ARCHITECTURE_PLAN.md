@@ -253,10 +253,31 @@ obvious one — a policy fork, not a bug fix. Options, recommendation first:
 
    **3 of the 7 — `deploy-parity`, `desk-recycle-durable`, `waiting-recycle` — were touched by that
    very commit.** A revived assertion is one that *could never fail before*; making it live can
-   legitimately expose a real failure. So the first move on those three is **diff them against
-   `575a55ea` and judge each newly-live assertion on its merits** — re-running them under a quiet
-   box or the per-suite runner cannot distinguish "load flake" from "assertion that was dead and is
-   now correctly failing", and would wrongly exonerate the second.
+   legitimately expose a real failure.
+
+   **MEASURED, and it REFUTES the hypothesis above (2026-07-27T02:00Z).** All 7 were run
+   individually against the then-current trunk:
+
+   | suite | result | | suite | result |
+   |---|---|---|---|---|
+   | `deploy-parity` | 8/8 green | | `session-continue` | 21/21 green |
+   | `desk-arm-live` | 7/7 green | | `test-hermeticity-lint` | 8/8 green |
+   | `desk-recycle-durable` | 9/9 green | | `waiting-recycle` | 98/98 green |
+   | `lr-team-audit` | 3/3 green | | **total** | **154 tests, 0 failures** |
+
+   So the mass-revive did **not** leave them broken. Either siblings fixed them in the ~12 h since
+   the stamp, or they were §2's false-REDs all along — postland's retry ladder "convicts six suites
+   that pass cleanly on a quiet box". **Recorded as a correction, not deleted:** the enrichment
+   argument (3 of 7 touched) was a reasonable prior and it is now refuted by direct measurement —
+   the same discipline as `re-derive-handed-down-measurements`. Do not re-derive the plan from the
+   prior; derive it from the table.
+
+   **Consequence — and SUPERSEDED, see "ROOT-CAUSED + FIXED `5abe5934`" below.** This measurement
+   said only "the inputs are green, so watch the next stamp". A sibling session, working the same
+   §7 in parallel, went further and found the actual cause (**PATH**) and fixed it in one line of
+   the runner. Their measurement and this one agree — the suites were never broken — so this table
+   stands as independent corroboration, and **their section is the operative one.** Two streams
+   converged on option 1; neither is a duplicate of the other, and neither is deleted.
 2. **Teach the guard the third state** — distinguish "never ran" from "ran, never green"; fail
    closed on the latter. Correct, but makes every land FULL until (1) is done.
 3. **Record and defer** — Phase 2's `$HOME` isolation may independently dissolve several of the 7
