@@ -116,7 +116,6 @@ land-lock.bats
 land-verify.bats
 lead-crash-watchdog.bats
 lead-deathwatch.bats
-lead-reconciler.bats
 lead-supervisor.bats
 lr-team-audit.bats
 mail-ack-consume.bats
