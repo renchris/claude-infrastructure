@@ -305,7 +305,13 @@ an embedded newline that must not leak into the operator line"
 @test "RED-PROOF: the pre-fix drain from origin/main emits NOTHING on an empty unwatched inbox" {
   local old="$BATS_TEST_TMPDIR/pre"; mkdir -p "$old"
   git -C "$REPO" archive origin/main hooks | tar -x -C "$old" || skip "origin/main unavailable"
-  grep -q 'HOISTED ABOVE THE EMPTY-INBOX EXIT' "$old/hooks/mailbox-drain.sh" && skip "control is not pre-fix"
+  # An `if` block, NOT `A && skip || false`: the liveness fixer's mechanical `|| false` is correct for
+  # `A && <assertion>` but INVERTS `A && skip` — a non-matching grep (the normal case, i.e. the control
+  # genuinely IS pre-fix) falls through to `false` and fails the test. skip is control flow, not an
+  # assertion, so it needs a branch rather than a short-circuit.
+  if grep -q 'HOISTED ABOVE THE EMPTY-INBOX EXIT' "$old/hooks/mailbox-drain.sh"; then
+    skip "control is not pre-fix"
+  fi
   run bash -c 'echo "{}" | "$0" prompt' "$old/hooks/mailbox-drain.sh"
   [ "$status" -eq 0 ]
   [ -z "$output" ] || false        # RED: the arm nudge was unreachable with an empty box
