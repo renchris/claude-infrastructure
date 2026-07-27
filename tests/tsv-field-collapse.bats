@@ -51,18 +51,18 @@ probe() {
 # ─── §1 · the mechanism ────────────────────────────────────────────────────────────────────────
 
 @test "mechanism: an empty middle field shifts every later field LEFT under IFS=tab" {
-  probe 'printf "acct\tREQUIRED\t\t2026-08-01\t12\tclaude-next\n" |
+  probe 'printf "acct\tREQUIRED\t\tWHEN\t12\tclaude-next\n" |
          { IFS=$'\''\t'\'' read -r a b c d e f; printf "%s|%s|%s|%s" "$c" "$d" "$e" "$f"; }'
   [ "$status" -eq 0 ]
   # c SHOULD be the empty field and f SHOULD be claude-next. It is neither.
-  [ "$output" = "2026-08-01|12|claude-next|" ]
+  [ "$output" = "WHEN|12|claude-next|" ]
 }
 
 @test "mechanism: padding the empty cell restores every column to its own variable" {
-  probe 'printf "acct\tREQUIRED\t-\t2026-08-01\t12\tclaude-next\n" |
+  probe 'printf "acct\tREQUIRED\t-\tWHEN\t12\tclaude-next\n" |
          { IFS=$'\''\t'\'' read -r a b c d e f; printf "%s|%s|%s|%s" "$c" "$d" "$e" "$f"; }'
   [ "$status" -eq 0 ]
-  [ "$output" = "-|2026-08-01|12|claude-next" ]
+  [ "$output" = "-|WHEN|12|claude-next" ]
 }
 
 # The finding doc's original repro concluded "a non-whitespace IFS does not work on macOS bash 3.2".
@@ -120,8 +120,14 @@ JSON
 @test "cc-decide: a packet with no status key does not shift class into the status column" {
   export CC_DECISIONS_DIR="$C/decisions" CC_IDL="$C/idl.jsonl"
   mkdir -p "$CC_DECISIONS_DIR"
-  cat > "$CC_DECISIONS_DIR/p2.json" <<'JSON'
-{"id":"p2","class":"B","veto_deadline":"2026-09-09T00:00:00Z","what_plain":"NOSTATUSPACKET"}
+  # Seed the deadline RELATIVE to now (scripts/test-walltime-lint.sh): an absolute future stamp
+  # silently changes meaning as the clock advances — cc-decide re-derives expiry from it, so the
+  # fixture would flip on a calendar boundary with no code change. SIGNED offset: bare `date -v 720H`
+  # SETS the hour rather than adding to it.
+  deadline="$(date -u -v+720H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+              || date -u -d '+30 days' +%Y-%m-%dT%H:%M:%SZ)"
+  cat > "$CC_DECISIONS_DIR/p2.json" <<JSON
+{"id":"p2","class":"B","veto_deadline":"$deadline","what_plain":"NOSTATUSPACKET"}
 JSON
   run bash "$REPO/bin/cc-decide" list --all
   [ "$status" -eq 0 ]
