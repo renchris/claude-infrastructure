@@ -13,34 +13,113 @@
 # ALSO renders kind=="relogin-blocked" — the class-C row cc-relogin-poll raises when an account's
 # login renewal escalates (T-48h with no k==0 window found). Same discipline: LATEST row per acct,
 # read-only, and each row's recover_cmd is printed as the EXACT runnable command, never paraphrased.
-# --json emits ONE array carrying both kinds (each row keeps its .kind), newest-first.
+#
+# ALSO renders two LAND-PIPELINE alarms (LAND_PIPELINE_V2 §4.4) that are NOT board rows: they are
+# fact-bound DISK reads, computed here every invocation. kind=="verifier-inert" (the post-land
+# verifier is not stamping while lands keep arriving, or its net was never activated) and
+# kind=="deploy-lag" (a GREEN-stamped commit has sat undeployed past the lag budget). Both exist
+# because a launchd job dies SILENTLY: absence must be loud (R9), never assumed healthy. Every
+# sensor failure — no stat(1), no git, an unparseable stamp, no clock — yields NO row (fail-OPEN):
+# a board that invents blockers gets ignored exactly like one that hides them.
+# --json emits ONE array carrying all four kinds (each row keeps its .kind), alarms first.
 set -uo pipefail
 
 IDL_FILE="${CC_REAPER_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
+POSTLAND_DIR="${CC_POSTLAND_DIR:-$HOME/.claude/autonomy/postland}"
+STAMPS_DIR="$POSTLAND_DIR/stamps"
+LANDLOG="${CC_LAND_LOG:-${LAND_LOG:-$HOME/.claude/land.log}}"
+DEPLOY_REPO="${DEPLOY_REPO:-$HOME/Development/claude-infrastructure}"
+ALARM_H="${CC_POSTLAND_ALARM_H:-3}"            # stamp staleness budget (hours)
+DEPLOY_LAG_MIN="${CC_DEPLOY_LAG_MIN:-60}"      # green-cursor → deployed-HEAD lag budget (minutes)
+ACTIVATE_SH="$HOME/.claude/autonomy/pending-activation/14-land-pipeline-v2-activate.sh"
 JSON=0
 case "${1:-}" in
   --json)   JSON=1 ;;
-  -h|--help) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  -h|--help) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
   "")       ;;
   *)        echo "cc-blockers: unknown arg $1 (usage: cc-blockers [--json])" >&2; exit 2 ;;
 esac
 command -v jq >/dev/null || { echo "cc-blockers: jq required" >&2; exit 2; }
 
-if [ ! -f "$IDL_FILE" ]; then
-  [ "$JSON" = 1 ] && { printf '[]\n'; exit 0; }
-  echo "no safeguard-blocked sessions (board $IDL_FILE absent)"; exit 0
-fi
+# ── LAND-PIPELINE alarms ─────────────────────────────────────────────────────────────────────────
+mtime() { stat -f %m "$1" 2>/dev/null || true; }   # BSD stat; empty ⇒ sensor unreadable ⇒ fail open
+hrs()   { printf '%s' "$(( ($1 + 1800) / 3600 ))"; }
+
+alarm_rows() { # → one JSON object per line (possibly none)
+  local now newest_ts=0 f t land_ts green_file="" green_ts=0 gcommit head_sha
+  now="$(date +%s 2>/dev/null || true)"
+  case "${now:-}" in ''|*[!0-9]*) return 0 ;; esac                    # no clock ⇒ no alarms
+
+  # (a) VERIFIER-INERT. Two distinct states, and the difference decides the fix: the net was NEVER
+  # activated (no stamps dir has ever existed — an un-run C10 hand-step), versus it was activated
+  # and has since gone quiet WHILE trunk kept moving. A stale stamp with no recent land is not
+  # inertness, it is an idle box, so land.log's own mtime is the required second sensor.
+  if [ ! -d "$STAMPS_DIR" ]; then
+    # ASCII-only in the DETAIL cell: printf pads by BYTES, so one em-dash silently shifts the column.
+    printf '{"kind":"verifier-inert","state":"NEVER-ACTIVATED","detail":"no stamps dir; the net has never run","subject":"%s","recover_cmd":"CONFIRM=1 bash %s","ts":%s}\n' \
+      "$STAMPS_DIR" "$ACTIVATE_SH" "$now"
+  else
+    for f in "$STAMPS_DIR"/*.json; do
+      [ -f "$f" ] || continue
+      t="$(mtime "$f")"; case "$t" in ''|*[!0-9]*) continue ;; esac
+      [ "$t" -gt "$newest_ts" ] && { newest_ts="$t"; }
+    done
+    land_ts="$(mtime "$LANDLOG")"; case "${land_ts:-}" in ''|*[!0-9]*) land_ts="" ;; esac
+    if [ -n "$land_ts" ] && [ "$land_ts" -gt "$newest_ts" ] \
+       && [ "$((now - newest_ts))" -gt "$((ALARM_H * 3600))" ]; then
+      printf '{"kind":"verifier-inert","state":"STALE","detail":"newest stamp %sh old; a land landed %sh ago","subject":"%s","recover_cmd":"tail -20 %s/runner.log ; launchctl list | grep postland","ts":%s}\n' \
+        "$(hrs "$((now - newest_ts))")" "$(hrs "$((now - land_ts))")" "$STAMPS_DIR" "$POSTLAND_DIR" "$now"
+    fi
+  fi
+
+  # (b) DEPLOY-LAG. The green cursor is the only thing the live layer may advance to, so a green
+  # commit sitting undeployed past the budget means the deploy lane — not the verifier — is stuck.
+  # The ancestor test is load-bearing: a green stamp BEHIND the deployed HEAD is history, not lag.
+  [ -d "$STAMPS_DIR" ] || return 0
+  for f in "$STAMPS_DIR"/*.json; do
+    [ -f "$f" ] || continue
+    jq -e '.verdict=="green"' "$f" >/dev/null 2>&1 || continue
+    t="$(mtime "$f")"; case "$t" in ''|*[!0-9]*) continue ;; esac
+    [ "$t" -gt "$green_ts" ] && { green_ts="$t"; green_file="$f"; }
+  done
+  [ -n "$green_file" ] || return 0
+  gcommit="$(jq -r '.commit // empty' "$green_file" 2>/dev/null || true)"
+  [ -n "$gcommit" ] || return 0
+  head_sha="$(git -C "$DEPLOY_REPO" rev-parse HEAD 2>/dev/null || true)"
+  [ -n "$head_sha" ] || return 0                                       # not a checkout ⇒ fail open
+  [ "$gcommit" != "$head_sha" ] || return 0                            # already deployed
+  git -C "$DEPLOY_REPO" merge-base --is-ancestor "$head_sha" "$gcommit" >/dev/null 2>&1 || return 0
+  [ "$((now - green_ts))" -gt "$((DEPLOY_LAG_MIN * 60))" ] || return 0
+  printf '{"kind":"deploy-lag","state":"LAGGING","detail":"green %.12s unshipped for %sh","subject":"%s","recover_cmd":"bash %s/.claude/scripts/deploy-live.sh ; tail -20 %s/deploy.log","ts":%s}\n' \
+    "$gcommit" "$(hrs "$((now - green_ts))")" "$DEPLOY_REPO" "$HOME" "$POSTLAND_DIR" "$now"
+}
+
+ALARMS_JSON="$(alarm_rows 2>/dev/null | jq -s '.' 2>/dev/null || true)"
+[ -n "$ALARMS_JSON" ] || ALARMS_JSON='[]'
+
+BOARD_ABSENT=0
+if [ ! -f "$IDL_FILE" ]; then BOARD_ABSENT=1; fi
 
 # Latest blocked row per subject, newest-first, both kinds in ONE array: safeguard-blocked dedups
 # per pane (the reaper appends one per surfacing sweep), relogin-blocked per acct (the poller
 # appends one per escalated tick). group_by needs a total key, hence the // "?" on each.
-ROWS="$(jq -Rn '[ inputs | fromjson? | select(type=="object") ] as $all
-                | ([ $all[] | select(.kind=="safeguard-blocked") ] | group_by(.pane // "?") | map(max_by(.ts)))
-                + ([ $all[] | select(.kind=="relogin-blocked")  ] | group_by(.acct // .account // "?") | map(max_by(.ts)))
-                | sort_by(.ts) | reverse' "$IDL_FILE" 2>/dev/null || echo '[]')"
-[ -n "$ROWS" ] || ROWS='[]'
+if [ "$BOARD_ABSENT" = 1 ]; then
+  ROWS='[]'
+else
+  ROWS="$(jq -Rn '[ inputs | fromjson? | select(type=="object") ] as $all
+                  | ([ $all[] | select(.kind=="safeguard-blocked") ] | group_by(.pane // "?") | map(max_by(.ts)))
+                  + ([ $all[] | select(.kind=="relogin-blocked")  ] | group_by(.acct // .account // "?") | map(max_by(.ts)))
+                  | sort_by(.ts) | reverse' "$IDL_FILE" 2>/dev/null || echo '[]')"
+  [ -n "$ROWS" ] || ROWS='[]'
+fi
 
-if [ "$JSON" = 1 ]; then printf '%s\n' "$ROWS"; exit 0; fi
+# ONE array, alarms first: they are a STANDING state of the pipeline, not a per-pane event, and a
+# JSON consumer that saw only the board rows would be blind to exactly the silent-death case the
+# alarms exist for.
+if [ "$JSON" = 1 ]; then
+  printf '%s\n%s\n' "$ALARMS_JSON" "$ROWS" | jq -s 'add' 2>/dev/null || printf '%s\n' "$ROWS"
+  exit 0
+fi
 
 # Every @tsv cell is padded to a NON-EMPTY, tab/newline-free value before it reaches `read`.
 # Load-bearing, not cosmetic: tab is IFS-*whitespace*, so `IFS=$'\t' read` collapses a run of
@@ -55,9 +134,28 @@ CELL='def cell(ph): (. // "") | tostring | gsub("[\\t\\r\\n]"; " ") | if . == ""
 
 n="$(printf '%s' "$ROWS" | jq '[.[] | select(.kind=="safeguard-blocked")] | length' 2>/dev/null || echo 0)"
 nr="$(printf '%s' "$ROWS" | jq '[.[] | select(.kind=="relogin-blocked")] | length' 2>/dev/null || echo 0)"
-if [ "${n:-0}" = 0 ] && [ "${nr:-0}" = 0 ]; then echo "no safeguard-blocked sessions surfaced"; exit 0; fi
+na="$(printf '%s' "$ALARMS_JSON" | jq 'length' 2>/dev/null || echo 0)"
+if [ "${n:-0}" = 0 ] && [ "${nr:-0}" = 0 ] && [ "${na:-0}" = 0 ]; then
+  if [ "$BOARD_ABSENT" = 1 ]; then echo "no safeguard-blocked sessions (board $IDL_FILE absent)"
+  else echo "no safeguard-blocked sessions surfaced"; fi
+  exit 0
+fi
+
+if [ "${na:-0}" != 0 ]; then
+  echo "LAND-PIPELINE — $na alarm(s): the landing net is degraded (run the RECOVER command):"
+  printf '%-15s %-16s %-44s %s\n' KIND STATE DETAIL RECOVER
+  printf '%s' "$ALARMS_JSON" | jq -r "$CELL"'.[] | [
+      (.kind        | cell("?")),
+      (.state       | cell("?")),
+      (.detail      | cell("-")),
+      (.recover_cmd | cell("?"))
+    ] | @tsv' | while IFS=$'\t' read -r kind state detail cmd; do
+      printf '%-15s %-16s %-44s %s\n' "${kind:0:15}" "${state:0:16}" "${detail:0:44}" "$cmd"
+    done
+fi
 
 if [ "${n:-0}" != 0 ]; then
+  [ "${na:-0}" != 0 ] && echo
   echo "SAFEGUARD-BLOCKED — $n fired peer(s) refused by model safeguards (re-fire with the RECOVER command):"
   printf '%-22s %-18s %-9s %-40s %s\n' SLUG ACCT MODEL REFUSAL RECOVER
   printf '%s' "$ROWS" | jq -r "$CELL"'.[] | select(.kind=="safeguard-blocked") | [
@@ -72,7 +170,7 @@ if [ "${n:-0}" != 0 ]; then
 fi
 
 if [ "${nr:-0}" != 0 ]; then
-  [ "${n:-0}" != 0 ] && echo
+  { [ "${n:-0}" != 0 ] || [ "${na:-0}" != 0 ]; } && echo
   echo "RELOGIN-BLOCKED — $nr account(s) escalated by cc-relogin-poll (run the RECOVER command):"
   printf '%-10s %-12s %-26s %s\n' ACCT STATE DEADLINE RECOVER
   printf '%s' "$ROWS" | jq -r "$CELL"'.[] | select(.kind=="relogin-blocked") | [
