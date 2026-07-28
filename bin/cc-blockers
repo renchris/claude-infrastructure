@@ -63,11 +63,19 @@ alarm_rows() { # → one JSON object per line (possibly none)
   # (a) VERIFIER-INERT / NEVER-ACTIVATED. The net was never activated — no stamps dir has ever
   # existed, i.e. an un-run C10 hand-step. Terminal for every later alarm: with no stamps there is
   # nothing to be stale, red, or lagging, so this returns rather than stacking derived noise.
+  # EVIDENCE GATE: only where a landing pipeline demonstrably EXISTS (a land.log or the deploy
+  # checkout). Keyed on stamps-absence alone this fired in every fixtured-$HOME void — 4 tests in
+  # tests/cc-relogin-status.bats seeded 2 board rows and got a third, phantom alarm row — and would
+  # fire on any machine that never had the infra at all. "The net never ran" is only an alarm where
+  # a net was supposed to run; a void satisfies the letter and not the premise (found landing v2:
+  # the bootstrap land's own smoke caught it).
   if [ ! -d "$STAMPS_DIR" ]; then
-    # ASCII-only in the DETAIL cell: printf pads by BYTES, so one em-dash silently shifts the column.
-    printf '{"kind":"verifier-inert","state":"NEVER-ACTIVATED","detail":"no stamps dir; the net has never run","subject":"%s","recover_cmd":"CONFIRM=1 bash %s","ts":%s}\n' \
-      "$STAMPS_DIR" "$ACTIVATE_SH" "$now"
-    return 0
+    if [ -e "$LANDLOG" ] || [ -d "$DEPLOY_REPO" ]; then
+      # ASCII-only in the DETAIL cell: printf pads by BYTES, so one em-dash silently shifts the column.
+      printf '{"kind":"verifier-inert","state":"NEVER-ACTIVATED","detail":"no stamps dir; the net has never run","subject":"%s","recover_cmd":"CONFIRM=1 bash %s","ts":%s}\n' \
+        "$STAMPS_DIR" "$ACTIVATE_SH" "$now"
+    fi
+    return 0    # with no stamps there is nothing to be stale, red, or lagging — evidence or not
   fi
 
   # ONE ordered pass over the stamps (newest first) feeds all three remaining shapes — they differ
