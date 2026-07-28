@@ -14,14 +14,21 @@
 # login renewal escalates (T-48h with no k==0 window found). Same discipline: LATEST row per acct,
 # read-only, and each row's recover_cmd is printed as the EXACT runnable command, never paraphrased.
 #
-# ALSO renders two LAND-PIPELINE alarms (LAND_PIPELINE_V2 §4.4) that are NOT board rows: they are
-# fact-bound DISK reads, computed here every invocation. kind=="verifier-inert" (the post-land
-# verifier is not stamping while lands keep arriving, or its net was never activated) and
-# kind=="deploy-lag" (a GREEN-stamped commit has sat undeployed past the lag budget). Both exist
-# because a launchd job dies SILENTLY: absence must be loud (R9), never assumed healthy. Every
-# sensor failure — no stat(1), no git, an unparseable stamp, no clock — yields NO row (fail-OPEN):
-# a board that invents blockers gets ignored exactly like one that hides them.
-# --json emits ONE array carrying all four kinds (each row keeps its .kind), alarms first.
+# ALSO renders three LAND-PIPELINE alarms (LAND_PIPELINE_V2 §4.4) that are NOT board rows: they are
+# fact-bound DISK reads, computed here every invocation.
+#   kind=="verifier-inert"  NEVER-ACTIVATED (no stamps dir has ever existed — an un-run C10 step)
+#                           or STALE (stamps stopped while land.log kept moving)
+#   kind=="trunk-red"       PERSISTENT-RED — the verifier is ALIVE and stamping FRESH, and every
+#                           one of the newest N verdicts is red with no green in 24h. Deliberately
+#                           a distinct kind, not a verifier state: nothing is wrong with the
+#                           verifier, and the fix is the opposite one (partition / attribution).
+#   kind=="deploy-lag"      LAGGING — a GREEN-stamped commit has sat undeployed past the budget
+# The three are mutually exclusive by construction on the stamp-freshness axis (STALE needs a stamp
+# older than the budget, PERSISTENT-RED needs one newer). All exist because a launchd job dies
+# SILENTLY: absence must be loud (R9), never assumed healthy. Every sensor failure — no stat(1), no
+# git, an unparseable stamp, no clock — yields NO row (fail-OPEN): a board that invents blockers
+# gets ignored exactly like one that hides them.
+# --json emits ONE array carrying all kinds (each row keeps its .kind), alarms first.
 set -uo pipefail
 
 IDL_FILE="${CC_REAPER_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
@@ -31,11 +38,13 @@ LANDLOG="${CC_LAND_LOG:-${LAND_LOG:-$HOME/.claude/land.log}}"
 DEPLOY_REPO="${DEPLOY_REPO:-$HOME/Development/claude-infrastructure}"
 ALARM_H="${CC_POSTLAND_ALARM_H:-3}"            # stamp staleness budget (hours)
 DEPLOY_LAG_MIN="${CC_DEPLOY_LAG_MIN:-60}"      # green-cursor → deployed-HEAD lag budget (minutes)
+REDRUN_N="${CC_POSTLAND_REDRUN_N:-5}"          # how many newest verdicts an all-red run must span
 ACTIVATE_SH="$HOME/.claude/autonomy/pending-activation/14-land-pipeline-v2-activate.sh"
+DAY_S=86400
 JSON=0
 case "${1:-}" in
   --json)   JSON=1 ;;
-  -h|--help) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  -h|--help) sed -n '2,31p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
   "")       ;;
   *)        echo "cc-blockers: unknown arg $1 (usage: cc-blockers [--json])" >&2; exit 2 ;;
 esac
@@ -46,44 +55,82 @@ mtime() { stat -f %m "$1" 2>/dev/null || true; }   # BSD stat; empty ⇒ sensor 
 hrs()   { printf '%s' "$(( ($1 + 1800) / 3600 ))"; }
 
 alarm_rows() { # → one JSON object per line (possibly none)
-  local now newest_ts=0 f t land_ts green_file="" green_ts=0 gcommit head_sha
+  local now newest_ts=0 f t v land_ts stamps="" gcommit="" green_ts=0 head_sha
+  local seen=0 red=0 green_24h=0 lands_24h=0
   now="$(date +%s 2>/dev/null || true)"
   case "${now:-}" in ''|*[!0-9]*) return 0 ;; esac                    # no clock ⇒ no alarms
 
-  # (a) VERIFIER-INERT. Two distinct states, and the difference decides the fix: the net was NEVER
-  # activated (no stamps dir has ever existed — an un-run C10 hand-step), versus it was activated
-  # and has since gone quiet WHILE trunk kept moving. A stale stamp with no recent land is not
-  # inertness, it is an idle box, so land.log's own mtime is the required second sensor.
+  # (a) VERIFIER-INERT / NEVER-ACTIVATED. The net was never activated — no stamps dir has ever
+  # existed, i.e. an un-run C10 hand-step. Terminal for every later alarm: with no stamps there is
+  # nothing to be stale, red, or lagging, so this returns rather than stacking derived noise.
   if [ ! -d "$STAMPS_DIR" ]; then
     # ASCII-only in the DETAIL cell: printf pads by BYTES, so one em-dash silently shifts the column.
     printf '{"kind":"verifier-inert","state":"NEVER-ACTIVATED","detail":"no stamps dir; the net has never run","subject":"%s","recover_cmd":"CONFIRM=1 bash %s","ts":%s}\n' \
       "$STAMPS_DIR" "$ACTIVATE_SH" "$now"
-  else
-    for f in "$STAMPS_DIR"/*.json; do
-      [ -f "$f" ] || continue
-      t="$(mtime "$f")"; case "$t" in ''|*[!0-9]*) continue ;; esac
-      [ "$t" -gt "$newest_ts" ] && { newest_ts="$t"; }
-    done
-    land_ts="$(mtime "$LANDLOG")"; case "${land_ts:-}" in ''|*[!0-9]*) land_ts="" ;; esac
-    if [ -n "$land_ts" ] && [ "$land_ts" -gt "$newest_ts" ] \
-       && [ "$((now - newest_ts))" -gt "$((ALARM_H * 3600))" ]; then
-      printf '{"kind":"verifier-inert","state":"STALE","detail":"newest stamp %sh old; a land landed %sh ago","subject":"%s","recover_cmd":"tail -20 %s/runner.log ; launchctl list | grep postland","ts":%s}\n' \
-        "$(hrs "$((now - newest_ts))")" "$(hrs "$((now - land_ts))")" "$STAMPS_DIR" "$POSTLAND_DIR" "$now"
-    fi
+    return 0
   fi
 
-  # (b) DEPLOY-LAG. The green cursor is the only thing the live layer may advance to, so a green
+  # ONE ordered pass over the stamps (newest first) feeds all three remaining shapes — they differ
+  # only in which slice of the same sorted list they read, so they can never disagree about it.
+  # NO `case` inside this $( ): macOS /bin/bash is 3.2, whose command-substitution parser counts
+  # parens and takes a case PATTERN's `)` as the closing one — the substitution dies with a syntax
+  # error on stderr (swallowed here) and yields garbage. `bash -n` and shellcheck both pass it; it
+  # only shows at runtime, and it showed as a FALSE verifier-inert alarm (newest_ts fell back to 0
+  # ⇒ "newest stamp 495906h old"), i.e. exactly the invented blocker this file must never emit.
+  # Numeric validation therefore happens in the read loop below, which is not inside a $( ).
+  stamps="$(for f in "$STAMPS_DIR"/*.json; do
+              [ -f "$f" ] || continue
+              t="$(mtime "$f")"
+              [ -n "$t" ] && printf '%s\t%s\n' "$t" "$f"
+            done | sort -rn)"
+  newest_ts="$(printf '%s\n' "$stamps" | head -1 | cut -f1)"
+  case "${newest_ts:-}" in ''|*[!0-9]*) newest_ts=0 ;; esac
+  land_ts="$(mtime "$LANDLOG")"; case "${land_ts:-}" in ''|*[!0-9]*) land_ts="" ;; esac
+  [ -n "$land_ts" ] && [ "$((now - land_ts))" -lt "$DAY_S" ] && lands_24h=1
+
+  while IFS=$'\t' read -r t f; do
+    [ -n "${f:-}" ] || continue
+    case "${t:-}" in ''|*[!0-9]*) continue ;; esac        # safe here: not inside a $( )
+    v="$(jq -r '.verdict // empty' "$f" 2>/dev/null || true)"
+    if [ "$seen" -lt "$REDRUN_N" ]; then
+      seen=$((seen + 1)); [ "$v" = "red" ] && red=$((red + 1))
+    fi
+    if [ "$v" = "green" ]; then
+      [ -z "$gcommit" ] && { green_ts="$t"; gcommit="$(jq -r '.commit // empty' "$f" 2>/dev/null || true)"; }
+      [ "$((now - t))" -lt "$DAY_S" ] && green_24h=1
+    fi
+  done <<EOF
+$stamps
+EOF
+
+  # (a') VERIFIER-INERT / STALE — stamping stopped WHILE trunk kept moving. A stale stamp with no
+  # recent land is not inertness, it is an idle box, so land.log's own mtime is the second sensor.
+  if [ -n "$land_ts" ] && [ "$land_ts" -gt "$newest_ts" ] \
+     && [ "$((now - newest_ts))" -gt "$((ALARM_H * 3600))" ]; then
+    # shellcheck disable=SC2016  # $(id -u) is EMITTED, not evaluated: it must expand in the
+    # operator's shell when they paste it, which is also what keeps the command uid-portable.
+    printf '{"kind":"verifier-inert","state":"STALE","detail":"newest stamp %sh old; a land landed %sh ago","subject":"%s","recover_cmd":"tail -20 %s/runner.log ; launchctl print gui/$(id -u)/com.claude.postland-verify","ts":%s}\n' \
+      "$(hrs "$((now - newest_ts))")" "$(hrs "$((now - land_ts))")" "$STAMPS_DIR" "$POSTLAND_DIR" "$now"
+  fi
+
+  # (b) TRUNK-RED / PERSISTENT-RED — the inverse failure: the verifier is ALIVE and stamping fresh,
+  # and every one of the newest N verdicts is red with no green in 24h while lands keep arriving.
+  # That is not a dead job, it is a trunk (or a partition/attribution) problem, and it blocks deploy
+  # just as hard — R3 pins the live layer to a green stamp that never comes. Freshness is required,
+  # which is what keeps this mutually exclusive with STALE. Floor of 2 verdicts: one red stamp is
+  # an ordinary red land, not a persistent state, and a board that cries on n=1 gets ignored.
+  if [ "$((now - newest_ts))" -le "$((ALARM_H * 3600))" ] \
+     && [ "$seen" -ge 2 ] && [ "$red" -eq "$seen" ] && [ "$green_24h" -eq 0 ] && [ "$lands_24h" -eq 1 ]; then
+    # --arg (not a "red" literal) so the emitted command carries NO double quote: one less escaping
+    # layer between here, the JSON, the table cell and the operator's paste buffer.
+    # shellcheck disable=SC2016  # $v is jq's --arg binding, EMITTED for the operator's jq to read.
+    printf '{"kind":"trunk-red","state":"PERSISTENT-RED","detail":"newest %s verdicts all red; 0 green in 24h","subject":"%s","recover_cmd":"jq -r --arg v red %sselect(.verdict==$v).failing[]?%s %s/*.json | sort | uniq -c | sort -rn | head","ts":%s}\n' \
+      "$seen" "$STAMPS_DIR" "'" "'" "$STAMPS_DIR" "$now"
+  fi
+
+  # (c) DEPLOY-LAG. The green cursor is the only thing the live layer may advance to, so a green
   # commit sitting undeployed past the budget means the deploy lane — not the verifier — is stuck.
   # The ancestor test is load-bearing: a green stamp BEHIND the deployed HEAD is history, not lag.
-  [ -d "$STAMPS_DIR" ] || return 0
-  for f in "$STAMPS_DIR"/*.json; do
-    [ -f "$f" ] || continue
-    jq -e '.verdict=="green"' "$f" >/dev/null 2>&1 || continue
-    t="$(mtime "$f")"; case "$t" in ''|*[!0-9]*) continue ;; esac
-    [ "$t" -gt "$green_ts" ] && { green_ts="$t"; green_file="$f"; }
-  done
-  [ -n "$green_file" ] || return 0
-  gcommit="$(jq -r '.commit // empty' "$green_file" 2>/dev/null || true)"
   [ -n "$gcommit" ] || return 0
   head_sha="$(git -C "$DEPLOY_REPO" rev-parse HEAD 2>/dev/null || true)"
   [ -n "$head_sha" ] || return 0                                       # not a checkout ⇒ fail open
