@@ -1,4 +1,6 @@
 #!/bin/bash
+# SUPERSEDED by 14-land-pipeline-v2-activate.sh (loads this plist too, plus the deploy lane) — run 14 instead.
+# Running both is harmless (idempotent) but 09 alone leaves the deploy lane unloaded: a degraded net that looks activated.
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════
 # 09-postland-verify  —  load the ASYNC post-land full-suite net (every 5 min)
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════

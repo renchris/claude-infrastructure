@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.claude.deploy-live — the AUTONOMOUS deploy lane (LAND_PIPELINE_V2 §4.3). Every 600s:
+  advance the live checkout to the newest origin/main commit whose TREE carries a GREEN post-land
+  stamp, run install.sh, then run the host-suite partition against the now-live layer. Nothing is
+  stamped green ⇒ silent exit 0; no verification net ⇒ ONE damped page per 24h. This is the first
+  time the live layer only ever advances to a full-suite-proven tree (R3) — the manual `git pull
+  --ff-only` it replaces deployed whatever happened to be on origin/main.
+
+  `bash -c` (not a bare ProgramArguments path) for the same two reasons as postland-verify: launchd
+  expands neither ~ nor $HOME inside ProgramArguments, and its PATH has no Homebrew — where git,
+  bats and timeout(1) actually live. Standard*Path CANNOT take $HOME at all, hence the literal.
+
+  RunAtLoad true: a login/boot is exactly when the live layer is most likely to be stale, and one
+  tick is cheap (an already-deployed tick is a fetch + a rev-parse). C10: OPERATOR loads it, via
+  docs/activation/pending-activation/14-land-pipeline-v2-activate.sh.
+  Kill switch: launchctl bootout gui/$(id -u)/com.claude.deploy-live
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.claude.deploy-live</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"; exec "$HOME/.claude/scripts/deploy-live.sh" --auto</string>
+    </array>
+
+    <key>StartInterval</key>
+    <integer>600</integer>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>LowPriorityIO</key>
+    <true/>
+
+    <key>Nice</key>
+    <integer>10</integer>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <key>StandardOutPath</key>
+    <string>/Users/chrisren/.claude/autonomy/postland/deploy.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/chrisren/.claude/autonomy/postland/deploy.log</string>
+</dict>
+</plist>

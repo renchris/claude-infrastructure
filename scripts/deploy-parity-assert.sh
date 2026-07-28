@@ -128,9 +128,16 @@ done
 
 # ── EXISTENCE PARITY: every tracked runtime file has a RESOLVING live counterpart ───────────────
 # The (subdir, glob) set below mirrors install.sh 1:1 — hooks/*.sh, hooks/lib/*.sh, commands/*.md,
-# scripts/*.sh (top level only), scripts/limit-recover/* (all types), bin/cc-*. Anything install.sh
-# does not link is deliberately NOT asserted, so this can never demand a link that install.sh would
-# not create. Live path is always $LIVE/<same relative path> (install.sh preserves the subdir).
+# scripts/*.sh (top level only), scripts/limit-recover/* (all types), bin/cc-*, skills/<name>/* (one
+# level: install.sh:197 globs "$skilldir"* and links regular files only). Anything install.sh does
+# not link is deliberately NOT asserted, so this can never demand a link that install.sh would not
+# create. Live path is always $LIVE/<same relative path> (install.sh preserves the subdir).
+# skills/ was MISSING from this leg until 2026-07-28 and the omission was live: skills/video-
+# understanding landed 07-27 with no live symlink at all while this assert still returned 0 — the
+# per-file-symlink class with the most new files was the one class nothing checked.
+# NOT included: top-level lib/. It is tracked, but install.sh has NO lib leg (its only lib glob is
+# hooks/lib/*.sh, already covered by the `hooks` pathspec), and asserting a link install.sh would
+# never create is exactly the false demand this comment's first rule forbids.
 LIVE="${CC_PARITY_LIVE:-$HOME/.claude}"
 missing=0
 if [ -e "$REPO/.git" ]; then    # a tracked-file listing needs a real checkout; anything else skips
@@ -150,6 +157,8 @@ if [ -e "$REPO/.git" ]; then    # a tracked-file listing needs a real checkout; 
       scripts/*.sh)              want=1 ;;
       bin/cc-*/*)                want=0 ;;
       bin/cc-*)                  want=1 ;;
+      skills/*/*/*)              want=0 ;;   # install.sh links skills/<name>/<file>, one level only
+      skills/*/*)                want=1 ;;
       *)                         want=0 ;;
     esac
     [ "$want" = 1 ] || continue
@@ -159,7 +168,7 @@ if [ -e "$REPO/.git" ]; then    # a tracked-file listing needs a real checkout; 
     missing=$((missing + 1))
     drift=1
   done <<EOF
-$(git -C "$REPO" ls-files -- hooks commands scripts bin 2>/dev/null)
+$(git -C "$REPO" ls-files -- hooks commands scripts bin skills 2>/dev/null)
 EOF
 fi
 if [ "$missing" -ne 0 ]; then

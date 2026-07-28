@@ -142,28 +142,29 @@ _track() { git -C "$CC_PARITY_REPO" add -A >/dev/null 2>&1; }   # ls-files reads
   [[ "$output" == *"cc-interactive.sh"* ]]
 }
 
-@test "existence: all six install.sh-linked classes are asserted (hooks, hooks/lib, commands, scripts, limit-recover, bin/cc-*)" {
+@test "existence: all seven install.sh-linked classes are asserted (hooks, hooks/lib, commands, scripts, limit-recover, bin/cc-*, skills)" {
   _livefix
-  mkdir -p "$CC_PARITY_REPO"/{hooks/lib,commands,scripts/limit-recover,bin}
+  mkdir -p "$CC_PARITY_REPO"/{hooks/lib,commands,scripts/limit-recover,bin,skills/a-skill}
   printf 'x\n' > "$CC_PARITY_REPO/hooks/a-hook.sh"
   printf 'x\n' > "$CC_PARITY_REPO/hooks/lib/a-lib.sh"
   printf 'x\n' > "$CC_PARITY_REPO/commands/a-cmd.md"
   printf 'x\n' > "$CC_PARITY_REPO/scripts/a-script.sh"
   printf 'x\n' > "$CC_PARITY_REPO/scripts/limit-recover/lr-any-ext.py"     # limit-recover globs ALL types
   printf 'x\n' > "$CC_PARITY_REPO/bin/cc-thing"
+  printf 'x\n' > "$CC_PARITY_REPO/skills/a-skill/SKILL.md"                 # skills/<name>/* — the 07-27 live gap
   _track
   run "$ASSERT"
   [ "$status" -eq 1 ]
-  [ "$(printf '%s\n' "$output" | grep -c '^MISSING: ln -sf')" -eq 6 ]
+  [ "$(printf '%s\n' "$output" | grep -c '^MISSING: ln -sf')" -eq 7 ]
   for f in hooks/a-hook.sh hooks/lib/a-lib.sh commands/a-cmd.md scripts/a-script.sh \
-           scripts/limit-recover/lr-any-ext.py bin/cc-thing; do
+           scripts/limit-recover/lr-any-ext.py bin/cc-thing skills/a-skill/SKILL.md; do
     [[ "$output" == *"$CC_PARITY_REPO/$f $CC_PARITY_LIVE/$f"* ]] || false
   done
 }
 
 @test "existence: files install.sh does NOT link are never asserted (no false demands)" {
   _livefix
-  mkdir -p "$CC_PARITY_REPO"/{hooks/other,commands/sub,scripts/sub,scripts/limit-recover/deep,bin/cc-dir}
+  mkdir -p "$CC_PARITY_REPO"/{hooks/other,commands/sub,scripts/sub,scripts/limit-recover/deep,bin/cc-dir,skills/a-skill/refs,lib}
   printf 'x\n' > "$CC_PARITY_REPO/hooks/README.md"                  # hooks/*.md — not globbed
   printf 'x\n' > "$CC_PARITY_REPO/hooks/other/nested.sh"            # hooks/<subdir>/ — not globbed
   printf 'x\n' > "$CC_PARITY_REPO/commands/sub/nested.md"           # commands/<subdir>/ — not globbed
@@ -171,6 +172,9 @@ _track() { git -C "$CC_PARITY_REPO" add -A >/dev/null 2>&1; }   # ls-files reads
   printf 'x\n' > "$CC_PARITY_REPO/scripts/limit-recover/deep/x.sh"  # limit-recover is top-level only
   printf 'x\n' > "$CC_PARITY_REPO/bin/cc-dir/nested"                # bin/cc-*/ subdir — not a file link
   printf 'x\n' > "$CC_PARITY_REPO/bin/other-tool"                   # bin/ non-cc-* — not globbed
+  printf 'x\n' > "$CC_PARITY_REPO/skills/a-skill/refs/deep.md"      # skills/<name>/<subdir>/ — one level only
+  printf 'x\n' > "$CC_PARITY_REPO/skills/stray.md"                  # a file directly in skills/ — not a skill dir
+  printf 'x\n' > "$CC_PARITY_REPO/lib/thing.sh"                     # top-level lib/ — install.sh has NO lib leg
   _track
   run "$ASSERT"
   [ "$status" -eq 0 ]
