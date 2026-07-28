@@ -533,6 +533,71 @@ landable() {  # $1=branch $2=shell file — a commit the gate always lints
   grep -q '"smoke":"none"' "$LAND_LOG"
 }
 
+@test "smoke: HOST-manifest suites are excluded — the partition binds the land lane too" {
+  # §4.2.2. The verifier runs tests/*.bats MINUS scripts/host-suites.manifest, and the deploy lane
+  # runs exactly that manifest POST-deploy against the live layer they actually assert. A host
+  # suite that re-enters through the SMOKE rebuilds the bootstrap circle one lane over — and it
+  # re-enters trivially, because touching a host suite makes it a DIRECT suite of your diff. The
+  # v2 bootstrap land is exactly such a land: tests/deploy-parity.bats test 8 is TRUE-red on this
+  # box right now (the live layer is missing a symlink), so unfiltered it would exit-6 a land whose
+  # TREE is fine, for a live-layer fact the tree cannot control.
+  #
+  # A DIFFERENTIAL, not a bare negative: "a.bats did not run" is trivially true of a build whose
+  # smoke runs nothing at all, so the SAME run must show the unlisted suite DID run. The manifest
+  # also carries a comment and a blank line, because those are in the frozen format contract.
+  scope_fixture
+  stub_selector "" "$(printf 'tests/a.bats\ntests/b.bats')"
+  mkdir -p scripts
+  printf '# host suites — asserted POST-deploy against the live layer\n\ntests/a.bats\n' \
+    > scripts/host-suites.manifest
+  git add scripts && git commit -q -m "seed host manifest" && git push -q origin HEAD:main
+  git fetch -q origin main
+  landable feat/host-manifest hm.sh
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  [ "$(grep -cx 'tests/a.bats' "$BATS_ARGV")" -eq 0 ]   # LISTED ⇒ never handed to bats (the spy)
+  [ "$(grep -cx 'tests/b.bats' "$BATS_ARGV")" -eq 1 ]   # UNLISTED ⇒ still smoked (the differential)
+  echo "$output" | grep -q "post-deploy check owns it"
+  grep -q '"smoke":"green"' "$LAND_LOG"
+  grep -q '"smoke_n":1' "$LAND_LOG"                     # the attest reflects the FILTERED count
+}
+
+@test "smoke: NO manifest ⇒ no filtering (the pre-adoption state must not silently narrow)" {
+  # The control leg for the test above, on the same fixture: without the manifest BOTH suites run,
+  # so the exclusion above is the manifest's doing and not an artifact of the selector or the shim.
+  # It is also the state every other test in this file runs in, and the state of the tree until
+  # the verifier lands its manifest — a missing file must never mean "smoke nothing".
+  scope_fixture
+  stub_selector "" "$(printf 'tests/a.bats\ntests/b.bats')"
+  landable feat/no-manifest nm.sh
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  [ "$(grep -cx 'tests/a.bats' "$BATS_ARGV")" -eq 1 ]
+  [ "$(grep -cx 'tests/b.bats' "$BATS_ARGV")" -eq 1 ]
+  [ "$(echo "$output" | grep -c 'post-deploy check owns it')" -eq 0 ]
+  grep -q '"smoke_n":2' "$LAND_LOG"
+}
+
+@test "smoke: a manifest that swallows EVERY direct suite is a lint-only land, not an error" {
+  # The degenerate case, and it must take the cheap branch: no smoke, no clone, exit 0. A land
+  # touching only host suites is the normal shape of a live-layer fix.
+  scope_fixture
+  stub_selector "" "tests/a.bats"
+  mkdir -p scripts
+  printf 'tests/a.bats\ntests/b.bats\n' > scripts/host-suites.manifest
+  git add scripts && git commit -q -m "seed host manifest (all)" && git push -q origin HEAD:main
+  git fetch -q origin main
+  landable feat/host-all hma.sh
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  [ ! -s "$BATS_ARGV" ]
+  echo "$output" | grep -q "0 direct suite"
+  grep -q '"smoke":"none"' "$LAND_LOG"
+}
+
 @test "lane: unknown SHIP_LAND_LANE ⇒ exit 2; SHIP_LAND_GATE_SCOPE still validated for back-compat" {
   run env SHIP_LAND_LANE=bogus bash "$SHIPLAND" --trunk main
   [ "$status" -eq 2 ]
