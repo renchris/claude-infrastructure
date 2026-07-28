@@ -470,6 +470,20 @@ symlink (deploy-parity test 8 red until `bash install.sh` runs live or the first
 advance self-heals it — operator readout carries the one-liner). Corpus exposure already
 nil: deploy-parity.bats is manifest-partitioned since verifier Phase A.
 
+**§4.1 DESIGN ADDITION (2026-07-28, found at integration):** the smoke's direct list must
+ALSO exclude scripts/host-suites.manifest entries (read from the tree being landed; missing
+⇒ no filter). A host suite arriving as a DIRECT suite of a diff reds the land for a
+live-layer state the tree cannot control — the verifier partition's bootstrap circle
+resurfacing in the land lane. Concrete: the integrated v2 land touches
+tests/deploy-parity.bats, whose test 8 is TRUE-red on this box until the operator relink;
+unfiltered smoke would exit-6 the bootstrap land itself. Routed to tv2-fastlane Phase B.
+
+**Integration log (lead branch):** tv2-deploy COMPLETE and cherry-picked (310e264e /
+ac47f2be / b73a7831, from 9ab93f66/eabcea9d/e58ad5b9); composed-tree gate re-run: shellcheck
+clean, plist lint OK, deploy-live.bats 24/24. Their RED-proof caught a vacuous test via the
+bats dead-assertion trap (non-final [[ ]] errexit-exempt ⇒ || false throughout) and an
+ls|grep glob-literal trap — both now pinned in the suite itself.
+
 ## Learnings (accumulate; never delete)
 
 - 2026-07-28: v1's own evolution had already built every v2 component (scoped selector,
