@@ -1,0 +1,42 @@
+# HOST suites — assert the LIVE deployed layer; run post-deploy by deploy-live.sh, NEVER in the
+# tree verdict (the deployed-layer bootstrap circle).
+#
+# FORMAT (frozen contract — LAND_PIPELINE_V2 §4.2.2): plain text, one `tests/<name>.bats` per line,
+# `#` comments and blank lines ignored. Consumers:
+#   scripts/postland-verify.sh  runs `tests/*.bats` MINUS these lines  ⇒ the TREE verdict
+#   scripts/deploy-live.sh      runs exactly these, AFTER an advance   ⇒ the LIVE HOST verdict
+# The partition is a SET DIFFERENCE, so it is total by construction and never hand-synced. A missing
+# manifest means EMPTY: the verifier then runs everything (fail-closed toward MORE proof, never
+# less). An unparseable line is ignored and logged rather than silently narrowing the corpus.
+#
+# WHY this file exists: these suites assert the state of ~/.claude — the DEPLOYED layer. The tree
+# under verification is by definition ahead of what is deployed, so pre-deploy they can only fail;
+# but the deploy waits on the verdict they are failing. That circle is why 22 postland stamps
+# produced 0 greens and every deploy since has been manual. Post-deploy, against the layer they
+# actually describe, they are exactly the right check — so they move, they do not get deleted.
+#
+# ADDING one: a suite that reds in the verifier and passes standalone against the live layer is a
+# host suite. Normal attribution already names the file, so it moves here by a one-line land, and
+# the next tree carries the new partition with it.
+#
+# SECOND admission criterion — WHOLE-TREE META-LINT WRAPPERS (tests/test-hermeticity-lint.bats).
+# That suite is here for a different reason than the six above: not because it asserts the live
+# layer, but because a bats suite that wraps a WHOLE-TREE assertion cannot run mid-corpus. It
+# passes standalone and fails from inside a full run — clean-room corpora failed on exactly this
+# suite and nothing else (2,085 ok / 1 not-ok and 2,242 ok / 1 not-ok; backlogs b59eb997d035,
+# b4e49b4b5014), which localises the 14-consecutive-red-stamp deadlock to one file. The
+# enforcement is NOT lost: postland-verify runs scripts/test-hermeticity-lint.sh (and the walltime
+# lint) STANDALONE and whole-tree-strict before the corpus, so a real violation is a deterministic
+# named RED. Post-deploy, run standalone against the live layer, the wrapper is meaningful again —
+# its symlink-selftest failure shape was a real finding.
+
+tests/deploy-parity.bats
+tests/desk-arm-live.bats
+tests/desk-recycle-durable.bats
+tests/lr-team-audit.bats
+tests/session-continue.bats
+tests/waiting-recycle.bats
+
+# whole-tree meta-lint wrapper (see the SECOND admission criterion above) — enforced standalone,
+# pre-corpus, by postland-verify.sh; re-run here post-deploy against the live layer.
+tests/test-hermeticity-lint.bats
