@@ -50,9 +50,12 @@
 # being the dominant cost and becomes a rounding error. Keep the rounds; they are now cheap.
 #
 # SMOKE — the land's only test work, and the highest-value seconds in the pipeline. The
-# `gate-select.sh --direct` suites of THIS diff, one process per suite, under ONE TOTAL wall
-# budget SHIP_LAND_SMOKE_BUDGET_S (default 120s), `nice`d, each child bounded by `timeout -k 10`
-# against the shared deadline. Three rules, each paying for a named v1 failure:
+# `gate-select.sh --direct` suites of THIS diff MINUS the HOST suites named in
+# scripts/host-suites.manifest (§4.2.2 — those assert the LIVE layer and are owned by the
+# post-deploy check; letting one back in through the smoke rebuilds the bootstrap circle one lane
+# over), one process per suite, under ONE TOTAL wall budget SHIP_LAND_SMOKE_BUDGET_S (default
+# 120s), `nice`d, each child bounded by `timeout -k 10` against the shared deadline. Three rules,
+# each paying for a named v1 failure:
 #   RED BLOCKS (exit 6)  a named `not ok` in a direct suite is a verdict about YOUR diff.
 #   CUT PROCEEDS         a cut / budget kill earned NO verdict, and a non-verdict must never
 #                        block a land (R6): recorded to flakes.jsonl, attested smoke:"partial",
@@ -108,6 +111,7 @@
 # the pre-T-P9-7 kill switch) · SHIP_LAND_GATE_ROUNDS (default 3; 0 = straight to the in-lock
 # statics re-gate) · SHIP_LAND_GATE_SCOPE / SHIP_LAND_GATE_POLICY / SHIP_LAND_GATE_SELECT ·
 # SHIP_LAND_HERM_LINT · SHIP_LAND_WALL_LINT (ratchet paths; default the landing tree's own) ·
+# SHIP_LAND_HOST_MANIFEST (host-suite partition; default the landing tree's own, §4.2.2) ·
 # SHIP_LAND_GATE_HOME_ISO · POSTLAND_DIR (flake + post-land queue + stamps dir) ·
 # POSTLAND_VERIFY=off (skip the post-land spawn) · POSTLAND_STALENESS_GUARD=off ·
 # POSTLAND_MAX_STAMP_AGE_H (24).
@@ -621,6 +625,39 @@ run_corpus() {  # $1=newline-list of DIRECT suites — the WHOLE corpus, one pro
   return 1
 }
 
+filter_host_suites() {  # $1=newline list of suites → the same list minus HOST suites
+  # THE PARTITION BINDS THE LAND LANE TOO (LAND_PIPELINE_V2 §4.2.2). scripts/host-suites.manifest
+  # names the suites whose real subject is the LIVE ~/.claude layer, not the tree: the verifier
+  # runs tests/*.bats MINUS this set, and the deploy lane runs exactly this set POST-deploy,
+  # against the layer they actually assert. That partition is what kills the bootstrap circle —
+  # and it is worthless if the same suites can re-enter through the SMOKE.
+  # They can, easily: a host suite becomes a DIRECT suite of any land that touches it, and the v2
+  # bootstrap land is precisely such a land. Measured on this box while writing it:
+  # tests/deploy-parity.bats test 8 is TRUE-red (the live layer is missing a symlink), so an
+  # unfiltered smoke would exit 6 on a land whose TREE is fine, for a live-layer fact the tree
+  # cannot control. That is the bootstrap circle resurfacing one lane over.
+  # Read from the TREE BEING LANDED, repo-root-relative — same rule as the two ratchets: the tree
+  # is judged by the manifest it SHIPS, so a land that legitimately adds a host suite is judged by
+  # its own new list. Missing/unreadable/empty manifest ⇒ NO filtering (the pre-adoption state,
+  # and the safe direction: we run more, we never silently run less than the author expects).
+  local list="$1" manifest pats kept before after
+  manifest="${SHIP_LAND_HOST_MANIFEST:-scripts/host-suites.manifest}"
+  [[ -r "$manifest" ]] || { printf '%s\n' "$list"; return 0; }
+  pats="$(mktemp 2>/dev/null)" || { printf '%s\n' "$list"; return 0; }
+  # Format (frozen contract): one tests/<name>.bats per line · `#` comments and blank lines
+  # ignored · trailing whitespace tolerated. An unparseable line simply fails to match anything.
+  grep -vE '^[[:space:]]*(#|$)' "$manifest" 2>/dev/null | sed 's/[[:space:]]*$//' > "$pats"
+  if [[ ! -s "$pats" ]]; then rm -f "$pats"; printf '%s\n' "$list"; return 0; fi
+  before="$(printf '%s\n' "$list" | grep -c . || true)"
+  kept="$(printf '%s\n' "$list" | grep -vxF -f "$pats" || true)"
+  rm -f "$pats"
+  after="$(printf '%s\n' "$kept" | grep -c . || true)"
+  [[ "$after" -lt "$before" ]] && \
+    echo "→ gate: smoke excluded $(( before - after )) direct suite(s) — host suite, the post-deploy check owns it (they assert the LIVE layer, which this tree cannot control)." >&2
+  printf '%s\n' "$kept"
+  return 0
+}
+
 run_smoke() {  # $1=range → 0 = PROCEED · 1 = RED (a named failure in a direct suite)
                # sets SMOKE_STATE / SMOKE_N / SMOKE_S; never sets GATE_KILLED (see below).
   # THE LAND'S ONLY TEST WORK (§4.1): the `--direct` suites of THIS diff — the ones a change can
@@ -661,6 +698,10 @@ run_smoke() {  # $1=range → 0 = PROCEED · 1 = RED (a named failure in a direc
     return 0
   fi
   direct="$(printf '%s\n' "$direct" | grep -v '^[[:space:]]*$' || true)"
+  # BEFORE the emptiness check on purpose: a land whose every direct suite is a host suite is a
+  # lint-only land as far as the smoke is concerned, and must take that branch (and its zero cost)
+  # rather than a separate one.
+  direct="$(filter_host_suites "$direct" | grep -v '^[[:space:]]*$' || true)"
   if [[ -z "$direct" ]]; then
     echo "→ gate: smoke — 0 direct suite(s) map to this range (lint-only land)." >&2
     return 0

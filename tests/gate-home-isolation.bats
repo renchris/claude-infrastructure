@@ -130,7 +130,7 @@ select_suites() {   # $1=what the selector prints → the suites the SMOKE will 
   export SHIP_LAND_GATE_SELECT="$BATS_TEST_TMPDIR/select.sh"
 }
 
-probe_fn() {   # extract the isolation functions and drive them directly (the gate_admit idiom)
+probe_fn() {   # extract the isolation functions and drive them directly (the function-probe idiom)
   { sed -n '/^gate_home_teardown() {/,/^}/p' "$SHIPLAND"
     sed -n '/^gate_home_setup() {/,/^}/p' "$SHIPLAND"
     cat
