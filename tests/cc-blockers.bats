@@ -117,8 +117,21 @@ kinds() { ccb --json | jq -r '.[].kind' | sort | tr '\n' ' '; }
   [ "$(echo "$output" | jq 'length')" = 0 ]
 }
 
+@test "alarm NEVER-ACTIVATED stays SILENT in a void (no land.log, no deploy repo)" {
+  # THE EVIDENCE GATE (found by v2's own bootstrap land): keyed on stamps-absence alone this
+  # alarm fired inside every fixtured-$HOME suite (4 phantom-row failures in
+  # tests/cc-relogin-status.bats) and would fire on any machine that never had the infra.
+  # Its positive control is the NEVER-ACTIVATED test below — same void plus one land.log.
+  export CC_POSTLAND_DIR="$D/never"
+  run ccb --json
+  [ "$status" -eq 0 ]
+  [ "$(echo "$output" | jq 'length')" = 0 ]
+}
+
 @test "alarm verifier-inert/NEVER-ACTIVATED: no stamps dir has ever existed" {
   export CC_POSTLAND_DIR="$D/never"                       # nothing was ever created here
+  : > "$CC_LAND_LOG"    # EVIDENCE GATE: a landing pipeline exists here (a land.log) — without
+                        # any evidence a stamps-dir void is a fixture/fresh machine, not an alarm
   run ccb --json
   [ "$(echo "$output" | jq 'length')" = 1 ]
   [ "$(echo "$output" | jq -r '.[0].kind')" = "verifier-inert" ]
@@ -212,6 +225,7 @@ kinds() { ccb --json | jq -r '.[].kind' | sort | tr '\n' ' '; }
 @test "alarms ride in the SAME --json array as board rows (a JSON consumer sees both)" {
   sg "2026-07-25T09:05:00Z" "PANE9" "peer-9" "Fable 5" "refused" "cc-recover-safeguard PANE9"
   export CC_POSTLAND_DIR="$D/never"
+  : > "$CC_LAND_LOG"    # evidence gate (see the NEVER-ACTIVATED test)
   run ccb --json
   [ "$(echo "$output" | jq 'length')" = 2 ]
   [ "$(echo "$output" | jq -r '[.[].kind]|sort|join(",")')" = "safeguard-blocked,verifier-inert" ]
