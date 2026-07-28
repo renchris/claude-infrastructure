@@ -484,6 +484,16 @@ clean, plist lint OK, deploy-live.bats 24/24. Their RED-proof caught a vacuous t
 bats dead-assertion trap (non-final [[ ]] errexit-exempt ⇒ || false throughout) and an
 ls|grep glob-literal trap — both now pinned in the suite itself.
 
+**Integration COMPLETE (2026-07-28, lead branch = 23 commits):** all three assignments
+delivered and cherry-picked; every component's suites re-run green ON THE COMPOSED TREE
+(deploy-live 24/24 · cc-blockers 20/20 · postland-verify 49/49 + selftest 26/26 ·
+ship-land/land-gate-cas/gate-home-isolation 96+ green · deploy-parity 15/16 with the one
+KNOWN TRUE red = live-layer symlink, operator step). Fastlane's final commit closes the
+integration-discovered gap: the smoke filters host-manifest suites (the partition binds the
+land lane too). Verifier's parting merge-order constraint (walltime fix before verifier) is
+satisfied by construction — single-branch integration, 11925061 precedes every verifier
+commit in history, one ff push carries all atomically.
+
 ## Learnings (accumulate; never delete)
 
 - 2026-07-28: v1's own evolution had already built every v2 component (scoped selector,
