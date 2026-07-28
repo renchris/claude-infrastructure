@@ -29,6 +29,10 @@ usage/
 __pycache__/
 *.pyc
 
+# diagram render toolchain only (scripts/render-diagrams.mjs); package-lock.json IS
+# committed — CI's `npm ci` requires it.
+node_modules/
+
 # defensive: a worktree must NEVER be created INSIDE the repo (they belong in
 # ~/Development/.worktrees). A stray inside-repo one read as untracked litter and made every
 # co-cwd session permanently "dirty" to the reaper. .claude/worktrees/ is ignored above.
