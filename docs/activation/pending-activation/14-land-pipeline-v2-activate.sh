@@ -77,11 +77,16 @@ load_job() { # <label>
 echo "[2] load the verifier"; load_job com.claude.postland-verify || exit 1
 echo "[3] load the deploy lane"; load_job com.claude.deploy-live   || exit 1
 
-echo "== verify (launchctl list — a label absent here is NOT loaded) =="
+# `launchctl print gui/$UID/<label>`, NOT `launchctl list | grep`: print resolves the label in THIS
+# domain and fails non-zero when it is absent, whereas a grep over list can match a substring of an
+# unrelated label and reads a job that exited as present. Verified 2026-07-28: all 13 com.claude.*
+# labels sit in the disabled database (`launchctl print-disabled gui/501`), which is why the enable
+# above is load-bearing — without it bootstrap fails EIO and this check is the thing that catches it.
+echo "== verify (launchctl print — resolves the label in this domain, not a substring match) =="
 rc=0
 for label in com.claude.postland-verify com.claude.deploy-live; do
-  if launchctl list 2>/dev/null | grep -q "$label"; then echo "  ✓ $label loaded"
-  else echo "  ✗ $label NOT in launchctl list" >&2; rc=1; fi
+  if launchctl print "gui/$UID_/$label" >/dev/null 2>&1; then echo "  ✓ $label loaded"
+  else echo "  ✗ $label does NOT resolve in gui/$UID_ — not loaded" >&2; rc=1; fi
 done
 [ "$rc" -eq 0 ] || { echo "✗ activation INCOMPLETE — the net is degraded, not live" >&2; exit 1; }
 
