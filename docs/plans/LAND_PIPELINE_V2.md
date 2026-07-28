@@ -126,6 +126,29 @@ R9 absence is loud: verifier stamp freshness + deploy lag + un-run activations s
 (Telemetry addenda — exit-code distribution, flake ledger, suite timing samples — integrated
 below as research lands; they tune parameters, not the architecture.)
 
+**2026-07-28 telemetry (researcher, full land.log/flakes/stamps parse + timed sample):**
+- Volume corrected: **12.9 lands/day calendar · 22.5/active-day · 47/day-equivalent** in the
+  only valid window (33h post-instrumentation; earlier "0 reds" is a logging artifact — B2).
+  341 attempts/14d → 180 lands (52.8%); valid window: 70% red. My earlier 43/day was commits.
+- Scoped-tier autopsy: 62% of "scoped" runs were **effective-FULL** (selector returned FULL)
+  → 95% red; genuine subsets (p50 27 suites) → 68% green. The tier that fails is the tier
+  that doesn't narrow.
+- Lock truth: post-unlock-fix median hold **1s** (was 299s), zero same-minute lands ever —
+  but the fix CREATED exit-42 stale-gate (30%, 26.4h of wait for 79s of work) and exit-75
+  starvation (19h) populations: **81% of all lock wait-hours ended in a non-outcome**. v2
+  keeps the CAS shape but re-gates cost seconds, so the 42-tax collapses.
+- Corpus is **sleep-bound**: ~2,889s of literal `sleep` ≈ 94-99% of the 49-57min sequential
+  wall (3 estimators converge; postland run_s p50 50.9min corroborates); 82% of sleep in 7
+  files; 1 of 10 cores used. ⇒ verifier under background QoS loses little; Phase-2 roadmap:
+  per-suite parallelism + sleep-shrinking those 7 files → cycle ≈ minutes.
+- postland runner spent **~10.0h of a 32h life in admission waits** (54/75 waits ended
+  "proceed anyway"); every recorded flake occurred at load ≥ 7.85 (the ceiling is 8).
+- exit 9 has NEVER fired (cuts absorbed as pass-on-retry below it); stranded-sweep `review`
+  is 100%-saturated non-signal (81% of successful lands); reboot 07-27 19:02 wiped the lock
+  dir and re-wrote the launchd disabled-override — all 13 com.claude.* labels sit DISABLED
+  (activation MUST `launchctl enable` before bootstrap; install.sh's bootstrap alone fails
+  EIO silently — deploy-layer G3).
+
 **2026-07-28 10:53 live reads (lead):** load 5.87 (first sub-ceiling window of the week; lock
 FREE; zero gates running — bootstrap-land window is OPEN). Newest postland run
 (2026-07-27 10:02, tip ea6f7b5a): **RED, run_s 3132, retries 12, flakes 0, failing = exactly
@@ -135,6 +158,29 @@ the tree verdict is red SOLELY because host-coupled suites assert a live layer t
 ahead of. Corpus cycle estimate for the verifier: ~52 min at moderate load.
 
 ---
+
+**2026-07-28 archaeology deltas (evidence pack: docs/research/land-pipeline-v2-research-2026-07-28/):**
+- **0-green re-localized (supersedes the restart brief's §6 cell suspicion):** clean-room full
+  corpora fail on exactly ONE suite — tests/test-hermeticity-lint.bats:22, a whole-tree
+  assertion that passes standalone and fails mid-corpus (2,085/1 and 2,242/1; backlogs
+  b59eb997d035, b4e49b4b5014; "the other 6 convicted suites are spurious" — their
+  convictions were verdict-path artifacts). §4.2 amended: manifest gains that suite as a 7th
+  entry AND the verifier runs scripts/test-hermeticity-lint.sh + test-walltime-lint.sh
+  standalone pre-corpus (whole-tree strict, bounded, named RED on failure).
+- **Carrier cap is a first-class failure mode (F14):** the agent Bash tool caps at 10 min;
+  a ~50-min gate inside it truncates to a false exit-6 (6 observed). Bootstrap land (§6)
+  therefore runs DETACHED (start_new_session Popen + log + Monitor), never as a foreground
+  tool call. v2 structurally clears F14 for everyone else: smoke ≤2 min fits any carrier;
+  the verifier runs under launchd/detached.
+- **Correction to the evidence pack itself:** its §4 row "land-lock keying per-worktree,
+  NOT BUILT" is stale — land-lock.sh:27-46 keys on --git-common-dir with worktree-suffix
+  normalization ("Fixes G-P9-1"), read directly; telemetry corroborates (0 same-minute
+  lands in 180). The report inherited a pre-fix audit doc claim.
+- exit-9/cut-not-red have NEVER fired in production despite landing — the CUT≠RED machinery
+  is labelling without policy; v2 makes the distinction structural (smoke cut ⇒ proceed;
+  verifier CUT ⇒ re-cycle) instead of exit-code vocabulary.
+- gate-select DIRECT edges can come from PROSE mentions (a71df503c6f1) — acceptable for
+  smoke (over-selection is bounded by the budget), noted for a later selector tightening.
 
 ## §3 The architecture — three lanes, one verdict owner
 
