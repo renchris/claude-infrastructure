@@ -77,6 +77,16 @@ tv2-fastlane/tv2-verifier/tv2-deploy on branches tv2/{fastlane,verifier,deploy}:
   pre-corpus lints — without these the verifier reds every cycle (the localized 0-green
   cause) and v2 would activate wedged. Routed: stale gate_admit comment in
   ship-land.bats:873 → tv2-fastlane Phase B.
+- 2026-07-28 verifier amend VERIFIED (b41cab96: 7-entry manifest w/ meta-lint criterion,
+  PRELINTS wired+selftested 26/26, ONE-list proof via discriminating fixture). BLOCKER
+  routed by teammate and cleared by LEAD (11925061): walltime ratchet's stale
+  cc-relogin-status grandfather line redded the whole tree 3/3 deterministic — deleted per
+  the ratchet's own shrink rule; verified lint rc=0/selftest rc=0/suite 14/14. APPROVED:
+  8th manifest entry tests/test-walltime-lint.bats (criterion-based: whole-tree meta-lint
+  wrapper class, enforced standalone by PRELINTS); three verifier refinements — own-bound
+  rc=124 ⇒ CUT never RED (a self-imposed timeout forges no finding; a false RED feeds
+  auto-revert), lint-red skips the corpus (R7), absent-lint ⇒ skipped (history stays
+  verifiable). tv2-deploy parity fix landed as own commit d9c9e807.
 
 ---
 
