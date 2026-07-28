@@ -54,6 +54,16 @@ tv2-fastlane/tv2-verifier/tv2-deploy on branches tv2/{fastlane,verifier,deploy}:
   Scope (grown): +tests/gate-home-isolation.bats → tv2-fastlane (was unowned; tests removed
   tier behavior — rewritten to the v2 smoke surface, never manifested).
   Routed: ship.md admission-control mentions → tv2-deploy's rewrite.
+- 2026-07-28 tv2-deploy Phase A ACCEPTED (a5c2509c + parity amend pending): --auto guards/
+  damping/host-checks/alarms verified with positive AND negative controls incl. live-disk
+  silence; plist /bin/bash -c PATH idiom approved (launchd expands neither ~ nor PATH;
+  postland precedent). §4.3.2 verdict: install.sh needs NO relink pass — every class re-globs
+  from the repo each run (skills at :193-200). Deliberate non-links recorded: scripts/ globs
+  *.sh only ⇒ host-suites.manifest is NEVER live-linked — harmless by design (verifier reads
+  the manifest from the tree under test; deploy-live reads $DEPLOY_REPO); bin/ cc-*-only is
+  pre-existing policy. One gap being amended: parity-assert skills existence leg (the guard
+  claimed 1:1 install.sh mirroring while routing skills/* to want=0 — the live
+  video-understanding gap is the cost).
 
 ---
 
