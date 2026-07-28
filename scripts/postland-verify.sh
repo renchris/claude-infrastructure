@@ -31,7 +31,7 @@
 # MACHINE event — a peer pkill, OOM, starvation: nothing was proven, never stamped green or red,
 # retried next sweep, honest page + cool-off at CUT_MAX). HUNG vs CUT is the load-bearing split:
 # "retry when quieter" is the right answer to one and the one answer guaranteed never to clear the
-# other. Bounds: POSTLAND_SUITE_TIMEOUT_S (2700) · POSTLAND_FILE_TIMEOUT_S (300); unbounded, HUNG is
+# other. Bounds: POSTLAND_SUITE_TIMEOUT_S (5400) · POSTLAND_FILE_TIMEOUT_S (300); unbounded, HUNG is
 # UNPROVABLE (nothing can return 124) so every hang candidate honestly degrades to a CUT.
 # Verbs: --run-if-needed (launchd) · --run <sha> · bisect <file> <good> <bad> · is-green <sha> ·
 #        status · --selftest.   Kill switches: POSTLAND_VERIFY=off (runtime-read ⇒ instantly inert) ·
@@ -145,7 +145,11 @@ else
 fi
 export PATH
 LOCK_TTL="${CC_POSTLAND_LOCK_TTL:-3600}"
-SUITE_TO="${POSTLAND_SUITE_TIMEOUT_S:-2700}"   # full-suite bound — makes a HUNG observable at all
+SUITE_TO="${POSTLAND_SUITE_TIMEOUT_S:-5400}"   # full-suite bound — makes a HUNG observable at all.
+# 5400 (was 2700): calibrated for the v2 BACKGROUND band. The corpus is ~50 min at nice-19 on a
+# QUIET box; `taskpolicy -c background` deliberately yields to sessions, so a busy box (load ~12)
+# legitimately runs 60-90 min — measured 2026-07-28: a healthy run CUT at 2737s with zero not-ok.
+# 90 min still makes a genuine HUNG observable; the bound exists for hangs, not for pacing.
 FILE_TO="${POSTLAND_FILE_TIMEOUT_S:-300}"      # per-file bound (retry ladder + the hang confirm)
 # ── BACKGROUND QoS — the singleton must make progress at ANY load (§4.2.3) ───────────────────────
 # v1 admission control (gate_admit, DELETED) waited for load < ceiling before the suite and before
