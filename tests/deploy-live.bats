@@ -186,3 +186,199 @@ nightly() { # runs the nightly with every other check stubbed green
   [ "$status" -eq 0 ]
   echo "$output" | grep -q "ok   postland-inertness"
 }
+
+# ── --auto autopilot (LAND_PIPELINE_V2 §4.3) ─────────────────────────────────────────────────────
+# EVERY `[[ ]]` below carries `|| false`. Not style — a non-final `[[ ]]` is errexit-EXEMPT under
+# bats, so it is a DEAD assertion that can never fail its test (`[ ]` and simple commands ARE live).
+# Measured here 2026-07-28: without it, the --force/--bootstrap test passed against the PRE-Phase-A
+# script, because that script also exits 2 on an unknown `--auto` arg and the only assertion that
+# could tell the two apart was the dead one. Do not strip the `|| false`.
+# Every seam is fixtured, so nothing here runs a real suite or touches the live layer:
+#   CC_DEPLOY_BATS_BIN  → a SPY that records the suite it was handed and returns a verdict keyed on
+#                         the suite NAME, so red/cut/green are deterministic without control files.
+#   CC_BACKLOG_BIN      → a spy recording the packet argv.
+#   CC_DEPLOY_TIMEOUT_BIN= → SET-EMPTY, the script's documented disable. Deliberate: a suite that
+#                         resolved the real timeout(1) would encode whether coreutils happens to be
+#                         installed on the host running it, which is not what these tests assert.
+auto_setup() {
+  export CC_SPY_LOG="$BATS_TEST_TMPDIR/bats.spy"
+  export CC_BACKLOG_LOG="$BATS_TEST_TMPDIR/backlog.spy"
+  SPY="$BATS_TEST_TMPDIR/bats-spy"; BLSPY="$BATS_TEST_TMPDIR/backlog-spy"
+  cat > "$SPY" <<'SPY'
+#!/bin/bash
+printf '%s\n' "$1" >> "$CC_SPY_LOG"
+case "$1" in
+  *host-red*) printf 'not ok 1 - boom\nnot ok 2 - boom2\n'; exit 1 ;;
+  *host-cut*) exit 124 ;;                 # OUR bound firing: non-zero naming ZERO tests
+  *)          printf 'ok 1 - fine\n'; exit 0 ;;
+esac
+SPY
+  # shellcheck disable=SC2016  # $* / $CC_BACKLOG_LOG belong to the SPY being written, not to us
+  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "$CC_BACKLOG_LOG"\n' > "$BLSPY"
+  chmod +x "$SPY" "$BLSPY"
+}
+
+dla() { # deploy-live --auto with every side channel spied
+  env DEPLOY_REPO="$SHARED" CC_POSTLAND_DIR="$BATS_TEST_TMPDIR/postland" CC_PAGES_DIR="$PAGES" \
+      CC_DEPLOY_BATS_BIN="$SPY" CC_BACKLOG_BIN="$BLSPY" CC_DEPLOY_TIMEOUT_BIN= \
+      bash "$DL" --auto "$@"
+}
+
+seed_host_suites() { # <manifest-body> — commit suites+manifest onto origin/main, leave HEAD behind
+  local head; head="$(git -C "$SHARED" rev-parse HEAD)"
+  mkdir -p "$SHARED/scripts" "$SHARED/tests"
+  printf '#!/usr/bin/env bats\n@test "x" { true; }\n' > "$SHARED/tests/host-ok.bats"
+  printf '#!/usr/bin/env bats\n@test "x" { true; }\n' > "$SHARED/tests/host-two.bats"
+  printf '#!/usr/bin/env bats\n@test "x" { false; }\n' > "$SHARED/tests/host-red.bats"
+  printf '#!/usr/bin/env bats\n@test "x" { true; }\n' > "$SHARED/tests/host-cut.bats"
+  printf '%s\n' "$1" > "$SHARED/scripts/host-suites.manifest"
+  git -C "$SHARED" add -A; git -C "$SHARED" commit -q -m host-suites
+  git -C "$SHARED" push -q origin main
+  git -C "$SHARED" reset -q --hard "$head"      # the suites arrive WITH the advance, as in life
+}
+
+@test "--auto: nothing new stamped green ⇒ SILENT exit 0 (the steady state must not narrate)" {
+  auto_setup
+  advance_origin b
+  stamp origin/main
+  run dla                                        # first tick advances
+  [ "$status" -eq 0 ]
+  run dla                                        # second tick: TARGET == HEAD
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  # positive control: the SAME state without --auto still narrates, so the emptiness above is the
+  # flag's doing and not a test that could never see output.
+  run dl
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"already deployed"* ]] || false
+}
+
+@test "--auto refuses --force/--bootstrap with exit 2, BEFORE any network read" {
+  auto_setup
+  git -C "$SHARED" remote set-url origin "$BATS_TEST_TMPDIR/does-not-exist.git"
+  run dla --force                                # a fetch would exit 1; 2 proves we never got there
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"cannot be combined"* ]] || false
+  run dla --bootstrap
+  [ "$status" -eq 2 ]
+  # positive control: without --auto, --force is still honored (the guard is scoped to the flag)
+  git -C "$SHARED" remote set-url origin "$ORIGIN"
+  advance_origin b
+  run dl --force
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"gate BYPASSED"* ]] || false
+}
+
+@test "--auto no-stamps refusal: pages ONCE, then silent inside the damp window, still exit 1" {
+  auto_setup
+  advance_origin b
+  rm -rf "$BATS_TEST_TMPDIR/postland"
+  run dla
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"verification net is not active"* ]] || false
+  [ -f "$PAGES/deploy-no-stamps.page" ]
+  head -1 "$PAGES/deploy-no-stamps.page" | grep -qE '^[0-9]+$'   # epoch-headed like every page
+  run dla                                        # same reason, inside the window
+  [ "$status" -eq 1 ]                            # fail-closed is NOT what gets damped
+  [ -z "$output" ]
+  # positive control: without --auto the same refusal is loud every single time
+  run dl; [[ "$output" == *"verification net is not active"* ]] || false
+  run dl; [[ "$output" == *"verification net is not active"* ]] || false
+}
+
+@test "--auto damping is subject+state: a CHANGED refusal reason re-pages immediately" {
+  auto_setup
+  advance_origin b
+  rm -rf "$BATS_TEST_TMPDIR/postland"
+  run dla; [ "$status" -eq 1 ]                   # arms the damp on no-stamps-dir
+  run dla; [ -z "$output" ]                      # damped
+  mkdir -p "$STAMPS"                             # reason CHANGES: dir exists, nothing green
+  run dla
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"no GREEN stamp"* ]] || false          # loud again despite the 24h window still running
+}
+
+@test "--auto damping: an ELAPSED window re-pages the SAME reason" {
+  auto_setup
+  advance_origin b
+  rm -rf "$BATS_TEST_TMPDIR/postland"
+  run dla; [ "$status" -eq 1 ]
+  run dla; [ -z "$output" ]
+  d="$BATS_TEST_TMPDIR/postland/deploy-auto.damp"
+  [ -f "$d" ]                                    # the marker is read from disk, never assumed
+  # Age it 25h. Seeded RELATIVE to now and SIGNED — a literal date would rot this test into a
+  # fleet-wide red the moment the calendar moved past it. The state key is copied back from the
+  # marker itself rather than re-guessed, so the test cannot drift from the script's own format.
+  printf '%s\n%s\n' "$(( $(date +%s) - 90000 ))" "$(sed -n '2p' "$d")" > "$d"
+  run dla
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"verification net is not active"* ]] || false
+}
+
+@test "--auto: a healthy advance CLEARS the damp so the next failure is loud at once" {
+  auto_setup
+  advance_origin b
+  rm -rf "$BATS_TEST_TMPDIR/postland"
+  run dla; run dla; [ -z "$output" ]             # damped
+  mkdir -p "$STAMPS"; stamp origin/main
+  run dla
+  [ "$status" -eq 0 ]
+  [ ! -f "$BATS_TEST_TMPDIR/postland/deploy-auto.damp" ]
+}
+
+@test "advance ⇒ EVERY manifest suite runs against the live layer; comments/blanks/absent skipped" {
+  auto_setup
+  seed_host_suites '# host partition
+tests/host-ok.bats
+
+  tests/host-two.bats   # indented, with a trailing comment
+tests/absent.bats'
+  stamp origin/main
+  run dla
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < "$CC_SPY_LOG" | tr -d ' ')" -eq 2 ]      # EXACT: absent is skipped, not counted
+  grep -qx 'tests/host-ok.bats'  "$CC_SPY_LOG"
+  grep -qx 'tests/host-two.bats' "$CC_SPY_LOG"
+  [[ "$output" == *"absent in the deployed tree"* ]] || false
+}
+
+@test "host RED ⇒ page + backlog naming the suite, exit 0, live layer NOT rolled back" {
+  auto_setup
+  seed_host_suites 'tests/host-red.bats'
+  stamp origin/main
+  want="$(git -C "$SHARED" rev-parse origin/main)"
+  run dla
+  [ "$status" -eq 0 ]                                   # a live-layer finding never fails the deploy
+  [ "$(git -C "$SHARED" rev-parse HEAD)" = "$want" ]     # and never rolls back
+  pf="$PAGES/deploy-host-red-$(printf '%.12s' "$want").page"
+  [ -f "$pf" ]
+  head -1 "$pf" | grep -qE '^[0-9]+$'
+  grep -q 'tests/host-red.bats' "$pf"
+  grep -q 'NOT a rollback trigger' "$pf"
+  grep -q 'post-deploy HOST RED' "$CC_BACKLOG_LOG"
+  grep -q 'host-red.bats' "$CC_BACKLOG_LOG"
+}
+
+@test "host CUT is a NON-VERDICT (R6): named 0 tests ⇒ no page, no backlog, deploy still 0" {
+  auto_setup
+  seed_host_suites 'tests/host-cut.bats'
+  stamp origin/main
+  run dla
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"CUT"* ]] || false
+  # find, not `ls | grep`: an unmatched glob would expand to its own literal and read as a HIT,
+  # which would make this assertion pass for the wrong reason. `[ ]` keeps it live under errexit.
+  [ "$(find "$PAGES" -name 'deploy-host-red-*.page' 2>/dev/null | wc -l | tr -d ' ')" -eq 0 ]
+  [ ! -s "$CC_BACKLOG_LOG" ]
+}
+
+@test "manifest MISSING ⇒ host checks skipped silently, bats never invoked at all" {
+  auto_setup
+  advance_origin b                               # no manifest is ever committed here
+  stamp origin/main
+  run dla
+  [ "$status" -eq 0 ]
+  [ ! -e "$CC_SPY_LOG" ]                         # the contract: missing ⇒ empty set ⇒ no host run
+  [[ "$output" != *"host check"* ]] || false
+  [[ "$output" == *"install.sh ok"* ]] || false           # positive control: the advance itself DID happen
+}
