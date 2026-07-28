@@ -1,0 +1,13 @@
+{
+  "name": "claude-infrastructure-diagrams",
+  "private": true,
+  "type": "module",
+  "description": "Diagram render pipeline only — this repo is shell/markdown; node is used solely to pre-render assets/diagrams/*.mmd through beautiful-mermaid for GitHub.",
+  "scripts": {
+    "diagrams": "node scripts/render-diagrams.mjs",
+    "diagrams:check": "node scripts/render-diagrams.mjs --check"
+  },
+  "devDependencies": {
+    "beautiful-mermaid": "1.1.3"
+  }
+}

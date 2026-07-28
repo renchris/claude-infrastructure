@@ -1,0 +1,23 @@
+name: diagrams
+
+# A .mmd edited without re-rendering is invisible on GitHub — the README keeps
+# showing the stale SVG. This makes that a CI failure instead of tribal knowledge.
+on:
+  push:
+    paths: ['assets/diagrams/**', 'scripts/render-diagrams.mjs', 'package.json', 'package-lock.json', '**/*.md']
+  pull_request:
+    paths: ['assets/diagrams/**', 'scripts/render-diagrams.mjs', 'package.json', 'package-lock.json', '**/*.md']
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      # Fails if any rendered SVG, or any embedded ```mermaid fence, has drifted
+      # from its .mmd source. Fix locally with `npm run diagrams` and commit.
+      - run: npm run diagrams:check
