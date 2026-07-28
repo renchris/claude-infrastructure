@@ -1,14 +1,24 @@
 #!/usr/bin/env bats
-# land-gate-cas.bats — the land-gate serialization fix (2026-07-25): the FULL gate runs
-# UNLOCKED (parallel across sessions); the landing lock covers ONLY the CAS race window
-# (fetch-compare → push → content-verify). RED-proofed against the pre-fix pipeline, which
-# ran the entire gate INSIDE the lock:
+# land-gate-cas.bats — the land-gate serialization fix (2026-07-25): the gate runs UNLOCKED
+# (parallel across sessions); the landing lock covers ONLY the CAS race window (fetch-compare →
+# push → content-verify). RED-proofed against the pre-fix pipeline, which ran the entire gate
+# INSIDE the lock:
 #   * "gate runs unlocked"      → pre-fix the gate observer records LOCKED, not UNLOCKED.
 #   * "stale-gate re-gate"      → pre-fix a sibling land mid-gate ⇒ push non-ff exit 7 (no
 #                                 re-gate, land FAILS); post-fix exit 42 → unlocked re-gate
 #                                 of the new final tree → land succeeds, nothing dropped.
 #   * "dry-run takes no lock"   → pre-fix dry-run held the mutex for the whole gate.
 #   * "hold-time collapse"      → pre-fix hold_s ≥ gate duration; post-fix hold_s ≈ 0.
+#
+# v2 (LAND_PIPELINE_V2 §4.1) ADDS the invariant this suite is now the primary home of: NOTHING
+# HEAVY MAY EVER ENTER THE LOCK, in EITHER lane. The 2026-07-25 fix moved the gate out of the
+# lock but left TWO paths that could put a corpus back in — the rounds-exhausted fallback and the
+# content-drop recovery re-gate — and the first of those produced a 3h36m lock holder while every
+# other lander queued behind it, then a multi-day jam when the corpus hung. v2 bans it in
+# run_gate, keyed on IN_LAND_LOCK, so no call site can forget. Every in-lock test below therefore
+# asserts a bats INVOCATION COUNT of zero, not merely a green outcome: the statics still run under
+# the lock (they are milliseconds and the observer records LOCKED for them), so an outcome
+# assertion alone cannot tell "statics only" from "statics plus a corpus".
 #
 # INSTRUMENTATION (durable products, not narration): a PATH-shimmed `shellcheck` appends
 # LOCKED/UNLOCKED per gate invocation to $GATE_OBS by testing whether the landing mutex dir
@@ -51,10 +61,17 @@ setup() {
   export CLAUDE_CODE_SESSION_ID="test-sid-cas"
   export POSTLAND_DIR="$BATS_TEST_TMPDIR/postland"
   export POSTLAND_VERIFY=off                     # never spawn a real post-land child from tests
-  # env-bleed immunity (see ship-land.bats setup): an outer gate's scope must not leak in.
+  # env-bleed immunity (see ship-land.bats setup): an outer gate's tuning must not leak in.
+  # SHIP_LAND_LANE is the one that matters most here — an operator landing with the v1 kill switch
+  # on would put a corpus inside every fixture pipeline below, i.e. exactly the thing these tests
+  # assert cannot happen, and the failure would look like a real regression.
   unset SHIP_LAND_GATE_SCOPE SHIP_LAND_GATE_SCOPE_DEFAULT SHIP_LAND_GATE_POLICY \
         SHIP_LAND_GATE_SELECT SHIP_LAND_FIRST_BASE SHIP_LAND_GATE_EFFECTIVE_FULL \
-        SHIP_LAND_SELECTED_N POSTLAND_STALENESS_GUARD 2>/dev/null || true
+        SHIP_LAND_SELECTED_N POSTLAND_STALENESS_GUARD \
+        SHIP_LAND_LANE SHIP_LAND_SMOKE_BUDGET_S SHIP_LAND_SMOKE_NICE SHIP_LAND_TIMEOUT_BIN \
+        SHIP_LAND_SMOKE_STATE SHIP_LAND_SMOKE_N SHIP_LAND_SMOKE_S SHIP_LAND_NET_STATE \
+        2>/dev/null || true
+  export CC_GATE_MAX_LOAD=0            # never shed: a fixture's smoke must not depend on `uptime`
 
   GATE_OBS="$BATS_TEST_TMPDIR/gate-obs"
   MOVER_ARMED="$BATS_TEST_TMPDIR/mover-armed"    # content = max sibling lands to inject
@@ -151,19 +168,51 @@ our_branch() {  # $1=branch $2=shell-file — a landable commit that always trip
   [ "$(wc -l < "$GATE_OBS" | tr -d ' ')" = "2" ]
 }
 
-@test "rounds exhausted: sibling lands during EVERY unlocked gate → in-lock full-gate fallback terminates + lands all content" {
+smoke_fixture() {  # seed one suite + a bats shim + a selector whose --direct names it
+  # Without this the in-lock tests below cannot fail: a gate with no suite to run trivially runs
+  # no bats, so "0 invocations" would be true of a broken build and a correct one alike. Every
+  # in-lock assertion is paired with the UNLOCKED control run that proves the smoke DOES fire.
+  cat > "$SHIMDIR/bats" <<EOF
+#!/bin/bash
+printf '%s\n' "\$*" >> "$BATS_TEST_TMPDIR/bats-argv"
+echo "1..1"; echo "ok 1 fine"; exit 0
+EOF
+  chmod +x "$SHIMDIR/bats"
+  : > "$BATS_TEST_TMPDIR/bats-argv"
+  SEL="$BATS_TEST_TMPDIR/gate-select.sh"
+  cat > "$SEL" <<EOF
+#!/bin/bash
+printf '%s\n' "\$*" >> "$BATS_TEST_TMPDIR/sel-argv"
+case "\$1" in lint) exit 0 ;; esac
+echo tests/a.bats
+EOF
+  chmod +x "$SEL"
+  export SHIP_LAND_GATE_SELECT="$SEL"
+  export SHIP_LAND_GATE_POLICY="$BATS_TEST_TMPDIR/no-such-policy.sh"
+  mkdir -p tests
+  printf '#!/usr/bin/env bats\n@test "a" { true; }\n' > tests/a.bats
+  git add tests && git commit -q -m "seed suite" && git push -q origin HEAD:main
+  git fetch -q origin main
+}
+
+@test "rounds exhausted: sibling lands during EVERY unlocked gate → in-lock STATICS-only fallback lands all content, runs NO bats" {
+  smoke_fixture
   echo 99 > "$MOVER_ARMED"                     # sustained contention: every unlocked gate is invalidated
   our_branch feat/contend contend.sh
 
   run env SHIP_LAND_GATE_ROUNDS=2 bash "$SHIPLAND" --trunk main
   [ "$status" -eq 0 ]
-  echo "$output" | grep -q "falling back to the in-lock full gate"
+  echo "$output" | grep -q "in-lock STATICS-only re-gate"
 
-  # rounds 1+2 unlocked (each invalidated), round 3 = the guaranteed-progress in-lock gate
+  # rounds 1+2 unlocked (each invalidated), round 3 = the guaranteed-progress in-lock re-gate
   # (the shim records LOCKED and — being locked — cannot inject further movement).
   [ "$(cat "$GATE_OBS")" = "UNLOCKED
 UNLOCKED
 LOCKED" ]
+  # THE v2 INVARIANT. v1 ran the FULL corpus on this exact path — the 3h36m lock holder. The
+  # unlocked rounds each smoked (2 invocations); the in-lock round must add NONE.
+  echo "$output" | grep -q "no bats inside the land-lock"
+  [ "$(grep -c . "$BATS_TEST_TMPDIR/bats-argv")" -eq 2 ]
 
   git fetch -q origin main
   [ -n "$(git ls-tree origin/main -- contend.sh)" ]
@@ -172,15 +221,51 @@ LOCKED" ]
   grep -q '"verify":"ok"' "$LAND_LOG"
 }
 
-@test "kill switch: SHIP_LAND_GATE_ROUNDS=0 → pre-fix behavior, gate runs IN-LOCK" {
+@test "kill switch: SHIP_LAND_GATE_ROUNDS=0 → statics run IN-LOCK, and STILL no bats" {
+  smoke_fixture
   our_branch feat/legacy legacy.sh
 
   run env SHIP_LAND_GATE_ROUNDS=0 bash "$SHIPLAND" --trunk main
   [ "$status" -eq 0 ]
   [ "$(wc -l < "$GATE_OBS" | tr -d ' ')" = "1" ]
-  [ "$(cat "$GATE_OBS")" = "LOCKED" ]
+  [ "$(cat "$GATE_OBS")" = "LOCKED" ]          # the statics DO run under the lock (milliseconds)
+  [ ! -s "$BATS_TEST_TMPDIR/bats-argv" ]       # …and nothing heavy follows them
   git fetch -q origin main
   [ -n "$(git ls-tree origin/main -- legacy.sh)" ]
+}
+
+@test "in-lock POSITIVE CONTROL: the same fixture, unlocked, DOES run the smoke" {
+  # Without this the two zero-invocation assertions above pass on any build where the selector,
+  # the shim, or the seeded suite is broken — i.e. where NO gate anywhere runs bats.
+  smoke_fixture
+  our_branch feat/control ctl.sh
+
+  run bash "$SHIPLAND" --trunk main            # default ROUNDS ⇒ the UNLOCKED gate
+  [ "$status" -eq 0 ]
+  [ "$(cat "$GATE_OBS")" = "UNLOCKED" ]
+  [ "$(cat "$BATS_TEST_TMPDIR/bats-argv")" = "tests/a.bats" ]
+}
+
+@test "in-lock: the ban binds in the v1 lane too — the kill switch never restores the in-lock corpus" {
+  # SHIP_LAND_LANE=v1 buys back the corpus PROOF, never the lock pathology. Pinned because "the
+  # kill switch restores v1 behaviour" is the natural reading, and v1 behaviour on this path is
+  # precisely the multi-day jam.
+  smoke_fixture
+  our_branch feat/v1-inlock v1il.sh
+
+  run env SHIP_LAND_GATE_ROUNDS=0 SHIP_LAND_LANE=v1 bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  [ "$(cat "$GATE_OBS")" = "LOCKED" ]
+  echo "$output" | grep -q "no bats inside the land-lock, in either lane"
+  [ ! -s "$BATS_TEST_TMPDIR/bats-argv" ]       # not even the v1 corpus
+
+  # CONTROL: the same lane, UNLOCKED, really does run the whole corpus — so the zero above is the
+  # lock's doing, not the lane's.
+  : > "$BATS_TEST_TMPDIR/bats-argv"
+  our_branch feat/v1-unlocked v1ul.sh
+  run env SHIP_LAND_LANE=v1 bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  [ "$(cat "$BATS_TEST_TMPDIR/bats-argv")" = "tests/a.bats" ]
 }
 
 @test "dry-run: gate runs UNLOCKED and the landing mutex is NEVER taken" {
@@ -240,58 +325,50 @@ LOCKED" ]
   [ "$(grep -c '"verify":"ok"' "$LAND_LOG")" = "2" ]          # BOTH lands content-verified
 }
 
-@test "scoped gate: CAS semantics preserved — sibling mid-gate ⇒ stale-gate re-gate, both contents land" {
-  # Scoping changes WHICH suites run, never the CAS contract. A sibling landing during the
-  # unlocked SCOPED gate must still trip exit 42 inside the lock and force an unlocked RE-gate of
-  # the new final tree (2 observations, both UNLOCKED) — and the re-gate must itself be scoped.
-  cat > "$SHIMDIR/bats" <<EOF
-#!/bin/bash
-printf '%s\n' "\$*" >> "$BATS_TEST_TMPDIR/bats-argv"
-exit 0
-EOF
-  chmod +x "$SHIMDIR/bats"
-  sel="$BATS_TEST_TMPDIR/gate-select.sh"
-  cat > "$sel" <<EOF
-#!/bin/bash
-printf '%s\n' "\$*" >> "$BATS_TEST_TMPDIR/sel-argv"
-case "\$1" in lint) exit 0 ;; --direct) exit 0 ;; esac
-echo tests/a.bats
-EOF
-  chmod +x "$sel"
-  mkdir -p tests                                   # the fixture has no suites; the gate needs one
-  printf '#!/usr/bin/env bats\n@test "a" { true; }\n' > tests/a.bats
-  git add tests && git commit -q -m "seed suite" && git push -q origin HEAD:main
-  git fetch -q origin main
+@test "stale-gate re-round runs the SMOKE, never a corpus — and carries the UNION range" {
+  # The CAS contract is lane-independent: a sibling landing during the unlocked gate must still
+  # trip exit 42 inside the lock and force an unlocked RE-gate of the new final tree (2
+  # observations, both UNLOCKED). What v2 changes is the COST of that re-round — it is the smoke
+  # again, seconds, not a second 20-53 minute corpus. That is the whole reason the optimistic
+  # rounds survive v2 at all (their v1 economics: 26.4h of accumulated lock-wait for 79s of work,
+  # ~30% of rounds invalidated, each invalidation paying for a full re-proof).
+  smoke_fixture
   gc="$(git rev-parse --git-common-dir)"; rm -f "$gc/gate-green"
 
   echo 1 > "$MOVER_ARMED"                          # exactly one sibling land, during our gate
-  our_branch feat/scoped-cas scoped-cas.sh
+  our_branch feat/stale-cas stale-cas.sh
 
-  run env SHIP_LAND_GATE_SCOPE=scoped SHIP_LAND_GATE_SELECT="$sel" bash "$SHIPLAND" --trunk main
+  run bash "$SHIPLAND" --trunk main
   [ "$status" -eq 0 ]
   echo "$output" | grep -q "STALE GATE"                             # CAS fired…
   [ "$(wc -l < "$GATE_OBS" | tr -d ' ')" = "2" ]                    # …and it re-gated…
   [ "$(sort -u "$GATE_OBS")" = "UNLOCKED" ]                         # …still never in the lock
-  [ "$(sort -u "$BATS_TEST_TMPDIR/bats-argv")" = "tests/a.bats" ]   # both gates scoped, not full
-  [ ! -f "$gc/gate-green" ]                                         # scoped ⇒ marker untouched
+  # Both rounds ran the SELECTED suite, one process each — never the whole corpus, and never the
+  # deleted monolithic `bats tests/` invocation.
+  [ "$(sort -u "$BATS_TEST_TMPDIR/bats-argv")" = "tests/a.bats" ]
+  [ "$(grep -c . "$BATS_TEST_TMPDIR/bats-argv")" -eq 2 ]            # exactly one per round
+  [ "$(grep -cx 'tests/' "$BATS_TEST_TMPDIR/bats-argv")" -eq 0 ]
+  [ ! -f "$gc/gate-green" ]                                         # a land never stamps the marker
 
   git fetch -q origin main
-  [ -n "$(git ls-tree origin/main -- scoped-cas.sh)" ]              # no drop, either side
+  [ -n "$(git ls-tree origin/main -- stale-cas.sh)" ]               # no drop, either side
   [ -n "$(git ls-tree origin/main -- sib-0.txt)" ]
-  grep -q '"gate_scope":"scoped"' "$LAND_LOG"
+  grep -q '"gate_scope":"fast"' "$LAND_LOG"
+  grep -q '"smoke":"green"' "$LAND_LOG"
 
-  # UNION SCOPE — the amendment. Round 1 selects on our delta alone; the re-gate must ALSO hand
-  # the selector the trunk delta the sibling landed while we gated (FIRST_BASE..new base), or
-  # the re-gate is scoped blind to the composed tree's only novelty.
-  grep -v -e '^--direct' -e '^lint' "$BATS_TEST_TMPDIR/sel-argv" > "$BATS_TEST_TMPDIR/sel-only"
-  [ "$(wc -l < "$BATS_TEST_TMPDIR/sel-only" | tr -d ' ')" = "2" ]                   # two rounds
-  [ "$(head -1 "$BATS_TEST_TMPDIR/sel-only" | awk '{print gsub(/\.\./,"")}')" = "1" ]  # r1: 1 range
-  [ "$(tail -1 "$BATS_TEST_TMPDIR/sel-only" | awk '{print gsub(/\.\./,"")}')" = "2" ]  # r2: + union
-  fb="$(sed 's/\.\..*//' < "$BATS_TEST_TMPDIR/sel-only" | head -1)"                  # round 1's base
-  tail -1 "$BATS_TEST_TMPDIR/sel-only" | grep -q " $fb\.\."       # the union range is anchored there
-
-  # --direct MIRRORS the selection ranges: the composed tree is what we push, so a sibling-mapped
-  # suite is direct to THIS land and must not be exonerable.
+  # UNION SCOPE, preserved verbatim from v1 and now carried on the ONLY call the smoke makes.
+  # Round 1 selects on our delta alone; the re-round must ALSO hand the selector the trunk delta
+  # the sibling landed while we gated (FIRST_BASE..new base), or the re-round is blind to the
+  # composed tree's only novelty. v2 narrows the surface: the plain (non---direct) selector call
+  # and the `lint` call are both GONE, so --direct is where this has to hold.
   grep '^--direct' "$BATS_TEST_TMPDIR/sel-argv" > "$BATS_TEST_TMPDIR/direct-only"
-  [ "$(tail -1 "$BATS_TEST_TMPDIR/direct-only" | awk '{print gsub(/\.\./,"")}')" = "2" ]
+  [ "$(wc -l < "$BATS_TEST_TMPDIR/direct-only" | tr -d ' ')" = "2" ]                    # two rounds
+  [ "$(head -1 "$BATS_TEST_TMPDIR/direct-only" | awk '{print gsub(/\.\./,"")}')" = "1" ]  # r1: 1 range
+  [ "$(tail -1 "$BATS_TEST_TMPDIR/direct-only" | awk '{print gsub(/\.\./,"")}')" = "2" ]  # r2: + union
+  fb="$(sed -E 's/^--direct //; s/\.\..*//' < "$BATS_TEST_TMPDIR/direct-only" | head -1)"  # r1's base
+  tail -1 "$BATS_TEST_TMPDIR/direct-only" | grep -q " $fb\.\."     # the union range is anchored there
+
+  # …and the selector's OTHER two entry points are never called at all in the fast lane: the plain
+  # selection decided the corpus tier (deleted) and `lint` gated a degrade-to-FULL (deleted).
+  [ "$(grep -cv '^--direct' "$BATS_TEST_TMPDIR/sel-argv")" -eq 0 ]
 }

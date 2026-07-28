@@ -38,14 +38,24 @@ setup() {
   # the outer env ⇒ 45 ok / 1 not ok; unset ⇒ 46 ok / 0 not ok. A verdict about the tree must never
   # be a function of how the operator tuned the land (ship-land.sh's gate_bats scrubs the same set
   # at the gate; this is the half that also holds when someone runs bats directly).
+  # v2 adds SHIP_LAND_LANE to this list, and it is the sharpest member: an operator landing with
+  # the kill switch on (LANE=v1) would otherwise bleed `v1` into every fixture pipeline below and
+  # red the fast-lane assertions on a tree that is fine — the ROUNDS=0 defect verbatim.
+  # SHIP_LAND_SMOKE_* and _TIMEOUT_BIN join for the same reason (a budget or a disabled bound
+  # inherited from the outer land would decide a fixture's smoke verdict), and the SMOKE_STATE
+  # handoff vars because a CAS child seeds its attestation from them.
   unset SHIP_LAND_GATE_SCOPE SHIP_LAND_GATE_SCOPE_DEFAULT SHIP_LAND_GATE_POLICY \
         SHIP_LAND_GATE_SELECT SHIP_LAND_FIRST_BASE SHIP_LAND_GATE_EFFECTIVE_FULL \
         SHIP_LAND_SELECTED_N POSTLAND_STALENESS_GUARD \
-        SHIP_LAND_GATE_ROUNDS SHIP_LAND_VERIFY_RETRIES 2>/dev/null || true
-  # Admission control OFF for the whole suite. The full-mode fixtures below really do reach
-  # run_bats_all → gate_admit, and this suite runs on exactly the loaded box that makes it defer;
-  # left on, every such test stalls for CC_GATE_ADMIT_MAX_WAIT and the suite reads as hung. These
-  # tests assert VERDICT logic, never shedding behaviour (that has its own dedicated tests below).
+        SHIP_LAND_GATE_ROUNDS SHIP_LAND_VERIFY_RETRIES \
+        SHIP_LAND_LANE SHIP_LAND_SMOKE_BUDGET_S SHIP_LAND_SMOKE_NICE SHIP_LAND_TIMEOUT_BIN \
+        SHIP_LAND_SMOKE_STATE SHIP_LAND_SMOKE_N SHIP_LAND_SMOKE_S SHIP_LAND_NET_STATE \
+        2>/dev/null || true
+  # LOAD SHEDDING OFF for the whole suite. In v2 CC_GATE_MAX_LOAD=0 is the never-shed kill switch,
+  # so every fixture's smoke RUNS. Left inherited, whether a pipeline smoked at all would depend on
+  # the ambient load of the box the suite happens to run on — a test verdict decided by `uptime`.
+  # These tests assert VERDICT logic; shedding has its own dedicated tests below, which set it
+  # per-test.
   export CC_GATE_MAX_LOAD=0
 }
 
@@ -232,22 +242,27 @@ on_branch_with() {  # $1=branch $2=file $3=content  → commit a change on a fre
   echo "$output" | grep -qi "nothing to land"
 }
 
-@test "P0-1 gate-green producer: green gate writes gate-green==HEAD; red gate does not" {
-  # boundary-handoff.sh:122 fires its advisory only when gate-green == HEAD on a clean tree.
-  # Before P0-1, the only gate-green writers were test fixtures, so boundary abstained 100% in prod.
+@test "v2 INVERSION: a GREEN land never advances gate-green — the verifier owns that marker" {
+  # P0-1 made the land the gate-green PRODUCER, on the premise that a land proved the full suite.
+  # v2 removes the premise (LAND_PIPELINE_V2 §4.1/§4.2): the land runs statics + a smoke over its
+  # own diff and makes no full-suite claim, so GATE_EFFECTIVE_FULL is pinned to 0 and
+  # stamp_gate_green self-noops in BOTH lanes. gate-green's consumers (boundary-handoff.sh:122,
+  # wrap-ledger.sh:79) read it as "the FULL suite proved THIS tree" — a claim only the post-land
+  # verifier can now make. Two writers for one marker is strictly worse than a stale one.
+  # This test is the exact inverse of the P0-1 test it replaces; it fails against the pre-v2 tree.
   gc="$(git rev-parse --git-common-dir)"
   rm -f "$gc/gate-green"
 
-  # green gate via --dry-run (runs the gate, no push) → producer stamps gate-green with HEAD
   git checkout -q -b feat/gg main
   printf '#!/usr/bin/env bash\necho ok\n' > gg.sh
   git add gg.sh && git commit -q -m "feat: gg"
   run bash "$SHIPLAND" --trunk main --dry-run
-  [ "$status" -eq 0 ]
-  [ -f "$gc/gate-green" ]
-  [ "$(cat "$gc/gate-green")" = "$(git rev-parse HEAD)" ]   # producer wrote the proven-green HEAD
+  [ "$status" -eq 0 ]                                        # the gate really did run GREEN…
+  [ ! -f "$gc/gate-green" ]                                  # …and still wrote nothing
+  echo "$output" | grep -q "gate-green NOT advanced"         # and said so, out loud, once
+  echo "$output" | grep -q "verifier owns that marker"
 
-  # red gate → the red HEAD must NEVER be marked green (gate-green must not advance to it)
+  # A red land obviously must not advance it either — the property that survived from P0-1.
   git checkout -q -b feat/gg-red main
   printf '#!/usr/bin/env bash\ncd /tmp/nope\necho ok\n' > bad-gg.sh   # SC2164 → shellcheck RED
   git add bad-gg.sh && git commit -q -m "feat: bad-gg"
@@ -255,6 +270,20 @@ on_branch_with() {  # $1=branch $2=file $3=content  → commit a change on a fre
   run bash "$SHIPLAND" --trunk main --dry-run
   [ "$status" -eq 6 ]
   [ "$(cat "$gc/gate-green" 2>/dev/null || echo none)" != "$redhead" ]   # unproven tree never green
+}
+
+@test "v2 INVERSION: the v1 kill switch does NOT restore gate-green stamping either" {
+  # LANE=v1 restores the corpus PROOF, never the marker. Pinned separately because "the corpus ran,
+  # so surely we may stamp" is the obvious wrong turn, and it would hand the marker two writers
+  # (this land and the verifier) racing on one file.
+  scope_fixture
+  gc="$(git rev-parse --git-common-dir)"; rm -f "$gc/gate-green"
+  landable feat/gg-v1 ggv1.sh
+
+  run env SHIP_LAND_LANE=v1 bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "FULL corpus green"               # the corpus genuinely ran…
+  [ ! -f "$gc/gate-green" ]                                  # …and still stamped nothing
 }
 
 @test "T-P9-7 recover: TRANSIENT concurrent drop → auto-retry re-lands → exit 0, content on trunk" {
@@ -338,29 +367,28 @@ EOF
   [ -z "$(git status --porcelain)" ]
 }
 
-# ---- gate scope modes · flake exoneration · attestation fields --------------
+# ════ SMOKE — the land's only test work (LAND_PIPELINE_V2 §4.1) ════════════════════════════════
 #
 # The fixture repo has no tests/ dir, so the gate's bats step never fires by default. These
 # tests SEED suites onto trunk and PATH-shim `bats`: the shim's recorded argv is the durable
 # product ("which suites actually ran"), and it injects a first-run-only failure for the flake
 # fixture. A nested REAL bats run is deliberately avoided — argv is what is under test.
 #
-# ── MONOLITH-PINNED ──────────────────────────────────────────────────────────────────────────
-# Phase 1 (docs/plans/GATE_ARCHITECTURE_PLAN.md §3) made the FULL tier run ONE bats process per
-# suite, so `bats tests/` is no longer a shape the gate can emit. Ten tests below observe the
-# runner through the shim's recorded ARGV, and those assertions — and ONLY those — are calibrated
-# to the monolith. Two irreducible classes:
-#   (a) the literal string `tests/` (`= "tests/"`, `grep -cx 'tests/'`) — per-suite mode never
-#       invokes it, by construction;
-#   (b) an invocation COUNT that assumes one process for the whole corpus (2 = run + re-run,
-#       1 = "a red is never re-run"). Per-suite the SEMANTIC is unchanged — still exactly one
-#       bounded re-run — but it is one per suite, so a 2-suite corpus counts 4, not 2.
-# Every OTHER assertion in those tests (exit code, operator text, landed / not-landed, gate-green)
-# passes unmodified against the per-suite runner; nothing about the verdict rule was re-pointed.
-# They are pinned to `SHIP_LAND_FULL_PER_SUITE=off` rather than rewritten, which also fixes a real
-# gap: the kill switch is the documented escape hatch back to the monolith, and an UNTESTED escape
-# hatch rots exactly when it is needed. The per-suite twins of every semantic below live in
-# "PER-SUITE RUNNER".
+# WHAT THE v1 TESTS HERE ASSERTED, AND WHY THEY ARE GONE. This block used to pin the gate SCOPE
+# machinery: full ⇒ `bats tests/`, scoped ⇒ the selector's list, and four ways scoped DEGRADED to
+# a full corpus (absent selector · red map lint · INERT post-land net · policy fallback). Every
+# one of those degradations is now a deleted code path, and deleting them was the point: each was
+# a fail-closed rule that answered uncertainty by running MORE bats on a box that was already
+# losing to bats (R7, the amplifier law). What replaces them is one rule with no degradation
+# ladder at all — run the `--direct` suites of THIS diff under a wall budget, and on ANY doubt
+# (no selector, selector says FULL, nothing selected, load too high, budget spent) run NOTHING and
+# let the post-land verifier prove the tree. The tests below pin the inversions specifically,
+# because "fail closed toward more proof" is the intuitive wrong answer someone will try to
+# restore. `smoke:"…"` in land.log is the durable evidence of which branch fired.
+#
+# The v1 assertions were also MONOLITH-PINNED (`= "tests/"`, and counts assuming one process for
+# the whole corpus) via SHIP_LAND_FULL_PER_SUITE=off. That flag and its runner are deleted; the
+# only surviving corpus runner is the LANE=v1 kill switch, whose tests live in "LANE=v1 CORPUS".
 
 scope_fixture() {   # seed tests/{a,b}.bats onto trunk + shim bats + default to an ABSENT policy
   SHIMDIR="$BATS_TEST_TMPDIR/shims"; mkdir -p "$SHIMDIR"
@@ -392,7 +420,11 @@ esac
 f="\$(cat "$FLAKE_ONCE" 2>/dev/null)"
 if [ -n "\$f" ] && [ "\$1" = "\$f" ]; then
   m="$BATS_TEST_TMPDIR/flaked-\$(basename "\$1")"
-  if [ ! -f "\$m" ]; then : > "\$m"; exit 1; fi
+  # A NAMED failure, not a bare rc — a FLAKE is a test that fails and then passes, and the
+  # discriminator between that and a machine event is the TAP body. This shim used to emit
+  # \`exit 1\` with no output, i.e. a CUT, so every test built on it was really asserting
+  # cut-then-green behaviour under the word "flake". Fixed with the carve-out it mis-pinned.
+  if [ ! -f "\$m" ]; then : > "\$m"; echo "1..1"; echo "not ok 1 intermittent"; exit 1; fi
 fi
 exit 0
 EOF
@@ -404,6 +436,13 @@ EOF
   printf '#!/usr/bin/env bats\n@test "b" { true; }\n' > tests/b.bats
   git add tests && git commit -q -m "seed suites" && git push -q origin HEAD:main
   git fetch -q origin main
+  # DEFAULT THE SELECTOR TO A STUB (v2). Unstubbed, SHIP_LAND_GATE_SELECT falls back to the REAL
+  # scripts/gate-select.sh, and in v1 that was harmless because full mode ignored selection — the
+  # smoke does NOT ignore it, so an unstubbed fixture would run the real ~2s python selector
+  # against a scratch repo and take its answer as a verdict input. A fixture's outcome must never
+  # depend on the real repo's suite map. Empty ⇒ no direct suites ⇒ no smoke; every test that wants
+  # a smoke calls stub_selector itself, which simply overwrites this.
+  stub_selector "" ""
 }
 
 stub_selector() {  # $1=plain-call stdout, $2=--direct stdout (either may be empty/multi-line)
@@ -426,60 +465,81 @@ landable() {  # $1=branch $2=shell file — a commit the gate always lints
   git add "$2" && git commit -q -m "feat: $2"
 }
 
-@test "scope: ABSENT policy file ⇒ full mode (bats tests/ runs, gate-green advances)" {
+@test "smoke: runs ONLY the --direct suites of this diff, never the corpus" {
+  # THE headline v2 property. The selector's plain (non---direct) answer names b.bats, and the
+  # corpus contains BOTH a and b — so a runner that consulted either the plain selection or
+  # tests/*.bats would show up here. Only the --direct list may run.
   scope_fixture
-  stub_selector "tests/a.bats" ""        # selector exists but MUST be ignored in full mode
-  gc="$(git rev-parse --git-common-dir)"; rm -f "$gc/gate-green"
-  landable feat/scope-full sf.sh
+  stub_selector "tests/b.bats" "tests/a.bats"     # plain says b · DIRECT says a
+  landable feat/smoke-direct sd.sh
 
-  run env SHIP_LAND_FULL_PER_SUITE=off bash "$SHIPLAND" --trunk main   # MONOLITH-PINNED (a)
+  run bash "$SHIPLAND" --trunk main
   [ "$status" -eq 0 ]
-  [ "$(cat "$BATS_ARGV")" = "tests/" ]                       # the WHOLE suite, one invocation
-  [ "$(cat "$gc/gate-green")" = "$(git rev-parse HEAD)" ]     # full proof ⇒ marker advances
+  [ "$(cat "$BATS_ARGV")" = "tests/a.bats" ]                 # exactly the direct suite…
+  [ "$(grep -cx 'tests/b.bats' "$BATS_ARGV")" -eq 0 ]        # …not the plain selection…
+  [ "$(grep -cx 'tests/' "$BATS_ARGV")" -eq 0 ]              # …and never a corpus invocation
+  grep -q '"gate_scope":"fast"' "$LAND_LOG"
+  grep -q '"smoke":"green"' "$LAND_LOG"
+  grep -q '"smoke_n":1' "$LAND_LOG"
 }
 
-@test "scope: scoped + selector picks ONE suite ⇒ only that suite runs, gate-green NOT advanced" {
+@test "smoke: 0 direct suites ⇒ no bats at all, land proceeds (lint-only land)" {
   scope_fixture
-  stub_selector "tests/a.bats" ""
-  gc="$(git rev-parse --git-common-dir)"; rm -f "$gc/gate-green"
-  landable feat/scope-one so.sh
+  stub_selector "tests/a.bats" ""                 # a plain selection exists; NO direct suites
+  landable feat/smoke-none sn.sh
 
-  run env SHIP_LAND_GATE_SCOPE=scoped bash "$SHIPLAND" --trunk main
+  run bash "$SHIPLAND" --trunk main
   [ "$status" -eq 0 ]
-  [ "$(cat "$BATS_ARGV")" = "tests/a.bats" ]                 # b.bats never ran; no `tests/` run
-  [ ! -f "$gc/gate-green" ]                                  # scoped ≠ full-suite claim
-  echo "$output" | grep -q "gate-green NOT advanced"
-  grep -q '"gate_scope":"scoped"' "$LAND_LOG"
-  grep -q '"selected_n":1' "$LAND_LOG"
-}
-
-@test "scope: scoped + selector says FULL ⇒ full run, gate-green advances" {
-  scope_fixture
-  stub_selector "FULL" ""
-  gc="$(git rev-parse --git-common-dir)"; rm -f "$gc/gate-green"
-  landable feat/scope-fullsel sfs.sh
-
-  # MONOLITH-PINNED (a) — the selector saying FULL is what is under test, not the runner shape.
-  run env SHIP_LAND_GATE_SCOPE=scoped SHIP_LAND_FULL_PER_SUITE=off bash "$SHIPLAND" --trunk main
-  [ "$status" -eq 0 ]
-  [ "$(cat "$BATS_ARGV")" = "tests/" ]
-  [ "$(cat "$gc/gate-green")" = "$(git rev-parse HEAD)" ]
-}
-
-@test "scope: scoped + selector picks NOTHING ⇒ bats skipped, land still proceeds" {
-  scope_fixture
-  stub_selector "" ""
-  landable feat/scope-none sn.sh
-
-  run env SHIP_LAND_GATE_SCOPE=scoped bash "$SHIPLAND" --trunk main
-  [ "$status" -eq 0 ]
-  echo "$output" | grep -q "0 suites"
+  echo "$output" | grep -q "0 direct suite"
   [ ! -s "$BATS_ARGV" ]                                      # bats never invoked at all
+  grep -q '"smoke":"none"' "$LAND_LOG"
+  grep -q '"smoke_n":0' "$LAND_LOG"
   git fetch -q origin main
   [ -n "$(git ls-tree origin/main -- sn.sh)" ]               # lint-only land still lands
 }
 
-@test "scope: unknown SHIP_LAND_GATE_SCOPE ⇒ exit 2 (fail-closed on a typo'd policy)" {
+@test "smoke INVERSION: an ABSENT selector lands with NO smoke — never the v1 FULL fallback" {
+  # v1: a missing selector meant FULL (fail-closed toward more proof). That is the single worst
+  # place to widen: the selector is missing exactly on the live-symlink path, where a brand-new
+  # tracked file has no symlink yet — i.e. on the busiest boxes, and it is the measured amplifier
+  # in the 2026-07-26 gate runaway (f8e40b4c577d). v2 inverts it: no selection ⇒ no smoke ⇒ the
+  # verifier proves the tree. PINNED so nobody restores the widening as a "safety" improvement.
+  scope_fixture
+  export SHIP_LAND_GATE_SELECT="$BATS_TEST_TMPDIR/no-such-selector.sh"
+  landable feat/smoke-nosel sns.sh
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]                                        # a missing selector never blocks…
+  echo "$output" | grep -q "missing/not executable"
+  echo "$output" | grep -q "verifier proves this tree"
+  [ ! -s "$BATS_ARGV" ]                                      # …and never widens: ZERO bats runs
+  grep -q '"smoke":"none"' "$LAND_LOG"
+  git fetch -q origin main
+  [ -n "$(git ls-tree origin/main -- sns.sh)" ]              # and the land completes
+}
+
+@test "smoke INVERSION: selector answering FULL ⇒ no smoke (its 'cannot decide', not 'run all')" {
+  # FULL is gate-select's OWN fail-closed output for any uncertainty (unmapped file, unparseable
+  # range, missing python3). In v1 it bought a corpus; in v2 it can only mean "this selection is
+  # untrustworthy", so it buys nothing and the verifier decides. The twin of the test above.
+  scope_fixture
+  stub_selector "FULL" "FULL"
+  landable feat/smoke-fullsel sfs.sh
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "cannot decide"
+  [ ! -s "$BATS_ARGV" ]                                      # no corpus, no single suite, nothing
+  grep -q '"smoke":"none"' "$LAND_LOG"
+}
+
+@test "lane: unknown SHIP_LAND_LANE ⇒ exit 2; SHIP_LAND_GATE_SCOPE still validated for back-compat" {
+  run env SHIP_LAND_LANE=bogus bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 2 ]
+  echo "$output" | grep -q "unknown SHIP_LAND_LANE"
+
+  # SCOPE is inert in v2 but still parsed and validated, so an operator's committed policy file or
+  # stale env cannot turn a land into a hard exit-2 on an unrelated flag — and a typo stays loud.
   run env SHIP_LAND_GATE_SCOPE=bogus bash "$SHIPLAND" --trunk main
   [ "$status" -eq 2 ]
   echo "$output" | grep -q "unknown SHIP_LAND_GATE_SCOPE"
@@ -497,36 +557,29 @@ landable() {  # $1=branch $2=shell file — a commit the gate always lints
   grep -q "\"head\":\"$head\"" "$LAND_LOG"                   # replayable: WHICH tree went red
 }
 
-@test "flake exoneration: NON-direct suite passes on retry ⇒ land GREEN + flakes.jsonl entry" {
+@test "smoke: the run-list IS the direct-list, so NO smoke suite can ever be exonerated" {
+  # A structural property of run_smoke, not of run_scoped_suite: the smoke hands its own selection
+  # to the runner AS the direct set, so the carve-out covers every suite it runs. The consequence
+  # is that flake-exoneration cannot fire in the fast lane at ALL for a named failure — its
+  # surviving home is the LANE=v1 corpus, where NON-direct suites exist (twin in that section).
+  # The `--direct` list here names ONLY a.bats while the selector's plain list names b.bats, so a
+  # build that passed the plain list as the direct set would exonerate a.bats and land green.
   scope_fixture
-  stub_selector "tests/a.bats" "tests/b.bats"   # a is selected but is NOT a direct suite
-  echo "tests/a.bats" > "$FLAKE_ONCE"           # fails once, passes the fresh-TMPDIR re-run
-  landable feat/flake fl.sh
-
-  run env SHIP_LAND_GATE_SCOPE=scoped bash "$SHIPLAND" --trunk main
-  [ "$status" -eq 0 ]
-  [ "$(grep -c . "$BATS_ARGV")" -eq 2 ]                      # first run + one exoneration re-run
-  echo "$output" | grep -q "EXONERATED"
-  grep -q '"outcome":"pass-on-retry"' "$POSTLAND_DIR/flakes.jsonl"
-  grep -q '"file":"tests/a.bats"' "$POSTLAND_DIR/flakes.jsonl"
-  grep -q '"phase":"land-gate"' "$POSTLAND_DIR/flakes.jsonl"
-}
-
-@test "flake exoneration: a DIRECT suite passing on retry is still RED ⇒ exit 6, nothing logged" {
-  scope_fixture
-  stub_selector "tests/a.bats" "tests/a.bats"   # same suite, now DIRECT to the change
-  echo "tests/a.bats" > "$FLAKE_ONCE"
+  stub_selector "tests/b.bats" "tests/a.bats"   # plain: b · DIRECT: a — deliberately disjoint
+  echo "tests/a.bats" > "$FLAKE_ONCE"           # a NAMES a failure once, passes the re-run
   landable feat/flake-direct fld.sh
 
-  run env SHIP_LAND_GATE_SCOPE=scoped bash "$SHIPLAND" --trunk main
+  run bash "$SHIPLAND" --trunk main
   [ "$status" -eq 6 ]
   echo "$output" | grep -q "finding, not a flake"
-  [ ! -f "$POSTLAND_DIR/flakes.jsonl" ]                      # never exonerated ⇒ never logged
+  [ "$(echo "$output" | grep -c "EXONERATED")" -eq 0 ]       # never exonerated…
+  [ ! -f "$POSTLAND_DIR/flakes.jsonl" ]                      # …⇒ never logged
+  grep -q '"smoke":"red"' "$LAND_LOG"
   git fetch -q origin main
   [ -z "$(git ls-tree origin/main -- fld.sh)" ]              # and NOT landed
 }
 
-@test "attest: land.log carries head/base/tree/gate_scope/selected_n" {
+@test "attest: land.log carries head/base/tree + the v2 lane/smoke/net fields" {
   landable feat/attest-fields af.sh
   base="$(git rev-parse origin/main)"
 
@@ -535,103 +588,91 @@ landable() {  # $1=branch $2=shell file — a commit the gate always lints
   grep -q "\"head\":\"$(git rev-parse HEAD)\"" "$LAND_LOG"
   grep -q "\"tree\":\"$(git rev-parse 'HEAD^{tree}')\"" "$LAND_LOG"
   grep -q "\"base\":\"$base\"" "$LAND_LOG"
-  grep -qE '"gate_scope":"(full|scoped|shadow)"' "$LAND_LOG"
+  grep -q '"gate_scope":"fast"' "$LAND_LOG"                  # the LANE, not the dead scope
+  grep -qE '"smoke":"(green|red|partial|skipped|none)"' "$LAND_LOG"
+  grep -qE '"smoke_n":[0-9]+' "$LAND_LOG"
+  grep -qE '"smoke_s":[0-9]+' "$LAND_LOG"
+  grep -qE '"net":"(live|inert|none)"' "$LAND_LOG"
   grep -q '"selected_n":' "$LAND_LOG"
 }
 
-@test "scope: scoped with an ABSENT selector ⇒ FULL suite (fail-closed, the pre-T1 repo state)" {
+# ── the post-land net: DETECTED and ATTESTED, never a control-flow input ──────────────────────
+# Stamp mtimes are seeded RELATIVE to now with a SIGNED offset (`date -v -48H`), never an absolute
+# literal: a fixture pinned to a wall-clock constant changes meaning as the clock advances and has
+# already taken the fleet's gate down on a calendar boundary with no code change.
+
+@test "net INVERSION: an INERT verifier WARNS and the land PROCEEDS — never a corpus degrade" {
+  # v1: stamps exist but the newest GREEN one has gone cold ⇒ "do not narrow" ⇒ run the FULL
+  # corpus. That is the amplifier law (R7) at its purest: the net goes inert precisely when the box
+  # is wedged, and the response was to add 40 minutes of bats per land to a wedged box. v2 keeps
+  # the detection and drops the escalation — warn, attest net:"inert", land. Nothing is lost: the
+  # land never made the full-suite claim, so an inert net costs verification LATENCY, which R9's
+  # freshness alarm surfaces to the operator.
   scope_fixture
-  export SHIP_LAND_GATE_SELECT="$BATS_TEST_TMPDIR/no-such-selector.sh"
-  landable feat/scope-nosel sns.sh
-
-  # MONOLITH-PINNED (a) — the fail-closed WIDENING is under test, not the runner shape.
-  run env SHIP_LAND_GATE_SCOPE=scoped SHIP_LAND_FULL_PER_SUITE=off bash "$SHIPLAND" --trunk main
-  [ "$status" -eq 0 ]
-  echo "$output" | grep -q "missing/not executable"
-  [ "$(cat "$BATS_ARGV")" = "tests/" ]        # narrowing is NEVER the failure mode
-}
-
-@test "scope: scoped + RED suite-map lint ⇒ degrades to FULL (lint never blocks a land)" {
-  scope_fixture
-  sel="$BATS_TEST_TMPDIR/gate-select.sh"
-  printf '#!/bin/bash\n[ "$1" = lint ] && exit 1\n[ "$1" = --direct ] && exit 0\necho tests/a.bats\n' > "$sel"
-  chmod +x "$sel"
-  export SHIP_LAND_GATE_SELECT="$sel"
-  landable feat/lint-red lr.sh
-
-  # MONOLITH-PINNED (a) — the lint-red DEGRADATION is under test, not the runner shape.
-  run env SHIP_LAND_GATE_SCOPE=scoped SHIP_LAND_FULL_PER_SUITE=off bash "$SHIPLAND" --trunk main
-  [ "$status" -eq 0 ]                            # a red MAP lint is never a red LAND
-  echo "$output" | grep -q "suite-map lint RED"
-  [ "$(cat "$BATS_ARGV")" = "tests/" ]           # …it buys proof, it does not block
-}
-
-@test "scope: INERT post-land net (stale green stamp) ⇒ scoped degrades to the FULL gate" {
-  scope_fixture
-  stub_selector "tests/a.bats" ""
+  stub_selector "" "tests/a.bats"
   mkdir -p "$POSTLAND_DIR/stamps"
   printf '{"head":"deadbee","verdict":"green"}\n' > "$POSTLAND_DIR/stamps/deadbee.json"
   printf '{"head":"newer","verdict":"red"}\n' > "$POSTLAND_DIR/stamps/newer.json"   # red ≠ liveness
-  touch -t 202001010000 "$POSTLAND_DIR/stamps/deadbee.json"    # net ran once, then went cold
+  touch -t "$(date -v -48H +%Y%m%d%H%M)" "$POSTLAND_DIR/stamps/deadbee.json"   # ran once, went cold
   landable feat/stale-net stn.sh
 
-  # MONOLITH-PINNED (a) — the INERT-net degradation is under test, not the runner shape.
-  run env SHIP_LAND_GATE_SCOPE=scoped SHIP_LAND_FULL_PER_SUITE=off bash "$SHIPLAND" --trunk main
-  [ "$status" -eq 0 ]
-  echo "$output" | grep -q "post-land net appears INERT"
-  [ "$(cat "$BATS_ARGV")" = "tests/" ]
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]                                        # LANDS — the whole inversion
+  echo "$output" | grep -q "looks INERT"                     # …loudly
+  echo "$output" | grep -q "This land PROCEEDS"
+  grep -q '"net":"inert"' "$LAND_LOG"                        # …and durably
+  [ "$(cat "$BATS_ARGV")" = "tests/a.bats" ]                 # the smoke is UNCHANGED by the net…
+  [ "$(grep -cx 'tests/' "$BATS_ARGV")" -eq 0 ]              # …and no corpus was summoned
+  git fetch -q origin main
+  [ -n "$(git ls-tree origin/main -- stn.sh)" ]
 }
 
-@test "scope: staleness guard — fresh stamp ⇒ scoped; kill switch ⇒ scoped despite a stale stamp" {
+@test "net: a fresh GREEN stamp ⇒ net:live, no warning; kill switch ⇒ net:none" {
+  # The positive control for the test above: if the staleness clock were simply broken, "inert"
+  # would fire always or never and both tests would still look sane in isolation. This pins the
+  # OTHER side of the discriminator on the same fixture shape.
   scope_fixture
-  stub_selector "tests/a.bats" ""
+  stub_selector "" "tests/a.bats"
   mkdir -p "$POSTLAND_DIR/stamps"
   printf '{"head":"fresh","verdict":"green"}\n' > "$POSTLAND_DIR/stamps/fresh.json"   # live net
   landable feat/fresh-net frn.sh
-  run env SHIP_LAND_GATE_SCOPE=scoped bash "$SHIPLAND" --trunk main
+  run bash "$SHIPLAND" --trunk main
   [ "$status" -eq 0 ]
-  [ "$(cat "$BATS_ARGV")" = "tests/a.bats" ]
+  grep -q '"net":"live"' "$LAND_LOG"
+  [ "$(echo "$output" | grep -c "looks INERT")" -eq 0 ]
 
   : > "$BATS_ARGV"
-  touch -t 202001010000 "$POSTLAND_DIR/stamps/fresh.json"      # now cold, but guard disabled
+  touch -t "$(date -v -48H +%Y%m%d%H%M)" "$POSTLAND_DIR/stamps/fresh.json"   # cold, guard disabled
   landable feat/killswitch ks.sh
-  run env SHIP_LAND_GATE_SCOPE=scoped POSTLAND_STALENESS_GUARD=off bash "$SHIPLAND" --trunk main
+  run env POSTLAND_STALENESS_GUARD=off bash "$SHIPLAND" --trunk main
   [ "$status" -eq 0 ]
-  [ "$(cat "$BATS_ARGV")" = "tests/a.bats" ]
-  ! echo "$output" | grep -q "INERT"
+  [ "$(echo "$output" | grep -c "looks INERT")" -eq 0 ]      # the kill switch really is one
+  grep -q '"net":"none"' "$LAND_LOG"                         # guard off ⇒ nothing measured
 }
 
-@test "flake ledger: the entry carries a signal field (what failed), not just 'it flaked'" {
+@test "net: stamps with NO green one yet ⇒ 'not adopted', not 'inert' (bootstrap must not warn)" {
   scope_fixture
-  stub_selector "tests/a.bats" "tests/b.bats"
-  echo "tests/a.bats" > "$FLAKE_ONCE"
-  landable feat/flake-signal fs.sh
-
-  run env SHIP_LAND_GATE_SCOPE=scoped bash "$SHIPLAND" --trunk main
-  [ "$status" -eq 0 ]
-  grep -q '"signal":"' "$POSTLAND_DIR/flakes.jsonl"
-  grep -qv '"signal":""' "$POSTLAND_DIR/flakes.jsonl"          # populated, never empty
-}
-
-@test "scope: stamps dir with NO green stamp yet ⇒ no guard (the bootstrap land must not brick)" {
-  scope_fixture
-  stub_selector "tests/a.bats" ""
+  stub_selector "" "tests/a.bats"
   mkdir -p "$POSTLAND_DIR/stamps"
   printf '{"head":"only","verdict":"red"}\n' > "$POSTLAND_DIR/stamps/only.json"
-  touch -t 202001010000 "$POSTLAND_DIR/stamps/only.json"       # ancient, but never green
+  touch -t "$(date -v -48H +%Y%m%d%H%M)" "$POSTLAND_DIR/stamps/only.json"   # ancient, never green
   landable feat/bootstrap bs.sh
 
-  run env SHIP_LAND_GATE_SCOPE=scoped bash "$SHIPLAND" --trunk main
+  run bash "$SHIPLAND" --trunk main
   [ "$status" -eq 0 ]
-  ! echo "$output" | grep -q "INERT" || false                  # a net that never went green
-  [ "$(cat "$BATS_ARGV")" = "tests/a.bats" ]                   # is "not adopted", not "inert"
+  [ "$(echo "$output" | grep -c "looks INERT")" -eq 0 ]      # a net that never went green is
+  grep -q '"net":"none"' "$LAND_LOG"                         # "not adopted", not "inert"
 }
 
-# ── CUT ≠ RED on the FULL tier (run_bats_all) ────────────────────────────────────────────────
+# ════ SMOKE VERDICTS — red blocks · cut proceeds · the budget is a wall ════════════════════════
 # bats masks a signal death: `bats:517-524` pipes exec bats-exec-suite through
 # bats_test_count_validator under `set -o pipefail` (:501), and the validator returns 1 on a
-# truncated TAP — so a killed suite surfaces as plain `1`, never 137/143. The TAP BODY is the
-# only honest discriminator, which is what these two tests pin.
+# truncated TAP — so a killed suite surfaces as plain `1`, never 137/143. The TAP BODY is the only
+# honest discriminator. v2 keeps that discriminator inside run_scoped_suite and changes only what
+# the SMOKE does with a non-verdict: it proceeds. The land never claimed the corpus, so a suite
+# that earned no verdict removes no claim — and blocking on one is the kill → "RED" → re-block →
+# dispatcher-retry runaway (f8e40b4c577d). A NAMED failure is the opposite: O(your diff),
+# reproducible, and the highest-value seconds in the pipeline ⇒ exit 6.
 cut_fixture() {   # shim `bats` that can produce EITHER a cut (rc!=0, zero output) or a real red
   SHIMDIR="$BATS_TEST_TMPDIR/shims-cut"; mkdir -p "$SHIMDIR"
   export BATS_ARGV="$BATS_TEST_TMPDIR/bats-argv-cut"
@@ -639,199 +680,336 @@ cut_fixture() {   # shim `bats` that can produce EITHER a cut (rc!=0, zero outpu
   cat > "$SHIMDIR/bats" <<EOF
 #!/bin/bash
 printf '%s\n' "\$*" >> "$BATS_ARGV"
-if [ "\$(cat "$CUT_MODE" 2>/dev/null)" = red ]; then
-  echo "1..1"; echo "not ok 1 a genuine failure"; exit 1      # a REAL red: a not-ok IS present
-fi
+case "\$(cat "$CUT_MODE" 2>/dev/null)" in
+  red)  echo "1..1"; echo "not ok 1 a genuine failure"; exit 1 ;;  # a REAL red: a not-ok IS present
+  hang) sleep 120; exit 0 ;;                                       # outlives any sane budget
+  cut)  exit 1 ;;                                                  # a CUT: rc!=0, ZERO output, always
+  red-once)                                                        # NAMES a failure, then passes —
+    if [ ! -f "$BATS_TEST_TMPDIR/red-once-done" ]; then             # the carve-out's real subject
+      : > "$BATS_TEST_TMPDIR/red-once-done"; echo "1..1"; echo "not ok 1 intermittent"; exit 1
+    fi
+    echo "1..1"; echo "ok 1 green on the re-run"; exit 0 ;;
+esac
 if [ ! -f "$BATS_TEST_TMPDIR/cut-done" ]; then
-  : > "$BATS_TEST_TMPDIR/cut-done"; exit 1                    # a CUT: rc!=0 with ZERO output
+  : > "$BATS_TEST_TMPDIR/cut-done"; exit 1                    # cut ONCE, then green on the re-run
 fi
 echo "1..1"; echo "ok 1 green on the re-run"; exit 0
 EOF
   chmod +x "$SHIMDIR/bats"
   export PATH="$SHIMDIR:$PATH"
-  export SHIP_LAND_GATE_POLICY="$BATS_TEST_TMPDIR/no-such-policy.sh"   # absent ⇒ full tier
+  export SHIP_LAND_GATE_POLICY="$BATS_TEST_TMPDIR/no-such-policy.sh"
   mkdir -p tests
   printf '#!/usr/bin/env bats\n@test "a" { true; }\n' > tests/a.bats
   git add tests && git commit -q -m "seed suites" && git push -q origin HEAD:main
   git fetch -q origin main
+  stub_selector "" "tests/a.bats"                              # a is the DIRECT suite under test
 }
 
-@test "FULL gate: a CUT (non-zero exit, ZERO 'not ok') is re-run once and CAN land green" {
-  cut_fixture
-  echo cut > "$CUT_MODE"
+@test "smoke: a CUT-then-green DIRECT suite LANDS — a cut is not 'intermittence in your diff'" {
+  # THE DEFECT THIS TEST FOUND (v1, latent; v2, live). The DIRECT carve-out — "a suite of THIS
+  # change that passes only on retry is a finding, not a flake" — was keyed on "the first run was
+  # non-zero", which lumps a CUT in with a NAMED failure. v1 mostly got away with it because only
+  # a minority of suites were ever direct. v2 cannot: the smoke passes its own list as the direct
+  # set, so EVERY smoke suite is direct, and the per-child `timeout` deliberately manufactures cuts
+  # on a slow-but-green suite. Unfixed, "the box was busy for 30s" became exit 6 on a green tree.
+  # The carve-out is now keyed on a NAMED failure in the first run; the fence itself is untouched
+  # (see the POSITIVE CONTROL below, and the v1-lane twin).
+  cut_fixture                                             # default mode: cut once, green on re-run
   landable feat/cut cut.sh
-  run env SHIP_LAND_FULL_PER_SUITE=off bash "$SHIPLAND" --trunk main   # MONOLITH-PINNED (a)
+  run bash "$SHIPLAND" --trunk main
   [ "$status" -eq 0 ]                                     # a cut must NOT be a landing failure
   echo "$output" | grep -q "CUT, not RED"
-  [ "$(grep -cx 'tests/' "$BATS_ARGV")" -eq 2 ]           # ran twice: original + exoneration
+  echo "$output" | grep -q "EXONERATED"
+  [ "$(grep -cx 'tests/a.bats' "$BATS_ARGV")" -eq 2 ]     # ran twice: original + the one re-run
+  grep -q '"smoke":"green"' "$LAND_LOG"                   # green on the re-run ⇒ a real green
+  grep -q '"outcome":"pass-on-retry"' "$POSTLAND_DIR/flakes.jsonl"   # never silent
+  git fetch -q origin main
+  [ -n "$(git ls-tree origin/main -- cut.sh)" ]
 }
 
-@test "FULL gate: a REAL red (a 'not ok' line) is NOT re-run and does NOT land" {
+@test "smoke CARVE-OUT CONTROL: a NAMED failure that passes on retry is still RED in a direct suite" {
+  # The other side of the fix above: keying on `notok` must not have disabled the fence. A first
+  # run that NAMES a failure and then goes green is intermittence in code you are landing — a
+  # finding. If this ever passes green, the carve-out has been softened into nothing.
+  cut_fixture
+  echo red-once > "$CUT_MODE"                             # names a failure, then passes
+  landable feat/red-once ro.sh
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 6 ]
+  echo "$output" | grep -q "finding, not a flake"
+  [ ! -f "$POSTLAND_DIR/flakes.jsonl" ]                   # never exonerated ⇒ never logged
+  git fetch -q origin main
+  [ -z "$(git ls-tree origin/main -- ro.sh)" ]
+}
+
+@test "smoke INVERSION: a suite CUT TWICE PROCEEDS as partial — never exit 9, never a block" {
+  # THE v2 inversion of the GATE-KILLED contract. Under v1 this exact fixture exited 9 and pushed
+  # nothing; the tree was fine and the box was busy, so the land was blocked by a fact about the
+  # MACHINE. In the fast lane a non-verdict cannot block: it is recorded (flakes.jsonl keeps the
+  # denominator and names WHICH suite ran out of machine), attested smoke:"partial", and the land
+  # completes. Exit 9 is now unreachable from the smoke — asserted explicitly below.
+  cut_fixture
+  echo cut > "$CUT_MODE"                                  # cut on EVERY run ⇒ cut twice
+  landable feat/cut-twice ct.sh
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]                                     # NOT 9, NOT 6 — it LANDS
+  [ "$(echo "$output" | grep -c "GATE-KILLED")" -eq 1 ]   # the non-verdict WAS detected…
+  [ "$(echo "$output" | grep -c "GATE RED")" -eq 0 ]      # …and never mislabelled a red
+  echo "$output" | grep -q "smoke PARTIAL"
+  [ "$(grep -cx 'tests/a.bats' "$BATS_ARGV")" -eq 2 ]     # run + ONE bounded re-run, then stop
+  grep -q '"smoke":"partial"' "$LAND_LOG"
+  [ "$(grep -c '"exit":9' "$LAND_LOG")" -eq 0 ]           # exit 9 is unreachable from the smoke
+  grep -q '"outcome":"cut-not-red"' "$POSTLAND_DIR/flakes.jsonl"   # …but never SILENT
+  grep -q '"file":"tests/a.bats"' "$POSTLAND_DIR/flakes.jsonl"     # names the suite, not "tests/"
+  git fetch -q origin main
+  [ -n "$(git ls-tree origin/main -- ct.sh)" ]            # the land completed
+}
+
+@test "smoke POSITIVE CONTROL: a NAMED failure is RED (exit 6) and does NOT land" {
+  # Without this the test above is worthless: a smoke that proceeded on EVERYTHING would pass it.
+  # A named `not ok` is a verdict about the diff and must block, re-run or not.
   cut_fixture
   echo red > "$CUT_MODE"
   landable feat/red red.sh
-  # MONOLITH-PINNED (a)+(b). "No free retry on red" is genuinely monolith-only SEMANTICS, not just
-  # shape: the per-suite tier routes every failure through run_scoped_suite, whose ONE exoneration
-  # re-run is the measured basis of Phase 1's q_eff 0.49% (and is fenced by the DIRECT carve-out,
-  # so a suite belonging to this change is never exonerated). The per-suite twin below asserts the
-  # property that replaces it: a named failure stays RED however many times it is re-run.
-  run env SHIP_LAND_FULL_PER_SUITE=off bash "$SHIPLAND" --trunk main
-  [ "$status" -eq 6 ]                                     # gate RED ⇒ exit 6, unchanged
-  echo "$output" | grep -q "bats RED"
-  [ "$(grep -cx 'tests/' "$BATS_ARGV")" -eq 1 ]           # exactly ONE run — no free retry on red
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 6 ]                                     # gate RED ⇒ exit 6, unchanged from v1
+  echo "$output" | grep -q "smoke RED"
+  [ "$(echo "$output" | grep -c "GATE-KILLED")" -eq 0 ]   # a verdict is never softened
+  grep -q '"smoke":"red"' "$LAND_LOG"
+  git fetch -q origin main
+  [ -z "$(git ls-tree origin/main -- red.sh)" ]           # fail-closed: nothing landed
 }
 
-# ════ admission control (gate_admit) ═══════════════════════════════════════════════════════════
-# Extracted and driven directly: the contract is about WAITING, and a fixture that actually waits
-# would make this suite the slow thing it exists to prevent. Assertions use `|| false` because a
-# non-final [[ ]] is errexit-EXEMPT in bats and would be a DEAD assertion.
-admit_probe() {  # $@ = env assignments → runs gate_admit once, echoes its stderr, returns its rc
-  { sed -n '/^gate_admit() {/,/^}/p' "$SHIPLAND"
-    printf 'gate_admit "the FULL bats suite"\n'
-  } > "$BATS_TEST_TMPDIR/admit.sh"
-  env "$@" bash "$BATS_TEST_TMPDIR/admit.sh" 2>&1
+@test "smoke: the wall BUDGET kills a hanging suite and the land PROCEEDS as partial" {
+  # R5: every step bounded by an absolute-path timeout(1), and ONE deadline for the whole phase so
+  # the bound cannot multiply across children (run_scoped_suite alone calls bats twice per suite).
+  # The v1 failure this replaces is the unbounded cc-inbox-guard fork that hung gates for five days
+  # — rc 124 with notok=0, a HANG that no exit code distinguished from a pass.
+  cut_fixture
+  echo hang > "$CUT_MODE"                                 # sleeps 120s; the budget is 3s
+  landable feat/budget bg.sh
+
+  run env SHIP_LAND_SMOKE_BUDGET_S=3 bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]                                     # bounded ⇒ it PROCEEDS, it does not hang
+  echo "$output" | grep -q "smoke PARTIAL"
+  grep -q '"smoke":"partial"' "$LAND_LOG"
+  git fetch -q origin main
+  [ -n "$(git ls-tree origin/main -- bg.sh)" ]
 }
 
-@test "admit: NEVER waits while the land-lock is held (IN_LAND_LOCK=1 ⇒ instant no-op)" {
-  # The load-bearing one. The gate sits OUTSIDE the lock BY DESIGN (190c839); sleeping inside it
-  # would serialize every other lander behind this one's wait.
-  run timeout 10 bash -c "$(declare -f admit_probe); SHIPLAND='$SHIPLAND' BATS_TEST_TMPDIR='$BATS_TEST_TMPDIR' \
-    admit_probe IN_LAND_LOCK=1 CC_GATE_MAX_LOAD=0.0001 CC_GATE_ADMIT_MAX_WAIT=300 CC_GATE_ADMIT_POLL=30"
+@test "smoke: the budget is a TOTAL, so later suites are skipped rather than each given a fresh one" {
+  # The per-call-vs-per-run distinction that turned a 600s admission bound into 21h of "bounded"
+  # waiting. With two hanging suites and a 3s TOTAL, suite b must never be STARTED — a per-suite
+  # budget would run it for another 3s. Pinned because the multiplication bug is invisible in any
+  # single-suite fixture.
+  cut_fixture
+  printf '#!/usr/bin/env bats\n@test "b" { true; }\n' > tests/b.bats
+  git add tests/b.bats && git commit -q -m "seed b" && git push -q origin HEAD:main
+  git fetch -q origin main
+  stub_selector "" "$(printf 'tests/a.bats\ntests/b.bats')"
+  echo hang > "$CUT_MODE"
+  landable feat/budget-total bgt.sh
+
+  run env SHIP_LAND_SMOKE_BUDGET_S=3 bash "$SHIPLAND" --trunk main
   [ "$status" -eq 0 ]
-  [ -z "$output" ]                                   # not even a DEFERRING line under the lock
+  echo "$output" | grep -q "budget 3s exhausted"
+  [ "$(grep -cx 'tests/b.bats' "$BATS_ARGV")" -eq 0 ]     # never STARTED — the total really is total
+  grep -q '"smoke":"partial"' "$LAND_LOG"
+  grep -q '"smoke_n":1' "$LAND_LOG"                       # one suite attempted, honestly counted
 }
 
-@test "admit: kill switch CC_GATE_MAX_LOAD=0 returns immediately" {
-  run timeout 10 bash -c "$(declare -f admit_probe); SHIPLAND='$SHIPLAND' BATS_TEST_TMPDIR='$BATS_TEST_TMPDIR' \
-    admit_probe CC_GATE_MAX_LOAD=0 CC_GATE_ADMIT_MAX_WAIT=300 CC_GATE_ADMIT_POLL=30"
+# ════ LOAD SHEDDING — shed is a SKIP, never a wait (R7) ════════════════════════════════════════
+# gate_admit is DELETED, so its four tests (kill switch · fail-open · bounded wait · no-wait under
+# the lock) went with it. Three of those properties survive in load_above_ceiling, which is a pure
+# predicate with no clock: the "bounded wait" one has no successor BY DESIGN — there is no wait to
+# bound. Driven by extraction because the contract is a decision, not a pipeline. Assertions use
+# `|| false` because a non-final [[ ]] / bare compound is errexit-EXEMPT in bats ⇒ a DEAD assertion.
+shed_probe() {  # $@ = env assignments → runs load_above_ceiling once, echoes ABOVE/BELOW
+  { sed -n '/^load_above_ceiling() {/,/^}/p' "$SHIPLAND"
+    printf 'if load_above_ceiling; then echo ABOVE; else echo BELOW; fi\n'
+  } > "$BATS_TEST_TMPDIR/shed.sh"
+  # Positive control: a silent sed miss (renamed/moved function) would leave a probe that echoes
+  # BELOW for every input and "passes" three of the four assertions vacuously.
+  grep -q 'sysctl -n vm.loadavg' "$BATS_TEST_TMPDIR/shed.sh" || return 1
+  env "$@" bash "$BATS_TEST_TMPDIR/shed.sh" 2>&1
+}
+
+@test "shed: an unsatisfiable ceiling reads ABOVE; a huge one reads BELOW (it measures at all)" {
+  run bash -c "$(declare -f shed_probe); SHIPLAND='$SHIPLAND' BATS_TEST_TMPDIR='$BATS_TEST_TMPDIR' \
+    shed_probe CC_GATE_MAX_LOAD=0.0001"
   [ "$status" -eq 0 ]
-  [ -z "$output" ]
-}
-
-@test "admit: fails OPEN on a non-numeric ceiling and on a zero poll (never blocks a land)" {
-  run timeout 10 bash -c "$(declare -f admit_probe); SHIPLAND='$SHIPLAND' BATS_TEST_TMPDIR='$BATS_TEST_TMPDIR' \
-    admit_probe CC_GATE_MAX_LOAD=bogus CC_GATE_ADMIT_MAX_WAIT=300 CC_GATE_ADMIT_POLL=30"
+  [ "$output" = "ABOVE" ]                            # 0.0001 is below any real loadavg
+  run bash -c "$(declare -f shed_probe); SHIPLAND='$SHIPLAND' BATS_TEST_TMPDIR='$BATS_TEST_TMPDIR' \
+    shed_probe CC_GATE_MAX_LOAD=100000"
   [ "$status" -eq 0 ]
-  run timeout 10 bash -c "$(declare -f admit_probe); SHIPLAND='$SHIPLAND' BATS_TEST_TMPDIR='$BATS_TEST_TMPDIR' \
-    admit_probe CC_GATE_MAX_LOAD=0.0001 CC_GATE_ADMIT_MAX_WAIT=300 CC_GATE_ADMIT_POLL=0"
+  [ "$output" = "BELOW" ]                            # …and both directions are reachable
+}
+
+@test "shed: kill switch (0|off) and a non-numeric ceiling BOTH fail OPEN (never invent a skip)" {
+  # Fail-open here means "run the bounded smoke", which is safe in a way it was not for gate_admit:
+  # the thing being admitted is now capped by a wall budget, so a broken sensor costs latency and
+  # can never restore the corpus.
+  for v in 0 off bogus; do
+    run bash -c "$(declare -f shed_probe); SHIPLAND='$SHIPLAND' BATS_TEST_TMPDIR='$BATS_TEST_TMPDIR' \
+      shed_probe CC_GATE_MAX_LOAD=$v"
+    [ "$status" -eq 0 ]
+    [ "$output" = "BELOW" ] || false
+  done
+}
+
+@test "shed: NEVER sleeps — the deleted wait must not come back as a poll loop" {
+  # The load-bearing regression. gate_admit's sleep is what starved five gates below their OWN
+  # ceiling; a successor that "just polls briefly" would rebuild it. Two independent assertions:
+  # the predicate is instant, and the SOURCE contains no sleep anywhere in the land path.
+  start="$(date +%s)"
+  run bash -c "$(declare -f shed_probe); SHIPLAND='$SHIPLAND' BATS_TEST_TMPDIR='$BATS_TEST_TMPDIR' \
+    shed_probe CC_GATE_MAX_LOAD=0.0001"
   [ "$status" -eq 0 ]
+  [ "$(( $(date +%s) - start ))" -le 2 ]                              # instant, even when ABOVE
+
+  # Full-line comments are stripped FIRST, then `sleep` must be followed by an argument. Written
+  # that way because the naive pattern matched this file's own PROSE about the deleted sleeps and
+  # failed on a tree with no sleep in it — a test that cannot pass is not a test. Controls run
+  # while writing it: `do sleep 5`, `{ sleep 3; }`, `sleep "$step"`, `&& sleep 1`,
+  # `sleep $((step+jit))` each score 1; a comment saying "sleeping 600 seconds per call" scores 0.
+  [ "$(grep -vE '^[[:space:]]*#' "$SHIPLAND" | grep -cE '(^|[^[:alnum:]_])sleep[[:space:]]+[-0-9"'"'"'$]')" -eq 0 ] || false
 }
 
-@test "admit: an unsatisfiable ceiling DEFERS, then PROCEEDS when the budget expires (bounded)" {
-  # 0.0001 is below any real loadavg ⇒ the wait can never be satisfied; a 1s budget bounds it.
-  run timeout 30 bash -c "$(declare -f admit_probe); SHIPLAND='$SHIPLAND' BATS_TEST_TMPDIR='$BATS_TEST_TMPDIR' \
-    admit_probe CC_GATE_MAX_LOAD=0.0001 CC_GATE_ADMIT_MAX_WAIT=1 CC_GATE_ADMIT_POLL=1"
-  [ "$status" -eq 0 ]                                # bounded: it PROCEEDS, it does not fail
-  echo "$output" | grep -q "DEFERRING" || false      # it announced the deferral
-  echo "$output" | grep -q "proceeding anyway" || false
+@test "shed: load >= ceiling ⇒ smoke SKIPPED, ZERO bats, land proceeds and attests it" {
+  # The end-to-end half: the predicate above, wired into a real pipeline. Shedding defers to the
+  # post-land verifier, never to a queue — so the land completes with no test work at all.
+  scope_fixture
+  stub_selector "" "tests/a.bats"
+  landable feat/shed shd.sh
+
+  run env CC_GATE_MAX_LOAD=0.0001 bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "smoke SKIPPED"
+  echo "$output" | grep -q "never a wait"
+  [ ! -s "$BATS_ARGV" ]                                   # not one suite was started
+  grep -q '"smoke":"skipped"' "$LAND_LOG"
+  grep -q '"smoke_n":0' "$LAND_LOG"
+  git fetch -q origin main
+  [ -n "$(git ls-tree origin/main -- shd.sh)" ]           # a busy box never blocks a land
 }
 
-# ════ GATE-KILLED — signal death is a THIRD state, never RED (backlog 9c5d0ba74e79) ════════════
+# ════ GATE-KILLED, LANE=v1 — signal death is a THIRD state, never RED (backlog 9c5d0ba74e79) ═══
 # The live signature these reproduce: a gate ran green through 1359 tests, then `bats tests/
 # Killed: 9`, and ship-land printed "gate: bats RED / not pushing" — byte-indistinguishable from a
 # real red, so the retry read as flaky tests instead of "we ran out of machine".
-# RED-PROOF: every assertion below fails against the pre-fix tree, where EVERY non-zero bats exit
-# produced "GATE RED" + exit 6. The `red` and `startup` cases are the positive controls — if the
-# kill path ever starts swallowing genuine failures, those two go red.
+#
+# WHY THESE ARE NOW v1-LANED. exit 9 is a claim "the gate ran and earned no verdict", and only a
+# runner that OWNS a verdict can make it. The fast lane's smoke owns none — it is a bounded look at
+# your diff, so a cut there proceeds (see "smoke INVERSION: a suite CUT TWICE PROCEEDS"). The v1
+# corpus still owns the full-suite verdict, so the whole 6-vs-9 split lives on here, unchanged, and
+# is exercised on every run of this suite rather than rotting behind an untested kill switch.
+# The two lanes' rules are NOT in tension: v1 blocks on a non-verdict because it was asked to
+# PROVE the tree; the fast lane proceeds because it never claimed to.
+# RED-PROOF: every assertion below fails against the pre-c605a2e tree, where EVERY non-zero bats
+# exit produced "GATE RED" + exit 6. The `red` and `startup` cases are the positive controls — if
+# the kill path ever starts swallowing genuine failures, those two go red.
+# Counts are per-suite arithmetic: scope_fixture seeds TWO suites, so a corpus-wide cut is 2 × (run
+# + one bounded re-run) = 4 invocations, not 2.
 
-@test "gate-killed: a SIGNAL-killed full suite exits 9 (not 6), pushes nothing, retries once" {
+@test "v1 gate-killed: a SIGNAL-killed corpus exits 9 (not 6), pushes nothing, retries once each" {
   scope_fixture
   echo sig > "$KILL_MODE"
   gc="$(git rev-parse --git-common-dir)"; rm -f "$gc/gate-green"
   landable feat/killed gk.sh
 
-  run env SHIP_LAND_FULL_PER_SUITE=off bash "$SHIPLAND" --trunk main   # MONOLITH-PINNED (b)
+  run env SHIP_LAND_LANE=v1 bash "$SHIPLAND" --trunk main
   [ "$status" -eq 9 ]                                          # 9 = no verdict, NOT 6 = red
   echo "$output" | grep -q "GATE-KILLED" || false
   ! echo "$output" | grep -q "GATE RED" || false               # never both, never the wrong one
-  [ "$(grep -c . "$BATS_ARGV")" -eq 2 ]                        # first run + ONE bounded re-run
+  [ "$(grep -c . "$BATS_ARGV")" -eq 4 ]                        # 2 suites × (run + ONE re-run)
   [ ! -f "$gc/gate-green" ]                                    # a kill proves nothing ⇒ no marker
   git fetch -q origin main
   [ -z "$(git ls-tree origin/main -- gk.sh)" ]                 # fail-closed: nothing landed
 }
 
-@test "gate-killed: land.log attests exit 9, so a kill is not counted in the red denominator" {
+@test "v1 gate-killed: land.log attests exit 9, so a kill is not in the red denominator" {
   scope_fixture
   echo sig > "$KILL_MODE"
   landable feat/killed-log gkl.sh
 
-  run bash "$SHIPLAND" --trunk main
+  run env SHIP_LAND_LANE=v1 bash "$SHIPLAND" --trunk main
   [ "$status" -eq 9 ]
   grep -q '"exit":9' "$LAND_LOG" || false
-  ! grep -q '"exit":6' "$LAND_LOG"
+  # `|| false` is load-bearing: a non-final `!` compound is errexit-EXEMPT in bats, so this line
+  # was a DEAD assertion that could never fail (scripts/bats-assert-liveness.py flags it).
+  ! grep -q '"exit":6' "$LAND_LOG" || false
+  grep -q '"gate_scope":"v1"' "$LAND_LOG"                      # and names the lane that ran it
 }
 
-@test "gate-killed: a non-zero suite that names NO failing test is a kill, not a red" {
+@test "v1 gate-killed: a non-zero suite that names NO failing test is a kill, not a red" {
   # The exact shape of the two poisoned live stamps: failing=["tests/"], retries=0. The retry
   # ladder identified ZERO failing FILES — the signature of signal-kill, not test failure.
   scope_fixture
   echo unattrib > "$KILL_MODE"
   landable feat/unattrib gu.sh
 
-  run bash "$SHIPLAND" --trunk main
+  run env SHIP_LAND_LANE=v1 bash "$SHIPLAND" --trunk main
   [ "$status" -eq 9 ]
   echo "$output" | grep -q "GATE-KILLED" || false
 }
 
-@test "gate-killed POSITIVE CONTROL: a suite that NAMES a failing test still exits 6" {
+@test "v1 gate-killed POSITIVE CONTROL: a suite that NAMES a failing test still exits 6" {
   # If this ever goes green-by-accident the whole split is worthless — a real red MUST stay a red.
   scope_fixture
   echo red > "$KILL_MODE"
   landable feat/really-red gr.sh
 
-  run env SHIP_LAND_FULL_PER_SUITE=off bash "$SHIPLAND" --trunk main   # MONOLITH-PINNED (b)
+  run env SHIP_LAND_LANE=v1 bash "$SHIPLAND" --trunk main
   [ "$status" -eq 6 ]
   echo "$output" | grep -q "GATE RED" || false
   ! echo "$output" | grep -q "GATE-KILLED" || false
-  [ "$(grep -c . "$BATS_ARGV")" -eq 1 ]                        # a RED is never re-run
 }
 
-@test "gate-killed: a suite that emits NO TAP at all is ALSO a non-verdict (exit 9, fail-closed)" {
-  # An earlier draft of this branch split "never got going" from "died mid-run" and called the
-  # former a RED. Retired deliberately on reconciliation: the ONE discriminator is `not ok` in the
-  # TAP — shared by the FULL and SCOPED tiers so they cannot disagree about what a cut is — and a
-  # second rule keyed on a plan line buys nothing, since a suite that never starts also names no
-  # failing test and both outcomes are equally fail-closed. This test PINS that choice rather than
-  # leaving it implicit.
+@test "v1 gate-killed: a suite that emits NO TAP at all is ALSO a non-verdict (exit 9, fail-closed)" {
+  # An earlier draft split "never got going" from "died mid-run" and called the former a RED.
+  # Retired deliberately: the ONE discriminator is `not ok` in the TAP, and a second rule keyed on
+  # a plan line buys nothing — a suite that never starts also names no failing test, and both
+  # outcomes are equally fail-closed. This test PINS that choice rather than leaving it implicit.
   scope_fixture
   echo startup > "$KILL_MODE"
   landable feat/no-tap gn.sh
 
-  run bash "$SHIPLAND" --trunk main
+  run env SHIP_LAND_LANE=v1 bash "$SHIPLAND" --trunk main
   [ "$status" -eq 9 ]
   echo "$output" | grep -q "GATE-KILLED" || false
   git fetch -q origin main
   [ -z "$(git ls-tree origin/main -- gn.sh)" ]                 # the property that actually matters
 }
 
-@test "gate-killed: a cut-then-green re-run LANDS (the whole point of the single re-run)" {
+@test "v1 gate-killed: a cut-then-green re-run LANDS (the whole point of the single re-run)" {
   scope_fixture
-  echo sig-once > "$KILL_MODE"                                 # cut once, then normal
+  echo sig-once > "$KILL_MODE"                                 # the FIRST invocation only
   landable feat/kill-then-green kg.sh
 
-  run env SHIP_LAND_FULL_PER_SUITE=off bash "$SHIPLAND" --trunk main   # MONOLITH-PINNED (b)
+  run env SHIP_LAND_LANE=v1 bash "$SHIPLAND" --trunk main
   [ "$status" -eq 0 ]
   echo "$output" | grep -q "CUT, not RED" || false             # it named the non-verdict…
-  [ "$(grep -c . "$BATS_ARGV")" -eq 2 ]                        # …re-ran…
+  [ "$(grep -c . "$BATS_ARGV")" -eq 3 ]                        # …re-ran only the cut suite…
   git fetch -q origin main
   [ -n "$(git ls-tree origin/main -- kg.sh)" ]                 # …and landed
 }
 
-@test "gate-killed: a cut re-run that turns up REAL failures is a red (6), not a kill (9)" {
-  # The re-run's TAP is now captured precisely so this case is decidable. Before, both outcomes
-  # printed "RED (or cut twice)" — a guess handed to the caller at the moment the answer decides
-  # whether retrying is correct. A real failure surfacing on the re-run must win.
+@test "v1 gate-killed: a cut re-run that turns up REAL failures is a red (6), not a kill (9)" {
+  # The re-run's TAP is captured precisely so this case is decidable. Before, both outcomes printed
+  # "RED (or cut twice)" — a guess handed to the caller at the moment the answer decides whether
+  # retrying is correct. A real failure surfacing on the re-run must win.
   scope_fixture
   echo cut-then-red > "$KILL_MODE"
   landable feat/cut-then-red ctr.sh
 
-  run bash "$SHIPLAND" --trunk main
+  run env SHIP_LAND_LANE=v1 bash "$SHIPLAND" --trunk main
   [ "$status" -eq 6 ]
   echo "$output" | grep -q "on the re-run" || false
-  ! echo "$output" | grep -q "GATE-KILLED"
 }
 
-@test "gate-killed: a REAL red alongside a kill exits 6 — a verdict outranks a non-verdict" {
+@test "v1 gate-killed: a REAL red alongside a kill exits 6 — a verdict outranks a non-verdict" {
   # Mixed run: shellcheck names a genuine defect while the suite dies. Reporting 9 would tell the
   # caller "just retry", losing a real finding. GATE_RED wins.
   scope_fixture
@@ -840,7 +1018,7 @@ admit_probe() {  # $@ = env assignments → runs gate_admit once, echoes its std
   printf '#!/usr/bin/env bash\nfoo=$(ls)\necho $foo\n' > mixed.sh    # SC2086 ⇒ shellcheck red
   git add mixed.sh && git commit -q -m "feat: mixed"
 
-  run bash "$SHIPLAND" --trunk main
+  run env SHIP_LAND_LANE=v1 bash "$SHIPLAND" --trunk main
   [ "$status" -eq 6 ]
   echo "$output" | grep -q "shellcheck RED" || false
   echo "$output" | grep -q "GATE RED" || false
@@ -848,6 +1026,26 @@ admit_probe() {  # $@ = env assignments → runs gate_admit once, echoes its std
   # was 6, so the exit code alone cannot distinguish the trees. This asserts the kill was actually
   # DETECTED and then outranked — not that detection never happened.
   echo "$output" | grep -q "GATE-KILLED" || false
+}
+
+@test "statics RED still runs the smoke, so one cycle names BOTH findings" {
+  # The fast-lane twin of the test above, and a deliberate design choice worth pinning: run_gate
+  # does NOT skip the smoke when the statics already went red. ≤120s on an already-doomed land buys
+  # the author every finding in ONE round-trip instead of one per re-run — the same reasoning as
+  # run_corpus's no-fail-fast rule.
+  scope_fixture
+  stub_selector "" "tests/a.bats"
+  export CUT_MODE="$BATS_TEST_TMPDIR/unused-cut-mode"
+  echo red > "$KILL_MODE"                                      # the smoke suite names a failure…
+  git checkout -q -b feat/both main
+  printf '#!/usr/bin/env bash\nfoo=$(ls)\necho $foo\n' > both.sh     # …and shellcheck names one too
+  git add both.sh && git commit -q -m "feat: both"
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 6 ]
+  echo "$output" | grep -q "shellcheck RED" || false           # BOTH findings surfaced…
+  echo "$output" | grep -q "smoke RED" || false                # …in the same cycle
+  [ "$(grep -cx 'tests/a.bats' "$BATS_ARGV")" -ge 1 ]          # the smoke really ran
 }
 
 @test "env hygiene: gate_bats scrubs LANDER tuning so a flag cannot forge a verdict" {
@@ -862,15 +1060,15 @@ admit_probe() {  # $@ = env assignments → runs gate_admit once, echoes its std
   mkdir -p "$BATS_TEST_TMPDIR/bin"
   cat > "$BATS_TEST_TMPDIR/bin/bats" <<'STUB'
 #!/bin/bash
-printf 'ROUNDS=[%s] RETRIES=[%s] SCOPE=[%s] LOCKWAIT=[%s] LOCKTTL=[%s] MAXLOAD=[%s] PERSUITE=[%s] ARGS=[%s]\n' \
+printf 'ROUNDS=[%s] RETRIES=[%s] SCOPE=[%s] LOCKWAIT=[%s] LOCKTTL=[%s] MAXLOAD=[%s] LANE=[%s] BUDGET=[%s] TMOUT=[%s] ARGS=[%s]\n' \
   "${SHIP_LAND_GATE_ROUNDS-unset}" "${SHIP_LAND_VERIFY_RETRIES-unset}" \
   "${SHIP_LAND_GATE_SCOPE-unset}" "${LAND_LOCK_WAIT-unset}" "${LAND_LOCK_TTL-unset}" \
-  "${CC_GATE_MAX_LOAD-unset}" "${SHIP_LAND_FULL_PER_SUITE-unset}" "$*"
+  "${CC_GATE_MAX_LOAD-unset}" "${SHIP_LAND_LANE-unset}" "${SHIP_LAND_SMOKE_BUDGET_S-unset}" \
+  "${SHIP_LAND_TIMEOUT_BIN-unset}" "$*"
 STUB
   chmod +x "$BATS_TEST_TMPDIR/bin/bats"
 
-  # Extract the function rather than sourcing ship-land.sh (sourcing would RUN the pipeline) —
-  # same idiom postland-verify.sh's selftest uses for gate_admit.
+  # Extract the function rather than sourcing ship-land.sh (sourcing would RUN the pipeline).
   sed -n '/^gate_bats() {/,/^}/p' "$SHIPLAND" > "$BATS_TEST_TMPDIR/probe.sh"
   # Positive control: a silent sed miss (function renamed/moved) would leave an empty probe that
   # "passes" every unset assertion vacuously. Require the function to actually be there.
@@ -879,7 +1077,8 @@ STUB
 
   run env PATH="$BATS_TEST_TMPDIR/bin:$PATH" \
       SHIP_LAND_GATE_ROUNDS=0 SHIP_LAND_VERIFY_RETRIES=9 SHIP_LAND_GATE_SCOPE=full \
-      LAND_LOCK_WAIT=10800 LAND_LOCK_TTL=99 CC_GATE_MAX_LOAD=31 SHIP_LAND_FULL_PER_SUITE=off \
+      LAND_LOCK_WAIT=10800 LAND_LOCK_TTL=99 CC_GATE_MAX_LOAD=31 \
+      SHIP_LAND_LANE=v1 SHIP_LAND_SMOKE_BUDGET_S=1 SHIP_LAND_TIMEOUT_BIN= \
       bash "$BATS_TEST_TMPDIR/probe.sh"
   [ "$status" -eq 0 ]
   # every LANDER knob the tests assert against arrives UNSET, whatever the operator set
@@ -888,12 +1087,18 @@ STUB
   echo "$output" | grep -q 'SCOPE=\[unset\]'    || false
   echo "$output" | grep -q 'LOCKWAIT=\[unset\]' || false
   echo "$output" | grep -q 'LOCKTTL=\[unset\]'  || false
-  # Phase 1's kill switch is LANDER tuning too. Unscrubbed, an operator landing with the monolith
-  # restored would bleed `off` into every fixture pipeline in this suite, so the per-suite tests
-  # below would silently exercise the monolith and go red on a tree that is fine.
-  echo "$output" | grep -q 'PERSUITE=\[unset\]' || false
-  # FORCED to 0, deliberately NOT unset: a test must never sit in admission control (it would
-  # stall the gate up to CC_GATE_ADMIT_MAX_WAIT per call and read as a hang).
+  # THE SHARPEST ONE (v2). The lane decides whether a pipeline runs a smoke or the whole corpus,
+  # and this suite asserts fast-lane semantics — so an operator landing with the kill switch on
+  # would bleed `v1` into all ~50 fixture pipelines here and red a tree that is fine. That is the
+  # ROUNDS=0 defect verbatim, on the flag v2 introduces.
+  echo "$output" | grep -q 'LANE=\[unset\]'     || false
+  # …and the two knobs that would silently change a fixture's smoke: a budget, and bounding turned
+  # OFF via a set-but-EMPTY timeout bin (which `${VAR:-}` cannot even distinguish from unset).
+  echo "$output" | grep -q 'BUDGET=\[unset\]'   || false
+  echo "$output" | grep -q 'TMOUT=\[unset\]'    || false
+  # FORCED to 0, deliberately NOT unset: 0 is the never-shed kill switch, so a fixture's smoke
+  # always runs. Inherited, whether a nested pipeline smoked at all would depend on the ambient
+  # load of the box the suite happens to run on — a test verdict decided by `uptime`.
   echo "$output" | grep -q 'MAXLOAD=\[0\]'      || false
   # and the scrub must not eat the arguments
   echo "$output" | grep -q 'ARGS=\[tests/foo.bats\]' || false
@@ -955,30 +1160,29 @@ add_suite() {   # $1=branch $2=suite basename $3=setup() body
   [ -z "$(git ls-tree origin/main -- tests/leak.bats)" ] # never reached trunk
 }
 
-@test "hermeticity: the SAME suite WITH a fixtured \$HOME lands green and bats still runs" {
+@test "hermeticity: the SAME suite WITH a fixtured \$HOME lands green and the smoke still runs" {
   herm_fixture
+  stub_selector "" "tests/leak.bats"                     # the added suite is DIRECT to this change
   add_suite feat/herm leak.bats 'export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"'
 
-  # MONOLITH-PINNED (a) — landed from a sibling branch against the monolith, which was the runner
-  # at the time it was written. The property under test is the RATCHET's (it discriminates, and it
-  # does not short-circuit a clean tree), not the runner's; only the argv SHAPE it reads that
-  # through changed. Its per-suite equivalent is asserted in "PER-SUITE RUNNER" below.
-  run env SHIP_LAND_FULL_PER_SUITE=off bash "$SHIPLAND" --trunk main
+  run bash "$SHIPLAND" --trunk main
   [ "$status" -eq 0 ]                                    # positive control: the ratchet discriminates
-  [ "$(cat "$BATS_ARGV")" = "tests/" ]                   # and does not short-circuit a clean tree
+  [ "$(cat "$BATS_ARGV")" = "tests/leak.bats" ]          # and does not short-circuit a clean tree
   git fetch -q origin main
   [ -n "$(git ls-tree origin/main -- tests/leak.bats)" ]
 }
 
-@test "hermeticity: it fires in SCOPED mode too, even when the selector picks nothing" {
+@test "hermeticity: it fires even on a land whose smoke selects NOTHING (selection can't reach it)" {
   # The hole that let both leaks land: gate-select maps a changed tests/X.bats to X.bats, and the
   # ratchet suite only to scripts/test-hermeticity-lint.sh — so no selection can ever reach it.
-  # A lint-only land (selector picks 0 suites) is the extreme case and must STILL be blocked.
+  # v2 makes this MORE important, not less: the fast lane's smoke is pure selection, so a ratchet
+  # that lived inside selection would now be unreachable on every land, not merely most. It sits
+  # OUTSIDE the lane machinery on purpose and runs before any suite in either lane.
   herm_fixture
-  stub_selector "" ""
-  add_suite feat/leak-scoped leak.bats 'REPO="$(pwd)"'
+  stub_selector "" ""                                    # zero direct suites ⇒ no smoke at all
+  add_suite feat/leak-noselect leak.bats 'REPO="$(pwd)"'
 
-  run env SHIP_LAND_GATE_SCOPE=scoped bash "$SHIPLAND" --trunk main
+  run bash "$SHIPLAND" --trunk main
   [ "$status" -eq 6 ]
   echo "$output" | grep -q 'leak.bats'
   [ ! -s "$BATS_ARGV" ]
@@ -997,17 +1201,23 @@ add_suite() {   # $1=branch $2=suite basename $3=setup() body
   [ "$status" -eq 0 ]
   [ "$(echo "$output" | grep -c 'test-hermeticity RED')" -eq 0 ]   # -qv would pass on ANY other line
 }
-# ════ PER-SUITE RUNNER — the DEFAULT tier since Phase 1 ════════════════════════════════════════
-# docs/plans/GATE_ARCHITECTURE_PLAN.md §3: the FULL corpus now runs ONE bats process per suite, so
-# a kill costs ONE suite instead of all 126 (governing law P(green) = (1-q)^n at q=2.94%/suite ⇒
-# P(green|n=126) 2.3% → 49.9%, at +3.0% wall). These are the per-suite TWINS of the MONOLITH-PINNED
-# tests above — identical semantics, per-suite arithmetic — plus the two properties only this tier
-# can express (a corpus mixing a kill with a real red, and the kill switch itself).
-# RED-PROOF: every exit-9 assertion here fails against the pre-fix per-suite loop, which collapsed
-# KILLED into GATE_RED=1 ⇒ exit 6 and would have silently undone c605a2e.
+# ════ LANE=v1 CORPUS — the kill switch, kept exercised so it cannot rot ════════════════════════
+# SHIP_LAND_LANE=v1 restores the pre-inversion full-corpus gate for one release. It is an ENV
+# switch rather than a revert because a revert would itself need the gate — the bootstrap deadlock
+# the plan exists to escape — and an UNTESTED escape hatch rots exactly when it is needed, so it
+# is asserted here on every run.
+# WHAT v1 STILL OWNS: the full-suite verdict, and therefore the whole 6-vs-9 split (above) and the
+# flake-exoneration machinery (below) — exoneration can only fire for a NON-direct suite, and the
+# fast lane runs direct suites only, so the v1 corpus is its last live home.
+# WHAT v1 DOES NOT RESTORE, permanently: bats under the land-lock (asserted in land-gate-cas.bats,
+# both lanes) and gate-green stamping (asserted above). The kill switch buys back the PROOF, never
+# the pathologies — those were the architecture, not the tier.
+# The runner is ONE bats process per suite (GATE_ARCHITECTURE_PLAN §3: P(green) = (1-q)^n at
+# q=2.94%/suite ⇒ 2.3% at n=126 → 49.9% with the re-run). The monolithic `bats tests/` runner and
+# its SHIP_LAND_FULL_PER_SUITE kill switch are DELETED, so no test here may assert `= "tests/"`.
 persuite_fixture() {  # seed tests/{a,b}.bats + a shim whose behaviour is keyed PER SUITE FILE —
-                      # the monolith could not express a mixed-outcome corpus at all, and that is
-                      # exactly where "a verdict outranks a non-verdict" has to arbitrate.
+                      # the only shape that can express a corpus mixing a kill with a real red,
+                      # which is where "a verdict outranks a non-verdict" has to arbitrate.
   SHIMDIR="$BATS_TEST_TMPDIR/shims-ps"; mkdir -p "$SHIMDIR"
   export BATS_ARGV="$BATS_TEST_TMPDIR/bats-argv-ps"
   export MODE_DIR="$BATS_TEST_TMPDIR/modes"; mkdir -p "$MODE_DIR"
@@ -1024,69 +1234,82 @@ case "\$(cat "$MODE_DIR/\$b" 2>/dev/null)" in
   sig-once) if [ ! -f "$BATS_TEST_TMPDIR/ps-cut-\$b" ]; then
               : > "$BATS_TEST_TMPDIR/ps-cut-\$b"; echo "1..3"; echo "ok 1 alpha"; exit 137
             fi ;;
+  red-once) if [ ! -f "$BATS_TEST_TMPDIR/ps-red-\$b" ]; then       # NAMES a failure, then passes
+              : > "$BATS_TEST_TMPDIR/ps-red-\$b"; echo "1..1"; echo "not ok 1 intermittent"; exit 1
+            fi ;;
 esac
 echo "1..1"; echo "ok 1 fine"; exit 0
 EOF
   chmod +x "$SHIMDIR/bats"
   export PATH="$SHIMDIR:$PATH"
-  export SHIP_LAND_GATE_POLICY="$BATS_TEST_TMPDIR/no-such-policy.sh"   # absent ⇒ full tier
+  export SHIP_LAND_GATE_POLICY="$BATS_TEST_TMPDIR/no-such-policy.sh"
   mkdir -p tests
   printf '#!/usr/bin/env bats\n@test "a" { true; }\n' > tests/a.bats
   printf '#!/usr/bin/env bats\n@test "b" { true; }\n' > tests/b.bats
   git add tests && git commit -q -m "seed suites" && git push -q origin HEAD:main
   git fetch -q origin main
+  stub_selector "" ""            # no direct suites: exoneration is what this tier is kept for
 }
 
-@test "per-suite: FULL tier runs EVERY suite as its own process — and still makes the full claim" {
+@test "v1 lane: the corpus runner runs EVERY suite, one process each — and the fast lane does not" {
+  # The kill switch's whole contract in one test, with its own control: the SAME fixture and the
+  # SAME selector, run twice. LANE=v1 runs both seeded suites; the default fast lane runs NOTHING
+  # (the selector offers no direct suites). Without the second half this would pass on a build
+  # where the lane flag was ignored and the corpus ran unconditionally.
   persuite_fixture
-  stub_selector "tests/a.bats" ""          # a selector EXISTS but full mode must ignore it
-  gc="$(git rev-parse --git-common-dir)"; rm -f "$gc/gate-green"
-  landable feat/ps-full psf.sh
+  landable feat/v1-corpus v1c.sh
 
-  run bash "$SHIPLAND" --trunk main
+  run env SHIP_LAND_LANE=v1 bash "$SHIPLAND" --trunk main
   [ "$status" -eq 0 ]
   [ "$(grep -cx 'tests/a.bats' "$BATS_ARGV")" -eq 1 ]      # the WHOLE corpus…
   [ "$(grep -cx 'tests/b.bats' "$BATS_ARGV")" -eq 1 ]
   [ "$(grep -c . "$BATS_ARGV")" -eq 2 ]                    # …nothing else, nothing twice
-  [ "$(grep -cx 'tests/' "$BATS_ARGV")" -eq 0 ]            # and NEVER the monolithic invocation
-  # THE INVARIANT Phase 1 must not spend: same suites ⇒ same claim. Only blast radius changed.
-  [ "$(cat "$gc/gate-green")" = "$(git rev-parse HEAD)" ]
-  grep -q '"gate_scope":"full"' "$LAND_LOG"
+  [ "$(grep -cx 'tests/' "$BATS_ARGV")" -eq 0 ]            # and NEVER the deleted monolith call
+  echo "$output" | grep -q "FULL corpus green"
+  grep -q '"gate_scope":"v1"' "$LAND_LOG"
+
+  : > "$BATS_ARGV"
+  landable feat/v1-control v1ctl.sh
+  run bash "$SHIPLAND" --trunk main                        # CONTROL: same fixture, default lane
+  [ "$status" -eq 0 ]
+  [ ! -s "$BATS_ARGV" ]                                    # zero suites — the lane really decides
 }
 
-@test "per-suite: a CUT suite is re-run ONCE in a fresh TMPDIR and can land green" {
+@test "v1 lane: a CUT suite is re-run ONCE in a fresh TMPDIR and can land green" {
   persuite_fixture
-  stub_selector "" ""                      # no DIRECT suites — exoneration is what is under test
   echo sig-once > "$MODE_DIR/a.bats"
   landable feat/ps-cut psc.sh
 
-  run bash "$SHIPLAND" --trunk main
+  run env SHIP_LAND_LANE=v1 bash "$SHIPLAND" --trunk main
   [ "$status" -eq 0 ]
   echo "$output" | grep -q "CUT, not RED"
   [ "$(grep -cx 'tests/a.bats' "$BATS_ARGV")" -eq 2 ]      # the cut suite: run + ONE re-run
-  # THE WHOLE POINT OF PHASE 1, as an assertion: the neighbour paid nothing for a's kill. Under the
-  # monolith that same kill discarded the entire corpus and was attested exit:6 RED.
+  # The point of per-suite, as an assertion: the neighbour paid nothing for a's kill. Under the
+  # deleted monolith that same kill discarded the entire corpus and was attested exit:6 RED.
   [ "$(grep -cx 'tests/b.bats' "$BATS_ARGV")" -eq 1 ]
   grep -q '"outcome":"pass-on-retry"' "$POSTLAND_DIR/flakes.jsonl"
   grep -q '"file":"tests/a.bats"' "$POSTLAND_DIR/flakes.jsonl"
+  grep -q '"phase":"land-gate"' "$POSTLAND_DIR/flakes.jsonl"
+  # The ledger names WHAT failed, not just "it flaked" — an unactionable line is not a denominator.
+  grep -q '"signal":"' "$POSTLAND_DIR/flakes.jsonl"
+  [ "$(grep -c '"signal":""' "$POSTLAND_DIR/flakes.jsonl")" -eq 0 ]
   git fetch -q origin main
   [ -n "$(git ls-tree origin/main -- psc.sh)" ]
 }
 
-@test "per-suite: a corpus of CUT suites is a NON-VERDICT (exit 9), never a red" {
+@test "v1 lane: a corpus of CUT suites is a NON-VERDICT (exit 9), never a red" {
   persuite_fixture
-  stub_selector "" ""
   echo sig > "$MODE_DIR/a.bats"
   echo sig > "$MODE_DIR/b.bats"
   gc="$(git rev-parse --git-common-dir)"; rm -f "$gc/gate-green"
   landable feat/ps-killed psk.sh
 
-  run bash "$SHIPLAND" --trunk main
+  run env SHIP_LAND_LANE=v1 bash "$SHIPLAND" --trunk main
   [ "$status" -eq 9 ]                                      # c605a2e's non-verdict, PRESERVED
   echo "$output" | grep -q "GATE-KILLED"
   [ "$(echo "$output" | grep -c "GATE RED")" -eq 0 ]       # never both, never the wrong one
   [ "$(grep -c . "$BATS_ARGV")" -eq 4 ]                    # 2 suites × (run + ONE bounded re-run)
-  [ ! -f "$gc/gate-green" ]                                # a kill proves nothing ⇒ no marker
+  [ ! -f "$gc/gate-green" ]
   grep -q '"exit":9' "$LAND_LOG"                           # …and is not in the red denominator
   grep -q '"outcome":"cut-not-red"' "$POSTLAND_DIR/flakes.jsonl"
   grep -q '"file":"tests/a.bats"' "$POSTLAND_DIR/flakes.jsonl"   # WHICH suite ran out of machine
@@ -1094,15 +1317,14 @@ EOF
   [ -z "$(git ls-tree origin/main -- psk.sh)" ]            # fail-closed: nothing landed
 }
 
-@test "per-suite POSITIVE CONTROL: a suite that NAMES a failing test is RED (6), re-run or not" {
-  # If this ever goes green-by-accident the whole split is worthless. The per-suite tier grants one
-  # exoneration re-run the monolith did not; a NAMED failure must survive it unchanged.
+@test "v1 lane POSITIVE CONTROL: a suite that NAMES a failing test is RED (6), re-run or not" {
+  # If this ever goes green-by-accident the whole split is worthless. The runner grants one
+  # exoneration re-run; a NAMED failure must survive it unchanged.
   persuite_fixture
-  stub_selector "" ""
   echo red > "$MODE_DIR/a.bats"
   landable feat/ps-red psr.sh
 
-  run bash "$SHIPLAND" --trunk main
+  run env SHIP_LAND_LANE=v1 bash "$SHIPLAND" --trunk main
   [ "$status" -eq 6 ]
   echo "$output" | grep -q "GATE RED"
   echo "$output" | grep -q "failed twice"
@@ -1111,17 +1333,16 @@ EOF
   [ -z "$(git ls-tree origin/main -- psr.sh)" ]
 }
 
-@test "per-suite: one suite CUT + another RED ⇒ exit 6 — a verdict outranks a non-verdict" {
-  # Only the per-suite tier can even produce this corpus, and it is the case that decides whether
-  # the loop may fail-fast: it may not. Stopping at a's kill would report 9 ("retry when quieter")
-  # for a tree that is genuinely broken — the dispatcher would retry it forever (f8e40b4c577d).
+@test "v1 lane: one suite CUT + another RED ⇒ exit 6 — a verdict outranks a non-verdict" {
+  # The case that decides whether the loop may fail-fast: it may not. Stopping at a's kill would
+  # report 9 ("retry when quieter") for a tree that is genuinely broken — the dispatcher would then
+  # retry it forever (f8e40b4c577d).
   persuite_fixture
-  stub_selector "" ""
   echo sig > "$MODE_DIR/a.bats"            # no verdict…
   echo red > "$MODE_DIR/b.bats"            # …and a real one, AFTER it in glob order
   landable feat/ps-mixed psm.sh
 
-  run bash "$SHIPLAND" --trunk main
+  run env SHIP_LAND_LANE=v1 bash "$SHIPLAND" --trunk main
   [ "$status" -eq 6 ]
   echo "$output" | grep -q "GATE-KILLED"                   # the cut WAS detected…
   echo "$output" | grep -q "GATE RED"                      # …and then outranked
@@ -1129,51 +1350,19 @@ EOF
   [ -z "$(git ls-tree origin/main -- psm.sh)" ]
 }
 
-@test "per-suite kill switch: SHIP_LAND_FULL_PER_SUITE=off restores the ONE-process monolith" {
-  # The escape hatch is an env flag, NOT a revert — a revert would itself need the gate, which is
-  # the bootstrap deadlock Phase 1 exists to escape. So the flag has to keep working, which is only
-  # true if something asserts it. This is the ONE test that proves the MONOLITH-PINNED tests above
-  # are still exercising a reachable path.
+@test "v1 lane: a DIRECT suite whose NAMED failure vanishes on retry is never exonerated" {
+  # THE correctness fence on the exoneration re-run, and it must hold in v1 too: intermittence in
+  # code you are landing is a FINDING, not a flake. The fast-lane twin is "smoke CARVE-OUT
+  # CONTROL…" above; this is the half where non-direct suites also exist to be confused with it.
+  # The fixture NAMES a failure (`red-once`) rather than being killed: keying the carve-out on a
+  # named `not ok` is the v2 correction — see the cut-then-green tests — and a fixture that is
+  # merely SIGKILLed would now (correctly) land, so it can no longer stand in for this rule.
   persuite_fixture
-  stub_selector "" ""
-  landable feat/ps-off pso.sh
-
-  run env SHIP_LAND_FULL_PER_SUITE=off bash "$SHIPLAND" --trunk main
-  [ "$status" -eq 0 ]
-  [ "$(cat "$BATS_ARGV")" = "tests/" ]                     # one invocation for the whole corpus
-  echo "$output" | grep -q "monolithic"
-}
-
-@test "scoped tier: a twice-CUT selected suite is a non-verdict (exit 9), not a red" {
-  # The half of c605a2e's promise the SCOPED path never kept. Before this, every scoped failure
-  # left GATE_RED/GATE_KILLED at 0, so gate_nonzero_code's else branch reported a signal-killed
-  # scoped land as exit 6 "your code is broken" — the two tiers disagreeing about what a cut is,
-  # which is precisely what sharing one discriminator was supposed to make impossible.
-  persuite_fixture
-  stub_selector "tests/a.bats" ""
-  echo sig > "$MODE_DIR/a.bats"
-  landable feat/ps-scoped-cut pssc.sh
-
-  run env SHIP_LAND_GATE_SCOPE=scoped bash "$SHIPLAND" --trunk main
-  [ "$status" -eq 9 ]
-  echo "$output" | grep -q "GATE-KILLED"
-  [ "$(echo "$output" | grep -c "GATE RED")" -eq 0 ]
-  [ "$(grep -cx 'tests/b.bats' "$BATS_ARGV")" -eq 0 ]      # still scoped: b was never selected
-  grep -q '"exit":9' "$LAND_LOG"
-}
-
-@test "per-suite: the FULL tier still never exonerates a DIRECT suite of this change" {
-  # THE correctness fence on Phase 1, and the whole of the difference from the monolith it
-  # replaces: the monolith gave a named red no retry at all, while the per-suite tier routes every
-  # suite through run_scoped_suite's one exoneration re-run. What stops that being a WEAKER gate is
-  # the DIRECT carve-out — intermittence in code you are landing is a FINDING, not a flake — which
-  # is why run_gate now computes --direct for FULL mode too, not just for scoped selection.
-  persuite_fixture
-  stub_selector "" "tests/a.bats"          # a IS a direct suite of this change…
-  echo sig-once > "$MODE_DIR/a.bats"       # …and it goes green on the re-run
+  stub_selector "" "tests/a.bats"          # a IS direct to this change…
+  echo red-once > "$MODE_DIR/a.bats"       # …and its named failure vanishes on the re-run
   landable feat/ps-direct psd.sh
 
-  run bash "$SHIPLAND" --trunk main
+  run env SHIP_LAND_LANE=v1 bash "$SHIPLAND" --trunk main
   [ "$status" -eq 6 ]                                      # pass-on-retry is NOT a pass here
   echo "$output" | grep -q "finding, not a flake"
   [ ! -f "$POSTLAND_DIR/flakes.jsonl" ]                    # never exonerated ⇒ never logged
@@ -1181,21 +1370,91 @@ EOF
   [ -z "$(git ls-tree origin/main -- psd.sh)" ]            # and NOT landed
 }
 
-@test "per-suite: a GREEN hermeticity ratchet hands the whole corpus to the per-suite runner" {
-  # The per-suite half of "hermeticity: the SAME suite WITH a fixtured \$HOME lands green and bats
-  # still runs", which is MONOLITH-PINNED (a) above. The ratchet returns EARLY on red — fail-fast,
-  # because an unfixtured suite contaminates every other result in the run — so the composition
-  # that actually needs pinning is the green one: ratchet passes ⇒ the runner still gets every
-  # suite, one process each. A sibling landed the ratchet into run_gate during this session; this
-  # is the seam between the two changes.
+@test "v1 lane: a DIRECT suite that was CUT and then passed DOES land (the same correction)" {
+  # The v1-lane twin of the fast-lane cut-then-green test. Pinned in both lanes because the fix
+  # lives in run_scoped_suite, which both share — a regression would hit v1 silently, where nobody
+  # is looking, and then surface in the fast lane as a mystery false red.
+  persuite_fixture
+  stub_selector "" "tests/a.bats"          # a IS direct…
+  echo sig-once > "$MODE_DIR/a.bats"       # …and it was KILLED, then passed
+  landable feat/ps-direct-cut psdc.sh
+
+  run env SHIP_LAND_LANE=v1 bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]                                      # a machine event is not your finding
+  echo "$output" | grep -q "EXONERATED"
+  grep -q '"outcome":"pass-on-retry"' "$POSTLAND_DIR/flakes.jsonl"
+  git fetch -q origin main
+  [ -n "$(git ls-tree origin/main -- psdc.sh)" ]
+}
+
+@test "v1 lane: a GREEN hermeticity ratchet hands the whole corpus to the runner" {
+  # The ratchet returns EARLY on red — fail-fast, because an unfixtured suite contaminates every
+  # other result in the run — so the composition that needs pinning is the GREEN one: ratchet
+  # passes ⇒ the runner still gets every suite, one process each.
   herm_fixture
   add_suite feat/herm-ps leak.bats 'export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"'
 
-  run bash "$SHIPLAND" --trunk main
+  run env SHIP_LAND_LANE=v1 bash "$SHIPLAND" --trunk main
   [ "$status" -eq 0 ]
   [ "$(grep -cx 'tests/a.bats' "$BATS_ARGV")" -eq 1 ]      # the suite herm_fixture seeded…
   [ "$(grep -cx 'tests/leak.bats' "$BATS_ARGV")" -eq 1 ]   # …and the one this land adds
-  [ "$(grep -cx 'tests/' "$BATS_ARGV")" -eq 0 ]            # never the monolithic invocation
+  [ "$(grep -cx 'tests/' "$BATS_ARGV")" -eq 0 ]            # never the deleted monolith call
   git fetch -q origin main
   [ -n "$(git ls-tree origin/main -- tests/leak.bats)" ]
+}
+
+# ════ NOTHING HEAVY UNDER THE LAND-LOCK — enforced at the suite-start chokepoint ═══════════════
+# v1's in-lock full gate produced a 3h36m lock holder and, when the corpus hung, a multi-day jam
+# while every other lander queued. v2 bans it structurally: run_gate refuses to start ANY suite
+# while IN_LAND_LOCK=1, in EITHER lane, so the ban cannot be forgotten at a call site. The
+# end-to-end proofs (rounds-exhausted fallback · the content-drop recovery re-gate) live in
+# tests/land-gate-cas.bats, which owns the lock pipeline. What is pinned HERE is the sharper unit
+# fact: the short-circuit happens BEFORE gate_home_setup, so the lock does not even pay for a
+# $HOME clone it will never use.
+
+iso_home_fixture() {  # force REAL $HOME isolation, cheaply — the spy needs the mechanism ON
+  # A fixture $HOME first, and it is load-bearing: SHIP_LAND_GATE_HOME_ISO=on forces a real APFS
+  # clone, and this suite does not otherwise fixture HOME — left unset, the positive control below
+  # would clone the operator's live 2.1 GB ~/.claude (~9 s and real disk churn) to prove a point
+  # about a directory listing. Clones land inside the sandbox, never in the real $TMPDIR and never
+  # inside the fixture $HOME (a clone rooted under its own source is an infinite regress).
+  export HOME="$BATS_TEST_TMPDIR/iso-home"; mkdir -p "$HOME/.claude"
+  export SHIP_LAND_GATE_HOME_ROOT="$BATS_TEST_TMPDIR/isoroot"; mkdir -p "$SHIP_LAND_GATE_HOME_ROOT"
+  export SHIP_LAND_GATE_HOME_ISO=on
+}
+
+@test "in-lock: the smoke short-circuits BEFORE gate_home_setup — no clone under the lock" {
+  # SPY: gate_home_setup is un-silent by construction — it announces either an isolated $HOME or
+  # (under a fixture pipeline) that it skipped isolation. Absence of BOTH lines is therefore proof
+  # it was never reached, not merely that isolation was off. SHIP_LAND_GATE_HOME_ROOT gives a
+  # second, independent witness: a clone would have to appear in that directory.
+  scope_fixture
+  stub_selector "" "tests/a.bats"                          # a real smoke selection exists…
+  iso_home_fixture                                         # …and isolation is FORCED on
+  landable feat/inlock-noclone ilc.sh
+
+  # ROUNDS=0 sends the gate straight into the lock — the fallback path, where v1 ran the corpus.
+  run env SHIP_LAND_GATE_ROUNDS=0 bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "no bats inside the land-lock"
+  [ ! -s "$BATS_ARGV" ]                                              # no suite started…
+  [ "$(echo "$output" | grep -c 'HOME. isolated')" -eq 0 ]           # …and gate_home_setup…
+  [ "$(echo "$output" | grep -c 'isolation skipped')" -eq 0 ]        # …was never REACHED at all
+  [ "$(find "$SHIP_LAND_GATE_HOME_ROOT" -maxdepth 1 -name 'gate-home.*' | grep -c .)" -eq 0 ]
+  grep -q '"smoke":"none"' "$LAND_LOG"
+}
+
+@test "in-lock POSITIVE CONTROL: the SAME fixture unlocked DOES clone and DOES smoke" {
+  # Without this the test above passes on any build where isolation is simply broken, or where the
+  # selector never selected anything. Same fixture, same flags, one difference: no lock.
+  scope_fixture
+  stub_selector "" "tests/a.bats"
+  iso_home_fixture
+  landable feat/unlocked-clone ulc.sh
+
+  run bash "$SHIPLAND" --trunk main                        # default ROUNDS ⇒ the UNLOCKED gate
+  [ "$status" -eq 0 ]
+  [ "$(cat "$BATS_ARGV")" = "tests/a.bats" ]               # the smoke ran…
+  echo "$output" | grep -q 'isolated'                      # …and gate_home_setup WAS reached
+  grep -q '"smoke":"green"' "$LAND_LOG"
 }

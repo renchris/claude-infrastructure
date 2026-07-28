@@ -89,17 +89,23 @@ echo MUTATION-FROM-GATE >> "\$HOME/.claude/autonomy/idl.jsonl" 2>/dev/null
 case "\$(cat "$STUB_RC" 2>/dev/null)" in
   red) echo "1..1"; echo "not ok 1 a genuine failure"; exit 1 ;;   # a REAL red: a not-ok IS present
   cut) exit 1 ;;                                                   # a CUT: rc!=0 with ZERO output
+  hang) sleep 120; exit 0 ;;                                       # outlives any sane wall budget
   *)   echo "1..1"; echo "ok 1 fine"; exit 0 ;;
 esac
 EOF
   chmod +x "$SHIMDIR/bats"
   export PATH="$SHIMDIR:$PATH"
-  export SHIP_LAND_GATE_POLICY="$BATS_TEST_TMPDIR/no-such-policy.sh"   # absent ⇒ full tier
+  export SHIP_LAND_GATE_POLICY="$BATS_TEST_TMPDIR/no-such-policy.sh"
   mkdir -p tests
   printf '#!/usr/bin/env bats\n@test "a" { true; }\n' > tests/a.bats
   printf '#!/usr/bin/env bats\n@test "b" { true; }\n' > tests/b.bats
   git add tests && git commit -q -m "seed suites" && git push -q origin HEAD:main
   git fetch -q origin main
+  # DEFAULT the selector to a stub naming both suites. v1 left it unset and relied on the FULL
+  # tier ignoring selection; v2's smoke IS selection, so unset would mean the REAL gate-select.sh
+  # decides — a fixture's clone behaviour keyed on the real repo's suite map. Tests that want a
+  # different selection call select_suites again, which simply overwrites this.
+  select_suites 'printf "tests/a.bats\ntests/b.bats\n"'
 }
 
 landable() {   # $1=branch — a trivial non-shell change (no shellcheck/bash -n in the way)
@@ -113,12 +119,15 @@ landable() {   # $1=branch — a trivial non-shell change (no shellcheck/bash -n
   git commit -q -m "feat: payload $1"
 }
 
-select_suites() {   # $1=what the selector prints → drives the PER-SUITE path (run_scoped_suite)
-  printf '#!/bin/bash\ncase "${1:-}" in lint) exit 0 ;; --direct) exit 0 ;; esac\n%s\n' \
+select_suites() {   # $1=what the selector prints → the suites the SMOKE will run
+  # v2: the smoke asks the selector ONLY for `--direct`, so that is the answer that has to carry
+  # the list. v1's stub exited 0 with no output there (the plain call decided the tier), which
+  # under v2 means "no direct suites" ⇒ no smoke ⇒ no clone — and every clone assertion in this
+  # file would have gone vacuously red. Both entry points now print the same list.
+  printf '#!/bin/bash\ncase "${1:-}" in lint) exit 0 ;; esac\n%s\n' \
     "$1" > "$BATS_TEST_TMPDIR/select.sh"
   chmod +x "$BATS_TEST_TMPDIR/select.sh"
   export SHIP_LAND_GATE_SELECT="$BATS_TEST_TMPDIR/select.sh"
-  export SHIP_LAND_GATE_SCOPE=scoped
 }
 
 probe_fn() {   # extract the isolation functions and drive them directly (the gate_admit idiom)
@@ -142,9 +151,9 @@ count_in() { printf '%s\n' "$2" | grep -c -- "$1" || true; }   # live negative a
 
 # ══ (a) the clone exists and is used ═══════════════════════════════════════════════════════════
 
-@test "(a) FULL gate: bats runs under a CLONED \$HOME that carries the live desk state" {
+@test "(a) SMOKE: bats runs under a CLONED \$HOME that carries the live desk state" {
   iso_fixture
-  landable feat/iso-full
+  landable feat/iso-smoke
   run bash "$SHIPLAND" --trunk main
   [ "$status" -eq 0 ]
   [ -s "$PROBE" ]                                            # the stub really ran
@@ -157,24 +166,29 @@ count_in() { printf '%s\n' "$2" | grep -c -- "$1" || true; }   # live negative a
   grep -q '^RESO=LEDGER,$' "$PROBE" || false
   grep -q '^ISO=1$' "$PROBE" || false                        # marked cacheable for Phase 2b
   echo "$output" | grep -q 'HOME isolated' || false
+  # PER-SUITE, one process each — the shape the smoke runs, and never the deleted `bats tests/`.
+  grep -q '^ARGS=tests/a.bats$' "$PROBE" || false
+  grep -q '^ARGS=tests/b.bats$' "$PROBE" || false
+  [ "$(count_in '^ARGS=tests/$' "$(cat "$PROBE")")" -eq 0 ]
 }
 
-@test "(a) SCOPED gate: the per-suite path is isolated too (same chokepoint, both callers)" {
+@test "(a) the v1 CORPUS lane is isolated too — same chokepoint, both runners" {
+  # gate_bats is the single chokepoint, so isolation must cover the kill switch's runner without
+  # it knowing about isolation at all. Pinned because an untested kill switch rots.
   iso_fixture
-  select_suites 'printf "tests/a.bats\ntests/b.bats\n"'
-  landable feat/iso-scoped
-  run bash "$SHIPLAND" --trunk main
+  select_suites 'true'                                       # NO direct suites ⇒ no smoke at all…
+  landable feat/iso-v1
+  run env SHIP_LAND_LANE=v1 bash "$SHIPLAND" --trunk main    # …but the corpus runs the lot
   [ "$status" -eq 0 ]
-  grep -q '^ARGS=tests/a.bats$' "$PROBE" || false            # really the per-suite path
+  grep -q '^ARGS=tests/a.bats$' "$PROBE" || false
   grep -q '^ARGS=tests/b.bats$' "$PROBE" || false
   grep -q "^HOME=$SHIP_LAND_GATE_HOME_ROOT/gate-home\." "$PROBE" || false
   grep -q '^IDL=LIVE,$' "$PROBE" || false
   [ "$(count_in "^HOME=$HOME\$" "$(cat "$PROBE")")" -eq 0 ]
 }
 
-@test "(a) ONE clone serves the whole selection — not one per suite" {
+@test "(a) ONE clone serves the whole smoke — not one per suite" {
   iso_fixture
-  select_suites 'printf "tests/a.bats\ntests/b.bats\n"'
   landable feat/iso-oneclone
   run bash "$SHIPLAND" --trunk main
   [ "$status" -eq 0 ]
@@ -185,17 +199,17 @@ count_in() { printf '%s\n' "$2" | grep -c -- "$1" || true; }   # live negative a
   grep -q "^HOME=$SHIP_LAND_GATE_HOME_ROOT/gate-home\." "$PROBE" || false
 }
 
-@test "(a) a lint-only land (0 suites selected) pays nothing — no clone is made" {
+@test "(a) a smoke that selects 0 suites pays nothing — no clone is made" {
   # A DIFFERENTIAL, not a bare negative: "no clone happened" is trivially true of any binary that
   # never clones, so the same fixture is run both ways and the two legs must DISAGREE. Guards the
-  # cost decision — gate_home_setup sits inside each bats-running branch, never hoisted above the
-  # 0-suite one, because a lint-only land must keep paying zero for a proof it never runs.
+  # cost decision — gate_home_setup sits AFTER the selection check inside run_smoke, never before
+  # it, because a lint-only land must keep paying zero for a proof it never runs.
   iso_fixture
   select_suites 'true'
   landable feat/iso-lintonly
   run bash "$SHIPLAND" --trunk main
   [ "$status" -eq 0 ]
-  echo "$output" | grep -q 'picked 0 suites' || false
+  echo "$output" | grep -q '0 direct suite' || false
   [ "$(count_in 'HOME isolated' "$output")" -eq 0 ]
   [ "$(live_clones)" -eq 0 ]
 
@@ -204,6 +218,51 @@ count_in() { printf '%s\n' "$2" | grep -c -- "$1" || true; }   # live negative a
   run bash "$SHIPLAND" --trunk main
   [ "$status" -eq 0 ]
   echo "$output" | grep -q 'HOME isolated' || false
+  [ "$(live_clones)" -eq 0 ]
+}
+
+@test "(a) v2: an ABSENT selector makes no clone either — no smoke, nothing to isolate" {
+  # The clone follows the SELECTION, and v2 answers every uncertainty with "no smoke". A missing
+  # selector is the live-symlink case (a brand-new tracked file has no symlink yet), so this is the
+  # path a real deploy gap takes — it must cost nothing, not a 2.1 GB clone for a suite list that
+  # was never computed.
+  iso_fixture
+  export SHIP_LAND_GATE_SELECT="$BATS_TEST_TMPDIR/no-such-selector.sh"
+  landable feat/iso-nosel
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'missing/not executable' || false
+  [ "$(count_in 'HOME isolated' "$output")" -eq 0 ]
+  [ ! -s "$PROBE" ]                                        # no suite ran…
+  [ "$(live_clones)" -eq 0 ]                               # …so nothing was cloned for one
+}
+
+@test "(a) v2: a SHED smoke (load >= ceiling) makes no clone — shedding costs nothing at all" {
+  # Shedding is a SKIP, not a wait, and a skip that still paid ~9s for an APFS clone would be a
+  # quiet tax on exactly the busy box the shed exists to protect.
+  iso_fixture
+  landable feat/iso-shed
+  run env CC_GATE_MAX_LOAD=0.0001 bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'smoke SKIPPED' || false
+  [ "$(count_in 'HOME isolated' "$output")" -eq 0 ]
+  [ ! -s "$PROBE" ]
+  [ "$(live_clones)" -eq 0 ]
+}
+
+@test "(a) v2: under the LAND-LOCK the clone is never even reached" {
+  # The invariant's cheapest corollary: run_smoke's IN_LAND_LOCK short-circuit sits BEFORE
+  # gate_home_setup, so the lock does not pay for a $HOME it will never hand to a suite.
+  # gate_home_setup is un-silent by construction (it announces isolation OR that it skipped), so
+  # the absence of BOTH lines is proof it was never reached — not merely that isolation was off.
+  iso_fixture
+  landable feat/iso-inlock
+  run env SHIP_LAND_GATE_ROUNDS=0 bash "$SHIPLAND" --trunk main   # straight into the lock
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'no bats inside the land-lock' || false
+  [ "$(count_in 'HOME isolated' "$output")" -eq 0 ]
+  [ "$(count_in 'isolation skipped' "$output")" -eq 0 ]
+  [ ! -s "$PROBE" ]
   [ "$(live_clones)" -eq 0 ]
 }
 
@@ -277,15 +336,33 @@ P
   [ "$(live_clones)" -eq 0 ]
 }
 
-@test "(c) cleanup on GATE-KILLED — the non-verdict path leaks nothing either" {
+@test "(c) cleanup on a CUT smoke — the non-verdict path leaks nothing either" {
+  # v2: a smoke cut twice PROCEEDS (smoke:"partial", exit 0) rather than exiting 9 — a non-verdict
+  # never blocks a land. The teardown property is what this test is for and it is unchanged; only
+  # the exit code the fixture produces moved, so pinning 9 here would now be pinning the v1 lane.
   iso_fixture
-  echo cut > "$STUB_RC"                     # cut, then cut again ⇒ exit 9, no verdict earned
+  echo cut > "$STUB_RC"                     # cut, then cut again ⇒ no verdict earned
   landable feat/iso-clean-cut
   run bash "$SHIPLAND" --trunk main
-  [ "$status" -eq 9 ]
-  echo "$output" | grep -q 'GATE-KILLED' || false
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'GATE-KILLED' || false          # the non-verdict WAS detected…
+  echo "$output" | grep -q 'smoke PARTIAL' || false        # …and did not block the land
   grep -q "^HOME=$SHIP_LAND_GATE_HOME_ROOT/gate-home\." "$PROBE" || false
   [ "$(live_clones)" -eq 0 ]
+}
+
+@test "(c) cleanup when the smoke BUDGET kills a suite mid-run — the bound tears down too" {
+  # New in v2: the wall budget can kill a bats child at any moment (timeout -k 10 on the process
+  # group). The clone must still be reaped — a killed CHILD is not a killed ship-land, so the
+  # normal teardown path has to cover it, and the 8h reaper is only the backstop for the latter.
+  iso_fixture
+  echo hang > "$STUB_RC"
+  landable feat/iso-clean-budget
+  run env SHIP_LAND_SMOKE_BUDGET_S=3 bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'smoke PARTIAL' || false
+  grep -q "^HOME=$SHIP_LAND_GATE_HOME_ROOT/gate-home\." "$PROBE" || false   # a clone WAS made…
+  [ "$(live_clones)" -eq 0 ]                                                # …and removed
 }
 
 @test "(c) teardown unlinks symlinks, it does NOT follow them into the real \$HOME" {
