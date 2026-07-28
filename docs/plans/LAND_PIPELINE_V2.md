@@ -126,6 +126,14 @@ R9 absence is loud: verifier stamp freshness + deploy lag + un-run activations s
 (Telemetry addenda — exit-code distribution, flake ledger, suite timing samples — integrated
 below as research lands; they tune parameters, not the architecture.)
 
+**2026-07-28 10:53 live reads (lead):** load 5.87 (first sub-ceiling window of the week; lock
+FREE; zero gates running — bootstrap-land window is OPEN). Newest postland run
+(2026-07-27 10:02, tip ea6f7b5a): **RED, run_s 3132, retries 12, flakes 0, failing = exactly
+the 6 host suites** (deploy-parity, desk-arm-live, desk-recycle-durable, lr-team-audit,
+session-continue, waiting-recycle) — the strongest direct evidence for the §4.2 partition:
+the tree verdict is red SOLELY because host-coupled suites assert a live layer the tree is
+ahead of. Corpus cycle estimate for the verifier: ~52 min at moderate load.
+
 ---
 
 ## §3 The architecture — three lanes, one verdict owner
