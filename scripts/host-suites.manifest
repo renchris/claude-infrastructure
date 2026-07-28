@@ -19,16 +19,23 @@
 # host suite. Normal attribution already names the file, so it moves here by a one-line land, and
 # the next tree carries the new partition with it.
 #
-# SECOND admission criterion — WHOLE-TREE META-LINT WRAPPERS (tests/test-hermeticity-lint.bats).
-# That suite is here for a different reason than the six above: not because it asserts the live
-# layer, but because a bats suite that wraps a WHOLE-TREE assertion cannot run mid-corpus. It
-# passes standalone and fails from inside a full run — clean-room corpora failed on exactly this
-# suite and nothing else (2,085 ok / 1 not-ok and 2,242 ok / 1 not-ok; backlogs b59eb997d035,
-# b4e49b4b5014), which localises the 14-consecutive-red-stamp deadlock to one file. The
-# enforcement is NOT lost: postland-verify runs scripts/test-hermeticity-lint.sh (and the walltime
-# lint) STANDALONE and whole-tree-strict before the corpus, so a real violation is a deterministic
-# named RED. Post-deploy, run standalone against the live layer, the wrapper is meaningful again —
-# its symlink-selftest failure shape was a real finding.
+# SECOND admission criterion — WHOLE-TREE META-LINT WRAPPERS (tests/test-hermeticity-lint.bats and
+# tests/test-walltime-lint.bats). These two are here for a different reason than the six above: not
+# because they assert the live layer, but because a bats suite that wraps a WHOLE-TREE assertion
+# cannot run mid-corpus. The hermeticity wrapper passes standalone and fails from inside a full run
+# — clean-room corpora failed on exactly that suite and nothing else (2,085 ok / 1 not-ok and 2,242
+# ok / 1 not-ok; backlogs b59eb997d035, b4e49b4b5014), which localises the 14-consecutive-red-stamp
+# deadlock to one file. The walltime wrapper is admitted on the CLASS, not on its own mid-corpus
+# proof: it carries the same shape (`@test "the real tree is CLEAN — the embedded ratchet matches
+# HEAD"`), so it inherits the same wedge risk, and it is redundant DETECTION — the check it wraps
+# is already enforced standalone. Enforcement is NOT lost by either move: postland-verify runs
+# scripts/test-walltime-lint.sh and scripts/test-hermeticity-lint.sh STANDALONE and
+# whole-tree-strict BEFORE the corpus, so a real violation is a deterministic named RED that
+# outranks a cut. Post-deploy, run standalone against the live layer, both wrappers are meaningful
+# again — the hermeticity one's symlink-selftest failure shape was a real finding.
+#
+# The distinction matters when reading a red: a violation reported by the pre-corpus lint is about
+# THE TREE; the same violation reported by one of these wrappers mid-corpus was about the run.
 
 tests/deploy-parity.bats
 tests/desk-arm-live.bats
@@ -37,6 +44,8 @@ tests/lr-team-audit.bats
 tests/session-continue.bats
 tests/waiting-recycle.bats
 
-# whole-tree meta-lint wrapper (see the SECOND admission criterion above) — enforced standalone,
-# pre-corpus, by postland-verify.sh; re-run here post-deploy against the live layer.
+# whole-tree meta-lint wrappers (see the SECOND admission criterion above) — the checks they wrap
+# are enforced standalone and pre-corpus by postland-verify.sh; re-run here post-deploy against the
+# live layer, which is the only place a whole-tree assertion has a stable subject.
 tests/test-hermeticity-lint.bats
+tests/test-walltime-lint.bats
