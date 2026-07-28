@@ -64,6 +64,19 @@ tv2-fastlane/tv2-verifier/tv2-deploy on branches tv2/{fastlane,verifier,deploy}:
   pre-existing policy. One gap being amended: parity-assert skills existence leg (the guard
   claimed 1:1 install.sh mirroring while routing skills/* to want=0 — the live
   video-understanding gap is the cost).
+- 2026-07-28 tv2-verifier Phase A ACCEPTED (d2a5029c + must-fix amend pending): fresh cell
+  per run w/ EXIT handler on every verb + 8h reap; ONE list feeds bats argv AND
+  suite_file_at; gate_admit deleted (proved by recording-taskpolicy argv:
+  nice -n 19 taskpolicy -c background bats <filtered list>); auto-revert e2e in fixtures
+  with all guards + positive controls; gate-green commit-sha sync; selftest 22/22.
+  §4.2.4 AMENDED: no --auto-revert VERB — red_actions integration is the mechanism.
+  DESIGN REFINEMENT (approved, load-bearing): auto-revert fires ONLY on an
+  actually-bisected culprit — red_actions' undecidable-bisect fallback (target sha) must
+  NEVER be reverted (innocent-tip protection); Phase B pins it with a positive control.
+  Must-fix in amend: 7th manifest entry (test-hermeticity-lint.bats) + standalone
+  pre-corpus lints — without these the verifier reds every cycle (the localized 0-green
+  cause) and v2 would activate wedged. Routed: stale gate_admit comment in
+  ship-land.bats:873 → tv2-fastlane Phase B.
 
 ---
 
