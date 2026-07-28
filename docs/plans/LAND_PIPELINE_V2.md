@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: complete
 ---
 
 # LAND PIPELINE V2 — first-principles landing architecture
@@ -493,6 +493,25 @@ integration-discovered gap: the smoke filters host-manifest suites (the partitio
 land lane too). Verifier's parting merge-order constraint (walltime fix before verifier) is
 satisfied by construction — single-branch integration, 11925061 precedes every verifier
 commit in history, one ff push carries all atomically.
+
+**LANDED 2026-07-28: 8d50f953 → origin/main** — 25 commits, via the branch's OWN v2 fast
+lane, content-verified. First attempt exited 6 because the smoke CAUGHT A REAL DEFECT in the
+landing range (the NEVER-ACTIVATED alarm firing in fixtured voids — fixed with the evidence
+gate + pinned, 1ef916b6); second attempt landed in ~2.5 min total. The pipeline validated
+itself on its own landing. Land latency at target on first production use.
+
+**Bootstrap residue (ordered):**
+1. Two PEER postland runners (pre-v2 code, wt-readme-pyramid copy) held the singleton lock
+   at land time and will stamp tree 8d50f953 stale-RED — harmless (deploy already pinned);
+   NEVER kill them (peer-kill pathology). On drain (monitored): lead kicks
+   `bash scripts/postland-verify.sh --run 8d50f953` from a v2 checkout — fresh worktree,
+   partitioned corpus, prelints — expected to mint the system's FIRST green stamp.
+2. OPERATOR (C10, one step): `CONFIRM=1 bash ~/.claude/autonomy/pending-activation/14-land-pipeline-v2-activate.sh`
+   (enable+bootstrap BOTH launchd jobs; the SessionStart parity check platters the repo→live
+   cp first if needed). After it: verifier every 5 min, deploy autopilot every 10 min — the
+   full land→verify→deploy chain is autonomous.
+3. The live-layer symlink true-red (skills/video-understanding) self-heals on the first
+   --auto advance (runs install.sh); no separate operator step required.
 
 ## Learnings (accumulate; never delete)
 
