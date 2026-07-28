@@ -793,7 +793,17 @@ run_scoped_suite() {  # $1=suite file $2=newline-list of DIRECT suites
     return 2
   fi
   rm -f "$log"
-  if printf '%s\n' "$direct" | grep -qxF -- "$f"; then
+  # THE DIRECT CARVE-OUT, and it is keyed on `notok1` — a NAMED failure in the first run — not on
+  # "the first run was non-zero". Its rule is "intermittence in code you are landing is a FINDING,
+  # not a flake", and a CUT is not intermittence: the first run earned no verdict at all (a peer's
+  # pkill, a starved fork, our own wall bound firing at rc 124), so there is nothing to convict.
+  # v1 conflated the two and got away with it because only a minority of suites were ever direct.
+  # v2 cannot: the SMOKE passes its own suite list as the direct set, so EVERY smoke suite is
+  # direct, and the per-child `timeout` deliberately manufactures cuts on a slow-but-green suite.
+  # Unkeyed, this branch would turn "the box was busy for 30s" into exit 6 on a green tree — R6's
+  # "a non-verdict is never a red" broken at the exact point v2 made it most likely to fire.
+  # A named failure that vanishes on re-run is STILL red here; that fence is untouched.
+  if [[ "$notok1" -gt 0 ]] && printf '%s\n' "$direct" | grep -qxF -- "$f"; then
     echo "✗ gate: bats RED: $f — pass-on-retry in a DIRECT suite of this change; intermittence in changed code is a finding, not a flake." >&2
     return 1
   fi
@@ -803,7 +813,7 @@ run_scoped_suite() {  # $1=suite file $2=newline-list of DIRECT suites
     "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$f" "$(git rev-parse --short HEAD 2>/dev/null || echo '?')" \
     "$sig" "$(uptime 2>/dev/null | sed 's/.*averages*: //' | awk -F'[, ]+' '{print $1}')" \
     >> "$fdir/flakes.jsonl" 2>/dev/null || true
-  echo "✓ gate[scoped]: $f EXONERATED (green on re-run, not a direct suite) — logged to flakes.jsonl" >&2
+  echo "✓ gate: $f EXONERATED (green on re-run; ${notok1:-0} named failure(s) in the first run) — logged to flakes.jsonl" >&2
   return 0
 }
 
