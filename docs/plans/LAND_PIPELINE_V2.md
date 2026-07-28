@@ -350,9 +350,26 @@ deployed HEAD > 60 min ⇒ surface). Both read disk only. land.log keeps one lin
 
 ## §6 Bootstrap & rollout (no half-measures, one clean cutover + kill switches)
 
-1. Land v2 (this branch set) via the CURRENT project `/ship` — the last corpus-gated land
-   (standing-land authorization applies; expected to pass on a first attempt in the background
-   band era is irrelevant — it needs one green, retried per exit-9 semantics if cut).
+1. Land v2 (this branch set) via the branch's OWN ship-land (the fast lane landing itself —
+   precedented: the per-suite runner landed through the scoped path it created; standing-land
+   authorization applies). DETACHED, never a foreground tool call (F14: the 10-min Bash
+   carrier cap truncates gates into false exit-6). Exact invocation from the integration
+   worktree after merging the three tv2 branches:
+
+   ```bash
+   cd /Users/chrisren/Development/.worktrees/claude-infrastructure-land-pipeline-v2
+   LOG=/tmp/land-v2-bootstrap.$(date +%s).log
+   python3 - "$PWD/scripts/ship-land.sh" "$LOG" <<'PY'
+   import subprocess, sys
+   subprocess.Popen(["bash", sys.argv[1]], stdout=open(sys.argv[2], "w"),
+                    stderr=subprocess.STDOUT, start_new_session=True)
+   PY
+   # then: Monitor the log for '✓ ship-land: LANDED|✗|⛔|PARKED' + tail on completion
+   ```
+   The fast lane's own gate = statics + ratchets + direct-suite smoke (bounded ≤120s), so
+   the land completes in minutes even mid-fleet; the first verifier cycle then makes the
+   full-suite claim on the landed tree (kick it: `scripts/postland-verify.sh --run-if-needed`
+   — a script run, NOT launchctl, so it is agent-runnable).
 2. Operator runs `14-land-pipeline-v2-activate.sh` (the ONE C10 hand-step; classifier-blocked
    for agents). Until run, v2 lands still work (fast lane is self-contained); the alarms (R9)
    surface the un-run activation — degraded = loud, never silent.
