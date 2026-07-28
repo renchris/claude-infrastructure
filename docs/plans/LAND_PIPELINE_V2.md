@@ -461,6 +461,15 @@ deployed HEAD > 60 min ⇒ surface). Both read disk only. land.log keeps one lin
 - SHIP_LAND_HARDENING_PLAN safety rails (CAS, content-verify, esc-park, backup refs) carried
   verbatim into §4.1.
 
+**Deploy amend log (2026-07-28):** def04b7c+d9c9e807 ACCEPTED. launchctl print (not list|grep)
+as the self-verify; trunk-red is a DISTINCT alarm kind from verifier-inert (opposite fixes;
+floor 2 verdicts; mutually exclusive with STALE by construction). Parity widened to skills
+with ordered deeper-first case patterns; lib correctly excluded (install.sh has no lib leg —
+recorded as deliberate). TRUE-red surfaced: live layer lacks skills/video-understanding
+symlink (deploy-parity test 8 red until `bash install.sh` runs live or the first --auto
+advance self-heals it — operator readout carries the one-liner). Corpus exposure already
+nil: deploy-parity.bats is manifest-partitioned since verifier Phase A.
+
 ## Learnings (accumulate; never delete)
 
 - 2026-07-28: v1's own evolution had already built every v2 component (scoped selector,
