@@ -33,8 +33,12 @@ stamp() { # <rev> [verdict]
   printf '{"verdict":"%s","tree":"%s"}\n' "${2:-green}" "$tree" > "$STAMPS/$tree.json"
 }
 
+# /bin/bash EXPLICITLY, not PATH's bash: com.claude.deploy-live.plist execs /bin/bash, which on macOS
+# is 3.2, and 3.2 mis-parses constructs a homebrew bash 5 on PATH accepts silently (a `case` pattern's
+# `)` inside a $( ) closes the substitution). Testing under a different bash than the job runs is how
+# such a bug reaches production green — one did, in bin/cc-blockers, on 2026-07-28.
 dl() { env DEPLOY_REPO="$SHARED" CC_POSTLAND_DIR="$BATS_TEST_TMPDIR/postland" \
-           CC_PAGES_DIR="$PAGES" bash "$DL" "$@"; }
+           CC_PAGES_DIR="$PAGES" /bin/bash "$DL" "$@"; }
 
 # advance origin/main by N commits while the clone's HEAD stays put (the deploy-lag shape)
 advance_origin() { # <name...>
@@ -221,7 +225,7 @@ SPY
 dla() { # deploy-live --auto with every side channel spied
   env DEPLOY_REPO="$SHARED" CC_POSTLAND_DIR="$BATS_TEST_TMPDIR/postland" CC_PAGES_DIR="$PAGES" \
       CC_DEPLOY_BATS_BIN="$SPY" CC_BACKLOG_BIN="$BLSPY" CC_DEPLOY_TIMEOUT_BIN= \
-      bash "$DL" --auto "$@"
+      /bin/bash "$DL" --auto "$@"
 }
 
 seed_host_suites() { # <manifest-body> — commit suites+manifest onto origin/main, leave HEAD behind
