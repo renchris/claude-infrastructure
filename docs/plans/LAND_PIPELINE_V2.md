@@ -30,6 +30,22 @@ serialized), final land via project `/ship`. Briefs ≤150 lines, pre-greped ran
 stop-on-issue clause. Merge conflicts impossible by ownership; semantic seams are the three
 contracts in §4 (exit codes · stamp schema · manifest format) — frozen here, cite by section.
 
+**Checkpoint-review criteria (lead, at each Phase A ack)** — spawned 2026-07-28, teammates
+tv2-fastlane/tv2-verifier/tv2-deploy on branches tv2/{fastlane,verifier,deploy}:
+1. tv2-fastlane: `run_gate` must auto-skip smoke when `IN_LAND_LOCK=1` (the drop-recovery
+   re-gate at old :1065 and the rounds-exhausted fallback both run under the lock — statics
+   only there; nothing heavy ever inside the mutex). The post-land verifier KICK at old
+   :1101-1106 (`postland-verify.sh --run-if-needed`, detached, per land) must SURVIVE —
+   launchd is the backstop, the kick is the fast path. No `sleep` may remain anywhere in
+   the land path (grep it).
+2. tv2-verifier: filtered corpus list must feed BOTH the bats invocation AND
+   suite_files()/suite_file_at() (index→file attribution breaks silently otherwise);
+   fresh-worktree teardown on EVERY exit path incl. signal traps; auto-revert lands FROM the
+   temp worktree (never the shared checkout — exit 4 refusal would fire).
+3. tv2-deploy: activation script must match the 09 idiom, never run launchctl itself in
+   tests; host-check red exits 0 (deploy succeeded; the finding routes to page+backlog).
+4. All: shellcheck + own-suite bats green BEFORE ack; no full-corpus runs ever.
+
 ---
 
 ## §1 First principles — why the old frame cannot work
