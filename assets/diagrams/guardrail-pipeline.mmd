@@ -1,0 +1,17 @@
+flowchart TB
+    P(["your prompt"]) --> UPS["UserPromptSubmit — 5 hooks<br/>mail · nudges"]
+    UPS --> M(["Claude"])
+    M --> Pre{"PreToolUse<br/>12 hooks"}
+    Pre -->|"refused"| No["the call never runs<br/>41 deny rules · dangerous bash<br/>wrong worktree · unsanctioned push"]
+    Pre -->|"allowed · Write backed up first"| Tool["the tool call"]
+    Tool --> Post["PostToolUse — 9 hooks<br/>plan version · bash log · context watch"]
+    Post --> M
+    M --> Stop{"Stop<br/>9 hooks"}
+    Stop -->|"the live git ledger disagrees"| M
+    Stop -->|"genuinely done"| End(["turn ends"])
+    classDef gate fill:@gold-bg,stroke:@gold-fg,color:@text
+    classDef no fill:@red-bg,stroke:@red-fg,color:@text
+    classDef ok fill:@green-bg,stroke:@green-fg,color:@text
+    class Pre,Stop gate
+    class No no
+    class End ok

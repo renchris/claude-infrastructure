@@ -1,0 +1,13 @@
+flowchart LR
+    Lock{"land-lock<br/>one pusher,<br/>machine-wide"}
+    A["session A<br/>own worktree · acct 1"] --> Lock
+    B["session B<br/>own worktree · acct 2"] --> Lock
+    C["session C<br/>own worktree · acct 3"] --> Lock
+    Lock --> Gate["inside the lock:<br/>fetch → rebase → full gate → push<br/>→ verify by CONTENT, not commit count"]
+    Gate --> Trunk[("origin/main")]
+    classDef w fill:@blue-bg,stroke:@blue-fg,color:@text
+    classDef k fill:@gold-bg,stroke:@gold-fg,color:@text
+    classDef t fill:@green-bg,stroke:@green-fg,color:@text
+    class A,B,C w
+    class Lock,Gate k
+    class Trunk t
