@@ -63,7 +63,6 @@ ROOT="$(cd "$(dirname "$SELF")/.." && pwd)"
 #   claude-accounts-core.bats  frontier-window parser fixtures (`end: "2026-07-31"`); the window date
 #                           is the SUBJECT of the test, so a relative seed would test nothing.
 EMBEDDED_ALLOWLIST="$(cat <<'ALLOW'
-cc-relogin-status.bats
 cc-relogin.bats
 claude-accounts-core.bats
 ALLOW
