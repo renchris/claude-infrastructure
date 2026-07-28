@@ -46,6 +46,15 @@ tv2-fastlane/tv2-verifier/tv2-deploy on branches tv2/{fastlane,verifier,deploy}:
    tests; host-check red exits 0 (deploy succeeded; the finding routes to page+backlog).
 4. All: shellcheck + own-suite bats green BEFORE ack; no full-corpus runs ever.
 
+**Checkpoint log:**
+- 2026-07-28 tv2-fastlane Phase A ACCEPTED (bae6c664): all criteria pass; 8-scenario
+  end-to-end fixture verification; deviation APPROVED — SHIP_LAND_LANE=v1 restores the corpus
+  PROOF, never the in-lock pathology (never-bats-under-lock binds in both lanes, permanently);
+  CAS smoke-fact handoff (SHIP_LAND_SMOKE_*) approved.
+  Scope (grown): +tests/gate-home-isolation.bats → tv2-fastlane (was unowned; tests removed
+  tier behavior — rewritten to the v2 smoke surface, never manifested).
+  Routed: ship.md admission-control mentions → tv2-deploy's rewrite.
+
 ---
 
 ## §1 First principles — why the old frame cannot work
