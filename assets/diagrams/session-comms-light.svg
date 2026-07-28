@@ -1,0 +1,103 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 551.922 904.9989999999999" width="551.922" height="904.9989999999999" style="--bg:#ffffff;--fg:#1f2328;--line:#d1d9e0;--accent:#0969da;--muted:#59636e">
+<style>
+  text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          var(--fg);
+    --_text-sec:      var(--muted, color-mix(in srgb, var(--fg) 60%, var(--bg)));
+    --_text-muted:    var(--muted, color-mix(in srgb, var(--fg) 40%, var(--bg)));
+    --_text-faint:    color-mix(in srgb, var(--fg) 25%, var(--bg));
+    --_line:          var(--line, color-mix(in srgb, var(--fg) 50%, var(--bg)));
+    --_arrow:         var(--accent, color-mix(in srgb, var(--fg) 85%, var(--bg)));
+    --_node-fill:     var(--surface, color-mix(in srgb, var(--fg) 3%, var(--bg)));
+    --_node-stroke:   var(--border, color-mix(in srgb, var(--fg) 20%, var(--bg)));
+    --_group-fill:    var(--bg);
+    --_group-hdr:     color-mix(in srgb, var(--fg) 5%, var(--bg));
+    --_inner-stroke:  color-mix(in srgb, var(--fg) 12%, var(--bg));
+    --_key-badge:     color-mix(in srgb, var(--fg) 10%, var(--bg));
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<polyline class="edge" data-from="Send" data-to="Res" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="140.81032499999998,93.80000000000001 140.81032499999998,141.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Res" data-to="Box" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="live" points="107.83557499999995,240.72424999999998 107.83557499999995,309.699 53.5,309.699 53.5,479.79900000000004 167.25615,479.79900000000004 167.25615,491.79900000000004" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Res" data-to="Fwd" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="pane recycled" points="140.81032499999998,273.699 140.81032499999998,309.699 132.899,309.699 132.899,389.999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Res" data-to="Desk" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="gone entirely" points="173.78507499999998,240.72425 173.78507499999998,309.699 301.0315,309.699 301.0315,389.999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Fwd" data-to="Box" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="132.899,443.79900000000004 132.899,467.79900000000004 200.39555000000001,467.79900000000004 200.39555000000001,491.79900000000004" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Desk" data-to="Box" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="301.0315,443.79900000000004 301.0315,467.79900000000004 233.53495,467.79900000000004 233.53495,491.79900000000004" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Box" data-to="Drain" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="216.96525,559.599 216.96524999999994,607.599" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Drain" data-to="Ctx" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="216.96524999999994,661.399 216.96524999999997,709.399" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Ctx" data-to="Ack" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="216.96524999999997,763.199 216.96524999999997,811.199" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Wake" data-to="Box" data-style="dotted" data-arrow-start="false" data-arrow-end="true" data-label="the write IS the wake" points="452.265,399.499 452.265,479.79900000000004 266.67435,479.79900000000004 266.67435,491.79900000000004" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="Res" data-to="Box" data-label="live">
+  <rect x="36" y="316.699" width="34.282" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="53.141" y="331.849" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">live</text>
+</g>
+<g class="edge-label" data-from="Res" data-to="Fwd" data-label="pane recycled">
+  <rect x="89.89900000000002" y="316.699" width="85.96000000000001" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="132.87900000000002" y="331.849" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">pane recycled</text>
+</g>
+<g class="edge-label" data-from="Res" data-to="Desk" data-label="gone entirely">
+  <rect x="261.5315" y="316.699" width="78.83200000000001" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="300.9475" y="331.849" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">gone entirely</text>
+</g>
+<g class="edge-label" data-from="Wake" data-to="Box" data-label="the write IS the wake">
+  <rect x="396.765" y="442.499" width="110.31400000000002" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="451.922" y="457.649" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">the write IS the wake</text>
+</g>
+<g class="node" data-id="Box" data-label="mailbox/&lt;uuid&gt;.md
+one line per message" data-shape="cylinder">
+  <rect x="134.11675" y="498.79900000000004" width="165.697" height="53.80000000000001" fill="#fff8c5" stroke="none" />
+  <line x1="134.11675" y1="498.79900000000004" x2="134.11675" y2="552.599" stroke="#9a6700" stroke-width="0.75" />
+  <line x1="299.81375" y1="498.79900000000004" x2="299.81375" y2="552.599" stroke="#9a6700" stroke-width="0.75" />
+  <ellipse cx="216.96525" cy="552.599" rx="82.8485" ry="7" fill="#fff8c5" stroke="#9a6700" stroke-width="0.75" />
+  <ellipse cx="216.96525" cy="498.79900000000004" rx="82.8485" ry="7" fill="#fff8c5" stroke="#9a6700" stroke-width="0.75" />
+  <text x="216.96525" y="525.6990000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#1f2328"><tspan x="216.96525" dy="-3.9000000000000012">mailbox/&lt;uuid&gt;.md</tspan><tspan x="216.96525" dy="16.900000000000002">one line per message</tspan></text>
+</g>
+<g class="node" data-id="Send" data-label="any session
+cc-notify --role peer" data-shape="rectangle">
+  <rect x="63.14882499999999" y="40" width="155.323" height="53.800000000000004" rx="0" ry="0" fill="#ddf4ff" stroke="#0969da" stroke-width="0.75" />
+  <text x="140.81032499999998" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#1f2328"><tspan x="140.81032499999998" dy="-3.9000000000000012">any session</tspan><tspan x="140.81032499999998" dy="16.900000000000002">cc-notify --role peer</tspan></text>
+</g>
+<g class="node" data-id="Res" data-label="resolved at
+SEND time" data-shape="diamond">
+  <polygon points="140.81032499999998,141.8 206.75982499999998,207.7495 140.81032499999998,273.699 74.86082499999998,207.7495" fill="#fff8c5" stroke="#9a6700" stroke-width="0.75" />
+  <text x="140.81032499999998" y="207.7495" text-anchor="middle" font-size="13" font-weight="500" fill="#1f2328"><tspan x="140.81032499999998" dy="-3.9000000000000012">resolved at</tspan><tspan x="140.81032499999998" dy="16.900000000000002">SEND time</tspan></text>
+</g>
+<g class="node" data-id="Fwd" data-label=".forward chain
+→ the successor" data-shape="rectangle">
+  <rect x="64.5" y="389.999" width="136.798" height="53.800000000000004" rx="0" ry="0" fill="#ddf4ff" stroke="#0969da" stroke-width="0.75" />
+  <text x="132.899" y="416.899" text-anchor="middle" font-size="13" font-weight="500" fill="#1f2328"><tspan x="132.899" dy="-3.9000000000000012">.forward chain</tspan><tspan x="132.899" dy="16.900000000000002">→ the successor</tspan></text>
+</g>
+<g class="node" data-id="Desk" data-label="tee'd to the desk
+tagged for:&lt;uuid&gt;" data-shape="rectangle">
+  <rect x="229.298" y="389.999" width="143.467" height="53.800000000000004" rx="0" ry="0" fill="#ddf4ff" stroke="#0969da" stroke-width="0.75" />
+  <text x="301.0315" y="416.899" text-anchor="middle" font-size="13" font-weight="500" fill="#1f2328"><tspan x="301.0315" dy="-3.9000000000000012">tee&#39;d to the desk</tspan><tspan x="301.0315" dy="16.900000000000002">tagged for:&lt;uuid&gt;</tspan></text>
+</g>
+<g class="node" data-id="Drain" data-label="drained at a SAFE boundary
+SessionStart · UserPromptSubmit" data-shape="rectangle">
+  <rect x="96.69624999999996" y="607.599" width="240.53799999999995" height="53.800000000000004" rx="0" ry="0" fill="#ddf4ff" stroke="#0969da" stroke-width="0.75" />
+  <text x="216.96524999999994" y="634.499" text-anchor="middle" font-size="13" font-weight="500" fill="#1f2328"><tspan x="216.96524999999994" dy="-3.9000000000000012">drained at a SAFE boundary</tspan><tspan x="216.96524999999994" dy="16.900000000000002">SessionStart · UserPromptSubmit</tspan></text>
+</g>
+<g class="node" data-id="Ctx" data-label="arrives as CONTEXT —
+never keystrokes on a live input line" data-shape="rectangle">
+  <rect x="91.50925000000001" y="709.399" width="250.91199999999995" height="53.800000000000004" rx="0" ry="0" fill="#dafbe1" stroke="#1a7f37" stroke-width="0.75" />
+  <text x="216.96524999999997" y="736.299" text-anchor="middle" font-size="13" font-weight="500" fill="#1f2328"><tspan x="216.96524999999997" dy="-3.9000000000000012">arrives as CONTEXT —</tspan><tspan x="216.96524999999997" dy="16.900000000000002">never keystrokes on a live input line</tspan></text>
+</g>
+<g class="node" data-id="Ack" data-label="acked at Stop:
+exactly-once cursor" data-shape="rectangle">
+  <rect x="135.96924999999996" y="811.199" width="161.99200000000002" height="53.800000000000004" rx="0" ry="0" fill="#dafbe1" stroke="#1a7f37" stroke-width="0.75" />
+  <text x="216.96524999999997" y="838.0989999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#1f2328"><tspan x="216.96524999999997" dy="-3.9000000000000012">acked at Stop:</tspan><tspan x="216.96524999999997" dy="16.900000000000002">exactly-once cursor</tspan></text>
+</g>
+<g class="node" data-id="Wake" data-label="idle peer?
+cc-await-ping" data-shape="rectangle">
+  <rect x="392.75800000000004" y="345.699" width="119.01400000000001" height="53.800000000000004" rx="0" ry="0" fill="#dafbe1" stroke="#1a7f37" stroke-width="0.75" />
+  <text x="452.26500000000004" y="372.599" text-anchor="middle" font-size="13" font-weight="500" fill="#1f2328"><tspan x="452.26500000000004" dy="-3.9000000000000012">idle peer?</tspan><tspan x="452.26500000000004" dy="16.900000000000002">cc-await-ping</tspan></text>
+</g>
+</svg>
