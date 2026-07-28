@@ -1,57 +1,76 @@
 #!/usr/bin/env bash
-# ship-land.sh — the ENTIRE claude-infrastructure landing pipeline as ONE fail-closed
-# script (was prose in .claude/commands/ship.md a model could skip or paraphrase).
+# ship-land.sh — the ENTIRE claude-infrastructure landing pipeline as ONE fail-closed script
+# (was prose in .claude/commands/ship.md a model could skip or paraphrase).
 #
 #   scripts/ship-land.sh [--trunk <branch>] [--dry-run]
 #
-# INVARIANT (land-gate serialization fix, 2026-07-25): the GATE proves the FINAL rebased
-# tree green; the LOCK covers ONLY the race window (fetch-compare → push → content-verify —
-# the 2026-07-11 anti-drop guarantee). The full gate runs UNLOCKED and therefore in PARALLEL
-# across concurrent landing sessions; the machine-wide mutex is held for seconds, not the
-# full-suite duration (pre-fix: N concurrent landers serialized at ~N × suite-time, observed
-# 40-min queues).
+# v2 — THE INVERSION (docs/plans/LAND_PIPELINE_V2.md §1/§4.1). The full corpus NEVER runs
+# per-land. v1 proved the whole suite before every push; measured, that frame cannot work on
+# this box — 144 suites × ~43 lands/day × 12+ concurrent writers, no quiet window by
+# construction, P(gate green) ≈ 2.3% at n=126 — and EVERY mitigation fed the contention it
+# guarded (unlocked parallel gates ⇒ N concurrent corpora; admission sleeping ⇒ ~2h/run and
+# five gates starving below their own load ceiling; the in-lock fallback ⇒ a 3h36m lock holder
+# and a multi-day jam). So the verdict MOVED: a LAND carries only work that is O(diff) and
+# bounded by WALL-CLOCK, never by load; the FULL suite runs once, post-land, batched, in the
+# background band, by the singleton verifier (postland-verify.sh), which owns the gate-green
+# marker and auto-reverts a red trunk; and DEPLOY — not land — waits for the green verdict.
 #
 # Pipeline (fail-closed at every step):
-#   preflight (OUTSIDE lock): shared-checkout refusal · dirty-tree refusal ·
-#     escalation-scan (destructive SQL / credential patterns ⇒ PARK a decision packet,
-#     exit 3, never auto-land) · safety backup ref
+#   preflight (OUTSIDE lock): shared-checkout refusal · dirty-tree refusal · escalation-scan
+#     (destructive SQL / credentials ⇒ PARK a decision packet, exit 3, never auto-land) ·
+#     safety backup ref
 #   → optimistic rounds, up to SHIP_LAND_GATE_ROUNDS (default 3), each:
-#       UNLOCKED: `git fetch` → `git rebase` (conflict ⇒ exit 5) → FULL GATE on the rebased
-#       tree (shellcheck + `bash -n` + py_compile for changed shell/python INCLUDING
-#       extensionless by shebang, then the test-hermeticity ratchet, then bats; red ⇒ exit 6);
-#       record (GATE_BASE = origin/<trunk>,
-#       GATE_HEAD = HEAD) — the exact tree the gate proved green. --dry-run stops here
-#       (a dry run never takes the lock).
-#       → land-lock'd child (serialized machine-wide per repo via land-lock.sh):
-#         last-moment `git fetch` → CAS check: origin/<trunk> still == GATE_BASE AND
-#         HEAD still == GATE_HEAD? If NOT (a sibling landed mid-gate): release the lock,
-#         exit 42 (internal STALE-GATE code), and the outer loop re-rebases + RE-GATES the
-#         new final tree UNLOCKED (the re-gate fires IFF origin moved in the window). If
-#         yes: the gated tree IS the pushed tree → `git push HEAD:<trunk>` (non-ff ⇒
-#         exit 7) → land-verify.sh (content-verify, IN the lock, after the push) → on a
-#         content-drop, BOUNDED AUTO-RETRY + ROLLBACK (T-P9-7): re-fetch + rebase onto the
-#         moved trunk + re-gate (in-lock — rare incident-recovery path) + re-push, up to
-#         SHIP_LAND_VERIFY_RETRIES times; a retry rebase-conflict rolls back
-#         (rebase --abort) ⇒ exit 5, retries exhausted (still not intact) ⇒ clean tree +
-#         exit 8 → stranded-sweep (exit 1 ⇒ REVIEW verdict, surfaced, never auto-recovered)
-#         → self-attesting land.log line {verify,sweep,esc_scan,sid}.
-#   → rounds exhausted (sustained contention — every unlocked gate was invalidated by a
-#     sibling land): GUARANTEED-PROGRESS FALLBACK — rebase + full gate INSIDE the lock (the
-#     pre-fix behavior; a held mutex stops further pipeline movement, so this terminates).
-#     SHIP_LAND_GATE_ROUNDS=0 skips the optimistic rounds entirely (the kill switch back to
-#     the pre-fix always-in-lock behavior).
+#       UNLOCKED: fetch → rebase (conflict ⇒ exit 5) → GATE on the rebased tree, which is ONLY:
+#       lint (shellcheck, `bash -n`, py_compile) on CHANGED files (extensionless by shebang too) ·
+#       test-hermeticity ratchet · wall-clock time-bomb ratchet · SMOKE (below). Red ⇒ exit 6.
+#       Record (GATE_BASE = origin/<trunk>, GATE_HEAD = HEAD) — the exact tree gated.
+#       --dry-run stops here (a dry run never takes the lock).
+#       → land-lock'd child (serialized machine-wide per repo via land-lock.sh): last-moment
+#         fetch → CAS: origin/<trunk> still == GATE_BASE AND HEAD still == GATE_HEAD? NO ⇒
+#         release the lock, exit 42 (INTERNAL stale-gate signal) and the outer loop re-rebases
+#         + re-gates UNLOCKED (statics+smoke — seconds, not a second corpus). YES ⇒ the gated
+#         tree IS the pushed tree → `git push HEAD:<trunk>` (non-ff ⇒ exit 7) → land-verify.sh
+#         (content-verify, IN the lock, after the push) → on a content-drop, BOUNDED AUTO-RETRY
+#         + ROLLBACK (T-P9-7) up to SHIP_LAND_VERIFY_RETRIES times; a retry rebase-conflict
+#         rolls back (rebase --abort) ⇒ exit 5, retries exhausted ⇒ clean tree + exit 8 →
+#         stranded-sweep (exit 1 ⇒ REVIEW, surfaced, never auto-recovered) → self-attesting
+#         land.log line.
+#   → rounds exhausted (sustained contention): in-lock re-gate of STATICS ONLY. NOTHING HEAVY
+#     MAY EVER ENTER THE LOCK, in EITHER lane — the lock covers the race window (a 5-15s hold),
+#     never a proof. SHIP_LAND_GATE_ROUNDS=0 goes straight there. Both in-lock gate call sites
+#     (this fallback and the content-drop recovery re-gate) are covered structurally: run_gate
+#     refuses to start any suite while IN_LAND_LOCK=1, so the ban cannot be forgotten at a call site.
 #
-# WHY the stale path re-runs the FULL gate (not a delta-scoped subset): green(our tree) +
-# green(sibling's landed tree) does NOT imply green(our tree rebased onto theirs) — semantic
-# conflicts need no file overlap, and this repo's tests read docs/prose too, so no
-# changed-path test map is conservatively sufficient. The full gate on the final tree is the
-# only provably-sufficient re-check; the fix is WHERE it runs (unlocked), never WHETHER.
+# THE OPTIMISTIC ROUNDS SURVIVE v2, but only because a re-gate now costs SECONDS. Their v1
+# economics were indefensible on the measurements: 26.4h of accumulated lock-WAIT bought 79s of
+# actual work, and ~30% of rounds were invalidated by a sibling landing mid-gate — each
+# invalidation paying for a whole second corpus, unlocked but still 20-53 min of machine. The
+# rounds were never a throughput trick; they exist so the LOCK covers only the CAS race window.
+# With statics+smoke behind them a stale-gate re-round is seconds, so that 30% re-round rate stops
+# being the dominant cost and becomes a rounding error. Keep the rounds; they are now cheap.
 #
-# --dry-run stops after the gate (no push, no lock). Exit codes: 0 landed · 2 preflight
-# refusal · 3 escalation PARK · 4 shared-checkout refusal · 5 rebase conflict (initial OR an
-# auto-retry rebase, the latter rolled back) · 6 gate red · 7 push non-ff · 8 content-verify
-# failed after exhausting the bounded auto-retries · 9 GATE-KILLED. (42 is INTERNAL — locked
-# child → outer-loop stale-gate signal; it never escapes ship-land.)
+# SMOKE — the land's only test work, and the highest-value seconds in the pipeline. The
+# `gate-select.sh --direct` suites of THIS diff, one process per suite, under ONE TOTAL wall
+# budget SHIP_LAND_SMOKE_BUDGET_S (default 120s), `nice`d, each child bounded by `timeout -k 10`
+# against the shared deadline. Three rules, each paying for a named v1 failure:
+#   RED BLOCKS (exit 6)  a named `not ok` in a direct suite is a verdict about YOUR diff.
+#   CUT PROCEEDS         a cut / budget kill earned NO verdict, and a non-verdict must never
+#                        block a land (R6): recorded to flakes.jsonl, attested smoke:"partial",
+#                        the verifier decides. Smoke therefore NEVER yields exit 9.
+#   SHED = SKIP          at 1-min load ≥ CC_GATE_MAX_LOAD (default 8) the smoke is SKIPPED
+#                        ENTIRELY, never waited (R7). Waiting WAS the amplifier; shedding defers
+#                        to the net, never to a queue. Fail-OPEN: an unreadable sensor runs the
+#                        (bounded) smoke rather than inventing a skip.
+#
+# A land makes NO full-suite claim: GATE_EFFECTIVE_FULL is 0 always — in BOTH lanes — so
+# stamp_gate_green self-noops and gate-green advances ONLY via the verifier (§4.2). Two writers
+# for one marker is strictly worse than a stale one.
+#
+# --dry-run stops after the gate (no push, no lock). Exit codes: 0 landed · 2 preflight refusal ·
+# 3 escalation PARK · 4 shared-checkout refusal · 5 rebase conflict (initial OR an auto-retry
+# rebase, the latter rolled back) · 6 GATE RED · 7 push non-ff · 8 content-verify failed after
+# exhausting the bounded auto-retries · 9 GATE-KILLED (now rare — only LANE=v1's corpus can earn
+# it). 42 is INTERNAL (locked child → outer-loop stale-gate signal); it never escapes ship-land.
 #
 # 6 vs 9 — a VERDICT vs a NON-VERDICT, and the distinction is load-bearing (backlog 9c5d0ba74e79):
 # 6 says "the gate ran and this tree is red" — a claim about YOUR CODE, actionable, do not retry
@@ -66,42 +85,32 @@
 # <sid>` can recover only own-drops. ship-land stamps land.log with the sid (a
 # post-hoc commit trailer is impossible), and adds the trailer to any commit IT makes.
 #
-# GATE SCOPE (scripts/gate-policy.sh; env SHIP_LAND_GATE_SCOPE overrides it, and a missing or
-# corrupt policy file falls back to `full` — narrowing is never the failure mode):
-#   full    `bats tests/` every land (the pre-scoping behavior; SHIP_LAND_GATE_SCOPE=full is the
-#           KILL SWITCH — byte-identical to before scoping).
-#   shadow  full suite still decides; gate-select.sh runs alongside for observability only.
-#   scoped  run only the suites gate-select.sh maps to the landing range, each as its OWN
-#           `bats <file>` (per-file attribution). Selector says FULL ⇒ full suite; missing or
-#           non-executable selector ⇒ FULL (fail-closed); selects nothing ⇒ lint-only land.
-#           A failing NON-direct suite gets ONE exoneration re-run in a fresh TMPDIR — green on
-#           retry ⇒ logged to postland/flakes.jsonl and the land continues; a DIRECT suite of the
-#           change never gets exonerated (intermittence in changed code is a finding, not a flake).
-#           A scoped run NEVER advances the gate-green marker (it cannot make the full-suite claim
-#           its consumers read it as) — boundary-handoff / wrap-ledger then degrade correctly.
-#   The test-hermeticity ratchet is OUTSIDE this scope machinery on purpose — it runs on every
-#   land in every mode, before bats, because selection can never reach it (a new tests/*.bats maps
-#   to itself, never to the ratchet) and because its subject is a whole-tree property, not a
-#   changed-path one. See run_gate.
-#   Three more ways scoped degrades to FULL, all fail-closed: a red `gate-select.sh lint` (the
-#   suite map is untrustworthy — but lint NEVER blocks a land), an INERT post-land net (stamps
-#   exist yet the newest green one is older than POSTLAND_MAX_STAMP_AGE_H — absence-is-loud; no
-#   stamps at all = not adopted yet, no guard), and a stale-gate re-round, which hands the
-#   selector a SECOND range (FIRST_BASE..new base) so the union covers what siblings landed
-#   while we gated — the composed tree's only novelty.
+# land.log schema (growth is safe — its only reader is a raw tail): `gate_scope` now carries the
+# LANE ("fast"|"v1"), plus smoke:"green|red|partial|skipped|none", smoke_n, smoke_s, and
+# net:"live|inert|none". The verifier's liveness is ATTESTED, never a control-flow input: a land
+# that cannot see a live net WARNS and lands anyway — degrading to a corpus is precisely the
+# fail-closed-amplifier class v2 exists to delete (R7).
 #
-# Env overrides (mostly for tests): SHIP_LAND_SHARED_CHECKOUT · SHIP_LAND_SESSION_BRANCH_RE
+# UNION SCOPE survives: a stale-gate re-round hands the selector a SECOND range
+# (FIRST_BASE..new base) so the smoke covers what siblings landed while we gated — the composed
+# tree's only novelty. The two ratchets sit OUTSIDE selection on purpose (a new tests/*.bats maps
+# to itself, never to the ratchet) and run on every land in every lane; see run_gate.
+#
+# KILL SWITCH: SHIP_LAND_LANE=v1 restores the v1 full-corpus gate for one release (default
+# `fast`) — except the never-in-lock invariant, which binds in both. SHIP_LAND_GATE_SCOPE is
+# still parsed for back-compat but decides nothing in the fast lane.
+#
+# Env overrides (mostly for tests): SHIP_LAND_LANE · SHIP_LAND_SMOKE_BUDGET_S ·
+# SHIP_LAND_SMOKE_NICE · SHIP_LAND_TIMEOUT_BIN (set-but-EMPTY ⇒ unbounded children) ·
+# CC_GATE_MAX_LOAD (0|off ⇒ never shed) · SHIP_LAND_SHARED_CHECKOUT · SHIP_LAND_SESSION_BRANCH_RE
 # · SHIP_LAND_ALLOW_SHARED=1 · SHIP_LAND_ESC_RE · SHIP_LAND_DECISIONS_DIR · LAND_LOG ·
 # LAND_LOCK_DIR (see land-lock.sh) · SHIP_LAND_VERIFY_RETRIES (default 2; 0 = single-shot,
-# the pre-T-P9-7 kill switch — one push, one verify, no auto-retry) ·
-# SHIP_LAND_GATE_ROUNDS (default 3; 0 = gate fully in-lock, the pre-optimistic kill switch) ·
-# SHIP_LAND_GATE_SCOPE / SHIP_LAND_GATE_POLICY / SHIP_LAND_GATE_SELECT (see GATE SCOPE above) ·
-# SHIP_LAND_HERM_LINT (test-hermeticity ratchet path; default the landing tree's own
-# scripts/test-hermeticity-lint.sh — see run_gate) ·
-# POSTLAND_DIR (flake + post-land queue + stamps dir) · POSTLAND_VERIFY=off (skip the post-land
-# spawn) · POSTLAND_STALENESS_GUARD=off · POSTLAND_MAX_STAMP_AGE_H (24) ·
-# CC_GATE_MAX_LOAD / CC_GATE_ADMIT_MAX_WAIT / CC_GATE_ADMIT_POLL (admission control; 0|off = the
-# kill switch).
+# the pre-T-P9-7 kill switch) · SHIP_LAND_GATE_ROUNDS (default 3; 0 = straight to the in-lock
+# statics re-gate) · SHIP_LAND_GATE_SCOPE / SHIP_LAND_GATE_POLICY / SHIP_LAND_GATE_SELECT ·
+# SHIP_LAND_HERM_LINT · SHIP_LAND_WALL_LINT (ratchet paths; default the landing tree's own) ·
+# SHIP_LAND_GATE_HOME_ISO · POSTLAND_DIR (flake + post-land queue + stamps dir) ·
+# POSTLAND_VERIFY=off (skip the post-land spawn) · POSTLAND_STALENESS_GUARD=off ·
+# POSTLAND_MAX_STAMP_AGE_H (24).
 #
 # bash 3.2-safe (no declare -A / mapfile; empty-array expansion guarded under `set -u`).
 # `pipefail` load-bearing; NO `set -e`.
@@ -136,8 +145,25 @@ STRANDED_SWEEP="${SCRIPT_DIR}/stranded-sweep.sh"
 GATE_MANIFEST="${SCRIPT_DIR}/gate-manifest.sh"
 GATE_SELECT="${SHIP_LAND_GATE_SELECT:-${SCRIPT_DIR}/gate-select.sh}"
 
+# ---- LANE: which gate this land runs (v2 default `fast`; `v1` is the kill switch) ----------
+# The lane is the ONE switch that decides whether a corpus can enter a land at all. Default
+# `fast` = statics + ratchets + bounded direct-suite smoke. `v1` restores the pre-inversion
+# full-corpus gate for one release — an ENV switch, not a revert, because a revert would itself
+# need the gate (the bootstrap deadlock this plan exists to escape).
+LANE="${SHIP_LAND_LANE:-fast}"
+case "$LANE" in
+  fast|v1) ;;
+  *) echo "✗ ship-land: unknown SHIP_LAND_LANE '$LANE' (want fast|v1)" >&2; exit 2 ;;
+esac
+
 # ---- gate scope (committed policy file; env always wins) --------------------
-# Hardcoded `full` fallback: an absent/corrupt policy file degrades SAFE (never narrows).
+# BACK-COMPAT ONLY in v2, and deliberately INERT: the scope machinery chose between
+# full/scoped/shadow CORPUS runs, and neither lane consults it any more — the fast lane runs no
+# corpus at all, and LANE=v1 runs the WHOLE corpus regardless of the value (a scoped v1 land would
+# be a third semantic to keep alive for a kill switch that exists for one release). It is still
+# read and still VALIDATED so an operator's committed policy file or existing env cannot turn a
+# land into a hard exit-2 on an unrelated flag, and so the value stays legible to anything that
+# greps it. Hardcoded `full` fallback preserved for the same reason: it never narrows.
 GATE_POLICY="${SHIP_LAND_GATE_POLICY:-${SCRIPT_DIR}/gate-policy.sh}"
 # shellcheck source=/dev/null
 [[ -r "$GATE_POLICY" ]] && . "$GATE_POLICY"
@@ -148,9 +174,12 @@ case "$SCOPE" in
 esac
 # What the gate ACTUALLY did. Seeded from the env because the locked phase is a separate
 # process (re-exec'd under land-lock) that, in CAS mode, does not re-run the gate — without the
-# handoff its land.log line would understate a scoped run as n/a. INTERNAL vars, not a UI.
-GATE_EFFECTIVE_FULL="${SHIP_LAND_GATE_EFFECTIVE_FULL:-1}"  # 1 ⇒ full suite PROVED (gate-green may advance)
-SELECTED_N="${SHIP_LAND_SELECTED_N:--1}"                   # suites selected (-1 = n/a: full/shadow run)
+# handoff its land.log line would understate the run as n/a. INTERNAL vars, not a UI.
+# GATE_EFFECTIVE_FULL is 0 by construction in v2 (a land makes no full-suite claim, in EITHER
+# lane) — it survives only so stamp_gate_green keeps ONE place that decides, and so a v1-era
+# env handoff cannot resurrect the claim.
+GATE_EFFECTIVE_FULL=0
+SELECTED_N="${SHIP_LAND_SELECTED_N:--1}"                   # suites the gate RAN (-1 = n/a)
 ATTEST_HEAD="?"; ATTEST_BASE="?"; ATTEST_TREE="?"
 # UNION SCOPE: on a stale-gate re-round the composed tree's ONLY novelty is what siblings landed
 # while we gated, so the selector is given that trunk delta as a SECOND range. FIRST_BASE anchors
@@ -163,6 +192,37 @@ EXTRA_RANGE=""
 # a kill, and must never be softened into a retryable non-verdict.
 GATE_RED=0        # ≥1 check produced a REAL verdict and it was red
 GATE_KILLED=0     # ≥1 bats run died to a signal / produced no attributable failure
+
+# ---- SMOKE + NET state (attested, seeded across the locked re-exec like SELECTED_N) ---------
+SMOKE_STATE="${SHIP_LAND_SMOKE_STATE:-none}"   # green | red | partial | skipped | none
+SMOKE_N="${SHIP_LAND_SMOKE_N:-0}"              # direct suites the smoke actually RAN
+SMOKE_S="${SHIP_LAND_SMOKE_S:-0}"              # wall seconds the smoke spent
+NET_STATE="${SHIP_LAND_NET_STATE:-none}"       # live | inert | none — ATTESTED, never enforced
+SMOKE_DEADLINE=""                              # non-empty ⇒ gate_bats bounds every child by it
+
+# ---- bounding every child of the smoke -------------------------------------
+# R5: every step bounded by an ABSOLUTE-PATH timeout(1), and the bound must cover the failure mode
+# it bounds. PATH alone is not enough — a land can run under launchd (no Homebrew on PATH), which
+# is exactly where coreutils installs timeout(1). Same resolution ladder as postland-verify.sh /
+# bin/it2-wrapper. `-k 10` + no `--foreground` ⇒ its own process group ⇒ the whole bats tree dies,
+# not just the wrapper (the unbounded-fork class that hung gates for five days).
+_resolve_timeout() {
+  local c
+  for c in "$(command -v timeout 2>/dev/null || true)" \
+           "$(command -v gtimeout 2>/dev/null || true)" \
+           /opt/homebrew/bin/timeout /usr/local/bin/timeout \
+           /opt/homebrew/bin/gtimeout /usr/local/bin/gtimeout; do
+    if [[ -n "$c" && -x "$c" ]]; then printf '%s' "$c"; return 0; fi
+  done
+  return 1
+}
+# UNSET ⇒ resolve one. SET (including set to EMPTY) ⇒ honored verbatim, so SHIP_LAND_TIMEOUT_BIN=
+# genuinely disables bounding — `${VAR:-}` cannot tell unset from set-empty, and a seam that cannot
+# turn a thing OFF is not a seam. No timeout(1) anywhere ⇒ children run UNBOUNDED (the budget then
+# only bites between suites); never a refusal to land.
+if [[ -n "${SHIP_LAND_TIMEOUT_BIN+set}" ]]; then TIMEOUT_BIN="$SHIP_LAND_TIMEOUT_BIN"
+else TIMEOUT_BIN="$(_resolve_timeout || true)"; fi
+NICE_BIN="$(command -v nice 2>/dev/null || true)"
 
 ESC_RE_DEFAULT='DROP[[:space:]]+TABLE|DROP[[:space:]]+COLUMN|DROP[[:space:]]+DATABASE|DROP[[:space:]]+SCHEMA|TRUNCATE[[:space:]]+TABLE|DELETE[[:space:]]+FROM|ALTER[[:space:]]+TABLE[[:space:]].+[[:space:]]DROP|-----BEGIN[[:space:]A-Z]*PRIVATE[[:space:]]+KEY'
 # NOTE: auth/session/navigation code lands are ALSO escalation-worthy (operator ruling),
@@ -238,14 +298,16 @@ attest_refs() {  # $1=base — pin the gated/landed IDENTITY for the next attest
 
 attest_land() {  # $1=verify $2=sweep $3=esc $4=exit — self-attesting land.log line
   # Schema GROWTH is safe: land.log's only reader is a raw tail. head/base/tree make a line
-  # replayable (which tree was gated) and gate_scope/selected_n make "was this a full-suite
-  # proof?" answerable per land — the denominator flake-rate claims need.
+  # replayable (which tree was gated); gate_scope now carries the LANE, and smoke/smoke_n/smoke_s
+  # + net make "what did this land actually prove, and was the net alive to prove the rest?"
+  # answerable per land — the §7 acceptance read (p50/p99, zero exit-9) comes from exactly here.
   local log; log="${LAND_LOG:-$HOME/.claude/land.log}"
   mkdir -p "$(dirname "$log")" 2>/dev/null || true
-  printf '{"ts":"%s","tool":"ship-land","repo":"%s","branch":"%s","sid":"%s","verify":"%s","sweep":"%s","esc_scan":"%s","exit":%s,"head":"%s","base":"%s","tree":"%s","gate_scope":"%s","selected_n":%s}\n' \
+  printf '{"ts":"%s","tool":"ship-land","repo":"%s","branch":"%s","sid":"%s","verify":"%s","sweep":"%s","esc_scan":"%s","exit":%s,"head":"%s","base":"%s","tree":"%s","gate_scope":"%s","selected_n":%s,"smoke":"%s","smoke_n":%s,"smoke_s":%s,"net":"%s"}\n' \
     "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${REPO_ROOT}" "${BRANCH}" "${CLAUDE_CODE_SESSION_ID:-}" \
     "$1" "$2" "$3" "$4" \
-    "${ATTEST_HEAD:-?}" "${ATTEST_BASE:-?}" "${ATTEST_TREE:-?}" "${SCOPE}" "${SELECTED_N:--1}" \
+    "${ATTEST_HEAD:-?}" "${ATTEST_BASE:-?}" "${ATTEST_TREE:-?}" "${LANE}" "${SELECTED_N:--1}" \
+    "${SMOKE_STATE:-none}" "${SMOKE_N:-0}" "${SMOKE_S:-0}" "${NET_STATE:-none}" \
     >> "$log" 2>/dev/null || true
 }
 
@@ -263,11 +325,17 @@ detect_trunk() {
   printf '%s' "$t"
 }
 
-postland_net_live() {  # 0 = trust the post-land net (or it is not adopted yet) / 1 = INERT
-  # ABSENCE IS LOUD. A scoped land is only safe because the FULL suite is re-proven off the
-  # critical path. If the net HAS run here (stamps exist) but its newest green stamp has gone
-  # cold, the net is inert and this land must NOT narrow. No stamps dir / no green stamp yet ⇒
-  # the net simply is not adopted (the bootstrap land) — never brick that.
+postland_net_live() {  # sets NET_STATE=live|inert|none. ALWAYS returns 0 — never blocks a land.
+  # ABSENCE IS LOUD, but loudness is the whole remedy (v2). v1 read an inert net as "do not
+  # narrow" and DEGRADED THE LAND TO THE FULL CORPUS — a fail-closed path picking the MORE
+  # expensive action, i.e. the amplifier law (R7) in its purest form: the net is inert precisely
+  # when the box is wedged, and the response was to add 40 minutes of bats per land to a wedged
+  # box. v2 keeps the detection and drops the escalation: WARN on stderr, attest net:"inert", and
+  # LAND. Correctness is not lost — the land never claimed the full suite in the first place; what
+  # an inert net costs is verification LATENCY, which R9's freshness alarm surfaces to the
+  # operator (cc-blockers / operator-readout), where a human can act on it.
+  # No stamps dir / no green stamp yet ⇒ the net simply is not adopted (the bootstrap land).
+  NET_STATE="none"
   [[ "${POSTLAND_STALENESS_GUARD:-on}" = "off" ]] && return 0
   local dir age max newest=0 m p
   dir="${POSTLAND_DIR:-$HOME/.claude/autonomy/postland}/stamps"
@@ -282,73 +350,41 @@ postland_net_live() {  # 0 = trust the post-land net (or it is not adopted yet) 
   [[ "$newest" -gt 0 ]] || return 0
   max="${POSTLAND_MAX_STAMP_AGE_H:-24}"
   age=$(( ( $(date +%s) - newest ) / 3600 ))
-  [[ "$age" -lt "$max" ]] && return 0
-  echo "⚠ gate[scoped]: post-land net appears INERT — newest green stamp is ${age}h old (max ${max}h). Degrading this land to the FULL gate. (kill switch: POSTLAND_STALENESS_GUARD=off)" >&2
-  return 1
+  if [[ "$age" -lt "$max" ]]; then NET_STATE="live"; return 0; fi
+  NET_STATE="inert"
+  echo "⚠ ship-land: the post-land VERIFIER looks INERT — newest GREEN stamp is ${age}h old (max ${max}h). This land PROCEEDS (a land never made the full-suite claim), but nothing is re-proving the trunk: check that com.claude.postland-verify is loaded (launchctl list) and that its stamps dir is advancing. Attested net:\"inert\". (kill switch: POSTLAND_STALENESS_GUARD=off)" >&2
+  return 0
 }
 
-# ---- admission control: bounded, fail-OPEN load shedding --------------------
-# WHY: nothing in the land path deferred on load — loadavg was RECORDED for forensics only
-# (here and postland-verify.sh). So every landing worktree started its FULL suite at once; the
-# kernel starved/killed them; the cuts were misread as RED; the reblocks made the dispatcher
-# retry. Fail-closed was AMPLIFYING the contention it guards (backlog f8e40b4c577d). CUT ≠ RED
-# (below) stops a cut from LYING; this stops the cut happening. They are complements, not
-# alternatives — the re-run below is only evidence if the environment actually changed.
-# CONTRACT — all four are load-bearing:
-#   bounded      never waits longer than CC_GATE_ADMIT_MAX_WAIT, then PROCEEDS (a land must never
-#                be starved by a busy box; shedding is a courtesy, not a gate).
-#   overridable  CC_GATE_MAX_LOAD (ceiling) · CC_GATE_ADMIT_MAX_WAIT · CC_GATE_ADMIT_POLL;
-#                CC_GATE_MAX_LOAD=0|off is the kill switch.
-#   fail-OPEN    unreadable sensor or non-numeric ceiling ⇒ return immediately. A broken load
-#                sensor must never block a land — that would be a new fail-closed amplifier.
-#   lock-free    NEVER called while the land-lock is held. The gate sits OUTSIDE the lock BY
-#                DESIGN (190c839, for the CAS push window); waiting inside it would serialize
-#                every lander behind one sleep and convert a load problem into a deadlock-shaped
-#                one. main_locked sets IN_LAND_LOCK=1 and this becomes a no-op there.
+# ---- load shedding: a PURE PREDICATE now — shed = SKIP, never WAIT ----------
+# WHAT WAS HERE: gate_admit, a bounded SLEEP loop that deferred an expensive suite until loadavg
+# fell below a ceiling. It is deleted, not tuned, because waiting is the amplifier itself (R7):
+#   * a bound written per-call MULTIPLIED across a per-suite loop (postland slept ~2h/run;
+#     600s × ~12 calls, backlog 60ec4c2d86d4);
+#   * five concurrent gates sat at load 16-18 waiting for a ceiling of 8 while THEIR OWN corpora
+#     were the load — self-starvation below their own threshold, a deadlock in all but name;
+#   * and every waiter that finally timed out ran the corpus ANYWAY, so the wait bought nothing
+#     but latency. A fail-closed path must never pick the MORE expensive action.
+# v2 keeps the sensor and drops the queue: at/above the ceiling the smoke is SKIPPED ENTIRELY and
+# the post-land verifier proves the tree instead. Shedding now defers to the NET, not to a sleep.
+#
+# FAIL-OPEN, unchanged in spirit: an unreadable sensor, a non-numeric ceiling, or the kill switch
+# (CC_GATE_MAX_LOAD=0|off) all answer "not above the ceiling" ⇒ the smoke RUNS. That is safe here
+# in a way it was not for gate_admit: the thing it admits is now bounded by an absolute wall
+# budget (≤120s, nice'd), so a broken sensor can cost latency but can never restore the corpus.
+#
+# IN_LAND_LOCK survives the deletion with a bigger job: it is the structural enforcement of
+# "nothing heavy may EVER enter the land-lock" (see run_gate) — the invariant the v1 in-lock full
+# gate broke, producing a 3h36m lock holder and the multi-day land jam.
 IN_LAND_LOCK="${IN_LAND_LOCK:-0}"
-gate_admit() {  # $1=what — defer the start of an expensive suite until load falls below a ceiling
-  local what="${1:-suite}" max budget step waited=0 load jit total spent
-  [[ "$IN_LAND_LOCK" = "1" ]] && return 0
-  max="${CC_GATE_MAX_LOAD:-8}"; budget="${CC_GATE_ADMIT_MAX_WAIT:-600}"; step="${CC_GATE_ADMIT_POLL:-15}"
-  [[ "$max" = "0" || "$max" = "off" ]] && return 0
-  case "$max" in ''|*[!0-9.]*) return 0 ;; esac                      # ceiling: numeric (awk-compared)
-  case "$budget$step" in ''|*[!0-9]*) return 0 ;; esac               # waits: INTEGER seconds
-  [[ "$step" -gt 0 ]] || return 0                                    # a 0 poll would spin ⇒ fail OPEN
-  # RUN-WIDE CEILING. The per-call bound was written for a caller that ran it twice; the per-suite
-  # runner calls it once per corpus PLUS once per failing suite's re-run, so a 600s per-call bound
-  # MULTIPLIES — 126 suites × 600s is 21 h of "bounded" waiting. Every bound must cover the failure
-  # mode it bounds. Fail-OPEN like the rest of this function: a non-integer total falls back to the
-  # default rather than blocking, and once the run-wide budget is spent, shedding simply stops.
-  total="${CC_GATE_ADMIT_TOTAL_WAIT:-1200}"
-  case "$total" in ''|*[!0-9]*) total=1200 ;; esac
-  spent="${GATE_ADMIT_SPENT:-0}"
-  if [[ "$spent" -ge "$total" ]]; then
-    if [[ "${GATE_ADMIT_CAPPED:-0}" != "1" ]]; then
-      GATE_ADMIT_CAPPED=1
-      echo "▶ gate: run-wide admission budget ${total}s spent — no further shedding this run (override CC_GATE_ADMIT_TOTAL_WAIT)" >&2
-    fi
-    return 0
-  fi
-  [[ $(( total - spent )) -lt "$budget" ]] && budget=$(( total - spent ))
-  while [[ "$waited" -lt "$budget" ]]; do
-    load="$(sysctl -n vm.loadavg 2>/dev/null | awk '{print $2}')"
-    [[ -n "$load" ]] || { GATE_ADMIT_SPENT=$(( spent + waited )); return 0; }   # sensor ⇒ fail OPEN
-    if awk -v l="$load" -v m="$max" 'BEGIN{exit !(l+0 < m+0)}'; then
-      GATE_ADMIT_SPENT=$(( spent + waited ))
-      [[ "$waited" -gt 0 ]] && echo "✓ gate: admitted after ${waited}s (load $load < $max) — starting $what" >&2
-      return 0
-    fi
-    [[ "$waited" -eq 0 ]] && echo "⏸ gate: DEFERRING $what — load $load ≥ ceiling $max (waiting up to ${budget}s; override CC_GATE_MAX_LOAD / CC_GATE_ADMIT_MAX_WAIT, 0=off)" >&2
-    # JITTER is load-bearing, not polish: without it every lander that deferred at the same moment
-    # also WAKES at the same moment and they all start their suites together — a fresh thundering
-    # herd precisely when load dips. Spreading the restarts lets the first waker in while the rest
-    # re-observe the load it just created.
-    jit=$(( RANDOM % 8 ))
-    sleep "$(( step + jit ))"; waited=$(( waited + step + jit ))
-  done
-  GATE_ADMIT_SPENT=$(( spent + waited ))
-  echo "▶ gate: admission budget ${budget}s exhausted (load $load ≥ $max) — proceeding anyway with $what (bounded by design)" >&2
-  return 0
+load_above_ceiling() {  # 0 = at/above the ceiling (SHED) · 1 = below it, sensor broken, or off
+  local max load
+  max="${CC_GATE_MAX_LOAD:-8}"
+  [[ "$max" = "0" || "$max" = "off" ]] && return 1            # kill switch: never shed
+  case "$max" in ''|*[!0-9.]*) return 1 ;; esac               # non-numeric ceiling ⇒ fail OPEN
+  load="$(sysctl -n vm.loadavg 2>/dev/null | awk '{print $2}')"
+  case "${load:-}" in ''|*[!0-9.]*) return 1 ;; esac          # unreadable sensor ⇒ fail OPEN
+  awk -v l="$load" -v m="$max" 'BEGIN{exit !(l+0 >= m+0)}'
 }
 
 # ---- GATE-KILLED: signal death is a THIRD state, never RED -------------------
@@ -363,7 +399,7 @@ gate_admit() {  # $1=what — defer the start of an expensive suite until load f
 # reported as evidence about the tree. It exits 9, distinct from 6.
 #
 # The DETECTION below is trunk's, not this branch's: an earlier draft here keyed on `rc > 128`,
-# which is simply wrong — bats masks the signal (see run_bats_all), so a SIGKILLed suite surfaces
+# which is simply wrong — bats masks the signal (see run_scoped_suite), so a SIGKILLed suite surfaces
 # as plain `1`. The TAP body is the only honest discriminator, and that half was already landed by
 # a sibling working the same incident. What this branch adds on top is (a) the twice-cut case,
 # which trunk could not decide because it did not capture the re-run's TAP (its own message says
@@ -397,8 +433,8 @@ gate_admit() {  # $1=what — defer the start of an expensive suite until load f
 # rather than inherit the lie. SHIP_LAND_GATE_HOME_ISO: `off` = kill switch · `on` = force even for
 # a fixture pipeline under bats · unset/`auto` = isolate real lands only (see gate_home_setup).
 #
-# The isolation is applied at gate_bats — the single chokepoint BOTH the monolithic run_bats_all
-# and the per-suite run_scoped_suite already funnel through — so ship-land's OWN bookkeeping
+# The isolation is applied at gate_bats — the single chokepoint every runner (the v2 smoke, the
+# v1-lane corpus, and run_scoped_suite's re-run) funnels through — so ship-land's OWN bookkeeping
 # (record_gate_cut / run_scoped_suite writing $HOME/.claude/autonomy/postland/flakes.jsonl) still
 # lands in the operator's REAL ledger. Isolating that too would silently delete the flake
 # denominator at teardown.
@@ -493,134 +529,191 @@ gate_home_setup() {     # NEVER returns non-zero — isolation is best-effort BY
 # That is a fail-closed degradation manufacturing a VERDICT about the tree out of a fact about
 # the operator's flags — the same class as CUT ≠ RED (f8e40b4c577d), and worse, it fires on the
 # documented escape hatch, so the fix for starvation caused a false red for anyone who took it.
-# CC_GATE_MAX_LOAD is FORCED to 0 rather than unset: a test must never sit in admission control,
-# which would stall the gate up to CC_GATE_ADMIT_MAX_WAIT per call (and gate_admit is a no-op
-# under the lock anyway). Only LANDER tuning is scrubbed — a test that wants any of these sets it
-# itself, per-test, which is unaffected.
-# SHIP_LAND_FULL_PER_SUITE joins the scrub list for exactly the same reason: it is LANDER tuning,
-# and tests/ship-land.bats asserts against BOTH runner modes. Left unscrubbed, an operator landing
-# with the kill switch on would bleed `off` into every fixture pipeline in that suite, so the
-# per-suite tests would silently exercise the monolith and go red on a tree that is fine — the
-# ROUNDS=0 defect verbatim, on the flag this very change introduces.
+# CC_GATE_MAX_LOAD is FORCED to 0 rather than unset, and in v2 that matters MORE, not less: 0 is
+# the never-shed kill switch, so a fixture pipeline's smoke always runs. Left inherited, whether a
+# nested pipeline smoked at all would depend on the ambient load of the box the suite happens to
+# run on — a test verdict decided by `uptime`, which is the same class of defect as the rest of
+# this paragraph. Only LANDER tuning is scrubbed — a test that wants any of these (including a
+# deliberate shed) sets it itself, per-test, which is unaffected.
+# SHIP_LAND_LANE and SHIP_LAND_SMOKE_BUDGET_S join the scrub list for exactly the same reason, and
+# the lane is the sharpest case yet: tests/ship-land.bats asserts fast-lane semantics, so an
+# operator landing with the kill switch on (SHIP_LAND_LANE=v1) would bleed `v1` into all ~50
+# fixture pipelines in that suite and red a tree that is fine — the ROUNDS=0 defect verbatim, on
+# the flag this very change introduces. SHIP_LAND_TIMEOUT_BIN likewise: an operator's set-empty
+# (bounding OFF) must not silently unbound a fixture's children. (SHIP_LAND_FULL_PER_SUITE was
+# scrubbed here for the same reason until v2 deleted the monolithic runner it selected; the entry
+# went with the flag, the precedent it set did not.)
 gate_bats() {  # run bats with the operator's lander tuning scrubbed; args pass through verbatim
-  # …and under the isolated $HOME when gate_home_setup got one. THE chokepoint: both run_bats_all
-  # (monolithic) and run_scoped_suite (per-suite, incl. its exoneration re-run) reach bats only
-  # through here, so isolation covers every path without either of them knowing about it.
+  # …and under the isolated $HOME when gate_home_setup got one. THE chokepoint: the smoke runner,
+  # the v1 corpus runner, and every exoneration re-run reach bats only through here, so isolation
+  # AND the smoke's wall bound cover every path without any caller knowing about them.
   # An EMPTY GATE_HOME passes HOME through untouched — that is the fail-open branch, not a bug.
-  local homeenv=()
+  #
+  # THE BOUND IS RECOMPUTED PER CALL, from the shared absolute SMOKE_DEADLINE — not handed down as
+  # a per-suite budget. A per-call budget is what multiplied gate_admit into 21h of "bounded"
+  # waiting; one deadline for the whole phase cannot multiply no matter how many children run
+  # (run_scoped_suite alone calls this twice per suite). A deadline already passed still yields a
+  # 1s bound rather than an unbounded child: the caller's loop stops starting suites, and anything
+  # already inside dies fast and honestly as a CUT.
+  local homeenv=() pre=() rem
   [[ -n "${GATE_HOME:-}" ]] && homeenv=(HOME="$GATE_HOME")
+  if [[ -n "${SMOKE_DEADLINE:-}" ]]; then
+    if [[ -n "$TIMEOUT_BIN" && -x "$TIMEOUT_BIN" ]]; then
+      rem=$(( SMOKE_DEADLINE - $(date +%s) ))
+      [[ "$rem" -lt 1 ]] && rem=1
+      pre=("$TIMEOUT_BIN" -k 10 "$rem")     # outermost ⇒ it owns the process group it kills
+    fi
+    # nice'd (§4.1): the smoke only runs below the load ceiling, so this costs ~nothing, and it
+    # keeps a land from being the thing that pushes an interactive box over.
+    [[ -n "$NICE_BIN" && -x "$NICE_BIN" ]] && pre+=("$NICE_BIN" -n "${SHIP_LAND_SMOKE_NICE:-10}")
+  fi
+  ${pre[@]+"${pre[@]}"} \
   env -u SHIP_LAND_GATE_ROUNDS -u SHIP_LAND_VERIFY_RETRIES -u SHIP_LAND_GATE_SCOPE \
-      -u LAND_LOCK_WAIT -u LAND_LOCK_TTL -u SHIP_LAND_FULL_PER_SUITE \
+      -u LAND_LOCK_WAIT -u LAND_LOCK_TTL \
+      -u SHIP_LAND_LANE -u SHIP_LAND_SMOKE_BUDGET_S -u SHIP_LAND_TIMEOUT_BIN \
       CC_GATE_MAX_LOAD=0 ${homeenv[@]+"${homeenv[@]}"} bats "$@"
 }
 
-run_bats_all() {  # $1=newline-list of DIRECT suites — the FULL corpus, one process per suite
-  # PHASE 1 of docs/plans/GATE_ARCHITECTURE_PLAN.md. SAME suites, SAME verdict rule; what changes
-  # is BLAST RADIUS. The governing law, MLE'd over all 55 real gate runs with a suite count
-  # (~/.claude/land.log): P(gate green) = (1-q)^n at q=2.94% PER SUITE — n=1 → 2/2 green,
-  # n=126 → 1/39 green, 5.0e5x more likely than a constant per-run model. So `n` is the lever.
-  # `bats tests/` handed all 126 files to ONE bats-exec-suite for 20-53 min, so a kill at suite 120
-  # lost all 126 and was attested exit:6 RED. Per suite, a kill costs ONE suite and run_scoped_suite
-  # re-runs it in a fresh TMPDIR — the mechanism that already absorbed 5 signal-kills
-  # (flakes.jsonl: 3x `exit 137`, 2x `Terminated: 15`) without redding a gate.
-  # Measured retry-failure rate 17% ⇒ q_eff 0.49% ⇒ P(green|n=126) 2.3% → 49.9% (21.5x), at a
-  # measured +3.0% wall time (bats startup 0.46s x 126 = 58s on a 1957s run).
-  # A DIRECT suite is still never exonerated and GATE_EFFECTIVE_FULL stays 1, so the full-suite
-  # claim is unchanged. This COMPOSES with the CUT≠RED body below (c605a2e) and gate_admit — the
-  # monolithic path keeps both; neither is replaced.
-  # KILL SWITCH — an env flag, NOT a revert: a revert would itself need the gate, which is the
-  # bootstrap deadlock this whole plan exists to escape.
-  if [[ "${SHIP_LAND_FULL_PER_SUITE:-on}" != "off" ]]; then
-    local _direct="${1:-}" _f _n=0 _red=0 _killed=0 _srv
-    echo "→ gate: bats tests/ — full corpus, one process per suite (SHIP_LAND_FULL_PER_SUITE=off restores the monolith)" >&2
-    gate_admit "the FULL bats suite (per-suite)"
-    for _f in tests/*.bats; do
-      [[ -e "$_f" ]] || continue
-      _n=$(( _n + 1 ))
-      _srv=0; run_scoped_suite "$_f" "$_direct" || _srv=$?
-      case "$_srv" in
-        0) ;;
-        2) _killed=$(( _killed + 1 )) ;;
-        *) _red=$(( _red + 1 )) ;;
-      esac
-    done
-    if [[ "$_n" -eq 0 ]]; then
-      echo "✗ gate: no suites matched tests/*.bats — refusing to claim green on an empty corpus" >&2
-      GATE_RED=1; return 1
-    fi
-    if [[ "$_red" -eq 0 && "$_killed" -eq 0 ]]; then
-      echo "✓ gate: FULL corpus green — $_n suites, one process each" >&2; return 0
-    fi
-    # NO FAIL-FAST, deliberately. The loop must finish the corpus so "did ANY suite name a real
-    # failure?" is answerable from evidence. Stopping at the first CUT would report a non-verdict
-    # (exit 9 ⇒ "retry when the box is quieter") for a corpus that also contained a genuine red —
-    # the dispatcher would then retry a tree that is actually broken, which is f8e40b4c577d in
-    # miniature. Finishing costs wall time on an already-doomed run and buys every failing suite
-    # named in ONE cycle instead of one per 20-minute gate.
-    if [[ "$_killed" -gt 0 ]]; then
-      GATE_KILLED=1
-      echo "⛔ gate: GATE-KILLED — $_killed of $_n suite(s) were cut TWICE with ZERO 'not ok'; they earned no verdict. Free a stuck gate with scripts/gate-cleanup.sh (worktree-scoped), never a bare pkill." >&2
-    fi
-    if [[ "$_red" -gt 0 ]]; then
-      GATE_RED=1
-      echo "✗ gate: bats RED — $_red of $_n suite(s) failed" >&2
-    fi
-    return 1
-  fi
-  echo "→ gate: bats tests/ (monolithic — SHIP_LAND_FULL_PER_SUITE=off)" >&2
-  # CUT ≠ RED. bats exits non-zero for BOTH a real `not ok` and a death by signal (a peer's
-  # kill, a starved fork, a truncated stream) — and the second case reports ZERO `not ok`.
-  # Branching on the exit code alone turned every machine-wide cut into a false "gate RED"
-  # (exit 6): measured 2026-07-26, 21 of 39 attested gate-REDs fired in 7 same-second clusters
-  # spanning 2-4 DIFFERENT worktrees — synchronization no genuine test failure can produce —
-  # and all 21 were FULL-tier runs. run_scoped_suite (:252) already absorbs exactly this via one
-  # fresh-TMPDIR re-run; FULL mode had no such appeal, which is why it failed 33 of its 34 runs.
-  #
-  # NOT by exit code: bats's own pipeline masks the signal. `bats:517-524` runs
-  # `exec bats-exec-suite | bats_test_count_validator | formatter` under `set -o pipefail`
-  # (`bats:501`), and the validator returns 1 on a truncated TAP — so under pipefail the
-  # rightmost non-zero wins and a SIGKILLed suite surfaces as plain `1`, never 137/143.
-  # The TAP BODY is the only honest discriminator.
-  local log rc notok td rc2
-  gate_admit "the FULL bats suite"
-  log="$(mktemp)"
-  echo "→ gate: bats tests/" >&2
-  gate_bats tests/ 2>&1 | tee "$log" >&2; rc="${PIPESTATUS[0]}"
-  if [[ "$rc" -eq 0 ]]; then rm -f "$log"; return 0; fi
-  notok="$(grep -c '^not ok' "$log" 2>/dev/null || true)"; notok="${notok:-0}"
-  if [[ "$notok" -gt 0 ]]; then
-    echo "✗ gate: bats RED — $notok failing test(s)" >&2
-    rm -f "$log"; GATE_RED=1; return 1
-  fi
-  echo "↻ gate: bats exited $rc with ZERO 'not ok' — CUT, not RED. One re-run in a fresh TMPDIR…" >&2
-  record_gate_cut "$rc" "$log"
-  rm -f "$log"
-  # SHED BEFORE THE RE-RUN. Re-running under the same sustained load that cut the first run is not
-  # a retry, it is the same experiment — and the postland retry ladder made exactly this mistake,
-  # convicting six suites that pass cleanly on a quiet box.
-  gate_admit "the FULL bats re-run"
-  # CAPTURE THE RE-RUN'S TAP TOO. Without it the two ways a re-run can fail are indistinguishable —
-  # hence the pre-existing "RED (or cut twice)", which handed the caller a guess at precisely the
-  # moment the answer decides what to do next. Same discriminator as the first run: the TAP body.
-  td="$(mktemp -d)"; log="$(mktemp)"
-  TMPDIR="$td" gate_bats tests/ 2>&1 | tee "$log" >&2; rc2="${PIPESTATUS[0]}"
-  rm -rf "$td" 2>/dev/null || true
-  if [[ "$rc2" -eq 0 ]]; then
-    rm -f "$log"
-    echo "✓ gate: FULL suite green on re-run — the first run was cut, not red." >&2
-    return 0
-  fi
-  notok="$(grep -c '^not ok' "$log" 2>/dev/null || true)"; notok="${notok:-0}"
-  if [[ "$notok" -gt 0 ]]; then
-    rm -f "$log"
-    echo "✗ gate: bats RED — $notok failing test(s) on the re-run (the first run was cut)" >&2
+run_corpus() {  # $1=newline-list of DIRECT suites — the WHOLE corpus, one process per suite.
+                # LANE=v1 ONLY. Unreachable in the default fast lane, by construction.
+  # THIS IS THE KILL SWITCH, not a tier. v2's whole finding is that the corpus cannot run
+  # per-land at this volume — see the header. It survives as one env flag away rather than a
+  # revert because a revert would itself need the gate (the bootstrap deadlock).
+  # What is GONE with the monolithic branch it replaces: `bats tests/` handed all 126 files to ONE
+  # bats-exec-suite for 20-53 min, so a kill at suite 120 lost all 126 and attested exit:6 RED.
+  # Per suite (GATE_ARCHITECTURE_PLAN Phase 1, MLE over 55 real runs: P(green) = (1-q)^n,
+  # q=2.94%/suite ⇒ 2.3% at n=126 → 49.9% with the fresh-TMPDIR re-run) a kill costs ONE suite.
+  # The monolith had no such appeal and failed 33 of its 34 runs; it is deleted, not kept.
+  local direct="${1:-}" f n=0 red=0 killed=0 srv
+  echo "→ gate[v1]: bats tests/ — full corpus, one process per suite (SHIP_LAND_LANE kill switch)" >&2
+  for f in tests/*.bats; do
+    [[ -e "$f" ]] || continue
+    n=$(( n + 1 ))
+    srv=0; run_scoped_suite "$f" "$direct" || srv=$?
+    case "$srv" in
+      0) ;;
+      2) killed=$(( killed + 1 )) ;;
+      *) red=$(( red + 1 )) ;;
+    esac
+  done
+  SELECTED_N="$n"
+  if [[ "$n" -eq 0 ]]; then
+    echo "✗ gate[v1]: no suites matched tests/*.bats — refusing to claim green on an empty corpus" >&2
     GATE_RED=1; return 1
   fi
-  record_gate_cut "$rc2" "$log"
-  rm -f "$log"
-  GATE_KILLED=1
-  echo "⛔ gate: GATE-KILLED — cut TWICE (exit $rc then $rc2, ZERO 'not ok' both times). The suite never earned a verdict, so this is NOT a red and NOT evidence about your tree: nothing is pushed and gate-green is untouched. Re-run /ship when the box is quieter, and free a stuck gate with scripts/gate-cleanup.sh (worktree-scoped), never a bare pkill." >&2
+  if [[ "$red" -eq 0 && "$killed" -eq 0 ]]; then
+    echo "✓ gate[v1]: FULL corpus green — $n suites, one process each" >&2; return 0
+  fi
+  # NO FAIL-FAST, deliberately. The loop must finish the corpus so "did ANY suite name a real
+  # failure?" is answerable from evidence. Stopping at the first CUT would report a non-verdict
+  # (exit 9 ⇒ "retry when the box is quieter") for a corpus that also contained a genuine red —
+  # the dispatcher would then retry a tree that is actually broken, which is f8e40b4c577d in
+  # miniature. Finishing costs wall time on an already-doomed run and buys every failing suite
+  # named in ONE cycle instead of one per 20-minute gate.
+  if [[ "$killed" -gt 0 ]]; then
+    GATE_KILLED=1
+    echo "⛔ gate[v1]: GATE-KILLED — $killed of $n suite(s) were cut TWICE with ZERO 'not ok'; they earned no verdict. Free a stuck gate with scripts/gate-cleanup.sh (worktree-scoped), never a bare pkill." >&2
+  fi
+  if [[ "$red" -gt 0 ]]; then
+    GATE_RED=1
+    echo "✗ gate[v1]: bats RED — $red of $n suite(s) failed" >&2
+  fi
   return 1
+}
+
+run_smoke() {  # $1=range → 0 = PROCEED · 1 = RED (a named failure in a direct suite)
+               # sets SMOKE_STATE / SMOKE_N / SMOKE_S; never sets GATE_KILLED (see below).
+  # THE LAND'S ONLY TEST WORK (§4.1): the `--direct` suites of THIS diff — the ones a change can
+  # actually break in a way statics cannot see — under ONE TOTAL wall budget. Everything else is
+  # the verifier's job now. Worst case here is bounded by construction: ≤ SHIP_LAND_SMOKE_BUDGET_S,
+  # or zero when the box is busy.
+  #
+  # SMOKE NEVER YIELDS EXIT 9. run_scoped_suite still distinguishes a cut (rc 2) from a named
+  # failure (rc 1) — that split is load-bearing and stays — but at THIS layer a non-verdict is not
+  # escalated to GATE_KILLED, because a non-verdict must never block a land (R6/§4.1): the corpus
+  # behind us will re-prove the tree, and turning "the box was busy" into a failed land is exactly
+  # the kill→"RED"→re-block→retry runaway (f8e40b4c577d). It becomes smoke:"partial" and lands.
+  local range="$1" direct budget start f n=0 red=0 cut=0 srv
+  SMOKE_STATE="none"; SMOKE_N=0; SMOKE_S=0; SMOKE_DEADLINE=""
+  ls tests/*.bats >/dev/null 2>&1 || return 0
+
+  # STRUCTURAL: nothing heavy may EVER run under the land-lock. Not a policy an author can forget —
+  # the check lives here, at the only place that could start a suite. v1's in-lock full gate is the
+  # 3h36m lock holder and the multi-day jam; the lock exists for the CAS race window alone.
+  if [[ "$IN_LAND_LOCK" = "1" ]]; then
+    echo "→ gate[locked]: statics + ratchets only — no bats inside the land-lock (v2 invariant)." >&2
+    return 0
+  fi
+
+  if [[ ! -x "$GATE_SELECT" ]]; then
+    # v1 read this as FULL (fail-closed toward a 40-minute corpus). In v2 "fail-closed toward more
+    # proof" IS the amplifier: the selector is missing exactly on the live-symlink path where a
+    # brand-new tracked file has no symlink yet, i.e. on the busiest boxes. No selection ⇒ no
+    # smoke; the verifier still proves the tree, and the land is not punished for a deploy gap.
+    echo "⚠ gate: selector '$GATE_SELECT' missing/not executable — no smoke this land; the post-land verifier proves this tree." >&2
+    return 0
+  fi
+  direct="$("$GATE_SELECT" --direct "$range" ${EXTRA_RANGE:+"$EXTRA_RANGE"} 2>/dev/null || true)"
+  if [[ "$direct" = "FULL" ]]; then
+    # FULL is the selector's own fail-closed answer ("I could not decide"). It can no longer mean
+    # "run everything", so its honest v2 reading is "this selection is untrustworthy" ⇒ no smoke.
+    echo "⚠ gate: selector answered FULL (its fail-closed 'cannot decide') — no direct-suite smoke this land; the verifier proves the tree." >&2
+    return 0
+  fi
+  direct="$(printf '%s\n' "$direct" | grep -v '^[[:space:]]*$' || true)"
+  if [[ -z "$direct" ]]; then
+    echo "→ gate: smoke — 0 direct suite(s) map to this range (lint-only land)." >&2
+    return 0
+  fi
+
+  if load_above_ceiling; then
+    SMOKE_STATE="skipped"
+    echo "⏭ gate: smoke SKIPPED — 1-min load is at/above the ceiling ${CC_GATE_MAX_LOAD:-8}. Shedding is a SKIP, never a wait (waiting is what starved five gates below their own ceiling); the post-land verifier proves this tree. Override: CC_GATE_MAX_LOAD=0." >&2
+    return 0
+  fi
+
+  budget="${SHIP_LAND_SMOKE_BUDGET_S:-120}"
+  case "$budget" in ''|*[!0-9]*) budget=120 ;; esac      # non-integer ⇒ the default, never unbounded
+  start="$(date +%s)"
+  [[ "$budget" -gt 0 ]] && SMOKE_DEADLINE=$(( start + budget ))
+  echo "→ gate: smoke — $(printf '%s\n' "$direct" | grep -c .) direct suite(s), ≤${budget}s total, one process each" >&2
+  # ONE clone for the whole smoke (not one per suite): the direct suites are as non-hermetic as any
+  # other, so they still get the isolated $HOME. Fail-open by contract — see gate_home_setup.
+  gate_home_setup
+  while IFS= read -r f; do
+    [[ -z "$f" ]] && continue
+    [[ -e "$f" ]] || continue                            # a suite deleted by this very land
+    if [[ -n "$SMOKE_DEADLINE" && "$(date +%s)" -ge "$SMOKE_DEADLINE" ]]; then
+      cut=1
+      echo "⏱ gate: smoke budget ${budget}s exhausted — remaining suite(s) not started, land PROCEEDS (attested smoke:\"partial\"; the verifier is the net). Override: SHIP_LAND_SMOKE_BUDGET_S." >&2
+      break
+    fi
+    n=$(( n + 1 ))
+    srv=0; run_scoped_suite "$f" "$direct" || srv=$?
+    case "$srv" in
+      0) ;;
+      2) cut=1 ;;                                        # cut twice / bound fired ⇒ NO verdict
+      *) red=$(( red + 1 )) ;;                           # a named `not ok` ⇒ a verdict
+    esac
+  done <<< "$direct"
+  SMOKE_S=$(( $(date +%s) - start ))
+  SMOKE_N="$n"
+  SMOKE_DEADLINE=""
+  gate_home_teardown
+
+  if [[ "$red" -gt 0 ]]; then
+    SMOKE_STATE="red"; GATE_RED=1
+    echo "✗ gate: smoke RED — $red of $n direct suite(s) named a failure. This is a VERDICT about your diff (O(diff), reproducible): fix it, do not retry unchanged." >&2
+    return 1
+  fi
+  if [[ "$cut" -eq 1 ]]; then
+    SMOKE_STATE="partial"
+    echo "⚠ gate: smoke PARTIAL — $n direct suite(s) attempted in ${SMOKE_S}s, not all earned a verdict (cut or budget). A non-verdict never blocks a land; the post-land verifier decides." >&2
+    return 0
+  fi
+  SMOKE_STATE="green"
+  echo "✓ gate: smoke green — $n direct suite(s) in ${SMOKE_S}s." >&2
+  return 0
 }
 
 record_gate_cut() {  # $1=rc $2=logfile [$3=file — default the whole corpus] — a CUT must be
@@ -672,9 +765,12 @@ run_scoped_suite() {  # $1=suite file $2=newline-list of DIRECT suites
   else
     echo "↻ gate: $f exited $rc1 with ZERO 'not ok' — CUT, not RED. One re-run in a fresh TMPDIR…" >&2
   fi
-  # SHED FIRST: a re-run under the SAME sustained load that failed the first one is the same
-  # experiment, not a retry — the exoneration only means something if the environment changed.
-  gate_admit "exoneration re-run of $f"
+  # NO SHED-BEFORE-RETRY. v1 slept here until load fell below a ceiling, on the theory that a
+  # re-run under the same sustained load is the same experiment, not a retry. True — and yet the
+  # sleep was strictly worse than the weak retry: it is what multiplied a per-call bound across a
+  # per-suite loop into hours of "bounded" waiting, and the smoke's ONE wall budget is now the
+  # thing that must not be spent on sleeping. The environment change v1 wanted is delivered
+  # structurally instead: a fresh TMPDIR here, and load shedding as a SKIP of the whole smoke.
   # CAPTURE THE RE-RUN'S TAP TOO — c605a2e's own lesson, applied to the per-file runner. Without
   # it "failed twice" cannot say WHICH twice, and a cut-then-real-failure would be handed to the
   # caller as a retryable non-verdict at exactly the moment the answer decides what to do next.
@@ -712,10 +808,16 @@ run_scoped_suite() {  # $1=suite file $2=newline-list of DIRECT suites
 }
 
 stamp_gate_green() {  # gate-green asserts "the FULL suite proved THIS tree" — its consumers
-  # (boundary-handoff.sh:122, wrap-ledger.sh:79) read it exactly that way, so a SCOPED run must
-  # leave the marker STALE rather than overstate; stale ⇒ they degrade correctly (abstain / n/a).
-  if [[ "${GATE_EFFECTIVE_FULL:-1}" != "1" ]]; then
-    echo "→ gate[$SCOPE]: gate-green NOT advanced — a scoped run cannot make the full-suite claim." >&2
+  # (boundary-handoff.sh:122, wrap-ledger.sh:79) read it exactly that way, so a run that did not
+  # prove it must leave the marker STALE rather than overstate; stale ⇒ they degrade correctly
+  # (abstain / n/a).
+  # IN v2 THIS IS ALWAYS THE NO-OP BRANCH — GATE_EFFECTIVE_FULL is pinned to 0 (§4.1), because the
+  # land never runs the full suite and the verifier is now the marker's single writer (§4.2). The
+  # function survives, and its call sites survive, so there is exactly ONE place where "may a land
+  # claim the full suite?" is decided, and it answers no out loud on every land. Deleting it would
+  # scatter that decision back across three call sites the next time someone is tempted.
+  if [[ "${GATE_EFFECTIVE_FULL:-0}" != "1" ]]; then
+    echo "→ gate[$LANE]: gate-green NOT advanced — a land makes no full-suite claim; the post-land verifier owns that marker." >&2
     return 0
   fi
   git rev-parse HEAD > "$(git rev-parse --git-common-dir)/gate-green" 2>/dev/null || true
@@ -723,7 +825,9 @@ stamp_gate_green() {  # gate-green asserts "the FULL suite proved THIS tree" —
 
 run_gate() {  # $1=range → 0 green / 1 red
   local range="$1" p rc=0 HERM_LINT
-  GATE_EFFECTIVE_FULL=1; SELECTED_N=-1; GATE_RED=0; GATE_KILLED=0
+  # GATE_EFFECTIVE_FULL is pinned at 0: a land makes no full-suite claim in EITHER lane, so
+  # stamp_gate_green self-noops and the verifier stays the marker's only writer (§4.2).
+  GATE_EFFECTIVE_FULL=0; SELECTED_N=-1; GATE_RED=0; GATE_KILLED=0
   local shellfiles=() pyfiles=()
   while IFS= read -r -d '' p; do
     [[ -z "$p" ]] && continue
@@ -823,64 +927,36 @@ run_gate() {  # $1=range → 0 green / 1 red
     fi
   fi
 
-  if [[ -d tests ]] && ls tests/*.bats >/dev/null 2>&1; then
-    local sel="" n direct f rbase srv
-    # UNION SCOPE: FIRST_BASE..<this range's base> is the trunk delta siblings landed since our
-    # FIRST gate — empty on round 1, non-empty on every stale-gate re-round / in-lock fallback /
-    # post-drop re-gate. Derived from the range so all three gate call sites get it for free.
-    rbase="${range%%..*}"
-    if [[ -n "$FIRST_BASE" && "$FIRST_BASE" != "$rbase" ]]; then EXTRA_RANGE="$FIRST_BASE..$rbase"; else EXTRA_RANGE=""; fi
-    if [[ "$SCOPE" != "full" ]]; then
-      if [[ ! -x "$GATE_SELECT" ]]; then
-        echo "⚠ gate[$SCOPE]: selector '$GATE_SELECT' missing/not executable — treating as FULL (fail-closed)." >&2
-        sel="FULL"
-      elif [[ "$SCOPE" = "scoped" ]] && ! "$GATE_SELECT" lint >/dev/null 2>&1; then
-        # A red map lint means the selection is untrustworthy, NOT that the land is bad: force
-        # FULL (~2s of extra proof), never block. Lint red must never be a landing failure.
-        echo "⚠ gate[scoped]: suite-map lint RED — selection untrustworthy; running the FULL gate for this land." >&2
-        sel="FULL"
-      elif [[ "$SCOPE" = "scoped" ]] && ! postland_net_live; then
-        sel="FULL"
+  # ── the test phase — SMOKE in the fast lane, the whole corpus only under the v1 kill switch ──
+  # NOT gated on the statics rc above: an already-red land still runs the smoke, so the author gets
+  # the lint error AND the failing test in ONE cycle. Same reasoning as run_corpus's no-fail-fast —
+  # ≤120s on an already-doomed run buys every finding named at once instead of one per round-trip.
+  local rbase direct
+  # UNION SCOPE: FIRST_BASE..<this range's base> is the trunk delta siblings landed since our
+  # FIRST gate — empty on round 1, non-empty on every stale-gate re-round / post-drop re-gate.
+  # Derived from the range so every gate call site gets it for free.
+  rbase="${range%%..*}"
+  if [[ -n "$FIRST_BASE" && "$FIRST_BASE" != "$rbase" ]]; then EXTRA_RANGE="$FIRST_BASE..$rbase"; else EXTRA_RANGE=""; fi
+
+  # The verifier's liveness is measured and ATTESTED here, and it decides NOTHING — see
+  # postland_net_live for why v1's "inert ⇒ run the full corpus" was the amplifier itself.
+  postland_net_live
+
+  if ls tests/*.bats >/dev/null 2>&1; then
+    if [[ "$LANE" = "v1" ]]; then
+      if [[ "$IN_LAND_LOCK" = "1" ]]; then
+        # The never-in-lock invariant binds in BOTH lanes. The kill switch restores the v1 PROOF,
+        # never the v1 lock pathology (a 3h36m holder while every other lander queued behind it).
+        echo "→ gate[v1/locked]: statics + ratchets only — no bats inside the land-lock, in either lane." >&2
       else
-        sel="$("$GATE_SELECT" "$range" ${EXTRA_RANGE:+"$EXTRA_RANGE"} 2>/dev/null)"
+        direct="$("$GATE_SELECT" --direct "$range" ${EXTRA_RANGE:+"$EXTRA_RANGE"} 2>/dev/null || true)"
+        [[ "$direct" = "FULL" ]] && direct=""   # "cannot decide" ⇒ exonerate nothing is unknown
+        gate_home_setup
+        run_corpus "$direct" || rc=1
       fi
-    fi
-    if [[ "$SCOPE" = "shadow" ]]; then
-      if [[ "$sel" = "FULL" ]]; then n="all"; else n="$(printf '%s' "$sel" | grep -c '[^[:space:]]' || true)"; fi
-      echo "→ gate[shadow]: would select $n suites" >&2
-    fi
-    if [[ "$SCOPE" != "scoped" || "$sel" = "FULL" ]]; then
-      # DIRECT suites matter in FULL mode too now that FULL runs per-suite: run_scoped_suite must
-      # never exonerate a suite belonging to THIS change (intermittence in code you are landing is
-      # a FINDING, not a flake). Same --direct call the scoped branch makes below; best-effort —
-      # an empty list simply means "exonerate nothing is unknown", which is the safe direction.
-      direct="$("$GATE_SELECT" --direct "$range" ${EXTRA_RANGE:+"$EXTRA_RANGE"} 2>/dev/null || true)"
-      gate_home_setup
-      run_bats_all "$direct" || rc=1
-    elif [[ -z "${sel//[[:space:]]/}" ]]; then
-      echo "→ gate[scoped]: selector picked 0 suites — skipping bats (lint-only land)" >&2
-      GATE_EFFECTIVE_FULL=0; SELECTED_N=0
     else
-      # --direct MIRRORS the selection's ranges (operator ruling): the composed tree is what we
-      # push, so a sibling-mapped suite is direct to THIS land too and must not be exonerated.
-      direct="$("$GATE_SELECT" --direct "$range" ${EXTRA_RANGE:+"$EXTRA_RANGE"} 2>/dev/null || true)"
-      GATE_EFFECTIVE_FULL=0; SELECTED_N=0
-      # ONE clone for the whole selection, not one per suite — and deliberately NOT hoisted above
-      # the 0-suite branch: a lint-only land must keep paying zero for a proof it never runs.
-      gate_home_setup
-      while IFS= read -r f; do
-        [[ -z "$f" ]] && continue
-        SELECTED_N=$(( SELECTED_N + 1 ))
-        # The SCOPED tier gets the same honest split as FULL. Before this it discarded the
-        # distinction: any failure left GATE_RED/GATE_KILLED at 0, so gate_nonzero_code's else
-        # branch reported a signal-killed scoped land as exit 6 "your code is broken". The two
-        # tiers must not disagree about what a cut is (c605a2e's premise); this is the half of
-        # that promise the scoped path never actually kept.
-        srv=0; run_scoped_suite "$f" "$direct" || srv=$?
-        if [[ "$srv" -eq 2 ]]; then GATE_KILLED=1; rc=1
-        elif [[ "$srv" -ne 0 ]]; then GATE_RED=1; rc=1; fi
-      done <<< "$sel"
-      echo "→ gate[scoped]: ran $SELECTED_N selected suite(s) — gate-green stays where it was." >&2
+      run_smoke "$range" || rc=1
+      SELECTED_N="$SMOKE_N"
     fi
   fi
   # Unconditional, and BEFORE the return so it runs on red and on GATE-KILLED alike — the EXIT trap
@@ -909,7 +985,7 @@ unlocked_reconcile_and_gate() {  # $1=trunk $2=dry_run → sets GATE_BASE/GATE_H
                                  # exits internally on rebase-conflict(5) / gate-red(6) /
                                  # nothing-to-land(0) / --dry-run(0).
   local TRUNK="$1" DRY_RUN="$2"
-  echo "→ ship-land[unlocked]: fetch + rebase + FULL gate — no lock held; concurrent landers gate in parallel" >&2
+  echo "→ ship-land[unlocked]: fetch + rebase + gate (statics + ratchets + bounded smoke) — no lock held" >&2
   git fetch origin "$TRUNK" 2>/dev/null || echo "⚠ ship-land: fetch failed — using local origin/$TRUNK" >&2
 
   if ! git rebase "origin/$TRUNK" >&2; then
@@ -935,12 +1011,10 @@ unlocked_reconcile_and_gate() {  # $1=trunk $2=dry_run → sets GATE_BASE/GATE_H
     exit "$code"
   fi
 
-  # P0-1 gate-green producer: the gate ran GREEN on HEAD, so mark it — boundary-handoff.sh:122 fires its
-  # "handoff before auto-compact eats the DoD" advisory only when gate-green == HEAD on a clean tree.
-  # Before this, the sole gate-green writers were test fixtures, so boundary abstained 100% in production
-  # (the FM1(b) advisory sat inert). Path matches wrap-ledger.sh:79 + boundary-handoff.sh:118 (readers).
-  # Fires on the green path for BOTH --dry-run (proven-green, unpushed) and a real land — but
-  # ONLY when the run proved the FULL suite (stamp_gate_green enforces that).
+  # gate-green: the call survives, the claim does not. stamp_gate_green self-noops in v2 (a land
+  # proves no full suite), so this line's job is to say so ONCE, out loud, on the green path — the
+  # marker's producer is the verifier now (§4.2), and boundary-handoff.sh:122 / wrap-ledger.sh:79
+  # read it from there. See stamp_gate_green for why it is kept rather than deleted.
   stamp_gate_green
 
   if [[ "$DRY_RUN" = "1" ]]; then
@@ -956,16 +1030,20 @@ unlocked_reconcile_and_gate() {  # $1=trunk $2=dry_run → sets GATE_BASE/GATE_H
 # ---- locked phase (re-exec'd under land-lock) ------------------------------
 
 main_locked() {
-  # We hold the land-lock from here on ⇒ admission control becomes a NO-OP (see gate_admit):
-  # sleeping under the lock would serialize every other lander behind this one's wait.
+  # We hold the land-lock from here on ⇒ IN_LAND_LOCK=1, which run_gate reads as its structural
+  # ban on starting ANY bats suite (either lane). Everything under the lock is O(seconds).
   IN_LAND_LOCK=1
-  # CAS mode ($3/$4 non-empty): the full gate already ran GREEN, UNLOCKED, on exactly
+  # CAS mode ($3/$4 non-empty): the gate already ran GREEN, UNLOCKED, on exactly
   # (HEAD=GATE_HEAD, base=GATE_BASE). Hold the lock only for fetch-compare → push →
   # content-verify — the 2026-07-11 race window. A moved origin/HEAD ⇒ exit 42 (stale
   # gate, INTERNAL): the outer loop re-gates the new final tree unlocked.
-  # FULL mode ($3/$4 empty — SHIP_LAND_GATE_ROUNDS=0 kill switch, or optimistic rounds
-  # exhausted under sustained contention): rebase + full gate INSIDE the lock (pre-fix
-  # behavior) — guaranteed progress, since a held mutex stops further pipeline movement.
+  # FALLBACK mode ($3/$4 empty — SHIP_LAND_GATE_ROUNDS=0, or the optimistic rounds exhausted
+  # under sustained contention): rebase + re-gate INSIDE the lock, but STATICS + RATCHETS ONLY.
+  # v1 ran the full corpus here, and that is the single worst thing this script ever did: a held
+  # machine-wide mutex plus a 20-53 min corpus produced a 3h36m lock holder while every other
+  # lander queued behind it (and, when the corpus hung, a multi-day jam). Guaranteed progress is
+  # still guaranteed — a held mutex stops further pipeline movement, so this round terminates —
+  # it just no longer costs the fleet an hour to get it.
   local TRUNK="$1" DRY_RUN="$2" GATE_BASE="${3:-}" GATE_HEAD="${4:-}"
   REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
   BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')"
@@ -999,7 +1077,7 @@ main_locked() {
       local code; code="$(gate_nonzero_code)"
       exit "$code"
     fi
-    # P0-1 gate-green producer (see unlocked_reconcile_and_gate for the full rationale).
+    # Self-noops in v2 — see stamp_gate_green / unlocked_reconcile_and_gate.
     stamp_gate_green
 
     if [[ "$DRY_RUN" = "1" ]]; then
@@ -1094,9 +1172,13 @@ main_locked() {
   attest_land "ok" "$sweep_field" "clean" 0
 
   # --- post-land verification (async, detached) ---
-  # A scoped land proved only the selected suites, so the FULL suite is re-proven off the critical
-  # path: queue the landed head and hand it to postland-verify.sh. start_new_session is MANDATORY —
-  # nohup/disown children share our process group and are reaped by the harness's group SIGKILL.
+  # THE HANDOFF OF THE VERDICT, and in v2 it carries the whole correctness argument: this land
+  # proved statics + a smoke over its own diff and nothing more, so the FULL suite is re-proven
+  # off the critical path — queue the landed head and hand it to postland-verify.sh. This kick is
+  # the FAST path (a fresh land is verified in seconds, not at the next tick); the launchd
+  # StartInterval is only the backstop for a land that died before reaching this line.
+  # start_new_session is MANDATORY — nohup/disown children share our process group and are reaped
+  # by the harness's group SIGKILL.
   # Guarded: absent verifier (or POSTLAND_VERIFY=off) is a no-op, never a land failure.
   if [[ "${POSTLAND_VERIFY:-on}" != "off" && -x "$SCRIPT_DIR/postland-verify.sh" ]]; then
     local pdir; pdir="${POSTLAND_DIR:-$HOME/.claude/autonomy/postland}"
@@ -1189,17 +1271,22 @@ main_outer() {
   # --- safety backup ref (rollback point) ---
   git branch -f "ship/backup-$(git rev-parse --short HEAD)" HEAD >/dev/null 2>&1 || true
 
-  # --- optimistic rounds: FULL gate UNLOCKED (parallel across sessions); the lock holds
+  # --- optimistic rounds: the gate runs UNLOCKED (parallel across sessions); the lock holds
   #     ONLY fetch-compare → push → content-verify. A stale gate (exit 42: a sibling
-  #     landed mid-gate) releases the lock and re-gates the new final tree out here. ---
+  #     landed mid-gate) releases the lock and re-gates the new final tree out here — and in v2
+  #     that re-gate is statics + ratchets + smoke (seconds), never a second corpus. ---
   local ROUNDS round rc
   ROUNDS="${SHIP_LAND_GATE_ROUNDS:-3}"
   round=0
   while [[ "$round" -lt "$ROUNDS" ]]; do
     round=$(( round + 1 ))
     unlocked_reconcile_and_gate "$TRUNK" "$DRY_RUN"   # exits on 5/6/dry-run/nothing-to-land
+    # HAND THE GATE'S FACTS TO THE LOCKED CHILD. It is a separate process and, in CAS mode, does
+    # not re-run the gate — without this its land.log line would attest a smoke that it never saw.
     export SHIP_LAND_GATE_EFFECTIVE_FULL="$GATE_EFFECTIVE_FULL" SHIP_LAND_SELECTED_N="$SELECTED_N" \
-           SHIP_LAND_FIRST_BASE="$FIRST_BASE"
+           SHIP_LAND_FIRST_BASE="$FIRST_BASE" \
+           SHIP_LAND_SMOKE_STATE="$SMOKE_STATE" SHIP_LAND_SMOKE_N="$SMOKE_N" \
+           SHIP_LAND_SMOKE_S="$SMOKE_S" SHIP_LAND_NET_STATE="$NET_STATE"
     "$LAND_LOCK" -- "$SELF" __locked "$TRUNK" "$DRY_RUN" "$GATE_BASE" "$GATE_HEAD"
     rc=$?
     [[ "$rc" -ne 42 ]] && exit "$rc"   # landed (0) or a real failure (incl. land-lock's 75) — propagate
@@ -1207,9 +1294,11 @@ main_outer() {
   done
 
   # --- rounds exhausted (sustained contention) or SHIP_LAND_GATE_ROUNDS=0: guaranteed
-  #     progress — rebase + full gate INSIDE the lock (pre-fix behavior; a held mutex
-  #     stops further pipeline movement, so this round cannot be invalidated). ---
-  [[ "$ROUNDS" -gt 0 ]] && echo "→ ship-land: ${ROUNDS} optimistic round(s) exhausted — falling back to the in-lock full gate (guaranteed progress)." >&2
+  #     progress — rebase + re-gate INSIDE the lock, STATICS + RATCHETS ONLY (run_gate refuses to
+  #     start bats when IN_LAND_LOCK=1, in either lane). A held mutex stops further pipeline
+  #     movement, so this round cannot be invalidated; the difference from v1 is that it now
+  #     costs seconds instead of the 3h36m lock hold that jammed the fleet. ---
+  [[ "$ROUNDS" -gt 0 ]] && echo "→ ship-land: ${ROUNDS} optimistic round(s) exhausted — falling back to the in-lock STATICS-only re-gate (guaranteed progress; nothing heavy enters the lock)." >&2
   exec "$LAND_LOCK" -- "$SELF" __locked "$TRUNK" "$DRY_RUN" "" ""
 }
 
