@@ -17,7 +17,23 @@
 #               TREE already has a stamp
 #   C6 mutex    run.lock.d mkdir+pid — a second LIVE instance exits 0 quietly;
 #               a DEAD-pid lock is reaped and the run proceeds
-#   C7 verdict  `bats tests/` inside the once-created DETACHED $CC_POSTLAND_WORKTREE
+#   C7 verdict  bats over the TREE CORPUS inside a DETACHED worktree MINTED FOR THIS RUN
+#               and REMOVED on exit (v2 §4.2.1 — the reused cell carried cross-tree residue)
+#   C18 partition  the corpus is tests/*.bats MINUS scripts/host-suites.manifest, passed to
+#               bats as an explicit FILE LIST (never `tests/`); ONE list also indexes
+#               suite_file_at, so hang attribution cannot desync from what ran. A missing
+#               manifest ⇒ empty ⇒ everything runs (fail-closed toward MORE proof)
+#   C19 qos     no admission control anywhere: the singleton must progress at ANY load
+#   C20 revert  on a reproducible RED with a BISECTED culprit C, and only then: revert C on
+#               its own branch and land it via the land lane. Refused if POSTLAND_AUTOREVERT=off ·
+#               C is itself a revert · $CC_POSTLAND_DIR/reverts/<C> exists (never twice) ·
+#               POSTLAND_MAX_REVERTS attempts already made this run · no land lane present.
+#               An UNDECIDABLE bisect pages + backlogs and attempts ZERO reverts.
+#   C21 green   a green stamp also writes <git-common-dir>/gate-green = the COMMIT sha —
+#               in v2 the verifier is the only party that can make the full-suite claim
+#   C22 prelint the whole-tree meta-lints run STANDALONE before the corpus, own-set seams
+#               UNSET (whole-tree strict); non-zero ⇒ named RED that outranks a cut; OUR
+#               bound firing proves nothing ⇒ cut, never red and never green
 #   C8 retries  the failing FILE is re-run alone up to 2 more times;
 #               >=2/3 fails => reproducible RED; 1/3 => flake (flakes.jsonl,
 #               EXCLUDED from the verdict); all-flake => verdict green
@@ -54,13 +70,20 @@ setup() {
   export HOME="$BATS_TEST_TMPDIR/home"
   export CC_POSTLAND_DIR="$BATS_TEST_TMPDIR/state"     # C3 — SUT creates it
   export CC_POSTLAND_REPO="$BATS_TEST_TMPDIR/repo"
-  export CC_POSTLAND_WORKTREE="$BATS_TEST_TMPDIR/pv-worktree"
+  # DELIBERATELY NOT setting CC_POSTLAND_WORKTREE: pinning it made every test exercise the
+  # fixed-path override and left the DEFAULT mint path — the only one production ever uses —
+  # untested. The seam still works and has its own test below; the suite drives the default.
   export CC_PAGES_DIR="$BATS_TEST_TMPDIR/pages"        # externally owned dir
   export CC_IDL="$BATS_TEST_TMPDIR/idl.jsonl"
-  # Admission control OFF: every --run-if-needed below reaches run_target → gate_admit, and this
-  # suite runs on exactly the loaded box that makes it defer. Left on, each of those stalls for
-  # CC_GATE_ADMIT_MAX_WAIT and the suite reads as hung. Shedding has its own tests (--selftest).
-  export CC_GATE_MAX_LOAD=0
+  # v2: there is NO admission control to disable any more (C19) — the old CC_GATE_MAX_LOAD=0 export
+  # lived here because every --run-if-needed reached gate_admit and stalled on this very box.
+  # AUTO-REVERT OFF BY DEFAULT FOR THIS SUITE (C20): a red fixture must never be one guard away
+  # from pushing. The revert tests below opt IN explicitly, so a guard that silently stopped
+  # working cannot hide behind a blanket suite-wide switch.
+  export POSTLAND_AUTOREVERT=off
+  # Per-run worktree cells (C7) land here, so a leak is visible to the tests rather than landing
+  # in the developer's real ~/Development/.worktrees.
+  export CC_POSTLAND_WT_ROOT="$BATS_TEST_TMPDIR/cells"
   STUB="$BATS_TEST_TMPDIR/bin"; REC="$BATS_TEST_TMPDIR/rec"
   export CC_BACKLOG_BIN="$STUB/cc-backlog"
   mkdir -p "$HOME" "$CC_PAGES_DIR" "$STUB" "$REC"
@@ -99,6 +122,7 @@ origin_tree() { git -C "$R" rev-parse "origin/main^{tree}"; }
 stamps_n()    { find "$CC_POSTLAND_DIR/stamps" -name '*.json' 2>/dev/null | wc -l | tr -d ' '; }
 idl_last()    { tail -n1 "$CC_IDL" | jq -r "$1"; }
 pages_n()     { find "$CC_PAGES_DIR" -name 'postland-red-*.page' 2>/dev/null | wc -l | tr -d ' '; }
+cells_n()     { find "$CC_POSTLAND_WT_ROOT" -maxdepth 1 -name 'wt-*' 2>/dev/null | wc -l | tr -d ' '; }
 cut_pages_n() { find "$CC_PAGES_DIR" -name 'postland-cut-*.page' 2>/dev/null | wc -l | tr -d ' '; }
 
 # A `bats` stand-in on $CC_POSTLAND_BATS reproducing the fingerprint of a REAL truncation — the
@@ -125,7 +149,21 @@ add_stateful_test() {   # $1 = basename, $2 = body of the helper script
   run env POSTLAND_VERIFY=off bash "$SUT" --run-if-needed
   [ "$status" -eq 0 ]                    # C2
   [ "$(stamps_n)" = "0" ]                # no verification happened...
-  [ ! -e "$CC_POSTLAND_WORKTREE" ]       # ...not even the C7 worktree
+  [ "$(cells_n)" = "0" ]                 # ...not even a C7 worktree cell was minted
+  # (asserted by COUNTING cells, not by `[ ! -e "$CC_POSTLAND_WORKTREE" ]`: with the fixed-path
+  # override no longer set, that expands to `[ ! -e "" ]`, which is vacuously true — a dead
+  # assertion that would pass just as happily if the kill switch had stopped working.)
+}
+
+# ── C7 the fixed-path seam still works (production uses the default; this keeps it from rotting)
+@test "C7: CC_POSTLAND_WORKTREE is still honored verbatim as the cell path" {
+  export CC_POSTLAND_WORKTREE="$BATS_TEST_TMPDIR/pinned-cell"
+  b="$(stub_bats pinned "printf '%s\n' \"\$PWD\" > '$REC/pinned.txt'; printf '1..1\nok 1 p\n'")"
+  CC_POSTLAND_BATS="$b" run bash "$SUT" --run-if-needed
+  [ "$status" -eq 0 ]
+  [ "$(cat "$REC/pinned.txt")" = "$CC_POSTLAND_WORKTREE" ]   # minted AT the pinned path...
+  [ ! -d "$CC_POSTLAND_WORKTREE" ]                            # ...and still torn down (C7)
+  [ "$(cells_n)" = "0" ]                                      # and nothing under the default root
 }
 
 # ── C9 green ────────────────────────────────────────────────────────────────────
@@ -195,19 +233,53 @@ add_stateful_test() {   # $1 = basename, $2 = body of the helper script
 }
 
 # ── C7 worktree ─────────────────────────────────────────────────────────────────
-@test "verification runs in a DETACHED worktree, leaving CC_POSTLAND_REPO untouched" {
+# The cell is EPHEMERAL in v2, so "where did the suite run?" can no longer be answered by
+# looking at the filesystem afterwards — by then the correct answer is "nowhere". It is
+# answered by a SPY standing in for bats, which records its own cwd/HEAD/detachment at the
+# only moment they exist. Asserting the leftovers would have quietly become an assertion
+# about teardown rather than about where the verdict was computed.
+@test "verification runs in a DETACHED worktree at the target, leaving CC_POSTLAND_REPO untouched" {
   target="$(origin_head)"
   repo_head_before="$(git -C "$R" rev-parse HEAD)"
-  run bash "$SUT" --run-if-needed
+  b="$(stub_bats spy "{ echo cwd=\$PWD; echo head=\$(git rev-parse HEAD); git symbolic-ref -q HEAD >/dev/null 2>&1 && echo detached=no || echo detached=yes; test -f .git && echo islink=yes || echo islink=no; } > '$REC/where.txt'; printf '1..1\nok 1 p\n'")"
+  CC_POSTLAND_BATS="$b" run bash "$SUT" --run-if-needed
   [ "$status" -eq 0 ]
-  [ -d "$CC_POSTLAND_WORKTREE" ]                                     # C7
-  [ "$(git -C "$CC_POSTLAND_WORKTREE" rev-parse HEAD)" = "$target" ] # checked out the target
-  run git -C "$CC_POSTLAND_WORKTREE" symbolic-ref -q HEAD
-  [ "$status" -ne 0 ]                                              # C7: detached
-  git -C "$R" worktree list | grep -q "$(basename "$CC_POSTLAND_WORKTREE")"
-  # ...and the repo's own checkout is not where tests ran
+  [ -f "$REC/where.txt" ]                                            # the spy really ran
+  grep -q "^head=$target\$"   "$REC/where.txt"                       # C7: at the TARGET sha
+  grep -q '^detached=yes$'    "$REC/where.txt"                       # C7: detached
+  grep -q '^islink=yes$'      "$REC/where.txt"                       # a linked worktree, not a clone
+  # C7: and NOT in the repo — whose working tree is the live ~/.claude layer
+  run grep -q "^cwd=$R\$" "$REC/where.txt"
+  [ "$status" -ne 0 ]
   [ "$(git -C "$R" rev-parse HEAD)" = "$repo_head_before" ]
   [ -z "$(git -C "$R" status --porcelain)" ]
+}
+
+# ── C7 lifecycle: minted per run, then removed ──────────────────────────────────
+@test "C7: the worktree cell is MINTED for the run and REMOVED afterwards (no residue, no leak)" {
+  # the cell must EXIST while the verdict is computed...
+  b="$(stub_bats live "printf '%s\n' \"\$PWD\" > '$REC/cell.txt'; printf '1..1\nok 1 p\n'")"
+  CC_POSTLAND_BATS="$b" run bash "$SUT" --run-if-needed
+  [ "$status" -eq 0 ]
+  cell="$(cat "$REC/cell.txt")"
+  [ -n "$cell" ]
+  # minted where v2 says: a live `[ ]` on prefix-stripping, so a wrong root fails the test
+  [ "${cell#"$CC_POSTLAND_WT_ROOT"/wt-run-}" != "$cell" ]
+  # ...and be gone afterwards, with git's own worktree list agreeing (a `rm -rf` alone would
+  # leave a registered-but-missing worktree that blocks the next `worktree add` on that path).
+  [ ! -d "$cell" ]
+  run bash -c "git -C '$R' worktree list | grep -cF '$cell'"
+  [ "$output" = "0" ]
+  [ -z "$(find "$CC_POSTLAND_WT_ROOT" -maxdepth 1 -name 'wt-run-*' 2>/dev/null)" ]
+  # POSITIVE CONTROL — a SECOND run mints again rather than reusing: a different path proves
+  # freshness, and this test cannot pass by the verifier simply never creating a cell at all.
+  CC_POSTLAND_BATS="$b" run bash "$SUT" --run-if-needed        # same tree ⇒ abstains, so move it
+  echo moved >> "$R/foo.sh"; push_commit "second tree"
+  CC_POSTLAND_BATS="$b" run bash "$SUT" --run-if-needed
+  [ "$status" -eq 0 ]
+  cell2="$(cat "$REC/cell.txt")"
+  [ -n "$cell2" ]
+  [ ! -d "$cell2" ]
 }
 
 # ── C5 tree-keying ──────────────────────────────────────────────────────────────
@@ -534,8 +606,14 @@ case "${PV_STUB_MODE:-}" in
   hungsig)  echo "1..3"; echo "bats: line 336: 42124 Terminated: 15   exec bats-exec-suite"; sleep 60 ;;
   # planned, completed nothing, exit 1, NOBODY signalled it (the no-timeout leg)
   stall)    echo "1..3"; exit 1 ;;
-  # wedges as a SUITE, completes as a FILE => the confirm re-run must exonerate it
-  flaky)    if [ "${1:-}" = "tests/" ]; then echo "1..3"; sleep 60; else echo "1..1"; echo "ok 1 a"; exit 0; fi ;;
+  # wedges as a SUITE, completes as a FILE => the confirm re-run must exonerate it.
+  # v2 passes the corpus as an explicit FILE LIST, never the literal `tests/` (C18), so the
+  # discriminator is ARGUMENT COUNT: >1 path = the suite run, exactly 1 = the confirm re-run.
+  # Keying on "tests/" was keying on the v1 invocation SHAPE, and it silently stopped matching
+  # the producer — the stub then completed instantly and the hang it exists to fake never
+  # happened. A fixture is a claim about the real producer; when the producer changes shape the
+  # fixture must be re-derived from it, not left passing for a new reason.
+  flaky)    if [ "$#" -gt 1 ] || [ "${1:-}" = "tests/" ]; then echo "1..3"; sleep 60; else echo "1..1"; echo "ok 1 a"; exit 0; fi ;;
   # bats OUTLIVED the child it lost: rc is a plain 1, the only trace is the shell's
   # job-control line. This is the literal 9c5d0ba74e79 observation.
   survivor) echo "1..3"; echo "ok 1 a"
@@ -568,10 +646,12 @@ hung_pages_n() { find "$CC_PAGES_DIR" -name 'postland-hung-*.page' 2>/dev/null |
   [ "$(pages_n)" = "0" ]                                            # C13: NOT a RED
   [ "$(cut_pages_n)" = "0" ]                                        # ...and NOT a machine cut
   [ -n "$(find "$CC_PAGES_DIR" -name 'postland-hung-wedge-*.page' 2>/dev/null)" ]
-  # POSITIVE CONTROL on the REAL producer: real bats, real wedge, real timeout(1) — the
-  # bound genuinely fires rather than the 124 arriving from somewhere in the fixture.
+  # POSITIVE CONTROL on the REAL producer: real bats, real wedge, real timeout(1) — the bound
+  # genuinely fires rather than the 124 arriving from somewhere in the fixture. It runs against
+  # the fixture repo's own copy of the suite, because the verifier's cell no longer outlives the
+  # run (C7); pointing it at that path would have made the control assert teardown, not wedging.
   tb="$(command -v timeout || command -v gtimeout || echo /opt/homebrew/bin/timeout)"
-  run env -u TMPDIR "$tb" -k 2 4 bats "$CC_POSTLAND_WORKTREE/tests/wedge.bats"
+  run env -u TMPDIR "$tb" -k 2 4 bats "$R/tests/wedge.bats"
   [ "$status" -eq 124 ]
 }
 
@@ -634,6 +714,10 @@ hung_pages_n() { find "$CC_PAGES_DIR" -name 'postland-hung-*.page' 2>/dev/null |
 @test "C15: a hang candidate whose file does NOT wedge alone degrades to a CUT" {
   run bash "$SUT" --run-if-needed
   [ "$status" -eq 0 ]
+  # TWO suites, deliberately: the stub tells "the SUITE run" from "the confirm re-run" by argument
+  # count (v2 passes a file LIST, never `tests/`), and with a one-suite corpus those two are
+  # byte-identical invocations — the fixture could not express the distinction it exists to test.
+  printf '@test "second" { true; }\n' > "$R/tests/second.bats"
   echo ff > "$R/flaky-fixture"; push_commit "suite wedges, file does not"
   tree="$(origin_tree)"
   stub_bats_mode flaky
@@ -711,4 +795,230 @@ hung_pages_n() { find "$CC_PAGES_DIR" -name 'postland-hung-*.page' 2>/dev/null |
   [ "$(pages_n)" = "0" ]                            # C13: and emphatically not a RED
   [ "$(hung_pages_n)" = "0" ]
   [ "$(cat "$CC_POSTLAND_DIR/last-green")" = "$green" ]
+}
+
+# ════ v2 (LAND_PIPELINE_V2 §4.2) ═════════════════════════════════════════════════════════════════
+# C18 partition · C19 no admission control · C20 auto-revert · C21 gate-green · C22 pre-corpus lints.
+# Every one carries a POSITIVE CONTROL, because each is a test that a thing does NOT happen — and an
+# absence-assertion passes just as happily when the mechanism is dead as when it is working.
+
+# ── C18 partition ───────────────────────────────────────────────────────────────
+@test "C18: the corpus is tests/*.bats MINUS the manifest — the LIST bats receives proves it" {
+  printf '@test "h" { true; }\n' > "$R/tests/hostonly.bats"
+  printf '@test "t" { true; }\n' > "$R/tests/treeonly.bats"
+  mkdir -p "$R/scripts"
+  printf '# host suites\ntests/hostonly.bats\n' > "$R/scripts/host-suites.manifest"
+  push_commit "a partitioned tree"
+  b="$(stub_bats argv "printf '%s\n' \"\$@\" > '$REC/argv.txt'; printf '1..1\nok 1 p\n'")"
+  CC_POSTLAND_BATS="$b" run bash "$SUT" --run-if-needed
+  [ "$status" -eq 0 ]
+  [ -f "$REC/argv.txt" ]
+  run grep -cxF 'tests/treeonly.bats' "$REC/argv.txt"; [ "$output" = "1" ]  # tree suite: RAN
+  run grep -cxF 'tests/ok.bats'       "$REC/argv.txt"; [ "$output" = "1" ]
+  run grep -cxF 'tests/hostonly.bats' "$REC/argv.txt"; [ "$output" = "0" ]  # host suite: EXCLUDED
+  run grep -cxF 'tests/'              "$REC/argv.txt"; [ "$output" = "0" ]  # never the DIRECTORY
+  # POSITIVE CONTROL — the identical tree with the manifest REMOVED must run hostonly. Without it
+  # this test would pass if the corpus were empty, or if hostonly.bats had simply never existed.
+  git -C "$R" rm -q "$R/scripts/host-suites.manifest"
+  push_commit "no manifest ⇒ everything runs"
+  CC_POSTLAND_BATS="$b" run bash "$SUT" --run-if-needed
+  [ "$status" -eq 0 ]
+  run grep -cxF 'tests/hostonly.bats' "$REC/argv.txt"; [ "$output" = "1" ]  # missing ⇒ MORE proof
+}
+
+# ── C19 no admission control ────────────────────────────────────────────────────
+@test "C19: no admission control survives anywhere in the runner (it must never wait on load)" {
+  run grep -cE '^[[:space:]]*gate_admit' "$SUT"
+  [ "$output" = "0" ]
+  # POSITIVE CONTROL on the PATTERN: it must match a real call site, else this test is a
+  # tautology that would keep passing if the regex silently stopped matching anything.
+  printf 'x() {\n  gate_admit "full suite"\n}\n' > "$BATS_TEST_TMPDIR/probe.sh"
+  run grep -cE '^[[:space:]]*gate_admit' "$BATS_TEST_TMPDIR/probe.sh"
+  [ "$output" = "1" ]
+  # and no load-polling loop survives under another name
+  run grep -cE 'CC_GATE_ADMIT_MAX_WAIT|CC_GATE_ADMIT_POLL|ADMIT-DEFER|ADMIT-PROCEED' "$SUT"
+  [ "$output" = "0" ]
+}
+
+# ── C21 gate-green ──────────────────────────────────────────────────────────────
+@test "C21: a GREEN stamp writes <git-common-dir>/gate-green = the COMMIT sha; a RED never does" {
+  gc="$(git -C "$R" rev-parse --git-common-dir)"
+  case "$gc" in /*) ;; *) gc="$R/$gc" ;; esac
+  rm -f "$gc/gate-green"
+  target="$(origin_head)"
+  run bash "$SUT" --run-if-needed
+  [ "$status" -eq 0 ]
+  [ -f "$gc/gate-green" ]
+  [ "$(cat "$gc/gate-green")" = "$target" ]        # the COMMIT — what the consumers compare to HEAD
+  [ "$(cat "$gc/gate-green")" != "$(origin_tree)" ] # ...explicitly NOT the tree the stamp is keyed on
+  # CONTROL: an unproven tree must never advance the marker (the whole point of the claim).
+  printf '@test "f" { false; }\n' > "$R/tests/bad.bats"
+  push_commit "a red tree"
+  run bash "$SUT" --run-if-needed
+  [ "$(cat "$gc/gate-green")" = "$target" ]        # still the last PROVEN commit
+}
+
+# ── C20 auto-revert ─────────────────────────────────────────────────────────────
+# A stub land lane on the CC_POSTLAND_SHIP_BIN seam. It RECORDS the cwd/branch/subject it was
+# invoked with — the contract is "landed FROM the revert worktree, on the revert's own branch" —
+# and then really pushes, so "trunk healed" is observed end-to-end rather than mocked away.
+ship_stub() {
+  printf '#!/bin/bash\n{ echo "cwd=$PWD"; echo "branch=$(git rev-parse --abbrev-ref HEAD)"; echo "subject=$(git log -1 --format=%%s)"; } >> "%s/ship.argv"\ngit push -q origin HEAD:main\n' \
+    "$REC" > "$STUB/ship-land"
+  chmod +x "$STUB/ship-land"
+  export CC_POSTLAND_SHIP_BIN="$STUB/ship-land"
+}
+# A green baseline FIRST: last-green is the bisect floor, and with no floor there is no bisected
+# culprit and therefore (by the bisected-culprit-only guard) no revert at all.
+arv_red() {   # [subject] → echoes the culprit sha
+  bash "$SUT" --run-if-needed >/dev/null 2>&1 || true
+  printf '@test "boom" { false; }\n' > "$R/tests/bad.bats"
+  push_commit "${1:-the culprit}"
+  origin_head
+}
+ship_field() { sed -n "s/^$1=//p" "$REC/ship.argv" | head -1; }
+
+@test "C20: a reproducible RED with a BISECTED culprit is reverted and landed via the land lane" {
+  ship_stub
+  culprit="$(arv_red)"
+  run env POSTLAND_AUTOREVERT=on bash "$SUT" --run-if-needed
+  [ -f "$REC/ship.argv" ]                                     # the land lane WAS invoked...
+  [ "$(ship_field branch)" = "postland-revert-${culprit:0:12}" ]   # ...on the revert's own branch
+  cwd="$(ship_field cwd)"
+  [ "${cwd#"$CC_POSTLAND_WT_ROOT"/wt-revert-}" != "$cwd" ]    # ...from the revert worktree
+  run bash -c "sed -n 's/^subject=//p' '$REC/ship.argv' | head -1 | grep -c '^Revert '"
+  [ "$output" = "1" ]
+  git -C "$R" fetch -q origin
+  run bash -c "git -C '$R' log -1 --format=%s origin/main | grep -c '^Revert '"
+  [ "$output" = "1" ]                                          # trunk actually HEALED
+  [ -f "$CC_POSTLAND_DIR/reverts/$culprit" ]                   # marker, keyed on the culprit
+  run grep -c '^land_exit=0$' "$CC_POSTLAND_DIR/reverts/$culprit"
+  [ "$output" = "1" ]
+  [ "$(cells_n)" = "0" ]                                       # both cells torn down
+}
+
+@test "C20: NEVER TWICE — a culprit with a marker is refused on every later encounter" {
+  ship_stub
+  culprit="$(arv_red)"
+  run env POSTLAND_AUTOREVERT=on bash "$SUT" --run-if-needed
+  [ -s "$REC/ship.argv" ]                                      # control: the first one DID revert
+  [ -f "$CC_POSTLAND_DIR/reverts/$culprit" ]
+  # re-present the SAME culprit as trunk, unstamped, so everything but the marker says "revert it"
+  git -C "$R" push -qf origin "$culprit:main"
+  rm -f "$CC_POSTLAND_DIR/stamps"/*.json
+  : > "$REC/ship.argv"
+  run env POSTLAND_AUTOREVERT=on bash "$SUT" --run-if-needed
+  [ ! -s "$REC/ship.argv" ]                                    # ZERO land-lane invocations
+}
+
+@test "C20: a culprit that is ITSELF a revert is refused (that is how a revert war starts)" {
+  ship_stub
+  culprit="$(arv_red 'Revert "an earlier commit"')"
+  run env POSTLAND_AUTOREVERT=on bash "$SUT" --run-if-needed
+  [ ! -f "$REC/ship.argv" ]                                    # nothing landed
+  [ -z "$(find "$CC_POSTLAND_DIR/reverts" -type f 2>/dev/null)" ]
+  [ "$(pages_n)" = "1" ]                                       # ...but the RED is still paged
+}
+
+@test "C20: POSTLAND_AUTOREVERT=off refuses the revert while still paging and backlogging" {
+  ship_stub
+  arv_red >/dev/null
+  run env POSTLAND_AUTOREVERT=off bash "$SUT" --run-if-needed
+  [ ! -f "$REC/ship.argv" ]                                    # the kill switch holds
+  [ -z "$(find "$CC_POSTLAND_DIR/reverts" -type f 2>/dev/null)" ]
+  [ "$(pages_n)" = "1" ]                                       # the net still reports
+  [ -f "$REC/cc-backlog.argv" ]
+}
+
+@test "C20: the per-run cap refuses once it is reached (and does NOT refuse below it)" {
+  # At most one culprit is convicted per run_target, so the cap is exercised at its BOUNDARY:
+  # 0 must refuse the very first attempt, 1 must allow it. Same fixture, same wiring, so the
+  # refusal below can only be the cap — the default (2) is exercised by the happy path above.
+  ship_stub
+  arv_red >/dev/null
+  run env POSTLAND_AUTOREVERT=on POSTLAND_MAX_REVERTS=0 bash "$SUT" --run-if-needed
+  [ ! -f "$REC/ship.argv" ]                                    # capped ⇒ no attempt
+  [ -z "$(find "$CC_POSTLAND_DIR/reverts" -type f 2>/dev/null)" ]
+  # POSITIVE CONTROL at the other side of the boundary
+  rm -f "$CC_POSTLAND_DIR/stamps"/*.json
+  run env POSTLAND_AUTOREVERT=on POSTLAND_MAX_REVERTS=1 bash "$SUT" --run-if-needed
+  [ -s "$REC/ship.argv" ]                                      # under the cap ⇒ it reverts
+}
+
+@test "C20: an UNDECIDABLE bisect pages and backlogs but attempts ZERO reverts" {
+  # The pin: red_actions falls back to the TARGET sha for paging when bisect cannot decide, and
+  # reverting that fallback would revert a tip nothing convicted. With no last-green there is no
+  # bisect floor, which is exactly the first-ever-run shape.
+  ship_stub
+  base="$(origin_head)"
+  printf '@test "f" { false; }\n' > "$R/tests/bad.bats"
+  push_commit "red, with no green floor to bisect from"
+  [ ! -f "$CC_POSTLAND_DIR/last-green" ]                       # precondition, asserted not assumed
+  run env POSTLAND_AUTOREVERT=on bash "$SUT" --run-if-needed
+  [ "$(pages_n)" = "1" ]                                       # it PAGES...
+  [ -f "$REC/cc-backlog.argv" ]                                # ...and BACKLOGS...
+  [ ! -f "$REC/ship.argv" ]                                    # ...and reverts NOTHING
+  [ -z "$(find "$CC_POSTLAND_DIR/reverts" -type f 2>/dev/null)" ]
+  # POSITIVE CONTROL: the same red, now WITH a green floor, must revert — otherwise this test
+  # would pass identically if auto-revert were dead in every case, which is the failure it guards.
+  git -C "$R" reset -q --hard "$base"
+  git -C "$R" push -qf origin HEAD:main
+  bash "$SUT" --run-if-needed >/dev/null 2>&1 || true          # green ⇒ last-green exists
+  [ -f "$CC_POSTLAND_DIR/last-green" ]
+  printf '@test "f2" { false; }\n' > "$R/tests/bad2.bats"
+  push_commit "the control culprit"
+  run env POSTLAND_AUTOREVERT=on bash "$SUT" --run-if-needed
+  [ -s "$REC/ship.argv" ]                                      # decidable ⇒ a revert IS attempted
+}
+
+# ── C22 pre-corpus whole-tree meta-lints ────────────────────────────────────────
+prelint_stub() { # <body> — installs it as the tree's walltime lint and lands it
+  mkdir -p "$R/scripts"
+  printf '#!/bin/bash\n%s\n' "$1" > "$R/scripts/test-walltime-lint.sh"
+  chmod +x "$R/scripts/test-walltime-lint.sh"
+  push_commit "prelint fixture"
+}
+
+@test "C22: a whole-tree lint RED is a named RED that OUTRANKS a cut, and skips the corpus" {
+  prelint_stub 'echo "  RATCHET stale entry"; exit 1'
+  tree="$(origin_tree)"
+  # a bats stub whose own shape is a CUT (plan, partial progress, SIGKILL): were the lint verdict
+  # dropped, this run would be filed "cut" — nothing proven — instead of a named red.
+  b="$(stub_bats cutter "printf '1..3\nok 1 a\n'; exit 137")"
+  CC_POSTLAND_BATS="$b" run bash "$SUT" --run-if-needed
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ "$output" = "red" ]
+  run jq -r '.failing[0]' "$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ "$output" = "scripts/test-walltime-lint.sh" ]              # the stamp NAMES the lint
+  [ ! -f "$CC_POSTLAND_DIR/last-green" ]
+}
+
+@test "C22: OUR OWN lint bound firing is a CUT — a timeout we imposed proves nothing" {
+  prelint_stub 'sleep 30'
+  tree="$(origin_tree)"
+  run env CC_POSTLAND_LINT_TIMEOUT_S=1 bash "$SUT" --run-if-needed
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ "$output" = "cut" ]                                        # never a RED: it forges no finding
+  [ "$(pages_n)" = "0" ]
+  [ ! -f "$CC_POSTLAND_DIR/last-green" ]                       # ...and never a GREEN either
+  # POSITIVE CONTROL: the same lint, failing FAST, is a red — so "cut" above is a statement about
+  # the BOUND, not evidence that a lint can never redden a verdict.
+  prelint_stub 'exit 1'
+  tree2="$(origin_tree)"
+  run env CC_POSTLAND_LINT_TIMEOUT_S=30 bash "$SUT" --run-if-needed
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree2.json"
+  [ "$output" = "red" ]
+}
+
+@test "C22: the lint runs whole-tree STRICT — an inherited own-set cannot narrow it" {
+  # Both lints distinguish own-set ABSENT (judge the whole tree) from set-but-EMPTY (judge
+  # nothing) via ${VAR+set}. If the verifier leaked its own environment through, a lander's
+  # own-set would silently reduce the trunk verdict to that lander's diff.
+  prelint_stub 'printf "own=%s herm=%s scope=%s argv=%s\n" "${CC_WALLTIME_OWN+SET}" "${CC_HERM_OWN+SET}" "${SHIP_LAND_HERM_OWN_SCOPE+SET}" "$*" > "$PLREC"; exit 0'
+  run env PLREC="$REC/lintenv.txt" CC_WALLTIME_OWN=tests/someone-elses.bats \
+      CC_HERM_OWN=tests/someone-elses.bats SHIP_LAND_HERM_OWN_SCOPE=off \
+      bash "$SUT" --run-if-needed
+  [ "$status" -eq 0 ]
+  [ -f "$REC/lintenv.txt" ]
+  [ "$(cat "$REC/lintenv.txt")" = "own= herm= scope= argv=tests" ]   # all three arrived UNSET
 }
