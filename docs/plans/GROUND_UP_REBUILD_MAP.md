@@ -17,7 +17,7 @@ rebuilds must not both redesign; the row that owns it is marked.
 | 1 | **Landing & deploy pipeline** — commit→trunk→live | ship-land, land-lock, postland-verify, deploy-live, host-suites.manifest, cc-blockers alarms | verifier stamps (1); deploy ff (1) | no quiet period; 12+ writers 24/7 | **DONE 2026-07-28** — LAND_PIPELINE_V2.md; 9 lands; exemplar |
 | 2 | **Session lifecycle & succession** — open/recycle/close | handoff-fire, /handoff, self-close, engagement verification, warm worktree claim | mailbox delivery (3); registry truth (4) | a watched pane must never vanish illegibly | open |
 | 3 | **Cross-session comms** — messages between peers | cc-notify, mailbox+ack cursor, .forward chains, cc-await-ping, mailbox-drain | wake path (2); desk inbox (5) | delivery must survive recycles; exactly-once ack | open (v3 design exists — cross-session-mail-v3 memory) |
-| 4 | **Session registry & reaping** — who is alive, who gets closed | session-register, cc-reconcile, cc-reaper, cc-teardown, liveness oracles (cwd/lsof) | teardown of (2)'s panes | never reap a live operator conversation | open |
+| 4 | **Session registry & reaping** — who is alive, who gets closed | session-register, cc-reconcile, cc-reaper, cc-teardown, liveness oracles (cwd/lsof) | teardown of (2)'s panes | never reap a live operator conversation | **DONE 2026-07-29** — SESSION_REGISTRY_V2.md; landed 7db74a76 (c834b705 design · acddb319 beat+lease · 5816968a fail-closed belts · +hermeticity fix); activation 16-session-beat staged |
 | 5 | **Autonomy dispatch & discovery** — what gets worked on | cc-dispatch, cc-backlog, cc-discover, desk loop, launchd dispatcher/discovery | fires via (2); reads (10) | backlog > concurrency is normal, not a cliff | **REBUILDING 2026-07-29** — [AUTONOMY_DISPATCH_V2.md](AUTONOMY_DISPATCH_V2.md); design landed 7400c614 |
 | 6 | **Guardrail/hook layer** — what a session may do | 69 hook entries / 12 events, validate-bash, permission rails, Stop asserts, OVERWRITE guard | every subsystem's enforcement chokepoints | a hook failure must never block a tool by accident | open |
 | 7 | **Account/quota routing & relogin** — which account works | claude-accounts, cc-relogin*, limit-recover, model-config.yaml SSOT, launchers | fire-time ranking (2) | login cliffs are hard walls; 4 isolated accounts | open |
@@ -87,6 +87,26 @@ its customers stabilize their contracts).
   OPEN operator question — do not assume either way. Row 12 owns this trap; every other row
   must still run the check first, because a row that measures an inert subsystem will report a
   performance problem it does not have.
+- 2026-07-29 (row 4, DONE) **ACTIVATION-TRUTH CHECK RUN AND PASSED — the trap above did not apply
+  here, and the check is cheap enough that every row should state its result rather than its
+  assumption.** `com.chrisren.cc-reaper` (note the `com.chrisren.*` prefix — the disabled-mass the
+  learning above measured is `com.claude.*`, a DIFFERENT label family; a row that greps only
+  `com.claude` will wrongly conclude its own daemon is inert) is loaded, and the log's newest sweep
+  was 4.2 min old with 893 lines the same day, in `mode=REAP`. So row 4's constants are performance
+  facts, not artifacts of a dead job.
+- 2026-07-29 (row 4) **WHEN THE LAST GATE OVERTURNS THE MAJORITY OF UPSTREAM DECISIONS, THE UPSTREAM
+  DECISION IS NOT A DECISION — IT IS A SUGGESTION.** The measurement that located row 4's inversion:
+  cc-teardown refused **88 of 168** reap proposals (52.4%). Six independent safety legs had been
+  added across successive incidents, and every one of them read evidence frozen at sweep start — so
+  each new leg lowered the failure RATE without touching its MECHANISM. Generalisable probe for any
+  row: compare what the actuator decides against what the proposer proposed. A high override rate is
+  a staleness signature, and it is visible from logs alone before reading any code.
+- 2026-07-29 (row 4) **A TEST CAN PIN A DEFECT AS CORRECT.** `tests/cc-teardown.bats` asserted that a
+  missing who-oracle → close proceeds (exit 0), against a fixture carrying a REAL operator prompt —
+  i.e. the fail-open that closed live operator conversations was protected by a green test. Grep your
+  row's suites for assertions that a SAFETY check being unavailable still yields the permissive
+  outcome; that shape is where fail-open hides, and it survives every code review that trusts green.
+
 - 2026-07-29 (row 5, source of the two entries above — kept for its row-specific residue only):
   the falsified cell and the disabled-daemon trap were both surfaced here; the generalised
   statements live above, not repeated. What is additionally row-5-specific and still load-bearing:
