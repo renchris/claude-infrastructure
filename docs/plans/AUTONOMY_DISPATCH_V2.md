@@ -224,6 +224,33 @@ measured 3-day inertness on day one.
 | Account/quota ranking | 7 | `claude-accounts --rank general` (ranked names) and `--json` (`.window.deadline`, `.rows[].k`); `cc-route <slot> --json`. SSOT `~/.claude/model-config.yaml` — never grep/hardcode the window. | `cc-wave-plan:20-26`. V2 adds a *bound* around these calls; the parse contract is unchanged |
 | Session registry | 4 | `cc-sessions` liveness for `live_workers` and for `claimer_live`. | `cc-backlog:405-423` reap oracles — reused verbatim |
 
+### §4.1 Ownership rulings (coordinator-decided 2026-07-29 — binding, do not relitigate)
+
+Two surfaces were named in NO map row. Row 5 pinged the coordinator rather than claiming them
+silently; the rulings landed in `GROUND_UP_REBUILD_MAP.md` § "Unowned-surface rulings" and are
+mirrored here because this rebuild acts on them:
+
+- **`bin/cc-wave-plan` → row 5 (ours).** Deciding test is the map's MECE basis — *who answers when
+  it breaks* — not who calls it. Its sole **executable** consumer is `bin/cc-dispatch:200`;
+  `cc-backlog`'s mentions (`:464`, `:535-536`) are comments describing the `wt-<id>` convention,
+  not calls. A false ⛔ cliff is a dispatch failure, i.e. row 5's standing constraint verbatim.
+  Method note worth keeping: rule by executable call sites, never by a comment asserting ownership
+  (a comment is text, not evidence), and never with an extension filter on the grep — this repo's
+  `bin/` is extensionless, so `--include='*.sh'` hides the very consumers that decide the question.
+- **`bin/cc-route` → row 7 (NOT ours).** It parses `~/.claude/model-config.yaml` (row 7's named
+  SSOT) and its exit contract (0 plan · 2 usage · 3 blind/no-data · 4 cliff) is pinned by
+  `scripts/route-safety-gate.sh:33-50` + `tests/cc-route.bats`. V2 may **wrap its invocation** in
+  `timeout(1)` from inside cc-wave-plan — that changes cc-wave-plan, not cc-route — but may not
+  change what it returns or how it is parsed. A cc-route rc=4 remains a GENUINE `capped` verdict.
+
+**A test can encode a falsified premise; changing it is legitimate, hiding it is not.**
+`tests/cc-wave-plan.bats:135` asserts "wave exceeds total concurrency → exit 4 cliff" — the exact
+belief §1 disproved. V2 changes it deliberately and RED-proofed, with the reason recorded here:
+wave-oversize is no longer a cliff at all, because surplus never reaches the oracle (S1/S2). Its
+neighbour `:141` (a cc-route-propagated quota cliff) is a genuine cliff and MUST remain
+distinguishable — after the change those two tests assert **different** verdicts. Telling a real
+capped-account stop apart from a wave-sizing false cliff is the whole point of the split.
+
 ---
 
 ## §5 Failure-mode table — every observed mode → its structural answer
