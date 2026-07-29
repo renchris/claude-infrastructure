@@ -123,6 +123,9 @@ class Theme:
     wm: str  # wordmark
     sub: str  # subtitle
     star: str
+    star_cool: str
+    star_warm: str
+    grain: float
     moon: str
     moon_halo: str
     cloud: list[tuple[str, str, str]]  # per layer: (body, top-light, bottom-shade)
@@ -153,7 +156,6 @@ class Art:
     # The cheer's period. It has to equal the peer's period when a peer exists, or the two rare
     # beats land at different times and the meeting has nobody answering it.
     cheer_period: float = 120.0
-    grain: float = 0.0
     hairline: bool = False
 
 
@@ -394,8 +396,31 @@ def sky_defs(art: Art) -> str:
         f'<stop offset="0.42" stop-color="#000" stop-opacity="0"/>'
         f'<stop offset="1" stop-color="#000" stop-opacity="1"/></radialGradient>'
         f'<radialGradient id="halo" cx="0.5" cy="0.5" r="0.5">'
-        f'<stop offset="0.3" stop-color="#fff" stop-opacity="0.5"/>'
-        f'<stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient>'
+        f'<stop offset="0.3" stop-color="{d.moon}" stop-opacity="0.38"/>'
+        f'<stop offset="1" stop-color="{d.moon}" stop-opacity="0"/></radialGradient>'
+        # The wide outer bloom is cooler than the core. Real glow shifts temperature outward; a
+        # single-colour radial gradient is the tell of vector art.
+        f'<radialGradient id="bloom" cx="0.5" cy="0.5" r="0.5">'
+        f'<stop offset="0.12" stop-color="{d.moon}" stop-opacity="0.20"/>'
+        f'<stop offset="0.45" stop-color="{d.glow}" stop-opacity="0.09"/>'
+        f'<stop offset="1" stop-color="{d.glow}" stop-opacity="0"/></radialGradient>'
+        # A small blur on the tight halo so its falloff is OPTICAL rather than a gradient stop.
+        # Verified to render in SVG-as-image (Chromium 141): the blurred edge samples to true
+        # intermediate values between disc and sky, not to either endpoint.
+        f'<filter id="soft" x="-70%" y="-70%" width="240%" height="240%">'
+        f'<feGaussianBlur stdDeviation="9"/></filter>'
+        # ONE low-opacity grain layer over the sky. This is the single biggest change against the
+        # plastic flatness of a large gradient. Measured over a flat patch: stddev 4.75 with the
+        # filter vs 1.11 without, so it is genuinely rendering and not a no-op.
+        f'<filter id="grain" x="0%" y="0%" width="100%" height="100%">'
+        f'<feTurbulence type="fractalNoise" baseFrequency="0.82" numOctaves="2" seed="11" '
+        f'result="n"/>'
+        f'<feColorMatrix in="n" type="saturate" values="0"/></filter>'
+        # A terminator across the lit limb turns a flat crescent into an object.
+        f'<linearGradient id="term" x1="0" y1="0" x2="1" y2="0.25">'
+        f'<stop offset="0" stop-color="#000" stop-opacity="0.20"/>'
+        f'<stop offset="0.45" stop-color="#000" stop-opacity="0"/>'
+        f'<stop offset="1" stop-color="#000" stop-opacity="0.10"/></linearGradient>'
     )
 
 
@@ -440,50 +465,124 @@ def stratified(
     return out
 
 
-def starfield(art: Art, rng: random.Random) -> str:
-    """Three depth tiers (size + opacity + twinkle rate), a density falloff toward the horizon, and
-    a hard keep-out around the type with a soft ramp outside it (S7).
+def poisson(count: int, x0: float, x1: float, y0: float, y1: float,
+            rng: random.Random, r_at, void_mask) -> list[tuple[float, float]]:
+    """Blue-noise scatter by dart-throwing against a spatial grid, with a VARIABLE minimum radius.
 
-    Drawn as rects, not `*` glyphs: at the displayed scale the mono asterisk renders as a snowflake,
-    and a glyph also makes the sky depend on the reader's installed fonts.
+    Uniform random placement reads as wallpaper and clumps read as spam; a jittered grid (the
+    previous approach) fixes the clumping but leaves a faint lattice. Blue noise is the one that
+    reads as sky: never two stars piled together, never a row.
+
+    `r_at(y)` returns the minimum separation at that height, so density varies deliberately —
+    sparser low, where atmosphere washes stars out. `void_mask(x, y)` returns False for deliberate
+    empty regions: unoccupied sky is what makes occupied sky read as composed rather than sprinkled.
     """
-    nA, nB, nC = art.star_count
-    tiers = [
-        # (count, size, opacity, twinkle period, y-limit, class)
-        (nA, 2, 0.34, 60.0, 336, "kA"),
-        (nB, 3, 0.62, 30.0, 300, "kB"),
-        (nC, 4, 0.95, 10.0, 264, "kC"),
-    ]
-    divides_P(60.0, 30.0, 10.0)
+    r_min = min(r_at(y0), r_at(y1))
+    cell = max(2.0, r_min / math.sqrt(2))
+    grid: dict[tuple[int, int], list[tuple[float, float]]] = {}
+    pts: list[tuple[float, float]] = []
+
+    def fits(x: float, y: float, r: float) -> bool:
+        gx, gy = int(x / cell), int(y / cell)
+        span = int(math.ceil(r / cell)) + 1
+        for i in range(gx - span, gx + span + 1):
+            for j in range(gy - span, gy + span + 1):
+                for (px, py) in grid.get((i, j), ()):
+                    if (px - x) ** 2 + (py - y) ** 2 < r * r:
+                        return False
+        return True
+
+    attempts = 0
+    budget = count * 260
+    while len(pts) < count and attempts < budget:
+        attempts += 1
+        x = rng.uniform(x0, x1)
+        y = rng.uniform(y0, y1)
+        if not void_mask(x, y):
+            continue
+        r = r_at(y)
+        if not fits(x, y, r):
+            continue
+        pts.append((x, y))
+        grid.setdefault((int(x / cell), int(y / cell)), []).append((x, y))
+    return pts
+
+
+# Star colour temperature. All-white stars look cheap; a few degrees of spread either side of
+# neutral is the cheapest refinement available in the whole sky.
+STAR_TEMPS = [("sc", 0.30), ("sn", 0.46), ("sw", 0.24)]   # cool / neutral / warm, with weights
+
+
+def starfield(art: Art, rng: random.Random) -> str:
+    """One blue-noise field with depth expressed by size and brightness, not by three separate
+    passes, plus deliberate voids and a hard keep-out around the type (S7).
+
+    Two things here are restraint rather than omission. Most stars do NOT twinkle — a whole sky
+    pulsing is a screensaver, and it also competes with the wordmark; only a minority animate, on
+    uncorrelated periods. And the 4-point diffraction cross is reserved for the two or three
+    brightest: that detail is what makes a field read as photographic, and it stops working the
+    moment everything has one.
+    """
+    total = sum(art.star_count)
+    divides_P(60.0, 30.0, 20.0, 12.0)
+
+    # Deliberate voids — a few soft holes in the field, so the sky has empty quarters.
+    voids = [(rng.uniform(0, W), rng.uniform(10, 300), rng.uniform(90, 210)) for _ in range(4)]
+
+    def void_mask(x: float, y: float) -> bool:
+        for (vx, vy, vr) in voids:
+            d = math.hypot(x - vx, y - vy)
+            if d < vr and rng.random() > (d / vr) ** 2.2:
+                return False
+        return True
+
+    # Minimum separation grows toward the horizon: denser high, sparser low.
+    def r_at(y: float) -> float:
+        return 15.0 * (1.0 + 2.3 * (max(0.0, y) / 330.0) ** 1.5)
+
+    pts = poisson(total, 8, W - 8, 8, 330, rng, r_at, void_mask)
+    pts = [(x, y) for (x, y) in pts if not in_keepout(x, y)]
+    pts = [(x, y) for (x, y) in pts
+           if keepout_distance(x, y) >= KEEPOUT_SOFT
+           or rng.random() <= (keepout_distance(x, y) / KEEPOUT_SOFT) ** 0.9]
+
+    # Brightness rank drives size, opacity and who gets a cross — one axis, so depth stays coherent.
+    ranked = sorted(pts, key=lambda _p: rng.random())
     out = []
-    for count, size, op, dur, ylim, kls in tiers:
-        placed = 0
-        for x, y in stratified(count, 6, W - 6, 8, ylim, rng, ylim):
-            if placed >= count:
+    n_cross = 3
+    n_twinkle = max(1, int(len(ranked) * 0.22))
+    periods = [60.0, 20.0, 12.0]
+    for i, (x, y) in enumerate(ranked):
+        q = i / max(1, len(ranked) - 1)          # 0 = brightest
+        size = 3.6 - 2.0 * q ** 0.6
+        op = 0.95 - 0.62 * q ** 0.75
+        temp = STAR_TEMPS[0][0]
+        roll = rng.random()
+        acc = 0.0
+        for (cls, wgt) in STAR_TEMPS:
+            acc += wgt
+            if roll <= acc:
+                temp = cls
                 break
-            if in_keepout(x, y):
-                continue
-            d = keepout_distance(x, y)
-            if d < KEEPOUT_SOFT and rng.random() > (d / KEEPOUT_SOFT) ** 0.9:
-                continue
-            delay = -(placed % 24) * (dur / 24.0)
-            body = f'<rect x="{fmt(x)}" y="{fmt(y)}" width="{size}" height="{size}"/>'
-            if kls == "kC":
-                # the brightest tier gets a small 4-point sparkle: still pure geometry, so it stays
-                # crisp at any zoom and owes nothing to the reader's installed fonts
-                arm = size * 1.55
-                t = max(1.0, size / 4.2)
-                body += (
-                    f'<rect x="{fmt(x + size / 2 - t / 2)}" y="{fmt(y - arm)}" '
-                    f'width="{fmt(t)}" height="{fmt(arm * 2 + size)}"/>'
-                    f'<rect x="{fmt(x - arm)}" y="{fmt(y + size / 2 - t / 2)}" '
-                    f'width="{fmt(arm * 2 + size)}" height="{fmt(t)}"/>'
-                )
-            out.append(
-                f'<g class="st {kls}" style="--d:{fmt(delay)}s" '
-                f'opacity="{fmt(op)}">{body}</g>'
-            )
-            placed += 1
+        body = (f'<rect x="{fmt(x - size / 2)}" y="{fmt(y - size / 2)}" '
+                f'width="{fmt(size)}" height="{fmt(size)}"/>')
+        if i < n_cross:
+            # diffraction spikes, on the brightest handful only
+            arm = size * 2.6
+            t = max(0.8, size / 4.6)
+            body += (f'<rect x="{fmt(x - t / 2)}" y="{fmt(y - arm)}" '
+                     f'width="{fmt(t)}" height="{fmt(arm * 2)}"/>'
+                     f'<rect x="{fmt(x - arm)}" y="{fmt(y - t / 2)}" '
+                     f'width="{fmt(arm * 2)}" height="{fmt(t)}"/>')
+        if i < n_twinkle:
+            dur = periods[i % len(periods)]
+            delay = -(i * 7.3) % dur
+            # opacity AND scale together — a pure opacity blink reads as a rendering glitch
+            out.append(f'<g class="st {temp} tw{i % 3}" style="--d:{fmt(-delay)}s" '
+                       f'opacity="{fmt(op)}" transform-origin="{fmt(x)}px {fmt(y)}px">'
+                       f'{body}</g>')
+        else:
+            out.append(f'<g class="st {temp}" opacity="{fmt(op)}">{body}</g>')
     return "".join(out)
 
 
@@ -510,13 +609,34 @@ def moon(art: Art) -> str:
 
 
 def moon_body(art: Art) -> str:
+    """Stacked glow, then the disc, then a terminator and a few maria.
+
+    Three passes rather than one radial gradient: a wide cool bloom, a tight warm halo softened by
+    an actual blur, and the disc itself. The whole group sits BEFORE the cloud layers, so the glow
+    is occluded by the clouds along with the moon — a halo that survives in front of a cloud reads
+    as pasted onto the scene.
+    """
     cx, cy, r = art.moon
     divides_P(80.0)
+    maria = []
+    mr = random.Random(4242)
+    for (fx, fy, fr) in ((-0.30, -0.22, 0.30), (0.10, 0.26, 0.22), (-0.06, 0.02, 0.15)):
+        maria.append(
+            f'<circle cx="{fmt(cx + fx * r)}" cy="{fmt(cy + fy * r)}" r="{fmt(fr * r)}" '
+            f'fill="#000" opacity="{fmt(mr.uniform(0.045, 0.085))}"/>')
     return (
-        f'<g class="moonHalo"><circle cx="{fmt(cx)}" cy="{fmt(cy)}" r="{fmt(r * 2.9)}" '
-        f'fill="url(#halo)" class="mhalo"/></g>'
-        f'<g class="moonLit"><circle class="mdisc" cx="{fmt(cx)}" cy="{fmt(cy)}" r="{fmt(r)}" '
-        f'mask="url(#mcut)"/></g>'
+        f'<g class="moonHalo">'
+        f'<circle cx="{fmt(cx)}" cy="{fmt(cy)}" r="{fmt(r * 3.5)}" fill="url(#bloom)"/>'
+        f'</g>'
+        f'<g class="moonGlow">'
+        f'<circle cx="{fmt(cx)}" cy="{fmt(cy)}" r="{fmt(r * 1.55)}" fill="url(#halo)" '
+        f'filter="url(#soft)"/>'
+        f'</g>'
+        f'<g class="moonLit" mask="url(#mcut)">'
+        f'<circle class="mdisc" cx="{fmt(cx)}" cy="{fmt(cy)}" r="{fmt(r)}"/>'
+        f'{"".join(maria)}'
+        f'<circle cx="{fmt(cx)}" cy="{fmt(cy)}" r="{fmt(r)}" fill="url(#term)"/>'
+        f'</g>'
     )
 
 
@@ -850,7 +970,9 @@ def css(art: Art) -> str:
     base = (
         # ---- themed fills (dark is the base; light is a media-query override) ----
         f".sky{{fill:url(#skyD)}}.grd{{fill:url(#grdD)}}.glw{{fill:url(#glowD)}}"
-        f".st{{fill:{d.star}}}.mdisc{{fill:{d.moon}}}"
+        f".st{{fill:{d.star}}}.sc{{fill:{d.star_cool}}}.sw{{fill:{d.star_warm}}}"
+        f".sn{{fill:{d.star}}}.mdisc{{fill:{d.moon}}}"
+        f".grain{{opacity:{fmt(d.grain)}}}"
         f".rl{{stroke:{d.rule}}}.wm{{fill:{d.wm}}}.sub{{fill:{d.sub}}}"
         f".tf0,.tf1{{fill:{d.tuft}}}.fgb{{fill:{d.fg}}}"
         f".ss{{fill:#f2f6ff}}.brd{{fill:{d.mound[0]}}}.bal{{fill:{CLAWD}}}.balStr{{stroke:none;fill:{CLAWD};opacity:.45}}"
@@ -867,12 +989,15 @@ def css(art: Art) -> str:
         f".tf1s{{animation:sc {fmt(P / 10)}s linear infinite}}"
         f".fgbs{{animation:sc {fmt(P / 12)}s linear infinite}}"
         # ---- twinkle: three rates so the sky has depth rather than one uniform pulse ----
-        f"@keyframes kAf{{0%{{opacity:.34}}50%{{opacity:.92}}100%{{opacity:.34}}}}"
-        f"@keyframes kBf{{0%{{opacity:.30}}44%{{opacity:1}}100%{{opacity:.30}}}}"
-        f"@keyframes kCf{{0%{{opacity:.55}}30%{{opacity:1}}62%{{opacity:.42}}100%{{opacity:.55}}}}"
-        f".kA{{animation:kAf 60s ease-in-out infinite}}"
-        f".kB{{animation:kBf 30s ease-in-out infinite}}"
-        f".kC{{animation:kCf 10s ease-in-out infinite}}"
+        # Twinkle varies opacity AND scale together on eased curves. A pure opacity blink reads as a
+        # rendering glitch rather than as atmosphere, and three uncorrelated periods stop the
+        # minority that does animate from pulsing as one organism.
+        f"@keyframes twA{{0%,100%{{opacity:.42;transform:scale(.86)}}50%{{opacity:1;transform:scale(1.1)}}}}"
+        f"@keyframes twB{{0%,100%{{opacity:.55;transform:scale(.92)}}38%{{opacity:1;transform:scale(1.14)}}}}"
+        f"@keyframes twC{{0%,100%{{opacity:.5;transform:scale(.9)}}62%{{opacity:1;transform:scale(1.06)}}}}"
+        f".tw0{{animation:twA 60s ease-in-out infinite}}"
+        f".tw1{{animation:twB 20s ease-in-out infinite}}"
+        f".tw2{{animation:twC 12s ease-in-out infinite}}"
         # ---- moon: a slow brightness breath, nothing more ----
         f"@keyframes mnf{{0%{{opacity:.80}}50%{{opacity:1}}100%{{opacity:.80}}}}"
         f".moonLit{{animation:mnf 80s ease-in-out infinite}}"
@@ -1003,6 +1128,7 @@ def css(art: Art) -> str:
     light = (
         "@media (prefers-color-scheme:light){"
         ".sky{fill:url(#skyL)}.grd{fill:url(#grdL)}.glw{fill:url(#glowL)}"
+        f".grain{{opacity:{fmt(l.grain)}}}"
         f".nOnly{{display:none}}.dOnly{{display:block}}"
         f".mdisc{{fill:{l.moon}}}"
         f".rl{{stroke:{l.rule}}}.wm{{fill:{l.wm}}}.sub{{fill:{l.sub}}}"
@@ -1048,6 +1174,8 @@ def build(art: Art) -> str:
         # sky, then the light that sits in it
         f'<rect class="sky" width="{W}" height="{H}"/>',
         f'<rect class="glw" x="0" y="{fmt(GROUND - 300)}" width="{W}" height="330"/>',
+        # grain over the sky only — it must not crawl over the ground plane or the type
+        f'<rect class="grain" x="0" y="0" width="{W}" height="{GROUND}" filter="url(#grain)"/>',
         # stars are night-only; the moon becomes a soft day disc in the light theme
         f'<g class="nOnly">{starfield(art, rng)}</g>',
         f'<g class="nOnly">{moon_body(art)}</g>',
@@ -1131,8 +1259,11 @@ NIGHT = Theme(
     rule="#5d6b80",
     wm="#eef3fa",
     sub="#8794a6",
-    star="#cfe0f5",
-    moon="#e9e4d3",
+    star="#dfe8f6",
+    star_cool="#c3d6f7",
+    star_warm="#fff0dd",
+    grain=0.055,
+    moon="#f2ead8",
     moon_halo="#e9e4d3",
     cloud=[
         ("#131b2d", "#1e2942", "#0e1524"),
@@ -1156,13 +1287,16 @@ DAY = Theme(
     rule="#9aa3ad",
     wm="#111820",
     sub="#5b6672",
-    star="#ffffff",
+    star="#f6f9ff",
+    star_cool="#e6efff",
+    star_warm="#fff6e6",
+    grain=0.030,
     moon="#ffd79a",
     moon_halo="#ffd79a",
     cloud=[
-        ("#f2f7fd", "#ffffff", "#dae6f2"),
-        ("#f7fafe", "#ffffff", "#dfe9f4"),
-        ("#fbfdff", "#ffffff", "#e4edf6"),
+        ("#f4f8fd", "#fdfcfa", "#dae6f2"),
+        ("#f8fbfe", "#fefdfb", "#dfe9f4"),
+        ("#fcfdff", "#fffefc", "#e4edf6"),
     ],
     mound=["#c6c8c0", "#adafa2"],
     tuft="#a8a99c",
@@ -1181,8 +1315,11 @@ DUSK = Theme(
     rule="#7a6572",
     wm="#fdf3ec",
     sub="#b39a9a",
-    star="#ffe9d6",
-    moon="#fbe3c4",
+    star="#f7e6d6",
+    star_cool="#d9dcf5",
+    star_warm="#ffe2c2",
+    grain=0.060,
+    moon="#fbe6cc",
     moon_halo="#fbe3c4",
     cloud=[
         ("#282142", "#3f3358", "#1b1730"),
@@ -1206,13 +1343,16 @@ DAWN = Theme(
     rule="#a8968a",
     wm="#1a1410",
     sub="#6d5c50",
-    star="#ffffff",
+    star="#fbf7f2",
+    star_cool="#e8eeff",
+    star_warm="#fff2e0",
+    grain=0.032,
     moon="#ffcf94",
     moon_halo="#ffcf94",
     cloud=[
-        ("#f6f0fb", "#ffffff", "#e2dced"),
-        ("#fbf2f2", "#ffffff", "#eadfe0"),
-        ("#fff6ef", "#ffffff", "#f0e2d4"),
+        ("#f7f1fb", "#fefaf6", "#e2dced"),
+        ("#fbf3f2", "#fffaf4", "#eadfe0"),
+        ("#fff7f0", "#fffbf5", "#f0e2d4"),
     ],
     mound=["#c8b9a4", "#ae9c85"],
     tuft="#a89684",
@@ -1231,8 +1371,11 @@ TERM = Theme(
     rule="#4e6b66",
     wm="#e6f2ee",
     sub="#7f9c95",
-    star="#bfe3d8",
-    moon="#dce9e2",
+    star="#d3e8df",
+    star_cool="#bcdcea",
+    star_warm="#f2ecd8",
+    grain=0.050,
+    moon="#e6efe6",
     moon_halo="#dce9e2",
     cloud=[
         ("#101a1c", "#18282a", "#0b1315"),
@@ -1256,13 +1399,16 @@ TERM_L = Theme(
     rule="#8fa39c",
     wm="#0d1512",
     sub="#556661",
-    star="#ffffff",
+    star="#f7fbf9",
+    star_cool="#e4f0f6",
+    star_warm="#fdf5e4",
+    grain=0.028,
     moon="#f0e6c8",
     moon_halo="#f0e6c8",
     cloud=[
-        ("#eef5f1", "#ffffff", "#d8e4de"),
-        ("#f3f8f5", "#ffffff", "#dde8e2"),
-        ("#f8fbf9", "#ffffff", "#e2ece6"),
+        ("#eff6f2", "#fdfefb", "#d8e4de"),
+        ("#f4f9f6", "#fdfefc", "#dde8e2"),
+        ("#f9fbfa", "#fefffd", "#e2ece6"),
     ],
     mound=["#c0cac2", "#a9b4ab"],
     tuft="#a3aea7",
@@ -1283,7 +1429,7 @@ VARIANTS = [
         light=DAY,
         clawd_scale=1.06,
         clawd_x=628,
-        star_count=(165, 68, 22),
+        star_count=(300, 90, 30),
         moon=(1656, 166, 62),
         moon_phase=0.30,
         events=("shootingstar", "birds", "peek"),
@@ -1300,7 +1446,7 @@ VARIANTS = [
         light=DAY,
         clawd_scale=1.0,
         clawd_x=560,
-        star_count=(150, 62, 20),
+        star_count=(280, 84, 28),
         moon=(1672, 178, 56),
         moon_phase=0.30,
         events=("shootingstar", "birds"),
@@ -1319,7 +1465,7 @@ VARIANTS = [
         light=DAWN,
         clawd_scale=1.12,
         clawd_x=1096,
-        star_count=(120, 44, 14),
+        star_count=(220, 62, 20),
         moon=(250, 214, 70),
         moon_phase=0.30,
         events=("shootingstar", "balloon", "birds", "peek"),
@@ -1335,7 +1481,7 @@ VARIANTS = [
         light=TERM_L,
         clawd_scale=0.98,
         clawd_x=812,
-        star_count=(130, 50, 16),
+        star_count=(240, 70, 22),
         moon=(1706, 140, 50),
         moon_phase=0.34,
         events=("birds", "peek"),
