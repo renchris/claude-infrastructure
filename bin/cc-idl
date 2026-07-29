@@ -62,19 +62,45 @@ chain_extend() {
 }
 
 # ── mkdir mutex (macOS has no flock); seal/append hold it, verify does not ──────────────────
+# OWNER TOKEN (a15/D4). Same defect and same fix as the mailbox lock: reaping purely on the lock
+# dir's mtime and releasing with an unconditional delete lets a holder that overran the TTL destroy
+# the lock of whoever stole it, admitting a third writer to a hash-chain append. The a15 audit rated
+# this variant moot on the grounds that cc-idl had ZERO callers — its own uncertainties section
+# flagged the caveat, and the caveat is now the case: scripts/rotate-autonomy-logs.sh seals the IDL
+# tail on every run (it was written precisely to BE the missing `cc-idl seal` caller), so this lock
+# is contended for real. A stolen-then-double-released mutex on an append-only chain is worse than
+# on the mailbox: the chain's monotonicity IS the security property.
 acquire_lock() {
   local waited=0
   while ! mkdir "$LOCKDIR" 2>/dev/null; do
     if [ -d "$LOCKDIR" ]; then
+      # A provably-dead holder is reclaimed immediately rather than serving out its TTL.
+      local htok=""
+      [ -f "$LOCKDIR/owner" ] && { read -r htok < "$LOCKDIR/owner" 2>/dev/null || htok=""; }
+      case "$htok" in
+        ''|*[!0-9]*) ;;
+        *) kill -0 "$htok" 2>/dev/null || { rm -rf "$LOCKDIR" 2>/dev/null || true; continue; } ;;
+      esac
       local age; age="$(( $(date +%s) - $(mtime "$LOCKDIR" 2>/dev/null || echo 0) ))"
       if [ "$age" -gt "$LOCK_TTL" ]; then rm -rf "$LOCKDIR" 2>/dev/null || true; continue; fi
     fi
     [ "$waited" -ge "$LOCK_WAIT" ] && return 1
     sleep 1; waited=$((waited + 1))
   done
+  printf '%s\n' "$$" > "$LOCKDIR/owner" 2>/dev/null || true
   return 0
 }
-release_lock() { rmdir "$LOCKDIR" 2>/dev/null || rm -rf "$LOCKDIR" 2>/dev/null || true; }
+# Release only what we still own. Note `rmdir` alone can no longer work — the dir holds our token —
+# so this is an owner-verified `rm -rf`. An untokened dir is ours by construction on this path (only
+# a pre-fix holder leaves none, and here that means a dir we just made), which keeps release total.
+release_lock() {
+  local tok=""
+  [ -f "$LOCKDIR/owner" ] && { read -r tok < "$LOCKDIR/owner" 2>/dev/null || tok=""; }
+  if [ -z "$tok" ] || [ "$tok" = "$$" ]; then
+    rm -rf "$LOCKDIR" 2>/dev/null || true
+  fi
+  return 0
+}
 
 # line count of \n-terminated lines only (wc -l ignores a mid-write trailing partial line).
 nlines() { if [ -f "$1" ]; then wc -l < "$1" | tr -d ' '; else echo 0; fi; }
