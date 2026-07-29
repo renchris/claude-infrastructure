@@ -48,6 +48,23 @@ command -v jq >/dev/null 2>&1 || { echo "cc-inbox-guard: jq required" >&2; exit 
 
 # shared cursor lib (bin → ../hooks/lib, then ~/.claude/hooks/lib)
 _bd="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
+
+# comms-alarm chokepoint lib. $0 is resolved THROUGH its symlinks first: ~/.claude/bin/cc-inbox-guard
+# is a per-file symlink into the checkout, so a bare dirname "$0" finds only the DEPLOYED hooks/lib,
+# which does not hold a brand-new tracked file until install.sh re-globs it. Resolving first makes
+# the guard live from the commit, with no deploy-lag window.
+_ca_self="$0"
+while [ -L "$_ca_self" ]; do
+  _ca_l="$(readlink "$_ca_self")"
+  if [ "${_ca_l#/}" != "$_ca_l" ]; then _ca_self="$_ca_l"; else _ca_self="$(dirname "$_ca_self")/$_ca_l"; fi
+done
+_ca_root="$(cd "$(dirname "$_ca_self")/.." 2>/dev/null && pwd || true)"
+for _ca_lib in "$_ca_root/hooks/lib/comms-alarm.sh" "$_bd/../hooks/lib/comms-alarm.sh" "$HOME/.claude/hooks/lib/comms-alarm.sh"; do
+  if [ -f "$_ca_lib" ]; then
+    # shellcheck source=/dev/null
+    . "$_ca_lib" 2>/dev/null && command -v comms_alarm_write >/dev/null 2>&1 && break
+  fi
+done
 _mbxlib="$_bd/../hooks/lib/mailbox-pending.sh"
 [ -f "$_mbxlib" ] || _mbxlib="$HOME/.claude/hooks/lib/mailbox-pending.sh"
 # shellcheck source=/dev/null
@@ -245,9 +262,17 @@ idl_rec() { # <uuid> <kind> <detail-json-obj>
     '{ts:$ts, actor:"cc-inbox-guard", uuid:$u, kind:$kind} + $x' >> "$IDL" 2>/dev/null || true
 }
 alarm_rec() { # <uuid> <reason>
-  mkdir -p "$ALARM_DIR" 2>/dev/null || true
-  jq -nc --arg ts "$(utc)" --arg u "$1" --arg r "$2" \
-    '{kind:"undelivered", uuid:$u, reason:$r, ts:$ts}' > "$ALARM_DIR/undelivered-$(stamp)-$$-$RANDOM.json" 2>/dev/null || true
+  # Through the comms-alarm chokepoint when available (stamps test_origin, diverts a fixture-context
+  # write out of the operator's live root — see hooks/lib/comms-alarm.sh). Lib absent → the original
+  # inline write, so the backstop never gets weaker than it was before the chokepoint existed.
+  local _rec
+  _rec="$(jq -nc --arg ts "$(utc)" --arg u "$1" --arg r "$2" '{kind:"undelivered", uuid:$u, reason:$r, ts:$ts}' 2>/dev/null)"
+  if command -v comms_alarm_write >/dev/null 2>&1; then
+    comms_alarm_write undelivered "$_rec" || true
+  else
+    mkdir -p "$ALARM_DIR" 2>/dev/null || true
+    printf '%s\n' "$_rec" > "$ALARM_DIR/undelivered-$(stamp)-$$-$RANDOM.json" 2>/dev/null || true
+  fi
 }
 phone() { # <title> <msg> — best-effort VERIFIED phone; records the leg's outcome, never crashes the sweep
   [ -n "$PUSH_BIN" ] || { printf 'no-push-bin'; return 0; }
@@ -295,7 +320,21 @@ sweep() {
     local ef
     for ef in "$ALARM_DIR"/enqueue-fail-*.json; do
       [ -e "$ef" ] || continue
-      local tgt msg; tgt="$(jq -r '.target // "?"' "$ef" 2>/dev/null)"; msg="$(jq -r '.msg // ""' "$ef" 2>/dev/null)"
+      local tgt msg torigin; tgt="$(jq -r '.target // "?"' "$ef" 2>/dev/null)"; msg="$(jq -r '.msg // ""' "$ef" 2>/dev/null)"
+      # A fixture-origin record must never page the operator. This loop phones once per record, and
+      # 510 of the 511 enqueue-fail records in the live store on 2026-07-29 were written by
+      # tests/cc-notify.bats — so the operator was paged 510 times about a failure that never
+      # happened, and each was then marked `.handled` as though triaged. The chokepoint stamps
+      # test_origin at write time precisely so this reader can exclude them by FIELD rather than by
+      # pattern-matching a magic UUID. Consume the record (it is not a real alarm) but never phone.
+      torigin="$(jq -r '.test_origin // ""' "$ef" 2>/dev/null)"
+      if [ -n "$torigin" ]; then
+        if [ "$DRY" = 1 ]; then echo "  SKIP [enqueue-fail] $tgt — test_origin=$torigin (fixture, not a real failure)"; else
+          echo "cc-inbox-guard: skipped a FIXTURE-origin enqueue-fail record ($torigin) — not paging the operator" >&2
+          mv -f "$ef" "$ef.handled" 2>/dev/null || rm -f "$ef" 2>/dev/null || true
+        fi
+        continue
+      fi
       if [ "$DRY" = 1 ]; then echo "  WOULD-ESCALATE [enqueue-fail] $tgt"; else
         phone "⚠️ comms enqueue FAILED" "inbox unwritable for $tgt — NOT delivered: $msg" >/dev/null
         idl_rec "$tgt" "enqueue-failed-escalated" "$(jq -nc --arg m "$msg" '{msg:$m}')"
