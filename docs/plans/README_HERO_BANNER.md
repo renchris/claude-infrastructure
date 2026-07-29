@@ -491,10 +491,18 @@ renders, while t=0 vs t=P stayed byte-identical.
 
 **Verification commands (use these, don't invent):**
 ```bash
-scripts/banner-shots.sh assets/banner/<f>.svg --times 0,240 --bg dark --out /tmp/x
-# then compare the two PNG hashes — MUST be identical. Guard for missing files:
-# a check that compares empty strings prints a FALSE PASS (this happened).
+scripts/banner-verify.sh assets/banner/<f>.svg     # lint · seam · aliveness · themes · still
+scripts/banner-verify.sh --self-test               # proves the gate's own guards can fail
 ```
+
+> **SUPERSEDED — do not compare PNG file hashes.** The original instruction here was
+> `--times 0,240` then "compare the two PNG hashes — MUST be identical". **Chromium's PNG encoder is
+> not deterministic in this harness**: the same asset frozen at the same timestamp renders to two
+> different FILES (measured 2026-07-29: `ee6b3378…` vs `55fab65e…`). So that comparison has a
+> false-FAILURE mode and its passes were luck, not proof. `banner-verify.sh` decodes to raw RGBA and
+> hashes the PIXELS, which is what the seam claim is actually about — corroborated independently by
+> `magick compare -metric AE` reporting 0 differing pixels. The missing-file guard noted originally
+> still stands and is now self-tested.
 
 **Still open — the operator's standing ask:** a from-the-ground-up *"Opus 5 design-quality
 show-off"* pass. `v5a-long-walk.svg` is the working reference implementation of every constraint
@@ -592,6 +600,37 @@ Two guards found broken *by* that exercise, both silent:
   gradient at 320% magnification. Took the comparison page 2.3 MB → 706 KB. `near-lossless=40` gives
   RMSE exactly 0 but 64 KB, i.e. no better than plain lossless.
 
+### S14 · The freeze must SEEK phase, not destroy it — `--d` + `--fz`
+
+Main's authored-`animation-delay` lint is correct about the mechanism: the freeze reached a
+timestamp by setting `animation-delay` on `*`, which clobbers any authored delay, so a deliberately
+staggered population **screenshots in lockstep** — a plausible-looking render that is wrong. But
+phase-by-negative-delay is exactly what S2 mandates, so banning it bans the design.
+
+**The seek is now additive.** The asset carries per-element phase in **`--d`**; the freeze supplies
+the global seek in **`--fz`**; the delay is `calc(var(--d,0s) + var(--fz,0s))`. Custom properties
+inherit into SVG children, so one rule on the root reaches everything, and an asset with no `--d`
+is unaffected (fallback `0s`). Proved in SVG-as-image on Chromium 141 with three rects at
+`--d` 0/−1/−2s on a 4 s `steps(4)` colour cycle: with `--fz` they stay one step apart and rotate
+together; under the old blanket override **all three render the same colour**.
+
+### S15 · Chromium's PNG encoder is NOT deterministic — compare pixels, never file bytes
+
+Found because S14 made SEAM start failing while `magick compare -metric AE` reported **0 differing
+pixels**. The same asset frozen at the same timestamp, rendered twice, produces two different
+**files** (`ee6b3378…` vs `55fab65e…`). So the long-prescribed "compare the two PNG hashes" check
+has a **false-FAILURE mode, and every pass it ever recorded was luck rather than proof**.
+
+`banner-verify.sh` decodes to raw RGBA and hashes the **pixels**. Its decode path is guarded too: a
+corrupt-but-non-empty file must not return the md5 of an empty stream, or the emptiness guard
+downstream ends up comparing two hashes of nothing — the same false-PASS shape in a new costume.
+
 **Regenerate:** `python3 tools/banner/gen.py --out assets/banner` then
 `python3 tools/banner/compare.py --stills <dir>`. Verify: `scripts/banner-verify.sh <svg>`
 (and `scripts/banner-verify.sh --self-test` to check the checker).
+
+**Reproducibility is part of the closing check.** `hash()` on a `str` is salted per process (PEP
+456), so `random.Random(hash(cls))` made the generator silently non-reproducible while every
+structural check still passed — those test properties of the output, and a differently-seeded ground
+satisfies all of them. Seeds come from `seed_of()` (crc32); regenerate and diff against the committed
+asset before believing the set is stable.
