@@ -24,16 +24,32 @@
 #   · `cc-route <slot> --json`         → per-slot {model, lead_effort, reason}; already SSOT-parses model
 #                                        ids + owns the frontier-window (route='none') + quota-cliff edges.
 #
-# 🚨 THE TWO EDGES (RED-proven in selftest):
+# 🚨 THE EDGES (RED-proven in selftest):
 #   · FABLE-WINDOW STRADDLE — a frontier slot (judgment-dense|adversarial) whose Fable window is within
 #     CC_WAVE_FABLE_GUARD_MIN (default 30) minutes of close, OR route='none', degrades to an EXPLICIT
 #     reason-carrying Opus fallback. The fable model id NEVER appears in a straddle plan.
-#   · QUOTA CLIFF — every account capped (rank empty) or the wave exceeds total concurrency → exit 4,
-#     NO plan, "run /limit-recover". A cliff is a STOP, never a silent down-tier, never a blind partial.
+#   · WALL — no plan, and the verdict is TRICHOTOMOUS + EVIDENCED (AUTONOMY_DISPATCH_V2 §3 S3/S4,
+#     §5 F4/F5/F6/F8). One undifferentiated `exit 4 / quota-cliff` used to collapse three structurally
+#     different states, two of which are FALSE cliffs aiming the operator at the wrong problem:
+#       4 capped   the oracle ANSWERED and every account it knows is at its quota limit → /limit-recover
+#       5 auth     the oracle ANSWERED, ≥1 account needs an auth action, NONE healthy   → /relogin
+#       6 unknown  the oracle timed out / exited non-zero / emitted nothing usable      → retry next pass
+#     `unknown` is the ABSENCE of a verdict, not a wall: never a cliff, never a page. (4 also covers
+#     `capacity` — a wave larger than per-wave placement capacity — which is wave sizing, NOT a quota
+#     wall; it keeps exit 4 for the cc-dispatch contract but is a distinct verdict in the journal so
+#     the A4 read below cannot mistake it for a cliff. Memory: dispatch-false-cliff-wave-sizing.)
+#     Every wall writes ONE IDL record carrying machine-readable `evidence` {oracle_rc, ranked_n,
+#     accounts:[{acct,state,k,…}], raw_excerpt, timeout_bin}. Without it "zero false cliffs" (§7 A4)
+#     is not measurable at all — an unevidenced verdict IS the defect (F6), not a cosmetic gap.
+#   · BOUNDED ORACLE — every claude-accounts / cc-route call runs under absolute-path timeout(1)
+#     (CC_WAVE_ORACLE_TIMEOUT_S, default 20). rc 124 ⇒ `unknown`, NEVER `capped` (S4's load-bearing
+#     mapping: a hang reported as "everything is capped" is the exact bug being removed).
 #
 # Exit: 0 = plan emitted · 2 = usage (bad/empty args) · 3 = config/parse-fail (LOUD, never a silent
-#       default) · 4 = QUOTA CLIFF (stop + /limit-recover). One IDL record per invocation.
-# Env (tests): CC_WAVE_ACCOUNTS_BIN, CC_WAVE_ROUTE_BIN, CC_WAVE_MAX_PER_ACCT, CC_WAVE_FABLE_GUARD_MIN, CC_WAVE_IDL.
+#       default) · 4 = capped | capacity · 5 = auth · 6 = unknown. One IDL record per invocation.
+# Env (tests): CC_WAVE_ACCOUNTS_BIN, CC_WAVE_ROUTE_BIN, CC_WAVE_MAX_PER_ACCT, CC_WAVE_FABLE_GUARD_MIN,
+#       CC_WAVE_IDL, CC_WAVE_ORACLE_TIMEOUT_S, CC_WAVE_TIMEOUT_BIN (set-but-empty ⇒ force "absent"),
+#       CC_WAVE_VERDICT_LANE (v1 ⇒ the pre-v2 path verbatim: one exit 4, no evidence, no bound).
 set -uo pipefail
 
 ACCOUNTS_BIN_DEFAULT="claude-accounts"
@@ -44,13 +60,74 @@ GUARD_MIN="${CC_WAVE_FABLE_GUARD_MIN:-30}"
 # nothing (cc-dispatch, the actuator, provisions the path warm before it fires).
 WTROOT="${CC_WAVE_WTROOT:-$HOME/Development/.worktrees}"
 IDL="${CC_WAVE_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
+# S3/S4 kill switch (§6): v1 restores the pre-v2 wall behaviour VERBATIM — one undifferentiated
+# exit 4, no evidence blob, no timeout wrapping — so this change is reversible by env, never by a
+# revert. Everything new below is gated on it.
+VERDICT_LANE="${CC_WAVE_VERDICT_LANE:-v2}"
+ORACLE_TIMEOUT_S="${CC_WAVE_ORACLE_TIMEOUT_S:-20}"
 
-usage()       { sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'; }
+usage()       { sed -n '2,52p' "$0" | sed 's/^# \{0,1\}//'; }
 die()         { echo "cc-wave-plan: $*" >&2; exit 2; }                       # usage
 fail_config() { idl failed "config: $*"; echo "cc-wave-plan: REFUSING — $* (config/parse-fail; never a silent default)." >&2; exit 3; }
-cliff()       { idl failed "quota-cliff: $*"; echo "cc-wave-plan: ⛔ QUOTA CLIFF — $*. STOP: run /limit-recover (disk-truth audit, re-run or transplant). No plan emitted." >&2; exit 4; }
+# cliff_v1 — the pre-v2 wall, kept BYTE-IDENTICAL as the kill-switch target. Never call it directly;
+# go through cliff()/wall_* so lane v2 gets a verdict and lane v1 gets exactly this.
+cliff_v1()    { idl failed "quota-cliff: $*"; echo "cc-wave-plan: ⛔ QUOTA CLIFF — $*. STOP: run /limit-recover (disk-truth audit, re-run or transplant). No plan emitted." >&2; exit 4; }
 
 now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+
+# ── S4: the bounded oracle ────────────────────────────────────────────────────────────────────────
+# ABSOLUTE paths only, resolved ONCE. This file is reached from a launchd job whose PATH is
+# /usr/bin:/bin, so `command -v timeout` resolves differently there than in a login shell; and
+# Homebrew's coreutils ships the GNU binary as `timeout` or `gtimeout` depending on install flavour,
+# so probing both is what makes the bound actually apply on this box rather than silently not.
+# When NOTHING is found the calls run UNWRAPPED and every verdict records timeout_bin:"absent" —
+# the bound is never silently skipped, because a skipped bound that nobody can see is F8 again.
+TIMEOUT_BIN=""
+resolve_timeout_bin() {
+  local p
+  if [ -n "${CC_WAVE_TIMEOUT_BIN+set}" ]; then       # set-but-empty ⇒ force the "absent" path (tests)
+    if [ -n "${CC_WAVE_TIMEOUT_BIN}" ] && [ -x "${CC_WAVE_TIMEOUT_BIN}" ]; then TIMEOUT_BIN="$CC_WAVE_TIMEOUT_BIN"; fi
+    return 0
+  fi
+  for p in /usr/bin/timeout /opt/homebrew/bin/timeout /usr/local/bin/timeout \
+           /opt/homebrew/bin/gtimeout /usr/local/bin/gtimeout; do
+    if [ -x "$p" ]; then TIMEOUT_BIN="$p"; return 0; fi
+  done
+  return 0
+}
+resolve_timeout_bin
+
+# Oracle stderr sink. Created in the PARENT and only ever APPENDED to, because run_oracle is called
+# inside $( ) — a subshell, whose global assignments are lost (the same trap place_item documents).
+# Without this an `unknown` verdict would carry an empty excerpt exactly when the oracle's own
+# diagnostic is the entire value of the record.
+ORACLE_ERRF=""
+oracle_errf() {
+  [ -n "$ORACLE_ERRF" ] && return 0
+  ORACLE_ERRF="$(mktemp "${TMPDIR:-/tmp}/cc-wave-oracle.XXXXXX" 2>/dev/null)" || ORACLE_ERRF=""
+  [ -n "$ORACLE_ERRF" ]
+}
+cleanup_oracle() { [ -n "${ORACLE_ERRF:-}" ] && rm -f "$ORACLE_ERRF"; return 0; }
+trap cleanup_oracle EXIT
+oracle_stderr()  { { [ -n "$ORACLE_ERRF" ] && [ -s "$ORACLE_ERRF" ] && cat "$ORACLE_ERRF" 2>/dev/null; }; return 0; }
+
+# run_oracle <bin> <args…> — THE single external-call chokepoint (§7 A8: zero unwrapped
+# claude-accounts / cc-route call sites). stdout passes through VERBATIM so every existing parse is
+# byte-identical; stderr is teed to the evidence sink; the call is bounded. Returns the callee's rc
+# (124 = timeout(1) expiry). Lane v1 runs unwrapped, as it did before.
+run_oracle() {
+  local bin="$1"; shift
+  if [ "$VERDICT_LANE" = v1 ] || [ -z "$TIMEOUT_BIN" ]; then
+    if [ -n "$ORACLE_ERRF" ]; then "$bin" "$@" 2>>"$ORACLE_ERRF"; else "$bin" "$@" 2>/dev/null; fi
+  else
+    if [ -n "$ORACLE_ERRF" ]; then "$TIMEOUT_BIN" "$ORACLE_TIMEOUT_S" "$bin" "$@" 2>>"$ORACLE_ERRF"
+    else "$TIMEOUT_BIN" "$ORACLE_TIMEOUT_S" "$bin" "$@" 2>/dev/null; fi
+  fi
+}
+
+# excerpt <text> — one bounded, single-line excerpt for the evidence blob. An IDL record is one
+# line; a raw oracle dump would break that and a full dump is not evidence, it is noise.
+excerpt() { printf '%s' "${1:-}" | tr '\n\t\r' '   ' | cut -c1-200; }
 
 # TSV field-collapse guard — docs/research/TSV_FIELD_COLLAPSE_2026-07-25.md. Tab is IFS-*whitespace*,
 # so `IFS=$'\t' read` collapses a RUN of tabs and ANY empty cell shifts every later field LEFT. The
@@ -80,6 +157,104 @@ route_bin() {
   else echo ""; fi
 }
 
+# ── the account oracle, read ONCE per invocation ──────────────────────────────────────────────────
+# `claude-accounts --json` feeds THREE consumers here (the straddle guard's window, the live-load
+# seed, and the wall verdict's per-account state). It used to be invoked once per consumer and
+# unbounded; one bounded call is strictly less hang surface (F8) and guarantees all three reason
+# about the SAME snapshot. Prime it from the PARENT (load_acct_json inside a $( ) would memoize
+# into a subshell and be lost).
+ACCT_JSON=""; ACCT_JSON_RC=0; ACCT_JSON_TRIED=0
+load_acct_json() {
+  [ "$ACCT_JSON_TRIED" -eq 1 ] && { [ -n "$ACCT_JSON" ]; return $?; }
+  ACCT_JSON_TRIED=1
+  local bin; bin="$(accounts_bin)"; [ -n "$bin" ] || { ACCT_JSON_RC=127; return 1; }
+  ACCT_JSON="$(run_oracle "$bin" --json)"; ACCT_JSON_RC=$?
+  [ "$ACCT_JSON_RC" -eq 0 ] && [ -n "$ACCT_JSON" ]
+}
+
+# ── S3: trichotomous, EVIDENCED wall verdicts ─────────────────────────────────────────────────────
+# evidence.oracle_rc is the FAILURE rc — the rc of the call that stopped the oracle from
+# answering, and 0 whenever it DID answer. §7 A4 reads exactly that ("0 records where verdict==
+# capped and the oracle rc was non-zero"): a capped verdict built on a broken oracle is a false
+# cliff by definition. The producer's own no-candidate codes (2 = policy refused, 3 = data
+# unavailable) are answers, not failures, so they are carried separately as evidence.rank_rc.
+EV_ORACLE_RC=0; EV_ROUTE_RC=0; EV_ACCOUNTS="[]"; RANK_RAW=""; RANK_RC=0
+build_evidence_accounts() {
+  [ -n "$ACCT_JSON" ] || return 0
+  local a
+  # `state` REPORTS the raw SSOT auth string; the booleans are what we DECIDE on (see wall_no_headroom).
+  # session_pct/weekly_pct are carried because A4's read — "no account healthy" — is about QUOTA
+  # headroom, and an auth-healthy account sitting at 12% is exactly the false cliff A4 must catch.
+  a="$(printf '%s' "$ACCT_JSON" | jq -c '[ .rows[]? | {acct:.acct, state:.auth, k:(.k // 0),
+        actionable:.auth_actionable, login_fixable:.login_fixable,
+        session_pct:.session_pct, weekly_pct:.weekly_pct} ]' 2>/dev/null)" || return 0
+  [ -n "$a" ] && EV_ACCOUNTS="$a"
+  return 0
+}
+
+# wall_emit <verdict> <exit-code> <operator-action> <reason> <human-message>
+# ONE evidence-carrying IDL record + one stderr line, then exit. The record's top-level `action` is
+# the IDL vocabulary token "wall"; the OPERATOR's action lives at evidence.action, which is what §7
+# A6 reads ("routes to /relogin in its action field").
+wall_emit() {
+  local verdict="$1" code="$2" action="$3" reason="$4" msg="$5" tb
+  tb="${TIMEOUT_BIN:-}"; [ -n "$tb" ] || tb="absent"
+  build_evidence_accounts
+  mkdir -p "$(dirname "$IDL")" 2>/dev/null || true
+  jq -cn --arg ts "$(now_iso)" --arg actor "cc-wave-plan" --arg verdict "$verdict" \
+         --arg act "$action" --arg reason "$reason" --arg detail "$msg" --arg tb "$tb" \
+         --arg raw "$(excerpt "$RANK_RAW")" --arg err "$(excerpt "$(oracle_stderr)")" \
+         --argjson rc "$EV_ORACLE_RC" --argjson rrc "$RANK_RC" --argjson orc "$EV_ROUTE_RC" \
+         --argjson rn "${#RANKED[@]}" --argjson accts "$EV_ACCOUNTS" \
+     '{ts:$ts, actor:$actor, action:"wall", verdict:$verdict, detail:$detail,
+       evidence:{oracle_rc:$rc, rank_rc:$rrc, route_rc:$orc, ranked_n:$rn, accounts:$accts,
+                 raw_excerpt:$raw, stderr_excerpt:$err, timeout_bin:$tb,
+                 reason:$reason, action:$act}}' \
+     >> "$IDL" 2>/dev/null || true
+  case "$verdict" in
+    unknown)  echo "cc-wave-plan: ⚠️  WALL[unknown] — $msg. NOT a wall and NOT a page: the oracle gave no answer. Retry next pass. No plan emitted." >&2 ;;
+    auth)     echo "cc-wave-plan: ⛔ WALL[auth] — $msg. STOP: run /relogin. This is an AUTH wall, not a quota wall." >&2 ;;
+    capacity) echo "cc-wave-plan: ⛔ WALL[capacity] — $msg. STOP: plan a smaller wave — the accounts have headroom, this is wave sizing. No plan emitted." >&2 ;;
+    *)        echo "cc-wave-plan: ⛔ WALL[capped] — $msg. STOP: run /limit-recover (disk-truth audit, re-run or transplant). No plan emitted." >&2 ;;
+  esac
+  exit "$code"
+}
+wall_capped()   { wall_emit capped   4 /limit-recover   "$1" "$2"; }
+wall_capacity() { wall_emit capacity 4 reduce-wave-size "$1" "$2"; }
+wall_auth()     { wall_emit auth     5 /relogin         "$1" "$2"; }
+wall_unknown()  { wall_emit unknown  6 retry-next-pass  "$1" "$2"; }
+
+# cliff <reason> <human-message> — the non-rank walls: a cc-route-reported quota cliff, and a wave
+# exceeding per-wave placement capacity. Lane v1 keeps the single undifferentiated exit-4 message.
+cliff() {
+  [ "$VERDICT_LANE" = v1 ] && cliff_v1 "$2"
+  case "$1" in
+    wave-overflow) wall_capacity "$1" "$2" ;;
+    *)             wall_capped   "$1" "$2" ;;
+  esac
+}
+
+# route_guard <rc> <what> — the ONE place a cc-route return code becomes a verdict.
+#   124  → unknown  (the bound expired: never a config-fail, and NEVER a cliff — S4)
+#     4  → capped   (cc-route's own quota-cliff signal, propagated with evidence)
+#  else  → config-fail (LOUD, never a silent default)
+route_guard() {
+  local rc="$1" what="$2"
+  [ "$rc" -eq 0 ] && return 0
+  EV_ROUTE_RC="$rc"
+  if [ "$rc" -eq 124 ] && [ "$VERDICT_LANE" != v1 ]; then
+    EV_ORACLE_RC="$rc"
+    wall_unknown oracle-timeout "cc-route ($what) exceeded the ${ORACLE_TIMEOUT_S}s bound"
+  fi
+  # rc 4 is cc-route's ANSWER — "general route none, every account capped" (bin/cc-route:29,264,
+  # itself derived from claude-accounts' policy-refused rc 2) — not a failure of the oracle. So
+  # evidence.oracle_rc stays 0 and A4's read is not tripped by a genuine cliff; the raw code is
+  # carried as evidence.route_rc instead.
+  [ "$rc" -eq 4 ] && cliff route-cliff "cc-route reports a quota cliff ($what)"
+  EV_ORACLE_RC="$rc"
+  fail_config "cc-route failed (rc=$rc) for $what"
+}
+
 # iso_to_epoch <iso> → seconds (UTC assumed; tz offset stripped). BSD + GNU date.
 iso_to_epoch() {
   local s="${1:0:19}"   # YYYY-MM-DDTHH:MM:SS (drops any +00:00 / Z suffix)
@@ -90,9 +265,8 @@ iso_to_epoch() {
 # window_mins_to_close → integer minutes until the Fable window closes; empty when unknown (→ no pre-empt,
 # cc-route's live route still governs). active:false = closed = 0.
 window_mins_to_close() {
-  local bin j active deadline dl now
-  bin="$(accounts_bin)"; [ -n "$bin" ] || return 1
-  j="$("$bin" --json 2>/dev/null)" || return 1
+  local j active deadline dl now
+  j="$ACCT_JSON"                                  # the ONE bounded snapshot (primed by cmd_plan)
   [ -n "$j" ] || return 1
   active="$(printf '%s' "$j" | jq -r '.window.active // empty' 2>/dev/null)"
   [ "$active" = "false" ] && { echo 0; return 0; }
@@ -110,14 +284,120 @@ window_mins_to_close() {
 # across the set AND an account already loaded from prior waves is de-prioritised — the fix for the
 # greedy-fill concentration bug where one top-ranked account absorbed every wave (operator, 2026-07-19).
 RANKED=(); RCOUNTS=(); RLOAD=()
+RANK_NONE=0; RANK_BAD=0
 load_ranks() {
-  local bin line name
+  local bin line name score
   bin="$(accounts_bin)"; [ -n "$bin" ] || fail_config "claude-accounts unavailable (cannot rank accounts)"
+  # Captured (not piped from a process substitution) because the rc and the RAW text are both
+  # EVIDENCE now: an empty ranked set means nothing until you know whether the oracle answered.
+  RANK_RAW="$(run_oracle "$bin" --rank general)"; RANK_RC=$?
+  # PARSE BY SHAPE, against the producer's literal contract: `--rank` emits
+  # `f"{acct} {score:.6f}"` per routable account (claude-accounts:1699), and when NOTHING is
+  # routable it prints the sentinel `none` on stdout and exits 2 (policy refused) or 3 (data
+  # unavailable) — claude-accounts:1678-1685. It does NOT return empty stdout.
+  # Accepting any non-blank text as an account name (`${line%% *}`, unconditional) therefore turned
+  # that sentinel — and an HTML error page, and a stray warning — into a PHANTOM ACCOUNT that the
+  # wave was then placed on and fired at (`--account none`). The no-headroom branch below was
+  # correspondingly unreachable against the real CLI. Shape validation is what makes S3 decidable.
   while IFS= read -r line; do
-    name="${line%% *}"; [ -n "$name" ] || continue
+    case "$line" in ''|[[:space:]]*) continue ;; esac              # blank / indented: not a rank line
+    name="${line%% *}"
+    [ "$name" = none ] && { RANK_NONE=1; continue; }               # the CLI's no-candidate sentinel
+    case "$line" in *' '*) score="${line#* }" ;; *) RANK_BAD=1; continue ;; esac
+    case "$score" in ''|*[!0-9.]*) RANK_BAD=1; continue ;; esac    # field 2 must be the numeric score
     RANKED+=("$name"); RCOUNTS+=(0); RLOAD+=(0)
-  done < <("$bin" --rank general 2>/dev/null)
-  [ "${#RANKED[@]}" -gt 0 ] || cliff "no account has general headroom (rank empty)"
+  done <<EOF
+$RANK_RAW
+EOF
+  [ "${#RANKED[@]}" -gt 0 ] || wall_no_headroom
+}
+
+# wall_no_headroom — the ranked set came back EMPTY. Which of the three states is that?
+#
+# F4/F5: the incumbent answer was "always a quota cliff", so a hung oracle and a fleet of
+# logged-out accounts both paged `/limit-recover`. `--rank general` empties identically on quota
+# exhaustion, on auth loss, and on the oracle failing to answer at all — the emptiness itself
+# carries no information. The state is decided from the SSOT's OWN per-row verdicts
+# (claude-accounts:717-723 emits auth_actionable/login_fixable precisely so consumers stop
+# re-deriving from a hand-copied auth-state list, which had already drifted once). So we DECIDE on
+# those booleans and only REPORT the raw `auth` string; a row carrying NEITHER boolean is
+# state-unknown and counts toward neither side — never re-derived from a vocabulary copied here.
+wall_no_headroom() {
+  [ "$VERDICT_LANE" = v1 ] && cliff_v1 "no account has general headroom (rank empty)"
+  local tsv rows_n healthy_n actionable_n fixable_n
+
+  # (1) THE ORACLE DID NOT ANSWER ⇒ `unknown`. rc 124 is timeout(1)'s expiry: the single most
+  # important mapping in S4 — a hang must never be reported as "every account is capped".
+  EV_ORACLE_RC="$RANK_RC"
+  [ "$RANK_RC" -eq 124 ] && wall_unknown oracle-timeout \
+      "claude-accounts --rank general exceeded the ${ORACLE_TIMEOUT_S}s bound"
+  # rc 2 and rc 3 are the producer's OWN no-candidate codes, not failures: 2 = "data was fine and
+  # policy refused", 3 = "data unavailable, callers may degrade to a proxy" (claude-accounts:836-838).
+  # Both print the `none` sentinel. They are ANSWERS and are classified at (3) from per-account
+  # state; any OTHER non-zero is the oracle failing to answer at all.
+  case "$RANK_RC" in
+    0|2|3) : ;;
+    *) wall_unknown oracle-rc "claude-accounts --rank general exited rc=$RANK_RC" ;;
+  esac
+
+  # (2) Text came back that carried neither a valid `<acct> <score>` line nor the `none` sentinel ⇒
+  # we could not parse the answer. Unparseable is the absence of a verdict, not a wall.
+  if [ "$RANK_BAD" -eq 1 ] && [ "$RANK_NONE" -eq 0 ]; then
+    wall_unknown oracle-unparseable \
+      "claude-accounts --rank general answered but no '<acct> <score>' line parsed"
+  fi
+
+  # (3) The oracle ANSWERED "nothing is routable" — so the rc is not a failure rc, and
+  # evidence.oracle_rc (which §7 A4 reads as "was this verdict built on a broken oracle?") is 0.
+  # The producer's raw code is kept alongside it as rank_rc; nothing is lost.
+  EV_ORACLE_RC=0
+  # WHICH wall this is depends on per-account state.
+  if ! load_acct_json; then
+    EV_ORACLE_RC="$ACCT_JSON_RC"
+    [ "$ACCT_JSON_RC" -eq 124 ] && wall_unknown oracle-timeout \
+        "claude-accounts --json exceeded the ${ORACLE_TIMEOUT_S}s bound (no per-account state)"
+    wall_unknown accounts-json-unavailable \
+        "claude-accounts --json unavailable or empty (rc=$ACCT_JSON_RC) — no per-account state to verdict on"
+  fi
+  # Every field below is a jq `length` ⇒ always a non-empty integer, so no empty cell can shift a
+  # later field left (the TSV field-collapse trap this file guards against at the item read).
+  tsv="$(printf '%s' "$ACCT_JSON" | jq -r '[ ([.rows[]?]|length),
+        ([.rows[]? | select(.auth_actionable == false)]|length),
+        ([.rows[]? | select(.auth_actionable == true)]|length),
+        ([.rows[]? | select(.login_fixable == true)]|length) ] | @tsv' 2>/dev/null)" || tsv=""
+  [ -n "$tsv" ] || wall_unknown accounts-json-unparseable \
+      "claude-accounts --json did not parse (no per-account state to verdict on)"
+  IFS=$'\t' read -r rows_n healthy_n actionable_n fixable_n <<EOF
+$tsv
+EOF
+  case "${rows_n:-}"       in ''|*[!0-9]*) rows_n=0 ;;       esac
+  case "${healthy_n:-}"    in ''|*[!0-9]*) healthy_n=0 ;;    esac
+  case "${actionable_n:-}" in ''|*[!0-9]*) actionable_n=0 ;; esac
+  case "${fixable_n:-}"    in ''|*[!0-9]*) fixable_n=0 ;;    esac
+
+  # (3a) AUTH wall (F5): something needs an operator auth action and NOTHING is healthy. The action
+  # is /relogin — telling the operator to run /limit-recover here sends them at the wrong problem,
+  # and no amount of waiting for a quota reset fixes a logged-out account.
+  if [ "$actionable_n" -ge 1 ] && [ "$healthy_n" -eq 0 ]; then
+    wall_auth auth-wall \
+      "$actionable_n of $rows_n account(s) need an auth action ($fixable_n /relogin-fixable), none healthy"
+  fi
+  # (3b) rc 3 = the producer's own "we could not SEE the data — degrade to a proxy". With no auth
+  # wall to explain it, that is an `unknown`: reporting "everything is at its limit" on the strength
+  # of data we could not read is the false cliff this design exists to remove. (Ordered AFTER the
+  # auth check on purpose: an all-logged-out fleet exits 3 too, because a logged-out row carries an
+  # `error` and reason_class maps that to "data" — and its verdict is auth, not unknown.)
+  [ "$RANK_RC" -eq 3 ] && wall_unknown rank-data-unavailable \
+      "claude-accounts --rank general reports data unavailable (rc=3) — no account state explains it"
+  # (3c) Accounts exist, none is auth-walled, and the producer refused by POLICY ⇒ the honest
+  # reading is that every one of them is at its quota limit. Rows carrying no state field land here
+  # too, by design: "accounts present, no state info" is `capped`, not a guess at auth.
+  [ "$rows_n" -ge 1 ] && wall_capped rank-empty \
+      "no account has general headroom — $rows_n account(s) known, all at limit"
+  # (3d) The oracle answered and knows about NO account at all. That is not evidence of a quota
+  # wall; it is the absence of evidence, and calling it a cliff is exactly the F6 defect.
+  wall_unknown accounts-empty \
+      "claude-accounts --json reports no accounts — no evidence of a quota wall"
 }
 # load_live_counts → seed RLOAD[i] with RANKED[i]'s live session count from `claude-accounts --json`
 # (.rows[].k). Best-effort: an unavailable/unparseable --json leaves the seeds at 0 and placement degrades
@@ -125,9 +405,8 @@ load_ranks() {
 # window_mins_to_close, which likewise treats an absent --json as "unknown, no pre-empt". Never fail-loud
 # here: round-robin is a principled fallback, not a silent-wrong default.
 load_live_counts() {
-  local bin j kv i name k
-  bin="$(accounts_bin)"; [ -n "$bin" ] || return 0
-  j="$("$bin" --json 2>/dev/null)" || return 0
+  local j kv i name k
+  j="$ACCT_JSON"                                  # the ONE bounded snapshot (primed by cmd_plan)
   [ -n "$j" ] || return 0
   kv="$(printf '%s' "$j" | jq -r '.rows[]? | [.acct, (.k // 0)] | @tsv' 2>/dev/null)" || return 0
   [ -n "$kv" ] || return 0
@@ -156,14 +435,13 @@ place_item() {
 
 # ── per-slot model/effort resolution (memoized per distinct slot; STRADDLE decided once per invocation) ──
 LEAD_MODEL=""; STRADDLE=0; STRADDLE_MINS=""
-route_call() { RJ_OUT="$("$(route_bin)" "$@" 2>/dev/null)"; return $?; }   # sets RJ_OUT, returns cc-route rc
+route_call() { RJ_OUT="$(run_oracle "$(route_bin)" "$@")"; return $?; }   # sets RJ_OUT, returns cc-route rc (bounded)
 
 resolve_lead_model() { # SSOT lead_default via cc-route (never hardcode a model id)
   [ -n "$LEAD_MODEL" ] && return 0
   [ -n "$(route_bin)" ] || fail_config "cc-route unavailable (cannot resolve model/effort)"
   route_call lead --json; local rc=$?
-  [ "$rc" -eq 4 ] && cliff "cc-route reports a quota cliff (lead route)"
-  [ "$rc" -ne 0 ] && fail_config "cc-route failed (rc=$rc) resolving lead_default"
+  route_guard "$rc" "lead route"
   LEAD_MODEL="$(printf '%s' "$RJ_OUT" | jq -r '.model // empty' 2>/dev/null)"
   [ -n "$LEAD_MODEL" ] || fail_config "cc-route returned no model for the lead slot"
 }
@@ -175,8 +453,7 @@ resolve_slot() { # <slot> → sets R_MODEL R_EFF R_REASON R_FALLBACK
     lead|transcription)
       [ -n "$(route_bin)" ] || fail_config "cc-route unavailable (cannot resolve model/effort)"
       route_call "$slot" --json; local rc=$?
-      [ "$rc" -eq 4 ] && cliff "cc-route reports a quota cliff (slot $slot)"
-      [ "$rc" -ne 0 ] && fail_config "cc-route failed (rc=$rc) for slot $slot"
+      route_guard "$rc" "slot $slot"
       R_MODEL="$(printf '%s' "$RJ_OUT" | jq -r '.model // empty')"
       R_EFF="$(printf '%s' "$RJ_OUT" | jq -r '.lead_effort // empty')"
       R_REASON="$(printf '%s' "$RJ_OUT" | jq -r '.reason // empty')"
@@ -192,8 +469,7 @@ resolve_slot() { # <slot> → sets R_MODEL R_EFF R_REASON R_FALLBACK
         R_FALLBACK=1
       else
         route_call "$slot" --json; local rc=$?
-        [ "$rc" -eq 4 ] && cliff "cc-route reports a quota cliff (slot $slot)"
-        [ "$rc" -ne 0 ] && fail_config "cc-route failed (rc=$rc) for slot $slot"
+        route_guard "$rc" "slot $slot"
         R_MODEL="$(printf '%s' "$RJ_OUT" | jq -r '.model // empty')"
         R_EFF="$(printf '%s' "$RJ_OUT" | jq -r '.lead_effort // empty')"
         R_REASON="$(printf '%s' "$RJ_OUT" | jq -r '.reason // empty')"
@@ -239,6 +515,21 @@ cmd_plan() {
   while IFS=$'\t' read -r id slot; do ids+=("$id"); slots+=("$slot"); done \
     < <(printf '%s' "$items" | jq -r "$CELL"'.[] | [(.id | cell("?")), (.slot | cell("?"))] | @tsv')
 
+  # Prime the ONE bounded account snapshot in the PARENT, before anything reads it. Every consumer
+  # below (straddle window, live-load seed, wall evidence) shares it; a failure here is NOT fatal —
+  # only the wall path turns an unavailable snapshot into a verdict.
+  oracle_errf || true
+  load_acct_json || true
+
+  # Rank accounts FIRST, before any cc-route call. The account wall is the cheapest and most
+  # authoritative wall signal, and it is the only one that can produce the full trichotomy. Ranking
+  # after the straddle block (as this used to) meant a FRONTIER wave hit `resolve_lead_model` first,
+  # so an all-logged-out fleet surfaced as cc-route's config-fail (exit 3) instead of the auth
+  # verdict — the S3 states were unreachable for exactly the wave shapes that use them most. Ranking
+  # first also means a genuine wall costs zero cc-route calls.
+  load_ranks
+  load_live_counts
+
   # Decide the Fable STRADDLE once (window state is uniform across the wave).
   local has_frontier=0 i
   for slot in "${slots[@]}"; do case "$slot" in judgment-dense|adversarial) has_frontier=1;; esac; done
@@ -248,13 +539,10 @@ cmd_plan() {
     if [ -n "$mins" ] && [ "$mins" -lt "$GUARD_MIN" ]; then STRADDLE=1; STRADDLE_MINS="$mins"; fi
   fi
 
-  # Rank accounts, seed each with its live load, then spread-place every item (all-or-nothing: any
-  # overflow is a cliff, no partial plan).
-  load_ranks
-  load_live_counts
+  # Spread-place every item (all-or-nothing: any overflow walls, never a partial plan).
   local accts=()
   for i in "${!ids[@]}"; do
-    place_item || cliff "wave of $n items exceeds capacity (${#RANKED[@]} accounts × ${MAX_PER_ACCT}/acct all capped)"
+    place_item || cliff wave-overflow "wave of $n items exceeds capacity (${#RANKED[@]} accounts × ${MAX_PER_ACCT}/acct all capped)"
     accts+=("$PLACED_ACCT")
   done
 
@@ -318,24 +606,60 @@ cmd_plan() {
 
 # ── selftest: every edge RED-proven against stubbed accounts + cc-route ───────────────────────────────
 selftest() {
-  local pass=0 fail=0 rc tmp SELF
+  local pass=0 fail=0 skipn=0 rc tmp SELF
   tmp="$(mktemp -d "${TMPDIR:-/tmp}/cc-wave-plan-selftest.XXXXXX")" || die "cannot mktemp"
-  trap 'rm -rf "${tmp:-}"' EXIT
+  # Composed, not replacing: a bare `trap … EXIT` here would silently drop the module-level
+  # cleanup_oracle handler, leaking a stderr sink the moment selftest calls an oracle directly.
+  trap 'cleanup_oracle; rm -rf "${tmp:-}"' EXIT
   export CC_WAVE_IDL="$tmp/idl.jsonl"
   SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 
-  # accounts stub: --rank general (STUB_RANK space-list; set-but-empty = cliff) · --json (window deadline
-  # = now + STUB_WIN_MIN minutes, default 600 = wide open; rows = STUB_ROWS JSON array, default [] = every
-  # account idle, so the live-load seed is 0 and placement is pure round-robin).
+  # accounts stub: --rank general (STUB_RANK space-list; set-but-empty = nobody has headroom) · --json
+  # (window deadline = now + STUB_WIN_MIN minutes, default 600 = wide open; rows).
+  #
+  # FIXTURE-SHAPE PARITY with the real producer (memory: fixture-shape-parity-with-real-producer).
+  # `--rank general` answers "who has HEADROOM"; `--json` answers "what accounts EXIST and what is
+  # their state" — different questions, and the real claude-accounts emits a row per CONFIGURED
+  # account regardless of headroom (bin/claude-accounts:694-723). The old stub defaulted rows to []
+  # while --rank listed four accounts, so its universe emptied along with its headroom set and it
+  # could not express "every account is capped" at all. Rows now default to the STUB_ACCTS universe
+  # and carry the CLI-OWNED verdict fields (auth_actionable / login_fixable) the real producer
+  # attaches to every row — the fields this tool decides on.
+  #   STUB_ROWS       explicit rows JSON (wins over the generated universe)
+  #   STUB_ACCTS      the configured universe for --json rows
+  #   STUB_AUTH/_ACTIONABLE/_FIXABLE   uniform auth state for that universe
+  #   STUB_SLEEP      sleep before answering (exercises the S4 bound)
+  #   STUB_RANK_RC    --rank exits non-zero · STUB_RANK_GARBAGE  --rank answers unparseably
+  #   STUB_JSON_RC    --json exits non-zero
   cat > "$tmp/accounts-stub" <<'STUB'
 #!/bin/bash
+[ -n "${STUB_SLEEP:-}" ] && sleep "$STUB_SLEEP"
 case "${1:-}" in
   --rank)
-    i=0; for n in ${STUB_RANK-next next4 next3 next2}; do printf '%s 0.%03d\n' "$n" $((900-i)); i=$((i+1)); done ;;
+    [ -n "${STUB_RANK_RC:-}" ] && { echo "claude-accounts: rank probe failed" >&2; exit "$STUB_RANK_RC"; }
+    [ -n "${STUB_RANK_GARBAGE:-}" ] && { printf '   \n<html>rate limited</html>\n'; exit 0; }
+    i=0; for n in ${STUB_RANK-next next4 next3 next2}; do printf '%s 0.%06d\n' "$n" $((900-i)); i=$((i+1)); done
+    # No candidate ⇒ the producer prints the `none` SENTINEL and exits 2 (policy refused) or 3
+    # (data unavailable) — claude-accounts:1678-1685. It never returns empty stdout, and the old
+    # fixture's silent-empty claim is what let a phantom account through unnoticed.
+    [ -z "${STUB_RANK-x}" ] && { echo none; echo "claude-accounts: no routable account for general" >&2; exit "${STUB_RANK_NONE_RC:-2}"; }
+    : ;;
   --json)
+    [ -n "${STUB_JSON_RC:-}" ] && { echo "claude-accounts: json probe failed" >&2; exit "$STUB_JSON_RC"; }
     m="${STUB_WIN_MIN:-600}"
     dl="$(date -u -v+"${m}"M +%Y-%m-%dT%H:%M:%S+00:00 2>/dev/null || date -u -d "+${m} minutes" +%Y-%m-%dT%H:%M:%S+00:00)"
-    printf '{"window":{"active":true,"deadline":"%s"},"rows":%s}\n' "$dl" "${STUB_ROWS:-[]}" ;;
+    if [ -n "${STUB_ROWS:-}" ]; then rows="$STUB_ROWS"
+    else
+      rows='['; sep=''
+      for n in ${STUB_ACCTS-next next4 next3 next2}; do
+        rows="$rows$sep{\"acct\":\"$n\",\"k\":0,\"auth\":\"${STUB_AUTH:-ok}\""
+        rows="$rows,\"auth_actionable\":${STUB_ACTIONABLE:-false},\"login_fixable\":${STUB_FIXABLE:-false}"
+        rows="$rows,\"session_pct\":${STUB_SESSION_PCT:-97},\"weekly_pct\":${STUB_WEEKLY_PCT:-96}}"
+        sep=','
+      done
+      rows="$rows]"
+    fi
+    printf '{"window":{"active":true,"deadline":"%s"},"rows":%s}\n' "$dl" "$rows" ;;
   *) exit 2 ;;
 esac
 STUB
@@ -344,6 +668,7 @@ STUB
   # cc-route stub: mirrors the real slot table + edges (STUB_ROUTE_CLIFF → exit 4; STUB_FABLE_NONE → Opus).
   cat > "$tmp/route-stub" <<'STUB'
 #!/bin/bash
+[ -n "${STUB_ROUTE_SLEEP:-}" ] && sleep "$STUB_ROUTE_SLEEP"
 [ -n "${STUB_ROUTE_CLIFF:-}" ] && { echo "cc-route: cliff" >&2; exit 4; }
 slot="$1"
 case "$slot" in
@@ -441,6 +766,121 @@ STUB
   check "cliff: cc-route quota cliff propagates -> exit 4" 4 \
     bash -c "STUB_ROUTE_CLIFF=1 '$SELF' --items '[{\"id\":\"a\",\"slot\":\"lead\"}]'"
 
+  # (f) S3/S4 — TRICHOTOMOUS EVIDENCED WALL VERDICTS + the bounded oracle (§3 S3/S4, §5 F4/F5/F6/F8).
+  # Note on absence assertions: a "writes NO page" check would be VACUOUS here — cc-wave-plan has no
+  # pages dir at all (cc-dispatch owns that surface), so it would pass against a totally broken tool
+  # (memory: absence-alarm-needs-existence-evidence). The real absence/presence pair for THIS tool is
+  # the operator action it names, and every absence check below sits beside its positive control.
+  local IT1='[{"id":"a","slot":"lead"}]'
+
+  # THE DISCRIMINATING PAIR — same harness, same wave, ONE variable: does the oracle ANSWER?
+  #   sleeps past the bound          -> 6 unknown  (retry next pass)
+  #   answers "nobody has headroom"  -> 4 capped   (/limit-recover)
+  # If these two ever agree, this whole task has failed.
+  if [ -n "$TIMEOUT_BIN" ]; then
+    check "S4 DISCRIMINATOR a: oracle sleeps past the bound -> exit 6 unknown" 6 \
+      bash -c "STUB_SLEEP=5 CC_WAVE_ORACLE_TIMEOUT_S=1 '$SELF' --items '$IT1'"
+    check "S4 DISCRIMINATOR b: SAME harness, empty-but-successful rank -> exit 4 capped" 4 \
+      bash -c "STUB_RANK='' CC_WAVE_ORACLE_TIMEOUT_S=1 '$SELF' --items '$IT1'"
+    check "S4: a timed-out oracle NEVER names /limit-recover (a hang is not a quota wall)" 0 \
+      bash -c "STUB_SLEEP=5 CC_WAVE_ORACLE_TIMEOUT_S=1 '$SELF' --items '$IT1' 2>'$tmp/err'; grep -q limit-recover '$tmp/err' && exit 1; grep -qi 'retry next pass' '$tmp/err'"
+    check "S4 positive control: the CAPPED path DOES name /limit-recover" 0 \
+      bash -c "STUB_RANK='' '$SELF' --items '$IT1' 2>'$tmp/err'; grep -q limit-recover '$tmp/err'"
+    check "S4: timeout verdict is unknown with oracle_rc 124 on the IDL record" 0 \
+      bash -c "STUB_SLEEP=5 CC_WAVE_ORACLE_TIMEOUT_S=1 '$SELF' --items '$IT1' >/dev/null 2>&1; tail -1 '$tmp/idl.jsonl' | jq -e 'select(.verdict==\"unknown\" and .evidence.oracle_rc==124 and .evidence.reason==\"oracle-timeout\")'"
+    check "S4: a bounded cc-route that hangs is unknown, NOT config-fail (exit 3)" 6 \
+      bash -c "STUB_ROUTE_SLEEP=5 CC_WAVE_ORACLE_TIMEOUT_S=1 '$SELF' --items '$IT1'"
+    check "S4: the bound is recorded (timeout_bin is a real path, never silently skipped)" 0 \
+      bash -c "STUB_RANK='' '$SELF' --items '$IT1' >/dev/null 2>&1; tail -1 '$tmp/idl.jsonl' | jq -e '.evidence.timeout_bin|test(\"^/\")'"
+    check "S4: no timeout(1) available -> runs unwrapped and records timeout_bin absent" 4 \
+      bash -c "STUB_RANK='' CC_WAVE_TIMEOUT_BIN= '$SELF' --items '$IT1' >/dev/null 2>&1; rc=\$?; tail -1 '$tmp/idl.jsonl' | jq -e '.evidence.timeout_bin==\"absent\"' >/dev/null && exit \$rc; exit 9"
+  else
+    printf '  skip %-62s (no absolute-path timeout(1) on this box)\n' "S4: bounded-oracle checks (8)"
+    skipn=$((skipn+8))
+  fi
+
+  # AUTH (F5) — every account logged out. `--rank general` empties EXACTLY as it does on quota
+  # exhaustion; only the per-account state tells them apart, and the action differs completely.
+  check "S3 auth: all accounts logged out -> exit 5 (not 4)" 5 \
+    bash -c "STUB_RANK='' STUB_AUTH=logged-out STUB_ACTIONABLE=true STUB_FIXABLE=true '$SELF' --items '$IT1'"
+  check "S3 auth: names /relogin and NEVER /limit-recover (the wrong operator action)" 0 \
+    bash -c "STUB_RANK='' STUB_AUTH=logged-out STUB_ACTIONABLE=true STUB_FIXABLE=true '$SELF' --items '$IT1' 2>'$tmp/err'; grep -q limit-recover '$tmp/err' && exit 1; grep -q relogin '$tmp/err'"
+  check "S3 auth: IDL verdict=auth with evidence.action=/relogin (A6)" 0 \
+    bash -c "STUB_RANK='' STUB_AUTH=logged-out STUB_ACTIONABLE=true STUB_FIXABLE=true '$SELF' --items '$IT1' >/dev/null 2>&1; tail -1 '$tmp/idl.jsonl' | jq -e 'select(.verdict==\"auth\" and .evidence.action==\"/relogin\")'"
+  # ...and the discriminator: ONE healthy account among the logged-out ones is a QUOTA wall, not an
+  # auth wall — the healthy account has no headroom, which is what `capped` means.
+  check "S3 auth: one healthy account among logged-out ones -> capped (4), not auth" 4 \
+    bash -c "STUB_RANK='' STUB_ROWS='[{\"acct\":\"a\",\"auth\":\"logged-out\",\"auth_actionable\":true,\"login_fixable\":true,\"k\":0},{\"acct\":\"b\",\"auth\":\"ok\",\"auth_actionable\":false,\"login_fixable\":false,\"k\":0}]' '$SELF' --items '$IT1'"
+
+  # UNKNOWN (F4) — three ways the oracle fails to ANSWER; none of them is a wall.
+  check "S3 unknown: --rank exits non-zero -> exit 6 (not a cliff)" 6 \
+    bash -c "STUB_RANK_RC=3 '$SELF' --items '$IT1'"
+  check "S3 unknown: --rank answers unparseably -> exit 6" 6 \
+    bash -c "STUB_RANK_GARBAGE=1 '$SELF' --items '$IT1'"
+  check "S3 unknown: rank empty + --json unavailable -> exit 6 (no state to verdict on)" 6 \
+    bash -c "STUB_RANK='' STUB_JSON_RC=1 '$SELF' --items '$IT1'"
+  check "S3 unknown: rank empty + oracle knows NO accounts -> exit 6 (absence of evidence)" 6 \
+    bash -c "STUB_RANK='' STUB_ROWS='[]' '$SELF' --items '$IT1'"
+  check "S3 unknown: the failing-oracle excerpt reaches the record (stderr is the diagnostic)" 0 \
+    bash -c "STUB_RANK_RC=3 '$SELF' --items '$IT1' >/dev/null 2>&1; tail -1 '$tmp/idl.jsonl' | jq -e '.evidence.stderr_excerpt|test(\"rank probe failed\")'"
+  # rc 3 = the producer's OWN "data unavailable — degrade to a proxy" (claude-accounts:836-838).
+  # With healthy accounts and no auth wall to explain it, that is unknown: a wall asserted on data
+  # we could not read IS the false cliff. Its rc-2 twin (policy refused) is the positive control.
+  check "S3 unknown: no-candidate rc=3 (data unavailable) -> exit 6, NOT capped" 6 \
+    bash -c "STUB_RANK='' STUB_RANK_NONE_RC=3 '$SELF' --items '$IT1'"
+  check "S3 positive control: the SAME sentinel with rc=2 (policy refused) -> exit 4 capped" 4 \
+    bash -c "STUB_RANK='' STUB_RANK_NONE_RC=2 '$SELF' --items '$IT1'"
+  # ...and rc 3 caused by AUTH is still an auth wall, not unknown — an all-logged-out fleet exits 3
+  # because a logged-out row carries an `error` and reason_class maps that to "data".
+  check "S3 auth: rc=3 caused by logged-out accounts is still exit 5 (order matters)" 5 \
+    bash -c "STUB_RANK='' STUB_RANK_NONE_RC=3 STUB_AUTH=logged-out STUB_ACTIONABLE=true STUB_FIXABLE=true '$SELF' --items '$IT1'"
+
+  # The `none` SENTINEL — claude-accounts prints it on stdout when nothing is routable. Accepting
+  # any non-blank line as an account name made it a PHANTOM ACCOUNT: a plan placing the wave on an
+  # account literally named "none", fired as `--account none`, instead of any wall at all.
+  check "S3 sentinel: 'none' is never parsed as an account (no phantom placement)" 0 \
+    bash -c "out=\$(STUB_RANK='' '$SELF' --items '$IT1' --json 2>/dev/null); [ -z \"\$out\" ]"
+  check "S3 sentinel: a rank line needs a numeric score (an HTML error page is not an account)" 6 \
+    bash -c "STUB_RANK_GARBAGE=1 '$SELF' --items '$IT1'"
+  check "S3 sentinel positive control: a well-formed '<acct> <score>' line still ranks" 0 \
+    bash -c "STUB_RANK='acctA' '$SELF' --items '$IT1' --json | jq -e '.[0].account==\"acctA\"'"
+
+  # CAPPED (F6) — the evidence blob is the whole point: without it A4 ("zero false cliffs") cannot
+  # be read at all. A capped record must carry rc 0, the per-account state, and a zero ranked set.
+  check "S3 capped: IDL carries evidence {oracle_rc:0, ranked_n:0, 4 accounts}" 0 \
+    bash -c "STUB_RANK='' '$SELF' --items '$IT1' >/dev/null 2>&1; tail -1 '$tmp/idl.jsonl' | jq -e 'select(.action==\"wall\" and .verdict==\"capped\" and .evidence.oracle_rc==0 and .evidence.ranked_n==0 and (.evidence.accounts|length)==4)'"
+  check "S3 capped: every evidence account carries {acct,state,k} (A4 is unreadable without it)" 0 \
+    bash -c "STUB_RANK='' '$SELF' --items '$IT1' >/dev/null 2>&1; tail -1 '$tmp/idl.jsonl' | jq -e '.evidence.accounts|all(has(\"acct\") and has(\"state\") and has(\"k\"))'"
+  # capacity (wave sizing) is NOT a quota cliff — it keeps exit 4 for the cc-dispatch contract but
+  # verdicts distinctly, so A4's `verdict=="capped"` read cannot mistake healthy accounts for one
+  # (memory: dispatch-false-cliff-wave-sizing).
+  check "S3 capacity: wave overflow verdicts 'capacity', never 'capped' (A4 stays readable)" 0 \
+    bash -c "STUB_RANK='acctA acctB' CC_WAVE_MAX_PER_ACCT=1 '$SELF' --items '[{\"id\":\"1\",\"slot\":\"lead\"},{\"id\":\"2\",\"slot\":\"lead\"},{\"id\":\"3\",\"slot\":\"lead\"}]' >/dev/null 2>&1; tail -1 '$tmp/idl.jsonl' | jq -e 'select(.verdict==\"capacity\" and .evidence.ranked_n==2)'"
+  check "S3: NO plan is emitted on any wall verdict (auth/unknown included)" 0 \
+    bash -c "for e in 'STUB_RANK=' 'STUB_RANK_RC=3' 'STUB_RANK= STUB_AUTH=logged-out STUB_ACTIONABLE=true'; do out=\$(env \$e '$SELF' --items '$IT1' --json 2>/dev/null); [ -n \"\$out\" ] && exit 1; done; exit 0"
+
+  # ORDERING — the account wall is decided BEFORE any cc-route call, so the trichotomy is reachable
+  # for every wave shape. A frontier wave used to resolve the lead model first, turning an
+  # all-logged-out fleet into cc-route's config-fail (exit 3) instead of the auth verdict.
+  check "S3 order: a FRONTIER wave on a logged-out fleet still verdicts auth (5), not 3" 5 \
+    bash -c "STUB_RANK='' STUB_AUTH=logged-out STUB_ACTIONABLE=true STUB_FIXABLE=true '$SELF' --items '[{\"id\":\"j\",\"slot\":\"judgment-dense\"}]'"
+  check "S3 order: a FRONTIER wave on a capped fleet still verdicts capped (4)" 4 \
+    bash -c "STUB_RANK='' '$SELF' --items '[{\"id\":\"j\",\"slot\":\"judgment-dense\"}]'"
+  # cc-route's rc 4 is its ANSWER ("every account capped"), not an oracle failure — so the record
+  # keeps oracle_rc 0 (A4 must not flag a genuine cliff) and carries the raw code as route_rc.
+  check "S3 route-cliff: capped with oracle_rc 0 and route_rc 4 (A4 not tripped)" 0 \
+    bash -c "STUB_ROUTE_CLIFF=1 '$SELF' --items '$IT1' >/dev/null 2>&1; tail -1 '$tmp/idl.jsonl' | jq -e 'select(.verdict==\"capped\" and .evidence.oracle_rc==0 and .evidence.route_rc==4)'"
+
+  # KILL SWITCH (§6) — v1 restores the pre-v2 wall verbatim: one exit 4, the old message, no verdict.
+  check "lane v1: an auth wall reverts to the single exit 4" 4 \
+    bash -c "CC_WAVE_VERDICT_LANE=v1 STUB_RANK='' STUB_AUTH=logged-out STUB_ACTIONABLE=true '$SELF' --items '$IT1'"
+  check "lane v1: a failing oracle reverts to exit 4 (the pre-v2 conflation, on purpose)" 4 \
+    bash -c "CC_WAVE_VERDICT_LANE=v1 STUB_RANK_RC=3 '$SELF' --items '$IT1'"
+  check "lane v1: writes the OLD unevidenced record (action=failed, no verdict/evidence)" 0 \
+    bash -c "CC_WAVE_VERDICT_LANE=v1 STUB_RANK='' '$SELF' --items '$IT1' >/dev/null 2>&1; tail -1 '$tmp/idl.jsonl' | jq -e 'select(.action==\"failed\" and (has(\"verdict\")|not) and (has(\"evidence\")|not))'"
+  check "lane v1: the happy path is untouched by the switch" 0 \
+    bash -c "CC_WAVE_VERDICT_LANE=v1 '$SELF' --items '$IT1' --json | jq -e '.[0].account==\"next\"'"
+
   # (d) usage + config edges.
   check "usage: empty items array -> exit 2" 2 "$SELF" --items '[]'
   check "usage: --items with no value -> exit 2" 2 "$SELF" --items
@@ -450,7 +890,7 @@ STUB
   check "config: invalid slot in an item -> exit 3 (never a silent default)" 3 \
     "$SELF" --items '[{"id":"a","slot":"chief-vibes-officer"}]'
 
-  echo "cc-wave-plan selftest: $pass passed, $fail failed"
+  echo "cc-wave-plan selftest: $pass passed, $fail failed, $skipn skipped"
   [ "$fail" -eq 0 ] || exit 1
 }
 

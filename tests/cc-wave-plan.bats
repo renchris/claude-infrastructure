@@ -10,16 +10,36 @@ setup() {
   C="$BATS_TEST_TMPDIR/case"
   mkdir -p "$C/bin"
 
-  # accounts stub — --rank general (STUB_RANK space-list; set-but-empty = cliff) · --json (window
-  # deadline = now + STUB_WIN_MIN minutes, default 600 = wide open; rows = STUB_ROWS JSON array,
-  # default [] = every account idle → live-load seed 0 → pure round-robin).
+  # accounts stub — --rank general (STUB_RANK space-list; set-but-empty = nothing routable) · --json
+  # (window deadline = now + STUB_WIN_MIN minutes, default 600 = wide open; rows).
+  #
+  # FIXTURE-SHAPE PARITY with bin/claude-accounts (memory: fixture-shape-parity-with-real-producer).
+  # Two corrections, both of which the old fixture got wrong in the same direction — claiming LESS
+  # than the producer emits, which hid a defect rather than exposing one:
+  #   · `--rank` prints the sentinel `none` and exits 2 (policy refused) / 3 (data unavailable) when
+  #     nothing is routable (claude-accounts:1678-1685). It never returns empty stdout.
+  #   · `--json` emits a row per CONFIGURED account regardless of headroom, carrying the CLI-owned
+  #     auth_actionable / login_fixable verdicts (claude-accounts:694-723) — so its universe does
+  #     not empty along with the headroom set. STUB_ROWS still overrides it explicitly.
   cat > "$C/bin/claude-accounts" <<'STUB'
 #!/bin/bash
 case "${1:-}" in
-  --rank) i=0; for n in ${STUB_RANK-next next4 next3 next2}; do printf '%s 0.%03d\n' "$n" $((900-i)); i=$((i+1)); done ;;
+  --rank)
+    i=0; for n in ${STUB_RANK-next next4 next3 next2}; do printf '%s 0.%06d\n' "$n" $((900-i)); i=$((i+1)); done
+    [ -z "${STUB_RANK-x}" ] && { echo none; echo "claude-accounts: no routable account for general" >&2; exit "${STUB_RANK_NONE_RC:-2}"; }
+    : ;;
   --json) m="${STUB_WIN_MIN:-600}"
     dl="$(date -u -v+"${m}"M +%Y-%m-%dT%H:%M:%S+00:00 2>/dev/null || date -u -d "+${m} minutes" +%Y-%m-%dT%H:%M:%S+00:00)"
-    printf '{"window":{"active":true,"deadline":"%s"},"rows":%s}\n' "$dl" "${STUB_ROWS:-[]}" ;;
+    if [ -n "${STUB_ROWS:-}" ]; then rows="$STUB_ROWS"
+    else
+      rows='['; sep=''
+      for n in ${STUB_ACCTS-next next4 next3 next2}; do
+        rows="$rows$sep{\"acct\":\"$n\",\"k\":0,\"auth\":\"ok\",\"auth_actionable\":false,\"login_fixable\":false,\"session_pct\":97,\"weekly_pct\":96}"
+        sep=','
+      done
+      rows="$rows]"
+    fi
+    printf '{"window":{"active":true,"deadline":"%s"},"rows":%s}\n' "$dl" "$rows" ;;
   *) exit 2 ;;
 esac
 STUB
@@ -49,11 +69,14 @@ STUB
 }
 
 # ── (a) selftest contract ─────────────────────────────────────────────────────────────────────────────
-@test "selftest passes and runs all 29 checks (a zero-check suite must not 'pass')" {
+@test "selftest passes and runs all 63 checks (a zero-check suite must not 'pass')" {
+  # 29 → 63: the S3/S4 verdict + bounded-oracle cases. Bound-dependent checks print `skip` and are
+  # counted separately, so a box without timeout(1) reports fewer `ok` lines rather than silently
+  # passing a hollow suite — hence >= on a floor that still fails a collapsed run.
   run "$WP" selftest
   [ "$status" -eq 0 ]
   n_ok="$(printf '%s' "$output" | grep -c '^  ok ')"
-  [ "$n_ok" -eq 29 ]
+  [ "$n_ok" -ge 52 ]
   ! printf '%s' "$output" | grep -q '^  FAIL'
 }
 
