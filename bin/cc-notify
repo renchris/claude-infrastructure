@@ -109,6 +109,18 @@
 set -uo pipefail
 
 MAILBOX_DIR="${CC_MAILBOX_DIR:-$HOME/.claude/mailbox}"
+
+# ── SENT-BODY ECHO (operator request 2026-07-28) ────────────────────────────────────────────────
+# The receiver renders inbound mail as a block behind a left rule (hooks/mailbox-drain.sh); echo
+# the OUTBOUND body behind the same rule so a hop looks like one channel from both ends. stderr
+# only, after the verdict line, and never parsed — every token cc-announce greps is on its own
+# line above this. Truncated so a long body cannot flood a tool result.
+_echo_sent() {
+  [ -n "${MSG:-}" ] || return 0
+  printf '%s' "$MSG" | awk 'NR==1{ if (length($0)>120) print "  \xe2\x94\x82 " substr($0,1,117) "\xe2\x80\xa6"; else print "  \xe2\x94\x82 " $0 }
+                            NR==2{ print "  \xe2\x94\x82 \xe2\x80\xa6"; exit }' >&2
+}
+
 ROLES_DIR="${CC_ROLES_DIR:-$HOME/.claude/cc-roles}"   # role → CURRENT pane uuid, re-read at SEND time
 DESK_ROLE="${CC_DESK_ROLE:-desk}"                     # the standing triager reroutes land on
 IT2="${IT2_BIN:-$HOME/.claude/bin/it2}"     # read-only here (session list, for pane liveness) — NEVER `session send`
@@ -452,7 +464,8 @@ ENQUEUED=1     # from here on the message is DURABLE — a kill can cost the ver
 # --mailbox-only: caller explicitly wants a pure record, no liveness verdict.
 if [ "$MAILBOX_ONLY" = 1 ]; then
   verdict mailbox-only reason=requested
-  echo "cc-notify: [$uuid] recorded to inbox ($MAILBOX_DIR/$uuid.md; --mailbox-only)" >&2
+  echo "cc-notify 📤 peer mail ▶ [$uuid] recorded to inbox ($MAILBOX_DIR/$uuid.md; --mailbox-only)" >&2
+  _echo_sent
   exit 0
 fi
 
@@ -524,15 +537,18 @@ case "$_lv" in
   0)
     if [ "$uuid" = "$own_uuid" ] || wake_path_armed "$uuid"; then
       verdict delivered reason=wake-path-armed
-      echo "cc-notify: delivered to inbox [$uuid] (live session, wake-path armed — its cc-await-ping watcher wakes it within a poll)" >&2
+      echo "cc-notify 📤 peer mail ▶ delivered to inbox [$uuid] (live session, wake-path armed — its cc-await-ping watcher wakes it within a poll)" >&2
+      _echo_sent
     else
       verdict delivered reason=no-watcher
-      echo "cc-notify: delivered to inbox [$uuid] (live session, NO watcher armed — drains on its NEXT turn; delivered but not a guaranteed instant wake)" >&2
+      echo "cc-notify 📤 peer mail ▶ delivered to inbox [$uuid] (live session, NO watcher armed — drains on its NEXT turn; delivered but not a guaranteed instant wake)" >&2
+      _echo_sent
     fi
     exit 0 ;;
   1)
     verdict mailbox-only reason=target-not-live
-    echo "cc-notify: [$uuid] mailbox only — target is NOT a live session (closed/recycled pane); no drain will run. The message is recorded but unread until/unless that pane returns." >&2
+    echo "cc-notify 📤 peer mail ▶ [$uuid] mailbox only — target is NOT a live session (closed/recycled pane); no drain will run. The message is recorded but unread until/unless that pane returns." >&2
+      _echo_sent
     # D3 REROUTE — a dead, unforwarded target is the silent-loop class (570 pages into one dead box for
     # three days). The line stays in the original box (forensics are never moved), and a COPY goes to
     # the desk role tagged [for:<orig>] so a human/triager actually sees it. Skipped when a forward was
@@ -564,5 +580,5 @@ case "$_lv" in
     fi
     exit 0 ;;
   *) verdict unverified reason=liveness-unverifiable
-     echo "cc-notify: delivered to inbox [$uuid] (liveness UNVERIFIABLE — no session registry/pane list; recorded, will drain if the pane is live)" >&2; exit 0 ;;
+     echo "cc-notify 📤 peer mail ▶ delivered to inbox [$uuid] (liveness UNVERIFIABLE — no session registry/pane list; recorded, will drain if the pane is live)" >&2; exit 0 ;;
 esac
