@@ -16,7 +16,7 @@ rebuilds must not both redesign; the row that owns it is marked.
 |---|---|---|---|---|---|
 | 1 | **Landing & deploy pipeline** — commit→trunk→live | ship-land, land-lock, postland-verify, deploy-live, host-suites.manifest, cc-blockers alarms | verifier stamps (1); deploy ff (1) | no quiet period; 12+ writers 24/7 | **DONE 2026-07-28** — LAND_PIPELINE_V2.md; 9 lands; exemplar |
 | 2 | **Session lifecycle & succession** — open/recycle/close | handoff-fire, /handoff, self-close, engagement verification, warm worktree claim | mailbox delivery (3); registry truth (4) | a watched pane must never vanish illegibly | open |
-| 3 | **Cross-session comms** — messages between peers | cc-notify, mailbox+ack cursor, .forward chains, cc-await-ping, mailbox-drain | wake path (2); desk inbox (5) | delivery must survive recycles; exactly-once ack | open (v3 design exists — cross-session-mail-v3 memory) |
+| 3 | **Cross-session comms** — messages between peers | cc-notify, mailbox+ack cursor, .forward chains, cc-await-ping, mailbox-drain | wake path (2); desk inbox (5) | ~~delivery must survive recycles; exactly-once ack~~ **cell CONFIRMED-BUT-RENAMED — exactly-once ack was already built and sound (split `.seen`/`.acked` under mkdir lock); the binding constraint is at-least-once delivery to a LIVE READER, and the root cause is ADDRESSING (inbox keyed on pane, not session)** | **REBUILDING 2026-07-29** — [CROSS_SESSION_COMMS_V2.md](CROSS_SESSION_COMMS_V2.md) (410 ln, four load-bearing sections); design 5dd65159 · build landing continuously (99164d48 · fea9f7a8 · 2db449d0 · 9075b347 · 0688dc5e · 66a43076 · a8b3a093 "address the session, PULL from a dead predecessor"), branch 0 ahead of trunk. Row **2 is BLOCKED on this row** (strict 4→3→2) |
 | 4 | **Session registry & reaping** — who is alive, who gets closed | session-register, cc-reconcile, cc-reaper, cc-teardown, liveness oracles (cwd/lsof) | teardown of (2)'s panes | never reap a live operator conversation | **DONE 2026-07-29** — SESSION_REGISTRY_V2.md; landed 7db74a76 (c834b705 design · acddb319 beat+lease · 5816968a fail-closed belts · +hermeticity fix); activation 16-session-beat staged — ⚠ **ORACLE INERT UNTIL ACTIVATED: consume it FAIL-SOFT, never assume it produces** (verified 2026-07-29: `~/.claude/cc-beats` absent, `session-beat.sh` in no live settings.json, activation has no `.done`) |
 | 5 | **Autonomy dispatch & discovery** — what gets worked on | cc-dispatch, cc-backlog, cc-discover, cc-wave-plan, desk loop, launchd dispatcher/discovery | fires via (2); reads (10); consumes (7) | ~~backlog > concurrency is normal, not a cliff~~ **cell falsified — real cause was no fleet concurrency ceiling** | **DONE 2026-07-29** — [AUTONOMY_DISPATCH_V2.md](AUTONOMY_DISPATCH_V2.md); 11 lands: design 7400c614 · map bf796c57 · acceptance reader 0a8a2976+361675e8+5257d457 · activation ruling c87ca381 · seam rulings e0356664 · ceiling correction 15cc1f4f · **build: cadence 21d8e869 · verdict 6c73429f · decide f16c37ee**. Live metric ACCRUING — **C10 activation DONE 2026-07-29 (dispatcher + discovery both flipped enabled; verified by row 12's Phase-1 re-derive and by the coordinator via `launchctl print-disabled`), so the ≤5-min metric is now MEASURABLE rather than 0-by-construction. Still awaiting DEPLOY** (checkout 33 behind trunk — `cc-backlog 4e0038a19faf`) |
 | 6 | **Guardrail/hook layer** — what a session may do | 69 hook entries / 12 events, validate-bash, permission rails, Stop asserts, OVERWRITE guard | every subsystem's enforcement chokepoints | a hook failure must never block a tool by accident | open |
@@ -107,15 +107,28 @@ phantom. Status is a claim like any other (see the constraint-cell learning belo
   warns about. Treat the cell as the PRIOR SESSION'S HYPOTHESIS; Phase 1 is where you kill or
   confirm it, and say in your plan which one happened.
 - 2026-07-29 **CHECK DAEMON-ACTIVATION TRUTH BEFORE MEASURING YOUR ROW'S METRIC — a disabled
-  job makes a metric read 0% BY CONSTRUCTION, which is not a performance result.** Verified
-  this session via `launchctl print-disabled gui/$(id -u)`: **12 of the 14 `com.claude.*` jobs
+  job makes a metric read 0% BY CONSTRUCTION, which is not a performance result.**
+  ⚠ **THE COUNT IN THIS ENTRY IS SUPERSEDED — live truth is 10 disabled / 4 enabled (re-read
+  2026-07-29T15:00Z; see the "COORDINATOR'S OWN COUNT WAS STALE" entry below). The LESSON is
+  what stands; the number is a snapshot and re-derive is mandatory.** Verified
+  at the time via `launchctl print-disabled gui/$(id -u)`: **12 of the 14 `com.claude.*` jobs
   are disabled**; only `com.claude.postland-verify` and `com.claude.deploy-live` are enabled,
   and `launchctl list` shows those two alone loaded. `com.claude.dispatcher` and
   `com.claude.discovery` are BOTH disabled, so row 5's "dispatch decision ≤5 min" was
   unmeetable before a line of code was read. Corroborated independently by `cc-backlog`
   107f27fbb00c and memory `desk-autonomy-dormancy-staged-not-loaded` (built but INERT: staged
-  in pending-activation/, never loaded). Whether the mass-disable was deliberate is still an
-  OPEN operator question — do not assume either way. Row 12 owns this trap; every other row
+  in pending-activation/, never loaded). ~~Whether the mass-disable was deliberate is still an
+  OPEN operator question — do not assume either way.~~ **ANSWERED WITH EVIDENCE by row 12, and
+  `cc-backlog 107f27fbb00c` is closed on it: the mass-disable was a DELIBERATE operator-directed
+  fleet shutdown on 2026-07-26 11:46-11:56 PDT.** The weapon was recovered verbatim —
+  `/tmp/claude-fleet-shutdown.sh`, running bootout+disable+unload -w over exactly 13 labels,
+  set-identical to the 13 `true` entries in the override db. Motive: 4 of those jobs CREATE
+  sessions on a timer (dispatcher, discovery, desk-invariant, boot-resume) and pane-closing
+  would not converge at 31 live processes / load 17; the 07-27 reboot was the AMPLIFIER (latent
+  bits → 0 loaded), not the cause. **Consequence binding on every row that touches the fleet:
+  `desk-invariant` and `boot-resume` are the runaway GENERATORS — never re-enable them without
+  a fleet concurrency ceiling, or the incident reopens. The other 8 were collateral and are
+  safe.** Row 12 owns this trap; every other row
   must still run the check first, because a row that measures an inert subsystem will report a
   performance problem it does not have.
 - 2026-07-29 (row 4, DONE) **ACTIVATION-TRUTH CHECK RUN AND PASSED — the trap above did not apply
@@ -179,6 +192,21 @@ phantom. Status is a claim like any other (see the constraint-cell learning belo
   separates them. Related: a broken daemon gets **quieter** with age — launchd's fast-fail throttle
   (`minimum runtime = 10`) stopped scheduling deploy-live after 59 loud failures, so any detector
   keyed on complaint volume or error rate reads recovery where there is decay.
+  **COORDINATOR ADDENDUM 2026-07-29T15:00Z — the REPLACEMENT read has its own dead-parse trap, and
+  I walked straight into it while re-deriving this very count.** `print-disabled` prints
+  `"<label>" => disabled|enabled`; the plist behind it stores `true`/`false`. Those are different
+  vocabularies for the same bit, and row 12's own archaeology (correctly) quotes the plist form
+  — so "13 `true` entries" and "13 `=> disabled`" are both right about different surfaces. Grep
+  the CLI output for `true` and you get **0 with exit 0**, which reads as *nothing is disabled*:
+  my sweep returned `total=14 disabled=0 enabled=0` and only the failure of 0+0 to sum to 14
+  exposed it. So the fix for `list | grep` is necessary but not sufficient — `print-disabled`
+  parsed with the wrong vocabulary fails in the MORE dangerous direction, because `list | grep`
+  at least returns nothing when it is wrong, while this returns a confident zero. **Two rules:
+  grep the literal `=> disabled`, and assert that disabled + enabled SUM to the label total
+  before believing either number** — a checksum is the only thing that distinguishes a real zero
+  from a dead grep. Row 12's landed code does use `'=> disabled'` correctly
+  (`scripts/dispatch-acceptance.sh:229`, `tests/cc-fleet.bats:60` stubs the plist form) — verified
+  before writing this, precisely so the entry is not a false alarm against its own row.
 - 2026-07-29 (row 12) **THE COORDINATOR'S OWN COUNT WAS STALE WITHIN HOURS — 12/2 re-derived as
   10/4.** The learning two entries above states 12 disabled / 2 enabled, verified the same morning;
   by 14:00 `dispatcher` and `discovery` were both enabled and loaded (dispatcher pid 74276). Nobody

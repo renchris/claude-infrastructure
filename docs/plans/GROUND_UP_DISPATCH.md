@@ -78,14 +78,33 @@ Commit ONLY here - NEVER in the shared checkout.
 YOU OWN: <row's core surfaces>.  SEAMS NOT YOURS: <seam → owning row> - consume those
 contracts, do not redesign them. Any seam dispute: ping the coordinator, never decide alone.
 
-PHASE 1 IS NOT OPTIONAL — two checks BEFORE you design anything (added 2026-07-29):
+PHASE 1 IS NOT OPTIONAL — three checks BEFORE you design anything (added 2026-07-29):
   (a) RE-DERIVE YOUR ROW'S STANDING-CONSTRAINT CELL from primary disk truth. The map cell is
       the PRIOR SESSION'S HYPOTHESIS, not a fact; say in your plan whether you killed or
       confirmed it. Row 5's cell was falsified mid-rebuild.
   (b) CHECK DAEMON-ACTIVATION TRUTH for every job your row's metric depends on
-      (`launchctl print-disabled gui/$(id -u)` + `launchctl list`). 12 of 14 com.claude.* jobs
-      are disabled; a metric measured against an inert daemon reads 0% BY CONSTRUCTION and is
-      not a performance result.
+      (`launchctl print-disabled gui/$(id -u)` + `launchctl list`). A metric measured against
+      an inert daemon reads 0% BY CONSTRUCTION and is not a performance result. Last read
+      2026-07-29T15:00Z: 10 of 14 com.claude.* disabled; enabled = postland-verify, dispatcher,
+      discovery, deploy-live. **RE-READ IT — do not inherit that number**; it decayed from
+      12/2 to 10/4 within six hours and was propagated into two fire payloads before anyone
+      noticed. TWO PARSE TRAPS, both of which return a plausible number from a dead read:
+      `print-disabled` prints `"<label>" => disabled|enabled`, NOT `true`/`false` (the plist
+      behind it uses `true`; the CLI does not) — a `grep -c true` over it returns 0 with exit 0
+      and reads as "nothing disabled"; and `launchctl list | grep` maps six real states onto
+      one boolean, putting four broken ones on the healthy side (use `launchctl print` for
+      runs / last-exit). Grep for the literal `=> disabled`, and sanity-check that your
+      disabled + enabled counts SUM to the label total before you believe either.
+  (c) SWEEP THE BRANCH GRAVEYARD before you build anything — the thing you are about to write
+      may already exist, finished and tested, on an unlanded branch. Prose archaeology does not
+      substitute; run both commands (skills/ground-up/SKILL.md Phase 1 has the detail):
+        git log --all --oneline --diff-filter=A -- '<paths your row would create>'
+        git for-each-ref --format='%(refname:short)' refs/heads | while read -r b; do \
+          printf '%s %s\n' "$b" "$(git rev-list --count origin/main..$b 2>/dev/null)"; done | awk '$2>0'
+      Row 12 found its OWN core deliverable this way — 167-line lint + a 208-line bats suite,
+      stranded 4 days, absent from origin/main and disk. A land that never happened leaves the
+      same trace as a rejected design; only the originating doc tells them apart. Cherry-pick
+      with `-x` and say in your plan what you took and what you rejected.
 
 DoD (all four, or you are not done):
 1. docs/plans/<TOPIC>_V2.md with the four load-bearing sections - measured constants WITH
@@ -462,6 +481,60 @@ the successor inherits:
   fired) · `817faf3a4968` (live alarm store ~40% fixture data) · `4e0038a19faf` (deploy behind,
   board silent) · `c13dad7d5dbe` (install.sh bounces the verifier; self-extinguishing deploy loop).
   Closed with evidence: `107f27fbb00c` (the mass-disable was deliberate).
+
+### Successor coordinator armed 2026-07-29T15:00Z — recycle crossed nothing, both rows verified alive
+
+Recycled successor of `98f66842` in the same pane `71B42B48-1331-4F60-8DA3-6849F2682CA2`, account
+next2, worktree `.worktrees/gu-coordinator`. **Wake path armed first** (`cc-await-ping`, 3600s /
+15s). **Mailbox clean at handover** — `.seen` = `.acked` = 10 of 10 lines, so the recycle stranded
+no ping; worth recording because a recycle is exactly where the campaign's own dead-letter shape
+(`cc-backlog a98084b79b2c`) would bite, and here the cursor discipline held.
+
+**Both in-flight rows verified ALIVE and progressing by transcript, not by pane:** row 3
+`9bd621fd` 386 rows / 158 assistant / 74 tool_use, last write 54s prior; row 12 `27a505b4` 727 /
+286 / 127, last write 268s prior with its teammates writing 122s prior — **a lead's JSONL freeze
+during a live wave is an owned wait, not a stall** (memory `desk-wave-monitor-lead-idle-is-owned-wait`),
+and the teammate liveness is what discriminates. Row 3's branch is **0 ahead of trunk** (landing
+continuously as briefed); row 12 holds `DAEMON_FLEET_V2.md` at 581 lines on trunk. No duplicate
+leads remain. Both slots legitimately full ⇒ **nothing fired**; 1-min load was 36.94 at handover,
+so the cadence guard would have held a fire anyway.
+
+**Row 3's map cell said `open` while it was in flight — fixed.** The map is the campaign's status
+SSOT, and an in-flight row reading `open` is a live double-fire hazard for any successor that
+trusts it (the same class as trusting the word DONE, one section up). Now `REBUILDING` with its
+plan link and its landed shas, and it carries row 3's own Phase-1 verdict: the constraint cell was
+**CONFIRMED-BUT-RENAMED** — exactly-once ack was already built and sound; the binding constraint
+is at-least-once delivery to a live READER, root cause ADDRESSING (inbox keyed on pane, not
+session). Row 2 stays blocked on row 3 per the strict chain.
+
+**The payload template carried a stale number into every remaining fire — corrected, and this is
+the second time this exact propagation has had to be caught.** Template check (b) asserted "12 of
+14 com.claude.* disabled" as present tense; live truth is **10 disabled / 4 enabled** (enabled =
+postland-verify, dispatcher, discovery, deploy-live). My predecessor had already been burned
+propagating an unverified constraint cell into two payloads, and the fix then was to add the
+re-derive instruction — but the instruction sat next to a hardcoded number, which is a standing
+invitation to inherit it. The template now dates its snapshot, says RE-READ explicitly, and names
+the two parse traps below. Check (b) also gained the **branch-graveyard sweep as (c)** — it was
+added to the skill on row 12's recommendation but the payload still said "two checks", and a
+session that trusts the payload's own enumeration would never run the third.
+
+**A dead grep fabricated a confident zero, in my hands, while re-deriving that very count.**
+`launchctl print-disabled` prints `"<label>" => disabled|enabled`; the plist behind it stores
+`true`/`false`. Grepping the CLI output for `true` returned **0 with exit 0** — my sweep reported
+`total=14 disabled=0 enabled=0`, and the ONLY thing that exposed it was 0+0 failing to sum to 14.
+This is strictly more dangerous than the `list | grep` idiom row 12 documented, because that one
+returns nothing when wrong while this returns a plausible number. Rule now in the map: grep the
+literal `=> disabled`, and **checksum that disabled + enabled sum to the label total**. Row 12's
+landed code was checked before writing this and uses the correct idiom
+(`scripts/dispatch-acceptance.sh:229`, `tests/cc-fleet.bats:60`) — no ping was sent, because a
+false alarm against a working row costs more than the catch is worth.
+
+**Row 12's open operator question is CLOSED on the map** (`cc-backlog 107f27fbb00c`): the
+mass-disable was a deliberate operator-directed fleet shutdown 2026-07-26 11:46-11:56 PDT,
+weapon recovered verbatim. The map learning had told every future row "do not assume either way"
+about a question that was already answered with evidence — and it now carries the binding
+consequence instead: **`desk-invariant` and `boot-resume` are the runaway GENERATORS; never
+re-enable them without a fleet concurrency ceiling.** The other 8 are collateral and safe.
 
 ## Inherited watch — first GREEN postland stamp (status, not a coordinator work item)
 
