@@ -411,8 +411,18 @@ Landed continuously per the 529 lesson (the predecessor died with 0 commits and 
 |---|---|---|
 | `5dd65159` | §1–§9 design (this document) | on trunk by content |
 | `a8b3a093` | **M1** session-keyed addressing + pane alias trail · **M4** pull-adoption from a provably-dead predecessor | `tests/mailbox-session-key.bats` 20/20 green, **RED-proved 20/20** against a pristine `origin/main` tree recovered via `git archive`; end-to-end run of the real hook with a real harness stdin payload adopted a crashed predecessor's mail with **no `.forward`** |
-| `771d5ee6` | `scripts/comms-strand-report.sh` + `tests/comms-strand-report.bats` (acceptance **A9**) | 9/9 green, **RED-proved 9/9**; live run `verdict=ok oracle=controlled` |
-| _this commit_ | map row 3 → DONE, two map learnings, this section | — |
+| `ca617db2` | `scripts/comms-strand-report.sh` + `tests/comms-strand-report.bats` (acceptance **A9**) | 9/9 green, **RED-proved 9/9**; live run `verdict=ok oracle=controlled` |
+| `4bb16816` | map row 3 → DONE, two map learnings, this section | 4 paths content-verified on `origin/main` |
+| _this commit_ | sha-citation repair (see below) | — |
+
+**A note on these shas, because it is the exact failure this document warns about.** The first
+version of this table cited `771d5ee6` for the strand report. That commit was **rebased away** by
+`ship-land`'s optimistic-round retry (it landed as `ca617db2`), so the citation named a commit not on
+trunk — a false disk-truth reference inside the section whose entire purpose is disk-truth references.
+Caught by re-reading trunk rather than trusting the local reflog: `git merge-base --is-ancestor`
+against `origin/main` for every sha cited. **Rule for any doc that cites its own lands: resolve shas
+AFTER the land, from `origin/main`, never from the pre-rebase local commit** — under concurrent
+landers a rebase is the normal case, not the exception (this row's commits were rebased twice).
 
 **Regression evidence for M1/M4** (a rebuild must not break what it inherits): the eight existing
 comms suites were re-run after the change — `mailbox-drain`, `mailbox-forward`, `mail-ack-consume`,
