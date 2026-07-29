@@ -962,6 +962,14 @@ if [ "${1:-}" = "__recycle" ]; then
     exit 1
   fi
   echo "→ claude exited after ${waited}s — typing relaunch"
+  # THE 2026-07-29 STRAND, made self-diagnosing. A session-owned worktree is reaped BY the exit this
+  # watcher just observed, so the relaunch's cd target can disappear between arming and typing. The
+  # command already carries a fallback (see the RECYCLE_FALLBACK chain), so this is pure evidence —
+  # but without it the next occurrence reads as "the launcher never started" and costs the same hour.
+  RCWD="${5:-}"
+  if [ -n "$RCWD" ] && [ ! -d "$RCWD" ]; then
+    echo "⚠ recycle cwd VANISHED during exit: $RCWD (a harness-owned worktree is reaped on session exit) — the baked fallback cd now decides where the successor lands"
+  fi
   sleep 2                                        # shell-prompt settle after claude exits
   ok=0
   for _ in 1 2; do
@@ -1898,7 +1906,43 @@ if [ "$RECYCLE" = 1 ]; then
   # Same pane, same dir: $PWD is the session's working dir (the harness re-pins the Bash tool
   # cwd to it). PREFIX carries CLAUDE_ISOLATION_SKIP=1 (IN_PLACE forced in the pre-pass) so a
   # repo-root relaunch can't auto-create a fresh worktree out from under the continuation.
-  CMD="cd $(printf %q "$PWD") && ${PREFIX}${LAUNCHER}${ARGS} \"\$(cat $QP)\""
+  #
+  # …BUT "same dir" is an ASSUMPTION, and it is FALSE for a session-owned worktree. Measured
+  # 2026-07-29 (session e891e080, log /tmp/handoff-recycle-71B42B48-*.log): the session ran in a
+  # worktree the CC HARNESS created (the EnterWorktree tool), the recycle typed `/exit`, and the
+  # harness REAPED ITS OWN WORKTREE on session exit — so by the time the watcher typed
+  # `cd <worktree> && <launcher> …` the directory was gone, `cd` failed, `&&` short-circuited, and
+  # NOTHING relaunched. The existing guards behaved correctly (one retype, then the pane-visible
+  # HANDOFF RELAUNCH FAILED comment) — they made it LOUD but could not RECOVER it, and the operator
+  # had to hunt for `claude --resume`. A recycle whose only cd target can be destroyed BY THE EXIT
+  # IT PERFORMS has no survivor by construction; the fix is to bake one in.
+  #
+  # DURABLE SURVIVOR: for a LINKED worktree the main checkout (--git-common-dir, normalized the way
+  # land-lock.sh keys its mutex) is the natural fallback — it cannot be reaped by a session exit,
+  # it is the same repo, and the payload's own `[locate]` header re-locates from there. The chain
+  # is only emitted when $PWD IS a linked worktree, so the 90% main-checkout recycle keeps its
+  # byte-identical single-cd command and gains zero new failure surface.
+  # zsh CORRECT-safe (the 1930-1938 lesson): the only COMMAND WORDS typed are `cd`, `cd` and the
+  # launcher — all always resolve; `{ } || ; &&` are reserved words, never spell-corrected.
+  # PHYSICAL comparison, not lexical: git reports its paths resolved (a /var/… cwd comes back as
+  # /private/var/…, the same logical-vs-physical split that makes lsof's cwd probe need `pwd -P`).
+  # Compared lexically, a checkout reached through ANY symlinked component reads as "not the main
+  # checkout" and arms a fallback it can never need — harmless at runtime (the primary cd succeeds)
+  # but it silently widens the changed surface to the 90% case this fix is supposed to leave alone.
+  RECYCLE_FALLBACK=""
+  _rpwd="$(pwd -P 2>/dev/null || printf '%s' "$PWD")"
+  _rgcd="$(git -C "$PWD" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+  if [ -n "$_rgcd" ]; then
+    _rmain="${_rgcd%/worktrees/*}"; _rmain="${_rmain%/.git}"
+    [ -d "$_rmain" ] && _rmain="$(cd "$_rmain" 2>/dev/null && pwd -P)"
+    [ -n "$_rmain" ] && [ "$_rmain" != "$_rpwd" ] && RECYCLE_FALLBACK="$_rmain"
+  fi
+  if [ -n "$RECYCLE_FALLBACK" ]; then
+    CMD="{ cd $(printf %q "$PWD") 2>/dev/null || cd $(printf %q "$RECYCLE_FALLBACK") ; } && ${PREFIX}${LAUNCHER}${ARGS} \"\$(cat $QP)\""
+    echo "→ recycle: \$PWD is a linked worktree — relaunch falls back to $RECYCLE_FALLBACK if it is removed during exit (harness-owned worktrees are reaped on session exit)"
+  else
+    CMD="cd $(printf %q "$PWD") && ${PREFIX}${LAUNCHER}${ARGS} \"\$(cat $QP)\""
+  fi
 elif [ -n "$WORKTREE" ]; then
   WT="$WTROOT/$WORKTREE"
   WT_SETUP="cold"                    # cold | pool | existing — decides whether the pane installs
@@ -2373,7 +2417,12 @@ recycle_fire() {
   # (detach(), not nohup: 2× 2026-07-13 the nohup watcher died in that reap → 0-byte log, no
   # relaunch, stranded pane). Everything that must survive happens BEFORE the /exit keystroke,
   # and /exit is only typed once the watcher has proven itself alive (await_armed).
-  WATCHER_PID="$(detach "$log" "$0" __recycle "$SID" "$tty" "$cmdfile")"
+  # $PWD as a 5th arg is EVIDENCE, not control flow: the survivor is already baked into $CMD, but a
+  # cwd that vanished during the exit must be NAMED in the log — the 2026-07-29 strand cost an hour
+  # precisely because the failure looked like "the launcher did not start" rather than "the dir the
+  # command cd's into no longer exists". Optional + positional-last, so an older watcher (a
+  # deployed-copy skew mid-land) simply ignores it.
+  WATCHER_PID="$(detach "$log" "$0" __recycle "$SID" "$tty" "$cmdfile" "$PWD")"
   if ! await_armed "$log"; then
     kill "$WATCHER_PID" 2>/dev/null || true
     echo "!! recycle ABORTED: watcher heartbeat never appeared ($log) — /exit NOT typed, session stays alive. Run manually: $CMD" >&2
