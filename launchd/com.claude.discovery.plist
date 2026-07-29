@@ -5,6 +5,12 @@
   A launchd job runs the standing critics (cc-discover --once) on an interval; each refills
   cc-backlog idempotently so most work ORIGINATES from Claude, not the operator.
 
+  StartInterval STAYS 3600 (hourly) while the dispatcher's drops 900 -> 300 (AUTONOMY_DISPATCH_V2
+  §3 S5). Deliberate asymmetry, not an oversight: this job is the SUPPLY side and the backlog is
+  already 121 deep (§2), so discovering faster refills a queue nothing drains (F15). The decision
+  cadence is what had to shorten; the critics are idempotent + event-keyed, so an hourly refill
+  loses nothing.
+
   TEMPLATE (RunAtLoad false, StartInterval 3600 = hourly). C10: the OPERATOR loads this
   (launchctl bootstrap) — the agent never loads it. See docs/activation/discovery-activate-snippet.md.
   Kill-switch: launchctl bootout.

@@ -10,7 +10,10 @@
   (launchctl bootstrap) after the C10 review in docs/activation/dispatcher-activate-snippet.md.
   The agent never loads launchd. Kill-switch: `launchctl bootout gui/$UID/com.claude.dispatcher`.
 
-  StartInterval 900s (15 min): the desk cadence for pulling new work; tune per throughput.
+  StartInterval 300s (5 min): the BACKSTOP, not the primary clock (AUTONOMY_DISPATCH_V2 §3 S5).
+  `cc-backlog add` kicks a debounced decision pass on write, so the common path is seconds; this
+  timer is what GUARANTEES the 5-minute decision bound (§7 A2) even with the kick disabled
+  (CC_BACKLOG_KICK=off) or failing. Was 900s, which alone could not meet that bound.
   PATH prepends ~/.claude/bin so cc-dispatch, cc-backlog, cc-wave-plan, handoff-fire.sh + jq
   resolve (launchd's default PATH lacks it — the 36f9d64 lesson). CC_DISPATCH_PROJECT pins the
   repo whose backlog is dispatched; edit it for another project. $HOME expands at runtime.
@@ -28,7 +31,7 @@
     </array>
 
     <key>StartInterval</key>
-    <integer>900</integer>
+    <integer>300</integer>
 
     <key>RunAtLoad</key>
     <false/>
