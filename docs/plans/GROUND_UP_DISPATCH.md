@@ -391,6 +391,34 @@ fail-closed anyway. **The defect is the silence, not the stall** — a lane 4h s
 0-for-15 should be the loudest row on the board. Same shape as the beacon in `1e16815bac51`:
 landed, wired, never fired once.
 
+### CORRECTION to `4e0038a19faf` — deploy-live is NOT dead, it is refusing honestly
+
+The duplicate row-12 lead corrected me and it is right. I read `launchctl list` (shows only
+last-exit) and inferred the lane had "stopped producing evidence at all". `launchctl print
+gui/501/com.claude.deploy-live` shows **`runs = 16`** — it fires on schedule and exits 1 as an
+**honest refusal** on the green-stamp gate. Verified stamp distribution: **30 red / 2 cut / 1 hung
+/ 0 green, in 33**. The log froze at 10:28 because the refusal path does not log, not because the
+job stopped. **The filed finding stands and is arguably sharpened**: the lane is behaving exactly
+as designed and refusing correctly, so the entire defect is that a correct refusal — repeated 16
+times, holding 33 commits back — surfaces nowhere the operator looks. Read `list` for a verdict and
+`print` for behaviour; conflating them turned a working component into a phantom corpse.
+
+### UNRESOLVED at handoff — the duplicate row-12 lead cannot be reached or closed
+
+`A7DA7EFB` (session `9f958f36`) is the duplicate my 529 misjudgement created. It is now in a bind
+the successor inherits:
+- It has **not drained** the stand-down (`~/.claude/mailbox/A7DA7EFB….seen` = none). It is deep in
+  an autonomous tool loop, and mailbox drain needs a turn boundary — the dead-letter shape of
+  `cc-backlog a98084b79b2c`, hit live for the third time today.
+- `self-close` **refuses twice over**: it now owns **three** teammates (R1-archaeology,
+  R2-telemetry, R3-seams — it spawned two more while I worked). `--allow-live-teammates` would
+  orphan them, which is the exact damage this session spent hours undoing. Not taken.
+- Both row-12 leads remain in read-only Phase 1 and have produced near-identical findings, so the
+  cost so far is duplicated tokens, not corrupted work. **The collision becomes real when either
+  starts writing `docs/plans/DAEMON_FLEET_V2.md`.** Watch for that; if the stand-down still has not
+  drained by then, the correct move is to let the duplicate FINISH and land, and stand down the
+  other — never to force-close a lead with a live team.
+
 ### Coordinator handoff state (for the successor — campaign must outlive any one context)
 
 - **Done: rows 1, 4, 5.** In flight: row 3 (`gu-cross-session-comms-2`, sole lead pane `2413459C`,
