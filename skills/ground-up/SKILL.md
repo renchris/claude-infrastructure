@@ -28,6 +28,27 @@ before gating any decision on it (three "facts" fell this way in the exemplar); 
 stranded reports from transcripts by agentName (idle ≠ delivered); read the load-bearing
 code yourself — subagent summaries are for breadth, your own reads are for the decisions.
 
+**Sweep the BRANCH GRAVEYARD before you build anything** (added 2026-07-29 — the campaign walked
+into this on its third occurrence). "Failure archaeology of prior docs/attempts" is not enough:
+the thing you are about to write may already exist, finished and tested, on an unlanded branch.
+Two commands, neither of which any prose sweep substitutes for:
+
+```bash
+git log --all --oneline --diff-filter=A -- '<paths your row would create>'
+git for-each-ref --format='%(refname:short)' refs/heads | while read -r b; do
+  printf '%s %s\n' "$b" "$(git rev-list --count origin/main..$b 2>/dev/null)"; done | awk '$2>0'
+```
+
+Row 12 found its own core deliverable this way — `518d61dc` carrying
+`scripts/launchd-parity-lint.sh` (167 lines) **plus a 208-line bats suite**, with the SSOT capture
+and a 328-line audit doc beside it, stranded 4 days on `tm/launchd` / `fix/infra-perfection` and
+absent from both `origin/main` and disk. Decisively, this was **not** an abandonment decision:
+`docs/research/STRANDED_EXPOSURE_2026-07-26.md:156` explicitly prescribed landing it and the land
+simply never happened. A branch that is far behind trunk looks abandoned and usually is not — a
+land that never happened leaves exactly the same trace as a rejected design, and only the
+originating doc distinguishes them. Take what survives on its merits, cherry-pick with `-x`, and
+state in your plan what you took and what you rejected. Memory: `search-branch-graveyard-before-building`.
+
 ## Phase 2 — split INVARIANTS from ARCHITECTURE
 
 First principles is not amnesia. Walk MEMORY.md + the incident docs and sort every
