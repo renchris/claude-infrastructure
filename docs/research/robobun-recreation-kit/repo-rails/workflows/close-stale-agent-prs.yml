@@ -1,0 +1,21 @@
+# MANDATORY GC. At robobun's rate (142 PRs/day against 2 human mergers) the open backlog
+# already exceeds the merged total. Without this the review queue becomes unusable.
+name: Close stale agent PRs
+on:
+  schedule: [{cron: "30 0 * * *"}]
+  workflow_dispatch:
+jobs:
+  close-stale:
+    runs-on: ubuntu-latest
+    permissions: {pull-requests: write}
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - run: |
+          cutoff=$(date -u -d '90 days ago' +%Y-%m-%dT%H:%M:%SZ)
+          gh pr list --author "${BOT_USER:-acmebot}" --state open --json number,updatedAt --limit 1000 \
+            --jq ".[] | select(.updatedAt < \"$cutoff\") | .number" |
+          while read -r pr; do
+            gh pr close "$pr" --comment "Closing this PR because it has been inactive for more than 90 days."
+          done

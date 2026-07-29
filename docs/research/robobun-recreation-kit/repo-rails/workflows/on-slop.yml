@@ -1,0 +1,36 @@
+# The one-label human kill switch. Retitling matters: it removes the misleading AI-written
+# description from reviewers' queues, which is the actual harm of a bad agent PR.
+# Near-verbatim from oven-sh/bun (body built via join() to avoid a template literal
+# colliding with the YAML block scalar).
+name: Close AI Slop PRs
+on:
+  pull_request_target:
+    types: [labeled]
+jobs:
+  on-slop:
+    if: github.event.label.name == 'slop'
+    runs-on: ubuntu-latest
+    permissions: {issues: write, pull-requests: write}
+    steps:
+      - uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          script: |
+            const n = context.payload.pull_request.number;
+            const body = [
+              'This PR has been closed because it was flagged as AI slop.',
+              '',
+              'Many AI-generated PRs are fine, but this one was identified as having one or more of the following issues:',
+              '- Fails to verify the problem actually exists',
+              '- Fails to test that the fix works',
+              '- Makes incorrect assumptions about the codebase',
+              '- Submits changes that are incomplete or misleading',
+              '',
+              'If you believe this was done in error, please leave a comment.',
+            ].join('\n');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner, repo: context.repo.repo, issue_number: n, body });
+            await github.rest.pulls.update({
+              owner: context.repo.owner, repo: context.repo.repo, pull_number: n,
+              title: 'ai slop',
+              body: 'This PR was flagged as AI slop; the description has been updated to avoid confusion or misleading reviewers.',
+              state: 'closed' });
