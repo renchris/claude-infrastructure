@@ -33,10 +33,39 @@ _lib="$_scd/lib/mailbox-pending.sh"
 . "$_lib" 2>/dev/null || exit 0
 
 command -v jq >/dev/null 2>&1 || exit 0
-cat >/dev/null 2>&1 || true    # consume the hook JSON on stdin so the writer never SIGPIPEs
 
-own_uuid="${ITERM_SESSION_ID:-}"; own_uuid="${own_uuid##*:}"
-case "$own_uuid" in ''|*[!0-9A-Fa-f-]*) exit 0 ;; esac
+# ── M1 (v2): READ the stdin JSON instead of discarding it ─────────────────────────────────────────
+# This used to be `cat >/dev/null` — the hook threw away the harness payload and then keyed the inbox
+# on $ITERM_SESSION_ID (the PANE) two lines later. The durable identity was being discarded at the
+# exact point the fragile one was chosen; 12 other hooks in this repo parse session_id from this same
+# stdin. See docs/plans/CROSS_SESSION_COMMS_V2.md §1.3(a).
+# Still fully consumed, so the writer never SIGPIPEs.
+_stdin_json="$(cat 2>/dev/null || true)"
+
+own_pane="${ITERM_SESSION_ID:-}"; own_pane="${own_pane##*:}"
+own_sid="$(printf '%s' "$_stdin_json" | jq -r '.session_id // empty' 2>/dev/null || true)"
+case "$own_sid" in *[!0-9A-Fa-f-]*) own_sid="" ;; esac
+
+# THE PANE IS STILL REQUIRED — it is how this hook knows WHICH container it is in, and the alias trail
+# is keyed on it. A missing/garbage pane is the one unrecoverable case (exit 0, as before).
+case "$own_pane" in ''|*[!0-9A-Fa-f-]*) exit 0 ;; esac
+
+# Record pane→session on EVERY boundary. This is the whole of M1's addressing repair: this hook is the
+# one place that sees both identities at once, for every session, so the mapping needs no daemon, no
+# registry, and no cooperation from a dying party — and it self-heals, because every boundary
+# re-asserts it. Append-only + deduped against the tip (see the lib).
+if [ -n "$own_sid" ] && [ "${CC_MBX_SESSION_KEY:-1}" != 0 ] \
+   && command -v mailbox_alias_write >/dev/null 2>&1; then
+  mailbox_alias_write "$own_pane" "$own_sid" 2>/dev/null || true
+fi
+
+# The box we read. Session-keyed when we know our session id (M1), else the pane exactly as before —
+# so a harness that stops sending session_id, or the kill switch, degrades to today's behaviour.
+if [ -n "$own_sid" ] && [ "${CC_MBX_SESSION_KEY:-1}" != 0 ]; then
+  own_uuid="$own_sid"
+else
+  own_uuid="$own_pane"
+fi
 
 case "$MODE" in
   session-start) EVENT=SessionStart ;;
@@ -69,13 +98,48 @@ if [ "$MODE" = "session-start" ] && command -v mailbox_migrate >/dev/null 2>&1; 
   for _f in "$_mdir"/*.forward; do
     [ -f "$_f" ] || continue                                   # unmatched glob
     _tgt="$(head -n1 "$_f" 2>/dev/null | tr -dc '0-9A-Fa-f-')"
-    [ "$_tgt" = "$own_uuid" ] || continue                      # not pointing at us
+    # a forward may name our PANE (legacy, pre-M1) or our SESSION (post-M1) — honour both
+    { [ "$_tgt" = "$own_uuid" ] || [ "$_tgt" = "$own_pane" ]; } || continue
     _pred="$(basename "$_f" .forward)"
     [ "$_pred" = "$own_uuid" ] && continue                     # paranoia: never adopt from ourselves
     _n="$(mailbox_migrate "$_pred" "$own_uuid" 2>/dev/null || true)"
     case "$_n" in ''|*[!0-9]*) _n=0 ;; esac
     _adopted=$(( _adopted + _n ))
   done
+
+  # ── M4 (v2): PULL-ADOPTION — no `.forward` required ────────────────────────────────────────────
+  # The loop above can only ever adopt from a predecessor that COOPERATIVELY wrote a pointer while
+  # dying. Measured coverage of that mechanism: 3 of 91 dead-pane boxes = 3.3%. A crash, a 529, a
+  # SIGKILL or an OOM writes nothing, so ~96.7% of stranded mail was structurally unreachable.
+  #
+  # Invert the direction: the SUCCESSOR discovers its predecessor from the pane's own alias trail,
+  # which this hook has been maintaining on every boundary. Nothing is owed by the dying party.
+  #
+  # SAFETY — the guard that makes this legitimate rather than theft: a predecessor is adoptable only
+  # if it is not the CURRENT occupant of any pane (mailbox_session_is_current). That is what stops us
+  # taking mail from a session that RESUMED ELSEWHERE and is still alive — the case pane-keying could
+  # not even represent. Bounded to the N most recent predecessors (R3: no unbounded work in a hook).
+  #
+  # Also adopts this session's own LEGACY PANE box: mail sent before M1 landed, or by a sender whose
+  # resolution fell through to the pane, lands under the pane key. One bounded, idempotent migration.
+  if [ "${CC_MBX_PULL_ADOPT:-1}" != 0 ] && [ -n "$own_sid" ] \
+     && command -v mailbox_adoptable_predecessors >/dev/null 2>&1; then
+    # our own pane box first (cheapest, most common)
+    if [ "$own_pane" != "$own_uuid" ] && [ -f "$_mdir/$own_pane.md" ]; then
+      _n="$(mailbox_migrate "$own_pane" "$own_uuid" 2>/dev/null || true)"
+      case "$_n" in ''|*[!0-9]*) _n=0 ;; esac
+      _adopted=$(( _adopted + _n ))
+    fi
+    while IFS= read -r _q; do
+      [ -n "$_q" ] || continue
+      _n="$(mailbox_migrate "$_q" "$own_uuid" 2>/dev/null || true)"
+      case "$_n" in ''|*[!0-9]*) _n=0 ;; esac
+      _adopted=$(( _adopted + _n ))
+    done <<MBXADOPT
+$(mailbox_adoptable_predecessors "$own_pane" "$own_sid" 2>/dev/null || true)
+MBXADOPT
+  fi
+
   if [ "$_adopted" -gt 0 ]; then
     _more="$(mailbox_take "$own_uuid" 0)"                      # surface the adopted lines NOW
     [ -n "$_more" ] && body="$([ -n "$body" ] && printf '%s\n' "$body"; printf '%s' "$_more")"
