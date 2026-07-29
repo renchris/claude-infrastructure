@@ -1,5 +1,27 @@
 # Part B2 — PermissionRequest beacon wiring (C10 operator-gated proposal)
 
+> **STATUS 2026-07-29 — §4 WAS NEVER RUN, and it cost an incident.** The beacon has been registered
+> in **zero** of the five config dirs since it landed, so it has never fired once and
+> `/tmp/cc-permission-pending/` has never existed. On 2026-07-29 a teammate parked forever on
+> *"Waiting for team lead approval"* — an approval routed to a lead process that had died — while
+> `cc-blockers` reported all-clear, because the mechanism built to see that was inert
+> (`cc-backlog 1e16815bac51`). Three things changed as a result; §4 below is unchanged and still the
+> authority for the transform itself.
+>
+> 1. **§4 is now a runnable script**, not a block to hand-assemble:
+>    `docs/activation/pending-activation/17-permission-beacon-wire-activate.sh` (same jq transform,
+>    plus backup-first, fail-closed validation, the §6 verification and a live smoke). Dry run by
+>    default: `CONFIRM=1 bash ~/.claude/autonomy/pending-activation/17-permission-beacon-wire-activate.sh`.
+> 2. **The hook now stamps a heartbeat** (`$CC_PERMPEND_DIR/.beacon-alive`) on *every* invocation, so
+>    an EMPTY beacon dir means "nothing pending" and no longer doubles as "never ran". Fork-free on
+>    the `clear`/PostToolUse hot path; dot-prefixed and suffix-less, so the supervisor's `*.json`
+>    glob can never read it as a beacon.
+> 3. **Inertness is now LOUD.** `cc-blockers` raises `beacon-inert` — `NOT-WIRED` (registered
+>    nowhere) or `NEVER-FIRED` (wired, but no beacon dir has ever existed) — so this document's
+>    un-run state reports itself instead of waiting to be rediscovered by an incident. Its sibling
+>    `orphaned-approver` covers the other half: a live assignee whose approver process cannot answer.
+
+
 **Backlog:** `cc-backlog 08d514250031` (project `claude-infrastructure`, source `desk-observed`).
 **Design authority:** `docs/research/desk-anti-hitl-2026-07-19.md` **Part B, rec 2** (Fable research, 2026-07-19).
 **Boundary (C10):** the agent *proposes* the wiring; it **never edits any `settings.json` in place** —
@@ -21,7 +43,8 @@ hooks.
 | The harness observer | `hooks/cc-permission-beacon.sh` (`write`/`clear`) | **yes** — in this commit |
 | The out-of-session consumer | `scripts/lead-supervisor.sh` — `sweep_permission_pending` / `beacon_cmd` / `page_permpend` (a `permission_pending` IDL record + a `⛔ PERMISSION-PENDING` page) | **yes** — in this commit |
 | Regression pins | `tests/cc-permission-beacon.bats` (12) + `scripts/supervisor-e2e.sh` T14–T19 (page/threshold/reap/damping), gated via `tests/lead-supervisor.bats` | **yes** — in this commit |
-| The `settings.json` registration (4 events × 5 config dirs) | **this document** | **no** — operator hand-step (C10) |
+| The `settings.json` registration (4 events × 5 config dirs) | **this document**, now executable as `pending-activation/17-permission-beacon-wire-activate.sh` | **no** — operator hand-step (C10); **still un-run as of 2026-07-29** |
+| Existence evidence (heartbeat + `beacon-inert` alarm) | `hooks/cc-permission-beacon.sh` `beat()` + `bin/cc-blockers` | **yes** — 2026-07-29, `cc-backlog 1e16815bac51` |
 
 The mechanism is inert until wired: the hook script ships symlinked into every `~/.claude*/hooks/` by
 `install.sh:89-91` (the `for hook in "$REPO_DIR"/hooks/*.sh` loop), but **"wired nowhere" means it is

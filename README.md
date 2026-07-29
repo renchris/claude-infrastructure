@@ -240,7 +240,8 @@ Stop (9)              completion-assert (blocks a false "done") · operator-read
                       anti-deference-nudge · dispatch-assert · teammate-checkpoint · cache-expiry-tracker · notify
 SessionEnd (6)        session-end (watchdog handshake) · session-deregister · session-index-end · session-save-id ·
                       live-session-registry · harvest-skill-end
-Notification (2)      notify (audio + desktop) · push-critical        PermissionRequest (3)  notify · cc-permission-beacon
+Notification (2)      notify (audio + desktop) · push-critical        PermissionRequest (3)  notify ×3 (Bash · question · plan)
+                      cc-permission-beacon is NOT wired — staged only (pending-activation/17-…); cc-blockers raises beacon-inert
 PreCompact (3)        dod-persist · compact logging                   TeammateIdle (1)       teammate-auto-shutdown
 WorktreeCreate (1)    worktree-setup                                  TaskCompleted (1)      task-quality-gate
 ```

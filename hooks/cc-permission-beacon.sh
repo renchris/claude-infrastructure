@@ -52,13 +52,42 @@ case "$SID" in *[!A-Za-z0-9._-]*|''|.|..) exit 0 ;; esac
 
 BEACON="$DIR/$SID.json"
 
+# ── EXISTENCE EVIDENCE / positive control (cc-backlog 1e16815bac51) ──────────────────────────────
+# WHY: an EMPTY beacon dir and a beacon that has NEVER RUN are the SAME observation — absence — and
+# only one of them is good news. This hook shipped landed-but-registered-nowhere, so
+# /tmp/cc-permission-pending/ was never created; "no pending approvals" actually meant "the hook has
+# never fired once" and NOTHING could tell the two apart. A teammate sat blocked on an approval its
+# (dead) lead could never answer while the board reported all-clear (2026-07-29; memory
+# absence-alarm-needs-existence-evidence — an absence alarm needs evidence its producer's world exists).
+#
+# The heartbeat is the liveness half of that control: EVERY invocation — write AND clear — creates
+# the dir and stamps this file, so after the first hook call of any session the dir exists even when
+# nothing is ever pending. Consumers then read a THREE-state world instead of a two-state one:
+#   dir ABSENT                      ⇒ the hook has never run (INERT — wired wrong, or not at all)
+#   dir present, no <sid>.json      ⇒ genuinely nothing pending  (the all-clear that can be trusted)
+#   dir present, <sid>.json present ⇒ a real pending prompt
+# cc-blockers' `beacon-inert` alarm renders exactly that split; the wiring half (registered in no
+# settings.json) it reads statically, because an unregistered hook cannot heartbeat either.
+#
+# COST: `clear` runs on every PostToolUse, so this stays FORK-FREE on the hot path — a builtin
+# [[ -d ]] test (so mkdir forks once per boot, not once per tool call) and a `:` truncate whose
+# MTIME *is* the timestamp, so no date(1) fork. Dot-prefixed and suffix-less so it can never be read
+# as a beacon: lead-supervisor globs "$dir"/*.json, which matches neither a dotfile nor this name.
+HEARTBEAT="$DIR/.beacon-alive"
+beat() {
+  [[ -d "$DIR" ]] || mkdir -p "$DIR" 2>/dev/null || return 0
+  : > "$HEARTBEAT" 2>/dev/null || true
+}
+
 case "$MODE" in
   clear)
+    beat
     rm -f "$BEACON" 2>/dev/null || true
     exit 0
     ;;
   write)
     mkdir -p "$DIR" 2>/dev/null || exit 0
+    beat
     TS="$(date +%s)"
     # Atomic write (temp in the SAME dir + mv) so the supervisor never reads a half-written beacon.
     TMP="$(mktemp "$DIR/.$SID.XXXXXX" 2>/dev/null)" || exit 0
