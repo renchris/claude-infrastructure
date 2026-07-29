@@ -1980,7 +1980,16 @@ elif [ -n "$WORKTREE" ]; then
     # (it would not have run yet). The only deterministic fix is to keep every correctable word OUT
     # of the typed line: `bash <file>` types three words that always resolve — cd, bash, launcher —
     # and the chain then runs under bash, where no such option exists at all.
-    WT_DEPS="$(mktemp "${TMPDIR:-/tmp}/handoff-deps-XXXXXX.sh")"
+    # MINT THE UNIQUE NAME FIRST, ADD THE SUFFIX AFTER. BSD mktemp substitutes only a TRAILING
+    # `XXXXXX`; given `handoff-deps-XXXXXX.sh` it creates the file named LITERALLY that, so the
+    # FIRST cold fire on a box "works" and every one after it dies `mkstemp failed … File exists`
+    # (2026-07-29, ground-up campaign wave 1: fire #2 of the wave, with fire #1's literal file
+    # still sitting in $TMPDIR). A single manual fire can never see this; a campaign hits it on
+    # its second dispatch. The rename target derives from an already-unique base, so it cannot
+    # collide, and the `.sh` suffix is kept because an operator debugging a parked pane reads
+    # this path out of the typed command.
+    WT_DEPS="$(mktemp "${TMPDIR:-/tmp}/handoff-deps-XXXXXX")"
+    mv "$WT_DEPS" "$WT_DEPS.sh" && WT_DEPS="$WT_DEPS.sh"
     { printf '#!/usr/bin/env bash\n'; printf '%s\n' "$WT_INSTALL"; } > "$WT_DEPS"
     chmod +x "$WT_DEPS"
     CMD="cd $(printf %q "$WT") && bash $(printf %q "$WT_DEPS") ; ${PREFIX}${LAUNCHER}${ARGS} \"\$(cat $QP)\""
