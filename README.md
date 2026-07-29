@@ -19,7 +19,7 @@ the two share one git index, one binary, and one operator's attention. **So how 
 once, safely, unattended?**
 
 Make `~/.claude` a *deployment* of a git repo — and make the sessions themselves the schedulers.
-That is this repo: **620 files, ~119,000 lines**, held to ground truth by a **2,307-test** bats suite
+That is this repo: **620 files, ~119,000 lines**, held to ground truth by a **2,358-test** bats suite
 and exercised across **5,709 sessions**.
 
 <div align="center">
@@ -397,7 +397,7 @@ Running processes survive `rm -rf` of their own version via POSIX vnode semantic
 
 ### Held to ground truth
 
-**2,307 bats tests across 144 files (30,656 lines)** run against the live deployment, plus a nightly full-suite regression daemon. Diagrams have their own guard: `npm run diagrams:check` fails CI if a rendered SVG or an embedded mermaid fence has drifted from its `.mmd` source.
+**2,358 bats tests across 144 files (31,841 lines)** prove every tree — continuously by the background verifier ([`postland-verify.sh`](scripts/postland-verify.sh), the sole owner of the full-suite claim), plus a nightly full-suite regression daemon. Diagrams have their own guard: `npm run diagrams:check` fails CI if a rendered SVG or an embedded mermaid fence has drifted from its `.mmd` source.
 
 ---
 
