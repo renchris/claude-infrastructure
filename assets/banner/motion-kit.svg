@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 520" width="1920" height="520"
+     role="img" aria-labelledby="t d">
+<title id="t">claude-infrastructure</title>
+<desc id="d">The words claude-infrastructure set in monospace on a dark plate, above a dotted horizon line that runs the full width. The orange Claude Code pixel creature stands on the same line to the right of the words. The title is present the whole time; the only movement is the creature idling — glancing left, glancing right, and occasionally stretching both arms above its head — on a loop that repeats indefinitely.</desc>
+<defs>
+  <radialGradient id="plate" cx=".5" cy=".38" r=".72"><stop offset="0" stop-color="#171e27"/><stop offset="1" stop-color="#0d1117"/></radialGradient>
+  <linearGradient id="rule" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="1920" y2="0"><stop offset="0" stop-color="#30363d" stop-opacity="0"/><stop offset=".18" stop-color="#30363d" stop-opacity=".95"/><stop offset=".82" stop-color="#30363d" stop-opacity=".95"/><stop offset="1" stop-color="#30363d" stop-opacity="0"/></linearGradient>
+</defs>
+<rect width="1920" height="520" rx="14" fill="url(#plate)"/>
+<rect x=".75" y=".75" width="1918.5" height="518.5" rx="14" fill="none" stroke="#21262d" stroke-width="1.5"/>
+<style>
+  .f { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; }
+
+  /* The creature idles. Nothing here touches the wordmark — R2 is structural, not a setting:
+     the title has no animation to disable, no opacity to reach, and no keyframe that owns it. */
+  .eye { animation: gaze 13s step-end infinite; }
+  .arm { animation: arms 19s step-end infinite; }
+
+  /* Both eyes share one rule, so a glance is always both eyes together — the shipped pose table
+     moves the eye segment as a unit and never one eye alone. Holds `default` most of the cycle;
+     the glances are brief, because a header that keeps moving pulls the eye off the page. */
+  @keyframes gaze {
+      0%,  28% { transform: translateX(0) }
+     28%,  34% { transform: translateX(-22px) }
+     34%,  61% { transform: translateX(0) }
+     61%,  67% { transform: translateX(22px) }
+     67%, 100% { transform: translateX(0) }
+  }
+
+  /* One stretch per 19s. 13 and 19 are coprime, so gaze and stretch land together once every
+     247s — the composite reads as unrepeating while every part of it loops. */
+  @keyframes arms {
+      0%,  86% { transform: translateY(0) }
+     86%,  91% { transform: translateY(-66px) }
+     91%, 100% { transform: translateY(0) }
+  }
+
+  /* Same artwork, held still — the creature sits in `default`, which is where both cycles begin
+     and end, so the frozen frame is a frame the animation genuinely passes through rather than a
+     separate static fallback that could drift from it. */
+  @media (prefers-reduced-motion: reduce) {
+    .eye, .arm { animation: none !important; transform: none !important; }
+  }
+</style>
+<line x1="0" y1="430" x2="1920" y2="430" stroke="url(#rule)" stroke-width="2" stroke-dasharray="3 9" stroke-linecap="butt"/>
+<text class="f" x="960" y="390" text-anchor="middle" fill="#e6edf3" font-size="84" letter-spacing="1.5">claude-infrastructure</text>
+<text class="f" x="960" y="480" text-anchor="middle" fill="#6e7681" font-size="22" letter-spacing="3.4">SESSIONS RUN EACH OTHER</text>
+<g id="clawd" shape-rendering="crispEdges">
+  <g fill="#D77757"><rect x="1604.2" y="254" width="198" height="132"/><rect x="1604.2" y="386" width="22" height="44"/><rect x="1648.2" y="386" width="22" height="44"/><rect x="1736.2" y="386" width="22" height="44"/><rect x="1780.2" y="386" width="22" height="44"/></g>
+  <g id="clawd-armL" class="arm" fill="#D77757"><rect x="1582.2" y="298" width="22" height="44"/></g>
+  <g id="clawd-armR" class="arm" fill="#D77757"><rect x="1802.2" y="298" width="22" height="44"/></g>
+  <g id="clawd-eyeL" class="eye" fill="#0d1117"><rect x="1626.2" y="298" width="22" height="22"/></g>
+  <g id="clawd-eyeR" class="eye" fill="#0d1117"><rect x="1758.2" y="298" width="22" height="22"/></g>
+</g>
+</svg>
