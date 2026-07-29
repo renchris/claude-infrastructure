@@ -116,34 +116,32 @@ NOTIFY_CMD="${CC_POSTLAND_NOTIFY:-}"                                   # empty �
 IDL="${CC_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
 LANDLOG="${CC_POSTLAND_LANDLOG:-${LAND_LOG:-$HOME/.claude/land.log}}"
 BATS_BIN="${CC_POSTLAND_BATS:-bats}"
-# ── PATH NORMALIZATION — the 0-green-stamp root cause (reproduced 2026-07-26) ────────────────────
-# The verdict is only meaningful if the suite runs in the environment a real session runs in. When
-# this script is driven from a daemon/launchd-ish context its PATH lacks $HOME/.claude/bin and
-# $HOME/bin, so every suite that shells out to a cc-* helper fails — and because the retry ladder
-# (:216) re-runs each red FILE alone twice and convicts at >=2/3, a PATH-dependent failure
-# reproduces deterministically and is written as a HARD red, not a flake. That is the mechanism
-# behind 15/15 red stamps and deploy-live sitting fail-closed at 0 green while trunk was in fact
-# green (measured: full 137-suite clean-room run at 03606baf = 2096 ok / 0 not-ok).
+# ── THIS SCRIPT DELIBERATELY DOES NOT NORMALIZE PATH (settled 2026-07-29) ────────────────────────
+# Do not re-add a PATH prepend here. It was here (5abe5934, 2026-07-26) and was removed on purpose;
+# the reasoning below is what stops it coming back the next time a red stamp looks PATH-shaped.
 #
-# REPRO (10s):  env -i HOME=$HOME PATH=/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin TERM=dumb \
-#                 bash -c 'cd <worktree> && bats tests/deploy-parity.bats'
-#               => "not ok 8 the real repo passes its own assertion" — 8/8 under a session PATH.
+# HISTORY. A minimal-PATH run reproduced a red the interactive shell could not see:
+#   env -i HOME=$HOME PATH=/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin TERM=dumb \
+#     bash -c 'cd <worktree> && bats tests/deploy-parity.bats'   => "not ok 8", vs 8/8 under a
+# session PATH. Because the retry ladder (see run_target) re-runs each red FILE alone twice and
+# convicts at >=2/3, an env-dependent failure is deterministic — written as a HARD red, never a
+# flake. Normalizing here turned that red green, and 6 of the 7 suites in the original cluster did
+# go quiet. But it bought the green by running the corpus in an environment that never occurs.
 #
-# Why normalize rather than make the suites PATH-hermetic: the affected assertions are HOST checks
-# by design ("the real repo passes its own assertion (guards the live host deployment)"), so
-# stubbing their tools would delete the thing they verify. This mirrors the prescription already
-# carried in the infra-green brief. Prepend-only and idempotent: an explicitly-set CC_POSTLAND_PATH
-# wins, entries already present are not duplicated, and nothing is ever removed — so an
-# interactive run (which already has these) is completely unaffected.
-if [ -n "${CC_POSTLAND_PATH:-}" ]; then
-  PATH="$CC_POSTLAND_PATH"
-else
-  for _p in "$HOME/.claude/bin" "$HOME/bin" /opt/homebrew/bin /usr/local/bin; do
-    [ -d "$_p" ] || continue
-    case ":$PATH:" in *":$_p:"*) ;; *) PATH="$_p:$PATH" ;; esac
-  done
-fi
-export PATH
+# WHY THAT IS THE WRONG TRADE. This gate's problem has always been false SIGNAL, not slowness, and
+# a synthesised PATH deletes a detection capability outright: a suite can no longer discover that
+# the ARTIFACT IT TESTS depends on ambient PATH, because the gate has already hidden the ambient.
+# That capability was not hypothetical — removing the normalization is what exposed
+# deploy-parity-assert.sh reporting NOPATH (a fact about the CALLER's environment) as deployment
+# DRIFT, so every daemon caller whose PATH lacks $HOME/bin was told the checkout had drifted while
+# every filesystem leg read LINKED. Under normalization the gate could never have seen it.
+#
+# WHAT REPLACES IT. The suites own their own hermeticity: a test that needs a tool resolves it
+# explicitly, by ABSOLUTE PATH as well as PATH (the pattern scripts/handoff-fire.sh uses for
+# timeout(1)), and an artifact that genuinely depends on ambient PATH is a BUG to fix, not an
+# environment to fake. So the corpus runs under exactly the PATH this process was handed — which
+# under launchd is the one the plist exports, and that is the environment being gated.
+
 # ── TMP BASE, SLASH-NORMALIZED — the 6-consecutive-RED root cause (RED-proved 2026-07-29) ────────
 # Every temp path this script mints is templated off $TMPDIR, and `mktemp` copies its template
 # VERBATIM. launchd hands its jobs TMPDIR=/var/folders/…/T/ WITH a trailing slash (this script runs
