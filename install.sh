@@ -95,6 +95,20 @@ for lib in "$REPO_DIR"/hooks/lib/*.sh; do
   link_file "$lib" "$CONFIG_DIR/hooks/lib/$(basename "$lib")"
 done
 
+# --- Shared shell libs (lib/) ---
+# config-mirror.zsh in particular: it decides which state each account config dir SHARES vs
+# isolates, and it lived for months as an unversioned real file at ~/.claude/lib/ — a config with
+# real blast radius, no history, no review, and no way to tell drift from intent. Linking it from
+# the repo puts the isolate-set under the same review as everything else. desk.zsh was already
+# linked here by hand; this generalises that.
+echo ""
+echo "Shell libs → $CONFIG_DIR/lib/"
+ensure_real_dir "$CONFIG_DIR/lib"
+for zlib in "$REPO_DIR"/lib/*.zsh; do
+  [[ -f "$zlib" ]] || continue
+  link_file "$zlib" "$CONFIG_DIR/lib/$(basename "$zlib")"
+done
+
 # --- Commands ---
 echo ""
 echo "Commands → $CONFIG_DIR/commands/"
