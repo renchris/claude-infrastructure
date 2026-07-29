@@ -27,8 +27,22 @@ validates and seals artifacts. Swap the agent, keep everything else.
 
 ## Resolve these before starting
 
+**`plugin_dir` is the one value you must resolve, not assume** — this skill is global, so it
+runs in repos that do not vendor their own copy. Take the FIRST of these that exists:
+
+```bash
+plugin_dir="${CODEX_SECURITY_PLUGIN_DIR:-}"                       # 1. explicit override
+[ -z "$plugin_dir" ] && [ -d "$(git rev-parse --show-toplevel)/vendor/codex-security" ] \
+  && plugin_dir="$(git rev-parse --show-toplevel)/vendor/codex-security"   # 2. repo-local copy
+[ -z "$plugin_dir" ] && plugin_dir="$HOME/.claude/vendor/codex-security"   # 3. deployed copy
+[ -d "$plugin_dir" ] || { echo "codex-security plugin not found"; exit 1; }
 ```
-plugin_dir  = <repo_root>/vendor/codex-security
+
+Only claude-infrastructure vendors it at case 2 — **every other repo resolves to case 3**, the
+`~/.claude/vendor/` symlink that `install.sh` creates. If case 3 is missing, the deploy has not
+run yet; say so plainly rather than scanning with dangling paths.
+
+```
 python_cmd  = python3
 repo_root   = git rev-parse --show-toplevel
 repo_name   = basename of repo_root
@@ -37,8 +51,9 @@ scan_dir    = ${TMPDIR:-/tmp}/codex-security-scans/<repo_name>/<scan_id>
 ```
 
 Artifact subdirectories, threat-model paths, and per-phase outputs are defined in
-`vendor/codex-security/references/scan-artifacts.md`. **Follow that file** — do not
-invent paths. Note it deliberately says to use `$TMPDIR`, not a hardcoded `/tmp`.
+`$plugin_dir/references/scan-artifacts.md`. **Follow that file** — do not invent paths. Note it
+deliberately says to use `$TMPDIR`, not a hardcoded `/tmp` — and `$TMPDIR` on macOS is not
+canonical, so pass `realpath` output to the finalizer (it rejects non-canonical scan dirs).
 
 ## Pick the workflow
 
@@ -59,7 +74,7 @@ Read the chosen `SKILL.md` in full and follow it. Route by intent:
 | File findings to Linear/Jira/GitHub | `skills/track-findings/` |
 | Author or review `SECURITY.md` | `skills/define-security-policy/` |
 
-`vendor/codex-security/references/shared-hard-rules.md` binds **every** workflow. Read it
+`$plugin_dir/references/shared-hard-rules.md` binds **every** workflow. Read it
 first. The rule that matters most in practice: *do not emit a finding unless it survives
 the final policy-adjustment pass* — this methodology is built to suppress plausible-sounding
 false positives, which is the entire reason to prefer it over grep-driven auditing.
@@ -71,24 +86,25 @@ they are the only adaptations required.
 
 | In the vendored text | Do this instead |
 |---|---|
-| `$skill-name` (e.g. `$validation`, `$threat-model`) | Read `vendor/codex-security/skills/<skill-name>/SKILL.md` and follow it as the current phase |
+| `$skill-name` (e.g. `$validation`, `$threat-model`) | Read `$plugin_dir/skills/<skill-name>/SKILL.md` and follow it as the current phase |
 | `open_codex_security_workspace`, `await_codex_security_scan_start`, `get_codex_security_scan_context`, `start_codex_security_deep_scan`, `complete_codex_security_scan`, and every other `*_codex_security_*` MCP tool | **Unavailable by construction.** Take the documented prompt-only path. The skills already branch on this — "In Codex CLI or when those tools are unavailable, use the prompt-only path." |
 | "In the Codex desktop app…" / setup workspace / **Continue in Codex** / "press Start scan" | Skip entirely. You are never the app host. |
 | `complete_codex_security_scan` for sealing | Run the finalizer directly (see below) |
 | Codex subagent fan-out, workers, per-candidate agents | Claude `Agent` subagents — `Explore` for read-only file sweeps, `general-purpose` for candidate work. One subagent per shard/candidate, same phase boundaries |
 | `<python_command>` | `python3` |
-| `<plugin_dir>` | `vendor/codex-security` |
+| `<plugin_dir>` | the `$plugin_dir` you resolved above — never a hardcoded `vendor/…` path |
 | `fail_codex_security_scan` | No terminal-fail tool exists. Record progress and leave the bundle resumable — never discard a scan because work remains |
 | `config_preflight.py` / capability profiles | Codex-runtime capability probing; **not applicable**. Proceed as a prompt-only host with subagent fan-out available |
 
 ## Sealing the scan — the deterministic gate
 
 Author the three canonical JSON files per
-`vendor/codex-security/references/final-report.md`, then seal:
+`$plugin_dir/references/final-report.md`, then seal:
 
 ```bash
-python3 vendor/codex-security/scripts/finalize_scan_contract.py \
-  --scan-dir "$scan_dir" --source-root "$(git rev-parse --show-toplevel)"
+python3 "$plugin_dir/scripts/finalize_scan_contract.py" \
+  --scan-dir "$(python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$scan_dir")" \
+  --source-root "$(git rev-parse --show-toplevel)"
 ```
 
 This validates `scan-manifest.json`, `findings.json`, and `coverage.json` against the

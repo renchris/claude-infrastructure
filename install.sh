@@ -201,6 +201,31 @@ if [[ -d "$REPO_DIR/skills" ]]; then
   done
 fi
 
+# --- Vendored third-party plugin content ---
+# ONE directory symlink per vendored plugin, deliberately NOT the per-file model used
+# above. vendor/ is upstream content we never edit and replace wholesale, so a per-file
+# loop would silently fail to link every BRAND-NEW file on the next re-vendor — the same
+# deploy-lag trap that left hooks/lib/cc-interactive.sh and skills/video-understanding
+# live-missing. A dir symlink cannot drift from its source.
+# `ln -sfn` (not -sf) is load-bearing: without -n, a re-run whose target CHANGED would
+# create the new link INSIDE the existing dir symlink instead of replacing it.
+if [[ -d "$REPO_DIR/vendor" ]]; then
+  echo ""
+  echo "Vendored plugins → $CONFIG_DIR/vendor/"
+  ensure_real_dir "$CONFIG_DIR/vendor"
+  for vdir in "$REPO_DIR"/vendor/*/; do
+    [[ -d "$vdir" ]] || continue
+    vsrc="${vdir%/}"; vdest="$CONFIG_DIR/vendor/$(basename "$vsrc")"
+    if [[ -L "$vdest" && "$(readlink "$vdest")" == "$vsrc" ]]; then
+      skipped=$((skipped + 1))
+      continue
+    fi
+    run ln -sfn "$vsrc" "$vdest"
+    echo "  ✓ $vdest → $vsrc"
+    installed=$((installed + 1))
+  done
+fi
+
 # --- Global instructions (CLAUDE.md + rules/) — repo is the source of truth ---
 # The lean resident knowledge layer. CLAUDE.md is COPIED as a real file (CC reads ~/.claude/CLAUDE.md
 # as user memory; a symlink into the repo would break across branch switches). rules/ is kept in sync:
