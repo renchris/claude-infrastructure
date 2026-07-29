@@ -42,6 +42,26 @@ KEEPOUT = (372, 82, 1548, 208)  # x0, y0, x1, y1
 KEEPOUT_SOFT = 130  # density ramps back up over this distance outside it
 
 
+# Every rect emitted into a SCROLLING layer is recorded here so `assert_type_clear` can prove the
+# wordmark is never overlapped. For a scrolling layer an x-position is no exclusion at all — a cloud
+# at x=1000 travels to x=-920 and therefore passes under the type on the way — so the only sound
+# invariant is a Y one: scrolling scenery must lie entirely below the keep-out (or entirely above).
+_SCROLLING: list[tuple[float, float, str]] = []
+
+
+def assert_type_clear() -> None:
+    """Fail the build if any scrolling scenery can pass through the wordmark's keep-out band."""
+    y0, y1 = KEEPOUT[1], KEEPOUT[3]
+    bad = [(top, bot, tag) for (top, bot, tag) in _SCROLLING if top < y1 and bot > y0]
+    if bad:
+        worst = min(bad)
+        raise SystemExit(
+            f"gen: {len(bad)} scrolling rect(s) cross the wordmark keep-out band "
+            f"y={y0}..{y1} — e.g. {worst[2]} spans y={worst[0]:.1f}..{worst[1]:.1f}. "
+            f"A scrolling element passes under the type at some phase regardless of its x."
+        )
+
+
 def divides_P(*periods: float) -> None:
     """A sub-period that does not divide P makes the composite loop at the LCM instead (S2)."""
     for p in periods:
@@ -175,8 +195,15 @@ def cumulus(
     return cols
 
 
-def pixel_cloud(x: float, base: float, w: float, h: float, cell: int,
-                rng: random.Random, bumps: int = 3) -> list[tuple[float, float, float, float]]:
+def pixel_cloud(
+    x: float,
+    base: float,
+    w: float,
+    h: float,
+    cell: int,
+    rng: random.Random,
+    bumps: int = 3,
+) -> list[tuple[float, float, float, float]]:
     """A pixel cumulus: a flat bottom under a crown of overlapping circular bubbles.
 
     Three shapes were tried before this one, and each failed in a way worth recording:
@@ -201,7 +228,7 @@ def pixel_cloud(x: float, base: float, w: float, h: float, cell: int,
     for c in range(ncols):
         u = (c + 0.5) / ncols
         best = 0.0
-        for (fc, rad, amp) in bubs:
+        for fc, rad, amp in bubs:
             d = abs(u - fc) / rad
             if d < 1.0:
                 best = max(best, amp * math.sqrt(1.0 - d * d))
@@ -219,8 +246,15 @@ def pixel_cloud(x: float, base: float, w: float, h: float, cell: int,
     return merge_runs(cols)
 
 
-def swell(x: float, base: float, w: float, h: float, cell: int,
-          rng: random.Random, tiers: int = 3) -> list[list[float]]:
+def swell(
+    x: float,
+    base: float,
+    w: float,
+    h: float,
+    cell: int,
+    rng: random.Random,
+    tiers: int = 3,
+) -> list[list[float]]:
     """A wide low ground mound as concentric tiers, widest at the bottom.
 
     Concentric tiers were wrong for clouds — on a tall shape they make a centred ziggurat. On a WIDE
@@ -245,8 +279,9 @@ def swell(x: float, base: float, w: float, h: float, cell: int,
     return out
 
 
-def cloud_body(cols: list[tuple[float, float, float, float]],
-               base: float, cell: int, layer: int) -> str:
+def cloud_body(
+    cols: list[tuple[float, float, float, float]], base: float, cell: int, layer: int
+) -> str:
     """Body, then a lit edge on each run's own top, then one shaded underside.
 
     Because the runs are merged the lit edge traces the crown; drawing it per source rectangle is
@@ -255,13 +290,20 @@ def cloud_body(cols: list[tuple[float, float, float, float]],
     if not cols:
         return ""
     s = [rects(cols, f"cb{layer}")]
-    s.append("".join(
-        f'<rect class="ct{layer}" x="{fmt(x)}" y="{fmt(y)}" width="{fmt(w)}" '
-        f'height="{fmt(min(cell, h))}"/>' for (x, y, w, h) in cols))
+    _SCROLLING.append((base - cell, base, f"cs{layer}"))
+    s.append(
+        "".join(
+            f'<rect class="ct{layer}" x="{fmt(x)}" y="{fmt(y)}" width="{fmt(w)}" '
+            f'height="{fmt(min(cell, h))}"/>'
+            for (x, y, w, h) in cols
+        )
+    )
     x0 = min(c[0] for c in cols)
     x1 = max(c[0] + c[2] for c in cols)
-    s.append(f'<rect class="cs{layer}" x="{fmt(x0)}" y="{fmt(base - cell)}" '
-             f'width="{fmt(x1 - x0)}" height="{fmt(cell)}"/>')
+    s.append(
+        f'<rect class="cs{layer}" x="{fmt(x0)}" y="{fmt(base - cell)}" '
+        f'width="{fmt(x1 - x0)}" height="{fmt(cell)}"/>'
+    )
     return "".join(s)
 
 
@@ -284,6 +326,8 @@ def merge_runs(
 
 # ── emit helpers ──────────────────────────────────────────────────────────────────────────────────
 def rects(cols, cls: str) -> str:
+    for _x, y, _w, h in cols:
+        _SCROLLING.append((y, y + h, cls))
     return "".join(
         f'<rect class="{cls}" x="{fmt(x)}" y="{fmt(y)}" width="{fmt(w)}" height="{fmt(h)}"/>'
         for (x, y, w, h) in cols
@@ -325,10 +369,10 @@ def sky_defs(art: Art) -> str:
         f'<stop offset="1" stop-color="{l.ground_bot}"/></linearGradient>'
         # Horizon glow: the cheapest depth cue there is. A flat sky reads as paper; a sky that
         # warms toward the horizon reads as air.
-        f'<radialGradient id="glowD" cx="0.5" cy="1" r="0.72">'
+        f'<radialGradient id="glowD" cx="{fmt(art.moon[0] / W)}" cy="1" r="0.78">'
         f'<stop offset="0" stop-color="{d.glow}" stop-opacity="{fmt(d.glow_op)}"/>'
         f'<stop offset="1" stop-color="{d.glow}" stop-opacity="0"/></radialGradient>'
-        f'<radialGradient id="glowL" cx="0.5" cy="1" r="0.72">'
+        f'<radialGradient id="glowL" cx="{fmt(art.moon[0] / W)}" cy="1" r="0.78">'
         f'<stop offset="0" stop-color="{l.glow}" stop-opacity="{fmt(l.glow_op)}"/>'
         f'<stop offset="1" stop-color="{l.glow}" stop-opacity="0"/></radialGradient>'
         # Vignette, drawn BEFORE the type so it can never darken the wordmark.
@@ -341,6 +385,47 @@ def sky_defs(art: Art) -> str:
     )
 
 
+def stratified(
+    count: int,
+    x0: float,
+    x1: float,
+    y0: float,
+    y1: float,
+    rng: random.Random,
+    ylim: float,
+) -> list[tuple[float, float]]:
+    """One jittered sample per grid cell, thinned toward the horizon.
+
+    Pure rejection sampling over a density function gives visible clumps and bald patches — v6d had
+    a dense knot on the left and an empty right. A jittered grid keeps coverage even while staying
+    irregular enough not to read as a lattice, which is what a real sky looks like.
+    """
+    if count <= 0:
+        return []
+    # Over-provision the grid. With exactly `count` cells each cell gets a single chance, so every
+    # horizon-falloff or keep-out rejection is permanent and the field comes out a third of the
+    # requested density (measured: 45 of 165). Shuffling the cells first means taking the first
+    # `count` acceptances from a larger grid still gives even coverage.
+    cells_wanted = count * 4
+    aspect = (x1 - x0) / max(1.0, (y1 - y0))
+    ncols = max(1, int(round(math.sqrt(cells_wanted * aspect))))
+    nrows = max(1, int(math.ceil(cells_wanted / ncols)))
+    cw = (x1 - x0) / ncols
+    chh = (y1 - y0) / nrows
+    cells = [(c, r) for r in range(nrows) for c in range(ncols)]
+    rng.shuffle(cells)
+    out = []
+    for c, r in cells:
+        x = x0 + (c + rng.uniform(0.12, 0.88)) * cw
+        y = y0 + (r + rng.uniform(0.12, 0.88)) * chh
+        # density falls off toward the horizon: physically true, and it keeps the busiest detail
+        # away from the cloud band
+        if rng.random() > (1.0 - y / (ylim * 1.22)) ** 1.15:
+            continue
+        out.append((x, y))
+    return out
+
+
 def starfield(art: Art, rng: random.Random) -> str:
     """Three depth tiers (size + opacity + twinkle rate), a density falloff toward the horizon, and
     a hard keep-out around the type with a soft ramp outside it (S7).
@@ -351,23 +436,17 @@ def starfield(art: Art, rng: random.Random) -> str:
     nA, nB, nC = art.star_count
     tiers = [
         # (count, size, opacity, twinkle period, y-limit, class)
-        (nA, 2, 0.34, 60.0, 330, "kA"),
+        (nA, 2, 0.34, 60.0, 336, "kA"),
         (nB, 3, 0.62, 30.0, 300, "kB"),
-        (nC, 4, 0.95, 10.0, 270, "kC"),
+        (nC, 4, 0.95, 10.0, 264, "kC"),
     ]
     divides_P(60.0, 30.0, 10.0)
     out = []
     for count, size, op, dur, ylim, kls in tiers:
         placed = 0
-        guard = 0
-        while placed < count and guard < count * 200:
-            guard += 1
-            x = rng.uniform(6, W - 6)
-            y = rng.uniform(8, ylim)
-            # density falls off toward the horizon — physically true and it keeps the busy detail
-            # away from the cloud band
-            if rng.random() > (1.0 - y / (ylim * 1.18)) ** 1.25:
-                continue
+        for x, y in stratified(count, 6, W - 6, 8, ylim, rng, ylim):
+            if placed >= count:
+                break
             if in_keepout(x, y):
                 continue
             d = keepout_distance(x, y)
@@ -376,15 +455,15 @@ def starfield(art: Art, rng: random.Random) -> str:
             delay = -(placed % 24) * (dur / 24.0)
             body = f'<rect x="{fmt(x)}" y="{fmt(y)}" width="{size}" height="{size}"/>'
             if kls == "kC":
-                # the brightest tier gets a 4-point sparkle: a cross of thin arms. Still pure
-                # geometry, so it stays crisp at any zoom and owes nothing to a font.
-                a = size * 1.55
+                # the brightest tier gets a small 4-point sparkle: still pure geometry, so it stays
+                # crisp at any zoom and owes nothing to the reader's installed fonts
+                arm = size * 1.55
                 t = max(1.0, size / 4.2)
                 body += (
-                    f'<rect x="{fmt(x + size / 2 - t / 2)}" y="{fmt(y - a)}" '
-                    f'width="{fmt(t)}" height="{fmt(a * 2 + size)}"/>'
-                    f'<rect x="{fmt(x - a)}" y="{fmt(y + size / 2 - t / 2)}" '
-                    f'width="{fmt(a * 2 + size)}" height="{fmt(t)}"/>'
+                    f'<rect x="{fmt(x + size / 2 - t / 2)}" y="{fmt(y - arm)}" '
+                    f'width="{fmt(t)}" height="{fmt(arm * 2 + size)}"/>'
+                    f'<rect x="{fmt(x - arm)}" y="{fmt(y + size / 2 - t / 2)}" '
+                    f'width="{fmt(arm * 2 + size)}" height="{fmt(t)}"/>'
                 )
             out.append(
                 f'<g class="st {kls}" style="animation-delay:{fmt(delay)}s" '
@@ -443,9 +522,9 @@ def clouds(art: Art, rng: random.Random) -> str:
     # bottom edge, height, cell, count per tile, tiers. Bottoms stay clear of the type keep-out
     # above (tops must exceed KEEPOUT[3]) and of the horizon below.
     bands = [
-        (274, 58, 8, 3, 4),
-        (312, 70, 8, 3, 3),
-        (348, 80, 10, 2, 3),
+        (292, 56, 8, 3, 4),
+        (328, 66, 8, 3, 3),
+        (362, 76, 10, 2, 3),
     ]
     out = []
     for layer in range(min(art.cloud_layers, 3)):
@@ -453,8 +532,9 @@ def clouds(art: Art, rng: random.Random) -> str:
         dur = speeds[layer]
         divides_P(dur)
 
-        def body(shift: float, layer=layer, base_y=base_y, hgt=hgt,
-                 cs=cs, n=n, tiers=tiers) -> str:
+        def body(
+            shift: float, layer=layer, base_y=base_y, hgt=hgt, cs=cs, n=n, tiers=tiers
+        ) -> str:
             r2 = random.Random(1400 + layer * 7)
             s = []
             gap = TILE / n
@@ -489,7 +569,9 @@ def mounds(art: Art, rng: random.Random) -> str:
             gap = TILE / n
             for i in range(n):
                 mw = gap * r2.uniform(0.52, 0.78)
-                mh = min(hgt * r2.uniform(0.72, 1.0), mw * 0.17)  # far flatter than a cloud
+                mh = min(
+                    hgt * r2.uniform(0.72, 1.0), mw * 0.17
+                )  # far flatter than a cloud
                 mx = shift + i * gap + r2.uniform(0, max(1.0, gap - mw))
                 cols = swell(mx, GROUND, mw, mh, 14, r2, tiers=4)
                 s.append(rects([tuple(c) for c in cols], cls))
@@ -502,7 +584,8 @@ def mounds(art: Art, rng: random.Random) -> str:
                         f'<rect class="{cls}" x="{fmt(vx)}" y="{fmt(GROUND - vh)}" '
                         f'width="{fmt(vw)}" height="{fmt(vh)}"/>'
                         f'<rect class="{cls}" x="{fmt(vx - 5)}" y="{fmt(GROUND - vh * 0.72)}" '
-                        f'width="{fmt(vw + 10)}" height="{fmt(vh * 0.34)}"/>')
+                        f'width="{fmt(vw + 10)}" height="{fmt(vh * 0.34)}"/>'
+                    )
             return "".join(s)
 
         out.append(tiled(duplicate(body), cls + "s", dur))
@@ -520,7 +603,7 @@ def ground_detail(art: Art) -> str:
     out = []
     # dashes + tufts, two speeds
     for dur, n, cls, y0, y1 in [
-        (P / 8, 20, "tf0", GROUND + 8, GROUND + 26),   # 30s
+        (P / 8, 20, "tf0", GROUND + 8, GROUND + 26),  # 30s
         (P / 10, 16, "tf1", GROUND + 30, GROUND + 54),  # 24s
     ]:
         divides_P(dur)
@@ -532,17 +615,21 @@ def ground_detail(art: Art) -> str:
             for i in range(n):
                 x = shift + i * gap + r2.uniform(0, gap * 0.55)
                 y = r2.uniform(y0, y1)
-                if r2.random() < 0.30:
+                if r2.random() < 0.22:
                     # a tuft: an uneven three-blade clump, never an evenly spaced comb
                     for k in range(3):
-                        bh = r2.uniform(6, 15)
-                        s.append(f'<rect class="{cls}" x="{fmt(x + k * r2.uniform(3.5, 6))}" '
-                                 f'y="{fmt(y - bh)}" width="2.5" height="{fmt(bh)}"/>')
+                        bh = r2.uniform(5, 12)
+                        s.append(
+                            f'<rect class="{cls}" x="{fmt(x + k * r2.uniform(3.5, 6))}" '
+                            f'y="{fmt(y - bh)}" width="2.5" height="{fmt(bh)}"/>'
+                        )
                 else:
                     # a long low streak — ground grain, the dino-run read
-                    s.append(f'<rect class="{cls}" x="{fmt(x)}" y="{fmt(y)}" '
-                             f'width="{fmt(r2.uniform(38, 104))}" height="2.5" '
-                             f'opacity="{fmt(r2.uniform(0.35, 0.75))}"/>')
+                    s.append(
+                        f'<rect class="{cls}" x="{fmt(x)}" y="{fmt(y)}" '
+                        f'width="{fmt(r2.uniform(38, 104))}" height="2.5" '
+                        f'opacity="{fmt(r2.uniform(0.35, 0.75))}"/>'
+                    )
             return "".join(s)
 
         out.append(tiled(duplicate(body), cls + "s", dur))
@@ -874,6 +961,10 @@ def css(art: Art) -> str:
         "*{animation:none!important}"
         ".shoot,.balloon,.birds,.rSleep,.rCheer,.legsStill,.zz1,.zz2,.eShut,.peer,.pCheer{opacity:0}"
         ".legsWalk,.eOpen{opacity:1}"
+        # `animation:none` reverts an element to its UN-animated base value, which for the
+        # moon halo is full strength — the frozen still showed a blown-out glow that never
+        # appears in the animation. Pin the breathing values to their mid-points instead.
+        ".moonHalo{opacity:.26}.moonLit{opacity:.9}"
         ".peek{transform:translateY(78px)}"
         "}"
     )
@@ -897,6 +988,7 @@ def css(art: Art) -> str:
 
 # ── assembly ──────────────────────────────────────────────────────────────────────────────────────
 def build(art: Art) -> str:
+    _SCROLLING.clear()
     rng = random.Random(20260729 + sum(ord(ch) for ch in art.key))
     scale = art.clawd_scale
 
@@ -965,6 +1057,7 @@ def build(art: Art) -> str:
         f'letter-spacing="7.5">{art.subtitle}</text>'
     )
     parts.append("</svg>")
+    assert_type_clear()
     return "".join(parts)
 
 
@@ -1027,8 +1120,8 @@ DAY = Theme(
     sky_low="#f4f2ec",
     glow="#ffe6c2",
     glow_op=0.62,
-    ground_top="#e7e3d6",
-    ground_bot="#d3cec0",
+    ground_top="#ebe6d8",
+    ground_bot="#d7d2c2",
     rule="#9aa3ad",
     wm="#111820",
     sub="#5b6672",
@@ -1061,9 +1154,9 @@ DUSK = Theme(
     moon="#fbe3c4",
     moon_halo="#fbe3c4",
     cloud=[
-        ("#2a2340", "#453354", "#1d1830"),
-        ("#382a45", "#5c3f56", "#261d36"),
-        ("#452f47", "#7b4e59", "#2f2139"),
+        ("#282142", "#3f3358", "#1b1730"),
+        ("#332947", "#4f3d60", "#231c36"),
+        ("#3d2e4c", "#63455f", "#2a2039"),
     ],
     mound=["#33253a", "#191221"],
     tuft="#4d3a49",
