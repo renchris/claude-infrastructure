@@ -5,7 +5,7 @@ Everything the plan settled is enforced here rather than trusted to hand-typing:
 
   * P = 240 s master period, and every sub-period is CHECKED to divide it (S1/S2). A period that
     does not divide P is a build error, not a subtle visual bug found later by a frame hash.
-  * Phase comes from negative `animation-delay` only — never from a different duration (S2).
+  * Phase comes from `--d` (a negative delay through the additive channel), never from a
   * One animation per element; anything that needs two motions becomes nested groups (S8).
   * The character is grounded by computation — `feet = GROUND - SPRITE_H * scale` (S6).
   * Stars are generated against a hard text keep-out rectangle, so "does not touch the type" is a
@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import math
 import random
+import re
 import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -350,7 +351,7 @@ def rects(cols, cls: str) -> str:
 def tiled(body: str, cls: str, dur: float, delay: float = 0.0) -> str:
     """One scrolling parallax layer. `body` must already contain its own +TILE duplicate."""
     divides_P(dur)
-    style = f' style="animation-delay:{fmt(-delay)}s"' if delay else ""
+    style = f' style="--d:{fmt(-delay)}s"' if delay else ""
     return f'<g class="{cls}"{style}>{body}</g>'
 
 
@@ -479,7 +480,7 @@ def starfield(art: Art, rng: random.Random) -> str:
                     f'width="{fmt(arm * 2 + size)}" height="{fmt(t)}"/>'
                 )
             out.append(
-                f'<g class="st {kls}" style="animation-delay:{fmt(delay)}s" '
+                f'<g class="st {kls}" style="--d:{fmt(delay)}s" '
                 f'opacity="{fmt(op)}">{body}</g>'
             )
             placed += 1
@@ -919,7 +920,7 @@ def css(art: Art) -> str:
         f"@keyframes zzf{{0%,63%{{opacity:0;transform:translate(0,0)}}64%{{opacity:.9}}"
         f"66%{{opacity:0;transform:translate(14px,-30px)}}66.2%,100%{{opacity:0}}}}"
         f".zz1{{animation:zzf 240s ease-out infinite}}"
-        f".zz2{{animation:zzf 240s ease-out infinite;animation-delay:-1.2s}}"
+        f".zz2{{animation:zzf 240s ease-out infinite;--d:-1.2s}}"
         f"@keyframes rcf{{0%,28%{{opacity:0}}28.4%,32%{{opacity:1}}32.4%,100%{{opacity:0}}}}"
         f".rCheer{{animation:rcf {fmt(art.cheer_period)}s steps(1,end) infinite}}"
         f"@keyframes rtf{{0%,86%{{transform:scaleX(1)}}88%,95%{{transform:scaleX(-1)}}97%,100%{{transform:scaleX(1)}}}}"
@@ -964,7 +965,24 @@ def css(art: Art) -> str:
         f"@keyframes pcf{{0%,28.6%{{opacity:0}}29%,32%{{opacity:1}}32.4%,100%{{opacity:0}}}}"
         f".pCheer{{animation:pcf 240s steps(1,end) infinite}}"
         f".pLegA{{animation:pwA .5s steps(1,end) infinite}}"
-        f".pLegB{{animation:pwB .5s steps(1,end) infinite;animation-delay:-.12s}}"
+        f".pLegB{{animation:pwB .5s steps(1,end) infinite;--d:-.12s}}"
+    )
+
+    # Give every animation declaration the ADDITIVE delay channel, so any element may carry its own
+    # phase in `--d` while the screenshot harness supplies the global seek in `--fz` and the delay is
+    # their sum. The `animation:` shorthand resets animation-delay to 0s, so the longhand must follow
+    # it — hence appending rather than prepending.
+    #
+    # Why not just author the delay directly: `banner-shots.sh`'s freeze reaches a timestamp by
+    # setting animation-delay on `*`, which OVERWRITES an authored delay outright. The animation is
+    # still right in a browser, but every frozen verification frame renders a deliberately staggered
+    # population in lockstep — a plausible-looking render that is wrong, which is worse than an
+    # obviously broken one. The harness lints for exactly this. Phase is necessary (many elements, one
+    # shared master period, per S2), so the answer is a channel the seek can add to, not less phase.
+    base = re.sub(
+        r"(animation:[^;{}]*?infinite)",
+        r"\1;animation-delay:calc(var(--d,0s) + var(--fz,0s))",
+        base,
     )
 
     # A still that is legible on its own, not a frame that happens to be paused. The rare emotes
