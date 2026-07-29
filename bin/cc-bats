@@ -1,0 +1,176 @@
+#!/bin/bash
+# cc-bats — the QoS CHOKEPOINT for the bats gate corpus.
+#
+# WHY THIS EXISTS (row 13, MACHINE_CAPACITY_V2.md §4 M1). Darwin's BACKGROUND band is already the
+# repo's chosen answer to gate-vs-interactive contention (row 1 deleted load-gated admission
+# control because "a shedder that WAITS amplifies" — R1). But that band was applied INSIDE ONE
+# CALLER, scripts/postland-verify.sh, and a census of the live box on 2026-07-29 measured what
+# that actually covers:
+#
+#     72 of 103 live bats procs at pri=31 (full interactive priority)
+#     coverage: 30% of procs, 0% of CPU
+#
+# The bypassing invocation is the ORDINARY one. A live session was running
+# `timeout 5400 bats tests/postland-verify.bats` at nice 0 — exactly what CLAUDE.md instructs a
+# session to do before committing. `which bats` resolves the real Homebrew binary; there was no
+# wrapper, hence no chokepoint.
+#
+# THE INVERSION: stop asking the caller to demote itself (measured to fail 70% of the time) and
+# make the TOOL demote itself. Installed as `bats` earlier on PATH, every invocation — hand-typed
+# by an agent, called from a script, fired from launchd — lands in the background band and yields
+# to interactive sessions. Nobody can forget, because there is nothing to remember.
+#
+# NOT admission control. Nothing here waits, sleeps, queues, or polls load. Demotion only (R1).
+#
+# Seams (set-but-EMPTY is honoured VERBATIM at both — `${VAR+set}`, never `${VAR:-}`, because a
+# seam that cannot turn a thing OFF is not a seam):
+#   CC_BATS_QOS=off          → exec the real bats verbatim, no demotion at all (kill switch, R8).
+#   CC_BATS_TASKPOLICY=<p>   → pin the taskpolicy(8) binary; SET-BUT-EMPTY disables that leg and
+#                              falls back to nice-only WITH the loud notice below.
+#   CC_BATS_REAL=<path>      → pin the real bats (tests use this; never guesses in production).
+#   CC_BATS_QUIET=1          → suppress the degradation notice on stderr (CI noise control only;
+#                              does NOT suppress it when QoS is fully unavailable).
+#
+# FAIL LOUD WHEN INERT (R4): if taskpolicy(8) cannot be resolved we still demote with nice(1), but
+# we SAY SO on stderr. A QoS shim that silently no-ops is a non-feature — ~100% abstain means inert
+# by construction, and the whole defect this file fixes was a mechanism that looked applied and
+# was not.
+#
+# bash 3.2 SAFE: no `case` inside command substitution, no IFS-on-control-char splitting
+# (memory bash32-case-in-substitution-zsh-repro-trap). Ships to launchd ⇒ tested under /bin/bash.
+
+set -uo pipefail
+
+# Exported so a census / crash record can attribute a demoted proc to a KNOWN shim version rather
+# than inferring it from pri alone.
+export CC_BATS_VERSION=1
+
+# ── resolve the REAL bats, never ourselves ────────────────────────────────────────────────────
+# Self-shadowing is the whole point of this file (we are installed AS `bats`), so naive
+# `command -v bats` would resolve to this script and fork-bomb. Resolve by walking PATH and
+# skipping any candidate whose physical path equals ours.
+self_phys=""
+if [ -n "${BASH_SOURCE[0]:-}" ]; then
+  self_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -P) || self_dir=""
+  [ -n "$self_dir" ] && self_phys="$self_dir/$(basename "${BASH_SOURCE[0]}")"
+fi
+
+resolve_real_bats() {
+  # 1 — explicit pin (tests, and any caller that knows better). Honoured even if non-executable
+  #     so a test can assert the failure path.
+  if [ -n "${CC_BATS_REAL+set}" ]; then printf '%s' "$CC_BATS_REAL"; return 0; fi
+  # 2 — walk PATH, skipping ourselves by PHYSICAL path (a symlinked shim dir must not fool us).
+  local oldifs="$IFS" d cand cand_phys
+  IFS=:
+  for d in $PATH; do
+    IFS="$oldifs"
+    [ -n "$d" ] || continue
+    cand="$d/bats"
+    if [ -x "$cand" ] && [ ! -d "$cand" ]; then
+      cand_phys=$(cd "$(dirname "$cand")" 2>/dev/null && pwd -P)/bats
+      if [ "$cand_phys" != "$self_phys" ]; then printf '%s' "$cand"; IFS="$oldifs"; return 0; fi
+    fi
+    IFS=:
+  done
+  IFS="$oldifs"
+  # 3 — known install locations, last resort. Order: Homebrew arm64, Homebrew x86, /usr/local.
+  for cand in /opt/homebrew/bin/bats /usr/local/bin/bats /opt/local/bin/bats; do
+    if [ -x "$cand" ]; then
+      cand_phys=$(cd "$(dirname "$cand")" 2>/dev/null && pwd -P)/bats
+      [ "$cand_phys" != "$self_phys" ] && { printf '%s' "$cand"; return 0; }
+    fi
+  done
+  return 1
+}
+
+REAL_BATS=$(resolve_real_bats) || REAL_BATS=""
+if [ -z "$REAL_BATS" ] || [ ! -x "$REAL_BATS" ]; then
+  echo "cc-bats: FATAL — cannot resolve the real bats(1) (self=${self_phys:-?}). Set CC_BATS_REAL." >&2
+  exit 127
+fi
+
+# ── kill switch ───────────────────────────────────────────────────────────────────────────────
+if [ "${CC_BATS_QOS:-on}" = "off" ]; then
+  exec "$REAL_BATS" "$@"
+fi
+
+# ── re-entrancy guard ─────────────────────────────────────────────────────────────────────────
+# bats re-execs itself (observed: two `bats-core/bats` procs per run). The demotion is idempotent
+# — nice 19 twice is still 19, taskpolicy -c background twice is a no-op — so a second wrap would
+# be HARMLESS but not FREE: it costs an extra fork+exec pair per nested call, and this file exists
+# to reduce load, not add it. Once we are inside the band, hand straight off to the real binary.
+if [ "${CC_BATS_ACTIVE:-0}" = "1" ]; then
+  exec "$REAL_BATS" "$@"
+fi
+export CC_BATS_ACTIVE=1
+
+# ── resolve taskpolicy(8) ─────────────────────────────────────────────────────────────────────
+# Hooks and launchd jobs run WITHOUT Homebrew on PATH, so absolute paths are tried as well as PATH
+# (the same lesson lead-crash-watchdog.sh:23 records for timeout(1)).
+if [ -n "${CC_BATS_TASKPOLICY+set}" ]; then
+  TP="$CC_BATS_TASKPOLICY"           # set-but-empty honoured verbatim ⇒ nice-only
+else
+  TP=""
+  for c in /usr/sbin/taskpolicy "$(command -v taskpolicy 2>/dev/null || true)"; do
+    if [ -n "$c" ] && [ -x "$c" ]; then TP="$c"; break; fi
+  done
+fi
+
+# ── resolve nice(1) ───────────────────────────────────────────────────────────────────────────
+# Seam CC_BATS_NICE_BIN, set-but-EMPTY honoured verbatim — same discipline as CC_BATS_TASKPOLICY.
+# It exists so the fully-inert QOS_MODE=NONE branch is REACHABLE and therefore PROVABLE: nice(1) is
+# always present at /usr/bin/nice on macOS, so without this seam the R4 "fail loud when inert"
+# branch would be dead code that no test could ever execute — an untested loud-failure path is
+# exactly the kind of thing that turns out to be broken on the one day it matters.
+if [ -n "${CC_BATS_NICE_BIN+set}" ]; then
+  NICE="$CC_BATS_NICE_BIN"
+else
+  NICE=""
+  for c in /usr/bin/nice "$(command -v nice 2>/dev/null || true)"; do
+    if [ -n "$c" ] && [ -x "$c" ]; then NICE="$c"; break; fi
+  done
+fi
+[ -n "$NICE" ] && [ ! -x "$NICE" ] && NICE=""
+
+NICE_LEVEL="${CC_BATS_NICE:-19}"
+
+# ── build the demotion prefix, and FAIL LOUD about whatever we could not get (R4) ─────────────
+# Three outcomes, all explicit — never a silent pass:
+#   FULL      nice + taskpolicy background  (scheduler AND I/O tier demoted)
+#   PARTIAL   nice only                     (notice on stderr; CPU demoted, I/O tier is not)
+#   NONE      neither                       (notice on stderr ALWAYS, even under CC_BATS_QUIET —
+#                                            "QoS requested but not applied" must never be quiet)
+QOS_MODE="NONE"
+if [ -n "$NICE" ] && [ -n "$TP" ] && [ -x "$TP" ]; then
+  QOS_MODE="FULL"
+elif [ -n "$NICE" ]; then
+  QOS_MODE="PARTIAL"
+fi
+
+if [ "$QOS_MODE" = "PARTIAL" ] && [ "${CC_BATS_QUIET:-0}" != "1" ]; then
+  # MEASURED 2026-07-29, and the reason this is a WARNING rather than a mild notice: on Darwin
+  # `nice -n 19` ALONE leaves PRI at 31 — full interactive priority. Calibration:
+  #   nice 19 + taskpolicy -c background -> NI=20 PRI=4    (real demotion)
+  #   nice 19 alone                      -> NI=20 PRI=31   (NOT demoted)
+  # So nice-only is NOT a working fallback for contention relief, and scripts/qos-census.sh
+  # correctly refuses to count it as covered. Row 1's postland-verify.sh:168 comment
+  # ("absent taskpolicy(8) => nice alone, never a hard fail") is right to not hard-fail, but the
+  # fallback it names does not achieve the demotion its neighbours assume.
+  echo "cc-bats: WARNING — taskpolicy(8) unavailable. nice -n $NICE_LEVEL alone does NOT move PRI off 31 on Darwin, so gate work will still compete with interactive sessions. QoS effectively NOT applied." >&2
+fi
+if [ "$QOS_MODE" = "NONE" ]; then
+  # Unconditional: this is the inert case the census must never read as success.
+  echo "cc-bats: WARNING — neither nice(1) nor taskpolicy(8) resolved; running bats at FULL interactive priority. QoS NOT applied." >&2
+fi
+
+# Export the applied mode so scripts/qos-census.sh can attribute a demoted proc to this shim
+# rather than inferring it, and so a PARTIAL/NONE run is auditable after the fact.
+export CC_BATS_QOS_MODE="$QOS_MODE"
+
+if [ "$QOS_MODE" = "FULL" ]; then
+  exec "$NICE" -n "$NICE_LEVEL" "$TP" -c background "$REAL_BATS" "$@"
+elif [ "$QOS_MODE" = "PARTIAL" ]; then
+  exec "$NICE" -n "$NICE_LEVEL" "$REAL_BATS" "$@"
+else
+  exec "$REAL_BATS" "$@"
+fi

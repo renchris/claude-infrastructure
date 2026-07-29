@@ -235,7 +235,8 @@ Each criterion names the exact command whose output proves it. Narration does no
 
 | # | Criterion | Proving read | Baseline |
 |---|---|---|---|
-| **AC1** | ≥95% of bats **CPU** runs at `pri≤10` during a gate burst | `scripts/qos-census.sh` → `coverage_cpu_pct` | **0%** |
+| **AC1** | ≥95% of bats **procs** run at `pri≤10` during a gate burst (≥2 concurrent runs) | `scripts/qos-census.sh` → `coverage_proc_pct`, `verdict=PASS` | **0%** (baseline census 2026-07-29: 4 runs in flight, 0/47 demoted) |
+| **AC1-b** | `coverage_cpu_pct` reported alongside, as the impact metric — **not** the gate | same JSON row → `coverage_cpu_pct`, `gate_on` | 0% |
 | **AC2** | 0 top-level bats invocations at `pri=31` | `ps -eo pri,args \| grep -E 'bats( \|$)' \| awk '$1==31'` → empty | **72 procs** |
 | **AC3** | The shim covers the hand-typed form | `cd <worktree> && timeout 5 bats --version` then census the child's `pri` → `≤10` | n/a (no shim) |
 | **AC4** | The shim FAILS LOUD when `taskpolicy` is absent (R4) | `PATH=/usr/bin:/bin CC_BATS_TASKPOLICY= bin/cc-bats --version` → non-zero **or** an explicit stderr degradation notice; never a silent nice-0 pass | n/a |
@@ -298,6 +299,44 @@ cannot turn a thing OFF is not a seam.
 - **The 81% crash-path exit rate** (3060/3763) is out of scope here but is a real signal for row 2
   (session lifecycle) or row 4 (registry & reaping) — most are deliberate recycles reclassified by
   `classify_death`, but the ratio has never been audited. Named and backlogged, not pursued.
+
+## 9.1 Build-phase measurements — three Darwin constraints that changed the design
+
+Discovered while building M1 (`bin/cc-bats`, `scripts/qos-census.sh`, `tests/qos-chokepoint.bats`).
+All three were found by the artifacts' own tests failing, which is the proof bar working.
+
+1. **`nice` alone does NOT demote on Darwin.** Calibrated with known controls:
+   `nice 19 + taskpolicy -c background` → `NI=20 PRI=4`; **`nice 19` alone → `NI=20 PRI=31`** —
+   still full interactive priority; a plain proc → `PRI=31`. So `taskpolicy -c background` is the
+   load-bearing mechanism and `nice` is nearly cosmetic for contention. **Consequence for row 1:**
+   its documented fallback at `postland-verify.sh:168` ("absent `taskpolicy(8)` ⇒ nice alone, never
+   a hard fail") is right not to hard-fail, but the fallback it names does not achieve the demotion
+   its neighbours assume. `cc-bats` therefore treats nice-only as a **WARNING** state, and the
+   census refuses to count it as covered.
+2. **The background band is a ONE-WAY RATCHET.** A plain child of a demoted parent *inherits*
+   `PRI=4`; `taskpolicy -B -p <pid>` does **not** lift it (verified: stayed 4); and there is no
+   `default`/`none` QoS clamp (only `utility`/`background`/`maintenance`). So a known-FULL control
+   process **cannot be constructed from inside a demoted process**. A two-sided positive control
+   calibrated for a full-priority caller is therefore *unrunnable* from a demoted caller — and
+   reporting FAIL there would be a false conviction (a bound under what it measures can only
+   convict). Hence the census has **four** control states, reads its own band first, and reports
+   `AMBIENT-DEMOTED` rather than `SIGNAL-DEAD` when fired from inside a gate.
+3. **CPU-weighted coverage is the wrong thing to GATE on.** A demoted proc that is *sleeping*
+   contributes `0.0` to `ps %cpu`, so CPU coverage reads 0% even when every proc is correctly
+   demoted. (A CPU-*active* demoted proc registers fine — verified 14.4% at `PRI=4`.) The gate is
+   therefore **proc coverage**; CPU coverage is reported as the impact metric. AC1 was rewritten.
+
+**End-to-end demonstration (2026-07-29, live box).** Baseline census: 4 gate runs in flight,
+**0/47 procs demoted, verdict FAIL** — the defect reproduced from disk truth. With two
+shim-wrapped runs added: **12/57 demoted (21.1%)**, i.e. the shim demotes its entire descendant
+tree. Coverage stays FAIL because the other sessions' runs are unshimmed — which is precisely what
+the PATH activation fixes, and is why AC1 can only be *proven* after activation, during a burst.
+
+**Proof status of M1:** `tests/qos-chokepoint.bats` — **16/16 GREEN** on the change tree;
+**15/16 RED** against the pristine `git archive` of base `6ce912b3` (the sole pass is the
+deliberately tree-independent grep control). The first RED run caught **two vacuous tests of my
+own** — `[ ! -f "$log" ]` and a `grep` absence assertion both pass trivially when their subject
+does not exist — now guarded by explicit existence assertions.
 
 ## 10. Learnings (accumulate; never delete)
 
