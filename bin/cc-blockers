@@ -90,7 +90,15 @@ LAUNCHCTL_BIN="${CC_BLOCKERS_LAUNCHCTL_BIN:-/bin/launchctl}"   # READ-ONLY subco
 PERMPEND_DIR="${CC_PERMPEND_DIR:-/tmp/cc-permission-pending}"   # MUST match hooks/cc-permission-beacon.sh + lead-supervisor.sh
 BEACON_HOOK="${CC_BEACON_HOOK:-$HOME/.claude/hooks/cc-permission-beacon.sh}"
 BEACON_CONFIG_DIRS="${CC_BEACON_CONFIG_DIRS:-$HOME/.claude $HOME/.claude-secondary $HOME/.claude-next $HOME/.claude-tertiary $HOME/.claude-quaternary}"
-BEACON_ACTIVATE_SH="${CC_BEACON_ACTIVATE_SH:-$DEPLOY_REPO/docs/activation/pending-activation/17-permission-beacon-wire-activate.sh}"
+# The LIVE queue copy, NOT the repo path — the opposite choice from DISPATCH_ACTIVATE_SH above, for
+# the opposite reason. That one names the repo because its mirror is content-DRIFTED; this one is
+# byte-identical in both places, and the repo copy is unreachable exactly when this alarm fires: the
+# shared checkout ~/.claude symlinks was 33 commits behind origin/main at land time, so
+# $DEPLOY_REPO/docs/…/17-… did not exist on disk while the row was already telling the operator to
+# run it. A recover command that cannot run is a broken platter (memory
+# silver-platter-exact-commands, deploy-lag-checkout-behind-origin). ~/.claude/autonomy/
+# pending-activation IS the operator's queue and is where the activation-queue reminder points.
+BEACON_ACTIVATE_SH="${CC_BEACON_ACTIVATE_SH:-$HOME/.claude/autonomy/pending-activation/17-permission-beacon-wire-activate.sh}"
 TEAM_ROOTS="${CC_TEAM_ROOTS:-$HOME/.claude/teams $HOME/.claude-secondary/teams $HOME/.claude-tertiary/teams}"
 WATCHDOG_DIR="${CC_WATCHDOG_DIR:-$HOME/.claude/watchdog}"
 # Absorbs ps's 1-second etime granularity. Biased so the ONLY thing a wrong grace can do is stay
