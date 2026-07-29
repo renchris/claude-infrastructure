@@ -121,14 +121,32 @@ is_idl_target() { [ "$1" = "$IDL" ]; }
 nlines() { [ -f "$1" ] && wc -l < "$1" | tr -d ' ' || printf '0'; }
 
 # seal_idl_tail — THE missing caller. Extends the chain over every complete IDL line not yet
-# sealed. Best-effort: records its outcome in seal_note and never fails the run, because
-# bounding unbounded growth outranks sealing it (a stalled rotation is the worse failure).
+# sealed. Best-effort for the RUN's exit status: bounding unbounded growth outranks sealing it,
+# so a seal failure never fails the rotation (a stalled rotation is the worse failure).
+#
+# But best-effort must not mean SILENT. seal_note lands in the run's audit record and NOTHING
+# reads it, the script always exits 0, and cc-fleet's evidence for this job is its stdout log —
+# whose mtime bumps whether or not the seal worked. So a seal failing every run leaves the chain
+# frozen while every observer still reads HEALTHY: this mechanism's own failure mode recurring in
+# its second form (the first was "no caller at all"; this one is "caller present, failing
+# quietly"). Both states that mean TAMPER-EVIDENCE HAS STOPPED ADVANCING — the sealer erroring,
+# and the sealer being unreachable — therefore report on stderr, carrying cc-idl's OWN diagnosis
+# rather than discarding it. A healthy seal stays SILENT: hourly noise would train the operator to
+# ignore the very log this warning has to survive in. `off`/`no-idl` are deliberate and stay quiet.
 seal_idl_tail() {
   [ "$DO_SEAL" = "1" ] || { seal_note="off"; return 1; }
   [ -f "$IDL" ] || { seal_note="no-idl"; return 1; }
-  local bin; bin="$(resolve_cc_idl)" || { seal_note="cc-idl-absent"; return 1; }
-  if CC_IDL="$IDL" "$bin" seal >/dev/null 2>&1; then seal_note="ok"; return 0; fi
-  seal_note="seal-failed"; return 1
+  local bin err
+  bin="$(resolve_cc_idl)" || {
+    seal_note="cc-idl-absent"
+    echo "rotate-autonomy-logs: WARNING cc-idl not found — the IDL hash chain is NOT being extended (tamper-evidence is OFF). Install ~/.claude/bin/cc-idl or set CC_IDL_BIN." >&2
+    return 1
+  }
+  # 2>&1 >/dev/null captures cc-idl's stderr ONLY — its stdout is the routine "sealed N new" line.
+  if err="$(CC_IDL="$IDL" "$bin" seal 2>&1 >/dev/null)"; then seal_note="ok"; return 0; fi
+  seal_note="seal-failed"
+  echo "rotate-autonomy-logs: WARNING cc-idl seal FAILED — chain frozen at $(nlines "$IDL$CHAIN_SUF") link(s) under a $(nlines "$IDL")-line IDL; tamper-evidence stops advancing until this clears. cc-idl said: ${err:-[no output]}" >&2
+  return 1
 }
 
 # close_chain_epoch <idl> <stamp> — retire the sidecar ALONGSIDE the IDL body it seals, then

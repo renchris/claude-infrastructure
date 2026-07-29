@@ -225,3 +225,62 @@ nl_of() { [ -f "$1" ] && wc -l < "$1" | tr -d ' ' || echo 0; }
   grep -q '"orphaned":false' "$CC_IDL"
   ! echo "$output" | grep -q 'ORPHANED at rotation'
 }
+
+# ── (3) BEST-EFFORT MUST NOT MEAN SILENT ────────────────────────────────────────────────────
+# The seal is deliberately best-effort for the run's EXIT STATUS (bounding growth outranks
+# sealing it). The hazard is that "best-effort" silently became "unobservable": seal_note lands
+# in the run record and NOTHING parses it, the run always exits 0, and cc-fleet's evidence for
+# this job is its stdout log — whose mtime bumps whether or not the seal worked. So a seal
+# failing every run freezes the chain while every observer still reads HEALTHY: the original bug
+# ("no caller at all") recurring as "caller present, failing quietly". Each guarantee below is
+# proven by its DISCRIMINATOR PAIR (L2) — loud on failure AND silent on success, because a
+# warning that also fires hourly on the happy path is one the operator learns to ignore.
+
+# Wedge cc-idl's own mutex so the REAL binary fails for a REAL reason (L1: never a stubbed
+# sealer — a stub would prove only that the stub failed). Verified to yield rc 5 + a real message.
+wedge_seal_lock() { mkdir -p "$CHAIN.lock.d"; export CC_IDL_LOCK_WAIT=0 CC_IDL_LOCK_TTL=3600; }
+
+@test "a FAILING seal is LOUD — cc-idl's own reason reaches stderr, not just an unread field" {
+  export ROTATE_MAX_BYTES=100000                   # seal without rotating: isolate the seal path
+  mkidl "$CC_IDL" 5
+  wedge_seal_lock
+  local st=0
+  bash "$ROT" "$CC_IDL" >/dev/null 2>"$BATS_TEST_TMPDIR/err" || st=$?
+  [ "$st" -eq 0 ]                                  # best-effort preserved: the RUN still succeeds
+  grep -q 'seal FAILED' "$BATS_TEST_TMPDIR/err" || false
+  # the diagnosis is cc-idl's own, forwarded — not a generic "something went wrong"
+  grep -q 'could not acquire lock' "$BATS_TEST_TMPDIR/err" || false
+  grep -q '"seal":"seal-failed"' "$CC_IDL" || false # and still recorded in the evidence trail
+}
+
+@test "RED-proof: a HEALTHY seal is SILENT — the warning is not unconditional" {
+  export ROTATE_MAX_BYTES=100000
+  mkidl "$CC_IDL" 5                                # identical to the test above, minus the wedge
+  local st=0
+  bash "$ROT" "$CC_IDL" >/dev/null 2>"$BATS_TEST_TMPDIR/err" || st=$?
+  [ "$st" -eq 0 ]
+  [ ! -s "$BATS_TEST_TMPDIR/err" ]                 # nothing on stderr at all on the happy path
+  grep -q '"seal":"ok"' "$CC_IDL" || false         # proves the seal really ran (not skipped)
+}
+
+@test "an UNREACHABLE cc-idl is LOUD — 'tamper-evidence is off' is never silent either" {
+  export ROTATE_MAX_BYTES=100000
+  mkidl "$CC_IDL" 5
+  export CC_IDL_BIN="$BATS_TEST_TMPDIR/no-such-cc-idl"   # resolves to nothing
+  local st=0
+  bash "$ROT" "$CC_IDL" >/dev/null 2>"$BATS_TEST_TMPDIR/err" || st=$?
+  [ "$st" -eq 0 ]
+  grep -q 'tamper-evidence is OFF' "$BATS_TEST_TMPDIR/err" || false
+  grep -q '"seal":"cc-idl-absent"' "$CC_IDL" || false
+  [ ! -e "$CHAIN" ]                                # and nothing was sealed, as claimed
+}
+
+@test "RED-proof: ROTATE_SEAL=0 stays SILENT — a deliberate opt-out is not a fault" {
+  export ROTATE_MAX_BYTES=100000
+  mkidl "$CC_IDL" 5
+  local st=0
+  ROTATE_SEAL=0 bash "$ROT" "$CC_IDL" >/dev/null 2>"$BATS_TEST_TMPDIR/err" || st=$?
+  [ "$st" -eq 0 ]
+  [ ! -s "$BATS_TEST_TMPDIR/err" ]                 # off-by-choice must not page as off-by-failure
+  grep -q '"seal":"off"' "$CC_IDL" || false
+}
