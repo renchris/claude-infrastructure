@@ -36,11 +36,12 @@ for _c in "$HOME"/Library/Caches/ms-playwright/chromium-*/chrome-mac/Chromium.ap
 done
 [[ -x "$CHROME" ]] || { echo "banner-shots: no playwright Chromium found" >&2; exit 1; }
 
-ASSET=""; TIMES="0"; BG="dark"; OUT="./shots"; WIDTH=900; SCALE=2; REDUCED=0; LINT=0
+ASSET=""; TIMES="0"; BG="dark"; OUT="./shots"; WIDTH=900; SCALE=2; REDUCED=0; LINT=0; SCHEME=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --times)          TIMES="$2"; shift 2 ;;
     --bg)             BG="$2"; shift 2 ;;
+    --scheme)         SCHEME="$2"; shift 2 ;;
     --out)            OUT="$2"; shift 2 ;;
     --width)          WIDTH="$2"; shift 2 ;;
     --scale)          SCALE="$2"; shift 2 ;;
@@ -50,6 +51,22 @@ while [[ $# -gt 0 ]]; do
     *)                ASSET="$1"; shift ;;
   esac
 done
+
+# --scheme drives `prefers-color-scheme` INSIDE the SVG. Distinct from --bg, which only paints the
+# page behind the image: an asset with a full-bleed background plate hides the page entirely, so
+# --bg light on such an asset renders byte-identically to --bg dark and silently reports nothing.
+# That is exactly what happened to v5a, whose light theme was never actually rendered.
+# Values measured against this Chromium (141.0.7390.37), which defaults to DARK when unset:
+#   0 -> dark matches   1 -> light matches   2 -> NEITHER matches (base stylesheet only)
+# `none` is the useful third state: what a renderer without color-scheme support shows.
+SCHEME_FLAG=""
+case "$SCHEME" in
+  "")          ;;
+  dark)        SCHEME_FLAG="--blink-settings=preferredColorScheme=0" ;;
+  light)       SCHEME_FLAG="--blink-settings=preferredColorScheme=1" ;;
+  none)        SCHEME_FLAG="--blink-settings=preferredColorScheme=2" ;;
+  *)           echo "banner-shots: --scheme must be dark|light|none (got '$SCHEME')" >&2; exit 2 ;;
+esac
 [[ -n "$ASSET" && -f "$ASSET" ]] || { echo "banner-shots: asset not found: ${ASSET:-<none>}" >&2; exit 2; }
 
 ASSET=$(cd "$(dirname "$ASSET")" && pwd)/$(basename "$ASSET")
@@ -59,18 +76,48 @@ WORK=$(mktemp -d); trap 'rm -rf "$WORK"' EXIT
 
 # The freeze is exact only while no element carries a comma-list of animations. Fail loudly
 # rather than emit a reference render that is quietly wrong.
+#
+# Commas at the TOP LEVEL of the value separate animations. Commas nested inside a function do not:
+# `steps(1,end)` and `cubic-bezier(.2,.7,0,1)` are single animations with a comma in their timing
+# function. Testing the raw value for `,` therefore FALSE-FAILS every stepped or eased animation —
+# which is most of them, since steps() is what keeps pixel art from interpolating into mush.
+# (Measured 2026-07-29: v5a-long-walk.svg failed this lint on `animation: wA .5s steps(1,end)
+# infinite`, a perfectly legal single animation. The lint was wrong, not the asset.)
 if [[ "$LINT" -eq 1 ]]; then
   python3 - "$ASSET" <<'PY'
 import re, sys, pathlib
+
+def top_level_commas(value: str) -> int:
+    """Commas at nesting depth 0 — the only ones that separate animations."""
+    depth = n = 0
+    for ch in value:
+        if ch == '(':
+            depth += 1
+        elif ch == ')':
+            depth = max(0, depth - 1)
+        elif ch == ',' and depth == 0:
+            n += 1
+    return n
+
 svg = pathlib.Path(sys.argv[1]).read_text()
 multi, delayed = [], []
 TIME = re.compile(r'(?<![\w.])-?\d*\.?\d+m?s(?![\w.])')
 for prop in ('animation', 'animation-name', 'animation-delay', 'animation-duration'):
-    for m in re.finditer(rf'(?<![\w-]){prop}\s*:\s*([^;{{}}]+)', svg):
+    # The value ends at `;`, at a rule brace — or at a QUOTE. Animation properties are routinely
+    # set through an inline style="animation-delay:-3s", and a value class that does not stop at
+    # the closing quote runs on through the rest of the element, picking up unrelated attributes:
+    # font-family="ui-monospace,Menlo,monospace" then supplies a top-level comma and the element
+    # is reported as carrying two animations. A CSS value cannot contain a bare quote here.
+    for m in re.finditer(rf'(?<![\w-]){prop}\s*:\s*([^;{{}}"\']+)', svg):
         value = m.group(1)
         line = svg.count('\n', 0, m.start()) + 1
-        # a comma inside animation shorthand/longhand means more than one animation on the element
-        if ',' in value:
+        # Commas at the TOP LEVEL of the value separate animations. Commas nested inside a function
+        # do not: `steps(1,end)` and `cubic-bezier(.2,.7,0,1)` are single animations with a comma in
+        # their timing function. Testing the raw value for `,` false-fails every stepped or eased
+        # animation — which is most of them, since steps() is what keeps pixel art from interpolating
+        # into mush. (Measured 2026-07-29: v5a-long-walk.svg failed on `animation: wA .5s
+        # steps(1,end) infinite`, a perfectly legal single animation. The lint was wrong, not it.)
+        if top_level_commas(value):
             multi.append(f'  line {line}: {prop}: {value.strip()}')
             continue
         # An AUTHORED delay is clobbered by the freeze, which sets animation-delay on `*` to reach
@@ -227,11 +274,16 @@ HTML
   magick "$png" -crop "${cw}x${ch}+0+0" +repage "$png"
 }
 
-FLAGS=""
-[[ "$REDUCED" -eq 1 ]] && FLAGS="--force-prefers-reduced-motion"
+FLAGS="$SCHEME_FLAG"
+[[ "$REDUCED" -eq 1 ]] && FLAGS="$FLAGS --force-prefers-reduced-motion"
+
+# The scheme is part of the render's identity, so it is part of the filename — otherwise a light
+# render silently overwrites the dark one at the same timestamp and the difference is invisible.
+SUFFIX="$BG"
+[[ -n "$SCHEME" ]] && SUFFIX="$BG-$SCHEME"
 
 if [[ "$REDUCED" -eq 1 ]]; then
-  png="$OUT/${STEM}-${BG}-reduced.png"
+  png="$OUT/${STEM}-${SUFFIX}-reduced.png"
   shoot "$ASSET" "$png" "$FLAGS"
   echo "$png"
   exit 0
@@ -240,7 +292,7 @@ fi
 IFS=',' read -r -a TS <<< "$TIMES"
 for t in "${TS[@]}"; do
   tag=$(printf '%s' "$t" | tr '.' 'p')
-  png="$OUT/${STEM}-${BG}-t${tag}.png"
+  png="$OUT/${STEM}-${SUFFIX}-t${tag}.png"
   frozen="$WORK/frozen-$tag.svg"
   if [[ "$ASSET" == *.svg ]]; then freeze "$ASSET" "$t" "$frozen"; else frozen="$ASSET"; fi
   shoot "$frozen" "$png" "$FLAGS"
