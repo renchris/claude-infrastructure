@@ -66,7 +66,7 @@ def svg_uri(p: Path) -> str:
 # 0.0076 against lossless, and at 320% magnification the sky gradient shows no banding and the pixel
 # edges stay crisp. (near-lossless=40 was also tried: RMSE exactly 0, but 64 KB, no better than
 # plain lossless — worth knowing before reaching for it again.)
-_CACHE = Path("/tmp/banner-compare-webp2")
+_CACHE = Path("/tmp/banner-compare-webp3")
 
 
 def still_uri(src: Path, width: int = 620, quality: int = 96) -> str:

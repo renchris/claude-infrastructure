@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import math
 import random
+import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -77,6 +78,18 @@ def fmt(v: float) -> str:
     if isinstance(v, int) or float(v).is_integer():
         return str(int(v))
     return f"{v:.2f}".rstrip("0").rstrip(".")
+
+
+def seed_of(name: str) -> int:
+    """A seed that is stable ACROSS PROCESSES.
+
+    `hash()` on a str is salted per interpreter run (PEP 456), so `random.Random(hash(cls))` reseeds
+    differently on every invocation and the generator silently stops being reproducible: the file
+    still passes every structural check — seam, aliveness, lint — because those test properties of
+    the output rather than its identity, so nothing reports a problem. Caught only by regenerating
+    and comparing hashes against the committed asset.
+    """
+    return zlib.crc32(name.encode("utf-8")) & 0xFFFFFFFF
 
 
 def in_keepout(x: float, y: float, pad: float = 0) -> bool:
@@ -564,7 +577,7 @@ def mounds(art: Art, rng: random.Random) -> str:
         divides_P(dur)
 
         def body(shift: float, hgt=hgt, n=n, cls=cls, veg=veg) -> str:
-            r2 = random.Random(hash(cls) % 9999)
+            r2 = random.Random(seed_of(cls))
             s = []
             gap = TILE / n
             for i in range(n):
@@ -609,7 +622,7 @@ def ground_detail(art: Art) -> str:
         divides_P(dur)
 
         def body(shift: float, n=n, cls=cls, y0=y0, y1=y1) -> str:
-            r2 = random.Random(hash(cls) % 9999)
+            r2 = random.Random(seed_of(cls))
             s = []
             gap = TILE / n
             for i in range(n):
