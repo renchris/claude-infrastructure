@@ -194,7 +194,7 @@ A mode without an answer is an unfinished design.
 |---|---|---|---|
 | **M1** | Gate corpus runs at interactive priority, starving 31 sessions | 72/103 bats procs `pri=31`; QoS coverage 0% of CPU | **Move the QoS band from the caller to the tool.** A `bats` shim earlier on `PATH` re-execs the real bats under `nice -n 19` + `taskpolicy -c background`. Inversion: *the tool demotes itself, so no caller can forget.* O(1) code, covers hand-typed, scripted, and launchd invocations alike. |
 | **M2** | Load-gated admission control amplifies contention | `gate_admit` deleted: ~2 h sleeping/run; 5 gates self-starving at load 16–18 vs their own ceiling of 8 | **Keep it deleted (R1).** Demote priority; never queue, never sleep. The existing lint at `postland-verify.sh:1154` is the enforcement — extend it to the new shim rather than duplicating policy. |
-| **M3** | Stop chain costs 3688 ms/turn; one hook is 73% of it | `operator-readout.sh` = 2711 ms, min-of-2 | **Make the readout's cost proportional to *change*, not to every turn.** It re-renders disk truth unconditionally; it already has damping semantics for *display* (15-min re-assert) — push that damping *below* the expensive reads so an unchanged state is a cheap stat, not a full render. |
+| **M3** ✅ **BUILT** | Stop chain costs 3688 ms/turn; one hook is 73% of it | `operator-readout.sh` = 2711 ms, min-of-2 | **Make the readout's cost proportional to *change*, not to every turn.** It re-renders disk truth unconditionally; it already has damping semantics for *display* (15-min re-assert) — push that damping *below* the expensive reads so an unchanged state is a cheap stat, not a full render. |
 | **M4** | Watchdog spawn/exit ledger does not balance (~102 lost); liveness test is unsound past one PID wrap | log accounting; `lead-crash-watchdog.sh:601` bare `kill -0` vs R5; PID wrap every 5.05 h | **pid+lstart liveness + a census leg with a positive control.** Makes "no orphans" distinguishable from "nobody looked" (R6), and makes the residue countable before it is optimised. |
 | **M5** | 31 unbounded `osascript` sites share one serialized AppleEvent channel | `grep`; documented machine-wide iTerm2/AppleEvent wedge 2026-07-26, cited in `lead-crash-watchdog.sh:18` | **Universalize the bound that already exists.** The `lcw_osa` helper is the proven shape; hoist it to one sourced helper and convert the 31 bare sites. Bound must fit what it bounds (R7) — not idle-calibrated. |
 | **M6** | Session ceiling is unstated, so pressure would be discovered by swapping | 44.7 GB @30, 57.2 GB @50, no guard | **State the ceiling (≈50) and alarm on the leading indicator** (compressor growth / swap > 0), not on the lagging one (already swapping). |
@@ -249,9 +249,9 @@ Each criterion names the exact command whose output proves it. Narration does no
 | **AC3** | The shim covers the hand-typed form | `cd <worktree> && timeout 5 bats --version` then census the child's `pri` → `≤10` | n/a (no shim) |
 | **AC4** | The shim FAILS LOUD when `taskpolicy` is absent (R4) | `PATH=/usr/bin:/bin CC_BATS_TASKPOLICY= bin/cc-bats --version` → non-zero **or** an explicit stderr degradation notice; never a silent nice-0 pass | n/a |
 | **AC5** | `gate_admit` stays absent (R1/M2) | `grep -c '^[[:space:]]*gate_admit' scripts/postland-verify.sh` → `0`; the existing lint still passes | `0` ✓ |
-| **AC6** | Stop chain ≤1500 ms | min-of-3 timing of the 9 Stop hooks with a probe payload | **3688 ms** |
-| **AC7** | `operator-readout.sh` unchanged-state path ≤300 ms | min-of-3 with an unchanged state marker | **2711 ms** |
-| **AC8** | The rendered readout block is byte-identical before/after M3 | diff `operator-readout.sh --render` output across the change on a fixed fixture | — |
+| **AC6** ✅ **MET** | Stop chain ≤1500 ms | min-of-2/3 timing of the 9 Stop hooks, steady state | **3688 ms → 882 ms** |
+| **AC7** ✅ **MET** | `operator-readout.sh` unchanged-state path ≤300 ms | min-of-3, warm latch | **2711 ms → 140 ms** (19×; cold render still 3221 ms, by design) |
+| **AC8** ✅ **MET** | The rendered readout block is byte-identical before/after M3 | `--render` old-vs-new on the SAME tree → identical sha `707c143f78f66e62` | — |
 | **AC9** | Watchdog census balances, with a positive control (R6) | `cc-reaper --watchdog-census` → `spawned/live/exited/lost` + a `control=OK` line proving the detector fires | ledger off by **~102**, no census exists |
 | **AC10** | Watchdog liveness uses pid+lstart (R5) | `grep -c 'lstart' hooks/lead-crash-watchdog.sh` → `>0`; RED-proof asserts a recycled-PID fixture is classified dead | bare `kill -0`, line 601 |
 | **AC11** | 0 unbounded `osascript` sites in `hooks/` (R7) | `grep -rn '^[^#]*osascript' hooks/ \| grep -vE 'timeout\|_osa\|TB' \| wc -l` → `0` | **31** repo-wide |
@@ -541,6 +541,43 @@ the PATH activation fixes, and is why AC1 can only be *proven* after activation,
 deliberately tree-independent grep control). The first RED run caught **two vacuous tests of my
 own** — `[ ! -f "$log" ]` and a `grep` absence assertion both pass trivially when their subject
 does not exist — now guarded by explicit existence assertions.
+
+## 9.2 M3 BUILT — the readout now damps before it pays
+
+`hooks/operator-readout.sh`: a **cheap pre-render change-stamp** gates `render_block`. The stamp is
+`stat` on the activation dir / decisions dir / backlog file, plus this cwd's `HEAD` and dirty count,
+plus the shared checkout's `origin/main` — read with `rev-parse` (a ref read), never `rev-list` (a
+commit walk). Two bounded `git` calls and three `stat`s replace ~100 forks.
+
+| Measure | Before | After |
+|---|---|---|
+| `operator-readout.sh`, steady-state turn | **2711 ms** | **140 ms** (19x) |
+| Full Stop chain, steady state | **3688 ms** | **882 ms** (AC6 met) |
+| Rendered block | - | **byte-identical** (`--render`, old vs new, same tree) |
+| `CC_READOUT_DAMP=off` | - | 3626 ms - restores the old path exactly |
+
+**Safety properties, deliberately chosen:**
+- The stamp may only suppress **inside the TTL the latch already enforced**. An expired latch always
+  re-renders, so the worst case is a stamp-invisible change going unreported for <= TTL - the
+  staleness bound the operator already lives with. It can never suppress *past* the TTL.
+- Dirty-tree state is read with a real `git status`, **not** a `.git/index` mtime, so an unstaged
+  edit cannot slip through that window.
+- When the stamp moves but content doesn't, the new stamp is persisted **with the original
+  timestamp**. Refreshing the ts there would let a never-changing block suppress its own 15-minute
+  re-assert indefinitely just by being touched - a silent loss of the operator's re-assert guarantee.
+- A pre-M3 two-field latch is never read as a match; an absent field is "unknown", which falls
+  through to a render and upgrades the format.
+
+**Proof:** `tests/operator-readout.bats` **26/26 green**; **4 of 5** changed/new tests RED against a
+pristine `git archive` of `c43ed39c` (the fifth is a deliberate behaviour-preservation positive
+control that must pass in both trees).
+
+**One existing test was deliberately changed, not relaxed.** Test 14 asserted the abstain reason
+`latched-ttl`; the cheap gate introduces a second reason (`stamp-unchanged-ttl`), so the test now
+names **both** paths - strictly more precise than before. Verified first that the reason string has
+no consumer outside that file (`grep -rn 'latched-ttl'` over `*.sh`/`*.bats`/`*.md` **and** the
+extensionless `bin/` - hits only the hook and the test). Recorded here per the map's binding rule
+that a test encoding a superseded premise may be changed only deliberately and never quietly.
 
 ## 10. Learnings (accumulate; never delete)
 

@@ -179,19 +179,107 @@ EOS
 
 # ── damping ──────────────────────────────────────────────────────────────────────────────────────
 
-@test "damping: unchanged within TTL → abstain latched-ttl; after TTL → re-fires; change → immediate" {
+@test "damping: unchanged within TTL → abstain (cheap stamp path); after TTL → re-fires; change → immediate" {
+  # UPDATED for row 13 M3 (MACHINE_CAPACITY_V2.md §8.5.3), deliberately — not by relaxation.
+  # The damp used to hash the RENDERED block, so it suppressed OUTPUT and saved ZERO CPU. A cheap
+  # pre-render stamp now abstains BEFORE render_block, which introduces a SECOND abstain reason.
+  # This test previously asserted only "latched-ttl"; it now names BOTH paths, which is strictly
+  # more precise. The reason string has no consumer outside this file (verified: grep -rn
+  # 'latched-ttl' over *.sh/*.bats/*.md and the extensionless bin/ hits only the hook and this test).
   printf '#!/bin/bash\n' > "$CC_ACTIVATION_DIR/15-z-activate.sh"
   w="$(mkrepo_landed f)"
   CC_OPREADOUT_NOW=1000000 hookrun "$w" | jq -e '.systemMessage' >/dev/null
+  # nothing moved at all ⇒ the CHEAP gate short-circuits before paying for a render
   out2="$(CC_OPREADOUT_NOW=1000100 hookrun "$w")"
-  [ -z "$out2" ]
-  grep -q '"reason":"latched-ttl:100s<900s"' "$CC_IDL"
+  [ -z "$out2" ] || false
+  grep -q '"reason":"stamp-unchanged-ttl:100s<900s"' "$CC_IDL" || false
+  # after the TTL it must re-assert even though the stamp is STILL unchanged
   out3="$(CC_OPREADOUT_NOW=1001000 hookrun "$w")"
   printf '%s' "$out3" | jq -e '.systemMessage' >/dev/null
   # a NEW step re-renders immediately even inside the TTL window
   printf '#!/bin/bash\n' > "$CC_ACTIVATION_DIR/16-new-activate.sh"
   out4="$(CC_OPREADOUT_NOW=1001010 hookrun "$w")"
   printf '%s' "$out4" | jq -r '.systemMessage' | grep -q '16-new-activate'
+}
+
+@test "M3: stamp MOVED but content identical → render is paid, then latched-ttl, and the TTL is NOT extended" {
+  # The subtle correctness case. When the stamp moves the cheap gate cannot short-circuit, the
+  # render is paid, and the CONTENT hash then decides. Two things must hold:
+  #   (a) the abstain is the CONTENT path (latched-ttl), not the stamp path;
+  #   (b) the stored timestamp keeps its ORIGINAL value — if a no-op render refreshed the ts, a
+  #       never-changing block could suppress its own 15-min re-assert indefinitely just by being
+  #       touched, which is a silent loss of the operator's re-assert guarantee.
+  printf '#!/bin/bash\n' > "$CC_ACTIVATION_DIR/15-z-activate.sh"
+  w="$(mkrepo_landed f)"
+  CC_OPREADOUT_NOW=1000000 hookrun "$w" | jq -e '.systemMessage' >/dev/null
+  latch="$(ls "$CC_OPREADOUT_STATE_DIR"/*.last | head -1)"
+  read -r h0 ts0 st0 < "$latch"
+  [ "$ts0" = "1000000" ] || false
+  [ -n "$st0" ] || false                        # 3-field latch is the new format
+  # Move the stamp WITHOUT changing the block: the backlog file's mtime is in the stamp, and an
+  # empty backlog renders no line either way.
+  touch "$CC_BACKLOG_FILE"
+  out="$(CC_OPREADOUT_NOW=1000200 hookrun "$w")"
+  [ -z "$out" ] || false
+  grep -q '"reason":"latched-ttl:200s<900s"' "$CC_IDL" || false
+  read -r h1 ts1 st1 < "$latch"
+  [ "$h1" = "$h0" ] || false                    # content genuinely unchanged
+  [ "$ts1" = "1000000" ] || false               # (b) ts preserved, NOT bumped to 1000200
+  [ "$st1" != "$st0" ] || false                 # (a) new stamp persisted ⇒ next turn is cheap
+}
+
+@test "M3: a PRE-M3 two-field latch is never mistaken for a match — it re-renders and upgrades the format" {
+  # Backward-compat. Latches already on disk carry "<hash> <ts>" with no stamp field. An ABSENT
+  # field must never read as equality, or the first turn after the upgrade would be suppressed.
+  printf '#!/bin/bash\n' > "$CC_ACTIVATION_DIR/15-z-activate.sh"
+  w="$(mkrepo_landed f)"
+  CC_OPREADOUT_NOW=1000000 hookrun "$w" | jq -e '.systemMessage' >/dev/null
+  latch="$(ls "$CC_OPREADOUT_STATE_DIR"/*.last | head -1)"
+  read -r h0 _ts0 _st0 < "$latch"
+  printf '%s %s\n' "$h0" 1000000 > "$latch"      # downgrade to the pre-M3 format
+  out="$(CC_OPREADOUT_NOW=1000100 hookrun "$w")"
+  [ -z "$out" ] || false
+  # content is unchanged so it still abstains — but via the CONTENT path, which proves the render ran
+  grep -q '"reason":"latched-ttl:100s<900s"' "$CC_IDL" || false
+  read -r _h1 _ts1 st1 < "$latch"
+  [ -n "$st1" ] || false                         # format upgraded to 3 fields
+}
+
+@test "M3: CC_READOUT_DAMP=off bypasses the cheap gate (kill switch restores the old cost path)" {
+  # NON-VACUITY GUARD. Caught by the RED-proof: asserting only "no stamp reason appears when the
+  # switch is off" passes trivially against the PRE-M3 hook, which has no stamp path at all — the
+  # test would have gone green while proving nothing about the switch. So assert BOTH directions:
+  # the stamp path must be OBSERVED with the switch on, and then absent with it off.
+  printf '#!/bin/bash\n' > "$CC_ACTIVATION_DIR/15-z-activate.sh"
+  w="$(mkrepo_landed f)"
+  CC_OPREADOUT_NOW=1000000 hookrun "$w" | jq -e '.systemMessage' >/dev/null
+
+  # (1) switch ON (default): the cheap stamp path must actually fire
+  : > "$CC_IDL"
+  out_on="$(CC_OPREADOUT_NOW=1000100 hookrun "$w")"
+  [ -z "$out_on" ] || false
+  grep -q '"reason":"stamp-unchanged-ttl:100s<900s"' "$CC_IDL" || false
+
+  # (2) switch OFF: same state, but the abstain must now come from the CONTENT latch
+  : > "$CC_IDL"
+  out_off="$(CC_OPREADOUT_NOW=1000200 CC_READOUT_DAMP=off hookrun "$w")"
+  [ -z "$out_off" ] || false
+  grep -q '"reason":"latched-ttl:200s<900s"' "$CC_IDL" || false
+  ! grep -q 'stamp-unchanged-ttl' "$CC_IDL" || false
+}
+
+@test "M3: POSITIVE CONTROL — the cheap gate cannot suppress a genuinely new manual step" {
+  # The one failure mode that would matter operationally: a pre-render gate abstaining while a real
+  # operator step is pending. The stamp includes the activation dir's mtime precisely so that cannot
+  # happen — this asserts the detector FIRES rather than trusting the reasoning.
+  w="$(mkrepo_landed f)"
+  printf '#!/bin/bash\n' > "$CC_ACTIVATION_DIR/15-z-activate.sh"
+  CC_OPREADOUT_NOW=1000000 hookrun "$w" | jq -e '.systemMessage' >/dev/null
+  out2="$(CC_OPREADOUT_NOW=1000050 hookrun "$w")"
+  [ -z "$out2" ] || false                        # damped, as expected
+  printf '#!/bin/bash\n' > "$CC_ACTIVATION_DIR/17-urgent-activate.sh"
+  out3="$(CC_OPREADOUT_NOW=1000060 hookrun "$w")"
+  printf '%s' "$out3" | jq -r '.systemMessage' | grep -q '17-urgent-activate' || false
 }
 
 # ── guards ───────────────────────────────────────────────────────────────────────────────────────

@@ -321,6 +321,62 @@ if [ -n "$CWD" ]; then
   { [ -n "$sc" ] && [ -f "$sc" ]; } && abstain "continue-armed"
 fi
 
+# ── PRE-RENDER CHEAP STAMP (row 13 M3 — MACHINE_CAPACITY_V2.md §8.5.3) ─────────────────────────
+# The damping latch below is correct but PAID FOR AFTER THE FACT: its input is the RENDERED block,
+# so the 900 s TTL suppressed OUTPUT and saved ZERO CPU. render_block costs ~2711 ms (73% of the
+# 3688 ms Stop chain) — 24 command substitutions, ~100 forks, git x7 / jq x6 / cc-backlog x5, plus a
+# `rev-list --count HEAD..origin/main` walk against the ONE shared checkout from EVERY session's
+# EVERY Stop. At 30 sessions that is ~30x100 forks per turn-round against one contended .git, and
+# the hook chain is fork-dominated (49% of its cost is scheduler queueing it causes itself), so this
+# is the O(N^2) term, not a constant.
+#
+# The inversion: decide whether anything MOVED using only cheap reads, and render only when it did
+# (or when the TTL expires and the block must re-assert). This dissolves the class
+# "content-hash latch pays full cost to decide it had nothing to say".
+#
+# The stamp covers every input that can change the block: the activation queue, the decisions store,
+# the backlog file, this cwd's commit + dirty state, and the shared checkout's trunk position. Two
+# bounded `git` calls + a few `stat`s — measured ~60-100 ms vs 2711 ms.
+#
+# SAFETY: the stamp is only ever permitted to SUPPRESS inside the TTL the latch already enforced, so
+# the worst case is a change the stamp cannot see going unreported for at most TTL — the same
+# staleness bound the operator already lives with. It is NOT permitted to suppress past the TTL: an
+# expired latch always re-renders. Dirty-tree state is read with a real `git status` rather than an
+# `.git/index` mtime precisely so an unstaged edit cannot slip through that window.
+# Kill switch: CC_READOUT_DAMP=off  → skip the cheap gate entirely (restores today's cost exactly).
+cheap_stamp() {
+  local cwd="${1:-}" s="" p
+  for p in "$ACT_DIR" "$DEC_DIR" "$BLG_FILE"; do
+    s="$s|$(stat -f '%m/%z' "$p" 2>/dev/null || printf -)"
+  done
+  if [ -n "$cwd" ]; then
+    s="$s|$(git -C "$cwd" rev-parse HEAD 2>/dev/null || printf -)"
+    s="$s|$(git -C "$cwd" status --porcelain --untracked-files=no 2>/dev/null | wc -l | tr -d ' ')"
+  else
+    s="$s|-|-"
+  fi
+  # trunk position via rev-parse (a ref READ), never rev-list (a commit WALK) — same fact, no walk.
+  s="$s|$(git -C "$SHARED" rev-parse origin/main 2>/dev/null || printf -)"
+  printf '%s' "$s"
+}
+
+mkdir -p "$STATE_DIR" 2>/dev/null || true
+SKEY="$(printf '%s|%s|%s' "$CFG" "$SID" "${CWD:-}" | shasum 2>/dev/null | cut -c1-16)"
+LATCH="$STATE_DIR/$SKEY.last"
+STAMP=""
+if [ "${CC_READOUT_DAMP:-on}" != "off" ] && [ -n "$SKEY" ] && [ -f "$LATCH" ]; then
+  STAMP="$(cheap_stamp "${CWD:-}" | shasum 2>/dev/null | cut -c1-16)"
+  # Latch line format: "<content-hash> <ts> [<stamp>]". A 2-field line is the PRE-M3 format — treat
+  # a missing stamp as "unknown", which falls through to a full render and rewrites the new format.
+  # Never infer equality from an absent field.
+  read -r _lh _lts _lstamp < "$LATCH" 2>/dev/null || { _lh=""; _lts=0; _lstamp=""; }
+  case "$_lts" in ''|*[!0-9]*) _lts=0 ;; esac
+  if [ -n "$STAMP" ] && [ -n "${_lstamp:-}" ] && [ "$_lstamp" = "$STAMP" ] \
+     && [ $(( NOW - _lts )) -lt "$TTL" ]; then
+    abstain "stamp-unchanged-ttl:$(( NOW - _lts ))s<${TTL}s"
+  fi
+fi
+
 # Render in THIS shell (temp-file redirect, not $(…)) so render_block's RUNG/TOTAL survive.
 TMPB="$(mktemp "${TMPDIR:-/tmp}/opreadout-blk.XXXXXX" 2>/dev/null)" || abstain "no-mktemp"
 render_block "${CWD:-}" > "$TMPB" 2>/dev/null
@@ -328,19 +384,27 @@ BLOCK="$(cat "$TMPB" 2>/dev/null || true)"; rm -f "$TMPB"
 [ -n "$BLOCK" ] || abstain "nothing-to-surface"
 
 # Damping latch: change → render now; unchanged → re-assert only after TTL.
-mkdir -p "$STATE_DIR" 2>/dev/null || true
-SKEY="$(printf '%s|%s|%s' "$CFG" "$SID" "${CWD:-}" | shasum 2>/dev/null | cut -c1-16)"
+# (STATE_DIR/SKEY/LATCH are established by the pre-render stamp gate above — not recomputed here.)
 HASH="$(printf '%s' "$BLOCK" | shasum 2>/dev/null | cut -c1-16)"
 if [ -n "$SKEY" ] && [ -n "$HASH" ]; then
-  LATCH="$STATE_DIR/$SKEY.last"
+  # The stamp may not have been computed above (kill switch, or no latch file existed). Compute it
+  # now so the latch we write is always usable by the NEXT turn's cheap gate — a latch missing its
+  # stamp field silently disables the optimization forever after.
+  [ -n "$STAMP" ] || STAMP="$(cheap_stamp "${CWD:-}" | shasum 2>/dev/null | cut -c1-16)"
   if [ -f "$LATCH" ]; then
-    read -r prev_hash prev_ts < "$LATCH" 2>/dev/null || { prev_hash=""; prev_ts=0; }
+    read -r prev_hash prev_ts _prev_stamp < "$LATCH" 2>/dev/null || { prev_hash=""; prev_ts=0; }
     case "$prev_ts" in ''|*[!0-9]*) prev_ts=0 ;; esac
     if [ "$prev_hash" = "$HASH" ] && [ $(( NOW - prev_ts )) -lt "$TTL" ]; then
+      # Content unchanged, but the STAMP moved (else the cheap gate would already have abstained).
+      # Persist the new stamp while KEEPING prev_ts, so (a) the next turn short-circuits cheaply
+      # instead of re-rendering this same block, and (b) the TTL still measures from the last real
+      # render rather than being silently extended by a no-op. Getting (b) wrong would let a
+      # never-changing block suppress its own re-assert indefinitely.
+      printf '%s %s %s\n' "$HASH" "$prev_ts" "$STAMP" > "$LATCH" 2>/dev/null || true
       abstain "latched-ttl:$(( NOW - prev_ts ))s<${TTL}s"
     fi
   fi
-  printf '%s %s\n' "$HASH" "$NOW" > "$LATCH" 2>/dev/null || true
+  printf '%s %s %s\n' "$HASH" "$NOW" "$STAMP" > "$LATCH" 2>/dev/null || true
 fi
 
 NSTEPS="$(printf '%s\n' "$BLOCK" | grep -cE '^ [0-9]+ (▶|◆)' 2>/dev/null)"
