@@ -22,6 +22,12 @@
 #   reap    [--dry-run]                                          → stale-claim maintenance sweep
 #   compact [--older-than-days N]                                (default N=30)
 #
+# KICK ON WRITE (S5): a successful `add` fires ONE debounced, detached `cc-dispatch --decide` pass
+# so new work gets a decision in seconds instead of waiting out the launchd interval. Strictly
+# best-effort — it can never change `add`'s exit code, its stdout (the id) or the ledger record.
+# Switches: CC_BACKLOG_KICK=off · CC_DISPATCH_KICK_DEBOUNCE_S (30) · CC_BACKLOG_KICK_MARKER ·
+# CC_BACKLOG_KICK_BIN. The launchd timer remains the backstop that guarantees the bound.
+#
 # REOPEN GUARDS (added 2026-07-20 after a60d62a215f1 → 6488617 burned a peer session). `reopen`
 # was the ONE transition with no status check at all: it would resurrect a terminal item and it
 # would yank an item out from under a worker that was still running. Both put the item back at
@@ -752,10 +758,55 @@ cmd_reap() {
   fi
 }
 
+# ── S5 KICK-ON-WRITE (AUTONOMY_DISPATCH_V2 §3 S5) ────────────────────────────────────────────────
+# `add` is the ONLY moment new work enters the ledger, so the writer kicking one decision pass is
+# what removes the average wait from the 5-minute decision bound (§7 A2). The launchd timer
+# (StartInterval 300) is the BACKSTOP and it, not this, is what GUARANTEES the bound — which is
+# precisely why every failure mode here is silent. A kick that never fires costs latency the
+# backstop already covers; a kick that is noisy, slow, or fd-holding BREAKS ITS CALLER. `cc-discover`
+# runs `id="$(cc-backlog add …)"` in a loop, so a background child inheriting the caller's stdout
+# keeps the command substitution's pipe OPEN and hangs the whole discovery pass — the child is
+# therefore spawned inside `( … & )` (reparented immediately, never waited on) with all three fds
+# redirected. `add`'s exit code, its stdout (exactly the id — callers parse it) and its ledger
+# record are untouched on every path below, including every failure path.
+#
+# ORDER IS LOAD-BEARING: debounce-check → stamp the marker → spawn. Stamping BEFORE the spawn means
+# a kick whose binary is missing or which exits non-zero still consumes the debounce window (the
+# backstop covers the lost pass), and it is what makes "the kick was attempted" observable at all.
+# An unwritable marker degrades to no-debounce rather than to no-kick: silently disabling the
+# mechanism is the failure class this whole rebuild exists to end (F7), and cc-dispatch's own
+# singleton (S6, skip-not-queue) bounds the blast radius of a burst that slips through.
+kick_bin() {
+  local b="${CC_BACKLOG_KICK_BIN:-}"
+  [ -n "$b" ] || b="$(command -v cc-dispatch 2>/dev/null || true)"
+  [ -n "$b" ] || b="$HOME/.claude/bin/cc-dispatch"
+  printf '%s' "$b"
+}
+
+dispatch_kick() {
+  local marker deb now marker_ts bin
+  [ "${CC_BACKLOG_KICK:-on}" = "off" ] && return 0            # kill switch (§6)
+  deb="${CC_DISPATCH_KICK_DEBOUNCE_S:-30}"
+  case "$deb" in ''|*[!0-9]*) deb=30 ;; esac
+  marker="${CC_BACKLOG_KICK_MARKER:-$HOME/.claude/autonomy/.dispatch-kick}"
+  now="$(date +%s 2>/dev/null || true)"
+  case "${now:-}" in ''|*[!0-9]*) return 0 ;; esac            # no clock ⇒ no kick; backstop covers
+  marker_ts="$(stat -f %m "$marker" 2>/dev/null || true)"     # BSD stat; absent ⇒ 0 ⇒ never debounced
+  case "${marker_ts:-}" in ''|*[!0-9]*) marker_ts=0 ;; esac
+  [ "$((now - marker_ts))" -lt "$deb" ] && return 0           # a burst of adds collapses to one pass
+  mkdir -p "$(dirname "$marker")" 2>/dev/null || true
+  : > "$marker" 2>/dev/null || true
+  bin="$(kick_bin)"
+  [ -x "$bin" ] || return 0
+  ( "$bin" --decide >/dev/null 2>&1 </dev/null & ) >/dev/null 2>&1 || true
+  return 0
+}
+
 command -v jq >/dev/null 2>&1 || { echo "cc-backlog: jq is required" >&2; exit 1; }
 
 case "${1:-}" in
-  add)     shift; cmd_add "$@" ;;
+  # rc is captured and re-exited so the kick can never become `add`'s verdict.
+  add)     shift; cmd_add "$@"; _add_rc=$?; [ "$_add_rc" -eq 0 ] && dispatch_kick; exit "$_add_rc" ;;
   list)    shift; cmd_list "$@" ;;
   claim)   shift; cmd_transition claim "$@" ;;
   done)    shift; cmd_transition "done" "$@" ;;

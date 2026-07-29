@@ -28,6 +28,19 @@
 # SILENTLY: absence must be loud (R9), never assumed healthy. Every sensor failure — no stat(1), no
 # git, an unparseable stamp, no clock — yields NO row (fail-OPEN): a board that invents blockers
 # gets ignored exactly like one that hides them.
+#
+# ALSO renders the DISPATCH alarm (AUTONOMY_DISPATCH_V2 §3 S8) on the same law and the same two
+# shapes as verifier-inert above — same idiom, deliberately not a new one:
+#   kind=="dispatch-inert"  NOT-ACTIVATED (the label is unloaded, or loaded but sitting in launchd's
+#                           disabled DB — an un-run C10 hand-step, an OPERATOR QUEUE ITEM and not a
+#                           stall) or STALE (the label IS loaded+enabled yet the newest cc-dispatch
+#                           decision is older than CC_DISPATCH_STALE_H).
+# NOT-ACTIVATED is terminal for STALE: a job that is not running cannot be late. Both are gated on
+# EXISTENCE EVIDENCE — >=1 actor=="cc-dispatch" record in the journal, i.e. the dispatcher has
+# demonstrably run on this host — because "it stopped" is only an alarm where it was SUPPOSED to be
+# running; without that gate this fires in every fixtured $HOME void and on every machine that never
+# had the spine. It exists because both labels sat disabled for ~3 days, with no log files and no
+# decision records, and nothing said so.
 # --json emits ONE array carrying all kinds (each row keeps its .kind), alarms first.
 set -uo pipefail
 
@@ -41,10 +54,24 @@ DEPLOY_LAG_MIN="${CC_DEPLOY_LAG_MIN:-60}"      # green-cursor → deployed-HEAD 
 REDRUN_N="${CC_POSTLAND_REDRUN_N:-5}"          # how many newest verdicts an all-red run must span
 ACTIVATE_SH="$HOME/.claude/autonomy/pending-activation/14-land-pipeline-v2-activate.sh"
 DAY_S=86400
+# ── DISPATCH alarm sensors (§3 S8). DISPATCH_IDL defaults to the board file itself — the desk
+# journal and the dispatch journal ARE one file — so a suite that fixtures CC_REAPER_IDL fixtures
+# this sensor too and cannot grow a phantom row from the operator's live state.
+DISPATCH_IDL="${CC_DISPATCH_IDL:-$IDL_FILE}"
+DISPATCH_LABEL="${CC_DISPATCH_LABEL:-com.claude.dispatcher}"
+DISPATCH_STALE_H="${CC_DISPATCH_STALE_H:-2}"
+DISPATCH_LOG="${CC_DISPATCH_LOG:-/tmp/claude-dispatcher.stderr.log}"
+# The REPO copy, not the ~/.claude mirror: nothing syncs docs/activation/pending-activation/ to
+# ~/.claude/autonomy/pending-activation/ (checked: deploy-live.sh does not), and the mirror is the
+# copy that is CONTENT-DRIFTED — it still bootstraps without enabling first, which is why the label
+# is disabled today. Handing over the drifted script would reproduce the failure. Same idiom as
+# scripts/deploy-live.sh:223, which also names the repo path.
+DISPATCH_ACTIVATE_SH="${CC_DISPATCH_ACTIVATE_SH:-$DEPLOY_REPO/docs/activation/pending-activation/02-load-dispatcher-activate.sh}"
+LAUNCHCTL_BIN="${CC_BLOCKERS_LAUNCHCTL_BIN:-/bin/launchctl}"   # READ-ONLY subcommands only
 JSON=0
 case "${1:-}" in
   --json)   JSON=1 ;;
-  -h|--help) sed -n '2,31p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  -h|--help) sed -n '2,44p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
   "")       ;;
   *)        echo "cc-blockers: unknown arg $1 (usage: cc-blockers [--json])" >&2; exit 2 ;;
 esac
@@ -149,7 +176,69 @@ EOF
     "$gcommit" "$(hrs "$((now - green_ts))")" "$DEPLOY_REPO" "$HOME" "$POSTLAND_DIR" "$now"
 }
 
-ALARMS_JSON="$(alarm_rows 2>/dev/null | jq -s '.' 2>/dev/null || true)"
+# ── DISPATCH alarm (AUTONOMY_DISPATCH_V2 §3 S8) ──────────────────────────────────────────────────
+# Mirrors alarm_rows() above deliberately: same NEVER/NOT-ACTIVATED-is-terminal shape, same
+# fail-OPEN-on-sensor-failure law, same ASCII-only DETAIL cell (printf pads by BYTES, so one
+# em-dash silently shifts the column). What differs is only the sensor set.
+#
+# EXISTENCE EVIDENCE FIRST (memory absence-alarm-needs-existence-evidence). Keyed on the launchd
+# label alone this alarm fires on any host that never had a dispatcher and inside every fixtured
+# $HOME void — the identical phantom-row defect the verifier alarm above had to fix after it
+# invented a third row in tests/cc-relogin-status.bats. The premise of "it stopped" is that it once
+# ran, so the gate is >=1 actor=="cc-dispatch" record in the journal. A host staged but never once
+# activated is covered by the pending-activation operator queue, not by an alarm that cannot tell
+# "never wired here" from "died".
+#
+# WHY launchctl AT ALL, rather than inferring from the journal gap: the two states have DIFFERENT
+# OWNERS and different fixes. `disabled`/unloaded is a hand-step nobody ran (operator, one command);
+# loaded-but-silent is a job that died or wedged (investigate the log). Reporting the first as a
+# stall sends the operator to debug a process that was never started — the exact wrong action, and
+# what "3 days inert with zero alarm" would otherwise have degraded into once an alarm existed.
+# READ-ONLY subcommands only (`list`, `print-disabled`): this tool never mutates launchd, and the
+# tests stub the binary through CC_BLOCKERS_LAUNCHCTL_BIN rather than touching real launchd.
+dispatch_alarm_rows() { # → one JSON object per line (possibly none)
+  local now uid newest listing disabled_db stale_h activated=1
+  now="$(date +%s 2>/dev/null || true)"
+  case "${now:-}" in ''|*[!0-9]*) return 0 ;; esac                    # no clock ⇒ no alarms
+  stale_h="$DISPATCH_STALE_H"
+  case "${stale_h:-}" in ''|*[!0-9]*) stale_h=2 ;; esac
+
+  [ -f "$DISPATCH_IDL" ] || return 0
+  # jq owns the ISO-8601 → epoch conversion (fromdateiso8601): one parser, and `fromjson?` keeps a
+  # malformed line from taking the whole read down, exactly as the board reader below does.
+  newest="$(jq -Rn --arg a cc-dispatch '[ inputs | fromjson? | select(type=="object")
+              | select(.actor == $a) | (.ts // empty) | tostring
+              | (try fromdateiso8601 catch empty) ] | max // empty' "$DISPATCH_IDL" 2>/dev/null || true)"
+  case "${newest:-}" in ''|*[!0-9]*) return 0 ;; esac                 # never ran here ⇒ no premise
+
+  [ -x "$LAUNCHCTL_BIN" ] || return 0                                 # no sensor ⇒ no verdict
+  uid="$(id -u 2>/dev/null || true)"
+  case "${uid:-}" in ''|*[!0-9]*) return 0 ;; esac
+  listing="$("$LAUNCHCTL_BIN" list 2>/dev/null)" || return 0          # sensor error ⇒ fail open
+  disabled_db="$("$LAUNCHCTL_BIN" print-disabled "gui/$uid" 2>/dev/null || true)"
+  # LOADED: `launchctl list` prints "PID\tSTATUS\tLABEL", so the label is the LAST field — matched
+  # whole, never as a substring (com.claude.dispatcher-foo must not satisfy com.claude.dispatcher).
+  printf '%s\n' "$listing" | awk -v l="$DISPATCH_LABEL" '$NF == l { f = 1 } END { exit !f }' || activated=0
+  # ENABLED: absence from the override DB means enabled (it records overrides, not memberships), so
+  # only an explicit "=> disabled" counts against the label.
+  printf '%s\n' "$disabled_db" | grep -q "\"$DISPATCH_LABEL\" => disabled" && activated=0
+
+  if [ "$activated" -eq 0 ]; then
+    # DETAIL is padded to 44 BYTES by the renderer, so it is written to fit: an over-long cell is
+    # truncated mid-word and the operator reads a sentence that stops.
+    printf '{"kind":"dispatch-inert","state":"NOT-ACTIVATED","detail":"launchd label disabled or unloaded (C10)","subject":"%s","recover_cmd":"CONFIRM=1 bash %s","ts":%s}\n' \
+      "$DISPATCH_LABEL" "$DISPATCH_ACTIVATE_SH" "$now"
+    return 0    # terminal: a job that is not running cannot be late
+  fi
+
+  [ "$((now - newest))" -gt "$((stale_h * 3600))" ] || return 0
+  # shellcheck disable=SC2016  # $(id -u) is EMITTED, not evaluated: it must expand in the operator's
+  # shell when they paste it, which is also what keeps the command uid-portable.
+  printf '{"kind":"dispatch-inert","state":"STALE","detail":"loaded+enabled but no decision in %sh","subject":"%s","recover_cmd":"tail -20 %s ; launchctl print gui/$(id -u)/%s","ts":%s}\n' \
+    "$(hrs "$((now - newest))")" "$DISPATCH_LABEL" "$DISPATCH_LOG" "$DISPATCH_LABEL" "$now"
+}
+
+ALARMS_JSON="$({ alarm_rows; dispatch_alarm_rows; } 2>/dev/null | jq -s '.' 2>/dev/null || true)"
 [ -n "$ALARMS_JSON" ] || ALARMS_JSON='[]'
 
 BOARD_ABSENT=0
@@ -190,16 +279,22 @@ CELL='def cell(ph): (. // "") | tostring | gsub("[\\t\\r\\n]"; " ") | if . == ""
 n="$(printf '%s' "$ROWS" | jq '[.[] | select(.kind=="safeguard-blocked")] | length' 2>/dev/null || echo 0)"
 nr="$(printf '%s' "$ROWS" | jq '[.[] | select(.kind=="relogin-blocked")] | length' 2>/dev/null || echo 0)"
 na="$(printf '%s' "$ALARMS_JSON" | jq 'length' 2>/dev/null || echo 0)"
+# The alarms ride in ONE --json array (a consumer must see them all) but render as TWO tables: the
+# families have different owners and different recovery paths, and a dispatch row printed under a
+# "the landing net is degraded" heading sends the operator to the wrong subsystem.
+LAND_SEL='select(.kind=="verifier-inert" or .kind=="trunk-red" or .kind=="deploy-lag")'
+DISP_SEL='select(.kind=="dispatch-inert")'
+nl="$(printf '%s' "$ALARMS_JSON" | jq "[.[] | $LAND_SEL] | length" 2>/dev/null || echo 0)"
+nd="$(printf '%s' "$ALARMS_JSON" | jq "[.[] | $DISP_SEL] | length" 2>/dev/null || echo 0)"
 if [ "${n:-0}" = 0 ] && [ "${nr:-0}" = 0 ] && [ "${na:-0}" = 0 ]; then
   if [ "$BOARD_ABSENT" = 1 ]; then echo "no safeguard-blocked sessions (board $IDL_FILE absent)"
   else echo "no safeguard-blocked sessions surfaced"; fi
   exit 0
 fi
 
-if [ "${na:-0}" != 0 ]; then
-  echo "LAND-PIPELINE — $na alarm(s): the landing net is degraded (run the RECOVER command):"
+alarm_table() { # <count> <jq-select> — the two alarm families share one renderer, never two
   printf '%-15s %-16s %-44s %s\n' KIND STATE DETAIL RECOVER
-  printf '%s' "$ALARMS_JSON" | jq -r "$CELL"'.[] | [
+  printf '%s' "$ALARMS_JSON" | jq -r "$CELL"'.[] | '"$1"' | [
       (.kind        | cell("?")),
       (.state       | cell("?")),
       (.detail      | cell("-")),
@@ -207,6 +302,17 @@ if [ "${na:-0}" != 0 ]; then
     ] | @tsv' | while IFS=$'\t' read -r kind state detail cmd; do
       printf '%-15s %-16s %-44s %s\n' "${kind:0:15}" "${state:0:16}" "${detail:0:44}" "$cmd"
     done
+}
+
+if [ "${nl:-0}" != 0 ]; then
+  echo "LAND-PIPELINE — $nl alarm(s): the landing net is degraded (run the RECOVER command):"
+  alarm_table "$LAND_SEL"
+fi
+
+if [ "${nd:-0}" != 0 ]; then
+  [ "${nl:-0}" != 0 ] && echo
+  echo "DISPATCH — $nd alarm(s): autonomy work is not being decided (run the RECOVER command):"
+  alarm_table "$DISP_SEL"
 fi
 
 if [ "${n:-0}" != 0 ]; then
