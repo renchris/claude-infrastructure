@@ -582,7 +582,12 @@ secs() { local s e; s=$(date +%s); "$@" >/dev/null 2>&1; e=$(date +%s); echo $((
   run "$NOTIFY" "$UUID" "a"
   [[ "$output" == *"cc-notify: verdict=delivered enqueued=1 uuid=$UUID "* ]] || false
   run "$NOTIFY" --mailbox-only "$UUID" "b"
-  [[ "$output" == *"cc-notify: verdict=mailbox-only enqueued=1 uuid=$UUID reason=requested"* ]] || false
+  # FIELD-WISE, never one contiguous string. The token is an EXTENSIBLE k=v line and this assertion
+  # pinned every field in one glob, so adding a field (the read-receipt cursor, which lands between
+  # uuid= and reason=) read as a contract BREAK rather than a contract extension. Pin what this test
+  # is about — that each field is present and parseable — not the spacing between them.
+  [[ "$output" == *"cc-notify: verdict=mailbox-only enqueued=1 uuid=$UUID "* ]] || false
+  [[ "$output" == *"reason=requested"* ]] || false
   run "$NOTIFY" "DDDDDDDD-9999-8888-7777-666666666666" "c"
   [[ "$output" == *"verdict=mailbox-only"* ]] || false
   [[ "$output" == *"reason=target-not-live"* ]] || false
@@ -633,4 +638,75 @@ secs() { local s e; s=$(date +%s); "$@" >/dev/null 2>&1; e=$(date +%s); echo $((
   : > "$CC_MAILBOX_DIR/$UUID.watching"
   run "$NOTIFY" "$UUID" "legacy marker"
   [[ "$output" == *"wake-path armed"* ]] || false
+}
+
+# ── READ RECEIPT — "delivered" answered a different question than the one being asked ─────────────
+# 2026-07-26 14:10: the desk told two panes their land-lock blocker was stale. cc-notify reported
+# "delivered to inbox (live session)" for both. Neither ever read the line — ~4 h idle, 4 unread
+# each — and the desk reported them to the operator as unblocked. Nothing lied; "delivered" was
+# true. Delivery, surfacing and consumption are three events and only the third means "they know".
+
+@test "receipt: the SEND cites the cursor — line + unacked, not just 'delivered'" {
+  run "$NOTIFY" "$UUID" "the land-lock blocker is STALE — retry"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"verdict=delivered"* ]] || false
+  [[ "$output" == *"line=1"* ]] || false          # the citable handle: this message is line 1
+  [[ "$output" == *"unacked=1"* ]] || false       # ...and nothing in this box has been consumed
+  [[ "$output" == *"DELIVERED IS NOT READ"* ]] || false
+  run "$NOTIFY" "$UUID" "second"
+  [[ "$output" == *"line=2"* ]] || false          # the cursor tracks the actual append
+  [[ "$output" == *"unacked=2"* ]] || false       # the backlog is visible AT SEND TIME (the 14:10 signal)
+}
+
+@test "receipt: THE THREE EVENTS — delivered→unread, drained→surfaced, a turn→read (rc gates)" {
+  run "$NOTIFY" "$UUID" "retry now"
+  [ "$status" -eq 0 ]
+  # 1. DELIVERED but nothing has surfaced it
+  run "$NOTIFY" --receipt "$UUID" 1
+  [ "$status" -eq 1 ]                                        # rc is the verdict: NOT read
+  [[ "$output" == *"receipt=unread"* ]] || false
+  [[ "$output" == *"Do NOT report this session as told"* ]] || false
+  # 2. the drain SURFACED it — still not proof a turn carried it
+  echo '{}' | ITERM_SESSION_ID="w0t0p0:$UUID" "$REPO/hooks/mailbox-drain.sh" prompt >/dev/null
+  run "$NOTIFY" --receipt "$UUID" 1
+  [ "$status" -eq 1 ]                                        # surfaced is NOT read — the load-bearing case
+  [[ "$output" == *"receipt=surfaced"* ]] || false
+  # 3. a turn provably carried it (the Stop fold advances .acked)
+  run bash -c "source '$REPO/hooks/lib/mailbox-pending.sh'; mailbox_promote_acked '$UUID'"
+  run "$NOTIFY" --receipt "$UUID" 1
+  [ "$status" -eq 0 ]                                        # ONLY here may a desk say "I told them"
+  [[ "$output" == *"receipt=read"* ]] || false
+  [[ "$output" == *"Safe to report this session as told"* ]] || false
+}
+
+@test "receipt: a claim can never be laundered — an UNSENT line is unread, not read" {
+  # Fail-safe direction matters: a malformed or out-of-range query must report the WEAKEST verdict.
+  # If this ever returned 'read' it would manufacture exactly the false confidence the tool exists
+  # to remove.
+  run "$NOTIFY" --receipt "$UUID" 99
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"receipt=unread"* ]] || false
+}
+
+@test "receipt: refuses a missing/non-numeric line instead of guessing" {
+  run "$NOTIFY" --receipt "$UUID"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"needs the LINE"* ]] || false
+  run "$NOTIFY" --receipt "$UUID" not-a-number
+  [ "$status" -eq 2 ]
+}
+
+@test "receipt: follows the forward chain, so it reads the box the SEND actually reached" {
+  # A self-closed pane's mail follows its successor. If the receipt did not follow the same chain it
+  # would report 'unread' about a box nobody wrote to — a false negative that reads as a lost message.
+  SUCC="EEEEEEEE-1111-2222-3333-444444444444"
+  printf '{"paneUUID":"%s","name":"succ","cwd":"/tmp","account":"next","pid":%s,"startedAt":1}' \
+    "$SUCC" "$$" > "$CC_REGISTRY_DIR/$SUCC.json"
+  printf '%s\n' "$SUCC" > "$CC_MAILBOX_DIR/$UUID.forward"
+  run "$NOTIFY" "$UUID" "follows the chain"
+  [ "$status" -eq 0 ]
+  [ "$(grep -c '' "$CC_MAILBOX_DIR/$SUCC.md")" -eq 1 ]        # it landed in the SUCCESSOR's box
+  run "$NOTIFY" --receipt "$UUID" 1                           # queried by the OLD address
+  [[ "$output" == *"uuid=$SUCC"* ]] || false                  # ...answered about the successor's box
+  [[ "$output" == *"receipt=unread"* ]] || false
 }

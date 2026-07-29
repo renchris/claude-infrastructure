@@ -132,6 +132,30 @@ mailbox_pending_count() { local d=$(( $(mailbox_lines "${1:-}") - $(mailbox_seen
 mailbox_unacked_count() { local d=$(( $(mailbox_lines "${1:-}") - $(mailbox_acked "${1:-}") )); [ "$d" -lt 0 ] && d=0; echo "$d"; }
 mailbox_has_pending()   { [ "$(mailbox_pending_count "${1:-}")" -gt 0 ]; }
 
+# ── READ RECEIPT — delivery, surfacing and consumption are THREE events ───────────────────────────
+# Only the third means "they know", and every sender-side report we had described the first. That gap
+# has a measured cost: 2026-07-26 14:10 the desk told two panes their land-lock blocker was stale and
+# to retry; cc-notify said "delivered to inbox (live session)" for both; neither ever read the line
+# (~4 h idle, 4 unread each) and the desk reported them to the operator as unblocked. Nothing had
+# lied — "delivered" was true. It was just answering a different question than the one being asked.
+#
+# The proof already existed in the cursors; nothing exposed it per-message. Given the line a message
+# landed on, this turns those cursors into the verdict, so a claim can cite the cursor and not the send:
+#   unread   — .seen has not reached the line: nothing has surfaced it
+#   surfaced — .seen passed it (a drain emitted it) but .acked has not: shown, not provably consumed
+#   read     — .acked passed it: a turn provably carried it. THE ONLY ONE THAT MEANS "they were told".
+# Keyed on .acked (never the eager .seen) for the same reason cc-inbox-guard is: seen is a promise,
+# acked is evidence. Fail-safe like every read here — a bad uuid or line reports the WEAKEST verdict
+# (unread), so a malformed query can never manufacture a false "read".
+mailbox_receipt() { # <uuid> <line> → echoes unread|surfaced|read; exit 0 iff read
+  local u="${1:-}" n
+  n="$(_mbx_int "${2:-0}")"
+  if ! _mbx_valid_uuid "$u" || [ "$n" -le 0 ]; then echo unread; return 1; fi
+  if [ "$(mailbox_acked "$u")" -ge "$n" ]; then echo read; return 0; fi
+  if [ "$(mailbox_seen  "$u")" -ge "$n" ]; then echo surfaced; return 1; fi
+  echo unread; return 1
+}
+
 # ── WAKE-PATH PREDICATE — the ONE definition (v3 D4 / wake-floor) ─────────────────────────────────
 # "Is <uuid> reachable RIGHT NOW by a write to its inbox?" i.e. does it have a live cc-await-ping
 # whose exit will ride the harness task-completion notification back into the model.

@@ -6,6 +6,7 @@
 #   cc-notify --role <name> "<msg>"  target = a ROLE (desk/operator/…), resolved at SEND time
 #   cc-notify --self                 print THIS session's pane UUID and exit
 #   cc-notify --list [--json]        list sessions (delegates to cc-sessions)
+#   cc-notify --receipt <t> <line>   did they READ it? rc 0 = read · 1 = not read (line from the send)
 #
 # Options:
 #   --role <name>     address a ROLE, not a pane: reads ~/.claude/cc-roles/<name> at SEND time, so a
@@ -13,6 +14,8 @@
 #                     pager (see ADDRESSING below). Missing/empty role file → exit 3.
 #   --from <name>     attribution written to the inbox line (default: own registered name / account)
 #   --mailbox-only    force inbox-only (skip the liveness classification / never a "not-live" note)
+#   --receipt         READ side of the cursor a send prints. DELIVERED IS NOT READ — a claim that a
+#                     session was told must cite acked≥line, never the send. rc 0 = read.
 #   -h, --help        this help
 #
 # ── TRANSPORT (v2, 2026-07-20): the INBOX, drained at a safe boundary — NO keystroke injection ──
@@ -136,7 +139,7 @@ for _cand in "$(dirname "$0")/../hooks/lib/mailbox-pending.sh" \
   [ -f "$_cand" ] && { . "$_cand" 2>/dev/null || true; break; }
 done
 
-usage() { sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; }
 
 # cc-sessions lives beside cc-notify (same bin/). Prefer the sibling (deterministic for tests +
 # symlinked deploys), then PATH, then the canonical ~/.claude/bin. It is BOTH the name resolver and
@@ -262,10 +265,16 @@ it2_list_bounded() {   # raw --json on stdout; rc != 0 on timeout/error
 # --- the caller contract: one machine-parseable line per terminal outcome --------------------------
 # Printed BEFORE the human sentence, never instead of it. `uuid` may not exist yet on the early
 # failure paths, hence ${uuid:-}.
-ENQUEUED=0
+#
+# CURSOR_LINE / UNACKED are the READ-RECEIPT fields (delivered ≠ read). They are empty until the
+# message is actually persisted, so their presence in the token is itself the proof that a line
+# exists to cite; every post-enqueue verdict carries them. See the enqueue site for why.
+ENQUEUED=0; CURSOR_LINE=""; UNACKED=""
 verdict() { # <verdict> [k=v ...]
   local v="$1"; shift
   printf 'cc-notify: verdict=%s enqueued=%s uuid=%s' "$v" "$ENQUEUED" "${uuid:-}" >&2
+  [ -n "$CURSOR_LINE" ] && printf ' line=%s' "$CURSOR_LINE" >&2
+  [ -n "$UNACKED" ]     && printf ' unacked=%s' "$UNACKED" >&2
   while [ $# -gt 0 ]; do printf ' %s' "$1" >&2; shift; done
   printf '\n' >&2
 }
@@ -286,7 +295,7 @@ _on_signal() {
 trap _on_signal TERM INT HUP
 
 # --- parse args ---
-FROM=""; MAILBOX_ONLY=0; TARGET=""; MSG=""; HAVE_TARGET=0; HAVE_MSG=0; ROLE=""; ROLE_GIVEN=0
+FROM=""; MAILBOX_ONLY=0; TARGET=""; MSG=""; HAVE_TARGET=0; HAVE_MSG=0; ROLE=""; ROLE_GIVEN=0; RECEIPT=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --list)         shift; if [ -n "$CCS" ]; then exec "$CCS" "$@"; else echo "cc-notify: cc-sessions not found" >&2; exit 1; fi ;;
@@ -294,6 +303,7 @@ while [ $# -gt 0 ]; do
     --role)         ROLE="${2:-}"; HAVE_TARGET=1; ROLE_GIVEN=1; shift; [ $# -gt 0 ] && shift ;;
     --role=*)       ROLE="${1#--role=}"; HAVE_TARGET=1; ROLE_GIVEN=1; shift ;;
     --mailbox-only) MAILBOX_ONLY=1; shift ;;
+    --receipt)      RECEIPT=1; shift ;;
     --from)         FROM="${2:-}"; shift; [ $# -gt 0 ] && shift ;;
     --from=*)       FROM="${1#--from=}"; shift ;;
     -h|--help)      usage; exit 0 ;;
@@ -417,6 +427,42 @@ if command -v mailbox_forward_of >/dev/null 2>&1; then
   fi
 fi
 
+# ── --receipt <target> <line> — DID THEY ACTUALLY READ IT? ────────────────────────────────────────
+# The read side of the cursor the send side now prints. Without this the line number in a verdict is
+# just another number nobody can check, and "cite the cursor" degrades back into prose — which is the
+# exact failure this whole channel keeps re-learning: a discipline with no mechanism behind it is
+# inert by construction. Placed AFTER resolution + the forward chain on purpose, so a receipt is
+# looked up at the same address a send would reach (a self-closed pane's mail followed its successor;
+# its receipt must follow it too, or the query reports "unread" about the wrong box).
+#
+# Exit code IS the verdict, so a caller can gate on it without parsing: 0 = read (a turn provably
+# carried it) · 1 = NOT read (surfaced-but-unconsumed, or never surfaced). Anything a desk is about
+# to report as "I told session X" should be gated on rc 0.
+if [ "$RECEIPT" = 1 ]; then
+  _line="$MSG"
+  case "$_line" in ''|*[!0-9]*)
+    echo "cc-notify --receipt: needs the LINE the message landed on: cc-notify --receipt <target> <line>" >&2
+    echo "  (the line comes from the send's own verdict token: 'cc-notify: verdict=… line=<N> …')" >&2
+    exit 2 ;;
+  esac
+  if ! command -v mailbox_receipt >/dev/null 2>&1; then
+    echo "cc-notify --receipt: mailbox lib unavailable (hooks/lib/mailbox-pending.sh) — cannot read the cursors" >&2
+    exit 4
+  fi
+  _rcpt="$(mailbox_receipt "$uuid" "$_line")"; _rrc2=$?
+  _seen="$(mailbox_seen "$uuid" 2>/dev/null || echo 0)"
+  _ackd="$(mailbox_acked "$uuid" 2>/dev/null || echo 0)"
+  _unak="$(mailbox_unacked_count "$uuid" 2>/dev/null || echo 0)"
+  printf 'cc-notify: receipt=%s uuid=%s line=%s seen=%s acked=%s unacked=%s\n' \
+    "$_rcpt" "$uuid" "$_line" "$_seen" "$_ackd" "$_unak" >&2
+  case "$_rcpt" in
+    read)     echo "cc-notify 📬 READ — a turn in [$uuid] provably carried line $_line (acked=$_ackd ≥ $_line). Safe to report this session as told." >&2 ;;
+    surfaced) echo "cc-notify 📭 SURFACED, NOT READ — line $_line was emitted to [$uuid] (seen=$_seen) but no turn has provably consumed it (acked=$_ackd). Do NOT report this session as told." >&2 ;;
+    *)        echo "cc-notify 📪 UNREAD — line $_line has never even been surfaced to [$uuid] (seen=$_seen, $_unak unacked). Do NOT report this session as told." >&2 ;;
+  esac
+  exit "$_rrc2"
+fi
+
 # `cc-notify --self` with no message = just print own UUID (utility).
 if [ "$HAVE_MSG" = 0 ]; then
   if [ "$TARGET" = "__self__" ]; then echo "$uuid"; exit 0; fi
@@ -461,10 +507,32 @@ fi
 
 ENQUEUED=1     # from here on the message is DURABLE — a kill can cost the verdict, never the delivery
 
+# ── THE READ RECEIPT (delivered ≠ read) ───────────────────────────────────────────────────────────
+# The append above put this message on exactly one line, and THAT LINE NUMBER is the only durable
+# handle by which anyone can later prove the target actually consumed it: read ⇔ .acked ≥ line.
+# Capture it here, at the one instant it is knowable, and put it in the verdict — a sender that
+# reports only "delivered" is answering a different question than the one its caller is asking.
+# UNACKED is the target's whole never-consumed backlog INCLUDING this line, which is what turns a
+# single delivery into a picture: `unacked=5` on a live pane says the last four went unread too.
+#   Costs one grep -c and one small file read on an already-written box — no extra I/O worth naming.
+#   Degrades silently to empty when the lib is absent (this file's standing rule: a missing lib
+#   degrades a feature, it never fails the send).
+if command -v mailbox_lines >/dev/null 2>&1; then
+  CURSOR_LINE="$(mailbox_lines "$uuid" 2>/dev/null || true)"
+  UNACKED="$(mailbox_unacked_count "$uuid" 2>/dev/null || true)"
+  case "$CURSOR_LINE" in ''|*[!0-9]*) CURSOR_LINE="" ;; esac
+  case "$UNACKED"     in ''|*[!0-9]*) UNACKED="" ;; esac
+fi
+# The one-clause reminder appended to every delivery sentence. Deliberately states the PROOF
+# ("acked≥N"), not an adjective — a caller that repeats this line downstream then repeats a checkable
+# fact instead of a reassurance.
+READ_NOTE=""
+[ -n "$CURSOR_LINE" ] && READ_NOTE=" · unread=${UNACKED:-?} in this box — DELIVERED IS NOT READ: proof is acked≥${CURSOR_LINE} (cc-notify --receipt $uuid $CURSOR_LINE), never this send"
+
 # --mailbox-only: caller explicitly wants a pure record, no liveness verdict.
 if [ "$MAILBOX_ONLY" = 1 ]; then
   verdict mailbox-only reason=requested
-  echo "cc-notify 📤 peer mail ▶ [$uuid] recorded to inbox ($MAILBOX_DIR/$uuid.md; --mailbox-only)" >&2
+  echo "cc-notify 📤 peer mail ▶ [$uuid] recorded to inbox ($MAILBOX_DIR/$uuid.md; --mailbox-only)${READ_NOTE}" >&2
   _echo_sent
   exit 0
 fi
@@ -543,17 +611,17 @@ case "$_lv" in
   0)
     if [ "$uuid" = "$own_uuid" ] || wake_path_armed "$uuid"; then
       verdict delivered reason=wake-path-armed
-      echo "cc-notify 📤 peer mail ▶ delivered to inbox [$uuid] (live session, wake-path armed — its cc-await-ping watcher wakes it within a poll)" >&2
+      echo "cc-notify 📤 peer mail ▶ delivered to inbox [$uuid] (live session, wake-path armed — its cc-await-ping watcher wakes it within a poll)${READ_NOTE}" >&2
       _echo_sent
     else
       verdict delivered reason=no-watcher
-      echo "cc-notify 📤 peer mail ▶ delivered to inbox [$uuid] (live session, NO watcher armed — drains on its NEXT turn; delivered but not a guaranteed instant wake)" >&2
+      echo "cc-notify 📤 peer mail ▶ delivered to inbox [$uuid] (live session, NO watcher armed — drains on its NEXT turn; delivered but not a guaranteed instant wake)${READ_NOTE}" >&2
       _echo_sent
     fi
     exit 0 ;;
   1)
     verdict mailbox-only reason=target-not-live
-    echo "cc-notify 📤 peer mail ▶ [$uuid] mailbox only — target is NOT a live session (closed/recycled pane); no drain will run. The message is recorded but unread until/unless that pane returns." >&2
+    echo "cc-notify 📤 peer mail ▶ [$uuid] mailbox only — target is NOT a live session (closed/recycled pane); no drain will run. The message is recorded but unread until/unless that pane returns.${READ_NOTE}" >&2
       _echo_sent
     # D3 REROUTE — a dead, unforwarded target is the silent-loop class (570 pages into one dead box for
     # three days). The line stays in the original box (forensics are never moved), and a COPY goes to
@@ -586,5 +654,5 @@ case "$_lv" in
     fi
     exit 0 ;;
   *) verdict unverified reason=liveness-unverifiable
-     echo "cc-notify 📤 peer mail ▶ delivered to inbox [$uuid] (liveness UNVERIFIABLE — no session registry/pane list; recorded, will drain if the pane is live)" >&2; exit 0 ;;
+     echo "cc-notify 📤 peer mail ▶ delivered to inbox [$uuid] (liveness UNVERIFIABLE — no session registry/pane list; recorded, will drain if the pane is live)${READ_NOTE}" >&2; exit 0 ;;
 esac
