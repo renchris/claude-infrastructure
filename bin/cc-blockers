@@ -129,13 +129,10 @@ WATCHDOG_DIR="${CC_WATCHDOG_DIR:-$HOME/.claude/watchdog}"
 # Absorbs ps's 1-second etime granularity. Biased so the ONLY thing a wrong grace can do is stay
 # quiet: a healthy assignee is spawned AFTER its lead, so its elapsed time is strictly SMALLER.
 ORPHAN_GRACE_S="${CC_ORPHAN_GRACE_S:-5}"
-JSON=0
-case "${1:-}" in
-  --json)   JSON=1 ;;
-  -h|--help) sed -n '2,59p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-  "")       ;;
-  *)        echo "cc-blockers: unknown arg $1 (usage: cc-blockers [--json])" >&2; exit 2 ;;
-esac
+# NOTE: argument parsing lives in ONE place, the `while` loop below. A second `case "${1:-}"` block
+# used to sit here; when the fleet work merged with the approval work, both survived and the earlier
+# one ran first, so `--plist-parity` exited 2 as an unknown arg before the loop that accepts it was
+# ever reached. Two parsers for one argv is always a bug — the first one wins silently.
 # ── FLEET sensor (DAEMON_FLEET_V2 §4.3). The producer is bin/cc-fleet in the DEPLOY_REPO checkout,
 # not the ~/.claude/bin mirror, and that is a correctness choice on two counts:
 #   (1) In production they are the SAME FILE — install.sh globs bin/cc-* into ~/.claude/bin/ as
@@ -515,7 +512,6 @@ beacon_alarm_rows() { # → one JSON object per line (possibly none)
     "$PERMPEND_DIR" "'{\\\"session_id\\\":\\\"smoke-1\\\"}'" "$BEACON_HOOK" "$PERMPEND_DIR" "$now"
 }
 
-ALARMS_JSON="$({ alarm_rows; dispatch_alarm_rows; orphan_approver_rows; beacon_alarm_rows; fleet_alarm_rows; } 2>/dev/null | jq -s '.' 2>/dev/null || true)"
 # ── FLEET alarm (DAEMON_FLEET_V2 §4.3) ───────────────────────────────────────────────────────────
 # The ONLY consumer-side code for the fleet: bin/cc-fleet reads launchd/fleet.manifest, reconciles
 # declared-vs-actual, and emits one kind=="fleet-inert" line per label that is not in its declared
@@ -694,6 +690,13 @@ if [ "$PARITY" = 1 ]; then
   alarm_table 'select(.kind=="plist-parity")' "$PARITY_JSON" 34
   exit 0
 fi
+
+# Composed AFTER every alarm function is DEFINED, not merely after the ones that existed when
+# this line was first written. Bash resolves a function name at CALL time in source order: with
+# this line above `fleet_alarm_rows()`, the call hit `command not found`, went straight into the
+# `2>/dev/null`, and the fleet family produced ZERO rows on a board that looked healthy. The
+# fail-open that makes a dead sensor safe is the same one that makes a mis-ordered call silent.
+ALARMS_JSON="$({ alarm_rows; dispatch_alarm_rows; orphan_approver_rows; beacon_alarm_rows; fleet_alarm_rows; } 2>/dev/null | jq -s '.' 2>/dev/null || true)"
 
 [ -n "$ALARMS_JSON" ] || ALARMS_JSON='[]'
 
