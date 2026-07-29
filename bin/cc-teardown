@@ -88,6 +88,22 @@ SELF_UUID="${_sid##*:}"   # ITERM_SESSION_ID = "wNtMpK:<UUID>" → <UUID>; an in
 
 # ── operator-adoption belt config (2026-07-24; mirrors cc-classify 4.7 env family) ─────────────────
 INTERACTIVE_HOLD_S="${CC_CLASSIFY_INTERACTIVE_HOLD_S:-21600}"   # a real operator prompt within this ⇒ ADOPTED pane
+# ── DECISION-FRESHNESS LEASE (SESSION_REGISTRY_V2 §4.3, R1) ────────────────────────────────────────
+# An autonomous reap decision is a SNAPSHOT. v1's reaper classified every session in one batch call
+# and then acted on that frozen verdict up to 2,099s later (p99; max 55,659s measured over 1,872
+# sweeps), so an operator who typed DURING the sweep was invisible to the decision that closed their
+# pane — the 2026-07-24 live-conversation reaps. No amount of caller-side care fixes this: the whole
+# failure class is "the caller's belief was correct when formed and wrong when used".
+# So freshness is enforced HERE, at the actuator: a decision carries the epoch it was made, and one
+# older than the lease is REFUSED. This converts staleness from a SAFETY failure into a LIVENESS
+# failure — a slow sweep now reaps NOTHING instead of reaping wrongly, and the safe direction is the
+# default. The lease is REQUIRED (not optional) for autonomous callers: an opt-in lease is not a
+# lease. Autonomous = passes --done-evidence (every real reap does; cc-reaper:756 is the sole caller).
+# Operator/manual closes are unaffected, and --force-adopted (operator-ONLY, no autonomous caller
+# passes it) exempts. Kill switches: CC_REAP_LEASE=off · CC_REAP_DECISION_MAX_STALE_S=<n>.
+DECIDED_AT=""
+DECISION_MAX_STALE_S="${CC_REAP_DECISION_MAX_STALE_S:-60}"
+DECISION_FUTURE_SKEW_S="${CC_REAP_DECISION_FUTURE_SKEW_S:-5}"   # a decision from the FUTURE is a bad clock/caller, not freshness
 FIRE_PROMPT_SLACK_S="${CC_CLASSIFY_FIRE_PROMPT_SLACK_S:-300}"   # a prompt within spawn+this = the spawn brief, not adoption
 PROJECT_ROOTS="${CC_CLASSIFY_PROJECT_ROOTS:-$HOME/.claude/projects $HOME/.claude-secondary/projects $HOME/.claude-tertiary/projects $HOME/.claude-quaternary/projects}"
 INTERACTIVE_LIB="${CC_INTERACTIVE_LIB:-$HERE/../hooks/lib/cc-interactive.sh}"
@@ -245,6 +261,7 @@ main() {
       --done-evidence|--done) [ $# -ge 2 ] && { done_ev="$2"; shift 2; } || shift ;;
       --expect-pid)    [ $# -ge 2 ] && { EXPECT_PID="$2"; shift 2; } || shift ;;
       --expect-lstart) [ $# -ge 2 ] && { EXPECT_LSTART="$2"; shift 2; } || shift ;;
+      --decided-at)    [ $# -ge 2 ] && { DECIDED_AT="$2"; shift 2; } || shift ;;
       --force-adopted) FORCE_ADOPTED=1; shift ;;
       --self) TARGET="--self"
               record REFUSE self-literal "'--self' is never a valid teardown target — refusing self-teardown" 0
@@ -292,6 +309,34 @@ main() {
     if [ "$pp0" = 1 ]; then
       record ALREADY-GONE idempotent "pid $pid already dead AND pane $paneUUID already absent — nothing to do" 1
       say "OK — already gone (pid dead + pane absent); idempotent success (exit 0)"; exit 0
+    fi
+  fi
+
+  # ── 1b-lease. DECISION-FRESHNESS LEASE (SESSION_REGISTRY_V2 §4.3 / R1) ──────────────────────────
+  # Ordered BEFORE the adoption belt deliberately: a stale decision must die on staleness alone, so
+  # the refusal names the real defect (and stays true even if every downstream read were perfect).
+  if [ "${CC_REAP_LEASE:-on}" != off ] && [ "$FORCE_ADOPTED" = 0 ] && [ -n "$done_ev" ]; then
+    local lease_now lease_age
+    lease_now="${CC_CLASSIFY_NOW:-$(date +%s)}"
+    case "$DECIDED_AT" in
+      ''|*[!0-9]*)
+        # MISSING is a refusal, not a pass. An autonomous caller that cannot say WHEN it decided
+        # cannot be trusted that the decision is still true — and a lease a caller may omit is
+        # not a lease. Names the exact fix so a caller is never left guessing.
+        record REFUSE lease-missing "autonomous teardown carried no --decided-at; the decision-freshness lease (${DECISION_MAX_STALE_S}s) cannot be verified, so the close is refused. Callers must pass --decided-at \$(date +%s) taken immediately before the call" 0
+        say "REFUSE — no --decided-at on an autonomous teardown: decision freshness unverifiable (exit 2). Pass --decided-at \$(date +%s) immediately before calling."
+        exit 2 ;;
+    esac
+    lease_age=$(( lease_now - DECIDED_AT ))
+    if [ "$lease_age" -lt "$(( 0 - DECISION_FUTURE_SKEW_S ))" ] 2>/dev/null; then
+      record REFUSE lease-future "decision timestamp is ${lease_age}s in the FUTURE (beyond ${DECISION_FUTURE_SKEW_S}s skew) — a bad clock or a forged decision, never freshness" 0
+      say "REFUSE — --decided-at is in the future (exit 2)."
+      exit 2
+    fi
+    if [ "$lease_age" -gt "$DECISION_MAX_STALE_S" ] 2>/dev/null; then
+      record REFUSE stale-decision "decision was made ${lease_age}s ago, past the ${DECISION_MAX_STALE_S}s freshness lease — the evidence it rests on may no longer hold (an operator can adopt a pane inside that window); refusing to act on a stale verdict" 0
+      say "REFUSE — stale decision: made ${lease_age}s ago > ${DECISION_MAX_STALE_S}s lease (exit 2). Re-take the decision and retry."
+      exit 2
     fi
   fi
 
