@@ -158,11 +158,21 @@ tx() {
 }
 
 # ── RED-PROOF — the control is the REAL pre-fix artifact, not an approximation ─────
-# A suite that cannot fail proves nothing. Replay hooks/ exactly as it stands on origin/main (the
-# tree this change is written against) and require the two core assertions to FAIL there.
-@test "RED-PROOF: the pre-fix hooks/ from origin/main does NOT block an unarmed idle session" {
+# A suite that cannot fail proves nothing. Replay hooks/ exactly as it stood BEFORE this change and
+# require the two core assertions to FAIL there.
+#
+# THE CONTROL IS PINNED TO A SHA, NEVER A MOVING REF. This replayed `origin/main`, which was the
+# pre-fix tree only until this very change landed on it — from that moment the "control" IS the fixed
+# tree, both sanity greps invert, and the RED-proof fails permanently against a perfectly green tree.
+# It did: the suite went red the moment fea9f7a8 landed. A control must replay the real pre-fix
+# artifact, and only an immutable ref can promise that.
+#   a219de9d = the last commit before 99164d48 (extracted mailbox_wake_armed) and fea9f7a8 (the floor),
+#   i.e. the newest tree that genuinely predates BOTH halves of the change under test.
+CC_WAKE_FLOOR_PREFIX_SHA="${CC_WAKE_FLOOR_PREFIX_SHA:-a219de9d}"
+@test "RED-PROOF: the pre-fix hooks/ (pinned sha) does NOT block an unarmed idle session" {
   local old="$BATS_TEST_TMPDIR/pre"; mkdir -p "$old"
-  git -C "$REPO" archive origin/main hooks | tar -x -C "$old" || skip "origin/main unavailable"
+  git -C "$REPO" archive "$CC_WAKE_FLOOR_PREFIX_SHA" hooks | tar -x -C "$old" \
+    || skip "pre-fix tree $CC_WAKE_FLOOR_PREFIX_SHA unavailable"
   [ -f "$old/hooks/session-continue.sh" ]
   # sanity: the control must genuinely predate the change
   ! grep -q 'WAKE FLOOR' "$old/hooks/session-continue.sh" || false
