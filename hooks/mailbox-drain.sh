@@ -112,8 +112,15 @@ fi
 [ "$_watched" = 1 ] || nudge='
 (no watcher armed — arm cc-await-ping via Bash run_in_background before idling, or mail waits for your next boundary)'
 
-ctx="$(printf '📬 INBOX — %s new %s from other Claude sessions (delivered as CONTEXT via the non-keystroke inbox channel, never typed into your input line)%s:\n%s\n(Already marked delivered. Triage/act as appropriate; reply to a peer with cc-notify <uuid> "…". This is a message TO you, not something you typed.)%s' \
-  "$n" "$plural" "$warn" "$body" "$nudge")"
+# ── BLOCK RENDERING (operator request 2026-07-28) ───────────────────────────────────────────────
+# Peer mail used to arrive as a bare paragraph, visually identical to every other scrap of
+# context. Render the bodies as a BLOCK behind a left rule so the channel is unmistakable at a
+# glance — and so a model reporting it downstream mirrors that structure instead of inlining it.
+# PRESENTATION ONLY: every body line is reproduced verbatim, and the tokens the suites pin
+# ("as CONTEXT", "no watcher armed") are preserved.
+_block="$(printf '%s\n' "$body" | sed 's/^/  │ /')"
+ctx="$(printf '📬 peer mail ◀ %s new %s from other Claude sessions%s\n  ╭─\n%s\n  ╰─ delivered as CONTEXT via the non-keystroke inbox channel — never typed into your input line.\n     Already marked delivered. Triage/act as appropriate; reply to a peer with cc-notify <uuid> "…". This is a message TO you, not something you typed.%s' \
+  "$n" "$plural" "$warn" "$_block" "$nudge")"
 # ── OPERATOR-VISIBLE LINE (2026-07-26) ──────────────────────────────────────────────────────────
 # additionalContext is MODEL-ONLY: it reaches the agent and is never rendered in the conversation,
 # so until now every inbox delivery was invisible to the human. Operator-reported: "I can't see
@@ -136,11 +143,11 @@ _noise="$(printf '%s\n' "$body" | grep -c 'HANDOFF-HUSK-PANE\|REAPER SURFACE\|\[
 case "$_noise" in ''|*[!0-9]*) _noise=0 ;; esac
 _sig=$(( n - _noise )); [ "$_sig" -lt 0 ] && _sig=0
 if [ "$_sig" -gt 0 ]; then
-  msg="📬 ${_sig} peer message(s)${_names:+ from ${_names}}"
+  msg="📬 peer mail ◀ ${_sig} peer message(s)${_names:+ from ${_names}}"
   [ "$_noise" -gt 0 ] && msg="${msg} · ${_noise} fixture/lifecycle suppressed"
   msg="${msg} — full text: cc-mail"
 else
-  msg="📬 ${n} lifecycle/fixture message(s), no peer traffic — cc-mail --all"
+  msg="📬 peer mail ◀ ${n} lifecycle/fixture message(s), no peer traffic — cc-mail --all"
 fi
 jq -nc --arg e "$EVENT" --arg c "$ctx" --arg m "$msg" \
   '{hookSpecificOutput:{hookEventName:$e, additionalContext:$c}, systemMessage:$m}'
