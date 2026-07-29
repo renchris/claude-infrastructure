@@ -77,7 +77,6 @@ cc-wave-plan.bats
 claude-accounts-core.bats
 claude-accounts.bats
 claude-kimi.bats
-comms-drain-activate.bats
 completion-assert.bats
 completion-push.bats
 context-econ.bats
