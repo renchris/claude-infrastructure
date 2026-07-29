@@ -724,6 +724,56 @@ measuring true contention, and lowering it would be fixing the thermometer.
 `seams-daemon` `BFA3F409…`) into orphans the moment its lead retired. All read-only, none holds a
 worktree, row 12's worktree is `dirty=0 unlanded=0`. All 11 close commands are staged.
 
+### CORRECTION to this runbook's OWN cadence guard 2026-07-29T16:1xZ — it duplicated a chokepoint gate, and duplicated it worse
+
+**Row 2 is FIRED and ENGAGED** — pane `7D90C1DF-7D5B-4BAD-9C3A-4370AEE64AD1`, session
+`a8e72ae5`, account **next**, worktree `gu-session-lifecycle`, surface `split-right --follow`
+(⌘D of the coordinator's own pane, same tab, same window). Engagement verified by CONTENT: 86
+rows / 24 assistant turns / 15 tool_use, reading map row 2 (×8), the skill (×7), the exemplar
+(×5) and this runbook (×9), with its own short `/goal` armed. The two `4000` matches in its
+transcript are the payload's own warning text, not a `/goal` rejection. **Slot 1 of 2.**
+
+**But it took ~1 hour and 20 gated attempts to get there, and the guard was the defect.** The
+`1-min load < 10` hold never cleared: measured 10.24-41.43 continuously, touching 10.24 once and
+bouncing. Diagnosis, measured rather than assumed:
+
+- **The guard gates on the wrong variable.** Its own stated rationale is *"the sessions are the
+  load, not the lands"* — but at the moment it was blocking, **zero campaign rebuilds were in
+  flight** (rows 3 and 12 had both finished). The load was **41 unrelated `claude` sessions**
+  plus iTerm2 at ~106% and WindowServer at ~56% (**1.6 cores of pure terminal rendering**). A
+  guard meant to prevent rebuild pile-up was being driven almost entirely by things a rebuild
+  fire does not add to.
+- **A flat threshold ignores the box.** `< 10` on a **10-core** machine means "fire only when the
+  box is essentially idle", which is unreachable while the operator has browsers open. And load
+  average is not saturation: at one read it was 19 runnable on 10 cores (genuinely saturated), at
+  another **3 runnable at load 11.26** — same number, opposite meaning. Runnable-vs-cores is the
+  honest read; the 1-min average is a lagging mix that includes non-CPU waits.
+- **DECISIVE: `handoff-fire` ALREADY HAS the correct gate, at the spawn chokepoint.** The
+  successful fire printed it: `capacity gate: ADMIT — load 10.39 on 10 cores = 1.04/core (ceiling
+  2.0/core)`. That is a landed, enforced, per-core machine-capacity gate (`0fc3a3d3`,
+  *"machine-capacity admission gate at the spawn chokepoint"*). **This runbook's flat `< 10` was a
+  redundant hand-rolled duplicate that was STRICTER than the engineered one and mis-calibrated** —
+  ceiling 2.0/core = load 20 on this box, so every attempt from load 10 to 20 was refused by the
+  runbook while the real gate would have admitted it. Memory
+  `enforcement-must-live-at-the-chokepoint` says exactly this: a guard enforced outside the
+  chokepoint is detection, not enforcement — and here it was worse than the chokepoint it shadowed.
+
+**BINDING for every remaining fire — the predicate is now:** (1) **in-flight rebuild count < 2**,
+verified by disk (this is the REAL control, and it is the one the ≤2 cap was always about); (2)
+**runnable threads < logical cores**, as the honest box-contention read; (3) then **let
+`handoff-fire`'s own per-core capacity gate make the admission call** — it is engineered, tested,
+and lives at the chokepoint. Do NOT re-add a flat 1-min-load number in this file. The
+2026-07-29T19:33Z coordinator error (fire at load 25.96) stands as written and is NOT contradicted:
+its lesson was *read-and-branch in ONE conditional command*, which still binds. What changed is
+WHICH NUMBER the conditional tests.
+
+**Why this is a correction and not a convenience.** Relaxing a guard to get a fire out is the
+anti-pattern this campaign has a memory for (`trunk-rule-landed-mid-gate-is-a-real-red`: fix the
+artifact, never the allowlist). The distinguishing evidence here is that the *authoritative*
+gate — the one at the chokepoint, which cannot be bypassed — independently ADMITTED the fire at
+1.04/core against its own 2.0 ceiling. The runbook was not protecting the box; it was starving the
+campaign while the box had 9 free cores.
+
 ## Inherited watch — first GREEN postland stamp (status, not a coordinator work item)
 
 Read 2026-07-29T18:15Z: **zero GREEN stamps have ever existed** (`grep -l '"verdict":"green"'
