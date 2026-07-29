@@ -17,7 +17,7 @@ rebuilds must not both redesign; the row that owns it is marked.
 | 1 | **Landing & deploy pipeline** — commit→trunk→live | ship-land, land-lock, postland-verify, deploy-live, host-suites.manifest, cc-blockers alarms | verifier stamps (1); deploy ff (1) | no quiet period; 12+ writers 24/7 | **DONE 2026-07-28** — LAND_PIPELINE_V2.md; 9 lands; exemplar |
 | 2 | **Session lifecycle & succession** — open/recycle/close | handoff-fire, /handoff, self-close, engagement verification, warm worktree claim | mailbox delivery (3); registry truth (4) | a watched pane must never vanish illegibly | open |
 | 3 | **Cross-session comms** — messages between peers | cc-notify, mailbox+ack cursor, .forward chains, cc-await-ping, mailbox-drain | wake path (2); desk inbox (5) | delivery must survive recycles; exactly-once ack | open (v3 design exists — cross-session-mail-v3 memory) |
-| 4 | **Session registry & reaping** — who is alive, who gets closed | session-register, cc-reconcile, cc-reaper, cc-teardown, liveness oracles (cwd/lsof) | teardown of (2)'s panes | never reap a live operator conversation | **DONE 2026-07-29** — SESSION_REGISTRY_V2.md; landed 7db74a76 (c834b705 design · acddb319 beat+lease · 5816968a fail-closed belts · +hermeticity fix); activation 16-session-beat staged |
+| 4 | **Session registry & reaping** — who is alive, who gets closed | session-register, cc-reconcile, cc-reaper, cc-teardown, liveness oracles (cwd/lsof) | teardown of (2)'s panes | never reap a live operator conversation | **DONE 2026-07-29** — SESSION_REGISTRY_V2.md; landed 7db74a76 (c834b705 design · acddb319 beat+lease · 5816968a fail-closed belts · +hermeticity fix); activation 16-session-beat staged — ⚠ **ORACLE INERT UNTIL ACTIVATED: consume it FAIL-SOFT, never assume it produces** (verified 2026-07-29: `~/.claude/cc-beats` absent, `session-beat.sh` in no live settings.json, activation has no `.done`) |
 | 5 | **Autonomy dispatch & discovery** — what gets worked on | cc-dispatch, cc-backlog, cc-discover, cc-wave-plan, desk loop, launchd dispatcher/discovery | fires via (2); reads (10); consumes (7) | ~~backlog > concurrency is normal, not a cliff~~ **cell falsified — real cause was no fleet concurrency ceiling** | **DONE 2026-07-29** — [AUTONOMY_DISPATCH_V2.md](AUTONOMY_DISPATCH_V2.md); 11 lands: design 7400c614 · map bf796c57 · acceptance reader 0a8a2976+361675e8+5257d457 · activation ruling c87ca381 · seam rulings e0356664 · ceiling correction 15cc1f4f · **build: cadence 21d8e869 · verdict 6c73429f · decide f16c37ee**. Live metric ACCRUING (needs deploy + C10 activation) |
 | 6 | **Guardrail/hook layer** — what a session may do | 69 hook entries / 12 events, validate-bash, permission rails, Stop asserts, OVERWRITE guard | every subsystem's enforcement chokepoints | a hook failure must never block a tool by accident | open |
 | 7 | **Account/quota routing & relogin** — which account works | claude-accounts, cc-relogin*, limit-recover, model-config.yaml SSOT, launchers | fire-time ranking (2) | login cliffs are hard walls; 4 isolated accounts | open |
@@ -59,6 +59,26 @@ whole point of the split.
 liveness/comms/succession triangle shares seams — sequence, never parallel) · then 5 · 12 ·
 10 · 8 · 7 · 11 · 9 · 6 last (it is every other row's enforcement surface — rebuild it after
 its customers stabilize their contracts).
+
+## What DONE means on this map (coordinator ruling 2026-07-29 — binding)
+
+**DONE = designed + landed + adversarially proven + activation STAGED AND PLATTERED. It does
+NOT mean live.** Row 4 shipped an oracle that is provably inert right now — no `~/.claude/cc-beats`,
+not in any live `settings.json`, activation `.done` absent — and it is still correctly DONE,
+because launchctl activation and deploy are classifier-blocked for agents (the C10 boundary) and
+row 4 did the whole agent-side job: it landed, it staged `16-session-beat-activate.sh` in both the
+live queue and the repo SSOT, and it named the exact operator command. The ground-up skill's
+Phase 5 asks for precisely this and no more.
+
+**Therefore, if you CONSUME another row's mechanism, consume it FAIL-SOFT.** Assume it may be
+landed-but-inert and degrade cleanly; never make your design's correctness depend on a mechanism
+being activated. Row 3 modelled this exactly right — it detected row 4's inert oracle during its
+own Phase 1 and consumed it through a `cb_system_live()` probe rather than depending on it. Do the
+same, and say in your plan what your design does when the dependency is dark.
+
+**And check, don't trust the word DONE.** Row 3 found this only because it probed for existence
+evidence instead of reading a status cell. A row that trusted "DONE" would have designed against a
+phantom. Status is a claim like any other (see the constraint-cell learning below).
 
 ## Learnings (accumulate; never delete)
 
