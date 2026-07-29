@@ -155,16 +155,60 @@ STUB
   printf '%s' "$output" | grep -q limit-recover
 }
 
-@test "cliff: wave exceeds total concurrency (5 items, MAX=2, 2 accounts) → exit 4" {
+# ── the falsified premise, and the split that replaces it ─────────────────────────────────────────
+# THIS TEST USED TO ENCODE A FALSIFIED BELIEF: "wave exceeds total concurrency → exit 4 cliff",
+# asserting nothing but the exit code — identical to its cc-route neighbour below, so the two were
+# indistinguishable. Verified from disk, not inherited: `bef587ac` (2026-07-18) bounded the wave to
+# MAX_SPAWN precisely "so an oversized backlog stops false-cliffing", and cc-dispatch:199 slices the
+# wave to MAX_SPAWN before it ever calls this tool — yet the live IDL still records 12 cc-dispatch
+# quota-cliffs on 2026-07-26, eight days later. So the surviving cliffs were never wave sizing, and
+# an oversized wave is not evidence of a quota wall at all: the accounts have headroom by
+# construction (ranked_n > 0 below is that fact, asserted).
+#
+# The replacement is a VERDICT split, not a relaxed assertion. Wave oversize verdicts `capacity`;
+# a cc-route-propagated cliff verdicts `capped` with evidence. The exit code stays 4 for BOTH
+# because that is cc-dispatch's pinned contract (cc-dispatch:204 treats 4 as abstain+page and any
+# other non-zero as a loud refuse) — telling them apart is the journal's job, which is exactly what
+# made the false cliffs unmeasurable before (§5 F6). Whether wave oversize should leave exit 4
+# entirely is a cc-dispatch-contract question, open with the lead; it is a one-line change here.
+
+@test "capacity: an oversized wave verdicts 'capacity' — NOT a quota cliff (premise falsified)" {
   export STUB_RANK='acctA acctB' CC_WAVE_MAX_PER_ACCT=2
   run "$WP" --items '[{"id":"1","slot":"lead"},{"id":"2","slot":"lead"},{"id":"3","slot":"lead"},{"id":"4","slot":"lead"},{"id":"5","slot":"lead"}]'
-  [ "$status" -eq 4 ]
+  [ "$status" -eq 4 ]                                   # cc-dispatch contract, pinned deliberately
+  tail -1 "$CC_WAVE_IDL" | jq -e 'select(.verdict=="capacity")'
+  # the accounts HAVE headroom — the whole reason this is not a cliff
+  tail -1 "$CC_WAVE_IDL" | jq -e '.evidence.ranked_n == 2'
+  tail -1 "$CC_WAVE_IDL" | jq -e '.evidence.action != "/limit-recover"'
+  run bash -c "STUB_RANK='acctA acctB' CC_WAVE_MAX_PER_ACCT=2 '$WP' --items '[{\"id\":\"1\",\"slot\":\"lead\"},{\"id\":\"2\",\"slot\":\"lead\"},{\"id\":\"3\",\"slot\":\"lead\"},{\"id\":\"4\",\"slot\":\"lead\"},{\"id\":\"5\",\"slot\":\"lead\"}]' 2>&1 1>/dev/null"
+  ! printf '%s' "$output" | grep -q limit-recover || false
 }
 
-@test "cliff: a cc-route quota cliff propagates → exit 4" {
+@test "cliff: a cc-route-propagated quota cliff is GENUINE — verdict 'capped', /limit-recover" {
+  # The neighbour the ruling requires to stay distinguishable. cc-route's exit 4 means "general
+  # route none, every account capped" (bin/cc-route:29,264) — a real capped-account stop, so it
+  # keeps the cliff verdict AND the operator action the oversize case must never carry.
   export STUB_ROUTE_CLIFF=1
   run "$WP" --items '[{"id":"a","slot":"lead"}]'
   [ "$status" -eq 4 ]
+  tail -1 "$CC_WAVE_IDL" | jq -e 'select(.verdict=="capped" and .evidence.action=="/limit-recover")'
+  run bash -c "STUB_ROUTE_CLIFF=1 '$WP' --items '[{\"id\":\"a\",\"slot\":\"lead\"}]' 2>&1 1>/dev/null"
+  printf '%s' "$output" | grep -q limit-recover
+}
+
+@test "the pair cannot collapse: wave-sizing and a real capped stop verdict DIFFERENTLY" {
+  # The guard the ruling actually asks for. Both cases exit 4, so an exit-code-only assertion (what
+  # both tests used to be) passes against a tool that cannot tell them apart. This one fails.
+  export STUB_RANK='acctA acctB' CC_WAVE_MAX_PER_ACCT=2
+  run "$WP" --items '[{"id":"1","slot":"lead"},{"id":"2","slot":"lead"},{"id":"3","slot":"lead"},{"id":"4","slot":"lead"},{"id":"5","slot":"lead"}]'
+  v_sizing="$(tail -1 "$CC_WAVE_IDL" | jq -r '.verdict')"
+  unset CC_WAVE_MAX_PER_ACCT
+  export STUB_RANK='' STUB_ROUTE_CLIFF=1
+  run "$WP" --items '[{"id":"a","slot":"lead"}]'
+  v_capped="$(tail -1 "$CC_WAVE_IDL" | jq -r '.verdict')"
+  [ "$v_sizing" = "capacity" ]
+  [ "$v_capped" = "capped" ]
+  [ "$v_sizing" != "$v_capped" ]
 }
 
 @test "usage: empty items array → exit 2" {
