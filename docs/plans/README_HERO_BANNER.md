@@ -298,8 +298,126 @@ because the prototypes are inlined rather than linked.
 
 </details>
 
+## v2 — nine candidates, awaiting the operator's comparison
+
+**Open the page:** `assets/banner/v2/comparison.html`. Nine banners, each shown animating and
+frozen. The README header is **untouched**; `banner-apply-header.sh` stays unrun.
+
+The operator's ruling on the redesign was **build all three subjects, and variants of each** — not
+pick one. So the subject question was still answered first, it just resolved to "all of them".
+
+### The subjects, and why these three
+
+Drawn on the question the README asks of itself in its third paragraph — *how do you run many at
+once, safely, unattended?* Three words, three different claims a header could make:
+
+| | Subject | The claim | Variants |
+|---|---|---|---|
+| **S1** | The world it lives in — *safely* | `~/.claude` stopped being machine state and became a place that is deployed | `s1a-horizon` · `s1b-close` · `s1c-scene` |
+| **S2** | The fleet — *many* | many sessions at once on one machine, unable to collide | `s2a-lanes` · `s2b-depth` · `s2c-row` |
+| **S3** | The night shift — *unattended* | it runs while you sleep, and pages you only for a decision | `s3a-starfield` · `s3b-tree` · `s3c-longwatch` |
+
+**In S2, nothing joins the creatures.** A thread between two of them would rebuild the handoff
+infographic R1 rejected. Same ground, separate lanes, no contact — the absence *is* the argument.
+
+**Nothing is invented.** The creature is the shipped 11×8 grid in `#D77757`; the motion is its
+shipped idle pose table (`default · look-left · look-right · arms-up`); the landscape and the night
+sky are the shipped session-start scenes. R3's seamless loop therefore comes from the source
+material — an idle cycle loops by nature — rather than from a contrivance.
+
+**No tagline.** "Sessions run each other" is one of five properties, so as banner copy it is an R1
+subsystem claim, and the h1 immediately below says it better (restraint rule 4).
+
+### Two harness defects found on the way, both of which made renders LIE
+
+Worth more than the banners, because every future candidate is judged through this harness.
+
+1. **`banner-shots.sh` silently cropped anything taller than ~614 px.** A headless window yields a
+   viewport *shorter* than itself (`viewport_h = max(window_h, ~375) − 87` on Chromium 141/macOS),
+   so a window sized to the image left the bottom outside it, padded with page background. On
+   GitHub dark that padding is the same colour as the plate, so a truncated render looked like a
+   banner with generous bottom margin. A 1920×780 sheet lost everything below y=613. The inset is
+   now **measured per run** — a hard-coded 87 is one machine's constant, and a number that is wrong
+   without looking wrong is this bug's whole failure mode — then asserted and cropped back off.
+   RED-proofed by forcing the inset to 0. Note the 640 px asset still passes at inset 0, because its
+   request falls under the minimum-window clamp: **short banners were accidentally fine, which is
+   why three prototypes (all 520 px) never surfaced it.**
+2. **`--lint` now rejects authored `animation-delay`.** The freeze seeks a timestamp by overriding
+   delay on `*`, so an authored delay is silently discarded: a fleet staggered by per-element delays
+   would **screenshot in lockstep**, a far more convincing lie than an obviously broken frame. Phase
+   now lives in the **keyframe percentages** (`hold_cycle` rotates events inside the period), which
+   survives the freeze exactly. Same failure class as the two-animation case, same remedy.
+
+### What the checks caught that reviewing by eye did not
+
+- **`s2b` placed three creatures and rendered two** — the far one overlapped both its neighbour and
+  the wordmark's last glyph. Only visible once creatures were labelled *individually*: a union
+  bounding box cannot see it, and on a fleet it is wrong in both directions (creatures either side
+  of the title give a union that spans it, failing a clear layout).
+- **`s3c` cleared the title by 14 px at rest and collided by 8 px with its arms up** — a collision
+  present for half a second in nineteen. Checking `t=0` only would have shipped it.
+- **The night tree sat behind "ture" in `infrastructure`**, reading as smudges on the type.
+  `banner-collide` watches the *creature*, so static scenery never tripped it. Scenery now reserves
+  against the title box and the **build refuses to emit**. Dim is not harmless: texture behind a
+  title degrades exactly the legibility R2 exists to protect.
+
+### Decisions taken by measurement, not taste
+
+- **Legibility floor is 12 px per grid cell.** At 8 px the eyes are specks and the legs merge
+  (`assets/banner/clawd-reference.svg` is the ramp). This bounds how many creatures a composition
+  can hold.
+- **`arms-up` rises 3 cells.** The source's own rise is "one row up" in a two-row creature, which
+  does not map. Measured −2/−3/−4 on the 8-row grid: −2 reads as a hat brim, −4 as antennae.
+- **Compositions centre themselves on the resting silhouette.** Absolute y values left every variant
+  in one band with a third of the plate empty — designed versus merely placed. Reserving the arms-up
+  rise inside the band was worse: invisible headroom tilted every frame to hold room for a pose that
+  shows for half a second. Arms-up clearance is the render-time check's job instead.
+- **Reduced motion freezes the creature as itself.** Proven, not claimed: five variants are
+  **pixel-identical** frozen versus at rest; the night three differ only in star pixels, none
+  touching the creature. (An earlier sweep put `opacity: .5` on `.eye`/`.arm` along with the stars —
+  a degraded fallback wearing the same geometry, which is what "same artwork" forbids.)
+- **Frozen stills are near-lossless WebP** — 4.5 KB against 70 KB for PNG. Plain lossy WebP seams
+  flat regions and these frames are mostly one flat plate.
+
+### Tooling added
+
+| File | What it is |
+|---|---|
+| `scripts/clawd-sprite.py` | the creature as vector geometry, **derived** from the literal grid — the parts are declared separately (an animatable arm cannot be a run inside one merged path) and their union is then asserted against the grid, so a one-pixel drift fails the build |
+| `scripts/banner-build.py` | composes all nine, plus `kit` (the mechanism proof, kept buildable so the committed artifact is never a file with no generator) |
+| `scripts/banner-collide.py` | reads the render back: per-creature boxes versus the title box, and asserts title ink **exists** in every frame |
+| `scripts/banner-compare.py` | the comparison page — every candidate **linked** as `<img src="…svg">`, never inlined, so the page cannot flatter its subjects by granting capabilities the README withholds |
+
+### Still open
+
+- **The operator's pick.** Nine candidates, one gate, unchanged: nothing reaches the README until
+  the comparison has been seen.
+- Composition notes not acted on, being taste rather than defect: `s2a`'s even spacing reads
+  slightly mechanical; `s1c` is the busiest of the nine and the least restrained.
+
 ## Log
 
+- **2026-07-29 (v2)** — subject validated with the operator BEFORE any SVG was written, which is the
+  check whose absence sank v1. Ruling: build all three subjects and variants of each. Nine
+  candidates shipped to `assets/banner/v2/`, gate still closed. **Learnings worth keeping beyond
+  this track:**
+  - **A verification harness can fail in a way that looks like success.** Two separate defects here
+    produced renders that were *plausibly wrong* rather than obviously broken: a silent bottom crop
+    that read as bottom margin because the padding matched the plate colour, and an
+    `animation-delay` override that would have screenshotted a staggered population in lockstep.
+    Both are now refused loudly. The general shape: when a tool's failure mode is a *believable*
+    artifact, the tool needs an assertion, not a convention.
+  - **Union bounding boxes cannot check a population.** Labelling the creatures individually was
+    what surfaced three-placed-two-rendered; a union is wrong in both directions once there is more
+    than one subject in frame.
+  - **Check every timestamp, not `t=0`.** The one collision that mattered appeared for half a second
+    in nineteen, on the pose that only fires once per cycle.
+  - **A guard only sees what it was pointed at.** The collision check watched the creature, so
+    static scenery walked straight behind the title. Extending it to scenery was a two-line
+    reservation and caught the defect immediately.
+  - **Derive art from its source and assert the derivation.** The sprite's parts are declared
+    separately for animation, then their union is checked against the literal grid — pixel art is
+    exactly where an off-by-one survives review.
 - **2026-07-29** — operator reviewed the three prototypes and **REJECTED all of them**. Four
   binding rejections (R1 whole-system not handoff-infographic · R2 title always visible, motion
   supplements it · R3 must loop · R4 the Claude Code pixel-art creature, not the asterisk mark).
