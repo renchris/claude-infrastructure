@@ -433,16 +433,35 @@ the successor inherits:
 
 ### Coordinator handoff state (for the successor — campaign must outlive any one context)
 
-- **Done: rows 1, 4, 5.** In flight: row 3 (`gu-cross-session-comms-2`, sole lead pane `2413459C`,
-  account next) and row 12 (`gu-daemon-fleet-activation`, sole lead pane `C97E20DD` + 4 teammates,
-  account next4). Duplicate leads from the 529 incident are being stood down; `A7DA7EFB` was
-  instructed to harvest + shutdown_request + self-close and had not yet completed that at handoff.
-- **Next in order after these:** row 2 (unblocked once row 3 lands — strict 4→3→2), then 10 · 8 ·
-  7 · 11 · 9 · 6 last. Payload template is in this file; amend per row with a fresh account read.
-- **Five orphaned `gu5-*` assignees** from row 5 remain un-reaped and are NOT agent-reapable — see
-  the dead-end section above; plattered for the operator in `/tmp/gu-operator-steps.sh`.
-- **Operator platter is unrun** and now materially more urgent: §1 (ff + install.sh) is what makes
-  33 commits of landed work actually live.
+*(refreshed 2026-07-29T21:50Z, immediately before the coordinator recycled at 47% context.)*
+
+- **Done: rows 1, 4, 5 (3 of 12).** Beware the grep: `grep -c '\*\*DONE'` on the map now returns 4
+  because the "What DONE means" section contains the literal string. Count rows, not matches.
+- **In flight, both clean, one lead each:** row 3 = `gu-cross-session-comms-2`, pane
+  `2413459C-082E-4D13-914F-FD13190B664C`, account **next**, 1 ahead / clean. Row 12 =
+  `gu-daemon-fleet-activation`, pane `C97E20DD-33CD-4750-B1F7-BDAF875AAF8C`, account **next4**,
+  3 ahead / 4 dirty. Both are past Phase 1 with design landed and are landing continuously.
+- **The 529 duplicate is RESOLVED** — `A7DA7EFB` harvested its 3 researchers, handed 4 concrete
+  catches to the survivor, wrote nothing to the tree, and self-closed. No duplicate leads remain.
+- **Next fires, in order:** row **2** unblocks the moment row 3 lands (strict 4→3→2), then
+  10 · 8 · 7 · 11 · 9 · 6 last. Both slots are currently full — **do not fire until a row is
+  verified DONE by disk.** Re-read `claude-accounts` at fire time; `next2` is the coordinator's
+  own account.
+- **Load is the live constraint, not quota.** It has been 22-49 with two leads plus teammate
+  fleets. Gate every fire in ONE conditional command (see the coordinator-error section) — never
+  read `uptime` and fire in the same unconditional sequence.
+- **Five orphaned `gu5-*` assignees** from row 5 are still un-reaped and are NOT agent-reapable
+  (self-close refuses: no fired-peer stamp). Operator-owned; already plattered.
+- **`/tmp/gu-operator-steps.sh` is UNRUN and is now the campaign's biggest single lever** — deploy
+  is **47 commits behind**, so three rebuilds' worth of landed work is inert. §1 is guarded: it
+  refuses while `postland-verify` holds its run lock (pid 94251 was 2h28m into the corpus, the
+  only in-flight path to the first GREEN stamp). §2b warns that `desk-invariant` and `boot-resume`
+  are runaway generators — never re-enable them without a fleet concurrency ceiling.
+- **Filed this session:** `93a9f880b6fe` (self-close successor check false-negatives on resume) ·
+  `1e16815bac51` (teammate approval to a dead lead is invisible; beacon landed, wired, never
+  fired) · `817faf3a4968` (live alarm store ~40% fixture data) · `4e0038a19faf` (deploy behind,
+  board silent) · `c13dad7d5dbe` (install.sh bounces the verifier; self-extinguishing deploy loop).
+  Closed with evidence: `107f27fbb00c` (the mass-disable was deliberate).
 
 ## Inherited watch — first GREEN postland stamp (status, not a coordinator work item)
 
