@@ -323,3 +323,61 @@ because the prototypes are inlined rather than linked.
   - Chromium's `--virtual-time-budget` does **not** drive the animation clock of an SVG loaded as
     an image — every timestamp rendered identically. It was removed rather than left in place as
     a verification mode that cannot fail.
+
+---
+
+## v5 — the landscape line (2026-07-29, session 2). SETTLED FINDINGS — do not re-derive.
+
+The mascot-free detour was MY misread of the operator and is void: **clawd is a hard requirement**
+(R4 stands). Everything below is measured on disk with `scripts/banner-shots.sh`.
+
+**S1 · Loop length is effectively free — use it.** An animated SVG is declarative CSS, so a
+4-minute loop costs the same bytes as a 32-second one. Master is now **P=240 s** (240 = 2⁴·3·5).
+**The only hard rule: every sub-period must divide P exactly**, or the composite never returns to
+its start. Valid: 0.5 / 2 / 4 / 8 / 10 / 30 / 60 / 80 / 120. This is what makes **rare items**
+possible — an event visible 4 s once per loop is a **1.7 % duty cycle**.
+
+**S2 · One shared master period, phase via negative `animation-delay` — never per-element
+durations.** With mixed durations the composite only repeats at their LCM and FAILS a t=0 vs t=P
+frame-hash test. Verified both ways: mixed durations → `SEAM ✗`; shared period → byte-identical.
+
+**S3 · `prefers-color-scheme` DOES work inside SVG-as-image.** Measured with an inverted probe
+(default white, dark only via the query; rendered black on a dark OS). So **one self-theming file
+— no `<picture>`, no second asset.** Caveat unchanged: it follows the reader's **OS**, not GitHub's
+toggle, so both looks must be legible rather than assumed to match.
+
+**S4 · The reference is CLOUDS over a flat ground, not hills.** The welcome screen's dithered
+blocks float in the sky; clawd stands on a flat dotted rule. Uniform-width bars read as a city
+skyline — build stepped mounds, wider than tall.
+
+**S5 · The sky dotted rule has no reason to exist.** In the terminal it is the header divider under
+"Welcome to Claude Code v2.1.45" — UI chrome. In a banner whose wordmark sits *inside* the scene it
+divides nothing. **Removed.** The ground rule stays: it is the surface clawd stands on.
+
+**S6 · Ground the character by computation.** One `GROUND` constant; feet = `GROUND − 160·scale`.
+Verified by pixel-probing a render: lowest clawd pixel at SVG y=505.6 vs ground 506 → **−0.4 px**.
+
+**S7 · Stars need a text keep-out box.** They landed on the wordmark. Keep-out `(430,120)–(1490,262)`
+plus a 30 px margin, enforced at generation. Depth via three tiers (size + opacity + twinkle rate
+60 s / 30 s / 10 s), not one uniform field.
+
+**S8 · One animation per element — nest groups.** `banner-shots.sh`'s deterministic freeze is exact
+only while no element carries a comma-list of animations. Structure clawd as nested single-animation
+groups (`rSpin > hop > {ears, look > blink, legA, legB}`).
+
+**S9 · Tamagotchi, not a bob.** Constant life: 0.5 s walk stride · 4 s blink · 8 s look-around ·
+4 s hop · 2 s ear-wiggle. Plus **rare emotes**: sleep w/ Zzz (240 s), cheer w/ arms-up (120 s),
+turn-around (80 s). And rare world events: shooting star (240 s), a visitor peeking from behind a
+rock (240 s), drifting balloon (120 s). Verified alive: 12 frames sampled 0→31 s were 12 distinct
+renders, while t=0 vs t=P stayed byte-identical.
+
+**Verification commands (use these, don't invent):**
+```bash
+scripts/banner-shots.sh assets/banner/<f>.svg --times 0,240 --bg dark --out /tmp/x
+# then compare the two PNG hashes — MUST be identical. Guard for missing files:
+# a check that compares empty strings prints a FALSE PASS (this happened).
+```
+
+**Still open — the operator's standing ask:** a from-the-ground-up *"Opus 5 design-quality
+show-off"* pass. `v5a-long-walk.svg` is the working reference implementation of every constraint
+above, not the final artwork. Beauty is the remaining work; the constraints are done.
