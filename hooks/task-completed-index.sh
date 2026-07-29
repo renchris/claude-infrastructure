@@ -8,7 +8,10 @@ set -euo pipefail
 
 TASK_LIST_ID="${CLAUDE_CODE_TASK_LIST_ID:-}"
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}"
-INDEX="$HOME/.claude/tasks-index.json"
+# Both hooks source task-helpers.sh above, which resolves the index against the RUNNING
+# session's config dir. Re-hardcoding it here re-introduced the account-2/3/4 mis-target
+# that helper exists to prevent.
+INDEX="$TASKS_INDEX"
 FILTERED_DIR=".claude-tasks"
 
 # Determine the active task list — prefer .active-list-id, fall back to detection

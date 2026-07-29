@@ -3,8 +3,18 @@
 # Source: . "$(dirname "$0")/lib/task-helpers.sh"
 # Env overrides (tests): CC_TASKS_DIR, CC_TASKS_INDEX.
 
-TASKS_DIR="${CC_TASKS_DIR:-$HOME/.claude/tasks}"
-TASKS_INDEX="${CC_TASKS_INDEX:-$HOME/.claude/tasks-index.json}"
+# Resolve the store the way Claude Code does — relative to the RUNNING session's config dir — with
+# account 1's as the fallback. These were hardcoded to $HOME/.claude/tasks, which for accounts
+# 2/3/4 named a directory Claude Code never wrote to (it wrote to $CLAUDE_CONFIG_DIR/tasks), so the
+# index, the _current symlink and the desk's cross-project rollup all pointed at empty boards for
+# three of four accounts, silently and with no error anywhere. The mirror now symlinks tasks/ so
+# both spellings land in the same place — deriving it anyway keeps these hooks correct if that ever
+# stops being true, rather than correct only by coincidence.
+CC_CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+TASKS_DIR="${CC_TASKS_DIR:-$CC_CONFIG_DIR/tasks}"
+TASKS_INDEX="${CC_TASKS_INDEX:-$CC_CONFIG_DIR/tasks-index.json}"
+[ -d "$TASKS_DIR" ]   || TASKS_DIR="$HOME/.claude/tasks"
+[ -f "$TASKS_INDEX" ] || TASKS_INDEX="$HOME/.claude/tasks-index.json"
 
 # Find the active task list for a project (G-P14-7). When a project is known,
 # ONLY lists the tasks-index maps to THAT project are eligible — a globally
