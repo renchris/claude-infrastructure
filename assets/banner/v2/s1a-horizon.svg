@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 520" width="1920" height="520" role="img" aria-labelledby="t d">
+<title id="t">claude-infrastructure</title>
+<desc id="d">The words claude-infrastructure set in monospace on a dark plate. The title is present the whole time and never moves; the only motion is the orange Claude Code pixel creature idling — glancing left, glancing right and occasionally stretching both arms above its head — on a loop that repeats indefinitely with no restart. It stands on the same dotted horizon the words sit on, which runs the full width of the plate. Nothing else is in the frame.</desc>
+<defs>
+  <radialGradient id="plate" cx=".5" cy=".38" r=".72"><stop offset="0" stop-color="#171e27"/><stop offset="1" stop-color="#0d1117"/></radialGradient>
+  <linearGradient id="rule" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="1920" y2="0"><stop offset="0" stop-color="#30363d" stop-opacity="0"/><stop offset=".16" stop-color="#30363d" stop-opacity=".95"/><stop offset=".84" stop-color="#30363d" stop-opacity=".95"/><stop offset="1" stop-color="#30363d" stop-opacity="0"/></linearGradient>
+</defs>
+<style>
+  .f { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; }
+  #c0 .eye { animation: gaze_c0 13s step-end infinite; }
+  #c0 .arm { animation: arms_c0 19s step-end infinite; }
+  @keyframes gaze_c0 { 0%{transform:translateX(0px)} 28%{transform:translateX(-22px)} 34%{transform:translateX(0px)} 61%{transform:translateX(22px)} 67%{transform:translateX(0px)} 100%{transform:translateX(0px)} }
+  @keyframes arms_c0 { 0%{transform:translateY(0px)} 86%{transform:translateY(-66px)} 91%{transform:translateY(0px)} 100%{transform:translateY(0px)} }
+  /* Same artwork, held still. Every cycle begins AND ends on `default`, so the
+     frozen frame is one the animation genuinely passes through rather than a
+     separate static fallback free to drift from it. */
+  @media (prefers-reduced-motion: reduce) {
+    /* The creature must freeze as ITSELF. An earlier version swept opacity onto
+       .eye and .arm along with the stars, which washed out the arms and let orange
+       bleed through the eyes — a degraded fallback wearing the same geometry, which
+       is precisely what 'same artwork' rules out. */
+    .eye, .arm { animation: none !important; transform: none !important; }
+    /* Stars hold mid-twinkle rather than at their dimmest, so the sky still reads. */
+    [id^=tw] { animation: none !important; opacity: .45 !important; }
+  }
+</style>
+<rect width="1920" height="520" rx="14" fill="url(#plate)"/>
+<rect x=".75" y=".75" width="1918.5" height="518.5" rx="14" fill="none" stroke="#21262d" stroke-width="1.5"/>
+<g transform="translate(0 -24)">
+<line x1="0" y1="372" x2="1920" y2="372" stroke="url(#rule)" stroke-width="2" stroke-dasharray="3 9" opacity="1"/>
+<text class="f" x="960" y="332" text-anchor="middle" fill="#e6edf3" font-size="84" letter-spacing="1.5">claude-infrastructure</text>
+<g id="c0" shape-rendering="crispEdges">
+  <g fill="#D77757"><rect x="1604.2" y="196" width="198" height="132"/><rect x="1604.2" y="328" width="22" height="44"/><rect x="1648.2" y="328" width="22" height="44"/><rect x="1736.2" y="328" width="22" height="44"/><rect x="1780.2" y="328" width="22" height="44"/></g>
+  <g id="c0-armL" class="arm" fill="#D77757"><rect x="1582.2" y="240" width="22" height="44"/></g>
+  <g id="c0-armR" class="arm" fill="#D77757"><rect x="1802.2" y="240" width="22" height="44"/></g>
+  <g id="c0-eyeL" class="eye" fill="#0d1117"><rect x="1626.2" y="240" width="22" height="22"/></g>
+  <g id="c0-eyeR" class="eye" fill="#0d1117"><rect x="1758.2" y="240" width="22" height="22"/></g>
+</g>
+</g>
+</svg>
