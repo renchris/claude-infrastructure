@@ -1304,6 +1304,70 @@ DAY = Theme(
     vignette=0.10,
 )
 
+# v6b was `dark=NIGHT, light=DAY` — the SAME two Theme objects as v6a, so it was a re-skin rather
+# than a candidate: measured 6.92% pairwise RMSE in light and 7.91% in dark, the tightest pair in
+# BOTH schemes. The lead read that as a light-scheme convergence, but the measurement locates it
+# elsewhere: v6d has its own light palette and is as distinct in day as in night. What was actually
+# wrong is that two of the four candidates were one candidate.
+#
+# "Two Sessions" is about a meeting, so it gets a quieter, hazier night — moonlight through humidity,
+# lower star contrast, warmer air — and an overcast morning rather than a clear midday.
+HAZE = Theme(
+    sky_top="#0a0d18",
+    sky_mid="#141a2c",
+    sky_low="#26293c",
+    glow="#6b6480",
+    glow_op=0.52,
+    ground_top="#242a3d",
+    ground_bot="#141826",
+    rule="#6f7385",
+    wm="#f2f0f6",
+    sub="#9b98a8",
+    star="#e6e2ec",
+    star_cool="#cdd4ef",
+    star_warm="#ffeeda",
+    grain=0.075,
+    moon="#f6ecd8",
+    moon_halo="#f6ecd8",
+    cloud=[
+        ("#1a2033", "#2a3048", "#141a2a"),
+        ("#1f2639", "#333a52", "#181e2f"),
+        ("#252c40", "#3d445c", "#1d2334"),
+    ],
+    mound=["#232a3e", "#161b29"],
+    tuft="#3c4360",
+    fg="#0b0e17",
+    vignette=0.36,
+)
+
+OVERCAST = Theme(
+    sky_top="#c4ccd6",
+    sky_mid="#d8dee5",
+    sky_low="#e9ebec",
+    glow="#f0eae0",
+    glow_op=0.40,
+    ground_top="#dcdcd6",
+    ground_bot="#c6c7c0",
+    rule="#96999b",
+    wm="#171c22",
+    sub="#5f666e",
+    star="#f8fafc",
+    star_cool="#eef2fa",
+    star_warm="#fdf8f0",
+    grain=0.034,
+    moon="#eae4d6",
+    moon_halo="#eae4d6",
+    cloud=[
+        ("#e6eaee", "#f4f6f8", "#d2d8de"),
+        ("#ecf0f3", "#f8fafb", "#d9dfe4"),
+        ("#f1f4f6", "#fbfcfd", "#dee4e8"),
+    ],
+    mound=["#c2c4bd", "#adafa8"],
+    tuft="#9fa29a",
+    fg="#8b8e86",
+    vignette=0.14,
+)
+
 DUSK = Theme(
     sky_top="#0b1020",
     sky_mid="#232a4a",
@@ -1442,8 +1506,8 @@ VARIANTS = [
             "meet, both throw their arms up, and the newcomer carries on — the title happening "
             "rather than being described."
         ),
-        dark=NIGHT,
-        light=DAY,
+        dark=HAZE,
+        light=OVERCAST,
         clawd_scale=1.0,
         clawd_x=560,
         star_count=(280, 84, 28),
