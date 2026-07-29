@@ -24,11 +24,22 @@ and exercised across **5,709 sessions**.
 
 <div align="center">
 
-<picture>
-  <img src="assets/diagrams/handoff-choreography.svg" width="900" alt="Animated: one terminal window, three acts. Act 1 self-open — the left pane runs /handoff, claims a warm worktree, ranks four accounts, and splits its own pane; a second session boots on the right and reaches its first assistant turn. Act 2 two-way — the left pane sends a message with cc-notify, it lands as one line in a mailbox file, and the right pane drains it at a safe boundary and pings back. Act 3 self-close — the left pane verifies the successor is engaged, announces the succession into it, exits, and its pane closes with focus landing on the survivor.">
-</picture>
+<img src="assets/demo/handoff-live.gif" width="900" alt="Screen recording of one real iTerm2 window. A session runs handoff-fire.sh with --split-right --notify-back; the pane genuinely splits, a second Claude session boots on the right, reads its brief, runs git rev-parse and answers origin/main = 9b4436ad, says it is pinging the originator and retiring, then closes its own pane — leaving the originating pane alone with its fire summary.">
+
+<sub><b>An unedited screen recording.</b> A real session fires a real peer: the pane <b>splits</b> → the peer boots, reads its brief and answers <code>origin/main = 9b4436ad</code> → it <b>pings the originator</b> → it <b>closes its own pane</b>. No human touched the keyboard after the first command.</sub>
 
 </div>
+
+<details>
+<summary>Schematic — the same loop with the guarantees named</summary>
+
+<br>
+
+<img src="assets/diagrams/handoff-choreography.svg" width="900" alt="Animated schematic of one window in three acts. Act 1 self-open — the left pane runs /handoff, claims a warm worktree, ranks four accounts, and splits its own pane; a second session boots on the right and reaches its first assistant turn. Act 2 two-way — the left pane sends a message with cc-notify, it lands as one line in a mailbox file, and the right pane drains it at a safe boundary and pings back. Act 3 self-close — the left pane verifies the successor is engaged, announces the succession into it, exits, and its pane closes with focus landing on the survivor.">
+
+<sub>The recording shows that it works; this labels <i>why</i> it is safe — the successor is verified <b>engaged</b> before the parent exits, mail is drained at a <b>safe boundary</b> and acked <b>exactly once</b>, and focus lands on the <b>survivor</b> so no watched pane ever vanishes into a gap.</sub>
+
+</details>
 
 | | The property | What it removes |
 |---|---|---|
@@ -42,7 +53,7 @@ and exercised across **5,709 sessions**.
 
 ## 1. Sessions run each other
 
-**A session is not a terminal you babysit — it is an addressable process that can open, message, and retire its peers.** The animation above is the whole loop; the mechanics are four commands.
+**A session is not a terminal you babysit — it is an addressable process that can open, message, and retire its peers.** The recording above is the whole loop; the mechanics are four commands.
 
 | Touchpoint | Command | What happens |
 |---|---|---|
@@ -52,6 +63,12 @@ and exercised across **5,709 sessions**.
 | **Two-way** | [`cc-notify`](bin/cc-notify) · `--notify-back` · [`cc-await-ping`](bin/cc-await-ping) | Peers exchange messages, so a fired session can report completion, a decision gate, or a blocker back to the session that fired it. |
 
 > **Why `/exit` and not `/clear` + a queued payload.** Claude Code's queue is type-asymmetric: a built-in slash command holds until the calling turn ends, but *plain text* is steered into the still-running turn at the next tool-result boundary — which the firing script's own Bash call guarantees. A queued payload therefore ran inline in the **old** context while `/clear` stayed armed behind it. Exit-and-relaunch has no such race.
+
+The same three touchpoints at the command line — every line below is real output from the scripts in this repo:
+
+<img src="assets/demo/handoff-real.gif" width="900" alt="Terminal recording in three scenes. Scene 1, self-open: handoff-fire.sh --dry-run ranks all four accounts by live quota headroom, resolves the split anchor to the firing pane's own session id, and prints the exact composed launch command. Scene 2, two-way: cc-notify --self prints the pane uuid, cc-notify writes a message that appears as one timestamped line in the mailbox file, mailbox-drain.sh emits it as UserPromptSubmit additionalContext, and a second drain returns zero bytes because the seen cursor already consumed it. Scene 3, self-close: a bare self-close is refused for having no succession statement, and self-close --terminal is refused because an origin session was never fired by an originator.">
+
+<sub>Recorded with <a href="https://github.com/charmbracelet/vhs">VHS</a> from <a href="assets/demo/handoff-real.tape"><code>assets/demo/handoff-real.tape</code></a> — re-runnable, so it can never drift from the scripts it documents. The <code>/handoff</code> and <code>self-close</code> scenes run <code>--dry-run</code> (nothing is launched or closed); the mailbox round trip is real and completes against a temp inbox.</sub>
 
 ### A message is a file, not a keystroke
 
@@ -427,6 +444,8 @@ Workflow: `navigate → snapshot → click/type` by element ref. `agent-browser`
 **22 commands** (`commands/`) — `/handoff`, `/ship`, `/wrap`, `/desk`, `/accounts`, `/limit-recover`, `/research`, `/review`, `/commit`, `/harvest-skill` and more. **12 skills** (`skills/`) — agent-teams, research-subagents, frontier-routing, coding-standards, plan-conventions, cc-upgrade-gate and others. **4 agents** (`agents/`) — `schema-migration`, `visual-design-iterator`, `north-star-design-agent`, `fresh-eyes-evaluator`.
 
 **Editing the diagrams.** Sources live in `assets/diagrams/*.mmd` and render through [beautiful-mermaid](https://www.npmjs.com/package/beautiful-mermaid) — the ELK-based engine behind Cursor's agent panel — into per-mode SVGs, because GitHub cannot swap its own dagre renderer. Edit the `.mmd`, run `npm run diagrams`, commit the regenerated SVGs. `handoff-choreography.svg` is hand-authored (CSS-animated, reduced-motion aware) and has no `.mmd` source.
+
+**Re-recording the demos.** `assets/demo/handoff-real.gif` regenerates from its committed tape — `vhs assets/demo/handoff-real.tape` — so the command output in the README can never drift from the scripts. `assets/demo/handoff-live.gif` is a screen recording of an actual `/handoff`; it is captured by hand (`screencapture -v`, cropped to the iTerm2 window with `ffmpeg`) because it depends on a live fleet, so there is no script for it.
 
 </details>
 
