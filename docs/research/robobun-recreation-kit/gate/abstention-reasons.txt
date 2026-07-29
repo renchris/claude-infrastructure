@@ -1,0 +1,6 @@
+# CLOSED vocabulary. Anything not on this list is a REJECT, never a publish.
+# Verbatim from robobun's output; 88/200 sampled PRs used one of these.
+Platform-specific test(s) that do not run on this machine. Deferring to CI, which covers all platforms: {{PATHS}}
+Platform-specific test-only change; deferring to CI.
+docs-only change; test-proof not applicable
+build/CI scripts only; test-proof not applicable
