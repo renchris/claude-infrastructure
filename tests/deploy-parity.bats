@@ -77,6 +77,43 @@ setup() {
   [[ "$output" == *"SHADOWED"* ]]
 }
 
+# ── PATH-REACHABILITY IS THE CALLER'S PROPERTY, NOT THE DEPLOYMENT'S (2026-07-29) ───────────────
+# "not on PATH" used to set drift, which made the verdict a function of WHO CALLED the script: a
+# daemon whose PATH lacks $BINDIR was told "DRIFT — the code running is not the code in this
+# checkout" while every filesystem leg read LINKED/OK. Both launchd plists that drive this repo's
+# deploy path export a PATH without $HOME/bin, so the false alarm was real and only masked by
+# claude-accounts also being linked into ~/.claude/bin. The three cases below pin the split.
+
+@test "strict tool not on THIS caller's PATH ⇒ advisory PATHGAP, exit 0 (the daemon false alarm)" {
+  ln -sfn "$CC_PARITY_REPO/bin/toolA" "$CC_PARITY_BINDIR/toolA"
+  cp "$CC_PARITY_REPO/bin/toolB" "$CC_PARITY_BINDIR/toolB"
+  PATH=/usr/bin:/bin run "$ASSERT"          # a PATH that cannot see $CC_PARITY_BINDIR
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PATHGAP"* ]] || false
+  [[ "$output" != *"DRIFT"* ]]
+}
+
+@test "CC_PARITY_REQUIRE_PATH=1 keeps the strict verdict — detection is moved, never deleted" {
+  ln -sfn "$CC_PARITY_REPO/bin/toolA" "$CC_PARITY_BINDIR/toolA"
+  cp "$CC_PARITY_REPO/bin/toolB" "$CC_PARITY_BINDIR/toolB"
+  PATH=/usr/bin:/bin CC_PARITY_REQUIRE_PATH=1 run "$ASSERT"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"NOPATH"* ]] || false
+  [[ "$output" == *"DRIFT"* ]]
+}
+
+@test "SHADOWED is still drift while reachability is advisory (the split kept the real check)" {
+  ln -sfn "$CC_PARITY_REPO/bin/toolA" "$CC_PARITY_BINDIR/toolA"
+  cp "$CC_PARITY_REPO/bin/toolB" "$CC_PARITY_BINDIR/toolB"
+  mkdir -p "$BATS_TEST_TMPDIR/shadow"
+  printf 'echo A IMPOSTOR\n' > "$BATS_TEST_TMPDIR/shadow/toolA"
+  # Default (advisory) reachability — the shadow must still convict on its own.
+  PATH="$BATS_TEST_TMPDIR/shadow:/usr/bin:/bin" run "$ASSERT"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"SHADOWED"* ]] || false
+  [[ "$output" != *"PATHGAP"* ]]
+}
+
 @test "a tool absent from the checkout is skipped, not reported as drift" {
   ln -sfn "$CC_PARITY_REPO/bin/toolA" "$CC_PARITY_BINDIR/toolA"
   cp "$CC_PARITY_REPO/bin/toolB" "$CC_PARITY_BINDIR/toolB"

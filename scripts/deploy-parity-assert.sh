@@ -114,12 +114,39 @@ done
 
 # The binary actually resolved from PATH is the one every consumer runs — a matching
 # ~/bin file is worthless if an earlier PATH entry shadows it.
+#
+# TWO FACTS WITH DIFFERENT JURISDICTIONS (split 2026-07-29). SHADOWED is a property of the
+# DEPLOYMENT and is provable from here: the tool resolves, but to a file that is not the repo's,
+# so this caller demonstrably runs code the checkout does not contain. NOPATH is a property of
+# THIS PROCESS'S ENVIRONMENT: it says $BINDIR is absent from the PATH we happen to have been
+# handed, which is not evidence about the deployment at all. Conflating them made the verdict a
+# function of the caller — every daemon/hook caller whose PATH lacks $BINDIR (launchd's does:
+# both plists export "$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin", no
+# $HOME/bin) was told "DRIFT — the code running is not the code in this checkout" while every
+# filesystem leg above read LINKED/OK. That is a false alarm on a fail-closed deploy path, and
+# it was masked only incidentally, by claude-accounts also being linked into ~/.claude/bin.
+#
+# So: NOPATH no longer sets drift by itself. The detection is NOT dropped — it becomes its own
+# named check that binds where the fact is meaningful, i.e. when the PATH we are inspecting is a
+# human's interactive one (stdout on a tty) or when a caller demands it explicitly.
+# CC_PARITY_REQUIRE_PATH=1 forces strict, =0 forces advisory; set-but-EMPTY is honoured as unset.
+if [ -n "${CC_PARITY_REQUIRE_PATH:-}" ]; then
+  require_path="$CC_PARITY_REQUIRE_PATH"
+elif [ -t 1 ]; then
+  require_path=1                      # a human is reading this: their PATH is the one that matters
+else
+  require_path=0                      # daemon/hook/captured-output: our PATH is not the subject
+fi
 for tool in $STRICT_TOOLS; do
   [ -f "$REPO/bin/$tool" ] || continue
   onpath="$(command -v "$tool" 2>/dev/null || true)"
   if [ -z "$onpath" ]; then
-    report "NOPATH" "$tool" "not on PATH — add $BINDIR to PATH"
-    drift=1
+    if [ "$require_path" = 1 ]; then
+      report "NOPATH" "$tool" "not on PATH — add $BINDIR to PATH"
+      drift=1
+    else
+      report "PATHGAP" "$tool" "not on THIS caller's PATH (add $BINDIR) — not deployment drift"
+    fi
   elif ! diff -q "$REPO/bin/$tool" "$onpath" >/dev/null 2>&1; then
     report "SHADOWED" "$tool" "PATH resolves to $onpath, which differs from the repo"
     drift=1
