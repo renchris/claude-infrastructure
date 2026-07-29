@@ -30,17 +30,6 @@ and exercised across **5,709 sessions**.
 
 </div>
 
-<details>
-<summary>Schematic — the same loop with the guarantees named</summary>
-
-<br>
-
-<img src="assets/diagrams/handoff-choreography.svg" width="900" alt="Animated schematic of one window in three acts. Act 1 self-open — the left pane runs /handoff, claims a warm worktree, ranks four accounts, and splits its own pane; a second session boots on the right and reaches its first assistant turn. Act 2 two-way — the left pane sends a message with cc-notify, it lands as one line in a mailbox file, and the right pane drains it at a safe boundary and pings back. Act 3 self-close — the left pane verifies the successor is engaged, announces the succession into it, exits, and its pane closes with focus landing on the survivor.">
-
-<sub>The recording shows that it works; this labels <i>why</i> it is safe — the successor is verified <b>engaged</b> before the parent exits, mail is drained at a <b>safe boundary</b> and acked <b>exactly once</b>, and focus lands on the <b>survivor</b> so no watched pane ever vanishes into a gap.</sub>
-
-</details>
-
 | | The property | What it removes |
 |---|---|---|
 | **1** | [**Sessions run each other**](#1-sessions-run-each-other) | You are no longer the scheduler. Sessions open, message, and retire one another — and page you only when a human must decide. |
@@ -443,7 +432,7 @@ Workflow: `navigate → snapshot → click/type` by element ref. `agent-browser`
 
 **22 commands** (`commands/`) — `/handoff`, `/ship`, `/wrap`, `/desk`, `/accounts`, `/limit-recover`, `/research`, `/review`, `/commit`, `/harvest-skill` and more. **12 skills** (`skills/`) — agent-teams, research-subagents, frontier-routing, coding-standards, plan-conventions, cc-upgrade-gate and others. **4 agents** (`agents/`) — `schema-migration`, `visual-design-iterator`, `north-star-design-agent`, `fresh-eyes-evaluator`.
 
-**Editing the diagrams.** Sources live in `assets/diagrams/*.mmd` and render through [beautiful-mermaid](https://www.npmjs.com/package/beautiful-mermaid) — the ELK-based engine behind Cursor's agent panel — into per-mode SVGs, because GitHub cannot swap its own dagre renderer. Edit the `.mmd`, run `npm run diagrams`, commit the regenerated SVGs. `handoff-choreography.svg` is hand-authored (CSS-animated, reduced-motion aware) and has no `.mmd` source.
+**Editing the diagrams.** Sources live in `assets/diagrams/*.mmd` and render through [beautiful-mermaid](https://www.npmjs.com/package/beautiful-mermaid) — the ELK-based engine behind Cursor's agent panel — into per-mode SVGs, because GitHub cannot swap its own dagre renderer. Edit the `.mmd`, run `npm run diagrams`, commit the regenerated SVGs.
 
 **Re-recording the demos.** `assets/demo/handoff-real.gif` regenerates from its committed tape — `vhs assets/demo/handoff-real.tape` — so the command output in the README can never drift from the scripts. `assets/demo/handoff-live.gif` is a screen recording of an actual `/handoff`; it is captured by hand (`screencapture -v`, cropped to the iTerm2 window with `ffmpeg`) because it depends on a live fleet, so there is no script for it.
 
