@@ -300,6 +300,135 @@ cannot turn a thing OFF is not a seam.
   (session lifecycle) or row 4 (registry & reaping) — most are deliberate recycles reclassified by
   `classify_death`, but the ratio has never been audited. Named and backlogged, not pursued.
 
+## 8.5 Phase-1 fan-out results (4 read-only axes + adversarial verify)
+
+Every claim below is a subagent's, re-derived by the lead before entry. Corrections are marked.
+
+### 8.5.1 M1 INDEPENDENTLY CONFIRMED — and the population is larger than the lead measured
+
+> "The dominant compute load is un-gated agent-invoked `bats`, not landing gates — every other bats
+> path IS bounded, this one has no admission control at all."
+
+**11 concurrent ROOT bats invocations** (not the lead's 8 runs), and **exactly ONE is a
+land/verify-class corpus run** — the other ten are agent sessions running the repo's own suites from
+Bash tool calls in `wt-10941179f8ec`, `wt-f72db4e3e68d`, `wt-b4e49b4b5014`, `wt-c3dd374de94a`. Both
+*derived* paths are already bounded (`ship-land.sh:386,:712` sheds at `CC_GATE_MAX_LOAD`;
+`postland-verify.sh:199,:246-262` singleton mutex + the QoS band) — **neither covers a plain
+`bats tests/…`**. A grep of `hooks/` for `loadavg|ncpu|MAX_LOAD` finds no term anywhere in the Bash
+PreToolUse chain. Verbatim conclusion: *"the fleet bounded every DERIVED test path and left the
+PRIMITIVE unbounded."* This is M1, reached independently, and it names the same fix — the chokepoint
+plus the nice+taskpolicy band. **`bin/cc-bats` is the right artifact.**
+
+**Follow-on it adds beyond M1 (backlogged, NOT built here):** one admission term in the Bash
+PreToolUse chain for test-runner command lines — *admit if load/core < ceiling AND live bats roots
+< K, else **DEFER with the exact re-run command** (never kill, never queue-then-run-anyway)*. Note
+this is **not** an R1 violation: refusing-and-reporting is shedding, not waiting; `gate_admit` failed
+because it *slept*. Distinct from M1 (which needs no policy decision) and lands in row 6's hook
+chain, so it belongs to a separate change with its own RED-proof.
+
+### 8.5.2 ⛔ OPERATOR-BLOCKING — the machine-capacity ceilings ALREADY EXIST and are INERT
+
+The single highest-value finding, and it is not a build task:
+
+- `git rev-list --count HEAD..origin/main` = **54**. The shared checkout is 54 commits behind.
+- `origin/main:scripts/handoff-fire.sh:819-874` contains `capacity_gate()` — *"P0-17 machine-capacity
+  admission gate (lag incident 2026-07-29)"*, ceiling `CC_FIRE_MAX_LOAD_PER_CORE` default **2.0**,
+  enforced at `:1634`. Commit `0fc3a3d3`, an ancestor of origin/main.
+- `origin/main:bin/cc-dispatch:43-63` contains the decision/admission split with
+  `free_slots = max(0, CEILING - live_workers)`.
+- **Live layer:** `grep -c capacity_gate ~/.claude/scripts/handoff-fire.sh` = **0**;
+  `grep -c CEILING ~/.claude/bin/cc-dispatch` = **0**. The live symlinks point into the *behind*
+  checkout, so both landed ceilings are absent from the layer that actually runs.
+- The gate's own header records load **27** (2.7/core) when it was written earlier the same day; the
+  lead measured **40.9** (4.09/core) hours later — load climbed straight past a landed ceiling that
+  would have refused every net-new fire.
+
+This is memory `deploy-lag-checkout-behind-origin` exactly: *landed ≠ deployed*. **Structural answer
+(for a later change, not a `git pull`):** a ceiling must be read from a location that *cannot* lag —
+bind the hardware term in harness config, not in a symlinked script body — and make inertness LOUD,
+so the gate self-reports `capacity_gate: ABSENT` at every spawn rather than silently admitting.
+
+Related: **a ceiling was built for RECOVERY spawns only.** `lr-select.py:83-84` caps recovery at
+`MAX_TOTAL=4` / `MAX_PER_WORKTREE=1`, and `SESSION_SPRAWL_CONSOLIDATION_PLAN.md` (status `complete`)
+states the right principle verbatim — *"the fix is at spawn time, not a reaper"* — but its caller
+inventory enumerates only the four resume/recovery callers. The organic paths (handoff-fire net-new
+fires, desk fires, Agent-Team assignee spawns) were never given a fleet term. That gap is what
+`0fc3a3d3` tried to close 8 days later, and it is undeployed.
+
+### 8.5.3 M3 mechanism identified exactly — pay-then-damp is structural, not incidental
+
+`operator-readout.sh:326` runs `render_block … > "$TMPB"` **first**; the damping latch starts at
+`:330` and hashes **the rendered block** at `:333`. So the latch input *is* the expensive output —
+the 900 s TTL suppresses *printing* and saves **zero** CPU. Inside `render_block` (108-288): 24
+command substitutions, 75 pipeline stages, and per invocation `git`×7, `jq`×6, `cc-backlog`×5,
+`cc-blockers`×2, `cc-decide`×2 — including a `git rev-list --count HEAD..origin/main` against the
+**one shared checkout's `.git`** from every session's every Stop. This is the structural cause of the
+lead's measured 2711 ms.
+
+**Structural answer (refines M3):** invert the latch input — damp on a *cheap* change-stamp computed
+**before** rendering (HEAD sha + a trunk-distance cached by a single writer, × mtimes of
+`pending-activation/`, `decisions/`, backlog jsonl) and render only on stamp change or TTL expiry.
+Separately, the shared-checkout deploy-lag read must be produced **once by a single writer** into a
+file every session reads, never recomputed N times against one contended `.git`.
+
+### 8.5.4 NEW — the hook chain is O(N²), and it is fork-dominated not work-dominated
+
+Measured at load 58.4: 40 × `bash -c 'exit 0'` = **13.38 ms wall vs 6.78 ms child CPU ⇒ 49% pure
+scheduler queueing**. At load 69.2: bash fork+exec 15.5 ms, zsh 17.9 ms, jq startup 15.1 ms,
+`git rev-parse HEAD` 15.0 ms, **python3 startup 68.7 ms**. Fork-inducing `$(` counts on the
+per-Bash-call chain: `waiting-recycle.sh` **131**, `teammate-checkpoint.sh` 17, `validate-bash.sh` 13.
+So the lead's 1037 ms ≈ 67 forks and 3688 ms ≈ 238 forks.
+
+**Why it is O(N²):** forks/s is O(N); cost-per-fork is O(load); load is O(forks/s). Measured
+inflation already 2× (6.78 ms of work billed at 13.38 ms). **This revises the lead's §1 conclusion
+that hook cost is a benign ~0.9 cores** — that figure was measured *at* high load and is therefore
+partly self-inflicted, and it grows super-linearly rather than linearly. Structural answer: stop
+paying process creation per event — one long-lived per-session hook **broker** over a pipe, or as a
+bounded fallback collapse the 5 PreToolUse/Bash hooks into one process and the 9 Stop hooks into one.
+Owner: **row 6** (hook layer), with this row supplying the O(N²) measurement.
+
+Also on the hot path: `waiting-recycle.sh:536` does a **full-file `jq` parse of the session
+transcript on every PostToolUse** — O(transcript size), which grows monotonically within a session.
+
+### 8.5.5 Additional leak-class findings (row 13 backlog; none built here)
+
+| Finding | Evidence | Owner |
+|---|---|---|
+| `cc-backlog` full-slurp on the **Stop hot path** — O(records-ever-filed), 0.80 ms/record | axis 4 | 10 / 13 |
+| `session-index.db` has **zero retention** (299-day span, 5788 rows), opened by 3 sqlite3 procs | axis 4 | 9 |
+| **10 of 28 launchd plists on disk are absent from the live layer** — the GC/reaper layer is staged-not-loaded | axis 2 & 4 | 12 |
+| `postland-verify`: a **300 s launchd interval wrapping a 10,800 s** corpus (self-overlap risk; it does hold a mutex) | axis 2 | 1 |
+| `cc-classify` inside `cc-reaper`: O(live_sessions × 4 account roots × corpus) filesystem walk | axis 2 | 4 |
+| `idl.jsonl` is one **17.5 MB** append-only file, full-grepped **4× per `cc-audit` call** | axis 2 | 10 |
+| `log-bash.sh` appends unbounded; `bash-execution.log` is **23% over its own stated cap** | axis 4 | 6 |
+| 168 stale files in `~/.claude/watchdog` (oldest 100 d); worktree janitor covers 1 of 5 owning repos | axis 3 & 4 | 11 |
+
+### 8.5.6 Lead corrections to the fan-out's own claims (re-derived before entry)
+
+- **"XProtect + syspolicyd burn ~97% of one core" — NOT SUPPORTED at that magnitude.** Re-derived:
+  `XprotectService` pid 903 is at **0.0% CPU** now, with `TIME` 122:50 over `ELAPSED` 1d20h33m =
+  **~4.6% of one core lifetime-average**; `syspolicyd` 78:41 over the same span = ~2.9%. The reported
+  89.9% is the **same `ps %cpu` lifetime-average trap** the lead recorded in §1.1 — and it is
+  self-contradicted by the `TIME` column in the agent's own evidence. Combined, these scanners are
+  ~0.3 cores, not ~1. **The worktree sprawl underlying it IS real and re-derived: 131 dirs, 114 GB,
+  4.26M files** (a plain `du` over it exceeded a 2-minute timeout, which is itself evidence of
+  scale). Kept as a row-11 sprawl item; **dropped as a CPU finding.**
+  Also: the proposed `.metadata_never_index` fix is a **Spotlight** exclusion, and the same report
+  exonerates Spotlight (`mds` 1.1%, `mds_stores` 0.7%) — it would not reclaim XProtect time. The
+  agent's structural answer conflated the two scanners.
+- **The lead's own "19.7 GB across 31 sessions" overcounts by ~2.34×** — `ps rss` double-counts
+  shared pages; true footprint ≈ 8.4 GB. Session count and per-process RSS re-derive correctly.
+  **This makes §3.1's memory exoneration stronger, not weaker.**
+- **The lead's "RSS flat with age" used the wrong instrument** (`rss` rather than phys_footprint).
+  The *conclusion* (no per-session leak) is unchallenged — fd-flatness and the 30 h/417 MB vs
+  33 min/700 MB spread both still hold — but the instrument is named here so a later revision
+  re-derives it with `footprint(1)`.
+- **"8 concurrent gate runs" → 11 concurrent bats roots** (68-87 bats-family procs at sample time).
+  Strengthens M1.
+- **"69 hook commands" — CONFIRMED** by independent re-derivation.
+- **Method warning worth keeping:** `launchctl print`'s `runs =` field is **not** a reliable run
+  counter; trusting it would have produced two false duty cycles.
+
 ## 9.1 Build-phase measurements — three Darwin constraints that changed the design
 
 Discovered while building M1 (`bin/cc-bats`, `scripts/qos-census.sh`, `tests/qos-chokepoint.bats`).
