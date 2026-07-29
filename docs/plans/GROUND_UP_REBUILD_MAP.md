@@ -25,7 +25,7 @@ rebuilds must not both redesign; the row that owns it is marked.
 | 9 | **Memory & knowledge** — what survives sessions | MEMORY.md + topic files, skills/, plans + find-plan, session index/search | consumed by every session start | anti-capture hygiene; index at read-size limit | open (compaction backlogged b0d889846885) |
 | 10 | **Observability & operator surface** — what the human sees | cc-blockers board, operator-readout, pages+damping, statusline, activation queue | renders facts owned by 1,4,5,7 | absence-is-loud WITH existence evidence; silver-platter commands | open |
 | 11 | **Worktree & warm-pool management** — where writers work | worktree-gc, warm pool build, new-worktree, .worktreeinclude | claimed by (2); landed by (1) | 107 GB observed drift; ownership per artifact-class | open |
-| 12 | **Daemon fleet & activation** — what runs unattended | 13+ launchd jobs, plist SSOT parity, pending-activation queue, C10 boundary | carries 1,4,5,7,8 | disabled-bit trap; agent stages / operator activates | open |
+| 12 | **Daemon fleet & activation** — what runs unattended | **14** launchd jobs, plist SSOT parity, pending-activation queue, C10 boundary | carries 1,4,5,7,8 | disabled-bit trap **(CONFIRMED but INSUFFICIENT — 1 of 3 silent states; see below)**; agent stages / operator activates | **IN PROGRESS 2026-07-29** — [DAEMON_FLEET_V2.md](DAEMON_FLEET_V2.md); design landed 59f7eb38 |
 
 **Why this cut is MECE:** every script/hook in the repo answers to exactly one row's
 responsibility; overlaps are declared as seams with a single owner. Row 1's rebuild validated
@@ -150,3 +150,28 @@ phantom. Status is a claim like any other (see the constraint-cell learning belo
   session doing dispatch by hand is what masked the daemon's 3-day death — a manual fallback that
   silently substitutes for an inert automation is why nobody noticed, so the inert-alarm cannot be
   keyed on "work is happening", only on "the job that should be running, is".
+- 2026-07-29 (row 12) **AN ALARM'S EXISTENCE EVIDENCE MUST COME FROM A DECLARATION, NEVER FROM THE
+  SUBJECT'S OWN SUCCESS HISTORY.** The `absence-alarm-needs-existence-evidence` law is right, but
+  the incumbent implements it by gating on the subject's past activity — which makes "never worked
+  once" indistinguishable from "never supposed to exist", so it is never alarmed. That is exactly
+  the population that matters: `com.claude.deploy-live` is enabled, loaded, and has **never once
+  succeeded** (59 logged `cannot execute` failures, `runs=15`, `last exit code=1`), and its only
+  covering alarm (`deploy-lag`) is gated on a GREEN stamp — of which there are **0 in 33** — so it
+  is *structurally incapable of firing* no matter how long the deploy lane stays broken. Generalises
+  to every "is X still working?" check in the repo: gate on the declaration, not on X's past.
+- 2026-07-29 (row 12) **`launchctl list | grep <label>` is the repo's most load-bearing wrong idiom.**
+  It maps six real states onto one boolean and puts four of the broken ones on the healthy side:
+  not-installed and disabled both read "absent" (indistinguishable from each other and from
+  never-intended), while loaded-never-ran, loaded-failing and loaded-stalled all read "present".
+  Every existing check uses it. `launchctl print` (runs / last exit code / state) plus the
+  root-owned override db `/var/db/com.apple.xpc.launchd/disabled.501.plist` is the read that
+  separates them. Related: a broken daemon gets **quieter** with age — launchd's fast-fail throttle
+  (`minimum runtime = 10`) stopped scheduling deploy-live after 59 loud failures, so any detector
+  keyed on complaint volume or error rate reads recovery where there is decay.
+- 2026-07-29 (row 12) **THE COORDINATOR'S OWN COUNT WAS STALE WITHIN HOURS — 12/2 re-derived as
+  10/4.** The learning two entries above states 12 disabled / 2 enabled, verified the same morning;
+  by 14:00 `dispatcher` and `discovery` were both enabled and loaded (dispatcher pid 74276). Nobody
+  was wrong — the measurement decayed. **Consequence for row 5: its "dispatch decision ≤5 min"
+  metric is now MEASURABLE, not 0-by-construction.** And the general point, which is row 12's whole
+  thesis: any answer of the form "audit the fleet and write down the result" is already wrong; only
+  a scheduled reconciler stays true. Re-derive at the moment you gate a decision on it, not once.
