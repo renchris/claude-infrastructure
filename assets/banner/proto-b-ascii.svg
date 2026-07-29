@@ -1,0 +1,194 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 520" width="1920" height="520" role="img" aria-labelledby="t d">
+<title id="t">claude-infrastructure — one session divides into two, they exchange a message, and one retires</title>
+<desc id="d">The same banner as the vector prototype, with the Claude starburst drawn as monospace characters. A character-grid starburst rests on a hairline rail across a dark plate. It divides: the mark slides left while a second materialises and slides right. The rail between them lights up; a blue dot travels left to right and a green dot travels back, and the glyph density of each mark flashes as its message lands. The left mark then dims and contracts away as the right one eases back to the centre, leaving one mark at rest above the words claude-infrastructure and sessions run each other.</desc>
+
+<defs>
+  <radialGradient id="halo">
+    <stop offset="0" stop-color="#d97757" stop-opacity=".42"/>
+    <stop offset=".35" stop-color="#d97757" stop-opacity=".12"/>
+    <stop offset="1" stop-color="#d97757" stop-opacity="0"/>
+  </radialGradient>
+  <radialGradient id="plate" cx=".5" cy=".4" r=".66">
+    <stop offset="0" stop-color="#171e27"/>
+    <stop offset="1" stop-color="#0d1117"/>
+  </radialGradient>
+  <linearGradient id="railFade" gradientUnits="userSpaceOnUse" x1="150" y1="0" x2="1770" y2="0">
+    <stop offset="0" stop-color="#30363d" stop-opacity="0"/>
+    <stop offset=".2" stop-color="#30363d" stop-opacity=".9"/>
+    <stop offset=".8" stop-color="#30363d" stop-opacity=".9"/>
+    <stop offset="1" stop-color="#30363d" stop-opacity="0"/>
+  </linearGradient>
+
+  <!-- The mark, twice: a sparse field and a denser one over the same cells. Alternating them is
+       a real per-character dissolve for the price of two animated groups, rather than one frame
+       sequence per step. Every row starts at the same x so the grid cannot shear. -->
+  <g id="asciiSparse" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace"
+     font-size="11.0" fill="#d97757" xml:space="preserve" transform="translate(-148.5 0)">
+    <text y="-128.5"></text>
+    <text y="-117.5"></text>
+    <text y="-106.5"></text>
+    <text y="-95.5">                      -</text>
+    <text y="-84.5">                     :=:</text>
+    <text y="-73.5">             --      :*:      --</text>
+    <text y="-62.5">              =+:    :#:    :+=</text>
+    <text y="-51.5">               =#-    @    -#=</text>
+    <text y="-40.5">                :@=   @   =@:</text>
+    <text y="-29.5">       :--        @+  @  +@        --:</text>
+    <text y="-18.5">         -=*#*=    =* @ *=    =*#*=-</text>
+    <text y="-7.5">              :+@@#  @@@  #@@+:</text>
+    <text y="3.5">                    -*@*-</text>
+    <text y="14.5">              :+@@#  @@@  #@@+:</text>
+    <text y="25.5">         -=*#*=    =* @ *=    =*#*=-</text>
+    <text y="36.5">       :--        @+  @  +@        --:</text>
+    <text y="47.5">                :@=   @   =@:</text>
+    <text y="58.5">               =#-    @    -#=</text>
+    <text y="69.5">              =+:    :#:    :+=</text>
+    <text y="80.5">             --      :*:      --</text>
+    <text y="91.5">                     :=:</text>
+    <text y="102.5">                      -</text>
+    <text y="113.5"></text>
+    <text y="124.5"></text>
+    <text y="135.5"></text>
+  </g>
+  <g id="asciiDense" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace"
+     font-size="11.0" fill="#d97757" xml:space="preserve" transform="translate(-148.5 0)">
+    <text y="-128.5"></text>
+    <text y="-117.5">                      .</text>
+    <text y="-106.5">                     :-:</text>
+    <text y="-95.5">           ..        :=:        ..</text>
+    <text y="-84.5">           .:-.      -*-      .-:.</text>
+    <text y="-73.5">            :==:     -#-     :==:</text>
+    <text y="-62.5">             .+#-    -@-    -#+.</text>
+    <text y="-51.5">               +@=   :@:   =@+</text>
+    <text y="-40.5">                -@+   @   +@-</text>
+    <text y="-29.5">     ::-==-.      @*  @  *@      .-==-::</text>
+    <text y="-18.5">       .:=+#@%+:   +% @ %+   :+%@#+=:.</text>
+    <text y="-7.5">             .-*@@% :@@@: %@@*-.</text>
+    <text y="3.5">                    =#@#=</text>
+    <text y="14.5">             .-*@@% :@@@: %@@*-.</text>
+    <text y="25.5">       .:=+#@%+:   +% @ %+   :+%@#+=:.</text>
+    <text y="36.5">     ::-==-.      @*  @  *@      .-==-::</text>
+    <text y="47.5">                -@+   @   +@-</text>
+    <text y="58.5">               +@=   :@:   =@+</text>
+    <text y="69.5">             .+#-    -@-    -#+.</text>
+    <text y="80.5">            :==:     -#-     :==:</text>
+    <text y="91.5">           .:-.      -*-      .-:.</text>
+    <text y="102.5">           ..        :=:        ..</text>
+    <text y="113.5">                     :-:</text>
+    <text y="124.5">                      .</text>
+    <text y="135.5"></text>
+  </g>
+</defs>
+
+<style>
+  .f  { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; }
+  .clay { fill: #d97757 } .gold { fill: #d4af37 } .dim { fill: #6e7681 }
+
+  /* ── one master timeline, run ONCE and held. Nothing loops: a header that keeps moving
+        competes with the text it sits above. One animation per element, which is also what
+        makes a frozen reference frame exact (scripts/banner-shots.sh --lint). ───────────── */
+  .a { animation-duration: 8s; animation-iteration-count: 1; animation-fill-mode: both;
+       animation-timing-function: cubic-bezier(.4,0,.2,1); }
+
+  /* ① self-open */
+  #slideL { animation-name: slideL }
+  @keyframes slideL { 0%,20% { transform: translateX(0) } 35%,100% { transform: translateX(-270px) } }
+  #coreL  { opacity: 0; animation-name: coreL }
+  @keyframes coreL { 0%        { opacity:0; transform: scale(.78) }
+                     12.5%,70% { opacity:1; transform: scale(1) }
+                     85%,100%  { opacity:0; transform: scale(.6) } }
+  #slideR { animation-name: slideR }
+  @keyframes slideR { 0%,20% { transform: translateX(0) } 35%,70% { transform: translateX(270px) }
+                      85%,100% { transform: translateX(0) } }
+  #coreR  { animation-name: coreR }
+  @keyframes coreR { 0%,20%   { opacity:0; transform: scale(.5) }
+                     31%      { opacity:1; transform: scale(1.06) }
+                     36%,100% { opacity:1; transform: scale(1) } }
+  #seam { opacity: 0; animation-name: seam }
+  @keyframes seam { 0%,18% {opacity:0} 21% {opacity:.85} 30%,100% {opacity:0} }
+
+  /* the glyph field itself moves: density flashes on the split and on each arrival */
+  .sparse { opacity: 0; animation-name: sparse }
+  @keyframes sparse { 0%,17% {opacity:0} 21% {opacity:1} 26%,51% {opacity:0}
+                      55% {opacity:1} 59%,62% {opacity:0} 66% {opacity:1} 70%,100% {opacity:0} }
+  .dense { animation-name: dense }
+  @keyframes dense { 0%,17% {opacity:1} 21% {opacity:0} 26%,51% {opacity:1}
+                     55% {opacity:0} 59%,62% {opacity:1} 66% {opacity:0} 70%,100% {opacity:1} }
+
+  /* ② two-way */
+  #thread { opacity: 0; stroke-dasharray: 300; stroke-dashoffset: 300; animation-name: thread }
+  @keyframes thread { 0%,36%  { opacity:0; stroke-dashoffset:300 }
+                      38%     { opacity:1; stroke-dashoffset:300 }
+                      46%,68% { opacity:1; stroke-dashoffset:0 }
+                      78%,100%{ opacity:0; stroke-dashoffset:0 } }
+  #p1 { opacity: 0; animation-name: p1 }
+  @keyframes p1 { 0%,46% { opacity:0; transform: translateX(0) } 48% { opacity:1; transform: translateX(8px) }
+                  54% { opacity:1; transform: translateX(300px) } 56%,100% { opacity:0; transform: translateX(300px) } }
+  #p2 { opacity: 0; animation-name: p2 }
+  @keyframes p2 { 0%,57% { opacity:0; transform: translateX(300px) } 59% { opacity:1; transform: translateX(292px) }
+                  65% { opacity:1; transform: translateX(0) } 67%,100% { opacity:0; transform: translateX(0) } }
+  #haloL { opacity: 0; animation-name: haloL }
+  @keyframes haloL { 0% {opacity:0} 12.5%,62% {opacity:.34} 66% {opacity:.8} 70% {opacity:.34}
+                     85%,100% {opacity:0} }
+  #haloR { opacity: 0; animation-name: haloR }
+  @keyframes haloR { 0%,20% {opacity:0} 31%,51% {opacity:.34} 55% {opacity:.8} 60%,100% {opacity:.38} }
+
+  /* ③ the resting state — also the reduced-motion state and the poster frame */
+  .cap { opacity: 0 }
+  #cap1 { animation-name: cap1 } #cap2 { animation-name: cap2 } #cap3 { animation-name: cap3 }
+  @keyframes cap1 { 0%,13% {opacity:0} 17%,32% {opacity:1} 34.5%,100% {opacity:0} }
+  @keyframes cap2 { 0%,39% {opacity:0} 43%,63% {opacity:1} 65.5%,100% {opacity:0} }
+  @keyframes cap3 { 0%,68% {opacity:0} 72%,83% {opacity:1} 85.5%,100% {opacity:0} }
+  #rest { opacity: 0; animation-name: rest }
+  @keyframes rest { 0%,86% { opacity:0; transform: translateY(8px) } 96%,100% { opacity:1; transform: translateY(0) } }
+
+  @media (prefers-reduced-motion: reduce) {
+    .a { animation: none !important }
+    #slideL, #slideR, #coreR { transform: none !important }
+    #coreR { opacity: 1 !important }
+    #haloR { opacity: .38 !important }
+    .dense { opacity: 1 !important }
+    #coreL, #haloL, #seam, #thread, #p1, #p2, .cap, .sparse { opacity: 0 !important }
+    #rest { opacity: 1 !important; transform: none !important }
+  }
+</style>
+
+<rect width="1920" height="520" rx="14" fill="url(#plate)"/>
+<rect x=".75" y=".75" width="1918.5" height="518.5" rx="14" fill="none" stroke="#21262d" stroke-width="1.5"/>
+<line x1="150" y1="208" x2="1770" y2="208" stroke="url(#railFade)" stroke-width="1.5"/>
+
+<g id="slideL" class="a">
+  <g transform="translate(960 208)">
+    <circle id="haloL" class="a" r="205" fill="url(#halo)"/>
+    <g id="coreL" class="a">
+      <g class="dense a"><use href="#asciiDense"/></g>
+      <g class="sparse a"><use href="#asciiSparse"/></g>
+    </g>
+  </g>
+</g>
+
+<g id="slideR" class="a">
+  <g transform="translate(960 208)">
+    <circle id="haloR" class="a" r="205" fill="url(#halo)"/>
+    <g id="coreR" class="a">
+      <g class="dense a"><use href="#asciiDense"/></g>
+      <g class="sparse a"><use href="#asciiSparse"/></g>
+    </g>
+  </g>
+</g>
+
+<line id="seam" class="a" x1="960" y1="82" x2="960" y2="334" stroke="#d97757" stroke-width="1.5"/>
+<line id="thread" class="a" x1="810" y1="208" x2="1110" y2="208" stroke="#7d8590" stroke-width="2.5"/>
+<circle id="p1" class="a" cx="810" cy="208" r="6" fill="#58a6ff"/>
+<circle id="p2" class="a" cx="810" cy="208" r="6" fill="#3fb950"/>
+
+<g class="f" text-anchor="middle">
+  <text id="cap1" class="cap a" x="960" y="406" font-size="30"><tspan class="clay">① self-open</tspan><tspan class="dim" dx="16">a session splits its own pane</tspan></text>
+  <text id="cap2" class="cap a" x="960" y="406" font-size="30"><tspan class="clay">② two-way</tspan><tspan class="dim" dx="16">a message is a line in a file</tspan></text>
+  <text id="cap3" class="cap a" x="960" y="406" font-size="30"><tspan class="clay">③ self-close</tspan><tspan class="dim" dx="16">the originator retires — one is left</tspan></text>
+  <g id="rest" class="a">
+    <text class="gold" x="964.5" y="402" font-size="46" letter-spacing="9">claude-infrastructure</text>
+    <text class="dim" x="960.75" y="452" font-size="26" letter-spacing="1.5">sessions run each other</text>
+  </g>
+</g>
+</svg>
