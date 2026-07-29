@@ -50,6 +50,17 @@ the landed SHA `828816d`, an entire 3rd-instance root-cause finding (`c3edb2d`),
 `P2-P4 BUILT / LAND-BLOCKED` build status. Also snapshot the pre-compaction index verbatim into
 `archive/` so any hook can be restored word-for-word.
 
+**Use TWO overlapping detectors, and a case-insensitive second pass.** Token-matching alone both
+over- and under-reports. (a) Hard tokens — backticks, 7-hex SHAs, numbers, ALL-CAPS. (b) Clause
+coverage — split the hook on `;`/`—`/`→` and flag any clause whose content words are largely
+absent from the topic file; this catches index-only clauses built from common words that no token
+scan can see. Then re-run **both against the finished file** to prove no surviving line outran its
+topic file. The case-insensitive pass is what makes the audit usable: it separates genuine
+absences from emphasis-only variants (`DELETES` vs "deleted", `PRE-EXISTING` vs "PREDATES",
+`STARTING` vs "STARTS WITH"). 2026-07-29: of 38 first-pass flags across 91 entries only **2 were
+real** — a `date -v` sign trap and the `C10` label — and without the second pass the 36 false
+positives would have buried them.
+
 6. **Oversized index lines**: any `## Project State` entry whose index line exceeds ~200 chars
    while its detail already lives in the linked topic file. Propose a shortened <=200-char line
    (preserve the load-bearing hook + SHA + `[link]`). Show before/after; apply only on approval.
@@ -66,9 +77,52 @@ the landed SHA `828816d`, an entire 3rd-instance root-cause finding (`c3edb2d`),
    PRESUMED DISTINCT (e.g. `scope-freeze-at-intake` vs `mvp-ban-is-per-feature` encode different
    concepts) — flag, never merge.
 
+## BUDGET THE PREFIXES FIRST (do this before writing a single line)
+
+`- [Title](file.md) — ` is a **fixed cost no hook-cutting can touch**, and it is far larger than it
+looks: measured 2026-07-29, **7,153 B of a 25,393 B index — 28%** — across 91 entries (avg 79 B).
+So compute the real per-hook allowance up front:
+
+```
+per_hook_budget = (target_bytes - header - Σ prefix_bytes - newlines) / N
+# 2026-07-29: (17,100 - 31 - 7,153 - 92) / 88  ≈  115 B   ...against a 199 B average.
+```
+
+That number decides *which job you are doing*: ~180 B/hook is a tightening pass (two rules per
+line), ~115 B is a **one-governing-rule** pass. They are different jobs and mixing them wastes a
+full rewrite — discovering this only after the first pass left it 1,105 B short cost a second pass.
+
+**Titles are the near-lossless lever.** The *filename* carries identity (link target + graph key);
+the title is only a human label. Retitling 49 entries via an explicit **hand-authored map**
+(`"Land pipeline v2: verdict inversion"` → `"Land pipeline v2"`) freed ~800 B that no hook-cutting
+could reach. A map is not truncation — every replacement is written out longhand.
+
+**Do NOT budget for merging.** The `[[...]]`-cross-link rule below makes merges nearly unavailable
+in a dense memory: 2026-07-29 *every* candidate (both `hermetic-*`, the two desk monitors,
+`named-failure`/`gate-never-ran`, `argv-is-sampling`/`effect-read`, the three `feedback-*drive*`)
+was cross-linked, and only **4 of 91** entries were honestly archivable. Plan the reduction as
+**rewrite + a little archiving**; a plan leaning on merges under-delivers and tempts dishonest ones.
+
+## CONCURRENCY — the index is written by other sessions while you work
+
+`MEMORY.md` is appended to by sibling sessions mid-task. 2026-07-29 two arrived during one
+compaction (+533 B, then +420 B), and a third session had left a **complete topic file with no
+index line** (silent decay — re-index it per SAFE-AUTO 4).
+
+- **`Edit`, never `Write`.** Edit's stale-read check is what catches a concurrent append — it fails
+  loudly. A wholesale `Write` destroys the sibling's entry silently.
+- **Re-measure immediately before applying**, and **fold new arrivals into the compaction** rather
+  than clobbering them (audit them first, like any other line).
+- **The byte target is a moving one.** Re-verify at the end, and if the index is over target purely
+  because siblings appended after your pass, **report that** — do not re-grind other sessions' fresh
+  entries to hit a number.
+
 ## PROTECTED
 - Any entry/line tagged `(PINNED)` is skipped entirely (explicit opt-out; mirrors hermes pin-to-protect).
 - Never delete historical decisions, "Why:" rationale, learnings, or known issues (global File Update Rule).
+- Archiving *intentionally* leaves a topic file unindexed. Keep that honest by putting a pointer —
+  `<!-- archived entries: archive/MEMORY_ARCHIVE_<year>-H<half>.md -->` — in the index header, so
+  archived topics stay discoverable from the auto-loaded surface. Cheaper than a bullet per entry.
 
 ## Output
 A report: SAFE-AUTO actions (taken or previewed), then the PROPOSE-ONLY queue as an
