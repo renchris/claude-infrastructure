@@ -171,3 +171,38 @@ mints a fresh cell per run, and the 7 post-v2 stamps were still 0 green. The act
 **retry ladder**, not the cell — it scored rc 124 (its own 300 s bound firing) as a test failure, so
 any suite slower than the bound could only ever be convicted. Full evidence and the C23 fix:
 `LANDING_GATE_ROOT_CAUSE_2026-07-26.md` §5. Backlog `10941179f8ec`.
+
+### §7 ANSWERED by measurement (2026-07-29, backlog `ba63751cea54`)
+
+§7 closed the cell hypothesis as **OBSOLETE** (the pipeline no longer reuses a cell). The bisect §6
+actually asked for was then run anyway, so it is now also closed as **REFUTED by measurement** →
+**`docs/research/POSTLAND-CELL-BISECT-2026-07-29.md`**. It agrees with §7's ladder finding and adds
+one correction. Short form, so nobody re-runs it:
+
+- The reused `ci-postland` cell's *entire* non-tracked content is **3 `.pyc` files** whose sources are
+  byte-identical across the tree change — a valid, inert cache, not cross-tree residue. Same tree hash
+  in both cells; the disk differed by exactly those 3 files.
+- The six convicted suites are **exactly** `scripts/host-suites.manifest`. v1 ran `bats tests/` (bare
+  dir, includes them); v2 runs `tests/*.bats` MINUS that manifest. **v2 cannot convict them because it
+  does not run them** — that, not the fresh cell and not PATH, is why they vanished at the cutover.
+- The `env -i` PATH model in §6's neighbourhood is wrong for this job: the launchd plist has exported
+  `$HOME/.claude/bin` since its first commit (`95438bbb`); only `$HOME/bin` was ever missing, and the
+  six pass 155/0 under exactly that PATH.
+- Both full-corpus arms ran to completion (2324/2324, same 7145 s window). The reused cell produced
+  **zero** failures the fresh cell did not; the only asymmetry was one *extra* file in the **fresh**
+  arm, and it passes 11/0 alone in both cells. The red was also caught **flipping live** with the cell
+  held constant: `21b68c60` landed two brand-new tracked files at 22:31:50Z, and deploy-parity's host
+  assertion went red in *both* cells 2 s apart — the deployed-layer circle, not worktree residue.
+- **Independently re-derived §7's ladder finding** before seeing it: `waiting-recycle` measures 445 s
+  alone vs `FILE_TO=300`, so both retries die on the bound and it is convicted 2/3 with `flakes=0` as
+  the tell. That is §7/C23, already fixed — my duplicate backlog item was closed, not re-worked.
+- **The one correction to §7.** Its point 4 ("the convicted suites are exactly the heaviest") holds for
+  the *post-v2* red (`postland-verify.bats`, 51 tests ≈ 50 min solo) but **not** for the 18 *pre-v2*
+  convictions: measured solo at load 25, five of that six are **2-14 s** (deploy-parity 9 s,
+  desk-arm-live 9 s, desk-recycle-durable 11 s, lr-team-audit 2 s, session-continue 14 s) — a 300 s
+  bound cannot convict them. Those five are host/deployed-layer assertions, and *that* is why the set's
+  membership never varied. Two eras, two mechanisms; the ladder fix does not retire the first one.
+- **Still open and unfixed on trunk** (`cc89fc8dc765`): the stall watcher is blind to bats' no-TAP
+  counting pass — its clock starts at t=0 and only `ok|not ok` lines reset it (verified on `origin/main`:
+  zero plan-line awareness), while the counting pass over 141 files measured **>600 s** at load 33-48
+  under background QoS against a 900 s bound. Latent load-conditional false cut.
