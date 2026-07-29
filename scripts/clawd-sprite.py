@@ -129,7 +129,13 @@ def sprite(
     plate: str = "#0d1117",
     animatable: bool = True,
 ) -> str:
-    """One creature. `animatable` gives the movable parts ids so a composition can drive them."""
+    """One creature.
+
+    `animatable` gives the movable parts an id (to drive one creature) and a class (to drive a whole
+    population from one rule). A composition drives them with CSS `transform`, which beats the
+    `transform` attribute a baked pose writes — so an animated creature should be emitted in the
+    default pose and moved from the stylesheet, not emitted mid-pose.
+    """
     p = POSES[pose]
     eye_dx, arm_dy = p["eye_dx"] * px, p["arm_dy"] * px
 
@@ -139,11 +145,11 @@ def sprite(
         f'  <g fill="{BODY}">{"".join(body)}</g>',
     ]
     for side, arm in ARMS.items():
-        ident = f' id="{idp}-arm{side.upper()}"' if animatable else ""
+        ident = f' id="{idp}-arm{side.upper()}" class="arm"' if animatable else ""
         shift = f' transform="translate(0 {arm_dy:g})"' if arm_dy else ""
         out.append(f'  <g{ident} fill="{BODY}"{shift}>{_r(arm, px, ox, oy)}</g>')
     for side, eye in EYES.items():
-        ident = f' id="{idp}-eye{side.upper()}"' if animatable else ""
+        ident = f' id="{idp}-eye{side.upper()}" class="eye"' if animatable else ""
         shift = f' transform="translate({eye_dx:g} 0)"' if eye_dx else ""
         out.append(f'  <g{ident} fill="{plate}"{shift}>{_r(eye, px, ox, oy)}</g>')
     out.append("</g>")
