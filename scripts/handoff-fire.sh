@@ -1926,7 +1926,20 @@ elif [ -n "$WORKTREE" ]; then
     # the package manager by lockfile, run the matching install, then launch REGARDLESS of its exit
     # (`;` not `&&`) — a launched session self-heals its deps; an un-launched one can do nothing.
     WT_INSTALL='if [ -f pnpm-lock.yaml ]; then CI=true pnpm install --frozen-lockfile; elif [ -f bun.lockb ] || [ -f bun.lock ]; then bun install; elif [ -f package-lock.json ]; then npm ci; elif [ -f yarn.lock ]; then yarn install --frozen-lockfile; elif [ -f uv.lock ]; then { uv sync --frozen || uv sync; }; elif [ -f poetry.lock ]; then poetry install; elif [ -f Pipfile.lock ]; then pipenv sync; elif [ -f go.sum ]; then go mod download; elif [ -f Cargo.lock ]; then cargo fetch; else echo "handoff: no recognized lockfile — skipping dep install"; fi'
-    CMD="cd $(printf %q "$WT") && { $WT_INSTALL ; } ; ${PREFIX}${LAUNCHER}${ARGS} \"\$(cat $QP)\""
+    # TYPED VIA A SCRIPT FILE, never inline (2026-07-29 hang). The chain above NAMES package
+    # managers that need not exist here (go, uv, poetry, pipenv, cargo, bun…). zsh's `setopt
+    # CORRECT` — set in this operator's ~/.zshrc:53 — offers a spelling correction for an unknown
+    # COMMAND WORD as it READS the line, BEFORE executing it. Firing a Node worktree hung forever
+    # at `zsh: correct 'go' to 'god' [nyae]?` — raised by the `go mod download` branch, which a
+    # Node repo can never reach: no session, no error, no timeout, just a pane parked on a prompt.
+    # Because the trigger is READ-time, an inline `unsetopt correct` on the same line cannot help
+    # (it would not have run yet). The only deterministic fix is to keep every correctable word OUT
+    # of the typed line: `bash <file>` types three words that always resolve — cd, bash, launcher —
+    # and the chain then runs under bash, where no such option exists at all.
+    WT_DEPS="$(mktemp "${TMPDIR:-/tmp}/handoff-deps-XXXXXX.sh")"
+    { printf '#!/usr/bin/env bash\n'; printf '%s\n' "$WT_INSTALL"; } > "$WT_DEPS"
+    chmod +x "$WT_DEPS"
+    CMD="cd $(printf %q "$WT") && bash $(printf %q "$WT_DEPS") ; ${PREFIX}${LAUNCHER}${ARGS} \"\$(cat $QP)\""
   else
     CMD="cd $(printf %q "$WT") && ${PREFIX}${LAUNCHER}${ARGS} \"\$(cat $QP)\""
   fi
