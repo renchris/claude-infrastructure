@@ -12,6 +12,23 @@ setup() {
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   C="$REPO/bin/cc-relogin"
+
+  # bin/cc-relogin is `#!/usr/bin/env python3`, so its interpreter is whatever PATH resolves —
+  # and that makes any test of a POST-import code path silently PATH-dependent. Under a minimal
+  # (launchd/hook) PATH, /usr/bin comes before Homebrew and wins: /usr/bin/python3 is the one
+  # interpreter here WITHOUT websocket-client, so the lazy import fails first and the subject
+  # exits 1 (dependency fault) before it can ever reach the CDP leg. A test asserting the CDP
+  # verdict then measured the dep-fault leg instead — a dead assertion in exactly the environment
+  # it exists to protect. The undeclared dependency is the TEST's, so the TEST resolves it, by
+  # ABSOLUTE PATH as well as PATH (the pattern scripts/handoff-fire.sh uses for timeout(1)).
+  # Empty ⇒ no such interpreter on this box ⇒ those tests skip loudly rather than mis-measure.
+  # The dep-fault case itself is asserted separately and deliberately runs on the bare PATH.
+  PY_WS=""
+  for _c in "$(command -v python3 2>/dev/null || true)" \
+            /opt/homebrew/bin/python3 /usr/local/bin/python3; do
+    [ -n "$_c" ] && [ -x "$_c" ] && "$_c" -c 'import websocket' 2>/dev/null \
+      && { PY_WS="$_c"; break; }
+  done
   D="$BATS_TEST_TMPDIR"
   CFG="$D/cfg-next3"
   LOCK="$D/claude-accounts-heal-next3.lock"
@@ -409,10 +426,11 @@ EOF
 }
 
 @test "phase 2: CDP unreachable → 4, and the browser is STILL stopped (teardown is unconditional)" {
+  [ -n "$PY_WS" ] || skip "no python3 with websocket-client — this case needs the CDP leg reachable"
   mk_info all false; mk_fresh 1 logged-out
   echo 'https://claude.ai/oauth/authorize?code_challenge=xyz' > "$D/claude.out"
   echo '{"ws_url":"ws://127.0.0.1:1/devtools/browser/dead"}' > "$D/ab.start.json"
-  run "$C" next3 --url-timeout 5
+  run "$PY_WS" "$C" next3 --url-timeout 5
   [ "$status" -eq 4 ]
   grep -q -- '--stop' "$D/authbrowser-calls"
   [ ! -e "$D/cc-relogin-next3.in" ]
