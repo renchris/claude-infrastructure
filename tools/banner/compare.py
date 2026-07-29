@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Assemble the banner comparison page.
+"""Assemble a LOCAL spot-check page for the banner set.
+
+NOT the operator-facing comparison — that one is owned by the lead session and is already built;
+a second page splits the operator's attention across two artefacts. This exists so a change can be
+eyeballed across all four variants and both themes in one place while iterating, and it is not
+committed as an artefact. Run it, look at it, throw it away.
 
 Everything is base64-inlined. A comparison page that links its assets looks fine on the machine that
 made it and silently renders empty everywhere else, which is the one failure mode that makes the
