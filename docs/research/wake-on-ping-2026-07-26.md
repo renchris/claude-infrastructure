@@ -283,3 +283,61 @@ sessions* — is what would have made the 0-watcher state loud on day one instea
   still cannot wake an idle agent from a message** — its only proactive wake is a scheduled turn.
   Our harness floor is therefore not a Claude Code deficiency; it is the shape of the problem, and
   the answer is a scheduler that creates turns, which we already own.
+- **2026-07-29** — Backlog `a98084b79b2c` driven to done. Three landings, all gate-green:
+
+  **1. The wake work had left trunk RED in 5 assertions** (`d6c3a7bd`) — nobody had re-run the
+  suites after landing. Both reds were green when written: arm-on-open moved the nudge onto every
+  boundary, silently inverting four `[ -z "$output" ]` exactly-once assertions in
+  `tests/mailbox-drain.bats` from "no mail was surfaced" into "the nudge did not fire"; and the
+  wake-floor RED-proof pinned its control to `origin/main`, which was the pre-fix tree only until
+  this very change landed on it — from that moment the control IS the fixed tree and the proof
+  fails permanently against a green one. Pinned to `a219de9d`. **A control can only promise to
+  replay the pre-fix artifact if its ref is immutable** ([[control-must-replay-the-real-artifact]]).
+
+  **2. The second gap — delivered ≠ read — is closed** (`a8b57f3c`). This was the half the ledger
+  named and nothing had touched. `mailbox_receipt <uuid> <line>` turns the existing cursors into a
+  verdict (unread | surfaced | **read**, keyed on `.acked` because seen is a promise and acked is
+  evidence); every post-enqueue `cc-notify` verdict now carries `line=` and `unacked=`; and
+  `cc-notify --receipt <target> <line>` is the read side, resolved through the same forward chain a
+  send follows, with **the exit code as the verdict** (0 = read) so a desk claim can be *gated*
+  rather than asserted. Without that verb the cited line is a number nobody can check and "cite the
+  cursor" decays back into the prose this whole item is about. Every string `cc-announce`
+  classifies on is preserved.
+
+  **3. A defect the fix itself created, found by verifying the ledger's own care conditions
+  rather than assuming them** (`33471d66`). MEASURED: a watcher whose owner dies is reparented to
+  pid 1 and keeps polling; on the next message it takes the line with `ack_now=1`, advancing BOTH
+  cursors, and prints the body to a stdout no model will ever read. The line is then marked
+  **provably consumed for a session that no longer exists** — `cc-inbox-guard` sees `unacked=0` and
+  never alarms, a read receipt reports `read`, and the successor's adoption (which migrates from
+  `.acked`) inherits nothing. A silent loss wearing the costume of a successful delivery: the exact
+  failure this channel exists to end, re-created by the mechanism that closes it. Latent before,
+  **fleet-wide the moment the floor arms every session**. The owner oracle is the registry pid,
+  never `$PPID` — a legitimate `run_in_background` arm has its launching shell exit immediately, so
+  a healthy watcher's ppid becomes 1 exactly like an orphan's (verified; keying on it would have
+  disarmed the entire fleet). Fail-safe: only a PRESENT row naming a DEAD pid proves death.
+
+  Care conditions from the ledger item, adjudicated against disk rather than assumed: **(b) bounded
+  / not held open at teardown** — satisfied, and better than the proposed `cc-teardown` reap, since
+  a self-reaping watcher does not depend on teardown ever running. **(c) a dead watcher is
+  detectable** — already true (pid-bearing heartbeat + `kill -0`). **(a) one watcher per session** —
+  substantially satisfied (floor and nudge both arm only when unarmed, so a duplicate needs a
+  sub-0.15 s race), with one **known residual, backlogged not built**: two concurrent watchers share
+  one `.watching` file, so the first to exit removes the marker while the second still lives. The
+  failure direction is conservative — the survivor merely reads as unarmed, mail drains on the next
+  turn and the guard backstops — so a single-watcher lock would add a new failure mode to remove a
+  benign one.
+
+  **Not closed by this item:** A3 (host-driven turn) is still the only mechanism that reaches the
+  sessions already idle and unarmed — the wake floor is birth-forward and cannot retroactively help
+  the ~1,300 stranded lines. A4–A9 remain backlogged.
+
+  **Surfaced, deliberately not fixed here (another stream owns it):** `hooks/mailbox-drain.sh`'s
+  operator digest points at `cc-mail` ("full text: cc-mail"), and that command works today only
+  because `~/.claude/bin/cc-mail` is a **hand-placed real file, not a symlink into the checkout** —
+  its commit (`57579877`) sits on an unlanded branch, and the path is absent from `origin/main` and
+  from the checkout working tree alike. So the live layer is the only copy: one `rm` from
+  unrecoverable, and absent for anyone who redeploys from the checkout, at which point the digest
+  names a command the operator cannot run ([[deploy-lag-checkout-behind-origin]]). Landing it
+  belongs with the parked-branch reconciliation in §3, by composition — not as a rider here
+  ([[parallel-stream-convergence-protocol]]).
