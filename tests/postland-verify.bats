@@ -661,51 +661,34 @@ printf '1..1\nok 1 p\n'")"
   grep -q 'boom' "$CC_PAGES_DIR"/postland-red-*.page || false
 }
 
-# ── PATH NORMALIZATION (the 0-green-stamp root cause, reproduced 2026-07-26) ────────────────────
-# The verdict is only meaningful if the suite runs in the environment a real session runs in. Driven
-# from a daemon/launchd-ish context, PATH lacked $HOME/.claude/bin and $HOME/bin, so suites shelling
-# out to cc-* helpers failed; the retry ladder then convicted them at >=2/3 (a PATH-dependent
-# failure reproduces every time), writing a HARD red. 15/15 stamps were red while trunk measured
-# 2096 ok / 0 not-ok. These lock the normalization in — and lock in that it never SUBTRACTS.
+# ── NO PATH NORMALIZATION: the corpus runs in the environment being gated (settled 2026-07-29) ──
+# The inverse of what these tests used to assert. A prepend lived in the SUT (5abe5934) and turned
+# a minimal-PATH red green — by running the corpus in an environment that never occurs. This gate's
+# problem is false SIGNAL, so faking the environment costs more than it buys: it hides the case
+# where the ARTIFACT UNDER TEST depends on ambient PATH. That case was real (deploy-parity-assert.sh
+# reported NOPATH, a property of the CALLER's environment, as deployment DRIFT), and normalization
+# would have kept it invisible. Suites own their hermeticity; the gate owns nothing but the truth.
+# These lock the absence in, so the prepend cannot quietly return.
 
-@test "PATH normalization: a daemon-like PATH gains \$HOME/.claude/bin before bats runs" {
-  grep -q 'PATH NORMALIZATION' "$SUT"          # block must EXIST — else this test is vacuous
-  mkdir -p "$HOME/.claude/bin" "$HOME/bin"
-  run env -i HOME="$HOME" PATH="/usr/bin:/bin" TERM=dumb bash -c \
-    "sed -n '/PATH NORMALIZATION/,/^export PATH\$/p' '$SUT' > '$BATS_TEST_TMPDIR/norm.sh'; . '$BATS_TEST_TMPDIR/norm.sh'; printf '%s' \"\$PATH\""
+@test "the SUT does not rewrite PATH — no prepend, no wholesale override" {
+  # No assignment to PATH anywhere outside a comment: the corpus inherits the caller's PATH.
+  run bash -c "grep -vE '^[[:space:]]*#' '$SUT' | grep -nE '^[[:space:]]*(export )?PATH=' || true"
   [ "$status" -eq 0 ]
-  # `|| false` on every NON-FINAL [[ ]]: `[[` is a bash KEYWORD, so the ERR trap never fires for it
-  # and a bare non-final [[ ]] is a DEAD assertion that can never fail the test. Only the LAST one
-  # is live unaided, being the test's exit status. tests/bats-assert-liveness.bats ratchets this.
-  [[ "$output" == *"$HOME/.claude/bin"* ]] || false
-  [[ "$output" == *"$HOME/bin"* ]] || false
-  [[ "$output" == *"/usr/bin"* ]]                     # PREPEND-only: the original entries survive
+  [ -z "$output" ]
 }
 
-@test "PATH normalization: idempotent — an already-normalized PATH is not duplicated" {
-  grep -q 'PATH NORMALIZATION' "$SUT"          # block must EXIST — else this test is vacuous
-  mkdir -p "$HOME/.claude/bin"
-  run env -i HOME="$HOME" PATH="$HOME/.claude/bin:/usr/bin:/bin" TERM=dumb bash -c \
-    "sed -n '/PATH NORMALIZATION/,/^export PATH\$/p' '$SUT' > '$BATS_TEST_TMPDIR/norm.sh'; . '$BATS_TEST_TMPDIR/norm.sh'; printf '%s' \"\$PATH\" | tr ':' '\n' | grep -c \"^$HOME/.claude/bin\$\""
+@test "a daemon-like PATH reaches bats UNCHANGED (the environment is the subject, not a variable)" {
+  # Drive the real SUT far enough to prove it never edits PATH, by comparing what a child sees.
+  before="/usr/bin:/bin"
+  run env -i HOME="$HOME" PATH="$before" TERM=dumb bash -c \
+    "grep -vE '^[[:space:]]*#' '$SUT' | grep -E '^[[:space:]]*(export )?PATH=' >/dev/null && echo MUTATES || printf '%s' \"\$PATH\""
   [ "$status" -eq 0 ]
-  [ "$output" = "1" ]                                 # exactly once, not twice
+  [ "$output" = "$before" ]
 }
 
-@test "PATH normalization: CC_POSTLAND_PATH overrides wholesale (explicit beats inferred)" {
-  grep -q 'PATH NORMALIZATION' "$SUT"          # block must EXIST — else this test is vacuous
-  run env -i HOME="$HOME" PATH="/usr/bin:/bin" CC_POSTLAND_PATH="/only/this" TERM=dumb bash -c \
-    "sed -n '/PATH NORMALIZATION/,/^export PATH\$/p' '$SUT' > '$BATS_TEST_TMPDIR/norm.sh'; . '$BATS_TEST_TMPDIR/norm.sh'; printf '%s' \"\$PATH\""
-  [ "$status" -eq 0 ]
-  [ "$output" = "/only/this" ]
-}
-
-@test "PATH normalization: a nonexistent dir is never added (no phantom entries)" {
-  grep -q 'PATH NORMALIZATION' "$SUT"          # block must EXIST — else this test is vacuous
-  rm -rf "$HOME/bin"
-  run env -i HOME="$HOME" PATH="/usr/bin:/bin" TERM=dumb bash -c \
-    "sed -n '/PATH NORMALIZATION/,/^export PATH\$/p' '$SUT' > '$BATS_TEST_TMPDIR/norm.sh'; . '$BATS_TEST_TMPDIR/norm.sh'; printf '%s' \"\$PATH\""
-  [ "$status" -eq 0 ]
-  [[ "$output" != *"$HOME/bin:"* ]]
+@test "the anti-regression rationale is present, not just the absence (so it cannot be re-added blind)" {
+  grep -q 'DELIBERATELY DOES NOT NORMALIZE PATH' "$SUT" || false
+  grep -q 'Do not re-add a PATH prepend here' "$SUT"
 }
 
 # ── C15–C17 HUNG: the one state carved OUT of the cut population ────────────────
