@@ -488,7 +488,7 @@ close_orphaned_panes() {
     [[ -n "$tdbin" ]] || { [[ -x "$HOME/.claude/bin/cc-teardown" ]] && tdbin="$HOME/.claude/bin/cc-teardown"; }
   fi
   local plan="$hdir/close-plan.tsv"; : > "$plan" 2>/dev/null || true
-  local n_elig=0 n_skip=0 n_ok=0 n_defer=0 n_refuse=0 n_fail=0
+  local n_elig=0 n_skip=0 n_ok=0 n_defer=0 n_refuse=0 n_fail=0 n_unres=0
   local member pane state bytes tpath
 
   while IFS=$'\t' read -r member pane state bytes tpath; do
@@ -513,12 +513,35 @@ close_orphaned_panes() {
     # the harvest that already happened, so cc-teardown's gate is judging facts, not a claim.
     local ev="lead-crash-watchdog: lead session $sid DEAD (positive evidence: watchdog pid failed kill -0); assignee '$member' orphaned with no lead to report to; final report HARVESTED to $hdir/$member.md (${bytes:-0}B, state=$state) from $tpath BEFORE teardown"
     if (( armed )) && [[ -n "$tdbin" ]]; then
-      local trc=0
-      "$tdbin" "$pane" --done-evidence "$ev" >/dev/null 2>&1 || trc=$?
+      local trc=0 tout=""
+      # --assignee-of: an assignee pane has NO session-registry row (134/134 measured across every
+      # team dir on this machine), so a bare call could only ever come back REFUSE unknown-target —
+      # which the rc==2 arm below counted as a *trusted* policy refusal. That made this whole leg a
+      # 100%-abstain no-op: built, tested, landed, incapable of closing one pane. The flag lets
+      # cc-teardown re-prove the target from positive it2 + argv evidence instead.
+      # --assignee-sid: leg (a) already resolved this member's transcript, and the file is named
+      # <sid>.jsonl — so we can hand cc-teardown the assignee's OWN session id. Without it the
+      # operator-adoption belt silently no-ops (find_transcript "" returns nothing), i.e. a safety
+      # gate would be BYPASSED rather than passed. Supply the identity; keep the gate armed.
+      local asid=""
+      [[ -n "$tpath" ]] && { asid="$(basename "$tpath")"; asid="${asid%.jsonl}"; }
+      # Captured, not discarded: the outcome has to be CHECKED, not claimed. rc 2 alone cannot
+      # distinguish "a safety gate declined" from "the actuator could not even SEE the target"
+      # (memory: claimed-outcome-vs-checked-outcome — parse a structured reason token).
+      tout=$("$tdbin" "$pane" --done-evidence "$ev" \
+               --assignee-of "$sid" ${asid:+--assignee-sid "$asid"} 2>&1) || trc=$?
       case "$trc" in
         0)  n_ok=$((n_ok + 1));     echo "[watchdog $sid] close: $member pane=$pane TORN DOWN + effect-verified (rc 0)" ;;
         10) n_defer=$((n_defer + 1)); echo "[watchdog $sid] close: $member pane=$pane DEFER — cc-teardown's gate says work-unsafe (rc 10); left alone" ;;
-        2)  n_refuse=$((n_refuse + 1)); echo "[watchdog $sid] close: $member pane=$pane REFUSE (rc 2); left alone" ;;
+        2)  # UNRESOLVED is NOT a policy refusal — it means our own resolution wiring is blind, the
+            # exact failure that made this leg inert. It must never be absorbed into the trusted
+            # refuse bucket (memory: feature-durability-mechanism-not-memory / named-failure).
+            if [[ "$tout" == *"reason_kind=unknown-target"* || "$tout" == *"reason_kind=assignee-unproven"* ]]; then
+              n_unres=$((n_unres + 1))
+              echo "[watchdog $sid] close: $member pane=$pane UNRESOLVED — cc-teardown could not SEE this pane (not a safety verdict; the close leg is BLIND here): ${tout##*cc-teardown: }"
+            else
+              n_refuse=$((n_refuse + 1)); echo "[watchdog $sid] close: $member pane=$pane REFUSE (rc 2); left alone"
+            fi ;;
         5)  n_fail=$((n_fail + 1)); echo "[watchdog $sid] close: $member pane=$pane FAIL LOUD — acted but the pane SURVIVED (rc 5)" ;;
         *)  n_fail=$((n_fail + 1)); echo "[watchdog $sid] close: $member pane=$pane cc-teardown rc=$trc (unexpected); left alone" ;;
       esac
@@ -531,7 +554,13 @@ close_orphaned_panes() {
   done < "$status"
 
   if (( armed )); then
-    echo "[watchdog $sid] close complete: $n_ok torn down, $n_defer defer, $n_refuse refuse, $n_fail FAIL, $n_skip skipped"
+    echo "[watchdog $sid] close complete: $n_ok torn down, $n_defer defer, $n_refuse refuse, $n_unres UNRESOLVED, $n_fail FAIL, $n_skip skipped"
+    # A leg that resolved NOTHING is not a leg that had nothing to do. Say so at the same volume as
+    # a failure, so inertness can never again read as a clean run (this is the signal whose absence
+    # let 100%-abstain look like success for three days).
+    if (( n_unres > 0 )); then
+      echo "[watchdog $sid] close BLIND: $n_unres of $n_elig eligible pane(s) could not be resolved by cc-teardown — these assignees are STILL RUNNING and no safety gate judged them; this is a wiring failure, not a verdict"
+    fi
   else
     echo "[watchdog $sid] close UNARMED: $n_elig orphaned pane(s) left RUNNING, $n_skip skipped — plan in $plan (arm: LCW_ORPHAN_CLOSE=1)"
   fi

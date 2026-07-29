@@ -114,6 +114,7 @@ command -v jq >/dev/null 2>&1 || { echo "cc-teardown: jq required" >&2; exit 2; 
 TARGET=""; paneUUID=""; pid=""; cwd=""; sname=""; done_ev=""; git_state=""
 sess_id=""; started_ms=""          # 1c operator-adoption belt (2026-07-24): transcript + spawn source
 EXPECT_PID=""; EXPECT_LSTART=""   # classify-time identity pin (a17 S-4); empty = no pin (back-compat)
+ASSIGNEE_OF=""; ASSIGNEE_SID=""   # 1b-A unregistered-assignee adoption (2026-07-29); empty = off
 
 iso()  { date -u +%Y-%m-%dT%H:%M:%SZ; }
 say()  { echo "cc-teardown: $*" >&2; }
@@ -123,6 +124,9 @@ usage() {
 cc-teardown <pane-uuid|name> --done-evidence <text> [--force-adopted]
   0 torn-down+verified · 10 DEFER · 2 REFUSE · 5 FAIL(pane survived)
   --force-adopted   operator CLI ONLY — skip the operator-adoption belt (no autonomous caller passes it)
+  --assignee-of <lead-sid>   target is an Agent-Team assignee of that (dead) lead: allow ADOPTION of a
+                             pane that has no session-registry row, on positive it2+argv proof only
+  --assignee-sid <own-sid>   the assignee's OWN session id — keeps the operator-adoption belt ARMED
 cc-teardown --selftest
 U
 }
@@ -197,6 +201,97 @@ pane_present() {
   return 1
 }
 
+# resolve_assignee <pane-uuid> <lead-sid> → rc 0 ADOPTED (globals set) · 1 pane provably ABSENT
+#                                          · 2 REFUSE (indeterminate or identity unproven)
+#
+# THE MISSING CATEGORY (backlog 95281da714f0 leg b, 2026-07-29). resolve() above knows exactly one
+# oracle — the session registry — and an Agent-Team assignee is NEVER in it: measured 134 of 134
+# member panes across all 50 team dirs on this machine had NO registry row. An assignee is not a
+# launched session; it is a `claude.exe --agent-id <name>@session-<lead>` child, so nothing ever
+# registers it. Consequence before this function existed: the lead-crash watchdog's close leg
+# enumerated the right panes, harvested them, called cc-teardown — and got REFUSE unknown-target
+# every single time, which it counted as a *trusted* policy refusal. 100% abstain BY CONSTRUCTION:
+# built, tested, landed, and incapable of ever closing one pane (memory:
+# feature-durability-mechanism-not-memory). Its suite passed only because the spy returned 0 —
+# a fixture whose shape did not match the real producer (memory: fixture-shape-parity).
+#
+# STRICTLY OPT-IN: consulted ONLY when resolve() has already MISSED and the caller passed
+# --assignee-of. No existing caller changes behaviour, and no resolvable target ever reaches here.
+#
+# POSITIVE EVIDENCE ONLY, three independent legs — any one unproven ⇒ REFUSE, never a guess:
+#   1. PANE LIVENESS from a FRESH it2 list, TRI-STATE via the same rule pane_present encodes: a
+#      zero-length/unparseable list is a BLIND enumerator, never "absent". This is not theoretical
+#      — an ad-hoc probe written while diagnosing this very bug called all six live panes ABSENT
+#      because its it2 call timed out under load and it read empty as gone. Absence of evidence is
+#      not evidence of absence; that read is the one this repo has been bitten by most.
+#   2. PANE→TTY from that same list object (one call, not two: it2 is slow under fleet load).
+#   3. TTY→PID with the identity PROVEN from argv, not from text. Requirements: comm is exactly
+#      `claude.exe` (the assignee binary) AND a real `--agent-id` argv token whose value matches
+#      `<name>@session-<lead-sid>`. Both guards are load-bearing: a sibling session on ttys029 had
+#      the literal string "--agent-id <name>@session-8891c11f" inside a prose TASK argument, and a
+#      substring match would have adopted — then killed — an unrelated live session
+#      (memory: detector-matching-its-own-skill-description — text is never evidence).
+resolve_assignee() {
+  local uuid="$1" lead="$2" lst n obj _tty base rpid rcomm rargs agid
+  [ -n "$uuid" ] && [ -n "$lead" ] || return 2
+
+  # ── leg 1: pane liveness, tri-state (see pane_present for why zero ⇒ indeterminate) ──
+  # A LONGER bound than the 10s default, for a measured reason: `it2 session list --json` took
+  # 10.59s at 33 panes on a loaded machine, so the default clipped it and this resolver refused
+  # every real pane with "indeterminate". A lead crashing with 8 live assignees IS the high-pane,
+  # high-load moment — a bound that expires exactly when the feature is needed is not a bound, it is
+  # an off switch. 30s matches the it2 shim's own self-bound. Seam: CCT_ADOPT_TIMEOUT_S.
+  local _cct_saved="$CCT_TIMEOUT_S"
+  CCT_TIMEOUT_S="${CCT_ADOPT_TIMEOUT_S:-30}"
+  lst="$(cct_bounded "$IT2" session list --json 2>/dev/null)" || lst=""
+  CCT_TIMEOUT_S="$_cct_saved"
+  [ -n "$lst" ] || return 2
+  n="$(printf '%s' "$lst" | jq -r 'if type=="array" then length else -1 end' 2>/dev/null)" || return 2
+  { [ -z "$n" ] || [ "$n" = -1 ]; } && return 2
+  [ "$n" -eq 0 ] && return 2
+  obj="$(printf '%s' "$lst" | jq -c --arg t "$uuid" '.[] | select(.id==$t)' 2>/dev/null | head -1)"
+  [ -n "$obj" ] || return 1          # enumerator was READABLE and non-empty ⇒ a real absence
+
+  # ── leg 2: pane → tty ──
+  _tty="$(printf '%s' "$obj" | jq -r '.tty // empty' 2>/dev/null)"
+  [ -n "$_tty" ] || return 2
+  base="${_tty#/dev/}"
+
+  # ── leg 3: tty → pid, identity proven from argv ──
+  # argv[0], NOT `ps -o comm=`: macOS truncates comm to 16 chars, so the assignee's
+  # `/Users/.../claude-code/bin/claude.exe` arrives as `/Users/chrisren/` and a basename test on it
+  # can never match anything. Measured — this silently refused every real pane. argv[0] from `args=`
+  # is never truncated, and it is the stronger check anyway: it is the binary actually exec'd.
+  while read -r rpid rargs; do
+    [ -n "$rpid" ] || continue
+    case "$rpid" in *[!0-9]*) continue ;; esac
+    rcomm="${rargs%% *}"                              # argv[0]
+    [ "${rcomm##*/}" = "claude.exe" ] || continue      # the assignee binary, not a wrapper/prose host
+    case " $rargs " in *" --agent-id "*) ;; *) continue ;; esac
+    agid="${rargs#*--agent-id }"; agid="${agid%% *}"   # the token AFTER the real flag
+    case "$agid" in
+      *"@session-$lead") ;;                            # proves assignee OF THIS dead lead
+      *) continue ;;
+    esac
+    case "$agid" in *[!A-Za-z0-9_.@-]*) continue ;; esac   # a shaped id, never a prose fragment
+    paneUUID="$uuid"; pid="$rpid"
+    sname="$agid"
+    # cwd feeds the work-safety gate (dirty / committed-not-pushed). BOUNDED via cct_bounded, NOT a
+    # bare `timeout`: hooks and launchd run with a minimal PATH excluding Homebrew (where coreutils
+    # puts timeout), and this leg's only autonomous caller IS a hook-spawned watchdog — a PATH-only
+    # lookup would leave exactly that caller broken, returning an empty cwd forever and re-inerting
+    # the leg through the gate's fail-closed die. cct_bounded resolves by absolute path and runs
+    # UNBOUNDED rather than breaking the call.
+    # An unresolved cwd is still SAFE: the gate `die`s on an empty --cwd, so we REFUSE rather than
+    # tear down a worktree whose dirty/unpushed state was never checked.
+    cwd="$(cct_bounded lsof -a -d cwd -w -p "$rpid" -F n 2>/dev/null | sed -n 's/^n//p' | head -1)"
+    sess_id="$ASSIGNEE_SID"
+    started_ms=""
+    return 0
+  done < <("$PS_BIN" -t "$base" -o pid=,args= 2>/dev/null)
+  return 2                                            # pane is live but hosts no provable assignee
+}
+
 # tty_foreign <pid> → count of FOREIGN live processes sharing the pane tty (not in the target tree, not an
 # interactive shell). -1 = tty undeterminable (fail-closed). Descendants of <pid> and login shells are OK.
 tty_foreign() {
@@ -263,6 +358,8 @@ main() {
       --expect-lstart) [ $# -ge 2 ] && { EXPECT_LSTART="$2"; shift 2; } || shift ;;
       --decided-at)    [ $# -ge 2 ] && { DECIDED_AT="$2"; shift 2; } || shift ;;
       --force-adopted) FORCE_ADOPTED=1; shift ;;
+      --assignee-of)   [ $# -ge 2 ] && { ASSIGNEE_OF="$2"; shift 2; } || shift ;;
+      --assignee-sid)  [ $# -ge 2 ] && { ASSIGNEE_SID="$2"; shift 2; } || shift ;;
       --self) TARGET="--self"
               record REFUSE self-literal "'--self' is never a valid teardown target — refusing self-teardown" 0
               say "REFUSE — '--self' is not a valid target (exit 2)"; exit 2 ;;
@@ -277,8 +374,27 @@ main() {
   # ── 1. RESOLVE (fail-closed on unknown) ────────────────────────────────────────────────────────────
   if ! resolve "$TARGET"; then
     paneUUID=""; pid=""; cwd=""; sname=""
-    record REFUSE unknown-target "target '$TARGET' resolves to no live-or-retained session (cc-sessions --all)" 0
-    say "REFUSE — unknown target '$TARGET' (exit 2)"; exit 2
+    # 1b-A ASSIGNEE ADOPTION — the registry is not the only way a session can exist. An Agent-Team
+    # assignee never has a row (134/134 measured), so for --assignee-of callers a registry miss is
+    # NOT "no such session"; it is the wrong oracle. resolve_assignee re-proves the target from
+    # positive it2 + argv evidence, and every downstream gate then runs UNCHANGED and fully armed.
+    if [ -n "$ASSIGNEE_OF" ]; then
+      local _ar=0
+      resolve_assignee "$TARGET" "$ASSIGNEE_OF" || _ar=$?
+      case "$_ar" in
+        0) say "NOTE — adopted UNREGISTERED assignee pane $paneUUID (pid $pid, agent $sname of dead lead $ASSIGNEE_OF): no registry row, identity proven from it2 pane liveness + argv" ;;
+        1) record ALREADY-GONE idempotent "assignee pane '$TARGET' is absent from a READABLE it2 enumeration — nothing to close" 1
+           say "OK — assignee pane already gone (idempotent success, exit 0)"; exit 0 ;;
+        *) # INDETERMINATE or identity unproven. Fail-closed, and named distinctly from
+           # unknown-target so a caller can tell "the actuator could not SEE the target" (a wiring
+           # or load problem, retryable) from "a safety gate declined" (a verdict to respect).
+           record REFUSE assignee-unproven "target '$TARGET' has no registry row and could not be adopted: either the it2 enumeration was unreadable/indeterminate, or the pane hosts no claude.exe with a real --agent-id token matching @session-$ASSIGNEE_OF; refusing to act without positive identity" 0
+           say "REFUSE reason_kind=assignee-unproven — cannot prove pane '$TARGET' hosts an assignee of lead $ASSIGNEE_OF (exit 2)"; exit 2 ;;
+      esac
+    else
+      record REFUSE unknown-target "target '$TARGET' resolves to no live-or-retained session (cc-sessions --all)" 0
+      say "REFUSE reason_kind=unknown-target — unknown target '$TARGET' (exit 2)"; exit 2
+    fi
   fi
 
   # SELF-GUARD — never tear down the invoking session's own pane.

@@ -15,7 +15,9 @@
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
-  WD="$REPO/hooks/lead-crash-watchdog.sh"
+  # Seam so the RED proof stays reproducible: point LCW_UNDER_TEST at the pre-fix watchdog
+  # (git show origin/main:hooks/lead-crash-watchdog.sh) and (xiii)-(xvi) must FAIL.
+  WD="${LCW_UNDER_TEST:-$REPO/hooks/lead-crash-watchdog.sh}"
 
   # Fixture $HOME — without it this suite would resolve the operator's REAL ~/.claude/bin/cc-teardown
   # and could close live panes.
@@ -27,12 +29,18 @@ setup() {
   PLAN="$TEAM/HARVEST/close-plan.tsv"
 
   # Spy cc-teardown: records every invocation, and its exit code is steerable per-test.
+  # TD_SAY lets a test give the spy the REAL cc-teardown's *output* too, not just its rc. That
+  # matters: rc 2 alone cannot distinguish "a safety gate declined" from "the actuator could not
+  # even SEE the target", and a spy that only ever returned 0 is precisely why this leg's 100%
+  # abstain stayed invisible through landing (memory: fixture-shape-parity-with-real-producer).
   TD="$BATS_TEST_TMPDIR/cc-teardown-spy"
   TD_LOG="$BATS_TEST_TMPDIR/teardown-calls.log"; : > "$TD_LOG"
   TD_RC="$BATS_TEST_TMPDIR/teardown.rc"; echo 0 > "$TD_RC"
+  TD_SAY="$BATS_TEST_TMPDIR/teardown.say"; : > "$TD_SAY"
   cat > "$TD" <<EOF
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >> "$TD_LOG"
+cat "$TD_SAY" 2>/dev/null
 exit "\$(cat "$TD_RC" 2>/dev/null || echo 0)"
 EOF
   chmod +x "$TD"
@@ -171,4 +179,68 @@ EOF
   [ "$status" -eq 0 ] || false
   [[ "$output" == *"cc-teardown-unavailable"* ]] || false
   ! [[ "$output" == *"osascript"* ]] || false
+}
+
+# ── the INERTNESS signal (2026-07-29) ──────────────────────────────────────────────────────────────
+# An assignee pane has NO session-registry row — 134 of 134 measured across every team dir on this
+# machine — and cc-teardown resolved ONLY via that registry. So every real call came back
+# REFUSE unknown-target, which test (viii) above pins as a *trusted* outcome. Net effect: this leg
+# was built, tested, landed, and structurally incapable of closing a single pane, while reporting a
+# clean run. These tests pin the two halves of the fix: pass the identity that makes resolution
+# possible, and never let a blind actuator be mistaken for a safety verdict.
+
+@test "(xiii) the assignee IDENTITY is passed — --assignee-of <dead lead> and its own sid" {
+  row "w-ok" "PANE-OK" "HARVESTED" 4242 "/acct/projects/p/sess-abc123.jsonl"
+  LCW_ORPHAN_CLOSE=1 run bash "$WD" --close-panes "$TEAM" sid-1
+  [ "$(calls)" -eq 1 ] || false
+  # without --assignee-of, cc-teardown can only ever answer unknown-target for an assignee pane
+  grep -q -- "--assignee-of sid-1" "$TD_LOG" || false
+  # the assignee's OWN sid keeps the operator-adoption belt ARMED; absent it, find_transcript ""
+  # returns nothing and that whole safety gate silently no-ops (bypassed, not passed)
+  grep -q -- "--assignee-sid sess-abc123" "$TD_LOG" || false
+}
+
+@test "(xiv) a member with no transcript path yields NO empty --assignee-sid flag" {
+  # EMPTY state = the transcript was read and held no report, so it IS closable, but tpath may be
+  # '-'. An empty flag value would shift cc-teardown's own argv parse.
+  row "w-empty" "PANE-E" "EMPTY" 0 "-"
+  LCW_ORPHAN_CLOSE=1 run bash "$WD" --close-panes "$TEAM" sid-1
+  [ "$(calls)" -eq 1 ] || false
+  ! grep -q -- "--assignee-sid *$" "$TD_LOG" || false
+  grep -q -- "--assignee-of sid-1" "$TD_LOG" || false
+}
+
+@test "(xv) UNRESOLVED is NOT the trusted refuse bucket — a blind actuator reports BLIND" {
+  row "w-ok" "PANE-OK" "HARVESTED" 4242 "/tmp/t.jsonl"
+  echo 2 > "$TD_RC"
+  # the REAL pre-fix outcome, verbatim from cc-teardown's refuse path
+  echo "cc-teardown: REFUSE reason_kind=unknown-target — unknown target 'PANE-OK' (exit 2)" > "$TD_SAY"
+  LCW_ORPHAN_CLOSE=1 run bash "$WD" --close-panes "$TEAM" sid-1
+  [ "$status" -eq 0 ] || false
+  [[ "$output" == *"UNRESOLVED"* ]] || false
+  [[ "$output" == *"close BLIND"* ]] || false
+  [[ "$output" == *"STILL RUNNING"* ]] || false
+  [[ "$output" == *"wiring failure, not a verdict"* ]] || false
+  # and it must NOT be laundered into the refuse tally that reads as a clean run
+  [[ "$output" == *"0 refuse"* ]] || false
+  [[ "$output" == *"1 UNRESOLVED"* ]] || false
+}
+
+@test "(xvi) assignee-unproven is UNRESOLVED too — cannot prove identity ≠ gate declined" {
+  row "w-ok" "PANE-OK" "HARVESTED" 4242 "/tmp/t.jsonl"
+  echo 2 > "$TD_RC"
+  echo "cc-teardown: REFUSE reason_kind=assignee-unproven — cannot prove pane hosts an assignee (exit 2)" > "$TD_SAY"
+  LCW_ORPHAN_CLOSE=1 run bash "$WD" --close-panes "$TEAM" sid-1
+  [[ "$output" == *"1 UNRESOLVED"* ]] || false
+  [[ "$output" == *"close BLIND"* ]] || false
+}
+
+@test "(xvii) a GENUINE policy refusal stays a trusted refuse — the split must cut both ways" {
+  row "w-ok" "PANE-OK" "HARVESTED" 4242 "/tmp/t.jsonl"
+  echo 2 > "$TD_RC"
+  echo "cc-teardown: REFUSE — operator-adopted pane: real prompt 12s ago (exit 2)." > "$TD_SAY"
+  LCW_ORPHAN_CLOSE=1 run bash "$WD" --close-panes "$TEAM" sid-1
+  [[ "$output" == *"1 refuse"* ]] || false
+  [[ "$output" == *"0 UNRESOLVED"* ]] || false
+  ! [[ "$output" == *"close BLIND"* ]] || false
 }
