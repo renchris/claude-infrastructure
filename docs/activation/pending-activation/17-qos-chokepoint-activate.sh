@@ -66,7 +66,14 @@ echo "    ✓ shim dir precedes Homebrew"
 if [ "${CONFIRM:-0}" != 1 ]; then
   echo
   echo "(dry run — re-run with CONFIRM=1 to apply:)"
-  echo "    CONFIRM=1 bash $HOME/.claude/autonomy/pending-activation/17-qos-chokepoint-activate.sh"
+  # PROPAGATE CC_REPO into the printed command. Without this the hint drops the very override that
+  # made the dry run succeed, so an operator who copy-pastes it gets the fail-loud "missing in
+  # checkout" path instead — handing back a command that does NOT work (memory
+  # feedback-silver-platter-exact-commands). Only emitted when CC_REPO was actually set, so the
+  # common case stays a clean one-liner.
+  _pfx=""
+  [ -n "${CC_REPO+set}" ] && _pfx="CC_REPO=$REPO "
+  echo "    CONFIRM=1 ${_pfx}bash $HOME/.claude/autonomy/pending-activation/17-qos-chokepoint-activate.sh"
   exit 0
 fi
 
