@@ -44,12 +44,24 @@ PASS=0; FAIL=0; RESULTS=()
 ok()   { RESULTS+=("  ✓ $1"); PASS=$((PASS+1)); }
 bad()  { RESULTS+=("  ✗ $1"); FAIL=$((FAIL+1)); }
 
-# hash_of — stdout is the hash, and it is EMPTY only when the file is unusable. Callers must
-# check for emptiness; that is the guard the naive version of this script lacked.
+# hash_of — a hash of the DECODED PIXELS, not of the file bytes. Stdout is the hash, and it is EMPTY
+# only when the file is unusable; callers must check for emptiness, which is the guard the naive
+# version of this script lacked.
+#
+# Why pixels and not bytes. Chromium's PNG encoder is NOT deterministic here: the same asset frozen
+# at the same timestamp, rendered twice, produces two different files. Measured 2026-07-29 —
+# ee6b3378… vs 55fab65e… for byte-identical inputs. So a file-hash comparison has a false-FAILURE
+# mode, and its passes were luck rather than proof. The seam claim is about the IMAGE, so the check
+# has to be about the image: decoding to raw RGBA and hashing that gives t=0 and t=240 the same
+# digest (90b82d8c…) while `compare -metric AE` independently reports 0 differing pixels.
 hash_of() {
-  local f="$1"
+  local f="$1" px
   [[ -f "$f" && -s "$f" ]] || return 1
-  md5 -q "$f" 2>/dev/null || md5sum "$f" 2>/dev/null | cut -d' ' -f1
+  px=$(magick "$f" -depth 8 rgba:- 2>/dev/null | { md5 -q 2>/dev/null || md5sum 2>/dev/null | cut -d' ' -f1; })
+  # a failed decode yields an empty or degenerate digest — refuse it rather than pass it on, or the
+  # emptiness guard downstream is comparing two hashes of nothing
+  [[ -n "$px" && "$px" != "d41d8cd98f00b204e9800998ecf8427e" ]] || return 1
+  printf '%s' "$px"
 }
 
 # ── self-test: prove the guards are load-bearing ──────────────────────────────────────────────

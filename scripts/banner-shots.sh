@@ -120,13 +120,20 @@ for prop in ('animation', 'animation-name', 'animation-delay', 'animation-durati
         if top_level_commas(value):
             multi.append(f'  line {line}: {prop}: {value.strip()}')
             continue
-        # An AUTHORED delay is clobbered by the freeze, which sets animation-delay on `*` to reach
-        # the requested timestamp. The element still animates correctly in a browser, but every
-        # frozen frame renders it at the wrong phase — so a staggered population screenshots in
-        # lockstep, which is a more convincing lie than an obviously broken render.
+        # A LITERAL authored delay is clobbered by the freeze's seek, so the element still animates
+        # correctly in a browser but every frozen frame renders it at the wrong phase — a staggered
+        # population screenshots in lockstep, a more convincing lie than an obviously broken render.
+        #
+        # Phase itself is legitimate and necessary (many elements, one shared master period), so what
+        # is rejected is the CLOBBERED spelling, not phase. The additive channel
+        # `animation-delay: calc(var(--d,0s) + var(--fz,0s))` with per-element `--d` survives the
+        # seek — see freeze() — so a value that routes through it passes.
         if prop == 'animation-delay':
-            if not re.fullmatch(r'0m?s|0', value.strip()):
-                delayed.append(f'  line {line}: {prop}: {value.strip()}')
+            v = value.strip()
+            additive = 'var(--d' in v and 'var(--fz' in v
+            if not additive and not re.fullmatch(r'0m?s|0', v):
+                delayed.append(f'  line {line}: {prop}: {v}'
+                               f'   (use --d + the calc form so the freeze can seek it)')
         elif prop == 'animation' and len(TIME.findall(value)) > 1:
             delayed.append(f'  line {line}: {prop}: {value.strip()}   (2nd time value is a delay)')
 if multi:
@@ -156,6 +163,22 @@ esac
 
 # Freeze an animated SVG at time T by appending an override <style> (last rule wins, plus
 # !important). Geometry is untouched — only the animation clock moves.
+#
+# The seek is ADDITIVE rather than absolute. A flat `animation-delay:-Ts !important` reaches the
+# timestamp but destroys every authored phase, so a deliberately staggered population — a star field
+# twinkling out of step, two legs half a stride apart — screenshots in LOCKSTEP. That is a more
+# convincing lie than an obviously broken render, which is why `--lint` rejects an authored delay.
+#
+# But phase-by-negative-delay is the sanctioned way to run many elements off one shared master period
+# (README_HERO_BANNER § S2), so the harness has to be able to seek it rather than forbid it. The fix
+# is a two-part custom property: the ASSET carries its per-element phase in `--d`, the FREEZE supplies
+# the global seek in `--fz`, and the delay is their sum. Custom properties inherit into SVG children,
+# so one rule on the root reaches everything.
+#
+# Measured in this exact mode (SVG-as-image, Chromium 141) with three rects at --d 0/-1/-2s on a 4s
+# steps(4) colour cycle: with --fz the three stay one step apart and rotate together as --fz changes;
+# with the old blanket override all three render the SAME colour. An asset that does not use `--d`
+# is unaffected — var(--d,0s) falls back to 0s and it seeks exactly as before.
 freeze() {
   local src="$1" t="$2" dst="$3"
   python3 - "$src" "$t" "$dst" <<'PY'
@@ -163,8 +186,10 @@ import sys, pathlib
 src, t, dst = sys.argv[1], sys.argv[2], sys.argv[3]
 svg = pathlib.Path(src).read_text()
 override = (
-    f'<style id="__freeze">*{{'
-    f'animation-delay:-{t}s !important;'
+    f'<style id="__freeze">'
+    f'svg{{--fz:-{t}s}}'
+    f'*{{'
+    f'animation-delay:calc(var(--d,0s) + var(--fz,0s)) !important;'
     f'animation-play-state:paused !important;'
     f'}}</style>'
 )
