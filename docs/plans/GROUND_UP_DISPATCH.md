@@ -366,6 +366,44 @@ process table tells them apart.
 zero loss because it had landed 11 times; row 3 lost an hour because it had landed zero. Continuous
 landing is the campaign's actual crash insurance.
 
+### Row 12 Phase-1 — it falsified the COORDINATOR's own measurement (2026-07-29T21:17Z)
+
+Row 12 re-derived the daemon count and **my 12-of-14-disabled figure is stale**: it is now **10 of
+14 disabled, 4 enabled** — `com.claude.dispatcher` and `com.claude.discovery` both flipped enabled
+today. Verified independently via `launchctl print-disabled gui/$(id -u)`. **Consequence for a
+CLOSED row:** row 5's "dispatch decision ≤5 min" is no longer 0-by-construction, it is now
+genuinely MEASURABLE. Row 5's session has retired, so updating its map cell is the coordinator's
+bookkeeping — done. **The general lesson is the one this campaign keeps re-learning: a measurement
+is perishable.** Mine was six hours old and I had already propagated it into two fire payloads.
+Row 12 caught it only because the payload told it to re-derive rather than inherit.
+
+Its cell verdict — **CONFIRMED but INSUFFICIENT** (the disabled-bit is 1 of 3 silent states) — is
+accepted; that is exactly the kill-or-confirm Phase 1 is for.
+
+**Its second finding is bigger than its own row and is now filed as `cc-backlog 4e0038a19faf`:**
+the shared checkout is **33 commits behind** origin/main — two entire rebuilds landed and not live
+— while `cc-blockers` prints *"no safeguard-blocked sessions surfaced"*. `com.claude.deploy-live`
+is enabled and loaded but last-exit=1 with its log frozen at 10:28, ~4h past a 600s interval. One
+correction to row 12's account, checked and falsified here: the symlink is **not** dangling now
+(it resolves, and `scripts/deploy-live.sh` exists at both origin/main and the checkout HEAD); the
+59 `cannot execute` failures all predate the 10:32 symlink fix. With 0 GREEN stamps the lane is
+fail-closed anyway. **The defect is the silence, not the stall** — a lane 4h stale, 33 behind and
+0-for-15 should be the loudest row on the board. Same shape as the beacon in `1e16815bac51`:
+landed, wired, never fired once.
+
+### Coordinator handoff state (for the successor — campaign must outlive any one context)
+
+- **Done: rows 1, 4, 5.** In flight: row 3 (`gu-cross-session-comms-2`, sole lead pane `2413459C`,
+  account next) and row 12 (`gu-daemon-fleet-activation`, sole lead pane `C97E20DD` + 4 teammates,
+  account next4). Duplicate leads from the 529 incident are being stood down; `A7DA7EFB` was
+  instructed to harvest + shutdown_request + self-close and had not yet completed that at handoff.
+- **Next in order after these:** row 2 (unblocked once row 3 lands — strict 4→3→2), then 10 · 8 ·
+  7 · 11 · 9 · 6 last. Payload template is in this file; amend per row with a fresh account read.
+- **Five orphaned `gu5-*` assignees** from row 5 remain un-reaped and are NOT agent-reapable — see
+  the dead-end section above; plattered for the operator in `/tmp/gu-operator-steps.sh`.
+- **Operator platter is unrun** and now materially more urgent: §1 (ff + install.sh) is what makes
+  33 commits of landed work actually live.
+
 ## Inherited watch — first GREEN postland stamp (status, not a coordinator work item)
 
 Read 2026-07-29T18:15Z: **zero GREEN stamps have ever existed** (`grep -l '"verdict":"green"'
