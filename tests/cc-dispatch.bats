@@ -65,7 +65,12 @@ idl_action() { tail -1 "$C/idl.jsonl" | jq -r '.action'; }
   run "$DISP" selftest
   [ "$status" -eq 0 ]
   n_ok="$(printf '%s' "$output" | grep -c '^  ok ')"
-  [ "$n_ok" -eq 108 ]   # 49 pre-v2 + the decision/admission split (S1,S2,S4,S6,S7 + kill switches)
+  [ "$n_ok" -eq 106 ]   # 49 pre-v2 + the decision/admission split (S1,S2,S6,S7 + kill switches).
+                        # 108 → 106 when the ceiling moved off the accounts oracle onto the ledger's
+                        # `claimed` fold (§3 S2): the oracle-hang bound and the zero-timeout config
+                        # case had nothing left to bound. Fewer checks here is a DELETION of dead
+                        # surface, not lost coverage — A14 in cc-dispatch-v2.bats now guards the
+                        # signal itself, which is the property those two were circling.
   ! printf '%s' "$output" | grep -q '^  FAIL'
 }
 

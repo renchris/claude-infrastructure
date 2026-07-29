@@ -50,7 +50,15 @@ setup() {
 #!/bin/bash
 [ -n "\${STUB_LIST_SLEEP:-}" ] && [ "\$1" = list ] && sleep "\$STUB_LIST_SLEEP"
 case "\$1" in
-  list)   cat "$C/items.json" ;;
+  list)
+    shift
+    case "\$*" in
+      *--all*)
+        [ -n "\${STUB_LIST_ALL_RC:-}" ] && exit "\$STUB_LIST_ALL_RC"
+        if [ "\${STUB_LIVE:-0}" = x ]; then echo 'definitely not json'
+        else jq -cn --argjson n "\${STUB_LIVE:-0}" '[range(\$n) | {id:"c\(.)", status:"claimed"}]'; fi ;;
+      *) cat "$C/items.json" ;;
+    esac ;;
   claim)  printf 'claim %s\n'  "\$2" >> "$C/backlog.log"; echo "\$2" ;;
   reopen) printf 'reopen %s\n' "\$2" >> "$C/backlog.log"; echo "\$2" ;;
 esac
@@ -75,20 +83,11 @@ EOF
 printf '%s\n' "\$*" >> "$C/spawn.log"
 exit "\${STUB_SPAWN_RC:-0}"
 EOF
-  # live-worker oracle stub: only the field cc-dispatch reads (.rows[].k). STUB_LIVE=x ⇒ unparseable.
-  cat > "$C/stubs/accounts" <<'EOF'
-#!/bin/bash
-[ -n "${STUB_ACCT_SLEEP:-}" ] && sleep "$STUB_ACCT_SLEEP"
-if [ "${STUB_LIVE:-0}" = x ]; then echo 'definitely not json'
-else printf '{"rows":[{"acct":"a","k":%s}]}\n' "${STUB_LIVE:-0}"; fi
-exit "${STUB_ACCT_RC:-0}"
-EOF
-  chmod +x "$C/stubs/backlog" "$C/stubs/waveplan" "$C/stubs/spawn" "$C/stubs/accounts"
+  chmod +x "$C/stubs/backlog" "$C/stubs/waveplan" "$C/stubs/spawn"
 
   export CC_DISPATCH_BACKLOG_BIN="$C/stubs/backlog" \
          CC_DISPATCH_WAVEPLAN_BIN="$C/stubs/waveplan" \
          CC_DISPATCH_SPAWN_BIN="$C/stubs/spawn" \
-         CC_DISPATCH_ACCOUNTS_BIN="$C/stubs/accounts" \
          CC_DISPATCH_PAGES_DIR="$C/pages" \
          CC_DISPATCH_IDL="$C/idl.jsonl" \
          CC_DISPATCH_LOCK_DIR="$C/dispatch.lock" \
@@ -185,8 +184,8 @@ spawns()     { local n; n="$(grep -c . "$C/spawn.log" 2>/dev/null || true)"; ech
   [ "$(spawns)" -eq 2 ]
 }
 
-# ── S4 — the bounded oracle: unknown is a third state ─────────────────────────────────────────────
-@test "S4: an unparseable oracle is UNKNOWN → at most 1 admit, live_workers:null, reason live-count-unknown, and NO page" {
+# ── S2 — the ceiling source: unknown is a third state ─────────────────────────────────────────────
+@test "S2: an unparseable ledger is UNKNOWN → at most 1 admit, live_workers:null, reason live-count-unknown, and NO page" {
   seed_items 5
   fresh; STUB_LIVE=x CC_DISPATCH_CEILING=6 "$DISP" --once >/dev/null 2>&1
   [ "$(dec)" -eq 5 ] || false
@@ -196,8 +195,8 @@ spawns()     { local n; n="$(grep -c . "$C/spawn.log" 2>/dev/null || true)"; ech
   [ ! -d "$C/pages" ] || false                             # unknown NEVER pages (control: test 3)
   ! grep -q '"action":"abstained"' "$C/idl.jsonl" || false
 
-  # a non-zero oracle exit is the same third state, not a cliff
-  fresh; STUB_ACCT_RC=7 CC_DISPATCH_CEILING=6 "$DISP" --once >/dev/null 2>&1
+  # an unreadable ledger is the same third state, not a cliff
+  fresh; STUB_LIST_ALL_RC=7 CC_DISPATCH_CEILING=6 "$DISP" --once >/dev/null 2>&1
   [ "$(dec ' and .reason=="live-count-unknown"')" -eq 1 ] || false
   [ ! -d "$C/pages" ] || false
 
@@ -207,17 +206,34 @@ spawns()     { local n; n="$(grep -c . "$C/spawn.log" 2>/dev/null || true)"; ech
   [ "$(spawns)" -eq 2 ]
 }
 
-@test "S4: a HUNG oracle is bounded by absolute-path timeout(1) — the pass finishes long before the oracle would" {
-  local t0 t1
-  fresh
-  t0="$(date +%s)"
-  STUB_ACCT_SLEEP=20 CC_DISPATCH_ORACLE_TIMEOUT_S=1 CC_DISPATCH_CEILING=6 "$DISP" --once >/dev/null 2>&1
-  t1="$(date +%s)"
-  [ "$((t1 - t0))" -lt 10 ] || false                       # bounded, not merely "eventually returned"
-  [ "$(dec ' and .reason=="live-count-unknown"')" -eq 1 ] || false
-  # the bound is a real code property, not an accident of this box: every oracle call site is wrapped
-  run grep -c 'TIMEOUT_BIN" "\$ORACLE_TIMEOUT_S"' "$REPO/bin/cc-dispatch"
-  [ "$output" -ge 1 ]
+@test "A14: the ceiling counts CLAIMED items — never a live-SESSION count (regression guard)" {
+  # The signal this rebuild corrected. An earlier revision summed `claude-accounts --json .rows[].k`
+  # (every live session: leads, desk panes, teammates, sibling rebuilds). Measured live that was 12
+  # against a claimed count of 0, so CEILING=6 gave free_slots=0 PERMANENTLY — a dispatcher that
+  # admits nothing, forever, and SILENTLY (deferrals never page). This test exists so that cannot
+  # come back. See AUTONOMY_DISPATCH_V2 §3 S2 + F16.
+  seed_items 5
+
+  # 2 claimed ⇒ free_slots = 5-2 = 3 admitted, and live_workers is recorded as the claimed count.
+  fresh; STUB_LIVE=2 CC_DISPATCH_CEILING=5 "$DISP" --once >/dev/null 2>&1
+  [ "$(dec ' and .verdict=="admit"')" -eq 3 ] || false
+  [ "$(jq -rs '[.[]|select(.verdict=="admit")|.live_workers]|first' "$C/idl.jsonl")" = 2 ] || false
+
+  # POSITIVE CONTROL: the ceiling really does bind — one more claim admits one fewer.
+  fresh; STUB_LIVE=3 CC_DISPATCH_CEILING=5 "$DISP" --once >/dev/null 2>&1
+  [ "$(dec ' and .verdict=="admit"')" -eq 2 ] || false
+
+  # cc-dispatch must not consult an account/session oracle for the ceiling at all: with NO accounts
+  # binary reachable anywhere on PATH, admission still works. Under the old signal this hung or
+  # degraded to the unknown path.
+  fresh; PATH=/usr/bin:/bin STUB_LIVE=2 CC_DISPATCH_CEILING=5 "$DISP" --once >/dev/null 2>&1
+  [ "$(dec ' and .verdict=="admit"')" -eq 3 ] || false
+  [ "$(dec ' and .reason=="live-count-unknown"')" -eq 0 ] || false
+
+  # and the source is the ledger, structurally — no .rows[].k in any EXECUTABLE line. Comments may
+  # (and do) name the rejected signal to explain why it is rejected; a doc reference is not a call.
+  run bash -c "grep -vE '^[[:space:]]*#' '$REPO/bin/cc-dispatch' | grep -c 'rows\[\]' || true"
+  [ "$output" -eq 0 ]
 }
 
 # ── S6 — singleton, skip-not-queue ────────────────────────────────────────────────────────────────
@@ -335,8 +351,6 @@ spawns()     { local n; n="$(grep -c . "$C/spawn.log" 2>/dev/null || true)"; ech
 @test "config-fail is LOUD for every new switch (a garbage ceiling must never read as 0 or as unlimited)" {
   run env CC_DISPATCH_CEILING=abc "$DISP" --once
   [ "$status" -eq 3 ] || false
-  run env CC_DISPATCH_ORACLE_TIMEOUT_S=0 "$DISP" --once
-  [ "$status" -eq 3 ] || false
   run env CC_DISPATCH_LANE=v3 "$DISP" --once
   [ "$status" -eq 3 ] || false
   # and a LOUD failure never actuates
@@ -359,9 +373,9 @@ spawns()     { local n; n="$(grep -c . "$C/spawn.log" 2>/dev/null || true)"; ech
   [ "$(dec)" -eq 1 ]
 }
 
-@test "A12: the in-script selftest still RED-proves every branch (108 checks, zero FAIL)" {
+@test "A12: the in-script selftest still RED-proves every branch (106 checks, zero FAIL)" {
   run "$DISP" selftest
   [ "$status" -eq 0 ] || false
-  [ "$(printf '%s' "$output" | grep -c '^  ok ')" -eq 108 ] || false
+  [ "$(printf '%s' "$output" | grep -c '^  ok ')" -eq 106 ] || false
   ! printf '%s' "$output" | grep -q '^  FAIL'
 }

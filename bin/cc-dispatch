@@ -44,7 +44,7 @@
 #     live_workers}; verdict ∈ admit | defer | skip. It costs no quota, no session and (below the
 #     ceiling) no oracle call, so decision latency = pass cadence, independent of N.   S1 / F1
 #   ADMISSION — the ONLY capacity-bound step. free_slots = max(0, CEILING − live_workers), with
-#     live_workers = Σ `.rows[].k` from `claude-accounts --json` behind an absolute-path timeout(1).
+#     live_workers = the ledger's `claimed` fold (workers dispatch has OUT) — never a session count.
 #     The first free_slots items by the S7 key are admitted; every other item DEFERS with its queue
 #     position. free_slots == 0 ⇒ ZERO wave-plan calls, ZERO claims, ZERO spawns, ZERO pages:
 #     "backlog > concurrency" is a NORMAL, RECORDED state, never a cliff.                S2 / F2,F3
@@ -83,10 +83,8 @@
 #   CC_DISPATCH_PROJECT      (default: git toplevel, else $PWD)
 #   CC_DISPATCH_MAX_SPAWN    (default: 2)          per-PASS spawn cap (unchanged)
 #   CC_DISPATCH_SID          (default: <host>-<pid>)
-#   CC_DISPATCH_ACCOUNTS_BIN (default: claude-accounts on PATH / sibling) — the live-worker oracle
 #   CC_DISPATCH_CEILING      (default: 6)   FLEET concurrency ceiling; 0 ⇒ admit nothing (decisions
 #                                           are still journalled — a pure-observation mode)
-#   CC_DISPATCH_ORACLE_TIMEOUT_S (default: 20)  absolute-path timeout(1) bound on the oracle
 #   CC_DISPATCH_LOCK_DIR     (default: <dir of CC_DISPATCH_IDL>/dispatch.lock)  the S6 pass lock
 #   CC_DISPATCH_DECIDE_ONLY  (default: off)  on ⇒ decisions only: zero claims/spawns/pages
 #   CC_DISPATCH_LANE         (default: v2)   v1 ⇒ the incumbent path verbatim (whole-rebuild switch)
@@ -105,7 +103,6 @@ PROJECT="$(basename "$PROJECT")"
 
 # ── V2 config ─────────────────────────────────────────────────────────────────────────────────────
 CEILING="${CC_DISPATCH_CEILING:-6}"
-ORACLE_TIMEOUT_S="${CC_DISPATCH_ORACLE_TIMEOUT_S:-20}"
 LANE="${CC_DISPATCH_LANE:-v2}"
 # The pass lock lives in the SAME state dir as the IDL rather than at a second independent $HOME
 # path: the production default is then byte-identical to ~/.claude/autonomy/dispatch.lock, AND every
@@ -133,8 +130,6 @@ is_uint() { case "${1:-}" in ''|*[!0-9]*) return 1 ;; *) return 0 ;; esac; }
 is_on()   { case "${1:-}" in on|On|ON|1|true|True|TRUE|yes|Yes|YES) return 0 ;; *) return 1 ;; esac; }
 
 is_uint "$CEILING"          || die3 "CC_DISPATCH_CEILING must be a non-negative integer (got '$CEILING')"
-is_uint "$ORACLE_TIMEOUT_S" || die3 "CC_DISPATCH_ORACLE_TIMEOUT_S must be a positive integer (got '$ORACLE_TIMEOUT_S')"
-[ "$ORACLE_TIMEOUT_S" -gt 0 ] || die3 "CC_DISPATCH_ORACLE_TIMEOUT_S must be > 0 (an unbounded oracle is not an option)"
 case "$LANE" in v1|v2) ;; *) die3 "CC_DISPATCH_LANE must be v1 or v2 (got '$LANE')" ;; esac
 
 # resolve_bin <override> <name> [fallback-abspath...] → echoes an executable path, or "" (rc 1)
@@ -185,41 +180,36 @@ idl_inflight() {
        detail:"another pass holds the singleton lock"}' >> "$IDL" 2>/dev/null || true
 }
 
-# ── S4: the bounded live-worker oracle ────────────────────────────────────────────────────────────
-# resolve_timeout → an ABSOLUTE-path timeout(1), or "" when the box has none (macOS ships none;
-# coreutils provides /opt/homebrew/bin/{timeout,gtimeout}). Resolved ONCE into TIMEOUT_BIN.
-# No timeout(1) ⇒ the oracle is treated as UNAVAILABLE rather than called unbounded: an unbounded
-# call can hang a pass past its own interval, which is the failure the bound exists for.
-resolve_timeout() {
-  local c
-  for c in /usr/bin/timeout /opt/homebrew/bin/timeout /usr/local/bin/timeout \
-           /opt/homebrew/bin/gtimeout /usr/local/bin/gtimeout; do
-    [ -x "$c" ] && { echo "$c"; return 0; }
-  done
-  echo ""; return 1
-}
-TIMEOUT_BIN="$(resolve_timeout)"
 
-# live_workers → the fleet's live session count on stdout, or "" for UNKNOWN.
-# `.rows[].k` is claude-accounts' per-account LIVE session count; the sum is fleet-wide ON PURPOSE —
-# CEILING is a FLEET ceiling, and the operator's own panes occupy slots as surely as a worker does.
-# Every failure mode (no timeout bin, unresolvable oracle, non-zero exit, expiry, unparseable or
-# rows-less JSON) collapses to "" — UNKNOWN, which the caller must never read as 0 and never as a
-# cliff. Absence of a verdict is a THIRD state.
-live_workers() {
-  # the oracle's name is a NAMED CONSTANT, deliberately not inlined into the resolve_bin call below.
-  # scripts/dispatch-acceptance.sh A8 proves "every oracle call site is bounded" by grepping for a
-  # line that mentions the oracle, contains a command substitution, and lacks `timeout` — a path
-  # RESOLUTION reads exactly like an unbounded INVOCATION to that heuristic, so inlining it here
-  # scores a permanent false FAIL on an acceptance criterion that could then never clear. The bound
-  # itself is on the invocation two lines down. Do not "simplify" this back.
-  local abin out n oracle=claude-accounts
-  [ -n "$TIMEOUT_BIN" ] || return 0
-  abin="$(resolve_bin "${CC_DISPATCH_ACCOUNTS_BIN:-}" "$oracle")" || return 0
-  [ -n "$abin" ] || return 0
-  out="$("$TIMEOUT_BIN" "$ORACLE_TIMEOUT_S" "$abin" --json 2>/dev/null)" || return 0
-  n="$(printf '%s' "$out" \
-       | jq -er 'if (.rows|type)=="array" then ([.rows[].k // 0] | add // 0) else error("no rows") end' \
+# live_workers → how many workers DISPATCH currently has out, or "" for UNKNOWN.
+#
+# This is the ledger's `claimed` fold — NOT a live-session count, and the distinction decides
+# whether this dispatcher works at all (AUTONOMY_DISPATCH_V2 §3 S2, landed 15cc1f4f). An earlier
+# revision summed `.rows[].k` from `claude-accounts --json` on the reasoning that a FLEET ceiling
+# should charge for the operator's panes too. Measured on live disk that sum was 12 while the
+# claimed count was 0: at the default CEILING=6 it yields free_slots = max(0, 6−12) = 0
+# PERMANENTLY. The dispatcher would admit nothing, ever — and because deferrals never page by
+# design (R2), it would do so in total silence. Strictly worse than the false cliff this rebuild
+# removes: a false cliff at least pages. Raising CEILING does not rescue it either; those 12 are
+# leads, desk panes, teammates and sibling rebuilds, all fluctuating independently of dispatch, so
+# any constant is either wedged or meaningless. Charging dispatch for human activity lets the
+# operator silently throttle autonomy to zero.
+#
+# Three properties follow, and they are why this is the better design rather than merely a fix:
+#   · no oracle is consulted — no timeout, no expiry path, no unknown-from-the-network;
+#   · it SELF-HEALS: a dead worker's claim is reopened by cc-backlog's `reap` liveness oracles
+#     (cc-backlog:52-84), so the ceiling cannot wedge at a stale count. Dispatch deliberately does
+#     NOT implement its own liveness probe — duplicating reap would reintroduce the false-dead
+#     verdict that spawns a duplicate peer onto live work;
+#   · it is the honest unit: the ceiling exists to stop DISPATCH exhausting quota by its own
+#     spawning, and dispatch only controls its own workers.
+# A failure to read or parse the ledger still collapses to "" — UNKNOWN, which the caller must
+# never read as 0 and never as a cliff. Absence of a verdict is a THIRD state.
+live_workers() { # <backlog-bin> → count of workers dispatch has OUT, or "" for UNKNOWN
+  local b="$1" n
+  [ -n "$b" ] || return 0
+  n="$("$b" list --all --json 2>/dev/null \
+       | jq -er 'if type=="array" then ([.[] | select(.status=="claimed")] | length) else error("not an array") end' \
          2>/dev/null)" || return 0
   is_uint "$n" || return 0
   echo "$n"
@@ -443,9 +433,9 @@ dispatch() { # <dry|run|decide>
     # than dropping the pass — a pass that decides nothing is the outage this rebuild is fixing.
     printf '%s' "$ordered" | jq -e 'type=="array"' >/dev/null 2>&1 || ordered="$dispatchable"
 
-    LIVE_RAW="$(live_workers)"
+    LIVE_RAW="$(live_workers "$backlog")"
     if [ -z "$LIVE_RAW" ]; then
-      # UNKNOWN: admit AT MOST ONE. Not 0 (a permanently unreadable oracle would stall the queue
+      # UNKNOWN: admit AT MOST ONE. Not 0 (a permanently unreadable ledger would stall the queue
       # forever — fail-closed must not amplify into an outage) and not CEILING (that is a blind fire
       # into an unknown fleet). CEILING=0 still admits nothing: the kill switch outranks the guess.
       FREE_SLOTS=1; [ "$CEILING" -lt 1 ] && FREE_SLOTS=0
@@ -639,10 +629,22 @@ selftest() {
   SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 
   # backlog stub: seeded array from $STUB_ITEMS; claim/reopen append to $tmp/backlog.log + echo id.
+  # `list --all` is the CEILING source (the claimed fold), `list --open` the dispatchable set —
+  # two different questions, so the stub answers them separately. \$STUB_LIVE seeds the claimed
+  # count; "x" makes the output UNPARSEABLE and \$STUB_LIST_ALL_RC makes the read FAIL — both are
+  # the UNKNOWN path.
   cat > "$tmp/backlog" <<STUB
 #!/bin/bash
 case "\$1" in
-  list)  cat "$tmp/items.json" ;;
+  list)
+    shift
+    case "\$*" in
+      *--all*)
+        [ -n "\${STUB_LIST_ALL_RC:-}" ] && exit "\$STUB_LIST_ALL_RC"
+        if [ "\${STUB_LIVE:-0}" = x ]; then echo 'not json at all'
+        else jq -cn --argjson n "\${STUB_LIVE:-0}" '[range(\$n) | {id:"c\(.)", status:"claimed"}]'; fi ;;
+      *)  cat "$tmp/items.json" ;;
+    esac ;;
   claim) printf 'claim %s\n' "\$2" >> "$tmp/backlog.log"; echo "\$2" ;;
   reopen)printf 'reopen %s\n' "\$2" >> "$tmp/backlog.log"; echo "\$2" ;;
 esac
@@ -663,17 +665,7 @@ STUB
 printf '%s\n' "\$*" >> "$tmp/spawn.log"
 exit "\${STUB_SPAWN_RC:-0}"
 STUB
-  # accounts stub: the live-worker oracle, reduced to the ONE field cc-dispatch reads
-  # (.rows[].k = per-account live sessions). \$STUB_LIVE seeds the fleet total; "x" makes the output
-  # UNPARSEABLE (the UNKNOWN path); \$STUB_ACCT_SLEEP outruns the timeout bound.
-  cat > "$tmp/accounts" <<STUB
-#!/bin/bash
-[ -n "\${STUB_ACCT_SLEEP:-}" ] && sleep "\$STUB_ACCT_SLEEP"
-if [ "\${STUB_LIVE:-0}" = x ]; then echo 'not json at all'
-else printf '{"rows":[{"acct":"a","k":%s}]}\n' "\${STUB_LIVE:-0}"; fi
-exit "\${STUB_ACCT_RC:-0}"
-STUB
-  chmod +x "$tmp/backlog" "$tmp/waveplan" "$tmp/spawn" "$tmp/accounts"
+  chmod +x "$tmp/backlog" "$tmp/waveplan" "$tmp/spawn"
 
   # EVERY seam is pinned explicitly, including the ones whose defaults would already be right: a
   # selftest that inherits a caller's CC_DISPATCH_* (a bats suite exercising the same binary does
@@ -681,14 +673,9 @@ STUB
   export CC_DISPATCH_BACKLOG_BIN="$tmp/backlog" CC_DISPATCH_WAVEPLAN_BIN="$tmp/waveplan" \
          CC_DISPATCH_SPAWN_BIN="$tmp/spawn" CC_DISPATCH_PAGES_DIR="$tmp/pages" \
          CC_DISPATCH_IDL="$tmp/idl.jsonl" CC_DISPATCH_PROJECT="/repo/a" CC_DISPATCH_MAX_SPAWN=2 \
-         CC_DISPATCH_SID="selftest" CC_DISPATCH_ACCOUNTS_BIN="$tmp/accounts" \
-         CC_DISPATCH_LOCK_DIR="$tmp/dispatch.lock" CC_DISPATCH_CEILING=6 CC_DISPATCH_LANE=v2 \
-         CC_DISPATCH_DECIDE_ONLY=off CC_DISPATCH_ORACLE_TIMEOUT_S=20
-  unset STUB_WP_RC STUB_SPAWN_RC STUB_LIVE STUB_ACCT_RC STUB_ACCT_SLEEP
-  # NEVER let the oracle seam fall through to the real claude-accounts: `resolve_bin` would find it
-  # on PATH or as a sibling of bin/, and the selftest would then read the OPERATOR'S live fleet —
-  # non-hermetic, ~2 s per pass, and with a real live count >= CEILING every case below would defer
-  # instead of firing. CC_DISPATCH_LOCK_DIR needs no export: it defaults into the fixtured IDL's dir.
+         CC_DISPATCH_SID="selftest"         CC_DISPATCH_LOCK_DIR="$tmp/dispatch.lock" CC_DISPATCH_CEILING=6 CC_DISPATCH_LANE=v2 \
+         CC_DISPATCH_DECIDE_ONLY=off
+  unset STUB_WP_RC STUB_SPAWN_RC STUB_LIVE STUB_LIST_ALL_RC
 
   # wave.json is removed too: its ABSENCE is the observable for "made zero wave-plan calls", and a
   # leftover from the previous case would make that assertion vacuously false (or vacuously true).
@@ -936,12 +923,9 @@ STUB
   t "(q) unknown is recorded as null, never as 0"     grep -q '"live_workers":null' "$tmp/idl.jsonl"
   t "(q) unknown → NO page written"                   test ! -d "$tmp/pages"
   t "(q) unknown → NOT an abstention"                 not grep -q '"action":"abstained"' "$tmp/idl.jsonl"
-  reset; STUB_ACCT_RC=7 CC_DISPATCH_CEILING=6 "$SELF" --once >/dev/null 2>&1
-  t "(q2) oracle exit non-zero → the SAME unknown path" grep -q '"reason":"live-count-unknown"' "$tmp/idl.jsonl"
-  t "(q2) oracle exit non-zero → still admits 1 (never 0-forever)" test "$(grep -c '"verdict":"admit"' "$tmp/idl.jsonl")" -eq 1
-  reset; STUB_ACCT_SLEEP=5 CC_DISPATCH_ORACLE_TIMEOUT_S=1 CC_DISPATCH_CEILING=6 "$SELF" --once >/dev/null 2>&1
-  t "(q3) a HUNG oracle is bounded by timeout(1) → unknown, not a hung pass" \
-    grep -q '"reason":"live-count-unknown"' "$tmp/idl.jsonl"
+  reset; STUB_LIST_ALL_RC=7 CC_DISPATCH_CEILING=6 "$SELF" --once >/dev/null 2>&1
+  t "(q2) unreadable ledger → the SAME unknown path" grep -q '"reason":"live-count-unknown"' "$tmp/idl.jsonl"
+  t "(q2) unreadable ledger → still admits 1 (never 0-forever)" test "$(grep -c '"verdict":"admit"' "$tmp/idl.jsonl")" -eq 1
 
   # (r) DECIDE-ONLY — the safe activation lane: the journal is the whole product.
   reset; seed_items "$items3"; CC_DISPATCH_CEILING=6 "$SELF" --decide >/dev/null 2>&1
@@ -995,8 +979,6 @@ STUB
   # (silently admitting nothing) or as ∞ (silently admitting everything).
   CC_DISPATCH_CEILING=abc "$SELF" --once >/dev/null 2>&1; rc=$?
   t "(u) non-numeric CC_DISPATCH_CEILING → exit 3"   test "$rc" -eq 3
-  CC_DISPATCH_ORACLE_TIMEOUT_S=0 "$SELF" --once >/dev/null 2>&1; rc=$?
-  t "(u) zero oracle timeout → exit 3 (unbounded is not an option)" test "$rc" -eq 3
   CC_DISPATCH_LANE=v3 "$SELF" --once >/dev/null 2>&1; rc=$?
   t "(u) unknown lane → exit 3"                      test "$rc" -eq 3
 
