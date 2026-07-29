@@ -109,6 +109,29 @@ land via /ship as you go; update the map row as part of your DoD; ping the coord
   postland stamp yet. Until it advances, every cold fire must be preceded by
   `rm -f "$TMPDIR"handoff-deps-XXXXXX.sh` (the live script is still the pre-fix copy).
 
+## Inherited watch — first GREEN postland stamp (status, not a coordinator work item)
+
+Read 2026-07-29T18:15Z: **zero GREEN stamps have ever existed** (`grep -l '"verdict":"green"'
+over ~/.claude/autonomy/postland/stamps = 0`). Last 7 verifier cycles: RED ×5 (dominant
+attribution `tests/postland-verify.bats`, also `tests/cc-backlog.bats`), CUT ×1, HUNG ×1
+(`tests/lead-crash-close-panes.bats`, wedge_at 1565/2215, `reproduced=true`). Deploy stays
+fail-closed by design, so **everything this campaign lands is landed-but-not-deployed** until
+the stamp exists — the shared checkout sits at `38eec335` while trunk moved on.
+
+**Not reopened here, deliberately.** This is `cc-backlog da18f179ac50` plus a mature lead
+chain (`19080082c195` root-cause repro · `10941179f8ec` retraction · `c3dd374de94a` an already
+RULED decision · `b4e49b4b5014` the one reproduced postland-config failure · `980fc9e1359b` a
+PARKED COMMIT `9423fad6` that fixes it, itself blocked on the `cc-authbrowser` port-lease item
+`e280bbc8b6e4` · `ba63751cea54` the open bisect). Ten hypotheses are already eliminated with
+evidence and trunk is provably green in a clean room (2096 ok / 0 not-ok); the standing
+conclusion is to audit the VERDICT PATH, not the suites. A coordinator diving in would burn
+the context the campaign depends on and duplicate owned work.
+
+One NEW data point worth carrying forward: the verifier now emits **HUNG as a distinct state**
+with `suspect=`, `wedge_at=` and `reproduced=`, which is exactly what `8b90c69e0edd` asked for
+(KILLED vs HUNG route to opposite fixes). That ask appears to be at least partly implemented —
+whoever picks up `da18f179ac50` should not re-file it.
+
 ## Learnings (accumulate; never delete)
 
 - Wave sizing is the load lever: sessions are the ambient load (14 ≈ load 88-104 pre-v2);
