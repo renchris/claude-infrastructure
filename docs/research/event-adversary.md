@@ -1,0 +1,117 @@
+CONTAMINATION NOTE: `BANNER_NARRATIVE_SPEC.md` (attack target 2) embeds prior duty-cycle measurements and fault diagnoses of v5a. I re-derived every number independently from the SVGs' CSS keyframes; where my numbers and the spec's diverge it is flagged. `BANNER_V2_SUBJECT_OPTIONS.md` was read only as the R1/R3 ruling source-of-record. Probes spent: 14 (all read-only: git show/ls, grep/python over the 5 SVGs, spec + rulings docs, banner-collide.py, v5a keyframes).
+
+Timing ground truth I derived (all four v6 variants share one byte-identical animation CSS; no per-event `--d` overrides, so keyframe % = absolute loop time):
+
+| element | selector | window(s) on the 240s loop |
+|---|---|---|
+| cheer | `rcf` 120s, vis 28.4–32% | **34.1–38.4s AND 154.1–158.4s** |
+| sleep (+Zzz, legsStill, eShut) | `rsf/zzf/lsf` 240s, vis 63.2–66% | **151.7–158.4s** |
+| body flip | `rtf` 80s, scaleX(−1) 88–95% | 70.4–76.0, **150.4–156.0**, 230.4–236.0s |
+| shooting star (v6a/b/c) | `ssf` 240s | 231.1–237.8s, then `opacity:0` — no landing, no ember |
+| birds (ALL v6) | `brdf` 80s, vis ~4–44% | 3 passes ≈ 111s ≈ **46% duty** |
+| balloon (v6c only) | `balf` 120s, vis ~5–45% | 2 passes ≈ **46% duty** |
+| peek (v6a/c/d) | `pkf` 240s | rises 96–102, up 102–115.2, down →121.2s |
+| peer (v6b) | `prf` 240s | in 50.4–66, hold **66–79.2 at x=814**, exits left 79.2–98.4s |
+
+---
+
+## AXIS 0 (unrequested but governing): the artifact contradicts both targets before any aesthetic argument
+
+**[DERIVED from "five independent timers on one shared period" + divisibility, then CONFIRMED in CSS] The cheer fires INSIDE the sleep, in v5a and in all four v6 candidates.** A 120s sub-period on a 240s master fires twice; nothing checks disjointness. v5a: `rc` vis 30–34% of 120s → 36.0–40.8s **and 156.0–160.8s**, entirely inside `rs` sleep 153.6–170.4s. v6: cheer#2 154.1–158.4s ⊂ sleep 151.7–158.4s (the generator even phase-locked both to END at exactly 158.4s). And `.armsIdle` is never opacity-gated (absent from the `{opacity:0}` reset list; `arf` has no opacity frames) — so during any cheer the sprite shows **four arms** (idle side-arms + raised arms) plus three detached confetti pixels. For 4.3s every loop, every v6 candidate renders: closed-eye lids + drifting Zzz + still legs + four arms + confetti — a sleeping creature sprouting horns. Manifests as: the operator's "horns" complaint recurring in the shipped fix, now while asleep. Confidence: high (CSS arithmetic; needs one frame-render to be unimpeachable — prediction P1 below).
+
+**[EVIDENCE] The diagnosis document is blind to this.** The spec's own "measured, not guessed" table (spec:23–29) lists rCheer as ONE window and never notices the second firing or the collision — while its central thesis is "events stack instead of sequencing" (spec:35–36). The audit missed the worst stacking instance in its own evidence table. Also spec:216 cites `.sh{opacity:.20}` as the light-mode shooting star; in every v6 file `.sh` is the creature's ground-shadow ellipse — the star is inside `.nOnly{display:none}`, i.e., **absent** in light mode, not faint. Two miscitations in a doc whose authority is "measured."
+
+**[DERIVED + CONFIRMED] The enforcement layer cannot see time.** `scripts/banner-collide.py:1-22` asserts only spatial creature-vs-wordmark intersection per frame. There is no temporal event-disjointness check anywhere, and per this repo's own doctrine (enforcement-at-the-chokepoint, mechanism-not-memory) the spec's "sequence, do not stack" (spec:60) is prose that already regressed once (v5a→v6) and will again.
+
+**[DERIVED + CONFIRMED] v6 also grew an unaudited 46%-duty event.** Birds (`brdf`) exist in all four v6 files, were not in v5a's keyframe set, appear in nobody's five-event inventory (including the lead's brief), and are absent from the spec's per-event reconsideration (spec:89–132) — which was updated (56e21dd2) AFTER v6 existed and re-measured v6c for filters. v6c carries birds AND balloon: union ≈160s ≈ **two-thirds of the loop has something crossing the sky**, against critique (a)'s "volume dilutes significance." Everyone is auditing v5a; the artifact moved.
+
+---
+
+## 1. SEMANTIC HONESTY — decorative, confirmed by the strongest available test
+
+**[DERIVED prediction: "swap the wordmark and nothing breaks"; CONFIRMED]** Class-census diff across the four "art directions": v6d-terminal-field has **zero** unique classes vs v6a and zero terminal content (no cursor/prompt/glyph anything); the only inter-variant deltas are v6c `bal/balStr/balloon`, v6a/b `shoot/ss`, v6b `peer`. The complete list of domain-bearing elements in any candidate: the `<text>` wordmark, the `<text>` subtitle "SESSIONS RUN EACH OTHER", Claude-orange #D77757, and the asterisk mark. Moon, clouds, mounds, birds, meteor, Zzz, balloon = the stock cozy-pixel-night kit. Replace the two text nodes with "cozy-farm-game" and every pixel remains equally apt. The scene is an illustration for a caption; the caption does all the semantic work.
+
+**The spec's chain adds coherence, not aboutness.** "Star lands → ember → visitor → cheer → sleep → wake" is internally consistent and refers to nothing: no beat encodes run/handoff/recycle. The tell is the constellation justification (spec:198–199): "separate points revealed to be one figure is *sessions run each other* stated in the sky" — a rationalization template that validates ANY joining of ANY dots. The one proposed beat with real referential content — "falls into step with clawd… states *sessions run each other* as behaviour" (spec:129–130) — is precisely the beat with maximal R1 exposure (see axis 3). **Semantic content and R1-safety are anti-correlated in this design space**: everything that would make the scene mean "sessions run each other" (two agents interacting, connections, one waking another) is what R1 forbids. The chain is about nothing because it is only allowed to be about nothing.
+
+What survives: decorativeness per se is priced in — R1 itself chose mascot-scene over infographic, and a brand-mascot hero is the industry norm. The dishonesty is the SPEC's claim that the chain confers meaning. Drop the claim, keep the craft. Also note: the subtitle, the one load-bearing semantic element, renders at 17 SVG px → ~7.3 CSS px on desktop GitHub (×0.432), ~3.4px mobile — sub-legible at 1× DPR. The banner's only sentence cannot be read where it matters. Confidence: high.
+
+## 2. CLICHÉ — ranked, most→least tired
+
+1. **Constellation line-mapping** — terminal. "Dots connected by lines in a night sky" has been the default visual of "network/AI" in tech marketing for a decade; it is simultaneously the most clichéd option available AND the R1-adjacent one, and the spec crowns it "the best event idea on the table" (spec:197) — which indicts the idea pool, not just the idea. Manifests as: the repo header every AI-tools startup shipped in 2019.
+2. **Shooting star** — Disney-wish grade; as the proposed WAKE cause ("the next streak wakes the creature," spec:55) it's a greeting-card beat.
+3. **Balloon** — Pixar/red-balloon sentimentality; doubly compromised as the brand asterisk (R4: "the clawd pixel creature… **not the asterisk mark**", V2:16). The spec's repair (visitor hands it over/releases it) upgrades it from stray mark to full trope.
+4. **Arms-up cheer** — Kirby-idle stock; harmless if legible; currently horns (and four-armed, axis 0).
+5. **Peek-from-behind** — stock shy-creature; v6a implements it as a literal whack-a-mole `translateY` pop, the exact "despawn" the spec bans (spec:126–128).
+6. **Zzz** — oldest glyph in the kit and the only one that EARNS its cliché: it is standardized, hence the only emote decodable at small sizes. Keep. (Though as built, `zmk` glyphs are 10 units → 4.6px desktop / 2px mobile — even Zzz is rendered below its legibility floor.)
+
+Severity = cliché × prominence: the constellation concentrates maximal cliché at the moment of maximal viewer attention (the rare crown event). The genuinely fresh assets in this project are not events at all: the per-column arc-envelope dithered clouds, the masked crescent, the generated seamlessness, self-theming. The craft layer is original; the story layer is a trope anthology.
+
+## 3. R1 VIOLATION RISK — the "lines never touch creatures" defense fails three separate ways
+
+The ruling of record: R1 = "whole-system (not a handoff/subsystem infographic)" (V2:14), and the prior design's load-bearing rationale: "**nothing connects them.** No threads, no pulses, no exchange — drawing a line between two of them would rebuild the handoff infographic R1 just rejected… The absence *is* the argument" (V2:66–68).
+
+**(a) [DERIVED] The caption primes the diagram reading.** The banner prints "SESSIONS RUN EACH OTHER" in the sky. Under that caption, ANY node-link drawing is read as the labeled system diagram — stars are the canonical rendering of graph nodes, and at 2×2 SVG px (0.86 CSS px) a viewer cannot even verify that the joined things are "stars, not creatures." The safety rule guards ink-ownership, a property invisible at render scale. Constellation + caption = network diagram with a title, no creature contact required.
+
+**(b) [DERIVED] Causal choreography IS the exchange.** The spec's repair wires visitor-arrival → clawd-cheer (spec:54, 112) — two agents signaling each other by timing. The V2 rationale banned "threads, pulses, exchange"; a stimulus-response pair between two creatures is an exchange rendered in time instead of ink. The spec convicts itself: "states *sessions run each other* as behaviour instead of as a diagram" (spec:130) concedes the behavior encodes the same content as the rejected diagram. If R1 rejected the CONTENT, re-encoding dodges nothing; if R1 rejected only the FORM (lines), the constellation restores the form. Either reading kills one of the spec's two flagship ideas.
+
+**(c) [DERIVED + CONFIRMED geometry] v6b reconstructs the rejected reading and adds a defect.** Named "two-sessions," captioned by the subtitle, its beat structure is arrive → greet (peer cheers 69.6–76.8s while clawd "turns," 70.4–76.0s) → **depart THROUGH the anchor**: the peer exits from x=814 to −320 and interpenetrates clawd's 560–780 span for ≈7.2s (59 px/s, both flat #D77757, crispEdges, no outlines, no depth cues, peer z-above so its blank body slides over clawd's face and erases the eyes). Two same-color sprites merging into one connected orange region reads as a rendering error — or worse, as one session absorbing another, which is a handoff infographic acted out. Also the "greet" itself is unrenderable: the sprite is bilaterally symmetric (eyes at 40–60/160–180 about center 110, arms at 0/200), so `scaleX(−1)` maps it to itself — **the turn-to-face beat is invisible by construction**, in both `rtf` and `pflf`. The interaction exists only in the code.
+
+Verdict: the constellation's stated safety rule is unsound (a); the repair chain violates R1's rationale without drawing anything (b); v6b violates it as shipped (c). What survives: a second creature with **no synchronized beats and no crossing** — co-presence without exchange — which is exactly the V2 doc's own "separate lanes" design, i.e., the thing this track already rejected as twee. Confidence: (c) high, (a)/(b) medium-high (interpretation of a human ruling; but the burden sits on the design under an explicit prior rejection).
+
+## 4. LEGIBILITY AT SCALE — the premise fails at the delta layer, not the creature layer
+
+Rendered sizes (1920→~830px GitHub desktop content column, ×0.432; ~×0.20 mobile):
+
+- clawd: 233×170 SVG px → **~101×73px desktop / 45×32 mobile** — the creature itself is fine. The brief's "creature is small" is the wrong diagnosis.
+- cheer delta: arm nubs 21×42 SVG → 9×18px desktop, 4×8 mobile; confetti 9–13 SVG → **4–6px desktop, ~2px mobile**, in body color. State-change ink is 2–9px.
+- visitor (peek, scale 0.3): 66×48 SVG → 29×21px desktop, 12×9 mobile; its eyes 2.6px. The spec's beat 3 — "looks at the ember, looks at clawd" (spec:53) — demands READABLE GAZE on 2.6px pupil-less eyes on a front-facing symmetric sprite whose eye-dart runs on a free 8s metronome (`lkf`) uncoupled from any event. Unrenderable three times over.
+- Zzz: 4.6px desktop / 2px mobile. Sleep lids: 9×2px. Proposed ember "small, faint slow pulse": a faint 3–4px warm dot in the bottom band already textured with 68 `tf0` ground dashes (89×2.5px each) — and "the only warm light in the frame" (spec:52) is false against a palette whose horizon glow and 100px creature are already warm orange. Zero pop-out.
+
+**The rule this derives:** at this framing, event legibility requires either (i) whole-body posture change ≥~30% of silhouette (sit, lie, jump arc — silhouette-level acting), or (ii) standardized glyphs at ≥16 rendered px (≈37 SVG px, ~3.7× current Zzz). Limb-level and gaze-level acting are out at ANY plausible creature size short of ~2× (which makes a 340px sprite dominate a 600px frame and still leaves confetti at 8px). The spec half-knows this — it demands whole-body cheer (spec:54, 72–73) — and then commits gaze-acting for the visitor two rows earlier. The v6 build ignored the whole-body demand and re-shipped nub-arms. Confidence: high (arithmetic); the perceptual thresholds are standard but checkable by prediction P3.
+
+## 5. THE VIEWER'S ACTUAL EXPERIENCE — the chain is unwitnessable by construction; rare-events-as-lottery survives, rare-events-as-story does not
+
+Single visit, uniform random phase, ~10s dwell: P(shooting star) ≈ (6.7+10)/240 ≈ **7%**. P(sleep) ≈ 7%. P(cheer) ≈ 12%. P(peek) ≈ 15%. P(any given cause AND its effect in one visit) requires dwell ≥ the inter-beat gap — and the spec MANDATES "one event visible at a time, with clear empty air between" (spec:60). **Theorem-grade self-defeat: if gaps > dwell, no viewer ever witnesses a cause and its effect in the same visit.** The full chain (star at ~231s → … → wake at t+240) needs 4+ minutes of continuous README-staring; probability ≈ 0 for every human who is not the designer. The spec's acceptance test — "a viewer can answer *why did it appear* from the animation alone" (spec:227) — cannot be passed by any viewer who arrives mid-chain, i.e., by everyone: an event whose cause fired 90s before your arrival is exactly as uncaused-for-you as v5a's timers. **The repair fixes authorial causation and leaves experienced causation untouched.**
+
+Two honest qualifications, then the kill:
+- The primary audience of a personal infra repo is the operator, a repeat viewer. Rare-uncaused events as slot-machine delight ARE a coherent design for repeat viewers (cf. terminal Easter eggs) — each visit samples the lottery. **But repetition never teaches ORDER**: random 10s windows collect events, not sequences; the causal grammar is only learnable by one deliberate full-loop watch, which only the author performs. So even for the operator, the chain degrades to the lottery it was meant to replace.
+- Light-mode readers: the chain's prime mover is `display:none` (`.shoot` inside `.nOnly`) — the story is structurally absent for the daytime half of the audience, which the spec concedes (spec:213–219) and punts on.
+
+What survives axis 5: (1) the **ambient layer** — walk, scroll, graded sky, moon, theming — fully sampled in any 5s window; this is where 100% of real viewer-value already lives, and the build's own best assets (12s hop, 2s arm-lift, blink, eye-dart) are good precisely BECAUSE they are frequent, refuting the rare-event theology from inside. (2) At most **one compressed vignette** (~30–45s, beats abutting within one dwell window: land → peek → cheer inside ~15s), P(catch some of it) ≈ 23%, P(read causation | caught) high — note this REQUIRES abandoning the "empty air" clause. Distributed rare beats at 100s/150s are a designer's indulgence: cost paid by every loop, perceived by no one.
+
+## 6. SELF-DEFEAT — the conflict is not aesthetic tension; it is codified and undocumented
+
+- **R3 of the binding ruleset says "seamless indefinite loop, ambient not narrative" (V2:15). The spec's program is "a story that closes rather than a reset" (spec:44).** The spec's header claims to supersede only "the timing half of S9" (spec:8) and never mentions R3. Either R3 was silently retired — undocumented supersession of a binding rule — or the entire narrative program violates the ruleset it is nominally implementing. Nobody has adjudicated this.
+- Critique (a) demands restraint; the repair ADDS: a persistent ember, a visitor errand, a retained re-caused balloon, a constellation event, a day-mode arrival. It thins the noise (stars — though v6 still ships **255** star groups against "thin the starfield hard") and thickens the plot. Under axis 5's sampling math, plot that cannot be perceived IS noise — volume without weight, failing critique (a) by its own metric. The two operator critiques, composed with real dwell times, refute the spec's synthesis: **(a) + (b) + 10-second viewers has no solution in the "rich distributed causal chain" region. One of {distributed rare-event narrative, restraint, the 240s period} must be abandoned** — the cheapest sacrifice is the narrative-as-experienced (keep it as authorial ordering discipline, sell no meaning), or compress it (one vignette), or re-found it on state-causation (below).
+
+Decisive resolution available [DERIVED]: **replace event-causation with state-causation.** A cause that is a STATE is co-present with its effect in every sampled frame — no sequence must be witnessed. Concretely: a slow intra-loop time-of-day arc (dusk → deep night → first light across the 240s, which v6c's palette already gestures at) makes sleep caused by "it is darkest" and wake caused by "light returns" — legible in ANY 5s window, ambient (R3-compliant), restrained (zero new objects), and works in both color schemes. The spec's own strongest rulings (whole-body sleep posture, symmetric exits) are state-shaped, not chain-shaped.
+
+---
+
+## REFUTED (by my own probes)
+
+- **"v6b's peer fuses with clawd during the hold"** — refuted: v6b's clawd sits at x=560–780 (scale 1.00, not v6a's 628/1.06); hold at 814 leaves a 34px gap. The 7.2s exit-crossing interpenetration stands.
+- **"The four variants are meaningfully different candidates"** — as behavior systems, refuted: one shared CSS, one sprite, one event kit; they differ in palette, anchor, and which 1–2 events are compiled in. Choosing among v6a–d is choosing wallpaper, not design.
+- **"The creature is too small to read"** (implicit in the brief) — refuted at the body level (~101×73px desktop); the scale problem is real only for state-deltas, gaze, subtitle, and the visitor.
+- **"Self-theming is cleanly wrong for GitHub"** — weakened: the repo's README already ships OS-keyed `<picture>` diagrams (README.md:68), so the theming authority (OS vs pinned GitHub theme) is an accepted convention here; residual risk is browser divergence on `color-scheme` propagation into SVG-as-`<img>` (P4 below), and the banner's day scene inverts much harder than a diagram (`.ct0{fill:#ffffff}` clouds on a dark page).
+
+## NEGATIVE SPACE (adjacent, unwatched)
+
+1. **Runtime cost of a perpetual header.** 300+ concurrent CSS animations (255 twinkles + per-tile parallax `--d` offsets) in an `<img>` SVG that every open tab paints forever; the spec proposes adding full-width `feTurbulence` grain (spec:166–169) — the one genuinely expensive primitive — with "perf-checked" as prose. Nobody has traced paint cost or battery. A README that warms laptops is a strictly worse defect than a boring one.
+- 2. **The GitHub mobile app / non-github.com render surfaces.** Camo-proxied SVG animation + `<style>` blocks are exercised only on desktop github.com; the mobile app's README pipeline has historically rasterized or frozen SVGs. The entire behavior layer may be dead (or, worse, frozen at t=0 mid-nothing) for a whole surface class. One phone-minute to check; checked never.
+3. **Accessibility contract.** No evidence of `<title>/<desc>/role="img"` on the banner (the README's diagrams carry rich alt text; the banner drafts weren't checked for it), and `prefers-reduced-motion` freezes at t=0 — which frame t=0 shows (and whether it's the intended composition) is untested for the freeze case.
+
+## FALSIFIABLE RUNTIME PREDICTIONS (cheap; a miss breaks my model)
+
+1. **Collision frame.** Render any v6 at t=156s (`scripts/banner-shots.sh` with `--fz:-156s`, or browser + `document.getAnimations().forEach(a=>a.currentTime=156000)`). PREDICT: shut-eye lids + Zzz + raised cheer-arms + idle side-arms simultaneously (4 arm blocks). If cheer arms are absent → my CSS composition model is wrong → discard axis-0 and downgrade axis-6.
+2. **v6b crossing.** Render v6b at t≈83s. PREDICT: peer sprite overlapping clawd ≥40% of body width, single connected orange region, clawd's eyes occluded. Absent → my transform arithmetic is wrong.
+3. **Horns replication.** Show the v6 cheer frame (t≈36s) at 830px to ≥5 naive viewers: "what just happened to the creature?" PREDICT ≥50% say horns/ears/antennae, ≤20% say cheer/arms. If most say "cheering," the legibility attack (axis 4) overclaims and the spec's whole-body ruling is optional.
+4. **Theme authority split.** GitHub theme pinned Dark + OS Light, load the raw SVG and the README embed in Chrome and Safari. PREDICT at least one disagreement (day banner on dark page or cross-browser divergence). No divergence anywhere → drop the theming caveat.
+5. **Dwell reality.** Ten 12s random-phase clips of v6a to fresh viewers, "describe what happened." PREDICT ≥8/10 report only walking/clouds/sky, 0/10 report any cause–effect pair. Any viewer reporting causation from a random 12s window refutes the axis-5 kill and rehabilitates the chain.
+
+## CAMPAIGN / GENERATOR CANDIDATES
+
+1. **Temporal disjointness as a build-time gate** (extend `banner-build.py`/`banner-collide.py`: every event class emits its absolute visibility windows; assert pairwise-disjoint-with-margin + per-window "nothing else moving in the same third of the frame"). Dissolves: the cheer∩sleep collision (all 5 files), the v6b crossing, the v5a→v6 stacking regression class, the spec's unenforced "sequence, don't stack," and the audit-blindness that let birds ship unreviewed — five ledger items become no-ops because the generator refuses to emit them. This repo's own doctrine (enforcement-at-the-chokepoint) says the spec ruling is worthless until this exists.
+2. **State-causation rewrite of the narrative program** (intra-loop time-of-day arc as the universal cause; events become states co-present with their causes). Dissolves: the wake-cause problem, the light-mode prime-mover absence (a sky arc renders in both schemes), the R3-vs-narrative contradiction, the acceptance-test unfalsifiability, and the balloon/ember prop inventory (no props needed) — while keeping the operator's cause/behaviour/exit demand satisfiable by a 10-second viewer, which the event-chain provably cannot.
+
+**Bottom line:** the craft layer (clouds, moon, walk, theming, seamlessness) genuinely holds up and needs no story. Both targets fail as designs-about-something: the as-built events are mutually colliding generic set-dressing audited against a stale artifact, and the proposed repair is an internally consistent story that no viewer can experience, about nothing the repo does, that re-encodes the one thing the operator explicitly rejected, under a binding rule ("ambient not narrative") it never acknowledges violating.
