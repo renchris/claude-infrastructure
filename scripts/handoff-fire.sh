@@ -2511,6 +2511,101 @@ if [ -n "$NOTIFY_BACK" ] || [ "$WANT_SELF_RETIRE" = 1 ] || [ "$ENGAGE_VERIFY" = 
   PROMPT_FILE="$PF_NB"
 fi
 
+# ---- FIRE-FAILED resource cleanup (audit rows 2+3 — there was no trap at all) -------------------
+# Every resource a fire acquires is acquired BEFORE the fire can fail, and nothing released any of
+# them on any failure branch: `payload_lint_gate` exit 4, `pre_trust`, a `spawn` return 1 under
+# set -e, and the FIRE-FAILED engagement miss all left behind whatever had been claimed. Three
+# resources, and the correct disposition differs — the discriminator is whether a pane was LANDED:
+#
+#   · NO PANE LANDED (lint / trust / spawn failure) — nothing can be using the worktree or the pool
+#     slot, so REMOVE the cold worktree + branch and RELEASE the slot. Leaving them is not neutral:
+#     a re-fire of the same slug takes the `[ -d "$WT" ]` → WT_SETUP=existing path and silently
+#     reuses a half-provisioned tree whose deps were never installed (the cold install runs only on
+#     create), and a claimed-forever slot drains a finite warm pool one failed fire at a time.
+#   · PANE LANDED, ENGAGEMENT MISSED (FIRE FAILED) — the pane is LIVE in that worktree, possibly a
+#     slow cold install that engages seconds after the window closed. Removing the tree under it
+#     would destroy real work, so the tree is KEPT and named with its exact cleanup command. What
+#     the pane gets instead is VISIBILITY: ensure_registration + the fired-peer marker both sat on
+#     the SUCCESS branch only, so a failed fire produced a pane with no registry row and no marker —
+#     invisible to cc-reaper and to the board, which is what made it BOTH an unreapable leak and
+#     duplicate-fire bait (the operator is told to re-fire; the orphan meanwhile engages; two live
+#     sessions on one task and nothing can GC either).
+#
+# Deliberately NOT a pane close. The engagement miss is a NEGATIVE READ — a transcript we could not
+# see inside the window — and killing a live session on a negative read is the wrong direction
+# (memory effect-read-predicate-red-proof: a detector's negative is not death). FIRE_FAILED_CLOSE_PANE=1
+# opts into the close for an operator who would rather lose the slow starter than inspect it.
+# The role is NOT published either: pointing cc-roles/<role> at a task-less pane would route every
+# role-addressed ping into a session that never started.
+#
+# THE POOL SLOT IS NOT RELEASED BY A `release` VERB — there isn't one. worktree-pool.sh's own header
+# states the contract: "A pool slot is a linked worktree at ~/Development/.worktrees/wt-pool-N
+# sitting on branch pool/slot-N … the moment a claim runs `git switch -C <session-branch>`, it stops
+# matching pool/slot-* and is invisible to the pool", and its slot_live() is exactly (dir exists AND
+# branch == pool/slot-N). So a claim CONSUMES a slot by switching its branch, and the release is to
+# restore that identity — NOT to remove the directory, which would destroy the slot instead of
+# returning it. `claim` also has its own cold fallback when the pool is empty (it returns a wt-<slug>
+# path, not wt-pool-N); that one is an ordinary cold worktree and is removed like one.
+FIRE_CLEAN_WT="" FIRE_CLEAN_BRANCH="" FIRE_CLEAN_POOL="" FIRE_CLEAN_DONE=0
+fire_cleanup() {
+  local _rc=$? _slot=""
+  [ "$FIRE_CLEAN_DONE" = 1 ] && return 0
+  FIRE_CLEAN_DONE=1
+  [ "$_rc" = 0 ] && return 0                     # a successful fire owns everything it claimed
+  if [ -z "${SPAWNED_PANE:-}" ]; then
+    if [ -n "$FIRE_CLEAN_POOL" ] && [ -d "$FIRE_CLEAN_POOL" ]; then
+      case "$(basename "$FIRE_CLEAN_POOL")" in
+        wt-pool-[0-9]*) _slot="${FIRE_CLEAN_POOL##*wt-pool-}" ;;
+      esac
+      if [ -n "$_slot" ]; then
+        # Restore the slot's identity so slot_live() sees it again and the pool can re-claim it.
+        if git -C "$FIRE_CLEAN_POOL" switch -C "pool/slot-$_slot" >/dev/null 2>&1; then
+          echo "→ fire-cleanup: warm pool slot RETURNED ($FIRE_CLEAN_POOL → pool/slot-$_slot) — the fire never landed a pane" >&2
+          if [ -n "$FIRE_CLEAN_BRANCH" ]; then
+            git -C "$FIRE_CLEAN_POOL" branch -D "$FIRE_CLEAN_BRANCH" >/dev/null 2>&1 \
+              && echo "→ fire-cleanup: stranded branch DELETED ($FIRE_CLEAN_BRANCH)" >&2 || true
+          fi
+        else
+          echo "⚠ fire-cleanup: could NOT return pool slot $FIRE_CLEAN_POOL — it stays consumed (one slot down until the pool replenishes). Return it by hand: git -C $FIRE_CLEAN_POOL switch -C pool/slot-$_slot" >&2
+        fi
+      else
+        # `claim`'s own cold fallback (pool was empty) — an ordinary cold worktree.
+        FIRE_CLEAN_WT="${FIRE_CLEAN_WT:-$FIRE_CLEAN_POOL}"
+      fi
+    fi
+    if [ -n "$FIRE_CLEAN_WT" ] && [ -d "$FIRE_CLEAN_WT" ]; then
+      if git -C "${REPO:-.}" worktree remove --force "$FIRE_CLEAN_WT" >/dev/null 2>&1; then
+        echo "→ fire-cleanup: cold worktree REMOVED ($FIRE_CLEAN_WT) — the fire never landed a pane" >&2
+        if [ -n "$FIRE_CLEAN_BRANCH" ]; then
+          git -C "${REPO:-.}" branch -D "$FIRE_CLEAN_BRANCH" >/dev/null 2>&1 \
+            && echo "→ fire-cleanup: branch DELETED ($FIRE_CLEAN_BRANCH)" >&2 || true
+        fi
+      else
+        echo "⚠ fire-cleanup: could NOT remove $FIRE_CLEAN_WT — clean up by hand: git -C ${REPO:-.} worktree remove --force $FIRE_CLEAN_WT && git -C ${REPO:-.} branch -D ${FIRE_CLEAN_BRANCH:-<branch>}" >&2
+      fi
+    fi
+  else
+    # A pane IS live and task-less. Make it VISIBLE to the reaper/board; never silently reap it.
+    FIRE_REG_TIMEOUT=0 ensure_registration "$REG_DIR" "$SPAWNED_PANE" \
+      "$(basename "${LAUNCH_DIR:-fire}")-${SPAWNED_PANE%%-*}" "${LAUNCH_DIR:-}" "${CMD:-}" || true
+    if [ "${WANT_SELF_RETIRE:-0}" = 1 ]; then
+      mark_fired_peer "$FIRED_DIR" "$SPAWNED_PANE" "${LAUNCH_DIR:-}" "${FIRING_SID:-}" "${PROMPT_FILE:-}" || true
+      echo "→ fire-cleanup: task-less pane $SPAWNED_PANE made VISIBLE (registry row + fired-peer marker) — cc-reaper can GC it" >&2
+    else
+      echo "⚠ fire-cleanup: task-less pane $SPAWNED_PANE registered but NOT auto-reapable (--no-self-retire leaves no fired-peer marker, by design) — close it by hand: it2 session close -f -s $SPAWNED_PANE" >&2
+    fi
+    if [ -n "$FIRE_CLEAN_WT" ]; then
+      echo "⚠ fire-cleanup: worktree $FIRE_CLEAN_WT KEPT — the pane is live in it and may engage late. Once you are sure it is dead: git -C ${REPO:-.} worktree remove --force $FIRE_CLEAN_WT && git -C ${REPO:-.} branch -D ${FIRE_CLEAN_BRANCH:-<branch>}" >&2
+    fi
+    if [ "${FIRE_FAILED_CLOSE_PANE:-0}" = 1 ]; then
+      echo "→ fire-cleanup: FIRE_FAILED_CLOSE_PANE=1 — closing the task-less pane $SPAWNED_PANE" >&2
+      "$HOME/.claude/bin/it2" session close -f -s "$SPAWNED_PANE" >/dev/null 2>&1 || true
+    fi
+  fi
+  return 0
+}
+trap fire_cleanup EXIT
+
 # Paths are typed into an interactive zsh line — %q-quote them so spaces/metachars can't split
 # or execute (conventional slugs pass through unchanged).
 QP="$(printf %q "$PROMPT_FILE")"
@@ -2569,10 +2664,16 @@ elif [ -n "$WORKTREE" ]; then
   elif [ "$POOL_ELIGIBLE" = 1 ] && claimed="$("$POOL" claim "$WORKTREE" 2>/dev/null)" \
        && [ -n "$claimed" ] && [ -d "$claimed" ]; then
     WT="$claimed"; WT_SETUP="pool"   # fully provisioned — no in-pane install needed
+    # Returned to the pool by fire_cleanup if no pane is ever landed. The PATH (not the branch) is
+    # what identifies the slot; the branch is the thing to delete once its identity is restored.
+    FIRE_CLEAN_POOL="$WT"; FIRE_CLEAN_BRANCH="$WORKTREE"
   fi
   if [ "$WT_SETUP" = "cold" ] && [ "$DRY" = 0 ]; then
     git -C "$REPO" fetch origin -q || echo "⚠ fetch failed — basing off last-fetched $BASE" >&2
     ( cd "$REPO" && git worktree add "$WT" -b "$WORKTREE" "$BASE" >/dev/null )
+    # Armed only AFTER a successful add, and only for `cold`: an `existing` tree was not created by
+    # this fire, so this fire must never remove it (that tree may hold another session's work).
+    FIRE_CLEAN_WT="$WT"; FIRE_CLEAN_BRANCH="$WORKTREE"
     [ -f "$REPO/.env.local" ] && { cp "$REPO/.env.local" "$WT/.env.local"; chmod 600 "$WT/.env.local"; }
   fi
   if [ "$WT_SETUP" = "cold" ]; then
@@ -3258,6 +3359,9 @@ else
       exit 1
     fi
   fi
+  # The fire succeeded: it OWNS the worktree/slot it claimed and the pane it landed. Disarm before
+  # the summary so nothing downstream (a summary-time hiccup) can trigger a cleanup of live work.
+  FIRE_CLEAN_DONE=1
   DEST="${CWD:-$REPO (self-routing)}"; [ -n "$WORKTREE" ] && DEST="$WT ($WT_SETUP)"
   RSUM=""; [ -n "$SURFACE_REASON" ] && RSUM=", reason: $SURFACE_REASON"
   if [ "$FOLLOW" = 1 ]; then FSUM=", --follow (raised)"; else FSUM=", background (operator focus preserved)"; fi
