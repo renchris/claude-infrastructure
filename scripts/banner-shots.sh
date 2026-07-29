@@ -110,10 +110,14 @@ PY
 }
 
 # Display height at $WIDTH, so the screenshot is the banner and not a page with a banner on it.
+# Prints two numbers: the CSS height to size the window by, and the exact device height to crop to.
+# They differ because the CSS one is rounded while the real image edge lands on a fraction — a
+# 1920x780 asset at 900 CSS px is 365.625 tall, so a round-and-multiply crop keeps one row of page
+# background. Flooring the device height drops that row and no part of the banner.
 img_height() {
-  python3 - "$1" "$WIDTH" <<'PY'
-import re, subprocess, sys
-src, width = sys.argv[1], int(sys.argv[2])
+  python3 - "$1" "$WIDTH" "$SCALE" <<'PY'
+import math, re, subprocess, sys
+src, width, scale = sys.argv[1], int(sys.argv[2]), float(sys.argv[3])
 if src.lower().endswith('.svg'):
     head = open(src, encoding='utf-8').read(4000)
     m = re.search(r'viewBox\s*=\s*["\']\s*[\d.eE+-]+\s+[\d.eE+-]+\s+([\d.eE+-]+)\s+([\d.eE+-]+)', head)
@@ -122,15 +126,51 @@ else:
     out = subprocess.run(['magick', 'identify', '-format', '%w %h', src + '[0]'],
                          capture_output=True, text=True).stdout.split()
     w, h = (float(out[0]), float(out[1])) if len(out) == 2 else (16.0, 9.0)
-print(max(1, round(width * h / w)))
+print(max(1, round(width * h / w)), max(1, math.floor(width * h / w * scale)))
 PY
+}
+
+# A headless window is TALLER than the page viewport it yields, so a window sized to the image
+# delivers a viewport shorter than the image and silently crops its bottom to the page background.
+# On GitHub dark that padding is the same colour as the plate, so the truncation is invisible: the
+# render just looks like a banner with more empty space at the bottom than it has.
+#
+# Measured 2026-07-29 (Chromium 141, macOS): viewport_h = max(window_h, ~375) - 87. A 1920x780
+# asset at --width 900 asks for a 366-tall window, gets a 288-tall viewport, and loses everything
+# below y=613 of the viewBox. It reproduced identically under --headless=new and at every device
+# scale factor, so it is not a headless-mode flag away from being correct.
+#
+# The inset is MEASURED rather than assumed — a hard-coded 87 is a constant from one machine, and
+# the whole failure mode here is a number that is wrong without looking wrong. Requesting
+# vh + inset then guarantees viewport >= vh (the minimum-window clamp only ever helps), and the
+# extra padding is cropped back off, so the output is still exactly the banner.
+VIEWPORT_INSET=""
+calibrate_inset() {
+  [[ -n "$VIEWPORT_INSET" ]] && return 0
+  local probe="$WORK/inset.html" req=1000 got
+  # A large request dodges the minimum-window clamp, so the difference is purely the inset.
+  cat > "$probe" <<'HTML'
+<!doctype html><meta charset="utf-8"><title>inset</title>
+<body><script>addEventListener('load',()=>{document.body.textContent='INNERH='+innerHeight})</script>
+HTML
+  got=$("$CHROME" --headless --disable-gpu --no-sandbox --window-size=900,"$req" \
+        --virtual-time-budget=800 --dump-dom "file://$probe" 2>/dev/null \
+        | sed -n 's/.*INNERH=\([0-9][0-9]*\).*/\1/p' | head -1)
+  [[ -n "$got" ]] && (( got > 0 && got <= req )) || {
+    echo "banner-shots: could not measure the headless viewport inset (got '${got:-}')" >&2
+    echo "  without it a tall asset is cropped silently — refusing to emit a render." >&2
+    exit 1
+  }
+  VIEWPORT_INSET=$(( req - got ))
 }
 
 shoot() {
   local img="$1" png="$2" extra="${3:-}"
-  local html vh
+  local html vh win_h cw ch
   html="$WORK/page-$(basename "${png%.png}").html"
-  vh=$(img_height "$img")
+  read -r vh ch <<<"$(img_height "$img")"
+  calibrate_inset
+  win_h=$(( vh + VIEWPORT_INSET ))
   # Sized to the image so the screenshot is the banner, not a page with a banner on it.
   cat > "$html" <<HTML
 <!doctype html><meta charset="utf-8">
@@ -144,10 +184,26 @@ HTML
   # shellcheck disable=SC2086
   "$CHROME" --headless --disable-gpu --hide-scrollbars --no-sandbox \
       --force-device-scale-factor="$SCALE" \
-      --window-size="$WIDTH","$vh" \
+      --window-size="$WIDTH","$win_h" \
       $extra \
       --screenshot="$png" "file://$html" >/dev/null 2>&1
   [[ -s "$png" ]] || { echo "banner-shots: empty screenshot for $png" >&2; return 1; }
+
+  # Crop the inset padding back off, so the file on disk is the banner and nothing else. The
+  # dimensions are asserted rather than trusted: a short capture means the inset moved, and a
+  # quietly-padded render is the exact failure this whole path exists to prevent.
+  cw=$(awk -v w="$WIDTH" -v s="$SCALE" 'BEGIN{printf "%d", w*s+0.5}')
+  local got
+  got=$(magick identify -format '%w %h' "$png" 2>/dev/null) || {
+    echo "banner-shots: magick is required to crop the headless window inset" >&2; return 1; }
+  # shellcheck disable=SC2086
+  set -- $got
+  (( $1 >= cw && $2 >= ch )) || {
+    echo "banner-shots: capture ${1}x${2} is smaller than the banner ${cw}x${ch} — the viewport" >&2
+    echo "  inset (${VIEWPORT_INSET}) no longer covers this window. Not emitting a cropped render." >&2
+    return 1
+  }
+  magick "$png" -crop "${cw}x${ch}+0+0" +repage "$png"
 }
 
 FLAGS=""
