@@ -24,21 +24,28 @@ Inline payload **4,192,585 → 3,525,960 B (−666,625 B, −15.9 %)**, with mea
 equal or better on both assets. Task 1 and Task 2 are **RESOLVED** — see below. Task 3 is
 a separate track and is untouched.
 
-## Task 1 — compression — **RESOLVED 2026-07-29, then PARTLY REVERTED the same day**
+## Task 1 — compression — **RESOLVED 2026-07-29, revised twice the same day**
 
-> **The first outcome was wrong and is corrected below.** The hero was shipped as lossy WebP
-> q65; the operator spotted vertical bar streaks in the flat grey of an unfocused pane. That
-> was a real regression I introduced, and SSIM/PSNR passed it. The hero is back on GIF.
+> **History kept, because the reasoning matters more than the endpoint.** (1) The hero shipped
+> as lossy WebP q65 — a −17 % "win" that SSIM/PSNR passed and that **seamed the flat grey of an
+> unfocused pane**; the operator caught it. (2) Reverted to GIF byte-identical, since no *lossy*
+> WebP is both clean and smaller. (3) The operator then took the near-lossless upgrade, which is
+> what ships now — the only WebP that does not seam, and better than the GIF on quality at a
+> real byte cost.
 
-**Outcome (corrected):** only the VHS clip moves to WebP. Inline payload −75,349 B (−1.8 %),
-quality ≥ the original on both assets.
+**Outcome (final):** both assets are WebP, by **different routes for different reasons**. The
+task's original framing — "shrink without quality loss" — proved unachievable for the hero. What
+ships is a deliberate **quality upgrade bought with bytes**, not a compression win, and it should
+be described that way.
 
 | Asset | Before | After | Δ | Quality |
 |---|---|---|---|---|
-| hero (`handoff-live`) | 3,483,666 B GIF | **unchanged — GIF** | 0 | no lossy WebP is both clean and smaller (below) |
-| VHS clip (`handoff-real`) | 708,919 B GIF | 633,570 B WebP | **−10.6 %** | **pixel-exact** (534/534 frames hash-identical, duration 63,960 ms both) |
+| hero (`handoff-live`) | 3,483,666 B GIF | 4,226,254 B WebP `-near_lossless 40` | **+21.3 %** | streak 0.194 (source 0.195) ✓ · coloured-text RMS **1.42 / 1.60 vs GIF 4.02 / 4.92** — ~3× better |
+| VHS clip (`handoff-real`) | 708,919 B GIF | 633,570 B WebP (`gif2webp`) | **−10.6 %** | **pixel-exact** (534/534 frames hash-identical, duration 63,960 ms both) |
 
-### Why the hero cannot be WebP (measured, whole range)
+Inline payload 4,192,585 → 4,859,824 B (**+15.9 %**) — spent, not saved, and knowingly.
+
+### Why the hero cannot be *lossy* WebP (measured, whole range)
 
 Lossy WebP encodes each animation frame as a **partial update rectangle** (measured:
 1105×616, 1070×594, 526×458 on a 1200×716 canvas). Inside the rectangle a flat grey
@@ -69,15 +76,19 @@ frame is a standalone image; cropping to a changed rectangle *is* the entire tem
 compression. Removing the seams removes the compression — hence the ~26 MB all-keyframe row.
 Raising `-q` only shrinks the DC step, it never removes it.
 
-**The honest conclusion:** for live screen capture, GIF is not beaten by WebP at equal quality.
-Near-lossless 40 is genuinely better than the GIF on both axes (clean flats *and* 2.8× better
-colour) but costs +742,588 B, which is an editorial trade, not a compression win. Regenerate it
-with:
+**The honest conclusion:** for live screen capture, GIF is not beaten by WebP *at equal or lower
+bytes* — the compression framing has no answer here. Near-lossless 40 is genuinely better than the
+GIF on both axes (clean flats *and* ~3× better colour) and costs +742,588 B. **That is the trade
+the operator took, and it is what ships.** Regenerate with:
 
 ```bash
-ffmpeg -v error -i assets/demo/handoff-live.mp4 -vf "fps=20,scale=1200:716:flags=lanczos" f/%04d.png
-img2webp -loop 0 -d 50 -near_lossless 40 f/*.png -o assets/demo/handoff-live.webp
+mkdir -p /tmp/f     # ffmpeg's image2 muxer does NOT create the output dir — it just errors
+ffmpeg -v error -i assets/demo/handoff-live.mp4 -vf "fps=20,scale=1200:716:flags=lanczos" /tmp/f/%04d.png
+img2webp -loop 0 -d 50 -near_lossless 40 /tmp/f/*.png -o assets/demo/handoff-live.webp
 ```
+
+The `mkdir` is not optional and its omission is a real defect in the first version of this recipe:
+`ffmpeg` fails with `Could not open file : /tmp/f/0001.png` and writes nothing.
 
 ### Correction: an earlier claim here was false
 
