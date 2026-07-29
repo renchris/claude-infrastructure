@@ -37,3 +37,8 @@ node_modules/
 # ~/Development/.worktrees). A stray inside-repo one read as untracked litter and made every
 # co-cwd session permanently "dirty" to the reaper. .claude/worktrees/ is ignored above.
 /.worktrees/
+
+# VHS can only write GIF, so `vhs assets/demo/handoff-real.tape` emits a GIF that is then
+# converted to the committed animated WebP (see the tape header). The GIF is a build
+# intermediate — regenerable, ~709 KB, and never referenced by the README.
+/assets/demo/handoff-real.gif
