@@ -30,12 +30,16 @@
 # exactly one condition and re-runs to prove the row DOES appear, and §4.4's clean-board case proves
 # the parity leg can go quiet with a real repo/live pair in front of it.
 #
-# RED-PROOF: every test below fails against the pristine pre-change tree. Point the suite at one:
-#   t=$(mktemp -d); git archive HEAD | tar -x -C "$t"
+# RED-PROOF: every test below fails against the pristine pre-change tree. Point the suite at one —
+# the ref is PINNED to the parent of the commit that added these legs, NOT `HEAD`:
+#   t=$(mktemp -d); git archive 4aa428ec^ | tar -x -C "$t"     # 59f7eb38, the tree before §4.3/§4.4
 #   CC_FLEET_SUBJECT_ROOT="$t" bats tests/cc-blockers-fleet.bats
-# On that tree `--plist-parity` is an unknown arg (exit 2) and no fleet-inert row can exist, so the
-# suite is 0 passes. Recovered with `git archive`, never a hand-edited approximation: an approximated
-# control passes vacuously (memory control-must-replay-the-real-artifact).
+# Measured on that tree: 0 ok / 27 not ok (`--plist-parity` is an unknown arg, exit 2, and no
+# fleet-inert row can exist); 27/27 here. `HEAD` was the correct ref for exactly as long as the work
+# was uncommitted — the moment it landed, `git archive HEAD` recovers a tree that ALREADY HAS the
+# subject and the proof goes silently VACUOUS, which is worse than no proof because it reads as one.
+# Recovered with `git archive`, never a hand-edited approximation, for the same reason (memory
+# control-must-replay-the-real-artifact).
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
