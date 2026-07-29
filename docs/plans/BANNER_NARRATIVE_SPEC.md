@@ -1,3 +1,8 @@
+---
+status: in-progress
+owner: pool-2 (feat/banner-showoff) implements; lead specifies
+---
+
 # Banner narrative spec — cause / behaviour / exit for every event
 
 Operator ruling, 2026-07-29 (binding, supersedes the timing half of S9). Two critiques:
@@ -81,7 +86,144 @@ shows the wrong phase (and the t=0 vs t=P hash test cannot fail on the phase que
   type; moon subtle, behind the clouds, no solid-white cell; vector only; reduced-motion freezes
   legibly. Do **not** run `scripts/banner-apply-header.sh` — the README edit is the operator's call.
 
+## Per-event reconsideration (operator directive, second pass)
+
+Reconsider **each micro-event individually** so it has a story of how it enters, exists and leaves,
+rather than being zero-context random. One at a time.
+
+### The balloon — the orange asterisk on a stem
+
+The deeper fault is not the timing: it is **the Claude asterisk floating with no owner**, which
+reads as a stray mark rather than an object.
+
+Give it an owner rather than deleting it: **it is the visitor's balloon.** The visitor enters
+holding it — the string is what makes the asterisk legible as *held* instead of *floating*. On
+leaving it **lets go**, and the release *is* the exit: the asterisk rises out of frame under its own
+logic. One story now explains two events that were both orphans, and nothing has to fade out
+unexplained. If that cannot be built cleanly, **cut it** — a fade-in with no origin is not an event.
+
+### The horns — the arms-up cheer
+
+Two independent faults. It is **illegible**: the arms clear the head silhouette as two loose pixels,
+so it reads as horns or antennae (`clawd-sprite.py` measured the cliff at rise −3, with −4 reading
+as antennae). And it is **uncaused**: it fires mid-balloon-pass, so even read correctly it would
+mean nothing.
+
+- **Enters** because clawd sees the visitor arrive — aimed at something actually in frame.
+- **Exists** as a *whole-body* gesture: a hop with a body tilt and arms held wide. The silhouette
+  must change shape, not sprout.
+- **Leaves** by settling back into the stride.
+
+If it cannot be made legible at this scale, **cut it**. A gesture that reads as horns is worse than
+no gesture: the viewer is left with a question instead of a beat.
+
+### The mini pet — the visitor
+
+It peeks from behind a mound and then lingers 24 s with nothing to do. That mismatch is most of why
+it feels arbitrary: the motion says *glance*, the duration says *visit*. Pick one. The stronger
+choice is a **visit with an errand**:
+
+- **Enters** because something arrived — walks in from behind the mound nearest it, never popping
+  into existence.
+- **Exists** doing exactly one legible thing: hands over the balloon, or studies the ember, or falls
+  into step with clawd for a few strides — the last states *sessions run each other* as behaviour
+  instead of as a diagram.
+- **Leaves** back behind **the same mound**. A symmetric exit reads as intent; a fade reads as a
+  despawn.
+
+## Should clawd move between right, middle and left?
+
+**Not as a free traverse — as motivated excursions from one fixed anchor.**
+
+The scene is a dino-run side-scroller, and that idiom works *because* the character's x is fixed
+while the world moves; that is what sells walking. A clawd that also translates across x introduces
+a second horizontal motion competing with the ground scroll, and the eye reads it as sliding rather
+than walking. A full left-to-right traverse also drags clawd through the wordmark keep-out, against
+a binding requirement.
+
+So: **choose one resting anchor** and let clawd leave it only for a reason — stepping toward the
+ember, following the visitor a few paces — and always **return to it** before the loop closes, or
+the composition does not return to its start even though the timing does. Excursion speed must read
+as clearly slower than the ground scroll, otherwise the two motions fight.
+
+Worth knowing when picking a candidate: the four v6 files already differ in anchor (v6a/v6b hold
+clawd left, v6c right of centre, v6d centre), and a composition balanced for one anchor will not be
+balanced at another — so this is a per-candidate decision, not a global one.
+
+## Making the sky read as craft rather than as basic vector art
+
+Measured on the committed `v6c`: **zero filters** — no `feGaussianBlur`, no `feTurbulence`, no
+`filter=` anywhere; 8 radial and 8 linear gradients, 4 masks. Stars are already shapes rather than
+text glyphs, and the moon is a properly masked crescent, so the geometry is not the problem. **The
+flatness is the absence of any optical treatment**, and that is the highest-leverage fix available.
+
+Ordered by effect per unit of effort:
+
+1. **Bloom, not a single radial gradient.** One radial gradient behind the moon is the tell of
+   vector art. Real glow is two or three stacked passes — a tight bright halo plus a much wider,
+   very faint bloom — with a slight outward colour shift (warm core, cooler edge). Add a small
+   `feGaussianBlur` on the halo so its falloff is optical rather than a gradient stop.
+2. **A single grain layer over the sky.** One tiled `feTurbulence` at very low opacity destroys the
+   plastic flatness of a large gradient more than any other single change. Inline, so it stays
+   self-contained and legal in SVG-as-image mode — but it must be render-verified and perf-checked,
+   because filters over a full-width rect are the one genuinely expensive thing here.
+3. **Never pure white.** `#ffffff` reads as a hole punched in the page; moonlight is a warm
+   off-white (≈`#f4ead8`). The light-mode block currently sets `.ct0{fill:#ffffff}` on cloud tops —
+   worth revisiting for the same reason.
+4. **Colour-temperature variance in the stars.** All-white stars look cheap. Give them 3–5%
+   saturation spread — a few cool (`#cfe0ff`), a few warm (`#fff0dd`). This is the single biggest
+   cheap-to-refined lever in the starfield and it costs nothing.
+5. **A terminator and maria on the moon.** A flat crescent is a shape; a subtle gradient across the
+   lit limb plus two or three very low-contrast darker patches make it an object.
+6. **Atmospheric perspective.** A single linear sky gradient is not how a sky looks. Lighten
+   subtly toward the horizon and add a faint vignette; even 2–3% separates "painted" from
+   "gradient".
+7. **Occlude the glow.** The moon sits behind the clouds by requirement, so its *glow* must be
+   occluded by them too — otherwise the halo reads as pasted on top of the scene.
+
+## Stars: scatter, and the constellation idea
+
+**Scatter.** Uniform random placement reads as wallpaper, and clumping reads as spam. Use
+**Poisson-disc / blue-noise placement with a minimum separation**, so stars never pile up in one
+spot but never form a grid either. Vary density deliberately: sparser near the horizon (atmosphere
+washes low stars out), denser high, with genuine voids — empty sky is what makes the occupied sky
+read as composed. Keep the keep-out box around the type.
+
+**Dynamism.** Most stars should *not* twinkle; a minority should, on uncorrelated periods, easing
+rather than linear, and varying **opacity and scale together**. Reserve a 4-point diffraction cross
+for only the two or three brightest — that one detail is what makes a field read as photographic
+instead of sprinkled.
+
+**Constellation line-mapping as a rare event: yes — and it is the best event idea on the table.**
+It is thematically exact: separate points revealed to be one figure is *sessions run each other*
+stated in the sky. Enter by drawing on (stroke-dashoffset, star to star, in order, quickly but not
+instantly), exist as a brief hold, leave by fading the lines while the stars remain. Three hard
+constraints:
+
+- **It must not read as a network diagram.** R1 rejected the handoff infographic, and lines joining
+  things is exactly that grammar. The rule that keeps it safe: constellation lines join **stars to
+  stars in the sky**, and never join clawd to the visitor. If a line ever touches a creature, R1 is
+  back.
+- **It must respect the type keep-out** — lines, not just stars.
+- **It is night-only.** There are no stars in the light scheme, so this cannot be the only rare
+  event; the day scene still needs its own arrival (see below).
+
+## Both schemes must carry the story (measured 2026-07-29)
+
+Rendering the committed v6 set under a real `prefers-color-scheme: light` shows light mode is a true
+daytime scene — moon becomes a warm sun, stars hidden, white clouds on blue, warm tan ground. Two
+consequences:
+
+1. **The shooting star cannot be the prime mover for daytime readers.** The light block sets
+   `.sh{opacity:.20}` and hides the starfield, so the one uncaused arrival the whole chain hangs
+   from is nearly invisible in light mode. Either give day its own legible arrival (a drifting seed,
+   a paper plane, a bird) or **re-root the chain on the ground**, which survives both schemes.
+2. **The art directions converge in daylight.** v6a, v6b and v6d become nearly the same picture
+   because what distinguishes them is night-only. Only v6c keeps an identity (sun left, warm horizon
+   band). Choose a candidate on **both** looks, never on the dark one alone.
+
 ## Acceptance
 
 An event passes only if a viewer can answer all three of *why did it appear*, *what did it do*, and
-*how did it leave* — from the animation alone, without reading this file.
+*how did it leave* — from the animation alone, without reading this file. **And it must pass in both
+colour schemes**, since a reader gets whichever one their OS is set to and never sees the other.
