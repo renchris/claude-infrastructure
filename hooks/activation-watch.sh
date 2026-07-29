@@ -100,6 +100,30 @@ age_axis() { # → the staleness finding (axis 1), empty when the queue is clean
     "${#stale[@]}" "$MAX_AGE_H" "$(join_names "${stale[@]}")" "$DIR" "$DIR"
 }
 
+inert_axis() { # → axis 3: a `.done` marker whose EFFECT never landed (empty when every claim holds)
+  # WHY THIS EXISTS (2026-07-29): axis 1 trusts the marker absolutely — `[ -f "$f.done" ] && continue`.
+  # But every launchd activation script here gates its real work behind CONFIRM=1 and otherwise only
+  # ECHOES the commands. Run one bare, read the printout, `touch` the marker, and the alarm is silenced
+  # FOREVER while nothing was ever loaded. That is exactly what happened to the auto-drive spine:
+  # 02-load-dispatcher and 03-load-discovery were marked .done on Jul 19/20 and neither job was ever
+  # bootstrapped — 10 days of a backlog that could not drain, reported as fully activated.
+  # A marker records that the SCRIPT RAN. Only launchctl records that the EFFECT LANDED. Read the effect.
+  local f label inert=()
+  command -v launchctl >/dev/null 2>&1 || return 0
+  for f in "$DIR"/*.sh; do
+    [ -f "$f" ] || continue
+    [ -f "$f.done" ] || continue                 # axis 1 already owns the un-run case
+    # Only the launchd class is effect-readable here; a script naming no label is out of scope.
+    label="$(grep -oE 'com\.claude\.[a-z0-9-]+' "$f" 2>/dev/null | head -1)"
+    [ -n "$label" ] || continue
+    launchctl list 2>/dev/null | awk -v l="$label" '$3==l{found=1} END{exit !found}' && continue
+    inert+=("$(basename "$f") → $label")
+  done
+  [ "${#inert[@]}" -eq 0 ] && return 0
+  printf 'ACTIVATION CLAIMED-DONE BUT INERT (axis 3, effect-read): %s activation(s) carry a `.done` marker while their launchd job is NOT loaded — %s. A `.done` marker proves the SCRIPT RAN, never that the EFFECT LANDED: these scripts print their commands and only cp+lint+bootstrap under CONFIRM=1, so a bare run + `touch` silences axis 1 permanently over a job that was never bootstrapped. Re-run with CONFIRM=1: `CONFIRM=1 bash %s/<name>` — then this axis clears itself, because it reads launchctl, not the marker.\n' \
+    "${#inert[@]}" "$(join_names "${inert[@]}")" "$DIR"
+}
+
 parity_axis() { # → the live-vs-repo SSOT finding (axis 2), empty when the two copies agree
   local mirror f b lonly=() ronly=() cdrift=() n out
   if ! mirror="$(resolve_mirror)"; then
@@ -141,12 +165,18 @@ parity_axis() { # → the live-vs-repo SSOT finding (axis 2), empty when the two
 
 watch() {
   [ -d "$DIR" ] || exit 0
-  local msg age par
+  local msg age par inert
   age="$(age_axis)"
   par="$(parity_axis)"
+  inert="$(inert_axis)"
   msg="$age"
   if [ -n "$par" ]; then
     if [ -n "$msg" ]; then msg="$msg"$'\n\n'"$par"; else msg="$par"; fi
+  fi
+  # Axis 3 last but never least: a CLAIMED-DONE-BUT-INERT activation is the quietest of the three
+  # (axis 1 is silenced by the very marker that is lying), so it must still reach the operator.
+  if [ -n "$inert" ]; then
+    if [ -n "$msg" ]; then msg="$msg"$'\n\n'"$inert"; else msg="$inert"; fi
   fi
   [ -z "$msg" ] && exit 0
   emit "$msg"
