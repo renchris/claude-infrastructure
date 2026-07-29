@@ -82,6 +82,17 @@ phantom. Status is a claim like any other (see the constraint-cell learning belo
 
 ## Learnings (accumulate; never delete)
 
+- 2026-07-29 **TWO LEADS IN ONE WORKTREE IS AN OVERWRITE HAZARD, NOT JUST WASTED TOKENS — and a
+  tool guard, not a coordinator ruling, is what caught it.** A coordinator misjudgement (treating a
+  transient 529 stall as a death and re-firing) put two row-12 leads in the same worktree. The
+  duplicate's `Write` of `docs/plans/DAEMON_FLEET_V2.md` was refused by the read-before-write
+  guard — **the only thing standing between it and clobbering 581 landed lines of the survivor's
+  design.** The stand-down ruling was in its inbox at the time and had not yet drained, so the
+  ruling would NOT have saved the file. Two consequences worth carrying: never re-fire into an
+  existing worktree on silence alone (require positive death evidence — pid gone, pane gone,
+  registry row gone), and treat the OVERWRITE GUARD as load-bearing infrastructure rather than
+  ceremony. Full incident: `docs/plans/GROUND_UP_DISPATCH.md`, commits `f8a98f71`, `8ed8615f`.
+
 - 2026-07-29: map created from the landing-rebuild exemplar; row 1 marked DONE. The
   methodology's distillation (what the prompt did/missed) lives in skills/ground-up/SKILL.md.
 - 2026-07-29 **THIS TABLE'S "standing constraint" CELLS ARE CLAIMS, NOT VERIFIED FACTS —
