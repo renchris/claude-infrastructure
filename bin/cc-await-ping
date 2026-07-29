@@ -23,7 +23,9 @@
 #       4 = line(s) DELIVERED but the shared cursor could not be advanced (F9 — you WILL see this mail
 #           again; that is a dup, not a loss). Loud on purpose: a cursor-write failure that exits 0 is
 #           indistinguishable from a clean take.
-# Env overrides (tests): CC_MAILBOX_DIR, CC_ROLES_DIR, CC_COMMS_ALARM_DIR.
+#       5 = ORPHANED — the session that armed this watcher is provably gone. Exits WITHOUT consuming,
+#           leaving the mail unacked (see the owner guard below for why that is the whole point).
+# Env overrides (tests): CC_MAILBOX_DIR, CC_ROLES_DIR, CC_COMMS_ALARM_DIR, CC_REGISTRY_DIR.
 set -uo pipefail
 
 MAILBOX_DIR="${CC_MAILBOX_DIR:-$HOME/.claude/mailbox}"
@@ -99,6 +101,35 @@ _watchfile() { printf '%s/%s.watching' "$MAILBOX_DIR" "$CUR_UUID"; }
 _beat() { printf 'pid=%s\n' "$$" > "$(_watchfile)" 2>/dev/null || true; }
 trap 'rm -f "$(_watchfile)" 2>/dev/null || true' EXIT
 
+# ── OWNER GUARD — a watcher must never outlive the session it wakes ───────────────────────────────
+# MEASURED (2026-07-29): a watcher whose owner dies is reparented to pid 1 and keeps polling. When
+# mail arrives it takes it with ack_now=1 — advancing BOTH cursors — and prints the body to a stdout
+# no model will ever read. The line is then marked PROVABLY CONSUMED for a session that no longer
+# exists: cc-inbox-guard sees unacked=0 and never alarms, a read receipt reports `read`, and the
+# successor's SessionStart adoption (which migrates from .acked) inherits nothing. A silent loss
+# wearing the costume of a successful delivery — the exact failure this whole channel exists to end,
+# re-created by the thing that closes it. The wake floor arms EVERY session, so this went from a rare
+# hand-armed case to the fleet default; the guard has to land with it.
+#
+# THE OWNER ORACLE IS THE REGISTRY PID, NOT $PPID. Reparenting is NOT evidence: a legitimate
+# `run_in_background` arm has its launching shell exit immediately, so a healthy watcher's ppid
+# becomes 1 exactly like an orphan's (verified). Keying on that would disarm the entire fleet.
+# The registry row is what cc-notify already treats as authoritative for the same question.
+#
+# FAIL-SAFE DIRECTION: only a PRESENT row naming a DEAD pid proves death. No row (an unregistered
+# pane is legitimate), an unreadable row, or a live pid → keep watching. So the guard can strand a
+# watcher it cannot adjudicate, but it can never kill a live session's wake path — and an
+# unadjudicable watcher is still bounded by --timeout, which is the case that was always true.
+REG_DIR="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"
+_owner_dead() {  # 0 iff the watched pane is PROVABLY gone
+  local rf="$REG_DIR/$CUR_UUID.json" p
+  [ -f "$rf" ] || return 1
+  p="$(jq -r '.pid // empty' "$rf" 2>/dev/null)"
+  case "$p" in ''|*[!0-9]*) return 1 ;; esac
+  kill -0 "$p" 2>/dev/null && return 1
+  return 0
+}
+
 elapsed=0
 while [ "$elapsed" -lt "$TIMEOUT" ]; do
   next_uuid="$(resolve_uuid)"
@@ -108,6 +139,12 @@ while [ "$elapsed" -lt "$TIMEOUT" ]; do
     echo "cc-await-ping: role re-pointed → now watching $CUR_UUID" >&2
   fi
   mkdir -p "$MAILBOX_DIR" 2>/dev/null || true; _beat                                     # heartbeat
+
+  # BEFORE any take: consuming is irreversible, so the orphan check has to gate it, not follow it.
+  if _owner_dead; then
+    echo "cc-await-ping: the session that armed me [$CUR_UUID] is GONE (registry pid dead) — exiting WITHOUT consuming its mail, so the lines stay unacked for cc-inbox-guard to alarm on and for the successor's adoption to inherit" >&2
+    exit 5
+  fi
 
   if [ "$_have_lib" = 1 ]; then
     if mailbox_has_pending "$CUR_UUID"; then

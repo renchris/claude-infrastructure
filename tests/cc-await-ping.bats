@@ -150,3 +150,61 @@ LIB
   [[ "$output" == *"cursor could NOT be advanced"* ]] || false     # …and said so
   [ -n "$(find "$CC_COMMS_ALARM_DIR" -name 'cursor-fail-*.json' 2>/dev/null | head -1)" ]
 }
+
+# ── OWNER GUARD — a watcher must never outlive the session it wakes ───────────────────────────────
+# MEASURED 2026-07-29: an orphaned watcher is reparented to pid 1 and keeps polling. On the next mail
+# it took the line with ack_now=1, advancing BOTH cursors, and printed the body to a stdout no model
+# would ever read — marking it PROVABLY CONSUMED for a session that no longer exists. cc-inbox-guard
+# then sees unacked=0 and never alarms; a read receipt reports `read`. A silent loss dressed as a
+# successful delivery. The wake floor arms every session, so the guard has to hold fleet-wide.
+
+@test "owner guard: an ORPHANED watcher exits WITHOUT consuming (mail stays unacked for the guard)" {
+  export CC_REGISTRY_DIR="$BATS_TEST_TMPDIR/reg"; mkdir -p "$CC_REGISTRY_DIR"
+  sleep 0.1 & local dead=$!; wait "$dead" 2>/dev/null || true       # a pid that is now provably dead
+  printf '{"paneUUID":"%s","name":"peer","pid":%s,"startedAt":1}' "$UUID" "$dead" \
+    > "$CC_REGISTRY_DIR/$UUID.json"
+  printf '2026-07-29T14:10:00+0000 [desk] the land-lock blocker is STALE — retry\n' > "$MB"
+  run "$AWAIT" "$UUID" --interval 1 --timeout 6
+  [ "$status" -eq 5 ]
+  # bats merges stderr into $output, so the guard's own message is here — assert the MAIL BODY is not.
+  [[ "$output" != *"land-lock blocker is STALE"* ]] || false        # never delivered into the void
+  [[ "$output" == *"is GONE"* ]] || false                           # ...and it said why, loudly
+  # THE POINT: the cursors are untouched, so the line is still unacked — cc-inbox-guard can alarm on
+  # it and the successor's adoption (which migrates from .acked) still inherits it.
+  [ ! -f "$CC_MAILBOX_DIR/$UUID.seen" ]
+  [ ! -f "$CC_MAILBOX_DIR/$UUID.acked" ]
+  [ ! -f "$CC_MAILBOX_DIR/$UUID.watching" ]                         # and it stops claiming a wake path
+}
+
+@test "owner guard: a LIVE registered session is still woken (reparenting is NOT evidence of death)" {
+  # The false-positive that would disarm the entire fleet: a legitimate run_in_background arm has its
+  # launching shell exit immediately, so a HEALTHY watcher's ppid becomes 1 exactly like an orphan's.
+  # The guard must key on the registry pid, never on $PPID.
+  export CC_REGISTRY_DIR="$BATS_TEST_TMPDIR/reg"; mkdir -p "$CC_REGISTRY_DIR"
+  printf '{"paneUUID":"%s","name":"peer","pid":%s,"startedAt":1}' "$UUID" "$$" \
+    > "$CC_REGISTRY_DIR/$UUID.json"
+  ( sleep 1; printf '2026-07-29T14:11:00+0000 [desk] retry now\n' >> "$MB" ) & local w=$!
+  run "$AWAIT" "$UUID" --interval 1 --timeout 10
+  wait "$w" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"retry now"* ]] || false
+}
+
+@test "owner guard: an UNREGISTERED pane keeps working — absence of proof is never proof of death" {
+  export CC_REGISTRY_DIR="$BATS_TEST_TMPDIR/reg"; mkdir -p "$CC_REGISTRY_DIR"   # deliberately EMPTY
+  ( sleep 1; printf '2026-07-29T14:12:00+0000 [desk] unregistered still wakes\n' >> "$MB" ) & local w=$!
+  run "$AWAIT" "$UUID" --interval 1 --timeout 10
+  wait "$w" 2>/dev/null || true
+  [ "$status" -eq 0 ]                                               # NOT 5
+  [[ "$output" == *"unregistered still wakes"* ]] || false
+}
+
+@test "owner guard: an UNREADABLE registry row is not death either (fail-safe direction)" {
+  export CC_REGISTRY_DIR="$BATS_TEST_TMPDIR/reg"; mkdir -p "$CC_REGISTRY_DIR"
+  printf 'not json at all' > "$CC_REGISTRY_DIR/$UUID.json"
+  ( sleep 1; printf '2026-07-29T14:13:00+0000 [desk] corrupt row still wakes\n' >> "$MB" ) & local w=$!
+  run "$AWAIT" "$UUID" --interval 1 --timeout 10
+  wait "$w" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"corrupt row still wakes"* ]] || false
+}
