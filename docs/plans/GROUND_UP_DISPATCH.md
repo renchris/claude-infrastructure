@@ -91,6 +91,23 @@ land via /ship as you go; update the map row as part of your DoD; ping the coord
 - 2026-07-29T18:03Z **row 5 HELD at the cadence guard** — 1-min load 12.58 ≥ 10 immediately
   after the row-4 fire. Account **next2** reserved (soonest-expiring weekly window,
   08-01T10:59Z). Fires resume when load < 10; the sessions are the load, not the lands.
+- 2026-07-29T18:10Z **WAVE 1 · row 5 FIRED** — autonomy-dispatch, after the guard cleared
+  (load 12.58 → 7.74 over ~7 min). Account **next2** (soonest-expiring weekly window).
+  Pane `F3B8333C-AC94-4CF7-B1ED-1212A5D77A94`, session `8891c11f`, branch/worktree
+  `gu-autonomy-dispatch`. **ENGAGED verified by content** — 23 assistant turns, 13 tool_use,
+  and 0 rows carrying the 4000-char `/goal` rejection.
+- 2026-07-29T18:12Z **wave 1 saturated (2/2 in flight); on-method check passed for both** —
+  each session armed its own short `/goal` and has read the map row + the ground-up skill +
+  the exemplar plan. Row 4: 81 assistant turns / 32 tool_use, writing. Row 5: 23 / 13.
+  **Next fire is BLOCKED on a verified completion, not on a timer** — the next row in order
+  is **3 (cross-session-comms)**, which additionally requires row 4 DONE (strict 4→3→2).
+  So a row-5 completion does NOT unblock row 3; it unblocks **12 (daemon-fleet-activation)**,
+  the next independent row.
+- 2026-07-29T18:12Z coordinator side-fix LANDED `dfaf7323` (+ wave log `9014fb8b`),
+  content-verified on origin/main. **Not yet DEPLOYED** — `~/.claude/scripts/` symlinks the
+  shared checkout, which sits at `38eec335`; the deploy autopilot is fail-closed with no GREEN
+  postland stamp yet. Until it advances, every cold fire must be preceded by
+  `rm -f "$TMPDIR"handoff-deps-XXXXXX.sh` (the live script is still the pre-fix copy).
 
 ## Learnings (accumulate; never delete)
 
