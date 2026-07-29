@@ -645,7 +645,7 @@ CELL='def cell(ph): (. // "") | tostring | gsub("[\\t\\r\\n]"; " ") | if . == ""
 # LAND and DISPATCH tables byte-identical to what they have always printed. WHY the column exists at
 # all, and why it is opt-in rather than always-on: measured against the real bin/cc-fleet on this box,
 # the fleet family emits 13 rows of which 6 are identical in KIND, STATE, DETAIL *and* RECOVER —
-# `DISABLED / disabled at the domain level (C10) / CONFIRM=1 bash …17-fleet-activate.sh` three times
+# `DISABLED / disabled at the domain level (C10) / CONFIRM=1 bash …18-fleet-activate.sh` three times
 # over. Those rows are per-LABEL and the label IS their identity, so without it the board hands the
 # operator a verdict they cannot attribute to a job, which is not an honest verdict (§4.3's floor).
 # The land and dispatch families do not want it: their .subject is a PATH (a stamps dir, a deploy
