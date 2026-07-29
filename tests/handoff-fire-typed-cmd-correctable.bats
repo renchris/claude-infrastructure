@@ -77,6 +77,48 @@ setup() {
   done
 }
 
+@test "RED-PROOF: two cold fires sharing one TMPDIR mint DISTINCT deps files" {
+  # INCIDENT (2026-07-29, ground-up campaign wave 1): BSD mktemp substitutes ONLY a trailing
+  # XXXXXX. The template `handoff-deps-XXXXXX.sh` therefore created a file named LITERALLY that,
+  # so fire #1 on a box succeeded and fire #2 died `mkstemp failed ... File exists` — the whole
+  # remaining campaign blocked. Invisible to any single-fire test, which is why this one fires
+  # TWICE. It executes the real source lines, so it goes RED against the pre-fix tree.
+  export TMPDIR="$BATS_TEST_TMPDIR/tmp/"; mkdir -p "$TMPDIR"
+  local mint first second
+  mint="$(sed -n '/^    WT_DEPS="\$(mktemp/,/^    chmod +x "\$WT_DEPS"/p' "$HF")"
+  [ -n "$mint" ] || { echo "could not extract the deps-file minting block"; false; }
+  local WT_INSTALL='echo hermetic-stub'
+  eval "$mint"; first="$WT_DEPS"
+  eval "$mint"; second="$WT_DEPS"
+  [ -f "$first" ] || { echo "first fire minted no file"; false; }
+  [ -f "$second" ] || { echo "second fire minted no file (the collision bug)"; false; }
+  [ "$first" != "$second" ] || { echo "both fires minted the SAME path: $first"; false; }
+}
+
+@test "POSITIVE CONTROL: on this host the pre-fix suffixed template really does collide" {
+  # Proves the guard above discriminates rather than passing vacuously — the OLD template, run
+  # through the same two-call predicate, must trip on this machine's mktemp.
+  export TMPDIR="$BATS_TEST_TMPDIR/tmp/"; mkdir -p "$TMPDIR"
+  local a
+  a="$(mktemp "${TMPDIR}pc-XXXXXX.sh" 2>/dev/null || true)"
+  if [ "$a" = "${TMPDIR}pc-XXXXXX.sh" ]; then
+    run mktemp "${TMPDIR}pc-XXXXXX.sh"
+    [ "$status" -ne 0 ] || { echo "expected the pre-fix template to collide; it succeeded"; false; }
+  else
+    skip "this host's mktemp is suffix-aware (GNU); the pre-fix shape cannot collide here"
+  fi
+}
+
+@test "the deps file keeps its .sh suffix (operators read this path off a parked pane)" {
+  export TMPDIR="$BATS_TEST_TMPDIR/tmp/"; mkdir -p "$TMPDIR"
+  local mint
+  mint="$(sed -n '/^    WT_DEPS="\$(mktemp/,/^    chmod +x "\$WT_DEPS"/p' "$HF")"
+  local WT_INSTALL='echo hermetic-stub'
+  eval "$mint"
+  [ "${WT_DEPS%.sh}" != "$WT_DEPS" ] || { echo "deps file lost its .sh suffix: $WT_DEPS"; false; }
+  [ -x "$WT_DEPS" ] || { echo "deps file is not executable: $WT_DEPS"; false; }
+}
+
 @test "the recycle path types no correctable word either" {
   # --recycle types `cd <cwd> && <launcher> ...` into the plain shell; assert no manager leaked in.
   local rec
