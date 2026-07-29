@@ -329,6 +329,43 @@ was cold-worktree + npm install and fell back to 12.15 within two minutes, and r
 cleanly), which is luck, not vindication. Related trap already recorded above: one fire moves the
 guard by itself, so the read must be immediate AND binding.
 
+## INCIDENT 2026-07-29T20:5xZ — upstream 529s, and the coordinator error they induced
+
+**Row 3's first session died on `API Error: 529 Overloaded`** (transcript `1f6e16a9`, 113 assistant
+turns, killed mid-Phase-1). Its worktree was subsequently removed and its branch carries **0
+commits**, so everything in flight was lost — recoverable only because its Phase-1 findings had
+already been *pinged* to the coordinator. 529s were fleet-wide today (33 transcripts). Note this is
+a **different** cause from row 5's earlier lead death: row 5's transcript contains no 529 at its
+death point (its one `API Error: 500` came later, post-resume), so that one stays unattributed.
+
+**Then I made it worse.** Re-fired row 3 and fired row 12; both new sessions took a 529 on turn 1
+and sat idle at 1 assistant turn / 0 tools. After ~6 minutes with no movement I judged the stalls
+terminal and re-fired both into their existing worktrees. **They were not terminal — the harness
+retries 529s on its own timescale, and both originals recovered.** Result: TWO leads writing the
+same worktree in each of rows 3 and 12 — the precise duplicate-worker hazard
+`argv-is-sampling-cwd-is-durable` warns about.
+
+**The rule I violated, now explicit: a 529 stall is NOT a death. Never re-fire on silence alone.**
+Death requires positive evidence — pid gone, pane gone, or a registry row that has vanished — which
+is exactly the discriminator I applied correctly to row 5 four hours earlier and skipped here under
+time pressure. An idle-but-alive session and a dead one look identical in a transcript; only the
+process table tells them apart.
+
+**Resolution (one lead per worktree, chosen by team investment, not seniority):**
+- Row 12: `27a505b4` continues (owns 4 teammates). `9f958f36` told to stand down — but *gracefully*,
+  because `self-close` **REFUSED** to close it: `1 LIVE teammate(s) … R1-archaeology`. That gate
+  caught a teammate my own `--agent-id` sweep had missed, and refusing was right — closing would
+  have orphaned it exactly like row 5's five. It was instructed to harvest R1-archaeology, issue a
+  structured `shutdown_request` (never a plain-text broadcast), hand over to the survivor, then
+  self-close.
+- Row 3: `9bd621fd` continues; `1ad2e99d` (no teammates, no commits, clean tree) self-closed with
+  the survivor as successor. Both survivors were told a 529 is transient and must not be treated as
+  a blocker, and to commit early precisely because row 3's first session lost everything by not.
+
+**Cheap protection that already proved itself:** row 5 survived an unexplained lead death with
+zero loss because it had landed 11 times; row 3 lost an hour because it had landed zero. Continuous
+landing is the campaign's actual crash insurance.
+
 ## Inherited watch — first GREEN postland stamp (status, not a coordinator work item)
 
 Read 2026-07-29T18:15Z: **zero GREEN stamps have ever existed** (`grep -l '"verdict":"green"'
