@@ -9,6 +9,10 @@
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
+  # Fixture $HOME FIRST: the producer and reader both default CC_BEAT_DIR to $HOME/.claude/cc-beats,
+  # so an unfixtured suite would write beats into the operator's LIVE registry — and a live beat is
+  # exactly what the reaper reads to decide a close. Hermetic by construction, not by convention.
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME/.claude"
   BEAT="$REPO/hooks/session-beat.sh"
   export CC_BEAT_DIR="$BATS_TEST_TMPDIR/beats"
   # shellcheck source=/dev/null
