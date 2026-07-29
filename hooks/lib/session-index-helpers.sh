@@ -70,23 +70,94 @@ session_index_sql() {
 SESSION_INDEX_LOCKFILE="$HOME/.claude/session-index.lock"
 _SESSION_INDEX_LOCK_FD=""
 
+# ─── Stale-holder recovery for the mkdir lock (a15/D1) ────────────────────────────────
+# WHY THIS EXISTS, measured rather than predicted. `flock` is ABSENT on macOS (verified:
+# `command -v flock` → nothing), so every path below falls through to the mkdir fallback, and that
+# fallback had NO stale recovery of any kind: no TTL, no owner check, and nothing in hooks/bin/
+# scripts/launchd ever removed the dir. `unlock` released it only from a clean EXIT trap, which does
+# not run on SIGKILL — and the holder is `com.claude.session-search-sweep`, the most OOM-exposed
+# process in the repo (it guards itself by skipping >50 MB transcripts).
+#
+# THE PREDICTED FAILURE ALREADY HAPPENED AND RAN FOR 111 DAYS. ~/.claude/session-index.lock.d was
+# created 2026-04-09 23:47:50 and never removed. From ~/.claude/logs/session-index.log, split at that
+# instant: "Indexed session" 1033 before / 0 after · "Sweep: indexed" 2889 before / 1 after · "lock
+# held by another process" 383 before / 8096 after. The last successful index was 23:45:03 and the
+# last sweep 23:47:27 — seconds before the orphan appeared. Full session indexing has been dead ever
+# since, while session-index-start.sh (the one writer that takes no lock) kept adding stub rows, so
+# the DB's mtime and its "5802 sessions" count both looked healthy. A liveness proxy that reads the
+# output of a DIFFERENT writer cannot see this.
+#
+# THE RULE — never steal from a holder that might be alive; always reclaim one that provably is not:
+#   • pid alive AND lstart matches (or no lstart recorded) → a real holder → do not touch.
+#   • pid dead, or alive with a MISMATCHED lstart (the OS recycled a dead holder's pid onto a new
+#     process — `kill -0` alone cannot see that; the land-lock flake of 2026-07-25) → reclaim.
+#   • NO pid recorded at all → either a holder 2 ms from writing its token, or pre-fix debris like
+#     the April dir. Grace-then-age: reclaim only once the dir is older than the stale window, so a
+#     mid-acquire peer is never robbed but 111-day debris cannot outlive one sweep interval.
+# Env seam (tests): SESSION_INDEX_LOCK_STALE_S.
+_session_index_lock_is_stale() {  # 0 = reclaimable, 1 = a live holder
+    local d="$SESSION_INDEX_LOCKFILE.d" pid rec cur age stale
+    stale="${SESSION_INDEX_LOCK_STALE_S:-900}"
+    pid="$(cat "$d/pid" 2>/dev/null || echo "")"
+    case "$pid" in
+        ''|*[!0-9]*)
+            age=$(( $(date +%s) - $(stat -f %m "$d" 2>/dev/null || echo 0) ))
+            [ "$age" -ge "$stale" ] && return 0
+            return 1 ;;
+    esac
+    kill -0 "$pid" 2>/dev/null || return 0          # holder is gone → reclaim
+    rec="$(cat "$d/lstart" 2>/dev/null || echo "")"
+    cur="$(ps -o lstart= -p "$pid" 2>/dev/null || echo "")"
+    [ -n "$rec" ] && [ "$rec" != "$cur" ] && return 0   # pid recycled → original holder dead
+    return 1                                        # live, identity confirmed → never steal
+}
+
+# Record ownership INSIDE the lock dir, so a later acquirer can judge us. Note this is why release
+# can no longer be a bare `rmdir` (see session_index_unlock).
+_session_index_lock_own() {
+    printf '%s\n' "$$" > "$SESSION_INDEX_LOCKFILE.d/pid" 2>/dev/null || true
+    ps -o lstart= -p "$$" 2>/dev/null > "$SESSION_INDEX_LOCKFILE.d/lstart" || true
+}
+
+# mkdir, with one owner-verified reclaim attempt. 0 = acquired, 1 = genuinely held by someone live.
+_session_index_mkdir_lock() {
+    mkdir "$SESSION_INDEX_LOCKFILE.d" 2>/dev/null && { _session_index_lock_own; return 0; }
+    _session_index_lock_is_stale || return 1
+    session_index_log "Reclaiming stale index lock (holder gone; dir $(( $(date +%s) - $(stat -f %m "$SESSION_INDEX_LOCKFILE.d" 2>/dev/null || echo 0) ))s old)"
+    rm -rf "$SESSION_INDEX_LOCKFILE.d" 2>/dev/null || return 1
+    mkdir "$SESSION_INDEX_LOCKFILE.d" 2>/dev/null && { _session_index_lock_own; return 0; }
+    return 1                                        # a peer won the reclaim race — correctly held
+}
+
 session_index_lock() {
     mkdir -p "$(dirname "$SESSION_INDEX_LOCKFILE")"
     exec 9>"$SESSION_INDEX_LOCKFILE"
-    _SESSION_INDEX_LOCK_FD=9
-    if ! flock -x 9 2>/dev/null; then
-        # flock not available on some macOS — fall back to mkdir lock
-        local _attempts=0
-        while ! mkdir "$SESSION_INDEX_LOCKFILE.d" 2>/dev/null; do
-            _attempts=$((_attempts + 1))
-            if [ "$_attempts" -ge 300 ]; then
-                session_index_log "Lock timeout after 300s, proceeding anyway"
-                return 0
-            fi
-            sleep 1
-        done
-        _SESSION_INDEX_LOCK_FD="mkdir"
+    # Do NOT set the FD before flock succeeds (a15/D3): with flock absent the old code left
+    # _FD="9" while holding a MKDIR lock, so unlock took the flock branch (`flock -u 9`, a no-op)
+    # and never removed the dir — a second way to orphan it. The FD is now set only by the branch
+    # that actually acquired.
+    if flock -x 9 2>/dev/null; then
+        _SESSION_INDEX_LOCK_FD=9
+        trap 'session_index_unlock' EXIT
+        return 0
     fi
+    # flock not available on some macOS — fall back to mkdir lock
+    local _attempts=0
+    while ! _session_index_mkdir_lock; do
+        _attempts=$((_attempts + 1))
+        if [ "$_attempts" -ge 300 ]; then
+            # RETURN 1, never "proceeding anyway" (a15/D3). The old code returned SUCCESS on timeout
+            # without holding anything and — because it returned before the trap below — without
+            # arming release either. Two callers could both "hold" the lock and write the DB
+            # concurrently. Failing honestly lets the caller skip, which is what every caller of this
+            # family already does correctly.
+            session_index_log "Lock timeout after ${_attempts}s — NOT proceeding (lock is held)"
+            exec 9>&- 2>/dev/null || true
+            return 1
+        fi
+        sleep 1
+    done
+    _SESSION_INDEX_LOCK_FD="mkdir"
     trap 'session_index_unlock' EXIT
 }
 
@@ -98,18 +169,26 @@ session_index_trylock() {
         trap 'session_index_unlock' EXIT
         return 0
     fi
-    # flock unavailable or lock held
-    if mkdir "$SESSION_INDEX_LOCKFILE.d" 2>/dev/null; then
+    # flock unavailable or lock held — mkdir path, now with owner-verified stale reclaim
+    if _session_index_mkdir_lock; then
         _SESSION_INDEX_LOCK_FD="mkdir"
         trap 'session_index_unlock' EXIT
         return 0
     fi
+    exec 9>&- 2>/dev/null || true
     return 1
 }
 
 session_index_unlock() {
     if [ "$_SESSION_INDEX_LOCK_FD" = "mkdir" ]; then
-        rmdir "$SESSION_INDEX_LOCKFILE.d" 2>/dev/null || true
+        # OWNER-VERIFIED, and `rm -rf` not `rmdir` — the dir now CONTAINS our pid/lstart token, so
+        # `rmdir` would fail on a non-empty directory and silently never release (turning the fix
+        # into the very wedge it removes). Verifying the token first is what keeps release safe: if
+        # our lock was reclaimed as stale and a peer now holds its own, the pid file is theirs and an
+        # unconditional delete here would drop a LIVE holder's lock and admit a third (a15/D4).
+        if [ "$(cat "$SESSION_INDEX_LOCKFILE.d/pid" 2>/dev/null || echo)" = "$$" ]; then
+            rm -rf "$SESSION_INDEX_LOCKFILE.d" 2>/dev/null || true
+        fi
     elif [ -n "$_SESSION_INDEX_LOCK_FD" ]; then
         flock -u "$_SESSION_INDEX_LOCK_FD" 2>/dev/null || true
         exec 9>&- 2>/dev/null || true
