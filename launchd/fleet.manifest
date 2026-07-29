@@ -69,3 +69,20 @@ com.claude.desk-invariant         | staged | 300  | auto | 5  | 06-desk-bootstra
 com.claude.boot-resume            | staged | 300  | auto | 2  | 18-fleet-activate.sh
 com.claude.lead-supervisor        | staged | 0    | auto | 2  | 18-fleet-activate.sh
 com.claude.nightly-regression     | staged | 0    | auto | 1  | 18-fleet-activate.sh
+
+# ── com.chrisren.* — the SECOND family this repo owns (added 2026-07-29 after the reconciler's
+# first live run declared only com.claude.*, hiding 6 LOADED, RUNNING jobs from every leg).
+# All six are enabled-by-default (ABSENT from the override db — never disabled, which is a THIRD
+# state distinct from an explicit `=> enabled` repair scar) and all six are currently loaded.
+# FIVE OF THEM HAVE NO REPO SSOT and are one `rm` from unrecoverable — including
+# com.chrisren.cc-reaper, row 4's LIVE reaper. `--plist-parity` now names them; capturing the
+# plists themselves is the follow-on (stranded commits e360c309 / a0e11648 / 687c2fd6 already
+# contain that capture and should be cherry-picked rather than rewritten).
+# NOT in scope, deliberately: com.reso.* / gl.reso.* belong to another project, and
+# adobe/google/razer/homebrew/git are third-party — this board must not answer for them.
+com.chrisren.autonomy-sweep        | run    | 300  | auto | 5  | 18-fleet-activate.sh
+com.chrisren.cc-reaper             | run    | 300  | auto | 4  | 18-fleet-activate.sh
+com.chrisren.restic-claude-archive | run    | 0    | auto | 12 | 18-fleet-activate.sh
+com.chrisren.screenshot-clipboard  | run    | 0    | auto | 12 | 18-fleet-activate.sh
+com.chrisren.verify-2114-archive   | run    | 0    | auto | 12 | 18-fleet-activate.sh
+com.chrisren.watch-claude-code-2118-hold | run | 0 | auto | 7 | 18-fleet-activate.sh
