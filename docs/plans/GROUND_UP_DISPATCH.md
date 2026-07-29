@@ -247,6 +247,38 @@ worktrees now clean and committed (`gu5-decide` +1, `gu5-cadence` +1, `gu5-verdi
 uncommitted insertions landed safely); orphaned pane retired with succession announced; ruling
 and ACK re-delivered. **Row 5 kept its slot — the wave was never over the ≤2 cap.**
 
+### Incident addendum — a resume restores the SESSION, never the TEAM CHANNEL (operator-spotted)
+
+The recovery above was necessary but **not sufficient**, and the operator caught the gap from the
+pane view before any alarm did. `handoff-fire --extra "--resume <sid>"` brought the lead back with
+its context and its sid — but the five assignees are keyed `--agent-id <name>@session-<sid>` to the
+**process** that died (pid 15095), not to the session id. The resumed lead's own words:
+`No agent named 'gu5-decide' is reachable.` Every agent-directed send from a resumed lead fails
+permanently. **Correct the step-3 expectation in the playbook above: resume buys you context and
+landed-work continuity, never team reconnection — brief the resumed lead to harvest by DISK and to
+send nothing to any assignee.**
+
+**The operator-visible failure this produced is the sharper finding.** `@gu5-decide` parked on
+*"Waiting for team lead approval"* — a permission request routed to a lead process that cannot
+answer, with **no fallback to the operator**: no prompt was ever rendered, so the pane looks like
+it is waiting on the human while the human has nothing to click. Worse, the mechanism built for
+this is inert rather than missing: `hooks/cc-permission-beacon.sh` is landed (`b7db06c5`) and wired
+in `~/.claude/settings.json`, yet `/tmp/cc-permission-pending/` **has never been created** and
+`cc-blockers` reported *"no safeguard-blocked sessions surfaced"* while the teammate was
+demonstrably blocked. A teammate's approval traverses the team channel to the lead and never
+presents as a session-local hook event, so the beacon abstains ~100% by construction. Filed
+`cc-backlog 1e16815bac51` with both required fixes (fail OPEN to the operator when the approver
+process is not alive; give the beacon existence evidence so "none pending" is distinguishable from
+"never ran"). Siblings: `95281da714f0`, `93a9f880b6fe`.
+
+**Nothing was lost.** Every assignee's output was already committed in its own worktree
+(`gu5-decide` `5a7eb60c`, `gu5-cadence` `21d8e869`, `gu5-verdict` ×2) and worktrees survive session
+close, so the dead channel cost coordination, not work. The lead was told to cherry-pick
+`5a7eb60c` and **fix its DOA rationale in its own branch rather than drop the commit** — with no
+round trip available, dropping it would have been the only real data loss on the table.
+Assignee-session GC is deliberately deferred until the lead confirms harvest, so nothing is closed
+early.
+
 ## Inherited watch — first GREEN postland stamp (status, not a coordinator work item)
 
 Read 2026-07-29T18:15Z: **zero GREEN stamps have ever existed** (`grep -l '"verdict":"green"'
