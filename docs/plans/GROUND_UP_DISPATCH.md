@@ -190,6 +190,63 @@ Every new mechanism ships with an env kill switch, never revert-as-plan.
   plan; and `:141` (a cc-route-propagated cliff) must stay distinguishable, since separating a
   real capped-account stop from a wave-sizing false cliff is the entire point of the split.
 
+## INCIDENT 2026-07-29T19:04Z — row 5's lead died mid-work, orphaning 5 assignees (RECOVERED)
+
+Operator-spotted from the pane view: the `gu-autonomy-dispatch` pane sat at a zsh prompt showing
+`Resume this session with: claude --resume 8891c11f…` while its `@gu5-*` assignees were still
+visibly working. Disk verdict below — every line was checked, none inferred from the pane.
+
+**It did NOT self-close.** Zero `self-close` tool calls in the whole 502-row transcript (the 18
+textual hits are the `--self-retire` trailer it was *given*, not a call it *made*). So the
+`--self-retire` trailer this runbook attaches is **exonerated** — do not "fix" it.
+**Not quota:** next2 was at 14% of the 5h window / 42% weekly at the time.
+**Not one of our closers:** `waiting-recycle` logged `abstained / not-armed` throughout;
+`lead-crash-watchdog` only observed `pid file gone — exit`; `cc-reaper`/`team-reaper` show
+nothing near the timestamp. **Not row 4** (the obvious suspect, since it is rebuilding the
+reaper): all 53 of its kill/teardown-adjacent tool calls are Edits and RED-proofs against files
+inside **its own worktree**, zero live process kills.
+**Cause remains UNATTRIBUTED.** The transcript stops mid-tool-sequence right after a
+`queue-operation` enqueue of a `<task-notification>`, and CC printed its normal resume banner, so
+it was an exit rather than a SIGKILL. Filed under the existing `cc-backlog 95281da714f0`
+(*Agent-Team lead crash ORPHANS its assignees*, operator-identified 2026-07-26) — **this is that
+item's second confirmed occurrence**, not a new class, so no duplicate was filed.
+
+**Damage was bounded by continuous landing — the discipline paid for itself.** The lead had
+already landed 6 dispatch commits to trunk (`7400c614`, `0a8a2976`, `361675e8`, `c87ca381`,
+`e0356664`, `15cc1f4f`) and its own worktree was clean at 0 ahead. Only assignee work was
+exposed: `gu5-decide` held ~518 insertions UNCOMMITTED at the moment of death. Had the lead
+batched, the whole rebuild would have been in that basket.
+
+**Recovery playbook that worked (reuse verbatim for the remaining rows):**
+1. Confirm death by pid + registry, not by the pane. Confirm assignees still live via
+   `ps -axo pid=,command= | grep 'agent-id gu5-'` — assignees DO outlive their lead.
+2. Read the lead's transcript for cause BEFORE acting; discriminate self-close vs crash by
+   counting `self-close` **tool_use** calls, never textual mentions.
+3. **Resume, do not re-fire.** The assignees are keyed `--agent-id <name>@session-<sid>`, so only
+   that same sid can re-establish them:
+   `handoff-fire.sh --cwd <worktree> --extra "--resume <sid>" --account <same-account-as-the-config-dir> --notify-back <coordinator> --follow`.
+   The account MUST match the config dir holding the transcript (`--resume` cannot see another
+   account's sessions). Brief it to **recover by DISK, never by waiting on the team channel**,
+   which may not reconnect.
+4. Retire the emptied pane via `handoff-fire.sh self-close --session-id <dead> --successor <new>`.
+   Expect it to refuse — see `cc-backlog 93a9f880b6fe`, filed today: the successor engagement
+   check false-negatives on a RESUMED session because a resume writes to the ORIGINAL sid's
+   transcript, so there is no "new" transcript to find. Only pass
+   `--successor-assume-engaged` once you have proven engagement another way (transcript row
+   growth past the pre-resume count + live assistant turns).
+5. **Re-deliver anything you sent the dead session.** Its inbox does not follow it. The close
+   inventory reported **2 unread messages** stranded in `mailbox/F3B8333C….md` — the coordinator's
+   ACK *and* the seam ruling row 5 had explicitly asked for. It died never having read either,
+   and the resumed pane has a fresh mailbox. Live proof of `cc-backlog a98084b79b2c`: cc-notify
+   reports "delivered to inbox" for a session that will never read it — delivered, read, and
+   acted-on are three different events.
+
+**Outcome:** lead resumed in pane `0813A7FF-6E90-49C0-8880-909A267E29F3` (transcript 502 → 536
+rows, 188 assistant turns, immediately inventorying its assignees by disk); all three assignee
+worktrees now clean and committed (`gu5-decide` +1, `gu5-cadence` +1, `gu5-verdict` +2 — the 518
+uncommitted insertions landed safely); orphaned pane retired with succession announced; ruling
+and ACK re-delivered. **Row 5 kept its slot — the wave was never over the ≤2 cap.**
+
 ## Inherited watch — first GREEN postland stamp (status, not a coordinator work item)
 
 Read 2026-07-29T18:15Z: **zero GREEN stamps have ever existed** (`grep -l '"verdict":"green"'
