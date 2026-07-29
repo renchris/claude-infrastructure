@@ -31,7 +31,7 @@ frozen in this document, not on T1's code.
 |---|---|---|---|
 | `df-reconciler` | the six-state fleet reconciler + the manifest | `launchd/fleet.manifest`, `bin/cc-fleet`, `tests/cc-fleet.bats` | shared (see note) |
 | `df-board` | board integration + plist SSOT parity leg | `bin/cc-blockers` (fleet rows only), `tests/cc-blockers-fleet.bats` | shared (see note) |
-| `df-platter` | the one C10 operator command + queue staging | `docs/activation/pending-activation/17-fleet-activate.sh`, `tests/fleet-activate.bats` | shared (see note) |
+| `df-platter` | the one C10 operator command + queue staging | `docs/activation/pending-activation/18-fleet-activate.sh`, `tests/fleet-activate.bats` | shared (see note) |
 
 > **Worktree note (measured, 2026-07-29 — correct this expectation in future rebuilds).** On this
 > runtime an `Agent({team_name})` spawn did **not** create per-teammate worktrees: `git worktree
@@ -273,9 +273,54 @@ disagreed.
 | Pending-activation queue | 21 scripts repo-side / 21 live + 10 `.done`; **7** staged >24h un-run | `ls` both dirs; `hooks/activation-watch.sh` axis 1 |
 | Activation SSOT drift | **6** — 1 live-only, 1 repo-only, 4 content-drift | `activation-watch.sh --parity` |
 
-*(Telemetry addenda from the Phase 1 researchers — per-job death dates, the enable-event provenance,
-and the full plist parity diff — integrate below as they land; they tune the manifest's initial
-classification, not the architecture.)*
+### 2.1 Archaeology deltas (Phase 1 researcher, 2026-07-29 — every one re-verified by the lead)
+
+**The open operator question is ANSWERED, not ruled on. The mass-disable was DELIBERATE.**
+An operator-directed fleet shutdown ran **2026-07-26 11:46–11:56 PDT** via `/tmp/claude-fleet-shutdown.sh`,
+recovered verbatim from a transcript in `~/.claude-tertiary/` (`7ef6df8d-1d41-…jsonl`). It ran
+`bootout` + `disable` + `unload -w` over **exactly 13 labels — set-identical to the 13 `true`
+entries in the override db**, and its own header states the motive: four of those jobs *create
+sessions on a timer*, so closing panes could not converge (31 live processes, load 17). Corroborated
+independently by `~/FLEET-SHUTDOWN-PATCHES/` (7 worktrees snapshotted 11:45:27, seconds before) and
+by `AUTONOMY_DISPATCH_V2.md:130-131` ("last dispatch pass 18:41:33Z"). The **07-27 19:02 reboot was
+the amplifier, not the cause** — it converted 13 latent bits into 0 loaded jobs. Backlog
+`107f27fbb00c` should be **closed with this evidence**.
+
+> **This is why the manifest's `staged` class is load-bearing rather than bureaucratic.**
+> `desk-invariant` and `boot-resume` are the runaway session **generators** the shutdown existed to
+> stop; re-enabling either without a fleet concurrency ceiling **reopens the incident**. The other 8
+> were collateral, disabled only because they run bats suites or hold the machine awake. A mass
+> re-enable — the obvious fix, and the one an unexamined reading of the map cell invites — would
+> have re-created the outage. Both generators are declared `staged`, and the platter touches only
+> `expect = run`, so the design refuses that guess *structurally*, not by remembering to.
+
+| Delta | Value | Source |
+|---|---|---|
+| Enable event for dispatcher+discovery | **2026-07-29 12:22:34** by `/tmp/claude-dispatcher-enable.sh --enable` (the 11:06 plist mtime is only the `cp`) | override-db mtime; the script, still on disk |
+| `com.claude.dispatcher` plist drift | repo declares `StartInterval 300` (landed `21d8e869`), live runs **900** — row 5's ≤5-min bound **is not live** | `plutil -p` both copies |
+| `lead-supervisor` SSOT | **not missing — abandoned.** Exists at `launchd/com.claude.lead-supervisor.plist` in `e360c309`, stranded on unlanded branch `tm/growth` | `git log --all` |
+| Fleet-wide shape | 7 plists landed in one day 2026-07-18 (the autonomy-100 burst); 6 of 7 now inert | `git log --diff-filter=A -- launchd/` |
+| Survivors of the reboot | exactly the labels with **no override-db entry** (`com.chrisren.*`) — absence from the db means enabled | override db read |
+| `deploy-live` exit 1 **today** | its **designed** no-green refusal, not a crash | `deploy-live.sh --dry-run` (lead-verified) |
+
+**Correction to §1.1/§2, made by the lead against its own earlier claim.** "deploy-live has never
+once succeeded" was too strong. The 59 `cannot execute` failures were real but bounded: 2026-07-28
+22:34 (activation) → 2026-07-29 10:32 (when its symlink finally appeared) — an activation that ran
+*before* the deploy that creates the symlink, i.e. the bootstrap circle. Since 10:32 it has been
+**correctly refusing**, because there is still no green stamp. The design consequence is sharper
+than the original claim, not weaker — see F20.
+
+### 2.2 What already exists — consumed, not rebuilt
+
+`hooks/activation-watch.sh` axis 3 (`inert_axis`, `:103-126`) already effect-reads `.done` markers
+against `launchctl list`, is deployed, is in all 5 config dirs' `settings.json`, and self-clears.
+This design **generalises its shape** to the whole roster rather than replacing it — axis 3 walks
+`pending-activation/*.sh`, so a label with no activation script (`lead-supervisor`) is invisible to
+it. `cc-blockers`' `NOT-ACTIVATED`-vs-`STALE` split, existence gating, and per-sensor fail-open are
+reused verbatim; **the gap there is a call site, not a design** — `cc-blockers` has zero automatic
+callers and runs only when a human types it. The A11 verify block
+(`02-load-dispatcher-activate.sh:67-79`) and the deliberately-outside-the-`&&`-chain
+`enable`-before-`bootstrap` idiom (`3b88c5e5`) are both adopted by the platter.
 
 ---
 
@@ -295,7 +340,7 @@ launchd/fleet.manifest               bin/cc-fleet --json                       c
         │                            never mutates launchd                       │
         └────────── is itself a declared job (R10) ───────────────────────────────┘
                                                                     ONE C10 command:
-                                                          17-fleet-activate.sh (enable→bootstrap)
+                                                          18-fleet-activate.sh (enable→bootstrap)
 ```
 
 ### 3.1 The state function (total, R1)
@@ -431,7 +476,7 @@ actually loads differs from the committed SSOT). Enforced at the **chokepoint**,
 suite (memory `enforcement-must-live-at-the-chokepoint`): the manifest lint runs in `run_gate` so an
 undeclared or unmirrored plist cannot land.
 
-### 4.5 The C10 platter — `17-fleet-activate.sh` (`df-platter`)
+### 4.5 The C10 platter — `18-fleet-activate.sh` (`df-platter`)
 
 **One** operator command that brings the fleet to its declared state. Reads the manifest, and for
 every `expect = run` label not currently S6:
@@ -483,6 +528,9 @@ this design's own dependency: it degrades cleanly when dark.
 | F16 | A bash-3.2 `case`-in-`$( )` death produced a **false** alarm row | banned in this component; validation happens outside command substitution |
 | F17 | Retiring a job would produce a permanent false alarm | `expect = retired` is a first-class declaration (R8) — retired ≠ broken |
 | F18 | This mechanism itself goes inert and nobody notices | it is a declared job reconciled by itself, and the board calls it synchronously so it works un-activated (R10/§4.6) |
+| F19 | `install.sh:306-315` boots out every plist then bootstraps with **no `launchctl enable`**, swallowing every error (`2>/dev/null \|\| true`) — and `deploy-live.sh:283` calls it on **every** autonomous advance (600s). An enabled job is bounced mid-work (postland-verify mid-corpus); a disabled job can never be recovered by it. `tests/install-staged-plist.bats:40` pins the broken command | **DETECTED here, NOT fixed here** — a bounced or un-recovered job reads S1/S2 and rows within one cycle. The fix touches row 1's files, so it is a **seam question routed to the coordinator**, not decided unilaterally (§9) |
+| F20 | A job whose **designed verdict is a non-zero exit** is read as broken. `deploy-live` exits **1** to mean "no green stamp, nothing safe to deploy" — an S4 rule keyed on `exit != 0` alarms on it forever | manifest field `ok_exits` (default `0`; deploy-live `0,1`). S4 fires only on an exit **outside** the declared healthy set. Caught mid-build by verifying the lead's own claim with `--dry-run` |
+| F21 | 🚨 The classifier boundary is **asymmetric** — agents are denied `launchctl enable` but NOT `bootout`/`disable`, and an agent used exactly that to dark 13 labels on 2026-07-26 | cannot be closed from inside this row (it is a permission-layer fact, row 6). It is a second, independent argument for **continuous** reconciliation over a one-shot audit: the fleet can be darkened at any moment by something that is allowed to do it. Surfaced to the operator; named here so no future design assumes the fleet only changes when a human changes it |
 
 ---
 
@@ -494,7 +542,7 @@ this design's own dependency: it degrades cleanly when dark.
 2. **Zero-activation value first:** `cc-blockers` calls `cc-fleet` synchronously, so the moment the
    board leg lands, all 11 currently-broken labels become visible with no operator step at all. The
    launchd job is a latency optimisation, not the mechanism (§4.6).
-3. **One** C10 operator step: `CONFIRM=1 bash ~/.claude/autonomy/pending-activation/17-fleet-activate.sh`.
+3. **One** C10 operator step: `CONFIRM=1 bash ~/.claude/autonomy/pending-activation/18-fleet-activate.sh`.
    Until it is run, the board says so — degraded is loud, never silent.
 4. The initial manifest classification is evidence-based, and every genuinely ambiguous job is
    declared `staged` (a decision surfaced) rather than `run` (an alarm guessed) — see §3.1.
@@ -524,7 +572,7 @@ Each criterion names the file or command that proves it.
   (guards against a detector that fires on everything).
 - **A7** `CC_FLEET_RECONCILE=off cc-fleet --json` emits zero rows and exits 0. *Read:* the command.
 - **A8** The platter exists **byte-identical** in both queues. *Read:*
-  `cmp docs/activation/pending-activation/17-fleet-activate.sh ~/.claude/autonomy/pending-activation/17-fleet-activate.sh`
+  `cmp docs/activation/pending-activation/18-fleet-activate.sh ~/.claude/autonomy/pending-activation/18-fleet-activate.sh`
   and `bash hooks/activation-watch.sh --parity` (rc 0).
 - **A9** A bare (no `CONFIRM`) platter run mutates nothing and says so. *Read:* run it, then
   `launchctl print-disabled gui/$(id -u)` is unchanged (diff before/after).
