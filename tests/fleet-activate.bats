@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# 17-fleet-activate.sh — the ONE C10 operator command that brings the launchd fleet to its DECLARED
+# 18-fleet-activate.sh — the ONE C10 operator command that brings the launchd fleet to its DECLARED
 # state (DAEMON_FLEET_V2 §4.5). These tests NEVER invoke real launchctl: a fixture `launchctl` on
 # PATH records every argv and emulates the domain semantics, and CC_FLEET_LAUNCHCTL_BIN is pinned at
 # it as well — belt AND braces, because a PATH miss here would mutate the operator's real fleet.
@@ -15,7 +15,7 @@
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
-  S="$REPO/docs/activation/pending-activation/17-fleet-activate.sh"
+  S="$REPO/docs/activation/pending-activation/18-fleet-activate.sh"
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME/Library/LaunchAgents"   # hermetic: never the live ~/
   U="$(id -u)"
 
@@ -114,7 +114,7 @@ lineno()   { grep -Fn -- "$1" "$LC_LOG" | head -1 | cut -d: -f1; }
 # ── the ordering that is the whole point ──────────────────────────────────────────────────────────
 @test "enable is issued BEFORE bootstrap for a disabled label" {
   manifest '# label | expect | interval_s | evidence | owner_row | activate' \
-           'com.claude.alpha | run | 300 | - | 12 | 17-fleet-activate.sh'
+           'com.claude.alpha | run | 300 | - | 12 | 18-fleet-activate.sh'
   mkplist com.claude.alpha
   disabled com.claude.alpha
   actc
@@ -135,8 +135,8 @@ lineno()   { grep -Fn -- "$1" "$LC_LOG" | head -1 | cut -d: -f1; }
 }
 
 @test "a not-loaded label is not booted out, and a loaded-but-disabled one is (idempotent reload)" {
-  manifest 'com.claude.alpha | run | 300 | - | 12 | 17-fleet-activate.sh' \
-           'com.claude.beta  | run | 300 | - | 12 | 17-fleet-activate.sh'
+  manifest 'com.claude.alpha | run | 300 | - | 12 | 18-fleet-activate.sh' \
+           'com.claude.beta  | run | 300 | - | 12 | 18-fleet-activate.sh'
   mkplist com.claude.alpha; mkplist com.claude.beta
   disabled com.claude.alpha                       # disabled AND absent  → no bootout
   disabled com.claude.beta; loaded com.claude.beta # disabled BUT loaded  → bootout first
@@ -151,8 +151,8 @@ lineno()   { grep -Fn -- "$1" "$LC_LOG" | head -1 | cut -d: -f1; }
 
 # ── skip semantics, each with a positive control in the SAME test ─────────────────────────────────
 @test "an already-loaded and enabled label is SKIPPED — a needing-work sibling is NOT (positive control)" {
-  manifest 'com.claude.alpha | run | 300 | - | 12 | 17-fleet-activate.sh' \
-           'com.claude.beta  | run | 600 | - | 12 | 17-fleet-activate.sh'
+  manifest 'com.claude.alpha | run | 300 | - | 12 | 18-fleet-activate.sh' \
+           'com.claude.beta  | run | 600 | - | 12 | 18-fleet-activate.sh'
   mkplist com.claude.alpha; mkplist com.claude.beta
   loaded com.claude.alpha                          # loaded, not in the disabled db ⇒ at declared state
   disabled com.claude.beta
@@ -164,7 +164,7 @@ lineno()   { grep -Fn -- "$1" "$LC_LOG" | head -1 | cut -d: -f1; }
 }
 
 @test "expect=staged and expect=retired are NEVER touched, while a run label in the same manifest IS" {
-  manifest 'com.claude.alpha | run     | 300 | - | 12 | 17-fleet-activate.sh' \
+  manifest 'com.claude.alpha | run     | 300 | - | 12 | 18-fleet-activate.sh' \
            'com.claude.gamma | staged  | 300 | - | 12 | -' \
            'com.claude.delta | retired | 0   | - | 12 | -'
   mkplist com.claude.alpha; mkplist com.claude.gamma; mkplist com.claude.delta
@@ -180,7 +180,7 @@ lineno()   { grep -Fn -- "$1" "$LC_LOG" | head -1 | cut -d: -f1; }
 
 # ── the bare run: the .done trap this script exists to refuse ──────────────────────────────────────
 @test "a bare run mutates NOTHING and says so, refusing the .done marker in words" {
-  manifest 'com.claude.alpha | run | 300 | - | 12 | 17-fleet-activate.sh'
+  manifest 'com.claude.alpha | run | 300 | - | 12 | 18-fleet-activate.sh'
   mkplist com.claude.alpha
   disabled com.claude.alpha
   act
@@ -196,8 +196,8 @@ lineno()   { grep -Fn -- "$1" "$LC_LOG" | head -1 | cut -d: -f1; }
 }
 
 @test "re-running twice is idempotent — the second run mutates nothing and says it is a no-op" {
-  manifest 'com.claude.alpha | run | 300 | - | 12 | 17-fleet-activate.sh' \
-           'com.claude.beta  | run | 600 | - | 12 | 17-fleet-activate.sh'
+  manifest 'com.claude.alpha | run | 300 | - | 12 | 18-fleet-activate.sh' \
+           'com.claude.beta  | run | 600 | - | 12 | 18-fleet-activate.sh'
   mkplist com.claude.alpha; mkplist com.claude.beta
   disabled com.claude.alpha; disabled com.claude.beta
   actc
@@ -212,8 +212,8 @@ lineno()   { grep -Fn -- "$1" "$LC_LOG" | head -1 | cut -d: -f1; }
 
 # ── fail loud, never guess ────────────────────────────────────────────────────────────────────────
 @test "an unresolvable checkout FAILS LOUD with the exact CC_REPO override and mutates nothing" {
-  ISO="$BATS_TEST_TMPDIR/iso"; mkdir -p "$ISO"; cp "$S" "$ISO/17-fleet-activate.sh"
-  run bash "$ISO/17-fleet-activate.sh"             # no CC_REPO, fixture HOME ⇒ no fallback checkout
+  ISO="$BATS_TEST_TMPDIR/iso"; mkdir -p "$ISO"; cp "$S" "$ISO/18-fleet-activate.sh"
+  run bash "$ISO/18-fleet-activate.sh"             # no CC_REPO, fixture HOME ⇒ no fallback checkout
   [ "$status" -ne 0 ]
   printf '%s' "$output" | grep -Fq 'CC_REPO='
   [ "$(muts)" -eq 0 ]
@@ -227,7 +227,7 @@ lineno()   { grep -Fn -- "$1" "$LC_LOG" | head -1 | cut -d: -f1; }
 
 # ── the sibling reconciler's contract: consumed when present, never required ───────────────────────
 @test "cc-fleet --check is consumed when present and its RED propagates; absence is fail-soft" {
-  manifest 'com.claude.alpha | run | 300 | - | 12 | 17-fleet-activate.sh'
+  manifest 'com.claude.alpha | run | 300 | - | 12 | 18-fleet-activate.sh'
   mkplist com.claude.alpha
   disabled com.claude.alpha
   actc                                              # cc-fleet ABSENT (the sibling has not landed)
@@ -263,8 +263,8 @@ lineno()   { grep -Fn -- "$1" "$LC_LOG" | head -1 | cut -d: -f1; }
 }
 
 @test "a declared-run label with NO plist anywhere is a loud non-zero, not a silent skip" {
-  manifest 'com.claude.alpha | run | 300 | - | 12 | 17-fleet-activate.sh' \
-           'com.claude.beta  | run | 600 | - | 12 | 17-fleet-activate.sh'
+  manifest 'com.claude.alpha | run | 300 | - | 12 | 18-fleet-activate.sh' \
+           'com.claude.beta  | run | 600 | - | 12 | 18-fleet-activate.sh'
   mkplist com.claude.beta                          # alpha has no plist in repo or LaunchAgents
   disabled com.claude.alpha; disabled com.claude.beta
   actc

@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════
-# 17-fleet-activate  —  bring the launchd FLEET to its DECLARED state in ONE operator command
+# 18-fleet-activate  —  bring the launchd FLEET to its DECLARED state in ONE operator command
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════
 # WHAT: reads the declaration `launchd/fleet.manifest` (DAEMON_FLEET_V2 §4.1) and, for every label
 #   declared `expect = run` that is not already loaded-and-enabled, runs the four-step reconcile:
@@ -44,11 +44,11 @@
 #   CC_FLEET_STALE_FACTOR=<n>          S5 staleness sensitivity (default 3)
 # SEAMS: CC_REPO (checkout root) · CC_FLEET_MANIFEST (declaration path) · CC_FLEET_LAUNCHCTL_BIN
 #
-# RUN IT:  CONFIRM=1 bash ~/.claude/autonomy/pending-activation/17-fleet-activate.sh
+# RUN IT:  CONFIRM=1 bash ~/.claude/autonomy/pending-activation/18-fleet-activate.sh
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════
 set -uo pipefail
 
-SELF_LIVE="$HOME/.claude/autonomy/pending-activation/17-fleet-activate.sh"
+SELF_LIVE="$HOME/.claude/autonomy/pending-activation/18-fleet-activate.sh"
 LAUNCHCTL="${CC_FLEET_LAUNCHCTL_BIN:-launchctl}"
 LIVE_AGENTS="$HOME/Library/LaunchAgents"
 UID_="$(id -u)"
@@ -101,7 +101,7 @@ MANIFEST="${CC_FLEET_MANIFEST:-$REPO/launchd/fleet.manifest}"
   exit 2; }
 command -v "$LAUNCHCTL" >/dev/null 2>&1 || { echo "✗ launchctl not found ($LAUNCHCTL) — is this macOS?" >&2; exit 2; }
 
-echo "== 17-fleet-activate =="
+echo "== 18-fleet-activate =="
 echo "declaration: $MANIFEST"
 echo "checkout:    $REPO"
 
@@ -167,7 +167,7 @@ else
       # A label with a BESPOKE activation script does more than bootstrap (symlinks, log dirs). The
       # generic reconcile still loads it — a job that loads and fails is reported FAILING (S4), which
       # is honest — but name the sibling script so the operator can close that gap if it does.
-      case "$act" in ''|-|17-fleet-activate.sh) ;; *) note=" · bespoke activation exists: $act" ;; esac
+      case "$act" in ''|-|18-fleet-activate.sh) ;; *) note=" · bespoke activation exists: $act" ;; esac
     done
     printf '  %-38s %s%s\n' "${TODO[$i]}" "${TODO_WHY[$i]}" "$note"
   done

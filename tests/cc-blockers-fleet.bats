@@ -108,13 +108,13 @@ setup() {
 
 @test "fleet: rows pass THROUGH to --json with kind, state, subject and recover_cmd intact" {
   frow NOT-INSTALLED com.claude.fleet-reconcile 'declared run; no plist in LaunchAgents' \
-    'CONFIRM=1 bash /x/17-fleet-activate.sh' > "$FPAY"; mk_fleet 0
+    'CONFIRM=1 bash /x/18-fleet-activate.sh' > "$FPAY"; mk_fleet 0
   run ccb --json
   [ "$status" -eq 0 ]
   [ "$(echo "$output" | jq -r '.[0].kind')" = "fleet-inert" ]
   [ "$(echo "$output" | jq -r '.[0].state')" = "NOT-INSTALLED" ]
   [ "$(echo "$output" | jq -r '.[0].subject')" = "com.claude.fleet-reconcile" ]
-  [ "$(echo "$output" | jq -r '.[0].recover_cmd')" = "CONFIRM=1 bash /x/17-fleet-activate.sh" ]
+  [ "$(echo "$output" | jq -r '.[0].recover_cmd')" = "CONFIRM=1 bash /x/18-fleet-activate.sh" ]
 }
 
 @test "fleet: rows render through the SHARED alarm_table renderer, under their own heading" {
