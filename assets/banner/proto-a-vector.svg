@@ -1,0 +1,158 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 520" width="1920" height="520" role="img" aria-labelledby="t d">
+<title id="t">claude-infrastructure — one session divides into two, they exchange a message, and one retires</title>
+<desc id="d">A single Claude starburst rests on a hairline rail across a dark plate. It divides: the mark slides left while a second materialises and slides right. The rail between them lights up; a blue dot travels left to right and a green dot travels back, each flaring the mark it reaches. The left mark then dims and contracts away as the right one eases back to the centre, leaving one mark at rest above the words claude-infrastructure and sessions run each other.</desc>
+
+<defs>
+  <!-- one tapered ray; the mark is eleven of these, rotated, with slight length variation -->
+  <path id="ray" d="M0 0C6.5 -34 9 -74 0 -110C-9 -74 -6.5 -34 0 0Z"/>
+  <radialGradient id="halo">
+    <stop offset="0" stop-color="#d97757" stop-opacity=".62"/>
+    <stop offset=".32" stop-color="#d97757" stop-opacity=".18"/>
+    <stop offset=".7" stop-color="#d97757" stop-opacity=".03"/>
+    <stop offset="1" stop-color="#d97757" stop-opacity="0"/>
+  </radialGradient>
+  <radialGradient id="plate" cx=".5" cy=".4" r=".66">
+    <stop offset="0" stop-color="#171e27"/>
+    <stop offset="1" stop-color="#0d1117"/>
+  </radialGradient>
+  <!-- a zero-height bounding box cannot carry an objectBoundingBox gradient — user space it is -->
+  <linearGradient id="railFade" gradientUnits="userSpaceOnUse" x1="150" y1="0" x2="1770" y2="0">
+    <stop offset="0" stop-color="#30363d" stop-opacity="0"/>
+    <stop offset=".2" stop-color="#30363d" stop-opacity=".9"/>
+    <stop offset=".8" stop-color="#30363d" stop-opacity=".9"/>
+    <stop offset="1" stop-color="#30363d" stop-opacity="0"/>
+  </linearGradient>
+  <!-- the mark: rays centred on the origin so a scale is always about its own middle -->
+  <g id="mark" fill="#d97757">
+    <use href="#ray" transform="rotate(0) scale(1 1)"/>
+    <use href="#ray" transform="rotate(32.727) scale(1 .90)"/>
+    <use href="#ray" transform="rotate(65.455) scale(1 .97)"/>
+    <use href="#ray" transform="rotate(98.182) scale(1 .87)"/>
+    <use href="#ray" transform="rotate(130.909) scale(1 .99)"/>
+    <use href="#ray" transform="rotate(163.636) scale(1 .91)"/>
+    <use href="#ray" transform="rotate(196.364) scale(1 .96)"/>
+    <use href="#ray" transform="rotate(229.091) scale(1 .88)"/>
+    <use href="#ray" transform="rotate(261.818) scale(1 1)"/>
+    <use href="#ray" transform="rotate(294.545) scale(1 .92)"/>
+    <use href="#ray" transform="rotate(327.273) scale(1 .95)"/>
+  </g>
+</defs>
+
+<style>
+  .f  { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; }
+  .clay { fill: #d97757 } .gold { fill: #d4af37 } .dim { fill: #6e7681 }
+
+  /* ── one master timeline. It runs ONCE and holds: a header that loops forever pulls the
+        eye back while the reader is trying to read the page it sits on. ───────────────── */
+  .a { animation-duration: 8s; animation-iteration-count: 1; animation-fill-mode: both;
+       animation-timing-function: cubic-bezier(.4,0,.2,1); }
+
+  /* ① self-open — the mark divides; the originator carries left */
+  #slideL { animation-name: slideL }
+  @keyframes slideL { 0%,20% { transform: translateX(0) } 35%,100% { transform: translateX(-270px) } }
+  #coreL  { opacity: 0; animation-name: coreL }
+  @keyframes coreL { 0%        { opacity:0; transform: scale(.78) rotate(-14deg) }
+                     12.5%,70% { opacity:1; transform: scale(1) rotate(0deg) }
+                     85%,100%  { opacity:0; transform: scale(.6) rotate(12deg) } }
+
+  /* the successor materialises out of the same point and carries right */
+  #slideR { animation-name: slideR }
+  @keyframes slideR { 0%,20% { transform: translateX(0) } 35%,70% { transform: translateX(270px) }
+                      85%,100% { transform: translateX(0) } }
+  #coreR  { animation-name: coreR }
+  @keyframes coreR { 0%,20%   { opacity:0; transform: scale(.5) rotate(-22deg) }
+                     31%      { opacity:1; transform: scale(1.06) rotate(4deg) }
+                     36%,100% { opacity:1; transform: scale(1) rotate(0deg) } }
+
+  /* the instant of division */
+  #seam { opacity: 0; animation-name: seam }
+  @keyframes seam { 0%,18% {opacity:0} 21% {opacity:.85} 30%,100% {opacity:0} }
+
+  /* ② two-way — the rail between them lights, then one message each way */
+  #thread { opacity: 0; stroke-dasharray: 300; stroke-dashoffset: 300; animation-name: thread }
+  @keyframes thread { 0%,36%  { opacity:0; stroke-dashoffset:300 }
+                      38%     { opacity:1; stroke-dashoffset:300 }
+                      46%,68% { opacity:1; stroke-dashoffset:0 }
+                      78%,100%{ opacity:0; stroke-dashoffset:0 } }
+  #p1 { opacity: 0; animation-name: p1 }
+  @keyframes p1 { 0%,46%   { opacity:0; transform: translateX(0) }
+                  48%      { opacity:1; transform: translateX(8px) }
+                  54%      { opacity:1; transform: translateX(300px) }
+                  56%,100% { opacity:0; transform: translateX(300px) } }
+  #p2 { opacity: 0; animation-name: p2 }
+  @keyframes p2 { 0%,57%   { opacity:0; transform: translateX(300px) }
+                  59%      { opacity:1; transform: translateX(292px) }
+                  65%      { opacity:1; transform: translateX(0) }
+                  67%,100% { opacity:0; transform: translateX(0) } }
+
+  /* each halo flares as its message lands */
+  #haloL { opacity: 0; animation-name: haloL }
+  @keyframes haloL { 0% {opacity:0} 12.5%,62% {opacity:.34} 66% {opacity:.8} 70% {opacity:.34}
+                     85%,100% {opacity:0} }
+  /* Nothing loops. At 8s the banner is a still, and stays one — a header that keeps moving
+     competes with the text it sits above. Every element therefore carries exactly ONE
+     animation, which is also what makes a frozen reference frame exact (scripts/banner-shots.sh). */
+  #haloR { opacity: 0; animation-name: haloR }
+  @keyframes haloR { 0%,20% {opacity:0} 31%,51% {opacity:.34} 55% {opacity:.8}
+                     60%,100% {opacity:.38} }
+
+  /* ③ the resting state — which is also the reduced-motion state and the poster frame */
+  .cap { opacity: 0 }
+  #cap1 { animation-name: cap1 } #cap2 { animation-name: cap2 } #cap3 { animation-name: cap3 }
+  @keyframes cap1 { 0%,13% {opacity:0} 17%,32% {opacity:1} 34.5%,100% {opacity:0} }
+  @keyframes cap2 { 0%,39% {opacity:0} 43%,63% {opacity:1} 65.5%,100% {opacity:0} }
+  @keyframes cap3 { 0%,68% {opacity:0} 72%,83% {opacity:1} 85.5%,100% {opacity:0} }
+  #rest { opacity: 0; animation-name: rest }
+  @keyframes rest { 0%,86%  { opacity:0; transform: translateY(8px) }
+                    96%,100%{ opacity:1; transform: translateY(0) } }
+
+  @media (prefers-reduced-motion: reduce) {
+    .a { animation: none !important }
+    #slideL, #slideR, #coreR { transform: none !important }
+    #coreR { opacity: 1 !important }
+    #haloR { opacity: .38 !important }
+    #coreL, #haloL, #seam, #thread, #p1, #p2, .cap { opacity: 0 !important }
+    #rest { opacity: 1 !important; transform: none !important }
+  }
+</style>
+
+<rect width="1920" height="520" rx="14" fill="url(#plate)"/>
+<rect x=".75" y=".75" width="1918.5" height="518.5" rx="14" fill="none" stroke="#21262d" stroke-width="1.5"/>
+
+<!-- the bus the sessions sit on: one hairline, faded out at both ends -->
+<line x1="150" y1="208" x2="1770" y2="208" stroke="url(#railFade)" stroke-width="1.5"/>
+
+<!-- the originator -->
+<g id="slideL" class="a">
+  <g transform="translate(960 208)">
+    <circle id="haloL" class="a" r="230" fill="url(#halo)"/>
+    <g id="coreL" class="a"><use href="#mark"/></g>
+  </g>
+</g>
+
+<!-- the successor — and, from 8s on, the whole banner -->
+<g id="slideR" class="a">
+  <g transform="translate(960 208)">
+    <circle id="haloR" class="a" r="230" fill="url(#halo)"/>
+    <g id="coreR" class="a"><use href="#mark"/></g>
+  </g>
+</g>
+
+<line id="seam" class="a" x1="960" y1="82" x2="960" y2="334" stroke="#d97757" stroke-width="1.5"/>
+
+<!-- a message is a line in a file: it crosses the gap, it is not typed into the far end -->
+<line id="thread" class="a" x1="810" y1="208" x2="1110" y2="208" stroke="#7d8590" stroke-width="2.5"/>
+<circle id="p1" class="a" cx="810" cy="208" r="6" fill="#58a6ff"/>
+<circle id="p2" class="a" cx="810" cy="208" r="6" fill="#3fb950"/>
+
+<g class="f" text-anchor="middle">
+  <text id="cap1" class="cap a" x="960" y="406" font-size="30"><tspan class="clay">① self-open</tspan><tspan class="dim" dx="16">a session splits its own pane</tspan></text>
+  <text id="cap2" class="cap a" x="960" y="406" font-size="30"><tspan class="clay">② two-way</tspan><tspan class="dim" dx="16">a message is a line in a file</tspan></text>
+  <text id="cap3" class="cap a" x="960" y="406" font-size="30"><tspan class="clay">③ self-close</tspan><tspan class="dim" dx="16">the originator retires — one is left</tspan></text>
+  <g id="rest" class="a">
+    <!-- +half the letter-space: text-anchor centres the advance width, trailing gap included -->
+    <text class="gold" x="964.5" y="402" font-size="46" letter-spacing="9">claude-infrastructure</text>
+    <text class="dim" x="960.75" y="452" font-size="26" letter-spacing="1.5">sessions run each other</text>
+  </g>
+</g>
+</svg>
