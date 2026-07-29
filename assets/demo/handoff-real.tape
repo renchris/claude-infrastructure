@@ -1,6 +1,14 @@
 # handoff-real.tape — a REAL terminal recording of the interactivity touchpoints.
 #
-#   vhs assets/demo/handoff-real.tape        → assets/demo/handoff-real.gif
+#   vhs assets/demo/handoff-real.tape        → assets/demo/handoff-real.gif   (intermediate)
+#   gif2webp -m 6 -min_size -mt assets/demo/handoff-real.gif \
+#            -o assets/demo/handoff-real.webp                                 (the committed artifact)
+#
+# VHS cannot write WebP, so the GIF is a build intermediate and is gitignored. The
+# conversion is lossless (gif2webp is lossless by default — there is no -lossless flag)
+# and `-min_size` is load-bearing: without it the output was 1,996,878 B, larger than the
+# 708,919 B GIF; with it, 633,570 B. Verified pixel-exact against the GIF at every stored
+# frame, total duration 63,960 ms either way. See the `demo-recording` skill.
 #
 # Every command below is the actual script in this repo and every line of output is
 # what it really printed — no mock-ups, no re-enactment. Two honest qualifications,
