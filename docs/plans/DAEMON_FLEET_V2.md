@@ -29,9 +29,18 @@ frozen in this document, not on T1's code.
 
 | Teammate | Deliverable | Owns (exclusive) | Worktree |
 |---|---|---|---|
-| `df-reconciler` | the six-state fleet reconciler + the manifest | `launchd/fleet.manifest`, `bin/cc-fleet`, `tests/cc-fleet.bats` | own |
-| `df-board` | board integration + plist SSOT parity leg | `bin/cc-blockers` (fleet rows only), `tests/cc-blockers-fleet.bats` | own |
-| `df-platter` | the one C10 operator command + queue staging | `docs/activation/pending-activation/17-fleet-activate.sh`, `tests/fleet-activate.bats` | own |
+| `df-reconciler` | the six-state fleet reconciler + the manifest | `launchd/fleet.manifest`, `bin/cc-fleet`, `tests/cc-fleet.bats` | shared (see note) |
+| `df-board` | board integration + plist SSOT parity leg | `bin/cc-blockers` (fleet rows only), `tests/cc-blockers-fleet.bats` | shared (see note) |
+| `df-platter` | the one C10 operator command + queue staging | `docs/activation/pending-activation/17-fleet-activate.sh`, `tests/fleet-activate.bats` | shared (see note) |
+
+> **Worktree note (measured, 2026-07-29 — correct this expectation in future rebuilds).** On this
+> runtime an `Agent({team_name})` spawn did **not** create per-teammate worktrees: `git worktree
+> list` showed a single entry and all three teammates ran in the lead's tree. Isolation therefore
+> came from **disjoint file ownership plus an explicit-paths staging rule**, not from git. The
+> standard brief line "commit on your own branch" is actively DANGEROUS under that arrangement — a
+> `checkout -b` moves the tree under two siblings and the lead mid-write — so all three were
+> corrected to commit on the current branch and to `git add` explicit paths only, never `-A`. Check
+> `git worktree list` after spawning rather than assuming the isolation the roster implies.
 
 Lead (this session): this plan, the contract freeze, integration review, merge order
 (smallest-diff first, rebase + ff-only, serialized), continuous landing via the project-local
@@ -301,11 +310,35 @@ launchd/fleet.manifest               bin/cc-fleet --json                       c
 | **S5 STALLED** | loaded, exit 0, evidence older than `interval_s × CC_FLEET_STALE_FACTOR` | evidence mtime + declared interval | **row** |
 | **S6 HEALTHY** | loaded, enabled, exit 0, evidence fresh | all | no row |
 | *(S7 RETIRED)* | declared `retired` — deliberately not running | manifest | no row, ever (R8: retired ≠ broken) |
-| *(S8 STAGED)* | declared `staged` — built, activation pending, not yet expected live | manifest | **one** row via the existing activation queue, never a daemon-fault row |
+| *(S8 UNDECIDED)* | declared `staged` — built, activation pending, not yet expected live | manifest | **always exactly one row**, `state:"UNDECIDED"` — a pending *decision*, never a daemon-fault row |
 
 `expect = staged` is the honest answer to "is this job *supposed* to run?" where the evidence does
 not settle it. It surfaces as a decision for the operator instead of either a guessed alarm (noise)
 or a guessed silence (the current failure). Ambiguity is declared, not resolved by the agent.
+
+**`staged` must never become a hiding place.** It emits a row unconditionally — absence-is-loud
+applied to the *decision* rather than to the daemon — so classifying a job `staged` cannot be used
+to silence it, only to say honestly that nobody has decided yet. The operator converts each to `run`
+or `retired` with a one-line manifest edit. Initial classification (lead, evidence-based):
+**7 `run`** — postland-verify, deploy-live, dispatcher, discovery, log-rotation, session-search-sweep,
+session-search-backfill; **7 `staged`** — caffeinate-floor, power-policy-verify, team-orphan-reaper,
+desk-invariant, boot-resume, lead-supervisor, nightly-regression; **0 `retired`** (retiring anything
+is an operator call, not an agent's).
+
+### 3.1.1 Sensor facts the state function is built on (measured 2026-07-29)
+
+`launchctl print gui/501/<label>` returns **rc=113 with an identical `Could not find service`
+message for a DISABLED label and for a label that does not exist at all** (measured:
+`com.claude.log-rotation` vs `com.claude.does-not-exist`; a loaded label returns rc=0). So `print`
+is a three-way ambiguity, not a signal, and **S1 and S2 must never be inferred from it** — S1 comes
+from the filesystem (`~/Library/LaunchAgents/<label>.plist`), S2 from the override db. `print` is
+used only for S3/S4, where rc=0 guarantees the parse is meaningful; a non-zero `print` on a label
+that *is* installed and *is not* disabled is a genuine UNKNOWN (R5/R8: no row, say so).
+
+`print-disabled` emits `\t\t"<label>" => disabled|enabled`. The label must be matched **whole and
+quoted**, or `com.claude.dispatcher-foo` satisfies `com.claude.dispatcher`. **Absence from the
+override db means ENABLED** — it records overrides, not memberships (the rule `cc-blockers:222-224`
+already states; reused verbatim rather than re-derived).
 
 ### 3.2 Why this dissolves the failure class rather than enlarging the old one
 
