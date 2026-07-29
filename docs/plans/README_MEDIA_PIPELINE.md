@@ -118,10 +118,16 @@ survives the sanitizer identically to GIF.
   quality loss). Animated AVIF not pursued: uneven browser support for the *animated*
   variant, and the inline slot has no fallback once `<video>` is stripped.
 
-**Why q65:** it is the point that beats the 64-colour GIF on both metrics with the largest
-size win. Visual check at README width confirmed it — and on **coloured** text the GIF's
-palette visibly posterizes a red→orange gradient that the WebP tracks cleanly. The swap is
-a quality *gain*, not a trade.
+> ~~**Why q65:** it is the point that beats the 64-colour GIF on both metrics with the largest
+> size win. Visual check at README width confirmed it — and on **coloured** text the GIF's
+> palette visibly posterizes a red→orange gradient that the WebP tracks cleanly. The swap is
+> a quality *gain*, not a trade.~~
+>
+> **SUPERSEDED — every sentence above is wrong.** q65 seams the flat grey (streak 0.526 vs the
+> GIF's 0.188); the visual check missed it because it was done on text, not on a flat region;
+> and the coloured-text claim is inverted — measured RMS vs source was GIF 4.02 / 4.92 against
+> WebP 4.84 / 5.45. Kept struck-through rather than deleted so the reasoning error stays
+> legible. See § "Why the hero cannot be WebP" and § "Correction" above.
 
 <details><summary>Original analysis (kept — the sanitizer measurements still hold)</summary>
 
