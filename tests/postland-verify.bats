@@ -130,6 +130,27 @@ pages_n()     { find "$CC_PAGES_DIR" -name 'postland-red-*.page' 2>/dev/null | w
 cells_n()     { find "$CC_POSTLAND_WT_ROOT" -maxdepth 1 -name 'wt-*' 2>/dev/null | wc -l | tr -d ' '; }
 cut_pages_n() { find "$CC_PAGES_DIR" -name 'postland-cut-*.page' 2>/dev/null | wc -l | tr -d ' '; }
 
+# Collapse duplicate slashes into $PWD's normal form; result in $NORM (a GLOBAL, deliberately: a
+# `case` inside `$( )` is a silent no-op under the bash 3.2 that ships as /bin/bash, and returning
+# via stdout would force exactly that shape — memory bash32-case-in-substitution-zsh-repro-trap).
+# Uses only `[ ]` and parameter expansion, both live under errexit.
+#
+# WHY EVERY RECORDED-CWD COMPARISON BELOW GOES THROUGH IT: a child's $PWD is slash-normalized BY
+# CONSTRUCTION (bash's `cd` collapses duplicate separators), so comparing it byte-wise against a
+# path built from an inherited env var asserts something about the SHAPE OF $TMPDIR rather than
+# about where the cell was minted. That conflation is what produced six consecutive post-land REDs
+# (stamps 4cea43d9 dc12c8db 9a3cfa48 5a409e07 22e866db 15fb714a, 2026-07-28/29): a doubled
+# separator inherited from $TMPDIR left three assertions off by exactly one slash.
+#
+# AND WHY NORMALIZING HERE IS LOAD-BEARING, NOT COSMETIC: this suite runs INSIDE the very verifier
+# it tests, so a comparison that fails on an inherited `//` makes the tree UN-GREENABLE by any
+# verifier predating the producer fix — while deploy-live is fail-closed on a green stamp and the
+# live layer only advances through it. That is a bootstrap circle (memory
+# deployed-layer-bootstrap-circle) and it is broken from this side. The producer's own invariant —
+# that it never MANUFACTURES a doubled separator — is not weakened by this; it is asserted
+# separately and RED-provably by the trailing-slash test below.
+norm() { NORM="$1"; while [ "${NORM#*//}" != "$NORM" ]; do NORM="${NORM%%//*}/${NORM#*//}"; done; }
+
 # A `bats` stand-in on $CC_POSTLAND_BATS reproducing the fingerprint of a REAL truncation — the
 # peer `pkill -9 -f bats-core/bats` this clause exists for: a plan promising N results, fewer
 # emitted, ZERO `not ok`, exit 137 (128+SIGKILL). Stubbing the PRODUCER, not the symptom.
@@ -166,9 +187,44 @@ add_stateful_test() {   # $1 = basename, $2 = body of the helper script
   b="$(stub_bats pinned "printf '%s\n' \"\$PWD\" > '$REC/pinned.txt'; printf '1..1\nok 1 p\n'")"
   CC_POSTLAND_BATS="$b" run bash "$SUT" --run-if-needed
   [ "$status" -eq 0 ]
-  [ "$(cat "$REC/pinned.txt")" = "$CC_POSTLAND_WORKTREE" ]   # minted AT the pinned path...
+  norm "$CC_POSTLAND_WORKTREE"
+  [ "$(cat "$REC/pinned.txt")" = "$NORM" ]                   # minted AT the pinned path...
   [ ! -d "$CC_POSTLAND_WORKTREE" ]                            # ...and still torn down (C7)
   [ "$(cells_n)" = "0" ]                                      # and nothing under the default root
+}
+
+# ── C7 slash normalization: a trailing-slash TMPDIR must not reach the corpus doubled ────────────
+@test "C7: a trailing-slash TMPDIR reaches the corpus with no doubled separator" {
+  # THE ROOT CAUSE OF SIX CONSECUTIVE POST-LAND REDS on this very file (stamps 4cea43d9 dc12c8db
+  # 9a3cfa48 5a409e07 22e866db 15fb714a, 2026-07-28/29 — deploy-live sat fail-closed the whole
+  # time and the live layer fell 58 commits behind trunk). launchd hands its jobs
+  # TMPDIR=/var/folders/…/T/ WITH a trailing slash, and `mktemp` copies its template VERBATIM, so
+  # `mktemp -d "${TMPDIR}/postland-run.XXXXXX"` produced `…/T//postland-run.X` — a doubled
+  # separator in the MIDDLE of the string. RUN_TMP is handed to the corpus as its TMPDIR, and bats
+  # chops only a TRAILING slash (bats:121 `BATS_TMPDIR=${BATS_TMPDIR%/}`), so that interior `//`
+  # propagated into BATS_RUN_TMPDIR → BATS_TEST_TMPDIR → every path a test derives from it, while
+  # bash's `cd` COLLAPSES duplicate slashes when it sets $PWD. Every assertion comparing a child's
+  # recorded cwd to such a path then missed by exactly one slash — in the real corpus TAP at
+  # 22e866dbb7ae, exactly the three positive cell-path claims failed (lines 164, 267 and 923 AT
+  # THAT SHA: C7's pinned path, the mint/teardown cell, C20's revert cwd) while all 50 of their
+  # siblings passed. That is why it never reproduced standalone: a plain trailing-slash TMPDIR is
+  # the one shape bats chops correctly, so only the nested corpus run ever saw the doubled form.
+  b="$(stub_bats slashnorm "printf 'tmpdir=%s\n' \"\$TMPDIR\" > '$REC/slash.txt'; printf '1..1\nok 1 p\n'")"
+  # The base is NORMALIZED before the trailing slash is appended, so this test measures only what
+  # the SUT itself adds. Passing $BATS_TEST_TMPDIR raw would inherit whatever the OUTER run's
+  # $TMPDIR looked like — and this suite runs inside that outer run, so the guard would convict the
+  # verifier for its caller's string (the bootstrap circle noted at norm() above).
+  norm "$BATS_TEST_TMPDIR"; base="$NORM"
+  run env TMPDIR="$base/" CC_POSTLAND_BATS="$b" bash "$SUT" --run-if-needed
+  [ "$status" -eq 0 ]
+  t="$(sed -n 's/^tmpdir=//p' "$REC/slash.txt")"
+  # POSITIVE CONTROL: the corpus really did receive OUR per-run dir, so the claim below cannot be
+  # satisfied by an empty/unset value (which trivially contains no `//`).
+  [ -n "$t" ]
+  [ "${t%/postland-run.*}" != "$t" ]
+  # ...and no doubled separator survived into it. A live `[ ]` on a prefix strip, so a regression
+  # fails the test rather than being skipped as an errexit-exempt compound.
+  [ "${t%%//*}" = "$t" ]
 }
 
 # ── C9 green ────────────────────────────────────────────────────────────────────
@@ -269,7 +325,8 @@ add_stateful_test() {   # $1 = basename, $2 = body of the helper script
   cell="$(cat "$REC/cell.txt")"
   [ -n "$cell" ]
   # minted where v2 says: a live `[ ]` on prefix-stripping, so a wrong root fails the test
-  [ "${cell#"$CC_POSTLAND_WT_ROOT"/wt-run-}" != "$cell" ]
+  norm "$CC_POSTLAND_WT_ROOT"
+  [ "${cell#"$NORM"/wt-run-}" != "$cell" ]
   # ...and be gone afterwards, with git's own worktree list agreeing (a `rm -rf` alone would
   # leave a registered-but-missing worktree that blocks the next `worktree add` on that path).
   [ ! -d "$cell" ]
@@ -987,7 +1044,8 @@ ship_field() { sed -n "s/^$1=//p" "$REC/ship.argv" | head -1; }
   [ -f "$REC/ship.argv" ]                                     # the land lane WAS invoked...
   [ "$(ship_field branch)" = "postland-revert-${culprit:0:12}" ]   # ...on the revert's own branch
   cwd="$(ship_field cwd)"
-  [ "${cwd#"$CC_POSTLAND_WT_ROOT"/wt-revert-}" != "$cwd" ]    # ...from the revert worktree
+  norm "$CC_POSTLAND_WT_ROOT"
+  [ "${cwd#"$NORM"/wt-revert-}" != "$cwd" ]                   # ...from the revert worktree
   run bash -c "sed -n 's/^subject=//p' '$REC/ship.argv' | head -1 | grep -c '^Revert '"
   [ "$output" = "1" ]
   git -C "$R" fetch -q origin
