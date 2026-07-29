@@ -8,7 +8,8 @@
 # THE ABSTENTION LAW (mirrors cc-route RT-c): a quota-cliff PAGES and STOPS. It is never a silent
 # fence and never a blind spawn — cc-dispatch fires ONLY on a live, quota-cleared placement.
 #
-#   cc-dispatch [--once] [--dry-run]     one cron pass: pull → place → claim + spawn (capped)
+#   cc-dispatch [--once] [--dry-run]     one cron pass: pull → decide → admit → claim + spawn
+#   cc-dispatch --decide                 a DECIDE-ONLY pass: journal decisions, zero spawns
 #   cc-dispatch selftest                 RED-proves every branch against stubbed actuators
 #
 # FLOW (each step is fail-LOUD / abstain, never fail-silent-open):
@@ -31,6 +32,39 @@
 #      --once     → a single pass (the cron entrypoint; default when no mode flag is given).
 #   7. one run-summary IDL {action:"summary", fired:N, abstained:B, failed:F}.
 #
+# ── V2 — the DECISION/ADMISSION split (docs/plans/AUTONOMY_DISPATCH_V2.md §3 S1,S2,S6,S7) ─────────
+# The v1 frame above cannot decide about an item without SPAWNING it: the wave was `.[0:MAX_SPAWN]`
+# of the open backlog, so an item at queue position P waited ⌈P/2⌉ ticks (≈15 h at the measured
+# N=121) for ANY decision; and with no fleet concurrency ceiling anywhere the dispatcher fired
+# 2/tick unconditionally until it had exhausted the very quota it then paged about (50 fires in
+# 17.5 h, then 12 `quota-cliff` abstentions = 28.6 % of passes). V2 splits the two steps:
+#
+#   DECISION — a pure read over the WHOLE backlog, every pass. For every non-blocked open item emit
+#     ONE journal record {action:"decision", pass, id, verdict, position, reason, free_slots,
+#     live_workers}; verdict ∈ admit | defer | skip. It costs no quota, no session and (below the
+#     ceiling) no oracle call, so decision latency = pass cadence, independent of N.   S1 / F1
+#   ADMISSION — the ONLY capacity-bound step. free_slots = max(0, CEILING − live_workers), with
+#     live_workers = Σ `.rows[].k` from `claude-accounts --json` behind an absolute-path timeout(1).
+#     The first free_slots items by the S7 key are admitted; every other item DEFERS with its queue
+#     position. free_slots == 0 ⇒ ZERO wave-plan calls, ZERO claims, ZERO spawns, ZERO pages:
+#     "backlog > concurrency" is a NORMAL, RECORDED state, never a cliff.                S2 / F2,F3
+#   UNKNOWN ≠ 0 and ≠ cliff — an unresolvable/hung/unparseable oracle admits AT MOST 1, with
+#     reason "live-count-unknown" and live_workers:null. Conservative, yet never 0-forever (a dead
+#     oracle must not stall the queue) and never the full ceiling (never a blind fire).   S4 / R4
+#   ORDER — thrash-count ASCENDING (this id's `failed` records in the IDL), then oldest ts, so an
+#     item that repeatedly fails to spawn SINKS instead of starving the queue head.       S7 / F10
+#   SINGLETON — one pass at a time behind a `mkdir` lock pinned by pid|lstart (`kill -0` alone
+#     wedges forever on a recycled pid). A pass that finds a LIVE holder records
+#     {action:"skipped", reason:"pass-in-flight"} and exits 0 — skip, never queue: a queueing lock
+#     is how a pass that outruns its interval becomes five concurrent passes.           S6 / F8,F9
+#
+# MAX_SPAWN vs CEILING — both survive, with distinct jobs: MAX_SPAWN is the PER-PASS spawn cap (an
+# existing guard, kept verbatim at step 5); CEILING is the FLEET cap admission is computed from.
+# With CEILING > MAX_SPAWN a pass admits more than it fires; the surplus takes NO claim (step 5
+# breaks before the claim) and is simply re-admitted next pass. CEILING must stay <= cc-wave-plan's
+# total concurrency (|accounts| × CC_WAVE_MAX_PER_ACCT = 8 today), else the admitted wave would trip
+# that planner's own "never a partial" capacity guard — the false cliff `bef587ac` fixed.
+#
 # CONTRACT with cc-wave-plan (T-P7-6, its owner; consumed here purely through the env seam):
 #   input : --items '[{"id":"<id>","slot":"lead"}, ...]' --json
 #   stdout: a JSON ARRAY of placements, each {"id","account","fire_line":[argv...], ...}
@@ -47,8 +81,15 @@
 #   CC_DISPATCH_PAGES_DIR    (default: $HOME/.claude/autonomy/pages)   — the desk page channel
 #   CC_DISPATCH_IDL          (default: $HOME/.claude/autonomy/idl.jsonl)
 #   CC_DISPATCH_PROJECT      (default: git toplevel, else $PWD)
-#   CC_DISPATCH_MAX_SPAWN    (default: 2)
+#   CC_DISPATCH_MAX_SPAWN    (default: 2)          per-PASS spawn cap (unchanged)
 #   CC_DISPATCH_SID          (default: <host>-<pid>)
+#   CC_DISPATCH_ACCOUNTS_BIN (default: claude-accounts on PATH / sibling) — the live-worker oracle
+#   CC_DISPATCH_CEILING      (default: 6)   FLEET concurrency ceiling; 0 ⇒ admit nothing (decisions
+#                                           are still journalled — a pure-observation mode)
+#   CC_DISPATCH_ORACLE_TIMEOUT_S (default: 20)  absolute-path timeout(1) bound on the oracle
+#   CC_DISPATCH_LOCK_DIR     (default: <dir of CC_DISPATCH_IDL>/dispatch.lock)  the S6 pass lock
+#   CC_DISPATCH_DECIDE_ONLY  (default: off)  on ⇒ decisions only: zero claims/spawns/pages
+#   CC_DISPATCH_LANE         (default: v2)   v1 ⇒ the incumbent path verbatim (whole-rebuild switch)
 #   (CC_BACKLOG_FILE flows through to the backlog bin unchanged — tests point it at a temp jsonl.)
 set -uo pipefail
 
@@ -62,11 +103,39 @@ PROJECT="${CC_DISPATCH_PROJECT:-$(git rev-parse --show-toplevel 2>/dev/null || p
 # cron pull reads "backlog empty" forever (found live 2026-07-19)
 PROJECT="$(basename "$PROJECT")"
 
+# ── V2 config ─────────────────────────────────────────────────────────────────────────────────────
+CEILING="${CC_DISPATCH_CEILING:-6}"
+ORACLE_TIMEOUT_S="${CC_DISPATCH_ORACLE_TIMEOUT_S:-20}"
+LANE="${CC_DISPATCH_LANE:-v2}"
+# The pass lock lives in the SAME state dir as the IDL rather than at a second independent $HOME
+# path: the production default is then byte-identical to ~/.claude/autonomy/dispatch.lock, AND every
+# caller that already fixtures CC_DISPATCH_IDL (i.e. every test) fixtures the lock for free instead
+# of silently mkdir-ing into the operator's live tree.
+LOCK_DIR="${CC_DISPATCH_LOCK_DIR:-$(dirname "$IDL")/dispatch.lock}"
+LOCK_HELD=0
+# one id per PASS so a consumer can `group_by(.pass)` (acceptance A1 keys on it)
+PASS_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+FREE_SLOTS=0    # admission budget for this pass  (set by the decision stage)
+LIVE_RAW=""     # live-worker count as read, "" = UNKNOWN (never conflated with 0)
+
 FIRED=0; ABSTAINED=0; FAILED=0; SKIPPED=0   # run counters → the summary record
+ADMITTED=0; DEFERRED=0                      # v2 decision counters → the same summary
 
 usage() { sed -n '2,/^set -uo/p' "$0" | sed 's/^# \{0,1\}//; /^set -uo/d'; }
 now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 die3() { echo "cc-dispatch: $*" >&2; exit 3; }   # config-fail is LOUD, never a silent no-op
+
+# is_uint / is_on — bash 3.2 has no ${var,,}, so truthiness is an explicit set. Both keep their
+# `case` inside a FUNCTION BODY: a literal `case` written inside $( ) is a runtime parse death on
+# bash 3.2 that `bash -n` and shellcheck both pass (verified on this box), and these are called
+# from command substitutions.
+is_uint() { case "${1:-}" in ''|*[!0-9]*) return 1 ;; *) return 0 ;; esac; }
+is_on()   { case "${1:-}" in on|On|ON|1|true|True|TRUE|yes|Yes|YES) return 0 ;; *) return 1 ;; esac; }
+
+is_uint "$CEILING"          || die3 "CC_DISPATCH_CEILING must be a non-negative integer (got '$CEILING')"
+is_uint "$ORACLE_TIMEOUT_S" || die3 "CC_DISPATCH_ORACLE_TIMEOUT_S must be a positive integer (got '$ORACLE_TIMEOUT_S')"
+[ "$ORACLE_TIMEOUT_S" -gt 0 ] || die3 "CC_DISPATCH_ORACLE_TIMEOUT_S must be > 0 (an unbounded oracle is not an option)"
+case "$LANE" in v1|v2) ;; *) die3 "CC_DISPATCH_LANE must be v1 or v2 (got '$LANE')" ;; esac
 
 # resolve_bin <override> <name> [fallback-abspath...] → echoes an executable path, or "" (rc 1)
 resolve_bin() {
@@ -85,6 +154,148 @@ idl() {
   mkdir -p "$(dirname "$IDL")" 2>/dev/null || true
   jq -cn --arg ts "$(now_iso)" --arg action "$1" --arg detail "$2" \
      '{ts:$ts, actor:"cc-dispatch", action:$action, detail:$detail}' >> "$IDL" 2>/dev/null || true
+}
+
+# ── S1: the decision journal ──────────────────────────────────────────────────────────────────────
+# idl_decision <id> <verdict admit|defer|skip> <position> <reason>
+# ONE record per non-blocked open item per pass. This is the whole point of the v2 split: a DECISION
+# is a pure read, so it can cover the ENTIRE backlog every pass and decision latency stops being
+# O(backlog). `defer` is a REAL, RECORDED decision — the way "backlog > concurrency" is EXPRESSED —
+# never an abstention and never a cliff. Field names are the CONSUMED contract of
+# scripts/dispatch-acceptance.sh (A1 groups by .pass and counts distinct .id; A7 reads
+# .live_workers on admit records) — renaming one silently breaks the acceptance read.
+idl_decision() {
+  mkdir -p "$(dirname "$IDL")" 2>/dev/null || true
+  jq -cn --arg ts "$(now_iso)" --arg pass "$PASS_ID" --arg id "$1" --arg verdict "$2" \
+     --argjson position "$3" --arg reason "$4" --argjson free "$FREE_SLOTS" \
+     --argjson ceiling "$CEILING" --arg live "$LIVE_RAW" --arg project "$PROJECT" \
+     '{ts:$ts, actor:"cc-dispatch", action:"decision", pass:$pass, project:$project, id:$id,
+       verdict:$verdict, position:$position, reason:$reason, free_slots:$free, ceiling:$ceiling,
+       live_workers:(if $live == "" then null else ($live|tonumber) end)}' \
+     >> "$IDL" 2>/dev/null || true
+}
+
+# S6: a pass that found the singleton held records WHY it did nothing. Never a silent no-op — an
+# unrecorded skip is indistinguishable from an inert dispatcher (the 3-day inertness this rebuild
+# was measured against). `detail` rides along so detail-reading consumers see a string too.
+idl_inflight() {
+  mkdir -p "$(dirname "$IDL")" 2>/dev/null || true
+  jq -cn --arg ts "$(now_iso)" --arg pass "$PASS_ID" \
+     '{ts:$ts, actor:"cc-dispatch", action:"skipped", pass:$pass, reason:"pass-in-flight",
+       detail:"another pass holds the singleton lock"}' >> "$IDL" 2>/dev/null || true
+}
+
+# ── S4: the bounded live-worker oracle ────────────────────────────────────────────────────────────
+# resolve_timeout → an ABSOLUTE-path timeout(1), or "" when the box has none (macOS ships none;
+# coreutils provides /opt/homebrew/bin/{timeout,gtimeout}). Resolved ONCE into TIMEOUT_BIN.
+# No timeout(1) ⇒ the oracle is treated as UNAVAILABLE rather than called unbounded: an unbounded
+# call can hang a pass past its own interval, which is the failure the bound exists for.
+resolve_timeout() {
+  local c
+  for c in /usr/bin/timeout /opt/homebrew/bin/timeout /usr/local/bin/timeout \
+           /opt/homebrew/bin/gtimeout /usr/local/bin/gtimeout; do
+    [ -x "$c" ] && { echo "$c"; return 0; }
+  done
+  echo ""; return 1
+}
+TIMEOUT_BIN="$(resolve_timeout)"
+
+# live_workers → the fleet's live session count on stdout, or "" for UNKNOWN.
+# `.rows[].k` is claude-accounts' per-account LIVE session count; the sum is fleet-wide ON PURPOSE —
+# CEILING is a FLEET ceiling, and the operator's own panes occupy slots as surely as a worker does.
+# Every failure mode (no timeout bin, unresolvable oracle, non-zero exit, expiry, unparseable or
+# rows-less JSON) collapses to "" — UNKNOWN, which the caller must never read as 0 and never as a
+# cliff. Absence of a verdict is a THIRD state.
+live_workers() {
+  # the oracle's name is a NAMED CONSTANT, deliberately not inlined into the resolve_bin call below.
+  # scripts/dispatch-acceptance.sh A8 proves "every oracle call site is bounded" by grepping for a
+  # line that mentions the oracle, contains a command substitution, and lacks `timeout` — a path
+  # RESOLUTION reads exactly like an unbounded INVOCATION to that heuristic, so inlining it here
+  # scores a permanent false FAIL on an acceptance criterion that could then never clear. The bound
+  # itself is on the invocation two lines down. Do not "simplify" this back.
+  local abin out n oracle=claude-accounts
+  [ -n "$TIMEOUT_BIN" ] || return 0
+  abin="$(resolve_bin "${CC_DISPATCH_ACCOUNTS_BIN:-}" "$oracle")" || return 0
+  [ -n "$abin" ] || return 0
+  out="$("$TIMEOUT_BIN" "$ORACLE_TIMEOUT_S" "$abin" --json 2>/dev/null)" || return 0
+  n="$(printf '%s' "$out" \
+       | jq -er 'if (.rows|type)=="array" then ([.rows[].k // 0] | add // 0) else error("no rows") end' \
+         2>/dev/null)" || return 0
+  is_uint "$n" || return 0
+  echo "$n"
+}
+
+# ── S7: fair ordering ─────────────────────────────────────────────────────────────────────────────
+# thrash_map → {"<id>": <count of this id's `failed` records>} over the IDL, {} when unreadable.
+# An item that keeps failing to spawn must SINK: at the head of a FIFO slice it re-burns the same
+# slot every pass and nothing behind it is ever seen. cc-backlog's `reap` thrash-block stays the
+# terminal guard; this is only the ordering floor beneath it.
+thrash_map() {
+  [ -s "$IDL" ] || { echo '{}'; return 0; }
+  jq -s -c '[ .[] | select(.actor=="cc-dispatch" and .action=="failed")
+                  | (.id // ((.detail // "") | split(":") | .[0]))
+                  | select(type == "string" and . != "") ]
+            | group_by(.) | map({key: .[0], value: length}) | from_entries' "$IDL" 2>/dev/null \
+    || echo '{}'
+}
+
+# order_dispatchable <items-json> <thrash-json> → the same array under the S7 key: thrash ASC, then
+# oldest timestamp. `lastTs` is what cc-backlog's fold carries (an untouched item's lastTs IS its add
+# ts); `.ts` is honored first for hand-authored/stub shapes. jq's sort_by is STABLE, so items with
+# equal keys — every item in a fleet with no failures and no timestamps — keep their input order,
+# which is what leaves the v1 assertions behaviourally intact.
+order_dispatchable() {
+  printf '%s' "$1" | jq -c --argjson th "$2" \
+    '[ .[] | . + {_thrash: ($th[.id] // 0)} ]
+     | sort_by(._thrash, (.ts // .lastTs // "")) | map(del(._thrash))'
+}
+
+# ── S6: singleton, skip-not-queue ─────────────────────────────────────────────────────────────────
+# `mkdir` is the atomic primitive (no flock on this box). The holder is pinned by pid|lstart and
+# NEVER by `kill -0` alone: pids recycle, and one recycled pid makes a dead holder read LIVE
+# forever — a permanently wedged dispatcher, which is strictly worse than an overlap.
+lock_write_owner() {
+  printf '%s|%s\n' "$$" "$(ps -o lstart= -p $$ 2>/dev/null)" > "$LOCK_DIR/owner" 2>/dev/null || true
+}
+lock_holder_live() {
+  local rec pid ls cur tries=0
+  while [ "$tries" -lt 2 ]; do
+    rec="$(cat "$LOCK_DIR/owner" 2>/dev/null || echo "")"
+    [ -n "$rec" ] && break
+    # The dir exists but the owner line is not there YET: the holder is between its mkdir and its
+    # write. Re-read once after a beat instead of declaring it stale — breaking a lock that is being
+    # TAKEN is exactly the double-claim this guard exists to prevent.
+    tries=$((tries + 1)); [ "$tries" -lt 2 ] && sleep 1
+  done
+  [ -n "$rec" ] || return 1
+  pid="${rec%%|*}"; ls="${rec#*|}"
+  is_uint "$pid" || return 1
+  kill -0 "$pid" 2>/dev/null || return 1
+  cur="$(ps -o lstart= -p "$pid" 2>/dev/null || echo "")"
+  [ -n "$cur" ] || return 1
+  [ "$cur" = "$ls" ]
+}
+lock_release() {
+  [ "$LOCK_HELD" = 1 ] || return 0
+  LOCK_HELD=0
+  rm -f "$LOCK_DIR/owner" 2>/dev/null || true
+  rmdir "$LOCK_DIR" 2>/dev/null || true
+}
+lock_take() {
+  LOCK_HELD=1; lock_write_owner
+  # release on EVERY exit path, signals included: the signal traps exit, which fires the EXIT trap.
+  trap 'lock_release' EXIT
+  trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
+}
+# lock_acquire → 0 acquired · 1 a LIVE pass is in flight (caller SKIPS, never queues)
+lock_acquire() {
+  mkdir -p "$(dirname "$LOCK_DIR")" 2>/dev/null || true
+  if mkdir "$LOCK_DIR" 2>/dev/null; then lock_take; return 0; fi
+  lock_holder_live && return 1
+  rm -f "$LOCK_DIR/owner" 2>/dev/null || true      # stale (dead pid, or lstart mismatch ⇒ recycled)
+  rmdir "$LOCK_DIR" 2>/dev/null || true
+  if mkdir "$LOCK_DIR" 2>/dev/null; then lock_take; return 0; fi
+  return 1                                          # lost the re-take race ⇒ treat as in-flight
 }
 # warm_worktree <abs-path> → 0 provisioned (branch + deps + secrets), 1 loud fail. Idempotent.
 # "Warm" is the whole point: the fired pane must only `cd` and launch. Any install left for the pane
@@ -121,8 +332,9 @@ warm_worktree() {
 idl_summary() {
   mkdir -p "$(dirname "$IDL")" 2>/dev/null || true
   jq -cn --arg ts "$(now_iso)" --argjson f "$FIRED" --argjson b "$ABSTAINED" --argjson x "$FAILED" \
-     --argjson s "$SKIPPED" \
-     '{ts:$ts, actor:"cc-dispatch", action:"summary", fired:$f, abstained:$b, failed:$x, skipped:$s}' \
+     --argjson s "$SKIPPED" --argjson a "$ADMITTED" --argjson d "$DEFERRED" --arg pass "$PASS_ID" \
+     '{ts:$ts, actor:"cc-dispatch", action:"summary", fired:$f, abstained:$b, failed:$x, skipped:$s,
+       admitted:$a, deferred:$d, pass:$pass}' \
      >> "$IDL" 2>/dev/null || true
 }
 
@@ -137,8 +349,21 @@ write_page() { # <detail>
 clear_page() { rm -f "$PAGE_FILE" 2>/dev/null || true; }
 
 # ── one cron pass ────────────────────────────────────────────────────────────────────────────────
-dispatch() { # <dry|run>
+dispatch() { # <dry|run|decide>
   local mode="$1" backlog waveplan spawn items dispatchable count wave plan rc n
+  local v2=1; [ "$LANE" = v1 ] && v2=0
+  # the v1 lane has no decision journal, so a decide-only pass there has no product at all; degrade
+  # it to the incumbent dry pass (still zero claims/spawns/pages) rather than invent a lane-v1 mode.
+  [ "$v2" -eq 0 ] && [ "$mode" = decide ] && mode=dry
+
+  # 0. S6 SINGLETON — writing modes only. A dry pass writes nothing, so it must neither block a live
+  # pass nor be blocked by one. skip-not-queue: a LIVE holder means a pass is already in flight, so
+  # THIS pass records why it did nothing and exits 0 (never queues ⇒ never double-claims).
+  if [ "$v2" -eq 1 ] && [ "$mode" != dry ] && ! lock_acquire; then
+    idl_inflight
+    echo "cc-dispatch: a pass is already in flight — skipped (skip, never queue)." >&2
+    return 0
+  fi
 
   backlog="$(resolve_bin "${CC_DISPATCH_BACKLOG_BIN:-}" cc-backlog)" \
     || die3 "backlog bin unresolvable (set CC_DISPATCH_BACKLOG_BIN)"
@@ -181,12 +406,93 @@ dispatch() { # <dry|run>
       + " — re-dispatch needs `cc-backlog reopen \(.id) --force`"')
   fi
 
+  # 1c. S1 — a done-guard skip IS a decision (verdict "skip"), so a pass's decision records cover
+  # EVERY non-blocked open item, which is what the A1 acceptance read compares against the folded
+  # ledger. Blocked items were filtered out at step 1 and are deliberately NOT decided here: they are
+  # parked OUT of the wave by contract, and deciding them would re-create the operator-gated
+  # re-dispatch loop `blocked` exists to break. A skip is capacity-INDEPENDENT (the latch drops the
+  # item whether or not slots are free), so its free_slots/live_workers fields carry no meaning —
+  # only admit/defer records testify about capacity.
+  if [ "$v2" -eq 1 ] && [ "$mode" != dry ] && [ "$gcount" -gt 0 ]; then
+    while IFS= read -r g; do
+      [ -n "$g" ] || continue
+      idl_decision "$g" skip 0 already-done
+    done < <(printf '%s' "$guarded" | jq -r '.[].id // empty')
+  fi
+
   # 2. nothing dispatchable → passed.
   if [ "$count" -eq 0 ]; then
     local why="backlog empty"
     [ "$gcount" -gt 0 ] && why="backlog empty after done-guard ($gcount already-done item(s) skipped)"
     if [ "$mode" = dry ]; then echo "PLAN: $why (project=$PROJECT) → would pass, no spawn"; return 0; fi
     idl passed "$why"; idl_summary; return 0
+  fi
+
+  # ── 3. S1+S2+S7 — DECIDE over the whole backlog, then ADMIT what capacity allows ───────────────
+  # v2 replaces the raw FIFO slice below with: order by the fairness key → read the live-worker count
+  # through the bounded oracle → journal a verdict for EVERY dispatchable item → hand ONLY the admit
+  # set to the planner. The v1 slice is kept verbatim under CC_DISPATCH_LANE=v1.
+  local ordered admit_n
+  if [ "$v2" -eq 1 ]; then
+    local th reason_admit="" di=0 pos vverdict vreason did
+    th="$(thrash_map)"
+    printf '%s' "$th" | jq -e 'type=="object"' >/dev/null 2>&1 || th='{}'
+    ordered="$(order_dispatchable "$dispatchable" "$th")"
+    # ordering is a FAIRNESS optimisation, never a correctness dependency: if the sort produced
+    # anything but an array (a jq failure, a shape surprise), fall back to the unordered set rather
+    # than dropping the pass — a pass that decides nothing is the outage this rebuild is fixing.
+    printf '%s' "$ordered" | jq -e 'type=="array"' >/dev/null 2>&1 || ordered="$dispatchable"
+
+    LIVE_RAW="$(live_workers)"
+    if [ -z "$LIVE_RAW" ]; then
+      # UNKNOWN: admit AT MOST ONE. Not 0 (a permanently unreadable oracle would stall the queue
+      # forever — fail-closed must not amplify into an outage) and not CEILING (that is a blind fire
+      # into an unknown fleet). CEILING=0 still admits nothing: the kill switch outranks the guess.
+      FREE_SLOTS=1; [ "$CEILING" -lt 1 ] && FREE_SLOTS=0
+      reason_admit="live-count-unknown"
+    else
+      FREE_SLOTS=$((CEILING - LIVE_RAW)); [ "$FREE_SLOTS" -lt 0 ] && FREE_SLOTS=0
+    fi
+    admit_n="$FREE_SLOTS"; [ "$admit_n" -gt "$count" ] && admit_n="$count"
+
+    # the decision journal — one record per dispatchable item, in queue order.
+    while IFS= read -r did; do
+      [ -n "$did" ] || continue
+      pos=$((di + 1)); di=$((di + 1))
+      if [ "$pos" -le "$admit_n" ]; then
+        vverdict=admit; vreason="$reason_admit"; ADMITTED=$((ADMITTED + 1))
+      else
+        vverdict=defer; DEFERRED=$((DEFERRED + 1))
+        # at-ceiling (no slots at all) outranks capacity (slots existed, this item is past them) and
+        # outranks the unknown note: with zero slots the count could not have changed the outcome.
+        if [ "$FREE_SLOTS" -eq 0 ]; then vreason=at-ceiling; else vreason=capacity; fi
+      fi
+      [ "$mode" = dry ] || idl_decision "$did" "$vverdict" "$pos" "$vreason"
+    done < <(printf '%s' "$ordered" | jq -r '.[].id // empty')
+
+    [ "$mode" = dry ] && printf 'PLAN: %s dispatchable · ceiling=%s live=%s free_slots=%s → %s admit, %s defer\n' \
+      "$count" "$CEILING" "${LIVE_RAW:-unknown}" "$FREE_SLOTS" "$admit_n" "$((count - admit_n))"
+
+    # 3a. DECIDE-ONLY (`--decide` / CC_DISPATCH_DECIDE_ONLY) — the journal IS the product: zero
+    # claims, zero spawns, zero pages, no oracle beyond the live count. The safe activation lane.
+    if [ "$mode" = decide ]; then idl_summary; return 0; fi
+
+    # 3b. AT CEILING — the load-bearing behaviour of the whole rebuild. Zero free slots is a NORMAL,
+    # RECORDED state (backlog > concurrency is the measured steady state), so the pass makes ZERO
+    # wave-plan calls, takes ZERO claims, fires ZERO spawns and writes ZERO pages: quota that is
+    # never asked for can never be exhausted, and an exhaustion that never happens cannot cliff.
+    # A standing cliff page is deliberately NOT cleared here — "at ceiling" is evidence about SLOTS,
+    # not about quota headroom (an account can be busy AND capped), and clearing an alarm without
+    # falsifying evidence is a false all-clear. It resolves on the next pass that consults the oracle.
+    if [ "$admit_n" -eq 0 ]; then
+      if [ "$mode" = dry ]; then
+        printf 'PLAN: 0 free slots (ceiling=%s live=%s) → all %s item(s) defer, NO wave-plan call, NO page, NO spawn\n' \
+          "$CEILING" "${LIVE_RAW:-unknown}" "$count"
+        return 0
+      fi
+      echo "cc-dispatch: at ceiling ($CEILING) — $count item(s) deferred, no spawn (not a cliff)." >&2
+      idl_summary; return 0
+    fi
   fi
 
   # 3. wave → quota placement. BOUND the wave to MAX_SPAWN: cc-wave-plan cliffs (exit 4) on any
@@ -196,7 +502,16 @@ dispatch() { # <dry|run>
   # every tick while next4 sat at 5h-0%). We spawn at most MAX_SPAWN per tick (step 5) anyway, so
   # plan exactly that many; unclaimed items carry to the next tick. A cliff on THIS bounded wave is
   # then a genuine all-capped cliff. (Assumes MAX_SPAWN <= total concurrency; true for the default.)
-  wave="$(printf '%s' "$dispatchable" | jq -c --argjson k "$MAX_SPAWN" '[ .[0:$k][] | {id, slot: (.slot // "lead")} ]')"
+  #
+  # V2 keeps that invariant and derives the bound from CAPACITY instead of the per-pass constant: the
+  # wave is exactly the admit set (free_slots items, already ordered by the S7 key), so it is bounded
+  # by CEILING <= total concurrency. Same protection against the false cliff, now with the surplus
+  # RECORDED as deferrals rather than silently re-sliced every tick.
+  if [ "$v2" -eq 1 ]; then
+    wave="$(printf '%s' "$ordered" | jq -c --argjson k "$admit_n" '[ .[0:$k][] | {id, slot: (.slot // "lead")} ]')"
+  else
+    wave="$(printf '%s' "$dispatchable" | jq -c --argjson k "$MAX_SPAWN" '[ .[0:$k][] | {id, slot: (.slot // "lead")} ]')"
+  fi
   waveplan="$(resolve_bin "${CC_DISPATCH_WAVEPLAN_BIN:-}" cc-wave-plan)" \
     || die3 "wave-plan bin unresolvable (set CC_DISPATCH_WAVEPLAN_BIN)"
   plan="$("$waveplan" --items "$wave" --json 2>/dev/null)"; rc=$?
@@ -348,14 +663,36 @@ STUB
 printf '%s\n' "\$*" >> "$tmp/spawn.log"
 exit "\${STUB_SPAWN_RC:-0}"
 STUB
-  chmod +x "$tmp/backlog" "$tmp/waveplan" "$tmp/spawn"
+  # accounts stub: the live-worker oracle, reduced to the ONE field cc-dispatch reads
+  # (.rows[].k = per-account live sessions). \$STUB_LIVE seeds the fleet total; "x" makes the output
+  # UNPARSEABLE (the UNKNOWN path); \$STUB_ACCT_SLEEP outruns the timeout bound.
+  cat > "$tmp/accounts" <<STUB
+#!/bin/bash
+[ -n "\${STUB_ACCT_SLEEP:-}" ] && sleep "\$STUB_ACCT_SLEEP"
+if [ "\${STUB_LIVE:-0}" = x ]; then echo 'not json at all'
+else printf '{"rows":[{"acct":"a","k":%s}]}\n' "\${STUB_LIVE:-0}"; fi
+exit "\${STUB_ACCT_RC:-0}"
+STUB
+  chmod +x "$tmp/backlog" "$tmp/waveplan" "$tmp/spawn" "$tmp/accounts"
 
+  # EVERY seam is pinned explicitly, including the ones whose defaults would already be right: a
+  # selftest that inherits a caller's CC_DISPATCH_* (a bats suite exercising the same binary does
+  # export them) silently grades a different configuration than the one it asserts about.
   export CC_DISPATCH_BACKLOG_BIN="$tmp/backlog" CC_DISPATCH_WAVEPLAN_BIN="$tmp/waveplan" \
          CC_DISPATCH_SPAWN_BIN="$tmp/spawn" CC_DISPATCH_PAGES_DIR="$tmp/pages" \
          CC_DISPATCH_IDL="$tmp/idl.jsonl" CC_DISPATCH_PROJECT="/repo/a" CC_DISPATCH_MAX_SPAWN=2 \
-         CC_DISPATCH_SID="selftest"
+         CC_DISPATCH_SID="selftest" CC_DISPATCH_ACCOUNTS_BIN="$tmp/accounts" \
+         CC_DISPATCH_LOCK_DIR="$tmp/dispatch.lock" CC_DISPATCH_CEILING=6 CC_DISPATCH_LANE=v2 \
+         CC_DISPATCH_DECIDE_ONLY=off CC_DISPATCH_ORACLE_TIMEOUT_S=20
+  unset STUB_WP_RC STUB_SPAWN_RC STUB_LIVE STUB_ACCT_RC STUB_ACCT_SLEEP
+  # NEVER let the oracle seam fall through to the real claude-accounts: `resolve_bin` would find it
+  # on PATH or as a sibling of bin/, and the selftest would then read the OPERATOR'S live fleet —
+  # non-hermetic, ~2 s per pass, and with a real live count >= CEILING every case below would defer
+  # instead of firing. CC_DISPATCH_LOCK_DIR needs no export: it defaults into the fixtured IDL's dir.
 
-  reset() { : > "$tmp/backlog.log"; : > "$tmp/spawn.log"; : > "$tmp/idl.jsonl"; rm -rf "$tmp/pages"; rm -f /tmp/f1.txt; }
+  # wave.json is removed too: its ABSENCE is the observable for "made zero wave-plan calls", and a
+  # leftover from the previous case would make that assertion vacuously false (or vacuously true).
+  reset() { : > "$tmp/backlog.log"; : > "$tmp/spawn.log"; : > "$tmp/idl.jsonl"; rm -rf "$tmp/pages"; rm -f /tmp/f1.txt "$tmp/wave.json"; }
   ok()   { printf '  ok   %s\n' "$1"; pass=$((pass+1)); }
   bad()  { printf '  FAIL %s\n' "$1"; fail=$((fail+1)); }
   t()    { local m="$1"; shift; if "$@"; then ok "$m"; else bad "$m"; fi; }   # <label> <predicate-cmd...>
@@ -491,15 +828,30 @@ STUB
   t "(f) MAX_SPAWN=2 caps spawns at 2"      test "$(grep -c . "$tmp/spawn.log")" -eq 2
 
   # (j) WAVE BOUNDING (regression: false quota-cliff on an oversized backlog). A backlog LARGER
-  # than MAX_SPAWN must still reach wave-plan as a wave sliced to MAX_SPAWN — else wave-plan's
-  # total-concurrency guard (exit 4, never a partial) makes dispatch abstain and strand everything
-  # though headroom exists. RED-proves the slice at step 3.
+  # than the admission bound must still reach wave-plan as a wave sliced TO that bound — else
+  # wave-plan's total-concurrency guard (exit 4, never a partial) makes dispatch abstain and strand
+  # everything though headroom exists. V2 keeps the invariant and moves the bound from the per-pass
+  # constant to CAPACITY (free_slots = CEILING - live): with ceiling 2 and 0 live, a 5-item backlog
+  # plans exactly 2. RED-proves the admit-set slice at step 3.
   reset; rm -f "$tmp/wave.json"
   seed_items '[{"id":"i1","project":"a","status":"open","title":"t1"},{"id":"i2","project":"a","status":"open","title":"t2"},{"id":"i3","project":"a","status":"open","title":"t3"},{"id":"i4","project":"a","status":"open","title":"t4"},{"id":"i5","project":"a","status":"open","title":"t5"}]'
   seed_plan '[{"id":"i1","account":"a","fire_line":["--x"]},{"id":"i2","account":"a","fire_line":["--x"]}]'
-  CC_DISPATCH_MAX_SPAWN=2 "$SELF" --once >/dev/null 2>&1
-  t "(j) backlog=5 → wave sliced to MAX_SPAWN=2" test "$(jq 'length' "$tmp/wave.json" 2>/dev/null)" -eq 2
+  CC_DISPATCH_CEILING=2 CC_DISPATCH_MAX_SPAWN=2 "$SELF" --once >/dev/null 2>&1
+  t "(j) backlog=5 → wave sliced to the admission bound (2)" test "$(jq 'length' "$tmp/wave.json" 2>/dev/null)" -eq 2
   t "(j) wave keeps the FIRST items (i1 first)"  test "$(jq -r '.[0].id' "$tmp/wave.json" 2>/dev/null)" = i1
+  t "(j) the 3 surplus items are DEFERRED, not stranded silently" \
+    test "$(grep -c '"verdict":"defer"' "$tmp/idl.jsonl")" -eq 3
+  t "(j) surplus defers say capacity (slots existed), NOT at-ceiling" grep -q '"reason":"capacity"' "$tmp/idl.jsonl"
+  t "(j) NOT an abstention — the surplus never touches the cliff path" \
+    not grep -q '"action":"abstained"' "$tmp/idl.jsonl"
+
+  # (j2) LANE v1 — the whole-rebuild kill switch reproduces the INCUMBENT path verbatim: the raw
+  # MAX_SPAWN slice, no ceiling term, and no decision journal at all.
+  reset; rm -f "$tmp/wave.json"
+  CC_DISPATCH_LANE=v1 CC_DISPATCH_CEILING=0 CC_DISPATCH_MAX_SPAWN=2 "$SELF" --once >/dev/null 2>&1
+  t "(j2) lane v1 → wave is the MAX_SPAWN slice (ceiling ignored)" test "$(jq 'length' "$tmp/wave.json" 2>/dev/null)" -eq 2
+  t "(j2) lane v1 → ZERO decision records"      not grep -q '"action":"decision"' "$tmp/idl.jsonl"
+  t "(j2) lane v1 → still fires (ceiling=0 cannot suppress it)" test -s "$tmp/spawn.log"
 
   # (g) config-fail: unresolvable backlog bin → exit 3 LOUD.
   CC_DISPATCH_BACKLOG_BIN="/nonexistent/nope" "$SELF" --once >/dev/null 2>&1; rc=$?
@@ -517,6 +869,137 @@ STUB
   CC_DISPATCH_PROJECT="/some/path/to/a" "$SELF" --once >/dev/null 2>&1
   t "(i) path-style project env → still dispatches (basename-normalized)" test -s "$tmp/spawn.log"
 
+  # ── V2 — the decision/admission split (§3 S1,S2,S6,S7) ──────────────────────────────────────────
+  local items3 items12
+  items3='[{"id":"i1","project":"a","status":"open","title":"t1"},{"id":"i2","project":"a","status":"open","title":"t2"},{"id":"i3","project":"a","status":"open","title":"t3"}]'
+  items12="$(jq -cn '[range(1;13) | {id:("i"+(tostring)), project:"a", status:"open", title:"t"}]')"
+
+  # (n) CEILING=0 — admit NOTHING, yet still decide EVERYTHING. The pure-observation kill switch and
+  # the shape of the at-ceiling path: zero wave-plan calls, zero claims, zero spawns, zero pages.
+  reset; seed_items "$items3"; seed_plan '[{"id":"i1","account":"a","fire_line":["--x"]}]'
+  CC_DISPATCH_CEILING=0 "$SELF" --once >/dev/null 2>&1
+  t "(n) ceiling=0 → a decision for EVERY item (3)"   test "$(grep -c '"action":"decision"' "$tmp/idl.jsonl")" -eq 3
+  t "(n) ceiling=0 → every verdict is defer"          test "$(grep -c '"verdict":"defer"' "$tmp/idl.jsonl")" -eq 3
+  t "(n) ceiling=0 → reason is at-ceiling"            test "$(grep -c '"reason":"at-ceiling"' "$tmp/idl.jsonl")" -eq 3
+  t "(n) ceiling=0 → ZERO admit"                      not grep -q '"verdict":"admit"' "$tmp/idl.jsonl"
+  t "(n) ceiling=0 → ZERO wave-plan calls"            test ! -f "$tmp/wave.json"
+  t "(n) ceiling=0 → ZERO claims"                     test ! -s "$tmp/backlog.log"
+  t "(n) ceiling=0 → ZERO spawns"                     test ! -s "$tmp/spawn.log"
+  t "(n) ceiling=0 → ZERO pages (a full queue is NOT a cliff)" test ! -d "$tmp/pages"
+  t "(n) ceiling=0 → NOT an abstention"               not grep -q '"action":"abstained"' "$tmp/idl.jsonl"
+  t "(n) summary counts the deferrals"                test "$(last '.deferred')" = 3
+
+  # (n2) POSITIVE CONTROL for every absence assertion in (n): the SAME harness, SAME fixture, only
+  # the ceiling reversed — so "no wave-plan call / no spawn / no page dir" above is a real
+  # observation and not a harness that cannot see those effects at all.
+  reset; CC_DISPATCH_CEILING=3 "$SELF" --once >/dev/null 2>&1
+  t "(n2) control: ceiling=3 → the wave-plan IS called (harness can see it)" test -f "$tmp/wave.json"
+  t "(n2) control: ceiling=3 → a spawn IS observed"    test -s "$tmp/spawn.log"
+  t "(n2) control: ceiling=3 → a claim IS observed"    grep -q '^claim ' "$tmp/backlog.log"
+  t "(n2) control: ceiling=3 → 3 admits, 0 defers"     test "$(grep -c '"verdict":"admit"' "$tmp/idl.jsonl")" -eq 3
+
+  # (o) A1's discriminating fixture — 12 items, ceiling 3: EVERY item is decided in ONE pass (the
+  # whole point of S1: decision latency is the cadence, not ⌈P/2⌉ ticks), 3 admitted and 9 deferred
+  # with their queue positions, all under a single pass id a consumer can group_by.
+  reset; seed_items "$items12"
+  seed_plan '[{"id":"i1","account":"a","fire_line":["--x"]},{"id":"i2","account":"a","fire_line":["--x"]},{"id":"i3","account":"a","fire_line":["--x"]}]'
+  CC_DISPATCH_CEILING=3 "$SELF" --once >/dev/null 2>&1
+  t "(o) 12 items → 12 decision records in ONE pass" \
+    test "$(jq -rs '[.[]|select(.action=="decision")]|length' "$tmp/idl.jsonl")" -eq 12
+  t "(o) exactly 3 admit"  test "$(grep -c '"verdict":"admit"' "$tmp/idl.jsonl")" -eq 3
+  t "(o) exactly 9 defer"  test "$(grep -c '"verdict":"defer"' "$tmp/idl.jsonl")" -eq 9
+  t "(o) the deferrals carry queue positions 4..12" \
+    test "$(jq -rs '[.[]|select(.verdict=="defer")|.position]|sort|@csv' "$tmp/idl.jsonl")" = '4,5,6,7,8,9,10,11,12'
+  t "(o) one pass id for the whole pass (group_by(.pass) == 1)" \
+    test "$(jq -rs '[.[]|select(.action=="decision")|.pass]|unique|length' "$tmp/idl.jsonl")" -eq 1
+  t "(o) every decision names its item id (no unattributed verdict)" \
+    test "$(jq -rs '[.[]|select(.action=="decision" and ((.id//"")==""))]|length' "$tmp/idl.jsonl")" -eq 0
+
+  # (p) the LIVE count is what consumes the ceiling — not a constant. 6 live against ceiling 6 ⇒ zero
+  # free slots ⇒ the fleet cap holds without any quota call, which is how exhaustion becomes
+  # unreachable (the measured 50-fires-then-12-cliffs curve cannot happen).
+  reset; seed_items "$items3"
+  STUB_LIVE=6 CC_DISPATCH_CEILING=6 "$SELF" --once >/dev/null 2>&1
+  t "(p) live=6 vs ceiling=6 → all defer at-ceiling"  test "$(grep -c '"reason":"at-ceiling"' "$tmp/idl.jsonl")" -eq 3
+  t "(p) live=6 vs ceiling=6 → ZERO spawn"            test ! -s "$tmp/spawn.log"
+  t "(p) the record carries the live count it decided on" grep -q '"live_workers":6' "$tmp/idl.jsonl"
+  reset; STUB_LIVE=5 CC_DISPATCH_CEILING=6 "$SELF" --once >/dev/null 2>&1
+  t "(p2) control: live=5 vs ceiling=6 → exactly 1 admit" test "$(grep -c '"verdict":"admit"' "$tmp/idl.jsonl")" -eq 1
+  t "(p2) control: live=5 → it DOES fire"             test -s "$tmp/spawn.log"
+
+  # (q) UNKNOWN ≠ 0 and ≠ cliff. An unparseable oracle must admit AT MOST ONE — never zero (a dead
+  # oracle would stall the queue forever) and never the full ceiling (a blind fire) — and must NOT
+  # page: reporting an unknown as a quota cliff is exactly failure mode F4.
+  reset; STUB_LIVE=x CC_DISPATCH_CEILING=6 "$SELF" --once >/dev/null 2>&1
+  t "(q) unparseable oracle → exactly 1 admit"        test "$(grep -c '"verdict":"admit"' "$tmp/idl.jsonl")" -eq 1
+  t "(q) unparseable oracle → named live-count-unknown" grep -q '"reason":"live-count-unknown"' "$tmp/idl.jsonl"
+  t "(q) unknown is recorded as null, never as 0"     grep -q '"live_workers":null' "$tmp/idl.jsonl"
+  t "(q) unknown → NO page written"                   test ! -d "$tmp/pages"
+  t "(q) unknown → NOT an abstention"                 not grep -q '"action":"abstained"' "$tmp/idl.jsonl"
+  reset; STUB_ACCT_RC=7 CC_DISPATCH_CEILING=6 "$SELF" --once >/dev/null 2>&1
+  t "(q2) oracle exit non-zero → the SAME unknown path" grep -q '"reason":"live-count-unknown"' "$tmp/idl.jsonl"
+  t "(q2) oracle exit non-zero → still admits 1 (never 0-forever)" test "$(grep -c '"verdict":"admit"' "$tmp/idl.jsonl")" -eq 1
+  reset; STUB_ACCT_SLEEP=5 CC_DISPATCH_ORACLE_TIMEOUT_S=1 CC_DISPATCH_CEILING=6 "$SELF" --once >/dev/null 2>&1
+  t "(q3) a HUNG oracle is bounded by timeout(1) → unknown, not a hung pass" \
+    grep -q '"reason":"live-count-unknown"' "$tmp/idl.jsonl"
+
+  # (r) DECIDE-ONLY — the safe activation lane: the journal is the whole product.
+  reset; seed_items "$items3"; CC_DISPATCH_CEILING=6 "$SELF" --decide >/dev/null 2>&1
+  t "(r) --decide → decisions ARE journalled (3)"     test "$(grep -c '"action":"decision"' "$tmp/idl.jsonl")" -eq 3
+  t "(r) --decide → ZERO wave-plan calls"             test ! -f "$tmp/wave.json"
+  t "(r) --decide → ZERO claims"                      test ! -s "$tmp/backlog.log"
+  t "(r) --decide → ZERO spawns"                      test ! -s "$tmp/spawn.log"
+  reset; CC_DISPATCH_DECIDE_ONLY=on CC_DISPATCH_CEILING=6 "$SELF" --once >/dev/null 2>&1
+  t "(r2) CC_DISPATCH_DECIDE_ONLY=on → same, via env"  test "$(grep -c '"action":"decision"' "$tmp/idl.jsonl")" -eq 3
+  t "(r2) CC_DISPATCH_DECIDE_ONLY=on → ZERO spawns"    test ! -s "$tmp/spawn.log"
+
+  # (s) S7 FAIR ORDERING — an item that keeps failing SINKS. With one free slot, a head item with two
+  # prior `failed` records must yield the slot to the item behind it; without this, the same broken
+  # item re-burns the only slot every pass and nothing behind it is ever decided-and-fired (F10).
+  reset; seed_items '[{"id":"i1","project":"a","status":"open","title":"t1"},{"id":"i2","project":"a","status":"open","title":"t2"}]'
+  seed_plan '[{"id":"i2","account":"a","fire_line":["--x"]}]'
+  printf '%s\n' '{"actor":"cc-dispatch","action":"failed","detail":"i1: spawn non-zero (reopened)"}' \
+                '{"actor":"cc-dispatch","action":"failed","detail":"i1: claim failed"}' >> "$tmp/idl.jsonl"
+  CC_DISPATCH_CEILING=1 "$SELF" --once >/dev/null 2>&1
+  t "(s) the thrashing head item is DEFERRED"  test "$(jq -rs '[.[]|select(.action=="decision" and .id=="i1")|.verdict]|first' "$tmp/idl.jsonl")" = defer
+  t "(s) the item behind it is ADMITTED"       test "$(jq -rs '[.[]|select(.action=="decision" and .id=="i2")|.verdict]|first' "$tmp/idl.jsonl")" = admit
+  t "(s) and it is the one that fires"         grep -qx 'claim i2' "$tmp/backlog.log"
+  reset; seed_plan '[{"id":"i1","account":"a","fire_line":["--x"]}]'
+  CC_DISPATCH_CEILING=1 "$SELF" --once >/dev/null 2>&1
+  t "(s2) control: with NO thrash history the head item wins the slot" \
+    test "$(jq -rs '[.[]|select(.action=="decision" and .id=="i1")|.verdict]|first' "$tmp/idl.jsonl")" = admit
+
+  # (t) S6 SINGLETON, pinned by pid|lstart. A LIVE holder ⇒ skip-not-queue.
+  reset; seed_items "$items3"; seed_plan '[{"id":"i1","account":"a","fire_line":["--x"]}]'
+  sleep 30 & local holder=$!
+  mkdir -p "$tmp/dispatch.lock"
+  printf '%s|%s\n' "$holder" "$(ps -o lstart= -p "$holder" 2>/dev/null)" > "$tmp/dispatch.lock/owner"
+  CC_DISPATCH_CEILING=6 "$SELF" --once >/dev/null 2>&1
+  t "(t) a live holder → the pass records pass-in-flight" grep -q '"reason":"pass-in-flight"' "$tmp/idl.jsonl"
+  t "(t) a live holder → ZERO decisions (never a second pass)" not grep -q '"action":"decision"' "$tmp/idl.jsonl"
+  t "(t) a live holder → ZERO spawns"                    test ! -s "$tmp/spawn.log"
+  # a RECYCLED pid is the case `kill -0` alone cannot see: same live pid, different start time.
+  reset; printf '%s|%s\n' "$holder" 'Mon Jan  1 00:00:00 2001' > "$tmp/dispatch.lock/owner"
+  CC_DISPATCH_CEILING=6 "$SELF" --once >/dev/null 2>&1
+  t "(t2) lstart mismatch (recycled pid) → stale, lock TAKEN, pass runs" grep -q '"action":"decision"' "$tmp/idl.jsonl"
+  t "(t2) recycled-pid holder → it fires (never wedged forever)"         test -s "$tmp/spawn.log"
+  kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null
+  # a DEAD holder is stale too — and the lock dir is released, not leaked, when the pass ends.
+  reset; mkdir -p "$tmp/dispatch.lock"
+  printf '%s|%s\n' "$holder" 'Mon Jan  1 00:00:00 2001' > "$tmp/dispatch.lock/owner"
+  CC_DISPATCH_CEILING=6 "$SELF" --once >/dev/null 2>&1
+  t "(t3) dead holder → lock broken, pass runs"      grep -q '"action":"decision"' "$tmp/idl.jsonl"
+  t "(t3) the lock is RELEASED on exit (no leak)"    test ! -d "$tmp/dispatch.lock"
+
+  # (u) config-fail is LOUD for the new switches too — a garbage ceiling must never read as 0
+  # (silently admitting nothing) or as ∞ (silently admitting everything).
+  CC_DISPATCH_CEILING=abc "$SELF" --once >/dev/null 2>&1; rc=$?
+  t "(u) non-numeric CC_DISPATCH_CEILING → exit 3"   test "$rc" -eq 3
+  CC_DISPATCH_ORACLE_TIMEOUT_S=0 "$SELF" --once >/dev/null 2>&1; rc=$?
+  t "(u) zero oracle timeout → exit 3 (unbounded is not an option)" test "$rc" -eq 3
+  CC_DISPATCH_LANE=v3 "$SELF" --once >/dev/null 2>&1; rc=$?
+  t "(u) unknown lane → exit 3"                      test "$rc" -eq 3
+
   echo "cc-dispatch selftest: $pass passed, $fail failed"
   [ "$fail" -eq 0 ] || exit 1
 }
@@ -524,17 +1007,23 @@ STUB
 command -v jq >/dev/null 2>&1 || { echo "cc-dispatch: jq is required" >&2; exit 3; }
 # flag parsing walks ALL args — `--once --dry-run` must be DRY, never a silent live pass
 # (the single-$1 case ignored trailing flags; found live 2026-07-19). Dry wins over once.
-MODE=run; WANT_SELFTEST=0; WANT_USAGE=0
+MODE=run; WANT_SELFTEST=0; WANT_USAGE=0; WANT_DRY=0; WANT_DECIDE=0
 [ $# -eq 0 ] && set -- --once
 for a in "$@"; do
   case "$a" in
     selftest)        WANT_SELFTEST=1 ;;
-    --dry-run)       MODE=dry ;;
+    --dry-run)       WANT_DRY=1 ;;
+    --decide)        WANT_DECIDE=1 ;;
     --once)          ;;
     -h|--help|help)  WANT_USAGE=1 ;;
     *) printf 'cc-dispatch: unknown arg %s\n\n' "$a" >&2; usage >&2; exit 3 ;;
   esac
 done
+# precedence is by BLAST RADIUS, not argument order (`--decide --dry-run` and `--dry-run --decide`
+# must agree): dry (writes nothing at all) > decide (journals, never actuates) > run.
+if   [ "$WANT_DRY" -eq 1 ];    then MODE=dry
+elif [ "$WANT_DECIDE" -eq 1 ] || is_on "${CC_DISPATCH_DECIDE_ONLY:-}"; then MODE=decide
+fi
 if   [ "$WANT_USAGE" -eq 1 ];    then usage
 elif [ "$WANT_SELFTEST" -eq 1 ]; then selftest
 else dispatch "$MODE"

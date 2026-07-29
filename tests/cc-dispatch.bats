@@ -30,17 +30,27 @@ EOF
 printf '%s\n' "$*" >> "$SPAWN_LOG"
 exit "$(cat "$SPAWN_RC_FILE" 2>/dev/null || echo 0)"
 EOF
-  chmod +x "$C/stubs/waveplan" "$C/stubs/spawn"
+  # live-worker oracle stub (v2 admission reads it every pass). MUST be stubbed: unstubbed,
+  # cc-dispatch resolves the operator's REAL claude-accounts, so free_slots would be computed from
+  # the live fleet and every fire assertion below would invert whenever the operator has >= CEILING
+  # sessions open — a suite whose verdict depends on what the desk happens to be doing.
+  cat > "$C/stubs/accounts" <<'EOF'
+#!/bin/bash
+printf '{"rows":[{"acct":"a","k":0}]}\n'
+EOF
+  chmod +x "$C/stubs/waveplan" "$C/stubs/spawn" "$C/stubs/accounts"
 
   echo 0 > "$C/wp_rc"; echo 0 > "$C/spawn_rc"
   export CC_BACKLOG_FILE="$C/backlog.jsonl"
   export CC_DISPATCH_BACKLOG_BIN="$BACKLOG" \
          CC_DISPATCH_WAVEPLAN_BIN="$C/stubs/waveplan" \
          CC_DISPATCH_SPAWN_BIN="$C/stubs/spawn" \
+         CC_DISPATCH_ACCOUNTS_BIN="$C/stubs/accounts" \
          CC_DISPATCH_PAGES_DIR="$C/pages" \
          CC_DISPATCH_IDL="$C/idl.jsonl" \
          CC_DISPATCH_PROJECT="/repo/proj" \
          CC_DISPATCH_MAX_SPAWN=2 \
+         CC_DISPATCH_CEILING=6 \
          CC_DISPATCH_SID="bats"
   export WP_RC_FILE="$C/wp_rc" SPAWN_RC_FILE="$C/spawn_rc" SPAWN_LOG="$C/spawn.log"
 }
@@ -51,11 +61,11 @@ add_item()   { "$BACKLOG" add --title "$1" --project proj --source bats; }   # e
 status_of()  { "$BACKLOG" list --all --json | jq -r --arg i "$1" '.[]|select(.id==$i)|.status'; }
 idl_action() { tail -1 "$C/idl.jsonl" | jq -r '.action'; }
 
-@test "selftest passes and runs all 49 checks (a zero-check suite must not 'pass')" {
+@test "selftest passes and runs all 108 checks (a zero-check suite must not 'pass')" {
   run "$DISP" selftest
   [ "$status" -eq 0 ]
   n_ok="$(printf '%s' "$output" | grep -c '^  ok ')"
-  [ "$n_ok" -eq 49 ]
+  [ "$n_ok" -eq 108 ]   # 49 pre-v2 + the decision/admission split (S1,S2,S4,S6,S7 + kill switches)
   ! printf '%s' "$output" | grep -q '^  FAIL'
 }
 
