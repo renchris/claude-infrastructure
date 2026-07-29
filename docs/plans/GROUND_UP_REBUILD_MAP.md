@@ -16,7 +16,7 @@ rebuilds must not both redesign; the row that owns it is marked.
 |---|---|---|---|---|---|
 | 1 | **Landing & deploy pipeline** — commit→trunk→live | ship-land, land-lock, postland-verify, deploy-live, host-suites.manifest, cc-blockers alarms | verifier stamps (1); deploy ff (1) | no quiet period; 12+ writers 24/7 | **DONE 2026-07-28** — LAND_PIPELINE_V2.md; 9 lands; exemplar |
 | 2 | **Session lifecycle & succession** — open/recycle/close | handoff-fire, /handoff, self-close, engagement verification, warm worktree claim | mailbox delivery (3); registry truth (4) | a watched pane must never vanish illegibly | open |
-| 3 | **Cross-session comms** — messages between peers | cc-notify, mailbox+ack cursor, .forward chains, cc-await-ping, mailbox-drain | wake path (2); desk inbox (5) | ~~delivery must survive recycles; exactly-once ack~~ **cell CONFIRMED-BUT-RENAMED — exactly-once ack was already built and sound (split `.seen`/`.acked` under mkdir lock); the binding constraint is at-least-once delivery to a LIVE READER, and the root cause is ADDRESSING (inbox keyed on pane, not session)** | **REBUILDING 2026-07-29** — [CROSS_SESSION_COMMS_V2.md](CROSS_SESSION_COMMS_V2.md) (410 ln, four load-bearing sections); design 5dd65159 · build landing continuously (99164d48 · fea9f7a8 · 2db449d0 · 9075b347 · 0688dc5e · 66a43076 · a8b3a093 "address the session, PULL from a dead predecessor"), branch 0 ahead of trunk. Row **2 is BLOCKED on this row** (strict 4→3→2) |
+| 3 | **Cross-session comms** — messages between peers | cc-notify, mailbox+ack cursor, .forward chains, cc-await-ping, mailbox-drain | wake path (2); desk inbox (5) | ~~delivery must survive recycles; exactly-once ack~~ **cell CONFIRMED-BUT-RENAMED — exactly-once ack was already built and sound (split `.seen`/`.acked` under mkdir lock); the binding constraint is at-least-once delivery to a LIVE READER, and the root cause is ADDRESSING (inbox keyed on pane, not session)** | **DONE 2026-07-29** — [CROSS_SESSION_COMMS_V2.md](CROSS_SESSION_COMMS_V2.md) (four load-bearing sections); lands: design **5dd65159** · **M1 session-keyed addressing + M4 pull-adoption a8b3a093** (20 tests, RED-proved 20/20 vs pristine; 8 existing comms suites re-run green) · strand report + 9 tests **771d5ee6** · map/learnings this commit. Predates this rebuild but on the same axis: 99164d48 · fea9f7a8 · 2db449d0 · 9075b347 · 0688dc5e · 66a43076 (2026-07-26, landed-but-undeployed). **M2 (verdict honesty) + M3 (close-path drain) are SPECIFIED, NOT BUILT** — §4 names why (M2 changes a string `cc-announce` parses; M3's call site is row 2's file). ⚠ **delivery RATE is ACCRUING, not proven**: no code this row landed reaches the running system until row 1 unblocks deploy (0 of 33 stamps green, live tree 36 behind). Row **2 unblocked** (strict 4→3→2) |
 | 4 | **Session registry & reaping** — who is alive, who gets closed | session-register, cc-reconcile, cc-reaper, cc-teardown, liveness oracles (cwd/lsof) | teardown of (2)'s panes | never reap a live operator conversation | **DONE 2026-07-29** — SESSION_REGISTRY_V2.md; landed 7db74a76 (c834b705 design · acddb319 beat+lease · 5816968a fail-closed belts · +hermeticity fix); activation 16-session-beat staged — ⚠ **ORACLE INERT UNTIL ACTIVATED: consume it FAIL-SOFT, never assume it produces** (verified 2026-07-29: `~/.claude/cc-beats` absent, `session-beat.sh` in no live settings.json, activation has no `.done`) |
 | 5 | **Autonomy dispatch & discovery** — what gets worked on | cc-dispatch, cc-backlog, cc-discover, cc-wave-plan, desk loop, launchd dispatcher/discovery | fires via (2); reads (10); consumes (7) | ~~backlog > concurrency is normal, not a cliff~~ **cell falsified — real cause was no fleet concurrency ceiling** | **DONE 2026-07-29** — [AUTONOMY_DISPATCH_V2.md](AUTONOMY_DISPATCH_V2.md); 11 lands: design 7400c614 · map bf796c57 · acceptance reader 0a8a2976+361675e8+5257d457 · activation ruling c87ca381 · seam rulings e0356664 · ceiling correction 15cc1f4f · **build: cadence 21d8e869 · verdict 6c73429f · decide f16c37ee**. Live metric ACCRUING — **C10 activation DONE 2026-07-29 (dispatcher + discovery both flipped enabled; verified by row 12's Phase-1 re-derive and by the coordinator via `launchctl print-disabled`), so the ≤5-min metric is now MEASURABLE rather than 0-by-construction. Still awaiting DEPLOY** (checkout 33 behind trunk — `cc-backlog 4e0038a19faf`) |
 | 6 | **Guardrail/hook layer** — what a session may do | 69 hook entries / 12 events, validate-bash, permission rails, Stop asserts, OVERWRITE guard | every subsystem's enforcement chokepoints | a hook failure must never block a tool by accident | open |
@@ -145,6 +145,34 @@ phantom. Status is a claim like any other (see the constraint-cell learning belo
   each new leg lowered the failure RATE without touching its MECHANISM. Generalisable probe for any
   row: compare what the actuator decides against what the proposer proposed. A high override rate is
   a staleness signature, and it is visible from logs alone before reading any code.
+- 2026-07-29 (row 3, DONE) **`launchctl` IS NOT THE ONLY WAY A LANDED MECHANISM CAN BE INERT — RUN THE
+  DEPLOY-AXIS CHECK TOO.** The daemon-activation learning above has a twin one layer out, and row 3
+  walked into it. The live `~/.claude` layer symlinks a shared checkout that was **36 commits behind
+  `origin/main`**, because **0 of 33** post-land stamps have ever been green, so `deploy-live` refuses
+  and **exits 1 silently** (damped, `scripts/deploy-live.sh:227`). So every row's landed work is inert
+  right now — including all seven comms commits of 2026-07-26 and row 4's beat oracle. Row 3's own
+  headline metric (wake path armed on **1 of 36** live panes = 2.8%) was therefore measuring a
+  mechanism that **has never executed**: `grep -c wake ~/.claude/hooks/session-continue.sh` = **0**
+  while `fea9f7a8` sits landed on trunk. **Probe, for every row: after `launchctl print-disabled`,
+  also `git -C <deployed checkout> rev-list --count HEAD..origin/main` and count green stamps.**
+  Skipping it means "measuring" a design you have never run — and then either rebuilding a mechanism
+  that was fine, or claiming a fix that cannot run. Corroborates `cc-backlog 4e0038a19faf` and memory
+  `deploy-lag-checkout-behind-origin`. Row 1 owns the fix; row 3 reported it and designed fail-soft.
+  **Corollary for the DONE bar:** "designed + landed + proven + staged" already excludes *live*, and
+  this is why — a row can do its whole job and still change nothing about the running system.
+
+- 2026-07-29 (row 3) **A DETECTOR'S NEGATIVE IS NOT DATA UNTIL IT PASSES A POSITIVE CONTROL — and the
+  cheapest control is an entity you already know is alive.** Row 3's central measurement counts
+  mailboxes whose pane is absent from a live-pane list, so a silently-broken detector marks EVERY box
+  dead. It ran `it2 --list --json` — a verb that does not exist — got empty output and **rc 0**, and
+  computed "0 live panes", which would have reported all 97 mailboxes as catastrophically stranded.
+  The control that caught it in one step: *my own pane must appear in that list.* This is the same
+  shape as memory `named-failure-vs-no-verdict` (a check whose own grep died fabricates findings) and
+  `effect-read-RED-proof`. `scripts/comms-strand-report.sh` now enforces it structurally — a list that
+  is missing, non-array, timed out, **or fails its own control** yields `verdict=unknown` and refuses
+  to print any number. Generalisable: when a metric's denominator comes from an oracle, assert a
+  known-true member of that oracle's output before believing anything it says.
+
 - 2026-07-29 (row 4) **A TEST CAN PIN A DEFECT AS CORRECT.** `tests/cc-teardown.bats` asserted that a
   missing who-oracle → close proceeds (exit 0), against a fixture carrying a REAL operator prompt —
   i.e. the fail-open that closed live operator conversations was protected by a green test. Grep your

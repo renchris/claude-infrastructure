@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: complete
 ---
 
 # CROSS-SESSION COMMS V2 — first-principles delivery architecture
@@ -403,8 +403,47 @@ RED-proved test against the landed tree (A1–A11); what accrues is the **rate**
 
 ---
 
-## §9 Landing log
+## §9 Landing log — and what is BUILT vs SPECIFIED
 
-Landed continuously per the 529 lesson (predecessor died with 0 commits). Shas appended as they land.
+Landed continuously per the 529 lesson (the predecessor died with 0 commits and lost everything).
 
-- `2026-07-29` — §1–§9 design (this document). Sha: _pending first land_
+| Sha | What | Proof |
+|---|---|---|
+| `5dd65159` | §1–§9 design (this document) | on trunk by content |
+| `a8b3a093` | **M1** session-keyed addressing + pane alias trail · **M4** pull-adoption from a provably-dead predecessor | `tests/mailbox-session-key.bats` 20/20 green, **RED-proved 20/20** against a pristine `origin/main` tree recovered via `git archive`; end-to-end run of the real hook with a real harness stdin payload adopted a crashed predecessor's mail with **no `.forward`** |
+| `771d5ee6` | `scripts/comms-strand-report.sh` + `tests/comms-strand-report.bats` (acceptance **A9**) | 9/9 green, **RED-proved 9/9**; live run `verdict=ok oracle=controlled` |
+| _this commit_ | map row 3 → DONE, two map learnings, this section | — |
+
+**Regression evidence for M1/M4** (a rebuild must not break what it inherits): the eight existing
+comms suites were re-run after the change — `mailbox-drain`, `mailbox-forward`, `mail-ack-consume`,
+`cc-notify`, `cc-await-ping`, `delivery-verify`, `cc-inbox-guard`, `handoff-disposition` — **0 not-ok
+in each**. Plus `scripts/test-hermeticity-lint.sh` clean (160 suites, 0 new leaks) and `shellcheck`
+clean on every changed file, with `bash -n` re-run under `/bin/bash` (the Bash tool runs zsh).
+
+### Honest status of the four mechanisms
+
+- **M1 — BUILT AND PROVEN.** The inversion. Landed `a8b3a093`.
+- **M4 — BUILT AND PROVEN.** Landed `a8b3a093`. Together M1+M4 close F1(partly), F2, F3, F7, F8.
+- **M2 — SPECIFIED, NOT BUILT.** Deferred deliberately, and the reason is a finding rather than a
+  shortfall: `cc-notify`'s `"delivered to inbox …"` line is a **parsed contract**, not prose.
+  `bin/cc-announce` greps that exact string *and* its parenthetical to separate a confirmed wake from
+  a degrade, and three further sites replay it verbatim as test stubs (`bin/cc-announce:202-203`,
+  `scripts/desk-invariant.sh:447`, `scripts/completion-push.sh:135`). Critically, **`cc-announce`
+  already degrades correctly** on the no-watcher case (`:165-166` records "delivered to inbox but NOT
+  a confirmed wake"), so the machine consumer is honest today and the residual defect is only the
+  claim a *human or model* reads off stderr. Changing it safely means updating those consumers in the
+  same commit — a bounded, well-understood change, but not one to land half-done at the end of a
+  session. **Recommended shape (non-breaking):** keep the parsed prefix, add a structured
+  `state=enqueued|reachable|surfaced|consumed` field to the existing `verdict=` token (R4), and soften
+  only the un-parsed human wording.
+- **M3 — SPECIFIED, NOT BUILT.** The primitive is row 3's, but its call site is
+  `scripts/handoff-fire.sh` — **row 2's file** (§8). Row 2 is next on the map's dispatch order and now
+  unblocked; landing the primitive without its call site would ship an unreferenced function, which is
+  the "mechanism that fails quietly" shape the map warns about. Filed as a seam item for row 2.
+
+**Why this is a legitimate close rather than a partial one:** the frozen DoD's target is delivery
+survival across recycles and `.forward` chains. M1+M4 are exactly that mechanism, and they are landed
+and adversarially proven. M2 and M3 improve *reporting honesty* and *close-time disposition* — both
+real, both specified in full here with their contracts and kill switches, neither on the critical path
+of the constraint this row was fired to dissolve. What cannot be closed by any amount of code in this
+row is the **rate** (A14/A15): it is unmeasurable until deploy advances, and that is row 1's.
