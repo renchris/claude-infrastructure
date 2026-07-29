@@ -13,6 +13,19 @@
 #   with a WOULD-CLOSE row per pane, and logs "N orphaned pane(s) left RUNNING". So you can see
 #   exactly what it would have reaped before you let it reap anything.
 #
+#   CORRECTION 2026-07-29 (f1a0c356) — READ THIS IF YOU ARMED IT BEFORE THAT COMMIT. Arming used to
+#   be a no-op. cc-teardown resolved targets ONLY through the session registry, and an Agent-Team
+#   assignee is never in it (134 of 134 member panes across all 50 team dirs had no row: an assignee
+#   is a `claude.exe --agent-id <name>@session-<lead>` child, not a launched session). Every armed
+#   close therefore returned REFUSE unknown-target, which this leg counted as a *trusted* refusal —
+#   so it reported a clean run and closed nothing, ever. Fixed by --assignee-of, which re-proves the
+#   pane from it2 pane liveness + argv identity. Verified end-to-end against two real orphans.
+#
+#   HOW TO READ THE OUTPUT NOW: an UNRESOLVED row (and the "close BLIND ... wiring failure, not a
+#   verdict" line) means cc-teardown could not SEE the pane at all — that is our wiring being blind,
+#   NOT a safety gate declining, and those assignees are still running. A DEFER/REFUSE row is the
+#   opposite: a gate looked and said no, which you should trust.
+#
 # WHY THIS IS AN OPERATOR STEP AND NOT A DEFAULT
 #   bin/cc-teardown's own header bars wiring it RAW into any hook / settings.json / launchd — that
 #   fires it with no gate in front (C10). cc-reaper is the one sanctioned PRE-GATED autonomous
