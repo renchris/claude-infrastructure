@@ -3,6 +3,8 @@
 # Auto-detects active task list (UUID or named) and generates TASKS.md.
 
 # shellcheck source=lib/task-helpers.sh
+# shellcheck disable=SC1091  # ship-land's gate runs shellcheck without -x, so the sourced
+# helper cannot be followed statically; TASKS_DIR/TASKS_INDEX come from it, not a misspelling.
 . "$(dirname "$0")/lib/task-helpers.sh"
 
 TASK_LIST_ID="${CLAUDE_CODE_TASK_LIST_ID:-}"
