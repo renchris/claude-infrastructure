@@ -262,14 +262,26 @@ send nothing to any assignee.**
 *"Waiting for team lead approval"* — a permission request routed to a lead process that cannot
 answer, with **no fallback to the operator**: no prompt was ever rendered, so the pane looks like
 it is waiting on the human while the human has nothing to click. Worse, the mechanism built for
-this is inert rather than missing: `hooks/cc-permission-beacon.sh` is landed (`b7db06c5`) and wired
-in `~/.claude/settings.json`, yet `/tmp/cc-permission-pending/` **has never been created** and
-`cc-blockers` reported *"no safeguard-blocked sessions surfaced"* while the teammate was
-demonstrably blocked. A teammate's approval traverses the team channel to the lead and never
-presents as a session-local hook event, so the beacon abstains ~100% by construction. Filed
+this is inert rather than missing: `hooks/cc-permission-beacon.sh` is landed (`b7db06c5`), yet
+`/tmp/cc-permission-pending/` **has never been created** and `cc-blockers` reported *"no
+safeguard-blocked sessions surfaced"* while the teammate was demonstrably blocked. Filed
 `cc-backlog 1e16815bac51` with both required fixes (fail OPEN to the operator when the approver
 process is not alive; give the beacon existence evidence so "none pending" is distinguishable from
 "never ran"). Siblings: `95281da714f0`, `93a9f880b6fe`.
+
+**CORRECTION (2026-07-29, while fixing 1e16815bac51 — two claims above were wrong).**
+(1) *"wired in `~/.claude/settings.json`"* is **false**: the beacon was registered in **ZERO** of the
+five config dirs (`grep -c cc-permission-beacon.sh` = 0 in each, re-verified). `docs/PART-B2-…§1`
+always said so — the registration is an operator C10 hand-step that was **never run**. (2) The
+mechanism theory — *"a teammate's approval traverses the team channel and never presents as a
+session-local hook event, so the beacon abstains by construction"* — is therefore **unproven and
+untestable as stated**: a hook registered on no event cannot abstain on a *particular* event,
+because it is never invoked for **any** tool in **any** session. The first-order cause was simply
+that nothing called it. Recorded because the wrong diagnosis is the expensive one: it points at a
+harness limitation nobody can fix, when the actual fix was one un-run activation script.
+**Both alarms are now live in `cc-blockers` (`orphaned-approver`, `beacon-inert`), and both were
+RED-proved against this very incident** — the five `gu5-*` assignees were still running at fix time
+and the detector named all five. Wiring: `pending-activation/17-permission-beacon-wire-activate.sh`.
 
 **Nothing was lost.** Every assignee's output was already committed in its own worktree
 (`gu5-decide` `5a7eb60c`, `gu5-cadence` `21d8e869`, `gu5-verdict` ×2) and worktrees survive session

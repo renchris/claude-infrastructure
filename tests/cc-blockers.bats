@@ -28,6 +28,20 @@ setup() {
   export CC_POSTLAND_DIR="$D/postland"; mkdir -p "$CC_POSTLAND_DIR/stamps"
   export CC_LAND_LOG="$D/absent-land.log"
   export DEPLOY_REPO="$D/absent-repo"
+  # ── APPROVAL-reachability sensors (cc-backlog 1e16815bac51) ──
+  # Same law as the land-pipeline sensors above, and the same lesson re-learned: these default to
+  # $HOME and to the LIVE PROCESS TABLE, so unfixtured they inject phantom rows into every test in
+  # this file — measured, 8 went red the moment the alarms landed, on this machine's real orphaned
+  # assignees and its genuinely-unwired beacon. Baseline chosen deterministically SILENT: a hook path
+  # that does not exist (beacon-inert has no premise) and a team root that does not exist (ps still
+  # sees this machine's real agents, but none of them can resolve a config here, so orphaned-approver
+  # abstains). Each alarm is then switched ON deliberately, one test at a time, below.
+  export CC_BEACON_HOOK="$D/absent-hook.sh"
+  export CC_BEACON_CONFIG_DIRS="$D/cfg-void"
+  export CC_BEACON_ACTIVATE_SH="$D/activate.sh"
+  export CC_PERMPEND_DIR="$D/permpend"
+  export CC_TEAM_ROOTS="$D/absent-teams"
+  export CC_WATCHDOG_DIR="$D/watchdog"; mkdir -p "$CC_WATCHDOG_DIR"
   sg() { # <ts> <pane> <name> <model> <refusal> <recover_cmd> — append a safeguard-blocked row
     jq -nc --arg ts "$1" --arg p "$2" --arg n "$3" --arg m "$4" --arg r "$5" --arg cmd "$6" \
       '{ts:$ts,actor:"cc-reaper",kind:"safeguard-blocked",pane:$p,name:$n,account:"claude-quaternary",blocked_model:$m,refusal:$r,firedBy:"ORIG",recover_cmd:$cmd}' >> "$BOARD"; }
@@ -229,4 +243,220 @@ kinds() { ccb --json | jq -r '.[].kind' | sort | tr '\n' ' '; }
   run ccb --json
   [ "$(echo "$output" | jq 'length')" = 2 ]
   [ "$(echo "$output" | jq -r '[.[].kind]|sort|join(",")')" = "safeguard-blocked,verifier-inert" ]
+}
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# APPROVAL-REACHABILITY alarms (cc-backlog 1e16815bac51)
+#
+# THE INCIDENT these pin: a lead process died, its five assignees survived, and @gu5-decide parked on
+# "Waiting for team lead approval" — an approval routed to a process that cannot answer, with no
+# fallback to the operator and no prompt ever rendered. Meanwhile the one mechanism built to see it
+# (hooks/cc-permission-beacon.sh) was registered in ZERO settings.json, so `cc-blockers` reported
+# all-clear. Both halves are pinned here: the live stuck process, and the blind observer.
+#
+# These tests spawn REAL processes rather than stubbing ps, because the predicate under test IS a
+# process-table fact (relative process AGE) and a stub would let it pass while the real comparison
+# was wrong. `sh -c 'sleep N' --agent-id <id>` reproduces an assignee's argv shape faithfully: the
+# trailing words land in the shell's own argv exactly as the harness's --agent-id does.
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+
+teardown() {
+  [ -f "$D/pids" ] || return 0
+  while read -r p; do [ -n "$p" ] && kill "$p" 2>/dev/null; done < "$D/pids"
+  return 0
+}
+
+spawn_agent() { # <agentId> → pid of a live process whose argv carries --agent-id <agentId>
+  # `; :` IS LOAD-BEARING — do not "simplify" it away. With a single simple command, sh EXECs it
+  # instead of forking, so the process becomes a bare `sleep 60` and the --agent-id words vanish from
+  # argv entirely. The fixture then spawns nothing the detector can see and every positive test fails
+  # while the detector is fine. Caught exactly that way; the compound command defeats the exec.
+  # >/dev/null IS ALSO LOAD-BEARING: this helper is called as `lead=$(spawn_agent ...)`, and a
+  # background job that inherits the command substitution's stdout holds that pipe OPEN — `$( )`
+  # then blocks for the full 60s instead of returning the pid. Redirecting releases it immediately.
+  /bin/sh -c 'sleep 60; :' --agent-id "$1" >/dev/null 2>&1 &
+  local p=$!
+  echo "$p" >> "$D/pids"
+  printf '%s' "$p"
+}
+
+team_cfg() { # <team> <leadSessionId> — the only field the alarm reads from team state
+  mkdir -p "$CC_TEAM_ROOTS/$1"
+  jq -nc --arg s "$2" '{leadSessionId:$s}' > "$CC_TEAM_ROOTS/$1/config.json"
+}
+
+dead_pid() { # a pid that is provably NOT running (spawned, reaped, then waited on)
+  /bin/sh -c 'exit 0' & local p=$!; wait "$p" 2>/dev/null; printf '%s' "$p"
+}
+
+orphan_rows() { echo "$output" | jq '[.[] | select(.kind=="orphaned-approver")]'; }
+beacon_rows() { echo "$output" | jq '[.[] | select(.kind=="beacon-inert")]'; }
+
+# ── orphaned-approver ────────────────────────────────────────────────────────────────────────────
+
+@test "orphaned-approver LEAD-DEAD: a live assignee whose lead process is gone" {
+  spawn_agent "gu5-decide@session-T1" >/dev/null
+  spawn_agent "gu5-cadence@session-T1" >/dev/null
+  team_cfg session-T1 lead-sid-1
+  dead_pid > "$CC_WATCHDOG_DIR/lead-sid-1.pid"
+  run ccb --json
+  [ "$status" -eq 0 ]
+  [ "$(orphan_rows | jq 'length')" = 1 ]
+  [ "$(orphan_rows | jq -r '.[0].state')" = "LEAD-DEAD" ]
+  [ "$(orphan_rows | jq -r '.[0].orphans | split(",") | sort | join(",")')" = "gu5-cadence,gu5-decide" ]
+  [ "$(orphan_rows | jq -r '.[0].lead_session')" = "lead-sid-1" ]
+}
+
+@test "orphaned-approver LEAD-DEAD also when the lead pidfile never existed at all" {
+  spawn_agent "a1@session-T2" >/dev/null
+  team_cfg session-T2 lead-sid-2          # no $CC_WATCHDOG_DIR/lead-sid-2.pid written
+  run ccb --json
+  [ "$(orphan_rows | jq 'length')" = 1 ]
+  [ "$(orphan_rows | jq -r '.[0].state')" = "LEAD-DEAD" ]
+}
+
+@test "orphaned-approver LEAD-RESTARTED: lead pid ALIVE but assignees OLDER than it" {
+  # THE REGRESSION THIS EXISTS FOR. The motivating incident had a LIVE lead pid (the pane had already
+  # been resumed), so "is the lead alive" answers YES and false-negatives the whole thing. A resume
+  # restores the session, never the team channel: the assignees are bound to the process that died.
+  spawn_agent "gu5-decide@session-T3" >/dev/null   # assignee first...
+  sleep 3                                          # ...so it is measurably OLDER than the "lead"
+  local lead; lead=$(spawn_agent "team-lead@session-T3")
+  echo "$lead" > "$CC_WATCHDOG_DIR/lead-sid-3.pid"
+  team_cfg session-T3 lead-sid-3
+  export CC_ORPHAN_GRACE_S=0                       # grace absorbs ps's 1s granularity, not the 3s gap
+  run ccb --json
+  [ "$(orphan_rows | jq 'length')" = 1 ]
+  [ "$(orphan_rows | jq -r '.[0].state')" = "LEAD-RESTARTED" ]
+  [ "$(orphan_rows | jq -r '.[0].orphans')" = "gu5-decide" ]
+}
+
+@test "orphaned-approver is SILENT on a healthy team (assignee spawned BY a live lead is younger)" {
+  local lead; lead=$(spawn_agent "team-lead@session-T4")   # lead first, as a real lead does
+  sleep 2
+  spawn_agent "worker@session-T4" >/dev/null               # then its assignee
+  echo "$lead" > "$CC_WATCHDOG_DIR/lead-sid-4.pid"
+  team_cfg session-T4 lead-sid-4
+  export CC_ORPHAN_GRACE_S=0
+  run ccb --json
+  [ "$(orphan_rows | jq 'length')" = 0 ]
+}
+
+@test "orphaned-approver EXISTENCE EVIDENCE: a dead lead with NO live assignee raises nothing" {
+  team_cfg session-T5 lead-sid-5
+  dead_pid > "$CC_WATCHDOG_DIR/lead-sid-5.pid"
+  run ccb --json                              # team state exists, lead is dead, but nobody is waiting
+  [ "$(orphan_rows | jq 'length')" = 0 ]
+}
+
+@test "orphaned-approver abstains when a live agent has no resolvable team config" {
+  spawn_agent "stray@session-T6" >/dev/null   # live, but $CC_TEAM_ROOTS/session-T6 does not exist
+  run ccb --json
+  [ "$(orphan_rows | jq 'length')" = 0 ]
+}
+
+@test "orphaned-approver never counts the lead's own sentinel as an orphan" {
+  spawn_agent "team-lead@session-T7" >/dev/null    # the ONLY live agent for this team
+  team_cfg session-T7 lead-sid-7
+  dead_pid > "$CC_WATCHDOG_DIR/lead-sid-7.pid"
+  run ccb --json
+  [ "$(orphan_rows | jq 'length')" = 0 ]
+}
+
+@test "orphaned-approver matches the team suffix EXACTLY (no prefix bleed between teams)" {
+  spawn_agent "w1@session-T8X" >/dev/null     # session-T8X must not satisfy team session-T8
+  team_cfg session-T8 lead-sid-8
+  dead_pid > "$CC_WATCHDOG_DIR/lead-sid-8.pid"
+  run ccb --json
+  [ "$(orphan_rows | jq 'length')" = 0 ]
+}
+
+@test "orphaned-approver hands over a runnable INVENTORY command naming the team" {
+  spawn_agent "a@session-T9" >/dev/null
+  team_cfg session-T9 lead-sid-9
+  dead_pid > "$CC_WATCHDOG_DIR/lead-sid-9.pid"
+  run ccb --json
+  echo "$(orphan_rows | jq -r '.[0].recover_cmd')" | grep -q '@session-T9'
+  # and the table renders it verbatim — a paraphrased command is not a silver platter
+  run ccb
+  echo "$output" | grep -q 'APPROVAL'
+  echo "$output" | grep -q "ps -axo pid=,tty=,command="
+}
+
+# ── beacon-inert ─────────────────────────────────────────────────────────────────────────────────
+
+wire_cfg() { # <dir> <wired:0|1> — a settings.json that does or does not register the beacon
+  mkdir -p "$1"
+  if [ "$2" = 1 ]; then
+    jq -nc '{hooks:{PermissionRequest:[{matcher:"",hooks:[{type:"command",command:"~/.claude/hooks/cc-permission-beacon.sh write"}]}]}}' > "$1/settings.json"
+  else
+    jq -nc '{hooks:{PostToolUse:[{matcher:"",hooks:[{type:"command",command:"~/.claude/hooks/other.sh"}]}]}}' > "$1/settings.json"
+  fi
+}
+
+@test "beacon-inert NOT-WIRED: the hook is deployed but registered in no settings.json" {
+  : > "$CC_BEACON_HOOK"                       # deployed ⇒ the premise holds
+  wire_cfg "$D/cfg-void" 0
+  run ccb --json
+  [ "$status" -eq 0 ]
+  [ "$(beacon_rows | jq 'length')" = 1 ]
+  [ "$(beacon_rows | jq -r '.[0].state')" = "NOT-WIRED" ]
+  [ "$(beacon_rows | jq -r '.[0].recover_cmd')" = "CONFIRM=1 bash $CC_BEACON_ACTIVATE_SH" ]
+}
+
+@test "beacon-inert NOT-WIRED is TERMINAL — it never also emits NEVER-FIRED" {
+  : > "$CC_BEACON_HOOK"
+  wire_cfg "$D/cfg-void" 0                    # unwired AND no beacon dir: both conditions true
+  run ccb --json
+  [ "$(beacon_rows | jq 'length')" = 1 ]      # exactly one row, not two
+}
+
+@test "beacon-inert NEVER-FIRED: wired, yet the beacon dir has never existed" {
+  : > "$CC_BEACON_HOOK"
+  wire_cfg "$D/cfg-void" 1
+  run ccb --json
+  [ "$(beacon_rows | jq 'length')" = 1 ]
+  [ "$(beacon_rows | jq -r '.[0].state')" = "NEVER-FIRED" ]
+}
+
+@test "beacon-inert SILENT once the heartbeat dir exists — the positive control that closes the gap" {
+  # The whole point: an EMPTY beacon dir must read as 'nothing pending', NOT as 'never ran'. Before
+  # the heartbeat, absence was the only observation available and the two were indistinguishable.
+  : > "$CC_BEACON_HOOK"
+  wire_cfg "$D/cfg-void" 1
+  mkdir -p "$CC_PERMPEND_DIR"                 # dir exists, EMPTY — no pending prompt
+  run ccb --json
+  [ "$(beacon_rows | jq 'length')" = 0 ]
+}
+
+@test "beacon-inert has NO premise where the hook is not deployed (a host that never had it)" {
+  wire_cfg "$D/cfg-void" 0                    # settings exist, but $CC_BEACON_HOOK does not
+  run ccb --json
+  [ "$(beacon_rows | jq 'length')" = 0 ]
+}
+
+@test "beacon-inert has NO premise in a settings-less void (the phantom-row law)" {
+  : > "$CC_BEACON_HOOK"                       # hook deployed, but no settings.json anywhere
+  run ccb --json
+  [ "$(beacon_rows | jq 'length')" = 0 ]
+}
+
+@test "beacon-inert is wired-if-ANY dir registers it (one armed account is armed)" {
+  : > "$CC_BEACON_HOOK"
+  wire_cfg "$D/c1" 0; wire_cfg "$D/c2" 1
+  export CC_BEACON_CONFIG_DIRS="$D/c1 $D/c2"
+  mkdir -p "$CC_PERMPEND_DIR"
+  run ccb --json
+  [ "$(beacon_rows | jq 'length')" = 0 ]
+}
+
+@test "both APPROVAL kinds ride the same --json array and render under one heading" {
+  : > "$CC_BEACON_HOOK"; wire_cfg "$D/cfg-void" 0
+  spawn_agent "a@session-TA" >/dev/null
+  team_cfg session-TA lead-sid-a
+  dead_pid > "$CC_WATCHDOG_DIR/lead-sid-a.pid"
+  run ccb --json
+  [ "$(echo "$output" | jq -r '[.[].kind]|sort|unique|join(",")')" = "beacon-inert,orphaned-approver" ]
+  run ccb
+  [ "$(echo "$output" | grep -c '^APPROVAL')" = 1 ]
 }

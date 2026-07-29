@@ -46,7 +46,10 @@ dir_empty() { [ -z "$(ls -A "$CC_PERMPEND_DIR" 2>/dev/null)" ]; }
   printf '%s' "$(payload s-re 'first')"  | "$H" write
   printf '%s' "$(payload s-re 'second')" | "$H" write
   [ "$(jq -r '.tool_input.command' "$(beacon s-re)")" = second ]
-  [ "$(ls -A "$CC_PERMPEND_DIR")" = "s-re.json" ]          # no leftover .s-re.XXXXXX temp
+  # The invariant is "no leftover .s-re.XXXXXX temp", not "exactly one file": the heartbeat
+  # (.beacon-alive, see the existence-evidence tests below) is an EXPECTED second entry, so the
+  # heartbeat is filtered out rather than the temp-leak check being weakened.
+  [ "$(ls -A "$CC_PERMPEND_DIR" | grep -v '^\.beacon-alive$' | tr '\n' ' ')" = "s-re.json " ]
 }
 
 # ── CLEAR — resolution removes the beacon; absent is a no-op ──────────────────────────────────────
@@ -103,4 +106,58 @@ dir_empty() { [ -z "$(ls -A "$CC_PERMPEND_DIR" 2>/dev/null)" ]; }
   [ ! -f "$(beacon s-bogus)" ]
   printf '%s' "$(payload s-bogus x)" | "$H"
   [ ! -f "$(beacon s-bogus)" ]
+}
+
+# ── EXISTENCE EVIDENCE / heartbeat (cc-backlog 1e16815bac51) ─────────────────────────────────────
+# WHY THESE EXIST: this hook shipped landed-but-registered-nowhere, so CC_PERMPEND_DIR was never
+# created and "no pending approvals" was indistinguishable from "the hook has never fired once".
+# A teammate sat blocked on an approval its dead lead could never answer while the board reported
+# all-clear. The heartbeat makes the observer's own liveness observable, so absence stops being
+# ambiguous: dir ABSENT ⇒ never ran; dir present with no <sid>.json ⇒ genuinely nothing pending.
+heartbeat() { printf '%s/.beacon-alive' "$CC_PERMPEND_DIR"; }
+
+@test "heartbeat: clear STAMPS existence evidence even with nothing pending" {
+  [ ! -d "$CC_PERMPEND_DIR" ]                       # precondition: the observer has never run
+  printf '%s' "$(payload s-hb1 x)" | "$H" clear     # a clear is the common case — no prompt pending
+  [ -d "$CC_PERMPEND_DIR" ]
+  [ -f "$(heartbeat)" ]
+  [ ! -f "$(beacon s-hb1)" ]                        # ...and it did NOT invent a pending beacon
+}
+
+@test "heartbeat: write stamps it too" {
+  printf '%s' "$(payload s-hb2 'git reset --hard')" | "$H" write
+  [ -f "$(heartbeat)" ]
+  [ -f "$(beacon s-hb2)" ]
+}
+
+@test "heartbeat SURVIVES the clear that removes the beacon (the two are independent)" {
+  # The load-bearing pair: after a full write→clear cycle the dir is EMPTY OF BEACONS but still
+  # proves the hook ran. Before this, that same state was byte-identical to 'never wired'.
+  printf '%s' "$(payload s-hb3 x)" | "$H" write
+  printf '%s' "$(payload s-hb3 x)" | "$H" clear
+  [ ! -f "$(beacon s-hb3)" ]
+  [ -f "$(heartbeat)" ]
+}
+
+@test "heartbeat is INVISIBLE to the supervisor's beacon glob (dotfile, no .json suffix)" {
+  # lead-supervisor.sh sweeps "$dir"/*.json. A heartbeat that matched would be read as a beacon with
+  # ts=0, age>=horizon, and get reaped every sweep — or worse, paged as a phantom pending prompt.
+  printf '%s' "$(payload s-hb4 x)" | "$H" clear
+  [ -f "$(heartbeat)" ]
+  found=0
+  for f in "$CC_PERMPEND_DIR"/*.json; do [ -e "$f" ] && found=$((found + 1)); done
+  [ "$found" -eq 0 ]
+}
+
+@test "heartbeat is NOT stamped when the hook fail-opens (no sid ⇒ nothing ran to attest)" {
+  # A heartbeat written on a payload the hook rejected would be a FALSE positive control: it would
+  # claim the observer is working on exactly the inputs it could not read.
+  printf '%s' '{"no":"sid"}' | "$H" write
+  [ ! -f "$(heartbeat)" ]
+  dir_empty
+}
+
+@test "heartbeat is NOT stamped when the kill switch is set (disabled means disabled)" {
+  printf '%s' "$(payload s-hb5 x)" | CC_PERMISSION_BEACON_DISABLED=1 "$H" clear
+  [ ! -f "$(heartbeat)" ]
 }

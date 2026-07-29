@@ -41,6 +41,21 @@
 # running; without that gate this fires in every fixtured $HOME void and on every machine that never
 # had the spine. It exists because both labels sat disabled for ~3 days, with no log files and no
 # decision records, and nothing said so.
+# ALSO renders two APPROVAL-REACHABILITY alarms (cc-backlog 1e16815bac51), same law again — both
+# answer "can an approval request actually REACH an approver?", which the board could not ask before:
+#   kind=="orphaned-approver"  LEAD-DEAD (the team's lead process is gone) or LEAD-RESTARTED (a live
+#                              lead, but assignees OLDER than it — a resume restores the session and
+#                              never the team channel), with >=1 LIVE assignee still running. Such an
+#                              assignee's approval request routes to a process that cannot answer and
+#                              waits FOREVER with no prompt ever rendered; this is the fail-OPEN to
+#                              the operator. Predicate is process AGE, not lead liveness — see the
+#                              function, where "is the lead alive" false-negatives the real incident.
+#   kind=="beacon-inert"       NOT-WIRED (hooks/cc-permission-beacon.sh is registered in NO
+#                              settings.json — an un-run C10 hand-step) or NEVER-FIRED (wired, yet
+#                              the beacon dir has never existed). Without it an EMPTY beacon dir and
+#                              a beacon that never ran are the same observation and the board reports
+#                              all-clear for both — which is exactly what it did while a teammate sat
+#                              blocked. NOT-WIRED is terminal for NEVER-FIRED.
 # --json emits ONE array carrying all kinds (each row keeps its .kind), alarms first.
 set -uo pipefail
 
@@ -68,10 +83,23 @@ DISPATCH_LOG="${CC_DISPATCH_LOG:-/tmp/claude-dispatcher.stderr.log}"
 # scripts/deploy-live.sh:223, which also names the repo path.
 DISPATCH_ACTIVATE_SH="${CC_DISPATCH_ACTIVATE_SH:-$DEPLOY_REPO/docs/activation/pending-activation/02-load-dispatcher-activate.sh}"
 LAUNCHCTL_BIN="${CC_BLOCKERS_LAUNCHCTL_BIN:-/bin/launchctl}"   # READ-ONLY subcommands only
+# ── APPROVAL-REACHABILITY sensors (cc-backlog 1e16815bac51) ──────────────────────────────────────
+# Every path here is a SEAM, and that is not decoration: without them these two alarms would read
+# the operator's live settings/teams/process table from inside the suite, and the verdict would flip
+# by machine (memory hermetic-suite-leaks-caller-identity).
+PERMPEND_DIR="${CC_PERMPEND_DIR:-/tmp/cc-permission-pending}"   # MUST match hooks/cc-permission-beacon.sh + lead-supervisor.sh
+BEACON_HOOK="${CC_BEACON_HOOK:-$HOME/.claude/hooks/cc-permission-beacon.sh}"
+BEACON_CONFIG_DIRS="${CC_BEACON_CONFIG_DIRS:-$HOME/.claude $HOME/.claude-secondary $HOME/.claude-next $HOME/.claude-tertiary $HOME/.claude-quaternary}"
+BEACON_ACTIVATE_SH="${CC_BEACON_ACTIVATE_SH:-$DEPLOY_REPO/docs/activation/pending-activation/17-permission-beacon-wire-activate.sh}"
+TEAM_ROOTS="${CC_TEAM_ROOTS:-$HOME/.claude/teams $HOME/.claude-secondary/teams $HOME/.claude-tertiary/teams}"
+WATCHDOG_DIR="${CC_WATCHDOG_DIR:-$HOME/.claude/watchdog}"
+# Absorbs ps's 1-second etime granularity. Biased so the ONLY thing a wrong grace can do is stay
+# quiet: a healthy assignee is spawned AFTER its lead, so its elapsed time is strictly SMALLER.
+ORPHAN_GRACE_S="${CC_ORPHAN_GRACE_S:-5}"
 JSON=0
 case "${1:-}" in
   --json)   JSON=1 ;;
-  -h|--help) sed -n '2,44p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  -h|--help) sed -n '2,59p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
   "")       ;;
   *)        echo "cc-blockers: unknown arg $1 (usage: cc-blockers [--json])" >&2; exit 2 ;;
 esac
@@ -238,7 +266,190 @@ dispatch_alarm_rows() { # → one JSON object per line (possibly none)
     "$(hrs "$((now - newest))")" "$DISPATCH_LABEL" "$DISPATCH_LOG" "$DISPATCH_LABEL" "$now"
 }
 
-ALARMS_JSON="$({ alarm_rows; dispatch_alarm_rows; } 2>/dev/null | jq -s '.' 2>/dev/null || true)"
+# ── APPROVAL-REACHABILITY alarms (cc-backlog 1e16815bac51) ───────────────────────────────────────
+# Same law as the two families above — NOT-x-is-terminal, fail-OPEN on sensor failure, ASCII-only
+# 44-byte DETAIL — and deliberately the same idiom rather than a new one. Both answer ONE question
+# the board could not previously ask: can an approval request actually REACH an approver?
+#
+# THE INCIDENT (2026-07-29, ground-up row 5). A lead process died; its five assignees survived.
+# `@gu5-decide` then parked on "Waiting for team lead approval" — a permission request routed to a
+# process that no longer exists, with NO fallback to the operator. No prompt was ever rendered, so
+# the pane looked like it was waiting on the human while the human had nothing to click, and it
+# would have waited forever. The mechanism built for this (hooks/cc-permission-beacon.sh, landed
+# b7db06c5) was INERT rather than missing: registered in ZERO settings.json, so it had never fired
+# once. These two alarms are the two halves of that failure, and they are separate kinds because
+# they have different owners: one is a live stuck process, the other is an un-run wiring step.
+
+# etime_secs "[[dd-]hh:]mm:ss" → seconds. Empty (no verdict) on anything unparseable.
+# `10#` on every field is load-bearing, NOT style: ps zero-pads, and bash reads a bare `08`/`09` as
+# INVALID OCTAL — an arithmetic error at exactly 8 and 9 minutes/seconds past, i.e. an alarm that
+# silently drops ~3% of the clock. Defined at top level so its `case` is parsed OUTSIDE any command
+# substitution (memory bash32-case-in-substitution: bash 3.2 mis-parses a case pattern's `)` as the
+# closing paren of a `$( )`, dying at RUNTIME while `bash -n` and shellcheck both pass).
+etime_secs() {
+  local e="${1:-}" d=0 hms h=0 m=0 s=0 n oldifs
+  [ -n "$e" ] || return 0
+  hms="${e#*-}"; [ "$hms" != "$e" ] && d="${e%%-*}"
+  oldifs="$IFS"; IFS=:
+  # shellcheck disable=SC2086  # the word split IS the parse: IFS=: turns "hh:mm:ss" into $1/$2/$3.
+  # (Directive must sit on its OWN line above the `set` — on a `a; b; set -- $x` one-liner it binds
+  # to the FIRST command and shellcheck still reports the third.)
+  set -- $hms
+  IFS="$oldifs"; n=$#
+  if   [ "$n" -eq 3 ]; then h="$1"; m="$2"; s="$3"
+  elif [ "$n" -eq 2 ]; then m="$1"; s="$2"
+  else return 0
+  fi
+  case "$d:$h:$m:$s" in *[!0-9:]*|*::*) return 0 ;; esac
+  printf '%s' "$(( 10#$d * 86400 + 10#$h * 3600 + 10#$m * 60 + 10#$s ))"
+}
+
+# (d) ORPHANED-APPROVER — a LIVE assignee whose approver cannot answer. This is the fail-OPEN half:
+# a request whose approver cannot exist must never be a silent infinite wait, so it becomes an
+# operator-visible row here instead of a pane parked forever.
+#
+# THE PREDICATE IS NOT "is the lead alive". That is the trap this alarm exists to avoid, and it
+# false-negatives the very incident it was built for: the lead had ALREADY been resumed, so its pid
+# was alive and healthy — but a resume restores the SESSION, never the TEAM CHANNEL. The assignees
+# are bound to the PROCESS that spawned them, and the resumed lead's own words were "No agent named
+# 'gu5-decide' is reachable." Measured on the live incident: lead pid 39471 elapsed 27:46, its five
+# assignees elapsed 1:14-1:31 — every assignee had been running an HOUR longer than the "lead" they
+# report to. So the predicate is PROCESS AGE: a healthy assignee is spawned BY its lead and is
+# therefore strictly YOUNGER; an assignee OLDER than the live lead process belongs to a dead
+# incarnation and its approvals go nowhere. Both times come from one ps snapshot — same clock, same
+# source, same granularity — which is why this compares elapsed times and not file birth times.
+#
+# EXISTENCE EVIDENCE: a row needs >=1 LIVE assignee process. No live process ⇒ nothing is waiting ⇒
+# no row, so an archived or finished team can never raise one (memory
+# absence-alarm-needs-existence-evidence).
+orphan_approver_rows() { # → one JSON object per line (possibly none)
+  local now snap live teams team root cfg team_dir lead_sid lead_pid lead_e
+  local name agent_id etime mem_e state orphans n cmd
+  now="$(date +%s 2>/dev/null || true)"
+  case "${now:-}" in ''|*[!0-9]*) return 0 ;; esac
+
+  # EXISTENCE EVIDENCE FIRST — and here it also drives the whole loop, which is both the correct
+  # premise and the only affordable shape. The alarm's premise is a LIVE assignee process that is
+  # waiting, so enumerating TEAM DIRS would be backwards: this host carries 80 of them, nearly all
+  # long finished, and each would cost a jq on every cc-blockers run. Driving from the process table
+  # visits only teams that still have something alive (measured: 1, not 80).
+  # ONE ps + ONE awk yields every live agent as "<pid> <etime> <agentId>"; liveness and age then come
+  # from the SAME instant, so a process cannot die between its own two reads.
+  snap="$(ps -axo pid=,etime=,command= 2>/dev/null)" || return 0
+  [ -n "$snap" ] || return 0                                          # no sensor ⇒ no verdict
+  live="$(printf '%s\n' "$snap" | awk \
+    '{ for (i = 3; i <= NF; i++) if ($i == "--agent-id" && (i + 1) <= NF) { print $1 " " $2 " " $(i + 1); break } }')"
+  [ -n "$live" ] || return 0                                          # no agent alive ⇒ nothing waiting
+
+  # Distinct team suffixes ("<name>@<team>"), deduped fork-free. Each $team is QUOTED in the case
+  # patterns so it matches literally — an unquoted pattern would let a metacharacter in a team name
+  # glob-match a different team.
+  teams=""
+  while read -r _ _ agent_id; do
+    [ -n "$agent_id" ] || continue
+    team="${agent_id#*@}"
+    { [ -n "$team" ] && [ "$team" != "$agent_id" ]; } || continue     # no '@' ⇒ not a team agent id
+    case " $teams " in *" $team "*) ;; *) teams="${teams:+$teams }$team" ;; esac
+  done <<EOF
+$live
+EOF
+  [ -n "$teams" ] || return 0
+
+  for team in $teams; do
+    # Direct path, never a glob: the team suffix IS the directory name.
+    cfg=""; team_dir=""
+    for root in $TEAM_ROOTS; do
+      if [ -f "$root/$team/config.json" ]; then team_dir="$root/$team"; cfg="$team_dir/config.json"; break; fi
+    done
+    [ -n "$cfg" ] || continue                                         # live agent but no team state ⇒ no verdict
+    lead_sid="$(jq -r '.leadSessionId // empty' "$cfg" 2>/dev/null || true)"
+    [ -n "$lead_sid" ] || continue
+    lead_pid="$(cat "$WATCHDOG_DIR/$lead_sid.pid" 2>/dev/null || true)"
+    case "${lead_pid:-}" in ''|*[!0-9]*) lead_pid="" ;; esac
+    lead_e=""
+    if [ -n "$lead_pid" ] && kill -0 "$lead_pid" 2>/dev/null; then
+      lead_e="$(printf '%s\n' "$snap" | awk -v p="$lead_pid" '$1==p {print $2; exit}')"
+      lead_e="$(etime_secs "$lead_e")"
+      # Alive but unreadable age ⇒ NO verdict for this team. Guessing either way is wrong: call it
+      # dead and every healthy assignee becomes a phantom row; call it healthy and a real orphan is
+      # swallowed.
+      [ -n "$lead_e" ] || continue
+      state="LEAD-RESTARTED"
+    else
+      state="LEAD-DEAD"
+    fi
+
+    orphans=""; n=0
+    while read -r _ etime agent_id; do
+      [ -n "$agent_id" ] || continue
+      [ "${agent_id#*@}" = "$team" ] || continue                      # exact suffix, never a prefix match
+      name="${agent_id%%@*}"
+      [ "$name" = "team-lead" ] && continue
+      if [ "$state" = "LEAD-RESTARTED" ]; then
+        mem_e="$(etime_secs "$etime")"
+        case "${mem_e:-}" in ''|*[!0-9]*) continue ;; esac             # unreadable age ⇒ no verdict
+        [ "$mem_e" -gt "$((lead_e + ORPHAN_GRACE_S))" ] || continue    # younger than the lead ⇒ healthy
+      fi
+      # Dedupe by NAME. More than one process can carry the same --agent-id token — a stale duplicate
+      # of the assignee, or merely another process whose argv MENTIONS it (a monitoring command, a
+      # shell running a script that names it). Counting it twice inflates the headline number the
+      # operator reads, and "5 live assignee(s)" has to mean five.
+      case ",$orphans," in *",$name,"*) continue ;; esac
+      orphans="${orphans:+$orphans,}$name"; n=$((n + 1))
+    done <<EOF
+$live
+EOF
+    [ "$n" -gt 0 ] || continue
+
+    # The RECOVER command is an INVENTORY, deliberately not a reaper. Orphaned assignees are not
+    # agent-reapable — cc-teardown holds no registry row for them and handoff-fire self-close
+    # REFUSES them (an assignee has an originator, so it is not a fired peer; but that originator
+    # is gone, so it is not an origin session either — a missing category, filed as 95281da714f0).
+    # The one resolution that works is mapping the agent process's tty to its pane, so that is
+    # exactly what this hands over. Single quotes keep it JSON-safe and paste-safe.
+    cmd="ps -axo pid=,tty=,command= | grep -- '@$team' | grep -v grep"
+    printf '{"kind":"orphaned-approver","state":"%s","detail":"%s live assignee(s) cannot reach their lead","subject":"%s","orphans":"%s","lead_session":"%s","recover_cmd":"%s","ts":%s}\n' \
+      "$state" "$n" "$team_dir" "$orphans" "$lead_sid" "$cmd" "$now"
+  done
+}
+
+# (e) BEACON-INERT — the positive control for the permission beacon. This is the "can we even SEE a
+# blocked approval" half: without it, an empty beacon dir and a beacon that has never run are the
+# same observation, and the board reports all-clear either way. That is not hypothetical — it is
+# what happened: `cc-blockers` said "no safeguard-blocked sessions surfaced" while a teammate was
+# demonstrably blocked, because the hook was registered nowhere and /tmp/cc-permission-pending/ had
+# never been created.
+#
+# EXISTENCE EVIDENCE, twice over: the hook must be DEPLOYED here (a host that never had the feature
+# is not a host where it "stopped"), and >=1 settings.json must exist among the config dirs (a
+# fixtured $HOME void satisfies the letter of "wired nowhere" without the premise — the same phantom
+# row the verifier alarm had to fix after inventing one in tests/cc-relogin-status.bats).
+beacon_alarm_rows() { # → one JSON object per line (possibly none)
+  local now d wired=0 have_settings=0
+  now="$(date +%s 2>/dev/null || true)"
+  case "${now:-}" in ''|*[!0-9]*) return 0 ;; esac
+  [ -e "$BEACON_HOOK" ] || return 0                                   # feature not deployed ⇒ no premise
+  for d in $BEACON_CONFIG_DIRS; do
+    [ -f "$d/settings.json" ] || continue
+    have_settings=1
+    grep -q 'cc-permission-beacon\.sh' "$d/settings.json" 2>/dev/null && wired=1
+  done
+  [ "$have_settings" -eq 1 ] || return 0                              # no settings anywhere ⇒ no premise
+
+  if [ "$wired" -eq 0 ]; then
+    printf '{"kind":"beacon-inert","state":"NOT-WIRED","detail":"registered in no settings.json; never fires","subject":"%s","recover_cmd":"CONFIRM=1 bash %s","ts":%s}\n' \
+      "$BEACON_HOOK" "$BEACON_ACTIVATE_SH" "$now"
+    return 0    # terminal: a hook registered nowhere cannot have fired, so NEVER-FIRED adds no news
+  fi
+
+  # The heartbeat's whole job: the dir exists after the FIRST hook call of any session, so its
+  # absence means "never invoked" and never "nothing was pending".
+  [ -d "$PERMPEND_DIR" ] && return 0
+  printf '{"kind":"beacon-inert","state":"NEVER-FIRED","detail":"wired but has never run; no beacon dir","subject":"%s","recover_cmd":"printf %s | %s write ; ls -la %s","ts":%s}\n' \
+    "$PERMPEND_DIR" "'{\\\"session_id\\\":\\\"smoke-1\\\"}'" "$BEACON_HOOK" "$PERMPEND_DIR" "$now"
+}
+
+ALARMS_JSON="$({ alarm_rows; dispatch_alarm_rows; orphan_approver_rows; beacon_alarm_rows; } 2>/dev/null | jq -s '.' 2>/dev/null || true)"
 [ -n "$ALARMS_JSON" ] || ALARMS_JSON='[]'
 
 BOARD_ABSENT=0
@@ -284,8 +495,13 @@ na="$(printf '%s' "$ALARMS_JSON" | jq 'length' 2>/dev/null || echo 0)"
 # "the landing net is degraded" heading sends the operator to the wrong subsystem.
 LAND_SEL='select(.kind=="verifier-inert" or .kind=="trunk-red" or .kind=="deploy-lag")'
 DISP_SEL='select(.kind=="dispatch-inert")'
+# ONE family for both approval kinds, on the same rule that splits LAND from DISPATCH: they share a
+# subsystem and an owner. A stuck assignee and an unwired beacon are the SAME operator question —
+# "an approval cannot reach an approver" — seen from the live end and the visibility end.
+APPR_SEL='select(.kind=="orphaned-approver" or .kind=="beacon-inert")'
 nl="$(printf '%s' "$ALARMS_JSON" | jq "[.[] | $LAND_SEL] | length" 2>/dev/null || echo 0)"
 nd="$(printf '%s' "$ALARMS_JSON" | jq "[.[] | $DISP_SEL] | length" 2>/dev/null || echo 0)"
+np="$(printf '%s' "$ALARMS_JSON" | jq "[.[] | $APPR_SEL] | length" 2>/dev/null || echo 0)"
 if [ "${n:-0}" = 0 ] && [ "${nr:-0}" = 0 ] && [ "${na:-0}" = 0 ]; then
   if [ "$BOARD_ABSENT" = 1 ]; then echo "no safeguard-blocked sessions (board $IDL_FILE absent)"
   else echo "no safeguard-blocked sessions surfaced"; fi
@@ -313,6 +529,12 @@ if [ "${nd:-0}" != 0 ]; then
   [ "${nl:-0}" != 0 ] && echo
   echo "DISPATCH — $nd alarm(s): autonomy work is not being decided (run the RECOVER command):"
   alarm_table "$DISP_SEL"
+fi
+
+if [ "${np:-0}" != 0 ]; then
+  { [ "${nl:-0}" != 0 ] || [ "${nd:-0}" != 0 ]; } && echo
+  echo "APPROVAL — $np alarm(s): an approval request cannot reach an approver (run the RECOVER command):"
+  alarm_table "$APPR_SEL"
 fi
 
 if [ "${n:-0}" != 0 ]; then
