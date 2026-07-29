@@ -641,6 +641,64 @@ No seam dispute identified. Anything that becomes one goes to the coordinator, n
 
 ---
 
+## §10 Close-out — landed, taken, rejected, and NOT done (2026-07-29)
+
+**Landed, content-verified on origin/main** (never by count — `git ls-tree` + empty `git diff` per
+path): `59f7eb38` design · `dc052a82` map row 12 + learnings · `bda59c54` the build (reconciler,
+manifest, board rows, plist parity, platter, 3 suites) · `68f33d39` the scope + state corrections.
+97 tests green under `/bin/bash` across cc-fleet (21) · cc-blockers-fleet (27) · fleet-activate (11)
+· cc-blockers (38, trunk's own suite untouched — the additive proof).
+
+**The metric, measured before and after.** Before: `cc-blockers` printed *"no safeguard-blocked
+sessions surfaced"* while 10 of 14 declared jobs were dark. After: the board renders every declared
+label not in its declared state, each with a paste-ready recover command. Coverage is now a property
+of a manifest line, not of who remembered to write an alarm.
+
+### Taken from the stranded work (coordinator's "take, do not rebuild")
+
+A duplicate row-12 lead's archaeologist found `518d61dc` — `scripts/launchd-parity-lint.sh` (167 ln)
++ `tests/launchd-parity-lint.bats` (208 ln) — stranded 4 days on `tm/launchd` / `fix/infra-perfection`,
+never landed, with `docs/research/STRANDED_EXPOSURE_2026-07-26.md:156` explicitly prescribing the
+land. **This was a Phase-1 miss on my part**: the `search-branch-graveyard-before-building` rule
+exists precisely for this and I did not run it. What was taken vs rejected, on the merits:
+
+| Item | Verdict |
+|---|---|
+| `518d61dc` label-keyed indexing, reso-scope exclusion, VACUOUS-not-green, no `plutil -extract` | **CONVERGED INDEPENDENTLY** — `bin/cc-fleet` already implements all four. Its two named gaps (reads FILES only, never the disabled DB; no self-test, relying on the DISABLED `nightly-regression` — i.e. double-inert) are exactly what this rebuild adds. Nothing to cherry-pick into the reconciler. |
+| `e360c309` / `a0e11648` / `687c2fd6` — `launchd/` SSOT capture for the 5 live-only plists | **TAKE, NOT DONE HERE.** This is the written fix for the LIVE-ONLY findings §10's parity leg now emits. Cherry-pick `-x` rather than re-author. Named as remainder R-2 below. |
+| `2976b342` INFRA_PERFECTION_2026-07-25.md (328 ln) | Context, not code. Read before R-2. |
+
+### NOT DONE — named, not hidden
+
+- **R-1 `install.sh` launchd safety (coordinator ruling: ROW 12's, filed `c13dad7d5dbe`).**
+  `install.sh:306-317` boots out every `launchd/*.plist` then bootstraps with **no `launchctl
+  enable`**, swallowing every error (`2>/dev/null || true`); `deploy-live.sh:283-284` calls it on
+  every 600s advance. The coordinator's sharpening is the part that makes it urgent and is recorded
+  here verbatim because it is not obvious: **it only bites once things start working.** Deploy is
+  fail-closed today, so `install.sh` is never invoked autonomously — but the moment a GREEN stamp
+  exists, every advance bounces all plists including `postland-verify`, whose measured runs are
+  3399-10112s against a 600s interval, so it can never finish, so no further green stamps, so the
+  gate re-closes. **A self-extinguishing autonomy loop.** Fix = `enable` before `bootstrap`, do not
+  swallow the verdict, and skip a label whose run-lock is held. Do NOT touch deploy's advance logic
+  (row 1's). `tests/install-staged-plist.bats:40` pins the broken command and must change with it.
+- **R-2** cherry-pick `e360c309`/`a0e11648`/`687c2fd6` to give the 5 live-only plists a repo SSOT.
+- **R-3 the `runs`-cursor upgrade for S5.** Four declared-`run` jobs carry `evidence = -` because
+  they have no per-run durable product, so S5 is unprovable for them (R8 applied honestly). A
+  persisted per-label `runs` cursor would make it provable — launchd increments `runs` on every
+  invocation regardless of output. Must handle a cursor DECREASE (re-bootstrap resets `runs` to 0)
+  as "re-bootstrapped", never as "stalled".
+- **R-4 the `NN-` activation prefix is not a total order.** `18-fleet-activate.sh` only exists
+  because `17-` collided with another session's landed script. Renaming dodged the instance; the
+  class remains. Go label-keyed or timestamp-keyed.
+- **R-5 a fourth activation-watch axis: script mtime vs `.done` mtime.** `09-operator-readout-activate.sh`
+  is 9.8h NEWER than its own `.done` — edited after being marked run, and axis 1 skips it forever. A
+  `.done` is a claim about a file that no longer exists.
+- **R-6 calibrate the 24h threshold.** Historical time-to-done is n=10, **median 24.8h**, mean 37.6h,
+  oldest un-run 257.8h, 10 of 19 `.done` = 52.6%. A 24h alarm sits exactly at the median, so it
+  fires on half of all healthy activations. Either declare that deliberate or widen it — but keep
+  the measurement either way.
+- **R-7** axis 1 emits `additionalContext` (model-only), never `systemMessage` (the human lever).
+
 ## Learnings (accumulate; never delete)
 
 - 2026-07-29 **An alarm keyed on the subject's own success history cannot fire for a subject that
