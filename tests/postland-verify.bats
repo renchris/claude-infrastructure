@@ -674,6 +674,41 @@ hung_pages_n() { find "$CC_PAGES_DIR" -name 'postland-hung-*.page' 2>/dev/null |
   grep -q 'timeout:4s' "$page"                      # attributed to OUR bound, not to sig:15
 }
 
+@test "STALL bound: a wedge is cut on TAP silence in seconds, not on the wall backstop" {
+  # The primary bound is PROGRESS (POSTLAND_STALL_S), not duration. Discriminator vs the old
+  # wall-only code: the wall here is 60s, so ONLY the stall path can produce a verdict this fast —
+  # run_s in the stamp must be well under the wall. Same hung classification, same named file.
+  run bash "$SUT" --run-if-needed
+  [ "$status" -eq 0 ]
+  printf '@test "wedge" { sleep 60; }\n' > "$R/tests/wedge.bats"
+  push_commit "a suite that wedges (stall path)"
+  tree="$(origin_tree)"
+  POSTLAND_STALL_S=3 POSTLAND_STALL_POLL_S=1 POSTLAND_SUITE_TIMEOUT_S=60 POSTLAND_FILE_TIMEOUT_S=6 \
+    run bash "$SUT" --run-if-needed
+  s="$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ -f "$s" ]
+  run jq -r '.verdict' "$s"; [ "$output" = "hung" ]
+  run jq -r '.failing[0]' "$s"; [ "$output" = "tests/wedge.bats" ]
+  run jq -r '.run_s' "$s"; [ "$output" -lt 30 ] || false   # the WALL (60s) provably did not fire
+}
+
+@test "STALL bound: slow-but-PROGRESSING corpus is never cut (non-regression control)" {
+  # The other half of the split the stall bound exists for: each test completes within the stall
+  # window, so progress keeps resetting the clock and the run finishes GREEN even though its total
+  # wall exceeds several stall windows. (Passes pre-change too — this is the control that pins the
+  # stall bound to STALLS; the discriminating half is the run_s assertion above.)
+  run bash "$SUT" --run-if-needed
+  [ "$status" -eq 0 ]
+  printf '@test "s1" { sleep 2; }\n@test "s2" { sleep 2; }\n@test "s3" { sleep 2; }\n@test "s4" { sleep 2; }\n' \
+    > "$R/tests/slowly.bats"
+  push_commit "a slow but progressing suite"
+  tree="$(origin_tree)"
+  POSTLAND_STALL_S=4 POSTLAND_STALL_POLL_S=1 POSTLAND_SUITE_TIMEOUT_S=120 POSTLAND_FILE_TIMEOUT_S=30 \
+    run bash "$SUT" --run-if-needed
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ "$output" = "green" ]
+}
+
 @test "C15: a HUNG tree is ABSTAINED as a real verdict, never re-run forever" {
   # the counterpart to C13's "a cut tree is RETRIED": a hang is PROVEN about the tree, so
   # re-running it every sweep re-proves a decided fact and burns a full suite per tick.
