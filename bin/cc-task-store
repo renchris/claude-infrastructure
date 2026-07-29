@@ -1,0 +1,510 @@
+#!/usr/bin/env python3
+"""cc-task-store — reconcile Claude Code task boards into ONE shared store.
+
+    cc-task-store plan     [--collapse-keys] [--json]   what a merge WOULD do (default; read-only)
+    cc-task-store merge    [--collapse-keys] [--yes]    do it
+    cc-task-store verify   [--collapse-keys]            assert the no-loss invariant holds
+    cc-task-store rebuild-summary [<list> ...]          refresh stale _summary.json caches
+
+WHY THIS EXISTS
+Claude Code stores a task board at $CLAUDE_CONFIG_DIR/tasks/<listId>/. This fleet runs four Max
+accounts as four config dirs, so the SAME board name resolves to four DIFFERENT directories. The
+board is work state, not account state — accounts here are quota pools, not different users — so
+they should be one. Sharing the directory is the mirror's job (lib/config-mirror.zsh); getting the
+CONTENT into one place without destroying any of it is this tool's job.
+
+WHY A NAIVE MERGE DESTROYS DATA — the whole reason this is a program and not a `cp -r`:
+
+  1. IDS COLLIDE ACROSS STORES AND MEAN DIFFERENT THINGS. Measured 2026-07-29 on
+     `claude-infrastructure-main`: ~/.claude holds ids 21-35, ~/.claude-quaternary holds ids 20-42.
+     Id 21 is "Triage machine lag" in one and "Audit session-close mechanisms" in the other. Any
+     union keyed on the id silently keeps one and drops the other. So every incoming task is
+     RENUMBERED above the target's watermark, and nothing is ever written to an id that exists.
+
+  2. RENUMBERING BREAKS DEPENDENCIES. Tasks carry `blocks`/`blockedBy` id references. Renumber
+     without rewriting those and the graph silently re-points at unrelated tasks — worse than
+     losing it, because it still looks valid. Every reference is remapped through the same
+     old->new table, and any reference that cannot be resolved is DROPPED AND REPORTED, never
+     silently discarded.
+
+  3. THE OBVIOUS MIGRATION PATH IS THE LOSSY ONE. `_cc_sync_config_mirror --convert` resolves a
+     forked real directory with `mv -f <dir> <dir>.premirror-bak` — correct for a config file,
+     catastrophic for 245/251/186 boards, which would simply stop existing. Content must be merged
+     BEFORE the mirror is allowed to convert; that ordering is the migration.
+
+SAFE UNDER LIVE SESSIONS — deliberately, because the alternative is a gate that never fires. This
+fleet runs ~10 concurrent sessions (k=3/3/1/3 when measured), so "refuse if any session is live"
+would make the migration unrunnable forever. Instead every write here is ADDITIVE and IDEMPOTENT
+and NO SOURCE IS EVER MODIFIED OR DELETED: a task a live session writes to a source store after we
+read it is simply picked up by the next run. Re-running is always safe and always converges. The
+destructive step (the mirror's convert) stays a separate operator-owned action.
+
+Dedupe is by (subject, description) within a board and every collapse is reported, so a re-run
+after a partial merge does not duplicate. `--no-dedupe` disables it.
+
+--collapse-keys additionally folds branch-keyed boards (`<repo>-<branch>`, the old ~/.zshrc
+_cc_tlid scheme) into the repo-keyed board that bin/cc-tlid now produces. It is OPT-IN and separate
+from the account merge because attribution is weaker: it resolves each board's recorded project
+path through git to a primary repo, and a board whose project directory no longer exists cannot be
+attributed at all. Those are left alone and named in the report rather than guessed at.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+HOME = Path(os.path.expanduser("~"))
+CANONICAL = Path(os.environ.get("CC_TASKS_DIR", HOME / ".claude" / "tasks"))
+TASKS_INDEX = Path(os.environ.get("CC_TASKS_INDEX", HOME / ".claude" / "tasks-index.json"))
+ACCOUNTS_JSON = Path(os.environ.get("CC_ACCOUNTS_JSON", HOME / ".claude" / "accounts.json"))
+BACKUP_ROOT = Path(os.environ.get("CC_TASKS_BACKUP_ROOT", HOME / ".claude" / "backups"))
+
+TASK_RE = re.compile(r"^\d+\.json$")
+
+
+# --------------------------------------------------------------------------------------- helpers
+def die(msg: str, code: int = 1):
+    print(f"cc-task-store: {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def load_json(p: Path):
+    try:
+        return json.loads(p.read_text())
+    except Exception:
+        return None
+
+
+def task_files(list_dir: Path):
+    """Task files only. _summary.json is a CACHE, .highwatermark/.lock are control files."""
+    if not list_dir.is_dir():
+        return []
+    return sorted(
+        (f for f in list_dir.iterdir() if TASK_RE.match(f.name)),
+        key=lambda f: int(f.stem),
+    )
+
+
+def load_tasks(list_dir: Path):
+    out = []
+    for f in task_files(list_dir):
+        t = load_json(f)
+        if isinstance(t, dict):
+            t.setdefault("id", f.stem)
+            out.append(t)
+    return out
+
+
+def content_key(t: dict):
+    return (str(t.get("subject", "")).strip(), str(t.get("description", "")).strip())
+
+
+def origin_label(src_dir: Path):
+    """Human-readable origin of a board: the ACCOUNT it came from, or the board it collapsed from.
+
+    A board lives at <config-dir>/tasks/<board>, so the account is two levels up — one level up is
+    always the literal "tasks" directory. Recording that instead of the account (the first version
+    of this) makes every merged task claim it came from "tasks", which is provenance that cannot
+    answer the only question it exists to answer: which account was this task written on?
+    """
+    if src_dir.parent.name == "tasks":
+        return src_dir.parent.parent.name          # e.g. .claude-quaternary
+    return src_dir.parent.name
+
+
+def source_stores():
+    """Account task stores that are REAL directories distinct from canonical.
+
+    A store already symlinked to canonical (account 1's ~/.claude-next/tasks) is not a source —
+    it IS canonical, and treating it as one would merge the board into itself.
+    """
+    stores = []
+    acc = load_json(ACCOUNTS_JSON) or {}
+    cfg_dirs = [a.get("config_dir", "") for a in acc.get("accounts", [])]
+    # Fall back to the known layout if accounts.json is unreadable — never silently scan nothing.
+    if not any(cfg_dirs):
+        cfg_dirs = ["~/.claude-next", "~/.claude-secondary", "~/.claude-tertiary",
+                    "~/.claude-quaternary"]
+    for d in cfg_dirs:
+        store = Path(os.path.expanduser(d)) / "tasks"
+        if not store.is_dir():
+            continue
+        try:
+            if store.resolve() == CANONICAL.resolve():
+                continue          # already shared
+        except OSError:
+            continue
+        stores.append(store)
+    return stores
+
+
+def git_primary(path: Path):
+    """Resolve a checkout to its PRIMARY repo root (a linked worktree -> the real repo)."""
+    if not path.is_dir():
+        return None
+    try:
+        cd = subprocess.run(
+            ["git", "-C", str(path), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+            capture_output=True, text=True, timeout=10,
+        )
+        common = cd.stdout.strip()
+        if cd.returncode != 0 or not common:
+            return None
+        return str(Path(common).parent) if Path(common).name == ".git" else common[:-4]
+    except Exception:
+        return None
+
+
+def repo_key_for(list_id: str):
+    """The repo-keyed board name a branch-keyed board should collapse into, or None.
+
+    Attribution comes from tasks-index.json (listId -> project path), the registry the task hooks
+    already maintain, resolved through git so a worktree lands on its primary repo. None means "not
+    attributable" — the caller must leave that board alone rather than guess.
+    """
+    idx = load_json(TASKS_INDEX) or {}
+    entry = (idx.get("taskLists") or {}).get(list_id) or {}
+    proj = entry.get("project")
+    if not proj:
+        return None
+    primary = git_primary(Path(proj))
+    if not primary:
+        return None
+    name = re.sub(r"[^A-Za-z0-9._-]", "-", Path(primary).name).strip(".-")
+    return name or None
+
+
+# ----------------------------------------------------------------------------------- merge engine
+class Plan:
+    def __init__(self):
+        self.moves = []        # (src_list_dir, dst_name, n_new, n_dup, unresolved_refs)
+        self.skipped = []      # (src_list_dir, why)
+        self.total_new = 0
+        self.total_dup = 0
+
+
+def dst_state(states: dict, dst_name: str, dedupe: bool, canonical: Path):
+    """Lazily-seeded allocation state for ONE destination board, shared across every move into it.
+
+    Threading this across moves is load-bearing. Planning each move independently against the
+    CURRENT disk state makes two sources targeting the same board both allocate from the same
+    starting id — caught in the first real run: account-4 and account-3 each planned ids 40,41,42
+    for `claude-infrastructure-main`, and `doc_classifier-main` collided the same way. The merge
+    would have been refused by the overwrite guard, which is safe but useless; the PLAN has to be
+    right, because the plan is what the operator approves.
+    """
+    st = states.get(dst_name)
+    if st is None:
+        dst_dir = canonical / dst_name
+        dst_tasks = load_tasks(dst_dir)
+        used = {int(t["id"]) for t in dst_tasks if str(t["id"]).isdigit()}
+        hwm = 0
+        hwm_file = dst_dir / ".highwatermark"
+        if hwm_file.is_file():
+            try:
+                hwm = int(hwm_file.read_text().strip() or 0)
+            except ValueError:
+                hwm = 0
+        st = {
+            "next": max([hwm] + sorted(used) + [0]) + 1,
+            "keys": {content_key(t): str(t["id"]) for t in dst_tasks} if dedupe else {},
+        }
+        states[dst_name] = st
+    return st
+
+
+def plan_one(src_dir: Path, dst_name: str, dedupe: bool, canonical: Path, states: dict):
+    """Compute the old->new id mapping for merging src_dir into canonical/dst_name.
+
+    Returns (mapping, new_tasks, dup_count, unresolved). Touches no disk state, but DOES advance
+    the shared allocation state in `states` so a later move into the same board cannot reuse an id.
+    """
+    st = dst_state(states, dst_name, dedupe, canonical)
+    dst_by_key = st["keys"]
+
+    mapping, new_tasks, dups = {}, [], 0
+    for t in load_tasks(src_dir):
+        old = str(t["id"])
+        key = content_key(t)
+        if dedupe and key in dst_by_key:
+            mapping[old] = dst_by_key[key]      # point dependencies at the incumbent
+            dups += 1
+            continue
+        new_id = str(st["next"])
+        st["next"] += 1
+        mapping[old] = new_id
+        # Register immediately so a duplicate arriving from ANOTHER source in the same plan
+        # collapses onto this one instead of being written twice.
+        if dedupe:
+            dst_by_key[key] = new_id
+        new_tasks.append((t, new_id))
+
+    # Second pass: remap dependency references now that every id is known.
+    unresolved = []
+    materialised = []
+    for t, new_id in new_tasks:
+        nt = dict(t)
+        nt["id"] = new_id
+        for field in ("blocks", "blockedBy"):
+            refs = nt.get(field) or []
+            if not isinstance(refs, list):
+                refs = []
+            kept = []
+            for r in refs:
+                r = str(r)
+                if r in mapping:
+                    kept.append(mapping[r])
+                else:
+                    unresolved.append((new_id, field, r))
+            nt[field] = kept
+        meta = nt.get("metadata") if isinstance(nt.get("metadata"), dict) else {}
+        meta = dict(meta)
+        meta["mergedFrom"] = origin_label(src_dir)
+        meta["originalList"] = src_dir.name
+        meta["originalId"] = str(t["id"])
+        nt["metadata"] = meta
+        materialised.append((nt, new_id))
+    return mapping, materialised, dups, unresolved
+
+
+def build_plan(dedupe: bool, collapse_keys: bool, canonical: Path):
+    plan = Plan()
+    states: dict = {}      # dst board -> allocation state, shared across every move into it
+
+    # 1) cross-ACCOUNT: every isolated store's boards -> canonical, same name.
+    for store in source_stores():
+        for src_dir in sorted(p for p in store.iterdir() if p.is_dir()):
+            tasks = load_tasks(src_dir)
+            if not tasks:
+                plan.skipped.append((src_dir, "empty"))
+                continue
+            dst_name = src_dir.name
+            _, new_tasks, dups, unres = plan_one(src_dir, dst_name, dedupe, canonical, states)
+            plan.moves.append((src_dir, dst_name, new_tasks, dups, unres))
+            plan.total_new += len(new_tasks)
+            plan.total_dup += dups
+
+    # 2) cross-KEY (opt-in): branch-keyed canonical boards -> the repo-keyed board.
+    if collapse_keys:
+        for src_dir in sorted(p for p in canonical.iterdir() if p.is_dir()):
+            tasks = load_tasks(src_dir)
+            if not tasks:
+                continue
+            dst_name = repo_key_for(src_dir.name)
+            if not dst_name:
+                plan.skipped.append((src_dir, "not attributable to a repo (no index entry, or "
+                                              "its project directory is gone)"))
+                continue
+            if dst_name == src_dir.name:
+                continue                                   # already repo-keyed
+            _, new_tasks, dups, unres = plan_one(src_dir, dst_name, dedupe, canonical, states)
+            plan.moves.append((src_dir, dst_name, new_tasks, dups, unres))
+            plan.total_new += len(new_tasks)
+            plan.total_dup += dups
+
+    return plan
+
+
+def backup(paths, label: str):
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    dest = BACKUP_ROOT / f"task-store-{label}-{stamp}"
+    dest.mkdir(parents=True, exist_ok=True)
+    for p in paths:
+        if p.exists():
+            tgt = dest / p.parent.name / p.name
+            tgt.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(p, tgt, dirs_exist_ok=True, symlinks=True)
+    return dest
+
+
+def rebuild_summary(list_dir: Path):
+    """Regenerate the _summary.json cache from the task files that are actually on disk.
+
+    Claude Code writes this lazily, so it drifts: measured 2026-07-29 it read 15 tasks while 19 were
+    on disk. It is the number the board HEADER shows the operator, so a merge that left it stale
+    would land tasks the operator cannot see a count for.
+    """
+    tasks = load_tasks(list_dir)
+    counts = {"pending": 0, "in_progress": 0, "completed": 0}
+    for t in tasks:
+        s = t.get("status", "pending")
+        if s in counts:
+            counts[s] += 1
+    hwm = 0
+    hf = list_dir / ".highwatermark"
+    if hf.is_file():
+        try:
+            hwm = int(hf.read_text().strip() or 0)
+        except ValueError:
+            hwm = 0
+    summary = {
+        "taskListId": list_dir.name,
+        "highwatermark": hwm,
+        "totalOnDisk": len(tasks),
+        **counts,
+        "plans": [],
+        "tasks": tasks,
+    }
+    (list_dir / "_summary.json").write_text(json.dumps(summary, indent=2))
+    return len(tasks)
+
+
+def do_merge(plan: Plan, canonical: Path):
+    written = 0
+    for src_dir, dst_name, new_tasks, _dups, _unres in plan.moves:
+        if not new_tasks:
+            continue
+        dst_dir = canonical / dst_name
+        dst_dir.mkdir(parents=True, exist_ok=True)
+        for nt, new_id in new_tasks:
+            target = dst_dir / f"{new_id}.json"
+            if target.exists():
+                # Must never happen (ids are allocated above the watermark); if it somehow does,
+                # refuse rather than overwrite — this is the exact failure the tool exists to stop.
+                die(f"refusing to overwrite existing task {target} — id allocation is unsound", 3)
+            target.write_text(json.dumps(nt, indent=2))
+            written += 1
+    for dst_name in {m[1] for m in plan.moves}:
+        d = canonical / dst_name
+        if d.is_dir():
+            rebuild_summary(d)
+    return written
+
+
+def verify(dedupe: bool, collapse_keys: bool, canonical: Path):
+    """The no-loss invariant: every source task's content exists in its target board."""
+    missing = []
+    checked = 0
+    targets = {}
+
+    def target_keys(name):
+        if name not in targets:
+            targets[name] = {content_key(t) for t in load_tasks(canonical / name)}
+        return targets[name]
+
+    for store in source_stores():
+        for src_dir in sorted(p for p in store.iterdir() if p.is_dir()):
+            for t in load_tasks(src_dir):
+                checked += 1
+                if content_key(t) not in target_keys(src_dir.name):
+                    missing.append((str(src_dir), t.get("id"), content_key(t)[0]))
+
+    if collapse_keys:
+        for src_dir in sorted(p for p in canonical.iterdir() if p.is_dir()):
+            dst = repo_key_for(src_dir.name)
+            if not dst or dst == src_dir.name:
+                continue
+            for t in load_tasks(src_dir):
+                checked += 1
+                if content_key(t) not in target_keys(dst):
+                    missing.append((str(src_dir), t.get("id"), content_key(t)[0]))
+    return checked, missing
+
+
+# ------------------------------------------------------------------------------------------- cli
+def print_plan(plan: Plan, verbose_skips: bool):
+    if not plan.moves:
+        print("nothing to merge — every board is already in the shared store.")
+    for src_dir, dst_name, new_tasks, dups, unres in plan.moves:
+        acct = origin_label(src_dir)
+        ids = ", ".join(n for _, n in new_tasks[:6]) + ("…" if len(new_tasks) > 6 else "")
+        print(f"  {acct}/{src_dir.name}  ->  {dst_name}"
+              f"   +{len(new_tasks)} as [{ids}]" + (f"   ({dups} dup)" if dups else ""))
+        for new_id, field, ref in unres:
+            print(f"      ! task {new_id}: unresolvable {field} ref '{ref}' will be dropped")
+    print(f"\n  totals: {plan.total_new} task(s) to merge, {plan.total_dup} duplicate(s) skipped, "
+          f"{len(plan.skipped)} board(s) skipped")
+    if verbose_skips:
+        for src, why in plan.skipped:
+            print(f"      skip {src}: {why}")
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="cc-task-store", add_help=True)
+    ap.add_argument("verb", nargs="?", default="plan",
+                    choices=["plan", "merge", "verify", "rebuild-summary"])
+    ap.add_argument("lists", nargs="*", help="rebuild-summary: board names (default: all)")
+    ap.add_argument("--collapse-keys", action="store_true",
+                    help="also fold branch-keyed boards into their repo-keyed board")
+    ap.add_argument("--no-dedupe", action="store_true")
+    ap.add_argument("--yes", action="store_true", help="merge without the confirmation prompt")
+    ap.add_argument("--json", action="store_true")
+    ap.add_argument("--show-skips", action="store_true")
+    args = ap.parse_args()
+
+    canonical = CANONICAL
+    if not canonical.is_dir():
+        die(f"canonical store {canonical} does not exist")
+    dedupe = not args.no_dedupe
+
+    if args.verb == "rebuild-summary":
+        names = args.lists or [p.name for p in canonical.iterdir() if p.is_dir()]
+        for n in names:
+            d = canonical / n
+            if d.is_dir():
+                print(f"  {n}: {rebuild_summary(d)} task(s)")
+        return 0
+
+    if args.verb == "verify":
+        checked, missing = verify(dedupe, args.collapse_keys, canonical)
+        if missing:
+            print(f"FAIL — {len(missing)} of {checked} source task(s) are NOT in the shared store:")
+            for src, tid, subj in missing[:40]:
+                print(f"  {src} #{tid}  {subj[:70]}")
+            return 1
+        print(f"OK — all {checked} source task(s) present in the shared store (no loss).")
+        return 0
+
+    plan = build_plan(dedupe, args.collapse_keys, canonical)
+
+    if args.json:
+        print(json.dumps({
+            "moves": [{"src": str(s), "dst": d, "new": len(n), "dups": du,
+                       "unresolved": len(u)} for s, d, n, du, u in plan.moves],
+            "totalNew": plan.total_new, "totalDup": plan.total_dup,
+            "skipped": [{"src": str(s), "why": w} for s, w in plan.skipped],
+        }, indent=2))
+        return 0
+
+    if args.verb == "plan":
+        print(f"PLAN (read-only) — canonical store: {canonical}\n")
+        print_plan(plan, args.show_skips)
+        print("\n  no changes made. run `cc-task-store merge` to apply.")
+        return 0
+
+    # merge
+    print(f"MERGE — canonical store: {canonical}\n")
+    print_plan(plan, args.show_skips)
+    if plan.total_new == 0:
+        print("\nnothing to do.")
+        return 0
+    if not args.yes and sys.stdin.isatty():
+        if input("\nproceed? [y/N] ").strip().lower() not in ("y", "yes"):
+            print("aborted.")
+            return 2
+    paths = source_stores() + [canonical]
+    dest = backup(paths, "merge")
+    print(f"\n  backup: {dest}")
+    written = do_merge(plan, canonical)
+    print(f"  merged: {written} task(s)")
+    checked, missing = verify(dedupe, args.collapse_keys, canonical)
+    if missing:
+        print(f"  VERIFY FAILED — {len(missing)} task(s) missing. Sources are untouched; "
+              f"restore from {dest} if needed.")
+        return 1
+    print(f"  verify: OK — all {checked} source task(s) present (no loss).")
+    print("\n  sources were NOT modified. Once you are satisfied, the mirror converts the account\n"
+          "  stores to symlinks (that step is operator-owned and moves them to *.premirror-bak).")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
