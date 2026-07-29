@@ -361,7 +361,12 @@ cwd_wait_fixture() {
   # Never return before the cwd is actually observable, or the assertion races the fork. FAIL LOUD if
   # it never becomes observable: a fixture that returns 0 on timeout makes every downstream failure
   # ambiguous ("did the probe break, or did the worker never start?") and can certify nothing.
-  for i in 1 2 3 4 5 6 7 8 9 10; do
+  # 50×0.2s = 10s, matching the SUT oracle's own bound (CC_BACKLOG_ORACLE_TIMEOUT_S:-10) — a fixture
+  # barrier TIGHTER than the oracle it feeds converts CPU starvation into a false RED: measured
+  # 2026-07-28, the v2 verifier (taskpolicy background band, load ~11.8) convicted this suite 2/3
+  # while every un-starved probe ran green — fork/exec + lsof observability legitimately exceed 2s
+  # there. A green run still exits on the FIRST observation; only a starved box uses the tail.
+  for i in $(seq 1 50); do
     /usr/sbin/lsof -a -d cwd -w -t -- "$dir" 2>/dev/null | grep -q "^$OWNED_PID$" && return 0
     sleep 0.2
   done
