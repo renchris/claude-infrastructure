@@ -312,9 +312,86 @@ main() {
     fi
   fi
 
-  # ── 1b-lease. DECISION-FRESHNESS LEASE (SESSION_REGISTRY_V2 §4.3 / R1) ──────────────────────────
-  # Ordered BEFORE the adoption belt deliberately: a stale decision must die on staleness alone, so
-  # the refusal names the real defect (and stays true even if every downstream read were perfect).
+  # ── 1c. OPERATOR-ADOPTION belt (2026-07-24; mirrors cc-classify 4.7 / hooks/lib/cc-interactive.sh) ──
+  # A pane a human OPERATOR has typed real prompts into is ADOPTED — never auto-close it, even when it
+  # looks work-safe + done: between prompts an interactive conversation is idle + clean + landed, the
+  # exact "done" shape (cc-reaper closed two live operator conversations this way, 2026-07-24). The one
+  # signal "done" cannot fake is WHO drove the last turn — ci_last_interactive_epoch returns the epoch
+  # of the last REAL operator-typed prompt; newer than spawn+SLACK (the spawn brief is a user prompt
+  # too) AND within the hold window ⇒ adopted → REFUSE (exit 2), joining the REFUSE family. Placed
+  # before the work-safety gate so an adopted pane REFUSEs (never) rather than DEFERs (later). The
+  # WHO-primitive is hooks/lib/cc-interactive.sh (lands separately) — absent ⇒ one WARN + skip
+  # (graceful degradation). --force-adopted (operator command-line ONLY; NO autonomous caller — never
+  # cc-reaper — passes it) skips just this belt. Kill switch: CC_CLASSIFY_INTERACTIVE_HOLD_DISABLE=1.
+  local hold_on=1
+  [ "$FORCE_ADOPTED" = 1 ] && hold_on=0
+  [ "${CC_CLASSIFY_INTERACTIVE_HOLD_DISABLE:-0}" = 1 ] && hold_on=0
+  case "$INTERACTIVE_HOLD_S" in ''|*[!0-9]*|0) hold_on=0 ;; esac
+  if [ "$hold_on" = 1 ]; then
+    # shellcheck source=/dev/null
+    if [ -f "$INTERACTIVE_LIB" ]; then . "$INTERACTIVE_LIB" 2>/dev/null || true; fi
+    # shellcheck source=/dev/null
+    for _b in "$HERE/../hooks/lib/cc-beat.sh" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/cc-beat.sh" \
+              "$HOME/.claude/hooks/lib/cc-beat.sh"; do
+      [ -f "$_b" ] && { . "$_b" 2>/dev/null || true; break; }
+    done
+    if ! type -t ci_last_interactive_epoch >/dev/null 2>&1; then
+      # ── R3 (SESSION_REGISTRY_V2 §4.3.5): the WHO-oracle is missing, so this process CANNOT prove
+      # the pane is not a live operator conversation. v1 answered that by proceeding to close —
+      # "cannot prove present" treated as "proven absent", the inverse of this repo's own
+      # absence-is-loud law, and the single most dangerous line in the subsystem (its own test
+      # pinned the fail-open as correct, using a fixture carrying a REAL operator prompt).
+      # v2 refuses instead. To keep that refusal from being a single point of INERTNESS (a lib that
+      # fails to deploy would otherwise refuse every teardown forever), the BEAT is consulted as an
+      # INDEPENDENT presence oracle first — it cannot share a bug with the transcript scanner.
+      # Only when BOTH oracles are unavailable do we refuse, and that refusal is loud.
+      local _bage
+      if type -t cb_operator_age >/dev/null 2>&1 && cb_system_live 2>/dev/null; then
+        _bage="$(cb_operator_age "$sess_id" 2>/dev/null || true)"
+        case "${_bage:-}" in
+          ''|*[!0-9]*)
+            record REFUSE presence-unprovable "the who-oracle ($INTERACTIVE_LIB) is absent AND this session has no presence beat, inside a LIVE beat world — cannot prove the pane is not a live operator conversation; refusing (v1 proceeded here, which is how live conversations were closed)" 0
+            say "REFUSE — cannot prove operator absence: who-lib absent and no beat for this session (exit 2)."
+            exit 2 ;;
+          *)
+            if [ "$_bage" -lt "$INTERACTIVE_HOLD_S" ] 2>/dev/null; then
+              record REFUSE operator-adopted "who-lib absent; the presence BEAT shows a real operator prompt ${_bage}s ago (< hold ${INTERACTIVE_HOLD_S}s) — refusing to auto-close a live operator conversation" 0
+              say "REFUSE — operator-adopted per presence beat: prompt ${_bage}s ago (exit 2)."
+              exit 2
+            fi
+            say "NOTE — cc-interactive.sh absent ($INTERACTIVE_LIB); presence proven ABSENT by beat (${_bage}s > hold) — proceeding on the independent oracle" ;;
+        esac
+      else
+        record REFUSE presence-unprovable "the who-oracle ($INTERACTIVE_LIB) is absent and the beat system is not live — NO presence oracle is available, so the pane cannot be shown to be free of a live operator conversation; refusing (fail-closed, R3)" 0
+        say "REFUSE — cc-interactive.sh absent ($INTERACTIVE_LIB) and no live beat system: no presence oracle available, refusing to close (exit 2)."
+        exit 2
+      fi
+    else
+      local atj="" iep="" now_s="" spawn_s="" iage=""
+      atj="$(find_transcript "$sess_id" 2>/dev/null || true)"
+      if [ -n "$atj" ]; then
+        iep="$(ci_last_interactive_epoch "$atj" 2>/dev/null || true)"
+        case "${iep:-}" in ''|*[!0-9]*) iep="" ;; esac
+        if [ -n "$iep" ]; then
+          now_s="${CC_CLASSIFY_NOW:-$(date +%s)}"
+          case "${started_ms:-}" in ''|*[!0-9]*) spawn_s=0 ;; *) spawn_s=$(( started_ms / 1000 )) ;; esac
+          iage=$(( now_s - iep )); [ "$iage" -lt 0 ] && iage=0
+          if [ "$iage" -lt "$INTERACTIVE_HOLD_S" ] && [ "$iep" -gt "$(( spawn_s + FIRE_PROMPT_SLACK_S ))" ]; then
+            record REFUSE operator-adopted "target pane is operator-adopted — a REAL operator prompt ${iage}s ago (< hold ${INTERACTIVE_HOLD_S}s, past spawn+${FIRE_PROMPT_SLACK_S}s); refusing to auto-close a live operator conversation (pass --force-adopted to override)" 0
+            say "REFUSE — operator-adopted pane: real prompt ${iage}s ago; refusing auto-close (exit 2). Pass --force-adopted to override."
+            exit 2
+          fi
+        fi
+      fi
+    fi
+  fi
+
+  # ── 1d. DECISION-FRESHNESS LEASE (SESSION_REGISTRY_V2 §4.3 / R1) ────────────────────────────────
+  # Ordered AFTER the adoption belt deliberately. Both refuse, so ordering cannot change safety —
+  # only which truth gets RECORDED. "This pane holds a live operator conversation" is the more
+  # fundamental fact than "your decision is stale", and it is the one an operator reading the
+  # decision record needs to see. The lease then bites exactly the reaps that would otherwise have
+  # proceeded, which is the population it exists to bound.
   if [ "${CC_REAP_LEASE:-on}" != off ] && [ "$FORCE_ADOPTED" = 0 ] && [ -n "$done_ev" ]; then
     local lease_now lease_age
     lease_now="${CC_CLASSIFY_NOW:-$(date +%s)}"
@@ -337,46 +414,6 @@ main() {
       record REFUSE stale-decision "decision was made ${lease_age}s ago, past the ${DECISION_MAX_STALE_S}s freshness lease — the evidence it rests on may no longer hold (an operator can adopt a pane inside that window); refusing to act on a stale verdict" 0
       say "REFUSE — stale decision: made ${lease_age}s ago > ${DECISION_MAX_STALE_S}s lease (exit 2). Re-take the decision and retry."
       exit 2
-    fi
-  fi
-
-  # ── 1c. OPERATOR-ADOPTION belt (2026-07-24; mirrors cc-classify 4.7 / hooks/lib/cc-interactive.sh) ──
-  # A pane a human OPERATOR has typed real prompts into is ADOPTED — never auto-close it, even when it
-  # looks work-safe + done: between prompts an interactive conversation is idle + clean + landed, the
-  # exact "done" shape (cc-reaper closed two live operator conversations this way, 2026-07-24). The one
-  # signal "done" cannot fake is WHO drove the last turn — ci_last_interactive_epoch returns the epoch
-  # of the last REAL operator-typed prompt; newer than spawn+SLACK (the spawn brief is a user prompt
-  # too) AND within the hold window ⇒ adopted → REFUSE (exit 2), joining the REFUSE family. Placed
-  # before the work-safety gate so an adopted pane REFUSEs (never) rather than DEFERs (later). The
-  # WHO-primitive is hooks/lib/cc-interactive.sh (lands separately) — absent ⇒ one WARN + skip
-  # (graceful degradation). --force-adopted (operator command-line ONLY; NO autonomous caller — never
-  # cc-reaper — passes it) skips just this belt. Kill switch: CC_CLASSIFY_INTERACTIVE_HOLD_DISABLE=1.
-  local hold_on=1
-  [ "$FORCE_ADOPTED" = 1 ] && hold_on=0
-  [ "${CC_CLASSIFY_INTERACTIVE_HOLD_DISABLE:-0}" = 1 ] && hold_on=0
-  case "$INTERACTIVE_HOLD_S" in ''|*[!0-9]*|0) hold_on=0 ;; esac
-  if [ "$hold_on" = 1 ]; then
-    # shellcheck source=/dev/null
-    if [ -f "$INTERACTIVE_LIB" ]; then . "$INTERACTIVE_LIB" 2>/dev/null || true; fi
-    if ! type -t ci_last_interactive_epoch >/dev/null 2>&1; then
-      say "WARN — cc-interactive.sh absent ($INTERACTIVE_LIB); skipping operator-adoption belt (degraded)"
-    else
-      local atj="" iep="" now_s="" spawn_s="" iage=""
-      atj="$(find_transcript "$sess_id" 2>/dev/null || true)"
-      if [ -n "$atj" ]; then
-        iep="$(ci_last_interactive_epoch "$atj" 2>/dev/null || true)"
-        case "${iep:-}" in ''|*[!0-9]*) iep="" ;; esac
-        if [ -n "$iep" ]; then
-          now_s="${CC_CLASSIFY_NOW:-$(date +%s)}"
-          case "${started_ms:-}" in ''|*[!0-9]*) spawn_s=0 ;; *) spawn_s=$(( started_ms / 1000 )) ;; esac
-          iage=$(( now_s - iep )); [ "$iage" -lt 0 ] && iage=0
-          if [ "$iage" -lt "$INTERACTIVE_HOLD_S" ] && [ "$iep" -gt "$(( spawn_s + FIRE_PROMPT_SLACK_S ))" ]; then
-            record REFUSE operator-adopted "target pane is operator-adopted — a REAL operator prompt ${iage}s ago (< hold ${INTERACTIVE_HOLD_S}s, past spawn+${FIRE_PROMPT_SLACK_S}s); refusing to auto-close a live operator conversation (pass --force-adopted to override)" 0
-            say "REFUSE — operator-adopted pane: real prompt ${iage}s ago; refusing auto-close (exit 2). Pass --force-adopted to override."
-            exit 2
-          fi
-        fi
-      fi
     fi
   fi
 
@@ -534,8 +571,13 @@ EOF
     CC_TEARDOWN_RECORDS_DIR="$d/rec" CC_TEARDOWN_SELF_UUID="SELF-0000" \
     IT2_PANES_FILE="$d/state/panes.json" CC_TEARDOWN_TERM_GRACE_S=2 \
     CC_TEARDOWN_DIR="$d/tdmark" \
-    "$@"
+    "$@" --decided-at "$(date +%s)"
   }
+  # Every selftest scenario stands in for the AUTONOMOUS caller (cc-reaper), so it must carry the
+  # decision-freshness lease exactly as that caller does — appended here rather than at 20 call sites.
+  # Without it every scenario would refuse `lease-missing` and the selftest would be measuring the
+  # lease instead of the branch each scenario exists to prove. The lease itself is proven separately
+  # and adversarially in tests/reap-freshness.bats (incl. its RED-proof against the pristine tree).
   # each scenario rm's records first + every cc-teardown run writes exactly one → find gives that record.
   last_record()   { find "$d/rec" -name '*.json' 2>/dev/null | head -1; }
   last_decision() { local f; f="$(last_record)"; [ -n "$f" ] && jq -r '.decision' "$f"; }
