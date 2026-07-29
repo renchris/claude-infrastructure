@@ -18,13 +18,23 @@
 # fact-bound DISK reads, computed here every invocation.
 #   kind=="verifier-inert"  NEVER-ACTIVATED (no stamps dir has ever existed — an un-run C10 step)
 #                           or STALE (stamps stopped while land.log kept moving)
-#   kind=="trunk-red"       PERSISTENT-RED — the verifier is ALIVE and stamping FRESH, and every
-#                           one of the newest N verdicts is red with no green in 24h. Deliberately
-#                           a distinct kind, not a verifier state: nothing is wrong with the
-#                           verifier, and the fix is the opposite one (partition / attribution).
+#   kind=="trunk-red"       PERSISTENT-RED — the verifier is ALIVE (stamping fresh, OR provably
+#                           mid-run) and every one of the newest N verdicts is red with no green in
+#                           24h. Deliberately a distinct kind, not a verifier state: nothing is wrong
+#                           with the verifier, and the fix is the opposite one (partition/attribution).
 #   kind=="deploy-lag"      LAGGING — a GREEN-stamped commit has sat undeployed past the budget
-# The three are mutually exclusive by construction on the stamp-freshness axis (STALE needs a stamp
-# older than the budget, PERSISTENT-RED needs one newer). All exist because a launchd job dies
+#   kind=="never-green"     NEVER-CERTIFIED — the BACKSTOP. The verifier runs and returns verdicts,
+#                           but not one has EVER been green, so `last-green` was never written and
+#                           deploy has no cursor at all. None of the three above can see this state
+#                           (deploy-lag needs a green to call late, verifier-inert needs a dead job,
+#                           trunk-red abstains on any non-red verdict in its window) — so the board
+#                           was SILENT through 53 commits of halted deploy. Emitted only when no
+#                           sharper row already claimed the reason.
+# The three are mutually exclusive by construction on the verifier-ALIVE axis: STALE needs a stamp
+# past the budget AND no run in progress, PERSISTENT-RED needs a fresh stamp OR a run in progress.
+# Stamp age alone was the original axis and it was WRONG — a stamp is only written when a run ENDS,
+# so a slow-but-healthy verifier read as inert and suppressed the red row (see verifier_running()).
+# All exist because a launchd job dies
 # SILENTLY: absence must be loud (R9), never assumed healthy. Every sensor failure — no stat(1), no
 # git, an unparseable stamp, no clock — yields NO row (fail-OPEN): a board that invents blockers
 # gets ignored exactly like one that hides them.
@@ -87,6 +97,14 @@ set -uo pipefail
 IDL_FILE="${CC_REAPER_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
 POSTLAND_DIR="${CC_POSTLAND_DIR:-$HOME/.claude/autonomy/postland}"
 STAMPS_DIR="$POSTLAND_DIR/stamps"
+# The verifier's OWN mutex, read as a liveness sensor. Path and semantics are postland-verify.sh's
+# $LOCK ("$STATE/run.lock.d" + a pid file) — deliberately the same oracle, not a second one: if
+# these two disagreed about "is a run in progress", the board would contradict the subject it reports.
+RUN_LOCK_PID="$POSTLAND_DIR/run.lock.d/pid"
+# The green CURSOR — the only commit R3 lets the live layer advance to. Its absence is not a detail:
+# scripts/deploy-live.sh refuses outright without one, so "this file has never existed" IS the
+# halted-deploy condition, stated positively.
+LAST_GREEN="$POSTLAND_DIR/last-green"
 LANDLOG="${CC_LAND_LOG:-${LAND_LOG:-$HOME/.claude/land.log}}"
 DEPLOY_REPO="${DEPLOY_REPO:-$HOME/Development/claude-infrastructure}"
 ALARM_H="${CC_POSTLAND_ALARM_H:-3}"            # stamp staleness budget (hours)
@@ -172,9 +190,33 @@ command -v jq >/dev/null || { echo "cc-blockers: jq required" >&2; exit 2; }
 mtime() { stat -f %m "$1" 2>/dev/null || true; }   # BSD stat; empty ⇒ sensor unreadable ⇒ fail open
 hrs()   { printf '%s' "$(( ($1 + 1800) / 3600 ))"; }
 
+# Is a verification run IN PROGRESS right now? Oracle copied from postland-verify.sh:try_acquire —
+# a lock whose pid file names a LIVE process is a held mutex; a dead pid is a crashed run's residue.
+#
+# WHY THE BOARD NEEDS THIS AT ALL. Every sensor below infers verifier health from STAMP AGE, but a
+# stamp is written only when a run FINISHES, and a run legitimately outlives the staleness budget:
+# measured on this host 2026-07-29, run_s was 5321 / 5437 / 8852 / 9620 / 10051 / 10112 s against an
+# ALARM_H of 3h (10800s). So a HEALTHY verifier, mid-run, reads as inert — and because STALE and
+# PERSISTENT-RED are mutually exclusive on that same axis, the red alarm that would name the real
+# fault ("every verdict is red, deploy cannot advance") is SUPPRESSED for exactly as long as the
+# runs are slow. Live proof: 34 stamps, 0 green, deploy halted 53 commits, and the only row the
+# board offered was "verifier-inert/STALE — go look at launchctl" while pid 94251 was 3h into a run.
+#
+# DIRECTION OF FAILURE IS DELIBERATE. Only a positive, validated read sets this true. An unreadable
+# or absent lock, a non-numeric pid, no `kill` — all leave it FALSE, i.e. exactly today's behaviour.
+# Guessing "running" would HIDE a genuinely dead verifier, which is the one outcome worse than the
+# misdiagnosis being fixed here.
+verifier_running() {
+  local holder
+  holder="$(cat "$RUN_LOCK_PID" 2>/dev/null || true)"
+  holder="${holder%%[[:space:]]*}"
+  case "${holder:-}" in ''|*[!0-9]*) return 1 ;; esac    # no holder / unparseable ⇒ not running
+  kill -0 "$holder" 2>/dev/null                          # ALIVE ⇒ a run is in progress
+}
+
 alarm_rows() { # → one JSON object per line (possibly none)
   local now newest_ts=0 f t v land_ts stamps="" gcommit="" green_ts=0 head_sha
-  local seen=0 red=0 green_24h=0 lands_24h=0
+  local seen=0 red=0 green_24h=0 lands_24h=0 emitted=0
   now="$(date +%s 2>/dev/null || true)"
   case "${now:-}" in ''|*[!0-9]*) return 0 ;; esac                    # no clock ⇒ no alarms
 
@@ -231,12 +273,17 @@ EOF
 
   # (a') VERIFIER-INERT / STALE — stamping stopped WHILE trunk kept moving. A stale stamp with no
   # recent land is not inertness, it is an idle box, so land.log's own mtime is the second sensor.
+  # THIRD sensor, and the one that makes the other two honest: a run IN PROGRESS is not inertness.
+  # Without it this branch accuses the verifier of being dead on the strength of a stamp it has not
+  # had the chance to write yet (see verifier_running for the measured run times that make that the
+  # NORMAL case, not an edge one).
   if [ -n "$land_ts" ] && [ "$land_ts" -gt "$newest_ts" ] \
-     && [ "$((now - newest_ts))" -gt "$((ALARM_H * 3600))" ]; then
+     && [ "$((now - newest_ts))" -gt "$((ALARM_H * 3600))" ] && ! verifier_running; then
     # shellcheck disable=SC2016  # $(id -u) is EMITTED, not evaluated: it must expand in the
     # operator's shell when they paste it, which is also what keeps the command uid-portable.
     printf '{"kind":"verifier-inert","state":"STALE","detail":"newest stamp %sh old; a land landed %sh ago","subject":"%s","recover_cmd":"tail -20 %s/runner.log ; launchctl print gui/$(id -u)/com.claude.postland-verify","ts":%s}\n' \
       "$(hrs "$((now - newest_ts))")" "$(hrs "$((now - land_ts))")" "$STAMPS_DIR" "$POSTLAND_DIR" "$now"
+    emitted=1
   fi
 
   # (b) TRUNK-RED / PERSISTENT-RED — the inverse failure: the verifier is ALIVE and stamping fresh,
@@ -245,19 +292,46 @@ EOF
   # just as hard — R3 pins the live layer to a green stamp that never comes. Freshness is required,
   # which is what keeps this mutually exclusive with STALE. Floor of 2 verdicts: one red stamp is
   # an ordinary red land, not a persistent state, and a board that cries on n=1 gets ignored.
-  if [ "$((now - newest_ts))" -le "$((ALARM_H * 3600))" ] \
+  # FRESHNESS, or a run in flight. "Fresh stamp" was only ever a proxy for "the verifier is alive",
+  # and it is a proxy that goes false precisely when runs get slow — the state in which an all-red
+  # trunk matters MOST, because every slow run ends in another red stamp and deploy stays pinned.
+  # Reading the mutex directly answers the real question, and keeps this mutually exclusive with
+  # STALE above by construction: STALE now requires NOT running, this admits running. Four cells,
+  # one alarm each — {fresh,stale} x {running,idle} — verified in tests/cc-blockers.bats.
+  if { [ "$((now - newest_ts))" -le "$((ALARM_H * 3600))" ] || verifier_running; } \
      && [ "$seen" -ge 2 ] && [ "$red" -eq "$seen" ] && [ "$green_24h" -eq 0 ] && [ "$lands_24h" -eq 1 ]; then
     # --arg (not a "red" literal) so the emitted command carries NO double quote: one less escaping
     # layer between here, the JSON, the table cell and the operator's paste buffer.
     # shellcheck disable=SC2016  # $v is jq's --arg binding, EMITTED for the operator's jq to read.
     printf '{"kind":"trunk-red","state":"PERSISTENT-RED","detail":"newest %s verdicts all red; 0 green in 24h","subject":"%s","recover_cmd":"jq -r --arg v red %sselect(.verdict==$v).failing[]?%s %s/*.json | sort | uniq -c | sort -rn | head","ts":%s}\n' \
       "$seen" "$STAMPS_DIR" "'" "'" "$STAMPS_DIR" "$now"
+    emitted=1
   fi
 
   # (c) DEPLOY-LAG. The green cursor is the only thing the live layer may advance to, so a green
   # commit sitting undeployed past the budget means the deploy lane — not the verifier — is stuck.
   # The ancestor test is load-bearing: a green stamp BEHIND the deployed HEAD is history, not lag.
-  [ -n "$gcommit" ] || return 0
+  # (d) NEVER-GREEN — the BACKSTOP, and the reason the board had nothing to say while deploy sat
+  # halted for 53 commits. This bare `return 0` on "no green stamp exists" WAS the hole: every alarm
+  # above explains a SPECIFIC fault, and none of them covers the state that actually pins the live
+  # layer — the verifier runs, returns verdicts, and not ONE has ever been green, so `last-green`
+  # never gets written and deploy-live has no cursor to advance to. deploy-lag structurally cannot
+  # cover it (it needs a green in order to call one late), verifier-inert cannot (the job is alive),
+  # and trunk-red abstains the moment a single non-red verdict lands in its window — which is exactly
+  # what the live host looked like: 30 red, 2 cut, 1 hung, 0 green, `last-green` absent, and silence.
+  #
+  # Emitted ONLY when no sharper row already claimed the reason (`emitted`), so the operator never
+  # gets two rows pointing at one fault. Same EXISTENCE-EVIDENCE gate as its siblings — a fixtured
+  # $HOME void has no greens either, and "the pipeline never certified" is only an alarm where a
+  # pipeline was supposed to certify. The n>=2 floor keeps a brand-new install quiet.
+  if [ -z "$gcommit" ]; then
+    if [ "$emitted" -eq 0 ] && [ "$seen" -ge 2 ] && [ ! -e "$LAST_GREEN" ] \
+       && { [ -e "$LANDLOG" ] || [ -d "$DEPLOY_REPO" ]; }; then
+      printf '{"kind":"never-green","state":"NEVER-CERTIFIED","detail":"%s verdicts, 0 green EVER; deploy has no cursor","subject":"%s","recover_cmd":"tail -40 %s/runner.log ; jq -r .verdict %s/*.json | sort | uniq -c","ts":%s}\n' \
+        "$seen" "$LAST_GREEN" "$POSTLAND_DIR" "$STAMPS_DIR" "$now"
+    fi
+    return 0
+  fi
   head_sha="$(git -C "$DEPLOY_REPO" rev-parse HEAD 2>/dev/null || true)"
   [ -n "$head_sha" ] || return 0                                       # not a checkout ⇒ fail open
   [ "$gcommit" != "$head_sha" ] || return 0                            # already deployed
@@ -731,7 +805,7 @@ na="$(printf '%s' "$ALARMS_JSON" | jq 'length' 2>/dev/null || echo 0)"
 # the families have different owners and different recovery paths, and a dispatch row printed under a
 # "the landing net is degraded" heading sends the operator to the wrong subsystem. One renderer
 # (alarm_table), N selectors — never a second renderer.
-LAND_SEL='select(.kind=="verifier-inert" or .kind=="trunk-red" or .kind=="deploy-lag")'
+LAND_SEL='select(.kind=="verifier-inert" or .kind=="trunk-red" or .kind=="deploy-lag" or .kind=="never-green")'
 DISP_SEL='select(.kind=="dispatch-inert")'
 # ONE family for both approval kinds, on the same rule that splits LAND from DISPATCH: they share a
 # subsystem and an owner. A stuck assignee and an unwired beacon are the SAME operator question —
