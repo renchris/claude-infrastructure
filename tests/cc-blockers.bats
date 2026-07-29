@@ -207,6 +207,142 @@ kinds() { ccb --json | jq -r '.[].kind' | sort | tr '\n' ' '; }
   [ "$(kinds)" = "trunk-red " ]
 }
 
+# ── the RUN-IN-PROGRESS cell ──────────────────────────────────────────────────────────────────────
+# A stamp is written only when a run FINISHES, and a run outlives the staleness budget as a matter of
+# course (measured on this host: run_s up to 10112s against ALARM_H=3h). So {stale stamp} alone does
+# not distinguish "the verifier died" from "the verifier is still working", and the board used to
+# resolve that ambiguity the wrong way in BOTH directions at once: it accused a live verifier of
+# being inert, and — because the two alarms are mutually exclusive on stamp freshness — it suppressed
+# the PERSISTENT-RED row that names the actual fault. Live on 2026-07-29: 34 stamps, 0 green ever,
+# deploy halted 53 commits behind trunk, and the one row offered was "STALE, go read launchctl"
+# while pid 94251 was three hours into a run. These four tests pin all four cells of
+# {fresh,stale} x {running,idle}; the two above own the idle row.
+
+hold_run_lock() { # the verifier's OWN in-progress mark: run.lock.d/pid naming a LIVE process
+  mkdir -p "$CC_POSTLAND_DIR/run.lock.d"
+  sleep 60 >/dev/null 2>&1 &
+  local p=$!
+  echo "$p" >> "$D/pids"                                  # teardown() reaps it
+  printf '%s\n' "$p" > "$CC_POSTLAND_DIR/run.lock.d/pid"
+}
+
+@test "alarm verifier-inert/STALE does NOT fire while a run is IN PROGRESS" {
+  mkstamp t1 red 9H                                       # stale by any budget…
+  : > "$CC_LAND_LOG"                                      # …and a land newer than it: STALE's shape
+  hold_run_lock                                           # …but the verifier is mid-run
+  run ccb --json
+  [ "$status" -eq 0 ]
+  [ "$(echo "$output" | jq '[.[] | select(.kind=="verifier-inert")] | length')" = 0 ]
+}
+
+@test "alarm trunk-red fires MID-RUN even though the newest stamp is past the budget" {
+  # The regression that mattered: this is the shape the live host was in for 53 commits, and the
+  # board was silent about the only thing an operator could act on.
+  for n in 1 2 3 4 5; do mkstamp "r$n" red 9H; done
+  : > "$CC_LAND_LOG"
+  hold_run_lock
+  run ccb --json
+  [ "$(echo "$output" | jq -r '[.[] | select(.kind=="trunk-red")] | .[0].state')" = "PERSISTENT-RED" ]
+}
+
+@test "alarms stay MUTUALLY EXCLUSIVE in the stale+running cell (exactly one kind)" {
+  for n in 1 2 3 4 5; do mkstamp "r$n" red 9H; done
+  : > "$CC_LAND_LOG"
+  hold_run_lock
+  [ "$(kinds)" = "trunk-red " ]
+}
+
+@test "a DEAD lock holder is residue, not a run: STALE still fires" {
+  # POSITIVE CONTROL for the sensor. Without this, a verifier_running() that returned true
+  # unconditionally would pass every test above while permanently hiding a genuinely dead verifier —
+  # the one outcome worse than the misdiagnosis being fixed here.
+  mkstamp t1 red 9H
+  : > "$CC_LAND_LOG"
+  mkdir -p "$CC_POSTLAND_DIR/run.lock.d"
+  dead_pid > "$CC_POSTLAND_DIR/run.lock.d/pid"
+  run ccb --json
+  [ "$(echo "$output" | jq -r '[.[] | select(.kind=="verifier-inert")] | .[0].state')" = "STALE" ]
+}
+
+# ── never-green: the BACKSTOP ─────────────────────────────────────────────────────────────────────
+# The state that actually halted deploy for 53 commits, and that no other alarm can express: the
+# verifier works, returns verdicts, and none has EVER been green. Live shape on 2026-07-29 was
+# 30 red + 2 cut + 1 hung + 0 green with `last-green` absent — and because ONE non-red verdict sits
+# in trunk-red's window, trunk-red correctly abstained and the board said nothing at all.
+
+@test "alarm never-green/NEVER-CERTIFIED: verdicts exist, none has ever been green" {
+  # The exact live shape: a non-red verdict in the window, so trunk-red must abstain and this must not.
+  mkstamp r1 red 1M; mkstamp r2 red 2M; mkstamp h1 hung 3M; mkstamp r3 red 4M
+  : > "$CC_LAND_LOG"
+  run ccb --json
+  [ "$status" -eq 0 ]
+  [ "$(echo "$output" | jq -r '[.[] | select(.kind=="never-green")] | .[0].state')" = "NEVER-CERTIFIED" ]
+  [ "$(echo "$output" | jq '[.[] | select(.kind=="trunk-red")] | length')" = 0 ]
+}
+
+@test "alarm never-green is SILENCED by a single green stamp ever having existed" {
+  mkstamp r1 red 1M; mkstamp h1 hung 2M; mkstamp g green 30H     # green is OLD — outside 24h
+  : > "$CC_LAND_LOG"
+  run ccb --json
+  [ "$(echo "$output" | jq '[.[] | select(.kind=="never-green")] | length')" = 0 ]
+}
+
+@test "alarm never-green is SILENCED by an existing last-green cursor" {
+  # The cursor is what deploy actually reads, so its presence means deploy is not cursorless even if
+  # the stamp that produced it has since been pruned.
+  mkstamp r1 red 1M; mkstamp h1 hung 2M
+  : > "$CC_LAND_LOG"
+  printf 'deadbeef\n' > "$CC_POSTLAND_DIR/last-green"
+  run ccb --json
+  [ "$(echo "$output" | jq '[.[] | select(.kind=="never-green")] | length')" = 0 ]
+}
+
+@test "alarm never-green DEFERS to a sharper row — never two rows for one fault" {
+  for n in 1 2 3 4 5; do mkstamp "r$n" red "${n}M"; done          # all-red ⇒ trunk-red owns it
+  : > "$CC_LAND_LOG"
+  [ "$(kinds)" = "trunk-red " ]
+}
+
+@test "alarm never-green DEFERS to verifier-inert/STALE (a dead verifier is the sharper fault)" {
+  mkstamp r1 red 9H; mkstamp h1 hung 10H
+  : > "$CC_LAND_LOG"
+  [ "$(kinds)" = "verifier-inert " ]
+}
+
+@test "alarm never-green has NO premise in a void (no land.log, no deploy repo)" {
+  # The phantom-row law: a fixtured $HOME has no greens either. Absence is only an alarm where a
+  # pipeline was supposed to certify.
+  mkstamp r1 red 1M; mkstamp h1 hung 2M
+  rm -f "$CC_LAND_LOG"; export DEPLOY_REPO="$D/absent-repo"
+  run ccb --json
+  [ "$(echo "$output" | jq 'length')" = 0 ]
+}
+
+@test "alarm never-green stays quiet on a single verdict (the n>=2 floor)" {
+  mkstamp solo hung 1M
+  : > "$CC_LAND_LOG"
+  run ccb --json
+  [ "$(echo "$output" | jq 'length')" = 0 ]
+}
+
+@test "alarm never-green renders in the LAND-PIPELINE table, not only in --json" {
+  # A kind missing from LAND_SEL rides the JSON array and VANISHES from the operator's table.
+  mkstamp r1 red 1M; mkstamp h1 hung 2M
+  : > "$CC_LAND_LOG"
+  run ccb
+  [ "$(echo "$output" | grep -c '^LAND-PIPELINE')" = 1 ]
+  echo "$output" | grep -q 'never-green' || false
+}
+
+@test "an unparseable lock pid reads as NOT running (the sensor never guesses alive)" {
+  mkstamp t1 red 9H
+  : > "$CC_LAND_LOG"
+  mkdir -p "$CC_POSTLAND_DIR/run.lock.d"
+  printf 'not-a-pid\n' > "$CC_POSTLAND_DIR/run.lock.d/pid"
+  run ccb --json
+  [ "$(echo "$output" | jq -r '[.[] | select(.kind=="verifier-inert")] | .[0].state')" = "STALE" ]
+}
+
 @test "alarm deploy-lag: a green commit ahead of the deployed HEAD past the budget" {
   git init -q "$D/repo"
   git -C "$D/repo" config user.email t@t; git -C "$D/repo" config user.name t
