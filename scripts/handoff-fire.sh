@@ -816,6 +816,60 @@ check_slash_head() { # $1=prompt-file → 0 ok/warned, 1 (loud) if a /goal head 
   return 0
 }
 
+# ---- P0-17 machine-capacity admission gate (lag incident 2026-07-29) --------------------------
+# EVERY fire mode funnels through this script — cc-dispatch defaults CC_DISPATCH_SPAWN_BIN here, and
+# the desk, the ground-up coordinator and manual fires all call it — so this is the ONE place where a
+# HARDWARE term can bind (enforcement-must-live-at-the-chokepoint).
+#
+# Until now every admission guard counted API QUOTA and nothing counted the cores the spawned
+# sessions actually run on: cc-wave-plan bounds a wave by CC_WAVE_MAX_PER_ACCT (accounts x 2) and the
+# Fable window; cc-dispatch bounds a pass by CC_DISPATCH_MAX_SPAWN. Measured on this box 2026-07-29:
+# 33 live Opus-max sessions across 38 panes on 10 cores, load 27 (2.7/core), 8% idle, 54G/64G RAM —
+# and iTerm2 alone burned 1.15 cores just DRAWING them. Quota headroom existed the whole time, so no
+# existing gate had any reason to fire. The box, not the API, was the binding constraint.
+#
+# Signal = 1-minute load average / core count. It is the cheapest honest saturation read (one sysctl,
+# no fork storm) and the 1-min window smooths the burstiness of an agent fleet.
+#
+# A RECYCLE is EXEMPT: it REPLACES a session (net-zero panes), so gating it would strand the very
+# handoff that SHEDS load — the gate would amplify the contention it exists to relieve
+# (fail-closed-degradation-as-amplifier). Only NET-NEW spawns are admitted against capacity.
+#
+# Fail-OPEN on an unreadable probe: a broken sysctl must never strand the whole fleet. Refusing here
+# would be safe for the box but would silently halt all dispatch — the expensive failure.
+# Kill switch: CC_FIRE_CAPACITY_GATE=off.  Ceiling: CC_FIRE_MAX_LOAD_PER_CORE (default 2.0).
+# Returns 0 = admit, 9 = refuse (a distinct code so a caller can back off rather than treat it as a
+# payload error). Prints the measured numbers either way — a refusal with no numbers is unauditable.
+capacity_gate() {
+  [ "${CC_FIRE_CAPACITY_GATE:-on}" = off ] && return 0
+  local ncpu load ceiling verdict lpc
+  ncpu="$(sysctl -n hw.ncpu 2>/dev/null || true)"
+  load="$(sysctl -n vm.loadavg 2>/dev/null | awk '{print $2}' || true)"
+  ceiling="${CC_FIRE_MAX_LOAD_PER_CORE:-2.0}"
+  case "$ncpu" in ''|*[!0-9]*)
+    echo "-- capacity gate: hw.ncpu unreadable ('$ncpu') -> ADMIT (fail-open)" >&2; return 0 ;;
+  esac
+  case "$load" in ''|*[!0-9.]*)
+    echo "-- capacity gate: vm.loadavg unreadable ('$load') -> ADMIT (fail-open)" >&2; return 0 ;;
+  esac
+  case "$ceiling" in ''|*[!0-9.]*)
+    echo "-- capacity gate: bad CC_FIRE_MAX_LOAD_PER_CORE ('$ceiling') -> ADMIT (fail-open)" >&2; return 0 ;;
+  esac
+  [ "$ncpu" -gt 0 ] || { echo "-- capacity gate: hw.ncpu=0 -> ADMIT (fail-open)" >&2; return 0; }
+  verdict="$(awk -v l="$load" -v n="$ncpu" -v c="$ceiling" \
+    'BEGIN { lpc = l / n; printf "%s %.2f", (lpc > c ? "REFUSE" : "ADMIT"), lpc }')"
+  lpc="${verdict#* }"; verdict="${verdict%% *}"
+  if [ "$verdict" = REFUSE ]; then
+    echo "!! capacity gate: REFUSING a net-new fire — load ${load} on ${ncpu} cores = ${lpc}/core > ceiling ${ceiling}/core." >&2
+    echo "   The box is saturated; another Opus-max session would make every live session slower." >&2
+    echo "   Shed load first (close finished panes / let the wave drain), then re-fire." >&2
+    echo "   Override for one fire: CC_FIRE_CAPACITY_GATE=off ; raise the bar: CC_FIRE_MAX_LOAD_PER_CORE=<n>" >&2
+    return 9
+  fi
+  echo "-- capacity gate: ADMIT — load ${load} on ${ncpu} cores = ${lpc}/core (ceiling ${ceiling}/core)" >&2
+  return 0
+}
+
 # ---- T-P2-5 (F3 / G-P2-5): payload back-channel lint PRE-FIRE ---------------------------------
 # The W5 incident ROOT: a successor-fire payload DROPPED the back-channel block (a cc-notify recipe +
 # a resolvable desk target), so the fired successor had no VERIFIED channel to the desk and its
@@ -1575,6 +1629,9 @@ esac; done
 # P0-16: reject an over-cap /goal payload BEFORE any side effect (covers every fire mode).
 check_goal_length "$PROMPT_FILE" || exit 1
 check_slash_head  "$PROMPT_FILE" || exit 1
+# P0-17: refuse a NET-NEW fire onto an already-saturated box, BEFORE any side effect. A recycle
+# REPLACES a session (net-zero panes) and is exempt — see capacity_gate().
+if [ "$RECYCLE" = 0 ]; then capacity_gate || exit 9; fi
 [ -n "$CWD" ] && [ -n "$WORKTREE" ] && { echo "!! --cwd and --worktree are mutually exclusive" >&2; exit 1; }
 if [ -n "$WORKTREE" ] && ! git check-ref-format --branch "$WORKTREE" >/dev/null 2>&1; then
   echo "!! invalid branch name for --worktree: $WORKTREE" >&2; exit 1
