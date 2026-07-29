@@ -1,0 +1,199 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 520" width="1920" height="520" role="img" aria-labelledby="t d">
+<title id="t">claude-infrastructure — the long watch</title>
+<desc id="d">The words claude-infrastructure set in monospace on a dark plate. The title is present the whole time and never moves; the only motion is the orange Claude Code pixel creature idling — glancing left, glancing right and occasionally stretching both arms above its head — on a loop that repeats indefinitely with no restart. A dense field of very faint stars twinkles on uncorrelated slow timings, with one star at the right on a far longer beat than any other. The creature stands centred on the dotted horizon below the words.</desc>
+<defs>
+  <radialGradient id="plate" cx=".5" cy=".38" r=".72"><stop offset="0" stop-color="#0f1420"/><stop offset="1" stop-color="#080b11"/></radialGradient>
+  <linearGradient id="rule" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="1920" y2="0"><stop offset="0" stop-color="#30363d" stop-opacity="0"/><stop offset=".16" stop-color="#30363d" stop-opacity=".95"/><stop offset=".84" stop-color="#30363d" stop-opacity=".95"/><stop offset="1" stop-color="#30363d" stop-opacity="0"/></linearGradient>
+</defs>
+<style>
+  .f { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; }
+  #tw0 { animation: tw0 9s step-end infinite; }
+  #tw1 { animation: tw1 9s step-end infinite; }
+  #tw2 { animation: tw2 9s step-end infinite; }
+  #tw3 { animation: tw3 7s step-end infinite; }
+  #tw4 { animation: tw4 13s step-end infinite; }
+  #tw5 { animation: tw5 13s step-end infinite; }
+  #tw6 { animation: tw6 7s step-end infinite; }
+  #tw7 { animation: tw7 9s step-end infinite; }
+  #tw8 { animation: tw8 13s step-end infinite; }
+  #tw9 { animation: tw9 11s step-end infinite; }
+  #tw10 { animation: tw10 7s step-end infinite; }
+  #tw11 { animation: tw11 13s step-end infinite; }
+  #tw12 { animation: tw12 9s step-end infinite; }
+  #tw13 { animation: tw13 11s step-end infinite; }
+  #tw14 { animation: tw14 11s step-end infinite; }
+  #tw15 { animation: tw15 7s step-end infinite; }
+  #tw16 { animation: tw16 9s step-end infinite; }
+  #tw17 { animation: tw17 13s step-end infinite; }
+  #tw18 { animation: tw18 9s step-end infinite; }
+  #tw19 { animation: tw19 9s step-end infinite; }
+  #tw20 { animation: tw20 9s step-end infinite; }
+  #tw21 { animation: tw21 11s step-end infinite; }
+  #tw22 { animation: tw22 7s step-end infinite; }
+  #tw23 { animation: tw23 7s step-end infinite; }
+  #tw24 { animation: tw24 9s step-end infinite; }
+  #tw25 { animation: tw25 9s step-end infinite; }
+  #tw26 { animation: tw26 7s step-end infinite; }
+  #tw27 { animation: tw27 9s step-end infinite; }
+  #tw28 { animation: tw28 11s step-end infinite; }
+  #tw29 { animation: tw29 7s step-end infinite; }
+  #tw30 { animation: tw30 9s step-end infinite; }
+  #tw31 { animation: tw31 9s step-end infinite; }
+  #tw32 { animation: tw32 11s step-end infinite; }
+  #tw33 { animation: tw33 9s step-end infinite; }
+  #tw34 { animation: tw34 7s step-end infinite; }
+  #tw35 { animation: tw35 9s step-end infinite; }
+  #tw36 { animation: tw36 7s step-end infinite; }
+  #tw37 { animation: tw37 13s step-end infinite; }
+  #tw38 { animation: tw38 7s step-end infinite; }
+  #tw39 { animation: tw39 9s step-end infinite; }
+  #tw40 { animation: tw40 7s step-end infinite; }
+  #tw41 { animation: tw41 7s step-end infinite; }
+  #tw42 { animation: tw42 9s step-end infinite; }
+  #tw43 { animation: tw43 9s step-end infinite; }
+  #tw44 { animation: tw44 13s step-end infinite; }
+  #tw45 { animation: tw45 11s step-end infinite; }
+  #tw46 { animation: tw46 9s step-end infinite; }
+  #tw47 { animation: tw47 7s step-end infinite; }
+  #tw48 { animation: tw48 7s step-end infinite; }
+  #tw49 { animation: tw49 7s step-end infinite; }
+  #tw50 { animation: tw50 13s step-end infinite; }
+  #tw51 { animation: tw51 9s step-end infinite; }
+  #twslow { animation: twslow 47s step-end infinite; }
+  #c0 .eye { animation: gaze_c0 13s step-end infinite; }
+  #c0 .arm { animation: arms_c0 19s step-end infinite; }
+  @keyframes tw0 { 0%{opacity:0.14} 23.96%{opacity:0.14} 73.96%{opacity:0.491886} 85.96%{opacity:0.14} 100%{opacity:0.14} }
+  @keyframes tw1 { 0%{opacity:0.664195} 7.729%{opacity:0.14} 45.73%{opacity:0.14} 95.73%{opacity:0.664195} 100%{opacity:0.664195} }
+  @keyframes tw2 { 0%{opacity:0.14} 17.86%{opacity:0.621193} 29.86%{opacity:0.14} 67.86%{opacity:0.14} 100%{opacity:0.14} }
+  @keyframes tw3 { 0%{opacity:0.703647} 9.844%{opacity:0.14} 47.84%{opacity:0.14} 97.84%{opacity:0.703647} 100%{opacity:0.703647} }
+  @keyframes tw4 { 0%{opacity:0.662725} 8.861%{opacity:0.14} 46.86%{opacity:0.14} 96.86%{opacity:0.662725} 100%{opacity:0.662725} }
+  @keyframes tw5 { 0%{opacity:0.14} 0.2361%{opacity:0.709079} 12.24%{opacity:0.14} 50.24%{opacity:0.14} 100%{opacity:0.14} }
+  @keyframes tw6 { 0%{opacity:0.14} 3.312%{opacity:0.14} 53.31%{opacity:0.606865} 65.31%{opacity:0.14} 100%{opacity:0.14} }
+  @keyframes tw7 { 0%{opacity:0.490968} 5.912%{opacity:0.14} 43.91%{opacity:0.14} 93.91%{opacity:0.490968} 100%{opacity:0.490968} }
+  @keyframes tw8 { 0%{opacity:0.14} 37.59%{opacity:0.14} 87.59%{opacity:0.497231} 99.59%{opacity:0.14} 100%{opacity:0.14} }
+  @keyframes tw9 { 0%{opacity:0.14} 5.008%{opacity:0.569406} 17.01%{opacity:0.14} 55.01%{opacity:0.14} 100%{opacity:0.14} }
+  @keyframes tw10 { 0%{opacity:0.14} 24.37%{opacity:0.530133} 36.37%{opacity:0.14} 74.37%{opacity:0.14} 100%{opacity:0.14} }
+  @keyframes tw11 { 0%{opacity:0.14} 11.25%{opacity:0.14} 61.25%{opacity:0.71148} 73.25%{opacity:0.14} 100%{opacity:0.14} }
+  @keyframes tw12 { 0%{opacity:0.588121} 9.791%{opacity:0.14} 47.79%{opacity:0.14} 97.79%{opacity:0.588121} 100%{opacity:0.588121} }
+  @keyframes tw13 { 0%{opacity:0.14} 5.769%{opacity:0.14} 55.77%{opacity:0.479923} 67.77%{opacity:0.14} 100%{opacity:0.14} }
+  @keyframes tw14 { 0%{opacity:0.14} 11.67%{opacity:0.454392} 23.67%{opacity:0.14} 61.67%{opacity:0.14} 100%{opacity:0.14} }
+  @keyframes tw15 { 0%{opacity:0.14} 20.34%{opacity:0.506064} 32.34%{opacity:0.14} 70.34%{opacity:0.14} 100%{opacity:0.14} }
+  @keyframes tw16 { 0%{opacity:0.14} 19.19%{opacity:0.14} 69.19%{opacity:0.534211} 81.19%{opacity:0.14} 100%{opacity:0.14} }
+  @keyframes tw17 { 0%{opacity:0.14} 17.25%{opacity:0.14} 67.25%{opacity:0.459769} 79.25%{opacity:0.14} 100%{opacity:0.14} }
+  @keyframes tw18 { 0%{opacity:0.14} 14.28%{opacity:0.50401} 26.28%{opacity:0.14} 64.28%{opacity:0.14} 100%{opacity:0.14} }
+  @keyframes tw19 { 0%{opacity:0.14} 24.39%{opacity:0.14} 74.39%{opacity:0.576042} 86.39%{opacity:0.14} 100%{opacity:0.14} }
+  @keyframes tw20 { 0%{opacity:0.14} 12.9%{opacity:0.14} 62.9%{opacity:0.516077} 74.9%{opacity:0.14} 100%{opacity:0.14} }
+  @keyframes tw21 { 0%{opacity:0.551117} 6.046%{opacity:0.14} 44.05%{opacity:0.14} 94.05%{opacity:0.551117} 100%{opacity:0.551117} }
+  @keyframes tw22 { 0%{opacity:0.14} 8.954%{opacity:0.14} 58.95%{opacity:0.528034} 70.95%{opacity:0.14} 100%{opacity:0.14} }
+  @keyframes tw23 { 0%{opacity:0.14} 32.48%{opacity:0.601657} 44.48%{opacity:0.14} 82.48%{opacity:0.14} 100%{opacity:0.14} }
+  @keyframes tw24 { 0%{opacity:0.14} 17.32%{opacity:0.14} 67.32%{opacity:0.602514} 79.32%{opacity:0.14} 100%{opacity:0.14} }
+  @keyframes tw25 { 0%{opacity:0.14} 14.88%{opacity:0.655015} 26.88%{opacity:0.14} 64.88%{opacity:0.14} 100%{opacity:0.14} }
+  @keyframes tw26 { 0%{opacity:0.14} 43.25%{opacity:0.588937} 55.25%{opacity:0.14} 93.25%{opacity:0.14} 100%{opacity:0.14} }
+  @keyframes tw27 { 0%{opacity:0.14} 42.91%{opacity:0.646913} 54.91%{opacity:0.14} 92.91%{opacity:0.14} 100%{opacity:0.14} }
+  @keyframes tw28 { 0%{opacity:0.14} 14.37%{opacity:0.14} 64.37%{opacity:0.494096} 76.37%{opacity:0.14} 100%{opacity:0.14} }
+  @keyframes tw29 { 0%{opacity:0.559762} 7.653%{opacity:0.14} 45.65%{opacity:0.14} 95.65%{opacity:0.559762} 100%{opacity:0.559762} }
+  @keyframes tw30 { 0%{opacity:0.14} 4.785%{opacity:0.14} 54.79%{opacity:0.59747} 66.79%{opacity:0.14} 100%{opacity:0.14} }
+  @keyframes tw31 { 0%{opacity:0.14} 29.5%{opacity:0.14} 79.5%{opacity:0.604306} 91.5%{opacity:0.14} 100%{opacity:0.14} }
+  @keyframes tw32 { 0%{opacity:0.14} 7.793%{opacity:0.685221} 19.79%{opacity:0.14} 57.79%{opacity:0.14} 100%{opacity:0.14} }
+  @keyframes tw33 { 0%{opacity:0.420283} 2.495%{opacity:0.14} 40.5%{opacity:0.14} 90.5%{opacity:0.420283} 100%{opacity:0.420283} }
+  @keyframes tw34 { 0%{opacity:0.14} 2.836%{opacity:0.14} 52.84%{opacity:0.608699} 64.84%{opacity:0.14} 100%{opacity:0.14} }
+  @keyframes tw35 { 0%{opacity:0.14} 35.1%{opacity:0.587401} 47.1%{opacity:0.14} 85.1%{opacity:0.14} 100%{opacity:0.14} }
+  @keyframes tw36 { 0%{opacity:0.14} 9.522%{opacity:0.563977} 21.52%{opacity:0.14} 59.52%{opacity:0.14} 100%{opacity:0.14} }
+  @keyframes tw37 { 0%{opacity:0.662963} 9.622%{opacity:0.14} 47.62%{opacity:0.14} 97.62%{opacity:0.662963} 100%{opacity:0.662963} }
+  @keyframes tw38 { 0%{opacity:0.14} 20.48%{opacity:0.14} 70.48%{opacity:0.534382} 82.48%{opacity:0.14} 100%{opacity:0.14} }
+  @keyframes tw39 { 0%{opacity:0.14} 31.19%{opacity:0.61528} 43.19%{opacity:0.14} 81.19%{opacity:0.14} 100%{opacity:0.14} }
+  @keyframes tw40 { 0%{opacity:0.14} 34.41%{opacity:0.455841} 46.41%{opacity:0.14} 84.41%{opacity:0.14} 100%{opacity:0.14} }
+  @keyframes tw41 { 0%{opacity:0.14} 3.946%{opacity:0.14} 53.95%{opacity:0.618123} 65.95%{opacity:0.14} 100%{opacity:0.14} }
+  @keyframes tw42 { 0%{opacity:0.14} 4.593%{opacity:0.14} 54.59%{opacity:0.478691} 66.59%{opacity:0.14} 100%{opacity:0.14} }
+  @keyframes tw43 { 0%{opacity:0.14} 24.64%{opacity:0.14} 74.64%{opacity:0.702332} 86.64%{opacity:0.14} 100%{opacity:0.14} }
+  @keyframes tw44 { 0%{opacity:0.636073} 9.611%{opacity:0.14} 47.61%{opacity:0.14} 97.61%{opacity:0.636073} 100%{opacity:0.636073} }
+  @keyframes tw45 { 0%{opacity:0.14} 5.787%{opacity:0.538371} 17.79%{opacity:0.14} 55.79%{opacity:0.14} 100%{opacity:0.14} }
+  @keyframes tw46 { 0%{opacity:0.14} 5.792%{opacity:0.14} 55.79%{opacity:0.619271} 67.79%{opacity:0.14} 100%{opacity:0.14} }
+  @keyframes tw47 { 0%{opacity:0.14} 44.06%{opacity:0.673775} 56.06%{opacity:0.14} 94.06%{opacity:0.14} 100%{opacity:0.14} }
+  @keyframes tw48 { 0%{opacity:0.14} 15.09%{opacity:0.14} 65.09%{opacity:0.441637} 77.09%{opacity:0.14} 100%{opacity:0.14} }
+  @keyframes tw49 { 0%{opacity:0.14} 18.26%{opacity:0.468918} 30.26%{opacity:0.14} 68.26%{opacity:0.14} 100%{opacity:0.14} }
+  @keyframes tw50 { 0%{opacity:0.14} 18.26%{opacity:0.681042} 30.26%{opacity:0.14} 68.26%{opacity:0.14} 100%{opacity:0.14} }
+  @keyframes tw51 { 0%{opacity:0.14} 20.63%{opacity:0.14} 70.63%{opacity:0.472915} 82.63%{opacity:0.14} 100%{opacity:0.14} }
+  @keyframes twslow { 0%{opacity:0.1} 93%{opacity:0.85} 99%{opacity:0.1} 100%{opacity:0.1} }
+  @keyframes gaze_c0 { 0%{transform:translateX(0px)} 28%{transform:translateX(-20px)} 34%{transform:translateX(0px)} 61%{transform:translateX(20px)} 67%{transform:translateX(0px)} 100%{transform:translateX(0px)} }
+  @keyframes arms_c0 { 0%{transform:translateY(0px)} 86%{transform:translateY(-60px)} 91%{transform:translateY(0px)} 100%{transform:translateY(0px)} }
+  /* Same artwork, held still. Every cycle begins AND ends on `default`, so the
+     frozen frame is one the animation genuinely passes through rather than a
+     separate static fallback free to drift from it. */
+  @media (prefers-reduced-motion: reduce) {
+    /* The creature must freeze as ITSELF. An earlier version swept opacity onto
+       .eye and .arm along with the stars, which washed out the arms and let orange
+       bleed through the eyes — a degraded fallback wearing the same geometry, which
+       is precisely what 'same artwork' rules out. */
+    .eye, .arm { animation: none !important; transform: none !important; }
+    /* Stars hold mid-twinkle rather than at their dimmest, so the sky still reads. */
+    [id^=tw] { animation: none !important; opacity: .45 !important; }
+  }
+</style>
+<rect width="1920" height="520" rx="14" fill="url(#plate)"/>
+<rect x=".75" y=".75" width="1918.5" height="518.5" rx="14" fill="none" stroke="#21262d" stroke-width="1.5"/>
+<g transform="translate(0 23)">
+<rect id="tw0" x="1591.8" y="174.4" width="2" height="2" fill="#9aa4ae" opacity="0.14"/>
+<rect id="tw1" x="382.3" y="96.2" width="3" height="3" fill="#9aa4ae" opacity="0.14"/>
+<rect id="tw2" x="1093.7" y="183.9" width="2" height="2" fill="#9aa4ae" opacity="0.14"/>
+<rect id="tw3" x="1441.5" y="59.2" width="3" height="3" fill="#9aa4ae" opacity="0.14"/>
+<rect id="tw4" x="1505.1" y="144.9" width="2" height="2" fill="#9aa4ae" opacity="0.14"/>
+<rect id="tw5" x="1832.1" y="155.5" width="3" height="3" fill="#9aa4ae" opacity="0.14"/>
+<rect id="tw6" x="501.0" y="164.7" width="2" height="2" fill="#9aa4ae" opacity="0.14"/>
+<rect id="tw7" x="1533.8" y="235.9" width="2" height="2" fill="#9aa4ae" opacity="0.14"/>
+<rect id="tw8" x="1050.3" y="42.1" width="3" height="3" fill="#9aa4ae" opacity="0.14"/>
+<rect id="tw9" x="1553.3" y="200.4" width="2" height="2" fill="#9aa4ae" opacity="0.14"/>
+<rect id="tw10" x="1603.3" y="196.2" width="2" height="2" fill="#9aa4ae" opacity="0.14"/>
+<rect id="tw11" x="1017.8" y="72.6" width="2" height="2" fill="#9aa4ae" opacity="0.14"/>
+<rect id="tw12" x="968.0" y="56.2" width="3" height="3" fill="#9aa4ae" opacity="0.14"/>
+<rect id="tw13" x="1175.4" y="92.5" width="2" height="2" fill="#9aa4ae" opacity="0.14"/>
+<rect id="tw14" x="365.8" y="143.7" width="2" height="2" fill="#9aa4ae" opacity="0.14"/>
+<rect id="tw15" x="1313.0" y="116.8" width="2" height="2" fill="#9aa4ae" opacity="0.14"/>
+<rect id="tw16" x="460.8" y="126.1" width="3" height="3" fill="#9aa4ae" opacity="0.14"/>
+<rect id="tw17" x="966.3" y="223.0" width="3" height="3" fill="#9aa4ae" opacity="0.14"/>
+<rect id="tw18" x="1761.6" y="171.7" width="2" height="2" fill="#9aa4ae" opacity="0.14"/>
+<rect id="tw19" x="394.3" y="230.5" width="2" height="2" fill="#9aa4ae" opacity="0.14"/>
+<rect id="tw20" x="249.4" y="214.4" width="3" height="3" fill="#9aa4ae" opacity="0.14"/>
+<rect id="tw21" x="522.6" y="201.8" width="2" height="2" fill="#9aa4ae" opacity="0.14"/>
+<rect id="tw22" x="1794.8" y="123.5" width="2" height="2" fill="#9aa4ae" opacity="0.14"/>
+<rect id="tw23" x="684.1" y="192.3" width="2" height="2" fill="#9aa4ae" opacity="0.14"/>
+<rect id="tw24" x="1176.2" y="177.0" width="2" height="2" fill="#9aa4ae" opacity="0.14"/>
+<rect id="tw25" x="750.2" y="151.0" width="2" height="2" fill="#9aa4ae" opacity="0.14"/>
+<rect id="tw26" x="1598.3" y="97.2" width="2" height="2" fill="#9aa4ae" opacity="0.14"/>
+<rect id="tw27" x="1074.3" y="210.6" width="2" height="2" fill="#9aa4ae" opacity="0.14"/>
+<rect id="tw28" x="1738.5" y="213.5" width="3" height="3" fill="#9aa4ae" opacity="0.14"/>
+<rect id="tw29" x="860.7" y="234.9" width="2" height="2" fill="#9aa4ae" opacity="0.14"/>
+<rect id="tw30" x="1019.0" y="206.3" width="2" height="2" fill="#9aa4ae" opacity="0.14"/>
+<rect id="tw31" x="1864.2" y="200.2" width="2" height="2" fill="#9aa4ae" opacity="0.14"/>
+<rect id="tw32" x="913.9" y="55.0" width="2" height="2" fill="#9aa4ae" opacity="0.14"/>
+<rect id="tw33" x="1844.0" y="224.4" width="2" height="2" fill="#9aa4ae" opacity="0.14"/>
+<rect id="tw34" x="557.9" y="175.5" width="3" height="3" fill="#9aa4ae" opacity="0.14"/>
+<rect id="tw35" x="721.0" y="61.1" width="2" height="2" fill="#9aa4ae" opacity="0.14"/>
+<rect id="tw36" x="851.3" y="65.3" width="2" height="2" fill="#9aa4ae" opacity="0.14"/>
+<rect id="tw37" x="1256.5" y="220.3" width="2" height="2" fill="#9aa4ae" opacity="0.14"/>
+<rect id="tw38" x="772.5" y="91.3" width="3" height="3" fill="#9aa4ae" opacity="0.14"/>
+<rect id="tw39" x="907.7" y="97.0" width="3" height="3" fill="#9aa4ae" opacity="0.14"/>
+<rect id="tw40" x="1512.4" y="195.1" width="3" height="3" fill="#9aa4ae" opacity="0.14"/>
+<rect id="tw41" x="1203.4" y="189.0" width="3" height="3" fill="#9aa4ae" opacity="0.14"/>
+<rect id="tw42" x="452.5" y="76.0" width="2" height="2" fill="#9aa4ae" opacity="0.14"/>
+<rect id="tw43" x="1730.6" y="131.1" width="2" height="2" fill="#9aa4ae" opacity="0.14"/>
+<rect id="tw44" x="1857.5" y="210.4" width="2" height="2" fill="#9aa4ae" opacity="0.14"/>
+<rect id="tw45" x="1746.0" y="163.3" width="2" height="2" fill="#9aa4ae" opacity="0.14"/>
+<rect id="tw46" x="1184.2" y="80.5" width="2" height="2" fill="#9aa4ae" opacity="0.14"/>
+<rect id="tw47" x="512.1" y="55.0" width="2" height="2" fill="#9aa4ae" opacity="0.14"/>
+<rect id="tw48" x="381.8" y="224.2" width="2" height="2" fill="#9aa4ae" opacity="0.14"/>
+<rect id="tw49" x="814.8" y="236.0" width="2" height="2" fill="#9aa4ae" opacity="0.14"/>
+<rect id="tw50" x="1405.5" y="61.0" width="2" height="2" fill="#9aa4ae" opacity="0.14"/>
+<rect id="tw51" x="546.7" y="72.6" width="2" height="2" fill="#9aa4ae" opacity="0.14"/>
+<rect id="twslow" x="1752" y="56" width="3" height="3" fill="#9aa4ae" opacity=".1"/>
+<line x1="0" y1="434" x2="1920" y2="434" stroke="url(#rule)" stroke-width="2" stroke-dasharray="3 9" opacity="1"/>
+<text class="f" x="960" y="172" text-anchor="middle" fill="#e6edf3" font-size="74" letter-spacing="1.5">claude-infrastructure</text>
+<g id="c0" shape-rendering="crispEdges">
+  <g fill="#D77757"><rect x="870" y="274" width="180" height="120"/><rect x="870" y="394" width="20" height="40"/><rect x="910" y="394" width="20" height="40"/><rect x="990" y="394" width="20" height="40"/><rect x="1030" y="394" width="20" height="40"/></g>
+  <g id="c0-armL" class="arm" fill="#D77757"><rect x="850" y="314" width="20" height="40"/></g>
+  <g id="c0-armR" class="arm" fill="#D77757"><rect x="1050" y="314" width="20" height="40"/></g>
+  <g id="c0-eyeL" class="eye" fill="#080b11"><rect x="890" y="314" width="20" height="20"/></g>
+  <g id="c0-eyeR" class="eye" fill="#080b11"><rect x="1010" y="314" width="20" height="20"/></g>
+</g>
+</g>
+</svg>

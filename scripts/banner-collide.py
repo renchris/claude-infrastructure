@@ -9,15 +9,16 @@ timestamp, on one composition.
 
 So this reads it back out of the rendered PNG rather than trusting the arithmetic that placed it:
 the creature is the only saturated-orange thing in frame and the title is the only near-white thing,
-so their column ranges are separable without knowing anything about the composition. Overlapping
-column ranges are reported as a collision.
+so their extents are separable without knowing anything about the composition.
 
-Columns, not boxes, because that is the failure that matters: the creature is placed BESIDE the
-wordmark, so a horizontal gap is exactly the invariant. A composition that deliberately puts the
-creature above or below the title passes `--allow-columns` and is checked on rows instead.
+The invariant is that the two boxes do not INTERSECT, which holds as soon as either axis is clear —
+so a creature beside the title and a creature above it both pass, and neither needs to declare which
+it is. Checking one named axis would fail every stacked layout for the crime of being stacked.
 
-  scripts/banner-collide.py shots/hero-dark-t0.png [more.png ...]
-  scripts/banner-collide.py --allow-columns shots/*.png     # stacked layouts
+It also asserts the title is present at all: a frame with no title ink is an R2 violation whatever
+the geometry says, and that is worth catching at every timestamp rather than at t=0 only.
+
+  scripts/banner-collide.py shots/*.png
 """
 
 from __future__ import annotations
@@ -44,60 +45,119 @@ def _bright(px: tuple[int, int, int]) -> bool:
     return min(px) > 150 and (max(px) - min(px)) < 40
 
 
-def extents(path: str) -> tuple[dict[str, tuple[int, int]], int, int]:
+MIN_BLOB = 400  # px; below this it is antialiasing on a hairline, not a creature
+
+
+def scan(
+    path: str,
+) -> tuple[list[tuple[int, int, int, int]], tuple[int, int, int, int] | None]:
+    """Return one box per CREATURE, plus one box for the whole title.
+
+    Creatures are labelled individually rather than taken as a single union. A union is not merely
+    imprecise here, it is wrong in both directions: a fleet with creatures either side of the title
+    has a union spanning the title on both axes, so a perfectly clear layout reports a collision.
+    The title stays a union because it genuinely is one run of text.
+    """
     im = Image.open(path).convert("RGB")
     w, h = im.size
-    found: dict[str, list[int]] = {}
-    for name in ("creature_x", "creature_y", "title_x", "title_y"):
-        found[name] = []
-    for y in range(h):
-        for x in range(w):
-            p = im.getpixel((x, y))
-            if _near(p, BODY):
-                found["creature_x"].append(x)
-                found["creature_y"].append(y)
-            elif _bright(p):
-                found["title_x"].append(x)
-                found["title_y"].append(y)
-    out = {}
-    for name, vals in found.items():
-        out[name] = (min(vals), max(vals)) if vals else None
-    return out, w, h
+    # One flat bytes buffer, walked once. Per-pixel im.getpixel() over 45 frames of 1800x487 is
+    # ~39M calls and takes minutes; this is the same arithmetic without the call overhead.
+    buf = im.tobytes()
+
+    mask = bytearray(w * h)
+    tx0, ty0, tx1, ty1 = w, h, -1, -1
+    br, bg, bb = BODY
+    for i in range(0, len(buf), 3):
+        r, g, b = buf[i], buf[i + 1], buf[i + 2]
+        if abs(r - br) <= TOL and abs(g - bg) <= TOL and abs(b - bb) <= TOL:
+            mask[i // 3] = 1
+        else:
+            lo = r if r < g else g
+            lo = lo if lo < b else b
+            if lo > 150:
+                hi = r if r > g else g
+                hi = hi if hi > b else b
+                if hi - lo < 40:
+                    p = i // 3
+                    y, x = divmod(p, w)
+                    if x < tx0:
+                        tx0 = x
+                    if x > tx1:
+                        tx1 = x
+                    if y < ty0:
+                        ty0 = y
+                    if y > ty1:
+                        ty1 = y
+
+    blobs = []
+    for start in range(w * h):
+        if mask[start] != 1:
+            continue
+        stack, x0, y0, x1, y1, area = [start], w, h, -1, -1, 0
+        mask[start] = 2
+        while stack:
+            i = stack.pop()
+            cy, cx = divmod(i, w)
+            area += 1
+            x0, x1 = min(x0, cx), max(x1, cx)
+            y0, y1 = min(y0, cy), max(y1, cy)
+            for j, ok in (
+                (i - 1, cx > 0),
+                (i + 1, cx < w - 1),
+                (i - w, cy > 0),
+                (i + w, cy < h - 1),
+            ):
+                if ok and mask[j] == 1:
+                    mask[j] = 2
+                    stack.append(j)
+        if area >= MIN_BLOB:
+            blobs.append((x0, y0, x1, y1))
+
+    title = (tx0, ty0, tx1, ty1) if tx1 >= 0 else None
+    return blobs, title
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("pngs", nargs="+")
-    ap.add_argument(
-        "--allow-columns",
-        action="store_true",
-        help="the layout stacks the creature above/below the title, so check rows instead",
-    )
     a = ap.parse_args()
 
-    axis = "y" if a.allow_columns else "x"
     bad = 0
     for png in a.pngs:
-        e, w, h = extents(png)
-        c, t = e[f"creature_{axis}"], e[f"title_{axis}"]
+        blobs, title = scan(png)
         name = png.rsplit("/", 1)[-1]
-        if c is None:
+        if not blobs:
             print(f"  {name}: FAIL — no creature found (is the body still {BODY}?)")
             bad += 1
             continue
-        if t is None:
+        if title is None:
             print(
                 f"  {name}: FAIL — no title ink found. R2 requires it at EVERY timestamp."
             )
             bad += 1
             continue
-        gap = max(c[0], t[0]) - min(c[1], t[1])
-        if gap > 0:
+
+        tx0, ty0, tx1, ty1 = title
+        worst, worst_box = None, None
+        for x0, y0, x1, y1 in blobs:
+            # Clear on EITHER axis means the boxes do not intersect. Take each creature's better
+            # axis, then the whole frame is only as good as its worst creature.
+            gap = max(
+                max(x0, tx0) - min(x1, tx1) - 1,
+                max(y0, ty0) - min(y1, ty1) - 1,
+            )
+            if worst is None or gap < worst:
+                worst, worst_box = gap, (x0, y0, x1, y1)
+
+        if worst >= 0:
             print(
-                f"  {name}: ok — creature {axis} {c}, title {axis} {t}, clear by {gap - 1}px"
+                f"  {name}: ok — {len(blobs)} creature(s), tightest clearance {worst}px"
             )
         else:
-            print(f"  {name}: FAIL — creature {axis} {c} overlaps title {axis} {t}")
+            print(
+                f"  {name}: FAIL — creature {worst_box} overlaps the title {title} "
+                f"by {-worst}px ({len(blobs)} creature(s) in frame)"
+            )
             bad += 1
     if bad:
         print(

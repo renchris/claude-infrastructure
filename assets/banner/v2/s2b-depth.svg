@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 520" width="1920" height="520" role="img" aria-labelledby="t d">
+<title id="t">claude-infrastructure — parallel lanes</title>
+<desc id="d">The words claude-infrastructure set in monospace on a dark plate. The title is present the whole time and never moves; the only motion is the orange Claude Code pixel creature idling — glancing left, glancing right and occasionally stretching both arms above its head — on a loop that repeats indefinitely with no restart. Three creatures of different sizes stand on three separate dotted lines at different heights, reading as three distances. Each idles on its own timing. No line connects one lane to another.</desc>
+<defs>
+  <radialGradient id="plate" cx=".5" cy=".38" r=".72"><stop offset="0" stop-color="#171e27"/><stop offset="1" stop-color="#0d1117"/></radialGradient>
+  <linearGradient id="rule" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="1920" y2="0"><stop offset="0" stop-color="#30363d" stop-opacity="0"/><stop offset=".16" stop-color="#30363d" stop-opacity=".95"/><stop offset=".84" stop-color="#30363d" stop-opacity=".95"/><stop offset="1" stop-color="#30363d" stop-opacity="0"/></linearGradient>
+</defs>
+<style>
+  .f { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; }
+  #c0 .eye { animation: gaze_c0 13s step-end infinite; }
+  #c0 .arm { animation: arms_c0 19s step-end infinite; }
+  #c1 .eye { animation: gaze_c1 13s step-end infinite; }
+  #c1 .arm { animation: arms_c1 19s step-end infinite; }
+  #c2 .eye { animation: gaze_c2 13s step-end infinite; }
+  #c2 .arm { animation: arms_c2 19s step-end infinite; }
+  @keyframes gaze_c0 { 0%{transform:translateX(0px)} 13%{transform:translateX(0px)} 41%{transform:translateX(-11px)} 47%{transform:translateX(0px)} 74%{transform:translateX(11px)} 80%{transform:translateX(0px)} 100%{transform:translateX(0px)} }
+  @keyframes arms_c0 { 0%{transform:translateY(-33px)} 0.1%{transform:translateY(0px)} 9.1%{transform:translateY(0px)} 95.1%{transform:translateY(-33px)} 100%{transform:translateY(-33px)} }
+  @keyframes gaze_c1 { 0%{transform:translateX(0px)} 5%{transform:translateX(17px)} 11%{transform:translateX(0px)} 44%{transform:translateX(0px)} 72%{transform:translateX(-17px)} 78%{transform:translateX(0px)} 100%{transform:translateX(0px)} }
+  @keyframes arms_c1 { 0%{transform:translateY(0px)} 16.8%{transform:translateY(-51px)} 21.8%{transform:translateY(0px)} 30.8%{transform:translateY(0px)} 100%{transform:translateY(0px)} }
+  @keyframes gaze_c2 { 0%{transform:translateX(0px)} 3%{transform:translateX(-25px)} 9%{transform:translateX(0px)} 36%{transform:translateX(25px)} 42%{transform:translateX(0px)} 75%{transform:translateX(0px)} 100%{transform:translateX(0px)} }
+  @keyframes arms_c2 { 0%{transform:translateY(0px)} 38.5%{transform:translateY(-75px)} 43.5%{transform:translateY(0px)} 52.5%{transform:translateY(0px)} 100%{transform:translateY(0px)} }
+  /* Same artwork, held still. Every cycle begins AND ends on `default`, so the
+     frozen frame is one the animation genuinely passes through rather than a
+     separate static fallback free to drift from it. */
+  @media (prefers-reduced-motion: reduce) {
+    /* The creature must freeze as ITSELF. An earlier version swept opacity onto
+       .eye and .arm along with the stars, which washed out the arms and let orange
+       bleed through the eyes — a degraded fallback wearing the same geometry, which
+       is precisely what 'same artwork' rules out. */
+    .eye, .arm { animation: none !important; transform: none !important; }
+    /* Stars hold mid-twinkle rather than at their dimmest, so the sky still reads. */
+    [id^=tw] { animation: none !important; opacity: .45 !important; }
+  }
+</style>
+<rect width="1920" height="520" rx="14" fill="url(#plate)"/>
+<rect x=".75" y=".75" width="1918.5" height="518.5" rx="14" fill="none" stroke="#21262d" stroke-width="1.5"/>
+<g transform="translate(0 8.04)">
+<text class="f" x="960" y="112" text-anchor="middle" fill="#e6edf3" font-size="64" letter-spacing="1.5">claude-infrastructure</text>
+<line x1="90" y1="268" x2="1830" y2="268" stroke="url(#rule)" stroke-width="2" stroke-dasharray="3 9" opacity="0.5"/>
+<g id="c0" shape-rendering="crispEdges">
+  <g fill="#D77757"><rect x="311" y="180" width="99" height="66"/><rect x="311" y="246" width="11" height="22"/><rect x="333" y="246" width="11" height="22"/><rect x="377" y="246" width="11" height="22"/><rect x="399" y="246" width="11" height="22"/></g>
+  <g id="c0-armL" class="arm" fill="#D77757"><rect x="300" y="202" width="11" height="22"/></g>
+  <g id="c0-armR" class="arm" fill="#D77757"><rect x="410" y="202" width="11" height="22"/></g>
+  <g id="c0-eyeL" class="eye" fill="#0d1117"><rect x="322" y="202" width="11" height="11"/></g>
+  <g id="c0-eyeR" class="eye" fill="#0d1117"><rect x="388" y="202" width="11" height="11"/></g>
+</g>
+<line x1="90" y1="344" x2="1830" y2="344" stroke="url(#rule)" stroke-width="2" stroke-dasharray="3 9" opacity="0.75"/>
+<g id="c1" shape-rendering="crispEdges">
+  <g fill="#D77757"><rect x="877" y="208" width="153" height="102"/><rect x="877" y="310" width="17" height="34"/><rect x="911" y="310" width="17" height="34"/><rect x="979" y="310" width="17" height="34"/><rect x="1013" y="310" width="17" height="34"/></g>
+  <g id="c1-armL" class="arm" fill="#D77757"><rect x="860" y="242" width="17" height="34"/></g>
+  <g id="c1-armR" class="arm" fill="#D77757"><rect x="1030" y="242" width="17" height="34"/></g>
+  <g id="c1-eyeL" class="eye" fill="#0d1117"><rect x="894" y="242" width="17" height="17"/></g>
+  <g id="c1-eyeR" class="eye" fill="#0d1117"><rect x="996" y="242" width="17" height="17"/></g>
+</g>
+<line x1="90" y1="438" x2="1830" y2="438" stroke="url(#rule)" stroke-width="2" stroke-dasharray="3 9" opacity="1"/>
+<g id="c2" shape-rendering="crispEdges">
+  <g fill="#D77757"><rect x="1433" y="238" width="225" height="150"/><rect x="1433" y="388" width="25" height="50"/><rect x="1483" y="388" width="25" height="50"/><rect x="1583" y="388" width="25" height="50"/><rect x="1633" y="388" width="25" height="50"/></g>
+  <g id="c2-armL" class="arm" fill="#D77757"><rect x="1408" y="288" width="25" height="50"/></g>
+  <g id="c2-armR" class="arm" fill="#D77757"><rect x="1658" y="288" width="25" height="50"/></g>
+  <g id="c2-eyeL" class="eye" fill="#0d1117"><rect x="1458" y="288" width="25" height="25"/></g>
+  <g id="c2-eyeR" class="eye" fill="#0d1117"><rect x="1608" y="288" width="25" height="25"/></g>
+</g>
+</g>
+</svg>

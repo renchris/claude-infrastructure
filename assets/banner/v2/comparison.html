@@ -1,0 +1,126 @@
+<!doctype html><meta charset="utf-8">
+<title>README hero banner — nine candidates, three subjects</title>
+<style>
+:root { color-scheme: dark light; }
+* { box-sizing: border-box; }
+body { margin: 0; padding: 40px 28px 96px;
+       background: #0d1117; color: #c9d1d9;
+       font: 15px/1.65 ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; }
+main { max-width: 1000px; margin: 0 auto; }
+h1 { font-size: 25px; font-weight: 600; letter-spacing: .2px; color: #e6edf3; margin: 0 0 6px; }
+.lede { color: #8b949e; margin: 0 0 12px; }
+.rules { border: 1px solid #21262d; border-radius: 10px; padding: 14px 18px; margin: 22px 0 40px;
+         background: #10151c; }
+.rules p { margin: 0 0 8px; color: #8b949e; }
+.rules p:last-child { margin: 0; }
+.rules b { color: #c9d1d9; }
+h2 { font-size: 18px; font-weight: 600; color: #e6edf3; margin: 46px 0 4px;
+     padding-top: 22px; border-top: 1px solid #21262d; }
+h2:first-of-type { border-top: 0; }
+.claim { color: #8b949e; margin: 0 0 26px; }
+figure { margin: 0 0 34px; }
+figcaption { display: flex; gap: 10px; align-items: baseline; margin: 0 0 8px; }
+.key { color: #d77757; font-weight: 600; }
+.why { color: #8b949e; }
+img { display: block; width: 100%; height: auto; border-radius: 10px; }
+.pair { display: grid; gap: 10px; grid-template-columns: 1fr; }
+.frozen { margin-top: 10px; }
+.frozen .tag { color: #6e7681; font-size: 13px; margin: 6px 0 4px; }
+.meta { color: #6e7681; font-size: 13px; margin: 6px 0 0; }
+code { color: #c9d1d9; background: #161b22; padding: 1px 5px; border-radius: 4px; font-size: .92em; }
+</style>
+<main>
+<h1>README hero banner — nine candidates</h1>
+<p class="lede">Three subjects, three variants each. Every banner below is embedded as <code>&lt;img src="…svg"&gt;</code> — the same SVG-as-image mode GitHub uses, with no scripts and no external resources. Nothing here is inlined, so none of them can reach a capability the README would not give it.</p>
+<div class="rules">
+<p><b>Held to all four rejections.</b> <b>R1</b> whole-system, never a handoff or subsystem infographic — nothing in any candidate depicts an exchange. <b>R2</b> the title is a plain <code>&lt;text&gt;</code> with no animation, opacity or keyframe that reaches it, so there is no state of the document in which it is absent; verified present, and unobscured, in all 45 rendered frames. <b>R3</b> every animation is <code>infinite</code> and every keyframe list starts and ends on the same value, so the loop has no seam; the motion is an idle cycle, not a narrative. <b>R4</b> the real 11×8 clawd in <code>#D77757</code>, posing through its four shipped poses.</p>
+<p><b>The choice is the subject, not the medium.</b> Vector is settled — every raster encoding of an eight-second composition ran 1.2×–45× over the 1&nbsp;MB budget. These are 3–17&nbsp;KB.</p>
+</div>
+<h2>S1 · The world it lives in</h2>
+<p class="claim"><b>safely</b> — <code>~/.claude</code> stopped being machine state and became a place that is deployed. One creature, the landscape that ships in the binary, and nothing else.</p>
+<figure>
+<figcaption><span class="key">s1a-horizon</span><span class="why">Title and creature on one full-width horizon. The plainest reading.</span></figcaption>
+<img src="s1a-horizon.svg" alt="The words claude-infrastructure set in monospace on a dark plate. The title is present the whole time and never moves; the only motion is the orange Claude Code pixel creature idling — glancing left, glancing right and occasionally stretching both arms above its head — on a loop that repeats indefinitely with no restart. It stands on the same dotted horizon the words sit on, which runs the full width of the plate. Nothing else is in the frame.">
+<p class="meta">3,709 B</p>
+<div class="frozen">
+<p class="tag">↑ animating &nbsp;·&nbsp; ↓ frozen, as a prefers-reduced-motion reader sees it — same artwork, no second fallback</p>
+<img src="s1a-horizon-frozen.webp" alt="The same banner with motion disabled.">
+</div>
+</figure>
+<figure>
+<figcaption><span class="key">s1b-close</span><span class="why">The most restrained: one large creature, one hairline, the words. Nothing else in the frame.</span></figcaption>
+<img src="s1b-close.svg" alt="The words claude-infrastructure set in monospace on a dark plate. The title is present the whole time and never moves; the only motion is the orange Claude Code pixel creature idling — glancing left, glancing right and occasionally stretching both arms above its head — on a loop that repeats indefinitely with no restart. The creature is large and stands at the left on a dotted line; the words sit to its right on the same line. There is nothing else in the frame.">
+<p class="meta">3,702 B</p>
+<div class="frozen">
+<p class="tag">↑ animating &nbsp;·&nbsp; ↓ frozen, as a prefers-reduced-motion reader sees it — same artwork, no second fallback</p>
+<img src="s1b-close-frozen.webp" alt="The same banner with motion disabled.">
+</div>
+</figure>
+<figure>
+<figcaption><span class="key">s1c-scene</span><span class="why">The fullest quote of the shipped scene — mounds and vegetation, the creature standing among them.</span></figcaption>
+<img src="s1c-scene.svg" alt="The words claude-infrastructure set in monospace on a dark plate. The title is present the whole time and never moves; the only motion is the orange Claude Code pixel creature idling — glancing left, glancing right and occasionally stretching both arms above its head — on a loop that repeats indefinitely with no restart. The words sit above a landscape: dim mounds at both edges, a few clumps of vegetation, and the creature standing among them on the dotted ground line.">
+<p class="meta">11,209 B</p>
+<div class="frozen">
+<p class="tag">↑ animating &nbsp;·&nbsp; ↓ frozen, as a prefers-reduced-motion reader sees it — same artwork, no second fallback</p>
+<img src="s1c-scene-frozen.webp" alt="The same banner with motion disabled.">
+</div>
+</figure>
+<h2>S2 · The fleet</h2>
+<p class="claim"><b>many</b> — several sessions run at once on one machine and cannot collide. The load-bearing detail is that <b>nothing joins the creatures</b>: a thread between two of them would rebuild the handoff infographic R1 rejected. Same ground, separate lanes, no contact — the absence is the argument.</p>
+<figure>
+<figcaption><span class="key">s2a-lanes</span><span class="why">Four creatures evenly spaced on one horizon, each idling out of step.</span></figcaption>
+<img src="s2a-lanes.svg" alt="The words claude-infrastructure set in monospace on a dark plate. The title is present the whole time and never moves; the only motion is the orange Claude Code pixel creature idling — glancing left, glancing right and occasionally stretching both arms above its head — on a loop that repeats indefinitely with no restart. Four identical creatures stand evenly spaced along one dotted horizon beneath the words, each idling out of step with the others. Nothing joins them: there are no lines, threads or exchanges between them — they simply share the ground in separate lanes.">
+<p class="meta">7,568 B</p>
+<div class="frozen">
+<p class="tag">↑ animating &nbsp;·&nbsp; ↓ frozen, as a prefers-reduced-motion reader sees it — same artwork, no second fallback</p>
+<img src="s2a-lanes-frozen.webp" alt="The same banner with motion disabled.">
+</div>
+</figure>
+<figure>
+<figcaption><span class="key">s2b-depth</span><span class="why">Three lanes at three distances, so parallelism reads as depth rather than as a row.</span></figcaption>
+<img src="s2b-depth.svg" alt="The words claude-infrastructure set in monospace on a dark plate. The title is present the whole time and never moves; the only motion is the orange Claude Code pixel creature idling — glancing left, glancing right and occasionally stretching both arms above its head — on a loop that repeats indefinitely with no restart. Three creatures of different sizes stand on three separate dotted lines at different heights, reading as three distances. Each idles on its own timing. No line connects one lane to another.">
+<p class="meta">6,549 B</p>
+<div class="frozen">
+<p class="tag">↑ animating &nbsp;·&nbsp; ↓ frozen, as a prefers-reduced-motion reader sees it — same artwork, no second fallback</p>
+<img src="s2b-depth-frozen.webp" alt="The same banner with motion disabled.">
+</div>
+</figure>
+<figure>
+<figcaption><span class="key">s2c-row</span><span class="why">The words hold the left, the population holds the right, both on one line.</span></figcaption>
+<img src="s2c-row.svg" alt="The words claude-infrastructure set in monospace on a dark plate. The title is present the whole time and never moves; the only motion is the orange Claude Code pixel creature idling — glancing left, glancing right and occasionally stretching both arms above its head — on a loop that repeats indefinitely with no restart. The words sit at the left on a dotted line. Four identical creatures stand in a row to the right on the same line, each idling out of step. Nothing connects them.">
+<p class="meta">7,551 B</p>
+<div class="frozen">
+<p class="tag">↑ animating &nbsp;·&nbsp; ↓ frozen, as a prefers-reduced-motion reader sees it — same artwork, no second fallback</p>
+<img src="s2c-row-frozen.webp" alt="The same banner with motion disabled.">
+</div>
+</figure>
+<h2>S3 · The night shift</h2>
+<p class="claim"><b>unattended</b> — it runs while you are asleep and pages you only when a human must decide. The night variant of the scene ships in the same bundle as the day one.</p>
+<figure>
+<figcaption><span class="key">s3a-starfield</span><span class="why">Sparse stars on uncorrelated slow timings; the creature still working beneath them.</span></figcaption>
+<img src="s3a-starfield.svg" alt="The words claude-infrastructure set in monospace on a dark plate. The title is present the whole time and never moves; the only motion is the orange Claude Code pixel creature idling — glancing left, glancing right and occasionally stretching both arms above its head — on a loop that repeats indefinitely with no restart. The plate is a night sky: sparse faint stars, each brightening and dimming on its own slow timing, none in step with another. The creature stands on the dotted horizon beside the words, still working.">
+<p class="meta">12,821 B</p>
+<div class="frozen">
+<p class="tag">↑ animating &nbsp;·&nbsp; ↓ frozen, as a prefers-reduced-motion reader sees it — same artwork, no second fallback</p>
+<img src="s3a-starfield-frozen.webp" alt="The same banner with motion disabled.">
+</div>
+</figure>
+<figure>
+<figcaption><span class="key">s3b-tree</span><span class="why">The night scene's canopy and trunk, quoted, with the creature at the far side of the same line.</span></figcaption>
+<img src="s3b-tree.svg" alt="The words claude-infrastructure set in monospace on a dark plate. The title is present the whole time and never moves; the only motion is the orange Claude Code pixel creature idling — glancing left, glancing right and occasionally stretching both arms above its head — on a loop that repeats indefinitely with no restart. Under a sparse field of faint twinkling stars, the creature stands at the left of a dotted horizon with the words to its right, and a small dim tree stands at the far right of the same line.">
+<p class="meta">11,999 B</p>
+<div class="frozen">
+<p class="tag">↑ animating &nbsp;·&nbsp; ↓ frozen, as a prefers-reduced-motion reader sees it — same artwork, no second fallback</p>
+<img src="s3b-tree-frozen.webp" alt="The same banner with motion disabled.">
+</div>
+</figure>
+<figure>
+<figcaption><span class="key">s3c-longwatch</span><span class="why">A denser, fainter sky — and one star on a far longer beat than any other: the page that is not coming.</span></figcaption>
+<img src="s3c-longwatch.svg" alt="The words claude-infrastructure set in monospace on a dark plate. The title is present the whole time and never moves; the only motion is the orange Claude Code pixel creature idling — glancing left, glancing right and occasionally stretching both arms above its head — on a loop that repeats indefinitely with no restart. A dense field of very faint stars twinkles on uncorrelated slow timings, with one star at the right on a far longer beat than any other. The creature stands centred on the dotted horizon below the words.">
+<p class="meta">17,796 B</p>
+<div class="frozen">
+<p class="tag">↑ animating &nbsp;·&nbsp; ↓ frozen, as a prefers-reduced-motion reader sees it — same artwork, no second fallback</p>
+<img src="s3c-longwatch-frozen.webp" alt="The same banner with motion disabled.">
+</div>
+</figure>
+</main>
