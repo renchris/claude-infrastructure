@@ -9,6 +9,24 @@ description: Record a real screen demo — a live agent session, a terminal, a t
 
 # Recording a demo for a README
 
+## Do it in this order
+
+Each step has a gate that must pass before the next. The expensive failures in this
+skill all came from skipping one.
+
+| # | Step | Gate before moving on |
+| --- | --- | --- |
+| 1 | Size the window; check pane parity | `cols`/`rows` **identical** across panes |
+| 2 | Fire the demo (real session, correct flags) | peer actually pings back — a refused self-retire means no close to film |
+| 3 | Capture the whole window | — |
+| 4 | **Contact-sheet the take** | no leaked content, composer ghost-text empty |
+| 5 | Edit: variable speed, caption strip below frame | — |
+| 6 | Encode per content class (§ recipes) | **streak metric ≈ source** — not just SSIM/PSNR |
+| 7 | **Verify on a scratch branch before landing** | served bytes SHA-match, browser animates |
+| 8 | Swap the `src`, assert README shape | line + heading counts unchanged |
+
+Steps 6 and 7 are the ones that were skipped and cost a shipped visual regression.
+
 ## The format decision is settled — do not re-derive it
 
 GitHub's markdown sanitizer **strips `<video>` outright**. Re-verified against the
@@ -184,7 +202,38 @@ Capture the **whole window** (title bar → status footer); crop = window bounds
 on Retina. AppleScript `bounds` is top-left origin; `it2 window list` is
 bottom-left — they disagree, so pick one and stay in it. `it2 window resize` +
 `move` in sequence collapsed a window to zero size; set `bounds` **atomically** via
-AppleScript instead.
+AppleScript instead:
+
+```bash
+# set window geometry atomically (top-left origin), then read it back
+osascript -e 'tell application "System Events" to tell process "iTerm2" to set position of window 1 to {0, 0}' \
+          -e 'tell application "System Events" to tell process "iTerm2" to set size of window 1 to {1920, 1200}'
+osascript -e 'tell application "System Events" to tell process "iTerm2" to get {position, size} of window 1'
+```
+
+### The capture itself
+
+```bash
+screencapture -v -V60 /tmp/take.mov           # -v = video; -V<secs> self-stops. NO space: it is -V60
+# interactive window pick instead:  screencapture -v -w /tmp/take.mov
+# a specific window id (no chrome): screencapture -v -l<window-id> /tmp/take.mov   # also attached
+```
+
+`screencapture -v` records the **whole screen** unless told otherwise, so crop to the
+window afterwards — bounds × 2 on Retina, and `crop` takes `w:h:x:y`:
+
+```bash
+ffmpeg -i /tmp/take.mov -vf "crop=3840:2400:0:0" -c:v libx264 -crf 18 -preset slow /tmp/win.mp4
+```
+
+Keep that crop as the **master**. Every deliverable (MP4 link, inline image) is
+derived from it, so a mistake here is unrecoverable without a re-shoot. Check the
+real bitrate before trusting it as a source — the master behind this repo's hero is
+only **657 kbps** for 1920×1144/60, which is fine for flat UI but leaves no headroom:
+
+```bash
+ffprobe -v error -select_streams v:0 -show_entries stream=width,height,avg_frame_rate,bit_rate -of default=nw=1 /tmp/win.mp4
+```
 
 ## Firing a two-way agent demo
 
@@ -221,12 +270,64 @@ Crop it out or confirm it is empty.
 ## Editing
 
 - **Variable speed beats a flat rate**: ~1.5–2× through the beats, ~2.5–5× through
-  dead air.
+  dead air. Concatenate per-segment `setpts` rather than one global rate:
+
+  ```bash
+  # a beat at 1.8x and the dead air after it at 4x, then join
+  ffmpeg -i win.mp4 -ss 0    -to 12   -vf "setpts=PTS/1.8" -an /tmp/a.mp4
+  ffmpeg -i win.mp4 -ss 12   -to 47   -vf "setpts=PTS/4"   -an /tmp/b.mp4
+  printf "file '/tmp/a.mp4'\nfile '/tmp/b.mp4'\n" > /tmp/l.txt
+  ffmpeg -f concat -safe 0 -i /tmp/l.txt -c copy /tmp/edited.mp4
+  ```
+
 - **Captions belong in a strip padded BELOW the frame**, never overlaid — an
-  overlay covers the content the clip exists to show.
+  overlay covers the content the clip exists to show. Pad, then composite:
+
+  ```bash
+  # add a 64px strip under the frame, then overlay pre-rendered caption PNGs into it
+  ffmpeg -i edited.mp4 -i caption_%04d.png \
+         -filter_complex "[0:v]pad=iw:ih+64:0:0:color=black[v];[v][1:v]overlay=0:H-64" \
+         -c:v libx264 -crf 18 out.mp4
+  ```
+
 - **This ffmpeg has no `drawtext`** (built without libfreetype; `ffmpeg -filters |
-  grep -w drawtext` returns nothing). Render caption frames with PIL and composite
-  with `overlay`/`vstack`, or label with ImageMagick's `-font`.
+  grep -w drawtext` returns nothing) — so caption frames must be *rendered*, not
+  drawn by ffmpeg. PIL is the path; render one PNG per frame so captions can fade,
+  rise, or carry a progress line rather than hard-cutting:
+
+  ```python
+  from PIL import Image, ImageDraw, ImageFont
+  f = ImageFont.truetype("/System/Library/Fonts/SFNSMono.ttf", 22)
+  img = Image.new("RGB", (1200, 64), "black")
+  ImageDraw.Draw(img).text((24, 20), "01  a real session fires a peer", font=f, fill="white")
+  img.save("caption_0001.png")
+  ```
+
+## Verify on a scratch branch BEFORE landing
+
+The encode can be wrong in ways the encoder never reports. Push the real asset to a
+throwaway branch and interrogate what GitHub actually serves. This costs two minutes
+and is the gate that a shipped regression got past.
+
+```bash
+git push origin HEAD:refs/heads/scratch/media-check      # plain push to a FRESH ref
+
+# 1. does GitHub serve the exact bytes? (it does — but prove it for THIS file)
+curl -sL -o /tmp/served.webp "https://github.com/OWNER/REPO/raw/scratch/media-check/assets/demo/x.webp"
+cmp -s /tmp/served.webp assets/demo/x.webp && echo BYTE-IDENTICAL || echo RE-ENCODED
+webpinfo /tmp/served.webp | grep -c '^Chunk ANMF'        # frame count survived?
+
+# 2. does a real browser ANIMATE it? distinct renders ⇒ yes
+agent-browser open "https://github.com/OWNER/REPO/blob/scratch/media-check/README.md"
+for i in 1 2 3 4 5; do agent-browser screenshot /tmp/s$i.png; done
+# hash the 5 PNGs — all identical ⇒ static, investigate
+
+git push origin --delete scratch/media-check             # clean up after
+```
+
+**Check the artefact you are about to ship, not a proxy for it.** A short test clip
+proved the *format* works and told me nothing about *my encode* — the seams only
+existed in the full-length file, in a region no metric I ran was looking at.
 
 ## Landing it in the README
 
