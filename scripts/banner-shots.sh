@@ -63,20 +63,39 @@ if [[ "$LINT" -eq 1 ]]; then
   python3 - "$ASSET" <<'PY'
 import re, sys, pathlib
 svg = pathlib.Path(sys.argv[1]).read_text()
-bad = []
+multi, delayed = [], []
+TIME = re.compile(r'(?<![\w.])-?\d*\.?\d+m?s(?![\w.])')
 for prop in ('animation', 'animation-name', 'animation-delay', 'animation-duration'):
     for m in re.finditer(rf'(?<![\w-]){prop}\s*:\s*([^;{{}}]+)', svg):
         value = m.group(1)
+        line = svg.count('\n', 0, m.start()) + 1
         # a comma inside animation shorthand/longhand means more than one animation on the element
         if ',' in value:
-            line = svg.count('\n', 0, m.start()) + 1
-            bad.append(f'  line {line}: {prop}: {value.strip()}')
-if bad:
+            multi.append(f'  line {line}: {prop}: {value.strip()}')
+            continue
+        # An AUTHORED delay is clobbered by the freeze, which sets animation-delay on `*` to reach
+        # the requested timestamp. The element still animates correctly in a browser, but every
+        # frozen frame renders it at the wrong phase — so a staggered population screenshots in
+        # lockstep, which is a more convincing lie than an obviously broken render.
+        if prop == 'animation-delay':
+            if not re.fullmatch(r'0m?s|0', value.strip()):
+                delayed.append(f'  line {line}: {prop}: {value.strip()}')
+        elif prop == 'animation' and len(TIME.findall(value)) > 1:
+            delayed.append(f'  line {line}: {prop}: {value.strip()}   (2nd time value is a delay)')
+if multi:
     print('banner-shots --lint: FAIL — element(s) carry more than one animation, so a frozen', file=sys.stderr)
     print('frame cannot represent their real state (see the header comment):', file=sys.stderr)
-    print('\n'.join(bad), file=sys.stderr)
+    print('\n'.join(multi), file=sys.stderr)
+if delayed:
+    print('banner-shots --lint: FAIL — authored animation-delay. The freeze overrides delay on', file=sys.stderr)
+    print('every element to seek the timestamp, so an authored one is silently discarded and the', file=sys.stderr)
+    print('render shows the wrong phase:', file=sys.stderr)
+    print('\n'.join(delayed), file=sys.stderr)
+    print('  Put the phase offset in the KEYFRAME PERCENTAGES instead — a per-element @keyframes', file=sys.stderr)
+    print('  with its events shifted inside the same period survives the freeze exactly.', file=sys.stderr)
+if multi or delayed:
     sys.exit(1)
-print('banner-shots --lint: ok — one animation per element, frozen frames are exact')
+print('banner-shots --lint: ok — one animation per element, no authored delay; frozen frames are exact')
 PY
   exit $?
 fi
