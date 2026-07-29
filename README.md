@@ -24,9 +24,9 @@ and exercised across **5,709 sessions**.
 
 <div align="center">
 
-<img src="assets/demo/handoff-live.gif" width="900" alt="Screen recording of one real iTerm2 window. A session runs handoff-fire.sh with --split-right --notify-back; the pane genuinely splits, a second Claude session boots on the right, reads its brief, runs git rev-parse and answers origin/main = 9b4436ad, says it is pinging the originator and retiring, then closes its own pane — leaving the originating pane alone with its fire summary.">
+<img src="assets/demo/handoff-live.gif" width="900" alt="Screen recording of one real iTerm2 window in three captioned beats. One: a real Claude session runs handoff-fire.sh with --split-right --notify-back, and the pane splits. Two: a second Claude session boots in the new pane, reads its brief, runs git rev-parse to get origin/main = ed609cff, and calls cc-notify to ping the originator before retiring. Three: the ping arrives inside the originator's own chat as PING RECEIVED FROM PEER with the peer's message, and the peer has closed its own pane — the window is back to one.">
 
-<sub><b>An unedited screen recording.</b> A real session fires a real peer: the pane <b>splits</b> → the peer boots, reads its brief and answers <code>origin/main = 9b4436ad</code> → it <b>pings the originator</b> → it <b>closes its own pane</b>. No human touched the keyboard after the first command.</sub>
+<sub><b>An unedited screen recording — two real Claude sessions, one window.</b> A session fires a peer, the pane <b>splits</b>, the peer answers <code>origin/main = ed609cff</code> and <b>pings back</b>; the ping arrives <b>inside the originator's chat</b> (<code>PING RECEIVED FROM PEER</code>) and the peer <b>closes its own pane</b>. One human keystroke: the first prompt.</sub>
 
 </div>
 
