@@ -18,7 +18,7 @@ rebuilds must not both redesign; the row that owns it is marked.
 | 2 | **Session lifecycle & succession** — open/recycle/close | handoff-fire, /handoff, self-close, engagement verification, warm worktree claim | mailbox delivery (3); registry truth (4) | a watched pane must never vanish illegibly | open |
 | 3 | **Cross-session comms** — messages between peers | cc-notify, mailbox+ack cursor, .forward chains, cc-await-ping, mailbox-drain | wake path (2); desk inbox (5) | delivery must survive recycles; exactly-once ack | open (v3 design exists — cross-session-mail-v3 memory) |
 | 4 | **Session registry & reaping** — who is alive, who gets closed | session-register, cc-reconcile, cc-reaper, cc-teardown, liveness oracles (cwd/lsof) | teardown of (2)'s panes | never reap a live operator conversation | open |
-| 5 | **Autonomy dispatch & discovery** — what gets worked on | cc-dispatch, cc-backlog, cc-discover, desk loop, launchd dispatcher/discovery | fires via (2); reads (10) | backlog > concurrency is normal, not a cliff | open |
+| 5 | **Autonomy dispatch & discovery** — what gets worked on | cc-dispatch, cc-backlog, cc-discover, desk loop, launchd dispatcher/discovery | fires via (2); reads (10) | backlog > concurrency is normal, not a cliff | **REBUILDING 2026-07-29** — [AUTONOMY_DISPATCH_V2.md](AUTONOMY_DISPATCH_V2.md); design landed 7400c614 |
 | 6 | **Guardrail/hook layer** — what a session may do | 69 hook entries / 12 events, validate-bash, permission rails, Stop asserts, OVERWRITE guard | every subsystem's enforcement chokepoints | a hook failure must never block a tool by accident | open |
 | 7 | **Account/quota routing & relogin** — which account works | claude-accounts, cc-relogin*, limit-recover, model-config.yaml SSOT, launchers | fire-time ranking (2) | login cliffs are hard walls; 4 isolated accounts | open |
 | 8 | **Context economy** — when a session recycles | waiting-recycle, boundary-handoff, dod-persist, /wrap, session-continue | recycle executes via (2) | rot degrades decisions before the wall breaks them | open |
@@ -41,3 +41,12 @@ its customers stabilize their contracts).
 
 - 2026-07-29: map created from the landing-rebuild exemplar; row 1 marked DONE. The
   methodology's distillation (what the prompt did/missed) lives in skills/ground-up/SKILL.md.
+- 2026-07-29 (row 5): the Phase-1 "re-derive every handed-down count" rule paid immediately —
+  row 5's own standing-constraint framing ("backlog > concurrency is a false cliff, fixed by
+  bef587a") is FALSIFIED by disk: that fix landed 2026-07-18, the 12 observed cliffs occurred
+  2026-07-26. The real cause was an unbounded spawn rate with no fleet concurrency ceiling.
+  **Generalisation for later rows: a map row's "standing constraint" cell is itself a claim —
+  re-derive it before designing against it.** Second finding of the same shape: the row's two
+  launchd jobs had been `disabled` and silently inert for ~3 days with zero alarm, so the row's
+  metric was being met 0% of the time by construction. Check activation truth FIRST on any row
+  whose surfaces include a daemon (rows 5, 12, and the deploy half of 1).
