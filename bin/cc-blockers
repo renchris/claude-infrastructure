@@ -56,6 +56,31 @@
 #                              a beacon that never ran are the same observation and the board reports
 #                              all-clear for both — which is exactly what it did while a teammate sat
 #                              blocked. NOT-WIRED is terminal for NEVER-FIRED.
+#
+# ALSO renders the FLEET alarm (DAEMON_FLEET_V2 §4.3) — the reconciler's rows, passed through:
+#   kind=="fleet-inert"     one row per DECLARED launchd label that is not in its declared state
+#                           (NOT-INSTALLED / DISABLED / NEVER-RAN / FAILING / STALLED / UNDECIDED),
+#                           plus an UNDECLARED-SUMMARY for live labels the manifest never declared.
+# This file does NOT compute those states: bin/cc-fleet owns the manifest and the reconcile, and its
+# lines pass straight through (one board, ONE renderer). Overlap with a dispatch-inert row on the
+# same label is intentional, not a bug to dedupe: the specific row carries meaning a generic
+# reconciler cannot express (trunk-red is a TRUNK problem, not a daemon one), and the fleet row is
+# the FLOOR that guarantees every declared label at least one honest verdict (R2). An absent,
+# non-executable, failing or garbage-emitting cc-fleet yields NO rows and NO error (R5, fail-OPEN) —
+# and, load-bearing, cannot take the land-pipeline or dispatch rows down with it.
+#
+# `--plist-parity` is a SEPARATE leg (DAEMON_FLEET_V2 §4.4), deliberately NOT part of the default
+# board: it compares the repo SSOT launchd/com.claude.*.plist against the live
+# ~/Library/LaunchAgents copies and emits kind=="plist-parity" rows in three classes —
+#   LIVE-ONLY      installed but never committed: one `rm` from unrecoverable (5 calendar
+#                  LaunchAgents were destroyed 2026-07-25 by a stray in-place rewrite)
+#   REPO-ONLY      committed but never installed, so launchd never loads it
+#   CONTENT-DRIFT  both exist, bytes differ — the copy launchd loads is not the committed SSOT
+# Same three classes, the same `.local` live-only exemption and the same loud-not-silent law as
+# hooks/activation-watch.sh's axis 2: an UNRESOLVABLE repo side is REPORTED as a row, never a silent
+# pass (a sibling parity assert once resolved REPO=~/.claude and every leg exited 0 vacuously —
+# backlog 816015ecb30b), which is why the repo side derefs BASH_SOURCE and gates on `.git`.
+# Whole-file `cmp`, never plutil: `plutil -extract` without `-o -` REWRITES the plist in place.
 # --json emits ONE array carrying all kinds (each row keeps its .kind), alarms first.
 set -uo pipefail
 
@@ -111,6 +136,39 @@ case "${1:-}" in
   "")       ;;
   *)        echo "cc-blockers: unknown arg $1 (usage: cc-blockers [--json])" >&2; exit 2 ;;
 esac
+# ── FLEET sensor (DAEMON_FLEET_V2 §4.3). The producer is bin/cc-fleet in the DEPLOY_REPO checkout,
+# not the ~/.claude/bin mirror, and that is a correctness choice on two counts:
+#   (1) In production they are the SAME FILE — install.sh globs bin/cc-* into ~/.claude/bin/ as
+#       per-file symlinks INTO this checkout (verified: ~/.claude/bin/cc-blockers is such a link) —
+#       so naming the repo path costs nothing and cannot read a stale copy. Same idiom as
+#       DISPATCH_ACTIVATE_SH two lines above, and as scripts/deploy-live.sh:223.
+#   (2) DEPLOY_REPO is a seam every existing cc-blockers suite ALREADY fixtures to an absent dir,
+#       so this sensor is fixtured wherever they are and cannot grow a phantom row from the
+#       operator's live fleet. Keyed on $HOME/.claude/bin/cc-fleet it would read the real fleet from
+#       inside tests/cc-blockers.bats (which fixtures every sensor but NOT $HOME) the moment the
+#       binary deployed — the exact phantom-row defect the verifier alarm (:99) and the dispatch
+#       alarm (:184) each had to fix, twice, in this same file.
+CC_FLEET_BIN="${CC_BLOCKERS_FLEET_BIN:-$DEPLOY_REPO/bin/cc-fleet}"
+# ── plist SSOT parity sensors (§4.4). Both overridable so the suite is hermetic; the repo side is
+# resolved from BASH_SOURCE when unset (see resolve_plist_repo) and NEVER from $HOME.
+LIVE_AGENTS_DIR="${CC_BLOCKERS_LAUNCHAGENTS_DIR:-$HOME/Library/LaunchAgents}"
+PLIST_REL="launchd"                            # the repo-side SSOT dir, relative to a checkout root
+ALARMS_JSON='[]'                               # bound early: alarm_table's default source under -u
+JSON=0
+PARITY=0
+# A LOOP, not a single `case "$1"`: --plist-parity composes with --json. Every previously-accepted
+# invocation still parses identically; the only behaviour delta is that trailing junk after a good
+# flag is now the same exit 2 it always was as $1, instead of being silently ignored.
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --json)         JSON=1 ;;
+    --plist-parity) PARITY=1 ;;
+    -h|--help) sed -n '2,69p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    "")        ;;
+    *)         echo "cc-blockers: unknown arg $1 (usage: cc-blockers [--json] [--plist-parity])" >&2; exit 2 ;;
+  esac
+  shift
+done
 command -v jq >/dev/null || { echo "cc-blockers: jq required" >&2; exit 2; }
 
 # ── LAND-PIPELINE alarms ─────────────────────────────────────────────────────────────────────────
@@ -457,7 +515,186 @@ beacon_alarm_rows() { # → one JSON object per line (possibly none)
     "$PERMPEND_DIR" "'{\\\"session_id\\\":\\\"smoke-1\\\"}'" "$BEACON_HOOK" "$PERMPEND_DIR" "$now"
 }
 
-ALARMS_JSON="$({ alarm_rows; dispatch_alarm_rows; orphan_approver_rows; beacon_alarm_rows; } 2>/dev/null | jq -s '.' 2>/dev/null || true)"
+ALARMS_JSON="$({ alarm_rows; dispatch_alarm_rows; orphan_approver_rows; beacon_alarm_rows; fleet_alarm_rows; } 2>/dev/null | jq -s '.' 2>/dev/null || true)"
+# ── FLEET alarm (DAEMON_FLEET_V2 §4.3) ───────────────────────────────────────────────────────────
+# The ONLY consumer-side code for the fleet: bin/cc-fleet reads launchd/fleet.manifest, reconciles
+# declared-vs-actual, and emits one kind=="fleet-inert" line per label that is not in its declared
+# state. Nothing about that state function lives here — a second implementation is a second answer,
+# and the whole point of the manifest is that there is exactly one.
+#
+# FAIL-OPEN, and specifically WITHOUT COLLATERAL. Three failure shapes are all one verdict (no rows,
+# no error, exit unchanged): the producer is absent or not executable; it exits non-zero; it emits
+# something that is not JSON. The third is why the filter runs HERE rather than letting the lines
+# fall into the `jq -s '.'` composition below: one garbage line reaching that slurp fails the whole
+# array, and `|| true` would then hand back '[]' — silently deleting the land-pipeline and dispatch
+# rows too. A sensor's own failure must never blind the sensors beside it. `fromjson?` is this
+# file's established malformed-line idiom (:253, :297) and skips exactly the bad line.
+#
+# Rows are otherwise passed THROUGH unmodified: cc-fleet owns .state/.detail/.recover_cmd, including
+# the DETAIL cell's ASCII-only, <=44-byte contract (the renderer pads by BYTES, so one em-dash
+# shifts the column). Filtering on .kind only — never on the .state enum — so a state the reconciler
+# adds later still reaches the operator instead of being silently dropped by its consumer.
+fleet_alarm_rows() { # → one JSON object per line (possibly none)
+  local out
+  [ -x "$CC_FLEET_BIN" ] || return 0                                  # absent/not-exec ⇒ no verdict
+  out="$("$CC_FLEET_BIN" --json 2>/dev/null)" || return 0              # non-zero ⇒ fail open
+  [ -n "$out" ] || return 0
+  printf '%s\n' "$out" | jq -cRn 'inputs | fromjson? | select(type=="object")
+                                  | select(.kind == "fleet-inert")' 2>/dev/null || true
+}
+
+# ── plist SSOT parity (DAEMON_FLEET_V2 §4.4) ─────────────────────────────────────────────────────
+deref() { # <path> → the real file behind any symlink chain (readlink -f, BSD-safe fallback)
+  local p="$1" t n=0
+  readlink -f "$p" 2>/dev/null && return 0
+  while [ -L "$p" ] && [ "$n" -lt 20 ]; do
+    t="$(readlink "$p")"
+    case "$t" in /*) p="$t" ;; *) p="$(dirname "$p")/$t" ;; esac
+    n=$(( n + 1 ))
+  done
+  printf '%s\n' "$p"
+}
+
+resolve_plist_repo() { # → the repo-side launchd/ dir, or rc 1. NEVER a vacuous ~/.claude "pass".
+  local root
+  if [ -n "${CC_BLOCKERS_PLIST_REPO:-}" ]; then
+    [ -d "$CC_BLOCKERS_PLIST_REPO" ] || return 1
+    printf '%s\n' "$CC_BLOCKERS_PLIST_REPO"; return 0
+  fi
+  # deref FIRST: invoked live we are ~/.claude/bin/cc-blockers, a symlink into the checkout, so a
+  # bare dirname yields ~/.claude — which has no launchd/ and, worse, would be accepted as the SSOT
+  # by a check that only tested for the directory. The `.git` gate is the anti-vacuous-pass guard:
+  # a checkout has one (a dir, or a FILE in a linked worktree, hence -e not -d); ~/.claude does not.
+  root="$(cd "$(dirname "$(deref "${BASH_SOURCE[0]}")")/.." 2>/dev/null && pwd)" || root=""
+  if [ -n "$root" ] && [ -e "$root/.git" ] && [ -d "$root/$PLIST_REL" ]; then
+    printf '%s\n' "$root/$PLIST_REL"; return 0
+  fi
+  [ -e "$DEPLOY_REPO/.git" ] && [ -d "$DEPLOY_REPO/$PLIST_REL" ] \
+    && { printf '%s\n' "$DEPLOY_REPO/$PLIST_REL"; return 0; }
+  return 1
+}
+
+# Whole-file `cmp -s`, and no plutil anywhere: `plutil -extract k json <file>` WITHOUT `-o -`
+# rewrites the plist IN PLACE (it destroyed 5 LaunchAgents on 2026-07-25), and byte equality is the
+# actual property under test — a semantic read would call two files "the same" while launchd loads
+# different bytes than the ones in git.
+plist_parity_rows() { # → one JSON object per line (possibly none)
+  local repo now f b label
+  now="$(date +%s 2>/dev/null || true)"
+  case "${now:-}" in ''|*[!0-9]*) now=0 ;; esac
+  if ! repo="$(resolve_plist_repo)"; then
+    # LOUD, never a silent pass: a parity check that could not run is a finding of its own.
+    printf '{"kind":"plist-parity","state":"UNRESOLVABLE","detail":"repo SSOT unresolved; parity DID NOT RUN","subject":"%s","recover_cmd":"CC_BLOCKERS_PLIST_REPO=%s/%s cc-blockers --plist-parity","ts":%s}\n' \
+      "$PLIST_REL" "$DEPLOY_REPO" "$PLIST_REL" "$now"
+    return 0
+  fi
+  if [ ! -d "$LIVE_AGENTS_DIR" ]; then
+    printf '{"kind":"plist-parity","state":"UNRESOLVABLE","detail":"LaunchAgents dir absent; parity DID NOT RUN","subject":"%s","recover_cmd":"ls -la %s","ts":%s}\n' \
+      "$LIVE_AGENTS_DIR" "$LIVE_AGENTS_DIR" "$now"
+    return 0
+  fi
+  # LIVE side. An unmatched glob stays literal, hence the -f guard on every iteration.
+  for f in "$LIVE_AGENTS_DIR"/com.claude.*.plist; do
+    [ -f "$f" ] || continue
+    b="${f##*/}"; label="${b%.plist}"
+    # Mirrors activation-watch.sh's `.local` convention: an adjacent <name>.plist.local declares the
+    # file intentionally live-only, so a legitimately un-committable plist does not train
+    # alarm-fatigue on this channel. It exempts LIVE-ONLY only — drift still reports.
+    if [ ! -f "$repo/$b" ]; then
+      [ -f "$f.local" ] && continue
+      printf '{"kind":"plist-parity","state":"LIVE-ONLY","detail":"installed but never committed to launchd/","subject":"%s","recover_cmd":"cp %s %s   # then commit it","ts":%s}\n' \
+        "$label" "$f" "$repo/$b" "$now"
+    elif ! cmp -s "$f" "$repo/$b"; then
+      printf '{"kind":"plist-parity","state":"CONTENT-DRIFT","detail":"live bytes differ from the committed SSOT","subject":"%s","recover_cmd":"diff %s %s","ts":%s}\n' \
+        "$label" "$repo/$b" "$f" "$now"
+    fi
+  done
+  # REPO side. Only the top-level launchd/*.plist are declared installable — launchd/staged/ is the
+  # existing convention for a committed-but-deliberately-uninstalled plist, and this glob is not
+  # recursive, so a staged plist is out of scope by construction rather than by exemption.
+  for f in "$repo"/com.claude.*.plist; do
+    [ -f "$f" ] || continue
+    b="${f##*/}"; label="${b%.plist}"
+    [ -f "$LIVE_AGENTS_DIR/$b" ] && continue
+    printf '{"kind":"plist-parity","state":"REPO-ONLY","detail":"committed but not installed in LaunchAgents","subject":"%s","recover_cmd":"cp %s %s","ts":%s}\n' \
+      "$label" "$f" "$LIVE_AGENTS_DIR/$b" "$now"
+  done
+}
+
+# ── the shared renderer ──────────────────────────────────────────────────────────────────────────
+# CELL and alarm_table() are DEFINITIONS ONLY and sit above the sensor composition so the
+# --plist-parity leg below can reach the same renderer without first running the land-pipeline and
+# dispatch sensors it has nothing to do with (which would also make that leg read the operator's
+# live disk from inside a suite). Bodies are unchanged from where they used to live; only the
+# position moved, plus alarm_table's optional source argument.
+#
+# Every @tsv cell is padded to a NON-EMPTY, tab/newline-free value before it reaches `read`.
+# Load-bearing, not cosmetic: tab is IFS-*whitespace*, so `IFS=$'\t' read` collapses a run of
+# tabs and ANY empty field shifts every later field LEFT — a row with no .refusal used to slide
+# recover_cmd into the refusal variable and render the RECOVER column blank, i.e. the operator's
+# one-glance board silently dropping the exact command it exists to hand over. (A non-whitespace
+# IFS is NOT the fix — $'\001' does not split at all on macOS bash 3.2.) `//` alone is not enough
+# either: it substitutes for null/false, never for an empty string, so the ""-default on .refusal
+# was the live case. Placeholder is chosen per column so the rendered table is unchanged for every
+# row that HAS the field.
+CELL='def cell(ph): (. // "") | tostring | gsub("[\\t\\r\\n]"; " ") | if . == "" then ph else . end; '
+
+# <jq-select> [json-source] [subject-col-width] — every alarm family shares ONE renderer, never two.
+#
+# A non-zero third arg inserts a SUBJECT column between STATE and DETAIL; the default 0 keeps the
+# LAND and DISPATCH tables byte-identical to what they have always printed. WHY the column exists at
+# all, and why it is opt-in rather than always-on: measured against the real bin/cc-fleet on this box,
+# the fleet family emits 13 rows of which 6 are identical in KIND, STATE, DETAIL *and* RECOVER —
+# `DISABLED / disabled at the domain level (C10) / CONFIRM=1 bash …17-fleet-activate.sh` three times
+# over. Those rows are per-LABEL and the label IS their identity, so without it the board hands the
+# operator a verdict they cannot attribute to a job, which is not an honest verdict (§4.3's floor).
+# The land and dispatch families do not want it: their .subject is a PATH (a stamps dir, a deploy
+# checkout) that would be truncated into noise, and their KIND already varies row to row.
+# ONE jq program either way — .subject is always selected (with CELL's non-empty placeholder, so the
+# @tsv field count never changes and the field-collapse trap above cannot reopen) and simply unread
+# in the 4-column branch. A second printf pair is not a second renderer; a second jq+read+loop would
+# be, which is what this avoids.
+alarm_table() {
+  local src="${2:-$ALARMS_JSON}" sw="${3:-0}"
+  if [ "$sw" != 0 ]; then printf "%-15s %-16s %-${sw}s %-44s %s\n" KIND STATE SUBJECT DETAIL RECOVER
+  else                     printf '%-15s %-16s %-44s %s\n' KIND STATE DETAIL RECOVER; fi
+  printf '%s' "$src" | jq -r "$CELL"'.[] | '"$1"' | [
+      (.kind        | cell("?")),
+      (.state       | cell("?")),
+      (.subject     | cell("-")),
+      (.detail      | cell("-")),
+      (.recover_cmd | cell("?"))
+    ] | @tsv' | while IFS=$'\t' read -r kind state subject detail cmd; do
+      if [ "$sw" != 0 ]; then
+        printf "%-15s %-16s %-${sw}s %-44s %s\n" \
+          "${kind:0:15}" "${state:0:16}" "${subject:0:$sw}" "${detail:0:44}" "$cmd"
+      else
+        printf '%-15s %-16s %-44s %s\n' "${kind:0:15}" "${state:0:16}" "${detail:0:44}" "$cmd"
+      fi
+    done
+}
+
+# ── the --plist-parity leg (§4.4) — its own leg, and terminal. It is deliberately NOT folded into
+# the default board: the parity sensors are $HOME-rooted, and every suite that renders the default
+# board fixtures the board sensors but not $HOME, so folding it in would make those suites read the
+# operator's real ~/Library/LaunchAgents. Exits here, before any land-pipeline sensor is touched.
+if [ "$PARITY" = 1 ]; then
+  PARITY_JSON="$(plist_parity_rows 2>/dev/null | jq -s '.' 2>/dev/null || true)"
+  [ -n "$PARITY_JSON" ] || PARITY_JSON='[]'
+  if [ "$JSON" = 1 ]; then printf '%s\n' "$PARITY_JSON"; exit 0; fi
+  np="$(printf '%s' "$PARITY_JSON" | jq 'length' 2>/dev/null || echo 0)"
+  PARITY_REPO="$(resolve_plist_repo || true)"
+  if [ "${np:-0}" = 0 ]; then
+    echo "plist SSOT parity: 0 drift — ${PARITY_REPO:-$PLIST_REL} and $LIVE_AGENTS_DIR agree"
+    exit 0
+  fi
+  echo "PLIST-SSOT PARITY — $np drift(s): repo ${PARITY_REPO:-unresolved} vs live $LIVE_AGENTS_DIR (run the RECOVER command; declare an intentional live-only with: touch $LIVE_AGENTS_DIR/<label>.plist.local):"
+  # Subject column: the parity rows are per-LABEL too, and three CONTENT-DRIFT rows read identically
+  # without it. 34 matches the fleet table so the two boards line up.
+  alarm_table 'select(.kind=="plist-parity")' "$PARITY_JSON" 34
+  exit 0
+fi
+
 [ -n "$ALARMS_JSON" ] || ALARMS_JSON='[]'
 
 BOARD_ABSENT=0
@@ -484,23 +721,13 @@ if [ "$JSON" = 1 ]; then
   exit 0
 fi
 
-# Every @tsv cell is padded to a NON-EMPTY, tab/newline-free value before it reaches `read`.
-# Load-bearing, not cosmetic: tab is IFS-*whitespace*, so `IFS=$'\t' read` collapses a run of
-# tabs and ANY empty field shifts every later field LEFT — a row with no .refusal used to slide
-# recover_cmd into the refusal variable and render the RECOVER column blank, i.e. the operator's
-# one-glance board silently dropping the exact command it exists to hand over. (A non-whitespace
-# IFS is NOT the fix — $'\001' does not split at all on macOS bash 3.2.) `//` alone is not enough
-# either: it substitutes for null/false, never for an empty string, so the ""-default on .refusal
-# was the live case. Placeholder is chosen per column so the rendered table is unchanged for every
-# row that HAS the field.
-CELL='def cell(ph): (. // "") | tostring | gsub("[\\t\\r\\n]"; " ") | if . == "" then ph else . end; '
-
 n="$(printf '%s' "$ROWS" | jq '[.[] | select(.kind=="safeguard-blocked")] | length' 2>/dev/null || echo 0)"
 nr="$(printf '%s' "$ROWS" | jq '[.[] | select(.kind=="relogin-blocked")] | length' 2>/dev/null || echo 0)"
 na="$(printf '%s' "$ALARMS_JSON" | jq 'length' 2>/dev/null || echo 0)"
-# The alarms ride in ONE --json array (a consumer must see them all) but render as TWO tables: the
-# families have different owners and different recovery paths, and a dispatch row printed under a
-# "the landing net is degraded" heading sends the operator to the wrong subsystem.
+# The alarms ride in ONE --json array (a consumer must see them all) but render as SEPARATE tables:
+# the families have different owners and different recovery paths, and a dispatch row printed under a
+# "the landing net is degraded" heading sends the operator to the wrong subsystem. One renderer
+# (alarm_table), N selectors — never a second renderer.
 LAND_SEL='select(.kind=="verifier-inert" or .kind=="trunk-red" or .kind=="deploy-lag")'
 DISP_SEL='select(.kind=="dispatch-inert")'
 # ONE family for both approval kinds, on the same rule that splits LAND from DISPATCH: they share a
@@ -510,23 +737,13 @@ APPR_SEL='select(.kind=="orphaned-approver" or .kind=="beacon-inert")'
 nl="$(printf '%s' "$ALARMS_JSON" | jq "[.[] | $LAND_SEL] | length" 2>/dev/null || echo 0)"
 nd="$(printf '%s' "$ALARMS_JSON" | jq "[.[] | $DISP_SEL] | length" 2>/dev/null || echo 0)"
 np="$(printf '%s' "$ALARMS_JSON" | jq "[.[] | $APPR_SEL] | length" 2>/dev/null || echo 0)"
+FLEET_SEL='select(.kind=="fleet-inert")'
+nf="$(printf '%s' "$ALARMS_JSON" | jq "[.[] | $FLEET_SEL] | length" 2>/dev/null || echo 0)"
 if [ "${n:-0}" = 0 ] && [ "${nr:-0}" = 0 ] && [ "${na:-0}" = 0 ]; then
   if [ "$BOARD_ABSENT" = 1 ]; then echo "no safeguard-blocked sessions (board $IDL_FILE absent)"
   else echo "no safeguard-blocked sessions surfaced"; fi
   exit 0
 fi
-
-alarm_table() { # <count> <jq-select> — the two alarm families share one renderer, never two
-  printf '%-15s %-16s %-44s %s\n' KIND STATE DETAIL RECOVER
-  printf '%s' "$ALARMS_JSON" | jq -r "$CELL"'.[] | '"$1"' | [
-      (.kind        | cell("?")),
-      (.state       | cell("?")),
-      (.detail      | cell("-")),
-      (.recover_cmd | cell("?"))
-    ] | @tsv' | while IFS=$'\t' read -r kind state detail cmd; do
-      printf '%-15s %-16s %-44s %s\n' "${kind:0:15}" "${state:0:16}" "${detail:0:44}" "$cmd"
-    done
-}
 
 if [ "${nl:-0}" != 0 ]; then
   echo "LAND-PIPELINE — $nl alarm(s): the landing net is degraded (run the RECOVER command):"
@@ -543,6 +760,18 @@ if [ "${np:-0}" != 0 ]; then
   { [ "${nl:-0}" != 0 ] || [ "${nd:-0}" != 0 ]; } && echo
   echo "APPROVAL — $np alarm(s): an approval request cannot reach an approver (run the RECOVER command):"
   alarm_table "$APPR_SEL"
+fi
+
+# FLEET last of the four alarm families and deliberately its own table: these rows are the FLOOR
+# (every declared label gets one honest verdict), so a label may legitimately appear both here and
+# in the dispatch table above with a different, more specific diagnosis. Two rows for one label is
+# the design, not a duplicate — dedup would delete exactly the specific one worth reading.
+if [ "${nf:-0}" != 0 ]; then
+  { [ "${nl:-0}" != 0 ] || [ "${nd:-0}" != 0 ] || [ "${np:-0}" != 0 ]; } && echo
+  echo "FLEET — $nf label(s) not in their declared state (run the RECOVER command):"
+  # 34 = the longest label the manifest declares today (com.claude.session-search-backfill). A label
+  # is pasted verbatim into launchctl, so it is shown WHOLE rather than prefix-stripped or elided.
+  alarm_table "$FLEET_SEL" "$ALARMS_JSON" 34
 fi
 
 if [ "${n:-0}" != 0 ]; then
