@@ -1,9 +1,13 @@
 #!/bin/bash
+# shellcheck disable=SC2153  # TASKS_DIR/TASKS_INDEX are set by the sourced lib/task-helpers.sh,
+# which the ship gate's shellcheck (no -x) cannot follow — not a misspelling of TASK_DIR.
 set -euo pipefail
 # TaskCompleted Hook - Regenerate summary and TASKS.md for the active task list.
 # Works with UUID-based task lists (auto-detected), not just named ones.
 
 # shellcheck source=lib/task-helpers.sh
+# shellcheck disable=SC1091  # ship-land's gate runs shellcheck without -x, so the sourced
+# helper cannot be followed statically; TASKS_DIR/TASKS_INDEX come from it, not a misspelling.
 . "$(dirname "$0")/lib/task-helpers.sh"
 
 TASK_LIST_ID="${CLAUDE_CODE_TASK_LIST_ID:-}"
@@ -36,6 +40,7 @@ TASK_DIR="$TASKS_DIR/$EFFECTIVE_ID"
 
 # Cleanup temp files on any exit
 TEMP=""
+# shellcheck disable=SC2329  # invoked indirectly via trap, which shellcheck cannot follow
 cleanup() { [ -n "$TEMP" ] && rm -f "$TEMP"; }
 trap cleanup EXIT
 

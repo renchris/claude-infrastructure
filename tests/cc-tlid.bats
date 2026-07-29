@@ -10,6 +10,11 @@
 # still produce a usable id rather than to exit non-zero.
 
 setup() {
+  # Hermetic $HOME: these suites drive tools whose defaults are $HOME/.claude/... — without
+  # this, a leaked default reads (or writes) the operator's LIVE board and the verdict starts
+  # depending on whatever the fleet happens to be doing. Enforced by ship-land's hermeticity
+  # ratchet, which blocks the land rather than letting the suite look green against live state.
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   C="$REPO/bin/cc-tlid"
   D="$BATS_TEST_TMPDIR"
