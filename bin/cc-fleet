@@ -1,0 +1,728 @@
+#!/usr/bin/env bash
+# cc-fleet — the launchd FLEET RECONCILER: exactly one honest verdict per DECLARED label.
+#
+#   cc-fleet --json | --table | --check | --plist-parity | --selftest
+#
+# Reads launchd/fleet.manifest (the declaration) and four INDEPENDENT sensors, and reduces them to a
+# total state function. The unit of coverage is a LINE IN A MANIFEST, not an alarm someone
+# remembered to write: that is why coverage is total by construction and stays total as the fleet
+# grows. The failure this replaces is measured, not hypothetical — 14 labels, 10 of them dark for
+# ~43h, 2 with any alarm at all, and an operator board that said "no safeguard-blocked sessions"
+# (DAEMON_FLEET_V2 §1.1, §2).
+#
+# READ-ONLY, ALWAYS. It renders verdicts; it never mutates launchd, never enables, never bootstraps.
+# Activation is the operator's C10 step and every row hands over the exact command for it.
+#
+#   --json          one verdict object per line; the FROZEN row schema below. No row = no problem.
+#   --table         operator-readable: one line per declared label (its state, healthy or not) plus
+#                   the row-emitting ones marked, plus UNKNOWN lines where a sensor could not run.
+#   --check         exit 0 iff every declared-`run` label is S6 HEALTHY. The gate entry point.
+#                   An UNKNOWN label fails it: a check that cannot run must never pass vacuously.
+#   --plist-parity  launchd/*.plist vs ~/Library/LaunchAgents/com.claude.*: LIVE-ONLY (one `rm`
+#                   from unrecoverable) / REPO-ONLY (committed, never installed) / CONTENT-DRIFT
+#                   (the copy launchd actually loads differs from the committed SSOT).
+#   --selftest      hermetic, RED-provable, side-effect-free. Never touches real launchd.
+#
+# ── the state function (total, first match wins, every arm TERMINAL) ─────────────────────────────
+# Terminal means: a job that is not installed cannot be disabled; a disabled job cannot be late.
+# That is what stops one dark job from emitting five rows.
+#   S1 NOT-INSTALLED  declared `run`, no plist in ~/Library/LaunchAgents          (filesystem)
+#   S2 DISABLED       installed, `=> disabled` in the override DB                 (print-disabled)
+#   S3 NEVER-RAN      loaded, runs=0, and no evidence artifact                   (print + evidence)
+#   S4 FAILING        loaded, `last exit code` != 0                               (print)
+#   S5 STALLED        exit 0, evidence older than interval_s x CC_FLEET_STALE_FACTOR
+#                     (interval_s=0 ⇒ 86400 x factor). Evidence `-`/unreadable ⇒ NEVER claimed
+#   S6 HEALTHY        no row
+# `expect=retired` ⇒ no row, ever (retired != broken). `expect=staged` ⇒ exactly ONE row,
+# state=UNDECIDED, carrying the OBSERVED state in its detail — declared, decision pending,
+# surfaced, never silent. A live com.claude.* plist absent from the manifest ⇒ ONE
+# UNDECLARED-SUMMARY row naming the count (detail) and the labels (subject): a manifest gap, not a
+# daemon fault.
+#
+# ── row schema (FROZEN — bin/cc-blockers' fleet_alarm_rows() codes against this) ─────────────────
+# {"kind":"fleet-inert","state":"<S>","detail":"<ascii, <=44 bytes>","subject":"<label>",
+#  "recover_cmd":"<paste-ready>","ts":<epoch>}
+# state ∈ NOT-INSTALLED|DISABLED|NEVER-RAN|FAILING|STALLED|UNDECIDED|UNDECLARED-SUMMARY.
+# `detail` is ASCII-only and <=44 bytes: the board's renderer pads by BYTES, so one em-dash
+# silently shifts the column. `$(id -u)` in a recover_cmd is EMITTED, never evaluated — it must
+# expand in the operator's shell, which is also what keeps the command uid-portable
+# (bin/cc-blockers:145-147).
+#
+# ── discipline (each line below cost a real incident in this repo) ───────────────────────────────
+# 1. `plutil -extract <key> <fmt> -o - <file>` — the `-o -` is MANDATORY. Without it plutil
+#    REWRITES the plist in place; that destroyed 5 LaunchAgents on 2026-07-25.
+# 2. launchctl is reached ONLY through CC_FLEET_LAUNCHCTL_BIN and ONLY with the read-only
+#    subcommands `list`, `print`, `print-disabled` (bin/cc-blockers:70's idiom). No load, unload,
+#    enable, disable, bootstrap, bootout or kickstart appears anywhere in this file.
+# 3. NO `case` inside a `$( )`. macOS /bin/bash is 3.2 and its command-substitution parser takes a
+#    case pattern's `)` as the closing paren: it dies at RUNTIME while `bash -n` and shellcheck
+#    both pass, and it previously emitted a FALSE alarm row. Every `case` here validates OUTSIDE
+#    command substitution.
+# 4. Sensor failure (no launchctl, unparseable print, unreadable uid, unreadable manifest row) ⇒
+#    that label emits NO row and --table prints `UNKNOWN <reason>`. Never a vacuous pass, never an
+#    invented row (R5/R8: no sensor, no verdict).
+# 5. Kill switch CC_FLEET_RECONCILE=off ⇒ zero rows, exit 0, one stderr line saying so.
+#
+# Env seams (the override surface is what makes --selftest and the suite hermetic):
+#   CC_FLEET_RECONCILE     on|off              CC_FLEET_STALE_FACTOR   staleness multiplier (3)
+#   CC_FLEET_MANIFEST      manifest path       CC_FLEET_LAUNCHCTL_BIN  read-only launchctl
+#   CC_FLEET_LIVE_LAUNCHD  ~/Library/LaunchAgents          CC_FLEET_REPO_LAUNCHD  <repo>/launchd
+#   CC_FLEET_ACTIVATE_DIR  pending-activation dir          CC_FLEET_PLUTIL_BIN    /usr/bin/plutil
+#   CC_FLEET_NOW           epoch override (tests)
+set -uo pipefail
+
+# Resolve $0 THROUGH symlinks before deriving ROOT: ~/.claude/bin/ is per-file symlinks into the
+# checkout, so a bare `dirname "$0"` yields ~/.claude, which has no launchd/. Same idiom as
+# scripts/test-hermeticity-lint.sh:31 (no `readlink -f` — GNU-only, this box ships BSD userland).
+SELF="$0"
+while [ -L "$SELF" ]; do
+  _link="$(readlink "$SELF")"
+  case "$_link" in
+    /*) SELF="$_link" ;;
+    *)  SELF="$(dirname "$SELF")/$_link" ;;
+  esac
+done
+ROOT="$(cd "$(dirname "$SELF")/.." && pwd)"
+
+MANIFEST="${CC_FLEET_MANIFEST:-$ROOT/launchd/fleet.manifest}"
+STALE_FACTOR="${CC_FLEET_STALE_FACTOR:-3}"
+LAUNCHCTL_BIN="${CC_FLEET_LAUNCHCTL_BIN:-/bin/launchctl}"   # READ-ONLY subcommands only
+PLUTIL_BIN="${CC_FLEET_PLUTIL_BIN:-/usr/bin/plutil}"
+LIVE_AGENTS="${CC_FLEET_LIVE_LAUNCHD:-$HOME/Library/LaunchAgents}"
+REPO_LAUNCHD="${CC_FLEET_REPO_LAUNCHD:-$ROOT/launchd}"
+ACTIVATE_DIR="${CC_FLEET_ACTIVATE_DIR:-$ROOT/docs/activation/pending-activation}"
+RECONCILE="${CC_FLEET_RECONCILE:-on}"
+DAY_S=86400
+DETAIL_MAX=44
+
+MODE=""
+case "${1:-}" in
+  --json)         MODE=json ;;
+  --table)        MODE=table ;;
+  --check)        MODE=check ;;
+  --plist-parity) MODE=parity ;;
+  --selftest)     MODE=selftest ;;
+  -h|--help)      sed -n '2,44p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  "")             echo "cc-fleet: pick a verb (--json|--table|--check|--plist-parity|--selftest)" >&2; exit 2 ;;
+  *)              echo "cc-fleet: unknown arg $1 (--json|--table|--check|--plist-parity|--selftest)" >&2; exit 2 ;;
+esac
+
+# ── helpers ──────────────────────────────────────────────────────────────────────────────────────
+trim() { # strip leading/trailing whitespace without forking
+  local s="$1"
+  s="${s#"${s%%[![:space:]]*}"}"
+  s="${s%"${s##*[![:space:]]}"}"
+  printf '%s' "$s"
+}
+jesc() { # minimal JSON string escape: backslash and double quote (paths can carry both)
+  local s="$1"
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  printf '%s' "$s"
+}
+mtime() { stat -f %m "$1" 2>/dev/null || true; }   # BSD stat; empty ⇒ unreadable ⇒ no verdict
+is_num() { # 0 = a non-empty run of digits. Validation lives HERE, never inside a $( ) (discipline 3)
+  case "${1:-}" in ''|*[!0-9]*) return 1 ;; esac
+  return 0
+}
+in_csv() { # $1 needle, $2 comma-separated haystack. 0 = present. Whole-field match, never substring:
+  # a plain `case "$2" in *"$1"*)` would let exit 1 satisfy an ok_exits of "13". Commas on both
+  # ends make every element bounded. Validation lives HERE, never inside a $( ) (discipline 3).
+  case ",${2:-}," in *",${1:-},"*) return 0 ;; esac
+  return 1
+}
+dur() { # seconds → compact human unit. Minutes under 2h so a 900s bound never renders as "0h".
+  local s="${1:-0}"
+  if [ "$s" -lt 7200 ]; then printf '%sm' "$(( (s + 30) / 60 ))"; else printf '%sh' "$(( (s + 1800) / 3600 ))"; fi
+}
+
+NOW="${CC_FLEET_NOW:-}"
+[ -n "$NOW" ] || NOW="$(date +%s 2>/dev/null || true)"
+is_num "$NOW" || { echo "cc-fleet: no readable clock — no verdict" >&2; exit 3; }
+
+# A non-numeric factor would make every staleness arithmetic die mid-pass; fall back LOUDLY rather
+# than half-reconcile.
+if ! is_num "$STALE_FACTOR" || [ "$STALE_FACTOR" -lt 1 ]; then
+  echo "cc-fleet: CC_FLEET_STALE_FACTOR=$STALE_FACTOR is not a positive integer — using 3" >&2
+  STALE_FACTOR=3
+fi
+
+# ── kill switch (before any sensor read, so `off` cannot fail for an unrelated reason) ────────────
+if [ "$RECONCILE" = off ]; then
+  echo "cc-fleet: reconciliation is OFF (CC_FLEET_RECONCILE=off) — zero rows by request" >&2
+  exit 0
+fi
+
+# ── sensors ──────────────────────────────────────────────────────────────────────────────────────
+UID_N="$(id -u 2>/dev/null || true)"
+SENSOR_UID=ok; is_num "$UID_N" || SENSOR_UID=fail
+
+SENSOR_LAUNCHCTL=ok
+[ -x "$LAUNCHCTL_BIN" ] || SENSOR_LAUNCHCTL=fail
+
+DISABLED_DB=""
+SENSOR_DISABLED=ok
+if [ "$SENSOR_UID" = ok ] && [ "$SENSOR_LAUNCHCTL" = ok ]; then
+  # The sensor's health is launchctl's EXIT STATUS, never the emptiness of its output: a domain
+  # with no overrides at all is a legitimate all-enabled READING, and treating it as a broken
+  # sensor would silently suppress every downstream verdict on a healthy box.
+  DISABLED_DB="$("$LAUNCHCTL_BIN" print-disabled "gui/$UID_N" 2>/dev/null)" || SENSOR_DISABLED=fail
+else
+  SENSOR_DISABLED=fail
+fi
+
+# disabled|enabled|absent for one label. `absent` = the override DB has no opinion (the default
+# state, i.e. enabled-by-omission); the closing quote in the pattern is what stops
+# session-search-sweep from matching session-search-backfill.
+DIS_STATE=""
+disabled_state_of() {
+  local hit
+  hit="$(printf '%s\n' "$DISABLED_DB" | grep -F "\"$1\" => " | head -1)"
+  DIS_STATE=absent
+  case "$hit" in
+    *'=> disabled'*) DIS_STATE=disabled ;;
+    *'=> enabled'*)  DIS_STATE=enabled ;;
+  esac
+}
+
+# launchctl print for one label. Sets P_RUNS, P_EXIT ("" = launchd has no opinion) and P_FAIL
+# ("" = sensor ok, else the reason). ONLY rc=0 yields facts.
+#
+# `print` is a THREE-WAY AMBIGUITY, not a signal (DAEMON_FLEET_V2 §3.1.1, measured 2026-07-29): it
+# returns rc=113 with an IDENTICAL "Could not find service" message for a disabled label and for a
+# label that does not exist at all. So S1 comes from the filesystem and S2 from the override db, and
+# print is consulted only for S3/S4 where rc=0 guarantees the parse is meaningful. Reaching a
+# non-zero print on a label that IS installed and IS NOT disabled therefore means the sensor cannot
+# tell us what state it is in — a genuine UNKNOWN (no row, and --table says so), never a guessed
+# NEVER-RAN and never a silent HEALTHY.
+P_RUNS=""; P_EXIT=""; P_FAIL=""
+read_print() {
+  local out rc
+  P_RUNS=""; P_EXIT=""; P_FAIL=""
+  if [ "$SENSOR_LAUNCHCTL" != ok ] || [ "$SENSOR_UID" != ok ]; then
+    P_FAIL=launchctl-unavailable; return 0
+  fi
+  out="$("$LAUNCHCTL_BIN" print "gui/$UID_N/$1" 2>&1)"; rc=$?
+  if [ "$rc" -ne 0 ]; then
+    case "$out" in
+      *'Could not find service'*) P_FAIL=not-loaded-though-installed-and-enabled; return 0 ;;
+      *) P_FAIL=launchctl-print-rc$rc; return 0 ;;
+    esac
+  fi
+  P_RUNS="$(printf '%s\n' "$out" | sed -n 's/^[[:space:]]*runs = \([0-9][0-9]*\).*$/\1/p' | head -1)"
+  P_EXIT="$(printf '%s\n' "$out" | sed -n 's/^[[:space:]]*last exit code = \(-*[0-9][0-9]*\).*$/\1/p' | head -1)"
+  is_num "$P_RUNS" || { P_FAIL=launchctl-print-unparseable; return 0; }
+  return 0
+}
+
+# Resolve the evidence field to a path. EV_PATH="" means NO SENSOR — S5 is then never claimed.
+EV_PATH=""
+resolve_evidence() { # $1=label $2=evidence field
+  local plist raw rc
+  EV_PATH=""
+  [ "$2" = "-" ] && return 0
+  if [ "$2" != auto ]; then
+    EV_PATH="$2"
+    # shellcheck disable=SC2088  # the tilde is DATA read out of the manifest, not a path this file
+    # writes; expanding it here is the whole point (SC2088 assumes an unexpanded literal is a bug).
+    case "$EV_PATH" in '~/'*) EV_PATH="$HOME/${EV_PATH#\~/}" ;; esac
+    return 0
+  fi
+  plist="$LIVE_AGENTS/$1.plist"
+  [ -f "$plist" ] || return 0
+  # `-o -` is MANDATORY (discipline 1): without it plutil -extract REWRITES the plist in place.
+  raw="$("$PLUTIL_BIN" -extract StandardOutPath raw -o - "$plist" 2>/dev/null)"; rc=$?
+  # plutil prints its errors on STDOUT and they START with the plist path, so an absolute-path test
+  # alone would swallow one. rc is the authority; the shape checks are belt-and-braces.
+  [ "$rc" -eq 0 ] || return 0
+  case "$raw" in
+    /*) ;;
+    *) return 0 ;;
+  esac
+  case "$raw" in
+    *'
+'*) return 0 ;;
+  esac
+  EV_PATH="$raw"
+}
+
+# ── row emission ─────────────────────────────────────────────────────────────────────────────────
+ROW_COUNT=0
+# NOTE: callers use emit_row inside a $( ), i.e. in a SUBSHELL — so it must never be the thing that
+# maintains a counter (the increment would be discarded). ROW_COUNT is bumped by the caller.
+emit_row() { # $1=state $2=detail $3=subject $4=recover_cmd
+  local detail="$2"
+  # Truncate defensively: the renderer pads by BYTES and every detail here is ASCII, so character
+  # truncation is byte truncation. A too-long detail is a bug in THIS file, not the operator's
+  # problem — the --selftest asserts the invariant so it is caught before it ships.
+  [ "${#detail}" -le "$DETAIL_MAX" ] || detail="${detail:0:$DETAIL_MAX}"
+  # shellcheck disable=SC2016  # $(id -u) inside recover_cmd is EMITTED, not evaluated (see header)
+  printf '{"kind":"fleet-inert","state":"%s","detail":"%s","subject":"%s","recover_cmd":"%s","ts":%s}\n' \
+    "$1" "$(jesc "$detail")" "$(jesc "$3")" "$(jesc "$4")" "$NOW"
+}
+
+# ── the state function ───────────────────────────────────────────────────────────────────────────
+# Sets S_STATE (a schema state, HEALTHY, RETIRED, or UNKNOWN), S_DETAIL, S_RECOVER, S_UNKNOWN.
+S_STATE=""; S_DETAIL=""; S_RECOVER=""; S_UNKNOWN=""
+classify() { # $1=label $2=expect $3=interval_s $4=evidence $5=activate $6=ok_exits
+  local label="$1" expect="$2" interval="$3" evidence="$4" activate="$5" okexits="${6:-}"
+  # ok_exits — the exit codes this job uses to express a HEALTHY outcome. Empty/absent ⇒ "0".
+  # A job whose DESIGNED verdict is a non-zero refusal is not failing: com.claude.deploy-live
+  # exits 1 to mean "no GREEN stamp, nothing safe to deploy" (verified via `deploy-live.sh
+  # --dry-run`). Keying S4 on `exit != 0` alone puts a permanent, unfixable row on a healthy
+  # job — the alarm-fatigue failure this whole design exists to prevent (plan §5 F20).
+  case "$okexits" in '') okexits=0 ;; esac
+  local plist bound ev_ts age
+  S_STATE=""; S_DETAIL=""; S_RECOVER=""; S_UNKNOWN=""
+  local act_cmd="CONFIRM=1 bash $ACTIVATE_DIR/$activate"
+  # shellcheck disable=SC2016  # EMITTED for the operator's shell, deliberately unexpanded here
+  local print_cmd='launchctl print gui/$(id -u)/'"$label"
+
+  if [ "$expect" = retired ]; then S_STATE=RETIRED; return 0; fi
+
+  # S1 — filesystem only, so it still decides when launchctl itself is the broken sensor.
+  plist="$LIVE_AGENTS/$label.plist"
+  if [ ! -f "$plist" ]; then
+    S_STATE=NOT-INSTALLED; S_DETAIL='no plist in ~/Library/LaunchAgents'; S_RECOVER="$act_cmd"
+    return 0
+  fi
+
+  # S2 — the override DB. Unreadable ⇒ UNKNOWN, never "enabled by assumption".
+  if [ "$SENSOR_DISABLED" != ok ]; then
+    S_STATE=UNKNOWN; S_UNKNOWN=print-disabled-unreadable; return 0
+  fi
+  disabled_state_of "$label"
+  if [ "$DIS_STATE" = disabled ]; then
+    S_STATE=DISABLED; S_DETAIL='disabled at the domain level (C10)'; S_RECOVER="$act_cmd"
+    return 0
+  fi
+
+  read_print "$label"
+  if [ -n "$P_FAIL" ]; then S_STATE=UNKNOWN; S_UNKNOWN="$P_FAIL"; return 0; fi
+
+  resolve_evidence "$label" "$evidence"
+  ev_ts=""
+  [ -n "$EV_PATH" ] && ev_ts="$(mtime "$EV_PATH")"
+  is_num "$ev_ts" || ev_ts=""
+
+  # S3 — never demonstrably ran: loaded, launchd's own counter says runs=0, and no evidence
+  # artifact. Both halves are required — an artifact means it ran at least once, which is a
+  # staleness question (S5), not a never-ran one.
+  if [ -z "$ev_ts" ] && [ "${P_RUNS:-0}" = 0 ]; then
+    S_STATE=NEVER-RAN; S_DETAIL='loaded, runs=0, no evidence artifact'; S_RECOVER="$print_cmd"
+    return 0
+  fi
+
+  # S4 — launchd's own verdict on the last run. Absent (`runs=0`) ⇒ no opinion ⇒ never FAILING.
+  # An exit inside the job's declared ok_exits set is a HEALTHY outcome, not a failure.
+  if [ -n "$P_EXIT" ] && ! in_csv "$P_EXIT" "$okexits"; then
+    S_STATE=FAILING; S_DETAIL="last exit code $P_EXIT after ${P_RUNS:-?} runs"
+    S_RECOVER="$print_cmd"
+    [ -n "$EV_PATH" ] && S_RECOVER="tail -40 $EV_PATH ; $print_cmd"
+    return 0
+  fi
+
+  # S5 — staleness. NO evidence sensor ⇒ never claimed (R8). A not-loaded job with stale evidence
+  # lands here too, and its detail says so: the fix is activation, not a log read.
+  if [ -n "$ev_ts" ]; then
+    bound="$interval"
+    [ "$bound" = 0 ] && bound="$DAY_S"
+    bound=$((bound * STALE_FACTOR))
+    age=$((NOW - ev_ts))
+    if [ "$age" -gt "$bound" ]; then
+      S_STATE=STALLED
+      S_DETAIL="evidence $(dur "$age") old; bound $(dur "$bound")"
+      S_RECOVER="tail -40 $EV_PATH ; $print_cmd"
+      return 0
+    fi
+  fi
+
+  S_STATE=HEALTHY
+}
+
+# ── the reconcile pass ───────────────────────────────────────────────────────────────────────────
+DECLARED=0; UNKNOWNS=0; NOT_S6=0
+TABLE=""; ROWS=""; UNKNOWN_LINES=""; DECLARED_LABELS=""
+reconcile() {
+  local line label expect interval evidence owner activate okexits rest tag
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="$(trim "$line")"
+    case "$line" in ''|'#'*) continue ;; esac
+    IFS='|' read -r label expect interval evidence owner activate okexits rest <<EOF
+$line
+EOF
+    label="$(trim "$label")"; expect="$(trim "$expect")"; interval="$(trim "$interval")"
+    evidence="$(trim "$evidence")"; owner="$(trim "$owner")"; activate="$(trim "$activate")"
+    # 7th field is OPTIONAL: a 6-field row is legal and means ok_exits=0. A malformed value is
+    # treated as 0 rather than crashing the row — a parser that dies on a typo is a dead sensor.
+    okexits="$(trim "${okexits:-}")"
+    case "$okexits" in ''|*[!0-9,-]*) okexits=0 ;; esac
+    if [ -z "$label" ] || [ -z "$activate" ] || ! is_num "$interval"; then
+      UNKNOWNS=$((UNKNOWNS + 1))
+      UNKNOWN_LINES="${UNKNOWN_LINES}UNKNOWN ${label:-<blank>} manifest-row-malformed
+"
+      continue
+    fi
+    case "$expect" in
+      run|staged|retired) ;;
+      *) UNKNOWNS=$((UNKNOWNS + 1))
+         UNKNOWN_LINES="${UNKNOWN_LINES}UNKNOWN $label manifest-expect-invalid
+"
+         continue ;;
+    esac
+    DECLARED=$((DECLARED + 1))
+    DECLARED_LABELS="$DECLARED_LABELS $label"
+
+    classify "$label" "$expect" "$interval" "$evidence" "$activate" "$okexits"
+
+    # `staged` reports the OBSERVED state inside a single UNDECIDED row: the job is not faulty, a
+    # decision about it is outstanding. The row is UNCONDITIONAL — it is derived from the
+    # DECLARATION, which needs no sensor, so `staged` can never become a hiding place (§3.1). A
+    # sensor that could not run shows up as `staged: UNKNOWN`, still one row, still surfaced.
+    if [ "$expect" = staged ]; then
+      S_DETAIL="staged: $S_STATE; decision pending"
+      S_RECOVER="CONFIRM=1 bash $ACTIVATE_DIR/$activate"
+      S_STATE=UNDECIDED
+    fi
+
+    tag="$S_STATE"
+    if [ "$S_STATE" = UNKNOWN ]; then
+      UNKNOWNS=$((UNKNOWNS + 1))
+      UNKNOWN_LINES="${UNKNOWN_LINES}UNKNOWN $label $S_UNKNOWN
+"
+      [ "$expect" = run ] && NOT_S6=$((NOT_S6 + 1))
+      TABLE="${TABLE}$(printf '%-18s %-35s %s' "UNKNOWN" "$label" "sensor: $S_UNKNOWN")
+"
+      continue
+    fi
+    if [ "$S_STATE" = HEALTHY ] || [ "$S_STATE" = RETIRED ]; then
+      TABLE="${TABLE}$(printf '%-18s %-35s %s' "$tag" "$label" "-")
+"
+      continue
+    fi
+    [ "$expect" = run ] && NOT_S6=$((NOT_S6 + 1))
+    ROW_COUNT=$((ROW_COUNT + 1))
+    ROWS="${ROWS}$(emit_row "$S_STATE" "$S_DETAIL" "$label" "$S_RECOVER")
+"
+    TABLE="${TABLE}$(printf '%-18s %-35s %s' "$tag" "$label" "$S_DETAIL")
+"
+  done < "$MANIFEST"
+
+  # S0 — live com.claude.* plists the manifest does not know about. ONE summary row: the count in
+  # `detail` (which the renderer bounds at 44 bytes) and the labels in `subject`, which is
+  # unbounded. A manifest gap, never a daemon fault, so it is not counted against --check.
+  local f b lbl missing="" n=0
+  for f in "$LIVE_AGENTS"/com.claude.*.plist; do
+    [ -f "$f" ] || continue
+    b="${f##*/}"; lbl="${b%.plist}"
+    case " $DECLARED_LABELS " in
+      *" $lbl "*) continue ;;
+    esac
+    n=$((n + 1))
+    missing="${missing:+$missing,}$lbl"
+  done
+  if [ "$n" -gt 0 ]; then
+    ROW_COUNT=$((ROW_COUNT + 1))
+    ROWS="${ROWS}$(emit_row UNDECLARED-SUMMARY "$n live com.claude labels undeclared" "$missing" "$ROOT/bin/cc-fleet --plist-parity")
+"
+    TABLE="${TABLE}$(printf '%-18s %-35s %s' "UNDECLARED" "($n live, not declared)" "$missing")
+"
+  fi
+}
+
+if [ ! -r "$MANIFEST" ]; then
+  # No declaration ⇒ nothing is declared ⇒ no verdict is possible. LOUD, never a silent green.
+  if [ "$MODE" != parity ] && [ "$MODE" != selftest ]; then
+    echo "cc-fleet: manifest unreadable: $MANIFEST" >&2
+    exit 3
+  fi
+fi
+
+# ── --plist-parity ───────────────────────────────────────────────────────────────────────────────
+parity() { # 0 = in parity, 1 = drift found
+  local f b live repo n=0
+  for f in "$REPO_LAUNCHD"/com.claude.*.plist; do
+    [ -f "$f" ] || continue
+    b="${f##*/}"; live="$LIVE_AGENTS/$b"
+    if [ ! -f "$live" ]; then
+      printf 'REPO-ONLY      %s  (committed, never installed)\n' "$b"; n=$((n + 1)); continue
+    fi
+    cmp -s "$f" "$live" || { printf 'CONTENT-DRIFT  %s  (live copy differs from the committed SSOT)\n' "$b"; n=$((n + 1)); }
+  done
+  for f in "$LIVE_AGENTS"/com.claude.*.plist; do
+    [ -f "$f" ] || continue
+    b="${f##*/}"; repo="$REPO_LAUNCHD/$b"
+    [ -f "$repo" ] || { printf 'LIVE-ONLY      %s  (one rm from unrecoverable — no repo SSOT)\n' "$b"; n=$((n + 1)); }
+  done
+  if [ "$n" -eq 0 ]; then echo "plist parity: clean (repo SSOT == ~/Library/LaunchAgents)"; return 0; fi
+  printf '%s parity finding(s). REPO-ONLY/LIVE-ONLY/CONTENT-DRIFT are all manifest-lint failures.\n' "$n"
+  return 1
+}
+
+# ── verbs ────────────────────────────────────────────────────────────────────────────────────────
+if [ "$MODE" = parity ]; then parity; exit $?; fi
+
+if [ "$MODE" = selftest ]; then
+  # Sourced-in selftest: the file is re-executed with env seams per case, so every assertion below
+  # runs the REAL code path. Hermetic — a stub launchctl, a fixture LaunchAgents dir, a fixture
+  # manifest; real launchd is never contacted and nothing outside the tmpdir is written.
+  PASS=0; FAIL=0
+  _ST_TMP="$(mktemp -d)"; trap 'rm -rf "${_ST_TMP:-}"' EXIT
+  okp()  { PASS=$((PASS + 1)); printf '  ok   %s\n' "$1"; }
+  badp() { FAIL=$((FAIL + 1)); printf '  FAIL %s\n' "$1"; }
+
+  d="$_ST_TMP"
+  mkdir -p "$d/agents" "$d/act" "$d/repo-launchd"
+  # stub launchctl: honours only read-only subcommands and RECORDS every argv, so a mutating
+  # subcommand anywhere in this file would be caught by the assertion at the end.
+  cat > "$d/launchctl" <<STUB
+#!/bin/bash
+printf '%s\n' "\$*" >> "$d/lctl.log"
+case "\$1" in
+  print-disabled) cat "$d/disabled.txt" 2>/dev/null; exit 0 ;;
+  print)
+    lbl="\${2##*/}"
+    if [ -f "$d/print-\$lbl.txt" ]; then cat "$d/print-\$lbl.txt"; exit 0; fi
+    echo "Bad request." >&2; echo "Could not find service \"\$lbl\" in domain for user gui: 501" >&2; exit 113 ;;
+  list) exit 0 ;;
+  *) echo "stub: refusing non-read-only subcommand \$1" >&2; exit 99 ;;
+esac
+STUB
+  chmod +x "$d/launchctl"
+  mk_plist() { # $1=label [$2=StandardOutPath]
+    if [ -n "${2:-}" ]; then
+      printf '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict><key>Label</key><string>%s</string><key>StandardOutPath</key><string>%s</string></dict></plist>\n' "$1" "$2" > "$d/agents/$1.plist"
+    else
+      printf '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict><key>Label</key><string>%s</string></dict></plist>\n' "$1" > "$d/agents/$1.plist"
+    fi
+  }
+  run_fleet() { # $1=verb ; manifest at $d/manifest
+    CC_FLEET_MANIFEST="$d/manifest" CC_FLEET_LAUNCHCTL_BIN="$d/launchctl" \
+    CC_FLEET_LIVE_LAUNCHD="$d/agents" CC_FLEET_REPO_LAUNCHD="$d/repo-launchd" \
+    CC_FLEET_ACTIVATE_DIR="$d/act" CC_FLEET_NOW=2000000000 CC_FLEET_RECONCILE=on \
+    "$SELF" "$1" 2>/dev/null
+  }
+  state_of() { printf '%s\n' "$1" | sed -n 's/.*"state":"\([^"]*\)".*/\1/p' | head -1; }
+  # if/then/else, never `A && B || C`: with `set -u` and no errexit here, the && || form silently
+  # runs the FAILURE branch when the success branch's own status is nonzero (shellcheck SC2015).
+  eq()     { if [ "$2" = "$3" ]; then okp "$1"; else badp "$1 (got [$2], want [$3])"; fi; }
+  is_empty() { if [ -z "$2" ]; then okp "$1"; else badp "$1 (expected nothing, got [$2])"; fi; }
+  has()    { if printf '%s\n' "$3" | grep -q "$2"; then okp "$1"; else badp "$1 (no /$2/ in [$3])"; fi; }
+  rows_in() { printf '%s\n' "$1" | grep -c fleet-inert; }
+  # Every case starts from an EMPTY fixture domain. Without this, case N's leftover plist is
+  # undeclared in case N+1's manifest and each later case picks up a spurious UNDECLARED-SUMMARY
+  # row — cross-case leakage that reads exactly like a detector firing on everything.
+  fresh() { rm -f "$d/agents"/*.plist "$d/print-"*.txt; : > "$d/disabled.txt"; }
+  # Fixture mtimes are derived FROM the fixed test clock, never from the real one: with
+  # CC_FLEET_NOW pinned to a date the wall clock has not reached, a plain `touch` writes a mtime
+  # that is *seven years stale* to the code under test — a fixture that silently contradicts the
+  # arm it is meant to prove.
+  ST_NOW=2000000000
+  stamp_at()    { touch -t "$(date -r "$2" +%Y%m%d%H%M.%S)" "$1"; }
+  stamp_fresh() { stamp_at "$1" $((ST_NOW - 10)); }
+  stamp_stale() { stamp_at "$1" $((ST_NOW - 9999999)); }
+
+  # 1. S1 NOT-INSTALLED — declared run, no plist.
+  fresh
+  echo 'com.claude.s1 | run | 300 | auto | 1 | a.sh' > "$d/manifest"
+  o="$(run_fleet --json)"
+  eq "S1 NOT-INSTALLED" "$(state_of "$o")" NOT-INSTALLED
+
+  # 2. S2 DISABLED — terminal: it must NOT also report NEVER-RAN or STALLED.
+  fresh
+  mk_plist com.claude.s2 "$d/s2.log"
+  printf '\t\t"com.claude.s2" => disabled\n' > "$d/disabled.txt"
+  echo 'com.claude.s2 | run | 300 | auto | 1 | a.sh' > "$d/manifest"
+  o="$(run_fleet --json)"
+  eq "S2 DISABLED" "$(state_of "$o")" DISABLED
+  eq "S2 terminal (exactly one row)" "$(rows_in "$o")" 1
+
+  # 3. S3 NEVER-RAN — loaded, runs=0, no artifact.
+  fresh
+  mk_plist com.claude.s3 "$d/absent-s3.log"
+  printf '\tstate = not running\n\truns = 0\n' > "$d/print-com.claude.s3.txt"
+  echo 'com.claude.s3 | run | 300 | auto | 1 | a.sh' > "$d/manifest"
+  o="$(run_fleet --json)"
+  eq "S3 NEVER-RAN" "$(state_of "$o")" NEVER-RAN
+
+  # 4. S4 FAILING — beats S5 even with stale evidence.
+  fresh
+  mk_plist com.claude.s4 "$d/s4.log"
+  printf '\tstate = not running\n\truns = 16\n\tlast exit code = 1\n' > "$d/print-com.claude.s4.txt"
+  : > "$d/s4.log"; stamp_stale "$d/s4.log"
+  echo 'com.claude.s4 | run | 600 | auto | 1 | a.sh' > "$d/manifest"
+  o="$(run_fleet --json)"
+  eq "S4 FAILING (beats stale evidence)" "$(state_of "$o")" FAILING
+
+  # 5. S5 STALLED, and 6. S6 HEALTHY from the SAME fixture with only the mtime moved.
+  fresh
+  mk_plist com.claude.s5 "$d/s5.log"
+  printf '\tstate = not running\n\truns = 9\n\tlast exit code = 0\n' > "$d/print-com.claude.s5.txt"
+  : > "$d/s5.log"; stamp_stale "$d/s5.log"
+  echo 'com.claude.s5 | run | 300 | auto | 1 | a.sh' > "$d/manifest"
+  o="$(run_fleet --json)"
+  eq "S5 STALLED" "$(state_of "$o")" STALLED
+  stamp_fresh "$d/s5.log"
+  o="$(run_fleet --json)"
+  is_empty "S6 HEALTHY (same fixture, fresh mtime -> zero rows)" "$o"
+  rc=0; run_fleet --check >/dev/null || rc=$?
+  eq "positive control: --check exits 0 on an all-healthy manifest" "$rc" 0
+
+  # 7. no evidence sensor => never STALLED (R8), even though the job never wrote anything.
+  fresh
+  mk_plist com.claude.s7
+  printf '\tstate = not running\n\truns = 9\n\tlast exit code = 0\n' > "$d/print-com.claude.s7.txt"
+  echo 'com.claude.s7 | run | 300 | auto | 1 | a.sh' > "$d/manifest"
+  o="$(run_fleet --json)"
+  is_empty "no evidence sensor -> no STALLED verdict (R8)" "$o"
+
+  # 8. staged => exactly one UNDECIDED row carrying the observed state; retired => silent.
+  fresh
+  mk_plist com.claude.s8 "$d/s8.log"
+  printf '\t\t"com.claude.s8" => disabled\n' > "$d/disabled.txt"
+  printf 'com.claude.s8 | staged | 300 | auto | 1 | a.sh\ncom.claude.s9 | retired | 300 | - | 1 | a.sh\n' > "$d/manifest"
+  o="$(run_fleet --json)"
+  eq  "staged -> UNDECIDED" "$(state_of "$o")" UNDECIDED
+  has "UNDECIDED carries the observed state" 'staged: DISABLED' "$o"
+  eq  "retired is silent (one row total)" "$(rows_in "$o")" 1
+
+  # 9. UNDECLARED-SUMMARY — one row, count in detail, labels in subject.
+  fresh
+  mk_plist com.claude.undeclared1 "$d/u1.log"
+  mk_plist com.claude.undeclared2 "$d/u2.log"
+  echo 'com.claude.s1 | run | 300 | auto | 1 | a.sh' > "$d/manifest"
+  o="$(run_fleet --json | grep UNDECLARED-SUMMARY)"
+  has "UNDECLARED-SUMMARY counts" '"detail":"2 live com.claude labels undeclared"' "$o"
+  has "UNDECLARED-SUMMARY names the labels" 'com.claude.undeclared1,com.claude.undeclared2' "$o"
+
+  # 10. sensor failure => NO row, and --table says UNKNOWN.
+  fresh
+  mk_plist com.claude.s10 "$d/s10.log"
+  echo 'com.claude.s10 | run | 300 | auto | 1 | a.sh' > "$d/manifest"
+  dead_launchctl() { # $1=verb
+    CC_FLEET_MANIFEST="$d/manifest" CC_FLEET_LAUNCHCTL_BIN="$d/nonexistent-launchctl" \
+    CC_FLEET_LIVE_LAUNCHD="$d/agents" CC_FLEET_REPO_LAUNCHD="$d/repo-launchd" \
+    CC_FLEET_ACTIVATE_DIR="$d/act" CC_FLEET_NOW=2000000000 "$SELF" "$1" 2>/dev/null
+  }
+  is_empty "dead launchctl -> zero rows (no vacuous verdict)" "$(dead_launchctl --json)"
+  has "--table says UNKNOWN on a dead sensor" 'UNKNOWN' "$(dead_launchctl --table)"
+  rc=0; dead_launchctl --check >/dev/null || rc=$?
+  eq "--check fails on UNKNOWN (never a vacuous pass)" "$rc" 1
+
+  # 11. kill switch.
+  rc=0
+  o="$(CC_FLEET_RECONCILE=off CC_FLEET_MANIFEST="$d/manifest" "$SELF" --json 2>/dev/null)" || rc=$?
+  is_empty "CC_FLEET_RECONCILE=off -> zero rows" "$o"
+  eq "CC_FLEET_RECONCILE=off -> exit 0" "$rc" 0
+
+  # 11b. `staged` is never a hiding place: the row is unconditional, so it survives a DEAD sensor
+  # (the verdict is about the outstanding DECISION, which no sensor is needed to observe).
+  fresh
+  mk_plist com.claude.s11 "$d/s11.log"
+  echo 'com.claude.s11 | staged | 300 | auto | 1 | a.sh' > "$d/manifest"
+  o="$(CC_FLEET_MANIFEST="$d/manifest" CC_FLEET_LAUNCHCTL_BIN="$d/nonexistent-launchctl" \
+       CC_FLEET_LIVE_LAUNCHD="$d/agents" CC_FLEET_REPO_LAUNCHD="$d/repo-launchd" \
+       CC_FLEET_ACTIVATE_DIR="$d/act" CC_FLEET_NOW=2000000000 "$SELF" --json 2>/dev/null)"
+  eq  "staged emits a row even with every sensor dead" "$(state_of "$o")" UNDECIDED
+  has "staged+dead sensor reports the sensor honestly" 'staged: UNKNOWN' "$o"
+
+  # 12. detail invariant: ASCII and <=44 bytes on EVERY row this file can emit.
+  fresh
+  printf 'com.claude.s1 | run | 300 | auto | 1 | a.sh\ncom.claude.s2 | run | 300 | auto | 1 | a.sh\ncom.claude.s3 | run | 300 | auto | 1 | a.sh\ncom.claude.s4 | run | 600 | auto | 1 | a.sh\ncom.claude.s5 | run | 300 | auto | 1 | a.sh\ncom.claude.s8 | staged | 300 | auto | 1 | a.sh\n' > "$d/manifest"
+  mk_plist com.claude.s2 "$d/s2.log"                        # DISABLED
+  mk_plist com.claude.s3 "$d/absent-s3.log"                 # NEVER-RAN
+  mk_plist com.claude.s4 "$d/s4.log"                        # FAILING
+  mk_plist com.claude.s5 "$d/s5.log"                        # STALLED
+  mk_plist com.claude.s8 "$d/s8.log"                        # staged -> UNDECIDED
+  printf '\tstate = not running\n\truns = 0\n' > "$d/print-com.claude.s3.txt"
+  printf '\tstate = not running\n\truns = 16\n\tlast exit code = 1\n' > "$d/print-com.claude.s4.txt"
+  printf '\tstate = not running\n\truns = 9\n\tlast exit code = 0\n' > "$d/print-com.claude.s5.txt"
+  printf '\tstate = not running\n\truns = 0\n' > "$d/print-com.claude.s8.txt"
+  printf '\t\t"com.claude.s2" => disabled\n' > "$d/disabled.txt"
+  stamp_stale "$d/s5.log"
+  ALL_ROWS="$(run_fleet --json)"
+  bad=0
+  while IFS= read -r rline; do
+    [ -n "$rline" ] || continue
+    det="$(printf '%s\n' "$rline" | sed -n 's/.*"detail":"\([^"]*\)".*/\1/p')"
+    if [ "$(printf '%s' "$det" | wc -c | tr -d ' ')" -gt "$DETAIL_MAX" ]; then
+      bad=$((bad + 1)); printf '    over-long detail: [%s]\n' "$det"
+    fi
+    if printf '%s' "$det" | LC_ALL=C grep -q '[^ -~]'; then
+      bad=$((bad + 1)); printf '    non-ASCII detail: [%s]\n' "$det"
+    fi
+  done <<EOF
+$ALL_ROWS
+EOF
+  eq "every detail is ASCII and <=$DETAIL_MAX bytes" "$bad" 0
+  # 13. one row per declared label on an all-unhealthy manifest (A1).
+  eq "one row per declared label (6/6 unhealthy)" "$(rows_in "$ALL_ROWS")" 6
+
+  # 14. read-only launchd: the stub logged nothing but list/print/print-disabled.
+  if [ -f "$d/lctl.log" ]; then
+    bad="$(LC_ALL=C grep -cvE '^(list|print|print-disabled)( |$)' "$d/lctl.log" || true)"
+    eq "launchctl calls are read-only only" "${bad:-0}" 0
+  else
+    badp "no launchctl calls recorded — the stub was never exercised"
+  fi
+
+  # 15. plutil -o - discipline: static, because the incident it prevents is unrecoverable.
+  # Scanned over the RECONCILER region only (everything above this selftest): PLUTIL_BIN is the one
+  # way this file can reach plutil, so every such line must carry `-o -`. Cutting the selftest out
+  # of its own scan is what keeps the check from matching the pattern string on this very line.
+  # shellcheck disable=SC2016  # a sed ADDRESS, not a shell expansion: it must stay literal
+  body() { sed -n '1,/^if \[ "\$MODE" = selftest \]/p' "$SELF"; }
+  n="$(body | LC_ALL=C grep -c 'PLUTIL_BIN.*-extract' || true)"
+  m="$(body | LC_ALL=C grep -c 'PLUTIL_BIN.*-extract.*-o -' || true)"
+  eq "every plutil -extract carries -o - ($m/$n)" "$n" "$m"
+  if [ "${n:-0}" -ge 1 ]; then okp "the plutil check is not vacuous ($n call site(s) scanned)"; else badp "plutil check scanned 0 call sites"; fi
+  # and it is PROVED, not just asserted: extracting must not modify the plist.
+  cp "$d/agents/com.claude.s5.plist" "$d/parity-before.plist"
+  run_fleet --json >/dev/null
+  if cmp -s "$d/parity-before.plist" "$d/agents/com.claude.s5.plist"; then
+    okp "a full reconcile pass does not rewrite any plist"
+  else
+    badp "a plist was REWRITTEN by the pass"
+  fi
+
+  # 16. --plist-parity names all three drift shapes.
+  cp "$d/agents/com.claude.s5.plist" "$d/repo-launchd/com.claude.s5.plist"          # SAME
+  mk_plist com.claude.driftme "$d/drift.log"
+  printf 'different\n' > "$d/repo-launchd/com.claude.driftme.plist"                  # CONTENT-DRIFT
+  printf 'repo only\n' > "$d/repo-launchd/com.claude.repoonly.plist"                 # REPO-ONLY
+  p="$(CC_FLEET_LIVE_LAUNCHD="$d/agents" CC_FLEET_REPO_LAUNCHD="$d/repo-launchd" "$SELF" --plist-parity 2>&1 || true)"
+  has "--plist-parity: CONTENT-DRIFT" 'CONTENT-DRIFT  com.claude.driftme' "$p"
+  has "--plist-parity: REPO-ONLY"     'REPO-ONLY      com.claude.repoonly' "$p"
+  has "--plist-parity: LIVE-ONLY"     'LIVE-ONLY      com.claude.s2' "$p"
+
+  printf 'cc-fleet --selftest: %s passed, %s failed\n' "$PASS" "$FAIL"
+  [ "$FAIL" -eq 0 ] || exit 1
+  exit 0
+fi
+
+reconcile
+
+case "$MODE" in
+  json)
+    printf '%s' "$ROWS"
+    exit 0
+    ;;
+  table)
+    printf '%-18s %-35s %s\n' STATE SUBJECT DETAIL
+    printf '%s' "$TABLE"
+    printf '%s' "$UNKNOWN_LINES"
+    printf -- '-- %s declared - %s row(s) - %s unknown - %s declared-run not healthy\n' \
+      "$DECLARED" "$ROW_COUNT" "$UNKNOWNS" "$NOT_S6"
+    exit 0
+    ;;
+  check)
+    if [ "$NOT_S6" -eq 0 ]; then
+      printf 'cc-fleet: every declared-run label is HEALTHY (%s declared)\n' "$DECLARED"
+      exit 0
+    fi
+    printf 'cc-fleet: %s declared-run label(s) not HEALTHY (of %s declared)\n' "$NOT_S6" "$DECLARED" >&2
+    printf '%s' "$ROWS" >&2
+    printf '%s' "$UNKNOWN_LINES" >&2
+    exit 1
+    ;;
+esac
