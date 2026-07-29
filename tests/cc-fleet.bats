@@ -337,7 +337,7 @@ STUB
   run "$FLEET" --table
   printf '%s\n' "$output" | grep -q 'NOT-LOADED .*com.claude.u1' || false
   # ...and it must NOT be reported as an unrunnable sensor: a determined fault is not an unknown.
-  printf '%s\n' "$output" | grep -q 'UNKNOWN .*com.claude.u1' && false
+  ! printf '%s\n' "$output" | grep -q 'UNKNOWN .*com.claude.u1' || false
   run "$FLEET" --check
   [ "$status" -eq 1 ]                         # a declared-run job that is not loaded fails the gate
 
