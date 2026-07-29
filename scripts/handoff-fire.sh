@@ -203,6 +203,38 @@ REPO="$DEFAULT_REPO" WTROOT="$HOME/Development/.worktrees" BASE="origin/main"
 SURFACE="split-right" SURFACE_EXPLICIT=0 SURFACE_REASON="" PROBE=0 DRY=0 IN_PLACE=0 EXTRA="" RECYCLE=0 SESSION_ID=""
 NOTIFY_BACK="" SELF_RETIRE=1 AS_ROLE="" FOLLOW=0
 SPAWNED_PANE="" ENGAGE_VERIFY=0 FIRE_MARKER=""
+# ---- V2 LIFECYCLE RECORD (SESSION_LIFECYCLE_V2.md §5) -----------------------------------------
+# THE INVERSION: row 2 owns the lifecycle ACTIONS but used to own almost none of the FACTS about
+# them, re-deriving every answer from foreign state at read time (row 4's registry row, the process
+# table, iTerm2's pane list) — fail-CLOSED. These globals are the facts only the FIRING process can
+# know, captured at the moment they are true instead of inferred later. Consumed by
+# mark_fired_peer (the durable record) and emit_handoff_telemetry (the metric).
+#   LR_STARTED_AT   the fire's TRUE start — captured immediately BEFORE spawn. Both timestamps the
+#                   script wrote before v2 (handoffs.jsonl.ts, cc-fired firedAt) are emitted AFTER
+#                   verify_engagement returns and are byte-identical for one fire, so fire→engaged
+#                   latency had NO PRODUCER at all (V2 §2 M-2). This is that producer.
+#   LR_ENGAGED_AT   when engagement was first PROVEN (not when the pane was born).
+#   LR_PROOF        WHICH oracle fired — "marker" | "registry:<sid>" | "assumed" (R12: a verdict
+#                   string must name its own oracle; the pre-v2 success line said
+#                   "(transcript/registry birth)" over a check that stopped being birth-based).
+#   LR_TRANSCRIPT   the transcript that carried the proof.
+LR_STARTED_AT="" LR_ENGAGED_AT="" LR_PROOF="" LR_TRANSCRIPT="" LR_LATENCY_S=""
+# Set by engagement_seen on success; read by its callers. Not the same as LR_PROOF: these are the
+# raw per-attempt outputs, promoted into the LR_* record fields only once a fire is confirmed.
+ENGAGE_PROOF="" ENGAGE_TRANSCRIPT=""
+_iso_now() { date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true; }
+# Seconds between two ISO8601 Z stamps. BSD date needs -j -f; a parse failure yields "" (never a
+# fabricated 0 — R9: a field that cannot measure must read ABSENT, not zero, or "not measured" is
+# indistinguishable from a real zero. firing_rss_kb logged a false 0 in 141 of 141 fires by
+# breaking exactly this rule).
+_iso_delta_s() { # $1=start $2=end → seconds, or "" when unparseable
+  local s e
+  [ -n "${1:-}" ] && [ -n "${2:-}" ] || return 0
+  s=$(date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$1" +%s 2>/dev/null) || return 0
+  e=$(date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$2" +%s 2>/dev/null) || return 0
+  [ -n "$s" ] && [ -n "$e" ] || return 0
+  printf '%s' "$((e - s))"
+}
 ACCOUNT_SWEEP_BRIDGE=""    # Part A2: embeddable "## ACCOUNT STATE" section (non-empty ⟺ ≥1 stranded account)
 
 # Print the header comment up to (excluding) the first non-comment sentinel — growth-proof range.
@@ -456,11 +488,17 @@ assistant_turn_in() { # $1=transcript jsonl → 0 a content-bearing assistant tu
 
 engagement_seen() { # $1=projects-dir $2=marker $3=registry-dir $4=fired-pane → 0 engaged / 1 not
   local pdir="$1" marker="$2" regdir="$3" pane="$4" hit rsid
+  ENGAGE_PROOF="" ENGAGE_TRANSCRIPT=""    # R12 — every success names the oracle that produced it
   # (a) the transcript carrying the marker must ALSO show an assistant turn (ingested AND ran).
+  # V2 §5.2: this CONTENT path is what makes a RESUMED successor provable. `--resume` writes into the
+  # ORIGINAL sid's transcript, so no "new" transcript is ever created — but that transcript DOES now
+  # contain the marker, because the resumed session ingested the marked prompt. A caller that passes
+  # the marker therefore never hits the resume false-negative (cc-backlog 93a9f880b6fe); a caller
+  # that passes "" is left with path (b) alone and its registry dependency.
   if [ -n "$marker" ] && [ -d "$pdir" ]; then
     while IFS= read -r hit; do
       [ -n "$hit" ] || continue
-      assistant_turn_in "$hit" && return 0
+      assistant_turn_in "$hit" && { ENGAGE_PROOF="marker"; ENGAGE_TRANSCRIPT="$hit"; return 0; }
     done <<EOF
 $(find "$pdir" -name '*.jsonl' -type f -exec grep -lF -- "$marker" {} + 2>/dev/null)
 EOF
@@ -472,7 +510,7 @@ EOF
     if [ -n "$rsid" ] && [ -d "$pdir" ]; then
       while IFS= read -r hit; do
         [ -n "$hit" ] || continue
-        assistant_turn_in "$hit" && return 0
+        assistant_turn_in "$hit" && { ENGAGE_PROOF="registry:$rsid"; ENGAGE_TRANSCRIPT="$hit"; return 0; }
       done <<EOF
 $(find "$pdir" -name "$rsid.jsonl" -type f 2>/dev/null)
 EOF
@@ -574,9 +612,57 @@ mark_fired_peer() { # $1=fired-dir $2=fired-pane $3=cwd $4=firing-pane [$5=promp
   command -v jq >/dev/null 2>&1 || return 0
   mkdir -p "$dir" 2>/dev/null || return 0
   tmp="$dir/.$pane.$$"
+  # ---- V2 schema 2: the LIFECYCLE RECORD (SESSION_LIFECYCLE_V2.md §5.1) ------------------------
+  # ADDITIVE-ONLY, and that is a hard constraint rather than a convenience: bin/cc-reaper consumes
+  # this exact path and keys auto-reap on the file's PRESENCE + selfRetire. Every pre-v2 field keeps
+  # its name, type and meaning, so the reaper's contract is untouched (V2 §7 A9) and new keys are
+  # simply invisible to it.
+  #
+  # SCOPE, deliberately: this record is written ONLY for a self-retiring PEER fire (see the call
+  # site's `if [ "$WANT_SELF_RETIRE" = 1 ]`). It must NEVER be written for an ordinary fire — the
+  # file's presence is what licenses cc-reaper to auto-reap, so stamping every fire would license
+  # the reaper against operator sessions. The fire→engaged METRIC therefore lives in
+  # handoffs.jsonl (written for EVERY fire) and not here; the two records answer different
+  # questions and that split is intentional (V2 §5.3).
+  #
+  #   originClass  the THIRD CATEGORY problem (V2 §5.1 / F1). Pre-v2, self-close inferred category
+  #                from one stat of one file: stamp present ⇒ fired peer, absent ⇒ origin. An
+  #                Agent-Team assignee whose lead is dead is NEITHER — it has an originator that no
+  #                longer exists — so no sanctioned resolution existed and 11 panes stranded. The
+  #                class is now RECORDED by the party that knows it, at creation.
+  #   originator   who to hand back to. For a fired peer that is the firing session/pane; a
+  #                consumer can ask "is my originator still alive" without guessing.
+  #   marker       V2 §5.2 — the engagement proof row 2 owns, so successor_engaged no longer
+  #                depends on row 4's registry row carrying a .session_id (a field the PROVISIONAL
+  #                row this very script writes does not have — M-9).
+  # CC_LIFECYCLE_RECORD=0 reverts to the pre-v2 five-field stamp (R8 kill switch).
+  if [ "${CC_LIFECYCLE_RECORD:-1}" = 0 ]; then
+    if jq -n --arg paneUUID "$pane" --arg cwd "$cwd" --arg firedBy "$by" \
+          --arg firedAt "$(_iso_now)" \
+          '{paneUUID:$paneUUID, cwd:$cwd, firedBy:$firedBy, firedAt:$firedAt, selfRetire:true}' \
+          > "$tmp" 2>/dev/null && [ -s "$tmp" ]; then
+      mv -f "$tmp" "$dir/$pane.json" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+    else
+      rm -f "$tmp" 2>/dev/null
+    fi
+    return 0
+  fi
   if jq -n --arg paneUUID "$pane" --arg cwd "$cwd" --arg firedBy "$by" \
-        --arg firedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)" \
-        '{paneUUID:$paneUUID, cwd:$cwd, firedBy:$firedBy, firedAt:$firedAt, selfRetire:true}' \
+        --arg firedAt "$(_iso_now)" \
+        --arg startedAt "${LR_STARTED_AT:-}" --arg engagedAt "${LR_ENGAGED_AT:-}" \
+        --arg proof "${LR_PROOF:-}" --arg transcript "${LR_TRANSCRIPT:-}" \
+        --arg marker "${FIRE_MARKER:-}" --arg originator "$by" \
+        --arg latency "$(_iso_delta_s "${LR_STARTED_AT:-}" "${LR_ENGAGED_AT:-}")" \
+        '{paneUUID:$paneUUID, cwd:$cwd, firedBy:$firedBy, firedAt:$firedAt, selfRetire:true}
+         + {schema:2, originClass:"fired-peer"}
+         + {originator:      (if $originator  == "" then null else $originator  end)}
+         + {firedStartedAt:  (if $startedAt   == "" then null else $startedAt   end)}
+         + {engagedAt:       (if $engagedAt   == "" then null else $engagedAt   end)}
+         + {engageProof:     (if $proof       == "" then null else $proof       end)}
+         + {transcript:      (if $transcript  == "" then null else $transcript  end)}
+         + {marker:          (if $marker      == "" then null else $marker      end)}
+         + {engageLatencyS:  (if $latency     == "" then null else ($latency|tonumber) end)}
+         + {closedAt:null, succession:null}' \
         > "$tmp" 2>/dev/null && [ -s "$tmp" ]; then
     mv -f "$tmp" "$dir/$pane.json" 2>/dev/null || rm -f "$tmp" 2>/dev/null
   else
@@ -2596,6 +2682,11 @@ else
   # (/goal fires) passes — payload-lint accepts cc-roles/<role>.
   payload_lint_gate "$PROMPT_FILE" enforce || exit "$?"
   pre_trust "$LAUNCH_DIR" "$(config_dir_for_launcher "$LAUNCHER")"
+  # V2 §5.3 — the fire's TRUE start, captured BEFORE the pane exists. This is the producer the
+  # headline metric never had: pre-v2 the earliest timestamp anywhere was written after
+  # verify_engagement RETURNED, so a fire that took 10s and one that took 10 minutes recorded the
+  # same single instant and "fire→engaged p95" was unfalsifiable (V2 §2 M-2).
+  LR_STARTED_AT="$(_iso_now)"
   spawn
   # P0-11: prove the fired session ingested the brief before claiming success. A cold fire that
   # raced CC boot sits at an empty composer (INC-4) — re-send once, then FAIL LOUD.
@@ -2610,9 +2701,54 @@ else
     _hf_rss=$(ps -o rss= -p "${_hf_pid:-0}" 2>/dev/null | tr -d ' ' || true)
     _hf_class=$([ "${WANT_SELF_RETIRE:-0}" = 1 ] && echo self-retire-peer || echo handoff)
     mkdir -p "$HOME/.claude/logs" 2>/dev/null || true
-    printf '{"ts":"%s","firing_sid":"%s","class":"%s","engaged":%s,"target_pane":"%s","account":"%s","firing_rss_kb":%s}\n' \
-      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${FIRING_SID:-?}" "$_hf_class" "${1:-0}" "${SPAWNED_PANE:-}" "${CHOSEN:-?}" "${_hf_rss:-0}" \
-      >> "$_hf_log" 2>/dev/null || true
+    # V2 §5.3 — this log is written for EVERY fire (the cc-fired record is written only for a
+    # self-retiring peer), so it is where the fire→engaged METRIC belongs.
+    #   started_at / engaged_at / engage_latency_s  the metric, now with a real start (M-2).
+    #   engage_proof                                WHICH oracle proved it (R12).
+    # R9 — NEVER fabricate a zero. firing_rss_kb read 0 in 141 of 141 fires because an absent
+    # pidfile made it `ps -p 0` ⇒ empty ⇒ 0, so "not measured" was indistinguishable from a real
+    # 0 KB. Unmeasured fields now emit JSON `null`; the same rule covers firing_sid, which logged
+    # the ambiguous string "?" for 51.8% of fires (M-3).
+    local _hf_json _hf_lat _hf_ts
+    # This function's contract is "a telemetry hiccup can never affect the fire", and `set -e` makes
+    # an unresolved helper a fire-killing 127 — so every collaborator is probed, never assumed. Not
+    # hypothetical: adding these two calls unguarded broke tests/handoff-teardown-marker.bats, which
+    # sed-extracts this unit ALONE, and a 127 there is exactly what would have happened in production
+    # had the helpers ever been renamed or reordered below this point.
+    if command -v _iso_delta_s >/dev/null 2>&1; then
+      _hf_lat="$(_iso_delta_s "${LR_STARTED_AT:-}" "${LR_ENGAGED_AT:-}")"
+    else
+      _hf_lat=""
+    fi
+    if command -v _iso_now >/dev/null 2>&1; then
+      _hf_ts="$(_iso_now)"
+    else
+      _hf_ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true)"
+    fi
+    _hf_json='{}'
+    if command -v jq >/dev/null 2>&1; then
+      _hf_json=$(jq -cn \
+        --arg ts "$_hf_ts" --arg fs "${FIRING_SID:-}" --arg cl "$_hf_class" \
+        --arg tp "${SPAWNED_PANE:-}" --arg ac "${CHOSEN:-}" --arg rs "${_hf_rss:-}" \
+        --arg sa "${LR_STARTED_AT:-}" --arg ea "${LR_ENGAGED_AT:-}" \
+        --arg pr "${LR_PROOF:-}" --arg la "$_hf_lat" --argjson en "${1:-0}" \
+        '{ts:$ts, class:$cl, engaged:$en, target_pane:$tp}
+         + {firing_sid:      (if $fs == "" then null else $fs end)}
+         + {account:         (if $ac == "" then null else $ac end)}
+         + {firing_rss_kb:   (if $rs == "" then null else ($rs|tonumber) end)}
+         + {started_at:      (if $sa == "" then null else $sa end)}
+         + {engaged_at:      (if $ea == "" then null else $ea end)}
+         + {engage_proof:    (if $pr == "" then null else $pr end)}
+         + {engage_latency_s:(if $la == "" then null else ($la|tonumber) end)}' 2>/dev/null) || _hf_json=''
+    fi
+    if [ -n "$_hf_json" ] && [ "$_hf_json" != '{}' ]; then
+      printf '%s\n' "$_hf_json" >> "$_hf_log" 2>/dev/null || true
+    else
+      # jq-less / jq-failed fallback: keep the pre-v2 line shape rather than lose the record.
+      printf '{"ts":"%s","firing_sid":"%s","class":"%s","engaged":%s,"target_pane":"%s","account":"%s","firing_rss_kb":%s}\n' \
+        "$_hf_ts" "${FIRING_SID:-?}" "$_hf_class" "${1:-0}" "${SPAWNED_PANE:-}" "${CHOSEN:-?}" "${_hf_rss:-0}" \
+        >> "$_hf_log" 2>/dev/null || true
+    fi
     if [ -f "$_hf_log" ] && [ "$(wc -l < "$_hf_log" 2>/dev/null || echo 0)" -gt 600 ]; then
       tail -500 "$_hf_log" > "$_hf_log.tmp" 2>/dev/null && mv "$_hf_log.tmp" "$_hf_log" 2>/dev/null || true
     fi
@@ -2620,8 +2756,18 @@ else
   if [ "$ENGAGE_VERIFY" = 1 ]; then
     PROJ_DIR="$(config_dir_for_launcher "$LAUNCHER")/projects"
     if verify_engagement "$PROJ_DIR" "$FIRE_MARKER" "$REG_DIR" "$SPAWNED_PANE" "$REAL_IT2" "$(cat "$PROMPT_FILE")"; then
+      # V2 §5.2 / R12 — promote the per-attempt oracle outputs into the record BEFORE anything reads
+      # them, and stamp the instant engagement was PROVEN (the other half of the latency measure).
+      LR_ENGAGED_AT="$(_iso_now)"
+      LR_PROOF="${ENGAGE_PROOF:-}" LR_TRANSCRIPT="${ENGAGE_TRANSCRIPT:-}"
       emit_handoff_telemetry 1
-      echo "→ engagement confirmed for the fired session (transcript/registry birth)" >&2
+      # R12: name the oracle that actually fired. The pre-v2 line claimed "(transcript/registry
+      # birth)" — a stale string over a check that stopped being birth-based when assistant_turn_in
+      # began requiring a content-bearing type=="assistant" turn (item ff2d6609a33e). The check was
+      # right and the CLAIM was wrong, which is the more dangerous of the two failure shapes: it
+      # reports an oracle nobody can audit (V2 §6 F4).
+      LR_LATENCY_S="$(_iso_delta_s "${LR_STARTED_AT:-}" "${LR_ENGAGED_AT:-}")"
+      echo "→ engagement confirmed: proof=${LR_PROOF:-unknown} latency=${LR_LATENCY_S:-unmeasured}s transcript=${LR_TRANSCRIPT:-none}" >&2
       # P0-12: guarantee a registry row so the reaper/board can see the fired pane.
       FIRE_NAME="$(basename "$LAUNCH_DIR")-${SPAWNED_PANE%%-*}"
       ensure_registration "$REG_DIR" "$SPAWNED_PANE" "$FIRE_NAME" "$LAUNCH_DIR" "$CMD"
