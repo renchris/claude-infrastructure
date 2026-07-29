@@ -21,21 +21,54 @@
 #
 # SECOND admission criterion — WHOLE-TREE META-LINT WRAPPERS (tests/test-hermeticity-lint.bats and
 # tests/test-walltime-lint.bats). These two are here for a different reason than the six above: not
-# because they assert the live layer, but because a bats suite that wraps a WHOLE-TREE assertion
-# cannot run mid-corpus. The hermeticity wrapper passes standalone and fails from inside a full run
-# — clean-room corpora failed on exactly that suite and nothing else (2,085 ok / 1 not-ok and 2,242
-# ok / 1 not-ok; backlogs b59eb997d035, b4e49b4b5014), which localises the 14-consecutive-red-stamp
-# deadlock to one file. The walltime wrapper is admitted on the CLASS, not on its own mid-corpus
-# proof: it carries the same shape (`@test "the real tree is CLEAN — the embedded ratchet matches
-# HEAD"`), so it inherits the same wedge risk, and it is redundant DETECTION — the check it wraps
-# is already enforced standalone. Enforcement is NOT lost by either move: postland-verify runs
-# scripts/test-walltime-lint.sh and scripts/test-hermeticity-lint.sh STANDALONE and
-# whole-tree-strict BEFORE the corpus, so a real violation is a deterministic named RED that
-# outranks a cut. Post-deploy, run standalone against the live layer, both wrappers are meaningful
-# again — the hermeticity one's symlink-selftest failure shape was a real finding.
+# because they assert the live layer, but because their whole-tree scans are LOAD-SENSITIVE, and a
+# full corpus is the load. Clean-room corpora failed on exactly the hermeticity wrapper and nothing
+# else (2,085 ok / 1 not-ok and 2,242 ok / 1 not-ok; backlogs b59eb997d035, b4e49b4b5014), which
+# localises the 14-consecutive-red-stamp deadlock to one file. The walltime wrapper is admitted on
+# the CLASS, not on its own mid-corpus proof: it carries the same shape (`@test "the real tree is
+# CLEAN — the embedded ratchet matches HEAD"`), so it inherits the same risk, and it is redundant
+# DETECTION — the check it wraps is already enforced standalone.
+#
+# CAUSE — CORRECTED 2026-07-29 (b4e49b4b5014, the reproduction). The original entry here said "a
+# bats suite that wraps a WHOLE-TREE assertion cannot run mid-corpus … it sees a tree the corpus is
+# concurrently using". That is WRONG, and it is worth correcting because it is the rationale a
+# future reader will use to decide whether these two may come back. The corpus never mutates the
+# tree (watched for a full run: 149 and 155 *.bats, zero changes). What actually happened: the lint's
+# two pure predicates ran a bare `grep -q`, so rc=2 — grep COULD NOT RUN, fork exhaustion at the
+# measured load 15-48 — was indistinguishable from rc=1, "no match". A single transient fork failure
+# therefore FABRICATED a LEAK, or "the embedded allowlist is stale", about a perfectly clean tree.
+# The corpus's only role was to be the load. That, and only that, explains all three observations
+# the "cannot run mid-corpus" story cannot: ~1 not-ok in 2,242 rather than the 4 a deterministic
+# whole-tree defect would give; WHICH of the suite's four whole-tree scans fails varying by run
+# (`the real tree is CLEAN` in b59eb997d035, the SYMLINK selftest in b4e49b4b5014); and the recorded
+# outcome `pass-on-retry` at loadavg 17.38 — a deterministic assertion cannot pass on retry.
+# Fixed at the source: afaf40de (rc>=2 is a NON-VERDICT, never a leak) + ed4e6c6a (retry the pure
+# predicates 3x before condemning a run). RED-proved by replaying the pre-fix artifact: at afaf40de~1
+# under an intermittent grep the whole-tree run exits 1 naming three clean suites as LEAKs and
+# --selftest reports "the embedded allowlist is stale"; at HEAD both are green.
+#
+# WHY THEY NEVERTHELESS STAY HERE: the premise above is fixed, not the appetite. Re-admitting them
+# puts a load-sensitive whole-tree scan back on the critical path of a verdict that AUTO-REVERTS, for
+# detection that is already enforced standalone — no upside, non-zero downside. Re-admission is a
+# deliberate call, not a cleanup; do not treat this correction as license for it.
+#
+# ENFORCEMENT — what these moves DO cost, recorded honestly. The whole-tree scan is fully preserved:
+# postland-verify runs both scripts STANDALONE and whole-tree-strict BEFORE the corpus, so a real
+# violation is a deterministic named RED that outranks a cut. The `--selftest` DISCRIMINATION proof
+# is NOT: the prelint invokes `./scripts/<lint>.sh tests`, never `--selftest`, so the 17 cases that
+# prove the ratchet actually goes RED on a new leak and on a stuck entry run only in these wrappers
+# and in scripts/nightly-regression.sh — whose launchd job com.claude.nightly-regression is staged
+# in ~/Library/LaunchAgents but NOT loaded (`launchctl print` → "Could not find service"). So today
+# that proof runs nowhere automatically. Tracked as backlog 76644e76aaae, not silently accepted.
+# Partly mitigated by being HERE rather than deleted: deploy-live.sh runs exactly these lines AFTER
+# an advance, so post-deploy — against the live layer, the one place a whole-tree assertion has a
+# stable subject — both wrappers run in full, `--selftest` included. That is a lagging check, not a
+# gate, which is why the gap is filed rather than closed. It is also how the symlink-selftest defect
+# was originally caught (f37a84cf: ROOT derived from a bare `dirname "$0"` resolved to ~/.claude,
+# which has no tests/) — a real finding, and a DIFFERENT defect from the load-sensitivity above.
 #
 # The distinction matters when reading a red: a violation reported by the pre-corpus lint is about
-# THE TREE; the same violation reported by one of these wrappers mid-corpus was about the run.
+# THE TREE; the same violation reported by one of these wrappers mid-corpus was about the LOAD.
 
 tests/deploy-parity.bats
 tests/desk-arm-live.bats

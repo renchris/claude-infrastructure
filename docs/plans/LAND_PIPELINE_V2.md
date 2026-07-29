@@ -209,6 +209,41 @@ ahead of. Corpus cycle estimate for the verifier: ~52 min at moderate load.
   convictions were verdict-path artifacts). §4.2 amended: manifest gains that suite as a 7th
   entry AND the verifier runs scripts/test-hermeticity-lint.sh + test-walltime-lint.sh
   standalone pre-corpus (whole-tree strict, bounded, named RED on failure).
+  - **CAUSE CORRECTED 2026-07-29 (b4e49b4b5014 — the reproduction).** "A whole-tree assertion
+    that passes standalone and fails mid-corpus" named a symptom, not a cause, and the cause it
+    implied ("sees a tree the corpus is concurrently using") is FALSIFIED: the corpus never
+    mutates the tree (watched for a full run — 149 and 155 `*.bats`, zero changes). Real cause:
+    the lint's two pure predicates ran a bare `grep -q`, so **rc=2 (grep could not RUN — fork
+    exhaustion at the measured load 15-48) was indistinguishable from rc=1 (no match)**, and one
+    transient fork failure FABRICATED a LEAK / "the embedded allowlist is stale" about a clean
+    tree. The corpus's only role was to be the load. Only this explains all three observations
+    the mid-corpus story cannot: ~1 not-ok in 2,242 (not the 4 a deterministic whole-tree defect
+    gives); WHICH of the suite's four whole-tree scans fails varying by run (`the real tree is
+    CLEAN` in b59eb997d035 vs the SYMLINK selftest here); and `flakes.jsonl` recording
+    **`pass-on-retry` at loadavg 17.38** — a deterministic assertion cannot pass on retry.
+    Already fixed at the source: **afaf40de** (rc>=2 ⇒ NON-VERDICT, never a leak) + **ed4e6c6a**
+    (retry the pure predicates 3×). RED-proved by replaying the pre-fix artifact at `afaf40de~1`
+    under an intermittent `grep`: whole-tree exits 1 naming three clean suites as LEAKs and
+    `--selftest` reports "the embedded allowlist is stale"; at HEAD both are green.
+  - **Consequence found while reproducing it — the same conflation, one layer OUT (fixed here).**
+    `prelint_check` mapped every non-zero, non-124 rc to `FAILING` ⇒ RED ⇒ `red_actions`. Both
+    lints publish `0 clean · 1 violation · 2 unusable`, so an HONEST exit-2 non-verdict — exactly
+    the state afaf40de created inside the lint — was filed as a verdict about the tree and could
+    **auto-revert a commit never shown to be at fault** (AUTOREVERT defaults on). Now only rc=1 is
+    a RED; 2/124/126/127/137 set `PRELINT_UNPROVEN` ⇒ CUT ⇒ the CUT_MAX page ladder (loud, never a
+    green). 2 regression tests, RED-proved against the pre-fix mapping.
+  - **Enforcement gap recorded, NOT closed:** the prelint invokes `./scripts/<lint>.sh tests`,
+    never `--selftest`, so the 17 cases proving the ratchet actually goes RED run only in the
+    partitioned-out wrappers and in `scripts/nightly-regression.sh` — whose launchd job
+    `com.claude.nightly-regression` is staged in `~/Library/LaunchAgents` but **NOT loaded**
+    (`launchctl print` → "Could not find service"). That proof runs nowhere automatically today.
+    Three candidate remedies (add `--selftest` to `PRELINTS`; load the nightly — a C10 operator
+    step; re-admit the wrappers to the corpus) trade off differently and change the corpus
+    partition, so this is filed as backlog **76644e76aaae** rather than picked unilaterally. Note
+    the exit-2 fix above is a PREREQUISITE for the first remedy: before it, adding `--selftest` to
+    `PRELINTS` would have made a fork-starved selftest auto-revert trunk. That remedy additionally
+    needs a verdict category separating "the LINT is broken" (selftest exit 1) from "the TREE is
+    dirty" — otherwise a broken lint reverts an innocent commit, i.e. this same bug once more.
 - **Carrier cap is a first-class failure mode (F14):** the agent Bash tool caps at 10 min;
   a ~50-min gate inside it truncates to a false exit-6 (6 observed). Bootstrap land (§6)
   therefore runs DETACHED (start_new_session Popen + log + Monitor), never as a foreground
