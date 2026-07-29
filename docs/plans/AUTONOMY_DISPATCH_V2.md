@@ -321,6 +321,27 @@ parity report) — reconciling them is part of this rebuild's activation work.
 Recommended first activation runs with `CC_DISPATCH_DECIDE_ONLY=on`: the decision journal accrues
 (proving A1–A3, A5, A9) with **zero spawns**, then the switch flips.
 
+**⚠️ Activation is NOT this rebuild's call to make, and the reason is new evidence.** Verified
+independently this session (`launchctl print-disabled gui/$(id -u)`): **12 of the 14 `com.claude.*`
+labels are disabled** — only `com.claude.postland-verify` and `com.claude.deploy-live` are enabled,
+and `launchctl list` shows those two alone loaded. That is a *fleet-wide* pattern, not a
+dispatcher-specific oversight, so the premise "the dispatcher is inert by accident and should be
+switched on" is **unproven**. Whether the mass-disable was deliberate (a reboot re-writing the
+override DB, or an operator quieting the fleet) is an **OPEN operator question** — row 12 owns it.
+
+Consequences for this rebuild, and they are deliberate:
+- V2 is built, tested and landed to be **correct when activated**, and correct-and-silent while
+  not. Nothing here activates anything.
+- The `DISPATCH-NOT-ACTIVATED` alarm (S8) reports the disabled state as an **operator queue item,
+  never a stall** — precisely so that a deliberate quiet fleet does not generate a false alarm,
+  while an *accidental* inertness stops being invisible. This is why the alarm is gated on
+  existence evidence rather than on the IDL gap alone.
+- The acceptance reader reports A11 as **NOT-RUN**, not FAIL, in this state (verified live) — an
+  un-activated job is a non-verdict, not a failure.
+- The DoD's live latency numbers (A2/A3/A7) are therefore **ACCRUING**, not provable this session.
+  What *is* provable now, and is proven, is everything measurable from source and fixtures
+  (A4/A5/A8/A9/A10/A12). §10 splits the close on exactly this line.
+
 ---
 
 ## Phase 0 — Agent Team Orchestration

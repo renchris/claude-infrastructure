@@ -87,12 +87,13 @@ its customers stabilize their contracts).
   OPEN operator question — do not assume either way. Row 12 owns this trap; every other row
   must still run the check first, because a row that measures an inert subsystem will report a
   performance problem it does not have.
-- 2026-07-29 (row 5): the Phase-1 "re-derive every handed-down count" rule paid immediately —
-  row 5's own standing-constraint framing ("backlog > concurrency is a false cliff, fixed by
-  bef587a") is FALSIFIED by disk: that fix landed 2026-07-18, the 12 observed cliffs occurred
-  2026-07-26. The real cause was an unbounded spawn rate with no fleet concurrency ceiling.
-  **Generalisation for later rows: a map row's "standing constraint" cell is itself a claim —
-  re-derive it before designing against it.** Second finding of the same shape: the row's two
-  launchd jobs had been `disabled` and silently inert for ~3 days with zero alarm, so the row's
-  metric was being met 0% of the time by construction. Check activation truth FIRST on any row
-  whose surfaces include a daemon (rows 5, 12, and the deploy half of 1).
+- 2026-07-29 (row 5, source of the two entries above — kept for its row-specific residue only):
+  the falsified cell and the disabled-daemon trap were both surfaced here; the generalised
+  statements live above, not repeated. What is additionally row-5-specific and still load-bearing:
+  (a) the incumbent's cliff record `{action:"abstained",detail:"quota-cliff"}` carries **no
+  evidence**, so "zero false cliffs" was not merely unmet — it was **unmeasurable**, and the
+  rebuild's acceptance criterion had to create the evidence it is judged by (design rule: a verdict
+  that gates an alarm must carry the evidence that falsifies it); (b) a human-driven **desk**
+  session doing dispatch by hand is what masked the daemon's 3-day death — a manual fallback that
+  silently substitutes for an inert automation is why nobody noticed, so the inert-alarm cannot be
+  keyed on "work is happening", only on "the job that should be running, is".
