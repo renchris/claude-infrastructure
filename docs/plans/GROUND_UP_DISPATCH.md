@@ -77,8 +77,45 @@ land via /ship as you go; update the map row as part of your DoD; ping the coord
 ## Wave log (coordinator appends; map rows carry the durable status)
 
 - 2026-07-29: campaign opened; coordinator = the recycled successor of session e891e080.
+- 2026-07-29T17:53Z: coordinator re-armed — pane `71B42B48-1331-4F60-8DA3-6849F2682CA2`,
+  session `98f66842`, account next2 (claude-secondary), worktree `.worktrees/gu-coordinator`
+  on `gu/coordinator`. Fire-time account snapshot (all 4 auth-healthy, `claude-accounts`):
+  weekly-window expiry next2 08-01T10:59Z < next 08-02T03:59Z < next4 08-02T09:00Z <
+  next3 08-04T12:00Z; `--rank general` = next > next3 = next4 > next2.
+- 2026-07-29T18:03Z **WAVE 1 · row 4 FIRED** — session-registry-reaping. Account **next**
+  (rank #1; ALSO the soonest login cliff 08-02T20:21Z — use the login before it dies).
+  Pane `3446A212-B9A0-4754-95A4-66FBC33C97BC`, session `be504c79`, branch/worktree
+  `gu-session-registry-reaping`. **ENGAGED verified by transcript CONTENT** — 12 assistant
+  turns + 6 tool_use blocks, not birth alone (the /goal-prefix trap makes birth a false
+  positive; this fire deliberately leads with plain text and self-arms a short `/goal`).
+- 2026-07-29T18:03Z **row 5 HELD at the cadence guard** — 1-min load 12.58 ≥ 10 immediately
+  after the row-4 fire. Account **next2** reserved (soonest-expiring weekly window,
+  08-01T10:59Z). Fires resume when load < 10; the sessions are the load, not the lands.
 
 ## Learnings (accumulate; never delete)
 
 - Wave sizing is the load lever: sessions are the ambient load (14 ≈ load 88-104 pre-v2);
   lands are cheap now. Cap in-flight rebuilds, not landing frequency.
+- **One rebuild fire moves the load guard by itself.** Row 4's fire took the 1-min load
+  6.93 → 12.58 in ~90s (cold worktree + session boot + its own Phase-1 fan-out). So the
+  guard must be re-read IMMEDIATELY BEFORE each fire, never once per wave — a wave-1 pair
+  read as "both clear" at wave open is a stale reading by the time fire #2 is typed.
+- **A rebuild fire payload must NOT start with `/goal`.** handoff-fire submits the whole
+  file as the first prompt; a leading slash command makes CC parse the entire submission as
+  that command, and `/goal` caps at 4000 chars — over it, the prompt is REJECTED and the
+  session idles at an empty box while engagement-verify still reports "confirmed (birth)".
+  Measured here: base 1.7 KB + the notify-back/self-retire trailers = 3423 chars, only 577
+  under the cap, and the account-sweep bridge can be appended at fire time. Structure used
+  instead: plain-text first line + an inline `Scope (frozen):` + a STEP 1 that has the fired
+  session arm its own SHORT `/goal`. Zero cap exposure, and the goal condition ends up being
+  the falsifiable one-liner the ground-up skill's Phase 0 actually asks for.
+- **Verify engagement by transcript CONTENT, never the script's verdict.** `→ engagement
+  confirmed (transcript/registry birth)` is satisfied by attachment/system rows alone. The
+  real read is `type=="assistant"` turn count + tool_use blocks in
+  `$CONFIG_DIR/projects/<slug>/*.jsonl`.
+- **Cold `--worktree` fires collide on a literal temp filename** (fixed 2026-07-29, below):
+  BSD `mktemp` only substitutes a TRAILING `XXXXXX`, so
+  `mktemp "$TMPDIR/handoff-deps-XXXXXX.sh"` created a file named literally
+  `handoff-deps-XXXXXX.sh` and every subsequent cold fire died `mkstemp failed … File
+  exists`. First fire of the day always works; fire #2 onward never does — which is exactly
+  the shape a per-wave campaign hits and a single manual fire never sees.
