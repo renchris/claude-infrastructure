@@ -121,20 +121,52 @@ mailbox_file() { printf '%s/%s.md' "$(_mbx_dir)" "${1:-}"; }
 _mbx_int() { case "${1:-}" in ''|*[!0-9]*) echo 0 ;; *) echo "$1" ;; esac; }
 
 # ── portable mkdir lock (macOS-safe; flock is Linux-only) ─────────────────────────────────────────
+# OWNER TOKEN (a15/D4). The 2 s give-up and the mtime-TTL self-break below are DELIBERATE — this
+# channel picks a benign duplicate over a hung hook, and that contract is unchanged here. What was
+# not deliberate is the release: `_mbx_unlock` was an unconditional `rm -rf`, so a holder whose lock
+# had been TTL-stolen from it went on to delete the THIEF's lock and admit a third writer. Two
+# concurrent cursor writers is the bounded dup the design accepts; THREE, one of which believes it
+# holds a mutex nobody else can see, is not — it is unbounded by construction.
+#
+# So: stamp an owner token on acquire and verify it on release. That closes the chain without
+# touching the dup-over-hang policy. It also lets the reap convict faster than the TTL when the
+# holder is provably dead, while still never stealing from a live one before its TTL.
 _mbx_lock() { # <uuid> → 0 acquired, 1 gave up (caller proceeds lock-free: dup-risk, never a hang)
   local u="$1" ld waited=0 step=50 max="${CC_MBX_LOCK_WAIT_MS:-2000}" stale="${CC_MBX_LOCK_STALE_S:-10}"
   mkdir -p "$(_mbx_dir)" 2>/dev/null || return 1
   ld="$(_mbx_dir)/.$u.lock"
   while ! mkdir "$ld" 2>/dev/null; do
-    local mt now age; mt="$(stat -f %m "$ld" 2>/dev/null || stat -c %Y "$ld" 2>/dev/null || echo 0)"
+    local mt now age htok=""
+    # A provably-dead holder is reclaimed at once — no need to serve out its TTL. Read with the
+    # `read` builtin, never `$(cat …)`: this is a hot hook path and a fork per poll is real cost.
+    [ -f "$ld/owner" ] && { read -r htok < "$ld/owner" 2>/dev/null || htok=""; }
+    case "$htok" in
+      ''|*[!0-9]*) ;;                                        # no/odd token → fall through to TTL
+      *) kill -0 "$htok" 2>/dev/null || { rm -rf "$ld" 2>/dev/null; continue; } ;;
+    esac
+    mt="$(stat -f %m "$ld" 2>/dev/null || stat -c %Y "$ld" 2>/dev/null || echo 0)"
     now="$(date +%s 2>/dev/null || echo 0)"; age=$(( now - $(_mbx_int "$mt") ))
     [ "$age" -ge "$stale" ] 2>/dev/null && { rm -rf "$ld" 2>/dev/null; continue; }   # holder died → break
     [ "$waited" -ge "$max" ] && return 1
     sleep 0.05 2>/dev/null || sleep 1; waited=$(( waited + step ))
   done
+  printf '%s\n' "$$" > "$ld/owner" 2>/dev/null || true
   return 0
 }
-_mbx_unlock() { rm -rf "$(_mbx_dir)/.${1:-}.lock" 2>/dev/null || true; }
+# Release ONLY what we still own: if our lock was TTL-stolen and a peer now holds its own dir, the
+# token is theirs and deleting it would admit a third writer. Fork-free read, as above.
+_mbx_unlock() {
+  local ld tok=""
+  ld="$(_mbx_dir)/.${1:-}.lock"
+  [ -f "$ld/owner" ] && { read -r tok < "$ld/owner" 2>/dev/null || tok=""; }
+  # An UNTOKENED dir is ours by construction: the only writer that leaves no token is a pre-fix
+  # holder, and on this path that can only be a dir we just created. Deleting it keeps release
+  # total (never leaking a lock) while a FOREIGN token is always preserved.
+  if [ -z "$tok" ] || [ "$tok" = "$$" ]; then
+    rm -rf "$ld" 2>/dev/null || true
+  fi
+  return 0
+}
 
 _mbx_read_int_file() { local f="$1" v=0; [ -f "$f" ] && v="$(head -n1 "$f" 2>/dev/null | tr -dc '0-9')"; _mbx_int "$v"; }
 # atomic write; echoes nothing, returns 1 on failure (F9 — the caller must be able to SEE a write fail).
