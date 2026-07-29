@@ -14,13 +14,62 @@ needed is **landed** (`84b14daf`); this doc covers the two follow-ons the operat
 
 | Artifact | Current | Notes |
 |---|---|---|
-| `assets/demo/handoff-live.gif` | 1200×~700, 20 fps, **3.3 MB** | the INLINE hero — the only thing GitHub will embed |
-| `assets/demo/handoff-live.mp4` | 1920×1144, 60 fps, **2.4 MB** | linked from the caption, not embedded |
-| `assets/demo/handoff-real.gif` | 1200×640, **692 KB** | the VHS terminal-mechanics clip |
-| `assets/demo/handoff-real.tape` | — | regenerates the above via `vhs` |
+| `assets/demo/handoff-live.webp` | 1200×716, 20 fps, **2,892,390 B** | the INLINE hero (was a 3,483,666 B GIF — Task 1) |
+| `assets/demo/handoff-live.mp4` | 1920×1144, 60 fps, **2,528,078 B** | linked from the caption, not embedded; also the encode SOURCE |
+| `assets/demo/handoff-real.webp` | 1200×640, 25 fps, **633,570 B** | the VHS clip (was a 708,919 B GIF — Task 1) |
+| `assets/demo/handoff-real.tape` | — | `vhs` → GIF intermediate (gitignored) → `gif2webp` |
 | `assets/diagrams/*.mmd` + SVGs | — | `npm run diagrams`, CI-guarded by `diagrams:check` |
 
-## Task 1 — compression (the inline GIF is the expensive artifact)
+Inline payload **4,192,585 → 3,525,960 B (−666,625 B, −15.9 %)**, with measured quality
+equal or better on both assets. Task 1 and Task 2 are **RESOLVED** — see below. Task 3 is
+a separate track and is untouched.
+
+## Task 1 — compression — **RESOLVED 2026-07-29**
+
+**Outcome:** both inline assets are animated WebP. Inline payload −666,625 B (−15.9 %),
+quality equal or better on both, every claim measured.
+
+| Asset | Before | After | Δ | Quality |
+|---|---|---|---|---|
+| hero (`handoff-live`) | 3,483,666 B GIF | 2,892,390 B WebP | **−17.0 %** | SSIM 0.9763 vs GIF 0.9751; PSNR 39.13 vs 38.31 dB — **better on both** |
+| VHS clip (`handoff-real`) | 708,919 B GIF | 633,570 B WebP | **−10.6 %** | **pixel-exact** (534/534 frames hash-identical, duration 63,960 ms both) |
+
+**The gate — settled empirically, and the premise was wrong.** camo is *not* in the path
+for a README image: a relative `<img src>` is rewritten to `/{owner}/{repo}/raw/{ref}/{path}`,
+GitHub's own endpoint. camo only proxies *absolute external* URLs. Served bytes were
+**SHA256-identical** to source, `content-type: image/webp`, `ANIM` + 60/60 `ANMF` intact;
+a real browser animated it (3 distinct frames over 6 screenshots, at the raw URL *and* in
+the rendered markdown page). Re-verified via `gh api /markdown` that `<img src="a.webp">`
+survives the sanitizer identically to GIF.
+
+**Learnings — the ones that would be re-learned painfully:**
+- **`-min_size` is load-bearing for `gif2webp` and does nothing for size on live footage.**
+  VHS clip: 1,996,878 B without it vs 633,570 B with — a **3.15× factor**. Hero: 3,130,182 B
+  without vs 3,171,988 B with. On the hero its real effect was **encode time, 670 s → 45 s**.
+- **`gif2webp` is lossless by default** — there is no `-lossless` flag; passing one prints usage.
+- **A live screen recording barely compresses.** Continuous motion (cursor blink, streaming
+  text) means no identical-frame redundancy: 610 frames in, 610 stored, zero dedup. The
+  format swap alone was only −8.9 % at q70; the −17.0 % came from finding the quality curve.
+- **The plan's "expect a large reduction" was optimistic.** WebP's reputation comes from
+  content like the VHS clip, not from live capture.
+- **Frame count legitimately drops** (1,599 → 534 on the VHS clip): identical consecutive
+  frames merge into one longer-duration frame. Verify by **summed duration**, never frame
+  count — and never compare frames by index across a deduplicated stream (that produced
+  confident, wrong "MISMATCH" output before the timeline was reconstructed properly).
+- **Tool traps:** `ffmpeg` cannot decode animated WebP (`image data not found`) — use
+  `magick -coalesce`. **Pillow mis-reports durations** on merged frames (63,680 ms where
+  `webpinfo` said 63,960 ms) — trust `webpinfo`.
+- **Rejected on measurement, not taste:** lossless WebP on the hero (6,083,602 B, **+75 %**);
+  `-mixed -q 85` (3,997,492 B, +15 %); q50/q60 (below the GIF's SSIM *and* PSNR — a real
+  quality loss). Animated AVIF not pursued: uneven browser support for the *animated*
+  variant, and the inline slot has no fallback once `<video>` is stripped.
+
+**Why q65:** it is the point that beats the 64-colour GIF on both metrics with the largest
+size win. Visual check at README width confirmed it — and on **coloured** text the GIF's
+palette visibly posterizes a red→orange gradient that the WebP tracks cleanly. The swap is
+a quality *gain*, not a trade.
+
+<details><summary>Original analysis (kept — the sanitizer measurements still hold)</summary>
 
 **The constraint is not negotiable, and it is measured, not assumed.** GitHub's markdown
 sanitizer strips `<video>` outright. Verified against the live API (`gh api /markdown`):
@@ -64,7 +113,39 @@ artifact (3.3 MB vs the MP4's 2.4 MB) and the lowest quality (20 fps, 64 colours
 160-colour palette on flat terminal colour — same bytes, +20 % resolution, +67 % frame rate.
 Dithering buys noise on this content. Start any GIF work from there, not from defaults.
 
-## Task 2 — harvest the recording process into a skill
+</details>
+
+## Task 2 — harvest the recording process into a skill — **RESOLVED 2026-07-29**
+
+**Delivered:** `skills/demo-recording/SKILL.md`, deployed as
+`~/.claude/skills/demo-recording/SKILL.md` (per-file symlink, the pattern every active
+skill uses). It carries the material below **plus** the Task 1 encode recipes with their
+measured byte counts, so the compression knowledge cannot drift from the recording process.
+
+Written directly into `skills/` rather than staged via `/harvest-skill` → `skills-pending/`:
+that gate exists to stop an agent silently accreting junk skills, and this one was
+explicitly commissioned. Noting the deviation rather than hiding it.
+
+**Claims re-derived against disk rather than transcribed** (the recording session's
+transcripts are gone — this plan doc *was* the harvest, so its claims needed checking):
+- **`--notify-back` refined.** The plan said "takes no argument". It actually takes an
+  **optional bare UUID** (`scripts/handoff-fire.sh:1550` — an empty or `--`-prefixed next
+  token selects `__self__`). The real failure is that `$ITERM_SESSION_ID` holds the
+  `w2t0p0:UUID` form, is accepted as a *literal* target, and `cc-notify` then answers
+  `verdict=unresolvable reason=no-such-target` (`bin/cc-notify:399`); the prefix is stripped
+  only for `--self` (`:312`). Guidance is now "pass nothing, or the bare UUID".
+- **Confirmed exactly as written:** `hooks/mailbox-drain.sh:36` consumes stdin
+  unconditionally (`cat >/dev/null`, deliberate anti-SIGPIPE); this `ffmpeg` has **no**
+  `drawtext` (0 matching filters, no libfreetype).
+- **Font-per-session confirmed live:** `it2 session list --json` reports per-pane
+  `cols`/`rows`, and a check found two panes **in the same window** at `75×78` and `68×83`.
+
+**New traps found while doing the work** (now in the skill): zsh does not word-split an
+unquoted `$VAR`, so `opts="-m 6"; gif2webp $opts` passes one argument and prints usage;
+`pgrep -c` is not valid on macOS; check `uptime` before fanning out encodes (three
+concurrent `-m 6` runs pushed a 10-core box to load 12.9).
+
+<details><summary>Original harvest notes (kept — the source material for the skill)</summary>
 
 Six takes produced knowledge that is non-obvious and would otherwise be re-learned painfully.
 The process is genuinely repeatable and belongs in a skill (`/harvest-skill` is the entry point).
@@ -108,6 +189,8 @@ The process is genuinely repeatable and belongs in a skill (`/harvest-skill` is 
   on a TTY blocks forever and swallows everything typed after it. Feed it `echo '{}' |`.
 - `plutil -extract <key> json <file>` **without `-o`** rewrites the plist in place. It destroyed
   two LaunchAgents during this session. Use `-o -`, or `grep`.
+
+</details>
 
 ## Guardrail earned the hard way
 
