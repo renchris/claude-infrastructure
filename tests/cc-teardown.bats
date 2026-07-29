@@ -126,14 +126,56 @@ IT2
   jq -e 'index("U-AD") == null' "$IT2_PANES_FILE" >/dev/null   # pane actually closed (removed)
 }
 
-@test "operator-adoption belt degradation: lib ABSENT → WARN + belt skipped → teardown proceeds (exit 0)" {
+# ── INVERTED 2026-07-29 (SESSION_REGISTRY_V2 §4.3.5 / R3) ────────────────────────────────────────
+# This test previously asserted: lib ABSENT → belt skipped → teardown PROCEEDS (exit 0), against a
+# fixture carrying a REAL operator prompt. That pinned the fail-open as correct — "cannot prove the
+# operator is present" treated as "proven absent" — which is the mechanism by which live operator
+# conversations were closed (2026-07-24). The behavior is deliberately inverted: with no presence
+# oracle available the close is REFUSED. The three arms are pinned separately so the refusal cannot
+# silently become unconditional inertness.
+@test "belt degradation: lib ABSENT and NO beat system → REFUSE (exit 2), never a close" {
   adopted_fixture
   export CC_INTERACTIVE_LIB="$BATS_TEST_TMPDIR/no-such-lib.sh"   # absent
-  run "$T" U-AD --done-evidence "looks done"
+  export CC_BEAT_DIR="$BATS_TEST_TMPDIR/no-such-beats"           # no beat world either
+  # NOTE: the fixture pins CC_CLASSIFY_NOW=1000000000, so --decided-at must use the SAME pinned
+  # clock — a real-clock timestamp reads as ~25 years in the FUTURE and trips the lease's skew arm
+  # instead of the branch under test.
+  run "$T" U-AD --done-evidence "looks done" --decided-at 1000000000
+  [ "$status" -eq 2 ]
+  rec="$(find "$CC_TEARDOWN_RECORDS_DIR" -name '*.json' | head -1)"
+  [ "$(jq -r '.decision' "$rec")" = "REFUSE" ]
+  [ "$(jq -r '.reason_kind' "$rec")" = "presence-unprovable" ]
+  jq -e 'index("U-AD") != null' "$IT2_PANES_FILE" >/dev/null      # pane still OPEN — nothing was closed
+}
+
+@test "belt degradation: lib ABSENT but the BEAT shows a recent operator prompt → REFUSE (independent oracle)" {
+  adopted_fixture
+  export CC_INTERACTIVE_LIB="$BATS_TEST_TMPDIR/no-such-lib.sh"
+  export CC_BEAT_DIR="$BATS_TEST_TMPDIR/beats"; mkdir -p "$CC_BEAT_DIR"
+  now=1000000000   # the fixture's pinned clock (CC_CLASSIFY_NOW)
+  export CC_BEAT_NOW="$now"
+  printf '{"sid":"sidAD","t":%s,"who":"operator","operatorT":%s,"seq":1}\n' "$now" "$now" > "$CC_BEAT_DIR/sidAD.json"
+  run "$T" U-AD --done-evidence "looks done" --decided-at "$now"
+  [ "$status" -eq 2 ]
+  rec="$(find "$CC_TEARDOWN_RECORDS_DIR" -name '*.json' | head -1)"
+  [ "$(jq -r '.reason_kind' "$rec")" = "operator-adopted" ]
+}
+
+@test "POSITIVE CONTROL: lib ABSENT but the BEAT proves presence is OLD → proceeds (fail-closed is not inert)" {
+  # Beside the two refusals above: proves the refusal is attributable to unprovable presence, not to
+  # a belt that refuses everything once the lib goes missing. Without this, §4.3.5 could ship as a
+  # permanent teardown outage and every test above would still be green.
+  adopted_fixture
+  export CC_INTERACTIVE_LIB="$BATS_TEST_TMPDIR/no-such-lib.sh"
+  export CC_BEAT_DIR="$BATS_TEST_TMPDIR/beats"; mkdir -p "$CC_BEAT_DIR"
+  now=1000000000   # the fixture's pinned clock (CC_CLASSIFY_NOW)
+  export CC_BEAT_NOW="$now"
+  # fresh beat (system IS live) but the operator high-water mark is far older than the hold
+  printf '{"sid":"sidAD","t":%s,"who":"auto","operatorT":%s,"seq":9}\n' "$now" "$(( now - 99999 ))" > "$CC_BEAT_DIR/sidAD.json"
+  CC_CLASSIFY_INTERACTIVE_HOLD_S=600 run "$T" U-AD --done-evidence "looks done" --decided-at "$now"
   [ "$status" -eq 0 ]
   rec="$(find "$CC_TEARDOWN_RECORDS_DIR" -name '*.json' | head -1)"
   [ "$(jq -r '.decision' "$rec")" = "TEARDOWN" ]
-  [[ "$output" == *"cc-interactive.sh absent"* ]]               # the degradation WARN (stderr, merged by run)
 }
 
 # ── teardown markers (2026-07-25) — a DELEGATED close must not read as a CRASH ────────────────────
