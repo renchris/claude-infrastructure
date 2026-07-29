@@ -322,12 +322,24 @@ STUB
   run env CC_FLEET_LAUNCHCTL_BIN="$D/nonexistent" "$FLEET" --check
   [ "$status" -eq 1 ]                         # a check that cannot RUN must never pass
 
-  # (b) installed + enabled, but `print` cannot say what state it is in (rc=113 is a THREE-WAY
-  # ambiguity per §3.1.1) ⇒ UNKNOWN, never a guessed NEVER-RAN and never a silent HEALTHY
+  # (b) DELIBERATE CHANGE 2026-07-29, not a relaxed assertion — this case used to assert UNKNOWN
+  # (no row). It was wrong: installed (S1 passed) + not disabled (S2 passed) + launchctl saying the
+  # label is absent from the domain is a DETERMINED FAULT, not a missing sensor. Folding it into
+  # UNKNOWN made the fleet's most common live fault emit NO row on the board built to show it —
+  # measured the same day, when com.claude.dispatcher, com.claude.discovery and
+  # com.claude.postland-verify each silently dropped out of the domain while enabled and installed.
+  # It is now S2b NOT-LOADED and it ROWS. The UNKNOWN contract is unchanged for (a) and (c), which
+  # are the genuine broken-sensor cases — that split is the point, so assert BOTH halves here.
   run "$FLEET" --json
-  [ -z "$output" ]
+  [ "$(printf '%s\n' "$output" | grep -c .)" = 1 ]
+  printf '%s\n' "$output" | grep -q '"state":"NOT-LOADED"' || false
+  printf '%s\n' "$output" | grep -q '"subject":"com.claude.u1"' || false
   run "$FLEET" --table
-  printf '%s\n' "$output" | grep -q 'not-loaded-though-installed-and-enabled' || false
+  printf '%s\n' "$output" | grep -q 'NOT-LOADED .*com.claude.u1' || false
+  # ...and it must NOT be reported as an unrunnable sensor: a determined fault is not an unknown.
+  printf '%s\n' "$output" | grep -q 'UNKNOWN .*com.claude.u1' && false
+  run "$FLEET" --check
+  [ "$status" -eq 1 ]                         # a declared-run job that is not loaded fails the gate
 
   # (c) an unparseable print body (rc=0 but no `runs` line) is a sensor failure, not runs=0
   printfix com.claude.u1 '	state = not running' '	garbage = yes'
@@ -515,10 +527,12 @@ STUB
     [ -n "$activate" ] || { echo "no activate script for $label"; return 1; }
     case "$activate" in *.sh) ;; *) echo "activate '$activate' is not a .sh for $label"; return 1 ;; esac
   done < "$M"
-  [ "$n" = 14 ]
+  # 20, not 14: the fleet is TWO label families. com.chrisren.* (6 labels, incl. cc-reaper — row 4's
+  # LIVE reaper) was undeclared until 2026-07-29 and therefore invisible to every leg of this tool.
+  [ "$n" = 20 ]
 
   # three-way coverage: every committed plist is declared (the lint §4.4 enforces at the chokepoint)
-  for f in "$ROOT"/launchd/com.claude.*.plist; do
+  for f in "$ROOT"/launchd/com.claude.*.plist "$ROOT"/launchd/com.chrisren.*.plist; do
     [ -f "$f" ] || continue
     b="${f##*/}"; lbl="${b%.plist}"
     grep -q "^$lbl *|" "$M" || { echo "repo plist $lbl is UNDECLARED in the manifest"; return 1; }

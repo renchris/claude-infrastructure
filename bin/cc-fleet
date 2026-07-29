@@ -42,7 +42,7 @@
 # ── row schema (FROZEN — bin/cc-blockers' fleet_alarm_rows() codes against this) ─────────────────
 # {"kind":"fleet-inert","state":"<S>","detail":"<ascii, <=44 bytes>","subject":"<label>",
 #  "recover_cmd":"<paste-ready>","ts":<epoch>}
-# state ∈ NOT-INSTALLED|DISABLED|NEVER-RAN|FAILING|STALLED|UNDECIDED|UNDECLARED-SUMMARY.
+# state ∈ NOT-INSTALLED|DISABLED|NOT-LOADED|NEVER-RAN|FAILING|STALLED|UNDECIDED|UNDECLARED-SUMMARY.
 # `detail` is ASCII-only and <=44 bytes: the board's renderer pads by BYTES, so one em-dash
 # silently shifts the column. `$(id -u)` in a recover_cmd is EMITTED, never evaluated — it must
 # expand in the operator's shell, which is also what keeps the command uid-portable
@@ -88,6 +88,19 @@ MANIFEST="${CC_FLEET_MANIFEST:-$ROOT/launchd/fleet.manifest}"
 STALE_FACTOR="${CC_FLEET_STALE_FACTOR:-3}"
 LAUNCHCTL_BIN="${CC_FLEET_LAUNCHCTL_BIN:-/bin/launchctl}"   # READ-ONLY subcommands only
 PLUTIL_BIN="${CC_FLEET_PLUTIL_BIN:-/usr/bin/plutil}"
+# The label families THIS REPO owns. Both are ours: `com.claude.*` is the autonomy fleet and
+# `com.chrisren.*` is the personal-daemon family that includes com.chrisren.cc-reaper — row 4's
+# LIVE reaper. Scoping to `com.claude.` alone hid 6 loaded, running jobs from every leg below,
+# 5 of them with no repo SSOT at all (one `rm` from unrecoverable). Deliberately NOT in scope:
+# com.reso.* / gl.reso.* belong to a different project, and adobe/google/razer/homebrew/git are
+# third-party — declaring those would make this board answer for machines it does not own.
+FLEET_PREFIXES="${CC_FLEET_PREFIXES:-com.claude. com.chrisren.}"
+fleet_plists() { # <dir> → every in-scope plist path in that dir, one per line
+  local d="$1" pfx f
+  for pfx in $FLEET_PREFIXES; do
+    for f in "$d/$pfx"*.plist; do [ -f "$f" ] && printf '%s\n' "$f"; done
+  done
+}
 LIVE_AGENTS="${CC_FLEET_LIVE_LAUNCHD:-$HOME/Library/LaunchAgents}"
 REPO_LAUNCHD="${CC_FLEET_REPO_LAUNCHD:-$ROOT/launchd}"
 ACTIVATE_DIR="${CC_FLEET_ACTIVATE_DIR:-$ROOT/docs/activation/pending-activation}"
@@ -298,6 +311,20 @@ classify() { # $1=label $2=expect $3=interval_s $4=evidence $5=activate $6=ok_ex
   fi
 
   read_print "$label"
+  # S2b NOT-LOADED — installed (S1 passed), not disabled (S2 passed), and launchctl DEFINITIVELY
+  # says the label is absent from the domain. That is a determined FAULT, not a missing sensor, and
+  # it must ROW: a job that is supposed to be running and simply is not there is the exact failure
+  # this board exists to surface. Measured live 2026-07-29: com.claude.dispatcher and
+  # com.claude.discovery were loaded at 14:11 (dispatcher pid 74276) and had silently dropped out of
+  # the domain by 15:0x — enabled, installed, gone, with nothing anywhere saying so. Folding this
+  # into UNKNOWN (which by design emits NO row, per R8) made the fleet's most common live fault
+  # invisible on the very board built to show it.
+  if [ "$P_FAIL" = not-loaded-though-installed-and-enabled ]; then
+    S_STATE=NOT-LOADED; S_DETAIL='installed and enabled, but not loaded'; S_RECOVER="$act_cmd"
+    return 0
+  fi
+  # Everything else in P_FAIL IS a broken sensor (launchctl absent, unparseable print, odd rc) ⇒
+  # UNKNOWN, no row, named in --table. No sensor, no verdict — never a guessed red (R5/R8).
   if [ -n "$P_FAIL" ]; then S_STATE=UNKNOWN; S_UNKNOWN="$P_FAIL"; return 0; fi
 
   resolve_evidence "$label" "$evidence"
@@ -412,7 +439,7 @@ EOF
   # `detail` (which the renderer bounds at 44 bytes) and the labels in `subject`, which is
   # unbounded. A manifest gap, never a daemon fault, so it is not counted against --check.
   local f b lbl missing="" n=0
-  for f in "$LIVE_AGENTS"/com.claude.*.plist; do
+  while IFS= read -r f; do
     [ -f "$f" ] || continue
     b="${f##*/}"; lbl="${b%.plist}"
     case " $DECLARED_LABELS " in
@@ -420,7 +447,7 @@ EOF
     esac
     n=$((n + 1))
     missing="${missing:+$missing,}$lbl"
-  done
+  done < <(fleet_plists "$LIVE_AGENTS")
   if [ "$n" -gt 0 ]; then
     ROW_COUNT=$((ROW_COUNT + 1))
     ROWS="${ROWS}$(emit_row UNDECLARED-SUMMARY "$n live com.claude labels undeclared" "$missing" "$ROOT/bin/cc-fleet --plist-parity")
@@ -441,19 +468,34 @@ fi
 # ── --plist-parity ───────────────────────────────────────────────────────────────────────────────
 parity() { # 0 = in parity, 1 = drift found
   local f b live repo n=0
-  for f in "$REPO_LAUNCHD"/com.claude.*.plist; do
+  while IFS= read -r f; do
     [ -f "$f" ] || continue
     b="${f##*/}"; live="$LIVE_AGENTS/$b"
     if [ ! -f "$live" ]; then
       printf 'REPO-ONLY      %s  (committed, never installed)\n' "$b"; n=$((n + 1)); continue
     fi
-    cmp -s "$f" "$live" || { printf 'CONTENT-DRIFT  %s  (live copy differs from the committed SSOT)\n' "$b"; n=$((n + 1)); }
-  done
-  for f in "$LIVE_AGENTS"/com.claude.*.plist; do
+    if ! cmp -s "$f" "$live"; then
+      # Byte-difference is NOT semantic difference. `plutil -convert json -o -` normalises XML
+      # whitespace, key order and comments, so a reformat or an added comment stops masquerading as
+      # a drift. Measured: com.claude.discovery differs by a 6-line XML comment and is semantically
+      # IDENTICAL (a false CONTENT-DRIFT), while com.claude.dispatcher is a REAL one — repo
+      # StartInterval 300 (row 5's 21d8e869, landed) vs live 900 (never deployed). One byte-compare
+      # gave one true and one false finding; a board with a 50% false rate is not read for long.
+      # `-convert ... -o -` writes to STDOUT and never touches the file (unlike a bare
+      # `plutil -extract`, which rewrites in place and destroyed 5 LaunchAgents on 2026-07-25).
+      if [ "$("$PLUTIL_BIN" -convert json -o - "$f" 2>/dev/null)" \
+         = "$("$PLUTIL_BIN" -convert json -o - "$live" 2>/dev/null)" ]; then
+        printf 'COSMETIC       %s  (bytes differ, semantics identical — not a drift)\n' "$b"
+      else
+        printf 'CONTENT-DRIFT  %s  (live copy differs from the committed SSOT)\n' "$b"; n=$((n + 1))
+      fi
+    fi
+  done < <(fleet_plists "$REPO_LAUNCHD")
+  while IFS= read -r f; do
     [ -f "$f" ] || continue
     b="${f##*/}"; repo="$REPO_LAUNCHD/$b"
     [ -f "$repo" ] || { printf 'LIVE-ONLY      %s  (one rm from unrecoverable — no repo SSOT)\n' "$b"; n=$((n + 1)); }
-  done
+  done < <(fleet_plists "$LIVE_AGENTS")
   if [ "$n" -eq 0 ]; then echo "plist parity: clean (repo SSOT == ~/Library/LaunchAgents)"; return 0; fi
   printf '%s parity finding(s). REPO-ONLY/LIVE-ONLY/CONTENT-DRIFT are all manifest-lint failures.\n' "$n"
   return 1
