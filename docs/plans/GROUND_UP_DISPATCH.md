@@ -105,6 +105,15 @@ PHASE 1 IS NOT OPTIONAL — three checks BEFORE you design anything (added 2026-
       stranded 4 days, absent from origin/main and disk. A land that never happened leaves the
       same trace as a rejected design; only the originating doc tells them apart. Cherry-pick
       with `-x` and say in your plan what you took and what you rejected.
+      **START FROM THE COORDINATOR'S SWEEP** — GROUND_UP_DISPATCH.md § "Campaign-level graveyard
+      sweep" already names, per row, the artifacts stranded by ONE un-executed land instruction
+      (`STRANDED_EXPOSURE_2026-07-26.md:155-157`: land `fix/infra-perfection` + `tm/hygiene`;
+      never executed; its precondition IS landed). Rows 6, 8, 9, 10, 11 all have artifacts there.
+      **Take from `fix/infra-perfection`, NEVER from `tm/growth`** — the tip a naive sweep points
+      at, which the doc says is redundant with 0 unique patches and drags a 6-branch nested chain.
+      That section is a POINTER to re-verify, not a fact to inherit: re-run the two commands for
+      YOUR paths, because the branch set moves. Do NOT land those branches wholesale (55 commits
+      at 326 behind); scope your take to your row.
 
 DoD (all four, or you are not done):
 1. docs/plans/<TOPIC>_V2.md with the four load-bearing sections - measured constants WITH
@@ -535,6 +544,56 @@ weapon recovered verbatim. The map learning had told every future row "do not as
 about a question that was already answered with evidence — and it now carries the binding
 consequence instead: **`desk-invariant` and `boot-resume` are the runaway GENERATORS; never
 re-enable them without a fleet concurrency ceiling.** The other 8 are collateral and safe.
+
+### Campaign-level graveyard sweep, run at the COORDINATOR level 2026-07-29T15:15Z — one un-executed land instruction strands work belonging to FIVE remaining rows
+
+Row 12's parting recommendation was that every remaining row run the branch-graveyard sweep. Run
+once here at campaign level instead of seven times in isolation, because the result does not
+decompose by row — and that is the whole finding.
+
+**What it found.** `docs/research/STRANDED_EXPOSURE_2026-07-26.md:155-157` prescribes, verbatim:
+*"Land `fix/infra-perfection` + `tm/hygiene` and the entire `tm/*` family is covered."* **That land
+never happened.** Its own step-0 precondition DID land (`fix/gate-runaway-loop` is 0 ahead of
+origin/main — verified, so nothing blocks the rest). Live state: `fix/infra-perfection` 55 ahead /
+326 behind, **35 new files**; `tm/hygiene` 29 ahead, 21 new files. Between them they strand real
+hooks, scripts and their suites across rows **6, 8, 9, 10, 11** — plus 2 and 12. Sampled and
+content-verified (`git cat-file -e <branch>:<path>`), not inferred:
+
+| Row | Stranded artifact (absent from origin/main AND disk) | in `fix/infra-perfection` | in `tm/hygiene` |
+|---|---|---|---|
+| 6 | `hooks/curl-gate.py` · `hooks/keychain-guard.sh` · `hooks/subagent-stop.sh` (+ `tests/subagent-stop.bats`, `tests/hook-jq-abstain.bats`) | ✓ all | curl-gate, keychain only |
+| 9 | `scripts/prune-plan-history.sh` + `tests/prune-plan-history.bats` · `tests/plan-version-sid.bats` | ✓ | — |
+| 10 | `tests/statusline-identity.bats` · `tests/statusline-mail-badge.bats` | ✓ | — |
+| 11 | `tests/git-worktree-guard.bats` | ✓ | ✓ |
+| 8 | `tests/session-continue-telemetry.bats` | ✓ | ✓ |
+| 2 | `tests/handoff-fire-daemon-window.bats` (`backup/daemon-window`) · `hooks/lib/session-evidence.sh` (`feat/session-scoped-close`) | — | — |
+
+**Why running this per-row would have failed.** Each row's own slice looks like one or two stray
+test files — dismissible. The aggregate is 30+ artifacts including production hooks with suites,
+from a land that was explicitly prescribed and simply never executed. **Row 6 has the largest
+exposure and is deliberately scheduled LAST**, so on the current order it is the last to discover
+that a chunk of its subsystem already exists, written and tested, four days stale.
+
+**THE TRAP — do not cherry-pick from `tm/growth`, even though a naive sweep points there.** My
+first sweep surfaced these paths via `tm/growth` (49 ahead, 30 new files) because it is the stack
+TIP. The same doc states `tm/growth` is **redundant — 0 unique patches**, fully covered by
+`fix/infra-perfection ∪ tm/hygiene`, and that it *"can then be dropped"*. A row that cherry-picks
+from the tip instead of the prescribed source duplicates work the land plan already sequences, and
+`tm/*` is a nested chain (`tm/wtgc ⊂ tm/closure-a ⊂ tm/hooks ⊂ tm/hygiene ⊂ tm/gates ⊂ tm/growth`)
+so picking from the wrong member silently drags six branches' worth of ancestry. **Take from
+`fix/infra-perfection` (or `tm/hygiene` for the 4 patches it uniquely carries), `cherry-pick -x`,
+and state in your plan what you took and what you rejected on merits.**
+
+**What a row must NOT do:** land these branches wholesale. 55 commits at 326 behind will conflict
+heavily; the doc's own plan is 25 branches smallest-diff-first and serialized. Scope your take to
+YOUR row's artifacts. The bulk land is a separate, non-campaign task.
+
+**Method note.** My first two attempts at this sweep both produced confident garbage: one lost
+every hit to `sed: command not found` inside a subshell, the other returned `total=14 disabled=0
+enabled=0`. Both "succeeded" with exit 0. The third attempt worked only because I gave it a
+**positive control** — assert it re-finds row 12's already-known `launchd-parity-lint.sh` before
+believing anything else it says. A discovery sweep with no known-answer case cannot distinguish
+"clean" from "broken", and both of mine read as clean.
 
 ## Inherited watch — first GREEN postland stamp (status, not a coordinator work item)
 
