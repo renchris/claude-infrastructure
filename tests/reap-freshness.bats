@@ -12,6 +12,10 @@
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
+  # Fixture $HOME FIRST: cc-teardown resolves its records dir, the it2 shim and the beat/who libs
+  # under $HOME by default. An unfixtured suite would read the operator's LIVE session registry and
+  # could act on a REAL pane — the one class of test defect this subsystem must never ship.
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME/.claude"
   T="$REPO/bin/cc-teardown"
   export CC_TEARDOWN_RECORDS_DIR="$BATS_TEST_TMPDIR/rec"
   export CC_TEARDOWN_SELF_UUID="none"
