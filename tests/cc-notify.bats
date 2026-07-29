@@ -15,6 +15,13 @@ setup() {
   export CC_REGISTRY_DIR="$BATS_TEST_TMPDIR/reg"
   export CC_MAILBOX_DIR="$BATS_TEST_TMPDIR/mbox"
   export IT2_LOG="$BATS_TEST_TMPDIR/it2.log"
+  # THE LEAK THIS SUITE WAS (backlog 817faf3a4968). This was set per-test at the F4 test only, so the
+  # other two inbox-unwritable tests below wrote their alarm records into the operator's LIVE
+  # ~/.claude/autonomy/comms-alarms. Measured 2026-07-29: 510 of the store's 511 enqueue-fail records
+  # were this suite's, 40% of the whole store, and cc-inbox-guard phoned the operator once per record.
+  # It belongs in setup() for the reason the $HOME ratchet gives: per-test does not count, it leaves
+  # every OTHER test in the file pointed at live state.
+  export CC_COMMS_ALARM_DIR="$BATS_TEST_TMPDIR/comms-alarms"
   mkdir -p "$CC_REGISTRY_DIR" "$CC_MAILBOX_DIR"
 
   UUID="AAAAAAAA-1111-2222-3333-444444444444"
