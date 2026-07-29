@@ -20,9 +20,20 @@ minus the autonomous fork.
   PROPOSE-ONLY items are NEVER auto-applied — present diffs and get per-item approval.
 
 ## SAFE-AUTO (mechanical, reversible — only with `--apply-safe`)
-1. Scan `## Project State` + `## Completed Work` for entries that are CLOSED with **no pending
-   tail** — marked RESOLVED / DONE / SHIPPED / LANDED / SUPERSEDED **and** containing none of:
-   `DEFERRED`, `NOT pushed`, `pending`, `backlog`, `open`, `gated on`, or a future-date obligation.
+1. Scan the index for entries that are CLOSED with **no pending tail** — marked RESOLVED / DONE /
+   SHIPPED / LANDED / SUPERSEDED **and** containing none of: `DEFERRED`, `NOT pushed`, `pending`,
+   `backlog`, `open`, `gated on`, `BLOCKED`, or a future-date obligation. Scan the WHOLE index, not
+   `## Project State` / `## Completed Work` — a mature index is a **flat bullet list with no `##`
+   sections at all** (claude-infrastructure, 2026-07-29: 91 entries, zero `##` headings), so a
+   section-scoped scan silently matches nothing and reports a vacuous "0 archivable".
+   🚨 **Then apply the DURABILITY criterion — a CLOSED marker is NOT sufficient.** Archive only
+   content that is a **one-time verdict or a closed-incident record**; a **durable rule** stays
+   indexed no matter how closed it is, because archiving it removes a live rule from the
+   auto-loaded surface — the exact silent decay step 4 exists to catch. A landed SHA is a
+   *tombstone on a rule*, not evidence the rule is spent. Verified 2026-07-29: the marker+tail test
+   alone passed 4 entries whose hooks are all live prohibitions — `Never re-add corpus`,
+   `sharing needs the same ID *and* a shared dir`, `tolerate PARTIALS`, and a pane-keyed-marker
+   design rule. All 4 must be KEPT; a spec without this criterion archives all 4.
 2. Move each such entry VERBATIM (tombstone intact — keep its SHA + date) into
    `memory/archive/MEMORY_ARCHIVE_<YEAR>-H<half>.md` (create dir/file if absent; **append**, never overwrite).
 3. Remove ONLY those moved index lines from `MEMORY.md`. Topic `.md` files are NEVER deleted.
@@ -30,9 +41,20 @@ minus the autonomous fork.
    index line, and every index link must resolve to a file on disk. A topic file with no index
    line is INVISIBLE at session load — silently decayed memory. Re-index it (write a hook from its
    `description:`) and report it; a dangling link is reported, never auto-removed.
+   🚨 **Subtract the archive's own entry set FIRST — steps 2-4 are otherwise exact inverses.**
+   Archiving deliberately leaves a topic file on disk with no index line, so a naive orphan sweep
+   re-indexes precisely what the previous run archived, and the index re-inflates by that much on
+   every subsequent run. Build the exclusion set from the links already recorded in
+   `archive/MEMORY_ARCHIVE_*.md` (that file, not a guess, is the record of intent) and treat those
+   files as CORRECTLY unindexed. Verified 2026-07-29: 4 of the 4 apparent "orphans" were the 4
+   entries the same-day pass had archived — re-indexing them would have undone it and added ~750 B.
+   A genuine orphan is a topic file that is in NEITHER the index NOR any archive file.
 5. Report: N archived, N re-indexed, lines/bytes reclaimed, new `MEMORY.md` line count.
    > Reality check: in a dense, active memory most "resolved" entries carry a tail, so SAFE-AUTO
    > alone rarely clears the warning. That is by design — say so; the real lever is PROPOSE-ONLY.
+   > 2026-07-29 SAFE-AUTO was a **legitimate no-op** on all counts (0 archivable after the
+   > durability criterion, 0 genuine orphans, 0 dangling) — report a no-op as a finding, never as
+   > a reason to reach for a lossy edit the byte budget does not need.
 
 ## PROPOSE-ONLY (lossy-at-glance — NEVER auto-apply)
 
@@ -107,7 +129,8 @@ was cross-linked, and only **4 of 91** entries were honestly archivable. Plan th
 
 `MEMORY.md` is appended to by sibling sessions mid-task. 2026-07-29 two arrived during one
 compaction (+533 B, then +420 B), and a third session had left a **complete topic file with no
-index line** (silent decay — re-index it per SAFE-AUTO 4).
+index line** (silent decay — re-index it per SAFE-AUTO 4, but only after subtracting the archive's
+entry set: an archived topic file looks identical to a decayed one from the index alone).
 
 - **`Edit`, never `Write`.** Edit's stale-read check is what catches a concurrent append — it fails
   loudly. A wholesale `Write` destroys the sibling's entry silently.
@@ -116,6 +139,34 @@ index line** (silent decay — re-index it per SAFE-AUTO 4).
 - **The byte target is a moving one.** Re-verify at the end, and if the index is over target purely
   because siblings appended after your pass, **report that** — do not re-grind other sessions' fresh
   entries to hit a number.
+
+## RE-INFLATION — compaction is a treadmill, so define "done" as headroom, not bytes
+
+A pass does not close the problem; it buys time. Measured on claude-infrastructure: the 2026-07-29
+pass landed **17,088 B at 01:13**, and by **12:46 the same day the index was 18,179 B** — **+1,091 B
+in 11.6 h**, fully reconciled as **4 new entries (1,002 B) + ~89 B of corrections appended to 3
+already-compacted lines**. Two rates bracket the return trip to the 24.1 KB trigger that filed this
+work: **~3 days** at that burst rate, **~17 days** at the project's lifetime average (91 entries over
+~7 weeks ≈ 1.8/day) — that day ran ~4× the average, so treat 3 days as a floor, not a forecast.
+
+Consequences for how you run this command:
+
+- **Verify the trigger before you curate.** A backlog item quoting a size is a *timestamped
+  observation*, not the current state — a sibling pass may already have cleared it. Re-measure first;
+  2026-07-29 the item said 24.1 KB and the index was 18.2 KB, already 6.5 KB under. Curating anyway
+  would have spent an irreversible lossy pass on headroom that already existed.
+- **A no-op close is a legitimate outcome** when SAFE-AUTO is clean and the index sits under trigger.
+  Do not manufacture lossy work to look productive — the byte budget, not the ritual, authorizes a
+  shortening. Report the headroom and the rate.
+- **Corrections land on the index, not the topic file.** ~89 B of the re-inflation was sessions
+  appending a clause to an *existing* compacted line, which is why a compacted line drifts back over
+  budget without any new entry appearing. This is the mechanism behind the PROPOSE-ONLY precondition
+  above: those appended clauses are the index-only facts a later shortening would destroy.
+- **The durable fix is a budget at append time**, not a periodic hand-curation: an entry written at
+  ~115 B of hook never needs a pass. Periodic compaction is the fallback for entries written without
+  one, and its cost (two full hand-audited passes, 2026-07-26 and 07-29) is the argument for the
+  cheaper rule. Fixing it at the write surface is out of this command's scope — the nudge that
+  prompts the append (`hooks/memory-nudge.sh`) is where a budget would have to bind.
 
 ## PROTECTED
 - Any entry/line tagged `(PINNED)` is skipped entirely (explicit opt-out; mirrors hermes pin-to-protect).
