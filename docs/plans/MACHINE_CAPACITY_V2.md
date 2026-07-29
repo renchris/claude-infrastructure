@@ -197,7 +197,7 @@ A mode without an answer is an unfinished design.
 | **M3** ✅ **BUILT** | Stop chain costs 3688 ms/turn; one hook is 73% of it | `operator-readout.sh` = 2711 ms, min-of-2 | **Make the readout's cost proportional to *change*, not to every turn.** It re-renders disk truth unconditionally; it already has damping semantics for *display* (15-min re-assert) — push that damping *below* the expensive reads so an unchanged state is a cheap stat, not a full render. |
 | **M4** | Watchdog spawn/exit ledger does not balance (~102 lost); liveness test is unsound past one PID wrap | log accounting; `lead-crash-watchdog.sh:601` bare `kill -0` vs R5; PID wrap every 5.05 h | **pid+lstart liveness + a census leg with a positive control.** Makes "no orphans" distinguishable from "nobody looked" (R6), and makes the residue countable before it is optimised. |
 | **M5** | 31 unbounded `osascript` sites share one serialized AppleEvent channel | `grep`; documented machine-wide iTerm2/AppleEvent wedge 2026-07-26, cited in `lead-crash-watchdog.sh:18` | **Universalize the bound that already exists.** The `lcw_osa` helper is the proven shape; hoist it to one sourced helper and convert the 31 bare sites. Bound must fit what it bounds (R7) — not idle-calibrated. |
-| **M6** | Session ceiling is unstated, so pressure would be discovered by swapping | 44.7 GB @30, 57.2 GB @50, no guard | **State the ceiling (≈50) and alarm on the leading indicator** (compressor growth / swap > 0), not on the lagging one (already swapping). |
+| **M6** OK-BUILT | Session ceiling is unstated, so pressure would be discovered by swapping | 44.7 GB @30, 57.2 GB @50, no guard | **State the ceiling (≈50) and alarm on the leading indicator** (compressor growth / swap > 0), not on the lagging one (already swapping). |
 
 **Structural check (skill Phase 2):** is the new design the old one with bigger constants? No. M1
 inverts *who* applies the policy (tool, not caller). M3 inverts *what* the cost scales with (change,
@@ -255,7 +255,7 @@ Each criterion names the exact command whose output proves it. Narration does no
 | **AC9** | Watchdog census balances, with a positive control (R6) | `cc-reaper --watchdog-census` → `spawned/live/exited/lost` + a `control=OK` line proving the detector fires | ledger off by **~102**, no census exists |
 | **AC10** | Watchdog liveness uses pid+lstart (R5) | `grep -c 'lstart' hooks/lead-crash-watchdog.sh` → `>0`; RED-proof asserts a recycled-PID fixture is classified dead | bare `kill -0`, line 601 |
 | **AC11** | 0 unbounded `osascript` sites in `hooks/` (R7) | `grep -rn '^[^#]*osascript' hooks/ \| grep -vE 'timeout\|_osa\|TB' \| wc -l` → `0` | **31** repo-wide |
-| **AC12** | Session ceiling stated + alarmed (M6) | the ceiling appears in this doc §1 **and** a live read alarms on `sysctl vm.swapusage` used > 0 | unstated |
+| **AC12** MET | Session ceiling stated + alarmed (M6) | `scripts/capacity-alarm.sh` -> 4-rung verdict; swap-used>0 => ALARM; `--selftest` proves every rung reachable | unstated -> OK@29.3 GB headroom |
 | **AC13** | Row 13 exists in the map with plan link + landed shas | `grep -c 'MACHINE_CAPACITY_V2' docs/plans/GROUND_UP_REBUILD_MAP.md` → `>0` | absent |
 
 **Proof bar (non-negotiable, from the exemplar's catches):** RED-proof every new test against the
@@ -578,6 +578,37 @@ names **both** paths - strictly more precise than before. Verified first that th
 no consumer outside that file (`grep -rn 'latched-ttl'` over `*.sh`/`*.bats`/`*.md` **and** the
 extensionless `bin/` - hits only the hook and the test). Recorded here per the map's binding rule
 that a test encoding a superseded premise may be changed only deliberately and never quietly.
+
+## 9.3 M6 BUILT — the ceiling now has an alarm, and it is an ALARM not a GATE
+
+`scripts/capacity-alarm.sh`. The design boundary is the whole point: the landed `capacity_gate()`
+is the cautionary case (REFUSE 10/10 against real samples = permanent dispatch outage), so this
+reports and exits — it never refuses, blocks, queues, sleeps or polls (R1), and test (xiii) fails if
+a refusal verb ever appears.
+
+**Instrument choice, because the obvious ones lie:** not `loadavg` (2.05x swing at constant session
+count, not session-attributable), and not summed `ps rss` (overcounts shared pages ~2.34x). What
+decides whether the box swaps is **reclaimable headroom** = free + speculative + inactive +
+purgeable, with `vm.swapusage` used > 0 as the hard (lagging) signal.
+
+Four verdicts, never a boolean: `OK` (0) · `WARN` (1) · `ALARM` (2) · **`NO-DATA` (3)**. The fourth
+is load-bearing — a capacity alarm that reads OK when it cannot measure actively asserts safety.
+Live: 8 sessions, 29.3 GB headroom, room for ~47 more, `OK`. Proof: **13/13 green**, **12/13 RED**
+against a pristine archive.
+
+**Three defects this file's own tests caught, each a named memory:**
+1. `python3 -` with a heredoc **ate the piped `vm_stat`** — the program is read from stdin, so the
+   heredoc claimed the data channel and the alarm reported permanent `NO-DATA` (memory
+   `blind-check-generators-stdin-and-sid-keys`; shellcheck SC2259). Fixed to `python3 -c`. The
+   four-state design is what surfaced it: a boolean would have said "fine".
+2. Swapping the process census for a name-matcher to satisfy SC2009 **silently undercounted to 0
+   with 8 live sessions** — macOS matches a truncated argv, so a long absolute path never matches.
+   That is `actuator-must-see-the-target-population` (134/134 MISS): a counter reading 0 forever
+   would have made the alarm report an empty fleet. Reverted, measurement recorded inline.
+   **Verify a census instrument against a known population before trusting it.**
+3. The R1 "never sleeps" guard **matched the script's own prose**, convicting the documentation of
+   the property it checks (`detector-matching-its-own-skill-description`). Comments are now stripped
+   before matching, with a control proving the stripping did not defang it.
 
 ## 10. Learnings (accumulate; never delete)
 
