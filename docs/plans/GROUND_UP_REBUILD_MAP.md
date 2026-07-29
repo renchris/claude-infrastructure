@@ -41,6 +41,29 @@ its customers stabilize their contracts).
 
 - 2026-07-29: map created from the landing-rebuild exemplar; row 1 marked DONE. The
   methodology's distillation (what the prompt did/missed) lives in skills/ground-up/SKILL.md.
+- 2026-07-29 **THIS TABLE'S "standing constraint" CELLS ARE CLAIMS, NOT VERIFIED FACTS —
+  re-derive YOUR row's cell from primary disk truth before you design against it.** Surfaced
+  by row 5 mid-rebuild and independently confirmed by the coordinator: row 5's cell rested on
+  "the backlog>concurrency false cliff was fixed by `bef587a`", but `bef587a` landed
+  **2026-07-18** while the 12 cliffs it supposedly prevents occurred **2026-07-26** — eight
+  days later. The real cause was different in kind (no fleet concurrency ceiling anywhere in
+  cc-dispatch: 50 sessions fired in 17.5h, quota exhausted, then it paged about its own wall).
+  A rebuild that inherits a falsified cell designs against the wrong failure class and its
+  "inversion" is just the old design with bigger constants — the exact Phase-2 trap the skill
+  warns about. Treat the cell as the PRIOR SESSION'S HYPOTHESIS; Phase 1 is where you kill or
+  confirm it, and say in your plan which one happened.
+- 2026-07-29 **CHECK DAEMON-ACTIVATION TRUTH BEFORE MEASURING YOUR ROW'S METRIC — a disabled
+  job makes a metric read 0% BY CONSTRUCTION, which is not a performance result.** Verified
+  this session via `launchctl print-disabled gui/$(id -u)`: **12 of the 14 `com.claude.*` jobs
+  are disabled**; only `com.claude.postland-verify` and `com.claude.deploy-live` are enabled,
+  and `launchctl list` shows those two alone loaded. `com.claude.dispatcher` and
+  `com.claude.discovery` are BOTH disabled, so row 5's "dispatch decision ≤5 min" was
+  unmeetable before a line of code was read. Corroborated independently by `cc-backlog`
+  107f27fbb00c and memory `desk-autonomy-dormancy-staged-not-loaded` (built but INERT: staged
+  in pending-activation/, never loaded). Whether the mass-disable was deliberate is still an
+  OPEN operator question — do not assume either way. Row 12 owns this trap; every other row
+  must still run the check first, because a row that measures an inert subsystem will report a
+  performance problem it does not have.
 - 2026-07-29 (row 5): the Phase-1 "re-derive every handed-down count" rule paid immediately —
   row 5's own standing-constraint framing ("backlog > concurrency is a false cliff, fixed by
   bef587a") is FALSIFIED by disk: that fix landed 2026-07-18, the 12 observed cliffs occurred
