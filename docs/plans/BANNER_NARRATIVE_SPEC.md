@@ -222,8 +222,129 @@ consequences:
    because what distinguishes them is night-only. Only v6c keeps an identity (sun left, warm horizon
    band). Choose a candidate on **both** looks, never on the dark one alone.
 
+## SYNTHESIS — five-agent research panel, 2026-07-29
+
+Reports on disk (144 KB): `repo-semantics`, `event-grammar`, `prior-art`, `event-generator`,
+`event-adversary`. **This section supersedes the causal chain proposed above.** The chain was
+internally consistent and about nothing; what follows is grounded in named mechanisms and survives
+the adversarial pass.
+
+### The finding that reorders everything: the viewer's clock starts at t=0
+
+An SVG in `<img>` starts its CSS timeline when the image begins rendering, the hero is the first
+element on the page, and Chrome does not throttle SVG-in-`<img>` animation. So there is **no random
+phase**: every reader starts at t≈0. **The first ~30 seconds of the loop is the product.** An event
+at t=231 s is seen by essentially nobody — not because it is rare, but because it is *late*.
+
+This reframes the adversary's strongest attack rather than refuting it. Its "no viewer ever witnesses
+cause and effect" holds under random phase; under t=0 anchoring the defect is **placement**, and the
+fix is front-loading, not abandoning events. Two agents converged here independently, and one adds
+the sharpest single move available: **fire the distinctive beat ONCE, ~2–4 s after load, and never
+repeat it** (`begin="2.5s" repeatCount="1"`). A repeating distinctive event is a *beacon of
+repetition* — the 40-second reader watches it fire twice and the illusion dies. One-shot gives every
+reader exactly one beat while they are still looking, and nobody ever sees it recur.
+
+⚠️ **This claim is load-bearing and should be checked in a real README before the build commits to
+it.** If the timeline does not anchor at load, front-loading buys nothing.
+
+### The reframe that dissolves R1 at no cost
+
+**A session is never co-present with its peers.** Peers live in other panes, other worktrees, other
+accounts. Co-presence is not merely risky under R1 — it is *the wrong picture of the system*. So
+peers are always **off-canvas, and their existence arrives as world state**: mail is a file, a
+predecessor is a record. R1 becomes free rather than endured, and every event can have exactly one
+creature in frame because the repo has exactly one session per pane.
+
+Corollary: **v6b's "a second session walks in and both cheer" is not just R1-exposed, it is
+semantically wrong** — and as shipped its peer interpenetrates clawd for ~7.2 s in the same flat
+orange, reading as a render error or as one session absorbing another.
+
+### The spine: the scroll rate is the only gauge
+
+| Reading | Means | Event |
+|---|---|---|
+| nominal | working | ambient |
+| **negative** | a turn was returned | THE REFUSAL |
+| **zero** | blocked on a human | THE ASK |
+
+Events share one vocabulary instead of each inventing its own. **Significance comes from a shared
+scale, not from novelty per beat** — the direct answer to critique (a). Second structural rule:
+nothing is ever authored above y=340, so the sky stays purely ambient and the wordmark cannot be
+crossed *by construction* rather than by a keep-out check.
+
+### The thesis belongs in a STATE, not an event
+
+Bake a footprint into the scrolling strip at **exactly one stride pitch**, for the whole strip. The
+foot then lands in an existing print every stride *by construction* — no second animation. The
+reading: **the record is continuous and the walker is not.** You cannot tell where one session's
+prints end and the next's begin. That is "SESSIONS RUN EACH OTHER" rendered as the ground itself,
+with no second creature and nothing joining anything, and it makes "nothing a session did dies with
+it" a permanent property rather than a 4-second event. Independently, the prior-art census ranks
+persistent footprints a top-tier *fresh* beat that also hides the loop seam.
+
+### The recommended set — three events, MECE, shippable alone
+
+- **THE OVERLAP** — `handoff-fire.sh self-close --successor` refuses to retire a predecessor until
+  the successor is *verified engaged*, so succession **overlaps rather than touches**. The print
+  pitch halves for ~12 prints: two walkers' worth of record. The foot lands on every *second* print
+  and the mismatch is the tell. Exit by resolution — pitch halves back, foot re-registers.
+- **THE REFUSAL** — `completion-assert.sh` refuses a false "done"; the README's own diagram draws it
+  as an arrow *back*. A post arrives, the creature settles (it is trying to end the turn), the bar
+  drops across, and **the world scrolls back exactly one print pitch**. So the creature steps into
+  the same print twice: *a returned turn is redoing a step.* The best detail in the set, and free.
+- **THE ASK** — the system pages you only when a human must decide (`cc-decide` class C waits with no
+  default; `cc-blockers`; STOP-ASK). Nothing arrives: it stops, ears up, gaze parks straight out,
+  world rate zero for 6 s, then resumes. **In a loop made of motion, the only cessation is the most
+  salient thing in it** — and it needs no new art, since the sprite already faces front. Prior-art
+  independently ranks "creature stops, looks off-frame, resumes" top-tier fresh.
+
+Two further candidates (**THE LANE**, a fork in the ground for worktree isolation; **THE ADVANCE**, a
+deploy sweep whose payload is that nothing changes) are specified in the generator report but are the
+recommended cut order — THE ADVANCE first (weakest exit, 1 px payload), THE LANE second (most
+infographic-prone, widest footprint).
+
+### Deleted, with reasons
+
+| Beat | Why it goes |
+|---|---|
+| Shooting star | The most tired beat available — ships as a free asset marketed for "pop up randomly in night backgrounds" — **and structurally invisible by day**, so it cannot carry a story in both schemes |
+| Drifting balloon | Filler: no cause for entering, no exit but drifting off, and it renders the brand asterisk as a stray object (against R4) |
+| Floating Zzz | UI iconography, not observation — and it **contradicts the thesis**: idleness here is a `cc-reaper` classification and a closed pane, not sleep |
+| Waving creature | Breaks the fourth wall, and collides with the 👋 that opens roughly every profile README |
+| The 4 s hop | Voluntary motion implies a cause it does not have. **Involuntary → texture; voluntary → must map to a mechanism, or cut.** 60 unmotivated hops per loop is precisely the noise critique (a) named |
+
+### Enforcement — a lint, not a doctrine
+
+Per this repo's own chokepoint rule, every ruling above is worthless as prose. Extend the build lint
+to expand every keyframe list to **absolute seconds on the 240 s master** and assert: pairwise event
+disjointness with margin; at most one feature on canvas (`min pairwise strip gap ≥ 1920 +
+feature_width`); per-type duty ≤4%; aggregate ≤25%; ≥65% empty air; no type recurring with a gap
+<60 s; and every rate modulation spanning an exact multiple of the 0.5 s stride. Measured v5a fails
+this at **88.1% aggregate duty, 64.8% union coverage, four concurrent events for 3.6 s**.
+
+Also assert `strip_length = 28.8 × (strides_taken − strides_in_place)`, divisible by the dash pitch —
+a hard stop cannot be paid back by a later catch-up without destroying the print lock.
+
+### Two defects nobody had recorded
+
+1. **The sprite is bilaterally symmetric, so the turn-around is a visual no-op.** Ears at 0/200, eyes
+   at 40/160, body 20+180 all mirror about x=110, and `legA` maps onto `legB` under `scaleX(-1)`. Found
+   independently by two agents. "Turn around" is unavailable as a beat without new art.
+2. **Stride and scroll are not locked.** 32.7 px/s ÷ 2 strides/s = 16.3 px per stride = 1.13 cells,
+   while the legs are two cells apart — **the creature has been sliding the whole time.** Fixing this
+   is what makes the footprint lock possible, so it is a prerequisite, not a polish item.
+
+### Open for the operator, not for us
+
+**R3 of the binding ruleset says "seamless indefinite loop, ambient not narrative."** Everything
+above is ambient-with-mechanism rather than plot, which is compatible — but the earlier chain was
+not, and nobody adjudicated the conflict. If R3 stands as written, narrative-as-experienced is out
+and the state/gauge reading is the only legal design. That is a ruling, not a craft call.
+
 ## Acceptance
 
 An event passes only if a viewer can answer all three of *why did it appear*, *what did it do*, and
 *how did it leave* — from the animation alone, without reading this file. **And it must pass in both
 colour schemes**, since a reader gets whichever one their OS is set to and never sees the other.
+**And it must be placed where a reader will actually meet it** — before t≈30 s, or it is not a rare
+event, only a late one.
