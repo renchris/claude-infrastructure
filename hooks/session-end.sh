@@ -71,10 +71,68 @@ disown 2>/dev/null || true
   version_count=$(find "$VERSIONS_DIR" -maxdepth 1 -mindepth 1 -type d ! -name current ! -name '.*' 2>/dev/null | wc -l)
   [[ "$version_count" -le "$GC_THRESHOLD" ]] && exit 0
 
-  # Acquire lock (skip if another cleanup is running)
+  # Acquire lock (skip if another cleanup is running).
+  #
+  # OWNER-VERIFIED STALE RECLAIM (a15/D6). This lock had neither a stale reap nor a trap: a bare
+  # `mkdir || exit 0` released only by the `rm -rf` at the end of the block. A SIGKILL/OOM/reboot
+  # between the two orphans the dir FOREVER, and every later SessionEnd GC then does
+  # `mkdir → fail → exit 0` — a silent permanent skip.
+  #
+  # The asymmetry is the actual bug: this lock dir is SHARED with claude-latest:96 (both resolve
+  # $HOME/.claude-versions/.cleanup_lock), and claude-latest DOES reclaim it by pid-liveness. So one
+  # holder of the same mutex self-heals and the other wedges. Adopt the same reclaim so the policy
+  # is symmetric — a lock is only ever stolen from a hoder that is provably GONE.
+  #
+  # pid+lstart, not pid alone: under load the OS recycles a dead holder's pid onto a new process and
+  # `kill -0` then reports the corpse as alive, wedging the lock exactly as before (the land-lock
+  # flake of 2026-07-25; scripts/land-lock.sh:96-112 carries the same rule). A recycled pid has a
+  # different start time, so an lstart mismatch convicts it. When no lstart was recorded — a holder
+  # from before this change, or claude-latest, which writes pid only — fall back to pid-liveness
+  # alone rather than reaping a possibly-live holder: never steal from a maybe-live process.
   lock_dir="$VERSIONS_DIR/.cleanup_lock"
-  mkdir "$lock_dir" 2>/dev/null || exit 0
-  echo $$ > "$lock_dir/pid"
+  if ! mkdir "$lock_dir" 2>/dev/null; then
+    lock_pid=$(cat "$lock_dir/pid" 2>/dev/null || echo "")
+    if [[ -z "$lock_pid" ]]; then
+      # mkdir'd but the pid not yet written: a real owner mid-acquire. Give it a grace window and
+      # only then treat it as debris, so we never race a holder that is 2 ms from writing its pid.
+      lock_age=$(( $(date +%s) - $(stat -f %m "$lock_dir" 2>/dev/null || echo 0) ))
+      [[ "$lock_age" -lt 30 ]] && exit 0
+    elif kill -0 "$lock_pid" 2>/dev/null; then
+      rec_lstart=$(cat "$lock_dir/lstart" 2>/dev/null || echo "")
+      cur_lstart=$(ps -o lstart= -p "$lock_pid" 2>/dev/null || echo "")
+      # live AND identity confirmed (or unrecorded) ⇒ a real holder ⇒ skip, never steal
+      [[ -z "$rec_lstart" || "$rec_lstart" == "$cur_lstart" ]] && exit 0
+    fi
+    # holder is provably dead (or its pid was recycled) → reclaim
+    rm -rf "$lock_dir" 2>/dev/null || exit 0
+    mkdir "$lock_dir" 2>/dev/null || exit 0
+  fi
+  # THE RECORDED PID MUST BE THIS SUBSHELL'S, NOT `$$`. This GC body runs in a backgrounded,
+  # disowned `( … ) &`, and on bash 3.2 `$$` inside a subshell is the PARENT shell's pid (verified:
+  # 3.2.57 prints the same value in both; `BASHPID` does not exist before bash 4). That parent is the
+  # SessionEnd hook, which exits within milliseconds of backgrounding us — so recording `$$` would
+  # write a pid that is dead for almost the entire critical section, and the reclaim above would then
+  # correctly conclude "holder dead" and steal the lock from this very much LIVE GC. A liveness token
+  # has to name the process that actually holds the section.
+  #
+  # `$(exec sh -c 'echo $PPID')` is the bash-3.2 way to get it: `exec` replaces the command
+  # substitution's forked child with `sh`, so sh's parent IS this subshell (verified against `$!`
+  # from the parent — the non-exec form returns the cmd-subst fork instead and is wrong here).
+  # Fall back to `$$` only if that yields no integer: a conservative token beats an empty one, which
+  # the reclaim would read as "mid-acquire debris".
+  own_pid=$(exec sh -c 'echo $PPID' 2>/dev/null)
+  case "$own_pid" in ''|*[!0-9]*) own_pid=$$ ;; esac
+  echo "$own_pid" > "$lock_dir/pid"
+  ps -o lstart= -p "$own_pid" 2>/dev/null > "$lock_dir/lstart" || true
+  # Release on EVERY exit of this subshell, not just the happy path at the bottom: any `exit`/error
+  # between here and there would otherwise leave the dir for the reclaim above to clean up later.
+  # (The reclaim is the SIGKILL backstop; the trap is what keeps ordinary exits from needing it.)
+  #
+  # OWNER-VERIFIED RELEASE: delete only while the recorded pid is still OURS. If our lock was
+  # reclaimed as stale by a peer that now holds its own, the pid file is theirs and an unconditional
+  # `rm -rf` here would delete a LIVE holder's lock and admit a third — the steal-then-double-release
+  # chain (a15/D4). Verifying the token on the way out makes release idempotent and safe.
+  trap '[ "$(cat "$lock_dir/pid" 2>/dev/null || echo)" = "$own_pid" ] && rm -rf "$lock_dir" 2>/dev/null; true' EXIT
 
   current_target=$(readlink "$CURRENT_LINK" 2>/dev/null | xargs basename 2>/dev/null || echo "")
 
@@ -90,26 +148,40 @@ disown 2>/dev/null || true
   IFS=$'\n' sorted=($(printf '%s\n' "${versions[@]}" | sort -t. -k1,1rn -k2,2rn -k3,3rn))
   unset IFS
 
-  declare -A keep_set
-  keep_set["$current_target"]=1
+  # Keep set as a |-delimited STRING, not an associative array. `declare -A` is bash 4+; the shebang
+  # here is /bin/bash, which on macOS is 3.2.57 with no bash 4 anywhere on PATH. So `declare -A`
+  # failed on EVERY SessionEnd ("declare: -A: invalid option"), and the next line then parsed
+  # `keep_set["$current_target"]=1` as an arithmetic index — "1.0.6: syntax error: invalid arithmetic
+  # operator" — leaving the keep set empty and aborting the block. This GC has therefore never once
+  # run: 0 "SessionEnd GC: removed" lines in ~/.claude/.update-versions.log against 29 removals from
+  # claude-latest's path, with ~/.claude-versions sitting at 7 dirs / 833 MB. Found while testing the
+  # lock above — a mutex whose critical section could not execute.
+  #
+  # This is claude-latest:117-130's idiom verbatim (the sibling that shares this very lock dir and
+  # does the identical keep-set computation) rather than a new one: same repo, same logic, already
+  # proven on 3.2. Pipes fence the match so `1.0.1` can never substring-match `11.0.1`.
+  keep_set="|${current_target}|"
   kept=0
   for v in "${sorted[@]}"; do
     [[ "$v" == "$current_target" ]] && continue
     if [[ $kept -lt $KEEP_COUNT ]]; then
-      keep_set["$v"]=1
+      keep_set="${keep_set}${v}|"
       kept=$((kept + 1))
     fi
   done
 
   for v in "${sorted[@]}"; do
-    [[ -n "${keep_set[$v]:-}" ]] && continue
+    [[ "$keep_set" == *"|${v}|"* ]] && continue
     pgrep -f "claude-versions/$v" >/dev/null 2>&1 && continue
     # shellcheck disable=SC2115  # VERSIONS_DIR is always set (top of block); guard is defensive (pre-existing)
     rm -rf "$VERSIONS_DIR/$v" 2>/dev/null && \
       echo "[$(date '+%Y-%m-%d %H:%M:%S')] SessionEnd GC: removed $v" >> "$HOME/.claude/.update-versions.log"
   done
 
-  rm -rf "$lock_dir"
+  # No `rm -rf "$lock_dir"` here — the EXIT trap above is the SOLE release point. Doing both would
+  # open the double-release hole this change exists to close: release here, a peer acquires in the
+  # microseconds before this subshell exits, then our trap fires and deletes THEIR lock, admitting a
+  # third holder. One releaser, and it verifies ownership before deleting (see the trap).
 ) &
 disown 2>/dev/null || true
 
