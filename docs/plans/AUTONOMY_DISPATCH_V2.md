@@ -176,11 +176,34 @@ independent of N and R2 structural: at N = 121 and 6 free slots, the pass emits 
 `defer` records — and 115 deferrals is a *healthy* steady state, not an incident.
 
 **S2 — Admission is capacity-driven.** `free_slots = max(0, CEILING − live_workers)`, with
-`live_workers` read from the session registry (row 4's `cc-sessions`, cross-checked against
-`claude-accounts --json .rows[].k`). `CEILING` (`CC_DISPATCH_CEILING`, default 6) sits below the
-quota wall by construction, so the dispatcher cannot exhaust quota. `free_slots == 0` ⇒ every item
-defers with `reason:"at-ceiling"` — **no oracle call, no page, no cliff**. This alone removes the
-entire measured abstention population.
+`CEILING` (`CC_DISPATCH_CEILING`, default 6) sitting below the quota wall by construction, so the
+dispatcher cannot exhaust quota. `free_slots == 0` ⇒ every item defers with `reason:"at-ceiling"` —
+**no oracle call, no page, no cliff**. This alone removes the entire measured abstention population.
+
+**`live_workers` is the ledger's `claimed` count — NOT a live-session count.** This distinction is
+load-bearing and was corrected mid-build after the first spec got it wrong; recording the error
+because it is the more instructive artifact:
+
+> The initial spec read `live_workers` from `claude-accounts --json .rows[].k`. Measured live, that
+> field totals **12** — it counts every session on each account (the lead, the desk pane, operator
+> panes, this rebuild's own teammates, sibling rebuild sessions), not the workers dispatch has
+> outstanding. With `CEILING=6` it yields `free_slots = max(0, 6−12) = 0` **permanently**: a
+> dispatcher that defers 100 % of items forever and never fires once — and because deferrals
+> deliberately never page (R2), it would do so **silently**. That is strictly worse than the false
+> cliff this rebuild exists to remove: a false cliff at least pages.
+
+The correct control variable is the count of items whose folded status is `claimed` — by definition
+"how many workers dispatch currently has out" (measured now: **0**, against 12 live sessions — the
+two numbers are not even close, which is what makes the error consequential rather than cosmetic).
+Three properties follow, and they are why this is not merely a bug-fix but the better design:
+- **No oracle is consulted for the ceiling at all** — so there is no timeout, no `unknown` state,
+  and no degradation path to get wrong. The ledger read is already in hand at step 1.
+- **It self-heals.** A claim whose worker died is reopened by the existing `reap` liveness oracles
+  (`cc-backlog:52-84`), so the ceiling cannot wedge at a stale count. Dispatch does not implement
+  its own liveness probe — `reap` owns that, and duplicating it would reintroduce the false-dead
+  verdict that spawns duplicate peers (F12).
+- **It is the honest unit.** The ceiling is about dispatch's own outstanding work; charging it for
+  the operator's panes would let unrelated human activity silently throttle autonomy.
 
 **S3 — Trichotomous, evidenced wall verdicts.** `cc-wave-plan` gains distinct exits: `4 = capped`
 (every account at its quota limit — evidence: per-account limit state), `5 = auth` (≥1 account
@@ -274,6 +297,7 @@ A mode without an answer is an unfinished design.
 | F13 | Dead worker strands a claim; thrashing item re-cycles the wave | `cc-backlog:52-84` | Kept verbatim: `reap` liveness oracles, abstention ≠ death, thrash-block |
 | F14 | Operator-gated item re-dispatched in a loop | `cc-backlog:45-50` | Kept verbatim: `blocked` folds distinctly and is excluded from the wave |
 | F15 | Discovery refills a queue nothing drains | discovery 3600 s vs 121 undrained open items | S1 makes the depth *visible as deferrals*; discovery stays idempotent + event-keyed (`cc-discover:12-17`) so supply never duplicates |
+| F16 | **Ceiling wedges at a stale count ⇒ permanent SILENT deferral** — the failure mode S2's own correction revealed. Deferrals never page (R2, deliberately), so a `live_workers` that never decreases produces a dispatcher that fires nothing and says nothing. | Near-miss this session: the first S2 spec would have wedged at `free_slots=0` from day one (12 sessions vs ceiling 6) | Ceiling reads the `claimed` fold, which `reap` heals (`cc-backlog:52-84`) — plus **A13**: alarm when `free_slots==0` persists past `CC_DISPATCH_SATURATED_H`. R2 says surplus must not page; it does NOT say saturation may be invisible. The two are different claims and only the second is an alarm. |
 
 ---
 
@@ -312,6 +336,8 @@ Each row names the **file or log that proves it**. Narration is not evidence.
 | A10 | Inert-alarm fires only with existence evidence | disable the label → check alarm text; enable+stop writing → check alarm text | disabled ⇒ `not-activated`; enabled+stale ⇒ `stalled`; never the reverse |
 | A11 | Activation is real | `launchctl print gui/$(id -u)/com.claude.dispatcher`; `/tmp/claude-dispatcher.stdout.log` | label loaded, **not** in `print-disabled`, log file **exists and is non-empty** |
 | A12 | Ledger invariants intact | `bin/cc-backlog` selftest + `cc-dispatch` selftest | all pre-existing assertions still pass (F12–F14 kept verbatim) |
+| A13 | Saturation is visible (F16) | `jq 'select(.action=="decision" and .reason=="at-ceiling")'` grouped by pass — is there a pass in the last `CC_DISPATCH_SATURATED_H` (default 6) with **any** `admit`? | if every pass in the window is 100 % `at-ceiling`, an alarm row exists. Deferral is silent by design; *sustained total* deferral is not |
+| A14 | Ceiling counts the right thing | `cc-backlog list --all --json \| jq '[.[]\|select(.status=="claimed")]\|length'` vs the `live_workers` recorded on decision records | the two agree; and neither equals `claude-accounts .rows[].k` unless coincidental (guards the corrected S2 from silently regressing) |
 
 **Observation window for A2/A3/A4/A7:** the first 2 h after activation, read from
 `~/.claude/autonomy/idl.jsonl`. These are **ACCRUING** criteria — the design is provable at build
