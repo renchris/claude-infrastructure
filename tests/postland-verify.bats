@@ -1045,6 +1045,44 @@ prelint_stub() { # <body> — installs it as the tree's walltime lint and lands 
   [ "$output" = "red" ]
 }
 
+@test "C22: a lint exit 2 is a NON-VERDICT, never a RED (a check that could not run must not revert)" {
+  # Backlog b4e49b4b5014. Both lints publish `0 clean · 1 violation · 2 unusable`, and only 1 is a
+  # claim about the TREE. Exit 2 is the fork-pressure case afaf40de carved out INSIDE the lint: a
+  # `grep` that cannot run is not a leak. Filing it as FAILING re-creates that conflation one layer
+  # out, and here it reaches red_actions — so a check that never ran could auto-revert a good trunk
+  # commit. RED-proved: before the fix this stamped `red` naming the lint.
+  prelint_stub 'echo "test-walltime-lint: ⛔ UNUSABLE — a predicate failed to run" >&2; exit 2'
+  tree="$(origin_tree)"
+  run bash "$SUT" --run-if-needed
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ "$output" = "cut" ]                                        # not a red: it forges no finding
+  [ ! -f "$CC_POSTLAND_DIR/last-green" ]                       # ...and not a green either
+  # The revert consequence is deliberately NOT asserted here: a revert additionally needs the C20
+  # scaffolding (ship_stub + a green baseline, without which there is no bisected culprit and so no
+  # revert at all), so a `ship.argv` assertion in THIS fixture would pass whatever the mapping does
+  # — vacuous. `verdict != red` is the load-bearing claim; C20 owns "a red reaches the land lane".
+  # POSITIVE CONTROL: the same lint exiting 1 IS a red naming it — so "cut" above is a statement
+  # about the exit CODE, not evidence that a lint can never redden a verdict.
+  prelint_stub 'echo "  RATCHET stale entry"; exit 1'
+  tree2="$(origin_tree)"
+  run bash "$SUT" --run-if-needed
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree2.json"
+  [ "$output" = "red" ]
+  run jq -r '.failing[0]' "$CC_POSTLAND_DIR/stamps/$tree2.json"
+  [ "$output" = "scripts/test-walltime-lint.sh" ]
+}
+
+@test "C22: an unexpected lint exit (127 — not executable) is a NON-VERDICT too, never a RED" {
+  # The `*)` arm. 126/127/137 are all "the check could not be MADE"; only 1 is a verdict. Without
+  # this arm a lint that lost its interpreter would revert a commit for the tree's sins.
+  prelint_stub 'exit 127'
+  tree="$(origin_tree)"
+  run bash "$SUT" --run-if-needed
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ "$output" = "cut" ] || false
+  [ ! -f "$CC_POSTLAND_DIR/last-green" ] || false
+}
+
 @test "C22: the lint runs whole-tree STRICT — an inherited own-set cannot narrow it" {
   # Both lints distinguish own-set ABSENT (judge the whole tree) from set-but-EMPTY (judge
   # nothing) via ${VAR+set}. If the verifier leaked its own environment through, a lander's

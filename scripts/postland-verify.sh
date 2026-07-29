@@ -169,13 +169,20 @@ else
 fi
 # ── WHOLE-TREE META-LINTS, RUN STANDALONE BEFORE THE CORPUS ──────────────────────────────────────
 # These two judge the tree AS A WHOLE (every suite's hermeticity; every suite's wall-clock literals).
-# Their bats WRAPPERS cannot express that from inside a full run — a whole-tree assertion evaluated
-# mid-corpus sees a tree the corpus is concurrently using, which is why clean-room runs failed on
-# exactly tests/test-hermeticity-lint.bats and nothing else (2,085/1, 2,242/1) and why the wrapper
-# is now partitioned out to the host manifest. Deleting the wrapper from the tree verdict WITHOUT
-# putting the check somewhere would silently drop the enforcement, so it lands here instead: the
-# real lint, standalone, whole-tree-strict, once, before the corpus — off every lander's critical
-# path, where a violation can no longer fleet-block a land but still cannot reach a green stamp.
+# Their bats WRAPPERS are LOAD-SENSITIVE from inside a full run, which is why clean-room runs failed
+# on exactly tests/test-hermeticity-lint.bats and nothing else (2,085/1, 2,242/1) and why the wrapper
+# is now partitioned out to the host manifest. NOT, as this comment previously claimed, because "a
+# whole-tree assertion evaluated mid-corpus sees a tree the corpus is concurrently using" — the
+# corpus never mutates the tree (watched for a full run: zero *.bats changes). The real cause,
+# reproduced 2026-07-29 under b4e49b4b5014: the lint's pure predicates ran a bare `grep -q`, so
+# rc=2 (grep could not RUN — fork exhaustion at the measured load 15-48) was indistinguishable from
+# rc=1 (no match), and one transient fork failure fabricated a LEAK about a clean tree. Fixed at the
+# source by afaf40de + ed4e6c6a; the full account, with the RED-proof, is in scripts/host-suites.manifest.
+# Deleting the wrapper from the tree verdict WITHOUT putting the check somewhere would silently drop
+# the enforcement, so it lands here instead: the real lint, standalone, whole-tree-strict, once,
+# before the corpus — off every lander's critical path, where a violation can no longer fleet-block
+# a land but still cannot reach a green stamp. (Caveat recorded in the manifest: this preserves the
+# whole-tree SCAN, not the `--selftest` discrimination proof, which the prelint never invokes.)
 # STRICTNESS: the own-set seams are UNSET in the child (`${VAR+set}` is how both lints distinguish
 # absent ⇒ judge the whole tree from set-but-empty ⇒ judge nothing), so an inherited own-set can
 # never silently narrow the verifier's check to somebody else's diff.
@@ -346,7 +353,7 @@ EOF
 prelint_check() { # whole-tree meta-lints, standalone, BEFORE the corpus. Appends any RED to FAILING
   # (so it flows through the existing verdict chain: FAILING non-empty ⇒ RED, and it OUTRANKS a cut
   # — which is the point, a deterministic named violation must never be filed as "nothing proven").
-  local s rc out first
+  local s rc out first why
   PRELINT_UNPROVEN=0                        # reset BEFORE the early return — the requeue loop
   [ "${#PRELINTS[@]}" -eq 0 ] && return 0   # calls run_target twice in one process
   for s in "${PRELINTS[@]}"; do
@@ -361,12 +368,29 @@ prelint_check() { # whole-tree meta-lints, standalone, BEFORE the corpus. Append
       bounded "$LINT_TO" "./$s" tests ) > "$out" 2>&1
     rc=$?
     [ "$rc" -eq 0 ] && { log "prelint: $s clean (whole-tree strict)"; continue; }
-    if [ "$rc" -eq 124 ]; then
-      # OUR bound fired. This is the forged-evidence case: a timeout we imposed is not a finding
-      # about the tree, so it may not become a RED (R6) — and it may not be waved through as a
-      # GREEN either. It degrades the run to a non-verdict, retried next sweep.
+    # THE VERDICT / NON-VERDICT SPLIT — exit 1 is the ONLY code that says anything about the tree.
+    # Both lints publish the same contract (`0 clean · 1 violation · 2 unusable, LOUD`), so every
+    # other code means the check could not be MADE: 2 = a predicate that would not run (the
+    # fork-pressure case afaf40de carved out INSIDE the lint, measured at load 15-48), 124 = our
+    # own bound, 126/127 = not executable, 137 = killed. Filing any of those as FAILING re-creates one
+    # layer out precisely the conflation afaf40de removed, and it is STRICTLY WORSE here: a prelint
+    # RED reaches red_actions, so a check that never ran can auto-revert a commit never shown to be
+    # at fault. Backlog b4e49b4b5014 is the reproduction — a transient `grep` rc=2 made the pre-fix
+    # lint fabricate "the embedded allowlist is stale" and name three clean suites as LEAKs, and the
+    # same suite's failure was recorded `pass-on-retry` at loadavg 17.38. Unproven is not silent:
+    # FAILING stays empty ⇒ CUT ⇒ the CUT_MAX page ladder, and no green may be claimed either.
+    if [ "$rc" -ne 1 ]; then
       PRELINT_UNPROVEN=1
-      log "prelint: $s hit OUR ${LINT_TO}s bound — nothing proven (not a red, and no green may be claimed)"
+      # Quote the lint's own first line INTO the log rather than pointing at $out: $RUN_TMP is
+      # removed when run_target returns, so a "see <path>" breadcrumb is dead by the time anyone
+      # reads this. Same reason the RED path lifts `first` into FAILTEST.
+      why="$(grep -aE '⛔|✗|UNUSABLE|could not' "$out" 2>/dev/null | head -1 | cut -c1-160)"
+      [ -n "$why" ] || why="$(sed -n '1p' "$out" 2>/dev/null | cut -c1-160)"
+      case "$rc" in
+        124) log "prelint: $s hit OUR ${LINT_TO}s bound — nothing proven (not a red, and no green may be claimed)" ;;
+        2)   log "prelint: $s exit 2 NON-VERDICT — its own check could not run; not a red, no green claimable — ${why:-（no output)}" ;;
+        *)   log "prelint: $s exit $rc — unexpected, treated as a NON-VERDICT; not a red, no green claimable — ${why:-（no output)}" ;;
+      esac
       continue
     fi
     FAILING+=("$s")
