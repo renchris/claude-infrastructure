@@ -1,6 +1,6 @@
 ---
 name: demo-recording
-description: Record a real screen demo — a live agent session, a terminal, a two-way exchange between panes — and land it in a README as an image GitHub will actually animate. Use when asked to record or re-record a demo, capture a live session on video for docs, shrink an oversized README GIF, or add a screen recording to a README. Covers the settled format decision (GitHub strips <video>; animated WebP is served byte-identical and is measurably better per byte than GIF), iTerm2 window sizing (font size is per-session and silently breaks pane matching), firing a two-way agent demo so the whole exchange is on camera, the mandatory contact-sheet review, caption strips as padded frames (this ffmpeg has no drawtext), and encode recipes with measured byte counts. NOT for understanding an existing video (that is video-understanding), and NOT for a scripted terminal clip where nothing live is needed — vhs + a .tape file is simpler and re-runnable (assets/demo/handoff-real.tape is the working reference).
+description: Record a real screen demo — a live agent session, a terminal, a two-way exchange between panes — and land it in a README as an image GitHub will actually animate. Use when asked to record or re-record a demo, capture a live session on video for docs, shrink an oversized README GIF or MP4, or add a screen recording to a README. Covers the settled format decision (GitHub strips <video>, so the inline slot is an image; it serves animated WebP byte-identical, and camo is not in the path for a relative README image) and the format rule that cost a shipped regression to learn — WebP wins on flat terminal output via lossless gif2webp, but LOSES on live screen capture, where lossy WebP seams every flat region and SSIM/PSNR do not catch it. Also iTerm2 window sizing (font size is per-session and silently breaks pane matching), firing a two-way agent demo so the whole exchange is on camera, the mandatory contact-sheet review, caption strips as padded frames (this ffmpeg has no drawtext), and encode recipes with measured byte counts. NOT for understanding an existing video (that is video-understanding), and NOT for a scripted terminal clip where nothing live is needed — vhs + a .tape file is simpler and re-runnable (assets/demo/handoff-real.tape is the working reference).
 ---
 
 <!-- markdownlint-configure-file {
@@ -33,9 +33,18 @@ image/webp`, `ANIM` chunk and all 60/60 `ANMF` frames intact. A real browser
 animated it — 3 distinct frames across 6 screenshots, both at the raw URL and in
 the rendered markdown page.
 
+**That WebP is served perfectly does not mean you should use it.** Delivery was never
+the constraint; the encoder is. See the two recipes below — they reach opposite
+conclusions, and picking the wrong one is what shipped a visible regression.
+
 ## Encode recipes, with the numbers
 
-Two different jobs. **Do not use one recipe for both.**
+Two different jobs, **opposite answers**. Do not use one recipe for both.
+
+| Content | Format | Why |
+| --- | --- | --- |
+| Flat terminal output (VHS, `asciinema`-style) | **WebP** via `gif2webp` | lossless, and −10.6 % |
+| Live screen capture (a real window, real UI) | **GIF** | every small-enough WebP seams flat regions |
 
 ### A GIF you already have → WebP: `gif2webp`, and `-min_size` is not optional
 
@@ -64,50 +73,72 @@ into one frame with a longer duration. Verify by **summed duration**, never by
 frame count — and never compare frames by index across a deduplicated stream (that
 produces confident, wrong "MISMATCH" output).
 
-### A live screen recording → WebP: encode from the video master, not the GIF
+### A live screen recording → **keep the GIF**. WebP loses this one.
 
-```bash
-ffmpeg -v error -i master.mp4 -vf "fps=20,scale=1200:716:flags=lanczos" frames/%04d.png
-img2webp -min_size -loop 0 -d 50 -lossy -q 70 frames/*.png -o out.webp
+This is the counter-intuitive result, and it was learned by shipping the bug: a
+lossy animated WebP **seams every large flat region**, and on a screen recording
+the flat regions are exactly what the eye rests on — an unfocused pane's grey
+background, a blank editor gutter.
+
+**The mechanism.** WebP animation has **no motion compensation**. Every ANMF frame
+is a standalone image, and the *only* temporal compression is cropping the frame to
+a changed rectangle and blending it over the canvas (measured: 1105×616, 1070×594,
+526×458 rectangles on a 1200×716 canvas). Inside the rectangle a flat grey
+re-quantizes to a marginally different DC level than the retained pixels outside it,
+and the rectangle edge becomes a **visible vertical seam**. GIF is immune: palette
+indices cannot drift.
+
+Because the rectangles *are* the compression, there is no setting that keeps the
+savings and drops the seams. Measured on the 1200×716 / 20 fps / 610-frame hero:
+
+| Encode | Bytes | vs GIF | Flat-region streak | Coloured-text RMS |
+| --- | --- | --- | --- | --- |
+| source master | — | — | 0.195 | — |
+| **GIF (winner)** | **3,483,666** | — | **0.188** | 4.02 |
+| lossy q65 | 2,892,390 | −17 % | **0.526** ✗ | 4.84 |
+| lossy q80 / q90 | — | — | 0.446 / 0.401 ✗ | — |
+| all-keyframe q65 | ~26 MB | +650 % | 0.222 ✓ | — |
+| near-lossless 30 | 3,740,996 | +7.4 % | **0.516** ✗ | — |
+| near-lossless 40 (= 50) | 4,226,254 | +21.3 % | 0.194 ✓ | **1.42** |
+| near-lossless 60 | 4,857,902 | +39.4 % | 0.191 ✓ | ~1.4 |
+
+Near-lossless 30 is the row that settles it: at only +7.4 % it is **still fully
+seamed**, and the threshold where seams vanish (40) is already bigger than the GIF.
+Raising `-q` only shrinks the DC step; it never removes it.
+
+`-near_lossless 40` *is* higher quality than the GIF on both axes — but it costs
++21 %, so it is an editorial upgrade, not a compression win. Say which one you mean.
+
+**Measure the seam, because SSIM and PSNR will not.** The artefact is low-amplitude
+but structured over a large area, so aggregate metrics average it away — q65 scored
+*better* than the GIF on both SSIM and PSNR while visibly streaking. Take the
+column-mean profile over text-free rows of a flat region and report its stdev:
+
+```python
+# rows with no text: row stdev across x is tiny in the SOURCE frame
+rows = [y for y in range(Y0,Y1) if pstdev([src.getpixel((x,y)) for x in range(X0,X1,4)]) < 1.5]
+prof = [mean(cand.getpixel((x,y)) for y in rows) for x in range(X0,X1)]
+print(pstdev(prof))          # ~source ⇒ clean;  2×+ ⇒ seams
 ```
 
-`-d` is per-frame **milliseconds** and must match the fps (20 fps → `-d 50`).
-`-min_size` is file-level and must come **before** the frame files.
-
-Measured on the 1200×716 / 20 fps / 610-frame hero (`handoff-live`), all against
-the same source frames:
-
-| Encode | Bytes | vs GIF | SSIM ↑ | PSNR ↑ | Encode time |
-| --- | --- | --- | --- | --- | --- |
-| `handoff-live.gif` (64-colour baseline) | 3,483,666 | — | 0.975131 | 38.31 dB | — |
-| `img2webp -lossy -q 70 -m 6` (no `-min_size`) | 3,130,182 | −10.1 % | — | — | 670 s |
-| `img2webp -min_size -lossy -q 70` | 3,171,988 | −8.9 % | **0.978576** | **39.61 dB** | **45 s** |
-| `img2webp -lossless -m 6` | 6,083,602 | +75 % | lossless | ∞ | 94 s |
-
-Three things to take from that table:
-
-- **Lossless loses badly** on photographic/anti-aliased screen content. It only
-  wins on flat, few-colour terminal output (the `gif2webp` case above).
-- **`-min_size` buys ~15× encode speed here, not size** (670 s → 45 s for the same
-  ~3.1 MB). Its size effect is content-dependent — decisive for the VHS clip,
-  neutral for the live recording. Always measure; never assume it helps size.
-- **A live screen recording compresses far worse than a terminal clip**, because
-  it has continuous subtle motion (cursor blink, streaming text, UI animation) and
-  so almost no identical-frame redundancy — 610 frames in, 610 frames stored, zero
-  deduplication. Expect **single-digit percent** from a format swap here, not the
-  order-of-magnitude win the format's reputation suggests.
-
-**Quality is a number, not an adjective.** Compare *both* candidates against the
-**source frames**, never against each other:
+Then still compare against the **source frames**, never against the incumbent:
 
 ```bash
 ffmpeg -hide_banner -i cand/%04d.png -i source/%04d.png -lavfi ssim -f null - 2>&1 | grep -o 'SSIM.*'
 ffmpeg -hide_banner -i cand/%04d.png -i source/%04d.png -lavfi psnr -f null - 2>&1 | grep -o 'PSNR.*'
 ```
 
-At q70 the WebP beat the GIF on **both** metrics (SSIM +0.0034, PSNR +1.30 dB)
-while being smaller — so the swap is a strict improvement, not a trade. If a
-candidate merely *ties* the GIF, say so; do not call a tie an upgrade.
+Other measured facts about live capture: `-min_size` is **inert** here (byte-identical
+output; on the VHS clip it was a 3.15× factor — never carry a flag's reputation across
+content classes), `-sharp_yuv` changes nothing (the artefact is luma, not chroma), and
+there is almost no identical-frame redundancy — 610 frames in, 610 stored, zero
+deduplication, because cursor blink and streaming text keep every frame slightly different.
+
+**ffmpeg cannot decode animated WebP** (`image data not found`). Use
+`magick in.webp -coalesce out/%04d.png` to get frames, and `webpinfo` for the
+authoritative per-frame durations. **Pillow mis-reports durations** on
+duration-merged frames — its timeline summed to 63,680 ms where `webpinfo` said
+63,960 ms. Trust `webpinfo`.
 
 **ffmpeg cannot decode animated WebP** (`image data not found`). Use
 `magick in.webp -coalesce out/%04d.png` to get frames, and `webpinfo` for the
@@ -229,7 +260,15 @@ written out in the `<sub>` line next to the image.
 - The size win from a format swap on a **live** recording is small (−8.9 % here).
   The real levers are duration, frame rate and crop — all of which change the
   artifact's content, so they are an editorial decision, not a compression one.
-- SSIM/PSNR compare distortion *magnitude*, not distortion *kind*. GIF banding and
-  WebP ringing can score alike and look different on text. Keep the side-by-side
-  visual check at README width; the metrics narrow the candidates, they do not
-  pick the winner alone.
+- SSIM/PSNR compare distortion *magnitude*, not distortion *kind*, and they are
+  **area-averaged** — which is how a lossy WebP that visibly streaked every flat
+  grey scored *better* than the GIF on both. Add a targeted metric for the artefact
+  class you actually care about (the column-profile stdev above). A global score
+  cannot fail a local defect.
+- **A visible artefact is not the same as a large one.** This skill previously
+  claimed the GIF "posterizes a gradient the WebP tracks cleanly". It was wrong:
+  measured RMS against the source over the coloured-text box was GIF 4.02 / 4.92
+  vs WebP q65 4.84 / 5.45 at two frames — the GIF was *closer* both times. The
+  mistake was reading a contrast-amplified zoom, where palette steps are obvious
+  and diffuse ringing is not, and treating obviousness as error. **If you amplify
+  to see a difference, you have destroyed the scale — go back and measure it.**
