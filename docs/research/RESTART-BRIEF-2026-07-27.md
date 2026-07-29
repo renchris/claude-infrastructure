@@ -161,3 +161,13 @@ worktree per run (or reset it) rather than reusing one.
 
 Backlog `da18f179ac50` (0-green-stamp deadlock) remains the owner of this; `e65d45027b3d` can now be
 answered: the stamp came back RED, and it did NOT share the deployed-path shape.
+
+---
+
+## 7. RESOLVED 2026-07-29 — and §6's named variable was not the cause either
+
+The cell hypothesis above (full-137 × reused-worktree) was overtaken: land-pipeline-v2 (`8d50f953`)
+mints a fresh cell per run, and the 7 post-v2 stamps were still 0 green. The actual cause was in the
+**retry ladder**, not the cell — it scored rc 124 (its own 300 s bound firing) as a test failure, so
+any suite slower than the bound could only ever be convicted. Full evidence and the C23 fix:
+`LANDING_GATE_ROOT_CAUSE_2026-07-26.md` §5. Backlog `10941179f8ec`.
