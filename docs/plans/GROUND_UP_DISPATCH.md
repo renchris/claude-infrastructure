@@ -48,16 +48,58 @@ chain). Wave N = next-in-order as slots free.
 
 ## Per-row fire payloads
 
-Template (compose per row; the /goal clause is the FALSIFIABLE distillation — superlatives
-are banned by the skill):
+Template (compose per row; the goal clause is the FALSIFIABLE distillation — superlatives
+are banned by the skill).
+
+**The original template opened with `/goal` and MUST NOT be used as written** — kept here only
+so the reason survives. handoff-fire submits the whole file as the session's first prompt, so a
+leading slash command makes CC parse the entire submission as that command, and `/goal` caps at
+4000 chars; over it the prompt is silently REJECTED, the pane idles at an empty box, and
+engagement-verify still reports "confirmed (birth)". Measured on the first wave-1 fire: a 1.7 KB
+body plus the notify-back and self-retire trailers came to 3423 chars — only 577 under the cap,
+with the account-sweep bridge still able to append at fire time. Corrected shape:
 
 ```
-/goal Rebuild <subsystem> from first principles so that <row's metric target> holds under
-<row's standing constraint>; measured, landed, and verified by disk-truth acceptance reads.
-Then: /ground-up <slug> — read docs/plans/GROUND_UP_REBUILD_MAP.md row <n>, the ground-up
-skill, and docs/plans/LAND_PIPELINE_V2.md (exemplar) FIRST. Work in your own worktree;
-land via /ship as you go; update the map row as part of your DoD; ping the coordinator
-(--notify-back) on completion or blocker.
+YOUR TASK — a from-first-principles GROUND-UP rebuild of ONE subsystem: <subsystem> (row <n>).
+You were fired by the ground-up campaign coordinator.
+
+Scope (frozen): <subsystem> achieves <row's metric target> under <row's standing constraint>
+— measured, landed, and verified by disk-truth acceptance reads.
+
+STEP 1 (one short command): arm your standing goal so you drive to DONE across recycles —
+  /goal <the falsifiable one-liner with the NUMBER in it>. Rebuild per skills/ground-up/SKILL.md.
+
+STEP 2: run /ground-up <slug>. Before any other tool call, READ: GROUND_UP_REBUILD_MAP.md row
+<n> - skills/ground-up/SKILL.md - docs/plans/LAND_PIPELINE_V2.md (exemplar).
+
+[locate] your own worktree on branch gu-<slug> (base origin/main) of claude-infrastructure.
+Commit ONLY here - NEVER in the shared checkout.
+
+YOU OWN: <row's core surfaces>.  SEAMS NOT YOURS: <seam → owning row> - consume those
+contracts, do not redesign them. Any seam dispute: ping the coordinator, never decide alone.
+
+PHASE 1 IS NOT OPTIONAL — two checks BEFORE you design anything (added 2026-07-29):
+  (a) RE-DERIVE YOUR ROW'S STANDING-CONSTRAINT CELL from primary disk truth. The map cell is
+      the PRIOR SESSION'S HYPOTHESIS, not a fact; say in your plan whether you killed or
+      confirmed it. Row 5's cell was falsified mid-rebuild.
+  (b) CHECK DAEMON-ACTIVATION TRUTH for every job your row's metric depends on
+      (`launchctl print-disabled gui/$(id -u)` + `launchctl list`). 12 of 14 com.claude.* jobs
+      are disabled; a metric measured against an inert daemon reads 0% BY CONSTRUCTION and is
+      not a performance result.
+
+DoD (all four, or you are not done):
+1. docs/plans/<TOPIC>_V2.md with the four load-bearing sections - measured constants WITH
+   citations, failure-mode table (every observed mode to its structural answer), rejected
+   alternatives with reasons, acceptance criteria as disk-truth reads.
+2. Adversarially proven to the skill's Phase 4 bar: RED-proof every new test against a pristine
+   pre-change tree recovered via git archive; a positive control beside every absence
+   assertion; `|| false` on non-final `[[ ]]` in bats; re-run launchd-bound artifacts under
+   /bin/bash (the Bash tool runs zsh, so repros lie).
+3. Landed via the project-local /ship CONTINUOUSLY - never batch. Never add corpus work to the
+   land path.
+4. GROUND_UP_REBUILD_MAP.md row <n> updated with status + plan link + landed shas, landed too.
+
+Every new mechanism ships with an env kill switch, never revert-as-plan.
 ```
 
 | Row | Slug | Metric target (the number in the /goal) | Standing constraint |
@@ -108,6 +150,29 @@ land via /ship as you go; update the map row as part of your DoD; ping the coord
   shared checkout, which sits at `38eec335`; the deploy autopilot is fail-closed with no GREEN
   postland stamp yet. Until it advances, every cold fire must be preceded by
   `rm -f "$TMPDIR"handoff-deps-XXXXXX.sh` (the live script is still the pre-fix copy).
+
+- 2026-07-29T18:30Z **row 5 INTERIM ping — verified, no fire triggered.** Ping text: design
+  landed `7400c614` + map row `bf796c57`, "3 teammates building". **Disk verification (a ping
+  is a claim):** both shas are ancestors of origin/main; `docs/plans/AUTONOMY_DISPATCH_V2.md`
+  is present at 375 lines carrying all four load-bearing sections; map row 5 now reads
+  `**REBUILDING 2026-07-29**` with the plan link and sha. Claims hold. **This is an INTERIM
+  milestone, not a completion** — row 5 keeps its slot, wave stays 2/2 saturated, nothing
+  fired. The dispatch rule is "fire on a verified COMPLETION", and a design-landed ping is not
+  one; treating it as one would have put 3 rebuilds in flight against the hard cap.
+- 2026-07-29T18:32Z **cross-row finding from row 5, INDEPENDENTLY CONFIRMED by the
+  coordinator** — and it corrects this runbook, so it is actioned here rather than filed:
+  (a) `bef587a` landed **2026-07-18** (`git log -1 --date=short`) while the cliffs its cell
+  credits it with preventing occurred **2026-07-26** ⇒ row 5's standing-constraint cell rested
+  on a falsified premise; (b) `launchctl print-disabled gui/$(id -u)` shows **12 of 14
+  `com.claude.*` jobs disabled**, `com.claude.dispatcher` and `com.claude.discovery` among
+  them, with only postland-verify + deploy-live enabled and loaded ⇒ row 5's metric was
+  unmeetable by construction. **Coordinator response:** the per-row payload template above now
+  carries a mandatory PHASE 1 pair — re-derive your own constraint cell, and check daemon
+  activation truth before measuring — and the same two paragraphs were appended to the MAP's
+  Learnings so every future row session reads them before its first tool call. The two staged
+  payloads (rows 3 and 12) were amended in place. **Why this mattered enough to act on
+  mid-wave:** I had been copying the map's constraint cell verbatim into every fire payload, so
+  an unverified cell was being propagated into all 11 remaining rebuilds.
 
 ## Inherited watch — first GREEN postland stamp (status, not a coordinator work item)
 
