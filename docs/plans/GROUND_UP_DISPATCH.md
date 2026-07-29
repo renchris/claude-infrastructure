@@ -595,6 +595,85 @@ enabled=0`. Both "succeeded" with exit 0. The third attempt worked only because 
 believing anything else it says. A discovery sweep with no known-answer case cannot distinguish
 "clean" from "broken", and both of mine read as clean.
 
+### 2026-07-29T15:20Z ROW 3 DONE (verified by disk) · row 2 unblocked and HELD at the load guard
+
+**Row 3's completion ping VERIFIED, not taken on trust** — four reads, all green: all five claimed
+shas (`5dd65159` · `a8b3a093` · `ca617db2` · `4bb16816` · `6bd373ed`) are ancestors of origin/main;
+`CROSS_SESSION_COMMS_V2.md` is present at 459 lines carrying all four load-bearing sections; map
+row 3 reads `**DONE 2026-07-29**` with plan link and shas; and both claimed suites exist on trunk
+with **exactly** the claimed case counts (`tests/mailbox-session-key.bats` 20 `@test`,
+`tests/comms-strand-report.bats` 9). **Campaign: 4 of 12 DONE (1, 3, 4, 5).**
+
+Row 3's inversion, recorded because it generalises: the inbox was named after *the container the
+reader currently occupies* (the pane), and continuity was restored by a pointer *the dying container
+wrote* — so the address expired while the reader still lived, and the repair was owed by the dead
+party (measured `.forward` coverage: **3 of 91 dead boxes, 3.3%**). Now keyed by `session_id`, with
+the pane as an alias the drain hook writes at every boundary.
+
+**A map-cell collision resolved itself correctly, and the mechanism is worth knowing.** I had set
+row 3's cell to `REBUILDING` at 15:0x (it still read `open` while in flight — a double-fire hazard);
+row 3 landed its own `DONE` edit to the same cell at 15:13. Trunk now carries **DONE** and my
+`REBUILDING` text is gone — the later, more advanced status won. Checked explicitly in both
+directions rather than assumed, because the failure mode here is silent: a coordinator's
+bookkeeping edit landing *after* a row's completion edit would have reverted a DONE to REBUILDING
+and the campaign would have re-fired a finished row.
+
+**SEAM RULING — M3 goes to row 2** (row 3 asked, and it is right): `M3 close-path
+drain-or-reroute` is fully specified in `CROSS_SESSION_COMMS_V2.md §4 M3 + §8` but deliberately
+NOT BUILT, because its call site is `scripts/handoff-fire.sh` — row 2's file — and landing an
+unreferenced primitive is exactly the quiet-inertness shape this map warns about. Row 2's payload
+carries it as an inherited seam item with instructions to implement against row 3's written
+contract and not redesign it. **M2 (verdict honesty) stays row 3's surface** — its residual defect
+is the human-facing claim in `cc-notify`, and `cc-announce` already degrades correctly on
+no-watcher. Both are documented NOT BUILT in the map cell so no row inherits a phantom.
+
+**Row 2 is unblocked (4→3→2 satisfied) and STAGED BUT HELD.** Fire-time account policy re-read
+live: eligible = `next` and `next3` (`next4` holds row 12, `next2` is the coordinator's own);
+picked **`next`** on the runbook's tiebreak — soonest login cliff at **94h** vs next3's 604h, auth
+ok, 5h 19%, weekly 39%. Payload staged at `/tmp/fire-gu-session-lifecycle.txt` (7,948 bytes,
+first two chars `YO` — verified NOT `/g`, so no 4000-char `/goal` rejection). **The load guard held
+it: 1-min load 15.26 ≥ 10**, read and branched in ONE conditional command per the coordinator-error
+ruling above. Load is falling (36.9 → 26.7 → 21.6 → 15.3) as row 3's fleet drains.
+
+### Assignee-orphan audit 2026-07-29T15:2xZ — operator asked "is this work lost?" Answer: NO, and nothing needs relaunching
+
+Audited by CONTENT because a count would have been wrong here: the row-5 lead re-applied every
+assignee's work at DIFFERENT shas, so `rev-list origin/main..<branch>` still shows 1-2 "unlanded"
+commits per assignee branch and reads like loss. File-by-file against origin/main:
+
+| Assignee | its commit | landed as | verdict |
+|---|---|---|---|
+| `gu5-cadence` | `5ecce019` | `21d8e869` | `bin/cc-backlog`, both activation scripts, both plists, `tests/dispatch-cadence.bats` **byte-identical** on trunk; `bin/cc-blockers` differs only by trunk being **+232 ahead** |
+| `gu5-verdict` | `fed2f08c`/`ea764b0f` | `6c73429f` | `bin/cc-wave-plan`, `tests/cc-wave-plan-verdict.bats` **byte-identical** on trunk |
+| `gu5-decide` | `5a7eb60c` | `f16c37ee` | **deliberately CORRECTED, not dropped** — see below |
+| 3 read-only researchers | — | — | product is §2's 25-row measured-constants table in `AUTONOMY_DISPATCH_V2.md`, landed with a reproducible command per row |
+
+**The one case that looked like loss and was not.** Trunk *removes* 71 lines of `gu5-decide`'s
+`bin/cc-dispatch`. Those 71 lines were the assignee's ceiling summing live SESSIONS: measured 12
+live vs 0 claimed, so at the default `CEILING=6`, `free_slots = max(0, 6−12) = 0` **permanently and
+silently** — strictly worse than the false cliff the rebuild removed, since a cliff at least pages.
+`f16c37ee`'s own message states the correction and why it was applied in the lead's branch:
+*"its message channel died with the session, so this is applied here rather than routed back."*
+The deliverable itself (decision/admission split) IS on trunk — 75 marker hits in `bin/cc-dispatch`.
+**Method rule this earns: when a lead harvests a dead assignee, the assignee branch keeps commits
+that are superseded-in-content but unlanded-in-sha. Adjudicate by file content, never by count —
+and check the DIRECTION of the diff, because "trunk removed 71 lines" and "trunk is 232 lines
+ahead" look identical in a bare numstat.**
+
+**The orphan census was WRONG at 5 — it is 7.** The platter only covered row 5's five `gu5-*`.
+Two more exist from the row-12 duplicate lead (`9f958f36`) that stood down: `R2-telemetry`
+(pane `37BA6BE5-AAA3-4502-B9A9-DBDA226CB778`) and `R3-seams` (pane
+`0DEC4734-26E7-4DF9-BA53-235F60230C1E`). Both read-only, zero writes, zero commits. Resolved the
+only way that works for an assignee — process **tty → it2 `session.tty`** — which also
+re-verified all five `gu5-*` pane ids as still correct. **Transcripts survive pane close**, so
+findings stay recoverable from disk by `agentName`; both records are named in the platter.
+**`R3-seams` was still WRITING at audit time (243s) and is deliberately excluded from the close
+list** — a pane still writing is not an orphan to reap, and treating silence as terminal is the
+exact error that created the duplicate leads in the first place.
+
+Four more agents (`arch-daemon`, `telem-daemon`, `activation-queue`, `seams-daemon`) are **not**
+orphans — their lead `27a505b4` is alive and row 12 is in flight. Left alone.
+
 ## Inherited watch — first GREEN postland stamp (status, not a coordinator work item)
 
 Read 2026-07-29T18:15Z: **zero GREEN stamps have ever existed** (`grep -l '"verdict":"green"'
