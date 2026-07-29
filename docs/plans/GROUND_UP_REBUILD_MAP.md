@@ -45,6 +45,7 @@ the very consumers that decide the question.
 | Surface | Owner | Evidence for the ruling |
 |---|---|---|
 | `bin/cc-wave-plan` | **5** | Sole executable consumer is `bin/cc-dispatch:200`; `bin/cc-backlog`'s references (`:464`, `:535-536`) are comments describing the `wt-<id>` convention, not calls. A mis-sized wave or a false ⛔ cliff is a dispatch failure — row 5's standing constraint verbatim. It CONSUMES row 7 (`claude-accounts --rank/--json`, `cc-route --json`) without owning it. Ruled 2026-07-29 on row 5's ping. |
+| `bin/cc-blockers` **alarm PREDICATES** (as distinct from the verifier's verdict vocabulary) | **10** | The map lists "cc-blockers alarms" under row 1 and "cc-blockers board" under row 10; the deciding test is who answers when it breaks. Row 1 owns what a verdict MEANS (red · cut · hung · green); row 10 owns whether the board SURFACES it. A predicate that decides row-appears/row-hidden is row 10's. Ruled 2026-07-29 on row 12's close addendum, which found a live suppression here — and the bug is exactly this seam: row 1's correct "CUT/HUNG is not RED" vocabulary leaked into row 10's alarm predicate, where the polarity inverts. Row 10 must fix it with the full proof bar, not a coordinator hand-patch. |
 | `M3` close-path drain-or-reroute (spec'd in `CROSS_SESSION_COMMS_V2.md §4 M3 + §8`) | **2** | Row 3 wrote the full contract but deliberately did NOT build it: its only call site is `scripts/handoff-fire.sh`, a row-2 file, and landing an unreferenced primitive is the quiet-inertness shape this map warns about. Ruled 2026-07-29 on row 3's close ping. Row 2 implements against row 3's written contract and does NOT redesign it. **M2 (verdict honesty) stays row 3's** — the residual defect is the human-facing claim in `cc-notify`, and `cc-announce` already degrades correctly on no-watcher. Both are recorded NOT BUILT in row 3's map cell so no row inherits a phantom. |
 | `bin/cc-route` | **7** | KEY-ANCHOR parses `~/.claude/model-config.yaml` (row 7's named SSOT surface) and `claude-accounts --route`. Its exit-code contract (0 plan · 2 usage · 3 blind/no-data · 4 cliff) is pinned by `scripts/route-safety-gate.sh:33-50` and `tests/cc-route.bats` — no other row may alter it. Ruled 2026-07-29, pre-emptively, because row 5's cc-wave-plan work sits directly on top of it. |
 
@@ -82,6 +83,44 @@ evidence instead of reading a status cell. A row that trusted "DONE" would have 
 phantom. Status is a claim like any other (see the constraint-cell learning below).
 
 ## Learnings (accumulate; never delete)
+
+- 2026-07-29 (row 12's close addendum, **coordinator-verified and REPRODUCED**) **A VERDICT
+  VOCABULARY THAT IS CORRECT FOR VERDICTS INVERTS ITS INTENT INSIDE AN ALARM PREDICATE.** The
+  campaign has spent real effort establishing that CUT and HUNG are *not* RED — a non-verdict is a
+  third state, not a test failure (memory `gate-never-ran-vs-gate-red`, `named-failure-vs-no-verdict`).
+  That distinction is right, and it leaked one layer down into an alarm, where the polarity flips.
+  `bin/cc-blockers:249` gates PERSISTENT-RED on `[ "$red" -eq "$seen" ]` across the newest
+  `REDRUN_N=5` stamps. Reproduced live by the coordinator: the newest five are
+  **red · hung · red · red · red**, so `seen=5, red=4`, `4 ≠ 5`, and the alarm is **SUPPRESSED** —
+  while the not-green count in that same window is **5 of 5** and there are **0 green in 33 stamps
+  ever**. The live board prints 15 rows (`beacon-inert`, `fleet-inert`, `orphaned-approver`,
+  `verifier-inert`) and no trunk-red among them. **ONE non-verdict anywhere in the window disables
+  the alarm that exists to catch exactly this.** The general rule: for a VERDICT, ask "is it red?";
+  for an ALARM, ask "is it green?" — because a hung run is *worse* than a red one for "is trunk
+  persistently failing", yet only the red test silences on it. Grep every alarm predicate in the
+  repo for equality against a specific failure name where it should test absence of success.
+  Ruled row 10's (see the rulings register); row 10 is next-but-one in dispatch order.
+
+- 2026-07-29 (row 12's close addendum) **THREE MORE CROSS-ROW FINDINGS, harvested from its
+  researchers at close precisely because they would otherwise have died in transcripts** (the
+  `wave-report-harvest-from-disk` law, applied by a row to its own team — worth copying):
+  (a) **ROW 4 gap, launchd side.** `hooks/lib/cc-beat.sh:67 cb_system_live()` (consumed at
+  `cc-reaper:779`, `cc-teardown:349`) gates on BEAT existence, not on the DAEMON. If
+  `com.chrisren.cc-reaper` itself dies, nothing probes it, sweeps stop silently, and there is no
+  reap-inert alarm kind anywhere. Row 4's fail-soft is correct hook-side and ABSENT launchd-side.
+  Partly closed by row 12: `cc-reaper` is now a declared label in `launchd/fleet.manifest`, so the
+  fleet reconciler gives it a verdict even though row 4 ships no probe of its own.
+  (b) **DEPLOY-LAG MASQUERADES AS "never committed".** `activation-watch`'s `resolve_mirror()`
+  dereferences to the SHARED CHECKOUT, so every SessionStart parity number is live-vs-shared-main,
+  NOT live-vs-trunk. While the checkout trails trunk, a "repo-only" or "live-only" parity finding
+  may be a deploy problem wearing a parity costume. Any row reading those numbers must diff against
+  `origin/main`, not the checkout.
+  (c) **CONVERGENT CONFIRMATION that log mtime is not a liveness signal for this fleet** — 3 of the
+  4 loaded jobs have logs that falsely read dark, derived independently by row 12 and by its
+  telemetry researcher. Two derivations, same answer, which is why row 12 set `evidence='-'` for
+  postland-verify/deploy-live/dispatcher/discovery rather than let a STALLED state false-fire.
+  Generalises the `effect-read-predicate-red-proof` memory: prove liveness by durable products,
+  never by mtime.
 
 - 2026-07-29 **TWO LEADS IN ONE WORKTREE IS AN OVERWRITE HAZARD, NOT JUST WASTED TOKENS — and a
   tool guard, not a coordinator ruling, is what caught it.** A coordinator misjudgement (treating a

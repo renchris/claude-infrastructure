@@ -674,6 +674,56 @@ exact error that created the duplicate leads in the first place.
 Four more agents (`arch-daemon`, `telem-daemon`, `activation-queue`, `seams-daemon`) are **not**
 orphans — their lead `27a505b4` is alive and row 12 is in flight. Left alone.
 
+### 2026-07-29T15:41Z ROW 12 DONE (verified) — 5 of 12, BOTH SLOTS FREE, fires load-blocked
+
+**Verified by disk, four reads:** all 5 claimed shas (`59f7eb38` · `dc052a82` · `bda59c54` ·
+`68f33d39` · `826ed1e4`) are ancestors of origin/main; `DAEMON_FLEET_V2.md` is 720 lines with all
+four load-bearing sections; map row 12 reads DONE with plan link and shas; and the test arithmetic
+checks out **exactly** — `cc-fleet` 21 + `cc-blockers-fleet` 27 + `fleet-activate` 11 = 59 new,
+plus 38 untouched `cc-blockers` = the claimed **97**. `18-fleet-activate.sh` is staged in BOTH the
+live queue and the repo SSOT (no parity drift). Its metric: the board went from *"no
+safeguard-blocked sessions surfaced"* with 10 of 14 dark, to **17 rows over 20 declared labels, 0
+unknown**, each carrying a paste-ready recover command.
+
+**Row 12 recorded its own Phase-1 MISS honestly and it is the campaign's third graveyard instance:**
+it did not run the branch-graveyard sweep. On being handed `518d61dc` it evaluated it on merits and
+found genuine CONVERGENCE (label-keyed, reso-excluded, vacuous-not-green, no `plutil -extract`), with
+the stranded version's two gaps — files-only, never the disabled DB; no selftest, relying on a
+DISABLED `nightly-regression`, i.e. double-inert — being precisely what its rebuild adds. So
+**nothing to cherry-pick there**, but `e360c309`/`a0e11648`/`687c2fd6` ARE worth taking and are named
+as remainder R-2 rather than re-authored. This is the honest outcome the sweep is for: it can
+conclude "already superseded", and that is still worth knowing before building.
+
+**R-1 REROUTED — `install.sh` launchd safety (`cc-backlog c13dad7d5dbe`) is NOT done and is NOT a
+campaign row.** `install.sh:306-315` boots out every `launchd/*.plist` and bootstraps with NO
+`launchctl enable`, swallowing every error, and `deploy-live.sh:283` calls `install.sh` on every
+autonomous advance (600s) — so an enabled job is bounced mid-work and a DISABLED job can never be
+recovered by it. `tests/install-staged-plist.bats:40` pins the broken command, so the fix needs a
+test change too. It is row 1's file and row 1 is DONE, so it stays on the backlog for an ordinary
+session; the self-extinguishing-loop analysis is written into row 12's plan verbatim because that
+is the non-obvious part. **Not assigned to any remaining row** — do not let it drift into row 10's
+scope just because row 10 touches the board.
+
+**Campaign state: 5 of 12 DONE (1, 3, 4, 5, 12). Both slots FREE. Remaining order: 2 → 10 → 8 → 7
+→ 11 → 9 → 6 (last).** Row 2's payload is staged at `/tmp/fire-gu-session-lifecycle.txt` with the
+account resolved to `next`.
+
+**THE BINDING CONSTRAINT IS NOW LOAD, NOT SLOTS — and it is a real ceiling, not a stale guard.**
+Measured: **10 logical cores** with **19 runnable threads**; 1-min load has ranged 15-41 across
+~45 min of retries and never once dipped under the runbook's `< 10` hold. The top consumers are
+**iTerm2 itself at ~128% CPU** and WindowServer at ~55%, driven by **29 live panes** — *not* by
+agent compute. An earlier hypothesis that the idle orphan agents were holding the load was
+FALSIFIED by measurement (all 11 together = **4.9% CPU**, every one in state `S+`). So the lever
+is pane COUNT, which makes closing the 11 dead-end orphans the cheapest real throughput win
+available — and it is operator-owned, plattered in full at `/tmp/gu-operator-steps.sh` §3.
+**Do not relax the `< 10` threshold to get a fire out**: at 19 runnable on 10 cores the guard is
+measuring true contention, and lowering it would be fixing the thermometer.
+
+**Orphan census is now 11, not 5 or 7** — row 12 finishing turned its own four researchers
+(`arch-daemon` `9EAB6C04…` · `telem-daemon` `5AA3B220…` · `activation-queue` `BA85960F…` ·
+`seams-daemon` `BFA3F409…`) into orphans the moment its lead retired. All read-only, none holds a
+worktree, row 12's worktree is `dirty=0 unlanded=0`. All 11 close commands are staged.
+
 ## Inherited watch — first GREEN postland stamp (status, not a coordinator work item)
 
 Read 2026-07-29T18:15Z: **zero GREEN stamps have ever existed** (`grep -l '"verdict":"green"'
