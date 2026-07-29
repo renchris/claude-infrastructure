@@ -1,6 +1,6 @@
 ---
 name: demo-recording
-description: Record a real screen demo — a live agent session, a terminal, a two-way exchange between panes — and land it in a README as an image GitHub will actually animate. Use when asked to record or re-record a demo, capture a live session on video for docs, shrink an oversized README GIF or MP4, or add a screen recording to a README. Covers the settled format decision (GitHub strips <video>, so the inline slot is an image; it serves animated WebP byte-identical, and camo is not in the path for a relative README image) and the format rule that cost a shipped regression to learn — WebP wins on flat terminal output via lossless gif2webp, but LOSES on live screen capture, where lossy WebP seams every flat region and SSIM/PSNR do not catch it. Also iTerm2 window sizing (font size is per-session and silently breaks pane matching), firing a two-way agent demo so the whole exchange is on camera, the mandatory contact-sheet review, caption strips as padded frames (this ffmpeg has no drawtext), and encode recipes with measured byte counts. NOT for understanding an existing video (that is video-understanding), and NOT for a scripted terminal clip where nothing live is needed — vhs + a .tape file is simpler and re-runnable (assets/demo/handoff-real.tape is the working reference).
+description: Record a real screen demo — a live agent session, a terminal, a two-way exchange between panes — and land it in a README as an image GitHub will actually animate. Use when asked to record or re-record a demo, capture a live session on video for docs, shrink an oversized README GIF or MP4, or add a screen recording to a README. Covers the settled format decision (GitHub strips <video>, so the inline slot is an image; it serves animated WebP byte-identical, and camo is not in the path for a relative README image) and the format rule that cost a shipped regression to learn — flat terminal output goes through lossless gif2webp, but live screen capture MUST use img2webp -near_lossless 40, because ordinary lossy WebP seams every flat region (an unfocused pane's grey) at every size that beats the GIF, and SSIM/PSNR do not catch it. Also iTerm2 window sizing (font size is per-session and silently breaks pane matching), firing a two-way agent demo so the whole exchange is on camera, the mandatory contact-sheet review, caption strips as padded frames (this ffmpeg has no drawtext), and encode recipes with measured byte counts. NOT for understanding an existing video (that is video-understanding), and NOT for a scripted terminal clip where nothing live is needed — vhs + a .tape file is simpler and re-runnable (assets/demo/handoff-real.tape is the working reference).
 ---
 
 <!-- markdownlint-configure-file {
@@ -39,12 +39,14 @@ conclusions, and picking the wrong one is what shipped a visible regression.
 
 ## Encode recipes, with the numbers
 
-Two different jobs, **opposite answers**. Do not use one recipe for both.
+Two different jobs, **different recipes**. Do not use one for both. What both have in
+common: **never plain lossy WebP for a screen recording.**
 
 | Content | Format | Why |
 | --- | --- | --- |
-| Flat terminal output (VHS, `asciinema`-style) | **WebP** via `gif2webp` | lossless, and −10.6 % |
-| Live screen capture (a real window, real UI) | **GIF** | every small-enough WebP seams flat regions |
+| Flat terminal output (VHS, `asciinema`-style) | **WebP** via `gif2webp -m 6 -min_size` | lossless, and −10.6 % |
+| Live screen capture (a real window, real UI) | **WebP** via `img2webp -near_lossless 40` | the only WebP that does not seam flat regions; +21 % vs GIF, ~3× better colour |
+| …if the byte budget is hard | GIF | the cheapest *clean* option; every lossy WebP small enough to beat it seams |
 
 ### A GIF you already have → WebP: `gif2webp`, and `-min_size` is not optional
 
@@ -73,7 +75,15 @@ into one frame with a longer duration. Verify by **summed duration**, never by
 frame count — and never compare frames by index across a deduplicated stream (that
 produces confident, wrong "MISMATCH" output).
 
-### A live screen recording → **keep the GIF**. WebP loses this one.
+### A live screen recording → **`-near_lossless 40`**, never plain lossy
+
+```bash
+mkdir -p frames                    # ffmpeg's image2 muxer will NOT create this, it just errors
+ffmpeg -v error -i master.mp4 -vf "fps=20,scale=1200:716:flags=lanczos" frames/%04d.png
+img2webp -loop 0 -d 50 -near_lossless 40 frames/*.png -o out.webp
+```
+
+`-d` is per-frame **milliseconds** and must match the fps (20 fps → `-d 50`).
 
 This is the counter-intuitive result, and it was learned by shipping the bug: a
 lossy animated WebP **seams every large flat region**, and on a screen recording
@@ -88,26 +98,30 @@ re-quantizes to a marginally different DC level than the retained pixels outside
 and the rectangle edge becomes a **visible vertical seam**. GIF is immune: palette
 indices cannot drift.
 
-Because the rectangles *are* the compression, there is no setting that keeps the
-savings and drops the seams. Measured on the 1200×716 / 20 fps / 610-frame hero:
+Because the rectangles *are* the compression, **there is no lossy setting that keeps
+the savings and drops the seams** — you must leave lossy mode entirely. Measured on
+the 1200×716 / 20 fps / 610-frame hero:
 
 | Encode | Bytes | vs GIF | Flat-region streak | Coloured-text RMS |
 | --- | --- | --- | --- | --- |
 | source master | — | — | 0.195 | — |
-| **GIF (winner)** | **3,483,666** | — | **0.188** | 4.02 |
-| lossy q65 | 2,892,390 | −17 % | **0.526** ✗ | 4.84 |
+| GIF | 3,483,666 | — | 0.188 | 4.02 / 4.92 |
+| lossy q65 | 2,892,390 | −17 % | **0.526** ✗ | 4.84 / 5.45 |
 | lossy q80 / q90 | — | — | 0.446 / 0.401 ✗ | — |
 | all-keyframe q65 | ~26 MB | +650 % | 0.222 ✓ | — |
 | near-lossless 30 | 3,740,996 | +7.4 % | **0.516** ✗ | — |
-| near-lossless 40 (= 50) | 4,226,254 | +21.3 % | 0.194 ✓ | **1.42** |
+| **near-lossless 40 (= 50) — shipped** | **4,226,254** | **+21.3 %** | **0.194** ✓ | **1.42 / 1.60** |
 | near-lossless 60 | 4,857,902 | +39.4 % | 0.191 ✓ | ~1.4 |
 
-Near-lossless 30 is the row that settles it: at only +7.4 % it is **still fully
-seamed**, and the threshold where seams vanish (40) is already bigger than the GIF.
-Raising `-q` only shrinks the DC step; it never removes it.
+Near-lossless 30 is the row that settles the lossy question: at only +7.4 % it is
+**still fully seamed**, and the threshold where seams vanish (40) is already bigger
+than the GIF. Raising `-q` only shrinks the DC step; it never removes it.
 
-`-near_lossless 40` *is* higher quality than the GIF on both axes — but it costs
-+21 %, so it is an editorial upgrade, not a compression win. Say which one you mean.
+So the choice on live capture is **not** "WebP or GIF for the bytes" — it is
+near-lossless WebP for the quality (+21 %, and ~3× better colour than the GIF's
+23–39-colour quantization) or GIF if the byte budget is hard. **There is no cheap
+clean WebP.** 40 and 50 emit byte-identical files (the parameter quantizes to
+discrete internal levels), and `-min_size` is inert for every mode here.
 
 **Measure the seam, because SSIM and PSNR will not.** The artefact is low-amplitude
 but structured over a large area, so aggregate metrics average it away — q65 scored
