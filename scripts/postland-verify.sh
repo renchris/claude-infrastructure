@@ -145,11 +145,11 @@ else
 fi
 export PATH
 LOCK_TTL="${CC_POSTLAND_LOCK_TTL:-3600}"
-SUITE_TO="${POSTLAND_SUITE_TIMEOUT_S:-5400}"   # full-suite bound — makes a HUNG observable at all.
-# 5400 (was 2700): calibrated for the v2 BACKGROUND band. The corpus is ~50 min at nice-19 on a
-# QUIET box; `taskpolicy -c background` deliberately yields to sessions, so a busy box (load ~12)
-# legitimately runs 60-90 min — measured 2026-07-28: a healthy run CUT at 2737s with zero not-ok.
-# 90 min still makes a genuine HUNG observable; the bound exists for hangs, not for pacing.
+SUITE_TO="${POSTLAND_SUITE_TIMEOUT_S:-10800}"  # wall BACKSTOP only — the primary bound is the TAP
+# progress stall (POSTLAND_STALL_S, see run_target). 10800 (was 5400, was 2700): the background band
+# yields to sessions by design, so a busy box legitimately runs the corpus past any tight wall —
+# measured 2026-07-29, healthy runs CUT at 2737s AND 5437s with zero not-ok. Hangs are caught by the
+# stall bound in ~15 min; this ceiling exists only for the case where the TAP writer itself wedges.
 FILE_TO="${POSTLAND_FILE_TIMEOUT_S:-300}"      # per-file bound (retry ladder + the hang confirm)
 # ── BACKGROUND QoS — the singleton must make progress at ANY load (§4.2.3) ───────────────────────
 # v1 admission control (gate_admit, DELETED) waited for load < ceiling before the suite and before
@@ -834,10 +834,40 @@ EOF
       bargs=("tests/")
     fi
     log "corpus: ${#bargs[@]} tree suite(s), $HOST_SKIPPED host suite(s) partitioned out @ $(sha12 "$sha")"
-    # BOUNDED: unbounded, a wedged suite holds the mutex until LOCK_TTL and no hang is ever
-    # observable — the runner just disappears. rc 124 is the bound firing and is the primary HUNG
-    # discriminator. QoS, not admission: it starts NOW, in the background band, at whatever load.
-    ( cd "$WORKTREE" && TMPDIR="$RUN_TMP" bounded "$SUITE_TO" "${QOS[@]}" "$BATS_BIN" "${bargs[@]}" ) > "$tap" 2>&1; rc=$?
+    # BOUNDED BY PROGRESS, backstopped by wall-clock. A fixed duration bound conflates two runs a
+    # busy box cannot tell apart: STARVED-BUT-PROGRESSING (the background band yielding to 12+
+    # sessions — measured 2026-07-29: two healthy runs CUT at 5437s/2737s with ZERO not-ok) and
+    # WEDGED (no test completes again, ever). The bound's failure mode is the STALL, so that is what
+    # it keys on: no new TAP line for POSTLAND_STALL_S (900) ⇒ cut as rc 124, which routes into
+    # classify_hang exactly like the old wall bound — and names the wedged file via the TAP index —
+    # only 6x sooner than the old 90-min wall. A progressing corpus runs to completion under the
+    # 3h backstop (SUITE_TO), which exists for the pathological case where even the TAP writer
+    # wedges. POSTLAND_STALL_S=0 restores the plain wall bound (the kill switch).
+    # exec, not `bounded`: the watcher must signal timeout(1) ITSELF (which kills its child's whole
+    # process group) — TERMing a wrapper subshell would orphan the bats tree instead of ending it.
+    local stall poll cpid last ndone still
+    stall="${POSTLAND_STALL_S:-900}"; poll="${POSTLAND_STALL_POLL_S:-60}"
+    case "$stall$poll" in *[!0-9]*) stall=900; poll=60 ;; esac
+    if [ "$stall" -eq 0 ] || [ -z "$TIMEOUT_BIN" ] || [ ! -x "$TIMEOUT_BIN" ]; then
+      ( cd "$WORKTREE" && TMPDIR="$RUN_TMP" bounded "$SUITE_TO" "${QOS[@]}" "$BATS_BIN" "${bargs[@]}" ) > "$tap" 2>&1; rc=$?
+    else
+      ( cd "$WORKTREE" && TMPDIR="$RUN_TMP" exec "$TIMEOUT_BIN" -k 10 "$SUITE_TO" "${QOS[@]}" "$BATS_BIN" "${bargs[@]}" ) > "$tap" 2>&1 &
+      cpid=$!; last=0; still=0
+      while kill -0 "$cpid" 2>/dev/null; do
+        sleep "$poll"
+        ndone="$(tap_done "$tap")"; ndone="${ndone:-0}"
+        if [ "$ndone" -gt "$last" ]; then last="$ndone"; still=0; else still=$(( still + poll )); fi
+        if [ "$still" -ge "$stall" ]; then
+          log "STALL: no TAP progress for ${stall}s at test $last — cutting the run (a stall, not slowness)"
+          kill -TERM "$cpid" 2>/dev/null || true
+          break
+        fi
+      done
+      wait "$cpid" 2>/dev/null; rc=$?
+      # A stall-cut presents as the bound firing: classify_hang keys on 124 and will name the
+      # wedged file from the TAP index. timeout's own ceiling already exits 124; unify the TERM path.
+      [ "$still" -ge "$stall" ] && rc=124
+    fi
   fi
   adv="$(sc_count)"
   [ "$rc" -eq 0 ] || classify_failures "$tap"
