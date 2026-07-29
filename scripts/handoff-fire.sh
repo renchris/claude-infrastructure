@@ -598,6 +598,74 @@ successor_engaged() { # $1=registry-dir $2=successor-pane → 0 engaged / 1 not
   return 1
 }
 
+# ---- SESSION PIN for the successor gate (audit row 1, infra-reliability-audit-2026-07-22) -------
+# The LIVENESS half of the successor gate was `ps -o comm= -t <tty> | grep -qE 'node|claude'` — a
+# controlling-TTY match on a pattern ANY Node process satisfies. Two ways that reads "alive" while
+# the successor we actually verified is gone: (a) a non-CC node owns the pane (a `npm run dev`, a
+# vite, an esbuild started in the pane after CC died); (b) CC exited and a DIFFERENT session was
+# launched into the reused pane. Worse than either alone: the ENGAGEMENT half resolves pane →
+# registry row → session_id → THAT transcript, so the two halves of one gate could be proving things
+# about two DIFFERENT sessions. Pinning both to (pane UUID × registry session_id × that row's live
+# pid) is what makes the gate composable rather than merely stricter.
+#
+# THREE states, because "cannot tell" is not "dead" (named-failure-vs-no-verdict). A pane with no
+# registry row — an adopted operator pane, a row not yet written — is an ORDINARY state, and
+# convicting it would refuse legitimate closes. Unpinnable therefore falls back to the caller's
+# tty check, LOUDLY, so the weaker proof is never mistaken for the strong one:
+#   0 PINNED LIVE — echoes "<session_id> <pid>"
+#   1 PINNED DEAD — the row named a session and that pid is gone, or no longer owns the pane's tty
+#   2 UNPINNABLE  — no row / no session_id / no pid / no jq → caller falls back to the tty check
+successor_pin() { # $1=pane-uuid $2=pane-tty → echoes "<sid> <pid>" · rc 0 live / 1 dead / 2 unpinnable
+  local pane="${1:-}" ptty="${2:-}" row sid pid
+  [ -n "$pane" ] || return 2
+  row="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}/$pane.json"
+  [ -f "$row" ] || return 2
+  command -v jq >/dev/null 2>&1 || return 2
+  sid="$(jq -r '.session_id // empty' "$row" 2>/dev/null || true)"
+  pid="$(jq -r '.pid // empty' "$row" 2>/dev/null || true)"
+  # BOTH fields are required to pin: the sid names the transcript the engagement half reads, the pid
+  # names the process this half must find. A row carrying only one of them cannot compose the two.
+  [ -n "$sid" ] || return 2
+  case "$pid" in ''|*[!0-9]*) return 2 ;; esac
+  printf '%s %s' "$sid" "$pid"          # emitted on the DEAD path too, so the caller can name it
+  pin_still_live "$sid $pid" "$ptty"
+}
+
+# T-0 half of the pin: is the EXACT pinned (pid, tty) pair still a live CC process? Deliberately does
+# NOT re-read the registry row — a row rewritten by a NEW session in that pane must not be able to
+# satisfy a gate that proved the OLD session engaged. `ps -o tty=` prints the SHORT form (ttys020)
+# while as_tty yields a device path (/dev/ttys020), so compare basenames. The tty leg is what a bare
+# `kill -0`/pid check cannot express: a pid the OS recycled onto another pane fails here.
+pin_still_live() { # $1="<sid> <pid>" $2=pane-tty → 0 live / 1 gone
+  local pid="${1##* }" ptty="${2:-}" tty_now
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  pid_is_cc "$pid" || return 1
+  [ -n "$ptty" ] || return 0            # no pane tty to compare → pid-liveness is all we can pin
+  tty_now="$(ps -o tty= -p "$pid" 2>/dev/null | tr -d '[:space:]' || true)"
+  [ -n "$tty_now" ] && [ "$tty_now" = "$(basename "$ptty")" ]
+}
+
+# Is this pid a live CC (node/claude) process? TWO oracles, either sufficient, because macOS `ps -o
+# comm=` can fall back to the kernel's 16-char p_comm — `/Users/chrisren/` arrives with the
+# `node|claude` substring truncated clean off (measured 2026-07-29, memory
+# actuator-must-see-the-target-population; a census of all 28 live registry pids on THIS box showed
+# 0 truncated, so the fallback is form- and process-dependent — which is exactly why it must not be
+# depended on). argv[0] is never truncated. This predicate is the CONVICTING leg of the successor
+# gate: a false negative here ABORTS a healthy self-close, so it must not inherit that coin flip.
+# argv[0] ONLY, never the full argv: a fired session's argv carries its whole BRIEF, which routinely
+# contains the word "claude" and would match anything (memory pgrep-f-matches-agent-briefs).
+# Empty on both ⇒ no such process ⇒ 1. Shared by the pin and the recycle engagement check.
+pid_is_cc() { # $1=pid → 0 live CC process / 1 not
+  local pid="${1:-}" comm a0
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  comm="$(ps -o comm= -p "$pid" 2>/dev/null || true)"
+  [ -n "$comm" ] || return 1
+  printf '%s' "$comm" | grep -qE 'node|claude' && return 0
+  a0="$(ps -o args= -p "$pid" 2>/dev/null | awk 'NR==1{print $1}' || true)"
+  [ -n "$a0" ] || return 1
+  printf '%s' "$a0" | grep -qE 'node|claude'
+}
+
 # ---- P0-12 registration guarantee ------------------------------------------------------------
 # After engagement, guarantee the fired pane is VISIBLE in the cross-account registry so the
 # reaper/board can see it (a never-registered pane is invisible to the whole classify/reap stack —
@@ -1291,7 +1359,10 @@ if [ "${1:-}" = "__selfclose" ]; then
   SUCCESSOR="${4:-}"                               # verified-alive pane to focus after the close
   SUCCESSOR_TTY="${5:-}"                            # successor's tty, RESOLVED FOREGROUND at arm time
                                                    # (never re-resolve here — AppleEvents fail detached)
-  echo "→ armed: __selfclose pid=$$ sid=$SID tty=${TTY_PATH:-none} successor=${SUCCESSOR:-none} successor_tty=${SUCCESSOR_TTY:-none}"
+  SUCCESSOR_PIN="${6:-}"                            # "<sid> <pid>" pinned at arm time; "" = unpinned
+                                                   # (positional-last + optional, so a deployed-copy
+                                                   # skew mid-land simply ignores it)
+  echo "→ armed: __selfclose pid=$$ sid=$SID tty=${TTY_PATH:-none} successor=${SUCCESSOR:-none} successor_tty=${SUCCESSOR_TTY:-none} successor_pin=${SUCCESSOR_PIN:-none}"
   cc_alive() { ps -o comm= -t "$(basename "$TTY_PATH")" 2>/dev/null | grep -qE 'node|claude'; }
   if [ -z "$TTY_PATH" ]; then
     # Truly blind (no tty handed over): NEVER instant-close on a blind read — fixed grace lets
@@ -1311,15 +1382,28 @@ if [ "${1:-}" = "__selfclose" ]; then
     done
     cc_alive && echo "⚠ CC still alive after ${waited}s — teammate-style force-close" >&2
   fi
-  # CLOSE-INSTANT RE-VERIFY. The successor was verified alive+engaged at ARM time, but this watcher
-  # closes up to ~180s later — a successor that DIED in that window would strand BOTH panes (the very
-  # failure the arm-time gate exists to prevent, just deferred). Cheap ps re-check on the successor's
-  # tty (resolved foreground at arm time and handed over as $5 — NO AppleEvents here, they fail
-  # detached; no engagement re-check needed). Dead ⇒ DO NOT close: page the desk (best-effort), leave
-  # the predecessor ALIVE, exit nonzero. Skipped when there is no successor (--terminal) or no tty was
-  # handed over (can't cheaply re-verify → defer to the arm-time proof, never block a close on it).
-  if [ -n "$SUCCESSOR" ] && [ -n "$SUCCESSOR_TTY" ] && \
+  # CLOSE-INSTANT RE-VERIFY (T-0). The successor was verified alive+engaged at ARM time, but this
+  # watcher closes up to ~180s later — a successor that DIED in that window would strand BOTH panes
+  # (the very failure the arm-time gate exists to prevent, just deferred). NO AppleEvents here (they
+  # fail detached): everything below is ps + the pin handed over at arm time.
+  #
+  # PINNED when arm time could resolve (session_id, pid): re-check THAT pid still runs and still owns
+  # the pane's tty. This is the leg that makes the re-verify meaningful — re-running the old tty-only
+  # check would pass on any node the pane picked up after the successor died, which is exactly the
+  # arm-time defect deferred by 180s. UNPINNED (no registry row) falls back to the tty check.
+  # Dead ⇒ DO NOT close: page the desk (best-effort), leave the predecessor ALIVE, exit nonzero.
+  # Skipped when there is no successor (--terminal) or nothing was handed over to re-check.
+  _t0_dead=0
+  if [ -n "$SUCCESSOR" ] && [ -n "$SUCCESSOR_PIN" ]; then
+    if ! pin_still_live "$SUCCESSOR_PIN" "$SUCCESSOR_TTY"; then
+      _t0_dead=1
+      echo "!! close-instant pin check FAILED: session ${SUCCESSOR_PIN%% *} (pid ${SUCCESSOR_PIN##* }) is gone or no longer on ${SUCCESSOR_TTY:-?}" >&2
+    fi
+  elif [ -n "$SUCCESSOR" ] && [ -n "$SUCCESSOR_TTY" ] && \
      ! ps -o comm= -t "$(basename "$SUCCESSOR_TTY")" 2>/dev/null | grep -qE 'node|claude'; then
+    _t0_dead=1
+  fi
+  if [ "$_t0_dead" = 1 ]; then
     echo "!! self-close ABORTED at close-instant: successor $SUCCESSOR ($SUCCESSOR_TTY) is NO LONGER ALIVE — NOT closing predecessor $SID (closing now would strand BOTH panes). Predecessor left alive." >&2
     if [ -x "$HOME/.claude/bin/cc-notify" ]; then
       "$HOME/.claude/bin/cc-notify" --role "${CC_COMPLETION_ROLE:-desk}" "HANDOFF-STRAND-RISK: self-close of $SID was aborted — its successor $SUCCESSOR died before the close instant. Predecessor left ALIVE to avoid stranding the work; the succession did NOT complete. Re-drive the handoff (re-fire a warm successor, then self-close again)." >/dev/null 2>&1 || true
@@ -1863,21 +1947,38 @@ USAGE
     fi
     echo "⚠ self-close proceeding with $SC_TM_N LIVE teammate(s) — --allow-live-teammates asserted; they are being ORPHANED deliberately" >&2
   fi
-  # Successor liveness gate — BEFORE any side effect: pane resolvable AND a claude on its tty.
-  # The irreversible step is gated on positive proof the survivor is alive (same rule as the
-  # recycle watcher's armed-heartbeat: verify the EFFECT, never the intention).
+  # Successor liveness gate — BEFORE any side effect: pane resolvable AND the successor's own CC
+  # SESSION running on it. The irreversible step is gated on positive proof the survivor is alive
+  # (same rule as the recycle watcher's armed-heartbeat: verify the EFFECT, never the intention).
   SUC_TTY=""
+  SUC_PIN=""                       # "<sid> <pid>" of the pinned successor session; "" = unpinned
   if [ -n "$SC_SUCCESSOR" ]; then
     SUC_TTY="$(as_tty "$SC_SUCCESSOR")"
     if [ -z "$SUC_TTY" ]; then
       echo "!! self-close ABORTED: successor pane $SC_SUCCESSOR not found in iTerm2 — the continuation is NOT there; fix the uuid, or --terminal if truly nothing continues" >&2
       exit 3
     fi
-    if ! ps -o comm= -t "$(basename "$SUC_TTY")" 2>/dev/null | grep -qE 'node|claude'; then
-      echo "!! self-close ABORTED: no live claude on successor pane $SC_SUCCESSOR ($SUC_TTY) — refusing to close a session whose continuation is not running" >&2
-      exit 3
-    fi
-    echo "→ successor verified alive: $SC_SUCCESSOR (tty $SUC_TTY)"
+    # SESSION-PINNED liveness (see successor_pin). The pin is what the close-instant re-verify
+    # re-checks, so it is resolved here, FOREGROUND, and handed to the watcher — never re-derived
+    # there (a row rewritten by a new session in that pane must not satisfy this gate).
+    SUC_PIN_RC=0
+    SUC_PIN="$(successor_pin "$SC_SUCCESSOR" "$SUC_TTY")" || SUC_PIN_RC=$?
+    case "$SUC_PIN_RC" in
+      0) echo "→ successor verified alive, SESSION-PINNED: $SC_SUCCESSOR (tty $SUC_TTY · session ${SUC_PIN%% *} · pid ${SUC_PIN##* })" ;;
+      1) echo "!! self-close ABORTED: successor pane $SC_SUCCESSOR resolves to session ${SUC_PIN%% *} (pid ${SUC_PIN##* }) and THAT process is gone — or no longer owns tty $SUC_TTY. A node/claude merely sharing the pane's tty is NOT proof the continuation is running; refusing to close." >&2
+         echo "!!   recover: re-fire the successor, or point --successor at the pane that is actually continuing the work (--terminal if truly nothing continues)." >&2
+         exit 3 ;;
+      *) # UNPINNABLE — no registry row / no session_id / no pid. Fall back to the tty-only check
+         # the pin replaces, but say so: an adopted operator pane legitimately has no row, and
+         # refusing every such close would be worse than the weaker proof.
+         if ! ps -o comm= -t "$(basename "$SUC_TTY")" 2>/dev/null | grep -qE 'node|claude'; then
+           echo "!! self-close ABORTED: no live claude on successor pane $SC_SUCCESSOR ($SUC_TTY) — refusing to close a session whose continuation is not running" >&2
+           exit 3
+         fi
+         SUC_PIN=""
+         echo "⚠ successor $SC_SUCCESSOR is NOT session-pinnable (no session_id+pid in $REG_DIR/$SC_SUCCESSOR.json) — falling back to the tty-only liveness check, which ANY node process on $SUC_TTY satisfies" >&2
+         echo "→ successor verified alive: $SC_SUCCESSOR (tty $SUC_TTY · tty-only, UNPINNED)" ;;
+    esac
     # ENGAGEMENT gate (BIRTH IS NOT ENGAGEMENT, item ff2d6609a33e — the same lesson the spawn path
     # learned). Process-alive proves the pane BOOTED, not that it INGESTED work: a cold-fire whose
     # first prompt was never submitted (auto-submit race) or was rejected (/goal >4000-char cap)
@@ -1926,9 +2027,13 @@ MSG
     echo "── dry run (self-close) ─────────────────────────"
     echo "pane:      $SC_SID"
     if [ -n "$SC_SUCCESSOR" ]; then
-      echo "successor: $SC_SUCCESSOR (tty $SUC_TTY — claude VERIFIED alive)"
+      if [ -n "$SUC_PIN" ]; then
+        echo "successor: $SC_SUCCESSOR (tty $SUC_TTY — session ${SUC_PIN%% *} pid ${SUC_PIN##* } VERIFIED alive, SESSION-PINNED)"
+      else
+        echo "successor: $SC_SUCCESSOR (tty $SUC_TTY — claude VERIFIED alive, UNPINNED: tty-only proof)"
+      fi
       echo "roles:     repoint any cc-roles/* naming $SC_SID → $SC_SUCCESSOR (P0-15)"
-      echo "chain:     announce succession into successor (cc-notify) → arm watcher → FOREGROUND /exit (interrupts any in-flight turn, exits in seconds) → detached ps-poll ≤180s (CR nudge @60s) → it2 force-close pane → FOCUS successor"
+      echo "chain:     announce succession into successor (cc-notify) → arm watcher → FOREGROUND /exit (interrupts any in-flight turn, exits in seconds) → detached ps-poll ≤180s (CR nudge @60s) → T-0 re-verify the pinned successor session → it2 force-close pane → FOCUS successor"
     else
       echo "successor: none (--terminal: end-of-line, nothing continues this session's work)"
       echo "completion: push a program-terminal completion to the '${CC_COMPLETION_ROLE:-desk}' role via completion-push (F5 / T-P2-1) — VERIFIED-or-LOUD, never silent"
@@ -2010,9 +2115,9 @@ MSG
     # No CC on the pane (shell-only, or still launching): typing /exit would hit the SHELL and
     # vanish (observed). Nothing to exit gracefully — the watcher closes the pane directly.
     echo "→ no CC on $SC_TTY — skipping /exit, closing pane directly" >&2
-    detach "$SC_LOG" "$0" __selfclose "$SC_SID" "$SC_TTY" "$SC_SUCCESSOR" "$SUC_TTY" >/dev/null
+    detach "$SC_LOG" "$0" __selfclose "$SC_SID" "$SC_TTY" "$SC_SUCCESSOR" "$SUC_TTY" "$SUC_PIN" >/dev/null
   else
-    SC_WATCHER="$(detach "$SC_LOG" "$0" __selfclose "$SC_SID" "$SC_TTY" "$SC_SUCCESSOR" "$SUC_TTY")"
+    SC_WATCHER="$(detach "$SC_LOG" "$0" __selfclose "$SC_SID" "$SC_TTY" "$SC_SUCCESSOR" "$SUC_TTY" "$SUC_PIN")"
     if ! await_armed "$SC_LOG"; then
       kill "$SC_WATCHER" 2>/dev/null || true
       echo "!! self-close ABORTED: watcher heartbeat never appeared ($SC_LOG) — /exit NOT typed, session stays alive" >&2
