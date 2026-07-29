@@ -6,6 +6,7 @@
 #   [1] link lib/config-mirror.zsh into the live layer (it un-isolates tasks/ + tasks-index.json)
 #   [2] link bin/cc-tlid + bin/cc-task-store into ~/bin
 #   [3] MERGE board CONTENT from the three isolated account stores into ~/.claude/tasks
+#   [3b] COLLAPSE branch-keyed boards onto the repo-keyed name (or [5] reads as a wiped board)
 #   [4] CONVERT each account's tasks/ dir to a symlink (the mirror's --convert)
 #   [5] point ~/.zshrc's _cc_tlid at bin/cc-tlid  ← the one hand-edit; C10
 #
@@ -41,7 +42,8 @@ echo "== 15-shared-task-board =="
 
 echo "Will do: [1] symlink $MIRROR_SRC → $MIRROR_DEST"
 echo "         [2] symlink bin/cc-tlid + bin/cc-task-store → ~/bin/"
-echo "         [3] cc-task-store merge   (content; additive, backs up first)"
+echo "         [3] cc-task-store merge   (cross-account content; additive, backs up first)"
+echo "         [3b] cc-task-store merge --collapse-keys   (branch-keyed → repo-keyed)"
 echo "         [4] mirror --convert for: $ACCTS   (linkage; refuses on live sessions)"
 echo "         [5] print the one-line ~/.zshrc edit for you to apply"
 
@@ -75,9 +77,26 @@ for t in cc-tlid cc-task-store; do
 done
 
 # ── [3] merge CONTENT (must precede [4]) ──────────────────────────────────────────────────────────
-echo "[3] merge board content"
+echo "[3] merge board content (cross-ACCOUNT)"
 "$REPO/bin/cc-task-store" merge --yes || { echo "✗ merge failed — NOT converting. Sources untouched." >&2; exit 1; }
 "$REPO/bin/cc-task-store" verify   || { echo "✗ verify failed — NOT converting. Sources untouched." >&2; exit 1; }
+
+# ── [3b] collapse branch-keyed boards onto the repo-keyed name ────────────────────────────────────
+# WITHOUT THIS, THE ZSHRC EDIT IN [5] LOOKS LIKE IT WIPED THE BOARD. [5] switches the key from
+# <repo>-<branch> to <repo>, so the next session resolves `claude-infrastructure` — a board that does
+# not exist yet — while all the work sits in `claude-infrastructure-main`. The operator sees an empty
+# task panel and reasonably concludes the migration ate everything. It did not; the two steps were
+# simply run in the wrong order. Folding first makes the key switch a no-op nobody notices, which is
+# the only acceptable outcome for a step whose failure mode reads as "your board is gone".
+#
+# Additive like every other merge: the old <repo>-<branch> boards stay fully intact, so sessions
+# already running on the old key keep working. Re-run after those sessions cycle to fold whatever
+# they added — idempotent, and it dedupes by content.
+echo "[3b] collapse branch-keyed boards → repo-keyed (MUST precede the [5] key switch)"
+"$REPO/bin/cc-task-store" merge --collapse-keys --yes \
+  || { echo "✗ collapse failed — do NOT apply the [5] zshrc edit yet, or the board will read empty." >&2; exit 1; }
+"$REPO/bin/cc-task-store" verify --collapse-keys \
+  || { echo "✗ collapse verify failed — do NOT apply the [5] zshrc edit yet." >&2; exit 1; }
 
 # ── [4] convert LINKAGE ───────────────────────────────────────────────────────────────────────────
 echo "[4] convert account stores to symlinks"
