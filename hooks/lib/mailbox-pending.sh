@@ -56,7 +56,49 @@
 #      · CC_MBX_FORWARD_MAX_HOPS (4).
 # bash 3.2-safe. No `set -e`.
 
+# ── SESSION-KEYED ADDRESSING (v2 M1) + PULL-ADOPTION (v2 M4) ─────────────────────────────────────
+# docs/plans/CROSS_SESSION_COMMS_V2.md §1.3-§1.4, §4.
+#
+# THE FRAME ERROR THIS REPLACES. The inbox was named after the container the reader currently
+# occupies (its iTerm2 pane), and continuity across container changes was restored by a pointer the
+# DYING container wrote (`.forward`). Both halves fail structurally:
+#
+#   (a) the address expires while the reader still LIVES — a `--resume` of the SAME session into a
+#       NEW pane opens a fresh empty inbox while the real mail sits in <old-pane>.md (live incident
+#       2026-07-29: the coordinator had to re-send by hand), and
+#   (b) the repair is owed by the dead party — `.forward` has exactly TWO production writers
+#       (handoff-fire.sh cooperative close, desk-register) so a crash / 529 / SIGKILL / plain resume
+#       writes nothing. MEASURED COVERAGE: 3 of 91 dead-pane boxes = 3.3%.
+#
+# The durable identity was available at the exact point the fragile one was chosen: the harness hands
+# every hook `session_id` on stdin, and mailbox-drain.sh discarded that stdin (`cat >/dev/null`) and
+# then keyed on $ITERM_SESSION_ID. Twelve other hooks in this repo parse session_id from that same
+# stdin. Pane-keying was never forced by a missing session id.
+#
+# THE INVERSION: address the SESSION; treat the pane as an ALIAS resolved at delivery; and have
+# succession PULL from a provably-dead predecessor instead of relying on a push.
+#
+# WHY THE ALIAS LIVES ON THE BOUNDARY PATH: mailbox-drain.sh is the ONE place in the system that sees
+# both identities at once, for every session, at every boundary. Writing the mapping there needs no
+# daemon, no registry, and no cooperation from any dying party, and it SELF-HEALS — every boundary
+# re-asserts it. That is `rearm-belongs-on-the-open-path` generalised from arming to addressing.
+#
+# The trail is APPEND-ONLY (never rewritten — append-only-store-safety-rules) and deduped against the
+# last entry, so it stays small while preserving the pane's occupancy HISTORY. That history is what
+# makes M4 possible without a `.forward`: a successor can see who held its pane before it.
+#
+#   mailbox_alias_write <pane> <session>   append pane→session iff it differs from the current tip
+#   mailbox_alias_of    <pane>             current occupant session (echoes <pane> when unaliased, so
+#                                          callers pipe unconditionally — same idiom as forward_of)
+#   mailbox_alias_trail <pane>             every session ever on <pane>, NEWEST FIRST (M4 input)
+#   mailbox_session_is_current <session>   is <session> the tip of ANY pane's trail? (liveness proxy)
+#   mailbox_adoptable_predecessors <pane> <self>   sessions on <pane> that are provably NOT current
+#
+# Kill switches: CC_MBX_SESSION_KEY=0 (addressing reverts to pane-keyed) · CC_MBX_PULL_ADOPT=0
+# (no pull-adoption). Both default ON. Env: CC_MBX_ALIAS_MAX_PRED (3) bounds the adoption fan-out.
 _mbx_dir() { printf '%s' "${CC_MAILBOX_DIR:-$HOME/.claude/mailbox}"; }
+_mbx_alias_dir() { printf '%s/.alias' "$(_mbx_dir)"; }
+_mbx_alias_file() { printf '%s/%s' "$(_mbx_alias_dir)" "${1:-}"; }
 # A mailbox KEY is a safe filename component, not necessarily a UUID. This used to be a hex-and-dashes
 # check, which silently made every NAME-keyed box invisible to the whole library: `mailbox_lines`
 # returned 0, so `mailbox_unacked_count` returned 0, so cc-inbox-guard's fail-loud backstop saw nothing
@@ -326,4 +368,101 @@ MBXEOF
   echo "$migrated"
   [ "$migrated" -gt 0 ] || return 1
   return "$rc"
+}
+
+# ── M1: PANE→SESSION ALIAS TRAIL ─────────────────────────────────────────────────────────────────
+# Append-only occupancy history for one pane. Deduped against the tip so a session taking 500
+# boundaries writes ONE line, not 500 — the file stays O(sessions-on-this-pane), not O(turns).
+# Fail-safe like every primitive here: a bad key or an unwritable dir is a silent no-op, never an
+# error that could cost a hook.
+mailbox_alias_write() { # <pane> <session>
+  local pane="${1:-}" sess="${2:-}" f tip dir
+  _mbx_valid_uuid "$pane" || return 1
+  _mbx_valid_uuid "$sess" || return 1
+  [ "$pane" = "$sess" ] && return 1          # a self-alias carries no information
+  dir="$(_mbx_alias_dir)"; mkdir -p "$dir" 2>/dev/null || return 1
+  f="$(_mbx_alias_file "$pane")"
+  tip="$(tail -n1 "$f" 2>/dev/null | awk '{print $2}')"
+  [ "$tip" = "$sess" ] && return 0           # already the current occupant → dedup
+  printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null)" "$sess" >> "$f" 2>/dev/null || return 1
+  return 0
+}
+
+# Current occupant of <pane>. Echoes <pane> itself when there is no alias, so every caller can pipe
+# through this with no "does an alias exist?" branch (the mailbox_forward_of idiom).
+mailbox_alias_of() { # <pane>
+  local pane="${1:-}" sess
+  _mbx_valid_uuid "$pane" || { printf '%s' "$pane"; return 1; }
+  sess="$(tail -n1 "$(_mbx_alias_file "$pane")" 2>/dev/null | awk '{print $2}')"
+  if [ -n "$sess" ] && _mbx_valid_uuid "$sess"; then printf '%s' "$sess"; return 0; fi
+  printf '%s' "$pane"; return 0
+}
+
+# Every session ever seen on <pane>, NEWEST FIRST. The M4 input.
+mailbox_alias_trail() { # <pane>
+  local pane="${1:-}"
+  _mbx_valid_uuid "$pane" || return 1
+  awk '{print $2}' "$(_mbx_alias_file "$pane")" 2>/dev/null | awk 'NF' | awk '!seen[$0]++' | sed '1!G;h;$!d'
+}
+
+# Is <session> the CURRENT occupant of any pane? This is the liveness PROXY that makes M4 safe
+# without a daemon and without row 4's (currently inert) beat oracle: a pane holds one session at a
+# time, so a session that is the tip of some pane's trail is being addressed as live RIGHT NOW.
+# Used only to REFUSE adoption — never to assert death. Deliberately conservative in that direction.
+mailbox_session_is_current() { # <session> → 0 = tip of some pane's trail, 1 = tip of none
+  local sess="${1:-}" f tip
+  _mbx_valid_uuid "$sess" || return 1
+  for f in "$(_mbx_alias_dir)"/*; do
+    [ -f "$f" ] || continue
+    tip="$(tail -n1 "$f" 2>/dev/null | awk '{print $2}')"
+    [ "$tip" = "$sess" ] && return 0
+  done
+  return 1
+}
+
+# ── M4: PULL-ADOPTION — who may I take mail from? ────────────────────────────────────────────────
+# A predecessor is adoptable iff it held MY pane before me AND it is not the current occupant of any
+# pane. The second clause is what stops us stealing from a session that RESUMED ELSEWHERE and is
+# still alive — the exact case pane-keying could not distinguish. Bounded to the N most recent
+# (CC_MBX_ALIAS_MAX_PRED, default 3): a hook must never do unbounded work (R3).
+#
+# ORDER MATTERS: the trail is newest-first, so the bound keeps the MOST RECENT predecessors — the
+# ones whose mail is most likely to still matter — rather than an arbitrary N.
+mailbox_adoptable_predecessors() { # <pane> <self-session>
+  local pane="${1:-}" self="${2:-}" max="${CC_MBX_ALIAS_MAX_PRED:-3}" n=0 q
+  _mbx_valid_uuid "$pane" || return 1
+  case "$max" in ''|*[!0-9]*) max=3 ;; esac
+  while IFS= read -r q; do
+    [ -n "$q" ] || continue
+    [ "$q" = "$self" ] && continue                  # never adopt from ourselves
+    [ "$q" = "$pane" ] && continue                  # degenerate alias
+    mailbox_session_is_current "$q" && continue      # ALIVE somewhere → refuse (the load-bearing guard)
+    printf '%s\n' "$q"
+    n=$(( n + 1 ))
+    [ "$n" -ge "$max" ] && break
+  done <<MBXPRED
+$(mailbox_alias_trail "$pane")
+MBXPRED
+  return 0
+}
+
+# ── M1: the one resolver every SENDER uses ───────────────────────────────────────────────────────
+# Given whatever a caller holds — a session id, a pane uuid, a role-derived name — return the box key
+# mail should land in. Resolution order, each step degrading to the next (never a hard failure):
+#   0. kill switch CC_MBX_SESSION_KEY=0            → today's behaviour, verbatim
+#   1. the key already names a box that exists       → use it (idempotent for session-keyed callers)
+#   2. pane→session via the alias trail              → the session box
+#   3. the key itself                                → pane-keyed, exactly as before
+# The FORWARD chain is still applied by the caller on top of this, so legacy pane boxes that DID get
+# a cooperative `.forward` keep working. M1 removes the NEED for the pointer; it does not break it.
+mailbox_resolve_key() { # <pane-or-session> → box key
+  local k="${1:-}" sess
+  _mbx_valid_uuid "$k" || { printf '%s' "$k"; return 1; }
+  if [ "${CC_MBX_SESSION_KEY:-1}" = 0 ]; then printf '%s' "$k"; return 0; fi
+  # An existing box for this exact key wins: a session-keyed sender must stay idempotent, and a pane
+  # that has never taken a boundary still has its own box.
+  if [ -f "$(mailbox_file "$k")" ] && ! [ -f "$(_mbx_alias_file "$k")" ]; then printf '%s' "$k"; return 0; fi
+  sess="$(mailbox_alias_of "$k")"
+  printf '%s' "$sess"
+  return 0
 }
