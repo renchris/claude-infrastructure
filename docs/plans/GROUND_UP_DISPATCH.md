@@ -279,6 +279,56 @@ round trip available, dropping it would have been the only real data loss on the
 Assignee-session GC is deliberately deferred until the lead confirms harvest, so nothing is closed
 early.
 
+### Orphaned assignees are NOT agent-reapable — the resolution-path dead end, demonstrated
+
+Trying to GC row 5's five orphaned assignees closed the loop on `cc-backlog 95281da714f0`'s
+"no pane close, no resolution path" leg. Every sanctioned route is blocked, and the last one
+fails with a refusal that is *correct by its own contract*:
+
+1. **Lead `shutdown_request`** — unavailable: the team channel died with the lead's process.
+2. **`cc-teardown` / registry** — they hold **0 registry rows**; the reaper cannot see them.
+3. **it2 resolution by cwd** — 0 panes report a `gu5-*` worktree as `session.path`. They ARE
+   resolvable, but only by mapping the agent process's **tty** to the pane
+   (`ps -axo pid=,tty=` → `--agent-id gu5-*@session-<sid>`, then match `session.tty` via the it2
+   API). Recorded because it is the only working resolution and it is not obvious.
+4. **`handoff-fire self-close --terminal`** — **REFUSED**: `this is an ORIGIN session, not a
+   fired peer … no fired-peer stamp at ~/.claude/cc-fired/<pane>.json`. An Agent-Team assignee
+   was spawned by its lead, never fired by handoff-fire, so it has no originator to hand back
+   to and the tool classifies it as an origin session that must never self-close.
+
+**The gap is a missing CATEGORY, not a missing feature.** self-close models exactly two kinds of
+session — a fired peer (may retire) and an origin session (never retires). An assignee whose lead
+is dead is neither: it has an originator, but that originator no longer exists. There is an
+`--allow-origin-close` override documented as "deliberate, loud, almost never right"; **this
+coordinator deliberately did NOT use it** — forcing a safety gate whose whole purpose is to stop
+sessions being closed with no continuation, purely for tidiness, is the wrong trade. Closing them
+is therefore an operator step, plattered below.
+
+**Pre-verified safe to close** (checked before deciding, so the operator does not have to):
+every assignee transcript has been silent 13-69 min while only the lead is active (22s), all
+worktrees are clean with work committed (`gu5-decide` `5a7eb60c`, `gu5-cadence` `21d8e869`,
+`gu5-verdict` ×2), and worktrees survive session close, so nothing is lost either way.
+
+| assignee | pane | pid |
+|---|---|---|
+| gu5-decide (parked on "Waiting for team lead approval") | `8A43425B-C6AA-493D-A14E-678AF747C6A8` | 36549 |
+| gu5-cadence | `EAC69523-13DB-4EC1-AE54-5D1384F11F75` | 49251 |
+| gu5-archaeology | `75857BFD-6F29-4216-AC92-0F665E13E3D5` | 32551 |
+| gu5-telemetry | `261F11A5-C3B9-47A4-9563-3710E9E0EC6E` | 42421 |
+| gu5-seams | `B270E0F4-D483-459C-9C5E-A91235992F4F` | 48765 |
+
+### Coordinator error 2026-07-29T19:33Z — the load guard was read but not ENFORCED
+
+Row 3 was fired at 1-min load **25.96**, over this runbook's own hard `load >= 10` hold. The read
+happened; the *gate* did not. `uptime` was batched into the same unconditional Bash call as the
+fire, so the number was printed and the fire ran regardless — a guard you observe but never branch
+on is decoration. **Fix, binding for every remaining fire: the load read and the fire must be ONE
+conditional command** — `L=$(uptime | sed -E 's/.*averages?: ([0-9.]+).*/\1/'); if load<10 then
+fire else hold` — never two statements separated by a semicolon. Consequence was bounded (the spike
+was cold-worktree + npm install and fell back to 12.15 within two minutes, and row 3 engaged
+cleanly), which is luck, not vindication. Related trap already recorded above: one fire moves the
+guard by itself, so the read must be immediate AND binding.
+
 ## Inherited watch — first GREEN postland stamp (status, not a coordinator work item)
 
 Read 2026-07-29T18:15Z: **zero GREEN stamps have ever existed** (`grep -l '"verdict":"green"'
