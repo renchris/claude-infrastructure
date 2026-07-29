@@ -52,5 +52,19 @@ while [ -n "$pid" ] && [ "$pid" -gt 1 ] 2>/dev/null && [ "$i" -lt 12 ]; do
 done
 [ -z "$cpid" ] && cpid="$PPID"   # fallback: still a live descendant anchor
 
-printf '%s\t%s\t%s\n' "$cpid" "$sid" "$cwd" > "$REG_DIR/$base" 2>/dev/null
+# ATOMIC (tmp+mv), never `> "$REG_DIR/$base"` directly. `>` is O_TRUNC — the file is emptied by one
+# syscall and refilled by a later one, so a reader landing in that gap sees ZERO bytes. That reader is
+# worktree-gc: it `cut -f2`s an empty file → empty pid → `kill -0 ""` fails → this LIVE session's
+# worktree reads as dead and is REAPED. That is precisely the single-bad-read flakiness the header
+# above says this file exists to eliminate, re-introduced at one-printf width by the write itself.
+# `mv` within a directory is an atomic rename: a reader sees either the old row or the new one, never
+# a partial. Matches the sibling writers (session-register.sh:81, cc-decide) — this was the ONE
+# non-atomic shared write left in the repo (a15/D5). Fail-safe: on a write failure the mv is skipped
+# and the PREVIOUS row survives, which is strictly better than a truncated one; tmp is cleaned either way.
+_tmp="$REG_DIR/.$base.$$"
+if printf '%s\t%s\t%s\n' "$cpid" "$sid" "$cwd" > "$_tmp" 2>/dev/null; then
+  mv -f "$_tmp" "$REG_DIR/$base" 2>/dev/null || rm -f "$_tmp" 2>/dev/null
+else
+  rm -f "$_tmp" 2>/dev/null
+fi
 exit 0
