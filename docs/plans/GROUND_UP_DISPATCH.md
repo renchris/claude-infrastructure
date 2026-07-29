@@ -174,6 +174,22 @@ Every new mechanism ships with an env kill switch, never revert-as-plan.
   mid-wave:** I had been copying the map's constraint cell verbatim into every fire payload, so
   an unverified cell was being propagated into all 11 remaining rebuilds.
 
+- 2026-07-29T18:38Z **row 5 SEAM QUESTION → ruled** (non-blocking ping; row 5 kept working).
+  Asked who owns `bin/cc-wave-plan`, named in no map row, and offered to stand down if row 7
+  should have it. **Ruled row 5's**, plus `bin/cc-route` ruled **row 7's** pre-emptively; both
+  recorded in the map's new *Unowned-surface rulings* register with their evidence, so the
+  next row inherits the answer instead of re-asking. **Method note worth keeping:** row 5
+  justified its claim with a COMMENT in the file (`cc-wave-plan:268` says cc-dispatch is its
+  only consumer). A comment is text, not evidence. My first verification grep was *also* wrong
+  — `--include='*.sh'` hid `bin/cc-dispatch` and `bin/cc-backlog`, which are extensionless — and
+  the corrected sweep is what actually confirmed the claim (cc-backlog's two references are
+  comments; `cc-dispatch:200` is the only call). Same trap, two agents, one minute apart.
+  The ruling also handed row 5 two things it had not asked for and needed:
+  `tests/cc-wave-plan.bats:135` **encodes the premise row 5 just falsified** (wave exceeds
+  concurrency ⇒ cliff), so changing it is in-scope but must be RED-proofed and reasoned in the
+  plan; and `:141` (a cc-route-propagated cliff) must stay distinguishable, since separating a
+  real capped-account stop from a wave-sizing false cliff is the entire point of the split.
+
 ## Inherited watch — first GREEN postland stamp (status, not a coordinator work item)
 
 Read 2026-07-29T18:15Z: **zero GREEN stamps have ever existed** (`grep -l '"verdict":"green"'

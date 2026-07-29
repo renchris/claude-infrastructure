@@ -32,6 +32,29 @@ responsibility; overlaps are declared as seams with a single owner. Row 1's rebu
 the method AND the seams model (its rebuild consumed seams from 6, 10, 12 without redesigning
 them).
 
+## Unowned-surface rulings (coordinator-decided; binding — do not re-litigate)
+
+The table's "core surfaces" are exemplary, not exhaustive. When a rebuild finds a surface named
+in NO row, it pings the coordinator rather than claiming it silently; rulings land here so the
+next row inherits the answer. **The deciding test is the MECE basis itself — who answers when
+it breaks — not who calls it or who wrote it.** Rule by EXECUTABLE call sites, never by a
+comment that asserts ownership (a comment is text, not evidence) and never with an extension
+filter on the grep: this repo's `bin/` is extensionless, so `--include='*.sh'` silently hides
+the very consumers that decide the question.
+
+| Surface | Owner | Evidence for the ruling |
+|---|---|---|
+| `bin/cc-wave-plan` | **5** | Sole executable consumer is `bin/cc-dispatch:200`; `bin/cc-backlog`'s references (`:464`, `:535-536`) are comments describing the `wt-<id>` convention, not calls. A mis-sized wave or a false ⛔ cliff is a dispatch failure — row 5's standing constraint verbatim. It CONSUMES row 7 (`claude-accounts --rank/--json`, `cc-route --json`) without owning it. Ruled 2026-07-29 on row 5's ping. |
+| `bin/cc-route` | **7** | KEY-ANCHOR parses `~/.claude/model-config.yaml` (row 7's named SSOT surface) and `claude-accounts --route`. Its exit-code contract (0 plan · 2 usage · 3 blind/no-data · 4 cliff) is pinned by `scripts/route-safety-gate.sh:33-50` and `tests/cc-route.bats` — no other row may alter it. Ruled 2026-07-29, pre-emptively, because row 5's cc-wave-plan work sits directly on top of it. |
+
+**A test can encode a falsified premise — changing it is legitimate, hiding it is not.**
+`tests/cc-wave-plan.bats:135` asserts "wave exceeds total concurrency → exit 4 cliff", i.e. the
+very belief row 5 disproved. A rebuild may change such a test, but only as a deliberate
+RED-proofed change with the reason recorded in its plan — never as a quietly relaxed assertion.
+Its neighbour `:141` (a cc-route-propagated quota cliff) is a GENUINE cliff and must stay
+distinguishable: telling a real capped-account stop apart from a wave-sizing false cliff is the
+whole point of the split.
+
 **Dispatch order recommendation (pain-first, dependency-aware):** 4 → 3 → 2 (the
 liveness/comms/succession triangle shares seams — sequence, never parallel) · then 5 · 12 ·
 10 · 8 · 7 · 11 · 9 · 6 last (it is every other row's enforcement surface — rebuild it after
