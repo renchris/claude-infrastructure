@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+# cc-tlid — the canonical TASK-LIST ID for a Claude Code session (`CLAUDE_CODE_TASK_LIST_ID`).
+#
+#   cc-tlid [--explain]        prints ONE line: the list id for $PWD
+#
+# THE ID IS THE SHARING KEY. Claude Code stores each task board at
+# $CLAUDE_CONFIG_DIR/tasks/<listId>/, so two sessions see ONE board iff they resolve the SAME id
+# AND their config dirs share that directory (the knowledge-layer mirror's job — see
+# lib/config-mirror.zsh, which un-isolates `tasks`/`tasks-index.json` so all four accounts point at
+# ~/.claude/tasks). This script owns the id half; the mirror owns the store half. Both are required:
+# same id + different store = two boards (measured 2026-07-29 — an account-3 session with
+# CLAUDE_CODE_TASK_LIST_ID=claude-infrastructure-main wrote into ~/.claude-tertiary/tasks and was
+# invisible to the account-1 session on the same name).
+#
+# WHY REPO IDENTITY, NOT REPO+BRANCH (operator decision 2026-07-29). The predecessor lived in
+# ~/.zshrc as `_cc_tlid() { basename(git toplevel)-$(git branch) }`. Under this fleet's mandatory
+# worktree isolation EVERY concurrent writer session gets its own branch, so the branch component
+# handed every session a PRIVATE board — the exact opposite of a shared one. The measured residue:
+# 373 project-keyed boards in ~/.claude/tasks that are empty, plus a long tail of per-worktree
+# `wt-pool-4-cc-231923-43383`-style boards holding 1-8 orphaned tasks each. Keying on the repo
+# collapses those to one board per project, which is what "shared" has to mean for a fleet whose
+# sessions are spread across worktrees AND accounts.
+#
+# Concurrency is safe to widen this way — it was PROVEN, not assumed (probe 2026-07-29): two
+# sessions creating tasks on one board simultaneously both survived with distinct ids (the store is
+# lock-serialized via <list>/.lock). Sharing a board does not race.
+#
+# LINKED WORKTREES RESOLVE TO THE PRIMARY REPO. `--git-common-dir` is the load-bearing call: in a
+# linked worktree `--show-toplevel` is the WORKTREE path (…/wt-run-44260) while `--git-common-dir`
+# is always the PRIMARY repo's .git. Using toplevel would give every worktree its own board again,
+# just spelled differently — the same bug with the branch component removed.
+#
+# COLLISION. The id is a directory name, so two checkouts whose basename matches (~/work/api and
+# ~/oss/api) would otherwise silently share one board. First-come keeps the clean name; a later
+# DIFFERENT repo claiming the same basename is disambiguated with a short path hash. The ownership
+# record is tasks-index.json (`.taskLists[<id>].project`), which the task hooks already maintain —
+# so this reuses the existing registry rather than inventing a second one. Deliberate property: an
+# established board is NEVER renamed out from under itself, because the incumbent always wins.
+#
+# FAIL-SOFT BY CONSTRUCTION. Every failure path still prints a usable id. This runs in the launcher
+# hot path on every session start; an empty stdout would hand Claude Code a per-session throwaway
+# board (`session-<hex>`) and silently un-share the fleet — the failure mode is invisible, so the
+# script must never produce one. There is no exit-non-zero path that omits the id.
+#
+# Env overrides (tests): CC_TASKS_INDEX.
+set -uo pipefail
+
+EXPLAIN=0
+[ "${1:-}" = "--explain" ] && EXPLAIN=1
+
+TASKS_INDEX="${CC_TASKS_INDEX:-$HOME/.claude/tasks-index.json}"
+
+# Sanitise to a safe single path segment. A repo basename is attacker-adjacent only in the sense
+# that it is arbitrary user input (clone a repo named `../../etc`); the id is used as a directory
+# name, so anything outside [A-Za-z0-9._-] collapses to '-'. Leading dots are stripped so an id can
+# never be a hidden entry or a `..` traversal.
+sanitize() {
+    printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '-' | sed -e 's/^[.-]*//' -e 's/-*$//'
+}
+
+# Short, stable digest of an absolute path — the collision tiebreaker.
+hash8() {
+    if command -v shasum >/dev/null 2>&1; then
+        printf '%s' "$1" | shasum -a 256 2>/dev/null | cut -c1-8
+    else
+        printf '%s' "$1" | cksum 2>/dev/null | awk '{printf "%08x", $1}' | cut -c1-8
+    fi
+}
+
+reason=""
+primary=""
+
+# --- resolve the primary repo root ------------------------------------------------------------
+# --path-format=absolute needs git >= 2.31; fall back to resolving a relative common-dir by hand so
+# an older git degrades to the same answer rather than to the -nogit branch.
+common_dir="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
+if [ -z "$common_dir" ]; then
+    rel="$(git rev-parse --git-common-dir 2>/dev/null)"
+    [ -n "$rel" ] && common_dir="$(cd "$rel" 2>/dev/null && pwd)"
+fi
+
+if [ -n "$common_dir" ] && [ -e "$common_dir" ]; then
+    case "$(basename "$common_dir")" in
+        .git) primary="$(dirname "$common_dir")"; reason="git worktree → primary repo" ;;
+        # A bare repo (…/foo.git) has no working tree above it; name it after the repo itself.
+        *)    primary="${common_dir%.git}"; primary="${primary%/}"; reason="bare repo" ;;
+    esac
+fi
+
+if [ -n "$primary" ]; then
+    base="$(basename "$primary")"
+    id="$(sanitize "$base")"
+    [ -n "$id" ] || { id="repo-$(hash8 "$primary")"; reason="$reason (unnameable basename)"; }
+else
+    # Not a git repo (or git unavailable): keep the historical -nogit convention so existing
+    # non-repo boards keep their names across this change.
+    primary="$(pwd -P 2>/dev/null || pwd)"
+    id="$(sanitize "$(basename "$primary")")-nogit"
+    [ "$id" = "-nogit" ] && id="nogit"
+    reason="not a git repo"
+fi
+
+# --- collision: does this id already belong to a DIFFERENT project? ----------------------------
+# jq is the only external dependency and it is not guaranteed on every PATH this runs under
+# (launchd, `zsh -f`), so its absence must degrade to the clean name rather than to no name.
+if [ -f "$TASKS_INDEX" ] && command -v jq >/dev/null 2>&1; then
+    owner="$(jq -r --arg k "$id" '.taskLists[$k].project // ""' "$TASKS_INDEX" 2>/dev/null)"
+    if [ -n "$owner" ] && [ "$owner" != "$primary" ]; then
+        id="${id}-$(hash8 "$primary")"
+        reason="$reason; basename already owned by $owner → disambiguated"
+    fi
+fi
+
+if [ "$EXPLAIN" = 1 ]; then
+    printf 'id:      %s\nprimary: %s\nreason:  %s\nindex:   %s\n' \
+        "$id" "$primary" "${reason:-direct}" "$TASKS_INDEX"
+else
+    printf '%s\n' "$id"
+fi
+exit 0
