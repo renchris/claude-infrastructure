@@ -21,6 +21,23 @@ setup() {
 seed() { printf '%s\n' "$@" > "$MBOX"; }
 add()  { printf '%s\n' "$@" >> "$MBOX"; }
 
+# "the drain delivered NOTHING" — no longer spellable as `[ -z "$output" ]`.
+#
+# Arm-on-open (7f2b85d5) moved the watcher nudge OFF the "mail arrived" path and onto every boundary,
+# so an unwatched session now legitimately emits `🔔 No inbox wake path armed.` even when there is
+# nothing to deliver. That is the fix working — but it silently inverted four exactly-once assertions
+# here from "no mail was surfaced" into "the nudge did not fire", which is a different (and now
+# always-false) claim. Assert the absence of the DELIVERY instead, so these tests keep testing the
+# cursor and stay indifferent to the nudge.
+#
+# "as CONTEXT" is the delivery marker the drain pins deliberately (hooks/mailbox-drain.sh renders it
+# in every body-bearing payload and the suite above already asserts it) — never a loose glob.
+delivered_nothing() { # <output> → 0 iff no mail body was surfaced
+  local ctx=""
+  [ -n "$1" ] && ctx="$(printf '%s' "$1" | jq -r '.hookSpecificOutput.additionalContext // ""' 2>/dev/null)"
+  [ -z "$(printf '%s' "$ctx" | grep -F 'as CONTEXT' || true)" ]
+}
+
 @test "prompt drain: pending mail → additionalContext (never keystrokes), cursor advances to EOF" {
   seed "2026-07-20T10:00:00+0000 [reaper] page one" "2026-07-20T10:01:00+0000 [supervisor] page two"
   run bash -c 'echo "{}" | "$0" prompt' "$DRAIN"
@@ -40,7 +57,8 @@ add()  { printf '%s\n' "$@" >> "$MBOX"; }
   echo '{}' | "$DRAIN" prompt >/dev/null
   run bash -c 'echo "{}" | "$0" prompt' "$DRAIN"
   [ "$status" -eq 0 ]
-  [ -z "$output" ]
+  delivered_nothing "$output"
+  [ "$(cat "$SEEN")" -eq 2 ]     # the named claim: the cursor stayed at EOF, it did not re-deliver
 }
 
 @test "session-start drain emits SessionStart additionalContext" {
@@ -150,7 +168,7 @@ add()  { printf '%s\n' "$@" >> "$MBOX"; }
   bash -c "echo '{}' | ITERM_SESSION_ID='w0t0p0:$UUID' '$DRAIN' session-start" >/dev/null
   run bash -c "echo '{}' | ITERM_SESSION_ID='w0t0p0:$UUID' '$DRAIN' session-start"
   [ "$status" -eq 0 ]
-  [ -z "$output" ]                                   # nothing left to deliver
+  delivered_nothing "$output"                        # nothing left to deliver
   [ "$(grep -c '' "$CC_MAILBOX_DIR/$UUID.md")" -eq 1 ]   # NOT duplicated into our box
 }
 
@@ -160,7 +178,7 @@ add()  { printf '%s\n' "$@" >> "$MBOX"; }
   printf '%s\n' "$OTHER"  > "$CC_MAILBOX_DIR/$PRED.forward"
   run bash -c "echo '{}' | ITERM_SESSION_ID='w0t0p0:$UUID' '$DRAIN' session-start"
   [ "$status" -eq 0 ]
-  [ -z "$output" ]
+  delivered_nothing "$output"
   [ "$(grep -c '' "$CC_MAILBOX_DIR/$PRED.md")" -eq 1 ]   # left untouched for its real successor
 }
 
@@ -170,7 +188,7 @@ add()  { printf '%s\n' "$@" >> "$MBOX"; }
   printf '%s\n' "$UUID"  > "$CC_MAILBOX_DIR/$PRED.forward"
   run bash -c "echo '{}' | ITERM_SESSION_ID='w0t0p0:$UUID' '$DRAIN' prompt"
   [ "$status" -eq 0 ]
-  [ -z "$output" ]
+  delivered_nothing "$output"
   [ "$(mailbox_acked "$PRED")" -eq 0 ] 2>/dev/null || [ -z "$(cat "$CC_MAILBOX_DIR/$PRED.acked" 2>/dev/null)" ]
 }
 
