@@ -176,6 +176,14 @@ The bypassing invocation is the *ordinary* one. A live session was running
 sessions to do before committing. `which bats` → `/opt/homebrew/bin/bats`, the real binary. **There
 is no wrapper, so there is no chokepoint.**
 
+> **⚠ SUPERSEDED IN PART by §8.5.7 — read that before using this paragraph.** The adversarial pass
+> showed that (a) load is a **high-variance** signal, not a trend — 13 samples ranged 29.15→59.80 at
+> a *constant* 31–32 sessions, so "load climbed 27→40.9" is oscillation, not accumulation; and (b)
+> the gate corpora are **not** the dominant term — 31 sessions total only ~18% of process CPU
+> (0.036 cores each) while a **single iTerm2 process exceeds the whole session fleet**. The
+> `pri=31` census finding stands exactly as measured, and demoting it remains correct and cheap —
+> but it buys ~0.5–0.7 cores, not the difference between load 40 and load 20.
+
 ---
 
 ## 4. Failure-mode table — every observed mode → its structural answer
@@ -347,6 +355,73 @@ This is memory `deploy-lag-checkout-behind-origin` exactly: *landed ≠ deployed
 (for a later change, not a `git pull`):** a ceiling must be read from a location that *cannot* lag —
 bind the hardware term in harness config, not in a symlinked script body — and make inertness LOUD,
 so the gate self-reports `capacity_gate: ABSENT` at every spawn rather than silently admitting.
+
+> #### ⚠ RETRACTION — do NOT deploy to "activate the ceiling". The adversarial pass refuted this.
+>
+> The archaeology above is confirmed line-for-line, **but its two load-bearing inferences are
+> false, and acting on them would cause an outage.** Recorded in full because the wrong version of
+> this finding was committed first (`2cda5bc6`) and a reader must not act on it:
+>
+> - **Only ONE of the two is a machine-capacity ceiling (category error).** `cc-dispatch`'s
+>   `CEILING` (`:105`, default 6; `FREE_SLOTS` at `:444`) is a **quota-bounded worker-concurrency
+>   cap** — its own comment at `:64` binds it to `|accounts| × CC_WAVE_MAX_PER_ACCT = 8`. It never
+>   reads cores, load, or memory. Only `capacity_gate()` is a hardware term.
+> - **"Nothing bounds net-new spawns" is FALSE.** Two spawn bounds are **live right now**:
+>   `~/.claude/bin/cc-dispatch:57 CC_DISPATCH_MAX_SPAWN=2` per tick (enforced `:234`) and
+>   `~/.claude/bin/cc-wave-plan:41 CC_WAVE_MAX_PER_ACCT=2` × 4 accounts. Measured: 11 dispatcher
+>   fires in 4 h. What is missing is a **hardware** term, not a bound.
+> - **DEPLOYED AS WRITTEN, `capacity_gate` IS A PERMANENT DISPATCH OUTAGE.** Ceiling 2.0/core = load
+>   20 on 10 cores. All **13 sampled loads were ≥ 29.15** (≥ 2.92/core, max 59.8) ⇒ the gate's own
+>   verdict computes **REFUSE 10/10**. It exempts only `RECYCLE` (`:1634`) and fails open only on an
+>   *unreadable* probe (`:852-857`) — a readable, permanently-over-ceiling probe **refuses forever
+>   with exit 9**. iTerm2 + XProtect + WindowServer alone are ~2.4 cores and are *not* sheddable by
+>   refusing fires, so load would never fall back under the ceiling on its own. This is precisely
+>   the `fail-closed-degradation-as-amplifier` trap its own header claims to design around.
+>
+> **What survives:** the deploy lag is real and **worse than first stated — 68 commits / 3 h 44 m
+> behind and actively widening**, and the inertness is confirmed with a positive control
+> (`grep -rl vm.loadavg ~/.claude/{hooks,bin,scripts}/` returns **empty** — there is no load-based
+> gate anywhere live, and the same grep finds `capacity_gate` at 7 lines in origin/main content, so
+> the detector distinguishes deployed from not-deployed). **Root cause found:**
+> `launchctl list | grep deploy` shows `com.claude.deploy-live` loaded with **last exit 1**, and
+> `~/.claude/autonomy/postland/deploy.log` is wall-to-wall
+> `~/.claude/scripts/deploy-live.sh: No such file or directory` — the brand-new-file symlink gap.
+> That symlink was since repaired (created Jul 29 10:32) **yet the checkout has not advanced in
+> ~22 ticks** and the log stopped writing at 10:28. So the operator item is *"the deployer is
+> broken"* (row 1), **not** *"deploy to get your ceiling"*.
+>
+> **The invariant worth keeping** is that a hardware term must bind somewhere on the spawn path and
+> the live layer must not silently lag the landed tree. **The architecture to discard** is 1-min
+> `loadavg/ncpu` as the saturation proxy with a fixed 2.0 ceiling and no sustained-saturation
+> escape — falsified below (§8.5.7). A redesign must key on a **sheddable** quantity actually
+> attributable to sessions, not on a system-wide loadavg dominated by iTerm2 and macOS XProtect.
+
+### 8.5.7 ⛔ THE BIGGEST CORRECTION — load is NOT a function of session count, and the sessions are not the load
+
+This falsifies the framing the whole row was commissioned under, and it must be read before any
+future capacity work:
+
+- **Load is a high-variance signal, not a trend.** 13 samples over ~100 s at a **constant 31–32
+  sessions**: 29.15, 37.66, 44.35, 45.96, 47.01, 49.94, 50.43, 55.56, 56.96, 56.04, 54.74, 56.24,
+  59.80 — a **2.05× swing while session count changed by at most 1**. The lead's 40.9 and the
+  verifier's 29.15 were **the same 31 sessions**. So this row's own opening observation —
+  "load climbed 27 → 40.9" — is **oscillation, not accumulation.**
+- **The 31 sessions are only ~18% of process CPU.** Measured: 31 `claude.exe` = **111.9% total,
+  3.61% each (0.036 cores)** of 612.8% total process CPU. Meanwhile **a single `iTerm.app` process
+  is 125.2% CPU / 2.17 GB RSS — more than the entire session fleet summed.** Then
+  `XprotectService` 61.6%, `WindowServer` 54.3%, `bfs` 31.1%, Chrome ~39%, plus a fork storm of
+  177 bash + 64 `-zsh` + 39 zsh + 48 sleep + 36 gitstatusd (1307 procs).
+- **Consequence for M1, stated honestly:** the census measures bats at ~0.5–0.7 cores of 10. So
+  **M1 is correct, cheap, safe, and NOT the dominant lag term.** It is worth doing — demotion
+  *reorders* rather than refuses, so it is the right kind of lever for a load you cannot shed — but
+  this plan must not oversell it. The dominant terms are the **TUI renderer** (iTerm2 +
+  WindowServer ≈ 1.8 cores), macOS scanning, and **per-event fork churn** (§8.5.4), in that order.
+- **Consequence for the exoneration in §3.1/§3.2:** unchanged and strengthened. Memory and leaks
+  were never the problem, and the per-session CPU cost (0.036 cores) is smaller than this plan
+  first estimated.
+- **XProtect is high-variance too, and all three measurements disagree:** axis 3 sampled 89.9%, the
+  verifier 61.6%, the lead 0.0% instantaneous / ~4.6% lifetime-average. Treat it as an oscillating
+  consumer of order 0.5 cores, never as a stable figure — and never from a single `ps %cpu` read.
 
 Related: **a ceiling was built for RECOVERY spawns only.** `lr-select.py:83-84` caps recovery at
 `MAX_TOTAL=4` / `MAX_PER_WORKTREE=1`, and `SESSION_SPRAWL_CONSOLIDATION_PLAN.md` (status `complete`)
