@@ -18,7 +18,7 @@ rebuilds must not both redesign; the row that owns it is marked.
 | 2 | **Session lifecycle & succession** — open/recycle/close | handoff-fire, /handoff, self-close, engagement verification, warm worktree claim | mailbox delivery (3); registry truth (4) | a watched pane must never vanish illegibly | open |
 | 3 | **Cross-session comms** — messages between peers | cc-notify, mailbox+ack cursor, .forward chains, cc-await-ping, mailbox-drain | wake path (2); desk inbox (5) | delivery must survive recycles; exactly-once ack | open (v3 design exists — cross-session-mail-v3 memory) |
 | 4 | **Session registry & reaping** — who is alive, who gets closed | session-register, cc-reconcile, cc-reaper, cc-teardown, liveness oracles (cwd/lsof) | teardown of (2)'s panes | never reap a live operator conversation | **DONE 2026-07-29** — SESSION_REGISTRY_V2.md; landed 7db74a76 (c834b705 design · acddb319 beat+lease · 5816968a fail-closed belts · +hermeticity fix); activation 16-session-beat staged |
-| 5 | **Autonomy dispatch & discovery** — what gets worked on | cc-dispatch, cc-backlog, cc-discover, desk loop, launchd dispatcher/discovery | fires via (2); reads (10) | backlog > concurrency is normal, not a cliff | **REBUILDING 2026-07-29** — [AUTONOMY_DISPATCH_V2.md](AUTONOMY_DISPATCH_V2.md); design landed 7400c614 |
+| 5 | **Autonomy dispatch & discovery** — what gets worked on | cc-dispatch, cc-backlog, cc-discover, cc-wave-plan, desk loop, launchd dispatcher/discovery | fires via (2); reads (10); consumes (7) | ~~backlog > concurrency is normal, not a cliff~~ **cell falsified — real cause was no fleet concurrency ceiling** | **DONE 2026-07-29** — [AUTONOMY_DISPATCH_V2.md](AUTONOMY_DISPATCH_V2.md); 11 lands: design 7400c614 · map bf796c57 · acceptance reader 0a8a2976+361675e8+5257d457 · activation ruling c87ca381 · seam rulings e0356664 · ceiling correction 15cc1f4f · **build: cadence 21d8e869 · verdict 6c73429f · decide f16c37ee**. Live metric ACCRUING (needs deploy + C10 activation) |
 | 6 | **Guardrail/hook layer** — what a session may do | 69 hook entries / 12 events, validate-bash, permission rails, Stop asserts, OVERWRITE guard | every subsystem's enforcement chokepoints | a hook failure must never block a tool by accident | open |
 | 7 | **Account/quota routing & relogin** — which account works | claude-accounts, cc-relogin*, limit-recover, model-config.yaml SSOT, launchers | fire-time ranking (2) | login cliffs are hard walls; 4 isolated accounts | open |
 | 8 | **Context economy** — when a session recycles | waiting-recycle, boundary-handoff, dod-persist, /wrap, session-continue | recycle executes via (2) | rot degrades decisions before the wall breaks them | open |
@@ -107,6 +107,19 @@ its customers stabilize their contracts).
   row's suites for assertions that a SAFETY check being unavailable still yields the permissive
   outcome; that shape is where fail-open hides, and it survives every code review that trusts green.
 
+- 2026-07-29 **A REPLACEMENT MECHANISM CAN FAIL MORE QUIETLY THAN THE ONE IT REPLACES — check the
+  new failure's LOUDNESS, not just its likelihood.** Row 5's near-miss, caught mid-build and worth
+  generalising. The rebuild replaced a false ⛔ cliff (which PAGES) with capacity-based deferral
+  (which deliberately never pages, because backlog > concurrency is normal). The first
+  implementation of the ceiling read a live-SESSION count instead of dispatch's own outstanding
+  workers: measured 12 vs 0, so at the default ceiling of 6 it would have admitted nothing FOREVER
+  and said NOTHING — strictly worse than the bug being fixed, which at least announced itself.
+  The design was right; one signal inside it was wrong, and the design's own virtue (silence on the
+  normal case) is what would have hidden it. **When a rebuild converts a loud failure into a silent
+  normal state, add an alarm for the SATURATED case at the same time** (row 5: F16 + A13), and pick
+  control variables the subsystem actually owns — charging dispatch for the operator's panes let
+  human activity throttle autonomy to zero. Caught only because the plan's measured-constants
+  discipline forced a live read of both numbers before accepting the spec.
 - 2026-07-29 (row 5, source of the two entries above — kept for its row-specific residue only):
   the falsified cell and the disabled-daemon trap were both surfaced here; the generalised
   statements live above, not repeated. What is additionally row-5-specific and still load-bearing:
