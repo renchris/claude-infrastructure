@@ -29,6 +29,9 @@ IDL="${CC_DISPATCH_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
 BACKLOG="${CC_BACKLOG_FILE:-$HOME/.claude/autonomy/backlog.jsonl}"
 PAGES_DIR="${CC_DISPATCH_PAGES_DIR:-$HOME/.claude/autonomy/pages}"
 CEILING="${CC_DISPATCH_CEILING:-6}"
+# MUST match cc-dispatch's own filter (cc-dispatch:59-63 — basename-normalised project name), else
+# this reader and the producer disagree about which items were even eligible for a decision.
+PROJECT="${CC_DISPATCH_PROJECT:-$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")}"
 REPO="${CC_ACCEPT_REPO:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 LAUNCHCTL="${CC_ACCEPT_LAUNCHCTL:-launchctl}"
 JSON=0; FAILS=0
@@ -55,8 +58,13 @@ a1() {
     row A1 NOT-RUN "no v2 decision records in the journal yet" "$IDL"; return
   fi
   n_dec="$(jq -r --arg p "$pass" 'select(.actor=="cc-dispatch" and .action=="decision" and .pass==$p) | .id' "$IDL" 2>/dev/null | sort -u | wc -l | tr -d ' ')"
-  # open = folded status "open" (blocked is excluded from the wave by contract, so not decided)
-  n_open="$(cc-backlog list --open --json 2>/dev/null | jq '[.[] | select(.status=="open")] | length' 2>/dev/null || echo "")"
+  # open = folded status "open" AND in the dispatched project. Scoping matters: cc-dispatch filters
+  # `project == CC_DISPATCH_PROJECT` (cc-dispatch:153), so comparing against the WHOLE ledger would
+  # fabricate a failure out of other projects' items — a check whose own filter disagrees with the
+  # producer's reports a defect that is not there (memory: named-failure-vs-no-verdict).
+  # blocked is excluded from the wave by contract, so it is never decided.
+  n_open="$(cc-backlog list --open --json 2>/dev/null \
+    | jq --arg p "$PROJECT" '[.[] | select(.status=="open" and .project==$p)] | length' 2>/dev/null || echo "")"
   if [ -z "$n_open" ]; then
     row A1 NOT-RUN "cannot fold the ledger (cc-backlog unavailable)" "$BACKLOG"; return
   fi
@@ -70,29 +78,38 @@ a1() {
 # ── A2 — decision within 5 min of add ────────────────────────────────────────────────────────────
 # Joins each item's `add` ts in the ledger to its FIRST decision record. Reports max; the bound is
 # 300s. Items added before v2 existed are excluded (they cannot testify about v2's latency).
+# UNDECIDED adds are the failure this criterion exists to catch. Measuring latency only over adds
+# that HAPPENED to get a decision is a false-pass generator: a v2 that decided 1 of 50 adds would
+# report a tiny max over n=1 and PASS. So an add inside the window with NO decision at all counts
+# as a violation in its own right — an infinite latency, not an absent sample.
 a2() {
-  local first_pass_ts joined max p50 n
+  local first_pass_ts pairs joined undecided max p50 n
   have_v2 || { row A2 NOT-RUN "no v2 decision records yet" "$IDL"; return; }
   first_pass_ts="$(jq -r 'select(.actor=="cc-dispatch" and .action=="decision") | .ts' "$IDL" 2>/dev/null | sort | head -1)"
-  joined="$(
-    jq -r --arg since "$first_pass_ts" '
-      select(.event=="add" and .ts >= $since) | [.id, .ts] | @tsv' "$BACKLOG" 2>/dev/null \
+  pairs="$(
+    jq -r --arg since "$first_pass_ts" --arg p "$PROJECT" '
+      select(.event=="add" and .ts >= $since and (.project == $p)) | [.id, .ts] | @tsv' "$BACKLOG" 2>/dev/null \
     | sort -u | while IFS=$'\t' read -r id ts; do
         [ -n "$id" ] || continue
         d="$(jq -r --arg i "$id" 'select(.actor=="cc-dispatch" and .action=="decision" and .id==$i) | .ts' "$IDL" 2>/dev/null | sort | head -1)"
-        [ -n "$d" ] || continue
+        if [ -z "$d" ]; then echo "UNDECIDED"; continue; fi
         a="$(iso_epoch "$ts")"; b="$(iso_epoch "$d")"
-        [ -n "$a" ] && [ -n "$b" ] && echo $(( b - a ))
-      done | sort -n
+        if [ -n "$a" ] && [ -n "$b" ]; then echo $(( b - a )); fi
+      done
   )"
+  undecided="$(printf '%s\n' "$pairs" | grep -c '^UNDECIDED$' || true)"
+  joined="$(printf '%s\n' "$pairs" | grep '^[0-9-]' | sort -n)"
   n="$(printf '%s\n' "$joined" | grep -c '^[0-9-]' || true)"
-  if [ "${n:-0}" -eq 0 ]; then
-    row A2 NOT-RUN "no item was added AND decided inside the v2 window yet" "$BACKLOG + $IDL"; return
+  if [ "${n:-0}" -eq 0 ] && [ "${undecided:-0}" -eq 0 ]; then
+    row A2 NOT-RUN "no item was added inside the v2 window yet" "$BACKLOG + $IDL"; return
+  fi
+  if [ "${undecided:-0}" -gt 0 ]; then
+    row A2 FAIL "$undecided add(s) in the v2 window received NO decision at all (n=$n decided)" "$BACKLOG + $IDL"; return
   fi
   max="$(printf '%s\n' "$joined" | tail -1)"
   p50="$(printf '%s\n' "$joined" | awk '{a[NR]=$1} END{print a[int((NR+1)/2)]}')"
   if [ "$max" -lt 300 ]; then
-    row A2 PASS "max ${max}s p50 ${p50}s over n=$n adds (bound 300s)" "$BACKLOG + $IDL"
+    row A2 PASS "max ${max}s p50 ${p50}s over n=$n adds, 0 undecided (bound 300s)" "$BACKLOG + $IDL"
   else
     row A2 FAIL "max ${max}s exceeds the 300s bound (p50 ${p50}s, n=$n)" "$BACKLOG + $IDL"
   fi
@@ -261,6 +278,30 @@ if [ "${1:-}" = selftest ]; then
   printf '#!/bin/bash\nexit 0\n' > "$tmp/lc-absent"; chmod +x "$tmp/lc-absent"
   got="$(CC_ACCEPT_LAUNCHCTL="$tmp/lc-absent" CC_DISPATCH_IDL="$tmp/idl-empty.jsonl" CC_BACKLOG_FILE="$tmp/none.jsonl" "$0" --json 2>/dev/null | jq -r 'select(.criterion=="A11")|.verdict')"
   t "A11 reports NOT-RUN when the label is absent" "$got" "NOT-RUN"
+
+  # A2 false-pass guard: an add inside the v2 window that got NO decision must FAIL, not be dropped
+  # as an absent sample. RED-proves the defect this reader had before the undecided-count was added.
+  # Fixture shape must match the real producer's TEMPORAL shape: the v2 window opens at the FIRST
+  # decision record, so an add can only testify if it lands after that. A seed decision opens the
+  # window, then the add under test follows it. (memory: fixture-shape-parity-with-real-producer.)
+  printf '%s\n' '{"actor":"cc-dispatch","action":"decision","pass":"p0","id":"seed","verdict":"admit","ts":"2026-07-29T00:00:00Z"}' \
+                '{"actor":"cc-dispatch","action":"decision","pass":"p1","id":"decided","verdict":"admit","ts":"2026-07-29T00:00:10Z"}' > "$tmp/idl-a2.jsonl"
+  printf '%s\n' '{"event":"add","id":"decided","project":"proj","ts":"2026-07-29T00:00:05Z"}' \
+                '{"event":"add","id":"ignored","project":"proj","ts":"2026-07-29T00:00:05Z"}' > "$tmp/bl-a2.jsonl"
+  got="$(CC_DISPATCH_PROJECT=proj CC_DISPATCH_IDL="$tmp/idl-a2.jsonl" CC_BACKLOG_FILE="$tmp/bl-a2.jsonl" "$0" --json 2>/dev/null | jq -r 'select(.criterion=="A2")|.verdict')"
+  t "A2 fails when an add in-window got NO decision" "$got" "FAIL"
+
+  # A2 positive control: same harness, same shapes, every add decided fast ⇒ PASS. Without this the
+  # test above could pass for the wrong reason (a reader that always says FAIL).
+  printf '%s\n' '{"event":"add","id":"decided","project":"proj","ts":"2026-07-29T00:00:05Z"}' > "$tmp/bl-a2ok.jsonl"
+  got="$(CC_DISPATCH_PROJECT=proj CC_DISPATCH_IDL="$tmp/idl-a2.jsonl" CC_BACKLOG_FILE="$tmp/bl-a2ok.jsonl" "$0" --json 2>/dev/null | jq -r 'select(.criterion=="A2")|.verdict')"
+  t "A2 passes when every in-window add was decided inside the bound" "$got" "PASS"
+
+  # A2 scoping: an add for ANOTHER project must not be counted undecided — cc-dispatch never had it.
+  printf '%s\n' '{"event":"add","id":"decided","project":"proj","ts":"2026-07-29T00:00:00Z"}' \
+                '{"event":"add","id":"other","project":"elsewhere","ts":"2026-07-29T00:00:05Z"}' > "$tmp/bl-a2scope.jsonl"
+  got="$(CC_DISPATCH_PROJECT=proj CC_DISPATCH_IDL="$tmp/idl-a2.jsonl" CC_BACKLOG_FILE="$tmp/bl-a2scope.jsonl" "$0" --json 2>/dev/null | jq -r 'select(.criterion=="A2")|.verdict')"
+  t "A2 ignores another project's adds (matches the producer's filter)" "$got" "PASS"
 
   # exit code: a FAIL row must make the reader exit non-zero (it gates, it does not merely print).
   CC_DISPATCH_IDL="$tmp/idl-false.jsonl" CC_BACKLOG_FILE="$tmp/none.jsonl" "$0" >/dev/null 2>&1
