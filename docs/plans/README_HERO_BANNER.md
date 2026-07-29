@@ -253,7 +253,10 @@ gate is unmet by design, so this track has landed everything *except* the README
 the demo GIFs are untouched.
 
 The header edit itself is staged as a single command, not applied — see
-`scripts/banner-apply-header.sh`.
+`scripts/banner-apply-header.sh`. It `git mv`s the chosen prototype to `assets/banner/hero.svg`,
+so after it runs the path captions in `comparison.html` name files that have moved. That is
+intended: the page is a point-in-time record of the bake-off, and it still *renders* correctly
+because the prototypes are inlined rather than linked.
 
 ## Log
 
