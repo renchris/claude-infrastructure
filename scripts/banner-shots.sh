@@ -175,11 +175,13 @@ HTML
   got=$("$CHROME" --headless --disable-gpu --no-sandbox --window-size=900,"$req" \
         --virtual-time-budget=800 --dump-dom "file://$probe" 2>/dev/null \
         | sed -n 's/.*INNERH=\([0-9][0-9]*\).*/\1/p' | head -1)
-  [[ -n "$got" ]] && (( got > 0 && got <= req )) || {
+  # Spelled as an explicit if: `A && B || C` reads as if-then-else and is not one — C also runs
+  # when A succeeds and B fails, which here is right by luck rather than by construction.
+  if [[ -z "$got" ]] || (( got <= 0 )) || (( got > req )); then
     echo "banner-shots: could not measure the headless viewport inset (got '${got:-}')" >&2
     echo "  without it a tall asset is cropped silently — refusing to emit a render." >&2
     exit 1
-  }
+  fi
   VIEWPORT_INSET=$(( req - got ))
 }
 
