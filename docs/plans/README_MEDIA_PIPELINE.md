@@ -24,15 +24,69 @@ Inline payload **4,192,585 → 3,525,960 B (−666,625 B, −15.9 %)**, with mea
 equal or better on both assets. Task 1 and Task 2 are **RESOLVED** — see below. Task 3 is
 a separate track and is untouched.
 
-## Task 1 — compression — **RESOLVED 2026-07-29**
+## Task 1 — compression — **RESOLVED 2026-07-29, then PARTLY REVERTED the same day**
 
-**Outcome:** both inline assets are animated WebP. Inline payload −666,625 B (−15.9 %),
-quality equal or better on both, every claim measured.
+> **The first outcome was wrong and is corrected below.** The hero was shipped as lossy WebP
+> q65; the operator spotted vertical bar streaks in the flat grey of an unfocused pane. That
+> was a real regression I introduced, and SSIM/PSNR passed it. The hero is back on GIF.
+
+**Outcome (corrected):** only the VHS clip moves to WebP. Inline payload −75,349 B (−1.8 %),
+quality ≥ the original on both assets.
 
 | Asset | Before | After | Δ | Quality |
 |---|---|---|---|---|
-| hero (`handoff-live`) | 3,483,666 B GIF | 2,892,390 B WebP | **−17.0 %** | SSIM 0.9763 vs GIF 0.9751; PSNR 39.13 vs 38.31 dB — **better on both** |
+| hero (`handoff-live`) | 3,483,666 B GIF | **unchanged — GIF** | 0 | no lossy WebP is both clean and smaller (below) |
 | VHS clip (`handoff-real`) | 708,919 B GIF | 633,570 B WebP | **−10.6 %** | **pixel-exact** (534/534 frames hash-identical, duration 63,960 ms both) |
+
+### Why the hero cannot be WebP (measured, whole range)
+
+Lossy WebP encodes each animation frame as a **partial update rectangle** (measured:
+1105×616, 1070×594, 526×458 on a 1200×716 canvas). Inside the rectangle a flat grey
+re-quantizes to a slightly different DC level than the retained pixels outside, and the
+rectangle edge becomes a visible vertical seam. GIF is immune — palette indices cannot drift.
+
+Streak metric = stdev of the column-mean profile over 239 text-free rows of the unfocused pane:
+
+| Encode | Bytes | vs GIF | Streak (source 0.195, GIF 0.188) | Coloured-text RMS |
+|---|---|---|---|---|
+| GIF (incumbent) | 3,483,666 | — | **0.188** | 4.02 |
+| lossy q65 (shipped, reverted) | 2,892,390 | −17 % | **0.526** ✗ | 4.84 |
+| lossy q80 / q90 | 1.47 / 1.83 MB* | — | 0.446 / 0.401 ✗ | — |
+| all-keyframe q65 | ~26 MB | +650 % | 0.222 ✓ | — |
+| near-lossless 20 / 30 | — / 3,740,996 | +7.4 % | **0.516 / 0.516** ✗ | — |
+| near-lossless 40 (= 50) | 4,226,254 | **+21.3 %** | **0.194** ✓ | **1.42** ✓ |
+| near-lossless 60 | 4,857,902 | +39.4 % | 0.191 ✓ | ~1.4 ✓ |
+
+The near-lossless 30 row is the one that closes the question: at only +7.4 % over the GIF it is
+**still fully streaked**. The threshold where seams disappear (40) is already past the GIF's size,
+so nothing in the range is both clean and smaller. `-min_size` is inert here for every mode, and
+40 and 50 emit byte-identical files — the parameter quantizes to discrete internal levels.
+
+<sub>* proxy-segment bytes (260 of 610 frames); all others are full-clip.</sub>
+
+**Why there is no middle setting:** WebP animation has **no motion compensation**. Every ANMF
+frame is a standalone image; cropping to a changed rectangle *is* the entire temporal
+compression. Removing the seams removes the compression — hence the ~26 MB all-keyframe row.
+Raising `-q` only shrinks the DC step, it never removes it.
+
+**The honest conclusion:** for live screen capture, GIF is not beaten by WebP at equal quality.
+Near-lossless 40 is genuinely better than the GIF on both axes (clean flats *and* 2.8× better
+colour) but costs +742,588 B, which is an editorial trade, not a compression win. Regenerate it
+with:
+
+```bash
+ffmpeg -v error -i assets/demo/handoff-live.mp4 -vf "fps=20,scale=1200:716:flags=lanczos" f/%04d.png
+img2webp -loop 0 -d 50 -near_lossless 40 f/*.png -o assets/demo/handoff-live.webp
+```
+
+### Correction: an earlier claim here was false
+
+This doc, commit `3355afa7`, the skill and memory all said the GIF "visibly posterizes a
+red→orange gradient that the WebP tracks cleanly", i.e. that the swap was a quality *gain* on
+coloured text. **That is wrong.** Measured RMS against the source over the coloured-text box,
+at both sampled frames: GIF **4.02 / 4.92**, WebP q65 **4.84 / 5.45** — the GIF is *closer*.
+The error was reading a contrast-amplified zoom and mistaking visible palette steps for greater
+error. A visible artefact is not the same as a larger one; the amplified view had no scale.
 
 **The gate — settled empirically, and the premise was wrong.** camo is *not* in the path
 for a README image: a relative `<img src>` is rewritten to `/{owner}/{repo}/raw/{ref}/{path}`,
