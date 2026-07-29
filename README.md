@@ -6,7 +6,7 @@
 
 [![sessions](https://img.shields.io/badge/sessions-5%2C709-d4af37?style=flat-square&labelColor=161b22)](#4-nothing-a-session-did-dies-with-it)
 [![hooks](https://img.shields.io/badge/hooks-69%20across%2012%20events-d4af37?style=flat-square&labelColor=161b22)](#3-autonomy-is-bounded)
-[![tests](https://img.shields.io/badge/bats%20tests-2%2C307-d4af37?style=flat-square&labelColor=161b22)](#5-the-whole-system-deploys-from-git)
+[![tests](https://img.shields.io/badge/bats%20tests-2%2C358-d4af37?style=flat-square&labelColor=161b22)](#5-the-whole-system-deploys-from-git)
 [![accounts](https://img.shields.io/badge/accounts-4%20isolated-d4af37?style=flat-square&labelColor=161b22)](#2-parallel-work-cannot-collide)
 
 [**1 · Sessions run each other**](#1-sessions-run-each-other) · [**2 · No collisions**](#2-parallel-work-cannot-collide) · [**3 · Bounded autonomy**](#3-autonomy-is-bounded) · [**4 · Nothing is lost**](#4-nothing-a-session-did-dies-with-it) · [**5 · Deploys from git**](#5-the-whole-system-deploys-from-git) · [**Install**](#install)
@@ -133,7 +133,7 @@ This layer is audited adversarially — most recently a 15-agent verified audit:
 <!-- Diagram source: assets/diagrams/parallel-lanes.mmd — edit it, run `npm run diagrams`, commit the regenerated SVGs. -->
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/diagrams/parallel-lanes-dark.svg">
-  <img src="assets/diagrams/parallel-lanes-light.svg" alt="Sessions A, B and C each work in their own worktree on their own account. All three funnel into a single machine-wide land-lock that admits exactly one pusher. Inside the lock, the landing fetches, rebases, runs the full gate, pushes, and then verifies the result by content rather than by commit count, before the work reaches origin/main.">
+  <img src="assets/diagrams/parallel-lanes-light.svg" alt="Sessions A, B and C each work in their own worktree on their own account. All three run an unlocked fast gate — statics, ratchets and a bounded smoke that sheds by skipping under load, never a test corpus — then funnel into a single machine-wide land-lock held for seconds, covering only the compare-and-swap push window. The push is verified by content rather than by commit count before the work reaches origin/main. Behind the trunk, one background verifier runs the full corpus in a fresh cell with host suites partitioned out, and its green stamp is the only thing that lets the deploy autopilot advance the live ~/.claude layer.">
 </picture>
 
 <details>
@@ -142,18 +142,22 @@ This layer is audited adversarially — most recently a 15-agent verified audit:
 <!-- mermaid-fence: assets/diagrams/parallel-lanes.mmd (auto-synced by `npm run diagrams`) -->
 ```mermaid
 flowchart LR
-    Lock{"land-lock<br/>one pusher,<br/>machine-wide"}
-    A["session A<br/>own worktree · acct 1"] --> Lock
-    B["session B<br/>own worktree · acct 2"] --> Lock
-    C["session C<br/>own worktree · acct 3"] --> Lock
-    Lock --> Gate["inside the lock:<br/>fetch → rebase → full gate → push<br/>→ verify by CONTENT, not commit count"]
-    Gate --> Trunk[("origin/main")]
+    A["session A<br/>own worktree · acct 1"] --> G
+    B["session B<br/>own worktree · acct 2"] --> G
+    C["session C<br/>own worktree · acct 3"] --> G
+    G["fast gate — UNLOCKED, seconds<br/>statics + ratchets + bounded smoke<br/>(sheds by SKIPPING under load; no corpus, ever)"]
+    G --> Lock{"land-lock<br/>held seconds:<br/>the CAS push window only"}
+    Lock --> Push["push → verify by CONTENT,<br/>not commit count"]
+    Push --> Trunk[("origin/main")]
+    Trunk --> V["verifier — ONE, background band<br/>full corpus, fresh cell,<br/>host suites partitioned out"]
+    V -->|"green stamp"| D["deploy autopilot<br/>fail-closed on green"]
+    D --> Live[("live ~/.claude")]
     classDef w fill:#0d1d2e,stroke:#58a6ff,color:#e6edf3
     classDef k fill:#2b2410,stroke:#d4af37,color:#e6edf3
     classDef t fill:#12261a,stroke:#3fb950,color:#e6edf3
     class A,B,C w
-    class Lock,Gate k
-    class Trunk t
+    class G,Lock,Push,V,D k
+    class Trunk,Live t
 ```
 
 <sup><a href="assets/diagrams/parallel-lanes-dark.svg?raw=true">full-screen dark</a> · <a href="assets/diagrams/parallel-lanes-light.svg?raw=true">light</a> · <a href="assets/diagrams/parallel-lanes.mmd">source</a></sup>
@@ -164,7 +168,7 @@ Three traps make naive automation fail. Each is defeated by a mechanism, not by 
 
 - **A shared index means a bare `git commit` sweeps another session's staged files** — plus ref-lock races and shared-file clobber. Every writer therefore gets its **own worktree**, handed out warm (`node_modules`, codegen, `.env.local`, seeded DB already built) in about three seconds.
 - **The launchers are zsh functions**, carrying per-account isolation, so no script can `exec` them. `handoff-fire.sh` **types** the launch command into a fresh iTerm2 surface through the it2 Python API with echo-verified keystrokes — anchored to the firing agent's own window, so the split lands where you are looking.
-- **A hot trunk means N landers race**, each re-running the gate. [`/ship`](commands/ship.md) folds fetch → reconcile → gate → push into one lock-held child ([`ship-land.sh`](scripts/ship-land.sh) + [`land-lock.sh`](scripts/land-lock.sh)), so exactly one gate runs per landing and the trunk cannot move under the push. Landing is then verified **by content** ([`land-verify.sh`](scripts/land-verify.sh)) — a commit-count check reads "landed" for work that was silently dropped, which is exactly how a 5-file commit went missing on 2026-07-11.
+- **A hot trunk means N landers race — and a per-land test corpus means they starve each other.** A week of measurement proved the frame, not the tree, was the blocker: full-corpus-per-land collapsed P(green) to ~2.3% under fleet load (one branch died 37 straight times on a tree that was never red). So the verdict is **inverted** ([`docs/plans/LAND_PIPELINE_V2.md`](docs/plans/LAND_PIPELINE_V2.md)): [`ship-land.sh`](scripts/ship-land.sh) lands in seconds-to-minutes with only O(diff) statics, ratchets and a ≤120s direct-suite smoke that *skips* under load — nothing heavy can enter [`land-lock.sh`](scripts/land-lock.sh), which holds for seconds around the CAS push window. The full-suite claim belongs to one background verifier ([`postland-verify.sh`](scripts/postland-verify.sh) — fresh cell per run, [`host-suites.manifest`](scripts/host-suites.manifest) partition, progress-keyed stall bound, auto-revert of bisected culprits), and the live layer only ever advances to its green stamp ([`deploy-live.sh`](scripts/deploy-live.sh) on a launchd tick). Landing is still verified **by content** ([`land-verify.sh`](scripts/land-verify.sh)) — a commit-count check reads "landed" for work that was silently dropped, which is exactly how a 5-file commit went missing on 2026-07-11.
 
 > **Portable vs project-specific.** `handoff-fire.sh`, the isolation policy, [`docs/WORKTREE_WORKFLOW.md`](docs/WORKTREE_WORKFLOW.md), and this repo's fail-closed landing rail are the **portable** half and live here. App repos keep their own warm pool and migration-aware `/ship` variants. Account, model and effort routing reads `~/.claude/model-config.yaml`, which is per-machine and deliberately not synced.
 
@@ -318,6 +322,8 @@ flowchart TB
 </details>
 
 The symlink rule was bought with a real failure: on 2026-07-03 a *copied* `handoff-fire.sh` had drifted +198 lines in the deployment and was one `install.sh` away from being clobbered. The four account dirs stay **copies** so a rate-limited account cannot perturb another; global surfaces are copies too, and `sync.sh` pulls hand-edits of those back.
+
+**Landed is not live — the gap is closed by proof, not by hand.** Because the primary dir symlinks into the checkout, a trunk commit only reaches running sessions when the checkout advances — and it advances *autonomously and fail-closed*: a launchd verifier ([`postland-verify.sh`](scripts/postland-verify.sh), every 5 min) proves each trunk tree with the full corpus in a fresh cell and stamps it; a deploy autopilot ([`deploy-live.sh`](scripts/deploy-live.sh)` --auto`, every 10 min) fast-forwards the checkout **only to a green-stamped tree**, re-runs `install.sh` (so brand-new files get their symlinks), and then runs the [host suites](scripts/host-suites.manifest) against the live layer — the one place suites that assert the deployed world can honestly run. A red trunk auto-reverts its bisected culprit; a dead verifier or a lagging deploy is surfaced by fact-bound alarms in [`cc-blockers`](bin/cc-blockers) rather than assumed healthy.
 
 <details>
 <summary><b>What actually lives in <code>~/.claude/</code></b></summary>
