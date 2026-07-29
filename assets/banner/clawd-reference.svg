@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 780" width="1920" height="780"
+     role="img" aria-labelledby="t d">
+<title id="t">clawd sprite — geometry verification sheet</title>
+<desc id="d">The Claude Code pixel creature drawn from its extracted 11 by 8 grid, in its four shipped poses along the top, and in a scale ramp along the bottom from 8 to 32 pixels per grid cell, to find the size below which the eyes and legs stop reading.</desc>
+<style>.f{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace}.cap{fill:#6e7681;font-size:15px;letter-spacing:.08em}</style>
+<rect width="1920" height="780" rx="14" fill="#0d1117"/>
+<rect x=".75" y=".75" width="1918.5" height="778.5" rx="14" fill="none" stroke="#21262d" stroke-width="1.5"/>
+<g id="p0" shape-rendering="crispEdges">
+  <g fill="#D77757"><rect x="360" y="90" width="180" height="120"/><rect x="360" y="210" width="20" height="40"/><rect x="400" y="210" width="20" height="40"/><rect x="480" y="210" width="20" height="40"/><rect x="520" y="210" width="20" height="40"/></g>
+  <g fill="#D77757"><rect x="340" y="130" width="20" height="40"/></g>
+  <g fill="#D77757"><rect x="540" y="130" width="20" height="40"/></g>
+  <g fill="#0d1117"><rect x="380" y="130" width="20" height="20"/></g>
+  <g fill="#0d1117"><rect x="500" y="130" width="20" height="20"/></g>
+</g>
+<text class="f cap" x="450" y="290" text-anchor="middle">default</text>
+<g id="p1" shape-rendering="crispEdges">
+  <g fill="#D77757"><rect x="700" y="90" width="180" height="120"/><rect x="700" y="210" width="20" height="40"/><rect x="740" y="210" width="20" height="40"/><rect x="820" y="210" width="20" height="40"/><rect x="860" y="210" width="20" height="40"/></g>
+  <g fill="#D77757"><rect x="680" y="130" width="20" height="40"/></g>
+  <g fill="#D77757"><rect x="880" y="130" width="20" height="40"/></g>
+  <g fill="#0d1117" transform="translate(-20 0)"><rect x="720" y="130" width="20" height="20"/></g>
+  <g fill="#0d1117" transform="translate(-20 0)"><rect x="840" y="130" width="20" height="20"/></g>
+</g>
+<text class="f cap" x="790" y="290" text-anchor="middle">look-left</text>
+<g id="p2" shape-rendering="crispEdges">
+  <g fill="#D77757"><rect x="1040" y="90" width="180" height="120"/><rect x="1040" y="210" width="20" height="40"/><rect x="1080" y="210" width="20" height="40"/><rect x="1160" y="210" width="20" height="40"/><rect x="1200" y="210" width="20" height="40"/></g>
+  <g fill="#D77757"><rect x="1020" y="130" width="20" height="40"/></g>
+  <g fill="#D77757"><rect x="1220" y="130" width="20" height="40"/></g>
+  <g fill="#0d1117" transform="translate(20 0)"><rect x="1060" y="130" width="20" height="20"/></g>
+  <g fill="#0d1117" transform="translate(20 0)"><rect x="1180" y="130" width="20" height="20"/></g>
+</g>
+<text class="f cap" x="1130" y="290" text-anchor="middle">look-right</text>
+<g id="p3" shape-rendering="crispEdges">
+  <g fill="#D77757"><rect x="1380" y="90" width="180" height="120"/><rect x="1380" y="210" width="20" height="40"/><rect x="1420" y="210" width="20" height="40"/><rect x="1500" y="210" width="20" height="40"/><rect x="1540" y="210" width="20" height="40"/></g>
+  <g fill="#D77757" transform="translate(0 -60)"><rect x="1360" y="130" width="20" height="40"/></g>
+  <g fill="#D77757" transform="translate(0 -60)"><rect x="1560" y="130" width="20" height="40"/></g>
+  <g fill="#0d1117"><rect x="1400" y="130" width="20" height="20"/></g>
+  <g fill="#0d1117"><rect x="1520" y="130" width="20" height="20"/></g>
+</g>
+<text class="f cap" x="1470" y="290" text-anchor="middle">arms-up</text>
+<g id="s8" shape-rendering="crispEdges">
+  <g fill="#D77757"><rect x="242" y="556" width="72" height="48"/><rect x="242" y="604" width="8" height="16"/><rect x="258" y="604" width="8" height="16"/><rect x="290" y="604" width="8" height="16"/><rect x="306" y="604" width="8" height="16"/></g>
+  <g fill="#D77757"><rect x="234" y="572" width="8" height="16"/></g>
+  <g fill="#D77757"><rect x="314" y="572" width="8" height="16"/></g>
+  <g fill="#0d1117"><rect x="250" y="572" width="8" height="8"/></g>
+  <g fill="#0d1117"><rect x="298" y="572" width="8" height="8"/></g>
+</g>
+<text class="f cap" x="278" y="654" text-anchor="middle">8px</text>
+<g id="s12" shape-rendering="crispEdges">
+  <g fill="#D77757"><rect x="444" y="524" width="108" height="72"/><rect x="444" y="596" width="12" height="24"/><rect x="468" y="596" width="12" height="24"/><rect x="516" y="596" width="12" height="24"/><rect x="540" y="596" width="12" height="24"/></g>
+  <g fill="#D77757"><rect x="432" y="548" width="12" height="24"/></g>
+  <g fill="#D77757"><rect x="552" y="548" width="12" height="24"/></g>
+  <g fill="#0d1117"><rect x="456" y="548" width="12" height="12"/></g>
+  <g fill="#0d1117"><rect x="528" y="548" width="12" height="12"/></g>
+</g>
+<text class="f cap" x="498" y="654" text-anchor="middle">12px</text>
+<g id="s16" shape-rendering="crispEdges">
+  <g fill="#D77757"><rect x="690" y="492" width="144" height="96"/><rect x="690" y="588" width="16" height="32"/><rect x="722" y="588" width="16" height="32"/><rect x="786" y="588" width="16" height="32"/><rect x="818" y="588" width="16" height="32"/></g>
+  <g fill="#D77757"><rect x="674" y="524" width="16" height="32"/></g>
+  <g fill="#D77757"><rect x="834" y="524" width="16" height="32"/></g>
+  <g fill="#0d1117"><rect x="706" y="524" width="16" height="16"/></g>
+  <g fill="#0d1117"><rect x="802" y="524" width="16" height="16"/></g>
+</g>
+<text class="f cap" x="762" y="654" text-anchor="middle">16px</text>
+<g id="s24" shape-rendering="crispEdges">
+  <g fill="#D77757"><rect x="984" y="428" width="216" height="144"/><rect x="984" y="572" width="24" height="48"/><rect x="1032" y="572" width="24" height="48"/><rect x="1128" y="572" width="24" height="48"/><rect x="1176" y="572" width="24" height="48"/></g>
+  <g fill="#D77757"><rect x="960" y="476" width="24" height="48"/></g>
+  <g fill="#D77757"><rect x="1200" y="476" width="24" height="48"/></g>
+  <g fill="#0d1117"><rect x="1008" y="476" width="24" height="24"/></g>
+  <g fill="#0d1117"><rect x="1152" y="476" width="24" height="24"/></g>
+</g>
+<text class="f cap" x="1092" y="654" text-anchor="middle">24px</text>
+<g id="s32" shape-rendering="crispEdges">
+  <g fill="#D77757"><rect x="1366" y="364" width="288" height="192"/><rect x="1366" y="556" width="32" height="64"/><rect x="1430" y="556" width="32" height="64"/><rect x="1558" y="556" width="32" height="64"/><rect x="1622" y="556" width="32" height="64"/></g>
+  <g fill="#D77757"><rect x="1334" y="428" width="32" height="64"/></g>
+  <g fill="#D77757"><rect x="1654" y="428" width="32" height="64"/></g>
+  <g fill="#0d1117"><rect x="1398" y="428" width="32" height="32"/></g>
+  <g fill="#0d1117"><rect x="1590" y="428" width="32" height="32"/></g>
+</g>
+<text class="f cap" x="1510" y="654" text-anchor="middle">32px</text>
+<text class="f cap" x="960" y="696" text-anchor="middle" opacity=".75">grid 11 x 8 &#183; body #D77757 &#183; eye = plate showing through</text>
+</svg>
