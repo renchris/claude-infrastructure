@@ -27,6 +27,8 @@ rebuilds must not both redesign; the row that owns it is marked.
 | 11 | **Worktree & warm-pool management** — where writers work | worktree-gc, warm pool build, new-worktree, .worktreeinclude | claimed by (2); landed by (1) | 107 GB observed drift; ownership per artifact-class | open |
 | 12 | **Daemon fleet & activation** — what runs unattended | **20** launchd jobs (14 `com.claude.*` + 6 `com.chrisren.*` — a `com.claude`-only scope hid row 4's live reaper), plist SSOT parity, pending-activation queue, C10 boundary | carries 1,4,5,7,8 | disabled-bit trap **(CONFIRMED but INSUFFICIENT — 1 of 3 silent states)**; agent stages / operator activates | **DONE 2026-07-29** — [DAEMON_FLEET_V2.md](DAEMON_FLEET_V2.md); 4 lands: design 59f7eb38 · map dc052a82 · **build bda59c54** · scope+state fix 68f33d39. 97 tests green. Board went from `no safeguard-blocked sessions surfaced` (with 10 of 14 dark) to one honest verdict per declared label. Activation STAGED + PLATTERED, C10 pending: `CONFIRM=1 bash ~/.claude/autonomy/pending-activation/18-fleet-activate.sh`. **Remainders R-1..R-7 named in §10** — R-1 (`install.sh` launchd safety, coordinator-ruled row 12's, `c13dad7d5dbe`) is the one that matters |
 
+| 13 | **Machine capacity & resource governance** — the box stays responsive under N concurrent sessions | QoS bands on batch work (`nice`/`taskpolicy`), per-session resource footprint, gate-burst behaviour, orphan/leak accounting, AppleEvent call-site bounds | consumes verifier QoS (1); hook cost (6); dispatch ceiling (5) | **the caller cannot be trusted** — sessions invoke `bats` by hand, so any design needing a caller to demote itself is measured to fail 70% of the time | **REBUILDING 2026-07-29** — [MACHINE_CAPACITY_V2.md](MACHINE_CAPACITY_V2.md). ⚠ **ROW PENDING COORDINATOR RATIFICATION** — see the ruling request below |
+
 **Why this cut is MECE:** every script/hook in the repo answers to exactly one row's
 responsibility; overlaps are declared as seams with a single owner. Row 1's rebuild validated
 the method AND the seams model (its rebuild consumed seams from 6, 10, 12 without redesigning
@@ -48,6 +50,36 @@ the very consumers that decide the question.
 | `bin/cc-blockers` **alarm PREDICATES** (as distinct from the verifier's verdict vocabulary) | **10** | The map lists "cc-blockers alarms" under row 1 and "cc-blockers board" under row 10; the deciding test is who answers when it breaks. Row 1 owns what a verdict MEANS (red · cut · hung · green); row 10 owns whether the board SURFACES it. A predicate that decides row-appears/row-hidden is row 10's. Ruled 2026-07-29 on row 12's close addendum, which found a live suppression here — and the bug is exactly this seam: row 1's correct "CUT/HUNG is not RED" vocabulary leaked into row 10's alarm predicate, where the polarity inverts. Row 10 must fix it with the full proof bar, not a coordinator hand-patch. |
 | `M3` close-path drain-or-reroute (spec'd in `CROSS_SESSION_COMMS_V2.md §4 M3 + §8`) | **2** | Row 3 wrote the full contract but deliberately did NOT build it: its only call site is `scripts/handoff-fire.sh`, a row-2 file, and landing an unreferenced primitive is the quiet-inertness shape this map warns about. Ruled 2026-07-29 on row 3's close ping. Row 2 implements against row 3's written contract and does NOT redesign it. **M2 (verdict honesty) stays row 3's** — the residual defect is the human-facing claim in `cc-notify`, and `cc-announce` already degrades correctly on no-watcher. Both are recorded NOT BUILT in row 3's map cell so no row inherits a phantom. |
 | `bin/cc-route` | **7** | KEY-ANCHOR parses `~/.claude/model-config.yaml` (row 7's named SSOT surface) and `claude-accounts --route`. Its exit-code contract (0 plan · 2 usage · 3 blind/no-data · 4 cliff) is pinned by `scripts/route-safety-gate.sh:33-50` and `tests/cc-route.bats` — no other row may alter it. Ruled 2026-07-29, pre-emptively, because row 5's cc-wave-plan work sits directly on top of it. |
+
+### RULING REQUEST (open) — machine-wide resource governance, and a new row 13
+
+Raised 2026-07-29 by the row-13 rebuild, per the rule above: this surface is named in NO row, so
+it is being declared rather than claimed silently. **The row is in the table marked PENDING
+RATIFICATION; the coordinator may fold it into an existing row instead.**
+
+- **The surface:** "the box stays responsive at N concurrent sessions" — QoS bands on batch work,
+  per-session resource footprint, gate-burst behaviour, orphan/leak accounting, AppleEvent
+  call-site bounds.
+- **Applying the MECE basis (who answers when it breaks):** when 31 interactive sessions go
+  sluggish because 8 concurrent 2403-test bats corpora are running at full interactive priority,
+  **no existing row answers.** Row 1 answers for the *landing pipeline's* correctness and latency
+  and owns the verifier's own QoS decision; row 6 answers for hook cost; row 11 for worktree disk;
+  row 5 for how many workers fire. None answers for machine-wide interactive responsiveness.
+- **Evidence it is a real, live gap (not a theoretical one):** census of live bats processes
+  2026-07-29 — **72 of 103 at `pri=31`** (full interactive priority) vs 31 at `pri≤10`; QoS
+  coverage **30% of procs, 0% of CPU**. `which bats` → `/opt/homebrew/bin/bats`, the real binary:
+  there is no wrapper, hence no chokepoint.
+- **Seam declared, not redesigned:** row 1 keeps ownership of `postland-verify.sh`'s QoS policy
+  *and* of its deleted-`gate_admit` lint. Row 13 only universalizes the band to the invocation
+  chokepoint (`bin/cc-bats`) and may not alter the verifier's policy or re-add admission control.
+- **If the coordinator prefers a fold:** row 1 is the least-bad home (it already owns the QoS
+  decision), but the fit is poor — row 1's constraint is "no quiet period; 12+ writers 24/7",
+  which is about *landing throughput*, not about interactive latency for sessions that are not
+  landing anything.
+- **Fleet-cap note (surfaced, not silently exceeded):** the `ground-up` skill caps concurrent
+  rebuilds at two, and rows 3 and 12 are both in flight. This rebuild was operator-directed by
+  name, and its subject *is* the shared box the cap exists to protect. Flagging rather than
+  assuming; the coordinator may park it behind 3/12.
 
 **A test can encode a falsified premise — changing it is legitimate, hiding it is not.**
 `tests/cc-wave-plan.bats:135` asserts "wave exceeds total concurrency → exit 4 cliff", i.e. the
@@ -282,3 +314,32 @@ phantom. Status is a claim like any other (see the constraint-cell learning belo
   metric is now MEASURABLE, not 0-by-construction.** And the general point, which is row 12's whole
   thesis: any answer of the form "audit the fleet and write down the result" is already wrong; only
   a scheduled reconciler stays true. Re-derive at the moment you gate a decision on it, not once.
+
+- 2026-07-29 (row 13) **THE NAMED RISK CAN BE THE WRONG RESOURCE — measure all three before
+  designing against any.** Row 13 was commissioned against "lag / memory pressure / leaks at 15-30+
+  concurrent sessions". Disk truth **exonerated two of the three**: memory is linear and fits
+  (30 sessions = 44.7 GB of 64 GiB, 0 swap; pressure starts ~50), and there is no per-session leak
+  (RSS is FLAT with age — a 30 h session held 417 MB while a 33 min session held 700 MB; fds flat at
+  22-24 against a 1,048,576 limit). "Lag" was real but **mis-located**: not volume (steady state at
+  30 sessions uses ~0.9 of 10 cores for hooks) but **priority** — 72 of 103 live bats procs at
+  `pri=31`, competing head-on with every interactive session. Designing against the named resource
+  would have produced session caps and memory limits for problems that do not exist.
+
+- 2026-07-29 (row 13) **YOUR OWN MEASUREMENTS ARE CLAIMS TOO — the constraint-cell rule applies
+  reflexively.** Two of this row's own Phase-1 findings were refuted by its own next check, both
+  cheap to test and both expensive to have designed against: (a) "33 orphaned watchdog daemons are a
+  leak, kept alive by PID reuse" — every one of the 33 pidfiles resolved to a LIVE claude session,
+  and `ppid=1` is deliberate (`disown`, `lead-crash-watchdog.sh:816`); 33 watchdogs for 33 sessions
+  is correct steady state. (b) "hooks hold 11.22 GB of RSS" — an artifact of a path-substring
+  classifier: `.claude-219/node_modules/.bin/claude` matches `\.claude.*bin`, so real sessions were
+  counted as hooks; true figure **0.15 GB across 75 procs**. Generalisation: *a plausible mechanism
+  plus a big-looking number reads exactly like a finding.* Classify by `comm`, never by a path
+  substring — and note `ps -o comm=` truncates at 16 chars, so neither is free.
+  Also: **`ps %cpu` is a lifetime average** and understated `claude.exe` ~4× (33% vs 129%); cite
+  `top -l 2` **second** sample for any CPU claim in this repo.
+
+- 2026-07-29 (row 13) **A ONE-TIME CENSUS OF A QoS/PRIORITY PROPERTY IS WORTHLESS — it is only
+  true during a burst.** Direct application of row 12's reconciler thesis above: coverage measured
+  on a quiet box reads 100% because there is nothing to demote. Row 13's AC1 therefore accrues from
+  a timestamped on-disk census row written whenever ≥2 gates run concurrently, never from a
+  narrated check at close time.
