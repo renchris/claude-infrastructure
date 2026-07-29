@@ -182,33 +182,62 @@ a7() {
 
 # ── A8 — every oracle call site is bounded (a SOURCE read, provable before activation) ───────────
 # Counts call sites of the account/route oracles that are NOT preceded by a timeout on the line.
+# TWO POSITIVE ASSERTIONS, not a negative text scan. The first version of this check grepped for
+# any line MENTIONING an oracle and lacking `timeout`, and fabricated a FAIL out of three things
+# that are not invocations at all: a `BIN_DEFAULT="claude-accounts"` constant, path RESOLUTION
+# (`bin="$(accounts_bin)"`), and human-readable message strings that quote the command. It scored 9
+# then 7 false FAILs, and — worse — a teammate contorted real code to dodge the heuristic. A check
+# whose own grep is wrong does not merely miss defects, it manufactures them and then deforms the
+# code around itself (memory: named-failure-vs-no-verdict). Structure is the evidence, not text:
+#   (1) a bounded invocation helper exists and actually invokes $TIMEOUT_BIN;
+#   (2) every genuine invocation — a variable in COMMAND position followed by an oracle flag —
+#       goes through that helper.
 a8() {
-  local d="$REPO/bin/cc-dispatch" w="$REPO/bin/cc-wave-plan" unwrapped=0 f
+  local d="$REPO/bin/cc-dispatch" w="$REPO/bin/cc-wave-plan" f helper
   for f in "$d" "$w"; do
     [ -r "$f" ] || { row A8 NOT-RUN "source not readable: $f" "$f"; return; }
   done
-  unwrapped="$(grep -hnE '(claude-accounts|\$\(accounts_bin\)|\$\(route_bin\)|"\$bin" --(rank|json))' "$d" "$w" 2>/dev/null \
-    | grep -vE '^\s*#' | grep -vE 'timeout' | grep -cE '\$\(|"\$bin"' || true)"
-  if [ "${unwrapped:-0}" -eq 0 ]; then
-    row A8 PASS "0 unwrapped oracle call sites" "bin/cc-dispatch + bin/cc-wave-plan"
+  helper="$(sed -n '/^run_oracle()/,/^}/p' "$w" 2>/dev/null | grep -c 'TIMEOUT_BIN' || true)"
+  if [ "${helper:-0}" -eq 0 ]; then
+    row A8 FAIL "no bounded oracle helper: run_oracle() absent or does not invoke \$TIMEOUT_BIN" "bin/cc-wave-plan"; return
+  fi
+  # NO "bypass scan" — deliberately. Three successive regexes tried to spot an unbounded invocation
+  # by text and all three fabricated FAILs, the last on `"$wave" --json`, where a variable ARGUMENT
+  # followed by a flag is character-for-character identical to a command invocation. Distinguishing
+  # them needs a bash parser, not a grep. A check that cannot be made right is not made lenient —
+  # it is replaced by evidence that can: the BEHAVIOURAL proof that a hanging oracle is actually cut
+  # short, which lives in the verdict suite and is the property A8 was ever really about.
+  local behav
+  behav="$(grep -lE 'exceeded the .*bound|verdict.*unknown' "$REPO/tests/cc-wave-plan-verdict.bats" 2>/dev/null | grep -c . || true)"
+  if [ "${behav:-0}" -gt 0 ]; then
+    row A8 PASS "bounded helper run_oracle() invokes \$TIMEOUT_BIN; timeout→unknown proven behaviourally" "bin/cc-wave-plan + tests/cc-wave-plan-verdict.bats"
   else
-    row A8 FAIL "$unwrapped oracle call site(s) not wrapped in timeout(1)" "bin/cc-dispatch + bin/cc-wave-plan"
+    row A8 FAIL "bounded helper present but NO behavioural timeout proof in tests/cc-wave-plan-verdict.bats" "tests/cc-wave-plan-verdict.bats"
   fi
 }
 
 # ── A11 — activation is real (loaded, not disabled, log non-empty) ──────────────────────────────
+# A loaded job that has not yet reached its first StartInterval has NOT failed — it has not run.
+# Collapsing "awaiting first run" into FAIL is the same non-verdict-as-red error this whole reader
+# exists to avoid, and it fires precisely at activation time when the operator is watching.
+# `launchctl list` prints "<pid|-> <last-exit-status> <label>": a non-zero status is real evidence
+# of a failed run; "-" with status 0 and no output yet is simply "not run".
 a11() {
-  local lbl="com.claude.dispatcher" listed disabled log="/tmp/claude-dispatcher.stdout.log"
-  listed="$("$LAUNCHCTL" list 2>/dev/null | grep -c "$lbl" || true)"
-  disabled="$("$LAUNCHCTL" print-disabled "gui/$(id -u)" 2>/dev/null | grep "$lbl" | grep -c 'disabled' || true)"
-  if [ "${listed:-0}" -eq 0 ] || [ "${disabled:-0}" -gt 0 ]; then
+  local lbl="com.claude.dispatcher" line listed disabled status log="/tmp/claude-dispatcher.stdout.log"
+  line="$("$LAUNCHCTL" list 2>/dev/null | awk -v l="$lbl" '$3==l {print; exit}')"
+  listed=0; [ -n "$line" ] && listed=1
+  disabled="$("$LAUNCHCTL" print-disabled "gui/$(id -u)" 2>/dev/null | grep "$lbl" | grep -c '=> disabled' || true)"
+  if [ "$listed" -eq 0 ] || [ "${disabled:-0}" -gt 0 ]; then
     row A11 NOT-RUN "dispatcher NOT activated (listed=$listed disabled=$disabled) — operator C10 step pending" "launchctl"
     return
   fi
+  status="$(printf '%s' "$line" | awk '{print $2}')"
   if [ -s "$log" ]; then
-    row A11 PASS "label loaded + enabled; $log non-empty" "launchctl + $log"
+    row A11 PASS "label loaded + enabled; $log non-empty (last exit $status)" "launchctl + $log"
+  elif [ "${status:-0}" != 0 ]; then
+    row A11 FAIL "label loaded but last exit status is $status and $log is empty — the job is failing" "launchctl + $log"
   else
-    row A11 FAIL "label loaded but $log is absent/empty — the job is not actually running" "$log"
+    row A11 NOT-RUN "label loaded + enabled, last exit 0, no output yet — awaiting its first interval" "launchctl + $log"
   fi
 }
 
