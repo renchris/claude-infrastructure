@@ -144,6 +144,22 @@ else
   done
 fi
 export PATH
+# ── TMP BASE, SLASH-NORMALIZED — the 6-consecutive-RED root cause (RED-proved 2026-07-29) ────────
+# Every temp path this script mints is templated off $TMPDIR, and `mktemp` copies its template
+# VERBATIM. launchd hands its jobs TMPDIR=/var/folders/…/T/ WITH a trailing slash (this script runs
+# from com.claude.postland-verify, which sets no TMPDIR of its own), so
+# `mktemp -d "${TMPDIR}/postland-run.XXXXXX"` produced `…/T//postland-run.abc123` — a doubled
+# separator in the MIDDLE of the string. RUN_TMP is then handed to the corpus as its TMPDIR, and
+# bats chops only a TRAILING slash (bats:121 `BATS_TMPDIR=${BATS_TMPDIR%/}`), so the interior `//`
+# propagated into BATS_RUN_TMPDIR → BATS_TEST_TMPDIR → every path a test derives from it. Meanwhile
+# bash's `cd` COLLAPSES duplicate slashes when it sets $PWD. So every assertion comparing a child's
+# recorded cwd against such a path missed by exactly one slash: in the real corpus TAP at
+# 22e866dbb7ae, tests/postland-verify.bats's three positive cell-path claims (C7's pinned path, the
+# mint/teardown cell, C20's revert cwd) failed while all 50 of their siblings passed — a red that
+# never reproduced standalone, because a plain trailing-slash TMPDIR is one bats chops correctly.
+# Normalize ONCE here so no consumer has to: strip the trailing slash, but never yield the empty
+# string (TMPDIR=/ is legal and must stay "/").
+TMPBASE="${TMPDIR:-/tmp}"; TMPBASE="${TMPBASE%/}"; [ -n "$TMPBASE" ] || TMPBASE=/
 LOCK_TTL="${CC_POSTLAND_LOCK_TTL:-3600}"
 SUITE_TO="${POSTLAND_SUITE_TIMEOUT_S:-10800}"  # wall BACKSTOP only — the primary bound is the TAP
 # progress stall (POSTLAND_STALL_S, see run_target). 10800 (was 5400, was 2700): the background band
@@ -660,7 +676,7 @@ do_bisect() { # <file> <good> <bad> → prints the first-bad sha (empty when und
   [ -n "$good" ] && [ -n "$bad" ] && [ "$good" != "$bad" ] || return 1
   file="tests/$(basename "$file")"
   prepare_worktree "$bad" || return 1
-  runner="$(mktemp "${TMPDIR:-/tmp}/postland-bisect.XXXXXX")" || return 1
+  runner="$(mktemp "$TMPBASE/postland-bisect.XXXXXX")" || return 1
   qos="$(printf '%q ' "${QOS[@]}")"     # every bats invocation runs in the background band, incl. this one
   {                                     # 125 = SKIP: file absent, or bats ERRORED (rc>1) — not a red
     printf '#!/bin/bash\n'
@@ -877,7 +893,7 @@ run_target() { # <sha> — the whole check-set + verdict for ONE sha
   [ -n "$tree" ] || { log "cannot resolve tree for $sha"; return 1; }
   prepare_worktree "$sha" || { log "worktree prepare FAILED for $(sha12 "$sha")"; return 1; }
   t0="$(now_epoch)"; env_fingerprint            # captured at run START — a green is env-relative
-  RUN_TMP="$(mktemp -d "${TMPDIR:-/tmp}/postland-run.XXXXXX")" || return 1
+  RUN_TMP="$(mktemp -d "$TMPBASE/postland-run.XXXXXX")" || return 1
   FAILING=(); FAILTEST=""; RETRIES=0; NFLAKE=0; CUT=0; LADDER_UNPROVEN=0   # reset per requeue pass
   DEATH_SIG=""; WEDGE_AT=""; SUSPECT=""; REPRODUCED=false
   syntax_check
@@ -1125,7 +1141,7 @@ badp() { printf '  FAIL %-52s\n' "$1"; FAIL=$((FAIL+1)); }
 # shellcheck disable=SC2317
 selftest() {
   local d rc tree green_sha red_sha
-  d="$(mktemp -d "${TMPDIR:-/tmp}/postland-selftest.XXXXXX")" || { echo mktemp failed; exit 1; }
+  d="$(mktemp -d "$TMPBASE/postland-selftest.XXXXXX")" || { echo mktemp failed; exit 1; }
   # shellcheck disable=SC2064
   trap "rm -rf '$d'" EXIT
   mkdir -p "$d/src/tests" "$d/state" "$d/pages"
