@@ -1,0 +1,71 @@
+# fleet.manifest — the DECLARATION of every launchd job this repo owns (DAEMON_FLEET_V2 §4.1).
+#
+# One record per line, `#` comments, `|`-separated, six fields:
+#
+#   label | expect | interval_s | evidence | owner_row | activate
+#
+#   label       the launchd label, exactly as it appears in `launchctl print-disabled gui/<uid>`.
+#   expect      run | staged | retired — what this box is SUPPOSED to be doing with the job:
+#                 run      expected live NOW. bin/cc-fleet runs the full state function over it
+#                          (S1 NOT-INSTALLED → S2 DISABLED → S3 NEVER-RAN → S4 FAILING →
+#                          S5 STALLED → S6 HEALTHY, first match wins) and emits a row unless S6.
+#                 staged   BUILT, activation decision PENDING. Always emits exactly ONE row,
+#                          state=UNDECIDED — "declared, decision pending: surfaced, never silent".
+#                          It is deliberately NOT a daemon-fault row: nothing is broken, an
+#                          operator decision is outstanding (activate it, or declare it retired).
+#                          This is the honest answer where the evidence does not settle whether
+#                          the job is supposed to be running; ambiguity is DECLARED, never
+#                          resolved by an agent guessing an alarm (noise) or a silence (the
+#                          failure this whole file exists to end).
+#                 retired  deliberately not running. NEVER a row — retired is not broken (R8).
+#   interval_s  the DECLARED cadence in seconds. `0` for calendar-scheduled jobs (StartCalendar-
+#               Interval / RunAtLoad-only), whose staleness bound is 86400 x CC_FLEET_STALE_FACTOR.
+#   evidence    the durable product that proves execution (R4). One of:
+#                 auto     read StandardOutPath out of the LIVE plist. PREFER THIS — it is
+#                          self-maintaining: change the plist and the sensor follows.
+#                 <path>   an explicit path; a leading `~/` is expanded at read time.
+#                 -        no artifact exists. Then only launchd's own counters decide S3/S4 and
+#                          S5 is NEVER claimed (R8: no sensor, no verdict — not a red). A plist
+#                          with no StandardOutPath key resolves `auto` to exactly this.
+#   owner_row   the GROUND_UP_REBUILD_MAP row that answers when this breaks. Routing metadata
+#               only — it never changes a verdict.
+#   activate    the pending-activation script that turns the job on, filename only; it becomes the
+#               row's paste-ready recover_cmd. The C10 boundary: agents drive TO it, never run it.
+#   ok_exits    OPTIONAL 7th field. Comma-separated exit codes this job uses to express a HEALTHY
+#               outcome; absent or malformed ⇒ `0`. A job whose DESIGNED verdict is a non-zero
+#               refusal is NOT failing: `com.claude.deploy-live` exits **1** to mean "no GREEN
+#               stamp — nothing is safe to deploy" (verify: `deploy-live.sh --dry-run`). Keying S4
+#               on `exit != 0` alone would put a permanent, unfixable row on a healthy job, which
+#               is the alarm-fatigue failure this whole file exists to prevent (plan §5 F20).
+#
+# WHY FOUR ROWS BELOW CARRY `evidence = -` RATHER THAN `auto` (measured 2026-07-29, plan §5 F20):
+# S5 STALLED compares an artifact's mtime against the declared cadence, so it needs a durable
+# product the job touches on EVERY run. postland-verify, deploy-live, dispatcher and discovery do
+# not have one: deploy-live is damped-silent on refusal (it deliberately writes nothing for a whole
+# day), `idl.jsonl` is a SHARED journal so its mtime does not prove the dispatcher specifically ran,
+# and one postland-verify corpus cycle takes ~50 min against a 300s interval so evidence-age
+# bounded by interval x factor can never be right for it. Declaring `-` is R8 applied honestly —
+# no sensor ⇒ NO VERDICT, not a red. They keep full S1/S2/S3/S4 coverage from launchd's own
+# counters, which is where their real failures live. The principled upgrade that WOULD make S5
+# provable for them is a persisted `runs` cursor per label (launchd increments `runs` on every
+# invocation regardless of output); that is named in the plan as the next step, NOT done here —
+# and a silent false STALLED would have been worse than an honest gap.
+#
+# A lint (§4.4) enforces manifest <-> launchd/*.plist <-> ~/Library/LaunchAgents three-way
+# coverage, so a new plist cannot land undeclared. `bin/cc-fleet --plist-parity` is that read.
+#
+# label | expect | interval_s | evidence | owner_row | activate
+com.claude.postland-verify        | run    | 300  | -    | 1  | 14-land-pipeline-v2-activate.sh
+com.claude.deploy-live            | run    | 600  | -    | 1  | 14-land-pipeline-v2-activate.sh | 0,1
+com.claude.dispatcher             | run    | 900  | -    | 5  | 02-load-dispatcher-activate.sh
+com.claude.discovery              | run    | 3600 | -    | 5  | 03-load-discovery-activate.sh
+com.claude.log-rotation           | run    | 3600 | auto | 12 | 18-fleet-activate.sh
+com.claude.session-search-sweep   | run    | 60   | auto | 9  | 18-fleet-activate.sh
+com.claude.session-search-backfill| run    | 0    | auto | 9  | 18-fleet-activate.sh
+com.claude.caffeinate-floor       | staged | 3600 | auto | 12 | 05-pmset-caffeinate-activate.sh
+com.claude.power-policy-verify    | staged | 3600 | auto | 12 | 05-pmset-caffeinate-activate.sh
+com.claude.team-orphan-reaper     | staged | 600  | auto | 11 | 18-fleet-activate.sh
+com.claude.desk-invariant         | staged | 300  | auto | 5  | 06-desk-bootstrap-activate.sh
+com.claude.boot-resume            | staged | 300  | auto | 2  | 18-fleet-activate.sh
+com.claude.lead-supervisor        | staged | 0    | auto | 2  | 18-fleet-activate.sh
+com.claude.nightly-regression     | staged | 0    | auto | 1  | 18-fleet-activate.sh
