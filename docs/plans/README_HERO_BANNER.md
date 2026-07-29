@@ -245,7 +245,45 @@ On the rubric, with the trade-offs named:
 a one-line swap in the README — the objection to it is aesthetic and resolution-based, not
 technical.
 
-## Landing gate — OPEN, awaiting the operator
+## Landing gate — CLOSED REJECTED 2026-07-29. Redesign required.
+
+> **The operator reviewed all three prototypes and rejected them.** The gate did its job — nothing
+> reached the README. Do **not** run `banner-apply-header.sh` on A, B or B2: what failed is the
+> concept, not the execution and not the medium choice.
+
+### The four rejections — all binding on the redesign
+
+| # | Rejection (operator's words) | What it invalidates |
+|---|---|---|
+| **R1** | *"the handoff is only one part of our entire claude-infrastructure, so our heading shouldn't be an infographic on that"* | **The core idea.** Starburst-mitosis → pulse → retirement *is* `self-open → two-way → self-close` — one subsystem. A header stands for the WHOLE system. Kills § "The one strong idea" outright. |
+| **R2** | *"the animations need to supplement the always showing title, title can't only show at the end"* | **The dramaturgy.** All three are narratives that RESOLVE onto the wordmark — the SVG's own `<desc>` reads "…leaving one mark at rest above the words claude-infrastructure". The title must be legible at **t=0 and every t**; motion supplements it, never delivers it. |
+| **R3** | *"Video needs to be a loop"* | **The timeline.** Must loop seamlessly and indefinitely — no one-shot 8 s narrative, no visible restart seam. Periodic/ambient motion is what loops cleanly, which is also what R2 wants. |
+| **R4** | *"the Claude Code orange mascot character"* | **The mark.** This means the pixel-art creature Claude Code renders at session start, **not** the radiating asterisk `✻ ✽ ✳`. § "Why the starburst is the right mascot here" is superseded — well-argued, and wrong about what was wanted. |
+
+**Do NOT re-derive these — measured, still binding:**
+
+- § "Inherited constraints" in full: GitHub strips `<video>`, so the header is an image; animated
+  SVG runs inside `<img>` (declarative only, no scripts); `<picture>` follows the reader's OS, not
+  GitHub's theme toggle.
+- § "On 1080p60" — honored as 1920 px wide at 60 fps, authored 1920×600, displayed `width="900"`.
+  A literal 16:9 stands 506 px tall and swallows the fold. Vector is resolution-*independent*, so
+  1080p is a floor, not a ceiling.
+- The § Comparison byte table: every raster encoding of an 8 s composition is **1.2×–45× over** the
+  1 MB budget (WebP 1920w@60 = 2,229,294 B; GIF cannot express 60 fps at all — integer-centisecond
+  frame delays allow only 50 or 100). **Vector is the only medium that fits.** Do not re-benchmark raster.
+- `scripts/banner-shots.sh` — the SVG-as-image screenshot harness + its one-animation-per-element
+  lint. Verify every candidate through it; it is the only mode matching GitHub.
+- `scripts/banner-apply-header.sh` — the staged one-command header edit. Still the apply path.
+- The restraint rules and the `prefers-reduced-motion` obligation.
+
+**The problem restated.** A looping, always-titled header whose motion is *ambient* rather than
+*narrative*, carrying the Claude Code creature, standing for the whole of claude-infrastructure —
+not one subsystem. The title is the constant; the mascot animates around it.
+
+**Weight was never the constraint.** The rejected prototypes were 9–12 KB against a 1 MB budget —
+0.9 %. Do not let byte-thrift shape the redesign; spend on the idea.
+
+<details><summary>Superseded — the original landing gate (kept: it explains why nothing was applied)</summary>
 
 The winner goes into the README header **only after the operator has seen the comparison**. That
 gate is unmet by design, so this track has landed everything *except* the README edit:
@@ -258,8 +296,18 @@ so after it runs the path captions in `comparison.html` name files that have mov
 intended: the page is a point-in-time record of the bake-off, and it still *renders* correctly
 because the prototypes are inlined rather than linked.
 
+</details>
+
 ## Log
 
+- **2026-07-29** — operator reviewed the three prototypes and **REJECTED all of them**. Four
+  binding rejections (R1 whole-system not handoff-infographic · R2 title always visible, motion
+  supplements it · R3 must loop · R4 the Claude Code pixel-art creature, not the asterisk mark).
+  The landing gate closed REJECTED — it worked exactly as designed: nothing reached the README.
+  **Learning worth keeping:** the bake-off compared *mediums* rigorously and never tested the
+  *concept* with the operator. Three prototypes of one idea is one idea, measured three ways —
+  the cheapest possible check ("is a handoff loop the right subject for a header at all?") was
+  never run, and it is the one that failed. Validate the SUBJECT before prototyping the MEDIUM.
 - **2026-07-29** — track opened. Constraints inherited; reference SVG recovered from `a85e87e4^`;
   design idea fixed (starburst mitosis → pulse → retirement); tooling surveyed.
 - **2026-07-29** — three prototypes built, compared and measured; recommendation = A. Two
