@@ -774,6 +774,55 @@ gate — the one at the chokepoint, which cannot be bypassed — independently A
 1.04/core against its own 2.0 ceiling. The runbook was not protecting the box; it was starving the
 campaign while the box had 9 free cores.
 
+### 2026-07-29T17:0xZ Row 2 in flight, and it corrected MY payload — plus the perishability recursion
+
+**Row 2 progressing: 3 lands** (`91e2c65a` design · `eaa5e269` map · `0dc2b1c0` build-1), Phase 1-4,
+no blockers. Its cell is **CONFIRMED-BUT-RENAMED**, and the rename is the important part: the
+*illegible-EXIT* half of "a watched pane must never vanish illegibly" **measures 0 BY CONSTRUCTION
+behind 4 blocking self-close gates** — the binding failure is its **MIRROR: panes that CANNOT
+retire.** This session is the proof at scale: 11 assignees stranded because `self-close` had no
+category for "originator existed and is now gone", and every sanctioned route refused. Row 2 found
+by derivation what the campaign found by injury.
+
+**VERIFIED: a DONE row's landed plan claims a primitive it never shipped.** Row 2 reported and I
+confirmed by disk with a positive control. `CROSS_SESSION_COMMS_V2.md:310` states *"Row 3 ships the
+primitive (`mailbox_close_disposition`); the call site lives [with row 2]"*. That symbol has **ZERO
+hits across `hooks/ bin/ scripts/ tests/` on origin/main** — it exists only in three docs. Positive
+control passes: `mailbox_migrate` IS real (`hooks/lib/mailbox-pending.sh`, `hooks/mailbox-drain.sh`),
+so the grep works. **Row 3's plan and row 3's map cell contradict each other, and the MAP CELL
+("M2/M3 SPECIFIED, NOT BUILT") is the honest one.** Generalises the map's own "check, don't trust the
+word DONE" ruling one level deeper: **a plan's acceptance section can claim a shipped artifact that
+does not exist, so a consumer must grep for the SYMBOL, not read the claim.** Row 2 is correctly
+implementing M3's mechanics against row 3's written §4 contract rather than against its §8 claim.
+
+**THE PERISHABILITY RECURSION — this is the sharpest thing in the exchange.** Row 2 legitimately
+falsified two premises in the payload I wrote it: I had put "~56 commits behind" and "the mktemp fix
+is landed but NOT deployed", and by the time it read them the deploy had advanced and both were
+false. Fair. **But row 2's own corrections went stale inside 15 minutes** — it measured the checkout
+at **1** behind and `handoff-fire.sh` as byte-identical to trunk; re-derived just now, the lag is
+**18** and the file differs again. Full trajectory today: **56 (15:05) → 3 (15:30) → 1 (16:52) → 18
+(17:0x)**, because rows land continuously by design. So the corrector was overtaken exactly as the
+corrected had been. **The fix is not a fresher number — it is to stop carrying numbers.** Row 10's
+payload was rewritten before firing to hand the two DERIVING COMMANDS plus the structural claim that
+does not decay ("the failure MOVED from not-deployed to deployed-but-not-switched-on"). Any payload
+field that a rebuild could compute in one command should be a command, not a value.
+
+One confirmed correction to me on the merits: **the BSD-mktemp collision IS fixed in the deployed
+copy** — `~/.claude/scripts/handoff-fire.sh:2048` reads `mktemp "${TMPDIR:-/tmp}/handoff-deps-XXXXXX"`
+with the substitutable TRAILING `XXXXXX` and no `.sh` suffix. So the standing
+`rm -f "$TMPDIR"handoff-deps-XXXXXX.sh` pre-fire step is now a **no-op**; kept because it is free and
+the deployed layer has re-diverged from trunk. Row 2's fm#6 in its own payload should be read as
+historical.
+
+**Also: my graveyard pointer UNDERCOUNTS.** Row 2's slice was **3** artifacts where my
+campaign-level sweep listed 2 — it found `tests/pane-id-lint.bats` on `fix/infra-perfection` and is
+taking it. Row 10's payload now says explicitly that the list is known-incomplete and to assume it
+undercounts. The sweep is a pointer to re-derive, exactly as labelled.
+
+**Row 10 is staged and gate-held, correctly:** `in-flight=1/2` but `runnable=12 > cores=10` while row
+2 works. The corrected predicate is refusing on real contention rather than rubber-stamping, which is
+the evidence it is honest.
+
 ## Inherited watch — first GREEN postland stamp (status, not a coordinator work item)
 
 Read 2026-07-29T18:15Z: **zero GREEN stamps have ever existed** (`grep -l '"verdict":"green"'
