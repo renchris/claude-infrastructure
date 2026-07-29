@@ -150,7 +150,18 @@ SUITE_TO="${POSTLAND_SUITE_TIMEOUT_S:-10800}"  # wall BACKSTOP only — the prim
 # yields to sessions by design, so a busy box legitimately runs the corpus past any tight wall —
 # measured 2026-07-29, healthy runs CUT at 2737s AND 5437s with zero not-ok. Hangs are caught by the
 # stall bound in ~15 min; this ceiling exists only for the case where the TAP writer itself wedges.
-FILE_TO="${POSTLAND_FILE_TIMEOUT_S:-300}"      # per-file bound (retry ladder + the hang confirm)
+FILE_TO="${POSTLAND_FILE_TIMEOUT_S:-300}"      # per-TEST retry bound + the hang confirm
+RETRY_TO="${POSTLAND_RETRY_TIMEOUT_S:-5400}"   # WHOLE-FILE retry bound — only the fallback path
+# WHY THE LADDER NEEDS ITS OWN, LARGER BOUND (C23). Until 2026-07-29 the ladder re-ran the whole FILE
+# under FILE_TO=300 and counted ANY non-zero rc as a fail — including 124, which `bounded` documents as
+# "OUR bound fired". A suite whose solo runtime exceeds the bound could therefore only ever be
+# CONVICTED, never exonerated: both retries returned 124, fails hit 3/3, and the tree was stamped a
+# "reproducible RED" that no re-run could clear. That is why 33 stamps carried 0 green, ever — and why
+# deploy-live refused forever off the back of it. tests/postland-verify.bats measures ~50 min solo
+# (51 tests, each minting scratch git repos) = 10x the bound; flakes.jsonl 2026-07-28T19:39Z records
+# `exit 124 / notok=0` for that very file at load 6.61, and the land gate filed the same signal
+# correctly as `cut-not-red`. The heaviest suites are exactly the ones the stamps convicted
+# (waiting-recycle 98 tests, cc-reaper 80, ship-land 74, cc-backlog 61, postland-verify 51).
 # ── BACKGROUND QoS — the singleton must make progress at ANY load (§4.2.3) ───────────────────────
 # v1 admission control (gate_admit, DELETED) waited for load < ceiling before the suite and before
 # every retry: ~2h of sleeping per run (backlog 60ec4c2d86d4), and with 5 concurrent gates each
@@ -195,6 +206,7 @@ else
 fi
 LINT_TO="${CC_POSTLAND_LINT_TIMEOUT_S:-60}"
 PRELINT_UNPROVEN=0     # a lint whose own bound fired: nothing proven ⇒ never a red, never a green
+LADDER_UNPROVEN=0      # a RETRY whose own bound fired: same rule — a cut, never a red (C23)
 # ── AUTO-REVERT (§4.2.4) ─────────────────────────────────────────────────────────────────────────
 AUTOREVERT="${POSTLAND_AUTOREVERT:-on}"                 # kill switch: POSTLAND_AUTOREVERT=off
 MAX_REVERTS="${POSTLAND_MAX_REVERTS:-2}"                # markers written THIS run before we stop
@@ -546,8 +558,32 @@ classify_hang() { # <tapfile> <rc> — 0 = HUNG (sets SUSPECT/WEDGE_AT/DEATH_SIG
   # degrades to a CUT: no bound, no hang verdict. We never fabricate one.
   [ "$rc" -eq 124 ]
 }
-classify_failures() { # <tapfile> — retry ladder: >=2/3 = REPRODUCIBLE, 1/3 = flake
-  local pairs f t rc i tdir fails notok
+retry_once() { # <file> <testname> <tmpdir> → rc of ONE re-run (124 = OUR bound ⇒ decides nothing)
+  # GRANULARITY: the failing TEST, not the whole FILE (POSTLAND_RETRY_GRANULARITY=file restores the
+  # file-wide re-run). A bound the re-run cannot fit inside is not a bound, it is a verdict — see the
+  # RETRY_TO block above. Re-running only the named test costs seconds, so the ladder can DECIDE for a
+  # heavy suite instead of timing out and calling that a failure. Trade-off, stated rather than hidden:
+  # an INTRA-file ordering dependence now reads as a flake rather than a red. The ladder already
+  # dropped cross-FILE ordering by re-running the file alone; this widens that same assumption by one
+  # level, and a suite that can never be exonerated (0 green in 33 stamps) is the worse failure.
+  local f="$1" t="$2" td="$3" rc=0 out filt
+  if [ "${POSTLAND_RETRY_GRANULARITY:-test}" = "test" ] && [ -n "$t" ]; then
+    out="$td/tap"
+    # `bats -f` takes a REGEX: escape every metachar in the TAP-reported name, then anchor it.
+    filt="$(printf '%s' "$t" | sed 's/[][\\.^$*+?(){}|\/]/\\&/g')"
+    ( cd "$WORKTREE" && TMPDIR="$td" bounded "$FILE_TO" "${QOS[@]}" \
+        "$BATS_BIN" -f "^${filt}\$" "$f" ) > "$out" 2>&1 || rc=$?
+    # A filter that matched NOTHING exits 0 with `1..0` — a NON-VERDICT that would exonerate the file
+    # for free. Only trust this run if it actually PLANNED a test; otherwise fall through to the file.
+    [ "$(tap_plan "$out")" -gt 0 ] && { rm -f "$out"; return "$rc"; }
+    rm -f "$out"; rc=0
+  fi
+  # FALLBACK: the whole file, under the bound sized for a whole file.
+  ( cd "$WORKTREE" && TMPDIR="$td" bounded "$RETRY_TO" "${QOS[@]}" "$BATS_BIN" "$f" ) >/dev/null 2>&1 || rc=$?
+  return "$rc"
+}
+classify_failures() { # <tapfile> — retry ladder: >=2/3 = REPRODUCIBLE, 1/3 = flake, 124 = no verdict
+  local pairs f t rc i tdir fails notok abstain
   # TAP: `not ok N <name>` followed by a `# (in test file tests/X.bats, line N)` diagnostic.
   pairs="$(awk '/^not ok /{p=1; n=$0; sub(/^not ok [0-9]+ /,"",n); next}
                 /^#/ && p { if (match($0, /[A-Za-z0-9_.\/-]+\.bats/)) { print substr($0,RSTART,RLENGTH) "\t" n; p=0 } }' "$1" \
@@ -577,7 +613,7 @@ classify_failures() { # <tapfile> — retry ladder: >=2/3 = REPRODUCIBLE, 1/3 = 
   fi
   while IFS="$(printf '\t')" read -r f t; do
     [ -n "$f" ] || continue
-    fails=1; rc=1
+    fails=1; rc=1; abstain=0
     for i in 1 2; do                                     # each re-run gets a FRESH private TMPDIR
       # NO ADMISSION WAIT before a retry (v1 slept here, per file, per attempt — the ~12-call ×
       # 600s budget that made a run 2h of sleeping). The ladder's premise — "a re-run under a
@@ -588,10 +624,24 @@ classify_failures() { # <tapfile> — retry ladder: >=2/3 = REPRODUCIBLE, 1/3 = 
       tdir="$(mktemp -d "$RUN_TMP/retry.XXXXXX")"
       # BOUNDED for the same reason the full suite is: a file that WEDGES would hold the ladder —
       # and this runner's mutex — open forever, turning one hung test into a dead post-land net.
-      ( cd "$WORKTREE" && TMPDIR="$tdir" bounded "$FILE_TO" "${QOS[@]}" "$BATS_BIN" "$f" ) >/dev/null 2>&1
-      rc=$?; RETRIES=$((RETRIES+1)); [ "$rc" -eq 0 ] || fails=$((fails+1)); rm -rf "$tdir"
+      retry_once "$f" "$t" "$tdir"; rc=$?
+      RETRIES=$((RETRIES+1)); rm -rf "$tdir"
+      # OUR OWN BOUND IS NOT EVIDENCE ABOUT THE TREE (C23) — the rule every other 124 site in this
+      # file already follows (prelint ⇒ cut, confirm_hang ⇒ the HUNG discriminator, classify_hang case
+      # 1, the stall unify). This was the one site that read rc without asking WHOSE bound fired, and
+      # it is the whole 0-green-stamp deadlock: a slow suite's 124 became a fail, two of them became a
+      # "reproducible RED", and a red stamp is what blocks deploy forever. Attempt 2 is skipped
+      # deliberately — under an identical bound it would abstain identically, so it buys no
+      # information and costs another RETRY_TO.
+      if [ "$rc" -eq 124 ]; then abstain=1; break; fi
+      [ "$rc" -eq 0 ] || fails=$((fails+1))
     done
     if [ "$fails" -ge 2 ]; then FAILING+=("$f"); [ -n "$FAILTEST" ] || FAILTEST="$t"
+    elif [ "$abstain" = 1 ]; then
+      # Not a red (nothing was proven) and not a flake (nothing was cleared) ⇒ the cut path, which
+      # says exactly that and retries next sweep. FAILTEST carries the name so the cut is diagnosable.
+      LADDER_UNPROVEN=1; [ -n "$FAILTEST" ] || FAILTEST="$t"
+      log "ladder UNPROVEN for $f — our own bound fired on the re-run; no verdict (cut, not red)"
     else record_flake "$f" "$t" "$rc"; fi
   done <<EOF
 $pairs
@@ -828,7 +878,7 @@ run_target() { # <sha> — the whole check-set + verdict for ONE sha
   prepare_worktree "$sha" || { log "worktree prepare FAILED for $(sha12 "$sha")"; return 1; }
   t0="$(now_epoch)"; env_fingerprint            # captured at run START — a green is env-relative
   RUN_TMP="$(mktemp -d "${TMPDIR:-/tmp}/postland-run.XXXXXX")" || return 1
-  FAILING=(); FAILTEST=""; RETRIES=0; NFLAKE=0; CUT=0
+  FAILING=(); FAILTEST=""; RETRIES=0; NFLAKE=0; CUT=0; LADDER_UNPROVEN=0   # reset per requeue pass
   DEATH_SIG=""; WEDGE_AT=""; SUSPECT=""; REPRODUCED=false
   syntax_check
   tap="$RUN_TMP/bats.tap"; : > "$tap"; rc=0
@@ -899,7 +949,10 @@ EOF
   # A meta-lint whose own bound fired proves nothing — so an otherwise-clean run may NOT be stamped
   # green off the back of a check that never returned. Downgrade to the cut path: honest, retried
   # next sweep, and cool-off/paged by the existing CUT_MAX ladder if the tree keeps doing it.
-  [ "$PRELINT_UNPROVEN" = 1 ] && [ "${#FAILING[@]}" -eq 0 ] && CUT=1
+  # Same rule for a RETRY whose own bound fired (C23): the file was neither convicted nor cleared, so
+  # the run proved nothing about this tree. Green would be unearned; red would be the lie that kept
+  # every stamp red and deploy refused. Cut says it honestly and the next sweep retries.
+  { [ "$PRELINT_UNPROVEN" = 1 ] || [ "$LADDER_UNPROVEN" = 1 ]; } && [ "${#FAILING[@]}" -eq 0 ] && CUT=1
   run_s="$(( $(now_epoch) - t0 ))"
   if [ "$CUT" = "1" ] && [ "${#FAILING[@]}" -eq 0 ] && classify_hang "$tap" "$rc"; then
     # HUNG is carved out of the cut population and IS a verdict about the tree: it reproduced here,

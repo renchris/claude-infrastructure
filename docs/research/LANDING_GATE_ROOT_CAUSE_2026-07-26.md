@@ -414,9 +414,75 @@ ship-land's own backup refs and must be excluded, not landed.
 
 ---
 
+## 5. THE 0-GREEN-STAMP DEADLOCK — closed 2026-07-29 (backlog `10941179f8ec`)
+
+Three hypotheses were filed and retracted before this one. Recording the chain, because each was
+refuted by measurement rather than by argument:
+
+| # | Hypothesis | Verdict |
+|---|---|---|
+| 1 | **Load** starves the corpus | **REFUTED** (RESTART-BRIEF §6) — reds at load 9.34 in the same window a sibling landed 2307/0 |
+| 2 | **PATH**-dependence in the daemon env | **REFUTED** — a verifier carrying the fix (`873e646b`) still stamped red |
+| 3 | postland's **reused worktree / custom TMPDIR** | **OBSOLETE** — land-pipeline-v2 (`8d50f953`) mints a fresh cell per run; still 0 green in the 7 post-v2 stamps |
+
+### The actual cause: the retry ladder counted OUR OWN bound as a failure
+
+`scripts/postland-verify.sh` bounds each ladder re-run at `FILE_TO=300s` and scored it
+`[ "$rc" -eq 0 ] || fails=$((fails+1))` — **any** non-zero, including rc 124, which the script's own
+`bounded()` helper documents as *"rc 124 = OUR bound fired"*. Consequence: **a suite whose solo
+runtime exceeds the bound can only ever be convicted, never exonerated.** Both retries return 124,
+`fails` reaches 3/3, and the tree is stamped a *reproducible RED* that no re-run can clear. A red
+stamp is exactly what `deploy-live.sh --auto` and ship-land's `postland_net_live` read — hence
+**33 stamps, 0 green, ever**, and a live layer 32 commits behind trunk.
+
+Every *other* rc-124 site in the same file already refuses to read its own bound as evidence — C22
+prelint ⇒ cut, `confirm_hang` ⇒ the HUNG discriminator, `classify_hang` case 1, the stall unify.
+The ladder was the sole exception, and it was the one on the deploy-blocking path.
+
+**Evidence (all disk truth, 2026-07-29):**
+
+1. `flakes.jsonl` 2026-07-28T19:39:38Z — `tests/postland-verify.bats`, `"signal":"exit 124 /
+   notok=0"`, `"loadavg":"6.61"`, `"outcome":"cut-not-red"`. The suite blows the 300 s bound at
+   **load 6.6**, and the *land* gate filed that identical signal correctly as a cut.
+2. The last 5 post-v2 REDs all name **one** suite — `tests/postland-verify.bats` — at loads
+   4.01 / 6.05 / 9.38 / 9.40 / 11.76. Load-independent by inspection.
+3. Measured solo: 51 tests, ~60 s/test ⇒ **~50 min, 10× the bound** — and that is at *normal*
+   priority, while the ladder runs at `nice -19` + `taskpolicy -c background`, so it is a lower bound.
+   Confirmed live, in production, mid-investigation: the running corpus's own
+   `bats-exec-file …/tests/postland-verify.bats` (pid 24914) was **1 h 17 min into that one file and
+   still going**, against a ladder bound of 300 s. Not a projection — a `ps` reading.
+4. The convicted suites are exactly the heaviest ones — `waiting-recycle` 98 tests, `cc-reaper` 80,
+   `ship-land` 74, `cc-backlog` 61, `postland-verify` 51. The bound, not the tree, was deciding.
+5. Onset correlates with size, not with any tree change: the suite went 40 → 61 `@test` on
+   2026-07-28 (`d84ae514`, v2 semantics); the first conviction is 2026-07-28T20:53.
+
+### The fix (C23)
+
+1. **rc 124 in the ladder is an abstention, not a fail** — following the script's own
+   `PRELINT_UNPROVEN` idiom: neither convicted nor cleared ⇒ the run downgrades to a **CUT** and is
+   retried next sweep (`LADDER_UNPROVEN`). Attempt 2 is skipped on abstention — under an identical
+   bound it would abstain identically, so it buys no information and costs another bound.
+2. **The re-run is the failing TEST, not its whole file** (`bats -f`, anchored + metachar-escaped),
+   so the bound can fit what it bounds: seconds instead of ~50 min. A filter matching nothing exits
+   `1..0` — a non-verdict that would exonerate for free — so a `tap_plan > 0` guard falls back to the
+   whole file under a separate, larger `RETRY_TO` (5400 s). Seam:
+   `POSTLAND_RETRY_GRANULARITY=file`.
+
+Granularity measured on an instrumented fixture (one file, a failing test beside a witness test that
+records every execution of itself): **test-granular = 2 witness runs** (the corpus + C20's bisect,
+which legitimately re-runs the whole file to locate a culprit — the retries contribute zero) versus
+**file-granular = 4** (corpus + two whole-file retries + bisect). The delta of exactly 2 is the two
+retries, so the seam is doing precisely what it claims and nothing else.
+
+Stated trade-off: an *intra*-file ordering dependence now reads as a flake rather than a red. The
+ladder already discarded *cross*-file ordering by re-running the file alone; this widens the same
+assumption one level, and a permanently un-exonerable suite is the worse failure.
+
 ## Reading rules this investigation had to obey (and one it nearly broke)
 
 - **CUT ≠ RED** — read the `not ok` count, never the exit code.
+- **A bound you imposed is never evidence about the subject** (§5). Ask *whose* bound fired before
+  scoring an rc. And a bound the re-run cannot fit inside is not a bound — it is a verdict.
 - **143 = SIGTERM, 137 = SIGKILL** — different causes; never conflate.
 - Verify landings by **content**, never `rev-list --count`.
 - A `pgrep -f` negative is not death — positive-control the detector.

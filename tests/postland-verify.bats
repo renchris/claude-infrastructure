@@ -34,6 +34,11 @@
 #   C22 prelint the whole-tree meta-lints run STANDALONE before the corpus, own-set seams
 #               UNSET (whole-tree strict); non-zero ⇒ named RED that outranks a cut; OUR
 #               bound firing proves nothing ⇒ cut, never red and never green
+#   C23 ladder  a RETRY whose OWN bound fired decides NOTHING — the same rule C22 applies to a lint
+#               and classify_hang applies to the suite run. It is neither a fail (nothing proven) nor
+#               a pass (nothing cleared) ⇒ the run downgrades to a CUT and is retried next sweep.
+#               The re-run is the failing TEST (`bats -f`), not its whole file, so the bound can
+#               actually fit what it bounds; POSTLAND_RETRY_GRANULARITY=file restores file-wide.
 #   C8 retries  the failing FILE is re-run alone up to 2 more times;
 #               >=2/3 fails => reproducible RED; 1/3 => flake (flakes.jsonl,
 #               EXCLUDED from the verdict); all-flake => verdict green
@@ -390,6 +395,68 @@ add_stateful_test() {   # $1 = basename, $2 = body of the helper script
   [ "$(pages_n)" = "1" ]                           # C10
   [ "$(cat "$CC_POSTLAND_DIR/last-green")" = "$green" ]   # C10: NOT advanced
   [ ! -s "$CC_POSTLAND_DIR/flakes.jsonl" ] || ! grep -q twofail "$CC_POSTLAND_DIR/flakes.jsonl"
+}
+
+# ── C23 the ladder's OWN bound: a re-run that never returned decides nothing ──────────────────────
+# THE 0-GREEN-STAMP DEADLOCK, root-caused 2026-07-29. The ladder re-ran the whole FILE under
+# FILE_TO=300 and counted ANY non-zero rc as a fail — 124 included, which `bounded` itself documents
+# as "OUR bound fired". Every other 124 site in the SUT already refuses to read its own bound as
+# evidence about the tree (C22 prelint ⇒ cut · confirm_hang ⇒ the HUNG discriminator · classify_hang
+# case 1 · the stall unify). This was the ONE site that did, and that is the whole deadlock: a suite
+# slower than the bound could only ever be CONVICTED, never exonerated — both retries returned 124,
+# `fails` reached 3/3, and the tree got a "reproducible RED" that no re-run could ever clear. Result:
+# 33 stamps, 0 green EVER, so deploy-live refused forever and the live layer sat 32 commits behind.
+# MEASURED: this very suite is ~50 min solo (51 tests × scratch git repos) = 10x the bound, and
+# flakes.jsonl 2026-07-28T19:39Z carries `exit 124 / notok=0` for tests/postland-verify.bats at load
+# 6.61 — while the LAND gate filed that identical signal correctly as `cut-not-red`. The convicted
+# suites were exactly the heaviest ones (waiting-recycle 98 tests, cc-reaper 80, ship-land 74,
+# cc-backlog 61, postland-verify 51) — the tell that the bound, not the tree, was doing the deciding.
+@test "C23: a retry whose OWN bound fires is a CUT, never a RED (the 0-green-stamp deadlock)" {
+  run bash "$SUT" --run-if-needed                  # green baseline => last-green to freeze against
+  [ "$status" -eq 0 ]
+  green="$(cat "$CC_POSTLAND_DIR/last-green")"
+  # Fails FAST the first time, so the corpus TAP names the file and the ladder is entered; then
+  # WEDGES on every re-run, so the ladder's OWN bound is the only thing that can end the retry.
+  m="$BATS_TEST_TMPDIR/wedge-marker"
+  add_stateful_test slowfail "$(printf '#!/bin/bash\nM="%s"\n[ -f "$M" ] && sleep 60\ntouch "$M"\nexit 1\n' "$m")"
+  push_commit "a suite too slow for the ladder's bound"
+  tree="$(origin_tree)"
+  POSTLAND_FILE_TIMEOUT_S=3 POSTLAND_RETRY_TIMEOUT_S=3 run bash "$SUT" --run-if-needed
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ "$output" = "cut" ]                            # C23: our own bound proves nothing ⇒ cut, and
+                                                   # emphatically NOT the red that blocks deploy
+  [ "$(pages_n)" = "0" ]                           # C10: pages are RED-only
+  [ "$(cat "$CC_POSTLAND_DIR/last-green")" = "$green" ]   # never advances on a non-verdict
+}
+
+@test "C23: the re-run is the failing TEST, not its whole file (what makes the bound fit)" {
+  run bash "$SUT" --run-if-needed
+  [ "$status" -eq 0 ]
+  # ONE file, TWO tests: one fails every time, one records every execution of itself.
+  wit="$BATS_TEST_TMPDIR/witness"
+  printf '@test "boom" { false; }\n@test "wit" { echo x >> "%s"; }\n' "$wit" > "$R/tests/pair.bats"
+  push_commit "one failing test beside a witness"
+  tree="$(origin_tree)"
+  run bash "$SUT" --run-if-needed
+  # WITNESS ACCOUNTING (measured, so nobody has to re-derive it): 2 = the corpus run (1) + C20's
+  # bisect, which legitimately re-runs the whole FILE to locate the culprit (1). The two RETRIES
+  # contribute ZERO, because each re-ran only the named test. The paired file-granularity test below
+  # is the control: same fixture, same bisect, 4 — and that delta of exactly 2 IS the retries.
+  [ "$(wc -l < "$wit" | tr -d ' ')" = "2" ]
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ "$output" = "red" ]                            # C8 still convicts: "boom" failed 3/3
+}
+
+@test "C23: POSTLAND_RETRY_GRANULARITY=file restores the whole-file re-run" {
+  run bash "$SUT" --run-if-needed
+  [ "$status" -eq 0 ]
+  wit="$BATS_TEST_TMPDIR/witness2"
+  printf '@test "boom" { false; }\n@test "wit" { echo x >> "%s"; }\n' "$wit" > "$R/tests/pair2.bats"
+  push_commit "the granularity seam"
+  POSTLAND_RETRY_GRANULARITY=file run bash "$SUT" --run-if-needed
+  # 4 = corpus (1) + TWO WHOLE-FILE retries (2) + the bisect's whole-file run (1). Against the
+  # test-granular default the same fixture yields 2 — the seam is what moves those two executions.
+  [ "$(wc -l < "$wit" | tr -d ' ')" = "4" ]
 }
 
 # ── C13 CUT ≠ RED ────────────────────────────────────────────────────────────────────────────
