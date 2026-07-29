@@ -1,0 +1,332 @@
+#!/bin/bash
+# shellcheck disable=SC2015  # file-wide: the selftest's `[ test ] && ok || bad` reporter idiom is
+# intentional — ok/bad always return 0 (echo + assignment), so SC2015's "C runs when A is true but B
+# failed" cannot occur here. Same precedent as bin/cc-inbox-guard, bin/cc-announce, bin/cc-discover.
+# cc-comms-alarm-sweep — audit / quarantine / assert the comms alarm store
+# (~/.claude/autonomy/comms-alarms).
+#
+# WHY (measured 2026-07-29, backlog 817faf3a4968): the store held 1273 records of which 511 were
+# test fixture data written by `tests/cc-notify.bats` into the LIVE directory. The hermeticity lint
+# catches the leaky SUITE; nothing ever cleaned the PRODUCT. So every rebuild that re-derives its
+# constants from primary disk truth — which the ground-up method requires — read a 40%-fixture
+# denominator, and cc-inbox-guard paged the operator once per fixture record (510 pages about a
+# failure that never happened).
+#
+# hooks/lib/comms-alarm.sh stops NEW contamination at the write chokepoint and stamps every
+# fixture-written record with `test_origin`. This tool handles the rest: the legacy records written
+# before the field existed, and the standing verdict on whether the live root is clean.
+#
+# ── THE CLASSIFIER IS CONSERVATIVE BY CONSTRUCTION, AND THAT IS THE WHOLE DESIGN ────────────────
+# Two plausible classifiers were built and BOTH were rejected on evidence during this work, because
+# each would have quarantined REAL operator telemetry:
+#
+#   REJECTED 1 — "the target appears as a literal in tests/*.bats". Fails: a test author copied a
+#     REAL pane UUID into a fixture. `D08B4FC0-9253-4F54-A699-7D45CE568F84` appears in
+#     tests/cc-reconcile.bats AND owns 256 genuine `undelivered` records ("LIVE session, 382
+#     message(s) unconsumed for 102415s past deadline"). Same for D5D419C8-… and cd122396-….
+#
+#   REJECTED 2 — "the target is structurally synthetic" (uniform nibble groups / hex words /
+#     not-a-UUID-shape). Fails on `DESK-UUID-1`, which is not a UUID at all and still owns 23
+#     genuine records: a real name-keyed mailbox really did sit 17 messages deep for 16896s, and
+#     the alarm is exactly the signal the guard exists to raise.
+#
+# So origin is decided by NARROW LITERAL RULES tied to a producer that is known to exist (or known
+# NOT to), never by the shape of a token. A record matching no rule is KEPT — including records
+# whose target looks synthetic. Under-sweeping leaves a countable, visible residue; over-sweeping
+# destroys the operator's only evidence of a real delivery failure.
+#
+# Rules (a record is fixture-origin iff one matches):
+#   R0  `test_origin` is present.  The forward path — written by the chokepoint, zero inference.
+#   R1  kind=="enqueue-failed" AND target ∈ legacy-fixture-uuids AND msg=="cannot persist".
+#       The exact literal triple tests/cc-notify.bats passes at its three inbox-unwritable tests
+#       (lines 94/122/574); `cannot persist` is the suite's own message argument. No production
+#       caller sends that message to that UUID.
+#   R2  kind=="rerouted" AND target ∈ legacy-fixture-uuids.  Structural: `grep -rn 'rerouted-'` over
+#       bin/ scripts/ hooks/ finds NO producer of a rerouted-*.json record. Every such file in the
+#       store was therefore written directly by a suite.
+#
+# Legacy fixture UUIDs are the constants tests/cc-notify.bats defines. They are listed explicitly
+# rather than pattern-matched so the list is auditable and cannot silently widen.
+#
+# Modes:  --audit (default) · --assert-clean · --sweep [--dry-run] · --selftest
+# Exit:   0 = clean / done · 1 = contaminated (--assert-clean) or sweep incomplete · 2 = usage /
+#         unreadable store (LOUD, never silent-green) · 3 = selftest RED
+#
+# Env seams: CC_COMMS_ALARM_DIR (the store) · CC_COMMS_ALARM_LEGACY_UUIDS (newline-separated,
+# overrides the embedded legacy list; selftest + future backfills).
+set -uo pipefail
+
+# Resolve $0 THROUGH symlinks before deriving ROOT. Everything under ~/.claude/bin is a per-file
+# symlink into the checkout, so a bare `dirname "$0"` yields ~/.claude/bin and the sibling lib
+# lookup lands in the DEPLOYED hooks/lib — which will not hold a brand-new file until install.sh
+# re-globs it. Resolving first means this tool works from the checkout the moment it is written,
+# before any deploy. (No `readlink -f`: GNU-only, and this box ships the BSD userland.)
+SELF="$0"
+while [ -L "$SELF" ]; do
+  _link="$(readlink "$SELF")"
+  if [ "${_link#/}" != "$_link" ]; then SELF="$_link"; else SELF="$(dirname "$SELF")/$_link"; fi
+done
+ROOT="$(cd "$(dirname "$SELF")/.." 2>/dev/null && pwd)"
+
+LIB="$ROOT/hooks/lib/comms-alarm.sh"
+[ -f "$LIB" ] || LIB="$HOME/.claude/hooks/lib/comms-alarm.sh"
+if [ -f "$LIB" ]; then
+  # shellcheck source=/dev/null
+  . "$LIB"
+fi
+command -v comms_alarm_dir >/dev/null 2>&1 || {
+  echo "cc-comms-alarm-sweep: hooks/lib/comms-alarm.sh not found (looked in $ROOT/hooks/lib and ~/.claude/hooks/lib)" >&2
+  exit 2
+}
+command -v jq >/dev/null 2>&1 || { echo "cc-comms-alarm-sweep: jq required" >&2; exit 2; }
+
+LEGACY_UUIDS="${CC_COMMS_ALARM_LEGACY_UUIDS:-$(cat <<'UUIDS'
+AAAAAAAA-1111-2222-3333-444444444444
+DEADBEEF-1111-2222-3333-444444444444
+DDDDDDDD-9999-8888-7777-666666666666
+UUIDS
+)}"
+
+is_legacy_uuid() { # <token>
+  [ -n "${1:-}" ] || return 1
+  printf '%s\n' "$LEGACY_UUIDS" | grep -qxF "$1"
+}
+
+# classify <file> → prints "R0" | "R1" | "R2" (fixture-origin, naming the rule) or "" (real/keep)
+classify() {
+  local f="$1" kind target msg origin
+  origin="$(jq -r '.test_origin // ""' "$f" 2>/dev/null)" || origin=""
+  [ -n "$origin" ] && { printf 'R0\n'; return 0; }
+  kind="$(jq -r '.kind // ""' "$f" 2>/dev/null)" || kind=""
+  target="$(jq -r '.target // .uuid // ""' "$f" 2>/dev/null)" || target=""
+  msg="$(jq -r '.msg // ""' "$f" 2>/dev/null)" || msg=""
+  if [ "$kind" = "enqueue-failed" ] && [ "$msg" = "cannot persist" ] && is_legacy_uuid "$target"; then
+    printf 'R1\n'; return 0
+  fi
+  if [ "$kind" = "rerouted" ] && is_legacy_uuid "$target"; then
+    printf 'R2\n'; return 0
+  fi
+  printf '\n'
+}
+
+# Records live in the store ROOT. quarantine/ and test-leak/ are subdirs and are NEVER re-scanned:
+# quarantine is the sweep's own destination (re-scanning it would re-sweep forever) and test-leak is
+# already-diverted evidence that by construction never entered the root.
+root_records() { # → NUL-separated paths, root only
+  local d="$1"
+  find "$d" -maxdepth 1 -type f \( -name '*.json' -o -name '*.json.handled' \) -print0 2>/dev/null
+}
+
+DIR="$(comms_alarm_dir)"
+MODE=audit
+DRY=0
+while [ $# -gt 0 ]; do
+  if [ "$1" = "--audit" ]; then MODE=audit
+  elif [ "$1" = "--assert-clean" ]; then MODE=assert
+  elif [ "$1" = "--sweep" ]; then MODE=sweep
+  elif [ "$1" = "--dry-run" ]; then DRY=1
+  elif [ "$1" = "--selftest" ]; then MODE=selftest
+  elif [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
+    sed -n '2,40p' "$SELF"; exit 0
+  else
+    echo "cc-comms-alarm-sweep: unknown argument '$1' (--audit|--assert-clean|--sweep [--dry-run]|--selftest)" >&2; exit 2
+  fi
+  shift
+done
+
+# ── census: fills N_TOTAL / N_FIX / N_REAL / N_R0..N_R2, and (given $2) writes the fixture-origin
+#    paths NUL-separated to that file.
+#
+# The fixture list goes through a FILE, not an accumulated delimited string. The obvious version —
+# join on \001 and split with `IFS=$'\001'` — is a bash 3.2 runtime trap: the assignment holds the
+# byte (${#IFS} is 1) but `for f in $LIST` yields ONE joined word with the delimiters deleted, so
+# the loop body ran zero times and the sweep reported "quarantined 0" while cheerfully printing a
+# correct census above it. `bash -n` and shellcheck both pass it, and zsh (what an agent's shell
+# tool runs) splits it correctly — so a repro can lie. NUL-separated read is the idiom that works,
+# and it is already what root_records feeds.
+census() {
+  local d="$1" out="${2:-}" f r
+  N_TOTAL=0; N_FIX=0; N_REAL=0; N_R0=0; N_R1=0; N_R2=0
+  [ -n "$out" ] && : > "$out"
+  while IFS= read -r -d '' f; do
+    N_TOTAL=$((N_TOTAL+1))
+    r="$(classify "$f")"
+    if [ -n "$r" ]; then
+      N_FIX=$((N_FIX+1))
+      [ -n "$out" ] && printf '%s\0' "$f" >> "$out"
+      if [ "$r" = "R0" ]; then N_R0=$((N_R0+1));
+      elif [ "$r" = "R1" ]; then N_R1=$((N_R1+1));
+      else N_R2=$((N_R2+1)); fi
+    else
+      N_REAL=$((N_REAL+1))
+    fi
+  done < <(root_records "$d")
+}
+
+pct() { # <part> <whole> → "NN.N"
+  if [ "${2:-0}" -le 0 ]; then printf '0.0'; else
+    printf '%s.%s' $(( $1 * 1000 / $2 / 10 )) $(( $1 * 1000 / $2 % 10 ))
+  fi
+}
+
+if [ "$MODE" != "selftest" ]; then
+  [ -d "$DIR" ] || { echo "cc-comms-alarm-sweep: store dir does not exist: $DIR" >&2; exit 2; }
+  [ -r "$DIR" ] || { echo "cc-comms-alarm-sweep: store dir unreadable: $DIR" >&2; exit 2; }
+fi
+
+if [ "$MODE" = "audit" ]; then
+  census "$DIR"
+  N_LEAK="$(find "$DIR/test-leak" -type f -name '*.json' 2>/dev/null | grep -c . || true)"
+  N_QUAR="$(find "$DIR/quarantine" -type f 2>/dev/null | grep -c . || true)"
+  echo "comms alarm store: $DIR"
+  echo "  root records ....... $N_TOTAL"
+  echo "  real (kept) ........ $N_REAL  ($(pct "$N_REAL" "$N_TOTAL")%)"
+  echo "  fixture-origin ..... $N_FIX  ($(pct "$N_FIX" "$N_TOTAL")%)   [R0 test_origin=$N_R0 · R1 enqueue-fail=$N_R1 · R2 rerouted=$N_R2]"
+  echo "  diverted (test-leak) $N_LEAK   (never entered the root; not escalated)"
+  echo "  quarantined ........ $N_QUAR"
+  if [ "$N_FIX" -gt 0 ]; then
+    echo ""
+    echo "  → $N_FIX fixture-origin record(s) are still in the LIVE root. Quarantine them:"
+    echo "      cc-comms-alarm-sweep --sweep"
+  fi
+  echo ""
+  echo "  Real-record targets (the classifier keeps everything no rule matched — including"
+  echo "  synthetic-LOOKING targets like DESK-UUID-1, whose records are genuine):"
+  while IFS= read -r -d '' f; do
+    [ -n "$(classify "$f")" ] && continue
+    jq -r '(.target // .uuid // "(none)")' "$f" 2>/dev/null
+  done < <(root_records "$DIR") | sort | uniq -c | sort -rn | head -12 | sed 's/^/    /'
+  exit 0
+fi
+
+if [ "$MODE" = "assert" ]; then
+  census "$DIR"
+  if [ "$N_FIX" -eq 0 ]; then
+    echo "cc-comms-alarm-sweep: CLEAN — 0 fixture-origin record(s) in $DIR ($N_TOTAL root records)."
+    exit 0
+  fi
+  echo "cc-comms-alarm-sweep: CONTAMINATED — $N_FIX of $N_TOTAL root record(s) ($(pct "$N_FIX" "$N_TOTAL")%) are fixture-origin." >&2
+  echo "  matched: R0 test_origin=$N_R0 · R1 enqueue-fail/cannot-persist=$N_R1 · R2 rerouted=$N_R2" >&2
+  echo "  Any reader deriving counts from this store is reading a contaminated denominator." >&2
+  echo "  Quarantine (archival, never deletion):  cc-comms-alarm-sweep --sweep" >&2
+  exit 1
+fi
+
+if [ "$MODE" = "sweep" ]; then
+  FIXFILE="$(mktemp -t ccalarmsweep)" || { echo "cc-comms-alarm-sweep: mktemp failed" >&2; exit 2; }
+  trap 'rm -f "$FIXFILE"' EXIT
+  census "$DIR" "$FIXFILE"
+  if [ "$N_FIX" -eq 0 ]; then
+    echo "cc-comms-alarm-sweep: nothing to sweep — 0 fixture-origin of $N_TOTAL root record(s)."
+    exit 0
+  fi
+  QDIR="$DIR/quarantine/$(date -u +%Y%m%dT%H%M%SZ)"
+  if [ "$DRY" = 1 ]; then
+    echo "cc-comms-alarm-sweep (DRY-RUN): WOULD quarantine $N_FIX of $N_TOTAL root record(s) → $QDIR"
+    echo "  R0 test_origin=$N_R0 · R1 enqueue-fail/cannot-persist=$N_R1 · R2 rerouted=$N_R2"
+    echo "  WOULD keep $N_REAL real record(s) untouched."
+    exit 0
+  fi
+  mkdir -p "$QDIR" 2>/dev/null || { echo "cc-comms-alarm-sweep: cannot create $QDIR" >&2; exit 2; }
+  MANIFEST="$QDIR/manifest.jsonl"
+  moved=0; failed=0
+  # ARCHIVAL, NEVER DELETION — and "archive" is a property of the DESTINATION, not the verb. So:
+  # never clobber (a colliding basename gets a -N suffix), and only unlink the source once the
+  # destination is CONFIRMED present. A failed move leaves the record exactly where it was; the
+  # sweep reports a non-zero incomplete rather than claiming a clean store it did not produce.
+  while IFS= read -r -d '' f; do
+    [ -n "$f" ] || continue
+    [ -e "$f" ] || continue
+    rule="$(classify "$f")"
+    base="$(basename "$f")"; dest="$QDIR/$base"; n=1
+    while [ -e "$dest" ]; do dest="$QDIR/$base-$n"; n=$((n+1)); done
+    if cp -p "$f" "$dest" 2>/dev/null && [ -s "$dest" ]; then
+      jq -nc --arg src "$f" --arg dst "$dest" --arg rule "$rule" \
+             --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+             '{ts:$ts, actor:"cc-comms-alarm-sweep", src:$src, dst:$dst, rule:$rule}' >> "$MANIFEST" 2>/dev/null || true
+      rm -f "$f" 2>/dev/null || true
+      moved=$((moved+1))
+    else
+      echo "cc-comms-alarm-sweep: FAILED to archive $f — left in place" >&2
+      failed=$((failed+1))
+    fi
+  done < "$FIXFILE"
+  echo "cc-comms-alarm-sweep: quarantined $moved record(s) → $QDIR"
+  echo "  R0 test_origin=$N_R0 · R1 enqueue-fail/cannot-persist=$N_R1 · R2 rerouted=$N_R2"
+  echo "  kept $N_REAL real record(s) in the live root; manifest: $MANIFEST"
+  if [ "$failed" -gt 0 ]; then
+    echo "cc-comms-alarm-sweep: $failed record(s) could NOT be archived and remain in the root — store is NOT clean." >&2
+    exit 1
+  fi
+  exit 0
+fi
+
+# ── selftest: RED-prove the classifier on a store built from KNOWN-origin records ───────────────
+if [ "$MODE" = "selftest" ]; then
+  rc=0
+  ok()  { echo "  ok   — $1"; }
+  bad() { echo "  FAIL — $1" >&2; rc=3; }
+  d="$(mktemp -d)"; trap 'rm -rf "$d"' EXIT
+  S="$d/store"; mkdir -p "$S"
+
+  # fixture-origin: R1 (the exact triple the leaking suite wrote), R2, R0
+  printf '{"kind":"enqueue-failed","target":"AAAAAAAA-1111-2222-3333-444444444444","from":"claude-next","msg":"cannot persist","ts":"2026-07-20T09:40:22Z"}\n' > "$S/enqueue-fail-A.json.handled"
+  printf '{"kind":"rerouted","target":"DEADBEEF-1111-2222-3333-444444444444","ts":"2026-07-20T09:40:22Z"}\n' > "$S/rerouted-B.json"
+  printf '{"kind":"undelivered","uuid":"11111111-2222-3333-4444-555555555555","reason":"x","ts":"2026-07-20T09:40:22Z","test_origin":"bats:foo.bats"}\n' > "$S/undelivered-C.json"
+  # REAL — the two records the rejected classifiers would have destroyed, verbatim from the store.
+  printf '{"kind":"undelivered","uuid":"D08B4FC0-9253-4F54-A699-7D45CE568F84","reason":"LIVE session, 382 message(s) unconsumed for 102415s past deadline","ts":"2026-07-20T15:37:56Z"}\n' > "$S/undelivered-REAL1.json"
+  printf '{"kind":"undelivered","uuid":"DESK-UUID-1","reason":"17 message(s) unconsumed 16896s AND owner liveness INDETERMINATE","ts":"2026-07-26T22:58:48Z"}\n' > "$S/undelivered-REAL2.json"
+  # REAL — an enqueue-failed for a legacy UUID but a DIFFERENT message: R1 needs all three fields,
+  # so this must survive. Guards the rule against widening into "any record naming that UUID".
+  printf '{"kind":"enqueue-failed","target":"AAAAAAAA-1111-2222-3333-444444444444","msg":"disk full","ts":"2026-07-20T09:40:22Z"}\n' > "$S/enqueue-fail-REAL3.json"
+
+  export CC_COMMS_ALARM_DIR="$S"
+  echo "cc-comms-alarm-sweep --selftest"
+
+  out="$("$SELF" --assert-clean 2>&1)"; a_rc=$?
+  [ "$a_rc" = 1 ] && ok "--assert-clean is RED on a contaminated store (rc=1)" \
+                  || bad "--assert-clean returned $a_rc on a store with 3 fixture records (expected 1)"
+  printf '%s' "$out" | grep -q 'CONTAMINATED — 3 of 6' \
+    && ok "the verdict counts 3 fixture of 6 root records" \
+    || bad "wrong census in: $out"
+
+  out="$("$SELF" --sweep --dry-run 2>&1)"
+  printf '%s' "$out" | grep -q 'WOULD quarantine 3 of 6' && ok "--dry-run reports 3, mutates nothing" \
+    || bad "dry-run census wrong: $out"
+  [ -e "$S/enqueue-fail-A.json.handled" ] && ok "--dry-run left the store untouched" \
+    || bad "--dry-run MOVED a record"
+
+  "$SELF" --sweep >/dev/null 2>&1 || bad "--sweep exited non-zero"
+  [ ! -e "$S/enqueue-fail-A.json.handled" ] && ok "R1 record left the live root" || bad "R1 record still in root"
+  [ ! -e "$S/rerouted-B.json" ]             && ok "R2 record left the live root" || bad "R2 record still in root"
+  [ ! -e "$S/undelivered-C.json" ]          && ok "R0 record left the live root" || bad "R0 record still in root"
+  # POSITIVE CONTROL — without these three the sweep could pass by moving everything.
+  [ -e "$S/undelivered-REAL1.json" ] && ok "POSITIVE CONTROL: the real D08B4FC0 record was KEPT" \
+    || bad "the sweep destroyed a REAL undelivered record (D08B4FC0)"
+  [ -e "$S/undelivered-REAL2.json" ] && ok "POSITIVE CONTROL: the real DESK-UUID-1 record was KEPT" \
+    || bad "the sweep destroyed a REAL record whose target merely LOOKS synthetic"
+  [ -e "$S/enqueue-fail-REAL3.json" ] && ok "POSITIVE CONTROL: enqueue-failed with a different msg was KEPT" \
+    || bad "R1 widened past its literal triple and took a non-fixture record"
+
+  n_q="$(find "$S/quarantine" -name '*.json*' -not -name 'manifest.jsonl' -type f 2>/dev/null | grep -c . || true)"
+  [ "$n_q" = 3 ] && ok "all 3 swept records are ARCHIVED, not deleted" || bad "quarantine holds $n_q, expected 3"
+  n_m="$(grep -c . "$(find "$S/quarantine" -name manifest.jsonl 2>/dev/null | head -1)" 2>/dev/null || echo 0)"
+  [ "$n_m" = 3 ] && ok "the manifest records all 3 moves with their rule" || bad "manifest holds $n_m lines, expected 3"
+
+  "$SELF" --assert-clean >/dev/null 2>&1 && ok "--assert-clean is GREEN after the sweep" \
+    || bad "--assert-clean still RED after a successful sweep"
+
+  # the chokepoint: a fixture-context write into the LIVE default must divert, not append.
+  ( export HOME="$d/fakehome"; mkdir -p "$HOME/.claude/autonomy/comms-alarms"
+    unset CC_COMMS_ALARM_DIR; export CC_COMMS_ALARM_TEST_ORIGIN="bats:selftest.bats"
+    comms_alarm_write enqueue-fail '{"kind":"enqueue-failed","target":"X","msg":"cannot persist"}' 2>/dev/null
+    w_rc=$?
+    n_root="$(find "$HOME/.claude/autonomy/comms-alarms" -maxdepth 1 -type f 2>/dev/null | grep -c . || true)"
+    n_leak="$(find "$HOME/.claude/autonomy/comms-alarms/test-leak" -type f 2>/dev/null | grep -c . || true)"
+    [ "$w_rc" = 1 ] && [ "$n_root" = 0 ] && [ "$n_leak" = 1 ] ) \
+    && ok "chokepoint: a fixture write to the LIVE default DIVERTED (rc=1, root=0, test-leak=1)" \
+    || bad "chokepoint did NOT divert a fixture-context write out of the live root"
+
+  if [ "$rc" = 0 ]; then echo "cc-comms-alarm-sweep --selftest: GREEN"; else echo "cc-comms-alarm-sweep --selftest: RED" >&2; fi
+  exit "$rc"
+fi

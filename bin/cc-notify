@@ -145,6 +145,27 @@ usage() { sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; }
 # symlinked deploys), then PATH, then the canonical ~/.claude/bin. It is BOTH the name resolver and
 # the liveness oracle (its --json lists LIVE sessions only: pid alive + pane present).
 _sd="$(cd "$(dirname "$0")" 2>/dev/null && pwd || true)"
+
+# ── comms-alarm chokepoint lib (the alarm store's hermeticity guard; see hooks/lib/comms-alarm.sh) ──
+# Three candidates, in order: the checkout reached by resolving $0 THROUGH its symlinks, the plain
+# sibling ../hooks/lib, then the deployed ~/.claude/hooks/lib. The symlink-resolved candidate is
+# first and is the load-bearing one: ~/.claude/bin/cc-notify is a per-file symlink into the checkout,
+# so a bare dirname "$0" yields ~/.claude/bin and finds only the DEPLOYED lib — which does not hold a
+# brand-new tracked file until install.sh re-globs hooks/lib/*.sh on the next deploy. Resolving first
+# means the guard is live from the moment it is committed, with no deploy-lag window.
+_ca_self="$0"
+while [ -L "$_ca_self" ]; do
+  _ca_l="$(readlink "$_ca_self")"
+  if [ "${_ca_l#/}" != "$_ca_l" ]; then _ca_self="$_ca_l"; else _ca_self="$(dirname "$_ca_self")/$_ca_l"; fi
+done
+_ca_root="$(cd "$(dirname "$_ca_self")/.." 2>/dev/null && pwd || true)"
+for _ca_lib in "$_ca_root/hooks/lib/comms-alarm.sh" "$_sd/../hooks/lib/comms-alarm.sh" "$HOME/.claude/hooks/lib/comms-alarm.sh"; do
+  if [ -f "$_ca_lib" ]; then
+    # shellcheck source=/dev/null
+    . "$_ca_lib" 2>/dev/null && command -v comms_alarm_write >/dev/null 2>&1 && break
+  fi
+done
+
 CCS=""
 if   [ -n "$_sd" ] && [ -x "$_sd/cc-sessions" ]; then CCS="$_sd/cc-sessions"
 elif command -v cc-sessions >/dev/null 2>&1;     then CCS="$(command -v cc-sessions)"
@@ -491,11 +512,22 @@ if ! mailbox_write; then
   # F4: exit 5 alone is INERT (every fire-and-forget caller swallows it with `|| true`). So the backstop
   # for "cannot persist" must NOT depend on persistence — escalate DIRECTLY here: a durable alarm record
   # in a DIFFERENT dir (the target mailbox is what failed) + a best-effort push to the operator's phone.
-  adir="${CC_COMMS_ALARM_DIR:-$HOME/.claude/autonomy/comms-alarms}"
-  if mkdir -p "$adir" 2>/dev/null; then
-    jq -nc --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)" --arg tgt "$uuid" --arg from "$FROM" --arg msg "$MSG_1LINE" \
-      '{kind:"enqueue-failed", target:$tgt, from:$from, msg:$msg, ts:$ts}' \
-      > "$adir/enqueue-fail-$(date -u +%Y%m%dT%H%M%SZ 2>/dev/null)-$$.json" 2>/dev/null || true
+  # Written through the comms-alarm chokepoint (hooks/lib/comms-alarm.sh), never straight to the
+  # dir. This suite's OWN inbox-unwritable tests wrote 510 of these into the operator's LIVE store
+  # (40% of it) and cc-inbox-guard phoned him once per record — see the lib header. The chokepoint
+  # stamps test_origin and diverts a fixture-context write out of the live root. Lib absent (a
+  # deployed layer whose install.sh has not re-globbed hooks/lib yet) → the original inline write,
+  # so the backstop can never become WEAKER than it was before it had a chokepoint.
+  _ca_rec="$(jq -nc --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)" --arg tgt "$uuid" --arg from "$FROM" --arg msg "$MSG_1LINE" \
+    '{kind:"enqueue-failed", target:$tgt, from:$from, msg:$msg, ts:$ts}' 2>/dev/null)"
+  if command -v comms_alarm_write >/dev/null 2>&1; then
+    comms_alarm_write enqueue-fail "$_ca_rec" || true
+  else
+    adir="${CC_COMMS_ALARM_DIR:-$HOME/.claude/autonomy/comms-alarms}"
+    if mkdir -p "$adir" 2>/dev/null; then
+      printf '%s\n' "$_ca_rec" \
+        > "$adir/enqueue-fail-$(date -u +%Y%m%dT%H%M%SZ 2>/dev/null)-$$-${RANDOM}.json" 2>/dev/null || true
+    fi
   fi
   for _p in "$_sd/../scripts/push-send.sh" "$HOME/.claude/scripts/push-send.sh" "$(command -v push-send.sh 2>/dev/null || true)"; do
     [ -n "$_p" ] && [ -x "$_p" ] && { "$_p" send --title "cc-notify enqueue FAILED" --message "inbox unwritable for $uuid; NOT delivered: $MSG_1LINE" >/dev/null 2>&1 || true; break; }

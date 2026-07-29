@@ -579,3 +579,69 @@ loop still exists where a retry can help.
   - **Verify a bounded-caller claim by REPRODUCING it against the current binary.** The rc-124 gap was
     confirmed by running the sibling's landed code under `timeout -s TERM`, not inferred from reading
     it — which is also how the "message actually persisted: YES" half was established.
+
+---
+
+## v5 — the alarm store was 40% test fixture data (backlog `817faf3a4968`, 2026-07-29)
+
+`~/.claude/autonomy/comms-alarms` held **1287 records, 522 of them (40.5%) written by a bats suite
+into the operator's LIVE directory**. Every one was the same literal triple —
+`{"kind":"enqueue-failed","target":"AAAAAAAA-1111-2222-3333-444444444444","msg":"cannot persist"}`
+— which is what `tests/cc-notify.bats` passes at its three inbox-unwritable tests. The suite
+fixtured `CC_REGISTRY_DIR` and `CC_MAILBOX_DIR` but not `CC_COMMS_ALARM_DIR`, so two of those three
+tests fell through to the `$HOME` default on every run (2 records/run × ~260 runs).
+
+This is **distinct from the suite-side hermeticity work** (`9cc78e748e7e`, the `$HOME` ratchet). That
+work fixes the SUITE. Nothing cleaned the PRODUCT, and the damage outlives the suite fix.
+
+**Measured harm, both real:**
+1. `cc-inbox-guard` phones the operator once per `enqueue-fail` record, then marks it `.handled`.
+   520 `.handled` fixture records = **520 pages about a failure that never happened**, each filed as
+   though triaged.
+2. The ground-up rebuild method requires re-deriving every constant from primary disk truth. Rows 3
+   (cross-session comms), 5 (autonomy dispatch) and 10 (operator surface) all derive from stores like
+   this one, so each silently read a **40%-fixture denominator**. Row 3 caught it only by
+   cross-checking; a row that trusted the store would have designed against fabricated failure rates.
+
+**The fix, three parts:**
+- **`hooks/lib/comms-alarm.sh` — the write chokepoint.** All three producers (`cc-notify`
+  enqueue-fail, `cc-await-ping` cursor-fail, `cc-inbox-guard` undelivered) write through
+  `comms_alarm_write`. A write whose actor resolves to a bats/fixture context is stamped
+  `test_origin`, **diverted** into `<dir>/test-leak/`, and shouted about on stderr with rc 1.
+  Fixture data can no longer reach the live root *at all* — contamination is structurally
+  impossible rather than detected late.
+- **`test_origin` makes records self-identifying.** `cc-inbox-guard` now excludes them **by field**
+  instead of pattern-matching a magic UUID, so the paging harm is closed at the reader too.
+- **`bin/cc-comms-alarm-sweep`** — `--audit` / `--assert-clean` / `--sweep [--dry-run]` /
+  `--selftest`. Quarantine is **archival**: records move to `quarantine/<stamp>/` with a
+  rule-stamped `manifest.jsonl`, non-clobbering, and the source is unlinked only once the
+  destination is confirmed present.
+
+**Why the enforcement is the write path and not a lint.** A lint over the tree would make every
+author answerable for every other author's suite (the fleet-wide hard stop). A lint over the *store*
+would block every land for as long as the operator's live directory stayed dirty. Neither is
+enforcement; the chokepoint is. `--assert-clean` exists as an auditable verdict, deliberately **not**
+wired into `run_gate` for exactly that reason.
+
+**Learnings:**
+- **Two plausible classifiers were built and BOTH rejected on evidence — each would have destroyed
+  real operator telemetry.** (a) *"the target appears as a literal in `tests/*.bats`"*: a test author
+  had copied a REAL pane UUID into a fixture, so `D08B4FC0-…` (256 genuine `undelivered` records)
+  matched. (b) *"the target is structurally synthetic"*: `DESK-UUID-1` is not a UUID at all and owns
+  23 genuine records — a real name-keyed mailbox really did sit 17 messages deep for 16896s. So
+  origin is decided by **narrow literal rules tied to a producer known to exist (or known not to)**,
+  never by the shape of a token. A record matching no rule is KEPT. Under-sweeping leaves a countable
+  residue; over-sweeping destroys the only evidence of a real delivery failure.
+- **The chokepoint was RED-proved independently of the suite fix.** Original suite + original bin →
+  `root=1, leak=0`. Original *unfixed* suite + new bin → `root=0, leak=1`, stamped
+  `test_origin:"bats:cc-notify.bats"`. The guarantee does not depend on suite cooperation — which is
+  the point, since a leak is by definition a suite that forgot to cooperate.
+- **`IFS` set to a control character does not split under bash 3.2.** Joining the sweep list on
+  `\001` and iterating `for f in $LIST` yielded ONE joined word with the delimiters deleted, so the
+  move loop ran zero times while a *correct* census printed above it — "quarantined 0 record(s)"
+  under `R1 enqueue-fail=1`. `bash -n` and shellcheck both pass it, and zsh splits it correctly, so
+  an agent's shell tool cannot reproduce it. NUL-separated `read -r -d ''` is the idiom that works.
+- **A fail-loud backstop must not be turned into a production abort to fix a test-hygiene problem.**
+  Every one of these call sites is fire-and-forget (`|| true`). The divert returns a real rc and
+  shouts, but never aborts the caller — and each producer keeps its original inline write as a
+  fallback, so the backstop can never become *weaker* than it was before it had a chokepoint.

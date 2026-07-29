@@ -82,6 +82,22 @@ if [ -f "$_mbxlib" ] && command -v jq >/dev/null 2>&1; then
   . "$_mbxlib" 2>/dev/null && command -v mailbox_has_pending >/dev/null 2>&1 && _have_lib=1
 fi
 
+# comms-alarm chokepoint lib. $0 is resolved THROUGH its symlinks first: ~/.claude/bin/cc-await-ping
+# is a per-file symlink into the checkout, so a bare dirname "$0" finds only the DEPLOYED hooks/lib,
+# which does not hold a brand-new tracked file until install.sh re-globs it.
+_ca_self="$0"
+while [ -L "$_ca_self" ]; do
+  _ca_l="$(readlink "$_ca_self")"
+  if [ "${_ca_l#/}" != "$_ca_l" ]; then _ca_self="$_ca_l"; else _ca_self="$(dirname "$_ca_self")/$_ca_l"; fi
+done
+_ca_root="$(cd "$(dirname "$_ca_self")/.." 2>/dev/null && pwd || true)"
+for _ca_lib in "$_ca_root/hooks/lib/comms-alarm.sh" "$_bd/../hooks/lib/comms-alarm.sh" "$HOME/.claude/hooks/lib/comms-alarm.sh"; do
+  if [ -f "$_ca_lib" ]; then
+    # shellcheck source=/dev/null
+    . "$_ca_lib" 2>/dev/null && command -v comms_alarm_write >/dev/null 2>&1 && break
+  fi
+done
+
 MBOX="$MAILBOX_DIR/$CUR_UUID.md"
 _lc() { if [ -f "$MBOX" ]; then grep -c '' "$MBOX" 2>/dev/null; else echo 0; fi; }   # grep -c '' — matches the lib (F1)
 baseline="$(_lc)"
@@ -154,11 +170,21 @@ while [ "$elapsed" -lt "$TIMEOUT" ]; do
       # deliver, never silently drop". This caller used to exit 0 regardless, so the lib's one escalation
       # contract had no honorer: a broken cursor looked exactly like a clean take. Deliver, alarm, exit loud.
       if [ "$_trc" = 2 ]; then
-        _adir="${CC_COMMS_ALARM_DIR:-$HOME/.claude/autonomy/comms-alarms}"
-        if mkdir -p "$_adir" 2>/dev/null && command -v jq >/dev/null 2>&1; then
-          jq -nc --arg u "$CUR_UUID" --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)" \
-            '{kind:"cursor-write-failed", uuid:$u, actor:"cc-await-ping", reason:"mailbox_take delivered the body but could not advance .seen — the same mail will be re-delivered (dup, not loss); the guard cannot key on a cursor that is not moving", ts:$ts}' \
-            > "$_adir/cursor-fail-$(date -u +%Y%m%dT%H%M%SZ 2>/dev/null)-$$.json" 2>/dev/null || true
+        # Through the comms-alarm chokepoint (stamps test_origin, diverts a fixture-context write out
+        # of the operator's live root — see hooks/lib/comms-alarm.sh). Lib absent → the original
+        # inline write, so this backstop never gets weaker than before the chokepoint existed.
+        if command -v jq >/dev/null 2>&1; then
+          _ca_rec="$(jq -nc --arg u "$CUR_UUID" --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)" \
+            '{kind:"cursor-write-failed", uuid:$u, actor:"cc-await-ping", reason:"mailbox_take delivered the body but could not advance .seen — the same mail will be re-delivered (dup, not loss); the guard cannot key on a cursor that is not moving", ts:$ts}' 2>/dev/null)"
+          if command -v comms_alarm_write >/dev/null 2>&1; then
+            comms_alarm_write cursor-fail "$_ca_rec" || true
+          else
+            _adir="${CC_COMMS_ALARM_DIR:-$HOME/.claude/autonomy/comms-alarms}"
+            if mkdir -p "$_adir" 2>/dev/null; then
+              printf '%s\n' "$_ca_rec" \
+                > "$_adir/cursor-fail-$(date -u +%Y%m%dT%H%M%SZ 2>/dev/null)-$$-${RANDOM}.json" 2>/dev/null || true
+            fi
+          fi
         fi
         echo "cc-await-ping: ⚠ delivered, but the shared cursor could NOT be advanced for $CUR_UUID — you will see this mail again (a dup, never a loss); alarm recorded" >&2
         exit 4
