@@ -281,6 +281,38 @@ flags above are verified against the parser: `--prompt-file` 1808 · `--account`
 only a silver platter if its flags are read off the parser — otherwise it is a recalled command
 with extra confidence, and it fails at exactly the moment a slot frees and nobody re-reads it.
 
+### Row 7 payload — COMPOSED AND HELD, and stored DURABLY this time
+
+**Payload: [`docs/ground-up-payloads/row7-account-relogin.md`](../ground-up-payloads/row7-account-relogin.md)** —
+96 lines, one copy, in the repo.
+
+**Why not `/tmp` and why not `docs/plans/`.** Row 8's payload was kept in BOTH `/tmp` and inline in
+this runbook, and the two promptly drifted — the `--payload`/`--prompt-file` fix had to be applied
+twice, and a `/tmp` copy does not survive a reboot or a coordinator recycle. One durable file
+removes both failure modes. It is NOT under `docs/plans/` because the plan-structure hook (rightly)
+demands `status:` frontmatter there, and giving a *payload* a plan status would put a non-plan into
+`find-plan.sh --list-open` forever — making the mission ledger less truthful, which is the opposite
+of what that gate exists for.
+
+**Pre-verified so the fire is one command:** does not open with a slash command (the `/goal` 4000-char
+rejection trap) · flags checked against the parser · payload-lint control pair run —
+**RED pre-trailer / GREEN with the back-channel block appended**, which is the EXPECTED shape,
+because `--notify-back` materialises that block before the *enforcing* lint at `handoff-fire.sh:2950`
+while the preview lints the pre-trailer file. Do not "fix" that RED.
+
+```bash
+rm -f "$TMPDIR"handoff-deps-XXXXXX.sh              # no-op since the mktemp fix; free insurance
+scripts/handoff-fire.sh --split-right --follow \
+  --notify-back 71B42B48-1331-4F60-8DA3-6849F2682CA2 \
+  --repo /Users/chrisren/Development/claude-infrastructure \
+  --worktree gu-account-relogin \
+  --account <re-read claude-accounts at fire time> \
+  --prompt-file docs/ground-up-payloads/row7-account-relogin.md
+rc=$?; [ "$rc" = 9 ] && echo "REFUSED by capacity gate — do NOT record a fire"
+```
+Then verify engagement by transcript CONTENT (assistant turns + tool_use), never the script's
+verdict — a cold `--worktree` fire has an auto-submit race.
+
 ## Wave log (coordinator appends; map rows carry the durable status)
 
 - 2026-07-29: campaign opened; coordinator = the recycled successor of session e891e080.
