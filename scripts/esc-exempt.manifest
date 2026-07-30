@@ -1,0 +1,86 @@
+# esc-exempt.manifest — the DECLARED exemption set for ship-land's EFFECT-class escalation scan.
+#
+# WHY THIS FILE EXISTS. `esc_scan()` in scripts/ship-land.sh is the blast-radius cap on the landing
+# rail: a destructive-SQL or credential pattern in the landing range PARKS a class-B decision packet
+# and refuses to auto-land. Measured over its whole life (~/.claude/land.log: 506 clean / 11 hit,
+# 9 distinct decision packets), its precision was ZERO — not one park was an agent about to
+# auto-land a destructive migration against a durable store. What it actually caught:
+#
+#   4 parks  the session-index retention GC (row-deletes against session_chunks and its siblings) —
+#            benign maintenance of a REBUILDABLE local cache. Still absent from origin/main as of
+#            2026-07-29: the rail blocked a complete, gate-green fix four separate times.
+#
+# NOTE ON THIS FILE'S OWN WORDING: the destructive verbs are described, never spelled as literal
+# statements. This file is not itself exempt (a config file should not be able to hide from the
+# scan), so a literal example inside it would park every land that touched it — the same trap that
+# drove doc authors to mangle their prose, one level down.
+#   3 parks  audit/research MARKDOWN describing this very defect. One author respelled the SQL as
+#            prose to dodge the scan — `<!-- pattern spelled as prose so the ship esc-scan doesn't
+#            match quoted SQL in docs -->` — and it matched anyway.
+#   1 park   scripts/gate-classify.sh's own `C_SURFACE` pattern table plus its bats fixtures, i.e.
+#            the detector matching its own test corpus (packet shipland-esc-c661813).
+#   1 park   real SQL in vendored third-party code (vendor/codex-security) — see NON-ENTRIES below.
+#
+# An alarm that fires only on benign input carries the same zero bits as one that cannot fire, and
+# it is worse than silence: it teaches the operator to rubber-stamp the one packet class that is
+# supposed to stop a real destructive land. This file restores the signal by naming, per path, where
+# a destructive statement provably reaches no durable store.
+#
+# FORMAT (frozen contract): one repo-relative path pattern per line; `#` comments and blank lines
+# ignored; leading/trailing whitespace stripped. Patterns are bash `[[ … == … ]]` PATTERN matches,
+# not pathname globs, so `*` DOES cross `/` — `docs/*` covers `docs/research/x.md`. A `#` cannot
+# appear inside a pattern. A missing or empty file means NO exemptions (fail-closed).
+#
+# SCOPE — this file exempts the EFFECT class ONLY (the destructive-SQL verbs: dropping a table,
+# column, database or schema; truncating one; row-deletes; an alter that drops), whose question is
+# "could auto-landing this DESTROY durable data?". It has NO power over the DISCLOSURE class
+# (credential material), whose question is "does this commit LEAK a secret?" — a private key is
+# exactly as leaked in a markdown doc as in code, so that class scans every file listed here and is
+# never exemptible by anything.
+#
+# TRUST ROOT — esc_scan reads this file from the landing range's BASE revision, never the working
+# tree. An entry added inside a landing range is therefore INERT for the land that adds it: a change
+# can never widen the exemption set and rely on the widening in one move. That is enforced by
+# construction rather than by review, which is strictly stronger than parking on touch (a
+# sloppily-reviewed widening cannot take effect either), and it is why introducing this file did not
+# have to park its own first land — a park-on-touch rule would have made the rail's own bootstrap
+# impossible. A change here is still announced loudly at land time, because a widening nobody saw is
+# the thing worth avoiding; it simply takes effect from the NEXT land.
+
+# ── rebuildable local caches: a destructive statement here reaches no durable store ──────────────
+# session-index.db is a DERIVED cache, not a store of record. Its SSOT is the transcript corpus at
+# ~/.claude/projects/**/*.jsonl. The schema is `CREATE TABLE IF NOT EXISTS` (self-creating) and
+# session-index-sweep.sh walks the SSOT and re-indexes every transcript, gated only by
+# file_tracking's mtime/size pair — so deleting the entire .db costs one sweep, not one byte of
+# data. The retention GC this entry exists for touches exactly the derived tables (sessions,
+# session_chunks, sessions_fts, chunks_fts, file_tracking) and deliberately NOT `synonyms` or
+# `search_log`, which are config and telemetry rather than reconstructible index rows.
+hooks/session-index-*.sh
+hooks/lib/session-index-*.sh
+
+# ── non-executing prose: a statement in a doc has no effect to cap ───────────────────────────────
+# Markdown cannot execute SQL, so the EFFECT class has nothing to say about it. Three of nine parks
+# were docs, and the cost was not just a blocked land: authors began mangling their own prose to
+# evade the scan, which corrupts the audit record this repo runs on. The DISCLOSURE class still
+# covers every file below, so a key pasted into a doc is still caught.
+docs/*
+*.md
+
+# ── self-reference: pattern tables and the corpora that test them ────────────────────────────────
+# An escalation classifier's pattern table necessarily CONTAINS the patterns it classifies, and its
+# suite necessarily contains fixture inputs that must classify AS destructive. Neither is an
+# instruction to a database.
+scripts/gate-classify.sh
+# tests/* is sound because hermeticity is ENFORCED, not merely conventional: the
+# tests/test-hermeticity-lint.bats ratchet fails any suite that does not fixture $HOME under
+# BATS_TEST_TMPDIR, so a destructive statement in a test reaches a temp fixture and cannot reach
+# the operator's live ~/.claude state at all.
+tests/*
+
+# ── NON-ENTRIES (named deliberately, so the omission is a decision and not an oversight) ─────────
+# vendor/*  — NOT exempt. Vendored third-party code (vendor/codex-security) executes real SQL
+#             against stores whose durability this repo does not define. It is the one park class
+#             in the measured population with a defensible claim to review, so it keeps parking.
+# hooks/*   — NOT exempt as a whole. Only the session-index-* files above are cache maintenance;
+#             the rest of hooks/ is live actuation and a destructive statement there is exactly
+#             what this rail should stop.
