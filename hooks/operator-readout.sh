@@ -205,17 +205,37 @@ render_block() {
       [ -e "$f" ] || continue
       # NB: jq -r renders \t in string literals as REAL tabs — line shape: created<TAB>mark<TAB>text;
       # sort on the created prefix (FIFO), then cut the prefix off. Never @tsv (it \t-escapes fields).
+      # A packet that can NEVER auto-resolve is human-gated no matter what its class FIELD says.
+      # `cc-decide open` refuses class-B without BOTH a default and a deadline, so a B carrying
+      # neither could not have come through the front door — it is a hard block wearing the wrong
+      # label, and the six legacy `shipland-esc-*` packets are exactly that. Admitting them here is
+      # what puts a parked land-block on the operator's board; matching on the class FIELD alone
+      # left them visible to `cc-decide list --open` yet absent from the numbered steps, which is
+      # the surface the operator actually reads. Class A is deliberately NOT folded: it also lacks
+      # a default/deadline, but it is a post-hoc audit trail with nothing for the operator to do.
       jq -r '
         select((.status // "" | if . == "" then "open" else . end) == "open"
-               and (.class // "") == "C")
-        | (.id // "?" | .[0:8]) as $id8
+               and ((.class // "") == "C"
+                    or ((.class // "") == "B"
+                        and (.default_if_no_veto // "") == ""
+                        and (.veto_deadline // "") == "")))
+        # ROUND-TRIP: `cc-decide veto|action` resolves an EXACT id ("$DECISIONS_DIR/$id.json"), with
+        # no prefix matching — so the old 8-char slice printed something the operator could not paste
+        # back for ANY packet (a 12-hex id truncated to 8 is "unknown id"), and collapsed every
+        # `shipland-esc-*` packet to the same unusable label "shipland". Render the id whole; the
+        # cap only stops a pathological id from blowing the line. This matches the backlog leg
+        # below, which already prints its ids in full.
+        | (.id // "?" | if length > 24 then .[0:24] else . end) as $id8
         | (.what_plain // "" | gsub("[\n\t]"; " ") | split(". ")[0]) as $s
         | ($s | if length > 110 then .[0:110] + "…" else . end) as $sent
         | (.run_command // "" | gsub("[\n\t]"; " ")) as $run
         | (.staged_artifact_path // "" | gsub("[\n\t]"; " ")) as $staged
-        | (if $run != ""      then "decision\t▶\t\($run)   [decision C \($id8): \($sent | .[0:60])]"
-           elif $staged != "" then "decision\t▶\tbash \($staged)   [decision C \($id8): \($sent | .[0:60])]"
-           else "decision\t◆\t[decision C \($id8)] \($sent)" end) as $line
+        # the packet is EVIDENCE — label the row with the class it actually carries, never the class
+        # this leg folded it in as, so the id still reconciles with `cc-decide list --all`
+        | (.class // "?") as $cls
+        | (if $run != ""      then "decision\t▶\t\($run)   [decision \($cls) \($id8): \($sent | .[0:60])]"
+           elif $staged != "" then "decision\t▶\tbash \($staged)   [decision \($cls) \($id8): \($sent | .[0:60])]"
+           else "decision\t◆\t[decision \($cls) \($id8)] \($sent)" end) as $line
         | "\(.created // "?")\t\($line)"' "$f" 2>/dev/null
     done | sort | cut -f2- >> "$steps_file"
   fi
@@ -397,7 +417,11 @@ render_block() {
     case "$1" in
       deploy)     rtot="$c_deploy";     rcmd="" ;;
       activation) rtot="$c_activation"; rcmd='for f in ~/.claude/autonomy/pending-activation/*.sh; do [ -f "$f.done" ] || echo "$f"; done' ;;
-      decision)   rtot="$c_decision";   rcmd='cc-decide list --open --class C' ;;
+      # NOT `--class C`: this leg also admits a class-B packet that carries neither a default nor a
+      # deadline (a hard block wearing the wrong label — see the decisions leg above), and a
+      # `--class C` filter would hide exactly those rows from the operator who followed this
+      # pointer to see "the rest". The overflow command must reproduce the rows it summarises.
+      decision)   rtot="$c_decision";   rcmd='cc-decide list --open' ;;
       backlog)    rtot="$c_backlog";    rcmd='cc-backlog list --blocked' ;;
       *) return 0 ;;
     esac
