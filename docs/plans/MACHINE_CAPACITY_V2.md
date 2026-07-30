@@ -243,7 +243,7 @@ Each criterion names the exact command whose output proves it. Narration does no
 
 | # | Criterion | Proving read | Baseline |
 |---|---|---|---|
-| **AC1** | ≥95% of bats **procs** run at `pri≤10` during a gate burst (≥2 concurrent runs) | `scripts/qos-census.sh` → `coverage_proc_pct`, `verdict=PASS` | **0%** (baseline census 2026-07-29: 4 runs in flight, 0/47 demoted) |
+| **AC1** ⚠ **CEILINGED at ~70%, NOT MET — see §9.4** | ≥95% of bats **procs** at `pri≤10` during a burst | `scripts/qos-census.sh` → `coverage_proc_pct` | **21.1% → 50.0%** measured; ~30% of invocations are structurally unreachable by a PATH shim |
 | **AC1-b** | `coverage_cpu_pct` reported alongside, as the impact metric — **not** the gate | same JSON row → `coverage_cpu_pct`, `gate_on` | 0% |
 | **AC2** | 0 top-level bats invocations at `pri=31` | `ps -eo pri,args \| grep -E 'bats( \|$)' \| awk '$1==31'` → empty | **72 procs** |
 | **AC3** | The shim covers the hand-typed form | `cd <worktree> && timeout 5 bats --version` then census the child's `pri` → `≤10` | n/a (no shim) |
@@ -609,6 +609,53 @@ against a pristine archive.
 3. The R1 "never sleeps" guard **matched the script's own prose**, convicting the documentation of
    the property it checks (`detector-matching-its-own-skill-description`). Comments are now stripped
    before matching, with a control proving the stripping did not defang it.
+
+## 9.4 AC1 IS NOT MET, AND A PATH SHIM CANNOT MEET IT — measured after activation
+
+The operator activated the shim (2026-07-29 18:01). It works, and it is transparent: a full suite
+run through it passes unchanged, and **every post-shim PATH invocation is demoted** — verified as a
+property, not a hope, by classifying each live `bats-exec-suite` as pre/post-shim by age and
+checking its band.
+
+Coverage accrual, from the durable census log:
+
+| When | Runs in flight | Demoted/total | Verdict |
+|---|---|---|---|
+| pre-shim (22:29) | 6 | 12/57 = **21.1%** | FAIL |
+| shim active, quiet (01:05) | 4 | 14/48 = **29.2%** | FAIL |
+| shim active, 3-run shimmed burst | 7 | 32/64 = **50.0%** | FAIL |
+
+**But the residual is not all drain.** One post-shim run persisted at `pri=31` across four samples.
+Its parent chain names the cause exactly:
+
+```
+timeout 90 /opt/homebrew/bin/bats tests/handoff-fire-validate.bats
+```
+
+**An absolute-path invocation never consults `PATH`, so a `PATH` shim cannot see it.** Measured
+distribution of live top-level invocations: **~6 absolute-path vs ~14 PATH-based — roughly 30%
+structurally uncovered.** The callers are *agents typing the absolute path in Bash tool calls*, not
+our own scripts: the only in-repo absolute reference is `bin/cc-bats`'s own fallback resolver.
+
+**So AC1 as written (≥95%) is unreachable by M1 alone, and this row should not claim otherwise.**
+The standing constraint — *the caller cannot be trusted* — bites one level deeper than the design
+answered. M1 raised coverage from 21% toward a ~70% ceiling; it did not remove the failure class.
+
+**Two ways to actually close it, neither taken here (both need an operator decision):**
+1. **Shim the Homebrew path itself** — point `/opt/homebrew/bin/bats` at `cc-bats` (it is currently a
+   symlink to `../Cellar/bats-core/1.13.0/bin/bats`), and add the Cellar path to `cc-bats`'s resolver
+   so it can still find the real binary. Covers both invocation forms. Costs: it mutates a
+   package-manager-owned path machine-wide, and `brew upgrade bats-core` silently restores the
+   original — so it needs a parity check to stay true. **Escalation surface: operator's call.**
+2. **One admission term in the Bash `PreToolUse` chain** for test-runner command lines — the
+   independent Phase-1 recommendation (§8.5.1). Sees the command line regardless of how bats is
+   spelled, so it covers both forms. Must **DEFER with the exact re-run command, never queue-or-sleep**
+   (R1). Lands in row 6's hook chain, so it is a separate change with its own RED-proof.
+
+**What M1 is worth, stated honestly:** it removes the *largest single* uncovered class (hand-typed
+`bats tests/…`, the form `CLAUDE.md` itself instructs) at O(1) cost and zero caller effort, and it is
+verifiably transparent. It is a real improvement with a named ceiling — not the complete fix the
+acceptance criterion asked for.
 
 ## 10. Learnings (accumulate; never delete)
 
