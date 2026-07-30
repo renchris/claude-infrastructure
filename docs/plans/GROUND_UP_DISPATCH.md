@@ -720,6 +720,40 @@ Everything in #3 below still holds except where this overrides it.
   674→691 rows (writing M2 tests); row 8 `9a2d094f` 943→981 rows (re-running 196 tests after a
   `BATS_EXIT=124` run left 11 tests NEVER RUN — its own note that a not-ok count alone reads that as
   green is the campaign's third-state law again).
+- ✅ **ROW 8 RATIFIED DONE 2026-07-30T03:5xZ — verified by disk, not on its word, and my DONE-blocker was
+  CLEARED first.** `docs/activation/pending-activation/20-ctx-audit-activate.sh` is now COMMITTED to the
+  repo SSOT (it was `??` untracked when I raised the blocker), so the *What DONE means* activation bar is
+  met. All **7** claimed lands re-resolved as ancestors of `origin/main`: `44cabad7` · `aee9f975` ·
+  `2a337c48` · `c6418f21` · `12a3a8ef` · `1a21099f` · `21aaebbf`. `CONTEXT_ECONOMY_V2.md` = 624 lines
+  carrying all four load-bearing sections; `bin/cc-ctx-audit` present on trunk (control: `bin/cc-no-such`
+  absent). Row 8's headline is **a THIRD failure shape for the campaign's collection** — not row 2's "no
+  producer" and not row 5's falsification but **the numerator was always recorded and the DENOMINATOR was
+  discarded**, so both halves of its frozen metric fail. ⚠ **METHOD NOTE ON MY OWN VERIFICATION:** my
+  first two artifact greps returned ABSENT for `tests/cc-ctx-audit.bats` and
+  `tests/context-economy-record.bats` — **both were my own bad selectors, not missing files.** The real
+  suite is `tests/ctx-audit.bats` at **19 `@test`**, matching row 8's 19/19 claim exactly. Enumerating
+  `tests/` and reading the hits corrected it. This is the campaign's grep-the-symbol-not-the-claim law
+  applied to a coordinator's own audit for the fourth time today: **an absence from a guessed filename is
+  not evidence.** ONE OPERATOR STEP remains, staged in both queue and SSOT, not CONFIRM-gated (it is an
+  `ln -sfn` that fail-closes on a missing source):
+  `bash ~/.claude/autonomy/pending-activation/20-ctx-audit-activate.sh` — needed only because
+  `~/.claude/bin` is a real dir of per-file symlinks, so a brand-new binary is never auto-linked.
+- 🔥 **ROW 11 FIRED AND ENGAGED 2026-07-30T04:0xZ** — pane **`B2D1CE68-EDE6-4232-B40D-D821A12D91FC`**,
+  session `380dce96`, account **next3**, worktree `gu-worktree-warmpool`, transcript root
+  **`~/.claude-tertiary/projects/`**. Capacity gate **ADMITted at 1.20/core** (ceiling 2.0). Fire-time
+  account read confirmed next3 best on BOTH axes — cliff 598 h *and* the freshest quota (0% 5-hour, 9%
+  weekly) — so the pre-planned choice held. **Engagement verified by transcript CONTENT (38 rows / 7
+  assistant / 3 tool_use), never the script's `proof=marker` verdict.**
+  🎯 **THE STEP-0 FIX IS CONFIRMED WORKING, AND THIS IS THE FIRST ROW ON THE CAMPAIGN WITH A LIVE WAKE
+  PATH.** Row 11's own first assistant turn reads: *"Pane uuid is `B2D1CE68-…` — note the SessionStart
+  hook suggested the session id (`380dce96-…`), which is exactly the trap the payload warned about.
+  Arming on the pane uuid."* It caught the trap **because the payload told it to**, against a
+  SessionStart hook actively advising the wrong key. Rows 7 and 8 both armed session-id watchers and had
+  no wake path all session; row 11 is reachable. **Keep the STEP 0 block verbatim in row 6's payload**,
+  and note the hook's own suggestion is the adversary — filed defect `6fe942c0eee5`.
+- **State after this fire: 9 DONE (1,2,3,4,5,8,10,12,13) · 2 IN FLIGHT (7, 11) · 2 OPEN (9, 6).** Order:
+  **9 next, 6 last.** Row 9's payload is already composed and on trunk (`f3a4a7f9`) so the next fire is
+  one command once in-flight drops below 2.
 - **Landed by coordinator #4, content-verified on trunk:** `f3a4a7f9` (row 9 payload) · this delta.
 
 #### DELTA from coordinator #3 (pane 71B42B48), 2026-07-29T19:3xZ — superseded by #4 above; still binding where #4 is silent
