@@ -9,6 +9,12 @@ description: >-
 Plans accumulate decisions across sessions. Always INTEGRATE updates using these patterns.
 The `backup-before-write.sh` hook auto-injects these rules on every Write or Edit to plan files.
 
+**This skill is the SSOT for the plan RULES.** The `plan-update` skill (also `/plan-update`) is the
+mechanical applier — workflow steps, compaction/expansion templates, the Phase 0 scaffold — and it
+cites these rules rather than restating them. Until consolidation audit 02 both files carried their
+own copy of the ruleset and the two had drifted in wording; if a rule needs to change, change it
+here.
+
 **Completed Sections → Compact**
 
 Mark DONE. Collapse to key learnings, commit hashes, and blockers only. Remove granular
