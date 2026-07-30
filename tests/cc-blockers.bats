@@ -264,20 +264,157 @@ hold_run_lock() { # the verifier's OWN in-progress mark: run.lock.d/pid naming a
   [ "$(echo "$output" | jq -r '[.[] | select(.kind=="verifier-inert")] | .[0].state')" = "STALE" ]
 }
 
+# ── ALARM POLARITY (OPERATOR_SURFACE_V2 §4 M1) ────────────────────────────────────────────────────
+# TWO TESTS IN THIS FILE PINNED THE DEFECT AS CORRECT and are CHANGED here, deliberately, with the
+# reason recorded (map rule: "a test can encode a falsified premise — changing it is legitimate,
+# hiding it is not"; and row 4's "A TEST CAN PIN A DEFECT AS CORRECT"). The old
+# never-green/NEVER-CERTIFIED test asserted, in its own comment, that "a non-red verdict in the
+# window ⇒ trunk-red must abstain" — which IS the suppression. Reproduced live 2026-07-29: newest
+# five red/hung/red/red/red, seen=5, red=4, 4 != 5, row SUPPRESSED, 0 of 33 stamps ever green.
+#
+# The vocabulary is not what changed. red/cut/hung/green still mean exactly what row 1 says they
+# mean. What changed is the polarity of the ALARM built on top of them: for a VERDICT ask "is it
+# red?", for an ALARM ask "is it green?" — because a hung run is WORSE than a red one for "is trunk
+# persistently failing", yet only the red test silences on it.
+#
+# never-green is NOT weakened by this; it is returned to being what its own comment always claimed
+# (the backstop "emitted ONLY when no sharper row already claimed the reason"). Its remaining
+# reachable window is proved below, because shipping a backstop that can no longer fire would be
+# the very bug this mechanism repairs.
+
+@test "POLARITY: the live shape (red hung red red red) FIRES as PERSISTENT-NOT-GREEN" {
+  # The reproduction, verbatim. Pre-fix this window yielded NO trunk-red row at all.
+  mkstamp r1 red 1M; mkstamp h1 hung 2M; mkstamp r2 red 3M; mkstamp r3 red 4M; mkstamp r4 red 5M
+  : > "$CC_LAND_LOG"
+  run ccb --json
+  [ "$status" -eq 0 ]
+  [ "$(echo "$output" | jq '[.[] | select(.kind=="trunk-red")] | length')" = 1 ]
+  [ "$(echo "$output" | jq -r '[.[] | select(.kind=="trunk-red")] | .[0].state')" = "PERSISTENT-NOT-GREEN" ]
+  # …and it hands over the platter that names the ACTUAL failures — the row's whole value, and the
+  # thing the never-green fallback could not give (it points at runner.log instead).
+  echo "$output" | jq -r '.[0].recover_cmd' | grep -q 'failing' || false
+  # one row, not two: never-green must DEFER now that a sharper row claimed the reason
+  [ "$(echo "$output" | jq '[.[] | select(.kind=="never-green")] | length')" = 0 ]
+}
+
+@test "POLARITY: a cut verdict counts too — the state names the mix, never the stronger claim" {
+  mkstamp c1 cut 1M; mkstamp r1 red 2M; mkstamp c2 cut 3M
+  : > "$CC_LAND_LOG"
+  run ccb --json
+  [ "$(echo "$output" | jq -r '[.[] | select(.kind=="trunk-red")] | .[0].state')" = "PERSISTENT-NOT-GREEN" ]
+  # 1 red of 3 seen ⇒ 2 nonverdicts. The DETAIL must not say "all red".
+  echo "$output" | jq -r '.[0].detail' | grep -q '1 red 2 nonverdict' || false
+}
+
+@test "POLARITY: an all-red window still reads PERSISTENT-RED (the state split is not a rename)" {
+  for n in 1 2 3 4 5; do mkstamp "r$n" red "${n}M"; done
+  : > "$CC_LAND_LOG"
+  run ccb --json
+  [ "$(echo "$output" | jq -r '.[0].state')" = "PERSISTENT-RED" ]
+}
+
+@test "POLARITY: one GREEN in the window silences it — the alarm's question, answered yes" {
+  # The positive control for the polarity itself. If `notgreen` were miscounted (e.g. counting
+  # green as not-green) every test above would still pass while the alarm fired on a HEALTHY
+  # pipeline — the invented-blocker failure that is as bad as suppression.
+  mkstamp r1 red 1M; mkstamp h1 hung 2M; mkstamp g green 3M; mkstamp r2 red 4M
+  : > "$CC_LAND_LOG"
+  run ccb --json
+  [ "$(echo "$output" | jq '[.[] | select(.kind=="trunk-red")] | length')" = 0 ]
+}
+
+@test "POLARITY kill switch: CC_BLOCKERS_ALARM_POLARITY=legacy restores the suppression exactly" {
+  mkstamp r1 red 1M; mkstamp h1 hung 2M; mkstamp r2 red 3M; mkstamp r3 red 4M; mkstamp r4 red 5M
+  : > "$CC_LAND_LOG"
+  CC_BLOCKERS_ALARM_POLARITY=legacy run ccb --json
+  [ "$(echo "$output" | jq '[.[] | select(.kind=="trunk-red")] | length')" = 0 ]
+  # …and with it off, the backstop takes over again — which is precisely the pre-fix board
+  [ "$(echo "$output" | jq -r '[.[] | select(.kind=="never-green")] | .[0].state')" = "NEVER-CERTIFIED" ]
+}
+
+@test "POLARITY: an UNPARSEABLE stamp is a sensor failure, not a non-verdict" {
+  # Direction matters in BOTH senses. Counted as not-green, one corrupt file fabricates the alarm
+  # (R5 fail-open); counted as green, it silences a real one. It must be excluded from the window
+  # entirely — so 4 readable reds still fire, and the corrupt file does not change the state.
+  for n in 1 2 3 4; do mkstamp "r$n" red "${n}M"; done
+  printf 'this is not json\n' > "$CC_POSTLAND_DIR/stamps/broken.json"
+  touch -t "$(date -v-1M +%Y%m%d%H%M)" "$CC_POSTLAND_DIR/stamps/broken.json"
+  : > "$CC_LAND_LOG"
+  run ccb --json
+  [ "$(echo "$output" | jq -r '[.[] | select(.kind=="trunk-red")] | .[0].state')" = "PERSISTENT-RED" ]
+  echo "$output" | jq -r '.[0].detail' | grep -q 'newest 4 all red' || false
+}
+
+@test "POLARITY: a corrupt stamp cannot PAD the window past the n>=2 floor" {
+  # The paired negative. One real verdict plus one unreadable file is n=1, not n=2.
+  mkstamp solo red 1M
+  printf '{"no":"verdict"}\n' > "$CC_POSTLAND_DIR/stamps/broken.json"
+  touch -t "$(date -v-2M +%Y%m%d%H%M)" "$CC_POSTLAND_DIR/stamps/broken.json"
+  : > "$CC_LAND_LOG"
+  run ccb --json
+  [ "$(echo "$output" | jq 'length')" = 0 ]
+}
+
+@test "DENOMINATOR: the DETAIL reports the LIFETIME history, not the capped window (F3)" {
+  # `seen` is capped at REDRUN_N=5, and the board used to print it as if it were the whole history —
+  # "5 verdicts, 0 green EVER" against a real 33. The number that sizes the problem must be real.
+  for n in 1 2 3 4 5 6 7; do mkstamp "r$n" red "${n}M"; done
+  : > "$CC_LAND_LOG"
+  run ccb --json
+  echo "$output" | jq -r '.[0].detail' | grep -q 'newest 5 all red, 0 green of 7 ever' || false
+}
+
 # ── never-green: the BACKSTOP ─────────────────────────────────────────────────────────────────────
 # The state that actually halted deploy for 53 commits, and that no other alarm can express: the
 # verifier works, returns verdicts, and none has EVER been green. Live shape on 2026-07-29 was
-# 30 red + 2 cut + 1 hung + 0 green with `last-green` absent — and because ONE non-red verdict sits
-# in trunk-red's window, trunk-red correctly abstained and the board said nothing at all.
+# 30 red + 2 cut + 1 hung + 0 green with `last-green` absent.
+#
+# Since M1 the SHARPER row (trunk-red) claims that live shape, and this is the true backstop again.
+# Its remaining window: verdicts exist, none green ever, and no sharper row applies — e.g. the
+# verifier is stamping fresh but NO land has arrived in 24h, so "trunk is persistently failing" is
+# not yet a claim anyone can make while "nothing has ever been certified" already is.
 
 @test "alarm never-green/NEVER-CERTIFIED: verdicts exist, none has ever been green" {
-  # The exact live shape: a non-red verdict in the window, so trunk-red must abstain and this must not.
+  # CHANGED 2026-07-29 by row 10's rebuild, deliberately (see the POLARITY header above). The old
+  # fixture asserted trunk-red ABSTAINS on a non-verdict in the window — the suppression itself.
+  # Same claim, moved to a window where never-green is genuinely the sharpest row: fresh stamps, but
+  # the newest land is >24h old, so lands_24h is 0 and trunk-red has no premise.
   mkstamp r1 red 1M; mkstamp r2 red 2M; mkstamp h1 hung 3M; mkstamp r3 red 4M
-  : > "$CC_LAND_LOG"
+  : > "$CC_LAND_LOG"; touch -t "$(date -v-30H +%Y%m%d%H%M)" "$CC_LAND_LOG"
   run ccb --json
   [ "$status" -eq 0 ]
   [ "$(echo "$output" | jq -r '[.[] | select(.kind=="never-green")] | .[0].state')" = "NEVER-CERTIFIED" ]
   [ "$(echo "$output" | jq '[.[] | select(.kind=="trunk-red")] | length')" = 0 ]
+  # POSITIVE CONTROL on the row's own denominator: 4 readable verdicts, and it says 4.
+  echo "$output" | jq -r '[.[] | select(.kind=="never-green")] | .[0].detail' | grep -q '0 green in 4 EVER' || false
+}
+
+@test "never-green carries the DEPLOY EXPOSURE — how many commits are inert, not just why (F4)" {
+  # "deploy has no cursor" is the cause; the count of landed commits sitting un-deployed behind it
+  # is what sizes the exposure, and it was nowhere on the board. Upstream wired locally so @{u}
+  # resolves without a network.
+  git init -q -b main "$D/dr"
+  git -C "$D/dr" config user.email t@t; git -C "$D/dr" config user.name t
+  git -C "$D/dr" commit -q --allow-empty -m a; behind="$(git -C "$D/dr" rev-parse HEAD)"
+  git -C "$D/dr" commit -q --allow-empty -m b
+  git -C "$D/dr" branch up
+  git -C "$D/dr" reset -q --hard "$behind"
+  git -C "$D/dr" config branch.main.remote .
+  git -C "$D/dr" config branch.main.merge refs/heads/up
+  [ "$(git -C "$D/dr" rev-list --count 'HEAD..@{u}')" = 1 ]      # harness self-check
+  export DEPLOY_REPO="$D/dr"
+  mkstamp r1 red 1M; mkstamp h1 hung 2M
+  : > "$CC_LAND_LOG"; touch -t "$(date -v-30H +%Y%m%d%H%M)" "$CC_LAND_LOG"
+  run ccb --json
+  echo "$output" | jq -r '[.[] | select(.kind=="never-green")] | .[0].detail' | grep -q 'live layer 1 behind' || false
+}
+
+@test "never-green degrades honestly when the deploy lag is UNREADABLE (no upstream)" {
+  # The paired fail-open: no @{u} ⇒ no number invented, and the row still ships with its cause.
+  mkstamp r1 red 1M; mkstamp h1 hung 2M
+  : > "$CC_LAND_LOG"; touch -t "$(date -v-30H +%Y%m%d%H%M)" "$CC_LAND_LOG"
+  run ccb --json
+  echo "$output" | jq -r '[.[] | select(.kind=="never-green")] | .[0].detail' | grep -q 'deploy has no cursor' || false
 }
 
 @test "alarm never-green is SILENCED by a single green stamp ever having existed" {
@@ -327,11 +464,23 @@ hold_run_lock() { # the verifier's OWN in-progress mark: run.lock.d/pid naming a
 
 @test "alarm never-green renders in the LAND-PIPELINE table, not only in --json" {
   # A kind missing from LAND_SEL rides the JSON array and VANISHES from the operator's table.
+  # CHANGED 2026-07-29 (row 10, §4 M1): fixture moved to never-green's own window — a >24h-old land —
+  # because the old one is now correctly claimed by trunk-red. The CLAIM under test is unchanged.
   mkstamp r1 red 1M; mkstamp h1 hung 2M
-  : > "$CC_LAND_LOG"
+  : > "$CC_LAND_LOG"; touch -t "$(date -v-30H +%Y%m%d%H%M)" "$CC_LAND_LOG"
   run ccb
   [ "$(echo "$output" | grep -c '^LAND-PIPELINE')" = 1 ]
   echo "$output" | grep -q 'never-green' || false
+}
+
+@test "trunk-red PERSISTENT-NOT-GREEN renders in the LAND-PIPELINE table too (new state, same SEL)" {
+  # LAND_SEL filters on .kind, so a new STATE cannot fall out of the table — asserted, not assumed,
+  # because the mirror bug (a new kind missing from the selector) has bitten this file before.
+  mkstamp r1 red 1M; mkstamp h1 hung 2M; mkstamp r2 red 3M
+  : > "$CC_LAND_LOG"
+  run ccb
+  [ "$(echo "$output" | grep -c '^LAND-PIPELINE')" = 1 ]
+  echo "$output" | grep -q 'PERSISTENT-NOT-G' || false
 }
 
 @test "an unparseable lock pid reads as NOT running (the sensor never guesses alive)" {
