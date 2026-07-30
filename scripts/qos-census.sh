@@ -273,7 +273,7 @@ if [ "$QUIET" != "1" ] && [ "$WANT_JSON" != "1" ]; then
   echo "  gate runs in flight:          $N_RUNS"
   echo "  procs   demoted/total:        $N_DEMOTED/$N_TOTAL   (${COV_PROC}%)"
   echo "  CPU     demoted/total:        ${CPU_DEMOTED}/${CPU_TOTAL}   (${COV_CPU}%)"
-  echo "  threshold (CPU):              ${THRESHOLD}%   band: pri<=${DEMOTED_PRI_MAX}"
+  echo "  threshold (${_gate_metric:-proc}):             ${THRESHOLD}%   band: pri<=${DEMOTED_PRI_MAX}"
   echo "  VERDICT:                      $VERDICT"
   if [ "$VERDICT" = "NO-BURST" ]; then
     echo "  NOTE: <2 concurrent gate runs — this is a NON-VERDICT, not a pass."
