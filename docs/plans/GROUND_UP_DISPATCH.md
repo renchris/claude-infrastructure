@@ -609,17 +609,26 @@ state and is retained for history only — every count in it is stale.
   cosmetic rc=1 that still closed). Zero `--agent-id` processes remain; all three assignee
   worktrees survive with commits intact. §3 of `/tmp/gu-operator-steps.sh` is now guarded inert —
   **do not re-run it.**
-- ⚠ **THE BULLET BELOW DECAYED WITHIN THE HOUR — RE-DERIVED 17:5xZ: DEPLOY IS BLOCKING AGAIN, AT
-  44 BEHIND.** The 15:30 fast-forward was a one-off manual advance, not a repair: `deploy-live`
-  still refuses honestly because **0 of 33 postland stamps have ever been green**, so the live
-  layer cannot self-advance and the lag grows monotonically as trunk moves. Measured twice a
-  minute apart and it moved (43 → 44), which is the point. **Never read the bullet below as
-  current; run the command:**
-  `git -C ~/Development/claude-infrastructure rev-list --count HEAD..origin/main`.
-  Consequence unchanged from the original ring: every row's landed work — including rows 12 and 13
-  and everything I landed this session — is INERT in `~/.claude` until the checkout advances. This
-  is the same "carried number" failure the campaign has now recorded five times; the previous
-  coordinator's bullet was true when written and is false now.
+- ⚠ **DEPLOY LAG IS NOT A STATE, IT IS A SAWTOOTH — STOP WRITING THE NUMBER DOWN AT ALL.** Every
+  coordinator so far, me included, has recorded deploy lag as a condition ("blocked at 56" /
+  "no longer the blocker" / "blocking again at 44"), and each was falsified within the hour. The
+  durable structure, which does NOT decay: **the live layer never advances continuously, because
+  `deploy-live` is gated on a GREEN postland stamp and there have been 0 green in 33, ever.** So
+  the lag climbs monotonically as trunk moves, then collapses to ~0 whenever something advances
+  the shared checkout OUT OF BAND, then climbs again. Observed inside 45 minutes this session:
+  **43 → 44 → 54 → 2**, the last measured against a checkout sitting exactly on my own final
+  commit, with the green-stamp count still 0 — so that collapse did NOT come through the gated
+  path. **The only valid read is the command, at the moment you need it:**
+  ```bash
+  git -C ~/Development/claude-infrastructure rev-list --count HEAD..origin/main   # lag right now
+  grep -l '"verdict":"green"' ~/.claude/autonomy/postland/stamps/*.json | wc -l   # 0 ⇒ still ungated
+  ```
+  And prefer an **effect-read** over the count when what you actually care about is whether YOUR
+  work is live — `[ -e ~/.claude/bin/<your-artifact> ]` answers that directly; the lag number does
+  not (row 13's `bin/cc-bats` is live right now at lag 2). The second command is the one that
+  matters strategically: while it reads 0, the sawtooth is guaranteed to continue, and the first
+  GREEN stamp — not any individual fast-forward — is the thing that would end it
+  (`cc-backlog da18f179ac50`, already-owned; do not reopen).
 
 - *(historical, true at 15:30, FALSE by 17:5x — see above)* **DEPLOY IS NO LONGER THE BLOCKING
   LEVER — ACTIVATION IS.** The checkout fast-forwarded at 15:30
