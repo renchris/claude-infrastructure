@@ -12,6 +12,7 @@
 # registration windows shrink to seconds via env. The pure detectors are extracted + sourced.
 
 setup() {
+  export CC_FIRE_CAPACITY_GATE=off  # capacity_gate() reads live vm.loadavg and refuses exit 9; pin it so this suite is load-insensitive
   # handoff-fire.sh bounds every external iTerm2 call (osascript / it2 CLI / iterm2 python) through
   # hf_bounded — a timeout(1) wrapper — because a wedged iTerm2 API blocks them indefinitely. These
   # suites EXTRACT individual functions instead of sourcing the script, so that helper is not in
