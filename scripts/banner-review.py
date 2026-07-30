@@ -271,7 +271,7 @@ def main() -> int:
     live: dict[str, str | None] = {}
     for label, rev in (
         ("trunk", trunk),
-        ("motion", "banner/parallax-fix"),
+        ("motion", "origin/main"),
         ("sky", "banner/sky-ab"),
     ):
         if not rev_exists(rev):
@@ -362,8 +362,8 @@ def main() -> int:
         "<section id=decide><h2>Needs your call</h2>",
         "<div class=box><strong>Four open decisions.</strong> Everything below is either evidence for "
         "one of these or a landed fact.<ol>"
-        "<li><strong>Ground motion</strong> — apply the derived parallax + tf0 fix? Changes visible "
-        "motion. Built and proven, held on <code>banner/parallax-fix</code>.</li>"
+        "<li><s>Ground motion</s> — <strong>DECIDED and LANDED.</strong> The derived parallax plus the "
+        "tf0 warp fix are on trunk; the world genuinely stops now.</li>"
         "<li><strong>The moon</strong> — I recommend REJECTING the rebuild; trunk's moon is better. "
         "Measured 3.6× brighter.</li>"
         "<li><strong>Grain</strong> — a dark-only decision; in light it measures 3 levels, i.e. "
@@ -372,15 +372,16 @@ def main() -> int:
         "</ol></div>",
         "<table><tr><th>item</th><th>state</th><th>where</th></tr>"
         "<tr><td>red-proof fixtures (7 stale)</td><td class=k>LANDED</td><td class=k>trunk</td></tr>"
-        "<tr><td>cloud 1px seam</td><td class=k>FIXED, landing</td><td class=k>this branch</td></tr>"
-        "<tr><td>parallax + tf0 warp</td><td class=k>BUILT, HELD</td><td class=k>banner/parallax-fix</td></tr>"
+        "<tr><td>cloud 1px seam</td><td class=k>LANDED</td><td class=k>trunk</td></tr>"
+        "<tr><td>parallax + tf0 warp</td><td class=k>LANDED</td><td class=k>trunk</td></tr>"
         "<tr><td>moon / starfield rebuild</td><td class=k>HELD — regression</td><td class=k>feat/banner-sky-craft</td></tr>"
         "<tr><td>O1 THE SUMMONING</td><td class=k>LIVE on trunk</td><td class=k>3.4-13.0s</td></tr>"
         "<tr><td>the other 7 beats</td><td class=k>STORYBOARD ONLY</td><td class=k>not animation</td></tr>"
         "</table></section>",
         # ── ground motion ──
-        "<section id=motion><h2>Ground motion — before / after</h2>",
-        "<p class=ask>Apply the parallax + tf0 fix?</p>",
+        "<section id=motion><h2>Ground motion — LANDED</h2>",
+        "<p class=ask>Decided: you kept the AFTER. Both panels below are kept for the record — the "
+        "bottom one is what ships now.</p>",
         "<p class=detail>Both panels animate. Watch the <strong>dark band along the bottom</strong> "
         "against the <strong>dashes and tufts just under the horizon</strong>. Top: they move at the "
         "same speed, so the ground reads as one flat sheet. Bottom: near clearly outruns far. Also at "
@@ -388,7 +389,7 @@ def main() -> int:
         "creeping through the stop at 32 px/s while everything else freezes byte-exact.</p>",
         anim(
             live["trunk"],
-            "BEFORE — ships on trunk",
+            "BEFORE — the old motion, no longer shipping",
             [
                 ("LIVE", "live"),
                 ("fgb 96 · tf1 80 · tf0 96", "bad"),
@@ -397,12 +398,12 @@ def main() -> int:
         ),
         anim(
             live["motion"],
-            "AFTER — the derived table",
+            "AFTER — LANDED, this is what ships",
             [
                 ("LIVE", "live"),
                 ("fgb 128 · tf1 80 · tf0 64", "good"),
                 ("2.00x near:far", "good"),
-                ("HELD", "held"),
+                ("LANDED", "good"),
             ],
         ),
         "<table><tr><th>layer</th><th>depth</th><th>before</th><th>after</th><th>period</th><th>wraps/P</th></tr>"
