@@ -389,26 +389,33 @@ esac
 input="$(cat 2>/dev/null || printf '{}')"
 
 # ── B-3: one IDL line per invocation (fired|abstained). "didn't fire" ≠ "never evaluated". ──
-# SIZE_JSON (header §9) — the measured size pair, merged into every record below once 4a-quater has run.
+# SIZE_JSON (header §9) — the measured size pair, merged into every record once 4a-quater has run.
 # Empty until then, so the pre-measurement abstains (no-jq / not-armed / cooldown …) stay unchanged
-# rather than claiming a measurement that never happened.
+# rather than claiming a measurement that never happened. The merge happens inside log_idl (via
+# idl_init's merge-var slot), so every record carries the pair by CONSTRUCTION rather than by
+# remembering to pass it at ~12 call sites.
 SIZE_JSON='{}'
-log_idl() { # $1=disposition $2=reason $3=extra JSON OBJECT (optional, jq-built {…}; default {})
-  mkdir -p "$(dirname "$IDL")" 2>/dev/null || true
-  local ts extra; ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '?')"
-  extra="${3:-}"; [ -n "$extra" ] || extra='{}'
-  # jq-encode EVERY field: a value carrying a " / backslash / newline then can NEVER emit a
-  # malformed IDL line — one malformed line aborts the cc-audit four-zeros `jq -rs` slurp, which
-  # reads as "no records" and silently flips D9/the alarm GREEN (defeats the un-gameable detector).
-  # $size merges BEFORE $extra so a call site can still override a field; every record carries the
-  # size pair by CONSTRUCTION rather than by remembering to pass it at ~12 call sites.
-  local size; size="${SIZE_JSON:-}"; [ -n "$size" ] || size='{}'
-  jq -cn --arg ts "$ts" --arg sid "${SID:-?}" --arg disp "$1" --arg reason "$2" \
-    --argjson size "$size" --argjson extra "$extra" \
-    '{ts:$ts,hook:"waiting-recycle",sid:$sid,disposition:$disp,reason:$reason} + $size + $extra' \
-    >> "$IDL" 2>/dev/null || true
-}
-abstain() { log_idl abstained "$1"; exit 0; }
+# Writer body = the SSOT lib hooks/lib/idl-log.sh (consolidation audit 02); see that file for the
+# "jq-encode EVERY field" invariant this used to duplicate in four places.
+_ilib="$_wrd/lib/idl-log.sh"
+# A BRAND-NEW hooks/lib file has no ~/.claude/hooks/lib symlink until install.sh runs — and when
+# this hook executes from ~/.claude/hooks/, the CFG and $HOME tiers below resolve to that SAME
+# missing path. So resolve $0's own symlink into the checkout first: the live hook IS a symlink to
+# the repo, so this finds the lib on the same fast-forward that delivers this hook. Without it,
+# landing would leave all five IDL hooks inert until someone remembered to re-run install.sh.
+[ -f "$_ilib" ] || { _itgt="$0"; [ -L "$_itgt" ] && _itgt="$(readlink "$_itgt")"
+  _ilib="$(cd "$(dirname "$_itgt")" 2>/dev/null && pwd)/lib/idl-log.sh"; }
+[ -f "$_ilib" ] || _ilib="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/idl-log.sh"
+[ -f "$_ilib" ] || _ilib="$HOME/.claude/hooks/lib/idl-log.sh"
+# shellcheck source=lib/idl-log.sh
+# shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+if ! . "$_ilib" 2>/dev/null; then
+  # Fail LOUD but SAFE — a hook that cannot log its own disposition must not proceed silently, and
+  # must never block the turn on a misconfig.
+  printf 'waiting-recycle: FATAL — cannot source %s (IDL writer inert).\n' "$_ilib" >&2
+  exit 0
+fi
+idl_init "$IDL" "waiting-recycle" "SID" "SIZE_JSON"
 
 # T-P1-8 out-of-band operator pages (API-independent; BOTH are safe no-ops when unavailable/unarmed).
 wr_os_notify() { # $1=title $2=msg — OS notification (osascript, or a stub in tests via CC_WR_NOTIFY)
@@ -599,6 +606,7 @@ rss_over=0; { [ "$RSS_PAGE_MB" -gt 0 ] 2>/dev/null && [ "$rss_mb" -ge "$RSS_PAGE
 # flips GREEN" trap log_idl's own comment guards against, one level up. Fall back to {} on any doubt.
 _sj="$(jq -cn --argjson tx "$tx_mb" --argjson rss "$rss_mb" --argjson st "$SIZE_MB" --argjson rt "$RSS_PAGE_MB" \
   '{tx_mb:$tx,rss_mb:$rss,size_mb_t:$st,rss_page_t:$rt}' 2>/dev/null || true)"
+# shellcheck disable=SC2034  # consumed by indirection in hooks/lib/idl-log.sh (idl_init merge-var slot)
 if [ -n "$_sj" ] && printf '%s' "$_sj" | jq -e 'type=="object"' >/dev/null 2>&1; then SIZE_JSON="$_sj"; else SIZE_JSON='{}'; fi
 
 # 4b. Behavioral ROT tell — the desk re-deriving already-known orchestration state (confusion /
