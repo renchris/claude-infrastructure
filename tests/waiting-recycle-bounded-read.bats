@@ -25,6 +25,7 @@
 # the fire is the hold computed from the site-(b) read.
 
 setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"   # hermeticity ratchet: never the live ~/
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   HOOK="$REPO/hooks/waiting-recycle.sh"
   export CC_WR_STATE_DIR="$BATS_TEST_TMPDIR/state"
