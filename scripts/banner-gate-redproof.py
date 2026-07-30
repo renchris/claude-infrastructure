@@ -133,31 +133,41 @@ def _overlapping_mods():
 
 @case("world: a stop deeper than the pad copy", "past the")
 def _past_pad():
-    # 41 strides of dead world is 1968px, past the 1920px pad. Called directly: the duty budget
-    # would reject a window this wide first, and this gate is about the pad, not the budget.
-    g.RARE_EVENTS["rAsk"] = (13.0, 100.0)
+    # Proves assert_warp_within_tile: 41 strides of dead world is 1968px, past the 1920px pad.
+    # THE ASK keeps its real 26.0s start, so its modulation begins after THE REFUSAL's ends at 21.0s
+    # — `world_segments` refuses two rates for one instant, and moving the beat back to 13.0s made
+    # it swallow THE REFUSAL and convict on that gate instead of this one.
+    # Called directly: the duty budget would reject a window this wide first, and this gate is about
+    # the pad, not the budget.
+    g.RARE_EVENTS["rAsk"] = (26.0, 67.0)
     g.WORLD_MOD["rAsk"] = ((0, 41, 0), (41, 41, 2))
     g.assert_warp_within_tile()
 
 
 @case("world: the print lock, under a rate that unlocks it", "FOOTPRINT LOCK BROKEN")
 def _print_lock():
+    # Proves assert_print_lock. THE ASK keeps its real 26.0-35.0s window — re-timing it to 13.0s put
+    # it hard against THE SUMMONING's 13.0s end and the disjointness gate convicted first. The mods
+    # stay inside the declared window (26.0-32.0s) and repay their own debt, so the ONE thing wrong
+    # with this build is the fractional 1.5x rate.
     # The integral-rate gate normally catches this first, so it is neutered to let the input reach
     # the lock. That is the point: the lock must be able to convict on its own evidence, not inherit
     # a verdict from the guard upstream of it.
     g.assert_world_rates_integral = lambda: None
-    g.RARE_EVENTS["rAsk"] = (13.0, 19.0)
     g.WORLD_MOD["rAsk"] = ((0, 4, 0), (4, 8, 1.5))
     g.build(v())
 
 
 @case("world: a hop inside a dead-stopped world", "inside a stopped/reversed")
 def _hop_in_stop():
+    # Proves assert_hop_clear_of_stopped_world. ONLY the hop clock moves: THE ASK keeps its real
+    # 26.0-35.0s window (so disjointness and the duty budget have nothing to say first, which is how
+    # the old 13.0-22.0s sabotage was convicting), and on an 8s clock the fourth hop is airborne
+    # 29.76-31.36s — inside THE ASK's 26.0-32.0s dead world. The real 12s clock clears that same
+    # stop by 0.64s, so this case is the margin's guard.
     g.HOP_PERIOD = 8.0
     g.HOP_RISE = g.HOP_PERIOD * g.HOP_FROM_PCT / 100  # 5.76
     g.HOP_FALL = g.HOP_PERIOD * g.HOP_TO_PCT / 100  # 7.36
-    g.RARE_EVENTS["rAsk"] = (13.0, 22.0)
-    # a hop now lands at 13.76-15.36, inside THE ASK's 13-19 dead world
     g.build(v())
 
 
@@ -208,11 +218,20 @@ def _negative_pcts():
 
 @case("layout: two strip features on canvas at once", "are on canvas")
 def _two_features():
-    # Deliberately keeps the 4 s temporal gap satisfied — the whole reason this gate exists is that
-    # a strip-borne beat is on canvas for ~20 s however brief its declared window is.
+    # Proves assert_one_strip_feature. THE OVERLAP is withdrawn from ALWAYS_EMITTED and from every
+    # variant's `events`, and `strip_features` reserves canvas only for beats the variant EMITS — so
+    # the gate sees ONE feature and cannot fire until the sabotage hands it the two-feature world it
+    # guards. Re-adding the name is exactly the one-line revert ALWAYS_EMITTED documents.
+    # Deliberately keeps the 4 s temporal gap satisfied — 5.0 s clear of THE ASK and 4.5 s clear of
+    # the peek — because the whole reason this gate exists is that a strip-borne beat is on canvas
+    # for ~20 s however brief its declared window is. 40.0s is a whole number of strides off the
+    # real 36.0s (384px, exactly 8 pitches), so `overlap_run`'s half-pitch check — which runs
+    # whether or not the beat is emitted — still reads the same 24px offset and stays silent.
+    art = copy.copy(v())
+    art.events = ("peek", "rOverlap")
     g.BAR_LEN = 400.0
-    g.RARE_EVENTS["rOverlap"] = (27.0, 35.25)
-    g.build(v())
+    g.RARE_EVENTS["rOverlap"] = (40.0, 44.0)
+    g.build(art)
 
 
 @case("layout: the overlap run off the half-pitch", "off the ambient print grid")
@@ -245,8 +264,15 @@ def _unthemed():
 
 @case("gate: a window too close to P for its swap edge", "too close to P")
 def _gate_overflow():
+    # Proves the swap-edge guard inside `gate()`. A gate is only EMITTED for a beat the variant
+    # emits, and the cheer is withdrawn everywhere — so its window has to be handed to a variant
+    # that declares it or nothing reads the number at all. rCheer composites with the peek, so
+    # disjointness exempts that pair, and 4.99s sits inside the duty band: the only illegal thing
+    # here is a window ending 0.01s from P with a 0.1s swap edge still to run.
+    art = copy.copy(v())
+    art.events = ("peek", "rCheer")
     g.RARE_EVENTS["rCheer"] = (235.0, 239.99)
-    g.build(v())
+    g.build(art)
 
 
 @case("gate: THE ASK with two rate-zero spans", "rate-zero spans")
@@ -275,13 +301,22 @@ def _stride():
 
 @case("legacy: the duty budget (an over-long beat)", "duty budget breached")
 def _duty():
-    g.RARE_EVENTS["rCheer"] = (50.5, 68.0)
+    # Proves assert_duty_budget. The cheer this used to stretch is emitted by no variant, so
+    # `active_events` never measures it; the peek is a beat v6a actually declares. 18.0s breaches
+    # BOTH the 10.0s per-instance ceiling and the 4% per-type one, and it stays 13.5s clear of THE
+    # ASK, so the disjointness gate ahead of it has nothing to say first.
+    g.RARE_EVENTS["peek"] = (48.5, 66.5)
     g.build(v())
 
 
 @case("legacy: event disjointness (two beats stacked)", "overlap or sit within")
 def _disjoint():
-    g.RARE_EVENTS["rOverlap"] = (23.0, 31.25)
+    # Proves assert_events_disjoint — the guard against the stacked-beat defect v5a shipped at four
+    # concurrent events, and the ONE gate here that could not be shown to fire at all: it stacked
+    # THE OVERLAP, which no variant emits, so `active_events` never saw the collision. It has to
+    # stack beats the variant actually declares, so the peek — v6a's own — is dropped onto THE ASK's
+    # 26.0-35.0s window. The peek composites only with the cheer, so nothing exempts this pair.
+    g.RARE_EVENTS["peek"] = (33.0, 39.0)
     g.build(v())
 
 
