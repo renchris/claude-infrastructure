@@ -9,6 +9,9 @@ setup() {
   export LAND_LOCK_DIR="$BATS_TEST_TMPDIR/lock"
   export LAND_LOG="$BATS_TEST_TMPDIR/land.log"
   LOCK="$LAND_LOCK_DIR/lock.d"
+  # A recorded lstart NO live process can ever match (nothing on a booted box started in 2020
+  # to the second). Shared by every dead/recycled-holder fixture so the two cannot drift.
+  SENTINEL_LSTART='Thu Jan  1 00:00:00 2020'
 }
 
 teardown() {
@@ -46,6 +49,8 @@ teardown() {
 
 @test "LIVE holder respected past TTL (never reaped) — exits 75, pid unchanged" {
   mkdir -p "$LOCK"
+  # NOTE: writes pid but NO lstart — so this covers the "nothing recorded ⇒ never stale"
+  # branch. The lstart-MATCHES branch is covered by the producer round-trip test below.
   sleep 30 & live=$!
   echo "$live" > "$LOCK/pid"
   run env LAND_LOCK_TTL=0 LAND_LOCK_WAIT=1 bash "$LL" -- bash -c 'exit 0'
@@ -56,16 +61,25 @@ teardown() {
 
 @test "DEAD holder reaped — acquires" {
   mkdir -p "$LOCK"
-  # A crashed holder wrote pid+lstart then died. Capture lstart WHILE it is alive, then kill
-  # it. Under load its pid may be recycled to a live process (kill -0 sees "alive"), but the
-  # recorded lstart won't match the impostor → land-lock still identifies the ORIGINAL holder
-  # as dead and reaps. The prior bare-pid fixture flaked exactly here (2026-07-25 land: not ok
-  # 1081/1102 — recycled pid read as a live holder, gate wedged RED).
-  sleep 5 & dead=$!
-  lstart="$(ps -o lstart= -p "$dead" 2>/dev/null)"
-  kill "$dead" 2>/dev/null || true; wait "$dead" 2>/dev/null || true
+  # A crashed holder wrote pid+lstart then died. The fixture forks NOTHING, kills nothing and
+  # waits on nothing — every recorded flake of this test has been the fixture's own job
+  # control, never land-lock:
+  #   · `kill` returning 1 on a sleep that had already exited under load          (debc016f)
+  #   · a backgrounded `sleep` making bats emit a spurious `not ok` ALONGSIDE the `ok` for a
+  #     body that ran ONCE and passed (proven with a body-execution counter: 12 bodies, 12
+  #     runs). Measured 5/12 when the `kill` follows the `&` immediately, 0/12 fork-free. The
+  #     older shape scored 0/15 only because an intervening `ps` fork happened to space the
+  #     `&` and the `kill` apart — timing nothing guarantees, and it still flaked the
+  #     2026-07-25 land at load 21-26 (not ok 1081/1102).
+  #     That spurious line alone refuses the push: the gate's verdict is `grep -c '^not ok'`
+  #     (scripts/ship-land.sh), so ONE of them is a RED regardless of the retry passing.
+  # Correctness does NOT depend on this pid being dead, which is why no live process is needed:
+  #   pid dead (the usual case) → kill -0 fails                  → reaped
+  #   pid happens to be live    → lstart is the SENTINEL, so it cannot match → reaped
+  # Both branches reap, so there is no race left to lose.
+  dead=99998
   echo "$dead" > "$LOCK/pid"
-  printf '%s\n' "$lstart" > "$LOCK/lstart"
+  printf '%s\n' "$SENTINEL_LSTART" > "$LOCK/lstart"
   run env LAND_LOCK_WAIT=5 bash "$LL" -- bash -c 'exit 0'
   [ "$status" -eq 0 ]
 }
@@ -78,10 +92,36 @@ teardown() {
   # and reap + acquire, WITHOUT relying on the OS actually recycling a pid under load.
   sleep 30 & live=$!
   echo "$live" > "$LOCK/pid"
-  printf '%s\n' "Thu Jan  1 00:00:00 2020" > "$LOCK/lstart"   # stale, non-matching lstart
+  printf '%s\n' "$SENTINEL_LSTART" > "$LOCK/lstart"           # stale, non-matching lstart
   run env LAND_LOCK_WAIT=5 bash "$LL" -- bash -c 'exit 0'
   kill "$live" 2>/dev/null || true
   [ "$status" -eq 0 ]
+}
+
+@test "LIVE holder with its REAL producer-written lstart is never reaped — exits 75" {
+  # The CATASTROPHIC direction, and the only test where lstart is written by the real producer
+  # (write_owner) instead of a fixture. If the recorded and the re-read lstart ever stop
+  # comparing equal — a whitespace/format change on one side only, `$(cat)` swapped for `read`,
+  # a `tr -s` added to one branch — land-lock would REAP A LIVE HOLDER and two lands would run
+  # concurrently: precisely what the mutex exists to prevent. Every other test writes lstart by
+  # hand or leaves it empty, so not one of them can catch that regression.
+  #
+  # NESTED rather than backgrounded (same reason as the DEAD-holder test above): the holder is
+  # the OUTER land-lock, which is genuinely alive and blocked waiting on this probe, so the
+  # fixture needs no `&`, no `kill` and no polling — nothing whose timing can flake.
+  probe="$BATS_TEST_TMPDIR/probe.sh"
+  cat > "$probe" <<'PROBE'
+#!/usr/bin/env bash
+# Runs while the OUTER land-lock holds the mutex, pid+lstart written by the real producer.
+[ -s "$LOCK/pid" ]    || { echo "PRECOND-FAIL: producer wrote no pid";    exit 90; }
+[ -s "$LOCK/lstart" ] || { echo "PRECOND-FAIL: producer wrote no lstart"; exit 91; }
+env LAND_LOCK_WAIT=1 bash "$LL" -- bash -c 'exit 0'
+echo "inner=$?"
+PROBE
+  export LOCK LL
+  run bash "$LL" -- bash "$probe"
+  [ "$status" -eq 0 ]                        # preconditions held; outer ran the probe
+  [[ "$output" == *"inner=75"* ]] || false   # live holder respected ⇒ lstart round-tripped EQUAL
 }
 
 @test "empty-pid stale reaped (old mtime) — acquires" {
