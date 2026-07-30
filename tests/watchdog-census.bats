@@ -37,6 +37,7 @@
 # `not ok` line BESIDE the `ok` for a body that passed, and the land gate greps for `not ok`.
 # Where a "live process" is needed, the test uses its OWN pid — alive by construction, nothing to reap.
 
+# shellcheck disable=SC2034  # consumed by bats itself; file-level is the ONLY working placement (memory: bats-runtime-cap-placement)
 BATS_TEST_TIMEOUT=180
 
 setup() {
