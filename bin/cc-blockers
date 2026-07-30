@@ -345,6 +345,13 @@ EOF
     # "4 red + 1 hung" and "5 red" are different facts and the board must not claim the stronger one.
     # Under legacy the predicate only passes when red==seen, so this is always PERSISTENT-RED there —
     # byte-identical to the pre-fix row.
+    # Firing was already decided above by `fcount -eq seen` on the NOT-GREEN count; all this asks is
+    # the verdict-shaped question "are all N literally red?", where equality against a failure name is
+    # exactly right. If it were wrong the operator would read a slightly weaker LABEL, never silence.
+    # scripts/alarm-polarity-lint.sh flags the shape and demands this justification — which is the
+    # point of it. The marker must sit on the line ABOVE the code it excuses, never at the top of a
+    # prose block: adjacency is what makes it unambiguous WHICH line was reviewed.
+    # alarm-polarity-ok: names the STATE, does not gate the ALARM (see the four lines above)
     if [ "$red" -eq "$seen" ]; then astate="PERSISTENT-RED"; else astate="PERSISTENT-NOT-GREEN"; fi
     # DETAIL is padded to 44 BYTES and ASCII-only (printf pads by bytes; one em-dash shifts the
     # column). Both variants carry the LIFETIME denominator, which is the number that sizes the
