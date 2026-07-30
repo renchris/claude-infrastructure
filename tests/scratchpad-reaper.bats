@@ -8,6 +8,10 @@
 # L3 `[ ]` / `grep -q` only; L4 every keep-rule has a paired reap-rule so a "reap nothing" bug is RED.
 
 setup() {
+  # HERMETICITY (run_gate's blocking test-hermeticity ratchet): fixture $HOME FIRST so every test
+  # inherits it. Load-bearing here beyond the ratchet: this subject `rm -rf`s an age-reaped tree, so
+  # an unfixtured $HOME is the one leak class that could reach real state.
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   REAPER="$REPO/scripts/scratchpad-reaper.sh"
   export CC_SCRATCHPAD_ROOT="$BATS_TEST_TMPDIR/scratch"
@@ -145,8 +149,16 @@ exists() { [ -d "$CC_SCRATCHPAD_ROOT/-Users-x-proj/$1" ]; }
   run grep -cE -- '-mmin \+2880' "$REAPER"
   [ "$status" -eq 0 ]
   run bash "$REPO/scripts/reaper-horizon-lint.sh"
-  [ "$status" -eq 0 ]
-  echo "$output" | grep -q "scratchpad-reaper.sh"
+  # Assert THIS reaper's own verdict, not the whole tree's exit code. The lint scans every file in
+  # the repo, so a bare `[ "$status" -eq 0 ]` made this suite fail on violations it did not create:
+  # origin/main's own tree reds this lint with 5 UNDECLARED reapers (cc-await-ping,
+  # dispatch-assert.sh, desk-invariant.sh, context-econ.sh, cc-recover-safeguard — the last two now
+  # declared here). Holding a new suite answerable for pre-existing trunk debt is a lint nobody can
+  # ever turn green; the scoped assertion below is what this test actually means, and it still fails
+  # loudly if scratchpad-reaper's own horizon regresses or stops being lint-VISIBLE.
+  echo "$output" | grep -qE '^  ok  scripts/scratchpad-reaper\.sh:[0-9]+  horizon 172800s'
+  # `[ ]`, not `! grep`: a non-final `!` is errexit-EXEMPT in bats and would be a DEAD assertion.
+  [ "$(echo "$output" | grep -c "⛔ scripts/scratchpad-reaper.sh")" -eq 0 ]
 }
 
 # ── the staged plist parses and is NOT wired to RunAtLoad (activation is C10/operator) ─────────

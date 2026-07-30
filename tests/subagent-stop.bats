@@ -7,6 +7,12 @@
 # BATS_TEST_TMPDIR via the env seams; nothing touches the live ~/.claude.
 
 setup() {
+  # HERMETICITY (run_gate's blocking test-hermeticity ratchet): fixture $HOME FIRST so every test
+  # inherits it; the SUBAGENT_STOP_* seams below cover this hook's inputs, this covers the rest.
+  # Deliberately under $BATS_RUN_TMPDIR, NOT $BATS_TEST_TMPDIR: the "four declared sinks" test
+  # enumerates $BATS_TEST_TMPDIR exactly, so a fixture dir there would appear as a fifth entry and
+  # break the very assertion it is meant to protect. Still bats-managed, so it is cleaned up.
+  export HOME="$BATS_RUN_TMPDIR/home-subagent-stop"; mkdir -p "$HOME"
   REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   HOOK="$REPO_ROOT/hooks/subagent-stop.sh"
   export SUBAGENT_STOP_IDL="$BATS_TEST_TMPDIR/idl.jsonl"

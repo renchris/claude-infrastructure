@@ -17,6 +17,9 @@
 # L4 each behaviour has a must-change and a must-NOT-change fixture.
 
 setup() {
+  # HERMETICITY (run_gate's blocking test-hermeticity ratchet): fixture $HOME FIRST so every test
+  # inherits it — this subject REWRITES a settings.json, so the live ~/.claude must be unreachable.
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   S="$REPO/scripts/settings-hook-timeouts.sh"
   D="$BATS_TEST_TMPDIR"

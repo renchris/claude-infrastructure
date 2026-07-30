@@ -9,6 +9,9 @@
 # knows works. Each red test asserts BOTH the exit code and the specific diagnosis.
 
 setup() {
+  # HERMETICITY (run_gate's blocking test-hermeticity ratchet): fixture $HOME FIRST so every test
+  # inherits it; the LAUNCHD_LINT_* seams below cover this lint's inputs, this covers the rest.
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   LINT="$REPO/scripts/launchd-parity-lint.sh"
   D="$BATS_TEST_TMPDIR"

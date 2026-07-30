@@ -12,6 +12,11 @@
 # reports health when it cannot read its own list is worse than no lint.
 
 setup() {
+  # HERMETICITY (run_gate's blocking test-hermeticity ratchet): fixture $HOME FIRST, before anything
+  # else in setup, so every test inherits it — a per-test HOME leaves the others reading the live ~/.
+  # The seams below already redirect this lint's own inputs; this closes the UNSEAMED $HOME reads the
+  # subject still makes (it resolves the live layer to compare against the SSOT).
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   LINT="$REPO/scripts/growth-coverage-lint.sh"
   export GROWTH_ROOT="$BATS_TEST_TMPDIR/root"

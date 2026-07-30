@@ -87,6 +87,12 @@ EVIDENCE_GREP='cc-telemetry|cc-registry|CC_TELEMETRY_DIR|CC_REGISTRY_DIR'
 # What it reaps is NOT supervisor evidence: `/private/tmp/claude-501/<project>/<sessionUUID>/` is the CC
 # harness's DERIVED per-session temp scratchpad (audit 03 §1d rank 1 — 10.67 GB, +810 MB/day, bounded
 # only by reboot). No supervisor, page, or gate reads it; the durable evidence for a session is its
+# hooks/lib/context-econ.sh names CC_TELEMETRY_DIR/CC_REGISTRY_DIR and has rm -f sites, so section-3
+# flags it — but both (:158,:160) are the mv-or-rm on its OWN atomic-write temp ("$hist.tmp.$$",
+# removed only when the mv that would have published it failed). Byte-identical in shape to the
+# handoff-fire.sh / cc-value / cc-reconcile entries above: scaffolding, never evidence. It writes the
+# context-history file it reads and deletes no telemetry/registry row; no -mmin/RETAIN_H anywhere, so
+# sections 1/2 find nothing to bound. Declared = reviewed (2026-07-29, infra-perfection land).
 # transcript + registry row + IDL, none of which this script can touch (it only ever READS the registry,
 # never deletes a row). Its horizon is a LITERAL `-mmin +2880` (48 h = 172,800 s), scored by §1 below —
 # 28× the 6,000 s floor — and liveness (live pid OR a transcript touched inside the horizon) outranks
@@ -100,7 +106,7 @@ EVIDENCE_GREP='cc-telemetry|cc-registry|CC_TELEMETRY_DIR|CC_REGISTRY_DIR'
 # CC_SUP_GC_S, so sections 1/2/2b find nothing to bound. The durable evidence of a recovery is the
 # re-fired session's transcript + its new registry row + the announce to the originator, none of which
 # this script can touch. Declared = reviewed (2026-07-25 infra-perfection pass).
-DECLARED='bin/cc-context bin/cc-board bin/cc-sessions bin/cc-notify bin/cc-reaper bin/cc-value bin/cc-reconcile bin/cc-recover-safeguard hooks/session-register.sh hooks/session-deregister.sh statusline.sh scripts/lead-supervisor.sh scripts/lead-reconciler.sh hooks/waiting-recycle.sh scripts/handoff-fire.sh hooks/lead-crash-watchdog.sh scripts/scratchpad-reaper.sh'
+DECLARED='bin/cc-context bin/cc-board bin/cc-sessions bin/cc-notify bin/cc-reaper bin/cc-value bin/cc-reconcile bin/cc-recover-safeguard hooks/session-register.sh hooks/session-deregister.sh statusline.sh scripts/lead-supervisor.sh scripts/lead-reconciler.sh hooks/waiting-recycle.sh scripts/handoff-fire.sh hooks/lead-crash-watchdog.sh scripts/scratchpad-reaper.sh hooks/lib/context-econ.sh'
 
 viol=0
 say(){ printf '  %s\n' "$1"; }
