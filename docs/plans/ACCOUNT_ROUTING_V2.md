@@ -406,6 +406,12 @@ unfinished design.
 | F10 | An older binary without `login_expires_*` has its whole fleet cliff-excluded. | `bin/claude-accounts:1519` (field not on every build) | **M1's FAIL-OPEN rule (R9)** — `None` ⇒ no cliff term. Pinned by test. |
 | F11 | The `staged` plist is invisible to the manifest's three-way lint because the lint globs `launchd/*.plist` only. | `tests/cc-fleet.bats:538` glob | **M4** declares it explicitly; the plist deliberately stays in `launchd/staged/` so `install.sh`'s glob cannot auto-activate it (`8a1e49ab`). |
 | F12 | Routing serves a 600 s-old quota number on the lock-contention degrade path with no record of the age. | C21 + C18 | **M3(b)** records `quota_as_of`, making the degrade path *visible* rather than silent. The 90 s TTL itself is kept (§8 R-3). |
+| F13 | A **days**-formatted deadline was parsed as hours — 24× under. A T−90 h account computed T−3 h, escalated 3 days early, and poisoned the deadline-keyed dedup state on every tick. | `hours_secs` was `${1%%.*}` + an integer test; `"3.7d"` → `"3"` → 3 h. Reproduced live the moment M2 widened the window | **M2b** — `hours_secs` is unit-aware over `fmt_h`'s full vocabulary (`m`/`h`/`d`/`now`/`99d+`), and REFUSES what it does not recognise rather than truncating. Float maths via `awk` (`$(( ))` is integer-only; macOS ships bash 3.2). |
+| F14 | The defect in F13 was **invisible to its own test suite** because the fixture was more parseable than the producer: ISO in `when`, a bare integer in `hours`, where the real tool emits `_fmt_when()` and `fmt_h()`. `hours_secs` was never executed by any test. | `tests/cc-relogin-poll.bats` `build()`, pre-M2 | **M2b** — the fixture is now the producer's LITERAL emission via `fmt_h_like`/`fmt_when_like` mirrors. This also exposed 3 pre-existing "ladder 1" tests as **vacuous** (they now fail on the pristine tree, correctly). Memory `fixture-shape-parity-with-real-producer`. |
+| F15 | A `"0m"` deadline — under an hour, the most urgent shape there is — was REFUSED by the parser and the row silently dropped. | same parser | **M2b** — minutes are parsed; `"now"` and a negative value resolve to 0 (act immediately). |
+| F16 | A **REQUIRED** row whose cause is not its deadline (next3's real 2026-07-24 shape: a rejected grant with time still on the stamp ⇒ both deadline columns `"—"`) was `continue`d — the account that most needed the poller was invisible to it. | `bin/claude-accounts:1858-1866` fills the deadline columns only when the deadline drives the verdict | **M2b** — REQUIRED resolves to a **NOW** deadline, which is that surface's own documented verdict ("action required NOW"), not a fabricated one. EXPIRING with no deadline stays correctly skipped — pinned as a discriminating control. |
+| F17 | A drain reason MASKS the binding reason, flipping the data-vs-policy exit code from 3 to 2 — hiding a data outage as a policy refusal. | Found by this row's own suite against its own first cut of M1 | **M1** — `ranked()` reports the yield pass's reasons whenever the cliff was not the binding constraint. |
+| F18 | A new bats suite runs against the operator's live `~/.claude`. | `ship-land`'s hermeticity ratchet refused M1's first land (exit 6) | **Fixed at the source** — `export HOME="$BATS_TEST_TMPDIR/home"` in `setup()`, never an allowlist entry. Overriding the three explicit path env vars is NOT sufficient: the subject also derives the relogin-poll log and the `CLAUDE_CONFIG_DIR` fallback from `$HOME`. |
 
 ---
 
@@ -416,11 +422,13 @@ Each is a command whose output decides the claim. No narration.
 | AC | Claim | Read | Pass |
 |---|---|---|---|
 | AC1 | The cliff is a routing term, not a render string. | `grep -c 'login_expires_h' <(sed -n '/^def _excluded/,/^def ranked/p' bin/claude-accounts)` | **≥ 1** (was **0**, C17) |
-| AC2 | An account inside the DRAIN band is excluded with a NAMED policy reason. | `CC_ROUTE_CLIFF_DRAIN_H=999999 claude-accounts --rank general --json \| jq -r '.reasons\|to_entries[]\|.value' \| grep -c login-cliff-drain` | **≥ 1** |
+| AC2 | An account inside the DRAIN band is excluded with a NAMED policy reason. | `CC_ROUTE_CLIFF_DRAIN_H=100 claude-accounts --route general 2>&1 >/dev/null \| grep -c login-cliff-drain` | **≥ 1** — verified live 2026-07-30: `next` (T−90 h) excluded, route still returned `next3` at exit 0 |
 | AC3 | The drain NEVER manufactures a fleet cliff (R11/F9). | `CC_ROUTE_CLIFF_DRAIN_H=999999 cc-route lead >/dev/null; echo $?` — unpiped | **0**, never 4 |
 | AC4 | Absence of the cliff field disables the term, not the fleet (R9/F10). | `tests/account-cliff-routing.bats` — the `login_expires_h: null` fixture still ranks | test green |
-| AC5 | The poller can see its own declared window (F3). | `claude-accounts --login-status --window-h 168 > /tmp/ls; echo $?; grep -c next /tmp/ls` | exit **1**, count **≥ 1** while `next` is at T−90 h (C4) |
-| AC6 | The default window is unchanged for every existing caller. | `diff <(claude-accounts --login-status) <(claude-accounts --login-status --window-h 72)` | **empty** |
+| AC5 | The poller can see its own declared window (F3). | `claude-accounts --login-status --window-h 168 > /tmp/ls; echo $?; grep -c next /tmp/ls` | exit **1**, count **≥ 1** while `next` is at T−90 h (C4). **Verified live 2026-07-30:** `--window-h 72` → rc 0, 0 rows; `--window-h 168` → rc 1, `next EXPIRING login-expiry Sun 13:21 3.7d claude-next` |
+| AC6 | The default window is unchanged for every existing caller. | `diff <(claude-accounts --login-status) <(claude-accounts --login-status --window-h 72)` | **empty** — verified live |
+| AC6b | A malformed window is a USAGE error, never a silent fallback to 72 and never a verdict. | `claude-accounts --login-status --window-h nope >/dev/null 2>&1; echo $?` | **64** — outside the 0/1/2 verdict range, so a `rc <= 2` consumer cannot read it as an answer |
+| AC6c | A days-formatted deadline is not read as hours (the latent 24× error, F13). | `tests/cc-relogin-poll.bats` "a DAYS-formatted deadline is not read as hours" — and live: the poller against a `--window-h`-capable binary reports `hours_left` **88** for `next`, not 3 | test green; `escalated == false` |
 | AC7 | The cliff survives a broken account (F6). | `jq -r 'to_entries[]\|"\(.key) \(.value.login_expires_at // "ABSENT")"' ~/.claude/logs/claude-accounts-lastgood.json` | **4 of 4 non-ABSENT** (was 0 of 4, C22) |
 | AC8 | A routing decision records its own inputs (F7). | `tail -1 ~/.claude/route/route.jsonl \| jq -e 'has("cliff_h") and has("cliff_band") and has("quota_as_of")'` | exit **0** |
 | AC9 | The dark poller is DECLARED, so its inertness is readable (F4). | `grep -c '^com\.claude\.relogin *|' launchd/fleet.manifest` | **1** (was 0, C16) |
@@ -474,7 +482,8 @@ disk claimed.
 | `CC_ROUTE_CLIFF_SOFT_H` | `168` | SOFT band edge (hours). `0` disables the soft band only. |
 | `CC_ROUTE_CLIFF_DRAIN_H` | `48` | DRAIN band edge (hours). `0` disables the drain band only. |
 | `CC_ROUTE_CLIFF_SOFT_FACTOR` | `0.25` | SOFT-band score multiplier. `1.0` = no deprioritization. |
-| `--window-h N` (M2) | `login_warn_h` (72) | Per-call `--login-status` window; omitted ⇒ prior behaviour exactly. |
+| `--window-h N` (M2) | `login_warn_h` (72) | Per-call `--login-status` window; omitted ⇒ prior behaviour exactly. A malformed N exits **64** (usage), deliberately outside the 0/1/2 verdict range. |
+| `--trigger-days N` (existing) | `7` | The poller's policy AND now the window it asks for — one constant, not two that can silently disagree. |
 | `CC_ROUTE_RECORD_INPUTS=off` | `on` | M3(b) reverts `route.jsonl` to the 4-field record. |
 
 ---
@@ -483,8 +492,81 @@ disk claimed.
 
 - **2026-07-30 — Phase 1 complete, cell CONFIRMED-and-renamed** (§1). 26 measured constants
   (§2). Graveyard swept with a passing positive control: **nothing to take** (§3).
-  Coordinator pinged with the findings and the M4 seam question.
-- Builds M1–M4 + map row: land order and status tracked below as they land.
+  Coordinator pinged with the findings and the M4 seam question; ping **read** (`acked=26`), no
+  objection to the M4 plan.
+- **M1 LANDED** — cliff-aware routing + the yield. 17 tests, **12 RED-proved** against a pristine
+  `git archive` tree at the derived pre-fix rev `5597bd2a`; the 5 green-on-both are
+  contract-preservation tests (R3 non-regression, exhausted-stays-exhausted, the data-vs-policy
+  exit split), named as such. Regression **104/104, 0 not-ok** across `claude-accounts-core`,
+  `claude-accounts`, `cc-route`, `cc-relogin-status`, `claude-accounts-fresh-lock-bound`,
+  `effort-parity`; `scripts/route-safety-gate.sh` green (frozen 0/2/3/4 contract untouched).
+  Verified live against the real fleet before landing: `next` (T−90 h) enters the SOFT band and
+  scores exactly ×0.25; `CC_ROUTE_CLIFF_DRAIN_H=100` excludes it and routing still returns
+  `next3` at exit 0; draining ALL FOUR still returns an account at exit 0 with the YIELDED notice
+  — **the R11 property proven on production data, not only in a fixture**.
+- **M2 LANDED** — `--login-status --window-h N` + the poller asking for its own window.
+
+### Learnings — three defects the build itself surfaced (each cost a real land or gate cycle)
+
+1. **My own suite caught a masking bug in my own first cut of M1.** `_excluded()` returns the
+   drain reason *before* `score_general` can reach `no-weekly-data`, so a fleet that was really
+   DATA-BLIND reported the drain instead — `policy` (exit 2, "do not fire blind") where the truth
+   was `data` (exit 3, "callers may degrade to a proxy"). Wrong verdict, in the direction that
+   HIDES an outage. `ranked()` now reports the **yield pass's** reasons whenever the cliff was not
+   the binding constraint. Pinned by two tests plus a CLI-level exit-3 test.
+2. **The land gate refused M1 once, correctly.** `ship-land`'s hermeticity ratchet found that
+   `tests/account-cliff-routing.bats` did not fixture `$HOME` — overriding
+   `CLAUDE_ACCOUNTS_JSON`/`_LASTGOOD`/`cache_file` is NOT sufficient, because the subject also
+   derives the relogin-poll log path and the `CLAUDE_CONFIG_DIR` fallback from `$HOME`. Fixed at
+   the source, never via the allowlist. *Expect your own gates to catch your own defects.*
+3. **Widening the window immediately exposed a latent 24× deadline error — and the reason it had
+   been invisible is a FIXTURE/PRODUCER PARITY failure.** `cc-relogin-poll`'s `hours_secs()` was
+   `${1%%.*}` plus an integer test, which strips the fraction *and the unit* in one step: `"3.7d"`
+   → `"3"` → **3 hours**. A T−90 h account computed T−3 h, escalated three days early, and
+   poisoned the state file's deadline-keyed dedup on every tick. It survived because
+   `tests/cc-relogin-poll.bats` fixtured the `--login-status` TSV with an **ISO stamp** in `when`
+   and a **bare integer** in `hours`, while the real `claude-accounts` emits `_fmt_when()`
+   (`"Sun 13:21"` — never ISO) and `fmt_h()` (`"30m"` / `"41.5h"` / `"3.7d"` / `"now"` /
+   `"99d+"`). So `iso_epoch()` always succeeded and **`hours_secs()` — the function that actually
+   derives the deadline in production — was never executed by any test.** The fixture is now the
+   producer's literal emission (with `fmt_h_like`/`fmt_when_like` mirrors), which also revealed
+   that three pre-existing "ladder 1" tests had been passing **vacuously**: on the pristine tree
+   they now fail, because the pristine poller genuinely cannot see a 100 h deadline through a
+   72 h-filtered surface. Memory: `fixture-shape-parity-with-real-producer`.
+   Two further drops fixed in the same pass: `"0m"` (a <1 h deadline — the most urgent shape of
+   all) was **refused** by the parser and the row silently `continue`d; and a **REQUIRED** row
+   whose cause was not its deadline — next3's real 2026-07-24 shape, a rejected grant with time
+   still on the stamp, both deadline columns `"—"` — was also `continue`d, so the account that
+   most needed the poller was invisible to it. REQUIRED now resolves to a NOW deadline, which is
+   that surface's own stated verdict rather than a fabricated one; EXPIRING with no deadline is
+   still correctly skipped (discriminating control).
+
+### Reprioritization, mid-build — M3(a) is smaller than §5 claimed
+
+§5 framed M3(a) (the cliff into the durable ledger) as closing a fail-closed hole: "the data
+vanishes precisely when it is needed." Verified at code level, that is **half right and the wrong
+half is the important one.** `probe_account` returns early on `kstate != "present"` — before
+`login_expires_at` is ever set (`bin/claude-accounts:588-594` vs `:603`) — so a broken account
+genuinely carries no cliff data. **But the ACTION path does not need it:** `relogin_row` already
+renders `logged-out`/`token-invalid` as ESCALATED from a field present on every build, and M2b's
+F16 fix makes a REQUIRED row with no parseable deadline resolve to a NOW deadline, so the poller
+now acts on exactly that account. M3(a) is therefore **visibility and history** — the operator's
+"when was this account's login due", and a durable series that would let the ~30 d period (C1) be
+measured rather than bracketed — not a stranding fix. Ranked below M3(b) and M4 accordingly, and
+if it does not land this session it is a named remainder, not a silent gap.
+
+### Correction to C23/C24 — "landing == deploying" is CONDITIONAL
+
+C23 measured deploy lag **0** at 02:0xZ. By 03:0xZ the shared checkout was **30 behind**
+`origin/main` (the sawtooth, climbing again). `~/.claude/bin/*` are symlinks into that checkout's
+**working tree**, so landing deploys **only once the checkout fast-forwards** — there is no
+per-file activation step, but there is a lag. Effect-read at 03:0xZ:
+`grep -c cliff_band ~/.claude/bin/claude-accounts` → **0** while `git show origin/main:` → **5**.
+So M1/M2 are landed and content-verified on trunk and **not yet live**. This was observable in the
+system's own behaviour within the hour: `cc-relogin-poll` run against the *deployed*
+`claude-accounts` found no `--window-h`, took its fail-soft path, and logged
+`WINDOW-CAPPED … does NOT cover T-7d` — the R12 degradation working exactly as designed, against
+a real dark dependency rather than a hypothetical one.
 
 ## §12 Remainders — named, with owner and reason
 
@@ -495,3 +577,5 @@ disk claimed.
 | R-3 | The 600 s cache-grace degrade path is now *recorded* (M3b) but not *bounded* — nobody counts how often routing serves a 600 s-old number. | 7 | Needs a period of records first; the read is `jq` over `quota_as_of` in `route.jsonl`. |
 | R-4 | `bin/claude-accounts:1525` `RELOGIN_UNKNOWN_ACTION = "land feat/accounts-login-cliff (adds --login-status)"` is **stale** — the flag is on this build (`:1692`). A stale recovery string sends the operator to a landed branch. | 7 | Cosmetic; folded into M2's land if it stays clean. |
 | R-5 | Session-lifetime distribution is unmeasured, so `CC_ROUTE_CLIFF_DRAIN_H=48` is a *reasoned* default, not a measured one. If 48 h of drain does not reach `k == 0`, behaviour degrades to today's (escalation row at T−48 h) — never worse. | 7 (data lives with 2/4) | Needs row 2/4's session-lifetime data; the design fails soft without it. |
+| R-6 | The `--login-status` leg carries the deadline only as `fmt_h()` text, whose days form rounds to 0.1 d — so a deadline derived through that leg is precise to **±1.2 h**. Harmless against a 48 h escalation threshold, but it is a real quantization and it is why the live poller reads T−88 h for a T−90.3 h cliff. The `json-fields` leg carries the raw float. Widening the TSV to carry an ISO stamp would break its frozen 6-field shape (`norm 6` parses positionally), so this is a **named limit, not a bug**. | 7 | Fixing it means a 7th field or a new flag; neither is worth breaking a frozen contract for 1.2 h against a 48 h threshold. |
+| R-7 | **A campaign-wide question this row can only raise, not answer:** the F14 defect class — *a test fixture more parseable than the producer it claims to model* — is invisible to every gate we have. `hours_secs` had **zero** effective coverage while its suite reported 33 passing tests. Worth a sweep: for every stub that renders a sibling tool's output, does it emit that tool's LITERAL formatting? | 1 (owns `run_gate`) / campaign | Out of row 7's scope; row 7 fixed its own two instances. A lint is conceivable (compare a stub's emitted shape against the producer's formatter) but is a real design problem, not a one-liner. |
