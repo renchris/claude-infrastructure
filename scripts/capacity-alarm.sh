@@ -59,6 +59,11 @@ set -uo pipefail
 WARN_GB="${CC_CAP_WARN_GB:-8}"
 ALARM_GB="${CC_CAP_ALARM_GB:-3}"
 PROC_WARN_GB="${CC_CAP_PROC_WARN_GB:-3}"
+# Compressor-segment saturation (rung 5). Deliberately low: the 2026-07-30 panic went from a cold
+# compressor to 100% of segments in ~26 seconds, so a threshold set near the ceiling would fire only
+# after the box was already unrecoverable. These are canary values, not capacity values.
+SEG_WARN_PCT="${CC_CAP_SEG_WARN_PCT:-45}"
+SEG_ALARM_PCT="${CC_CAP_SEG_ALARM_PCT:-70}"
 LOG="${CC_CAP_LOG:-$HOME/.claude/logs/capacity-alarm.jsonl}"
 APPEND=1; WANT_JSON=0; QUIET=0
 
@@ -112,6 +117,54 @@ print("%.2f %.2f %.2f %.2f" % (head,comp,act,wired))
 MEM="$(read_mem || true)"
 SWAP_MB="$(sysctl -n vm.swapusage 2>/dev/null \
             | sed -n 's/.*used = \([0-9.]*\)M.*/\1/p' | head -1)"
+
+# ── compressor SEGMENT saturation — the term that killed the box on 2026-07-30 ────────────────────
+# The 02:18:05 panic printed `watchdog timeout: no checkins from watchdogd in 92 seconds`, but the
+# cause is one line further down the same panic log:
+#     Compressor Info: 33% of compressed pages limit (OK) and 100% of segments limit (BAD)
+# and the kernel's own memorystatus verdict at 02:15:36 was:
+#     {"compressor_exhausted": 1, "zone_map_is_exhausted": 0, "swap_low": 0, "swap_exhausted": 0}
+# with memorystatus_available_pages: 1310531 — i.e. TWENTY GIGABYTES STILL FREE, and swap healthy.
+#
+# That is precisely why this rung must exist separately from every rung above it. Headroom (rung 2),
+# swap (rung 1) and kernel pressure (rung 3) ALL read healthy at the moment of death. `COMP` was
+# already sampled by read_mem and printed to the log, but it never reached classify(), so the verdict
+# could not see the one number that was out of range. This closes that gap.
+#
+# WHY SEGMENTS AND NOT COMPRESSOR SIZE. Each segment holds up to 16 compressed pages
+# (segment_pages_compressed_limit / segment_limit = 26073840 / 1629615 = exactly 16.0). At the panic
+# packing was 5.3/16 = 33%, so all 1,629,615 DESCRIPTORS were consumed while holding only ~41 GiB.
+# Segment count is invisible to compressor size, free memory, swap and pressure — it is its own axis.
+# Note the structural consequence, from this machine's own sysctls:
+#     segment_limit x alloc_size = 1629615 x 81920 = 124.3 GiB  ==  vm.compressor_pool_size (exact)
+# The pool is provisioned for 124.3 GiB on a 64 GiB machine, so FULLY-PACKED segments could never be
+# exhausted — there is not enough RAM to fill them. Exhaustion is reachable ONLY through under-packing.
+# This rung is therefore a CANARY, not a predictor: it may lead by seconds rather than minutes. It
+# ships anyway because it is the only instrument that can see this failure mode at all.
+#
+# zprint is the ONLY live source for the in-use descriptor count — no sysctl exposes it. Column 7 is
+# `cur inuse`, validated 2026-07-30 against zones with known-nonzero counts; the `cur size`/`#elts`
+# columns read 0 on this build, so position 7 (not a size column) is the one to parse.
+read_segments() { # → "<inuse> <limit>", or nothing when unreadable (never a fabricated 0)
+  local row inuse limit
+  command -v "${CC_CAP_ZPRINT:-zprint}" >/dev/null 2>&1 || return 1
+  row="$("${CC_CAP_ZPRINT:-zprint}" 2>/dev/null | awk '$1=="compressor_segment"{print; exit}')"
+  [ -n "$row" ] || return 1
+  inuse="$(printf '%s\n' "$row" | awk '{print $7}')"
+  case "$inuse" in ''|*[!0-9]*) return 1 ;; esac
+  limit="$(sysctl -n vm.compressor_segment_limit 2>/dev/null)"
+  case "$limit" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$limit" -gt 0 ] || return 1
+  printf '%s %s' "$inuse" "$limit"
+}
+
+# Unreadable ⇒ SEG_PCT stays empty ⇒ rung 5 is SKIPPED, never a fabricated healthy 0 (see rung 3's
+# identical policy in the header: absent instrument is SKIPPED, only headroom can produce NO-DATA).
+SEG_PCT=""
+if SEG_RAW="$(read_segments)"; then
+  SEG_PCT="$(awk -v a="${SEG_RAW% *}" -v b="${SEG_RAW#* }" 'BEGIN{printf "%.1f", 100*a/b}')"
+fi
+
 # ── session census — BOTH pid families, counted as TREES, matched at the COMMAND POSITION ─────────
 # THREE separate census defects are fixed here, each measured, each of which silently understated or
 # overstated the fleet. This function is the reason the row exists, so the reasoning stays in-file.
@@ -242,8 +295,8 @@ fi
 # MAX-COMBINED, not first-match. The rungs are evaluated into a severity level and the WORST wins, so
 # adding a rung can only raise a verdict. The incumbent returned on first match, which would have let
 # a later-added rung be shadowed — and worse, would have made rung ORDER a silent policy decision.
-classify() { # <headroom_gb> <swap_mb> [pressure_level] [max_proc_gb] → prints verdict
-  local h="$1" s="$2" pl="${3:-}" mp="${4:-}" v=0 si=0
+classify() { # <headroom_gb> <swap_mb> [pressure_level] [max_proc_gb] [seg_pct] → prints verdict
+  local h="$1" s="$2" pl="${3:-}" mp="${4:-}" sg="${5:-}" v=0 si=0
   # headroom is the ONE instrument the verdict cannot exist without (see header).
   if [ -z "$h" ]; then printf 'NO-DATA'; return 0; fi
 
@@ -275,6 +328,17 @@ classify() { # <headroom_gb> <swap_mb> [pressure_level] [max_proc_gb] → prints
     if [ "$v" -lt 1 ]; then v=1; fi
   fi
 
+  # rung 5 — compressor SEGMENT saturation (2026-07-30 panic). Reaches ALARM, unlike rung 4: this is
+  # the axis the machine actually died on, and it dies with memory and swap both reading healthy.
+  # Absent instrument ⇒ SKIPPED (rung 3's policy), never a fabricated OK.
+  case "$sg" in
+    ''|*[!0-9.]*) : ;;
+    *) if awk -v a="$sg" -v b="$SEG_ALARM_PCT" 'BEGIN{exit !(a+0 >= b+0)}'; then v=2
+       elif awk -v a="$sg" -v b="$SEG_WARN_PCT" 'BEGIN{exit !(a+0 >= b+0)}'; then
+         if [ "$v" -lt 1 ]; then v=1; fi
+       fi ;;
+  esac
+
   case "$v" in 2) printf 'ALARM' ;; 1) printf 'WARN' ;; *) printf 'OK' ;; esac
 }
 
@@ -283,19 +347,26 @@ if [ "${CC_CAP_SELFTEST:-0}" = "1" ]; then
   # Every rung, in both directions, plus the three cases that are POLICY rather than arithmetic:
   # max-combine (a WARN rung must not downgrade an ALARM), an unreadable pressure level staying OK,
   # and the outlier rung being unable to reach ALARM. probe = headroom:swap:pressure:maxproc:want
+  # probe = headroom:swap:pressure:maxproc:seg:want
+  # The rung-5 rows encode the 2026-07-30 panic directly: `99:0:1:0:100:ALARM` is the machine's
+  # actual dying state — abundant headroom, zero swap, normal pressure, no outlier process, and
+  # segments at 100%. Every pre-existing rung called that box HEALTHY, which is the whole point.
   for probe in \
-      "99:0:1:0:OK"       "5:0:1:0:WARN"    "1:0:1:0:ALARM"   "99:512:1:0:ALARM" ":0:1:0:NO-DATA" \
-      "99:0:2:0:WARN"     "99:0:4:0:ALARM"  "99:0:1:9:WARN"   "5:0:4:0:ALARM"    "1:0:1:9:ALARM" \
-      "99:0::0:OK"        "99:0:1::OK"; do
+      "99:0:1:0::OK"      "5:0:1:0::WARN"   "1:0:1:0::ALARM"  "99:512:1:0::ALARM" ":0:1:0::NO-DATA" \
+      "99:0:2:0::WARN"    "99:0:4:0::ALARM" "99:0:1:9::WARN"  "5:0:4:0::ALARM"    "1:0:1:9::ALARM" \
+      "99:0::0::OK"       "99:0:1:::OK" \
+      "99:0:1:0:100:ALARM" "99:0:1:0:70:ALARM" "99:0:1:0:45:WARN" "99:0:1:0:44:OK" \
+      "99:0:1:0:0:OK"      "99:0:1:0:?:OK"     "1:0:1:0:0:ALARM"  "99:0:1:9:100:ALARM"; do
     h="${probe%%:*}";  r="${probe#*:}"
     s="${r%%:*}";      r="${r#*:}"
     pl="${r%%:*}";     r="${r#*:}"
-    mp="${r%%:*}";     want="${r#*:}"
-    got="$(classify "$h" "$s" "$pl" "$mp")"
+    mp="${r%%:*}";     r="${r#*:}"
+    sg="${r%%:*}";     want="${r#*:}"
+    got="$(classify "$h" "$s" "$pl" "$mp" "$sg")"
     if [ "$got" = "$want" ]; then
-      echo "  control OK   headroom='$h' swap='$s' pressure='$pl' maxproc='$mp' → $got"
+      echo "  control OK   headroom='$h' swap='$s' pressure='$pl' maxproc='$mp' seg='$sg' → $got"
     else
-      echo "  control FAIL headroom='$h' swap='$s' pressure='$pl' maxproc='$mp' → $got (want $want)"
+      echo "  control FAIL headroom='$h' swap='$s' pressure='$pl' maxproc='$mp' seg='$sg' → $got (want $want)"
       fails=$((fails+1))
     fi
   done
@@ -309,7 +380,7 @@ if [ "${CC_CAP_SELFTEST:-0}" = "1" ]; then
   else
     echo "  control FAIL census trees=${1:-?} != exe ${2:-?} + bin ${3:-?}"; fails=$((fails+1))
   fi
-  [ "$fails" -eq 0 ] && { echo "capacity-alarm: selftest GREEN (4 rungs + no-data + census reachable)"; exit 0; }
+  [ "$fails" -eq 0 ] && { echo "capacity-alarm: selftest GREEN (5 rungs + no-data + census reachable)"; exit 0; }
   echo "capacity-alarm: selftest RED ($fails)" >&2; exit 70
 fi
 
@@ -320,7 +391,7 @@ if [ -n "$MEM" ]; then
   HEAD="${1:-}"; COMP="${2:-}"; ACT="${3:-}"; WIRED="${4:-}"
 fi
 
-VERDICT="$(classify "$HEAD" "${SWAP_MB:-0}" "$PRESSURE" "$MAX_PROC_GB")"
+VERDICT="$(classify "$HEAD" "${SWAP_MB:-0}" "$PRESSURE" "$MAX_PROC_GB" "$SEG_PCT")"
 case "$VERDICT" in
   OK)      RC=0 ;;
   WARN)    RC=1 ;;
@@ -368,10 +439,11 @@ TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 # change stays parseable. `sessions` keeps its name and gains its correct VALUE (trees across both
 # families); the two per-family counts are added beside it so a future census regression is visible in
 # the log itself rather than only in an aggregate that looks plausible either way.
-JSON="$(printf '{"ts":"%s","verdict":"%s","sessions":%s,"headroom_gb":%s,"compressor_gb":%s,"active_gb":%s,"wired_gb":%s,"swap_used_mb":%s,"warn_gb":%s,"alarm_gb":%s,"est_room_sessions":%s,"per_session_mb_est":%s,"sessions_exe":%s,"sessions_binclaude":%s,"pressure_level":%s,"proc_warn_gb":%s,"max_proc_gb":%s,"top_procs":%s}' \
+JSON="$(printf '{"ts":"%s","verdict":"%s","sessions":%s,"headroom_gb":%s,"compressor_gb":%s,"active_gb":%s,"wired_gb":%s,"swap_used_mb":%s,"warn_gb":%s,"alarm_gb":%s,"est_room_sessions":%s,"per_session_mb_est":%s,"sessions_exe":%s,"sessions_binclaude":%s,"pressure_level":%s,"proc_warn_gb":%s,"max_proc_gb":%s,"seg_pct":%s,"seg_warn_pct":%s,"seg_alarm_pct":%s,"top_procs":%s}' \
   "$TS" "$VERDICT" "$SESSIONS" "${HEAD:-null}" "${COMP:-null}" "${ACT:-null}" "${WIRED:-null}" \
   "${SWAP_MB:-0}" "$WARN_GB" "$ALARM_GB" "$ROOM_JSON" "$PER_MB" \
   "$SESSIONS_EXE" "$SESSIONS_BIN" "${PRESSURE:-null}" "$PROC_WARN_GB" "${MAX_PROC_GB:-null}" \
+  "${SEG_PCT:-null}" "$SEG_WARN_PCT" "$SEG_ALARM_PCT" \
   "$TOP_JSON")"
 
 if [ "$APPEND" = 1 ]; then
@@ -436,6 +508,8 @@ if [ "$QUIET" != 1 ] && [ "$WANT_JSON" != 1 ]; then
   echo "  live sessions:          ${SESSIONS} trees   (${SESSIONS_EXE} claude.exe + ${SESSIONS_BIN} .bin/claude)"
   echo "  reclaimable headroom:   ${HEAD:-?} GB   (warn <${WARN_GB} · alarm <${ALARM_GB})"
   echo "  compressor / active:    ${COMP:-?} GB / ${ACT:-?} GB"
+  # SKIPPED, not "0%" — an unreadable zprint must never render as a healthy reading (2026-07-30).
+  echo "  compressor segments:    ${SEG_PCT:-SKIPPED (zprint unreadable)}${SEG_PCT:+% of limit  (warn ${SEG_WARN_PCT}% / alarm ${SEG_ALARM_PCT}%)}"
   echo "  kernel pressure level:  ${PRESSURE:-unreadable}   (>=2 ⇒ WARN · >=4 ⇒ ALARM · absent ⇒ rung skipped)"
   echo "  largest proc footprint: ${MAX_PROC_GB:-?} GB   (warn >${PROC_WARN_GB})"
   if [ -n "$TOP_PROCS" ]; then
