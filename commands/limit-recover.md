@@ -1,6 +1,6 @@
 ---
 name: limit-recover
-description: Recover perfectly from a usage-limit interruption (5-hour / weekly / model-scoped Fable / monthly-spend cap) — disk-truth audit of every Dynamic Workflow slot, subagent, task, AND Agent-Team assignee session; re-run everything not provably COMPLETE (accepting partial results is banned); or continue with zero loss on another of the 4 accounts via validated transcript transplant + salvage bundle. Use when: a session was killed by "You've hit your session/weekly limit", when teammates died mid-wave ("Teammate @x failed - You've hit your monthly spend limit"), when resuming after a limit ("continue, we hit our limit"), when workflow/subagent results came back null/partial/empty, or when the reset is too far away and work should continue NOW on another account.
+description: Recover perfectly from a usage-limit interruption (5-hour / weekly / model-scoped Fable / monthly-spend cap) — disk-truth audit of every Dynamic Workflow slot, subagent, task, AND Agent-Team assignee session; re-run everything not provably COMPLETE (accepting partial results is banned); or continue with zero loss on another of the 4 accounts via validated transcript transplant + salvage bundle. Use when: a session was killed by "You've hit your session/weekly limit", when teammates died mid-wave ("Teammate @x failed - You've hit your monthly spend limit"), when resuming after a limit ("continue, we hit our limit"), when workflow/subagent results came back null/partial/empty, or when the reset is too far away and work should continue NOW on another account. ALSO use when an account died on its LOGIN CLIFF rather than on quota — `invalid_grant` on every refresh, `auth: logged-out` / `token-invalid`, "Not logged in · Please run /login" — because the recovery is the same transplant and the alternative is losing the work (there is NO reset to wait for; see § A login cliff is not a quota limit).
 allowed-tools: Bash, Read, Write, Edit, Grep, Glob, Agent, Workflow, TaskList, TaskCreate, TaskUpdate, AskUserQuestion
 argument-hint: "[audit | handoff [next|next2|next3|next4|auto] [opus|fable] | ingest <bundle-dir>] — bare = full same-session recovery"
 ---
@@ -33,6 +33,39 @@ a concurrent same-account write; skips → expect fallback if the lock is busy),
 preseed BEFORE opening the pane so the iTerm2 pref lands seconds ahead of the resumed TUI. **One-time
 machine setup (NOT per-resume):** grant osascript the "control iTerm2" Automation permission (macOS prompts
 once; already granted here). Full detail + preconditions: `resume-sessions/REFERENCE.md § 4a`.
+
+## A login cliff is not a quota limit — and it changes exactly one branch of the decision tree
+
+Added 2026-07-30 (ACCOUNT_ROUTING_V2, row 7). Every trigger above used to name a QUOTA event, so a
+session killed by its account's **login cliff** matched none of them — while this command's transplant
+machinery is precisely the right recovery for it. The capability existed and the failure that needed
+it could not reach it.
+
+**Recognise it, and do not mistake it for a cap.** `invalid_grant` on every refresh · `auth:
+logged-out` or `token-invalid` in `claude-accounts --json` · a launcher greeting with "Not logged in ·
+Please run /login". Confirm from the credential store, not the symptom:
+`claude-accounts --relogin-status` (exit 2 = ESCALATED/overdue). A REAL cap returns HTTP 200 with
+percent ≈ 100; an auth death is not a percentage at all.
+
+**The one branch that differs — `wait for the reset` DOES NOT EXIST.** A 5-hour / weekly / Fable cap
+has a `resets_at` and waiting is a legitimate option. A login cliff has no reset: past
+`refreshTokenExpiresAt` every refresh grant is refused **by construction**, and only an INTERACTIVE
+login recovers the account. Measured: six successful refreshes did not move next3's wall, it died
+anyway, and 24 automated re-attempts inside 7.7 h all failed — the account stayed down **93.5 hours**
+until a human logged in. So on a cliff:
+
+1. **Never wait, and never retry the grant.** Retrying is the 24-attempt failure above. There is
+   nothing to poll.
+2. **Transplant is the ONLY zero-loss path** — `handoff [next|next2|next3|next4|auto]`, exactly as
+   for a cap. The 4 accounts are isolated, so a cliff on one says nothing about the others; pick the
+   target from `claude-accounts --rank general`, which now DEPRIORITIZES an account inside its own
+   cliff window so `auto` will not hand you a second account that is about to die.
+3. **Repair runs in PARALLEL, not first** — `cc-relogin <acct>` (or `/relogin`). It needs the account
+   at `k == 0`, so it cannot run while the work is still there; move the work, then repair. Landing
+   the repair before the transplant inverts the dependency and strands the work for the whole repair.
+4. **If it is the LAST healthy account**, this is a genuine STOP-ASK: the operator must perform an
+   interactive `/login`. Surface the exact command and the deadline
+   (`claude-accounts --relogin-status`), and salvage a bundle so nothing is lost while you wait.
 
 ## Iron rules (bind every mode; quote back any you are about to break and STOP)
 
