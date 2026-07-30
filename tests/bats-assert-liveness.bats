@@ -141,6 +141,46 @@ bats_passes() { bats "$1" >/dev/null 2>&1; }
   [ "$(findings "$D/t.bats")" -eq 0 ]
 }
 
+# The test above used `<<EOF`. The repo's DOMINANT form is `<<'EOF'` (60 of 189 suites), and it
+# was BROKEN while that test passed — a fixture-shape parity gap, not a missing test. The opener
+# was detected on `strip_quoted(raw)`, which blanks the CONTENTS of quoted spans; `<<'EOS'` became
+# `<<'   '`, no delimiter matched, and the skip never started. Every quoted-heredoc body was then
+# analyzed as this file's own assertions — 4 live false positives in tests/alarm-polarity-lint.bats,
+# whose ` || false` remedy would have edited the FIXTURE, changing the subject a lint-under-test is
+# asked about. Both delimiter forms are pinned from here on, in both directions.
+@test "a QUOTED-delimiter heredoc body is never analyzed either (<<'EOF' is the common form)" {
+  mkbats "$D/t.bats" '@test "x" {' "  cat > \"\$D/gen.sh\" <<'EOS'" \
+    '  [[ 1 -eq 2 ]]' '  ! true' 'EOS' '  true' '}'
+  [ "$(findings "$D/t.bats")" -eq 0 ]
+  # …and the real shape that regressed: an && whose RHS is a command, inside a quoted heredoc.
+  mkbats "$D/r.bats" '@test "x" {' "  cat > \"\$D/ok.sh\" <<'EOS'" \
+    '[ "$notgreen" -eq "$seen" ] && echo ALARM' 'EOS' '  true' '}'
+  [ "$(findings "$D/r.bats")" -eq 0 ]
+}
+
+@test "a <<-'EOF' (tab-stripped, quoted) body is skipped, and its indented terminator closes it" {
+  mkbats "$D/t.bats" '@test "x" {' "  cat > \"\$D/gen.sh\" <<-'EOS'" \
+    '  [[ 1 -eq 2 ]]' "$(printf '\tEOS')" '  [[ 1 -eq 3 ]]' '  true' '}'
+  # The body is skipped; the [[ ]] AFTER the terminator is real code and must still be reported —
+  # a skip that never terminates would swallow it and read as a clean file.
+  [ "$(findings "$D/t.bats")" -eq 1 ]
+  python3 "$AN" --format tsv "$D/t.bats" | grep -q '1 -eq 3' || false
+}
+
+@test "a <<EOF inside a QUOTED STRING opens nothing — string data is not syntax" {
+  # The other direction, and the reason the opener cannot simply be matched on the raw line: a
+  # fixture that PRINTS shell source contains `<<EOF` as data. Treating it as an opener starts a
+  # skip that never terminates and silently swallows the rest of the block (the original defect).
+  mkbats "$D/t.bats" '@test "x" {' "  printf 'cat <<EOF\\n' > \"\$D/w.sh\"" \
+    '  [[ 1 -eq 2 ]]' '  true' '}'
+  [ "$(findings "$D/t.bats")" -eq 1 ]
+}
+
+@test "a herestring is not a heredoc — <<< opens no skip" {
+  mkbats "$D/t.bats" '@test "x" {' '  grep -q x <<< "$output"' '  [[ 1 -eq 2 ]]' '  true' '}'
+  [ "$(findings "$D/t.bats")" -eq 1 ]
+}
+
 @test "[[ A && B ]] is ONE conditional, not an AND-OR list" {
   mkblock "$D/t.bats" '[[ 1 -eq 1 && 1 -eq 2 ]]' nonfinal
   [ "$(findings "$D/t.bats")" -eq 1 ]
