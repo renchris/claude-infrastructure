@@ -434,7 +434,7 @@ STUB
 @test "no case statement inside a \$( ) — the bash 3.2 runtime-only death" {
   have_subject
   # STATIC: an opening `$(` and a `case` on the same line is the shape that dies. bash -n and
-  # shellcheck both PASS it, so only a scan or an exercised path catches it.
+  # ShellCheck both PASS it, so only a scan or an exercised path catches it.
   [ "$(grep -cE '\$\(.*[^"'"'"']case ' "$FLEET")" = 0 ]
 
   # DYNAMIC, which is the real proof: every arm is exercised under /bin/bash 3.2 below, and a
