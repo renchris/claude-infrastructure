@@ -9,26 +9,31 @@ STEP 0 — ARM YOUR WAKE PATH FIRST, BEFORE ANYTHING ELSE. Run this as a Bash to
 run_in_background=true, substituting YOUR OWN pane uuid from `~/.claude/bin/cc-notify --self`:
   ~/.claude/bin/cc-await-ping <YOUR-PANE-UUID> --timeout 14400 --interval 15
 **RE-ARM IT AFTER EVERY WAKE — it is single-shot, and one wake makes you deaf.**
-🚨 **ARM THE EXACT KEY THE WAKE-FLOOR HOOK PRINTS — NEVER HAND-PICK ONE.** Earlier payloads on this
-campaign (including an earlier version of THIS one) said "use the pane uuid, never your session id."
-**That is now WRONG, and the coordinator shipped it twice before tracing it.** The truth, read off the
-DEPLOYED `hooks/session-continue.sh:180-205`: `mailbox-drain.sh` reads the SESSION-keyed box whenever
-it knows its session id (`CC_MBX_SESSION_KEY` default 1) and writes a pane→session **alias** on the
-way, so **the canonical key CHANGES once your pane has been drained.** `mailbox_resolve_key` is the
-lib's one implementation of that mapping, and it falls back to the pane when no alias exists — which
-is why a freshly-fired row resolves to its own pane while a long-running one resolves to its session
-id. `bin/cc-await-ping` resolves NO alias; it watches the key it is handed, literally. Therefore:
-  · Arm with the exact command the `🔔 WAKE FLOOR` Stop-hook message hands you — it has already
-    resolved the key. Do not substitute your own reasoning about which uuid is "right".
-  · Verify with the lib's own predicate, never `pgrep` (which reported 0 for a watcher that was
-    provably running):
+🚨 **ARM BOTH KEYS — THE PANE AND THE SESSION. Neither alone works, and this is measured end-to-end.**
+An earlier version of this payload said "use the pane uuid, never your session id"; a later one said the
+opposite. **Both were half right, and the coordinator shipped each in turn.** The system derives the
+mailbox key independently at three hops and they disagree:
+  · **SENDERS write the PANE box.** `bin/cc-notify` has **ZERO** `mailbox_resolve_key` call sites
+    (positive control: `hooks/session-continue.sh` has 3) and at `:508` appends to
+    `$MAILBOX_DIR/$uuid.md` with the key it is handed, unresolved.
+  · **The DRAIN and the WAKE FLOOR read the SESSION box** — `hooks/mailbox-drain.sh:64-65` sets
+    `own_uuid="$own_sid"` whenever `CC_MBX_SESSION_KEY` (default 1) is on.
+  · **`cc-notify:644` checks `wake_path_armed` against the PANE**, so its `reason=no-watcher` field is a
+    FALSE NEGATIVE against a session-armed peer. Do not trust that field.
+Measured cost of getting this wrong: a sibling counted **79 pane-keyed boxes holding 1,747 unacked lines
+against 30 session-keyed holding 267**, and the coordinator killed its own pane watchers on a
+half-correct reading and lost a row's DONE ping to the gap. Therefore:
+  · Arm **TWO** background watchers — one on your PANE uuid (`~/.claude/bin/cc-notify --self`), one on
+    the key the `🔔 WAKE FLOOR` Stop-hook message prints. Both are single-shot; **re-arm each after
+    every wake.** The pane one catches peer mail; the session one satisfies the floor.
+  · Verify each with the lib's own predicate, never `pgrep` (which returned 0 for a watcher that `ps`
+    and the lib both confirmed alive):
       bash -c '. ~/.claude/hooks/lib/mailbox-pending.sh; mailbox_wake_armed <KEY> && echo ARMED'
-  · **RE-ARM AFTER EVERY WAKE, again with the key the hook prints** — the canonical key can move
-    under you. The coordinator watched a stale pane key for ~2 h with FOUR watchers running and read
-    as UNARMED to the floor the entire time, because the alias had moved the box.
-Why it matters to you specifically: a row inside an hours-long autonomous turn is reachable ONLY
-through the watcher it arms here — so an arm on the wrong key is indistinguishable from no wake path
-at all.
+**THE DURABLE LESSON, and it generalises past mailboxes: A FIX TO THE ADVERTISER IS NOT A FIX TO THE
+WRITER.** Commit `9586f1ac` corrected what the hook *tells* you to arm, and every verification of it
+passed because the advertiser and the reader genuinely agreed — the hop nobody re-checked was the
+SENDER. When a key is derived independently at N hops, verify the ROUND TRIP end-to-end (write as a
+peer, drain as the recipient), never one hop against its neighbour.
 
 STEP 1 (one short command): arm your standing goal so you drive to DONE across recycles —
   ~/.claude/hooks/dod-persist.sh set "Scope (frozen): row 9 memory & knowledge — durable knowledge
