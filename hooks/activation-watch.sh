@@ -86,18 +86,42 @@ emit() { # <context-string> — SessionStart additionalContext (JSON form, match
   fi
 }
 
-age_axis() { # → the staleness finding (axis 1), empty when the queue is clean
-  local now f mt stale=()
+age_axis() { # → the QUEUE finding (axis 1), empty only when the queue is genuinely empty
+  # M3 (OPERATOR_SURFACE_V2 §4 F7) — PARTITION, never FILTER. The >MAX_AGE_H gate was built against
+  # rot ("do not nag about something staged five minutes ago") and it hid the newest entries, which
+  # are exactly the ones a just-finished rebuild staged and the ones the operator still has context
+  # for. Measured 2026-07-29: 13 pending, 6 named — so the operator read "6 pending" and believed
+  # that was the queue, while `18-fleet-activate.sh` (12 dark launchd labels), `16-session-beat` and
+  # `17-qos-chokepoint` sat in the invisible half. Same law as the class budget: a surface may
+  # de-emphasise a class, never delete it.
+  # Kill switch: CC_ACTIVATION_AGE_FILTER=on restores the >MAX_AGE_H filter exactly.
+  local now f mt stale=() fresh=() n
   now="$(date +%s)"
   for f in "$DIR"/*.sh; do
     [ -f "$f" ] || continue
     [ -f "$f.done" ] && continue                 # already run (operator touched the marker)
     mt="$(stat -f %m "$f" 2>/dev/null || echo "$now")"
-    [ $(( now - mt )) -ge "$MAX_AGE_S" ] && stale+=("$(basename "$f")")
+    if [ $(( now - mt )) -ge "$MAX_AGE_S" ]; then stale+=("$(basename "$f")")
+    else                                              fresh+=("$(basename "$f")"); fi
   done
-  [ "${#stale[@]}" -eq 0 ] && return 0
-  printf 'ACTIVATION QUEUE (absence-is-loud, D-v): %s pending-activation script(s) staged >%sh and NOT run — %s. These are C10 operator hand-steps (agent stages, operator runs): review + run %s/<name>, then `touch %s/<name>.done`. An un-run activation is silently-incomplete wiring.\n' \
-    "${#stale[@]}" "$MAX_AGE_H" "$(join_names "${stale[@]}")" "$DIR" "$DIR"
+  if [ "${CC_ACTIVATION_AGE_FILTER:-off}" = on ]; then
+    [ "${#stale[@]}" -eq 0 ] && return 0
+    printf 'ACTIVATION QUEUE (absence-is-loud, D-v): %s pending-activation script(s) staged >%sh and NOT run — %s. These are C10 operator hand-steps (agent stages, operator runs): review + run %s/<name>, then `touch %s/<name>.done`. An un-run activation is silently-incomplete wiring.\n' \
+      "${#stale[@]}" "$MAX_AGE_H" "$(join_names "${stale[@]}")" "$DIR" "$DIR"
+    return 0
+  fi
+  n=$(( ${#stale[@]} + ${#fresh[@]} ))
+  [ "$n" -eq 0 ] && return 0
+  local out
+  out="$(printf 'ACTIVATION QUEUE (absence-is-loud, D-v): %s pending-activation script(s) NOT run. These are C10 operator hand-steps (agent stages, operator runs): review + run %s/<name>, then `touch %s/<name>.done`. An un-run activation is silently-incomplete wiring.' "$n" "$DIR" "$DIR")"
+  # ROTTING first — age is the escalation signal, so it leads. But the count above is the QUEUE.
+  if [ "${#stale[@]}" -gt 0 ]; then
+    out="$out"$'\n'"  ROTTING (>${MAX_AGE_H}h, ${#stale[@]}): $(join_names "${stale[@]}")"
+  fi
+  if [ "${#fresh[@]}" -gt 0 ]; then
+    out="$out"$'\n'"  FRESH (<${MAX_AGE_H}h, ${#fresh[@]}) — staged by a session whose context is probably still open, i.e. the cheapest moment to run them: $(join_names "${fresh[@]}")"
+  fi
+  printf '%s\n' "$out"
 }
 
 inert_axis() { # → axis 3: a `.done` marker whose EFFECT never landed (empty when every claim holds)
@@ -108,35 +132,94 @@ inert_axis() { # → axis 3: a `.done` marker whose EFFECT never landed (empty w
   # 02-load-dispatcher and 03-load-discovery were marked .done on Jul 19/20 and neither job was ever
   # bootstrapped — 10 days of a backlog that could not drain, reported as fully activated.
   # A marker records that the SCRIPT RAN. Only launchctl records that the EFFECT LANDED. Read the effect.
-  local f label inert=()
-  command -v launchctl >/dev/null 2>&1 || return 0
+  #
+  # M5 (§4 F9) — TWO FIXES, both row 12's laws applied one layer out.
+  # (a) SCOPE. The label pattern was `com\.claude\.` only, so an activation whose effect is a
+  #     `com.chrisren.*` label was unverifiable BY CONSTRUCTION — and one such script is staged right
+  #     now (`13-mailbox-gc-activate.sh`). A `com.claude`-only scope is exactly what hid row 4's live
+  #     reaper from the fleet audit; the declared fleet is 20 labels across two families.
+  # (b) STATE. `launchctl list` alone cannot tell DISABLED from NOT-INSTALLED, and those have
+  #     OPPOSITE fixes (`enable` vs `bootstrap`), so the row used to send the operator to the wrong
+  #     one half the time. The literal `=> disabled` read from the override DB separates them —
+  #     `print-disabled` prints `"<label>" => disabled|enabled`, NEVER true/false, and grepping the
+  #     plist vocabulary against the CLI returns a confident ZERO (the trap that cost the campaign
+  #     coordinator a read on 2026-07-29).
+  # NOT a reimplementation of launchd health: the six-state verdict (NEVER-RAN / FAILING / STALLED /
+  # UNDECIDED …) is `bin/cc-fleet`'s, declared in launchd/fleet.manifest, and this axis consumes that
+  # board rather than competing with it. Axis 3 asks strictly "did the EFFECT land at all?", where
+  # `list`'s absent-means-not-loaded is the safe direction.
+  # Kill switch: CC_ACTIVATION_INERT_SCOPE=claude restores the com.claude-only pattern.
+  local f label inert=() listing disabled_db uid pat state lc
+  # A SEAM (CC_ACTIVATION_LAUNCHCTL_BIN), and not decoration: without it this axis reads the
+  # OPERATOR's real launchd from inside the suite and the verdict flips by machine — borrowed
+  # hermeticity (memory hermetic-suite-leaks-caller-identity). READ-ONLY subcommands only.
+  lc="${CC_ACTIVATION_LAUNCHCTL_BIN:-launchctl}"
+  command -v "$lc" >/dev/null 2>&1 || return 0
+  pat='com\.(claude|chrisren)\.[a-z0-9-]+'
+  [ "${CC_ACTIVATION_INERT_SCOPE:-both}" = claude ] && pat='com\.claude\.[a-z0-9-]+'
+  listing="$("$lc" list 2>/dev/null)" || return 0          # no sensor ⇒ no verdict (fail-open)
+  uid="$(id -u 2>/dev/null || true)"
+  case "${uid:-}" in ''|*[!0-9]*) disabled_db="" ;; *) disabled_db="$("$lc" print-disabled "gui/$uid" 2>/dev/null || true)" ;; esac
   for f in "$DIR"/*.sh; do
     [ -f "$f" ] || continue
     [ -f "$f.done" ] || continue                 # axis 1 already owns the un-run case
     # Only the launchd class is effect-readable here; a script naming no label is out of scope.
-    label="$(grep -oE 'com\.claude\.[a-z0-9-]+' "$f" 2>/dev/null | head -1)"
+    label="$(grep -oE "$pat" "$f" 2>/dev/null | head -1)"
     [ -n "$label" ] || continue
-    launchctl list 2>/dev/null | awk -v l="$label" '$3==l{found=1} END{exit !found}' && continue
-    inert+=("$(basename "$f") → $label")
+    # $NF, not $3: matches the label as a whole final field, the idiom bin/cc-blockers already uses.
+    printf '%s\n' "$listing" | awk -v l="$label" '$NF==l{found=1} END{exit !found}' && continue
+    state="NOT-LOADED"
+    printf '%s\n' "$disabled_db" | grep -q "\"$label\" => disabled" && state="DISABLED"
+    inert+=("$(basename "$f") → $label [$state]")
   done
   [ "${#inert[@]}" -eq 0 ] && return 0
   printf 'ACTIVATION CLAIMED-DONE BUT INERT (axis 3, effect-read): %s activation(s) carry a `.done` marker while their launchd job is NOT loaded — %s. A `.done` marker proves the SCRIPT RAN, never that the EFFECT LANDED: these scripts print their commands and only cp+lint+bootstrap under CONFIRM=1, so a bare run + `touch` silences axis 1 permanently over a job that was never bootstrapped. Re-run with CONFIRM=1: `CONFIRM=1 bash %s/<name>` — then this axis clears itself, because it reads launchctl, not the marker.\n' \
     "${#inert[@]}" "$(join_names "${inert[@]}")" "$DIR"
 }
 
+# M4 (OPERATOR_SURFACE_V2 §4 F8) — LIVE-ONLY must be adjudicated against TRUNK, not the working
+# tree. resolve_mirror() dereferences to the SHARED CHECKOUT, so parity is live-vs-checkout; while
+# that checkout trails origin/main, a file that IS committed reads as "never committed, one `rm` from
+# unrecoverable" and the platter says `cp live -> repo`, creating a local diff the next fast-forward
+# must conflict on. Deploy lag wearing a parity costume, and in the one direction that does damage.
+# Latent on 2026-07-29 (all four live drifts were real, verified live-vs-origin/main) — fixed before
+# it fired rather than after.
+# Returns: 0 = present on trunk (so NOT live-only), 1 = genuinely absent, 2 = cannot tell.
+on_trunk() { # <repo-root> <basename>
+  [ "${CC_ACTIVATION_TRUNK_ADJUDICATE:-on}" = off ] && return 1
+  local root="$1" b="$2" ref
+  [ -n "$root" ] && [ -e "$root/.git" ] || return 2
+  ref="$(git -C "$root" rev-parse --verify --quiet origin/HEAD 2>/dev/null || true)"
+  [ -n "$ref" ] || ref="$(git -C "$root" rev-parse --verify --quiet origin/main 2>/dev/null || true)"
+  [ -n "$ref" ] || return 2                       # no trunk ref ⇒ NO verdict, never a guess
+  git -C "$root" cat-file -e "$ref:$MIRROR_REL/$b" 2>/dev/null && return 0
+  return 1
+}
+
 parity_axis() { # → the live-vs-repo SSOT finding (axis 2), empty when the two copies agree
-  local mirror f b lonly=() ronly=() cdrift=() n out
+  local mirror f b lonly=() ronly=() cdrift=() undep=() n out root lag tv
   if ! mirror="$(resolve_mirror)"; then
     # Loud-not-silent: an unrunnable check is a finding, not a pass (see the 816015ecb30b note).
     printf 'ACTIVATION SSOT PARITY: the repo mirror could not be resolved (no checkout at %s, and no %s/%s) — the live-vs-repo parity check DID NOT RUN. Point CC_ACTIVATION_MIRROR_DIR at the repo copy to restore it.\n' \
       "$MIRROR_REL" "$FALLBACK_REPO" "$MIRROR_REL"
     return 0
   fi
+  root="${mirror%/"$MIRROR_REL"}"
+  # The checkout's own trunk position, carried on every finding: a parity number computed against a
+  # behind-checkout is not a parity number, and the operator must be able to see that before acting.
+  lag="$(git -C "$root" rev-list --count 'HEAD..@{u}' 2>/dev/null || true)"
+  case "${lag:-}" in ''|*[!0-9]*) lag="" ;; esac
   for f in "$DIR"/*.sh; do
     [ -f "$f" ] || continue
     b="$(basename "$f")"
     [ -f "$f.local" ] && continue                # declared intentionally live-only
-    if [ ! -f "$mirror/$b" ]; then lonly+=("$b")
+    if [ ! -f "$mirror/$b" ]; then
+      on_trunk "$root" "$b"; tv=$?
+      case "$tv" in
+        0) undep+=("$b") ;;                      # committed on trunk, absent from THIS checkout
+        1) lonly+=("$b") ;;                      # genuinely never committed
+        *) lonly+=("$b (trunk unreadable — verdict UNCONFIRMED)") ;;
+      esac
     elif ! cmp -s "$f" "$mirror/$b"; then cdrift+=("$b"); fi
   done
   for f in "$mirror"/*.sh; do
@@ -145,9 +228,14 @@ parity_axis() { # → the live-vs-repo SSOT finding (axis 2), empty when the two
     [ -f "$DIR/$b" ] || ronly+=("$b")
   done
 
-  n=$(( ${#lonly[@]} + ${#ronly[@]} + ${#cdrift[@]} ))
+  n=$(( ${#lonly[@]} + ${#ronly[@]} + ${#cdrift[@]} + ${#undep[@]} ))
   [ "$n" -eq 0 ] && return 0
-  out="$(printf 'ACTIVATION SSOT PARITY (D-v axis 2): %s drift(s) — live %s vs repo %s.' "$n" "$DIR" "$mirror")"
+  out="$(printf 'ACTIVATION SSOT PARITY (D-v axis 2): %s drift(s) — live %s vs repo %s%s.' "$n" "$DIR" "$mirror" \
+    "$( [ -n "$lag" ] && [ "$lag" != 0 ] && printf ' (this checkout is %s commit(s) BEHIND its trunk — every finding below is live-vs-checkout, so read it with that in mind)' "$lag" )")"
+  if [ "${#undep[@]}" -gt 0 ]; then
+    out="$out"$'\n'"  UNDEPLOYED-MIRROR — committed ON TRUNK but absent from this checkout, i.e. DEPLOY LAG, not a missing commit: $(join_names "${undep[@]}")"
+    out="$out"$'\n'"    ▶ git -C $root fetch origin main && git -C $root merge --ff-only origin/main   # do NOT cp live->repo: it would recreate a committed file as a local diff the next ff must conflict on"
+  fi
   if [ "${#lonly[@]}" -gt 0 ]; then
     out="$out"$'\n'"  LIVE-ONLY — never committed, one \`rm\` from unrecoverable: $(join_names "${lonly[@]}")"
     out="$out"$'\n'"    ▶ cp $DIR/<name> $mirror/<name>   # then commit it; or \`touch $DIR/<name>.local\` if intentionally live-only"
@@ -205,7 +293,15 @@ selftest() {
   # mirror := the queue itself ⇒ axis 2 is trivially in parity, so axis 1 is measured alone
   out="$(CC_ACTIVATION_DIR="$d/q" CC_ACTIVATION_MIRROR_DIR="$d/q" CC_ACTIVATION_MAX_AGE_H=24 "$SELF")"
   printf '%s' "$out" | grep -q 'stale-activate.sh' && okp "stale un-run script is named" || badp "stale un-run NOT named"
-  printf '%s' "$out" | grep -q 'fresh-activate.sh' && badp "fresh script wrongly named" || okp "fresh (<24h) script NOT named"
+  # CHANGED 2026-07-29 (row 10, §4 F7): axis 1 PARTITIONS instead of FILTERING, so a fresh un-run
+  # script is now NAMED — under a FRESH heading, not a rotting one. The old assertion pinned the
+  # >24h gate that hid the campaign's own freshest activations.
+  printf '%s' "$out" | grep -q 'fresh-activate.sh' && okp "fresh (<24h) script IS named (partitioned)" || badp "fresh script NOT named"
+  printf '%s' "$out" | grep -q 'ROTTING' && okp "rotting partition labelled" || badp "no ROTTING partition"
+  printf '%s' "$out" | grep -q 'FRESH'   && okp "fresh partition labelled"   || badp "no FRESH partition"
+  printf '%s' "$out" | grep -q '2 pending-activation script(s) NOT run' && okp "the count is the QUEUE (2), not a filtered subset (1)" || badp "count is not the queue"
+  out2="$(CC_ACTIVATION_DIR="$d/q" CC_ACTIVATION_MIRROR_DIR="$d/q" CC_ACTIVATION_AGE_FILTER=on "$SELF")"
+  printf '%s' "$out2" | grep -q 'fresh-activate.sh' && badp "kill switch did not restore the filter" || okp "CC_ACTIVATION_AGE_FILTER=on restores the >24h filter"
   printf '%s' "$out" | grep -q 'done-activate.sh'  && badp ".done-marked script wrongly named" || okp ".done-marked script NOT named"
   printf '%s' "$out" | grep -q 'ACTIVATION QUEUE'  && okp "emits the absence-is-loud line" || badp "no activation-queue line"
   if [ -n "$JQ" ]; then
@@ -213,9 +309,10 @@ selftest() {
       && okp "output is valid SessionStart additionalContext JSON" || badp "output not valid SessionStart JSON"
   else okp "jq absent — plain-stdout fallback (skipped JSON check)"; fi
 
-  # only fresh + done → NO output, exit 0
+  # a genuinely EMPTY queue → NO output, exit 0. `.done`-marked, not merely fresh: since axis 1
+  # partitions, "nothing pending" is the only silent state, which is the honest definition of clean.
   mkdir -p "$d/clean"
-  printf '#!/bin/bash\n' > "$d/clean/fresh.sh"
+  printf '#!/bin/bash\n' > "$d/clean/fresh.sh"; : > "$d/clean/fresh.sh.done"
   out="$(CC_ACTIVATION_DIR="$d/clean" CC_ACTIVATION_MIRROR_DIR="$d/clean" "$SELF")"; rc=$?
   { [ -z "$out" ] && [ "$rc" -eq 0 ]; } && okp "no stale scripts → silent, exit 0" || badp "spurious output on a clean queue"
 
@@ -225,6 +322,8 @@ selftest() {
 
   # ══ axis 2: SSOT parity — live `p/live` vs repo mirror `p/repo`, every fixture FRESH so axis 1
   #    stays silent and each finding below is attributable to the parity axis alone ═══════════
+  # `.done`-marked (not merely fresh) since axis 1 partitions: freshness no longer buys silence, and
+  # borrowing another axis's quiet is not isolation.
   mkdir -p "$d/p/live" "$d/p/repo"
   printf '#!/bin/bash\n# same\n' > "$d/p/live/same-activate.sh"
   printf '#!/bin/bash\n# same\n' > "$d/p/repo/same-activate.sh"
@@ -233,6 +332,7 @@ selftest() {
   printf '#!/bin/bash\n'         > "$d/p/live/liveonly-activate.sh"
   printf '#!/bin/bash\n'         > "$d/p/repo/repoonly-activate.sh"
   printf '#!/bin/bash\n'         > "$d/p/live/intentional-activate.sh"; : > "$d/p/live/intentional-activate.sh.local"
+  for _f in "$d/p/live"/*.sh "$d/p/repo"/*.sh; do : > "$_f.done"; done      # axis-1 silence, by marker
 
   out="$(CC_ACTIVATION_DIR="$d/p/live" CC_ACTIVATION_MIRROR_DIR="$d/p/repo" "$SELF")"
   printf '%s' "$out" | grep -q 'liveonly-activate.sh'    && okp "LIVE-ONLY named (the unrecoverable class)"   || badp "LIVE-ONLY drift NOT named"
