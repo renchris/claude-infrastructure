@@ -115,6 +115,15 @@ HARD-WON RULES — each has cost this campaign real work:
 - Commit only in this worktree (gu-coordinator on gu/coordinator). Land continuously via
   `scripts/ship-land.sh`. The stranded-sweep reporting ~150 commits across ~880 branches is peers'
   expected WIP — never cherry-pick it; only your own dropped land matters.
+- 🚨 **RUN `ship-land.sh` WITH run_in_background=true, ALWAYS.** In the foreground it exceeds the Bash
+  tool's 2-minute default and gets **SIGTERM'd (exit 143)** during its post-push stranded-sweep over
+  ~880 branches. **That kill happens AFTER the push and looks exactly like a failed land** — I hit it
+  on `f51b2fac`, which was already on trunk and content-verified while the tool reported a timeout.
+  This is the campaign's "gate-never-ran ≠ gate-red" third state wearing a new mask: do NOT re-run and
+  do NOT panic. Diagnose it in this order — `git rev-list --count origin/main..HEAD` (0 ⇒ it landed) ·
+  content-verify the file on `origin/main` · then check for a **stranded lock** (`/tmp/land-lock-*/lock.d`
+  with a `pid` that `kill -0` says is DEAD), which is the one outcome that actually jams every other
+  writer and must be reported. In my case: no lock dir, no orphaned procs, tree clean.
 - **NEVER hand-patch another row's surface.** Per the row-10 precedent, a defect in a row's territory
   gets fixed by that row with the full proof bar. Rule the seam, hand over the evidence, stand back.
 - Recycle at >=50% context, or earlier if idle, via
