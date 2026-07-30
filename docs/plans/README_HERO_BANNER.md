@@ -499,10 +499,12 @@ scripts/banner-verify.sh --self-test               # proves the gate's own guard
 > `--times 0,240` then "compare the two PNG hashes — MUST be identical". **Chromium's PNG encoder is
 > not deterministic in this harness**: the same asset frozen at the same timestamp renders to two
 > different FILES (measured 2026-07-29: `ee6b3378…` vs `55fab65e…`). So that comparison has a
-> false-FAILURE mode and its passes were luck, not proof. `banner-verify.sh` decodes to raw RGBA and
-> hashes the PIXELS, which is what the seam claim is actually about — corroborated independently by
-> `magick compare -metric AE` reporting 0 differing pixels. The missing-file guard noted originally
-> still stands and is now self-tested.
+> **false-FAILURE mode — it can go red on a pixel-perfect render.** Its PASSES were always sound,
+> though: bytes-identical trivially implies pixels-identical, so the check could only ever err red,
+> never green (see § S15 for the correction to an earlier over-claim here). `banner-verify.sh`
+> decodes to raw RGBA and hashes the PIXELS, which is what the seam claim is actually about —
+> corroborated independently by `magick compare -metric AE` reporting 0 differing pixels. The
+> missing-file guard noted originally still stands and is now self-tested.
 
 **Still open — the operator's standing ask:** a from-the-ground-up *"Opus 5 design-quality
 show-off"* pass. `v5a-long-walk.svg` is the working reference implementation of every constraint
@@ -619,11 +621,53 @@ together; under the old blanket override **all three render the same colour**.
 Found because S14 made SEAM start failing while `magick compare -metric AE` reported **0 differing
 pixels**. The same asset frozen at the same timestamp, rendered twice, produces two different
 **files** (`ee6b3378…` vs `55fab65e…`). So the long-prescribed "compare the two PNG hashes" check
-has a **false-FAILURE mode, and every pass it ever recorded was luck rather than proof**.
+has a **false-FAILURE mode**: it can go red on a render that is pixel-perfect.
+
+> **CORRECTION — the first draft of this section over-claimed, and the direction of the error is
+> worth keeping.** It said "every pass it ever recorded was luck rather than proof". That is wrong.
+> The observation was two *different* files with *zero* differing pixels, so bytes-differ does not
+> imply pixels-differ — but **bytes-identical trivially implies pixels-identical**, since the same
+> bytes decode to the same image. The old check could therefore only ever produce a false **RED**,
+> never a false **GREEN**. Every seam PASS it recorded stands as sound proof; only its failures were
+> untrustworthy. Hashing decoded pixels is still the right fix — it removes a flaky red — but it
+> does not void the green history. (Raised by the lead session, who also could not reproduce the
+> divergence in 5 consecutive renders; combined with the one observation here, the nondeterminism is
+> **intermittent**, which is harder to debug than a reliable fault and is why the fix earns its
+> place.)
 
 `banner-verify.sh` decodes to raw RGBA and hashes the **pixels**. Its decode path is guarded too: a
 corrupt-but-non-empty file must not return the md5 of an empty stream, or the emptiness guard
 downstream ends up comparing two hashes of nothing — the same false-PASS shape in a new costume.
+
+### S16 · The timeline ANCHORS AT LOAD — the opening seconds are the product
+
+The panel's synthesis rests on this, so it was verified rather than accepted. **Confirmed:** an SVG
+loaded as an image starts its CSS timeline when the image begins rendering, so every reader who
+scrolls past the README sees **t=0**. A beat placed late in the loop is not rare, it is *unseen*.
+
+Re-runnable: `scripts/banner-timeline-anchor.sh assets/banner/<f>.svg`.
+
+**The first version of this test was wrong, and the failure mode generalises.** It rendered the
+unfrozen asset twice, 25 s apart, compared them, found them different, and concluded "not
+load-anchored". That is not decisive: a load-anchored timeline *also* yields two different renders,
+because the screenshot fires at a slightly variable delay after load and this asset has a 0.5 s
+stepped stride — 250 ms of jitter flips the legs. "Differs" cannot separate **jitter** from
+**drift**, so the naive test produced a confident refutation on evidence equally consistent with
+confirmation.
+
+The decisive form measures *which phase* each render is at, by matching against frozen references:
+
+| render | best match | RMSE |
+| --- | --- | --- |
+| raw, immediately | **t = 0** | 0.000 % |
+| raw, 25 s later | **t = 0** | 0.189 % (jitter, not 25 s of drift) |
+| control: frozen t=0 vs t=25 | — | differ, so 25 s of motion *is* detectable |
+
+The 0.000 % is also an independent validation of the freeze itself: the frozen t=0 frame is
+pixel-exact against a live render of the unmodified file.
+
+**Rule this produces:** the first beat wants to be at **t≈2.5–4 s**, and anything after ~t=45 s is
+decoration. `shoot` at t=228 s was never rare — it was invisible.
 
 **Regenerate:** `python3 tools/banner/gen.py --out assets/banner` then
 `python3 tools/banner/compare.py --stills <dir>`. Verify: `scripts/banner-verify.sh <svg>`
