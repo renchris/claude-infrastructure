@@ -118,3 +118,70 @@ agree() { # <path> <expected: yes|no>
     fi
   done
 }
+
+# ── 6. the THIRD STATE — "cannot read the answer" ≠ "nobody typed" ─────────────────────────────────
+# ce_ took this split on 2026-07-25 (51521697) for its reap consumers; ci_ took it on 2026-07-29 to
+# close C-SC-1, because the actuators that gate on ci_ — bin/cc-teardown's adoption belt and
+# hooks/teammate-auto-shutdown.sh's TeammateIdle close — are the ones that actually KILL a pane, and a
+# two-valued answer made them read an unreadable transcript as "no adoption → close". Both predicates
+# must now answer THREE ways, identically, or a closer's fail-closed branch is unreachable on one leg.
+#
+# Verdict normalizes each predicate's (stdout, rc) pair onto the shared vocabulary:
+#   adopted    = digits           (an operator turn was seen)
+#   none       = "" — a FACT      (the transcript parsed; nobody typed) — the ONLY licence to close
+#   unreadable = "unreadable"     (no path / unreadable / no jq / not one well-formed record)
+verdict() { # <predicate-fn> <path> → adopted|none|unreadable
+  local out rc=0
+  out="$("$1" "$2" 2>/dev/null)" || rc=$?
+  case "$out" in
+    unreadable) printf unreadable ;;
+    '')         if [ "$rc" = 2 ]; then printf unreadable; else printf none; fi ;;
+    *[!0-9]*)   printf none ;;
+    *)          printf adopted ;;
+  esac
+}
+
+# each row: <fixture-builder> <expected shared verdict>. One table, both predicates, no per-leg drift.
+@test "third state: both predicates agree on adopted / none / unreadable across every readability shape" {
+  local shape want got_ce got_ci
+  for shape in typed quiet corrupt empty missing nulls; do
+    TX="$T/$shape.jsonl"; : > "$TX"
+    case "$shape" in
+      typed)   mk_text "$(( NOW - 60 ))" "still here"; want=adopted ;;
+      # POSITIVE CONTROL for the whole split: a transcript that PARSES and holds only assistant/tool
+      # traffic is the "nobody typed" FACT. If this ever answered unreadable, every closer would be
+      # wedged forever and the fail-closed branches below would be indistinguishable from inert.
+      quiet)   mk_tool "$(( NOW - 40 ))"; mk_pad 3; want=none ;;
+      corrupt) printf 'not json at all\n\x00\x01binary garbage\n{"half":\n' > "$TX"; want=unreadable ;;
+      empty)   : > "$TX"; want=unreadable ;;
+      missing) TX="$T/does-not-exist.jsonl"; want=unreadable ;;
+      # a file of well-formed JSON that is not one OBJECT (bare scalars) — parses per line, yields no
+      # record: still "we could not read an answer", not "nobody typed".
+      nulls)   printf 'null\n42\n"a string"\n' > "$TX"; want=unreadable ;;
+    esac
+    got_ce="$(verdict ce_last_interactive_age "$TX")"
+    got_ci="$(verdict ci_last_interactive_epoch "$TX")"
+    [ "$got_ce" = "$want" ] || { echo "ce_ on '$shape': got $got_ce, wanted $want" >&2; return 1; }
+    [ "$got_ci" = "$want" ] || { echo "ci_ on '$shape': got $got_ci, wanted $want" >&2; return 1; }
+  done
+}
+
+# The rc is the machine-readable half of the contract — a consumer branches on IT, not on the string.
+@test "third state: ci_ returns rc 2 for unreadable and rc 1 for a parsed-but-quiet transcript" {
+  TX="$T/quiet.jsonl"; : > "$TX"; mk_tool "$(( NOW - 30 ))"
+  local rc=0; ci_last_interactive_epoch "$TX" >/dev/null 2>&1 || rc=$?
+  [ "$rc" = 1 ] || { echo "parsed-but-quiet should be rc 1 (the FACT), got rc $rc" >&2; return 1; }
+  printf 'garbage\n' > "$T/bad.jsonl"
+  rc=0; ci_last_interactive_epoch "$T/bad.jsonl" >/dev/null 2>&1 || rc=$?
+  [ "$rc" = 2 ] || { echo "corrupt should be rc 2 (unreadable), got rc $rc" >&2; return 1; }
+}
+
+# The whole-file fallback must not be confused WITH the discriminator: a prompt buried past the tail
+# window is ADOPTED (readable, found late), never "unreadable".
+@test "third state: a tail-evicted prompt is ADOPTED, not unreadable (fallback beats the discriminator)" {
+  TX="$T/evicted.jsonl"; : > "$TX"
+  mk_text "$(( NOW - 100 ))" "buried past the window"; mk_pad 40
+  export CC_CE_TAIL_BYTES=512 CC_CLASSIFY_INTERACTIVE_TAIL_BYTES=512
+  [ "$(verdict ce_last_interactive_age "$TX")" = adopted ] || { echo "ce_ lost the buried prompt" >&2; return 1; }
+  [ "$(verdict ci_last_interactive_epoch "$TX")" = adopted ] || { echo "ci_ lost the buried prompt" >&2; return 1; }
+}

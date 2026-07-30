@@ -52,31 +52,14 @@ setup() {
 }
 
 # ── operator-adoption belt (2026-07-24) — never auto-close a pane a human is conversing with ─────────
-# The WHO-primitive ci_last_interactive_epoch lands separately in hooks/lib/cc-interactive.sh; a STUB
-# is written here so these tests are landing-order-independent.
-write_interactive_stub() { # <path>
-  cat > "$1" <<'STUB'
-#!/usr/bin/env bash
-ci_last_interactive_epoch() {
-  local f="${1:-}" rx ep
-  [ -n "$f" ] && [ -f "$f" ] || return 1
-  rx="${CC_CLASSIFY_AUTO_RX:-^<task-notification>|^<local-command-stdout>|^Stop hook feedback:|^\\[Request interrupted|^⟳|^⚑|^⚠}"
-  ep="$(tail -c "${CC_CLASSIFY_INTERACTIVE_TAIL_BYTES:-2000000}" "$f" 2>/dev/null | jq -Rr --arg rx "$rx" '
-      fromjson? | objects
-      | select(.type=="user") | select(.isMeta != true)
-      | (.message.content) as $c
-      | ( if ($c|type)=="string" then $c
-          elif ($c|type)=="array" and ([$c[]? | select(.type?=="tool_result")] | length)==0
-          then ([$c[]? | select(.type?=="text") | .text] | join("\n"))
-          else empty end ) as $t
-      | select(($t|length) > 0)
-      | select($t | test($rx) | not)
-      | (.timestamp | strings | sub("\\.[0-9]+Z$"; "Z") | try fromdateiso8601 catch empty)
-    ' 2>/dev/null | tail -1)"
-  case "$ep" in ''|*[!0-9]*) return 1 ;; esac
-  printf '%s' "$ep"
-}
-STUB
+# The WHO-primitive is hooks/lib/cc-interactive.sh. Until 2026-07-29 this wrote a hand-rolled COPY of
+# the predicate ("the lib lands separately"), which is fixture drift by construction: the lib grew the
+# image-only-paste leg, the whole-file fallback and then the THREE-VALUED unreadable answer, while the
+# copy stayed on the original two-valued body — so a test asserting the belt's fail-closed branch would
+# have been green against a predicate that no longer exists. The lib is in-tree now, so the shim SOURCES
+# THE REAL THING and the drift is unconstructible (memory: fixture-vs-real needs a producer).
+write_interactive_stub() { # <path> — a shim onto the REAL lib, never a re-implementation
+  printf '#!/usr/bin/env bash\n. "%s"\n' "$REPO/hooks/lib/cc-interactive.sh" > "$1"
 }
 
 # ADOPTED target U-AD: a REAL operator prompt 60s ago, spawn 1h ago. Dead pid (4000000, > kern.maxproc)
@@ -171,6 +154,80 @@ IT2
   now=1000000000   # the fixture's pinned clock (CC_CLASSIFY_NOW)
   export CC_BEAT_NOW="$now"
   # fresh beat (system IS live) but the operator high-water mark is far older than the hold
+  printf '{"sid":"sidAD","t":%s,"who":"auto","operatorT":%s,"seq":9}\n' "$now" "$(( now - 99999 ))" > "$CC_BEAT_DIR/sidAD.json"
+  CC_CLASSIFY_INTERACTIVE_HOLD_S=600 run "$T" U-AD --done-evidence "looks done" --decided-at "$now"
+  [ "$status" -eq 0 ]
+  rec="$(find "$CC_TEARDOWN_RECORDS_DIR" -name '*.json' | head -1)"
+  [ "$(jq -r '.decision' "$rec")" = "TEARDOWN" ]
+}
+
+# ── THIRD STATE (2026-07-29, C-SC-1) — the lib is PRESENT but has no answer to give ───────────────
+# The three arms above all concern an ABSENT lib. A distinct and much more common gap went straight
+# through the belt to the close: the lib is present and working, but the target's transcript cannot be
+# READ (corrupt / truncated / empty) or cannot be RESOLVED at all. ci_last_interactive_epoch answered
+# those with the same empty string it used for "parsed, nobody typed", so the belt's `[ -n "$iep" ]`
+# test fell through and the pane was closed — the identical absence-of-evidence-as-evidence-of-absence
+# defect §4.3.5 inverted for the lib-absent arm, still live on the arm that fires far more often.
+# Both now route through beat_or_refuse, the same second-oracle path, and record presence-unprovable.
+set_transcript() { # <corrupt|missing|quiet> — rewrite the adopted fixture's transcript in place
+  local mode="$1" f="$BATS_TEST_TMPDIR/proj/slug/sidAD.jsonl"
+  case "$mode" in
+    corrupt) printf 'not json at all\n\x00\x01binary garbage\n{"half":\n' > "$f" ;;
+    missing) rm -f "$f" ;;
+    # PARSES cleanly, holds only assistant/tool traffic — the "nobody typed" FACT, the one world that
+    # is still allowed to license a close.
+    quiet)   printf '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"done"}]},"timestamp":"2001-09-09T01:46:40.000Z"}\n' > "$f" ;;
+  esac
+}
+
+@test "third state: transcript CORRUPT (lib present, no answer) and no beat → REFUSE, pane stays open" {
+  adopted_fixture
+  set_transcript corrupt
+  export CC_BEAT_DIR="$BATS_TEST_TMPDIR/no-such-beats"
+  run "$T" U-AD --done-evidence "looks done" --decided-at 1000000000
+  [ "$status" -eq 2 ]
+  rec="$(find "$CC_TEARDOWN_RECORDS_DIR" -name '*.json' | head -1)"
+  [ "$(jq -r '.decision' "$rec")" = "REFUSE" ]
+  [ "$(jq -r '.reason_kind' "$rec")" = "presence-unprovable" ]
+  jq -e 'index("U-AD") != null' "$IT2_PANES_FILE" >/dev/null
+}
+
+# The BOUNDARY of the fix, pinned so it cannot drift in either direction. An UNRESOLVABLE transcript
+# is NOT treated as unreadable: no <sid>.jsonl is the ordinary state of a synthetic sid and of any
+# session whose transcript a handoff renamed to <sid>.jsonl.handed-off, so refusing on it would refuse
+# a large legitimate population whenever the beat world is also down. Routing it through
+# beat_or_refuse was tried and RED-proved wrong — it turned 7 of the 17 --selftest checks into REFUSE
+# (a fleet-wide teardown outage). Only a transcript that EXISTS and cannot be READ is unprovable.
+@test "boundary: transcript UNRESOLVABLE is NOT unreadable → belt skipped, teardown proceeds" {
+  adopted_fixture
+  set_transcript missing
+  export CC_BEAT_DIR="$BATS_TEST_TMPDIR/no-such-beats"
+  run "$T" U-AD --done-evidence "looks done" --decided-at 1000000000
+  [ "$status" -eq 0 ]
+  rec="$(find "$CC_TEARDOWN_RECORDS_DIR" -name '*.json' | head -1)"
+  [ "$(jq -r '.decision' "$rec")" = "TEARDOWN" ]
+}
+
+@test "POSITIVE CONTROL: transcript PARSES with no operator turn → proceeds (the FACT still licenses a close)" {
+  # The counterpart to the two refusals above, and the reason the three-valued split exists at all. If
+  # "no operator turn" were folded into "unreadable", this teardown would refuse too and cc-teardown
+  # would be a permanent outage for every ordinary finished worker — with both tests above still green.
+  adopted_fixture
+  set_transcript quiet
+  export CC_BEAT_DIR="$BATS_TEST_TMPDIR/no-such-beats"
+  run "$T" U-AD --done-evidence "looks done" --decided-at 1000000000
+  [ "$status" -eq 0 ]
+  rec="$(find "$CC_TEARDOWN_RECORDS_DIR" -name '*.json' | head -1)"
+  [ "$(jq -r '.decision' "$rec")" = "TEARDOWN" ]
+  jq -e 'index("U-AD") == null' "$IT2_PANES_FILE" >/dev/null
+}
+
+@test "third state: transcript CORRUPT but the BEAT proves presence is OLD → proceeds (second oracle not inert)" {
+  adopted_fixture
+  set_transcript corrupt
+  export CC_BEAT_DIR="$BATS_TEST_TMPDIR/beats"; mkdir -p "$CC_BEAT_DIR"
+  now=1000000000
+  export CC_BEAT_NOW="$now"
   printf '{"sid":"sidAD","t":%s,"who":"auto","operatorT":%s,"seq":9}\n' "$now" "$(( now - 99999 ))" > "$CC_BEAT_DIR/sidAD.json"
   CC_CLASSIFY_INTERACTIVE_HOLD_S=600 run "$T" U-AD --done-evidence "looks done" --decided-at "$now"
   [ "$status" -eq 0 ]

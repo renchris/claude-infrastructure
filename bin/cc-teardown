@@ -349,6 +349,42 @@ find_transcript() { # <sid> → its .jsonl (first match across the account proje
   return 1
 }
 
+beat_or_refuse() { # <sid> <who_gap> → returns 0 to PROCEED; exits 2 (REFUSE) when presence is unprovable
+  # The SECOND, INDEPENDENT presence oracle, consulted whenever the transcript WHO-oracle could not
+  # answer. Two distinct gaps reach here and both mean the same thing — "we cannot prove this pane is
+  # not a live operator conversation":
+  #   (a) the who-LIB is absent (R3, SESSION_REGISTRY_V2 §4.3.5), and
+  #   (b) the lib is present but its answer is "unreadable" or its transcript did not resolve
+  #       (the 2026-07-29 C-SC-1 close — before it, (b) fell straight through the belt to the CLOSE,
+  #       so a corrupt/unresolvable transcript licensed exactly the auto-close this belt exists to
+  #       prevent; the ce_ backstop legs took the same split in 51521697).
+  # Refusing outright on either gap would make the belt a single point of INERTNESS (a lib that fails
+  # to deploy, or one bad transcript, would refuse every teardown forever), so the BEAT is asked first
+  # — it cannot share a bug with the transcript scanner. Only when BOTH oracles are unavailable do we
+  # refuse, and that refusal is loud + recorded (never a silent proceed).
+  local _sid="${1:-}" _gap="${2:-the who-oracle could not answer}" _bage
+  if type -t cb_operator_age >/dev/null 2>&1 && cb_system_live 2>/dev/null; then
+    _bage="$(cb_operator_age "$_sid" 2>/dev/null || true)"
+    case "${_bage:-}" in
+      ''|*[!0-9]*)
+        record REFUSE presence-unprovable "$_gap AND this session has no presence beat, inside a LIVE beat world — cannot prove the pane is not a live operator conversation; refusing (v1 proceeded here, which is how live conversations were closed)" 0
+        say "REFUSE — cannot prove operator absence: $_gap and no beat for this session (exit 2)."
+        exit 2 ;;
+      *)
+        if [ "$_bage" -lt "$INTERACTIVE_HOLD_S" ] 2>/dev/null; then
+          record REFUSE operator-adopted "$_gap; the presence BEAT shows a real operator prompt ${_bage}s ago (< hold ${INTERACTIVE_HOLD_S}s) — refusing to auto-close a live operator conversation" 0
+          say "REFUSE — operator-adopted per presence beat: prompt ${_bage}s ago (exit 2)."
+          exit 2
+        fi
+        say "NOTE — $_gap; presence proven ABSENT by beat (${_bage}s > hold) — proceeding on the independent oracle"
+        return 0 ;;
+    esac
+  fi
+  record REFUSE presence-unprovable "$_gap and the beat system is not live — NO presence oracle is available, so the pane cannot be shown to be free of a live operator conversation; refusing (fail-closed, R3)" 0
+  say "REFUSE — $_gap and no live beat system: no presence oracle available, refusing to close (exit 2)."
+  exit 2
+}
+
 main() {
   local args=() FORCE_ADOPTED=0
   while [ $# -gt 0 ]; do
@@ -457,36 +493,27 @@ main() {
       # "cannot prove present" treated as "proven absent", the inverse of this repo's own
       # absence-is-loud law, and the single most dangerous line in the subsystem (its own test
       # pinned the fail-open as correct, using a fixture carrying a REAL operator prompt).
-      # v2 refuses instead. To keep that refusal from being a single point of INERTNESS (a lib that
-      # fails to deploy would otherwise refuse every teardown forever), the BEAT is consulted as an
-      # INDEPENDENT presence oracle first — it cannot share a bug with the transcript scanner.
-      # Only when BOTH oracles are unavailable do we refuse, and that refusal is loud.
-      local _bage
-      if type -t cb_operator_age >/dev/null 2>&1 && cb_system_live 2>/dev/null; then
-        _bage="$(cb_operator_age "$sess_id" 2>/dev/null || true)"
-        case "${_bage:-}" in
-          ''|*[!0-9]*)
-            record REFUSE presence-unprovable "the who-oracle ($INTERACTIVE_LIB) is absent AND this session has no presence beat, inside a LIVE beat world — cannot prove the pane is not a live operator conversation; refusing (v1 proceeded here, which is how live conversations were closed)" 0
-            say "REFUSE — cannot prove operator absence: who-lib absent and no beat for this session (exit 2)."
-            exit 2 ;;
-          *)
-            if [ "$_bage" -lt "$INTERACTIVE_HOLD_S" ] 2>/dev/null; then
-              record REFUSE operator-adopted "who-lib absent; the presence BEAT shows a real operator prompt ${_bage}s ago (< hold ${INTERACTIVE_HOLD_S}s) — refusing to auto-close a live operator conversation" 0
-              say "REFUSE — operator-adopted per presence beat: prompt ${_bage}s ago (exit 2)."
-              exit 2
-            fi
-            say "NOTE — cc-interactive.sh absent ($INTERACTIVE_LIB); presence proven ABSENT by beat (${_bage}s > hold) — proceeding on the independent oracle" ;;
-        esac
-      else
-        record REFUSE presence-unprovable "the who-oracle ($INTERACTIVE_LIB) is absent and the beat system is not live — NO presence oracle is available, so the pane cannot be shown to be free of a live operator conversation; refusing (fail-closed, R3)" 0
-        say "REFUSE — cc-interactive.sh absent ($INTERACTIVE_LIB) and no live beat system: no presence oracle available, refusing to close (exit 2)."
-        exit 2
-      fi
+      # v2 refuses instead — via beat_or_refuse, the shared second-oracle path (see its header for why
+      # refusing outright would make this belt a single point of inertness).
+      beat_or_refuse "$sess_id" "the who-oracle ($INTERACTIVE_LIB) is absent"
     else
-      local atj="" iep="" now_s="" spawn_s="" iage=""
+      local atj="" iep="" irc=0 now_s="" spawn_s="" iage=""
       atj="$(find_transcript "$sess_id" 2>/dev/null || true)"
+      # DELIBERATELY NOT a refusal: an UNRESOLVABLE transcript (no <sid>.jsonl under PROJECT_ROOTS) is
+      # the ordinary state of a synthetic/short-lived sid and of any session whose transcript was
+      # renamed out from under it (a handoff leaves <sid>.jsonl.handed-off), so gating the close on it
+      # would refuse a large, legitimate population whenever the beat world is also down — a
+      # fleet-wide teardown outage, the fail-closed-as-amplifier trap. RED-proved: routing this case
+      # through beat_or_refuse turned 7 of the 17 --selftest checks into REFUSE. The narrow, evidenced
+      # gap is the one below — a transcript that EXISTS and cannot be read.
       if [ -n "$atj" ]; then
-        iep="$(ci_last_interactive_epoch "$atj" 2>/dev/null || true)"
+        iep="$(ci_last_interactive_epoch "$atj" 2>/dev/null)" || irc=$?
+        if [ "$irc" = 2 ]; then
+          # THREE-VALUED contract (hooks/lib/cc-interactive.sh): "unreadable" — corrupt / truncated /
+          # binary / empty / no jq. NOT "nobody typed". Only the rc-1 world (a transcript that parsed
+          # and holds no operator turn) is a FACT that may license a close.
+          beat_or_refuse "$sess_id" "the who-oracle read the target's transcript as UNREADABLE (corrupt/truncated/empty, or no jq) — 'cannot read' is not 'nobody typed'"
+        fi
         case "${iep:-}" in ''|*[!0-9]*) iep="" ;; esac
         if [ -n "$iep" ]; then
           now_s="${CC_CLASSIFY_NOW:-$(date +%s)}"

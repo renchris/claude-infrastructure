@@ -498,6 +498,16 @@ classify_entry() { # <entry-json> <all-sessions-json>
   #     the conversation, so the predecessor should reap) is preserved by the firedAt EXCLUSION below, not
   #     by ordering: a stamped worker's fire-brief prompts (< firedAt+slack) don't count as adoption, so a
   #     self-recycled predecessor still reaps; only a genuine post-fire operator prompt holds it.
+  #     THIRD STATE (2026-07-29, C-SC-1): ci_last_interactive_epoch now returns rc 2 / "unreadable" for
+  #     "could not read the answer" (vs rc 1 "parsed, nobody typed"). This gate needs NO rc-2 branch of
+  #     its own, and the reason is structural, not incidental: every world that makes the WHO-scan
+  #     unreadable (transcript unresolvable, unreadable perms, no jq, not one well-formed record) ALSO
+  #     denies this function a last-assistant timestamp, so IDLE stays -1 and the fail-safe ~20 lines
+  #     above has already returned CAUSE=active (never-reap). A rc-2 answer is therefore unreachable
+  #     here. DO NOT weaken that IDLE<0 fail-safe without adding an explicit unreadable ⇒ hold branch
+  #     right here — it is the only thing standing between this ladder and a reap on unreadable input.
+  #     (The actuators that CAN reach rc 2 — cc-teardown's belt, teammate-auto-shutdown's TeammateIdle
+  #     close — read it explicitly and HOLD.)
   local iep
   if [ "$INTERACTIVE_HOLD_DISABLE" != 1 ] && [ -n "$tj" ] && iep="$(last_interactive_epoch "$tj")"; then
     local iage=$(( NOW - iep )); [ "$iage" -lt 0 ] && iage=0

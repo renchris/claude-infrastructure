@@ -578,6 +578,10 @@ fi
 # spawn+SLACK (the spawn brief arrives as a user prompt and must NOT count as adoption) AND within
 # the hold window ⇒ adopted → surface (page), never close. The WHO-primitive lives in
 # hooks/lib/cc-interactive.sh (lands separately) — absent ⇒ one WARN + skip (graceful degradation).
+# THIRD STATE (2026-07-29, C-SC-1): the primitive now distinguishes "the transcript parsed and nobody
+# typed" (rc 1 — a FACT that may license the close) from "we could not READ the answer" (rc 2,
+# "unreadable" — corrupt/truncated/empty/no-jq). rc 2 HOLDS + pages, exactly like adoption: absence of
+# evidence is not evidence of absence on an actuator that force-closes a pane.
 # Kill switch: CC_CLASSIFY_INTERACTIVE_HOLD_DISABLE=1.
 _hold_on=1
 [[ "${CC_CLASSIFY_INTERACTIVE_HOLD_DISABLE:-0}" == "1" ]] && _hold_on=0
@@ -597,7 +601,20 @@ if (( _hold_on )); then
       [[ -n "$_alt_sid" ]] && _adopt_tj="$(_find_transcript "$_alt_sid" || true)"
     fi
     if [[ -n "$_adopt_tj" ]]; then
-      _iep="$(ci_last_interactive_epoch "$_adopt_tj" 2>/dev/null || true)"
+      _irc=0
+      _iep="$(ci_last_interactive_epoch "$_adopt_tj" 2>/dev/null)" || _irc=$?
+      if (( _irc == 2 )); then
+        # THREE-VALUED contract (hooks/lib/cc-interactive.sh, 2026-07-29 C-SC-1 close): "unreadable" —
+        # corrupt / truncated / binary / empty / no jq. NOT "nobody typed". Before the split this
+        # returned the same empty answer as a parsed-but-quiet transcript and fell through to the
+        # pane CLOSE below, so an unreadable transcript licensed exactly the force-close this belt
+        # exists to prevent. reap-guard R-d fails closed the same way — but only for teammates that
+        # HAVE a worktree (the reap-guard call above is gated on $WORKTREE), so for a worktree-less
+        # teammate this belt is the ONLY who-gate and must not fall open.
+        log "  ⚑ who-oracle UNREADABLE for $_adopt_tj (corrupt/truncated/empty, or no jq) — 'cannot read' is not 'nobody typed'; NOT closing pane [$PANEID] ($MEMBER_NAME); paging desk"
+        _page_desk "teammate-auto-shutdown HELD: pane $PANEID ($MEMBER_NAME, team $TEAM_NAME) — the operator-presence oracle could not READ its transcript ($_adopt_tj), so adoption is unprovable; left open, confirm-close manually."
+        exit 0
+      fi
       if [[ "$_iep" =~ ^[0-9]+$ ]]; then
         _now="${CC_CLASSIFY_NOW:-$(date +%s)}"
         _spawn_s="$(_spawn_epoch "$SESSION_ID" || echo 0)"; [[ "$_spawn_s" =~ ^[0-9]+$ ]] || _spawn_s=0
