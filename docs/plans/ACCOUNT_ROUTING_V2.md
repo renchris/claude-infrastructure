@@ -505,6 +505,20 @@ disk claimed.
   `next3` at exit 0; draining ALL FOUR still returns an account at exit 0 with the YIELDED notice
   — **the R11 property proven on production data, not only in a fixture**.
 - **M2 LANDED** — `--login-status --window-h N` + the poller asking for its own window.
+- **M3(b) built** — `route-meta:` on stderr + `route.jsonl` carrying `cliff_band` / `cliff_h` /
+  `cliff_at` / `quota_age_s` / `quota_cached` / `cliff_yielded`. 7 RT-h checks in **`cc-route`'s own
+  selftest**, which is the enforcement chokepoint (`scripts/route-safety-gate.sh:46` gates on
+  `cc-route selftest`, not on a sibling suite — memory
+  `enforcement-must-live-at-the-chokepoint`). 26/26 green. **2 of the 7 RED-prove** via a true
+  differential — same stub, same SSOT fixture, only the subject binary differs: pristine
+  `ebf916f4` records `["detail","outcome","slot","ts"]`, current records those plus the five input
+  fields. The other **5 are contract-preservation** checks, named as such (fail-soft on an
+  old producer, the R8 kill switch, and three pinning stdout unchanged).
+- **M4 built** — `com.claude.relogin` declared `staged` in `launchd/fleet.manifest` with a per-tick
+  evidence sensor and `ok_exits 0,5`; label count 21→22 in row 12's own convention; activation
+  staged in **both** the repo SSOT and the live operator queue, dry-run executed.
+- **M3(a) NOT BUILT** — deliberately, per the mid-build reprioritization above. It is visibility and
+  history, not a stranding fix. Recorded as remainder **R-8** rather than left as a silent gap.
 
 ### Learnings — three defects the build itself surfaced (each cost a real land or gate cycle)
 
@@ -578,4 +592,6 @@ a real dark dependency rather than a hypothetical one.
 | R-4 | `bin/claude-accounts:1525` `RELOGIN_UNKNOWN_ACTION = "land feat/accounts-login-cliff (adds --login-status)"` is **stale** — the flag is on this build (`:1692`). A stale recovery string sends the operator to a landed branch. | 7 | Cosmetic; folded into M2's land if it stays clean. |
 | R-5 | Session-lifetime distribution is unmeasured, so `CC_ROUTE_CLIFF_DRAIN_H=48` is a *reasoned* default, not a measured one. If 48 h of drain does not reach `k == 0`, behaviour degrades to today's (escalation row at T−48 h) — never worse. | 7 (data lives with 2/4) | Needs row 2/4's session-lifetime data; the design fails soft without it. |
 | R-6 | The `--login-status` leg carries the deadline only as `fmt_h()` text, whose days form rounds to 0.1 d — so a deadline derived through that leg is precise to **±1.2 h**. Harmless against a 48 h escalation threshold, but it is a real quantization and it is why the live poller reads T−88 h for a T−90.3 h cliff. The `json-fields` leg carries the raw float. Widening the TSV to carry an ISO stamp would break its frozen 6-field shape (`norm 6` parses positionally), so this is a **named limit, not a bug**. | 7 | Fixing it means a 7th field or a new flag; neither is worth breaking a frozen contract for 1.2 h against a 48 h threshold. |
+| R-8 | **M3(a) — `login_expires_at` into the last-good ledger** (AC7). NOT BUILT this session, by the reprioritization above: it is visibility and history (the operator's "when was this login due", and a durable series that would let C1's ~30 d period be *measured* rather than bracketed to [26.1, 30.0] d), not a stranding fix — M2b's F16 already makes the poller act on exactly the account whose cliff is unreadable. ~10 lines: carry the absolute stamp into the `entry` dict beside the quota, restore it in `inherit_lastgood`, and let `refresh_login_countdown` derive `_h` from it for free. **R3 must be preserved exactly:** an inherited cliff must NOT make a row routable — the row still carries `error`, so `_excluded()` still bails. Pinned by the existing AC11 control. | 7 | Ranked below M3(b)/M4 on measured value; named, not silently dropped. AC7 stays UNMET and is reported as such. |
+| R-9 | A **load-dependent flake** in this row's own tests was found and fixed (see §11), but the general lesson is unowned: **a bats assertion on a process EXIT CODE is fragile whenever the subject forks a child under the background QoS band `bin/cc-bats` imposes.** Two of this row's tests hit it. The durable fix pattern is to assert the subject's own durable product instead — but nothing enforces or even detects the fragile pattern. | 13 (owns `cc-bats`/QoS) / 1 (owns the gate) | Row 7 fixed its own two instances. A detector would need to know which code paths fork, which is not a lint. |
 | R-7 | **A campaign-wide question this row can only raise, not answer:** the F14 defect class — *a test fixture more parseable than the producer it claims to model* — is invisible to every gate we have. `hours_secs` had **zero** effective coverage while its suite reported 33 passing tests. Worth a sweep: for every stub that renders a sibling tool's output, does it emit that tool's LITERAL formatting? | 1 (owns `run_gate`) / campaign | Out of row 7's scope; row 7 fixed its own two instances. A lint is conceivable (compare a stub's emitted shape against the producer's formatter) but is a real design problem, not a one-liner. |
