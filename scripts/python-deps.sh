@@ -28,7 +28,23 @@
 
 set -uo pipefail
 
-REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Resolve every symlink hop BEFORE deriving the repo root. This script is reached through
+# ~/.claude, which is a symlink layer over the checkout, so an unresolved $BASH_SOURCE puts
+# REPO_DIR at $HOME instead of the repo and requirements.txt silently "does not exist" —
+# verdict=failed reason=no-requirements-file, blamed on the operator's tree. Same shape the
+# script-dir ratchet (scripts/self-path-lint.sh) exists to catch; `readlink -f` is GNU-only
+# and this box is BSD, hence the loop.
+_resolve_self() {  # <path> → absolute path, every symlink hop resolved (bash 3.2 / POSIX-safe)
+  local p="$1" d
+  while [[ -L "$p" ]]; do
+    d="$(cd "$(dirname "$p")" && pwd)"
+    p="$(readlink "$p")"
+    case "$p" in /*) ;; *) p="$d/$p" ;; esac
+  done
+  printf '%s/%s\n' "$(cd "$(dirname "$p")" && pwd)" "$(basename "$p")"
+}
+SELF="$(_resolve_self "${BASH_SOURCE[0]:-$0}")"
+REPO_DIR="$(cd "$(dirname "$SELF")/.." && pwd)"
 REQ_FILE="${PYTHON_DEPS_REQUIREMENTS:-$REPO_DIR/requirements.txt}"
 PYTHON_BIN="${PYTHON_DEPS_PYTHON:-python3}"
 PIP_BIN="${PYTHON_DEPS_PIP:-pip3}"
@@ -38,7 +54,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run) MODE=dry-run; shift ;;
     --probe)   MODE=probe;   shift ;;
-    -h|--help) sed -n '2,26p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    -h|--help) sed -n '2,26p' "$SELF"; exit 0 ;;   # resolved: --help must work through the symlink too
     *) echo "python-deps.sh: unknown option: $1" >&2; exit 2 ;;
   esac
 done
