@@ -669,6 +669,33 @@ pixel-exact against a live render of the unmodified file.
 **Rule this produces:** the first beat wants to be at **t≈2.5–4 s**, and anything after ~t=45 s is
 decoration. `shoot` at t=228 s was never rare — it was invisible.
 
+### S17 · CSS `@keyframes` DOES animate in Firefox-as-image — the showstopper is refuted
+
+Mozilla bug 1190881 (`SVGDocumentWrapper::IsAnimated` only checks for SMIL, so a CSS-only
+`VectorImage` never joins the refresh driver) would make this banner a **static image for every
+Firefox reader**, and a Chromium-only harness would never notice. **Measured and refuted:** CSS
+`@keyframes` inside an `<img>`-loaded SVG **advances over time in Firefox 144.0.2**. Do not
+re-express anything in SMIL.
+
+Re-runnable: `python3 scripts/banner-firefox-probe.py` (Marionette over a socket — no
+playwright/puppeteer needed).
+
+**Two obvious forms of this test give WRONG answers**, which is why the script exists:
+
+| test | what it reports | why it is wrong |
+| --- | --- | --- |
+| one screenshot | "animates" | only proves the t=0 value is COMPOSITED, which Firefox does; says nothing about the clock ticking, which is the whole bug |
+| two screenshots, two page loads | "static" | the timeline anchors at LOAD (§ S16), so both land at t≈0 and read identical |
+| **two screenshots inside ONE document** | correct | straddles a hard flip; the only form that observes advancement |
+
+Pixel-checked, not byte-checked (§ S15): `css A=srgba(255,0,0,1) B=srgba(0,0,255,1)`. SMIL runs as a
+positive control in the same pass — had SMIL also read static, the harness would be broken rather
+than the finding confirmed.
+
+**The real hole this exposed is still open:** the whole verification harness is Chromium-only. S1 was
+false, but nothing in the gate would have caught it if it had been true. This probe is one engine's
+worth of coverage; WebKit is unprobed (playwright ships a build).
+
 **Regenerate:** `python3 tools/banner/gen.py --out assets/banner` then
 `python3 tools/banner/compare.py --stills <dir>`. Verify: `scripts/banner-verify.sh <svg>`
 (and `scripts/banner-verify.sh --self-test` to check the checker).
