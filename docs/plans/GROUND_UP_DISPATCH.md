@@ -795,6 +795,41 @@ Everything in #3 below still holds except where this overrides it.
   wrong key at birth and never were. Do not re-escalate the mail-v3 D5 landing as urgent — it also
   collides with row 8's `hooks/session-continue.sh`, and the stranded-commit analysis is in backlog
   `ece77ba9dfe2`.
+- 🚨 **RETRACTION — THE PANE-UUID RULE IS WRONG, AND I SHIPPED IT TWICE. THE WAKE-FLOOR HOOK IS RIGHT.**
+  Every payload on this campaign, including both of mine, said "arm `cc-await-ping` on your PANE uuid,
+  never your session id," and I wrote that the SessionStart/Stop hook "actively advises the wrong key."
+  **Both claims are false.** Root cause of my error: **I was reading MY WORKTREE's copy of
+  `hooks/session-continue.sh` (383 lines) while the DEPLOYED copy and `origin/main` are identical at
+  407 lines** — a sibling had already traced and fixed this, and my branch was cut before it landed.
+  The fix (deployed `:180-205`) states it plainly: `mailbox-drain.sh` reads the **SESSION-keyed** box
+  whenever it knows its session id (`CC_MBX_SESSION_KEY` default 1) and writes a pane→session **ALIAS**
+  on the way, so **the canonical key MOVES once a pane has been drained.** `mailbox_resolve_key` is the
+  lib's single implementation of that mapping and falls back to the pane only when no alias exists;
+  `bin/cc-await-ping` resolves NO alias — it watches the key it is handed, literally. Its comment
+  records the cost: *"two wrong arms in one session before it was traced."*
+  **Measured on myself:** `mailbox_resolve_key(71B42B48-…)` → `f1730377-…`;
+  `wake_armed(pane)=YES` (four leaked watchers) but `wake_armed(sid)=no`, and my pane box's last write
+  was 20:57 while the sid key carried 22:43 sentinels — **so I ran ~2 h with four watchers on a box
+  nothing writes to, reading as UNARMED to the floor.** No mail was lost (no sid-keyed `.md` was ever
+  created, so nothing had been sent). Reaped the four; armed the resolved key; `mailbox_wake_armed`
+  now YES.
+  **THE REAL DEFECT IS SHARPER THAN THE ONE I FILED:** it is not that agents hand-pick the wrong uuid —
+  it is that **an alias migration silently orphans an already-correct watcher**, and nothing re-arms
+  it. Row 11 is the proof: it armed on its pane uuid, ACKED a ruling mid-turn (so it genuinely worked),
+  and now resolves to `380dce96-…` with `wake_armed` NO on **both** keys. Mitigation that makes this a
+  nuisance rather than a catastrophe: **the floor self-heals** — it runs at every Stop, resolves the key
+  itself, and nags with the correct command, which is exactly why its comment says the nudge "recurs
+  forever" when the two sides disagree.
+  **THE CORRECTED RULE, now in both payloads on trunk:** arm the EXACT command the `🔔 WAKE FLOOR`
+  message hands you, never a key you chose; verify with
+  `bash -c '. ~/.claude/hooks/lib/mailbox-pending.sh; mailbox_wake_armed <KEY> && echo ARMED'` and
+  **not `pgrep`**, which reported 0 for a watcher `ps` and the lib both confirmed running; re-arm after
+  every wake with the key the hook prints. Row 11 has been sent the correction
+  (`verdict=unverified reason=liveness-unverifiable` — it will drain at its next Stop).
+  **METHOD LESSON, and it is the one to carry:** in a long-lived worktree, **any file you do not own is
+  a STALE READ** — you see it as of your branch-cut, not as of now. Cite the DEPLOYED copy for any
+  deployed-behaviour claim, which this campaign already learned once for row 13's capacity gate and
+  which I then repeated in the opposite direction.
 - **Landed by coordinator #4, content-verified on trunk:** `f3a4a7f9` (row 9 payload) · `92a2fb36`
   (row 8 ratification + row 11 fire) · `53c6eee9` (row 6 payload) · this delta. **Backlog filed:**
   `ff839f1f8f38` (cc-mail/cc-thread untracked + zero callers) · `ece77ba9dfe2` (activation advertises an
