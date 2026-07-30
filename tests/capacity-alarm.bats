@@ -133,3 +133,68 @@ setup() {
   run grep -nE '^\s*(exit 9|refuse|REFUSE)\b' "$ALARM"
   [ "$status" -ne 0 ] || false
 }
+
+# ── the page channel (M6 wiring) ─────────────────────────────────────────────────────────────────
+
+@test "(xiv) WARN/ALARM writes ONE fixed-slug page; OK REMOVES it (self-clearing)" {
+  # Self-clearing is the point. Observed 2026-07-29 on the deploy channel: a `deploy-host-red` page
+  # from 15:35 was still on disk hours after the condition cleared (its lint re-ran 16/16 green), so
+  # the board reported a problem that no longer existed. A page whose condition has passed is
+  # misinformation, not history — the append-only jsonl keeps the record.
+  export CC_PAGES_DIR="$BATS_TEST_TMPDIR/pages"
+  page="$CC_PAGES_DIR/capacity-alarm.page"
+
+  # force WARN → page raised
+  run env CC_CAP_WARN_GB=999999 /bin/bash "$ALARM" --quiet
+  [ "$status" -eq 1 ] || false
+  [ -f "$page" ] || false
+  run grep -c 'capacity WARN' "$page"
+  [ "$output" -ge 1 ] || false
+
+  # back to OK → page retracted
+  run /bin/bash "$ALARM" --quiet
+  [ "$status" -eq 0 ] || false
+  [ ! -f "$page" ] || false
+}
+
+@test "(xv) the page slug is FIXED — a repeated alarm overwrites, never accumulates" {
+  # The unslugged channel has 490 files on disk. A job on a 10-minute interval must not add to that,
+  # so damping is by construction (one path) rather than by a separate damper.
+  export CC_PAGES_DIR="$BATS_TEST_TMPDIR/pages2"
+  for _ in 1 2 3; do
+    run env CC_CAP_WARN_GB=999999 /bin/bash "$ALARM" --quiet
+    [ "$status" -eq 1 ] || false
+  done
+  n="$(find "$CC_PAGES_DIR" -name '*.page' | wc -l | tr -d ' ')"
+  [ "$n" -eq 1 ] || false
+}
+
+@test "(xvi) NO-DATA also retracts a stale page — never assert a condition we cannot see" {
+  export CC_PAGES_DIR="$BATS_TEST_TMPDIR/pages3"
+  page="$CC_PAGES_DIR/capacity-alarm.page"
+  run env CC_CAP_WARN_GB=999999 /bin/bash "$ALARM" --quiet
+  [ -f "$page" ] || false
+  run env CC_CAP_PYTHON=/nonexistent/python /bin/bash "$ALARM" --quiet
+  [ "$status" -eq 3 ] || false
+  [ ! -f "$page" ] || false
+}
+
+@test "(xvii) CC_CAP_PAGE=off suppresses the page but still logs (channel and record are separate)" {
+  export CC_PAGES_DIR="$BATS_TEST_TMPDIR/pages4"
+  log="$BATS_TEST_TMPDIR/p4.jsonl"
+  run env CC_CAP_PAGE=off CC_CAP_WARN_GB=999999 CC_CAP_LOG="$log" /bin/bash "$ALARM" --quiet
+  [ "$status" -eq 1 ] || false
+  [ ! -f "$CC_PAGES_DIR/capacity-alarm.page" ] || false
+  [ -f "$log" ] || false                      # the durable record is unaffected by the page switch
+  run grep -c '"verdict":"WARN"' "$log"
+  [ "$output" -ge 1 ] || false
+}
+
+@test "(xviii) --no-append writes NEITHER the log nor a page (a dry read stays a dry read)" {
+  export CC_PAGES_DIR="$BATS_TEST_TMPDIR/pages5"
+  log="$BATS_TEST_TMPDIR/p5.jsonl"
+  run env CC_CAP_WARN_GB=999999 CC_CAP_LOG="$log" /bin/bash "$ALARM" --quiet --no-append
+  [ "$status" -eq 1 ] || false                 # verdict still reported
+  [ ! -f "$log" ] || false
+  [ ! -f "$CC_PAGES_DIR/capacity-alarm.page" ] || false
+}

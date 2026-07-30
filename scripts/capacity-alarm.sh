@@ -160,6 +160,44 @@ if [ "$APPEND" = 1 ]; then
   printf '%s\n' "$JSON" >> "$LOG" 2>/dev/null || true
 fi
 
+# ── page the operator on WARN/ALARM, and SELF-CLEAR on OK ─────────────────────────────────────────
+# A built alarm that nothing invokes is inert, and an alarm that only logs is not an alarm — so this
+# writes the repo's standard page envelope (~/.claude/autonomy/pages/<slug>.page: epoch, headline,
+# detail, re-run).
+#
+# ONE FIXED SLUG, deliberately. Every write overwrites the same file, so a job on a 10-minute
+# interval cannot accumulate 490 pages the way the unslugged channel has. Damping by construction
+# rather than by a separate damper (memory notify-channel-golive-damp-first).
+#
+# AND IT SELF-CLEARS. On OK the page and its .notified sibling are REMOVED. This is the defect
+# observed 2026-07-29 on the deploy channel: a `deploy-host-red` page from 15:35 was still on disk
+# hours after the condition cleared (the lint re-ran 16/16 green), so the board reported a problem
+# that no longer existed. A page whose condition has passed is misinformation, not history — the
+# durable record is the jsonl log, which is append-only and keeps every sample.
+# Kill switch: CC_CAP_PAGE=off.
+PAGES_DIR="${CC_PAGES_DIR:-$HOME/.claude/autonomy/pages}"
+PAGE="$PAGES_DIR/capacity-alarm.page"
+if [ "${CC_CAP_PAGE:-on}" != "off" ] && [ "$APPEND" = 1 ]; then
+  if [ "$VERDICT" = "WARN" ] || [ "$VERDICT" = "ALARM" ]; then
+    mkdir -p "$PAGES_DIR" 2>/dev/null || true
+    {
+      date +%s 2>/dev/null || echo 0
+      printf 'capacity %s — reclaimable headroom %s GB with %s live sessions (warn <%s, alarm <%s)\n' \
+        "$VERDICT" "${HEAD:-?}" "$SESSIONS" "$WARN_GB" "$ALARM_GB"
+      printf 'swap used: %s MB  ·  compressor: %s GB  ·  est. room: ~%s more sessions\n' \
+        "${SWAP_MB:-0}" "${COMP:-?}" "${ROOM:-?}"
+      printf 'shed by CLOSING idle sessions (/handoff them). Do NOT add a load-based spawn gate —\n'
+      printf 'measured REFUSE 10/10 against real load; see docs/plans/MACHINE_CAPACITY_V2.md §8.5.7.\n'
+      printf 're-run:  %s\n' "$0"
+    } > "$PAGE" 2>/dev/null || true
+  else
+    # OK or NO-DATA ⇒ this alarm asserts nothing; retract any page we previously raised.
+    # NO-DATA deliberately clears too: leaving a stale WARN up while blind would be asserting a
+    # condition we can no longer see.
+    rm -f "$PAGE" "$PAGE.notified" 2>/dev/null || true
+  fi
+fi
+
 if [ "$QUIET" != 1 ] && [ "$WANT_JSON" != 1 ]; then
   echo "capacity-alarm — $TS"
   echo "  live sessions:          ${SESSIONS}"
