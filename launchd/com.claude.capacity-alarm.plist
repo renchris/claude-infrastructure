@@ -30,6 +30,19 @@
   RunAtLoad stays false and is NOT implicated in the gap above — a StartInterval job fires on its
   interval regardless; the 6h24m silence was deferral, not the absence of a load-time run.
 
+  THE PATH MUST CARRY /usr/sbin — THREE RUNGS WERE SILENTLY DEAD WITHOUT IT. launchd hands the job
+  PATH=/usr/bin:/bin:/usr/sbin:/sbin, but the wrapper below OVERWRITES it, and the original override
+  omitted /usr/sbin. `sysctl` lives in /usr/sbin. So in every SCHEDULED run (never in a hand-run from
+  an interactive shell, which is why it survived review) these three all failed open:
+      rung 1 swap      SWAP_MB   <- sysctl vm.swapusage
+      rung 3 pressure  PRESSURE  <- sysctl kern.memorystatus_vm_pressure_level
+      rung 5 segments  SEG_PCT   <- sysctl vm.compressor_segment_limit
+  Measured in the 17:25:59Z scheduled row: pressure_level=null, seg_pct=null, and — the dangerous
+  one — swap_used_mb=0, because `${SWAP_MB:-0}` renders an UNREADABLE instrument as the healthy
+  value 0, indistinguishable from "no swap in use". A dead rung that reports OK is worse than an
+  absent rung. tests/capacity-alarm-launchd-path.bats now asserts every binary the script invokes is
+  reachable on THIS plist's own PATH string, with the pre-fix PATH as the RED control.
+
   WHY StartInterval AND NOT a calendar entry: headroom is a continuous quantity, not a daily event.
   RunAtLoad is false — a login must not page about a condition that has not been sampled yet.
 
@@ -53,7 +66,7 @@
     <array>
         <string>/bin/bash</string>
         <string>-c</string>
-        <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"; exec "$HOME/.claude/scripts/capacity-alarm.sh" --quiet</string>
+        <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"; exec "$HOME/.claude/scripts/capacity-alarm.sh" --quiet</string>
     </array>
 
     <key>StartInterval</key>
