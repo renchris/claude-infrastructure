@@ -387,11 +387,20 @@ def _waived(kind: str, event: str | None) -> str | None:
     return reason
 
 
-# Beats every variant emits regardless of `art.events` — the three ratified ones plus the cheer.
+# Beats every variant emits regardless of `art.events` — the ratified ones.
 # ONE list, read by BOTH the duty budget and the disjointness gate. They used to carry a copy each,
 # which is a silent-divergence trap: a beat added to one list only is either unbudgeted or
 # uncollided, and in both cases the build stays green over the thing the gate exists to check.
-ALWAYS_EMITTED = ("rRefuse", "rAsk", "rOverlap", "rCheer")
+#
+# WITHDRAWN by the operator on the artifact. Both keep their machinery AND their RARE_EVENTS entry,
+# so re-adding the one name here restores the whole beat — that is the point of routing every
+# emitter through `emits()` rather than letting each decide for itself:
+#   rOverlap — correct and INVISIBLE. Its entire signal is a print pitch that halves, ~9 px of ink
+#              at the 838 px README column, under the one thing in frame anybody looks at. The
+#              legibility audit had already named it the designated sacrifice; the artifact agreed.
+#   rCheer   — belongs to the visitor's visit, and the visitor beats are on hold. On its own it is
+#              an unprompted celebration with nothing present to celebrate.
+ALWAYS_EMITTED = ("rRefuse", "rAsk")
 
 
 def active_events(art: Art) -> list[str]:
@@ -400,6 +409,18 @@ def active_events(art: Art) -> list[str]:
     if art.second_clawd:
         active.add("peer")
     return sorted(active, key=lambda n: RARE_EVENTS[n][0])
+
+
+def emits(art: Art, name: str) -> bool:
+    """Does this variant emit `name`? The ONE question every emitter and every geometry gate asks.
+
+    Membership in ALWAYS_EMITTED / `art.events` used to decide only what the temporal gates MEASURED,
+    while `build` emitted the overlap run and the cheer's raised arms unconditionally. Withdrawing a
+    beat from the list would then have removed it from the budget and the disjointness gate and left
+    it on screen — a beat nothing measures, which is the exact inversion of the drift
+    `assert_event_names_known` exists to catch. So emission reads the same list the gates do.
+    """
+    return name in active_events(art)
 
 
 def assert_duty_budget(art: Art) -> None:
@@ -544,6 +565,38 @@ def ask_stop() -> tuple[float, float]:
         )
     off, n, _r = zero[0]
     return (w0 + off * STRIDE, w0 + (off + n) * STRIDE)
+
+
+ASK_BLINK = 0.12  # s — one blink, long enough to register at 838px and too short to read as a shut
+# Fractions of the dead-world span at which the creature blinks. Deliberately NOT on the 0.5s stride
+# grid and not evenly spaced: the world clock has stopped, so anything ticking in step with it is
+# just a second stopped thing. Three is the count — one reads as a dropped frame, four starts to
+# read as a nervous tic in a beat whose subject is stillness.
+ASK_BLINK_AT = (0.19, 0.53, 0.86)
+
+
+def ask_blinks() -> list[tuple[float, float]]:
+    """THE ASK's blinks: the one thing still alive through six seconds of dead world.
+
+    The cessation IS the beat, so it is NOT shortened — but a frame with nothing moving in it is
+    indistinguishable from a stalled image, and a reader who arrives inside the beat has no earlier
+    frame to compare it against. It read as broken ("feels buggy being halted"). A blink answers
+    exactly that and nothing else, because it is on the CREATURE: zero world-rate change, so there is
+    no debt to repay, no strip feature to space, and `assert_print_lock` never sees it.
+
+    Derived from `ask_stop()` rather than written down beside it, so re-timing the stop moves the
+    blinks with it instead of leaving them over a world that has started moving again.
+    """
+    t0, t1 = ask_stop()
+    span = t1 - t0
+    out = [(t0 + f * span, t0 + f * span + ASK_BLINK) for f in ASK_BLINK_AT]
+    if out[0][0] < t0 or out[-1][1] + GATE_EDGE > t1:
+        raise SystemExit(
+            f"gen: an ASK blink falls outside its own dead-world span ({t0:.2f}-{t1:.2f}s): "
+            f"{[(f'{a:.2f}', f'{b:.2f}') for a, b in out]}. A blink after the world restarts makes "
+            f"the stop look like it ended early. Move ASK_BLINK_AT's fractions inboard."
+        )
+    return out
 
 
 def assert_event_names_known(art: Art) -> None:
@@ -860,13 +913,19 @@ def refusal_x0(art: Art) -> float:
 
 
 def strip_features(art: Art) -> list[tuple[str, float, float]]:
-    """(beat, strip_x0, strip_x1) for every EVENT-OWNED object riding the scrolling ground."""
+    """(beat, strip_x0, strip_x1) for every EVENT-OWNED object riding the scrolling ground.
+
+    Only beats this variant actually EMITS. A withdrawn beat puts nothing on the strip, so reserving
+    twenty seconds of canvas for it would make the gate report on a fiction — the same defect as a
+    gate that skips a live event, reached from the other side.
+    """
     pitch = STRIP_PX_PER_STRIDE
     ox, px = overlap_x0(art), refusal_x0(art)
-    return [
+    feats = [
         ("rOverlap", ox - 9, ox + (OVERLAP_PRINTS - 1) * pitch + 9),
         ("rRefuse", px, px + BAR_LEN),
     ]
+    return [f for f in feats if emits(art, f[0])]
 
 
 def assert_one_strip_feature(art: Art) -> None:
@@ -1764,6 +1823,10 @@ def overlap_run(art: Art) -> str:
     is: the record was written before this stretch reached us. An opacity gate would have popped the
     extra prints into existence across the whole frame at once, which is the despawn-in-reverse the
     spec rules out.
+
+    WITHDRAWN — see ALWAYS_EMITTED. The half-pitch check below runs whether or not the beat is
+    emitted, deliberately: a withdrawn beat whose geometry stops being checked rots silently, and
+    restoring one name must restore a beat that provably sits on the print grid.
     """
     pitch = STRIP_PX_PER_STRIDE
     # The left edge meets the rightmost foot exactly at the declared window start.
@@ -1776,6 +1839,8 @@ def overlap_run(art: Art) -> str:
             f"on every second print — it lands between prints, which reads as a broken grid rather "
             f"than as two records. Keep the window start a whole number of {STRIDE:g}s strides."
         )
+    if not emits(art, "rOverlap"):
+        return ""
 
     def body(shift: float) -> str:
         return "".join(print_ink(shift + x0 + k * pitch) for k in range(OVERLAP_PRINTS))
@@ -1880,7 +1945,7 @@ def ground_detail(art: Art) -> str:
 
 
 # ── clawd ─────────────────────────────────────────────────────────────────────────────────────────
-def clawd_sprite(idsuffix: str = "") -> str:
+def clawd_sprite(idsuffix: str = "", cheer: bool = True) -> str:
     """The creature as nested single-animation groups (S8).
 
     Geometry is the 11x8 grid from the binary: rows 0-5 are the body at columns 1-9, rows 2-3 widen
@@ -1890,6 +1955,10 @@ def clawd_sprite(idsuffix: str = "") -> str:
     The pose vocabulary is quoted rather than invented: default / look-left / look-right / arms-up,
     where only the eye band moves between the three looking poses and arms-up is the one whole-body
     pose.
+
+    `cheer=False` omits the arms-up group entirely rather than leaving it for a gate to hide. An
+    ungated group is not hidden — the raised arms would simply be ON for the whole loop — so the
+    element and its gate have to appear and disappear together.
     """
     c = CELL
     sfx = idsuffix
@@ -1922,6 +1991,7 @@ def clawd_sprite(idsuffix: str = "") -> str:
         f'<rect x="{fmt(7.0 * c)}" y="{fmt(-1.6 * c)}" width="{fmt(0.45 * c)}" '
         f'height="{fmt(0.45 * c)}" fill="{CLAWD}" opacity=".7"/>'
     )
+    cheer_group = f'<g class="rCheer{sfx}">{arms_up}</g>' if cheer else ""
 
     eyes_open = (
         f'<rect class="eyeHole" x="{eye_l}" y="{eye_y}" width="{c}" height="{c}"/>'
@@ -1947,14 +2017,21 @@ def clawd_sprite(idsuffix: str = "") -> str:
 
     # THE ASK's posture. The sleep this replaces shut the eyes; an ask does the opposite — it is
     # waiting on a human and looking straight at where the answer has to come from. So the ask needs
-    # the eye band PARKED rather than moving: the 8 s look cycle is swapped out wholesale for a
-    # static centred pair, exactly as the legs are. Six seconds without a blink is a stare, which is
-    # the read the beat wants; keeping the blink would have meant putting the whole look cycle on the
-    # master period, thirty repetitions of it, to gate six seconds out of the middle.
+    # the eye band PARKED rather than PANNING: the 8 s look cycle is swapped out wholesale for a
+    # centred pair, exactly as the legs are.
+    #
+    # It does NOT stay perfectly still, and that is a correction. A dead-still stare was the read the
+    # beat wanted, and six seconds of it instead read as a stalled render — "feels buggy being
+    # halted" — because nothing on screen distinguishes a stopped world from a stopped image. The gaze
+    # still does not move; the eyes BLINK three times (see `ask_blinks`). The reason the ambient 4 s
+    # blink could not simply be gated through still stands — it would have to be re-based onto the
+    # master period, thirty repetitions, to keep six seconds out of the middle — so this pair carries
+    # its own once-per-loop blink instead: gate outside on `.eyesAsk`, blink inside, the same nesting
+    # as armsGate/armsIdle for the same one-animation-per-element reason.
     eyes_ask = (
         f'<g class="eyesAsk{sfx}">'
-        f'<rect class="eyeHole" x="{eye_l}" y="{eye_y}" width="{c}" height="{c}"/>'
-        f'<rect class="eyeHole" x="{eye_r}" y="{eye_y}" width="{c}" height="{c}"/>'
+        f'<g class="aOpen{sfx}">{eyes_open}</g>'
+        f'<g class="aShut{sfx}">{eyes_shut}</g>'
         f"</g>"
     )
     # ears up: the stubs rise ONE cell in their own columns. Deliberately not the cheer's three cells
@@ -1978,7 +2055,7 @@ def clawd_sprite(idsuffix: str = "") -> str:
         # already carries the wiggle and only one animation per element survives the freeze (S8),
         # so it becomes a nested wrapper: gate outside, wiggle inside.
         f'<g class="armsGate{sfx}"><g class="armsIdle{sfx}">{arms_idle}</g></g>'
-        f'<g class="rCheer{sfx}">{arms_up}</g>'
+        f"{cheer_group}"
         f"{arms_alert}"
         f"{body}"
         # The look cycle needs an opacity gate for THE ASK, and it already carries the 8 s pan, so it
@@ -2008,7 +2085,7 @@ def clawd_placed(art: Art, x: float, scale: float, sfx: str = "") -> str:
     )
     return (
         shadow + f'<g transform="translate({fmt(x)} {fmt(ty)}) scale({fmt(scale)})" '
-        f'shape-rendering="crispEdges">{clawd_sprite(sfx)}</g>'
+        f'shape-rendering="crispEdges">{clawd_sprite(sfx, emits(art, "rCheer"))}</g>'
     )
 
 
@@ -2039,6 +2116,7 @@ def peek(art: Art) -> str:
 # ── stylesheet ────────────────────────────────────────────────────────────────────────────────────
 def css(art: Art) -> str:
     d, l = art.dark, art.light
+    cheering = emits(art, "rCheer")
 
     def cloudrules(t: Theme, pfx: str = "") -> str:
         s = ""
@@ -2154,11 +2232,23 @@ def css(art: Art) -> str:
                 gate("lgf", ".lookGate", [ask_stop()], on_inside=False),
                 gate("eaf", ".eyesAsk", [ask_stop()]),
                 gate("aaf", ".armsAlert", [ask_stop()]),
-                # cheer: raised arms ON and — the shipped bug — the IDLE side-arms OFF, or the
-                # sprite shows four arms at once, which is what read as horns with confetti. The
-                # idle arms must also be off for the ask's raised pair, for the same reason.
-                gate("rcf", ".rCheer", [ev("rCheer")]),
-                gate("agf", ".armsGate", [ev("rCheer"), ask_stop()], on_inside=False),
+                # ...and the stare BLINKS, three times, inside the gate that shows it. This is the
+                # ONLY thing moving through the dead world, which is the whole job: it separates a
+                # stopped world from a stopped renderer. It costs no world rate, so nothing is owed
+                # back and the print lock is untouched.
+                gate("abo", ".aOpen", ask_blinks(), on_inside=False),
+                gate("abc", ".aShut", ask_blinks()),
+                # The idle side-arms must be OFF while the ask's alert pair is up, or the sprite
+                # shows four arms at once — two at the sides and two raised — which is most of why a
+                # raised pair reads as horns. The gate cannot go on `.armsIdle` itself because that
+                # element already carries the wiggle and only one animation per element survives the
+                # freeze (S8), so it is a nested wrapper: gate outside, wiggle inside.
+                gate(
+                    "agf",
+                    ".armsGate",
+                    [ev("rCheer"), ask_stop()] if cheering else [ask_stop()],
+                    on_inside=False,
+                ),
                 # the barrier: retracted at the post's head, down across the path, retracted again.
                 f"@keyframes rbf{{0%,{at('rRefuse', 0)}%{{transform:translateY(0)}}"
                 f"{at('rRefuse', BAR_AT)}%,{at('rRefuse', BAR_UP_AT)}%"
@@ -2199,6 +2289,10 @@ def css(art: Art) -> str:
                 f"{atf('peer', 0.68)}%,100%{{opacity:0}}}}"
                 f".pCheer{{animation:pcf {fmt(P)}s steps(1,end) infinite}}",
             ]
+            # The cheer's gate and the cheer's element appear and disappear together — an element
+            # with no gate is not hidden, it is permanently ON, and a gate with no element is a
+            # keyframe block nothing reads. Withdrawing the beat has to drop BOTH halves.
+            + ([gate("rcf", ".rCheer", [ev("rCheer")])] if cheering else [])
         )
         # the peer's stride — the only peer motion not driven by the event table
         + (
@@ -2233,8 +2327,8 @@ def css(art: Art) -> str:
     reduced = (
         "@media (prefers-reduced-motion:reduce){"
         "*{animation:none!important}"
-        ".rCheer,.legsStill,.eShut,.peer,.pCheer,.eyesAsk,.armsAlert{opacity:0}"
-        ".legsWalk,.eOpen,.armsGate,.lookGate{opacity:1}"
+        ".rCheer,.legsStill,.eShut,.aShut,.peer,.pCheer,.eyesAsk,.armsAlert{opacity:0}"
+        ".legsWalk,.eOpen,.aOpen,.armsGate,.lookGate{opacity:1}"
         # The barrier rests RETRACTED. `animation:none` already leaves it there (translateY(0) is its
         # un-animated base), but the still is the deliverable, so it is pinned rather than inferred —
         # the same reasoning as the moon halo below, which was blown out for exactly that assumption.
