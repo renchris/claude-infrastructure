@@ -316,8 +316,57 @@ _spawn_epoch() {
   printf '%s' "$(( ms / 1000 ))"
 }
 
+# D7 send-damping (best-effort: absent lib ⇒ undamped, i.e. today's behaviour, never a lost page).
+# Same resolve order + fail-open posture as bin/cc-reaper's.
+for _c in "$HOOK_DIR/lib/page-damp.sh" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/page-damp.sh" \
+          "$HOME/.claude/hooks/lib/page-damp.sh"; do
+  # shellcheck disable=SC1090,SC1091
+  [[ -f "$_c" ]] && { . "$_c" 2>/dev/null || true; break; }
+done
+
 # Best-effort desk page (never fatal).
 _page_desk() { "$CC_NOTIFY_BIN" --role desk "$1" >/dev/null 2>&1 || true; }
+
+# Damped desk page: <fingerprint> <message>. The fingerprint is the page's STATE — never a clock or a
+# counter, which would change every sweep and silently disable damping while looking wired.
+_page_desk_damped() {
+  local fp="$1" msg="$2"
+  if command -v damp_should_send >/dev/null 2>&1; then
+    damp_should_send "role:desk" "$fp" || { log "  ~ page suppressed (damped) [$fp]"; return 0; }
+  fi
+  _page_desk "$msg"
+}
+
+# ── LIVENESS: is a tool RUNNING right now? (2026-07-29) ──────────────────────────────────────────
+# TeammateIdle fires on turn-boundary silence, but a teammate in the middle of a long Bash/build/test
+# call is SILENT AND WORKING: its transcript's last record is an assistant tool_use timestamped at
+# call START, so idleness crosses the threshold mid-call and a live worker reads as finished. Observed
+# on this hook 2026-07-29 — a teammate actively writing tests (stale=0m) was SURFACEd as confirm-close.
+# In a real transcript a FINISHED turn ends with an assistant TEXT block or a `user` tool_result,
+# never a bare trailing tool_use, so this fires only on a genuine mid-call state.
+# Mirrors bin/cc-classify's tool_in_flight() (a18 L-13) — same predicate, deliberately re-stated here
+# rather than sourced: cc-classify is an executable with no library guard, so sourcing it would run
+# its main. Keep the two in step; tests/teammate-auto-shutdown.bats pins this copy's semantics.
+_tool_in_flight() {  # <session-id> → 0 if a tool call is outstanding
+  local sid="${1:-}" f last_rec tu_id
+  [[ -n "$sid" && "$sid" != "unknown" ]] || return 1
+  f="$(_find_transcript "$sid")" || return 1
+  [[ -s "$f" ]] || return 1
+  last_rec="$(tail -n 1 "$f" 2>/dev/null)"
+  [[ -n "$last_rec" ]] || return 1
+  printf '%s' "$last_rec" \
+    | jq -e '.type=="assistant" and ((.message.content // []) | map(select(.type=="tool_use")) | length > 0)' \
+      >/dev/null 2>&1 || return 1
+  tu_id="$(printf '%s' "$last_rec" \
+    | jq -r '(.message.content // []) | map(select(.type=="tool_use")) | last | .id // empty' 2>/dev/null)"
+  if [[ -n "$tu_id" ]]; then
+    # a matching tool_result anywhere ⇒ the tool returned ⇒ not in flight
+    jq -rc 'select(.type=="user") | (.message.content // []) | if type=="array" then .[] else empty end
+            | select(.type=="tool_result") | .tool_use_id // empty' "$f" 2>/dev/null \
+      | grep -qxF "$tu_id" && return 1
+  fi
+  return 0
+}
 
 INPUT=$(cat)
 TEAMMATE_NAME=$(echo "$INPUT" | jq -r '.teammate_name // "unknown"' 2>/dev/null)
@@ -334,6 +383,20 @@ SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // "unknown"' 2>/dev/null)
 #
 # Strategy: try exact matches first, then fall back to a glob-based search.
 WORKTREE=""
+
+# ── WORKTREE_OWNED — may we DESTROY this worktree? (2026-07-29) ───────────────────────────────────
+# Two different questions share the one $WORKTREE variable, and conflating them is a data-loss bug:
+#   (a) "which tree do I GATE on?"    — busy-marker, dirty-defer, reap-guard effect-read, checkpoint.
+#   (b) "which tree may I REMOVE?"    — the `git worktree remove --force` at the end of the close.
+# For a DEDICATED per-member worktree both answers are the same tree. For a SHARED one they are not:
+# on the 2.1.183 implicit-team model every member's config.json `cwd` is the LEAD's spawn cwd, shared
+# verbatim by the whole team (verified: team session-a8e72ae5 — lead + 3 members all recorded
+# ~/Development/.worktrees/gu-session-lifecycle). Resolving (b) to that tree would make the reap of
+# ONE pool teammate `--force`-remove the LEAD's worktree and every sibling's uncommitted work.
+# So: resolution legs that prove per-MEMBER ownership set OWNED=true; the shared-cwd leg leaves it
+# false, which still buys every gate in (a) — strictly more safety than today's unresolved-and-blind
+# path — while the removal below stays refused. Gate on a shared tree, never destroy one.
+WORKTREE_OWNED=false
 
 # Build candidate member names: full, and with trailing "-N" stripped.
 MEMBER_CANDIDATES=("$TEAMMATE_NAME")
@@ -374,7 +437,81 @@ resolve_from_manifest() {
   return 1
 }
 if MANIFEST_WT=$(resolve_from_manifest "$PAYLOAD_CWD"); then
-  WORKTREE="$MANIFEST_WT"
+  WORKTREE="$MANIFEST_WT"          # manifest declares a per-member worktree ⇒ dedicated
+  WORKTREE_OWNED=true
+fi
+
+# ── Team config.json — the ONE file that always exists for an implicit team (2026-07-29) ─────────
+# Read once here and reused by both new legs below. CC writes $CLAUDE_CONFIG_DIR/teams/<team>/
+# config.json for every team INCLUDING the 2.1.183 implicit ones (`session-<id>`), recording each
+# member's `cwd` — and the close block at the bottom of this hook already opens exactly this file
+# for tmuxPaneId. The worktree answer was sitting in a file we already read and never looked at.
+# Prefer the root that actually lists this member; a stale same-named team dir must not shadow it.
+TEAM_CONFIG=""
+for _root in "${TEAM_ROOTS[@]}"; do
+  _cand_cfg="$_root/$TEAM_NAME/config.json"
+  [[ -f "$_cand_cfg" ]] || continue
+  [[ -z "$TEAM_CONFIG" ]] && TEAM_CONFIG="$_cand_cfg"        # first existing = weakest fallback
+  for m in "${MEMBER_CANDIDATES[@]}"; do
+    if jq -e --arg m "$m" '.members[]? | select(.name==$m)' "$_cand_cfg" >/dev/null 2>&1; then
+      TEAM_CONFIG="$_cand_cfg"; break 2
+    fi
+  done
+done
+
+# ── LEG: the member's OWN worktree, by name, from git itself (2026-07-29) ────────────────────────
+# WHY this leg exists: every pre-existing leg is structurally dead for an implicit team. The manifest
+# above needs .claude/team-briefs/<team>/manifest.yaml (no such file exists anywhere on this machine);
+# the TSV below is written only by create-team.sh (present for 4 named teams from June, none of the
+# `session-*` ones); the /tmp globs cannot match ~/Development/.worktrees/<name>, which is where the
+# native `claude -w` / Agent worktrees actually live. Net effect measured 2026-07-29: WORKTREE was
+# unresolved for 100% of implicit-team teammates — 81 SURFACE pages, and reap-guard's decision-record
+# dir was EMPTY, i.e. the whole birth-grace/effect-read/adoption gate had never once executed.
+# git is the authority on where a worktree is, so ask git: the fleet convention is one worktree per
+# member named for that member (gu5-verdict → ~/Development/.worktrees/gu5-verdict, all in
+# `git worktree list`). A basename match is per-MEMBER evidence ⇒ dedicated ⇒ removable.
+resolve_by_worktree_name() {
+  local seed="$1" line wt base m
+  [[ -n "$seed" && -d "$seed" ]] || return 1
+  while IFS= read -r line; do
+    wt="${line#worktree }"
+    [[ "$wt" != "$line" ]] || continue          # only `worktree <path>` records
+    # ONE normal form. git reports the path as recorded at `worktree add`, which on macOS is the
+    # /private-prefixed realpath for anything under /var or /tmp, while every other leg here yields
+    # the unprefixed form (PAYLOAD_CWD and the config cwd are both `#/private`-stripped). Two spellings
+    # of one directory would then reach the log line, the checkpoint payload, the patch header and the
+    # teardown marker. Strip only when the result still resolves — an unconditional strip would break a
+    # path that genuinely lives under /private with no /-rooted twin.
+    [[ "$wt" == /private/* && -d "${wt#/private}" ]] && wt="${wt#/private}"
+    base="${wt##*/}"
+    for m in "${MEMBER_CANDIDATES[@]}"; do
+      if [[ "$base" == "$m" && -d "$wt" ]]; then printf '%s\n' "$wt"; return 0; fi
+    done
+  done < <(git -C "$seed" worktree list --porcelain 2>/dev/null)
+  return 1
+}
+if [[ -z "$WORKTREE" ]]; then
+  # The seed only has to be SOME live path inside the right repo — `git worktree list` then reports
+  # every worktree of that repo, including the member's. Try each candidate until one is a live dir:
+  # a DEAD seed silently disables this whole leg. Live case that proved it (team session-8891c11f,
+  # 2026-07-29): the recorded cwd for all 7 members is ~/Development/.worktrees/gu-autonomy-dispatch,
+  # which no longer exists — yet gu5-verdict/-decide/-cadence each still own a worktree of their own
+  # name. Seeding from only the first recorded cwd left every one of them unresolved.
+  _named_seeds=()
+  [[ -n "$PAYLOAD_CWD" ]] && _named_seeds+=("$PAYLOAD_CWD")
+  if [[ -n "$TEAM_CONFIG" ]]; then
+    while IFS= read -r _c; do
+      [[ -n "$_c" ]] && _named_seeds+=("${_c#/private}")
+    done < <(jq -r '[.members[]?.cwd // empty] | map(select(.!="")) | unique | .[]' "$TEAM_CONFIG" 2>/dev/null)
+  fi
+  for _seed in "${_named_seeds[@]:-}"; do
+    [[ -n "$_seed" && -d "$_seed" ]] || continue
+    if NAMED_WT=$(resolve_by_worktree_name "$_seed"); then
+      WORKTREE="$NAMED_WT"
+      WORKTREE_OWNED=true
+      break
+    fi
+  done
 fi
 
 # Fallback: a global TSV (<member>\t<worktree>) persisted by create-team.sh —
@@ -388,7 +525,7 @@ if [[ -z "$WORKTREE" ]]; then
     for m in "${MEMBER_CANDIDATES[@]}"; do
       cand=$(awk -F'\t' -v want="$m" '$1==want{print $2; exit}' "$TSV" 2>/dev/null || echo '')
       cand="${cand/#\~/$HOME}"
-      if [[ -n "$cand" && -d "$cand" ]]; then WORKTREE="$cand"; break 2; fi
+      if [[ -n "$cand" && -d "$cand" ]]; then WORKTREE="$cand"; WORKTREE_OWNED=true; break 2; fi
     done
   done
 fi
@@ -401,7 +538,8 @@ if [[ -z "$WORKTREE" ]]; then
       "/tmp/worktree-${TEAM_NAME}-${m}" \
       "/tmp/worktree-${m}"; do
       if [[ -d "$candidate" ]]; then
-        WORKTREE="$candidate"
+        WORKTREE="$candidate"        # per-member path ⇒ dedicated
+        WORKTREE_OWNED=true
         break 2
       fi
     done
@@ -416,12 +554,43 @@ if [[ -z "$WORKTREE" ]]; then
   for m in "${MEMBER_CANDIDATES[@]}"; do
     for candidate in /tmp/wt-*-"${m}" /tmp/worktree-*-"${m}"; do
       if [[ -d "$candidate" ]]; then
-        WORKTREE="$candidate"
+        WORKTREE="$candidate"        # per-member path ⇒ dedicated
+        WORKTREE_OWNED=true
         break 2
       fi
     done
   done
   shopt -u nullglob
+fi
+
+# ── LAST LEG: the team config's recorded cwd — GATE-ONLY, never removable (2026-07-29) ───────────
+# Deliberately last: every leg above is per-MEMBER evidence, this one is not. On the implicit-team
+# model `.members[].cwd` is the cwd the member was SPAWNED in, which is the lead's — team
+# session-8891c11f records ~/Development/.worktrees/gu-autonomy-dispatch for all 7 members even
+# though gu5-verdict/-decide/-cadence each own a worktree of their own name (the name leg above
+# catches those first, which is exactly why it runs first). Two consequences, both handled:
+#   • It is often SHARED ⇒ OWNED stays false ⇒ the removal at the bottom refuses it. Marking it
+#     owned would `--force`-remove the lead's tree on the first pool teammate reaped.
+#   • It can be STALE — the recorded dir may already be gone (that same team's cwd no longer
+#     exists). A non-directory is not a resolution; fall through to the fail-closed defer instead.
+# What it DOES buy: for genuinely-shared pool teammates this is the real tree they work in, so the
+# busy-marker, dirty-tree and reap-guard effect-read gates finally run on something true.
+if [[ -z "$WORKTREE" && -n "$TEAM_CONFIG" ]]; then
+  for m in "${MEMBER_CANDIDATES[@]}"; do
+    cfg_cwd=$(jq -r --arg m "$m" '.members[]? | select(.name==$m) | .cwd // empty' "$TEAM_CONFIG" 2>/dev/null | head -1)
+    cfg_cwd="${cfg_cwd#/private}"
+    [[ -n "$cfg_cwd" && -d "$cfg_cwd" ]] || continue
+    WORKTREE="$cfg_cwd"
+    # Dedicated ONLY if this member is the sole occupant of that cwd; any sibling (the lead counts)
+    # sharing it ⇒ shared ⇒ gate-only. jq counts members recording the same path.
+    _occupants=$(jq -r --arg c "$cfg_cwd" '[.members[]? | select((.cwd // "") == $c)] | length' "$TEAM_CONFIG" 2>/dev/null)
+    if [[ "$_occupants" == "1" ]]; then
+      WORKTREE_OWNED=true
+    else
+      log "  ↳ $TEAMMATE_NAME: worktree $WORKTREE is SHARED by ${_occupants:-?} members — gating on it, removal refused"
+    fi
+    break
+  done
 fi
 
 # Rule 4 — cooperative busy marker
@@ -451,6 +620,23 @@ if $TREE_DIRTY && (( DEFER_COUNT < MAX_DEFERS )); then
   "$HOOK_DIR/teammate-checkpoint.sh" <<<"{\"hook_event_name\":\"TeammateIdle\",\"session_id\":\"$SESSION_ID\",\"cwd\":\"$WORKTREE\",\"team_name\":\"$TEAM_NAME\",\"teammate_name\":\"$TEAMMATE_NAME\"}" \
     2>/dev/null || true
   # Do NOT emit {"continue": false}; let the teammate keep working.
+  exit 0
+fi
+
+# ── TOOL-IN-FLIGHT hold (2026-07-29) — a running tool is positive evidence of LIFE ───────────────
+# Sits BEFORE reap-guard and is deliberately independent of $WORKTREE: it reads the teammate's own
+# transcript, so it holds for the teammates no worktree leg can resolve (a member with no `cwd`
+# recorded, or a team with no config.json at all) as well as for the resolved ones.
+# It is also the safety companion to the resolution fix above. Until 2026-07-29 an implicit-team
+# teammate never got past the unresolved-worktree defer, so it was never closeable at all; now that
+# those worktrees DO resolve, such a teammate reaches the close for the first time — and a live one
+# mid-tool_use with a clean tree and products since spawn is precisely what reap-guard would wave
+# through. Neither tree-state nor turn-silence can see a running tool; only the transcript can.
+# UNBOUNDED by design (not charged to MAX_DEFERS): a tool that is still running is a fact, not a
+# stall, and it clears itself the moment the tool_result lands.
+if _tool_in_flight "$SESSION_ID"; then
+  log "defer $TEAMMATE_NAME (team=$TEAM_NAME): tool in flight — teammate is live, not idle"
+  # Do NOT emit {"continue": false}; the teammate is mid-call.
   exit 0
 fi
 
@@ -488,7 +674,13 @@ if [[ -z "$WORKTREE" ]]; then
     exit 0
   fi
   log "⚑ SURFACE $TEAMMATE_NAME (team=$TEAM_NAME): WORKTREE unresolved after $MAX_DEFERS defers — refusing ungated close, paging desk (session=$SESSION_ID)"
-  _page_desk "teammate-auto-shutdown SURFACE: cannot resolve worktree for $TEAMMATE_NAME (team $TEAM_NAME, session $SESSION_ID) after $MAX_DEFERS defers — pane NOT closed (would be ungated). Confirm-close manually."
+  # DAMPED (2026-07-29): this leg re-fires on EVERY subsequent TeammateIdle for the same teammate —
+  # measured 81 pages, one teammate paging 6 times in 3 minutes. A close-order channel that repeats
+  # itself trains the operator to ignore it, so the page is keyed on its STATE (team+member+cause)
+  # and re-asserts on the page-damp TTL (~2/hour) instead of every sweep. The LOG line above stays
+  # undamped — the forensic record must remain complete even when the page is suppressed.
+  _page_desk_damped "WORKTREE-UNRESOLVED:$TEAM_NAME:$TEAMMATE_NAME" \
+    "teammate-auto-shutdown SURFACE: cannot resolve worktree for $TEAMMATE_NAME (team $TEAM_NAME, session $SESSION_ID) after $MAX_DEFERS defers — pane NOT closed (would be ungated). Confirm-close manually."
   exit 0
 fi
 
@@ -612,7 +804,13 @@ if (( _hold_on )); then
         # HAVE a worktree (the reap-guard call above is gated on $WORKTREE), so for a worktree-less
         # teammate this belt is the ONLY who-gate and must not fall open.
         log "  ⚑ who-oracle UNREADABLE for $_adopt_tj (corrupt/truncated/empty, or no jq) — 'cannot read' is not 'nobody typed'; NOT closing pane [$PANEID] ($MEMBER_NAME); paging desk"
-        _page_desk "teammate-auto-shutdown HELD: pane $PANEID ($MEMBER_NAME, team $TEAM_NAME) — the operator-presence oracle could not READ its transcript ($_adopt_tj), so adoption is unprovable; left open, confirm-close manually."
+        # Damped for the same reason as the SURFACE page: both re-fire on EVERY subsequent
+        # TeammateIdle. Neither had ever fired before 2026-07-29 — not because they are rare, but
+        # because the unresolved-worktree defer above short-circuited every implicit-team teammate
+        # before it could reach them. The resolution fix makes this belt reachable for the first
+        # time, so it gets the damping up front rather than after it becomes the next 81-page log.
+        _page_desk_damped "ADOPTION-UNREADABLE:$TEAM_NAME:$MEMBER_NAME" \
+          "teammate-auto-shutdown HELD: pane $PANEID ($MEMBER_NAME, team $TEAM_NAME) — the operator-presence oracle could not READ its transcript ($_adopt_tj), so adoption is unprovable; left open, confirm-close manually."
         exit 0
       fi
       if [[ "$_iep" =~ ^[0-9]+$ ]]; then
@@ -621,7 +819,9 @@ if (( _hold_on )); then
         _iage=$(( _now - _iep )); (( _iage < 0 )) && _iage=0
         if (( _iage < INTERACTIVE_HOLD_S )) && (( _iep > _spawn_s + FIRE_PROMPT_SLACK_S )); then
           log "  ⚑ operator-adopted: real prompt ${_iage}s ago (< hold ${INTERACTIVE_HOLD_S}s, past spawn+${FIRE_PROMPT_SLACK_S}s) — NOT closing pane [$PANEID] ($MEMBER_NAME); paging desk"
-          _page_desk "teammate-auto-shutdown HELD: pane $PANEID ($MEMBER_NAME, team $TEAM_NAME) is operator-adopted — real prompt ${_iage}s ago; left open, confirm-close manually."
+          # Damped on (team, member, cause) — see the note on the unreadable-oracle page above.
+          _page_desk_damped "ADOPTION-HELD:$TEAM_NAME:$MEMBER_NAME" \
+            "teammate-auto-shutdown HELD: pane $PANEID ($MEMBER_NAME, team $TEAM_NAME) is operator-adopted — real prompt ${_iage}s ago; left open, confirm-close manually."
           # Do NOT emit {"continue": false}; leave the operator's turn untouched.
           exit 0
         fi
@@ -661,12 +861,19 @@ echo '{"continue": false, "stopReason": "Idle teammate auto-shutdown (work prese
       log "  ! no pane id resolved for $MEMBER_NAME — left for CC session-end cleanup"
     fi
   fi
-  if [[ -n "$WORKTREE" ]]; then
+  # `--force` DISCARDS uncommitted work, so this must fire only on a tree this member provably OWNS.
+  # WORKTREE_OWNED is false when the path came from the shared team-config cwd (2026-07-29): on the
+  # implicit-team model that is the LEAD's worktree, recorded identically for every member, so an
+  # unguarded remove would destroy the lead's tree and every sibling's uncommitted work the first
+  # time any one pool teammate went idle. Gate on a shared tree; never destroy one.
+  if [[ -n "$WORKTREE" ]] && $WORKTREE_OWNED; then
     MAIN_REPO=$(git -C "$WORKTREE" rev-parse --git-common-dir 2>/dev/null | sed 's|/\.git$||')
     if [[ -n "$MAIN_REPO" && -d "$MAIN_REPO" ]]; then
       git -C "$MAIN_REPO" worktree remove "$WORKTREE" --force 2>/dev/null \
         && log "  ✓ worktree removed: $WORKTREE"
     fi
+  elif [[ -n "$WORKTREE" ]]; then
+    log "  ~ worktree kept (shared, not owned by $MEMBER_NAME): $WORKTREE"
   fi
 ) >/dev/null 2>&1 &
 

@@ -284,3 +284,161 @@ wait_for() { local i=0; while [ ! -e "$1" ] && [ "$i" -lt 60 ]; do sleep 0.05; i
   [[ "$output" == RECYCLE* ]] || false
   [[ "$output" == *deliberate-teardown* ]]
 }
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# 2026-07-29 — WORKTREE-RESOLUTION GAP + LIVENESS. Measured before this change: WORKTREE was
+# unresolved for 100% of 2.1.183 implicit-team teammates (every resolution leg is structurally dead
+# for them — no manifest exists on the machine, worktrees.tsv is written only by create-team.sh, and
+# the /tmp globs cannot match ~/Development/.worktrees/<name>). Consequences: 81 SURFACE pages, and
+# ~/.claude/reap-guard/ EMPTY — the birth-grace/effect-read/adoption gate had never once executed.
+# The fix adds two legs, and with them the OWNERSHIP distinction these tests exist to pin: a tree
+# resolved from the team config's shared `cwd` may be GATED on but must never be REMOVED.
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+
+# a real git repo with one commit (git worktree remove needs a real repo, not a bare dir)
+mkrepo() {
+  mkdir -p "$1"; git -C "$1" init -q
+  git -C "$1" config user.email t@t; git -C "$1" config user.name t
+  echo x > "$1/f"; git -C "$1" add f; git -C "$1" commit -qm init
+}
+# a real LINKED worktree of <repo> at <path> on a new branch
+mkwt() { git -C "$1" worktree add -q -b "$3" "$2" >/dev/null 2>&1; }
+# team config.json with a per-member cwd (the implicit-team shape); args: team member pane cwd [extra-member]
+teamcfg_cwd() {
+  mkdir -p "$HOME/.claude/teams/$1"
+  if [ -n "${5:-}" ]; then
+    printf '{"members":[{"name":"%s","tmuxPaneId":"leader","cwd":"%s"},{"name":"%s","tmuxPaneId":"%s","cwd":"%s"}]}' \
+      "$5" "$4" "$2" "$3" "$4" > "$HOME/.claude/teams/$1/config.json"
+  else
+    printf '{"members":[{"name":"%s","tmuxPaneId":"%s","cwd":"%s"}]}' "$2" "$3" "$4" > "$HOME/.claude/teams/$1/config.json"
+  fi
+}
+# last record = an assistant tool_use with NO result ⇒ a tool is RUNNING
+txtool() { printf '{"type":"assistant","timestamp":"%s.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"%s","name":"Bash","input":{}}]}}\n' "$(iso "$2")" "${3:-tu1}" > "$D/proj/slug/$1.jsonl"; }
+# the tool RETURNED (a user tool_result record appended) ⇒ turn finished
+txtoolresult() { printf '{"type":"user","timestamp":"%s.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"%s"}]}}\n' "$(iso "$2")" "${3:-tu1}" >> "$D/proj/slug/$1.jsonl"; }
+wait_gone() { local i=0; while [ -e "$1" ] && [ "$i" -lt 60 ]; do sleep 0.05; i=$((i+1)); done; [ ! -e "$1" ]; }
+
+# (A) NAME leg — a worktree named for the member resolves from git itself, and IS removed.
+#     POSITIVE CONTROL for the ownership gate: proves it is not merely "never remove".
+@test "worktree-by-name: a member-named worktree resolves via git and IS removed (owned)" {
+  local sid=sidWN team=teamWN member=gu5-verdict pane=%91
+  mkrepo "$D/repo"; local wt="$D/wts/$member"; mkdir -p "$D/wts"; mkwt "$D/repo" "$wt" b-verdict
+  [ -d "$wt" ]
+  # NO tsv and NO cwd in config ⇒ the name leg is the ONLY thing that can resolve this.
+  teamcfg "$team" "$member" "$pane"
+  reg "$sid" PANE-WN "$wt" 3600
+  tx "$sid" 9000
+  run hookrun "$member" "$team" "$sid" "$D/repo"     # payload cwd seeds `git worktree list`
+  [ "$status" -eq 0 ]
+  grep -q "Auto-shutdown idle teammate: $member" "$LOGF"     # resolved ⇒ reached the reap
+  wait_gone "$wt"                                            # and the OWNED worktree was removed
+  grep -q "worktree removed: $wt" "$LOGF"
+}
+
+# (B) SHARED cwd — THE data-loss guard. On the implicit-team model every member's config `cwd` is the
+#     LEAD's worktree, recorded identically for the whole team. Resolving it is right (the gates need
+#     a real tree) but removing it would `--force`-destroy the lead's tree and every sibling's work.
+@test "shared team-config cwd: gated on, but the worktree is NEVER removed (lead-tree data-loss guard)" {
+  local sid=sidSH team=teamSH member=gu2-seams pane=%92
+  mkrepo "$D/repo2"; local shared="$D/wts2/pool"; mkdir -p "$D/wts2"; mkwt "$D/repo2" "$shared" b-pool
+  [ -d "$shared" ]
+  # lead + member BOTH record the same cwd ⇒ shared ⇒ not owned. No name-match, no tsv.
+  teamcfg_cwd "$team" "$member" "$pane" "$shared" team-lead
+  reg "$sid" PANE-SH "$shared" 3600
+  tx "$sid" 9000
+  run hookrun "$member" "$team" "$sid" /nonexistent-cwd
+  [ "$status" -eq 0 ]
+  grep -q "Auto-shutdown idle teammate: $member" "$LOGF"     # resolved: gates ran, reap proceeded
+  grep -q "is SHARED by 2 members" "$LOGF"                   # and it was classified as shared
+  sleep 0.5
+  [ -d "$shared" ]                                           # ← the guard: tree SURVIVES the reap
+  grep -q "worktree kept (shared, not owned" "$LOGF"
+  ! grep -q "worktree removed: $shared" "$LOGF"
+}
+
+# (B2) a config cwd recorded for a SOLE occupant is genuinely that member's ⇒ owned ⇒ removable.
+#      Keeps (B) honest: the refusal is keyed on SHARING, not on "came from config".
+@test "sole-occupant team-config cwd: owned ⇒ worktree IS removed" {
+  local sid=sidSO team=teamSO member=solo-worker pane=%93
+  mkrepo "$D/repo3"; local wt="$D/wts3/solo"; mkdir -p "$D/wts3"; mkwt "$D/repo3" "$wt" b-solo
+  teamcfg_cwd "$team" "$member" "$pane" "$wt"          # exactly ONE member records this cwd
+  reg "$sid" PANE-SO "$wt" 3600
+  tx "$sid" 9000
+  run hookrun "$member" "$team" "$sid" /nonexistent-cwd
+  [ "$status" -eq 0 ]
+  wait_gone "$wt"
+  grep -q "worktree removed: $wt" "$LOGF"
+}
+
+# (C) TOOL-IN-FLIGHT — a teammate mid-tool_use is LIVE. Observed 2026-07-29: a teammate actively
+#     writing tests (stale=0m) was SURFACEd as confirm-close. Must defer: no close, no page.
+@test "tool in flight: a mid-tool_use teammate is live → defer, no close, no page" {
+  local sid=sidTF team=teamTF member=wkrLive pane=%94 wt="$D/wtTF"
+  mkdir -p "$wt"; worktreetsv "$team" "$member" "$wt"; teamcfg "$team" "$member" "$pane"
+  reg "$sid" PANE-TF "$wt" 3600
+  txtool "$sid" 30 tu-live                              # trailing tool_use, NO tool_result
+  run hookrun "$member" "$team" "$sid" "$wt"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *'"continue": false'* ]] || false
+  grep -q "tool in flight" "$LOGF"
+  [ ! -e "$D/tmux-calls.log" ]                          # no pane closed
+  [ ! -e "$D/it2-calls.log" ]
+  [ ! -e "$D/notify-calls.log" ]                        # and NOT surfaced as confirm-close
+}
+
+# (C2) positive control for (C): the same tool_use once its RESULT has landed is a FINISHED turn.
+#      Without this, (C) would also pass against a predicate that simply always says "live".
+@test "tool returned: tool_use + matching tool_result → not live → closes as before" {
+  local sid=sidTR team=teamTR member=wkrDone pane=%95 wt="$D/wtTR"
+  mkdir -p "$wt"; worktreetsv "$team" "$member" "$wt"; teamcfg "$team" "$member" "$pane"
+  reg "$sid" PANE-TR "$wt" 3600
+  txtool "$sid" 9000 tu-done; txtoolresult "$sid" 8900 tu-done
+  run hookrun "$member" "$team" "$sid" "$wt"
+  [ "$status" -eq 0 ]
+  ! grep -q "tool in flight" "$LOGF"
+  grep -q "Auto-shutdown idle teammate: $member" "$LOGF"
+}
+
+# (D) DAMPING — the SURFACE leg re-fires on EVERY subsequent TeammateIdle (measured: one teammate
+#     paged 6 times in 3 minutes; 81 pages total). Repetition on a close-order channel is what trains
+#     the operator to ignore it. The LOG must stay complete; only the PAGE is damped.
+@test "SURFACE page is damped: repeated unresolved-worktree fires page the desk ONCE" {
+  export TEAMMATE_MAX_DEFERS=1
+  local sid=sidDM team=teamDM member=wkrDamp
+  tx "$sid" 9000
+  run hookrun "$member" "$team" "$sid" /nonexistent-cwd    # fire 1 → defer (1/1)
+  run hookrun "$member" "$team" "$sid" /nonexistent-cwd    # fire 2 → SURFACE + page
+  [ -e "$D/notify-calls.log" ]
+  [ "$(grep -c 'cc-notify' "$D/notify-calls.log")" -eq 1 ]
+  run hookrun "$member" "$team" "$sid" /nonexistent-cwd    # fire 3 → SURFACE, page SUPPRESSED
+  run hookrun "$member" "$team" "$sid" /nonexistent-cwd    # fire 4 → same
+  [ "$status" -eq 0 ]
+  [ "$(grep -c 'cc-notify' "$D/notify-calls.log")" -eq 1 ]  # still ONE page
+  [ "$(grep -c 'SURFACE' "$LOGF")" -ge 3 ]                  # but the forensic log is complete
+  grep -q "page suppressed (damped)" "$LOGF"
+}
+
+# (A2) DEAD SEED — `git worktree list` needs some LIVE path in the repo to run at all, so seeding it
+#      from only the first recorded cwd silently disables the name leg whenever that path is gone.
+#      Real shape (team session-8891c11f, 2026-07-29): all 7 members record one cwd that no longer
+#      exists, while gu5-verdict/-decide/-cadence each still own a worktree of their own name.
+#      Here the FIRST recorded cwd is dead and the member's own name-matched worktree must still win
+#      (name leg ⇒ OWNED) over the shared live cwd the config also offers.
+@test "dead first seed: name leg still resolves from a later live cwd (owned, not the shared tree)" {
+  local sid=sidDS team=teamDS member=gu5-decide pane=%96
+  mkrepo "$D/repo4"; local wt="$D/wts4/$member"; mkdir -p "$D/wts4"; mkwt "$D/repo4" "$wt" b-decide
+  mkdir -p "$HOME/.claude/teams/$team"
+  # lead records a DEAD cwd (listed first); the member records the live repo root (shared-looking)
+  printf '{"members":[{"name":"team-lead","tmuxPaneId":"leader","cwd":"%s"},{"name":"%s","tmuxPaneId":"%s","cwd":"%s"}]}' \
+    "$D/gone-worktree" "$member" "$pane" "$D/repo4" > "$HOME/.claude/teams/$team/config.json"
+  [ ! -d "$D/gone-worktree" ]
+  reg "$sid" PANE-DS "$wt" 3600
+  tx "$sid" 9000
+  run hookrun "$member" "$team" "$sid" /nonexistent-cwd     # payload cwd dead too ⇒ must use config seeds
+  [ "$status" -eq 0 ]
+  grep -q "Auto-shutdown idle teammate: $member" "$LOGF"
+  wait_gone "$wt"                                            # the member's OWN worktree was removed…
+  grep -q "worktree removed: $wt" "$LOGF"
+  [ -d "$D/repo4" ]                                          # …and the shared repo root was NOT touched
+}
