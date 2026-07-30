@@ -41,7 +41,7 @@
 #
 # KNOWN COVERAGE RESIDUAL, day one — a leading `VAR=value` assignment (lead review 2026-07-30).
 # Transform (b) declines any command whose first word is an env assignment, because the prefix is
-# PREPENDED: `taskpolicy -c background CC_X=1 pytest` hands `CC_X=1` to taskpolicy as the program to
+# PREPENDED: `taskpolicy -c utility CC_X=1 pytest` hands `CC_X=1` to taskpolicy as the program to
 # exec, and it dies. The form is COMMON in this fleet's agent Bash calls (`CC_X=1 timeout 500 …`),
 # so this is a REAL residual for the table patterns, not a theoretical one. Transform (a) is
 # unaffected — token replacement finds `bats` wherever it sits, assignment or no. Declining is the
@@ -55,14 +55,21 @@
 #   CC_QOS_REWRITE=off      → whole hook off, exit 0 before anything else (kill switch, R8).
 #   CC_QOS_PATTERNS=<path>  → pin the pattern table; SET-BUT-EMPTY disables transform (b) ONLY.
 #   CC_QOS_CC_BATS=<path>   → pin the cc-bats target; SET-BUT-EMPTY disables transform (a) ONLY.
-#   CC_QOS_TASKPOLICY=<p>   → pin taskpolicy(8); set-but-empty ⇒ (b) off (no nice-only fallback).
-#   CC_QOS_NICE_BIN=<p>     → pin nice(1);        set-but-empty ⇒ (b) off.
-#   CC_QOS_NICE_LEVEL=<n>   → nice level, default 19.
+#   CC_QOS_TASKPOLICY=<p>   → pin taskpolicy(8); set-but-empty ⇒ transform (b) off entirely.
 #
-# WHY NO nice-ONLY FALLBACK when taskpolicy(8) is missing: cc-bats:150-159 MEASURED that on Darwin
-# `nice -n 19` alone leaves PRI at 31 — full interactive priority, i.e. not demoted at all. A
-# nice-only prefix would add two forks per command and buy nothing, while LOOKING covered to a
-# census. Refusing the rewrite is the honest state.
+# THE BAND, AND WHY nice(1) IS NOT IN THE PREFIX (M1-rev, 2026-07-30; §11.9 per lead message).
+# Two measured facts changed the shape of this prefix after day one:
+#   1. `nice` IS DECORATIVE. `nice -n 19` moves NI to 19 and leaves PRI at 31 — verified again on
+#      this box. It never demoted anything. It was in the day-one prefix on the assumption that it
+#      composed with the clamp; it does not, it just costs a fork. So the prefix is now taskpolicy
+#      ALONE, and there is no nice-only fallback tier: a missing taskpolicy means NO rewrite, which
+#      is the honest state rather than a prefix that looks covered to a census and demotes nothing.
+#   2. `-c background` IS TOO SHARP for long batch work — a ~84–89× tax, because it confines the
+#      process to the 2 E-cores (shared with ~628 system procs) at I/O tier 2, with a ×84 fork
+#      penalty. `-c utility` costs ~2.4× under the same load (PRI 20, P-core-eligible, tier-1 I/O)
+#      and still yields to interactive PRI 31 — which is the only property this row actually needs.
+# The band is NOT hardcoded here: it comes from the table's band column, so re-tuning it stays a
+# config edit (§11.7). All three clamps stay admitted by the allowlist below.
 #
 # bash 3.2 SAFE: no `case` inside command substitution, no IFS-on-control-char splitting
 # (memory bash32-case-in-substitution-zsh-repro-trap). Runs under /bin/bash as a hook.
@@ -168,8 +175,8 @@ fi
 
 # ── only a SINGLE SIMPLE command may be prefixed ──────────────────────────────────────────────
 # A prefix is string surgery, and string surgery on a compound line is how you demote the wrong
-# half: `nice … taskpolicy -c background du -s x | sort` would demote `du` but the pipeline's
-# parse is no longer ours to reason about, and `a && pytest` would put the prefix on `a`.
+# half: `taskpolicy -c utility du -s x | sort` would demote `du` but the pipeline's parse is no
+# longer ours to reason about, and `a && pytest` would put the prefix on `a`.
 # Conservative by design — anything with structure is left ALONE (fail-open, §11.3 M7: "never wrap
 # compounds by string surgery"). `(`/`)` cover the brief's `$(` and command grouping in one test.
 # The single-quoted metacharacters are LITERALS to match, mirroring rm-safe-allowlist.sh:53-56.
@@ -207,15 +214,12 @@ case "$BAND" in
   *) exit 0 ;;
 esac
 
-# ── resolve the two prefix binaries; missing either ⇒ no rewrite ──────────────────────────────
+# ── resolve taskpolicy(8); missing ⇒ no rewrite ────────────────────────────────────────────────
 # Single-dash `${VAR-default}`: the default applies only when the var is UNSET, so a set-but-EMPTY
-# seam is honoured verbatim and turns transform (b) off. Hooks run without Homebrew on PATH, so
-# these are absolute (the lesson lead-crash-watchdog.sh:23 records for timeout(1)).
-NICE_BIN="${CC_QOS_NICE_BIN-/usr/bin/nice}"
+# seam is honoured verbatim and turns transform (b) off. Hooks run without Homebrew on PATH, so this
+# is absolute (the lesson lead-crash-watchdog.sh:23 records for timeout(1)).
+# ONE binary, not two — see THE BAND, AND WHY nice(1) IS NOT IN THE PREFIX in the header.
 TP_BIN="${CC_QOS_TASKPOLICY-/usr/sbin/taskpolicy}"
-NICE_LEVEL="${CC_QOS_NICE_LEVEL-19}"
-[ -n "$NICE_BIN" ] && [ -x "$NICE_BIN" ] || exit 0
 [ -n "$TP_BIN" ] && [ -x "$TP_BIN" ] || exit 0
-[ -n "$NICE_LEVEL" ] || exit 0
 
-emit "$NICE_BIN -n $NICE_LEVEL $TP_BIN -c $BAND $CMD"
+emit "$TP_BIN -c $BAND $CMD"

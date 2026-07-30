@@ -8,8 +8,12 @@
 #     carries `|| false` (memory bats-dead-assertions-errexit-exemptions).
 #   · The runtime-priority tests read PRI from ps, not from the exec line: the exec line is what we
 #     INTENDED, PRI is what the kernel DID.
-#   · Bands are the empirically calibrated ones (2026-07-29): background tier PRI=4, undemoted
-#     PRI=31, and `nice` ALONE does NOT leave the 31 band.
+#   · Bands are the empirically calibrated ones (re-measured 2026-07-30 for M1-rev): utility PRI=20
+#     (the band the actuators now request), background/maintenance PRI=4, undemoted PRI=31, and
+#     `nice` ALONE does NOT leave the 31 band — which is why nice is gone from both actuators.
+#   · PRI assertions on DEMOTED procs test the exact clamp value, never a `<= N` range: Darwin
+#     decays a busy undemoted proc as low as PRI 17, so a range up to 20 would make these tests
+#     pass on undemoted work. A clamp PINS its value; that is what makes the equality safe.
 #
 # RED-PROOF: see tests/README or the plan §7. The pre-change tree has no bin/cc-bats at all, so
 # (i)-(vi) fail at file-not-found against a pristine `git archive` checkout — that is the RED. The
@@ -37,8 +41,8 @@ setup() {
   # cause. A suite that tests a wrapper must not inherit that wrapper's own state — unset the whole
   # family so each test controls exactly the seams it sets via `run env ...` (per-invocation env is
   # unaffected by this).
-  unset CC_BATS_ACTIVE CC_BATS_QOS CC_BATS_QOS_MODE CC_BATS_QUIET \
-        CC_BATS_REAL CC_BATS_NICE CC_BATS_NICE_BIN CC_BATS_TASKPOLICY
+  unset CC_BATS_ACTIVE CC_BATS_QOS CC_BATS_QOS_MODE CC_BATS_QOS_BAND CC_BATS_QUIET \
+        CC_BATS_REAL CC_BATS_BAND CC_BATS_TASKPOLICY
   # A tiny bats corpus whose single test lives long enough to be observed by ps.
   mkdir -p "$TMP/t"
   cat > "$TMP/t/slow.bats" <<'EOF'
@@ -76,7 +80,7 @@ EOF
 
 # ── the load-bearing runtime assertion: PRI, not the exec line ────────────────────────────────
 
-@test "(iv) shim's bats descendants actually reach the BACKGROUND band (PRI<=10)" {
+@test "(iv) shim's bats descendants actually reach the UTILITY band (PRI==20)" {
   if [ ! -x /usr/sbin/taskpolicy ]; then skip "taskpolicy(8) absent on this host"; fi
   /bin/bash "$SHIM" "$TMP/t/slow.bats" >/dev/null 2>&1 &
   local shim_pid=$!
@@ -88,9 +92,9 @@ EOF
   kill "$shim_pid" 2>/dev/null || true
   wait "$shim_pid" 2>/dev/null || true
   [ -n "$pris" ] || false                                  # we must have observed something
-  # every observed descendant must be in the background band
+  # every observed descendant must be pinned at the utility clamp value — not merely "low"
   local bad
-  bad=$(printf '%s\n' "$pris" | awk '$1>10 {n++} END {print n+0}')
+  bad=$(printf '%s\n' "$pris" | awk '$1!=20 {n++} END {print n+0}')
   [ "$bad" -eq 0 ] || false
 }
 
@@ -106,8 +110,8 @@ EOF
   # exercise this control; test (xv) covers the demoted-caller path explicitly.
   local own
   own=$(ps -p $$ -o pri= 2>/dev/null | tr -d ' ')
-  if [ -n "$own" ] && [ "$own" -le 10 ]; then
-    skip "suite itself is in the background band (pri=$own); a full-priority control is unconstructible from here — see (xv)"
+  if [ -n "$own" ] && [ "$own" -le 20 ]; then
+    skip "suite itself is in a demoted band (pri=$own); a full-priority control is unconstructible from here — see (xv)"
   fi
   CC_BATS_QOS=off /bin/bash "$SHIM" "$TMP/t/slow.bats" >/dev/null 2>&1 &
   local shim_pid=$!
@@ -118,7 +122,7 @@ EOF
   wait "$shim_pid" 2>/dev/null || true
   [ -n "$pris" ] || false
   local undemoted
-  undemoted=$(printf '%s\n' "$pris" | awk '$1>10 {n++} END {print n+0}')
+  undemoted=$(printf '%s\n' "$pris" | awk '$1>20 {n++} END {print n+0}')
   [ "$undemoted" -gt 0 ] || false                          # the detector CAN see full priority
 }
 
@@ -131,24 +135,25 @@ EOF
 }
 
 @test "(vi-b) CC_BATS_QUIET must NOT be able to silence the fully-inert case" {
-  # PARTIAL may be quieted; NONE may never be. An inert QoS that prints nothing is the exact
-  # failure mode this row exists to fix (R4).
+  # NONE may never be quieted. An inert QoS that prints nothing is the exact failure mode this row
+  # exists to fix (R4). M1-rev deleted the PARTIAL tier, so CC_BATS_TASKPOLICY= alone reaches NONE
+  # — the reason removing the CC_BATS_NICE_BIN seam cost this suite no coverage.
   #
   # The first version of this test used PATH=/nonexistent to make QoS unavailable. That was a WRONG
   # PREMISE: it broke bats' own `#!/usr/bin/env bash` shebang (rc 127) instead of exercising the
-  # NONE branch, so it proved nothing about quieting. Reaching NONE needs BOTH resolvers empty,
-  # which is what the two set-but-empty seams are for.
-  run env CC_BATS_QUIET=1 CC_BATS_TASKPOLICY= CC_BATS_NICE_BIN= /bin/bash "$SHIM" --version
+  # NONE branch, so it proved nothing about quieting. The set-but-empty taskpolicy seam is what
+  # actually reaches it.
+  run env CC_BATS_QUIET=1 CC_BATS_TASKPOLICY= /bin/bash "$SHIM" --version
   [ "$status" -eq 0 ] || false                                   # bats itself must still run
   [[ "$output" =~ "QoS NOT applied" ]] || false                  # and the warning must survive QUIET
 }
 
-@test "(xv) census reports AMBIENT-DEMOTED (not FAIL) when run from inside the background band" {
+@test "(xv) census reports AMBIENT-DEMOTED (not FAIL) when run from inside a demoted band" {
   # The one-way-ratchet path. A census fired from inside a gate cannot build a full-priority
   # control; it must degrade to a named state and still produce a population verdict, never a false
   # SIGNAL-DEAD. This is the test that (v)'s skip points at.
   if [ ! -x /usr/sbin/taskpolicy ]; then skip "taskpolicy(8) absent on this host"; fi
-  run /usr/bin/nice -n 19 /usr/sbin/taskpolicy -c background \
+  run /usr/sbin/taskpolicy -c utility \
       /bin/bash "$CENSUS" --json --no-append
   [ "$status" -ne 4 ] || false                                   # must NOT be SIGNAL-DEAD
   [[ "$output" =~ \"control\":\"AMBIENT-DEMOTED\" ]] || false
@@ -234,6 +239,135 @@ EOF
   printf 'gate_admit() { :; }\n' > "$TMP/bait.sh"
   run grep -nE 'loadavg|load average|gate_admit' "$TMP/bait.sh"
   [ "$status" -eq 0 ] || false
+}
+
+# ── M1-rev: the band flip, and the tier that died with it ─────────────────────────────────────
+
+@test "(xvi) M1-rev: FULL mode applies the UTILITY clamp — asserted on kernel PRI, not the exec line" {
+  if [ ! -x /usr/sbin/taskpolicy ]; then skip "taskpolicy(8) absent on this host"; fi
+  # A stand-in for the real bats that reports the shim's exported state AND the band the kernel
+  # actually gave it. The exec line is what we intended; PRI is what happened.
+  echo '#!/bin/bash' > "$TMP/fake-bats"
+  echo 'echo "MODE=$CC_BATS_QOS_MODE BAND=$CC_BATS_QOS_BAND PRI=$(ps -o pri= -p $$ | tr -d " ")"' >> "$TMP/fake-bats"
+  chmod +x "$TMP/fake-bats"
+  run env CC_BATS_REAL="$TMP/fake-bats" /bin/bash "$SHIM"
+  [ "$status" -eq 0 ] || false
+  [[ "$output" =~ MODE=FULL ]] || false
+  [[ "$output" =~ BAND=utility ]] || false
+  [[ "$output" =~ PRI=20 ]] || false          # 20 == BASEPRI_UTILITY, pinned
+  # and the prefix must no longer carry nice(1) at all — it was measured decorative
+  [[ ! "$output" =~ PRI=4 ]] || false
+}
+
+@test "(xvii) M1-rev: an invalid CC_BATS_BAND refuses the clamp but STILL RUNS bats" {
+  # taskpolicy exits 64 on an unparseable clamp WITHOUT running the program, so an unvalidated band
+  # would not merely fail to demote — it would stop the gate. The refusal must be loud AND harmless.
+  echo '#!/bin/bash' > "$TMP/fake-bats"
+  echo 'echo "MODE=$CC_BATS_QOS_MODE ran=yes"' >> "$TMP/fake-bats"
+  chmod +x "$TMP/fake-bats"
+  run env CC_BATS_REAL="$TMP/fake-bats" CC_BATS_BAND=definitely-not-a-clamp /bin/bash "$SHIM"
+  [ "$status" -eq 0 ] || false
+  [[ "$output" =~ ran=yes ]] || false                 # the gate still ran
+  [[ "$output" =~ MODE=NONE ]] || false
+  [[ "$output" =~ "QoS NOT applied" ]] || false       # and said so
+}
+
+@test "(xviii) M1-rev: the nice-only PARTIAL tier is UNREACHABLE, not merely unused" {
+  # The tier fell back to something measured to demote nothing. Removing it means no seam
+  # combination may still produce it — otherwise the dead code is just hidden.
+  echo '#!/bin/bash' > "$TMP/fake-bats"
+  echo 'echo "MODE=$CC_BATS_QOS_MODE"' >> "$TMP/fake-bats"
+  chmod +x "$TMP/fake-bats"
+  run env CC_BATS_REAL="$TMP/fake-bats" CC_BATS_TASKPOLICY= /bin/bash "$SHIM"
+  [ "$status" -eq 0 ] || false
+  [[ "$output" =~ MODE=NONE ]] || false
+  [[ ! "$output" =~ PARTIAL ]] || false
+  # Assert on the CODE marker, not the bare word: the header comment explaining the tier's removal
+  # legitimately contains "PARTIAL", and a grep for prose would fail for the wrong reason.
+  run grep -c 'QOS_MODE="PARTIAL"' "$SHIM"
+  [ "$output" -eq 0 ] || false                        # no assignment can produce the tier
+}
+
+# ── M1-rev: the census classifier must reject a DECAYED undemoted PRI ──────────────────────────
+
+# _marker_script <name> — write a uniquely-named sleeper whose ARGS will carry <name> (the census
+# greps the full args line) and print its path. The caller starts it in ITS OWN shell, never via
+# `$(...)`: a background job started inside a command substitution belongs to that subshell, so the
+# pid it reports is not the caller's child and the proc is not reliably observable afterwards.
+# No `exec` in the script — the wrapper must survive, because it is the proc carrying <name>.
+# CONCURRENCY NOTE: the fleet demonstrably runs this suite in parallel with itself (observed
+# 2026-07-30 — a sibling session running `bats tests/qos-chokepoint.bats tests/capacity-alarm.bats`
+# while this suite ran), so two live markers can share one name and both land in the census
+# population. The assertions below are written to be COLLISION-SAFE rather than relying on a unique
+# name: a neighbour's marker is always in the same band as ours, so it can only add to the tier we
+# already assert `>= 1` on, and (xix)'s reject-side clamp set is `actual + 1`, a value no marker can
+# occupy. A $$-suffixed name was tried and abandoned — it did not survive the census's pattern seam
+# inside bats, and an unverified mechanism guarding a negligible risk is worse than none.
+_marker_script() {
+  local name="$1"
+  echo '#!/bin/bash' > "$TMP/$name"
+  echo '/bin/sleep 6' >> "$TMP/$name"
+  chmod +x "$TMP/$name"
+  printf '%s' "$TMP/$name"
+}
+
+@test "(xix) M1-rev: the CLAMP FILTER decides, not the ceiling — admit and reject, same proc" {
+  # THE MEASURED HAZARD (2026-07-30): Darwin decays a busy UNDEMOTED proc's PRI as low as 17, so a
+  # bare `pri <= 20` ceiling counts undemoted work as demoted — over-reported coverage, a false PASS.
+  # The fix is to require a CLAMP-PINNED value, and this proves the filter is what rejects.
+  #
+  # The marker is PINNED to the background clamp rather than inheriting this suite's band. Two
+  # reasons, both learned the hard way here: (1) an inherited band is not deterministic — the suite
+  # runs demoted through the shim in some contexts and undemoted in others, so a test keyed on the
+  # marker's OWN measured PRI is flaky by construction; (2) `background` is reachable from ANY band
+  # because a clamp only ever lowers, so PRI 4 is guaranteed. That also makes the test collision-safe
+  # against a concurrent run of this same suite: every zzqosmark marker anywhere is PRI 4.
+  #
+  # The ceiling is raised to 99 so the RANGE always admits. The only thing that can then reject is
+  # the clamp SET — which is exactly the mechanism under test.
+  local mk; mk=$(_marker_script zzqosmark)
+  /usr/sbin/taskpolicy -c background /bin/bash "$mk" >/dev/null 2>&1 &
+  local pid=$!
+  /bin/sleep 1
+  local actual; actual=$(ps -o pri= -p "$pid" 2>/dev/null | tr -d ' ')
+  [ "$actual" = "4" ] || false                           # deterministic by construction
+  run env QOS_CENSUS_PATTERN=zzqosmark QOS_CENSUS_NO_CONTROL=1 QOS_DEMOTED_PRI_MAX=99 \
+      QOS_CLAMP_PRIS="4" /bin/bash "$CENSUS" --json --no-append
+  local admitted="$output"
+  run env QOS_CENSUS_PATTERN=zzqosmark QOS_CENSUS_NO_CONTROL=1 QOS_DEMOTED_PRI_MAX=99 \
+      QOS_CLAMP_PRIS="20" /bin/bash "$CENSUS" --json --no-append
+  local rejected="$output"
+  run env QOS_CENSUS_PATTERN=zzqosmark QOS_CENSUS_NO_CONTROL=1 \
+      /bin/bash "$CENSUS" --json --no-append
+  local defaults="$output"
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  # NON-VACUITY: an empty population would make both sides trivially 0.
+  [ "$(printf '%s' "$admitted" | jq -r '.procs_total')" -ge 1 ] || false
+  [ "$(printf '%s' "$admitted" | jq -r '.procs_demoted')" -ge 1 ] || false   # 4 in set  ⇒ admit
+  [ "$(printf '%s' "$rejected" | jq -r '.procs_demoted')" -eq 0 ] || false   # 4 not in {20} ⇒ reject
+  # And the SHIPPED default is the two clamp constants — which is what excludes the decay range
+  # (17..19, 21..30) that a bare ceiling of 20 would have swallowed.
+  [ "$(printf '%s' "$defaults" | jq -r '.clamp_pris')" = "4 20" ] || false
+}
+
+@test "(xx) M1-rev: a known UTILITY proc lands in the pri20 tier and the tiers partition the set" {
+  if [ ! -x /usr/sbin/taskpolicy ]; then skip "taskpolicy(8) absent on this host"; fi
+  local mk; mk=$(_marker_script zzutilmark)
+  /usr/sbin/taskpolicy -c utility /bin/bash "$mk" >/dev/null 2>&1 &
+  local pid=$!
+  /bin/sleep 1
+  run env QOS_CENSUS_PATTERN=zzutilmark QOS_CENSUS_NO_CONTROL=1 \
+      /bin/bash "$CENSUS" --json --no-append
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  local d p4 p20
+  d=$(printf '%s' "$output" | jq -r '.procs_demoted')
+  p4=$(printf '%s' "$output" | jq -r '.procs_pri4')
+  p20=$(printf '%s' "$output" | jq -r '.procs_pri20')
+  [ "$p20" -ge 1 ] || false                     # the utility proc is counted, in the RIGHT tier
+  [ "$p4" -eq 0 ] || false                      # and not in the background tier
+  [ "$((p4 + p20))" -eq "$d" ] || false         # the two tiers partition the demoted set
 }
 
 # ── helper ────────────────────────────────────────────────────────────────────────────────────
