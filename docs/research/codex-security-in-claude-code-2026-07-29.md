@@ -121,6 +121,67 @@ Five other surfaces were reviewed and closed as `no_issue_found` / `not_applicab
 reasons — no `eval` with interpolation anywhere in scope, decision JSON correctly escaped, no
 network egress from any hook.
 
+### Second scan — `bin/` + `scripts/`, the other 41k lines
+
+Run later the same day (`38eec335_20260729T1750Z`): the 152 tracked files under `bin/` (47) and
+`scripts/` (105) at `38eec335` — **40,961 lines**, overwhelmingly bash with four Python tools.
+`hooks/` is excluded, having been scanned at `dc12c8db` above. Same finalizer, same `rc=0` seal.
+
+Completeness is recorded as **`partial`, not `complete`**, and the distinction is the honest part:
+the sweep is *pattern*-complete — every file checked against every risk class in the threat model,
+every file with a hit read around that hit, ~20 read in full — but the remaining lines were never
+read individually, and `coverage.json` carries three `deferred` entries (one live candidate, plus
+line-by-line review and an ESC-sequence binary diff) rather than pretending they were closed.
+
+| # | Finding | Severity | Confidence | Status |
+|---|---|---|---|---|
+| 1 | `json.dumps`-quoted record fields `eval`'d in a loaded launchd daemon (`scripts/limit-recover/lr-reset-poller.sh:391,431`) | medium (5.5) | high | **fixed** `29431edd` |
+| 2 | Launchers written + `chmod +x` + executed at predictable `/tmp` paths (3 sites) | low (3.3) | high | open → `7f3b2061dd5d` |
+
+**Finding 1 is the hooks Finding 1 in a different register: a quoter that does not match its
+consuming interpreter.** `lr-reset-poller.sh` rebuilt each parked-session record by having Python
+print `key=<json.dumps(value)>` and handing the result to `eval`. JSON escaping neutralises `\` and
+`"` — it leaves `$`, backtick and `!` untouched, and the assignment it emits is evaluated in a
+double-quoted shell context where all three are live. The reachable field is `cwd`, a directory
+*name*: a directory called `$(touch FILE)` is legal on APFS and produces perfectly valid JSON, so
+it passes the record writer unmangled. **No quote character is needed anywhere**, which is exactly
+why the writer never mangled it. Reproduced by execution — the shipped emitter/consumer pair, run
+verbatim against a crafted record, created the file.
+
+What set the severity was not the source but the *host*: `launchctl list` and the deployed
+LaunchAgent plist were read, and `com.reso.lr-reset-poller` was loaded and firing on a ~600s cadence
+with `LR_POLLER_AUTOFIRE=1`. So this ran unattended, with no operator present to see an `ask`
+prompt — arbitrary execution that routes around the hook classifier which is this repo's primary
+control over model-influenced strings. Held at medium rather than high only because `$PARKED` lives
+under `$HOME/.reso`, where the party who can seed a payload already holds this uid: a control
+bypass, not a privilege-boundary crossing. Reading deployment state also produced a *separate*
+defect for free — the committed plist template advertises auto-resume as OFF while the deployed one
+sets it ON (`ad7482e4ab55`).
+
+**Finding 2 is still open.** Three scripts build a shell script at a guessable `/tmp` path, `chmod
++x` it, and execute it *by path* rather than by descriptor —
+`lr-reset-poller.sh:431`, `lr-handoff.sh:159`, `handoff-fire.sh:2400` at scan time (today `:443`,
+`:159`, `:3676` — line-pinned findings age, so verify by content). `/tmp` is mode 1777 on macOS:
+the sticky bit stops another uid *replacing* a file this user owns, but not *pre-creating* a name
+that does not yet exist, which turns the `>` into an arbitrary-file clobber plus a `chmod +x` on
+the target. The entropy budget is the whole weakness — 8 hex characters of session id, and
+`bin/cc-context:28` exports telemetry to a world-readable `/tmp/cc-telemetry`, so the names do not
+even have to be guessed. Low, because the attacker model is a second local uid on a
+single-operator workstation. The repo already calls `mktemp` at ~40 other sites; this is the
+asymmetry pattern again.
+
+One candidate is `deferred` with an unresolved reachability question (`lr-handoff.sh`'s unquoted
+heredoc launcher — git permits `$` and backticks in a ref name, so `$BRANCH` may inject; enumerating
+the callers that hand off an attacker-nameable branch is the open work → `942beac8bbff`). Four more
+were **rejected with counterevidence**, one of them by execution as well: `probe_osascript_notify.sh`
+refuted an AppleScript-breakout candidate. A methodology that only ever confirms is not being run
+honestly — two candidates here were decided by running code, and they went opposite ways.
+
+All five bundles are committed under
+[`codex-security-scans/`](codex-security-scans/) with a coverage
+[`LEDGER.md`](codex-security-scans/LEDGER.md), because `$TMPDIR` is swept and losing a bundle costs
+the whole scan — the coverage record, the severity reasoning, and the seal.
+
 ### Reproduce
 
 ```bash
@@ -138,7 +199,11 @@ python3 vendor/codex-security/scripts/finalize_scan_contract.py \
   not ported.
 - **Quality is now a function of Claude, not of a vendored scanner.** The skills are phase
   discipline and contracts; they constrain and structure the reasoning, they do not perform it.
-- **`bin/` and `scripts/` (~39k lines) were not scanned** — out of scope for this demonstration.
+- ~~**`bin/` and `scripts/` (~39k lines) were not scanned** — out of scope for this
+  demonstration.~~ **SUPERSEDED the same day — see §5's second scan.** 152 files / 40,961 lines at
+  `38eec335`, sealed `rc=0`, 2 findings. The real limit is narrower and worth stating exactly:
+  that scan's completeness is `partial`, so *pattern*-complete is not *line*-complete, and
+  `commands/`, `lib/`, `tests/` and `launchd/` remain genuinely unscanned.
 - The scan did not audit the `settings.json` permission arrays, which is what would settle whether
   Finding 1 is medium or critical in unattended operation. Recorded as an open question in
   `coverage.json`.
