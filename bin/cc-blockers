@@ -890,9 +890,44 @@ nd="$(printf '%s' "$ALARMS_JSON" | jq "[.[] | $DISP_SEL] | length" 2>/dev/null |
 np="$(printf '%s' "$ALARMS_JSON" | jq "[.[] | $APPR_SEL] | length" 2>/dev/null || echo 0)"
 FLEET_SEL='select(.kind=="fleet-inert")'
 nf="$(printf '%s' "$ALARMS_JSON" | jq "[.[] | $FLEET_SEL] | length" 2>/dev/null || echo 0)"
+# ── the ALL-CLEAR line, and why it carries a SENSOR ROSTER (OPERATOR_SURFACE_V2 §4 M8) ───────────
+# Every sensor family above fails OPEN by design (R5/I6: a board that invents blockers is ignored
+# exactly like one that hides them). The cost is that a ZERO-ROW board means EITHER "everything is
+# healthy" OR "every sensor is broken", and the operator cannot tell which. That is not hypothetical
+# and it is not a new hazard — it is the incident quoted at the top of this file verbatim:
+# `cc-blockers` said "no safeguard-blocked sessions surfaced" while a teammate was demonstrably
+# blocked, because the beacon hook was registered nowhere. `beacon-inert` closed that ONE case; the
+# aggregate line still could not distinguish nothing-to-report from nothing-could-be-read.
+#
+# WHAT THIS IS AND IS NOT, stated precisely because an over-claim here would be the same defect
+# inverted. It reports SENSOR READABILITY — can each family's primary input be read at all — NOT
+# "every family rendered a verdict". Anything stronger would need a second implementation of each
+# family's premise logic, and a second implementation is a second answer.
+#
+# AND IT DOES NOT EDITORIALIZE, deliberately. The first cut of this appended "NOT a clean bill of
+# health" whenever any sensor read `x` — which on a FRESH host (no board file yet, cc-fleet not
+# installed) is the normal state, so it would have cried wolf on every clean install and trained the
+# operator to skip the line. That is the mirror of the defect this whole rebuild is about. A COUNT is
+# scannable and makes no claim: `sensors 3/5 readable (… fleet:x board:x)` lets the reader see that
+# silence here is not evidence, without the board asserting an alarm it cannot justify.
+# Printed ONLY on the all-clear path: when rows exist, the rows are the message.
+sensor_roster() { # → "<n> <roster>" — readable count and the per-sensor detail, one pass
+  local r="" k=0
+  if [ -d "$STAMPS_DIR" ];         then r="stamps:ok";      k=$((k+1)); else r="stamps:x"; fi
+  if [ -x "$LAUNCHCTL_BIN" ];      then r="$r launchctl:ok"; k=$((k+1)); else r="$r launchctl:x"; fi
+  if ps -axo pid= >/dev/null 2>&1; then r="$r ps:ok";        k=$((k+1)); else r="$r ps:x"; fi
+  if [ -x "$CC_FLEET_BIN" ];       then r="$r fleet:ok";     k=$((k+1)); else r="$r fleet:x"; fi
+  if [ -f "$IDL_FILE" ];           then r="$r board:ok";     k=$((k+1)); else r="$r board:x"; fi
+  printf '%s %s' "$k" "$r"
+}
+
 if [ "${n:-0}" = 0 ] && [ "${nr:-0}" = 0 ] && [ "${na:-0}" = 0 ]; then
-  if [ "$BOARD_ABSENT" = 1 ]; then echo "no safeguard-blocked sessions (board $IDL_FILE absent)"
-  else echo "no safeguard-blocked sessions surfaced"; fi
+  ROSTER="$(sensor_roster 2>/dev/null || true)"
+  RK="${ROSTER%% *}"; RDETAIL="${ROSTER#* }"
+  case "${RK:-}" in ''|*[!0-9]*) RK="?"; RDETAIL="unreadable" ;; esac
+  if [ "$BOARD_ABSENT" = 1 ]; then MSG="no safeguard-blocked sessions (board $IDL_FILE absent)"
+  else MSG="no safeguard-blocked sessions surfaced"; fi
+  printf '%s — sensors %s/5 readable (%s)\n' "$MSG" "$RK" "$RDETAIL"
   exit 0
 fi
 

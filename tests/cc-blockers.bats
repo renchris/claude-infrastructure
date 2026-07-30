@@ -745,3 +745,62 @@ wire_cfg() { # <dir> <wired:0|1> — a settings.json that does or does not regis
   run ccb
   [ "$(echo "$output" | grep -c '^APPROVAL')" = 1 ]
 }
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# M8 · the ALL-CLEAR line must distinguish "nothing to report" from "nothing could be read"
+# (OPERATOR_SURFACE_V2 §4 M8 — the frozen DoD's second clause at its last remaining site)
+#
+# Every sensor family here fails OPEN by design, so a ZERO-ROW board means EITHER "healthy" OR "every
+# sensor broken". That is the incident quoted at the top of bin/cc-blockers verbatim: it said "no
+# safeguard-blocked sessions surfaced" while a teammate was demonstrably blocked. beacon-inert closed
+# that one case; the aggregate line still could not tell the two apart.
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+
+@test "M8: the all-clear line NAMES an unreadable sensor, so silence is not mistaken for evidence" {
+  : > "$BOARD"                                        # board readable, nothing on it
+  export CC_BLOCKERS_FLEET_BIN="$D/no-such-fleet"     # producer unreadable
+  run ccb
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'no safeguard-blocked' || false
+  echo "$output" | grep -q 'fleet:x' || false
+  echo "$output" | grep -qE 'sensors [0-4]/5 readable' || false
+}
+
+@test "M8 POSITIVE CONTROL: with every sensor readable it says 5/5 — the count can reach full" {
+  # Without this the roster could be hardwired to under-report and every test above would pass while
+  # the line permanently implied a broken board. A count that cannot reach its maximum is not a count.
+  : > "$BOARD"
+  fleet="$D/fleet-stub"; printf '#!/bin/bash\nexit 0\n' > "$fleet"; chmod +x "$fleet"
+  export CC_BLOCKERS_FLEET_BIN="$fleet"
+  run ccb
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'sensors 5/5 readable' || false
+  ! echo "$output" | grep -q ':x' || false
+}
+
+@test "M8: it does NOT editorialize — no alarm language on a fresh host with sensors missing" {
+  # The mirror of the defect this whole rebuild is about. The first cut appended "NOT a clean bill of
+  # health" on any `x`, which on a fresh host (no board file, cc-fleet not installed) is NORMAL — so
+  # it would have cried wolf on every clean install. A count makes the fact available without the
+  # board asserting an alarm it cannot justify.
+  export CC_BLOCKERS_FLEET_BIN="$D/no-such-fleet"
+  run ccb
+  [ "$status" -eq 0 ]
+  ! echo "$output" | grep -qi 'clean bill of health' || false
+  ! echo "$output" | grep -qi 'degraded\|ALARM' || false
+}
+
+@test "M8: the roster is printed ONLY on the all-clear path — rows are their own message" {
+  for n in 1 2 3 4 5; do mkstamp "r$n" red "${n}M"; done
+  : > "$CC_LAND_LOG"
+  run ccb
+  echo "$output" | grep -q 'trunk-red' || false
+  ! echo "$output" | grep -q 'sensors .*readable' || false
+}
+
+@test "M8: --json is unchanged by the roster (a machine consumer sees no prose)" {
+  : > "$BOARD"
+  run ccb --json
+  [ "$status" -eq 0 ]
+  [ "$(echo "$output" | jq -c '.')" = '[]' ]
+}
