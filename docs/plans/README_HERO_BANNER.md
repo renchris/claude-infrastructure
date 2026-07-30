@@ -705,3 +705,161 @@ worth of coverage; WebKit is unprobed (playwright ships a build).
 structural check still passed — those test properties of the output, and a differently-seeded ground
 satisfies all of them. Seeds come from `seed_of()` (crc32); regenerate and diff against the committed
 asset before believing the set is stable.
+
+---
+
+## v7 — the three ratified beats (2026-07-29, session 4). SETTLED — do not re-derive.
+
+`BANNER_NARRATIVE_SPEC.md`'s recommended set is built: THE OVERLAP, THE REFUSAL, THE ASK. All four
+variants pass `banner-verify.sh` **6/6**, the print lock re-proves at **0.000000 px over 480 stride
+boundaries under the warp**, the generator stays byte-reproducible, and the header is still untouched
+— `banner-apply-header.sh` remains unrun.
+
+### S17 · The three beats are ONE mechanism: the world clock
+
+All three speak the same sentence — the ground's scroll rate — so they are not three effects to be
+hand-animated. One clock `w(t)` drives every ground-plane layer, and significance comes from a shared
+scale rather than from novelty per beat, which is the answer to critique (a).
+
+The warp **cannot** live in a layer's own keyframes: those run on sub-multiples of P, so a hold
+written into the 20 s strip would fire twelve times a loop — a beacon of repetition, which is the
+defect S16 names. It is a nested outer group instead (`wp96 > fprs > content`): two
+single-animation elements per S8, the ambient scroll left byte-for-byte as it was, and the
+modulation firing exactly once.
+
+Consequence to know before touching it: **a warped layer needs a third content copy at −TILE.** The
+warp offsets the layer beyond its own wrap, and just after a wrap the frame edge would otherwise show
+a hard-edged gap of page background — which against a dark plate is very nearly invisible and would
+therefore ship. That pad is what took the files 78 KB → 107 KB (10.7 % of the 1 MB budget).
+`assert_warp_within_tile` bounds the offset to the one tile the pad buys.
+
+**The sky is deliberately NOT warped.** The clouds keep drifting through THE ASK. The ground's rate is
+the gauge the beats speak in, and a session blocked on a human does not stop the world — it stops its
+own progress. A frozen sky would also read as the render having died.
+
+### S18 · Two constraints the loop imposes, which the spec did not have
+
+Both were derived, not tuned, and both bind any future edit.
+
+1. **A looping world cannot hold or reverse for free.** Every scrolling layer must travel a whole
+   number of its own wrap distances per master period or the loop seams. So a permanent world-time
+   deficit would have to be a common multiple of *every* layer's period — and the slowest layer's
+   period **is** the master period, so the only free deficit is the entire loop. Every stop and every
+   rewind must therefore be **repaid inside the loop, at a rate strictly above nominal.**
+
+   The catch-up is not an artifact to hide; it is forced, so each beat has to *mean* it. Both do: a
+   returned turn costs you a step and you make it up, and a session unblocked works through what it
+   held.
+
+2. **The rate vocabulary is the integers.** The print lock says the ground advances exactly one
+   leg-spacing per stride; under rate `r` it advances `r` leg-spacings, so the foot lands in an
+   existing print only when `r` is whole. **There is no gentle catch-up.** A 6 s stop is payable as
+   6 s at 2× or 3 s at 3×, and that is the entire menu. Do not soften a rate to taste — it silently
+   unlocks the footprint the whole thesis rests on. `assert_print_lock` says so, naming the timestamp
+   and the miss distance.
+
+   A corollary worth stating because it looks like a bug: during a repayment stretch the ground
+   outruns the stride, so the foot lands on every second (or third) print. That is the cost of the
+   integer constraint, it is bounded to 1.5–3 s per loop, and it is visually distinct from THE
+   OVERLAP, whose tell is a doubled print *density* at a normal ground rate rather than a fast ground
+   at normal density.
+
+### S19 · A beat can be entirely ABSENT while every check reports green
+
+The committed v6b carried a live defect that nothing caught. Its peer keyframes placed interior stops
+at **absolute second offsets** (`+14`, `−16`) carried over from a much longer window; on the 9 s peer
+those resolved to `-0.83%` and `-1.67%`. **CSS drops a keyframe block with an invalid selector
+whole**, so the peer never stopped beside the resident and `pCheer` never fired at all — in the one
+candidate built to showcase exactly that beat.
+
+Meanwhile: the file was well-formed, one animation rode each element, `t=0 == t=240`, 12/12 frames
+were distinct, both schemes rendered and differed, and the reduced-motion still existed. **6/6 green
+over a beat that does not happen.**
+
+Two rules out of it:
+
+- **Interior keyframes are FRACTIONS of the window, never second offsets** (`atf()`). A fraction
+  cannot run off the end of a re-timed window; a second offset silently can.
+- `assert_keyframe_pcts_sane` reads the **emitted stylesheet** and rejects any selector outside
+  0–100 %. Its RED-proof replays the actual committed v6b out of git rather than a hand-written
+  approximation, because an approximation of a defect can pass a check vacuously.
+
+### S20 · What the acceptance gate structurally cannot see, and the two probes added for it
+
+`banner-verify.sh` is necessary and not sufficient: **nothing in it can tell a working world clock
+from an inert one.** S19 is the proof that green says little about whether a beat happens. So:
+
+| Probe | What it decides |
+|---|---|
+| `scripts/banner-gate-redproof.py` | Sabotages every build-time gate and requires the **specific** gate to reject it, keyed on the message — not on a non-zero exit, which an unrelated earlier failure can counterfeit. **19/19.** |
+| `scripts/banner-world-clock-probe.py` | Cross-correlates the near foreground band between frozen frames and reports how far the ground **actually** moved, against the model. Measured: `0 / −48 / +48 / +96 / 0 / 0 / +288 / +96` px, every one exact. |
+
+Four things about those probes are worth keeping:
+
+- **Prove BOTH halves of an assertion.** Firing on bad input says nothing about whether anything calls
+  it. `assert_all_gates_wired` reads `build()`'s own source and refuses any `assert_*` that nothing
+  invokes — the exact shape of the S12 defect, where a formatter had already turned the patch anchor's
+  quotes around so the wiring edit no-opped and a green build hid it. A hand-maintained list of
+  expected calls would be a third copy of the same fact and would rot the same way.
+- **The print lock reads the numbers back out of the emitted stylesheet**, not out of the expression
+  that generated them. Computing the check from the generator would only prove the function agrees
+  with itself. `pctx()` exists for this: `pct()`'s 3 decimals quantise a t=13 s boundary to an 0.08 ms
+  error, which is 0.008 px of drift — invisible, and still a lie when the claim is 0.000000 px.
+- **A probe that cannot fail is worse than none** (the same reason `--virtual-time-budget` was
+  removed). The world-clock probe returns **exit 1** against the pre-change asset recovered from git,
+  where it reads a flat nominal 48 px/stride with no modulation anywhere. Read the exit status
+  directly — `… | tail` reports *tail's* status, which is the S12 mistake in a new costume.
+- **A threshold in the wrong unit is indistinguishable from a subject that cannot pass.** The probe's
+  first cut demanded the runner-up beat the winner by 1.0 SAD and reported all eight intervals as FLAT
+  PEAK while every measurement was already exact — on near-binary content a correct match scores ~0.0
+  and its rivals ~0.7. Prominence is now measured against the correlation surface's own median, which
+  has no unit to get wrong.
+
+### S21 · A missing fill does not error, it picks a colour from outside the palette
+
+THE REFUSAL's barrier rendered **solid black** on its first pass because its class had no fill rule
+behind it. SVG's initial `fill` is black, so the shape renders confidently in a colour no theme chose
+— and it would have been black-on-pale in the light scheme, which is worse. Nothing in the output
+pipeline can catch that: well-formed, one animation per element, seam holds, frames differ, both
+schemes "render". Only the eye catches it, and only if the crop includes it.
+
+`assert_every_shape_is_themed` now walks the built tree. Two things it had to learn, both of which
+made the first version useless rather than merely wrong:
+
+- **`fill` inherits**, so the question is whether the shape *or any ancestor* supplies one. Checking
+  each shape's own class alone flagged all ~400 stars, which correctly take their colour from
+  `<g class="st sn tw0">`. A guard whose model of the format is wrong produces a wall of false
+  positives, and the only cheap response to that is to delete it — so an over-strict guard ends up
+  costing exactly what no guard costs, just later.
+- **A filter can replace the shape.** The grain rect's chain starts at `feTurbulence` and never
+  references `SourceGraphic`, so its own fill cannot reach the screen. It is exempt for that reason,
+  checked against the filter's actual primitives. Adding a meaningless fill to quiet a checker would
+  have been a lie written into the artifact.
+
+### Verified this session, not recalled
+
+```text
+banner-verify.sh          6/6 × 4 variants  (wellformed · lint · seam · alive · themes · still)
+banner-verify.sh --self-test                4/4 guards fire
+banner-gate-redproof.py                     19/19 gates fire, for the right message
+banner-world-clock-probe.py                 4/4 variants exact; exit 1 on the pre-change asset
+print lock                                  0.000000 px over 480 stride boundaries, per variant
+byte-reproducibility                        identical across two runs
+bytes                                       98-107 KB (budget 1 MB)
+both schemes                                all three beats read in dark AND light (inspected)
+```
+
+### Found and NOT applied — the operator's or spec owner's call
+
+- **The ground's parallax hierarchy is inverted.** By y-band, near-to-far is `fgb` (nearest, 96 px/s),
+  `tf1` (middle, **80 px/s**), `tf0` (farther, 96 px/s) — so the middle layer is the slowest of the
+  three and the nearest is no faster than the far one, against `ground_detail`'s own stated intent
+  that "near things must outrun far things by enough to read". The fix is one line each
+  (`tf1s` → `P/16` = 120 px/s, `fgbs` → `P/12` at a shorter tile), and it is **deliberately not in
+  this session's commits**: it changes the motion of all four candidates while an operator comparison
+  is open, which is the spec owner's call and not a defect fix to slip in beside the beats.
+- **The visitor beats (`peek`/`peer`/`rCheer`) are demoted to t≈48-57 s, not deleted.** The panel
+  ruled co-presence semantically wrong — a session is never co-present with its peers — but that
+  deletes v6b's whole identity, so it is surfaced rather than taken. One line in `RARE_EVENTS`
+  reverses the demotion; removing them from `ALWAYS_EMITTED` and `art.events` completes the deletion.
+- **The harness is still Chromium-only** (unchanged from S16's note). WebKit remains unprobed.
