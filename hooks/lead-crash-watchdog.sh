@@ -39,6 +39,25 @@ lcw_osa() {
   "$LCW_OSA_TB" -k 3 "$LCW_OSA_TIMEOUT_S" "$@"
 }
 
+# lcw_bounded <secs> cmd… — run an external command under the timeout binary resolved above.
+#
+# WHY a second entry point rather than reusing lcw_osa: the DEATH path's calls need their OWN
+# budgets, and they are not best-effort pages. A notification can be cut at 5s and cost one missed
+# banner; the transcript reader that recovers an assignee's only surviving report cannot. Sharing
+# one constant would either strangle the harvest or leave the notification unbounded.
+#
+# The death path is the one place in this file where an unbounded call is unrecoverable: the daemon
+# is already the last thing running for a session that just died, nothing supervises IT, and a hang
+# here strands every teammate the crash handler exists to notify. Two of its calls read data whose
+# size is not ours to bound — a transcript "runs to hundreds of MB" (last_assistant_text) and
+# cc-teardown drives AppleEvents into iTerm2, the documented machine-wide wedge surface.
+# Same degradation contract as lcw_osa: no timeout(1) ⇒ run unbounded rather than lose the call.
+lcw_bounded() {
+  local s="$1"; shift
+  if [ -z "$LCW_OSA_TB" ] || [ ! -x "$LCW_OSA_TB" ]; then "$@"; return $?; fi
+  "$LCW_OSA_TB" -k 3 "$s" "$@"
+}
+
 
 if [[ "${LEAD_CRASH_WATCHDOG_DISABLED:-0}" == "1" ]]; then
   exit 0
@@ -360,7 +379,10 @@ member_transcript() {
         while IFS= read -r hit; do
           [[ -n "$hit" ]] || continue
           if [[ -z "$newest" || "$hit" -nt "$newest" ]]; then newest="$hit"; fi
-        done < <(grep -l "\"agentName\":\"$name\"" "$d"/*.jsonl 2>/dev/null || true)
+        # BOUNDED for the same reason as the strategy-2 fallback below: one project dir holds every
+        # transcript for that cwd, so this grep's cost is set by the corpus, not by us. Strategy 2
+        # was bounded and this one was not, which left the cheaper-looking path as the unbounded one.
+        done < <(lcw_bounded "${LCW_HARVEST_SCAN_TIMEOUT_S:-20}" grep -l "\"agentName\":\"$name\"" "$d"/*.jsonl 2>/dev/null || true)
       done
     done
   fi
@@ -403,7 +425,10 @@ member_transcript() {
 last_assistant_text() {
   local t="$1"
   [[ -n "$t" && -f "$t" ]] || return 0
-  "${LCW_PYTHON_BIN:-python3}" - "$t" <<'PY' 2>/dev/null || true
+  # BOUNDED: this streams a transcript whose size is not ours to bound (hundreds of MB), on the
+  # death path, in the process that is the last thing running for the dead session. A cut costs one
+  # assignee's report text; a hang costs every teammate the crash handler exists to notify.
+  lcw_bounded "${LCW_REPORT_READ_TIMEOUT_S:-30}" "${LCW_PYTHON_BIN:-python3}" - "$t" <<'PY' 2>/dev/null || true
 import json, sys
 last = ""
 try:
@@ -607,7 +632,10 @@ close_orphaned_panes() {
       # Captured, not discarded: the outcome has to be CHECKED, not claimed. rc 2 alone cannot
       # distinguish "a safety gate declined" from "the actuator could not even SEE the target"
       # (memory: claimed-outcome-vs-checked-outcome — parse a structured reason token).
-      tout=$("$tdbin" "$pane" --done-evidence "$ev" \
+      # BOUNDED: cc-teardown drives AppleEvents into iTerm2 — the documented machine-wide wedge
+      # surface this file's own osascript bound was added for (2026-07-26) — and it is called once
+      # PER orphaned pane, so an unbounded hang here stalls the teardown of every later member too.
+      tout=$(lcw_bounded "${LCW_TEARDOWN_TIMEOUT_S:-60}" "$tdbin" "$pane" --done-evidence "$ev" \
                --assignee-of "$sid" ${asid:+--assignee-sid "$asid"} 2>&1) || trc=$?
       case "$trc" in
         0)  n_ok=$((n_ok + 1));     echo "[watchdog $sid] close: $member pane=$pane TORN DOWN + effect-verified (rc 0)" ;;
@@ -622,6 +650,14 @@ close_orphaned_panes() {
               n_refuse=$((n_refuse + 1)); echo "[watchdog $sid] close: $member pane=$pane REFUSE (rc 2); left alone"
             fi ;;
         5)  n_fail=$((n_fail + 1)); echo "[watchdog $sid] close: $member pane=$pane FAIL LOUD — acted but the pane SURVIVED (rc 5)" ;;
+        124) # The bound above CUT the call — timeout(1)'s own rc, not cc-teardown's. A THIRD state:
+             # we have NO verdict at all, and the pane may or may not have been acted on. It must not
+             # land in n_fail ("acted, pane survived" — a claim we cannot make) nor in n_refuse ("a
+             # gate declined" — nothing declined). Counted with the UNRESOLVED bucket, whose meaning
+             # is exactly "no safety gate judged this pane and it is still running", and named
+             # distinctly in the line so the cause is not lost.
+             n_unres=$((n_unres + 1))
+             echo "[watchdog $sid] close: $member pane=$pane NO-VERDICT — cc-teardown exceeded ${LCW_TEARDOWN_TIMEOUT_S:-60}s and was cut (rc 124); pane state UNKNOWN, left alone" ;;
         *)  n_fail=$((n_fail + 1)); echo "[watchdog $sid] close: $member pane=$pane cc-teardown rc=$trc (unexpected); left alone" ;;
       esac
       printf '%s\t%s\t%s\t%s\n' "$member" "$pane" "rc=$trc" "$ev" >> "$plan" 2>/dev/null || true
@@ -740,8 +776,29 @@ echo "$LEAD_PID" > "$WATCHDOG_DIR/$SESSION_ID.pid"
 echo "$SESSION_ID" > "$WATCHDOG_DIR/$SESSION_ID.id"
 log "registered session=$SESSION_ID pid=$LEAD_PID"
 
+# The lead's start-time, read BEFORE the daemon is spawned and handed to it BY VALUE. It must not be
+# re-derived from disk later: $SESSION_ID.pid records only the pid, and a later SessionStart
+# overwrites it — so a daemon reading it back could pin itself to a successor it never watched.
+# Unreadable ⇒ empty ⇒ lead_alive degrades to bare pid liveness (see its header).
+LEAD_START=$(ps -o lstart= -p "$LEAD_PID" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//')
+
+# ── The parent must survive its own bookkeeping window (2026-07-29) ────────────────────────────────
+# From the `&` below until the .daemon file and the spawn log line are written, this PARENT holds the
+# only record of the daemon it just created. It had no HUP trap — only the daemon subshell did — and
+# a SessionStart hook runs in the dying pane's process group, so a pane teardown inside that window
+# killed the parent while the disowned daemon (which ignores HUP) lived on. The result is a daemon
+# named by NO .daemon file and NO log line: the single-instance guard cannot see it to retire it, and
+# nothing else knows it exists. Measured before this change: 14 of 63 live daemons untracked, oldest
+# 1d15h, and 0 "retired stale watchdog" lines across 3864 spawns.
+#
+# Placed HERE, not at the top of the file, and never removed: everything above this point is either
+# instant or the `INPUT=$(cat)` stdin read, and making THAT unkillable would trade a lost record for
+# a wedged hook. What follows is one ps, one printf and one log line, so the window this covers is
+# bounded by construction.
+trap '' HUP
+
 # Spawn detached watchdog daemon. Uses setsid + nohup + disown to survive
-# the hook process exit; daemon itself polls via kill -0 every 30s.
+# the hook process exit; daemon itself polls the lead's {pid, start-time} every 30s.
 (
   # Self-contained daemon. Exits cleanly when:
   #   (a) lead PID gone AND any owned team handled, or
@@ -750,15 +807,59 @@ log "registered session=$SESSION_ID pid=$LEAD_PID"
   exec </dev/null >>"$LOG_FILE" 2>&1
   trap '' HUP
 
+  # lead_alive <pid> <lstart-at-spawn> → 0 iff the pid is live AND is still the process this daemon
+  # was born watching.
+  #
+  # THE WEDGE THIS CLOSES. The check here used to be a bare `kill -0 "$pid"`, which answers only
+  # "some process holds this pid" — and macOS recycles pids. Once the lead died and its pid was
+  # reused, the answer flipped back to ALIVE permanently, so NEITHER of this loop's exit conditions
+  # could ever become true again and the daemon polled forever. Measured on this machine
+  # 2026-07-29: 63 live daemons, 14 of them named by no .daemon file, oldest 1d15h, against 157
+  # spawns and ZERO exits of EITHER kind logged that day (0 "pid file gone", 0 "LEAD CRASH
+  # detected") — the whole population had stopped being able to finish.
+  #
+  # The remedy is the {pid, start-time} identity this very file already uses on the DAEMON
+  # (daemon_alive, above) and cc-reaper uses on its sweep lock (lock_holder_alive) — it was simply
+  # never applied to the SUBJECT being watched. lstart is the pin because it is the one process
+  # attribute a recycled pid cannot inherit.
+  #
+  # Detection stays within one poll interval of the death: the instant the lead exits, `kill -0`
+  # fails as it always did. The pin only decides the case where the pid was REUSED between two
+  # polls, which is precisely where the old check went permanently wrong.
+  #
+  # Unreadable lstart at spawn ⇒ stored empty ⇒ fall back to bare pid liveness. That is today's
+  # behaviour and it keeps the bias this file states everywhere — never invent a crash — while the
+  # SUPERSEDED exit below still bounds that case. Same fail-open shape as lock_holder_alive.
+  lead_alive() {
+    local p="$1" want="$2" cur
+    kill -0 "$p" 2>/dev/null || return 1
+    [[ -n "$want" ]] || return 0
+    cur=$(ps -o lstart= -p "$p" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//')
+    [[ -n "$cur" ]] || return 1
+    [[ "$cur" == "$want" ]]
+  }
+
   local_watchdog() {
-    local pid="$1" sid="$2"
-    local pid_file="$WATCHDOG_DIR/$sid.pid"
+    local pid="$1" sid="$2" start="${3:-}"
+    local pid_file="$WATCHDOG_DIR/$sid.pid" holder
 
     while :; do
       # pid file gone = clean shutdown elsewhere
       [[ -f "$pid_file" ]] || { echo "[watchdog $sid] pid file gone — exit"; return 0; }
+      # SUPERSEDED — the pidfile is keyed by sid and only THIS sid's SessionStart rewrites it, so a
+      # different pid in it means the sid re-registered under a new process and a newer daemon owns
+      # the watch. The spawn guard above already treats exactly that condition as "the incumbent is
+      # stale" and kills it — but it can only reach daemons whose .daemon file was written, and 0
+      # "retired stale watchdog" lines across 3864 spawns say it never has. Self-retirement needs no
+      # bookkeeping and so cannot be lost the way that record can: the superseded daemon reads one
+      # file it already knows the path of and leaves.
+      holder=$(cat "$pid_file" 2>/dev/null || true)
+      if [[ -n "$holder" && "$holder" != "$pid" ]]; then
+        echo "[watchdog $sid] SUPERSEDED — pidfile holds $holder, not our lead $pid — exit"
+        return 0
+      fi
       # lead process gone = crash detected
-      if ! kill -0 "$pid" 2>/dev/null; then
+      if ! lead_alive "$pid" "$start"; then
         echo "[watchdog $sid] LEAD CRASH detected pid=$pid"
         handle_crash "$pid" "$sid"
         return 0
@@ -804,12 +905,16 @@ log "registered session=$SESSION_ID pid=$LEAD_PID"
     cause=$(printf '%s' "$_cls" | cut -f2)
     kb=$(printf '%s' "$_cls" | cut -f3)
     recs=$(printf '%s' "$_cls" | cut -f4)
-    mem_free=$(/usr/bin/memory_pressure 2>/dev/null | awk -F'[: ]+' '/free percentage/{print $(NF)}' | tr -d '%' || true)
+    # BOUNDED (both probes): these are diagnostic ENRICHMENT fields on the crash row. memory_pressure
+    # queries the VM subsystem and `ps aux` walks the whole process table — precisely the two things
+    # that are slowest under the memory/CPU exhaustion that caused the crash being recorded. Neither
+    # is worth delaying the shutdown_requests for; an empty field is honest, a hang is not.
+    mem_free=$(lcw_bounded "${LCW_PROBE_TIMEOUT_S:-5}" /usr/bin/memory_pressure 2>/dev/null | awk -F'[: ]+' '/free percentage/{print $(NF)}' | tr -d '%' || true)
     # grep -c exits 1 on zero matches (true when the dead session was the LAST claude proc);
     # `|| true` keeps that from tripping `set -e` and aborting handle_crash before the crash
     # record AND the team-recovery below run. grep still prints "0" to stdout.
     # shellcheck disable=SC2009  # ps|grep is deliberate: one pattern counts BOTH binary names portably
-    concurrent=$(ps aux 2>/dev/null | grep -cE '[c]laude\.exe|[n]ode_modules/\.bin/claude' || true)
+    concurrent=$(lcw_bounded "${LCW_PROBE_TIMEOUT_S:-5}" ps aux 2>/dev/null | grep -cE '[c]laude\.exe|[n]ode_modules/\.bin/claude' || true)
     # claude_version — THE decisive field: the crash rate is version-correlated (a regression
     # onset at 2.1.207: 2.1.183=0.02% → 2.1.207=4.76% → 2.1.215=1.56%, all mid-Bash in-process
     # deaths, NOT transcript size). Read from the transcript tail (every record carries it), cheap.
@@ -995,7 +1100,7 @@ log "registered session=$SESSION_ID pid=$LEAD_PID"
     done
   }
 
-  local_watchdog "$LEAD_PID" "$SESSION_ID"
+  local_watchdog "$LEAD_PID" "$SESSION_ID" "$LEAD_START"
 ) </dev/null >/dev/null 2>&1 &
 WATCHDOG_PID=$!
 disown

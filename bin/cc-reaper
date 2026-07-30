@@ -7,6 +7,10 @@
 #   cc-reaper sweep            DRY-RUN — classify + show what WOULD be reaped/paged (default; writes nothing)
 #   cc-reaper sweep --reap     ACT — checkpoint → re-verify → cc-teardown safe candidates; PAGE the desk on
 #                              never-reap-but-surface causes; run the enumerated≈live-panes self-check
+#   cc-reaper watchdog-census  CENSUS ONLY — classify the lead-crash-watchdog daemon population
+#                              {live-session | orphan | stale-file} + untracked daemons, reconcile
+#                              against the daemon's own log, PRINT the reap command per orphan.
+#                              Kills nothing, ever. `--json` for machine output. Off: CC_WATCHDOG_CENSUS=off
 #   cc-reaper selftest         RED-proof the disposition + the never-reap guarantees (no real session)
 #
 # SURFACE PAGING (T-P3-3 — surfaced ≠ acted, the FM2 gap G-P3-3): a never-reap cause that needs a HUMAN
@@ -898,6 +902,284 @@ acquire_sweep_lock(){
   return 0
 }
 
+# ── watchdog census (M4) ─────────────────────────────────────────────────────────────────────────
+# CENSUS ONLY. This leg never kills anything, by design and not by omission: a lead-crash-watchdog
+# daemon is the one process on this machine whose entire job is to OUTLIVE its session, so an
+# actuator that reaped it automatically would be able to disarm a live session's only crash handler.
+# It classifies, reconciles against the daemon's own log, and PRINTS the exact command per orphan.
+#
+# WHY IT EXISTS: the daemon's liveness test was a bare `kill -0` on the captured lead pid. macOS
+# recycles pids, so once the lead died and its pid was reused the test read ALIVE forever and neither
+# of the poll loop's exit conditions could ever become true again. Measured 2026-07-29 before the
+# fix: 63 live daemons, 14 of them named by no .daemon file, oldest 1d15h, against 157 spawns and
+# ZERO logged exits of EITHER kind that day. hooks/lead-crash-watchdog.sh now pins {pid, lstart} and
+# self-retires when superseded, which stops NEW daemons wedging; this census is how the already-wedged
+# population is seen, and how we tell afterwards whether it is converging.
+#
+# Kill switch: CC_WATCHDOG_CENSUS=off
+WD_CENSUS_DIR="${CC_WATCHDOG_DIR:-$HOME/.claude/watchdog}"
+WD_CENSUS_LOG="${CC_WATCHDOG_LOG:-$HOME/.claude/logs/lead-crash-watchdog.log}"
+
+wd_lstart(){ ps -o lstart= -p "${1:-0}" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//'; }
+
+# 0 iff the pid is live AND is a claude binary. The command check is the whole point: a dead lead's
+# pid gets RECYCLED, and answering "is this session alive" with bare pid liveness is the exact defect
+# this census reports on — it must not commit that defect inside its own classifier.
+wd_lead_live(){
+  local p="${1:-}" c
+  case "$p" in ''|*[!0-9]*) return 1 ;; esac
+  kill -0 "$p" 2>/dev/null || return 1
+  c="$(ps -o command= -p "$p" 2>/dev/null)"
+  case "$c" in *claude.exe*|*node_modules/.bin/claude*) return 0 ;; esac
+  return 1
+}
+
+# 0 iff the .daemon record still names the process it recorded. Deliberately {pid, lstart} with NO
+# command check: this mirrors the watchdog's own daemon_alive predicate verbatim, so the census
+# answers the same question production asks — and the positive control below can therefore exercise
+# the real predicate instead of a lookalike. Unverifiable identity ⇒ not provably ours ⇒ not alive
+# (same bias as daemon_alive, which re-spawns rather than trust an unpinned pid).
+wd_daemon_live(){
+  local pid="${1:-}" want="${2:-}" cur
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  kill -0 "$pid" 2>/dev/null || return 1
+  [ -n "$want" ] || return 1
+  cur="$(wd_lstart "$pid")"
+  [ -n "$cur" ] && [ "$cur" = "$want" ]
+}
+
+# wd_classify <watchdog-dir> <sid> → CLASS<TAB>LEAD_PID<TAB>DAEMON_PID<TAB>DAEMON_LSTART
+# The three classes are MECE over one sid and keyed on what is RUNNING, never on file age:
+#   live-session : the recorded lead pid is a live claude → a legitimate watch, leave it alone
+#   orphan       : the lead is gone or recycled but a daemon is still provably running → the wedge
+#   stale-file   : neither lead nor daemon alive → filesystem residue, nothing to reap
+wd_classify(){
+  local dir="$1" sid="$2" lead="" dpid="" dstart=""
+  lead="$(cat "$dir/$sid.pid" 2>/dev/null || true)"
+  if [ -f "$dir/$sid.daemon" ]; then
+    IFS=$'\t' read -r dpid dstart < "$dir/$sid.daemon" 2>/dev/null || true
+  fi
+  if wd_lead_live "$lead"; then
+    printf 'live-session\t%s\t%s\t%s' "$lead" "$dpid" "$dstart"
+  elif wd_daemon_live "$dpid" "$dstart"; then
+    printf 'orphan\t%s\t%s\t%s' "$lead" "$dpid" "$dstart"
+  else
+    printf 'stale-file\t%s\t%s\t%s' "$lead" "$dpid" "$dstart"
+  fi
+}
+
+# POSITIVE CONTROL (R6). A census whose classifier silently answered "live-session" for everything
+# would print a clean, reassuring, entirely false report — and nothing in a normal run could tell the
+# difference. So every run proves the orphan predicate FIRST, on a fixture built in a scratch dir:
+# a lead pid that cannot exist (2147483647 > the 99999 macOS pid ceiling, so it is ESRCH by
+# construction and can never be recycled into a live process under us) plus a daemon record naming a
+# process that IS provably alive with its REAL lstart — this shell. That is exactly the orphan shape
+# (lead gone, daemon running), and it drives the same wd_classify the real rows go through.
+# Fork-free on purpose: a `sleep &` fixture would need reaping and prints stray job noise.
+wd_control(){
+  local d rc=1 out
+  d="$(mktemp -d "${TMPDIR:-/tmp}/wd-control.XXXXXX" 2>/dev/null)" || { printf 'control=FAIL reason=no-tmpdir'; return 1; }
+  printf '2147483647\n' > "$d/ctl.pid"
+  printf '%s\t%s\n' "$$" "$(wd_lstart "$$")" > "$d/ctl.daemon"
+  out="$(wd_classify "$d" ctl | cut -f1)"
+  [ "$out" = "orphan" ] && rc=0
+  rm -rf "$d" 2>/dev/null || true
+  if [ "$rc" = 0 ]; then printf 'control=OK (fixture dead-lead + live-pinned-daemon classified orphan)'
+  else printf 'control=FAIL (fixture orphan classified as %s — the classifier is not deciding; every count below is UNTRUSTWORTHY)' "${out:-<empty>}"; fi
+  return "$rc"
+}
+
+# wd_daemon_pids — the live daemon population, read from the PROCESS TABLE.
+#
+# THE ENUMERATION IS PROCESS-FIRST, NOT PIDFILE-FIRST, and that ordering is the whole design. A
+# census keyed on ~/.claude/watchdog/*.pid can only ever see daemons that were successfully RECORDED
+# — and the dominant leak class is precisely the daemons that were not (14 of 63 when measured,
+# oldest 1d15h, because the parent hook was killed before it could write .daemon). Keyed on files,
+# this leg would have reported a clean zero while those 14 ran: an actuator that cannot see its
+# target population reports success by construction. So the process table is the source of truth and
+# the pidfiles are what it is reconciled AGAINST.
+#
+# Matched on the script token inside ARGS, never `comm` (truncated to 16 chars, so every one of these
+# reads "lead-crash-watch" and no exact match is possible) and never `pgrep -f` (which also matches
+# any process whose argv merely MENTIONS the path — agent briefs quoting a filename have produced
+# exactly that false census before). Anchored to a whitespace boundary and end-of-token so a path
+# ending in the script name matches while a longer name does not.
+#
+# ONE ps call for the whole census, carrying {pid, lstart, etime} so the classification pass never
+# forks again. The naive shape — enumerate pids, then `ps -o lstart=` per .daemon record per daemon —
+# is O(daemons × records): 60 × 49 = ~2,900 forks on the machine this was written for, which turns a
+# diagnostic into its own load event.
+#
+# lstart occupies exactly 5 whitespace-separated fields ("Wed 29 Jul 22:34:14 2026"), so args begin at
+# field 8, and joining fields 2-6 with single spaces reproduces byte-for-byte what the watchdog's own
+# `ps -o lstart= | tr -s ' '` wrote into the .daemon file — the two must match textually or every
+# record reads stale.
+#
+# Seam: CC_WATCHDOG_PS_BIN — lets the positive control drive a synthetic process table.
+wd_daemon_table(){
+  "${CC_WATCHDOG_PS_BIN:-ps}" -axo pid,lstart,etime,args 2>/dev/null \
+    | awk '{ for (i = 8; i <= 9 && i <= NF; i++)
+               if ($i ~ /(^|\/)lead-crash-watchdog\.sh$/) {
+                 printf "%s\t%s %s %s %s %s\t%s\n", $1, $2, $3, $4, $5, $6, $7; break } }' \
+    | sort -u
+}
+wd_daemon_pids(){ wd_daemon_table | cut -f1; }
+
+# SECOND POSITIVE CONTROL — the UNTRACKED leg (the one that matters most, and the one a file-keyed
+# census could not have had at all). wd_control above proves the sid-keyed classifier decides; it
+# says nothing about whether the process-table enumeration can SEE a daemon nobody recorded. Here a
+# stub `ps` emits a synthetic table containing one daemon pid that appears in no .daemon file, and
+# the enumerator must return it. If wd_daemon_pids' args-matching ever silently stops matching — a
+# `comm` truncation, a changed ps format, an over-anchored pattern — the live census would quietly
+# report zero orphans, which is exactly what "everything is fine" looks like.
+wd_control_untracked(){
+  local d stub out
+  d="$(mktemp -d "${TMPDIR:-/tmp}/wd-ctl2.XXXXXX" 2>/dev/null)" || { printf 'control-untracked=FAIL reason=no-tmpdir'; return 1; }
+  stub="$d/ps"
+  {
+    printf '#!/bin/bash\n'
+    printf 'printf "%%s\\n" "  PID STARTED                     ELAPSED ARGS"\n'
+    printf 'printf "%%s\\n" "424242 Wed 29 Jul 22:34:14 2026 01-02:03:04 /bin/bash /w/hooks/lead-crash-watchdog.sh"\n'
+    printf 'printf "%%s\\n" "424243 Wed 29 Jul 22:34:14 2026 01-02:03:04 /bin/bash /w/hooks/not-the-watchdog.sh"\n'
+    printf 'printf "%%s\\n" "424244 Wed 29 Jul 22:34:14 2026 01-02:03:04 /w/claude --print fix hooks/lead-crash-watchdog.sh"\n'
+  } > "$stub"
+  chmod +x "$stub" 2>/dev/null || true
+  out="$(CC_WATCHDOG_PS_BIN="$stub" wd_daemon_pids)"
+  rm -rf "$d" 2>/dev/null || true
+  if [ "$out" = "424242" ]; then
+    printf 'control-untracked=OK (synthetic unrecorded daemon enumerated from the process table; both decoys ignored)'
+    return 0
+  fi
+  printf 'control-untracked=FAIL (enumerator returned "%s", expected 424242 — the census CANNOT SEE untracked daemons; untracked_orphan=0 below means nothing)' "${out:-<empty>}"
+  return 1
+}
+
+watchdog_census(){
+  local json=0; [ "${1:-}" = "--json" ] && json=1
+  if [ "${CC_WATCHDOG_CENSUS:-on}" = "off" ]; then
+    say "cc-reaper watchdog-census: DISABLED (CC_WATCHDOG_CENSUS=off) — no census taken"; return 0
+  fi
+
+  local ctl ctl_rc=0 ctl2 ctl2_rc=0
+  ctl="$(wd_control)" || ctl_rc=1
+  ctl2="$(wd_control_untracked)" || ctl2_rc=1
+
+  # PASS 1 — every live daemon process, classified by whether a .daemon record still names it and by
+  # whether the lead that record points at is really alive.
+  # Every .daemon record read ONCE, as pid<TAB>lstart<TAB>sid, so the join below is in-memory.
+  local records="" f rp rl
+  for f in "$WD_CENSUS_DIR"/*.daemon; do
+    [ -f "$f" ] || continue
+    IFS=$'\t' read -r rp rl < "$f" 2>/dev/null || true
+    [ -n "$rp" ] || continue
+    records="${records}${rp}"$'\t'"${rl}"$'\t'"$(basename "$f" .daemon)"$'\n'
+  done
+
+  local n_tlive=0 n_torph=0 n_untracked=0 n_stale=0 rows="" jrows="" p sid dstart lead et seen="" plstart rec
+  while IFS=$'\t' read -r p plstart et; do
+    [ -n "$p" ] || continue
+    # Which sid, if any, records THIS process? Matched on {pid, lstart} against the records read
+    # above — a record naming a RECYCLED pid is not a record of this process, and trusting the pid
+    # alone here would reproduce, inside the census, the exact defect the census exists to report.
+    sid=""; dstart=""
+    rec="$(printf '%s' "$records" | awk -F'\t' -v P="$p" -v L="$plstart" '$1==P && $2==L {print $3; exit}')"
+    if [ -n "$rec" ]; then sid="$rec"; dstart="$plstart"; fi
+    if [ -z "$sid" ]; then
+      n_untracked=$(( n_untracked + 1 ))
+      rows="${rows}  ▶ kill ${p}  # UNTRACKED watchdog daemon, age ${et:-?} — named by no .daemon record"$'\n'
+      jrows="${jrows}{\"sid\":null,\"class\":\"UNTRACKED-orphan\",\"daemon_pid\":\"$p\",\"age\":\"${et:-?}\"},"
+      continue
+    fi
+    seen="$seen $sid"
+    lead="$(cat "$WD_CENSUS_DIR/$sid.pid" 2>/dev/null || true)"
+    if wd_lead_live "$lead"; then
+      n_tlive=$(( n_tlive + 1 ))
+      jrows="${jrows}{\"sid\":\"$sid\",\"class\":\"tracked-live\",\"lead_pid\":\"$lead\",\"daemon_pid\":\"$p\"},"
+    else
+      n_torph=$(( n_torph + 1 ))
+      rows="${rows}  ▶ kill ${p}  # watchdog for dead session ${sid}, lstart ${dstart}"$'\n'
+      jrows="${jrows}{\"sid\":\"$sid\",\"class\":\"tracked-orphan\",\"lead_pid\":\"$lead\",\"daemon_pid\":\"$p\"},"
+    fi
+  done <<< "$(wd_daemon_table)"
+
+  # PASS 2 — reconcile the OTHER direction: pidfiles with no live daemon and no live lead. Pure
+  # filesystem residue; nothing to kill, but it is what the sid-keyed classifier (and its positive
+  # control) decides, so it is counted rather than assumed empty.
+  # Both of wd_classify's remaining verdicts are consumed here, not just the tidy one. A pass that
+  # counted stale-file and silently dropped orphan would make the class the census exists to surface
+  # disappear whenever the process-table scan had not already caught it — a third state skipping the
+  # gate that was supposed to be MECE with it.
+  local cls crow
+  for f in "$WD_CENSUS_DIR"/*.pid; do
+    [ -f "$f" ] || continue
+    sid="$(basename "$f" .pid)"
+    case " $seen " in *" $sid "*) continue ;; esac
+    crow="$(wd_classify "$WD_CENSUS_DIR" "$sid")"
+    cls="$(printf '%s' "$crow" | cut -f1)"
+    dstart="$(printf '%s' "$crow" | cut -f4)"
+    p="$(printf '%s' "$crow" | cut -f3)"
+    case "$cls" in
+      orphan)     n_torph=$(( n_torph + 1 ))
+                  rows="${rows}  ▶ kill ${p}  # watchdog for dead session ${sid}, lstart ${dstart}"$'\n'
+                  jrows="${jrows}{\"sid\":\"$sid\",\"class\":\"tracked-orphan\",\"daemon_pid\":\"$p\"}," ;;
+      stale-file) n_stale=$(( n_stale + 1 ))
+                  jrows="${jrows}{\"sid\":\"$sid\",\"class\":\"stale-file\"}," ;;
+      live-session) n_tlive=$(( n_tlive + 1 ))
+                  jrows="${jrows}{\"sid\":\"$sid\",\"class\":\"tracked-live\"}," ;;
+    esac
+  done
+
+  # Reconcile against the daemon's OWN log. spawned − (clean-exit + superseded + crash-path) is the
+  # accounting identity for "should still be running"; the delta against the observed live count is
+  # the leak. A zero-exit day with a positive spawn count is the wedge signature, and it is only
+  # visible as a RATIO — either number alone looks unremarkable.
+  local n_spawn=0 n_gone=0 n_sup=0 n_crash=0 n_dedupe=0 n_retire=0 n_procs=0 expect delta
+  if [ -r "$WD_CENSUS_LOG" ]; then
+    # NO `|| echo 0` on any of these: `grep -c` ALREADY prints 0 on no-match and exits 1, so the
+    # fallback would append a SECOND line and the count becomes the two-line string "0\n0", which
+    # blows up the $(( )) below. This script runs without errexit, so a rc-1 grep in a command
+    # substitution is already safe and captures the "0" grep itself printed.
+    n_spawn=$(grep -cF 'spawned watchdog daemon' "$WD_CENSUS_LOG" 2>/dev/null)
+    n_gone=$(grep -cF 'pid file gone — exit' "$WD_CENSUS_LOG" 2>/dev/null)
+    n_sup=$(grep -cF 'SUPERSEDED — pidfile holds' "$WD_CENSUS_LOG" 2>/dev/null)
+    n_crash=$(grep -cF 'LEAD CRASH detected' "$WD_CENSUS_LOG" 2>/dev/null)
+    n_dedupe=$(grep -cF 'ALREADY RUNNING' "$WD_CENSUS_LOG" 2>/dev/null)
+    n_retire=$(grep -cF 'retired stale watchdog' "$WD_CENSUS_LOG" 2>/dev/null)
+  fi
+  # Same enumerator the classification pass used — never a second, differently-written scan, or the
+  # reconcile could disagree with the rows it is reconciling.
+  n_procs=$(wd_daemon_pids | grep -c .)
+  expect=$(( n_spawn - n_gone - n_sup - n_crash ))
+  delta=$(( n_procs - expect ))
+
+  if [ "$json" = 1 ]; then
+    printf '{"control_ok":%s,"control_untracked_ok":%s,' \
+      "$( [ "$ctl_rc" = 0 ] && printf true || printf false )" \
+      "$( [ "$ctl2_rc" = 0 ] && printf true || printf false )"
+    printf '"counts":{"tracked_live":%s,"tracked_orphan":%s,"untracked_orphan":%s,"stale_file":%s,"live_procs":%s},' \
+      "$n_tlive" "$n_torph" "$n_untracked" "$n_stale" "$n_procs"
+    printf '"log":{"spawned":%s,"clean_exit":%s,"superseded":%s,"crash_path":%s,"dedupe_skips":%s,"retired":%s,"expected_running":%s,"delta":%s},' \
+      "$n_spawn" "$n_gone" "$n_sup" "$n_crash" "$n_dedupe" "$n_retire" "$expect" "$delta"
+    printf '"rows":[%s]}\n' "${jrows%,}"
+  else
+    say "cc-reaper watchdog-census — CENSUS ONLY, nothing was killed"
+    say "  $ctl"
+    say "  $ctl2"
+    say "  daemon procs : live=$n_procs  →  tracked-live=$n_tlive  tracked-orphan=$n_torph  UNTRACKED-orphan=$n_untracked"
+    say "  pidfile-only : stale-file=$n_stale (no live daemon, no live lead — residue)"
+    say "  log reconcile: spawned=$n_spawn  clean-exit=$n_gone  superseded=$n_sup  crash-path=$n_crash"
+    say "                 dedupe-skips=$n_dedupe  retired-stale=$n_retire"
+    say "                 expected-still-running=$expect  observed=$n_procs  delta=$delta"
+    if [ -n "$rows" ]; then
+      say "  reap commands (run these yourself — this leg never kills):"
+      printf '%s' "$rows"
+    else
+      say "  no orphans — nothing to reap"
+    fi
+  fi
+  return 0
+}
+
 case "${1:-}" in
   # Only --reap is serialized. A DRY-RUN neither takes the lock nor respects it: it writes nothing
   # (reconcile / backlog-reap / inbox-guard are all --reap-gated), so it has no state to race on, and
@@ -906,7 +1188,10 @@ case "${1:-}" in
   # made someone want to run it. Its ~12s of read-only git I/O is not worth either.
   sweep)        [ "${2:-}" = "--reap" ] && { acquire_sweep_lock || exit 0; }
                 sweep "${2:-}" ;;
+  # CENSUS ONLY and therefore unlocked: it kills nothing and writes nothing, so it has no state to
+  # race a sweep on, and it must stay available during exactly the long sweep that made someone ask.
+  watchdog-census|--watchdog-census) watchdog_census "${2:-}" ;;
   selftest)     exec bats "$HERE/../tests/cc-reaper.bats" ;;
   -h|--help|"") sed -n '2,20p' "$0"; exit 0 ;;
-  *)            echo "cc-reaper: unknown command '$1' (sweep | selftest)" >&2; exit 2 ;;
+  *)            echo "cc-reaper: unknown command '$1' (sweep | watchdog-census | selftest)" >&2; exit 2 ;;
 esac
