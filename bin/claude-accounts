@@ -759,7 +759,78 @@ def _soft(r, R):
     return SF * KF * CF
 
 
-def _excluded(r, R):
+# ---- the login-cliff routing term (ACCOUNT_ROUTING_V2 M1 — THE INVERSION) ----------------------
+# Until this landed, every login_expires_* read in this file was in a PRODUCER (probe_account), a
+# re-deriver (refresh_login_countdown) or a RENDERER — and the four functions that decide which
+# account works never mentioned the cliff once. So the subsystem whose whole job is "which account
+# works" treated the one fact that decides whether an account will STILL work as a display string.
+#
+# Two bands, both off the ABSOLUTE stamp's derived login_expires_h, reusing cc-relogin-poll's own
+# constants (T-7d trigger / T-48h escalation) rather than inventing new numbers:
+#   SOFT  (<= 168h)  score multiplier. The account keeps serving and keeps its quota; it loses
+#                    ties. New-session inflow falls for ~5 days so k DECAYS instead of being
+#                    fought at the deadline. A multiplier, not an exclusion: hard-excluding for a
+#                    week discards ~25% of fleet capacity for 7 of every 30 days, per account.
+#   DRAIN (<= 48h)   excluded from new work. Existing sessions finish, k -> 0, and cc-relogin
+#                    finally gets the k==0 window it has never once found (all 4 accounts sit at
+#                    k=5-6, so the autonomous path was 0-BY-CONSTRUCTION). Draining an account IS
+#                    a routing decision — that is why this belongs here and not in a new daemon.
+#
+# FAIL-OPEN on absence is not a nicety: login_expires_h is not on every build (see the
+# --relogin-status detection note), and reading a missing field as "cliff imminent" would exclude
+# the ENTIRE fleet on an older binary. Absence of the cliff fact is never evidence of a cliff.
+CLIFF_SOFT_H = 168.0     # = cc-relogin-poll --trigger-days 7
+CLIFF_DRAIN_H = 48.0     # = cc-relogin-poll --escalate-hours 48
+CLIFF_SOFT_FACTOR = 0.25
+CLIFF_DRAIN_REASON = "login-cliff-drain"
+
+
+def _cliff_env(name, default):
+    """Float from the env, else the default. A malformed value is IGNORED, never fatal and never
+    zero: a typo in a tuning knob must not silently disable a safety term (nor crash a router)."""
+    raw = os.environ.get(name)
+    if raw:
+        try:
+            v = float(raw)
+            if v >= 0:
+                return v
+        except ValueError:
+            pass
+    return default
+
+
+def cliff_enabled():
+    """R8 kill switch. CC_ROUTE_CLIFF_TERM=off restores byte-identical prior routing."""
+    return os.environ.get("CC_ROUTE_CLIFF_TERM", "on").strip().lower() not in ("off", "0", "false")
+
+
+def cliff_band(r):
+    """-> 'drain' | 'soft' | 'none' for ONE row. 'none' whenever the term is off or the cliff is
+    unknown — the fail-open rule above. Pure read; no side effects."""
+    if not cliff_enabled():
+        return "none"
+    h = r.get("login_expires_h")
+    if h is None:
+        return "none"
+    try:
+        h = float(h)
+    except (TypeError, ValueError):
+        return "none"
+    if h <= _cliff_env("CC_ROUTE_CLIFF_DRAIN_H", CLIFF_DRAIN_H):
+        return "drain"
+    if h <= _cliff_env("CC_ROUTE_CLIFF_SOFT_H", CLIFF_SOFT_H):
+        return "soft"
+    return "none"
+
+
+def _cliff_factor(r):
+    """SOFT-band score multiplier (1.0 outside the band)."""
+    if cliff_band(r) != "soft":
+        return 1.0
+    return _cliff_env("CC_ROUTE_CLIFF_SOFT_FACTOR", CLIFF_SOFT_FACTOR)
+
+
+def _excluded(r, R, cliff=True):
     if "error" in r:
         return r["error"]
     if r.get("session_pct") is None:
@@ -770,12 +841,18 @@ def _excluded(r, R):
         return "5h-cutoff"
     if r.get("k", 0) >= R["KMAX"]:
         return "kmax-concurrency"
+    # LAST of the exclusions, deliberately: a row with no live quota must still report its DATA
+    # reason (that is what drives exit 3 rather than 2), and a genuinely capped account must still
+    # read as capped. The cliff is the softest reason here — it is a preference, and ranked()
+    # yields it entirely when it is what emptied the candidate set.
+    if cliff and cliff_band(r) == "drain":
+        return CLIFF_DRAIN_REASON
     return None
 
 
-def score_general(r, cfg):
+def score_general(r, cfg, cliff=True):
     R = cfg["router"]
-    reason = _excluded(r, R)
+    reason = _excluded(r, R, cliff)
     if reason:
         return None, reason
     if r.get("weekly_pct") is None:
@@ -785,12 +862,12 @@ def score_general(r, cfg):
     if w_rem <= R["WEEKLY_FLOOR"]:
         return None, "weekly-exhausted"
     T = horizon(r.get("weekly_reset_h"), R)
-    return (w_rem / T) * _soft(r, R), None
+    return (w_rem / T) * _soft(r, R) * (_cliff_factor(r) if cliff else 1.0), None
 
 
-def score_fable(r, cfg, win):
+def score_fable(r, cfg, win, cliff=True):
     R, F = cfg["router"], cfg["frontier"]
-    reason = _excluded(r, R)
+    reason = _excluded(r, R, cliff)
     if reason:
         return None, reason
     if win["active"] is None:
@@ -816,20 +893,56 @@ def score_fable(r, cfg, win):
     T_fable = horizon(r.get("fable_reset_h"), R)
     H = max(min(T_fable, h_deadline), R["EPS_H"]) if h_deadline is not None else max(T_fable, R["EPS_H"])
     JB = R["JB_BONUS"] if (h_deadline is not None and T_fable > h_deadline) else 1.00
-    return (f_eff / H) * JB * _soft(r, R), None
+    return (f_eff / H) * JB * _soft(r, R) * (_cliff_factor(r) if cliff else 1.0), None
 
 
-def ranked(rows, cfg, win, kind):
-    out = []
-    reasons = {}
+def _rank_pass(rows, cfg, win, kind, cliff):
+    out, reasons = [], {}
     for r in rows:
-        s, why = score_fable(r, cfg, win) if kind == "fable" else score_general(r, cfg)
+        s, why = (score_fable(r, cfg, win, cliff) if kind == "fable"
+                  else score_general(r, cfg, cliff))
         if s is not None and s > 0:
             out.append((s, r))
         else:
             reasons[r["acct"]] = why or "zero-score"
     out.sort(key=lambda x: x[0], reverse=True)
     return out, reasons
+
+
+def ranked(rows, cfg, win, kind):
+    """Rank routable accounts, with the login-cliff term YIELDING rather than starving the fleet.
+
+    A cliff-drained account STILL WORKS — the cliff has not passed. So refusing to route to it is
+    a PREFERENCE, and a preference must never be reported as "no account has headroom": the drain
+    reason classifies as policy, policy maps to --route exit 2, and cc-route turns exit 2 into a
+    fleet-wide QUOTA CLIFF (exit 4) that row 5 consumes as a hard stop. Left un-yielded, this term
+    would convert a survivable, scheduled 4-account cliff calendar into a dispatch OUTAGE — the
+    exact shape of the capacity gate that scored REFUSE against every sampled load.
+
+    So: if the cliff term is what emptied the candidate set, re-rank without it and say so. The
+    fleet degrades to pre-cliff-term behaviour under pressure, never below it.
+
+    The override is recorded on the ROW (`cliff_yielded`), never as a synthetic entry in the
+    reasons map: that map is account-keyed and its consumers count it (`route_line` renders
+    "N excluded") and index it by account, so a non-account key would silently inflate a
+    rendered count."""
+    out, reasons = _rank_pass(rows, cfg, win, kind, True)
+    if out or not any(w == CLIFF_DRAIN_REASON for w in reasons.values()):
+        return out, reasons
+    yielded, y_reasons = _rank_pass(rows, cfg, win, kind, False)
+    if not yielded:
+        # The cliff was NOT the binding constraint — something else would have excluded these rows
+        # anyway. Report the reasons that actually BIND, never the drain that merely masked them.
+        # This is not cosmetic: `_excluded` returns the drain before score_general can reach
+        # "no-weekly-data", and the data-vs-policy split drives the exit code. Reporting the drain
+        # here would turn a DATA-unavailable fleet (exit 3, callers may degrade to a proxy) into a
+        # POLICY refusal (exit 2, callers must not fire blind) — the wrong verdict, in the
+        # direction that hides an outage.
+        return yielded, y_reasons
+    for _s, r in yielded:
+        if reasons.get(r["acct"]) == CLIFF_DRAIN_REASON:
+            r["cliff_yielded"] = True
+    return yielded, y_reasons
 
 
 # Exclusion reasons meaning "we could not SEE the data", as opposed to "policy says no".
@@ -1676,6 +1789,10 @@ def main():
             f, fr_ = score_fable(r, cfg, win)
             r["score_general"], r["score_fable"] = g, f
             r["route_reasons"] = {"general": gr, "fable": fr_}
+            # The band is emitted as its own field, not left implicit in a reason string:
+            # cc-route records it per decision (route.jsonl cliff_band) so "did routing see the
+            # cliff?" is answerable from disk rather than inferred from prose.
+            r["cliff_band"] = cliff_band(r)
             # Parallel map, not a reshape of route_reasons: the reason strings are prose
             # (one carries an emoji), so a consumer classifying them had to string-match.
             # None where the account routed — there is nothing to classify.
@@ -1752,6 +1869,14 @@ def main():
         if reasons:
             print(f"claude-accounts: {kind} excluded — "
                   + "; ".join(f"{a}={w}" for a, w in reasons.items()), file=sys.stderr)
+        # A yielded login-cliff drain is never silent: the caller is told that the account it just
+        # received is inside its drain band and was re-admitted only because nothing else was
+        # routable. Stdout stays exactly the contract (account name / acct score lines).
+        drained = [r["acct"] for _s, r in cand if r.get("cliff_yielded")]
+        if drained:
+            print(f"claude-accounts: login-cliff drain YIELDED for {', '.join(drained)} — no other "
+                  f"account was routable and a drained account still works (the cliff has not "
+                  f"passed). Re-login is due: cc-relogin {drained[0]}", file=sys.stderr)
         if flag == "--route":
             print(cand[0][1]["acct"])
         else:
