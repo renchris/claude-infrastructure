@@ -47,7 +47,13 @@ setup() {
 @test "harness self-check: the baseline is the pre-slim implementation" {
   grep -q "jq -r '.context_window.used_percentage" "$OLD"
   grep -q 'git branch --show-current' "$OLD"
-  ! grep -q 'porcelain=v2' "$OLD"
+  # `|| false` is LOAD-BEARING: a non-final `!` is errexit-EXEMPT under bats, so this line was DEAD —
+  # it could not fail. In the harness self-check whose entire purpose is "the baseline really is the
+  # old implementation, or every diff below passes for free", a dead assertion is the vacuous pass it
+  # exists to prevent. Found by a dead-assertion sweep of this row's suites, 2026-07-29
+  # (memory bats-dead-assertions-errexit-exemptions). Only NON-final ones are exempt — the last `!`
+  # in this body is the test's own exit status and is live.
+  ! grep -q 'porcelain=v2' "$OLD" || false
   # ...and the new one is not
   grep -q 'porcelain=v2' "$NEW"
   ! grep -q "jq -r '.context_window.used_percentage" "$NEW"
