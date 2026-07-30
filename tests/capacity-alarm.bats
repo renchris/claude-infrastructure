@@ -324,6 +324,41 @@ SC
   [[ "$output" =~ "disjoint-family sum" ]] || false
 }
 
+@test "(xxvii) the row PARSES as JSON in EVERY verdict state — including NO-DATA" {
+  # The gap every other test in this file shares: they assert with regexes like `"verdict":"NO-DATA"`,
+  # and a regex match never requires the surrounding document to be valid JSON. That blindness hid a
+  # real defect — on the NO-DATA path the row carried `"est_room_sessions":?`, because the human-facing
+  # `?` default is non-empty and so slipped past a `${ROOM:-null}` fallback. NO-DATA rows ARE appended,
+  # so one blind sample poisoned the jsonl for every consumer, and the row that says "the instrument
+  # broke" was precisely the row nobody could read.
+  #
+  # So: hand the output to a real parser, in each state that reaches a different branch of the printf.
+  # NO-DATA is listed FIRST because it is the state that was broken and the one most likely to regress.
+  parse() { printf '%s' "$1" | python3 -c 'import sys,json; json.loads(sys.stdin.read())'; }
+
+  run env CC_CAP_PYTHON=/nonexistent/python /bin/bash "$ALARM" --json --no-append
+  [ "$status" -eq 3 ] || false
+  [[ "$output" =~ \"verdict\":\"NO-DATA\" ]] || false
+  parse "$output" || false
+  # and the field is the JSON literal null, never a bare `?`
+  [[ "$output" =~ \"est_room_sessions\":null ]] || false
+  ! [[ "$output" =~ est_room_sessions\":\? ]] || false
+
+  # every other branch, so the fix cannot have traded one broken state for another
+  for probe in "OK::" "WARN:CC_CAP_WARN_GB=999999:" "ALARM:CC_CAP_ALARM_GB=999999:CC_CAP_WARN_GB=999999"; do
+    want="${probe%%:*}"; envs="${probe#*:}"
+    # shellcheck disable=SC2086  # deliberate word-split: each probe's env assignments
+    run env ${envs//:/ } /bin/bash "$ALARM" --json --no-append
+    [[ "$output" =~ \"verdict\":\"$want\" ]] || false
+    parse "$output" || false
+  done
+
+  # the ps-rss fallback branch builds top_procs differently — parse that shape too
+  mk_stubs
+  run env PATH="$STUBS:$PATH" CC_CAP_TOP=/nonexistent/top /bin/bash "$ALARM" --json --no-append
+  parse "$output" || false
+}
+
 @test "(viii) R1 — never sleeps, polls, or waits on load (EXECUTABLE lines only)" {
   # TWO defects the first version of this test had, both caught by running it:
   #  1. It matched the script's OWN PROSE — the header says "NEVER refuses, blocks, queues, sleeps,

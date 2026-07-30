@@ -343,10 +343,24 @@ esac
 # It is never used in the VERDICT (that keys on measured reclaimable headroom and swap), only in the
 # human line, and it is labelled as a floor there. Override with CC_CAP_PER_SESSION_MB if you have
 # measured your own with footprint(1).
+#
+# Projected ceiling: how many MORE sessions fit in the reclaimable headroom, at the row's measured
+# ~636 MB/session process RSS. Reported as an ESTIMATE and never used in the verdict — per-session
+# RSS overcounts shared pages, so this is directional guidance for the operator, not a threshold.
+#
+# TWO VALUES, deliberately — `?` reads well to a human and is not JSON. The display default is the
+# literal `?`, and because that is NON-EMPTY a `${ROOM:-null}` fallback in the printf below cannot
+# rescue it: on the NO-DATA path (headroom unreadable) the row emitted `"est_room_sessions":?`, which
+# no JSON parser accepts. The row that says "the instrument broke" was therefore the one row in the
+# log that could not be read — and NO-DATA rows ARE appended, so a single blind sample poisoned the
+# file for every consumer. The regex-based NO-DATA test did not catch it because matching
+# `"verdict":"NO-DATA"` never requires the surrounding document to parse.
 PER_MB="${CC_CAP_PER_SESSION_MB:-636}"
-ROOM="?"
+ROOM="?"          # human-readable
+ROOM_JSON="null"  # machine-readable — must stay a JSON literal in every branch
 if [ -n "$HEAD" ]; then
   ROOM="$(awk -v h="$HEAD" -v p="$PER_MB" 'BEGIN{printf "%d", (h*1024)/p}')"
+  ROOM_JSON="$ROOM"
 fi
 
 TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -356,7 +370,7 @@ TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 # the log itself rather than only in an aggregate that looks plausible either way.
 JSON="$(printf '{"ts":"%s","verdict":"%s","sessions":%s,"headroom_gb":%s,"compressor_gb":%s,"active_gb":%s,"wired_gb":%s,"swap_used_mb":%s,"warn_gb":%s,"alarm_gb":%s,"est_room_sessions":%s,"per_session_mb_est":%s,"sessions_exe":%s,"sessions_binclaude":%s,"pressure_level":%s,"proc_warn_gb":%s,"max_proc_gb":%s,"top_procs":%s}' \
   "$TS" "$VERDICT" "$SESSIONS" "${HEAD:-null}" "${COMP:-null}" "${ACT:-null}" "${WIRED:-null}" \
-  "${SWAP_MB:-0}" "$WARN_GB" "$ALARM_GB" "${ROOM:-null}" "$PER_MB" \
+  "${SWAP_MB:-0}" "$WARN_GB" "$ALARM_GB" "$ROOM_JSON" "$PER_MB" \
   "$SESSIONS_EXE" "$SESSIONS_BIN" "${PRESSURE:-null}" "$PROC_WARN_GB" "${MAX_PROC_GB:-null}" \
   "$TOP_JSON")"
 
