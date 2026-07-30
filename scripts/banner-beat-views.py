@@ -13,9 +13,20 @@ THE MECHANISM. The assets already carry per-element phase in `--d` and take a gl
 banner-shots.sh additionally pins `animation-play-state: paused` because it wants one still frame;
 this script deliberately does NOT, so each view *plays live* from its own beat the moment it loads.
 
-So a beat's view is the same asset with one injected rule. No re-render, no second source of truth,
-and nothing about the beat's own timing is restated here — get the window wrong and the view simply
-shows the wrong moment, which is visible rather than silent.
+So a beat's view is the same asset with one injected rule. No re-render and no second source of truth:
+**the windows are read out of `tools/banner/gen.py`'s own `RARE_EVENTS`, never restated here.**
+
+That was not true of the first version, and the way it failed is the reason this paragraph exists. It
+carried its own copy of the windows while this docstring claimed it didn't. When a beat was later
+withdrawn and two others re-timed, the copies went stale and the affected panels rendered plain
+ambient — which looks exactly like a *broken beat* rather than a stale reviewer, i.e. the tool would
+have made a correct build look defective. A review surface that can drift from its subject is worse
+than no review surface. Windows now come from the generator; a beat the generator does not emit is
+labelled **NOT IN THIS BUILD** instead of quietly rendering ambient (which covers both a globally withdrawn beat and one this variant simply never declared); and a beat in `RARE_EVENTS` that has no
+editorial note here still gets a panel, so a newly-added beat appears without anyone editing this file.
+
+The generator is **parsed, not imported** — `tools/banner/gen.py` raises partway through a bare
+module exec, and a tool whose job is to review the build must not depend on running it.
 
 Each panel is 838 px wide, the re-measured README column (scripts/banner-column-width.py), because
 § THE PICK requires judging at rendered size rather than at 1:1 of the art grid.
@@ -28,68 +39,117 @@ Each panel is 838 px wide, the re-measured README column (scripts/banner-column-
 from __future__ import annotations
 
 import argparse
+import ast
 import pathlib
 import shutil
 import subprocess
 import sys
 
-# Beat windows are declared in tools/banner/gen.py RARE_EVENTS; these mirror the shipped set and the
-# lead-in is how far BEFORE the window each view starts, so the entry is on screen rather than
-# already over. A beat is easiest to read from just before it begins.
-BEATS = [
-    {
-        "key": "ambient",
-        "name": "AMBIENT — the control",
-        "window": (0.0, 0.0),
-        "lead": 0.0,
-        "look": "No beat. This is what 91% of the loop looks like: stride, scroll, drifting cloud "
-        "bands, the print strip. Judge every beat below against THIS, because a beat that reads "
-        "the same as ambient is absent however green the gate is.",
-        "mech": "the resting state",
-    },
-    {
-        "key": "refusal",
-        "name": "THE REFUSAL",
-        "window": (3.0, 8.0),
-        "lead": 1.0,
-        "look": "A post arrives riding the ground. The bar drops across the path, the world pulls "
-        "BACK exactly one print pitch, and the creature re-steps into a print it already made — a "
-        "returned turn is redoing a step. Then it makes the lost ground up above nominal.",
-        "mech": "completion-assert.sh refuses a false 'done'",
-    },
-    {
-        "key": "ask",
-        "name": "THE ASK",
-        "window": (13.0, 22.0),
-        "lead": 1.0,
-        "look": "Nothing arrives. The world rate goes to ZERO for 6 s, ears up, gaze parked "
-        "straight out — then 3 s at treble to repay the stop. The clouds keep drifting: the ground "
-        "is the gauge, and a session blocked on a human stops its progress, not the world.",
-        "mech": "a class-C decision waits with no default",
-    },
-    {
-        "key": "overlap",
-        "name": "THE OVERLAP",
-        "window": (36.0, 44.25),
-        "lead": 1.0,
-        "look": "The print pitch HALVES for 12 prints — two walkers' worth of record — so the foot "
-        "lands on every second print and the mismatch is the tell. Exits by re-registration. This "
-        "is the beat the legibility audit named the designated sacrifice: purest idea, lowest "
-        "visibility. Decide it here.",
-        "mech": "self-close --successor overlaps rather than touches",
-    },
-    {
-        "key": "visitor",
-        "name": "VISITOR (demoted, not deleted)",
-        "window": (48.5, 57.0),
-        "lead": 1.5,
-        "look": "The peek/peer/cheer machinery, still present but pushed past any realistic dwell. "
-        "Present so the co-presence question can be judged on the artifact — O1 reverses the "
-        "never-co-present principle, so this is the nearest thing to a preview of two creatures "
-        "sharing the frame.",
-        "mech": "carried, pending the spec owner's ruling",
-    },
-]
+# EDITORIAL notes only, keyed by the generator's own beat name. No windows here — those are read
+# from gen.py (see read_beats). `lead` is how far BEFORE the window a view starts, so the entry is on
+# screen rather than already over; a beat is easiest to read from just before it begins.
+NOTES = {
+    "rSummon": (
+        "THE SUMMONING",
+        "the magician beat: hat, summon, hand over the brief, take the work back, self-remove",
+        1.0,
+        "A dons a hat and summons a SMALLER second clawd — the binary's own in-session creature, so "
+        "it is derived rather than invented, and the smaller mass keeps the source's rule of one "
+        "saturated orange subject. A hands over the brief; B hands back the finished work; B removes "
+        "ITSELF. Watch that the two never overlap and that nothing detaches from A while it hops.",
+    ),
+    "rRefuse": (
+        "THE REFUSAL",
+        "completion-assert.sh refuses a false 'done'",
+        1.0,
+        "A post arrives riding the ground. The bar drops across the path, the world pulls BACK exactly "
+        "one print pitch, and the creature re-steps into a print it already made — a returned turn is "
+        "redoing a step. Then it makes the lost ground up above nominal. Watch for the predicted "
+        "misread: a ground scrolling backward is also what a broken animation looks like.",
+    ),
+    "rAsk": (
+        "THE ASK",
+        "a class-C decision waits with no default",
+        1.0,
+        "Nothing arrives. The world rate goes to ZERO, ears up, gaze parked straight out — then a "
+        "catch-up above nominal, because a looping world cannot hold for free. The operator read the "
+        "first build of this as 'buggy being halted', so the creature now BLINKS through the stop: "
+        "stillness must not read as a stalled image.",
+    ),
+    "rOverlap": (
+        "THE OVERLAP",
+        "self-close --successor overlaps rather than touches",
+        1.0,
+        "The print pitch HALVES for 12 prints — two walkers' worth of record — so the foot lands on "
+        "every second print. Ruled INVISIBLE by the operator and withdrawn; the geometry is kept so "
+        "one name restores it.",
+    ),
+    "rCheer": (
+        "VISITOR / CHEER",
+        "on hold — operator: 'silly'",
+        1.5,
+        "The peek/peer/cheer machinery. Withdrawn, not deleted.",
+    ),
+}
+
+AMBIENT = {
+    "key": "ambient",
+    "name": "AMBIENT — the control",
+    "window": None,
+    "lead": 0.0,
+    "emitted": True,
+    "mech": "the resting state",
+    "look": "No beat. This is what most of the loop looks like: stride, scroll, drifting cloud bands, "
+    "the print strip. Judge every beat below against THIS, because a beat that reads the same as "
+    "ambient is absent however green the gate is.",
+}
+
+
+def read_beats(gen: pathlib.Path) -> list[dict]:
+    """Read RARE_EVENTS + the emitted set out of gen.py by PARSING it.
+
+    Not by importing: gen.py raises partway through a bare module exec, and a tool whose job is to
+    review the build must not depend on running it. Fails loud if either name is missing, because
+    silently falling back to a local copy is the exact drift this function exists to remove.
+    """
+    tree = ast.parse(gen.read_text())
+    found: dict[str, object] = {}
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        for tgt in node.targets:
+            if isinstance(tgt, ast.Name) and tgt.id in ("RARE_EVENTS", "ALWAYS_EMITTED"):
+                try:
+                    found[tgt.id] = ast.literal_eval(node.value)
+                except ValueError:
+                    pass
+    windows = found.get("RARE_EVENTS")
+    emitted = found.get("ALWAYS_EMITTED")
+    if not isinstance(windows, dict):
+        sys.exit(
+            f"banner-beat-views: could not read RARE_EVENTS from {gen}. The windows live there and "
+            "are deliberately not duplicated here — fix the parse rather than restoring a local copy."
+        )
+    emitted_set = set(emitted) if isinstance(emitted, (list, tuple, set)) else set(windows)
+
+    out = [AMBIENT]
+    for name, win in sorted(windows.items(), key=lambda kv: kv[1][0]):
+        label, mech, lead, look = NOTES.get(
+            name, (name, "no editorial note yet — added to gen.py after this file was written", 1.0,
+                   "Newly declared in RARE_EVENTS. It gets a panel automatically so a new beat is "
+                   "never invisible to review; add a note for it in NOTES.")
+        )
+        out.append({
+            "key": name,
+            "name": label,
+            "window": (float(win[0]), float(win[1])),
+            "lead": lead,
+            "emitted": name in emitted_set,
+            "mech": mech,
+            "look": look,
+        })
+    return out
+
 
 COLUMN = 838  # re-measured README column
 
@@ -110,11 +170,14 @@ def seek(svg_text: str, t: float, *, paused: bool = False) -> str:
 def page(asset_name: str, beats: list[dict]) -> str:
     panels = []
     for b in beats:
-        w0, w1 = b["window"]
-        span = (
-            "resting state" if w1 == 0 else f"{w0:g}–{w1:g}s &#183; {w1 - w0:g}s long"
-        )
-        start = max(0.0, w0 - b["lead"])
+        win = b["window"]
+        if win is None:
+            span, start = "resting state", 0.0
+        else:
+            w0, w1 = win
+            span = f"{w0:g}\u2013{w1:g}s &#183; {w1 - w0:g}s long"
+            start = max(0.0, w0 - b["lead"])
+        withdrawn = "" if b.get("emitted", True) else '<span class="wd">NOT IN THIS BUILD</span>'
         panels.append(f"""
     <section class="beat" id="{b["key"]}">
       <header>
@@ -123,7 +186,7 @@ def page(asset_name: str, beats: list[dict]) -> str:
           <p class="mech">{b["mech"]}</p>
         </div>
         <div class="meta">
-          <span class="win">{span}</span>
+          <span class="win">{span}</span>{withdrawn}
           <span class="seek">seeked to t={start:g}s</span>
           <button class="replay" data-key="{b["key"]}">Replay</button>
         </div>
@@ -174,6 +237,8 @@ def page(asset_name: str, beats: list[dict]) -> str:
   .win, .seek {{ font:500 11.5px var(--mono); letter-spacing:.03em;
     padding:4px 9px; border-radius:5px; border:1px solid var(--line) }}
   .win {{ color:var(--ink) }}
+  .wd {{ font:600 10.5px var(--mono); letter-spacing:.1em; padding:4px 8px;
+    border-radius:5px; color:#e0a03a; border:1px solid #6b4f1d; background:#241c0c }}
   .seek {{ color:var(--faint) }}
   .stage {{ background:var(--card); border:1px solid var(--line); border-radius:8px;
     overflow:hidden; line-height:0 }}
@@ -232,6 +297,8 @@ def page(asset_name: str, beats: list[dict]) -> str:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--asset", default="assets/banner/v6c-dusk-line.svg")
+    ap.add_argument("--gen", default="tools/banner/gen.py",
+                    help="generator to read RARE_EVENTS from (never duplicated here)")
     ap.add_argument("--out", default="")
     ap.add_argument("--only", default="", help="comma-separated beat keys")
     ap.add_argument("--open", action="store_true", help="open the page when done")
@@ -251,16 +318,17 @@ def main() -> int:
     out = pathlib.Path(a.out) if a.out else pathlib.Path("/tmp/banner-beats")
     out.mkdir(parents=True, exist_ok=True)
 
+    all_beats = read_beats(pathlib.Path(a.gen))
     wanted = [k.strip() for k in a.only.split(",") if k.strip()]
-    beats = [b for b in BEATS if not wanted or b["key"] in wanted]
+    beats = [b for b in all_beats if not wanted or b["key"] in wanted]
     if not beats:
         sys.exit(
             f"banner-beat-views: --only matched nothing; keys are "
-            f"{', '.join(b['key'] for b in BEATS)}"
+            f"{', '.join(b['key'] for b in all_beats)}"
         )
 
     for b in beats:
-        start = max(0.0, b["window"][0] - b["lead"])
+        start = 0.0 if b["window"] is None else max(0.0, b["window"][0] - b["lead"])
         (out / f"{b['key']}.svg").write_text(seek(svg, start))
 
     index = out / "index.html"
@@ -269,6 +337,9 @@ def main() -> int:
 
     print(f"banner-beat-views: {len(beats)} view(s) from {src.name} -> {index}")
     for b in beats:
+        if b["window"] is None:
+            print(f"  {b['key']:9s} ambient control        seek t=0s")
+            continue
         w0, w1 = b["window"]
         start = max(0.0, w0 - b["lead"])
         print(f"  {b['key']:9s} window {w0:6.2f}-{w1:<6.2f} seek t={start:g}s")
