@@ -10,8 +10,25 @@
 
   WHY IT IS CHEAP ENOUGH TO BE ALLOWED TO EXIST (this row is about NOT adding load): one vm_stat +
   one sysctl + one ps + one python3, measured ~100-200 ms per tick. At 600 s that is a duty cycle
-  around 0.03% of one core. It runs in the BACKGROUND band (ProcessType/Nice/LowPriorityIO) so even
-  that yields to interactive sessions — the same band the row's QoS chokepoint puts gate corpora in.
+  around 0.03% of one core. It stays cheap via Nice + LowPriorityIO, which yield to interactive
+  sessions.
+
+  PROCESSTYPE WAS "Background" AND THAT MADE THE SENSOR INERT WHEN IT MATTERED — measured, not
+  theorised. After the 2026-07-30 02:18:05 panic-reboot this job did not emit a single sample for
+  6 HOURS 24 MINUTES (last pre-panic row 09:05:40Z, next row 15:41:29Z; max inter-sample gap 23,749 s
+  against a configured 600 s), because the box came up under a Spotlight reindex storm — load average
+  140, mds at 90% CPU — and Darwin defers the Background band aggressively under exactly that load.
+  A capacity sensor that stops sampling when the machine is busy is inert precisely when it is
+  needed, and its silence is indistinguishable from a green reading.
+
+  ProcessType is therefore "Adaptive": still not user-interactive, still Nice 10 + LowPriorityIO 1
+  (a ~0.03% duty cycle cannot be the thing that loads a 10-core box), but no longer subject to
+  Background-band deferral. Note the one-way-ratchet caveat from memory darwin-qos-band-mechanics:
+  `nice` alone does NOT demote a process (PRI stays 31) — the demotion came from ProcessType, so
+  this key is the correct and only lever here.
+
+  RunAtLoad stays false and is NOT implicated in the gap above — a StartInterval job fires on its
+  interval regardless; the 6h24m silence was deferral, not the absence of a load-time run.
 
   WHY StartInterval AND NOT a calendar entry: headroom is a continuous quantity, not a daily event.
   RunAtLoad is false — a login must not page about a condition that has not been sampled yet.
@@ -45,7 +62,7 @@
     <key>RunAtLoad</key>
     <false/>
 
-    <key>ProcessType</key>      <string>Background</string>
+    <key>ProcessType</key>      <string>Adaptive</string>
     <key>LowPriorityIO</key>    <true/>
     <key>Nice</key>             <integer>10</integer>
 
