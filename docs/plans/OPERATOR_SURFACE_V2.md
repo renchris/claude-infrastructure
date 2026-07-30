@@ -241,6 +241,7 @@ old design is right, it stays byte-identical, and the tests prove that.
 | F10 | The bug class recurs: F1's shape is one grep away from reappearing in the next alarm anybody writes | A declared-file **polarity lint** naming both shapes — equality against a failure name, and existence evidence taken from success history — plus the standing rule that every alarm carries a positive control that proves it FIRES on a non-verdict window (I3) | **M6** |
 | F11 | `statusline.sh` renders on every UI update; its byte-identical slim rewrite plus proof harness sat stranded 4 days on an unlanded branch | Take it: `cherry-pick -x 78de6237`, verified clean, with the harness that extracts its own baseline from git. **Perf figure RE-DERIVED, not inherited: measured 108 ms → 63 ms (−42%) over 20 renders each on this box. The commit's own claim of 25-30 ms does not reproduce here** — its 108 ms baseline does, exactly. The take is still clearly right (a hot path every pane renders) but a number in a handed-down message is a claim like any other | **M7** |
 | F12 | Reflexive: `operator-readout` is registered in 4 of 5 config dirs (C18) — this row's own surface is dark in one place, and no alarm covers a hook's own wiring | Recorded, not built here. The general mechanism (a hook-wiring alarm) is `beacon-inert`'s shape generalised and belongs to row 6 (guardrail/hook layer). **Named + backlogged, not silently carried** | — |
+| F13 | **The frozen DoD's SECOND clause at its last remaining site.** Every sensor family fails OPEN by design (I6), so a ZERO-ROW board means EITHER "everything is healthy" OR "every sensor is broken" — indistinguishable. This is the incident quoted at the top of `bin/cc-blockers` verbatim: it said "no safeguard-blocked sessions surfaced" while a teammate was demonstrably blocked. `beacon-inert` closed that ONE case; the aggregate line still could not tell the two apart. (Per-family the distinction was already good — `NEVER-ACTIVATED` / `NOT-WIRED` / `UNRESOLVABLE` / `UNCONFIRMED` states across six kinds — which is why this is the last site, not the first) | The all-clear line carries a **SENSOR ROSTER with a count**: `— sensors 5/5 readable (stamps:ok launchctl:ok ps:ok fleet:ok board:ok)`. Scoped to READABILITY, never "every family rendered a verdict" — anything stronger needs a second implementation of each family's premise logic. **And it does not editorialize:** the first cut appended "NOT a clean bill of health" on any `x`, which on a fresh host (no board file, cc-fleet not installed) is NORMAL — it would have cried wolf on every clean install, the exact mirror of F5. A count is scannable and asserts nothing | **M8** |
 
 ### Mechanism specs
 
@@ -348,6 +349,17 @@ exactly this in a doc whose whole purpose was disk-truth citations.
 | 5 | **M3/M4/M5** activation queue: whole-queue report · trunk-adjudicated LIVE-ONLY · both label families | **`97667057`** | ✓ |
 | 6 | **M7** graveyard recovery — `cherry-pick -x 78de6237` + hermeticity fix | **`df6b328f`** | ✓ |
 | 7 | **M6** alarm-polarity lint + suite | **`6937d001`** | ✓ |
+| 8 | map row 10 DONE + five campaign learnings | **`07b9499c`** | ✓ |
+| 9 | dead assertion in the recovered harness SELF-CHECK (`\| \| false`) | **`fca95afd`** | ✓ |
+| 10 | **M8** the all-clear line's SENSOR ROSTER | **`030e0f39`** | ✓ |
+
+**The rebase trap, hit live and worth recording.** Increment 9 was committed locally as `3f42ab7a`;
+`ship-land.sh` rebased it over two sibling lands and it reached trunk as **`fca95afd`**, so
+`git merge-base --is-ancestor 3f42ab7a origin/main` returns **1** while the content is unambiguously
+on trunk. A row that had cited its local sha would have published a citation that resolves to
+nothing — and a row that had *verified by sha* would have concluded its own land failed. **Verify by
+CONTENT, then resolve the sha from `origin/main` by grepping the subject.** Increments 1-8 were
+fast-forwards and their local shas survived; that is luck, not a rule.
 
 ## §9 · Close against the frozen DoD
 
@@ -357,6 +369,7 @@ exactly this in a doc whose whole purpose was disk-truth citations.
 |---|---|---|---|
 | classes starved at any queue depth | **2 of 5** | **0 of 5** | `hooks/operator-readout.sh --render` — all four active classes present at 57 steps / MAX=6 |
 | alarm predicates testing a named failure where absence-of-success is meant | **1 of 9, live-suppressed** | **0** | `scripts/alarm-polarity-lint.sh` → clean, 4 files, 1 explained suppression |
+| sites where "nothing to report" is indistinguishable from "the check never ran" | **1** (the board's aggregate all-clear line) | **0** | `cc-blockers` all-clear prints `sensors N/5 readable (…)`; per-family already covered by 6 kinds with NEVER-ACTIVATED / NOT-WIRED / UNRESOLVABLE / UNCONFIRMED states |
 
 **PROVEN (disk reads, re-derived at close):**
 - **A1/A2** `cc-blockers` emits `trunk-red / PERSISTENT-NOT-GREEN — newest 5: 4 red 1 nonverdict,
@@ -370,6 +383,10 @@ exactly this in a doc whose whole purpose was disk-truth citations.
 - **A8** the queue surface names **12 of 12** pending (was 6 of 12), partitioned ROTTING/FRESH.
 - **A11** the lint is clean on the fixed tree and **fires on the real pre-fix predicate recovered
   from git** — the positive control, not an approximation.
+- **M8** the all-clear line now reads `— sensors 5/5 readable (stamps:ok launchctl:ok ps:ok fleet:ok
+  board:ok)`, and names any sensor it could not read. That closes the frozen DoD's second clause at
+  the last site where it was still open; per-family it was already covered by six kinds carrying
+  `NEVER-ACTIVATED` / `NOT-WIRED` / `UNRESOLVABLE` / `UNCONFIRMED` states.
 - **A13** every suite RED-proofed against a `git archive origin/main` pristine tree: cc-blockers
   8/12, operator-readout 8/10, activation-watch 9, lint 1 (its positive control). In every case the
   cases that pass on pristine are exactly the positive controls and the kill switches, which by
@@ -377,8 +394,18 @@ exactly this in a doc whose whole purpose was disk-truth citations.
 - **A14** `statusline.sh` output byte-identical (10/10 incl. the harness self-check + a live check).
 - **A15** kill switches restore the incumbent: `CC_OPREADOUT_CLASSBUDGET=off` is **byte-identical**
   to `origin/main`'s render; `CC_BLOCKERS_ALARM_POLARITY=legacy` restores the suppression exactly.
-- Totals: **cc-blockers 62/62 · operator-readout 35/35 · activation-watch 27/27 (+ selftest 18/18) ·
-  alarm-polarity 7/7 · statusline-identity 10/10**. All gate-green through `scripts/ship-land.sh`.
+- **Dead-assertion sweep run at close** rather than assumed from green runs. Four of this row's five
+  suites were clean; the fifth — `tests/statusline-identity.bats`, recovered from the graveyard — had
+  a non-final `!` inside the harness SELF-CHECK whose entire job is preventing a vacuous pass, so it
+  could not fail. Proved in BOTH directions on a deliberately-false variant: with `|| false` → `not
+  ok`, without it → `ok`.
+- **Every artifact re-run under `/bin/bash` (3.2.57)**, the version a launchd or hook invocation gets:
+  `cc-blockers` (PERSISTENT-NOT-GREEN), `operator-readout --render`, `activation-watch`,
+  `alarm-polarity-lint`, `statusline.sh` — all correct. On this box `env bash` also resolves to 3.2,
+  so the suites were already exercising it; asserted rather than assumed.
+- Totals: **cc-blockers 67/67 · operator-readout 35/35 · activation-watch 27/27 (+ selftest 18/18) ·
+  alarm-polarity 7/7 · statusline-identity 10/10 = 154**. All gate-green through
+  `scripts/ship-land.sh`, 10 lands, never batched.
 
 **IN FLIGHT (autonomous, owner named):** nothing of this row's. All seven increments are landed and
 every edit is in an already-symlinked live file, so **this row needs no activation step** — unlike
