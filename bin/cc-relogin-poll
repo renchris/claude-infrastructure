@@ -96,8 +96,8 @@ epoch_iso() { date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@$1
 # "41.5h" / "3.7d" / "30m" / "now" / "-3" / "12" → seconds. EMPTY when unrecognised (callers must
 # never fabricate a deadline).
 #
-# UNIT-AWARE, and that is the whole point. claude-accounts' fmt_h emits FIVE shapes — "30m",
-# "41.5h", "3.7d", "now", "99d+" — and the previous parser was `${1%%.*}` + an integer test, which
+# UNIT-AWARE, and that is the whole point. claude-accounts' fmt_h emits SIX shapes — "30m",
+# "41.5h", "2d 6h", "4d", "now", "99d+" — and the previous parser was `${1%%.*}` + an integer test, which
 # strips the fraction AND the unit in one step: "3.7d" became "3" became 3 HOURS. 24x under.
 # It stayed latent only because detection was capped at 72h, where fmt_h emits hours; widening the
 # window to the declared T-7d walked straight into it, and a T-90h account computed T-3h, escalated
@@ -113,6 +113,13 @@ hours_secs() { # <fmt_h-or-numeric-string> -> seconds | ""
     v ~ /^[0-9]+(\.[0-9]+)?m$/       { printf "%d", (v + 0) * 60;    exit }
     v ~ /^[0-9]+(\.[0-9]+)?h$/       { printf "%d", (v + 0) * 3600;  exit }
     v ~ /^[0-9]+(\.[0-9]+)?d$/       { printf "%d", (v + 0) * 86400; exit }
+    # "2d 6h" — fmt_h renders every ≥24h countdown this way as of 2026-07-30. Kept BELOW the
+    # bare-day rule so "4d" still matches that one. Without this rule the row falls through to
+    # "" and an EXPIRING account with no ISO `when` is `continue`d — i.e. widening the window
+    # past 24h would have silently dropped the very rows it was widened to catch, the same
+    # latent-until-the-window-moves failure the 3.7d→3h bug had.
+    v ~ /^[0-9]+d +[0-9]+h$/         { split(v, p, /d +/); sub(/h$/, "", p[2])
+                                       printf "%d", p[1] * 86400 + p[2] * 3600; exit }
     v ~ /^[0-9]+(\.[0-9]+)?$/        { printf "%d", (v + 0) * 3600;  exit }   # bare = hours
   '
 }

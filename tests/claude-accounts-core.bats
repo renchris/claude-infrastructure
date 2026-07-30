@@ -316,12 +316,116 @@ print("OK")'
   run python3 -c "$LOAD"'
 assert ca.fmt_h(-41.0) == "now" and ca.fmt_h(-0.5) == "now"
 assert ca.fmt_h(None) == "?" and ca.fmt_h(0.0) == "0m"
-assert ca.fmt_h(0.5) == "30m" and ca.fmt_h(2.0) == "2.0h" and ca.fmt_h(96.0) == "4.0d"
-# both reset cells are fixed-width; an overflow skews every column to its right
-for h in (-41.0, None, 0.0, 0.5, 2.0, 96.0, 1e5):
-    assert len("↻" + ca.fmt_h(h)) <= 5, (h, ca.fmt_h(h))
+assert ca.fmt_h(0.5) == "30m" and ca.fmt_h(2.0) == "2.0h" and ca.fmt_h(96.0) == "4d"
+# the MID-ROW 5h cell is fixed-width; an overflow there skews every column to its right.
+# narrow=True is that contract, and it must hold for ANY input, not just realistic ones.
+for h in (-41.0, None, 0.0, 0.5, 2.0, 96.0, 2399.0, 1e5):
+    assert len("↻" + ca.fmt_h(h, narrow=True)) <= 5, (h, ca.fmt_h(h, narrow=True))
 print("OK")'
   [ "$status" -eq 0 ] && [[ "$output" == *OK* ]] || false
+}
+
+@test "fmt_h: anything past a day reads as days+hours, never a decimal day or 50+ hours" {
+  run python3 -c "$LOAD"'
+# Operator feedback 2026-07-30: "54.4h" / "2.3d" make the reader finish the arithmetic.
+assert ca.fmt_h(54.4)  == "2d 6h",  ca.fmt_h(54.4)
+assert ca.fmt_h(110.4) == "4d 14h", ca.fmt_h(110.4)
+assert ca.fmt_h(605.8) == "25d 5h", ca.fmt_h(605.8)
+assert ca.fmt_h(25.0)  == "1d 1h",  ca.fmt_h(25.0)     # just over the boundary
+assert ca.fmt_h(96.0)  == "4d",     ca.fmt_h(96.0)     # exact multiple: no noise remainder
+assert ca.fmt_h(23.9)  == "23.9h",  ca.fmt_h(23.9)     # still sub-day: hours
+assert ca.fmt_h(2399.0).startswith("99d") and ca.fmt_h(2400.0) == "99d+"
+# NO surviving decimal-day form anywhere past the boundary — the shape being retired.
+import re
+for h in (24.0, 25.0, 47.9, 54.4, 96.0, 110.4, 605.8, 2399.0):
+    assert not re.fullmatch(r"[0-9]+\.[0-9]+d", ca.fmt_h(h)), (h, ca.fmt_h(h))
+# narrow collapses to whole days — same value, width-safe, still parseable downstream
+assert ca.fmt_h(54.4, narrow=True) == "2d"
+print("OK")'
+  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]] || false
+}
+
+@test "fmt_h output round-trips through cc-relogin-poll hours_secs (producer/parser contract)" {
+  # fmt_h is not just display: cc-relogin-poll reads it back out of the --login-status TSV to
+  # derive a deadline. A shape the parser cannot read yields "" and an EXPIRING row with no ISO
+  # stamp is dropped — silently, on exactly the accounts the poller exists to catch.
+  local poll="${BATS_TEST_DIRNAME}/../bin/cc-relogin-poll"
+  [ -f "$poll" ] || skip "cc-relogin-poll not present"
+  # source only the helper, without running the poller body
+  hours_secs() { sed -n "/^hours_secs()/,/^}/p" "$poll" > "$BATS_TEST_TMPDIR/hs.sh"; }
+  hours_secs
+  run bash -c ". '$BATS_TEST_TMPDIR/hs.sh'
+    for v in '2d 6h' '4d 14h' '25d 5h' '4d' '23.9h' '30m' 'now'; do
+      s=\"\$(hours_secs \"\$v\")\"
+      [ -n \"\$s\" ] || { echo \"UNPARSED: \$v\"; exit 1; }
+      echo \"\$v=\$s\"
+    done
+    # the exact values the table now emits must convert to the right magnitude, not 24x under
+    [ \"\$(hours_secs '2d 6h')\" = 194400 ] || { echo BAD_2d6h; exit 1; }
+    [ \"\$(hours_secs '4d 14h')\" = 396000 ] || { echo BAD_4d14h; exit 1; }
+    [ \"\$(hours_secs '4d')\" = 345600 ] || { echo BAD_4d; exit 1; }
+    # a display BOUND still refuses, rather than inventing a deadline
+    [ -z \"\$(hours_secs '99d+')\" ] || { echo BAD_bound; exit 1; }
+    echo OK"
+  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "render_table: the routed row is marked IN the table, not only in the footer" {
+  run python3 -c "$LOAD"'
+import io, contextlib, re
+# two healthy rows; "win" has the headroom, so the router must pick it
+rows = [{"acct": "loser", "auth": "ok", "k": 0, "session_pct": 5, "weekly_pct": 95,
+         "fable_pct": 90, "email": "l@x.com", "dia_profile": "L", "launcher": "claude-loser",
+         "weekly_reset_h": 40.0, "fable_reset_h": 40.0, "session_reset_h": 2.0},
+        {"acct": "win", "auth": "ok", "k": 0, "session_pct": 2, "weekly_pct": 10,
+         "fable_pct": 5, "email": "w@x.com", "dia_profile": "W", "launcher": "claude-win",
+         "weekly_reset_h": 40.0, "fable_reset_h": 40.0, "session_reset_h": 2.0}]
+buf = io.StringIO()
+with contextlib.redirect_stdout(buf):
+    ca.render_table(rows, cfg, {"active": True, "end": "2099-12-31", "deadline": None,
+                                "permanent": True}, False, None)
+out = buf.getvalue()
+plain = re.sub(r"\x1b\[[0-9;]*m", "", out)
+tbl = [ln for ln in plain.splitlines() if re.match(r"^\s{2}(win|loser)\b", ln)]
+assert len(tbl) == 2, tbl
+picked = [ln for ln in tbl if "➤" in ln]
+# exactly ONE row marked, and it is the row the footer route line also names
+assert len(picked) == 1, picked
+assert picked[0].lstrip().startswith("win"), picked
+assert "➤ general → win" in plain, plain
+# the marker must not cost the row its column alignment
+assert len(tbl[0]) == len(tbl[1]), [len(x) for x in tbl]
+print("OK")'
+  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "render_table: a /login instruction always names the mailbox it authenticates" {
+  run python3 -c "$LOAD"'
+import io, contextlib, re
+# An account NUMBER is not an identity: the operator authenticates a MAILBOX, and pointing a
+# /login at the wrong one silently pairs a credential with the wrong profile while the account
+# you meant keeps expiring (operator directive 2026-07-30).
+rows = [{"acct": "next", "auth": "ok", "k": 0, "session_pct": 2, "weekly_pct": 10,
+         "fable_pct": 5, "email": "ichris96+claude@hotmail.com", "dia_profile": "Personaly",
+         "launcher": "claude-next", "weekly_reset_h": 40.0, "fable_reset_h": 40.0,
+         "session_reset_h": 2.0, "login_expires_h": 12.0,
+         "login_expires_at": "2026-07-31T02:00:00+00:00"}]
+buf = io.StringIO()
+with contextlib.redirect_stdout(buf):
+    ca.render_table(rows, cfg, {"active": True, "end": "2099-12-31", "deadline": None,
+                                "permanent": True}, False, None)
+plain = re.sub(r"\x1b\[[0-9;]*m", "", buf.getvalue())
+cliff = [ln for ln in plain.splitlines() if "login expires" in ln]
+assert cliff, plain
+# the identity travels ON the same line as the instruction, never a lookup away from it
+assert "claude-next → /login" in cliff[0], cliff
+assert "ichris96+claude@hotmail.com" in cliff[0], cliff
+assert "Personaly" in cliff[0], cliff
+# and when that same account is the pick, the route warning names the mailbox too
+warn = [ln for ln in plain.splitlines() if "is the pick" in ln]
+assert warn and "ichris96+claude@hotmail.com" in warn[0], warn
+print("OK")'
+  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]] || { echo "$output"; false; }
 }
 
 @test "render_table: a stale row is glyph-marked and declared, never shown as live" {

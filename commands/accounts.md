@@ -31,10 +31,25 @@ One entrypoint over the 4-account fleet. The mechanism is `~/bin/claude-accounts
 
    | account | live | 5h used | 5h resets | weekly used | Fable used | weekly resets | login expires |
    |---|---|---|---|---|---|---|---|
-   | next4 ← you | 6 | 8% | Sat 07:21 (in 4.7h) | 25% | 22% | Sat 02:00 (in 23.4h) | Sat 12:39 (in 18.8h) |
+   | **next4** ➤ ← you | 6 | 8% | Sat 07:21 (in 4.7h) | 25% | 22% | Sat 02:00 (in 23.4h) | Sat 12:39 (in 18.8h) |
+   | next2 | 0 | 2% | Sat 11:49 (in 4.3h) | 74% | 12% | Sat 03:59 (in 1d 12h) | ⚠ **Mon Aug 24 20:20 (in 2d 21h)** |
 
    - Column set is FIXED — both reset columns AND `login expires` present in EVERY row,
      absolute first.
+   - **Relatives past 24h are `Xd Yh`, never decimal days and never 25+ hours** (operator
+     directive 2026-07-30, on a table reading `in 54.4h`). Nobody plans against 0.4 of a day
+     or counts 54 hours onto a Thursday: `in 2d 6h` is the form the reader already thinks in.
+     Sub-24h stays hours (`in 4.7h`), sub-1h stays minutes. Drop a zero remainder — `in 4d`,
+     not `in 4d 0h`. This matches the CLI's own `fmt_h`, so the two surfaces cannot diverge.
+   - **Mark the routed account: bold its name and append `➤`** — the same glyph the CLI table
+     and the router footer use, so the mark and its explanation read as one answer. `➤` is the
+     GENERAL pick; if the Fable pick differs, mark it `➤ᶠ` and say so on the footer line. The
+     marker composes with `← you` (`**next4** ➤ ← you`). Take the pick from
+     `claude-accounts --route <kind>`, NEVER by re-ranking `score_*` yourself.
+   - **A `login expires` cell inside `login_warn_h` is bold and `⚠`-prefixed** — the whole
+     cell, absolute and relative together. It is the one column whose deadline no reset will
+     clear, so it must be findable without reading the bullets. A row already showing
+     `⊘ REQUIRED` is not additionally marked — that state is louder than the warning.
    - **`login expires` is a COLUMN, not a flag** (operator directive 2026-07-24: "we don't
      show the next login required in the table?"). Source `login_expires_at` — the refresh
      token's OWN expiry, which a refresh does NOT extend, so it is a hard per-account deadline
@@ -91,6 +106,16 @@ One entrypoint over the 4-account fleet. The mechanism is `~/bin/claude-accounts
      session fired onto it outlives its credentials. `login_expired: true` with `auth: ok` is
      the case to never drop: the stamp lapsed inside the cache TTL, so no other field on that
      row says so. Skip the bullet on a `login-required` row — it already carries its own.
+   - 🚨 **Every re-login instruction names the MAILBOX it authenticates** — `email` and
+     `dia_profile` from that same row, on the SAME line as the command, never a lookup away
+     (operator directive 2026-07-30: *"so we don't accidentally authenticate a different
+     account to a wrong profile"*). `next` / `next3` are slot numbers, not identities; the
+     operator authenticates a mailbox in a browser profile, and a mis-paired one lands
+     silently — the credential works, so nothing errors, while the account you meant is still
+     expiring. Shape: `▶ claude-next → /login · ichris96+claude@hotmail.com · Dia "Personaly"`.
+     Binds to EVERY surface that suggests a login — the cliff bullet, an `auth_actionable`
+     row, the routed-winner warning, and any `/relogin` you propose. The CLI enforces the same
+     rule in its own bullets, so never restate one of those WITHOUT its identity.
    - Close with the router footer (`➤ general → X` · `➤ fable → Y`) + the Fable window line.
      When the window is **permanent**, there is no countdown to report — say "permanent",
      never a date-derived time remaining.
