@@ -894,6 +894,33 @@ Everything in #3 below still holds except where this overrides it.
   by enumerating or by a control. The last was caught **before** publication, which is the only reason
   it is not a retraction. **Never report an absence from a pattern you chose without first proving the
   pattern can hit.**
+- ✅ **ROW 7 RATIFIED DONE 2026-07-30T07:2xZ → 10 DONE, 0 ENGAGED IN FLIGHT, 3 OPEN (11, 9, 6).** Verified
+  by disk: **11 cited shas all trunk ancestors** · `ACCOUNT_ROUTING_V2.md` **633 lines** with all four
+  load-bearing sections · **activation `21-relogin-poll-activate.sh` staged in BOTH the repo SSOT and the
+  live queue** — it did NOT repeat row 8's gap · `bin/cc-route`, `scripts/route-safety-gate.sh`,
+  `launchd/fleet.manifest` present against a passing control. **IT IS THE CAMPAIGN'S FIRST SURVIVING
+  CELL** — "login cliffs are hard walls" CONFIRMED (insufficient as stated, renamed), and it proved the
+  claim from two independent PRIMARY sources rather than quoting memory: all 4 accounts' access tokens
+  were minted inside a **2.9 h** window yet their login cliffs spread **22.291 d — 186× wider**, which a
+  clock-resetting refresh would have collapsed to ~0; and the **millisecond component of `expiresAt` and
+  `refreshTokenExpiresAt` is IDENTICAL per account, 4 of 4 (~1e-12 by chance)**, so both derive from ONE
+  `Date.now()` at the grant — the server returns a countdown to a FIXED wall, re-expressed at every
+  refresh rather than reset by it. Longitudinal confirmation: next3 refreshed OK **six times** Jul 19-23
+  and died Jul 24 anyway — 93.5 h of outage, recovered only by an interactive login.
+  🎯 **AND IT COMPLIED WITH MY FLEET-MANIFEST RULING IT NEVER RECEIVED** (`seen=0` through five checks):
+  `com.claude.relogin | staged | 3600 | … | 21-relogin-poll-activate.sh` — declared **`staged`**, not
+  enabled, which was bound #1 verbatim. It went further and declared other undeclared trunk jobs it found
+  (row-12's hardcoded count 21→**23**, not 22) — additive, reasoned in-file with `Z1`/`Z2` comments, and
+  it repaired a genuine red on pristine trunk where a landed plist had no manifest row. Within the
+  ruling's spirit and letter. **Silence produced the approved outcome — luck, not design, as recorded.**
+- 🔥 **TWO FIRE LOOPS ARMED, BOTH PARKED ON THE BOX (not the cap).** Row 11 → worktree
+  `gu-worktree-warmpool-b`, account **next3**; row 9 → worktree `gu-memory-knowledge` (verified free),
+  account **next4** (589 h cliff, 43% weekly — `next` is free but carries an 85 h cliff at 50% weekly, and
+  a long rebuild should not sit behind either). Two concurrent admits = exactly the ≤2 cap, legal. Both
+  use the actuator-is-the-arbiter loop; **both die with the session that armed them**, so a recycling
+  coordinator MUST re-arm both — the exact commands are in
+  `docs/ground-up-payloads/coordinator-recycle-5.md`. **Row 6's payload is on trunk too, so the campaign
+  has nothing left to compose.**
 - **Landed by coordinator #4, content-verified on trunk:** `f3a4a7f9` (row 9 payload) · `92a2fb36`
   (row 8 ratification + row 11 fire) · `53c6eee9` (row 6 payload) · this delta. **Backlog filed:**
   `ff839f1f8f38` (cc-mail/cc-thread untracked + zero callers) · `ece77ba9dfe2` (activation advertises an

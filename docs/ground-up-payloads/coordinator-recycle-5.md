@@ -26,8 +26,22 @@ everything beneath it and carries every finding below in full detail. Then GROUN
 rows, the "What DONE means" ruling, the unowned-surface rulings register, the last ~5 Learnings) and
 skills/ground-up/SKILL.md.
 
-WHERE YOU ARE: **9 DONE (1,2,3,4,5,8,10,12,13) · 1 IN FLIGHT (row 7) · 3 OPEN (11, 9, 6).**
-Order: **11 (re-fire) · 9 · 6 last.** **In-flight is 1, so the CAP is NOT your blocker — the BOX is.**
+WHERE YOU ARE: **10 DONE (1,2,3,4,5,7,8,10,12,13) · 0 ENGAGED IN FLIGHT · 3 OPEN (11, 9, 6).**
+Order: **11 (re-fire) · 9 · 6 last.** 🚨 **THE CAP IS NOT YOUR BLOCKER — THE BOX IS.** Two fires are
+already owed and both are refused by the capacity gate at 3-6 load/core against a 2.0 ceiling.
+
+**ROW 7 RATIFIED DONE 2026-07-30T07:2xZ, verified by disk not on its word:** 11 cited shas all trunk
+ancestors · `ACCOUNT_ROUTING_V2.md` 633 lines with all four load-bearing sections · activation
+`21-relogin-poll-activate.sh` staged in **BOTH** repo SSOT and live queue (it did NOT repeat row 8's
+gap) · `bin/cc-route`, `scripts/route-safety-gate.sh`, `launchd/fleet.manifest` present against a
+passing control. **It is the campaign's FIRST SURVIVING CELL** — "login cliffs are hard walls" CONFIRMED
+(though insufficient as stated), proven twice from primary sources: all 4 accounts' tokens minted in a
+2.9 h window yet cliffs spread 22.291 d (186× wider), and the millisecond component of `expiresAt` and
+`refreshTokenExpiresAt` is IDENTICAL per account 4-of-4, so both derive from ONE `Date.now()` at grant —
+the wall is re-expressed by a refresh, never reset. **It also complied with the fleet-manifest ruling it
+never received** (`seen=0` throughout): `com.claude.relogin | staged` — bound #1 exactly — and went
+further, declaring other undeclared trunk jobs (row-12 count 21→23). Silence produced the approved
+outcome, which was luck, not design.
 
 🚨 YOUR FIRST ACTION: **RE-ARM THE ROW-11 RE-FIRE LOOP. IT DIED WITH YOUR PREDECESSOR'S SESSION.**
 Row 11 died at 04:39Z with nothing landed (proven on three axes; backlog `b521cb445465`). Its payload on
@@ -58,9 +72,26 @@ Use worktree **`gu-worktree-warmpool-b`** (the original name's branch+dir still 
 clean — a fresh name avoids the collision with no destructive op). Account **next3** on WEEKLY headroom;
 re-read fresh anyway. **Verify engagement by transcript CONTENT, never the script's `proof=marker`.**
 
-THEN: rows 9 and 6 both have fire-ready payloads ON TRUNK
-(`docs/ground-up-payloads/row9-memory-knowledge.md`, `row6-guardrail-hooks.md`) — nothing left to
-compose. Fire row 9 when in-flight < 2 and the gate admits; row 6 last.
+🚨 **AND RE-ARM THE ROW-9 LOOP TOO — IT ALSO DIED WITH YOUR PREDECESSOR.** Row 7 closed, so in-flight is
+0 and BOTH row 11 and row 9 are owed. Two concurrent fires = exactly the ≤2 cap, which is legal. Same
+pattern, different worktree/account/payload — worktree `gu-memory-knowledge` (verified free), account
+**next4** (589 h cliff, 43% weekly; `next` is free but carries an 85 h cliff and 50% weekly, and next3 is
+reserved for row 11):
+
+  cd /Users/chrisren/Development/.worktrees/gu-coordinator
+  for i in $(seq 1 30); do
+    bash scripts/handoff-fire.sh --split-right --follow \
+      --notify-back 71B42B48-1331-4F60-8DA3-6849F2682CA2 \
+      --repo /Users/chrisren/Development/claude-infrastructure \
+      --worktree gu-memory-knowledge --account next4 \
+      --prompt-file /Users/chrisren/Development/.worktrees/gu-coordinator/docs/ground-up-payloads/row9-memory-knowledge.md \
+      > /tmp/fire-row9.log 2>&1
+    rc=$?; [ "$rc" != 9 ] && { echo "ADMITTED rc=$rc"; tail -12 /tmp/fire-row9.log; break; }
+    echo "$(date -u +%H:%M:%SZ) row9 attempt=$i rc=9 — refused before side effects"; sleep 200
+  done
+
+**Row 6 is LAST and its payload is on trunk too** (`row6-guardrail-hooks.md`) — nothing left to compose
+for the whole campaign. Fire it when a slot frees.
 
 DERIVE IN-FLIGHT FROM THE MAP, NEVER FROM MEMORY:
   INFLIGHT=$(git show origin/main:docs/plans/GROUND_UP_REBUILD_MAP.md | grep -E '^\| [0-9]+ \|' | grep -cE 'REBUILDING|IN PROGRESS')
