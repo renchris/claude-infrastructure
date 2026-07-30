@@ -908,6 +908,45 @@ all survive any height change untouched — the cost is confined to the sky.
 The engineering note is only that changing height is cheap *now* and expensive after the moon/star
 craft work lands, so it is worth answering before that work starts.
 
+## OPERATOR RULINGS ON THE BUILT BEATS (2026-07-29, from the per-beat views)
+
+Given after examining each beat in isolation via `scripts/banner-beat-views.py` — so these are
+verdicts on the **artifact**, not on prose. Verbatim: *"The Ask: feels buggy being halted"* /
+*"The overlap: i dont see or understsand what to see"* / *"vistor: silly. hold for now?"* / *"but i
+thought we were doing the magician spawning a second clawd, exchanging mail, and completing task,
+and self closing"*.
+
+**Two of these confirm the LEGIBILITY AUDIT's own predictions, which settles those questions.** The
+audit is above; it called both failures before the operator saw them, and it prescribed fixes that
+were never built. It is no longer a forecast to weigh — it is a measurement to act on.
+
+| beat | ruling | basis |
+|---|---|---|
+| **THE OVERLAP** | ⛔ **CUT** | The audit named it *"the most conceptually beautiful and the least perceptible… the designated sacrifice"* — a pitch change in ~6 px footprints. The operator independently reports seeing nothing. Both agree; it goes. O1 subsumes its meaning (succession) while being visible. |
+| **THE ASK** | 🔧 **FIX or cut — it currently reads as BROKEN** | Exactly the audit's misread risk #2: *"6 s of dead world may read as 'the image finished loading'."* The prescribed mitigation — keep something unmistakably alive through the stop — was never implemented. The builder's note argued the drifting sky covers it; **the operator's reading proves it does not.** |
+| **VISITOR** | ⏸ **HOLD** (operator: *"silly"*) | Already demoted to t≈48-57 s. Keep the machinery, leave it out of the shipped set. |
+| **THE REFUSAL** | no ruling yet | Not commented on. Note it carries the *other* predicted misread (reads as a rendering glitch), so it is not yet cleared. |
+
+### The fix for THE ASK, derived rather than guessed
+
+Cessation is the beat, so the stop cannot be shortened without destroying it. What must change is
+that **stillness ≠ deadness**: one element must keep moving, and it has to be *on the creature*,
+because a still creature beside a drifting cloud reads as a broken sprite over a working background.
+
+Per the measured legibility ladder above, the eye is the only face element and a 1-cell shift moves
+it 100% of its own width — so **a blink is the strongest available "still alive" signal, and it is
+already inside the quoted pose vocabulary** (the eye is a hole to the plate; toggling or shifting it
+needs no new art). A 1 px body rise/fall for breathing is the secondary cue. Cost: zero world-rate
+change, so no repayment, and it does not touch the print lock.
+
+### What the operator actually expects next
+
+**O1 — the magician beat — is SPECIFIED AND STORYBOARDED BUT NOT BUILT.** The three beats in the
+current asset predate the operator's ideas entirely. The expectation is explicit: *summon a second
+clawd, hand over mail, complete the task, self-close.* That is now the priority of the track, not a
+future item. § BETTER MICRO-EVENTS above carries the derived build constraints (props kept/cut, the
+binary's own smaller in-session clawd, screen-pinning, the hop's stride bookkeeping).
+
 ## The parallax inversion is now UNBLOCKED — and its handed-down remedy is wrong
 
 Recorded because the implementer that found it has since closed, and because the reason it was *not*
