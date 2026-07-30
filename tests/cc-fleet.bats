@@ -571,8 +571,8 @@ STUB
   # not exist — deathwatch has no production watch-file producer (~100% abstain, inert by construction)
   # and the reconciler's roster A is unwired (an empty roster alarms on every live pid). Both gates are
   # named in the manifest's comment block; this asserts nobody quietly promoted one to a row instead.
-  ! grep -q '^com\.claude\.lead-deathwatch *|' "$M"
-  ! grep -q '^com\.claude\.lead-reconciler *|' "$M"
+  ! grep -q '^com\.claude\.lead-deathwatch *|' "$M" || false
+  ! grep -q '^com\.claude\.lead-reconciler *|' "$M" || false
   # ...and the reconciler's pin really is StartInterval, never KeepAlive: it has only a `--once` mode,
   # and KeepAlive on a one-shot relaunches it at the 10s throttle floor forever.
   P="$ROOT/launchd/staged/com.claude.lead-reconciler.plist"
