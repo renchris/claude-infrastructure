@@ -121,10 +121,17 @@ while IFS= read -r _t; do TIMES[${#TIMES[@]}]="$_t"; done < "$WORK/times.txt"
 [[ "${#TIMES[@]}" -eq "$NFRAMES" ]] || die "built ${#TIMES[@]} timestamps, expected $NFRAMES"
 
 # ONE invocation, all timestamps (see the header).
+#
+# The frames land in the WORK dir, not in --out. --out is an asset directory: the first run of this
+# script against a 7 s loop at 24 fps left 168 intermediate PNGs sitting in assets/demo/ next to the
+# committed media, where the next `git add` sweeps them into the repo. The frames are scaffolding for
+# one command; only the mp4 is a deliverable. WORK is a mktemp with a cleanup trap, so they go away
+# on their own — including when this script dies partway through.
+FRAMES="$WORK/frames"; mkdir -p "$FRAMES"
 TIMES_ARG=$(tr '\n' ',' < "$WORK/times.txt" | sed 's/,$//')
 printf 'banner-video: rendering %s frames of %s (%ss loop @ %s fps)…\n' \
   "$NFRAMES" "$STEM" "$PERIOD" "$FPS" >&2
-if ! "$SHOTS" "$ASSET" --times "$TIMES_ARG" --bg "$BG" --out "$OUT" \
+if ! "$SHOTS" "$ASSET" --times "$TIMES_ARG" --bg "$BG" --out "$FRAMES" \
        --width "$WIDTH" --scale "$SCALE" > "$WORK/shots.log" 2>&1; then
   cat "$WORK/shots.log" >&2
   die "banner-shots.sh failed — no frames to encode"
@@ -135,7 +142,7 @@ STAGE="$WORK/seq"; mkdir -p "$STAGE"
 K=0
 for _t in "${TIMES[@]}"; do
   TAG=$(printf '%s' "$_t" | tr '.' 'p')
-  PNG="$OUT/${STEM}-${BG}-t${TAG}.png"
+  PNG="$FRAMES/${STEM}-${BG}-t${TAG}.png"
   [[ -e "$PNG" ]] || die "missing frame for t=${_t}s — expected $PNG (frame $K of $NFRAMES)"
   [[ -s "$PNG" ]] || die "empty frame for t=${_t}s — $PNG is zero bytes (frame $K of $NFRAMES)"
   ln -s "$PNG" "$(printf '%s/f%05d.png' "$STAGE" "$K")"
