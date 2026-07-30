@@ -907,3 +907,39 @@ all survive any height change untouched — the cost is confined to the sky.
 **Recommendation withheld deliberately: this is an art-direction call on the operator's own page.**
 The engineering note is only that changing height is cheap *now* and expensive after the moon/star
 craft work lands, so it is worth answering before that work starts.
+
+## The parallax inversion is now UNBLOCKED — and its handed-down remedy is wrong
+
+Recorded because the implementer that found it has since closed, and because the reason it was *not*
+applied has quietly expired.
+
+**The defect, re-derived from the constants rather than relayed** (`tools/banner/gen.py`: `TILE 1920`,
+`P 240`, `STRIP_PERIOD 20`):
+
+| layer | depth by y-band | period | px/s |
+|---|---|---|---|
+| `fgb` | **nearest** | `P/12` = 20 s | **96** |
+| `tf1` | middle | `P/10` = 24 s | **80** |
+| `tf0` | **farthest** | `STRIP_PERIOD` = 20 s | **96** |
+
+So it is worse than "the middle is slowest": **the nearest and farthest layers move at exactly the
+same rate**, which means there is no depth separation between them at all, and the middle one is
+inverted relative to both. Against `ground_detail`'s own stated intent that near must outrun far.
+
+**The deferral premise has expired.** It was held back because applying it "changes the motion of all
+four candidates while your operator comparison is open" — a sound call at the time. **The comparison is
+closed: v6c-dusk-line is the pick** (§ THE PICK), so the fix now touches one file the operator has
+already chosen, and the only reason not to apply it is gone. This is the parked-blocker-goes-stale
+pattern: the park was keyed on a fact that a later decision silently obsoleted.
+
+⚠️ **But the proposed remedy moves one layer the wrong way, so do not apply it as written.** It was
+recorded as *"tf1s → P/16, fgbs → a shorter tile"*. Since **`px/s = TILE / period`**, shortening
+`fgb`'s *tile* while its period stays at `P/12` makes the nearest layer **slower** (960 px over 20 s =
+48 px/s), deepening the inversion instead of fixing it. To speed a layer up you must shorten its
+**period**, not its tile. `tf1 → P/16` is right (= 15 s = 128 px/s); `fgb` then needs a period shorter
+than that, and any new period must still divide `P` and leave each layer travelling a whole number of
+wraps per master period, or the loop seams. **Re-derive both, do not transcribe.**
+
+Ordering to satisfy: `fgb > tf1 > tf0`, i.e. nearest fastest. Verify by rendering two frames one
+half-period apart and measuring per-layer displacement — `scripts/banner-world-clock-probe.py` already
+extracts real displacement out of Chromium and is the right instrument.
