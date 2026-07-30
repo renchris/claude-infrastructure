@@ -2705,6 +2705,103 @@ def summon_css(art: Art) -> str:
 
 
 # ── stylesheet ────────────────────────────────────────────────────────────────────────────────────
+# ── the gaze ──────────────────────────────────────────────────────────────────────────────────────
+# A directional gaze is the strongest causal device this sprite owns — the eye band is the only face
+# element, and one cell moves it 100% of its own width. It was spent on a free-running 8 s
+# oscillator, thirty pans per loop on a clock that can only correlate with a 240 s beat by accident.
+# Measured consequence: `.look` panned LEFT through the whole of THE SUMMONING's entry (2.72-4.64 s,
+# while B materialises to the RIGHT) and LEFT again through THE REFUSAL's rewind (18.72-20.64 s,
+# while the bar is to the RIGHT). The creature was looking away at both moments it was supposed to
+# react to, which is most of why neither beat reads as caused.
+#
+# So the gaze is rebased onto the master period and becomes a BEAT: it AIMS at each event, and it
+# glances ambiently at a budget rather than on a metronome. Nothing new is drawn and no group is
+# added — one animation on one element, the same element, just told when to look and where.
+GAZE_LEAD = (
+    0.3  # s after an event's onset before the eyes move: the 150-400ms reaction band
+)
+GAZE_TAIL = (
+    0.5  # s of follow-through after it ends, before they come back: the 300-800ms band
+)
+LOOK_BUCKET = 20.0  # s — at most one SPONTANEOUS glance per bucket; 240/20 = 12 a loop
+LOOK_GLANCE = 1.2  # s — how long an ambient glance holds
+
+
+def gaze_targets(art: Art) -> list[tuple[float, float, int]]:
+    """(t0, t1, direction) for every gaze aimed at something, derived from that thing's OWN timing.
+
+    Never written down beside the events. A beat that is re-timed drags its own reaction with it;
+    a hand-written window would go on pointing at where the event used to be, and an eye aimed at
+    empty plate is worse than an eye that wanders — it asserts a cause that is not there.
+
+    Both targets are to the creature's RIGHT and that is structural, not luck: B is summoned into the
+    clear plate at `summon_bx()`, which is A's right edge plus a gap, and the barrier comes down at
+    `refusal_x0()`, which is `BAR_CLEAR` AHEAD of the leading foot. The world scrolls leftward, so
+    ahead is right. If either ever moves, this asserts rather than assumes.
+    """
+    out: list[tuple[float, float, int]] = []
+    if emits(art, "rSummon"):
+        if summon_bx(art) <= art.clawd_x:
+            raise SystemExit(
+                f"gen[{art.key}]: B sits at x={summon_bx(art):.0f}, not right of A at "
+                f"{art.clawd_x:.0f} — the summon gaze aims right and would now point away from its "
+                f"own subject"
+            )
+        out.append((sm_at(SM_SPARK[0]) + GAZE_LEAD, sm_at(SM_B_OFF) + GAZE_TAIL, 1))
+    if emits(art, "rRefuse"):
+        if refusal_x0(art) <= art.clawd_x:
+            raise SystemExit(
+                f"gen[{art.key}]: the barrier arrives at x={refusal_x0(art):.0f}, not right of A — "
+                f"the refusal gaze aims right and would now point away from the bar"
+            )
+        w0 = ev("rRefuse")[0]
+        out.append((w0 + GAZE_LEAD, w0 + BAR_UP_AT + 0.4 + GAZE_TAIL, 1))
+    return out
+
+
+def look_keyframes(art: Art) -> str:
+    """The eye band's whole schedule for one loop: aimed gazes first, ambient glances in the gaps.
+
+    Ambient glances are placed one per `LOOK_BUCKET` and DE-PHASED inside their bucket, because a
+    glance on an exact 20 s grid is a metronome with a longer period rather than life. They are also
+    refused anywhere near a beat: an unaimed pan during an event competes with the aimed one for the
+    same 24 px of travel, and the reader cannot tell which of the two was the reaction.
+    """
+    aims = gaze_targets(art)
+    busy = [(a - GATE_EDGE, b + GATE_EDGE) for a, b, _ in aims]
+    busy += [(ev(n)[0] - GATE_EDGE, ev(n)[1] + GATE_EDGE) for n in active_events(art)]
+
+    def free(t0: float, t1: float) -> bool:
+        return all(t1 <= b0 or t0 >= b1 for b0, b1 in busy)
+
+    moves = list(aims)
+    for i in range(int(P / LOOK_BUCKET)):
+        a = i * LOOK_BUCKET + 4.7 + 3.1 * (i % 5)
+        b = a + LOOK_GLANCE
+        if b + GATE_EDGE < P and free(a, b):
+            moves.append((a, b, -1 if i % 2 else 1))
+    moves.sort()
+
+    prev = 0.0
+    for a, b, _d in moves:
+        if a < prev:
+            raise SystemExit(
+                f"gen[{art.key}]: two gazes overlap at t={a:.2f}s (previous ends {prev:.2f}s). The "
+                f"eye band has one position, so overlapping gazes are two aims for one pair of eyes."
+            )
+        prev = b
+
+    frames = ["0%{transform:translateX(0)}"]
+    for a, b, d in moves:
+        frames.append(f"{pctx(a)}%{{transform:translateX({fmt(d * CELL)}px)}}")
+        frames.append(f"{pctx(b)}%{{transform:translateX(0)}}")
+    frames.append("100%{transform:translateX(0)}")
+    return (
+        f"@keyframes lkf{{{''.join(frames)}}}"
+        f".look{{animation:lkf {fmt(P)}s steps(1,end) infinite}}"
+    )
+
+
 def css(art: Art) -> str:
     d, l = art.dark, art.light
     cheering = emits(art, "rCheer")
@@ -2793,10 +2890,10 @@ def css(art: Art) -> str:
         f"@keyframes esf{{0%,90%{{opacity:0}}90.5%,95%{{opacity:1}}95.5%,100%{{opacity:0}}}}"
         f".eOpen{{animation:eof 4s steps(1,end) infinite}}"
         f".eShut{{animation:esf 4s steps(1,end) infinite}}"
-        # look around — the eye band only, exactly one grid cell each way (the quoted pose table)
-        f"@keyframes lkf{{0%,26%{{transform:translateX(0)}}34%,50%{{transform:translateX(-{CELL}px)}}"
-        f"58%,74%{{transform:translateX({CELL}px)}}82%,100%{{transform:translateX(0)}}}}"
-        f".look{{animation:lkf 8s steps(1,end) infinite}}"
+        # look around — the eye band only, exactly one grid cell each way (the quoted pose table).
+        # On the MASTER period, not a free 8 s oscillator: see look_keyframes. The pose vocabulary is
+        # unchanged; what changed is that the pans now have causes and the metronome is gone.
+         + look_keyframes(art) +
         # ear/arm wiggle
         f"@keyframes arf{{0%,64%{{transform:translateY(0)}}72%{{transform:translateY(-{fmt(CELL * 0.55)}px)}}"
         f"82%,100%{{transform:translateY(0)}}}}"
