@@ -68,24 +68,29 @@ PHASE 1 IS NOT OPTIONAL — three checks BEFORE you design anything:
       Row 4's session-beat oracle is verified INERT (no ~/.claude/cc-beats, activation .done
       absent). You consume row 4 — consume it FAIL-SOFT and say what your design does when it is
       dark.
-  (c) SWEEP THE BRANCH GRAVEYARD before you build. **YOUR ROW IS THE ONE ROW WHERE THE CAMPAIGN'S
-      OWN GRAVEYARD TABLE IS WRONG, AND I VERIFIED THAT THIS SESSION.** Re-verify all of it
-      yourself, controls included — I am handing you a finding, not a fact to inherit:
-        · GROUND_UP_DISPATCH.md's table says tests/git-worktree-guard.bats is in
-          fix/infra-perfection ✓ and tm/hygiene ✓. IT IS IN NEITHER. (git cat-file -e on both:
-          MISSING. Positive control passed — the same idiom re-found hooks/git-worktree-guard.sh in
-          that branch; negative control passed — it correctly rejected a phantom path.)
-        · It is live only at tm/wtgc and its rebase-duplicates up the chain to tm/growth. The
-          original patch is 12476a03 (2026-07-25 02:15, tm/wtgc, 9 ahead / 497 behind); 14 identical
-          add-commits exist because one patch was replayed along the nested tm/* chain. Zero delete
-          events.
-        · SO THE CAMPAIGN'S "NEVER TAKE FROM tm/growth, TAKE FROM fix/infra-perfection" INSTRUCTION
-          IS WRONG FOR YOUR ROW ONLY, and the source doc's claim that tm/growth has "0 unique
-          patches, fully covered by fix/infra-perfection ∪ tm/hygiene" is FALSIFIED by this
-          artifact. Take from tm/wtgc — the patch's origin, minimal ancestry — with cherry-pick -x.
-          A single-commit cherry-pick drags no ancestry; the six-branch-chain warning in that doc is
-          about LANDING a branch, not picking a commit.
-        · **AND THE FIX THAT TEST GUARDS IS NOT ON TRUNK — this is your headline take.** 12476a03 is
+  (c) SWEEP THE BRANCH GRAVEYARD before you build. Your slice per GROUND_UP_DISPATCH.md is
+      tests/git-worktree-guard.bats, marked present in fix/infra-perfection ✓ and tm/hygiene ✓.
+      **THAT TABLE ENTRY IS CORRECT — I verified it with git ls-tree, absent from trunk and present
+      in both branches.** Take from fix/infra-perfection with cherry-pick -x, per the standard
+      campaign guidance; no override is needed for your row. The same patch also exists as
+      rebase-duplicates along the nested tm/* chain (origin 12476a03, 2026-07-25 02:15 on tm/wtgc) —
+      you do not need them.
+        · 🚨 **READ THIS BEFORE YOU RUN ANY SWEEP — IT COST ME A FALSE FINDING THIS SESSION AND I
+          ALMOST SHIPPED IT TO YOU AS FACT.** My first probe said the test was in NEITHER branch. It
+          was a zsh bug, not a fact. In zsh, inside double quotes, `"$b:tests/foo"` parses `:t` as
+          the **history/glob TAIL modifier**: with b=fix/infra-perfection it expands to
+          `infra-perfection` + `ests/foo` = `infra-perfectionests/foo`, git fatals rc=128, and under
+          the `2>/dev/null` that every sweep applies **that is indistinguishable from "file
+          absent."** The two most common directories in this repo are the two worst hit —
+          `tests/` (`:t` tail) and `hooks/` (`:h` head). `"$b:$p"` is SAFE (the `:` is followed by
+          `$`, not a modifier letter), and `git ls-tree "$b" -- "$p"` is safe and is what I settled
+          the truth with. This very likely explains the earlier coordinator's note that two of its
+          three sweeps "returned confident garbage at exit 0". **Never trust a bare-absence result
+          from a `"$var:path"` expression under zsh; assert your sweep re-finds a known-present file
+          first, and prefer ls-tree.**
+        · **THE FIX THAT TEST GUARDS IS NOT ON TRUNK — this is your headline take, and it survived
+          the correction above because it was measured with commands that carry no `$var:` pattern.**
+          12476a03 is
           NOT an ancestor of origin/main, and trunk's hooks/git-worktree-guard.sh has zero -C /
           target-repo / GIT_DIR handling (positive control: the same grep returns 21 branch/worktree
           hits, so the grep works). Read lines 29-48: it matches the LITERAL strings "git branch"
@@ -121,7 +126,12 @@ THREE MORE THINGS I VERIFIED THAT YOUR CELL DOES NOT SAY — confirm, do not inh
     "ABSENT in this repo (reso-only)" — it is PRESENT at 615 lines with a 288-line suite. That audit
     is 11 days old. Do not inherit it.
 
-FOUR HARNESS TRAPS — each produced a WRONG VERDICT for someone on this campaign today:
+FIVE HARNESS TRAPS — each produced a WRONG VERDICT for someone on this campaign today:
+  · **zsh eats `:t` / `:h` in `"$var:path"` as a glob MODIFIER, manufacturing false absences.**
+    `"$b:tests/foo"` → basename($b) + `ests/foo` → git fatal rc=128, which `2>/dev/null` renders
+    identical to "absent". `tests/` and `hooks/` are the worst-hit prefixes in this repo. Use
+    `"$b:$p"` or `git ls-tree "$b" -- "$p"`. Full account in Phase 1 (c) — it cost me a false
+    finding about YOUR artifact this session.
   · NEVER pipe a test run into tail/head and read the exit code — that is the PIPE's status. It
     reported a clean exit 0 over two RED tests. Redirect to a file, read $? unpiped, key the verdict
     on the `not ok` COUNT.
