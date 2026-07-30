@@ -9,7 +9,13 @@
 # landing commit. Design: docs/research/desk-anti-hitl-2026-07-19.md Part C.
 
 setup() {
-  export CC_FIRE_CAPACITY_GATE=off  # capacity_gate() reads live vm.loadavg and refuses exit 9; pin it so this suite is load-insensitive
+  # M11 (MACHINE_CAPACITY_V2 §11.3) — a test's environment is PINNED, not ambient. handoff-fire.sh's
+  # capacity_gate reads the box's live loadavg AND (M10) its memory headroom, exiting 9 when either
+  # is past its bar — which turned 16 corpus tests RED purely because the machine was busy (map R-1),
+  # a gate failing its own suite and blocking deploy verification. Both terms are pinned off here;
+  # tests/handoff-fire-capacity-gate.bats is the ONE place the gate runs ON, against synthetic inputs.
+  export CC_FIRE_CAPACITY_GATE=off
+  export CC_FIRE_HEADROOM_GATE=off
   # handoff-fire.sh bounds every external iTerm2 call (osascript / it2 CLI / iterm2 python) through
   # hf_bounded — a timeout(1) wrapper — because a wedged iTerm2 API blocks them indefinitely. These
   # suites EXTRACT individual functions instead of sourcing the script, so that helper is not in
