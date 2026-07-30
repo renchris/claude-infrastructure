@@ -160,7 +160,13 @@ STUB
 }
 
 @test "cc-dispatch's composed brief does NOT start with a slash command (would be parsed as one)" {
-  run grep -n 'cc-backlog item \$id (project \$PROJECT)' "$REPO/bin/cc-dispatch"
+  # LOCATOR, not a contract: this grep only has to FIND the composed TASK line so the assertion below
+  # can inspect it. It was pinned to the whole parenthesised tail `(project $PROJECT)`, which
+  # f90fd1bd rewrote to `(project $iproj, repo $irepo)` for multi-project dispatch — so the locator
+  # matched nothing, `[ "$status" -eq 0 ]` failed, and the suite went red on trunk while the safety
+  # property it guards was never actually in question. Anchor on the STABLE head of the line instead;
+  # a locator that re-breaks on every wording change tests the wording, not the property.
+  run grep -n 'cc-backlog item \$id (project ' "$REPO/bin/cc-dispatch"
   [ "$status" -eq 0 ]
   ! printf '%s\n' "$output" | grep -q '"/'
 }
