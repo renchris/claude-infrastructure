@@ -36,12 +36,34 @@
 #   under the same contract — ONLY EVER DELETE LINES; pinning a suite without deleting its line is
 #   a RED, which is what stops a ratchet from decaying into a permanent exemption list.
 #
+# RULE 3 (the orphan-close arming lever) — the SAME CLASS AGAIN, found 2026-07-30. Rule 2 taught
+# that a lever the OPERATOR flips machine-wide silently rewrites what a suite is testing; rule 3 is
+# that lesson applied to the one other such lever in this tree. `~/.zshrc` sources
+# `~/.claude/autonomy/watchdog.env`, which carries `export LCW_ORPHAN_CLOSE=1` (armed
+# 2026-07-29T20:35) — the lever that ARMS lead-crash-watchdog.sh's orphaned-pane close leg. Every
+# shell that sources the profile, bats included, therefore hands an ARMED actuator to any suite
+# exercising that leg, and its DEFAULT-OFF tests stop testing the default and start testing this
+# box. Proven two-sided on tests/lead-crash-close-panes.bats: ambient -> `not ok 4` and `not ok 5`
+# (4/4, foreground and background band alike); `unset LCW_ORPHAN_CLOSE` in setup() -> 18/18.
+#   ASYMMETRY WITH RULE 2, deliberate: rule 2 demands one specific value (`=off`) because only that
+#   value detaches the subject from live load. Here ANY deterministic position in setup() — `unset`,
+#   `=0`, or a fixture's own `=1` — detaches it; what is forbidden is INHERITING one. So the
+#   predicate asks whether the suite took a position at all, not which.
+#   SCOPED BY THE LEG the lever gates (`--close-panes`), never by whether the suite happens to
+#   mention the lever: a suite that never names LCW_ORPHAN_CLOSE is precisely the one that goes
+#   ambient-red, so keying on the mention would exempt the worst case.
+#   Rule 3's grandfather list (EMBEDDED_ORPHAN_ALLOWLIST) ships EMPTY — the tree was measured at the
+#   last possible moment and exactly one suite is in scope, and it pins. A ratchet that starts empty
+#   can only stay empty.
+#
 # Exit: 0 = clean · 1 = violation · 2 = bad usage / unreadable scan dir (LOUD, never silent-green)
 #
 # Env seams (selftest / escape hatch):
-#   CC_HERM_ALLOWLIST       overrides rule 1's embedded allowlist (set-but-empty = no grandfathering)
-#   CC_HERM_FIRE_ALLOWLIST  overrides rule 2's embedded allowlist (same set-but-empty semantics)
-#   CC_HERM_FIRE_RULE=off   kill switch — disables rule 2 entirely, leaving rule 1 exactly as it was
+#   CC_HERM_ALLOWLIST        overrides rule 1's embedded allowlist (set-but-empty = no grandfathering)
+#   CC_HERM_FIRE_ALLOWLIST   overrides rule 2's embedded allowlist (same set-but-empty semantics)
+#   CC_HERM_FIRE_RULE=off    kill switch — disables rule 2 entirely, leaving rule 1 exactly as it was
+#   CC_HERM_ORPHAN_ALLOWLIST overrides rule 3's embedded allowlist (same set-but-empty semantics)
+#   CC_HERM_ORPHAN_RULE=off  kill switch — disables rule 3 entirely, leaving rules 1-2 untouched
 set -uo pipefail
 # Resolve $0 THROUGH symlinks before deriving ROOT. Everything under ~/.claude/scripts/ is a per-file
 # symlink into this checkout, so a bare `dirname "$0"` yields ~/.claude — which has no tests/ — and the
@@ -232,6 +254,21 @@ FIREALLOW
 FIRE_ALLOW="${CC_HERM_FIRE_ALLOWLIST-$EMBEDDED_FIRE_ALLOWLIST}"
 FIRE_RULE="${CC_HERM_FIRE_RULE:-on}"
 
+# ── RULE 3's ratchet: suites that exercise the watchdog's orphaned-pane close leg WITHOUT pinning
+# LCW_ORPHAN_CLOSE in setup(). Ships EMPTY, and that is a measurement, not an aspiration: on
+# 2026-07-30 exactly one suite in tests/ invokes `--close-panes` (lead-crash-close-panes.bats) and
+# it pins the lever. Derived against trunk at the last possible moment, for the reason rule 2's list
+# records — a ratchet listed from an earlier reading ships stale, i.e. RED on its first run.
+# ONLY EVER DELETE LINES FROM THIS LIST. It should never gain one: a NEW suite in scope is a suite
+# that can pin from the start.
+EMBEDDED_ORPHAN_ALLOWLIST=""
+
+# Rule 3's runtime knobs. Globals rather than lint_dir parameters for rule 2's reason verbatim:
+# lint_dir's ARITY is load-bearing. `-` not `:-` on the seam, so set-but-EMPTY legitimately means
+# "grandfather nothing" — which is also the shipped default, so the two agree by construction.
+ORPHAN_ALLOW="${CC_HERM_ORPHAN_ALLOWLIST-$EMBEDDED_ORPHAN_ALLOWLIST}"
+ORPHAN_RULE="${CC_HERM_ORPHAN_RULE:-on}"
+
 # The setup()/setup_file() bodies of a suite. Terminator is a bare `}` at column 0 — the convention
 # every suite in tests/ follows; the extraction was verified against all 118 before this landed.
 setup_bodies() {
@@ -315,10 +352,15 @@ references_fire() {
 # Fail-SAFE = 0 (pinned): 'pinned' cannot fabricate an AMBIENT violation. It COULD in principle
 # fabricate a stuck-ratchet line for an allowlisted suite — but CHECK_FAILED makes the whole run
 # exit 2 with an explicit "this is NOT a violation report", exactly as is_hermetic already does.
+# COMMENT-STRIPPED for rule 3's reason, retrofitted here: rule 3's bare substring match was proven
+# VACUOUS by a suite that merely NAMED its lever in a setup() comment, and this predicate had the
+# identical hole — a suite documenting `CC_FIRE_CAPACITY_GATE=off` without setting it would have
+# read as pinned. Measured before changing it: across every handoff-fire suite in the tree, ZERO
+# verdicts flip, so this closes a latent hole and grandfathers nobody new.
 is_fire_pinned() {
   local rc
   for _ in 1 2 3; do
-    setup_bodies "$1" | grep -qF 'CC_FIRE_CAPACITY_GATE=off'; rc=$?
+    setup_statements "$1" | grep -qF 'CC_FIRE_CAPACITY_GATE=off'; rc=$?
     case "$rc" in
       0) return 0 ;;
       1) return 1 ;;
@@ -327,6 +369,61 @@ is_fire_pinned() {
   done
   CHECK_FAILED=1
   echo "test-hermeticity-lint: ⛔ capacity-pin check could not RUN for $1 after 3 tries (grep rc=$rc)" >&2
+  return 0                        # fail-SAFE: 'pinned' cannot fabricate an AMBIENT violation
+}
+
+# ── RULE 3's two predicates. Same shape, same retry, same CHECK_FAILED third state, same fail-SAFE
+# directions as rule 2's pair above — and same accepted floor: textual, so a suite that reaches the
+# close leg through some other wrapper is not matched. The ratchet binds where evidence is plain.
+
+# Is this suite in scope for rule 3? 0 = it invokes the close leg · 1 = it does not.
+# Fail-SAFE = 1 (out of scope): an unreadable scope check must not pull a suite INTO the rule.
+references_close_leg() {
+  local rc
+  for _ in 1 2 3; do
+    grep -qF -- '--close-panes' "$1" 2>/dev/null; rc=$?
+    case "$rc" in
+      0) return 0 ;;
+      1) return 1 ;;
+    esac
+    sleep 1                       # transient fork pressure — see PREDICATE RETRY above
+  done
+  CHECK_FAILED=1
+  echo "test-hermeticity-lint: ⛔ close-leg scope check could not RUN for $1 after 3 tries (grep rc=$rc)" >&2
+  return 1                        # fail-SAFE: 'not in scope' cannot fabricate an AMBIENT violation
+}
+
+# setup_statements <file> — setup bodies with COMMENTS STRIPPED, so a predicate keys on what the
+# suite DOES, never on what it says about itself.
+#
+# Not a refinement: a bare `grep -F LCW_ORPHAN_CLOSE` over the raw body made rule 3 VACUOUS on the
+# exact suite it was written for. tests/lead-crash-close-panes.bats documents the lever in its own
+# setup() comment ("…carries `export LCW_ORPHAN_CLOSE=1`"), so deleting the actual `unset` left the
+# mention behind and the lint stayed GREEN on a genuinely ambient suite — caught only by replaying
+# the REAL file instead of the hand-made fixture, which passed either way (memory:
+# control-must-replay-the-real-artifact). Same `${line%%#*}` shape scripts/test-walltime-lint.sh
+# already uses; a '#' inside a string is over-stripped, which can only ever cost a MENTION, never a
+# statement, so the fail direction stays safe.
+setup_statements() { setup_bodies "$1" | sed 's/[[:space:]]#.*$//; s/^#.*$//'; }
+
+# 0 = takes a deterministic position on LCW_ORPHAN_CLOSE in setup() · 1 = inherits the operator's.
+# Any position counts (see RULE 3's ASYMMETRY note) — the violation is inheriting one, not choosing
+# the "wrong" one — but it must be a STATEMENT: an assignment (`LCW_ORPHAN_CLOSE=`, with or without
+# `export`) or an `unset`, which is why the pattern is anchored rather than a substring match.
+# Fail-SAFE = 0 (pinned): 'pinned' cannot fabricate an AMBIENT violation.
+is_orphan_pinned() {
+  local rc
+  for _ in 1 2 3; do
+    setup_statements "$1" \
+      | grep -qE '(^|[[:space:];&|(])(export[[:space:]]+)?LCW_ORPHAN_CLOSE=|(^|[[:space:];&|(])unset([[:space:]]+-[a-zA-Z]+)?([[:space:]]+[A-Za-z_][A-Za-z0-9_]*)*[[:space:]]+LCW_ORPHAN_CLOSE([[:space:]]|$)'; rc=$?
+    case "$rc" in
+      0) return 0 ;;
+      1) return 1 ;;
+    esac
+    sleep 1                       # transient fork pressure — see PREDICATE RETRY above
+  done
+  CHECK_FAILED=1
+  echo "test-hermeticity-lint: ⛔ orphan-close pin check could not RUN for $1 after 3 tries (grep rc=$rc)" >&2
   return 0                        # fail-SAFE: 'pinned' cannot fabricate an AMBIENT violation
 }
 
@@ -384,6 +481,7 @@ in_own() {  # $1=basename · $2=own-set text · $3=1 if an own-set was supplied 
 lint_dir() {
   local dir="$1" allow="$2" own="${3:-}" own_scoped=0 f base new_leak=0 stuck=0 seen=0 other=0
   local fire_allow="$FIRE_ALLOW" fire_leak=0 fire_stuck=0
+  local orphan_allow="$ORPHAN_ALLOW" orphan_leak=0 orphan_stuck=0
   [ "$#" -ge 3 ] && own_scoped=1
   CHECK_FAILED=0
   [ -d "$dir" ] || { echo "test-hermeticity-lint: ⛔ not a directory: $dir" >&2; return 2; }
@@ -435,6 +533,30 @@ lint_dir() {
         fi
       fi
     fi
+    # ── RULE 3, applied INDEPENDENTLY of rules 1 and 2 (a suite can violate any, all, or none) and
+    # ONLY to suites that invoke the close leg. A suite that never drives `--close-panes` is out of
+    # scope and must never appear here — that scoping is why references_close_leg() exists.
+    if [ "$ORPHAN_RULE" = on ] && references_close_leg "$f"; then
+      if is_orphan_pinned "$f"; then
+        if in_allowlist "$base" "$orphan_allow"; then
+          if in_own "$base" "$own" "$own_scoped"; then
+            printf '  RATCHET-ORPH %s pins LCW_ORPHAN_CLOSE now — delete its ORPHAN allowlist line\n' "$base"
+            orphan_stuck=$((orphan_stuck + 1))
+          else
+            printf '  ratchet-orph? %s pins the lever but is still grandfathered (NOT in your diff — advisory)\n' "$base"
+            other=$((other + 1))
+          fi
+        fi
+      elif ! in_allowlist "$base" "$orphan_allow"; then
+        if in_own "$base" "$own" "$own_scoped"; then
+          printf '  AMBIENT  %s: setup() does not pin LCW_ORPHAN_CLOSE — its close leg inherits this box'"'"'s arming\n' "$base"
+          orphan_leak=$((orphan_leak + 1))
+        else
+          printf '  ambient? %s does not pin LCW_ORPHAN_CLOSE (NOT in your diff — advisory, not blocking)\n' "$base"
+          other=$((other + 1))
+        fi
+      fi
+    fi
   done
   [ "$seen" -gt 0 ] || { echo "test-hermeticity-lint: ⛔ no .bats suites under $dir" >&2; return 2; }
   [ "$other" -eq 0 ] || echo "test-hermeticity-lint: $other pre-existing violation(s) NOT in your diff — reported, not blocking (own-scope)."
@@ -467,16 +589,32 @@ lint_dir() {
     echo "test-hermeticity-lint: ⛔ $fire_stuck suite(s) above pin the capacity gate but are still grandfathered."
     echo "  Fix: delete their lines from EMBEDDED_FIRE_ALLOWLIST in $0 — the ratchet only shrinks."
   fi
-  [ $((new_leak + stuck + fire_leak + fire_stuck)) -eq 0 ] || return 1
+  if [ "$orphan_leak" -gt 0 ]; then
+    echo "test-hermeticity-lint: ⛔ $orphan_leak suite(s) above drive the orphaned-pane close leg against an AMBIENT arming lever."
+    echo "  WHY: ~/.zshrc sources ~/.claude/autonomy/watchdog.env, which exports LCW_ORPHAN_CLOSE=1, so"
+    echo "       every bats run inherits an ARMED actuator and the suite's DEFAULT-OFF tests test this box."
+    echo "  Fix: in setup(), \`unset LCW_ORPHAN_CLOSE\` (or pin whatever value the fixture needs)."
+    echo "       Do NOT add to the orphan allowlist — it ships empty and is meant to stay that way."
+  fi
+  if [ "$orphan_stuck" -gt 0 ]; then
+    echo "test-hermeticity-lint: ⛔ $orphan_stuck suite(s) above pin LCW_ORPHAN_CLOSE but are still grandfathered."
+    echo "  Fix: delete their lines from EMBEDDED_ORPHAN_ALLOWLIST in $0 — the ratchet only shrinks."
+  fi
+  [ $((new_leak + stuck + fire_leak + fire_stuck + orphan_leak + orphan_stuck)) -eq 0 ] || return 1
   # The summary must say what was ENFORCED, not what is merely on disk: with rule 2 killed, printing
   # its grandfather count would read as "43 suites checked and grandfathered" when zero were checked.
-  local fire_note
+  local fire_note orphan_note
   if [ "$FIRE_RULE" = on ]; then
     fire_note="$(printf '%s\n' "$fire_allow" | grep -c .) grandfathered (capacity gate)"
   else
     fire_note="capacity-gate rule OFF (CC_HERM_FIRE_RULE)"
   fi
-  echo "test-hermeticity-lint: clean — $seen suite(s); $(printf '%s\n' "$allow" | grep -c .) grandfathered (\$HOME), $fire_note, 0 new leaks."
+  if [ "$ORPHAN_RULE" = on ]; then
+    orphan_note="$(printf '%s\n' "$orphan_allow" | grep -c .) grandfathered (orphan-close lever)"
+  else
+    orphan_note="orphan-close rule OFF (CC_HERM_ORPHAN_RULE)"
+  fi
+  echo "test-hermeticity-lint: clean — $seen suite(s); $(printf '%s\n' "$allow" | grep -c .) grandfathered (\$HOME), $fire_note, $orphan_note, 0 new leaks."
   return 0
 }
 
@@ -528,6 +666,18 @@ setup() {
 }
 @test "x" { run bash "$SUBJECT" --dry-run; }
 F
+  # Rule 2's copy of rule 3's prose-match regression control — the hole was found there, and this
+  # pins that the retrofit here actually took.
+  mkdir -p "$d/firecomment"
+  cat >"$d/firecomment/zz-fixture.bats" <<'F'
+#!/usr/bin/env bats
+setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  # NOTE: the capacity gate is pinned with CC_FIRE_CAPACITY_GATE=off — but this suite never does it.
+  SUBJECT="$REPO/scripts/handoff-fire.sh"
+}
+@test "x" { run bash "$SUBJECT" --dry-run; }
+F
   cat >"$d/firepertest/zz-fixture.bats" <<'F'
 #!/usr/bin/env bats
 setup() {
@@ -537,12 +687,70 @@ setup() {
 @test "a" { CC_FIRE_CAPACITY_GATE=off run bash "$SUBJECT" --dry-run; }
 @test "b" { run bash "$SUBJECT" --dry-run; }
 F
+  # ── RULE 3 fixtures. All three are $HOME-hermetic AND fire-free on purpose, so a rule-3 verdict
+  # can never be rules 1-2 leaking through: the ONLY axis that varies is the `--close-panes` call and
+  # the setup() position on the lever. noclose is byte-identical to orphleak MINUS the close leg —
+  # the scope control, without which "orphleak went red" proves nothing about SCOPING.
+  mkdir -p "$d/noclose" "$d/orphleak" "$d/orphpin" "$d/orphpertest"
+  cat >"$d/noclose/zz-fixture.bats" <<'F'
+#!/usr/bin/env bats
+setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  WD="$REPO/hooks/lead-crash-watchdog.sh"
+}
+@test "x" { run bash "$WD" --harvest-team "$TEAM" sid-1; }
+F
+  cat >"$d/orphleak/zz-fixture.bats" <<'F'
+#!/usr/bin/env bats
+setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  WD="$REPO/hooks/lead-crash-watchdog.sh"
+}
+@test "x" { run bash "$WD" --close-panes "$TEAM" sid-1; }
+F
+  cat >"$d/orphpin/zz-fixture.bats" <<'F'
+#!/usr/bin/env bats
+setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  unset LCW_ORPHAN_CLOSE
+  WD="$REPO/hooks/lead-crash-watchdog.sh"
+}
+@test "x" { run bash "$WD" --close-panes "$TEAM" sid-1; }
+F
+  # The REGRESSION control. A hand-made fixture passed either way while the predicate was a bare
+  # substring match, and the bug only surfaced against the real suite — which documents the lever in
+  # its own setup() comment. This fixture replays that shape: the MENTION is present, the STATEMENT
+  # is not, and it must be RED. Without it, is_orphan_pinned could silently revert to matching prose.
+  mkdir -p "$d/orphcomment"
+  cat >"$d/orphcomment/zz-fixture.bats" <<'F'
+#!/usr/bin/env bats
+setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  # ~/.claude/autonomy/watchdog.env carries `export LCW_ORPHAN_CLOSE=1`, which arms the close leg.
+  WD="$REPO/hooks/lead-crash-watchdog.sh"
+}
+@test "x" { run bash "$WD" --close-panes "$TEAM" sid-1; }
+F
+  cat >"$d/orphpertest/zz-fixture.bats" <<'F'
+#!/usr/bin/env bats
+setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  WD="$REPO/hooks/lead-crash-watchdog.sh"
+}
+@test "a" { LCW_ORPHAN_CLOSE=1 run bash "$WD" --close-panes "$TEAM" sid-1; }
+@test "b" { run bash "$WD" --close-panes "$TEAM" sid-1; }
+F
   fails=0
   # Pin BOTH rule-2 knobs for the duration of the selftest: an ambient CC_HERM_FIRE_RULE=off or a
   # stray CC_HERM_FIRE_ALLOWLIST in the caller's environment would otherwise make every rule-2
   # assertion below pass VACUOUSLY, which is the one way a discrimination proof can lie.
   FIRE_RULE=on
   FIRE_ALLOW=""
+  # Rule 3's knobs, pinned for that same reason. The rule-1/rule-2 fixtures are out of rule 3's
+  # scope, so this cannot perturb their verdicts — but an ambient CC_HERM_ORPHAN_RULE=off would make
+  # every rule-3 assertion below pass vacuously, which is exactly what pinning forecloses.
+  ORPHAN_RULE=on
+  ORPHAN_ALLOW=""
   lint_dir "$d/leak" ""               >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a NEW non-hermetic suite did not go RED"; fails=1; }
   lint_dir "$d/herm" "zz-fixture.bats" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a fixed-but-still-allowlisted suite did not go RED (ratchet not shrinking)"; fails=1; }
   lint_dir "$d/herm" ""                >/dev/null 2>&1 || { echo "SELFTEST FAIL: a hermetic suite did not go GREEN"; fails=1; }
@@ -553,13 +761,33 @@ F
   # the same verdict/non-verdict conflation ship-land keeps apart as gate-red 6 vs gate-killed 9.
   # Both embedded allowlists are judged here, so a stale entry in EITHER ratchet is caught by (e).
   FIRE_ALLOW="$EMBEDDED_FIRE_ALLOWLIST"
+  ORPHAN_ALLOW="$EMBEDDED_ORPHAN_ALLOWLIST"
   lint_dir "$ROOT/tests" "$EMBEDDED_ALLOWLIST" >/dev/null 2>&1; rc_real=$?
   FIRE_ALLOW=""
+  ORPHAN_ALLOW=""
   case "$rc_real" in
     0) ;;
     2) echo "SELFTEST FAIL: could not scan $ROOT/tests — a NON-VERDICT (bad ROOT?), NOT a stale allowlist"; fails=1 ;;
-    *) echo "SELFTEST FAIL: an embedded allowlist is stale (\$HOME and/or capacity-gate) — the real tree is not clean"; fails=1 ;;
+    *) echo "SELFTEST FAIL: an embedded allowlist is stale (\$HOME, capacity-gate and/or orphan-close) — the real tree is not clean"; fails=1 ;;
   esac
+  # ── RULE 3's four-way discrimination. Each assertion is paired with the one that proves it fired
+  # for the RIGHT reason: red without the scope control is a rule that reds on everything.
+  lint_dir "$d/orphleak" ""  >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a close-leg suite inheriting LCW_ORPHAN_CLOSE did not go RED"; fails=1; }
+  lint_dir "$d/orphpin"  ""  >/dev/null 2>&1 || { echo "SELFTEST FAIL: a close-leg suite that PINS the lever did not go GREEN"; fails=1; }
+  lint_dir "$d/noclose"  ""  >/dev/null 2>&1 || { echo "SELFTEST FAIL: a suite that never drives --close-panes was pulled INTO rule 3 (scoping broken)"; fails=1; }
+  lint_dir "$d/orphpertest" "" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a PER-TEST pin was accepted — it leaves every other test on ambient state"; fails=1; }
+  lint_dir "$d/orphcomment" "" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a setup() COMMENT naming the lever was accepted as a pin — the predicate is matching prose"; fails=1; }
+  # Rule 3's grandfathering rides ORPHAN_ALLOW, NOT lint_dir's $2 (which is rule 1's list) — passing
+  # $2 here would grandfather the wrong rule and, worse, make these two cases pass for rule 1's
+  # reasons. Both fixtures are $HOME-hermetic, so $2 stays empty on purpose.
+  ORPHAN_ALLOW="zz-fixture.bats"
+  lint_dir "$d/orphleak" "" >/dev/null 2>&1 || { echo "SELFTEST FAIL: a grandfathered close-leg suite did not go GREEN"; fails=1; }
+  lint_dir "$d/orphpin"  "" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a pinned-but-still-grandfathered suite did not go RED (rule-3 ratchet not shrinking)"; fails=1; }
+  ORPHAN_ALLOW=""
+  # The kill switch must actually kill: with rule 3 off, the RED fixture above must go green.
+  ORPHAN_RULE=off
+  lint_dir "$d/orphleak" "" >/dev/null 2>&1 || { echo "SELFTEST FAIL: CC_HERM_ORPHAN_RULE=off did not disable rule 3"; fails=1; }
+  ORPHAN_RULE=on
   lint_dir "$d/nope" ""               >/dev/null 2>&1; [ "$?" -eq 2 ] || { echo "SELFTEST FAIL: a missing scan dir did not exit 2 (LOUD)"; fails=1; }
   # ── OWN-SCOPE: both directions, because a scope that can only PASS is not a scope ────────────
   # (g) a leak OUTSIDE the own-set must not block — the fleet-wide-hard-stop fix itself.
@@ -618,6 +846,7 @@ F
   # (u) per-TEST pinning does NOT count — rule 1's reason verbatim: every OTHER test in the file is
   #     still on ambient load. Four suites in the tree are grandfathered for exactly this shape.
   lint_dir "$d/firepertest" "" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a per-TEST CC_FIRE_CAPACITY_GATE counted as pinned"; fails=1; }
+  lint_dir "$d/firecomment" "" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a setup() COMMENT naming CC_FIRE_CAPACITY_GATE=off counted as pinned — rule 2 is matching prose"; fails=1; }
   # (w) own-scope governs rule 2 as well: advisory OUTSIDE the lander's diff, blocking INSIDE it.
   lint_dir "$d/fireleak" "" "some-other-suite.bats" >/dev/null 2>&1 || { echo "SELFTEST FAIL: an AMBIENT violation OUTSIDE the own-set blocked"; fails=1; }
   lint_dir "$d/fireleak" "" "zz-fixture.bats" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: an AMBIENT violation INSIDE the own-set did not block"; fails=1; }
@@ -642,7 +871,7 @@ F
   ( CC_HERM_ALLOWLIST="" CC_HERM_FIRE_ALLOWLIST="" CC_HERM_FIRE_RULE=off "$SELF" "$d/fireleak" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: CC_HERM_FIRE_RULE=off did not disable rule 2"; fails=1; }
 
   if [ "$fails" -eq 0 ]; then
-    echo "test-hermeticity-lint --selftest: 29/29 — RULE 1 (\$HOME): RED on a new leak + on a stuck ratchet entry, GREEN on hermetic + grandfathered, GREEN on the real tree, LOUD on a bad dir, own-scope blocks INSIDE / advises OUTSIDE for both violation kinds (path-form accepted), NON-VERDICT on an unrunnable check (with and without an own-set). RULE 2 (capacity gate): RED on an unpinned handoff-fire suite + on a per-test pin + on a stuck fire-ratchet entry, GREEN on a setup()-pinned suite + on a grandfathered one + on a suite that never mentions handoff-fire (the scope control), own-scope honoured both ways, NON-VERDICT on an unrunnable fire predicate, and both env seams (CC_HERM_FIRE_ALLOWLIST, CC_HERM_FIRE_RULE=off) proved at the entrypoint."
+    echo "test-hermeticity-lint --selftest: 38/38 — RULE 1 (\$HOME): RED on a new leak + on a stuck ratchet entry, GREEN on hermetic + grandfathered, GREEN on the real tree, LOUD on a bad dir, own-scope blocks INSIDE / advises OUTSIDE for both violation kinds (path-form accepted), NON-VERDICT on an unrunnable check (with and without an own-set). RULE 2 (capacity gate): RED on an unpinned handoff-fire suite + on a per-test pin + on a stuck fire-ratchet entry, GREEN on a setup()-pinned suite + on a grandfathered one + on a suite that never mentions handoff-fire (the scope control), RED on a setup() COMMENT that merely names the pin (the prose-match regression), own-scope honoured both ways, NON-VERDICT on an unrunnable fire predicate, and both env seams (CC_HERM_FIRE_ALLOWLIST, CC_HERM_FIRE_RULE=off) proved at the entrypoint. RULE 3 (orphan-close lever): RED on a close-leg suite that inherits LCW_ORPHAN_CLOSE + on a per-test pin + on a stuck orphan-ratchet entry, GREEN on a setup()-pinned suite + on a grandfathered one + on a suite that never drives --close-panes (the scope control), and CC_HERM_ORPHAN_RULE=off proved to actually disable it."
     exit 0
   fi
   echo "test-hermeticity-lint --selftest: FAILED — the ratchet does not discriminate."
