@@ -1,21 +1,26 @@
 #!/usr/bin/env bats
-# test-hermeticity-lint — the RATCHET that stops NEW bats suites from running against the operator's
-# live ~/. Two properties matter and both are proved here: it discriminates (RED on a new leak, RED on
-# an entry that stayed grandfathered after being fixed), and it is GREEN on the tree as it stands —
-# a lint that ships standing-RED is the rot this repo is killing, and the nightly auto-runs every
-# scripts/*lint*.sh, so a false RED here poisons the whole nightly signal.
+# test-hermeticity-lint — the RATCHET that stops NEW bats suites from running against AMBIENT STATE.
+# Two rules, one mechanism: rule 1 is the operator's live ~/ ($HOME fixtured in setup()), rule 2 is
+# the machine's live LOAD (CC_FIRE_CAPACITY_GATE=off pinned in setup(), for any suite that drives
+# handoff-fire). Two properties matter for each and both are proved here: it discriminates (RED on a
+# new violation, RED on an entry that stayed grandfathered after being fixed), and it is GREEN on the
+# tree as it stands — a lint that ships standing-RED is the rot this repo is killing, and the nightly
+# auto-runs every scripts/*lint*.sh, so a false RED here poisons the whole nightly signal.
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   LINT="$REPO/scripts/test-hermeticity-lint.sh"
-  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"    # dogfood: this suite obeys its own rule
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"    # dogfood: this suite obeys its own rule 1
+  export CC_FIRE_CAPACITY_GATE=off                         # dogfood rule 2 — this file names handoff-fire
   FIX="$BATS_TEST_TMPDIR/fix"; mkdir -p "$FIX"
 }
 
-# write a fixture suite whose setup() body is $2, into a fresh dir $1
+# write a fixture suite into a fresh dir $1, whose setup() body is $2 and whose single @test body is
+# $3 (default `true`). $3 is where a fixture's handoff-fire reference goes — rule 2's scope is
+# textual and file-wide, while its PIN must be in setup(), so the two must be settable separately.
 mk_suite() {
   mkdir -p "$FIX/$1"
-  { echo '#!/usr/bin/env bats'; echo 'setup() {'; echo "  $2"; echo '}'; echo '@test "x" { true; }'; } \
+  { echo '#!/usr/bin/env bats'; echo 'setup() {'; echo "  $2"; echo '}'; echo "@test \"x\" { ${3:-true}; }"; } \
     > "$FIX/$1/zz-fixture.bats"
 }
 
@@ -152,4 +157,104 @@ mk_suite() {
   grep -q "SHIP_LAND_HERM_OWN_SCOPE" "$REPO/scripts/ship-land.sh" || false
   # the own-set must come from the landing RANGE, never from the working tree
   grep -q 'git diff --name-only "\$range" -- .tests/\*\.bats' "$REPO/scripts/ship-land.sh" || false
+}
+
+# ── RULE 2: the capacity-gate ratchet — the SAME class as rule 1, a different ambient input ───────
+# handoff-fire.sh's capacity_gate() reads live `sysctl vm.loadavg` and REFUSES a net-new fire above
+# 2.0 load/core (exit 9); this box sits permanently at 3.4-7.3/core. So a suite that exercises a fire
+# without pinning CC_FIRE_CAPACITY_GATE=off in setup() does not test its subject at all — it tests
+# what the rest of the fleet happens to be doing. Proven two-sided at 3.39/core on
+# tests/fire-engagement.bats: ambient -> `not ok 14`, pinned -> `ok 14`.
+
+@test "RULE 2 RED: a suite that drives handoff-fire without pinning the gate in setup()" {
+  mk_suite fireleak 'export HOME="$BATS_TEST_TMPDIR/home"' 'run bash ./scripts/handoff-fire.sh --dry-run'
+  CC_HERM_FIRE_ALLOWLIST="" run bash "$LINT" "$FIX/fireleak"
+  [ "$status" -eq 1 ] || false
+  echo "$output" | grep -q 'AMBIENT' || false
+  echo "$output" | grep -q 'Do NOT add to the fire allowlist' || false
+}
+
+@test "RULE 2 SCOPE CONTROL: the same suite MINUS the handoff-fire reference is GREEN" {
+  # The positive control that makes the RED above mean something. These two fixtures differ in
+  # exactly one token; if this one also went RED the rule would be flagging every suite in the tree
+  # and the RED would be evidence of nothing.
+  mk_suite nofire 'export HOME="$BATS_TEST_TMPDIR/home"' 'run bash ./scripts/some-other-tool.sh --dry-run'
+  CC_HERM_FIRE_ALLOWLIST="" run bash "$LINT" "$FIX/nofire"
+  [ "$status" -eq 0 ] || false
+  [ "$(echo "$output" | grep -c 'AMBIENT')" -eq 0 ] || false
+}
+
+@test "RULE 2 GREEN: the pin in setup() clears it — the prescribed fix actually works" {
+  mk_suite firepin 'export HOME="$BATS_TEST_TMPDIR/home"; export CC_FIRE_CAPACITY_GATE=off' \
+    'run bash ./scripts/handoff-fire.sh --dry-run'
+  CC_HERM_FIRE_ALLOWLIST="" run bash "$LINT" "$FIX/firepin"
+  [ "$status" -eq 0 ] || false
+}
+
+@test "RULE 2 RED: a suite that pins the gate but is STILL grandfathered (the ratchet only shrinks)" {
+  mk_suite firepin 'export HOME="$BATS_TEST_TMPDIR/home"; export CC_FIRE_CAPACITY_GATE=off' \
+    'run bash ./scripts/handoff-fire.sh --dry-run'
+  CC_HERM_FIRE_ALLOWLIST="zz-fixture.bats" run bash "$LINT" "$FIX/firepin"
+  [ "$status" -eq 1 ] || false
+  echo "$output" | grep -q 'RATCHET-CAP' || false
+  echo "$output" | grep -q 'EMBEDDED_FIRE_ALLOWLIST' || false
+}
+
+@test "RULE 2 GREEN: an unpinned suite that IS grandfathered passes (today's list blocks nobody)" {
+  mk_suite fireleak 'export HOME="$BATS_TEST_TMPDIR/home"' 'run bash ./scripts/handoff-fire.sh --dry-run'
+  CC_HERM_FIRE_ALLOWLIST="zz-fixture.bats" run bash "$LINT" "$FIX/fireleak"
+  [ "$status" -eq 0 ] || false
+}
+
+@test "RULE 2: a per-TEST capacity pin does not count (every OTHER test still reads ambient load)" {
+  # Rule 1's reason verbatim. Four suites in the tree are grandfathered for precisely this shape:
+  # they DO mention CC_FIRE_CAPACITY_GATE=off, but only inside individual @test bodies.
+  mkdir -p "$FIX/firepertest"
+  { echo '#!/usr/bin/env bats'; echo 'setup() {'; echo '  export HOME="$BATS_TEST_TMPDIR/home"'; echo '}'
+    echo '@test "a" { CC_FIRE_CAPACITY_GATE=off run bash ./scripts/handoff-fire.sh; }'
+    echo '@test "b" { run bash ./scripts/handoff-fire.sh; }'; } \
+    > "$FIX/firepertest/zz-fixture.bats"
+  CC_HERM_FIRE_ALLOWLIST="" run bash "$LINT" "$FIX/firepertest"
+  [ "$status" -eq 1 ] || false
+  echo "$output" | grep -q 'AMBIENT' || false
+}
+
+@test "RULE 2 kill switch: CC_HERM_FIRE_RULE=off disables it — with the RED as its positive control" {
+  mk_suite fireleak 'export HOME="$BATS_TEST_TMPDIR/home"' 'run bash ./scripts/handoff-fire.sh --dry-run'
+  CC_HERM_FIRE_ALLOWLIST="" run bash "$LINT" "$FIX/fireleak"
+  [ "$status" -eq 1 ] || false                          # control: the rule DOES fire on this fixture
+  CC_HERM_FIRE_ALLOWLIST="" CC_HERM_FIRE_RULE=off run bash "$LINT" "$FIX/fireleak"
+  [ "$status" -eq 0 ] || false
+}
+
+@test "RULE 2 own-scope: an AMBIENT violation outside the diff is advisory, inside it blocks" {
+  mk_suite fireleak 'export HOME="$BATS_TEST_TMPDIR/home"' 'run bash ./scripts/handoff-fire.sh --dry-run'
+  CC_HERM_FIRE_ALLOWLIST="" CC_HERM_OWN="tests/something-else.bats" run bash "$LINT" "$FIX/fireleak"
+  [ "$status" -eq 0 ] || false
+  echo "$output" | grep -q 'advisory, not blocking' || false
+  CC_HERM_FIRE_ALLOWLIST="" CC_HERM_OWN="tests/zz-fixture.bats" run bash "$LINT" "$FIX/fireleak"
+  [ "$status" -eq 1 ] || false
+  echo "$output" | grep -q 'AMBIENT' || false
+}
+
+@test "the two ratchets are INDEPENDENT — a \$HOME-grandfathered suite is still judged on the gate" {
+  # Why two lists and not one: a shared list could only shrink when BOTH violations were fixed, so
+  # fixing one would be unrewarded and the ratchet would ratchet half as often.
+  mk_suite both 'REPO="$(pwd)"' 'run bash ./scripts/handoff-fire.sh --dry-run'
+  CC_HERM_ALLOWLIST="zz-fixture.bats" CC_HERM_FIRE_ALLOWLIST="" run bash "$LINT" "$FIX/both"
+  [ "$status" -eq 1 ] || false
+  echo "$output" | grep -q 'AMBIENT' || false
+  [ "$(echo "$output" | grep -c 'LEAK')" -eq 0 ] || false     # rule 1 is satisfied; only rule 2 fired
+  # …and the mirror image: grandfathered for rule 2, unlisted for rule 1 ⇒ LEAK only, no AMBIENT.
+  CC_HERM_ALLOWLIST="" CC_HERM_FIRE_ALLOWLIST="zz-fixture.bats" run bash "$LINT" "$FIX/both"
+  [ "$status" -eq 1 ] || false
+  echo "$output" | grep -q 'LEAK' || false
+  [ "$(echo "$output" | grep -c 'AMBIENT')" -eq 0 ] || false
+}
+
+@test "the real tree is clean under BOTH ratchets and the summary reports both counts" {
+  run bash "$LINT"
+  [ "$status" -eq 0 ] || false
+  echo "$output" | grep -q 'grandfathered (\$HOME)' || false
+  echo "$output" | grep -q 'grandfathered (capacity gate)' || false
 }

@@ -15,13 +15,33 @@
 # delete its allowlist line) and the lint FAILS if you fixture one and forget to delete the line,
 # which is what stops a ratchet from silently becoming a permanent exemption list.
 #
-# THE RULE: a suite is hermetic iff its setup() or setup_file() body sets a fixture HOME
+# RULE 1 ($HOME): a suite is hermetic iff its setup() or setup_file() body sets a fixture HOME
 # (`export HOME=` or `HOME="$BATS...`). Per-test HOME does not count — it leaves every OTHER test
 # in the file pointed at live state, which is exactly the failure this catches.
 #
+# RULE 2 (the fire capacity gate) — the SAME CLASS, found 2026-07-29 and folded into this ratchet
+# rather than given a guard of its own, because the failure, the remedy and the ratchet contract are
+# identical; only the seam differs. handoff-fire.sh's `capacity_gate()` (scripts/handoff-fire.sh,
+# `CC_FIRE_CAPACITY_GATE`) reads LIVE `sysctl vm.loadavg` and REFUSES a net-new fire at >= 2.0
+# load/core (exit 9). This box sits permanently at 3.4-7.3/core. So a suite that exercises a net-new
+# fire WITHOUT pinning the gate off does not test its subject at all: it reads AMBIENT MACHINE LOAD
+# and goes red-by-load — the same "result depends on whatever the desk happens to be doing" flake
+# that rule 1 exists to kill. Proven two-sided at 3.39/core on tests/fire-engagement.bats (ambient ->
+# `not ok 14`; `CC_FIRE_CAPACITY_GATE=off` -> `ok 14`).
+#   A suite is compliant iff it does NOT reference handoff-fire at all (out of scope — never
+#   flagged), or its setup()/setup_file() BODY contains `CC_FIRE_CAPACITY_GATE=off` (export or
+#   inline env). Per-test pinning does NOT count, for rule 1's reason verbatim: it leaves every
+#   other test in the file reading ambient state.
+#   Rule 2 carries its OWN grandfather list (EMBEDDED_FIRE_ALLOWLIST), separate from rule 1's and
+#   under the same contract — ONLY EVER DELETE LINES; pinning a suite without deleting its line is
+#   a RED, which is what stops a ratchet from decaying into a permanent exemption list.
+#
 # Exit: 0 = clean · 1 = violation · 2 = bad usage / unreadable scan dir (LOUD, never silent-green)
 #
-# Env seam (selftest only): CC_HERM_ALLOWLIST overrides the embedded allowlist.
+# Env seams (selftest / escape hatch):
+#   CC_HERM_ALLOWLIST       overrides rule 1's embedded allowlist (set-but-empty = no grandfathering)
+#   CC_HERM_FIRE_ALLOWLIST  overrides rule 2's embedded allowlist (same set-but-empty semantics)
+#   CC_HERM_FIRE_RULE=off   kill switch — disables rule 2 entirely, leaving rule 1 exactly as it was
 set -uo pipefail
 # Resolve $0 THROUGH symlinks before deriving ROOT. Everything under ~/.claude/scripts/ is a per-file
 # symlink into this checkout, so a bare `dirname "$0"` yields ~/.claude — which has no tests/ — and the
@@ -146,6 +166,72 @@ wrap-ledger.bats
 ALLOW
 )"
 
+# ── RULE 2's ratchet: suites that exercise handoff-fire WITHOUT pinning CC_FIRE_CAPACITY_GATE=off in
+# setup(). ONLY EVER DELETE LINES FROM THIS LIST. Deliberately a SECOND list and not a merge with the
+# one above: the two rules are independent (a suite can be $HOME-hermetic and load-exposed, or the
+# reverse), so one shared list could only shrink when BOTH were fixed — which is a ratchet that
+# ratchets half as often. Derived by reading the tree, not handed down: for every tests/*.bats that
+# mentions handoff-fire, the setup()/setup_file() body was checked for the pin. Four of these
+# (handoff-fire-capacity-gate, handoff-fire-failed-cleanup, handoff-fire-repo-resolution,
+# handoff-recycle-engagement) DO pin the gate, but per-test only — which is exactly the shape the
+# rule rejects, so they are grandfathered like the rest until the pin moves into setup().
+# The list was derived AGAINST TRUNK at the last possible moment, which is the only way it can be
+# right: while this rule was being written, three suites (fire-engagement, handoff-fire-focus,
+# handoff-fire-payload-lint) were pinned and landed by a sibling — listing them from an earlier
+# reading would have shipped a ratchet that was stale on arrival, i.e. RED on its first run.
+EMBEDDED_FIRE_ALLOWLIST="$(cat <<'FIREALLOW'
+cc-backlog.bats
+cc-classify.bats
+cc-close-attrib.bats
+cc-recover-safeguard.bats
+cc-relogin.bats
+cc-teardown.bats
+cc-wave-plan-verdict.bats
+cc-wave-plan.bats
+claude-accounts-core.bats
+claude-accounts-fresh-lock-bound.bats
+desk-invariant.bats
+desk-land.bats
+desk-register.bats
+fire-autonomy.bats
+handoff-close-mail-guard.bats
+handoff-fire-account-sweep.bats
+handoff-fire-capacity-gate.bats
+handoff-fire-completion-push.bats
+handoff-fire-failed-cleanup.bats
+handoff-fire-inject.bats
+handoff-fire-it2-bound.bats
+handoff-fire-repo-resolution.bats
+handoff-fire-tab-window-typing.bats
+handoff-fire-typed-cmd-correctable.bats
+handoff-fire-validate.bats
+handoff-lifecycle-record.bats
+handoff-orphaned-assignee.bats
+handoff-payload-gates.bats
+handoff-recycle-durable-cwd.bats
+handoff-recycle-engagement.bats
+handoff-selfclose-session-pin.bats
+handoff-selfclose-teammate-gate.bats
+handoff-selfclose.bats
+handoff-splitright.bats
+handoff-teardown-marker.bats
+it2-wrapper.bats
+lead-crash-watchdog.bats
+notify-back.bats
+self-path-lint.bats
+teammate-auto-shutdown.bats
+waiting-recycle.bats
+FIREALLOW
+)"
+
+# Rule 2's runtime knobs. Globals rather than lint_dir parameters ON PURPOSE: lint_dir's ARITY is
+# load-bearing — `[ "$#" -ge 3 ]` is what separates "no own-set supplied ⇒ strict" from "own-set
+# supplied but empty ⇒ nothing blocks", so a 4th positional would force every caller that wants a
+# fire allowlist to also invent an own-set, silently flipping the own-scope state it never meant to
+# touch. `-` not `:-` on the seam, so set-but-EMPTY legitimately means "grandfather nothing".
+FIRE_ALLOW="${CC_HERM_FIRE_ALLOWLIST-$EMBEDDED_FIRE_ALLOWLIST}"
+FIRE_RULE="${CC_HERM_FIRE_RULE:-on}"
+
 # The setup()/setup_file() bodies of a suite. Terminator is a bare `}` at column 0 — the convention
 # every suite in tests/ follows; the extraction was verified against all 118 before this landed.
 setup_bodies() {
@@ -201,6 +287,49 @@ is_hermetic() {
   return 0                        # fail-SAFE: 'hermetic' cannot fabricate a LEAK
 }
 
+# ── RULE 2's two predicates. Same shape as is_hermetic(): the same 3-try retry, the same
+# CHECK_FAILED third state, and a fail-SAFE direction chosen so a check that could not RUN can never
+# fabricate a violation naming a good suite (the 2026-07-26 incident this file's PREDICATE RETRY
+# block documents). CHECK_FAILED still forces exit 2, so fail-safe never becomes a silent green.
+
+# Is this suite in scope for rule 2 at all? 0 = it references handoff-fire · 1 = it does not.
+# Fail-SAFE = 1 (out of scope): an unreadable scope check must not pull a suite INTO the rule.
+# Textual by design — a suite that reaches the fire only through some other wrapper is not matched,
+# which is a known and accepted floor: the ratchet binds where the evidence is unambiguous.
+references_fire() {
+  local rc
+  for _ in 1 2 3; do
+    grep -qF 'handoff-fire' "$1" 2>/dev/null; rc=$?
+    case "$rc" in
+      0) return 0 ;;
+      1) return 1 ;;
+    esac
+    sleep 1                       # transient fork pressure — see PREDICATE RETRY above
+  done
+  CHECK_FAILED=1
+  echo "test-hermeticity-lint: ⛔ fire-scope check could not RUN for $1 after 3 tries (grep rc=$rc)" >&2
+  return 1                        # fail-SAFE: 'not in scope' cannot fabricate an AMBIENT violation
+}
+
+# 0 = pins CC_FIRE_CAPACITY_GATE=off in setup() · 1 = does not.
+# Fail-SAFE = 0 (pinned): 'pinned' cannot fabricate an AMBIENT violation. It COULD in principle
+# fabricate a stuck-ratchet line for an allowlisted suite — but CHECK_FAILED makes the whole run
+# exit 2 with an explicit "this is NOT a violation report", exactly as is_hermetic already does.
+is_fire_pinned() {
+  local rc
+  for _ in 1 2 3; do
+    setup_bodies "$1" | grep -qF 'CC_FIRE_CAPACITY_GATE=off'; rc=$?
+    case "$rc" in
+      0) return 0 ;;
+      1) return 1 ;;
+    esac
+    sleep 1                       # transient fork pressure — see PREDICATE RETRY above
+  done
+  CHECK_FAILED=1
+  echo "test-hermeticity-lint: ⛔ capacity-pin check could not RUN for $1 after 3 tries (grep rc=$rc)" >&2
+  return 0                        # fail-SAFE: 'pinned' cannot fabricate an AMBIENT violation
+}
+
 # 0 = present · 1 = absent · sets CHECK_FAILED if the check could not run
 in_allowlist() {
   local rc
@@ -254,6 +383,7 @@ in_own() {  # $1=basename · $2=own-set text · $3=1 if an own-set was supplied 
 # lint <tests-dir> <allowlist-text> [own-set-text] — 0 clean · 1 violations · 2 unusable scan dir
 lint_dir() {
   local dir="$1" allow="$2" own="${3:-}" own_scoped=0 f base new_leak=0 stuck=0 seen=0 other=0
+  local fire_allow="$FIRE_ALLOW" fire_leak=0 fire_stuck=0
   [ "$#" -ge 3 ] && own_scoped=1
   CHECK_FAILED=0
   [ -d "$dir" ] || { echo "test-hermeticity-lint: ⛔ not a directory: $dir" >&2; return 2; }
@@ -281,6 +411,30 @@ lint_dir() {
         other=$((other + 1))
       fi
     fi
+    # ── RULE 2, applied INDEPENDENTLY of rule 1 (a suite can violate either, both, or neither) and
+    # ONLY to suites that reference handoff-fire. A suite that never touches the fire is out of
+    # scope and must never appear here — that scoping is the whole reason references_fire() exists.
+    if [ "$FIRE_RULE" = on ] && references_fire "$f"; then
+      if is_fire_pinned "$f"; then
+        if in_allowlist "$base" "$fire_allow"; then
+          if in_own "$base" "$own" "$own_scoped"; then
+            printf '  RATCHET-CAP  %s pins the capacity gate now — delete its FIRE allowlist line\n' "$base"
+            fire_stuck=$((fire_stuck + 1))
+          else
+            printf '  ratchet-cap? %s pins the gate but is still grandfathered (NOT in your diff — advisory)\n' "$base"
+            other=$((other + 1))
+          fi
+        fi
+      elif ! in_allowlist "$base" "$fire_allow"; then
+        if in_own "$base" "$own" "$own_scoped"; then
+          printf '  AMBIENT  %s: setup() does not pin CC_FIRE_CAPACITY_GATE=off — its fires read live machine load\n' "$base"
+          fire_leak=$((fire_leak + 1))
+        else
+          printf '  ambient? %s does not pin CC_FIRE_CAPACITY_GATE=off (NOT in your diff — advisory, not blocking)\n' "$base"
+          other=$((other + 1))
+        fi
+      fi
+    fi
   done
   [ "$seen" -gt 0 ] || { echo "test-hermeticity-lint: ⛔ no .bats suites under $dir" >&2; return 2; }
   [ "$other" -eq 0 ] || echo "test-hermeticity-lint: $other pre-existing violation(s) NOT in your diff — reported, not blocking (own-scope)."
@@ -303,8 +457,26 @@ lint_dir() {
     echo "test-hermeticity-lint: ⛔ $stuck suite(s) above are fixed but still grandfathered."
     echo "  Fix: delete their lines from EMBEDDED_ALLOWLIST in $0 — the ratchet only shrinks."
   fi
-  [ $((new_leak + stuck)) -eq 0 ] || return 1
-  echo "test-hermeticity-lint: clean — $seen suite(s); $(printf '%s\n' "$allow" | grep -c .) grandfathered, 0 new leaks."
+  if [ "$fire_leak" -gt 0 ]; then
+    echo "test-hermeticity-lint: ⛔ $fire_leak suite(s) above exercise handoff-fire against AMBIENT machine load."
+    echo "  WHY: handoff-fire's capacity_gate() refuses a net-new fire above ${CC_FIRE_MAX_LOAD_PER_CORE:-2.0}/core"
+    echo "       and this box lives well above that, so the suite goes red-by-load, not by its subject."
+    echo "  Fix: in setup(), \`export CC_FIRE_CAPACITY_GATE=off\`. Do NOT add to the fire allowlist."
+  fi
+  if [ "$fire_stuck" -gt 0 ]; then
+    echo "test-hermeticity-lint: ⛔ $fire_stuck suite(s) above pin the capacity gate but are still grandfathered."
+    echo "  Fix: delete their lines from EMBEDDED_FIRE_ALLOWLIST in $0 — the ratchet only shrinks."
+  fi
+  [ $((new_leak + stuck + fire_leak + fire_stuck)) -eq 0 ] || return 1
+  # The summary must say what was ENFORCED, not what is merely on disk: with rule 2 killed, printing
+  # its grandfather count would read as "43 suites checked and grandfathered" when zero were checked.
+  local fire_note
+  if [ "$FIRE_RULE" = on ]; then
+    fire_note="$(printf '%s\n' "$fire_allow" | grep -c .) grandfathered (capacity gate)"
+  else
+    fire_note="capacity-gate rule OFF (CC_HERM_FIRE_RULE)"
+  fi
+  echo "test-hermeticity-lint: clean — $seen suite(s); $(printf '%s\n' "$allow" | grep -c .) grandfathered (\$HOME), $fire_note, 0 new leaks."
   return 0
 }
 
@@ -327,7 +499,50 @@ setup() {
 }
 @test "x" { true; }
 F
+  # ── RULE 2 fixtures. All four are $HOME-hermetic on purpose, so a rule-2 verdict can never be
+  # rule 1 leaking through: the ONLY axis that varies is the handoff-fire reference and the pin.
+  # nofire is byte-identical to fireleak MINUS the reference — the scope control for case (r).
+  mkdir -p "$d/nofire" "$d/fireleak" "$d/firepin" "$d/firepertest"
+  cat >"$d/nofire/zz-fixture.bats" <<'F'
+#!/usr/bin/env bats
+setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  SUBJECT="$REPO/scripts/some-other-tool.sh"
+}
+@test "x" { run bash "$SUBJECT" --dry-run; }
+F
+  cat >"$d/fireleak/zz-fixture.bats" <<'F'
+#!/usr/bin/env bats
+setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  SUBJECT="$REPO/scripts/handoff-fire.sh"
+}
+@test "x" { run bash "$SUBJECT" --dry-run; }
+F
+  cat >"$d/firepin/zz-fixture.bats" <<'F'
+#!/usr/bin/env bats
+setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  export CC_FIRE_CAPACITY_GATE=off
+  SUBJECT="$REPO/scripts/handoff-fire.sh"
+}
+@test "x" { run bash "$SUBJECT" --dry-run; }
+F
+  cat >"$d/firepertest/zz-fixture.bats" <<'F'
+#!/usr/bin/env bats
+setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  SUBJECT="$REPO/scripts/handoff-fire.sh"
+}
+@test "a" { CC_FIRE_CAPACITY_GATE=off run bash "$SUBJECT" --dry-run; }
+@test "b" { run bash "$SUBJECT" --dry-run; }
+F
   fails=0
+  # Pin BOTH rule-2 knobs for the duration of the selftest: an ambient CC_HERM_FIRE_RULE=off or a
+  # stray CC_HERM_FIRE_ALLOWLIST in the caller's environment would otherwise make every rule-2
+  # assertion below pass VACUOUSLY, which is the one way a discrimination proof can lie.
+  FIRE_RULE=on
+  FIRE_ALLOW=""
   lint_dir "$d/leak" ""               >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a NEW non-hermetic suite did not go RED"; fails=1; }
   lint_dir "$d/herm" "zz-fixture.bats" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a fixed-but-still-allowlisted suite did not go RED (ratchet not shrinking)"; fails=1; }
   lint_dir "$d/herm" ""                >/dev/null 2>&1 || { echo "SELFTEST FAIL: a hermetic suite did not go GREEN"; fails=1; }
@@ -336,11 +551,14 @@ F
   # (exit 1). An unscannable dir is a NON-VERDICT (exit 2) and says nothing whatever about the
   # allowlist. Collapsing them is how the ROOT bug above surfaced as "your ratchet is stale" —
   # the same verdict/non-verdict conflation ship-land keeps apart as gate-red 6 vs gate-killed 9.
+  # Both embedded allowlists are judged here, so a stale entry in EITHER ratchet is caught by (e).
+  FIRE_ALLOW="$EMBEDDED_FIRE_ALLOWLIST"
   lint_dir "$ROOT/tests" "$EMBEDDED_ALLOWLIST" >/dev/null 2>&1; rc_real=$?
+  FIRE_ALLOW=""
   case "$rc_real" in
     0) ;;
     2) echo "SELFTEST FAIL: could not scan $ROOT/tests — a NON-VERDICT (bad ROOT?), NOT a stale allowlist"; fails=1 ;;
-    *) echo "SELFTEST FAIL: the embedded allowlist is stale — the real tree is not clean"; fails=1 ;;
+    *) echo "SELFTEST FAIL: an embedded allowlist is stale (\$HOME and/or capacity-gate) — the real tree is not clean"; fails=1 ;;
   esac
   lint_dir "$d/nope" ""               >/dev/null 2>&1; [ "$?" -eq 2 ] || { echo "SELFTEST FAIL: a missing scan dir did not exit 2 (LOUD)"; fails=1; }
   # ── OWN-SCOPE: both directions, because a scope that can only PASS is not a scope ────────────
@@ -381,8 +599,50 @@ F
     exit 0
   ) || fails=1
 
+  # ── RULE 2 (capacity gate) — the same two-sided discipline, plus a SCOPE control, because a rule
+  # that fires on everything would pass every RED assertion below while being worthless. ──────────
+  # (p) RED: a suite that drives handoff-fire without pinning the gate reads AMBIENT machine load.
+  lint_dir "$d/fireleak" "" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: an UNPINNED handoff-fire suite did not go RED (rule 2 is inert)"; fails=1; }
+  # (q) GREEN: the same suite with the pin in setup() — the fix the RED prescribes actually clears it.
+  lint_dir "$d/firepin" "" >/dev/null 2>&1 || { echo "SELFTEST FAIL: a suite pinning CC_FIRE_CAPACITY_GATE=off in setup() did not go GREEN"; fails=1; }
+  # (r) SCOPE CONTROL for (p): the same suite MINUS the handoff-fire reference must be GREEN. Without
+  #     this, (p) could be passing because rule 2 flags every suite, not because that suite fires.
+  lint_dir "$d/nofire" "" >/dev/null 2>&1 || { echo "SELFTEST FAIL: a suite that never mentions handoff-fire was flagged — rule 2 is not scoped"; fails=1; }
+  # (s) RED: pinned but STILL on the fire allowlist — the second ratchet may only ever shrink.
+  FIRE_ALLOW="zz-fixture.bats"
+  lint_dir "$d/firepin" "" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a pinned-but-still-grandfathered suite did not go RED (fire ratchet is not shrinking)"; fails=1; }
+  # (t) GREEN: unpinned but grandfathered — today's list must not block anybody. Pairs with (s):
+  #     together they show the fire allowlist is consulted in BOTH directions, not just one.
+  lint_dir "$d/fireleak" "" >/dev/null 2>&1 || { echo "SELFTEST FAIL: a grandfathered unpinned suite did not go GREEN"; fails=1; }
+  FIRE_ALLOW=""
+  # (u) per-TEST pinning does NOT count — rule 1's reason verbatim: every OTHER test in the file is
+  #     still on ambient load. Four suites in the tree are grandfathered for exactly this shape.
+  lint_dir "$d/firepertest" "" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a per-TEST CC_FIRE_CAPACITY_GATE counted as pinned"; fails=1; }
+  # (w) own-scope governs rule 2 as well: advisory OUTSIDE the lander's diff, blocking INSIDE it.
+  lint_dir "$d/fireleak" "" "some-other-suite.bats" >/dev/null 2>&1 || { echo "SELFTEST FAIL: an AMBIENT violation OUTSIDE the own-set blocked"; fails=1; }
+  lint_dir "$d/fireleak" "" "zz-fixture.bats" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: an AMBIENT violation INSIDE the own-set did not block"; fails=1; }
+  # (x) COULD-NOT-CHECK survives rule 2: an unrunnable predicate is a NON-VERDICT (exit 2) and must
+  #     never print an AMBIENT line naming a suite nobody was able to check. The output test is a
+  #     `case`, not a grep — grep is the very thing stubbed here, so a grep-based assertion would be
+  #     structurally incapable of failing (a dead assertion wearing an assertion's clothes).
+  ( grep() { return 2; }
+    out="$(lint_dir "$d/fireleak" "" 2>&1)"; rc=$?
+    [ "$rc" -eq 2 ] || { echo "SELFTEST FAIL: an unrunnable rule-2 predicate did not exit 2 (got $rc)"; exit 1; }
+    case "$out" in *AMBIENT*) echo "SELFTEST FAIL: an unrunnable rule-2 predicate still fabricated an AMBIENT line"; exit 1 ;; esac
+    exit 0
+  ) || fails=1
+  # (y) entrypoint parity for the CC_HERM_FIRE_ALLOWLIST seam, both directions — the RED half is
+  #     also the positive control for the kill switch in (z), which is the identical command + one
+  #     variable. Rule 1's allowlist is emptied in both so only rule 2 can produce the verdict.
+  #     CC_HERM_FIRE_RULE=on is passed explicitly so an ambient kill switch in the CALLER's
+  #     environment cannot neuter the child and turn (y)'s RED half into an unexplained failure.
+  ( CC_HERM_ALLOWLIST="" CC_HERM_FIRE_ALLOWLIST="" CC_HERM_FIRE_RULE=on "$SELF" "$d/fireleak" >/dev/null 2>&1 ); [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: CC_HERM_FIRE_ALLOWLIST set-but-empty did not block at the entrypoint"; fails=1; }
+  ( CC_HERM_ALLOWLIST="" CC_HERM_FIRE_ALLOWLIST="zz-fixture.bats" CC_HERM_FIRE_RULE=on "$SELF" "$d/fireleak" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: CC_HERM_FIRE_ALLOWLIST did not grandfather at the entrypoint"; fails=1; }
+  # (z) the kill switch turns rule 2 off — and ONLY rule 2 (rule 1 still judges the same tree).
+  ( CC_HERM_ALLOWLIST="" CC_HERM_FIRE_ALLOWLIST="" CC_HERM_FIRE_RULE=off "$SELF" "$d/fireleak" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: CC_HERM_FIRE_RULE=off did not disable rule 2"; fails=1; }
+
   if [ "$fails" -eq 0 ]; then
-    echo "test-hermeticity-lint --selftest: 17/17 — RED on a new leak + on a stuck ratchet entry, GREEN on hermetic + grandfathered, GREEN on the real tree, LOUD on a bad dir, own-scope blocks INSIDE / advises OUTSIDE for both violation kinds (path-form accepted), and NON-VERDICT on an unrunnable check (with and without an own-set)."
+    echo "test-hermeticity-lint --selftest: 29/29 — RULE 1 (\$HOME): RED on a new leak + on a stuck ratchet entry, GREEN on hermetic + grandfathered, GREEN on the real tree, LOUD on a bad dir, own-scope blocks INSIDE / advises OUTSIDE for both violation kinds (path-form accepted), NON-VERDICT on an unrunnable check (with and without an own-set). RULE 2 (capacity gate): RED on an unpinned handoff-fire suite + on a per-test pin + on a stuck fire-ratchet entry, GREEN on a setup()-pinned suite + on a grandfathered one + on a suite that never mentions handoff-fire (the scope control), own-scope honoured both ways, NON-VERDICT on an unrunnable fire predicate, and both env seams (CC_HERM_FIRE_ALLOWLIST, CC_HERM_FIRE_RULE=off) proved at the entrypoint."
     exit 0
   fi
   echo "test-hermeticity-lint --selftest: FAILED — the ratchet does not discriminate."
