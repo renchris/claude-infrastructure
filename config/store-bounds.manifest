@@ -1,0 +1,45 @@
+# store-bounds.manifest — every append-only store that grows without a bound, and the cap it must
+# stay under. Read by scripts/store-bounds-census.sh (M9c, MACHINE_CAPACITY_V2.md §11.3).
+#
+# WHY A MANIFEST AND NOT EIGHT FIXES. §8.5.5 named eight unbounded stores. Fixing them one at a time
+# leaves the CLASS alive: the ninth store ships next week with nobody watching it, because nothing in
+# the repo knows that "a store must have a bound" is a rule. A declared cap per store turns eight spot
+# fixes into one mechanism plus eight one-line rows, and adding a row is the cheapest possible way to
+# put a new store under watch.
+#
+# THE CENSUS NEVER DELETES, ROTATES, OR TRUNCATES. It measures, compares, and PAGES. Deletion is the
+# destination's property, never the census's decision (memory append-only-store-safety-rules — an
+# `mv -f` "archive" destroyed 1,461 lines). Each row therefore carries the REMEDY as text for the
+# owner to run, not a command this tool will execute.
+#
+# FORMAT — one store per line, four `|`-separated fields; `#` comments and blank lines ignored:
+#
+#   <glob>|<max_mb>|<owner-row>|<remedy>
+#
+#   glob      Path relative to $HOME/.claude (never absolute, never containing `..`). Ordinary shell
+#             glob; it is expanded ONE level as written and never walked recursively — deliberately,
+#             because a recursive walk over ~/.claude would traverse the 7,359-file / 4.26 GB
+#             transcript corpus under projects/ on every run and become its own load problem.
+#             A glob matching several files (a `.bak-*` set) is summed and judged as ONE store.
+#   max_mb    Integer cap. A no-match glob sums to 0 and is trivially under cap — an absent store is
+#             genuinely not a growth problem.
+#   owner-row The MACHINE_CAPACITY_V2 row that owns the remedy, or `-` when unowned. The census does
+#             not fix anything, so a bound without a named owner is a page nobody can action.
+#   remedy    Free text (may contain `|`), shown verbatim on the page.
+#
+# CALIBRATION — CAPS ARE A RATCHET, NOT A FORECAST. Each cap is set just above the store's measured
+# size at 2026-07-30 so that GROWTH pages while today's steady state stays quiet. The two exceptions
+# are deliberate and expected to page on the very first live run (AC20 — a ratchet that cannot
+# demonstrate a catch is indistinguishable from one that is broken):
+#   · logs/bash-execution.log        measured 36 MB against a 24 MB cap
+#   · state/session-index.db.bak-*   measured ~49 MB against a 1 MB cap
+# Raising a cap is a decision with a reason, made in a commit — never a silent edit to quiet a page.
+
+logs/bash-execution.log|24|6|rotate: gzip+truncate per its own header
+logs/bash-commands.log|48|6|same
+autonomy/idl.jsonl|32|10|archive-compact per idl chain
+logs/teammate-checkpoint.log|24|6|rotate
+session-index.db|96|9|retention backlogged b0d889846885
+state/session-index.db.bak-*|1|9|stale backup — delete candidate, operator call
+logs/cc-reaper.log|16|4|rotate
+history.jsonl|16|-|rotate
