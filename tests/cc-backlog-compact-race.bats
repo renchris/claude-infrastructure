@@ -23,6 +23,10 @@
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   CB="$REPO/bin/cc-backlog"
+  # $HOME is fixtured even though CC_BACKLOG_FILE redirects the ledger: cc-backlog resolves other
+  # paths under $HOME (the kick marker, the sessions-bin lookup), and the hermeticity ratchet's rule
+  # is the file, not the specific read — a suite that touches live ~/ at all contaminates the run.
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME/.claude"
   export CC_BACKLOG_FILE="$BATS_TEST_TMPDIR/backlog.jsonl"
   export CC_BACKLOG_LOCK_DIR="$BATS_TEST_TMPDIR/compact.lock.d"
   export CC_BACKLOG_KICK=off          # no detached cc-dispatch kick from `add` during tests
