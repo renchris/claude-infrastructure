@@ -51,7 +51,7 @@ mkb() { printf '#!/usr/bin/env bats\n%s\n' "$2" > "$D/$1.bats"; }
   [ "$status" -eq 0 ]
   echo "$output" | grep -q 'NOT on a line in your diff' || false
   # …and the finding must NOT be printed as a blocking line
-  echo "$output" | grep -q 'SHELLCHECK ' && false || true
+  ! echo "$output" | grep -q 'SHELLCHECK ' || false
 }
 
 @test "a SET-BUT-EMPTY own-set means 'I wrote no line' — nothing blocks" {
@@ -102,7 +102,7 @@ mkb() { printf '#!/usr/bin/env bats\n%s\n' "$2" > "$D/$1.bats"; }
   run env -u CC_BATS_SC_OWN "$L" "$D/plain.bats"
   echo "$output" | grep -q 'SC1007' || false        # the defect IS seen when analysis runs
   run env -u CC_BATS_SC_OWN "$L" "$D/abort.bats"
-  echo "$output" | grep -q 'SC1007' && false || true # …and is INVISIBLE when it aborts
+  ! echo "$output" | grep -q 'SC1007' || false       # …and is INVISIBLE when it aborts
   echo "$output" | grep -q 'UNANALYZABLE' || false   # …but the abort itself is never silent
 }
 
@@ -120,7 +120,7 @@ mkb() { printf '#!/usr/bin/env bats\n%s\n' "$2" > "$D/$1.bats"; }
   # that is what makes the gate's cost proportional to the diff.)
   run env CC_BATS_SC_OWN="$D/other.bats:2" "$L" "$D/abort.bats"
   [ "$status" -eq 0 ]
-  echo "$output" | grep -q 'UNANALYZABLE' && false || true
+  ! echo "$output" | grep -q 'UNANALYZABLE' || false
   echo "$output" | grep -qE 'no scanned suite|clean' || false
 }
 
@@ -137,7 +137,7 @@ mkb() { printf '#!/usr/bin/env bats\n%s\n' "$2" > "$D/$1.bats"; }
 }'
   run env CC_BATS_SC_OWN="$D/mine.bats:3" "$L" "$D/dirty.bats" "$D/mine.bats"
   [ "$status" -eq 0 ]
-  echo "$output" | grep -q 'SC1007' && false || true
+  ! echo "$output" | grep -q 'SC1007' || false
   echo "$output" | grep -q '1 suite(s) scanned' || false
 }
 
@@ -191,12 +191,13 @@ mkb() { printf '#!/usr/bin/env bats\n%s\n' "$2" > "$D/$1.bats"; }
   # $output-clobbering rewrite §3 of the DoD doc measured and rejected — these negations sit between
   # a `run` and a later assertion on that run's output. Deadness is owned by
   # scripts/bats-assert-liveness.py, which uses bats itself as its oracle and runs at the same gate.
+  # Built on ONE line, unlike the other fixtures here: this body contains an assertion-shaped line
+  # (`! echo …`), and the liveness analyzer tracks quotes per line, so a MULTI-line single-quoted
+  # argument leaves its continuation lines looking like this suite's own code — a false positive on
+  # the fixture, and the fixer would then edit the fixture. Any fixture body carrying `!`, `[[ ]]`
+  # or `(( ))` belongs on one line for the same reason.
   # shellcheck disable=SC2016
-  mkb neg '@test "x" {
-  run true
-  [ "$status" -eq 0 ]
-  ! echo "$output" | grep -q nope
-}'
+  printf '%s\n' '#!/usr/bin/env bats' '@test "x" {' '  run true' '  [ "$status" -eq 0 ]' '  ! echo "$output" | grep -q nope' '}' > "$D/neg.bats"
   run env -u CC_BATS_SC_OWN "$L" "$D/neg.bats"
   [ "$status" -eq 0 ]
   # …and shellcheck really does flag it, so the exclusion is what keeps this green (not its absence)
@@ -211,7 +212,7 @@ mkb() { printf '#!/usr/bin/env bats\n%s\n' "$2" > "$D/$1.bats"; }
   [ "$status" -eq 0 ]
   # Every emitted token must be tests/<f>.bats:<n> — a malformed token would silently widen or
   # narrow the blocking set.
-  echo "$output" | grep -vE '^tests/[^:]+\.bats:[0-9]+$' | grep -q . && false || true
+  ! echo "$output" | grep -vE '^tests/[^:]+\.bats:[0-9]+$' | grep -q . || false
 }
 
 @test "--own-lines on a range with no .bats change is EMPTY, not an error" {
@@ -241,7 +242,7 @@ mkb() { printf '#!/usr/bin/env bats\n%s\n' "$2" > "$D/$1.bats"; }
   # match is handed to `bash -n`, which fails on all 189 suites. If a future change widens it, this
   # fails here rather than turning every test-touching land red.
   run bash -c 'source_fn() { sed -n "/^is_shell_file()/,/^}/p" scripts/ship-land.sh; }; source_fn'
-  echo "$output" | grep -q 'bats' && false || true
+  ! echo "$output" | grep -q 'bats' || false
 }
 
 @test "bash -n really does fail on a bats file — the reason .bats stays out of \$shellfiles" {
