@@ -694,8 +694,32 @@ Everything below in this section still holds except where this delta overrides i
   `--relogin-status` says `next DUE`, because a `login_warn_h` filter caps it at 72h and hides a 90h
   cliff — row 7's finding, reproduced. **Row 7 holds `next`, row 8 holds `next4`, `next2` is the
   coordinator's ⇒ fire row 11 on `next3`.**
-- **Landed this session, all three verified ancestors of origin/main:** `34e91fd8` (row 11 payload) ·
-  `deabc75b` (retraction) · `88e0d349` (zsh trap into both campaign SSOTs).
+- 🚨 **THE COORDINATOR→ROW CHANNEL IS STRUCTURALLY ONE-WAY, AND EVERY REMAINING PAYLOAD MUST FIX IT
+  (row 11's now does — copy its STEP 0 into rows 9 and 6).** Two compounding defects, both measured:
+  (a) **`cc-await-ping` accepts a SESSION id but mailboxes are keyed on PANE uuid**, so the watcher
+  polls a file that can never exist and blocks its full timeout on a void — backlog `6fe942c0eee5`,
+  and the tell is an **ABSENT** `.seen` cursor (`seen=none`), not `seen=0`. A census found **4 of 13
+  armed watchers fleet-wide on session-id keys, including BOTH live rebuild rows** (row 7 armed
+  `85233c18…`, row 8 armed `9a2d094f…`; neither pane uuid was armed at all) — so both rows *believe*
+  they have a wake path and have none. **The predecessor brief's instruction to "arm a second on your
+  own session id too" produces exactly this dead watcher — do not repeat it.**
+  (b) **`hooks/mailbox-drain.sh` is wired to only SessionStart + UserPromptSubmit** in all five live
+  config dirs (verified by parsing each `settings.json`). Both are session- or human-gated, so a row
+  inside an hours-long autonomous turn passes NEITHER and never drains. That is failure **R-2** in
+  `docs/research/cross-session-mail-2026-07-20.md`; the mid-turn `PostToolUse` boundary is staged and
+  un-run in `12-mailbox-posttool-activate.sh`, whose own header records this as what "let the live
+  desk sit on 57 unacked pages for 2 h WHILE WORKING."
+  **Consequences for the coordinator role, and they are not small:** a ruling you "send" mid-turn is
+  write-only; `pgrep -fl cc-await-ping` proves a watcher RUNS, never that it can fire; and you must
+  never read a row's silence as agreement. Always prove with
+  `cc-notify --receipt <uuid> <line>` and treat `seen=0` as NOT TOLD. Mitigation that worked here:
+  row 7 had pre-committed to the action I approved, so silence produced the approved outcome — but
+  that was luck, not design. Operator fix, and it restores the whole loop:
+  `CONFIRM=1 bash ~/.claude/autonomy/pending-activation/12-mailbox-posttool-activate.sh`.
+- **Landed this session, verified ancestors of origin/main by CONTENT and by subject-resolved sha
+  (row 10's sha-drift trap: a local sha reads NOT-ancestor while its content is on trunk):**
+  `34e91fd8` (row 11 payload) · `deabc75b` (retraction) · `88e0d349` (zsh trap into both campaign
+  SSOTs) · `e6c93e69` (this delta).
 
 - **Map is 13 rows now, not 12** (row 13 machine-capacity was added by a parallel session and
   **RATIFIED** by this coordinator — see the ratification section above). **UPDATED 19:0xZ: 8 DONE

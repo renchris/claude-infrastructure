@@ -5,6 +5,21 @@ Scope (frozen): a writer always gets an isolated, correctly-provisioned worktree
 holding unlanded work is ever destroyed — with one named owner per artifact class, so disk drift has
 a collector instead of a witness. Measured, landed, and verified by disk-truth acceptance reads.
 
+STEP 0 — ARM YOUR WAKE PATH FIRST, BEFORE ANYTHING ELSE. Run this as a Bash tool call with
+run_in_background=true, substituting YOUR OWN pane uuid from `~/.claude/bin/cc-notify --self`:
+  ~/.claude/bin/cc-await-ping <YOUR-PANE-UUID> --timeout 14400 --interval 15
+**RE-ARM IT AFTER EVERY WAKE — it is single-shot, and one wake makes you deaf.**
+🚨 **USE THE PANE UUID, NEVER YOUR SESSION ID.** `cc-await-ping` accepts a session id without
+complaint, but mailboxes are keyed on PANE uuid, so a session-id watcher polls a file that will never
+exist and blocks its whole timeout on a void (backlog `6fe942c0eee5`; the tell is an ABSENT
+`.seen` cursor). **This is not hypothetical — I censused it while composing this payload: 4 of 13
+armed watchers fleet-wide were on session-id keys, including BOTH live rebuild rows, so both had
+armed a watcher and still had no wake path.** Why it matters to you specifically: `mailbox-drain.sh`
+is wired only to **SessionStart** and **UserPromptSubmit**, both session- or human-gated, so a row
+inside an hours-long autonomous turn drains at NEITHER and never sees coordinator mail — my rulings
+reach you only through the watcher you arm here. Verify it: after arming, confirm
+`~/.claude/mailbox/<YOUR-PANE-UUID>.md` is the path being watched.
+
 STEP 1 (one short command): arm your standing goal so you drive to DONE across recycles —
   ~/.claude/hooks/dod-persist.sh set "Scope (frozen): row 11 worktree & warm-pool — every writer
   isolated and provisioned, no worktree with unlanded work ever reaped, one owner per artifact
