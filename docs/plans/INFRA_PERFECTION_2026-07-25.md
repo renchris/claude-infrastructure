@@ -442,6 +442,40 @@ on a mechanism fact without re-verifying the wall.
   can only make it fail-OPEN — i.e. permit a removal it should block. That trips Follow-On Gate F3
   (safety envelope) ⇒ **named and backlogged, not silently changed.**
 
+### Post-land follow-through — running the HAND-MERGED suites found two real defects
+
+The land's fast lane runs statics + ratchets and no corpus, so after landing I ran the suites whose
+SUBJECTS this land hand-merged — the union files, which by construction no single side's tests cover.
+Two reds, both genuine, both fixed:
+
+- **`rotate-autonomy-logs.bats` (`1e77d64c`)** — my union took DEFAULT_TARGETS from 13 to 15, but the
+  suite's fixture still listed 13. A target with no fixture file counts SKIPPED, so it reded both
+  `"rotated":13` and `"skipped":0`. Fixture + counts corrected; 14/14.
+- **`cc-classify` G1 (`e74208fa`) — a LIVE reap-a-live-operator-conversation defect on trunk.**
+  I had kept the stranded branch's 3 G1 tests while dropping its code (its `${CI_LIB_MISSING:-1}`
+  form referenced a variable trunk had deleted, so applying it verbatim would have held EVERY
+  session forever). Running them measured the real behaviour on the incident fixture:
+  **lib resolvable ⇒ `owned-wait`; lib UNRESOLVABLE ⇒ `finished` = REAPABLE.**
+  The §4.7 comment had argued no such branch was needed because "every world that makes the WHO-scan
+  unreadable ALSO denies this function a last-assistant timestamp". True for an unreadable
+  *transcript* — **false for a missing *lib***: the transcript reads fine, IDLE is computed normally,
+  the `IDLE<0` fail-safe never fires, and `last_interactive_epoch()` returns 1 for a MISSING PRIMITIVE
+  exactly as it does for "nobody typed". Fixed by keying on `command -v ci_last_interactive_epoch`
+  (the wrapper's own predicate, so it cannot drift). Reachable via ordinary deploy lag —
+  `hooks/lib/idl-log.sh` is live-missing on this box for precisely that reason.
+
+  **Not theoretical, and not finished:** `bin/cc-teardown` (3 uses) and
+  `hooks/teammate-auto-shutdown.sh` (5 uses) consume the same primitive with **no such guard**, and
+  both **CLOSE PANES** — strictly higher blast radius than the classifier. `hooks/lib/context-econ.sh`
+  likewise (2 uses). Filed as **backlog `319831157e33`** with a per-site *measured-proof* DoD rather
+  than fixed off a grep (memory `third-state-skips-the-unnamed-gate`: the defect survives in the leg
+  a residual list calls strong).
+
+**Method note worth keeping:** a green ratchet does not prove the suites pass, and a passing land
+does not prove the corpus. Both defects above were invisible to the landing gate and were found only
+by running the union files' own suites. Also: two bats runs were CUT by my own `timeout` bound and a
+cut is a NON-VERDICT, never a pass (`0 not ok` at test 17 of 58 means nothing).
+
 ### Residual — operator-owned, none blocking
 
 - **Live deploy lag (2 links).** `./install.sh` from the main checkout, or the two exact `ln -sf`
