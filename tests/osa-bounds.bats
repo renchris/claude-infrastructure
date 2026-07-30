@@ -63,6 +63,20 @@ ac22_scan() { # <path>… → hazardous "file:line:text" rows
     | "$G" -vE "osascript -e '(delay)[[:space:]]+[0-9.]+'"
 }
 
+# The counterpart to that last exclusion, and the reason it is safe. `delay N` runs inside the
+# osascript interpreter — no `tell application`, no target process, so it cannot block on another
+# app's event loop (measured: `osascript -e 'delay 2'` returns in 2.045s wall clock). That makes the
+# 4 real sites in scripts/handoff-fire.sh portable sleeps rather than AppleEvents, and exempting them
+# correct. But the exclusion above is a LINE-scoped `grep -v`, so it exempts everything else on the
+# line too. This is the check that the exemption is not carrying a passenger: strip the delay
+# invocations, and anything left that still calls out is a real, unbounded site.
+# ONE implementation, exercised by both the tree assertion and its positive control below.
+delay_launder(){ # <path>… → delay-exempt rows carrying another call (empty = clean)
+  "$G" -rnE "osascript -e '(delay)[[:space:]]+[0-9.]+'" "$@" 2>/dev/null \
+    | sed -E "s/osascript -e '(delay)[[:space:]]+[0-9.]+'/<DELAY>/g" \
+    | "$G" -E 'osascript|tell application' || true
+}
+
 # ── POSITIVE CONTROL: the scan can FAIL ─────────────────────────────────────────────────────────
 @test "AC22 control (+): a bare osascript call IS caught" {
   mkdir -p "$D/pos"
@@ -122,8 +136,25 @@ ac22_scan() { # <path>… → hazardous "file:line:text" rows
   ex="$("$G" -rnE "osascript -e '(delay)[[:space:]]+[0-9.]+'" "$ROOT/hooks" "$ROOT/bin" "$ROOT/scripts" 2>/dev/null || true)"
   echo "delay-exempt sites (no target app, cannot block on another process):"
   printf '%s\n' "$ex"
-  bad="$(printf '%s' "$ex" | "$G" -c 'tell application' || true)"
-  [ "$bad" -eq 0 ] || { echo "a call carrying 'tell application' laundered itself through the delay exemption"; false; }
+  bad="$(delay_launder "$ROOT/hooks" "$ROOT/bin" "$ROOT/scripts" | "$G" -c . || true)"
+  [ "$bad" -eq 0 ] || { echo "a real call laundered itself through the delay exemption:"; delay_launder "$ROOT/hooks" "$ROOT/bin" "$ROOT/scripts"; false; }
+}
+
+@test "AC22 control (+): a real call sharing a line with a delay does NOT escape the exemption" {
+  # The exemption is only sound while a delay is the ONLY call on its line, and nothing in ac22_scan
+  # can enforce that — its delay filter is a line-scoped `grep -v`, so a second, genuinely unbounded
+  # call sharing the line is exempted along with the delay. Verified 2026-07-30 with exactly this
+  # fixture: it escaped both ac22_scan AND the previous `tell application`-only guard, because
+  # `display notification` names no application while still being a real AppleEvent (NotificationCenter).
+  mkdir -p "$D/laund"
+  {
+    printf '#!/bin/bash\n'
+    printf "osascript -e 'delay 2'; osascript -e 'display notification \"x\"'\n"
+  } > "$D/laund/l.sh"
+  s="$(ac22_scan "$D/laund" | "$G" -c . || true)"
+  [ "$s" -eq 0 ] || { echo "precondition changed: ac22_scan now catches this unaided, so this guard's premise needs re-deriving"; false; }
+  n="$(delay_launder "$D/laund" | "$G" -c . || true)"
+  [ "$n" -eq 1 ] || { echo "the laundering guard did not fire (n=$n) — the delay exemption is a hole"; false; }
 }
 
 # ── the shared lib ──────────────────────────────────────────────────────────────────────────────
