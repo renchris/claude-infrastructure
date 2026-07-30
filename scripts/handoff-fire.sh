@@ -666,6 +666,53 @@ pid_is_cc() { # $1=pid → 0 live CC process / 1 not
   printf '%s' "$a0" | grep -qE 'node|claude'
 }
 
+# ---- RECYCLE-path ENGAGEMENT (audit row: birth ≠ engagement, still live on --recycle) -----------
+# ef11307 taught the FIRE path that a transcript's existence is not engagement — it must show a real
+# assistant turn. That fix never reached the recycle watcher: `ENGAGE_VERIFY=1` is set only for
+# RECYCLE=0, and the watcher's success test was `cc_alive` — a node process on the pane's tty, i.e.
+# pure process birth. So a relaunch whose brief the harness consumed or rejected (a /research-headed
+# payload, a >4000-char /goal — memory handoff-fire-goal-prefix-trap) sat at an empty composer with
+# claude alive and the watcher logged "relaunched + CONFIRMED". A silent dead recycle, reported as
+# success, with no backstop anywhere (the fire path at least FAILS LOUD).
+#
+# TWO independent signals, either sufficient — the same OR-structure as engagement_seen:
+#   (a) MARKER — a token embedded in the relaunch prompt COPY appears in a transcript that ALSO shows
+#       an assistant turn. Proves ingestion by THIS relaunch specifically.
+#   (b) ROW-CHANGE — the pane's registry row now names a session_id DIFFERENT from the pre-recycle
+#       one, and THAT transcript shows an assistant turn. The CHANGE is the whole discriminator: a
+#       recycle reuses its own pane, so reading the row's sid without comparing it would read the
+#       DEAD PREDECESSOR's transcript, which trivially has assistant turns. Disabled when the
+#       pre-recycle sid could not be resolved — an unknown baseline cannot witness a change.
+#
+# The predecessor's transcript is EXCLUDED from (a) as well. The marker is written only into the
+# launch-time copy and never echoed, but the caller of a recycle IS the session being recycled, so if
+# the token ever reached its own stream the check would pass on the predecessor's turns — the exact
+# false-positive this function exists to prevent. Cheap belt, no cost when the leak never happens.
+recycle_engaged() { # $1=pane $2=pre-recycle-sid $3=marker → 0 engaged / 1 not
+  local pane="${1:-}" oldsid="${2:-}" marker="${3:-}" pdir newsid hit
+  # shellcheck disable=SC2086  # CC_PROJECTS_DIRS is an intentional space-separated dir list
+  if [ -n "$marker" ]; then
+    for pdir in $CC_PROJECTS_DIRS; do
+      [ -d "$pdir" ] || continue
+      while IFS= read -r hit; do
+        [ -n "$hit" ] || continue
+        [ -n "$oldsid" ] && [ "$(basename "$hit")" = "$oldsid.jsonl" ] && continue
+        if assistant_turn_in "$hit"; then return 0; fi
+      done <<EOF
+$(find "$pdir" -name '*.jsonl' -type f -exec grep -lF -- "$marker" {} + 2>/dev/null)
+EOF
+    done
+  fi
+  newsid="$(cc_sid_for_pane "$pane")"
+  if [ -n "$oldsid" ] && [ -n "$newsid" ] && [ "$newsid" != "$oldsid" ]; then
+    # shellcheck disable=SC2086
+    for pdir in $CC_PROJECTS_DIRS; do
+      if [ -f "$pdir/$newsid.jsonl" ] && assistant_turn_in "$pdir/$newsid.jsonl"; then return 0; fi
+    done
+  fi
+  return 1
+}
+
 # ---- P0-12 registration guarantee ------------------------------------------------------------
 # After engagement, guarantee the fired pane is VISIBLE in the cross-account registry so the
 # reaper/board can see it (a never-registered pane is invisible to the whole classify/reap stack —
@@ -1473,6 +1520,12 @@ if [ "${1:-}" = "__recycle" ]; then
   # command already carries a fallback (see the RECYCLE_FALLBACK chain), so this is pure evidence —
   # but without it the next occurrence reads as "the launcher never started" and costs the same hour.
   RCWD="${5:-}"
+  # Engagement inputs, positional-last + optional (an older watcher from a deployed-copy skew simply
+  # ignores them, and this one degrades to the honest weaker verdict when they are absent).
+  RCY_OLD_SID="${6:-}"                             # pre-recycle CC sid — the ROW-CHANGE baseline
+  RCY_MARKER="${7:-}"                              # token embedded in the relaunch prompt copy
+  RCY_ENGAGE_TIMEOUT="${RCY_ENGAGE_TIMEOUT:-180}"  # env-overridable so tests run in seconds
+  RCY_ENGAGE_INTERVAL="${RCY_ENGAGE_INTERVAL:-5}"
   if [ -n "$RCWD" ] && [ ! -d "$RCWD" ]; then
     echo "⚠ recycle cwd VANISHED during exit: $RCWD (a harness-owned worktree is reaped on session exit) — the baked fallback cd now decides where the successor lands"
   fi
@@ -1497,22 +1550,49 @@ if [ "${1:-}" = "__recycle" ]; then
     for _ in $(seq 1 15); do sleep 3; if cc_alive; then up=1; break; fi; done
   fi
   if [ "$up" = 1 ] || cc_alive; then
-    # V2 §6 F12 / R12 — NAME THE ORACLE. This previously printed "relaunched + CONFIRMED", and
-    # "CONFIRMED" reads as engagement while the only evidence is `ps -o comm=` matching node|claude on
-    # the tty. That is BIRTH, and birth is not engagement — the exact insufficiency the FIRE path
-    # already learned (item ff2d6609a33e): a relaunch whose prompt was rejected (a /goal head over the
-    # 4000-char cap) or never auto-submitted sits at an empty composer forever and looks identical.
-    # ENGAGE_VERIFY is hard-wired to 0 for recycles (:2326), so no marker check runs on this path at
-    # all. Until it does, the honest report is the one that says what was actually observed — an
-    # overclaimed verdict is worse than a modest one, because it stops anyone looking (memory
-    # claimed-outcome-vs-checked-outcome).
-    echo "→ relaunched in $RSID — PROCESS-ALIVE (claude on tty), NOT engagement-verified: a rejected or"
-    echo "  never-submitted prompt is indistinguishable from this. Confirm work actually started by"
-    echo "  reading the transcript's assistant turns, not this line."
-    # Disk-visible so a task-less recycle is findable without being at the pane. class distinguishes
-    # it from a fire: a recycle is net-zero panes and is never capacity-gated.
-    emit_fire_event recycle-unverified process-alive "relaunched pane $RSID; engagement NOT verified (ENGAGE_VERIFY=0 on the recycle path)"
-    exit 0
+    # CONVERGENCE of two parallel streams, both aimed at "birth is not engagement" on this path.
+    # V2 §6 F12 / R12 (trunk) fixed the REPORT: "relaunched + CONFIRMED" reads as engagement while
+    # the only evidence is `ps -o comm=` matching node|claude on the tty, so it was replaced with an
+    # honest PROCESS-ALIVE disclaimer plus a disk-visible event — and it named the remaining gap
+    # explicitly: "ENGAGE_VERIFY is hard-wired to 0 for recycles, so no marker check runs on this
+    # path at all. UNTIL IT DOES, the honest report is the one that says what was actually observed."
+    # This change is that "until it does": recycle_engaged supplies the check the disclaimer was
+    # standing in for. So the two compose rather than compete — the disclaimer is retained VERBATIM
+    # as the DEGRADED branch, which is now exactly the case it describes (nothing to verify against),
+    # and its event vocabulary rides every non-engaged outcome.
+    if [ -z "$RCY_MARKER" ] && [ -z "$RCY_OLD_SID" ]; then
+      # Nothing to verify AGAINST: an older arming side (a deployed-copy skew mid-land) handed over
+      # neither the marker nor the baseline sid. An overclaimed verdict is worse than a modest one,
+      # because it stops anyone looking (memory claimed-outcome-vs-checked-outcome).
+      echo "→ relaunched in $RSID — PROCESS-ALIVE (claude on tty), NOT engagement-verified: a rejected or"
+      echo "  never-submitted prompt is indistinguishable from this. Confirm work actually started by"
+      echo "  reading the transcript's assistant turns, not this line."
+      # Disk-visible so a task-less recycle is findable without being at the pane. class distinguishes
+      # it from a fire: a recycle is net-zero panes and is never capacity-gated.
+      emit_fire_event recycle-unverified process-alive "relaunched pane $RSID; engagement NOT verifiable (no marker/baseline handed to the watcher)"
+      exit 0
+    fi
+    echo "→ relaunch process up in $RSID (claude on tty) — verifying ENGAGEMENT"
+    rcy_t=0
+    while [ "$rcy_t" -lt "$RCY_ENGAGE_TIMEOUT" ]; do
+      if recycle_engaged "$RSID" "$RCY_OLD_SID" "$RCY_MARKER"; then
+        echo "→ relaunched + ENGAGEMENT CONFIRMED in $RSID (a real assistant turn, not just a process)"
+        exit 0
+      fi
+      sleep "$RCY_ENGAGE_INTERVAL"; rcy_t=$((rcy_t + RCY_ENGAGE_INTERVAL))
+    done
+    # DEAD RECYCLE. Deliberately NO re-type: unlike the fire path, this pane holds a LIVE claude, and
+    # pasting the brief into a session that IS working but whose transcript we simply could not read
+    # would interrupt its turn. A recycle's only reader is the operator/desk, so the truthful verdict
+    # plus a page is worth more than a blind retry (the audit's complaint was the FALSE success, not
+    # the absence of a recovery). The session is left exactly as it is, for inspection.
+    echo "!! RECYCLE FAILED — never engaged: claude is running in $RSID but showed no assistant turn within ${RCY_ENGAGE_TIMEOUT}s. The relaunch booted and then idled: the brief was consumed or rejected (a slash-command-headed payload, or a /goal over the 4000-char cap). The pane is LIVE but TASK-LESS — do NOT trust it as a working continuation." >&2
+    echo "!!   recover: re-send the brief into the pane (cc-notify $RSID '<re-engage prompt>'), or relaunch manually: $(cat "$CMDFILE")" >&2
+    emit_fire_event recycle-dead never-engaged "relaunched pane $RSID; no assistant turn within ${RCY_ENGAGE_TIMEOUT}s (brief consumed or rejected)"
+    if [ -x "$HOME/.claude/bin/cc-notify" ]; then
+      hf_bounded "$HOME/.claude/bin/cc-notify" --role "${CC_COMPLETION_ROLE:-desk}" "HANDOFF-RECYCLE-DEAD: pane $RSID relaunched but never engaged (no assistant turn in ${RCY_ENGAGE_TIMEOUT}s) — claude is alive at an empty composer, the continuation did NOT start. Re-send the brief or relaunch: $(cat "$CMDFILE")" >/dev/null 2>&1 || true
+    fi
+    exit 1
   fi
   hf_bounded "$IT2" session run -s "$RSID" "# HANDOFF RELAUNCH FAILED — run manually: $(cat "$CMDFILE")" >/dev/null 2>&1 || true
   echo "!! relaunch typed but no claude process appeared within 90s — fallback comment typed into pane" >&2
@@ -2451,7 +2531,12 @@ WANT_SELF_RETIRE=0
 # no trailer is requested (--no-self-retire without --notify-back). Dry runs make no copy (nothing
 # fires), preserving the "original used as-is" contract the notify-back tests assert.
 [ "$RECYCLE" = 0 ] && [ "$DRY" = 0 ] && ENGAGE_VERIFY=1
-if [ -n "$NOTIFY_BACK" ] || [ "$WANT_SELF_RETIRE" = 1 ] || [ "$ENGAGE_VERIFY" = 1 ]; then
+# …and the SAME proof for the recycle path, which had none (see recycle_engaged). Gated on DRY=0 for
+# the same reason ENGAGE_VERIFY is: a dry run fires nothing, so it makes no copy, which keeps the
+# "--recycle: original used as-is" assertion in notify-back.bats meaningful rather than merely passing.
+RECYCLE_VERIFY=0 RECYCLE_MARKER=""
+[ "$RECYCLE" = 1 ] && [ "$DRY" = 0 ] && RECYCLE_VERIFY=1
+if [ -n "$NOTIFY_BACK" ] || [ "$WANT_SELF_RETIRE" = 1 ] || [ "$ENGAGE_VERIFY" = 1 ] || [ "$RECYCLE_VERIFY" = 1 ]; then
   [ -f "$PROMPT_FILE" ] || { echo "!! prompt trailer: prompt file not found: $PROMPT_FILE" >&2; exit 1; }
   PF_NB="$(mktemp "${TMPDIR:-/tmp}/handoff-prompt-nb-XXXXXX")" || { echo "!! prompt trailer: mktemp failed" >&2; exit 1; }
   cp "$PROMPT_FILE" "$PF_NB" || { echo "!! prompt trailer: could not copy prompt" >&2; exit 1; }
@@ -2507,6 +2592,14 @@ if [ -n "$NOTIFY_BACK" ] || [ "$WANT_SELF_RETIRE" = 1 ] || [ "$ENGAGE_VERIFY" = 
     # appearance under the target account's projects dir proves the brief was ingested (P0-11).
     FIRE_MARKER="${FIRE_ENGAGE_MARKER:-HANDOFF-ENGAGE-$$-$(date +%s)-${RANDOM:-0}}"
     printf '\n<!-- handoff-fire engagement marker: %s (ignore) -->\n' "$FIRE_MARKER" >> "$PF_NB"
+  fi
+  if [ "$RECYCLE_VERIFY" = 1 ]; then
+    # Same construction, distinct token namespace so a recycle marker can never be confused with a
+    # fire marker in a shared projects dir. Written ONLY to this copy and never echoed to this
+    # session's own stream — the recycled session IS this session, so a leaked token would let the
+    # check pass on the dying predecessor's own transcript (recycle_engaged excludes it as a belt).
+    RECYCLE_MARKER="${RCY_ENGAGE_MARKER:-HANDOFF-RECYCLE-$$-$(date +%s)-${RANDOM:-0}}"
+    printf '\n<!-- handoff-fire recycle engagement marker: %s (ignore) -->\n' "$RECYCLE_MARKER" >> "$PF_NB"
   fi
   PROMPT_FILE="$PF_NB"
 fi
@@ -3144,7 +3237,11 @@ recycle_fire() {
   # precisely because the failure looked like "the launcher did not start" rather than "the dir the
   # command cd's into no longer exists". Optional + positional-last, so an older watcher (a
   # deployed-copy skew mid-land) simply ignores it.
-  WATCHER_PID="$(detach "$log" "$0" __recycle "$SID" "$tty" "$cmdfile" "$PWD")"
+  # The ENGAGEMENT baseline, resolved FOREGROUND (the watcher must not re-derive it — by the time it
+  # runs, the row may already have been rewritten by the relaunched session, which would make the
+  # ROW-CHANGE signal compare a value against itself and never witness a change).
+  rcy_old_sid="$(cc_sid_for_pane "$SID")"
+  WATCHER_PID="$(detach "$log" "$0" __recycle "$SID" "$tty" "$cmdfile" "$PWD" "$rcy_old_sid" "$RECYCLE_MARKER")"
   if ! await_armed "$log"; then
     kill "$WATCHER_PID" 2>/dev/null || true
     echo "!! recycle ABORTED: watcher heartbeat never appeared ($log) — /exit NOT typed, session stays alive. Run manually: $CMD" >&2
