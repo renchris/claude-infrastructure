@@ -108,6 +108,56 @@ mkrepo_unlanded() {
   ! echo "$output" | grep -q 'audit trail entry'
 }
 
+# ── a hard block wearing the wrong label still reaches the board ───────────────────────────────
+# scripts/ship-land.sh writes its park packet directly rather than through `cc-decide open`, and the
+# legacy shape was class B with NO status, NO default and NO deadline. `cc-decide open` REFUSES that
+# combination (class-B requires both), so such a packet can only be hand-written — it is a hard block
+# mislabelled, and six of them sat parked and unrendered. Fixtures here are raw JSON for that reason.
+_legacy_pkt() {  # $1=id  [$2=extra jq object]
+  local extra="${2:-}"
+  [ -n "$extra" ] || extra='{}'
+  jq -n --arg id "$1" '{id:$id, class:"B", what_plain:"ship-land refused to auto-land branch x. Tail.",
+                        options:[], recommendation:"review"}
+                       + ('"$extra"')' > "$CC_DECISIONS_DIR/$1.json"
+  [ -s "$CC_DECISIONS_DIR/$1.json" ] || { echo "_legacy_pkt: fixture build failed" >&2; return 1; }
+}
+
+@test "a status-less class-B with no default/deadline renders on the board (the ship-land park shape)" {
+  _legacy_pkt shipland-esc-deadbee
+  run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  echo "$output" | grep -q 'ship-land refused to auto-land'
+  # labelled with the class it actually CARRIES, so the row reconciles with `cc-decide list --all`
+  echo "$output" | grep -q '◆ \[decision B shipland-esc-deadbee\]'
+}
+
+@test "board ids ROUND-TRIP: the printed decision id is the whole id, not an 8-char slice" {
+  # `cc-decide veto|action` resolves an EXACT id — a truncated one is "unknown id", and every
+  # shipland-esc-* packet used to collapse to the same unusable label "shipland".
+  _legacy_pkt shipland-esc-1111111
+  _legacy_pkt shipland-esc-2222222
+  run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  echo "$output" | grep -q 'shipland-esc-1111111'
+  echo "$output" | grep -q 'shipland-esc-2222222'
+  ! echo "$output" | grep -q '\[decision B shipland\]' || false
+}
+
+@test "the decision overflow pointer does NOT filter to --class C (it would hide the folded rows)" {
+  # The pointer must reproduce the rows it summarises; `--class C` would hide every folded class-B.
+  for i in 1 2 3 4 5 6 7 8 9; do _legacy_pkt "shipland-esc-over$i"; done
+  run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  echo "$output" | grep -q 'cc-decide list --open'
+  ! echo "$output" | grep -q 'cc-decide list --open --class C' || false
+}
+
+@test "a WELL-FORMED class-B (default+deadline) still does NOT render as an operator step" {
+  # The control that keeps the fold narrow: a real class-B auto-fires at its deadline and is covered
+  # by the ≤24h auto-fire line, not by the human-gated steps. Only the never-resolvable B folds in.
+  "$DECIDE" open --class B --what "Pick an account. Tail." \
+    --default "continue on next2" --deadline "2099-01-01T00:00:00Z" >/dev/null
+  run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  ! echo "$output" | grep -q '◆ \[decision B .*\] Pick an account' || false
+}
+
 @test "actioned/vetoed class-C packets stop rendering (status is honored)" {
   id="$("$DECIDE" open --class C --what "Transient gate. Done soon.")"
   run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
@@ -222,7 +272,13 @@ mk4() { # the live shape, scaled down: N activations + N class-C decisions + N b
   mk4 6
   run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
   echo "$output" | grep -qF '↳ for f in ~/.claude/autonomy/pending-activation/*.sh; do [ -f "$f.done" ] || echo "$f"; done' || false
-  echo "$output" | grep -qF '↳ cc-decide list --open --class C' || false
+  # Was `cc-decide list --open --class C`. The decisions leg now also renders a class-B packet that
+  # carries neither a default nor a deadline (a hard block wearing the wrong label — six live
+  # `shipland-esc-*` packets are exactly that), so a `--class C` filter would hide precisely the rows
+  # an operator followed this pointer to see. The class-budget contract this test pins is unchanged:
+  # each starved class still rolls up with its OWN exact listing command — that command just has to
+  # reproduce the rows it summarises.
+  echo "$output" | grep -qF '↳ cc-decide list --open' || false
 }
 
 @test "CLASS BUDGET POSITIVE CONTROL: a class that FITS gets no rollup at all" {
