@@ -1111,3 +1111,74 @@ resolves the member's LIVE cwd (lsof per pid) before the shared-tree gate, and h
 no-manifest implicit-team case; row 4 — cc-reaper gains an agent-corpse leg (agent-id sessions
 whose turn ended in `idleReason:failed`, idle ≥ settle, parent session alive ⇒ platter or reap);
 row 3/6 — the subagent watcher exemption (§11.7). Each keyed to this section's evidence.
+
+**RESOLVED same night (amends the "in-wave remedy"):** cooperative explicit-approve close works when
+the agent complies (8 clean terminations incl. pane close) — but a corpse resumed by the request
+itself may execute its BRIEF instead (observed: read-only replays; one lane's gen-1 authored real
+commits mid-"death"). **`TaskStop(name)` is the reliable forced actuator — 8/8 instant** (fleet
+18→3 procs, 9.8→2.0 GB). Hierarchy: cooperative close for LIVE agents (checkpoint semantics);
+TaskStop for corpses/superseded generations (nothing a checkpoint would save; messaging them is a
+resume trigger). Also: name resolution for sends is latest-wins-ish and NONDETERMINISTIC when
+suffixed siblings exist (`cap2-qos` routed to gen-1 in one send, to `cap2-qos2` minutes later,
+delivering a shutdown-approve to the ACTIVE worker — countermanded) ⇒ never address lifecycle
+commands by a base name that has suffixed siblings. Memory: `implicit-team-lifecycle-discipline`.
+
+## 11.11 Completion-wave learnings (accumulate; never delete)
+
+**Instrument + classifier traps, each caught pre-ship by its lane:**
+- `taskpolicy -c <bogus>` exits 64 WITHOUT running the program — an unvalidated band column in a
+  config table converts matching commands into no-op failures; the hook allowlists
+  {utility, background, maintenance} (qos).
+- A bare `DEMOTED_PRI_MAX=20` range mis-classifies busy UNDEMOTED work — Darwin timeshare decay
+  floats PRI through 31→17 (60-sample floor 17), while clamps PIN (utility exactly 20, background
+  exactly 4) ⇒ classify on the CLAMP CONSTANTS {4,20}, not a range; residual (float sampled at
+  exactly 20) documented, ~4× smaller (qos).
+- `ps -o lstart=` renders through the CURRENT TIMEZONE — a DST shift changes the pin string of a
+  process that never restarted; a plain-string compare would have mass-fired handle_crash on every
+  healthy team twice a year. Three-state `lead_alive`: DEAD only with positive corroboration (pid no
+  longer a claude binary); else IDENTITY-LOST → re-pin, BOUNDED at 2, then exit claiming nothing
+  (m4m5).
+- `top -n 0` suppresses EVERY process row (an empty-fleet census that looks healthy);
+  macOS `ps` has no `etimes`; `pgrep -n <name>` can return empty with the target plainly alive ⇒
+  pid and CPU must come from ONE instrument (render).
+- `ps -M` %CPU is a lifetime average — the census field carries `hot_thread_src` provenance rather
+  than a number reading 4× better than the sample-based truth (render; R5's cousin: a record carries
+  its own instrument).
+- `jq -c` on a tail window ABORTS the whole stream at a partial first line (zero records — silent
+  blanking on ORDINARY files); the `fromjson?` line-wise idiom + a no-record-in-window (never
+  empty-result) fallback discriminator (wr).
+- A line-scoped `grep -v` exemption launders a REAL call sharing the line with the exempted one; and
+  `display notification` is an AppleEvent naming NO application, slipping `tell application` guards
+  (m4m5).
+- Backticks in a bats `@test` name fail the whole file at GATHER time; `bats … | tail` yields the
+  PIPE's rc and a SIGTERM'd run can report exit 0 with no TAP ⇒ every count reconciles the `1..N`
+  header, never a bare rc (render, gate2, qos2 — three independent hits in one night).
+
+**Proof-method learnings:**
+- An EQUIVALENCE contract cannot be RED-proved against the unbounded reference it equals — the
+  second control is a NAIVE-BOUND MUTANT (the brief's literal sketch), with the mutation anchor
+  asserted to match exactly once (wr).
+- A gate that only reaches the artifact through an interpreter cannot certify the LAUNCH path —
+  `/bin/bash "$X"` succeeds on a mode-644 file that launchd EACCESes; the direct-execution test
+  caught a real shipped defect (mem).
+- Control-must-replay-the-real-artifact, positive form: copy the REAL script, inject the forbidden
+  text AFTER its final exit (text the guard must catch, code that can never run), require the
+  artifact's OWN selftest to go red, keep an unmodified copy as the negative control (mem lane's
+  (vi), superseding a re-typed-regex approximation).
+- A handed-down green is ONE EDIT STALE the moment the file changes — re-derive counts from the
+  artifact, and treat "committed" vs "RED-proved" as separable states (gate-never-ran is a third
+  state; the mem lane's commits shipped before their proof bar and the proofs were run POST-HOC,
+  valid as proofs, no longer as a gate).
+
+**Load/lifecycle learnings:**
+- The wave reproduced `gate-admit-ceiling-self-starvation` on itself: 121 concurrent bats procs;
+  a trivial one-assertion test cost 12.4 s in the background band (the 84× tax measured by §11.9,
+  observed independently by four lanes); killing a top-level `bats` ORPHANS its exec children which
+  keep re-running the suite (five copies of one suite, 1h14m — self-inflicted loadavg) (mem gen-1).
+- Three-sibling worktree convergence (gate, mem) resolves by DISK ADJUDICATION: authorship is
+  formally ambiguous (all commits carry the operator's git identity; CPU% attribution is the
+  argv-sampling trap) — content verification governs, and the sole-owner ruling + stand-downs must
+  precede any shutdown_request (which is itself a resume trigger).
+- A property guard names the SUBJECT it protects, not the verb it dislikes — a blanket `rm -f` ban
+  convicted the census's own page self-clear; scoping to $ROOT-derived paths with a positive
+  control kept conviction power (mem3).
