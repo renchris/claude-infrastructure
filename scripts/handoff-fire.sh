@@ -452,26 +452,63 @@ await_armed() { # $1=logfile → 0 once armed, 1 on timeout
 # overridable so tests run in ms (IT2_BIN seam). ESC = $'\x1b'.
 BP_START=$'\x1b[200~'
 BP_END=$'\x1b[201~'
-it2_type_verified() { # $1=it2-bin $2=session-id $3=command → 0 verified+submitted / 1 fail-loud
-  local it2="$1" id="$2" cmd="$3" attempt mode reread want
-  # nlines=500 reads the WHOLE visible screen, not the last N rows: a freshly-split pane's prompt +
-  # input line sit at the TOP (row 0-1) with blank rows below, so a small "last N" window reads only
-  # blanks and never sees the command (live-verified 2026-07-19). 500 > any pane height, so it2's
-  # `read -n` returns every visible line and grep finds the command wherever the prompt is.
+
+# SPELL-CORRECTION DISARM, typed as its OWN accepted line (item b3d1a77c75ae fix (c)). `setopt
+# CORRECT` (~/.zshrc:53) prompts `zsh: correct 'X' to 'Y' [nyae]?` for an unknown COMMAND WORD as ZLE
+# READS the line — an interactive prompt NO automated caller can answer, so the pane parks forever
+# while the fire reports success: a whole dispatched work item lost, silently (observed 2026-07-26,
+# 6m40s wedge). 3ef2e631 removed the ONE word then known to trigger it (`go`, from the inline
+# dep-install chain); this removes the CLASS. Because the trigger is READ-time, an inline
+# `unsetopt correct` on the SAME line cannot help — correction runs over the whole buffer before any
+# of it executes (see the WT_DEPS note at the CMD site). It must be its own ACCEPTED line, typed
+# first, through the same verified-typing discipline (a mangled `unsetopt` would itself be
+# correctable). Both words are zsh builtins, so neither is ever correction-eligible; args are exempt
+# unless CORRECT_ALL is set, which this operator's zshrc does not set. Under bash the whole line is a
+# silent no-op (`unsetopt` not found → stderr suppressed → `|| true`), so the disarm is safe to type
+# into any shell. Best-effort by design: it can only ever REMOVE a way to hang, so a failure to land
+# it must not fail an otherwise-healthy fire. Seam: FIRE_NOCORRECT=0 disables.
+FIRE_NOCORRECT_LINE='unsetopt correct correct_all 2>/dev/null || true'
+
+# ONE verified typed line: scrub → paste → echo-verify → CR. Split out of it2_type_verified so the
+# disarm line above goes through the SAME proof the launch command does.
+#
+# NONCE-ANCHORED ECHO-VERIFY (item b3d1a77c75ae, defect 1 — the claimed-outcome-vs-checked-outcome
+# class). The verifier reads the WHOLE visible screen (nlines=500, deliberately — see below) but used
+# to grep it for a FIXED string: the command itself. Verification and the thing being verified were
+# therefore DIFFERENT SURFACES, and the read surface includes stale evidence of success — a copy of
+# this very command left in the scrollback by an EARLIER failed attempt, an earlier fire into the same
+# pane, or the echoed line above a wedged `[nyae]` prompt. The grep matches the residue while the
+# actual input line holds a mangled fragment, and line 1 below then sends CR — i.e. the check could
+# PASS on evidence from a previous FAILURE. Anchoring fixes it structurally: each attempt mints a
+# fresh nonce and types `: <nonce>; <line>`, so `want` is unique to THIS attempt and no residue —
+# from any earlier attempt, fire, or operator command — can satisfy it. `:` is the POSIX no-op
+# builtin (never correction-eligible, arg ignored), so the executed semantics are unchanged and the
+# prefix is inert in zsh and bash alike.
+#
+# The whole-screen read is KEPT and is now sound: nlines=500 reads the WHOLE visible screen, not the
+# last N rows, because a freshly-split pane's prompt + input line sit at the TOP (row 0-1) with blank
+# rows below, so a small "last N" window reads only blanks and never sees the command (live-verified
+# 2026-07-19). 500 > any pane height. Whitespace is stripped from both sides so a WRAPPED line still
+# matches. Breadth of the read surface was never the bug — the forgeability of what was sought was.
+_it2_type_line() { # $1=it2-bin $2=session-id $3=line → 0 verified+submitted / 1 fail-loud
+  local it2="$1" id="$2" line="$3" attempt mode reread want nonce wire
   local attempts="${FIRE_TYPE_ATTEMPTS:-4}" settle="${FIRE_TYPE_SETTLE:-0.5}" nlines="${FIRE_TYPE_READLINES:-500}"
   local presettle="${FIRE_TYPE_PRESETTLE:-0.12}"
-  want="$(printf '%s' "$cmd" | tr -d '[:space:]')"
-  [ -n "$want" ] || return 1
+  [ -n "$(printf '%s' "$line" | tr -d '[:space:]')" ] || return 1
   for attempt in $(seq 1 "$attempts"); do
+    # Fresh per ATTEMPT, not per call: attempt N must not be satisfiable by attempt N-1's echo.
+    nonce="hfv-$$-${attempt}-${RANDOM:-0}"
+    wire=": $nonce; $line"
+    want="$(printf '%s' "$wire" | tr -d '[:space:]')"
     # Final attempt degrades to a plain (un-bracketed) char-send — covers the exotic case of a shell
     # with bracketed paste disabled; echo-verify still gates the CR so the fallback is never unsafe.
     mode="paste"; [ "$attempt" -ge "$attempts" ] && mode="plain"
     hf_bounded "$it2" session send -s "$id" $'\x15' >/dev/null 2>&1 || true    # Ctrl-U: scrub any partial line
     /bin/sleep "$presettle"
     if [ "$mode" = "paste" ]; then
-      hf_bounded "$it2" session send -s "$id" "${BP_START}${cmd}${BP_END}" >/dev/null 2>&1 || { /bin/sleep "$settle"; continue; }
+      hf_bounded "$it2" session send -s "$id" "${BP_START}${wire}${BP_END}" >/dev/null 2>&1 || { /bin/sleep "$settle"; continue; }
     else
-      hf_bounded "$it2" session send -s "$id" "$cmd" >/dev/null 2>&1 || { /bin/sleep "$settle"; continue; }
+      hf_bounded "$it2" session send -s "$id" "$wire" >/dev/null 2>&1 || { /bin/sleep "$settle"; continue; }
     fi
     /bin/sleep "$settle"
     reread="$(hf_bounded "$it2" session read -s "$id" -n "$nlines" 2>/dev/null | tr -d '[:space:]' || true)"
@@ -484,13 +521,69 @@ it2_type_verified() { # $1=it2-bin $2=session-id $3=command → 0 verified+submi
   return 1
 }
 
+it2_type_verified() { # $1=it2-bin $2=session-id $3=command → 0 verified+submitted / 1 fail-loud
+  local it2="$1" id="$2" cmd="$3"
+  # Emptiness is judged on the CALLER's command, never on the wire form — the nonce prefix makes the
+  # wire non-empty for every input, so checking that instead would silently submit an empty command.
+  [ -n "$(printf '%s' "$cmd" | tr -d '[:space:]')" ] || return 1
+  if [ "${FIRE_NOCORRECT:-1}" = 1 ]; then
+    _it2_type_line "$it2" "$id" "$FIRE_NOCORRECT_LINE" \
+      || echo "⚠ could not disarm zsh spell-correction in pane $id — proceeding (the launch line is still echo-verified)" >&2
+  fi
+  _it2_type_line "$it2" "$id" "$cmd"
+}
+
+# COMPOSER-PRESENCE ORACLE (item b3d1a77c75ae, defect 2). Positive proof that a live CC session — not
+# a shell — owns a pane, so the engagement RESEND below can gate its blind CR on ownership instead of
+# assuming it. TWO INDEPENDENT positive signals, either sufficient (the same OR-structure as
+# engagement_seen), because each covers the other's blind spot:
+#   (a) REGISTRY PIN — the pane's cc-registry row names a session_id AND a pid that is still a live CC
+#       process owning the pane's tty (successor_pin rc 0). Survives an unresolvable tty, which (b)
+#       cannot; blind when the row is missing (an adopted pane, a row not yet written), which (b) covers.
+#   (b) TTY OWNERSHIP — some live CC process has the pane's tty as its controlling terminal. Wholly
+#       independent of the registry. Verified on this box: a CC pane's `ps -t` lists the claude binary
+#       alongside its `-zsh` parent, while a BARE-SHELL pane lists only login/-zsh/gitstatusd — so the
+#       shell case, the only one that is destructive, is refused by both legs.
+# FAIL-CLOSED by construction: "cannot tell" is NOT ownership. Unlike the successor gate — where a
+# false negative aborts a healthy self-close and three states are needed (named-failure-vs-no-verdict)
+# — the only cost of abstaining here is losing a best-effort recovery whose caller ALREADY fails loud,
+# whereas the cost of guessing wrong is executing a brief as shell commands. Escape: CC_FIRE_COMPOSER_GATE=off.
+composer_owned() { # $1=pane-uuid → 0 PROVEN a live CC session owns it / 1 NOT PROVEN (abstain)
+  local pane="${1:-}" ptty pid
+  [ -n "$pane" ] || return 1
+  ptty="$(as_tty "$pane")"                        # always exits 0; empty = pane gone / bridge wedged
+  successor_pin "$pane" "$ptty" >/dev/null 2>&1 && return 0      # (a) rc 0 ONLY — 1 dead, 2 unpinnable
+  [ -n "$ptty" ] || return 1
+  while IFS= read -r pid; do                                     # (b)
+    [ -n "$pid" ] || continue
+    pid_is_cc "$pid" && return 0
+  done <<EOF
+$(ps -t "$(basename "$ptty")" -o pid= 2>/dev/null | tr -d ' ' || true)
+EOF
+  return 1
+}
+
 # INC-4 engagement RESEND: re-inject the (multi-line) BRIEF into what should be the fired session's
 # claude composer. Same bracketed-paste atomicity so that IF claude has not yet taken the pane (still
 # a shell) the brief lands as ONE inert buffer blob instead of flooding line-by-line as commands (the
-# ttys018 catastrophe). No echo-verify here — the target is Ink's composer, not a shell input line —
-# but bracketed paste alone removes the flood. CR submits (Ink binds Enter to CR).
-it2_paste_submit() { # $1=it2-bin $2=session-id $3=text → 0 pasted+submitted / 1 send failed
+# ttys018 catastrophe).
+#
+# OWNERSHIP-GATED (item b3d1a77c75ae). This used to send CR with NO verification of any kind, on the
+# stated assumption that "the target is Ink's composer, not a shell input line". The cold --worktree
+# auto-submit race FALSIFIES exactly that assumption — this function runs only on the path where
+# engagement was NOT observed, i.e. precisely when CC may never have taken the pane. Bracketed paste
+# prevents the line-by-line FLOOD but does NOT prevent EXECUTION: it converts a flood into one
+# mangled command, which is itself a prime zsh CORRECT trigger, and the CR then runs it. So the CR is
+# now gated on positive proof of ownership; absent that proof this ABSTAINS ENTIRELY — it sends
+# neither the paste nor the CR, because a brief left sitting in a shell's input buffer is a loaded
+# gun for the operator's next Enter. Abstaining is loud, and the caller already fails loud on the
+# re-poll, so a lost resend can never read as a successful fire.
+it2_paste_submit() { # $1=it2-bin $2=pane-uuid $3=text → 0 pasted+submitted / 1 abstained or send failed
   local it2="$1" id="$2" text="$3"
+  if [ "${CC_FIRE_COMPOSER_GATE:-on}" != off ] && ! composer_owned "$id"; then
+    echo "⚠ engagement resend ABSTAINED — no proof a live CC session owns pane $id (it may still be a shell); refusing to submit a brief into it" >&2
+    return 1
+  fi
   hf_bounded "$it2" session send -s "$id" "${BP_START}${text}${BP_END}" >/dev/null 2>&1 || return 1
   /bin/sleep "${FIRE_TYPE_SETTLE:-0.5}"
   hf_bounded "$it2" session send -s "$id" $'\r' >/dev/null 2>&1

@@ -41,6 +41,12 @@ setup() {
   FIRSTPASTE="$BATS_TEST_TMPDIR/firstpaste"; rm -f "$FIRSTPASTE"
   LASTTYPE="$BATS_TEST_TMPDIR/lasttype"; : > "$LASTTYPE"
   SEEN="$BATS_TEST_TMPDIR/seen"; rm -f "$SEEN"
+  # ALLPASTES records EVERY paste (one per line) so a test can assert across attempts — the
+  # per-attempt nonce is only checkable by comparing attempt N's wire against attempt N-1's.
+  ALLPASTES="$BATS_TEST_TMPDIR/allpastes"; : > "$ALLPASTES"
+  # RESIDUE drives the `residue` read-mode: a screen holding stale evidence of success (a copy of the
+  # command left by an EARLIER failed attempt) while the real input line holds something else.
+  RESIDUE="$BATS_TEST_TMPDIR/residue"; : > "$RESIDUE"
 
   FAKE_IT2="$BATS_TEST_TMPDIR/it2"
   # Expanding heredoc — bake the record paths in; the mock stays mode-driven via $MODE_FILE.
@@ -48,6 +54,7 @@ setup() {
 #!/usr/bin/env bash
 EVENTS='$EVENTS'; SCREEN='$SCREEN'; MODE_FILE='$MODE_FILE'
 FIRSTPASTE='$FIRSTPASTE'; LASTTYPE='$LASTTYPE'; SEEN='$SEEN'
+ALLPASTES='$ALLPASTES'; RESIDUE='$RESIDUE'
 SH
   cat >> "$FAKE_IT2" <<'SH'
 ESC=$'\x1b'; BPS="${ESC}[200~"; BPE="${ESC}[201~"; CU=$'\x15'; CR=$'\r'
@@ -65,8 +72,10 @@ if [ "$sub" = session ] && [ "$verb" = send ]; then
       "${BPS}"*"${BPE}")
         [ -f "$FIRSTPASTE" ] || printf '%s' "$text" > "$FIRSTPASTE"
         inner="${text#"$BPS"}"; inner="${inner%"$BPE"}"
+        printf '%s\n' "$inner" >> "$ALLPASTES"
         printf 'PASTE\n' >> "$EVENTS"; printf '%s' "$inner" > "$SCREEN"; printf 'PASTE' > "$LASTTYPE" ;;
       *)
+        printf '%s\n' "$text" >> "$ALLPASTES"
         printf 'PLAIN\n' >> "$EVENTS"; printf '%s' "$text" > "$SCREEN"; printf 'PLAIN' > "$LASTTYPE" ;;
     esac
   fi
@@ -77,6 +86,7 @@ if [ "$sub" = session ] && [ "$verb" = read ]; then
     garbage)      printf 'zsh: correct ould ocd? [nyae]\n' ;;
     corrupt-once) if [ -f "$SEEN" ]; then cat "$SCREEN" 2>/dev/null; else : > "$SEEN"; printf 'ould ocd garbage\n'; fi ;;
     only-plain)   if [ "$(cat "$LASTTYPE" 2>/dev/null)" = PLAIN ]; then cat "$SCREEN" 2>/dev/null; else printf 'not-a-match\n'; fi ;;
+    residue)      cat "$RESIDUE" 2>/dev/null ;;
     *)            cat "$SCREEN" 2>/dev/null ;;
   esac
   exit 0
@@ -88,8 +98,10 @@ SH
   # Fast timings for tests.
   export FIRE_TYPE_SETTLE=0.01 FIRE_TYPE_PRESETTLE=0.001 FIRE_TYPE_ATTEMPTS=4 FIRE_TYPE_READLINES=20
 
-  # Extract the bracketed-paste markers + the two helpers under test from the real script.
+  # Extract the bracketed-paste markers + the helpers under test from the real script.
   eval "$(grep -E '^BP_(START|END)=' "$HF")"
+  eval "$(grep -E "^FIRE_NOCORRECT_LINE=" "$HF")"
+  eval "$(sed -n '/^_it2_type_line() {/,/^}/p' "$HF")"
   eval "$(sed -n '/^it2_type_verified() {/,/^}/p' "$HF")"
   eval "$(sed -n '/^it2_paste_submit() {/,/^}/p' "$HF")"
 
@@ -110,13 +122,22 @@ set_mode() { printf '%s' "$1" > "$MODE_FILE"; }
 
 @test "it2_type_verified: the command is wrapped in bracketed-paste markers, inner intact" {
   set_mode perfect
-  run it2_type_verified "$FAKE_IT2" SID "$CMD"
+  # FIRE_NOCORRECT=0 isolates the launch line: with the disarm pre-line on, the FIRST paste is the
+  # disarm line, not the command. What must hold is that the command survives the wire INTACT.
+  FIRE_NOCORRECT=0 run it2_type_verified "$FAKE_IT2" SID "$CMD"
   [ "$status" -eq 0 ]
-  # The exact bytes of the first paste == ESC[200~ + CMD + ESC[201~ (no corruption, both markers).
   [ -f "$FIRSTPASTE" ]
-  [ "$(cat "$FIRSTPASTE")" = "${BP_START}${CMD}${BP_END}" ]
-  # And what the terminal "echoed" (mock SCREEN) is exactly the command — the launcher gets it intact.
-  [ "$(cat "$SCREEN")" = "$CMD" ]
+  local wire; wire="$(cat "$FIRSTPASTE")"
+  # Both bracketed-paste markers are present and the payload sits strictly between them.
+  [ "${wire#"$BP_START"}" != "$wire" ]
+  [ "${wire%"$BP_END"}" != "$wire" ]
+  local inner="${wire#"$BP_START"}"; inner="${inner%"$BP_END"}"
+  # The wire is the nonce anchor + the command, and the COMMAND SUFFIX IS BYTE-EXACT — the anchor
+  # prefixes, it never rewrites (a prefix that mangled the command would be worse than no anchor).
+  [ "${inner%"$CMD"}" != "$inner" ]
+  [[ "$inner" =~ ^:\ hfv-[0-9]+-1-[0-9]+\;\  ]]
+  # And what the terminal "echoed" (mock SCREEN) still carries the command intact.
+  case "$(cat "$SCREEN")" in *"$CMD") : ;; *) false ;; esac
 }
 
 @test "it2_type_verified: SAFETY — a non-verifying echo is NEVER submitted (no CR), fails loud" {
@@ -130,7 +151,9 @@ set_mode() { printf '%s' "$1" > "$MODE_FILE"; }
 
 @test "it2_type_verified: recovers on retry when the first echo is corrupt" {
   set_mode corrupt-once
-  run it2_type_verified "$FAKE_IT2" SID "$CMD"
+  # FIRE_NOCORRECT=0: otherwise the disarm pre-line consumes the single "corrupt" read and the LAUNCH
+  # line would never exercise the recovery this test names.
+  FIRE_NOCORRECT=0 run it2_type_verified "$FAKE_IT2" SID "$CMD"
   [ "$status" -eq 0 ]
   grep -q '^CR$' "$EVENTS"                 # eventually submits after a clean re-verify
   [ "$(grep -c '^PASTE$' "$EVENTS")" -ge 2 ]   # took at least two paste attempts
@@ -138,7 +161,7 @@ set_mode() { printf '%s' "$1" > "$MODE_FILE"; }
 
 @test "it2_type_verified: final attempt falls back to a plain send, still echo-gated" {
   set_mode only-plain
-  run it2_type_verified "$FAKE_IT2" SID "$CMD"
+  FIRE_NOCORRECT=0 run it2_type_verified "$FAKE_IT2" SID "$CMD"
   [ "$status" -eq 0 ]
   grep -q '^PLAIN$' "$EVENTS"              # degraded to an un-bracketed send on the last attempt
   grep -q '^CR$' "$EVENTS"                 # still only after echo-verify passed
@@ -152,6 +175,7 @@ set_mode() { printf '%s' "$1" > "$MODE_FILE"; }
 }
 
 @test "it2_paste_submit: pastes the multi-line brief atomically then submits (no flood)" {
+  composer_owned() { return 0; }          # ownership PROVEN — this test is about the paste mechanics
   local brief=$'first line of brief\nsecond line: run the gate\n<!-- marker HANDOFF-ENGAGE-x -->'
   run it2_paste_submit "$FAKE_IT2" SID "$brief"
   [ "$status" -eq 0 ]
@@ -160,4 +184,195 @@ set_mode() { printf '%s' "$1" > "$MODE_FILE"; }
   grep -q '^PASTE$' "$EVENTS"
   grep -q '^CR$' "$EVENTS"
   [ "$(cat "$FIRSTPASTE")" = "${BP_START}${brief}${BP_END}" ]
+}
+
+# ---- D1: the echo-verify must not be satisfiable by evidence from an EARLIER failure -------------
+# The defect (item b3d1a77c75ae): want= was a fixed, space-stripped substring searched over the WHOLE
+# 500-line screen with no anchor to the current input line, so a copy of the command left in the
+# scrollback by a previous failed attempt satisfied the check while the input line held a mangled
+# fragment — and the CR then executed the fragment. Verification and the thing verified were
+# different surfaces (memory: claimed-outcome-vs-checked-outcome).
+
+@test "it2_type_verified: RED-PROOF — scrollback residue of THIS command never satisfies the verifier" {
+  # The screen carries a full, intact copy of the command (an earlier fire into this pane) ABOVE a
+  # wedged autocorrect prompt. The current input line is NOT the command. This is the incident shape.
+  printf '%s\n%s\n' "$CMD" "zsh: correct 'go' to 'god' [nyae]?" > "$RESIDUE"
+  set_mode residue
+  FIRE_NOCORRECT=0 run it2_type_verified "$FAKE_IT2" SID "$CMD"
+  [ "$status" -ne 0 ]                      # fails loud
+  ! grep -q '^CR$' "$EVENTS" || false      # THE INVARIANT: residue must never buy an Enter
+}
+
+@test "it2_type_verified: POSITIVE CONTROL — that residue WOULD have passed the pre-fix predicate" {
+  # Proves the RED-PROOF above is not vacuous: the pre-fix check was `grep -qF <space-stripped CMD>`
+  # over the space-stripped screen, and this exact residue satisfies it.
+  printf '%s\n%s\n' "$CMD" "zsh: correct 'go' to 'god' [nyae]?" > "$RESIDUE"
+  local prefix_want screen
+  prefix_want="$(printf '%s' "$CMD" | tr -d '[:space:]')"
+  screen="$(tr -d '[:space:]' < "$RESIDUE")"
+  printf '%s' "$screen" | grep -qF -- "$prefix_want"
+}
+
+@test "it2_type_verified: every attempt carries a DISTINCT anchor (attempt N-1 cannot satisfy N)" {
+  set_mode garbage                         # never verifies → burns all attempts, recording each wire
+  FIRE_NOCORRECT=0 run it2_type_verified "$FAKE_IT2" SID "$CMD"
+  [ "$status" -ne 0 ]
+  local total uniq
+  total="$(grep -c . "$ALLPASTES")"
+  uniq="$(sed -E 's/^(: hfv-[^;]*);.*/\1/' "$ALLPASTES" | sort -u | grep -c .)"
+  [ "$total" -ge 2 ]                       # more than one attempt actually happened
+  [ "$uniq" -eq "$total" ]                 # …and no two attempts shared an anchor
+}
+
+# ---- (c): spell-correction is disarmed BEFORE the launch command is typed ------------------------
+
+@test "it2_type_verified: the disarm line is accepted BEFORE the launch command" {
+  set_mode perfect
+  run it2_type_verified "$FAKE_IT2" SID "$CMD"
+  [ "$status" -eq 0 ]
+  # Two accepted lines, disarm first: the CR that submits the launch line comes after the one that
+  # submitted the disarm line, so CORRECT is already off when the launcher is read.
+  [ "$(grep -c '^CR$' "$EVENTS")" -eq 2 ]
+  grep -q 'unsetopt correct correct_all' "$ALLPASTES"
+  [ "$(grep -n 'unsetopt correct correct_all' "$ALLPASTES" | head -1 | cut -d: -f1)" -lt \
+    "$(grep -n -F "$CMD" "$ALLPASTES" | head -1 | cut -d: -f1)" ]
+}
+
+@test "it2_type_verified: the disarm line is itself echo-verified (never blindly submitted)" {
+  set_mode garbage                         # nothing verifies
+  run it2_type_verified "$FAKE_IT2" SID "$CMD"
+  [ "$status" -ne 0 ]
+  grep -q 'unsetopt correct correct_all' "$ALLPASTES"   # it WAS attempted (else this asserts nothing)
+  ! grep -q '^CR$' "$EVENTS" || false      # a mangled `unsetopt` is correctable too — it gets no Enter
+}
+
+@test "it2_type_verified: FIRE_NOCORRECT=0 disables the disarm line (a seam that cannot turn off is not a seam)" {
+  # A seam can only be proven OFF against a tree where it can be ON: assert the feature exists first,
+  # else this passes trivially on any tree that never had a disarm line.
+  [ -n "$FIRE_NOCORRECT_LINE" ]
+  set_mode perfect
+  FIRE_NOCORRECT=0 run it2_type_verified "$FAKE_IT2" SID "$CMD"
+  [ "$status" -eq 0 ]
+  [ "$(grep -c '^CR$' "$EVENTS")" -eq 1 ]
+  ! grep -q 'unsetopt' "$ALLPASTES" || false
+}
+
+@test "the disarm line types no word zsh could offer to correct" {
+  # Same discipline as handoff-fire-typed-cmd-correctable.bats: every COMMAND WORD must always
+  # resolve. `unsetopt` and `true` are zsh builtins; arguments are exempt without CORRECT_ALL.
+  [ -n "$FIRE_NOCORRECT_LINE" ]
+  local w norm
+  norm="${FIRE_NOCORRECT_LINE//[|;]/$'\n'}"      # split on every command separator
+  for w in $(printf '%s\n' "$norm" | awk 'NF{print $1}'); do
+    case "$w" in
+      unsetopt|true) : ;;
+      *) printf 'correctable command word in the disarm line: %s\n' "$w" >&2; false ;;
+    esac
+  done
+}
+
+# ---- D2: the RESEND's blind CR is gated on POSITIVE proof that CC owns the pane ------------------
+# The defect: it2_paste_submit sent CR with no verification of any kind, on the assumption that the
+# target is Ink's composer. verify_engagement calls it EXACTLY on the path where engagement was not
+# observed — i.e. precisely when CC may never have taken the pane and the target is still a shell.
+
+@test "it2_paste_submit: RED-PROOF — unproven ownership ABSTAINS (no paste, no CR) and is loud" {
+  composer_owned() { return 1; }           # the pane is (or may be) still a shell
+  local brief=$'run the gate\nthen land'
+  run it2_paste_submit "$FAKE_IT2" SID "$brief"
+  [ "$status" -ne 0 ]
+  ! grep -qE '^(PASTE|PLAIN)$' "$EVENTS" || false   # nothing is left sitting in a shell's buffer…
+  ! grep -q '^CR$' "$EVENTS" || false               # …and above all, no Enter
+  printf '%s\n' "$output" | grep -q 'ABSTAINED'     # named, never silent
+}
+
+@test "it2_paste_submit: POSITIVE CONTROL — proven ownership still pastes and submits" {
+  composer_owned() { return 0; }
+  run it2_paste_submit "$FAKE_IT2" SID "brief"
+  [ "$status" -eq 0 ]
+  grep -q '^PASTE$' "$EVENTS"
+  grep -q '^CR$' "$EVENTS"
+}
+
+@test "it2_paste_submit: CC_FIRE_COMPOSER_GATE=off is a real escape hatch" {
+  composer_owned() { return 1; }
+  # Prove the gate is LIVE first — otherwise "the switch turned it off" is indistinguishable from
+  # "there was never a gate", and this test would certify a tree with no gate at all.
+  run it2_paste_submit "$FAKE_IT2" SID "brief"
+  [ "$status" -ne 0 ]
+  : > "$EVENTS"
+  CC_FIRE_COMPOSER_GATE=off run it2_paste_submit "$FAKE_IT2" SID "brief"
+  [ "$status" -eq 0 ]
+  grep -q '^CR$' "$EVENTS"
+}
+
+# ---- D2: the oracle itself -----------------------------------------------------------------------
+
+# composer_owned composes three existing predicates; each is stubbed here so the OR-structure and the
+# fail-closed default are what get tested. `ps` is stubbed on PATH so the tty leg runs against a
+# synthetic process table — the shapes are the ones measured live on this box.
+setup_oracle() {
+  eval "$(sed -n '/^composer_owned() {/,/^}/p' "$HF")"
+  # NON-VACUITY GUARD. Every "NOT proven" assertion below is `[ "$status" -ne 0 ]`, and a MISSING
+  # function also exits non-zero (127) — so without this, the fail-closed tests would pass on a tree
+  # where the oracle had been deleted, i.e. they would certify the very hole they exist to close
+  # (verified: they did exactly that against the recovered pre-fix artifact).
+  [ -n "$(declare -F composer_owned)" ]
+  PSDIR="$BATS_TEST_TMPDIR/psbin"; mkdir -p "$PSDIR"
+  PSTABLE="$BATS_TEST_TMPDIR/pstable"; : > "$PSTABLE"
+  cat > "$PSDIR/ps" <<SH
+#!/usr/bin/env bash
+cat '$PSTABLE'
+SH
+  chmod +x "$PSDIR/ps"
+  PATH="$PSDIR:$PATH"
+  as_tty() { printf '%s' "${STUB_TTY-/dev/ttys002}"; }
+  successor_pin() { return "${STUB_PIN-2}"; }        # default: UNPINNABLE (no registry row)
+  pid_is_cc() { grep -qx "$1" "$BATS_TEST_TMPDIR/ccpids" 2>/dev/null; }
+  : > "$BATS_TEST_TMPDIR/ccpids"
+}
+
+@test "composer_owned: registry pin (rc 0) alone PROVES ownership" {
+  setup_oracle
+  STUB_PIN=0
+  run composer_owned PANE-1
+  [ "$status" -eq 0 ]
+}
+
+@test "composer_owned: unpinnable + a live CC pid on the pane tty PROVES ownership" {
+  setup_oracle
+  printf '30556\n' > "$PSTABLE"; printf '30556\n' > "$BATS_TEST_TMPDIR/ccpids"
+  run composer_owned PANE-1
+  [ "$status" -eq 0 ]
+}
+
+@test "composer_owned: RED-PROOF — a BARE SHELL pane is NOT proven (the destructive case)" {
+  setup_oracle
+  # The measured shape of a wedged pane: login + two zsh + gitstatusd, no CC process anywhere.
+  printf '27166\n27172\n27192\n27392\n' > "$PSTABLE"; : > "$BATS_TEST_TMPDIR/ccpids"
+  run composer_owned PANE-1
+  [ "$status" -ne 0 ]
+}
+
+@test "composer_owned: a PINNED-DEAD row does not convict when a live CC still owns the tty" {
+  setup_oracle
+  STUB_PIN=1                                        # row names a dead session…
+  printf '30556\n' > "$PSTABLE"; printf '30556\n' > "$BATS_TEST_TMPDIR/ccpids"   # …but CC is live here
+  run composer_owned PANE-1
+  [ "$status" -eq 0 ]
+}
+
+@test "composer_owned: FAIL-CLOSED — an unresolvable tty with no pin is NOT ownership" {
+  setup_oracle
+  STUB_TTY=""                                       # bridge wedged / pane gone
+  printf '30556\n' > "$PSTABLE"; printf '30556\n' > "$BATS_TEST_TMPDIR/ccpids"
+  run composer_owned PANE-1
+  [ "$status" -ne 0 ]
+}
+
+@test "composer_owned: an empty pane id is refused outright" {
+  setup_oracle
+  STUB_PIN=0
+  run composer_owned ""
+  [ "$status" -ne 0 ]
 }
