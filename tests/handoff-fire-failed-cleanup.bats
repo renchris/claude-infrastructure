@@ -54,6 +54,10 @@ REAL_IT2="$HOMEDIR/.claude/bin/it2"
 exit 0
 STUB
   chmod +x "$HOMEDIR/.claude/bin/it2"
+  # Fixtured in setup(), not per-invocation: test-hermeticity-lint's rule is that a per-test HOME
+  # leaves every OTHER test in the file pointed at the operator's live ~/. The explicit
+  # `env HOME="$HOMEDIR"` below is then belt, not the mechanism.
+  export HOME="$HOMEDIR"
 }
 
 # A fire that FAILS at the payload-lint gate — the earliest failure AFTER the worktree/slot are
