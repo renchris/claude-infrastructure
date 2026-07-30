@@ -633,6 +633,70 @@ the successor inherits:
 **READ THIS BLOCK, NOT THE ONE BELOW IT.** The block that follows is the *previous* coordinator's
 state and is retained for history only — every count in it is stale.
 
+#### DELTA from coordinator #3 (pane 71B42B48), 2026-07-29T19:3xZ — read this sub-block FIRST
+
+Everything below in this section still holds except where this delta overrides it.
+
+- **State re-derived from trunk, not recalled: 8 DONE (1,2,3,4,5,10,12,13) · in-flight 2 (rows 8, 7 —
+  map cells still read `open`, the known lag; ADD fired rows) · 3 OPEN: 6, 9, 11.** Order: 11 · 9 ·
+  6 last. **AT THE CAP — fire nothing until in-flight < 2.**
+- ✅ **ROW 11'S PAYLOAD IS COMPOSED AND ON TRUNK** — `docs/ground-up-payloads/row11-worktree-warmpool.md`
+  (landed `34e91fd8`, content-verified via `git ls-tree origin/main`). It is fire-ready; it carries
+  only deriving commands, no carried numbers. Four things it hands row 11, all verified this session:
+  (1) **2 of row 11's 4 named core surfaces do not exist anywhere** — `scripts/new-worktree.sh` and
+  `.worktreeinclude` are absent from the tracked tree, the untracked shared checkout, AND the live
+  `~/.claude` layer; (2) **"warm pool build" has no standalone artifact** — the logic lives inside
+  `scripts/handoff-fire.sh` (row 2's file, row 2 DONE) and `hooks/worktree-setup.sh`, so row 11 was
+  told to PING before touching the fire path; (3) `hooks/worktree-setup.sh` +
+  `hooks/git-worktree-guard.sh` **pre-ruled row 11's** by the map's effect test and the row-2
+  precedent (row 6 owns hook DISPATCH, not a hook's semantics) — pre-ruled to save a round trip, as
+  was done for row 7 with `cc-route`; (4) its headline take, below.
+- 🚨 **LIVE EXPOSURE, ROW 11'S HEADLINE TAKE — the worktree guard is bypassable.** Trunk's
+  `hooks/git-worktree-guard.sh` matches the LITERAL strings `git branch` (`:35`) and
+  `git worktree remove` (`:47`) and **fails OPEN on non-match** (`:16`), so
+  `git -C <path> branch -D <b>` and `git -C <path> worktree remove <p>` both reach git unguarded.
+  Zero `-C`/target-repo handling on trunk (positive control: the same grep returns 21
+  branch/worktree hits). The fix **and** its 6-case suite have sat on `tm/wtgc` since 2026-07-25
+  (`12476a03`, NOT an ancestor of origin/main). ~20 worktrees currently hold unlanded work. Row 11's
+  payload carries a hard hazard block about never pointing a reaper test at a real worktree. **I did
+  not hand-patch it** — per the row-10 precedent, it gets fixed with the full proof bar by its owner.
+- 🚨 **`/goal` DOES NOT EXIST.** Every payload on this campaign, including row 7's and row 10's, told
+  its row to run `/goal …` as STEP 1. Verified absent from all five config dirs. It silently did
+  nothing (row 10 completed anyway), so no row was harmed — but stop shipping it. The mechanism that
+  actually works is **`~/.claude/hooks/dod-persist.sh set "Scope (frozen): …"`** (a symlink into the
+  checkout, so live; its output is what SessionStart re-injects). Row 11's payload uses it.
+- 🚨 **THE SHELL CAN FABRICATE AN ABSENCE — see "Method note 2" in the graveyard-sweep section, and
+  the new map Learning.** zsh parses `:t`/`:h` in `"$ref:tests/…"` / `"$ref:hooks/…"` as glob
+  modifiers, git exits 128, and `2>/dev/null` makes it identical to "file absent". **I published a
+  false correction to the graveyard table on that reading and retracted it** (`deabc75b`; the SSOT
+  fix landed `88e0d349`). Net: **row 11's `✓ ✓` was CORRECT**; the table's one real error is
+  `tests/statusline-mail-badge.bats` marked present when it is on NO branch (row 10 found it too).
+  **A positive control did not catch this** — a control must share the first path segment's initial
+  letter with the paths under test, or it cannot fail the same way.
+- **Row 7 ruling ISSUED — fleet.manifest seam APPROVED with 4 bounds** (declare state `staged` not
+  enabled · count bump 21→22 in the SAME commit, RED-proofed, reason in commit + plan · additive
+  only, do not touch row 12's verdict vocabulary/schema/exclusions · consume the fleet alarm
+  FAIL-SOFT because `18-fleet-activate.sh` is C10-pending). Basis: row 12's own learning that
+  existence evidence comes from a DECLARATION, so declaring a supposed-to-run daemon IS row 12's
+  design, and its "claims coverage that does not exist" exclusion does not reach a job with a real
+  producer and cadence. ⚠ **SENT BUT STILL `seen=0` — SUCCESSOR MUST RE-CHECK
+  `cc-notify --receipt 9B38FF36-… 1` AND NOT REPORT ROW 7 AS TOLD UNTIL acked≥1.** Both live rows
+  had un-drained inboxes for 20+ min while working normally; that is turn-boundary drain, not a
+  stall.
+- **Both rows verified alive by transcript CONTENT and both are LANDING:** row 7 landed its design
+  doc `cb930804` ("the cliff is produced, rendered, and never routed on"); row 8 landed
+  `2a337c48` ("record the fill-drop before truncating the only evidence of it").
+- **ACCOUNT POLICY FOR THE ROW-11 FIRE — re-read fresh, but note the cliff axis is NOT the quota
+  axis.** I verified row 7's cliff claim independently off `claude-accounts --relogin-status`:
+  **`next` is DUE at 2026-08-02T20:21Z, 90h out**; next4 594h, next3 600h, next2 625h. The
+  `↻week` column in the default view is a QUOTA reset (next reads 3.1d) and is easy to misread as
+  the cliff — they are different axes. `--login-status` returns EMPTY at rc=0 while
+  `--relogin-status` says `next DUE`, because a `login_warn_h` filter caps it at 72h and hides a 90h
+  cliff — row 7's finding, reproduced. **Row 7 holds `next`, row 8 holds `next4`, `next2` is the
+  coordinator's ⇒ fire row 11 on `next3`.**
+- **Landed this session, all three verified ancestors of origin/main:** `34e91fd8` (row 11 payload) ·
+  `deabc75b` (retraction) · `88e0d349` (zsh trap into both campaign SSOTs).
+
 - **Map is 13 rows now, not 12** (row 13 machine-capacity was added by a parallel session and
   **RATIFIED** by this coordinator — see the ratification section above). **UPDATED 19:0xZ: 8 DONE
   — 1, 2, 3, 4, 5, 10, 12, 13. 2 IN FLIGHT: 8, 7. 3 OPEN: 6, 9, 11. Remaining order: 11 · 9 ·
