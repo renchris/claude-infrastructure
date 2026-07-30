@@ -192,6 +192,25 @@ if [ -n "$TASKPOLICY_BIN" ] && [ -x "$TASKPOLICY_BIN" ]; then
 else
   QOS=(nice -n 19)                             # absent taskpolicy(8) ⇒ nice alone, never a hard fail
 fi
+# PRELINT BAND — utility (PRI 20), deliberately NOT the corpus's background (PRI 4). The band above
+# is right for the CORPUS (hours of bats; wall time is deploy latency, never blockage) and wrong for
+# the prelints, which are ~3s whole-tree greps sitting on the critical path to a green stamp. The
+# launchd job is ProcessType Background, so ABSENT AN EXPLICIT BAND they inherit PRI 4 (E-core
+# confined) and their runtime becomes load-proportional. Measured on this box 2026-07-30, same tree,
+# 218 suites: hermeticity 2.9s utility / 12.9s background @ load 9, and 41s background @ load 14.8;
+# walltime 3.3s utility / 30.4s background. The repo's own instrumented figure for long batch work in
+# that band is 84-89x (2514226e, which moved the actuators background→utility for exactly this
+# reason). That is how a 3s lint blew the 60s bound below and logged "no green may be claimed"
+# (runner.log 2026-07-30T15:41:31Z) — the bound never fit the band it was bounding.
+# taskpolicy(8) sets a FRESH clamp on the CHILD, so utility IS reachable out of a background-clamped
+# parent — verified directly (PRI 20 child of a `-c background` parent), and the exit codes the
+# verdict/non-verdict split keys on (0/1/2/124) all pass through the timeout+taskpolicy chain intact.
+# Seam: shares CC_POSTLAND_TASKPOLICY_BIN with QOS above (set-but-EMPTY ⇒ no band, honored verbatim).
+if [ -n "$TASKPOLICY_BIN" ] && [ -x "$TASKPOLICY_BIN" ]; then
+  LINT_QOS=("$TASKPOLICY_BIN" -c utility)
+else
+  LINT_QOS=()                                  # absent taskpolicy(8) ⇒ inherit; the bound still fits
+fi
 # ── WHOLE-TREE META-LINTS, RUN STANDALONE BEFORE THE CORPUS ──────────────────────────────────────
 # These two judge the tree AS A WHOLE (every suite's hermeticity; every suite's wall-clock literals).
 # Their bats WRAPPERS are LOAD-SENSITIVE from inside a full run, which is why clean-room runs failed
@@ -218,7 +237,14 @@ if [ -n "${CC_POSTLAND_PRELINTS+set}" ]; then
 else
   PRELINTS=(scripts/test-walltime-lint.sh scripts/test-hermeticity-lint.sh)
 fi
-LINT_TO="${CC_POSTLAND_LINT_TIMEOUT_S:-60}"
+# 600s, raised from 60s (2026-07-30): a bound must fit what it BOUNDS, in the band it actually runs
+# in. 60s was sized for a foreground ~3s lint and left no room for the band the launchd job imposes,
+# so the whole-tree lint timed out and no green could be claimed — a deadlock the growing corpus
+# (136→218 suites in four days) only tightened. The band fix above is the primary remedy; this is the
+# belt: even with taskpolicy absent (LINT_QOS empty ⇒ background inherited) at the measured 84x tax,
+# ~250s still fits with 2.4x headroom, while a genuinely WEDGED lint is still cut well inside
+# SUITE_TO. Sized against its siblings, 60s was the lone foreground-scaled outlier here.
+LINT_TO="${CC_POSTLAND_LINT_TIMEOUT_S:-600}"
 PRELINT_UNPROVEN=0     # a lint whose own bound fired: nothing proven ⇒ never a red, never a green
 LADDER_UNPROVEN=0      # a RETRY whose own bound fired: same rule — a cut, never a red (C23)
 # ── AUTO-REVERT (§4.2.4) ─────────────────────────────────────────────────────────────────────────
@@ -390,8 +416,11 @@ prelint_check() { # whole-tree meta-lints, standalone, BEFORE the corpus. Append
     out="$RUN_TMP/prelint.$(basename "$s").out"
     # `unset` inside the subshell, NOT `env -u`: env execs a binary and could never run the
     # `bounded` FUNCTION, which has to stay the outer call so the bound owns the process group.
+    # `${LINT_QOS[@]+"${LINT_QOS[@]}"}` — NOT a bare "${LINT_QOS[@]}": this is bash 3.2 under `set -u`,
+    # where expanding an EMPTY array unguarded is an unbound-variable death (the taskpolicy-absent
+    # path). QOS above needs no such guard because it is never empty.
     ( cd "$WORKTREE" && unset CC_HERM_OWN CC_WALLTIME_OWN SHIP_LAND_HERM_OWN_SCOPE
-      bounded "$LINT_TO" "./$s" tests ) > "$out" 2>&1
+      bounded "$LINT_TO" ${LINT_QOS[@]+"${LINT_QOS[@]}"} "./$s" tests ) > "$out" 2>&1
     rc=$?
     [ "$rc" -eq 0 ] && { log "prelint: $s clean (whole-tree strict)"; continue; }
     # THE VERDICT / NON-VERDICT SPLIT — exit 1 is the ONLY code that says anything about the tree.
