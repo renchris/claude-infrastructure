@@ -39,11 +39,16 @@ FAIL=0
 SKIPPED=0
 FAILED_CASES=()
 
-# Colors (only if stdout is a tty)
+# Colors (only if stdout is a tty). YELLOW was defined here and never used, and the land gate
+# lints every CHANGED file whole, so that dead assignment (SC2034) blocked this file the moment it
+# was touched. Deleted rather than suppressed — an unused constant is not a construct worth an
+# exemption line. (This comment does not open with the linter's name on purpose: a comment whose
+# first word is that name parses as a malformed DIRECTIVE and aborts analysis of the entire file,
+# which is how a real finding goes unseen. Memory: shellcheck-prose-comment-aborts-analysis.)
 if [[ -t 1 ]]; then
-  GREEN='\033[0;32m'; RED='\033[0;31m'; YELLOW='\033[0;33m'; GRAY='\033[0;37m'; NC='\033[0m'
+  GREEN='\033[0;32m'; RED='\033[0;31m'; GRAY='\033[0;37m'; NC='\033[0m'
 else
-  GREEN=''; RED=''; YELLOW=''; GRAY=''; NC=''
+  GREEN=''; RED=''; GRAY=''; NC=''
 fi
 
 # assert_case <name> <command> <expected: allow|deny|ask> <reason_substring_or_empty>
@@ -194,6 +199,61 @@ assert_case "E02-pipeline-real-flag"             "git commit --no-verify | tee l
 assert_case "E03-subst-msg-body"                 "echo 'topic: --no-verify' | git commit -F -"                           "allow"  ""
 assert_case "E04-commit-with-cd"                 "cd /tmp && git commit --no-verify"                                     "deny"   "--no-verify"
 assert_case "E05-git-dash-C-commit"              "git -C /path commit --no-verify"                                       "deny"   "--no-verify"
+
+# ────────────────────────────────────────────────────────────────────────
+# F. CATASTROPHIC-RM SPELLING EQUIVALENCE (codex-security dc12c8db finding 1)
+#
+# The deny regex hardcoded ONE flag bundle, `-rf`, and the warn regex one bundle set,
+# `-(r|rf|fr)`. 11 of the 13 spellings below walked past the shipped hook — some downgraded to
+# `ask`, some emitting NO DECISION AT ALL. They are all the same command. The rule is now read off
+# argv (hooks/lib/is-true-flag.sh :: rm_argv_scan), so spelling cannot decide enforcement.
+#
+# The gate-enforced twin of this section is tests/rm-argv-normalize.bats, which additionally
+# replays the pre-fix hook out of git to prove this corpus convicts it (11/13) rather than passing
+# against an approximation nobody ever ran.
+# ────────────────────────────────────────────────────────────────────────
+echo ""
+echo "── F. catastrophic-rm spelling equivalence (must deny) ──"
+
+assert_case "F01-rf-root-glob"                   'rm -rf /*'                                                             "deny"   "system damage"
+assert_case "F02-fr-bundle-reversed"             'rm -fr /*'                                                             "deny"   "system damage"
+assert_case "F03-split-r-f"                      'rm -r -f /*'                                                           "deny"   "system damage"
+assert_case "F04-long-form"                      'rm --recursive --force /*'                                             "deny"   "system damage"
+assert_case "F05-bare-root-end-of-input"         'rm -rf /'                                                              "deny"   "system damage"
+assert_case "F06-capital-R-bundle"               'rm -Rf /'                                                              "deny"   "system damage"
+assert_case "F07-no-preserve-root-flag"          'rm -rf --no-preserve-root /'                                           "deny"   "system damage"
+assert_case "F08-long-form-tilde"                'rm --force --recursive ~'                                              "deny"   "system damage"
+# The next three MUST stay single-quoted: the literal text `$HOME` / `${HOME}` is what has to reach
+# the hook. Expanding it here would substitute this machine's home path and test a different case
+# entirely — one the guard is not even claiming to catch.
+# shellcheck disable=SC2016
+assert_case "F09-split-home-var"                 'rm -r -f $HOME'                                                        "deny"   "system damage"
+# shellcheck disable=SC2016
+assert_case "F10-quoted-home-var"                'rm -rf "$HOME"'                                                        "deny"   "system damage"
+# shellcheck disable=SC2016
+assert_case "F11-braced-home-var"                'rm -rf ${HOME}'                                                        "deny"   "system damage"
+assert_case "F12-force-before-recursive"         'rm -f -r /'                                                            "deny"   "system damage"
+assert_case "F13-second-clause-of-compound"      'rm -rf src && rm -rf /'                                                "deny"   "system damage"
+assert_case "F14-end-of-flags-separator"         'rm -rf -- /'                                                           "deny"   "system damage"
+assert_case "F15-bundle-with-company"            'rm -vrf /'                                                             "deny"   "system damage"
+assert_case "F16-nested-shell-c-string"          "bash -c 'rm -rf /'"                                                    "deny"   "system damage"
+assert_case "F17-eval"                           'eval rm -rf /'                                                         "deny"   "system damage"
+assert_case "F18-absolute-rm-path"               '/bin/rm -rf /'                                                         "deny"   "system damage"
+assert_case "F19-find-exec"                      'find . -name x -exec rm -rf / ;'                                       "deny"   "system damage"
+
+echo ""
+echo "── F′. the same fix's other half: reach unchanged, text is not execution ──"
+
+# Spellings the WARN clause was equally blind to — `-R` and the long form emitted no decision.
+assert_case "F20-capital-R-etc-asks"             'rm -Rf /etc'                                                           "ask"    "non-build-artifact"
+assert_case "F21-long-form-src-asks"             'rm --recursive --force src'                                            "ask"    "non-build-artifact"
+assert_case "F22-multi-target-second-unsafe"     'rm -rf node_modules /etc'                                              "ask"    "non-build-artifact"
+assert_case "F23-multi-target-both-safe"         'rm -rf node_modules dist'                                              "allow"  ""
+# The mirror-image defect: the old text regex DENIED a commit message about this very rule, so the
+# guard blocked its own fix from being committed.
+assert_case "F24-commit-msg-describes-rule"      'git commit -m "fix(hooks): rm --recursive --force / must deny"'        "allow"  ""
+assert_case "F25-commit-msg-tilde-and-home"      "git commit -m 'fix: rm -rf ~ and rm -rf \$HOME both blocked'"          "allow"  ""
+assert_case "F26-quoted-echo-is-not-execution"   'echo "never run rm -rf /"'                                             "allow"  ""
 
 # ────────────────────────────────────────────────────────────────────────
 # Summary

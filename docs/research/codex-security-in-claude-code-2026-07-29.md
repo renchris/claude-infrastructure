@@ -97,6 +97,22 @@ Root cause is precise: the deny regex hardcodes the `-rf` bundle, and its slash 
 branch **in the same alternation** is written `~(/|$|[[:space:]])` and does accept end-of-input.
 That internal inconsistency is what proves this is an oversight rather than a deliberate choice.
 
+> **FIXED 2026-07-30 — backlog `c3568d7982af`.** The spelling question is no longer asked of the
+> command *text*: `hooks/lib/is-true-flag.sh :: rm_argv_scan` tokenizes and reports
+> `(recursive, force, target)` per real invocation, and both the deny and the warn clause read the
+> rule off argv. The measured table above was **worse than recorded** — re-running it against the
+> shipped hook also found `rm -Rf /` and `rm -f -r /` emitting *no decision at all*, and the warn
+> clause carried the identical blindness one bundle-set further on (`-(r|rf|fr)` knew neither `-R`
+> nor `--recursive`). 11 of 13 spellings got through; all 13 now deny, on the argv path and on both
+> text-fallback paths (`VALIDATE_BASH_LEGACY=1`, python3 absent). The **mirror-image** defect was
+> fixed with it: the old regex denied `git commit -m "fix: guard rm -rf / properly"`, so the guard
+> blocked its own fix from being committed — it refused the repair session's first probe command.
+> Target *reach* is deliberately unchanged (`/etc`, `/usr` still `ask`); only spellings moved.
+> Contract: `tests/rm-argv-normalize.bats` (gate-enforced), which replays the pre-fix hook out of
+> git and asserts it fails this corpus 11/13 — a control against an approximation would pass
+> vacuously. That suite also pulls `hooks/tests/validate-bash.test.sh` (86 cases, extended here
+> from 60) under the land gate, which runs `tests/*.bats` and had never seen it.
+
 Severity was held at **medium**, not critical, because `rm-safe-allowlist.sh` was checked and
 found sound — it defers rather than auto-allowing, so the command still falls through to the base
 `Bash(rm:*)` ask rule. Honest calibration over a scary headline is the point of the methodology.

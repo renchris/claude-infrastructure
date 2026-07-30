@@ -111,10 +111,96 @@ check_real_flag() {
 
 # ── Hard deny: catastrophic or rule-violating patterns ────────────────
 
-# System damage
-# shellcheck disable=SC2016  # $HOME is a LITERAL to match in the command TEXT, not an expansion
-if echo "$CMD" | grep -qE '(rm[[:space:]]+-rf[[:space:]]+/[^a-zA-Z]|rm[[:space:]]+-rf[[:space:]]+\$HOME|rm[[:space:]]+-rf[[:space:]]+~(/|$|[[:space:]])|sudo[[:space:]]+rm|:\(\)\{[[:space:]]*:\|:&[[:space:]]*\};:)'; then
-  deny "Dangerous command pattern blocked: potential system damage (rm -rf /, rm -rf ~, sudo rm, or fork bomb)."
+# System damage, part 1 — the two shapes that are NOT an rm argv question. A fork bomb is syntax,
+# not a command with flags; `sudo rm` is a two-token shape whose breadth (any rm at all under
+# sudo) is deliberate. Both keep their text matching, unchanged.
+if echo "$CMD" | grep -qE '(sudo[[:space:]]+rm|:\(\)\{[[:space:]]*:\|:&[[:space:]]*\};:)'; then
+  deny "Dangerous command pattern blocked: potential system damage (sudo rm, or fork bomb)."
+fi
+
+# ── System damage, part 2 — catastrophic rm, decided on ARGV ──────────
+# The regex this replaces hardcoded ONE spelling of the flags, `-rf`, so every equivalent spelling
+# walked past it. Measured against the shipped hook (codex-security scan dc12c8db, finding 1):
+#     rm -rf /*                 deny          ← the only spelling it knew
+#     rm -fr /*                 ask           ← downgraded
+#     rm -r -f /*               ask           ← downgraded
+#     rm -Rf /                  NO DECISION   ← -R is the same flag
+#     rm -f -r /                NO DECISION
+#     rm --recursive --force /* NO DECISION   ← the long form is not a flag bundle at all
+#     rm -rf /                  ask           ← the slash branch ended in `[^a-zA-Z]`, which must
+#                                               CONSUME a character, so bare `/` at end-of-input
+#                                               could not match — while the tilde branch beside it
+#                                               was written `~(/|$|…)` and did accept it. That
+#                                               internal disagreement is what proves oversight
+#                                               rather than intent.
+# The equivalence class is not enumerable by regex — flag order, bundling, case, long form and
+# `--` separation multiply — so the spelling question is answered by tokenizing instead:
+# rm_argv_scan reports (recursive, force, target) per real invocation, and the rule reads exactly
+# as it is written in CLAUDE.md. That also fixes the mirror-image defect, since text is not
+# execution: `git commit -m "fix: guard rm -rf / properly"` used to be DENIED, so the guard
+# blocked its own fix from being committed.
+#
+# ONE scan, TWO consumers (this deny and the non-build-target warn below): a second parse would be
+# a second place for the spelling rule to rot out of sync.
+RM_SCAN=""
+RM_SCAN_OK=0
+RM_PRESENT=0
+if printf '%s' "$CMD" | grep -qE '(^|[^a-zA-Z0-9_-])rm([[:space:]]|$)'; then
+  RM_PRESENT=1
+  # `declare -F` is not ceremony: hooks/ deploys as per-file symlinks, so a live layer can briefly
+  # hold a NEW validate-bash.sh beside an OLD lib. Absent function → legacy path, never a crash.
+  if [[ "$HAVE_IS_TRUE_FLAG" == "1" ]] && declare -F rm_argv_scan >/dev/null 2>&1; then
+    if RM_SCAN=$(rm_argv_scan "$CMD"); then
+      RM_SCAN_OK=1
+    fi
+  fi
+fi
+
+# is_catastrophic_rm_target <argv-token> — the TARGET half of the predicate. Deliberately the same
+# REACH as the regex it replaces, so this change moves only the flag and quoting spellings and
+# never which targets count:
+#   /  //  /*  /.        root itself or a root-level glob — but NOT /usr, /etc, which stay `ask`
+#   ~  ~/  ~/anything    the tilde branch's existing prefix reach
+#   $HOME…  ${HOME}…     the $HOME branch's existing prefix reach; ${HOME} is the same variable,
+#                        spelled differently, which is the very defect class being fixed here
+is_catastrophic_rm_target() {
+  local t="$1"
+  local re_root='^/([^a-zA-Z].*)?$'
+  local re_tilde='^~(/.*)?$'
+  local re_home='^\$\{?HOME\}?'
+  [[ "$t" =~ $re_root || "$t" =~ $re_tilde || "$t" =~ $re_home ]]
+}
+
+deny_catastrophic_rm() {  # <target> — one message, so both paths below cannot drift apart
+  deny "Dangerous command pattern blocked: potential system damage — recursive+force rm targeting '$1' (root or home). Flag spelling is irrelevant: -rf, -fr, -Rf, -r -f, --recursive --force and every bundle containing r/R and f are the same command. If you meant a path INSIDE the tree, name it relatively."
+}
+
+if [[ "$RM_PRESENT" == "1" && "$RM_SCAN_OK" == "1" ]]; then
+  while IFS=$'\t' read -r rm_rec rm_force rm_target; do
+    [[ "$rm_rec" == "1" && "$rm_force" == "1" ]] || continue
+    is_catastrophic_rm_target "$rm_target" && deny_catastrophic_rm "$rm_target"
+  done <<<"$RM_SCAN"
+elif [[ "$RM_PRESENT" == "1" ]]; then
+  # UNCLEAR (python3 absent / unbalanced quotes) or VALIDATE_BASH_LEGACY=1. No argv, so decide on
+  # text — over-blocking a message body exactly as this clause always did. Still spelling-aware,
+  # so the rollback knob is a rollback of the PARSER, never a re-opening of the bypass.
+  RM_TEXT_OCC=$(printf '%s' "$CMD" | grep -oE '(^|[^a-zA-Z0-9_-])rm([[:space:]]+[^;&|]*)?' || true)
+  while IFS= read -r rm_occ; do
+    [[ -z "$rm_occ" ]] && continue
+    printf '%s' "$rm_occ" | grep -qE '(^|[[:space:]])-[a-zA-Z]*[rR][a-zA-Z]*([[:space:]]|$)|--recursive([[:space:]=]|$)' || continue
+    printf '%s' "$rm_occ" | grep -qE '(^|[[:space:]])-[a-zA-Z]*f[a-zA-Z]*([[:space:]]|$)|--force([[:space:]=]|$)' || continue
+    # `read -a`, never `for tok in $rm_occ`: word splitting there would also GLOB, and the first
+    # target it expanded would be `/*` — the guard would list the root directory and then match
+    # nothing. Quotes are stripped by hand because this path never tokenized.
+    RM_TOKS=()
+    read -r -a RM_TOKS <<<"$rm_occ"
+    for rm_tok in "${RM_TOKS[@]}"; do
+      rm_tok="${rm_tok//\"/}"
+      rm_tok="${rm_tok//\'/}"
+      [[ "$rm_tok" == -* ]] && continue
+      is_catastrophic_rm_target "$rm_tok" && deny_catastrophic_rm "$rm_tok"
+    done
+  done <<<"$RM_TEXT_OCC"
 fi
 
 # ── Worktree-UNSCOPED pkill/killall of gate processes ─────────────────
@@ -210,23 +296,44 @@ if echo "$CMD" | grep -qE 'git[[:space:]]+clean[[:space:]]+-[a-zA-Z]*[xX]'; then
   warn "git clean -x/-X removes gitignored files which may include paid assets (AI-generated images, API outputs). Confirm intentional — safer alternative is git clean -fd (no -x)."
 fi
 
-# rm -rf on non-safe targets. Per-clause extraction avoids the compound-command
-# escape hatch (e.g., `rm -rf src && rm -rf node_modules` used to silently pass
-# because one clause matched a safe target).
+# Recursive rm on non-safe targets. Per-target evaluation avoids the compound-command escape
+# hatch (e.g., `rm -rf src && rm -rf node_modules` used to silently pass because one clause
+# matched a safe target).
 SAFE_RM_TARGETS='(node_modules|\.next|dist|__pycache__|\.cache|build|\.turbo|coverage|test-results|out|\.vercel|artifacts|\.pytest_cache|target|\.tox|htmlcov|\.ruff_cache|\.mypy_cache)'
-RM_OCCURRENCES=$(echo "$CMD" | grep -oE 'rm[[:space:]]+-(r|rf|fr)[[:space:]]+[^[:space:];&|]+' || true)
-if [[ -n "$RM_OCCURRENCES" ]]; then
-  while IFS= read -r occurrence; do
-    target=$(echo "$occurrence" | sed -E 's/^rm[[:space:]]+-(r|rf|fr)[[:space:]]+//')
-    # Strip leading `./` or `/` (but NOT a leading `.` — `.next` must match `\.next`)
-    # Two separate subs to avoid `|` collision with sed's delimiter.
-    target_stripped=$(echo "$target" | sed -E 's|^\./||; s|^/||')
-    if ! echo "$target_stripped" | grep -qE "^${SAFE_RM_TARGETS}(/|$)"; then
-      warn "rm -rf on non-build-artifact target: '$target'. Verify intentional."
-      # shellcheck disable=SC2317  # reachable: warn() exits, so this only runs if warn is stubbed
-      break
+
+# is_safe_rm_target <argv-token> — shared by both paths below, for the same no-drift reason.
+is_safe_rm_target() {
+  # Strip leading `./` or `/` (but NOT a leading `.` — `.next` must match `\.next`).
+  # Two separate subs to avoid `|` collision with sed's delimiter.
+  local stripped
+  stripped=$(printf '%s' "$1" | sed -E 's|^\./||; s|^/||')
+  printf '%s' "$stripped" | grep -qE "^${SAFE_RM_TARGETS}(/|$)"
+}
+
+if [[ "$RM_PRESENT" == "1" && "$RM_SCAN_OK" == "1" ]]; then
+  # Same spelling blindness as the deny above lived here too, one flag-bundle enumeration further
+  # on: `-(r|rf|fr)` knew neither `-R` nor `--recursive`, so `rm -Rf /etc` and
+  # `rm --recursive --force src` emitted no decision at all. Recursive in ANY spelling, with or
+  # without force, is the trigger — unchanged in meaning, only in reach.
+  while IFS=$'\t' read -r rm_rec rm_force rm_target; do
+    [[ "$rm_rec" == "1" ]] || continue
+    if ! is_safe_rm_target "$rm_target"; then
+      warn "rm -r on non-build-artifact target: '$rm_target'. Verify intentional."
     fi
-  done <<<"$RM_OCCURRENCES"
+  done <<<"$RM_SCAN"
+elif [[ "$RM_PRESENT" == "1" ]]; then
+  RM_OCCURRENCES=$(echo "$CMD" | grep -oE 'rm[[:space:]]+(-[a-zA-Z-]+[[:space:]]+)*[^[:space:];&|-][^[:space:];&|]*' || true)
+  if [[ -n "$RM_OCCURRENCES" ]]; then
+    while IFS= read -r occurrence; do
+      printf '%s' "$occurrence" | grep -qE '(^|[[:space:]])-[a-zA-Z]*[rR][a-zA-Z]*([[:space:]]|$)|--recursive([[:space:]=]|$)' || continue
+      target=$(printf '%s' "$occurrence" | sed -E 's/^rm[[:space:]]+(-[a-zA-Z-]+[[:space:]]+)*//')
+      if ! is_safe_rm_target "$target"; then
+        warn "rm -r on non-build-artifact target: '$target'. Verify intentional."
+        # shellcheck disable=SC2317  # reachable: warn() exits, so this only runs if warn is stubbed
+        break
+      fi
+    done <<<"$RM_OCCURRENCES"
+  fi
 fi
 
 # (Layer-3 #9 writer-lock guard removed 2026-06-03 — always-worktree isolation makes it a

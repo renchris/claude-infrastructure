@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
-# is_true_flag — layered detector for real argv flags vs. substring-only matches.
+# Argv-level detectors for hooks/validate-bash.sh. Two functions, one model: a command STRING is
+# not argv, so every question about "is this really being executed" is answered after tokenizing.
+#   is_true_flag  <flag> <cmd>   — is <flag> a real argv token, or just text in a message body?
+#   rm_argv_scan  <cmd>          — normalize every `rm` invocation to (recursive, force, target)
+#
+# ── is_true_flag — layered detector for real argv flags vs. substring-only matches.
 #
 # Problem: naive grep on bash command strings false-positives when the flag
 # substring appears inside a quoted message body, heredoc, or similar payload.
@@ -206,4 +211,161 @@ PYEOF
       return 2
       ;;
   esac
+}
+
+# ── rm_argv_scan — argv normalization for `rm` invocations ─────────────────────────────────────
+#
+# Why a second detector and not more is_true_flag calls: the catastrophic-rm rule is not "does
+# flag X appear anywhere", it is a THREE-part predicate — recursive AND force AND a catastrophic
+# target — and each part has several equivalent spellings. Answering it one flag at a time leaves
+# the caller to re-associate flags with the invocation they belong to, which is where the original
+# hardcoded `-rf` regex went wrong: `rm -rf src && rm -rf /` is ONE command string and TWO
+# invocations, and only the second one is fatal.
+#
+# Contract:
+#   rm_argv_scan <command>
+#   stdout: one TAB-separated line per (rm invocation × target):
+#             <recursive 0|1> \t <force 0|1> \t <target>
+#           No real rm invocation, or an rm with no targets → empty stdout, exit 0.
+#   exit 0 → scan completed; stdout is the whole truth
+#   exit 2 → UNCLEAR (python3 absent, or shlex could not tokenize) — caller MUST fall back and
+#            must not read an empty stdout as "nothing found" (that is the fail-open shape).
+#
+# Spellings normalized (every one of these reports recursive=1 force=1):
+#   -rf · -fr · -Rf · -r -f · -f -r · -rvf · --recursive --force · -r --force · … -- <target>
+# and the invocation is found wherever it really is: `sudo rm`, `env X=1 rm`, `time rm`,
+# `/bin/rm`, `find . -exec rm …`, `xargs rm …`, `bash -c 'rm …'`, `eval rm …`.
+#
+# Deliberately NOT normalized: the target itself. shlex removes quoting ("$HOME" → $HOME) but
+# nothing is expanded and no tilde is resolved, so the caller matches the LITERAL argv text and
+# the policy of WHICH targets are catastrophic stays in the hook, not in this library.
+rm_argv_scan() {
+  local cmd="$1"
+
+  # An UNCLEAR must never be silent. It does not fail OPEN here — the caller falls back to text
+  # matching, which still denies — but that fallback also over-blocks message bodies, so when an
+  # operator asks "why was my commit message refused", this line is the answer. Both causes are
+  # logged, which is why this is a function and not the early `return 2` its sibling above uses.
+  _rm_argv_unclear() { # <cause>
+    mkdir -p "${HOME}/.claude/logs" 2>/dev/null || true
+    printf '%s\t%s\t%s\n' \
+      "$(date -u +%FT%TZ 2>/dev/null || echo '?')" \
+      "rm-argv-scan-UNCLEAR($1)" "text fallback, argv NOT parsed: $cmd" \
+      >> "${HOME}/.claude/logs/validate-bash-unclear.log" 2>/dev/null || true
+  }
+
+  if ! command -v python3 >/dev/null 2>&1; then
+    _rm_argv_unclear "python3-absent"
+    return 2
+  fi
+
+  local out rc
+  out=$(CMD="$cmd" python3 - <<'PYEOF' 2>/dev/null
+import os
+import shlex
+import sys
+
+CMD = os.environ.get("CMD", "")
+
+PIPELINE_OPS = {"|", "||", "&&", ";", ";;", "&"}
+SHELL_HEADS = {"bash", "sh", "zsh", "ksh", "dash"}
+
+
+def parse_rm(argv):
+    """argv[0] is the rm token. → (recursive, force, [targets])."""
+    recursive = force = False
+    targets = []
+    end_of_flags = False
+    for tok in argv[1:]:
+        if not end_of_flags and tok == "--":
+            end_of_flags = True
+            continue
+        if not end_of_flags and tok.startswith("--") and len(tok) > 2:
+            name = tok.split("=", 1)[0]
+            if name == "--recursive":
+                recursive = True
+            elif name == "--force":
+                force = True
+            continue                       # any other long flag (--no-preserve-root, …)
+        if not end_of_flags and len(tok) > 1 and tok.startswith("-"):
+            for ch in tok[1:]:             # a bundle: order and company are irrelevant
+                if ch in ("r", "R"):
+                    recursive = True
+                elif ch == "f":
+                    force = True
+            continue
+        targets.append(tok)
+    return (recursive, force, targets)
+
+
+def strip_env_prefix(argv):
+    i = 0
+    while i < len(argv) and "=" in argv[i] and not argv[i].startswith("-"):
+        name = argv[i].split("=", 1)[0]
+        if name and (name[0].isalpha() or name[0] == "_") and all(c.isalnum() or c == "_" for c in name):
+            i += 1
+        else:
+            break
+    return argv[i:]
+
+
+def scan(src, depth=0):
+    out = []
+    if depth > 3:                          # bounded: `bash -c "bash -c …"` cannot recurse forever
+        return out
+    tokens = shlex.split(src, comments=True, posix=True)
+    clauses = [[]]
+    for tok in tokens:
+        if tok in PIPELINE_OPS:
+            clauses.append([])
+        else:
+            clauses[-1].append(tok)
+
+    for argv in clauses:
+        argv = strip_env_prefix(argv)
+        if not argv:
+            continue
+        # A nested shell hides its whole command inside ONE string argument, so without
+        # re-scanning it `bash -c 'rm -rf /'` reads as a bash invocation with no rm in it.
+        head = os.path.basename(argv[0])
+        if head in SHELL_HEADS:
+            for i in range(1, len(argv) - 1):
+                if argv[i] == "-c":
+                    out.extend(scan(argv[i + 1], depth + 1))
+                    break
+        elif head == "eval":
+            out.extend(scan(" ".join(argv[1:]), depth + 1))
+
+        # EVERY position, not just argv[0] — `sudo rm`, `time rm`, `find . -exec rm …`,
+        # `xargs rm …` all place rm mid-argv. A MENTION survives as a single quoted token
+        # ("fix: rm -rf / bug"), whose basename is never "rm"; that is precisely what keeps a
+        # commit message describing this rule from being read as an execution of it.
+        for i, tok in enumerate(argv):
+            if os.path.basename(tok) == "rm":
+                out.append(parse_rm(argv[i:]))
+    return out
+
+
+try:
+    results = scan(CMD)
+except ValueError:                         # unbalanced quotes → the caller must fall back
+    sys.exit(3)
+
+for recursive, force, targets in results:
+    for t in targets:
+        # Control characters would break the TSV line framing. No catastrophic target contains
+        # one, so folding them can only cost a WARN precision, never hide a DENY.
+        safe = "".join((c if ord(c) >= 32 else "?") for c in t)
+        sys.stdout.write("%d\t%d\t%s\n" % (1 if recursive else 0, 1 if force else 0, safe))
+PYEOF
+  )
+  rc=$?
+
+  if [[ "$rc" != "0" ]]; then
+    _rm_argv_unclear "unparseable"
+    return 2
+  fi
+
+  [[ -n "$out" ]] && printf '%s\n' "$out"
+  return 0
 }
