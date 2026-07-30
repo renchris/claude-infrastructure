@@ -17,23 +17,50 @@ ok(){ P=$((P+1)); echo "  ✓ $1"; }
 no(){ F=$((F+1)); echo "  ✗ $1"; }
 
 echo "T1 statusline: atomic export + config_dir join-key (P1/P5)"
-PAY='{"session_id":"s1","cwd":"/w","transcript_path":"/Users/chrisren/.claude-secondary/projects/-x/T.jsonl","model":{"id":"claude-opus-4-8"},"effort":{"level":"max"},"context_window":{"context_window_size":1000000,"used_percentage":42,"remaining_percentage":58,"total_input_tokens":420000},"exceeds_200k_tokens":true}'
-# statusline hardcodes /tmp/cc-telemetry (no CC_TELEMETRY_DIR seam yet) — test with a
-# throwaway sid in the real dir + clean up; $SB isolates cc-context/cc-board only.
+# Read the telemetry back from $SB — the sandbox this suite already exports as CC_TELEMETRY_DIR
+# at the top — NOT from the live /tmp/cc-telemetry.
+#
+# These three tests used to assert against a hardcoded /tmp/cc-telemetry/s1.json under a comment
+# claiming "statusline hardcodes /tmp/cc-telemetry (no CC_TELEMETRY_DIR seam yet)". That stopped
+# being true: statusline.sh:87 now resolves TDIR="${CC_TELEMETRY_DIR:-/tmp/cc-telemetry}" (added by
+# df6b328f, 2026-07-25). So the export at the top of this file took effect, statusline began writing
+# into $SB, and T1/T3 kept looking in the live dir — a 100%-deterministic miss (verified 3/3), not a
+# flake. The stale comment is what hid it: it asserted the seam's absence as a fact.
+#
+# That miss cascaded, which is why it mattered far beyond this suite: premortem-gate.sh:72 gates its
+# S-2 criterion on this suite exiting 0, so T1+T3 failing flipped S-2 ⛔ and took premortem-gate from
+# 7·1 to 6·2 — and nightly-regression counts premortem as a REGRESSION. The nightly's own RED set
+# therefore grew from a test that was looking in the wrong directory.
+#
+# Reading from $SB also makes the suite genuinely hermetic, which is what premortem-gate.sh:72's
+# `# e2e:reviewed-hermetic` marker already claims ("no live ~/.claude writes"). Before this, the
+# claim was false for T1-T3: they wrote into, and rm -f'd from, the shared live telemetry dir.
+T1SID="s1-$$-${RANDOM}"          # unique per run: never share a fixture filename with a concurrent peer
+T1F="$SB/$T1SID.json"
+PAY='{"session_id":"'"$T1SID"'","cwd":"/w","transcript_path":"/Users/chrisren/.claude-secondary/projects/-x/T.jsonl","model":{"id":"claude-opus-4-8"},"effort":{"level":"max"},"context_window":{"context_window_size":1000000,"used_percentage":42,"remaining_percentage":58,"total_input_tokens":420000},"exceeds_200k_tokens":true}'
 echo "$PAY" | bash "$SL" >/dev/null 2>&1
-jq -e '.config_dir=="/Users/chrisren/.claude-secondary" and .used_pct==42' /tmp/cc-telemetry/s1.json >/dev/null 2>&1 && ok "config_dir + fields" || no "config_dir/fields"
+jq -e '.config_dir=="/Users/chrisren/.claude-secondary" and .used_pct==42' "$T1F" >/dev/null 2>&1 && ok "config_dir + fields" || no "config_dir/fields"
 
 echo "T2 statusline: sid-once guard — no unknown.json (P2)"
-rm -f /tmp/cc-telemetry/unknown.json
+# Same seam correction as T1, and here the stale path was WORSE than a failure: this is a negative
+# assertion ("no unknown.json"), so pointing it at the live dir while statusline writes to $SB made
+# it pass VACUOUSLY — it could no longer fail, whatever the guard did. A check that cannot fail is a
+# deleted check, so this one has been asserting nothing since the seam landed. Positive control: with
+# $SB, breaking the sid-once guard makes this test go RED again.
+rm -f "$SB/unknown.json"
 echo "$PAY" | jq 'del(.session_id)' | bash "$SL" >/dev/null 2>&1
-[ ! -f /tmp/cc-telemetry/unknown.json ] && ok "no unknown.json on empty sid" || no "unknown.json created"
+[ ! -f "$SB/unknown.json" ] && ok "no unknown.json on empty sid" || no "unknown.json created"
 
 echo "T3 statusline: atomic under concurrency — 0 torn reads (P1)"
 e=0; ( for i in $(seq 20); do echo "$PAY" | bash "$SL" >/dev/null 2>&1; done ) & \
      ( for i in $(seq 20); do echo "$PAY" | jq '.context_window.used_percentage=9' | bash "$SL" >/dev/null 2>&1; done ) &
-for i in $(seq 150); do jq . /tmp/cc-telemetry/s1.json >/dev/null 2>&1 || e=$((e+1)); done; wait
-[ "$e" -eq 0 ] && ok "0 torn reads" || no "$e torn reads"
-rm -f /tmp/cc-telemetry/s1.json
+for i in $(seq 150); do jq . "$T1F" >/dev/null 2>&1 || e=$((e+1)); done; wait
+# ABSENT and TORN are different verdicts and this counter cannot tell them apart on its own — name
+# the absent case so a peer-deleted (or never-written) fixture can never again read as 150 torn reads.
+if [ "$e" -eq 0 ]; then ok "0 torn reads"
+elif [ ! -f "$T1F" ]; then no "torn-read check is a NON-VERDICT: $T1F absent (never written / removed mid-run), not torn"
+else no "$e torn reads"; fi
+rm -f "$T1F"
 
 # --- cc-context / cc-board in the isolated sandbox ---
 # $6 = optional pid (P9). Fixtures must carry the fields production actually emits (harness law L1).
