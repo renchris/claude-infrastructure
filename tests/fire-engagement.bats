@@ -184,6 +184,56 @@ STUB
   ! printf '%s\n' "$output" | grep -q '→ fired'
 }
 
+# item 7146aab37a9a — the THIRD state. A pane parked on an interactive shell prompt is not a slower
+# "never engaged": the launcher never ran, there is no session to recover, and the INC-4 re-send
+# that fixes a real engagement miss would paste the brief into a shell that EXECUTES it. The fire
+# must say so specifically, and must say it in seconds rather than after the 8-15min disk-poll
+# window that let the live 2026-07-26 wedge die before any verdict was written.
+@test "E2E: a PARKED pane (zsh [nyae]) fails loud as parked, not as 'never engaged'" {
+  # Stub models the real sequence: the echo-verify BEFORE the CR must still see the command (else
+  # typing fails first and the engagement gate is never reached), and only AFTER the CR does the
+  # screen show the shell's refusal — which is exactly when the wedge becomes observable.
+  local BIN2="$BATS_TEST_TMPDIR/bin2"; mkdir -p "$BIN2"
+  cat > "$BIN2/it2" <<STUB
+#!/bin/bash
+LAST="$BATS_TEST_TMPDIR/it2-last-send2"
+CRSEEN="$BATS_TEST_TMPDIR/cr-seen"
+case "\$1 \$2" in
+  "session send"|"session run")
+    txt="\${!#}"
+    if [ "\$txt" = \$'\r' ]; then : > "\$CRSEEN"; else printf '%s' "\$txt" > "\$LAST"; fi ;;
+esac
+case "\$*" in
+  *"session split"*) echo "Created new pane: $PANE" ;;
+  *"session read"*)
+    if [ -f "\$CRSEEN" ]; then printf "zsh: correct 'go' to 'god' [nyae]? \n"
+    else cat "\$LAST" 2>/dev/null; fi ;;
+  *) : ;;
+esac
+STUB
+  chmod +x "$BIN2/it2"
+  cp "$BIN2/it2" "$HOMEDIR/.claude/bin/it2"
+  # FIRE_NOCORRECT=0 — 0e03861c landed independently while this was in flight and now types a
+  # separate `unsetopt correct correct_all` disarm line, with its own CR, BEFORE the launch command.
+  # This stub keys "the command was submitted" on seeing a CR, so the disarm line's CR would flip it
+  # to the parked screen before the real command is ever typed — the echo-verify would then fail and
+  # the fire would die on a different path, testing nothing. Pinning the disarm off keeps this test
+  # about the parked-pane verdict. (That disarm and this detector are complementary: it removes the
+  # cause, this reports the state when anything else still produces it — including its own documented
+  # failure mode, where it warns and PROCEEDS unprotected.)
+  run env HOME="$HOMEDIR" IT2_BIN="$BIN2/it2" TMPDIR="$BATS_TEST_TMPDIR" FIRE_NOCORRECT=0 \
+    FIRE_ENGAGE_TIMEOUT=5 FIRE_ENGAGE_RETRY=5 FIRE_ENGAGE_INTERVAL=1 FIRE_REG_TIMEOUT=0 \
+    FIRE_ENGAGE_MARKER=NEVER-SEEN-MARKER \
+    bash "$HF" --prompt-file "$PF" --launcher claude-test --split-right \
+      --session-id FIRING-0000 --cwd "$BATS_TEST_TMPDIR" --no-self-retire
+  [ "$status" -ne 0 ]
+  printf '%s\n' "$output" | grep -q 'pane PARKED, launcher never ran'
+  printf '%s\n' "$output" | grep -q "correct 'go' to 'god'"
+  # must NOT be misreported as the INC-4 shape, whose printed remedy is wrong here
+  ! printf '%s\n' "$output" | grep -q 'FIRE FAILED — never engaged' || false
+  ! printf '%s\n' "$output" | grep -q '→ fired' || false
+}
+
 @test "E2E: an engaged fire (marker in a transcript) prints '→ fired' exit 0" {
   mkdir -p "$PROJ/proj"
   { printf '{"type":"user","message":{"role":"user","content":"the brief SEEN-MARKER ok"}}\n'

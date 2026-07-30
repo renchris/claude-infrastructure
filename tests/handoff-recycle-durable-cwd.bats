@@ -12,6 +12,26 @@
 # worktree. Tests 1/2 pin the two command shapes; tests 3/4 are the BEHAVIORAL pair — the shape is
 # worthless if the chain does not actually recover, and test 4 is test 3's positive control.
 
+# Execute an emitted launch chain THE WAY PRODUCTION EXECUTES IT — in zsh.
+#
+# These BEHAVIORAL tests take the real emitted command and run it; running it under bats' own bash
+# via `eval` was an accident of the host shell, not a modelling decision, and it silently diverged
+# from production. The emitted string is zsh-specific BY CONSTRUCTION — it is typed into the
+# operator's interactive zsh pane, and the launcher it names is a zsh alias/function that no bash
+# could resolve anyway (these tests only run at all because they stub the launcher as a PATH
+# binary). It also now carries `nocorrect` (item 7146aab37a9a), a zsh RESERVED WORD that shields
+# the launcher from `setopt CORRECT`'s `[nyae]` spell-prompt; bash has no such word, so a bash
+# `eval` reports `command not found` and the chain dies before the launcher — a RED that says
+# nothing about the cd/fallback logic these tests exist to prove.
+#
+# `zsh -f` = no operator rc (hermetic); PATH is exported by the caller so the launcher stubs still
+# resolve, and `nocorrect` is a reserved word in non-interactive zsh too (verified: `zsh -f -c
+# 'nocorrect echo ok'` → ok).
+run_emitted() { # $1=the emitted chain
+  command -v zsh >/dev/null 2>&1 || { echo "zsh absent — cannot run the emitted chain faithfully"; return 1; }
+  zsh -f -c "$1"
+}
+
 setup() {
   # HERMETIC $HOME (test-hermeticity-lint.sh — binds every NEW suite), with the gate's own idiom:
   # the fixture $HOME SYMLINKS the read-only config the subject must resolve (~/.claude carries the
@@ -77,7 +97,7 @@ cmd_line() { ( cd "$1" && bash "$HF" --recycle --dry-run --prompt-file "$PF" --s
   [ ! -d "$WT" ] || false                          # the fixture's own contract
   # shellcheck disable=SC2030,SC2031  # the subshell IS the point: the stub PATH and the cd must not
   # leak into the next test, and `cd "$MAIN"` proves the chain's own cd moved us, not the caller.
-  ( export PATH="$BATS_TEST_TMPDIR/bin:$PATH"; cd "$MAIN" && eval "$cmd" ) >/dev/null 2>&1 || true
+  ( export PATH="$BATS_TEST_TMPDIR/bin:$PATH"; cd "$MAIN" && run_emitted "$cmd" ) >/dev/null 2>&1 || true
   [ -f "$rec" ] || false                           # pre-fix: never written — the strand
   [ "$(cat "$rec")" = "$MAIN" ] || false           # landed in the survivor
 }
@@ -92,7 +112,7 @@ cmd_line() { ( cd "$1" && bash "$HF" --recycle --dry-run --prompt-file "$PF" --s
   chmod +x "$BATS_TEST_TMPDIR/bin/claude-next"
   # shellcheck disable=SC2030,SC2031  # the subshell IS the point: the stub PATH and the cd must not
   # leak into the next test, and `cd "$MAIN"` proves the chain's own cd moved us, not the caller.
-  ( export PATH="$BATS_TEST_TMPDIR/bin:$PATH"; cd "$MAIN" && eval "$cmd" ) >/dev/null 2>&1 || true
+  ( export PATH="$BATS_TEST_TMPDIR/bin:$PATH"; cd "$MAIN" && run_emitted "$cmd" ) >/dev/null 2>&1 || true
   [ -f "$rec" ] || false
   [ "$(cat "$rec")" = "$WT" ] || false
 }
