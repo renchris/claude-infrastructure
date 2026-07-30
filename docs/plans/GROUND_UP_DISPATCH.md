@@ -1200,6 +1200,31 @@ python3 -c "import json,glob,collections;c=collections.Counter()
 print(c.most_common(10))"
 ```
 
+**ROW 2's FINAL CORRECTION (9th land `401ecebb`) NARROWS ITS OWN F1 — and names the single
+highest-leverage operator step in the campaign.** Every claim below verified by me against disk,
+not relayed. **F1 closes only the SELF-close half**: `--orphaned-assignee` requires the assignee to
+RUN it, and an idle orphan runs nothing. Row 2 demonstrated it on its own 3 read-only researchers
+(pids `27200`/`36432`/`44938`, all confirmed alive at ~2h27m, panes traced to iTerm2 rather than to
+its session, reports already harvested, no worktree held) — **they survive its exit as orphans**,
+and the ordering is correct rather than unfortunate: while the lead lives its gate REFUSES them
+("your originator is ALIVE"), and the moment it dies they qualify with nothing left to invoke it.
+**Orphan census: the 11 closed at ~16:05 plus these +3.**
+
+**The actuator already exists and is ONE C10 activation away.** `bin/cc-teardown --assignee-of`
+landed **`44720884`** (trunk-ancestor ✓, 4 hits in `bin/cc-teardown`, 9 tests) and resolves an
+unregistered assignee by it2-liveness + argv — its own census found **134/134 assignee panes have
+no registry row**, which is why registry-based reaping never touched them. Its ONLY caller,
+`hooks/lead-crash-watchdog.sh:476`, is **DEFAULT OFF** behind `LCW_ORPHAN_CLOSE=1` (documented
+at `:457`). The activation is staged in BOTH queues and **UN-RUN**. Checked before plattering it:
+it is **NOT `CONFIRM`-gated** (0 hits), so a bare run genuinely appends
+`export LCW_ORPHAN_CLOSE=1` — the `.done`-marks-an-inert-script trap does not apply here — and it
+prints a WOULD-CLOSE dry run first. **Activating it closes F1 end-to-end and reaps every orphan in
+the census**, which is why it now leads the operator block rather than sitting at position 6 of 57:
+```bash
+bash ~/.claude/autonomy/pending-activation/10-lead-crash-orphan-close-activate.sh \
+  && touch ~/.claude/autonomy/pending-activation/10-lead-crash-orphan-close-activate.sh.done
+```
+
 **Remaining order: 7 · 11 · 9 · 6 last.** In-flight is **2** (rows 10, 8) — at the cap again.
 
 ## Inherited watch — first GREEN postland stamp (status, not a coordinator work item)
