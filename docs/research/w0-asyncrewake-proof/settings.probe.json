@@ -1,0 +1,18 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/private/tmp/claude-501/-Users-chrisren-Development-claude-infrastructure/a78e659d-921a-49ca-9357-b67791e3aee3/scratchpad/w0probe/watcher.sh",
+            "asyncRewake": true,
+            "timeout": 600,
+            "rewakeMessage": "W0 PROBE — your mailbox watcher fired. Incoming peer mail:",
+            "rewakeSummary": "W0 probe: mailbox wake"
+          }
+        ]
+      }
+    ]
+  }
+}

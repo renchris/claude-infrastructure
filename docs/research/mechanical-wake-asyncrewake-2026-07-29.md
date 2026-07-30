@@ -1,8 +1,10 @@
 # The wake path can be MECHANICAL: `asyncRewake` falsifies the harness floor
 
 **Date:** 2026-07-29 · **Binary:** CC 2.1.219 (`~/.claude-219`, the binary this session and every
-`claude-next*` session already runs) · **Probe artifacts:** `scratchpad/w0probe/PROOF-transcript.jsonl`,
-`PROOF-watch.log`
+`claude-next*` session already runs) · **Probe artifacts:** `docs/research/w0-asyncrewake-proof/`
+(transcript · watcher log · watcher body · probe settings — committed, because the first version of this
+line cited a session **scratchpad** path that is reaped with the session, leaving the claim that
+overturns a three-session premise resting on evidence nobody could re-read)
 **Scope (frozen):** investigate whether the SessionStart hook should arm the 2-way mail inbox itself,
 instead of the Stop hook asking the operator/agent to arm it reactively; ground-up the mailbox so mail
 is not lost while sessions are idle.
