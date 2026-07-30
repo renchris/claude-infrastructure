@@ -30,6 +30,16 @@ setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   HF="$REPO/scripts/handoff-fire.sh"
 
+  # FIXTURE $HOME in setup(), not per-test (test-hermeticity-lint's rule, and it is the right rule
+  # here): the arm-time gate tests below drive the real script, which resolves REAL_IT2, cc-notify and
+  # the roles dir under $HOME. Unfixtured they would read — and in the non-dry paths write — the
+  # OPERATOR'S live ~/.claude. The it2 shim must EXIST or the `sed … | head -1` REAL_IT2 probe aborts
+  # the script under pipefail before any gate runs.
+  export HOME="$BATS_TEST_TMPDIR/fixture-home"
+  mkdir -p "$HOME/.claude/bin" "$HOME/.claude/cc-roles" "$HOME/.claude/logs"
+  printf '#!/bin/bash\nREAL_IT2="%s"\nexit 0\n' "$HOME/.claude/bin/it2" > "$HOME/.claude/bin/it2"
+  chmod +x "$HOME/.claude/bin/it2"
+
   SHIM="$BATS_TEST_TMPDIR/shim"; mkdir -p "$SHIM"
   OSA_GONE_DIR="$BATS_TEST_TMPDIR/gone"; mkdir -p "$OSA_GONE_DIR"
   PS_DEAD_DIR="$BATS_TEST_TMPDIR/dead";  mkdir -p "$PS_DEAD_DIR"

@@ -48,6 +48,10 @@ printf '%s\n' "$*" >> "$HOME/it2-calls.log"
 exit 0
 SH
   chmod +x "$H/.claude/bin/cc-notify" "$H/.claude/bin/it2"
+  # Fixtured in setup(), not per-test (test-hermeticity-lint): the watcher and the arming side both
+  # resolve cc-notify / it2 / REAL_IT2 under $HOME, so an unfixtured suite pages the operator's real
+  # desk and probes their live ~/.claude.
+  export HOME="$H"
 
   eval "$(sed -n '/^assistant_turn_in() {/,/^}/p' "$HF")"
   eval "$(sed -n '/^cc_sid_for_pane() {/,/^}/p' "$HF")"
