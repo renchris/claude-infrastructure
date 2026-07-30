@@ -113,6 +113,48 @@ ensure_file() {
   [ -f "$BACKLOG" ] || : > "$BACKLOG"
 }
 
+# ── compact-only mutex (a15/D2) ────────────────────────────────────────────────────────────────
+# Serializes compact against ANOTHER compact — two concurrent rewriters of one file cannot be made
+# safe by retry alone, because each would validate against the other's half-written state. It is
+# deliberately NOT taken by the append verbs: bare O_APPEND is atomic for these line lengths and
+# keeping ~14 writers coordination-free is a design property of this store, not an oversight. What
+# protects compact from appenders is the optimistic re-check in cmd_compact, not this lock.
+#
+# Owner-token verified for the same reason as every other lock in this change: reaping on age alone
+# lets a slow holder have its lock stolen and then delete the thief's, admitting a third. A live,
+# identity-confirmed holder is never reclaimed; a dead one is reclaimed at once.
+# Env (tests): CC_BACKLOG_LOCK_DIR · CC_BACKLOG_LOCK_STALE_S.
+_bl_lock_dir() { printf '%s' "${CC_BACKLOG_LOCK_DIR:-$BACKLOG.compact.lock.d}"; }
+
+_bl_compact_lock() {
+  local ld tok="" stale="${CC_BACKLOG_LOCK_STALE_S:-300}" age
+  ld="$(_bl_lock_dir)"
+  mkdir "$ld" 2>/dev/null && { printf '%s\n' "$$" > "$ld/owner" 2>/dev/null || true; return 0; }
+  [ -f "$ld/owner" ] && { read -r tok < "$ld/owner" 2>/dev/null || tok=""; }
+  case "$tok" in
+    ''|*[!0-9]*)
+      # untokened: a holder mid-acquire, or pre-fix debris. Age decides, so a peer milliseconds from
+      # writing its token is never robbed.
+      age=$(( $(date +%s) - $(stat -f %m "$ld" 2>/dev/null || stat -c %Y "$ld" 2>/dev/null || echo 0) ))
+      [ "$age" -ge "$stale" ] || return 1 ;;
+    *) kill -0 "$tok" 2>/dev/null && return 1 ;;   # live holder → never steal
+  esac
+  rm -rf "$ld" 2>/dev/null || return 1
+  mkdir "$ld" 2>/dev/null || return 1              # lost the reclaim race → correctly held
+  printf '%s\n' "$$" > "$ld/owner" 2>/dev/null || true
+  return 0
+}
+
+_bl_compact_unlock() {
+  local ld tok=""
+  ld="$(_bl_lock_dir)"
+  [ -f "$ld/owner" ] && { read -r tok < "$ld/owner" 2>/dev/null || tok=""; }
+  if [ -z "$tok" ] || [ "$tok" = "$$" ]; then
+    rm -rf "$ld" 2>/dev/null || true
+  fi
+  return 0
+}
+
 # ── TSV field-collapse guard — docs/research/TSV_FIELD_COLLAPSE_2026-07-25.md ──────────────────
 # Tab is IFS-*whitespace*, so `IFS=$'\t' read` collapses a RUN of tabs: ANY empty cell shifts every
 # later field one position LEFT, silently and with a zero exit status. Here `.needs` is "" on every
@@ -377,24 +419,123 @@ cmd_compact() {
     printf 'cc-backlog compact: nothing aged out (cutoff %s)\n' "$cutoff" >&2
     return 0
   fi
-  local tmp n=0 kept=0 dropped=0 malformed=0 line lid
-  tmp=$(mktemp)
-  while IFS= read -r line || [ -n "$line" ]; do
-    n=$((n + 1)); [ -z "$line" ] && continue
-    lid=$(printf '%s' "$line" | jq -r 'if (has("id") and has("event")) then .id else "__BAD__" end' 2>/dev/null || echo "__BAD__")
-    if [ "$lid" = "__BAD__" ]; then
-      printf '%s\n' "$line" >> "$tmp"; malformed=$((malformed + 1))   # preserve, never drop
-      printf 'cc-backlog compact: preserved malformed line %d\n' "$n" >&2
-      continue
+  # ── LOST-APPEND SAFETY (a15/D2) ───────────────────────────────────────────────────────────────
+  # compact is the ONE verb that rewrites this store; every other writer appends. It read the whole
+  # file into $tmp and then `mv`'d $tmp over it, with no lock and no re-check, so ANY record appended
+  # between the read loop and the mv was silently discarded by the overwrite. The record that gets
+  # lost is not hypothetical: a cc-dispatch `claim` landing in that window vanishes, the item folds
+  # back to status "open", and the next dispatch tick claims and spawns a SECOND worker on in-flight
+  # work — the exact double-dispatch class the reopen guards above were added to stop, reintroduced
+  # through the compaction door.
+  #
+  # WHY NOT SIMPLY "TAKE A LOCK": the appenders are deliberately lock-free. Bare O_APPEND of a
+  # sub-PIPE_BUF line is atomic and is what makes this store safe for ~14 concurrent writers without
+  # coordination. Putting a mutex on that hot path to protect a manual, once-a-month verb would be
+  # the wrong trade. So the lock here serves only to serialize compact against ANOTHER compact, and
+  # correctness against appenders comes from optimistic concurrency instead:
+  #
+  #   1. snapshot the line count n0 and consume exactly n0 lines;
+  #   2. carry lines n0+1..EOF through VERBATIM (late arrivals are preserved, never judged);
+  #   3. immediately before the mv, re-read the count. If it changed, our snapshot is stale → retry.
+  #   4. after RETRY_MAX stale rounds, ABORT WITHOUT REWRITING.
+  #
+  # Fail-closed is the whole point: a skipped compaction costs some disk, a lost claim costs a
+  # double-dispatched worker. When we cannot PROVE the file is unchanged we do not touch it.
+  local RETRY_MAX=3 attempt=1
+  _bl_compact_lock || {
+    echo "cc-backlog compact: another compact holds the lock — skipping (nothing was rewritten)" >&2
+    return 5
+  }
+  while :; do
+    local tmp n=0 kept=0 dropped=0 malformed=0 line lid n0 late
+    n0=$(grep -c '' "$BACKLOG" 2>/dev/null || echo 0)
+    tmp=$(mktemp)
+    while IFS= read -r line || [ -n "$line" ]; do
+      n=$((n + 1))
+      [ "$n" -gt "$n0" ] && break                 # beyond the snapshot — handled verbatim below
+      [ -z "$line" ] && continue
+      lid=$(printf '%s' "$line" | jq -r 'if (has("id") and has("event")) then .id else "__BAD__" end' 2>/dev/null || echo "__BAD__")
+      if [ "$lid" = "__BAD__" ]; then
+        printf '%s\n' "$line" >> "$tmp"; malformed=$((malformed + 1))   # preserve, never drop
+        printf 'cc-backlog compact: preserved malformed line %d\n' "$n" >&2
+        continue
+      fi
+      if printf '%s\n' "$drop" | grep -qxF -- "$lid"; then
+        dropped=$((dropped + 1)); continue
+      fi
+      printf '%s\n' "$line" >> "$tmp"; kept=$((kept + 1))
+    done < "$BACKLOG"
+    # Late arrivals ride through untouched — they are by definition newer than the cutoff, so no
+    # filtering decision applies to them, and preserving them verbatim is what makes a concurrent
+    # append survive compaction instead of being erased by it.
+    #
+    # The BOUND is fixed BEFORE the read and the copy is clamped to it (`head -n "$late"`). Measuring
+    # `late` after the tail instead — the first version of this — is itself a lost-append bug: growth
+    # between the read and the measurement inflates `late`, the guard below then compares against the
+    # inflated number and PASSES, and the lines the tail never reached are dropped by the mv. Caught
+    # by test 2 of tests/cc-backlog-compact-race.bats, which is why that test exists.
+    local n1
+    n1=$(grep -c '' "$BACKLOG" 2>/dev/null || echo 0)
+    late=$(( n1 - n0 ))
+    [ "$late" -lt 0 ] && late=0
+    if [ "$late" -gt 0 ]; then
+      tail -n "+$((n0 + 1))" "$BACKLOG" 2>/dev/null | head -n "$late" >> "$tmp" 2>/dev/null || true
     fi
-    if printf '%s\n' "$drop" | grep -qxF -- "$lid"; then
-      dropped=$((dropped + 1)); continue
+    # THE GUARD: the file must still be exactly the length we just consumed (n1). Any append that
+    # landed after the bound was fixed makes this fail, and the attempt is retried rather than
+    # committing a rewrite that would erase it.
+    if [ "$(grep -c '' "$BACKLOG" 2>/dev/null || echo 0)" -eq "$n1" ]; then
+      # COMMIT BY RENAME-ASIDE, NOT OVERWRITE. The guard above still leaves one irreducible gap: an
+      # append landing between the check and the commit. `mv "$tmp" "$BACKLOG"` DESTROYS the old inode,
+      # so such a record is unrecoverable — and this is not a theoretical gap, it is what test 1 of
+      # tests/cc-backlog-compact-race.bats reproduces deterministically.
+      #
+      # Renaming the original ASIDE first makes the window recoverable instead of fatal. The appenders
+      # open by name per write (`>> "$BACKLOG"`), so a writer racing the swap lands in exactly one of
+      # two files, and we still hold BOTH: anything that arrived in the stash beyond our snapshot is
+      # appended to the new ledger afterwards. The recovery repeats while the stash keeps growing, so
+      # a burst is drained rather than sampled once.
+      #
+      # RESIDUAL, stated rather than hidden: a writer that opened the stash inode after the final
+      # recovery read still loses its line. Closing that completely requires the appenders to take the
+      # lock, which is deliberately rejected above — bare O_APPEND is what keeps ~14 writers
+      # coordination-free. This narrows the window from "the whole commit" to "after the last drain of
+      # a file nothing is supposed to be opening any more", and never widens it.
+      local stash="$BACKLOG.compacting.$$" rec=0 spins=0 sn
+      if mv "$BACKLOG" "$stash" 2>/dev/null; then
+        mv "$tmp" "$BACKLOG" 2>/dev/null || { mv "$stash" "$BACKLOG" 2>/dev/null || true; rm -f "$tmp" 2>/dev/null || true; _bl_compact_unlock; echo "cc-backlog compact: commit failed — ledger left untouched" >&2; return 5; }
+        while :; do
+          sn=$(grep -c '' "$stash" 2>/dev/null || echo 0)
+          [ "$sn" -gt "$(( n1 + rec ))" ] || break
+          tail -n "+$(( n1 + rec + 1 ))" "$stash" 2>/dev/null | head -n "$(( sn - n1 - rec ))" >> "$BACKLOG" 2>/dev/null || true
+          rec=$(( sn - n1 ))
+          spins=$((spins + 1)); [ "$spins" -ge 5 ] && break
+        done
+        rm -f "$stash" 2>/dev/null || true
+      else
+        rm -f "$tmp" 2>/dev/null || true; _bl_compact_unlock
+        echo "cc-backlog compact: could not rename the ledger aside — nothing was rewritten" >&2
+        return 5
+      fi
+      _bl_compact_unlock
+      printf 'cc-backlog compact: kept %d, dropped %d aged-terminal, preserved %d malformed' \
+        "$kept" "$dropped" "$malformed" >&2
+      [ "$late" -gt 0 ] && printf ', carried %d concurrent append(s)' "$late" >&2
+      [ "$rec" -gt 0 ] && printf ', recovered %d append(s) from the commit window' "$rec" >&2
+      printf '\n' >&2
+      return 0
     fi
-    printf '%s\n' "$line" >> "$tmp"; kept=$((kept + 1))
-  done < "$BACKLOG"
-  mv "$tmp" "$BACKLOG"
-  printf 'cc-backlog compact: kept %d, dropped %d aged-terminal, preserved %d malformed\n' \
-    "$kept" "$dropped" "$malformed" >&2
+    rm -f "$tmp" 2>/dev/null || true
+    attempt=$((attempt + 1))
+    if [ "$attempt" -gt "$RETRY_MAX" ]; then
+      _bl_compact_unlock
+      echo "cc-backlog compact: the ledger is being appended to concurrently; ABORTED after $RETRY_MAX attempts." >&2
+      echo "  NOTHING was rewritten — a skipped compaction is cheap, a lost claim record is not." >&2
+      echo "  Re-run when the dispatcher/reaper timers are quiet." >&2
+      return 5
+    fi
+    printf 'cc-backlog compact: ledger changed under us — retrying (%d/%d)\n' "$attempt" "$RETRY_MAX" >&2
+  done
 }
 
 # _resolve_sessions_bin → path to cc-sessions (the live-registry liveness oracle), or "" (rc 0).
