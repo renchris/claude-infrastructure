@@ -2,7 +2,10 @@
 # gate-select.bats — RED-proofs for the changed-scope test selector. Every test asserts a
 # FAIL-CLOSED or a coupling the naive selector misses:
 #   * lib/ + hooks/lib/  → FULL   (a `^lib/`-only rule misses two thirds of shared helpers)
-#   * delete / rename → FULL (the map cannot describe a path that moved out from under it)
+#   * delete / rename of CODE → FULL (the map cannot describe a path that moved out from under it)
+#   * delete / rename of PROSE → the suites that NAME the vanished path (and, on a rename, the
+#                       new one) — FULL there means "no smoke at all" in the v2 lane, so the
+#                       blanket rung ran ZERO suites on a docs land; both ends must be prose
 #   * new file        → the SAME clauses as a modified one; FULL only via the `unmapped` rung
 #                       (a blanket `added ⇒ FULL` widened nearly every land to 1,749 tests)
 #   * suite-comment refs → DIRECT (comments are evidence: real suites name their script only there)
@@ -63,6 +66,13 @@ seed() {
   suite tests/inventoried.bats 'run bash scripts/inventoried.sh'
   printf '# guide\nprose\n' > docs/guide.md
   printf '# named\nprose\n' > docs/named.md
+  # The prose-REMOVAL fixtures: one doc named by a suite, plus a suite that names the path it
+  # is about to be renamed TO. Proving the dst end is scanned needs an owner that does NOT also
+  # name the src end, so this one is kept lint-reachable by its own dedicated anchor script.
+  printf '# moving\nprose\n' > docs/moving.md
+  printf '#!/bin/bash\necho anchor\n' > scripts/doc-anchor.sh
+  suite tests/doc-src-owner.bats 'documents docs/moving.md'
+  suite tests/doc-dst-owner.bats 'will document docs/moved.md  # anchor: scripts/doc-anchor.sh'
   suite tests/foo.bats 'run bash scripts/foo.sh'
   suite tests/bar.bats 'run bash "$BAR"'
   suite tests/common-utils.bats 'run bash scripts/common.sh'
@@ -82,7 +92,10 @@ gs() { run bash "$SEL" "$@" HEAD~1..HEAD; }
 # $output = the --explain STDERR only: asserting the REASON pins WHICH fail-closed rung
 # fired. Without it a FULL assertion passes on any rung — the rules are defence-in-depth,
 # so removing the one under test still yields FULL via the next one down.
-gse() { run bash -c "bash '$SEL' --explain $* HEAD~1..HEAD 2>&1 >/dev/null"; }
+# No `$*`: all 13 call sites are bare, so the forwarding was dead — and a function that
+# references positional params while never being passed any makes every bare call an SC2119,
+# which the .bats shellcheck ratchet blocks on for any line a land actually writes.
+gse() { run bash -c "bash '$SEL' --explain HEAD~1..HEAD 2>&1 >/dev/null"; }
 
 # `[[ ]]` is NOT usable for a mid-body assertion: on bats 1.13.0 a failing `[[ ]]` that is
 # not the test's LAST command is silently swallowed (probed: `false` and `[ ]` do fail the
@@ -120,6 +133,66 @@ lacks() { ! printf '%s\n' "$output" | grep -qxF -- "$1"; }
   [ "$output" = FULL ]
   gse
   has "FULL <- renamed:scripts/renamed.sh"
+}
+
+@test "PROSE delete ⇒ the suites that still NAME it, not FULL" {
+  # The docs-land defect (backlog 4a420270c9c8). A land that archives one research doc hit the
+  # blanket `D ⇒ FULL` rung — and in the v2 lane FULL is read as "selection untrustworthy ⇒ NO
+  # smoke" (ship-land.sh:797) and "exonerate nothing" (:1199), so the land ran ZERO suites. The
+  # suite that still names the removed doc is exactly the one that can break; FULL runs none.
+  git rm -q docs/named.md
+  git commit -q -m archive
+  gs
+  [ "$status" -eq 0 ]
+  [ "$output" = "tests/docs-owner.bats" ]
+  gse
+  has "tests/docs-owner.bats <- prose-removed:docs/named.md"
+  gs --direct
+  # DIRECT: a doc you are landing is never exonerated as a merely-adjacent flake.
+  [ "$output" = "tests/docs-owner.bats" ]
+}
+
+@test "PROSE delete with nothing naming it ⇒ inert (empty, exit 0), not FULL" {
+  git rm -q docs/guide.md
+  git commit -q -m archive
+  gs
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "PROSE rename ⇒ BOTH ends' literal refs, not FULL" {
+  # The src end is a removal (who still names the path that went away) and the dst end is an ADD
+  # (who names the new one). Selecting only one end is the half-fix: the owner of the destination
+  # never runs, so a suite pinned to the new doc path lands unproven.
+  git mv docs/moving.md docs/moved.md
+  git commit -q -m move
+  gs
+  [ "$status" -eq 0 ]
+  has tests/doc-src-owner.bats
+  has tests/doc-dst-owner.bats
+  gse
+  has "tests/doc-src-owner.bats <- prose-removed:docs/moving.md"
+  has "tests/doc-dst-owner.bats <- prose-literal:docs/moved.md"
+}
+
+@test "rename ACROSS the prose/code boundary still ⇒ FULL (BOTH ends must be prose)" {
+  # The guard on the rung above. A doc renamed INTO the code tree hands the code end a path whose
+  # clause ladder was never run — which is the `unmapped` fail-closed case, not an inert doc.
+  git mv docs/moving.md scripts/moving.sh
+  git commit -q -m promote
+  gs
+  [ "$output" = FULL ]
+  gse
+  has "FULL <- renamed:scripts/moving.sh"
+}
+
+@test "rename of CODE into the docs tree still ⇒ FULL (the src end is the code end)" {
+  git mv scripts/rename-me.sh docs/rename-me.md
+  git commit -q -m demote
+  gs
+  [ "$output" = FULL ]
+  gse
+  has "FULL <- renamed:docs/rename-me.md"
 }
 
 @test "new unmapped script ⇒ FULL (via the unmapped rung, not a blanket added ⇒ FULL)" {

@@ -16,7 +16,8 @@
 #
 # MULTI-RANGE: the changed-file sets of every range are UNIONED before the rules run, so a
 # CAS-stale re-gate can pass the sibling trunk delta as a second range and see the novelty
-# of the COMPOSED tree. A path that is D/R in any range still fails the whole run closed.
+# of the COMPOSED tree. A path that is D/R in any range fails the whole run closed — EXCEPT a
+# prose path, which has a removal rung of its own (see `prose removal` in the selector).
 #
 # LINT: asserts every tests/*.bats is reachable from >=1 non-test tracked file through some
 # clause. An unreachable suite is one the selector can NEVER pick — it would silently stop
@@ -296,9 +297,11 @@ def main():
     if MODE == "lint":
         sys.exit(lint(tracked, suites, text, closure, naming))
 
-    # UNION of every range's changed-file set, deduped on (status, path) so a file touched by
-    # two ranges is judged once. `-M` asks for rename detection explicitly: git must REPORT
-    # an R status for the R-⇒-FULL rule to fire on it.
+    # UNION of every range's changed-file set, deduped on (status, path, src) so a file touched
+    # by two ranges is judged once. `-M` asks for rename detection explicitly: git must REPORT
+    # an R status for the R-⇒-FULL rule to fire on it. The SRC half of an R/C record is kept, not
+    # discarded: the prose-removal rung below has to judge the path that went AWAY, and a rename
+    # whose two ends land in different classes (prose ⇄ code) must still fail closed.
     changes, seen = [], set()
     for rng in RANGES:
         raw = git("diff", "--name-status", "-z", "-M", rng).split("\0")
@@ -309,10 +312,11 @@ def main():
             if not status:
                 continue
             if status[0] in ("R", "C"):        # src \0 dst
-                rec = (status, raw[i + 1] if i + 1 < len(raw) else "")
+                rec = (status, raw[i + 1] if i + 1 < len(raw) else "",
+                       raw[i] if i < len(raw) else "")
                 i += 2
             else:
-                rec = (status, raw[i] if i < len(raw) else "")
+                rec = (status, raw[i] if i < len(raw) else "", "")
                 i += 1
             if rec not in seen:
                 seen.add(rec)
@@ -320,13 +324,59 @@ def main():
 
     picked, direct_picked = set(), set()
 
-    for status, path in changes:
+    def prose_refs(p):
+        """The ONE coupling a prose path has to the corpus: a suite that NAMES it literally.
+
+        Measured over the whole corpus: every suite that touches this repo's own docs tree does
+        so through an explicit literal path (`$REPO/docs/activation/.../08-…-activate.sh`,
+        `$REPO/docs/templates/desk-boot-brief.md`, …). Not one globs it, and the suites that DO
+        enumerate a docs/plans tree (plan-index, validate-plan-structure, find-plan-list-open)
+        build a FIXTURE one under $BATS_TEST_TMPDIR, so no real doc path reaches them. That is
+        why the prose rung is literal-only, and it is what makes the removal rung below sound.
+        `text` is read from the WORKING TREE — the POST-change side — so "still names it" is
+        exactly the breakage set: a land that drops the doc AND its references selects nothing,
+        while a land that drops the doc and leaves a suite naming it runs that suite.
+        """
+        return set(s for s in suites if p in text.get(s, ""))
+
+    for status, path, src in changes:
         if not path:
             emit_full("unparseable-diff-record:%s" % status)
         code = status[0]
-        if code == "D":
-            emit_full("deleted:%s" % path)
-        if code in ("R", "C"):
+
+        # PROSE REMOVAL — the one rung above the blanket D/R fail-closed.
+        #
+        # WHY THIS IS NOT A WEAKENING, AND WHY IT NOW BUYS PROOF RATHER THAN SPENDING IT: FULL is
+        # this selector's "I cannot decide", and in the v2 land lane its consumer INVERTED. It used
+        # to mean "run the ~1630-test corpus"; ship-land.sh:797 now reads it as "this selection is
+        # untrustworthy ⇒ NO direct-suite smoke", and the stale-gate re-round (ship-land.sh:1199)
+        # reads it as "exonerate nothing". So a docs-only land that renamed or archived one research
+        # doc ran ZERO suites and could exonerate nothing — a fail-closed rung that fails OPEN at
+        # its consumer (the class of docs/research/land-pipeline-v2-research-2026-07-28). Deciding
+        # the removal narrowly runs the suites that can actually break; FULL runs none of them.
+        #
+        # The blanket rule stays for CODE because a removed script takes its whole clause ladder
+        # with it (closure edges, stems, install wiring) and the map cannot describe a path that
+        # moved out from under it. Prose has no ladder — only the literal ref above.
+        if code in ("D", "R", "C"):
+            gone = src if code in ("R", "C") else path
+            # BOTH ends must be prose. A rename across the classes (docs/x.md → scripts/x.sh, or
+            # back) hands the code end a path whose clauses were never run, which is precisely the
+            # `unmapped` fail-closed case; judging it as prose would skip that rung.
+            if gone and is_prose(gone) and (code == "D" or is_prose(path)):
+                hits = set()
+                for suite in sorted(prose_refs(gone)):
+                    note(suite, "prose-removed:%s" % gone)
+                    hits.add(suite)
+                if code in ("R", "C"):         # the dst end is an ADD — same rung as A/M prose
+                    for suite in sorted(prose_refs(path)):
+                        note(suite, "prose-literal:%s" % path)
+                        hits.add(suite)
+                picked |= hits
+                direct_picked |= hits          # prose you are landing is never exonerated
+                continue
+            if code == "D":
+                emit_full("deleted:%s" % path)
             emit_full("%s:%s" % ("renamed" if code == "R" else "copied", path))
         if code not in ("A", "M", "T"):
             emit_full("status-%s:%s" % (status, path))
@@ -351,7 +401,7 @@ def main():
             if LIVENESS_SUITE in tset and path != LIVENESS_SUITE:                        # (g)
                 take(set([LIVENESS_SUITE]), "assert-liveness")
         elif is_prose(path):           # no suite builds a doc path dynamically — literal or inert
-            take(set(s for s in suites if path in text.get(s, "")), "prose-literal", direct=True)
+            take(prose_refs(path), "prose-literal", direct=True)
         else:
             # An ADDED file gets NO special rung: it runs the same clauses as a modified one,
             # and the `unmapped` rung below still fails it closed if nothing maps it. The old
