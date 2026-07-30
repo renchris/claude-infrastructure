@@ -50,6 +50,7 @@ setup() {
         SHIP_LAND_GATE_ROUNDS SHIP_LAND_VERIFY_RETRIES \
         SHIP_LAND_LANE SHIP_LAND_SMOKE_BUDGET_S SHIP_LAND_SMOKE_NICE SHIP_LAND_TIMEOUT_BIN \
         SHIP_LAND_SMOKE_STATE SHIP_LAND_SMOKE_N SHIP_LAND_SMOKE_S SHIP_LAND_NET_STATE \
+        SHIP_LAND_BACKUP_REF SHIP_BACKUP_REAP \
         2>/dev/null || true
   # LOAD SHEDDING OFF for the whole suite. In v2 CC_GATE_MAX_LOAD=0 is the never-shed kill switch,
   # so every fixture's smoke RUNS. Left inherited, whether a pipeline smoked at all would depend on
@@ -79,6 +80,26 @@ on_branch_with() {  # $1=branch $2=file $3=content  → commit a change on a fre
   [ -n "$(git ls-tree origin/main -- hello.sh)" ]         # content actually on trunk
   grep -q '"verify":"ok"' "$LAND_LOG"                     # self-attesting log
   grep -q '"sid":"test-sid-123"' "$LAND_LOG"
+}
+
+@test "green: the ship/backup-* rollback ref is REAPED once the land is content-verified" {
+  # The WIRING proof (the predicate itself is tests/ship-backup-reap.bats). The ref is written in
+  # the OUTER preflight and discharged by the LOCKED child, which cannot recompute its name —
+  # HEAD has been rebased by then. So if the exported SHIP_LAND_BACKUP_REF ever stops crossing that
+  # exec, the reaper goes SILENTLY inert and every successful land resumes leaking a permanent
+  # branch (739 of them by 2026-07-30). Nothing else in this suite would notice; this is that alarm.
+  # `grep -q reaped` is the non-vacuous half: the "no refs remain" assertion alone would also pass
+  # if the ref had never been created at all.
+  git checkout -q -b feat/reap main
+  printf '#!/usr/bin/env bash\necho "reap"\n' > reap-me.sh
+  git add reap-me.sh && git commit -q -m "feat: reap-me"
+  [ -z "$(git branch --list 'ship/backup-*')" ]
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "LANDED"
+  echo "$output" | grep -qE "reaped ship/backup-"
+  [ -z "$(git branch --list 'ship/backup-*')" ]
 }
 
 @test "red gate: shellcheck-dirty shell blocks the land → exit 6, trunk unchanged" {

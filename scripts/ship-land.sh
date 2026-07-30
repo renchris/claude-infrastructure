@@ -147,6 +147,7 @@ SELF="$(_resolve_self "${BASH_SOURCE[0]:-$0}")"
 SCRIPT_DIR="$(dirname "$SELF")"
 LAND_LOCK="${SCRIPT_DIR}/land-lock.sh"
 LAND_VERIFY="${SCRIPT_DIR}/land-verify.sh"
+BACKUP_REAP="${SCRIPT_DIR}/ship-backup-reap.sh"
 STRANDED_SWEEP="${SCRIPT_DIR}/stranded-sweep.sh"
 GATE_MANIFEST="${SCRIPT_DIR}/gate-manifest.sh"
 GATE_SELECT="${SHIP_LAND_GATE_SELECT:-${SCRIPT_DIR}/gate-select.sh}"
@@ -1478,6 +1479,26 @@ main_locked() {
     fi
   done
 
+  # --- discharge the rollback ref (STRANDED_EXPOSURE_2026-07-26 §8.2) ---
+  # THE ONLY PLACE THIS REF MAY BE DELETED, and it is reachable only past the `break` above — i.e.
+  # only once land-verify has proven this head's content is on the trunk. That is exactly the
+  # ref's release condition: it exists to roll back a land that went wrong, and this land did not.
+  # Left undeleted (the behaviour until now) every SUCCESSFUL land permanently added a branch
+  # pinning the PRE-rebase commits, whose patch-ids no dedupe can collapse onto their landed twins —
+  # so the "stranded" exposure metric grew monotonically with landing volume, 70 of 81 orphan-
+  # carrying branches being these refs. The reaper re-proves the ref's OWN content against
+  # $LANDED_HEAD before deleting (never against origin/$TRUNK, which a sibling can advance under
+  # us), and KEEPS it on any doubt.
+  # Ordered before the sweep purely as hygiene — the sweep walks every ref in refs/heads, so a ref
+  # whose purpose is already discharged should not be in that walk. It is NOT a correctness fix for
+  # the sweep: stranded-sweep only reports a commit whose paths are ALL absent from the trunk, so it
+  # would not have flagged a ref we just landed.
+  # `|| true` is load-bearing: a land that has already content-verified must never be turned red by
+  # its own cleanup. Kill switch: SHIP_BACKUP_REAP=off.
+  if [[ -n "${SHIP_LAND_BACKUP_REF:-}" && -x "$BACKUP_REAP" ]]; then
+    "$BACKUP_REAP" reap "$SHIP_LAND_BACKUP_REF" "$LANDED_HEAD" || true
+  fi
+
   local sweep_out sweep_rc sweep_field
   sweep_out="$("$STRANDED_SWEEP" "$TRUNK" 2>&1)"; sweep_rc=$?
   if [[ "$sweep_rc" -eq 0 ]]; then
@@ -1589,7 +1610,15 @@ main_outer() {
   [[ -x "$GATE_MANIFEST" ]] && "$GATE_MANIFEST" backstop "$RANGE" || true
 
   # --- safety backup ref (rollback point) ---
-  git branch -f "ship/backup-$(git rev-parse --short HEAD)" HEAD >/dev/null 2>&1 || true
+  # EXPORTED, not just written: the locked child is the process that learns whether the land
+  # succeeded, and it cannot recompute this name — by the time it holds a verdict HEAD has been
+  # rebased, so `rev-parse --short HEAD` there names a different commit. Exporting at the write site
+  # covers BOTH exec paths below (the optimistic-round loop and the statics-only fallback) without
+  # either of them having to know about it. The ref is discharged by ship-backup-reap.sh on the
+  # content-verified success path; every failure path leaves it intact, which is its whole purpose.
+  SHIP_LAND_BACKUP_REF="ship/backup-$(git rev-parse --short HEAD)"
+  export SHIP_LAND_BACKUP_REF
+  git branch -f "$SHIP_LAND_BACKUP_REF" HEAD >/dev/null 2>&1 || true
 
   # --- optimistic rounds: the gate runs UNLOCKED (parallel across sessions); the lock holds
   #     ONLY fetch-compare → push → content-verify. A stale gate (exit 42: a sibling
