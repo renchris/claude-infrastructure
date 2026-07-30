@@ -1,0 +1,124 @@
+{
+  "documentType": "codex-security.findings",
+  "findings": [
+    {
+      "attackPath": {
+        "dataflow": "Authenticated victim loads attacker page -> fetch('/api/replicache-push', {method:'POST', credentials:'include', headers:{'Content-Type':'text/plain'}, body: JSON.stringify(mutations)}) -> CORS simple request, no preflight -> SameSite=None session cookie attached -> origin check logs and continues -> content-type pin logs and continues -> session gate passes on the victim's cookie -> mutations applied to the victim's tenant.",
+        "reachability": "Reachable in any deployment that has not set either knob to 'enforce'. The repository sets neither, and .env.example documents the default as 'report'. No victim interaction beyond loading a page is required."
+      },
+      "codeEvidence": [
+        {
+          "code": "    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',",
+          "endLine": 33,
+          "explanation": "A deliberate accommodation for WebKit #255524, but it removes SameSite as a CSRF layer in production: the cookie is attached to cross-site requests, so every state-changing route needs its own defence.",
+          "id": "cookie-samesite-none",
+          "label": "Production session cookie is SameSite=None",
+          "language": "typescript",
+          "path": "lib/auth/session.ts",
+          "role": "precondition",
+          "startLine": 33
+        },
+        {
+          "code": "  const ctMode = (process.env.PUSH_CONTENT_TYPE_CHECK ?? 'report') as ContentTypeCheckMode\n  if (ctMode !== 'off') {\n    const ct = requireJsonContentType(request.headers.get('content-type'))\n    if (!ct.ok) {\n      if (ctMode === 'enforce') {\n        return NextResponse.json({ error: 'Unsupported Media Type' }, { status: 415 })\n      }",
+          "endLine": 91,
+          "explanation": "Only the 'enforce' branch returns 415. Under the 'report' default a text/plain cross-site POST is logged and then processed, which is exactly the simple-request path the surrounding comment identifies as the attack.",
+          "id": "content-type-pin-default-report",
+          "label": "The primary simple-request defence defaults to observe-only",
+          "language": "typescript",
+          "path": "src/app/api/replicache-push/route.ts",
+          "role": "root_control",
+          "startLine": 85
+        }
+      ],
+      "confidence": {
+        "level": "high",
+        "rationale": "The defaults, the fall-through branches, the cookie configuration and the absence of any enforce assignment were each read directly. The residual uncertainty is deployment configuration, not code behaviour, and it is recorded as an open question rather than assumed either way."
+      },
+      "extensions": {},
+      "findingId": "csf_58a83632bdcc6e0a4116e2c2",
+      "fingerprints": {
+        "algorithm": "codex-security/v1",
+        "primary": "codex-security/v1:sha256:cd51aaaf0fe90d272de161228d93807ccba1361af30e8dd1471449877c7ace78"
+      },
+      "identity": {
+        "anchor": "replicache-push-csrf-report-mode"
+      },
+      "locations": [
+        {
+          "endLine": 30,
+          "path": "src/app/api/replicache-push/route.ts",
+          "role": "root_control",
+          "startLine": 30
+        },
+        {
+          "endLine": 85,
+          "path": "src/app/api/replicache-push/route.ts",
+          "role": "root_control",
+          "startLine": 85
+        },
+        {
+          "endLine": 58,
+          "path": "src/app/api/replicache-push/route.ts",
+          "role": "supporting",
+          "startLine": 51
+        },
+        {
+          "endLine": 111,
+          "path": "src/app/api/replicache-push/route.ts",
+          "role": "supporting",
+          "startLine": 92
+        },
+        {
+          "endLine": 33,
+          "path": "lib/auth/session.ts",
+          "role": "precondition",
+          "startLine": 33
+        },
+        {
+          "endLine": 37,
+          "path": "src/app/api/passkey-login/route.ts",
+          "role": "expected_control",
+          "startLine": 36
+        }
+      ],
+      "occurrenceId": "occ_a7915958d34addc292d937d2",
+      "preventiveControls": [
+        "A security control introduced in report mode needs an explicit expiry \u2014 a date or a metric threshold that flips it \u2014 otherwise the observation window becomes the permanent state.",
+        "Where SameSite cannot be relied on, make the CSRF defence a shared route wrapper rather than per-route code, so no state-changing endpoint can omit it."
+      ],
+      "provenance": {
+        "source": "local_plugin"
+      },
+      "remediation": "Set PUSH_CONTENT_TYPE_CHECK=enforce in production first: the route's own comment records that it has NO false-415 surface, unlike the origin check, so it closes the simple-request path at once and without the sync-isolation risk that is gating the other flip. Then complete the origin-check report window and set PUSH_ORIGIN_CHECK=enforce. Treat 'enforce' as the default in code and 'report' as the opt-out, so a fresh environment is safe rather than open.",
+      "remediationTests": [
+        "Cross-site POST with Content-Type: text/plain and a JSON body, carrying a valid session cookie, must return 415 and apply no mutation.",
+        "Same-origin POST with Content-Type: application/json must still succeed, so the legitimate Replicache client is unaffected.",
+        "Cross-site POST with a mismatched Origin must return 403 once the origin check is enforced."
+      ],
+      "rootCause": "/api/replicache-push implements the two correct CSRF defences and leaves BOTH disabled by default. `PUSH_ORIGIN_CHECK ?? 'report'` (route.ts:30) and `PUSH_CONTENT_TYPE_CHECK ?? 'report'` (route.ts:85) each default to observe-only: on a mismatch they call logInfo and fall through, and only the 'enforce' value returns 403/415. Nothing in the repository assigns either variable \u2014 .env.example:298 carries `# PUSH_ORIGIN_CHECK=report`, commented out, restating the default. The session gate below them (route.ts:115) authenticates the caller but cannot stop CSRF, because in a CSRF the victim IS authenticated and their SameSite=None cookie is attached automatically. The route's own comment at lines 76-79 states the attack precisely: 'Next parses request.json() by body content, ignoring this header, so a cross-site text/plain POST carrying a JSON body is a CORS simple request (no preflight) that rides the SameSite=none cookie.' The Content-Type pin that closes it is named 'the PRIMARY simple-request CSRF defence' in the same comment, and it is the one running in report mode. The sibling endpoint /api/passkey-login enforces its origin check (route.ts:36) for this identical reason, so the codebase is internally inconsistent about which state-changing routes get a live defence.",
+      "ruleId": "csrf.state-changing-endpoint-defences-report-only",
+      "severity": {
+        "changeConditions": "Drops to informational the moment either knob is set to 'enforce' in the production environment \u2014 which this scan cannot observe from the repository. Rises if mutation handlers accept cross-tenant identifiers, since a blind write would then also cross a tenant boundary.",
+        "level": "high",
+        "rationale": "Every link was verified in source: the cookie is SameSite=None in production (lib/auth/session.ts:33), both knobs default to 'report' (route.ts:30, 85), the non-enforce branches only logInfo, and no assignment to either variable exists anywhere in the repository. Impact is arbitrary authenticated writes to tenant business data with no victim interaction beyond visiting a page. Not critical: the attacker cannot read the response (CORS still blocks reading), so this is blind write, not disclosure.",
+        "score": 8.1,
+        "scoringSystem": "CVSS:3.1"
+      },
+      "summary": "POST /api/replicache-push applies arbitrary client mutations to tenant data. Its two CSRF controls \u2014 a same-origin check and a Content-Type pin \u2014 both default to 'report', which logs a mismatch and continues. The production session cookie is SameSite=None, so it is attached to cross-site requests, and a cross-site text/plain POST carrying a JSON body is a CORS simple request that is delivered without a preflight. An authenticated victim who loads an attacker's page can therefore have arbitrary mutations written to their tenant.",
+      "taxonomy": {
+        "category": "Cross-site request forgery",
+        "cwe": [
+          "CWE-352",
+          "CWE-1173"
+        ]
+      },
+      "title": "Both CSRF defences on the state-changing Replicache push endpoint default to report-only, leaving cross-site mutation live in production",
+      "validation": {
+        "disposition": "reportable",
+        "method": "Source trace of both knob defaults and their non-enforce branches, the session cookie configuration, and a repository-wide search for any assignment of either variable in env files, compose, Dockerfiles, IaC, CI or scripts."
+      }
+    }
+  ],
+  "scanId": "reso_20260729T1730Z",
+  "schemaVersion": "1.0"
+}

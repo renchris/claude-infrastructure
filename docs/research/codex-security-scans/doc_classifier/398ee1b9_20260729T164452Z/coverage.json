@@ -1,0 +1,80 @@
+{
+  "completeness": "complete",
+  "deferred": [],
+  "documentType": "codex-security.coverage",
+  "excludePaths": [],
+  "explicitExclusions": [],
+  "includePaths": [
+    "reviewapp/api/"
+  ],
+  "inventoryStrategy": "scoped_path",
+  "mode": "scoped_path",
+  "openQuestions": [
+    {
+      "question": "Is any documented or scripted launcher invocation binding a routable address? This scan covered reviewapp/api only; REVIEWAPP_HOST is read at reviewapp/cli.py:116 and defaults to loopback, but deployment scripts, container manifests and provisioning/ were out of scope and would settle the finding's real-world reachability."
+    },
+    {
+      "question": "pipeline/ (document ingestion) and contracts/ were not scanned \u2014 for a system whose input is untrusted documents, the parsing surface is the other high-value target."
+    }
+  ],
+  "scanId": "398ee1b9_20260729T164452Z",
+  "schemaVersion": "1.0",
+  "surfaces": [
+    {
+      "disposition": "reported",
+      "id": "surface_authn_authz",
+      "label": "Authentication and authorization (auth.py, route dependencies)",
+      "notes": "JWT-vs-JWKS validation, Entra app-role RBAC with unknown roles dropped at validation so a role rename cannot silently grant access, and a local-principal bypass correctly gated on BOTH a launcher marker and a loopback origin, failing closed on an absent origin. That design is sound. The reported finding is a route that reaches for the same launcher-only concept with only half the test.",
+      "receiptRefs": [],
+      "riskArea": "Missing authentication / broken access control"
+    },
+    {
+      "disposition": "no_issue_found",
+      "id": "surface_client_host_trust",
+      "label": "Trustworthiness of request.client.host",
+      "notes": "The loopback test is only as good as client.host. No proxy_headers, forwarded_allow_ips, ProxyHeadersMiddleware or X-Forwarded handling exists anywhere in the repository, so client.host is the real transport peer and cannot be set by a request header.",
+      "receiptRefs": [],
+      "riskArea": "Spoofed origin"
+    },
+    {
+      "disposition": "no_issue_found",
+      "id": "surface_sql",
+      "label": "SQL construction",
+      "notes": "No f-string, concatenation or .format interpolation reaches an execute/text/raw call in scope. The single f-string hit was a log-prefix builder, not SQL.",
+      "receiptRefs": [],
+      "riskArea": "SQL injection"
+    },
+    {
+      "disposition": "not_applicable",
+      "id": "surface_deserialization",
+      "label": "Deserialization of untrusted input",
+      "notes": "No pickle, marshal, yaml.load, eval or exec anywhere in scope.",
+      "receiptRefs": [],
+      "riskArea": "Unsafe deserialization"
+    },
+    {
+      "disposition": "not_applicable",
+      "id": "surface_ssrf",
+      "label": "Outbound requests from request handlers",
+      "notes": "No requests, httpx, aiohttp or urlopen call in scope; no attacker-influenced destination exists.",
+      "receiptRefs": [],
+      "riskArea": "SSRF"
+    },
+    {
+      "disposition": "not_applicable",
+      "id": "surface_cors",
+      "label": "CORS and debug configuration",
+      "notes": "No CORSMiddleware, allow_origins, allow_credentials or debug=True in scope.",
+      "receiptRefs": [],
+      "riskArea": "Overly permissive origin policy"
+    },
+    {
+      "disposition": "no_issue_found",
+      "id": "surface_reflected_input",
+      "label": "Reflection of caller input in error bodies",
+      "notes": "The corpus 400 deliberately does not echo the supplied path back, and says so in its docstring. Auth failures surface a failure CLASS only, never the token or claims.",
+      "receiptRefs": [],
+      "riskArea": "Reflected input"
+    }
+  ]
+}

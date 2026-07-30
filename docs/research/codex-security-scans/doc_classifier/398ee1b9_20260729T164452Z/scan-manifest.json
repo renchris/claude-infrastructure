@@ -1,0 +1,44 @@
+{
+  "documentType": "codex-security.scan-manifest",
+  "scan": {
+    "artifacts": [
+      {
+        "mediaType": "application/json",
+        "path": "findings.json",
+        "sha256": "45e31e5ef396aca3c07d1655fac72e7cfc48b09d38d9934210af681f346b914b"
+      },
+      {
+        "mediaType": "application/json",
+        "path": "coverage.json",
+        "sha256": "c0159eb92c104540525cf47e89a6335ab5f2f6c7f9405477f32c1f253176bfa5"
+      }
+    ],
+    "completedAt": "2026-07-29T17:05:00Z",
+    "coverageRef": "coverage.json",
+    "findingsRef": "findings.json",
+    "id": "398ee1b9_20260729T164452Z",
+    "producer": {
+      "name": "claude-code-codex-security-port",
+      "version": "0.1.0"
+    },
+    "scope": {
+      "excludePaths": [],
+      "includePaths": [
+        "reviewapp/api/"
+      ]
+    },
+    "sealedAt": "2026-07-29T17:05:00Z",
+    "startedAt": "2026-07-29T16:44:52Z",
+    "status": "completed",
+    "target": {
+      "displayName": "doc_classifier",
+      "kind": "git_revision",
+      "revision": "398ee1b9",
+      "targetId": "doc_classifier"
+    },
+    "threatModel": {
+      "summary": "doc_classifier's reviewapp is a FastAPI service with two deployment shapes that share one codebase. The DEPLOYED shape (Azure App Service, Gate-2) authenticates every caller with an Entra bearer JWT validated against the tenant JWKS, with app-role RBAC. The LOCAL shape (`pipeline launch`) serves the review SPA to a single stakeholder on their own machine, where no Entra tenant exists; it therefore opts in to a local principal so the nav is not dead on arrival. The security question for this scan is whether the local-shape affordances are confined to the local shape. The primary attacker is a remote unauthenticated caller who can reach a launcher process that has been bound to a routable address \u2014 a mistyped --host, a REVIEWAPP_HOST override, or a container port publish, all three named by the codebase itself. Assets: the operator's filesystem layout, and the integrity of the authentication boundary."
+    }
+  },
+  "schemaVersion": "1.0"
+}

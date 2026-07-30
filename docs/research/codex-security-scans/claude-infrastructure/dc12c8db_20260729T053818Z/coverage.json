@@ -1,0 +1,87 @@
+{
+  "completeness": "complete",
+  "deferred": [],
+  "documentType": "codex-security.coverage",
+  "excludePaths": [
+    "hooks/tests/"
+  ],
+  "explicitExclusions": [
+    {
+      "pattern": "hooks/tests/**",
+      "reason": "Test fixtures, not executed by the harness as a hook."
+    }
+  ],
+  "includePaths": [
+    "hooks/"
+  ],
+  "inventoryStrategy": "scoped_path",
+  "mode": "scoped_path",
+  "openQuestions": [
+    {
+      "question": "Whether the ambient permission posture prompts for Bash(rm:*) during unattended autonomous sessions determines whether the validate-bash finding is medium or critical; this scan covered hooks/ only and did not audit the settings.json permission arrays."
+    },
+    {
+      "question": "bin/ and scripts/ (about 39k lines) are out of scope for this scan and contain further command-construction surface."
+    }
+  ],
+  "scanId": "dc12c8db_20260729T053818Z",
+  "schemaVersion": "1.0",
+  "surfaces": [
+    {
+      "disposition": "reported",
+      "id": "surface_bash_command_guards",
+      "label": "Bash command permission guards (validate-bash, smart-bash-allowlist, rm-safe-allowlist, ship-rail-push-allow, reset-hard-shadow-allow)",
+      "notes": "The security-decision surface. validate-bash.sh reported. rm-safe-allowlist.sh reviewed and found sound: it is allow-only against an explicit regenerable-path whitelist, rejects globs, ~, .., the bare root and outside-repo absolutes, refuses compound commands, and defers silently rather than allowing when a target is not provably safe.",
+      "receiptRefs": [],
+      "riskArea": "Protection mechanism failure"
+    },
+    {
+      "disposition": "no_issue_found",
+      "id": "surface_command_injection",
+      "label": "Command injection via untrusted tool_input",
+      "notes": "No eval with interpolation and no sh -c / bash -c with interpolated untrusted data anywhere in scope; the repository enforces an explicit no-eval convention. The three yq eval occurrences in teammate-auto-shutdown.sh are the yq subcommand, not shell eval.",
+      "receiptRefs": [],
+      "riskArea": "Command injection"
+    },
+    {
+      "disposition": "no_issue_found",
+      "id": "surface_json_decision_integrity",
+      "label": "Integrity of emitted permission decisions",
+      "notes": "validate-bash.sh json_escape() escapes backslash before quote and strips control characters, so a command echoed back into a deny reason cannot break out of the JSON string and silently void the decision. Peer hooks build decision JSON with jq -nc --arg, which is safe by construction.",
+      "receiptRefs": [],
+      "riskArea": "Improper output encoding"
+    },
+    {
+      "disposition": "reported",
+      "id": "surface_tempfiles",
+      "label": "Temporary file and lock handling",
+      "notes": "notify.sh reported. Other hooks use mktemp or paths under $HOME/.claude.",
+      "receiptRefs": [],
+      "riskArea": "Insecure temporary file"
+    },
+    {
+      "disposition": "no_issue_found",
+      "id": "surface_path_handling",
+      "label": "Filesystem paths derived from tool_input.file_path",
+      "notes": "backup-before-write.sh consumes .tool_input.file_path but gates on a regular-file test, quotes every expansion, and derives backup names via basename into a fixed $HOME/.claude/backups root; no attacker-controlled component reaches the destination directory.",
+      "receiptRefs": [],
+      "riskArea": "Path traversal"
+    },
+    {
+      "disposition": "no_issue_found",
+      "id": "surface_destructive_ops",
+      "label": "Destructive filesystem operations inside hooks",
+      "notes": "Every deletion, move and copy occurrence in scope quotes its operands and targets paths under $HOME/.claude or a mktemp directory; no unquoted expansion reaches a destructive command.",
+      "receiptRefs": [],
+      "riskArea": "Unintended file deletion"
+    },
+    {
+      "disposition": "not_applicable",
+      "id": "surface_network_egress",
+      "label": "Network egress from hooks",
+      "notes": "No curl, wget, nc, ssh or scp invocation exists anywhere in scope; hooks are local-only.",
+      "receiptRefs": [],
+      "riskArea": "Data exfiltration"
+    }
+  ]
+}

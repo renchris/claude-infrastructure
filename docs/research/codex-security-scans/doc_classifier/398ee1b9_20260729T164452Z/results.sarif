@@ -1,0 +1,142 @@
+{
+  "$schema": "https://docs.oasis-open.org/sarif/sarif/v2.1.0/os/schemas/sarif-schema-2.1.0.json",
+  "runs": [
+    {
+      "automationDetails": {
+        "id": "398ee1b9_20260729T164452Z"
+      },
+      "properties": {
+        "codexSecuritySchemaVersion": "1.0",
+        "codexSecurityTargetKind": "git_revision"
+      },
+      "results": [
+        {
+          "level": "warning",
+          "locations": [
+            {
+              "message": {
+                "text": "root_control"
+              },
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "reviewapp/api/routers/corpus.py"
+                },
+                "region": {
+                  "endLine": 91,
+                  "startLine": 83
+                }
+              }
+            },
+            {
+              "message": {
+                "text": "entrypoint"
+              },
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "reviewapp/api/routers/corpus.py"
+                },
+                "region": {
+                  "endLine": 68,
+                  "startLine": 64
+                }
+              }
+            },
+            {
+              "message": {
+                "text": "sink"
+              },
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "reviewapp/api/deps.py"
+                },
+                "region": {
+                  "endLine": 98,
+                  "startLine": 97
+                }
+              }
+            },
+            {
+              "message": {
+                "text": "supporting"
+              },
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "reviewapp/api/main.py"
+                },
+                "region": {
+                  "endLine": 93,
+                  "startLine": 93
+                }
+              }
+            },
+            {
+              "message": {
+                "text": "expected_control"
+              },
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "reviewapp/api/auth.py"
+                },
+                "region": {
+                  "endLine": 113,
+                  "startLine": 112
+                }
+              }
+            },
+            {
+              "message": {
+                "text": "evidence:marker-only-guard"
+              },
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "reviewapp/api/routers/corpus.py"
+                },
+                "region": {
+                  "endLine": 88,
+                  "startLine": 83
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "`GET /api/corpus/scan?path=<any absolute path>` takes an arbitrary operator filesystem path verbatim and returns a census of it \u2014 existence, enumerated file count, admitted-PDF count, total bytes, and a defect-keyed skip histogram. Its only control is a 503 raised when `run_monitor_root` is unwired. That marker proves the process was composed as the local launcher; it does not prove the CALLER is local. Any launcher bound to a routable address therefore exposes arbitrary directory enumeration to unauthenticated remote callers."
+          },
+          "partialFingerprints": {
+            "codexSecurity/v1": "codex-security/v1:sha256:daee7eaf02b0a026603a2a23ee516cad87248c3a3b70e1cdbf5c47ed9683145c",
+            "primaryLocationLineHash": "d4b701db89dcaaaa:1"
+          },
+          "properties": {
+            "category": "Missing authentication for critical function",
+            "confidence": "high",
+            "findingId": "csf_e8764eb92fea90c40d8866ac",
+            "occurrenceId": "occ_b6c0341846108f8eeb604485",
+            "severity": "medium"
+          },
+          "ruleId": "authz.launcher-affordance-missing-origin-check",
+          "ruleIndex": 0
+        }
+      ],
+      "tool": {
+        "driver": {
+          "name": "Codex Security",
+          "rules": [
+            {
+              "id": "authz.launcher-affordance-missing-origin-check",
+              "name": "authz.launcher-affordance-missing-origin-check",
+              "properties": {
+                "tags": [
+                  "security"
+                ]
+              },
+              "shortDescription": {
+                "text": "authz.launcher-affordance-missing-origin-check"
+              }
+            }
+          ],
+          "version": "0.1.0"
+        }
+      }
+    }
+  ],
+  "version": "2.1.0"
+}

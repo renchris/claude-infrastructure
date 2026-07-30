@@ -1,0 +1,219 @@
+{
+  "$schema": "https://docs.oasis-open.org/sarif/sarif/v2.1.0/os/schemas/sarif-schema-2.1.0.json",
+  "runs": [
+    {
+      "automationDetails": {
+        "id": "38eec335_20260729T1750Z"
+      },
+      "properties": {
+        "codexSecuritySchemaVersion": "1.0",
+        "codexSecurityTargetKind": "git_revision"
+      },
+      "results": [
+        {
+          "level": "note",
+          "locations": [
+            {
+              "message": {
+                "text": "sink"
+              },
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "scripts/limit-recover/lr-reset-poller.sh"
+                },
+                "region": {
+                  "endLine": 433,
+                  "startLine": 430
+                }
+              }
+            },
+            {
+              "message": {
+                "text": "sink"
+              },
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "scripts/limit-recover/lr-handoff.sh"
+                },
+                "region": {
+                  "endLine": 168,
+                  "startLine": 159
+                }
+              }
+            },
+            {
+              "message": {
+                "text": "sink"
+              },
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "scripts/handoff-fire.sh"
+                },
+                "region": {
+                  "endLine": 2402,
+                  "startLine": 2400
+                }
+              }
+            },
+            {
+              "message": {
+                "text": "evidence"
+              },
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "bin/cc-context"
+                },
+                "region": {
+                  "endLine": 28,
+                  "startLine": 28
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Three scripts build a shell script at a predictable path under `/tmp`, `chmod +x` it, and then execute it by path: `lr-reset-poller.sh:431` (`/tmp/lr-poller-launch-<sid8>.sh`), `lr-handoff.sh:159` (`/tmp/lr-launch-<sid8>.sh`) and `handoff-fire.sh:2400` (`/tmp/handoff-recycle-cmd-<sid>-<epoch>.sh`). On macOS `/tmp` is mode 1777: the sticky bit stops another uid deleting or replacing a file this user already owns, but it does not stop that uid pre-creating a name that does not yet exist. A pre-created symlink turns the `>` redirect into an arbitrary-file clobber plus a `chmod +x` on the target; a pre-created mode-0666 regular file leaves attacker-writable bytes at a path this user subsequently executes. The names are predictable in practice because session ids are world-readable: `bin/cc-context` exports per-session telemetry to `/tmp/cc-telemetry`, observed on this host as a 0755 directory holding 78 files at mode 0644, each named `<session-uuid>.json`. The same repository already uses `mktemp \"${TMPDIR:-/tmp}/...\"` at roughly forty other sites, so the safe idiom is established in-tree and these three are the outliers."
+          },
+          "partialFingerprints": {
+            "codexSecurity/v1": "codex-security/v1:sha256:ce5a1763e463d23542a3207c0f6647d2fa9c43d87e5b59d6b572e37b02cdb94d",
+            "primaryLocationLineHash": "8b8d26fe8b50a425:1"
+          },
+          "properties": {
+            "candidateId": "candidate-ae9e75b8b0e9e825",
+            "category": "Insecure temporary file / link following",
+            "confidence": "high",
+            "findingId": "csf_9ff069ab90e785229ce85f89",
+            "occurrenceId": "occ_04ee6d85495389d4a3059773",
+            "severity": "low"
+          },
+          "ruleId": "tempfile.predictable-world-writable-executable",
+          "ruleIndex": 1
+        },
+        {
+          "level": "warning",
+          "locations": [
+            {
+              "message": {
+                "text": "root_control"
+              },
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "scripts/limit-recover/lr-reset-poller.sh"
+                },
+                "region": {
+                  "endLine": 329,
+                  "startLine": 328
+                }
+              }
+            },
+            {
+              "message": {
+                "text": "sink"
+              },
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "scripts/limit-recover/lr-reset-poller.sh"
+                },
+                "region": {
+                  "endLine": 397,
+                  "startLine": 391
+                }
+              }
+            },
+            {
+              "message": {
+                "text": "source"
+              },
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "scripts/limit-recover/lr-reset-poller.sh"
+                },
+                "region": {
+                  "endLine": 155,
+                  "startLine": 145
+                }
+              }
+            },
+            {
+              "message": {
+                "text": "expected_control"
+              },
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "scripts/limit-recover/lr-reset-poller.sh"
+                },
+                "region": {
+                  "endLine": 304,
+                  "startLine": 304
+                }
+              }
+            },
+            {
+              "message": {
+                "text": "concrete_implementation"
+              },
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "scripts/limit-recover/lr-reset-poller.sh"
+                },
+                "region": {
+                  "endLine": 432,
+                  "startLine": 431
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "`lr-reset-poller.sh` reconstructs shell variables from each parked-session record by having Python print `key=<json.dumps(value)>` and passing the result to `eval`. JSON string escaping neutralises only backslash and double quote; `$`, backtick and `!` survive it untouched, and the emitted assignment is evaluated inside a shell double-quoted context where all three are active. A parked record whose `cwd` field contains `$(...)` or backticks therefore executes as a command. The value reaches the record from a session transcript's `cwd` field, written by an unescaped `printf '\"cwd\":\"%s\"'` at line 328, and the same unquoted `$cwd` is interpolated a second time with `%s` (not `%q`) into a generated executable launcher at line 431. What makes this materially different from the model simply running a command itself is where the execution lands: `com.reso.lr-reset-poller` is a loaded LaunchAgent, so nothing on this path passes through the PreToolUse command classifier, no permission prompt is raised, and no operator is watching."
+          },
+          "partialFingerprints": {
+            "codexSecurity/v1": "codex-security/v1:sha256:0a13483df606899729a94993fe879a615fa100f76d836366d0691ff712bfeac6",
+            "primaryLocationLineHash": "1d0ce0e4483c7919:1"
+          },
+          "properties": {
+            "candidateId": "candidate-20ddc0915a266083",
+            "category": "Command injection via improper neutralization",
+            "confidence": "high",
+            "findingId": "csf_4e1ac14f06c43703df5ee1b3",
+            "occurrenceId": "occ_ea005f0dd3e7dbd00081c413",
+            "severity": "medium"
+          },
+          "ruleId": "injection.json-escaping-used-as-shell-quoting",
+          "ruleIndex": 0
+        }
+      ],
+      "tool": {
+        "driver": {
+          "name": "Codex Security",
+          "rules": [
+            {
+              "id": "injection.json-escaping-used-as-shell-quoting",
+              "name": "injection.json-escaping-used-as-shell-quoting",
+              "properties": {
+                "tags": [
+                  "security"
+                ]
+              },
+              "shortDescription": {
+                "text": "injection.json-escaping-used-as-shell-quoting"
+              }
+            },
+            {
+              "id": "tempfile.predictable-world-writable-executable",
+              "name": "tempfile.predictable-world-writable-executable",
+              "properties": {
+                "tags": [
+                  "security"
+                ]
+              },
+              "shortDescription": {
+                "text": "tempfile.predictable-world-writable-executable"
+              }
+            }
+          ],
+          "version": "0.1.0"
+        }
+      }
+    }
+  ],
+  "version": "2.1.0"
+}

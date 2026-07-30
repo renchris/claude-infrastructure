@@ -1,0 +1,46 @@
+{
+  "documentType": "codex-security.scan-manifest",
+  "scan": {
+    "artifacts": [
+      {
+        "mediaType": "application/json",
+        "path": "findings.json",
+        "sha256": "3e18029e0ec0ad6b1a01cdc6a0bc57a055458a03bdd5f4fcc49d48f0575bf6ba"
+      },
+      {
+        "mediaType": "application/json",
+        "path": "coverage.json",
+        "sha256": "94fe32d700b073bef6ee66d4f926ec06cec79b7bd98f132ca7430646d9292154"
+      }
+    ],
+    "completedAt": "2026-07-29T17:35:00Z",
+    "coverageRef": "coverage.json",
+    "findingsRef": "findings.json",
+    "id": "reso_20260729T1730Z",
+    "producer": {
+      "name": "claude-code-codex-security-port",
+      "version": "0.1.0"
+    },
+    "scope": {
+      "excludePaths": [],
+      "includePaths": [
+        "src/app/api/",
+        "middleware.ts",
+        "lib/auth/"
+      ]
+    },
+    "sealedAt": "2026-07-29T17:35:00Z",
+    "startedAt": "2026-07-29T17:10:00Z",
+    "status": "completed",
+    "target": {
+      "displayName": "reso-management-app",
+      "kind": "git_revision",
+      "revision": "HEAD",
+      "targetId": "reso-management-app"
+    },
+    "threatModel": {
+      "summary": "reso-management-app is a multi-tenant Next.js App Router application whose clients sync via Replicache against /api/replicache-pull and /api/replicache-push. Authentication is WebAuthn passkeys with an iron-session cookie named `next-webauthn`. That cookie is deliberately SameSite=None in production (lib/auth/session.ts:33) because WebKit bug #255524 breaks the passkey flow otherwise \u2014 a documented, accepted trade-off. The consequence is that SameSite contributes NO CSRF protection in production: the cookie rides cross-site requests. Every state-changing endpoint must therefore carry its own CSRF defence. The primary attacker is a web attacker who gets an authenticated user to visit an unrelated page; the asset is the tenant's business data, mutable through the Replicache push channel."
+    }
+  },
+  "schemaVersion": "1.0"
+}

@@ -1,0 +1,116 @@
+{
+  "documentType": "codex-security.findings",
+  "findings": [
+    {
+      "attackPath": {
+        "dataflow": "Remote unauthenticated HTTP GET -> /api/corpus/scan?path=/ -> get_run_monitor_root returns the wired Path (marker present) -> 503 not raised -> Path(path) -> scan_corpus() -> CorpusScanView returned to the remote caller.",
+        "reachability": "Requires the launcher process to be bound to a routable interface. The default is loopback, so this is a misconfiguration-reachable path, not a default-on exposure \u2014 but it is exactly the misconfiguration auth.py names and defends against for the sibling affordance."
+      },
+      "codeEvidence": [
+        {
+          "code": "    if client is None or client.host not in _LOOPBACK_HOSTS:\n        return None",
+          "endLine": 113,
+          "explanation": "auth.local_principal will not grant a local identity unless the request physically originated on loopback, and fails closed when the origin is un-attributable. This is the control that /api/corpus/scan lacks.",
+          "id": "expected-control",
+          "label": "The origin check auth.py applies to the sibling affordance",
+          "language": "python",
+          "path": "reviewapp/api/auth.py",
+          "role": "expected_control",
+          "startLine": 112
+        },
+        {
+          "code": "    if run_monitor_root is None:\n        raise HTTPException(status_code=503, ...)\n    corpus_dir = Path(path)",
+          "endLine": 88,
+          "explanation": "The 503 tests a property of the PROCESS (was it composed as the launcher), then the caller-supplied `path` is used verbatim. Nothing tests a property of the CALLER, so a remote request to a routable launcher passes.",
+          "id": "marker-only-guard",
+          "label": "The corpus route's only control",
+          "language": "python",
+          "path": "reviewapp/api/routers/corpus.py",
+          "role": "root_control",
+          "startLine": 83
+        }
+      ],
+      "confidence": {
+        "level": "high",
+        "rationale": "Every link was checked rather than assumed: the route's dependency list, the include_router call, and the dependency's implementation. No router-level or app-level guard exists."
+      },
+      "extensions": {},
+      "findingId": "csf_e8764eb92fea90c40d8866ac",
+      "fingerprints": {
+        "algorithm": "codex-security/v1",
+        "primary": "codex-security/v1:sha256:daee7eaf02b0a026603a2a23ee516cad87248c3a3b70e1cdbf5c47ed9683145c"
+      },
+      "identity": {
+        "anchor": "corpus-scan-marker-only-guard"
+      },
+      "locations": [
+        {
+          "endLine": 68,
+          "path": "reviewapp/api/routers/corpus.py",
+          "role": "entrypoint",
+          "startLine": 64
+        },
+        {
+          "endLine": 91,
+          "path": "reviewapp/api/routers/corpus.py",
+          "role": "root_control",
+          "startLine": 83
+        },
+        {
+          "endLine": 98,
+          "path": "reviewapp/api/deps.py",
+          "role": "sink",
+          "startLine": 97
+        },
+        {
+          "endLine": 93,
+          "path": "reviewapp/api/main.py",
+          "role": "supporting",
+          "startLine": 93
+        },
+        {
+          "endLine": 113,
+          "path": "reviewapp/api/auth.py",
+          "role": "expected_control",
+          "startLine": 112
+        }
+      ],
+      "occurrenceId": "occ_b6c0341846108f8eeb604485",
+      "preventiveControls": [
+        "Every launcher-only affordance must test the CALLER's origin, not only the process composition marker \u2014 one shared dependency, not a per-route re-derivation."
+      ],
+      "provenance": {
+        "source": "local_plugin"
+      },
+      "remediation": "Apply the same two-condition test the auth module already implements. Either add a loopback-origin dependency to this route (reusing auth._LOOPBACK_HOSTS so the two cannot drift), or include the corpus router with `dependencies=[Depends(get_principal)]` at main.py:93 so an unauthenticated remote caller receives the ordinary 401 the auth module intends.",
+      "remediationTests": [
+        "With run_monitor_root wired and a simulated non-loopback client host, assert GET /api/corpus/scan returns 401 or 403 rather than a census.",
+        "Assert the loopback case still returns 200, so the legitimate local-launcher affordance is preserved."
+      ],
+      "rootCause": "The launcher-only affordances are guarded by two different, unequal tests. `auth.local_principal` requires BOTH the launcher marker (`app.state.local_principal`) AND that `request.client.host` is in `_LOOPBACK_HOSTS`, and its own docstring calls the host half 'the load-bearing one' precisely because a launcher bound to a routable address must make a remote caller anonymous again. `GET /api/corpus/scan` reaches for the same launcher-only concept but tests only the marker: `get_run_monitor_root` (deps.py:97) reads `app.state.run_monitor_root` via `getattr` and returns it, with no origin check. The route declares no principal dependency, and `main.py:93` includes the router with no `dependencies=`, so nothing supplies one at include time. The result is that the exact scenario auth.py was written to defend leaves this route undefended: the caller does not fall through to a 401, because no authentication is consulted on this path at all.",
+      "ruleId": "authz.launcher-affordance-missing-origin-check",
+      "severity": {
+        "changeConditions": "Rises to high if the launcher is ever documented, scripted or containerised with a routable bind, or if any future field on CorpusScanView carries file names or text rather than counts.",
+        "level": "medium",
+        "rationale": "Confirmed by reading: no principal dependency on the route, no `dependencies=` at `main.py:93`, and `get_run_monitor_root` performs no origin test. Disclosure is metadata only \u2014 counts, sizes and existence, never file text, so the app's no-text-egress property is not broken. Not high, because reachability requires a non-default bind: `REVIEWAPP_HOST` defaults to 127.0.0.1 at cli.py:116.",
+        "score": 5.3,
+        "scoringSystem": "CVSS:3.1"
+      },
+      "summary": "`GET /api/corpus/scan?path=<any absolute path>` takes an arbitrary operator filesystem path verbatim and returns a census of it \u2014 existence, enumerated file count, admitted-PDF count, total bytes, and a defect-keyed skip histogram. Its only control is a 503 raised when `run_monitor_root` is unwired. That marker proves the process was composed as the local launcher; it does not prove the CALLER is local. Any launcher bound to a routable address therefore exposes arbitrary directory enumeration to unauthenticated remote callers.",
+      "taxonomy": {
+        "category": "Missing authentication for critical function",
+        "cwe": [
+          "CWE-306",
+          "CWE-497"
+        ]
+      },
+      "title": "Unauthenticated filesystem census on GET /api/corpus/scan is gated only by the launcher marker, not by request origin",
+      "validation": {
+        "disposition": "reportable",
+        "method": "Static trace of the route's declared dependencies, the include_router call site, and the dependency implementation; plus a negative check that no proxy-header middleware exists that could make client.host attacker-controlled."
+      }
+    }
+  ],
+  "scanId": "398ee1b9_20260729T164452Z",
+  "schemaVersion": "1.0"
+}

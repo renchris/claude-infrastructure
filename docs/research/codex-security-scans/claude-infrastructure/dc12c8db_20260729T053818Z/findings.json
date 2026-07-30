@@ -1,0 +1,171 @@
+{
+  "documentType": "codex-security.findings",
+  "findings": [
+    {
+      "attackPath": {
+        "dataflow": "Untrusted content read by the model (repository file, web page, subagent output) -> prompt injection -> model emits a Bash tool call -> PreToolUse payload .tool_input.command -> validate-bash.sh regex classification -> permissionDecision.",
+        "reachability": "The hook runs on every Bash tool call, so the vulnerable classifier is always on the path. Reaching destructive execution additionally requires the base permission layer not to prompt."
+      },
+      "codeEvidence": [
+        {
+          "code": "if echo \"$CMD\" | grep -qE '(rm[[:space:]]+-rf[[:space:]]+/[^a-zA-Z]|rm[[:space:]]+-rf[[:space:]]+\\$HOME|rm[[:space:]]+-rf[[:space:]]+~(/|$|[[:space:]])|sudo[[:space:]]+rm|:\\(\\)\\{[[:space:]]*:\\|:&[[:space:]]*\\};:)'; then\n  deny \"Dangerous command pattern blocked: potential system damage ...\"\nfi",
+          "endLine": 96,
+          "explanation": "The slash branch hardcodes the `-rf` bundle and ends in `[^a-zA-Z]`, which must consume a character. The sibling tilde branch in the same alternation uses `~(/|$|[[:space:]])` and does accept end-of-input. That inconsistency is the defect: the slash branch cannot match a command that ends immediately after the slash, and neither branch models any spelling other than `-rf`.",
+          "id": "deny-regex",
+          "label": "Catastrophic-command deny regex",
+          "language": "bash",
+          "path": "hooks/validate-bash.sh",
+          "role": "root_control",
+          "startLine": 94
+        },
+        {
+          "code": "RM_OCCURRENCES=$(echo \"$CMD\" | grep -oE 'rm[[:space:]]+-(r|rf|fr)[[:space:]]+[^[:space:];&|]+' || true)",
+          "endLine": 195,
+          "explanation": "The fallback that would otherwise downgrade an unmatched destructive command to `ask` enumerates only the short bundles `-r`, `-rf` and `-fr`. A long-form `--recursive --force` invocation matches neither this extractor nor the deny regex, so the hook emits no decision at all for it.",
+          "id": "ask-fallback-extractor",
+          "label": "Secondary ask-level target extractor",
+          "language": "bash",
+          "path": "hooks/validate-bash.sh",
+          "role": "expected_control",
+          "startLine": 195
+        }
+      ],
+      "confidence": {
+        "level": "high",
+        "rationale": "Bypass reproduced by feeding crafted payloads directly to the hook and reading the emitted permissionDecision; the deny/ask/none split is observed, not inferred."
+      },
+      "extensions": {},
+      "findingId": "csf_62c61e14bacee96a5c5fb5ca",
+      "fingerprints": {
+        "algorithm": "codex-security/v1",
+        "primary": "codex-security/v1:sha256:8a06226077d05d1471f93a5f5825277cf68bb2250c50a5535d38df922c3f14e2"
+      },
+      "identity": {
+        "anchor": "catastrophic-rm-deny-regex-flag-forms"
+      },
+      "locations": [
+        {
+          "endLine": 96,
+          "path": "hooks/validate-bash.sh",
+          "role": "root_control",
+          "startLine": 94
+        },
+        {
+          "endLine": 195,
+          "path": "hooks/validate-bash.sh",
+          "role": "supporting",
+          "startLine": 195
+        }
+      ],
+      "occurrenceId": "occ_78102ca2f37cb6df1a059265",
+      "preventiveControls": [
+        "Classify shell commands on a parsed argv representation, never on raw text.",
+        "Every denylist clause needs a table-driven test enumerating equivalent spellings of the same dangerous operation."
+      ],
+      "provenance": {
+        "source": "local_plugin"
+      },
+      "remediation": "Normalise the command to argv before classifying instead of pattern-matching raw text: reuse the existing lib/is-true-flag.sh shlex-aware helper to detect recursive+force semantics regardless of spelling (-r, -R, --recursive, -f, --force, bundled or split), then test the resolved target. As a minimum immediate fix, anchor the slash branch as `/([^a-zA-Z]|$)` and cover the -fr, -r -f and long-form spellings.",
+      "remediationTests": [
+        "Add a table-driven case to hooks/tests/validate-bash.test.sh asserting permissionDecision == deny for each spelling: `rm -rf /`, `rm -rf /*`, `rm -fr /*`, `rm -r -f /*`, `rm --recursive --force /*`, `rm --recursive --force ~`.",
+        "Add a negative control asserting that a command merely mentioning the pattern in a quoted commit message body is NOT denied, so the fix does not regress the existing message-body handling."
+      ],
+      "rootCause": "The alternation `rm[[:space:]]+-rf[[:space:]]+/[^a-zA-Z]` encodes one specific flag spelling and requires a character to follow the slash. `[^a-zA-Z]` consumes a character rather than permitting end-of-input, so the bare form cannot match. The adjacent `~` branch in the very same regex is written `~(/|$|[[:space:]])` and does anchor on `$` \u2014 that internal inconsistency shows the missing `$` in the `/` branch is an oversight, not a deliberate choice. The secondary ask-level clause at line 195 extracts targets with `rm[[:space:]]+-(r|rf|fr)[[:space:]]+`, which likewise cannot see long-form flags, so both layers miss the same spellings.",
+      "ruleId": "denylist.incomplete-flag-forms",
+      "severity": {
+        "changeConditions": "Rises to high or critical if the ambient permission posture stops prompting for Bash(rm:*) \u2014 an unattended or auto-approving session, a broadened allow-list, or any future hook that auto-allows long-form flags. This repository explicitly runs 24/7 autonomous sessions, so that posture is a live configuration, not a hypothetical.",
+        "level": "medium",
+        "rationale": "Reproduced directly against the hook: `rm -rf /*` returns deny, while `rm --recursive --force /*` returns no decision at all and the bare `rm -rf /` form returns only ask. Impact if reached is destruction of the user's filesystem. It is not critical because this hook is defence-in-depth by its own header comment, and rm-safe-allowlist.sh correctly defers rather than auto-allowing these forms, so the command still falls through to the base Bash(rm:*) ask rule \u2014 an attended operator would still be prompted.",
+        "score": 5.5,
+        "scoringSystem": "CVSS:3.1"
+      },
+      "summary": "The hard-deny regex that is supposed to stop catastrophic filesystem destruction matches only the literal short-flag bundle `-rf` followed by a character. Equivalent invocations with identical destructive effect \u2014 `--recursive --force`, `-fr`, `-r -f`, and the bare `rm -rf /` form at end of input \u2014 are not matched, so the guard emits `ask`, or no decision at all, instead of `deny`.",
+      "taxonomy": {
+        "category": "Protection mechanism failure / incomplete denylist",
+        "cwe": [
+          "CWE-184",
+          "CWE-693"
+        ]
+      },
+      "title": "Catastrophic-command denylist is bypassed by equivalent flag spellings, downgrading deny to ask or to no decision",
+      "validation": {
+        "disposition": "reportable",
+        "method": "Direct execution of the hook with crafted PreToolUse payloads, reading the emitted permissionDecision."
+      }
+    },
+    {
+      "attackPath": {
+        "dataflow": "Local process as another uid pre-creates /tmp/claude-notify.log as a symlink -> notification hook fires -> the append follows the symlink -> write into the attacker-chosen file as the invoking user.",
+        "reachability": "Requires local code execution under a different uid on the same host; no remote path."
+      },
+      "confidence": {
+        "level": "high",
+        "rationale": "Paths and the append are read directly from source; /tmp permissions verified on the live host."
+      },
+      "extensions": {},
+      "findingId": "csf_3e515867f4bce69bbfe083ce",
+      "fingerprints": {
+        "algorithm": "codex-security/v1",
+        "primary": "codex-security/v1:sha256:422cb08f647e95160b5d31ffe645842d9011ca3ffa5a78cd2e66688e14491e02"
+      },
+      "identity": {
+        "anchor": "notify-fixed-tmp-paths"
+      },
+      "locations": [
+        {
+          "endLine": 35,
+          "path": "hooks/notify.sh",
+          "role": "root_control",
+          "startLine": 35
+        },
+        {
+          "endLine": 88,
+          "path": "hooks/notify.sh",
+          "role": "sink",
+          "startLine": 88
+        },
+        {
+          "endLine": 39,
+          "path": "hooks/notify.sh",
+          "role": "supporting",
+          "startLine": 39
+        }
+      ],
+      "occurrenceId": "occ_f00cfa565b32dcc7068f6057",
+      "preventiveControls": [
+        "Never use a fixed name directly under /tmp for a file the process will write; prefer $TMPDIR or an application-owned directory."
+      ],
+      "provenance": {
+        "source": "local_plugin"
+      },
+      "remediation": "Place both files under a user-owned directory such as $TMPDIR (per-user on macOS) or ~/.claude/logs, create the directory with mode 700, and do not follow symlinks when opening.",
+      "remediationTests": [
+        "Pre-create the target path as a symlink to a canary file, run the hook, and assert the canary is unchanged."
+      ],
+      "rootCause": "LOG_FILE and DEBOUNCE_FILE are fixed literals under the shared /tmp root rather than a per-user directory or an O_NOFOLLOW/mktemp-created file, so the hook cannot distinguish its own file from an attacker-planted symlink of the same name.",
+      "ruleId": "tempfile.predictable-world-writable-path",
+      "severity": {
+        "changeConditions": "Rises if the host is shared or multi-user, if the log path is later consumed by anything that parses or executes it, or if a future writer truncates rather than appends.",
+        "level": "low",
+        "rationale": "Confirmed world-writable sticky /tmp (drwxrwxrwt) and a real append at line 88. Impact is limited to appending attacker-influenceable log text or updating an mtime, not arbitrary content control, and it requires a hostile local process under a different uid \u2014 uncommon on a single-user developer workstation.",
+        "score": 3.3,
+        "scoringSystem": "CVSS:3.1"
+      },
+      "summary": "The notification hook writes its log and debounce lock to hardcoded `/tmp` paths. `/tmp` is world-writable on macOS, so a process running as another uid can pre-create either path as a symlink and have the hook's append or touch follow it, writing to a file of the attacker's choosing with the invoking user's privileges.",
+      "taxonomy": {
+        "category": "Insecure temporary file / link following",
+        "cwe": [
+          "CWE-377",
+          "CWE-59"
+        ]
+      },
+      "title": "Notification hook appends to fixed, predictable paths in world-writable /tmp",
+      "validation": {
+        "disposition": "reportable",
+        "method": "Source review plus live verification of /tmp permissions."
+      }
+    }
+  ],
+  "scanId": "dc12c8db_20260729T053818Z",
+  "schemaVersion": "1.0"
+}
