@@ -121,6 +121,18 @@ The dominant failure is no longer *"landed but not deployed"* — it is **"deplo
 on"**, and the operator surface has no row, no rank and no count that expresses it. §4's M2/M3
 exist for that migration, not for any particular count.
 
+**CORRECTION to the deploy figure, made during this session and the reason the STRUCTURAL claim is
+worded the way it is.** The lag was measured four times in ~90 minutes: **20 → 23 → 0 → 47**. It
+reached 0 (the shared checkout genuinely caught up to `458a45e9`), then trunk advanced again as three
+sibling rebuilds landed. So "deployed but not switched on" is not a stable state and any plan that
+gated on it would be gating on a coin flip. The claim that survives re-derivation:
+
+> **The deploy axis OSCILLATES and is self-correcting; the activation queue is MONOTONE and nobody
+> drains it.** 12 pending, 6 of them staged in the last 24h by the campaign's own just-finished
+> rebuilds, and the surface that reports it named only 6 of the 12 before this rebuild. A count that
+> swings 20→0→47 within the hour is a reconciler's job; a queue that only grows is the operator's,
+> and it is the one the board was under-reporting.
+
 ### §1.2 Branch-graveyard sweep (Phase 1, non-optional) — POSITIVE CONTROL PASSED FIRST
 
 Method: `git log --all --oneline --diff-filter=A -- <row-10 paths>` plus the per-branch
@@ -220,14 +232,14 @@ old design is right, it stays byte-identical, and the tests prove that.
 | F1 | `trunk-red` cannot fire: `[ "$red" -eq "$seen" ]` silences on ONE non-verdict in the window (C9/C10) | **Count NOT-GREEN, not RED.** The alarm's question is "is it green?" (I2). One non-verdict must *strengthen* the alarm, never silence it | **M1** |
 | F2 | The suppressed row was the one carrying the useful platter — `never-green`'s fallback sends the operator to `runner.log`, `trunk-red`'s sends them to the failing-test histogram. Different action, silently substituted | The state name must distinguish them: `PERSISTENT-RED` (all literally red) vs `PERSISTENT-NOT-GREEN` (window mixes red with non-verdicts). Row 1's verdict vocabulary is consumed verbatim; only the ALARM state is row 10's | **M1** |
 | F3 | `never-green` DETAIL says "5 verdicts" against a lifetime of 33 (C11) — the board understates its own evidence 6.6× | Report **both** denominators: window and lifetime. A gate's number and a human's number are different questions | **M1** |
-| F4 | `deploy-lag` is structurally incapable of firing: gated on a green stamp, of which there are 0 in 33 (C14). Existence evidence taken from the subject's own success history (violates I1) | Take existence evidence from the **DECLARATION** — the live layer's own trunk position, which `operator-readout` already reads and needs no green. `deploy-lag` becomes reachable with **0 greens** | **M1** |
+| F4 | ~~`deploy-lag` is structurally incapable of firing…~~ **REVISED on close reading of the code — the diagnosis was half right and the prescription was wrong.** `deploy-lag`'s own predicate is CORRECT and needs no polarity change: its semantic *is* "a GREEN commit sat undeployed", so a missing green is a legitimately absent premise, not a suppression — and `never-green` already exists as the backstop that covers it and DOES fire (verified live). What was genuinely missing was **MAGNITUDE**: `never-green` said "deploy has no cursor" (the cause) and nothing about how many commits of landed work were inert behind it — the number row 3 spent a whole rebuild not knowing | Fold the exposure into `never-green`'s DETAIL rather than add an overlapping alarm. Adding a second row for one fault is what this file's own comments warn against, and inventing a blocker is as bad as hiding one | **M1** |
 | F5 | **THE HEADLINE.** 55 steps → 6 slots, fixed section order, so **2 of 5 classes are unreachable at any queue depth** (C6). A genuine class-C judgment call and a blocked work item — the two things most needing a human — cannot be rendered while ≥6 activations are pending | **Allocate the render budget per CLASS, not first-come.** Every class gets ≥1 line: its items if they fit, else an honest counted rollup carrying that class's own drill-down command. Truncation can then never delete a class (I10) | **M2** |
 | F6 | Within activations, glob order = filename order, so `18-fleet` (12 dark labels) is always cut and `04-page-channel` is always shown | Rank by a signal already in hand at zero fork cost (C19): **CONFIRM-gated ⇒ has a real effect** (C15: 9 of 12). Effect-bearing activations rank above print-only ones | **M2** |
 | F7 | Activation axis 1 hides everything staged <24h — 6 of 12 pending, and the 6 hidden are exactly the campaign's freshest rebuilds (C7). The operator reads "6 pending" and believes that is the queue | **Report the whole queue, partitioned by age.** The age gate was built against rot and now hides the window in which the operator still has context. Never hide a class (I10) | **M3** |
 | F8 | `resolve_mirror()` derefs to the SHARED CHECKOUT, so parity is live-vs-checkout while the checkout trails trunk by 23 — **deploy lag masquerades as "never committed"**, and the dangerous direction (LIVE-ONLY ⇒ `cp` into a behind-checkout) is the one it fabricates | **Adjudicate LIVE-ONLY against `origin/main`**, and carry the checkout's trunk lag on every parity finding so a `cp` instruction is never issued blind. Latent today (C17: all 4 drifts are real) — fixed before it fires | **M4** |
 | F9 | Axis 3's label regex is `com\.claude\.` only, so an activation whose effect is a `com.chrisren.*` label is unverifiable (C16) — row 12's exact scope bug, one layer out | Widen to both declared families, and distinguish DISABLED from NOT-INSTALLED via the literal `=> disabled` read with the sum checksum. **Defer to `bin/cc-fleet` when present** (consume row 12's contract, fail-soft when dark) | **M5** |
 | F10 | The bug class recurs: F1's shape is one grep away from reappearing in the next alarm anybody writes | A declared-file **polarity lint** naming both shapes — equality against a failure name, and existence evidence taken from success history — plus the standing rule that every alarm carries a positive control that proves it FIRES on a non-verdict window (I3) | **M6** |
-| F11 | `statusline.sh` renders on every UI update at ~109 ms; its byte-identical slim rewrite plus proof harness sat stranded 4 days on an unlanded branch | Take it: `cherry-pick -x 78de6237`, verified clean, with the harness that extracts its own baseline from git | **M7** |
+| F11 | `statusline.sh` renders on every UI update; its byte-identical slim rewrite plus proof harness sat stranded 4 days on an unlanded branch | Take it: `cherry-pick -x 78de6237`, verified clean, with the harness that extracts its own baseline from git. **Perf figure RE-DERIVED, not inherited: measured 108 ms → 63 ms (−42%) over 20 renders each on this box. The commit's own claim of 25-30 ms does not reproduce here** — its 108 ms baseline does, exactly. The take is still clearly right (a hot path every pane renders) but a number in a handed-down message is a claim like any other | **M7** |
 | F12 | Reflexive: `operator-readout` is registered in 4 of 5 config dirs (C18) — this row's own surface is dark in one place, and no alarm covers a hook's own wiring | Recorded, not built here. The general mechanism (a hook-wiring alarm) is `beacon-inert`'s shape generalised and belongs to row 6 (guardrail/hook layer). **Named + backlogged, not silently carried** | — |
 
 ### Mechanism specs
@@ -321,10 +333,80 @@ Land order, continuously via `scripts/ship-land.sh`, never batched:
 `origin/main` after landing (`git merge-base --is-ancestor <sha> origin/main`) and corrected in a
 follow-up land. Row 3 hit exactly this in a doc whose whole purpose was disk-truth citations.
 
-## §8 · Landed shas
+## §8 · Landed shas — ALL SEVEN VERIFIED ON TRUNK
 
-_(filled in as each increment lands; resolved against `origin/main`, not local HEAD)_
+Resolved with `git merge-base --is-ancestor <sha> origin/main` **after** landing, never from local
+HEAD: `ship-land.sh` rebases, so a pre-land sha names a commit that is not on trunk. Row 3 hit
+exactly this in a doc whose whole purpose was disk-truth citations.
 
-| Increment | sha | ancestor of origin/main |
-|---|---|---|
-| §1-§8 design doc | _pending_ | — |
+| # | Increment | sha | ancestor of `origin/main` |
+|---|---|---|---|
+| 1 | design doc (§0-§8) | **`a95f4f38`** | ✓ |
+| 2 | **M1** alarm polarity — for a VERDICT ask "is it red?", for an ALARM ask "is it green?" | **`f1451bcf`** | ✓ |
+| 3 | **M2** per-CLASS render budget | **`7662ce58`** | ✓ |
+| 4 | test determinism — a bare `touch` races `stat %m`'s 1-second granularity | **`a8a0f163`** | ✓ |
+| 5 | **M3/M4/M5** activation queue: whole-queue report · trunk-adjudicated LIVE-ONLY · both label families | **`97667057`** | ✓ |
+| 6 | **M7** graveyard recovery — `cherry-pick -x 78de6237` + hermeticity fix | **`df6b328f`** | ✓ |
+| 7 | **M6** alarm-polarity lint + suite | **`6937d001`** | ✓ |
+
+## §9 · Close against the frozen DoD
+
+**Both DoD integers met, read off disk, not narrated.**
+
+| DoD target | Before | After | The read |
+|---|---|---|---|
+| classes starved at any queue depth | **2 of 5** | **0 of 5** | `hooks/operator-readout.sh --render` — all four active classes present at 57 steps / MAX=6 |
+| alarm predicates testing a named failure where absence-of-success is meant | **1 of 9, live-suppressed** | **0** | `scripts/alarm-polarity-lint.sh` → clean, 4 files, 1 explained suppression |
+
+**PROVEN (disk reads, re-derived at close):**
+- **A1/A2** `cc-blockers` emits `trunk-red / PERSISTENT-NOT-GREEN — newest 5: 4 red 1 nonverdict,
+  0 green`, carrying the failing-test histogram platter. Pre-fix this window produced **no**
+  `trunk-red` row at all.
+- **A3** the DETAIL names the lifetime (34 stamps: 31 red · 2 cut · 1 hung · **0 green ever**), not
+  the 5-wide window it used to report as if it were the whole history.
+- **A5/A6** all four step classes render; `↳` rollups carry `+10 activation`, `+12 decision`,
+  `+29 backlog` with each class's own listing command. Effect-bearing activations lead.
+- **A7** zero new forks in `render_block`; net one fewer.
+- **A8** the queue surface names **12 of 12** pending (was 6 of 12), partitioned ROTTING/FRESH.
+- **A11** the lint is clean on the fixed tree and **fires on the real pre-fix predicate recovered
+  from git** — the positive control, not an approximation.
+- **A13** every suite RED-proofed against a `git archive origin/main` pristine tree: cc-blockers
+  8/12, operator-readout 8/10, activation-watch 9, lint 1 (its positive control). In every case the
+  cases that pass on pristine are exactly the positive controls and the kill switches, which by
+  definition must reproduce the incumbent.
+- **A14** `statusline.sh` output byte-identical (10/10 incl. the harness self-check + a live check).
+- **A15** kill switches restore the incumbent: `CC_OPREADOUT_CLASSBUDGET=off` is **byte-identical**
+  to `origin/main`'s render; `CC_BLOCKERS_ALARM_POLARITY=legacy` restores the suppression exactly.
+- Totals: **cc-blockers 62/62 · operator-readout 35/35 · activation-watch 27/27 (+ selftest 18/18) ·
+  alarm-polarity 7/7 · statusline-identity 10/10**. All gate-green through `scripts/ship-land.sh`.
+
+**IN FLIGHT (autonomous, owner named):** nothing of this row's. All seven increments are landed and
+every edit is in an already-symlinked live file, so **this row needs no activation step** — unlike
+rows 4, 5, 12 and 13. Its output changes at the next SessionStart / Stop in each session.
+
+**ACCRUING (time-dependent, and where it will be read):**
+- The queue-drain metric. The surface now reports 12 of 12; whether the operator's un-run count
+  actually falls is measured by `for f in …/pending-activation/*.sh; do [ -f "$f.done" ] || echo; done
+  | wc -l` over days, not by this rebuild.
+- `trunk-red`'s platter only pays off when someone runs it. The histogram it hands over is the first
+  actionable thing the board has offered about the 0-green deadlock (`cc-backlog da18f179ac50`).
+
+**REMAINDERS — named, not silently carried:**
+- **R-1 (row 1 seam, ping sent).** Wiring `alarm-polarity-lint.sh` into `run_gate` as a blocking
+  diff-scoped gate touches `scripts/ship-land.sh` — row 1's file. Enforcement today is via
+  `tests/alarm-polarity-lint.bats`, which run_gate already executes in own-scope when a declared
+  alarm file changes. That is real enforcement for this row's surfaces and short of the
+  fleet-wide ratchet the rule deserves.
+- **R-2 (row 6).** `operator-readout.sh` is registered in **4 of 5** config dirs (absent from
+  `~/.claude-next`) — this row's own close block is dark in one place and no alarm covers a hook's
+  own wiring. The general mechanism is `beacon-inert`'s shape generalised to every declared hook,
+  which is row 6's surface (guardrail/hook layer). Backlogged, not built here.
+- **R-3.** The sibling polarity shape — existence evidence from a subject's own success history —
+  is deliberately NOT linted (see §4 M6 for why a checker would fire on correct code). It stays a
+  review rule under §3 I1.
+- **R-4.** `tests/statusline-mail-badge.bats` REJECTED with reasons (§1.2); the 📬 badge is row 3's
+  call and row 3 is DONE without it.
+
+**Methodology note earned here:** `shellcheck -S warning` is a WEAKER check than the land gate,
+which runs at default severity. One land went RED on an `SC2016` **info** that the pre-land check
+passed. Verify with bare `shellcheck` before every land.
