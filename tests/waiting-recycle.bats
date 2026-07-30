@@ -948,3 +948,133 @@ _wr_repo() { mkdir -p "$1"; git -C "$1" init -q; git -C "$1" config user.email t
   [ ! -f "$CC_WR_STATE_DIR/live-$(_wr_key_role)" ] || false      # must NOT claim the shared role key
   [ -f "$CC_WR_STATE_DIR/live-$(_wr_key_cwd "$DESK")" ]
 }
+
+# ── SIZE AXIS (2026-07-29, K02 — hook header §9) ───────────────────────────────────────────────────
+# The whole apparatus keyed on used_pct, which compaction resets — so a session with a huge transcript
+# at LOW fill was invisible, and (the sharper half of a3's finding) it exited at the
+# `below-threshold-no-tell` abstain that sits UPSTREAM of every advisory, Stage-2, wedge and page path.
+# Every case below therefore pins fill BELOW T_IDLE=55: at or above it the legacy trigger would fire
+# anyway and the test would prove nothing about the new axis.
+#
+# Sizes are in whole MB (integer division), so a 1 MB bar needs a real >1 MiB fixture.
+mk_tx_size() { # $1=MiB $2=last-assistant-text → a VALID jsonl transcript of at least $1 MiB
+  # The pad is STREAMED into the file, never passed as a jq --arg: a 1 MiB argument exceeds ARG_MAX
+  # ("Argument list too long"), which fails the FIXTURE and looks exactly like the hook not firing.
+  # 'p' needs no JSON escaping, so the hand-built line stays valid without jq.
+  local p="$BATS_TEST_TMPDIR/txbig-${BATS_TEST_NUMBER}.jsonl"
+  { printf '{"type":"assistant","message":{"content":[{"type":"text","text":"'
+    head -c $(( $1 * 1048576 )) /dev/zero | tr '\0' 'p'
+    printf '"}]}}\n'
+  } > "$p"
+  jq -nc --arg t "$2" '{type:"assistant",message:{content:[{type:"text",text:$t}]}}' >> "$p"
+  printf '%s' "$p"; }
+mk_tel_pid() { # $1=sid $2=used_pct $3=pid — telemetry with a pid so the RSS axis can resolve
+  printf '{"session_id":"%s","ts":%s,"used_pct":%s,"cwd":"%s","pid":%s}' \
+    "$1" "$(date +%s)" "$2" "$DESK" "$3" > "$CC_TELEMETRY_DIR/$1.json"; }
+mk_ps_rss() { # $1=rss_kb → a `ps` stub reporting that RSS for a claude-looking comm
+  local p="$BATS_TEST_TMPDIR/ps-${BATS_TEST_NUMBER}"
+  printf '#!/bin/bash\nprintf "  %%s %%s\\n" "%s" "/usr/local/bin/claude"\n' "$1" > "$p"
+  chmod +x "$p"; printf '%s' "$p"; }
+
+@test "size: an OVERSIZE transcript fires at 30% fill — the K02 case (fill alone stays silent)" {
+  export CC_WR_SIZE_MB=1
+  mk_tel s_sz1 30                                   # 30% is far below T_IDLE=55
+  run drive s_sz1 "$(mk_tx_size 1 "$WAIT")"
+  [ "$status" -eq 0 ]; fired "$output"
+  echo "$output" | grep -q "/handoff"
+  # the control: the SAME 30% fill with a SMALL transcript must stay silent
+  rm -f "$CC_WR_STATE_DIR"/cooldown-* "$CC_WR_STATE_DIR"/cap-* "$CC_WR_STATE_DIR"/escalate-*
+  mk_tel s_sz2 30
+  run drive s_sz2 "$(mk_tx 9 "$WAIT")"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+}
+@test "size: the advisory names the SIZE axis and never claims a context threshold it did not cross" {
+  export CC_WR_SIZE_MB=1
+  mk_tel s_sz3 30
+  run drive s_sz3 "$(mk_tx_size 1 "$WAIT")"
+  fired "$output"
+  echo "$output" | grep -q "transcript 1MB ≥ 1MB"
+  echo "$output" | grep -q "SIZE axis"
+  # must NOT narrate a fill threshold: 30% never crossed eff_idle, and a misattributed cause reads as
+  # a false positive to the next person who checks the fill
+  echo "$output" | grep -q "context 30% ≥" && false || true
+  tail -1 "$CC_WR_IDL" | jq -e 'select(.disposition=="fired") | .trigger=="size"' >/dev/null
+}
+@test "size: CC_WR_SIZE_MB=0 disables the axis (and a 0 measurement never clears a live bar)" {
+  export CC_WR_SIZE_MB=0
+  mk_tel s_sz4 30
+  run drive s_sz4 "$(mk_tx_size 1 "$WAIT")"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  # …but SILENCE alone is also what a hook with no size axis at all produces, so assert the axis was
+  # EVALUATED-and-disabled: the record must carry the measured MB and the 0 bar it was compared to.
+  tail -1 "$CC_WR_IDL" | jq -e 'select(.disposition=="abstained") | .size_mb_t==0 and .tx_mb>=1' >/dev/null
+  # an UNKNOWN size (absent transcript) must not fire a live bar either — 0 is unknown, not small
+  export CC_WR_SIZE_MB=1
+  mk_tel s_sz5 30
+  run drive s_sz5 "$BATS_TEST_TMPDIR/no-such-transcript.jsonl"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  tail -1 "$CC_WR_IDL" | jq -e 'select(.disposition=="abstained") | .size_mb_t==1 and .tx_mb==0' >/dev/null
+}
+@test "size: OVERSIZE + a HARD hold at low fill reaches the busy-PAGE — the emergency fallback" {
+  # Pre-fix this was structurally unreachable: the trigger-gate abstain sits upstream of every page
+  # branch, so a size-dangerous session at low fill never even paged the operator.
+  export CC_WR_SIZE_MB=1
+  mk_tel s_sz6 30
+  run drive s_sz6 "$(mk_tx_size 1 "Which do you prefer — option A or B?")"
+  [ "$status" -eq 0 ]; fired "$output"
+  echo "$output" | grep -q "open-decision-hold"
+  echo "$output" | grep -q "OVERSIZE"
+  echo "$output" | grep -q "1MB"
+  # axis-honest: a size page must not borrow the fill narrative
+  echo "$output" | grep -q "climbing toward the 90%" && false || true
+  tail -1 "$CC_WR_IDL" | jq -e 'select(.disposition=="escalated") | .forceable==false' >/dev/null
+}
+@test "size: RSS alone PAGES and never enters the recycle ladder; the page is paced" {
+  export CC_CE_PS="$(mk_ps_rss 1600000)"           # 1562 MB ≥ the 1500 MB default bar
+  export CC_WR_SIZE_MB=1                            # transcript stays UNDER its bar → RSS is the sole signal
+  mk_tel_pid s_sz7 30 4242
+  run drive s_sz7 "$(mk_tx 7 "$WAIT")"
+  [ "$status" -eq 0 ]; fired "$output"
+  echo "$output" | grep -q "HIGH PROCESS FOOTPRINT"
+  echo "$output" | grep -q "1562MB"
+  tail -1 "$CC_WR_IDL" | jq -e 'select(.disposition=="escalated") | .rss_page==true and .forceable==false' >/dev/null
+  # NOT the recycle ladder: no Stage-2 grace clock and no fire latch may exist for this SID
+  [ ! -f "$CC_WR_STATE_DIR/escalate-s_sz7" ] || false
+  [ ! -f "$CC_WR_STATE_DIR/fired-s_sz7" ] || false
+  # paced: an immediate re-poll is silent, and says why
+  run drive s_sz7 "$(mk_tx 7 "$WAIT")"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  grep -q '"reason":"rss-page-paced' "$CC_WR_IDL"
+}
+@test "size: RSS yields to the recycle ladder whenever another trigger is also live" {
+  # RSS pages because its dangerous level is unproven; but when a real lever exists (an oversize
+  # transcript, or the fill threshold) the ladder must own the decision, not the page.
+  export CC_CE_PS="$(mk_ps_rss 1600000)"
+  export CC_WR_SIZE_MB=1
+  mk_tel_pid s_sz8 30 4242
+  run drive s_sz8 "$(mk_tx_size 1 "$WAIT")"        # oversize AND over-RSS
+  fired "$output"
+  echo "$output" | grep -q "HIGH PROCESS FOOTPRINT" && false || true
+  [ -f "$CC_WR_STATE_DIR/escalate-s_sz8" ]         # the ladder's grace clock DID start
+}
+@test "size: every eval records what it measured — tx_mb/rss_mb ride even on an abstain" {
+  # A dormant threshold must never be indistinguishable from broken wiring; this is the data the
+  # operator calibrates the bar DOWN from.
+  export CC_CE_PS="$(mk_ps_rss 700000)"
+  mk_tel_pid s_sz9 30 4242
+  run drive s_sz9 "$(mk_tx 9 "$WAIT")"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  tail -1 "$CC_WR_IDL" | jq -e 'select(.disposition=="abstained")
+      | has("tx_mb") and has("rss_mb") and has("size_mb_t") and has("rss_page_t") and .rss_mb==683' >/dev/null
+}
+@test "size: the Stage-2 successor brief explains a SIZE recycle, not a phantom context% one" {
+  export CC_WR_SIZE_MB=1 CC_WR_GRACE_S=0 CC_WR_FIRE_DIR="$BATS_TEST_TMPDIR/fire"
+  mkdir -p "$CC_WR_FIRE_DIR"
+  mk_tel s_sz10 30
+  run drive s_sz10 "$(mk_tx_size 1 "$WAIT")"; fired "$output"     # Stage 1 stamps the grace clock
+  run drive s_sz10 "$(mk_tx_size 1 "$WAIT")"                       # grace 0 ⇒ Stage 2 (SHADOW default)
+  [ "$status" -eq 0 ]; fired "$output"
+  grep -q "triggered by SIZE, not context fill" "$CC_WR_FIRE_DIR/wr-fire-s_sz10.txt"
+  grep -q "never reset by compaction" "$CC_WR_FIRE_DIR/wr-fire-s_sz10.txt"
+  tail -1 "$CC_WR_IDL" | jq -e 'select(.reason=="stage2-shadow") | .trigger=="size"' >/dev/null
+}

@@ -144,3 +144,65 @@ mk_assist()   { printf '{"type":"assistant","message":{"role":"assistant","conte
   mk_human "$(( now - 10 ))" "NOISE: synthetic chatter"
   [ -z "$(ce_last_interactive_age "$TX")" ]
 }
+
+# ── ce_size — THE SIZE AXIS (2026-07-29, K02) ─────────────────────────────────────────────────────
+# The axis used_pct is blind to: a compacted session resets its fill but not its transcript or its
+# process footprint. Both metrics report 0 for UNKNOWN, never for "safe and small" — consumers gate on
+# `>=`, so an unknown degrades to the pre-size behavior.
+mk_ps() { # $1=rss-column-text $2=comm → a `ps` stub on CC_CE_PS
+  local p="$BATS_TEST_TMPDIR/ps-${BATS_TEST_NUMBER}"
+  printf '#!/bin/bash\nprintf "%%s %%s\\n" "%s" "%s"\n' "$1" "$2" > "$p"; chmod +x "$p"; printf '%s' "$p"; }
+mk_tel_pid() { # $1=pid → telemetry carrying that pid
+  local p="$BATS_TEST_TMPDIR/tel-${BATS_TEST_NUMBER}.json"
+  printf '{"ts":1,"pid":%s}' "$1" > "$p"; printf '%s' "$p"; }
+
+@test "size: transcript bytes are read exactly; a missing/empty path is 0 = UNKNOWN not small" {
+  printf '0123456789' > "$T/tx.jsonl"
+  [ "$(ce_size "$T/tx.jsonl" '')" = "10 0" ]
+  [ "$(ce_size "$T/absent.jsonl" '')" = "0 0" ]
+  [ "$(ce_size '' '')" = "0 0" ]
+}
+@test "size: RSS resolves via the telemetry pid when the comm still looks like claude" {
+  export CC_CE_PS="$(mk_ps 700000 /usr/local/bin/claude)"
+  [ "$(ce_size '' "$(mk_tel_pid 4242)")" = "0 700000" ]
+}
+@test "size: RIGHT-ALIGNED ps output parses — the width must never decide whether the axis works" {
+  # `ps -o rss=` pads to a varying column width, so a small RSS arrives as "  1984 bash". A
+  # ${line%%' '*} parse yields EMPTY there ⇒ rss=0 ⇒ the axis silently never fires, while a wide
+  # value spot-checks fine. Both widths must give the number.
+  export CC_CE_PS="$(mk_ps '    1984' /usr/local/bin/claude)"
+  [ "$(ce_size '' "$(mk_tel_pid 4242)")" = "0 1984" ]
+  export CC_CE_PS="$(mk_ps 1048576 /usr/local/bin/claude)"
+  [ "$(ce_size '' "$(mk_tel_pid 4242)")" = "0 1048576" ]
+}
+@test "size: pid-recycle guard — a live pid whose comm is NOT claude reports 0 (unknown), not a stranger's RSS" {
+  # Telemetry files outlive their sessions and pids recycle, so charging the pid blind would read an
+  # unrelated process's footprint as this session's.
+  export CC_CE_PS="$(mk_ps 900000 /bin/loginwindow)"
+  [ "$(ce_size '' "$(mk_tel_pid 4242)")" = "0 0" ]
+  export CC_CE_RSS_COMM_RX='loginwindow'          # seam works in the other direction too
+  [ "$(ce_size '' "$(mk_tel_pid 4242)")" = "0 900000" ]
+}
+@test "size: no pid / non-numeric pid / dead pid → rss 0, never an error" {
+  export CC_CE_PS="$(mk_ps 700000 /usr/local/bin/claude)"
+  printf '{"ts":1}' > "$T/nopid.json";            [ "$(ce_size '' "$T/nopid.json")" = "0 0" ]
+  printf '{"ts":1,"pid":"abc"}' > "$T/badpid.json"; [ "$(ce_size '' "$T/badpid.json")" = "0 0" ]
+  printf '{"ts":1,"pid":0}' > "$T/zeropid.json";  [ "$(ce_size '' "$T/zeropid.json")" = "0 0" ]
+  export CC_CE_PS=/nonexistent-ps                  # ps itself unavailable
+  [ "$(ce_size '' "$(mk_tel_pid 4242)")" = "0 0" ]
+}
+@test "size: input_tokens is NOT a size proxy — col-3 tracks used_pct, transcript bytes do not" {
+  # The premise this axis had to replace (audit roadmap called col-3 "a ready size proxy"; measured
+  # |input_tokens/window*100 - used_pct| <= 0.5pt across 67 live files). Encoded as a test so the
+  # refutation is executable: a COMPACTED session's col-3 falls while its transcript keeps growing.
+  local big="$T/big.jsonl"
+  mk_tel 100 80 800000 ; ce_sample "$TEL"                       # full window, big col-3
+  printf 'x%.0s' $(seq 1 5000) > "$big"                         # 5000-byte transcript
+  before="$(ce_size "$big" '')"
+  mk_tel 200 5 50000 ; ce_sample "$TEL"                         # compaction: fill AND col-3 collapse
+  printf 'y%.0s' $(seq 1 5000) >> "$big"                        # a transcript only ever GROWS
+  after="$(ce_size "$big" '')"
+  [ "$before" = "5000 0" ] || false
+  [ "$after" = "10000 0" ] || false                             # size axis rose while col-3 fell
+  tail -1 "$HIST" | grep -q ' 5 50000$'                         # col-3 really did collapse
+}
