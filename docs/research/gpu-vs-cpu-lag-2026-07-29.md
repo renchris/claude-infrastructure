@@ -13,8 +13,9 @@ CPU only?
    active in iTerm2 right now (verified below). The 136–152% CPU it burns is *not* recoverable by
    "turning the GPU on"; it is already on.
 3. **Memory pressure cannot be fixed by the GPU by construction.** On Apple Silicon the GPU allocates
-   from the *same* 64 GB unified pool (measured: 6.59 GB GPU-allocated). GPU offload relocates
-   nothing. And memory is not actually the problem: **84% free, 0.00 MB swap in use.**
+   from the *same* 64 GB unified pool (measured: 6.59 GB GPU-allocated). GPU offload relocates nothing —
+   there is no separate VRAM to move pages into. Memory is *tight* but not swapping (see the corrected
+   reading below), and no GPU decision changes that either way.
 
 **The lag is CPU oversubscription, and the largest single contributor is the render path — but its
 cost is driven by display configuration, not by which processor does the drawing.**
@@ -25,25 +26,41 @@ cost is driven by display configuration, not by which processor does the drawing
 
 ### Machine
 
+Measured with `top -l 2` **second sample** — the repo's mandated standard, because `ps %cpu` is a
+*lifetime average* and has previously misread this box by ~4× (`MACHINE_CAPACITY_V2.md` §1.1). An
+earlier `ps`-based pass in this same investigation is superseded by the numbers below.
+
 | Fact | Value |
 |---|---|
 | Chip | Apple M1 Max — 10 CPU cores (8P + 2E), 32 GPU cores |
 | Memory | 64 GB unified, Metal 3 |
 | Uptime | 2 days, 3:41 |
-| loadavg | 27.73 / 32.55 / 37.95 → climbed to 48.25 during this session |
-| CPU actually busy | 761% of 1000% = **7.6 of 10 cores** |
-| Processes / threads | 1,417 / 81,920 |
-| Memory free | **84%** |
-| Swap used | **0.00 MB** |
+| loadavg | 27.73 → 48.25 → **65.19 / 61.39 / 51.67** = **6.52 per core** |
+| CPU | 70.19% user + 29.80% sys, **0.0% idle** |
+| Processes / threads | 1,502 / 7,264 |
+| PhysMem | **61 G used, 929 M unused, 6,097 M compressor** |
+| Swap | **0 swapins, 0 swapouts** |
 | GPU utilization | Device 36%, Renderer 33–34%, Tiler 36%, `recoveryCount` 0 |
 
-Two independent readings follow immediately:
+Three readings follow immediately:
 
-- **Memory is not under pressure.** 84% free and *zero* swap. The 6.3M cumulative compressed pages are
-  a 2-day historical total, not present-tense pressure. There is no leak signature at the system level
-  to chase. (Per-process leak check delegated to a subagent; see Open Items.)
-- **The GPU is not saturated (36%) — it has headroom.** So GPU non-use is not a capacity problem.
-  The work simply is not GPU-shaped. Those are different failures and only the second one is true here.
+- **The machine is fully CPU-saturated: 0.0% idle at 6.52 load/core.** The lag is real and severe, and
+  it is a scheduler-contention problem.
+- **Memory — corrected.** An earlier `memory_pressure` reading in this investigation said "84% free"
+  and I initially reported memory as a non-issue. That was too generous. `memory_pressure`'s
+  free-percentage counts *reclaimable* pages (free + speculative + inactive + purgeable) as free; `top`'s
+  strictly-unused figure is **929 MB**, and the **compressor holds 6.1 GB** — i.e. the VM system *is*
+  doing pressure work. What remains true and load-bearing: **swap is still 0 in/0 out**, so nothing is
+  paging to disk, and the repo's own live `capacity-alarm` (which correctly measures reclaimable
+  headroom) reads **26.07 GB headroom, verdict `OK`, "room for ~41 more" sessions**. So: **tight, working
+  the compressor, not swapping, and not near an OOM** — but "nothing to see here" was wrong.
+- **The GPU is not saturated (36%) — it has headroom.** So GPU non-use is not a capacity problem. The
+  work simply is not GPU-shaped. Those are different failures and only the second is true here.
+
+Note also that a `ps`-derived RSS total **overcounts shared pages by ~2.34×** on this box
+(`MACHINE_CAPACITY_V2.md` §8.5.6). My earlier "21.7 GB across 34 Claude processes" is an `rss` sum and
+should be read as ≈9 GB of true private footprint. Use `footprint(1)`/phys_footprint for any real
+accounting.
 
 ### The repo's compute is categorically not GPU-amenable
 
@@ -64,19 +81,29 @@ this is not a limitation we could remove with effort.
 
 ### CPU composition by GPU-amenability
 
-Live classification of all 761% busy CPU:
+`top -l 2` second sample, top consumers:
 
-| Cores | Class | GPU-amenable? |
+| %CPU | Process | GPU-amenable? |
 |---|---|---|
-| 2.12 | Claude agent sessions (network-bound LLM waits) | No |
-| **1.89** | **RENDER — iTerm2 + WindowServer** | **Already on GPU** |
-| 1.75 | Python glue / gate scripts | No |
-| 0.97 | other | — |
-| 0.78 | Shell + `bats` + `shellcheck`, fork-heavy | No |
-| 0.41 | Browsers (Chrome/Dia) | Already GPU-accelerated |
-| 0.02 | Spotlight indexing | No |
+| **94.7** | **iTerm2** (single process, 1946 M) | **Already on GPU via Metal** |
+| **51.7** | **WindowServer** (1799 M) | **Already on GPU** |
+| 40.5 | `kernel_task` | No — interrupt/thermal handling |
+| 25.4 | `syspolicyd` | No |
+| 22.6 | `SystemUIServer` | No |
+| 18.2 + 8.7 | Google Chrome Helpers | Already GPU-accelerated |
+| 9.8 / 8.9 / 6.1 / 4.7 / 4.6 | `claude.exe` ×5 (largest individually ≤9.8%) | No — network-bound LLM waits |
+| 7.4 / 6.7 / 6.3 / 5.2 / 5.0 | `fontd`, `fseventsd`, `trustd`, `opendirectoryd`, `tccd` | No |
+| 5.4 | `Python` (gate script) | No |
+| 5.0 | `shellcheck` | No |
 
-**Only the 1.89-core render slice is GPU-relevant at all — and it is already GPU-accelerated.**
+**iTerm2 + WindowServer = 146.4% ≈ 1.46 cores, the two largest consumers on the machine by a wide
+margin — and the ONLY GPU-relevant slice. It is already GPU-accelerated.** No individual Claude session
+exceeds 9.8%.
+
+This independently reproduces the repo's four prior measurement passes, which concluded *the sessions
+are not the load; the TUI renderer is*: 33 sessions across 38 panes measured iTerm2 ~115% +
+WindowServer ~50% ≈ **1.6 cores spent purely drawing** (`MACHINE_CAPACITY_V2.md` §1, §8.5.7 — where a
+single `iTerm.app` process at 125.2% **exceeded the entire 31-session fleet summed at 111.9%**).
 
 ### Metal is already active in iTerm2 — verified, not assumed
 
@@ -224,32 +251,101 @@ doing everything it can do here.
 
 | # | Action | Expected effect | Risk |
 |---|---|---|---|
-| 1 | Set the two 120 Hz displays to **60 Hz** | Halves frame production across the 1.89-core render slice — the largest available win | Low; reversible in Displays. Costs pointer smoothness |
-| 2 | Serialize the gate/test suites (one `bats` corpus at a time) | Reclaims ~2–3 cores at peak; fixes a *recorded recurring* class | Low; already the known remedy |
-| 3 | Reduce **visible** iTerm2 panes | iTerm2 renders visible sessions; each repainting TUI multiplies items 1 and 4 | Low; costs at-a-glance monitoring |
-| 4 | Consider unscaled 3840 × 2160 on the Dells | Removes rendering 78% surplus pixels ×3 | Medium — UI becomes physically smaller; a genuine ergonomic tradeoff, operator's call |
-| 5 | `h264_videotoolbox` for intermediate media encodes only | Faster demo/banner renders | Medium — see the seaming caveat; never for final assets unreviewed |
-| 6 | **Enabling iTerm2 Metal** | **Zero — already enabled** | — |
-| 7 | **GPU-offloading infrastructure compute** | **Not possible; no applicable work exists** | — |
+| 1 | **Close Chrome and Dia** | Largest *measured* lever in the repo's history: load **88–104 → 10–16** after closing them (`RESTART-BRIEF-2026-07-27.md` §1; Dia held 10.6 GB over 41 procs). Currently 26.9% CPU + ~2.1 GB | None |
+| 2 | **Reduce visible iTerm2 panes** | iTerm2 renders *visible* sessions; at 94.7% it is the #1 consumer. Pane count is a first-class cost independent of session count | Low; costs at-a-glance monitoring |
+| 3 | Set the two 120 Hz displays to **60 Hz** | **New finding — halves frame production** across the 1.46-core render slice. Untried; no prior pass measured display config | Low; reversible in Displays. Costs pointer smoothness |
+| 4 | Consider unscaled 3840 × 2160 on the Dells | **New finding** — removes rendering 78% surplus pixels, ×3 displays | Medium — UI becomes physically smaller; a real ergonomic tradeoff, operator's call |
+| 5 | Shim `/opt/homebrew/bin/bats` → `bin/cc-bats` | Closes the ~30% absolute-path bypass that ceilings QoS coverage at ~70%; worth ~0.5–0.7 cores. **Already named as an operator call, not taken** | Medium — brew-upgrade-fragile; needs a parity check |
+| 6 | `h264_videotoolbox` for intermediate media encodes only | Faster demo/banner renders | Medium — see the seaming caveat; never for final assets unreviewed |
+| 7 | **Enabling iTerm2 Metal** | **Zero — already enabled and executing shaders** | — |
+| 8 | **GPU-offloading infrastructure compute** | **Not possible; no applicable work exists** | — |
 
-**Do not** pursue a load-or-core-based spawn ceiling as the fix. That was already tried and recorded as
-a permanent outage (memory: *Load ≠ session count*, *Gate admit-ceiling starvation*): loadavg swings 2×
-at constant session count, and sessions cost ~0.036 cores each while one iTerm2 process exceeds the
-entire fleet — so a load-keyed gate blocks work that is not causing the load.
+Items 3 and 4 are the only *new* levers this investigation contributes to lag; 1, 2 and 5 were already
+known and are simply not being exercised. Items 7 and 8 are the direct answer to the question asked.
+
+**Do not build a load-or-core-based spawn ceiling — because one already exists and is live.**
+
+`capacity_gate()` (`scripts/handoff-fire.sh:1282–1315`, enforced at `:2273`) refuses a net-new session
+fire when 1-min loadavg ÷ `hw.ncpu` exceeds `CC_FIRE_MAX_LOAD_PER_CORE`, default **2.0**. It is LIVE with
+no activation step — `~/.claude/scripts/handoff-fire.sh` is a per-file symlink into the checkout, so
+landing *is* deploying. Landed `0fc3a3d3`.
+
+⚠️ **A correction to my own earlier guidance in this document.** I first wrote "do not pursue a load
+ceiling — already tried, recorded as a permanent outage," citing memory *Load ≠ session count*. **That
+memory is stale against its own source.** `MACHINE_CAPACITY_V2.md` §9.5 **self-retracts** the
+permanent-outage projection: the gate is not inert (symlink), and not an outage — load did fall back
+(fleet drained 31→8, 1.55/core ⇒ ADMITS), and the IDL holds **1,498 `reason:"capacity"` rows**, proving
+both verdicts fire. Anyone reading only the memory index line gets the falsified verdict.
+
+What *does* survive is the **instrument** critique, and it is the useful part: **loadavg is not
+session-attributable.** It is dominated by iTerm2, WindowServer and browsers — none of which a refused
+session fire can shed. So the gate throttles the wrong population. The named-but-unbuilt improvement is
+a ceiling keyed on a **sheddable, session-attributable** quantity (session count, or session RSS against
+a memory budget) rather than system-wide loadavg.
+
+🚨 **Live consequence, right now:** at **6.52 load/core** against a 2.0 ceiling, `capacity_gate` is
+**refusing every net-new session fire** — the lag has become a dispatch outage. Worse, the gate being
+on-by-default makes **16 postland corpus tests fail BY LOAD, not by code** (`handoff-fire-focus` 8,
+`handoff-fire-payload-lint` 6, `fire-engagement` 2 — all pass at 0.5/core, all fail at 2.78/core;
+memory *Metric zero by refusing gate*), a plausible contributor to the 0-green-of-33 deploy-stamp
+condition. **Any gate run in this window is red-by-load and must not be read as red-by-code.**
+
+**Also do not** re-add a shedder that *waits*. `gate_admit()` was deleted and its absence is
+**lint-enforced** (`scripts/postland-verify.sh:1245–1246`): a per-call bound multiplied across a
+per-suite loop into 126 × 600 s = **21 h** of "bounded" waiting, and five concurrent gates sat at load
+16–18 waiting for a ceiling of 8 **while their own corpora were the load**. The standing invariant is
+**priority demotion, never queueing or sleeping** — refuse-and-report is fine, sleeping is not.
 
 ---
 
+## Where this sits against existing work
+
+**The lag question has been investigated exhaustively twice and closed.** The SSOT is
+`docs/plans/MACHINE_CAPACITY_V2.md` (706 lines, ground-up campaign row 13; frontmatter still reads
+`status: open` while the map's row-13 cell reads RATIFIED AND CLOSED — a documentation defect worth
+fixing). Anyone touching lag should read it, plus `GROUND_UP_REBUILD_MAP.md` row 13,
+`RESTART-BRIEF-2026-07-27.md` §1/§6, and `SESSION_CLOSE_AND_LAG_2026-07-26.md` §2, **before measuring
+the box again.**
+
+**This investigation's genuinely new contributions are narrow, and worth stating plainly so they are not
+mistaken for a rediscovery:**
+
+1. **The GPU question itself.** No prior pass addressed GPU/Metal at all. It is now answered with
+   execution-level proof (shader cache), not inference.
+2. **Display configuration as the mechanism behind the render cost.** Prior passes established *that*
+   iTerm2 + WindowServer ≈ 1.6 cores of pure drawing, and that pane count is a first-class cost. None
+   measured **why it is that expensive**: 52.0M pixels/frame across 4 displays, two demanding 120 fps,
+   with 4K panels rendered at 5K and downsampled. That converts a known cost into two new levers
+   (refresh rate, scaling) that no prior doc lists.
+3. **The `/bin/bash` 3.2 SIGSEGV class** — 37 crashes, ~7/day, ongoing. Prior work examined abrupt
+   *session* ends (husk panes, mis-owned teardown markers) and noted an unaudited 81% crash-path exit
+   rate, but this specific interpreter-segfault class does not appear in any existing doc.
+
+Everything else here reproduces prior findings, which is itself useful: independent confirmation that
+**the sessions are not the load, the renderer is.**
+
+Prior art also **exonerates** the leak framing, consistent with what I measured: per-session RSS does
+not grow with age (a 30 h session held 417 MB; a 33 min one 700 MB — RSS tracks context size, not
+uptime), fds do not leak (22–24 against a 1,048,576 limit), and `gitstatusd` and Spotlight are innocent
+(`mds` 1.1%, `mds_stores` 0.7%; my own measurement: 0.02 cores). The real accumulation engine is named
+differently: `owned-wait` is a never-reap **and** never-surface terminal bucket (13 sessions, 5 idle
+47–222 h, ~3.5 GB) and pane-less `claude.exe` trees (~3 GB) are invisible to all reapers by
+construction.
+
 ## Open items
 
-Three subagents were dispatched; their findings are to be integrated here:
+Two subagents are still running; their findings will be integrated:
 
-- `iterm-gpu-axis` — iTerm2 Metal defaults, disqualifying conditions, and whether Metal ever *raises* CPU
-- `memory-fleet-axis` — per-process RSS-vs-age leak correlation across the 34-process Claude fleet
-  (~21.7 GB), real crash/jetsam evidence from DiagnosticReports, Spotlight indexing scope, and whether
-  the 179 `bash` / 60 `zsh` processes are orphans
-- `prior-art-axis` — existing capacity/admission mechanisms in-repo and their LIVE/STAGED/INERT status,
-  to avoid rebuilding what exists
+- `iterm-gpu-axis` — iTerm2 Metal per-session disqualifying conditions, and whether Metal can ever
+  *raise* CPU. Does not change the verdict (Metal is empirically active and executing), but may sharpen
+  lever #3/#4.
+- `memory-fleet-axis` — per-process RSS-vs-age correlation, DiagnosticReports detail, and whether the
+  179 `bash` / 60 `zsh` processes are orphans. Prior art already answers the leak half in the negative.
 
-The crash half of the operator's question ("crashes") is **not yet answered from disk** — pending
-`memory-fleet-axis`. Nothing above depends on it: no GPU recommendation would change, since crashes on
-a machine with 84% free RAM and zero swap are not memory-exhaustion crashes.
+**Not pursued here** (named, not scoped into this investigation):
+
+- The `/bin/bash` 3.2 SIGSEGV class needs its own RED-proof — reproduce the segfault, then show it gone
+  under Homebrew `bash` 5 and/or a bounded hook payload. An interpreter swap on 239 `.sh` files is not a
+  speculative change.
+- Fixing the stale memory entry *Load ≠ session count*, which still asserts a verdict its own source
+  retracted.
