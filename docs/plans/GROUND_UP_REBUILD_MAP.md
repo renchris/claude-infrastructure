@@ -116,6 +116,26 @@ phantom. Status is a claim like any other (see the constraint-cell learning belo
 
 ## Learnings (accumulate; never delete)
 
+- 2026-07-29 (coordinator, same session, **third incarnation of one defect**) **A WAIT PREDICATE
+  IS AN UNVERIFIED CLAIM TOO — AND ITS FAILURE MODE IS "HEALTHY".** To serialize my land behind a
+  peer's I wrote `until ! pgrep -f 'ship-land'; do sleep 10; done`. It never exited, and my commit
+  sat unlanded for ~15 minutes while every check I ran reported **`ship-land RUNNING`** — which
+  reads as *progress*, not as a fault. Two independent reasons, either alone sufficient:
+  **(1) the pattern matched TEST FILENAMES.** The only processes matching `ship-land` were `bats`
+  runs whose argv lists `tests/ship-land.bats`. No ship-land was running at any point.
+  **(2) the loop matched ITSELF** — the shell executing `until ! pgrep -f 'ship-land'` has that
+  string in its own argv, so the predicate can never go false. A self-referential guard is a
+  deadlock with a reassuring status line.
+  I also misread a `.claude-tertiary` pid as "row 10 is landing" from the same substring match.
+  **The rule: match on the COMMAND POSITION, never a bare `-f` substring** —
+  `ps -Ao pid=,command= | awk '$2 ~ /ship-land\.sh$/'` — and when a wait exceeds its expected
+  duration, **verify the thing you are waiting FOR exists**, rather than trusting that the waiting
+  is working. Memory `pgrep-f-matches-agent-briefs` records this for agent briefs and
+  `argv-is-sampling-cwd-is-durable` for liveness guards; this adds the two shapes those miss —
+  argv containing a test-file ARGUMENT, and a guard matching its own command line. The general
+  form, shared with the entry below: **an instrument that cannot fail loudly will report the
+  reassuring answer.**
+
 - 2026-07-29 (coordinator, verifying row 13 — **two false verdicts in a row, in opposite
   directions, on the same 55 tests**) **A VERIFICATION HARNESS IS ITSELF AN UNVERIFIED CLAIM.**
   The campaign's rule is "a ping is a claim, verify by disk". Verifying row 13's *"55 tests green"*
