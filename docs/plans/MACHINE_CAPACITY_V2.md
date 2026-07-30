@@ -883,3 +883,123 @@ the classifier.
   the failure mode is generic: a plausible mechanism plus a big-looking number reads as a finding.
 - 2026-07-29: `ps %cpu` is a lifetime average. It understated `claude.exe` by ~4× (33% vs 129%).
   Any CPU claim in this repo should cite `top -l 2` second-sample.
+
+---
+
+# §11. COMPLETION PROGRAM — systemic elimination at 15–30+ sessions (2026-07-29, operator directive)
+
+**Operator directive (verbatim intent):** */ground-up ensure we eliminate the possibility of device
+lag and memory leak/pressure at 15–30+ concurrent sessions — SYSTEMIC, inside claude-infrastructure,
+not a one-time fix for the current laptop state (today's numbers are a data point).*
+
+**Scope (frozen, refined):** claude-infrastructure itself carries enforced fail-loud mechanisms so
+15–30+ concurrent sessions cannot lag the box or build memory pressure: **(1)** batch-class CPU
+demoted to the background band at a chokepoint callers cannot bypass, **≥95% coverage
+census-verified CONTINUOUSLY** (absolute-path invocations included); **(2)** render cost
+(iTerm2+WindowServer) under a **measured budget with an alarm**, and every one-time machine knob
+captured as **drift-detected parity-checked config** in the repo, never a manual tweak; **(3)**
+memory governed by an **armed alarm term** (pressure > level-1, swap growth, per-proc RSS outlier)
+wired to the operator surface + a bounded-by-construction story for session heaps. Standing
+constraints unchanged: the caller cannot be trusted; pane render (not agent compute) is the dominant
+lever; no quiet period exists.
+
+**Relation to §1–§10:** this section COMPLETES the row — it closes AC1 (ceilinged at ~70% by
+absolute-path invocations, §9.4), builds the never-built M4/M5 (AC9–AC11), and takes ownership of
+the two levers §5 deliberately excluded now that the operator's directive puts them in scope:
+the TUI render term (the measured dominant consumer, §8.5.7) and continuous verification wiring.
+
+## 11.1 Phase 0 — Agent Team Orchestration (completion wave)
+
+Disjoint file ownership; briefs ≤150 lines with pre-greped ranges; verbatim stop-on-issue clause;
+no visual verification inline; RED-proof per artifact against a pristine `git archive` tree.
+
+| Teammate | Owns (exclusive) | Deliverable | blockedBy |
+|---|---|---|---|
+| `cap2-qos` | `hooks/qos-rewrite.sh` (new), `tests/qos-rewrite.bats` (new) | M7: Bash-boundary batch-demotion rewrite (absolute-path closure) + empirical `updatedInput` probe | design ratified |
+| `cap2-render` | `scripts/render-census.sh` (new), `config/iterm2-perf.keys` (new), `scripts/iterm2-perf-parity.sh` (new), `tests/render-census.bats` (new) | M8: render budget census + page, knob SSOT + drift parity | design ratified |
+| `cap2-mem` | `scripts/capacity-alarm.sh`, `scripts/store-bounds-census.sh` (new), `config/store-bounds.manifest` (new), `tests/capacity-alarm.bats`, `tests/store-bounds.bats` (new) | M9: session-census fix + per-proc outlier term + unbounded-store ratchet | design ratified |
+| `cap2-gate` | `scripts/handoff-fire.sh` (capacity_gate only), fire-suite `setup()` load-immunity, `tests/` fire suites touched minimally | M10 headroom term + M11 load-immune corpus (R-1) | design ratified |
+| `cap2-m4m5` | `bin/cc-reaper` (census leg), `hooks/lib/osa.sh` (new), the ~3 remaining bare `osascript` sites (§11.2), `tests/watchdog-census.bats` (new), `tests/osa-bounds.bats` (new) | M4 census leg (AC21; AC10 verify-only — lstart already landed) + M5 remainder (AC22 with the `*_bounded`-aware grep as a standing test) | design ratified |
+
+Lead keeps: settings.json hook registration (shared live file, single owner), launchd plists +
+`fleet.manifest` rows, activation staging (both live queue + repo SSOT), map row update, all lands
+via project-local `/ship` (standing-land), serialized smallest-diff first.
+
+## 11.2 New measured constants (completion baseline, 2026-07-29 late)
+
+| Constant | Value | How measured |
+|---|---|---|
+| Live snapshot at goal intake | loadavg **49.4/44.0/41.5** on 10 cores; ~30 session-class procs; pressure level **1**; swap **0** | `uptime`, `sysctl`, `ps` first-token census |
+| iTerm2 / WindowServer | **159.9% CPU, 2.31 GB RSS** / **56.8% CPU** | `ps -axo pcpu,rss` (burst read; ⏳ top -l 2 second-sample from live axis) |
+| `updatedInput` support | stable 2.1.114 claude.exe: **×88** · eval 2.1.219: **×79** (both bun-compiled Mach-O; V8/NODE_OPTIONS heap flags moot) | `grep -ac` on both binaries |
+| PreToolUse Bash chain today | **5 hooks** (curl-gate, validate-bash, git-worktree-guard, keychain-guard, rm-safe-allowlist) | `jq .hooks.PreToolUse` on live settings |
+| capacity-alarm wiring | **LIVE**: `com.claude.capacity-alarm` loaded, rows every ~10 min, OK @ 26–29 GB headroom | `launchctl list`, jsonl tail |
+| capacity-alarm session census defect | reports **sessions=12** while ~30 session-class procs live — pattern matches only `claude-code/bin/claude.exe`, misses `.bin/claude` heavies (417–985 MB each) | jsonl vs `ps` cross-read |
+| qos-census | latest burst: **69.4% proc / 66.2% CPU** at 5 runs in flight — at the predicted ~70% absolute-path ceiling; census has NO cadence (rows are manual) | `~/.claude/logs/qos-census.jsonl`; `launchctl list` (no qos job) |
+| Unbounded-store landscape | `bash-execution.log` 35 MB · `bash-commands.log` 34 MB · `idl.jsonl` 21 MB (+6.4 MB chain) · `teammate-checkpoint.log` 16 MB · `session-index.db` 49 MB (+49 MB stale .bak) · 62 jsonl/log files in logs+autonomy | `find -size +5M`, `du` |
+| Spotlight consumers in repo | **0** (`mdfind|mdutil|mdls` unreferenced) — exclusion safe from tooling side | `grep -rn` hooks/ bin/ scripts/ skills/ commands/ |
+| **`updatedInput` PROBE — CONFIRMED, both modes** | On 2.1.219 live: a PreToolUse hook emitting `updatedInput` REWRITES the executed Bash command **with** `permissionDecision:"allow"` AND **without any decision** (permission flow untouched); the transcript keeps the agent's ORIGINAL command in the tool_use block while the rewritten one executes | headless probes, transcripts `~/.claude-next/projects/...289d0a28*.jsonl` + `...26f0d19a*.jsonl`: `EXEC: echo MAGIC_TOKEN_A` → result `REWRITTEN_BY_HOOK_{with,no}-decision` |
+| Pages → operator consumer | ONLY `scripts/desk-invariant.sh` + `desk-recycle-invariant.sh` consume `autonomy/pages` (operator-readout and cc-blockers do NOT) — the standing pattern capacity-alarm already uses; surface completeness is row 10's | `grep -rln pages` over the surface files |
+| M5 population TODAY (not baseline) | TRUE unbounded osascript sites ≈ **3** (`bin/screenshot-to-clipboard.sh:18`, `bin/dia-cdp-launch.sh:322`, `hooks/waiting-recycle.sh:423`) — the baseline "31" predates intermediate lands, and `hf_bounded`/`lrp_bounded`/`e2e_bounded` per-script wrappers already bound the rest (the AC11 grep must exclude `*_bounded`) | refined `grep -rn` over hooks/ bin/ scripts/ |
+| M4 status TODAY | watchdog identity is ALREADY `{pid, lstart}` at the daemon layer (`lead-crash-watchdog.sh:707-718`) ⇒ AC10 likely met on trunk; `bin/cc-reaper` has **0** watchdog references ⇒ AC9 census leg confirmed absent | grep |
+| Fire suites | `tests/handoff-fire-capacity-gate.bats` exists (dedicated gate suite); the red-by-load suites' `setup()` blocks pin NO gate env today | grep -ln / awk over setup() |
+| ⏳ live load attribution, QoS band census, pane count, mds/XProtect re-measure | AWAITING gu13-live | top-delta sampling, PRI census |
+| ⏳ iTerm2/WindowServer knob inventory + magnitudes, taskpolicy band semantics, CC background-work knobs, Spotlight-exclusion mechanics on this macOS | AWAITING gu13-levers + gu13-ccguide | external docs + local defaults |
+| ⏳ M4/M5 spec re-verify, graveyard sweep, adjacent-plan seam facts | AWAITING gu13-archaeology | repo + branch reads |
+
+## 11.3 Failure-mode additions — every mode → structural answer (extends §4)
+
+| # | Mode | Evidence | Structural answer (the inversion) | Kill switch |
+|---|---|---|---|---|
+| **M7** | ~30% of bats CPU structurally unreachable by the PATH shim (absolute-path invocations) | §9.4: `timeout 90 /opt/homebrew/bin/bats …` at pri=31 across 4 samples | **Move the chokepoint to the Bash TOOL boundary** — a PreToolUse hook rewrites any absolute-path/spelling-variant bats token to `cc-bats` via `updatedInput`, converging every funnel on the one proven demotion artifact. The tool boundary cannot be spelled around. FAIL-OPEN on any parse/JSON error (row 6's standing constraint: a hook failure must never block a tool by accident). Pattern-table seam for future batch classes; ships bats-only. | `CC_QOS_REWRITE=off` |
+| **M8** | TUI render is the DOMINANT measured consumer (§8.5.7: one iTerm2 proc > entire session fleet) and has zero governance | 159.9% + 56.8% now; 96%+66% at row-13 baseline | **Render gets the same treatment memory got: a budget, a 4-state census, a page.** `render-census.sh` (top -l 2 second-sample of iTerm2+WindowServer + pane/session counts) alarms on sustained budget breach with the shed platter (retire orphans / `/handoff` idle). Knobs that cut the per-pane cost (⏳ from gu13-levers: Metal/fps/dimming/blur…) become `config/iterm2-perf.keys` + a drift-parity check — one-time tweaks become verifiable config (operator C10 to SET, agent-verified thereafter). | `CC_RENDER_CENSUS=off` |
+| **M9** | Alarm's own census undercounts the fleet 12 vs ~30 (violates its in-file verify-against-known-population rule); no per-proc outlier term; append-only stores grow unbounded (8 known instances, §8.5.5) | jsonl vs ps; store table §11.2 | **(a)** census matches BOTH session forms, verified against a known population in tests; **(b)** top phys-footprint outlier term (report always, WARN above `CC_CAP_PROC_WARN_GB`) — the leak-alarm the directive asks for, keyed on the instrument `footprint(1)` §8.5.6 prescribed; **(c)** `store-bounds.manifest` declares every store's cap + owner + rotate remedy; a census walks the manifest and PAGES on breach — the leak CLASS gets one mechanism instead of 8 spot fixes. NEVER deletes (append-only-store safety: archive is the destination's property). | `CC_STORE_BOUNDS=off` |
+| **M10** | capacity_gate keys on box-wide loadavg — not session-attributable, not sheddable (§9.5 instrument critique stands) | deployed `:1285-1316` | **Gate a session spawn on what a session actually consumes:** memory headroom term (refuse net-new when reclaimable headroom < `CC_FIRE_MIN_HEADROOM_GB`, sheddable by closing sessions — same instrument as capacity-alarm) alongside the existing loadavg ceiling (kept: §9.5 measured it behaving as a ceiling). Pane-budget term named as follow-on once render-census provides the count. | `CC_FIRE_HEADROOM_GATE=off` |
+| **M11** | 16 corpus tests RED **by ambient load** on the pristine tree (capacity gate exit 9 inside fire-path tests) — a gate that fails itself, blocking deploy verification (map R-1) | map ~:236-243 | **A test's environment is pinned, not ambient:** fire suites' `setup()` pins `CC_FIRE_CAPACITY_GATE=off` (+ load-keyed gates off) EXCEPT the dedicated gate-behaviour tests, which set it ON explicitly with synthetic inputs. Extends memory `red-proof-environment-and-ref-fragility` (off load-keyed gates) to the standing corpus. | n/a (test-only) |
+| **M12** | Coverage/census claims decay without cadence: qos-census has no runner; alarm verdicts have a consumer only via pages | `launchctl list`; §11.2 | **Continuous verification is wiring, not discipline:** `com.claude.qos-census` launchd job (10-min; NO-BURST rows are cheap and honest) + fleet.manifest rows + staged activation (C10, both queues); every census writes the standard page envelope on FAIL/ALARM so the operator surface renders it by construction. | per-tool switches above |
+
+## 11.4 Acceptance criteria — completion (extends §7; disk-truth reads only)
+
+| # | Criterion | Proving read |
+|---|---|---|
+| **AC14** | Absolute-path bats invocation is demoted end-to-end on BOTH tracks | empirical probe: headless session issues `/opt/homebrew/bin/bats --version` via Bash; child census shows `pri≤10`; probe artifact committed |
+| **AC15** | AC1 becomes reachable: first post-M7 burst census ≥95% proc coverage | `qos-census.jsonl` row with `runs_in_flight≥2`, `coverage_proc_pct≥95` (ACCRUING until a burst) |
+| **AC16** | Render census live on cadence with 4-state verdict + budget from config | `launchctl list com.claude.render-census`; jsonl rows; `--selftest` proves every rung |
+| **AC17** | iTerm2 knob parity: every key in `config/iterm2-perf.keys` matches live defaults, drift pages | `iterm2-perf-parity.sh` exit 0 + a deliberate-drift RED control |
+| **AC18** | Alarm session census matches a known population (±0) in test AND live forms both counted | bats fixture census + live cross-read vs `ps` first-token count |
+| **AC19** | Per-proc outlier term reports top-3 footprints every row; WARN rung reachable (selftest) | alarm jsonl rows carry `top_procs`; selftest |
+| **AC20** | Every §8.5.5 store is in `store-bounds.manifest` with cap+owner+remedy; census pages on breach; bash-execution.log's existing breach is its first live catch | manifest read; census run; page file exists naming the breach |
+| **AC21** | M4: watchdog census balances with positive control (was AC9/AC10) | `cc-reaper --watchdog-census` → spawned/live/exited/lost + `control=OK`; `grep -c lstart hooks/lead-crash-watchdog.sh` >0 |
+| **AC22** | M5: 0 unbounded osascript sites in hooks/ (was AC11) | §7 AC11's exact grep → 0 |
+| **AC23** | Fire suites green under ambient load ≥2.0/core (M11) | full fire-suite run at recorded high load → 0 not-ok |
+| **AC24** | Headroom gate: REFUSE and ADMIT both reachable with synthetic inputs; live default admits at today's headroom | gate selftest/bats with env-injected vm_stat; live fire log |
+| **AC25** | The map row cell reflects this completion with landed shas resolved from origin/main | map read after land |
+
+## 11.5 Seams (consumed, not redesigned)
+
+Row 2 owns `handoff-fire.sh` control flow — M10 touches ONLY `capacity_gate()` + its telemetry line,
+additively. Row 6 owns the hook chain — M7 is a NEW fail-open file registered at the end of the Bash
+matcher; the future hook-broker absorbs it (its ~15 ms fork cost ≈ 0.007 cores fleet-wide at
+30×59/hr, cited against §8.5.4 honestly). Row 10 owns the operator surface — all new alarms speak
+the existing page envelope; zero new surfaces. Row 12 owns launchd activation — plists ship in
+`launchd/` + `fleet.manifest` + staged activation scripts in BOTH queues, operator-run (C10).
+Row 9 owns session-index retention; row 11 owns worktree sprawl — the store-bounds manifest BOUNDS
+and REPORTS them with owner labels; it does not fix them here.
+
+## 11.6 Rejected alternatives (completion; extends §6)
+
+| Rejected | Why |
+|---|---|
+| Shim `/opt/homebrew/bin/bats` itself (§9.4 option 1) | Mutates a package-manager-owned path machine-wide; `brew upgrade bats-core` silently reverts it (needs its own parity check to stay true); M7 achieves the same closure at OUR chokepoint with a kill switch and no foreign mutation. |
+| `NODE_OPTIONS=--max-old-space-size` per-session heap caps | The 2.1.x CLI is a bun-compiled Mach-O (JavaScriptCore) — V8 flags are inert (§11.2). Per-session RSS is exonerated flat-with-age anyway (§3.2); the outlier ALARM (M9b) is the honest bound. |
+| DEFER/refuse batch admission in PreToolUse (§8.5.1 follow-on) | Rewrite-to-demote is strictly better: zero round-trips, zero policy decisions, R1-clean (never waits). **RESOLVED — the empirical probe CONFIRMED `updatedInput` rewrite on live 2.1.219 in both decision modes (§11.2)**; M7 ships rewrite-only, no-decision form (permission flow untouched). DEFER stays here as the recorded fallback design should a future binary regress the semantics (the probe is re-runnable). |
+| Spotlight exclusion of `~/.claude*` | ⏳ HOLD until gu13-levers: mds CPU was exonerated (§8.5.6) and modern-macOS exclusion mechanics are contested; adopt only with a verifiable, drift-checkable method and measured benefit — else record here with numbers. |
+
+## 11.7 Open — awaiting Phase-1 completion wave
+
+gu13-archaeology (deployed-state delta, M4/M5 re-verify, graveyard) · gu13-live (load attribution,
+QoS band census, pane count, memory truth) · gu13-levers (knob inventory + magnitudes, QoS band
+semantics incl. E-core confinement question, CC background-work knobs, Spotlight mechanics) ·
+gu13-ccguide (updatedInput envelope + version semantics, hook serial/parallel + timeout, CC idle-work
+settings). Their numbers replace every ⏳ above before any teammate spawns; contradictions get
+resolved IN THIS FILE, not narrated.
