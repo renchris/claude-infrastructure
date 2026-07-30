@@ -9,16 +9,31 @@ STEP 0 — ARM YOUR WAKE PATH FIRST, BEFORE ANYTHING ELSE. Run this as a Bash to
 run_in_background=true, substituting YOUR OWN pane uuid from `~/.claude/bin/cc-notify --self`:
   ~/.claude/bin/cc-await-ping <YOUR-PANE-UUID> --timeout 14400 --interval 15
 **RE-ARM IT AFTER EVERY WAKE — it is single-shot, and one wake makes you deaf.**
-🚨 **USE THE PANE UUID, NEVER YOUR SESSION ID.** `cc-await-ping` accepts a session id without
-complaint, but mailboxes are keyed on PANE uuid, so a session-id watcher polls a file that will never
-exist and blocks its whole timeout on a void (backlog `6fe942c0eee5`; the tell is an ABSENT
-`.seen` cursor). **This is not hypothetical — I censused it while composing this payload: 4 of 13
-armed watchers fleet-wide were on session-id keys, including BOTH live rebuild rows, so both had
-armed a watcher and still had no wake path.** Why it matters to you specifically: `mailbox-drain.sh`
-is wired only to **SessionStart** and **UserPromptSubmit**, both session- or human-gated, so a row
-inside an hours-long autonomous turn drains at NEITHER and never sees coordinator mail — my rulings
-reach you only through the watcher you arm here. Verify it: after arming, confirm
-`~/.claude/mailbox/<YOUR-PANE-UUID>.md` is the path being watched.
+🚨 **ARM BOTH KEYS — THE PANE AND THE SESSION. Neither alone works, and this is measured end-to-end.**
+An earlier version of this payload said "use the pane uuid, never your session id"; a later one said the
+opposite. **Both were half right, and the coordinator shipped each in turn.** The system derives the
+mailbox key independently at three hops and they disagree:
+  · **SENDERS write the PANE box.** `bin/cc-notify` has **ZERO** `mailbox_resolve_key` call sites
+    (positive control: `hooks/session-continue.sh` has 3) and at `:508` appends to
+    `$MAILBOX_DIR/$uuid.md` with the key it is handed, unresolved.
+  · **The DRAIN and the WAKE FLOOR read the SESSION box** — `hooks/mailbox-drain.sh:64-65` sets
+    `own_uuid="$own_sid"` whenever `CC_MBX_SESSION_KEY` (default 1) is on.
+  · **`cc-notify:644` checks `wake_path_armed` against the PANE**, so its `reason=no-watcher` field is a
+    FALSE NEGATIVE against a session-armed peer. Do not trust that field.
+Measured cost of getting this wrong: a sibling counted **79 pane-keyed boxes holding 1,747 unacked lines
+against 30 session-keyed holding 267**, and the coordinator killed its own pane watchers on a
+half-correct reading and lost a row's DONE ping to the gap. Therefore:
+  · Arm **TWO** background watchers — one on your PANE uuid (`~/.claude/bin/cc-notify --self`), one on
+    the key the `🔔 WAKE FLOOR` Stop-hook message prints. Both are single-shot; **re-arm each after
+    every wake.** The pane one catches peer mail; the session one satisfies the floor.
+  · Verify each with the lib's own predicate, never `pgrep` (which returned 0 for a watcher that `ps`
+    and the lib both confirmed alive):
+      bash -c '. ~/.claude/hooks/lib/mailbox-pending.sh; mailbox_wake_armed <KEY> && echo ARMED'
+**THE DURABLE LESSON, and it generalises past mailboxes: A FIX TO THE ADVERTISER IS NOT A FIX TO THE
+WRITER.** Commit `9586f1ac` corrected what the hook *tells* you to arm, and every verification of it
+passed because the advertiser and the reader genuinely agreed — the hop nobody re-checked was the
+SENDER. When a key is derived independently at N hops, verify the ROUND TRIP end-to-end (write as a
+peer, drain as the recipient), never one hop against its neighbour.
 
 STEP 1 (one short command): arm your standing goal so you drive to DONE across recycles —
   ~/.claude/hooks/dod-persist.sh set "Scope (frozen): row 11 worktree & warm-pool — every writer
