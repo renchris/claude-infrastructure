@@ -281,6 +281,26 @@ def _two_stops():
     g.build(v())
 
 
+@case(
+    "warp: a layer scrolled at a rate its warp was not sized for",
+    "SCROLL/WARP MISMATCH",
+)
+def _warp_scroll_mismatch():
+    """Replays the REAL shipped defect, not an invention of one.
+
+    `tf0` scrolled at `STRIP_PERIOD` (20 s, 96 px/s) inside a wrapper registered from `ground_detail`'s
+    `P/8` (30 s, 64 px/s), so through THE ASK's dead world it crept at 32 px/s while `tf1` and `fgb`
+    froze byte-exact. The sabotage below is that exact disagreement, re-introduced through `css` so
+    the layer's declared period is untouched — which is the shape the defect actually had: one number
+    written twice, and only one of the two copies wrong.
+    """
+    orig = g.css
+    g.css = lambda art: re.sub(
+        r"\.tf0s\{animation:sc [0-9.]+s", ".tf0s{animation:sc 20s", orig(art)
+    )
+    g.build(v())
+
+
 @case("warp: no layer at the strip rate", "no layer scrolls at the strip rate")
 def _no_strip():
     g._WARPED.clear()
