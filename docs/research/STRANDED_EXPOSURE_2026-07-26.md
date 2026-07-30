@@ -468,6 +468,49 @@ it last and alone. Caveat on `8030d997`: it *suppresses* findings via directives
 fixing them — SC1090 (dynamic `source`) is legitimately a directive, but confirm the SC2034
 unused-variable suppressions are not masking a real bug before landing.
 
+### 8.5-X EXECUTED 2026-07-30 (backlog `60f5d31601fd`) — 2 of the 4 recovered, 1 obsolete, 1 rescoped
+
+Outcome of running §8.5. **Both halves of a parked item rot independently — the symptom and
+the prescribed remedy — and here each rotted in a different row.** Re-measured before acting;
+§8.5's table is left standing above as the 2026-07-26 record, and is corrected here.
+
+| Patch | 2026-07-26 ruling | 2026-07-30 measurement | Action |
+|---|---|---|---|
+| `6a5caea41` python-deps | RECOVER | Still orphan-exclusive. Trunk has no `requirements.txt`, no pip path in `install.sh`; `bin/cc-relogin` still imports `websocket`. | **Recovered**, + a forward-fix (below). |
+| `b52c3ac77` activation SSOT | RECOVER | **OBSOLETE.** Blob `9cc89eba` is byte-identical on trunk, landed by `094bc2bc` ("commit the 3 live-only activation scripts to the repo mirror"). | **Dropped** — cherry-pick would be an empty commit. |
+| `ab66db8c7` shellcheck directives | RECOVER (17 + 6 findings) | **HALF OBSOLETE.** `session-index-helpers.sh` now measures **0**, not 17 — it already carries `disable=SC2034` + `disable=SC2001` (lines 6/9) covering the same 20 escaper sites. `session-index-sweep.sh` measures **4** (SC1091 ×1, SC2001 ×3), still latent. | **Rescoped to the sweep half.** Landing the helpers hunk would have appended a *second* blanket SC2001 suppression to an already-clean file — a live regression, since it would then hide real future findings. |
+| `3f348e3d1` research doc | RECOVER | Still absent (trunk's `desk-audit-2026-07-18/` has `reobserve-anti-deference-nudge.md`, a different doc). | **Recovered** unchanged. |
+
+**§8.6's precondition wall is CLEARED — but not by the commits it names.** `7dda0f8` is still
+not an ancestor of `origin/main`; the *content* arrived by another route, and in a better form.
+Verified by content, never by ref: `load_above_ceiling()` + the `IN_LAND_LOCK` invariant
+(`ship-land.sh:513`), GATE-KILLED as a third state (exit 9), `scripts/gate-cleanup.sh`
+(worktree-scoped), and `tests/pkill-scope.bats`. Note the mechanism *inverted* on the way in —
+admission is now a pure predicate that SHEDS rather than the `gate_admit` sleep loop §8.6
+anticipated, because waiting was itself the amplifier. A precondition check keyed on
+"did commit X land" would have read this as still-blocked and parked the item a second time.
+
+**§8.5's caveat on `8030d997` resolved:** the SC2034 suppressions are not masking a bug — they
+are already on trunk in `helpers.sh`, scoped and documented per-directive. The only directive
+this land adds is on `sweep.sh`. Its source-line conflict resolved to **both** `source=` and
+`disable=SC1090,SC1091`, which are not substitutes: the gate invokes bare `shellcheck` with no
+`-x` (`ship-land.sh:1025`, not `:355` as §8.5 has it), so `source=` is never followed and
+SC1091 fires regardless. The disable is what clears it. Effect-verified — bare `shellcheck` on
+the trunk blob now exits 0, with a positive control confirming the same invocation still exits
+1 on a known-bad file.
+
+**A recovered patch is not a patch that still passes.** `6a5caea41` predates `477e6a30`
+(script-dir resolution ratchet, landed four days after it was written), so rebased onto today's
+trunk it is a real, own-scoped RED. The violation was a genuine latent bug, not lint pedantry:
+`scripts/python-deps.sh` derived `REPO_DIR` from an unresolved `$BASH_SOURCE`, and it is
+reached through `~/.claude` — a symlink layer over the checkout. Reproduced through a symlink
+of that shape, `REPO_DIR` landed at `<home>/.claude` instead of the repo, so the installer
+would have reported `verdict=failed reason=no-requirements-file`, blamed the operator's tree,
+and left `websocket-client` uninstalled — i.e. silently preserved the exact
+`BROWSER_FAILED(4)`-masking-`CONSENT_GATE(7)` failure the patch exists to remove. Fixed with
+the house `_resolve_self()` loop. **Any patch recovered from a branch older than the trunk's
+newest ratchet needs its lints re-run, not just its tests.**
+
 ### 8.6 The recoveries are PARKED — both preconditions are still absent from trunk
 
 Re-verified file-by-file at `995dd96`, unchanged from §2 five commits later:
