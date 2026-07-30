@@ -532,7 +532,13 @@ STUB
   # 21 since 2026-07-30: com.claude.capacity-alarm. Its plist landed (12595000) with NO manifest row,
   # which made THIS test red on pristine origin/main — the coverage loop below is what caught it, so the
   # count moves with the repair rather than the repair being hidden behind a looser count.
-  [ "$n" = 21 ]
+  # 22 since 2026-07-30 (row 7, ACCOUNT_ROUTING_V2 M4): com.claude.relogin. NOT caught by the coverage
+  # loop below and it never could have been — that loop globs launchd/*.plist, and this plist lives in
+  # launchd/staged/ on purpose (install.sh globs launchd/*.plist, so a plist there would let a routine
+  # install activate credentials automation). So a staged-only plist can be undeclared indefinitely with
+  # every lint green, which is how a tested poller stayed unscheduled and unreported since 2026-07-26.
+  # Same convention as above: the count moves WITH the repair.
+  [ "$n" = 22 ]
 
   # three-way coverage: every committed plist is declared (the lint §4.4 enforces at the chokepoint)
   for f in "$ROOT"/launchd/com.claude.*.plist "$ROOT"/launchd/com.chrisren.*.plist; do

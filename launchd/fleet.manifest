@@ -118,6 +118,32 @@ com.claude.nightly-regression     | staged | 0    | auto | 1  | 18-fleet-activat
 # resolves to its StandardOutPath and the script does write to stdout, so unlike lead-supervisor's the
 # sensor is real. The job's owner may flip this to `run` after activating it.
 com.claude.capacity-alarm         | staged | 600  | auto | 13 | 19-capacity-alarm-activate.sh
+# ── com.claude.relogin (row 7, ACCOUNT_ROUTING_V2 M4) ──────────────────────────────────────────────
+# WHY IT WAS MISSING, and why that mattered: this label was invisible to the three-way coverage loop
+# because that loop globs launchd/*.plist and this plist lives in launchd/staged/ — deliberately, so
+# install.sh's glob cannot auto-activate credentials automation (8a1e49ab: "structure, not a
+# conditional"). Net effect: a poller that has existed and been tested since 2026-07-26 has NEVER been
+# scheduled — TWO log lines all-time, both from a hand invocation — and cc-fleet never evaluated it, so
+# NOTHING said so. That is feature-durability-mechanism-not-memory, doubled: inert AND unreportable.
+# Declared here so the inertness is READABLE (existence evidence comes from the DECLARATION, not from
+# the subject's success).
+#
+# `staged`, from disk truth: not in ~/Library/LaunchAgents, not loaded. Exactly ONE UNDECIDED row —
+# "declared, decision pending" — never a daemon-fault row, because nothing is broken; an operator
+# decision is outstanding. Row 7's owner flips this to `run` after activating.
+#
+# evidence is the PER-TICK artifact, NOT `auto`: the plist's StandardOutPath is cc-relogin-poll.out.log,
+# but the poller writes every line through its own log() to cc-relogin-poll.log and the launchd args
+# carry no --json, so stdout stays ~0 bytes even when healthy — `auto` here would be a sensor that can
+# only ever say STALLED (lead-supervisor's lesson, verified the same way). Every terminal path of a
+# scheduled tick logs (nothing-due, WINDOW-CAPPED, DETECTION-UNAVAILABLE, SKIP, ATTEMPT, ESCALATED), so
+# mtime-vs-cadence is a real S5 sensor for this file.
+#
+# ok_exits 0,5: exit 5 is ESCALATED — the DESIGNED loud verdict at T-48h, raising the class-C
+# relogin-blocked row. Keying S4 on exit != 0 would put a permanent, unfixable FAILING row on a job
+# doing precisely its job (plan §5 F20, deploy-live's exit 1 is the same shape). Exit 3
+# (DETECTION-UNAVAILABLE) is deliberately NOT ok — "cannot tell whether a re-login is due" must row.
+com.claude.relogin                | staged | 3600 | ~/.claude/logs/cc-relogin-poll.log | 7 | 21-relogin-poll-activate.sh | 0,5
 
 # ── com.chrisren.* — the SECOND family this repo owns (added 2026-07-29 after the reconciler's
 # first live run declared only com.claude.*, hiding 6 LOADED, RUNNING jobs from every leg).

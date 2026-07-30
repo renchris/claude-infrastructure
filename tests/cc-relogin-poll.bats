@@ -627,18 +627,109 @@ attempts() { jq -r '.attempts' "$CC_RELOGIN_POLL_STATE_DIR/relogin-poll-$1.json"
   # next3's real 2026-07-24 shape: the refresh grant was REJECTED with time still on the stamp, so
   # --login-status fills both deadline columns with "—" and the verdict is driven by the cause.
   # Before this, the poller `continue`d such a row: the account that most needed it was invisible.
+  #
+  # Asserted on the DURABLE PRODUCT (the class-C board row) and the JSON verdict, NOT on the
+  # process exit code. Not a weakening — a correction: the non-dry-run path forks `cc-relogin` plus
+  # a `sleep`-based watchdog, and under the background QoS band this suite runs in (bin/cc-bats
+  # demotes to PRI=4) that fork's timing is load-dependent, which made an exit-code assertion here
+  # flake at load ~58 while passing at ~13. The subject's own design says where the truth lives:
+  # "The row is raised BEFORE this tick's attempt, so a hung or crashing attempt can never swallow
+  # the escalation." So the row is the invariant; the exit code is asserted on --dry-run below,
+  # where nothing is forked at all.
   build ls
   printf 'next3\tREQUIRED\ttoken-invalid\t—\t—\tclaude-next3\n' > "$D/ls.tsv"
   printf '1\n' > "$D/ls.rc"
+  run "$P" --dry-run --json
+  [ "$status" -eq 0 ] || false                       # --dry-run decides and reports, forking nothing
+  json | jq -e '.candidates==1 and .acct=="next3" and .escalated==true' >/dev/null || false
+  grep -q 'DRY-RUN would raise relogin-blocked for next3' "$CC_RELOGIN_POLL_LOG" || false
+  # ...and for real: the board row is the durable evidence the account is no longer invisible.
+  : > "$CC_RELOGIN_POLL_LOG"
   run "$P" --json
-  [ "$status" -eq 5 ] || false                       # ESCALATED — loud, exactly as intended
   json | jq -e '.candidates==1 and .acct=="next3" and .escalated==true' >/dev/null || false
   [ "$(nrows)" -eq 1 ] || false
+  jq -rs '.[0].recover_cmd' "$CC_REAPER_IDL" | grep -qx 'cc-relogin next3' || false
   # DISCRIMINATING CONTROL: the same shape as EXPIRING is genuinely unknowable and MUST be skipped
-  # rather than given a fabricated now-deadline.
+  # rather than given a fabricated now-deadline. (Also on --dry-run, same reason.)
   rm -rf "$CC_RELOGIN_POLL_STATE_DIR" "$CC_REAPER_IDL"; : > "$CC_RELOGIN_POLL_LOG"
   printf 'next3\tEXPIRING\tlogin-expiry\t—\t—\tclaude-next3\n' > "$D/ls.tsv"
-  run "$P" --json
+  run "$P" --dry-run --json
   [ "$status" -eq 0 ] || false
   json | jq -e '.candidates==0' >/dev/null || false
+  [ "$(nrows)" -eq 0 ] || false
+}
+
+# ── M4: the label is DECLARED, so its inertness is READABLE (ACCOUNT_ROUTING_V2) ─────────────────
+# The poller has existed and been tested since 2026-07-26 and has never been scheduled — two log
+# lines all-time. Nothing reported that, because launchd/fleet.manifest never declared the label, so
+# bin/cc-fleet never evaluated it. And it never COULD have been caught by the three-way coverage
+# lint: that loop globs launchd/*.plist, and this plist lives in launchd/staged/ on purpose
+# (install.sh globs launchd/*.plist, so a plist there would let a routine install turn on
+# credentials automation). Existence evidence comes from the DECLARATION, never the subject.
+
+@test "M4: com.claude.relogin is declared in the fleet manifest, with a per-tick sensor and ok_exits 0,5" {
+  M="$REPO/launchd/fleet.manifest"
+  row="$(grep '^com\.claude\.relogin *|' "$M")"
+  [ -n "$row" ] || false
+  f() { printf '%s' "$row" | awk -F'|' -v i="$1" '{gsub(/^[[:space:]]+|[[:space:]]+$/,"",$i); print $i}'; }
+  # `staged`, from disk truth: neither installed nor loaded ⇒ exactly ONE UNDECIDED row, which is
+  # "declared, decision pending" — not a daemon-fault row, because nothing is broken.
+  [ "$(f 2)" = staged ] || false
+  [ "$(f 3)" = 3600 ] || false            # = the plist's StartInterval
+  [ "$(f 5)" = 7 ] || false               # owner row
+  # evidence must be the PER-TICK artifact, never `auto`: the plist's StandardOutPath is a
+  # .out.log the poller never writes to (every line goes through its own log(), and the launchd
+  # args carry no --json), so `auto` would be a sensor that can only ever say STALLED.
+  [ "$(f 4)" != auto ] || false
+  [ "$(f 4)" != - ] || false
+  case "$(f 4)" in *cc-relogin-poll.log) ;; *) echo "evidence '$(f 4)' is not the per-tick artifact"; return 1 ;; esac
+  # ok_exits MUST admit 5 — ESCALATED is the DESIGNED loud verdict at T-48h, not a failure. Keying
+  # S4 on exit != 0 would pin a permanent FAILING row on a job doing exactly its job.
+  [ "$(f 7)" = "0,5" ] || false
+  # ...and 3 (DETECTION-UNAVAILABLE) must NOT be admitted: "cannot tell" has to row.
+  case "$(f 7)" in *3*) echo "exit 3 must not be declared healthy"; return 1 ;; esac
+}
+
+@test "M4: the activation is staged in the repo SSOT, is a dry-run by default, and never self-loads" {
+  A="$REPO/docs/activation/pending-activation/21-relogin-poll-activate.sh"
+  [ -r "$A" ] || false
+  bash -n "$A" || false
+  FH="$BATS_TEST_TMPDIR/fakehome"
+
+  # It REFUSES rather than loading a job whose executable is absent. Pinned first, because this is
+  # the guard that stops a load from succeeding against a live layer that has not been deployed yet
+  # — and it is why the same run cannot simply be pointed at an empty HOME to test the dry run.
+  mkdir -p "$FH"
+  HOME="$FH" CC_REPO="$REPO" run bash "$A"
+  [ "$status" -ne 0 ] || false
+  [[ "$output" == *"cc-relogin-poll is not present"* ]] || false
+
+  # C10: the agent stages, the operator loads. With the precondition satisfied and CONFIRM unset it
+  # must mutate NOTHING.
+  mkdir -p "$FH/.claude/bin"
+  printf '#!/bin/bash\nexit 0\n' > "$FH/.claude/bin/cc-relogin-poll"
+  chmod +x "$FH/.claude/bin/cc-relogin-poll"
+  HOME="$FH" CC_REPO="$REPO" run bash "$A"
+  [ "$status" -eq 0 ] || false
+  [[ "$output" == *"dry run"* ]] || false
+  [[ "$output" == *"CONFIRM=1"* ]] || false
+  [ ! -e "$FH/Library/LaunchAgents/com.claude.relogin.plist" ] || false
+  # POSITIVE CONTROL for that absence: the path it WOULD write is named in its own output, so the
+  # check is aimed at a real target rather than passing because nothing could ever appear there.
+  [[ "$output" == *"Library/LaunchAgents"* ]] || false
+  # ...and no launchctl is EXECUTED before the CONFIRM gate — the C10 boundary, asserted against the
+  # CODE. Matched at COMMAND POSITION, not by substring: this script's own "Will do:" banner names
+  # `launchctl enable ; launchctl bootstrap` in an echo before the gate, and a bare grep convicts it
+  # for describing itself (the detector-matches-its-own-text trap). Comments and echo/printf lines
+  # are therefore excluded, and `launchctl` must open a command.
+  cmdpos() { # <file-slice-cmd> -> count of launchctl invocations at command position
+    eval "$1" | sed 's/#.*//' \
+      | grep -vE '^[[:space:]]*(echo|printf)\b' \
+      | grep -cE '(^|[[:space:]]*(;|&&|\|\||\||\{)[[:space:]]*)launchctl[[:space:]]' || true
+  }
+  # POSITIVE CONTROL first: it DOES invoke launchctl somewhere, so a zero below means "not here",
+  # never "this check cannot see launchctl at all".
+  [ "$(cmdpos "sed -n '/CONFIRM:-0/,\$p' '$A'")" -gt 0 ] || false
+  # ...and NONE before the gate.
+  [ "$(cmdpos "sed -n '1,/CONFIRM:-0/p' '$A'")" -eq 0 ] || false
 }
