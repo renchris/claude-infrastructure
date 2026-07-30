@@ -102,6 +102,7 @@ SVG_CSS = """
 .st{fill:var(--sb-star,#f4ead8)}
 .sd{fill:var(--sb-stardim,#59626f)}
 .sw{fill:var(--sb-sweep,#333e50)}
+.hz{fill:var(--sb-hazard,#7b8698)}
 .mo{fill:var(--sb-label,#7f8a9a)}
 .ln{stroke:var(--sb-line,#57616f);stroke-width:1;fill:none}
 .lf{stroke:var(--sb-linedim,#2c333f);stroke-width:1;fill:none}
@@ -339,14 +340,19 @@ def bird(px: float, x: float, y: float) -> str:
     return cells([(0, 0), (1, 1), (2, 0)], px, x, y, "st")
 
 
-def hazard(x: float, px: float = 4) -> str:
-    """The spike pit: a destructive call arriving on the ground. Three pixel spikes, whole cells."""
+def hazard(x: float, px: float = 5) -> str:
+    """The spike pit: a destructive call arriving on the ground.
+
+    Its own class, NOT the ground's. Drawn in the ground colour and packed at three cells' pitch it
+    rendered as a thicker section of ground — the threat and the thing it threatens were the same
+    visual family, which is the horns failure in another costume. Lighter value than the ground,
+    and one clear cell of plate between spikes so they read as points rather than as a serration."""
     spikes = [
-        (cx + i * 3, cy)
+        (cx + i * 4, cy)
         for i in range(3)
         for cx, cy in ((1, 0), (0, 1), (1, 1), (2, 1))
     ]
-    return cells(spikes, px, x, BASE - 2 * px, "gr")
+    return cells(spikes, px, x, BASE - 2 * px, "hz")
 
 
 def shield(x: float, y: float, px: float = 5) -> str:
@@ -358,8 +364,8 @@ def shield(x: float, y: float, px: float = 5) -> str:
 def wall(x: float, h: float = 46) -> str:
     """The quota cliff: the one thing on the ground the walker cannot pass."""
     return (
-        f'<g class="hk"><rect x="{x:g}" y="{BASE - h:g}" width="6" height="{h:g}"/>'
-        f'<rect x="{x - 2:g}" y="{BASE - h:g}" width="10" height="4"/></g>'
+        f'<g class="hk"><rect x="{x:g}" y="{BASE - h:g}" width="9" height="{h:g}"/>'
+        f'<rect x="{x - 3:g}" y="{BASE - h:g}" width="15" height="5"/></g>'
     )
 
 
@@ -367,7 +373,11 @@ def vrule(x: float, opened: float = 1.0) -> str:
     """The pane split, CHEAP build: a 2 art-px vertical rule that opens and retracts. It implies a
     second surface without authoring one."""
     top = BASE - 74 * opened
-    return f'<g class="sw"><rect x="{x:g}" y="{top:g}" width="2" height="{BASE - top:g}"/></g>'
+    seg = "".join(
+        f'<rect x="{x:g}" y="{y:g}" width="2" height="4"/>'
+        for y in range(int(top), int(BASE), 7)
+    )
+    return f'<g class="sw">{seg}</g>'
 
 
 def split_frame(x: float, phase: float = 0) -> str:
@@ -670,7 +680,7 @@ BEATS: tuple[Beat, ...] = (
                 "enters high, far right",
                 1,
                 (W_RIGHT,),
-                back=keepout() + star(4, 176, 20),
+                back=keepout() + star(4, 172, 34),
             ),
             Frame(
                 "crosses BELOW the type",
@@ -693,7 +703,7 @@ BEATS: tuple[Beat, ...] = (
                     "day · enters high right",
                     1,
                     (W_RIGHT,),
-                    back=keepout() + bird(4, 176, 20),
+                    back=keepout() + bird(4, 172, 34),
                     day=True,
                 ),
                 Frame(
@@ -889,14 +899,14 @@ BEATS: tuple[Beat, ...] = (
                 1,
                 (W_BIG,),
                 ground=print_row(mark=(FOOT,)),
-                back=hazard(150),
+                back=hazard(140),
             ),
             Frame(
                 "the shield drops",
                 1,
                 (W_BIG,),
                 ground=print_row(mark=(FOOT,)),
-                back=hazard(124),
+                back=hazard(126),
                 front=shield(112, BASE - 48),
             ),
             Frame(
@@ -963,11 +973,11 @@ BEATS: tuple[Beat, ...] = (
                 front=letter(6, 126, BASE - 58),
             ),
             Frame(
-                "A poofs · B walks on",
+                "A poofs · B takes over",
                 2,
-                (Creature(SML, AX + 8),),
+                (Creature(SML, 110),),
                 ground=print_row(mark=(FOOT - PITCH,)),
-                back=burst(5, 128, BASE - 32, 4),
+                back=burst(5, AX + 38, BASE - 34, 4),
             ),
         ),
         variant=Variant(
@@ -996,38 +1006,36 @@ BEATS: tuple[Beat, ...] = (
         reach="partly coded",
         cause="A pane dies mid-turn — a crash, a reap, a context wall. Something the session was "
         "holding drops.",
-        behaviour="The walker DROPS one cell, and that is the whole of the loss cue: legs never "
-        "animate and there is no stumble pose, so a limb action is not available to express it. A "
-        "pale token falls out and lands in the print strip.",
+        behaviour="A pale token falls out of the walker and lands in the print strip, and the gaze "
+        "snaps BACK to it. The walker itself does not change pose: the loss is carried by the thing "
+        "that leaves and by the look that follows it, because — see the variant below — the sprite "
+        "has no move that reads as stumbling.",
         exit_="The strip gives it back. The token rides the record, then rises out of a print and "
-        "overtakes the world to the walker, which is up again by then. Nothing new is drawn — the "
-        "ground already meant 'the record'.",
+        "overtakes the world to the walker. Nothing new is drawn — the ground already meant 'the "
+        "record'.",
         mech="`backup-before-write.sh` stamps a backup before every Write/Edit (nanosecond+PID "
         "names, so it is parallel-agent-safe) · `plan-version-commit.sh` MANIFEST.jsonl · the "
         "self-maintaining FTS5 index. Panes are disposable; their output is not.",
         cost_tag="rate: free · the token rides the strip",
-        cost="No rate change: a body drop is NOT a stride_in_place, because the feet never leave "
-        "the ground and the stride count is untouched, so the print lock is undisturbed. The token "
-        "is authored on the strip for the leg where the record carries it (the 20-26 s transit); "
-        "the return leg overtakes the world and is screen-pinned, so it costs nothing.",
-        note="Two changes from the sketch, both forced rather than chosen. 'clawd trips' is not "
-        "available — legs never move — so the loss is a body drop, which is a position change and "
-        "therefore the strongest cue on the ladder anyway. And the recovery is NOT a restore-claw "
-        "swinging in from a vault: the token falls into the print strip and the strip carries it "
-        "back, which needs zero new art and is truer to the mechanism. It supersedes an earlier "
-        "draft beat of mine (THE RECALL) that had this same return leg with no loss to motivate it.",
+        cost="No rate change: nothing about the walker's stride is touched, so the print lock is "
+        "undisturbed. The token is authored on the strip for the leg where the record carries it "
+        "(the 20-26 s transit); the return leg overtakes the world and is screen-pinned, so it "
+        "costs nothing.",
+        note="Two changes from the sketch and one from the brief, all three forced by the sprite "
+        "rather than chosen. 'clawd trips' is not available — legs never move. The recovery is NOT "
+        "a restore-claw swinging in from a vault: the token falls into the print strip and the "
+        "strip carries it back, which needs zero new art and is truer to the mechanism. And the "
+        "prescribed body DROP does not read either — the variant below is the render that shows "
+        "why, and it is the reason the main strip carries the loss on the token and the gaze "
+        "instead. This beat supersedes an earlier draft of mine (THE RECALL) that had the same "
+        "return leg with no loss to motivate it.",
         frames=(
             Frame("ambient · rate 1", 1, (R_BIG,)),
+            Frame("the token falls out", 1, (R_BIG,), back=letter(5, 84, BASE - 44)),
             Frame(
-                "the body DROPS one cell",
+                "it lands in a print",
                 1,
-                (R_DROP,),
-                back=letter(5, 84, BASE - 44),
-            ),
-            Frame(
-                "the token hits the strip",
-                1,
-                (R_DROP,),
+                (R_LEFT,),
                 ground=print_row(mark=(60,)),
                 back=letter(5, 60, BASE - 13),
             ),
@@ -1051,6 +1059,21 @@ BEATS: tuple[Beat, ...] = (
                 (R_BIG,),
                 ground=print_row(mark=(34,)),
                 back=burst(4, 80, BASE - 30, 3, 6),
+            ),
+        ),
+        variant=Variant(
+            caption="The prescribed body DROP, and why it is not used above — this is the render "
+            "that decides it. A trip was ruled out because legs never animate, and a body drop was "
+            "prescribed instead on the ladder's own logic that position change is the strongest "
+            "cue. But the feet are what DEFINE the ground line, so dropping the body puts them "
+            "below the print row: it reads as the creature sinking INTO the record, not stumbling "
+            "on it. There is no way out inside the vocabulary — no squash pose exists, and the "
+            "legs are solid 1 x 2 columns that scripts/clawd-sprite.py explicitly forbids moving, "
+            "so a body-only drop is unconstructible. The loss cue therefore has to leave the "
+            "creature entirely, which is what the main strip does.",
+            frames=(
+                Frame("feet ON the line", 1, (R_BIG,)),
+                Frame("the DROP · feet below", 1, (R_DROP,)),
             ),
         ),
     ),
@@ -1171,6 +1194,7 @@ DARK = {
     "line": "#57616f",
     "linedim": "#2c333f",
     "sweep": "#333e50",
+    "hazard": "#7b8698",
 }
 # The prop inversion is not a theming shortcut, it is this spec's own "one geometry, two paints"
 # rule applied to the storyboard: what is warm and bright at night is a dark silhouette by day.
@@ -1199,6 +1223,7 @@ LIGHT = {
     "line": "#8d8271",
     "linedim": "#cdc0a9",
     "sweep": "#c6b8a0",
+    "hazard": "#8a7461",
 }
 REACH_ORDER = {"no code needed": 0, "partly coded": 1, "needs the code": 2}
 
