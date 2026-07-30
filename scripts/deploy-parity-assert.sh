@@ -316,7 +316,24 @@ EOF
 fi
 if [ "$missing" -ne 0 ]; then
   printf '\ndeploy-parity-assert: %s tracked runtime file(s) have NO live counterpart under %s.\n' "$missing" "$LIVE" >&2
-  printf 'A bare ff-sync of the checkout can never create these links — run ./install.sh (or the ln -sf lines above).\n' >&2
+  # THE REMEDY MUST NOT DESTROY THE STATE THIS SCRIPT JUST REPORTED. ./install.sh globs
+  # hooks/*.sh (install.sh:89) and scripts/*.sh (install.sh:200) UNCONDITIONALLY and has no notion
+  # of staged-pending whatsoever (`grep -n pending-activation install.sh` → zero hits), so running
+  # it while a PENDING file is listed links that file too — erasing the "activation un-run" signal
+  # while the activation itself stays un-run, and the operator's own hand-step (which creates that
+  # symlink as its step 1, bundled with the settings.json wiring) silently becomes a partial no-op.
+  # The classification half of this landed in f0186bbd; the PRESCRIPTION half did not, so the
+  # script went on recommending the one command that undoes its own finding. Near-missed
+  # 2026-07-30 on the live host (2 PENDING + 5 MISSING): the targeted lines were run instead.
+  # A symptom and its prescribed remedy rot independently — both halves have to be checked.
+  if [ "$pending" -ne 0 ]; then
+    printf 'A bare ff-sync of the checkout can never create these links — run the ln -sf lines above.\n' >&2
+    printf 'Do NOT run ./install.sh while a PENDING file is listed below: it globs hooks/*.sh and\n' >&2
+    printf 'scripts/*.sh unconditionally, so it would link the staged-pending file(s) too and erase\n' >&2
+    printf 'that signal. Run the targeted ln -sf lines, which leave the staged state intact.\n' >&2
+  else
+    printf 'A bare ff-sync of the checkout can never create these links — run ./install.sh (or the ln -sf lines above).\n' >&2
+  fi
 fi
 # Emitted even when nothing is missing: a silent PENDING count is how "unlinked by design" decays
 # into "nobody remembers this is un-run". It is a fact about the queue, never a verdict on parity.
