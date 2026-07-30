@@ -24,6 +24,19 @@
 # serializes every lander on the box behind one copy of this suite, which is the cost the lease
 # exists to remove — and two `setup_file` definitions in one file silently resolve to whichever
 # is defined last, so keeping both leaves a landmine that a reorder would arm.
+#
+# THE PORT WAS NOT THE ONLY GLOBAL — TIME IS ONE TOO (backlog 53e2fd9a8253, 2026-07-30). The
+# paragraph above called the port "the ONE global the STATE_DIR / PROFILE_ROOT seams could not
+# cover". Measurement says otherwise: with the lease provably working — 19 concurrent copies,
+# 19 distinct blocks, verified live — this suite still went 5/19 RED, and a targeted re-run of
+# the two failing tests went 8/16 RED on a clean box. Not one failure was a port collision.
+# Every one was a fixed WALL-CLOCK BUDGET in the subject blowing under load: 6 exceeded the 15s
+# CDP wait, and 2 exceeded the 10s lsof — and that second one is the nastier failure, because a
+# timed-out lsof yields NO pids, so do_start's adoption check misses and cc-authbrowser reports
+# the browser it JUST LAUNCHED as "held by a foreign process (pids=unknown)". Wall-clock is
+# machine-wide exactly as a port is. setup() therefore pins CC_AUTHBROWSER_CDP_TIMEOUT_S and
+# CC_AUTHBROWSER_PROC_TIMEOUT_S; production defaults are untouched. Never delete those pins:
+# unpinned, this file measures the box's load average and calls the result a test result.
 
 # Fork can transiently fail (EAGAIN) when this box is running dozens of concurrent bats suites,
 # and a bare `cmd &` then aborts the whole test under errexit — a spurious RED that blocks a
@@ -54,7 +67,22 @@ spawn_bg() {   # usage: pid=$(spawn_bg <cmd...>)
 # mutex — a mutex serializes every lander behind one suite; a lease lets them all run at once,
 # which is the actual goal. The range starts well above the frozen 9341-9344 so a lease can never
 # disturb a REAL account browser.
-CDP_LEASE_ROOT="${TMPDIR:-/tmp}/cc-authbrowser-cdp-lease"
+#
+# THE ROOT IS DELIBERATELY NOT UNDER $TMPDIR. An allocator only allocates if every contender
+# shares ONE namespace, and the gate runners on this box re-point TMPDIR per run precisely so
+# each gets a private scratch: scripts/postland-verify.sh hands the WHOLE corpus a fresh
+# RUN_TMP (:940,:942 — launchd every 300s, plus a detached kick after every land), and
+# scripts/ship-land.sh does the same for its one exoneration re-run (:949). A TMPDIR-derived
+# root gives each of those its OWN lease dir, so both win "slot 0" and both land on 19341 —
+# the original collision through a different door, and block_free() cannot see it because it
+# probes once at setup_file time, before any test has bound anything. This was not theory:
+# ~/.claude/autonomy/postland/flakes.jsonl records tests/cc-authbrowser.bats flaking at
+# 2026-07-29T07:44:42Z on sha dc12c8db — which CONTAINS the port-lease fix ab8df95b — in
+# phase=postland, i.e. on exactly that private-TMPDIR path. One box, one allocator.
+cdp_lease_root() {   # keep as a FUNCTION so the TMPDIR-independence above is testable
+  echo "/tmp/cc-authbrowser-cdp-lease.${UID:-$(id -u)}"
+}
+CDP_LEASE_ROOT="$(cdp_lease_root)"
 CDP_LEASE_BASE0=19341      # echoes 9341; far from the 49152+ ephemeral range
 CDP_LEASE_SPAN=4           # one port per frozen account (contract §1 has four)
 CDP_LEASE_SLOTS=64         # 64 concurrent copies of this suite; the fleet runs ~5
@@ -143,6 +171,18 @@ setup() {
   # would leave the subject on its frozen 9341-9344 default — silently reinstating the exact
   # collision this file exists to prevent — so an absent lease is LOUD, never a fallback.
   [ -n "${CC_AUTHBROWSER_PORT_BASE:-}" ] || { echo "no CDP lease from setup_file" >&2; return 1; }
+  # PIN THE SUBJECT'S WALL-CLOCK BUDGETS. Isolating the port was necessary and NOT sufficient:
+  # with every copy provably on its own block, 8 of 16 concurrent copies still went RED
+  # (measured 2026-07-30, load ~40) because the subject's fixed budgets are bets on an idle
+  # box — 6 blew the 15s CDP wait, and 2 blew the 10s lsof, which returns no pids and so makes
+  # do_start call the browser it JUST STARTED "foreign (pids=unknown)". Unpinned, this suite
+  # measures ambient machine load, not cc-authbrowser: the same defect scripts/test-hermeticity
+  # -lint.sh rule 2 exists to catch. These are CEILINGS, not sleeps — the happy path returns as
+  # soon as the stub answers, so a generous value costs a passing run nothing. The one test that
+  # WANTS the CDP wait to expire pins it back down locally; that is why the two knobs are split.
+  export CC_AUTHBROWSER_CDP_TIMEOUT_S=180
+  export CC_AUTHBROWSER_PROC_TIMEOUT_S=120
+
   P_NEXT=$((CC_AUTHBROWSER_PORT_BASE))
   P_NEXT2=$((CC_AUTHBROWSER_PORT_BASE + 1))
   P_NEXT3=$((CC_AUTHBROWSER_PORT_BASE + 2))
@@ -400,6 +440,69 @@ refute() { # <cmd…> — assert the command FAILS.
   refute argv_has "--remote-debugging-port=9341"
 }
 
+@test "POSITIVE CONTROL: the lease root is TMPDIR-INDEPENDENT — one allocator per box" {
+  # Without this, a refactor back to \${TMPDIR}/… passes every other test in the file while
+  # silently handing postland-verify and ship-land's exoneration re-run their own private
+  # allocator (see the header). The lease would look healthy and allocate collisions.
+  a="$(export TMPDIR=/tmp/cdp-probe-aaa; cdp_lease_root)"
+  b="$(export TMPDIR=/tmp/cdp-probe-bbb; cdp_lease_root)"
+  c="$(unset TMPDIR; cdp_lease_root)"
+  [ -n "$a" ]
+  [ "$a" = "$b" ]
+  [ "$a" = "$c" ]
+  [ "${a#/}" != "$a" ]                        # absolute, so cwd cannot fork the namespace
+  [ "${a#*cdp-probe}" = "$a" ]                # and carries no fragment of either TMPDIR
+  [ "$CDP_LEASE_ROOT" = "$a" ]                # the LIVE root really is this function's value
+}
+
+@test "POSITIVE CONTROL: the wall-clock budgets are PINNED, and the subject honours them" {
+  # Two halves, both load-bearing. (1) THIS run is pinned — an unpinned suite silently goes
+  # back to measuring ambient load. (2) The subject actually reads the seam and fails CLOSED
+  # on junk: without (2), a typo'd export would leave the suite on the 15s default while (1)
+  # still passed, which is precisely how an isolation seam rots into decoration.
+  [ -n "${CC_AUTHBROWSER_CDP_TIMEOUT_S:-}" ]
+  [ -n "${CC_AUTHBROWSER_PROC_TIMEOUT_S:-}" ]
+
+  for bad in "" "abc" " 15" "0" "-1"; do
+    export CC_AUTHBROWSER_CDP_TIMEOUT_S="$bad"
+    run "$B" next --start
+    [ "$status" -eq 2 ]
+    echo "$output" | grep -q "CC_AUTHBROWSER_CDP_TIMEOUT_S"
+    [ ! -f "$STUB_ARGV_LOG" ]                 # refused BEFORE any browser was launched
+  done
+
+  export CC_AUTHBROWSER_CDP_TIMEOUT_S=180     # restore, then prove the OTHER knob too
+  export CC_AUTHBROWSER_PROC_TIMEOUT_S="junk"
+  run "$B" next --start
+  [ "$status" -eq 2 ]
+  # …and it fails CLOSED on the read-only modes as well, never just on --start
+  run "$B" next --status
+  [ "$status" -eq 2 ]
+  run "$B" next --stop
+  [ "$status" -eq 2 ]
+  export CC_AUTHBROWSER_PROC_TIMEOUT_S=120
+
+  # EFFECT-READ, not just validation. Everything above still passes if the subject VALIDATES
+  # both knobs and then uses its hardcoded 15/10 anyway — a seam that is checked but unwired
+  # is decoration, and this file already learned that lesson once about the port. So drive
+  # each knob to a budget no process on earth can meet and demand the corresponding verdict.
+  export CC_AUTHBROWSER_CDP_TIMEOUT_S=0.001
+  run "$B" next --start
+  [ "$status" -eq 4 ]
+  echo "$output" | grep -qi "CDP did not answer"      # ⇒ the CDP knob reaches the readiness wait
+  export CC_AUTHBROWSER_CDP_TIMEOUT_S=180
+
+  # With our OWN browser up, an unmeetable lsof budget must fall CLOSED to "pids=unknown" —
+  # which is precisely the production failure observed under load, so this asserts the seam
+  # reaches the listener lookup AND pins the shape of the failure it is there to prevent.
+  run "$B" next --start
+  [ "$status" -eq 0 ]
+  export CC_AUTHBROWSER_PROC_TIMEOUT_S=0.001
+  run "$B" next --start
+  [ "$status" -eq 4 ]
+  echo "$output" | grep -q "pids=unknown"
+}
+
 # ------------------------------------------------------------------- launch posture (argv)
 
 @test "default posture is headed-offscreen: contract flags present, --headless ABSENT" {
@@ -481,6 +584,11 @@ EOF
 
 @test "CDP never coming up is BROWSER-FAILED (exit 4) and leaves NO orphan browser" {
   export CC_AUTHBROWSER_CHROME_BIN="$D/stub-chrome-silent"
+  # The ONE test that wants the CDP wait to EXPIRE, so it pins setup()'s load-immunity
+  # ceiling back down: this stub never binds, so the deadline is always burned in full and
+  # the suite-wide 180s would be spent as dead wall-clock on every single run. Any value
+  # yields the same verdict here — a stub that never answers cannot answer late.
+  export CC_AUTHBROWSER_CDP_TIMEOUT_S=5
   run "$B" next --start
   [ "$status" -eq 4 ]
   echo "$output" | grep -qi "CDP did not answer"
