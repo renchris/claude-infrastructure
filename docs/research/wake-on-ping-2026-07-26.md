@@ -124,6 +124,14 @@ five queue items will not clear.
 
 ## 4 · The design — a wake LADDER, not a nudge
 
+> ⚠️ **SUPERSEDED 2026-07-29 — the premise of this section is FALSE on CC 2.1.219.** The harness floor
+> is **not** immovable: `asyncRewake` is a generic per-hook field ("hook runs in background and wakes
+> the model on exit code 2. Implies async"), so a `SessionStart` hook can BE the watcher and the
+> **harness** arms it at birth. Proven live end-to-end — see
+> `docs/research/mechanical-wake-asyncrewake-2026-07-29.md` §2. R1 below exists only to work around an
+> arming constraint that no longer applies; read that doc's §4 (W1–W3) instead. §1's metrics are also
+> stale (0 armed watchers → 23 pid-proven). The rest of this section's damping analysis is still sound.
+
 The harness floor is immovable: **only the model can arm its own watcher.** Therefore the only
 levers that can force arming are the two channels that reach the model — `additionalContext`
 (ignorable prose) and Stop `decision:block` (a forced turn). A 100th-percentile floor cannot rest on
