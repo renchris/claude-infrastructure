@@ -1370,9 +1370,13 @@ def second_session(art: Art) -> str:
     s = art.clawd_scale * 0.92
     ty = GROUND - SPRITE_H * s
     return (
+        # There is deliberately NO scaleX flip wrapper here. The sprite is bilaterally symmetric —
+        # eyes at 40-60 and 160-180 about centre 110, body 20-200, arm stubs 0-20 and 200-220 — so
+        # scaleX(-1) maps it exactly onto itself and the "turns to face the resident" beat was
+        # invisible by construction. It existed only in the code. Direction now reads from travel
+        # alone, which is honest; leaving an inert wrapper behind would just re-invite the claim.
         f'<g class="peerWrap"><g class="peer">'
         f'<g transform="translate(0 {fmt(ty)}) scale({fmt(s)})" shape-rendering="crispEdges">'
-        f'<g class="peerFlip">'
         f'<rect x="{CELL}" y="0" width="{9 * CELL}" height="{6 * CELL}" fill="{CLAWD}"/>'
         f'<rect x="0" y="{2 * CELL}" width="{CELL}" height="{2 * CELL}" fill="{CLAWD}"/>'
         f'<rect x="{10 * CELL}" y="{2 * CELL}" width="{CELL}" height="{2 * CELL}" fill="{CLAWD}"/>'
@@ -1384,7 +1388,7 @@ def second_session(art: Art) -> str:
         f'<g class="pLegB"><rect x="{3 * CELL}" y="{6 * CELL}" width="{CELL}" height="{2 * CELL}" '
         f'fill="{CLAWD}"/><rect x="{9 * CELL}" y="{6 * CELL}" width="{CELL}" height="{2 * CELL}" '
         f'fill="{CLAWD}"/></g>'
-        f"</g></g></g></g>"
+        f"</g></g></g>"
     )
 
 

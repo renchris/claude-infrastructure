@@ -3,6 +3,7 @@
 #
 # Five checks, each of which can actually FAIL:
 #
+#   0. WELLFORMED the file parses as XML at all — malformed SVG renders BLANK, never errors.
 #   1. LINT      one animation per element, so `banner-shots.sh`'s deterministic freeze is exact.
 #   2. SEAM      t=0 and t=P render byte-identically ⇒ the loop has no visible restart.
 #   3. ALIVE     N frames sampled across a short window are all DISTINCT ⇒ it is not a still.
@@ -107,6 +108,19 @@ if [[ -n "$KEEP" ]]; then mkdir -p "$KEEP"; WORK=$(cd "$KEEP" && pwd)
 else WORK=$(mktemp -d); trap 'rm -rf "$WORK"' EXIT; fi
 
 echo "banner-verify: $ASSET  (P=${PERIOD}s)"
+
+# ── 0. WELLFORMED ─────────────────────────────────────────────────────────────────────────────
+# A malformed SVG renders as a BLANK image inside <img> — no error, no console, just nothing. That
+# failure is nearly invisible to the other checks: two blank frames are byte-identical, so SEAM
+# passes on it. (This track already has three prototypes that render empty at t=0, and a broken tag
+# balance produces exactly the same picture.) Parse it before believing any render of it.
+if [[ "$ASSET" == *.svg ]]; then
+  if wf=$(python3 -c "import xml.etree.ElementTree as ET,sys; ET.parse(sys.argv[1])" "$ASSET" 2>&1); then
+    ok "WELLFD one well-formed XML document"
+  else
+    bad "WELLFD malformed XML — it will render BLANK, not error: $(printf '%s' "$wf" | tail -1)"
+  fi
+fi
 
 # ── 1. LINT ───────────────────────────────────────────────────────────────────────────────────
 if lint_out=$("$SHOTS" "$ASSET" --lint 2>&1); then
