@@ -1469,6 +1469,145 @@ def duplicate(body_fn, pad: bool = True) -> str:
 
 
 # ── sky ───────────────────────────────────────────────────────────────────────────────────────────
+#
+# The sky's optical treatment is BANDED, not blurred. A smooth radial gradient behind pixel art
+# reads as a Photoshop layer sitting on top of the scene and it bands anyway — 8-bit stops across a
+# 250 px falloff put the terraces at ~1 level apart, which is exactly where dithering-free ramps go
+# visible. So every glow here is a small stack of hard-edged steps down the sky ramp, and only the
+# OUTERMOST boundary is dithered: interior steps stay hard, because the hard step is the material.
+def _rgb(h: str) -> tuple[int, int, int]:
+    h = h.lstrip("#")
+    return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+
+
+def mix(a: str, b: str, t: float) -> str:
+    """Blend two palette hexes. Every band colour is derived rather than hand-picked, so a theme
+    change carries into the glow instead of leaving a stale hard-coded step behind."""
+    ar, ag, ab = _rgb(a)
+    br, bg, bb = _rgb(b)
+    t = max(0.0, min(1.0, t))
+    return "#{:02x}{:02x}{:02x}".format(
+        round(ar + (br - ar) * t), round(ag + (bg - ag) * t), round(ab + (bb - ab) * t)
+    )
+
+
+def sky_at(t: Theme, y: float) -> str:
+    """The sky ramp's own colour at an art-space y — the reference every glow band steps down to.
+
+    A glow that resolves into GREY is the tell; a glow that resolves into the sky it sits in is
+    what makes it read as light rather than as a decal. So the outward steps are mixes toward THIS,
+    not toward neutral.
+    """
+    u = max(0.0, min(1.0, y / H))
+    if u <= 0.55:
+        return mix(t.sky_top, t.sky_mid, u / 0.55)
+    return mix(t.sky_mid, t.sky_low, (u - 0.55) / 0.45)
+
+
+# Glow bands, as (radius multiplier of the OUTERMOST radius, STEP, mix-toward-sky fraction).
+# Radii grow non-linearly — the steps crowd near the source and stretch out where the eye stops
+# counting them — which is how you fake inverse-square falloff with four hard edges.
+#
+# STEP is a fraction of the distance from the sky to the source's own colour, NOT an opacity. The
+# distinction is the whole reason these numbers are trustworthy: the band colour is already mixed
+# `tow` of the way back toward the sky, so painting it at opacity `a` moves the pixel only
+# a·(1-tow) of the way. A first cut set these as raw opacities and the outer bands, at tow=0.78,
+# landed +1 LEVEL — measurably nothing, with a dithered boundary dissolving an edge that was not
+# there. `band_opacity` inverts it, so the table says what the eye gets.
+#
+# This is the DAY DISC's set. A sun is lit all over, so concentric is correct there and four steps
+# read as air. The moon uses two of these plus a pair of strokes on its lit limb — see MOON_RIM.
+GLOW_BANDS = (
+    (0.455, 0.100, 0.00),
+    (0.571, 0.070, 0.28),
+    (0.734, 0.048, 0.55),
+    (1.000, 0.030, 0.78),
+)
+# The moon's ambient half: two circular steps, offset onto the lit portion. Kept to two because
+# every extra boundary is another visible ring, and a ring is only worth its cost where the light
+# actually is.
+# The outermost band is desaturated 0.68 rather than 0.80 toward the sky. At 0.80 the dither
+# cells came out a neutral grey speckle that reads as dirt on the plate rather than as light;
+# the step is identical either way, so the only thing the extra desaturation bought was grime.
+MOON_AMBIENT = ((0.62, 0.042, 0.50), (1.00, 0.024, 0.68))
+# The moon's near half, as (stroke width, step, mix-toward-sky). These are STROKED ON THE LIT LIMB
+# ITSELF rather than drawn as circles, which is the whole answer to the operator's note: a circle
+# around a crescent lights the unlit half as brightly as the lit one, and light does not do that. A
+# stroke follows the arc, so the glow is centred on the lit portion by construction and cannot
+# drift off it when the phase or the tilt changes.
+MOON_RIM = ((30.0, 0.060, 0.34), (12.0, 0.130, 0.00))
+
+
+def band_opacity(step: float, tow: float) -> float:
+    """Opacity that lands a `tow`-desaturated band `step` of the way from the sky to the source."""
+    return min(0.9, step / max(0.05, 1.0 - tow))
+
+
+GLOW_DITHER_CELL = 8  # matches the cloud layers' own cell, so the sky is one material
+GLOW_DITHER_W = (
+    28  # width of the dithered outer boundary, carved INWARD from the last radius
+)
+
+
+def glow_stack(
+    gx: float,
+    gy: float,
+    r_out: float,
+    hue: str,
+    theme: Theme,
+    seed: int,
+    bands: tuple[tuple[float, float, float], ...] = GLOW_BANDS,
+) -> str:
+    """Concentric hard bands plus one dithered outer boundary.
+
+    `r_out` is the outermost radius INCLUDING the dither, which is carved inward — so the whole
+    stack is bounded by `r_out` and a caller can hold it clear of the type keep-out with one number.
+    """
+    back = sky_at(theme, gy)
+    out = []
+    for k, (fr, step, tow) in enumerate(bands):
+        rr = r_out * fr
+        col = mix(hue, back, tow)
+        op = band_opacity(step, tow)
+        if k < len(bands) - 1:
+            out.append(
+                f'<circle cx="{fmt(gx)}" cy="{fmt(gy)}" r="{fmt(rr)}" '
+                f'fill="{col}" fill-opacity="{fmt(op)}"/>'
+            )
+            continue
+        # Outermost: solid to r_out - GLOW_DITHER_W, then an ordered scatter of whole cells out to
+        # r_out. Probability ramps to zero at the edge, so the boundary dissolves instead of ending.
+        out.append(
+            f'<circle cx="{fmt(gx)}" cy="{fmt(gy)}" r="{fmt(rr - GLOW_DITHER_W)}" '
+            f'fill="{col}" fill-opacity="{fmt(op)}"/>'
+        )
+        dr = random.Random(seed)
+        c = GLOW_DITHER_CELL
+        cells = []
+        lo, hi = rr - GLOW_DITHER_W, rr
+        i0, i1 = int((gx - hi) // c), int((gx + hi) // c) + 1
+        j0, j1 = int((gy - hi) // c), int((gy + hi) // c) + 1
+        for i in range(i0, i1):
+            for j in range(j0, j1):
+                px, py = i * c + c / 2, j * c + c / 2
+                dist = math.hypot(px - gx, py - gy)
+                if not (lo <= dist <= hi):
+                    continue
+                if in_keepout(px, py, pad=c):
+                    continue
+                if dr.random() > 1.0 - ((dist - lo) / GLOW_DITHER_W) ** 1.35:
+                    continue
+                cells.append(
+                    f'<rect x="{fmt(i * c)}" y="{fmt(j * c)}" width="{c}" height="{c}"/>'
+                )
+        if cells:
+            out.append(
+                f'<g fill="{col}" fill-opacity="{fmt(op)}" shape-rendering="crispEdges">'
+                f"{''.join(cells)}</g>"
+            )
+    return "".join(out)
+
+
 def sky_defs(art: Art) -> str:
     d, l = art.dark, art.light
     return (
@@ -1501,20 +1640,13 @@ def sky_defs(art: Art) -> str:
         f'<radialGradient id="vig" cx="0.5" cy="0.46" r="0.78">'
         f'<stop offset="0.42" stop-color="#000" stop-opacity="0"/>'
         f'<stop offset="1" stop-color="#000" stop-opacity="1"/></radialGradient>'
-        f'<radialGradient id="halo" cx="0.5" cy="0.5" r="0.5">'
-        f'<stop offset="0.3" stop-color="{d.moon}" stop-opacity="0.38"/>'
-        f'<stop offset="1" stop-color="{d.moon}" stop-opacity="0"/></radialGradient>'
-        # The wide outer bloom is cooler than the core. Real glow shifts temperature outward; a
-        # single-colour radial gradient is the tell of vector art.
-        f'<radialGradient id="bloom" cx="0.5" cy="0.5" r="0.5">'
-        f'<stop offset="0.12" stop-color="{d.moon}" stop-opacity="0.20"/>'
-        f'<stop offset="0.45" stop-color="{d.glow}" stop-opacity="0.09"/>'
-        f'<stop offset="1" stop-color="{d.glow}" stop-opacity="0"/></radialGradient>'
-        # A small blur on the tight halo so its falloff is OPTICAL rather than a gradient stop.
-        # Verified to render in SVG-as-image (Chromium 141): the blurred edge samples to true
-        # intermediate values between disc and sky, not to either endpoint.
-        f'<filter id="soft" x="-70%" y="-70%" width="240%" height="240%">'
-        f'<feGaussianBlur stdDeviation="9"/></filter>'
+        # NOTE: the moon's `halo` / `bloom` radial gradients and the `soft` feGaussianBlur that
+        # used to live here are GONE. All three existed to fake an optical falloff, and all three
+        # were the wrong instrument for pixel art: a smooth radial behind a stepped moon reads as a
+        # layer pasted over the scene, and — the defect the operator actually caught — a gradient
+        # centred on the DISC puts a symmetric ring around a crescent, lighting the unlit half.
+        # Light comes off the lit limb, so the glow is now a banded stack offset onto it
+        # (`glow_stack`), which is also one fewer filter painting forever in an <img>.
         # ONE low-opacity grain layer over the sky. This is the single biggest change against the
         # plastic flatness of a large gradient. Measured over a flat patch: stddev 4.75 with the
         # filter vs 1.11 without, so it is genuinely rendering and not a no-op.
@@ -1522,11 +1654,17 @@ def sky_defs(art: Art) -> str:
         f'<feTurbulence type="fractalNoise" baseFrequency="0.82" numOctaves="2" seed="11" '
         f'result="n"/>'
         f'<feColorMatrix in="n" type="saturate" values="0"/></filter>'
-        # A terminator across the lit limb turns a flat crescent into an object.
-        f'<linearGradient id="term" x1="0" y1="0" x2="1" y2="0.25">'
-        f'<stop offset="0" stop-color="#000" stop-opacity="0.20"/>'
-        f'<stop offset="0.45" stop-color="#000" stop-opacity="0"/>'
-        f'<stop offset="1" stop-color="#000" stop-opacity="0.10"/></linearGradient>'
+        # A terminator across the lit limb turns a flat crescent into an object. objectBoundingBox
+        # units resolve in the crescent's OWN rotated frame, so offset 0 is the terminator and
+        # offset 1 is the outer limb whatever tilt the moon is given: the shading follows the
+        # geometry instead of being re-tuned by hand every time the phase moves.
+        f'<linearGradient id="term" x1="0" y1="0" x2="1" y2="0">'
+        f'<stop offset="0" stop-color="#000" stop-opacity="0.26"/>'
+        f'<stop offset="0.38" stop-color="#000" stop-opacity="0.05"/>'
+        f'<stop offset="0.82" stop-color="#000" stop-opacity="0"/>'
+        # and a whisper of limb darkening at the very edge, which is what stops the lit rim
+        # reading as a cut-out
+        f'<stop offset="1" stop-color="#000" stop-opacity="0.13"/></linearGradient>'
     )
 
 
@@ -1587,11 +1725,18 @@ def poisson(
     previous approach) fixes the clumping but leaves a faint lattice. Blue noise is the one that
     reads as sky: never two stars piled together, never a row.
 
-    `r_at(y)` returns the minimum separation at that height, so density varies deliberately —
-    sparser low, where atmosphere washes stars out. `void_mask(x, y)` returns False for deliberate
-    empty regions: unoccupied sky is what makes occupied sky read as composed rather than sprinkled.
+    `r_at(x, y)` returns the minimum separation at that POINT, so density varies deliberately —
+    sparser low, where atmosphere washes stars out, and modulated by a smooth field across the
+    frame so the result is clustered-random rather than evenly spread. Blue noise alone is *too*
+    even: it guarantees no piles and no rows, and it also guarantees no groups, which is the other
+    half of what a real sky has. `void_mask(x, y)` returns False for deliberate empty regions:
+    unoccupied sky is what makes occupied sky read as composed rather than sprinkled.
     """
-    r_min = min(r_at(y0), r_at(y1))
+    r_min = min(
+        r_at(x0 + (x1 - x0) * i / 8.0, y0 + (y1 - y0) * j / 8.0)
+        for i in range(9)
+        for j in range(9)
+    )
     cell = max(2.0, r_min / math.sqrt(2))
     grid: dict[tuple[int, int], list[tuple[float, float]]] = {}
     pts: list[tuple[float, float]] = []
@@ -1614,7 +1759,7 @@ def poisson(
         y = rng.uniform(y0, y1)
         if not void_mask(x, y):
             continue
-        r = r_at(y)
+        r = r_at(x, y)
         if not fits(x, y, r):
             continue
         pts.append((x, y))
@@ -1622,33 +1767,116 @@ def poisson(
     return pts
 
 
-# Star colour temperature. All-white stars look cheap; a few degrees of spread either side of
-# neutral is the cheapest refinement available in the whole sky.
-STAR_TEMPS = [
-    ("sc", 0.30),
-    ("sn", 0.46),
-    ("sw", 0.24),
-]  # cool / neutral / warm, with weights
+def drop_collinear(
+    pts: list[tuple[float, float]], span: float = 96.0, tol: float = 3.4
+) -> list[tuple[float, float]]:
+    """Delete the middle star of any near-perfect three-in-a-row.
+
+    Blue noise happily produces short straight runs, and the eye finds them instantly: three stars
+    on a line is the one arrangement that reads as DRAWN. Real constellations are made of them, of
+    course — which is the point. An accidental one claims a meaning the composition did not intend,
+    so the middle point goes and the pair is left as a pair.
+
+    Only the middle of a triple is removed, and only when the outer two are within `span`, so this
+    thins runs without opening holes the void mask did not ask for.
+    """
+    kept: list[tuple[float, float]] = []
+    for x, y in pts:
+        near = [
+            (px, py)
+            for px, py in kept
+            if abs(px - x) <= span
+            and abs(py - y) <= span
+            and math.hypot(px - x, py - y) <= span
+        ]
+        collinear = False
+        for i in range(len(near)):
+            for j in range(i + 1, len(near)):
+                ax, ay = near[i]
+                bx, by = near[j]
+                ux, uy = bx - ax, by - ay
+                seg = math.hypot(ux, uy)
+                if seg < 1e-6:
+                    continue
+                # perpendicular distance from (x, y) to the line, and it must sit BETWEEN them
+                t = ((x - ax) * ux + (y - ay) * uy) / (seg * seg)
+                if not (0.18 <= t <= 0.82):
+                    continue
+                if abs((x - ax) * uy - (y - ay) * ux) / seg <= tol:
+                    collinear = True
+                    break
+            if collinear:
+                break
+        if not collinear:
+            kept.append((x, y))
+    return kept
+
+
+# Three discrete magnitude tiers as (share of the field, edge in art px, opacity). A CONTINUOUS
+# brightness ramp — what this used to be — gives a field with no hierarchy: 300 stars each very
+# slightly dimmer than the last average out to one grey wash. Real magnitude classes are steps, and
+# steps are what let the eye pick a few stars out as bright.
+#
+# The size floor matters as much as the colour. The banner renders at 838 px from 1920 art px
+# (0.4365x), so anything under ~2 art px lands inside a single device pixel and shimmers rather
+# than resolves — and the twinkling tiers are held higher still, since a scaling sub-pixel feature
+# is the one thing guaranteed to crawl.
+STAR_TIERS = (
+    (4.2, 0.94),  # a handful, at palette white
+    (3.0, 0.58),  # a middle band, one step down
+    (2.4, 0.34),  # the majority, two steps down
+)
+# The brightest tier is a COUNT, not a share. "A handful" does not scale with the field, and as a
+# 2% share it resolved to TWO stars on this variant's 115 — which is fewer than the number of
+# stars the hue table wants to colour, so three of the five hues silently never appeared.
+STAR_BRIGHT_N = 6
+STAR_MID_SHARE = 0.26
+# Faint point sources are genuinely colourless to human vision, so a multicoloured starfield is
+# factually wrong rather than merely gaudy. Hue goes to FIVE stars in the whole field, in real
+# temperature order — hottest (blue-white) first — and only within the brightest tier, because that
+# is the only place a few percent of saturation can register at all.
+STAR_HUES = ("sc", "sc", "sw", "sw", "sw")
+# Incommensurate twinkle periods. The brief's 2.3 / 3.1 / 4.7 / 5.9 s cannot be used verbatim —
+# every sub-period must divide P=240 s or the composite loop seams at the LCM — so these are the
+# nearest set that both divides P exactly and formats exactly at two decimals. They realign only at
+# the full 240 s loop, which is the property the odd numbers were chosen for.
+STAR_PERIODS = (2.5, 3.2, 4.8, 6.0)
+STAR_TWINKLE_MAX = (
+    18  # animated elements, not a share: the field can grow without the cost doing so
+)
+# Scintillation is atmospheric, so only stars BELOW this may twinkle. The field spans y 8..330, so
+# this is its lower half — the thick air near the horizon — and it leaves the stars nearest the
+# wordmark perfectly still.
+STAR_LOW_Y = 168.0
 
 
 def starfield(art: Art, rng: random.Random) -> str:
-    """One blue-noise field with depth expressed by size and brightness, not by three separate
-    passes, plus deliberate voids and a hard keep-out around the type (S7).
+    """One clustered blue-noise field in three magnitude tiers, with deliberate voids and a hard
+    keep-out around the type (S7).
 
-    Two things here are restraint rather than omission. Most stars do NOT twinkle — a whole sky
-    pulsing is a screensaver, and it also competes with the wordmark; only a minority animate, on
-    uncorrelated periods. And the 4-point diffraction cross is reserved for the two or three
-    brightest: that detail is what makes a field read as photographic, and it stops working the
-    moment everything has one.
+    Three things here are restraint rather than omission, and each of them is a rule a sky obeys.
+
+    Only a minority twinkles, and only the LOW ones: scintillation is atmospheric, strongest
+    through the thick air near the horizon, so a high star that pulses is telling the viewer
+    something untrue — and a whole sky pulsing is a screensaver that competes with the wordmark.
+
+    There are no diffraction spikes. They are a CAMERA artifact, not something an eye sees, and at
+    838 px a 4-point cross on a 4 px star reads as a sparkle emoji rather than as a bright star.
+
+    And nothing is `#ffffff`. Pure white blows out against a dark sky and flattens the magnitude
+    hierarchy the tiers exist to create; the palette's star colour is a warm off-white instead.
     """
     total = sum(art.star_count)
-    divides_P(60.0, 30.0, 20.0, 12.0)
+    divides_P(*STAR_PERIODS)
 
-    # Deliberate voids — a few soft holes in the field, so the sky has empty quarters.
+    # Deliberate voids. Three land wherever the seed puts them; the fourth is placed BY HAND above
+    # the creature, because that is the one piece of empty sky the composition actually needs — a
+    # silhouette read against a busy field loses its edge.
     voids = [
         (rng.uniform(0, W), rng.uniform(10, 300), rng.uniform(90, 210))
-        for _ in range(4)
+        for _ in range(3)
     ]
+    voids.append((art.clawd_x + SPRITE_W * art.clawd_scale / 2, 336.0, 190.0))
 
     def void_mask(x: float, y: float) -> bool:
         for vx, vy, vr in voids:
@@ -1657,9 +1885,19 @@ def starfield(art: Art, rng: random.Random) -> str:
                 return False
         return True
 
-    # Minimum separation grows toward the horizon: denser high, sparser low.
-    def r_at(y: float) -> float:
-        return 15.0 * (1.0 + 2.3 * (max(0.0, y) / 330.0) ** 1.5)
+    # Separation grows toward the horizon (denser high, sparser low) and is then modulated by a
+    # smooth two-frequency field across the frame. That modulation is what turns even blue noise
+    # into CLUSTERED-random: patches where stars crowd, patches where they thin out, with the
+    # minimum separation still holding everywhere so nothing ever piles up.
+    ph = [rng.uniform(0, math.tau) for _ in range(4)]
+
+    def r_at(x: float, y: float) -> float:
+        base = 15.0 * (1.0 + 2.3 * (max(0.0, y) / 330.0) ** 1.5)
+        f = (
+            math.sin(x / 260.0 + ph[0]) * math.cos(y / 190.0 + ph[1])
+            + 0.55 * math.sin(x / 118.0 + ph[2]) * math.cos(y / 96.0 + ph[3])
+        ) / 1.55
+        return base * (1.0 + 0.42 * f)
 
     pts = poisson(total, 8, W - 8, 8, 330, rng, r_at, void_mask)
     pts = [(x, y) for (x, y) in pts if not in_keepout(x, y)]
@@ -1669,105 +1907,183 @@ def starfield(art: Art, rng: random.Random) -> str:
         if keepout_distance(x, y) >= KEEPOUT_SOFT
         or rng.random() <= (keepout_distance(x, y) / KEEPOUT_SOFT) ** 0.9
     ]
+    pts = drop_collinear(pts)
 
-    # Brightness rank drives size, opacity and who gets a cross — one axis, so depth stays coherent.
+    # Rank is random rather than positional, so magnitude does not correlate with height — a field
+    # whose bright stars are all at the top reads as a gradient, not as a sky.
     ranked = sorted(pts, key=lambda _p: rng.random())
+    n = len(ranked)
+    cuts = [min(STAR_BRIGHT_N, n // 6), int(n * STAR_MID_SHARE)]
+
+    # Twinkle candidates: bright enough to be worth animating, low enough for the atmosphere to be
+    # a plausible cause. Capped as a COUNT — a bigger field must not buy more animation.
+    # Ranked order IS brightness order, so this takes the brightest LOW stars first and stops at
+    # the cap. Restricting the pool to the top two tiers instead left 10 twinklers on this variant,
+    # because rank is independent of height and only a third of the field is low.
+    cand = [i for i in range(n) if ranked[i][1] >= STAR_LOW_Y]
+    twinkling = {c: k for k, c in enumerate(cand[:STAR_TWINKLE_MAX])}
+
     out = []
-    n_cross = 3
-    n_twinkle = max(1, int(len(ranked) * 0.22))
-    periods = [60.0, 20.0, 12.0]
     for i, (x, y) in enumerate(ranked):
-        q = i / max(1, len(ranked) - 1)  # 0 = brightest
-        size = 3.6 - 2.0 * q**0.6
-        op = 0.95 - 0.62 * q**0.75
-        temp = STAR_TEMPS[0][0]
-        roll = rng.random()
-        acc = 0.0
-        for cls, wgt in STAR_TEMPS:
-            acc += wgt
-            if roll <= acc:
-                temp = cls
-                break
+        tier = 0 if i < cuts[0] else (1 if i < cuts[1] else 2)
+        size, op = STAR_TIERS[tier]
+        temp = STAR_HUES[i] if tier == 0 and i < len(STAR_HUES) else "sn"
         body = (
             f'<rect x="{fmt(x - size / 2)}" y="{fmt(y - size / 2)}" '
             f'width="{fmt(size)}" height="{fmt(size)}"/>'
         )
-        if i < n_cross:
-            # diffraction spikes, on the brightest handful only
-            arm = size * 2.6
-            t = max(0.8, size / 4.6)
-            body += (
-                f'<rect x="{fmt(x - t / 2)}" y="{fmt(y - arm)}" '
-                f'width="{fmt(t)}" height="{fmt(arm * 2)}"/>'
-                f'<rect x="{fmt(x - arm)}" y="{fmt(y - t / 2)}" '
-                f'width="{fmt(arm * 2)}" height="{fmt(t)}"/>'
-            )
-        if i < n_twinkle:
-            dur = periods[i % len(periods)]
-            delay = -(i * 7.3) % dur
-            # opacity AND scale together — a pure opacity blink reads as a rendering glitch
-            out.append(
-                f'<g class="st {temp} tw{i % 3}" style="--d:{fmt(-delay)}s" '
-                f'opacity="{fmt(op)}" transform-origin="{fmt(x)}px {fmt(y)}px">'
-                f"{body}</g>"
-            )
-        else:
+        k = twinkling.get(i)
+        if k is None:
             out.append(f'<g class="st {temp}" opacity="{fmt(op)}">{body}</g>')
+            continue
+        # Nested, and that nesting is the fix for a real defect: a keyframe sets opacity
+        # ABSOLUTELY, so an animation on the same element that carries the tier's own
+        # `opacity=` attribute overrides it — every twinkling star pulsed to the same brightness
+        # and the magnitude hierarchy vanished for exactly the stars meant to carry it. The outer
+        # group holds the tier (static, un-animated); the inner one holds the one animation, and
+        # the two multiply.
+        dur = STAR_PERIODS[k % len(STAR_PERIODS)]
+        delay = -(k * 7.3) % dur
+        out.append(
+            f'<g class="st {temp}" opacity="{fmt(op)}">'
+            f'<g class="tw{k % len(STAR_PERIODS)}" style="--d:{fmt(-delay)}s" '
+            f'transform-origin="{fmt(x)}px {fmt(y)}px">{body}</g></g>'
+        )
     return "".join(out)
 
 
-def moon(art: Art) -> str:
-    """A clean crescent via a mask — no dither, no solid-white cell.
+# Where the lit limb faces, in SVG's y-down frame: -90° is straight up. The crescent is tilted
+# just off vertical so the horns angle DOWN toward the horizon rather than standing up like a logo
+# mark. At 10° off vertical both cusps sit within 0.18r of the horizontal through the centre, so
+# the crescent unambiguously opens DOWNWARD — the horns cannot be read as standing up — while the
+# slight lean keeps it off the symmetry that would make it look like a logo.
+MOON_LIT_DEG = -100.0
+# The glow's centre, as a fraction of the disc radius along the lit direction. THIS is the operator's
+# defect: a glow concentric on the disc rings the unlit half as brightly as the lit one, which is a
+# thing light does not do.
+MOON_GLOW_OFFSET = 0.42
+MOON_GLOW_MAX = (
+    2.4  # hard ceiling on the glow radius in disc radii — past ~2.5x it reads as fog
+)
 
-    The checkerboard moon in v5a is the failure this replaces: at the displayed scale an 8 px
-    pattern collapses into grey mud and the bitten shape reads as a corrupted sprite rather than
-    a moon.
+
+def moon_frame(art: Art) -> tuple[float, float, float, float, float, float]:
+    """(cx, cy, r, terminator semi-minor axis, lit unit x, lit unit y)."""
+    cx, cy, r = art.moon
+    # A crescent is bounded by a half-CIRCLE and a half-ELLIPSE, and the ellipse's MAJOR axis is a
+    # diameter of the disc. `b` is its semi-MINOR axis: the terminator's bulge toward the lit side.
+    # Two overlapping circles of different radii — what this used to be — cannot produce that, and
+    # the giveaway is that the line joining the horns comes out a chord rather than a diameter.
+    # At phase 0.30 this is 0.70r, so the lit crescent is 15% of the disc's diameter at its widest.
+    b = r * (0.48 + 0.72 * art.moon_phase)
+    a = math.radians(MOON_LIT_DEG)
+    return cx, cy, r, b, math.cos(a), math.sin(a)
+
+
+def crescent_d(r: float, b: float) -> str:
+    """The lit crescent in the moon's OWN frame: horns on the vertical diameter, belly toward +x.
+
+    Drawn in a local frame and rotated into place by the caller, so the horn line is a diameter by
+    construction at any tilt — `M0,-r … 0,r` are literally the two ends of one, and no amount of
+    later re-tilting can turn it into a chord.
+    """
+    return (
+        f"M0,{fmt(-r)}"
+        f"A{fmt(r)},{fmt(r)} 0 0 1 0,{fmt(r)}"  # outer limb: a true half-circle
+        f"A{fmt(b)},{fmt(r)} 0 0 0 0,{fmt(-r)}Z"  # terminator: the half-ellipse
+    )
+
+
+def limb_shell(r: float, w: float) -> str:
+    """A glow shell hugging the OUTSIDE of the lit limb, `w` thick at its middle and tapering to
+    nothing at both cusps.
+
+    Same half-circle/half-ellipse construction as the crescent, mirrored outward: the outer bound
+    is an ellipse of semi-axes (r+w, r) sharing the crescent's own horn diameter, so it meets the
+    limb exactly at the two cusps and no cap is needed. Both alternatives were rendered and both
+    are worse — a `stroke` with round caps pushes two glowing nubs ~w/2 past the cusps, which read
+    as a second pair of horns, and butt caps leave a hard flat cut across the glow at each cusp.
+    """
+    return (
+        f"M0,{fmt(-r)}"
+        f"A{fmt(r + w)},{fmt(r)} 0 0 1 0,{fmt(r)}"  # outer bound of the shell
+        f"A{fmt(r)},{fmt(r)} 0 0 0 0,{fmt(-r)}Z"  # back along the limb itself
+    )
+
+
+def moon(art: Art) -> str:
+    """Defs for the moon: a clip to the lit crescent, in the crescent's OWN rotated frame.
+
+    `clipPathUnits` stays at its default (userSpaceOnUse), which resolves in the user space of the
+    element that REFERENCES the clip — so the same local path serves as both the crescent and its
+    clip with no second copy in world coordinates to drift out of step.
     """
     cx, cy, r = art.moon
     if in_keepout(cx, cy, pad=r):
         raise SystemExit("gen: moon overlaps the wordmark keep-out")
-    # bite radius > disc radius keeps the horns closing cleanly; a purely horizontal
-    # offset with a slight lift gives the classic tilt without a spur on one horn
-    off = r * (0.55 + art.moon_phase * 0.75)
-    return (
-        f'<mask id="mcut" maskUnits="userSpaceOnUse" x="{fmt(cx - r * 1.4)}" y="{fmt(cy - r * 1.4)}" '
-        f'width="{fmt(r * 2.8)}" height="{fmt(r * 2.8)}">'
-        f'<circle cx="{fmt(cx)}" cy="{fmt(cy)}" r="{fmt(r)}" fill="#fff"/>'
-        f'<circle cx="{fmt(cx + off)}" cy="{fmt(cy - r * 0.14)}" r="{fmt(r * 1.16)}" fill="#000"/>'
-        f"</mask>"
-    )
+    _cx, _cy, _r, b, _ux, _uy = moon_frame(art)
+    return f'<clipPath id="mcres"><path d="{crescent_d(r, b)}"/></clipPath>'
 
 
 def moon_body(art: Art) -> str:
-    """Stacked glow, then the disc, then a terminator and a few maria.
+    """Ambient bands, a rim glow stroked on the lit limb, earthshine, the crescent, maria.
 
-    Three passes rather than one radial gradient: a wide cool bloom, a tight warm halo softened by
-    an actual blur, and the disc itself. The whole group sits BEFORE the cloud layers, so the glow
-    is occluded by the clouds along with the moon — a halo that survives in front of a cloud reads
-    as pasted onto the scene.
+    The whole group sits BEFORE the cloud layers, so the glow is occluded by the clouds along with
+    the moon — a halo that survives in front of a cloud reads as pasted onto the scene.
+
+    Three details do most of the work and none is expensive. The glow is on the LIT PORTION, not
+    around the disc, because that is where the light is. The unlit disc is filled one step above
+    the sky (earthshine), which costs one circle, is bounded by the same circle as the crescent,
+    and is the cheapest single thing that separates "drew a moon" from "looked at one". And the
+    crescent is a half-circle closed by a half-ELLIPSE, so the line joining the horns is a real
+    diameter rather than the chord that two overlapping circles produce.
     """
-    cx, cy, r = art.moon
+    cx, cy, r, b, ux, uy = moon_frame(art)
+    d = art.dark
     divides_P(80.0)
-    maria = []
+
+    # Ambient half: offset onto the lit limb, then capped so NO ink reaches the type keep-out. The
+    # cap is a real constraint here rather than taste — v6c parks the moon 52 px from the keep-out's
+    # left edge, and the bloom this replaces crossed that boundary by 123 px.
+    gx, gy = cx + ux * r * MOON_GLOW_OFFSET, cy + uy * r * MOON_GLOW_OFFSET
+    r_out = min(r * MOON_GLOW_MAX, max(0.0, keepout_distance(gx, gy) - 6.0))
+    back = sky_at(d, gy)
+
+    # Near half: two shells hugging the lit limb. Widest and faintest first, so they stack the same
+    # way the circular bands do — cumulative toward the limb, which is where the light is.
+    rim = "".join(
+        f'<path d="{limb_shell(r, w)}" fill="{mix(d.moon, back, tow)}" '
+        f'fill-opacity="{fmt(band_opacity(step, tow))}"/>'
+        for w, step, tow in MOON_RIM
+    )
+
+    # Maria, clipped to the LIT crescent. Clipping them to the whole disc instead was tried and it
+    # is worse than no maria at all: three soft blobs on a dim earthshine disc turn the moon into a
+    # planet, and the crescent stops reading as a crescent.
     mr = random.Random(4242)
-    for fx, fy, fr in ((-0.30, -0.22, 0.30), (0.10, 0.26, 0.22), (-0.06, 0.02, 0.15)):
-        maria.append(
-            f'<circle cx="{fmt(cx + fx * r)}" cy="{fmt(cy + fy * r)}" r="{fmt(fr * r)}" '
-            f'fill="#000" opacity="{fmt(mr.uniform(0.045, 0.085))}"/>'
-        )
+    maria = "".join(
+        f'<circle cx="{fmt(fx * r)}" cy="{fmt(fy * r)}" r="{fmt(fr * r)}" '
+        f'fill="#000" opacity="{fmt(mr.uniform(0.03, 0.055))}"/>'
+        for fx, fy, fr in ((0.80, -0.30, 0.20), (0.72, 0.34, 0.16), (0.90, 0.06, 0.11))
+    )
+    # Earthshine is meant to be barely there. A first cut mixed 0.17 toward the moon and rendered a
+    # solid grey ball with a lit cap sitting on it. "One ramp step above the sky" is the whole
+    # instruction, and one step is small.
+    earth = mix(sky_at(d, cy), d.moon, 0.10)
+    tilt = f"translate({fmt(cx)} {fmt(cy)}) rotate({fmt(MOON_LIT_DEG)})"
+    path = crescent_d(r, b)
     return (
         f'<g class="moonHalo">'
-        f'<circle cx="{fmt(cx)}" cy="{fmt(cy)}" r="{fmt(r * 3.5)}" fill="url(#bloom)"/>'
+        f"{glow_stack(gx, gy, r_out, d.moon, d, 9091, MOON_AMBIENT)}"
+        f'<g transform="{tilt}">{rim}</g>'
         f"</g>"
-        f'<g class="moonGlow">'
-        f'<circle cx="{fmt(cx)}" cy="{fmt(cy)}" r="{fmt(r * 1.55)}" fill="url(#halo)" '
-        f'filter="url(#soft)"/>'
-        f"</g>"
-        f'<g class="moonLit" mask="url(#mcut)">'
-        f'<circle class="mdisc" cx="{fmt(cx)}" cy="{fmt(cy)}" r="{fmt(r)}"/>'
-        f"{''.join(maria)}"
-        f'<circle cx="{fmt(cx)}" cy="{fmt(cy)}" r="{fmt(r)}" fill="url(#term)"/>'
-        f"</g>"
+        f'<g class="moonLit">'
+        f'<circle cx="{fmt(cx)}" cy="{fmt(cy)}" r="{fmt(r)}" fill="{earth}"/>'
+        f'<g transform="{tilt}">'
+        f'<path class="mdisc" d="{path}"/>'
+        f'<g clip-path="url(#mcres)">{maria}</g>'
+        f'<path d="{path}" fill="url(#term)"/>'
+        f"</g></g>"
     )
 
 
@@ -3026,20 +3342,29 @@ def css(art: Art) -> str:
         f"@keyframes gsc{{from{{transform:translateX(0)}}"
         f"to{{transform:translateX(-{fmt(GROUND_TRAVEL)}px)}}}}"
         f".ovl,.rfPost{{animation:gsc {fmt(P)}s linear infinite}}" + warp_css() +
-        # ---- twinkle: three rates so the sky has depth rather than one uniform pulse ----
-        # Twinkle varies opacity AND scale together on eased curves. A pure opacity blink reads as a
-        # rendering glitch rather than as atmosphere, and three uncorrelated periods stop the
-        # minority that does animate from pulsing as one organism.
-        f"@keyframes twA{{0%,100%{{opacity:.42;transform:scale(.86)}}50%{{opacity:1;transform:scale(1.1)}}}}"
-        f"@keyframes twB{{0%,100%{{opacity:.55;transform:scale(.92)}}38%{{opacity:1;transform:scale(1.14)}}}}"
-        f"@keyframes twC{{0%,100%{{opacity:.5;transform:scale(.9)}}62%{{opacity:1;transform:scale(1.06)}}}}"
-        f".tw0{{animation:twA 60s ease-in-out infinite}}"
-        f".tw1{{animation:twB 20s ease-in-out infinite}}"
-        f".tw2{{animation:twC 12s ease-in-out infinite}}"
+        # ---- twinkle: four rates so the sky has depth rather than one uniform pulse ----
+        # Scintillation is fast and it is atmospheric, so these are SECONDS rather than the old
+        # minute-long breaths — and they are mutually incommensurate (they realign only at the full
+        # 240 s loop), which is what stops the animating minority pulsing as one organism.
+        #
+        # Each varies opacity AND scale together on an eased curve. A pure opacity blink reads as a
+        # rendering glitch; a pure scale change on a 3 px feature is invisible. The opacity swing is
+        # about one magnitude step, and it MULTIPLIES the tier opacity on the parent group rather
+        # than replacing it — see starfield() for why that nesting exists.
+        f"@keyframes twA{{0%,100%{{opacity:.7;transform:scale(.88)}}50%{{opacity:1;transform:scale(1.1)}}}}"
+        f"@keyframes twB{{0%,100%{{opacity:.76;transform:scale(.92)}}38%{{opacity:1;transform:scale(1.12)}}}}"
+        f"@keyframes twC{{0%,100%{{opacity:.72;transform:scale(.9)}}62%{{opacity:1;transform:scale(1.08)}}}}"
+        f"@keyframes twD{{0%,100%{{opacity:.8;transform:scale(.94)}}44%{{opacity:1;transform:scale(1.06)}}}}"
+        f".tw0{{animation:twA {fmt(STAR_PERIODS[0])}s ease-in-out infinite}}"
+        f".tw1{{animation:twB {fmt(STAR_PERIODS[1])}s ease-in-out infinite}}"
+        f".tw2{{animation:twC {fmt(STAR_PERIODS[2])}s ease-in-out infinite}}"
+        f".tw3{{animation:twD {fmt(STAR_PERIODS[3])}s ease-in-out infinite}}"
         # ---- moon: a slow brightness breath, nothing more ----
-        f"@keyframes mnf{{0%{{opacity:.80}}50%{{opacity:1}}100%{{opacity:.80}}}}"
+        f"@keyframes mnf{{0%{{opacity:.88}}50%{{opacity:1}}100%{{opacity:.88}}}}"
         f".moonLit{{animation:mnf 80s ease-in-out infinite}}"
-        f"@keyframes mhf{{0%{{opacity:.18}}50%{{opacity:.34}}100%{{opacity:.18}}}}"
+        # The halo's own bands carry their opacities now, so the group breathes near 1 and just
+        # modulates them. Driving it .18-.34 as before would have scaled every band down to a third.
+        f"@keyframes mhf{{0%{{opacity:.84}}50%{{opacity:1}}100%{{opacity:.84}}}}"
         f".moonHalo{{animation:mhf 80s ease-in-out infinite}}"
         # ---- clawd: constant life ----
         # stride, on steps() so the legs snap between cells instead of sliding
@@ -3216,7 +3541,11 @@ def css(art: Art) -> str:
         # `animation:none` reverts an element to its UN-animated base value, which for the
         # moon halo is full strength — the frozen still showed a blown-out glow that never
         # appears in the animation. Pin the breathing values to their mid-points instead.
-        ".moonHalo{opacity:.26}.moonLit{opacity:.9}"
+        ".moonHalo{opacity:.92}.moonLit{opacity:.94}"
+        # Same reasoning for the twinkling stars: un-animated they revert to scale(1) at full
+        # opacity, i.e. every one of them pinned at its own peak, which is a brighter horizon than
+        # the animation ever shows. Pin them to the mid-point of their own swing.
+        ".tw0,.tw1,.tw2,.tw3{opacity:.86}"
         ".peek{transform:translateY(78px)}"
         "}"
     )
@@ -3272,13 +3601,30 @@ def build(art: Art) -> str:
         + f'<clipPath id="belowGround"><rect x="0" y="0" width="{W}" height="{GROUND}"/></clipPath>'
     )
 
+    # The day disc gets the same banded treatment, and it needs it more: in light mode the stars
+    # are hidden and the moon's craft is gone with them, so a flat undetailed circle IS the sky.
+    # Concentric is CORRECT here and only here — a sun is lit all over, so there is no lit portion
+    # to offset the glow onto, and the asymmetry that fixes the crescent would be a defect on a
+    # full disc. The core is a step brighter than the limb, which is what stops it reading as a
+    # sticker; there is no terminator, because there is nothing to terminate.
     sun_cx, sun_cy, sun_r = art.moon
+    lt = art.light
+    sun_out = min(sun_r * 1.9, max(0.0, keepout_distance(sun_cx, sun_cy) - 6.0))
     day_sun = (
         f'<g class="dOnly">'
-        f'<circle cx="{fmt(sun_cx)}" cy="{fmt(sun_cy)}" r="{fmt(sun_r * 3.1)}" '
-        f'fill="url(#halo)" opacity=".5"/>'
-        f'<circle class="mdisc" cx="{fmt(sun_cx)}" cy="{fmt(sun_cy)}" r="{fmt(sun_r * 0.92)}" '
-        f'opacity=".9"/></g>'
+        # The day glow's hue is a warm near-WHITE, not the sun's own orange. Mixing 0.35 toward
+        # white leaves it at (255,223,182), which against a #b8d3ec sky is +71 red but MINUS 54
+        # blue — so the bands came out as faintly dirty specks rather than as light. A halo has to
+        # be brighter than its sky in every channel or it reads as grime.
+        f"{glow_stack(sun_cx, sun_cy, sun_out, '#fff9ee', lt, 5150)}"
+        f'<circle class="mdisc" cx="{fmt(sun_cx)}" cy="{fmt(sun_cy)}" r="{fmt(sun_r * 0.92)}"/>'
+        # Two interior steps, and they are DELIBERATELY small. Mixing 0.55 and 0.82 toward white was
+        # tried and it renders a bullseye: three rings of very different value, concentric, hard —
+        # a target, not a sun. Ten levels per step reads as a hot centre and nothing else.
+        f'<circle cx="{fmt(sun_cx)}" cy="{fmt(sun_cy)}" r="{fmt(sun_r * 0.7)}" '
+        f'fill="{mix(lt.moon, "#fffaf0", 0.22)}"/>'
+        f'<circle cx="{fmt(sun_cx)}" cy="{fmt(sun_cy)}" r="{fmt(sun_r * 0.34)}" '
+        f'fill="{mix(lt.moon, "#fffdf8", 0.42)}"/></g>'
     )
 
     # The SCENE is composed before the stylesheet, because emitting a scrolling layer is what
