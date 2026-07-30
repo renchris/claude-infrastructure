@@ -61,16 +61,22 @@ add_item()   { "$BACKLOG" add --title "$1" --project proj --source bats; }   # e
 status_of()  { "$BACKLOG" list --all --json | jq -r --arg i "$1" '.[]|select(.id==$i)|.status'; }
 idl_action() { tail -1 "$C/idl.jsonl" | jq -r '.action'; }
 
-@test "selftest passes and runs all 108 checks (a zero-check suite must not 'pass')" {
+@test "selftest passes and runs all 111 checks (a zero-check suite must not 'pass')" {
   run "$DISP" selftest
   [ "$status" -eq 0 ]
   n_ok="$(printf '%s' "$output" | grep -c '^  ok ')"
-  [ "$n_ok" -eq 106 ]   # 49 pre-v2 + the decision/admission split (S1,S2,S6,S7 + kill switches).
+  [ "$n_ok" -eq 111 ]   # 49 pre-v2 + the decision/admission split (S1,S2,S6,S7 + kill switches).
                         # 108 → 106 when the ceiling moved off the accounts oracle onto the ledger's
                         # `claimed` fold (§3 S2): the oracle-hang bound and the zero-timeout config
                         # case had nothing left to bound. Fewer checks here is a DELETION of dead
                         # surface, not lost coverage — A14 in cc-dispatch-v2.bats now guards the
                         # signal itself, which is the property those two were circling.
+                        # 106 → 111 with multi-project coverage (f7abcbdee98c): the brief's rails
+                        # line is now read from the project, so (c) asserts BOTH branches instead of
+                        # one unconditional '/ship', plus the (c6) positive control that a
+                        # conf-declared FOREIGN project is dispatched and gets the ship rail when its
+                        # repo carries one. This count is deliberately exact — it is what stops a
+                        # selftest that silently stops running checks from reading as a pass.
   ! printf '%s' "$output" | grep -q '^  FAIL'
 }
 
