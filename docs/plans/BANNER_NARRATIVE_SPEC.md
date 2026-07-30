@@ -1202,8 +1202,11 @@ the exact size this document mandates judging at, which is worth knowing about t
 ## ⛔ THE WORLD DOES NOT ACTUALLY STOP — `tf0` is warped at the wrong rate (2026-07-30, MEASURED)
 
 Found while re-deriving the parallax fix per the instruction above, and it **changes what that fix
-has to be**. One ground layer keeps moving through the dead world of THE ASK and THE REFUSAL, which
-are the two beats whose entire meaning is that the world stopped.
+has to be**. One ground layer is mis-compensated through **both** world modulations, and the symptom
+differs by beat: through THE ASK's dead world (26.0-32.0 s) it **keeps moving**, and through THE
+REFUSAL's rewind (17.0-22.0 s) it **under-rewinds to two-thirds** of the distance every other ground
+layer travels. Stated precisely because THE REFUSAL is a reversal, not a stop, and calling both a
+"dead world" would send a successor looking for the wrong symptom in the wrong beat.
 
 **`tf0` carries two different periods, in two different places, and neither knows about the other:**
 
@@ -1233,11 +1236,27 @@ question. (A cross-correlation was tried first and could NOT resolve it — the 
 interpenetrate, since a `tf1` tuft rises up to 12 px into `tf0`'s band, so its correlation peak sat at
 1.6× the median and reported a false `0`. The change-detection above is the measurement that works.)
 
-**This invalidates the handed-down parallax remedy a second way.** § above already caught that
-shortening `fgb`'s *tile* would slow it. The new one is worse: the remedy names **`tf0 → P/8` = 64
-px/s**, and `ground_detail` line 2291 **already says `P / 8`, with a `# 30s` comment.** Anyone
-applying the remedy where it appears to belong edits a line that is already correct, changes nothing
-about the scroll, and lands a branch that looks fixed. The rate that ships is in the *stylesheet*.
+**This RELOCATES the handed-down parallax remedy — it does not refute its numbers.** Said this way
+deliberately, correcting a sharper framing in this section's first draft: a successor who reads
+"the remedy is invalid" throws away three numbers that are actually right. Re-derived independently
+from the constants rather than transcribed, as § above demands:
+
+| layer | depth | period | wraps per P | px/s |
+|---|---|---|---|---|
+| `fgb` | nearest | `P/16` = 15 s | 16 | **128** |
+| `tf1` | middle | `P/10` = 24 s | 10 | **80** |
+| `tf0` | farthest | `P/8` = 30 s | 8 | **64** |
+
+Monotonic near→far, **2.00× near:far spread**, every period divides `P = 240`, and every layer travels
+a whole number of wraps per master period so the loop cannot seam. No ground layer is left at
+`STRIP_V` = 96 and none needs to be — `.fprs` and `world_borne` hold that rate, which is what
+`warp_css`'s "no layer scrolls at the strip rate" guard actually requires. **The numbers survive.**
+
+**What is wrong is WHERE you would write them.** § above already caught that shortening `fgb`'s *tile*
+would slow it. This is the worse one: the remedy names **`tf0 → P/8` = 64 px/s**, and `ground_detail`
+line 2291 **already says `P / 8`, with a `# 30s` comment.** Anyone applying the remedy where it appears
+to belong edits a line that is already correct, changes nothing about the scroll, and lands a branch
+that looks fixed. The rate that ships is in the *stylesheet*.
 
 **So the tf0 repair and the parallax re-derivation are ONE edit, not two.** Any new period for `tf0`
 must be written in both places at once — the stylesheet drives the scroll, `tiled()`'s argument drives
