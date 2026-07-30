@@ -3419,7 +3419,14 @@ VARIANTS = [
         star_count=(220, 62, 20),
         moon=(250, 214, 70),
         moon_phase=0.30,
-        events=("peek",),
+        # The visitor is HELD, not deleted — operator ruling on the artifact, "silly"
+        # (BANNER_NARRATIVE_SPEC.md § OPERATOR RULINGS). Only half of that ruling had been applied:
+        # the beat was demoted to t=48.5 and left EMITTING, so the shipped pick still carried a beat
+        # its owner had withdrawn. A demotion is not a withdrawal — past t=45s a beat is unseen by
+        # most readers, which hides it from review without removing it from the file.
+        # The machinery stays whole (RARE_EVENTS, the emitters, the collision partner entry); putting
+        # "peek" back in this tuple is the entire restoration.
+        events=(),
     ),
     Art(
         key="v6d-terminal-field",
