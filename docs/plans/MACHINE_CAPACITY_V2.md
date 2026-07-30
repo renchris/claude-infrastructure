@@ -1084,3 +1084,30 @@ never assert exclusion from a bare mdfind zero).** Spotlight exclusion cannot re
 
 **New anomaly for the ledger:** `NotificationCenter` at 22.8% of a core — 20× the entire mds
 family, in nobody's brief. Backlogged with a `sample 660 5` as the named next probe.
+
+## 11.10 Agent-lifecycle gap found DURING this wave (operator-prompted investigation, 2026-07-30)
+
+**Finding: graceful teammate self-close does not operate on the implicit-team runtime, and
+API-error "deaths" leave immortal idle processes.** Measured mid-wave: **16 idle `claude.exe`
+agent processes ≈ 8.5 GB RSS** — all 7 server-529/500 "corpses" (turn died, process idles
+resumable-by-design) + 5 finished researchers + superseded generations. Three compounding causes,
+each verified: **(a)** no team manifest is created for an implicit team (`~/.claude/teams/
+session-5f645730/` absent) ⇒ the auto-shutdown hook has no member→worktree/pane records;
+**(b)** its worktree resolution falls back to the SPAWN cwd — the shared checkout — where the
+2026-07-29 owned-tree gate CORRECTLY refuses destruction ("SHARED by 19 members"); right gate,
+wrong input; **(c)** a turn killed by an API error never enters the TeammateIdle→shutdown path,
+and no reaper leg classifies an agent-corpse session. A fourth amplifier already in §11.7: the
+inbox-nudge hook makes every ephemeral subagent arm a 4-h watcher, keeping finished researchers
+warm instead of exiting.
+
+**In-wave remedy applied (lead protocol, not code):** the lifecycle's Cleanup step — structured
+`shutdown_request` per agent — is the working teardown on this runtime and was MISSING from the
+lead's flow; 12 sent on discovery, effect-verified by process census. **Standing lead protocol
+from this wave on: shutdown_request every accepted/superseded agent at acceptance time, and
+effect-verify with `ps` (a claimed shutdown is not a checked one).**
+
+**Backlogged with owners (not built here — foreign files):** row 2/6 — teammate-auto-shutdown.sh
+resolves the member's LIVE cwd (lsof per pid) before the shared-tree gate, and handles the
+no-manifest implicit-team case; row 4 — cc-reaper gains an agent-corpse leg (agent-id sessions
+whose turn ended in `idleReason:failed`, idle ≥ settle, parent session alive ⇒ platter or reap);
+row 3/6 — the subagent watcher exemption (§11.7). Each keyed to this section's evidence.
