@@ -157,8 +157,26 @@ the ceiling and alarm before swap**, not to cap sessions.
 - **`gitstatusd` is exonerated.** 39 procs, 0.09 GB, ~0% CPU.
 - **The 33 orphaned `lead-crash-watchdog.sh` daemons are NOT a leak.** All 33 pidfiles resolve to
   live claude sessions; `ppid=1` is by design (`disown`, line 816, required so the SessionStart hook
-  can return immediately). 33 watchdogs for 33 sessions is correct steady state at ~2 MB and 0% CPU
-  each. **My own PID-reuse hypothesis was refuted by this check** — recorded because the hypothesis
+  can return immediately). ~~33 watchdogs for 33 sessions is correct steady state~~ — **⚠ ARITHMETIC
+  CORRECTED 2026-07-30 (the exoneration STANDS; only its count identity was wrong).** §1 measures the
+  fleet at **31 real sessions**, not 33, so "one watchdog per session" cannot be what 33 daemons
+  means, and the doc previously asserted both numbers. The true reading is **33 daemons against a
+  31-session fleet — a 2-daemon surplus, not a 2-session undercount.** Disk evidence for *why*, and
+  it is not sample drift: sibling commit `2f62ee62` (2026-07-29 17:48, *"single-instance guard +
+  one-handler-per-death — watchers accumulated per SessionStart"*) records that this hook spawned a
+  detached daemon on **every** SessionStart — startup **and** resume **and** clear **and** compact —
+  with nothing retiring the previous incarnation, so a long-lived pane accumulated multiple watchers
+  all polling the same lead pid (measured in the live log at the time: 3064 "LEAD CRASH detected"
+  lines across 2597 distinct pids, one pid recorded **19** times). A daemon count **above** the
+  session count was therefore the expected state, and 1:1 was never a measured invariant. **Why the
+  exoneration is unaffected:** it rests on a *per-pidfile* property — every pidfile resolving to a
+  **live** session, i.e. no daemon outliving its subject — which is exactly what was checked, and
+  which duplicate watchers on a live session satisfy. The cost claim is likewise per-daemon (~2 MB,
+  0% CPU each) and does not depend on the ratio. What the correction *does* retire is the implicit
+  "therefore nothing is accumulating": the duplicate-per-SessionStart accumulation is real, was fixed
+  by `2f62ee62`, and is a second, independent reason the §10 learning's phrase *"watchdogs correctly
+  1:1 with sessions"* should be read as "no watchdog outlives its session", never as a count identity.
+  **My own PID-reuse hypothesis was refuted by this check** — recorded because the hypothesis
   was plausible and cheap-looking, and gating a redesign on it would have been wrong.
 - **Real residue:** the spawn/exit ledger does not balance — ~102 watchdogs unaccounted over the
   log's life. Small in absolute cost, but it is *unbounded in time* and currently **uncountable**,
@@ -244,19 +262,66 @@ Each criterion names the exact command whose output proves it. Narration does no
 | # | Criterion | Proving read | Baseline |
 |---|---|---|---|
 | **AC1** ✅ **MET (100%) — see §9.7; the ~70% ceiling was a contaminated instrument, now retracted** | ≥95% of bats **procs** at `pri≤10` during a burst | `scripts/qos-census.sh` → `coverage_proc_pct` | **21.1% → 50.0%** measured; ~30% of invocations are structurally unreachable by a PATH shim |
-| **AC1-b** | `coverage_cpu_pct` reported alongside, as the impact metric — **not** the gate | same JSON row → `coverage_cpu_pct`, `gate_on` | 0% |
-| **AC2** | 0 top-level bats invocations at `pri=31` | `ps -eo pri,args \| grep -E 'bats( \|$)' \| awk '$1==31'` → empty | **72 procs** |
-| **AC3** | The shim covers the hand-typed form | `cd <worktree> && timeout 5 bats --version` then census the child's `pri` → `≤10` | n/a (no shim) |
-| **AC4** | The shim FAILS LOUD when `taskpolicy` is absent (R4) | `PATH=/usr/bin:/bin CC_BATS_TASKPOLICY= bin/cc-bats --version` → non-zero **or** an explicit stderr degradation notice; never a silent nice-0 pass | n/a |
-| **AC5** | `gate_admit` stays absent (R1/M2) | `grep -c '^[[:space:]]*gate_admit' scripts/postland-verify.sh` → `0`; the existing lint still passes | `0` ✓ |
+| **AC1-b** ✅ **MET** | `coverage_cpu_pct` reported alongside, as the impact metric — **not** the gate | same JSON row → `coverage_cpu_pct`, `gate_on`. **Evidence 2026-07-30:** latest row of `~/.claude/logs/qos-census.jsonl` = `…"coverage_proc_pct":100.0,"coverage_cpu_pct":100.0,"threshold":95,"demoted_pri_max":10,…,"gate_on":"proc"` — CPU is reported and `gate_on` names **proc**, so CPU is explicitly not the gate. `grep -c coverage_cpu_pct` → **8 of 8** rows; `grep -c gate_on` → **6 of 8** (the 2 earliest rows predate the field, consistent with §9.7's "do not compare historical rows") | 0% |
+| **AC2** ✅ **MET** — via the corrected instrument; the row's own read is **RETIRED** (note [a]) | 0 top-level bats invocations at `pri=31` | ~~`ps -eo pri,args \| grep -E 'bats( \|$)' \| awk '$1==31'` → empty~~ — **this read is contaminated exactly as §9.7 describes and must not be used** (note [a]). **Corrected read, 2026-07-30:** (i) positional discriminator — `ps -eo pid,nice,pri,%cpu,args \| awk '($5 ~ /libexec\/bats-core\/bats-exec/ \|\| $6 ~ /libexec\/bats-core\/bats-exec/) && $3==31'` → **0 rows**; all 16 real bats procs live read `pri=4`. (ii) `scripts/qos-census.sh` @ `2026-07-30T08:21:26Z` → `runs_in_flight 5 · procs_demoted 32/32 · procs_full 0 · control OK · VERDICT PASS` | **72 procs** |
+| **AC3** ✅ **MET** | The shim covers the hand-typed form | `cd <worktree> && timeout 5 bats --version` then census the child's `pri` → `≤10`. **Evidence 2026-07-30:** `which bats` → `/Users/chrisren/.claude/bin/bats` → symlink → `…/claude-infrastructure/bin/cc-bats`. Live proof from a caller measured at `pri=31` (`ps -o pid,nice,pri -p $$` → `NI 0 PRI 31`): a hand-typed `bats <tmp>.bats` produced the child `/usr/bin/env bash /opt/homebrew/bin/bats …` at **`ni=20 pri=4`** — demoted, and the shim still resolved the real binary | n/a (no shim) |
+| **AC4** ✅ **MET** | The shim FAILS LOUD when `taskpolicy` is absent (R4) | `PATH=/usr/bin:/bin CC_BATS_TASKPOLICY= bin/cc-bats --version` → non-zero **or** an explicit stderr degradation notice; never a silent nice-0 pass. **Evidence 2026-07-30:** run verbatim → stderr `cc-bats: WARNING — taskpolicy(8) unavailable. nice -n 19 alone does NOT move PRI off 31 on Darwin, so gate work will still compete with interactive sessions. QoS effectively NOT applied.` The same run with `2>/dev/null` emits only `Bats 1.13.0`, proving the notice is on **stderr** and not a stdout artifact. rc=0 ⇒ the criterion's *explicit-notice* branch, not a silent pass | n/a |
+| **AC5** ✅ **MET** | `gate_admit` stays absent (R1/M2) | `grep -c '^[[:space:]]*gate_admit' scripts/postland-verify.sh` → `0`; the existing lint still passes. **Evidence 2026-07-30:** count = **0**; the lint survives at `scripts/postland-verify.sh:1245-1247` and its own `grep -qE '^[[:space:]]*gate_admit' "$SELF"` returns non-zero ⇒ the `okp` branch ("no admission control anywhere in the runner"), never `badp` | `0` ✓ |
 | **AC6** ✅ **MET** | Stop chain ≤1500 ms | min-of-2/3 timing of the 9 Stop hooks, steady state | **3688 ms → 882 ms** |
 | **AC7** ✅ **MET** | `operator-readout.sh` unchanged-state path ≤300 ms | min-of-3, warm latch | **2711 ms → 140 ms** (19×; cold render still 3221 ms, by design) |
 | **AC8** ✅ **MET** | The rendered readout block is byte-identical before/after M3 | `--render` old-vs-new on the SAME tree → identical sha `707c143f78f66e62` | — |
-| **AC9** | Watchdog census balances, with a positive control (R6) | `cc-reaper --watchdog-census` → `spawned/live/exited/lost` + a `control=OK` line proving the detector fires | ledger off by **~102**, no census exists |
-| **AC10** | Watchdog liveness uses pid+lstart (R5) | `grep -c 'lstart' hooks/lead-crash-watchdog.sh` → `>0`; RED-proof asserts a recycled-PID fixture is classified dead | bare `kill -0`, line 601 |
-| **AC11** | 0 unbounded `osascript` sites in `hooks/` (R7) | `grep -rn '^[^#]*osascript' hooks/ \| grep -vE 'timeout\|_osa\|TB' \| wc -l` → `0` | **31** repo-wide |
-| **AC12** MET | Session ceiling stated + alarmed (M6) | `scripts/capacity-alarm.sh` -> 4-rung verdict; swap-used>0 => ALARM; `--selftest` proves every rung reachable | unstated -> OK@29.3 GB headroom |
-| **AC13** | Row 13 exists in the map with plan link + landed shas | `grep -c 'MACHINE_CAPACITY_V2' docs/plans/GROUND_UP_REBUILD_MAP.md` → `>0` | absent |
+| **AC9** ❌ **NOT MET** — M4 shipped nothing | Watchdog census balances, with a positive control (R6) | `cc-reaper --watchdog-census` → `spawned/live/exited/lost` + a `control=OK` line proving the detector fires. **Evidence 2026-07-30:** `grep -c watchdog-census bin/cc-reaper` → **0**; `ls tests/watchdog-census.bats` → *No such file or directory*; `grep -rn 'watchdog[-_]census\|WATCHDOG_CENSUS' bin/ scripts/ hooks/ tests/` → **0 hits** (`bin/cc-reaper` itself exists, 65193 B, and contains no `census` / `--watchdog` token at all). **Missing:** the whole M4 leg — the `--watchdog-census` subcommand, the spawned/live/exited/lost ledger, the `control=OK` positive control, and the `CC_WATCHDOG_CENSUS=off` kill switch §8 already declares | ledger off by **~102**, no census exists |
+| **AC10** ⚠ **PARTIAL** — the read passes on code this row did not write; the poll it names is unchanged (note [b]) | Watchdog liveness uses pid+lstart (R5) | `grep -c 'lstart' hooks/lead-crash-watchdog.sh` → `>0`; RED-proof asserts a recycled-PID fixture is classified dead. **Evidence 2026-07-30:** count = **4** — so the read as written passes — but all four sit in the daemon's **own** identity check (`daemon_alive()` at `:718`, `WATCHDOG_START` at `:1008`), and `git blame -L 705,725` attributes 100% of them to sibling commit `2f62ee62` *"single-instance guard + one-handler-per-death"* (2026-07-29 17:48), not to this row. **The liveness this AC names — the daemon's poll of the LEAD — is still a bare `kill -0 "$pid"` at `hooks/lead-crash-watchdog.sh:761`** (base `6ce912b3` line 630; the `:601` cited in R5/M4). The recycled-PID RED-proof at `tests/lead-crash-watchdog.bats:301-311` exists but `git blame -L 301,311` → **11/11 lines `2f62ee626`**, and it asserts the *daemon-record* path (a recycled pid must not suppress the spawn), never the lead-liveness classification. **Missing:** pid+lstart on the lead poll, and a RED-proof that a recycled **lead** pid is classified dead | bare `kill -0`, line 601 |
+| **AC11** ❌ **NOT MET** — M5 shipped nothing; the read never reached `0` (note [c]) | 0 unbounded `osascript` sites in `hooks/` (R7) | `grep -rn '^[^#]*osascript' hooks/ \| grep -vE 'timeout\|_osa\|TB' \| wc -l` → `0`. **Evidence 2026-07-30:** the read returns **2**, not 0 — and returns the **same 2** against the pristine base tree (`git archive 6ce912b3 hooks/` → identical count), i.e. this row moved it by zero. Both residual hits are non-invocations (note [c]), so no *unbounded* osascript CALL survives in `hooks/` — but that was already true at base, from the pre-existing per-caller helpers `nty_osa` / `lcw_osa` / `wrc_osa` landed by `7774734a` (2026-07-26), which predates this row. **Missing:** M5 itself — the one sourced helper and the conversion of the bare sites. Repo-wide the same read returns **33** (`hooks/ bin/ scripts/`), including genuinely unbounded calls at `scripts/handoff-fire.sh:2218,2224,3341,3348` (`osascript -e 'delay …'`), `bin/screenshot-to-clipboard.sh:18`, `bin/dia-cdp-launch.sh:322` | **31** repo-wide |
+| **AC12** ✅ **MET** | Session ceiling stated + alarmed (M6) | `scripts/capacity-alarm.sh` -> 4-rung verdict; swap-used>0 => ALARM; `--selftest` proves every rung reachable. **Evidence 2026-07-30:** `launchctl list \| grep capacity-alarm` → `-	0	com.claude.capacity-alarm` (loaded; last exit 0), plist present at `~/Library/LaunchAgents/com.claude.capacity-alarm.plist`. Live run → `live sessions 20 · reclaimable headroom 28.77 GB · swap used 0.00 MB · est. room ~46 more · **VERDICT: OK**` (rc=0). `--selftest` → `OK / WARN / ALARM / ALARM-on-swap>0 / NO-DATA` each reached with `control OK`, closing `capacity-alarm: selftest GREEN (4 rungs + no-data reachable)` | unstated -> OK@29.3 GB headroom |
+| **AC13** ✅ **MET** | Row 13 exists in the map with plan link + landed shas | `grep -c 'MACHINE_CAPACITY_V2' docs/plans/GROUND_UP_REBUILD_MAP.md` → `>0`. **Evidence 2026-07-30:** count = **1**, at `docs/plans/GROUND_UP_REBUILD_MAP.md:30`, and the row carries both halves the criterion asks for — the plan link `[MACHINE_CAPACITY_V2.md](MACHINE_CAPACITY_V2.md)` and landed shas `b9fc76b0` (design) · `5370b2ff` (activation) · `fa8f15a8` (fan-out) · `8160416b` (close-out) · `bfe4da1e` (§9.7 census fix) | absent |
+
+### 7.0 Status sweep — every AC marked from disk (2026-07-30)
+
+Before this sweep only 4 of the 14 rows carried a status marker (AC1 + the three M3 rows; AC12 had a
+bare unstyled `MET`), so "MET" and "never checked" were indistinguishable. Every row above now
+carries **exactly one** marker (`✅ MET` · `❌ NOT MET` · `⚠ PARTIAL` · `➖ N/A`), and every marker
+newly assigned rests on a command run against this tree on 2026-07-30 — never on prose. **10 rows
+were swept here** (AC1-b · AC2 · AC3 · AC4 · AC5 · AC9 · AC10 · AC11 · AC12 · AC13) → **7 MET ·
+2 NOT MET · 1 PARTIAL**; AC1 and AC6/AC7/AC8 were left exactly as previously proven (§9.7, §9.2).
+Whole-table tally: **11 MET · 2 NOT MET · 1 PARTIAL.** The two NOT-MET and the one PARTIAL are all
+the same fact stated three ways: **`cap-leak` (M4) and M5 shipped nothing**, so the leaks leg and
+the AppleEvent leg of the frozen DoD are open. This matches — and is the disk-truth form of —
+`GROUND_UP_REBUILD_MAP.md` addendum (0b) ("M4 and M5 are now explicitly declared NOT BUILT",
+backlog `cb5514b9d1b4` / `b72a2b8e7666`). No status here contradicts §9.x.
+
+**[a] AC2 — the criterion's own read is the contaminated instrument §9.7 retracts, and it must not
+be used again.** Run verbatim on 2026-07-30 it returns **24 rows at `pri=31`**, and *not one of them
+is a bats process*: zsh shell-snapshot `-c` lines, `grep --line-buffered -E '^(ok |not ok |bats rc=)'`
+output filters, `timeout 5400 bats …` wrappers, and `claude` sessions whose argv merely contains a
+bats test path. The sharpest case is a row reading
+`/opt/homebrew/bin/timeout -k 10 10800 nice -n 19 /usr/sbin/taskpolicy -c background bats tests/…` —
+a **correctly demoted** run whose *wrapper* argv legitimately sits at `pri=31` while every bats child
+beneath it is at `pri=4`. So the stated read manufactures the exact "uncovered" signal AC2 exists to
+detect. The positional discriminator (libexec path in argv field 5/6, §9.7) returns **0** real bats
+procs at `pri=31` out of 16 live. AC2's *substance* holds; its *instrument* is retired.
+
+**[b] AC10 — a grep hit is not a build.** This is the row that would have read MET by accident. The
+criterion has two halves and they part company: `grep -c lstart` passes, but only because sibling
+commit `2f62ee62` added pid+lstart to the **daemon's own** identity record while fixing a different
+bug (watchers accumulating per SessionStart). The R5 violation this AC was written against — the
+daemon's 30-second `kill -0` poll of the **lead** pid — is byte-for-byte unchanged from base. A
+recycled lead pid still reads as a live lead forever, which is the failure R5 names. Marked PARTIAL,
+not MET, because half the criterion is satisfied by code this row neither wrote nor owns.
+
+**[c] AC11 — the two residual hits are non-invocations, and the count is unchanged from base.**
+`hooks/waiting-recycle.sh:423` is a `command -v osascript >/dev/null` availability probe (the actual
+call on the next line goes through `wrc_osa`), and `hooks/handoff-intent-nudge.sh:26` is the word
+"osascript" inside a JSON `additionalContext` prose string. All three real osascript calls in
+`hooks/` (`notify.sh:100`, `lead-crash-watchdog.sh:840,888`, `waiting-recycle.sh:424`) are already
+wrapped by per-caller helpers and are correctly excluded by the `_osa` filter. This is a
+false-positive pattern of the same family as note [a] — substring presence in a line is not evidence
+that the line IS the thing (§9.7's lesson, third occurrence).
+
+**[d] AC6 / AC7 / AC8 spot-check (not re-timed; the M3 measurements in §9.2 stand).** Confirmed the
+mechanism that produced them is still in the tree: the cheap pre-render change-stamp gate at
+`hooks/operator-readout.sh:552` (`[ "${CC_READOUT_DAMP:-on}" != "off" ] && …`) with its kill switch
+documented at `:531`, 17 `stamp` references in the file.
 
 **Proof bar (non-negotiable, from the exemplar's catches):** RED-proof every new test against the
 pristine pre-change tree recovered via `git archive` — never a hand-edited approximation. Positive
