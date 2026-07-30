@@ -49,16 +49,100 @@ export CC_BATS_VERSION=1
 # Self-shadowing is the whole point of this file (we are installed AS `bats`), so naive
 # `command -v bats` would resolve to this script and fork-bomb. Resolve by walking PATH and
 # skipping any candidate whose physical path equals ours.
+# phys_of <path> → the FULLY symlink-resolved absolute path, or empty on failure.
+#
+# WHY NOT `cd $(dirname X) && pwd -P` (what this file shipped with, and the bug review killed):
+# `pwd -P` physicalises the DIRECTORY only and never the final symlink, so the result is still the
+# SYMLINK's path. Two different symlink paths to the SAME script therefore compare as DIFFERENT
+# files, the self-skip below cannot fire, and with two shims on PATH you get a closed 2-cycle:
+# shim A execs shim B, B (already CC_BATS_ACTIVE=1) execs A, forever. Measured in review: rc=137,
+# ~200 fork+exec/s, ZERO output, sustained — 134 resolution legs split exactly 67/67 between the two
+# paths. That is the whole reason "shadow mode" was rejected, and it is a latent defect here even
+# with one shim installed.
+#
+# /usr/bin/readlink is addressed ABSOLUTELY on purpose: this function must not depend on PATH (a shim
+# installed as `bats` gets invoked from arbitrary PATHs, and an empty command substitution here is
+# what turns the guard into the loop). The dir-physical form is kept only as a LAST-RESORT fallback,
+# and callers treat an empty return as "cannot establish identity ⇒ refuse", never as "not equal".
+phys_of() {
+  local p="${1:-}" out d b
+  [ -n "$p" ] || return 1
+  if [ -x /usr/bin/readlink ]; then
+    out=$(/usr/bin/readlink -f -- "$p" 2>/dev/null) || out=""
+    [ -n "$out" ] && { printf '%s' "$out"; return 0; }
+  fi
+  # fallback: dir-physical + basename (weaker — cannot see a sibling symlink to the same file)
+  d="${p%/*}"; [ "$d" = "$p" ] && d="."
+  b="${p##*/}"
+  d=$(cd -- "$d" 2>/dev/null && pwd -P) || return 1
+  [ -n "$d" ] && [ -n "$b" ] || return 1
+  printf '%s/%s' "$d" "$b"
+}
+
+# BUILTINS ONLY — this block must not depend on PATH, and must never guess.
+#
+# The first version used `$(dirname …)` / `$(basename …)`, which was an UNBOUNDED EXEC LOOP waiting
+# to happen (found in review 2026-07-29). If dirname/basename are not resolvable on PATH — which is
+# exactly the situation a shim installed as `bats` can be invoked from — the command substitutions
+# yield empty, and `cd ""` SILENTLY SUCCEEDS. Both $self_phys and every $cand_phys then collapse to
+# cwd-derived garbage differing only by the trailing `/bats`, so no candidate ever compares equal to
+# self, the shim execs ITSELF, and it spins a core forever. Worse, a valid seed does NOT rescue it:
+# $seeded_phys collapses to the same garbage and is rejected as "self". The guard inverted in both
+# directions at once.
+#
+# So: parameter expansion (no forks, no PATH), and if we still cannot establish our own identity we
+# REFUSE (127) rather than proceed blind. An exec loop on a machine-wide `bats` is far worse than a
+# loud failure — and "cannot determine self" is a THIRD state, not a reason to continue.
 self_phys=""
 if [ -n "${BASH_SOURCE[0]:-}" ]; then
-  self_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -P) || self_dir=""
-  [ -n "$self_dir" ] && self_phys="$self_dir/$(basename "${BASH_SOURCE[0]}")"
+  self_phys="$(phys_of "${BASH_SOURCE[0]}")" || self_phys=""
+fi
+if [ -z "$self_phys" ]; then
+  echo "cc-bats: FATAL — cannot determine my own path (BASH_SOURCE='${BASH_SOURCE[0]:-}')." >&2
+  echo "cc-bats: refusing to run: without a self-identity the self-skip guard inverts into an exec loop." >&2
+  exit 127
+fi
+
+# Seed file: the ABSOLUTE path of the real bats, recorded from DISK TRUTH at activation time.
+# It exists only when the operator has activated the deeper "shadow the Homebrew path" mode
+# (activation 22 — shadow mode). Why a seed rather than a Cellar glob: the glob is version-shaped
+# (/opt/homebrew/Cellar/bats-core/<ver>/bin/bats) and picking a version by sort order is a GUESS —
+# on a machine with two Cellar versions installed it can silently select the wrong one. The
+# activation reads the symlink's CURRENT target before replacing it and writes that exact path here,
+# so the shim never has to infer which binary Homebrew considered canonical.
+# The seed records a MACHINE fact (where Homebrew's real bats lives), NOT an account fact, so it is
+# deliberately keyed on $HOME/.claude and NOT on $CLAUDE_CONFIG_DIR. Measured 2026-07-29: this box runs
+# sessions across four config dirs (CLAUDE_CONFIG_DIR was ~/.claude-secondary in the session that wrote
+# this), so a per-config-dir seed would be written once by an activation and then be INVISIBLE to the
+# other three accounts' sessions — they would silently fall through to the version-guessing Cellar
+# sweep. One machine, one seed.
+# Seam honoured VERBATIM including set-but-EMPTY (`+set`, never `:-`): `CC_BATS_SEED=` genuinely
+# disables the seed lookup. The `:-` form here was a real asymmetry against this file's own stated
+# discipline and against scripts/bats-shim-parity-lint.sh — caught in review.
+if [ -n "${CC_BATS_SEED+set}" ]; then
+  CC_BATS_SEED_PATH="$CC_BATS_SEED"
+else
+  CC_BATS_SEED_PATH="$HOME/.claude/state/cc-bats-real"
 fi
 
 resolve_real_bats() {
   # 1 — explicit pin (tests, and any caller that knows better). Honoured even if non-executable
   #     so a test can assert the failure path.
   if [ -n "${CC_BATS_REAL+set}" ]; then printf '%s' "$CC_BATS_REAL"; return 0; fi
+  # 1.5 — the activation-recorded seed. Tried BEFORE the PATH walk because in shadow mode the
+  #       Homebrew path on PATH *is* this shim, and the seed is the only non-guessing answer.
+  #       A seed pointing at something absent/non-executable is IGNORED rather than fatal — a stale
+  #       seed (brew upgraded the Cellar out from under it) must degrade to the search below, not
+  #       break every gate run on the machine.
+  if [ -n "$CC_BATS_SEED_PATH" ] && [ -f "$CC_BATS_SEED_PATH" ]; then
+    local seeded seeded_phys
+    seeded=$(head -1 "$CC_BATS_SEED_PATH" 2>/dev/null | tr -d '[:space:]')
+    if [ -n "$seeded" ] && [ -x "$seeded" ] && [ ! -d "$seeded" ]; then
+      seeded_phys="$(phys_of "$seeded")" || seeded_phys=""
+      # never accept a seed that resolves back to us — that is the fork-bomb
+      if [ -n "$seeded_phys" ] && [ "$seeded_phys" != "$self_phys" ]; then printf '%s' "$seeded"; return 0; fi
+    fi
+  fi
   # 2 — walk PATH, skipping ourselves by PHYSICAL path (a symlinked shim dir must not fool us).
   local oldifs="$IFS" d cand cand_phys
   IFS=:
@@ -67,19 +151,34 @@ resolve_real_bats() {
     [ -n "$d" ] || continue
     cand="$d/bats"
     if [ -x "$cand" ] && [ ! -d "$cand" ]; then
-      cand_phys=$(cd "$(dirname "$cand")" 2>/dev/null && pwd -P)/bats
-      if [ "$cand_phys" != "$self_phys" ]; then printf '%s' "$cand"; IFS="$oldifs"; return 0; fi
+      cand_phys="$(phys_of "$cand")" || cand_phys=""
+      # empty cand_phys = could not resolve ⇒ SKIP it. Treating unresolvable as
+      # "different from me" is exactly how the guard inverted into an exec loop.
+      if [ -n "$cand_phys" ] && [ "$cand_phys" != "$self_phys" ]; then printf '%s' "$cand"; IFS="$oldifs"; return 0; fi
     fi
     IFS=:
   done
   IFS="$oldifs"
-  # 3 — known install locations, last resort. Order: Homebrew arm64, Homebrew x86, /usr/local.
+  # 3 — known install locations, last resort. Order: Homebrew arm64, Homebrew x86, MacPorts.
   for cand in /opt/homebrew/bin/bats /usr/local/bin/bats /opt/local/bin/bats; do
     if [ -x "$cand" ]; then
-      cand_phys=$(cd "$(dirname "$cand")" 2>/dev/null && pwd -P)/bats
-      [ "$cand_phys" != "$self_phys" ] && { printf '%s' "$cand"; return 0; }
+      cand_phys="$(phys_of "$cand")" || cand_phys=""
+      [ -n "$cand_phys" ] && [ "$cand_phys" != "$self_phys" ] && { printf '%s' "$cand"; return 0; }
     fi
   done
+  # 4 — Cellar/opt sweep, reached only in shadow mode with a stale-or-absent seed (every path above
+  #     resolved to US). Ordered newest-version-last by `sort -V` so the tail is the highest
+  #     version. This IS a guess, which is exactly why the seed exists and is tried first — but a
+  #     guess that runs the right tests beats exiting 127 and failing every gate on the box.
+  local c found=""
+  for c in $(find /opt/homebrew/Cellar/bats-core /usr/local/Cellar/bats-core \
+                  /opt/homebrew/opt/bats-core -maxdepth 3 -name bats -type f \
+                  -perm -u+x 2>/dev/null | sort -V); do
+    [ -x "$c" ] || continue
+    cand_phys="$(phys_of "$c")" || cand_phys=""
+    [ -n "$cand_phys" ] && [ "$cand_phys" != "$self_phys" ] && found="$c"
+  done
+  [ -n "${found:-}" ] && { printf '%s' "$found"; return 0; }
   return 1
 }
 
