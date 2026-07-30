@@ -8,6 +8,11 @@
 #                                                    # (skips global items: bin/, LaunchAgents)
 #
 # Idempotent: safe to run multiple times.
+#
+# MUST be run from the PRIMARY checkout: a global install links ~/.claude at this script's own
+# directory, so running it from a linked worktree points the live layer at a directory that is
+# entitled to be deleted. That case is REFUSED (CC_INSTALL_ALLOW_WORKTREE=1 overrides); see the
+# guard below. --config-dir installs are unaffected.
 
 set -euo pipefail
 
@@ -15,6 +20,7 @@ REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 CONFIG_DIR="$HOME/.claude"
 DRY_RUN=false
 WIRE_HOOKS=false
+ORIG_ARGS="$*"          # kept verbatim for the worktree-refusal re-run hint below
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -28,6 +34,77 @@ done
 # Global items (bin/, LaunchAgents, versions) only for default config dir
 IS_GLOBAL=false
 [[ "$CONFIG_DIR" == "$HOME/.claude" ]] && IS_GLOBAL=true
+
+# --- REFUSE a global install from a linked worktree -------------------------------------------
+# link_file points every ~/.claude/** entry at $REPO_DIR, and $REPO_DIR is just $0's directory
+# (line 14) — it has never been git-aware. Run from a linked worktree, the entire live layer
+# therefore targets a directory that `git worktree remove` and scripts/worktree-gc.sh are both
+# entitled to delete, at which point every hook, command, skill and cc-* tool becomes a dangling
+# symlink simultaneously. The deploy lane cannot repair that: deploy-live.sh only reaches its
+# install.sh call (line 283-284) after advancing to a green-stamped tree, and the hooks that
+# produce a green stamp are the same links that just died. That is the dead deploy lane.
+#
+# Scoped to the GLOBAL install ($CONFIG_DIR == $HOME/.claude) DELIBERATELY — a blanket refusal
+# would be self-defeating. Every automated caller passes --config-dir into a throwaway dir
+# (tests/install-wire-hooks.bats x4, docs/activation/wiring-all.sh), and BOTH postland-verify.sh
+# (which mints wt-run-$$ per run) and the /ship gate (ship-land.sh refuses to land from the
+# shared checkout) execute that suite FROM A LINKED WORKTREE BY CONSTRUCTION. Refusing them
+# would turn every postland run red ⇒ no tree ever earns a green stamp ⇒ deploy-live.sh stops
+# advancing: the exact failure this guard exists to prevent. deploy-live.sh, its launchd job and
+# wiring-all.sh all resolve to the fixed primary checkout and are unaffected.
+#
+# --dry-run is NOT exempt: a preview that prints "would link ~/.claude/hooks/x → <worktree>/..."
+# is previewing the catastrophe, so the honest answer to "what would happen?" is the refusal.
+# No automated caller uses --dry-run (only README.md's quickstart).
+#
+# Detection FAILS OPEN. A tarball checkout, a fresh machine, or a git that cannot answer must
+# still install normally; the dangerous state is specifically "this IS a linked worktree", which
+# --absolute-git-dir names unambiguously (<main>/.git/worktrees/<name>, vs <repo>/.git in the
+# primary checkout). `git -C "$REPO_DIR"` and not a bare `git`: the CWD is unrelated to $0.
+IS_LINKED_WORKTREE=false
+case "$(git -C "$REPO_DIR" rev-parse --absolute-git-dir 2>/dev/null || true)" in
+  */.git/worktrees/*) IS_LINKED_WORKTREE=true ;;
+esac
+
+if $IS_LINKED_WORKTREE; then
+  # Resolve the canonical checkout so the message can hand over an exact re-run command.
+  # --git-common-dir is ".git" (relative) in the primary and absolute in a linked worktree.
+  _common="$(git -C "$REPO_DIR" rev-parse --git-common-dir 2>/dev/null || true)"
+  case "$_common" in
+    "") PRIMARY_DIR="" ;;
+    /*) PRIMARY_DIR="$(cd "$_common/.." 2>/dev/null && pwd || true)" ;;
+    *)  PRIMARY_DIR="$(cd "$REPO_DIR/$_common/.." 2>/dev/null && pwd || true)" ;;
+  esac
+
+  if $IS_GLOBAL && [[ "${CC_INSTALL_ALLOW_WORKTREE:-}" != "1" ]]; then
+    {
+      echo "✗ install.sh: REFUSING a global install from a linked worktree."
+      echo "    worktree   : $REPO_DIR"
+      [[ -n "$PRIMARY_DIR" ]] && echo "    primary    : $PRIMARY_DIR"
+      echo "    config dir : $CONFIG_DIR"
+      echo ""
+      echo "  Every $CONFIG_DIR symlink would point into this worktree and would dangle the"
+      echo "  moment it is removed (git worktree remove / scripts/worktree-gc.sh), taking the"
+      echo "  live layer and the autonomous deploy lane with it."
+      echo ""
+      if [[ -n "$PRIMARY_DIR" ]]; then
+        echo "  Re-run from the primary checkout:"
+        echo "      $PRIMARY_DIR/install.sh${ORIG_ARGS:+ $ORIG_ARGS}"
+      else
+        echo "  Re-run from the primary checkout (the symlink source for $CONFIG_DIR)."
+      fi
+      echo ""
+      echo "  --config-dir <dir> installs are unaffected; CC_INSTALL_ALLOW_WORKTREE=1 overrides."
+    } >&2
+    exit 1
+  fi
+
+  # Non-global from a worktree is NOT refused (it is the automated callers' path), but it is not
+  # silent either: an alt config dir that outlives this worktree — ~/.claude-secondary and the
+  # other real per-account dirs, as opposed to a test tmpdir — inherits exactly the same dangling
+  # links. One line, to stderr, so it cannot corrupt a --dry-run diff or a caller parsing stdout.
+  echo "  ⚠ installing from a linked worktree ($REPO_DIR) — links into $CONFIG_DIR will dangle if it is removed" >&2
+fi
 
 installed=0
 skipped=0
