@@ -1,0 +1,54 @@
+# iterm2-perf.keys — the render-knob SSOT for this box (row 13 M8, MACHINE_CAPACITY_V2.md §11.3).
+#
+# WHY THIS FILE EXISTS: every knob below is a ONE-TIME MACHINE TWEAK. A one-time tweak is invisible
+# state — it survives in nobody's repo, it is silently reverted by an app update or a preference
+# reset, and nothing notices. Declaring them here makes the intended machine state a REPO ARTIFACT
+# that `scripts/iterm2-perf-parity.sh` can check for drift on a cadence.
+#
+# THIS FILE IS A DECLARATION, NOT AN ACTUATOR. Nothing in this repo writes these defaults. Setting
+# them is the operator's C10 activation (agents are classifier-blocked from it), so until that
+# activation runs, parity correctly reports DRIFT on every row. THAT IS THE EXPECTED STATE, not a
+# bug — an UNSET key means "the app default is live", and the app defaults are what §11.9 measured
+# as the cost.
+#
+# EVIDENCE: §11.9(2) — a 5-second `sample` of the live iTerm2 process. The saturated thread is
+# LEGACY CPU GLYPH DRAWING (56-70% of the main thread in legacyView:drawRect: →
+# iTermTextDrawingHelper), not parsing (4.7x cheaper). Metal was active for only a minority of
+# sessions (93 vs 2,182 samples). Magnitudes below are from that report.
+#
+# FORMAT (one required knob per line, whitespace-separated):
+#   <domain> <key> <type:bool|float> <expected> <why + magnitude>
+# `#` comments and blank lines are ignored. Rows commented out are CANDIDATES, deliberately NOT
+# parity-checked (see the block at the bottom).
+
+com.googlecode.iterm2 disableAdaptiveFrameRateInInteractiveApps bool false THE LARGEST LEVER ~0.5-0.9 cores. Default YES EXEMPTS alternate-screen (TUI) panes from the adaptive frame-rate throttle - so our ~60 agent panes redraw at 60-120 FPS regardless of throughput. Setting false puts them back under the throttle.
+com.googlecode.iterm2 maximumFrameRate float 30 Frame ceiling for the focused pane. The 30/30/10 trio together is ~0.3-0.6 cores; halving 60 FPS to 30 halves the glyph-drawing work that the measured hot thread is doing.
+com.googlecode.iterm2 activeUpdateCadence float 30 Update cadence for the active session. NEW SESSIONS ONLY - existing panes keep the cadence they were created with, so the full effect lands only after panes recycle. Do not read an unchanged live number as a failed setting.
+com.googlecode.iterm2 slowFrameRate float 10 Frame ceiling for non-focused panes. Cadence is visibility-gated - non-visible tabs parse but do NOT draw - so this governs the visible-but-unfocused majority, which is most of our 60 panes.
+com.googlecode.iterm2 fastForegroundJobUpdates bool false ~0.15-0.4 cores - kills the SECOND-BUSIEST queue outright. Measured at 803 samples doing process-tree walking with __sysctl x387 over 1,556 procs, purely to keep each tab title's job name fresh.
+com.googlecode.iterm2 animateGraphStatusBarComponents bool false Verbatim-documented WindowServer reducer. Animated status-bar graphs composite continuously; part of the ~0.1-0.3-core dimming+animation band and the one member with no ergonomic cost.
+com.googlecode.iterm2 DimInactiveSplitPanes bool false Dimming forces a redraw+composite of every inactive split pane. At ~60 visible panes that is the widest blast radius of the ~0.1-0.3-core band. Ergonomic cost is real - it removes the focus cue - which is why the DimOnlyText row below is its paired middle ground.
+com.googlecode.iterm2 DimOnlyText bool true The ergonomic middle ground for the row above. Where dimming still applies, dim TEXT ONLY rather than compositing a dim layer over the whole pane background - keeps a focus cue at a fraction of the draw cost.
+
+# ── CANDIDATES — deliberately NOT parity-checked ──────────────────────────────────────────────────
+# These are real levers with real magnitudes, held out of the required set because each needs an
+# instrument-first decision that has not been made. Adding one to the required set is a one-line
+# change once its measurement exists.
+#
+# com.googlecode.iterm2 UseMetal bool true
+#     THE CEILING - Metal would move the whole 1.39-core legacy-drawing bottleneck off the CPU.
+#     Held out because §11.9 grades it MEDIUM RISK at our scale: 60 panes means 60 CAMetalLayers,
+#     and iTerm2 disables Metal per-tab above ~6 sessions anyway (memory
+#     capability-initialized-is-not-capability-used: a loaded driver proved only SOME pane used it).
+#     INSTRUMENT FIRST via showMetalFPSmeter, then decide - do not flip it blind.
+# com.googlecode.iterm2 metalRedrawPeriod float 60
+#     Only meaningful WITH Metal on; ships as a pair with UseMetal, never alone.
+# com.googlecode.iterm2 showMetalFPSmeter bool true
+#     INSTRUMENT, not a lever - the measurement that would qualify UseMetal above.
+# com.googlecode.iterm2 logDrawingPerformance bool true
+#     INSTRUMENT, not a lever - per-frame drawing cost to iTerm2's log; noisy, enable only during a probe.
+#
+# ── NOT A KNOB, recorded so it is not re-litigated ────────────────────────────────────────────────
+# Tab-stacking is a free structural lever nobody uses: non-visible tabs parse but do NOT draw
+# (cadence is visibility-gated). Today 60/60 panes are visible. This is a HABIT change, not a
+# default, so it cannot live in a parity file - but it is the cheapest render reduction available.
