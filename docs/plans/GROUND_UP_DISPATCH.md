@@ -868,6 +868,33 @@ enabled=0`. Both "succeeded" with exit 0. The third attempt worked only because 
 believing anything else it says. A discovery sweep with no known-answer case cannot distinguish
 "clean" from "broken", and both of mine read as clean.
 
+🚨 **METHOD NOTE 2, added 2026-07-29T19:3xZ by coordinator #3 — THE MECHANISM BEHIND "CONFIDENT
+GARBAGE", FOUND AT LAST, AND IT SILENTLY MANUFACTURES FALSE ABSENCES IN EXACTLY THIS TABLE.**
+The Bash tool runs **zsh**, and in zsh — inside double quotes — `"$b:tests/foo"` parses `:t` as the
+history/glob **TAIL modifier**. With `b=fix/infra-perfection` it expands to `infra-perfection` +
+`ests/foo` = `infra-perfectionests/foo`; git exits **128** `Not a valid object name`; and under the
+`2>/dev/null` that every sweep applies, **that is byte-for-byte indistinguishable from "the file is
+absent."** The two most-used directories in this repo are the two worst hit: **`tests/` (`:t` tail)
+and `hooks/` (`:h` head)**. Also affected: `r`, `e`, `s`, `a`, `A`, `c`, `l`, `p`, `P`, `q`, `Q`,
+`u`, `U`, `x`, `g`.
+- **SAFE:** `"$b:$p"` (the colon is followed by `$`, not a modifier letter) · `git ls-tree "$b" -- "$p"` · a hardcoded `origin/main:hooks/...` with no variable.
+- **POISONED:** `git cat-file -e "$b:tests/..."` / `"$b:hooks/..."` — the single most natural way to write this check.
+- **How it was caught:** the same question answered two ways disagreed — a `for`-loop over
+  `"$b:tests/git-worktree-guard.bats"` said absent from both branches, while a table built on
+  `"$b:$p"` said present in both. `ls-tree` and `rev-parse` broke the tie. **A positive control does
+  NOT catch this** — row 7's sweep control passed and its result was still trustworthy only because
+  its paths start with `bin/` (`b` is not a modifier). The control must use a path with the SAME
+  first letter as the paths under test, or it proves nothing about them.
+- **Consequence for this table:** re-verified with `ls-tree` 2026-07-29. Row 11's `✓ ✓` is
+  **CORRECT** (present in both branches, absent from trunk). The one genuine error is
+  **`tests/statusline-mail-badge.bats`, marked present when it exists on NO branch at all** — which
+  row 10 independently found and recorded in its close. Rows 6 and 9: your entries verified correct
+  by `ls-tree`, with one refinement — `tests/plan-version-sid.bats` IS also in `tm/hygiene`, which
+  row 9's `—` column understates.
+- Coordinator #3 published a false correction to this table before finding the cause and retracted
+  it in `65153c68`; the retraction commit carries the full account. **Suspect the harness before the
+  claim, and re-run structurally differently rather than repeating the same idiom louder.**
+
 ### 2026-07-29T15:20Z ROW 3 DONE (verified by disk) · row 2 unblocked and HELD at the load guard
 
 **Row 3's completion ping VERIFIED, not taken on trust** — four reads, all green: all five claimed
