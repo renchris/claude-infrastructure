@@ -6,6 +6,13 @@ round-2 rebase). Brief filed by the shutdown-hardening session (2026-07-25) afte
 pathology first-hand; forensics in `docs/research/session-crash-forensics-2026-07-23.md`
 § 2026-07-25.
 
+> ⚠️ **SUPERSEDED IN PART — read the last section first.** This fix moved the gate out of the lock,
+> which traded a queueing cost for a *concurrency* cost (N landers = N unlocked corpora), filed as
+> backlog `77738605376f`. That item is now **resolved by the v2 fast lane (`492c5106`)**, which
+> removed the corpus from the land entirely — so the "gate-concurrency cap / queue" this document's
+> follow-on asked for is respectively unnecessary and **forbidden**. See
+> § *Resolution of the follow-on THIS design created* at the end.
+
 ## Problem
 
 `scripts/ship-land.sh` ran the **entire gate** (shellcheck + ~100-file bats suite + `bash -n` +
@@ -180,3 +187,115 @@ never to retry past.
   changes shape (`desk-land.sh`, `handoff-fire.sh land` pass through the same CLI + exit
   codes; `hooks/ship-rail-push-allow.sh` matches Bash-tool push shapes, and ship-land's push
   remains a subprocess).
+
+---
+
+# Resolution of the follow-on THIS design created — backlog `77738605376f` (2026-07-30)
+
+**This fix created its own successor problem, and that successor is now closed — by none of the
+three remedies it asked for.** Moving the gate out of the lock (above) converted a *queueing* cost
+into a *concurrency* cost: with the corpus unlocked by design, N simultaneous landers ran N full
+corpora. Item `77738605376f` filed that on 2026-07-26 and prescribed "a gate-concurrency cap /
+queue / changed-path test selection". Two days later the **v2 fast lane** (`492c5106`, 2026-07-28)
+deleted the premise instead: **a land no longer runs a corpus at all**, so there is no N-way
+multiplication left to cap.
+
+Read this section before acting on the item's title. Anyone starting from that title alone will
+design a cap for a pathology that no longer exists, and one of its three prescribed remedies is
+now *forbidden by design*.
+
+## The premise was real, and it rotted
+
+The original measurement was sound — it is preserved in the `block` records of `9c5d0ba74e79` and
+`2d36e63d16a2`: ~10-12 concurrent full corpora, load 17-20, swap 2.5 G of 4 G with 546,696
+pageouts, and gates dying at arbitrary test counts (68 / 438 / 1581 / 561) with no `pkill` anywhere
+in the repo — i.e. memory-pressure termination, not test failure. Six ship-land attempts in one
+worktree and four in another all failed to land; no session landed anything for hours.
+
+What rotted is the *prescription*, not the observation. Today the same topology cannot arise:
+
+| the item's remedy | disposition today | why |
+|---|---|---|
+| gate-concurrency **cap** | **unnecessary** | nothing in a land is unbounded any more, so there is no quantity left to cap. The one component that still runs a corpus — the post-land verifier — is already a mutex-guarded **singleton** (`postland-verify.sh`, `run.lock.d`), i.e. a cap of exactly 1. |
+| **queue** | **🚨 FORBIDDEN** | waiting *is* the amplifier. `gate_admit` was precisely this queue and it is deleted, not tuned (`ship-land.sh:466-485`): five concurrent gates once sat at load 16-18 waiting for a ceiling of 8 **while their own corpora were the load** — self-starvation below their own threshold. Every waiter that timed out then ran the corpus anyway, so the wait bought nothing but latency. Re-adding a queue re-adds the deadlock. |
+| **changed-path test selection** | **shipped** — and made sound | `gate-select.sh --direct` picks the suites of *this diff*. §"Rejected alternatives B" above rejected this as unsound, and that reasoning still holds **for a gate that must be conservatively sufficient**. v2 escapes it by changing what the selection is *for*: it feeds a best-effort **smoke**, never a proof, and the whole-tree proof moved to the verifier. Selection unsoundness can therefore no longer reach trunk — the soundness bet §B refused to take is still not taken. |
+
+## What a land costs now (structural, every path bounded)
+
+`run_gate` (`ship-land.sh:980`) in the default `fast` lane:
+
+1. **statics — O(diff), not O(tree):** `shellcheck` + `bash -n` on the shell files in
+   `git diff --name-only <range>`, `py_compile` on the python ones (`:997-1007`).
+2. **four ratchets — seconds each, scope-independent:** hermeticity, wall-clock time-bomb, UTC
+   timestamp-contract, and `.bats` shellcheck (`test-hermeticity-lint.sh`,
+   `test-walltime-lint.sh`, `utc-stamp-lint.sh`, `bats-shellcheck-lint.sh`; `:1009` onward). Each
+   greps `tests/` and *names the offending file to the session that wrote it*, binding on that
+   land's own diff.
+3. **the smoke — the only test work, and every exit from it is bounded** (`:780-861`):
+
+| condition | behaviour | cost |
+|---|---|---|
+| `IN_LAND_LOCK=1` | statics + ratchets only — **structural**, checked at the one place a suite could start, so no call site can forget it | 0 |
+| selector missing / answers `FULL` | no smoke (`FULL` is the selector's "cannot decide"; in v2 it can no longer mean "run everything") | 0 |
+| 0 direct suites map to the range | lint-only land | 0 |
+| 1-min load ≥ `CC_GATE_MAX_LOAD` (8) | **SKIPPED entirely — never waited** | 0 |
+| otherwise | direct suites minus host-manifest suites, one `nice`d process each, serial, **one total wall budget** `SHIP_LAND_SMOKE_BUDGET_S` (120 s), deadline re-checked before each suite | **≤120 s** |
+
+A named `not ok` in a direct suite blocks (exit 6 — a verdict about your diff). A cut or budget kill
+**proceeds** (attested `smoke:"partial"`) — a non-verdict must never block a land. `GATE_EFFECTIVE_FULL`
+is pinned to 0 in *both* lanes, so a land makes no full-suite claim and the verifier stays the sole
+writer of gate-green.
+
+**The amplifier is broken at the root:** the shed is a pure predicate, so a gate starting under
+fleet load contributes *no* test load. More landers can no longer produce more load — the feedback
+term the 2026-07-26 runaway depended on is gone.
+
+## Verified 2026-07-30 (live, under exactly the condition the item describes)
+
+Measured on the 10-core / 64 GiB box at load **37-57** — 4.6-7× the shed ceiling, i.e. the wave
+condition, not a quiet-box rehearsal:
+
+- **A real land's gate completed GREEN in 29 s at 1-min load 56.75.** This document's own land is
+  the trace: `./scripts/ship-land.sh --dry-run` → fetch + rebase onto `origin/main` + full fast-lane
+  gate + `gate GREEN`, `rc=0`, wall **29 s**, no lock taken. That is the item's own failure condition
+  (it reported "cannot complete" at load 17-20) at **3× that load**, completing in under half a
+  minute. Path taken: four ratchets clean over 205 suites, then `smoke — 0 direct suite(s) map to
+  this range (lint-only land)`.
+- **Corpus today: 205 suites / 3348 tests** — the item's "~1751 tests" has since **roughly doubled**,
+  so the v1 pathology would be materially worse now than when it was measured. The fix removed the
+  corpus from the land rather than tuning around it, so this growth costs a land nothing.
+- **Selection is O(diff):** direct-suite selection over the last five real lands →
+  **0, 0, 0, 3, 0 suites of 204**.
+- **Zero of the 9 bats suites live on the box were land gates** — all were other sessions' single-suite
+  runs, resolved by `cwd` (`lsof -d cwd`), not by argv. `pgrep -f ship-land.sh` matched only session
+  *briefs*, never a gate: argv carries whole prompts, so it over-counts by design.
+- **The verifier is alive and single-flight:** stamps advancing (newest minutes old), background QoS
+  band, fresh worktree per run, `run.lock.d` mutex in the `land-lock.sh` shape.
+- The properties above are **test-enforced**, not merely documented: the in-lock bats ban in both
+  lanes (`land-gate-cas.bats:214,259`, `ship-land.bats:1678`), the smoke budget
+  (`ship-land.bats:1033,1054`), the shed predicate incl. malformed-ceiling fail-open
+  (`ship-land.bats:1080-1126`), and `GATE_EFFECTIVE_FULL=0` (`ship-land.bats:422`).
+
+## Where the load went, and what is tracked elsewhere
+
+The corpus did not vanish — it moved to the singleton verifier, and **that is where the remaining
+difficulty now lives**. Do not re-file it here; it is extensively tracked already. At the time of
+writing the verifier's recent stamps read `verdict:"red"` with `failing:["tests/"]` at loads 47-61 —
+a *non-specific* failure, which is the cut-misread-as-red signature (a real red always names a test),
+already covered by `d1ba434f6239` and its refinement `8b90c69e0edd` (a gate has **four** terminal
+states — GREEN / RED / KILLED / HUNG). Related open items: `e3229172d3a0`, `a49a6a4541f1`,
+`cde699d09fa8`, `cc89fc8dc765`, `36ed9b03e47a`, `62599dd76a60`, `168cfdfda0b5`, and
+`60ec4c2d86d4` (port a run-wide admit cap to the verifier, where a per-call bound multiplies across
+the retry ladder).
+
+One consequence of the shed deserves naming because it is easy to read as a regression and is
+**by design**: under normal fleet load the smoke skips, so a land runs *no* bats at all. Anything
+that assumed the land gate would execute a suite is therefore not being enforced there — filed
+separately as `e38d68f0c3c2` (the `bats-assert-liveness` ratchet had not been enforcing; trunk
+carried 25 dead assertions).
+
+**Lesson for the ledger.** A work item's symptom and its prescribed remedy rot independently. This
+item's symptom was fixed at a different layer two days after filing, while one of its three named
+remedies (the queue) became actively forbidden in the same change. Re-derive the premise from disk
+before implementing any parked item's prescription — and check the DoD ref for a resolution section
+like this one first.
