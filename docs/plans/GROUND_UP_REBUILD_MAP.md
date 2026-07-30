@@ -119,6 +119,31 @@ phantom. Status is a claim like any other (see the constraint-cell learning belo
 
 ## Learnings (accumulate; never delete)
 
+- 2026-07-29 (row 10, post-DONE addendum) **A POSITIVE CONTROL WHOSE SELECTOR MATCHES A STRING THAT
+  SURVIVES THE FIX BECOMES A NO-OP — and tightening one past the point of comfort is what finds the
+  real defect.** The campaign already knows a detector's negative is not data until it passes a
+  positive control (row 3). This is the next layer: **the control itself decays, silently, on the very
+  next commit to the code it guards.** Row 10 shipped a lint for its own signature bug class with a
+  control that recovered "the newest `bin/cc-blockers` containing `[ "$red" -eq "$seen" ]`" from git.
+  That string SURVIVES in the fixed file — the state-naming line legitimately uses it under an
+  explained `# alarm-polarity-ok:` marker — so one commit later the selector walked back exactly one
+  step, extracted the CURRENT justified version, the lint correctly returned 0, and the control
+  reported "the lint does not catch the bug" while having tested the wrong file entirely.
+  **Then the tightened control exposed the defect underneath, which was much worse: the lint DID NOT
+  FIRE on a genuinely pre-fix baseline at all.** The original bug was written on one line —
+  `seen=$((seen + 1)); [ "$v" = "red" ] && red=$((red + 1))` — and the lint's pass 1 used a single
+  `match()`, so it registered `seen` (the WINDOW counter) and never `red`. It recognised only the
+  post-fix layout, where the two increments sit on separate lines. **A guard against a shape it could
+  not see, landed green, with a passing positive control.** Three rules earned: (a) a
+  recover-from-git control must pin the UNFIXED shape by what the fix ADDS (`no notgreen`, `no
+  suppression marker`), never only by what the bug contains; (b) give it a harness SELF-CHECK that
+  asserts the extracted baseline really is unfixed, the way `tests/statusline-identity.bats` does, so
+  a bad extraction cannot make the control pass; (c) when a control starts failing, suspect the
+  CONTROL before the subject — but fix it by making it STRICTER, because the loose version is what
+  was hiding the defect. Extends memory `control-must-replay-the-real-artifact` and
+  `effect-read-predicate-red-proof`.
+
+
 - 2026-07-29 (row 10, DONE) **AN ALARM THAT ALWAYS FIRES AND AN ALARM THAT CANNOT FIRE ARE THE SAME
   ALARM — both carry zero bits, and this map's vocabulary could only see the second one.** The
   campaign has a well-developed law for silence (absence-is-loud, existence evidence from a
