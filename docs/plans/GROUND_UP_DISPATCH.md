@@ -634,8 +634,28 @@ the successor inherits:
 state and is retained for history only — every count in it is stale.
 
 - **Map is 13 rows now, not 12** (row 13 machine-capacity was added by a parallel session and
-  **RATIFIED** by this coordinator — see the ratification section above). **UPDATED 18:3xZ: 7 DONE
-  — 1, 2, 3, 4, 5, 12, 13. 2 IN FLIGHT: 10, 8. 4 OPEN: 6, 7, 9, 11.** (Row 13 was closed by the
+  **RATIFIED** by this coordinator — see the ratification section above). **UPDATED 19:0xZ: 8 DONE
+  — 1, 2, 3, 4, 5, 10, 12, 13. 2 IN FLIGHT: 8, 7. 3 OPEN: 6, 9, 11. Remaining order: 11 · 9 ·
+  6 last.**
+
+  **ROW 10 VERIFIED DONE 19:0xZ** — 7/7 shas trunk-ancestors, `OPERATOR_SURFACE_V2.md` 412 lines /
+  10 sections, DoD integers met on disk (starved classes 2-of-5 → 0-of-5; inverted predicates
+  1 → 0), 141 tests. **My audit grep false-positived and row 10 had already defended against it:**
+  `bin/cc-blockers:355` still matches `red -eq seen`, which looks exactly like the old inverted
+  predicate — but the fix changed the SEMANTICS (it now only NAMES the state, `PERSISTENT-RED` vs
+  `PERSISTENT-NOT-GREEN`, and no longer gates the alarm), and `:354` carries a machine-readable
+  `# alarm-polarity-ok:` marker with a documented adjacency rule so a grep-based auditor cannot
+  mistake it. Third time today a raw grep produced a misleading verdict; first time a row had
+  pre-emptively built the annotation that resolves it. Row 10's own cell verdict is
+  CONFIRMED-BUT-INSUFFICIENT: both halves were true AND implemented, and the surface still failed,
+  because the cell states per-ROW correctness while both live failures are whole-SURFACE properties
+  (predicate POLARITY and the operator's ATTENTION BUDGET). **"An alarm that ALWAYS fires and an
+  alarm that CANNOT fire are the same alarm."**
+
+  **ROW 7 FIRED AND ENGAGED 19:0xZ** — pane resolved from the fire log, session `85233c18`, account
+  **next** (eligible + soonest-expiring at 3.1d, freed by row 2's retirement), worktree
+  `gu-account-relogin`, cold `--split-right --follow`. Gate ADMITted at **1.64/core**; verified by
+  transcript CONTENT (48 rows / 10 assistant / 7 tool_use), not the script's verdict. (Row 13 was closed by the
   coordinator after its own session exited clean without flipping its cell; row 2 closed itself and
   was verified on five disk axes; row 8 was fired 18:3xZ — see the sections below.) Remaining
   dispatch order: **7 · 11 · 9 · 6 last.** Do NOT count rows by grepping `DONE` alone — the "What
