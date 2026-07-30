@@ -143,9 +143,89 @@ map_exit_class() {
   esac
 }
 
+# ── jetsam attribution, anchored to the DEATH — not to "now" (audit 2026-07-22, root cause 4) ─────────
+# The check used to be `find … -mmin -6`, i.e. "was any JetsamEvent written in the last 6 minutes OF
+# NOW". On the LIVE path now ≈ the death, so it read correctly. On `cc-crash-report --backfill`, which
+# re-classifies up to 90 HISTORICAL deaths, "now" is whenever the report happens to run — so the same
+# expression answered a question about the present for every death in the past:
+#   · one unrelated jetsam kill in the last 6 minutes relabelled EVERY backfilled death jetsam-oom,
+#     deliberate recycles included — and jetsam OUTRANKS the recycle evidence, so those flips are
+#     silent and total (the recycle text is never even consulted);
+#   · a death 3 days ago that WAS jetsam-killed could never match, because its report is long past
+#     any now-relative window.
+# The window is now two-sided around the death, which is what the documented contract ("a JetsamEvent
+# within ~6 min of death", cc-crash-report:15) always claimed: a report is written AT or shortly after
+# the kill, while the watchdog notices up to one 30s poll late, so the truth can fall on either side.
+JETSAM_WINDOW_S="${CC_JETSAM_WINDOW_S:-360}"     # ±6 min, the interval the old -mmin -6 approximated
+jetsam_near_death() { # $1=death epoch → 0 iff a JetsamEvent report lies within ±JETSAM_WINDOW_S of it
+  local death="$1" f mt d out
+  case "$death" in ''|*[!0-9]*) return 1 ;; esac   # unparseable death ⇒ do not claim jetsam (never invent a cause)
+  local jdirs="${CC_JETSAM_DIRS:-/Library/Logs/DiagnosticReports $HOME/Library/Logs/DiagnosticReports}"
+  # BOUNDED: DiagnosticReports is a system dir this crash path does not control. Reuse the timeout
+  # binary already resolved at the top of this file; absent ⇒ unbounded, as everywhere else here.
+  # The window is applied in bash rather than by find: BSD find REJECTS `-newermt @epoch` ("Can't parse
+  # date/time"), the same trap lead-supervisor.sh records, and a two-sided window needs two references
+  # anyway. `-mmin` cannot express "near an arbitrary past instant" at all.
+  # shellcheck disable=SC2086  # intentional word-split over space-separated dirs (matches the old call)
+  if [[ -n "$LCW_OSA_TB" && -x "$LCW_OSA_TB" ]]; then
+    out=$("$LCW_OSA_TB" -k 3 "${LCW_JETSAM_SCAN_TIMEOUT_S:-10}" find $jdirs -name 'JetsamEvent-*.ips' -print 2>/dev/null || true)
+  else
+    out=$(find $jdirs -name 'JetsamEvent-*.ips' -print 2>/dev/null || true)
+  fi
+  while IFS= read -r f; do
+    [[ -n "$f" ]] || continue
+    mt=$(stat -f%m "$f" 2>/dev/null || stat -c%Y "$f" 2>/dev/null || echo 0)   # BSD stat, then GNU fallback
+    case "$mt" in ''|*[!0-9]*) continue ;; esac
+    d=$(( mt > death ? mt - death : death - mt ))
+    # explicit `if`, never `[[ … ]] && return`: a non-final [[ ]] in an && list is errexit-EXEMPT, so a
+    # false compare would silently fall through instead of continuing the loop (the dead-assertion class)
+    if [[ "$d" -le "$JETSAM_WINDOW_S" ]]; then return 0; fi
+  done <<< "$out"
+  return 1
+}
+
+# ── when did this session die? — the anchor jetsam attribution is judged against ────────────────────
+# Deliberately NOT parsed from the watchdog log: the daemon writes its "LEAD CRASH detected" lines with a
+# bare `echo` into an already-redirected stdout, so — unlike the hook's log() lines — they carry NO
+# timestamp at all. A parser keyed on one would match 0 of the 3064 historical detections and turn
+# backfill into a silent no-op that still printed a confident summary.
+#
+# Disk evidence instead, most precise first:
+#   1. the close-record epoch — the launcher's exec-wrapper names it <pid>-<epoch>.json at the moment the
+#      binary exits. This is the exact death instant, not a proxy.
+#   2. the transcript mtime — its last write is the last thing the session did before dying. Available
+#      for essentially every historical death, which is what backfill needs.
+#   3. now — the LIVE daemon's answer. It detects within one 30s poll, far inside a ±6-min window, and
+#      it must not be "corrected" to a transcript mtime: a session idle for hours before being killed has
+#      an old transcript but died just now, and anchoring to the mtime would MISS its real jetsam report.
+# So the live path (no argument) keeps using now, and backfill asks for `auto` to walk 1→2→3.
+resolve_death_epoch() { # $1=sid  $2=pid  → epoch on stdout
+  local sid="$1" pid="${2:-}" cr base ep t mt
+  if [[ -n "$pid" ]]; then
+    cr=$(find_close_record "$pid") || cr=""
+    if [[ -n "$cr" ]]; then
+      base=$(basename "$cr" .json); ep="${base#*-}"          # <pid>-<epoch>.json; pid holds no dash
+      case "$ep" in ''|*[!0-9]*) ep="" ;; esac
+      [[ -n "$ep" ]] && { printf '%s' "$ep"; return 0; }
+    fi
+  fi
+  t=$(find_transcript "$sid" 2>/dev/null || true)
+  if [[ -n "$t" && -f "$t" ]]; then
+    mt=$(stat -f%m "$t" 2>/dev/null || stat -c%Y "$t" 2>/dev/null || echo "")
+    case "$mt" in ''|*[!0-9]*) mt="" ;; esac
+    [[ -n "$mt" ]] && { printf '%s' "$mt"; return 0; }
+  fi
+  date +%s
+}
+
 classify_death() {
   # prints: CLASS<TAB>CAUSE<TAB>transcript_kb<TAB>records   (CLASS = RECYCLE|CRASH)
-  local sid="$1" pid="${2:-}" t body kb=0 recs=0
+  # $3 = when this session died, for jetsam attribution: an EPOCH, the literal `auto` (derive from disk —
+  # what cc-crash-report --backfill passes, since its deaths are historical), or omitted ⇒ NOW, which is
+  # correct for the live daemon and is what every pre-existing caller gets unchanged.
+  local sid="$1" pid="${2:-}" death="${3:-}" t body kb=0 recs=0
+  if [[ "$death" == "auto" ]]; then death=$(resolve_death_epoch "$sid" "$pid"); fi
+  case "$death" in ''|*[!0-9]*) death=$(date +%s) ;; esac
   # 0) CLOSE-RECORD FIRST — per-pid ground truth OUTRANKS every heuristic below (incl. jetsam:
   #    137 already IS the SIGKILL/OOM case; a clean exit for THIS pid is clean even if some other
   #    process tripped a JetsamEvent). Absent record ⇒ fall through to the existing ladder.
@@ -167,11 +247,10 @@ classify_death() {
   t=$(find_transcript "$sid") || { printf 'CRASH\tno-transcript\t0\t0'; return 0; }
   kb=$(( $(stat -f%z "$t" 2>/dev/null || echo 0) / 1024 ))
   recs=$(wc -l < "$t" 2>/dev/null | tr -d ' ')
-  # 1) JETSAM FIRST — a JetsamEvent report within ~6 min is an unambiguous system OOM
-  #    kill and OUTRANKS any recycle text (a kill mid-recycle is still a kill).
-  local jdirs="${CC_JETSAM_DIRS:-/Library/Logs/DiagnosticReports $HOME/Library/Logs/DiagnosticReports}"
-  # shellcheck disable=SC2086  # intentional word-split over space-separated dirs
-  if find $jdirs -name 'JetsamEvent-*.ips' -mmin -6 2>/dev/null | grep -q .; then
+  # 1) JETSAM FIRST — a JetsamEvent report within ~6 min OF THIS DEATH is an unambiguous system OOM
+  #    kill and OUTRANKS any recycle text (a kill mid-recycle is still a kill). Because it outranks
+  #    everything, a mis-anchored window is not a mild inaccuracy: it silently overwrites good evidence.
+  if jetsam_near_death "$death"; then
     printf 'CRASH\tjetsam-oom\t%s\t%s' "${kb:-0}" "${recs:-0}"; return 0
   fi
   # 1.5) DELIBERATE TEARDOWN — a fresh marker handoff-fire.sh writes the moment a session
@@ -587,7 +666,9 @@ fi
 # session id (+ optional pid, to join its close-record) and exit, without spawning the
 # daemon or reading stdin.
 if [[ "${1:-}" == "--classify" ]]; then
-  classify_death "${2:-}" "${3:-}"; echo; exit 0
+  # $4 = death epoch (optional; omitted ⇒ now). cc-crash-report --backfill passes the timestamp of the
+  # watchdog-log line that recorded the death, so a historical death is judged against ITS OWN moment.
+  classify_death "${2:-}" "${3:-}" "${4:-}"; echo; exit 0
 fi
 # Debug/test entrypoint: print a pid's close-record enrichment (EXIT<TAB>SIGNAL<TAB>PATH<TAB>VERSION).
 if [[ "${1:-}" == "--close-fields" ]]; then

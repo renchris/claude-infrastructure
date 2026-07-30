@@ -34,6 +34,17 @@ classify() { bash "$HOOK" --classify "$1"; }
 cls() { classify "$1" | cut -f1; }        # CLASS field
 cause() { classify "$1" | cut -f2; }      # CAUSE field
 
+# ── death-anchored jetsam helpers (the --backfill window fix) ─────────────────────────────────────
+# classify_at <sid> <pid|""> <epoch|auto> — the 3-arg form: judge the death against a stated moment
+# instead of against now.
+classify_at() { bash "$HOOK" --classify "$1" "$2" "$3"; }
+cls_at()   { classify_at "$1" "$2" "$3" | cut -f1; }
+cause_at() { classify_at "$1" "$2" "$3" | cut -f2; }
+# stamp a file's mtime to an absolute epoch (BSD touch takes no @epoch; go via date -r)
+set_mtime() { touch -t "$(date -r "$2" +%Y%m%d%H%M.%S)" "$1"; }
+mk_jetsam() { # $1=name-suffix $2=epoch its report was written
+  local p="$CC_JETSAM_DIRS/JetsamEvent-$1.ips"; : > "$p"; set_mtime "$p" "$2"; }
+
 @test "deliberate recycle via DISPOSITION: CLOSE phrase → RECYCLE" {
   mk_tx s_disp "DISPOSITION: CLOSE — the recycle IS the continuation; firing now"
   run cls s_disp
@@ -146,4 +157,88 @@ cause() { classify "$1" | cut -f2; }      # CAUSE field
     > "$CC_TEARDOWN_DIR/PANE-ANON.json"
   [ "$(cls s_anon)" = "RECYCLE" ]
   [ "$(cause s_anon)" = "deliberate-teardown" ]
+}
+
+# ── jetsam attribution is anchored to the DEATH, not to "now" (audit root cause 4) ─────────────────
+# The window was `find … -mmin -6`: "was any JetsamEvent written in the last 6 minutes OF NOW". Correct
+# on the live path (now ≈ the death) and wrong for every historical death `cc-crash-report --backfill`
+# re-classifies — and because jetsam OUTRANKS the recycle evidence, a mis-anchored window does not
+# merely lose precision, it silently overwrites a correct RECYCLE verdict.
+
+@test "a HISTORICAL death is NOT jetsam-attributed by an unrelated RECENT report (the --backfill bug)" {
+  # A deliberate self-close an hour ago; the only jetsam report on the box was written seconds ago and
+  # has nothing to do with it. Pre-fix, -mmin -6 matched that report and the recycle text was never
+  # consulted — every backfilled row flipped to CRASH/jetsam-oom.
+  mk_tx s_hist "DISPOSITION: CLOSE — this pane becomes the successor"
+  mk_jetsam recent "$(date +%s)"
+  [ "$(cls_at s_hist '' "$(( $(date +%s) - 3600 ))")" = "RECYCLE" ]
+  [ "$(cause_at s_hist '' "$(( $(date +%s) - 3600 ))")" = "deliberate-self-close" ]
+}
+
+@test "a HISTORICAL death IS jetsam-attributed by a report near THAT death (the other half)" {
+  # The same window failed in the opposite direction: a death that really was jetsam-killed last week
+  # could never match a now-relative window, so the hard OOM signal was lost for all history.
+  local died; died=$(( $(date +%s) - 3600 ))
+  mk_tx s_hist2 "DISPOSITION: CLOSE — recycled at 70%"
+  mk_jetsam athand "$(( died + 60 ))"          # report written 1 min after the kill, inside ±6 min
+  [ "$(cls_at s_hist2 '' "$died")" = "CRASH" ]
+  [ "$(cause_at s_hist2 '' "$died")" = "jetsam-oom" ]
+}
+
+@test "the window is TWO-SIDED and bounded: a report just outside ±6 min does not attribute" {
+  # A report is written at or shortly after the kill, while the watchdog notices up to one 30s poll
+  # late, so the truth can fall on either side of the death — but only just.
+  local died; died=$(( $(date +%s) - 7200 ))
+  mk_tx s_edge "mid-tool output, nothing conclusive here"
+  mk_jetsam before "$(( died - 300 ))"          # 5 min BEFORE ⇒ inside the window
+  [ "$(cause_at s_edge '' "$died")" = "jetsam-oom" ]
+  rm -f "$CC_JETSAM_DIRS"/*.ips
+  mk_jetsam faroff "$(( died - 900 ))"          # 15 min before ⇒ OUTSIDE ⇒ no attribution
+  [ "$(cause_at s_edge '' "$died")" = "abrupt-unknown" ]
+}
+
+@test "the LIVE path is unchanged: no death argument ⇒ now, so a fresh report still attributes" {
+  # The live daemon must keep passing nothing and keep getting the old answer — it detects within one
+  # 30s poll, far inside the window. Anchoring it to disk instead would MISS the real report for a
+  # session that sat idle for hours before being killed.
+  mk_tx s_live "mid-tool output, nothing conclusive here"
+  mk_jetsam live "$(date +%s)"
+  [ "$(cause s_live)" = "jetsam-oom" ]
+}
+
+@test "auto: the death epoch resolves from the CLOSE-RECORD (exact exit instant, not a proxy)" {
+  # <pid>-<epoch>.json is named at the moment the binary exits. An unmappable exit_code falls through
+  # to the ladder, so the jetsam leg is reached and must use that exact epoch — here an hour ago,
+  # while the only report is fresh ⇒ no attribution.
+  local died; died=$(( $(date +%s) - 3600 ))
+  export CC_CLOSE_RECORDS_DIR="$BATS_TEST_TMPDIR/close"; mkdir -p "$CC_CLOSE_RECORDS_DIR"
+  printf '{"exit_code":"weird","signal":""}\n' > "$CC_CLOSE_RECORDS_DIR/4242-$died.json"
+  mk_tx s_auto1 "DISPOSITION: CLOSE — this pane becomes the successor"
+  mk_jetsam recent2 "$(date +%s)"
+  [ "$(cls_at s_auto1 4242 auto)" = "RECYCLE" ]
+  # ...and a report near the recorded exit instant DOES attribute, proving the epoch was actually read
+  rm -f "$CC_JETSAM_DIRS"/*.ips; mk_jetsam athand2 "$(( died + 30 ))"
+  [ "$(cause_at s_auto1 4242 auto)" = "jetsam-oom" ]
+}
+
+@test "auto: with no close-record the TRANSCRIPT MTIME anchors the death (backfill's usual case)" {
+  # Most historical deaths have no close-record (the launcher wrapper is newer than the corpus), so the
+  # transcript's last write — the last thing the session did — is the anchor. Without it, `auto` would
+  # silently fall through to now and reinstate the very bug this closes.
+  local died; died=$(( $(date +%s) - 5400 ))
+  export CC_CLOSE_RECORDS_DIR="$BATS_TEST_TMPDIR/close-empty"; mkdir -p "$CC_CLOSE_RECORDS_DIR"
+  mk_tx s_auto2 "DISPOSITION: CLOSE — this pane becomes the successor"
+  set_mtime "$CC_ACCOUNT_BASES/projects/proj/s_auto2.jsonl" "$died"
+  mk_jetsam recent3 "$(date +%s)"
+  [ "$(cls_at s_auto2 '' auto)" = "RECYCLE" ]           # fresh report is far from the 90-min-old death
+  rm -f "$CC_JETSAM_DIRS"/*.ips; mk_jetsam athand3 "$(( died - 120 ))"
+  [ "$(cause_at s_auto2 '' auto)" = "jetsam-oom" ]      # a report near the mtime DOES attribute
+}
+
+@test "an unparseable death epoch never INVENTS a jetsam cause" {
+  # Garbage in must not become a confident hard-OOM verdict. `0` is a valid-but-ancient epoch: no report
+  # can be within 6 minutes of it, so the ladder falls through to the ordinary heuristics.
+  mk_tx s_bad "mid-tool output, nothing conclusive here"
+  mk_jetsam recent4 "$(date +%s)"
+  [ "$(cause_at s_bad '' 0)" = "abrupt-unknown" ]
 }

@@ -70,19 +70,38 @@ backfill() {
   # arg, read stdin, and spawn a watchdog daemon per call (log pollution + stray daemons).
   grep -q -- '--classify' "$HOOK" || { echo "watchdog hook $HOOK has no --classify support (stale?) — refusing to avoid spawning daemons"; return 1; }
   echo "── backfill: reclassifying the last $n watchdog-detected deaths ──"
-  # unique recent crashed sids, most-recent order
-  local sids
-  sids=$(grep -aoE '\[watchdog [0-9a-f-]{36}\] LEAD CRASH detected' "$WD_LOG" \
-         | grep -oE '[0-9a-f-]{36}' | tail -"$n" | awk '!seen[$0]++')
+  # unique recent crashed sids, most-recent order, EACH WITH ITS PID — and every death judged against
+  # WHEN IT DIED rather than against now.
+  #
+  # The bug this closes: classify_death's jetsam leg asked "was any JetsamEvent written in the last 6
+  # minutes?" — a question about the PRESENT, applied to up to 90 deaths in the PAST. One unrelated jetsam
+  # kill while this report happened to run relabelled every death below as jetsam-oom, deliberate recycles
+  # included; and since jetsam OUTRANKS the recycle evidence, the flip was silent and total. Conversely a
+  # death that really was jetsam-killed last Tuesday could never match.
+  #
+  # Two changes, both cheap: pass `auto` so the hook anchors on disk evidence (close-record epoch, else
+  # transcript mtime), and pass the PID — which was being thrown away, leaving the close-record ladder
+  # (exact exit_code/signal ground truth) unreachable on every historical row it could have settled.
+  # NOTE the detections carry no timestamp of their own: the daemon `echo`s them into an
+  # already-redirected stdout, so only the hook's log() lines are stamped. Anchoring is disk-side for
+  # that reason, not by preference.
+  # `pid=` is optional in the pattern so lines predating that suffix still match: they yield an empty pid
+  # (no close-record leg; the transcript mtime still anchors them) instead of vanishing from the corpus.
+  # Semantics preserved from the sid-only version: last N detections chronologically, first-seen dedupe.
+  local rows
+  rows=$(grep -aoE '\[watchdog [0-9a-f-]{36}\] LEAD CRASH detected( pid=[0-9]+)?' "$WD_LOG" \
+         | sed -E 's/^\[watchdog ([0-9a-f-]{36})\] LEAD CRASH detected( pid=([0-9]+))?$/\1 \3/' \
+         | tail -"$n" | awk '!seen[$1]++')
   local R=0 C=0 gone=0
   local tmp; tmp=$(mktemp)
-  local sid out cl ca kb
-  for sid in $sids; do
-    out=$(bash "$HOOK" --classify "$sid" 2>/dev/null)
+  local sid pid out cl ca kb
+  while read -r sid pid; do
+    [[ -n "$sid" ]] || continue
+    out=$(bash "$HOOK" --classify "$sid" "$pid" auto 2>/dev/null)
     cl=$(printf '%s' "$out" | cut -f1); ca=$(printf '%s' "$out" | cut -f2); kb=$(printf '%s' "$out" | cut -f3)
     [[ "$ca" == "no-transcript" ]] && { gone=$((gone+1)); continue; }
     if [[ "$cl" == "RECYCLE" ]]; then R=$((R+1)); else C=$((C+1)); printf '%s\t%s\t%s\n' "${sid:0:8}" "$ca" "$kb" >> "$tmp"; fi
-  done
+  done <<< "$rows"
   echo "analyzed (transcript on disk): $((R+C))   ·   aged-out (skipped): $gone"
   echo "   RECYCLE (deliberate self-close): $R"
   echo "   CRASH   (genuine, upper bound):  $C"
