@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.claude.capacity-alarm — row 13 M6. Every 10 min: is the box approaching its memory ceiling?
+
+  WHY A JOB AT ALL: the row measured a real ceiling (~50 concurrent sessions on this 10-core/64 GiB
+  box) and shipped scripts/capacity-alarm.sh to read it — but a built alarm that nothing invokes is
+  inert, which is the failure this repo names as feature-durability-mechanism-not-memory. This is the
+  thing that fires it.
+
+  WHY IT IS CHEAP ENOUGH TO BE ALLOWED TO EXIST (this row is about NOT adding load): one vm_stat +
+  one sysctl + one ps + one python3, measured ~100-200 ms per tick. At 600 s that is a duty cycle
+  around 0.03% of one core. It runs in the BACKGROUND band (ProcessType/Nice/LowPriorityIO) so even
+  that yields to interactive sessions — the same band the row's QoS chokepoint puts gate corpora in.
+
+  WHY StartInterval AND NOT a calendar entry: headroom is a continuous quantity, not a daily event.
+  RunAtLoad is false — a login must not page about a condition that has not been sampled yet.
+
+  IT NEVER REFUSES ANYTHING. The script reports and exits; it has no gate, no spawn veto, no sleep
+  (R1). The landed capacity_gate() is the cautionary case: measured REFUSE 10/10 against real load,
+  i.e. a permanent dispatch outage. See docs/plans/MACHINE_CAPACITY_V2.md §8.5.7.
+
+  Pages to ~/.claude/autonomy/pages/capacity-alarm.page on WARN/ALARM, and REMOVES that page on
+  OK/NO-DATA — one fixed slug, so a 10-minute cadence cannot accumulate pages, and a cleared
+  condition stops being reported.
+
+  C10: the OPERATOR loads it. Kill switches after load: CC_CAPACITY_ALARM=off (whole script),
+  CC_CAP_PAGE=off (page channel only), or launchctl bootout.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.claude.capacity-alarm</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"; exec "$HOME/.claude/scripts/capacity-alarm.sh" --quiet</string>
+    </array>
+
+    <key>StartInterval</key>
+    <integer>600</integer>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>ProcessType</key>      <string>Background</string>
+    <key>LowPriorityIO</key>    <true/>
+    <key>Nice</key>             <integer>10</integer>
+
+    <key>StandardOutPath</key>  <string>/Users/chrisren/.claude/logs/capacity-alarm.out.log</string>
+    <key>StandardErrorPath</key><string>/Users/chrisren/.claude/logs/capacity-alarm.err.log</string>
+</dict>
+</plist>
