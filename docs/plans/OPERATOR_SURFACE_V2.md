@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: complete
 row: 10
 subsystem: Observability & operator surface — what the human sees
 ---
@@ -352,6 +352,8 @@ exactly this in a doc whose whole purpose was disk-truth citations.
 | 8 | map row 10 DONE + five campaign learnings | **`07b9499c`** | ✓ |
 | 9 | dead assertion in the recovered harness SELF-CHECK (`\| \| false`) | **`fca95afd`** | ✓ |
 | 10 | **M8** the all-clear line's SENSOR ROSTER | **`030e0f39`** | ✓ |
+| 11 | §4 F13/M8 + the rebase-trap note | **`a29473c0`** | ✓ |
+| 12 | **the lint did not catch the bug it was written for** — control tightened, pass 1 widened | **`471df5dd`** | ✓ |
 
 **The rebase trap, hit live and worth recording.** Increment 9 was committed locally as `3f42ab7a`;
 `ship-land.sh` rebased it over two sibling lands and it reached trunk as **`fca95afd`**, so
@@ -382,7 +384,19 @@ fast-forwards and their local shas survived; that is luck, not a rule.
 - **A7** zero new forks in `render_block`; net one fewer.
 - **A8** the queue surface names **12 of 12** pending (was 6 of 12), partitioned ROTTING/FRESH.
 - **A11** the lint is clean on the fixed tree and **fires on the real pre-fix predicate recovered
-  from git** — the positive control, not an approximation.
+  from git** — the positive control, not an approximation. **CORRECTED after first being claimed
+  falsely:** as first landed, the control's baseline selector was "the newest `bin/cc-blockers`
+  containing `[ "$red" -eq "$seen" ]`" — a string that SURVIVES in the fixed file, where the
+  state-naming line legitimately uses it under `# alarm-polarity-ok:`. One commit later the selector
+  extracted the *current* justified version, so the control tested the wrong file. Tightening it to a
+  genuinely pre-fix baseline (predicate present, no marker, no `notgreen`) plus a harness self-check
+  then exposed the defect underneath: **the lint did not fire at all.** The original bug was written
+  `seen=$((seen + 1)); [ "$v" = "red" ] && red=$((red + 1))` on ONE line, and pass 1's single
+  `match()` registered `seen` — the window counter — never `red`. The lint recognised only the
+  post-fix layout, i.e. it would have shipped as a guard against a shape it could not see. Pass 1 now
+  collects every increment on the line; verified against `39ebcd07` it reports the exact line and
+  variable of the original defect. **Two compounding defects, both mine, both already landed, and
+  neither would have been found without a control tightened past the point where it was comfortable.**
 - **M8** the all-clear line now reads `— sensors 5/5 readable (stamps:ok launchctl:ok ps:ok fleet:ok
   board:ok)`, and names any sensor it could not read. That closes the frozen DoD's second clause at
   the last site where it was still open; per-family it was already covered by six kinds carrying
@@ -404,8 +418,9 @@ fast-forwards and their local shas survived; that is luck, not a rule.
   `alarm-polarity-lint`, `statusline.sh` — all correct. On this box `env bash` also resolves to 3.2,
   so the suites were already exercising it; asserted rather than assumed.
 - Totals: **cc-blockers 67/67 · operator-readout 35/35 · activation-watch 27/27 (+ selftest 18/18) ·
-  alarm-polarity 7/7 · statusline-identity 10/10 = 154**. All gate-green through
-  `scripts/ship-land.sh`, 10 lands, never batched.
+  alarm-polarity 7/7 · statusline-identity 10/10 · cc-blockers-fleet 27/27 = **173 pass / 0 fail**,
+  plus the activation-watch selftest 18/18. All gate-green through `scripts/ship-land.sh`,
+  **12 lands, never batched.**
 
 **IN FLIGHT (autonomous, owner named):** nothing of this row's. All seven increments are landed and
 every edit is in an already-symlinked live file, so **this row needs no activation step** — unlike
