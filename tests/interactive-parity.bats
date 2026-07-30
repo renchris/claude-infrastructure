@@ -72,7 +72,7 @@ agree() { # <path> <expected: yes|no>
   mk_image "$(( NOW - 300 ))"
   age="$(ce_last_interactive_age "$TX")"
   ep="$(ci_last_interactive_epoch "$TX")"
-  [ -n "$age" ] && [ -n "$ep" ]
+  [ -n "$age" ] && [ -n "$ep" ] || false
   d=$(( (NOW - ep) - age )); [ "$d" -ge -2 ] && [ "$d" -le 2 ]     # same turn ⇒ ages agree within clock jitter
 }
 

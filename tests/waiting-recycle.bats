@@ -997,7 +997,7 @@ mk_ps_rss() { # $1=rss_kb → a `ps` stub reporting that RSS for a claude-lookin
   echo "$output" | grep -q "SIZE axis"
   # must NOT narrate a fill threshold: 30% never crossed eff_idle, and a misattributed cause reads as
   # a false positive to the next person who checks the fill
-  echo "$output" | grep -q "context 30% ≥" && false || true
+  ! echo "$output" | grep -q "context 30% ≥" || false
   tail -1 "$CC_WR_IDL" | jq -e 'select(.disposition=="fired") | .trigger=="size"' >/dev/null
 }
 @test "size: CC_WR_SIZE_MB=0 disables the axis (and a 0 measurement never clears a live bar)" {
@@ -1026,7 +1026,7 @@ mk_ps_rss() { # $1=rss_kb → a `ps` stub reporting that RSS for a claude-lookin
   echo "$output" | grep -q "OVERSIZE"
   echo "$output" | grep -q "1MB"
   # axis-honest: a size page must not borrow the fill narrative
-  echo "$output" | grep -q "climbing toward the 90%" && false || true
+  ! echo "$output" | grep -q "climbing toward the 90%" || false
   tail -1 "$CC_WR_IDL" | jq -e 'select(.disposition=="escalated") | .forceable==false' >/dev/null
 }
 @test "size: RSS alone PAGES and never enters the recycle ladder; the page is paced" {
@@ -1054,7 +1054,7 @@ mk_ps_rss() { # $1=rss_kb → a `ps` stub reporting that RSS for a claude-lookin
   mk_tel_pid s_sz8 30 4242
   run drive s_sz8 "$(mk_tx_size 1 "$WAIT")"        # oversize AND over-RSS
   fired "$output"
-  echo "$output" | grep -q "HIGH PROCESS FOOTPRINT" && false || true
+  ! echo "$output" | grep -q "HIGH PROCESS FOOTPRINT" || false
   [ -f "$CC_WR_STATE_DIR/escalate-s_sz8" ]         # the ladder's grace clock DID start
 }
 @test "size: every eval records what it measured — tx_mb/rss_mb ride even on an abstain" {
