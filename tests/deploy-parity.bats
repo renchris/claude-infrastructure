@@ -124,6 +124,15 @@ setup() {
 
 @test "the real repo passes its own assertion (guards the live host deployment)" {
   run env -u CC_PARITY_REPO -u CC_PARITY_BINDIR -u CC_PARITY_STRICT -u CC_PARITY_COPY "$ASSERT"
+  # Exit 3 is the assert's NO-VERDICT state: a `diff` or the tracked-file listing could not RUN. That
+  # is a fact about the machine, not about the live layer — and it is reachable here, because
+  # deploy-live.sh runs this suite post-deploy at `nice -n 19` next to a corpus (fork exhaustion at
+  # loadavg 15-48 is measured in scripts/host-suites.manifest). Letting it fall through to the
+  # `-eq 0` below would turn a non-verdict into a live-layer RED that PAGES and files a backlog
+  # packet — the same fabricated-verdict class this suite pins one level down, re-created in its own
+  # consumer. A new third state has to be taught to everything that reads the exit code.
+  # Exit 1 is NOT covered by this: real drift still fails here, loudly, as it must.
+  [ "$status" -ne 3 ] || skip "assert returned NO VERDICT (exit 3), no claim about the host: $output"
   [ "$status" -eq 0 ]
   [[ "$output" == *"claude-accounts"* ]]
 }
@@ -243,11 +252,104 @@ _track() { git -C "$CC_PARITY_REPO" add -A >/dev/null 2>&1; }   # ls-files reads
   ln -s "$REPO_ROOT/bin/claude-accounts" "$d/bin/claude-accounts"
   ln -s "$ASSERT" "$d/scripts/deploy-parity-assert.sh"
   run env -u ITERM_SESSION_ID -u CC_PARITY_REPO -u CC_PARITY_BINDIR -u CC_PARITY_STRICT -u CC_PARITY_COPY -u CC_PARITY_LIVE bash "$d/scripts/deploy-parity-assert.sh"
-  via_symlink="$status"
+  via_symlink="$status"; via_out="$output"
   run env -u ITERM_SESSION_ID -u CC_PARITY_REPO -u CC_PARITY_BINDIR -u CC_PARITY_STRICT -u CC_PARITY_COPY -u CC_PARITY_LIVE bash "$ASSERT"
   [ "$via_symlink" -eq "$status" ] || false
+  # NON-VACUITY (2026-07-29). Two agreeing exit codes prove nothing if NEITHER invocation compared
+  # anything — and a vacuous agreement is precisely the fail-open the next test pins. So require
+  # evidence that a comparison actually happened: a named verdict, and not the no-verdict state.
+  # Deliberately NOT pinned to 0 — the real host legitimately reads 1 while a landed file awaits its
+  # live symlink, and this test is about AGREEMENT, not about the host being clean (test above owns that).
+  [ "$via_symlink" -ne 3 ] || false
+  [[ "$via_out" == *"claude-accounts"* ]] || false
 }
 
 @test "resolving \$0 through symlinks is present (the mechanism, not just the outcome)" {
   grep -q 'while \[ -L "\$_self" \]' "$ASSERT" || false
+}
+
+# ── THE THIRD STATE: "could not compare" is not parity (2026-07-29, backlog 816015ecb30b) ─────────
+# tm-closure-a finding #3 said this script "silently no-ops when invoked via its live symlink". Half
+# of that was already fixed by f94d9631 (the two tests above pin it). The half that SURVIVED is the
+# consequence, not the cause: every leg here is written to SKIP what it cannot find — the strict loop
+# on `[ ! -f "$src" ]`, the COPY and PATH loops via a silent `continue`, the existence leg behind
+# `[ -e "$REPO/.git" ]` — so ANY route that leaves the script without a real subject made all of them
+# skip and still exit 0: "the code running IS the code in this checkout", about a checkout it never
+# located. Exit 0 (parity) and 1 (drift) both CLAIM a comparison happened. When none did, the answer
+# is neither — exit 3. Each test below pins the EXACT exit code, never merely `-ne 0`: a guard whose
+# proof accepts any non-zero cannot tell a no-verdict from the drift it exists to report.
+
+@test "a DERIVED repo that is not a checkout ⇒ NO VERDICT exit 3, never a vacuous 0" {
+  # A COPY of the script into a non-repo: $0 resolves fine, and lands somewhere that is not a
+  # checkout. Pre-fix this printed a single `SKIP claude-accounts` line and returned 0 (measured).
+  # CC_PARITY_* must all be UNSET — CC_PARITY_REPO short-circuits the derivation under test.
+  d="$BATS_TEST_TMPDIR/nonrepo"; mkdir -p "$d/scripts"
+  cp "$ASSERT" "$d/scripts/deploy-parity-assert.sh"
+  run env -u ITERM_SESSION_ID -u CC_PARITY_REPO -u CC_PARITY_BINDIR -u CC_PARITY_STRICT -u CC_PARITY_COPY -u CC_PARITY_LIVE bash "$d/scripts/deploy-parity-assert.sh"
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"CANNOT DETERMINE"* ]]
+}
+
+# The guard names its own path as a literal, so a rename would make it fire on every invocation.
+# That is fail-CLOSED (loud), but this pins it so the rename is caught here instead of in production.
+@test "the self-path named by the derivation guard exists in the tree (a rename cannot rot silently)" {
+  grep -q '\[ ! -f "\$REPO/scripts/deploy-parity-assert.sh" \]' "$ASSERT" || false
+  [ -f "$REPO_ROOT/scripts/deploy-parity-assert.sh" ]
+}
+
+# `diff` has THREE outcomes: 0 same, 1 differ, >=2 COULD NOT RUN. The script collapsed >=2 into the
+# `else` that reports STALE, so a diff that could not run fabricated drift about byte-identical
+# files. Measured 2026-07-29: `STALE  toolB  copy differs from repo` + exit 1 under the DRIFT banner.
+# Same shape this repo already paid for once with a bare `grep -q` whose rc=2 under fork exhaustion
+# fabricated hermeticity LEAKs naming clean suites (afaf40de / ed4e6c6a; scripts/host-suites.manifest).
+@test "a diff that CANNOT RUN (rc≥2) ⇒ NOVERDICT exit 3, never fabricated STALE drift" {
+  ln -sfn "$CC_PARITY_REPO/bin/toolA" "$CC_PARITY_BINDIR/toolA"
+  cp "$CC_PARITY_REPO/bin/toolB" "$CC_PARITY_BINDIR/toolB"   # BYTE-IDENTICAL: "same" is the only honest verdict
+  export CC_PARITY_LIVE="$BATS_TEST_TMPDIR/live"; mkdir -p "$CC_PARITY_LIVE"
+  fake="$BATS_TEST_TMPDIR/fakebin"; mkdir -p "$fake"
+  printf '#!/bin/sh\nexit 2\n' > "$fake/diff"; chmod +x "$fake/diff"
+  PATH="$fake:$PATH" run "$ASSERT"
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"NOVERDICT"* ]]
+  [[ "$output" != *"STALE"* ]]
+}
+
+# A genuine difference must STILL be drift — the positive control. Without it the test above is
+# satisfiable by a script that simply stopped detecting drift at all.
+@test "a diff that CAN run still reports a real difference as drift (the fix removed no detection)" {
+  ln -sfn "$CC_PARITY_REPO/bin/toolA" "$CC_PARITY_BINDIR/toolA"
+  printf 'echo B DIFFERENT\n' > "$CC_PARITY_BINDIR/toolB"
+  export CC_PARITY_LIVE="$BATS_TEST_TMPDIR/live"; mkdir -p "$CC_PARITY_LIVE"
+  run "$ASSERT"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"STALE"* ]]
+}
+
+# The existence leg inlined `$(git ls-files …)` in its heredoc, discarding git's rc — so a FAILED
+# listing was indistinguishable from an empty one: zero loop iterations, `missing` 0, parity reported.
+# This is the leg that catches the unlinked-new-file class, so a silent zero here is the worst placed
+# of the three. Hermetic, no stubbing: a DANGLING gitfile is what a linked worktree becomes once its
+# main .git is gone — `[ -e "$REPO/.git" ]` passes and ls-files fails.
+@test "existence: a FAILED tracked-file listing ⇒ NOVERDICT exit 3, never 'nothing missing'" {
+  ln -sfn "$CC_PARITY_REPO/bin/toolA" "$CC_PARITY_BINDIR/toolA"
+  cp "$CC_PARITY_REPO/bin/toolB" "$CC_PARITY_BINDIR/toolB"
+  export CC_PARITY_LIVE="$BATS_TEST_TMPDIR/live"; mkdir -p "$CC_PARITY_LIVE"
+  printf 'gitdir: /nonexistent\n' > "$CC_PARITY_REPO/.git"
+  run "$ASSERT"
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"NOVERDICT"* ]]
+  [[ "$output" == *"(existence)"* ]]
+}
+
+# A real drift and a no-verdict can co-occur (one tool differs, another's diff could not run). The
+# NAMED failure must win: it is a positive observation about the subject, where the no-verdict is a
+# fact about the machine. Same rule deploy-live.sh's host_checks applies (R6).
+@test "a named drift OUTRANKS a co-occurring no-verdict (exit 1, not 3)" {
+  ln -sfn "$CC_PARITY_REPO/bin/toolA" "$CC_PARITY_BINDIR/toolA"
+  printf 'echo B DIFFERENT\n' > "$CC_PARITY_BINDIR/toolB"      # a REAL difference
+  export CC_PARITY_LIVE="$BATS_TEST_TMPDIR/live"; mkdir -p "$CC_PARITY_LIVE"
+  printf 'gitdir: /nonexistent\n' > "$CC_PARITY_REPO/.git"     # AND a failed enumeration
+  run "$ASSERT"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"STALE"* ]]
 }
