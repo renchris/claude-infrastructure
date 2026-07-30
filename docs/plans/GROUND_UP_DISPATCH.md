@@ -609,7 +609,20 @@ state and is retained for history only — every count in it is stale.
   cosmetic rc=1 that still closed). Zero `--agent-id` processes remain; all three assignee
   worktrees survive with commits intact. §3 of `/tmp/gu-operator-steps.sh` is now guarded inert —
   **do not re-run it.**
-- **DEPLOY IS NO LONGER THE BLOCKING LEVER — ACTIVATION IS.** The checkout fast-forwarded at 15:30
+- ⚠ **THE BULLET BELOW DECAYED WITHIN THE HOUR — RE-DERIVED 17:5xZ: DEPLOY IS BLOCKING AGAIN, AT
+  44 BEHIND.** The 15:30 fast-forward was a one-off manual advance, not a repair: `deploy-live`
+  still refuses honestly because **0 of 33 postland stamps have ever been green**, so the live
+  layer cannot self-advance and the lag grows monotonically as trunk moves. Measured twice a
+  minute apart and it moved (43 → 44), which is the point. **Never read the bullet below as
+  current; run the command:**
+  `git -C ~/Development/claude-infrastructure rev-list --count HEAD..origin/main`.
+  Consequence unchanged from the original ring: every row's landed work — including rows 12 and 13
+  and everything I landed this session — is INERT in `~/.claude` until the checkout advances. This
+  is the same "carried number" failure the campaign has now recorded five times; the previous
+  coordinator's bullet was true when written and is false now.
+
+- *(historical, true at 15:30, FALSE by 17:5x — see above)* **DEPLOY IS NO LONGER THE BLOCKING
+  LEVER — ACTIVATION IS.** The checkout fast-forwarded at 15:30
   and `install.sh` ran (row 4's `session-beat.sh` and row 12's `cc-fleet` are live; row 3's wake
   floor reads 21 where its Phase 1 measured 0). The failure MOVED to **deployed-but-not-switched-on:
   11 staged activations un-run**, top two being `17-permission-beacon-wire` and
