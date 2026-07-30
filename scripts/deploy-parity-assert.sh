@@ -26,7 +26,9 @@
 # `ln -sf` per miss.
 #
 # READ-ONLY: compares and reports. It never installs, copies, or repairs anything.
-# Exit 0 = parity · 1 = drift (actionable: re-run ./install.sh) · 3 = missing prerequisite.
+# Exit 0 = parity · 1 = drift (actionable: re-run ./install.sh) · 3 = NO VERDICT — the repo under
+# assertion could not be resolved, so nothing was compared (see the derivation guard below). Both 0
+# and 1 CLAIM a comparison happened; this state must never borrow either exit code.
 # Covered by tests/deploy-parity.bats, whose fixtures drive it via CC_PARITY_REPO /
 # CC_PARITY_BINDIR / CC_PARITY_STRICT / CC_PARITY_COPY / CC_PARITY_LIVE (fully hermetic — no
 # host deps).
@@ -65,6 +67,30 @@ else
     /*)  REPO="$(cd "$_common/.." && pwd)" ;;
     *)   REPO="$(cd "$_self_root/$_common/.." && pwd)" ;;
   esac
+  # THE DERIVATION MUST BE ABLE TO FAIL (2026-07-29). Every leg below is written to SKIP what it
+  # cannot find: the strict loop reports SKIP on `[ ! -f "$src" ]`, the COPY and PATH loops
+  # `continue` SILENTLY, and the whole existence leg is gated on `[ -e "$REPO/.git" ]`. That is
+  # correct when a caller has DECLARED the subject — the hermetic fixtures do, via CC_PARITY_REPO,
+  # and one of them asserts precisely that a non-checkout repo skips the existence leg. It is
+  # catastrophic when the subject was DERIVED and the derivation missed: every leg skips, and the
+  # script still exits 0 — "the code running IS the code in this checkout", asserted about a
+  # checkout it never located. Measured on the pre-fix tree: copied into a non-repo directory it
+  # printed one `SKIP claude-accounts` line and returned 0, indistinguishable by exit code from
+  # real parity. A fail-OPEN on the one guard standing between a bare-ff deploy and a silently
+  # stale live layer — the same shape as the drift this script exists to catch.
+  # So an unresolvable REPO is a THIRD STATE: exit 3, never 0 (parity) and never 1 (drift), because
+  # both of those claim a comparison that did not happen. Validated ONLY here, on the derived path:
+  # CC_PARITY_REPO above is the caller declaring the subject, and it keeps its skip semantics.
+  # Self-path is named literally; a rename makes this fire LOUDLY rather than rot (and
+  # tests/deploy-parity.bats pins the literal against the tree so it cannot go stale unnoticed).
+  if [ ! -e "$REPO/.git" ] || [ ! -f "$REPO/scripts/deploy-parity-assert.sh" ]; then
+    printf 'deploy-parity-assert: CANNOT DETERMINE — no verdict, nothing was compared.\n' >&2
+    printf '  resolved REPO = %s\n' "$REPO" >&2
+    printf '  derived from  = %s\n' "$_self" >&2
+    printf '  That is not a checkout containing this script. This is NOT a parity result: invoke it\n' >&2
+    printf '  from the checkout, or set CC_PARITY_REPO to declare the subject explicitly.\n' >&2
+    exit 3
+  fi
 fi
 BINDIR="${CC_PARITY_BINDIR:-$HOME/bin}"
 
@@ -74,7 +100,28 @@ STRICT_TOOLS="${CC_PARITY_STRICT:-claude-accounts}"
 COPY_TOOLS="${CC_PARITY_COPY:-claude-latest claude-update claude-versions browsermcp-wrapper.sh claude-kimi}"
 
 drift=0
+noverdict=0
 report() { printf '  %-9s %-22s %s\n' "$1" "$2" "$3"; }
+
+# `diff` has THREE outcomes and only two of them are verdicts: 0 = same, 1 = differ, >=2 = COULD NOT
+# RUN (unreadable input, or fork exhaustion under load). Collapsing >=2 into "differ" fabricates
+# STALE drift about byte-identical files — measured 2026-07-29 with a `diff` that exits 2: an
+# identical pair reported `STALE  toolB  copy differs from repo` and the script exited 1 under the
+# DRIFT banner. This repo has already paid for exactly this shape once, in a different file: a bare
+# `grep -q` whose rc=2 under load (fork exhaustion, measured loadavg 15-48) was read as "no match"
+# and fabricated hermeticity LEAKS naming provably clean suites. Fixed there by afaf40de (rc>=2 is a
+# NON-VERDICT) + ed4e6c6a (retry the pure predicate before condemning); the whole story is in
+# scripts/host-suites.manifest. The retry is why >=2 is rare enough to be worth reporting honestly
+# rather than papering over: a transient loses to 3 tries, a real unreadable file survives them.
+same_file() {   # <a> <b> → 0 same · 1 differ · 2 NO VERDICT. Callers MUST handle 2 separately.
+  local i=0 rc
+  while [ "$i" -lt 3 ]; do
+    diff -q "$1" "$2" >/dev/null 2>&1; rc=$?
+    [ "$rc" -le 1 ] && return "$rc"
+    i=$((i + 1))
+  done
+  return 2
+}
 
 for tool in $STRICT_TOOLS; do
   src="$REPO/bin/$tool"; dest="$BINDIR/$tool"
@@ -87,14 +134,17 @@ for tool in $STRICT_TOOLS; do
     drift=1
   elif [ -L "$dest" ] && [ "$(cd "$(dirname "$(readlink "$dest")")" && pwd)/$(basename "$(readlink "$dest")")" = "$src" ]; then
     report "LINKED" "$tool" "→ repo (cannot drift)"
-  elif diff -q "$src" "$dest" >/dev/null 2>&1; then
-    # Content matches today, but it is a COPY where a symlink is required: it will drift
-    # again on the next repo edit. Actionable now, before the divergence appears.
-    report "UNLINKED" "$tool" "copy matches but must be a symlink → run ./install.sh"
-    drift=1
   else
-    report "STALE" "$tool" "copy DIFFERS from repo — repo edits are NOT live → run ./install.sh"
-    drift=1
+    same_file "$src" "$dest"
+    case $? in
+      # Content matches today, but it is a COPY where a symlink is required: it will drift
+      # again on the next repo edit. Actionable now, before the divergence appears.
+      0) report "UNLINKED" "$tool" "copy matches but must be a symlink → run ./install.sh"; drift=1 ;;
+      1) report "STALE" "$tool" "copy DIFFERS from repo — repo edits are NOT live → run ./install.sh"
+         drift=1 ;;
+      *) report "NOVERDICT" "$tool" "diff could not run (3 tries) — no claim either way"
+         noverdict=1 ;;
+    esac
   fi
 done
 
@@ -104,11 +154,14 @@ for tool in $COPY_TOOLS; do
   if [ ! -e "$dest" ]; then
     report "MISSING" "$tool" "not deployed → run ./install.sh"
     drift=1
-  elif diff -q "$src" "$dest" >/dev/null 2>&1; then
-    report "OK" "$tool" "copy identical to repo"
   else
-    report "STALE" "$tool" "copy differs from repo → run ./install.sh"
-    drift=1
+    same_file "$src" "$dest"
+    case $? in
+      0) report "OK" "$tool" "copy identical to repo" ;;
+      1) report "STALE" "$tool" "copy differs from repo → run ./install.sh"; drift=1 ;;
+      *) report "NOVERDICT" "$tool" "diff could not run (3 tries) — no claim either way"
+         noverdict=1 ;;
+    esac
   fi
 done
 
@@ -147,9 +200,14 @@ for tool in $STRICT_TOOLS; do
     else
       report "PATHGAP" "$tool" "not on THIS caller's PATH (add $BINDIR) — not deployment drift"
     fi
-  elif ! diff -q "$REPO/bin/$tool" "$onpath" >/dev/null 2>&1; then
-    report "SHADOWED" "$tool" "PATH resolves to $onpath, which differs from the repo"
-    drift=1
+  else
+    same_file "$REPO/bin/$tool" "$onpath"
+    case $? in
+      0) ;;
+      1) report "SHADOWED" "$tool" "PATH resolves to $onpath, which differs from the repo"; drift=1 ;;
+      *) report "NOVERDICT" "$tool" "diff could not run (3 tries) on $onpath — no claim either way"
+         noverdict=1 ;;
+    esac
   fi
 done
 
@@ -168,6 +226,20 @@ done
 LIVE="${CC_PARITY_LIVE:-$HOME/.claude}"
 missing=0
 if [ -e "$REPO/.git" ]; then    # a tracked-file listing needs a real checkout; anything else skips
+  # CAPTURE THE ENUMERATION AND ITS EXIT STATUS. Inlining `$(git ls-files)` directly in the heredoc
+  # below discarded git's rc, so a FAILED listing was indistinguishable from an empty one: the loop
+  # ran zero times, `missing` stayed 0, and this leg reported parity — the same non-verdict-as-verdict
+  # shape as `diff` above, in the ONE leg that catches the unlinked-new-file class (the class that was
+  # live at the time of writing: bin/cc-ctx-audit and hooks/lib/idl-log.sh both tracked and unlinked).
+  # Proved 2026-07-29 with `.git` a DANGLING gitfile — exactly what a linked worktree becomes once its
+  # main .git is gone: `[ -e "$REPO/.git" ]` passes, ls-files fails, and the assert returned 0 against
+  # a deliberately EMPTY live root. Recorded as a non-verdict, never as parity.
+  if ! _tracked="$(git -C "$REPO" ls-files -- hooks commands scripts bin skills 2>/dev/null)"; then
+    report "NOVERDICT" "(existence)" "git ls-files failed in $REPO — the tracked set is unknown"
+    noverdict=1
+    _tracked=""
+  fi
+  # Heredoc, NOT a pipe: the loop must run in THIS shell or its `missing`/`drift` writes are lost.
   while IFS= read -r rel; do
     [ -n "$rel" ] || continue
     # NOTE: in a `case` pattern `*` also matches `/`, so each deeper-path exclusion must precede the
@@ -195,7 +267,7 @@ if [ -e "$REPO/.git" ]; then    # a tracked-file listing needs a real checkout; 
     missing=$((missing + 1))
     drift=1
   done <<EOF
-$(git -C "$REPO" ls-files -- hooks commands scripts bin skills 2>/dev/null)
+$_tracked
 EOF
 fi
 if [ "$missing" -ne 0 ]; then
@@ -203,8 +275,17 @@ if [ "$missing" -ne 0 ]; then
   printf 'A bare ff-sync of the checkout can never create these links — run ./install.sh (or the ln -sf lines above).\n' >&2
 fi
 
+# ORDER IS THE DOCTRINE: a NAMED failure outranks a non-verdict. Real drift was actually observed on
+# some tool, so it is reported as drift even if a different tool's comparison could not run — the
+# same rule deploy-live.sh's host_checks applies (R6: a named failure is the only red; an rc that
+# names zero failures is a CUT, a fact about the machine, never a claim about the subject).
 if [ "$drift" -ne 0 ]; then
   printf '\ndeploy-parity-assert: DRIFT — the code running is not the code in this checkout.\n' >&2
   exit 1
+fi
+if [ "$noverdict" -ne 0 ]; then
+  printf '\ndeploy-parity-assert: NO VERDICT — a comparison could not run, and every leg that DID\n' >&2
+  printf 'run found parity. This is not a parity result: re-run it (typically transient load).\n' >&2
+  exit 3
 fi
 exit 0
