@@ -23,13 +23,25 @@
 # bats is deliberately ABSENT: the hook's transform (a) rewrites any spelling of `bats` to cc-bats,
 # which self-demotes, so a row here would only double-wrap it.
 #
-# Band choice is `background` for all four, consistent with cc-bats (the shim whose PRI 31→4
-# transition is proven live). §11.7: if the pending gu13-levers evidence shows `utility` semantics
-# warrant a split, that lands as an edit to THIS FILE — never a code change.
+# BAND = `utility` for all four (M1-rev, 2026-07-30; §11.9 per lead message). The day-one choice was
+# `background`, on the reasoning that it was the band cc-bats had already proven live. The levers
+# axis then MEASURED what that band actually costs a long batch job: a ~84–89× tax, because
+# `-c background` confines the process to the 2 E-cores — shared with ~628 system processes — and
+# drops it to I/O tier 2, with a ×84 fork penalty on top. `-c utility` costs ~2.4× under the same
+# load: PRI 20, P-core-eligible, tier-1 I/O, and it STILL yields to interactive work at PRI 31,
+# which is the whole property this row needs. Demoting batch work so hard that it never finishes is
+# not contention relief, it is a stall with a nice PRI number.
+#
+# Verified on this box 2026-07-30: `-c utility` → PRI exactly 20 (pinned, no drift) · `-c background`
+# → PRI 4 · `-c maintenance` → PRI 4 (indistinguishable from background by PRI alone).
+#
+# `background` and `maintenance` remain ADMITTED by the hook's allowlist — a row may still choose
+# them deliberately for genuinely fire-and-forget work. This file is the lever: changing a band is
+# an edit here, never a code change (§11.7).
 #
 # Each ERE is word-anchored with `(^|[[:space:]])…([[:space:]]|$)` so a substring in a path or a
 # filename cannot match (e.g. `cat notes-about-pytest.md` must not demote).
-background	(^|[[:space:]])(uv run +)?pytest([[:space:]]|$)
-background	(^|[[:space:]])shellcheck([[:space:]]|$)
-background	(^|[[:space:]])npm (install|ci)([[:space:]]|$)
-background	(^|[[:space:]])du -s
+utility	(^|[[:space:]])(uv run +)?pytest([[:space:]]|$)
+utility	(^|[[:space:]])shellcheck([[:space:]]|$)
+utility	(^|[[:space:]])npm (install|ci)([[:space:]]|$)
+utility	(^|[[:space:]])du -s

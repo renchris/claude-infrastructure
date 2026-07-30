@@ -11,8 +11,9 @@
 # artifacts instead: config/qos-batch.patterns (its four day-one rows ARE a deliverable, so a
 # fixture table would test nothing about them) and the $0-relative table resolution.
 #
-# The two prefix binaries are the real /usr/bin/nice and /usr/sbin/taskpolicy — present on every
-# macOS, and the point of the rewrite is that THOSE paths are what lands in the command.
+# The prefix is /usr/sbin/taskpolicy ALONE — present on every macOS, and the point of the rewrite is
+# that THAT path is what lands in the command. nice(1) is deliberately absent: M1-rev measured it
+# decorative (NI moves, PRI stays 31), so it was removed from the prefix rather than kept as cost.
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
@@ -24,7 +25,6 @@ setup() {
   CCBATS="$D/bin/cc-bats"
   printf '#!/bin/bash\nexit 0\n' > "$CCBATS"; chmod +x "$CCBATS"
   export CC_QOS_CC_BATS="$CCBATS"
-  NICE=/usr/bin/nice
   TP=/usr/sbin/taskpolicy
 }
 
@@ -75,34 +75,34 @@ mktable() {
 }
 
 @test "a command already carrying taskpolicy -c is untouched" {
-  run run_hook "$NICE -n 19 $TP -c background uv run pytest"
+  run run_hook "$TP -c utility uv run pytest"
   [ "$status" -eq 0 ]
   [ -z "$output" ]
 }
 
 # ── transform (b): the four SHIPPED day-one rows, each a measured consumer (§11.2) ─────────────
-@test "pytest (uv run form) gets the background demotion prefix" {
+@test "pytest (uv run form) gets the utility demotion prefix" {
   run run_hook "uv run pytest -m load"
   [ "$status" -eq 0 ]
-  [ "$(cmd_of "$output")" = "$NICE -n 19 $TP -c background uv run pytest -m load" ]
+  [ "$(cmd_of "$output")" = "$TP -c utility uv run pytest -m load" ]
 }
 
-@test "shellcheck gets the background demotion prefix" {
+@test "shellcheck gets the utility demotion prefix" {
   run run_hook "shellcheck hooks/qos-rewrite.sh"
   [ "$status" -eq 0 ]
-  [ "$(cmd_of "$output")" = "$NICE -n 19 $TP -c background shellcheck hooks/qos-rewrite.sh" ]
+  [ "$(cmd_of "$output")" = "$TP -c utility shellcheck hooks/qos-rewrite.sh" ]
 }
 
-@test "npm install gets the background demotion prefix" {
+@test "npm install gets the utility demotion prefix" {
   run run_hook "npm install --frozen-lockfile"
   [ "$status" -eq 0 ]
-  [ "$(cmd_of "$output")" = "$NICE -n 19 $TP -c background npm install --frozen-lockfile" ]
+  [ "$(cmd_of "$output")" = "$TP -c utility npm install --frozen-lockfile" ]
 }
 
-@test "recursive du gets the background demotion prefix" {
+@test "recursive du gets the utility demotion prefix" {
   run run_hook "du -sh /Users/x/Development"
   [ "$status" -eq 0 ]
-  [ "$(cmd_of "$output")" = "$NICE -n 19 $TP -c background du -sh /Users/x/Development" ]
+  [ "$(cmd_of "$output")" = "$TP -c utility du -sh /Users/x/Development" ]
 }
 
 # ── the conservative detector: structure means hands off (never string-surgery a compound) ─────
@@ -115,7 +115,7 @@ mktable() {
 # A DELIBERATE day-one coverage residual, pinned in both directions so that changing it is a
 # conscious decision rather than drift (lead review 2026-07-30). The form is common in this fleet's
 # agent Bash calls, so the residual is real; the reason transform (b) declines is that the prefix is
-# PREPENDED, and `taskpolicy -c background PYTEST_ADDOPTS=-q pytest` execs the assignment and dies.
+# PREPENDED, and `taskpolicy -c utility PYTEST_ADDOPTS=-q pytest` execs the assignment and dies.
 # Three halves, because emptiness alone would also pass if the hook did nothing at all:
 #   1. the skip itself                       2. the control: no assignment ⇒ prefixed
 #   3. the ASYMMETRY: transform (a) is unaffected, because it replaces a token in place
@@ -125,7 +125,7 @@ mktable() {
   [ -z "$output" ]
   run run_hook "pytest -m load"
   [ "$status" -eq 0 ]
-  [ "$(cmd_of "$output")" = "$NICE -n 19 $TP -c background pytest -m load" ]
+  [ "$(cmd_of "$output")" = "$TP -c utility pytest -m load" ]
   run run_hook "CC_X=1 timeout 500 /opt/homebrew/bin/bats t.bats"
   [ "$status" -eq 0 ]
   [ "$(cmd_of "$output")" = "CC_X=1 timeout 500 $CCBATS t.bats" ]
@@ -169,7 +169,7 @@ mktable() {
   [ -z "$output" ]
   run run_hook "uv run pytest -m load"
   [ "$status" -eq 0 ]
-  [ "$(cmd_of "$output")" = "$NICE -n 19 $TP -c background uv run pytest -m load" ]
+  [ "$(cmd_of "$output")" = "$TP -c utility uv run pytest -m load" ]
 }
 
 # Rewriting to a cc-bats that is not deployed would turn a working gate run into exit 127. The
@@ -187,14 +187,15 @@ mktable() {
   CC_QOS_PATTERNS="$(mktable bogus bogus '(^|[[:space:]])du -s')" run run_hook "du -sh ."
   [ "$status" -eq 0 ]
   [ -z "$output" ]
-  CC_QOS_PATTERNS="$(mktable ok utility '(^|[[:space:]])du -s')" run run_hook "du -sh ."
+  CC_QOS_PATTERNS="$(mktable ok background '(^|[[:space:]])du -s')" run run_hook "du -sh ."
   [ "$status" -eq 0 ]
-  [ "$(cmd_of "$output")" = "$NICE -n 19 $TP -c utility du -sh ." ]
+  [ "$(cmd_of "$output")" = "$TP -c background du -sh ." ]
 }
 
-# nice -n 19 ALONE leaves PRI at 31 on Darwin (cc-bats:150-159) — a nice-only prefix would cost two
-# forks and demote nothing, so a missing taskpolicy must refuse (b) entirely, not degrade.
-@test "a missing taskpolicy refuses transform (b) with no nice-only fallback; (a) still works" {
+# taskpolicy is the ONLY binary in the prefix, so its absence removes the entire mechanism — there
+# is no degraded tier to fall back to. M1-rev measured nice -n 19 alone as leaving PRI at 31, so a
+# nice-only prefix would cost a fork and demote nothing while LOOKING covered to a census.
+@test "a missing taskpolicy refuses transform (b) entirely; (a) still works" {
   export CC_QOS_TASKPOLICY="$D/nope/taskpolicy"
   run run_hook "uv run pytest -m load"
   [ "$status" -eq 0 ]
@@ -241,5 +242,5 @@ mktable() {
   run bash -c 'jq -n --arg c "$2" "{tool_input:{command:\$c}}" | bash "$1"' \
     _ "$D/deployed/hooks/qos-rewrite.sh" "uv run pytest -m load"
   [ "$status" -eq 0 ]
-  [ "$(cmd_of "$output")" = "$NICE -n 19 $TP -c background uv run pytest -m load" ]
+  [ "$(cmd_of "$output")" = "$TP -c utility uv run pytest -m load" ]
 }
