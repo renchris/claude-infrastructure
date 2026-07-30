@@ -134,7 +134,9 @@ emit() {
   if [ -d "$DECISIONS_DIR" ]; then
     for f in "$DECISIONS_DIR"/*.json; do
       [ -e "$f" ] || continue
-      st="$(jq -r '.status // ""' "$f" 2>/dev/null || echo "")"
+      # status FOLD (see bin/cc-decide § SFOLD): absent/empty `.status` reads as "open" so a packet
+      # written outside `cc-decide open` still reaches the digest instead of being silently skipped.
+      st="$(jq -r '.status // "" | if . == "" then "open" else . end' "$f" 2>/dev/null || echo "open")"
       [ "$st" = "open" ] || continue
       cls="$(jq -r '.class // "?"' "$f" 2>/dev/null)"; id="$(jq -r '.id // "?"' "$f" 2>/dev/null)"
       what="$(jq -r '.what_plain // ""' "$f" 2>/dev/null)"; dl="$(jq -r '.veto_deadline // ""' "$f" 2>/dev/null)"
@@ -228,7 +230,9 @@ compute_counts() { # <digest_file>
   fi
   if [ -d "$DECISIONS_DIR" ]; then
     for f in "$DECISIONS_DIR"/*.json; do [ -e "$f" ] || continue
-      st="$(jq -r '.status // ""' "$f" 2>/dev/null || echo "")"; [ "$st" = open ] && dopen=$((dopen + 1)); done
+      # status FOLD (see bin/cc-decide § SFOLD) — absent/empty reads as "open" so the count matches
+      # what `cc-decide list --open` shows; a bare `// ""` undercounted by every schema-less packet.
+      st="$(jq -r '.status // "" | if . == "" then "open" else . end' "$f" 2>/dev/null || echo "open")"; [ "$st" = open ] && dopen=$((dopen + 1)); done
   fi
   if [ -d "$PAGES_DIR" ]; then
     for f in "$PAGES_DIR"/*.page; do [ -e "$f" ] || continue

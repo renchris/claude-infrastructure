@@ -206,7 +206,8 @@ render_block() {
       # NB: jq -r renders \t in string literals as REAL tabs — line shape: created<TAB>mark<TAB>text;
       # sort on the created prefix (FIFO), then cut the prefix off. Never @tsv (it \t-escapes fields).
       jq -r '
-        select((.status // "") == "open" and (.class // "") == "C")
+        select((.status // "" | if . == "" then "open" else . end) == "open"
+               and (.class // "") == "C")
         | (.id // "?" | .[0:8]) as $id8
         | (.what_plain // "" | gsub("[\n\t]"; " ") | split(". ")[0]) as $s
         | ($s | if length > 110 then .[0:110] + "…" else . end) as $sent

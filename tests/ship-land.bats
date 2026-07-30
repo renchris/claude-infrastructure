@@ -186,14 +186,49 @@ on_branch_with() {  # $1=branch $2=file $3=content  → commit a change on a fre
   run bash "$SHIPLAND" --trunk main
   [ "$status" -eq 3 ]
   echo "$output" | grep -qi "PARKED"
-  # a class-B decision packet was written
+  # a class-C decision packet was written, in cc-decide's CANONICAL schema
   pkt="$(ls "$SHIP_LAND_DECISIONS_DIR"/*.json 2>/dev/null | head -1)"
   [ -n "$pkt" ]
-  grep -q '"class": "B"' "$pkt"
-  grep -q '"staged": true' "$pkt"
+  # class C, not B: this packet has no default and waits for a human, and `cc-decide open`'s own
+  # fail-closed gate REFUSES class-B without both --default and --deadline. C is also the class
+  # operator-readout renders on the operator board.
+  run jq -r '.class' "$pkt";                  [ "$output" = "C" ]
+  # RED-PROOF (the defect): `.status` was absent entirely, so the packet was invisible to
+  # `cc-decide list --open` (predicate `.status == "open"`) and to autonomy-sweep / cc-digest /
+  # operator-readout, which share that idiom. Six live packets were parked and unreachable.
+  run jq -r '.status' "$pkt";                 [ "$output" = "open" ]
+  # PAIRED GUARD: an empty-string deadline, never an absent key. In jq a missing key is `null`, and
+  # BOTH `null != ""` and `null < <now>` are true — so `status:"open"` with no deadline would make
+  # cc-decide expire-sweep auto-fire this packet to `expired-actioned` against a null default,
+  # silently closing a land-block no human ever saw. The empty string is what makes it never fire.
+  run jq -r '.veto_deadline' "$pkt";          [ "$output" = "" ]
+  run jq -r '.staged_artifact_path' "$pkt";   [ "$output" = "" ]
+  # canonical field NAMES (session_sid / staged_artifact_path), so the board's own jq finds them
+  run jq -e 'has("created") and has("session_sid") and has("route_around_taken")' "$pkt"
+  [ "$status" -eq 0 ]
+  # the evidence lines survive (additive schema growth is safe)
+  run jq -e '.matched | length > 0' "$pkt"
+  [ "$status" -eq 0 ]
   # never pushed
   git fetch -q origin main
   [ -z "$(git ls-tree origin/main -- migration.sql)" ]
+}
+
+@test "esc-scan packet is VISIBLE to cc-decide list --open (end-to-end producer→consumer)" {
+  # The whole point of the schema: ship-land's park must reach the operator's board. This asserts
+  # the two tools AGREE, so a future schema drift on either side fails here rather than silently
+  # parking work no one can see. Pre-fix this found nothing — the packet had no `.status`.
+  git checkout -q -b feat/esc-visible main
+  printf 'DROP TABLE users;\n' > migration.sql
+  git add migration.sql && git commit -q -m "feat: migration"
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 3 ]
+
+  CC_DECISIONS_DIR="$SHIP_LAND_DECISIONS_DIR" run bash "$REPO/bin/cc-decide" list --open
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'shipland-esc-'
+  echo "$output" | grep -q '^open '
 }
 
 @test "esc-scan FAIL-CLOSED: option-like SHIP_LAND_ESC_RE ('-foo') is applied via -- → exit 3, not fail-open" {

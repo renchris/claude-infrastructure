@@ -142,6 +142,109 @@ setup() {
   [ -f "$CC_DECISIONS_DIR/$idc.json" ]   # untouched open, NOT deleted
 }
 
+# ── status FOLD: an absent/empty .status reads as "open" ───────────────────────
+# Every status predicate is a jq `select`, so a packet with no `.status` DROPS OUT with a zero exit
+# — absent from the board rather than flagged, the wrong polarity for an operator queue. Six live
+# `shipland-esc-*` packets written directly by scripts/ship-land.sh (bypassing `open`) carried no
+# `.status` and were invisible to `list --open`, autonomy-sweep, cc-digest and operator-readout.
+# The producer is fixed; the fold is what recovers the LEGACY packets already on disk, without
+# rewriting them (inv7: a packet is EVIDENCE, never overwritten to satisfy a view).
+
+# Write a raw packet with NO .status key — exactly what ship-land used to emit.
+# NB: the `extra` object is interpolated into the jq PROGRAM, so it must reach jq as bare `{...}`.
+# Defaulting it inline as "${3:-\{\}}" does NOT work: inside double quotes bash leaves `\{` intact,
+# so jq receives a literal backslash and dies with a compile error — which fails the FIXTURE rather
+# than the assertion, and a fixture that cannot build proves nothing about the code under test.
+_raw_pkt() {  # $1=id $2=class [$3=extra jq object merged in]
+  local extra="${3:-}"
+  [ -n "$extra" ] || extra='{}'
+  mkdir -p "$CC_DECISIONS_DIR"
+  jq -n --arg id "$1" --arg c "$2" \
+    '{id:$id, class:$c, what_plain:"legacy packet with no status key",
+      options:[], recommendation:"review", default_if_no_veto:null, matched:["a.sql: effect"]}
+     + ('"$extra"')' > "$CC_DECISIONS_DIR/$1.json"
+  # A fixture is a CLAIM: assert it actually built, so a future quoting slip fails HERE, loudly.
+  [ -s "$CC_DECISIONS_DIR/$1.json" ] || { echo "_raw_pkt: fixture build failed for $1" >&2; return 1; }
+}
+
+@test "FOLD: a packet with NO .status key is still listed by list --open" {
+  # RED-PROOF: pre-fix the predicate was `.status == "open"`, so this row was silently dropped.
+  _raw_pkt legacy-nostatus C
+  run bash "$CD" list --open
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "legacy-nostatus"
+}
+
+@test "FOLD: the status COLUMN renders 'open' for a status-less packet, not the '?' pad" {
+  # The TSV padding sweep surfaced the defect by rendering `?` here (which then shifted .class into
+  # the status column). The fold must resolve the cell, not just pad it.
+  _raw_pkt legacy-col C
+  run bash "$CD" list --open
+  echo "$output" | grep -q '^open .*legacy-col'
+}
+
+@test "FOLD: a present-but-EMPTY .status also reads as open (a bare // is not enough)" {
+  # `//` substitutes for null/false ONLY, never for a present empty string — the same trap the CELL
+  # prelude documents. A truncated/hand-edited packet with "status":"" must still reach the board.
+  _raw_pkt legacy-empty C '{status:""}'
+  run bash "$CD" list --open
+  echo "$output" | grep -q "legacy-empty"
+}
+
+@test "FOLD does NOT over-reach: a TERMINAL status stays out of list --open" {
+  # The control that makes the fold falsifiable in the other direction. A fold implemented as
+  # "treat everything as open" would pass the three tests above and fail here.
+  _raw_pkt legacy-actioned C '{status:"actioned"}'
+  _raw_pkt legacy-vetoed   C '{status:"vetoed"}'
+  run bash "$CD" list --open
+  [ "$status" -eq 0 ]
+  ! echo "$output" | grep -q "legacy-actioned" || false
+  ! echo "$output" | grep -q "legacy-vetoed"   || false
+  # ...but --all still shows them (status is a VIEW; the packet is evidence)
+  run bash "$CD" list --all
+  echo "$output" | grep -q "legacy-actioned"
+}
+
+# ── the guard that makes the FOLD safe (contract guard, not a defect regression) ─
+# NB on RED-proof honesty: pre-fix these two cases passed VACUOUSLY — a status-less packet was
+# dropped by expire-sweep's `.status == "open"` too, so it could not fire either. They are live only
+# once the fold exists, and they pin the pairing: verified by applying the fold WITHOUT the
+# `(.veto_deadline // "")` guard, which auto-closes all six live packets against a null default.
+@test "FOLD+GUARD: a status-less, deadline-less class-B is NOT auto-fired by expire-sweep" {
+  # In jq a MISSING key is `null`, and BOTH `null != ""` and `null < <now>` are TRUE. So folding the
+  # status without guarding the deadline would transition a land-block NO HUMAN EVER SAW straight to
+  # `expired-actioned`, firing a null default. The fold must make such packets VISIBLE, never CLOSED.
+  _raw_pkt legacy-nodeadline B
+  run bash "$CD" expire-sweep
+  [ "$status" -eq 0 ]
+  ! echo "$output" | grep -q "legacy-nodeadline" || false
+  # still on disk and still reported open — parked, awaiting the operator
+  run jq -r '.status // "ABSENT"' "$CC_DECISIONS_DIR/legacy-nodeadline.json"
+  [ "$output" = "ABSENT" ]
+  run bash "$CD" list --open
+  echo "$output" | grep -q "legacy-nodeadline"
+}
+
+@test "FOLD+GUARD: a status-less class-B with an EMPTY deadline is not fired either" {
+  _raw_pkt legacy-emptydeadline B '{veto_deadline:""}'
+  run bash "$CD" expire-sweep
+  [ "$status" -eq 0 ]
+  ! echo "$output" | grep -q "legacy-emptydeadline" || false
+}
+
+@test "FOLD+GUARD: a status-less class-B WITH a past deadline still fires (the fold is live)" {
+  # The positive control for the pair: the guard must block only the deadline-LESS case. A packet
+  # that genuinely declared a past deadline must still fire its default under the fold — otherwise
+  # the guard would have silently disabled expire-sweep for every legacy packet.
+  _raw_pkt legacy-pastdeadline B '{veto_deadline:"2000-01-01T00:00:00Z", default_if_no_veto:"park it"}'
+  run bash "$CD" expire-sweep
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "legacy-pastdeadline"
+  echo "$output" | grep -q "park it"
+  run jq -r '.status' "$CC_DECISIONS_DIR/legacy-pastdeadline.json"
+  [ "$output" = "expired-actioned" ]
+}
+
 # ── veto / action transitions ──────────────────────────────────────────────────
 @test "veto transitions open→vetoed; the default then never fires on expire-sweep" {
   id=$(bash "$CD" open --class B --what "vetoed one" --default "d" --deadline "2000-01-01T00:00:00Z")
