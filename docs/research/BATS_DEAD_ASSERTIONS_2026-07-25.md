@@ -575,3 +575,45 @@ harmless mechanical edit.
 **So the through-line of §9 extends by one:** the detector, the fixer and the fixture each certified
 something they could not see — and so did the *gate*, which reported green over a test surface it
 had never once read.
+
+### 10g. Why the ratchet never held — the smoke is SHED under load
+
+§5 claims the ratchet closes the class: *"Because the commit gate runs `bats tests/`, a reintroduced
+dead assertion now fails the gate."* Measured on 2026-07-29, that premise does not hold, and it is
+the reason §8's inflow never stopped.
+
+`origin/main` carries **25 dead assertions across 9 suites** (derived at clean trunk with trunk's own
+analyzer — `launchd-parity-lint` ×8, `cc-classify` ×4, `alarm-polarity-lint` ×4, `waiting-recycle`
+×3, `cc-fleet` ×2, +4). The ratchet did not stop any of them, and the reason is in the gate's own
+log:
+
+```
+⏭ gate: smoke SKIPPED — 1-min load is at/above the ceiling 8. Shedding is a SKIP, never a wait
+→ ship-land --dry-run: reconciled onto origin/main + gate GREEN
+```
+
+`gate-select` picks the liveness suite correctly for any diff touching `tests/*.bats` — it simply
+**never runs**. Under sustained load (30 on 10 cores while this was measured, i.e. routinely) the
+smoke is shed wholesale and the land still exits GREEN. This is the `gate-never-ran ≠ gate-red`
+third state: not a failure anyone sees, and not a verdict either. **A ratchet is only as enforcing
+as the phase that executes it**, and this one lives in the phase that is dropped first when the box
+is busy.
+
+**The shedding itself is deliberate, and this is not an argument against it.** Land-pipeline v2 moved
+the full-suite claim off the land path on purpose — the monolith measured P(green) = 2.3% on a box
+whose ambient load never drops below the gate's own ceiling — and a cut smoke attesting
+`smoke:"skipped"` while the land proceeds is exactly R6, a non-verdict is not a red. What is stale is
+**§5 above**, written under v1, which located this ratchet's enforcement in the land gate. Under v2
+that enforcement belongs to the post-land verifier, and *that* control cannot currently be relied
+on: per the `land-pipeline-v2-verdict-inversion` record its green has never once occurred (0/34). So
+the class has no enforcing path at either end — which is exactly what a trunk at 25 would predict.
+
+Filed as backlog `e38d68f0c3c2` with the 15 concrete revivals, rather than absorbed here: reviving
+them again without addressing the shedding is the treadmill this section exists to name. One of the
+15 is a §9b false positive worth flagging in advance — `backup-prune-identity.bats:67`,
+`[ "$i" -lt 3 ] && write_n "$SRC_B" 1`, is a **for-loop guard**, so the uniform append inverts it and
+fails the test on iterations 3-11; it needs an `if`, not a ` || false`.
+
+Two lints landed here are deliberately placed *outside* that phase, in the statics block that always
+runs: `bats-shellcheck-lint` and its `--selftest`. The corpus invariant they assert is a grep, not a
+suite, for the same reason.
