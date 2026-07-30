@@ -185,7 +185,19 @@ seed_inbox() { # $1=uuid $2=n
   # A missing library must not strand a finished session forever — but it must never read as success
   # either. This is the one place the implementation degrades below the contract, so it is pinned
   # explicitly rather than left as an accident.
-  run env -u CC_MAILBOX_DIR bash -c '
+  #
+  # CLAUDE_CONFIG_DIR MUST BE UNSET, not merely HOME fixtured. selfclose_mail_disposition resolves
+  # row 3's lib from three candidates and the SECOND is
+  # "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/mailbox-pending.sh" — so on any box that exports
+  # CLAUDE_CONFIG_DIR (this one: ~/.claude-secondary, whose hooks/lib is a symlink into the live
+  # checkout) the REAL lib is found despite the fixture, mailbox_pending_count gets defined, the
+  # unavailable-lib branch is never taken, and the function returns 0 with EMPTY output. The test then
+  # fails on a missing "M3 SKIPPED" while the implementation is entirely correct — i.e. it was red on
+  # this box from the day it landed (b10ac9a7) and green anywhere else, blocking every land whose
+  # gate selects this suite. Fixturing $HOME alone cannot close a seam that has its OWN env override.
+  # (The repo's test-hermeticity ratchet covers HOME and the capacity gate; CLAUDE_CONFIG_DIR is a
+  # third seam of the same class that it does not yet police.)
+  run env -u CC_MAILBOX_DIR -u CLAUDE_CONFIG_DIR bash -c '
     set -uo pipefail
     unset -f mailbox_pending_count mailbox_migrate 2>/dev/null || true
     export HOME="'"$BATS_TEST_TMPDIR"'/nolib-home"; mkdir -p "$HOME/.claude"
