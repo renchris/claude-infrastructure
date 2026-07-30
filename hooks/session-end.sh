@@ -25,8 +25,13 @@ _se_reason=$(printf '%s' "$_se_input" | jq -r '.reason // empty' 2>/dev/null || 
 # would archive a LIVE team and shutdown-deny its teammates. Real exits (logout / prompt_input_exit
 # / other) proceed normally. The cp-count is still safe to drop on clear (it just re-creates).
 if [[ -n "$_se_sid" && "$_se_sid" =~ ^[A-Za-z0-9._-]+$ && "$_se_reason" != "clear" ]]; then
+  # `.daemon` holds the watchdog daemon's {pid,start-time} for the single-instance guard. It is dropped
+  # with the pair it describes: leaving it behind would let a LATER session reusing this sid consult a
+  # record of a daemon that has exited — and a pid-recycle match there would skip the spawn and leave
+  # that session with no watcher at all.
   rm -f "$HOME/.claude/watchdog/$_se_sid.pid" \
         "$HOME/.claude/watchdog/$_se_sid.id" \
+        "$HOME/.claude/watchdog/$_se_sid.daemon" \
         "$HOME/.claude/watchdog/cp-$_se_sid.count" 2>/dev/null || true
 fi
 
@@ -35,8 +40,12 @@ fi
 # historical backlog (1900+ cp-*.count + stale pids, back to Apr — no reaper covers this dir, nor
 # the per-fire /tmp handoff watcher logs). Reap them here, liveness- and age-gated so a long-lived
 # session's OWN live files are never touched:
-#   • <sid>.pid/.id  — removed only when the recorded pid is dead (a live session keeps its pair).
+#   • <sid>.pid/.id/.daemon — removed only when the recorded LEAD pid is dead (a live session keeps
+#     its set). `.daemon` rides with them for the pid-recycle reason above.
 #   • cp-<sid>.count — a live session bumps its mtime every tool use, so +2d ⇒ a dead session.
+#   • <sid>.death-<pid>.d — the watchdog's per-death claim dir. handle_crash rmdir's its own on both
+#     exits, so one surviving +2d means the handler itself died mid-crash; reaping it lets a future
+#     death for that sid be claimed again instead of being refused by a dead holder forever.
 #   • /tmp handoff-*  — a live fire's watcher log is seconds old; +2d ⇒ long finished.
 (
   _wd="$HOME/.claude/watchdog"
@@ -45,9 +54,10 @@ fi
     _p=$(cat "$_pf" 2>/dev/null)
     if [[ "$_p" =~ ^[0-9]+$ ]] && kill -0 "$_p" 2>/dev/null; then continue; fi
     _sid=$(basename "$_pf" .pid)
-    rm -f "$_wd/$_sid.pid" "$_wd/$_sid.id" "$_wd/cp-$_sid.count" 2>/dev/null || true
+    rm -f "$_wd/$_sid.pid" "$_wd/$_sid.id" "$_wd/$_sid.daemon" "$_wd/cp-$_sid.count" 2>/dev/null || true
   done
   find "$_wd" -name 'cp-*.count' -mtime +2 -delete 2>/dev/null || true
+  find "$_wd" -maxdepth 1 -type d -name '*.death-*.d' -mtime +2 -exec rmdir {} + 2>/dev/null || true
   # tmp sweep dirs are env-overridable so tests stay hermetic (never touch the real /tmp).
   # shellcheck disable=SC2086  # intentional word-split over space-separated dirs
   for _td in ${CC_TMP_SWEEP_DIRS:-${TMPDIR:-/tmp} /private/tmp}; do

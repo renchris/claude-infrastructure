@@ -685,6 +685,56 @@ if [[ -z "$SESSION_ID" ]]; then
   SESSION_ID="pid-$LEAD_PID"
 fi
 
+# ── SINGLE-INSTANCE GUARD (audit 2026-07-22 root cause 4, S1) ─────────────────────────────────────
+# SessionStart fires on startup AND resume AND clear AND compact, and this hook spawned a daemon
+# UNCONDITIONALLY on every one of them. Nothing retired the previous incarnation, so a long-lived pane
+# accumulated watchers over its life — all polling the same lead pid, all independently entitled to
+# declare its death. That is the count inflation the audit measured in the watchdog log: 3064 "LEAD
+# CRASH detected" lines over 2597 distinct pids, one pid recorded 19 times. Per-death consequences
+# multiply with it — a duplicated ledger row, a duplicated shutdown_request into every teammate inbox,
+# a duplicated teardown of the same panes.
+#
+# The guard needs both halves of the question, because "a daemon already exists for this sid" has two
+# opposite answers:
+#   · SAME lead pid  ⇒ a genuine duplicate SessionStart (resume/clear/compact inside one process).
+#                      The incumbent is watching the right pid. SKIP — spawning again adds a watcher,
+#                      never coverage.
+#   · DIFFERENT pid  ⇒ the sid moved to a NEW process. The incumbent is now watching a pid that is gone
+#                      (or, worse, RECYCLED to an unrelated process, which reads as alive forever), so
+#                      it would either declare a CRASH for a session that is alive or never fire again.
+#                      RETIRE it, then spawn fresh. Skipping here would leave the live session unwatched.
+#
+# Identity is {pid, start-time}, never a bare kill -0: the OS recycles pids, and a recycled pid reads as
+# a live daemon — which would make this guard silently skip spawning and leave a session with NO watcher
+# at all (strictly worse than the duplication it exists to prevent). Same discipline as the pid-identity
+# checks in lead-supervisor.sh and cc-teardown's teardown pin.
+DAEMON_FILE="$WATCHDOG_DIR/$SESSION_ID.daemon"
+daemon_alive() { # $1=daemon-file → 0 iff it records a LIVE process that is still the one we recorded
+  local f="$1" dpid dstart cur
+  [[ -f "$f" ]] || return 1
+  IFS=$'\t' read -r dpid dstart < "$f" 2>/dev/null || return 1
+  case "$dpid" in ''|*[!0-9]*) return 1 ;; esac
+  kill -0 "$dpid" 2>/dev/null || return 1
+  cur=$(ps -o lstart= -p "$dpid" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//')
+  [[ -n "$cur" && -n "$dstart" && "$cur" == "$dstart" ]]
+}
+# PREV_LEAD must be read BEFORE the pidfile is rewritten below — it is the only record of which process
+# the incumbent daemon is actually watching.
+PREV_LEAD=$(cat "$WATCHDOG_DIR/$SESSION_ID.pid" 2>/dev/null || true)
+if daemon_alive "$DAEMON_FILE"; then
+  if [[ -n "$PREV_LEAD" && "$PREV_LEAD" == "$LEAD_PID" ]]; then
+    log "watchdog ALREADY RUNNING for session=$SESSION_ID pid=$LEAD_PID — duplicate SessionStart, not spawning a second daemon"
+    exit 0
+  fi
+  # sid re-registered under a new process ⇒ the incumbent is stale. Kill by the VERIFIED identity only,
+  # so a recycled pid can never make this signal a stranger.
+  IFS=$'\t' read -r _stale_pid _ < "$DAEMON_FILE" 2>/dev/null || _stale_pid=""
+  if [[ -n "$_stale_pid" ]]; then
+    kill "$_stale_pid" 2>/dev/null || true
+    log "retired stale watchdog daemon pid=$_stale_pid for session=$SESSION_ID (was watching lead ${PREV_LEAD:-<none>}, now $LEAD_PID)"
+  fi
+fi
+
 # Record session→PID mapping for orphan-reaper to consult
 echo "$LEAD_PID" > "$WATCHDOG_DIR/$SESSION_ID.pid"
 echo "$SESSION_ID" > "$WATCHDOG_DIR/$SESSION_ID.id"
@@ -722,6 +772,28 @@ log "registered session=$SESSION_ID pid=$LEAD_PID"
   handle_crash() {
     local pid="$1" sid="$2"
     local affected_team_dirs=()
+
+    # ── ONE handler per death (belt to the single-instance guard's braces) ──
+    # The guard above stops watchers ACCUMULATING; this stops two that already coexist from both
+    # processing one death. The existing pid-equality pidfile removal at the end of this function
+    # already de-dupes SEQUENTIAL handlers (a later daemon finds no pidfile and takes its clean-exit
+    # branch), but it removes the pidfile only AFTER team handling — so two daemons waking inside that
+    # window both proceed, and the death is recorded twice, the shutdown_requests injected twice, the
+    # same panes torn down twice. mkdir is the atomic claim; the loser says so and returns without
+    # duplicating anything. Keyed by sid AND pid so a later, genuinely different death still claims.
+    local claim="$WATCHDOG_DIR/$sid.death-$pid.d" claim_mtime claim_age
+    if ! mkdir "$claim" 2>/dev/null; then
+      # A claim older than 10 min means its holder died mid-handling (same stale-reclaim idiom as the
+      # inbox lock below); reclaim it so a crash is never left permanently unhandled by a dead handler.
+      claim_mtime=$(stat -f%m "$claim" 2>/dev/null || echo 0)
+      claim_age=$(( $(date +%s) - ${claim_mtime:-0} ))
+      if [[ "${claim_mtime:-0}" -gt 0 && "$claim_age" -ge 600 ]]; then
+        echo "[watchdog $sid] reclaiming a stale death-claim for pid=$pid (holder gone ${claim_age}s)"
+      else
+        echo "[watchdog $sid] death of pid=$pid already claimed by another handler — not duplicating"
+        return 0
+      fi
+    fi
 
     # Classify the death + snapshot cause BEFORE team handling, so solo AND team
     # deaths land in the structured crash ledger honestly (classify_death + find_transcript
@@ -794,9 +866,10 @@ log "registered session=$SESSION_ID pid=$LEAD_PID"
       # overwritten it with the successor incarnation's LIVE pid, and deleting that silently disarms
       # a live session (frontier finding: 125 proven cross-incarnation disarms).
       if [[ "$(cat "$WATCHDOG_DIR/$sid.pid" 2>/dev/null)" == "$pid" ]]; then
-        rm -f "$WATCHDOG_DIR/$sid.pid" "$WATCHDOG_DIR/$sid.id"
+        rm -f "$WATCHDOG_DIR/$sid.pid" "$WATCHDOG_DIR/$sid.id" "$WATCHDOG_DIR/$sid.daemon"
         gc_teardown_marker "$sid" || true
       fi
+      rmdir "$claim" 2>/dev/null || true      # release the death-claim (never leave a dir per death)
       return 0
     fi
 
@@ -817,9 +890,10 @@ log "registered session=$SESSION_ID pid=$LEAD_PID"
 
     # rm-race guard (see above): never delete a pidfile a successor incarnation now owns.
     if [[ "$(cat "$WATCHDOG_DIR/$sid.pid" 2>/dev/null)" == "$pid" ]]; then
-      rm -f "$WATCHDOG_DIR/$sid.pid" "$WATCHDOG_DIR/$sid.id"
+      rm -f "$WATCHDOG_DIR/$sid.pid" "$WATCHDOG_DIR/$sid.id" "$WATCHDOG_DIR/$sid.daemon"
       gc_teardown_marker "$sid" || true
     fi
+    rmdir "$claim" 2>/dev/null || true        # release the death-claim (never leave a dir per death)
   }
 
 
@@ -923,7 +997,16 @@ log "registered session=$SESSION_ID pid=$LEAD_PID"
 
   local_watchdog "$LEAD_PID" "$SESSION_ID"
 ) </dev/null >/dev/null 2>&1 &
+WATCHDOG_PID=$!
 disown
 
-log "spawned watchdog daemon for session=$SESSION_ID pid=$LEAD_PID"
+# Record the daemon's {pid, start-time} so the next SessionStart can tell a live incumbent from a
+# recycled pid. Written by the PARENT (the subshell cannot portably read its own lstart before doing
+# work) and best-effort: an unwritable file degrades to today's behaviour — a duplicate spawn — never
+# to a missing watcher. If lstart is unreadable the identity is left unverifiable, which daemon_alive
+# treats as NOT alive: it re-spawns rather than risk skipping and leaving a session unwatched.
+WATCHDOG_START=$(ps -o lstart= -p "$WATCHDOG_PID" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//')
+printf '%s\t%s\n' "$WATCHDOG_PID" "$WATCHDOG_START" > "$DAEMON_FILE" 2>/dev/null || true
+
+log "spawned watchdog daemon pid=$WATCHDOG_PID for session=$SESSION_ID pid=$LEAD_PID"
 exit 0

@@ -242,3 +242,86 @@ mk_jetsam() { # $1=name-suffix $2=epoch its report was written
   mk_jetsam recent4 "$(date +%s)"
   [ "$(cause_at s_bad '' 0)" = "abrupt-unknown" ]
 }
+
+# ── SINGLE-INSTANCE GUARD (audit root cause 4) ─────────────────────────────────────────────────────
+# SessionStart fires on startup AND resume AND clear AND compact, and the hook spawned a daemon on every
+# one of them with nothing retiring the previous incarnation — so one pane accumulated watchers over its
+# life, each independently entitled to declare the lead's death (3064 detections over 2597 pids in the
+# live log; one pid recorded 19 times). These tests drive the REAL spawn path under a sandboxed $HOME.
+#
+# WATCHDOG_DIR is `readonly … "$HOME/.claude/watchdog"` and resolved at source time, so $HOME is the only
+# seam — set per-test (bats gives each test its own process, so this cannot leak into the tests above).
+
+wd_sandbox() {                       # sandbox HOME and return the watchdog dir
+  export HOME="$BATS_TEST_TMPDIR/home"
+  mkdir -p "$HOME/.claude/watchdog" "$HOME/.claude/logs"
+  WD="$HOME/.claude/watchdog"; WLOG="$HOME/.claude/logs/lead-crash-watchdog.log"
+}
+fire_hook() { echo "{\"session_id\":\"$1\"}" | bash "$HOOK"; }
+spawns()  { grep -c 'spawned watchdog daemon' "$WLOG" 2>/dev/null || true; }
+# Kill every daemon this test started. Without it a test leaves a real detached process polling the bats
+# shell's pid; it would self-exit, but not before the suite moves on.
+kill_daemons() { local f p
+  for f in "$WD"/*.daemon; do [[ -f "$f" ]] || continue
+    IFS=$'\t' read -r p _ < "$f" 2>/dev/null || continue
+    [[ -n "$p" ]] && kill "$p" 2>/dev/null || true
+  done; }
+
+@test "singleton: a duplicate SessionStart on the SAME lead pid does NOT spawn a second daemon" {
+  wd_sandbox
+  fire_hook s_dup                                     # startup
+  [ "$(spawns)" -eq 1 ]
+  local first; IFS=$'\t' read -r first _ < "$WD/s_dup.daemon"
+  fire_hook s_dup                                     # resume/clear/compact — same process, same pid
+  kill_daemons
+  [ "$(spawns)" -eq 1 ]                               # still ONE
+  grep -q 'ALREADY RUNNING' "$WLOG"
+  local now; IFS=$'\t' read -r now _ < "$WD/s_dup.daemon"
+  [ "$first" = "$now" ]                               # the INCUMBENT was kept, not replaced
+}
+
+@test "singleton: the same sid on a NEW lead pid RETIRES the stale daemon and spawns a fresh one" {
+  # The opposite answer to the same question: the incumbent is watching a pid that is gone, so it would
+  # declare a CRASH for a session that is alive (or, on a pid recycle, never fire again). Skipping here
+  # would leave the live session unwatched — strictly worse than the duplication the guard prevents.
+  wd_sandbox
+  fire_hook s_move
+  local stale; IFS=$'\t' read -r stale _ < "$WD/s_move.daemon"
+  echo 999999 > "$WD/s_move.pid"                      # the sid now maps to a DIFFERENT lead process
+  fire_hook s_move
+  kill_daemons
+  [ "$(spawns)" -eq 2 ]
+  grep -q 'retired stale watchdog daemon' "$WLOG"
+  local fresh; IFS=$'\t' read -r fresh _ < "$WD/s_move.daemon"
+  [ "$stale" != "$fresh" ]
+  run kill -0 "$stale"                                # the retired daemon is genuinely gone
+  [ "$status" -ne 0 ]
+}
+
+@test "singleton: identity is {pid,start-time} — a RECYCLED pid must not suppress the spawn" {
+  # A bare `kill -0` reads a recycled pid as a live daemon. That failure mode is the dangerous one: the
+  # guard would skip, and the session would run with NO watcher at all. $$ is alive but its start-time
+  # cannot match the fabricated one, so the record must be rejected.
+  wd_sandbox
+  printf '%s\t%s\n' "$$" "Not A Real Start Time" > "$WD/s_recycled.daemon"
+  fire_hook s_recycled
+  kill_daemons
+  [ "$(spawns)" -eq 1 ]                               # spawned anyway — coverage never silently skipped
+  ! grep -q 'ALREADY RUNNING' "$WLOG"
+}
+
+@test "singleton: a daemon record whose pid is DEAD does not suppress the spawn" {
+  wd_sandbox
+  printf '%s\t%s\n' 999998 "Mon Jan  1 00:00:00 2020" > "$WD/s_dead.daemon"
+  fire_hook s_dead
+  kill_daemons
+  [ "$(spawns)" -eq 1 ]
+}
+
+@test "singleton: a malformed/empty daemon record is ignored (fails toward spawning)" {
+  wd_sandbox
+  : > "$WD/s_empty.daemon"
+  fire_hook s_empty
+  kill_daemons
+  [ "$(spawns)" -eq 1 ]
+}
