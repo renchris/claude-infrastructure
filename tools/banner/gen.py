@@ -1821,10 +1821,27 @@ def drop_collinear(
 # (0.4365x), so anything under ~2 art px lands inside a single device pixel and shimmers rather
 # than resolves — and the twinkling tiers are held higher still, since a scaling sub-pixel feature
 # is the one thing guaranteed to crawl.
+#
+# THE FIELD'S PRESENCE, and it is the second KNOWN OPEN QUESTION — one line to turn.
+#
+# `STAR_FAINT_OP` is the majority tier's opacity, and therefore how loud the sky is: roughly 70% of
+# every star in the field carries this one number. At 0.34 — "the majority two steps down", as the
+# craft brief specifies — the field reads deliberately QUIET at the true 838 px width, quieter than
+# what shipped before, because the old continuous ramp put most stars around 0.5-0.7 with no
+# hierarchy at all. That quiet is the brief working as intended and it is also a matter of taste,
+# so it is named here rather than buried in the tuple.
+#
+#   0.34  as briefed — restraint; the six bright stars carry the field
+#   0.42  noticeably more present, hierarchy still intact
+#   0.50  approaching the old density; the tiers start to flatten back into one wash
+#
+# Do not raise it past ~0.55: at that point the majority tier meets the middle tier and the three
+# magnitude classes stop being distinguishable, which is the exact failure the tiers replaced.
+STAR_FAINT_OP = 0.34
 STAR_TIERS = (
     (4.2, 0.94),  # a handful, at palette white
     (3.0, 0.58),  # a middle band, one step down
-    (2.4, 0.34),  # the majority, two steps down
+    (2.4, STAR_FAINT_OP),  # the majority, two steps down
 )
 # The brightest tier is a COUNT, not a share. "A handful" does not scale with the field, and as a
 # 2% share it resolved to TWO stars on this variant's 115 — which is fewer than the number of
@@ -1878,7 +1895,17 @@ def starfield(art: Art, rng: random.Random) -> str:
     ]
     voids.append((art.clawd_x + SPRITE_W * art.clawd_scale / 2, 336.0, 190.0))
 
+    # The lunar disc is an OCCLUDER, not a void — a hard rejection with no probability ramp, because
+    # "mostly no stars behind the moon" is not a thing. This is not decoration: earthshine composites
+    # translucently (see MOON_EARTHSHINE), so a star inside the disc now shows straight THROUGH the
+    # moon at ~97% of its brightness. It did not before, when an opaque fill hid it — which is the
+    # trap, since the star keep-out and the earthshine's opacity look like unrelated decisions right
+    # up until one of them changes. The same disc serves the light scheme's sun for free.
+    mcx, mcy, mr_ = art.moon
+
     def void_mask(x: float, y: float) -> bool:
+        if math.hypot(x - mcx, y - mcy) <= mr_ + 3.0:
+            return False
         for vx, vy, vr in voids:
             d = math.hypot(x - vx, y - vy)
             if d < vr and rng.random() > (d / vr) ** 2.2:
@@ -1952,11 +1979,30 @@ def starfield(art: Art, rng: random.Random) -> str:
     return "".join(out)
 
 
-# Where the lit limb faces, in SVG's y-down frame: -90° is straight up. The crescent is tilted
-# just off vertical so the horns angle DOWN toward the horizon rather than standing up like a logo
-# mark. At 10° off vertical both cusps sit within 0.18r of the horizontal through the centre, so
-# the crescent unambiguously opens DOWNWARD — the horns cannot be read as standing up — while the
-# slight lean keeps it off the symmetry that would make it look like a logo.
+# ── the three knobs an art direction is likely to want to turn ────────────────────────────────────
+#
+# THE MOON'S ORIENTATION, and it is a KNOWN OPEN QUESTION — one line to flip.
+#
+# `MOON_LIT_DEG` is the compass bearing the LIT limb faces, in SVG's y-down frame: -90° is straight
+# up, so -100° tilts the belly slightly left and the crescent opens DOWNWARD (horns down).
+#
+#   -100.0  horns DOWN — what ships today, and what the narrative spec asks for.
+#   +100.0  horns UP   — the astronomically CORRECT night crescent. Flip this one number.
+#
+# Horns-up is correct and the spec is self-contradictory on this point. Its own rule — "the horns
+# point away from the Sun" — gives horns UP at night, because at night the Sun is BELOW the horizon,
+# so "away from the Sun" is upward; the lit limb faces down toward the sunken Sun and the cusps rise
+# away from it. That is the "wet moon" everyone has actually seen in evening twilight. The spec then
+# concludes "at night they angle down", which only follows if the Sun were ABOVE the horizon, i.e.
+# in daylight. Shipping horns-down is therefore a deliberate art choice, not a physical one, and it
+# is the operator's call to make rather than this file's to assume — hence one constant and this
+# comment instead of a value buried in a path expression.
+#
+# Both cusps sit within 0.18r of the horizontal at 10° off vertical, so the crescent reads
+# unambiguously one way or the other, and the slight lean keeps it off the symmetry that would make
+# it look like a logo mark. The whole crescent, its rim glow and its terminator gradient are all
+# built in a local frame and rotated by this angle, so flipping the sign carries every one of them
+# with it — nothing else needs touching.
 MOON_LIT_DEG = -100.0
 # The glow's centre, as a fraction of the disc radius along the lit direction. THIS is the operator's
 # defect: a glow concentric on the disc rings the unlit half as brightly as the lit one, which is a
@@ -1965,6 +2011,23 @@ MOON_GLOW_OFFSET = 0.42
 MOON_GLOW_MAX = (
     2.4  # hard ceiling on the glow radius in disc radii — past ~2.5x it reads as fog
 )
+# EARTHSHINE — the unlit disc, one ramp step above whatever is behind it. Same magnitude as one
+# MOON_AMBIENT band step, which is what "one ramp step" means everywhere else in this file.
+#
+# TRANSLUCENT rather than a solid fill, and that is the whole fix for a real regression. It shipped
+# once as an OPAQUE circle of `mix(sky, moon, 0.10)`, and at the true 838 px display width the moon
+# stopped reading as a crescent altogether: the disc closed the silhouette into a solid mid-dark
+# ball with a bright rim, i.e. an eclipse or a planet. The 3x crop hid it completely — at 3x the
+# crescent still reads — which is exactly why the spec says to judge at 838 px.
+#
+# Lowering the value could not have fixed it. Measured at mix 0.0 the disc was STILL a dark circle,
+# because an opaque fill OCCLUDES the glow bands behind it whatever its colour: against a lit
+# backdrop, "the sky colour" is darker than the sky. Earthshine is light being ADDED to the unlit
+# face, so it has to composite like light. At this opacity it can only ever lift its backdrop by one
+# step and can never close the silhouette, whatever sits behind it.
+#
+# The crescent is the design; this is a grace note and must never compete with it.
+MOON_EARTHSHINE = 0.03
 
 
 def moon_frame(art: Art) -> tuple[float, float, float, float, float, float]:
@@ -2066,10 +2129,6 @@ def moon_body(art: Art) -> str:
         f'fill="#000" opacity="{fmt(mr.uniform(0.03, 0.055))}"/>'
         for fx, fy, fr in ((0.80, -0.30, 0.20), (0.72, 0.34, 0.16), (0.90, 0.06, 0.11))
     )
-    # Earthshine is meant to be barely there. A first cut mixed 0.17 toward the moon and rendered a
-    # solid grey ball with a lit cap sitting on it. "One ramp step above the sky" is the whole
-    # instruction, and one step is small.
-    earth = mix(sky_at(d, cy), d.moon, 0.10)
     tilt = f"translate({fmt(cx)} {fmt(cy)}) rotate({fmt(MOON_LIT_DEG)})"
     path = crescent_d(r, b)
     return (
@@ -2078,7 +2137,9 @@ def moon_body(art: Art) -> str:
         f'<g transform="{tilt}">{rim}</g>'
         f"</g>"
         f'<g class="moonLit">'
-        f'<circle cx="{fmt(cx)}" cy="{fmt(cy)}" r="{fmt(r)}" fill="{earth}"/>'
+        # Earthshine. TRANSLUCENT, which is the load-bearing word — see MOON_EARTHSHINE.
+        f'<circle cx="{fmt(cx)}" cy="{fmt(cy)}" r="{fmt(r)}" fill="{d.moon}" '
+        f'fill-opacity="{fmt(MOON_EARTHSHINE)}"/>'
         f'<g transform="{tilt}">'
         f'<path class="mdisc" d="{path}"/>'
         f'<g clip-path="url(#mcres)">{maria}</g>'
