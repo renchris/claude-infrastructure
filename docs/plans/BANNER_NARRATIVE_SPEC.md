@@ -1187,17 +1187,65 @@ the source and false of the render.
 horn-direction knob therefore has no light-mode counterpart at all — it is a night-only decision, and
 any future `<picture>` day/night split does not need to carry it twice.
 
-### A ring artifact I claimed and then disproved — recorded so nobody re-raises it
+### ~~A ring artifact I claimed and then disproved~~ — **RETRACTED. The ring is REAL.**
 
-On first look at 838 px both the moon and the sun appeared to carry a scalloped, cog-like ring, which
-would have been a real defect in exactly what the sky rebuild changed. **Measurement refutes it.** The
-radial profile through the glow is smooth and monotonic — max step between adjacent radial samples is
-**1.8 levels** on the sun, and the moon's single 56-level step is its own limb, where a step belongs.
-The angular ripple is dominated by **1-3 lobes per turn**, which is the sky's own top-to-bottom
-gradient crossing the circle; a scalloped ring would show a tooth count in the tens. The glow bands
-are doing what they were built to do. Recorded because the eye produced a confident false positive at
-the exact size this document mandates judging at, which is worth knowing about the size rule itself:
-838 px is where defects become visible, and also where texture becomes over-readable.
+⛔ **The paragraph below was wrong, and it was wrong in an instructive way. Retained, struck through,
+because the retraction is the lesson.** The operator looked at the same render and reported *"it looks
+like there's layers of duplicates / artifacts"* and *"moon looks really weird now"* — and they were
+right. The ring is real, blocky and concentric, and it is the most visible thing about the new moon.
+
+**Why the measurement said otherwise: the instrument was the wrong SHAPE for the defect.** A radial
+profile *averaged over 360 angles* and an angular ripple *sampled at fixed radii* both integrate away
+an axis-aligned, stepped halo — a square-ish band smears into a smooth ramp the moment you average it
+around a circle. This repo has already paid for this exact error once: § README media records lossy
+WebP seaming flat regions while SSIM and PSNR passed it, and the rule drawn there was that **an
+area-averaged metric cannot fail a LOCAL defect.** An angular average is an area average. The right
+instrument is a raw scanline with no averaging at all.
+
+~~On first look at 838 px both the moon and the sun appeared to carry a scalloped, cog-like ring,
+which would have been a real defect in exactly what the sky rebuild changed. Measurement refutes it.
+The radial profile through the glow is smooth and monotonic — max step between adjacent radial samples
+is 1.8 levels on the sun, and the moon's single 56-level step is its own limb, where a step belongs.
+The angular ripple is dominated by 1-3 lobes per turn, which is the sky's own top-to-bottom gradient
+crossing the circle; a scalloped ring would show a tooth count in the tens. The glow bands are doing
+what they were built to do.~~
+
+### ⛔ The sky-craft moon is a REGRESSION against what ships, and "earthshine: blocker cleared" is FALSE
+
+Measured on a single horizontal scanline through the moon's centre at 838 px, `v6c-dusk-line`, no
+averaging, trunk vs `feat/banner-sky-craft`:
+
+| | peak on the centre row | falloff |
+|---|---|---|
+| **trunk (ships today)** | **193** | crescent at 174-193, then a smooth glow 110→100→87→81→75→68→62→55→49→43→37 |
+| **`feat/banner-sky-craft`** | **54** | a FLAT PLATEAU at 48-54 across the entire disc, then back to sky |
+
+**The moon lost 3.6× its luminance across its own body.** What ships today is a bright crescent with a
+smooth radial glow; the rebuild is a dark ball ringed by discrete blocky bands. At 838 px it does not
+read as a moon.
+
+**This falsifies § Earthshine's own verdict.** That section states the eclipse defect was fixed by
+`11a92d59` and records *"re-judged at 838 px the moon now reads as a crescent with faint earthshine …
+**Blocker cleared**"*. It is not cleared. The unlit disc is still a solid-reading dark ball at the
+shipping size — the very failure that section was written to close. The earlier fix changed earthshine
+from opaque to translucent, which is a real improvement in construction, but it did not restore the
+object: the disc is still dark enough to close the silhouette, and the banded glow that replaced the
+smooth one now reads as concentric duplicates around it.
+
+**Standing verdict: do not land the moon rebuild.** It was correctly held. The branch's other work is
+separable and may well be good on its own — the starfield magnitude tiers, the star keep-out inside
+the lunar disc, and the three named knobs are independent of the glow/earthshine construction, and
+`STAR_FAINT_OP` remains a live question. Splitting the branch is the cheap path; re-deriving the moon
+from trunk's smooth glow rather than from the banded rebuild is the honest one.
+
+**And the process lesson, which is bigger than the moon.** Three separate times in this session a
+claim about this artwork was settled by measurement and the measurement was the thing at fault — a
+cross-correlation that returned a false zero on `tf0` because the ground bands interpenetrate, a
+wrap-identity test whose failures were its own design, and this. **The operator's eye caught what
+three of my instruments missed.** The rule this document already carries — judge at 838 px — is
+necessary but not sufficient; the corollary is that when a human looking at the render disagrees with
+a metric, the metric is the suspect, and the first question is whether its shape can even represent
+the defect being claimed.
 
 ## ⛔ THE WORLD DOES NOT ACTUALLY STOP — `tf0` is warped at the wrong rate (2026-07-30, MEASURED)
 
