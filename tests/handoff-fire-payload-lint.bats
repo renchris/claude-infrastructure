@@ -11,6 +11,7 @@
 # lints the pre-trailer payload).
 
 setup() {
+  export CC_FIRE_CAPACITY_GATE=off  # capacity_gate() reads live vm.loadavg and refuses exit 9; pin it so this suite is load-insensitive
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   HF="$REPO/scripts/handoff-fire.sh"
   WT="$BATS_TEST_TMPDIR/wt"; mkdir -p "$WT"
