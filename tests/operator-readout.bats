@@ -143,8 +143,20 @@ EOS
   ( cd "$w"; echo z > z.txt; git add z.txt; git commit -q -m more; git push -q origin main
     git reset -q --hard HEAD~1 ) >/dev/null 2>&1   # local main now 1 behind its origin/main
   export CC_SHARED_CHECKOUT="$w"
-  run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
-  echo "$output" | grep -q "▶ bash ~/.claude/scripts/deploy-live.sh   \[deploy: live layer 1 behind origin/main\]"
+  # HERMETIC via the CC_DEPLOY_SCRIPT seam. It used to assert the operator's real
+  # ~/.claude/scripts/deploy-live.sh, which did not exist for the entire window in which
+  # com.claude.deploy-live logged 59 `cannot execute: No such file or directory` failures — so the
+  # test would have gone red exactly when the platter was broken, and for the wrong reason. The
+  # DEFAULT is pinned by its own case below (memory: hermetic-suite-leaks-caller-identity).
+  live="$BATS_TEST_TMPDIR/dl-default.sh"; printf '#!/bin/bash\n' > "$live"
+  CC_DEPLOY_SCRIPT="$live" run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  echo "$output" | grep -q "▶ bash $live   \[deploy: live layer 1 behind origin/main\]"
+}
+
+@test "deploy platter: the SEAM's default is the live ~/.claude/scripts copy" {
+  # The seam makes the branch testable; this keeps the production default itself from drifting
+  # unnoticed, which a fixtured seam alone cannot see.
+  grep -q 'DEPLOY_SCRIPT="\${CC_DEPLOY_SCRIPT:-\$HOME/.claude/scripts/deploy-live.sh}"' "$HOOK"
 }
 
 @test "class-B is never itemized; ≤24h deadline appears only as the veto summary line" {
@@ -168,6 +180,118 @@ EOS
   echo "$output" | grep -q ' 2 ▶ '
   ! echo "$output" | grep -q ' 3 ▶ ' || false
   echo "$output" | grep -q '+1 more'
+}
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# CLASS BUDGET — OPERATOR_SURFACE_V2 §4 M2 (the row's headline mechanism)
+#
+# THE DEFECT, measured live 2026-07-29: 55 steps = 1 deploy + 12 activation + 14 decision-C +
+# 28 blocked-backlog, rendered through MAX=6 in fixed source order, so the first class-C decision
+# sat at position 14 and the first blocked-backlog item past 27 — TWO OF FIVE CLASSES UNREACHABLE
+# AT ANY QUEUE DEPTH, with `+49 more` as their only trace. The starved classes were precisely the
+# ones needing a human. An alarm that always fires 55 times carries the same zero bits as one that
+# cannot fire; a `+N more` footer promises "more of what you just saw".
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+
+mk4() { # the live shape, scaled down: N activations + N class-C decisions + N blocked backlog items.
+  # Real producers only (fixture-shape-parity): cc-decide / cc-backlog / the activation-file
+  # convention — never hand-rolled JSON, so a producer-side schema change breaks the test, not
+  # the fixture silently.
+  local n="${1:-6}" i id
+  for i in $(seq 1 "$n"); do printf '#!/bin/bash\n' > "$CC_ACTIVATION_DIR/3$i-a-activate.sh"; done
+  for i in $(seq 1 "$n"); do "$DECIDE" open --class C --what "Decision $i. Detail." >/dev/null; done
+  for i in $(seq 1 "$n"); do
+    id="$("$BACKLOG" add --title "Blocked item $i" --project infra)"
+    "$BACKLOG" block "$id" --needs "operator step $i" >/dev/null
+  done
+}
+
+@test "CLASS BUDGET: at MAX=6 with 6 items in each of 3 classes, NO class is starved" {
+  # The acceptance criterion, stated as the read that proves it: every class present in the step set
+  # must appear in the render — itemized or as its own counted rollup. Pre-fix, `decision` and
+  # `backlog` appeared in neither.
+  mk4 6
+  run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'activation' || false
+  echo "$output" | grep -q 'decision C' || false
+  echo "$output" | grep -q '\[+.* more decision\]' || false
+}
+
+@test "CLASS BUDGET: each starved class rolls up with its OWN exact listing command (I5)" {
+  mk4 6
+  run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  echo "$output" | grep -qF '↳ for f in ~/.claude/autonomy/pending-activation/*.sh; do [ -f "$f.done" ] || echo "$f"; done' || false
+  echo "$output" | grep -qF '↳ cc-decide list --open --class C' || false
+}
+
+@test "CLASS BUDGET POSITIVE CONTROL: a class that FITS gets no rollup at all" {
+  # Without this, a rollup emitted unconditionally would pass every test above while telling the
+  # operator there is more to see when there is not — the invented-blocker failure, and the reason
+  # a detector's negative is not data until the positive case is pinned beside it.
+  printf '#!/bin/bash\n' > "$CC_ACTIVATION_DIR/40-only-activate.sh"
+  run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  echo "$output" | grep -q '40-only-activate' || false
+  ! echo "$output" | grep -q "↳" || false
+  ! echo "$output" | grep -q 'more activation' || false
+}
+
+@test "CLASS BUDGET: output is BOUNDED BY CONSTRUCTION at MAX + one rollup per class" {
+  # 20 items in each of three classes. The bound is structural, not a magic number: <= MAX itemized
+  # plus at most one rollup per class.
+  mk4 20
+  CC_OPREADOUT_MAX=6 run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  nlines="$(echo "$output" | grep -cE '^ [0-9]+ (▶|◆|↳)')"
+  [ "$nlines" -le 10 ]
+  [ "$nlines" -ge 7 ]                       # 6 itemized + >=1 rollup: it did not silently shrink
+}
+
+@test "CLASS BUDGET F6: CONFIRM-gated (effect-bearing) activations outrank print-only ones" {
+  # Filename order put 18-fleet-activate.sh (12 dark launchd labels) permanently below
+  # 04-page-channel-activate.sh and always in the truncated tail. CONFIRM-gating is the free signal.
+  printf '#!/bin/bash\necho hi\n'                        > "$CC_ACTIVATION_DIR/04-plain-activate.sh"
+  printf '#!/bin/bash\necho hi\n'                        > "$CC_ACTIVATION_DIR/05-plain-activate.sh"
+  printf '#!/bin/bash\n[ "${CONFIRM:-0}" = 1 ] || exit 0\n' > "$CC_ACTIVATION_DIR/18-gated-activate.sh"
+  CC_OPREADOUT_MAX=1 run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  echo "$output" | grep -q '18-gated-activate' || false
+  ! echo "$output" | grep -q ' 1 ▶ .*04-plain' || false
+}
+
+@test "CLASS BUDGET kill switch: CC_OPREADOUT_CLASSBUDGET=off restores flat order AND the footer" {
+  # I8 — every mechanism ships a switch, and the switch must restore the incumbent, ORDERING
+  # INCLUDED. Gating only the allocation left F6's reorder live under `off`; caught by asserting
+  # byte-level behaviour rather than "looks the same".
+  printf '#!/bin/bash\necho hi\n'                        > "$CC_ACTIVATION_DIR/04-plain-activate.sh"
+  printf '#!/bin/bash\n[ "${CONFIRM:-0}" = 1 ] || exit 0\n' > "$CC_ACTIVATION_DIR/18-gated-activate.sh"
+  CC_OPREADOUT_CLASSBUDGET=off CC_OPREADOUT_MAX=1 run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  echo "$output" | grep -q ' 1 ▶ .*04-plain-activate' || false     # glob order, not CONFIRM order
+  ! echo "$output" | grep -q "↳" || false                          # no rollups
+  echo "$output" | grep -q '+1 more' || false                      # the legacy aggregate footer
+}
+
+@test "I11: the deploy platter FALLS BACK to the repo copy when the live script is absent" {
+  # ~/.claude/scripts/deploy-live.sh did not exist for the whole window in which
+  # com.claude.deploy-live logged 59 `cannot execute: No such file or directory` failures, and both
+  # this hook and the board handed it over anyway. A recover command that cannot run is worse than
+  # no row: it teaches the operator the board lies.
+  w="$(mkrepo_landed i11)"
+  ( cd "$w"; echo z > z.txt; git add z.txt; git commit -q -m more; git push -q origin main
+    git reset -q --hard HEAD~1 ) >/dev/null 2>&1
+  mkdir -p "$w/scripts"; printf '#!/bin/bash\n' > "$w/scripts/deploy-live.sh"
+  export CC_SHARED_CHECKOUT="$w"
+  CC_DEPLOY_SCRIPT="$BATS_TEST_TMPDIR/absent-deploy.sh" run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  echo "$output" | grep -qF "bash $w/scripts/deploy-live.sh" || false
+  ! echo "$output" | grep -q 'absent-deploy.sh' || false
+}
+
+@test "I11 POSITIVE CONTROL: the live script is used verbatim when it DOES exist" {
+  w="$(mkrepo_landed i11b)"
+  ( cd "$w"; echo z > z.txt; git add z.txt; git commit -q -m more; git push -q origin main
+    git reset -q --hard HEAD~1 ) >/dev/null 2>&1
+  export CC_SHARED_CHECKOUT="$w"
+  live="$BATS_TEST_TMPDIR/present-deploy.sh"; printf '#!/bin/bash\n' > "$live"
+  CC_DEPLOY_SCRIPT="$live" run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  echo "$output" | grep -qF "bash $live" || false
 }
 
 @test "state line: dirty repo renders 🔧 with the uncommitted-file fact" {

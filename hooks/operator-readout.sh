@@ -43,7 +43,20 @@
 #                normalization cc-dispatch applies) → one COUNTED line, never itemized (open items
 #                are the dispatcher's work, not operator steps). Header when it is the only signal,
 #                footer otherwise.
-#   Line marks: `▶` = run this exact command · `◆` = judgment/decision (no single command exists).
+#   Line marks: `▶` = run this exact command · `◆` = judgment/decision (no single command exists) ·
+#   `↳` = N more of this class, and this command lists them (the class-rollup, §4 M2).
+#   (`▸` is NOT available as a mark — it is the header's own glyph, `OPERATOR ▸`; caught by a test.)
+#
+# ── CLASS BUDGET (OPERATOR_SURFACE_V2 §4 M2) ── the render budget is allocated per CLASS, not
+#   first-come, because a fixed window over a flat list STARVES WHOLE CLASSES. Measured 2026-07-29:
+#   55 steps (1 deploy + 12 activation + 14 decision-C + 28 blocked-backlog) through MAX=6 put the
+#   first class-C decision at position 14 and the first blocked-backlog item past 27 — 2 of 5 classes
+#   unreachable at ANY queue depth, with `+49 more` as their only trace. Every active class now gets
+#   a guaranteed itemized slot plus one counted `↳` rollup carrying its own listing command, so
+#   truncation can shorten a class but never delete one. Bounded by construction at MAX + 4 lines.
+#   Within the activation class, CONFIRM-gated (effect-bearing) scripts outrank print-only ones —
+#   filename order had `18-fleet` (12 dark launchd labels) permanently below `04-page-channel`.
+#   Kill switch: CC_OPREADOUT_CLASSBUDGET=off restores flat first-come + the `+N more` footer.
 #
 # ── SAFETY (house pattern) ── every hook path exits 0; jq/read failure → abstain; B-3 one IDL
 #   {fired|abstained:<reason>} line per invocation; kill-switch CC_OPREADOUT_DISABLE=1;
@@ -56,7 +69,7 @@
 # Env seams (tests): CC_OPREADOUT_DISABLE · CC_OPREADOUT_MAX · CC_OPREADOUT_TTL_S ·
 #   CC_OPREADOUT_NOW (epoch) · CC_OPREADOUT_STATE_DIR · CC_ACTIVATION_DIR · CC_DECISIONS_DIR ·
 #   CC_BACKLOG_FILE · CC_BACKLOG_BIN · WRAP_LEDGER_BIN · WRAP_TRUNK (passes through) ·
-#   CC_SHARED_CHECKOUT · CC_IDL · CC_CONTINUE_SENTINEL
+#   CC_SHARED_CHECKOUT · CC_IDL · CC_CONTINUE_SENTINEL · CC_OPREADOUT_CLASSBUDGET · CC_DEPLOY_SCRIPT
 set -uo pipefail
 
 CFG="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
@@ -66,7 +79,11 @@ ACT_DIR="${CC_ACTIVATION_DIR:-$HOME/.claude/autonomy/pending-activation}"
 DEC_DIR="${CC_DECISIONS_DIR:-$HOME/.claude/autonomy/decisions}"
 BLG_FILE="${CC_BACKLOG_FILE:-$HOME/.claude/autonomy/backlog.jsonl}"
 SHARED="${CC_SHARED_CHECKOUT:-$HOME/Development/claude-infrastructure}"
-MAX="${CC_OPREADOUT_MAX:-6}"
+# A SEAM, and specifically so the deploy platter's own existence check (I11) is testable in BOTH
+# states. Without it the suite asserts the operator's live ~/.claude/scripts/ and the verdict flips
+# by machine — borrowed hermeticity, and the flip case is exactly the one the check exists for.
+DEPLOY_SCRIPT="${CC_DEPLOY_SCRIPT:-$HOME/.claude/scripts/deploy-live.sh}"
+MAX="${CC_OPREADOUT_MAX:-6}"          # the ITEMIZED-line budget (§4 M2); rollups ride on top
 TTL="${CC_OPREADOUT_TTL_S:-900}"
 NOW="${CC_OPREADOUT_NOW:-$(date +%s 2>/dev/null || echo 0)}"
 SID="?"
@@ -108,32 +125,65 @@ RUNG="?"; TOTAL=0; Q_N=0
 render_block() {
   local cwd="$1"
   local steps_file; steps_file="$(mktemp "${TMPDIR:-/tmp}/opreadout.XXXXXX")" || return 0
-  # steps_file: one step per line — mark<TAB>text (mark ∈ {▶,◆}); array-free (bash-3.2-safe).
+  # steps_file: one step per line — class<TAB>mark<TAB>text; array-free (bash-3.2-safe).
+  # class ∈ {deploy,activation,decision,backlog}, in that (irreversibility) order — see the CLASS
+  # BUDGET block below, which is why the class is a FIELD and not just an ordering convention.
+  # TABC once, not per-`read`: `IFS="$(printf '\t')" read` re-runs that substitution on EVERY
+  # iteration, so hoisting it removes one fork per step rather than adding any (C19).
+  local TABC; TABC="$(printf '\t')"
+  # ONE switch for the WHOLE of M2 — allocation AND ordering. Bound here, before the first producer,
+  # because F6's CONFIRM-first reorder happens at APPEND time: gating only the allocation left the
+  # reorder live under `off`, so the switch did not restore the incumbent and A15 was unprovable.
+  # Caught by A15 itself, which is the point of asserting byte-identity rather than "looks the same".
+  local CBUDGET="${CC_OPREADOUT_CLASSBUDGET:-on}"
 
   # 1 · deploy-lag: shared checkout on trunk but behind its already-fetched origin/main.
   if [ -d "$SHARED" ] && git -C "$SHARED" rev-parse --git-dir >/dev/null 2>&1; then
-    local sbr behind
+    local sbr behind dscript
     sbr="$(git -C "$SHARED" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
     if [ "$sbr" = "main" ] || [ "$sbr" = "master" ]; then
       behind="$(git -C "$SHARED" rev-list --count "HEAD..origin/$sbr" 2>/dev/null || echo 0)"
       case "$behind" in ''|*[!0-9]*) behind=0 ;; esac
+      # I11 — EXISTENCE-CHECK THE PLATTER. This line named ~/.claude/scripts/deploy-live.sh
+      # unconditionally, and that path did not exist for the whole window in which
+      # com.claude.deploy-live logged 59 `cannot execute: No such file or directory` failures; it is
+      # valid today only because a symlink happened to land at 10:32 on 2026-07-29, four minutes
+      # after the newest failure line. A recover command that cannot run is worse than no row: it
+      # teaches the operator the board lies. Fall back to the repo copy, which is what the symlink
+      # points AT, so the platter is correct in both states.
+      dscript="$DEPLOY_SCRIPT"
+      [ -e "$dscript" ] || dscript="$SHARED/scripts/deploy-live.sh"
       # green-stamp-gated deploy (never a raw pull — that ships whatever is on origin, verified or not)
-      [ "$behind" -gt 0 ] && printf '▶\tbash ~/.claude/scripts/deploy-live.sh   [deploy: live layer %s behind origin/%s]\n' \
-        "$behind" "$sbr" >> "$steps_file"
+      [ "$behind" -gt 0 ] && printf 'deploy\t▶\tbash %s   [deploy: live layer %s behind origin/%s]\n' \
+        "$(tildify "$dscript")" "$behind" "$sbr" >> "$steps_file"
     fi
   fi
 
   # 2 · activations: staged, un-run (no .done marker). CONFIRM-gated scripts get CONFIRM=1 so the
   #     emitted line is the REAL run; `&&` keeps a failed run from falsely touching .done.
-  local f disp pre
+  #
+  #     ORDER IS A FINDING, not a style choice (§4 F6). The glob is filename order, so `18-fleet`
+  #     (12 launchd labels dark) sorted BELOW `04-page-channel` and was always the one truncated
+  #     away. CONFIRM-gating is the one signal already in hand at zero fork cost — the loop greps
+  #     for it anyway — and it is exactly the right one: a CONFIRM-gated script does real work
+  #     (cp + lint + bootstrap), a plain one prints instructions. Measured 2026-07-29: 9 of 12
+  #     pending were CONFIRM-gated. Effect-bearing first.
+  local f disp pre act_c="" act_p=""
   if [ -d "$ACT_DIR" ]; then
     for f in "$ACT_DIR"/*.sh; do
       [ -f "$f" ] || continue
       [ -f "$f.done" ] && continue
       disp="$(tildify "$f")"; pre=""
       grep -q 'CONFIRM' "$f" 2>/dev/null && pre="CONFIRM=1 "
-      printf '▶\t%sbash %s && touch %s.done   [activation]\n' "$pre" "$disp" "$disp" >> "$steps_file"
+      if [ "$CBUDGET" = off ]; then       # legacy: glob order, one stream
+        act_c="${act_c}activation${TABC}▶${TABC}${pre}bash ${disp} && touch ${disp}.done   [activation]"$'\n'
+      elif [ -n "$pre" ]; then
+        act_c="${act_c}activation${TABC}▶${TABC}${pre}bash ${disp} && touch ${disp}.done   [activation]"$'\n'
+      else
+        act_p="${act_p}activation${TABC}▶${TABC}bash ${disp} && touch ${disp}.done   [activation]"$'\n'
+      fi
     done
+    [ -n "$act_c$act_p" ] && printf '%s' "$act_c$act_p" >> "$steps_file"
   fi
 
   # 3 · open class-C decisions (human-gated), oldest first. Prefer an exact command; degrade
@@ -150,9 +200,9 @@ render_block() {
         | ($s | if length > 110 then .[0:110] + "…" else . end) as $sent
         | (.run_command // "" | gsub("[\n\t]"; " ")) as $run
         | (.staged_artifact_path // "" | gsub("[\n\t]"; " ")) as $staged
-        | (if $run != ""      then "▶\t\($run)   [decision C \($id8): \($sent | .[0:60])]"
-           elif $staged != "" then "▶\tbash \($staged)   [decision C \($id8): \($sent | .[0:60])]"
-           else "◆\t[decision C \($id8)] \($sent)" end) as $line
+        | (if $run != ""      then "decision\t▶\t\($run)   [decision C \($id8): \($sent | .[0:60])]"
+           elif $staged != "" then "decision\t▶\tbash \($staged)   [decision C \($id8): \($sent | .[0:60])]"
+           else "decision\t◆\t[decision C \($id8)] \($sent)" end) as $line
         | "\(.created // "?")\t\($line)"' "$f" 2>/dev/null
     done | sort | cut -f2- >> "$steps_file"
   fi
@@ -170,8 +220,8 @@ render_block() {
       | (.title // "" | gsub("[\n\t]"; " ") | .[0:60]) as $t
       | (.needs // "" | gsub("[\n\t]"; " ") | .[0:90]) as $n
       | (.run // .run_command // "" | gsub("[\n\t]"; " ")) as $run
-      | if $run != "" then "▶\t\($run)   [backlog \(.id // "?"): \($t)]"
-        else "◆\t[backlog \(.id // "?")] \($t) — needs: \($n)" end' 2>/dev/null >> "$steps_file"
+      | if $run != "" then "backlog\t▶\t\($run)   [backlog \(.id // "?"): \($t)]"
+        else "backlog\t◆\t[backlog \(.id // "?")] \($t) — needs: \($n)" end' 2>/dev/null >> "$steps_file"
   fi
 
   # 5 · open-queue visibility (operator crux 2026-07-25: "we are just sitting here on todo items…
@@ -250,30 +300,128 @@ render_block() {
     fi
   fi
 
-  # ── compose (Pyramid: governing line → numbered steps → counted footer) ──
-  local total shown=0 over
-  total="$(grep -c . "$steps_file" 2>/dev/null || echo 0)"; case "$total" in ''|*[!0-9]*) total=0 ;; esac
+  # ── CLASS BUDGET (§4 M2 — the row's headline mechanism) ────────────────────────────────────────
+  # THE DEFECT: a fixed window over a flat, source-ordered list STARVES WHOLE CLASSES. Measured
+  # 2026-07-29 on this host: 55 steps = 1 deploy + 12 activation + 14 decision-C + 28 blocked-backlog,
+  # rendered through MAX=6, so a class-C decision first appeared at position 14 and a blocked backlog
+  # item past 27 — i.e. **2 of 5 classes were unreachable at any queue depth**, and the queue only
+  # grows. The two starved classes are precisely the ones that need a human (a genuine judgment call,
+  # a blocked work item); the `+49 more` footer promised "more of what you just saw" and was the only
+  # trace of them.
+  #
+  # THE INVERSION: an alarm that ALWAYS fires 55 times and an alarm that CANNOT fire carry the same
+  # zero bits. Absence-is-loud has no term for the cost of loudness, so the budget is allocated per
+  # CLASS rather than first-come: every active class gets a guaranteed itemized slot, and whatever it
+  # cannot itemize becomes ONE counted rollup line carrying that class's own exact listing command.
+  # Truncation can then shorten a class but can never DELETE one (I10).
+  #
+  # The output is bounded BY CONSTRUCTION, not by a magic number: <= MAX itemized + one rollup per
+  # class = MAX + 4 lines worst case. MAX's meaning narrows from "total lines" to "itemized lines".
+  # Kill switch: CC_OPREADOUT_CLASSBUDGET=off restores flat first-come + the `+N more` footer exactly.
+  local total=0 cls mark text
+  local c_deploy=0 c_activation=0 c_decision=0 c_backlog=0
+  # PASS 1 — count per class. Fork-free: a `< file` redirect is not a fork, and this REPLACES the
+  # `grep -c .` that used to compute the total, so the class budget costs one fork LESS than the
+  # flat renderer it supersedes (C19: no new fork may enter render_block).
+  while IFS="$TABC" read -r cls mark text; do
+    [ -n "$mark" ] || continue
+    total=$((total + 1))
+    case "$cls" in
+      deploy)     c_deploy=$((c_deploy + 1)) ;;
+      activation) c_activation=$((c_activation + 1)) ;;
+      decision)   c_decision=$((c_decision + 1)) ;;
+      backlog)    c_backlog=$((c_backlog + 1)) ;;
+    esac
+  done < "$steps_file"
   TOTAL="$total"
   if [ "$total" -eq 0 ] && [ "$RUNG" != "📦" ] && [ "$Q_N" -eq 0 ]; then rm -f "$steps_file"; return 0; fi
 
-  local hdr
+  # ALLOCATION. Written out per class rather than looped: four classes is a fixed set, and the
+  # alternatives (eval, or a `$(fn)` lookup) cost either clarity or a fork per step.
+  local budget="$MAX" before legacy=0
+  local a_deploy=0 a_activation=0 a_decision=0 a_backlog=0
+  if [ "$CBUDGET" = off ]; then
+    legacy=1; a_deploy="$MAX"; a_activation="$MAX"; a_decision="$MAX"; a_backlog="$MAX"
+  else
+    # floor: one guaranteed itemized slot per ACTIVE class, in irreversibility order
+    [ "$c_deploy"     -gt 0 ] && [ "$budget" -gt 0 ] && { a_deploy=1;     budget=$((budget - 1)); }
+    [ "$c_activation" -gt 0 ] && [ "$budget" -gt 0 ] && { a_activation=1; budget=$((budget - 1)); }
+    [ "$c_decision"   -gt 0 ] && [ "$budget" -gt 0 ] && { a_decision=1;   budget=$((budget - 1)); }
+    [ "$c_backlog"    -gt 0 ] && [ "$budget" -gt 0 ] && { a_backlog=1;    budget=$((budget - 1)); }
+    # top-up: ROUND-ROBIN, one slot per class per pass, until the budget is spent or no class can
+    # use another. Round-robin rather than a per-class ceiling constant, because a ceiling leaves the
+    # budget UNSPENT: at a ceiling of 2 with two active classes, MAX=6 rendered only 4 lines and two
+    # slots the operator had room for went to nobody. Fairness comes from the pass structure, not
+    # from a second magic number. Terminates on the no-slot-taken guard.
+    while [ "$budget" -gt 0 ]; do
+      before="$budget"
+      [ "$a_deploy"     -lt "$c_deploy" ]     && [ "$budget" -gt 0 ] && { a_deploy=$((a_deploy + 1));         budget=$((budget - 1)); }
+      [ "$a_activation" -lt "$c_activation" ] && [ "$budget" -gt 0 ] && { a_activation=$((a_activation + 1)); budget=$((budget - 1)); }
+      [ "$a_decision"   -lt "$c_decision" ]   && [ "$budget" -gt 0 ] && { a_decision=$((a_decision + 1));     budget=$((budget - 1)); }
+      [ "$a_backlog"    -lt "$c_backlog" ]    && [ "$budget" -gt 0 ] && { a_backlog=$((a_backlog + 1));       budget=$((budget - 1)); }
+      [ "$before" = "$budget" ] && break
+    done
+  fi
+
+  # ── compose (Pyramid: governing line → numbered steps → counted footer) ──
+  local hdr shown=0 over
   if [ "$total" -gt 0 ]; then hdr="OPERATOR ▸ ${total} manual step(s)${state:+ · $state}"
   elif [ "$RUNG" = "📦" ]; then hdr="OPERATOR ▸ ${state}"
   else hdr="OPERATOR ▸ ${q_line}"; fi   # queue-only render: the queue IS the governing line
   printf '%s\n' "$hdr"
 
-  local n=0 mark text
-  while IFS="$(printf '\t')" read -r mark text; do
+  local n=0 alloc pc=0 last_cls="" rest rcmd rtot
+  # close_class — the COMPLETENESS guarantee. Emits at most one `▸` rollup for whatever the class
+  # could not itemize, carrying the exact command that LISTS the rest. `▸` is deliberately a third
+  # mark: `▶` = run this exact step · `◆` = judgment, no single command exists · `▸` = N more of
+  # this class, and this command shows them. Every command here was RUN before being plattered (I5).
+  # Dynamic scoping is load-bearing and safe: the `while … done < file` loop is not a subshell, so
+  # `n` increments survive.
+  close_class() {
+    [ "$legacy" = 1 ] && return 0
+    # shellcheck disable=SC2016  # $f is EMITTED, not evaluated: the loop variable must expand in the
+    # OPERATOR's shell when they paste the line, which is the whole point of a platter.
+    case "$1" in
+      deploy)     rtot="$c_deploy";     rcmd="" ;;
+      activation) rtot="$c_activation"; rcmd='for f in ~/.claude/autonomy/pending-activation/*.sh; do [ -f "$f.done" ] || echo "$f"; done' ;;
+      decision)   rtot="$c_decision";   rcmd='cc-decide list --open --class C' ;;
+      backlog)    rtot="$c_backlog";    rcmd='cc-backlog list --blocked' ;;
+      *) return 0 ;;
+    esac
+    rest=$(( rtot - $2 )); [ "$rest" -gt 0 ] || return 0
+    n=$((n + 1))
+    printf ' %d ↳ %s   [+%s more %s]\n' "$n" "${rcmd:-cc-blockers}" "$rest" "$1"
+  }
+
+  while IFS="$TABC" read -r cls mark text; do
     [ -n "$mark" ] || continue
-    n=$((n+1)); [ "$n" -gt "$MAX" ] && break
-    printf ' %d %s %s\n' "$n" "$mark" "$text"
-    shown=$((shown+1))
+    if [ "$cls" != "$last_cls" ]; then
+      [ -n "$last_cls" ] && close_class "$last_cls" "$pc"
+      last_cls="$cls"; pc=0
+    fi
+    case "$cls" in
+      deploy)     alloc="$a_deploy" ;;
+      activation) alloc="$a_activation" ;;
+      decision)   alloc="$a_decision" ;;
+      backlog)    alloc="$a_backlog" ;;
+      *)          alloc="$MAX" ;;
+    esac
+    if [ "$legacy" = 1 ] && [ "$n" -ge "$MAX" ]; then break; fi
+    if [ "$pc" -lt "$alloc" ]; then
+      n=$((n + 1)); pc=$((pc + 1)); shown=$((shown + 1))
+      printf ' %d %s %s\n' "$n" "$mark" "$text"
+    fi
   done < "$steps_file"
+  [ -n "$last_cls" ] && close_class "$last_cls" "$pc"
   rm -f "$steps_file"
 
-  over=$(( total - shown )); [ "$over" -lt 0 ] && over=0
+  # The `+N more` footer is the LEGACY path only. Under the class budget it is not merely redundant,
+  # it is the defect: one aggregate number that hides which CLASSES are missing (§4 F5).
   local foot=""
-  [ "$over" -gt 0 ] && foot="+${over} more"
+  if [ "$legacy" = 1 ]; then
+    over=$(( total - shown )); [ "$over" -lt 0 ] && over=0
+    [ "$over" -gt 0 ] && foot="+${over} more"
+  fi
   [ -n "$b_line" ] && foot="${foot:+$foot · }${b_line}"
   # queue rides the footer whenever it is not already the header (steps or 📦 govern the headline).
   if [ -n "$q_line" ] && { [ "$total" -gt 0 ] || [ "$RUNG" = "📦" ]; }; then
