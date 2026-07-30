@@ -733,6 +733,47 @@ def assert_warp_within_tile() -> None:
         )
 
 
+def assert_warp_matches_scroll(art: Art, sheet: str) -> None:
+    """A layer's warp must be sized for the speed the STYLESHEET actually scrolls it at.
+
+    Every parallax layer's period is written twice: `tiled()` takes it as `dur` and sizes the warp
+    wrapper from `TILE / dur`, and the stylesheet writes it again as the `sc` animation duration.
+    Nothing compared them, and they disagreed in the shipped artifact for `tf0` — declared `P/8`
+    (30 s, so its wrapper was `wp64`) while `.tf0s` scrolled at `STRIP_PERIOD` (20 s, 96 px/s).
+
+    `warp_css` scales each layer's world-modulation offset by its REGISTERED rate, so the mismatch
+    means the modulation under-compensates by exactly the ratio between the two: through THE ASK's
+    dead world `tf0` kept moving at 96-64 = 32 px/s while `tf1` and `fgb` froze byte-exact, and
+    through THE REFUSAL's rewind it travelled two-thirds of everyone else. Measured, not inferred —
+    two frames inside the stop differed over 17.3% of that band's pixels against 0.0% for its
+    neighbours.
+
+    Nothing else could have caught it. `divides_P` passes (both 20 and 30 divide 240), the print lock
+    is anchored to `.fprs` and never looks at `tf0`, `warp_css` only requires that SOME layer sits at
+    the strip rate, and every render is self-consistent. The defect lives exactly in the gap between
+    two copies of one number, which is why the check has to read the EMITTED stylesheet rather than
+    recompute the period — recomputing it would only prove this function agrees with itself.
+    """
+    for cls, dur in sorted(_LAYER_PERIOD.items()):
+        m = re.search(rf"\.{re.escape(cls)}\{{animation:sc ([0-9.]+)s", sheet)
+        if not m:
+            raise SystemExit(
+                f"gen[{art.key}]: layer '{cls}' is tiled with a {dur:g}s period but the stylesheet "
+                f"never scrolls it — a tiled layer with no `sc` rule is painted and then frozen, "
+                f"which reads as a stuck decal rather than as ground."
+            )
+        css_dur = float(m.group(1))
+        if abs(css_dur - dur) > 1e-6:
+            raise SystemExit(
+                f"gen[{art.key}]: layer '{cls}' SCROLL/WARP MISMATCH — the stylesheet scrolls it at "
+                f"{css_dur:g}s ({TILE / css_dur:.0f}px/s) but it registered a {dur:g}s period "
+                f"({TILE / dur:.0f}px/s) with its warp wrapper. The world modulation is scaled by "
+                f"the registered rate, so a stopped world would leave this layer creeping at "
+                f"{abs(TILE / css_dur - TILE / dur):.0f}px/s while every correctly-warped layer "
+                f"freezes. Write ONE period to both sites."
+            )
+
+
 def assert_print_lock(art: Art, encoded: list[tuple[float, float]]) -> None:
     """The thesis, re-proved UNDER the warp: the foot lands in an existing print every stride.
 
@@ -1323,6 +1364,13 @@ def rects(cols, cls: str) -> str:
 # animations that are used are emitted. Keyed by px/s.
 _WARPED: set[float] = set()
 
+# The period each tiled layer DECLARED, keyed by its scroll class. Recorded because a layer's period
+# is written twice — once here, where it sizes the warp wrapper, and once in the stylesheet, where it
+# drives the actual scroll — and nothing used to compare them. `tf0` shipped for months declaring
+# P/8 (30 s) to its warp while the stylesheet scrolled it at STRIP_PERIOD (20 s), so its world
+# modulation was scaled for 64 px/s against a layer moving 96. See assert_warp_matches_scroll.
+_LAYER_PERIOD: dict[str, float] = {}
+
 
 def warp_class(v: float) -> str:
     """The wrapper class for a layer travelling at `v` px/s."""
@@ -1342,6 +1390,7 @@ def tiled(
     makes the modulation exactly once per loop.
     """
     divides_P(dur)
+    _LAYER_PERIOD[cls] = dur
     style = f' style="--d:{fmt(-delay)}s"' if delay else ""
     inner = f'<g class="{cls}"{style}>{body}</g>'
     if not warp:
@@ -1987,7 +2036,7 @@ def ground_detail(art: Art) -> str:
         out.append(tiled(duplicate(body), cls + "s", dur))
 
     # the near foreground: one dark band with a stepped top edge, fastest of all
-    divides_P(P / 12)
+    divides_P(P / 16)
 
     def fg(shift: float) -> str:
         r2 = random.Random(77)
@@ -2002,7 +2051,7 @@ def ground_detail(art: Art) -> str:
         s.append(rects(merge_runs(cols), "fgb"))
         return "".join(s)
 
-    out.append(tiled(duplicate(fg), "fgbs", P / 12))
+    out.append(tiled(duplicate(fg), "fgbs", P / 16))
     return "".join(out)
 
 
@@ -2707,10 +2756,10 @@ def css(art: Art) -> str:
         f".cl2{{animation:sc {fmt(P / 3)}s linear infinite}}"
         f".md0s{{animation:sc {fmt(P / 2)}s linear infinite}}"
         f".md1s{{animation:sc {fmt(P / 4)}s linear infinite}}"
-        f".tf0s{{animation:sc {fmt(STRIP_PERIOD)}s linear infinite}}"
+        f".tf0s{{animation:sc {fmt(P / 8)}s linear infinite}}"
         f".fprs{{animation:sc {fmt(STRIP_PERIOD)}s linear infinite}}"
         f".tf1s{{animation:sc {fmt(P / 10)}s linear infinite}}"
-        f".fgbs{{animation:sc {fmt(P / 12)}s linear infinite}}"
+        f".fgbs{{animation:sc {fmt(P / 16)}s linear infinite}}"
         # a world-borne single object travels the whole loop's worth of ground in one pass
         f"@keyframes gsc{{from{{transform:translateX(0)}}"
         f"to{{transform:translateX(-{fmt(GROUND_TRAVEL)}px)}}}}"
@@ -2934,6 +2983,7 @@ def css(art: Art) -> str:
 def build(art: Art) -> str:
     _SCROLLING.clear()
     _WARPED.clear()
+    _LAYER_PERIOD.clear()
     _ENCODED_STRIP.clear()
     assert_all_gates_wired()
     assert_texture_not_eventised()
@@ -3032,6 +3082,7 @@ def build(art: Art) -> str:
     # Now the stylesheet, which needs every warped layer to have been registered above.
     sheet = css(art)
     assert_keyframe_pcts_sane(art, sheet)
+    assert_warp_matches_scroll(art, sheet)
     assert_every_shape_is_themed(art, sheet, "".join(scene), defs)
     assert_print_lock(art, _ENCODED_STRIP)
     assert_one_strip_feature(art)
