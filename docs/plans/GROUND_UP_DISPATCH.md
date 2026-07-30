@@ -754,7 +754,52 @@ Everything in #3 below still holds except where this overrides it.
 - **State after this fire: 9 DONE (1,2,3,4,5,8,10,12,13) · 2 IN FLIGHT (7, 11) · 2 OPEN (9, 6).** Order:
   **9 next, 6 last.** Row 9's payload is already composed and on trunk (`f3a4a7f9`) so the next fire is
   one command once in-flight drops below 2.
-- **Landed by coordinator #4, content-verified on trunk:** `f3a4a7f9` (row 9 payload) · this delta.
+- ✅ **ROW 6'S PAYLOAD IS COMPOSED AND ON TRUNK** — `docs/ground-up-payloads/row6-guardrail-hooks.md`
+  (landed **`53c6eee9`**, content-verified, 189 lines). **EVERY REMAINING ROW NOW HAS A FIRE-READY
+  PAYLOAD ON TRUNK — 9 and 6 — so all remaining dispatch is mechanical: wait for a close, fire, repeat.**
+  No successor needs to compose anything.
+- 🚨 **ROW 6'S HEADLINE TAKE, MEASURED — WHAT A SESSION MAY DO DEPENDS ON WHICH ACCOUNT FIRED IT.** There
+  is **no checker for hook-wiring parity across the five config dirs**, and the drift is live. I
+  enumerated every `(event, script)` pair in all five `settings.json`: **62 distinct pairs, 58 wired in
+  all five, 4 DRIFTING** — `Stop`/`operator-readout.sh` 4/5 (missing `.claude-next`) ·
+  `PreToolUse`/`cc-unattended-ask-guard.sh` 3/5 (missing `.claude-next`, `.claude-quaternary`) ·
+  `SessionEnd`/`session-deregister.sh` 3/5 (same two) · `SessionStart`/`desk-brief-inject.sh` 3/5 (same
+  two). **The second one is a PERMISSION RAIL absent for two of five config dirs.** Because the fleet
+  picks a config dir BY ACCOUNT at fire time, the guardrail set a session gets is a side effect of quota
+  routing — and it hit this campaign: **row 7 runs under `.claude-next`, so for its entire rebuild it has
+  had no `operator-readout` Stop hook, no unattended-ask guard and no `session-deregister`.** This
+  **independently confirms row 10's remainder R-2** and names the dir row 10 could not. Also: the cell's
+  "69 hook entries" **is not a number that exists** — measured 67 · 67 · 67 · 64 · 63, and that it is
+  five different numbers IS the finding. **12 events is exactly right.** Filed separately as
+  `4ce34a4f703c` because row 6 is LAST and a missing permission rail should not wait for it. Handed to
+  row 6 as its headline with a hypothesis to TEST not inherit (does the missing `session-deregister`
+  explain part of the 134/134 assignee-panes-with-no-registry-row census? row 4's registry is the
+  oracle).
+- **Row 6 graveyard slice re-verified, and it corrects the campaign table a second time:** all five of
+  `hooks/curl-gate.py` · `hooks/keychain-guard.sh` · `hooks/subagent-stop.sh` ·
+  `tests/subagent-stop.bats` · `tests/hook-jq-abstain.bats` are absent from trunk and present in
+  `fix/infra-perfection`; `tm/hygiene` carries curl-gate, keychain **AND `tests/hook-jq-abstain.bats`**,
+  but not `subagent-stop{.sh,.bats}` — the table records hygiene as "curl-gate, keychain only". Verified
+  with `git ls-tree` and both controls (`hooks/dod-persist.sh` for the `h`-paths — note `h` is the zsh
+  HEAD modifier, so this control can fail the same way — and `tests/no-such.bats` for the `t`-paths).
+- 📌 **THE CHANNEL IS NOT STRUCTURALLY ONE-WAY — PROVEN, AND MY OWN EARLIER CONCLUSION IS CORRECTED.**
+  Coordinator #3 and I both recorded the coordinator→row channel as write-only mid-turn. **That was
+  over-general.** Row 11 armed its watcher on its PANE uuid (per the payload's STEP 0, against a
+  SessionStart hook that suggested the session id); I then sent it a substantive ruling and got
+  **`receipt=read`, `acked=1`, MID-TURN**. `cc-notify` itself distinguishes the two cases in its own
+  send verdict: *"wake-path armed — its cc-await-ping watcher wakes it within a poll"* for row 11 vs
+  *"NO watcher armed — drains on its NEXT turn"* for rows 7 and 8. **So the addressing defect
+  (`6fe942c0eee5`) was the whole cause, and the mid-turn `PostToolUse` drain is a belt-and-braces
+  improvement for watcher-less sessions, NOT the fix for this.** Consequence for the successor: a row
+  fired with the corrected STEP 0 is REACHABLE and you may hold it to a ruling; rows 7 and 8 armed the
+  wrong key at birth and never were. Do not re-escalate the mail-v3 D5 landing as urgent — it also
+  collides with row 8's `hooks/session-continue.sh`, and the stranded-commit analysis is in backlog
+  `ece77ba9dfe2`.
+- **Landed by coordinator #4, content-verified on trunk:** `f3a4a7f9` (row 9 payload) · `92a2fb36`
+  (row 8 ratification + row 11 fire) · `53c6eee9` (row 6 payload) · this delta. **Backlog filed:**
+  `ff839f1f8f38` (cc-mail/cc-thread untracked + zero callers) · `ece77ba9dfe2` (activation advertises an
+  unlanded feature) · `80321b2556e6` (env-var activations escape both health axes) · `9d514681fb84`
+  (96-hour relogin threshold dead band) · `4ce34a4f703c` (hook-wiring parity).
 
 #### DELTA from coordinator #3 (pane 71B42B48), 2026-07-29T19:3xZ — superseded by #4 above; still binding where #4 is silent
 
