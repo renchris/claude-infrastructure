@@ -72,7 +72,17 @@ EVIDENCE_GREP='cc-telemetry|cc-registry|CC_TELEMETRY_DIR|CC_REGISTRY_DIR'
 # temp `$tmp` (`$REG_DIR/.$pane.$$.tmp`, schema byte-identical to session-register.sh:75-81), removed on a
 # failed mv/jq. It only ever CREATES registry rows (via mv); it never age-reaps the registry — durable
 # evidence is never deleted. No -mmin/RETAIN_H, so sections 1/2 find nothing to bound. Declared = reviewed (2026-07-19 desk wave).
-DECLARED='bin/cc-context bin/cc-board bin/cc-sessions bin/cc-notify bin/cc-reaper bin/cc-value bin/cc-reconcile hooks/session-register.sh hooks/session-deregister.sh statusline.sh scripts/lead-supervisor.sh scripts/lead-reconciler.sh hooks/waiting-recycle.sh scripts/handoff-fire.sh'
+# hooks/lead-crash-watchdog.sh READS CC_REGISTRY_DIR (:262,:302 — `grep -l` only; no registry row is ever
+# deleted) and has rm -f sites, so section-3 flags it — but every one is a LIFECYCLE op, never an age
+# reaper: gc_teardown_marker (:299) removes $CC_TEARDOWN_DIR/$sid.json + its pane alias, and its own
+# docstring binds it to "ONLY the owner-guarded pidfile-rm blocks below" (our own pid's recycle/self-close,
+# fully handled); the pidfile/.id/.daemon removals (:869,:893) are pid-EQUALITY-guarded (the documented
+# cross-incarnation disarm), and the death-claim `rmdir` releases a mutex this same function took. No
+# -mmin/RETAIN_H anywhere in the file, so sections 1/2 find nothing to bound. Identical shape to
+# lead-reconciler.sh + waiting-recycle.sh above. Declared = reviewed (2026-07-25 infra-perfection pass,
+# adopted from the stranded 101ab269; line refs re-derived 2026-07-29 after the singleton/jetsam work,
+# and the +2d sweeps of .daemon / *.death-*.d live in hooks/session-end.sh, which owns that dir's GC).
+DECLARED='bin/cc-context bin/cc-board bin/cc-sessions bin/cc-notify bin/cc-reaper bin/cc-value bin/cc-reconcile hooks/session-register.sh hooks/session-deregister.sh statusline.sh scripts/lead-supervisor.sh scripts/lead-reconciler.sh hooks/waiting-recycle.sh scripts/handoff-fire.sh hooks/lead-crash-watchdog.sh'
 
 viol=0
 say(){ printf '  %s\n' "$1"; }
