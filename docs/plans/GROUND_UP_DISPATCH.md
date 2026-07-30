@@ -459,9 +459,54 @@ the successor inherits:
   drained by then, the correct move is to let the duplicate FINISH and land, and stand down the
   other — never to force-close a lead with a live team.
 
-### Coordinator handoff state (for the successor — campaign must outlive any one context)
+### Coordinator handoff state — CURRENT (refreshed 2026-07-29T17:2xZ before recycle #2)
 
-*(refreshed 2026-07-29T21:50Z, immediately before the coordinator recycled at 47% context.)*
+**READ THIS BLOCK, NOT THE ONE BELOW IT.** The block that follows is the *previous* coordinator's
+state and is retained for history only — every count in it is stale.
+
+- **Map is 13 rows now, not 12** (row 13 machine-capacity was added by a parallel session and
+  **RATIFIED** by this coordinator — see the ratification section above). **5 DONE: 1, 3, 4, 5, 12.
+  3 IN FLIGHT: 2, 10, 13. 5 OPEN: 6, 7, 8, 9, 11.** Remaining dispatch order: **8 · 7 · 11 · 9 · 6
+  last.** Do NOT count rows by grepping `DONE` alone — the "What DONE means" prose contains the
+  literal string. Derive it as
+  `grep -E '^\| [0-9]+ \|' | grep -cE '\*\*DONE 2026'`.
+- **DERIVE IN-FLIGHT FROM THE MAP, NEVER FROM MEMORY.** This coordinator breached the ≤2 cap by
+  typing `INFLIGHT=1` from recall while row 13 was already `REBUILDING` from outside its dispatch.
+  Exact command is in the breach section above. Add rows you fired whose cell has not yet updated.
+- **In flight, verified alive by transcript content at 17:2xZ:** row 2 = `gu-session-lifecycle`,
+  pane `7D90C1DF-7D5B-4BAD-9C3A-4370AEE64AD1`, session `a8e72ae5`, account **next**, 3 live
+  teammates (`gu2-archaeology`/`telemetry`/`seams`), landed `0dc2b1c0`. Row 10 =
+  `gu-operator-surface`, pane `0A8D5025-C06E-4C11-A9B4-346CFCCE81A2`, session `3640555f`, account
+  **next3**. Row 13 = fired outside this dispatch, 626-line plan + 3 builds landed. **`next2` is
+  the coordinator's own account; `next4` is free.**
+- **THE FIRE GATE CHANGED — do not re-add a flat load number.** Predicate is: in-flight < 2
+  (derived from the map) AND runnable threads < logical cores, then let `handoff-fire`'s own
+  per-core capacity gate make the admission call. Full reasoning + why the old `< 10` starved the
+  campaign for an hour is in the correction section above. Row 13's ⛔ is compatible: that gate is a
+  correct *instantaneous* check and a catastrophic *always-on dispatch* gate on this box.
+- **STOP CARRYING NUMBERS IN FIRE PAYLOADS.** Deploy lag went 56 → 3 → 1 → 18 in two hours; a
+  payload written at 15:20 was falsified by 16:52, and the row that corrected it was itself stale
+  15 minutes later. Hand the *deriving command* plus the structural claim. Both remaining payload
+  templates already do this.
+- **All 11 orphaned assignees were CLOSED** at ~16:05 on explicit operator approval (10 clean, 1
+  cosmetic rc=1 that still closed). Zero `--agent-id` processes remain; all three assignee
+  worktrees survive with commits intact. §3 of `/tmp/gu-operator-steps.sh` is now guarded inert —
+  **do not re-run it.**
+- **DEPLOY IS NO LONGER THE BLOCKING LEVER — ACTIVATION IS.** The checkout fast-forwarded at 15:30
+  and `install.sh` ran (row 4's `session-beat.sh` and row 12's `cc-fleet` are live; row 3's wake
+  floor reads 21 where its Phase 1 measured 0). The failure MOVED to **deployed-but-not-switched-on:
+  11 staged activations un-run**, top two being `17-permission-beacon-wire` and
+  `10-lead-crash-orphan-close`. `/tmp/gu-operator-steps.sh` is refreshed, syntax-checked, and its
+  §1 guard no longer `exit 3`s the whole script before §2. Still operator-owned (C10).
+- **Open coordinator debts:** row 3's plan §8:310 claims a primitive (`mailbox_close_disposition`)
+  that does not exist in any code — row 2 is building M3 against row 3's §4 contract instead; row 13
+  cites 3 pre-rebase shas; the `cc-blockers` PERSISTENT-RED suppression is ruled row 10's and row 10
+  is now live on it.
+- **Inherited, unchanged:** first GREEN postland stamp is still 0-in-33 (`cc-backlog da18f179ac50`,
+  already-owned — do not reopen). R-1 `install.sh` launchd safety (`c13dad7d5dbe`) is backlog, NOT a
+  campaign row.
+
+*(historical — previous coordinator, refreshed 2026-07-29T21:50Z before recycle #1; counts stale.)*
 
 - **Done: rows 1, 4, 5 (3 of 12).** Beware the grep: `grep -c '\*\*DONE'` on the map now returns 4
   because the "What DONE means" section contains the literal string. Count rows, not matches.
