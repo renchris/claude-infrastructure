@@ -652,10 +652,22 @@ state and is retained for history only — every count in it is stale.
   (predicate POLARITY and the operator's ATTENTION BUDGET). **"An alarm that ALWAYS fires and an
   alarm that CANNOT fire are the same alarm."**
 
-  **ROW 7 FIRED AND ENGAGED 19:0xZ** — pane resolved from the fire log, session `85233c18`, account
-  **next** (eligible + soonest-expiring at 3.1d, freed by row 2's retirement), worktree
-  `gu-account-relogin`, cold `--split-right --follow`. Gate ADMITted at **1.64/core**; verified by
-  transcript CONTENT (48 rows / 10 assistant / 7 tool_use), not the script's verdict. (Row 13 was closed by the
+  **ROW 7 FIRED AND ENGAGED 19:0xZ** — pane **`9B38FF36-4CE8-4622-9F9E-A340A4916CAA`**, session
+  `85233c18`, account **next** (eligible + soonest-expiring at 3.1d, freed by row 2's retirement),
+  worktree `gu-account-relogin`, cold `--split-right --follow`. Gate ADMITted at **1.64/core**;
+  verified by transcript CONTENT (48 rows / 10 assistant / 7 tool_use), not the script's verdict.
+
+  **THE TWO LIVE ROWS, for the successor — verify these by CONTENT before trusting anything:**
+
+  | Row | Pane | Session | Account | Worktree | Transcript root |
+  |---|---|---|---|---|---|
+  | 8 | `8D689C3D-C642-440A-906E-091E3663B2C8` | `9a2d094f` | next4 | `gu-context-economy` | `~/.claude-quaternary/projects/` |
+  | 7 | `9B38FF36-4CE8-4622-9F9E-A340A4916CAA` | `85233c18` | next | `gu-account-relogin` | `~/.claude/projects/` |
+
+  `next2` is the coordinator's own account; `next3` came free when row 10 finished. **Row 11 is the
+  next fire and has NO payload composed yet** — compose it durably under
+  `docs/ground-up-payloads/`, never `/tmp` and never under `docs/plans/` (see the row 7 payload
+  section for why both fail). (Row 13 was closed by the
   coordinator after its own session exited clean without flipping its cell; row 2 closed itself and
   was verified on five disk axes; row 8 was fired 18:3xZ — see the sections below.) Remaining
   dispatch order: **7 · 11 · 9 · 6 last.** Do NOT count rows by grepping `DONE` alone — the "What
