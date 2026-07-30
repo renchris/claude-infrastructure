@@ -2523,6 +2523,88 @@ def summon_props(art: Art) -> str:
     return letter + cake
 
 
+# The flash that COVERS B at each swap. Straddles the instant: bright before it, blowing out after.
+SM_FLASH_LEAD, SM_FLASH_TAIL = (
+    0.06,
+    0.16,
+)  # s — total 0.22s, inside §2b's 0.3s opacity concession
+
+
+def summon_flash(art: Art) -> str:
+    """A plate the size of B, over B, bright for 0.22s around each of its two switches.
+
+    THE ENTRANCE AND THE EXIT WERE NOT ACTUALLY COVERED. `summon_bursts` claimed "at its bright stage
+    it covers B's arrival, which is exactly what a materialisation has to do — nothing may be seen
+    switching on". Measured against the geometry it emits: `_burst` is five 10x10 rects, so at B's
+    switch-off instant it puts 605 px^2 over a 176x128 = 22,528 px^2 silhouette. **2.7 % coverage**,
+    8.9 % at its widest. B popped into existence and popped out of it in open plate, and the beat's
+    own subject therefore had neither an entrance nor an exit — the one thing a summoned-and-removed
+    creature has to have. A docstring asserting coverage is not coverage.
+
+    So the burst keeps the dots and gains a core it cannot carry itself. The core has to be a SEPARATE
+    element: the burst group holds one animation for all four of its stages, and the core must be
+    opaque for a fifth of a second and gone by the time the dots reach scale 2 — at that size the same
+    plate would be a 368x280 flare across the plate. Two lifetimes, two elements (S8).
+
+    Both switches sit at ~1.1x of their own burst (46 % through the spark, 40 % through the poof), so
+    ONE size covers both — that is measured, not arranged, and if either moves the assertion below
+    says so rather than letting a swap happen in the open again.
+    """
+    if not emits(art, "rSummon"):
+        return ""
+    s = SUMMON_B_SCALE
+    c = CELL
+    x = summon_bx(art)
+    # B'S OWN SILHOUETTE, one cell fatter — not its bounding box. The first build used the bbox and it
+    # renders as a hard-edged pale RECTANGLE beside the creature: mechanically a perfect cover, and it
+    # reads as a UI panel rather than as light. What a materialisation looks like in this vocabulary
+    # is the character arriving as a glowing mass that resolves INTO itself, so the mass has to be
+    # creature-shaped. Drawn on B's own grid from B's own part positions, so it cannot drift from the
+    # thing it covers.
+    legs = "".join(
+        f'<rect x="{k * c}" y="{6 * c}" width="{c}" height="{3 * c}"/>'
+        for k in (1, 3, 7, 9)
+    )
+    return (
+        f'<g class="smFlash">'
+        f'<g transform="translate({fmt(x)} {fmt(GROUND - SPRITE_H * s)}) scale({fmt(s)})" '
+        f'shape-rendering="crispEdges">'
+        f'<rect x="0" y="{-c}" width="{11 * c}" height="{8 * c}"/>{legs}'
+        f"</g></g>"
+    )
+
+
+def summon_flash_css(art: Art, cx: float, cy: float) -> str:
+    """The flash's own lifetime: opaque at the swap, blown out 0.16s later, dark the rest of the loop.
+
+    Opacity and transform ride the SAME keyframe block, as every other summon element does, because
+    two declarations on one element is two animations and the freeze collapses them.
+    """
+    swaps = (sm_at(SM_B_ON), sm_at(SM_B_OFF))
+    for name, win in (("spark", SM_SPARK), ("poof", SM_POOF)):
+        w0, w1 = sm_at(win[0]), sm_at(win[1])
+        t = swaps[0] if name == "spark" else swaps[1]
+        if not (w0 < t - SM_FLASH_LEAD and t + SM_FLASH_TAIL < w1):
+            raise SystemExit(
+                f"gen[{art.key}]: B's {name} swap at {t:.2f}s does not sit clear inside its burst "
+                f"({w0:.2f}-{w1:.2f}s) with room for the {SM_FLASH_LEAD + SM_FLASH_TAIL:.2f}s flash. "
+                f"B would be seen switching in open plate — the defect this flash exists to close."
+            )
+    frames = ["0%{opacity:0;transform:scale(1)}"]
+    for t in swaps:
+        frames.append(f"{pctx(t - SM_FLASH_LEAD)}%{{opacity:1;transform:scale(1)}}")
+        frames.append(
+            f"{pctx(t + SM_FLASH_LEAD)}%{{opacity:.55;transform:scale(1.25)}}"
+        )
+        frames.append(f"{pctx(t + SM_FLASH_TAIL)}%{{opacity:0;transform:scale(1)}}")
+    frames.append("100%{opacity:0;transform:scale(1)}")
+    return (
+        f"@keyframes smflf{{{''.join(frames)}}}"
+        f".smFlash{{animation:smflf {fmt(P)}s steps(1,end) infinite;"
+        f"transform-origin:{fmt(cx)}px {fmt(cy)}px}}"
+    )
+
+
 def summon_bursts(art: Art) -> str:
     """Both bursts, drawn OVER B — the one thing in this beat that is not under a body.
 
@@ -2535,7 +2617,8 @@ def summon_bursts(art: Art) -> str:
     if not emits(art, "rSummon"):
         return ""
     cx, cy = summon_burst_centre(art)
-    return _burst(cx, cy, "smSpark") + _burst(cx, cy, "smPoof")
+    # flash FIRST so the dots ride over it: the dots are the read, the plate is the cover.
+    return summon_flash(art) + _burst(cx, cy, "smSpark") + _burst(cx, cy, "smPoof")
 
 
 def summon_peer(art: Art) -> str:
@@ -2695,6 +2778,7 @@ def summon_css(art: Art) -> str:
                 on_inside=False,
             ),
             gate("smbu", ".smBUp", [(sm_at(SM_BUP[0]), sm_at(SM_BUP[1]))]),
+            summon_flash_css(art, cx, cy),
             summon_burst_css("smsf", "smSpark", SM_SPARK, cx, cy),
             summon_burst_css("smpf", "smPoof", SM_POOF, cx, cy),
             summon_travel_css("smmf", "smMail", mail_marks),
@@ -2844,7 +2928,7 @@ def css(art: Art) -> str:
         f".smHat{{fill:{d.rule}}}"
         f".smMailE{{fill:{d.fg}}}.smMailF{{fill:#f4ead8}}"
         f".smCkB{{fill:#7a4a2e}}.smCkI{{fill:#f4ead8}}.smCkC{{fill:#e8b04b}}"
-        f".smSpk{{fill:{d.star}}}"
+        f".smSpk{{fill:{d.star}}}.smFlash{{fill:{d.star}}}"
         f".vig{{fill:url(#vig);opacity:{fmt(d.vignette)}}}" + cloudrules(d) +
         # ---- parallax: one shared translate, per-layer duration, all dividing P ----
         f"@keyframes sc{{from{{transform:translateX(0)}}to{{transform:translateX(-{TILE}px)}}}}"
@@ -3042,7 +3126,7 @@ def css(art: Art) -> str:
         # so the frozen still would otherwise show the hat on, both cakes at once, the letter in
         # mid-air and two bursts at rest scale. The one thing a still must never be is a frame that
         # could not occur.
-        ".smHat,.smPeer,.smBUp,.smSpark,.smPoof,.smMail,.smCake,.smHeld{opacity:0}"
+        ".smHat,.smPeer,.smBUp,.smSpark,.smPoof,.smMail,.smCake,.smHeld,.smFlash{opacity:0}"
         ".smBArm{opacity:1}"
         # The barrier rests RETRACTED. `animation:none` already leaves it there (translateY(0) is its
         # un-animated base), but the still is the deliverable, so it is pinned rather than inferred —
@@ -3066,7 +3150,7 @@ def css(art: Art) -> str:
         f".tf0,.tf1{{fill:{l.tuft}}}.fgb{{fill:{l.fg}}}.fpr{{fill:{l.fg};opacity:.40}}"
         f".rfp{{fill:{l.rule};opacity:.9}}"
         f".brd{{fill:{l.mound[0]}}}.sh{{opacity:.20}}"
-        f".smHat{{fill:{l.rule}}}.smMailE{{fill:{l.fg}}}.smSpk{{fill:{l.fg}}}"
+        f".smHat{{fill:{l.rule}}}.smMailE{{fill:{l.fg}}}.smSpk{{fill:{l.fg}}}.smFlash{{fill:{l.fg}}}"
         f".vig{{opacity:{fmt(l.vignette)}}}" + cloudrules(l) + "}"
     )
     # Day/night switching is done with `display` on a parent group, so no element ever needs both a
