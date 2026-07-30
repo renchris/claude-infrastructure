@@ -2615,8 +2615,14 @@ esac; done
 check_goal_length "$PROMPT_FILE" || exit 1
 check_slash_head  "$PROMPT_FILE" || exit 1
 # P0-17: refuse a NET-NEW fire onto an already-saturated box, BEFORE any side effect. A recycle
-# REPLACES a session (net-zero panes) and is exempt — see capacity_gate().
-if [ "$RECYCLE" = 0 ]; then capacity_gate || exit 9; fi
+# REPLACES a session (net-zero panes) and is exempt — see capacity_gate(). So is a --dry-run: it
+# prints a readout and returns without reaching any fire path (the DRY branch of the terminal
+# if/elif never calls a fire function), so it costs ZERO capacity — strictly less than a recycle.
+# Gating it inverted the intent: the safe "what WOULD this do" probe became unavailable precisely
+# when a saturated box is what you need to inspect, and it fabricated exit 9 where callers assert 0
+# (tests/handoff-fire-account-sweep.bats:226,234 went RED by LOAD, not by code — 2026-07-25..26
+# nightly). Matches the guard idiom already used for side effects at :2490 and :2569.
+if [ "$RECYCLE" = 0 ] && [ "$DRY" = 0 ]; then capacity_gate || exit 9; fi
 [ -n "$CWD" ] && [ -n "$WORKTREE" ] && { echo "!! --cwd and --worktree are mutually exclusive" >&2; exit 1; }
 if [ -n "$WORKTREE" ] && ! git check-ref-format --branch "$WORKTREE" >/dev/null 2>&1; then
   echo "!! invalid branch name for --worktree: $WORKTREE" >&2; exit 1
