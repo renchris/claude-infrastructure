@@ -82,7 +82,11 @@ exits would be the old design with bigger constants — exactly what Phase 2 for
 The cost term is measured, not asserted: pane count — not agent compute — is the campaign's binding
 throughput constraint (`GROUND_UP_DISPATCH.md`: 29 live panes, iTerm2 itself at ~128% CPU while all
 11 idle orphan agents together drew **4.9%**; memory `admission-control-needs-a-hardware-term`
-measures a pane at ~1.6 cores to draw). So an un-retirable pane is not untidiness; it is the load
+measures ~1.6 cores for the WHOLE fleet's draw — iTerm2 ~115% + WindowServer ~50% across ~38 panes,
+i.e. ~0.04–0.06 cores/pane; a prior revision of this line misread it as per-pane, off ~38×
+[corrected 2026-07-30, row 13 completion]. Row 13's later live read adds that iTerm2's cost funnels
+through ONE saturated thread, so aggregate PTY output volume — which pane count drives — is the
+binding term, MACHINE_CAPACITY_V2 §11.2). So an un-retirable pane is not untidiness; it is the load
 that blocked this campaign's own fires for ~45 minutes.
 
 ### Consequence for the frozen DoD
