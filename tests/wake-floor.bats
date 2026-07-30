@@ -181,3 +181,46 @@ CC_WAKE_FLOOR_PREFIX_SHA="${CC_WAKE_FLOOR_PREFIX_SHA:-a219de9d}"
   [ "$status" -eq 0 ]
   ! blocked "$output"                                # RED: the defect this change closes
 }
+
+# ── Box-key agreement (2026-07-29) ────────────────────────────────────────────────────────────────
+# The floor advertises a `cc-await-ping <key>` arm. That key MUST be the box key mailbox-drain.sh
+# actually reads — session-keyed once the pane→session alias exists (drain's :64-68). It used to be
+# the raw PANE uuid, so following the advice armed a watcher on a key nothing writes to while the
+# nudge kept firing (each side checking its own key). cc-await-ping resolves no alias, so the hook
+# has to resolve it. These three lock the mapping in both directions plus the pre-fix control.
+alias_to() { mkdir -p "$CC_MAILBOX_DIR/.alias"; printf '2026-07-29T00:00:00+0000 %s\n' "$1" > "$CC_MAILBOX_DIR/.alias/$U"; }
+
+@test "box key: with a pane→session alias, the advertised arm names the SESSION key" {
+  local S="11111111-2222-3333-4444-555555555555"
+  alias_to "$S"
+  run bash -c "printf '{\"cwd\":\"%s\",\"session_id\":\"sidA\",\"transcript_path\":\"\"}' '$CWD' | bash '$HOOK' 2>/dev/null"
+  [ "$status" -eq 0 ]
+  blocked "$output" || false
+  echo "$output" | grep -q "cc-await-ping $S" || false      # the key the drain reads
+  ! echo "$output" | grep -q "cc-await-ping $U" || false    # never the bare pane
+}
+
+@test "box key: with NO alias, the advertised arm still names the pane (unchanged fallback)" {
+  run bash -c "printf '{\"cwd\":\"%s\",\"session_id\":\"sidA\",\"transcript_path\":\"\"}' '$CWD' | bash '$HOOK' 2>/dev/null"
+  [ "$status" -eq 0 ]
+  blocked "$output" || false
+  echo "$output" | grep -q "cc-await-ping $U" || false
+}
+
+# Pinned, never a moving ref — same reasoning as the RED-PROOF above: once this change lands on
+# origin/main, a floating control IS the fixed tree and the proof inverts.
+CC_BOXKEY_PREFIX_SHA="${CC_BOXKEY_PREFIX_SHA:-c967d7cd}"
+@test "RED-PROOF: the pre-fix hook advertises the PANE key even when an alias exists" {
+  local S="11111111-2222-3333-4444-555555555555"
+  local old="$BATS_TEST_TMPDIR/prekey"; mkdir -p "$old"
+  git -C "$REPO" archive "$CC_BOXKEY_PREFIX_SHA" hooks | tar -x -C "$old" \
+    || skip "pre-fix tree $CC_BOXKEY_PREFIX_SHA unavailable"
+  [ -f "$old/hooks/session-continue.sh" ]
+  # sanity: the control must genuinely predate the fix
+  ! grep -q 'mailbox_resolve_key' "$old/hooks/session-continue.sh" || false
+  alias_to "$S"
+  run bash -c "printf '{\"cwd\":\"%s\",\"session_id\":\"sidA\",\"transcript_path\":\"\"}' '$CWD' | bash '$old/hooks/session-continue.sh' 2>/dev/null"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "cc-await-ping $U" || false     # RED: pane key, the defect
+  ! echo "$output" | grep -q "cc-await-ping $S" || false
+}
