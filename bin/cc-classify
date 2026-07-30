@@ -71,6 +71,18 @@ SAFEGUARD_REFUSAL_SUBTYPE="${CC_CLASSIFY_SAFEGUARD_SUBTYPE:-model_refusal_no_fal
 SAFEGUARD_IDLE_S="${CC_CLASSIFY_SAFEGUARD_IDLE_S:-120}"   # refusal terminal AND idle >= this ⇒ blocked
 
 die(){ printf 'cc-classify: %s\n' "$*" >&2; exit 2; }
+
+# ONE stderr line per INVOCATION (not per pane) when the interactive primitive is unresolvable, and
+# it carries the remediation rather than just the symptom. Damped because --all classifies N panes
+# through the same missing lib: N identical lines is noise an operator learns to skip, and the
+# condition is a property of the deploy, not of any one pane. stderr only — stdout stays parseable
+# JSON for every consumer (cc-reaper, cc-teardown, the desk).
+_CI_LIB_WARNED=0
+ci_lib_warn() {
+  [ "$_CI_LIB_WARNED" = 1 ] && return 0
+  _CI_LIB_WARNED=1
+  printf 'cc-classify: hooks/lib/cc-interactive.sh unresolvable — cannot read WHO drove the last turn, so operator adoption is UNKNOWN; every idle pane falls closed to owned-wait (never-reap, fail-closed) instead of finished. Fix: run ./install.sh from the checkout to (re)link it.\n' >&2
+}
 command -v jq >/dev/null || die "jq required"
 
 # HOLD FLOOR (2026-07-24 rule 5): a too-small hold (unset/0/<60) is almost certainly a mis-set env, and
@@ -527,6 +539,29 @@ classify_entry() { # <entry-json> <all-sessions-json>
   #     right here — it is the only thing standing between this ladder and a reap on unreadable input.
   #     (The actuators that CAN reach rc 2 — cc-teardown's belt, teammate-auto-shutdown's TeammateIdle
   #     close — read it explicitly and HOLD.)
+  #
+  #     LIB-ABSENT IS THE ONE WORLD THAT REASONING MISSES (G1, measured 2026-07-29). The paragraph
+  #     above holds for every world where the TRANSCRIPT is unreadable — but an unresolvable
+  #     hooks/lib/cc-interactive.sh is not one of them: the transcript is perfectly readable, so IDLE
+  #     is computed normally and the IDLE<0 fail-safe never fires. last_interactive_epoch() then
+  #     returns 1 ("no interactive turn") for a MISSING PRIMITIVE exactly as it does for "nobody
+  #     typed", the hold below is skipped, and the ladder falls through to `finished` = REAPABLE.
+  #     Measured on the incident fixture (stamped 50000s, landed, idle 900s, real operator prompt
+  #     950s ago): lib present ⇒ owned-wait; lib unresolvable ⇒ finished. That is a live operator
+  #     conversation auto-reaped by a deploy gap, and the gap is routine — all three resolve
+  #     candidates collapse onto $CLAUDE_CONFIG_DIR/hooks/lib/ when deployed, which is a dir of
+  #     per-file symlinks that a bare ff-sync never extends to a NEW tracked lib (the same class that
+  #     left hooks/lib/idl-log.sh live-missing; see scripts/deploy-parity-assert.sh).
+  #     So: absence of the primitive is adoption-UNKNOWN, never adoption-absent. Fail closed to
+  #     owned-wait. Keyed on `command -v` — the same predicate last_interactive_epoch() itself uses —
+  #     so it cannot drift from the thing it guards, and it NARROWS: with the lib resolvable this
+  #     branch is unreachable and every path below is byte-for-byte unchanged.
+  if [ "$INTERACTIVE_HOLD_DISABLE" != 1 ] && ! command -v ci_last_interactive_epoch >/dev/null 2>&1; then
+    ci_lib_warn
+    CAUSE=owned-wait
+    DETAIL="interactive lib unresolvable — cannot prove no operator adoption (adoption-unknown, fail-closed)"
+    return 0
+  fi
   local iep
   if [ "$INTERACTIVE_HOLD_DISABLE" != 1 ] && [ -n "$tj" ] && iep="$(last_interactive_epoch "$tj")"; then
     local iage=$(( NOW - iep )); [ "$iage" -lt 0 ] && iage=0
