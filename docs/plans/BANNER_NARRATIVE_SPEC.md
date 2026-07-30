@@ -1039,6 +1039,50 @@ theme override" — **that claim is provably false for the icing row in light mo
 corrected along with the colour. In DARK mode the cake reads correctly as a cake, which is why the
 earlier storyboard-palette finding overstated the problem.
 
+## WHERE TO SEE IT — live vs storyboard vs still (2026-07-29)
+
+The operator asked whether the decisions are viewable or only pre-implementation. It is a mix, and
+conflating the three is how a storyboard gets mistaken for a shipped beat.
+
+**LIVE AND ON TRUNK — real animation, viewable now.** Only three beats are built: **rSummon**
+(3.4-13.0s), **rRefuse** (17.0-22.0s), **rAsk** (26.0-35.0s, now with the blink). Regenerate the
+per-beat surface and open it:
+`scripts/banner-beat-views.py --out /tmp/beats` → `/tmp/beats/index.html`. Each panel seeks the real
+asset to its own beat and plays on load, at the true 838 px column. Because it reads `RARE_EVENTS`
+from the generator, the four withdrawn/undeclared beats are labelled **NOT IN THIS BUILD** rather than
+silently rendering as ambient.
+
+**STORYBOARD ONLY — drawn frames, NOT animation.** The other seven — THE GUARD, THE NOTICING, THE
+INDEX (constellation), THE LANDING, THE WALL, NOTHING LOST, THE LANE, THE ADVANCE — exist as
+storyboards, not as built beats. `scripts/banner-storyboard.py` → 10 beats, 55 frames. Every frame is
+drawn from the extracted 11 × 8 sprite, so none of them is a move the creature cannot make, but **a
+storyboard is a proposal and nothing on that page animates.**
+
+**BRANCH-ONLY STILLS — built but not landed.** The moon and starfield rebuild lives on
+`feat/banner-sky-craft`, viewable as stills in `/tmp/banner-sky-craft/`. Not on trunk, because it is
+gated on three operator decisions.
+
+### Earthshine: fixed, verdict recorded
+
+The first sky build closed the moon's silhouette — at 838 px the unlit disc read as solid and the moon
+became **an eclipse rather than a crescent**. Worth recording *how that hid*: at 3× the crescent still
+read fine, so the 3× comparison passed while the shipping size failed. `11a92d59` makes earthshine
+**add** light rather than replace it, and re-judged at 838 px the moon now reads as a crescent with
+faint earthshine, which is the intended object. **Blocker cleared.**
+
+### The three sky decisions are now single named knobs
+
+Deliberately parameterised rather than decided, since all three are visible art on the operator's own
+page: **horn direction** (astronomically, horns-up is correct at night — this document says down twice
+and contradicts its own "horns point away from the Sun" rule, since at night the Sun is *below* the
+horizon), **`grain`** (the last remaining SVG filter — ±4 measured levels, paints forever in an
+`<img>`, and the new banded dithering now supplies that texture deliberately; removing it changes
+every variant), and **`STAR_TIERS[2]` opacity** (the field reads quiet at 838 px).
+
+**Next session's first task should be an A/B render of each of those three** — the operator has asked
+repeatedly to decide by looking, and all three are one-constant flips, so each can be shown as a real
+side-by-side at 838 px rather than described.
+
 ## OPERATOR RULINGS ON THE BUILT BEATS (2026-07-29, from the per-beat views)
 
 Given after examining each beat in isolation via `scripts/banner-beat-views.py` — so these are
