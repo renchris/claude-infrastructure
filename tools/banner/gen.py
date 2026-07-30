@@ -98,6 +98,110 @@ def assert_stride_locked(art: Art) -> None:
         )
 
 
+# ── the world clock ────────────────────────────────────────────────────────────────────────────
+# The three ratified beats all speak ONE sentence: the ground's scroll rate. Nominal = working,
+# zero = blocked on a human (THE ASK), negative = a turn was returned (THE REFUSAL). So the rate is
+# not a per-beat effect to be hand-animated three times; it is a single shared quantity, modelled
+# here as one world clock w(t) that every ground-plane layer reads. Significance then comes from a
+# shared scale rather than from novelty per beat, which is the whole answer to "volume dilutes
+# significance".
+#
+# TWO RESULTS FELL OUT OF THE LOOP THAT THE SPEC DID NOT HAVE, and both bind whoever edits next:
+#
+# 1. A LOOPING WORLD CANNOT HOLD OR REVERSE FOR FREE. Every scrolling layer must travel a whole
+#    number of its own wrap distances per master period or the loop seams. So a permanent deficit of
+#    world-time would have to be a common multiple of EVERY layer's period — and the slowest layer's
+#    period IS the master period, so the only free deficit is the entire loop. Therefore every stop
+#    and every rewind must be REPAID inside the loop, at a rate strictly above nominal. The catch-up
+#    is not an artifact to be hidden; it is forced, so each beat has to MEAN it. Both do: a returned
+#    turn costs you a step and you make it up, and a session unblocked works through what it held.
+#
+# 2. THE RATE VOCABULARY IS THE INTEGERS. The print lock says the ground advances exactly one
+#    leg-spacing per stride; under rate r it advances r leg-spacings, so the foot lands in an
+#    existing print only when r is a whole number. There is no gentle catch-up — the world can stop,
+#    reverse, walk, double or treble and nothing in between exists. A 6 s stop is payable as 6 s at
+#    2x or 3 s at 3x, and that is the entire menu. Do not "tune" a rate to soften it; it will
+#    silently break the footprint lock the whole thesis rests on, and assert_print_lock will say so.
+STRIP_V = TILE / STRIP_PERIOD  # 96 px/s — the rate the print lock is defined against
+
+# The hop's clock, declared ONCE here because both the CSS keyframes and
+# assert_hop_clear_of_stopped_world read it. A second copy in the checker would let the animation and
+# the assertion drift apart, and the assertion would then pass on a file it no longer describes.
+HOP_PERIOD = 12.0
+HOP_FROM_PCT, HOP_TO_PCT = 72.0, 92.0  # airborne between these points of the cycle
+HOP_RISE = HOP_PERIOD * HOP_FROM_PCT / 100
+HOP_FALL = HOP_PERIOD * HOP_TO_PCT / 100
+
+# Rate modulations, in STRIDES from the owning beat's declared window start:
+#     (offset_strides, n_strides, rate)
+WORLD_MOD: dict[str, tuple[tuple[int, int, int], ...]] = {
+    # THE REFUSAL — `completion-assert.sh` refuses a false "done", and the README's own diagram
+    # draws it as an arrow BACK. The bar drops across the path, the creature settles (it is trying
+    # to end the turn, so the world stops with it), the world pulls back exactly one print pitch,
+    # the creature steps forward into the print it has already made, and then it makes up the ground
+    # it lost. The foot is over the SAME print at +2, +3 and +5 strides, and over the print behind
+    # it at +4: a returned turn is redoing a step.
+    "rRefuse": ((2, 1, 0), (3, 1, -1), (4, 1, 1), (5, 3, 2)),
+    # THE ASK — the system pages a human only when one must decide, and then it waits with no
+    # default. Nothing arrives; everything stops. 12 strides of dead world (6 s — in a loop made of
+    # motion the only cessation is the most salient thing in it), then 6 strides at treble to clear
+    # the debt. 6+3 was chosen over 4+4 because the cessation is the payload and the catch-up is the
+    # cost: maximise the payload, minimise the cost's DURATION.
+    "rAsk": ((0, 12, 0), (12, 6, 3)),
+}
+
+
+def world_segments() -> list[tuple[float, float, int]]:
+    """Absolute (t0, t1, rate) covering the whole loop; rate 1 wherever nothing is declared."""
+    declared: list[tuple[float, float, int]] = []
+    for beat, mods in WORLD_MOD.items():
+        base = RARE_EVENTS[beat][0]
+        for off, n, r in mods:
+            declared.append((base + off * STRIDE, base + (off + n) * STRIDE, r))
+    declared.sort()
+    out: list[tuple[float, float, int]] = []
+    t = 0.0
+    for t0, t1, r in declared:
+        if t0 < t:
+            raise SystemExit(
+                f"gen: world modulations overlap at t={t0}s (previous segment ends {t}s) — two "
+                f"rates for one instant is not a rate"
+            )
+        if t0 > t:
+            out.append((t, t0, 1))
+        out.append((t0, t1, r))
+        t = t1
+    if t < P:
+        out.append((t, P, 1))
+    return out
+
+
+def world_breaks() -> list[tuple[float, float]]:
+    """(t, q) at every segment boundary, where q = strip pixels the world is BEHIND nominal.
+
+    q is piecewise LINEAR between these points because the rate is piecewise constant, so a `linear`
+    CSS animation through exactly these keyframes reproduces it without approximation.
+    """
+    q = 0.0
+    out = [(0.0, 0.0)]
+    for t0, t1, r in world_segments():
+        q += STRIP_V * (1 - r) * (t1 - t0)
+        out.append((t1, q))
+    return out
+
+
+def pctx(t: float) -> str:
+    """A keyframe offset at enough precision that the POSITION it encodes is exact.
+
+    `pct()`'s 3 decimals are fine for an opacity gate but they quantise a boundary at t=13s to
+    5.417%, an 0.08 ms error — which on a 96 px/s strip is 0.008 px of drift. That is invisible and
+    it is still a lie, because the claim being made is 0.000000 px. Nine decimals puts the encoded
+    error below 1e-6 px, and `assert_print_lock` reads the numbers back out of these strings rather
+    than trusting this function.
+    """
+    return f"{t / P * 100:.9f}".rstrip("0").rstrip(".") or "0"
+
+
 def divides_P(*periods: float) -> None:
     """A sub-period that does not divide P makes the composite loop at the LCM instead (S2)."""
     for p in periods:
@@ -197,11 +301,25 @@ def assert_texture_not_eventised() -> None:
 
 
 RARE_EVENTS = {
-    #  name        (start_s, end_s)   duration — all now inside the 2.5-10s band
-    "peek": (3.0, 9.0),        # 6.0s — a GLANCE, which is what its motion always read as
-    "peer": (3.0, 12.0),       # 9.0s — v6b only, in place of peek
-    "rCheer": (6.0, 10.0),     # 4.0s — part of the peer's visit in v6b, see COMPOSITE_OF
-    "rSleep": (24.0, 32.0),    # 8.0s — posture only now; the Zzz glyph is deleted
+    #  name        (start_s, end_s)   duration — all inside the 2.5-10s band
+    # The three ratified beats, ordered so all three land inside the window a reader actually sees.
+    # The timeline anchors at LOAD (S16), so placement is not taste: a beat at t=200s is not rare,
+    # it is unseen. THE REFUSAL leads because it is the strongest of the three.
+    "rRefuse": (3.0, 8.0),  # 5.0s — THE REFUSAL: the world pulls back one print pitch
+    # THE ASK: 6s of dead world, then 3s at treble to clear the debt.
+    "rAsk": (13.0, 22.0),  # 9.0s
+    # THE OVERLAP: the print pitch halves; the foot lands on every 2nd print. Placed here and not
+    # earlier because it and THE REFUSAL are the only two beats that put an OBJECT on the scrolling
+    # strip, and a strip object is on canvas for ~20s however brief its beat is. Their on-canvas
+    # windows must not overlap, so the spacing is set by geometry, not by the 4s event gap.
+    "rOverlap": (36.0, 44.25),  # 8.25s
+    # The visitor beats are DEMOTED, not deleted. The panel ruled co-presence semantically wrong —
+    # a session is never co-present with its peers, they live in other panes — but deleting v6b's
+    # identity is the spec owner's call, not this session's. So they keep their machinery and move
+    # past the ~45s line where S16 says a beat is decoration. One line reverts either decision.
+    "peek": (48.5, 54.5),  # 6.0s — a GLANCE, which is what its motion always read as
+    "peer": (48.5, 57.5),  # 9.0s — v6b only, in place of peek
+    "rCheer": (50.5, 54.5),  # 4.0s — part of the visitor's visit, see COMPOSITE_OF
 }
 
 # Beats that are ONE beat expressed as two, so the gate must not treat them as a collision.
@@ -219,7 +337,12 @@ COMPOSITE_OF = {"rCheer": {"peer", "peek"}}
 #             anything in both. v6d already shipped without it: evidence the deletion costs nothing.
 #   birds   — never in anyone's inventory, never reviewed, 40% duty over three passes, no story.
 #   Zzz     — UI iconography. Idleness here is a reaper classification and a closed pane, not sleep.
-DELETED_EVENTS = ("balloon", "shoot", "birds")
+#   rSleep  — SUPERSEDED BY THE ASK, not merely cut. Both beats are a cessation; the sleep's is
+#             uncaused and the ask's is `cc-decide` class C waiting on a human with no default.
+#             Shipping both puts two stops 15 s apart, and the ambient one makes the distinctive one
+#             read as a repeat of itself. Its posture machinery (the legsWalk/legsStill swap) is
+#             exactly what THE ASK needs and is reused rather than duplicated.
+DELETED_EVENTS = ("balloon", "shoot", "birds", "rSleep")
 
 
 # ── the duty budget ────────────────────────────────────────────────────────────────────────────
@@ -264,14 +387,24 @@ def _waived(kind: str, event: str | None) -> str | None:
     return reason
 
 
+# Beats every variant emits regardless of `art.events` — the three ratified ones plus the cheer.
+# ONE list, read by BOTH the duty budget and the disjointness gate. They used to carry a copy each,
+# which is a silent-divergence trap: a beat added to one list only is either unbudgeted or
+# uncollided, and in both cases the build stays green over the thing the gate exists to check.
+ALWAYS_EMITTED = ("rRefuse", "rAsk", "rOverlap", "rCheer")
+
+
+def active_events(art: Art) -> list[str]:
+    """Every rare event this variant actually emits, earliest first."""
+    active = {n for n in RARE_EVENTS if n in art.events} | set(ALWAYS_EMITTED)
+    if art.second_clawd:
+        active.add("peer")
+    return sorted(active, key=lambda n: RARE_EVENTS[n][0])
+
+
 def assert_duty_budget(art: Art) -> None:
     """Measure every rare event against the ratified budget; fail on any unwaived breach."""
-    active = sorted(
-        {n for n in RARE_EVENTS if n in art.events}
-        | ({"peer"} if art.second_clawd else set())
-        | {"rCheer", "rSleep"},
-        key=lambda n: RARE_EVENTS[n][0],
-    )
+    active = active_events(art)
     spans = {n: RARE_EVENTS[n][1] - RARE_EVENTS[n][0] for n in active}
     agg = sum(spans.values())
     breaches, waived = [], []
@@ -338,6 +471,81 @@ def pct(t: float) -> str:
     return fmt(round(t / P * 100, 3))
 
 
+def at(name: str, secs: float) -> str:
+    """A percentage `secs` into a beat's declared window."""
+    return pct(ev(name)[0] + secs)
+
+
+def atf(name: str, frac: float) -> str:
+    """A percentage at a FRACTION of the way through a beat's window.
+
+    The only safe way to place an interior keyframe. Absolute-second offsets do not survive a beat
+    being re-timed to a shorter window: they run off the end, land on a negative percentage, and CSS
+    drops the whole keyframe block silently. Fractions cannot, by construction.
+    """
+    w0, w1 = ev(name)
+    return pct(w0 + frac * (w1 - w0))
+
+
+GATE_EDGE = 0.1  # s — the hard swap between a gate's two states
+
+
+def gate(
+    name: str, sel: str, windows: list[tuple[float, float]], on_inside: bool = True
+) -> str:
+    """An opacity gate: visible inside `windows`, hidden outside (or inverted).
+
+    One animation, one element, `steps(1,end)` so the swap is hard — a pixel-art sprite must never be
+    caught half-faded, and an interpolated opacity is not in the palette.
+    """
+    a, b = ("0", "1") if on_inside else ("1", "0")
+    frames = [f"0%{{opacity:{a}}}"]
+    for w0, w1 in sorted(windows):
+        if w1 + GATE_EDGE > P:
+            raise SystemExit(
+                f"gen: gate '{name}' window ends at {w1}s, too close to P={P}s for its "
+                f"{GATE_EDGE}s swap edge — the gate would never return to its resting state and the "
+                f"loop would seam"
+            )
+        frames.append(f"{pct(w0)}%{{opacity:{a}}}{pct(w0 + GATE_EDGE)}%{{opacity:{b}}}")
+        frames.append(f"{pct(w1)}%{{opacity:{b}}}{pct(w1 + GATE_EDGE)}%{{opacity:{a}}}")
+    frames.append(f"100%{{opacity:{a}}}")
+    return (
+        f"@keyframes {name}{{{''.join(frames)}}}"
+        f"{sel}{{animation:{name} {fmt(P)}s steps(1,end) infinite}}"
+    )
+
+
+def stopped_spans() -> list[tuple[float, float]]:
+    """Contiguous spans where the world is not moving forward — rate zero or negative.
+
+    Derived from the world clock rather than written down beside it, so the creature's stride and the
+    ground it stands on cannot disagree about when the world stopped.
+    """
+    out: list[list[float]] = []
+    for t0, t1, r in world_segments():
+        if r > 0:
+            continue
+        if out and abs(out[-1][1] - t0) < 1e-9:
+            out[-1][1] = t1
+        else:
+            out.append([t0, t1])
+    return [(a, b) for a, b in out]
+
+
+def ask_stop() -> tuple[float, float]:
+    """THE ASK's dead-world span — the only one the stare and the ears belong to."""
+    w0 = RARE_EVENTS["rAsk"][0]
+    zero = [m for m in WORLD_MOD["rAsk"] if m[2] == 0]
+    if len(zero) != 1:
+        raise SystemExit(
+            f"gen: THE ASK declares {len(zero)} rate-zero spans; the stare, the ears and the "
+            f"standing legs are all gated on exactly one. Merge them or gate each explicitly."
+        )
+    off, n, _r = zero[0]
+    return (w0 + off * STRIDE, w0 + (off + n) * STRIDE)
+
+
 def assert_event_names_known(art: Art) -> None:
     """Every event a variant declares must exist in RARE_EVENTS.
 
@@ -360,21 +568,14 @@ def assert_events_disjoint(art: Art) -> None:
     Only the events this variant actually EMITS are checked — carrying an unused keyframe is
     harmless, and `peek`/`peer` deliberately share a slot because no variant has both.
     """
-    active = [n for n in RARE_EVENTS if n in art.events]
-    if art.second_clawd:
-        active.append("peer")
-    if "rCheer" not in active:
-        active.append("rCheer")
-    if "rSleep" not in active:
-        active.append("rSleep")
-    active = sorted(set(active), key=lambda n: RARE_EVENTS[n][0])
+    active = active_events(art)
 
     for i in range(len(active)):
         for j in range(i + 1, len(active)):
             a, b = active[i], active[j]
             (a0, a1), (b0, b1) = RARE_EVENTS[a], RARE_EVENTS[b]
             if b in COMPOSITE_OF.get(a, ()) or a in COMPOSITE_OF.get(b, ()):
-                continue   # one beat in two elements — see COMPOSITE_OF
+                continue  # one beat in two elements — see COMPOSITE_OF
             if a0 < b1 + EVENT_GAP and b0 < a1 + EVENT_GAP:
                 raise SystemExit(
                     f"gen[{art.key}]: rare events '{a}' ({a0:.1f}-{a1:.1f}s) and '{b}' "
@@ -388,6 +589,372 @@ def assert_events_disjoint(art: Art) -> None:
             raise SystemExit(
                 f"gen[{art.key}]: '{active[i]}' window {a0}-{a1}s does not fit in P={P}s"
             )
+
+
+# ── gates on the world clock ───────────────────────────────────────────────────────────────────
+def assert_world_rates_integral() -> None:
+    """Result 2 above, enforced: a fractional rate silently unlocks the footprint."""
+    bad = [(b, r) for b, mods in WORLD_MOD.items() for _o, _n, r in mods if int(r) != r]
+    if bad:
+        raise SystemExit(
+            f"gen: fractional world rate(s) {bad}. The ground must advance a WHOLE number of "
+            f"leg-spacings per stride or the foot stops landing in a print — there is no gentle "
+            f"catch-up. Legal rates are the integers: 0 stops, -1 reverses, 2 and 3 repay."
+        )
+
+
+def assert_world_balanced() -> None:
+    """Every stop and rewind must be repaid INSIDE the loop, and inside its own beat.
+
+    Result 1 above: a permanent deficit would have to be a common multiple of every layer's period,
+    and the slowest layer's period is P itself. If q does not return to 0 the loop seams — and the
+    seam check would catch that, but only after a full Chromium render, and it could not say why.
+    """
+    q = 0.0
+    for beat, mods in WORLD_MOD.items():
+        for _off, n, r in mods:
+            q += STRIP_V * (1 - r) * n * STRIDE
+        if abs(q) > 1e-9:
+            raise SystemExit(
+                f"gen: world clock for '{beat}' ends {q:+.1f}px behind nominal. A stop or rewind is "
+                f"debt: it must be repaid by a rate above nominal within the same beat, or the loop "
+                f"seams. Add strides at rate 2 or 3 (each rate-2 stride repays "
+                f"{STRIP_V * STRIDE:.0f}px, each rate-3 stride {2 * STRIP_V * STRIDE:.0f}px)."
+            )
+    if abs(world_breaks()[-1][1]) > 1e-9:
+        raise SystemExit(
+            f"gen: world clock ends {world_breaks()[-1][1]:+.1f}px off at t=P"
+        )
+
+
+def assert_world_inside_windows() -> None:
+    """A rate modulation must lie inside its beat's DECLARED window.
+
+    Otherwise the duty budget and the disjointness gate are both measuring a window that is not
+    when the world is actually perturbed — the gate reports on a fiction, which is worse than no
+    gate because it reports green over exactly the thing it exists to check.
+    """
+    for beat, mods in WORLD_MOD.items():
+        w0, w1 = RARE_EVENTS[beat]
+        lo = w0 + min(o for o, _n, _r in mods) * STRIDE
+        hi = w0 + max(o + n for o, n, _r in mods) * STRIDE
+        if lo < w0 - 1e-9 or hi > w1 + 1e-9:
+            raise SystemExit(
+                f"gen: '{beat}' modulates the world over {lo:.2f}-{hi:.2f}s but declares "
+                f"{w0:.2f}-{w1:.2f}s in RARE_EVENTS. Widen the declared window: every temporal gate "
+                f"reads the declaration, so an un-declared perturbation is an unbudgeted event."
+            )
+
+
+def assert_warp_within_tile() -> None:
+    """The warp shifts a scrolling layer beyond its own wrap, so each carries a -TILE pad copy.
+
+    That pad buys exactly one tile of headroom. A deeper stop would slide the layer past it and
+    open a hard-edged GAP of page background at the frame edge — which on a dark plate is very
+    nearly invisible, so it would ship.
+    """
+    qmax = max(abs(q) for _t, q in world_breaks())
+    if qmax > TILE:
+        raise SystemExit(
+            f"gen: the world falls {qmax:.0f}px behind nominal, past the {TILE}px pad copy every "
+            f"warped layer carries — the frame edge would show a gap. Shorten the stop, or emit a "
+            f"second pad copy in `duplicate`."
+        )
+
+
+def assert_print_lock(art: Art, encoded: list[tuple[float, float]]) -> None:
+    """The thesis, re-proved UNDER the warp: the foot lands in an existing print every stride.
+
+    `encoded` is the (t, q) polyline recovered from the percentages actually written into the
+    stylesheet — not from `world_breaks()`. That distinction is the whole point: computing the check
+    from the same expression that generated the CSS would only prove this function agrees with
+    itself, and would stay green through any rounding introduced between here and the file. The
+    lesson is on the record twice in this repo: a control has to replay the real artifact.
+
+    The condition is exact, not approximate. Foot at canvas x_f; the strip coordinate under it is
+    x_f + q(t) + STRIP_V*t; a print sits at every multiple of the pitch measured from x_f. So the
+    foot is in a print iff (q(t) + STRIP_V*t) is a whole number of pitches, and that must hold at
+    EVERY stride boundary in the loop.
+    """
+    pitch = STRIP_PX_PER_STRIDE
+    worst = (0.0, 0.0)
+    n = int(round(P / STRIDE))
+    for m in range(n):
+        t = m * STRIDE
+        q = _interp(encoded, t)
+        off = (q + STRIP_V * t) % pitch
+        off = min(off, pitch - off)  # distance to the NEAREST print, either side
+        if off > worst[1]:
+            worst = (t, off)
+    if worst[1] > 1e-6:
+        raise SystemExit(
+            f"gen[{art.key}]: FOOTPRINT LOCK BROKEN — at t={worst[0]:.2f}s the foot lands "
+            f"{worst[1]:.6f}px from the nearest print (pitch {pitch:g}px). The record is the thesis; "
+            f"a foot that misses it makes the ground decorative. Every world rate must be an integer "
+            f"and every segment a whole number of {STRIDE:g}s strides."
+        )
+    print(f"  [{art.key}] print lock: 0.000000px over {n} stride boundaries")
+
+
+def _interp(poly: list[tuple[float, float]], t: float) -> float:
+    """Linear interpolation over a (t, value) polyline — the same reading a CSS `linear` run makes."""
+    for (t0, v0), (t1, v1) in zip(poly, poly[1:]):
+        if t0 - 1e-9 <= t <= t1 + 1e-9:
+            if t1 - t0 < 1e-12:
+                return v1
+            return v0 + (v1 - v0) * (t - t0) / (t1 - t0)
+    return poly[-1][1]
+
+
+def assert_all_gates_wired() -> None:
+    """Every `assert_*` in this module must actually be CALLED from `build`.
+
+    This is the other half of "define an assertion and prove it fires", and it is the half that has
+    already failed twice on this branch. S12 records one: an assertion was written, reviewed and
+    committed, and never ran, because the patch anchor was single-quoted and a formatter had already
+    converted it to double quotes, so the wiring edit no-opped in silence. A build stayed green over
+    a check that did not exist. Proving a guard CAN fail says nothing about whether anything asks it.
+
+    Reading `build`'s own source is deliberate: a hand-maintained list of expected calls is a third
+    copy of the same fact and would rot exactly like the other two.
+    """
+    import inspect
+
+    body = inspect.getsource(build)
+    mine = [
+        n
+        for n, o in sorted(globals().items())
+        if n.startswith("assert_") and callable(o) and n != "assert_all_gates_wired"
+    ]
+    orphans = [n for n in mine if f"{n}(" not in body]
+    if orphans:
+        raise SystemExit(
+            f"gen: {len(orphans)} assertion(s) are DEFINED BUT NEVER CALLED from build(): "
+            f"{orphans}. An unwired gate is worse than no gate — it reads as coverage in review and "
+            f"the build goes green over the thing it was written to catch."
+        )
+
+
+def assert_keyframe_pcts_sane(art: Art, sheet: str) -> None:
+    """Every keyframe selector in the emitted stylesheet must be a percentage in [0, 100].
+
+    This is the guard for a defect that was live in the committed v6b and that nothing caught. Its
+    interior keyframes were placed at absolute second offsets (`+14`, `-16`) carried over from a much
+    longer window; on the 9 s peer they resolved to -0.83% and -1.67%. CSS drops a keyframe block
+    with an invalid selector WHOLE, so the peer never stopped beside the resident and its cheer never
+    appeared at all — and the file was well-formed, the lint passed, the seam passed, twelve frames
+    were distinct, both themes rendered. A beat can be entirely absent from a candidate while every
+    check reports green, which is why this reads the stylesheet rather than the intent behind it.
+    """
+    bad = []
+    for block in re.finditer(
+        r"@keyframes\s+([\w-]+)\s*\{(.*?)\}\s*(?=@|\.|$)", sheet, re.S
+    ):
+        name, body = block.group(1), block.group(2)
+        for sel in re.finditer(r"(?:^|\})\s*([^{}]+?)\s*\{", "}" + body):
+            for token in sel.group(1).split(","):
+                token = token.strip()
+                if not token or token in ("from", "to"):
+                    continue
+                if not token.endswith("%"):
+                    bad.append((name, token, "not a percentage"))
+                    continue
+                try:
+                    v = float(token[:-1])
+                except ValueError:
+                    bad.append((name, token, "unparseable"))
+                    continue
+                if v < 0 or v > 100:
+                    bad.append((name, token, "outside 0-100%"))
+    if bad:
+        raise SystemExit(
+            f"gen[{art.key}]: invalid keyframe selector(s) — CSS drops the whole block SILENTLY, so "
+            f"the beat simply does not happen:\n"
+            + "\n".join(f"  · @keyframes {n}: '{t}' ({why})" for n, t, why in bad)
+            + "\nPlace interior keyframes with atf() — a fraction of the window, never a second "
+            "offset that can run off its end."
+        )
+
+
+def assert_every_shape_is_themed(art: Art, sheet: str, body: str, defs: str) -> None:
+    """Every painted shape must get its colour from the palette, not from the SVG default.
+
+    THE REFUSAL's barrier shipped its first render in solid black because it carried a class with no
+    fill rule behind it. That is not a loud failure: SVG's initial `fill` is black, so the shape
+    renders confidently in a colour no theme chose, and on the light scheme it would have been black
+    on pale. Nothing in the output pipeline can catch it — the file is well-formed, one animation per
+    element, the seam holds, twelve frames differ, both schemes "render". Only the eye catches it, and
+    only if the crop happens to include it.
+    """
+    # `fill` INHERITS in SVG, so the question is whether the shape OR ANY ANCESTOR supplies one. A
+    # first cut of this check looked at each shape's own class alone and flagged all ~400 stars, which
+    # legitimately take their colour from `<g class="st sn tw0">`. Worth recording: a guard whose
+    # model of the format is wrong produces a wall of false positives, and the only cheap response to
+    # that is to delete it — so an over-strict guard ends up costing exactly what no guard costs.
+    import xml.etree.ElementTree as ET
+
+    def filter_generates_its_own_paint(el) -> bool:
+        """True when a filter REPLACES the shape rather than modifying it.
+
+        The grain rect is the case: its filter starts at `feTurbulence` and never references
+        SourceGraphic, so the output is entirely synthesised and the rect's own fill cannot reach the
+        screen. Adding a fill to satisfy a checker would be a lie written to keep a checker quiet.
+        A filter that DOES consume SourceGraphic is not exempt — there the fill is still the input.
+        """
+        ref = re.match(r"url\(#([\w-]+)\)", el.get("filter") or "")
+        if not ref:
+            return False
+        block = re.search(
+            rf'<filter id="{re.escape(ref.group(1))}".*?</filter>', defs, re.S
+        )
+        if not block:
+            return False
+        chain = block.group(0)
+        return (
+            "SourceGraphic" not in chain
+            and re.search(r"<fe(?:Turbulence|Flood|Image)\b", chain) is not None
+        )
+
+    def supplies_paint(el) -> bool:
+        if el.get("fill") or el.get("stroke"):
+            return True
+        if filter_generates_its_own_paint(el):
+            return True
+        for cls in (el.get("class") or "").split():
+            for rule in re.findall(rf"\.{re.escape(cls)}\b[^{{}}]*{{([^}}]*)}}", sheet):
+                if re.search(r"(?:fill|stroke)\s*:", rule):
+                    return True
+        return False
+
+    ns = "{http://www.w3.org/2000/svg}"
+    shapes = {f"{ns}{t}" for t in ("rect", "circle", "ellipse", "path", "polygon")}
+    root = ET.fromstring(f"<svg xmlns='http://www.w3.org/2000/svg'>{body}</svg>")
+    missing = set()
+
+    def walk(el, inherited: bool) -> None:
+        here = inherited or supplies_paint(el)
+        if el.tag in shapes and not here:
+            missing.add(el.get("class") or f"<no class> at x={el.get('x')}")
+        for kid in el:
+            walk(kid, here)
+
+    for kid in root:
+        walk(kid, False)
+    if missing:
+        raise SystemExit(
+            f"gen[{art.key}]: painted shape(s) with no fill in the stylesheet: {sorted(missing)}. "
+            f"SVG's initial fill is BLACK, so these render in a colour no theme picked — visible as "
+            f"a hard graphic element on the dark plate and worse on the light one. Give each a rule "
+            f"in both schemes, or an inline fill= at the call site."
+        )
+
+
+def overlap_x0(art: Art) -> float:
+    """Strip x of THE OVERLAP run's first print. ONE definition, read by the emitter AND the gate."""
+    return foot_r(art) + STRIP_V * RARE_EVENTS["rOverlap"][0]
+
+
+def refusal_x0(art: Art) -> float:
+    """Strip x of THE REFUSAL barrier's left end. ONE definition, ditto."""
+    return foot_r(art) + BAR_CLEAR + STRIP_V * (RARE_EVENTS["rRefuse"][0] + BAR_AT)
+
+
+def strip_features(art: Art) -> list[tuple[str, float, float]]:
+    """(beat, strip_x0, strip_x1) for every EVENT-OWNED object riding the scrolling ground."""
+    pitch = STRIP_PX_PER_STRIDE
+    ox, px = overlap_x0(art), refusal_x0(art)
+    return [
+        ("rOverlap", ox - 9, ox + (OVERLAP_PRINTS - 1) * pitch + 9),
+        ("rRefuse", px, px + BAR_LEN),
+    ]
+
+
+def assert_one_strip_feature(art: Art) -> None:
+    """At most one event-owned feature on canvas at a time.
+
+    The temporal gate is not enough for these two, and that is the whole reason this exists. A beat
+    riding the strip is on canvas for (1920 + its width) / 96 ≈ 20-26 s no matter how short its beat
+    is, so two beats a comfortable 4 s apart in the event table can still put two objects on screen
+    together for twenty seconds — which is precisely the "volume dilutes significance" failure the
+    redesign was ordered to fix, arriving through a gate that reports green.
+
+    Swept over the real world clock, not over t, because THE ASK stops the ground: a stop compresses
+    the wall-clock gap between two strip features without changing either's declared window.
+    """
+    feats = strip_features(art)
+    step = 0.05
+    n = int(round(P / step))
+    for i in range(n + 1):
+        t = min(i * step, P)
+        travelled = STRIP_V * t - _interp(_ENCODED_STRIP, t)
+        on = []
+        for name, x0, x1 in feats:
+            for copy in (0.0, GROUND_TRAVEL):
+                a, b = x0 + copy - travelled, x1 + copy - travelled
+                if b > 0 and a < W:
+                    on.append(name)
+        if len(set(on)) > 1:
+            raise SystemExit(
+                f"gen[{art.key}]: at t={t:.2f}s both {sorted(set(on))} are on canvas. A strip-borne "
+                f"beat is visible for ~{(W + BAR_LEN) / STRIP_V:.0f}s regardless of how brief its "
+                f"beat is, so their spacing is set by geometry and not by the {EVENT_GAP:g}s event "
+                f"gap. Move one beat later in RARE_EVENTS."
+            )
+
+
+def assert_overlap_ink_is_ambient(art: Art) -> None:
+    """THE OVERLAP must lay down prints indistinguishable from the ambient ones.
+
+    Its whole claim is a DENSER RECORD — one stretch of ground carrying two walkers' worth. The
+    moment its prints differ in colour, size or opacity they stop being record and become a new
+    object crossing the frame, and then its declared 8.25 s window is measuring the wrong thing
+    entirely: an object is on canvas for 20 s+, and the duty budget was told 8.25.
+    """
+    x = 500.0
+    if print_ink(x) != print_ink(
+        x
+    ):  # pragma: no cover - stability of the spelling itself
+        raise SystemExit("gen: print_ink is not deterministic")
+    ambient = print_ink(x)
+    if 'class="fpr"' not in ambient:
+        raise SystemExit(
+            f"gen[{art.key}]: prints no longer carry the ambient `fpr` class, so the overlap run "
+            f"cannot be ink-identical to the record it is meant to thicken"
+        )
+    body = "".join(
+        print_ink(overlap_x0(art) + k * STRIP_PX_PER_STRIDE)
+        for k in range(OVERLAP_PRINTS)
+    )
+    shape = re.sub(r'x="[-\d.]+"', 'x="_"', ambient)
+    for chunk in re.findall(r"<rect[^>]*/>", body):
+        if re.sub(r'x="[-\d.]+"', 'x="_"', chunk + "") not in shape:
+            raise SystemExit(
+                f"gen[{art.key}]: an overlap print differs from an ambient print other than in x:\n"
+                f"  overlap: {chunk}\n  ambient: {ambient}\n"
+                f"Both must come from print_ink(), or the beat is an object, not a record."
+            )
+
+
+def assert_hop_clear_of_stopped_world(art: Art) -> None:
+    """Texture must not contradict the beat it lands in.
+
+    The hop is involuntary life on a 12 s clock and is deliberately NOT a rare event. But a hop
+    inside a dead-stopped world is a creature jumping while the world is frozen — the exact
+    non-sequitur this redesign exists to remove, and it would arrive purely from re-timing a beat,
+    with every existing gate still green.
+    """
+    stops = [(t0, t1) for t0, t1, r in world_segments() if r <= 0]
+    k = 0
+    while k * HOP_PERIOD < P:
+        h0, h1 = k * HOP_PERIOD + HOP_RISE, k * HOP_PERIOD + HOP_FALL
+        for s0, s1 in stops:
+            if h0 < s1 and s0 < h1:
+                raise SystemExit(
+                    f"gen[{art.key}]: the hop fires {h0:.2f}-{h1:.2f}s, inside a stopped/reversed "
+                    f"world ({s0:.2f}-{s1:.2f}s) — a creature jumping while the world is frozen. "
+                    f"Move the beat off the {HOP_PERIOD:g}s hop clock."
+                )
+        k += 1
 
 
 # ── palette ───────────────────────────────────────────────────────────────────────────────────────
@@ -631,16 +1198,46 @@ def rects(cols, cls: str) -> str:
     )
 
 
-def tiled(body: str, cls: str, dur: float, delay: float = 0.0) -> str:
-    """One scrolling parallax layer. `body` must already contain its own +TILE duplicate."""
+# Every distinct layer speed that gets a warp wrapper, collected during the build so exactly the
+# animations that are used are emitted. Keyed by px/s.
+_WARPED: set[float] = set()
+
+
+def warp_class(v: float) -> str:
+    """The wrapper class for a layer travelling at `v` px/s."""
+    _WARPED.add(v)
+    return "wp" + fmt(round(v, 4)).replace(".", "_")
+
+
+def tiled(
+    body: str, cls: str, dur: float, delay: float = 0.0, warp: bool = True
+) -> str:
+    """One scrolling parallax layer, wrapped in its world-clock warp.
+
+    The warp CANNOT live in this layer's own keyframes. Its period is a sub-multiple of P, so a hold
+    written into it would fire once per sub-period — twelve times a loop for the strip — which is a
+    beacon of repetition rather than a rare beat. Nesting it as an outer group instead gives two
+    single-animation elements (S8), leaves the ambient scroll byte-for-byte what it already was, and
+    makes the modulation exactly once per loop.
+    """
     divides_P(dur)
     style = f' style="--d:{fmt(-delay)}s"' if delay else ""
-    return f'<g class="{cls}"{style}>{body}</g>'
+    inner = f'<g class="{cls}"{style}>{body}</g>'
+    if not warp:
+        return inner
+    return f'<g class="{warp_class(TILE / dur)}">{inner}</g>'
 
 
-def duplicate(body_fn) -> str:
-    """Render a layer twice, the second copy offset by exactly TILE, so translateX(-TILE) wraps."""
-    return body_fn(0) + body_fn(TILE)
+def duplicate(body_fn, pad: bool = True) -> str:
+    """Render a layer at -TILE, 0 and +TILE so translateX wraps seamlessly under the warp.
+
+    Two copies is enough for an unwarped layer, whose translate stays inside [0, -TILE]. The warp
+    adds a positive offset on top of that, so just after a wrap the layer needs content to the LEFT
+    of its own origin or the frame edge shows a hard-edged gap of page background — which against a
+    dark plate is very nearly invisible and would therefore ship. `assert_warp_within_tile` bounds
+    the offset to the one tile this pad buys.
+    """
+    return (body_fn(-TILE) if pad else "") + body_fn(0) + body_fn(TILE)
 
 
 # ── sky ───────────────────────────────────────────────────────────────────────────────────────────
@@ -1049,22 +1646,175 @@ def footprints(art: Art) -> str:
     pitch = STRIP_PX_PER_STRIDE
     n = TILE / pitch
     if abs(n - round(n)) > 1e-9:
-        raise SystemExit(f"gen[{art.key}]: TILE {TILE} is not a whole number of {pitch}px print "
-                         f"pitches ({n:.3f}) — the grid would jump at the tile wrap")
-    foot0 = art.clawd_x + CELL * art.clawd_scale        # leftmost leg, in canvas units
-    offset = foot0 % pitch
+        raise SystemExit(
+            f"gen[{art.key}]: TILE {TILE} is not a whole number of {pitch}px print "
+            f"pitches ({n:.3f}) — the grid would jump at the tile wrap"
+        )
+    offset = foot_l(art) % pitch
 
     def body(shift: float) -> str:
         out = []
         for k in range(int(round(n))):
-            x = shift + offset + k * pitch
-            # two pads, so it reads as a print rather than as a dash of ground texture
-            out.append(
-                f'<rect class="fpr" x="{fmt(x - 9)}" y="{fmt(GROUND + 5)}" width="8" height="4"/>'
-                f'<rect class="fpr" x="{fmt(x + 1)}" y="{fmt(GROUND + 5)}" width="8" height="4"/>')
+            out.append(print_ink(shift + offset + k * pitch))
         return "".join(out)
 
     return tiled(duplicate(body), "fprs", STRIP_PERIOD)
+
+
+def print_ink(x: float) -> str:
+    """One footprint, centred on x. The SINGLE spelling of a print's ink.
+
+    THE OVERLAP calls this too, and that is load-bearing rather than tidy: the extra prints it lays
+    down must be indistinguishable from ambient ones. If the overlap run ever gets its own colour or
+    size it stops being a denser RECORD and becomes a new object crossing the frame — a feature with
+    a 20 s on-canvas life instead of an 8 s beat, and a different thing entirely from what the duty
+    budget was told it was measuring. `assert_overlap_ink_is_ambient` refuses that.
+    """
+    return (
+        f'<rect class="fpr" x="{fmt(x - 9)}" y="{fmt(GROUND + 5)}" width="8" height="4"/>'
+        f'<rect class="fpr" x="{fmt(x + 1)}" y="{fmt(GROUND + 5)}" width="8" height="4"/>'
+    )
+
+
+def foot_l(art: Art) -> float:
+    """Canvas x of the leftmost leg's outer edge — the print grid's anchor."""
+    return art.clawd_x + CELL * art.clawd_scale
+
+
+def foot_r(art: Art) -> float:
+    """Canvas x of the rightmost leg's outer edge. The legs span 4 pitches, so a beat that has to be
+    read AT THE FOOT has to clear all four of them, not one."""
+    return art.clawd_x + 10 * CELL * art.clawd_scale
+
+
+# ── the three ratified beats ───────────────────────────────────────────────────────────────────
+# A world-borne object travels STRIP_V*P over the loop, so a single copy is visible for one pass
+# only — which means it is on canvas at t=0 and gone at t=P, and the SEAM check fails. Emitting the
+# same object again one full loop-travel downstream makes t=0 and t=P present identically BY
+# CONSTRUCTION rather than by the accident of both being off-canvas.
+GROUND_TRAVEL = STRIP_V * P  # 23040 px — one loop of world travel at the strip rate
+OVERLAP_PRINTS = 12  # the successor's own record: "two walkers' worth", ~12 prints
+BAR_LEN, BAR_W, POST_W, POST_H = 116.0, 7.0, 7.0, 66.0
+BAR_CLEAR = 36.0  # how far ahead of the leading foot the bar comes down
+BAR_DROP = (
+    30.0  # how far it falls — far enough to cross the leg band, which is 48px tall
+)
+# Seconds after the REFUSAL's window opens at which the bar is fully down. It must coincide with the
+# first stalled stride, or the world stops before anything has asked it to.
+BAR_AT = WORLD_MOD["rRefuse"][0][0] * STRIDE
+# ...and when it lifts: the instant the world has finished re-walking the step it was sent back over,
+# which is the end of the rate-1 segment in the middle of the beat. Both derived, so re-timing the
+# modulation moves the barrier with it instead of leaving it hanging over a world already moving on.
+BAR_UP_AT = (WORLD_MOD["rRefuse"][2][0] + WORLD_MOD["rRefuse"][2][1]) * STRIDE
+
+
+_ENCODED_STRIP: list[tuple[float, float]] = []
+
+
+def warp_css() -> str:
+    """One @keyframes per warped layer speed, driving every ground layer off ONE world clock.
+
+    Each layer's offset is scaled by its own speed, so the parallax stays coherent: a stopped world
+    stops the near tufts and the far mounds in the same proportion they normally move. The sky is
+    NOT warped — the clouds keep drifting through THE ASK. That is a decision, not an omission: the
+    ground's rate is the gauge the beats speak in, and a session blocked on a human does not stop the
+    world, it stops its own progress. A frozen sky would also say the render had died.
+
+    Side effect: records the strip-speed polyline exactly as encoded, for `assert_print_lock`.
+    """
+    breaks = world_breaks()
+    out = []
+    for v in sorted(_WARPED):
+        cls = warp_class(v)
+        frames = []
+        for t, q in breaks:
+            frames.append((pctx(t), fmt(round(q * v / STRIP_V, 4))))
+        out.append(
+            f"@keyframes {cls}f{{"
+            + "".join(f"{p}%{{transform:translateX({x}px)}}" for p, x in frames)
+            + f"}}.{cls}{{animation:{cls}f {fmt(P)}s linear infinite}}"
+        )
+        if abs(v - STRIP_V) < 1e-9:
+            # read back out of the emitted TEXT — see assert_print_lock's docstring
+            _ENCODED_STRIP[:] = [(float(p) / 100 * P, float(x)) for p, x in frames]
+    if not _ENCODED_STRIP:
+        raise SystemExit(
+            "gen: no layer scrolls at the strip rate, so the print lock has nothing to be measured "
+            "against — the footprint grid is anchored to that rate by construction"
+        )
+    return "".join(out)
+
+
+def world_borne(body_fn, cls: str, extra: str = "") -> str:
+    """One object that travels with the ground, warped by the world clock like every ground layer."""
+    inner = f'<g class="{cls}"{extra}>{body_fn(0)}{body_fn(GROUND_TRAVEL)}</g>'
+    return f'<g class="{warp_class(STRIP_V)}">{inner}</g>'
+
+
+def overlap_run(art: Art) -> str:
+    """THE OVERLAP — `handoff-fire.sh self-close --successor` refuses to retire a predecessor until
+    the successor is VERIFIED ENGAGED, so succession overlaps rather than touches.
+
+    For twelve prints the pitch halves: two walkers' worth of record on one stretch of ground. The
+    foot still lands every 48 px, so it lands on every SECOND print, and that mismatch is the tell —
+    there is more record here than one walker can account for. It exits by resolution: the run ends,
+    the pitch halves back, the foot re-registers.
+
+    Nothing fades in. The denser stretch arrives from the right as ground, because that is what it
+    is: the record was written before this stretch reached us. An opacity gate would have popped the
+    extra prints into existence across the whole frame at once, which is the despawn-in-reverse the
+    spec rules out.
+    """
+    pitch = STRIP_PX_PER_STRIDE
+    # The left edge meets the rightmost foot exactly at the declared window start.
+    x0 = overlap_x0(art)
+    half = (x0 - foot_l(art)) % pitch
+    if abs(half - pitch / 2) > 1e-9:
+        raise SystemExit(
+            f"gen[{art.key}]: the overlap run sits {half:.3f}px off the ambient print grid, not the "
+            f"{pitch / 2:g}px half-pitch it must sit at. At any other offset the foot does not land "
+            f"on every second print — it lands between prints, which reads as a broken grid rather "
+            f"than as two records. Keep the window start a whole number of {STRIDE:g}s strides."
+        )
+
+    def body(shift: float) -> str:
+        return "".join(print_ink(shift + x0 + k * pitch) for k in range(OVERLAP_PRINTS))
+
+    return world_borne(body, "ovl")
+
+
+def refusal_gate(art: Art) -> str:
+    """THE REFUSAL — `completion-assert.sh` refuses a false "done".
+
+    A post arrives with the ground. When it draws level with the creature's path the bar comes down
+    across it; the creature settles, trying to end its turn; the world pulls back exactly one print
+    pitch so the creature is returned to the print it already made; it steps that step again; the bar
+    lifts and it makes up the ground it lost.
+
+    The post is deliberately still on canvas through THE ASK that follows, and that is not leftover
+    scenery. A stopped strip of UNIFORM ground texture is ambiguous — nothing in it says whether it
+    is moving. One distinct object standing dead still is unambiguous, so the post is what makes the
+    next beat's cessation legible at all. It never does anything during it; it just holds.
+    """
+    x0 = refusal_x0(art)
+    top = GROUND - POST_H
+
+    def body(shift: float) -> str:
+        px = shift + x0 + BAR_LEN - POST_W
+        _SCROLLING.append((top, GROUND, "rfPost"))
+        _SCROLLING.append((top + 4, top + 4 + BAR_W + BAR_DROP, "rfBar"))
+        return (
+            f'<rect class="rfp" x="{fmt(px)}" y="{fmt(top)}" width="{fmt(POST_W)}" '
+            f'height="{fmt(POST_H)}"/>'
+            # The bar is ALWAYS present, retracted at the post's head, and drops into the path. So
+            # nothing spawns and nothing despawns: the exit is the same mechanism as the entrance,
+            # played backwards, which is what reads as intent rather than as a fade.
+            f'<g class="rfBar">'
+            f'<rect class="rfp" x="{fmt(shift + x0)}" y="{fmt(top + 4)}" width="{fmt(BAR_LEN)}" '
+            f'height="{fmt(BAR_W)}"/></g>'
+        )
+
+    return world_borne(body, "rfPost")
 
 
 def ground_detail(art: Art) -> str:
@@ -1143,7 +1893,7 @@ def clawd_sprite(idsuffix: str = "") -> str:
     """
     c = CELL
     sfx = idsuffix
-    divides_P(0.5, 2.0, 4.0, 8.0, 12.0, 80.0, 120.0, 240.0)
+    divides_P(STRIDE, 2.0, 4.0, 8.0, HOP_PERIOD, 80.0, 120.0, 240.0)
 
     eye_l, eye_r = 2 * c, 8 * c  # eye columns
     eye_y = 2 * c
@@ -1195,16 +1945,26 @@ def clawd_sprite(idsuffix: str = "") -> str:
         + "</g>"
     )
 
-    # sleep: lids drawn over the eye holes in body orange, plus a drifting Z pair
-    sleep = (
-        f'<g class="rSleep{sfx}">'
-        f'<rect x="{eye_l}" y="{eye_y}" width="{c}" height="{c}" fill="{CLAWD}"/>'
-        f'<rect x="{eye_r}" y="{eye_y}" width="{c}" height="{c}" fill="{CLAWD}"/>'
-        f'<rect x="{fmt(eye_l + 1)}" y="{fmt(eye_y + c * 0.6)}" width="{fmt(c - 2)}" '
-        f'height="{fmt(c * 0.22)}" fill="#2b1b14"/>'
-        f'<rect x="{fmt(eye_r + 1)}" y="{fmt(eye_y + c * 0.6)}" width="{fmt(c - 2)}" '
-        f'height="{fmt(c * 0.22)}" fill="#2b1b14"/>'
-                f"</g>"
+    # THE ASK's posture. The sleep this replaces shut the eyes; an ask does the opposite — it is
+    # waiting on a human and looking straight at where the answer has to come from. So the ask needs
+    # the eye band PARKED rather than moving: the 8 s look cycle is swapped out wholesale for a
+    # static centred pair, exactly as the legs are. Six seconds without a blink is a stare, which is
+    # the read the beat wants; keeping the blink would have meant putting the whole look cycle on the
+    # master period, thirty repetitions of it, to gate six seconds out of the middle.
+    eyes_ask = (
+        f'<g class="eyesAsk{sfx}">'
+        f'<rect class="eyeHole" x="{eye_l}" y="{eye_y}" width="{c}" height="{c}"/>'
+        f'<rect class="eyeHole" x="{eye_r}" y="{eye_y}" width="{c}" height="{c}"/>'
+        f"</g>"
+    )
+    # ears up: the stubs rise ONE cell in their own columns. Deliberately not the cheer's three cells
+    # out-and-up — the measurement on this grid puts -2 at "hat brim" and -4 at "antennae", and this
+    # beat is alertness, not a gesture. It reads as attention because everything else has stopped.
+    arms_alert = (
+        f'<g class="armsAlert{sfx}">'
+        f'<rect x="0" y="{eye_y - c}" width="{c}" height="{2 * c}" fill="{CLAWD}"/>'
+        f'<rect x="{10 * c}" y="{eye_y - c}" width="{c}" height="{2 * c}" fill="{CLAWD}"/>'
+        f"</g>"
     )
 
     return (
@@ -1219,12 +1979,15 @@ def clawd_sprite(idsuffix: str = "") -> str:
         # so it becomes a nested wrapper: gate outside, wiggle inside.
         f'<g class="armsGate{sfx}"><g class="armsIdle{sfx}">{arms_idle}</g></g>'
         f'<g class="rCheer{sfx}">{arms_up}</g>'
+        f"{arms_alert}"
         f"{body}"
-        f'<g class="look{sfx}">'
+        # The look cycle needs an opacity gate for THE ASK, and it already carries the 8 s pan, so it
+        # takes a wrapper: gate outside, pan inside. Same shape as armsGate/armsIdle, same reason.
+        f'<g class="lookGate{sfx}"><g class="look{sfx}">'
         f'<g class="eOpen{sfx}">{eyes_open}</g>'
         f'<g class="eShut{sfx}">{eyes_shut}</g>'
-        f"</g>"
-        f"{sleep}"
+        f"</g></g>"
+        f"{eyes_ask}"
         # legs swap wholesale between walking and standing, so the stride can stop during a doze
         # without any element carrying two animations
         f'<g class="legsWalk{sfx}">{legs("legA" + sfx, (1, 7))}{legs("legB" + sfx, (3, 9))}</g>'
@@ -1293,6 +2056,12 @@ def css(art: Art) -> str:
         f".grain{{opacity:{fmt(d.grain)}}}"
         f".rl{{stroke:{d.rule}}}.wm{{fill:{d.wm}}}.sub{{fill:{d.sub}}}"
         f".tf0,.tf1{{fill:{d.tuft}}}.fgb{{fill:{d.fg}}}.fpr{{fill:{d.fg};opacity:.55}}"
+        # THE REFUSAL's barrier takes the GROUND RULE's own colour. It had no fill rule at all on
+        # first render and therefore fell back to the SVG default of solid black, which against a
+        # #1e2941 ground read as a hard graphic bracket pasted over the scene — and would have been
+        # black-on-pale in the light scheme, where it is worse. Nothing here may be un-themed: a
+        # missing fill does not error, it picks a colour from outside the palette.
+        f".rfp{{fill:{d.rule};opacity:.9}}"
         f".ss{{fill:#f2f6ff}}.brd{{fill:{d.mound[0]}}}.bal{{fill:{CLAWD}}}.balStr{{stroke:none;fill:{CLAWD};opacity:.45}}"
         f".eyeHole{{fill:#1b1109}}.sh{{fill:#000;opacity:.46}}.zmk{{fill:{d.star}}}"
         f".vig{{fill:url(#vig);opacity:{fmt(d.vignette)}}}" + cloudrules(d) +
@@ -1307,6 +2076,10 @@ def css(art: Art) -> str:
         f".fprs{{animation:sc {fmt(STRIP_PERIOD)}s linear infinite}}"
         f".tf1s{{animation:sc {fmt(P / 10)}s linear infinite}}"
         f".fgbs{{animation:sc {fmt(P / 12)}s linear infinite}}"
+        # a world-borne single object travels the whole loop's worth of ground in one pass
+        f"@keyframes gsc{{from{{transform:translateX(0)}}"
+        f"to{{transform:translateX(-{fmt(GROUND_TRAVEL)}px)}}}}"
+        f".ovl,.rfPost{{animation:gsc {fmt(P)}s linear infinite}}" + warp_css() +
         # ---- twinkle: three rates so the sky has depth rather than one uniform pulse ----
         # Twinkle varies opacity AND scale together on eased curves. A pure opacity blink reads as a
         # rendering glitch rather than as atmosphere, and three uncorrelated periods stop the
@@ -1344,75 +2117,89 @@ def css(art: Art) -> str:
         f"@keyframes arf{{0%,64%{{transform:translateY(0)}}72%{{transform:translateY(-{fmt(CELL * 0.55)}px)}}"
         f"82%,100%{{transform:translateY(0)}}}}"
         f".armsIdle{{animation:arf 2s ease-in-out infinite}}"
-        # hop every 12 s, not every 4 — an occasional hop is life, a constant one is a bob
-        f"@keyframes hpf{{0%,72%{{transform:translateY(0)}}78%{{transform:translateY(-30px)}}"
-        f"84%{{transform:translateY(0)}}88%{{transform:translateY(-9px)}}92%,100%{{transform:translateY(0)}}}}"
-        f".hop{{animation:hpf 12s cubic-bezier(.3,.05,.4,1) infinite}}"
-        # the shadow squashes on the same 12 s clock — the cue that sells the hop as a jump
-        f"@keyframes shf{{0%,72%{{transform:scale(1,1);opacity:.46}}78%{{transform:scale(.66,.5);opacity:.14}}"
-        f"84%{{transform:scale(1,1);opacity:.46}}88%{{transform:scale(.88,.8);opacity:.24}}"
-        f"92%,100%{{transform:scale(1,1);opacity:.46}}}}"
-        f".shdw{{animation:shf 12s cubic-bezier(.3,.05,.4,1) infinite;transform-origin:"
+        # A hop every 12 s, not every 4 — an occasional hop is life, a constant one is a bob. The
+        # period and the airborne window come from the HOP_* constants because
+        # assert_hop_clear_of_stopped_world reads them: a hardcoded 12s here and a 12.0 there are two
+        # copies of one fact, and the assertion would go on passing against a file it no longer
+        # describes the moment either moved.
+        f"@keyframes hpf{{0%,{fmt(HOP_FROM_PCT)}%{{transform:translateY(0)}}"
+        f"{fmt(HOP_FROM_PCT + 6)}%{{transform:translateY(-30px)}}"
+        f"{fmt(HOP_FROM_PCT + 12)}%{{transform:translateY(0)}}"
+        f"{fmt(HOP_FROM_PCT + 16)}%{{transform:translateY(-9px)}}"
+        f"{fmt(HOP_TO_PCT)}%,100%{{transform:translateY(0)}}}}"
+        f".hop{{animation:hpf {fmt(HOP_PERIOD)}s cubic-bezier(.3,.05,.4,1) infinite}}"
+        # the shadow squashes on the same clock — the cue that sells the hop as a jump
+        f"@keyframes shf{{0%,{fmt(HOP_FROM_PCT)}%{{transform:scale(1,1);opacity:.46}}"
+        f"{fmt(HOP_FROM_PCT + 6)}%{{transform:scale(.66,.5);opacity:.14}}"
+        f"{fmt(HOP_FROM_PCT + 12)}%{{transform:scale(1,1);opacity:.46}}"
+        f"{fmt(HOP_FROM_PCT + 16)}%{{transform:scale(.88,.8);opacity:.24}}"
+        f"{fmt(HOP_TO_PCT)}%,100%{{transform:scale(1,1);opacity:.46}}}}"
+        f".shdw{{animation:shf {fmt(HOP_PERIOD)}s cubic-bezier(.3,.05,.4,1) infinite;"
+        f"transform-origin:"
         f"{fmt(art.clawd_x + SPRITE_W * art.clawd_scale / 2)}px {fmt(GROUND + 3)}px}}"
         # ---- rare emotes and world events ----
         # Every window below is DERIVED from RARE_EVENTS, which the build-time gate also reads, so a
         # stacked pair cannot be emitted. Hand-written percentages are what let the cheer land inside
         # the sleep. Every event runs on the full period, so each fires exactly ONCE per loop.
-        + (
-            lambda: "".join(
-                [
-                    # sleep: lids + Zzz on, walking legs swapped for standing ones
-                    f"@keyframes rsf{{0%,{pct(ev('rSleep')[0])}%{{opacity:0}}"
-                    f"{pct(ev('rSleep')[0] + 0.1)}%,{pct(ev('rSleep')[1])}%{{opacity:1}}"
-                    f"{pct(ev('rSleep')[1] + 0.1)}%,100%{{opacity:0}}}}"
-                    f".rSleep{{animation:rsf {fmt(P)}s steps(1,end) infinite}}",
-                    f"@keyframes lwf{{0%,{pct(ev('rSleep')[0])}%{{opacity:1}}"
-                    f"{pct(ev('rSleep')[0] + 0.1)}%,{pct(ev('rSleep')[1])}%{{opacity:0}}"
-                    f"{pct(ev('rSleep')[1] + 0.1)}%,100%{{opacity:1}}}}"
-                    f".legsWalk{{animation:lwf {fmt(P)}s steps(1,end) infinite}}",
-                    f"@keyframes lsf{{0%,{pct(ev('rSleep')[0])}%{{opacity:0}}"
-                    f"{pct(ev('rSleep')[0] + 0.1)}%,{pct(ev('rSleep')[1])}%{{opacity:1}}"
-                    f"{pct(ev('rSleep')[1] + 0.1)}%,100%{{opacity:0}}}}"
-                    f".legsStill{{animation:lsf {fmt(P)}s steps(1,end) infinite}}",
-                    # cheer: raised arms ON and — the shipped bug — the IDLE side-arms OFF, or the sprite
-                    # shows four arms at once, which is what read as horns with confetti
-                    f"@keyframes rcf{{0%,{pct(ev('rCheer')[0])}%{{opacity:0}}"
-                    f"{pct(ev('rCheer')[0] + 0.1)}%,{pct(ev('rCheer')[1])}%{{opacity:1}}"
-                    f"{pct(ev('rCheer')[1] + 0.1)}%,100%{{opacity:0}}}}"
-                    f".rCheer{{animation:rcf {fmt(P)}s steps(1,end) infinite}}",
-                    f"@keyframes agf{{0%,{pct(ev('rCheer')[0])}%{{opacity:1}}"
-                    f"{pct(ev('rCheer')[0] + 0.1)}%,{pct(ev('rCheer')[1])}%{{opacity:0}}"
-                    f"{pct(ev('rCheer')[1] + 0.1)}%,100%{{opacity:1}}}}"
-                    f".armsGate{{animation:agf {fmt(P)}s steps(1,end) infinite}}",
-                    f"@keyframes pkf{{0%,{pct(ev('peek')[0])}%{{transform:translateY(78px)}}"
-                    f"{pct(ev('peek')[0] + 3)}%,{pct(ev('peek')[1] - 3)}%{{transform:translateY(0)}}"
-                    f"{pct(ev('peek')[1])}%,100%{{transform:translateY(78px)}}}}"
-                    f".peek{{animation:pkf {fmt(P)}s ease-in-out infinite}}",
-                    # ---- the peer session (v6b) ----
-                    # It arrives from the right, holds beside the resident, and RETURNS THE WAY IT CAME.
-                    # It used to exit leftwards THROUGH the resident: same flat #D77757, crispEdges, drawn
-                    # above, so its blank body slid over the face and erased the eyes — two same-colour
-                    # sprites merging into one connected orange region, which reads as a rendering error, or
-                    # worse as one session absorbing another (the handoff infographic R1 rejected, acted out).
-                    # A symmetric exit also reads as intent rather than as a despawn.
-                    f"@keyframes prf{{0%,{pct(ev('peer')[0])}%{{opacity:0;transform:translateX({W + 240}px)}}"
-                    f"{pct(ev('peer')[0] + 1)}%{{opacity:1}}"
-                    f"{pct(ev('peer')[0] + 14)}%,{pct(ev('peer')[1] - 14)}%"
-                    f"{{transform:translateX({fmt(art.clawd_x + SPRITE_W * art.clawd_scale + 46)}px)}}"
-                    f"{pct(ev('peer')[1] - 1)}%{{opacity:1;transform:translateX({W + 240}px)}}"
-                    f"{pct(ev('peer')[1])}%,100%{{opacity:0;transform:translateX({W + 240}px)}}}}"
-                    f".peer{{animation:prf {fmt(P)}s linear infinite}}",
-                    # NOTE: there is deliberately no scaleX flip on the peer. The sprite is bilaterally
-                    # symmetric — eyes at 40-60 and 160-180 about centre 110 — so scaleX(-1) maps it onto
-                    # itself and the "turn to face" beat was invisible by construction. It existed only in
-                    # the code. Direction now reads from travel alone, which is honest.
-                    f"@keyframes pcf{{0%,{pct(ev('peer')[0] + 16)}%{{opacity:0}}"
-                    f"{pct(ev('peer')[0] + 17)}%,{pct(ev('peer')[1] - 16)}%{{opacity:1}}"
-                    f"{pct(ev('peer')[1] - 15)}%,100%{{opacity:0}}}}"
-                    f".pCheer{{animation:pcf {fmt(P)}s steps(1,end) infinite}}",
-                ]
-            )
-        )()
+        + "".join(
+            [
+                # ---- THE ASK and THE REFUSAL: the creature's side of a stopped world ----
+                # The stall windows are DERIVED from the world clock, never written twice. If they
+                # were authored separately the legs could keep striding through a dead world — the
+                # sliding defect the stride lock exists to kill — with every gate still green.
+                gate("lwf", ".legsWalk", stopped_spans(), on_inside=False),
+                gate("lsf", ".legsStill", stopped_spans()),
+                # The stare and the ears belong to THE ASK only. A refusal is a settle, not a stare:
+                # the creature is trying to end its turn, not waiting on anybody.
+                gate("lgf", ".lookGate", [ask_stop()], on_inside=False),
+                gate("eaf", ".eyesAsk", [ask_stop()]),
+                gate("aaf", ".armsAlert", [ask_stop()]),
+                # cheer: raised arms ON and — the shipped bug — the IDLE side-arms OFF, or the
+                # sprite shows four arms at once, which is what read as horns with confetti. The
+                # idle arms must also be off for the ask's raised pair, for the same reason.
+                gate("rcf", ".rCheer", [ev("rCheer")]),
+                gate("agf", ".armsGate", [ev("rCheer"), ask_stop()], on_inside=False),
+                # the barrier: retracted at the post's head, down across the path, retracted again.
+                f"@keyframes rbf{{0%,{at('rRefuse', 0)}%{{transform:translateY(0)}}"
+                f"{at('rRefuse', BAR_AT)}%,{at('rRefuse', BAR_UP_AT)}%"
+                f"{{transform:translateY({fmt(BAR_DROP)}px)}}"
+                f"{at('rRefuse', BAR_UP_AT + 0.4)}%,100%{{transform:translateY(0)}}}}"
+                f".rfBar{{animation:rbf {fmt(P)}s ease-in-out infinite}}",
+                # ---- the visitor beats ----
+                # Offsets are FRACTIONS of the declared window, never absolute seconds. They used to
+                # be seconds — `+14`, `-16` — carried over from a much longer window, so on a 9 s
+                # peer they resolved to NEGATIVE percentages. A keyframe block with an invalid
+                # selector is dropped whole, so v6b shipped with a peer that never stopped beside the
+                # resident and a cheer that never fired at all: no error, no blank frame, just a beat
+                # silently absent from the candidate built to showcase it.
+                f"@keyframes pkf{{0%,{atf('peek', 0)}%{{transform:translateY(78px)}}"
+                f"{atf('peek', 0.45)}%,{atf('peek', 0.55)}%{{transform:translateY(0)}}"
+                f"{atf('peek', 1)}%,100%{{transform:translateY(78px)}}}}"
+                f".peek{{animation:pkf {fmt(P)}s ease-in-out infinite}}",
+                # It arrives from the right, holds beside the resident, and RETURNS THE WAY IT CAME.
+                # It used to exit leftwards THROUGH the resident: same flat #D77757, crispEdges,
+                # drawn above, so its blank body slid over the face and erased the eyes — two
+                # same-colour sprites merging into one connected orange region, which reads as a
+                # rendering error, or worse as one session absorbing another (the handoff
+                # infographic R1 rejected, acted out). A symmetric exit reads as intent, not despawn.
+                f"@keyframes prf{{0%,{atf('peer', 0)}%"
+                f"{{opacity:0;transform:translateX({W + 240}px)}}"
+                f"{atf('peer', 0.06)}%{{opacity:1}}"
+                f"{atf('peer', 0.24)}%,{atf('peer', 0.76)}%"
+                f"{{transform:translateX({fmt(art.clawd_x + SPRITE_W * art.clawd_scale + 46)}px)}}"
+                f"{atf('peer', 0.96)}%{{opacity:1;transform:translateX({W + 240}px)}}"
+                f"{atf('peer', 1)}%,100%{{opacity:0;transform:translateX({W + 240}px)}}}}"
+                f".peer{{animation:prf {fmt(P)}s linear infinite}}",
+                # NOTE: there is deliberately no scaleX flip on the peer. The sprite is bilaterally
+                # symmetric — eyes at 40-60 and 160-180 about centre 110 — so scaleX(-1) maps it onto
+                # itself and the "turn to face" beat was invisible by construction. It existed only in
+                # the code. Direction now reads from travel alone, which is honest.
+                f"@keyframes pcf{{0%,{atf('peer', 0.34)}%{{opacity:0}}"
+                f"{atf('peer', 0.36)}%,{atf('peer', 0.66)}%{{opacity:1}}"
+                f"{atf('peer', 0.68)}%,100%{{opacity:0}}}}"
+                f".pCheer{{animation:pcf {fmt(P)}s steps(1,end) infinite}}",
+            ]
+        )
         # the peer's stride — the only peer motion not driven by the event table
         + (
             f"@keyframes pwA{{0%,49%{{transform:translateY(0)}}"
@@ -1446,8 +2233,12 @@ def css(art: Art) -> str:
     reduced = (
         "@media (prefers-reduced-motion:reduce){"
         "*{animation:none!important}"
-        ".rSleep,.rCheer,.legsStill,.eShut,.peer,.pCheer{opacity:0}"
-        ".legsWalk,.eOpen,.armsGate{opacity:1}"
+        ".rCheer,.legsStill,.eShut,.peer,.pCheer,.eyesAsk,.armsAlert{opacity:0}"
+        ".legsWalk,.eOpen,.armsGate,.lookGate{opacity:1}"
+        # The barrier rests RETRACTED. `animation:none` already leaves it there (translateY(0) is its
+        # un-animated base), but the still is the deliverable, so it is pinned rather than inferred —
+        # the same reasoning as the moon halo below, which was blown out for exactly that assumption.
+        ".rfBar{transform:translateY(0)}"
         # `animation:none` reverts an element to its UN-animated base value, which for the
         # moon halo is full strength — the frozen still showed a blown-out glow that never
         # appears in the animation. Pin the breathing values to their mid-points instead.
@@ -1464,6 +2255,7 @@ def css(art: Art) -> str:
         f".mdisc{{fill:{l.moon}}}"
         f".rl{{stroke:{l.rule}}}.wm{{fill:{l.wm}}}.sub{{fill:{l.sub}}}"
         f".tf0,.tf1{{fill:{l.tuft}}}.fgb{{fill:{l.fg}}}.fpr{{fill:{l.fg};opacity:.40}}"
+        f".rfp{{fill:{l.rule};opacity:.9}}"
         f".brd{{fill:{l.mound[0]}}}.sh{{opacity:.20}}"
         f".vig{{opacity:{fmt(l.vignette)}}}" + cloudrules(l) + "}"
     )
@@ -1477,13 +2269,27 @@ def css(art: Art) -> str:
 # ── assembly ──────────────────────────────────────────────────────────────────────────────────────
 def build(art: Art) -> str:
     _SCROLLING.clear()
+    _WARPED.clear()
+    _ENCODED_STRIP.clear()
+    assert_all_gates_wired()
     assert_texture_not_eventised()
     assert_event_names_known(art)
     assert_events_disjoint(art)
     assert_stride_locked(art)
     assert_duty_budget(art)
+    assert_world_rates_integral()
+    assert_world_inside_windows()
+    assert_world_balanced()
+    assert_warp_within_tile()
+    assert_hop_clear_of_stopped_world(art)
     rng = random.Random(20260729 + sum(ord(ch) for ch in art.key))
     scale = art.clawd_scale
+
+    defs = (
+        sky_defs(art)
+        + moon(art)
+        + f'<clipPath id="belowGround"><rect x="0" y="0" width="{W}" height="{GROUND}"/></clipPath>'
+    )
 
     sun_cx, sun_cy, sun_r = art.moon
     day_sun = (
@@ -1494,19 +2300,10 @@ def build(art: Art) -> str:
         f'opacity=".9"/></g>'
     )
 
-    parts = [
-        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" width="{W}" height="{H}" '
-        f'role="img" aria-label="claude-infrastructure — the Claude Code creature walking a '
-        f'looping landscape under drifting clouds">',
-        f"<title>claude-infrastructure</title>",
-        f"<desc>{art.title}. {art.blurb} One 240-second loop; the wordmark is legible at every "
-        f"instant and nothing passes behind it.</desc>",
-        f"<style>{css(art)}</style>",
-        "<defs>",
-        sky_defs(art),
-        moon(art),
-        f'<clipPath id="belowGround"><rect x="0" y="0" width="{W}" height="{GROUND}"/></clipPath>',
-        "</defs>",
+    # The SCENE is composed before the stylesheet, because emitting a scrolling layer is what
+    # registers its speed for a warp animation. Generating the CSS first would have produced a
+    # stylesheet with no warp rules at all — every gate still green, the beats simply absent.
+    scene = [
         # sky, then the light that sits in it
         f'<rect class="sky" width="{W}" height="{H}"/>',
         f'<rect class="glw" x="0" y="{fmt(GROUND - 300)}" width="{W}" height="330"/>',
@@ -1523,38 +2320,64 @@ def build(art: Art) -> str:
         f'<rect class="grd" x="0" y="{GROUND}" width="{W}" height="{H - GROUND}"/>',
         mounds(art, rng),
         footprints(art),
+        # THE OVERLAP rides at the footprints' own z, because it IS footprints — see print_ink
+        overlap_run(art),
         peek(art),
         ground_detail(art),
+        # THE REFUSAL's barrier stands on the ground, so it goes over the ground texture and under
+        # the creature
+        refusal_gate(art),
         f'<line x1="0" y1="{GROUND}" x2="{W}" y2="{GROUND}" class="rl" stroke-width="3" '
         f'stroke-dasharray="3 9" stroke-linecap="round" opacity=".72"/>',
         clawd_placed(art, art.clawd_x, scale),
     ]
 
     if art.second_clawd:
-        parts.append(second_session(art))
+        scene.append(second_session(art))
 
     # vignette BEFORE the type: focuses the frame without ever touching the wordmark
-    parts.append(f'<rect class="vig" width="{W}" height="{H}"/>')
+    scene.append(f'<rect class="vig" width="{W}" height="{H}"/>')
 
     # the type, last — nothing can be over it
-    parts.append(
+    scene.append(
         f'<text x="{W // 2}" y="140" text-anchor="middle" class="wm" '
         f'font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="62" '
         f'letter-spacing="1.5">claude-infrastructure</text>'
     )
     if art.hairline:
-        parts.append(
+        scene.append(
             f'<rect class="sub" x="{W // 2 - 132}" y="163" width="264" height="1" '
             f'opacity=".28"/>'
         )
-    parts.append(
+    scene.append(
         f'<text x="{W // 2}" y="{188 if art.hairline else 182}" text-anchor="middle" class="sub" '
         f'font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="17" '
         f'letter-spacing="7.5">{art.subtitle}</text>'
     )
-    parts.append("</svg>")
     assert_type_clear()
-    return "".join(parts)
+
+    # Now the stylesheet, which needs every warped layer to have been registered above.
+    sheet = css(art)
+    assert_keyframe_pcts_sane(art, sheet)
+    assert_every_shape_is_themed(art, sheet, "".join(scene), defs)
+    assert_print_lock(art, _ENCODED_STRIP)
+    assert_one_strip_feature(art)
+    assert_overlap_ink_is_ambient(art)
+
+    return "".join(
+        [
+            f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" width="{W}" '
+            f'height="{H}" role="img" aria-label="claude-infrastructure — the Claude Code creature '
+            f'walking a looping landscape under drifting clouds">',
+            "<title>claude-infrastructure</title>",
+            f"<desc>{art.title}. {art.blurb} One 240-second loop; the wordmark is legible at every "
+            f"instant and nothing passes behind it.</desc>",
+            f"<style>{sheet}</style>",
+            f"<defs>{defs}</defs>",
+            *scene,
+            "</svg>",
+        ]
+    )
 
 
 def second_session(art: Art) -> str:
