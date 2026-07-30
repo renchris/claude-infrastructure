@@ -46,7 +46,8 @@ from typing import Any, Dict, List, Optional, Tuple
 ACCOUNTS: Tuple[str, ...] = ("next", "next2", "next3", "next4")
 PORT_BASE_DEFAULT = 9341
 CHROME_DEFAULT = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-CDP_TIMEOUT_S = 15.0
+CDP_TIMEOUT_S = 15.0      # default; CC_AUTHBROWSER_CDP_TIMEOUT_S overrides (see budget())
+PROC_TIMEOUT_S = 10.0     # default for `ps`/`lsof`; CC_AUTHBROWSER_PROC_TIMEOUT_S overrides
 DEFAULT_TTL_S = 300
 TERM_GRACE_S = 3.0
 
@@ -98,6 +99,61 @@ def port_map() -> Dict[str, int]:
     return {acct: base + idx for idx, acct in enumerate(ACCOUNTS)}
 
 
+def budget(name: str, default: float) -> float:
+    """A WALL-CLOCK budget, overridable for callers whose box the default does not fit.
+
+    Every timeout in this file is a bet on how fast this machine is. The bet holds for a
+    real Chrome on an idle box; it is false for a python stub on a box running 19
+    concurrent landing gates, where the 15s CDP wait and the 10s lsof BOTH blow. When they
+    do, the failure is indistinguishable from a real one -- and the lsof case is worse than
+    slow: a timed-out lsof returns NO pids, so do_start's adoption check (`st.pid in
+    owners`) misses and the browser THIS process just started is reported as "held by a
+    foreign process (pids=unknown)". Measured 2026-07-30: 8 of 16 concurrent copies of
+    tests/cc-authbrowser.bats went RED, every one of them on a PRIVATE port block -- i.e.
+    not a port collision at all, which is why the port lease alone did not close backlog
+    53e2fd9a8253. Same class as the fire capacity gate that scripts/test-hermeticity-lint.sh
+    rule 2 makes suites pin off: a suite that reads ambient machine load is not testing its
+    subject.
+
+    Unset -> the default, so production behaviour is byte-identical to what shipped.
+    SET-but-EMPTY or junk is REFUSED verbatim, never laundered into the default: that is
+    port_base()'s convention and it is here for port_base()'s reason -- silently serving the
+    default to a caller that asked to be moved is exactly how a run that believes it is
+    insulated from the box is not. NaN and <= 0 are refused for the same reason: a budget
+    that cannot bound anything must never masquerade as one that can.
+    """
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    # float() STRIPS surrounding whitespace, so " 15" would parse to 15.0 and a padded value
+    # would be quietly honoured while the sibling seam (port_base, via isdigit) refuses it.
+    # Reject it here so the two seams share one strictness instead of two.
+    if raw != raw.strip():
+        warn("%s is set but is not a plain number (surrounding whitespace): %r" % (name, raw))
+        sys.exit(EXIT_REFUSED)
+    try:
+        val = float(raw)
+    except ValueError:                 # "" and "abc" both land here, by design
+        warn("%s is set but is not a number: %r" % (name, raw))
+        sys.exit(EXIT_REFUSED)
+    if not val > 0 or val == float("inf"):   # `not >0` also catches nan (all its compares are False)
+        warn("%s must be a positive, finite number of seconds: %r" % (name, raw))
+        sys.exit(EXIT_REFUSED)
+    return val
+
+
+def cdp_timeout_s() -> float:
+    """How long --start waits for CDP to answer."""
+    return budget("CC_AUTHBROWSER_CDP_TIMEOUT_S", CDP_TIMEOUT_S)
+
+
+def proc_timeout_s() -> float:
+    """How long `ps`/`lsof` may take. DELIBERATELY separate from the CDP budget: a caller
+    that wants a FAST refusal when CDP never comes up must still be able to identify a
+    listener, and one knob could not express both."""
+    return budget("CC_AUTHBROWSER_PROC_TIMEOUT_S", PROC_TIMEOUT_S)
+
+
 def profile_dir(acct: str) -> str:
     root = os.environ.get("CC_AUTHBROWSER_PROFILE_ROOT") or os.path.expanduser(
         "~/.claude/auth-profiles")
@@ -136,7 +192,7 @@ def pid_cmdline(pid: int) -> Optional[str]:
     """Live command line of <pid>, or None if the pid is gone. `-ww` defeats truncation."""
     try:
         out = subprocess.run(["ps", "-ww", "-o", "command=", "-p", str(pid)],
-                             capture_output=True, text=True, timeout=10)
+                             capture_output=True, text=True, timeout=proc_timeout_s())
     except (OSError, subprocess.SubprocessError):
         return None
     line = out.stdout.strip()
@@ -185,7 +241,7 @@ def port_listener_pids(port: int) -> List[int]:
     unreadable listener is treated as foreign and is never adopted or killed."""
     try:
         out = subprocess.run(["lsof", "-nP", "-iTCP:%d" % port, "-sTCP:LISTEN", "-t"],
-                             capture_output=True, text=True, timeout=10)
+                             capture_output=True, text=True, timeout=proc_timeout_s())
     except (OSError, subprocess.SubprocessError):
         return []
     return [int(tok) for tok in out.stdout.split() if tok.isdigit()]
@@ -288,10 +344,11 @@ def do_start(acct: str, ttl: int, headless: bool) -> int:
         warn("failed to exec chrome: %s" % exc)
         return EXIT_BROWSER
 
-    ver = cdp_version(port, time.time() + CDP_TIMEOUT_S, child)
+    cdp_to = cdp_timeout_s()
+    ver = cdp_version(port, time.time() + cdp_to, child)
     if ver is None:
         warn("CDP did not answer on port %d within %gs -- killing the browser we launched"
-             % (port, CDP_TIMEOUT_S))
+             % (port, cdp_to))
         kill_pid(child.pid, binpath)
         clear_state(acct)
         return EXIT_BROWSER
@@ -408,6 +465,12 @@ def main() -> int:
     if args.ttl < 0:
         warn("--ttl must be >= 0")
         return EXIT_REFUSED
+    # Validate the wall-clock seams HERE, before any mode acts. do_start's CDP budget is
+    # not read until after Popen, so validating at its use site would refuse a junk value
+    # only AFTER launching a browser -- leaking the very process the refusal exists to
+    # prevent. Uniform across modes, exactly as an invalid CC_AUTHBROWSER_PORT_BASE is.
+    cdp_timeout_s()
+    proc_timeout_s()
     if args.watchdog:
         return do_watchdog(args.acct, args.pid, args.ttl, args.match)
     if args.start:
