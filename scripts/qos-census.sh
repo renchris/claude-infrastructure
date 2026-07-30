@@ -104,7 +104,20 @@ if [ "$NO_CONTROL" != "1" ]; then
     if [ -n "$c" ] && [ -x "$c" ]; then _tp="$c"; break; fi
   done
   # Our own band decides which control is even constructible.
-  _self_band=$(classify_pid "$$")
+  #
+  # SAMPLED, not read once. `classify_pid "$$"` milliseconds after a `taskpolicy` exec transiently
+  # reads pri=31 even when this process IS demoted. On that reading the code takes the two-sided
+  # branch, where the "full" control inherits pri=4 from the demoted parent (the one-way ratchet) and
+  # is classified `demoted` ⇒ CONTROL=FAIL ⇒ a spurious SIGNAL-DEAD. Measured: 1 failure in 5 runs
+  # inside a bats suite, 0 in 11 direct invocations — a race, not a defect in the ladder.
+  # Three samples, and ANY demoted reading wins: the band is a one-way ratchet, so a process that has
+  # ever read demoted cannot have climbed back out. Biased toward AMBIENT-DEMOTED, which is the
+  # honest degradation, never toward a false SIGNAL-DEAD.
+  _self_band="full"
+  for _i in 1 2 3; do
+    if [ "$(classify_pid "$$")" = "demoted" ]; then _self_band="demoted"; break; fi
+    /bin/sleep 0.1 2>/dev/null || true
+  done
   if [ -z "$_tp" ]; then
     CONTROL="NO-TASKPOLICY"
   else
@@ -139,15 +152,60 @@ fi
 # The bracket trick that excludes our own grep is applied to the FIRST character of $PATTERN.
 _p_head=$(printf '%s' "$PATTERN" | cut -c1)
 _p_tail=$(printf '%s' "$PATTERN" | cut -c2-)
-# shellcheck disable=SC2009  # ps|grep is REQUIRED here, not a shortcut. pgrep matches against the
-# process NAME, and this census must see `bats-exec-suite`/`bats-exec-file`/`bats-format-cat` —
-# names that `ps -o comm=` truncates at 16 chars, which is the exact way an actuator census goes
-# blind to its own target population (memory actuator-must-see-the-target-population: 134/134 MISS).
-# We also need pri and %cpu per row, which pgrep cannot emit. Same rationale as
-# hooks/lead-crash-watchdog.sh:629.
-SNAP=$(ps -eo pid,nice,pri,%cpu,args 2>/dev/null \
-        | grep -E "[${_p_head}]${_p_tail}" \
-        | grep -v 'qos-census' || true)
+
+# ── DENOMINATOR PURITY (added 2026-07-30 after this census was found contaminated) ────────────────
+# The first version counted ANY process whose argv contained "bats". Measured on the live box that
+# was 157 rows, of which only 114 were real bats processes:
+#     real bats internals   114 rows   0 at pri=31
+#     timeout wrappers        6 rows   6 at pri=31
+#     shell -c lines         17 rows  17 at pri=31
+#     claude sessions        19 rows  18 at pri=31
+# EVERY pri=31 row was pollution, so the census reported ~70% coverage where the real figure was
+# 114/114. A `timeout 800 bats …` WRAPPER is the worst offender: it legitimately sits at pri=31 while
+# every bats child it spawned is at pri=4 (reproduced on 3 live wrappers), so it manufactures exactly
+# the "uncovered" signal this tool exists to detect.
+#
+# This is the same failure as memory `detector-matching-its-own-skill-description` and the
+# path-substring misclassification recorded in this row's own §1.1 — text in an argv is not evidence
+# that the process IS the thing. Count only what bats itself execs.
+#
+# Seam: QOS_CENSUS_STRICT=off restores the old permissive matching (for comparing against the
+# historical, contaminated rows already in the log — never for a verdict).
+_census_rows() {
+  # shellcheck disable=SC2009  # ps|grep is REQUIRED: pgrep matches the process NAME, and this census
+  # must see bats-exec-suite / bats-format-cat, which `ps -o comm=` truncates at 16 chars — the exact
+  # way an actuator census goes blind to its own population. We also need pri and %cpu per row.
+  ps -eo pid,nice,pri,%cpu,args 2>/dev/null \
+    | grep -E "[${_p_head}]${_p_tail}" \
+    | grep -v 'qos-census'
+}
+if [ "${QOS_CENSUS_STRICT:-on}" = "off" ]; then
+  SNAP="$(_census_rows || true)"
+else
+  # POSITIONAL discriminator, NOT a substring blacklist.
+  #
+  # The first attempt at this fix excluded rows containing `timeout `, `<shell> -c ` or `claude`.
+  # That was WORSE than the contamination it replaced: this repo's own primary checkout is
+  # /Users/chrisren/Development/claude-infrastructure, so `grep -v claude` deleted GENUINE bats rows
+  # whose test path merely contained the word. Measured against one live run: strict saw 0 rows,
+  # permissive saw 5 — and all 5 were real bats libexec processes at pri=31, i.e. exactly the
+  # undemoted population this census exists to find. A census that reports 100% with a whole
+  # undemoted run in front of it is worse than one that over-counts.
+  #
+  # bats execs its internals as `bash <…>/libexec/bats-core/bats-exec-*`, so the libexec path is
+  # argv field 1 or 2. Anchoring there admits every real bats process regardless of what its test
+  # PATHS are called, and rejects the wrapper classes by construction — a `timeout 800 bats …` has
+  # `timeout` in field 1 and a non-libexec `bats` in field 2; `zsh -c '… bats …'` has `-c` in
+  # field 2; a claude session has neither. No blacklist, so no word can be collateral damage.
+  SNAP="$(_census_rows | awk '
+    # ps -eo pid,nice,pri,%cpu,args ⇒ $1=pid $2=nice $3=pri $4=%cpu $5=executable $6=first arg.
+    # bats runs its internals as `bash <…>/libexec/bats-core/bats-exec-*`, so the libexec path is
+    # $5 (direct exec) or $6 (via bash). Checking $1/$2 — the pid and nice columns — was the first
+    # attempt and matched nothing, which is why this is anchored on named fields.
+    { if ($5 ~ /bats-core\/(bats|bats-exec-[a-z]+|bats-format-[a-z]+|bats-preprocess|bats-gather-tests)$/ \
+         || $6 ~ /bats-core\/(bats|bats-exec-[a-z]+|bats-format-[a-z]+|bats-preprocess|bats-gather-tests)$/) print }
+  ' || true)"
+fi
 
 N_DEMOTED=0; N_FULL=0; CPU_DEMOTED=0; CPU_FULL=0
 if [ -n "$SNAP" ]; then
