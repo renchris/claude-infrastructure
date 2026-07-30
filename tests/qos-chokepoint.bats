@@ -27,6 +27,18 @@ setup() {
   # on every test remembering --no-append.
   export HOME="$BATS_TEST_TMPDIR/home"
   mkdir -p "$HOME/.claude/logs"
+  # HERMETICITY, second axis — the AMBIENT CC_BATS_* environment. Every seam this suite exercises is
+  # read from the environment, so the suite's verdict silently depended on HOW IT WAS INVOKED. Run it
+  # through `bin/cc-bats` (the obvious thing to do — CLAUDE.md tells rebuild sessions to put gate work
+  # through the chokepoint) and the shim exports CC_BATS_ACTIVE=1; the shim UNDER TEST then hits its
+  # own re-entrancy guard (bin/cc-bats:101), execs straight to real bats, and emits none of the
+  # warnings (vi)/(vi-b) assert. Measured 2026-07-29 by the campaign coordinator: 16/16 green under
+  # plain bats, 14/16 through the shim, with nothing in either output naming the harness as the
+  # cause. A suite that tests a wrapper must not inherit that wrapper's own state — unset the whole
+  # family so each test controls exactly the seams it sets via `run env ...` (per-invocation env is
+  # unaffected by this).
+  unset CC_BATS_ACTIVE CC_BATS_QOS CC_BATS_QOS_MODE CC_BATS_QUIET \
+        CC_BATS_REAL CC_BATS_NICE CC_BATS_NICE_BIN CC_BATS_TASKPOLICY
   # A tiny bats corpus whose single test lives long enough to be observed by ps.
   mkdir -p "$TMP/t"
   cat > "$TMP/t/slow.bats" <<'EOF'
