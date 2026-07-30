@@ -59,6 +59,34 @@ SEAMS NOT YOURS: worktree-gc CONSUMES hooks/live-session-registry.sh and the liv
 are row 4's (DONE). Landing is row 1's. Claiming/creation at fire time is row 2's (DONE).
 Any other seam dispute: ping the coordinator, never decide alone.
 
+🚨 **YOU ARE THE SECOND ATTEMPT AT THIS ROW. YOUR PREDECESSOR DIED ABRUPTLY AT 04:39Z, ~39 MINUTES IN,
+WITH NOTHING LANDED — BUT ITS PHASE-1 WORK WAS GOOD AND IS PRESERVED HERE. Confirm each claim yourself
+(cheap), then BUILD ON IT rather than repeating it.** Death evidence, verified on three axes: pane
+absent from iTerm2's own enumeration (positive-controlled), no `claude.exe` with this worktree as its
+cwd, zero registry rows — and only ONE transcript in its project dir, so it did **not** recycle. Its
+worktree was `ahead=0` and clean, so nothing was stranded. Cause unexplained: 236 rows, small context,
+no crash message, last records were a `queue-operation` enqueue and two `bridge-session` rows. Not
+context exhaustion. **So: checkpoint by LANDING EARLY AND OFTEN — a design doc that exists only in your
+context is exactly what was lost.** Land your Phase-1 findings as a plan-doc stub before you start
+building.
+
+**WHAT IT ESTABLISHED (verify, then inherit):**
+  1. 🎯 **THE CELL IS FALSIFIED BY ITS DENOMINATOR — the "107 GB observed drift" is not a constraint.**
+     It measured: **7.3 TiB volume, 5.0 TiB free, 31% used**, so the entire ~114 GB of worktrees is
+     **1.5% of the volume with 45× that much free**. Disk pressure is NOT the binding resource. This is
+     row 13's learning landing a second time, and it is the right way to open your plan.
+  2. 🎯 **THE IRREPLACEABLE RESOURCE IS UNLANDED COMMITS, NOT BYTES.** It measured **92 unlanded commits
+     across 12 worktrees, plus 36 dirty files in 12 more**, with `wt-692eaf74b0be
+     [infra-perfection-land]` alone holding **42 commits + 8 dirty**. Re-derive the numbers (they move),
+     but that reframing — *"what has no collector"* → *"what is irreplaceable and what protects it"* —
+     is the row's real question and it survives the numbers.
+  3. It confirmed **every destructive call site uses the `-C` form**, i.e. the guard-bypass hazard below
+     is real at the call sites that matter, and correctly noted an unregistered hook is inert
+     regardless — so check REGISTRATION before semantics.
+  4. Its graveyard sweep, run with a first-letter-matching positive control on `tests/` and `hooks/`,
+     confirmed: the suite is **absent from trunk, present on all three branches, and the fix exists as
+     16 rebase-duplicates, none landed.**
+
 PHASE 1 IS NOT OPTIONAL — three checks BEFORE you design anything:
   (a) RE-DERIVE YOUR ROW'S STANDING-CONSTRAINT CELL from primary disk truth. The cell reads
       "107 GB observed drift; ownership per artifact-class". It is the PRIOR SESSION'S HYPOTHESIS
