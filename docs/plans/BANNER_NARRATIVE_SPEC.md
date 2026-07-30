@@ -394,6 +394,84 @@ above is ambient-with-mechanism rather than plot, which is compatible — but th
 not, and nobody adjudicated the conflict. If R3 stands as written, narrative-as-experienced is out
 and the state/gauge reading is the only legal design. That is a ruling, not a craft call.
 
+## THE PICK: v6c-dusk-line (operator, 2026-07-29)
+
+All remaining work concentrates on that one file. **The operator's condition on the pick: every
+surviving micro-event must make narrative and repo-relevance sense** — and, separately, *"heavily
+improve the dynamicness and quality of the moon and stars"*.
+
+### Three defects that invalidate current verification — fix before judging art
+
+**1. The wordmark's footprint is platform-dependent, so every keep-out check is unvalidated.**
+SVG-as-image cannot load external fonts, so `<text font-family="ui-monospace,SFMono-Regular,Menlo,
+monospace">` falls back to a system face. It *does* render — "the font fails to load" is the wrong
+framing. The real defect is measured: substituting the stack moves the type's ink width by **−9.9%
+(`sans-serif`) and −12.1% (`serif`)**. Every keep-out and collision check in this track was computed
+against *this machine's* metrics; a platform with a wider fallback pushes the wordmark past what the
+check cleared and the check still reports green, because it was computed here. **Draw the wordmark as
+pixel geometry or outlined paths** — that makes the footprint invariant, which is the only thing that
+makes the gate's central guarantee true rather than locally true.
+
+**2. S3 is falsified in practice — the day scheme does not reach readers.** S3 concluded "one
+self-theming file — no `<picture>`, no second asset", measured with a scheme-**emulation** probe. The
+operator switched their OS to light and got no day version. The reliable mechanism is already in this
+repo: **`README.md` ships four `<picture>` blocks with `media="(prefers-color-scheme: dark)"` on the
+`<source>`** (lines 68/135/183/301), which resolves in the *host* document where the query definitely
+works. Emit **two files behind `<picture>`**, same as every diagram already in that README. (A
+contributing cause was local and is fixed: the comparison page declared `color-scheme: dark`, and an
+SVG-as-image resolves the query against the embedding document, so that page could never show day.)
+
+**3. Rendered size is 830 px, and 1920→830 is a NON-INTEGER ~2.3× downscale.** Judge everything at
+rendered size, never at 1:1 of the art grid. This directly bounds the star work below: a 1 px star
+lands on a fractional device pixel and shimmers.
+
+**Not a defect — refuted:** CSS `@keyframes` inside an `<img>`-loaded SVG **does** animate in Firefox
+144 (Marionette, one document, two screenshots straddling a hard flip, SMIL positive control also
+advancing so the harness is sound). Mozilla bug 1190881 does not bite this build. **Do not re-express
+anything in SMIL.** Note the two tests that gave *wrong* answers first: a single screenshot only
+proves t=0 is composited, and two screenshots from two page *loads* both land at t≈0 because the
+timeline anchors at load.
+
+### Moon, stars and clouds — craft brief
+
+Source: `docs/research/prior-art.md` §D. ⚠️ **This supersedes earlier optics guidance in this track
+that was wrong for pixel art:** a smooth radial gradient behind a pixel moon reads as a Photoshop
+layer sitting on top of the art and **will band**, so stacked `feGaussianBlur` bloom is the wrong
+mental model.
+
+**Moon glow** — 2–4 concentric **bands** stepping down the sky ramp, one step each, radii growing
+non-linearly to fake inverse-square falloff. Hue-shift toward the moon's own hue and desaturate
+outward so the glow resolves into the *sky*, not into grey. Dither **only** the outermost boundary;
+interior boundaries stay hard. **The glow is not concentric on a crescent** — it centres on the lit
+portion, offset toward the horns' outer edge; centring on the disc is a tell. Keep the radius under
+~2.5× the moon's, or it reads as fog.
+
+**Moon geometry, which is where amateurs die** — a crescent is bounded by a half-**circle** and a
+half-**ellipse**: the terminator is an elliptical arc whose major axis is a diameter of the disc. Two
+overlapping circles of different radii gives the *logo* moon, not the *sky* moon. The horns point
+**away from the sun**, so at night they angle down toward the horizon, never up (xkcd 1738 flags
+horns-up-at-night as impossible), and the line joining the horns must be a **diameter**, not a chord.
+Add **earthshine**: the unlit disc filled one ramp step above sky, bounded by the same circle — the
+cheapest single detail that separates "drew a moon" from "looked at the moon".
+
+**Stars** — **desaturate almost everything.** Faint point sources are genuinely colourless to human
+vision (small-field tritanopia), so a multicoloured starfield is *factually wrong*, not merely gaudy.
+Give hue to **3–6 stars in the entire field**, in real temperature order, warm ones for contrast
+against a cool sky; everything else near-white or one step off the sky colour. **At least three
+brightness tiers** — a handful at palette-white, a middle band one step down, the majority two steps
+down. Placement **clustered-random**, never even and never a grid: delete accidental lines and
+triangles, and **carve a deliberate void** behind the wordmark and above the creature. **Twinkle a
+minority**, at incommensurate periods (2.3 / 3.1 / 4.7 / 5.9 s, ±1 ramp step), and only the **low**
+stars — scintillation is atmospheric and strongest near the horizon, so high stars stay steady.
+**No diffraction spikes**: they are a camera artifact, and at this scale a 4-point spike reads as a
+sparkle emoji. **Never pure `#ffffff`** — it blows out against a dark sky and destroys the magnitude
+hierarchy.
+
+**Clouds** (v6c's signature) — dither the **interior** transition and keep the **silhouette hard**:
+the silhouette is the design, the dither is the material. And the decisive animation trap: a moving
+region's dither **crawls** unless it translates as a **rigid group** in whole art-pixel steps. These
+clouds drift, so this binds.
+
 ## Acceptance
 
 An event passes only if a viewer can answer all three of *why did it appear*, *what did it do*, and
