@@ -27,7 +27,8 @@
 # Env seams: CC_TELEMETRY_DIR · CC_IDL · CC_SUPERVISOR_LOG · CC_PAGE_TO · CC_SUP_T · CC_SUP_STALL_S ·
 #            CC_SUP_PAGE_DEADLINE_S · CC_SUP_TRUNK · CC_SUP_GC_S · CC_SUP_OWNER_PAT · CC_PAGE_TO_FILE ·
 #            CC_REGISTRY_DIR · SUPERVISOR_SWEEP_MAX_S · SUPERVISOR_SWEEP · CC_SUP_TIMEOUT_BIN ·
-#            CC_SUP_GIT_TIMEOUT_S · CC_SUP_FIND_TIMEOUT_S · CC_SUP_CKPT_TIMEOUT_S · CC_SUP_NOTIFY_TIMEOUT_S
+#            CC_SUP_GIT_TIMEOUT_S · CC_SUP_FIND_TIMEOUT_S · CC_SUP_CKPT_TIMEOUT_S · CC_SUP_NOTIFY_TIMEOUT_S ·
+#            CC_SUP_PANE_DELTA_TOL · CC_SUP_SELFCHECK_MIN_PERSIST
 set -uo pipefail
 
 # ── BOUNDED EXTERNALS: one hung fork must never end all supervision (audit 2026-07-22 root cause 4, S1) ──
@@ -569,6 +570,59 @@ sweep_permission_pending(){ # prints the number of PERMISSION-PENDING pages prod
   echo "$found"
 }
 
+# ── V3: telemetry↔LIVE-PANE delta self-check — "is my world-view even populated?" (audit 2026-07-22) ──
+# EVERY pager path in this file starts from `$TEL_DIR/*.json`. That dir is a SINGLE, FRAGILE world-view:
+# it lives in /tmp (reboot-cleared), and its only writer is the statusline, which stops emitting the
+# moment a pane is not actively rendering (statusline.sh:48). So the supervisor's world can be EMPTY
+# while sessions are live — and an empty world produces a clean all-clear heartbeat, indistinguishable
+# from a genuinely quiet fleet. Sessions invisible here are invisible to DEAD, STALL?, PAST-THRESHOLD and
+# the permission beacon alike: they have no pager at all, and nothing says so.
+#
+# cc-reaper already answers this for itself (P0-12b, cc-reaper:528-556) with an INDEPENDENT count that
+# deliberately does not read the same source it is checking. This is that check, for this daemon.
+#
+# LOCKSTEP: the process-identity clause below is the same one cc-reaper live_pane_count and cc-reconcile
+# live_claude_pids carry, and it must not drift from them — argv0 is the claude binary (or its cli.js),
+# excluding headless one-shots (-p/--print/--version) and env-inherited node/MCP children. `claude.exe` is
+# the eval-track install's own binary name and a FIRST-CLASS interactive session (session-register.sh:63),
+# so omitting it would undercount live panes and desensitize this detector in both directions. The clause
+# is duplicated across ~10 files in this tree with no lint holding them together; consolidating that is
+# named as follow-on work, NOT done here — a silent 11th copy with no note would be the worse option.
+live_pane_count(){
+  ps -wwEo command= 2>/dev/null | awk '
+    { t0=$1
+      if (t0!="claude" && t0!="claude.exe" && t0 !~ /\/claude$/ && t0 !~ /\/claude\.exe$/ && t0 !~ /cli\.js/) next
+      for (i=2; i<=7 && i<=NF; i++) if ($i=="-p" || $i=="--print" || $i=="--version") next
+      c++ }
+    END { print c+0 }'
+}
+PANE_DELTA_TOL="${CC_SUP_PANE_DELTA_TOL:-0}"                 # live−enumerated > tol ⇒ blind spot (mirrors cc-reaper's default)
+SELFCHECK_MIN_PERSIST="${CC_SUP_SELFCHECK_MIN_PERSIST:-2}"   # delta must persist N sweeps — a spawn mid-sweep is not a blind spot
+# PAGE-ONLY and DAMPED, like every other act here: page once per delta, and again only on a genuine
+# WORSENING. An undamped per-sweep re-page of a standing condition is the 2026-07-19 composer storm.
+self_check(){ # $1=enumerated-count
+  local enum="$1" live delta sf consec paged
+  live="$(live_pane_count)"
+  case "$live" in ''|*[!0-9]*) return 0 ;; esac      # unreadable ps ⇒ ABSTAIN (no verdict), never a phantom Δ
+  delta=$(( live - enum ))
+  sf="$PAGEDIR/selfcheck.state"
+  if [ "$delta" -le "$PANE_DELTA_TOL" ]; then
+    _ensure; printf '0 0\n' > "$sf" 2>/dev/null || true   # re-arm on recovery
+    return 0
+  fi
+  _ensure
+  read -r consec paged < <(cat "$sf" 2>/dev/null || echo "0 0"); consec="${consec:-0}"; paged="${paged:-0}"
+  consec=$(( consec + 1 ))
+  if [ "$consec" -ge "$SELFCHECK_MIN_PERSIST" ] && { [ "$paged" = 0 ] || [ "$delta" -gt "$paged" ]; }; then
+    idl selfcheck_page "\"live\":$live,\"enumerated\":$enum,\"delta\":$delta,\"persisted_sweeps\":$consec,\"why\":\"$delta live Claude pane(s) are absent from the supervisor's telemetry world-view — they have NO pager coverage on any path (DEAD/STALL?/PAST-THRESHOLD/permission-beacon all iterate that dir)\""
+    # D7 fingerprint = the DELTA, so a worsening blind spot breaks through while a standing one stays quiet.
+    send_page "⚠️ SUPERVISOR SELF-CHECK — ${live} live Claude pane(s) but only ${enum} in telemetry (Δ${delta} unseen). Those sessions have NO supervisor coverage: every pager path reads ${TEL_DIR}, so a stall/death there pages NOBODY. Likely the statusline is not emitting (backgrounded/long-turn panes) or ${TEL_DIR} was reboot-cleared. Compare \`ls ${TEL_DIR}\` against the live interactive-claude procs." \
+              "selfcheck:blind:delta$delta" && paged="$delta"
+    printf '%s  self-check BLIND live=%s enum=%s delta=%s\n' "$(utc)" "$live" "$enum" "$delta" >> "$SUPLOG" 2>/dev/null || true
+  fi
+  printf '%s %s\n' "$consec" "$paged" > "$sf" 2>/dev/null || true
+}
+
 sweep(){
   local n=0 found=0 gc r pp
   gc="$(gc_stale)"                 # GC horizon-stale live-owner zombies FIRST — they are resolved, not a per-sweep finding
@@ -583,6 +637,9 @@ sweep(){
   # possible MODAL for the operator to eyeball. (Recorded here so the blindness is declared, not hidden.)
   # But a permission prompt DOES leave a harness-emitted beacon — read it for a precise page (§B2).
   pp="$(sweep_permission_pending)"; found=$(( found + ${pp:-0} ))
+  # V3 self-check LAST, on the count this sweep actually enumerated: a heartbeat of "swept 0, found 0" is
+  # an all-clear that must not be emitted while live panes sit outside the world-view it swept.
+  self_check "$n"
   heartbeat "$n" "$found" "$gc"
 }
 
