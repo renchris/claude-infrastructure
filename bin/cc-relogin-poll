@@ -93,16 +93,57 @@ iso_epoch() {
   printf '0'
 }
 epoch_iso() { date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo ''; }
-# "41.5" / "-3" → seconds. Empty when not a number (callers must not fabricate a deadline).
-hours_secs() { local h="${1%%.*}"; case "$h" in ''|-|*[!0-9-]*) printf '' ;; *) printf '%s' "$((h * 3600))" ;; esac; }
+# "41.5h" / "3.7d" / "30m" / "now" / "-3" / "12" → seconds. EMPTY when unrecognised (callers must
+# never fabricate a deadline).
+#
+# UNIT-AWARE, and that is the whole point. claude-accounts' fmt_h emits FIVE shapes — "30m",
+# "41.5h", "3.7d", "now", "99d+" — and the previous parser was `${1%%.*}` + an integer test, which
+# strips the fraction AND the unit in one step: "3.7d" became "3" became 3 HOURS. 24x under.
+# It stayed latent only because detection was capped at 72h, where fmt_h emits hours; widening the
+# window to the declared T-7d walked straight into it, and a T-90h account computed T-3h, escalated
+# 3 days early, and poisoned the state file's deadline-keyed dedup on every tick.
+# Float maths goes through awk deliberately: $(( )) is integer-only, and macOS ships bash 3.2.
+hours_secs() { # <fmt_h-or-numeric-string> -> seconds | ""
+  printf '%s' "${1:-}" | awk '
+    { v = $0 }
+    v == "" || v == "-" || v == "?"   { exit }                          # no value: refuse
+    v == "now"                       { print 0; exit }                 # already past ⇒ NOW
+    v ~ /^-/                         { print 0; exit }                 # negative hours ⇒ NOW
+    v ~ /d\+$/                       { exit }                          # "99d+" is a display BOUND
+    v ~ /^[0-9]+(\.[0-9]+)?m$/       { printf "%d", (v + 0) * 60;    exit }
+    v ~ /^[0-9]+(\.[0-9]+)?h$/       { printf "%d", (v + 0) * 3600;  exit }
+    v ~ /^[0-9]+(\.[0-9]+)?d$/       { printf "%d", (v + 0) * 86400; exit }
+    v ~ /^[0-9]+(\.[0-9]+)?$/        { printf "%d", (v + 0) * 3600;  exit }   # bare = hours
+  '
+}
 
 # ── detection ladder ────────────────────────────────────────────────────────────────────────
 # ROWS lines (tab-separated, NO empty fields — "-" stands in): acct, deadline_epoch, k, launcher
-NOW="$(now)"; ROWS=""; DETECT="unavailable"; MISSING=""
+NOW="$(now)"; ROWS=""; DETECT="unavailable"; MISSING=""; WINDOW_CAPPED=""
 if "$ACCOUNTS_BIN" -h 2>/dev/null | grep -q -- '--login-status'; then
-  LS_OUT="$("$ACCOUNTS_BIN" --login-status 2>/dev/null)"; LS_RC=$?
+  # ASK FOR OUR OWN WINDOW. --login-status is a pre-FILTERED view, gated at claude-accounts'
+  # login_warn_h (72h) — a HUMAN warning constant, not this poller's policy. Reading it bare
+  # capped the declared T-7d attempt window at 72h, so 96 of 168 hours were structurally
+  # unreachable and the comment at the top of this file described a window the code could not
+  # see. Probe support POSITIVELY from the help text, exactly as --login-status itself is probed:
+  # an unknown flag here would exit 64 (usage), and a bare exit-code probe cannot distinguish
+  # that from a verdict.
+  LS_WINDOW=""
+  if "$ACCOUNTS_BIN" -h 2>/dev/null | grep -q -- '--window-h'; then
+    LS_WINDOW="$((TRIG_DAYS * 24))"
+  else
+    WINDOW_CAPPED="--window-h unsupported on this claude-accounts — detection is capped at its login_warn_h, NOT the declared T-${TRIG_DAYS}d"
+  fi
+  if [ -n "$LS_WINDOW" ]; then
+    LS_OUT="$("$ACCOUNTS_BIN" --login-status --window-h "$LS_WINDOW" 2>/dev/null)"; LS_RC=$?
+  else
+    LS_OUT="$("$ACCOUNTS_BIN" --login-status 2>/dev/null)"; LS_RC=$?
+  fi
   if [ "$LS_RC" -le 2 ]; then
     DETECT="login-status"
+    # A capped window is never silent: it is the difference between 168 chances at a k==0
+    # moment and 72, on the one account that most needs them.
+    [ -n "$WINDOW_CAPPED" ] && log "WINDOW-CAPPED $WINDOW_CAPPED"
     # norm 6 first: the frozen TSV carries an optional `reason`, and an empty one would otherwise
     # collapse with its neighbour and slide `when`/`hours` into the wrong variables.
     while IFS=$'\t' read -r a state _reason when hours launcher; do
@@ -110,7 +151,15 @@ if "$ACCOUNTS_BIN" -h 2>/dev/null | grep -q -- '--login-status'; then
       dl="$(iso_epoch "$(dash "$when")")"
       if [ "$dl" = 0 ]; then
         s="$(hours_secs "$(dash "$hours")")"
-        if [ -n "$s" ]; then dl=$((NOW + s)); else continue; fi   # no parseable deadline → never fabricate one
+        if [ -n "$s" ]; then dl=$((NOW + s))
+        elif [ "$state" = REQUIRED ]; then
+          # REQUIRED's own documented meaning is "action required NOW", so NOW is that surface's
+          # ANSWER, not a fabricated deadline. Before this, a REQUIRED row whose cause was not its
+          # deadline (a rejected grant with time still on the stamp — next3's real 2026-07-24
+          # shape) printed "—" in both deadline columns and was `continue`d: the poller silently
+          # dropped the one account that most needed it, forever.
+          dl="$NOW"
+        else continue; fi                        # EXPIRING with no deadline is genuinely unknowable
       fi
       ROWS+="$a	$dl	-	$launcher"$'\n'   # k is not in the TSV — resolved lazily, only if we act
     done < <(printf '%s\n' "$LS_OUT" | norm 6)
@@ -153,7 +202,10 @@ CAND="$(printf '%s' "$ROWS" | awk -F'\t' -v lim="$TRIG_EPOCH" 'NF>=2 && $1!="" &
         | sort -t$'\t' -k2,2n)"
 NCAND="$(printf '%s' "$CAND" | grep -c . || true)"
 if [ "${NCAND:-0}" -eq 0 ]; then
-  log "no account inside the T-${TRIG_DAYS}d window (detection=$DETECT) — nothing due"
+  # Name the window ACTUALLY APPLIED, never the one this poller wanted. The old line read
+  # "no account inside the T-7d window" while detection was capped at 72h — a claim about a
+  # window the code had not looked at, which is how a real cliff 8 days out read as "nothing due".
+  log "no account inside the T-${TRIG_DAYS}d window (detection=$DETECT$([ -n "$WINDOW_CAPPED" ] && echo ", WINDOW CAPPED at claude-accounts' login_warn_h — this verdict does NOT cover T-${TRIG_DAYS}d")) — nothing due"
   [ "$JSON" = 1 ] && jq -nc --arg d "$DETECT" --argjson td "$TRIG_DAYS" \
     '{ts:(now|todate),detection:$d,trigger_days:$td,candidates:0,action:"none",exit:0}'
   exit 0

@@ -32,9 +32,38 @@ case "${1:-}" in
   -h|--help)
     echo "usage: claude-accounts [--json] [--fresh] [--relogin-info NAME]"
     [ -f "$D/ls_supported" ] && echo "  claude-accounts --login-status      per-account login deadline"
+    # --window-h is advertised separately: the poller probes for it independently, and a build
+    # with --login-status but WITHOUT --window-h is the real deployed shape it must degrade on.
+    [ -f "$D/wh_supported" ] && echo "      --window-h N   override login_warn_h for this call"
     exit 0 ;;
   --login-status)
-    [ -f "$D/ls.tsv" ] && cat "$D/ls.tsv"
+    # Record the ARGV so a test can prove the poller asked for its OWN window rather than
+    # accepting this surface's default filter.
+    printf '%s\n' "$*" >> "$D/ls.argv"
+    if [ -f "$D/wh_supported" ]; then
+      # Behave like the real flag: only rows inside the REQUESTED window are emitted. Without
+      # this the fixture would answer a 168h question with a 72h-filtered table and the whole
+      # defect under test would be invisible again.
+      wh=72; [ "${2:-}" = "--window-h" ] && wh="${3:-72}"
+      [ -f "$D/ls.tsv" ] && awk -F'\t' -v lim="$wh" '{ h=$5
+          if (h ~ /^now$/)     { v = 0 }
+          else if (h ~ /m$/)   { v = (h+0)/60 }
+          else if (h ~ /d\+$/) { v = 99999 }
+          else if (h ~ /d$/)   { v = (h+0)*24 }
+          else                 { v = h+0 }
+          if (v <= lim) print }' "$D/ls.tsv"
+      exit "$(cat "$D/ls.rc" 2>/dev/null || echo 0)"
+    fi
+    # No --window-h on this build ⇒ the REAL surface still filters, at its own login_warn_h of
+    # 72h. Emitting the whole table here would model a build that does not exist and would hide
+    # the cap the poller has to degrade on.
+    [ -f "$D/ls.tsv" ] && awk -F'\t' '{ h=$5
+        if (h ~ /^now$/)     { v = 0 }
+        else if (h ~ /m$/)   { v = (h+0)/60 }
+        else if (h ~ /d\+$/) { v = 99999 }
+        else if (h ~ /d$/)   { v = (h+0)*24 }
+        else                 { v = h+0 }
+        if (v <= 72) print }' "$D/ls.tsv"
     exit "$(cat "$D/ls.rc" 2>/dev/null || echo 0)" ;;
 esac
 printf '%s\n' "$*" >> "$D/accounts.argv"
@@ -58,21 +87,51 @@ STUB
 iso_in_h() { local s=$((NOW + $1 * 3600)); date -u -r "$s" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@$s" +%Y-%m-%dT%H:%M:%SZ; }
 mk() { printf '%s\t%s\t%s\n' "$1" "$2" "$3" >> "$D/fixture"; }   # <acct> <hours-to-deadline> <k>
 
+# ── FIXTURE/PRODUCER PARITY (2026-07-30, ACCOUNT_ROUTING_V2 M2) ────────────────────────────────
+# The --login-status fixture below used to emit an ISO stamp in `when` and a bare integer in
+# `hours`. The REAL claude-accounts emits neither: `when` is _fmt_when() — 'Sun 13:21' inside a
+# week, 'Sat Aug 08' beyond it, never parseable as ISO — and `hours` is fmt_h() — '30m' / '41.5h' /
+# '3.7d' / 'now' / '99d+'. So every ls-leg test drove a surface that does not exist, iso_epoch()
+# always succeeded, and hours_secs() — the function that actually derives the deadline in
+# production — was NEVER EXERCISED. That is what let a 24x deadline error live in it: '3.7d' parsed
+# as 3 HOURS, which made a T-90h account escalate at T-3h. A fixture is a contract CLAIM; it has to
+# be the producer's LITERAL emission.
+fmt_h_like() { # mirror of claude-accounts fmt_h — the exact vocabulary the poller must parse
+  awk -v h="$1" 'BEGIN{
+    if (h < 0)      { print "now" }
+    else if (h < 1) { printf "%dm", int(h*60) }
+    else if (h < 48){ printf "%.1fh", h }
+    else if (h >= 2400) { print "99d+" }
+    else            { printf "%.1fd", h/24 }
+  }'
+}
+fmt_when_like() { # mirror of claude-accounts _fmt_when — a human LOCAL string, never ISO
+  local s=$((NOW + $1 * 3600))
+  date -r "$s" '+%a %H:%M' 2>/dev/null || date -d "@$s" '+%a %H:%M'
+}
+
 # render the fixture into ONE detection surface: ls | json | none
 build() {
   local a h k at st
-  : > "$D/rows.login"; : > "$D/rows.plain"; : > "$D/ls.tsv"; rm -f "$D/ls_supported" "$D/fresh.json"
+  : > "$D/rows.login"; : > "$D/rows.plain"; : > "$D/ls.tsv"
+  rm -f "$D/ls_supported" "$D/wh_supported" "$D/fresh.json" "$D/ls.argv"
   while IFS=$'\t' read -r a h k; do
     [ -n "$a" ] || continue
     at="$(iso_in_h "$h")"; st=EXPIRING; [ "$h" -le 0 ] && st=REQUIRED
     jq -nc --arg a "$a" --argjson k "$k" --arg at "$at" \
       '{acct:$a,k:$k,launcher:("claude-"+$a),auth:"ok",login_expires_at:$at,login_expired:false,login_fixable:true}' >> "$D/rows.login"
     jq -nc --arg a "$a" --argjson k "$k" '{acct:$a,k:$k,launcher:("claude-"+$a),auth:"ok"}' >> "$D/rows.plain"
-    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$a" "$st" "token-expiry" "$at" "$h" "claude-$a" >> "$D/ls.tsv"
+    # PRODUCER-LITERAL, not ISO+integer: see the fixture/producer-parity note above.
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+      "$a" "$st" "token-expiry" "$(fmt_when_like "$h")" "$(fmt_h_like "$h")" "claude-$a" >> "$D/ls.tsv"
   done < "$D/fixture"
   jq -sc '{window:{},cached:true,rows:.}' "$D/rows.plain" > "$D/cached.json"   # k only — no login_* fields
   case "$1" in
-    ls)   touch "$D/ls_supported" ;;
+    # `ls` = the LANDED shape: --login-status AND --window-h, so the poller can ask for its own
+    # T-trigger window. `ls-narrow` = the shape actually deployed while the checkout lags —
+    # --login-status only, still filtered at claude-accounts' 72h login_warn_h.
+    ls)        touch "$D/ls_supported" "$D/wh_supported" ;;
+    ls-narrow) touch "$D/ls_supported" ;;
     json) jq -sc '{window:{},cached:false,rows:.}' "$D/rows.login" > "$D/fresh.json" ;;
     none) : ;;
   esac
@@ -446,4 +505,140 @@ attempts() { jq -r '.attempts' "$CC_RELOGIN_POLL_STATE_DIR/relogin-poll-$1.json"
   # executable body after the comment close must be free of it
   run bash -c "sed -n '/-->/,\$p' '$REPO/launchd/staged/com.claude.relogin.plist' | grep -c launchctl"
   [ "$output" -eq 0 ]
+}
+
+# ── M2: the detection window must match this poller's OWN policy (ACCOUNT_ROUTING_V2) ───────────
+# `--login-status` is a pre-FILTERED view gated at claude-accounts' login_warn_h (72h) — a HUMAN
+# warning constant, not this poller's policy. Reading it bare capped the declared T-7d attempt
+# window at 72h: 96 of 168 hours structurally unreachable, on the one lever (a k==0 moment) that
+# needs every hour it can get. The same cap produced a wrong HUMAN verdict — RELOGIN_AUTOMATION_PLAN
+# concluded "the cliff is closed until roughly 2026-08-23" off this surface's exit 0 while `next`
+# was 8 days from its cliff.
+
+@test "M2: the poller ASKS for its own T-trigger window, not this surface's default filter" {
+  mk next3 100 0                  # 4.2d out: inside T-7d, well OUTSIDE the 72h filter
+  build ls
+  run "$P" --json
+  [ "$status" -eq 0 ] || false
+  # it asked for 168h explicitly...
+  grep -q -- '--window-h 168' "$D/ls.argv" || false
+  # ...and therefore SAW the account the 72h view hides
+  json | jq -e '.detection=="login-status" and .candidates==1 and .acct=="next3"' >/dev/null || false
+  [ "$(ncalls)" -eq 1 ] || false
+}
+
+@test "M2: --trigger-days is what it asks for — the window follows the POLICY, not a constant" {
+  mk next3 100 0
+  build ls
+  run "$P" --trigger-days 3 --json
+  [ "$status" -eq 0 ] || false
+  grep -q -- '--window-h 72' "$D/ls.argv" || false     # 3d = 72h
+  # DISCRIMINATING CONTROL: at a 3-day policy a 4.2-day deadline is correctly NOT due, so the
+  # widened ask cannot be mistaken for "always attempt".
+  json | jq -e '.candidates==0 and .action=="none"' >/dev/null || false
+  [ "$(ncalls)" -eq 0 ] || false
+}
+
+@test "M2 FAIL-SOFT: on a build without --window-h the cap is LOUD, never a silent nothing-due" {
+  mk next3 100 0
+  build ls-narrow                 # --login-status only: the shape deployed while the checkout lags
+  run "$P" --json
+  [ "$status" -eq 0 ] || false
+  # it must NOT pass a flag the build does not advertise...
+  # (asserted via `run` + status, never `grep -c … || echo 0`: grep -c prints "0" AND exits 1 on no
+  # match, so the fallback appends a SECOND "0" and the integer test errors out — a broken
+  # assertion that reads as a failing subject.)
+  [ -s "$D/ls.argv" ] || false                 # the surface WAS called — absence is not vacuous
+  run grep -q -- '--window-h' "$D/ls.argv"
+  [ "$status" -ne 0 ] || false
+  # ...and the cap must be on the record, plus the nothing-due line must DISCLAIM the window it
+  # did not actually apply (the old line named T-7d while looking at 72h).
+  grep -q 'WINDOW-CAPPED' "$CC_RELOGIN_POLL_LOG" || false
+  grep -q 'WINDOW CAPPED' "$CC_RELOGIN_POLL_LOG" || false
+  grep -q 'does NOT cover T-7d' "$CC_RELOGIN_POLL_LOG" || false
+}
+
+@test "M2 POSITIVE CONTROL: with --window-h supported, no cap is claimed" {
+  mk next3 100 0
+  build ls
+  run "$P" --json
+  [ "$status" -eq 0 ] || false
+  [ -s "$CC_RELOGIN_POLL_LOG" ] || false       # the log WAS written — the absence below is real
+  run grep -q 'WINDOW-CAPPED' "$CC_RELOGIN_POLL_LOG"
+  [ "$status" -ne 0 ] || false
+}
+
+# ── M2b: hours_secs is UNIT-AWARE — the 24x deadline error the cap was hiding ────────────────────
+
+@test "M2b: a DAYS-formatted deadline is not read as hours (was 24x under, escalating 3d early)" {
+  mk next3 90 0                   # fmt_h renders 90h as "3.8d" — the exact shape that broke
+  build ls
+  run "$P" --json
+  [ "$status" -eq 0 ] || false
+  # 3.8d = 91.2h. The pre-fix parser produced 3h, which is inside the 48h escalation window and
+  # would have raised a class-C board row three days early, keyed on a WRONG deadline.
+  json | jq -e '.hours_left >= 88 and .hours_left <= 94' >/dev/null || false
+  json | jq -e '.escalated == false' >/dev/null || false
+  [ "$(nrows)" -eq 0 ] || false
+}
+
+@test "M2b: every shape fmt_h can emit is parsed or explicitly REFUSED — never silently truncated" {
+  # Exercised through the SUBJECT's own source, extracted to a file and sourced — never piped into
+  # `. /dev/stdin`, which competes for the stdin a sourced script may itself read.
+  sed -n '/^hours_secs()/,/^}/p' "$P" > "$D/hs.sh"
+  [ -s "$D/hs.sh" ] || false                 # the extraction itself must not silently yield nothing
+  grep -q 'awk' "$D/hs.sh" || false          # ...and must be the unit-aware body, not a stale stub
+  run bash -c '
+    . "'"$D"'/hs.sh"
+    fail=0
+    chk() { got="$(hours_secs "$1")"; [ "$got" = "$2" ] || { echo "hours_secs($1) = ${got:-<empty>}, want ${2:-<empty>}"; fail=1; }; }
+    chk "30m"    1800
+    chk "0m"     0
+    chk "41.5h"  149400
+    chk "2.0d"   172800
+    chk "3.7d"   319680
+    chk "now"    0
+    chk "-3"     0
+    chk "12"     43200
+    chk "99d+"   ""
+    chk "?"      ""
+    chk "-"      ""
+    chk ""       ""
+    chk "garbage" ""
+    exit $fail'
+  [ "$status" -eq 0 ] || false
+}
+
+@test "M2b: a MINUTES deadline is seen, not dropped — the most urgent shape of all" {
+  mk next3 0 0                    # 0h ⇒ REQUIRED, and fmt_h renders it "0m", not a bare number
+  build ls
+  run "$P" --json
+  # exit 5 = ESCALATED, the designed loud verdict at T-0 — not an error (see the poller's Exit note)
+  [ "$status" -eq 5 ] || false
+  json | jq -e '.candidates==1 and .acct=="next3"' >/dev/null || false
+  json | jq -e '.escalated == true' >/dev/null || false
+  [ "$(nrows)" -eq 1 ] || false
+  # The pre-fix parser REFUSED "0m" outright (a non-digit made it return empty), so this row was
+  # `continue`d and the most urgent deadline of all produced candidates=0.
+  grep -q 'hours_secs\|0m' "$D/ls.tsv" || false
+}
+
+@test "M2b: a REQUIRED row with NO parseable deadline is acted on NOW, not silently dropped" {
+  # next3's real 2026-07-24 shape: the refresh grant was REJECTED with time still on the stamp, so
+  # --login-status fills both deadline columns with "—" and the verdict is driven by the cause.
+  # Before this, the poller `continue`d such a row: the account that most needed it was invisible.
+  build ls
+  printf 'next3\tREQUIRED\ttoken-invalid\t—\t—\tclaude-next3\n' > "$D/ls.tsv"
+  printf '1\n' > "$D/ls.rc"
+  run "$P" --json
+  [ "$status" -eq 5 ] || false                       # ESCALATED — loud, exactly as intended
+  json | jq -e '.candidates==1 and .acct=="next3" and .escalated==true' >/dev/null || false
+  [ "$(nrows)" -eq 1 ] || false
+  # DISCRIMINATING CONTROL: the same shape as EXPIRING is genuinely unknowable and MUST be skipped
+  # rather than given a fabricated now-deadline.
+  rm -rf "$CC_RELOGIN_POLL_STATE_DIR" "$CC_REAPER_IDL"; : > "$CC_RELOGIN_POLL_LOG"
+  printf 'next3\tEXPIRING\tlogin-expiry\t—\t—\tclaude-next3\n' > "$D/ls.tsv"
+  run "$P" --json
+  [ "$status" -eq 0 ] || false
+  json | jq -e '.candidates==0' >/dev/null || false
 }
