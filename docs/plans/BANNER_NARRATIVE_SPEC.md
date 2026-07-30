@@ -1002,6 +1002,43 @@ the ground = worktree isolation) and **THE ADVANCE** (a deploy sweep whose paylo
 changes), plus **THE RECALL** (restore-file). Their standings on the page are the cut order, not a
 recommendation to build all ten.
 
+### ⛔ The re-timing left 7 of 19 red-proof gates UNPROVEN (2026-07-29) — and the build could not say so
+
+`638fba76` re-timed the three windows. Every build assertion passed, all four variants built, the
+print lock held at 0.000000px, `--lint` was clean, and the beat rendered correctly in both schemes.
+`scripts/banner-gate-redproof.py` then reported **`FAIL — 7 of 19 gates unproven`**. Confirmed by the
+lead independently, and ruled pre-existing rather than caused by the concurrent sky branch the right
+way: a throwaway worktree at pristine `origin/main` with that branch absent produced a byte-identical
+failure.
+
+The guards are still CORRECT — the *proofs that they fire* went stale, in two modes:
+
+- **3 fired on the WRONG check.** Their sabotage still violates the OLD windows, so it trips
+  event-disjointness before reaching the assertion under test (wanted `FOOTPRINT LOCK BROKEN`, got
+  `rSummon (3.4-13.0s) and rAsk (13.0-19.0s) overlap`). Keying on the MESSAGE rather than the exit
+  code is the only reason this was diagnosable.
+- **4 ACCEPTED their sabotage.** Under the new timing the old mutations are **no longer illegal**:
+  *two strip features on canvas*, *a window too close to P for its swap edge*, *the duty budget*, and
+  **event disjointness** — the guard against the stacked-beat defect that already shipped in v5a at
+  four concurrent events. That one currently cannot be shown to fire at all.
+
+**The rule this establishes: a red-proof suite is part of the blast radius of any re-timing, not a
+separate test job.** A green build plus a green lint is not evidence the guards still work, and by
+this document's own standard a guard never observed to fire is a guess — so a timing change can
+silently convert seven guards into guesses. Repair fixtures only; never relax a gate or a real window
+to make the proof pass, and re-confirm each fixture fails for the RIGHT reason.
+
+### The cake's light-mode contrast is 1.05:1 against the SKY, not the cloud
+
+Measured, and it corrects an earlier read in this file. The icing `#f4ead8` is **1.13:1** against the
+light cloud tops but **1.05:1 against the light sky itself** — so the cloud was never the cause and
+moving the cake off it would have fixed nothing. The cake body `#7a4a2e` is 9.77:1 and fine, so the
+prop still reads as a *shape*; it reads as a two-row brown block with a candle. Note `_cake`'s own
+docstring claims it is "SELF-contrasting … reads on the navy ground and on the pale one without a
+theme override" — **that claim is provably false for the icing row in light mode** and should be
+corrected along with the colour. In DARK mode the cake reads correctly as a cake, which is why the
+earlier storyboard-palette finding overstated the problem.
+
 ## OPERATOR RULINGS ON THE BUILT BEATS (2026-07-29, from the per-beat views)
 
 Given after examining each beat in isolation via `scripts/banner-beat-views.py` — so these are
