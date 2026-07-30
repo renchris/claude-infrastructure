@@ -6,6 +6,11 @@
 # Performance target: <500ms when no changes detected.
 #
 # Also the entry point for index RETENTION: `session-index-sweep.sh --retention[-apply]`.
+#
+# shellcheck disable=SC2001
+# The three `echo | sed "s/'/''/g"` sites below are SQL single-quote doubling, kept byte-identical
+# to the 20 in lib/session-index-helpers.sh so one grep finds every escaper in the subsystem — see
+# that file's header for why the ${v//…} form is the wrong tool for this particular job.
 set -euo pipefail
 
 # Resolve helpers — follow symlink to repo
@@ -16,6 +21,11 @@ if [ ! -f "$HELPERS" ]; then
 fi
 [ -f "$HELPERS" ] || exit 0
 # shellcheck source=hooks/lib/session-index-helpers.sh
+# shellcheck disable=SC1090,SC1091  # runtime-resolved path (repo checkout OR the ~/.claude symlink)
+#   Both directives are load-bearing, and neither replaces the other: `source=` names the file
+#   for a run that passes -x, while the disable is what actually clears the finding, because the
+#   gate (ship-land.sh:1025) invokes bare `shellcheck` — no -x — so the source= path is never
+#   followed and SC1091 fires regardless.
 source "$HELPERS"
 
 # Fast exit if no DB
