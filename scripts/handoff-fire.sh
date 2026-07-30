@@ -1282,11 +1282,33 @@ check_slash_head() { # $1=prompt-file → 0 ok/warned, 1 (loud) if a /goal head 
 # Kill switch: CC_FIRE_CAPACITY_GATE=off.  Ceiling: CC_FIRE_MAX_LOAD_PER_CORE (default 2.0).
 # Returns 0 = admit, 9 = refuse (a distinct code so a caller can back off rather than treat it as a
 # payload error). Prints the measured numbers either way — a refusal with no numbers is unauditable.
+#
+# ---- M10 (MACHINE_CAPACITY_V2 §11.3): a SECOND, session-attributable term ----------------------
+# The loadavg ceiling above STAYS — §9.5 measured it behaving as a ceiling — but it is the wrong
+# instrument on its own: box-wide load is neither session-ATTRIBUTABLE nor SHEDDABLE. Measured
+# 2026-07-29 (§11.2): the gate refused every net-new fire at 5.20/core with only 12–15 sessions
+# live, while ~2.0 of those cores were iTerm2+WindowServer merely DRAWING — closing a session
+# would not have moved the number the gate reads. Memory headroom is both: a session's footprint
+# is its own, and quitting it returns the pages. So a net-new fire must now clear BOTH terms.
+#
+# Headroom = (free + speculative + inactive + purgeable) pages × page size — the classes the kernel
+# can hand to a new process without swapping (wired and active are not reclaimable, and `Pages
+# purged` is a lifetime counter, not a population). ONE vm_stat pass, pure awk, and the page size is
+# read from vm_stat's OWN header: assuming 4096 understates headroom 4× on Apple silicon (16384) and
+# would refuse every fire on a perfectly healthy box.
+# Fail-OPEN on an unreadable vm_stat or a non-numeric floor, exactly like the load term above.
+# Kill switch: CC_FIRE_HEADROOM_GATE=off (skips ONLY this term).  Floor: CC_FIRE_MIN_HEADROOM_GB (4).
+#
+# TEST-ONLY seams — CC_FIRE_LOADAVG_OVERRIDE / CC_FIRE_HEADROOM_OVERRIDE replace the corresponding
+# READ when non-empty. They exist so the bats corpus can pin synthetic inputs (M11: a test's
+# environment is pinned, not ambient). NEVER set them in production: an override silences the
+# instrument it replaces, and a gate reading a constant is a deleted gate.
 capacity_gate() {
   [ "${CC_FIRE_CAPACITY_GATE:-on}" = off ] && return 0
-  local ncpu load ceiling verdict lpc
+  local ncpu load ceiling verdict lpc floor head_gb vms
   ncpu="$(sysctl -n hw.ncpu 2>/dev/null || true)"
   load="$(sysctl -n vm.loadavg 2>/dev/null | awk '{print $2}' || true)"
+  if [ -n "${CC_FIRE_LOADAVG_OVERRIDE:-}" ]; then load="$CC_FIRE_LOADAVG_OVERRIDE"; fi
   ceiling="${CC_FIRE_MAX_LOAD_PER_CORE:-2.0}"
   case "$ncpu" in ''|*[!0-9]*)
     echo "-- capacity gate: hw.ncpu unreadable ('$ncpu') -> ADMIT (fail-open)" >&2; return 0 ;;
@@ -1313,6 +1335,41 @@ capacity_gate() {
     return 9
   fi
   echo "-- capacity gate: ADMIT — load ${load} on ${ncpu} cores = ${lpc}/core (ceiling ${ceiling}/core)" >&2
+
+  # ---- M10: memory-headroom term. Runs ONLY once the load term above has admitted, so the load
+  # refusal keeps its reason and its numbers; this term can only ever narrow admission further.
+  [ "${CC_FIRE_HEADROOM_GATE:-on}" = off ] && return 0
+  floor="${CC_FIRE_MIN_HEADROOM_GB:-4}"
+  if [ -n "${CC_FIRE_HEADROOM_OVERRIDE:-}" ]; then
+    head_gb="$CC_FIRE_HEADROOM_OVERRIDE"
+  else
+    vms="$(vm_stat 2>/dev/null || true)"
+    head_gb="$(printf '%s\n' "$vms" | awk '
+      function n(s,   t) { t = s; gsub(/[^0-9]/, "", t); return t + 0 }
+      /page size of/        { ps = n($0) }
+      /^Pages free:/        { p += n($0); k++ }
+      /^Pages speculative:/ { p += n($0); k++ }
+      /^Pages inactive:/    { p += n($0); k++ }
+      /^Pages purgeable:/   { p += n($0); k++ }
+      END { if (ps <= 0 || k < 4) exit 1; printf "%.2f", p * ps / 1073741824 }
+    ')" || head_gb=""
+  fi
+  case "$floor" in ''|*[!0-9.]*)
+    echo "-- capacity gate: bad CC_FIRE_MIN_HEADROOM_GB ('$floor') -> ADMIT (fail-open)" >&2; return 0 ;;
+  esac
+  case "$head_gb" in ''|*[!0-9.]*)
+    echo "-- capacity gate: reclaimable headroom unreadable ('$head_gb') -> ADMIT (fail-open)" >&2; return 0 ;;
+  esac
+  verdict="$(awk -v h="$head_gb" -v f="$floor" 'BEGIN { print (h < f ? "REFUSE" : "ADMIT") }')"
+  if [ "$verdict" = REFUSE ]; then
+    echo "!! capacity gate: REFUSING a net-new fire — reclaimable memory headroom ${head_gb}GB < floor ${floor}GB." >&2
+    echo "   free+speculative+inactive+purgeable is what a new session can take WITHOUT swapping; below the floor it swaps." >&2
+    echo "   Shed memory first (quit finished sessions — unlike load, a session's footprint IS reclaimable), then re-fire." >&2
+    echo "   Override for one fire: CC_FIRE_HEADROOM_GATE=off ; lower the bar: CC_FIRE_MIN_HEADROOM_GB=<n>" >&2
+    emit_fire_refusal headroom "reclaimable ${head_gb}GB < floor ${floor}GB"
+    return 9
+  fi
+  echo "-- capacity gate: headroom ADMIT — reclaimable ${head_gb}GB (floor ${floor}GB)" >&2
   return 0
 }
 
