@@ -118,6 +118,23 @@ phantom. Status is a claim like any other (see the constraint-cell learning belo
 
 ## Learnings (accumulate; never delete)
 
+- 2026-07-29 (coordinator, self-inflicted) **"LAND CONTINUOUSLY" AND "KEEP EDITING" COLLIDE — DO
+  NOT TOUCH TRACKED FILES WHILE A `ship-land` IS IN FLIGHT.** Every row's DoD item 3 mandates
+  continuous landing, and the natural rhythm is to keep working while the land runs. It fails:
+  `ship-land` rebases onto `origin/main`, a rebase refuses on a dirty tree, and mine died with
+  `error: Please commit or stash them` → `✗ rebase onto origin/main hit a conflict`. **It was not a
+  conflict and not a gate failure** — the gate never ran, which is the third state
+  (`gate-never-ran-vs-gate-red`); the message names the wrong cause because it reports the rebase's
+  exit, not the dirty-tree precondition. It aborted cleanly (no `rebase-merge` dir, both files
+  intact, backup ref held), so the recovery is just: commit, re-run. **The rule: commit BEFORE
+  invoking `ship-land`, then keep hands off tracked files until it prints its `✓`/`✗`.** Two
+  corollaries worth inheriting, both measured here: the land-lock is genuinely contended on this
+  box (my land waited 335s behind one holder, then queued again behind another — with trunk moving
+  the whole time, so a long queue is HEALTHY, not a wedge; check the holder pid is alive and that
+  trunk is still advancing before suspecting the 5-day-blockage shape), and a queued land is not a
+  landed one — **verify by CONTENT on `origin/main` with a positive control**, never by
+  `rev-list --count` alone.
+
 - 2026-07-29 (coordinator, same session, **third incarnation of one defect**) **A WAIT PREDICATE
   IS AN UNVERIFIED CLAIM TOO — AND ITS FAILURE MODE IS "HEALTHY".** To serialize my land behind a
   peer's I wrote `until ! pgrep -f 'ship-land'; do sleep 10; done`. It never exited, and my commit
