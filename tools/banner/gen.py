@@ -79,9 +79,9 @@ def assert_type_clear() -> None:
 # both dividing P. Enumerating the solutions in the usable scale band gives T=20s at scale 1.2 with
 # k=2 — one full leg-spacing per stride — which also scales the creature UP, which is what gesture
 # legibility wanted anyway.
-STRIDE = 0.5           # seconds per step (half the two-step cycle)
-STRIP_PERIOD = 20.0    # seconds for the strip to travel one TILE
-STRIP_PX_PER_STRIDE = TILE / STRIP_PERIOD * STRIDE   # 48 px
+STRIDE = 0.5  # seconds per step (half the two-step cycle)
+STRIP_PERIOD = 20.0  # seconds for the strip to travel one TILE
+STRIP_PX_PER_STRIDE = TILE / STRIP_PERIOD * STRIDE  # 48 px
 
 
 def assert_stride_locked(art: Art) -> None:
@@ -94,7 +94,8 @@ def assert_stride_locked(art: Art) -> None:
             f"{STRIP_PX_PER_STRIDE:.2f}px per {STRIDE}s stride, which is {cells:.3f} sprite cells at "
             f"scale {art.clawd_scale}. The creature slides. Pick a scale where this is a whole "
             f"number (at STRIP_PERIOD={STRIP_PERIOD:g}s: 1.2 gives 2 cells, 1.0 gives 2.4 — not "
-            f"whole).")
+            f"whole)."
+        )
 
 
 def divides_P(*periods: float) -> None:
@@ -168,6 +169,131 @@ RARE_EVENTS = {
 }
 
 
+# ── the duty budget ────────────────────────────────────────────────────────────────────────────
+# Ratified thresholds from the panel synthesis. These are bands with derivations, not taste: the
+# per-instance ceiling comes from duration <= 1/3 of median dwell, so entry + middle + exit all fit
+# in ONE visit with air either side.
+BUDGET = {
+    "instance_min": 2.5,  # s — shorter than this and a beat cannot be read as caused
+    "instance_max": 10.0,  # s
+    "per_type_pct": 4.0,  # <= 4% of P, i.e. <= 9.6 s total per event type
+    "aggregate_pct": 25.0,  # all rare events summed
+    "union_pct": 35.0,  # coverage; equals aggregate while the disjointness gate holds
+    "air_pct": 65.0,  # >= this much of the loop with nothing rare on canvas
+    "recur_gap": 60.0,  # s — no type may recur inside this
+    "first_beat_max": 45.0,  # s — at least one instance must enter before this
+}
+
+# The current event SET is deliberately unratified (the panel is still open), so the variants do not
+# meet the budget yet. Rather than let the gate pass vacuously or block work that is on hold by
+# agreement, each unmet check is WAIVED BY NAME with a reason — and every waived check prints its
+# real measured value on every build, so the gap stays visible instead of becoming the new normal.
+# Deleting an entry here is what turns each threshold live; that is a one-line change per check.
+# Each waived check names the EVENTS it covers, not just the check. A waiver keyed only by check
+# name is a blanket: the `instance` waiver below is justified by three beats running LONG, and when
+# it was keyed by name alone it also silently absorbed a beat that was too SHORT — the opposite
+# defect, suppressed by a reason that did not apply to it. `None` means the check is not per-event
+# (aggregate, air, first_beat), so it is waived whole.
+BUDGET_WAIVED = {
+    "instance": (
+        {"balloon", "birds", "peek", "peer", "rSleep"},
+        "these run long (28s / 48s / 20s) and duration IS the design question the panel is "
+        "deciding, so shortening now would prejudge it",
+    ),
+    "per_type": (
+        {"balloon", "birds", "peek", "peer", "rSleep"},
+        "the same set (v6b uses `peer` where the others use `peek`); `peek` at 20% is the largest single overage and the qualitative note "
+        "agrees — the motion says glance, the duration says visit",
+    ),
+    "aggregate": (
+        None,
+        "follows arithmetically from per_type — thinning is the panel's call",
+    ),
+    "air": (None, "the inverse of aggregate; it cannot clear until the set is thinned"),
+    "first_beat": (
+        None,
+        "front-loading is justified now that t=0 anchoring is CONFIRMED, but which "
+        "beat goes first depends on which beats survive",
+    ),
+}
+
+
+def _waived(kind: str, event: str | None) -> str | None:
+    """The waiver reason if this specific breach is covered, else None."""
+    entry = BUDGET_WAIVED.get(kind)
+    if entry is None:
+        return None
+    events, reason = entry
+    if events is not None and event not in events:
+        return None
+    return reason
+
+
+def assert_duty_budget(art: Art) -> None:
+    """Measure every rare event against the ratified budget; fail on any unwaived breach."""
+    active = sorted(
+        {n for n in RARE_EVENTS if n in art.events}
+        | ({"peer"} if art.second_clawd else set())
+        | {"rCheer", "rSleep"},
+        key=lambda n: RARE_EVENTS[n][0],
+    )
+    spans = {n: RARE_EVENTS[n][1] - RARE_EVENTS[n][0] for n in active}
+    agg = sum(spans.values())
+    breaches, waived = [], []
+
+    def check(kind: str, ok: bool, msg: str, event: str | None = None) -> None:
+        if ok:
+            return
+        reason = _waived(kind, event)
+        (waived if reason else breaches).append((kind, msg, reason))
+
+    for n, d in spans.items():
+        check(
+            "instance",
+            BUDGET["instance_min"] <= d <= BUDGET["instance_max"],
+            f"'{n}' runs {d:.1f}s, outside the {BUDGET['instance_min']}-{BUDGET['instance_max']}s "
+            f"per-instance band",
+            n,
+        )
+        check(
+            "per_type",
+            d / P * 100 <= BUDGET["per_type_pct"],
+            f"'{n}' is {d / P * 100:.1f}% duty ({d:.1f}s), over the {BUDGET['per_type_pct']}% "
+            f"per-type ceiling ({P * BUDGET['per_type_pct'] / 100:.1f}s)",
+            n,
+        )
+    check(
+        "aggregate",
+        agg / P * 100 <= BUDGET["aggregate_pct"],
+        f"aggregate rare-event duty is {agg / P * 100:.1f}%, over the "
+        f"{BUDGET['aggregate_pct']}% ceiling",
+    )
+    check(
+        "air",
+        (P - agg) / P * 100 >= BUDGET["air_pct"],
+        f"empty air is {(P - agg) / P * 100:.1f}%, under the {BUDGET['air_pct']}% floor",
+    )
+    if active:
+        first = min(RARE_EVENTS[n][0] for n in active)
+        check(
+            "first_beat",
+            first <= BUDGET["first_beat_max"],
+            f"first beat enters at t={first:.1f}s, after the {BUDGET['first_beat_max']}s mark — "
+            f"and the timeline anchors at LOAD, so a late beat is unseen, not rare",
+        )
+
+    if waived:
+        print(f"  [{art.key}] budget WAIVED ({len(waived)}), measured anyway:")
+        for _kind, msg, reason in waived:
+            print(f"      · {msg}")
+            print(f"        waiver: {reason}")
+    if breaches:
+        raise SystemExit(
+            f"gen[{art.key}]: duty budget breached:\n"
+            + "\n".join(f"  · {m}" for _k, m, _r in breaches)
+        )
+
+
 def ev(name: str) -> tuple[float, float]:
     return RARE_EVENTS[name]
 
@@ -175,6 +301,21 @@ def ev(name: str) -> tuple[float, float]:
 def pct(t: float) -> str:
     """A window edge as a percentage of the master period."""
     return fmt(round(t / P * 100, 3))
+
+
+def assert_event_names_known(art: Art) -> None:
+    """Every event a variant declares must exist in RARE_EVENTS.
+
+    The two vocabularies drifted: the table keyed the shooting star as `shoot` while the variants
+    declared `shootingstar`, so the membership test never matched and the event was SILENTLY EXCLUDED
+    from both the disjointness gate and the duty budget. A gate that quietly skips an event is worse
+    than no gate, because it reports green over the thing it was built to check.
+    """
+    unknown = [n for n in art.events if n not in RARE_EVENTS]
+    if unknown:
+        raise SystemExit(
+            f"gen[{art.key}]: declares event(s) {unknown} that are not in RARE_EVENTS "
+            f"{sorted(RARE_EVENTS)} — they would be silently skipped by every temporal check")
 
 
 def assert_events_disjoint(art: Art) -> None:
@@ -256,7 +397,7 @@ class Art:
     star_count: tuple[int, int, int] = (150, 62, 20)
     moon: tuple[float, float, float] = (1648, 206, 62)  # cx, cy, r
     moon_phase: float = 0.30  # 0 = full, 1 = sliver
-    events: tuple[str, ...] = ("shootingstar", "balloon", "birds", "peek")
+    events: tuple[str, ...] = ("shoot", "balloon", "birds", "peek")
     second_clawd: bool = False
     hairline: bool = False
 
@@ -1042,7 +1183,7 @@ def clawd_placed(art: Art, x: float, scale: float, sfx: str = "") -> str:
 # ── rare world events ─────────────────────────────────────────────────────────────────────────────
 def events(art: Art) -> str:
     out = []
-    if "shootingstar" in art.events:
+    if "shoot" in art.events:
         divides_P(P)
         trail = "".join(
             f'<rect class="ss" x="{fmt(-i * 15)}" y="{fmt(i * 6.4)}" width="{fmt(9 - i * 0.75)}" '
@@ -1319,8 +1460,10 @@ def css(art: Art) -> str:
 # ── assembly ──────────────────────────────────────────────────────────────────────────────────────
 def build(art: Art) -> str:
     _SCROLLING.clear()
+    assert_event_names_known(art)
     assert_events_disjoint(art)
     assert_stride_locked(art)
+    assert_duty_budget(art)
     rng = random.Random(20260729 + sum(ord(ch) for ch in art.key))
     scale = art.clawd_scale
 
@@ -1675,7 +1818,7 @@ VARIANTS = [
         star_count=(300, 90, 30),
         moon=(1656, 166, 62),
         moon_phase=0.30,
-        events=("shootingstar", "birds", "peek"),
+        events=("shoot", "birds", "peek"),
     ),
     Art(
         key="v6b-two-sessions",
@@ -1692,7 +1835,7 @@ VARIANTS = [
         star_count=(280, 84, 28),
         moon=(1672, 178, 56),
         moon_phase=0.30,
-        events=("shootingstar", "birds"),
+        events=("shoot", "birds"),
         second_clawd=True,
         hairline=True,
     ),
@@ -1710,7 +1853,7 @@ VARIANTS = [
         star_count=(220, 62, 20),
         moon=(250, 214, 70),
         moon_phase=0.30,
-        events=("shootingstar", "balloon", "birds", "peek"),
+        events=("shoot", "balloon", "birds", "peek"),
     ),
     Art(
         key="v6d-terminal-field",
