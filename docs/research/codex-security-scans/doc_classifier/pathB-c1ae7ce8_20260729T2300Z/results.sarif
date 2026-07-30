@@ -1,0 +1,264 @@
+{
+  "$schema": "https://docs.oasis-open.org/sarif/sarif/v2.1.0/os/schemas/sarif-schema-2.1.0.json",
+  "runs": [
+    {
+      "automationDetails": {
+        "id": "27350c18-33ef-44a8-a962-f609ff6d196a"
+      },
+      "properties": {
+        "codexSecuritySchemaVersion": "1.0",
+        "codexSecurityTargetKind": "git_worktree"
+      },
+      "results": [
+        {
+          "level": "note",
+          "locations": [
+            {
+              "message": {
+                "text": "root_control"
+              },
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "contracts/base.py"
+                },
+                "region": {
+                  "endLine": 137,
+                  "startLine": 114
+                }
+              }
+            },
+            {
+              "message": {
+                "text": "entrypoint"
+              },
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "reviewapp/api/auth.py"
+                },
+                "region": {
+                  "endLine": 149,
+                  "startLine": 140
+                }
+              }
+            },
+            {
+              "message": {
+                "text": "sink"
+              },
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "reviewapp/api/decisions.py"
+                },
+                "region": {
+                  "endLine": 203,
+                  "startLine": 190
+                }
+              }
+            },
+            {
+              "message": {
+                "text": "evidence:local-part-transform"
+              },
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "contracts/base.py"
+                },
+                "region": {
+                  "endLine": 137,
+                  "startLine": 131
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "The signed full UPN is reduced to its case-folded local part before per-reviewer blind-entry, second-key, and queue checks. Distinct accepted-tenant accounts sharing that local part across domains therefore operate under the same workflow identity."
+          },
+          "partialFingerprints": {
+            "codexSecurity/v1": "codex-security/v1:sha256:b617ffce74838e2a773a462c2bc0390fd9d9030bdff30b7440cde4bf05476012"
+          },
+          "properties": {
+            "candidateId": "candidate-8e767fb7e027e6d6",
+            "category": "Identity collision / improper authentication",
+            "confidence": "high",
+            "findingId": "csf_7eccc5e8612533ecde2b85bb",
+            "occurrenceId": "occ_4c8ab7a720c6a8ae1b2de1fc",
+            "severity": "low"
+          },
+          "ruleId": "identity-collision.reviewer-handle",
+          "ruleIndex": 1
+        },
+        {
+          "level": "note",
+          "locations": [
+            {
+              "message": {
+                "text": "root_control"
+              },
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "reviewapp/api/auth.py"
+                },
+                "region": {
+                  "endLine": 114,
+                  "startLine": 106
+                }
+              }
+            },
+            {
+              "message": {
+                "text": "concrete_implementation"
+              },
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "reviewapp/cli.py"
+                },
+                "region": {
+                  "endLine": 320,
+                  "startLine": 313
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "The tokenless launcher grants every ReviewApp role based only on an app-state marker and loopback TCP peer. It does not bind the grant to the expected Host, Origin, or an unguessable launcher credential, so a browser DNS-rebinding origin can potentially reach protected routes as the local principal."
+          },
+          "partialFingerprints": {
+            "codexSecurity/v1": "codex-security/v1:sha256:72cba4c20c0bd1bfa71bdf6b049cb63eda6538694fc6fd63b303d8bf1e2523b3"
+          },
+          "properties": {
+            "candidateId": "candidate-5032c222409af6d0",
+            "category": "Authorization bypass / DNS rebinding",
+            "confidence": "medium",
+            "findingId": "csf_cde305d98d00089d6f96dcd5",
+            "occurrenceId": "occ_7ad23d253e3074207f545354",
+            "severity": "low"
+          },
+          "ruleId": "authorization-bypass.local-launcher-origin",
+          "ruleIndex": 0
+        },
+        {
+          "level": "warning",
+          "locations": [
+            {
+              "message": {
+                "text": "root_control"
+              },
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "reviewapp/api/auth.py"
+                },
+                "region": {
+                  "endLine": 75,
+                  "startLine": 73
+                }
+              }
+            },
+            {
+              "message": {
+                "text": "entrypoint"
+              },
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "reviewapp/api/auth.py"
+                },
+                "region": {
+                  "endLine": 139,
+                  "startLine": 117
+                }
+              }
+            },
+            {
+              "message": {
+                "text": "evidence:bearer-entry"
+              },
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "reviewapp/api/auth.py"
+                },
+                "region": {
+                  "endLine": 139,
+                  "startLine": 133
+                }
+              }
+            },
+            {
+              "message": {
+                "text": "evidence:fresh-jwks-client"
+              },
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "reviewapp/api/auth.py"
+                },
+                "region": {
+                  "endLine": 75,
+                  "startLine": 70
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Every supplied bearer token creates a new `PyJWKClient`, discarding both JWKS and key caches. An unauthenticated caller can make each valid-shaped token perform a synchronous JWKS request, while an unknown `kid` forces a second refresh before the request is rejected."
+          },
+          "partialFingerprints": {
+            "codexSecurity/v1": "codex-security/v1:sha256:3f9bb1dc5b525cc1d96b10842406ac3792fdd8b5857f88e4630f82e796ab27be"
+          },
+          "properties": {
+            "candidateId": "candidate-204fcb4fa7b16ade",
+            "category": "Uncontrolled resource consumption",
+            "confidence": "high",
+            "findingId": "csf_f1c52db3dc211f2e5128479e",
+            "occurrenceId": "occ_e734b99678915e5e44795ff8",
+            "severity": "medium"
+          },
+          "ruleId": "resource-exhaustion.jwks-fetch",
+          "ruleIndex": 2
+        }
+      ],
+      "tool": {
+        "driver": {
+          "name": "Codex Security",
+          "rules": [
+            {
+              "id": "authorization-bypass.local-launcher-origin",
+              "name": "authorization-bypass.local-launcher-origin",
+              "properties": {
+                "tags": [
+                  "security"
+                ]
+              },
+              "shortDescription": {
+                "text": "authorization-bypass.local-launcher-origin"
+              }
+            },
+            {
+              "id": "identity-collision.reviewer-handle",
+              "name": "identity-collision.reviewer-handle",
+              "properties": {
+                "tags": [
+                  "security"
+                ]
+              },
+              "shortDescription": {
+                "text": "identity-collision.reviewer-handle"
+              }
+            },
+            {
+              "id": "resource-exhaustion.jwks-fetch",
+              "name": "resource-exhaustion.jwks-fetch",
+              "properties": {
+                "tags": [
+                  "security"
+                ]
+              },
+              "shortDescription": {
+                "text": "resource-exhaustion.jwks-fetch"
+              }
+            }
+          ],
+          "version": "0.1.14"
+        }
+      }
+    }
+  ],
+  "version": "2.1.0"
+}

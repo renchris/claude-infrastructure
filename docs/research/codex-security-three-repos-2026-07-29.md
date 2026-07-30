@@ -13,6 +13,11 @@ Supersedes the "honest limits" of
 [`codex-security-in-claude-code-2026-07-29.md`](codex-security-in-claude-code-2026-07-29.md) §6,
 which assumed the npm CLI was out of reach.
 
+**Path A has already scanned all three repos** — 4 sealed bundles, 6 open findings. The coverage
+SSOT is [`codex-security-scans/LEDGER.md`](codex-security-scans/LEDGER.md); read it before launching
+any scan, on either path. §5 reconciles this investigation against it, including a divergence where
+Path B found two defects in a control Path A recorded as *"found sound"*.
+
 ---
 
 ## 1. The two paths, as they actually stand today
@@ -127,7 +132,7 @@ against ChatGPT/Codex plan rate limits rather than an invoice. Either way it is 
 order-of-magnitude signal, and `--max-cost` exists precisely because of it.
 
 Extrapolating to whole repos is not defensible from one data point, but the shape is clear: a
-per-shard scan of the surfaces mapped in §6 is a **multi-hour, plan-quota-consuming** exercise per
+per-shard scan of the surfaces mapped in §7 is a **multi-hour, plan-quota-consuming** exercise per
 repo, and a whole-repo `scan .` at `xhigh` on 100k+ LOC is not something to launch casually.
 
 Quality, though, is high — these are not pattern matches. The medium finding was proven by an
@@ -142,30 +147,93 @@ scan ran 24 of the repo's own tests as supporting evidence:
 
 All three sit exactly on the surfaces an independent recon pass had flagged as highest-value
 (`auth.py`'s loopback `local_principal` bypass, JWT validation, identity keying) — mutual
-corroboration that the shard plan in §6 points at real defects.
+corroboration that the shard plan in §7 points at real defects.
 
-## 5. Recommendation
+## 5. Reconciliation with the existing scan ledger — and a divergence worth the whole exercise
 
-**Per repo, split by the classifier and by cost:**
+**Path A is not hypothetical here: it has already scanned all three repos.** A sibling session
+landed four sealed bundles and a coverage ledger on `origin/main` earlier today —
+[`codex-security-scans/LEDGER.md`](codex-security-scans/LEDGER.md), 6 findings, all filed to
+`cc-backlog`. **That ledger is the SSOT for what is already covered; read it before launching any
+scan on either path.** Everything below targets the *remainder*.
 
-| Repo | Path | Why |
+| Repo | Already covered (Path A) | Remainder = where to point the next scan |
 |---|---|---|
-| `claude-infrastructure` | **A (Claude-native)** | Path B is refused on its core security surface (§3). Not a preference — a hard block. |
-| `doc_classifier` | **B for 1–2 highest-value shards, A for the rest** | Path B is proven end-to-end here and its findings are strong. Rich untrusted-input surface (request→`Popen`, unconfined `Path(path)`, loopback auth bypass, document→prompt injection) rewards the spend. |
-| `reso-management-app` | **A first, B for shard S3 only** | 61 interpolated `` sql` `` templates in the Replicache builders is the one surface where an executed-PoC engine earns its cost; the other 6 shards are cheaper on Path A. |
+| `claude-infrastructure` | `hooks/` complete · `bin/`+`scripts/` partial | `commands/`, `lib/`, `tests/`, `launchd/` + 3 recorded deferrals |
+| `doc_classifier` | `reviewapp/api/` complete | **`pipeline/` + `contracts/`** — the ledger's own "highest-value gap in any of the three repos" |
+| `reso-management-app` | 15 API routes, `middleware.ts`, `lib/auth/` (partial) | **`src/app/actions/`** — server actions, same `SameSite=None` exposure as the open **high** finding, and more of them than API routes |
 
-**Do not run `scan .` on a whole repo.** Always `--path`-scope to a shard from §6. Rationale: cost
-(§4), and coverage honesty — a scoped scan that reports `completeness: complete` is worth more than
-a whole-repo scan that silently defers.
+That remainder independently matches the shard plan in §7 (doc_classifier Shard C/D = `pipeline/` +
+`contracts/`; reso Shard S3/S6 = `src/app/actions/`), derived from a separate recon pass. Two
+independent decompositions landing on the same gaps is the strongest available evidence that the
+gaps are real.
 
-Path A remains the default for breadth because it is free, unrefusable, and produces a bundle sealed
-by the same upstream validator. Path B is the escalation for a shard where an executed proof-of-
-concept changes the verdict.
+### The divergence: Path A cleared what Path B then broke
 
-**One thing to do irrespective of path:** fix the token-concatenation bypass family (§3). It is
-already 6 of 10 candidates against our own guard.
+The ledger records, for `doc_classifier`'s `reviewapp/api/` scan (completeness **complete**):
 
-## 6. Per-repo scan surface and shards
+> The auth design was reviewed and found **sound** (JWKS validation, Entra RBAC with unknown roles
+> dropped, a local-principal bypass **correctly gated** on *both* a launcher marker and a loopback
+> origin).
+
+Path B scanned `reviewapp/api/auth.py` — a strict subset of that already-"complete" scope — and
+returned **3 findings on precisely those two controls**:
+
+| Path A verdict | Path B finding | Evidence quality |
+|---|---|---|
+| "JWKS validation" sound | **Fresh `PyJWKClient` per token → pre-authentication fetch amplification** (medium) | **high — executed PoC** against the real `_decode` + installed PyJWT 2.13 observed **4 JWKS fetches from 2 rejected tokens** |
+| local-principal bypass "correctly gated on … a loopback origin" | **DNS rebinding can inherit the launcher's all-role principal** (low) | medium — source and tests prove the all-role grant and the *absence of application-layer origin binding*; no live browser reproduction |
+| — | UPN local-part mapping merges distinct reviewer identities (low) | high — the transform and every DB predicate are in source |
+
+Adjudicating rather than deferring to either: **the JWKS finding survives** — it is backed by an
+executed proof-of-concept, which outranks a static "found sound", and it is a *resource*-amplification
+defect (per-request client lifecycle), a class a correctness-focused read of the same code will
+legitimately pass over. **The rebinding finding is a genuine gap in reasoning, not a contradiction**:
+a loopback *peer-address* check is exactly what Path A verified, and it is exactly what DNS rebinding
+defeats, because the attacker's browser really does connect from `127.0.0.1`. Both controls Path A
+named as mitigating are the two Path B punctured. The third finding is new surface neither pass had
+framed.
+
+Both are now filed — `cc-backlog` `ce7651b02a17` (JWKS amplification) and `a36f2a81e3ee` (DNS
+rebinding) — and the sealed bundle is preserved at
+[`codex-security-scans/doc_classifier/pathB-c1ae7ce8_20260729T2300Z/`](codex-security-scans/doc_classifier/pathB-c1ae7ce8_20260729T2300Z/)
+per the ledger's own rule that `$TMPDIR` is not storage.
+
+**The generalizable lesson: "coverage: complete" is a statement about files visited, not about
+classes considered.** Two engines running the identical methodology over the identical file reached
+different verdicts, and the difference was an engine that *executed a PoC* versus one that reasoned
+statically. That is the real argument for Path B on a high-value shard — not that it is smarter, but
+that it pays to run the code.
+
+## 6. Recommendation
+
+**Path A for breadth, Path B as a targeted second opinion — and always against the remainder in §5,
+never from zero.**
+
+| Repo | Next scan | Path | Why |
+|---|---|---|---|
+| `claude-infrastructure` | `commands/`, `lib/`, `launchd/` + 3 deferrals | **A only** | Path B is refused on this repo's core security surface (§3). Not a preference — a hard block. |
+| `doc_classifier` | **`pipeline/` + `contracts/`** (Shards C, D) | **A for breadth, B for Shard C** | The ledger's own highest-value gap. Untrusted documents are the input, so the parsing + prompt-assembly surface is the primary attack surface and has *never* been scanned. Shard C is where an executed-PoC engine earns its cost. |
+| `reso-management-app` | **`src/app/actions/`** (Shards S3, S6) | **A for breadth, B for S3** | Largest remaining gap, carrying the same `SameSite=None` exposure as the open **high** finding. S3's 61 interpolated `` sql` `` templates are the one surface worth Path B's price. |
+
+**Sequencing:** run Path A first on each remainder. It is free and unrefusable, so it costs nothing
+to establish breadth and it updates the ledger's coverage. Then spend Path B on the single shard per
+repo where §5's divergence logic applies — a surface whose defects are *resource*, *timing*, or
+*origin-binding* shaped, which is exactly the class a static read passes over.
+
+**Do not run `scan .` on a whole repo.** Always `--path`-scope to a shard from §7. Rationale: cost
+(§4), and coverage honesty — a scoped scan reporting `completeness: complete` is worth more than a
+whole-repo scan that silently defers.
+
+**Two things to do irrespective of path:**
+
+1. **Fix the token-concatenation bypass family** (§3) — already 6 of 10 candidates against our own
+   guard, and free to validate on Path A.
+2. **Re-read "found sound" verdicts as scoped, not final** (§5). The ledger's own best insight is
+   that 5 of 6 findings were *asymmetries between sibling controls*; the auth divergence shows the
+   same asymmetry can hide **inside a control the previous scan explicitly cleared**.
+
+## 7. Per-repo scan surface and shards
 
 Measured tracked-code LOC (excluding `node_modules`, `dist`, generated, and test trees):
 
@@ -226,7 +294,7 @@ shard across all three repos.** Defer `s6_calibration`, `s8_eval`, `s3_families`
 typed records, no I/O, credential, or path surface. Notably **no `SECURITY.md`**, and no
 `gitleaks`/`pip-audit`/CodeQL/Trivy in CI.
 
-## 7. Path B operating notes — the preflight guards, in the order they bite
+## 8. Path B operating notes — the preflight guards, in the order they bite
 
 Three separate refusals before any model work, each costing a round trip. All are cheap to
 pre-satisfy:
@@ -278,7 +346,7 @@ npx -y @openai/codex-security@0.1.4 bulk-scan repos.csv \
   --output-dir "$HOME/codex-security-runs/bulk" --workers 2 --max-attempts 3
 ```
 
-## 8. Open questions
+## 9. Open questions
 
 - **Trusted Access for Cyber** (<https://chatgpt.com/cyber>) is the named remedy for the §3
   refusal. Whether this account qualifies, and whether approval would unblock

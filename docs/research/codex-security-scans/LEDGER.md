@@ -106,3 +106,39 @@ controls*, which is where the signal has been concentrated.
 3. **`$TMPDIR` is not storage.** Copy the bundle into this directory as the last step of any scan.
 4. Pass `realpath` output as `--scan-dir` — the finalizer rejects a non-canonical path, and
    `$TMPDIR` on macOS resolves under the `/var` symlink.
+
+---
+
+## Path B (upstream Codex CLI) — one scan, and it contradicts a "found sound" above
+
+Added 2026-07-29T23:00Z. Background, measured cost, and the three-repo runbook:
+[`../codex-security-three-repos-2026-07-29.md`](../codex-security-three-repos-2026-07-29.md).
+`npx @openai/codex-security@0.1.4` **is** runnable here (Codex CLI + ChatGPT login, no API key) —
+the prior doc's claim that it was not is corrected there.
+
+| Scan | Revision | Scope | Completeness | Findings |
+|---|---|---|---|---|
+| `doc_classifier/pathB-c1ae7ce8_20260729T2300Z` | `c1ae7ce8` | `reviewapp/api/auth.py` | **complete** | 3 (1 medium, 2 low) |
+
+⚠️ **This scope is a strict subset of `398ee1b9`'s "complete" `reviewapp/api/` scan above, and it
+returned 3 findings on the two controls that scan named as sound.** Do not read the rows as
+duplicates:
+
+| `398ee1b9` recorded | `pathB-c1ae7ce8` found | Backlog |
+|---|---|---|
+| "JWKS validation" sound | **medium** — fresh `PyJWKClient` per token ⇒ pre-auth JWKS fetch amplification; **PoC observed 4 fetches from 2 rejected tokens** | `ce7651b02a17` |
+| local-principal bypass "correctly gated on … a loopback origin" | **low** — DNS rebinding inherits the launcher's all-role principal; the loopback *peer* check carries no Host/Origin binding | `a36f2a81e3ee` |
+| — (new surface) | **low** — UPN local-part mapping merges distinct reviewer identities | filed with the two above |
+
+Neither engine is wrong about the code; they asked different questions. The amplification defect is
+about a *client lifecycle*, and rebinding defeats a peer-address check precisely because the victim's
+browser really does connect from `127.0.0.1`. **Lesson for this ledger: `completeness: complete`
+means every file was visited, not that every class was considered — a later scan may legitimately
+re-target a scope already marked complete, and should say so rather than skip it.**
+
+Path B costs **~$14.22 / ~998s / 17.2M input tokens for that one 170-line file**, and OpenAI's cyber
+classifier **refuses** `claude-infrastructure/hooks/validate-bash.sh` outright, so Path A stays the
+default and is the *only* path for this repo. Before the refusal, Path B did emit 10 candidates
+against that hook — the known `-rf` gap plus **6 of one unmodelled family: shell token concatenation
+defeats raw-text matchers** (`drizzle-kit pu''sh` executes as `push`). Those are unvalidated leads;
+running them down on Path A is free.
