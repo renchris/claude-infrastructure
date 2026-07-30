@@ -206,10 +206,22 @@ NGR_UNSAFE_DECL=(
 # READINESS-BAR baselines: "<basename>|<max failed criteria that is NOT a regression>".
 # Raise a number ONLY with the measurement that justifies it; lower it when a bar is genuinely met.
 NGR_BAR_BASELINE=(
-  "premortem-gate.sh|1"                    # S-1 (reaper-horizon-lint) outstanding
-  "wait-safety-gate.sh|1"                  # L1 outstanding; L2 is the keeper of the set
+  # premortem + wait-safety reached their bars on 2026-07-30 (8·0 and 13·0, both "un-hold is
+  # defensible") once reaper-horizon-lint went clean. They now exit 0 and never reach the bar branch
+  # at all — but these rows are pinned at 0 deliberately: leaving them at the old 1 would let the
+  # FIRST future regression back in silently, which is the miscalibration this whole mechanism exists
+  # to avoid. A baseline is a ratchet; it only ever tightens.
+  "premortem-gate.sh|0"
+  "wait-safety-gate.sh|0"
   "comms-safety-gate.sh|0"
   "reaper-safety-gate.sh|0"
+  "respawn-safety-gate.sh|1"               # measured 2026-07-30: 1 met · 1 failed
+  "route-safety-gate.sh|0"                 # measured 2026-07-30: 2 met · 0 failed
+  # DELIBERATELY UNDECLARED — limit-reset-safety-gate.sh and session-lifecycle-safety-gate.sh. Both
+  # re-run bats internally and outran a 900s probe on a loaded box, so no honest baseline exists yet.
+  # They reach the NON-VERDICT branch (rc 124) long before the bar branch, so leaving them undeclared
+  # costs nothing today; if one ever COMPLETES it reports RED as "undeclared bar", which is the
+  # intended fail-closed prompt to measure it on a quiet box and add a row. Never guess these.
 )
 
 ngr_decl_lookup() { # <basename> <array-name> → payload on stdout, rc 1 when undeclared
@@ -492,7 +504,14 @@ selftest() {
   ngr_decl_lookup cc-upgrade-gate.sh NGR_UNSAFE_DECL >/dev/null && okp "U: cc-upgrade-gate.sh is declared unsafe" || badp "U: cc-upgrade-gate.sh not declared"
   ngr_decl_lookup gate-cleanup.sh    NGR_UNSAFE_DECL >/dev/null && okp "U: gate-cleanup.sh is declared unsafe" || badp "U: gate-cleanup.sh not declared"
   ngr_decl_lookup pane-id-lint.sh    NGR_UNSAFE_DECL >/dev/null && badp "U: exempted a script that must still RUN" || okp "U: an undeclared script is NOT exempt"
-  [ "$(ngr_decl_lookup premortem-gate.sh NGR_BAR_BASELINE)" = 1 ] && okp "B: premortem-gate baseline resolves to 1" || badp "B: premortem-gate baseline missing/wrong"
+  # Assert the row RESOLVES TO A NUMBER, never to one specific number — a baseline is a ratchet that
+  # tightens as gates reach their bars (premortem went 1 → 0 on 2026-07-30), and an assertion pinned to
+  # today's value turns every legitimate tightening into a false failure. The property that matters is
+  # that the row parses at all: a typo'd row silently exempts nothing.
+  case "$(ngr_decl_lookup premortem-gate.sh NGR_BAR_BASELINE)" in
+    ''|*[!0-9]*) badp "B: premortem-gate baseline missing or non-numeric" ;;
+    *)           okp  "B: premortem-gate baseline resolves to a number" ;;
+  esac
 
   # bar marker detection, off the gates' OWN wording
   printf 'premortem-gate: 7 met · 1 failed · 0 NOT BUILT\n⇒ RUNTIME PHASE: NOT READY TO UN-HOLD\n' > "$d/cls/bar.out"
