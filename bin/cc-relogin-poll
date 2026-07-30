@@ -120,7 +120,21 @@ hours_secs() { # <fmt_h-or-numeric-string> -> seconds | ""
 # ── detection ladder ────────────────────────────────────────────────────────────────────────
 # ROWS lines (tab-separated, NO empty fields — "-" stands in): acct, deadline_epoch, k, launcher
 NOW="$(now)"; ROWS=""; DETECT="unavailable"; MISSING=""; WINDOW_CAPPED=""
-if "$ACCOUNTS_BIN" -h 2>/dev/null | grep -q -- '--login-status'; then
+# READ THE HELP ONCE, MATCH IT WITH `case` — NEVER `… -h | grep -q` (2026-07-30).
+# `grep -q` exits the instant it matches, so the producer is SIGPIPEd on the NEXT line it tries
+# to write, and `set -o pipefail` (line 50) promotes that 141 into the pipeline's status. The
+# `if` then reads FALSE on a surface that is plainly advertised. Measured on bash 3.2 against a
+# 3-line help whose match is line 2: FALSE 263/400 (66%); with pipefail off, 0/400. The REAL
+# `claude-accounts --help` prints many lines after the match, so the window is wider still, and
+# both probes below were affected — which is what put a spurious `WINDOW-CAPPED` in the live
+# poll log while the deployed claude-accounts did support --window-h.
+# A false negative here is never cosmetic: it makes this poller declare DETECTION-UNAVAILABLE,
+# or silently narrow its window to 72h, exactly when a renewal is due — the precise failure §2
+# exists to prevent. Capturing to a variable removes the pipe (and one of the two forks).
+# `case` on an already-captured string is bash-3.2 safe: the trap is `case` INSIDE `$( )`.
+ACCT_HELP="$("$ACCOUNTS_BIN" -h 2>/dev/null || true)"
+case "$ACCT_HELP" in *--login-status*) LS_ADVERTISED=1 ;; *) LS_ADVERTISED=0 ;; esac
+if [ "$LS_ADVERTISED" = 1 ]; then
   # ASK FOR OUR OWN WINDOW. --login-status is a pre-FILTERED view, gated at claude-accounts'
   # login_warn_h (72h) — a HUMAN warning constant, not this poller's policy. Reading it bare
   # capped the declared T-7d attempt window at 72h, so 96 of 168 hours were structurally
@@ -129,11 +143,10 @@ if "$ACCOUNTS_BIN" -h 2>/dev/null | grep -q -- '--login-status'; then
   # an unknown flag here would exit 64 (usage), and a bare exit-code probe cannot distinguish
   # that from a verdict.
   LS_WINDOW=""
-  if "$ACCOUNTS_BIN" -h 2>/dev/null | grep -q -- '--window-h'; then
-    LS_WINDOW="$((TRIG_DAYS * 24))"
-  else
-    WINDOW_CAPPED="--window-h unsupported on this claude-accounts — detection is capped at its login_warn_h, NOT the declared T-${TRIG_DAYS}d"
-  fi
+  case "$ACCT_HELP" in
+    *--window-h*) LS_WINDOW="$((TRIG_DAYS * 24))" ;;
+    *) WINDOW_CAPPED="--window-h unsupported on this claude-accounts — detection is capped at its login_warn_h, NOT the declared T-${TRIG_DAYS}d" ;;
+  esac
   if [ -n "$LS_WINDOW" ]; then
     LS_OUT="$("$ACCOUNTS_BIN" --login-status --window-h "$LS_WINDOW" 2>/dev/null)"; LS_RC=$?
   else

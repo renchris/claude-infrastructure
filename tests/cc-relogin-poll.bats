@@ -568,6 +568,52 @@ attempts() { jq -r '.attempts' "$CC_RELOGIN_POLL_STATE_DIR/relogin-poll-$1.json"
   [ "$status" -ne 0 ] || false
 }
 
+# ── the help probe must survive its own producer being SIGPIPEd ──────────────────────────────────
+# REGRESSION (2026-07-30). The probe shipped as `"$ACCOUNTS_BIN" -h | grep -q -- '--login-status'`
+# under `set -o pipefail`. `grep -q` exits on its FIRST match, the producer is SIGPIPEd on the next
+# line it writes, and pipefail promotes that 141 to the pipeline status — so a plainly-advertised
+# surface probed FALSE. Measured on bash 3.2 with a 3-line help (match on line 2): 263/400 = 66%.
+# That is why this suite failed a DIFFERENT subset every run, and why a spurious WINDOW-CAPPED
+# reached the live poll log against a claude-accounts that DOES support --window-h.
+#
+# This test is deterministic where the real defect was probabilistic: the stub prints a large
+# payload AFTER the match, so the early exit reliably SIGPIPEs the producer. Against the old
+# pipeline form both cases below fail; against the captured-then-`case` form both pass.
+# RED-PROOF: restore `if "$ACCOUNTS_BIN" -h 2>/dev/null | grep -q -- '--login-status'` and this
+# goes red immediately — verified, not asserted.
+@test "M2c: a help text with heavy output AFTER the match is still detected (pipefail/SIGPIPE)" {
+  mk next3 90 0
+  build ls
+  # widen the SIGPIPE window: thousands of lines follow the two advertised flags
+  cat > "$D/claude-accounts" <<STUB
+#!/usr/bin/env bash
+D="\$(dirname "\$0")"
+case "\${1:-}" in
+  -h|--help)
+    echo "usage: claude-accounts"
+    echo "  claude-accounts --login-status      per-account login deadline"
+    echo "      --window-h N   override login_warn_h for this call"
+    i=0; while [ \$i -lt 5000 ]; do echo "  filler line \$i padded out to widen the pipe window"; i=\$((i+1)); done
+    exit 0 ;;
+  --login-status)
+    printf '%s\n' "\$*" >> "$D/ls.argv"
+    cat "$D/ls.tsv"; exit 0 ;;
+esac
+exit 0
+STUB
+  chmod +x "$D/claude-accounts"
+
+  run "$P" --json
+  [ "$status" -eq 0 ] || false
+  # detection resolved through ladder 1 — NOT "unavailable", NOT a fallback
+  json | jq -e '.detection=="login-status"' >/dev/null || false
+  # ...and the SECOND probe (--window-h) survived too: no cap may be claimed, and the poller
+  # must have asked for its OWN 168h window rather than accepting a 72h default.
+  run grep -q 'WINDOW-CAPPED' "$CC_RELOGIN_POLL_LOG"
+  [ "$status" -ne 0 ] || false
+  grep -q -- '--window-h 168' "$D/ls.argv" || false
+}
+
 # ── M2b: hours_secs is UNIT-AWARE — the 24x deadline error the cap was hiding ────────────────────
 
 @test "M2b: a DAYS-formatted deadline is not read as hours (was 24x under, escalating 3d early)" {
