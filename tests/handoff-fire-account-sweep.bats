@@ -220,9 +220,20 @@ time.sleep(10)" &
   echo "$output" | grep -q "last-known weekly n/a"
 }
 
+# These two assert on the READOUT's content, so they must not also depend on ambient box load.
+# CC_FIRE_CAPACITY_GATE=off is the gate's own documented kill switch (handoff-fire.sh:1286).
+#
+# Without it both went RED whenever the box was busy: the P0-17 capacity gate refuses a net-new fire
+# at >2.0 load/core with exit 9, and a --dry-run is deliberately NOT exempt — it is how
+# handoff-fire-capacity-gate.bats observes the gate at all, and reporting the refusal is the honest
+# dry-run answer ("what WOULD happen" = refused). So exit 9 here was CORRECT behaviour meeting a test
+# that assumed an idle box. These two are the reason 2 of the 15 bats failures on the 2026-07-25/26
+# nightly pages survived re-triage; they failed by LOAD, not by code (measured: exit 9 at
+# 2.05/core). Neutralising the gate per-test keeps them deterministic without weakening it globally —
+# the gate's own suite still proves refuse/admit/fail-open.
 @test "dry-run fire advertises the pre-fire sweep in its readout" {
   local pf="$BATS_TEST_TMPDIR/brief.txt"; echo "resume the desk" > "$pf"
-  run bash "$HF" --dry-run --prompt-file "$pf" --session-id "fake:UUID" --account next
+  CC_FIRE_CAPACITY_GATE=off run bash "$HF" --dry-run --prompt-file "$pf" --session-id "fake:UUID" --account next
   [ "$status" -eq 0 ]
   echo "$output" | grep -q "sweep:"
   echo "$output" | grep -qi "claude-accounts --fresh"
@@ -230,7 +241,7 @@ time.sleep(10)" &
 
 @test "dry-run fire shows the sweep OFF when disabled" {
   local pf="$BATS_TEST_TMPDIR/brief.txt"; echo "resume the desk" > "$pf"
-  HANDOFF_ACCOUNT_SWEEP=off run bash "$HF" --dry-run --prompt-file "$pf" --session-id "fake:UUID" --account next
+  HANDOFF_ACCOUNT_SWEEP=off CC_FIRE_CAPACITY_GATE=off run bash "$HF" --dry-run --prompt-file "$pf" --session-id "fake:UUID" --account next
   [ "$status" -eq 0 ]
   echo "$output" | grep -q "account sweep OFF"
 }
