@@ -1198,3 +1198,62 @@ gradient crossing the circle; a scalloped ring would show a tooth count in the t
 are doing what they were built to do. Recorded because the eye produced a confident false positive at
 the exact size this document mandates judging at, which is worth knowing about the size rule itself:
 838 px is where defects become visible, and also where texture becomes over-readable.
+
+## ⛔ THE WORLD DOES NOT ACTUALLY STOP — `tf0` is warped at the wrong rate (2026-07-30, MEASURED)
+
+Found while re-deriving the parallax fix per the instruction above, and it **changes what that fix
+has to be**. One ground layer keeps moving through the dead world of THE ASK and THE REFUSAL, which
+are the two beats whose entire meaning is that the world stopped.
+
+**`tf0` carries two different periods, in two different places, and neither knows about the other:**
+
+| | where | value | rate |
+|---|---|---|---|
+| its **scroll** | stylesheet, `.tf0s{animation:sc STRIP_PERIOD s}` | 20 s | **96 px/s** |
+| its **warp registration** | `ground_detail`, `tiled(…, "tf0s", P/8)` → `warp_class(TILE/30)` | 30 s | **64 px/s** |
+
+`warp_css` scales each layer's world-modulation offset by `q * v / STRIP_V`, where `v` is whatever
+rate the layer was *registered* with. So `tf0` scrolls at 96 px/s inside a wrapper that cancels only
+64. **Residual through a "stopped" world: +32 px/s.** Read straight out of the emitted keyframes —
+over THE ASK's 26.0-32.0 s stop, `wp96` travels +576 px (exact cancellation), `wp80` +480 px (exact),
+and `wp64` +384 px against a layer that needs 576. That is **192 px of drift**, ~84 CSS px at 838.
+
+**Rendered proof, not arithmetic** — two frames both *inside* the stop, t=27.0 s → t=31.0 s:
+
+| band | mean abs Δ | pixels changed | verdict |
+|---|---|---|---|
+| `tf1` | **0.00** | **0.0%** | byte-exact freeze ✓ |
+| `fgb` | **0.00** | **0.0%** | byte-exact freeze ✓ |
+| **`tf0`** | **1.32** | **17.3%** | **it moves** |
+
+Positive control (ambient, t=60→61): the same detector measures `tf0` at **−96 px/s**, which both
+proves the detector can see motion and independently confirms `tf0`'s real scroll rate is 96, not the
+30 s its own source comment claims. Two `tf1`/`fgb` zeros beside a live `tf0` is not a tolerance
+question. (A cross-correlation was tried first and could NOT resolve it — the three bands
+interpenetrate, since a `tf1` tuft rises up to 12 px into `tf0`'s band, so its correlation peak sat at
+1.6× the median and reported a false `0`. The change-detection above is the measurement that works.)
+
+**This invalidates the handed-down parallax remedy a second way.** § above already caught that
+shortening `fgb`'s *tile* would slow it. The new one is worse: the remedy names **`tf0 → P/8` = 64
+px/s**, and `ground_detail` line 2291 **already says `P / 8`, with a `# 30s` comment.** Anyone
+applying the remedy where it appears to belong edits a line that is already correct, changes nothing
+about the scroll, and lands a branch that looks fixed. The rate that ships is in the *stylesheet*.
+
+**So the tf0 repair and the parallax re-derivation are ONE edit, not two.** Any new period for `tf0`
+must be written in both places at once — the stylesheet drives the scroll, `tiled()`'s argument drives
+the warp, and the defect is precisely that they disagree. Fixing `tf0` alone now would be discarded by
+whichever parallax ordering the operator picks.
+
+**The missing guard, and it is the 20th red-proof case.** `warp_css` raises when *no* layer scrolls at
+the strip rate, but **nothing asserts that a layer's scroll period equals the period its warp was
+registered with.** Every existing gate passed this build. That is the guard this defect needed:
+`assert_warp_matches_scroll`, comparing the stylesheet's per-class `sc` duration against the `dur`
+each `tiled()` call registered — and it must arrive with a sabotage fixture, because by this
+document's own standard a guard never observed to fire is a guess.
+
+**Possible bearing on THE ASK's ruling.** The operator's verdict was *"feels buggy being halted."* A
+single band creeping while every other ground layer is frozen byte-exact is, literally, one broken
+layer over a working background — which is the misread the audit predicted from a different cause.
+The blink fix addressed stillness reading as deadness; this is the opposite failure sitting in the
+same beat, and it was never in evidence. Recorded as a hypothesis, not a conclusion: it has not been
+A/B'd against a corrected build, and it should be before anyone claims it was the cause.
