@@ -338,6 +338,33 @@ RARE_EVENTS = {
     "peek": (48.5, 54.5),  # 6.0s — a GLANCE, which is what its motion always read as
     "peer": (48.5, 57.5),  # 9.0s — v6b only, in place of peek
     "rCheer": (50.5, 54.5),  # 4.0s — part of the visitor's visit, see COMPOSITE_OF
+    # ── the two SKY beats ─────────────────────────────────────────────────────────────────────
+    # These are a different KIND of beat from the four above and they are deliberately placed by a
+    # different rule. A narrative beat has to be SEEN — it says something about the system, so
+    # S16's "anchor at load, a beat at t=200s is unseen" applies with full force and the prime
+    # window is fought over. A sky beat says nothing about the system. Its entire value is that
+    # you might look up and catch one, and a shooting star you are guaranteed to see on every
+    # visit is not a shooting star, it is a loading spinner. So for these two, and only these two,
+    # LATE IS THE POINT — the operator's own words were "rare micro-event once in a while".
+    #
+    # That inverts the placement rule rather than loosening it: they take the air the narrative
+    # beats cannot use, and they take it at its two extremes.
+    #   · rShoot at 62.0s — the EARLIEST legal slot. `peer` (v6b's visitor) ends at 57.5s and
+    #     EVENT_GAP is 4.0s, so 61.5s is the floor; 62.0 clears it by 0.5s. Earliest, because of
+    #     the two it is the one worth a chance of being caught on a short visit.
+    #   · rTrace at 150.2s — the exact MIDPOINT of the empty half. Free air runs 65.0s to the
+    #     loop's wrap into rSummon at 243.4s: 178.4s long, centred at 154.2s, so an 8.0s window
+    #     sits at 150.2-158.2 and stands 85.2s clear on BOTH sides. That symmetry is derived, not
+    #     chosen, and it is the furthest any beat can get from every other beat on this loop.
+    #
+    # Both are night-only. They live inside `.nOnly` with the starfield, because the light scheme
+    # has a SUN and no stars — a meteor in daylight is not a restrained version of this beat, it
+    # is a different and wrong one.
+    "rShoot": (62.0, 65.0),  # 3.0s — THE SHOOTING STAR: one ablates, and leaves a train
+    "rTrace": (
+        150.2,
+        158.2,
+    ),  # 8.0s — THE CONSTELLATION: six stars are joined, then let go
 }
 
 # Beats that are ONE beat expressed as two, so the gate must not treat them as a collision.
@@ -349,10 +376,40 @@ RARE_EVENTS = {
 # reject v6a, where the cheer is caused by the peek it was overlapping.
 COMPOSITE_OF = {"rCheer": {"peer", "peek"}}
 
+# ── does the beat actually put INK on the canvas? ──────────────────────────────────────────────
+# Every gate in this file is STRUCTURAL: the markup parses, the animation is singular, the periods
+# divide P, the loop seams shut, the geometry clears the type. Not one of them asks the only
+# question a reader cares about — is anything visible? A beat can satisfy all of them and render
+# nothing, and one did: THE SHOOTING STAR's persistent train was a stroked horizontal path with an
+# objectBoundingBox gradient, whose bounding box has zero height, so SVG declines to paint it. Max
+# delta over the whole frame: zero. Every gate green.
+#
+# `banner-verify`'s ALIVE check is the closest thing that existed and it cannot cover this: it
+# samples 0..31s of a 240s loop and asks only that the frames DIFFER from each other, which the
+# creature's own stride satisfies on its own. It would report a lively banner with every rare event
+# painted in invisible ink.
+#
+# So each beat declares where to look and what to look at, and `scripts/banner-beat-ink.py` renders
+# the frame twice — once whole, once with that selector suppressed — and requires the difference to
+# be real. `(seconds into the beat's window, CSS selector)`. A beat may declare several probes; the
+# meteor needs two because its head and its train are alive at different instants, and a single
+# probe on the head would have passed over exactly the element that was missing.
+BEAT_INK: dict[str, tuple[tuple[float, str], ...]] = {
+    "rSummon": (
+        (4.8, ".smHat,.smPeer,.smBUp,.smSpark,.smPoof,.smMail,.smCake,.smHeld"),
+    ),
+    "rRefuse": ((2.5, ".rfBar"),),
+    "rAsk": ((3.0, ".eyesAsk,.armsAlert"),),
+    "rShoot": ((0.5, ".shBurn"), (1.1, ".shTrain")),
+    "rTrace": ((2.4, ".cstL"), (2.4, ".cstN")),
+    "peek": ((3.0, ".peek"),),
+    "peer": ((3.0, ".peer"),),
+    "rCheer": ((2.0, ".rCheer,.pCheer"),),
+    "rOverlap": ((4.0, ".ovl"),),
+}
+
 # DELETED, reasons recorded so they are not rediscovered as ideas:
 #   balloon — filler with no cause for entering; renders the brand asterisk as a stray object (R4).
-#   shoot   — the most tired beat available, AND absent in the day scheme, so it cannot carry
-#             anything in both. v6d already shipped without it: evidence the deletion costs nothing.
 #   birds   — never in anyone's inventory, never reviewed, 40% duty over three passes, no story.
 #   Zzz     — UI iconography. Idleness here is a reaper classification and a closed pane, not sleep.
 #   rSleep  — SUPERSEDED BY THE ASK, not merely cut. Both beats are a cessation; the sleep's is
@@ -360,7 +417,29 @@ COMPOSITE_OF = {"rCheer": {"peer", "peek"}}
 #             Shipping both puts two stops 15 s apart, and the ambient one makes the distinctive one
 #             read as a repeat of itself. Its posture machinery (the legsWalk/legsStill swap) is
 #             exactly what THE ASK needs and is reused rather than duplicated.
-DELETED_EVENTS = ("balloon", "shoot", "birds", "rSleep")
+DELETED_EVENTS = ("balloon", "birds", "rSleep")
+
+# REINSTATED, and the old deletion's reasoning is kept rather than erased, because a reversal that
+# deletes its own case looks like the case was never made:
+#
+#   shoot — deleted as "the most tired beat available, AND absent in the day scheme, so it cannot
+#           carry anything in both. v6d already shipped without it: evidence the deletion costs
+#           nothing." Reinstated as `rShoot` on the operator's explicit ask (2026-07-30).
+#
+#           BOTH halves of that case are answered rather than overruled. The day-scheme half was
+#           never an argument for deletion — it is an argument that the beat belongs inside
+#           `.nOnly`, which is where the whole starfield already lives and where `rShoot` now is;
+#           the light scheme has a sun and no stars, so it has nothing for this beat to be absent
+#           FROM. The "tired" half is a statement about the generic version of this beat — a bright
+#           dash sliding corner to corner and vanishing at the frame edge — and that is not what is
+#           built here: this one has a radiant-derived path, ablates and dies in open sky rather
+#           than exiting, and leaves a PERSISTENT TRAIN that outlives the head by 1.6s. Tiredness
+#           was a craft verdict on an implementation, and the implementation changed.
+#
+#           The evidence half also has a reading the deletion did not give it: v6d shipping without
+#           it proves the beat is not load-bearing, which is exactly the licence to place it at
+#           t=62s where it may well be missed. A beat nothing depends on is the only kind that can
+#           afford to be rare.
 
 
 # ── the duty budget ────────────────────────────────────────────────────────────────────────────
@@ -418,7 +497,10 @@ def _waived(kind: str, event: str | None) -> str | None:
 #              legibility audit had already named it the designated sacrifice; the artifact agreed.
 #   rCheer   — belongs to the visitor's visit, and the visitor beats are on hold. On its own it is
 #              an unprompted celebration with nothing present to celebrate.
-ALWAYS_EMITTED = ("rSummon", "rRefuse", "rAsk")
+#
+# The two sky beats are here rather than per-variant for the same reason the starfield is: they are
+# properties of the NIGHT, not of an art direction. Every variant that has a sky has these.
+ALWAYS_EMITTED = ("rSummon", "rRefuse", "rAsk", "rShoot", "rTrace")
 
 
 def active_events(art: Art) -> list[str]:
@@ -1665,6 +1747,37 @@ def sky_defs(art: Art) -> str:
         # and a whisper of limb darkening at the very edge, which is what stops the lit rim
         # reading as a cut-out
         f'<stop offset="1" stop-color="#000" stop-opacity="0.13"/></linearGradient>'
+        # ── the sky's two occurrences ────────────────────────────────────────────────────────────
+        # The meteor's tail, in the CORRIDOR's own frame: offset 1 is the head, offset 0 is the
+        # point behind it. objectBoundingBox again, so the taper stays glued to the head whatever
+        # angle `shoot_path` returns — the same reasoning as the terminator above, and for the same
+        # reason it must not be re-tuned when the geometry moves.
+        f'<linearGradient id="shTail" x1="1" y1="0" x2="0" y2="0">'
+        f'<stop offset="0" stop-color="{d.star}" stop-opacity="0"/>'
+        f'<stop offset="0.34" stop-color="{d.star}" stop-opacity="0.22"/>'
+        f'<stop offset="1" stop-color="{d.star_cool}" stop-opacity="0.92"/>'
+        f"</linearGradient>"
+        # The head's own glow. Tight — 3.4x the head radius, which at 838 px is under 5 device px,
+        # so it registers as a bright point rather than as a lamp. A meteor is not a light source
+        # you can see illuminating anything; it is a spark.
+        f'<radialGradient id="shGlow" cx="0.5" cy="0.5" r="0.5">'
+        f'<stop offset="0" stop-color="{d.star}" stop-opacity="0.55"/>'
+        f'<stop offset="0.45" stop-color="{d.star_cool}" stop-opacity="0.20"/>'
+        f'<stop offset="1" stop-color="{d.star_cool}" stop-opacity="0"/></radialGradient>'
+        # The PERSISTENT TRAIN fades at BOTH ends rather than stopping. A hard-ended remnant reads
+        # as a drawn line — a scratch on the plate — and the whole point of the train is that it is
+        # a thing that was left behind, not a thing that was drawn.
+        f'<linearGradient id="shTrain" x1="0" y1="0" x2="1" y2="0">'
+        f'<stop offset="0" stop-color="{d.star}" stop-opacity="0"/>'
+        f'<stop offset="0.3" stop-color="{d.star}" stop-opacity="1"/>'
+        f'<stop offset="0.72" stop-color="{d.star}" stop-opacity="0.85"/>'
+        f'<stop offset="1" stop-color="{d.star}" stop-opacity="0"/></linearGradient>'
+        # A constellation node is a SOFT flare over a star that is already drawn, never a second
+        # hard dot on top of it — two hard edges at the same centre read as a ring at 838 px.
+        f'<radialGradient id="cstNode" cx="0.5" cy="0.5" r="0.5">'
+        f'<stop offset="0" stop-color="{d.star}" stop-opacity="0.95"/>'
+        f'<stop offset="0.36" stop-color="{d.star}" stop-opacity="0.42"/>'
+        f'<stop offset="1" stop-color="{d.star}" stop-opacity="0"/></radialGradient>'
     )
 
 
@@ -1867,7 +1980,9 @@ STAR_TWINKLE_MAX = (
 STAR_LOW_Y = 168.0
 
 
-def starfield(art: Art, rng: random.Random) -> str:
+def starfield(
+    art: Art, rng: random.Random
+) -> tuple[str, list[tuple[float, float, int]]]:
     """One clustered blue-noise field in three magnitude tiers, with deliberate voids and a hard
     keep-out around the type (S7).
 
@@ -1976,6 +2091,718 @@ def starfield(art: Art, rng: random.Random) -> str:
             f'<g class="tw{k % len(STAR_PERIODS)}" style="--d:{fmt(-delay)}s" '
             f'transform-origin="{fmt(x)}px {fmt(y)}px">{body}</g></g>'
         )
+    # The FIELD is returned alongside its markup, and that is a contract rather than a convenience.
+    # THE CONSTELLATION draws lines between stars, and the only way a line can be guaranteed to end
+    # ON a star is to be built from the very list that emitted them. The alternative — picking
+    # pleasing coordinates and trusting a star to be there — is how you ship an asterism whose
+    # vertices sit in empty sky, and at 838 px that reads as a stray polygon rather than as a
+    # constellation. `assert_constellation_on_real_stars` re-proves the join against the emitted
+    # markup, so this return value cannot quietly drift from what is drawn.
+    return "".join(out), [
+        (x, y, 0 if i < cuts[0] else (1 if i < cuts[1] else 2))
+        for i, (x, y) in enumerate(ranked)
+    ]
+
+
+# ══ THE SKY'S TWO OCCURRENCES ═════════════════════════════════════════════════════════════════════
+#
+# Everything above this line is the sky's STATE: the field, its magnitudes, the moon, and a
+# scintillation that is texture rather than occurrence. Below it are the sky's only two EVENTS.
+#
+# They are held to a harder standard than the narrative beats, for a reason that is specific to
+# them. A narrative beat is legible because it is CAUSED — a subagent is summoned, a gate refuses, a
+# decision waits — so a viewer who does not read the detail still reads the shape. A sky beat has no
+# cause available to it. Nothing in the system explains a meteor. All it has is craft, which means
+# the ONLY thing separating it from decoration is whether the details are right, and there is no
+# story to fall back on when they are not. That is why both of these derive their geometry from the
+# scene and then assert it, rather than being placed by eye:
+#
+#   · the meteor's corridor is SEARCHED for as the longest descending line that fits in open sky,
+#     so it cannot be a diagonal that happens to look clear on one variant;
+#   · the constellation's vertices are taken from the emitted starfield ITSELF, so a line cannot end
+#     in a place where no star was drawn.
+#
+# THE ONE THING BOTH MUST NOT DO is compete with the wordmark, which is why both keep a hard pad
+# from KEEPOUT and neither is allowed to cross it. A meteor passing behind the type would be a
+# lovely piece of depth at 1920 px and an illegible smear at 838.
+
+
+# ── THE SHOOTING STAR ─────────────────────────────────────────────────────────────────────────────
+#
+# WHAT MAKES THIS ONE NOT THE TIRED VERSION. The generic shooting star is a bright dash that slides
+# corner to corner at constant brightness and disappears at the frame edge. Three things here are
+# different, and each of them is what a real meteor does:
+#
+#   1. IT ABLATES. The head brightens over the first fraction of its flight, holds, and then fades
+#      to nothing over the last third — so it DIES IN OPEN SKY rather than exiting. A streak that
+#      leaves the frame says the frame is a window onto something bigger; a streak that burns out
+#      says it was a grain of rock and it is now gone, which is the true and better statement.
+#   2. IT LEAVES A PERSISTENT TRAIN. The ionised column outlives the head — seconds, for a bright
+#      one. So the head's 0.95s of flight is followed by 1.6s of a faint straight remnant fading
+#      along the path it took. This is the detail almost nothing animates, and it is why the beat's
+#      declared window is 3.0s rather than the 0.95s the head is actually in flight.
+#   3. IT IS SHORT. 0.95s across ~20% of the frame. The instinct is to make it slower so it can be
+#      seen; that instinct is what produces a floating dash. A meteor's speed is most of what
+#      identifies it.
+#
+# The 3.0s window is therefore not padding to satisfy BUDGET['instance_min'] — it is the beat. The
+# head is a fifth of it. Sizing the window to the head instead would have declared 0.95s, which is
+# under the 2.5s floor, and the honest reading of that floor ("shorter than this and a beat cannot
+# be read as caused") is exactly right here: a 0.95s flash with nothing after it is something you
+# are not sure you saw. The train is what turns it into something you saw.
+SHOOT_ANGLE_BAND = (
+    30.0,
+    55.0,
+)  # degrees below horizontal; outside this it reads as a scratch
+SHOOT_Y_BAND = (
+    26.0,
+    250.0,
+)  # the corridor stays above the horizon haze and the cloud bank
+SHOOT_PAD_TYPE = 26.0  # clearance from KEEPOUT — the streak may not graze the wordmark
+SHOOT_PAD_MOON = (
+    48.0  # ... and from the lunar disc, whose halo reaches past its own limb
+)
+SHOOT_MIN_LEN = 240.0  # a corridor shorter than this is not a flight, it is a tick mark
+SHOOT_HEAD_R = 2.9  # art px. At 0.4365x this is ~2.5 device px — a point, not a dot
+SHOOT_TRAIL = 128.0  # the tapered tail that travels WITH the head
+SHOOT_TRAIL_W = 5.2  # its width at the head, tapering to a point behind
+SHOOT_FLIGHT = 0.95  # s — the head's whole life
+SHOOT_TRAIN_OP = (
+    0.17  # the persistent train's peak. Faint by an order of magnitude, on purpose
+)
+SHOOT_TRAIN_W = (
+    3.4  # art px. Above the sub-pixel floor, and NON-ZERO — see `shooting_star`
+)
+SHOOT_TRAIN_END = (
+    2.55  # s into the window — the train is gone with 0.45s of the window to spare
+)
+
+# The corridor search is identical for every variant that shares a moon and a keep-out, and all four
+# do. Cached rather than recomputed so the four builds pay for it once.
+_SHOOT_CACHE: dict[tuple[float, float, float], tuple[float, float, float, float]] = {}
+
+
+def _sky_open(art: Art, x: float, y: float) -> bool:
+    """Is (x, y) sky a meteor may occupy? Keep-out, moon and horizon, in one predicate."""
+    if not (SHOOT_Y_BAND[0] <= y <= SHOOT_Y_BAND[1]):
+        return False
+    if not (16.0 <= x <= W - 16.0):
+        return False
+    if keepout_distance(x, y) < SHOOT_PAD_TYPE:
+        return False
+    mcx, mcy, mr = art.moon
+    return math.hypot(x - mcx, y - mcy) >= mr + SHOOT_PAD_MOON
+
+
+def shoot_path(art: Art) -> tuple[float, float, float, float]:
+    """(x0, y0, degrees, length) — the longest descending straight corridor in open sky.
+
+    SEARCHED, not placed, and the difference is the whole point. The scene has one hole in it the
+    size of a meteor and it is not obvious where: the wordmark's keep-out is 1176 px wide and
+    126 px tall across the middle of the frame, the moon owns the right, and stars stop at the
+    horizon haze. Eyeballing a diagonal through that produces a line that looks clear at 1920 px
+    and clips the type at 838 — which is the failure mode this whole file is organised against.
+
+    The result is worth stating because it is a fact about the composition rather than a preference:
+    on this canvas there is NO long steep line through the centre. Any line that starts right of the
+    keep-out and descends at a meteor's angle enters the keep-out within ~50 px, and any line that
+    clears the keep-out from above must be shallow enough (under ~7 degrees) to read as a scratch
+    rather than a fall. So the corridor is forced into the open block LEFT of the type, and the
+    meteor is a corner event because the geometry leaves nowhere else for it. That is a better
+    reason than composition-by-taste, and it is re-derived on every build rather than remembered.
+
+    Coarse sweep then a local refinement: the coarse grid finds the basin, the refinement recovers
+    the precision the grid threw away. Both are deterministic — no rng touches this.
+    """
+    key = art.moon
+    if key in _SHOOT_CACHE:
+        return _SHOOT_CACHE[key]
+
+    def run_length(x0: float, y0: float, deg: float, step: float) -> float:
+        a = math.radians(deg)
+        ux, uy = math.cos(a), math.sin(a)
+        if not _sky_open(art, x0, y0):
+            return 0.0
+        n = 0.0
+        while _sky_open(art, x0 + ux * (n + step), y0 + uy * (n + step)):
+            n += step
+            if n > 2.0 * W:  # cannot happen on this canvas; a guard, not a bound
+                break
+        return n
+
+    def sweep(
+        degs: list[float], xs: list[float], ys: list[float], step: float
+    ) -> tuple[float, float, float, float]:
+        # Ties broken by the tuple order (length, then the smallest x0/y0/deg) so two corridors of
+        # equal length can never pick differently between runs or between machines.
+        best = (0.0, 0.0, 0.0, 0.0)
+        for deg in degs:
+            for x0 in xs:
+                for y0 in ys:
+                    n = run_length(x0, y0, deg, step)
+                    if n > best[3] + 1e-9:
+                        best = (x0, y0, deg, n)
+        return best
+
+    # BOTH horizontal directions, and only DESCENDING ones. The bearing is stored as SVG's own
+    # signed rotate() degrees, so down-right is +a and down-left is 180-a; in either case the sine
+    # of the stored bearing is positive, which is the invariant that means "it falls".
+    #
+    # Getting this wrong is not theoretical — the first build of this search swept `±a` and mirrored
+    # dy while leaving dx positive, so half the corridors it considered were ASCENDING. It duly
+    # returned one: a meteor climbing out of the horizon at 27 degrees, which every geometric gate
+    # passed because none of them knows which way is down. `assert_sky_beats_clear` now checks the
+    # sign explicitly, since a physically inverted beat is exactly the kind of defect that survives
+    # a clearance check.
+    bearings = [
+        b
+        for a in range(int(SHOOT_ANGLE_BAND[0]), int(SHOOT_ANGLE_BAND[1]) + 1, 5)
+        for b in (float(a), 180.0 - a)
+    ]
+    coarse = sweep(
+        sorted(bearings),
+        [float(v) for v in range(16, W - 15, 16)],
+        [float(v) for v in range(int(SHOOT_Y_BAND[0]), int(SHOOT_Y_BAND[1]) + 1, 10)],
+        8.0,
+    )
+
+    bx, by, bdeg, _ = coarse
+    fine = sweep(
+        [bdeg + d * 0.5 for d in range(-9, 10)],
+        [bx + d * 2.0 for d in range(-9, 10)],
+        [by + d * 2.0 for d in range(-6, 7)],
+        2.0,
+    )
+    # Report the corridor as a POSITIVE angle plus a direction the renderer can apply directly: SVG
+    # rotate() takes the signed degrees, so the sign is carried rather than stripped.
+    _SHOOT_CACHE[key] = fine
+    return fine
+
+
+def shooting_star(art: Art) -> str:
+    """THE SHOOTING STAR — one head in flight, and the train it leaves behind.
+
+    THREE ELEMENTS, ONE ANIMATION EACH, and that is a hard constraint rather than tidiness:
+    `banner-shots.sh --lint` fails any element carrying a comma-list of animations, because the
+    deterministic freeze injects a single `animation-delay` and a second delayed animation would
+    then start immediately and paint itself into frames it does not belong in. Measured on this
+    branch already — a two-animation halo painted its idle breath into every narrative frame.
+
+        translate+rotate (STATIC)  — puts the corridor's frame on the canvas
+          .shTrav                  — one animation: travel along +x, which IS the corridor
+            .shBurn                — one animation: the ablation envelope
+              head + tapered tail  — static children, so the taper cannot drift off the head
+        .shTrain                   — one animation: the persistent train's own fade
+
+    The tail travels INSIDE the burn envelope rather than carrying its own fade, so head and tail
+    can never disagree about how bright the meteor is — a tail that outlives its head by even a
+    frame reads as a detached smear.
+    """
+    if not emits(art, "rShoot"):
+        return ""
+    x0, y0, deg, length = shoot_path(art)
+    d = art.dark
+    # The tail is a spike, not a rectangle: full width at the head and a point behind it. A
+    # constant-width trail reads as a comet's coma, which is a different object on a different
+    # timescale — a meteor's trail is the last few tens of km of its own path and it tapers.
+    w = SHOOT_TRAIL_W / 2
+    tail = f'<path d="M0 {fmt(-w)}L0 {fmt(w)}L{fmt(-SHOOT_TRAIL)} 0Z" fill="url(#shTail)"/>'
+    head = (
+        f'<circle r="{fmt(SHOOT_HEAD_R * 3.4)}" fill="url(#shGlow)"/>'
+        f'<circle r="{fmt(SHOOT_HEAD_R)}" fill="{d.star}"/>'
+    )
+    # The train covers the MIDDLE of the corridor, not all of it. The head is still faint over the
+    # first sixth (it is brightening) and already faint over the last sixth (it is dying), and an
+    # ionised column only exists where the thing was actually burning.
+    t0, t1 = length * 0.17, length * 0.88
+    # A FILLED RECT, not a stroked line, and the reason is a bug this shipped invisible for one
+    # build. The train was authored as `<path d="M.. L..">` with `stroke="url(#shTrain)"`, which is
+    # the obvious spelling and renders NOTHING: the gradient's units are objectBoundingBox, a
+    # perfectly horizontal path has a bounding box of zero height, and SVG says an element whose
+    # bounding box is degenerate in either axis is not rendered at all when it references such a
+    # gradient. Every gate stayed green — the markup is well-formed, the animation is singular, the
+    # loop still seams shut — because none of them asks whether an element puts ink on the canvas.
+    # (`banner-verify`'s ALIVE check samples 0..31s, which contains neither sky beat.)
+    #
+    # MEASURED, both forms, at t=63.0s against a control that suppresses `.shTrain`: the stroked
+    # path contributes max delta 0 over the entire frame; this rect contributes max 33 across 1,072
+    # pixels, in the corridor. The control was itself wrong on the first attempt and is worth the
+    # sentence: suppressing with a plain `opacity:0` reads as "the element draws nothing", because a
+    # running CSS ANIMATION outranks a normal author declaration. It took `display:none!important`
+    # plus a positive control on a different element to tell a dead element from a dead control.
+    # `scripts/banner-beat-ink.py` is that measurement made permanent, for every beat.
+    tw = SHOOT_TRAIN_W
+    train = (
+        f'<g class="shTrain"><rect x="{fmt(t0)}" y="{fmt(-tw / 2)}" '
+        f'width="{fmt(t1 - t0)}" height="{fmt(tw)}" fill="url(#shTrain)"/></g>'
+    )
+    return (
+        f'<g transform="translate({fmt(x0)} {fmt(y0)}) rotate({fmt(deg)})">'
+        f'<g class="shTrav" style="--L:{fmt(length)}px">'
+        f'<g class="shBurn">{tail}{head}</g></g>'
+        f"{train}</g>"
+    )
+
+
+# ── THE CONSTELLATION ─────────────────────────────────────────────────────────────────────────────
+#
+# WHY THIS BEAT EXISTS AT ALL, and why it is the harder of the two. `drop_collinear` deletes the
+# middle star of any near-perfect three-in-a-row, on the stated grounds that "three stars on a line
+# is the one arrangement that reads as DRAWN" and an accidental one claims a meaning the composition
+# did not intend. That is a scrub, and it has an unexploited consequence: because the field has been
+# swept clean of accidental lines, the ONE line that does get drawn is unambiguously deliberate.
+# This beat is the payoff for that scrub, and it is why the two functions belong to each other.
+#
+# THE VERTICES ARE REAL STARS. Not "stars placed to suit an asterism" and not "coordinates that look
+# starry" — the chain is searched for inside the list `starfield` actually emitted, and
+# `assert_constellation_on_real_stars` then re-finds every vertex in the emitted MARKUP rather than
+# in the list, so the check replays the artifact instead of agreeing with itself.
+#
+# WHAT IT IS NOT: a named real constellation. Orion or the Plough would need the field bent to fit
+# them, which inverts the whole relationship — the sky would then exist to serve the beat. This
+# draws whatever figure the field already contains, which is what an actual observer does.
+CST_N = 6  # vertices, so five segments. Four is a quadrilateral; seven starts to read as a scribble
+# THE SIZE BAND IS THE DIFFERENCE BETWEEN A FIGURE AND A SURVEY DIAGRAM, and it was set by rendering
+# rather than by argument. The first build allowed 96-250 px segments in a 700x250 bbox; at 838 px
+# that produced five near-maximal spans across a 447 px box — three long strokes with acres of empty
+# sky between them, which reads as a plotted route. Shortening the band to 70-150 px in a 380x230
+# box puts the same six vertices in roughly a 200x200 art-px area, about 90 device px square at the
+# README width, and THAT reads as a constellation: several joints close enough together for the eye
+# to take the whole figure in as one object.
+# 70-170, not the 70-150 the compaction pass first landed on. That tighter band builds on three of
+# the four variants and finds NO chain on `v6d-terminal-field`, whose field is the sparsest at 105
+# stars — measured, by the gate below firing. 70-170 in a 420x250 box leaves 1,813 legal chains on
+# that same worst-case variant and 3k-52k on the others, which is the headroom a shape rule needs:
+# a band that only just admits one chain is a band that a future star_count tweak silently breaks.
+CST_SEG = (70.0, 170.0)  # segment length band, art px
+CST_TURN = (
+    28.0,
+    140.0,
+)  # degrees of direction change at an interior vertex — see below
+CST_BBOX = (
+    420.0,
+    250.0,
+)  # the figure must stay compact; a chain across the frame is not a figure
+# A WIDE SHALLOW FIGURE ACROSS THE TOP was the other candidate and it is RULED OUT BY MEASUREMENT,
+# recorded so it is not re-proposed: the band above the wordmark (y 14-80) is the one region with
+# clear sky at full frame width, and a Cassiopeia-style zigzag would have sat over the title. It
+# holds 29-33 eligible stars on the four variants and admits NO six-chain at any segment band tried
+# — 62 px of vertical room cannot produce five turns that clear the 16-degree floor. The band is too
+# shallow for a figure, and a figure squeezed into it would have been a shallow scribble anyway.
+# FRAME MARGINS, and both numbers are a render's verdict rather than a guess. The first build had
+# neither: vertices landed at x=9 and x=12 and the figure was CLIPPED by the frame edge, which reads
+# as a bigger constellation partly out of shot — the one thing a self-contained figure must not do.
+# 60 px stopped the clipping but still sat the figure 40 device px from the edge at 838, close
+# enough to read as pinned into the corner; 90 gives it air. The y floor moved for the same reason
+# at the top edge, where the first unclipped build put a vertex 12 device px below it.
+CST_MARGIN = 90.0  # no vertex may sit closer than this to the left or right frame edge
+CST_Y_BAND = (
+    42.0,
+    300.0,
+)  # off the top edge; clouds may pass IN FRONT lower down, which is correct
+CST_PAD_TYPE = (
+    34.0  # a SEGMENT may not approach the wordmark, even between two legal stars
+)
+CST_PAD_MOON = 150.0  # the moon out-competes a faint figure — this is a legibility pad, not a hit-test
+CST_CLEAR = 22.0  # a segment may not graze a vertex it does not belong to
+# EVERY magnitude is eligible, and that is a MEASUREMENT rather than a preference. Restricting the
+# vertices to the bright and middle tiers was tried first, on the reasonable-sounding rule that you
+# cannot join stars you cannot see. Measured on all four variants it leaves 17-25 usable stars
+# spread over the full 1920 px, an average vertex degree of 2.1-2.7, and NO six-chain satisfying the
+# shape rules anywhere — `assert_constellation_on_real_stars` fired on every one of them. Admitting
+# the faint tier takes the same graph to 71-82 vertices at degree 11-15, which is where a figure
+# actually exists to be found.
+#
+# The craft objection to faint vertices is real, and it is answered by the node flare rather than by
+# the filter: a vertex BRIGHTENS as the line reaches it, so a faint star at a vertex is legible for
+# exactly as long as the figure is. What a flare cannot manufacture is an ANCHOR — something the eye
+# had a reason to be looking at before the beat started — so the chain must still contain
+# CST_BRIGHT_MIN genuinely bright stars, and brightness is rewarded in the score beyond that floor.
+CST_TIER_MAX = 2
+CST_BRIGHT_MIN = 2  # of CST_N vertices, at least this many must be tier 0 or 1
+CST_BRIGHT_BONUS = (
+    0.05  # score weight per bright vertex — prefer anchors, do not demand all six
+)
+
+
+def _seg_pt_dist(
+    ax: float, ay: float, bx: float, by: float, px: float, py: float
+) -> float:
+    ux, uy = bx - ax, by - ay
+    L2 = ux * ux + uy * uy
+    t = 0.0 if L2 < 1e-9 else max(0.0, min(1.0, ((px - ax) * ux + (py - ay) * uy) / L2))
+    return math.hypot(ax + ux * t - px, ay + uy * t - py)
+
+
+def _segs_cross(a: tuple, b: tuple, c: tuple, d: tuple) -> bool:
+    def side(p: tuple, q: tuple, r: tuple) -> float:
+        return (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0])
+
+    d1, d2 = side(a, b, c), side(a, b, d)
+    d3, d4 = side(c, d, a), side(c, d, b)
+    return (d1 * d2 < 0) and (d3 * d4 < 0)
+
+
+def _seg_clear_of_scene(art: Art, a: tuple, b: tuple) -> bool:
+    """A segment between two legal stars can still cross the type or the moon — check the SEGMENT.
+
+    This is the check that vertex-level clearance cannot give you, and it is not hypothetical: the
+    field puts bright stars on both sides of the wordmark, so the longest chains available are
+    exactly the ones that step straight across it.
+    """
+    mcx, mcy, mr = art.moon
+    if _seg_pt_dist(a[0], a[1], b[0], b[1], mcx, mcy) < mr + CST_PAD_MOON:
+        return False
+    steps = max(2, int(math.dist(a, b) / 6.0))
+    for i in range(steps + 1):
+        u = i / steps
+        x, y = a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u
+        if keepout_distance(x, y) < CST_PAD_TYPE:
+            return False
+    return True
+
+
+def constellation_chain(
+    art: Art, stars: list[tuple[float, float, int]]
+) -> list[tuple[float, float, int]]:
+    """Find the figure the field already contains: CST_N stars joined by a legible polyline.
+
+    THE SHAPE RULES, and every one of them exists to keep the result from reading as a random walk:
+
+      · SEGMENT LENGTH is banded. Too short and two vertices merge into one bright blob at 838 px;
+        too long and the eye stops carrying the line across the gap and sees two separate pairs.
+      · TURN ANGLE is banded at both ends. Under 30 degrees the three stars are nearly collinear,
+        which `drop_collinear` spent a whole function removing from the field — reintroducing it
+        with ink would be the same defect, drawn. Over 132 degrees the chain doubles back on itself
+        and reads as a crease rather than a figure.
+      · NO SELF-CROSSING, and no segment may pass within CST_CLEAR of a vertex it does not own. A
+        line that grazes an unrelated node makes that node look connected, so the figure the viewer
+        reads is not the figure that was drawn.
+      · THE BOUNDING BOX is capped. A constellation is a figure you can hold in one glance; a chain
+        that spans the frame is a route.
+
+    SCORED by total ink weighted by how much the direction ALTERNATES. A chain that turns the same
+    way at every vertex is an arc or a spiral, which reads as a drawn curve; alternation is what
+    makes a figure read as joined points. The weight is small (6% per alternation) because length is
+    still the primary signal that a figure is worth drawing at all.
+
+    Deterministic throughout — sorted candidate order, a fixed expansion budget, and ties broken by
+    the vertex indices, so neither rng nor dict ordering can reach the result. The budget is a
+    runaway guard rather than a quality knob: it sits an order of magnitude above what any field on
+    this canvas consumes, and `assert_constellation_on_real_stars` fails the build if the search
+    ever comes back empty.
+    """
+    cand = sorted(
+        (
+            (x, y, tier)
+            for (x, y, tier) in stars
+            if tier <= CST_TIER_MAX
+            and CST_Y_BAND[0] <= y <= CST_Y_BAND[1]
+            and CST_MARGIN <= x <= W - CST_MARGIN
+            and keepout_distance(x, y) >= CST_PAD_TYPE
+            and math.hypot(x - art.moon[0], y - art.moon[1])
+            >= art.moon[2] + CST_PAD_MOON
+        ),
+        key=lambda s: (s[0], s[1]),
+    )
+    n = len(cand)
+    nbr: list[list[int]] = [[] for _ in range(n)]
+    for i in range(n):
+        for j in range(n):
+            if i != j:
+                dl = math.dist(cand[i][:2], cand[j][:2])
+                if CST_SEG[0] <= dl <= CST_SEG[1] and _seg_clear_of_scene(
+                    art, cand[i][:2], cand[j][:2]
+                ):
+                    nbr[i].append(j)
+
+    best_score = -1.0
+    best_path: list[int] = []
+    budget = 4_000_000
+
+    # The optimistic ceiling a partial chain could still reach: every remaining segment at the
+    # maximum legal length, every remaining turn alternating, every remaining vertex bright. Any
+    # prefix that cannot beat the incumbent even under all three is abandoned. This is what makes an
+    # exhaustive search affordable on a degree-12 graph — without it, depth 6 over 81 vertices is
+    # ~10^5 paths per start and the budget would bind, which would quietly turn "the best figure in
+    # this field" into "the first acceptable figure in traversal order".
+    def ceiling(ink: float, depth: int, bright: int) -> float:
+        left = CST_N - depth
+        return (ink + left * CST_SEG[1]) * (
+            1.0 + 0.06 * (CST_N - 2) + CST_BRIGHT_BONUS * (bright + left)
+        )
+
+    def extend(
+        path: list[int],
+        ink: float,
+        alt: int,
+        bright: int,
+        lastdir: float | None,
+        lastsgn: float,
+    ) -> None:
+        nonlocal best_score, best_path, budget
+        if budget <= 0:
+            return
+        budget -= 1
+        if len(path) == CST_N:
+            if bright < CST_BRIGHT_MIN:
+                return
+            score = ink * (1.0 + 0.06 * alt + CST_BRIGHT_BONUS * bright)
+            if score > best_score + 1e-9:
+                best_score, best_path = score, list(path)
+            return
+        if ceiling(ink, len(path), bright) <= best_score:
+            return
+        px, py = cand[path[-1]][:2]
+        for j in nbr[path[-1]]:
+            if j in path:
+                continue
+            qx, qy = cand[j][:2]
+            # The bounding box is checked AS WE GO, so a doomed prefix dies at depth 2 instead of
+            # being expanded to depth 6 and rejected there. This is what keeps the budget slack.
+            xs = [cand[k][0] for k in path] + [qx]
+            ys = [cand[k][1] for k in path] + [qy]
+            if max(xs) - min(xs) > CST_BBOX[0] or max(ys) - min(ys) > CST_BBOX[1]:
+                continue
+            newdir = math.atan2(qy - py, qx - px)
+            sgn = 0.0
+            if lastdir is not None:
+                dth = (newdir - lastdir + math.pi) % math.tau - math.pi
+                if not (CST_TURN[0] <= abs(math.degrees(dth)) <= CST_TURN[1]):
+                    continue
+                sgn = 1.0 if dth > 0 else -1.0
+            a, b = (px, py), (qx, qy)
+            if any(
+                _segs_cross(cand[path[k]][:2], cand[path[k + 1]][:2], a, b)
+                for k in range(len(path) - 1)
+            ):
+                continue
+            if any(
+                _seg_pt_dist(a[0], a[1], b[0], b[1], *cand[path[k]][:2]) < CST_CLEAR
+                for k in range(len(path) - 1)
+            ):
+                continue
+            extend(
+                path + [j],
+                ink + math.dist(a, b),
+                alt + (1 if (sgn and lastsgn and sgn != lastsgn) else 0),
+                bright + (1 if cand[j][2] <= 1 else 0),
+                newdir,
+                sgn or lastsgn,
+            )
+
+    # Bright seeds first. The order does not change WHICH chain wins — the search is exhaustive —
+    # but it finds a strong incumbent early, and a strong incumbent is what gives `ceiling` teeth.
+    for i in sorted(range(n), key=lambda k: (cand[k][2], cand[k][0], cand[k][1])):
+        extend([i], 0.0, 0, 1 if cand[i][2] <= 1 else 0, None, 0.0)
+    return [cand[i] for i in best_path]
+
+
+# The trace's internal clock, in seconds from the start of the rTrace window. Every one of these is
+# a keyframe edge, and they are here rather than inline so the SHAPE of the beat can be read in one
+# place: six vertices light in turn as five lines reach them, the figure holds complete for a beat,
+# and then the whole thing lets go.
+CST_T0 = 0.30  # the first node lights BEFORE the first line moves — the line is drawn TO somewhere
+CST_DRAW = 0.95  # s per segment
+CST_STEP = 0.72  # s between segment starts, so consecutive draws overlap by 0.23s
+CST_HOLD = 5.60  # complete and still, until here
+CST_FADE = (
+    7.70  # gone by here — 0.5s inside the declared 8.0s window, never on its edge
+)
+# THE LINE MUST LOSE TO THE STARS, and this is the pair of numbers that decides it. At 0.40 opacity
+# and 3 px the first render put more ink into the joins than into anything they joined: the figure
+# read as a polygon that happened to have stars near its corners, which is precisely backwards. The
+# stars are the subject; the line is an annotation on them, and an annotation that outweighs its
+# subject is a mistake in any medium. Down to 0.28 at 2.4 px the relationship inverts correctly.
+#
+# 2.4 art px is also the floor, not a coincidence: it is the same sub-pixel floor STAR_TIERS derives
+# from, and below it a 0.4365x downscale puts the stroke inside one device pixel where it stops
+# being a line and starts being a dotted artifact of the rasteriser.
+CST_LINE_OP = 0.28  # peak stroke opacity — the beat's single most delicate number
+CST_LINE_W = 2.4  # art px, at the sub-pixel floor
+CST_NODE_OP = 0.78  # a node's flare, ON TOP of the star's own tier opacity
+CST_NODE_HOLD = 0.72  # the fraction of the flare a node keeps while the figure stands
+CST_NODE_R = 6.2  # art px — bigger than the 4.2px bright-tier star it sits on, so it reads as glow
+
+
+def constellation(art: Art, chain: list[tuple[float, float, int]]) -> str:
+    """THE CONSTELLATION — five lines drawn to six real stars, held, then let go.
+
+    THE LINES FADE RATHER THAN UN-DRAW. Reversing the dash offset was tried in the obvious sense and
+    it reads as a mistake being corrected: the eye follows the retreating end and the beat's last
+    statement becomes an erasure. A figure that fades has been LET GO of, which is the right ending
+    for something that was never claimed to be permanent.
+
+    ONE ANIMATION PER ELEMENT, and here that costs eleven keyframes rather than the two a shared
+    keyframe plus per-element `animation-delay` would need. That trade is deliberate. A positive
+    animation-delay interacts badly with the deterministic freeze: `banner-shots.sh` injects
+    `animation-delay: calc(var(--d) + var(--fz))`, so an element whose composite delay is still
+    POSITIVE at the requested timestamp has not started, and renders its un-animated base rather
+    than its 0% keyframe. Every other beat in this file uses absolute percentages on the full P
+    timeline for exactly that reason, and eleven keyframes is a cheap price for a freeze whose
+    semantics are the same as everything else's.
+    """
+    if not emits(art, "rTrace") or not chain:
+        return ""
+    d = art.dark
+    out = []
+    for i in range(len(chain) - 1):
+        (ax, ay, _), (bx, by, _) = chain[i], chain[i + 1]
+        # `pathLength="1"` normalises every segment, which is what lets the dash pair be written as
+        # a plain 1 regardless of the segment's real length. Without it each line would need its
+        # own dasharray in user units and the numbers would stop being readable.
+        out.append(
+            f'<line class="cstL cstL{i}" x1="{fmt(ax)}" y1="{fmt(ay)}" '
+            f'x2="{fmt(bx)}" y2="{fmt(by)}" pathLength="1" stroke-dasharray="1 1" '
+            f'stroke="{d.star}" stroke-width="{fmt(CST_LINE_W)}" stroke-linecap="round"/>'
+        )
+    for i, (x, y, _t) in enumerate(chain):
+        out.append(
+            f'<circle class="cstN cstN{i}" cx="{fmt(x)}" cy="{fmt(y)}" '
+            f'r="{fmt(CST_NODE_R)}" fill="url(#cstNode)"/>'
+        )
+    return "".join(out)
+
+
+def cst_times(i: int) -> tuple[float, float]:
+    """(start, end) of segment i's draw, in seconds from the window's start."""
+    return CST_T0 + i * CST_STEP, CST_T0 + i * CST_STEP + CST_DRAW
+
+
+def cst_node_time(i: int) -> float:
+    """When node i lights: node 0 leads the first line, every other node is a line's ARRIVAL."""
+    return CST_T0 if i == 0 else cst_times(i - 1)[1]
+
+
+def assert_constellation_on_real_stars(
+    art: Art, chain: list[tuple[float, float, int]], stars_svg: str
+) -> None:
+    """Every vertex must be findable in the EMITTED starfield markup, not merely in the point list.
+
+    The distinction is the whole value of this gate, and this repo has paid for the lesson twice: a
+    control has to replay the real artifact. Checking the chain against the list it was selected
+    from would only prove `constellation_chain` agrees with itself, and would stay green through
+    any later change that alters how a star is drawn — a tier whose size moves, a rect that becomes
+    a circle, a rounding step between the point and the attribute. All three would leave the lines
+    ending near stars rather than on them, which at 838 px is a polygon floating in the sky.
+
+    So the check reconstructs the exact `<rect>` the emitter would have written for a star of that
+    tier at that position and requires it to be present verbatim. If the emitter's spelling changes,
+    this fails loudly and gets updated deliberately, which is the correct outcome — it is the ONE
+    place the two representations are allowed to be compared.
+    """
+    if not emits(art, "rTrace"):
+        return
+    if len(chain) != CST_N:
+        raise SystemExit(
+            f"gen[{art.key}]: THE CONSTELLATION found {len(chain)} of {CST_N} vertices. The field "
+            f"has no chain satisfying the shape rules (segment {CST_SEG}, turn {CST_TURN}, bbox "
+            f"{CST_BBOX}). Loosen one band or raise star_count — do NOT ship a shorter figure: at "
+            f"four vertices it reads as a quadrilateral someone drew, not as a constellation."
+        )
+    missing = []
+    for x, y, tier in chain:
+        size = STAR_TIERS[tier][0]
+        rect = (
+            f'<rect x="{fmt(x - size / 2)}" y="{fmt(y - size / 2)}" width="{fmt(size)}"'
+        )
+        if rect not in stars_svg:
+            missing.append((x, y, tier))
+    if missing:
+        raise SystemExit(
+            f"gen[{art.key}]: {len(missing)} constellation vertex/vertices do not correspond to a "
+            f"star actually emitted: {missing}. The lines would end in empty sky. This means the "
+            f"point list and the markup have drifted — fix the emitter or this check, never the "
+            f"chain."
+        )
+
+
+def assert_sky_beats_clear(art: Art, chain: list[tuple[float, float, int]]) -> None:
+    """Neither sky beat may touch the wordmark or the moon — checked on the GEOMETRY, not the seed.
+
+    Both beats derive their geometry from a search, and a search is exactly the kind of thing that
+    silently returns something legal-but-degenerate when its inputs move: a corridor of 12 px, a
+    figure squeezed into one corner because the moon grew. So the search's OUTPUT is re-checked
+    against the same scene the search was supposed to respect, by a function that shares no code
+    with it. A gate that calls the thing it is gating proves nothing.
+    """
+    if emits(art, "rShoot"):
+        x0, y0, deg, length = shoot_path(art)
+        if length < SHOOT_MIN_LEN:
+            raise SystemExit(
+                f"gen[{art.key}]: the longest open-sky corridor is {length:.0f}px, under the "
+                f"{SHOOT_MIN_LEN:.0f}px floor — at that length the meteor is a tick mark rather "
+                f"than a flight. The scene has closed up: check KEEPOUT, art.moon and "
+                f"SHOOT_Y_BAND before touching the floor."
+            )
+        a = math.radians(deg)
+        # It must FALL. No clearance check can see this — an ascending corridor is exactly as clear
+        # of the wordmark as its mirror image — so the sign of the travel is asserted on its own.
+        if math.sin(a) <= 0:
+            raise SystemExit(
+                f"gen[{art.key}]: the meteor's bearing is {deg:.1f} degrees, which ASCENDS. A "
+                f"rising streak is not a meteor; check the direction set `shoot_path` sweeps."
+            )
+        for u in range(0, 101):
+            x = x0 + math.cos(a) * length * u / 100
+            y = y0 + math.sin(a) * length * u / 100
+            if not _sky_open(art, x, y):
+                raise SystemExit(
+                    f"gen[{art.key}]: the meteor corridor leaves open sky at ({x:.0f}, {y:.0f}) — "
+                    f"it would cross the wordmark, the moon or the horizon."
+                )
+    if emits(art, "rTrace") and chain:
+        for i in range(len(chain) - 1):
+            a2, b2 = chain[i][:2], chain[i + 1][:2]
+            if not _seg_clear_of_scene(art, a2, b2):
+                raise SystemExit(
+                    f"gen[{art.key}]: constellation segment {i} ({a2} -> {b2}) crosses the "
+                    f"wordmark keep-out or the lunar disc."
+                )
+
+
+def constellation_css() -> str:
+    """Eleven keyframes, one per element — see `constellation` for why they are not shared.
+
+    THE SNAP-BACK is the one edge that is not obvious. A line has to return to `stroke-dashoffset:1`
+    before the next loop or the second pass starts already drawn, and interpolating it back from 0
+    to 1 while the line fades would UN-DRAW it — the exact reading the fade exists to avoid. So the
+    reset is a hard step taken 0.05s after the line is already at opacity 0: invisible when it
+    happens, correct when it next matters. The same trick is what lets the loop be seamless without
+    the beat ever running backwards on screen.
+    """
+    out = []
+    for i in range(CST_N - 1):
+        s0, s1 = cst_times(i)
+        out.append(
+            f"@keyframes cstL{i}{{"
+            f"0%,{at('rTrace', s0)}%{{stroke-dashoffset:1;opacity:0}}"
+            # opacity comes up a hair before the dash starts moving, so the line's leading end
+            # arrives already lit instead of materialising a few pixels in
+            f"{at('rTrace', s0 + 0.02)}%{{stroke-dashoffset:1;opacity:{fmt(CST_LINE_OP)}}}"
+            f"{at('rTrace', s1)}%{{stroke-dashoffset:0;opacity:{fmt(CST_LINE_OP)}}}"
+            f"{at('rTrace', CST_HOLD)}%{{stroke-dashoffset:0;opacity:{fmt(CST_LINE_OP)}}}"
+            f"{at('rTrace', CST_FADE)}%{{stroke-dashoffset:0;opacity:0}}"
+            f"{at('rTrace', CST_FADE + 0.05)}%,100%{{stroke-dashoffset:1;opacity:0}}}}"
+        )
+        out.append(f".cstL{i}{{animation:cstL{i} {fmt(P)}s ease-in-out infinite}}")
+    for i in range(CST_N):
+        t = cst_node_time(i)
+        out.append(
+            f"@keyframes cstN{i}{{"
+            f"0%,{at('rTrace', t)}%{{opacity:0;transform:scale(.5)}}"
+            # The flare overshoots and settles. A node that simply appears at its final value reads
+            # as a dot switching on; the overshoot is what makes it read as a star RESPONDING.
+            f"{at('rTrace', t + 0.20)}%{{opacity:{fmt(CST_NODE_OP)};transform:scale(1.3)}}"
+            f"{at('rTrace', t + 0.70)}%{{opacity:{fmt(CST_NODE_OP * CST_NODE_HOLD)};transform:scale(1)}}"
+            f"{at('rTrace', CST_HOLD)}%{{opacity:{fmt(CST_NODE_OP * CST_NODE_HOLD)};transform:scale(1)}}"
+            f"{at('rTrace', CST_FADE)}%,100%{{opacity:0;transform:scale(1)}}}}"
+        )
+        out.append(f".cstN{i}{{animation:cstN{i} {fmt(P)}s ease-out infinite}}")
+    # Base state, and it is load-bearing rather than defensive: an element whose animation has not
+    # yet reached its first keyframe renders its OWN value, so a line left at the SVG default of
+    # opacity 1 would sit permanently drawn across the sky in any renderer that starts it late.
+    out.append(".cstL,.cstN{opacity:0}")
     return "".join(out)
 
 
@@ -3420,6 +4247,29 @@ def css(art: Art) -> str:
         f".tw1{{animation:twB {fmt(STAR_PERIODS[1])}s ease-in-out infinite}}"
         f".tw2{{animation:twC {fmt(STAR_PERIODS[2])}s ease-in-out infinite}}"
         f".tw3{{animation:twD {fmt(STAR_PERIODS[3])}s ease-in-out infinite}}"
+        # ---- THE SHOOTING STAR: travel, ablation, and a train that outlives the head ----
+        # Three keyframes for three elements, because the freeze is per-element and a comma-list
+        # would break it (see `shooting_star`). Every edge below is derived from the ONE window in
+        # RARE_EVENTS, so re-timing the beat moves all nine edges together and cannot desynchronise
+        # the head from its own trail.
+        f"@keyframes shFly{{0%,{at('rShoot', 0)}%{{transform:translateX(0)}}"
+        f"{at('rShoot', SHOOT_FLIGHT)}%,100%{{transform:translateX(var(--L))}}}}"
+        f".shTrav{{animation:shFly {fmt(P)}s linear infinite}}"
+        # The ablation envelope. Up fast, hold, then a long ramp to nothing — the asymmetry IS the
+        # beat: a symmetric fade in and out reads as a light being turned on and off.
+        f"@keyframes shBurn{{0%,{at('rShoot', 0)}%{{opacity:0}}"
+        f"{at('rShoot', SHOOT_FLIGHT * 0.10)}%{{opacity:1}}"
+        f"{at('rShoot', SHOOT_FLIGHT * 0.55)}%{{opacity:1}}"
+        f"{at('rShoot', SHOOT_FLIGHT)}%,100%{{opacity:0}}}}"
+        f".shBurn{{animation:shBurn {fmt(P)}s linear infinite}}"
+        # The train peaks just AFTER the head has gone — which is the whole observation. It is at
+        # its most visible in the moment there is nothing left to have made it.
+        f"@keyframes shTrain{{0%,{at('rShoot', SHOOT_FLIGHT * 0.62)}%{{opacity:0}}"
+        f"{at('rShoot', SHOOT_FLIGHT * 1.06)}%{{opacity:{fmt(SHOOT_TRAIN_OP)}}}"
+        f"{at('rShoot', SHOOT_TRAIN_END)}%,100%{{opacity:0}}}}"
+        f".shTrain{{animation:shTrain {fmt(P)}s ease-out infinite}}"
+        # ---- THE CONSTELLATION: five lines drawn to six stars, held, then let go ----
+         + constellation_css() +
         # ---- moon: a slow brightness breath, nothing more ----
         f"@keyframes mnf{{0%{{opacity:.88}}50%{{opacity:1}}100%{{opacity:.88}}}}"
         f".moonLit{{animation:mnf 80s ease-in-out infinite}}"
@@ -3607,6 +4457,15 @@ def css(art: Art) -> str:
         # opacity, i.e. every one of them pinned at its own peak, which is a brighter horizon than
         # the animation ever shows. Pin them to the mid-point of their own swing.
         ".tw0,.tw1,.tw2,.tw3{opacity:.86}"
+        # The sky's two occurrences resolve to NOT HAVING HAPPENED, which is the only still either
+        # of them has. A frozen meteor is a dash floating in the sky with no way to read it as
+        # moving, and a half-drawn constellation is a still of a thing mid-gesture — both are
+        # exactly the "frame that could not occur" the summoning props above are pinned to avoid.
+        # `.shBurn` and `.shTrain` need saying out loud: `animation:none` reverts them to the SVG
+        # default of opacity 1, so without this the reduced-motion still is the one frame in which
+        # the meteor is brightest. `.cstL`/`.cstN` already carry a 0 base and are pinned here too,
+        # so a later edit to that base cannot silently light them.
+        ".shBurn,.shTrain,.cstL,.cstN{opacity:0}"
         ".peek{transform:translateY(78px)}"
         "}"
     )
@@ -3656,6 +4515,16 @@ def build(art: Art) -> str:
     rng = random.Random(20260729 + sum(ord(ch) for ch in art.key))
     scale = art.clawd_scale
 
+    # The field is generated ONCE and then read twice — once as markup, once as the list THE
+    # CONSTELLATION picks its vertices from. Generating it twice would consume the rng twice and
+    # produce two different skies, one drawn and one joined, with no gate able to see the
+    # disagreement: every structural check would still pass on a figure whose vertices sit in empty
+    # sky. The two assertions below close that by re-finding each vertex in the emitted MARKUP.
+    stars_svg, star_pts = starfield(art, rng)
+    chain = constellation_chain(art, star_pts)
+    assert_constellation_on_real_stars(art, chain, stars_svg)
+    assert_sky_beats_clear(art, chain)
+
     defs = (
         sky_defs(art)
         + moon(art)
@@ -3698,7 +4567,12 @@ def build(art: Art) -> str:
         # grain over the sky only — it must not crawl over the ground plane or the type
         f'<rect class="grain" x="0" y="0" width="{W}" height="{GROUND}" filter="url(#grain)"/>',
         # stars are night-only; the moon becomes a soft day disc in the light theme
-        f'<g class="nOnly">{starfield(art, rng)}</g>',
+        f'<g class="nOnly">{stars_svg}</g>',
+        # The sky's two occurrences ride WITH the field, under the clouds — which is a depth
+        # statement, not an ordering accident. Meteors ablate at ~90 km and every cloud in frame is
+        # at ~2, so a cloud passing in front of the burn is correct, and a meteor drawn over a
+        # cloud would silently flatten the sky into one plane.
+        f'<g class="nOnly">{constellation(art, chain)}{shooting_star(art)}</g>',
         f'<g class="nOnly">{moon_body(art)}</g>',
         day_sun,
         # clouds pass in FRONT of the moon, which is what makes the sky feel deep
