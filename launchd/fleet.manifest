@@ -144,6 +144,21 @@ com.claude.capacity-alarm         | staged | 600  | auto | 13 | 19-capacity-alar
 # doing precisely its job (plan §5 F20, deploy-live's exit 1 is the same shape). Exit 3
 # (DETECTION-UNAVAILABLE) is deliberately NOT ok — "cannot tell whether a re-login is due" must row.
 com.claude.relogin                | staged | 3600 | ~/.claude/logs/cc-relogin-poll.log | 7 | 21-relogin-poll-activate.sh | 0,5
+# ── com.claude.scratchpad-reaper — a TRUNK REPAIR, not row 7's artifact ────────────────────────────
+# `97d4984b feat(growth): scratchpad-reaper for the /private/tmp per-session tree` landed
+# launchd/com.claude.scratchpad-reaper.plist with NO manifest row, which puts BOTH the three-way
+# coverage lint and tests/cc-fleet.bats "declares every repo plist" RED on pristine origin/main —
+# for every lander who comes after, not for its author. Same failure and same repair as
+# com.claude.capacity-alarm above, so it takes the same treatment rather than an allowlist.
+# All four fields are DISK TRUTH, read not assumed: `staged` because it is neither in
+# ~/Library/LaunchAgents nor loaded (`launchctl print` → not found); interval 21600 = its
+# StartInterval; `auto` is a REAL sensor here, unlike com.claude.relogin's — scripts/
+# scratchpad-reaper.sh:157 echoes a per-run summary to stdout, so its StandardOutPath is written on
+# every run. owner_row 11 (worktree/scratchpad disk hygiene) is the best fit and is PROVISIONAL: the
+# field is routing metadata only and never changes a verdict, so its real owner may correct it
+# without touching anything else. activate = the generic fleet activation, as boot-resume,
+# nightly-regression and team-orphan-reaper already do — no scratchpad-specific script exists.
+com.claude.scratchpad-reaper      | staged | 21600 | auto | 11 | 18-fleet-activate.sh
 
 # ── com.chrisren.* — the SECOND family this repo owns (added 2026-07-29 after the reconciler's
 # first live run declared only com.claude.*, hiding 6 LOADED, RUNNING jobs from every leg).

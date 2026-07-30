@@ -538,7 +538,11 @@ STUB
   # install activate credentials automation). So a staged-only plist can be undeclared indefinitely with
   # every lint green, which is how a tested poller stayed unscheduled and unreported since 2026-07-26.
   # Same convention as above: the count moves WITH the repair.
-  [ "$n" = 22 ]
+  # 23 since 2026-07-30: com.claude.scratchpad-reaper — a TRUNK REPAIR, not row 7's artifact.
+  # 97d4984b landed launchd/com.claude.scratchpad-reaper.plist with no manifest row, so THIS test and
+  # the coverage lint were RED on pristine origin/main for every lander after it. Identical shape to
+  # the capacity-alarm repair above; fixed the same way rather than loosened.
+  [ "$n" = 23 ]
 
   # three-way coverage: every committed plist is declared (the lint §4.4 enforces at the chokepoint)
   for f in "$ROOT"/launchd/com.claude.*.plist "$ROOT"/launchd/com.chrisren.*.plist; do
