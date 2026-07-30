@@ -106,6 +106,78 @@ def keepout_distance(x: float, y: float) -> float:
     return math.hypot(dx, dy)
 
 
+# ── rare events: ONE source of truth for both the keyframes and the disjointness gate ──────────
+#
+# Every rare event declares its visible window in ABSOLUTE SECONDS on the P=240 s loop, and the CSS
+# percentages are derived from that. Previously each window was hand-written as a percentage inside
+# its own keyframe string, which is how the shipped defect happened: `rCheer` ran on a 120 s
+# sub-period, so it fired TWICE, and its second firing (154.1-158.4 s) sat entirely inside `rSleep`
+# (151.7-158.4 s) — the generator had even phase-locked both to end at the same instant. The result
+# rendered a sleeping creature, eyes shut and Zzz up, sprouting raised arms.
+#
+# "Sequence, do not stack" was written down and then regressed anyway, because prose is not
+# enforcement. So it is a build-time assertion now: a stacked pair REFUSES TO BUILD.
+#
+# Every event fires ONCE per loop (period = P). That is also what makes "rare" true — the previous
+# set had birds at 40% duty across three passes and a balloon at 40% across two, so two-thirds of
+# the loop had something crossing the sky.
+EVENT_GAP = 4.0  # seconds of clear air required between any two rare events
+
+RARE_EVENTS = {
+    #  name        (start_s, end_s)   what it is
+    "birds": (34.0, 62.0),
+    "peer": (74.0, 122.0),
+    "peek": (74.0, 122.0),  # v6b uses peer, the others use peek — never both
+    "rCheer": (126.0, 132.0),
+    "rSleep": (152.0, 172.0),
+    "balloon": (186.0, 214.0),
+    "shoot": (228.0, 236.0),
+}
+
+
+def ev(name: str) -> tuple[float, float]:
+    return RARE_EVENTS[name]
+
+
+def pct(t: float) -> str:
+    """A window edge as a percentage of the master period."""
+    return fmt(round(t / P * 100, 3))
+
+
+def assert_events_disjoint(art: Art) -> None:
+    """Refuse to emit a variant whose rare events overlap in time.
+
+    Only the events this variant actually EMITS are checked — carrying an unused keyframe is
+    harmless, and `peek`/`peer` deliberately share a slot because no variant has both.
+    """
+    active = [n for n in RARE_EVENTS if n in art.events]
+    if art.second_clawd:
+        active.append("peer")
+    if "rCheer" not in active:
+        active.append("rCheer")
+    if "rSleep" not in active:
+        active.append("rSleep")
+    active = sorted(set(active), key=lambda n: RARE_EVENTS[n][0])
+
+    for i in range(len(active)):
+        for j in range(i + 1, len(active)):
+            a, b = active[i], active[j]
+            (a0, a1), (b0, b1) = RARE_EVENTS[a], RARE_EVENTS[b]
+            if a0 < b1 + EVENT_GAP and b0 < a1 + EVENT_GAP:
+                raise SystemExit(
+                    f"gen[{art.key}]: rare events '{a}' ({a0:.1f}-{a1:.1f}s) and '{b}' "
+                    f"({b0:.1f}-{b1:.1f}s) overlap or sit within the {EVENT_GAP:.0f}s gap on the "
+                    f"{P:.0f}s loop. Two unrelated things happening at once cannot read as caused; "
+                    f"re-time one of them in RARE_EVENTS."
+                )
+        # an event must also fit inside the loop, or it wraps and silently becomes two events
+        a0, a1 = RARE_EVENTS[active[i]]
+        if not (0 <= a0 < a1 <= P):
+            raise SystemExit(
+                f"gen[{art.key}]: '{active[i]}' window {a0}-{a1}s does not fit in P={P}s"
+            )
+
+
 # ── palette ───────────────────────────────────────────────────────────────────────────────────────
 @dataclass
 class Theme:
@@ -153,9 +225,6 @@ class Art:
     moon_phase: float = 0.30  # 0 = full, 1 = sliver
     events: tuple[str, ...] = ("shootingstar", "balloon", "birds", "peek")
     second_clawd: bool = False
-    # The cheer's period. It has to equal the peer's period when a peer exists, or the two rare
-    # beats land at different times and the meeting has nobody answering it.
-    cheer_period: float = 120.0
     hairline: bool = False
 
 
@@ -465,8 +534,16 @@ def stratified(
     return out
 
 
-def poisson(count: int, x0: float, x1: float, y0: float, y1: float,
-            rng: random.Random, r_at, void_mask) -> list[tuple[float, float]]:
+def poisson(
+    count: int,
+    x0: float,
+    x1: float,
+    y0: float,
+    y1: float,
+    rng: random.Random,
+    r_at,
+    void_mask,
+) -> list[tuple[float, float]]:
     """Blue-noise scatter by dart-throwing against a spatial grid, with a VARIABLE minimum radius.
 
     Uniform random placement reads as wallpaper and clumps read as spam; a jittered grid (the
@@ -487,7 +564,7 @@ def poisson(count: int, x0: float, x1: float, y0: float, y1: float,
         span = int(math.ceil(r / cell)) + 1
         for i in range(gx - span, gx + span + 1):
             for j in range(gy - span, gy + span + 1):
-                for (px, py) in grid.get((i, j), ()):
+                for px, py in grid.get((i, j), ()):
                     if (px - x) ** 2 + (py - y) ** 2 < r * r:
                         return False
         return True
@@ -510,7 +587,11 @@ def poisson(count: int, x0: float, x1: float, y0: float, y1: float,
 
 # Star colour temperature. All-white stars look cheap; a few degrees of spread either side of
 # neutral is the cheapest refinement available in the whole sky.
-STAR_TEMPS = [("sc", 0.30), ("sn", 0.46), ("sw", 0.24)]   # cool / neutral / warm, with weights
+STAR_TEMPS = [
+    ("sc", 0.30),
+    ("sn", 0.46),
+    ("sw", 0.24),
+]  # cool / neutral / warm, with weights
 
 
 def starfield(art: Art, rng: random.Random) -> str:
@@ -527,10 +608,13 @@ def starfield(art: Art, rng: random.Random) -> str:
     divides_P(60.0, 30.0, 20.0, 12.0)
 
     # Deliberate voids — a few soft holes in the field, so the sky has empty quarters.
-    voids = [(rng.uniform(0, W), rng.uniform(10, 300), rng.uniform(90, 210)) for _ in range(4)]
+    voids = [
+        (rng.uniform(0, W), rng.uniform(10, 300), rng.uniform(90, 210))
+        for _ in range(4)
+    ]
 
     def void_mask(x: float, y: float) -> bool:
-        for (vx, vy, vr) in voids:
+        for vx, vy, vr in voids:
             d = math.hypot(x - vx, y - vy)
             if d < vr and rng.random() > (d / vr) ** 2.2:
                 return False
@@ -542,9 +626,12 @@ def starfield(art: Art, rng: random.Random) -> str:
 
     pts = poisson(total, 8, W - 8, 8, 330, rng, r_at, void_mask)
     pts = [(x, y) for (x, y) in pts if not in_keepout(x, y)]
-    pts = [(x, y) for (x, y) in pts
-           if keepout_distance(x, y) >= KEEPOUT_SOFT
-           or rng.random() <= (keepout_distance(x, y) / KEEPOUT_SOFT) ** 0.9]
+    pts = [
+        (x, y)
+        for (x, y) in pts
+        if keepout_distance(x, y) >= KEEPOUT_SOFT
+        or rng.random() <= (keepout_distance(x, y) / KEEPOUT_SOFT) ** 0.9
+    ]
 
     # Brightness rank drives size, opacity and who gets a cross — one axis, so depth stays coherent.
     ranked = sorted(pts, key=lambda _p: rng.random())
@@ -553,34 +640,40 @@ def starfield(art: Art, rng: random.Random) -> str:
     n_twinkle = max(1, int(len(ranked) * 0.22))
     periods = [60.0, 20.0, 12.0]
     for i, (x, y) in enumerate(ranked):
-        q = i / max(1, len(ranked) - 1)          # 0 = brightest
-        size = 3.6 - 2.0 * q ** 0.6
-        op = 0.95 - 0.62 * q ** 0.75
+        q = i / max(1, len(ranked) - 1)  # 0 = brightest
+        size = 3.6 - 2.0 * q**0.6
+        op = 0.95 - 0.62 * q**0.75
         temp = STAR_TEMPS[0][0]
         roll = rng.random()
         acc = 0.0
-        for (cls, wgt) in STAR_TEMPS:
+        for cls, wgt in STAR_TEMPS:
             acc += wgt
             if roll <= acc:
                 temp = cls
                 break
-        body = (f'<rect x="{fmt(x - size / 2)}" y="{fmt(y - size / 2)}" '
-                f'width="{fmt(size)}" height="{fmt(size)}"/>')
+        body = (
+            f'<rect x="{fmt(x - size / 2)}" y="{fmt(y - size / 2)}" '
+            f'width="{fmt(size)}" height="{fmt(size)}"/>'
+        )
         if i < n_cross:
             # diffraction spikes, on the brightest handful only
             arm = size * 2.6
             t = max(0.8, size / 4.6)
-            body += (f'<rect x="{fmt(x - t / 2)}" y="{fmt(y - arm)}" '
-                     f'width="{fmt(t)}" height="{fmt(arm * 2)}"/>'
-                     f'<rect x="{fmt(x - arm)}" y="{fmt(y - t / 2)}" '
-                     f'width="{fmt(arm * 2)}" height="{fmt(t)}"/>')
+            body += (
+                f'<rect x="{fmt(x - t / 2)}" y="{fmt(y - arm)}" '
+                f'width="{fmt(t)}" height="{fmt(arm * 2)}"/>'
+                f'<rect x="{fmt(x - arm)}" y="{fmt(y - t / 2)}" '
+                f'width="{fmt(arm * 2)}" height="{fmt(t)}"/>'
+            )
         if i < n_twinkle:
             dur = periods[i % len(periods)]
             delay = -(i * 7.3) % dur
             # opacity AND scale together — a pure opacity blink reads as a rendering glitch
-            out.append(f'<g class="st {temp} tw{i % 3}" style="--d:{fmt(-delay)}s" '
-                       f'opacity="{fmt(op)}" transform-origin="{fmt(x)}px {fmt(y)}px">'
-                       f'{body}</g>')
+            out.append(
+                f'<g class="st {temp} tw{i % 3}" style="--d:{fmt(-delay)}s" '
+                f'opacity="{fmt(op)}" transform-origin="{fmt(x)}px {fmt(y)}px">'
+                f"{body}</g>"
+            )
         else:
             out.append(f'<g class="st {temp}" opacity="{fmt(op)}">{body}</g>')
     return "".join(out)
@@ -620,23 +713,24 @@ def moon_body(art: Art) -> str:
     divides_P(80.0)
     maria = []
     mr = random.Random(4242)
-    for (fx, fy, fr) in ((-0.30, -0.22, 0.30), (0.10, 0.26, 0.22), (-0.06, 0.02, 0.15)):
+    for fx, fy, fr in ((-0.30, -0.22, 0.30), (0.10, 0.26, 0.22), (-0.06, 0.02, 0.15)):
         maria.append(
             f'<circle cx="{fmt(cx + fx * r)}" cy="{fmt(cy + fy * r)}" r="{fmt(fr * r)}" '
-            f'fill="#000" opacity="{fmt(mr.uniform(0.045, 0.085))}"/>')
+            f'fill="#000" opacity="{fmt(mr.uniform(0.045, 0.085))}"/>'
+        )
     return (
         f'<g class="moonHalo">'
         f'<circle cx="{fmt(cx)}" cy="{fmt(cy)}" r="{fmt(r * 3.5)}" fill="url(#bloom)"/>'
-        f'</g>'
+        f"</g>"
         f'<g class="moonGlow">'
         f'<circle cx="{fmt(cx)}" cy="{fmt(cy)}" r="{fmt(r * 1.55)}" fill="url(#halo)" '
         f'filter="url(#soft)"/>'
-        f'</g>'
+        f"</g>"
         f'<g class="moonLit" mask="url(#mcut)">'
         f'<circle class="mdisc" cx="{fmt(cx)}" cy="{fmt(cy)}" r="{fmt(r)}"/>'
-        f'{"".join(maria)}'
+        f"{''.join(maria)}"
         f'<circle cx="{fmt(cx)}" cy="{fmt(cy)}" r="{fmt(r)}" fill="url(#term)"/>'
-        f'</g>'
+        f"</g>"
     )
 
 
@@ -813,14 +907,22 @@ def clawd_sprite(idsuffix: str = "") -> str:
         f'<rect x="{10 * c}" y="{eye_y}" width="{c}" height="{2 * c}" fill="{CLAWD}"/>'
     )
     # arms-up: the stubs rise three cells, and a small spark marks the cheer
+    # arms-up: OUT as well as up. Raising the stubs in the same two columns leaves the silhouette
+    # exactly as wide as at rest, so the only change is two nubs appearing above the head — which is
+    # why the operator read it as horns rather than as a cheer. Moving them a full cell outboard
+    # makes the silhouette itself change shape, which is what a gesture has to do to be nameable.
+    # Measured: rest width 218 px on GitHub desktop; this takes the cheer to ~255 px.
     arms_up = (
-        f'<rect x="0" y="{eye_y - 3 * c}" width="{c}" height="{2 * c}" fill="{CLAWD}"/>'
-        f'<rect x="{10 * c}" y="{eye_y - 3 * c}" width="{c}" height="{2 * c}" fill="{CLAWD}"/>'
+        f'<rect x="{-c}" y="{eye_y - 3 * c}" width="{c}" height="{2 * c}" fill="{CLAWD}"/>'
+        f'<rect x="{11 * c}" y="{eye_y - 3 * c}" width="{c}" height="{2 * c}" fill="{CLAWD}"/>'
+        # the shoulder cells that connect the raised arms to the body, so they read as attached
+        f'<rect x="0" y="{eye_y - c}" width="{c}" height="{c}" fill="{CLAWD}"/>'
+        f'<rect x="{10 * c}" y="{eye_y - c}" width="{c}" height="{c}" fill="{CLAWD}"/>'
         f'<rect x="{fmt(5.2 * c)}" y="{fmt(-2.1 * c)}" width="{fmt(0.6 * c)}" '
         f'height="{fmt(0.6 * c)}" fill="{CLAWD}"/>'
-        f'<rect x="{fmt(4.2 * c)}" y="{fmt(-1.5 * c)}" width="{fmt(0.45 * c)}" '
+        f'<rect x="{fmt(3.6 * c)}" y="{fmt(-1.5 * c)}" width="{fmt(0.45 * c)}" '
         f'height="{fmt(0.45 * c)}" fill="{CLAWD}" opacity=".7"/>'
-        f'<rect x="{fmt(6.4 * c)}" y="{fmt(-1.6 * c)}" width="{fmt(0.45 * c)}" '
+        f'<rect x="{fmt(7.0 * c)}" y="{fmt(-1.6 * c)}" width="{fmt(0.45 * c)}" '
         f'height="{fmt(0.45 * c)}" fill="{CLAWD}" opacity=".7"/>'
     )
 
@@ -867,7 +969,12 @@ def clawd_sprite(idsuffix: str = "") -> str:
         f'<g class="rTurn{sfx}">'
         f'<g class="hop{sfx}">'
         f'<g class="bob{sfx}">'
-        f'<g class="armsIdle{sfx}">{arms_idle}</g>'
+        # The idle side-arms must VANISH during the cheer, or the sprite shows four arms at once —
+        # two at the sides and two raised — which is a large part of why the raised pair read as
+        # horns rather than as arms. The gate cannot go on `.armsIdle` itself because that element
+        # already carries the wiggle and only one animation per element survives the freeze (S8),
+        # so it becomes a nested wrapper: gate outside, wiggle inside.
+        f'<g class="armsGate{sfx}"><g class="armsIdle{sfx}">{arms_idle}</g></g>'
         f'<g class="rCheer{sfx}">{arms_up}</g>'
         f"{body}"
         f'<g class="look{sfx}">'
@@ -955,8 +1062,6 @@ def peek(art: Art) -> str:
 
 # ── stylesheet ────────────────────────────────────────────────────────────────────────────────────
 def css(art: Art) -> str:
-    # every per-variant period goes through the same divisibility gate as the built-in ones
-    divides_P(art.cheer_period)
     d, l = art.dark, art.light
 
     def cloudrules(t: Theme, pfx: str = "") -> str:
@@ -1035,62 +1140,97 @@ def css(art: Art) -> str:
         f"92%,100%{{transform:scale(1,1);opacity:.46}}}}"
         f".shdw{{animation:shf 12s cubic-bezier(.3,.05,.4,1) infinite;transform-origin:"
         f"{fmt(art.clawd_x + SPRITE_W * art.clawd_scale / 2)}px {fmt(GROUND + 3)}px}}"
-        # ---- rare emotes; every window is a small % of a 240 s loop ----
-        f"@keyframes rsf{{0%,63%{{opacity:0}}63.2%,66%{{opacity:1}}66.2%,100%{{opacity:0}}}}"
-        f".rSleep{{animation:rsf 240s steps(1,end) infinite}}"
-        f"@keyframes lwf{{0%,63%{{opacity:1}}63.2%,66%{{opacity:0}}66.2%,100%{{opacity:1}}}}"
-        f".legsWalk{{animation:lwf 240s steps(1,end) infinite}}"
-        f"@keyframes lsf{{0%,63%{{opacity:0}}63.2%,66%{{opacity:1}}66.2%,100%{{opacity:0}}}}"
-        f".legsStill{{animation:lsf 240s steps(1,end) infinite}}"
-        f"@keyframes zzf{{0%,63%{{opacity:0;transform:translate(0,0)}}64%{{opacity:.9}}"
-        f"66%{{opacity:0;transform:translate(14px,-30px)}}66.2%,100%{{opacity:0}}}}"
-        f".zz1{{animation:zzf 240s ease-out infinite}}"
-        f".zz2{{animation:zzf 240s ease-out infinite;--d:-1.2s}}"
-        f"@keyframes rcf{{0%,28%{{opacity:0}}28.4%,32%{{opacity:1}}32.4%,100%{{opacity:0}}}}"
-        f".rCheer{{animation:rcf {fmt(art.cheer_period)}s steps(1,end) infinite}}"
-        f"@keyframes rtf{{0%,86%{{transform:scaleX(1)}}88%,95%{{transform:scaleX(-1)}}97%,100%{{transform:scaleX(1)}}}}"
-        f".rTurn{{animation:rtf 80s steps(1,end) infinite;transform-origin:"
-        f"{fmt(SPRITE_W / 2)}px {fmt(SPRITE_H / 2)}px}}"
-        # ---- rare world events ----
-        # the shooting star crosses at 96.5-99% of the loop; clawd's cheer sits at 28-32% so the
-        # two rare beats do not collide and the loop always has something coming
-        f"@keyframes ssf{{0%,96.3%{{opacity:0;transform:translate(0,0)}}"
-        f"96.5%{{opacity:1}}98.9%{{opacity:.85;transform:translate(-700px,300px)}}"
-        f"99.1%,100%{{opacity:0;transform:translate(-760px,326px)}}}}"
-        f".shoot{{animation:ssf 240s linear infinite}}"
-        f"@keyframes brdf{{0%{{opacity:0;transform:translate({W + 180}px,0)}}"
-        f"4%{{opacity:.75}}44%{{opacity:.75}}50%,100%{{opacity:0;transform:translate(-260px,-54px)}}}}"
-        f".birds{{animation:brdf 80s linear infinite}}"
-        f"@keyframes balf{{0%{{opacity:0;transform:translate({W + 120}px,0)}}"
-        f"5%{{opacity:.8}}45%{{opacity:.8}}50%,100%{{opacity:0;transform:translate(-180px,-70px)}}}}"
-        f".balloon{{animation:balf 120s linear infinite}}"
-        f"@keyframes pkf{{0%,40%{{transform:translateY(78px)}}42.5%,48%{{transform:translateY(0)}}"
-        f"50.5%,100%{{transform:translateY(78px)}}}}"
-        f".peek{{animation:pkf 240s ease-in-out infinite}}"
-        # ---- the peer session (v6b) ----
-        # It walks in from the right, holds beside the resident for the meeting, then continues
-        # left and off. `translate` on the wrapper, stride on the legs, flip on an inner group:
-        # three motions, three nested elements, one animation each.
-        f"@keyframes prf{{0%,20%{{opacity:0;transform:translateX({W + 240}px)}}"
-        f"21%{{opacity:1}}"
-        f"27.5%{{transform:translateX({fmt(art.clawd_x + SPRITE_W * art.clawd_scale + 34)}px)}}"
-        f"33%{{transform:translateX({fmt(art.clawd_x + SPRITE_W * art.clawd_scale + 34)}px)}}"
-        f"41%{{opacity:1;transform:translateX(-320px)}}"
-        f"42%,100%{{opacity:0;transform:translateX(-320px)}}}}"
-        f".peer{{animation:prf 240s linear infinite}}"
-        # it faces the resident while they meet, then turns back to its heading
-        f"@keyframes pflf{{0%,27.4%{{transform:scaleX(1)}}27.5%,33%{{transform:scaleX(-1)}}"
-        f"33.1%,100%{{transform:scaleX(1)}}}}"
-        f".peerFlip{{animation:pflf 240s steps(1,end) infinite;transform-origin:"
-        f"{fmt(SPRITE_W / 2)}px {fmt(SPRITE_H / 2)}px}}"
-        f"@keyframes pwA{{0%,49%{{transform:translateY(0)}}"
-        f"50%,100%{{transform:translateY(-{fmt(CELL * 0.6)}px)}}}}"
-        f"@keyframes pwB{{0%,49%{{transform:translateY(-{fmt(CELL * 0.6)}px)}}"
-        f"50%,100%{{transform:translateY(0)}}}}"
-        f"@keyframes pcf{{0%,28.6%{{opacity:0}}29%,32%{{opacity:1}}32.4%,100%{{opacity:0}}}}"
-        f".pCheer{{animation:pcf 240s steps(1,end) infinite}}"
-        f".pLegA{{animation:pwA .5s steps(1,end) infinite}}"
-        f".pLegB{{animation:pwB .5s steps(1,end) infinite;--d:-.12s}}"
+        # ---- rare emotes and world events ----
+        # Every window below is DERIVED from RARE_EVENTS, which the build-time gate also reads, so a
+        # stacked pair cannot be emitted. Hand-written percentages are what let the cheer land inside
+        # the sleep. Every event runs on the full period, so each fires exactly ONCE per loop.
+        + (
+            lambda: "".join(
+                [
+                    # sleep: lids + Zzz on, walking legs swapped for standing ones
+                    f"@keyframes rsf{{0%,{pct(ev('rSleep')[0])}%{{opacity:0}}"
+                    f"{pct(ev('rSleep')[0] + 0.1)}%,{pct(ev('rSleep')[1])}%{{opacity:1}}"
+                    f"{pct(ev('rSleep')[1] + 0.1)}%,100%{{opacity:0}}}}"
+                    f".rSleep{{animation:rsf {fmt(P)}s steps(1,end) infinite}}",
+                    f"@keyframes lwf{{0%,{pct(ev('rSleep')[0])}%{{opacity:1}}"
+                    f"{pct(ev('rSleep')[0] + 0.1)}%,{pct(ev('rSleep')[1])}%{{opacity:0}}"
+                    f"{pct(ev('rSleep')[1] + 0.1)}%,100%{{opacity:1}}}}"
+                    f".legsWalk{{animation:lwf {fmt(P)}s steps(1,end) infinite}}",
+                    f"@keyframes lsf{{0%,{pct(ev('rSleep')[0])}%{{opacity:0}}"
+                    f"{pct(ev('rSleep')[0] + 0.1)}%,{pct(ev('rSleep')[1])}%{{opacity:1}}"
+                    f"{pct(ev('rSleep')[1] + 0.1)}%,100%{{opacity:0}}}}"
+                    f".legsStill{{animation:lsf {fmt(P)}s steps(1,end) infinite}}",
+                    f"@keyframes zzf{{0%,{pct(ev('rSleep')[0])}%{{opacity:0;transform:translate(0,0)}}"
+                    f"{pct(ev('rSleep')[0] + 2)}%{{opacity:.9}}"
+                    f"{pct(ev('rSleep')[1])}%{{opacity:0;transform:translate(14px,-30px)}}"
+                    f"{pct(ev('rSleep')[1] + 0.1)}%,100%{{opacity:0}}}}"
+                    f".zz1{{animation:zzf {fmt(P)}s ease-out infinite}}"
+                    f".zz2{{animation:zzf {fmt(P)}s ease-out infinite;--d:-1.2s}}",
+                    # cheer: raised arms ON and — the shipped bug — the IDLE side-arms OFF, or the sprite
+                    # shows four arms at once, which is what read as horns with confetti
+                    f"@keyframes rcf{{0%,{pct(ev('rCheer')[0])}%{{opacity:0}}"
+                    f"{pct(ev('rCheer')[0] + 0.1)}%,{pct(ev('rCheer')[1])}%{{opacity:1}}"
+                    f"{pct(ev('rCheer')[1] + 0.1)}%,100%{{opacity:0}}}}"
+                    f".rCheer{{animation:rcf {fmt(P)}s steps(1,end) infinite}}",
+                    f"@keyframes agf{{0%,{pct(ev('rCheer')[0])}%{{opacity:1}}"
+                    f"{pct(ev('rCheer')[0] + 0.1)}%,{pct(ev('rCheer')[1])}%{{opacity:0}}"
+                    f"{pct(ev('rCheer')[1] + 0.1)}%,100%{{opacity:1}}}}"
+                    f".armsGate{{animation:agf {fmt(P)}s steps(1,end) infinite}}",
+                    # shooting star
+                    f"@keyframes ssf{{0%,{pct(ev('shoot')[0])}%{{opacity:0;transform:translate(0,0)}}"
+                    f"{pct(ev('shoot')[0] + 0.4)}%{{opacity:1}}"
+                    f"{pct(ev('shoot')[1] - 0.4)}%{{opacity:.85;transform:translate(-700px,300px)}}"
+                    f"{pct(ev('shoot')[1])}%,100%{{opacity:0;transform:translate(-760px,326px)}}}}"
+                    f".shoot{{animation:ssf {fmt(P)}s linear infinite}}",
+                    # birds — one pass per loop, not three
+                    f"@keyframes brdf{{0%,{pct(ev('birds')[0])}%{{opacity:0;transform:translate({W + 180}px,0)}}"
+                    f"{pct(ev('birds')[0] + 1.5)}%{{opacity:.7}}"
+                    f"{pct(ev('birds')[1] - 1.5)}%{{opacity:.7}}"
+                    f"{pct(ev('birds')[1])}%,100%{{opacity:0;transform:translate(-260px,-54px)}}}}"
+                    f".birds{{animation:brdf {fmt(P)}s linear infinite}}",
+                    f"@keyframes balf{{0%,{pct(ev('balloon')[0])}%{{opacity:0;transform:translate({W + 120}px,0)}}"
+                    f"{pct(ev('balloon')[0] + 1.5)}%{{opacity:.8}}"
+                    f"{pct(ev('balloon')[1] - 1.5)}%{{opacity:.8}}"
+                    f"{pct(ev('balloon')[1])}%,100%{{opacity:0;transform:translate(-180px,-70px)}}}}"
+                    f".balloon{{animation:balf {fmt(P)}s linear infinite}}",
+                    f"@keyframes pkf{{0%,{pct(ev('peek')[0])}%{{transform:translateY(78px)}}"
+                    f"{pct(ev('peek')[0] + 3)}%,{pct(ev('peek')[1] - 3)}%{{transform:translateY(0)}}"
+                    f"{pct(ev('peek')[1])}%,100%{{transform:translateY(78px)}}}}"
+                    f".peek{{animation:pkf {fmt(P)}s ease-in-out infinite}}",
+                    # ---- the peer session (v6b) ----
+                    # It arrives from the right, holds beside the resident, and RETURNS THE WAY IT CAME.
+                    # It used to exit leftwards THROUGH the resident: same flat #D77757, crispEdges, drawn
+                    # above, so its blank body slid over the face and erased the eyes — two same-colour
+                    # sprites merging into one connected orange region, which reads as a rendering error, or
+                    # worse as one session absorbing another (the handoff infographic R1 rejected, acted out).
+                    # A symmetric exit also reads as intent rather than as a despawn.
+                    f"@keyframes prf{{0%,{pct(ev('peer')[0])}%{{opacity:0;transform:translateX({W + 240}px)}}"
+                    f"{pct(ev('peer')[0] + 1)}%{{opacity:1}}"
+                    f"{pct(ev('peer')[0] + 14)}%,{pct(ev('peer')[1] - 14)}%"
+                    f"{{transform:translateX({fmt(art.clawd_x + SPRITE_W * art.clawd_scale + 46)}px)}}"
+                    f"{pct(ev('peer')[1] - 1)}%{{opacity:1;transform:translateX({W + 240}px)}}"
+                    f"{pct(ev('peer')[1])}%,100%{{opacity:0;transform:translateX({W + 240}px)}}}}"
+                    f".peer{{animation:prf {fmt(P)}s linear infinite}}",
+                    # NOTE: there is deliberately no scaleX flip on the peer. The sprite is bilaterally
+                    # symmetric — eyes at 40-60 and 160-180 about centre 110 — so scaleX(-1) maps it onto
+                    # itself and the "turn to face" beat was invisible by construction. It existed only in
+                    # the code. Direction now reads from travel alone, which is honest.
+                    f"@keyframes pcf{{0%,{pct(ev('peer')[0] + 16)}%{{opacity:0}}"
+                    f"{pct(ev('peer')[0] + 17)}%,{pct(ev('peer')[1] - 16)}%{{opacity:1}}"
+                    f"{pct(ev('peer')[1] - 15)}%,100%{{opacity:0}}}}"
+                    f".pCheer{{animation:pcf {fmt(P)}s steps(1,end) infinite}}",
+                ]
+            )
+        )()
+        # the peer's stride — the only peer motion not driven by the event table
+        + (
+            f"@keyframes pwA{{0%,49%{{transform:translateY(0)}}"
+            f"50%,100%{{transform:translateY(-{fmt(CELL * 0.6)}px)}}}}"
+            f"@keyframes pwB{{0%,49%{{transform:translateY(-{fmt(CELL * 0.6)}px)}}"
+            f"50%,100%{{transform:translateY(0)}}}}"
+            f".pLegA{{animation:pwA .5s steps(1,end) infinite}}"
+            f".pLegB{{animation:pwB .5s steps(1,end) infinite;--d:-.12s}}"
+        )
     )
 
     # Give every animation declaration the ADDITIVE delay channel, so any element may carry its own
@@ -1116,7 +1256,7 @@ def css(art: Art) -> str:
         "@media (prefers-reduced-motion:reduce){"
         "*{animation:none!important}"
         ".shoot,.balloon,.birds,.rSleep,.rCheer,.legsStill,.zz1,.zz2,.eShut,.peer,.pCheer{opacity:0}"
-        ".legsWalk,.eOpen{opacity:1}"
+        ".legsWalk,.eOpen,.armsGate{opacity:1}"
         # `animation:none` reverts an element to its UN-animated base value, which for the
         # moon halo is full strength — the frozen still showed a blown-out glow that never
         # appears in the animation. Pin the breathing values to their mid-points instead.
@@ -1146,6 +1286,7 @@ def css(art: Art) -> str:
 # ── assembly ──────────────────────────────────────────────────────────────────────────────────────
 def build(art: Art) -> str:
     _SCROLLING.clear()
+    assert_events_disjoint(art)
     rng = random.Random(20260729 + sum(ord(ch) for ch in art.key))
     scale = art.clawd_scale
 
@@ -1515,7 +1656,6 @@ VARIANTS = [
         moon_phase=0.30,
         events=("shootingstar", "birds"),
         second_clawd=True,
-        cheer_period=240.0,
         hairline=True,
     ),
     Art(
