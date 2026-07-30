@@ -15,13 +15,37 @@ setup() {
 
 @test "POSITIVE CONTROL: catches the REAL pre-fix cc-blockers predicate recovered from git" {
   # The exact artifact, not a reconstruction: the newest commit of bin/cc-blockers whose alarm still
-  # tested `[ "$red" -eq "$seen" ]`. If no such commit is reachable the control cannot run, and a
-  # control that cannot run must SKIP loudly, never pass.
+  # tested `[ "$red" -eq "$seen" ]` AND carried no suppression marker. If no such commit is reachable
+  # the control cannot run, and a control that cannot run must SKIP loudly, never pass.
+  #
+  # THE SECOND CONDITION IS LOAD-BEARING and was missing on the first cut, which broke this control on
+  # the VERY NEXT commit to bin/cc-blockers. The predicate string SURVIVES in the fixed file — the
+  # state-naming line `[ "$red" -eq "$seen" ]` is legitimate there and carries
+  # `# alarm-polarity-ok:` — so a selector keyed on the string alone walks back exactly ONE commit,
+  # finds the CURRENT justified version, and the lint correctly returns 0. The control then reports
+  # "the lint does not catch the bug" while actually having tested the wrong file. A too-loose
+  # baseline selector converts a positive control into a no-op the moment the guarded code evolves
+  # (memory control-must-replay-the-real-artifact). Require the UNFIXED shape explicitly.
+  # THREE conditions, and the third matters as much as the second: no `notgreen` counter either, or
+  # the selector settles on the POST-M1 commit — which still carries an unsuppressed state-naming
+  # `[ "$red" -eq "$seen" ]`, so the lint fires and the test passes while having tested a file where
+  # the alarm was ALREADY FIXED. That proves "the lint recognises the shape", not "the lint would have
+  # caught the original bug", which is what this control claims. Measured: without it the selector
+  # picked f1451bcf, whose cc-blockers contains `notgreen` six times.
   sha="$(cd "$REPO" && git log --format=%H -- bin/cc-blockers | while read -r c; do
-           if git show "$c:bin/cc-blockers" 2>/dev/null | grep -q '"\$red" -eq "\$seen"'; then echo "$c"; break; fi
+           b="$(git show "$c:bin/cc-blockers" 2>/dev/null)" || continue
+           if printf '%s' "$b" | grep -q '"\$red" -eq "\$seen"' \
+              && ! printf '%s' "$b" | grep -q 'alarm-polarity-ok' \
+              && ! printf '%s' "$b" | grep -q 'notgreen'; then echo "$c"; break; fi
          done)"
   [ -n "$sha" ] || skip "no pre-fix baseline reachable in history"
   (cd "$REPO" && git show "$sha:bin/cc-blockers") > "$D/prefix"
+  # HARNESS SELF-CHECK, the same discipline statusline-identity.bats uses: prove the baseline really
+  # is the unfixed implementation before believing anything the lint says about it. A bad extraction
+  # must not be able to make this control pass.
+  grep -q '"\$red" -eq "\$seen"' "$D/prefix" || false
+  ! grep -q 'notgreen' "$D/prefix" || false
+  ! grep -q 'alarm-polarity-ok' "$D/prefix" || false
   run bash "$L" "$D/prefix"
   [ "$status" -eq 1 ]
   echo "$output" | grep -q 'POLARITY' || false
