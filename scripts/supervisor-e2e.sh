@@ -29,6 +29,12 @@ export CC_PERMPEND_NOTICE_S=1                      # page a beacon pending ≥1s
 export CC_PERMPEND_HORIZON_S=86400                # orphan-reap horizon (T16 ages a beacon past it)
 export CC_REGISTRY_DIR="$SBX/registry";           mkdir -p "$CC_REGISTRY_DIR"   # paneUUID→sid map for the registered-desk exemption tests (T23-T26)
 export CC_SUP_OWNER_PAT=sleep     # the live-session fixtures below are `sleep` PIDs — mark them owners (prod default: claude)
+# V3 self-check OFF by default here (T31 opts back in, like CC_PAGE_TO/T9). It compares REAL live claude
+# panes against the SANDBOX's telemetry dir, and this box legitimately runs ~30 panes against 1-2
+# fixtures — a permanent artificial blind spot whose page would land in notify.log and corrupt every
+# test that asserts on notify VOLUME (T9/T10/T18 caught exactly that). An unreachable tolerance is the
+# off switch; T31 stubs `ps` so it can assert on an exact, fabricated delta instead.
+export CC_SUP_PANE_DELTA_TOL=1000000
 
 ALIVE=; cleanup(){ [ -n "$ALIVE" ] && kill "$ALIVE" 2>/dev/null; rm -rf "$SBX"; }
 trap cleanup EXIT
@@ -453,6 +459,70 @@ else
   idl_has '"kind":"reap"' && ok "work_landed still proves landed with the wrap disabled (5 git calls ran)" \
                           || no "work_landed could not prove landed without timeout(1)"
 fi
+
+echo "T31 V3 SELF-CHECK — live panes OUTSIDE the telemetry world-view must page, damped (audit V3)"
+# The blind spot: every pager path here iterates $TEL_DIR, whose only writer is the statusline (it stops
+# emitting on a backgrounded/long-turn pane) and which lives in reboot-cleared /tmp. So the world can be
+# EMPTY while sessions are live, and an empty world emits a CLEAN all-clear heartbeat — identical to a
+# genuinely quiet fleet. `ps` is stubbed to report a fixed number of interactive claude panes, so the
+# delta is exact and the assertions do not depend on what is really running on this box.
+reset; permreset; rm -f "$CC_TELEMETRY_DIR"/*.json "$SBX/notify.log" "$CC_SUPERVISOR_PAGEDIR"/selfcheck.state
+rm -rf "$CC_SUPERVISOR_PAGEDIR/damp"
+PSBIN="$SBX/psbin"; mkdir -p "$PSBIN"
+mkps(){ # $1=how many interactive claude panes `ps` should report
+  { echo '#!/bin/bash'
+    echo 'case " $* " in *" -wwEo "*) : ;; *) exec /bin/ps "$@" ;; esac'   # only the self-check form is faked
+    echo "for i in \$(seq 1 $1); do echo '/Users/x/.claude-versions/2.1.219/claude --model opus'; done"
+  } > "$PSBIN/ps"; chmod +x "$PSBIN/ps"; }
+selfsweep(){ CC_NOTIFY_CAPTURE="$SBX/notify.log" CC_PAGE_TO_FILE="$SBX/desk-role" \
+             CC_NOTIFY_BIN="$SBX/bin/cc-notify" CC_SUP_PANE_DELTA_TOL=0 PATH="$PSBIN:$PATH" \
+             bash "$SUP" --once >/dev/null 2>&1; }
+# Count SENDS, not message text: the shared cc-notify stub captures the resolved TARGET only (one line
+# per attempt), which is what T9/T10/T18/T29 already assert on — so a content grep here could never
+# match, and widening that fixture for this one test would touch four others. Attribution comes from the
+# fixture instead: these sweeps run against an EMPTY telemetry dir, so no DEAD/STALL?/PAST-THRESHOLD page
+# is reachable and every captured line IS a self-check page. The `"kind":"selfcheck_page"` IDL assertions
+# below pin the identity independently.
+# The `-f` guard is load-bearing: `< missing-file` fails in the SHELL before wc runs, so `2>/dev/null`
+# on wc cannot suppress it — the redirect error would print on every no-sends assertion.
+scap(){ local n=0
+  [ -f "$SBX/notify.log" ] && { n=$(wc -l < "$SBX/notify.log" 2>/dev/null) || n=0; }
+  printf '%s' "$(( ${n:-0} + 0 ))"; }
+
+mkps 3                                                            # 3 live panes, 0 telemetry rows ⇒ Δ3, fully blind
+selfsweep                                                         # sweep 1 — must NOT page yet (persistence gate)
+[ "$(scap)" -eq 0 ] && ok "Δ does not page on its FIRST sweep (a pane spawned mid-sweep is not a blind spot)" \
+                    || no "self-check paged on sweep 1 (persistence gate missing — races will page)"
+selfsweep                                                         # sweep 2 — persisted ⇒ page
+[ "$(scap)" -eq 1 ] && ok "a PERSISTED blind spot pages exactly once (Δ3 live vs 0 enumerated)" \
+                    || no "persisted blind spot did not page once (sends=$(scap))"
+idl_has '"kind":"selfcheck_page"' && ok "self-check page is IDL-recorded (S-4 auditable)" \
+                                  || no "self-check page left no IDL record"
+selfsweep                                                         # sweep 3 — SAME delta ⇒ damped
+[ "$(scap)" -eq 1 ] && ok "an unchanged blind spot stays DAMPED (no per-sweep composer storm)" \
+                    || no "standing blind spot re-paged every sweep (sends=$(scap) — the 07-19 storm)"
+mkps 5; selfsweep                                                 # WORSENED (Δ3→Δ5) ⇒ breaks through
+[ "$(scap)" -eq 2 ] && ok "a WORSENING blind spot breaks through the damping (Δ3→Δ5)" \
+                    || no "worsening delta stayed damped (sends=$(scap)) — damping hides escalation"
+# RECOVERY: the statusline resumes / telemetry repopulates ⇒ enumerated catches up ⇒ silence + re-arm.
+reset; rm -f "$CC_TELEMETRY_DIR"/*.json
+mkps 2; mktel sc1 40 2 "$ALIVE" "$REPO"; mktel sc2 40 2 "$ALIVE" "$REPO"   # 2 live, 2 enumerated ⇒ Δ0
+selfsweep
+[ "$(scap)" -eq 2 ] && ok "Δ0 does not page (a fully-visible fleet is silent)" \
+                    || no "self-check paged with no blind spot (sends=$(scap) — false alarm)"
+idl_has '"kind":"selfcheck_page"' && no "Δ0 emitted a selfcheck_page (false alarm in the ledger)" \
+                                  || ok "no selfcheck_page in the IDL for a visible fleet"
+# ABSTAIN, never a phantom Δ: an unreadable `ps` yields no count, so there is no verdict to page on.
+# (`enum` is real here, so treating an empty count as 0 would compute a NEGATIVE delta and, worse, a
+# broken `ps` on a busy box would read as "everything is visible" — a silent detector failure.)
+reset; rm -f "$CC_TELEMETRY_DIR"/*.json "$SBX/notify.log"
+printf '#!/bin/bash\nexit 1\n' > "$PSBIN/ps"; chmod +x "$PSBIN/ps"
+selfsweep
+[ "$(scap)" -eq 0 ] && ok "an unreadable ps ABSTAINS (no count ⇒ no verdict, never a phantom page)" \
+                    || no "broken ps produced a self-check page (a non-observation was treated as data)"
+idl_has '"kind":"heartbeat"' && ok "the sweep still completes and heartbeats with ps unreadable" \
+                             || no "a broken ps broke the sweep"
+rm -rf "$PSBIN"                                                   # never leave the stub on PATH for later tests
 
 echo ""
 echo "supervisor-e2e: $P passed, $F failed"

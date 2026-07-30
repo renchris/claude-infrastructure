@@ -32,13 +32,13 @@ setup() {
   # the summary line is the un-fakeable outcome: "N passed, 0 failed"
   echo "$output" | grep -qE 'supervisor-e2e: [0-9]+ passed, 0 failed'
   # guard against a zero-check 'pass' (a suite that silently runs nothing must not read green).
-  # RATCHET: raised 36 → 74 with T30 (bounded externals). The floor is the whole point — a refactor that
-  # silently drops checks must fail here rather than read green on a shrunken suite.
+  # RATCHET: raised 36 → 74 (T30 bounded externals) → 83 (T31 V3 self-check). The floor is the whole
+  # point — a refactor that silently drops checks must fail here rather than read green on a shrunken suite.
   # T30's 9 checks need a real timeout(1); where the box has none it SKIPs wholesale, so the floor drops
-  # to 65 for that case only. Deriving the floor from the skip line (rather than pinning the lower number
+  # to 74 for that case only. Deriving the floor from the skip line (rather than pinning the lower number
   # everywhere) keeps the ratchet at full strength on every box that can actually run the checks.
-  floor=74
-  if echo "$output" | grep -q 'SKIP T30'; then floor=65; fi
+  floor=83
+  if echo "$output" | grep -q 'SKIP T30'; then floor=74; fi
   n_pass="$(echo "$output" | sed -nE 's/.*supervisor-e2e: ([0-9]+) passed.*/\1/p')"
   [ "${n_pass:-0}" -ge "$floor" ]
 }
@@ -99,4 +99,20 @@ setup() {
   # an unprovable landed-check must never reap, and a MISSING timeout(1) must not break the call
   echo "$output" | grep -q 'no false clean-completion reap'
   echo "$output" | grep -q 'run UNBOUNDED, not broken'
+}
+
+@test "T31: live panes outside the telemetry world-view page once, damped, and never on a non-observation (V3)" {
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'T31 V3 SELF-CHECK'
+  # the alarm itself: a PERSISTED blind spot pages, and it is auditable
+  echo "$output" | grep -q 'a PERSISTED blind spot pages exactly once'
+  echo "$output" | grep -q 'self-check page is IDL-recorded'
+  # anti-storm: first-sweep races do not page, a standing delta stays damped, a WORSENING one breaks through
+  echo "$output" | grep -q 'does not page on its FIRST sweep'
+  echo "$output" | grep -q 'stays DAMPED'
+  echo "$output" | grep -q 'WORSENING blind spot breaks through'
+  # anti-false-alarm: a fully-visible fleet is silent, and an unreadable ps ABSTAINS rather than
+  # computing a phantom delta (a broken detector must not read as "everything is visible")
+  echo "$output" | grep -q 'does not page (a fully-visible fleet is silent)'
+  echo "$output" | grep -q 'unreadable ps ABSTAINS'
 }
