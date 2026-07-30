@@ -1,0 +1,156 @@
+{
+  "$schema": "https://docs.oasis-open.org/sarif/sarif/v2.1.0/os/schemas/sarif-schema-2.1.0.json",
+  "runs": [
+    {
+      "automationDetails": {
+        "id": "reso_20260729T1730Z"
+      },
+      "properties": {
+        "codexSecuritySchemaVersion": "1.0",
+        "codexSecurityTargetKind": "git_revision"
+      },
+      "results": [
+        {
+          "level": "error",
+          "locations": [
+            {
+              "message": {
+                "text": "root_control"
+              },
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "src/app/api/replicache-push/route.ts"
+                },
+                "region": {
+                  "endLine": 30,
+                  "startLine": 30
+                }
+              }
+            },
+            {
+              "message": {
+                "text": "root_control"
+              },
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "src/app/api/replicache-push/route.ts"
+                },
+                "region": {
+                  "endLine": 85,
+                  "startLine": 85
+                }
+              }
+            },
+            {
+              "message": {
+                "text": "supporting"
+              },
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "src/app/api/replicache-push/route.ts"
+                },
+                "region": {
+                  "endLine": 58,
+                  "startLine": 51
+                }
+              }
+            },
+            {
+              "message": {
+                "text": "supporting"
+              },
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "src/app/api/replicache-push/route.ts"
+                },
+                "region": {
+                  "endLine": 111,
+                  "startLine": 92
+                }
+              }
+            },
+            {
+              "message": {
+                "text": "precondition"
+              },
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "lib/auth/session.ts"
+                },
+                "region": {
+                  "endLine": 33,
+                  "startLine": 33
+                }
+              }
+            },
+            {
+              "message": {
+                "text": "expected_control"
+              },
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "src/app/api/passkey-login/route.ts"
+                },
+                "region": {
+                  "endLine": 37,
+                  "startLine": 36
+                }
+              }
+            },
+            {
+              "message": {
+                "text": "evidence:content-type-pin-default-report"
+              },
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "src/app/api/replicache-push/route.ts"
+                },
+                "region": {
+                  "endLine": 91,
+                  "startLine": 85
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "POST /api/replicache-push applies arbitrary client mutations to tenant data. Its two CSRF controls \u2014 a same-origin check and a Content-Type pin \u2014 both default to 'report', which logs a mismatch and continues. The production session cookie is SameSite=None, so it is attached to cross-site requests, and a cross-site text/plain POST carrying a JSON body is a CORS simple request that is delivered without a preflight. An authenticated victim who loads an attacker's page can therefore have arbitrary mutations written to their tenant."
+          },
+          "partialFingerprints": {
+            "codexSecurity/v1": "codex-security/v1:sha256:cd51aaaf0fe90d272de161228d93807ccba1361af30e8dd1471449877c7ace78",
+            "primaryLocationLineHash": "56bd1cd0daec3fa0:1"
+          },
+          "properties": {
+            "category": "Cross-site request forgery",
+            "confidence": "high",
+            "findingId": "csf_58a83632bdcc6e0a4116e2c2",
+            "occurrenceId": "occ_a7915958d34addc292d937d2",
+            "severity": "high"
+          },
+          "ruleId": "csrf.state-changing-endpoint-defences-report-only",
+          "ruleIndex": 0
+        }
+      ],
+      "tool": {
+        "driver": {
+          "name": "Codex Security",
+          "rules": [
+            {
+              "id": "csrf.state-changing-endpoint-defences-report-only",
+              "name": "csrf.state-changing-endpoint-defences-report-only",
+              "properties": {
+                "tags": [
+                  "security"
+                ]
+              },
+              "shortDescription": {
+                "text": "csrf.state-changing-endpoint-defences-report-only"
+              }
+            }
+          ],
+          "version": "0.1.0"
+        }
+      }
+    }
+  ],
+  "version": "2.1.0"
+}

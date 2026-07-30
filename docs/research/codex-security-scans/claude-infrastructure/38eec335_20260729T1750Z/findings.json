@@ -1,0 +1,334 @@
+{
+  "documentType": "codex-security.findings",
+  "findings": [
+    {
+      "attackPath": {
+        "dataflow": "Session transcript record `.cwd` -> `cwd_of()` (line 145) -> `$cwd` -> existence-only guard (line 304) -> unescaped `printf` into `$PARKED/<sid>.json` (line 328) -> a later daemon tick reads the record -> `json.dumps` emits shell assignments (line 391) -> `eval` performs command substitution -> the same `$cwd` is interpolated with `%s` into `$launcher` (line 431) and that file is executed.",
+        "evidenceRefs": [
+          "existence-only-guard",
+          "eval-sink"
+        ],
+        "reachability": "The actor is a prompt-injected or otherwise steered Claude Code session that can create a directory and start work in it \u2014 the confused-deputy the repository's threat model names as its primary attacker. It needs that session to hit a session or weekly usage limit so the poller parks it; the poller then reads the record on its next 600-second tick. Execution lands inside a launchd job, so the PreToolUse classifier in hooks/ never sees the command, no permission prompt is raised, and the operator is not watching a pane. The counterevidence that bounds this: the seeding party already holds the same uid, so what is gained is bypass of the classifier and of operator presence, not new privilege."
+      },
+      "codeEvidence": [
+        {
+          "code": "# cwd_of <transcript> \u2014 the first cwd field (avoids lossy slug-decoding). Empty if none.\ncwd_of() {\n  python3 -c \"\nimport json,sys\nfor ln in open(sys.argv[1],encoding='utf-8'):\n    try: o=json.loads(ln)\n    except: continue\n    c=o.get('cwd')\n    if c: print(c); break\n\" \"$1\" 2>/dev/null\n}",
+          "endLine": 155,
+          "explanation": "The value that will eventually be eval'd enters here as the `cwd` field of a session transcript record \u2014 the directory the session was launched in. It is returned verbatim, with no character-class validation, and is carried onward as `$cwd`.",
+          "id": "cwd-source",
+          "label": "cwd read out of a session transcript",
+          "language": "bash",
+          "path": "scripts/limit-recover/lr-reset-poller.sh",
+          "role": "source",
+          "startLine": 145
+        },
+        {
+          "code": "    [[ -n \"$cwd\" && -d \"$cwd\" ]] || continue",
+          "endLine": 304,
+          "explanation": "This is the sole gate on `$cwd` before it is recorded. It asserts the directory exists; it says nothing about the characters in its name, so `$(...)` and backticks pass so long as a directory with that literal name is present. This is the control that would have to change to close the class.",
+          "id": "existence-only-guard",
+          "label": "The only check applied to $cwd",
+          "language": "bash",
+          "path": "scripts/limit-recover/lr-reset-poller.sh",
+          "role": "expected_control",
+          "startLine": 304
+        },
+        {
+          "code": "      printf '{\"sid\":\"%s\",\"acct\":\"%s\",\"cfg\":\"%s\",\"cwd\":\"%s\",\"kind\":\"%s\",\"reset_at_utc\":\"%s\",\"parked_at\":\"%s\"}\\n' \\\n        \"$sid\" \"$acct\" \"$cfg\" \"$cwd\" \"$kind\" \"$reset\" \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\" > \"$PARKED/$sid.json\"",
+          "endLine": 329,
+          "explanation": "`$cwd` is written into a JSON string with `%s` and no escaping, so the recorded value is byte-identical to the directory name. This carries the payload across the process and time boundary from the detecting tick to the resuming tick, and it is also why a `cwd` containing a double quote produces malformed JSON rather than a rejected record.",
+          "id": "unescaped-record-write",
+          "label": "Parked record built with unescaped printf",
+          "language": "bash",
+          "path": "scripts/limit-recover/lr-reset-poller.sh",
+          "role": "root_control",
+          "startLine": 328
+        },
+        {
+          "code": "  eval \"$(python3 -c \"\nimport json,sys\nd=json.load(open(sys.argv[1]))\nfor k in ('sid','acct','cfg','cwd','reset_at_utc'):\n    print('%s=%s'%(k,json.dumps(str(d.get(k,'')))))\n\" \"$pf\")\"",
+          "endLine": 397,
+          "explanation": "`json.dumps` is being used as a shell quoter. It emits `cwd=\"$(touch FILE)\"`; the outer `eval` then evaluates that assignment, and the shell performs command substitution before the assignment completes \u2014 so the command runs and `$cwd` ends up empty. Because the script is `set -uo pipefail` without `-e` (line 30), a record whose JSON is malformed makes this eval a silent no-op and leaves the previous iteration's `sid`/`cwd` bound, so the loop then operates on the wrong session.",
+          "id": "eval-sink",
+          "label": "json.dumps() output passed to eval",
+          "language": "bash",
+          "path": "scripts/limit-recover/lr-reset-poller.sh",
+          "role": "sink",
+          "startLine": 391
+        },
+        {
+          "code": "    { echo '#!/bin/bash'; printf 'exec \"%s/lr-fire-resume.sh\" \"%s\" \"%s\" \"%s\" --prompt %q\\n' \\\n        \"$LR\" \"$acct\" \"$cwd\" \"$sid\" \"/limit-recover\"; } > \"$launcher\"; chmod +x \"$launcher\"",
+          "endLine": 432,
+          "explanation": "The same unvalidated `$cwd` is placed inside a double-quoted shell string in a file that is then made executable and run. Note the asymmetry that shows the author knew the hazard: the trailing `--prompt` argument uses `%q`, which shell-quotes correctly, while `$cwd` two positions earlier uses `%s`. This is a second, independent execution of the same value.",
+          "id": "second-sink-launcher",
+          "label": "The same $cwd interpolated into a generated executable",
+          "language": "bash",
+          "path": "scripts/limit-recover/lr-reset-poller.sh",
+          "role": "concrete_implementation",
+          "startLine": 431
+        }
+      ],
+      "confidence": {
+        "level": "high",
+        "rationale": "The injection was reproduced by executing the shipped emitter/consumer pair verbatim against a crafted record, and the daemon's live load state and deployed autofire setting were read off the host rather than assumed; the only unproven element is how often a directory name carrying shell metacharacters arises, which is captured in severity rather than confidence."
+      },
+      "extensions": {
+        "candidateId": "candidate-20ddc0915a266083"
+      },
+      "findingId": "csf_4e1ac14f06c43703df5ee1b3",
+      "fingerprints": {
+        "algorithm": "codex-security/v1",
+        "primary": "codex-security/v1:sha256:0a13483df606899729a94993fe879a615fa100f76d836366d0691ff712bfeac6"
+      },
+      "identity": {
+        "anchor": "lr-reset-poller-eval-json-dumps-quoting"
+      },
+      "locations": [
+        {
+          "endLine": 397,
+          "path": "scripts/limit-recover/lr-reset-poller.sh",
+          "role": "sink",
+          "startLine": 391
+        },
+        {
+          "endLine": 329,
+          "path": "scripts/limit-recover/lr-reset-poller.sh",
+          "role": "root_control",
+          "startLine": 328
+        },
+        {
+          "endLine": 155,
+          "path": "scripts/limit-recover/lr-reset-poller.sh",
+          "role": "source",
+          "startLine": 145
+        },
+        {
+          "endLine": 304,
+          "path": "scripts/limit-recover/lr-reset-poller.sh",
+          "role": "expected_control",
+          "startLine": 304
+        },
+        {
+          "endLine": 432,
+          "path": "scripts/limit-recover/lr-reset-poller.sh",
+          "role": "concrete_implementation",
+          "startLine": 431
+        }
+      ],
+      "occurrenceId": "occ_ea005f0dd3e7dbd00081c413",
+      "preventiveControls": [
+        "Treat every serialisation format's escaping as valid only for its own parser; when a value crosses into a shell, quote it with a shell quoter (shlex.quote / printf %q) at the boundary.",
+        "Prefer field-at-a-time reads (jq -r, read -r) over reconstructing variable assignments, so no on-disk state is ever a program.",
+        "Any state file written by one process and consumed by another is untrusted input at the consumer, even when both run as the same uid \u2014 the daemon's lack of a hook layer is exactly why."
+      ],
+      "provenance": {
+        "source": "local_plugin"
+      },
+      "remediation": "Stop round-tripping the parked record through the shell. Read the fields with `jq -r` into separate variables (`sid=$(jq -r '.sid' \"$pf\")`), or have the Python emitter print NUL- or tab-separated values consumed by `read -r`, so no value is ever evaluated. If a generated assignment is genuinely wanted, use `shlex.quote` rather than `json.dumps` \u2014 it is the quoter that matches the consuming interpreter. Independently, fix the second sink at line 431 by using `%q` for `$cwd` exactly as the adjacent `--prompt` argument already does, and write the parked record with `jq -n --arg` so a value containing a double quote produces valid JSON instead of a record that silently fails to parse and leaves stale variables bound.",
+      "remediationTests": [
+        "Add a case to tests/lr-reset-poller.bats that writes a parked record whose cwd is `$(touch \"$BATS_TEST_TMPDIR/pwned\")`, runs one poller tick, and asserts the marker file does NOT exist.",
+        "Add a case whose parked cwd contains a literal double quote and assert the tick logs a rejected/malformed record rather than proceeding with the previous iteration's sid \u2014 this pins the stale-variable behaviour that `set -u` without `-e` currently allows.",
+        "Add a negative control with an ordinary cwd asserting the resume path still fires normally, so the fix cannot regress into rejecting valid records.",
+        "Extend the repository's no-eval lint to fail on `eval \"$(` anywhere under bin/ and scripts/, so this construction cannot reappear."
+      ],
+      "rootCause": {
+        "evidenceRefs": [
+          "cwd-source",
+          "existence-only-guard",
+          "unescaped-record-write",
+          "eval-sink",
+          "second-sink-launcher"
+        ],
+        "summary": "The violated invariant is that no untrusted string is evaluated as code \u2014 an invariant this repository states as a no-`eval` convention. It breaks because JSON escaping is mistaken for shell escaping. `json.dumps` guarantees a valid JSON string literal: it escapes backslash, double quote and control characters, and it is explicitly not required to escape `$`, backtick or `!`, none of which mean anything in JSON. The consumer, however, is not a JSON parser \u2014 it is `eval` operating on a shell double-quoted context, where all three are active. The value arrives from a session transcript's `cwd` field (line 145), passes an existence-only gate (line 304), is written unescaped into the parked record (line 328), and is re-read a tick later and eval'd (line 391), then interpolated with `%s` into a generated executable (line 431). Two independent sinks, one broken control."
+      },
+      "ruleId": "injection.json-escaping-used-as-shell-quoting",
+      "severity": {
+        "changeConditions": "Rises to high if any routine path names a directory from model-supplied text, if `$PARKED` becomes writable by another uid, or if a second producer writes parked records from a less trusted source. Falls to informational once the parked fields are read without a shell round-trip.",
+        "level": "medium",
+        "rationale": "Execution at the sink is proven rather than inferred \u2014 running the shipped emitter over a record whose `cwd` was `$(touch FILE)` and eval'ing its output created the file \u2014 and the daemon carrying that sink is loaded and firing every 600 seconds with `LR_POLLER_AUTOFIRE=1` in its deployed plist. The consequence is arbitrary command execution as the interactive user inside an unattended launchd job, which defeats the hook-based command classifier that is this repository's primary control over model-influenced strings, and it happens with no operator present to see an `ask` prompt. It is held at medium rather than high because the payload has to arrive as the name of a directory that actually exists (line 304 requires `[[ -d \"$cwd\" ]]`) belonging to a session that then hits a usage limit, and because `$PARKED` sits under `$HOME/.reso` where only this uid can write \u2014 so the party who can seed the payload already holds the same uid, making this a control bypass rather than a privilege-boundary crossing. Evidence that a routine code path can name a directory from model-supplied text, or a second writer into the parked record, would raise it to high; validating `cwd` against a shell-safe character class before recording it would drop it to informational.",
+        "score": 5.5,
+        "scoringSystem": "CVSS:3.1"
+      },
+      "summary": "`lr-reset-poller.sh` reconstructs shell variables from each parked-session record by having Python print `key=<json.dumps(value)>` and passing the result to `eval`. JSON string escaping neutralises only backslash and double quote; `$`, backtick and `!` survive it untouched, and the emitted assignment is evaluated inside a shell double-quoted context where all three are active. A parked record whose `cwd` field contains `$(...)` or backticks therefore executes as a command. The value reaches the record from a session transcript's `cwd` field, written by an unescaped `printf '\"cwd\":\"%s\"'` at line 328, and the same unquoted `$cwd` is interpolated a second time with `%s` (not `%q`) into a generated executable launcher at line 431. What makes this materially different from the model simply running a command itself is where the execution lands: `com.reso.lr-reset-poller` is a loaded LaunchAgent, so nothing on this path passes through the PreToolUse command classifier, no permission prompt is raised, and no operator is watching.",
+      "taxonomy": {
+        "category": "Command injection via improper neutralization",
+        "cwe": [
+          "CWE-78",
+          "CWE-116"
+        ]
+      },
+      "title": "Parked-record fields are shell-quoted with json.dumps() and then eval'd inside a loaded launchd daemon",
+      "validation": {
+        "checklist": [
+          "Does json.dumps neutralise the metacharacters the consuming context treats as active? No \u2014 $, backtick and ! survive.",
+          "Is the sink reached unconditionally, or gated? The eval loop runs on every tick and is not gated by LR_POLLER_AUTOFIRE; only the later resume spawn is.",
+          "Is the daemon actually running? launchctl list shows com.reso.lr-reset-poller loaded, StartInterval 600, RunAtLoad true.",
+          "Is autofire on in production? The deployed ~/Library/LaunchAgents plist sets LR_POLLER_AUTOFIRE=1, although the repository template ships that block commented out.",
+          "Can a foreign uid write the parked record directly? No \u2014 $PARKED is $HOME/.reso/limit-recover/parked."
+        ],
+        "evidence": "Replaying the exact python emitter over a record whose cwd was `$(touch <tmp>/PWNED)` printed `cwd=\"$(touch <tmp>/PWNED)\"`; after `eval` the marker file existed and `$cwd` was empty. Probe retained at artifacts/02_discovery/validation_artifacts/probe_eval_jsondumps.sh.",
+        "evidenceRefs": [
+          "eval-sink",
+          "unescaped-record-write",
+          "existence-only-guard"
+        ],
+        "method": "Direct execution of the shipped emitter and consumer against a crafted parked record, plus live inspection of the daemon's load state and its deployed plist.",
+        "remainingUncertainty": "Whether a directory whose name carries shell metacharacters arises in ordinary fleet operation. Worktree paths are built from hex backlog ids, so the realistic route is a deliberately created directory rather than an incidental one."
+      }
+    },
+    {
+      "attackPath": {
+        "dataflow": "Foreign local uid reads `/tmp/cc-telemetry` -> learns live session uuids -> pre-creates `/tmp/lr-poller-launch-<sid8>.sh` (or `/tmp/lr-launch-<sid8>.sh`, or `/tmp/handoff-recycle-cmd-<sid>-<epoch>.sh`) as a symlink or as a mode-0666 regular file -> the victim script's `>` redirect writes through it and `chmod +x` follows -> the victim executes the path via `/bin/bash`.",
+        "evidenceRefs": [
+          "telemetry-leak",
+          "poller-launcher"
+        ],
+        "reachability": "Reachable by any process running as a different local uid that can read and create files in `/tmp`; it requires no interaction with Claude Code at all. The `lr-reset-poller` site is on the live autofire path, and the `lr-handoff` and `handoff-fire` sites fire on limit recovery and session recycle respectively, both routine in this fleet. The bound is the attacker model itself: on a single-operator workstation the other local uids are system accounts."
+      },
+      "codeEvidence": [
+        {
+          "code": "    launcher=\"${LR_POLLER_LAUNCH_DIR:-/tmp}/lr-poller-launch-${sid:0:8}.sh\"\n    { echo '#!/bin/bash'; printf 'exec \"%s/lr-fire-resume.sh\" \"%s\" \"%s\" \"%s\" --prompt %q\\n' \\\n        \"$LR\" \"$acct\" \"$cwd\" \"$sid\" \"/limit-recover\"; } > \"$launcher\"; chmod +x \"$launcher\"",
+          "endLine": 433,
+          "explanation": "The default directory is `/tmp` and the name carries only eight hex characters of session id. The file is created by `>` (which follows a symlink), made executable, and then handed to `spawn_gui`/`spawn_tmux`, both of which run it as `/bin/bash $launcher` \u2014 an open-by-path at execution time, so the bytes executed are whatever the path resolves to then, not what was written.",
+          "id": "poller-launcher",
+          "label": "lr-reset-poller launcher: write, chmod +x, execute",
+          "language": "bash",
+          "path": "scripts/limit-recover/lr-reset-poller.sh",
+          "role": "sink",
+          "startLine": 430
+        },
+        {
+          "code": "LAUNCHER=\"/tmp/lr-launch-${SID:0:8}.sh\"\ncat > \"$LAUNCHER\" <<EOF\n#!/bin/bash\n...\nEOF\nchmod +x \"$LAUNCHER\"",
+          "endLine": 168,
+          "explanation": "The same eight-character truncation and the same `/tmp` placement, here with the path hardcoded rather than seam-overridable. The launcher is subsequently typed into a new iTerm2 pane as `exec /bin/bash $LAUNCHER`.",
+          "id": "handoff-launcher",
+          "label": "lr-handoff launcher: identical construction",
+          "language": "bash",
+          "path": "scripts/limit-recover/lr-handoff.sh",
+          "role": "sink",
+          "startLine": 159
+        },
+        {
+          "code": "  cmdfile=\"/tmp/handoff-recycle-cmd-$SID-$ts.sh\"\n  log=\"/tmp/handoff-recycle-$SID-$ts.log\"\n  printf '%s\\n' \"$CMD\" > \"$cmdfile\"",
+          "endLine": 2402,
+          "explanation": "This variant uses the full session id plus `date +%s`, so pre-creation needs the id (readable from /tmp/cc-telemetry) and a guess within a small window of seconds rather than a blind guess. The file is passed to a detached watcher that executes it once the old session exits.",
+          "id": "recycle-cmdfile",
+          "label": "handoff-fire recycle command file",
+          "language": "bash",
+          "path": "scripts/handoff-fire.sh",
+          "role": "sink",
+          "startLine": 2400
+        },
+        {
+          "code": "TDIR=\"${CC_TELEMETRY_DIR:-/tmp/cc-telemetry}\"   # override for E2E isolation",
+          "endLine": 28,
+          "explanation": "This is what makes the launcher names predictable rather than guessable. The statusline exports one `<session-uuid>.json` per session per turn boundary into this directory; on this host it was observed as `drwxr-xr-x` containing 78 files at `-rw-r--r--`, so any local uid can enumerate every live session id and derive every `<sid8>` launcher name in advance.",
+          "id": "telemetry-leak",
+          "label": "Session ids published world-readably in /tmp",
+          "language": "bash",
+          "path": "bin/cc-context",
+          "role": "evidence",
+          "startLine": 28
+        }
+      ],
+      "confidence": {
+        "level": "high",
+        "rationale": "The write-then-execute construction is unambiguous in source at all three sites, and the predictability premise was checked against the live filesystem \u2014 session ids really are world-readable in /tmp \u2014 rather than assumed; only end-to-end exploitation was not attempted, since racing a launcher would disturb a running fleet."
+      },
+      "extensions": {
+        "candidateId": "candidate-ae9e75b8b0e9e825"
+      },
+      "findingId": "csf_9ff069ab90e785229ce85f89",
+      "fingerprints": {
+        "algorithm": "codex-security/v1",
+        "primary": "codex-security/v1:sha256:ce5a1763e463d23542a3207c0f6647d2fa9c43d87e5b59d6b572e37b02cdb94d"
+      },
+      "identity": {
+        "anchor": "tmp-launcher-scripts-written-then-executed"
+      },
+      "locations": [
+        {
+          "endLine": 433,
+          "path": "scripts/limit-recover/lr-reset-poller.sh",
+          "role": "sink",
+          "startLine": 430
+        },
+        {
+          "endLine": 168,
+          "path": "scripts/limit-recover/lr-handoff.sh",
+          "role": "sink",
+          "startLine": 159
+        },
+        {
+          "endLine": 2402,
+          "path": "scripts/handoff-fire.sh",
+          "role": "sink",
+          "startLine": 2400
+        },
+        {
+          "endLine": 28,
+          "path": "bin/cc-context",
+          "role": "evidence",
+          "startLine": 28
+        }
+      ],
+      "occurrenceId": "occ_04ee6d85495389d4a3059773",
+      "preventiveControls": [
+        "Never write-then-execute by path in a shared directory; allocate with mktemp under $TMPDIR and, where practical, execute the descriptor you wrote.",
+        "Treat any identifier the system publishes to a world-readable location as public, and never let it be the sole source of unpredictability in a filename.",
+        "Add a lint that flags a literal /tmp/ path in bin/ or scripts/ that is redirected into or chmod'ed, so the established mktemp idiom is enforced rather than merely conventional."
+      ],
+      "provenance": {
+        "source": "local_plugin"
+      },
+      "remediation": "Allocate all three files with `mktemp` under the per-uid temporary directory \u2014 `launcher=\"$(mktemp \"${TMPDIR:-/tmp}/lr-poller-launch-XXXXXXXX.sh\")\"` \u2014 which the repository already does at roughly forty other sites; this gives both an unpredictable name and `O_EXCL` creation that fails rather than following a pre-existing symlink. Keep the session id in the name only as a readability prefix, never as the whole entropy budget. Separately, move the telemetry export off `/tmp`: `bin/cc-context` should default `CC_TELEMETRY_DIR` to `$HOME/.claude/telemetry` (or `$TMPDIR`) rather than `/tmp/cc-telemetry`, since publishing live session ids world-readably is what makes the launcher names predictable in the first place.",
+      "remediationTests": [
+        "Add a test asserting each launcher path matches the mktemp XXXXXXXX pattern and lies under $TMPDIR, so a future edit cannot silently move it back to /tmp.",
+        "Add a test that pre-creates a symlink at the deterministic legacy path and asserts the script neither writes through it nor executes it \u2014 this is the RED case and it must fail against the current tree.",
+        "Assert the telemetry directory is created with mode 0700 and is not under /tmp."
+      ],
+      "rootCause": {
+        "evidenceRefs": [
+          "telemetry-leak",
+          "poller-launcher",
+          "handoff-launcher",
+          "recycle-cmdfile"
+        ],
+        "summary": "The violated invariant is that a file which will be written and then executed must live in a directory only the trusting uid can write, under a name no one else can predict. All three sites break it in the same way: they compose a name from a fixed prefix plus a session identifier \u2014 an identifier the repository itself publishes world-readably into `/tmp/cc-telemetry` \u2014 and place it in mode-1777 `/tmp` instead of the per-uid `$TMPDIR`. Because the file is later opened by path (`/bin/bash $launcher`) rather than by the descriptor that wrote it, the content executed is whatever that name resolves to at execution time. `mktemp` would close it on both axes at once: unpredictable suffix, and `O_EXCL` creation that fails rather than following a pre-existing symlink."
+      },
+      "ruleId": "tempfile.predictable-world-writable-executable",
+      "severity": {
+        "changeConditions": "Rises if these scripts ever run on a shared or multi-tenant host, or if a launcher name stops being session-derived. Drops to informational once all three allocate via mktemp under $TMPDIR.",
+        "level": "low",
+        "rationale": "The primitive is real and there are two distinct outcomes: the symlink variant gives another local uid an arbitrary-file clobber and a `chmod +x` performed as this user, and the pre-created-file variant gives a window in which bytes that uid controls are executed as this user, because all three sites execute the file by path after writing it rather than by descriptor. Severity stays low because the attacker model is a distinct local uid on a single-operator workstation, where the other uids are essentially system accounts, and because the sticky bit forces pre-creation rather than the much easier replace-after-write race. The `/tmp/cc-telemetry` leak is what moves this from theoretical to mechanically reachable \u2014 without it the 8-hex-character launcher names would have to be guessed. Evidence of a routinely-present non-operator uid, or of any launcher name that is constant rather than session-derived, would raise this to medium.",
+        "score": 3.3,
+        "scoringSystem": "CVSS:3.1"
+      },
+      "summary": "Three scripts build a shell script at a predictable path under `/tmp`, `chmod +x` it, and then execute it by path: `lr-reset-poller.sh:431` (`/tmp/lr-poller-launch-<sid8>.sh`), `lr-handoff.sh:159` (`/tmp/lr-launch-<sid8>.sh`) and `handoff-fire.sh:2400` (`/tmp/handoff-recycle-cmd-<sid>-<epoch>.sh`). On macOS `/tmp` is mode 1777: the sticky bit stops another uid deleting or replacing a file this user already owns, but it does not stop that uid pre-creating a name that does not yet exist. A pre-created symlink turns the `>` redirect into an arbitrary-file clobber plus a `chmod +x` on the target; a pre-created mode-0666 regular file leaves attacker-writable bytes at a path this user subsequently executes. The names are predictable in practice because session ids are world-readable: `bin/cc-context` exports per-session telemetry to `/tmp/cc-telemetry`, observed on this host as a 0755 directory holding 78 files at mode 0644, each named `<session-uuid>.json`. The same repository already uses `mktemp \"${TMPDIR:-/tmp}/...\"` at roughly forty other sites, so the safe idiom is established in-tree and these three are the outliers.",
+      "taxonomy": {
+        "category": "Insecure temporary file / link following",
+        "cwe": [
+          "CWE-377",
+          "CWE-59"
+        ]
+      },
+      "title": "Launcher scripts are written to predictable paths in world-writable /tmp, made executable, and then run",
+      "validation": {
+        "checklist": [
+          "Is the directory writable by other uids? Yes \u2014 macOS /tmp is 1777.",
+          "Is the name predictable to another uid? Yes \u2014 /tmp/cc-telemetry publishes the session ids that seed every name.",
+          "Is the file opened by path at execution, or by descriptor? By path, in all three cases.",
+          "Does the repository have a safe idiom available? Yes \u2014 mktemp \"${TMPDIR:-/tmp}/...\" is used at roughly forty other sites."
+        ],
+        "evidence": "`ls -ld /tmp/cc-telemetry` returned `drwxr-xr-x` with 78 entries named `<uuid>.json` at mode 0644; `/tmp/claude-accounts-cache.json` and `/tmp/handoff-account-sweep.json` were likewise present at 0644. No launcher file existed at scan time, which is consistent with pre-creation being available to another uid.",
+        "evidenceRefs": [
+          "telemetry-leak",
+          "poller-launcher"
+        ],
+        "method": "Source review of all three write-then-execute sites, plus live inspection of the /tmp surfaces that make their names predictable.",
+        "remainingUncertainty": "Not exploited live \u2014 no attempt was made to pre-create a launcher name and win the write/execute window, because doing so would interfere with a running fleet. The attacker model (a distinct, hostile local uid) was not demonstrated to exist on this workstation."
+      }
+    }
+  ],
+  "scanId": "38eec335_20260729T1750Z",
+  "schemaVersion": "1.0"
+}

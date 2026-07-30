@@ -1,0 +1,63 @@
+{
+  "documentType": "codex-security.scan-manifest",
+  "scan": {
+    "artifacts": [
+      {
+        "mediaType": "application/json",
+        "path": "findings.json",
+        "sha256": "6802e26348edb44a48c6cadfddc901093154e9b0760085cc35d17c913eef38cc"
+      },
+      {
+        "mediaType": "application/json",
+        "path": "coverage.json",
+        "sha256": "1f3404ec9d8ff5a0e9c45469c4fe1e21937423448b44691bbd9ac78895e334e5"
+      },
+      {
+        "mediaType": "application/octet-stream",
+        "path": "artifacts/02_discovery/candidate_ledger.jsonl",
+        "sha256": "404b0f59bda568bcca928f4ce42a12d3b4c33ce5282d7718a01945f74cff4a7b"
+      },
+      {
+        "mediaType": "application/octet-stream",
+        "path": "artifacts/02_discovery/validation_artifacts/probe_eval_jsondumps.sh",
+        "sha256": "8ad3623de4198e59124d952f6563f6ae7b79a0a3a198053313b87f962ea22cae"
+      },
+      {
+        "mediaType": "application/octet-stream",
+        "path": "artifacts/02_discovery/validation_artifacts/probe_osascript_notify.sh",
+        "sha256": "fab231848395f844f385a760df78e7d75399df0d1cff4391ad948b4a3088af5d"
+      }
+    ],
+    "completedAt": "2026-07-29T18:55:00Z",
+    "coverageRef": "coverage.json",
+    "findingsRef": "findings.json",
+    "id": "38eec335_20260729T1750Z",
+    "producer": {
+      "name": "claude-code-codex-security-port",
+      "version": "0.1.0"
+    },
+    "scope": {
+      "context": "Scoped-path scan of the 152 tracked files under bin/ (47) and scripts/ (105) at revision 38eec335 \u2014 40,961 lines, overwhelmingly bash with four Python tools. hooks/ was scanned separately at dc12c8db on 2026-07-29 and is excluded here. Artifacts reviewed: the deterministic in-scope file list at artifacts/02_discovery/in_scope_files.txt, the enriched candidate ledger at artifacts/02_discovery/candidate_ledger.jsonl, and two executable probes retained under artifacts/02_discovery/validation_artifacts/. Runtime status: two candidates were decided by running code rather than by reading it \u2014 probe_eval_jsondumps.sh reproduced the reported injection, and probe_osascript_notify.sh refuted the AppleScript-breakout candidate \u2014 and the live activation state of the affected daemon was read off the host (launchctl list, the deployed LaunchAgent plist, and the /tmp permission surfaces). Validation mode: compact standard-scan, one validation record per ledger row and one attack-path record per reportable or deferred row. Limitations: coverage is pattern-complete but not line-complete \u2014 every file was swept for every risk class in the threat model and every file with a hit was read around that hit, with roughly 20 read in full, but the remaining lines were not read individually; one candidate (lr-handoff.sh's unquoted heredoc launcher) is deferred with an unresolved reachability question rather than reported. The threat model was generated during Phase 1 of this scan, not supplied by the user.",
+      "excludePaths": [
+        "hooks/"
+      ],
+      "includePaths": [
+        "bin/",
+        "scripts/"
+      ]
+    },
+    "sealedAt": "2026-07-29T18:55:00Z",
+    "startedAt": "2026-07-29T17:50:00Z",
+    "status": "completed",
+    "target": {
+      "displayName": "claude-infrastructure",
+      "kind": "git_revision",
+      "revision": "38eec335",
+      "targetId": "claude-infrastructure"
+    },
+    "threatModel": {
+      "summary": "claude-infrastructure is not an application but the control plane for a fleet of autonomous Claude Code sessions running 24/7 on one macOS workstation; it is also the source checkout that ~/.claude symlinks into. Everything in bin/ and scripts/ runs as the interactive user with no sandbox, so the assets at risk are the developer's filesystem and git history, four Claude Max OAuth refresh tokens held in the keychain, the integrity of automated decisions (which Bash commands are allowed, which sessions may be closed, which branches may be pushed to a remote trunk), and the session transcripts that are the durable record of all work. The primary trust boundary is model output reaching shell: these tools are invoked by the model through the Bash tool, so argv, stdin and environment all carry strings that untrusted content the model has read \u2014 repository files, web pages, subagent output, other sessions' mail \u2014 can steer. The model is not malicious but it is a confused deputy, and this fleet deliberately runs it unattended. A second boundary matters because much of scripts/ is the body of a launchd job: code that executes inside a daemon is not classified by the hooks/ PreToolUse layer, raises no permission prompt, and has no operator watching, so laundering a string into a daemon defeats the repository's own primary control even without any gain in uid. A third, thinner boundary is a foreign local uid, whose only shared writable surface is world-writable /tmp. The invariants that follow: no untrusted string is ever evaluated as code \u2014 the repository states this as a no-eval convention; every expansion reaching a destructive operation is quoted and validated; security decisions fail closed rather than emitting nothing; state a decision depends on lives where only this uid can write; credentials never reach argv, a log, or a notification body; and a predictable path in a shared directory is never written to, executed from, or trusted as a lock. The repository-wide failure modes that would matter most are command injection through a model-influenced string reaching eval, sh -c, a python -c program body or an osascript program body; guard bypass by input a classifier does not model; unquoted expansion into rm or git; /tmp symlink and pre-creation attacks against predictable names; credential exposure; subversion of the landing rail; and an unbounded external call wedging a daemon so that a fail-closed control never runs at all."
+    }
+  },
+  "schemaVersion": "1.0"
+}

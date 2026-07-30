@@ -1,0 +1,163 @@
+{
+  "completeness": "partial",
+  "deferred": [
+    {
+      "id": "deferred_lr_handoff_branch_name",
+      "paths": [
+        "scripts/limit-recover/lr-handoff.sh"
+      ],
+      "reason": "lr-handoff.sh:160-167 expands $BRANCH into a double-quoted shell string inside a generated executable via an unquoted heredoc, and git permits $, backtick and parentheses in a ref name. Whether a branch named by one session is ever handed off by a different, unattended caller was not traced, so neither reachability nor severity could be fixed. Resolve by enumerating every caller of lr-handoff.sh and checking whether any runs without an operator present against a worktree whose branch it did not create.",
+      "surfaceIds": [
+        "surface_generated_launcher_quoting"
+      ]
+    },
+    {
+      "id": "deferred_line_by_line_review",
+      "paths": [
+        "bin/",
+        "scripts/"
+      ],
+      "reason": "Coverage is pattern-complete but not line-complete. All 152 in-scope files were swept for every risk class in the threat model (shell evaluation, generated executables, temp-file placement, destructive operands, credential flow, jq and AppleScript program construction, network egress, unsafe parsing), and every file with a hit was read around that hit; roughly 20 files were read in full. The remaining ~41k lines were not read line by line, so a defect that matches none of the swept patterns would have been missed. Resolve by re-running this scope with a per-file review pass rather than a class-driven sweep.",
+      "surfaceIds": []
+    },
+    {
+      "id": "deferred_esc_scan_binary_diff",
+      "paths": [
+        "scripts/ship-land.sh"
+      ],
+      "reason": "ship-land.sh's esc_scan greps the textual diff body, so a destructive change committed in a file marked binary via .gitattributes would render as 'Binary files differ' and present no scannable lines. This was reasoned about but not tested, and is recorded rather than asserted. Resolve by committing a .gitattributes-binary file containing a DROP TABLE line on a scratch branch and confirming whether esc_scan parks the land.",
+      "surfaceIds": [
+        "surface_landing_rail"
+      ]
+    }
+  ],
+  "documentType": "codex-security.coverage",
+  "excludePaths": [
+    "hooks/"
+  ],
+  "explicitExclusions": [
+    {
+      "pattern": "hooks/**",
+      "reason": "Scanned separately at dc12c8db on 2026-07-29; excluded here to avoid duplicating that bundle's findings."
+    },
+    {
+      "pattern": "scripts/plan-phase-scan-tests/fixtures/**",
+      "reason": "Static markdown and JSON fixtures with no runnable behaviour; the harness that consumes them (scripts/plan-phase-scan-tests/run.sh) was reviewed."
+    }
+  ],
+  "includePaths": [
+    "bin/",
+    "scripts/"
+  ],
+  "inventoryStrategy": "scoped_path",
+  "mode": "scoped_path",
+  "openQuestions": [
+    {
+      "followUpPrompt": "Diff scripts/limit-recover/com.reso.lr-reset-poller.plist against ~/Library/LaunchAgents/com.reso.lr-reset-poller.plist and decide whether LR_POLLER_AUTOFIRE=1 is the intended production posture; if it is, land the template change so the repository stops understating what the daemon does.",
+      "question": "The deployed ~/Library/LaunchAgents/com.reso.lr-reset-poller.plist sets LR_POLLER_AUTOFIRE=1, but the committed template at scripts/limit-recover/com.reso.lr-reset-poller.plist ships that block commented out with the comment 'Auto-resume is OFF by default'. Which side is authoritative, and should the committed template match the deployed reality?"
+    },
+    {
+      "followUpPrompt": "Grep bin/ and scripts/ for paths and locks whose only unpredictability is a session id, and decide whether CC_TELEMETRY_DIR should default to $HOME/.claude/telemetry instead of /tmp/cc-telemetry.",
+      "question": "bin/cc-context publishes one <session-uuid>.json per live session into world-readable /tmp/cc-telemetry. Beyond making the /tmp launcher names predictable, does anything else in the fleet treat a session id as a secret or as a capability?"
+    },
+    {
+      "followUpPrompt": "Search ~/.reso/limit-recover/poller.log for RESUMED or LISTED lines whose sid does not match the parked record processed in that tick, and add an explicit per-iteration reset of sid/acct/cfg/cwd/reset_at_utc regardless of the quoting fix.",
+      "question": "lr-reset-poller.sh runs under 'set -uo pipefail' with no -e, so a parked record containing a double quote produces malformed JSON, makes the eval at line 391 a silent no-op, and leaves the previous loop iteration's sid/acct/cwd bound. Has that ever caused a resume to fire against the wrong session?"
+    }
+  ],
+  "scanId": "38eec335_20260729T1750Z",
+  "schemaVersion": "1.0",
+  "surfaces": [
+    {
+      "disposition": "reported",
+      "id": "surface_shell_code_evaluation",
+      "label": "Evaluation of data as shell code (eval, sh -c, generated scripts, interpolation into python -c and osascript program bodies)",
+      "notes": "The primary surface for this scope. Enumerated every eval, every sh/bash/zsh -c, every python3 -c, every osascript -e and every generated-then-executed script across all 152 in-scope files. Reported: lr-reset-poller.sh's use of json.dumps() as a shell quoter feeding eval, reproduced by execution. Rejected: the three eval sites in lead-reconciler.sh, which read CC_RECON_ROSTER_* variables documented at line 34 as 'a command line each' \u2014 every setter in the tree is either the script's own selftest, tests/lead-reconciler.bats, or operator activation documentation, so this is a config-as-command hook at the same trust level as $EDITOR, not data interpolated into code. Also rejected: the bash -c occurrences in bin/cc-dispatch, cc-respawn, cc-route, cc-run and cc-wave-plan, which are all selftest assertions over mktemp-derived paths.",
+      "receiptRefs": [
+        "artifacts/02_discovery/candidate_ledger.jsonl",
+        "artifacts/02_discovery/validation_artifacts/probe_eval_jsondumps.sh"
+      ],
+      "riskArea": "Command injection"
+    },
+    {
+      "disposition": "reported",
+      "id": "surface_tempfile_placement",
+      "label": "Temporary file and generated-executable placement",
+      "notes": "Three write-then-execute sites in /tmp reported. The predictability premise was verified live: /tmp/cc-telemetry is a 0755 directory holding 78 world-readable <session-uuid>.json files, so launcher names derived from ${SID:0:8} are enumerable by any local uid. bin/claude-accounts' /tmp/claude-accounts-cache.json was reviewed and rejected: cache_write stages to a pid-suffixed name and os.replace()s it into place, and rename(2) does not traverse a symlink at the destination, so only the staging name is symlink-followable \u2014 a sub-second window whose payload is a fixed quota-JSON blob, guarded further by a cfg_key check and a 90s TTL, with routing integrity rather than execution as the consequence. Roughly forty other sites in scope use mktemp \"${TMPDIR:-/tmp}/...\" correctly.",
+      "receiptRefs": [
+        "artifacts/02_discovery/candidate_ledger.jsonl"
+      ],
+      "riskArea": "Insecure temporary file / link following"
+    },
+    {
+      "disposition": "rejected",
+      "id": "surface_applescript_construction",
+      "label": "AppleScript program construction (osascript -e / heredoc) from interpolated values",
+      "notes": "Five notification helpers (desk-invariant.sh:183, nightly-regression.sh:74, postland-verify.sh:232, desk-recycle-invariant.sh:130, lr-reset-poller.sh:214) interpolate a message and title into an AppleScript string literal, stripping only the double quote via ${msg//\\\"/}. The backslash escape survives that guard, so the construction looked breakable. Refuted by execution rather than argument: a message ending in a backslash yields a program osascript rejects with -2740, and the quote-free breakout attempt that appends ` & (do shell script (ASCII character 116)) & ` through the title yields -2741, because escaping the closing quote opens a string that nothing left in the input can close \u2014 a balanced breakout needs two quote characters and the guard strips both. A $(...) payload created no file. handoff-fire.sh and lr-handoff.sh build their AppleScript from heredocs carrying only script-derived pane ids and launcher paths.",
+      "receiptRefs": [
+        "artifacts/02_discovery/validation_artifacts/probe_osascript_notify.sh"
+      ],
+      "riskArea": "Improper output encoding"
+    },
+    {
+      "disposition": "rejected",
+      "id": "surface_landing_rail",
+      "label": "Automated push-to-trunk rail and its escalation-surface gate",
+      "notes": "scripts/ship-land.sh holds the only automated write path to a remote trunk, so its ESC_RE_DEFAULT denylist was examined as the same class that produced the hooks/ finding at dc12c8db. Rejected on specific counterevidence: unlike hooks/validate-bash.sh, where a sibling branch of the same alternation proved the missing anchor accidental, here lines 232-236 state the narrower scope and its reason in the file \u2014 auth/session/navigation lands are escalation-worthy but this repository's churn is saturated with those words, so a substring scan would self-park every land \u2014 and record it as surfaced to the lead as a design tradeoff, with SHIP_LAND_ESC_RE as the per-repository extension point. The enclosing control is also fail-closed: esc_scan uses grep -E -- with an explicit rc capture and emits a synthetic hit on rc>=2, so a malformed pattern parks the land rather than reading clean.",
+      "receiptRefs": [
+        "artifacts/02_discovery/candidate_ledger.jsonl"
+      ],
+      "riskArea": "Protection mechanism failure"
+    },
+    {
+      "disposition": "needs_follow_up",
+      "id": "surface_generated_launcher_quoting",
+      "label": "Quoting of caller-supplied values into generated launcher scripts",
+      "notes": "lr-handoff.sh:160-167 generates its launcher with an unquoted heredoc, so $TARGET, ${WT_TOP:-$CWD}, $BRANCH and $INGEST_PROMPT are expanded into double-quoted shell strings inside an executable file. Most of those come from the invoking caller's own --target/--cwd argv, which carries no authority gain. The unresolved input is $BRANCH, read from the working tree at line 91: git check-ref-format permits $, backtick, parentheses, semicolon and double quote, so a branch literally named $(cmd) is a valid ref that one session could create and another could later hand off. No caller was found that runs lr-handoff.sh against a worktree whose branch it did not itself choose, so the reaching path is unproven and the row is deferred rather than reported.",
+      "receiptRefs": [
+        "artifacts/02_discovery/candidate_ledger.jsonl"
+      ],
+      "riskArea": "Command injection"
+    },
+    {
+      "disposition": "no_issue_found",
+      "id": "surface_destructive_filesystem_ops",
+      "label": "Destructive filesystem and git operations (rm -rf, worktree remove, branch -D, reset)",
+      "notes": "Swept every rm/mv/cp/chmod/chown/kill/rmdir occurrence with a variable operand across all 152 files. Every destructive operand is double-quoted; no unquoted expansion reaches a destructive command, which matters because the Bash tool's zsh does not word-split but the scripts run under bash, which does. scripts/worktree-gc.sh is written defensively by design: removal is always `git worktree remove` and never --force, so git refuses when a tree changed since the gates ran, and the refusal is reported as KEEP rather than escalated.",
+      "receiptRefs": [],
+      "riskArea": "Unintended file deletion"
+    },
+    {
+      "disposition": "no_issue_found",
+      "id": "surface_credential_handling",
+      "label": "OAuth refresh tokens, keychain reads, and push credentials",
+      "notes": "bin/claude-accounts reads refresh tokens via /usr/bin/security find-generic-password and passes them to the heal child through the environment, never through argv; the file documents this choice and its ~90s same-uid ps -E exposure explicitly at lines 31-34. bin/claude-kimi writes its API key under (umask 077) into a 0700 directory. scripts/push-send.sh does place PUSHOVER_TOKEN in curl argv via --form-string, but the value originates in the caller's own environment, so a same-uid reader gains nothing it did not already have, and the channel is inert on this host (unset token exits 3). No credential reaches a log, a notification body, or a world-readable path.",
+      "receiptRefs": [],
+      "riskArea": "Credential exposure"
+    },
+    {
+      "disposition": "no_issue_found",
+      "id": "surface_jq_program_construction",
+      "label": "jq filter construction from shell variables",
+      "notes": "Eight tools interpolate $CELL into a jq program. $CELL is a fixed literal `def cell(ph): ...` helper defined in each file (cc-context:53, cc-decide:58, cc-value:81, cc-blockers:188, cc-board:38, cc-backlog:118, cc-wave-plan:60, cc-audit:62) and is never assigned from input. Every variable datum reaching jq goes through --arg or --argjson, which binds it as a value rather than as program text.",
+      "receiptRefs": [],
+      "riskArea": "Query/filter injection"
+    },
+    {
+      "disposition": "not_applicable",
+      "id": "surface_network_egress",
+      "label": "Outbound network calls",
+      "notes": "Three call sites only: scripts/push-send.sh (Pushover, inert without credentials), scripts/relogin-probes/e2-launchd-browser-survival.sh (127.0.0.1 CDP probe), and bin/claude-accounts' usage API read. No curl-pipe-to-shell, no base64 decode-and-execute, and no attacker-controlled destination anywhere in scope.",
+      "receiptRefs": [],
+      "riskArea": "Data exfiltration"
+    },
+    {
+      "disposition": "no_issue_found",
+      "id": "surface_argument_and_stdin_parsing",
+      "label": "argv/stdin parsing in the cc-* tools the model invokes directly",
+      "notes": "The cc-* tools are the surface where model-influenced strings arrive most directly. Their record writers build JSON with jq -nc --arg (cc-backlog:236, cc-announce:79, cc-await-ping:122, cc-run:56), which is safe by construction. The printf-built JSON records elsewhere (cc-teardown:152, cc-decide:64, land-lock.sh:74 and others) carry script-derived enum values, timestamps and uuids rather than free text; the one printf-built record that does carry an unconstrained value into a later shell context is lr-reset-poller.sh:328 and it is reported above. IFS is assigned only in read-scoped form; no unsafe xargs and no find -exec appear in scope.",
+      "receiptRefs": [],
+      "riskArea": "Improper input handling"
+    }
+  ]
+}

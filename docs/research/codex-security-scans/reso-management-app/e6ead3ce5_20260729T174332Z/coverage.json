@@ -1,0 +1,77 @@
+{
+  "completeness": "partial",
+  "deferred": [
+    {
+      "id": "deferred_replicache_pull",
+      "paths": [
+        "src/app/api/replicache-pull/route.ts"
+      ],
+      "reason": "/api/replicache-pull carries no origin or content-type check at all. It is a read path and CORS prevents an attacker reading the response, so it is not the same class of exposure, but its tenant-scoping was not traced in this scan."
+    }
+  ],
+  "documentType": "codex-security.coverage",
+  "excludePaths": [],
+  "explicitExclusions": [],
+  "includePaths": [
+    "src/app/api/",
+    "middleware.ts",
+    "lib/auth/"
+  ],
+  "inventoryStrategy": "scoped_path",
+  "mode": "scoped_path",
+  "openQuestions": [
+    {
+      "question": "Does the production environment set PUSH_CONTENT_TYPE_CHECK or PUSH_ORIGIN_CHECK to 'enforce'? The repository sets neither and .env.example documents 'report', but deployment configuration is not visible from source. This single fact decides whether the finding is live or already closed, and it is the first thing to check."
+    },
+    {
+      "question": "Server actions (src/app/actions/) were NOT scanned. Next.js server actions are state-changing POST endpoints with the same SameSite=None exposure, and there are more of them than API routes. This is the largest remaining gap."
+    },
+    {
+      "question": "Tenant isolation inside the Replicache mutation handlers was not traced \u2014 whether a mutation can name another tenant's row. That determines whether the blind write in the reported finding stays inside the victim's tenant."
+    }
+  ],
+  "scanId": "reso_20260729T1730Z",
+  "schemaVersion": "1.0",
+  "surfaces": [
+    {
+      "disposition": "reported",
+      "id": "surface_csrf",
+      "label": "CSRF on state-changing endpoints",
+      "notes": "The reported finding. /api/passkey-login enforces its origin check for the same stated reason, so the gap is an inconsistency rather than an oversight of the class.",
+      "receiptRefs": [],
+      "riskArea": "Cross-site request forgery"
+    },
+    {
+      "disposition": "no_issue_found",
+      "id": "surface_dev_bypass_routes",
+      "label": "Development and load-test authentication bypass routes",
+      "notes": "dev-login is triple-gated: NODE_ENV must be development, the caller must be localhost, and the userId must resolve to a seeded row absent from production databases. load-test-login is four-gated, fail-closed on every gate, returns a uniform 404 so the route's existence is not disclosed, uses a length-checked constant-time comparison, and is inert unless LOAD_TEST_SECRET is set to at least 16 characters. Both are sound.",
+      "receiptRefs": [],
+      "riskArea": "Authentication bypass"
+    },
+    {
+      "disposition": "no_issue_found",
+      "id": "surface_debug_secret_exposure",
+      "label": "Debug endpoint secret exposure",
+      "notes": "/api/debug/vapid reads VAPID_PRIVATE_KEY but returns only the boolean hasPrivateKey; the only key material returned is a prefix and suffix of the PUBLIC key. Admin-gated with a 403 otherwise.",
+      "receiptRefs": [],
+      "riskArea": "Sensitive data exposure"
+    },
+    {
+      "disposition": "no_issue_found",
+      "id": "surface_route_authn",
+      "label": "Session authentication on data routes",
+      "notes": "replicache-push validates the session at route.ts:115 and returns on an absent user. METHODOLOGY NOTE: a grep census for getSession/session.user reported auth=0 for this route because it imports the helper under the alias getServerActionSession \u2014 a symbol-name census produces false negatives and must be resolved against the import, not the call site.",
+      "receiptRefs": [],
+      "riskArea": "Missing authentication"
+    },
+    {
+      "disposition": "no_issue_found",
+      "id": "surface_cookie_config",
+      "label": "Session cookie configuration",
+      "notes": "httpOnly true, secure in production, SameSite=None in production only. The None value is a documented WebKit #255524 accommodation and is not itself a defect; it is recorded as the precondition that makes per-route CSRF defence mandatory. The separate sameSite:'lax' at cookieActions.ts:209 belongs to the THEME cookie, not the session \u2014 checked because the two could easily be conflated.",
+      "receiptRefs": [],
+      "riskArea": "Insecure cookie attributes"
+    }
+  ]
+}

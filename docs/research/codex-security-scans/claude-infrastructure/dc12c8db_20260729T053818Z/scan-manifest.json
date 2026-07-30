@@ -1,0 +1,46 @@
+{
+  "documentType": "codex-security.scan-manifest",
+  "scan": {
+    "artifacts": [
+      {
+        "mediaType": "application/json",
+        "path": "findings.json",
+        "sha256": "3580e11cccaf518fe5956d3255c386d84c030148958451ea18385a98c5c4cc6f"
+      },
+      {
+        "mediaType": "application/json",
+        "path": "coverage.json",
+        "sha256": "a2f36c3c98be7a4a4cba9c6f6ccdecb8ebb9bf5504d6de3e35f47b760648b5c7"
+      }
+    ],
+    "completedAt": "2026-07-29T05:55:00Z",
+    "coverageRef": "coverage.json",
+    "findingsRef": "findings.json",
+    "id": "dc12c8db_20260729T053818Z",
+    "producer": {
+      "name": "claude-code-codex-security-port",
+      "version": "0.1.0"
+    },
+    "scope": {
+      "excludePaths": [
+        "hooks/tests/"
+      ],
+      "includePaths": [
+        "hooks/"
+      ]
+    },
+    "sealedAt": "2026-07-29T05:55:00Z",
+    "startedAt": "2026-07-29T05:38:18Z",
+    "status": "completed",
+    "target": {
+      "displayName": "claude-infrastructure",
+      "kind": "git_revision",
+      "revision": "dc12c8db",
+      "targetId": "claude-infrastructure"
+    },
+    "threatModel": {
+      "summary": "Claude Code hooks are shell scripts the harness executes automatically on every tool call, receiving a JSON payload on stdin whose tool_input fields (command, file_path, prompt) are influenced by model output and therefore by any untrusted content the model has read: repository files, web pages, subagent output. Several hooks are not merely observers but security CONTROLS: they emit a permissionDecision of deny, ask or allow for Bash commands. The primary attacker is prompt injection steering the model into emitting a command that a guard fails to classify correctly; the secondary attacker is a local process running as another uid on a shared macOS host. Assets at risk: the developer's filesystem and home directory, the git history, and the integrity of the auto-approval decision itself."
+    }
+  },
+  "schemaVersion": "1.0"
+}

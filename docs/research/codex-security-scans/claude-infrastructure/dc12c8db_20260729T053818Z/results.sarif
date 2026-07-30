@@ -1,0 +1,161 @@
+{
+  "$schema": "https://docs.oasis-open.org/sarif/sarif/v2.1.0/os/schemas/sarif-schema-2.1.0.json",
+  "runs": [
+    {
+      "automationDetails": {
+        "id": "dc12c8db_20260729T053818Z"
+      },
+      "properties": {
+        "codexSecuritySchemaVersion": "1.0",
+        "codexSecurityTargetKind": "git_revision"
+      },
+      "results": [
+        {
+          "level": "warning",
+          "locations": [
+            {
+              "message": {
+                "text": "root_control"
+              },
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "hooks/validate-bash.sh"
+                },
+                "region": {
+                  "endLine": 96,
+                  "startLine": 94
+                }
+              }
+            },
+            {
+              "message": {
+                "text": "supporting"
+              },
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "hooks/validate-bash.sh"
+                },
+                "region": {
+                  "endLine": 195,
+                  "startLine": 195
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "The hard-deny regex that is supposed to stop catastrophic filesystem destruction matches only the literal short-flag bundle `-rf` followed by a character. Equivalent invocations with identical destructive effect \u2014 `--recursive --force`, `-fr`, `-r -f`, and the bare `rm -rf /` form at end of input \u2014 are not matched, so the guard emits `ask`, or no decision at all, instead of `deny`."
+          },
+          "partialFingerprints": {
+            "codexSecurity/v1": "codex-security/v1:sha256:8a06226077d05d1471f93a5f5825277cf68bb2250c50a5535d38df922c3f14e2",
+            "primaryLocationLineHash": "f184ba4d9137c873:1"
+          },
+          "properties": {
+            "category": "Protection mechanism failure / incomplete denylist",
+            "confidence": "high",
+            "findingId": "csf_62c61e14bacee96a5c5fb5ca",
+            "occurrenceId": "occ_78102ca2f37cb6df1a059265",
+            "severity": "medium"
+          },
+          "ruleId": "denylist.incomplete-flag-forms",
+          "ruleIndex": 0
+        },
+        {
+          "level": "note",
+          "locations": [
+            {
+              "message": {
+                "text": "root_control"
+              },
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "hooks/notify.sh"
+                },
+                "region": {
+                  "endLine": 35,
+                  "startLine": 35
+                }
+              }
+            },
+            {
+              "message": {
+                "text": "sink"
+              },
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "hooks/notify.sh"
+                },
+                "region": {
+                  "endLine": 88,
+                  "startLine": 88
+                }
+              }
+            },
+            {
+              "message": {
+                "text": "supporting"
+              },
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "hooks/notify.sh"
+                },
+                "region": {
+                  "endLine": 39,
+                  "startLine": 39
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "The notification hook writes its log and debounce lock to hardcoded `/tmp` paths. `/tmp` is world-writable on macOS, so a process running as another uid can pre-create either path as a symlink and have the hook's append or touch follow it, writing to a file of the attacker's choosing with the invoking user's privileges."
+          },
+          "partialFingerprints": {
+            "codexSecurity/v1": "codex-security/v1:sha256:422cb08f647e95160b5d31ffe645842d9011ca3ffa5a78cd2e66688e14491e02",
+            "primaryLocationLineHash": "1582b9d68c7ce209:1"
+          },
+          "properties": {
+            "category": "Insecure temporary file / link following",
+            "confidence": "high",
+            "findingId": "csf_3e515867f4bce69bbfe083ce",
+            "occurrenceId": "occ_f00cfa565b32dcc7068f6057",
+            "severity": "low"
+          },
+          "ruleId": "tempfile.predictable-world-writable-path",
+          "ruleIndex": 1
+        }
+      ],
+      "tool": {
+        "driver": {
+          "name": "Codex Security",
+          "rules": [
+            {
+              "id": "denylist.incomplete-flag-forms",
+              "name": "denylist.incomplete-flag-forms",
+              "properties": {
+                "tags": [
+                  "security"
+                ]
+              },
+              "shortDescription": {
+                "text": "denylist.incomplete-flag-forms"
+              }
+            },
+            {
+              "id": "tempfile.predictable-world-writable-path",
+              "name": "tempfile.predictable-world-writable-path",
+              "properties": {
+                "tags": [
+                  "security"
+                ]
+              },
+              "shortDescription": {
+                "text": "tempfile.predictable-world-writable-path"
+              }
+            }
+          ],
+          "version": "0.1.0"
+        }
+      }
+    }
+  ],
+  "version": "2.1.0"
+}
