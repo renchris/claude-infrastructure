@@ -107,9 +107,28 @@ IN
   # previous missed: family 1 ("$it2"/"$REAL_IT2") missed :989 "$IT2"; family 2 missed :2098
   # "$IT2_SHIM". A fixed token list encodes the last reader's blind spot, so the guard matches the
   # NAME SHAPE instead (memory: enumerate-call-sites-not-mechanisms).
-  local tok='(osascript|"\$[A-Za-z_]*([Ii][Tt]2|PYTHON)[A-Za-z_]*")'
+  #
+  # FOURTH sweep, 2026-07-29 (backlog f44a901152d9): the name-shape family is still a name-shape
+  # family, so it was blind to the LITERAL-PATH fork — `"$HOME/.claude/bin/it2" session close …`,
+  # where the only variable is HOME. Four such sites existed, all unbounded, all invisible: the
+  # watcher's CR nudge, the pane-close retry (a WEDGED call there means the documented 4-attempt
+  # retry never runs at all, turning a blip into a permanent husk pane), the successor focus, and a
+  # new one this backlog item added. The guard read GREEN over every one of them — a detector that
+  # cannot see part of its target population is worse than none, because it certifies the gap
+  # (memory: actuator-must-see-the-target-population). So the sweep now matches the binary by PATH
+  # SHAPE as well as by variable-name shape.
+  #
+  # …and the SAME sweep also had to learn a second command position. The prefix group accepted only
+  # line-start, a `|;&` separator, or `$(` — so `if "$HOME/.claude/bin/it2" session close …` was
+  # invisible for the additional reason that `if ` precedes the token. Two of the four sites above
+  # were of exactly that shape, so widening only the binary pattern still certified them green.
+  # Shell KEYWORDS are now skipped after a real command-position prefix; passing the binary as an
+  # ARGUMENT (`it2_type_verified "$REAL_IT2" …`) still does not match, because what follows the
+  # line-start there is a command name, not a keyword.
+  local pre='(^[[:space:]]*|[|;&]{1,2}[[:space:]]*|\$\()((if|elif|while|until|then|else|do|!)[[:space:]]+)*'
+  local tok='(osascript|"\$[A-Za-z_]*([Ii][Tt]2|PYTHON)[A-Za-z_]*"|"[^"]*/bin/it2")'
   local unbounded
-  unbounded="$(grep -nE "(^[[:space:]]*|[|;&]{1,2}[[:space:]]*|\\\$\\()${tok}[[:space:]]" "$HF" \
+  unbounded="$(grep -nE "${pre}${tok}[[:space:]]" "$HF" \
     | grep -v 'hf_bounded' \
     | grep -vE "osascript -e 'delay" \
     | grep -vE '^[[:space:]]*[0-9]+:[[:space:]]*#' || true)"
