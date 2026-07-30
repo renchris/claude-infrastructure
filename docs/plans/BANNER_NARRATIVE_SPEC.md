@@ -648,3 +648,73 @@ what makes the next beat's cessation readable at all. It does nothing during it;
 never co-present with its peers — but acting on it deletes v6b's entire identity, which is a spec
 ruling and not an implementation call. They keep their machinery; one line in `RARE_EVENTS` reverses
 the demotion, and removing them from `ALWAYS_EMITTED` completes the deletion.
+
+---
+
+## RE-MEASURED: the README column is 838 px, not 830 — and that falsifies the integer-scale plan
+
+`prior-art.md` §E3 flagged its own number as provisional: *"Exact 830px figure is from a single 2025
+measurement, consistent with the widely-documented 980-1012px markdown body but not independently
+re-measured. Re-measure in a browser before locking the art grid — this number determines the whole
+pixel scale."* Re-measured now, against the live README rather than a reconstruction of GitHub's CSS
+(a local mock would only prove my own assumption). Probe: `scripts/banner-column-width.py`, driving
+Chromium over CDP.
+
+| viewport | README column | full-width `<img>` resolves to |
+|---|---|---|
+| 1920 | **838 px** | 838 |
+| 1512 | **838 px** | 838 |
+| 1280 | **838 px** | 838 |
+| 1024 | 582 px | 582 |
+
+Three independent probes agree at each width (`clientWidth` minus padding, a `width:100%` element
+inserted into the real column, and the measured box of images GitHub already renders), and the column
+is **capped rather than fluid** — identical at 1280, 1512 and 1920.
+
+**The consequence is not the 8 px. It is that the recommended art grid no longer divides.** §E3's
+recommendation was *"design on a 415 × 130 art grid presented in a 830 × 260 viewBox at 2×"*, resting
+entirely on `830 / 415 = 2`. But **`838 / 415 = 2.0193`**, and `838 = 2 × 419` with 419 prime — so the
+only integer scales available at the dominant width are **419 × 131 at 2×** or **838 native at 1×**.
+415 is not among them.
+
+And integer scale was never achievable in general anyway: the column is 582 px at a 1024 viewport
+(`582 / 419 = 1.389`). §E3 already said as much, which is why the **Chunky Pixels Rule** (no feature
+thinner than 2 art px) is the load-bearing mitigation. The honest position: **stop treating integer
+scale as attainable, keep the Chunky Pixels Rule as the real defence, and re-base on 419 only if the
+grid is being re-cut for another reason.** The current 1920-wide art renders at 0.4365× — fractional
+either way, which is exactly why no feature may be 1 art px thin.
+
+This changes none of the beats above: at 0.4365 the sprite cell is 10.5 CSS px instead of 10.4, and
+the legibility ladder is unaffected.
+
+## OPEN — banner height is the operator's call (offered, not decided)
+
+The measurement above lets this be put in real numbers for the first time. There are **two independent
+axes**, and the handed-down framing ran them together:
+
+**Axis 1 — rendered height (the prose-push question).** At 838 px wide, the current 1920 × 600 art
+(3.2:1) renders **838 × 262**. That plus H1 and the badge row is what puts the first sentence of prose
+roughly 400 px down. Reducing it means a *wider aspect ratio*, not a different viewBox size:
+
+| aspect | renders | vs today | cost |
+|---|---|---|---|
+| 3.2:1 (today, 1920 × 600) | 838 × **262** | — | the ~400 px prose push |
+| 4:1 (1920 × 480) | 838 × **210** | −52 px | sky loses ~20% of its height |
+| 5:1 (1920 × 384) | 838 × **168** | −94 px | sky is halved; a letterbox strip |
+
+**Axis 2 — whether the art grid is re-cut so scale is integer.** An `838 × 262` viewBox at 1× (or
+`419 × 131` at 2×) gives integer scale at the dominant width. Note this is a *scale* fix, not a height
+fix — `830 × 260`, as previously framed, renders essentially the same 262 px height as today, so it
+does not by itself address the prose push.
+
+**What it costs to change either.** The sky is where the moon and stars live, and the structural rule
+*"nothing is ever authored above y=340"* is expressed in art units of a 600-tall canvas — y=340 is
+56.7% down, giving 148 CSS px of sky. A shorter canvas compresses that band, so the moon glow radius,
+the starfield's three brightness tiers and the deliberate void behind the wordmark all need re-laying
+out, and the wordmark keep-out is recomputed. It also re-opens every beat's vertical placement.
+**Nothing below y=340 is affected**, so the print lock, the stride lock and clawd's pinned 1.2 scale
+all survive any height change untouched — the cost is confined to the sky.
+
+**Recommendation withheld deliberately: this is an art-direction call on the operator's own page.**
+The engineering note is only that changing height is cheap *now* and expensive after the moon/star
+craft work lands, so it is worth answering before that work starts.
