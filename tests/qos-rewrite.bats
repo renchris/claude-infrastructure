@@ -112,10 +112,23 @@ mktable() {
   [ -z "$output" ]
 }
 
-@test "a leading VAR=value assignment is untouched — a prefix there would exec the assignment" {
+# A DELIBERATE day-one coverage residual, pinned in both directions so that changing it is a
+# conscious decision rather than drift (lead review 2026-07-30). The form is common in this fleet's
+# agent Bash calls, so the residual is real; the reason transform (b) declines is that the prefix is
+# PREPENDED, and `taskpolicy -c background PYTEST_ADDOPTS=-q pytest` execs the assignment and dies.
+# Three halves, because emptiness alone would also pass if the hook did nothing at all:
+#   1. the skip itself                       2. the control: no assignment ⇒ prefixed
+#   3. the ASYMMETRY: transform (a) is unaffected, because it replaces a token in place
+@test "a leading VAR=value assignment skips transform (b) but not transform (a)" {
   run run_hook "PYTEST_ADDOPTS=-q pytest -m load"
   [ "$status" -eq 0 ]
   [ -z "$output" ]
+  run run_hook "pytest -m load"
+  [ "$status" -eq 0 ]
+  [ "$(cmd_of "$output")" = "$NICE -n 19 $TP -c background pytest -m load" ]
+  run run_hook "CC_X=1 timeout 500 /opt/homebrew/bin/bats t.bats"
+  [ "$status" -eq 0 ]
+  [ "$(cmd_of "$output")" = "CC_X=1 timeout 500 $CCBATS t.bats" ]
 }
 
 @test "a command matching nothing produces NO output at all" {
