@@ -539,6 +539,10 @@ def gate(
     """
     a, b = ("0", "1") if on_inside else ("1", "0")
     frames = [f"0%{{opacity:{a}}}"]
+    # pctx, not pct: `fmt` is 2 decimals, so pct() quantises a window edge to 24 ms of the master
+    # period. Measured consequence — pct(31.26) and pct(31.28) both emitted 13.03%, so THE ASK's
+    # third blink rendered 96 ms instead of the declared 120 ms. A 20% shortening of the only thing
+    # alive in six seconds of dead world, produced by the formatter rather than by any decision.
     for w0, w1 in sorted(windows):
         if w1 + GATE_EDGE > P:
             raise SystemExit(
@@ -546,8 +550,8 @@ def gate(
                 f"{GATE_EDGE}s swap edge — the gate would never return to its resting state and the "
                 f"loop would seam"
             )
-        frames.append(f"{pct(w0)}%{{opacity:{a}}}{pct(w0 + GATE_EDGE)}%{{opacity:{b}}}")
-        frames.append(f"{pct(w1)}%{{opacity:{b}}}{pct(w1 + GATE_EDGE)}%{{opacity:{a}}}")
+        frames.append(f"{pctx(w0)}%{{opacity:{a}}}{pctx(w0 + GATE_EDGE)}%{{opacity:{b}}}")
+        frames.append(f"{pctx(w1)}%{{opacity:{b}}}{pctx(w1 + GATE_EDGE)}%{{opacity:{a}}}")
     frames.append(f"100%{{opacity:{a}}}")
     return (
         f"@keyframes {name}{{{''.join(frames)}}}"
@@ -583,6 +587,60 @@ def ask_stop() -> tuple[float, float]:
         )
     off, n, _r = zero[0]
     return (w0 + off * STRIDE, w0 + (off + n) * STRIDE)
+
+
+# THE ASK HAD NO CAUSE AND NO HERALD, and its payoff sat at +0.000 s from its own onset — the one
+# placement §7 forbids outright ("transient at t0, payoff at t0+0.5 to t0+2.0 s. NEVER put the payoff
+# at t0"). Everything about the beat happened in the same instant the world stopped, so there was
+# nothing for the stop to be the CONSEQUENCE of. A world that simply halts with no visible reason is
+# indistinguishable from a render that has died, which is exactly the verdict it drew: "feels buggy
+# being halted."
+#
+# The fix is ordering, not addition. The creature LOOKS UP FIRST and the world stops after — cause on
+# screen, moving before its effect (Michotte's priority), separated by half a second so the eye has
+# time to arrive. The halt stops being something that happens TO the scene and becomes something the
+# creature does, and a halt somebody chose does not read as a crash.
+#
+# It costs nothing: the eyes and ears were already swapping at the stop, so this moves an existing
+# transient rather than authoring a new one. No world rate changes, so there is no debt to repay and
+# the print lock never sees it.
+#
+# It is deliberately NOT applied to the legs. `legsStill` stays derived from `stopped_spans()`,
+# because legs that stop before the ground does is the creature SLIDING — the defect the stride lock
+# exists to kill. The face may anticipate; the feet may not.
+ASK_LEAD = 0.5  # s the stare precedes the stop by — the low end of §7's 0.5-2.0s payoff window
+
+
+def ask_attend() -> tuple[float, float]:
+    """THE ASK's span for the FACE: the stare opens ASK_LEAD before the world stops, and closes with it.
+
+    Derived from `ask_stop()` rather than written beside it, so re-timing the beat carries its own
+    anticipation along instead of leaving an eye that looks up at nothing.
+    """
+    t0, t1 = ask_stop()
+    lead = t0 - ASK_LEAD
+
+    # The lead falls BEFORE the declared window, and that is what a herald is — the first version of
+    # this guard demanded it sit inside, which is a contradiction in terms and it correctly refused
+    # its own beat. What the lead must not do is land on top of another event, so that is what is
+    # checked. It is legal here for a reason the budget already guarantees: EVENT_GAP is 4.0 s of
+    # empty air by construction, so a 0.5 s face movement has eight times the room it needs.
+    #
+    # It also spends none of the budget it sits outside of. The duty budget bounds how much of the
+    # loop has something RARE on canvas; this authors no object, no strip feature and no rate change.
+    # The creature's own face is on canvas for the entire loop either way — all that changes is where
+    # it is pointed.
+    for name in RARE_EVENTS:
+        if name == "rAsk":
+            continue
+        e0, e1 = ev(name)
+        if e0 - GATE_EDGE < t0 and lead < e1 + GATE_EDGE:
+            raise SystemExit(
+                f"gen: THE ASK's stare would open at {lead:.2f}s, inside '{name}' "
+                f"({e0:.2f}-{e1:.2f}s). An anticipation laid over another beat is read as that "
+                f"beat's reaction, not as this one's cause."
+            )
+    return (lead, t1)
 
 
 ASK_BLINK = 0.12  # s — one blink, long enough to register at 838px and too short to read as a shut
@@ -1864,11 +1922,18 @@ def foot_r(art: Art) -> float:
 # CONSTRUCTION rather than by the accident of both being off-canvas.
 GROUND_TRAVEL = STRIP_V * P  # 23040 px — one loop of world travel at the strip rate
 OVERLAP_PRINTS = 12  # the successor's own record: "two walkers' worth", ~12 prints
-BAR_LEN, BAR_W, POST_W, POST_H = 116.0, 7.0, 7.0, 66.0
+# THE SCENE'S OWN LEGIBILITY FLOOR IS ONE SPRITE CELL: CELL * clawd_scale = 24 canvas px, which is
+# 10.5 CSS px at the 838 px README column. The barrier shipped at 7 px — 3.1 CSS px, a THIRD of the
+# floor — and at that width it does not read as a barrier at all: it reads as a scratch on the render,
+# or as a distant flagpole. That is precisely the misread the legibility audit predicted for this beat
+# ("it can read as a rendering glitch rather than as a reversal") and it was never a tuning miss; a
+# feature under the floor of its own scene cannot be tuned into legibility.
+BAR_LEN, BAR_W, POST_W, POST_H = 116.0, 18.0, 18.0, 72.0
 BAR_CLEAR = 36.0  # how far ahead of the leading foot the bar comes down
-BAR_DROP = (
-    30.0  # how far it falls — far enough to cross the leg band, which is 48px tall
-)
+# ...and how far it falls. 30 px was under the >=40 px salient-travel floor as well, so the DROP was
+# as unreadable as the bar. 48 px is the leg band's own height: the bar now crosses the whole of what
+# it is barring, which is also the only height that makes "across the path" true rather than nominal.
+BAR_DROP = 48.0
 # Seconds after the REFUSAL's window opens at which the bar is fully down. It must coincide with the
 # first stalled stride, or the world stops before anything has asked it to.
 BAR_AT = WORLD_MOD["rRefuse"][0][0] * STRIDE
@@ -3032,9 +3097,9 @@ def css(art: Art) -> str:
                 gate("lsf", ".legsStill", stopped_spans()),
                 # The stare and the ears belong to THE ASK only. A refusal is a settle, not a stare:
                 # the creature is trying to end its turn, not waiting on anybody.
-                gate("lgf", ".lookGate", [ask_stop()], on_inside=False),
-                gate("eaf", ".eyesAsk", [ask_stop()]),
-                gate("aaf", ".armsAlert", [ask_stop()]),
+                gate("lgf", ".lookGate", [ask_attend()], on_inside=False),
+                gate("eaf", ".eyesAsk", [ask_attend()]),
+                gate("aaf", ".armsAlert", [ask_attend()]),
                 # ...and the stare BLINKS, three times, inside the gate that shows it. This is the
                 # ONLY thing moving through the dead world, which is the whole job: it separates a
                 # stopped world from a stopped renderer. It costs no world rate, so nothing is owed
@@ -3049,7 +3114,7 @@ def css(art: Art) -> str:
                 gate(
                     "agf",
                     ".armsGate",
-                    [ev("rCheer"), ask_stop()] if cheering else [ask_stop()],
+                    [ev("rCheer"), ask_attend()] if cheering else [ask_attend()],
                     on_inside=False,
                 ),
                 # the barrier: retracted at the post's head, down across the path, retracted again.
