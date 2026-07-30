@@ -1182,3 +1182,56 @@ commands by a base name that has suffixed siblings. Memory: `implicit-team-lifec
 - A property guard names the SUBJECT it protects, not the verb it dislikes — a blanket `rm -f` ban
   convicted the census's own page self-clear; scoping to $ROOT-derived paths with a positive
   control kept conviction power (mem3).
+
+## 11.12 CLOSE vs the frozen DoD (2026-07-30; shas re-resolve from trunk post-land — commit TITLES cited here)
+
+**PROVEN (disk reads, this session):**
+- **M7 + M1-rev (DoD clause 1, the chokepoint):** the Bash-boundary rewrite hook exists with 22/22
+  green + 22/22 RED and a live-probe-verified envelope; the band is `-c utility` fleet-wide
+  (cc-bats, hook prefix, patterns) per the measured 84–89× background tax; the census classifies on
+  clamp constants {4,20} (12-sample float floor 17 documented) with per-tier fields. Suites:
+  qos-rewrite 22 · qos-chokepoint 21 (8/21 RED-B vs the M7 tree, 13 named unchanged-property
+  greens) · census selftest.
+- **M9/M9-ext/M9c (DoD clause 3, memory):** alarm census reads BOTH families as trees (60 vs the
+  incumbent's 35, live), kernel pressure-level rungs + per-proc outlier term armed, NO-DATA rows
+  PARSE (A′ attribution proof: red-pre/green-post at the verbatim bad byte); store-bounds ratchet
+  live-caught both real breaches on its first run (AC20 met by measurement). 30/30 + 23/23 green;
+  RED 12/30 + 22/23 with every pristine-pass named.
+- **M8/M8b (DoD clause 2, render):** render-census with budget verdicts + page (live read 1.76
+  cores = dead-center of the measured band); iTerm2 knob SSOT + parity with the sudo-free Spotlight
+  drift probe (live: 7 UNSET + 1 real DRIFT = the expected pre-activation state). 35/35 green run
+  twice (once demoted under ~90-suite contention); RED 33/35 with both survivors named controls.
+- **M10/M11 (gate):** headroom term (session-attributable, sheddable) + load-immune fire suites —
+  62/62 green, RED 13/24 with the two by-design greens named; recycle exemption preserved.
+- **M4/M5 (leaks/wedges):** watchdog immortality root-caused (bare kill-0 on a recycled pid + the
+  untracked-daemon window) and fixed with pid+lstart + the three-state DST-safe lead_alive;
+  process-table-first census with dual positive controls (live: 8 untracked orphans, kill platter
+  printed, kills nothing); shared osa_bounded + last bare sites converted + the corrected AC22
+  standing grep. 19/19 + 12/12 green; RED 19/19 + 6/12 (6 named tree-independent controls).
+- **M12/M13:** qos-census cadence plist + fleet.manifest truth (capacity-alarm staged→run);
+  waiting-recycle bounded reads (438→24 ms/call, 18×, dual-control RED incl. the naive-bound
+  mutant).
+- **Lifecycle (unplanned, operator-prompted):** §11.10-§11.11 — the implicit-team close gap found,
+  worked around (8 cooperative + 8 forced terminations, fleet 18→3 agent procs / 9.8→2.0 GB),
+  protocol + actuator hierarchy recorded in repo memory.
+
+**IN FLIGHT (autonomous, owner named):** the land itself (this session, via the project /ship
+fast lane, serialized); the banner campaign (separate subsystem, teammate banner-fix, its own
+branch).
+
+**ACCRUING (time-dependent proof + where it will be read):**
+- **AC15 (≥95% coverage)** — needs the M7 hook ACTIVATED (operator: 22-qos-rewrite) + one real
+  burst; read: `~/.claude/logs/qos-census.jsonl` first `runs_in_flight≥2` row post-activation.
+- **AC16/AC17 cadence + parity flip** — after operator activations 23 (census cadence) and 24
+  (knob writes); read: launchctl print + the parity page clearing.
+- **Render-budget effect** — the §11.9 knob magnitudes (~1.0–2.2 cores predicted) are measured
+  claims until 24 runs; read: render-census.jsonl before/after rows.
+- **Orphan-watchdog decay** — the exit-path fix prevents NEW orphans immediately on land (symlinked
+  files); the existing ~8-10 drain only via the operator's plattered kills; read:
+  `bin/cc-reaper --watchdog-census`.
+
+**CEILINGS STATED (never let an unfalsifiable clause hold the session):** AC15's residual after
+activation = env-prefixed non-bats commands (documented skip) + PATH-less contexts — the census is
+the honest meter, ~4× tighter than the old one. AC23 is PARTIAL: the gate term of ambient
+dependence is gone; payload-lint's body-level `timeout 25` wall remains (named, owner row 2/1).
+Session count ceiling (~50, memory-bound) unchanged and alarmed.
