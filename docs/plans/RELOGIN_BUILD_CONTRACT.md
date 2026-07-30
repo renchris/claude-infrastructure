@@ -1,5 +1,6 @@
 ---
-status: in-progress
+status: complete
+landed: 2026-07-26 — Phases 0-4 on origin/main (tip 174a27e0) · re-verified 2026-07-30
 interfaces: FROZEN by lead 2026-07-25 pre-spawn — do not renegotiate mid-build
 spec: docs/research/autonomous-relogin-100pct-design-2026-07-25.md (branch relogin-design2)
 inherits: docs/plans/RELOGIN_AUTOMATION_PLAN.md (branch relogin — the frozen cc-relogin contract)
@@ -13,23 +14,77 @@ internals. **If reality contradicts this doc, STOP and message lead — do not i
 
 ## LANDING STATUS (read this first if you are picking this up)
 
-**Build: COMPLETE. Landing: BLOCKED on fleet conditions, not on this code.**
+**Build: COMPLETE. Landing: DONE — Phases 0-4 are on `origin/main`.**
 
-State as of 2026-07-25 ~21:45: 19 commits on `feat/relogin-build` in
-`/private/tmp/wt-relogin-build`, tree clean, all five teammates delivered/reviewed/merged
-and shut down. **Nothing is on `origin/main` yet** — verify with
-`git cat-file -e origin/main:bin/cc-relogin`.
+Landed 2026-07-26. Branch tip **`174a27e0`** ("test(relogin): re-seed two status cases
+against trunk's derived login countdown") is an **ancestor of `origin/main`**, and the
+content diff over every deliverable path is **empty**. All five teammate branches
+(`feat/relogin-{browser,executor,observability,probes,schedule}`) are **content**-upstream.
+`/private/tmp/wt-relogin-build` is gone — nothing is stranded there.
 
-**To finish — one command, after the box is calm:**
+> Read `git cherry` carefully here: it marks two commits `+` (`3ced668b` executor
+> phase A, `7765814` observability) that ARE fully landed. A `+` means "no upstream
+> commit with this patch-id", and a later phase-B commit touching the same files
+> changes the patch-id of the squashed result. **Patch-id is not a landing oracle for
+> a branch that was built in phases** — the deliverable-path content diff is, and it
+> is empty. Cross-checked independently: `--relogin-status` and `relogin-blocked`
+> both grep positive on trunk, which is `7765814`'s payload.
+
+Re-verify by CONTENT, never by count (this is the check that was run 2026-07-30):
 
 ```bash
-cd /private/tmp/wt-relogin-build
-git fetch origin main && git rebase origin/main
-scripts/ship-land.sh            # ONCE. Do not retry-spam.
+git merge-base --is-ancestor feat/relogin-build origin/main && echo ANCESTOR
+git diff feat/relogin-build origin/main -- \
+  bin/cc-relogin bin/cc-authbrowser bin/cc-relogin-poll bin/claude-accounts \
+  bin/cc-blockers launchd/staged/com.claude.relogin.plist scripts/relogin-probes \
+  tests/cc-relogin.bats tests/cc-authbrowser.bats tests/cc-relogin-poll.bats \
+  tests/cc-relogin-status.bats        # must print nothing
+git cherry -v origin/main feat/relogin-executor   # corroboration ONLY — see the
+                                                  # patch-id caveat above; '+' here
+                                                  # does NOT mean unlanded
 ```
 
-Then **verify by CONTENT, never by count**: every changed path present on trunk
-(`git ls-tree`) *and* `git diff <your-sha> origin/main -- <paths>` empty.
+> ⚠️ **This section previously read "Landing: BLOCKED … nothing is on `origin/main` yet"
+> and shipped a `cd /private/tmp/wt-relogin-build && ship-land.sh` recipe.** That was true
+> on 2026-07-25 and false from 2026-07-26 onward; the worktree it names no longer exists.
+> A stale landing verdict is worse than no verdict — the next reader either re-lands
+> already-landed work or mis-diagnoses the subsystem as unbuilt. **When a landing
+> completes, the status line is part of the landing.**
+
+**Runtime evidence the landed code actually works** (live logs, 2026-07-30):
+
+- §4 precondition gate refuses correctly rather than authenticating:
+  `next refused exit=2 phase=gate :: no re-auth needed — healthy (auth=ok, login_expires_h=88.7)`
+- §2 honest degradation fires instead of a confident wrong "OK":
+  `WINDOW-CAPPED --window-h unsupported … this verdict does NOT cover T-7d` — since fixed
+  by `434a391e` (M2); `--window-h` is supported on trunk and in the live layer today.
+- All five bins (`cc-relogin`, `cc-relogin-poll`, `cc-authbrowser`, `claude-accounts`,
+  `cc-blockers`) are symlinks into the checkout and content-match trunk — no deploy lag.
+
+**Cadence is live** (C10 activation was done by the operator on 2026-07-30 via
+`pending-activation/21-relogin-poll-activate.sh`; Phases 0-4 only ever **stage** the
+plist per §0/§5 — loading it was never in this contract's scope). `com.claude.relogin`
+is loaded and `enabled`, and a tick was caught live at `2026-07-30T16:31:29Z` doing
+exactly the frozen thing:
+
+```
+SKIP next k=3 (>0) — cc-relogin would refuse; deadline=2026-08-02T21:19:15Z T-76h attempts=0
+```
+
+That single line confirms four §5 clauses at once against the real daemon: the k>0
+cheap pre-filter, nearest-deadline selection, `attempts`-not-successes counting, and
+the T−7d window being live (T−76h is inside it).
+
+> ⚠️ **Near-miss worth keeping — an inert-daemon alarm that was WRONG.** A first pass
+> read `launchctl print` as `runs = 0`, `last exit code = (never exited)`, with no
+> launchd out/err logs, and was one step from filing "loaded but never fires". It had
+> simply been sampled mid-interval. What broke the tie was a **positive control on a
+> sibling job** — `com.chrisren.cc-reaper` showed `runs = 7` over the same ~7.2 h
+> window, proving the *measurement* worked — and then catching the live tick. **A
+> zero-count on a slow-cadence daemon is not evidence of death; sample it twice and
+> control it against a known-live sibling before alarming.** (Open, minor, and
+> downstream of this contract: relogin showed 1 run to cc-reaper's 7 on the same
+> `StartInterval 3600` — cadence-lag worth a look, NOT inertness.)
 
 **Landing history — three attempts, three different causes (all diagnosed):**
 
