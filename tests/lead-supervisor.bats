@@ -31,9 +31,16 @@ setup() {
   [ "$status" -eq 0 ]
   # the summary line is the un-fakeable outcome: "N passed, 0 failed"
   echo "$output" | grep -qE 'supervisor-e2e: [0-9]+ passed, 0 failed'
-  # guard against a zero-check 'pass' (a suite that silently runs nothing must not read green)
+  # guard against a zero-check 'pass' (a suite that silently runs nothing must not read green).
+  # RATCHET: raised 36 → 74 with T30 (bounded externals). The floor is the whole point — a refactor that
+  # silently drops checks must fail here rather than read green on a shrunken suite.
+  # T30's 9 checks need a real timeout(1); where the box has none it SKIPs wholesale, so the floor drops
+  # to 65 for that case only. Deriving the floor from the skip line (rather than pinning the lower number
+  # everywhere) keeps the ratchet at full strength on every box that can actually run the checks.
+  floor=74
+  if echo "$output" | grep -q 'SKIP T30'; then floor=65; fi
   n_pass="$(echo "$output" | sed -nE 's/.*supervisor-e2e: ([0-9]+) passed.*/\1/p')"
-  [ "${n_pass:-0}" -ge 36 ]
+  [ "${n_pass:-0}" -ge "$floor" ]
 }
 
 @test "clean-completion reap + stranded-death page are both exercised (item 9b183d78c723)" {
@@ -72,4 +79,24 @@ setup() {
   echo "$output" | grep -q 'refused send leaves NO damping marker'
   echo "$output" | grep -q 'refused send is IDL-recorded'
   echo "$output" | grep -q 'refused page RETRIED on the next sweep'
+}
+
+@test "T30: a hung external fork does not end supervision — bounded git/find + the INDETERMINATE third state" {
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'T30 BOUNDED EXTERNALS'
+  # A SKIP is legitimate only where the box genuinely has no timeout(1) (the subject then degrades to
+  # unbounded BY DESIGN). Anywhere else the assertions below must have actually run — a silently-skipped
+  # T30 would read green while proving nothing, so the skip line is accepted only in place of the rest.
+  if echo "$output" | grep -q 'SKIP T30'; then skip "no timeout(1) on this box — subject is unbounded by design"; fi
+  # the S1 itself: the sweep completes, and its S-4 heartbeat proves it completed rather than died quiet
+  echo "$output" | grep -q 'sweep COMPLETES with a hung git'
+  echo "$output" | grep -q 'S-4 heartbeat still written despite the hung git'
+  echo "$output" | grep -q 'sweep COMPLETES with a hung find'
+  # a cut probe is neither fresh nor dark: no escalation, no laundering, and a durable non-verdict record
+  echo "$output" | grep -q 'records the INDETERMINATE non-verdict'
+  echo "$output" | grep -q 'cut re-read does NOT escalate'
+  echo "$output" | grep -q 'not laundered as fresh'
+  # an unprovable landed-check must never reap, and a MISSING timeout(1) must not break the call
+  echo "$output" | grep -q 'no false clean-completion reap'
+  echo "$output" | grep -q 'run UNBOUNDED, not broken'
 }
