@@ -243,7 +243,7 @@ Each criterion names the exact command whose output proves it. Narration does no
 
 | # | Criterion | Proving read | Baseline |
 |---|---|---|---|
-| **AC1** ⛔ **CLOSED AT ~70% — see §9.4 + §9.6 (option A REJECTED 3/3)** | ≥95% of bats **procs** at `pri≤10` during a burst | `scripts/qos-census.sh` → `coverage_proc_pct` | **21.1% → 50.0%** measured; ~30% of invocations are structurally unreachable by a PATH shim |
+| **AC1** ✅ **MET (100%) — see §9.7; the ~70% ceiling was a contaminated instrument, now retracted** | ≥95% of bats **procs** at `pri≤10` during a burst | `scripts/qos-census.sh` → `coverage_proc_pct` | **21.1% → 50.0%** measured; ~30% of invocations are structurally unreachable by a PATH shim |
 | **AC1-b** | `coverage_cpu_pct` reported alongside, as the impact metric — **not** the gate | same JSON row → `coverage_cpu_pct`, `gate_on` | 0% |
 | **AC2** | 0 top-level bats invocations at `pri=31` | `ps -eo pri,args \| grep -E 'bats( \|$)' \| awk '$1==31'` → empty | **72 procs** |
 | **AC3** | The shim covers the hand-typed form | `cd <worktree> && timeout 5 bats --version` then census the child's `pri` → `≤10` | n/a (no shim) |
@@ -739,6 +739,70 @@ rejected on evidence. Option B (a Bash `PreToolUse` admission term) remains avai
 row 6 and would add per-tool-call fork cost to the chain this row measured as the O(N^2) term — which
 is self-defeating for this row's own goal. What shipped removes the largest single uncovered class
 (the hand-typed `bats tests/…` form `CLAUDE.md` itself instructs) at O(1) cost and zero caller effort.
+
+## 9.7 ⛔ AC1 IS **MET** — the ~70% ceiling was a CONTAMINATED INSTRUMENT, not a real gap
+
+A completeness critic re-derived §9.4's population and found the census denominator polluted. This
+retracts §9.4 and §9.6's coverage arithmetic. The census counted ANY process whose argv contained
+"bats"; measured live that was 157 rows of which only 114 were real bats processes:
+
+| class | rows | of which `pri=31` |
+|---|---|---|
+| **real bats internals** | **114** | **0** |
+| `timeout` wrappers | 6 | 6 |
+| shell `-c` lines | 17 | 17 |
+| claude sessions | 19 | 18 |
+
+**Every single `pri=31` row was pollution.** A `timeout 800 bats …` wrapper legitimately sits at
+`pri=31` while every bats child it spawned is at `pri=4` — reproduced on three live wrappers — so it
+manufactures exactly the "uncovered" signal this tool exists to detect.
+
+**Re-derived with a clean denominator:**
+
+| instrument | reading |
+|---|---|
+| contaminated | 112/153 = **73.2% FAIL** ← this is where "~70% ceiling" came from |
+| clean | **92/92 = 100.0% PASS** |
+| clean + one deliberately-undemoted run | 90/96 = 93.8% **FAIL** (still detects real undemotion) |
+
+**Consequences, stated plainly:**
+- **AC1 (≥95%) is MET.** It was never ceilinged; the ceiling was an artifact.
+- **§9.4's "~6 absolute vs ~14 PATH ⇒ ~30% structurally uncovered" is FALSIFIED.** Its sole evidence
+  — `timeout 90 /opt/homebrew/bin/bats tests/handoff-fire-validate.bats` — is a *wrapper* argv,
+  which reads `pri=31` even when the run beneath it is fully covered.
+- **The shadow-mode rejection (§9.6) STANDS and is now doubly right.** It rested on the measured
+  fork-storm, which is independent of coverage — and there was never a coverage gap to justify the
+  risk in the first place.
+- The three historical rows in `qos-census.jsonl` carry the polluted denominator and must not be
+  compared against post-fix rows. `QOS_CENSUS_STRICT=off` reproduces the old behaviour for exactly
+  that comparison, never for a verdict.
+
+**The fix, and a defect inside the fix.** The first correction excluded rows containing `timeout `,
+`<shell> -c ` or `claude` — and that was **worse than the contamination**: this repo's own primary
+checkout is `/Users/chrisren/Development/claude-infrastructure`, so `grep -v claude` deleted GENUINE
+bats rows whose test path merely contained the word. Measured against one live run: **strict saw 0
+rows, permissive saw 5 — and all 5 were real bats processes at `pri=31`**, i.e. precisely the
+undemoted population the census exists to find. A census reporting 100% with a whole undemoted run in
+front of it is worse than one that over-counts.
+
+The shipped discriminator is therefore **positional, not a blacklist**: bats execs its internals as
+`bash <…>/libexec/bats-core/bats-exec-*`, so the libexec path must occupy argv field 5 or 6
+(`ps -eo pid,nice,pri,%cpu,args`). That admits every real bats process regardless of what its test
+paths are called, and rejects the wrapper classes by construction — no word can become collateral
+damage. Verified both ways: a `claude`-pathed run is now counted (73/73 = 100% PASS), and 36
+wrapper/shell/session rows are still dropped, **28 of which were at `pri=31`**.
+
+**Also fixed:** the census's self-band read raced its own `taskpolicy` exec, transiently reading
+`pri=31` and producing a spurious `SIGNAL-DEAD` (~1 run in 5 inside a suite, 0 in 11 direct
+invocations). Now sampled three times with any-demoted-wins — biased toward the honest
+`AMBIENT-DEMOTED` degradation, never toward a false signal-death. **0 failures in 6 runs.**
+
+**The lesson, which this row had already written down and then repeated.** §1.1 and §10 both record
+a path-substring classifier miscounting sessions as hooks. The census made the same mistake in a
+different file, in the same session, and *then the first fix made it again in the opposite
+direction*. Substring presence in an argv is not evidence that a process IS the thing. Anchor on
+structure — a field position, an executable path — and positive-control the DENOMINATOR, not only
+the classifier.
 
 ## 10. Learnings (accumulate; never delete)
 

@@ -480,3 +480,312 @@ _fake_bats() {
 
 # (seed helpers _cellar_bats / _seed / _fake_bats are defined above (xvi), ahead of their callers —
 #  see the SC2218 note there.)
+
+# ── DENOMINATOR PURITY: "argv contains bats" is not "this process IS bats" ─────────────────────
+# Added 2026-07-30 with the strict-matching fix (scripts/qos-census.sh § DENOMINATOR PURITY). The
+# first census counted ANY process whose argv contained the pattern. Measured live, that denominator
+# was 157 rows of which only 114 were real bats: 6 `timeout` wrappers, 17 `<shell> -c` lines and 19
+# claude sessions made up the rest — and EVERY pri=31 row in the population was one of those three
+# classes. The `timeout 800 bats …` wrapper is the worst of them: it legitimately sits at pri=31
+# while every bats child it spawned is at pri=4 (reproduced on 3 live wrappers), so it MANUFACTURES
+# exactly the uncovered signal this tool exists to detect. Contaminated census: 73.2%. Clean: 100%.
+# Same failure class as memory `detector-matching-its-own-skill-description` — text in an argv is
+# never evidence that the process IS the thing.
+#
+# HOW THESE TESTS ARE DETERMINISTIC ON A SHARED BOX. The census reads the LIVE process table, and
+# this machine runs other sessions' gates continuously (loadavg 47.1 while these were written, 73
+# real bats procs in flight), so any absolute count against the default `bats` pattern is
+# non-deterministic by construction. Each test below therefore spawns REAL processes carrying a
+# token unique to that test and points QOS_CENSUS_PATTERN at it, which narrows the population to
+# exactly this test's own processes. The probe path ALSO carries `bats-core/bats-exec-test`, because
+# strict mode's positive discriminator is bats' own libexec path — without that half a probe would
+# be excluded for the WRONG REASON and every exclusion test would pass vacuously against a census
+# that had simply seen nothing.
+#
+# Every exclusion below is paired with a positive control measuring the SAME LIVE PROCESS under
+# QOS_CENSUS_STRICT=off. That pairing is the point of the row: the bug being fixed was itself an
+# unpoliced denominator, and "excluded" is indistinguishable from "saw nothing" without it.
+#
+# Helpers precede their callers (SC2218, as above). Probes are self-limiting (`timeout`/`sleep`
+# bounded) AND swept with `pkill -f <token>` before any assertion runs, so a failing assertion can
+# never strand a process on a box other sessions are using.
+
+# _json_field <key> <json-line> — the numeric value of one census JSON field ("" when absent).
+_json_field() {
+  printf '%s' "$2" | sed -n "s/.*\"$1\":\([0-9.]*\).*/\1/p"
+}
+
+# _qos_probe_bin <token> — a sleep-shaped stand-in at a path that satisfies BOTH filters.
+# The path carries the unique token (so QOS_CENSUS_PATTERN selects only this test's processes) and
+# `bats-core/bats-exec-test` (so strict mode's positive discriminator accepts it). Only then is an
+# exclusion attributable to the exclusion rule under test.
+_qos_probe_bin() {
+  local d="$TMP/$1/libexec/bats-core"
+  mkdir -p "$d"
+  ln -sf /bin/sleep "$d/bats-exec-test"
+  printf '%s' "$d/bats-exec-test"
+}
+
+# _qos_probe_rows <token> — live ps rows carrying <token>. The bracket trick on the token's first
+# character keeps this function's OWN grep out of the snapshot, the same way the census does it.
+_qos_probe_rows() {
+  # shellcheck disable=SC2009  # ps|grep is REQUIRED for the same reason it is in the census: the
+  # subject is the FULL args line, which `ps -o comm=` truncates at 16 chars and pgrep never sees at
+  # all. A probe wait that read a different surface from the thing under test would not be a wait.
+  ps -eo pid,nice,pri,args 2>/dev/null | grep -E "[${1%"${1#?}"}]${1#?}"
+}
+
+# _qos_wait_rows <token> <n> — bounded (<=20s) wait until >=n live rows carry <token>.
+# A fixed sleep is a coin flip at loadavg 47; the bound turns a slow spawn into a named failure
+# instead of an intermittent one.
+_qos_wait_rows() {
+  local tok="$1" want="$2" i=0 n=0
+  while [ "$i" -lt 20 ]; do
+    n=$(_qos_probe_rows "$tok" | grep -c . || true)
+    if [ "$n" -ge "$want" ]; then return 0; fi
+    /bin/sleep 1
+    i=$((i + 1))
+  done
+  return 1
+}
+
+# _qos_wait_runs <token> <n> — bounded (<=30s) wait until >=n DISTINCT bats-run-* ids appear among
+# the token's rows. Not the same wait as _qos_wait_rows: runs_in_flight is what lifts the census off
+# NO-BURST, and bats stamps its run tmpdir only on bats-exec-file's argv, which appears later than
+# the first process of a run.
+_qos_wait_runs() {
+  local tok="$1" want="$2" i=0 n=0
+  while [ "$i" -lt 30 ]; do
+    n=$(_qos_probe_rows "$tok" | grep -oE 'bats-run-[A-Za-z0-9]+' | sort -u | grep -c . || true)
+    if [ "$n" -ge "$want" ]; then return 0; fi
+    /bin/sleep 1
+    i=$((i + 1))
+  done
+  return 1
+}
+
+@test "(xxviii) a timeout(1) WRAPPER is EXCLUDED from the census population (strict)" {
+  # The contaminant that made the tool lie. timeout(1) FORKS (measured: it does not exec), so this
+  # is two live rows — the wrapper and its child — at a path both filters accept. Strict must keep
+  # the child and drop the wrapper, so the honest population size is 1, not 2.
+  local tok="qoscensus$$w$RANDOM$RANDOM"
+  local probe
+  probe=$(_qos_probe_bin "$tok")
+  timeout 30 "$probe" 25 >/dev/null 2>&1 &
+  local wpid=$!
+  local spawned=0
+  if _qos_wait_rows "$tok" 2; then spawned=1; fi
+  run timeout 40 env QOS_CENSUS_PATTERN="$tok" QOS_CENSUS_NO_CONTROL=1 \
+      QOS_CENSUS_LOG="$TMP/census-xxviii.jsonl" /bin/bash "$CENSUS" --json --no-append
+  local st="$status" out="$output"
+  kill "$wpid" 2>/dev/null || true
+  pkill -f "$tok" >/dev/null 2>&1 || true
+  wait "$wpid" 2>/dev/null || true
+  [ "$spawned" -eq 1 ] || false                          # the fixture really was in flight
+  [ "$st" -ne 124 ] || false                             # a hang is a failure, not a slow pass
+  [ "$st" -ne 127 ] || false                             # 127 = never executed; not "excluded"
+  [ ! -f "$TMP/census-xxviii.jsonl" ] || false           # --no-append held; no durable write
+  local total
+  total=$(_json_field procs_total "$out")
+  [ -n "$total" ] || false
+  [ "$total" -eq 1 ] || false                            # the child, and ONLY the child
+}
+
+@test "(xxix) POSITIVE CONTROL for (xxviii): the SAME wrapper IS counted with STRICT=off" {
+  # Two censuses over ONE live process pair, so the difference can only be the strict filter. Without
+  # this, (xxviii)'s "1" is indistinguishable from a census that never saw the wrapper at all — the
+  # absence-without-existence-evidence failure this repo keeps re-learning.
+  local tok="qoscensus$$c$RANDOM$RANDOM"
+  local probe
+  probe=$(_qos_probe_bin "$tok")
+  timeout 30 "$probe" 25 >/dev/null 2>&1 &
+  local wpid=$!
+  local spawned=0
+  if _qos_wait_rows "$tok" 2; then spawned=1; fi
+  run timeout 40 env QOS_CENSUS_PATTERN="$tok" QOS_CENSUS_NO_CONTROL=1 \
+      QOS_CENSUS_LOG="$TMP/census-xxix-s.jsonl" /bin/bash "$CENSUS" --json --no-append
+  local s_st="$status" s_out="$output"
+  run timeout 40 env QOS_CENSUS_STRICT=off QOS_CENSUS_PATTERN="$tok" QOS_CENSUS_NO_CONTROL=1 \
+      QOS_CENSUS_LOG="$TMP/census-xxix-p.jsonl" /bin/bash "$CENSUS" --json --no-append
+  local p_st="$status" p_out="$output"
+  kill "$wpid" 2>/dev/null || true
+  pkill -f "$tok" >/dev/null 2>&1 || true
+  wait "$wpid" 2>/dev/null || true
+  [ "$spawned" -eq 1 ] || false
+  [ "$s_st" -ne 124 ] || false
+  [ "$p_st" -ne 124 ] || false
+  [ "$s_st" -ne 127 ] || false
+  [ "$p_st" -ne 127 ] || false
+  local s_total p_total
+  s_total=$(_json_field procs_total "$s_out")
+  p_total=$(_json_field procs_total "$p_out")
+  [ -n "$s_total" ] || false
+  [ -n "$p_total" ] || false
+  [ "$p_total" -eq 2 ] || false                          # permissive sees wrapper AND child
+  [ "$s_total" -eq 1 ] || false                          # strict sees only the child
+  [ "$p_total" -gt "$s_total" ] || false                 # the delta IS the wrapper
+}
+
+@test "(xxx) a '<shell> -c' command line is EXCLUDED from the census population (strict)" {
+  # 17 of the 157 contaminated rows were shell -c lines, all at pri=31. A shell whose ARGUMENT
+  # mentions a bats path is not a bats process; counting it charges the actuator for a proc it was
+  # never asked to demote.
+  local tok="qoscensus$$s$RANDOM$RANDOM"
+  local probe
+  probe=$(_qos_probe_bin "$tok")
+  # Two statements, so bash cannot exec-optimise itself away and the `bash -c` row really persists.
+  /bin/bash -c "/bin/sleep 25; : $probe" >/dev/null 2>&1 &
+  local bpid=$!
+  local spawned=0
+  if _qos_wait_rows "$tok" 1; then spawned=1; fi
+  run timeout 40 env QOS_CENSUS_PATTERN="$tok" QOS_CENSUS_NO_CONTROL=1 \
+      QOS_CENSUS_LOG="$TMP/census-xxx.jsonl" /bin/bash "$CENSUS" --json --no-append
+  local st="$status" out="$output"
+  kill "$bpid" 2>/dev/null || true
+  pkill -f "$tok" >/dev/null 2>&1 || true
+  wait "$bpid" 2>/dev/null || true
+  [ "$spawned" -eq 1 ] || false
+  [ "$st" -ne 124 ] || false
+  [ "$st" -ne 127 ] || false
+  local total
+  total=$(_json_field procs_total "$out")
+  [ -n "$total" ] || false
+  [ "$total" -eq 0 ] || false
+}
+
+@test "(xxxi) POSITIVE CONTROL for (xxx): the SAME shell line IS counted with STRICT=off" {
+  # (xxx) asserts a ZERO — the most vacuity-prone shape there is. This measures the same live line
+  # under both settings so the zero is provably an exclusion and not an empty snapshot.
+  local tok="qoscensus$$t$RANDOM$RANDOM"
+  local probe
+  probe=$(_qos_probe_bin "$tok")
+  /bin/bash -c "/bin/sleep 25; : $probe" >/dev/null 2>&1 &
+  local bpid=$!
+  local spawned=0
+  if _qos_wait_rows "$tok" 1; then spawned=1; fi
+  run timeout 40 env QOS_CENSUS_PATTERN="$tok" QOS_CENSUS_NO_CONTROL=1 \
+      QOS_CENSUS_LOG="$TMP/census-xxxi-s.jsonl" /bin/bash "$CENSUS" --json --no-append
+  local s_st="$status" s_out="$output"
+  run timeout 40 env QOS_CENSUS_STRICT=off QOS_CENSUS_PATTERN="$tok" QOS_CENSUS_NO_CONTROL=1 \
+      QOS_CENSUS_LOG="$TMP/census-xxxi-p.jsonl" /bin/bash "$CENSUS" --json --no-append
+  local p_st="$status" p_out="$output"
+  kill "$bpid" 2>/dev/null || true
+  pkill -f "$tok" >/dev/null 2>&1 || true
+  wait "$bpid" 2>/dev/null || true
+  [ "$spawned" -eq 1 ] || false
+  [ "$s_st" -ne 124 ] || false
+  [ "$p_st" -ne 124 ] || false
+  [ "$s_st" -ne 127 ] || false
+  [ "$p_st" -ne 127 ] || false
+  local s_total p_total
+  s_total=$(_json_field procs_total "$s_out")
+  p_total=$(_json_field procs_total "$p_out")
+  [ -n "$s_total" ] || false
+  [ -n "$p_total" ] || false
+  [ "$p_total" -ge 1 ] || false                          # the shell line IS visible to the census
+  [ "$s_total" -eq 0 ] || false                          # and strict is what removes it
+  [ "$p_total" -gt "$s_total" ] || false
+}
+
+@test "(xxxii) the census still COUNTS a genuine bats run" {
+  # The other half of a purity fix, and the one a narrowing change breaks silently: a filter tight
+  # enough to drop the wrapper must not also drop the population it exists to measure. A census that
+  # counts nothing reports 100% coverage forever (the NO-BURST/signal-death shape row 13 was built
+  # around), so "excluded the junk" is only half a verdict.
+  local real
+  real=$(_cellar_bats)
+  if [ -z "$real" ]; then skip "no real bats binary on this host to run"; fi
+  local tok="qoscensus$$r$RANDOM$RANDOM"
+  mkdir -p "$TMP/$tok"
+  # Corpus under BATS_TEST_TMPDIR: the token lands in every bats child's argv via the file path, and
+  # the path contains no 'claude' substring the census would (correctly) exclude.
+  cat > "$TMP/$tok/slow.bats" <<'EOF'
+@test "occupies the scheduler long enough to be sampled" {
+  /bin/sleep 12
+}
+EOF
+  "$real" "$TMP/$tok/slow.bats" >/dev/null 2>&1 &
+  local rpid=$!
+  local spawned=0
+  if _qos_wait_rows "$tok" 2; then spawned=1; fi
+  run timeout 40 env QOS_CENSUS_PATTERN="$tok" QOS_CENSUS_NO_CONTROL=1 \
+      QOS_CENSUS_LOG="$TMP/census-xxxii-s.jsonl" /bin/bash "$CENSUS" --json --no-append
+  local s_st="$status" s_out="$output"
+  run timeout 40 env QOS_CENSUS_STRICT=off QOS_CENSUS_PATTERN="$tok" QOS_CENSUS_NO_CONTROL=1 \
+      QOS_CENSUS_LOG="$TMP/census-xxxii-p.jsonl" /bin/bash "$CENSUS" --json --no-append
+  local p_st="$status" p_out="$output"
+  kill "$rpid" 2>/dev/null || true
+  pkill -f "$tok" >/dev/null 2>&1 || true
+  wait "$rpid" 2>/dev/null || true
+  [ "$spawned" -eq 1 ] || false
+  [ "$s_st" -ne 124 ] || false
+  [ "$s_st" -ne 127 ] || false
+  local s_total p_total
+  s_total=$(_json_field procs_total "$s_out")
+  p_total=$(_json_field procs_total "$p_out")
+  [ -n "$s_total" ] || false
+  [ "$s_total" -ge 1 ] || false                          # the real population survives the filter
+  # Strict is a SUBSET of permissive by construction; a strict count above it would mean the filter
+  # invented rows. Asserted relatively, never as a total, because the box is shared.
+  [ "$p_st" -ne 124 ] || false
+  [ -n "$p_total" ] || false
+  [ "$p_total" -ge "$s_total" ] || false
+}
+
+@test "(xxxiii) the verdict can still go FAIL when genuinely undemoted runs are present" {
+  # The fix must not have bought its 100% by making failure unreachable. Two REAL bats runs spawned
+  # WITHOUT the demotion path put a full-priority population in front of a strict census; coverage
+  # must fall below threshold and the verdict must be FAIL (rc 1), not PASS and not NO-BURST.
+  #
+  # SAME ONE-WAY-RATCHET CONSTRAINT AS (v): a child of a demoted process inherits pri=4 and cannot be
+  # lifted, so an undemoted population is UNCONSTRUCTIBLE from a demoted caller. Rather than ship a
+  # test that flips with how the suite was invoked, this states the precondition and skips — a bound
+  # that cannot be met from here can only convict falsely.
+  local own
+  own=$(ps -p $$ -o pri= 2>/dev/null | tr -d ' ')
+  if [ -n "$own" ] && [ "$own" -le 10 ]; then
+    skip "suite is itself in the background band (pri=$own); an undemoted population is unconstructible from here — see (v)/(xv)"
+  fi
+  local real
+  real=$(_cellar_bats)
+  if [ -z "$real" ]; then skip "no real bats binary on this host to run"; fi
+  local tok="qoscensus$$f$RANDOM$RANDOM"
+  mkdir -p "$TMP/$tok"
+  cat > "$TMP/$tok/slow.bats" <<'EOF'
+@test "occupies the scheduler long enough to be sampled" {
+  /bin/sleep 14
+}
+EOF
+  # CC_BATS_QOS=off is belt-and-braces: $real is a Cellar binary, never the shim, but if that ever
+  # changed the seam keeps the population undemoted rather than turning this into a silent PASS.
+  CC_BATS_QOS=off "$real" "$TMP/$tok/slow.bats" >/dev/null 2>&1 &
+  local r1=$!
+  CC_BATS_QOS=off "$real" "$TMP/$tok/slow.bats" >/dev/null 2>&1 &
+  local r2=$!
+  # Wait for three distinct bats-run ids: the two spawned runs' own tmpdirs plus this suite's, which
+  # the corpus path sits inside. The verdict needs >=2 and the two spawned runs alone supply that.
+  local burst=0
+  if _qos_wait_runs "$tok" 3; then burst=1; fi
+  run timeout 40 env QOS_CENSUS_PATTERN="$tok" QOS_CENSUS_NO_CONTROL=1 \
+      QOS_CENSUS_LOG="$TMP/census-xxxiii.jsonl" /bin/bash "$CENSUS" --json --no-append
+  local st="$status" out="$output"
+  kill "$r1" "$r2" 2>/dev/null || true
+  pkill -f "$tok" >/dev/null 2>&1 || true
+  wait "$r1" 2>/dev/null || true
+  wait "$r2" 2>/dev/null || true
+  [ "$burst" -eq 1 ] || false                            # a real burst was in flight
+  [ "$st" -ne 124 ] || false
+  [ "$st" -ne 127 ] || false
+  local total runs
+  total=$(_json_field procs_total "$out")
+  runs=$(_json_field runs_in_flight "$out")
+  [ -n "$total" ] || false
+  [ "$total" -ge 1 ] || false                            # non-vacuity: something was counted
+  [ -n "$runs" ] || false
+  [ "$runs" -ge 2 ] || false                             # and it cleared the NO-BURST gate
+  local below
+  below=$(awk -v c="$(_json_field coverage_proc_pct "$out")" -v t=95 'BEGIN{print (c+0 < t+0) ? 1 : 0}')
+  [ "$below" = "1" ] || false                            # coverage really did drop
+  [[ "$out" =~ \"verdict\":\"FAIL\" ]] || false
+  [ "$st" -eq 1 ] || false
+}
