@@ -402,3 +402,68 @@ PY
   [ -f "$STATE/parked/aaaa000p-1111-2222-3333-444444444444.json" ]    # the real kill was still seen
   grep -q "PARKED aaaa000p" "$STATE/poller.log"
 }
+
+# ── LR-q..LR-s: parked-record fields are DATA, never code (sec fix 2026-07-30) ───────────
+# Codex-security finding 1 (medium): §2 read the parked record with `eval "$(python3 … json.dumps …)"`
+# and built the resume launcher with `printf '"%s"'`. Neither is shell quoting: json.dumps escapes
+# `"` and `\` but NOT `$`/backtick, and a %s inside literal double quotes in GENERATED bash source
+# re-expands when that source runs. `cwd` is a directory NAME, and `proj$(…)` is a legal one — and a
+# record carrying it is valid JSON, so it passes the §1 writer unmangled. The daemon is LOADED
+# (com.reso.lr-reset-poller), so the payload ran unattended, every ~10 min.
+#
+# The payload is `touch <canary>`: it needs NO quote character, which is the whole point — a `"`
+# would have made the record malformed JSON and been skipped. Canary absent = the field stayed data.
+# Proven RED against the pre-fix poller (both sites fire their canary) before being recorded green.
+PAYLOAD_CWD() { printf '%s/proj$(touch %s)' "$CWD" "$1"; }
+
+@test "LR-q: parked-record cwd carrying \$(…) is DATA — the reader never executes it" {
+  local canary="$BATS_TEST_TMPDIR/PWNED-q" pay; pay="$(PAYLOAD_CWD "$canary")"
+  mk_parked "aaaa000q-1111-2222-3333-444444444444" "$(past_iso)" "$pay"
+  # the record must be VALID JSON — otherwise this proves only that malformed input is skipped
+  run jq -e -r '.cwd' "$STATE/parked/aaaa000q-1111-2222-3333-444444444444.json"
+  [ "$status" -eq 0 ]
+  [ "$output" = "$pay" ]
+  LR_POLLER_AUTOFIRE=1 run bash "$POLLER" --once
+  [ "$status" -eq 0 ]
+  [ ! -e "$canary" ]                                  # ← the finding: pre-fix this file EXISTS
+}
+
+@test "LR-r: a malformed/unreadable parked record is SKIPPED, never half-assigned" {
+  # Fail-closed leg of the same fix: the eval it replaced would assign whatever fields parsed and
+  # carry stale loop values for the rest. A short read must abandon the record, not proceed.
+  printf '{"sid":"aaaa000r","acct":"next4",NOT-JSON\n' > "$STATE/parked/aaaa000r-1111-2222-3333-444444444444.json"
+  LR_POLLER_AUTOFIRE=1 run bash "$POLLER" --once
+  [ "$status" -eq 0 ]
+  grep -q "SKIP  aaaa000r" "$STATE/poller.log"
+  [ ! -e "$LR_POLLER_LAUNCH_DIR/lr-poller-launch-aaaa000r.sh" ]      # nothing was fired off it
+}
+
+@test "LR-s: the generated launcher passes cwd VERBATIM as one argv element (no re-expansion)" {
+  # The launcher is bash SOURCE that runs later, so quoting there is a second, independent site.
+  # Executing it is the only assertion that can actually fail — a content grep would pass
+  # vacuously. The poller is run from a byte-identical `cp -R` of the real directory so that
+  # $LR/lr-fire-resume.sh resolves to a recorder instead of really spawning a session; the
+  # artifact under test is unmodified (memory: control-must-replay-the-real-artifact).
+  local lrcopy="$BATS_TEST_TMPDIR/lr" canary="$BATS_TEST_TMPDIR/PWNED-s" pay
+  cp -R "$REPO/scripts/limit-recover" "$lrcopy"
+  cat > "$lrcopy/lr-fire-resume.sh" <<'STUB'
+#!/bin/bash
+printf '%s\n' "$@" > "${FIRE_ARGV:?}"          # one line per argv element — a split is visible
+STUB
+  chmod +x "$lrcopy/lr-fire-resume.sh"
+  pay="$(PAYLOAD_CWD "$canary")"
+  mk_parked "aaaa000s-1111-2222-3333-444444444444" "$(past_iso)" "$pay"
+  LR_POLLER_AUTOFIRE=1 run bash "$lrcopy/lr-reset-poller.sh" --once
+  [ "$status" -eq 0 ]
+  local launcher="$LR_POLLER_LAUNCH_DIR/lr-poller-launch-aaaa000s.sh"
+  [ -x "$launcher" ]
+  export FIRE_ARGV="$BATS_TEST_TMPDIR/fire-argv.txt"
+  run bash "$launcher"                              # ← expansion happens HERE, before exec
+  [ "$status" -eq 0 ]
+  [ ! -e "$canary" ]                                # pre-fix: the substitution fired
+  # argv = acct, cwd, sid, --prompt, /limit-recover → cwd is line 2, intact and unsplit
+  run sed -n '2p' "$FIRE_ARGV"
+  [ "$output" = "$pay" ]
+  run wc -l < "$FIRE_ARGV"
+  [ "$(echo "$output" | tr -d ' ')" = 5 ]           # not split into extra words
+}

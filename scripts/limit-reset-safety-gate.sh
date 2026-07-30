@@ -35,7 +35,7 @@ todo(){ printf '  ⏳ %-7s %s\n' "$1" "$2"; TODO=$((TODO+1)); }
 SUITE=tests/lr-reset-poller.bats
 POLLER=scripts/limit-recover/lr-reset-poller.sh
 
-echo "limit-reset-safety-gate — never-park-forever bar (LR-a..LR-p registered; RED until $SUITE proves them)"
+echo "limit-reset-safety-gate — never-park-forever bar (LR-a..LR-s registered; RED until $SUITE proves them)"
 echo
 
 if [ ! -f "$POLLER" ]; then
@@ -57,12 +57,15 @@ elif [ ! -f "$SUITE" ]; then
   todo "LR-n" "NOT PROVEN — SPEND TEAMMATE-SKIP: a teammate (agentName) monthly-spend session opens NO packet (recovery is lead-owned; the lead's own spend kill carries the packet) — teammate-skip logged."
   todo "LR-o" "NOT PROVEN — TEXT IS NOT EVIDENCE: a HEALTHY session whose only limit text is the limit-recover skill description (skill_listing attachment, no isApiErrorMessage envelope) opens NO packet, parks nothing, and is not misfiled as a teammate. RED-provable: the pre-2026-07-25 poller opened a false class-B packet off that text alone (incident: fb1d3fc8 + a402c9f3 on next4)."
   todo "LR-p" "NOT PROVEN — NO SPEND SHADOWING: a session carrying BOTH the skill-listing text and a genuine reset-bearing session|weekly kill is still PARKED. RED-provable: the spend branch matched the listing text and hit an unconditional 'continue', so the real kill was never evaluated."
+  todo "LR-q" "NOT PROVEN — RECORD FIELDS ARE DATA (codex-security finding 1, medium): a parked record whose cwd carries \$(…) or a backtick is READ, never executed. RED-provable: the pre-2026-07-30 reader was \`eval \"\$(python3 … json.dumps …)\"\`, and json.dumps escapes \" and \\ but NOT \$/backtick — a legal APFS directory name detonated inside a LOADED launchd job."
+  todo "LR-r" "NOT PROVEN — FAIL CLOSED ON A BAD RECORD: an unreadable/malformed parked record is SKIPPED with a logged outcome, never processed with half-assigned fields carrying stale values from the previous loop iteration (the abstention law applied to the reader)."
+  todo "LR-s" "NOT PROVEN — GENERATED LAUNCHER QUOTING: the resume launcher is bash SOURCE, so every interpolated field must be %q. Executing it must pass cwd VERBATIM as ONE argv element. RED-provable: the pre-2026-07-30 printf spent its only %q on the /limit-recover CONSTANT and gave the three record-derived fields %s inside literal double quotes, so cwd re-expanded when the launcher ran."
 else
   if command -v bats >/dev/null 2>&1; then
     if bats "$SUITE" >/dev/null 2>&1; then
-      ok "LR-a..p" "$SUITE GREEN — detect+ledger, no-fire-before-reset, headroom guard, notify-only default + notify-once, autofire idempotency, runaway cap, kill-switch, outcome records, event-keyed recurrence, headless tmux spawn (LR-j) + auto→tmux fallback (LR-m), monthly-spend class-B packet (LR-k) + idempotency (LR-l) + teammate-skip (LR-n), and the 2026-07-25 false-positive pair — envelope-required detection (LR-o) + no spend-branch shadowing of a real kill (LR-p) — all proven (fixtures = real transcript bytes; stubs for claude-accounts/osascript/tmux/cc-decide; suite RED-proven against the as-shipped poller: LR-c blind headroom + LR-i forever-skip fired, and LR-j/k RED against the GUI-only + session|weekly-only poller)"
+      ok "LR-a..s" "$SUITE GREEN — detect+ledger, no-fire-before-reset, headroom guard, notify-only default + notify-once, autofire idempotency, runaway cap, kill-switch, outcome records, event-keyed recurrence, headless tmux spawn (LR-j) + auto→tmux fallback (LR-m), monthly-spend class-B packet (LR-k) + idempotency (LR-l) + teammate-skip (LR-n), and the 2026-07-25 false-positive pair — envelope-required detection (LR-o) + no spend-branch shadowing of a real kill (LR-p), and the 2026-07-30 injection triad — parked-record fields read as DATA not code (LR-q), fail-closed on a malformed record (LR-r), %q-quoted launcher argv (LR-s) — all proven (fixtures = real transcript bytes; stubs for claude-accounts/osascript/tmux/cc-decide; suite RED-proven against the as-shipped poller: LR-c blind headroom + LR-i forever-skip fired, and LR-j/k RED against the GUI-only + session|weekly-only poller)"
     else
-      bad "LR-a..p" "$SUITE RED — a registered limit-reset criterion fails (run: bats $SUITE)"
+      bad "LR-a..s" "$SUITE RED — a registered limit-reset criterion fails (run: bats $SUITE)"
     fi
   else
     bad "LR-*" "bats unavailable — the proof cannot run (install bats-core)"
