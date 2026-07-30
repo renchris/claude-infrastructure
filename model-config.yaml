@@ -11,22 +11,16 @@
 versions:
   frontier_latest: claude-fable-5           # NEW TIER ABOVE OPUS (2026-06-09) — not an opus rename
   frontier_prior: ""                        # first frontier-tier model; no prior to sweep from
-  # opus_latest is HELD at claude-opus-4-8 during Opus 5 staging (see § Opus 5 adoption + opus_staged
-  # below). It is the operational sweep-target/latest for the CC harness. Flipping it to claude-opus-5
-  # (+ opus_prior → claude-opus-4-8, then `claude-bump-models --apply`) is the FINAL activation step,
-  # done ONLY after the operator's auto-mode live-test passes — flipping it now makes the lint demand a
-  # sweep that refuses / silently-demotes not-yet-allowlisted teammate spawns (Sonnet-5 lesson).
+  # Opus 5 ACTIVATED (staging complete) — the auto-mode live-test passed and opus_latest was
+  # flipped to claude-opus-5 (opus_prior → claude-opus-4-8, opus_staged cleared). The flip landed in
+  # the LIVE config on 2026-07-25 but was never committed back; this file is now the single versioned
+  # SSOT (see the header) so the activation state can no longer live only on disk. Behavioral +
+  # routing analysis: docs/research/OPUS5_ADOPTION_AND_PROMPTING_2026-07-24.md · § Opus 5 adoption below.
   opus_latest: claude-opus-5
   opus_prior: claude-opus-4-8
-  opus_staged: ""              # STAGED latest (2026-07-24), pending auto-mode activation. The
-                                          # new Opus default per platform docs ("start with Opus 5 for
-                                          # complex agentic coding + enterprise work"); ≈ Fable 5 on most
-                                          # benchmarks at HALF the cost; Fable 5 REMAINS the frontier tier.
-                                          # Same $5/$25, 1M ctx, 128K out, adaptive-thinking API surface as
-                                          # 4.8 — one new delta: thinking:disabled + effort xhigh/max → 400.
-                                          # Ignored by claude-lint/bump-models (not a *_latest/_prior key) —
-                                          # a pure staging marker. Behavioral + routing + activation guide:
-                                          # docs/research/OPUS5_ADOPTION_AND_PROMPTING_2026-07-24.md
+  opus_staged: ""                           # empty = nothing staged. A future lateral bump parks its
+                                            # candidate here (ignored by claude-lint/bump-models — not a
+                                            # *_latest/_prior key) until its auto-mode test passes.
   sonnet_latest: claude-sonnet-5            # LATERAL 2026-06-30 (was claude-sonnet-4-6); 1M ctx, 128K out
   sonnet_prior: claude-sonnet-4-6
   haiku_latest: claude-haiku-4-5
@@ -188,7 +182,7 @@ classifier_model: claude-sonnet-4-6
 # Docs, team briefs, and scripts reference role aliases via claude-bump-models —
 # when a role's optimal model changes, update here + run `claude-bump-models --apply`.
 roles:
-  lead_default: claude-opus-5             # lead/orchestrator sessions — Opus 4.8 @ effort max.
+  lead_default: claude-opus-5             # lead/orchestrator sessions — Opus 5 @ effort max.
                                             # REVERTED from claude-fable-5 2026-06-09 (launch day):
                                             # Fable-by-default at max effort exhausted 5-hour plan
                                             # windows prematurely. Fable 5 is OPT-IN ONLY while
@@ -228,7 +222,7 @@ roles:
                                             # silent-demotion risk). Else fallback 4-8.
   teammate_mechanical: claude-opus-5      # same model; effort differentiates (see effort_defaults)
   teammate_research: claude-opus-5        # same model; effort differentiates (see effort_defaults)
-  research_worker: claude-opus-5          # IN-PROCESS / teammate synthesis-worker default = GA ceiling (Opus 4.8).
+  research_worker: claude-opus-5          # IN-PROCESS / teammate synthesis-worker default = GA ceiling (Opus 5).
                                             # In-process /research inherits LEAD effort (can't pin max, GH #25591) and
                                             # Sonnet 5 is NOT teammate-allowlisted → those two surfaces stay Opus 4.8.
                                             # HISTORY: T2 (probe wf_771c1e9f-644, 2026-06-30, on Sonnet 4.6) + re-probe

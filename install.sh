@@ -148,6 +148,14 @@ if $IS_GLOBAL; then
   echo ""
   echo "Accounts SSOT → $CONFIG_DIR/accounts.json"
   link_file "$REPO_DIR/accounts.json" "$CONFIG_DIR/accounts.json"
+
+  # Model-config SSOT — same symlink pattern, for the same reason (consolidation audit 02).
+  # This was a REAL unversioned file at ~/.claude/model-config.yaml while templates/model-config.yaml
+  # separately claimed SSOT in its header: the two drifted in BOTH directions, and the live Opus 5
+  # activation existed in no committed file at all. One versioned file + a symlink makes that
+  # divergence structurally impossible.
+  echo "Model-config SSOT → $CONFIG_DIR/model-config.yaml"
+  link_file "$REPO_DIR/model-config.yaml" "$CONFIG_DIR/model-config.yaml"
 fi
 
 # --- Scripts ---
