@@ -130,6 +130,20 @@ team_has_live_session() { # $1=team_dir
 # timed-out probe yields no pids, which the CALLER must read as UNRESOLVED (a non-verdict), never
 # as "nobody is there" — our own timeout must not forge the death evidence.
 #
+# …and saying that in a comment was not enough to make it true (2026-07-30, backlog 9efae9e3cfc1).
+# The caller CANNOT read a timeout as UNRESOLVED unless this function tells it apart from an answer,
+# and it did not: every failure path returned rc 0 with empty stdout, identical to "asked, nobody
+# there". `team_occupied` pre-checked the BINARY and so caught only the missing-lsof case; a lsof
+# that was present and simply did not return inside the cap fell through as UNOCCUPIED, i.e. a real
+# verdict, and past UNKNOWN_MAX_S that ARCHIVES a live team. So the rc contract is the mechanism, and
+# the comment above was the requirement it was missing (memory: feature-durability-mechanism-not-memory):
+#   rc 0  ANSWERED    the probe RAN; the pids it found (possibly NONE) are on stdout. A real verdict.
+#   rc 2  UNRESOLVED  no binary, seam disabled, timed out, or no output at all. A NON-VERDICT.
+# Empty output is UNRESOLVED rather than "nobody home" because a full-system `lsof -d cwd` always
+# reports at least this process's own cwd — a truly empty read means the probe did not complete.
+# The identical fold was fixed in bin/cc-backlog's copy of this probe in the same change; there it
+# reopened live workers instead of archiving live teams.
+#
 # Seam: TEAM_REAPER_LSOF_BIN — UNSET ⇒ resolve one. SET, including set to EMPTY ⇒ honored verbatim,
 # so `TEAM_REAPER_LSOF_BIN=` genuinely disables the probe. `${VAR:-}` cannot tell unset from
 # set-empty, and a seam that cannot turn a thing OFF is not a seam.
@@ -143,17 +157,20 @@ procs_cwd_under() {
     bin=/usr/sbin/lsof
     [[ -x "$bin" ]] || bin="$(command -v lsof 2>/dev/null || true)"
   fi
-  [[ -n "$bin" ]] && [[ -x "$bin" ]] || return 0
+  [[ -n "$bin" ]] && [[ -x "$bin" ]] || return 2   # no probe to run ⇒ UNRESOLVED, not "nobody there"
   if command -v timeout >/dev/null 2>&1; then
     out="$(timeout "${TEAM_REAPER_ORACLE_TIMEOUT_S:-10}" "$bin" -a -d cwd -w -F pn 2>/dev/null || true)"
   else
     out="$("$bin" -a -d cwd -w -F pn 2>/dev/null || true)"
   fi
-  [[ -n "$out" ]] || return 0
+  [[ -n "$out" ]] || return 2                      # timed out / crashed ⇒ UNRESOLVED (see the header)
   printf '%s\n' "$out" | awk -v d="$dir" -v pd="$pdir" '
     function under(n, base) { return base != "" && (n == base || index(n, base "/") == 1) }
     /^p/ { p = substr($0, 2); next }
     /^n/ { n = substr($0, 2); if (under(n, d) || under(n, pd)) print p }' | sort -u
+  # EXPLICIT, not the pipeline's rc: under `set -o pipefail` a hiccup in awk/sort would otherwise
+  # surface as rc 1 or 2 and be misread as a liveness verdict. The probe ran; that is what rc 0 means.
+  return 0
 }
 
 # team_occupied <team_dir> — is anyone actually WORKING in this team's worktrees?
@@ -173,6 +190,11 @@ team_occupied() {
   if [[ -n "${TEAM_REAPER_LSOF_BIN+set}" ]]; then bin="$TEAM_REAPER_LSOF_BIN"
   else bin=/usr/sbin/lsof; [[ -x "$bin" ]] || bin="$(command -v lsof 2>/dev/null || true)"; fi
   [[ -n "$bin" ]] && [[ -x "$bin" ]] || return 2
+  # A probe that ran for SOME worktrees and starved on others has not answered for this team: a
+  # worker could be sitting in exactly the one we could not read. Positive evidence anywhere still
+  # wins (it is proof, and no starvation can retract it), so this only decides the "found nobody"
+  # case — where it is the difference between "nobody is working" and "we did not manage to look".
+  local starved=""
   while IFS= read -r wt; do
     [[ -n "$wt" ]] || continue
     [[ -d "$wt" ]] || continue
@@ -191,13 +213,20 @@ team_occupied() {
     # "unresolved" — occupancy is INAPPLICABLE, not unanswerable, and the registry cross-check and
     # the age ceiling below are then what decide it.
     [[ -d "$wt/.git" ]] && { log "occupancy: skipping shared checkout $wt (main checkout — not a per-team worktree)"; continue; }
-    n="$(procs_cwd_under "$wt" | wc -l | tr -d ' ')"
-    if [[ -n "$n" ]] && [[ "$n" -gt 0 ]] 2>/dev/null; then
+    local out prc n=0
+    out="$(procs_cwd_under "$wt")"; prc=$?
+    [[ -z "$out" ]] || n="$(printf '%s\n' "$out" | wc -l | tr -d ' ')"
+    if [[ "$n" -gt 0 ]] 2>/dev/null; then
       log "occupancy: $n live process(es) with cwd under $wt — team is ALIVE"
       return 0
     fi
+    [[ "$prc" -ne 2 ]] || starved="$wt"
   done < <(jq -r '[ (.members[]? | (.worktree, .cwd)) ] | map(select(type=="string" and . != "")) | unique[]' \
              "$cfg" 2>/dev/null || true)
+  if [[ -n "$starved" ]]; then
+    log "occupancy: the probe never answered for $starved — UNRESOLVED, not unoccupied"
+    return 2
+  fi
   return 1
 }
 
@@ -363,12 +392,13 @@ main() {
         unknown_clear "$team_name"
         live_count=$((live_count + 1))
       elif [[ "$occ" -eq 2 ]]; then
-        # NON-VERDICT: the probe could not run (no lsof). Never archive on this at any age — our
-        # own inability to look is not evidence of death. Bound it so it still terminates: past the
-        # ceiling the operator is paged ONCE and the team is left for a human.
+        # NON-VERDICT: the probe could not run — no lsof, the seam disabled it, or it did not return
+        # inside its cap. Never archive on this at any age — our own inability to look is not
+        # evidence of death, and a TIMEOUT is our own bound firing, not the machine answering. Bound
+        # it so it still terminates: past the ceiling the operator is paged ONCE and left to decide.
         if [[ "$age" -ge "$UNRESOLVED_MAX_S" ]]; then
-          log "unknown-liveness $team_name: liveness probe UNRESOLVED for ${age}s (no lsof) — paging once, NOT archiving"
-          page_once "$team_name" "team-orphan-reaper: '$team_name' — cannot probe liveness (no lsof) after ${age}s; NOT archiving on a non-verdict. Decide manually: $TEAMS_DIR/$team_name"
+          log "unknown-liveness $team_name: liveness probe UNRESOLVED for ${age}s (no lsof, or it never answered) — paging once, NOT archiving"
+          page_once "$team_name" "team-orphan-reaper: '$team_name' — cannot probe liveness (no lsof, or the probe never answered) after ${age}s; NOT archiving on a non-verdict. Decide manually: $TEAMS_DIR/$team_name"
         else
           log "unknown-liveness $team_name: probe UNRESOLVED, abstaining (${age}s of ${UNRESOLVED_MAX_S}s)"
         fi
