@@ -115,9 +115,11 @@ python3 vendor/codex-security/scripts/finalize_scan_contract.py \
 
 ## 6. Honest limits
 
-- **The upstream npm CLI remains unusable** without Codex, by design. We reuse the methodology,
-  not the launcher. Anything the *desktop workspace* adds (scan history UI, cross-repo finding
-  tracking, the deep-scan MCP fan-out orchestrator) is not ported.
+- ~~**The upstream npm CLI remains unusable** without Codex, by design.~~ **CORRECTED later the
+  same day — see §8.** The CLI runs fine on this machine. We reuse the methodology, not the
+  launcher, but that is now a *choice*, not a constraint. Anything the *desktop workspace* adds
+  (scan history UI, cross-repo finding tracking, the deep-scan MCP fan-out orchestrator) is still
+  not ported.
 - **Quality is now a function of Claude, not of a vendored scanner.** The skills are phase
   discipline and contracts; they constrain and structure the reasoning, they do not perform it.
 - **`bin/` and `scripts/` (~39k lines) were not scanned** — out of scope for this demonstration.
@@ -134,3 +136,28 @@ and now vendored.
 
 The first real scan found a reproducible bypass in our own command-safety guard, which is a
 reasonable argument that the methodology earns its place.
+
+## 8. Update — the CLI *is* runnable, and it was measured
+
+Later on 2026-07-29 the untested premise behind §6's first bullet was checked against this machine
+rather than against the dependency graph. Codex CLI `0.142.2` is installed and **logged in via
+ChatGPT**, so `npx @openai/codex-security@0.1.4` runs end-to-end with `--auth chatgpt` — no API key,
+no separate subscription. §6's first bullet is struck above.
+
+Both paths were then run against the *same* file to calibrate them. The full write-up, the
+three-repo runbook, and the shard plans live in
+[`codex-security-three-repos-2026-07-29.md`](codex-security-three-repos-2026-07-29.md). The three
+findings that change how this port should be used:
+
+1. **OpenAI's cyber classifier refuses `hooks/validate-bash.sh` mid-scan** ("flagged for possible
+   cybersecurity risk… join the Trusted Access for Cyber program"), while the same credential
+   completed a scan of an ordinary auth module minutes later. The refusal is **content-triggered,
+   not account-gated** — and it lands on precisely the file class this repo is made of. For
+   `claude-infrastructure`, the Claude-native path is not the cheap option, it is the *only* option.
+2. **Cost: ~$14.22 and ~17 minutes for one 170-line file** (17.2M input tokens, 8-way worker
+   fan-out). Path A's "zero marginal cost" is therefore the headline advantage, not a footnote.
+3. **Path B independently rediscovered Finding 1** (`rm-equivalent-option-spellings`) and added 9
+   more candidate classes on the same file — 6 of them one family: **shell token concatenation
+   defeats every raw-text matcher** (`drizzle-kit pu''sh` executes as `push`; `sqlite3 'DR''OP TABLE
+   users'`). Our denylist does not model it. That family is now the highest-value open item against
+   this repo's own guard, and it is validatable on Path A for free.
