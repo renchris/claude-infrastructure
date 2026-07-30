@@ -23,6 +23,27 @@ setup() {
   # and could close live panes.
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME/.claude/bin"
 
+  # ── DE-AMBIENT: pin every lever the subject reads, in SETUP, never per-test ──────────────────────
+  # Rule-1 shape (scripts/test-hermeticity-lint.sh): a per-test pin leaves every OTHER test in the
+  # file reading the operator's shell, which is the flake it exists to kill.
+  #
+  # These are not hypothetical seams. `~/.zshrc` sources `~/.claude/autonomy/watchdog.env`, which
+  # carries `export LCW_ORPHAN_CLOSE=1` (armed 2026-07-29T20:35). EVERY shell that sources the
+  # profile — bats included — therefore handed this suite an ARMED actuator, so the two DEFAULT-OFF
+  # tests stopped testing the default and started testing this box: (iv) and (v) go red 4/4,
+  # foreground and background band alike. Exactly the $HOME / CC_FIRE_CAPACITY_GATE class the
+  # hermeticity ratchet already covers, on a lever it did not yet know about.
+  unset LCW_ORPHAN_CLOSE                # DEFAULT-OFF must mean the DEFAULT, never this box's arming
+  unset LEAD_CRASH_WATCHDOG_DISABLED    # ambient =1 exits(0) before any leg runs — green by no-op
+  # The subject's OWN bounds (hooks/lead-crash-watchdog.sh lcw_bounded). Pinned for the same reason:
+  # an ambient budget would silently outlast this suite's outer bound below and put the two back in
+  # the wrong order. Every one stays BELOW $BOUND_S so the subject's graceful cut wins when it can.
+  export LCW_TEARDOWN_TIMEOUT_S=20 LCW_HARVEST_SCAN_TIMEOUT_S=20 LCW_REPORT_READ_TIMEOUT_S=20
+  # Account roots — hoisted out of (ix-b) for rule 1's reason verbatim. member_transcript's
+  # strategy-2 fallback greps EVERY account's project corpus (6k+ transcripts on this box); unpinned,
+  # any test that reaches harvest walks the operator's real corpus instead of this fixture.
+  export CC_ACCOUNT_BASES="$BATS_TEST_TMPDIR/acct"; mkdir -p "$CC_ACCOUNT_BASES/projects"
+
   TEAM="$BATS_TEST_TMPDIR/teams/session-dead"
   mkdir -p "$TEAM/HARVEST"
   STATUS="$TEAM/HARVEST/status.tsv"
@@ -45,6 +66,80 @@ exit "\$(cat "$TD_RC" 2>/dev/null || echo 0)"
 EOF
   chmod +x "$TD"
   export LCW_TEARDOWN_BIN="$TD"
+
+  # ── the OUTER BOUND. Resolved with the subject's own ladder (hooks/lead-crash-watchdog.sh:28-36)
+  # so the two agree about what "no timeout(1)" means on a given box.
+  BOUND_S="${LCW_TEST_BOUND_S:-60}"
+  TB=""
+  for _c in "$(command -v timeout 2>/dev/null || true)" "$(command -v gtimeout 2>/dev/null || true)" \
+            /opt/homebrew/bin/timeout /usr/local/bin/timeout \
+            /opt/homebrew/bin/gtimeout /usr/local/bin/gtimeout; do
+    [ -n "$_c" ] && [ -x "$_c" ] && { TB="$_c"; break; }
+  done
+  # REFUSE rather than degrade. The subject's lcw_bounded falls back to an UNBOUNDED call when no
+  # timeout(1) resolves — a defensible choice for a crash handler that must not lose the call, and
+  # the wrong one here: running this suite unbounded is precisely what stalled the corpus. A skip is
+  # legible in the TAP; a silent unbounded run is the failure wearing a green hat.
+  [ -n "$TB" ] || skip "no timeout(1)/gtimeout(1) — refusing to run the subject UNBOUNDED (see run_wd)"
+}
+
+# run_wd <args…> — invoke the subject BOUNDED, exactly as a bare `run bash "$WD" …` otherwise would.
+#
+# WHY THE CALLER BOUNDS, when the subject already bounds itself: `lcw_bounded` wraps the watchdog's
+# own external calls (cc-teardown → AppleEvents into iTerm2, the harvest greps, the transcript
+# reader), but it DEGRADES to running them unbounded whenever no timeout(1) resolves — and it did
+# not exist at all on 2026-07-29, when this file wedged the whole post-land corpus: 900s of ZERO TAP
+# progress at 1565/2215, the run cut at 10800s, the stall attributed here at test (i), this file's
+# first (`~/.claude/autonomy/postland/runner.log`; lcw_bounded landed later, in 70d7afe9). A bound
+# the subject can degrade away is not this suite's guarantee. This one is.
+#
+# THE COST OF NOT HAVING IT is the whole point: an unbounded wedge emits no TAP line at all, so it
+# takes the 649 later tests with it and leaves a verdict nobody can read. rc 124 fails ONE test, by
+# name, with the cause on stdout. The subject's every entrypoint exits 0, so 124 is unambiguously
+# the bound and never the subject's own verdict.
+#
+# GROUP-KILL, deliberately — `timeout` WITHOUT `--foreground`. It puts itself and the subject in a
+# NEW process group and signals that GROUP, so a wedged GRANDCHILD is reaped with its parent. This
+# was settled by measurement against a subject that logs and then wedges, because the intuitive
+# choice is the wrong one: `--foreground` signals only the direct child, the grandchild survives
+# holding an fd it inherited from bats, and bats then HANGS after emitting the failure — measured at
+# the full outer bound, 30s/30s and 6/6 runs, i.e. `--foreground` reproduces the very corpus stall
+# this helper exists to prevent (memory: fixture-lifetime-is-an-orphan-leak-bound). Group-kill exits
+# clean in 3s with the TAP result intact. Group-kill does NOT endanger bats: the new process group is
+# timeout's own, not the harness's.
+# The capture goes to a FILE rather than through bats' `run` pipe, and `3>&-` closes bats' TAP fd, so
+# nothing the subject spawns can hold the harness open even if the reap ever misses one.
+# `</dev/null` closes the last half: the hook's main path parses its JSON with `INPUT=$(cat)`, so any
+# future entrypoint falling through the argv dispatch would block on stdin forever rather than fail.
+# status/output/lines are set exactly as bats' own `run` sets them (stderr merged, same as default).
+run_wd() {
+  local of="$BATS_TEST_TMPDIR/wd-run.out" rc=0 l
+  : > "$of"
+  "$TB" -k 3 "$BOUND_S" bash "$WD" "$@" >"$of" 2>&1 </dev/null 3>&- || rc=$?
+  status="$rc"
+  output="$(cat "$of")"
+  lines=(); while IFS= read -r l; do lines+=("$l"); done < "$of"
+  [ "$status" -ne 124 ] || {
+    echo "BOUND FIRED: the watchdog exceeded ${BOUND_S}s and was cut — a seam WEDGED (not a slow box)."
+    echo "  Do not raise LCW_TEST_BOUND_S to clear this; find the un-stubbed external call."
+    # The subject's OWN last words, which is the diagnostic 2026-07-29 did not have: a stall that
+    # emits no TAP line leaves nothing to read, and the wedge was never attributed to a single call.
+    # `run` keeps whatever was written before the cut, so the last line names the leg it died in.
+    local n="${#lines[@]}" start=0
+    if [ "$n" -eq 0 ]; then
+      echo "  --- the subject produced NO output before the cut: it wedged before its first log line ---"
+    else
+      # NOT `${lines[@]: -5}`. A negative array offset whose magnitude EXCEEDS the array length
+      # expands to NOTHING in bash — so the usual "last 5" idiom printed a blank line for every
+      # run with fewer than 5 lines, i.e. it was silently emptiest exactly when the subject died
+      # early and the diagnostic mattered most. Caught only by checking the rendered output against
+      # a subject that really did log before wedging (99 bytes captured, 2 lines, nothing printed).
+      [ "$n" -gt 5 ] && start=$((n - 5))
+      echo "  --- last output before the cut (names the leg) ---"
+      printf '  %s\n' "${lines[@]:$start}"
+    fi
+    false
+  }
 }
 
 row() { printf '%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" "$5" >> "$STATUS"; }
@@ -52,7 +147,7 @@ calls() { wc -l < "$TD_LOG" | tr -d ' '; }
 
 @test "(i) HARVEST-FIRST: no status.tsv ⇒ REFUSE, and cc-teardown is never invoked" {
   rm -f "$STATUS"
-  run bash "$WD" --close-panes "$TEAM" sid-1
+  run_wd --close-panes "$TEAM" sid-1
   [ "$status" -eq 0 ] || false
   [[ "$output" == *"REFUSE"* ]] || false
   [[ "$output" == *"harvest never ran"* ]] || false
@@ -61,7 +156,7 @@ calls() { wc -l < "$TD_LOG" | tr -d ' '; }
 
 @test "(ii) a NO-TRANSCRIPT member is NEVER closed — its pane is the last copy of its report" {
   row "w-lost" "PANE-LOST" "NO-TRANSCRIPT" 0 ""
-  LCW_ORPHAN_CLOSE=1 run bash "$WD" --close-panes "$TEAM" sid-1
+  LCW_ORPHAN_CLOSE=1 run_wd --close-panes "$TEAM" sid-1
   [ "$status" -eq 0 ] || false
   [[ "$output" == *"SKIP w-lost"* ]] || false
   [ "$(calls)" -eq 0 ] || false
@@ -70,7 +165,7 @@ calls() { wc -l < "$TD_LOG" | tr -d ' '; }
 
 @test "(iii) ARMED: a harvested member's pane is closed through cc-teardown with done-evidence" {
   row "w-ok" "PANE-OK" "HARVESTED" 4242 "/tmp/t.jsonl"
-  LCW_ORPHAN_CLOSE=1 run bash "$WD" --close-panes "$TEAM" sid-1
+  LCW_ORPHAN_CLOSE=1 run_wd --close-panes "$TEAM" sid-1
   [ "$status" -eq 0 ] || false
   [ "$(calls)" -eq 1 ] || false
   grep -q -- "PANE-OK" "$TD_LOG" || false
@@ -83,14 +178,14 @@ calls() { wc -l < "$TD_LOG" | tr -d ' '; }
 
 @test "(iv) DEFAULT-OFF: unarmed runs invoke cc-teardown ZERO times" {
   row "w-ok" "PANE-OK" "HARVESTED" 4242 "/tmp/t.jsonl"
-  run bash "$WD" --close-panes "$TEAM" sid-1
+  run_wd --close-panes "$TEAM" sid-1
   [ "$status" -eq 0 ] || false
   [ "$(calls)" -eq 0 ] || false
 }
 
 @test "(v) UNARMED IS NOT SILENT: the orphaned pane is still counted, logged and planned" {
   row "w-ok" "PANE-OK" "HARVESTED" 4242 "/tmp/t.jsonl"
-  run bash "$WD" --close-panes "$TEAM" sid-1
+  run_wd --close-panes "$TEAM" sid-1
   [[ "$output" == *"WOULD-CLOSE w-ok pane=PANE-OK"* ]] || false
   [[ "$output" == *"1 orphaned pane(s) left RUNNING"* ]] || false
   [[ "$output" == *"LCW_ORPHAN_CLOSE=1"* ]] || false      # names its own arming lever
@@ -100,7 +195,7 @@ calls() { wc -l < "$TD_LOG" | tr -d ' '; }
 @test "(vi) cc-teardown DEFER (rc 10) is trusted — reported, not retried, not forced" {
   row "w-dirty" "PANE-D" "HARVESTED" 100 "/tmp/t.jsonl"
   echo 10 > "$TD_RC"
-  LCW_ORPHAN_CLOSE=1 run bash "$WD" --close-panes "$TEAM" sid-1
+  LCW_ORPHAN_CLOSE=1 run_wd --close-panes "$TEAM" sid-1
   [ "$status" -eq 0 ] || false
   [ "$(calls)" -eq 1 ] || false                            # exactly once: no blind retry
   [[ "$output" == *"DEFER"* ]] || false
@@ -111,7 +206,7 @@ calls() { wc -l < "$TD_LOG" | tr -d ' '; }
 @test "(vii) cc-teardown FAIL LOUD (rc 5) is surfaced as a survivor, never a false success" {
   row "w-surv" "PANE-S" "HARVESTED" 100 "/tmp/t.jsonl"
   echo 5 > "$TD_RC"
-  LCW_ORPHAN_CLOSE=1 run bash "$WD" --close-panes "$TEAM" sid-1
+  LCW_ORPHAN_CLOSE=1 run_wd --close-panes "$TEAM" sid-1
   [[ "$output" == *"FAIL LOUD"* ]] || false
   [[ "$output" == *"pane SURVIVED"* ]] || false
   [[ "$output" == *"0 torn down"* ]] || false              # must NOT be counted as reaped
@@ -120,7 +215,7 @@ calls() { wc -l < "$TD_LOG" | tr -d ' '; }
 @test "(viii) cc-teardown REFUSE (rc 2) is trusted and counted separately from a failure" {
   row "w-ref" "PANE-R" "HARVESTED" 100 "/tmp/t.jsonl"
   echo 2 > "$TD_RC"
-  LCW_ORPHAN_CLOSE=1 run bash "$WD" --close-panes "$TEAM" sid-1
+  LCW_ORPHAN_CLOSE=1 run_wd --close-panes "$TEAM" sid-1
   [[ "$output" == *"REFUSE"* ]] || false
   [[ "$output" == *"1 refuse"* ]] || false
 }
@@ -128,7 +223,7 @@ calls() { wc -l < "$TD_LOG" | tr -d ' '; }
 @test "(ix) the lead's own 'leader' sentinel and pane-less members are skipped, never torn down" {
   row "team-lead" "leader" "HARVESTED" 10 "/tmp/t.jsonl"
   row "w-inproc"  "-"      "HARVESTED" 10 "/tmp/t.jsonl"   # '-' = the writer's absent-pane placeholder
-  LCW_ORPHAN_CLOSE=1 run bash "$WD" --close-panes "$TEAM" sid-1
+  LCW_ORPHAN_CLOSE=1 run_wd --close-panes "$TEAM" sid-1
   [ "$(calls)" -eq 0 ] || false
   [[ "$output" == *"no pane / in-process"* ]] || false
 }
@@ -138,7 +233,7 @@ calls() { wc -l < "$TD_LOG" | tr -d ' '; }
   # An in-process member has no pane; an empty column there would be coalesced away by
   # `IFS=$'\t' read`, so the reader would take state="HARVESTED" as the PANE and tear down a
   # nonexistent target. The contract is a '-' placeholder, and this pins it at the source.
-  export CC_ACCOUNT_BASES="$BATS_TEST_TMPDIR/acct"; mkdir -p "$BATS_TEST_TMPDIR/acct/projects"
+  # CC_ACCOUNT_BASES is pinned in setup() — per-test would leave the other tests on the real corpus.
   T2="$BATS_TEST_TMPDIR/teams/session-prod"; mkdir -p "$T2"
   cat > "$T2/config.json" <<'EOF'
 {"teamName":"session-prod","members":[
@@ -146,7 +241,7 @@ calls() { wc -l < "$TD_LOG" | tr -d ' '; }
   {"name":"w-inproc","cwd":"/nowhere"}
 ]}
 EOF
-  run bash "$WD" --harvest-team "$T2" sid-p
+  run_wd --harvest-team "$T2" sid-p
   [ "$status" -eq 0 ] || false
   # the pane-less member's row must carry 5 tab-separated fields, none empty
   line=$(grep '^w-inproc' "$T2/HARVEST/status.tsv")
@@ -158,7 +253,7 @@ EOF
 @test "(x) an EMPTY harvest still permits close — the transcript was read and held no report" {
   # EMPTY is a PROVEN outcome (assignee died before its first turn), unlike NO-TRANSCRIPT.
   row "w-empty" "PANE-E" "EMPTY" 0 "/tmp/t.jsonl"
-  LCW_ORPHAN_CLOSE=1 run bash "$WD" --close-panes "$TEAM" sid-1
+  LCW_ORPHAN_CLOSE=1 run_wd --close-panes "$TEAM" sid-1
   [ "$(calls)" -eq 1 ] || false
 }
 
@@ -166,7 +261,7 @@ EOF
   row "w-a" "PANE-A" "HARVESTED"     10 "/tmp/a.jsonl"
   row "w-b" "PANE-B" "NO-TRANSCRIPT"  0 ""
   row "w-c" "PANE-C" "EMPTY"          0 "/tmp/c.jsonl"
-  LCW_ORPHAN_CLOSE=1 run bash "$WD" --close-panes "$TEAM" sid-1
+  LCW_ORPHAN_CLOSE=1 run_wd --close-panes "$TEAM" sid-1
   [ "$(calls)" -eq 2 ] || false
   grep -q "PANE-A" "$TD_LOG" || false
   grep -q "PANE-C" "$TD_LOG" || false
@@ -175,7 +270,13 @@ EOF
 
 @test "(xii) cc-teardown unavailable ⇒ abstain and say so, never fall back to raw it2/osascript" {
   row "w-ok" "PANE-OK" "HARVESTED" 10 "/tmp/t.jsonl"
-  LCW_TEARDOWN_BIN= LCW_ORPHAN_CLOSE=1 run bash "$WD" --close-panes "$TEAM" sid-1
+  # The empty value is the ENTIRE POINT of this test and must not be "fixed": the subject
+  # distinguishes UNSET (resolve an actuator, up to the operator's real ~/.claude/bin/cc-teardown)
+  # from SET-BUT-EMPTY (honored verbatim ⇒ actuator disabled). `LCW_TEARDOWN_BIN=''` would read the
+  # same to the subject but hides the intent; the bare form is what a caller disabling the actuator
+  # actually writes, so it is the form worth pinning.
+  # shellcheck disable=SC1007
+  LCW_TEARDOWN_BIN= LCW_ORPHAN_CLOSE=1 run_wd --close-panes "$TEAM" sid-1
   [ "$status" -eq 0 ] || false
   [[ "$output" == *"cc-teardown-unavailable"* ]] || false
   ! [[ "$output" == *"osascript"* ]] || false
@@ -191,7 +292,7 @@ EOF
 
 @test "(xiii) the assignee IDENTITY is passed — --assignee-of <dead lead> and its own sid" {
   row "w-ok" "PANE-OK" "HARVESTED" 4242 "/acct/projects/p/sess-abc123.jsonl"
-  LCW_ORPHAN_CLOSE=1 run bash "$WD" --close-panes "$TEAM" sid-1
+  LCW_ORPHAN_CLOSE=1 run_wd --close-panes "$TEAM" sid-1
   [ "$(calls)" -eq 1 ] || false
   # without --assignee-of, cc-teardown can only ever answer unknown-target for an assignee pane
   grep -q -- "--assignee-of sid-1" "$TD_LOG" || false
@@ -204,7 +305,7 @@ EOF
   # EMPTY state = the transcript was read and held no report, so it IS closable, but tpath may be
   # '-'. An empty flag value would shift cc-teardown's own argv parse.
   row "w-empty" "PANE-E" "EMPTY" 0 "-"
-  LCW_ORPHAN_CLOSE=1 run bash "$WD" --close-panes "$TEAM" sid-1
+  LCW_ORPHAN_CLOSE=1 run_wd --close-panes "$TEAM" sid-1
   [ "$(calls)" -eq 1 ] || false
   ! grep -q -- "--assignee-sid *$" "$TD_LOG" || false
   grep -q -- "--assignee-of sid-1" "$TD_LOG" || false
@@ -215,7 +316,7 @@ EOF
   echo 2 > "$TD_RC"
   # the REAL pre-fix outcome, verbatim from cc-teardown's refuse path
   echo "cc-teardown: REFUSE reason_kind=unknown-target — unknown target 'PANE-OK' (exit 2)" > "$TD_SAY"
-  LCW_ORPHAN_CLOSE=1 run bash "$WD" --close-panes "$TEAM" sid-1
+  LCW_ORPHAN_CLOSE=1 run_wd --close-panes "$TEAM" sid-1
   [ "$status" -eq 0 ] || false
   [[ "$output" == *"UNRESOLVED"* ]] || false
   [[ "$output" == *"close BLIND"* ]] || false
@@ -230,7 +331,7 @@ EOF
   row "w-ok" "PANE-OK" "HARVESTED" 4242 "/tmp/t.jsonl"
   echo 2 > "$TD_RC"
   echo "cc-teardown: REFUSE reason_kind=assignee-unproven — cannot prove pane hosts an assignee (exit 2)" > "$TD_SAY"
-  LCW_ORPHAN_CLOSE=1 run bash "$WD" --close-panes "$TEAM" sid-1
+  LCW_ORPHAN_CLOSE=1 run_wd --close-panes "$TEAM" sid-1
   [[ "$output" == *"1 UNRESOLVED"* ]] || false
   [[ "$output" == *"close BLIND"* ]] || false
 }
@@ -239,7 +340,7 @@ EOF
   row "w-ok" "PANE-OK" "HARVESTED" 4242 "/tmp/t.jsonl"
   echo 2 > "$TD_RC"
   echo "cc-teardown: REFUSE — operator-adopted pane: real prompt 12s ago (exit 2)." > "$TD_SAY"
-  LCW_ORPHAN_CLOSE=1 run bash "$WD" --close-panes "$TEAM" sid-1
+  LCW_ORPHAN_CLOSE=1 run_wd --close-panes "$TEAM" sid-1
   [[ "$output" == *"1 refuse"* ]] || false
   [[ "$output" == *"0 UNRESOLVED"* ]] || false
   ! [[ "$output" == *"close BLIND"* ]] || false
