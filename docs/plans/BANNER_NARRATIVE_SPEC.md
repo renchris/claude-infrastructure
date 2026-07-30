@@ -531,6 +531,68 @@ coherent design and it matches where viewer value actually lives — but it must
 Do not assert legibility the artifact does not have. Three consequences follow: make the subtitle
 legible; pull THE ASK into ~8–14 s and THE OVERLAP inside 20 s or cut it; de-risk both misreads.
 
+## OPERATOR MICRO-EVENT IDEAS (2026-07-29) — the live design input, and they beat mine
+
+Given verbatim, with the note *"I think you should be able to research and come up with better
+ones"* — so these are a **starting point to improve on, not a finished set**. Two of them overturn
+rulings this document has been enforcing, and the operator authored those rulings, so their direction
+governs. Recorded before improving on them so the originals are not lost to paraphrase.
+
+### O1 · Handoff with two-way communication
+
+> clawd puts on a magician hat and wand and spells up a teammate clawd. main clawd passes a mail
+> letter for new clawd to read, then do a task, then hands back the task result such as building a
+> cake, then waves good bye and poofs away by itself
+
+**This is the most complete beat anyone has proposed in this track.** It has an unforced
+beginning/middle/end with agency at every step: summon → hand over → work → hand back → farewell →
+self-removal. The exit is *self*-removal, which is the strongest form — the departing party ends
+itself rather than being faded out.
+
+**It is also more literally accurate about the mechanism than my abstraction was.** `cc-notify`
+enqueues a message as a **file the other session reads at a safe boundary** — a letter handed over IS
+the mechanism, not a metaphor for it. And `handoff-fire.sh self-close` has the predecessor retire
+*itself* once the successor is verified engaged, which is exactly "waves goodbye and poofs away by
+itself".
+
+**⚠️ It reverses two things this document argued.** (a) The "peers are never co-present" principle —
+which I used to *dissolve* R1 — is contradicted: two clawds share the frame and interact. (b) An
+object passing between two creatures is close to the picture R1 rejected. **The operator authored R1,
+so this supersedes my derivation, and it is not to be re-litigated** — noted here only so a successor
+does not "restore" the co-presence rule and quietly delete the operator's best idea. The trade is
+explicit and favourable: it costs the architectural purity of one-creature-in-frame and buys a beat a
+stranger can actually follow, which is precisely what the legibility audit above says the set lacks.
+
+### O2 · Fireworks with clawd celebrating/dancing — on a commit succeeding
+
+Repo-real (a land is the system's genuine success event) and **universally legible without a code** —
+the one thing the audited set was short of. Cautions, not objections: fireworks are a heavily-used
+beat, so the execution has to earn it; and celebration must be **whole-body posture** (the arms-up
+cliff already measured — limb-level acting is illegible at this render size).
+
+### O3 · Shooting star across the sky, with clawd's eyes following it
+
+**This rehabilitates the beat I deleted, and the operator's version fixes what was wrong with it.**
+My objection was that a shooting star refers to nothing and has no cause or exit. Adding *clawd
+watching it* supplies the missing half: the event is not the star, it is **the noticing**. Gaze is
+causality expressed for free, and reaction is what a bare star lacked.
+
+Two constraints carry over unchanged: the star is inside `nOnly`, so it is **absent in the day
+scheme** and needs a daylight counterpart (something crossing a bright sky — a bird, a paper plane);
+and per the legibility audit the star must not read as a glitch, so the gaze should *lead* slightly,
+selling the star as caused rather than as a stray pixel.
+
+### Where this leaves the built set
+
+The three specified beats (THE OVERLAP / THE REFUSAL / THE ASK) are **not cancelled** — THE REFUSAL
+and THE ASK survived the audit on their own merits, and THE ASK is the only one that works on a
+stranger. But O1–O3 are more legible than all three, and **O1 subsumes THE OVERLAP's meaning**
+(succession) while being visible rather than a 6 px pitch change. If a beat is to be sacrificed,
+THE OVERLAP was already named the candidate, and O1 replacing it is a strict improvement.
+
+**Next, and explicitly invited: research better versions of these three** rather than implementing
+them literally. The operator expects improvement on the sketch, not transcription of it.
+
 ## Acceptance
 
 An event passes only if a viewer can answer all three of *why did it appear*, *what did it do*, and
