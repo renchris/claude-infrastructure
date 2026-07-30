@@ -212,6 +212,9 @@ for only the two or three brightest — that one detail is what makes a field re
 instead of sprinkled.
 
 **Constellation line-mapping as a rare event: yes — and it is the best event idea on the table.**
+✅ **PROMOTED TO REQUIRED by the operator, 2026-07-29** — asked for by name alongside the full-length
+shooting star, both as beats they expected to be in flight already. The three constraints below stay
+binding, especially that lines join stars to stars and **never** touch a creature.
 It is thematically exact: separate points revealed to be one figure is *sessions run each other*
 stated in the sky. Enter by drawing on (stroke-dashoffset, star to star, in order, quickly but not
 instantly), exist as a brief hold, leave by fading the lines while the stars remain. Three hard
@@ -710,10 +713,15 @@ survives contact with the constraints better than anything else on the table. Fo
    documented fix for misread risk #1 — by the time the star appears the viewer is already looking
    where it will be, so the star cannot read as a glitch. Eyeline directing the audience is ordinary
    cinematic grammar and it costs one keyframe.
-2. **The star travels the LOW sky, descending toward the horizon** — never across the top. This is
-   what makes it compatible with "nothing is ever authored above y=340" and with the wordmark keep-out
-   *by construction* rather than by a check. A meteor descending to the horizon is also simply more
-   correct than one flying level.
+2. ~~**The star travels the LOW sky, descending toward the horizon** — never across the top.~~
+   ⚠️ **SUPERSEDED by operator direction, 2026-07-29: the star crosses the FULL LENGTH of the sky.**
+   The low-arc version was my narrowing, justified by the structural rule *"nothing is ever authored
+   above y=340"* — but that rule was invented in § SYNTHESIS for convenience, and **the operator's
+   binding requirement is only that stars never touch the type.** The keep-out is on the TYPE, not on
+   the sky's upper band, so a full-width traverse is legal: route it around or below the wordmark box,
+   or behind the cloud bands. Recorded because a successor reading only the constraint list would
+   re-derive the smaller version and quietly delete what was asked for. The improvement that survives
+   unchanged: **the gaze LEADS the star by ~0.5 s.**
 3. **One geometry, two paints — not two assets.** Emit a single travelling dash on a single path; at
    night it takes a warm bright fill plus a night-only tail, by day a dark silhouette fill. The motion
    path, the timing and the gaze choreography are then **identical in both schemes**, so the duty and
