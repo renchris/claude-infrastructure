@@ -111,10 +111,18 @@
 #      merely slow, and never called dead. A wait still present past OWNED_WAIT_MAX_S is a WEDGE:
 #      blocked (never reopened — its worktree is occupied) and named as such. See the owned_wait body
 #      for the full rationale and the incident it came from.
-#   3. ABSTENTION  an oracle that produced NO ANSWER (registry absent, wedged, or unparseable) is a
-#      NON-VERDICT, not a death: the item is KEPT and the abstention is printed. Bounded by
-#      UNRESOLVED_MAX_S, past which it BLOCKS out to a human — it still never reopens, because an
-#      unanswered probe is not proof of death at any age.
+#   3. ABSTENTION  an oracle that produced NO ANSWER is a NON-VERDICT, not a death: the item is KEPT
+#      and the abstention is printed. Bounded by UNRESOLVED_MAX_S, past which it BLOCKS out to a
+#      human — it still never reopens, because an unanswered probe is not proof of death at any age.
+#      This covers BOTH oracles, and it has to. The claimer probe abstains when the registry is
+#      absent, wedged, or unparseable. The WORKTREE probe abstains when lsof is missing, disabled, or
+#      times out, or when CC_BACKLOG_WT_ROOT itself is unreadable — and that leg was missing until
+#      2026-07-30 (backlog 9efae9e3cfc1). It mattered more than the claimer's: a dispatched claim's
+#      `by` is a spent pid, so oracle 1 returns a REAL not-live verdict and only oracle 2 can speak
+#      for the worker. With its silence folded into "worktree empty", a starved probe read as a dead
+#      worker and reopened it — and the starvation is load-correlated (a full-system lsof exceeding
+#      its cap), so one starved sweep reopened a BATCH of live workers whose duplicate peers then
+#      raised the load that starved the next sweep. TOTAL starvation now fails toward KEEP.
 # Why the asymmetry is not merely tidy: `reopen` sets status=open, which is exactly cc-dispatch's
 # fire predicate, so a false dead verdict SPAWNS A DUPLICATE PEER onto live work (a60d62a215f1 →
 # 6488617). A missed dead worker only strands an item, visibly, until the next sweep.
@@ -761,8 +769,21 @@ item_worktree() { printf '%s/wt-%s' "${CC_BACKLOG_WT_ROOT:-$HOME/Development/.wo
 #
 # BOUNDED: lsof can block indefinitely on an unresponsive mount, and this runs inside the
 # `cc-reaper --reap` sweep — an unbounded probe would hang that sweep exactly as the wedged it2
-# registry call did (see claimer_live). A timed-out probe yields NO pids, so the signal abstains and
-# the next one is consulted: a bound costs a slower path, never a false ALIVE verdict.
+# registry call did (see claimer_live).
+#
+# THREE-VALUED, like claimer_live and for the same reason (memory: gate-never-ran-vs-gate-red — one
+# exit code for two outcomes forces every caller to lie):
+#   rc 0  ANSWERED    the probe RAN; the pids it found (possibly NONE) are on stdout. A real verdict.
+#   rc 2  UNRESOLVED  the probe could not be run at all — no binary, the seam disabled it, it timed
+#                     out, or it produced no output. A NON-VERDICT: callers must ABSTAIN.
+# It used to return rc 0 on every one of those paths, and the comment here claimed "the signal
+# abstains and the next one is consulted". It does not: an empty stdout is INDISTINGUISHABLE from
+# "asked, nobody there", and there is no next signal that can see the worker (S2 is a land lock, held
+# only while landing). So the abstention never reached the caller, `owned_wait` returned "no
+# evidence", and reap read that as a licence to REOPEN a live worker (see the owned_wait rc contract).
+# Empty output is UNRESOLVED and not "nobody home" because a full-system `lsof -d cwd` always reports
+# at least this very process's own cwd — a truly empty read means the probe did not complete.
+# A bound must cost a slower path, never a false verdict in EITHER direction.
 #
 # PATH FORM: lsof reports a cwd PHYSICALLY RESOLVED — a process sitting in /var/… is reported under
 # /private/var/… (measured 2026-07-26). A prefix match against the RAW path therefore sees NOTHING
@@ -783,21 +804,52 @@ procs_cwd_under() {
     bin=/usr/sbin/lsof
     [ -x "$bin" ] || bin="$(command -v lsof 2>/dev/null || true)"
   fi
-  [ -n "$bin" ] && [ -x "$bin" ] || return 0
+  [ -n "$bin" ] && [ -x "$bin" ] || return 2      # no probe to run ⇒ UNRESOLVED, not "nobody there"
   if command -v timeout >/dev/null 2>&1; then
     out="$(timeout "${CC_BACKLOG_ORACLE_TIMEOUT_S:-10}" "$bin" -a -d cwd -w -F pn 2>/dev/null || true)"
   else
     out="$("$bin" -a -d cwd -w -F pn 2>/dev/null || true)"
   fi
-  [ -n "$out" ] || return 0
+  [ -n "$out" ] || return 2                       # timed out / crashed ⇒ UNRESOLVED (see the header)
   printf '%s\n' "$out" | awk -v d="$dir" -v pd="$pdir" '
     function under(n, base) { return base != "" && (n == base || index(n, base "/") == 1) }
     /^p/ { p = substr($0, 2); next }
     /^n/ { n = substr($0, 2); if (under(n, d) || under(n, pd)) print p }' | sort -u
+  # EXPLICIT, not the pipeline's rc: under `set -o pipefail` a hiccup in awk/sort would otherwise
+  # surface as rc 1 or 2 and be misread as a liveness verdict. The probe ran; that is what rc 0 means.
+  return 0
 }
 
 # owned_wait <id> — is the item's WORKER in an OWNED WAIT (alive, merely slow) rather than DEAD?
-# Echoes a short reason and returns 0 when alive; returns 1 (silent) when there is no evidence.
+#
+# THREE-VALUED, matching claimer_live (oracle 1) and team-orphan-reaper.sh's `team_occupied`, which
+# already models exactly these states for the same probe (team-orphan-reaper.sh:159-167):
+#   rc 0  OWNED       positive evidence of life; a short reason is echoed.
+#   rc 1  NOT-OWNED   every probe RAN and none of them found anyone. A real verdict — the only one
+#                     the dead-worker path may act on.
+#   rc 2  UNRESOLVED  a probe that COULD have seen the worker never ran (no lsof, seam disabled,
+#                     timed out; or the worktree root itself is unreadable). A NON-VERDICT — a reason
+#                     is echoed and the caller must ABSTAIN, exactly as it does for an unresolved
+#                     claimer.
+#
+# WHY rc 2 EXISTS (2026-07-30, backlog 9efae9e3cfc1, found by the v2 verifier 2026-07-28). Oracle 1
+# was made three-valued on 2026-07-26; oracle 2 never was, and it is the oracle that actually decides
+# a DISPATCHED item — a dispatcher-keyed claim is proven-dead by construction (`kill -0` on a spent
+# pid ⇒ rc 1, a REAL verdict), so `claimer_live` cannot abstain on its behalf and this function is the
+# only thing standing between a live worker and `reopen`. With rc 2 folded into rc 1, every way the
+# probe could FAIL TO RUN read as "the worktree is empty" ⇒ dead-worker ⇒ reopen ⇒ cc-dispatch's fire
+# predicate ⇒ a second peer onto live work. The failure mode is worst exactly when it is most likely:
+# under load a full-system lsof legitimately exceeds the 10s cap (measured 2026-07-28 at load ~11.8 —
+# the same starvation that forced this suite's own fixture barrier up to 10s, tests/cc-backlog.bats),
+# and load is when the most items are simultaneously past STALE_CLAIM_S. So one starved sweep reopens
+# a BATCH of live workers, each reopen spawns a duplicate peer, and the duplicates raise the load that
+# starves the next sweep. That is an amplifier, not an isolated false verdict.
+#
+# The direction is not a new judgement: the asymmetry at the top of this file already settles it — a
+# false dead verdict SPAWNS a duplicate peer, a missed dead worker only STRANDS an item, visibly and
+# recoverably. Fail-toward-KEEP is what that asymmetry means when the oracles go silent; the caller
+# bounds it at UNRESOLVED_MAX_S and then BLOCKS out to a human, never reopens (memory:
+# universalizing-a-mechanism-promotes-its-latent-leak — the lifecycle bound ships in the same change).
 #
 # WHY THIS EXISTS (2026-07-26, backlog 2d36e63d16a2). `claimer_live` alone cannot see a dispatched
 # worker: cc-dispatch claims with `--by $SID` where SID is its OWN `$$` (cc-dispatch:58), then spawns
@@ -841,8 +893,25 @@ procs_cwd_under() {
 # caller's OWNED_WAIT_MAX_S ceiling is what bounds that (a 6h "gate" is pathological, not owned). In
 # production the reaper resolves cc-backlog through ~/.claude/bin → the shared checkout, so neither
 # its argv nor its cwd carries a wt-<id> path at all.
+#
+# S2 lives in `land_lock_owner` below purely so this function has ONE exit point for "no signal
+# found" — the point at which rc 1 and rc 2 are told apart. Inlined, each of S2's eight early
+# `return 1`s would have needed the same three-valued decision repeated, which is how the two states
+# got collapsed in the first place.
 owned_wait() {
   local id="$1" wt; wt="$(item_worktree "$id")"
+
+  # ABSENCE vs STARVATION, at the root. A missing wt-<id> UNDER AN EXISTING ROOT is a real answer
+  # (the item is worked in place, or its worktree was torn down) and stays rc 1 — that is what keeps
+  # the dead-worker path reachable at all. A missing or unreadable ROOT is not an answer about any
+  # item: the convention this oracle reads through is simply not there, so EVERY dispatched item
+  # would report "no worktree" at once — precisely the batch false-dead this rc contract exists to
+  # stop (a mistyped/unmounted CC_BACKLOG_WT_ROOT, or a launchd sweep with no HOME).
+  local root="${CC_BACKLOG_WT_ROOT:-$HOME/Development/.worktrees}"
+  if [ ! -d "$root" ]; then
+    printf 'worktree root %s is absent — the occupancy oracle could not be asked at all' "$root"
+    return 2
+  fi
   [ -d "$wt" ] || return 1
 
   # S1 — live process tree in the worktree. `pgrep -f` excludes itself; one fork, only ever reached
@@ -853,16 +922,43 @@ owned_wait() {
   fi
 
   # S1b — live process whose CWD is at or below the worktree (see the header: this is the signal
-  # that actually sees a dispatched worker; S1 sees only the spent launcher's argv).
-  local cwdprocs; cwdprocs="$(procs_cwd_under "$wt" | wc -l | tr -d ' ')"
-  if [ -n "$cwdprocs" ] && [ "$cwdprocs" -gt 0 ] 2>/dev/null; then
+  # that actually sees a dispatched worker; S1 sees only the spent launcher's argv). Its rc is
+  # CAPTURED, not discarded: rc 2 means the probe never ran, and S1 answering "no" is no consolation
+  # because S1 is structurally blind to the dispatched shape. Note the ordering — a starved S1b does
+  # NOT short-circuit; S2 is an affirmative signal and still gets its chance to absolve.
+  local cwdout cwdrc cwdprocs=0 starved=""
+  cwdout="$(procs_cwd_under "$wt")"; cwdrc=$?
+  [ -z "$cwdout" ] || cwdprocs="$(printf '%s\n' "$cwdout" | wc -l | tr -d ' ')"
+  if [ "$cwdprocs" -gt 0 ] 2>/dev/null; then
     printf 'live process cwd in %s (%s proc)' "$wt" "$cwdprocs"; return 0
   fi
+  [ "$cwdrc" -ne 2 ] || starved="the worktree occupancy probe (lsof) never ran or never answered for $wt"
 
-  # S2 — land lock held for this item's branch. The lock dir is a hash of the repo's common git dir,
-  # so ask land-lock.sh itself (`--print-lock-dir` is its documented pure read) from inside the
-  # worktree rather than duplicating the hash. Holder liveness uses the pid+lstart rule land-lock
-  # uses, because a dead holder's pid can be RECYCLED (memory: periodic-job-self-overlap).
+  # S2 — land lock held for this item's branch.
+  local locked; locked="$(land_lock_owner "$id" "$wt")" || locked=""
+  if [ -n "$locked" ]; then printf '%s' "$locked"; return 0; fi
+
+  # No signal found — and WHICH kind of "no" this is turns on whether every probe actually RAN.
+  if [ -n "$starved" ]; then printf '%s' "$starved"; return 2; fi
+  return 1
+}
+
+# land_lock_owner <id> <wt> → echoes a reason + rc 0 when the machine-wide land lock is held for THIS
+# item's branch by a live holder; rc 1 (silent) otherwise. Distinct from S1, not redundant: a land
+# re-run from the shared checkout (or any other cwd) on branch wt-<id> names no worktree path in its
+# argv, yet is the most owned wait there is.
+#
+# The lock dir is a hash of the repo's common git dir, so ask land-lock.sh itself
+# (`--print-lock-dir` is its documented pure read) from inside the worktree rather than duplicating
+# the hash. Holder liveness uses the pid+lstart rule land-lock uses, because a dead holder's pid can
+# be RECYCLED (memory: periodic-job-self-overlap).
+#
+# Deliberately NOT three-valued: an absent land-lock.sh or an unheld lock is a real "this item is not
+# landing", not a starved probe — and S2 is an AFFIRMATIVE signal, so its silence never decides
+# anything on its own. Only S1b's silence can be mistaken for evidence, which is why only S1b carries
+# the abstention.
+land_lock_owner() {
+  local id="$1" wt="$2"
   local ll="$wt/scripts/land-lock.sh"
   [ -x "$ll" ] || return 1
   local lockdir; lockdir="$(cd "$wt" && "$ll" --print-lock-dir 2>/dev/null)" || return 1
@@ -1027,7 +1123,13 @@ cmd_reap() {
       # claimer_live cannot see the worker (see owned_wait). Ask the WORKTREE whether the wait is
       # OWNED. Printed in BOTH modes on purpose — a silent absolve is indistinguishable from an
       # inert oracle (memory: feature-durability-mechanism-not-memory).
-      local owned; owned="$(owned_wait "$id" || true)"
+      # rc CAPTURED for the same reason clrc is (owned_wait is three-valued too): rc 2 means the
+      # occupancy probe never ran, which must reach the abstain path below and never the reopen path.
+      # `starved` is kept SEPARATE from `owned` so every existing `-n "$owned"` test below keeps
+      # meaning "positive evidence of life" exactly as before.
+      local owned owrc starved=""
+      owned="$(owned_wait "$id")"; owrc=$?
+      if [ "$owrc" -eq 2 ]; then starved="$owned"; owned=""; fi
       if [ -n "$owned" ] && [ "$ageS" -le "$ownedmax" ]; then
         printf 'cc-backlog reap: KEEP %s [owned wait — %s; claimed %ss]\n' "$id" "$owned" "$ageS"
         continue
@@ -1042,6 +1144,18 @@ cmd_reap() {
           "$id" "${by:-<none>}" "$ageS"
         continue
       fi
+      # TOTAL ORACLE STARVATION — the same abstention, one oracle down. Here the claimer DID answer
+      # ("not live"), but for a dispatched item that answer is about the DISPATCHER's spent pid and
+      # says nothing about the worker; the only oracle that can see the worker is the occupancy probe,
+      # and it never ran. So no oracle has produced evidence about the WORKER, and the transition on
+      # offer is `reopen` — cc-dispatch's fire predicate. Abstain, bounded by the same ceiling as an
+      # unresolved claimer, and say which probe went dark: a silent abstain is indistinguishable from
+      # an inert oracle (memory: feature-durability-mechanism-not-memory).
+      if [ -n "$starved" ] && [ "$ageS" -le "$unresolvedmax" ]; then
+        printf 'cc-backlog reap: KEEP %s [worktree oracle UNRESOLVED — %s; no answer is not proof of death, abstaining; claimed %ss]\n' \
+          "$id" "$starved" "$ageS"
+        continue
+      fi
       # A WEDGED owned wait (live worktree, but past the ceiling) BLOCKS regardless of the attempt
       # count — it never reopens. Reopening would fire a second worker into a worktree the first one
       # still occupies, which is the very double-dispatch this oracle exists to prevent; and the
@@ -1049,11 +1163,14 @@ cmd_reap() {
       # ceiling blocks for the mirror-image reason: still not proof of death, so still never reopened
       # — but the abstention itself has to end somewhere, and it ends at a human.
       local why="stall, $claims attempts"
-      if [ "$claims" -ge "$maxattempts" ] || [ -n "$owned" ] || [ "$clrc" -eq 2 ]; then
+      if [ "$claims" -ge "$maxattempts" ] || [ -n "$owned" ] || [ "$clrc" -eq 2 ] || [ -n "$starved" ]; then
         local smsg="dead-worker stall after ${claims} dispatch attempt(s) (idle ${ageS}s) — not auto-completable. Investigate, then \`cc-backlog unblock ${id}\`."
         if [ -n "$owned" ]; then
           why="wedged owned wait"
           smsg="wedged owned wait past the ${ownedmax}s ceiling — ${owned} — after ${claims} dispatch attempt(s) (claimed ${ageS}s). The worker is NOT dead and its worktree is still occupied, so this was NOT reopened: find what the wait is blocked on, then \`cc-backlog unblock ${id}\`."
+        elif [ -n "$starved" ]; then
+          why="unresolvable worktree oracle"
+          smsg="the worktree occupancy oracle could not be RESOLVED past the ${unresolvedmax}s ceiling — ${starved} — after ${claims} dispatch attempt(s) (claimed ${ageS}s). The claimer read not-live, but for a dispatched item that is the DISPATCHER's spent pid, so nothing here is evidence about the worker. NOT reopened: reopening on a probe that never ran would fire a second peer at possibly-live work. Restore the probe (lsof / CC_BACKLOG_WT_ROOT) or establish by hand whether the worker is alive, then \`cc-backlog unblock ${id}\`."
         elif [ "$clrc" -eq 2 ]; then
           why="unresolvable claimer"
           smsg="claimer ${by:-<none>} could not be RESOLVED past the ${unresolvedmax}s ceiling — the liveness registry gave no answer (absent, wedged, or unparseable) and the worktree shows no live work, after ${claims} dispatch attempt(s) (claimed ${ageS}s). NOT reopened: an unanswered probe is a non-verdict, never proof of death, and reopening would fire a second worker at possibly-live work. Establish whether the worker is alive (or repair the registry), then \`cc-backlog unblock ${id}\`."
