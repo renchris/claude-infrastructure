@@ -347,9 +347,28 @@ a hard stop cannot be paid back by a later catch-up without destroying the print
 1. **The sprite is bilaterally symmetric, so the turn-around is a visual no-op.** Ears at 0/200, eyes
    at 40/160, body 20+180 all mirror about x=110, and `legA` maps onto `legB` under `scaleX(-1)`. Found
    independently by two agents. "Turn around" is unavailable as a beat without new art.
-2. **Stride and scroll are not locked.** 32.7 px/s ÷ 2 strides/s = 16.3 px per stride = 1.13 cells,
-   while the legs are two cells apart — **the creature has been sliding the whole time.** Fixing this
-   is what makes the footprint lock possible, so it is a prerequisite, not a polish item.
+2. **Stride and scroll are not locked** — RESOLVED, and the original diagnosis here was too narrow.
+   This section first read "32.7 px/s ÷ 2 strides/s = 16.3 px per stride = 1.13 cells while the legs
+   are two cells apart", which implies one wrong rate to correct. Measured against the emitted files
+   there were **four different ground-ish rates** — near tufts 1.51 cells/stride, foreground 2.26,
+   mounds 0.75, far mounds 0.38. **"The ground" was never one layer**, so there was no single ground
+   speed to lock to; that, not a bad constant, was the defect.
+
+   **The condition, derived rather than tuned:** `(TILE / STRIP_PERIOD) × STRIDE == k × CELL × scale`,
+   with both periods dividing P. Seven solutions exist in the usable scale band; the chosen one is
+   `STRIP_PERIOD = 20 s, scale = 1.2, k = 2`, and a designated strip layer carries that rate.
+   Independently verified off the emitted file: the strip translates −1920 px over 20 s = 96 px/s =
+   **48.000 px per 0.5 s stride = exactly 2.0000 cells**, i.e. the ground advances one full
+   leg-spacing per stride. Enforced by `assert_stride_locked`, which fails the build naming the
+   offending cell count and the scales that would work — sabotage-proved by restoring 1.06, which
+   reports "2.264 sprite cells at scale 1.06".
+
+   🔒 **CONSEQUENCE: clawd's scale is no longer a free art-direction variable.** It is pinned by the
+   lock, all four variants sit at 1.2, and the print pitch is now a design constant rather than a
+   knob. Any future "make clawd bigger/smaller" must move `STRIP_PERIOD` or `STRIDE` with it, or
+   re-solve the condition — a bare scale change silently breaks the footprint lock that the whole
+   thesis rests on. Note the lock happens to scale clawd **up** from 1.06, which is independently
+   what the gesture-legibility finding wanted, so the two constraints agree rather than compete.
 
 ### Open for the operator, not for us
 
