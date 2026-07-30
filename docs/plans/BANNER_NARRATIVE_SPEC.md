@@ -57,11 +57,28 @@ and closes the cycle.
 That last row is what closes the loop causally: the event that starts the story is the event that
 ends the sleep, so t=P is both the seam and the narrative return.
 
-**Sequence them, do not stack them.** One event visible at a time, with clear empty air between.
-Phase must live in **keyframe percentages**, never authored `animation-delay` — the freeze in
-`banner-shots.sh` overrides delay on `*`, so an authored delay is discarded and every frozen frame
-shows the wrong phase (and the t=0 vs t=P hash test cannot fail on the phase question).
-`scripts/banner-build.py hold_cycle()` already rotates events inside a period; reuse it.
+**Sequence unrelated beats; STACK beats that cause each other.** ⚠️ This started life as the
+unqualified "sequence them, do not stack them", and that form is *wrong* — it forbids the very thing
+this redesign exists for. The resident's cheer is caused by the visitor arriving, so a strict
+pairwise-disjointness rule rejects causality itself. Causally-linked beats **must** overlap, declared
+as one beat in two elements (`COMPOSITE_OF`) — the same precedent as Zzz-during-sleep. The corrected
+rule: **stack when one beat causes the other; sequence when they are unrelated, with clear empty air
+between.**
+
+A subtlety the gate surfaced and that a hand-written rule would have missed: naming a single parent
+for the cheer is not enough. Declaring only `peer` as its cause made the gate correctly reject v6a,
+where the cheer is caused by the `peek` it overlaps. **The parent is whichever visitor beat that
+variant carries**, so the relationship is per-variant, not global.
+
+**Phase lives in the element, and the freeze is additive.** ⚠️ This section previously read "phase
+must live in keyframe percentages, never authored `animation-delay`", on the grounds that the freeze
+overrode delay on `*` and discarded it. That was true of the old freeze and is now **superseded** —
+it solved the clobbering by removing the feature. The freeze is now additive: an element keeps its
+phase in `--d`, the harness supplies only the seek in `--fz`, and the delay is their `calc()` sum, so
+custom-property inheritance carries it into SVG children and assets with no `--d` are byte-unaffected.
+Verified against a three-rect control that renders one step apart under the new freeze and identically
+under the old one. Consequence: the seam test now genuinely exercises phase (staggered vs
+stripped-stagger produce different renders), where before it could not fail on that question.
 
 ## Specific rulings
 
