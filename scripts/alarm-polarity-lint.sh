@@ -97,10 +97,21 @@ for f in "${FILES[@]}"; do
       for (i = 1; i <= NR; i++) {
         L = line[i]
         if (L !~ ("=[[:space:]]*\"?(" names ")\"?[[:space:]]*\\]")) continue
-        if (match(L, /[A-Za-z_][A-Za-z_0-9]*=\$\(\([[:space:]]*[A-Za-z_][A-Za-z_0-9]*[[:space:]]*\+/)) {
-          v = substr(L, RSTART, RLENGTH); sub(/=.*/, "", v)
+        # EVERY increment on the line, not just the first. The real defect was written
+        #   seen=$((seen + 1)); [ "$v" = "red" ] && red=$((red + 1))
+        # so a single `match()` registered `seen` — the window counter — and never `red`, and the lint
+        # MISSED the exact bug it exists to catch. Found by tightening the positive control in
+        # tests/alarm-polarity-lint.bats to a genuinely pre-fix baseline; the looser baseline
+        # (post-fix, where the two increments sit on separate lines) had passed.
+        # NOTE: no apostrophes anywhere in this awk program -- it is single-quoted, and one
+        # apostrophe in a comment terminates the whole string (SC1011). Cost one debug cycle. Over-registering a window counter is harmless: pass 2 only fires
+        # on a variable appearing to the LEFT of -eq, where a window counter does not.
+        rest = L
+        while (match(rest, /[A-Za-z_][A-Za-z_0-9]*=\$\(\([[:space:]]*[A-Za-z_][A-Za-z_0-9]*[[:space:]]*\+/)) {
+          v = substr(rest, RSTART, RLENGTH); sub(/=.*/, "", v)
           fail_only[v] = fail_only[v] + 1
-          where[v] = i
+          if (!(v in where)) where[v] = i
+          rest = substr(rest, RSTART + RLENGTH)
         }
       }
       # PASS 2 — any of those compared for EQUALITY against another counter.
