@@ -420,9 +420,9 @@ handle_no_desk() { # <reason>
       local fwd=""
       if [ -n "$PANE" ] && write_forward "$PANE" "$pane"; then fwd="; mail forwarded $PANE -> $pane"; fi
       heal_role "$pane"
-      idl no-desk fire "fired replacement desk from canned brief (--window, headless); role $ROLE healed -> $pane${fwd}; ${reason}"
+      idl no-desk fire "fired replacement desk from canned brief (headless; anchor resolved at the chokepoint, split-right); role $ROLE healed -> $pane${fwd}; ${reason}"
     else
-      idl no-desk fire "fired replacement desk from canned brief (--window, headless); no cc-fired stamp yet to heal role; ${reason}"
+      idl no-desk fire "fired replacement desk from canned brief (headless; anchor resolved at the chokepoint, split-right); no cc-fired stamp yet to heal role; ${reason}"
     fi
   else
     idl no-desk fire-failed "handoff-fire returned nonzero: ${FIRE_ERR:-<no stderr captured>}; ${reason}"
