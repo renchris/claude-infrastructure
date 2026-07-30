@@ -374,6 +374,42 @@ unwired) — **that reasoning does not apply here**: `cc-relogin-poll` has a rea
 (`cc-relogin-poll.log`) and a real declared cadence (3600 s). Row 12's LINT is untouched; only a
 row is added. **Raised with the coordinator before landing** rather than decided alone.
 
+### M5 — `/limit-recover` could not be reached by the failure it recovers · `commands/limit-recover.md`
+
+`Scope (grown): +an auth-cliff trigger and decision branch in /limit-recover.` **Follow-On Gate
+PASS** — F1 net-positive (it is the LAST stranding path left in the frozen scope: M1 stops *new* work
+reaching a dying account, and nothing addressed work already in flight when the wall arrives) · F2
+grounded in this session's disk read of the file (every trigger named a QUOTA event; zero auth
+vocabulary) · F3 a docs edit to a command row 7 owns, no escalation surface · F4 one line plus one
+section.
+
+Every trigger in `limit-recover`'s description named a quota event — 5-hour, weekly, Fable,
+monthly-spend — so a session killed by its account's **login cliff** matched none of them, while the
+transplant machinery in that very file is precisely the right recovery. **The capability existed and
+the failure that needed it could not reach it** — the row's own shape, one layer up.
+
+The substantive content is ONE branch, not a synonym list: **"wait for the reset" does not exist on a
+cliff.** A cap has `resets_at`; past `refreshTokenExpiresAt` every grant is refused by construction
+(C9/C10/C11: six refreshes did not move the wall, 24 re-attempts failed, 93.5 h down until a human
+logged in). Hence: never wait, never retry the grant · transplant is the only zero-loss path ·
+`cc-relogin` runs **in parallel, not first** (it needs `k == 0`, so it cannot run while the work is
+still on the account — repairing first inverts the dependency and strands the work for the whole
+repair) · last healthy account ⇒ genuine STOP-ASK with a salvage bundle taken while waiting.
+`~/.claude/commands/limit-recover.md` is a **symlink** into the checkout, so no activation step.
+
+### M6 — a trunk repair, taken because it reds the gate for every lander
+
+`Scope (grown): +declare the trunk's undeclared com.claude.scratchpad-reaper plist.` **Follow-On Gate
+PASS** — F1 (both the three-way coverage lint and `tests/cc-fleet.bats` were RED on *pristine*
+origin/main, blocking every land, not just mine) · F2 (all four fields read from disk: not installed,
+not loaded, `StartInterval 21600`, and `auto` verified a REAL sensor because
+`scripts/scratchpad-reaper.sh:157` echoes a per-run summary — unlike `com.claude.relogin`'s, which is
+why that row names its per-tick log explicitly) · F3 (a manifest declaration; no activation) · F4
+(one row plus the count convention this file already documents). Not row 7's artifact; repaired
+rather than allowlisted, exactly as `com.claude.capacity-alarm` was two commits earlier in the same
+file. `owner_row 11` is marked PROVISIONAL in the manifest — the field is routing metadata and
+changes no verdict, so its real owner can correct it in isolation.
+
 ### What this design does when a dependency is DARK (R12 — fail-soft, mandatory)
 
 | Dependency | Owner | If landed-but-inert / dark |
