@@ -252,6 +252,28 @@ scripts/handoff-fire.sh --split-right --follow \
 Verify engagement by transcript CONTENT (assistant turns + tool_use), never the script's "birth"
 verdict.
 
+🚨 **`exit 9` IS A REFUSED FIRE, AND IT LOOKS LIKE NOTHING.** Verified against the DEPLOYED file
+2026-07-29T18:0xZ on row 2's ping: `~/.claude/scripts/handoff-fire.sh` is a **symlink** into the
+shared checkout, so the capacity gate has been live all along — default **ON**
+(`CC_FIRE_CAPACITY_GATE:-on`, live `:1013`), ceiling `CC_FIRE_MAX_LOAD_PER_CORE:-2.0` (`:1017`),
+and a net-new fire above that ceiling is refused with **`exit 9` before any side effect**
+(`:1849`). `--recycle` is exempt (net-zero panes). This box's load has ranged 8-59 on 10 cores, so
+the gate **admits and refuses intermittently** — 1.4/core admits, row 13's 2.9-6.0/core samples all
+refuse. **Never fire without capturing the status**, or you will record a fire that never happened:
+
+```bash
+scripts/handoff-fire.sh … ; rc=$?
+case $rc in
+  0) : ;;                       # then STILL verify engagement by transcript CONTENT
+  9) echo "REFUSED by capacity gate — box saturated. Re-check load and retry; do NOT record a fire." ;;
+  *) echo "fire failed rc=$rc" ;;
+esac
+```
+Do NOT reach for `CC_FIRE_CAPACITY_GATE=off` as routine practice — the refusal is the chokepoint
+gate doing the job the coordinator ruling delegated to it. Override only with a stated reason.
+This does not conflict with row 13's ⛔: correct as an instantaneous admission check, catastrophic
+as an always-on autonomous dispatch gate.
+
 **The flag is `--prompt-file`, not `--payload`.** I wrote `--payload` from recall composing this
 block, and caught it only by grepping `scripts/handoff-fire.sh:1808` before publishing. All five
 flags above are verified against the parser: `--prompt-file` 1808 · `--account` 1809 · `--repo`
