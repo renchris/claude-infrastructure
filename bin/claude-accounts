@@ -796,6 +796,18 @@ CLIFF_SOFT_FACTOR = 0.25
 CLIFF_DRAIN_REASON = "login-cliff-drain"
 
 
+def _quota_age_s(cfg):
+    """Age in whole seconds of the sweep this process read, from the cache's OWN recorded `ts`
+    (cache_write stamps it) — never a file mtime, which answers a different question. None when
+    unknowable, so a consumer can record `-` rather than a fabricated 0."""
+    try:
+        with open(cfg["cache_file"]) as f:
+            ts = json.load(f).get("ts")
+        return max(0, int(time.time() - float(ts))) if ts else None
+    except (OSError, ValueError, TypeError, KeyError):
+        return None
+
+
 def _cliff_env(name, default):
     """Float from the env, else the default. A malformed value is IGNORED, never fatal and never
     zero: a typo in a tuning knob must not silently disable a safety term (nor crash a router)."""
@@ -1902,6 +1914,30 @@ def main():
         # A yielded login-cliff drain is never silent: the caller is told that the account it just
         # received is inside its drain band and was re-admitted only because nothing else was
         # routable. Stdout stays exactly the contract (account name / acct score lines).
+        # ROUTE-META (ACCOUNT_ROUTING_V2 M3b): the INPUTS of the decision, in a machine-parseable
+        # token, so "did routing read live quota, and did it see the cliff?" is answerable from disk.
+        # route.jsonl recorded only the OUTPUT (ts/slot/outcome/detail), which makes the frozen
+        # scope's second clause unfalsifiable — the campaign's most-repeated defect.
+        # On STDERR, never stdout: the stdout contract is one account name (--route) or `acct score`
+        # lines (--rank), and row 5's cc-wave-plan parses stdout BY SHAPE and discards stderr.
+        if os.environ.get("CC_ROUTE_RECORD_INPUTS", "on").strip().lower() not in ("off", "0", "false"):
+            w = cand[0][1]
+            lxh = w.get("login_expires_h")
+            age = _quota_age_s(cfg)
+            print("route-meta: "
+                  + " ".join([f"acct={w['acct']}",
+                              f"cliff_band={cliff_band(w)}",
+                              f"cliff_h={lxh:.1f}" if isinstance(lxh, (int, float)) else "cliff_h=-",
+                              f"cliff_at={w.get('login_expires_at') or '-'}",
+                              # quota_as_of is set ONLY on an inherited (stale) row, which the router
+                              # excludes — so on a routed account it is absent BY CONSTRUCTION and
+                              # `-` is the honest value. The falsifiable freshness number is the age
+                              # of the sweep this decision read.
+                              f"quota_as_of={w.get('quota_as_of') or '-'}",
+                              f"quota_age_s={age if age is not None else '-'}",
+                              f"cached={1 if cached else 0}",
+                              f"yielded={1 if w.get('cliff_yielded') else 0}"]),
+                  file=sys.stderr)
         drained = [r["acct"] for _s, r in cand if r.get("cliff_yielded")]
         if drained:
             print(f"claude-accounts: login-cliff drain YIELDED for {', '.join(drained)} — no other "
