@@ -31,6 +31,7 @@ setup() {
 
   {
     grep '^_iso_now() {' "$HF" || true
+    sed -n '/^emit_fire_event() {/,/^}/p'       "$HF"
     sed -n '/^emit_fire_refusal() {/,/^}/p'     "$HF"
     sed -n '/^check_slash_head() {/,/^}/p'      "$HF"
     sed -n '/^payload_pane_id_gate() {/,/^}/p'  "$HF"
@@ -186,4 +187,17 @@ setup() {
   printf 'not-a-dir\n' > "$HOME/.claude/logs"
   run emit_fire_refusal capacity "x"
   [ "$status" -eq 0 ]
+}
+
+@test "F12/F13 VOCABULARY: an unverified RECYCLE is not filed as a refusal" {
+  # `class` is what consumers count. A successful-but-unverified recycle logged as "refused" would
+  # inflate the refusal metric with non-refusals and make a genuine fire outage unreadable — the
+  # campaign's own CUT/HUNG-is-not-RED leak, one layer down.
+  emit_fire_event recycle-unverified process-alive "relaunched pane P; engagement NOT verified"
+  emit_fire_refusal capacity "load over ceiling"
+  run jq -rs 'map(.class)|join(",")' "$LOG"
+  [ "$output" = "recycle-unverified,refused" ]
+  # a consumer counting refusals must see exactly ONE
+  run jq -rs 'map(select(.class=="refused"))|length' "$LOG"
+  [ "$output" = "1" ]
 }
