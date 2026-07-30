@@ -294,6 +294,14 @@ printf '%s %s' "$used" "$tx_mb" > "$latch" 2>/dev/null || true
 # fire narrating itself as "context N% ≥ 73%" would misattribute the cause AND look like a false positive
 # (the reader checks the fill, finds it low, and distrusts the hook).
 size_fired=0; { [ "$over_size" = 1 ] || [ "$over_rss" = 1 ]; } && [ "$used" -lt "$T" ] && [ "$early" = 0 ] && size_fired=1
+# M-3: the DURABLE, self-describing outcome record (CONTEXT_ECONOMY_V2 §4.3). `advised` — this hook
+# only ever advises; it has no exec path at all. Measured before this landed: 2,173 evaluations,
+# 2,173 abstains, ZERO fires in the hook's entire lifetime — so this is the first record it will ever
+# produce, and it carries the window so the fill is interpretable later (the row's core defect).
+command -v ce_record_recycle >/dev/null 2>&1 && \
+  ce_record_recycle "$tel" advised "$used" \
+    "$(if [ "$size_fired" = 1 ]; then printf 'size'; elif [ "$early" = 1 ]; then printf 'forecast'; else printf 'fill'; fi)" \
+    "boundary" || true
 log_idl fired "past-boundary" \
   "$(jq -cn --argjson used "$used" --argjson threshold "$T" --arg head "${head:0:8}" \
       --argjson burn "$burn_x100" --argjson fc "$forecast_min" --argjson early "$early" --arg conv "${conv_age:-}" \
