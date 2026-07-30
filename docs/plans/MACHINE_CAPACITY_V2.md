@@ -1030,3 +1030,57 @@ per-pattern band choice ships `background` day-one (consistent with cc-bats); if
 watcher (the nudge hook does not exempt subagents — observed on all Phase-1 agents + probes).
 Fork-churn litter squarely in this row's domain; smallest fix is a subagent guard in the nudge
 hook. BACKLOGGED for row 3/6 with this citation, not built here (their file).
+
+## 11.9 gu13-levers findings (LANDED 2026-07-30) — two premises falsified, one design revision
+
+Full report: measured on THIS box (loadavg 20–46), kernel constants cited from XNU source, iTerm2
+3.6.11 knobs from its own `iTermAdvancedSettingsModel.m`, Spotlight via a controlled 4-probe
+experiment. The three load-bearing outcomes:
+
+**(1) BAND REVISION — `background` is a measured ~84–89× tax; the row's own M1 band was wrong for
+long batch.** PRI map (measured): default 31 · `-c utility` **20** (P-core-eligible,
+`THROTTLE_LEVEL_TIER1` I/O ≈ baseline) · `-c background`/`-c maintenance`/`-b` **4** (E-core-
+CONFINED — 2 cores shared with 628 system procs at PRI≤4, I/O tier 2). Measured: fork/exec ×84,
+CPU ×89 under load, 4-concurrent scaling 1.87× wall ⇒ ~2 usable cores ⇒ N corpora ≈ ⌈N/2⌉ ×
+84×-single. `nice -n 19` is DECORATIVE (NI moves, PRI stays 31; indistinguishable from baseline;
+irreversible for non-root) — drop it. Clamps are spawn-only and immutable both directions
+(`taskpolicy -c … -p` is a SILENT NO-OP, rc=0); only `-b -p`-applied-post-spawn is reversible; every
+failed lift returns rc=0 ⇒ never trust the exit code, re-read `ps -o pri=`. **Revision (M1-rev,
+extends M7): long-batch band = `taskpolicy -c utility` alone** — yields to interactive PRI 31,
+keeps throughput; `background` stays right ONLY for short idle-time bursts. The census's
+demoted-band definition widens: pri ≤ 20 counts as covered (utility), reported per-tier. The frozen
+DoD's "background band" wording is INSTRUMENT-CORRECTED to "demoted band (utility clamp)": the
+DoD's intent — batch cannot compete with the interactive band — is exactly what utility preserves
+while removing an 84× self-harm. Child inheritance verified to grandchild depth for both bands.
+
+**(2) iTerm2 (Section A) — the saturated thread is LEGACY CPU GLYPH DRAWING, not parsing.** 5-s
+`sample` of the live process: 56–70% of the main thread in `legacyView:drawRect:` →
+`iTermTextDrawingHelper`; Metal active for only a minority of sessions (93 vs 2,182 samples).
+Parsing (`com.iterm2.mutation`) is 4.7× cheaper than drawing. Second-busiest queue:
+`fastForegroundJobUpdates` process-tree walking (803 samples, `__sysctl` ×387 over 1,556 procs).
+**The default `disableAdaptiveFrameRateInInteractiveApps=YES` exempts alternate-screen (TUI) panes
+from the adaptive throttle — exactly our 60 panes redraw at 60–120 FPS regardless of throughput.**
+Top-5 knobs (commands + magnitudes + risk in the harvested report; render lane consumes them):
+adaptive-in-TUI false (~0.5–0.9 cores) · UseMetal true (ceiling = the whole 1.39-core bottleneck;
+MEDIUM risk at 60 CAMetalLayers — instrument first via showMetalFPSmeter) · frame ceilings 30/30/10
+(~0.3–0.6) · fastForegroundJobUpdates false (~0.15–0.4) · dimming+graph-animation off (~0.1–0.3,
+ergonomic cost; DimOnlyText middle ground). CC's own TUI uses DECSET 2026 synchronized updates ⇒
+full VT100Grid copy per begin/end — inherent per-byte cost above plain streams. Non-visible tabs
+parse but do NOT draw (cadence is visibility-gated) — today 60/60 panes are visible, so
+tab-stacking is a free structural lever nobody uses.
+
+**(3) Spotlight (Section E) — M8b's premise DOES NOT HOLD; downgraded to a drift probe.** All 15
+`~/.claude*` dirs are ALREADY index-excluded by the dot-prefix rule — proven per-file (transcript
+mdls: 15 filesystem-only attrs, 0 ContentType/Kind vs control 31/3). Controlled experiment on this
+OS: `.metadata_never_index` is **DEAD** (probe dir indexed anyway); `.noindex` suffix and dot-prefix
+both work (byte-identical signature). The Privacy list is write-only-by-UI and root-gated to read ⇒
+NOT drift-checkable. The 0.49–0.80-core mds reading does NOT reproduce (sustained re-measure: peak
+2.1% — the earlier read was a transient rebuild or misattribution; both reads were real,
+the class is bursty). `mdutil -s <dir>` is USELESS for directories ("unknown indexing state").
+**M8b final shape: NO exclusion action; render-census keeps the indexing-class CPU column; parity
+gains the sudo-free per-file probe (mdls attr-count with a positive control on an indexed file —
+never assert exclusion from a bare mdfind zero).** Spotlight exclusion cannot reduce FSEvents load
+(volume-wide, no opt-out) — category error avoided.
+
+**New anomaly for the ledger:** `NotificationCenter` at 22.8% of a core — 20× the entire mds
+family, in nobody's brief. Backlogged with a `sample 660 5` as the named next probe.
