@@ -24,13 +24,33 @@
 #   · `sysctl vm.swapusage` used > 0 is the HARD signal — by then it is already happening.
 #
 # Verdicts (four, never a boolean — "could not measure" must not read as "fine"):
-#   OK       headroom above the warn floor and no swap in use.        exit 0
-#   WARN     headroom below the warn floor, still no swap.            exit 1
-#   ALARM    swap in use, or headroom below the alarm floor.          exit 2
-#   NO-DATA  vm_stat/sysctl unreadable — nothing is asserted.         exit 3
+#   OK       every rung clear.                                        exit 0
+#   WARN     any rung at its warn floor, none at alarm.               exit 1
+#   ALARM    any rung at its alarm floor.                             exit 2
+#   NO-DATA  vm_stat unreadable — nothing is asserted.                exit 3
+#
+# FOUR RUNGS, MAX-COMBINED (M9/M9-ext, §11.3). The verdict is the WORST rung, never the last one
+# evaluated — so a new term can only ever raise the verdict, never mask an existing one:
+#   1. swap in use            > 0 MB           ⇒ ALARM   (the hard, LAGGING signal)
+#   2. reclaimable headroom   < ALARM_GB/WARN_GB
+#   3. kernel pressure level  >= 4 / >= 2      ⇒ ALARM / WARN   (the kernel's own LEADING indicator)
+#   4. per-proc phys outlier  > PROC_WARN_GB   ⇒ WARN    (the leak term; report always, gate softly)
+#
+# WHY RUNG 3 EXISTS. 2026-07-26 proved the swap rung fires only AFTER the pain: 2.56 GB of swap was
+# in use at 57 procs, and the swap file was later reset by a reboot — so "swap 0" today is not
+# evidence the ceiling was never hit. `kern.memorystatus_vm_pressure_level` is what the kernel itself
+# uses to decide it is unhappy, and it moves BEFORE swapping. Compressor stays REPORTED-BUT-NOT-GATED:
+# no calibrated threshold for it exists, and inventing one would be a made-up number in a verdict.
+#
+# AN UNREADABLE PRESSURE LEVEL IS NOT NO-DATA — deliberately. NO-DATA belongs to the ONE instrument
+# the verdict cannot exist without (vm_stat headroom). The pressure sysctl is a supplementary rung:
+# if it is missing on some macOS build, the headroom/swap verdict is still fully valid, and demoting
+# it to NO-DATA would destroy a working alarm to report the absence of a bonus. So a missing level is
+# skipped (and logged as null), while a missing headroom is still NO-DATA.
 #
 # Seams: CC_CAPACITY_ALARM=off (kill switch) · CC_CAP_WARN_GB (default 8) ·
-#        CC_CAP_ALARM_GB (default 3) · CC_CAP_LOG · CC_CAP_SELFTEST=1 (positive control)
+#        CC_CAP_ALARM_GB (default 3) · CC_CAP_PROC_WARN_GB (default 3) · CC_CAP_LOG ·
+#        CC_CAP_TOP (top(1) binary, for stubbing) · CC_CAP_SELFTEST=1 (positive control)
 #
 # bash 3.2 safe. Ships to launchd ⇒ tested under /bin/bash.
 
@@ -38,6 +58,7 @@ set -uo pipefail
 
 WARN_GB="${CC_CAP_WARN_GB:-8}"
 ALARM_GB="${CC_CAP_ALARM_GB:-3}"
+PROC_WARN_GB="${CC_CAP_PROC_WARN_GB:-3}"
 LOG="${CC_CAP_LOG:-$HOME/.claude/logs/capacity-alarm.jsonl}"
 APPEND=1; WANT_JSON=0; QUIET=0
 
@@ -91,38 +112,204 @@ print("%.2f %.2f %.2f %.2f" % (head,comp,act,wired))
 MEM="$(read_mem || true)"
 SWAP_MB="$(sysctl -n vm.swapusage 2>/dev/null \
             | sed -n 's/.*used = \([0-9.]*\)M.*/\1/p' | head -1)"
-# shellcheck disable=SC2009  # ps|grep is REQUIRED. pgrep was tried here and SILENTLY UNDERCOUNTS:
-# measured 2026-07-29 with 8 live sessions, `pgrep -cf 'claude-code/bin/claude\.exe'` returned 0
-# while `ps -eo args | grep -c` returned 8 — macOS pgrep -f matches against a TRUNCATED argv, so a
-# long absolute path never matches, and `pgrep -x` cannot see the path at all. A counter that reads 0
-# forever is the exact failure in memory actuator-must-see-the-target-population (134/134 MISS), and
-# here it would make this alarm permanently report an empty fleet. Verify a census instrument against
-# a known population BEFORE trusting it; a zero from a matcher is not evidence of absence.
-SESSIONS="$(ps -eo args 2>/dev/null | grep -cE 'claude-code/bin/claude\.exe' || true)"
-case "$SESSIONS" in ''|*[!0-9]*) SESSIONS=0 ;; esac
+# ── session census — BOTH pid families, counted as TREES, matched at the COMMAND POSITION ─────────
+# THREE separate census defects are fixed here, each measured, each of which silently understated or
+# overstated the fleet. This function is the reason the row exists, so the reasoning stays in-file.
+#
+# (1) pgrep SILENTLY UNDERCOUNTS — the original defect. Measured 2026-07-29 with 8 live sessions,
+#     `pgrep -cf 'claude-code/bin/claude\.exe'` returned 0 while a `ps` read returned 8: macOS
+#     pgrep -f matches against a TRUNCATED argv, so a long absolute path never matches, and
+#     `pgrep -x` cannot see the path at all. A counter that reads 0 forever is the exact failure in
+#     memory actuator-must-see-the-target-population (134/134 MISS) — here it would make this alarm
+#     permanently report an empty fleet. Hence ps, not pgrep.
+#
+# (2) ONE FAMILY IS NOT THE FLEET — the defect this row fixes. The incumbent matched only
+#     `claude-code/bin/claude.exe` and so reported 13 of 31 real session trees (archaeology, §11.2):
+#     sessions launch under TWO disjoint spellings — `.../claude-code/bin/claude.exe` (measured
+#     ≡ exactly the `--agent-id` teammate set) and `.../node_modules/.bin/claude` (the interactive
+#     launcher path). Measured intersection: ZERO — they are disjoint populations, not two views of
+#     one, so the fleet is their SUM. Re-measured live while writing this: 35 + 25 = 60 trees where
+#     the incumbent pattern saw 35. Both families are ~350-765 MB each, so missing one is missing
+#     half the memory the alarm exists to watch.
+#
+# (3) MATCHING ANYWHERE IN argv OVERCOUNTS — found by measurement while fixing (2), and the reason
+#     this reads a specific FIELD rather than the whole line. A whole-argv grep for the same two
+#     patterns returned 83 where the true population is 60: the 23 extras are `bash
+#     .../cc-close-attrib .../node_modules/.bin/claude ...` wrappers, which merely NAME a claude
+#     binary in their arguments. This is memory pgrep-f-matches-agent-briefs ("argv carries whole
+#     briefs, so `pgrep -f X` counts sessions that MENTION X") — the fix is to match on the COMMAND
+#     POSITION (argv[0]) only. Note a PPID-in-family subtraction alone does NOT fix this: those
+#     wrappers' parents are mostly NOT in-family, so 12 of the 23 would have survived it.
+#
+# TREES, NOT PROCESSES. What consumes the ~500 MB is a session tree, so a proc whose parent is itself
+# in-family is a child of an already-counted tree and must not be counted twice. Measured today that
+# subtraction removes 0 (§11.2: "no claude process has a claude parent" — background subagents are
+# in-process), i.e. it is currently a no-op — it is kept because it is the CORRECT reduction, so a
+# future binary that does fork an in-family child cannot silently double the count.
+#
+# `comm` was rejected as the matching field: measured, a `.bin/claude` session reports COMMAND `node`
+# to top(1), so the resolved executable name loses the very distinction being counted.
+census() { # → "<trees> <exe_trees> <bin_trees>"
+  ps -eo pid=,ppid=,args= 2>/dev/null | awk '
+    {
+      cmd = $3; f = ""
+      if      (cmd ~ /claude-code\/bin\/claude\.exe$/) f = "exe"
+      else if (cmd ~ /node_modules\/\.bin\/claude$/)   f = "bin"
+      if (f != "") { fam[$1] = f; par[$1] = $2 }
+    }
+    END {
+      exe = 0; bin = 0
+      for (p in fam) {
+        if (par[p] in fam) continue        # child of an already-counted tree
+        if (fam[p] == "exe") exe++; else bin++
+      }
+      printf "%d %d %d\n", exe + bin, exe, bin
+    }'
+}
+
+CENSUS="$(census || true)"
+SESSIONS=0; SESSIONS_EXE=0; SESSIONS_BIN=0
+if [ -n "$CENSUS" ]; then
+  # shellcheck disable=SC2086  # deliberate word-split of the 3-field awk output
+  set -- $CENSUS
+  SESSIONS="${1:-0}"; SESSIONS_EXE="${2:-0}"; SESSIONS_BIN="${3:-0}"
+fi
+case "$SESSIONS"     in ''|*[!0-9]*) SESSIONS=0 ;;     esac
+case "$SESSIONS_EXE" in ''|*[!0-9]*) SESSIONS_EXE=0 ;; esac
+case "$SESSIONS_BIN" in ''|*[!0-9]*) SESSIONS_BIN=0 ;; esac
+
+# ── the kernel's own leading indicator (M9-ext rung 3) ────────────────────────────────────────────
+# Empty when the sysctl does not exist on this build; see the header — that is a skipped rung, never
+# NO-DATA. Stripped of whitespace so the numeric guards in classify() see a bare integer.
+PRESSURE="$(sysctl -n kern.memorystatus_vm_pressure_level 2>/dev/null | tr -dc '0-9')"
+
+# ── per-proc physical-footprint outlier (M9b rung 4) ──────────────────────────────────────────────
+# §8.5.6 prescribed footprint(1) as the instrument because summed `ps rss` OVERCOUNTS ~2.34x (shared
+# pages counted once per process). top(1)'s MEM column is that same physical-footprint accounting, and
+# unlike footprint(1) it needs no per-pid loop over a 250-proc box — one sample yields the top N.
+#
+# ALARM-NOT-GATE, ABSOLUTELY. This is the leak term the directive asked for, and a leak is diagnosed
+# by a TREND across rows, not by one sample. So the top rows are reported on EVERY row (that is what
+# makes the trend readable at all) and only an absolute breach of PROC_WARN_GB floors WARN — never
+# ALARM, never a refusal. Today's max is iTerm2 at 2.24 GB against a 3 GB floor: the rung is armed
+# and quiet, which is the state a threshold should ship in.
+#
+# ps rss is the FALLBACK, and it is deliberately a worse instrument used only when the better one is
+# unavailable: it overcounts shared pages, so it can only ever raise a false WARN, never hide a real
+# one. Failing toward the louder direction is the right way for a fallback to be wrong.
+read_top_procs() { # → lines "<pid> <mb> <cmd>"
+  "${CC_CAP_TOP:-top}" -l 1 -o mem -n 3 -stats pid,mem,command 2>/dev/null | awk '
+    $1 ~ /^[0-9]+$/ && NF >= 3 {
+      raw = $2; unit = "M"
+      if (raw ~ /[KkMmGg]/) { unit = raw; gsub(/[^KkMmGg]/, "", unit) }
+      n = raw; gsub(/[^0-9.]/, "", n); if (n == "") next
+      mb = n + 0
+      if      (unit == "K" || unit == "k") mb = mb / 1024
+      else if (unit == "G" || unit == "g") mb = mb * 1024
+      cmd = $3; for (i = 4; i <= NF; i++) cmd = cmd " " $i
+      gsub(/[\\"]/, "", cmd); gsub(/[[:space:]]+$/, "", cmd)
+      printf "%s %.0f %s\n", $1, mb, cmd
+      if (++seen == 3) exit
+    }'
+}
+
+TOP_PROCS="$(read_top_procs || true)"
+if [ -z "$TOP_PROCS" ]; then
+  TOP_PROCS="$(ps -eo pid=,rss=,comm= 2>/dev/null \
+                | sort -k2 -nr | head -3 \
+                | awk '{ cmd = $3; for (i = 4; i <= NF; i++) cmd = cmd " " $i
+                         gsub(/[\\"]/, "", cmd); printf "%s %.0f %s\n", $1, $2/1024, cmd }' || true)"
+fi
+
+# JSON array + the max, from the same rows — so the number in the verdict and the rows in the log can
+# never disagree about which process was the outlier.
+TOP_JSON='[]'; MAX_PROC_GB=""
+if [ -n "$TOP_PROCS" ]; then
+  TOP_JSON="$(printf '%s\n' "$TOP_PROCS" | awk '
+    BEGIN { printf "[" }
+    { if (NR > 1) printf ","
+      cmd = $3; for (i = 4; i <= NF; i++) cmd = cmd " " $i
+      printf "{\"pid\":%s,\"mb\":%s,\"cmd\":\"%s\"}", $1, $2, cmd }
+    END { printf "]" }')"
+  MAX_PROC_GB="$(printf '%s\n' "$TOP_PROCS" \
+                  | awk 'BEGIN{m=0} {if ($2+0 > m) m = $2+0} END{printf "%.2f", m/1024}')"
+fi
 
 # ── positive control (R6) — prove the ladder can reach every rung ─────────────────────────────────
 # Without this, "OK" is indistinguishable from "the thresholds are unreachable". Runs the SAME
 # classify function against synthetic inputs, so it tests the real code path, not a description.
-classify() { # <headroom_gb> <swap_mb> → prints verdict
-  local h="$1" s="$2"
+#
+# MAX-COMBINED, not first-match. The rungs are evaluated into a severity level and the WORST wins, so
+# adding a rung can only raise a verdict. The incumbent returned on first match, which would have let
+# a later-added rung be shadowed — and worse, would have made rung ORDER a silent policy decision.
+classify() { # <headroom_gb> <swap_mb> [pressure_level] [max_proc_gb] → prints verdict
+  local h="$1" s="$2" pl="${3:-}" mp="${4:-}" v=0 si=0
+  # headroom is the ONE instrument the verdict cannot exist without (see header).
   if [ -z "$h" ]; then printf 'NO-DATA'; return 0; fi
-  # swap in use is the hard signal and outranks headroom
-  if [ -n "$s" ] && [ "$(printf '%s\n' "$s" | cut -d. -f1)" -gt 0 ] 2>/dev/null; then printf 'ALARM'; return 0; fi
-  if awk -v a="$h" -v b="$ALARM_GB" 'BEGIN{exit !(a+0 < b+0)}'; then printf 'ALARM'; return 0; fi
-  if awk -v a="$h" -v b="$WARN_GB"  'BEGIN{exit !(a+0 < b+0)}'; then printf 'WARN';  return 0; fi
-  printf 'OK'
+
+  # rung 1 — swap in use: the hard signal, and the LAGGING one (by now it is already happening).
+  if [ -n "$s" ]; then
+    si="$(printf '%s\n' "$s" | cut -d. -f1)"
+    case "$si" in ''|*[!0-9]*) si=0 ;; esac
+    if [ "$si" -gt 0 ]; then v=2; fi
+  fi
+
+  # rung 2 — reclaimable headroom: what actually decides whether the box swaps.
+  if awk -v a="$h" -v b="$ALARM_GB" 'BEGIN{exit !(a+0 < b+0)}'; then
+    v=2
+  elif awk -v a="$h" -v b="$WARN_GB" 'BEGIN{exit !(a+0 < b+0)}'; then
+    if [ "$v" -lt 1 ]; then v=1; fi
+  fi
+
+  # rung 3 — kernel pressure level (M9-ext). Absent ⇒ SKIPPED, never NO-DATA (header).
+  case "$pl" in
+    ''|*[!0-9]*) : ;;
+    *) if [ "$pl" -ge 4 ]; then v=2
+       elif [ "$pl" -ge 2 ]; then if [ "$v" -lt 1 ]; then v=1; fi
+       fi ;;
+  esac
+
+  # rung 4 — per-proc footprint outlier (M9b). WARN ceiling by design: one big process is a lead to
+  # follow, not grounds to declare the box in trouble.
+  if [ -n "$mp" ] && awk -v a="$mp" -v b="$PROC_WARN_GB" 'BEGIN{exit !(a+0 > b+0)}'; then
+    if [ "$v" -lt 1 ]; then v=1; fi
+  fi
+
+  case "$v" in 2) printf 'ALARM' ;; 1) printf 'WARN' ;; *) printf 'OK' ;; esac
 }
 
 if [ "${CC_CAP_SELFTEST:-0}" = "1" ]; then
   fails=0
-  for probe in "99:0:OK" "5:0:WARN" "1:0:ALARM" "99:512:ALARM" ":0:NO-DATA"; do
-    h="${probe%%:*}"; rest="${probe#*:}"; s="${rest%%:*}"; want="${rest#*:}"
-    got="$(classify "$h" "$s")"
-    if [ "$got" = "$want" ]; then echo "  control OK   headroom='$h' swap='$s' → $got"
-    else echo "  control FAIL headroom='$h' swap='$s' → $got (want $want)"; fails=$((fails+1)); fi
+  # Every rung, in both directions, plus the three cases that are POLICY rather than arithmetic:
+  # max-combine (a WARN rung must not downgrade an ALARM), an unreadable pressure level staying OK,
+  # and the outlier rung being unable to reach ALARM. probe = headroom:swap:pressure:maxproc:want
+  for probe in \
+      "99:0:1:0:OK"       "5:0:1:0:WARN"    "1:0:1:0:ALARM"   "99:512:1:0:ALARM" ":0:1:0:NO-DATA" \
+      "99:0:2:0:WARN"     "99:0:4:0:ALARM"  "99:0:1:9:WARN"   "5:0:4:0:ALARM"    "1:0:1:9:ALARM" \
+      "99:0::0:OK"        "99:0:1::OK"; do
+    h="${probe%%:*}";  r="${probe#*:}"
+    s="${r%%:*}";      r="${r#*:}"
+    pl="${r%%:*}";     r="${r#*:}"
+    mp="${r%%:*}";     want="${r#*:}"
+    got="$(classify "$h" "$s" "$pl" "$mp")"
+    if [ "$got" = "$want" ]; then
+      echo "  control OK   headroom='$h' swap='$s' pressure='$pl' maxproc='$mp' → $got"
+    else
+      echo "  control FAIL headroom='$h' swap='$s' pressure='$pl' maxproc='$mp' → $got (want $want)"
+      fails=$((fails+1))
+    fi
   done
-  [ "$fails" -eq 0 ] && { echo "capacity-alarm: selftest GREEN (4 rungs + no-data reachable)"; exit 0; }
+  # The census is an instrument too, and its failure mode is a plausible-looking zero. Assert the
+  # invariant a miscount breaks: the two families are disjoint, so the trees must be their exact sum.
+  cs="$(census || true)"
+  # shellcheck disable=SC2086  # deliberate word-split of the 3-field census output
+  set -- $cs
+  if [ "${1:-x}" = "$(( ${2:-0} + ${3:-0} ))" ]; then
+    echo "  control OK   census trees=${1:-?} = exe ${2:-?} + bin ${3:-?} (disjoint-family sum)"
+  else
+    echo "  control FAIL census trees=${1:-?} != exe ${2:-?} + bin ${3:-?}"; fails=$((fails+1))
+  fi
+  [ "$fails" -eq 0 ] && { echo "capacity-alarm: selftest GREEN (4 rungs + no-data + census reachable)"; exit 0; }
   echo "capacity-alarm: selftest RED ($fails)" >&2; exit 70
 fi
 
@@ -133,7 +320,7 @@ if [ -n "$MEM" ]; then
   HEAD="${1:-}"; COMP="${2:-}"; ACT="${3:-}"; WIRED="${4:-}"
 fi
 
-VERDICT="$(classify "$HEAD" "${SWAP_MB:-0}")"
+VERDICT="$(classify "$HEAD" "${SWAP_MB:-0}" "$PRESSURE" "$MAX_PROC_GB")"
 case "$VERDICT" in
   OK)      RC=0 ;;
   WARN)    RC=1 ;;
@@ -163,9 +350,15 @@ if [ -n "$HEAD" ]; then
 fi
 
 TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-JSON="$(printf '{"ts":"%s","verdict":"%s","sessions":%s,"headroom_gb":%s,"compressor_gb":%s,"active_gb":%s,"wired_gb":%s,"swap_used_mb":%s,"warn_gb":%s,"alarm_gb":%s,"est_room_sessions":%s,"per_session_mb_est":%s}' \
+# Fields are APPEND-ONLY — every consumer of an existing key keeps working, and a row from before this
+# change stays parseable. `sessions` keeps its name and gains its correct VALUE (trees across both
+# families); the two per-family counts are added beside it so a future census regression is visible in
+# the log itself rather than only in an aggregate that looks plausible either way.
+JSON="$(printf '{"ts":"%s","verdict":"%s","sessions":%s,"headroom_gb":%s,"compressor_gb":%s,"active_gb":%s,"wired_gb":%s,"swap_used_mb":%s,"warn_gb":%s,"alarm_gb":%s,"est_room_sessions":%s,"per_session_mb_est":%s,"sessions_exe":%s,"sessions_binclaude":%s,"pressure_level":%s,"proc_warn_gb":%s,"max_proc_gb":%s,"top_procs":%s}' \
   "$TS" "$VERDICT" "$SESSIONS" "${HEAD:-null}" "${COMP:-null}" "${ACT:-null}" "${WIRED:-null}" \
-  "${SWAP_MB:-0}" "$WARN_GB" "$ALARM_GB" "${ROOM:-null}" "$PER_MB")"
+  "${SWAP_MB:-0}" "$WARN_GB" "$ALARM_GB" "${ROOM:-null}" "$PER_MB" \
+  "$SESSIONS_EXE" "$SESSIONS_BIN" "${PRESSURE:-null}" "$PROC_WARN_GB" "${MAX_PROC_GB:-null}" \
+  "$TOP_JSON")"
 
 if [ "$APPEND" = 1 ]; then
   mkdir -p "$(dirname "$LOG")" 2>/dev/null || true
@@ -198,6 +391,20 @@ if [ "${CC_CAP_PAGE:-on}" != "off" ] && [ "$APPEND" = 1 ]; then
         "$VERDICT" "${HEAD:-?}" "$SESSIONS" "$WARN_GB" "$ALARM_GB"
       printf 'swap used: %s MB  ·  compressor: %s GB  ·  est. room: ~%s more sessions\n' \
         "${SWAP_MB:-0}" "${COMP:-?}" "${ROOM:-?}"
+      printf 'sessions: %s trees (%s claude.exe + %s .bin/claude)  ·  kernel pressure level: %s\n' \
+        "$SESSIONS" "$SESSIONS_EXE" "$SESSIONS_BIN" "${PRESSURE:-unreadable}"
+      # NAME the outlier. A page that says "a process is large" sends the operator hunting; the whole
+      # value of the rung is arriving with the pid already identified.
+      if [ -n "$MAX_PROC_GB" ] \
+         && awk -v a="$MAX_PROC_GB" -v b="$PROC_WARN_GB" 'BEGIN{exit !(a+0 > b+0)}'; then
+        printf 'PER-PROC OUTLIER: %s GB > %s GB floor. Top footprints:\n' "$MAX_PROC_GB" "$PROC_WARN_GB"
+        printf '%s\n' "$TOP_PROCS" | awk '{ cmd = $3; for (i = 4; i <= NF; i++) cmd = cmd " " $i
+                                            printf "  pid %s  %s MB  %s\n", $1, $2, cmd }'
+      elif [ -n "$TOP_PROCS" ]; then
+        printf 'top footprints: %s\n' "$(printf '%s\n' "$TOP_PROCS" \
+          | awk '{ cmd = $3; for (i = 4; i <= NF; i++) cmd = cmd " " $i
+                   printf "%s%s %s MB", (NR > 1 ? " · " : ""), cmd, $2 } END { print "" }')"
+      fi
       printf 'shed by CLOSING idle sessions (/handoff them). Do NOT add a load-based spawn gate —\n'
       printf 'measured REFUSE 10/10 against real load; see docs/plans/MACHINE_CAPACITY_V2.md §8.5.7.\n'
       printf 're-run:  %s\n' "$0"
@@ -212,9 +419,15 @@ fi
 
 if [ "$QUIET" != 1 ] && [ "$WANT_JSON" != 1 ]; then
   echo "capacity-alarm — $TS"
-  echo "  live sessions:          ${SESSIONS}"
+  echo "  live sessions:          ${SESSIONS} trees   (${SESSIONS_EXE} claude.exe + ${SESSIONS_BIN} .bin/claude)"
   echo "  reclaimable headroom:   ${HEAD:-?} GB   (warn <${WARN_GB} · alarm <${ALARM_GB})"
   echo "  compressor / active:    ${COMP:-?} GB / ${ACT:-?} GB"
+  echo "  kernel pressure level:  ${PRESSURE:-unreadable}   (>=2 ⇒ WARN · >=4 ⇒ ALARM · absent ⇒ rung skipped)"
+  echo "  largest proc footprint: ${MAX_PROC_GB:-?} GB   (warn >${PROC_WARN_GB})"
+  if [ -n "$TOP_PROCS" ]; then
+    printf '%s\n' "$TOP_PROCS" | awk '{ cmd = $3; for (i = 4; i <= NF; i++) cmd = cmd " " $i
+                                        printf "      pid %-7s %6s MB  %s\n", $1, $2, cmd }'
+  fi
   echo "  swap used:              ${SWAP_MB:-0} MB   (>0 ⇒ ALARM, the lagging indicator)"
   echo "  est. room for:          >=${ROOM} more sessions (FLOOR: ~${PER_MB} MB/session is an rss-derived UPPER bound, so this under-promises)"
   echo "  VERDICT:                ${VERDICT}"
