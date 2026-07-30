@@ -243,7 +243,7 @@ Each criterion names the exact command whose output proves it. Narration does no
 
 | # | Criterion | Proving read | Baseline |
 |---|---|---|---|
-| **AC1** ⚠ **CEILINGED at ~70%, NOT MET — see §9.4** | ≥95% of bats **procs** at `pri≤10` during a burst | `scripts/qos-census.sh` → `coverage_proc_pct` | **21.1% → 50.0%** measured; ~30% of invocations are structurally unreachable by a PATH shim |
+| **AC1** ⛔ **CLOSED AT ~70% — see §9.4 + §9.6 (option A REJECTED 3/3)** | ≥95% of bats **procs** at `pri≤10` during a burst | `scripts/qos-census.sh` → `coverage_proc_pct` | **21.1% → 50.0%** measured; ~30% of invocations are structurally unreachable by a PATH shim |
 | **AC1-b** | `coverage_cpu_pct` reported alongside, as the impact metric — **not** the gate | same JSON row → `coverage_cpu_pct`, `gate_on` | 0% |
 | **AC2** | 0 top-level bats invocations at `pri=31` | `ps -eo pri,args \| grep -E 'bats( \|$)' \| awk '$1==31'` → empty | **72 procs** |
 | **AC3** | The shim covers the hand-typed form | `cd <worktree> && timeout 5 bats --version` then census the child's `pri` → `≤10` | n/a (no shim) |
@@ -689,6 +689,56 @@ a projection from a single high-variance window is not a measurement. §8.5.7 es
 loadavg swings 2× at constant session count; I then built a "permanent" claim on 13 samples drawn
 from one side of that swing. Re-derive before gating a decision on it — *including* when the claim is
 your own, and especially when it is the one you stated most forcefully.
+
+## 9.6 AC1 CLOSES AT ~70% — "shadow mode" REJECTED 3/3 by adversarial review, and it found a live bug
+
+§9.4 named two ways to reach AC1's >=95%. Option A (repoint `/opt/homebrew/bin/bats` at the shim) was
+built, reviewed by three independent lenses, and **all three returned DO-NOT-BUILD**. It is not
+staged, and the activation was deleted rather than left lying around.
+
+**Why it was rejected — a closed 2-cycle, measured, not theorised.** `pwd -P` physicalises the
+DIRECTORY only and never the final symlink, so `self_phys` was the SYMLINK's path. Two symlink paths
+to the SAME script therefore compared as DIFFERENT files, the self-skip could not fire, and with TWO
+shims on PATH the run became a closed 2-cycle: shim A execs B, B (already `CC_BATS_ACTIVE=1`) execs A.
+Reproduced independently: **134 resolution legs split exactly 67/67 between the two paths**, rc=137,
+~200 fork+exec/s, **zero output**, sustained indefinitely. And **two shims is precisely the state
+option A creates** — `~/.claude/bin/bats` at PATH position 1 plus `/opt/homebrew/bin/bats` at 16,
+with six live/staged plists exporting exactly that PATH. A mechanism whose *purpose* is to reduce
+machine load, whose *default post-install state* can fork-storm the box, is not worth 0.2-0.3 cores.
+
+**What the review earned us anyway — a latent defect in the SHIPPED, LIVE shim.** The same
+dir-only physicalisation is in the shim that is deployed right now. It is harmless today because the
+box has exactly ONE shim (verified: `/opt/homebrew/bin/bats` is still Homebrew's real binary), but it
+would fire the moment any second shim or symlink chain appeared. Fixed regardless of the rejected
+proposal:
+
+- `phys_of()` — a single helper resolving the FULL symlink chain via `/usr/bin/readlink -f`,
+  addressed **absolutely** so it cannot depend on `PATH`.
+- An **unresolvable candidate now SKIPS**. Treating "I could not resolve this" as "therefore it is
+  not me" was the precise inversion that produced the loop.
+- If the shim cannot establish its OWN identity it **refuses with 127** rather than proceeding
+  blind. "Cannot determine self" is a third state, not a reason to continue.
+- A second, independently-found instance of the same class: `$(dirname …)`/`$(basename …)` on a
+  minimal PATH yielded empty, and `cd ""` **silently succeeds** — same collapse, same loop, and a
+  valid seed did NOT rescue it (`seeded_phys` collapsed identically and was rejected as "self").
+
+Measured before → after, two shims on PATH: **rc=137 / indefinite / no output → rc=0 / 0s** across
+seed absent, valid and stale. Minimal PATH: **infinite loop → rc=127 in 0s**.
+
+**Also corrected, both found by review:** the parity lint defaulted its seed to
+`$CLAUDE_CONFIG_DIR/state/cc-bats-real` while the shim reads `$HOME/.claude/...` — on this box those
+differ (`~/.claude-secondary` vs `~/.claude`), so the lint judged a path nothing reads and would have
+reported the healthy-looking `NOT-ACTIVE` **while shadow mode was live**: the brew-fragility watchdog
+silently inert, the exact failure class it exists to catch. And its `STALE-SEED` grade of
+"silent-but-not-fatal" was **measured false** — with two shims a stale seed never reached the Cellar
+sweep, because the PATH walk returned the sibling shim first.
+
+**THE DECISION, plainly: AC1 is CLOSED AT ~70% and that is the final answer, not a deferral.**
+The acceptance criterion was written before the invocation distribution was known. Option A is
+rejected on evidence. Option B (a Bash `PreToolUse` admission term) remains available but belongs to
+row 6 and would add per-tool-call fork cost to the chain this row measured as the O(N^2) term — which
+is self-defeating for this row's own goal. What shipped removes the largest single uncovered class
+(the hand-typed `bats tests/…` form `CLAUDE.md` itself instructs) at O(1) cost and zero caller effort.
 
 ## 10. Learnings (accumulate; never delete)
 
