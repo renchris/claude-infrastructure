@@ -370,7 +370,7 @@ so the gate self-reports `capacity_gate: ABSENT` at every spawn rather than sile
 >   `~/.claude/bin/cc-dispatch:57 CC_DISPATCH_MAX_SPAWN=2` per tick (enforced `:234`) and
 >   `~/.claude/bin/cc-wave-plan:41 CC_WAVE_MAX_PER_ACCT=2` × 4 accounts. Measured: 11 dispatcher
 >   fires in 4 h. What is missing is a **hardware** term, not a bound.
-> - **DEPLOYED AS WRITTEN, `capacity_gate` IS A PERMANENT DISPATCH OUTAGE.** Ceiling 2.0/core = load
+> - **~~DEPLOYED AS WRITTEN, `capacity_gate` IS A PERMANENT DISPATCH OUTAGE~~ — RETRACTED, see §9.5: the gate was already live, and at 1.55/core it ADMITS. The measurement below is accurate for its window; the projection from it was not.** Ceiling 2.0/core = load
 >   20 on 10 cores. All **13 sampled loads were ≥ 29.15** (≥ 2.92/core, max 59.8) ⇒ the gate's own
 >   verdict computes **REFUSE 10/10**. It exempts only `RECYCLE` (`:1634`) and fails open only on an
 >   *unreadable* probe (`:852-857`) — a readable, permanently-over-ceiling probe **refuses forever
@@ -656,6 +656,39 @@ answered. M1 raised coverage from 21% toward a ~70% ceiling; it did not remove t
 `bats tests/…`, the form `CLAUDE.md` itself instructs) at O(1) cost and zero caller effort, and it is
 verifiably transparent. It is a real improvement with a named ceiling — not the complete fix the
 acceptance criterion asked for.
+
+## 9.5 SELF-CORRECTION — my "permanent dispatch outage" projection is FALSIFIED
+
+Two claims this row made about the landed `capacity_gate()` need retracting, and both were mine.
+
+**1. "It is inert / there is a deployment to withhold" — WRONG.**
+`~/.claude/scripts/handoff-fire.sh` is a **symlink into the shared checkout**, so for that file
+*landing IS deploying* and the staged-activation frame never applied. Verified on the DEPLOYED copy:
+default **ON** (`CC_FIRE_CAPACITY_GATE:-on`), ceiling `CC_FIRE_MAX_LOAD_PER_CORE:-2.0`, net-new fires
+refused with `exit 9`; `--recycle` exempt by design. The gate has been live all along. My §8.5.2
+"INERT in the live layer" reading came from grepping `~/.claude/scripts/handoff-fire.sh` at a moment
+the checkout was 54-68 commits behind — the symlink was resolving to an older file body, which is a
+real deploy-lag fact but NOT the same as "the mechanism is absent".
+
+**2. "Deployed as written it is a permanent dispatch outage" — OVERSTATED, and now measured false.**
+That projection came from 13 samples in a window where load sat at 29.15-59.80 (2.92-5.98/core), all
+above the 2.0 ceiling. It assumed load would never fall back. **It did:** measured after the fleet
+drained from 31 sessions to 8, `loadavg1 = 15.5` on 10 cores = **1.55/core ⇒ the gate ADMITS.** And
+the IDL carries **1498 `"reason":"capacity"` rows**, i.e. the gate has been exercising both verdicts,
+not wedged on one. A ceiling that refuses at 4.0/core and admits at 1.55/core is behaving as a
+ceiling, not as an outage.
+
+**What survives, and it is still worth having:** the gate keys on a quantity that is *not*
+session-attributable (§8.5.7 — loadavg is dominated by the TUI renderer and macOS scanning, and swung
+2.05x at constant session count), so *what* it throttles is only loosely related to *what* is
+consuming the box. That criticism of the instrument stands. The prediction about its operational
+effect did not.
+
+**The generalisable lesson — and it is the same one this row keeps re-learning, now against itself:**
+a projection from a single high-variance window is not a measurement. §8.5.7 established that
+loadavg swings 2× at constant session count; I then built a "permanent" claim on 13 samples drawn
+from one side of that swing. Re-derive before gating a decision on it — *including* when the claim is
+your own, and especially when it is the one you stated most forcefully.
 
 ## 10. Learnings (accumulate; never delete)
 
