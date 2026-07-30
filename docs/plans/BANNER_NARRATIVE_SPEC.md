@@ -472,6 +472,65 @@ the silhouette is the design, the dither is the material. And the decisive anima
 region's dither **crawls** unless it translates as a **rigid group** in whole art-pixel steps. These
 clouds drift, so this binds.
 
+## LEGIBILITY AUDIT — will a first-time viewer understand any of this? (2026-07-29)
+
+Operator asked directly whether the beats are too abstract. Honest answer: **no first-time viewer
+will decode any of them, and two have a worse failure mode than abstraction — they read as broken.**
+Recorded here because the implementation was mid-build with two beats placed where nobody will see
+them, and because the conclusion changes what to build, not just how to describe it.
+
+### Reach — measured against the windows in the generator, not estimated
+
+A reader arrives at t=0 (confirmed anchoring) and stays 5–15 s, once.
+
+| beat | window | dwell needed | reach |
+|---|---|---|---|
+| THE REFUSAL | 3.0–8.0 s | ≥3 s | **essentially every viewer** |
+| THE ASK | 13.0–22.0 s | ≥13 s | a minority |
+| THE OVERLAP | 36.0–44.25 s | ≥36 s | **almost nobody** |
+| visitor glance | 48.5–54.5 s | ≥48.5 s | **nobody** |
+
+Front-loading was applied to the *first* beat only. Two of four sit outside any realistic dwell —
+the same defect as the old set's t=231 s star, merely less extreme. **A beat worth building belongs
+inside ~20 s.**
+
+### The code problem, and why the subtitle is load-bearing
+
+Every beat requires a code the viewer does not have: *ground = progress*, *reversal = work undone*,
+*print density = two sessions*. None is inferable from the image. **And the one element that could
+hand over the code is itself illegible** — the subtitle renders at ~7.3 CSS px desktop and ~3.4 px
+mobile. Coded events plus an unreadable key compounds: making the subtitle legible is the cheapest
+change with the largest effect on comprehension, and it is a prerequisite for the beats meaning
+anything at all.
+
+### Two misread risks — worse than "too abstract"
+
+1. **THE REFUSAL may read as a rendering glitch.** A ground layer scrolling backward is what a broken
+   animation looks like. Same failure class as v6b's interpenetrating sprites. *Looks broken* is a far
+   worse outcome than *looks abstract*. Mitigation: an anticipation cue before the reversal so it
+   reads as caused rather than as a stutter.
+2. **THE ASK's 6 s of dead world may read as "the image finished loading."** A frozen banner caught
+   mid-stop is indistinguishable from a stalled asset. Mitigation: keep something unmistakably alive
+   through the stop — a blink, a breath — so cessation never reads as failure.
+
+### What works, and what to sacrifice
+
+**THE ASK lands** — not because the mechanism is legible but because **stillness plus direct outward
+gaze is a human-universal signal**. Nobody reads "class C decision packet"; everybody reads "it
+stopped and looked at me." That is the right note reached without a code, and it is why this beat
+survives the audit intact.
+
+**THE OVERLAP is the inverse: the most conceptually beautiful and the least perceptible.** Its mark is
+a pitch change in ~6 px footprints; even an attentive viewer must be studying the ground. It is the
+designated sacrifice if something must go — purest idea, lowest visibility.
+
+### The honest posture, which should be stated rather than quietly assumed
+
+**The ambient layer carries the banner for everyone; the beats reward the second look.** That is a
+coherent design and it matches where viewer value actually lives — but it must be claimed openly.
+Do not assert legibility the artifact does not have. Three consequences follow: make the subtitle
+legible; pull THE ASK into ~8–14 s and THE OVERLAP inside 20 s or cut it; de-risk both misreads.
+
 ## Acceptance
 
 An event passes only if a viewer can answer all three of *why did it appear*, *what did it do*, and
