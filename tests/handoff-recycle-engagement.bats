@@ -207,8 +207,9 @@ SH
       IT2_BIN="$H/.claude/bin/it2" \
       bash "$HF" __recycle "$PANE" /dev/ttys999 "$CMDF" /tmp "$OLD_SID" "MK-NONE"
   [ "$status" -eq 1 ]
-  ! grep -q "HANDOFF RELAUNCH FAILED" "$H/it2-calls.log" 2>/dev/null \
-    || { echo "typed the shell-fallback comment into a pane running claude"; false; }
+  if grep -q "HANDOFF RELAUNCH FAILED" "$H/it2-calls.log" 2>/dev/null; then
+    echo "typed the shell-fallback comment into a pane running claude"; false
+  fi
 }
 
 @test "watcher: NEITHER marker nor baseline handed over → the PROCESS-ALIVE disclaimer + an event" {
