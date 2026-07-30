@@ -41,6 +41,7 @@
 # dialect differs (it rejects an empty alternation outright), so an unpinned scan would encode which
 # grep the PATH happened to offer and could return a different verdict in the gate than on the desk.
 
+# shellcheck disable=SC2034  # consumed by bats itself; file-level is the ONLY working placement (memory: bats-runtime-cap-placement)
 BATS_TEST_TIMEOUT=180
 
 setup() {

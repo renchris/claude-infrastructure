@@ -159,6 +159,7 @@ mk_big() {
 @test "each incumbent-path seam value still produces the correct verdict end-to-end" {
   local tx="$BATS_TEST_TMPDIR/seam.jsonl"; mk_big "$tx" "$ROT"
   CC_WR_TAIL_BYTES=0 run drive s6 "$tx" 40;      [ "$status" -eq 0 ]; fired "$output"
+  # shellcheck disable=SC1007  # DELIBERATE set-but-empty: proves the seam honours empty as the incumbent full read
   CC_WR_TAIL_BYTES= run drive s6b "$tx" 40;      [ "$status" -eq 0 ]; fired "$output"
   CC_WR_TAIL_BYTES=lots run drive s6c "$tx" 40;  [ "$status" -eq 0 ]; fired "$output"
 }
