@@ -340,12 +340,18 @@ STUB
   # {ts,slot,outcome,detail}, so "did routing read LIVE quota, and did it see the login cliff?" was
   # unanswerable from disk — 252 records, not one of them an input. An unfalsifiable claim is the
   # defect this campaign keeps re-finding, so the falsifier lives at the gate, not in prose.
-  META='acct=next3 cliff_band=soft cliff_h=90.3 cliff_at=2026-08-02T20:21:49Z quota_as_of=- quota_age_s=12 cached=1 yielded=0'
+  # The stamp is DERIVED at runtime, never a literal: this file's own structural guard
+  # (tests/cc-route.bats "no hardcoded window date anywhere in the tool's CODE") greps the source
+  # for `2026-NN-NN`, and it is right to — a literal date in a routing tool is the JUL7 regression's
+  # exact shape. A fixture inside the tool is still the tool's code, so it obeys the same rule.
+  CLIFF_AT="$(date -u -v+3d +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+              || date -u -d '+3 days' +%Y-%m-%dT%H:%M:%SZ)"
+  META="acct=next3 cliff_band=soft cliff_h=90.3 cliff_at=$CLIFF_AT quota_as_of=- quota_age_s=12 cached=1 yielded=0"
   check "RT-h a plan record carries the DECISION'S INPUTS (cliff band/hours + quota freshness)" 0 \
     bash -c "rm -f '$tmp/records/route.jsonl'; env STUB_ROUTE_META='$META' '$SELF' lead >/dev/null 2>&1;
-             jq -e 'select(.cliff_band==\"soft\" and .cliff_h==90.3 and .quota_age_s==12
-                           and .quota_cached==true and .cliff_yielded==false
-                           and .cliff_at==\"2026-08-02T20:21:49Z\")' '$tmp/records/route.jsonl' >/dev/null"
+             jq -e --arg at '$CLIFF_AT' 'select(.cliff_band==\"soft\" and .cliff_h==90.3
+                           and .quota_age_s==12 and .quota_cached==true
+                           and .cliff_yielded==false and .cliff_at==\$at)' '$tmp/records/route.jsonl' >/dev/null"
   check "RT-h the meta token is LIFTED OUT of the human reason (never recorded twice, once unparseably)" 0 \
     bash -c "env STUB_ROUTE_META='$META' '$SELF' lead 2>/dev/null | jq -e 'select((.reason|test(\"route-meta\"))|not)' >/dev/null"
   # DISCRIMINATING CONTROL — an OLDER claude-accounts emits no meta at all (the live deployed state

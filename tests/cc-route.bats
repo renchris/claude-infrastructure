@@ -40,11 +40,15 @@ STUB
   export CC_ROUTE_KIMI_BIN="$BATS_TEST_TMPDIR/kimi-unwired"
 }
 
-@test "selftest passes and runs all 19 checks (a zero-check suite must not 'pass')" {
+@test "selftest passes and runs all 26 checks (a zero-check suite must not 'pass')" {
   run "$T" selftest
   [ "$status" -eq 0 ]
   n_ok="$(printf '%s' "$output" | grep -c '^  ok ')"
-  [ "$n_ok" -eq 19 ]
+  # 26 since 2026-07-30 (row 7, ACCOUNT_ROUTING_V2 M3b): +7 RT-h checks pinning that a routing record
+  # carries the decision's INPUTS (cliff band/hours + quota freshness), not only its verdict. The
+  # count moves WITH the addition, deliberately — that is the whole point of pinning it: a suite
+  # whose check count can drift silently cannot tell "26 ran" from "19 ran and 7 were skipped".
+  [ "$n_ok" -eq 26 ]
 }
 
 @test "lead → one-line JSON plan {slot,model,account,lead_effort,reason} on stdout" {
