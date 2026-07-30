@@ -79,7 +79,7 @@ verifier can never stamp green, `deploy-live --auto` can never open, and every b
 | 3 | 39 of 43 suites invoking `handoff-fire` **never pin** the kill switch | `grep -L CC_FIRE_CAPACITY_GATE` over `tests/*.bats` |
 | 4 | So those suites observe a refusal instead of the behaviour they assert | **two-sided control below** |
 | 5 | Verifier is fail-closed on GREEN | `postland-verify.sh` is the sole full-suite verdict owner |
-| 6 | GREEN has therefore **never once occurred** | all 34 stamps = `{red:31, cut:2, hung:1}` |
+| 6 | GREEN is **vanishingly rare** — 1 in 38 | live stamp read: `{red:34, cut:2, green:1, hung:1}`. ⚠️ the inherited "zero green in 34" is STALE — see A4 |
 | 7 | `deploy-live --auto` never opens; live layer sat ~48 commits behind | memory `land-pipeline-v2-verdict-inversion` |
 | 8 | Work strands | **15+ branches, 43–57 commits each**, incl. `fix/infra-perfection` (55) |
 
@@ -155,8 +155,16 @@ is what stops the next relocation from re-inheriting it.
   fixed tree — RED-proof against the pristine pre-change tree via `git archive`, never a hand edit.
 - **A3** The three measured-failing suites pass **at ≥3.0 load/core** — the arm-A/arm-B control re-run,
   both arms recorded.
-- **A4** A verifier stamp reads **green** for the first time: `{green:1}` in the postland stamp dir,
-  against a historical `{red:31, cut:2, hung:1}` / zero green in 34.
+- **A4** A verifier stamp reads **green on a tree containing the pin**. ⚠️ **Baseline corrected
+  2026-07-30 — re-derived from disk, not inherited.** The memory entry and §2 line 6 of this document
+  say "zero green in 34"; that was true when written and is now **stale**. Live read of
+  `~/.claude/autonomy/postland/stamps`: **38 stamps = `{red:34, cut:2, green:1, hung:1}`**, and
+  `~/.claude/autonomy/postland/last-green` = `34e725d629caf311cb1ea749b0044780bc496860`. So the
+  bootstrap deadlock HAS been broken once (backlog #50 closed). The criterion is therefore not
+  "first green ever" but **"green on a post-pin tree, and reds falling as a fraction"** — 34 of 38
+  are still red, and T1's measurement shows a large share of those were red-by-load.
+  (Verified two ways — `json.loads` fold and a raw `grep -ho '"verdict":"[a-z]*"'` — because a
+  single parse path can silently drop malformed rows.)
 - **A5** `deploy-live --auto` advances the live layer — `git rev-list --count HEAD..origin/main` on the
   deploy checkout goes to 0. **Never** verify a deploy by symlink presence: *"0 unlinked" ≠ "content
   current"* (a clean link sweep once read green while the checkout was 48 commits behind).
