@@ -529,7 +529,10 @@ STUB
   done < "$M"
   # 20, not 14: the fleet is TWO label families. com.chrisren.* (6 labels, incl. cc-reaper — row 4's
   # LIVE reaper) was undeclared until 2026-07-29 and therefore invisible to every leg of this tool.
-  [ "$n" = 20 ]
+  # 21 since 2026-07-30: com.claude.capacity-alarm. Its plist landed (12595000) with NO manifest row,
+  # which made THIS test red on pristine origin/main — the coverage loop below is what caught it, so the
+  # count moves with the repair rather than the repair being hidden behind a looser count.
+  [ "$n" = 21 ]
 
   # three-way coverage: every committed plist is declared (the lint §4.4 enforces at the chokepoint)
   for f in "$ROOT"/launchd/com.claude.*.plist "$ROOT"/launchd/com.chrisren.*.plist; do

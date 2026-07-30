@@ -75,9 +75,14 @@
 #                     manifest, per the staged/ convention) behind ONE named gate: roster_tasks is
 #                     deliberately unwired (lead-reconciler.sh:50-56 — "the operator supplies the
 #                     task-table reader at activation. Empty by default so a mis-deploy diverges
-#                     LOUDLY"). An empty roster A makes every live pid "in registry, ABSENT from tasks",
-#                     so loading it against the ~30 live sessions on this box would emit ~30 divergence
-#                     alarms. GATE: set CC_RECON_ROSTER_TASKS in that plist, then declare it `run` here.
+#                     LOUDLY"). An empty roster A makes every live pid "in registry, ABSENT from tasks".
+#                     MEASURED (2 seeded live pids, GRACE_S=0, production roster defaults): 2 alarms on
+#                     tasks-x-registry AND 2 on registry-x-disk — because roster C comes from the
+#                     deathwatch heartbeat, which is not running either, so BOTH empty rosters compound.
+#                     Scaled to this box's ~30 live sessions that is ~60 one-shot alarms, not ~30. GATE:
+#                     set CC_RECON_ROSTER_TASKS in that plist, then declare it `run` here. Note the two
+#                     gates are coupled — roster C stays empty until deathwatch has a producer, so a
+#                     reconciler activated alone still alarms on registry-x-disk for every live session.
 #
 #   lead-deathwatch   NOT pinned, and deliberately NOT given a plist. Both its modes need a watch-file,
 #                     and NOTHING in production writes one (only bin/cc-deathwatch-kqueue's docs and the
@@ -104,6 +109,15 @@ com.claude.desk-invariant         | staged | 300  | auto | 5  | 06-desk-bootstra
 com.claude.boot-resume            | staged | 300  | auto | 2  | 18-fleet-activate.sh
 com.claude.lead-supervisor        | run    | 0    | ~/.claude/autonomy/supervisor.log | 2 | 18-fleet-activate.sh
 com.claude.nightly-regression     | staged | 0    | auto | 1  | 18-fleet-activate.sh
+# Declared here to repair the three-way coverage lint, which commit 12595000 landed RED on the trunk:
+# it added launchd/com.claude.capacity-alarm.plist with no manifest row, so `cc-fleet --plist-parity` and
+# tests/cc-fleet.bats ("declares every repo plist") failed on pristine origin/main — not for any lander
+# who came after. Declared `staged`, from disk truth, because the job is neither installed in
+# ~/Library/LaunchAgents nor loaded: an activation decision is outstanding, which is exactly what
+# `staged` says (ONE UNDECIDED row, never a guessed alarm). interval 600 = its StartInterval; `auto`
+# resolves to its StandardOutPath and the script does write to stdout, so unlike lead-supervisor's the
+# sensor is real. The job's owner may flip this to `run` after activating it.
+com.claude.capacity-alarm         | staged | 600  | auto | 13 | 19-capacity-alarm-activate.sh
 
 # ── com.chrisren.* — the SECOND family this repo owns (added 2026-07-29 after the reconciler's
 # first live run declared only com.claude.*, hiding 6 LOADED, RUNNING jobs from every leg).
