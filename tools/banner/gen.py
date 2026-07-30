@@ -1032,6 +1032,41 @@ def mounds(art: Art, rng: random.Random) -> str:
     return "".join(out)
 
 
+def footprints(art: Art) -> str:
+    """The record the walker leaves — prints baked into the strip at exactly one stride pitch.
+
+    This is the thesis as a STATE rather than an event. The prints are already there, evenly spaced
+    at the distance the ground travels in one stride, so the foot lands in an existing print every
+    stride BY CONSTRUCTION. The record is continuous and the walker is not: you cannot tell where
+    one session's prints end and the next's begin, which is `sessions run each other` rendered as
+    the ground instead of as a diagram joining two creatures.
+
+    It only works because the stride is locked (see assert_stride_locked). The grid is anchored to a
+    foot's x modulo the pitch, and TILE / pitch is a whole number, so the alignment survives the tile
+    wrap as well as every stride. The sprite's legs are themselves 2 and 4 cells apart — multiples of
+    the pitch — so one grid puts a print under all four feet at once rather than under one.
+    """
+    pitch = STRIP_PX_PER_STRIDE
+    n = TILE / pitch
+    if abs(n - round(n)) > 1e-9:
+        raise SystemExit(f"gen[{art.key}]: TILE {TILE} is not a whole number of {pitch}px print "
+                         f"pitches ({n:.3f}) — the grid would jump at the tile wrap")
+    foot0 = art.clawd_x + CELL * art.clawd_scale        # leftmost leg, in canvas units
+    offset = foot0 % pitch
+
+    def body(shift: float) -> str:
+        out = []
+        for k in range(int(round(n))):
+            x = shift + offset + k * pitch
+            # two pads, so it reads as a print rather than as a dash of ground texture
+            out.append(
+                f'<rect class="fpr" x="{fmt(x - 9)}" y="{fmt(GROUND + 5)}" width="8" height="4"/>'
+                f'<rect class="fpr" x="{fmt(x + 1)}" y="{fmt(GROUND + 5)}" width="8" height="4"/>')
+        return "".join(out)
+
+    return tiled(duplicate(body), "fprs", STRIP_PERIOD)
+
+
 def ground_detail(art: Art) -> str:
     """The fastest layers, inside the ground band. A visible speed hierarchy is the whole trick of a
     dino-run ground — near things must outrun far things by enough to read.
@@ -1257,7 +1292,7 @@ def css(art: Art) -> str:
         f".sn{{fill:{d.star}}}.mdisc{{fill:{d.moon}}}"
         f".grain{{opacity:{fmt(d.grain)}}}"
         f".rl{{stroke:{d.rule}}}.wm{{fill:{d.wm}}}.sub{{fill:{d.sub}}}"
-        f".tf0,.tf1{{fill:{d.tuft}}}.fgb{{fill:{d.fg}}}"
+        f".tf0,.tf1{{fill:{d.tuft}}}.fgb{{fill:{d.fg}}}.fpr{{fill:{d.fg};opacity:.55}}"
         f".ss{{fill:#f2f6ff}}.brd{{fill:{d.mound[0]}}}.bal{{fill:{CLAWD}}}.balStr{{stroke:none;fill:{CLAWD};opacity:.45}}"
         f".eyeHole{{fill:#1b1109}}.sh{{fill:#000;opacity:.46}}.zmk{{fill:{d.star}}}"
         f".vig{{fill:url(#vig);opacity:{fmt(d.vignette)}}}" + cloudrules(d) +
@@ -1269,6 +1304,7 @@ def css(art: Art) -> str:
         f".md0s{{animation:sc {fmt(P / 2)}s linear infinite}}"
         f".md1s{{animation:sc {fmt(P / 4)}s linear infinite}}"
         f".tf0s{{animation:sc {fmt(STRIP_PERIOD)}s linear infinite}}"
+        f".fprs{{animation:sc {fmt(STRIP_PERIOD)}s linear infinite}}"
         f".tf1s{{animation:sc {fmt(P / 10)}s linear infinite}}"
         f".fgbs{{animation:sc {fmt(P / 12)}s linear infinite}}"
         # ---- twinkle: three rates so the sky has depth rather than one uniform pulse ----
@@ -1427,7 +1463,7 @@ def css(art: Art) -> str:
         f".nOnly{{display:none}}.dOnly{{display:block}}"
         f".mdisc{{fill:{l.moon}}}"
         f".rl{{stroke:{l.rule}}}.wm{{fill:{l.wm}}}.sub{{fill:{l.sub}}}"
-        f".tf0,.tf1{{fill:{l.tuft}}}.fgb{{fill:{l.fg}}}"
+        f".tf0,.tf1{{fill:{l.tuft}}}.fgb{{fill:{l.fg}}}.fpr{{fill:{l.fg};opacity:.40}}"
         f".brd{{fill:{l.mound[0]}}}.sh{{opacity:.20}}"
         f".vig{{opacity:{fmt(l.vignette)}}}" + cloudrules(l) + "}"
     )
@@ -1486,6 +1522,7 @@ def build(art: Art) -> str:
         # ground plane: fill first so the bottom third stops being dead space, then scenery
         f'<rect class="grd" x="0" y="{GROUND}" width="{W}" height="{H - GROUND}"/>',
         mounds(art, rng),
+        footprints(art),
         peek(art),
         ground_detail(art),
         f'<line x1="0" y1="{GROUND}" x2="{W}" y2="{GROUND}" class="rl" stroke-width="3" '
