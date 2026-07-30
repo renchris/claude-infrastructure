@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.claude.lead-reconciler — the OS-level tick for L4, the three-way anti-entropy reconciler
+  (audit 2026-07-22 V6: "watcher daemons have no launchd KeepAlive — 'absence is the alarm' has no
+  reader"). lead-reconciler.sh compares three INDEPENDENT rosters of who is alive (harness tasks /
+  cc-registry / disk telemetry) and alarms on a divergence that PERSISTS past its grace window, and it
+  writes its own heartbeat each run so its absence is itself detectable (L4-c).
+
+  WHY StartInterval AND NOT KeepAlive — the point most likely to be "corrected" wrongly later.
+  The audit's wording is "pin the watchers under launchd KeepAlive", but lead-reconciler has exactly
+  one mode, `--once`: a single reconcile pass that returns. KeepAlive means "restart this process
+  whenever it is not running", so on a one-shot it relaunches at the 10-second throttle floor, forever
+  — thousands of reconciles an hour, each forking jq per registry row. StartInterval is the launchd
+  idiom for a periodic one-shot, and it delivers the property V6 actually asked for: a crashed or
+  killed run does not end the cadence, because the next tick is scheduled by launchd rather than by
+  the dead process. KeepAlive belongs to com.claude.lead-supervisor, which really is a persistent
+  `--daemon` loop; it already carries it.
+
+  300s matches com.claude.desk-invariant, the other liveness-adjacent job, and is far below the
+  reconciler's own grace window, so a divergence still has to persist across ticks to alarm.
+
+  ── WHY THIS SITS IN launchd/staged/ AND IS NOT YET IN launchd/fleet.manifest ──
+  ONE gate, and it is a real one, not paperwork. roster_tasks (lead-reconciler.sh:50-56) is unwired by
+  design: "the operator supplies the task-table reader at activation. Empty by default so a mis-deploy
+  diverges LOUDLY, never faked." There is no short-circuit for an empty roster, so with roster A empty
+  every live pid reads as "in registry, ABSENT from tasks" — on this box, ~30 live sessions would
+  produce ~30 divergence alarms on the first tick past the grace window. That is the alarm-fatigue
+  failure the fleet design exists to prevent, so the job must not be declared `run` until roster A can
+  actually answer.
+
+  ACTIVATION (operator, C10 — agents stage, they never launchctl):
+    1. Wire the task-table reader by uncommenting CC_RECON_ROSTER_TASKS below and giving it a command
+       that prints one ALIVE pid per line from the harness task table. Verify it in isolation first:
+         CC_RECON_ROSTER_TASKS='<your reader>' scripts/lead-reconciler.sh --once
+       and confirm it does NOT alarm for healthy live sessions.
+    2. Move this file to launchd/ (install.sh globs launchd/*.plist; staged/ is deliberately excluded)
+       and add the row, which is what puts it under cc-fleet's absence reader:
+         com.claude.lead-reconciler | run | 300 | ~/.claude/deathwatch/reconciler-heartbeat.json | 2 | 18-fleet-activate.sh
+       Point `evidence` at whatever artifact the run actually touches EVERY time — never `auto` unless
+       the job really writes to stdout (com.claude.lead-supervisor's `auto` was a dead sensor for
+       exactly that reason: 0-byte stdout against a 1.2MB log).
+    3. Load it with the fleet's one command: docs/activation/pending-activation/18-fleet-activate.sh
+
+  KILL SWITCH: launchctl bootout gui/$(id -u)/com.claude.lead-reconciler
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.claude.lead-reconciler</string>
+
+    <!-- PATH is set inside bash -c so $HOME expands at RUNTIME (launchd does not expand it in
+         ProgramArguments), and it is set explicitly because launchd jobs get a minimal PATH that
+         excludes both ~/.claude/bin and Homebrew. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>export PATH="$HOME/.claude/bin:/usr/bin:/bin:/usr/sbin:/sbin"; exec "$HOME/Development/claude-infrastructure/scripts/lead-reconciler.sh" --once</string>
+    </array>
+
+    <!-- FALSE deliberately: loading the job must not fire an immediate reconcile against a roster
+         whose reader was only just wired. The first tick comes one StartInterval later. -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StartInterval</key>
+    <integer>300</integer>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <!-- THE ACTIVATION GATE (step 1 above). Until this prints live pids from the harness task
+             table, roster A is empty and every registry pid diverges. -->
+        <!-- <key>CC_RECON_ROSTER_TASKS</key><string>REPLACE-ME</string> -->
+        <key>CC_RECON_PLACEHOLDER</key>
+        <string></string>
+    </dict>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <key>LowPriorityIO</key>
+    <true/>
+
+    <key>Nice</key>
+    <integer>5</integer>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/claude-lead-reconciler.stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/tmp/claude-lead-reconciler.stderr.log</string>
+</dict>
+</plist>
