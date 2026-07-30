@@ -11,16 +11,28 @@ STEP 0 — ARM YOUR WAKE PATH FIRST, BEFORE ANYTHING ELSE. Run this as a Bash to
 run_in_background=true, substituting YOUR OWN pane uuid from `~/.claude/bin/cc-notify --self`:
   ~/.claude/bin/cc-await-ping <YOUR-PANE-UUID> --timeout 14400 --interval 15
 **RE-ARM IT AFTER EVERY WAKE — it is single-shot, and one wake makes you deaf.**
-🚨 **USE THE PANE UUID, NEVER YOUR SESSION ID — AND YOUR OWN SessionStart HOOK WILL TELL YOU TO DO THE
-WRONG THING.** The `🔔 No inbox wake path armed` reminder suggests your *session id*. That is the trap:
-mailboxes are keyed on PANE uuid, so a session-id watcher polls a file that can never exist and burns
-its whole timeout on a void (filed defect `6fe942c0eee5`; the tell is an ABSENT `.seen` cursor, not
-`seen=0`). **This is measured, and it is now measured on BOTH sides.** Rows 7 and 8 each armed a
-session-id watcher, believed they had a wake path, and had none for their entire session — a ruling
-sent to row 7 sat `seen=0` through five checks. Row 11 armed on its pane uuid and the coordinator's
-next message came back `acked=1, receipt=read` **mid-turn**. So the channel works; the addressing was
-the whole defect. Do what row 11 did. Note for your own subsystem: this reminder is emitted by a HOOK,
-which makes "a hook that confidently advises the wrong key" your territory, not a footnote.
+🚨 **ARM THE EXACT KEY THE WAKE-FLOOR HOOK PRINTS — NEVER HAND-PICK ONE. THE HOOK IS RIGHT AND THE
+EARLIER PAYLOADS WERE WRONG.** An earlier version of this payload told you the `🔔 WAKE FLOOR` hook
+"advises the wrong key" and that you must use your pane uuid. **That is inverted, and the coordinator
+had to retract it.** Read off the DEPLOYED `hooks/session-continue.sh:180-205`: `mailbox-drain.sh`
+reads the SESSION-keyed box whenever it knows its session id (`CC_MBX_SESSION_KEY` default 1) and
+writes a pane→session **alias** on the way, so **the canonical key CHANGES once your pane has been
+drained.** `mailbox_resolve_key` is the lib's one implementation of that mapping and falls back to the
+pane when no alias exists — which is why a freshly-fired row resolves to its own pane and a
+long-running one resolves to its session id. `bin/cc-await-ping` resolves NO alias; it watches the key
+it is handed, literally. So: arm with the exact command the hook gives you; verify with the lib's own
+predicate rather than `pgrep` (which reported 0 for a provably-running watcher) —
+`bash -c '. ~/.claude/hooks/lib/mailbox-pending.sh; mailbox_wake_armed <KEY> && echo ARMED'`; and
+**re-arm after every wake with the key the hook prints**, because the canonical key can move under
+you. The coordinator watched a stale pane key for ~2 h with FOUR watchers running while reading as
+UNARMED to the floor.
+**THIS IS ALSO A LIVE CASE STUDY FOR YOUR ROW, and it is worth more to you than the arm itself.** Two
+hooks named different keys for one mechanism; each then checked its OWN key, so the nudge recurred
+forever while the operator believed they were armed. The fix had to land at the single point the
+identity is derived — not in the watcher, not per call site. That is your subsystem's central design
+question stated by someone else's bug: **when two hooks share a mechanism, who owns the identity?**
+The fix's own comment says it cost two wrong arms in one session before it was traced. Read that
+comment before you design anything.
 
 STEP 1 (one short command): arm your standing goal so you drive to DONE across recycles —
   ~/.claude/hooks/dod-persist.sh set "Scope (frozen): row 6 guardrail/hook layer — every session gets

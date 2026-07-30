@@ -9,16 +9,26 @@ STEP 0 — ARM YOUR WAKE PATH FIRST, BEFORE ANYTHING ELSE. Run this as a Bash to
 run_in_background=true, substituting YOUR OWN pane uuid from `~/.claude/bin/cc-notify --self`:
   ~/.claude/bin/cc-await-ping <YOUR-PANE-UUID> --timeout 14400 --interval 15
 **RE-ARM IT AFTER EVERY WAKE — it is single-shot, and one wake makes you deaf.**
-🚨 **USE THE PANE UUID, NEVER YOUR SESSION ID.** `cc-await-ping` accepts a session id without
-complaint, but mailboxes are keyed on PANE uuid, so a session-id watcher polls a file that will never
-exist and blocks its whole timeout on a void (backlog `6fe942c0eee5`; the tell is an ABSENT `.seen`
-cursor, not `seen=0`). **This is measured, not hypothetical: a census found 4 of 13 armed watchers
-fleet-wide on session-id keys, including BOTH live rebuild rows — each had armed a watcher and still
-had no wake path.** Why it matters to you specifically: `mailbox-drain.sh` is wired to **SessionStart
-and UserPromptSubmit ONLY** (verified by parsing all five live `settings.json`), both session- or
-human-gated, so a row inside an hours-long autonomous turn drains at NEITHER and never sees
-coordinator mail. My rulings reach you through the watcher you arm here, or not at all. Verify it:
-after arming, confirm `~/.claude/mailbox/<YOUR-PANE-UUID>.md` is the path being watched.
+🚨 **ARM THE EXACT KEY THE WAKE-FLOOR HOOK PRINTS — NEVER HAND-PICK ONE.** Earlier payloads on this
+campaign (including an earlier version of THIS one) said "use the pane uuid, never your session id."
+**That is now WRONG, and the coordinator shipped it twice before tracing it.** The truth, read off the
+DEPLOYED `hooks/session-continue.sh:180-205`: `mailbox-drain.sh` reads the SESSION-keyed box whenever
+it knows its session id (`CC_MBX_SESSION_KEY` default 1) and writes a pane→session **alias** on the
+way, so **the canonical key CHANGES once your pane has been drained.** `mailbox_resolve_key` is the
+lib's one implementation of that mapping, and it falls back to the pane when no alias exists — which
+is why a freshly-fired row resolves to its own pane while a long-running one resolves to its session
+id. `bin/cc-await-ping` resolves NO alias; it watches the key it is handed, literally. Therefore:
+  · Arm with the exact command the `🔔 WAKE FLOOR` Stop-hook message hands you — it has already
+    resolved the key. Do not substitute your own reasoning about which uuid is "right".
+  · Verify with the lib's own predicate, never `pgrep` (which reported 0 for a watcher that was
+    provably running):
+      bash -c '. ~/.claude/hooks/lib/mailbox-pending.sh; mailbox_wake_armed <KEY> && echo ARMED'
+  · **RE-ARM AFTER EVERY WAKE, again with the key the hook prints** — the canonical key can move
+    under you. The coordinator watched a stale pane key for ~2 h with FOUR watchers running and read
+    as UNARMED to the floor the entire time, because the alias had moved the box.
+Why it matters to you specifically: a row inside an hours-long autonomous turn is reachable ONLY
+through the watcher it arms here — so an arm on the wrong key is indistinguishable from no wake path
+at all.
 
 STEP 1 (one short command): arm your standing goal so you drive to DONE across recycles —
   ~/.claude/hooks/dod-persist.sh set "Scope (frozen): row 9 memory & knowledge — durable knowledge
