@@ -44,6 +44,8 @@
 BATS_TEST_TIMEOUT=180
 
 setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"   # hermeticity ratchet: never the live ~/
+  export CC_FIRE_CAPACITY_GATE=off CC_FIRE_HEADROOM_GATE=off  # M11: pinned, not ambient
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   ROOT="${CC_OSA_SUBJECT_ROOT:-$REPO}"
   LIB="$ROOT/hooks/lib/osa.sh"
