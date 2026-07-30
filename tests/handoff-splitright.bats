@@ -87,12 +87,90 @@ SH
   [[ "$output" == *"NOT firing into a random window"* ]]
 }
 
-@test "REGRESSION: split with NO anchor REFUSES — no frontmost window" {
-  FIRING_SID=""; SURFACE=split-right
+@test "REGRESSION: split with a NAMED-but-unusable anchor REFUSES — no frontmost window" {
+  # ANCHOR_INTENT=1: the caller DID name a pane (via --session-id / \$ITERM_SESSION_ID) and it did not
+  # resolve. That is an operator intent we must not betray → fail loud, never resolve a substitute.
+  FIRING_SID=""; SURFACE=split-right; ANCHOR_INTENT=1
   run spawn
   [ "$status" -ne 0 ]
   [ ! -f "$FRONTMOST_MARK" ]
   [[ "$output" == *"REFUSING to fire"* ]]
+}
+
+@test "REGRESSION: an UNKNOWN anchor intent defaults to the refusal, never to resolution" {
+  # Fail-safe direction: if ANCHOR_INTENT is somehow unset, the safe branch is refuse — never
+  # "resolve some pane and fire into it".
+  FIRING_SID=""; SURFACE=split-right; unset ANCHOR_INTENT
+  resolve_headless_anchor() { echo "GOOD 1"; }
+  run spawn
+  [ "$status" -ne 0 ]
+  [ ! -f "$FRONTMOST_MARK" ]
+  [[ "$output" == *"REFUSING to fire"* ]]
+}
+
+# ---- HEADLESS ANCHOR (2026-07-30) -------------------------------------------------------------
+# The regression this locks: between 2026-07-25 and 2026-07-30 every anchor-free caller (launchd
+# cc-dispatch via cc-wave-plan, desk-invariant's respawn) hardcoded --window, so each dispatched
+# session opened its own iTerm2 WINDOW — 174 of them in a single day. A caller that never named a
+# pane has no intent to betray, so it must now resolve a live anchor and ⌘D-split it in place.
+
+@test "HEADLESS: no anchor intent resolves a live pane and SPLITS it — never a new window" {
+  FIRING_SID=""; SURFACE=split-right; ANCHOR_INTENT=0
+  resolve_headless_anchor() { echo "GOOD 2"; }
+  run spawn
+  [ "$status" -eq 0 ]
+  [ ! -f "$FRONTMOST_MARK" ]               # THE invariant: no fresh window was created
+  [ -f "$LAND_MARK" ]
+  [ "$(cat "$LAND_MARK")" = NEWPANE-123 ]  # landed in the split of the resolved anchor
+  [[ "$output" == *"anchored to live pane GOOD"* ]]
+}
+
+@test "HEADLESS: a DENSE anchor tab degrades to a bg-tab in the SAME window, not a new one" {
+  FIRING_SID=""; SURFACE=split-right; ANCHOR_INTENT=0
+  resolve_headless_anchor() { echo "GOOD 9"; }          # 9 panes ≥ CC_FIRE_MAX_PANES default 6
+  it2_bgtab() { echo BGPANE; }
+  run spawn
+  [ "$status" -eq 0 ]
+  [ ! -f "$FRONTMOST_MARK" ]               # sliver-avoidance must NOT become a new window
+  [ "$(cat "$LAND_MARK")" = BGPANE ]
+  [[ "$output" == *"degrading split-right to a background tab"* ]]
+}
+
+@test "HEADLESS: a 4-pane tab still SPLITS — the degrade must not eat the common case" {
+  # Calibration guard. The active tab held exactly 4 panes when this was built, so a threshold of 4
+  # would have turned nearly every headless fire into a tab and quietly re-lost "same existing tab
+  # view" — the thing the operator asked for. The bias is toward splitting.
+  FIRING_SID=""; SURFACE=split-right; ANCHOR_INTENT=0
+  resolve_headless_anchor() { echo "GOOD 4"; }
+  it2_bgtab() { echo BGPANE; }
+  run spawn
+  [ "$status" -eq 0 ]
+  [ ! -f "$FRONTMOST_MARK" ]
+  [ "$(cat "$LAND_MARK")" = NEWPANE-123 ]  # the SPLIT ran, not the bg-tab
+  [[ "$output" != *"degrading"* ]]
+}
+
+@test "HEADLESS: only a totally paneless iTerm2 falls back to a fresh window" {
+  FIRING_SID=""; SURFACE=split-right
+  # shellcheck disable=SC2034  # read by the spawn() extracted from the real script, not by this file
+  ANCHOR_INTENT=0
+  resolve_headless_anchor() { return 1; }               # no live session anywhere
+  run spawn
+  [ "$status" -eq 0 ]
+  [ -f "$FRONTMOST_MARK" ]                 # the ONE legitimate window case
+  [ "$(cat "$LAND_MARK")" = WINPANE ]
+  [[ "$output" == *"no live iTerm2 session to anchor to"* ]]
+}
+
+@test "HEADLESS: the kill-switch restores the old behaviour" {
+  # CC_FIRE_HEADLESS_ANCHOR=off makes resolve_headless_anchor decline, so a headless fire degrades
+  # to the fresh window it used to hardcode — an escape hatch, not the default.
+  eval "$(sed -n '/^resolve_headless_anchor() {/,/^}/p' "$HF")"
+  # shellcheck disable=SC2034  # read by the extracted resolve_headless_anchor, not by this file
+  CC_FIRE_HEADLESS_ANCHOR=off
+  run resolve_headless_anchor
+  [ "$status" -ne 0 ]
+  [ -z "$output" ]
 }
 
 @test "spawn --window creates via spawn_frontmost then verified-types via it2_land" {

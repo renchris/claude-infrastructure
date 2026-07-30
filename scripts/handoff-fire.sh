@@ -65,7 +65,21 @@
 #                       is the same background surface (opt-in for --follow: pair with --surface-reason).
 #   --window            OPT-IN (pair with --surface-reason). Fresh iTerm2 window — the ONLY surface
 #                       that deliberately does NOT anchor to the firing pane. WITHOUT --follow it is
-#                       created without activating iTerm2 (background).
+#                       created without activating iTerm2 (background). A HEADLESS caller (launchd/
+#                       cron) must NOT reach for this: see HEADLESS ANCHOR below.
+#
+# HEADLESS ANCHOR (2026-07-30). A caller with no --session-id and no $ITERM_SESSION_ID — a launchd
+# or cron caller that can never have a firing pane — no longer has to choose --window. The split
+# surfaces resolve a live anchor themselves (resolve_headless_anchor → the desk role pane → the
+# currently-active session → any live pane), so a headless fire lands as a ⌘D split in the operator's
+# EXISTING window+tab like every other fire. A fresh window is minted only when iTerm2 has no live
+# pane at all, and a would-be sliver (anchor tab already ≥ CC_FIRE_MAX_PANES, default 6) degrades to
+# a background tab in that SAME window — never to a new one. Kill-switch: CC_FIRE_HEADLESS_ANCHOR=off.
+# WHY this is not a re-opening of the app-frontmost drift bug (d662845): an anchor that was NAMED and
+# is gone still FAILS LOUD. Only the never-named case resolves — there is no operator intent to
+# betray there. Between 2026-07-25 and 2026-07-30 the headless callers hardcoded --window and every
+# dispatched session opened its own window (174 in one day), which is the "handoffs open a whole new
+# window instead of a ⌘D split" the operator has reported since 2026-07-03.
 #   --surface-reason R  Why a non-default surface (--tab/--window) was chosen — e.g. sliver-avoidance
 #                       for many parallel fires. Recorded in the fire summary; silences the advisory
 #                       that otherwise warns a --tab/--window handoff is overriding the ⌘D default.
@@ -3182,6 +3196,18 @@ fi
 _itsid="${ITERM_SESSION_ID:-}"
 FIRING_SID="${SESSION_ID:-${_itsid##*:}}"
 
+# ANCHOR_INTENT — did the CALLER name a pane at all? The two anchorless cases are NOT the same
+# failure and must not share one policy (regression 2026-07-25 → 2026-07-30):
+#   intent=1, unresolvable  → the caller named a pane and it is GONE. FAIL LOUD, always. Drifting to
+#                             another window is the original bug (d662845) and stays fixed.
+#   intent=0 (no --session-id, no $ITERM_SESSION_ID) → a launchd/cron caller that CANNOT have a
+#                             firing pane. Nothing is being betrayed. The old policy made these
+#                             callers pass --window, so every headless dispatch/desk-respawn minted a
+#                             FRESH WINDOW — the operator's "handoffs open a whole new window now".
+#                             These now resolve a live anchor (it2py anchor) and split it, in-window.
+ANCHOR_INTENT=0
+if [ -n "${SESSION_ID:-}" ] || [ -n "$_itsid" ]; then ANCHOR_INTENT=1; fi
+
 # REAL it2 binary, NOT the $HOME/.claude/bin/it2 SHIM: the shim injects `-p Claude-Teammate` on
 # every `session split` (the teammate never-prompt profile), but a handoff split wants the FIRING
 # pane's OWN profile — the ⌘D "same profile" experience — which async_split_pane inherits from
@@ -3293,6 +3319,42 @@ async def main(connection):
             rc = 5
         return
 
+    if verb == "anchor":
+        # HEADLESS ANCHOR RESOLUTION (2026-07-30). Reached ONLY when the caller supplied no anchor
+        # AT ALL (no --session-id, no $ITERM_SESSION_ID) — i.e. a launchd/cron caller that can never
+        # have a firing pane. There is no operator-named pane to betray here, so resolving one is
+        # strictly better than minting a fresh WINDOW (which is what the headless callers used to do,
+        # and is exactly the "handoff opened a whole new window" the operator keeps reporting).
+        # Preference: the desk role pane (the operator's main pane) → the currently-ACTIVE session
+        # (the window they are looking at) → any live session. Prints "<session-id> <panes-in-tab>";
+        # the pane count lets the caller degrade a would-be sliver split to a tab in the SAME window.
+        desk = sys.argv[2] if len(sys.argv) > 2 else ""
+        cand = None
+        if desk:
+            cand = app.get_session_by_id(desk)
+        if cand is None:
+            a = active_id(app)
+            if a:
+                cand = app.get_session_by_id(a)
+        if cand is None:
+            for w in app.terminal_windows:
+                for t in w.tabs:
+                    for s in t.sessions:
+                        cand = s
+                        break
+                    if cand is not None:
+                        break
+                if cand is not None:
+                    break
+        if cand is None:
+            print("Error: no live iTerm2 session to anchor to", file=sys.stderr)
+            rc = 1
+            return
+        _w, t = app.get_window_and_tab_for_session(cand)
+        npanes = len(t.sessions) if t is not None else 1
+        out.append("%s %d" % (cand.session_id, npanes))
+        return
+
     if verb == "bgtab":
         firing = sys.argv[2]
         s = app.get_session_by_id(firing)
@@ -3371,6 +3433,22 @@ restore_focus_or_fail() {
   echo "   Closed the untyped pane $newid — NOTHING launched (C1: a background fire must not move focus)." >&2
   echo "   Pass --follow to intentionally land your view on the continuation, else re-fire." >&2
   return 1
+}
+
+# resolve_headless_anchor — echoes "<session-id> <panes-in-its-tab>" for a caller that supplied NO
+# anchor at all (ANCHOR_INTENT=0). Returns 1 when iTerm2 has no live session (then, and ONLY then, a
+# fresh window is the honest surface). Kill-switch: CC_FIRE_HEADLESS_ANCHOR=off restores the old
+# refuse-or---window behaviour. The desk role file is a HINT, not a truth: it2py anchor verifies the
+# uuid is live and falls through when it is stale (it was stale on 2026-07-30 when this was built).
+resolve_headless_anchor() {
+  [ "${CC_FIRE_HEADLESS_ANCHOR:-on}" != off ] || return 1
+  local desk=""
+  desk="$(tr -d '[:space:]' < "$HOME/.claude/cc-roles/desk" 2>/dev/null || true)"
+  local out; out="$(it2py anchor "$desk" 2>/dev/null)" || return 1
+  case "$out" in
+    ????????-*\ [0-9]*) printf '%s' "$out"; return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 # it2 split: split the firing pane (vertically=right / horizontally=down) inheriting ITS profile,
@@ -3487,6 +3565,46 @@ spawn() {
     it2_land "$winid" || return 1
     SPAWNED_PANE="$winid"                          # the fired pane — engagement verify + registry
     return 0
+  fi
+  # HEADLESS ANCHOR (2026-07-30). A caller with NO anchor intent (launchd/cron: no --session-id, no
+  # $ITERM_SESSION_ID) used to be forced onto --window by its own code — which is why every dispatcher
+  # spawn and every desk respawn opened a FRESH iTerm2 WINDOW. Resolve a live pane instead and split
+  # it, so a headless fire lands in the operator's existing window+tab like every other fire.
+  # An anchor that was NAMED and is gone still fails loud below — that distinction is the whole point.
+  # ${ANCHOR_INTENT:-1} — an unset/unknown intent defaults to 1, i.e. to the fail-loud refusal below.
+  # The safe direction is always "refuse", never "resolve some pane and fire into it".
+  if [ -z "$FIRING_SID" ] && [ "${ANCHOR_INTENT:-1}" = 0 ]; then
+    local ares=""; ares="$(resolve_headless_anchor || true)"
+    if [ -n "$ares" ]; then
+      FIRING_SID="${ares%% *}"
+      local npanes="${ares##* }"
+      echo "→ headless fire: no firing pane (launchd/cron caller); anchored to live pane $FIRING_SID (${npanes} pane(s) in its tab)" >&2
+      # CROWDING DEGRADE — a split into an already-dense tab makes unreadable slivers (a live tab held
+      # 9 panes on 2026-07-30). Degrade to a background TAB in the SAME window: still never a new
+      # window, which is the property the operator actually asked for.
+      # THRESHOLD 6, deliberately ABOVE the ~4 in commands/handoff.md. That 4 is advice to a human
+      # picking a surface with the operator watching; this is an autonomous degrade, and the standing
+      # complaint is that fires DON'T split, so the bias must be toward splitting. Degrading at 4
+      # would turn most headless fires into tabs on this box (the active tab held exactly 4 panes when
+      # this was built) and quietly re-lose "same existing tab view". 6 keeps the split through the
+      # comfortable range and reserves the tab for genuinely unreadable density. Tune: CC_FIRE_MAX_PANES.
+      if [ "$npanes" -ge "${CC_FIRE_MAX_PANES:-6}" ] && { [ "$SURFACE" = split-right ] || [ "$SURFACE" = split-down ]; }; then
+        echo "   ${npanes} panes ≥ ${CC_FIRE_MAX_PANES:-6} — degrading $SURFACE to a background tab in that SAME window (sliver-avoidance, not a new window)." >&2
+        SURFACE="bg-tab"
+      fi
+    else
+      # Genuinely nothing to anchor to (iTerm2 has no live session, or the kill-switch is off).
+      # A fresh window is then the honest surface, not a drift — say so and take it.
+      echo "→ headless fire: no live iTerm2 session to anchor to — falling back to a fresh window." >&2
+      SURFACE="window"
+      [ -n "$SURFACE_REASON" ] || SURFACE_REASON="headless: no live iTerm2 pane to anchor to"
+      local winid
+      winid="$(spawn_frontmost | tr -d '[:space:]')" || winid=""
+      [ -n "$winid" ] || { echo "!! could not create a fresh iTerm2 window — nothing launched." >&2; return 1; }
+      it2_land "$winid" || return 1
+      SPAWNED_PANE="$winid"
+      return 0
+    fi
   fi
   if [ -z "$FIRING_SID" ]; then
     echo "!! no \$ITERM_SESSION_ID/--session-id to anchor to — REFUSING to fire a $SURFACE into a random window." >&2
@@ -3632,24 +3750,39 @@ if [ "$DRY" = 1 ]; then
       echo "follow:   no — AUTONOMOUS: no raise, no split of the operator's active pane; operator focus captured + asserted unchanged, fail-loud on a steal (C1)"
     fi
     [ -n "$SURFACE_REASON" ] && echo "reason:   $SURFACE_REASON"
+    # A caller with NO anchor intent (launchd/cron) no longer refuses — it resolves a live pane and
+    # splits it (HEADLESS ANCHOR, 2026-07-30). The preview must say which of the two it will be, or a
+    # dry-run describes a refusal the real run will not perform.
+    dry_anchor_note() {
+      if [ "${ANCHOR_INTENT:-1}" = 0 ]; then
+        local _a; _a="$(resolve_headless_anchor 2>/dev/null || true)"
+        if [ -n "$_a" ]; then
+          echo "anchor:   HEADLESS (no firing pane) — would resolve live pane ${_a%% *} (${_a##* } pane(s) in its tab) and land in ITS window; never a new one"
+        else
+          echo "anchor:   HEADLESS (no firing pane) — no live iTerm2 pane resolvable; would fall back to a fresh window"
+        fi
+      else
+        echo "anchor:   (\$ITERM_SESSION_ID/--session-id named a pane that does not resolve — would REFUSE to fire)"
+      fi
+    }
     case "$SURFACE" in
       bg-tab)
         if [ -n "$FIRING_SID" ]; then
           echo "anchor:   firing session $FIRING_SID — BACKGROUND tab in ITS window (no raise, no active-pane split; fail-loud if the window is gone, NEVER another window)"
         else
-          echo "anchor:   (no \$ITERM_SESSION_ID/--session-id — would REFUSE to fire; pass --session-id or --window)"
+          dry_anchor_note
         fi ;;
       split-right|split-down)
         if [ -n "$FIRING_SID" ]; then
           echo "anchor:   firing session $FIRING_SID — ${SURFACE} lands in ITS tab (it2 API ⌘D-style; fail-loud if the anchor is gone, NEVER another window)"
         else
-          echo "anchor:   (no \$ITERM_SESSION_ID/--session-id — would REFUSE to fire; pass --session-id or --window)"
+          dry_anchor_note
         fi ;;
       tab)
         if [ -n "$FIRING_SID" ]; then
           echo "anchor:   firing session $FIRING_SID — tab lands in ITS window (fail-loud if the window is gone, NEVER another window)"
         else
-          echo "anchor:   (no \$ITERM_SESSION_ID/--session-id — would REFUSE to fire; pass --session-id or --window)"
+          dry_anchor_note
         fi ;;
     esac
   fi
@@ -3726,6 +3859,10 @@ else
     # pidfile made it `ps -p 0` ⇒ empty ⇒ 0, so "not measured" was indistinguishable from a real
     # 0 KB. Unmeasured fields now emit JSON `null`; the same rule covers firing_sid, which logged
     # the ambiguous string "?" for 51.8% of fires (M-3).
+    # SURFACE/SURFACE_REASON/ANCHOR_INTENT (2026-07-30): the surface a fire actually used was recorded
+    # in NO durable artifact — not here, not the cc-fired record, not the registry — so "did this fire
+    # open a new window?" could only be INFERRED (from firing_sid being null). That is how a
+    # 174-new-windows-in-one-day regression ran unnoticed. Record the surface at the source.
     local _hf_json _hf_lat _hf_ts
     # This function's contract is "a telemetry hiccup can never affect the fire", and `set -e` makes
     # an unresolved helper a fire-killing 127 — so every collaborator is probed, never assumed. Not
@@ -3749,8 +3886,12 @@ else
         --arg tp "${SPAWNED_PANE:-}" --arg ac "${CHOSEN:-}" --arg rs "${_hf_rss:-}" \
         --arg sa "${LR_STARTED_AT:-}" --arg ea "${LR_ENGAGED_AT:-}" \
         --arg pr "${LR_PROOF:-}" --arg la "$_hf_lat" --argjson en "${1:-0}" \
+        --arg sf "${SURFACE:-}" --arg sr "${SURFACE_REASON:-}" --arg ai "${ANCHOR_INTENT:-}" \
         '{ts:$ts, class:$cl, engaged:$en, target_pane:$tp}
          + {firing_sid:      (if $fs == "" then null else $fs end)}
+         + {surface:         (if $sf == "" then null else $sf end)}
+         + {surface_reason:  (if $sr == "" then null else $sr end)}
+         + {anchor_intent:   (if $ai == "" then null else ($ai|tonumber) end)}
          + {account:         (if $ac == "" then null else $ac end)}
          + {firing_rss_kb:   (if $rs == "" then null else ($rs|tonumber) end)}
          + {started_at:      (if $sa == "" then null else $sa end)}

@@ -36,7 +36,9 @@ done
 [ -n "$pf" ] && [ -f "$pf" ] || exit 1
 # No inherited pane in this env (ITERM_SESSION_ID is unset in the harness), so an explicit anchor is
 # mandatory — mirrors the real refusal, and prints to STDERR as the real one does.
-[ -n "$anchor" ] || { echo "handoff-fire: no \$ITERM_SESSION_ID/--session-id — REFUSING to fire" >&2; exit 1; }
+# ANCHOR (2026-07-30): an anchor flag is NO LONGER required. handoff-fire resolves a live pane
+# itself for a caller with no anchor intent (resolve_headless_anchor), so a launchd respawn splits
+# the operator's existing window instead of minting a new one. The stub therefore models ACCEPTANCE.
 printf '%s\n' "$orig" >> "$(dirname "$0")/fire.log"
 exit 0
 FIRE
@@ -121,14 +123,21 @@ disp() { tail -1 "$C/idl.jsonl" | jq -r '.disposition'; }
   ls "$C/state"/respawn-*.marker >/dev/null 2>&1
 }
 
-@test "no-desk: the respawn passes an ANCHOR (--window) — a launchd caller has no firing pane" {
-  # RED before the fix: fire_replacement passed neither --session-id nor --window, so the anchor-aware
-  # stub refuses exactly as prod did and no fire.log is written. This is the 41h/266-failure defect.
+@test "no-desk: the respawn passes NO surface flag — it must never hardcode --window" {
+  # Two regressions meet in this one assertion, so it is worth stating both:
+  #  · 2026-07-25: fire_replacement passed no anchor at all, handoff-fire refused, and the desk went
+  #    un-respawned for 41h / 266 failures. Fixed by passing --window.
+  #  · 2026-07-30: that --window meant every respawn opened a BRAND-NEW iTerm2 window — the operator's
+  #    long-standing "handoffs open a whole new window instead of a ⌘D split". Surface choice moved to
+  #    the chokepoint (handoff-fire resolves a headless anchor itself), so this caller must pass NO
+  #    surface flag and inherit split-right. Asserting the ABSENCE of --window is what keeps a future
+  #    session from "fixing" an anchor problem here again instead of at the chokepoint.
   printf 'UANCHOR\n' > "$C/roles/desk"
   run "$DI" --once
   [ "$(disp)" = no-desk ]
-  [ -f "$C/stubs/fire.log" ]
-  grep -q -- '--window' "$C/stubs/fire.log"
+  [ -f "$C/stubs/fire.log" ]                       # the fire still happens (the 41h defect stays fixed)
+  ! grep -q -- '--window' "$C/stubs/fire.log"      # …and it does not mint a window
+  grep -q -- '--prompt-file' "$C/stubs/fire.log"
 }
 
 @test "no-desk: a FAILING fire still consumes respawn budget (no unbounded loop)" {
@@ -195,7 +204,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ -n "$pf" ] && [ -f "$pf" ] || exit 1
-[ -n "$anchor" ] || { echo "handoff-fire: no anchor — REFUSING" >&2; exit 1; }
+# anchor optional since 2026-07-30 — handoff-fire resolves one itself (see setup()'s stub).
 printf '%s\n' "$orig" >> "$(dirname "$0")/fire.log"
 fired="$(dirname "$0")/../fired"; mkdir -p "$fired"
 printf '{"paneUUID":"abcdef01-2345-6789-abcd-ef0123456789","selfRetire":true}\n' \
@@ -245,7 +254,7 @@ FIRE
 # ── MAILBOX SUCCESSION on the replacement path (v3 D1/D3) ─────────────────────────────────────────
 # A fire stub that ALSO models handoff-fire's mark_fired_peer stamp (cc-fired/<newpane>.json) — the only
 # source desk-invariant has for the successor's pane. Otherwise identical to setup()'s default stub
-# (--prompt-file required + anchor required), so the producer's refusal contract is not weakened here.
+# (--prompt-file required; anchor OPTIONAL since 2026-07-30), so the producer contract stays mirrored.
 fire_stub_with_stamp() {
   cat > "$C/stubs/fire" <<'FIRE'
 #!/bin/bash
@@ -259,7 +268,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ -n "$pf" ] && [ -f "$pf" ] || exit 1
-[ -n "$anchor" ] || { echo "handoff-fire: no anchor — REFUSING" >&2; exit 1; }
+# anchor optional since 2026-07-30 — handoff-fire resolves one itself (see setup()'s stub).
 printf '%s\n' "$orig" >> "$(dirname "$0")/fire.log"
 fired="$(dirname "$0")/../fired"; mkdir -p "$fired"
 printf '{"paneUUID":"abcdef01-2345-6789-abcd-ef0123456789","selfRetire":true}\n' \

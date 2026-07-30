@@ -219,16 +219,22 @@ fire_replacement() { # fire a fresh desk from the canned brief (role-tagged). Re
   # That fail-loud is CORRECT for an interactive fire (never app-frontmost drift), but this caller is a
   # LAUNCHD job — it can never have a firing pane, so every respawn exited nonzero. Prod evidence:
   # 266 `handoff-fire returned nonzero; no-registry-row` records over 41h (2026-07-23T07:35Z →
-  # 2026-07-25T01:02Z) with no desk alive the whole time. `--window` is documented as "the ONLY surface
-  # that deliberately does NOT anchor to the firing pane" (handoff-fire.sh:66-68) and, without --follow,
-  # is created WITHOUT activating iTerm2 — exactly the headless-respawn surface. --surface-reason
-  # silences the override advisory and records WHY a non-default surface was chosen.
+  # 2026-07-25T01:02Z) with no desk alive the whole time. The 2026-07-25 fix passed `--window`, the
+  # anchor-free surface.
+  #
+  # SURFACE fix (2026-07-30): `--window` cured the refusal but made every respawn open a BRAND-NEW
+  # iTerm2 window — the operator's long-standing "handoffs open a whole new window instead of a ⌘D
+  # split" (reported 2026-07-03, fixed on trunk 2026-07-17, reintroduced here + in cc-wave-plan on
+  # 2026-07-25). Surface choice belongs at the chokepoint, not in each headless caller: handoff-fire
+  # now resolves a live anchor ITSELF when the caller has none (resolve_headless_anchor → desk role
+  # pane → active session → any live pane) and only mints a window when iTerm2 has no live pane at
+  # all. So this caller passes NO surface flag and inherits the split-right default. The anchorless
+  # refusal that caused the 41h outage cannot fire here any more (ANCHOR_INTENT=0 path).
   #
   # STDERR IS CAPTURED, not discarded: the old `2>&1 >/dev/null` is why 41h of identical failures were
   # undiagnosable from the IDL. The caller puts $FIRE_ERR into the fire-failed record.
   [ -f "$BRIEF" ] || { FIRE_ERR="boot brief missing: $BRIEF"; echo "desk-invariant: $FIRE_ERR" >&2; return 1; }
-  FIRE_ERR="$("$FIRE_BIN" --prompt-file "$BRIEF" --as-role "$ROLE" --cwd "$CANNED_CWD" \
-      --window --surface-reason "headless respawn: a launchd caller has no anchor pane" 2>&1 >/dev/null)"
+  FIRE_ERR="$("$FIRE_BIN" --prompt-file "$BRIEF" --as-role "$ROLE" --cwd "$CANNED_CWD" 2>&1 >/dev/null)"
   local rc=$?
   FIRE_ERR="$(printf '%s' "$FIRE_ERR" | tr '\n' ' ' | cut -c1-300)"
   return "$rc"

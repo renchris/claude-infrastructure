@@ -325,6 +325,17 @@ plan"`, `--launcher` for an explicit tier (e.g. `claude-fable-x`; note it skips 
 > `waiting-recycle`, wave fires) — none of which read this file — so it fires alongside a typing
 > operator without stealing focus. When YOU run `/handoff`, keep `--follow` on.
 
+> **Headless fires split too — never a new window (2026-07-30).** A fire from a context with no
+> firing pane (the launchd `cc-dispatch` wave, `desk-invariant`'s desk respawn, any cron caller)
+> used to be forced onto `--window`, so every autonomously-dispatched session opened its own iTerm2
+> window — 174 of them on 2026-07-30 alone, which is the "handoffs open a whole new window" the
+> operator has reported since 2026-07-03. `handoff-fire.sh` now resolves an anchor itself for a
+> caller that never named one (desk role pane → the active session → any live pane) and ⌘D-splits
+> it in place. **Do not "fix" a headless anchor problem by passing `--window` from a caller** — that
+> is the exact regression; the chokepoint owns the surface. A fresh window happens only when iTerm2
+> has no live pane at all, and an already-dense tab (≥ `CC_FIRE_MAX_PANES`, default 6) degrades to a
+> background tab in the *same* window. Kill-switch: `CC_FIRE_HEADLESS_ANCHOR=off`.
+>
 > **Split-right is the STICKY default — do NOT preemptively downgrade to `--tab`.** The window is
 > comfortable at **3-4 side panes** (⌘D-style), so a 2nd or 3rd concurrent handoff still fires
 > `--split-right`, NOT `--tab`. Reach for `--tab` ONLY when (a) the firing window already holds ~4+
