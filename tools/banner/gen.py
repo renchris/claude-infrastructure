@@ -2071,7 +2071,7 @@ def clawd_sprite(idsuffix: str = "", cheer: bool = True, summon: bool = False) -
     ungated group is not hidden — the raised arms would simply be ON for the whole loop — so the
     element and its gate have to appear and disappear together.
 
-    `summon=True` adds THE SUMMONING's two ON-BODY props: the hat, and the cake once it is in hand.
+    `summon=True` adds THE SUMMONING's two ON-BODY props: the hat, and the returned work once it is in hand.
     Both live INSIDE this group rather than beside it, and that is forced rather than tidy — `.hop`
     lifts the creature 30px every 12s and the beat's window contains an airborne span, so a
     screen-pinned prop "in hand" would hang in the air for 2.4s while the hand left it behind. In here
@@ -2176,14 +2176,14 @@ def clawd_sprite(idsuffix: str = "", cheer: bool = True, summon: bool = False) -
         if summon
         else ""
     )
-    # ...and the cake ONCE IT IS IN HAND, as a second copy that takes over from the travelling one at
+    # ...and the RETURNED WORK ONCE IT IS IN HAND, as a second copy that takes over from the travelling one at
     # the same position in the same instant. Two representations of one object is the only way it can
     # both cross open plate and then ride A's hop — and they cannot disagree, because the travelling
     # copy is authored AT this position and animated backwards from B.
     #
     # Drawn BEFORE the body, which is the exit: its last four steps slide it 8 cells left, entirely
     # inside the body rect, and it switches off there. Occluded, not popped.
-    held = f'<g class="smHeld{sfx}">{_cake(11 * c, c, c)}</g>' if summon else ""
+    held = f'<g class="smHeld{sfx}">{_result(11 * c, c, c)}</g>' if summon else ""
 
     return (
         # turn-around: a rare scaleX flip so he walks against the scroll for a few seconds
@@ -2261,9 +2261,9 @@ def peek(art: Art) -> str:
 
 # ── THE SUMMONING ─────────────────────────────────────────────────────────────────────────────────
 # The resident dons a hat; a burst opens in the clear plate beside it and a SECOND, SMALLER clawd is
-# standing there; the resident hands it a letter; it hands back a cake; it removes itself in a second
-# burst and the resident walks on with the cake. `Task`/`Agent` in four moves: dispatch, work,
-# result, self-removal. The letter is the brief and the cake is the finished work.
+# standing there; the resident hands it a letter; it hands back the finished work; it removes itself in a
+# second burst and the resident walks on with it. `Task`/`Agent` in four moves: dispatch, work,
+# result, self-removal. The letter is the brief; it comes back green, and that is the finished work.
 #
 # WHY THIS PUTS TWO CREATURES ON SCREEN when v6b's peer was rejected for exactly that. The peer WALKED
 # IN from off-frame, which claims sessions are co-present in one world — they are not, they live in
@@ -2296,8 +2296,8 @@ SUMMON_Y_FLOOR = (
 #     be moved — every other period that divides P either lands a jump inside a stopped world (the
 #     assertion refuses it) or makes the hop so rare it stops reading as life. So NOTHING may be in
 #     hand across it: both hand-offs complete by 8.6s, and the hop falls in the span where A is just
-#     walking on with the cake, which is where a hop belongs anyway.
-#  2. The loop must seam, so every prop must be gone by f=1. The cake leaves by sliding BEHIND A's own
+#     walking on with the result, which is where a hop belongs anyway.
+#  2. The loop must seam, so every prop must be gone by f=1. The result leaves by sliding BEHIND A's own
 #     body and switching off while fully occluded, and the letter the same way behind B — the exit is
 #     the entrance played backwards, which this file already requires of the barrier and the peer.
 #     The hat is the ONE plain swap: no pose in the vocabulary can lift it (arms translate on y only),
@@ -2316,10 +2316,10 @@ SM_MAIL_OFF = 0.396
 SM_BUP = (
     0.406,
     0.49,
-)  # B's arms-up — the one whole-body pose in the table — as it hands the cake
-SM_CAKE = (0.4375, 0.5215)
+)  # B's arms-up — the one whole-body pose in the table — as it hands the work back
+SM_WORK = (0.4375, 0.5215)
 SM_HELD_ON = (
-    0.542  # the travelling cake switches off in the same instant, at the same position
+    0.542  # the travelling result switches off in the same instant, at the same position
 )
 SM_POOF = (0.5625, 0.667)
 SM_OCCLUDE = (0.8125, 0.917)  # after the hop lands at 11.04s, never during it
@@ -2366,8 +2366,8 @@ def summon_steps(art: Art) -> dict[str, float]:
         "mail_dx": u,  # one cell per step across the gap
         "mail_dy": u / 2,  # and half a cell down: A's hand band is one cell above B's
         "mail_swallow": u * 1.5,  # the two steps that carry it inside B's silhouette
-        "cake_dx": -3 * u / 4,  # 4 steps back over 3 cells
-        "cake_dy": -14.0,  # 4 steps up over the 56px between B's hands and A's
+        "work_dx": -3 * u / 4,  # 4 steps back over 3 cells
+        "work_dy": -14.0,  # 4 steps up over the 56px between B's hands and A's
         "held_dx": -2 * CELL,  # LOCAL px inside A's sprite: 2 cells per step, 4 steps
     }
 
@@ -2446,18 +2446,34 @@ def assert_summon_clear_plate(art: Art) -> None:
         )
 
 
-def _cake(x: float, y: float, u: float) -> str:
-    """3 wide x 2 tall, an icing row, one candle pixel. The riskiest prop, so it is built to be
-    SELF-contrasting rather than to contrast with the plate: dark body under a pale icing row under an
-    amber candle. That way it reads on the navy ground and on the pale one without a theme override,
-    which a single-tone silhouette of this size could not do.
+def _result(x: float, y: float, u: float) -> str:
+    """The work coming back: the SAME document that went out, returned green.
+
+    It used to be a cake. A cake is not something claude-infrastructure produces, and at the 838 px
+    column it did not read as a cake either — 3u x 4u of dark body under a pale row under one amber
+    pixel presents as a mug, a jar or a bin. This track already recorded "the cake does not read as a
+    cake" and shipped it anyway.
+
+    A returned RESULT is the right object, and the strongest way to draw one is not a new shape but
+    the SAME shape in a new state: the letter goes out with a pale blank face and comes back with a
+    green one. The eye already knows the object by then, so the whole payload is one colour change on
+    something familiar — the most legible state change available at this size, and the only channel
+    that survives it. Measured: the face is 1.5u = 36 canvas px = 15.7 CSS px at 838. A tick inside
+    that would have 2.6 CSS px strokes, a quarter of the scene's own 10.5 CSS px cell floor, so a
+    checkmark is not on the table however much it wants to be. Colour is.
+
+    The edge is the LETTER'S OWN class, not a copy of it, so the two states of the document cannot
+    drift apart into two different objects.
+
+    Green is not borrowed from outside the palette either — it is this repo's own word for the thing
+    being depicted. A gate is green, a stamp is green; work comes back green or it comes back
+    refused, which is the very next beat.
     """
     return (
-        f'<rect class="smCkC" x="{fmt(x + u)}" y="{fmt(y)}" width="{fmt(u)}" height="{fmt(u)}"/>'
-        f'<rect class="smCkI" x="{fmt(x)}" y="{fmt(y + u)}" width="{fmt(3 * u)}" '
-        f'height="{fmt(u)}"/>'
-        f'<rect class="smCkB" x="{fmt(x)}" y="{fmt(y + 2 * u)}" width="{fmt(3 * u)}" '
+        f'<rect class="smMailE" x="{fmt(x)}" y="{fmt(y)}" width="{fmt(2 * u)}" '
         f'height="{fmt(2 * u)}"/>'
+        f'<rect class="smResF" x="{fmt(x + u / 4)}" y="{fmt(y + u / 4)}" '
+        f'width="{fmt(1.5 * u)}" height="{fmt(1.5 * u)}"/>'
     )
 
 
@@ -2490,7 +2506,7 @@ def summon_props(art: Art) -> str:
     """The bursts and the two travelling props, drawn UNDER both creatures.
 
     Under, not over, and that is the whole exit mechanism: the letter's last two steps carry it inside
-    B's silhouette and the travelling cake hands off to a copy inside A's, so each prop switches off
+    B's silhouette and the travelling result hands off to a copy inside A's, so each prop switches off
     while fully occluded instead of popping out of existence in open plate. A prop drawn OVER a body
     would also be the v6b failure in miniature — an object crossing a face erases it.
     """
@@ -2517,10 +2533,10 @@ def summon_props(art: Art) -> str:
         f'width="{fmt(u)}" height="{fmt(u / 4)}"/>'
         f"</g>"
     )
-    # The travelling cake is drawn at its DESTINATION and animated backwards from B, so its final
+    # The travelling result is drawn at its DESTINATION and animated backwards from B, so its final
     # position is identical to the held copy's by construction rather than by two numbers agreeing.
-    cake = f'<g class="smCake">{_cake(a_right, a_top + u, u)}</g>'
-    return letter + cake
+    result = f'<g class="smWork">{_result(a_right, a_top + u, u)}</g>'
+    return letter + result
 
 
 # The flash that COVERS B at each swap. Straddles the instant: bright before it, blowing out after.
@@ -2753,12 +2769,12 @@ def summon_css(art: Art) -> str:
         for k in range(7)
     ]
     mail_marks.append((SM_MAIL_OFF, mail_marks[-1][1], mail_marks[-1][2], 0))
-    c0, c1 = SM_CAKE
-    cake_marks = [
-        (c0 + k * (c1 - c0) / 4, (4 - k) * -st["cake_dx"], (4 - k) * -st["cake_dy"], 1)
+    c0, c1 = SM_WORK
+    work_marks = [
+        (c0 + k * (c1 - c0) / 4, (4 - k) * -st["work_dx"], (4 - k) * -st["work_dy"], 1)
         for k in range(5)
     ]
-    cake_marks.append((SM_HELD_ON, 0.0, 0.0, 0))
+    work_marks.append((SM_HELD_ON, 0.0, 0.0, 0))
     o0, o1 = SM_OCCLUDE
     held_marks = [(SM_HELD_ON, 0.0, 0.0, 1), (o0, 0.0, 0.0, 1)]
     held_marks += [
@@ -2782,7 +2798,7 @@ def summon_css(art: Art) -> str:
             summon_burst_css("smsf", "smSpark", SM_SPARK, cx, cy),
             summon_burst_css("smpf", "smPoof", SM_POOF, cx, cy),
             summon_travel_css("smmf", "smMail", mail_marks),
-            summon_travel_css("smcf", "smCake", cake_marks),
+            summon_travel_css("smcf", "smWork", work_marks),
             summon_travel_css("smhf", "smHeld", held_marks),
         ]
     )
@@ -2922,12 +2938,12 @@ def css(art: Art) -> str:
         #   · the envelope's EDGE lands on the ground plate and takes the foreground colour, which is
         #     the darkest tone in each scheme. Its pale face needs no override because the edge is
         #     what carries the read: pale-on-pale would be invisible in the light scheme alone.
-        #   · the cake is SELF-contrasting (dark body / pale icing / amber candle), so it needs no
+        #   · the returned work reuses the letter's OWN edge class, so it needs no
         #     override at all — which is the whole reason the brief specified an icing row.
         #   · the sparkle dots land on the ground plate, so they invert with it.
         f".smHat{{fill:{d.rule}}}"
         f".smMailE{{fill:{d.fg}}}.smMailF{{fill:#f4ead8}}"
-        f".smCkB{{fill:#7a4a2e}}.smCkI{{fill:#f4ead8}}.smCkC{{fill:#e8b04b}}"
+        f".smResF{{fill:#5fa860}}"
         f".smSpk{{fill:{d.star}}}.smFlash{{fill:{d.star}}}"
         f".vig{{fill:url(#vig);opacity:{fmt(d.vignette)}}}" + cloudrules(d) +
         # ---- parallax: one shared translate, per-layer duration, all dividing P ----
@@ -3123,10 +3139,10 @@ def css(art: Art) -> str:
         ".legsWalk,.eOpen,.aOpen,.armsGate,.lookGate{opacity:1}"
         # THE SUMMONING resolves to BEFORE it happened, not to the middle of it. `animation:none`
         # reverts each element to its un-animated base, which for every one of these is opacity 1 —
-        # so the frozen still would otherwise show the hat on, both cakes at once, the letter in
+        # so the frozen still would otherwise show the hat on, both copies of the result at once, the letter in
         # mid-air and two bursts at rest scale. The one thing a still must never be is a frame that
         # could not occur.
-        ".smHat,.smPeer,.smBUp,.smSpark,.smPoof,.smMail,.smCake,.smHeld,.smFlash{opacity:0}"
+        ".smHat,.smPeer,.smBUp,.smSpark,.smPoof,.smMail,.smWork,.smHeld,.smFlash{opacity:0}"
         ".smBArm{opacity:1}"
         # The barrier rests RETRACTED. `animation:none` already leaves it there (translateY(0) is its
         # un-animated base), but the still is the deliverable, so it is pinned rather than inferred —
@@ -3151,6 +3167,9 @@ def css(art: Art) -> str:
         f".rfp{{fill:{l.rule};opacity:.9}}"
         f".brd{{fill:{l.mound[0]}}}.sh{{opacity:.20}}"
         f".smHat{{fill:{l.rule}}}.smMailE{{fill:{l.fg}}}.smSpk{{fill:{l.fg}}}.smFlash{{fill:{l.fg}}}"
+        # The cake had NO light override at all: its #f4ead8 icing measured 1.05:1 against the day
+        # sky. A prop that vanishes for every daylight reader is not a prop.
+        f".smResF{{fill:#3d7f42}}"
         f".vig{{opacity:{fmt(l.vignette)}}}" + cloudrules(l) + "}"
     )
     # Day/night switching is done with `display` on a parent group, so no element ever needs both a
@@ -3228,7 +3247,7 @@ def build(art: Art) -> str:
         f'stroke-dasharray="3 9" stroke-linecap="round" opacity=".72"/>',
         # THE SUMMONING, in paint order: bursts and travelling props UNDER both creatures, so each
         # prop's exit is an OCCLUSION rather than a pop — the letter's last steps carry it inside B,
-        # the cake hands off to a copy inside A. Over a body, either one would erase a face, which is
+        # the result hands off to a copy inside A. Over a body, either one would erase a face, which is
         # v6b's rejected peer in miniature.
         summon_props(art),
         summon_peer(art),
