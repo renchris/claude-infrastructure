@@ -124,6 +124,25 @@ two separately, so a corpus with ≥1 killed and 0 `not ok` stays the exit-9 non
 - **A per-call bound multiplies across a loop.** `gate_admit`'s 600 s was written for a caller that
   ran it twice; per-suite it runs once per corpus **plus** once per failing suite's re-run — 126 ×
   600 s is 21 h of "bounded" waiting. Added run-wide `CC_GATE_ADMIT_TOTAL_WAIT` (1200 s, fail-OPEN).
+  - > **SUPERSEDED 2026-07-30 — `CC_GATE_ADMIT_TOTAL_WAIT` NO LONGER EXISTS; do not port it.**
+    > The diagnosis above stands; the remedy was replaced by a better one and then deleted outright.
+    > `gate_admit` is gone from **both** call sites — `ship-land.sh:494-508` (shed = **SKIP**, never
+    > WAIT: a fail-closed path must never pick the *more* expensive action) and
+    > `postland-verify.sh:180-188` + `:665-671` (deleted, not tuned; the corpus runs in Darwin's
+    > BACKGROUND band — `nice -n 19` + `taskpolicy -c background` — so wall time under load becomes
+    > deploy *latency*, never blockage). The cap has **zero occurrences in code** repo-wide; it
+    > survives only in this line and in two dated research snapshots.
+    > **Re-adding it is gate-RED by construction:** `postland-verify.sh --selftest` (`:1245-1247`)
+    > asserts `gate_admit` is absent — "the verifier must never wait on load" — with a bait fixture
+    > red-control at `tests/qos-chokepoint.bats:239`.
+    > **A run-wide cap does now exist in postland**, in the shape that fits it: `SUITE_TO`
+    > (`POSTLAND_SUITE_TIMEOUT_S`, 10800 s) wraps the whole corpus at `:940`/`:942`, so it cannot
+    > multiply across the ladder no matter how many children run — the same structural move as
+    > `ship-land.sh`'s shared absolute `SMOKE_DEADLINE` (`:687`).
+    > Landed `0152be39` (on `origin/main`). Why this note exists: backlog `60ec4c2d86d4` was
+    > dispatched off *this line* to "port the cap to postland-verify" — three days after the
+    > mechanism was deleted and forbidden. **An item's symptom and its prescribed remedy rot
+    > independently; check both halves before acting.**
 - **The new kill switch had to join `gate_bats`'s scrub list.** Unscrubbed, an operator landing with
   `SHIP_LAND_FULL_PER_SUITE=off` bleeds it into every fixture pipeline in `tests/ship-land.bats` —
   the `SHIP_LAND_GATE_ROUNDS=0` defect verbatim, on the flag this change introduces.
