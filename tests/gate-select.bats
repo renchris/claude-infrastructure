@@ -8,7 +8,10 @@
 #                       blanket rung ran ZERO suites on a docs land; both ends must be prose
 #   * new file        → the SAME clauses as a modified one; FULL only via the `unmapped` rung
 #                       (a blanket `added ⇒ FULL` widened nearly every land to 1,749 tests)
-#   * suite-comment refs → DIRECT (comments are evidence: real suites name their script only there)
+#   * suite-comment refs → SELECTED, never DIRECT unless the suite's CODE corroborates them.
+#                       A DIRECT edge claims "a failure here is caused by your diff", so its
+#                       evidence must live in executable text; a citation is not a dependency.
+#                       (Measured: 90 of 542 clause-(a) edges were comment-only, 1 was real.)
 #   * 3-hop chain       → selected via CLOSURE, and provably NOT via a direct clause
 #                         (a depth-2 walk drops it — this is the closure-depth floor)
 #   * 4-hop chain       → NOT selected: CLOSURE_DEPTH=3 is the ceiling, and 3 is the floor above
@@ -78,7 +81,16 @@ seed() {
   suite tests/common-utils.bats 'run bash scripts/common.sh'
   suite tests/noise.bats 'run bash scripts/noise-source.sh  # the common case is prose'
   suite tests/alpha.bats 'run bash scripts/alpha-entry.sh'
-  suite tests/lead-supervisor.bats '# drives scripts/supervisor-e2e.sh end to end'
+  # A comment ref the suite's CODE corroborates. Mirrors the real pair: tests/lead-supervisor.bats
+  # names scripts/supervisor-e2e.sh only in a header comment because it drives it indirectly, via
+  # `lead-supervisor.sh --selftest` — but its code names the stem. Evidence in executable text.
+  printf '#!/usr/bin/env bats\n# drives scripts/supervisor-e2e.sh end to end\n@test "supervisor-e2e --selftest is green" {\n  run bash "$SUP" --selftest\n}\n' > tests/lead-supervisor.bats
+  # A pure CITATION: the boilerplate the $HOME-fixture remediation writes into every suite it
+  # fixes. Nothing in the body executes the ratchet, so the suite is reachable for the map lint
+  # (which still counts comments) but must never be DIRECT.
+  printf '#!/bin/bash\necho ratchet\n' > scripts/ratchet-lint.sh
+  printf '#!/bin/bash\necho citer-anchor\n' > scripts/citer-anchor.sh
+  printf '#!/usr/bin/env bats\n# HERMETIC $HOME (scripts/ratchet-lint.sh — the ratchet that binds every NEW suite)\n@test "unrelated behaviour" {\n  run bash scripts/citer-anchor.sh\n}\n' > tests/ratchet-citer.bats
   suite tests/docs-owner.bats 'documents docs/named.md'
   suite tests/install-wire-hooks.bats 'install wiring'
   # The ratchet suite plus the analyzer it owns — mirroring the real repo, so the suite is
@@ -256,7 +268,28 @@ lacks() { ! printf '%s\n' "$output" | grep -qxF -- "$1"; }
   [ "$output" = "tests/docs-owner.bats" ]
 }
 
-@test "literal ref inside a suite COMMENT is a DIRECT selection" {
+@test "a path a suite only CITES in a comment is SELECTED but never DIRECT" {
+  # The land-blocking defect, and it was self-inflicted and GROWING: the $HOME-fixture remediation
+  # writes a boilerplate comment naming the ratchet into every suite it fixes, so each hermeticity
+  # fix MANUFACTURED another false DIRECT edge — 7 suites on 2026-07-26, 20 four days later, of
+  # which 2 had any functional dependency. DIRECT means "a failure here is caused by your diff", so
+  # a merely-citing suite could veto a land on its OWN unrelated flake (the observed one:
+  # cc-authbrowser's frozen machine-wide CDP ports). It must still RUN; it must not convict.
+  bump scripts/ratchet-lint.sh
+  gs
+  has tests/ratchet-citer.bats
+  gs --direct
+  lacks tests/ratchet-citer.bats
+  gse
+  has "tests/ratchet-citer.bats <- cited:scripts/ratchet-lint.sh"
+}
+
+@test "a comment ref the suite's CODE corroborates IS still DIRECT" {
+  # The other direction, and the reason the rule is corroboration rather than a blanket comment
+  # strip: measured over this corpus, 1 of 90 comment-only edges was a real dependency —
+  # tests/lead-supervisor.bats drives scripts/supervisor-e2e.sh through `lead-supervisor.sh
+  # --selftest`, so it never names the path in code, but its code DOES name the stem. The comment
+  # says WHICH file; the code shows the suite really exercises something by that name.
   bump scripts/supervisor-e2e.sh
   gs --direct
   has tests/lead-supervisor.bats
