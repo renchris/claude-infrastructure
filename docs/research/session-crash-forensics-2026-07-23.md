@@ -500,6 +500,25 @@ S6 got the extended-grace hold. **Remaining for the campaign:** migrate reap-gua
 `ce_last_interactive_age` to the lib (they coexist today by design), a STICKY adoption marker surviving
 transcript rotation, and unifying context-econ's `ce_` with `ci_`.
 
+**CLOSED 2026-07-29 — at the default tier, no campaign** (full
+per-residual disposition in `FRONTIER_HOLES.md` § C-SC-1 RESOLVED). Two of the three residuals needed no
+new code: the `ce_`/`ci_` unification already existed, **stranded 4 days** on the never-shipped
+`fix/infra-perfection` branch (cherry-picked `-x`, not rebuilt — searching the branch graveyard first is
+what made this cheap), and the sticky marker turned out **unnecessary** once the whole-file fallback
+landed on both predicates (the 2 MB wall was real — 345 of 7319 transcripts exceed it — but a fallback
+closes it without new state; no rotation blind spot is demonstrable).
+
+The residual list's own framing was the thing that hid the live bug. It treated `ci_` as the strict gate
+and `ce_` as the weak backstop; the truth was the reverse. `ci_` was two-valued, and *its* consumers are
+the two actuators that actually kill a session — so a corrupt / truncated / empty transcript made
+`cc-teardown` and `teammate-auto-shutdown` **close the pane**, RED-proved against the pre-fix tree. The
+`ce_` legs had been split on 07-25 precisely because they were the named suspects, which is why the
+unnamed gate carried the defect four days longer. Both predicates now answer three ways identically
+("digits" / `""` = nobody typed / `"unreadable"`), pinned by `tests/interactive-parity.bats`, and both
+bats suites stopped re-implementing the predicate as a hand-rolled stub — the copies had silently gone
+stale against the lib, so a fail-closed assertion could have been green against a predicate that no
+longer existed.
+
 ### Convergence note (process)
 
 THREE independent streams fixed this class in one night: this goal session's wave; the
