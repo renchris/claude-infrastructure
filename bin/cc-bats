@@ -22,27 +22,66 @@
 #
 # NOT admission control. Nothing here waits, sleeps, queues, or polls load. Demotion only (R1).
 #
-# Seams (set-but-EMPTY is honoured VERBATIM at both — `${VAR+set}`, never `${VAR:-}`, because a
-# seam that cannot turn a thing OFF is not a seam):
-#   CC_BATS_QOS=off          → exec the real bats verbatim, no demotion at all (kill switch, R8).
-#   CC_BATS_TASKPOLICY=<p>   → pin the taskpolicy(8) binary; SET-BUT-EMPTY disables that leg and
-#                              falls back to nice-only WITH the loud notice below.
-#   CC_BATS_REAL=<path>      → pin the real bats (tests use this; never guesses in production).
-#   CC_BATS_QUIET=1          → suppress the degradation notice on stderr (CI noise control only;
-#                              does NOT suppress it when QoS is fully unavailable).
+# Seams — ALL SEVEN this file actually reads, each with its empty-value discipline stated. There
+# are two kinds, and conflating them is what made the earlier four-seam list read as a rule it did
+# not keep:
+#   VALUE seams hand the script something it then USES (a path, a level). These take `${VAR+set}`,
+#     never `${VAR:-}`, so set-but-EMPTY is honoured VERBATIM — a seam that cannot turn a thing OFF
+#     is not a seam. ONE deliberate exception (CC_BATS_NICE), called out below with its reason.
+#   TOGGLE seams are only ever compared against a literal ("off", "1"). Empty is simply not that
+#     literal, so `${VAR:-<default>}` and `${VAR+set}` are behaviourally IDENTICAL here; `:-` is
+#     used and carries no discipline claim either way.
 #
-# FAIL LOUD WHEN INERT (R4): if taskpolicy(8) cannot be resolved we still demote with nice(1), but
-# we SAY SO on stderr. A QoS shim that silently no-ops is a non-feature — ~100% abstain means inert
-# by construction, and the whole defect this file fixes was a mechanism that looked applied and
-# was not.
+#   CC_BATS_QOS=off          → [toggle] exec the real bats verbatim, no demotion at all (kill
+#                              switch, R8). Empty ≡ unset ≡ on.
+#   CC_BATS_QUIET=1          → [toggle] suppress the degradation notice on stderr (CI noise control
+#                              only; does NOT suppress it when QoS is fully unavailable).
+#   CC_BATS_REAL=<path>      → [value] pin the real bats (tests use this; never guesses in
+#                              production). SET-BUT-EMPTY honoured verbatim ⇒ resolves to nothing ⇒
+#                              FATAL 127, which is how a test asserts the unresolvable-bats path.
+#   CC_BATS_SEED=<path>      → [value] pin the activation-recorded seed FILE. SET-BUT-EMPTY honoured
+#                              verbatim ⇒ the seed lookup is disabled outright.
+#   CC_BATS_TASKPOLICY=<p>   → [value] pin the taskpolicy(8) binary; SET-BUT-EMPTY disables that leg
+#                              and falls back to nice-only WITH the loud notice below.
+#   CC_BATS_NICE_BIN=<path>  → [value] pin nice(1); SET-BUT-EMPTY disables that leg. Exists so
+#                              QOS_MODE=NONE is reachable and therefore provable (nice(1) is never
+#                              absent on macOS, so the R4 branch would otherwise be dead code).
+#   CC_BATS_NICE=<n>         → [value, THE EXCEPTION] the nice LEVEL, default 19. Uses `${VAR:-19}`,
+#                              so set-but-EMPTY falls back to 19 rather than being honoured verbatim.
+#                              A numeric level has no "off" to express and `nice -n ''` is an
+#                              argument error, so honouring empty here would break every run rather
+#                              than disable anything. Full rationale at the assignment below.
+#
+# NOT a seam — an INTERNAL flag, do not set it by hand:
+#   CC_BATS_ACTIVE=1         → the re-entrancy marker this script exports for its OWN nested
+#                              re-execs (bats re-execs itself; see the guard below). Set externally,
+#                              it makes the shim hand straight off to the real bats and apply NO
+#                              demotion — the exact silent-inert failure this file exists to
+#                              prevent. It is why tests/qos-chokepoint.bats unsets the whole
+#                              CC_BATS_* family before each test rather than only the seams it sets.
+#
+# FAIL LOUD WHEN INERT (R4): if taskpolicy(8) cannot be resolved we still APPLY nice(1) — but nice
+# does not move PRI at all (calibration at the PARTIAL warning below), so that is a courtesy, not a
+# demotion — and we SAY SO on stderr. A QoS shim that silently no-ops is a non-feature — ~100%
+# abstain means inert by construction, and the whole defect this file fixes was a mechanism that
+# looked applied and was not.
 #
 # bash 3.2 SAFE: no `case` inside command substitution, no IFS-on-control-char splitting
 # (memory bash32-case-in-substitution-zsh-repro-trap). Ships to launchd ⇒ tested under /bin/bash.
 
 set -uo pipefail
 
-# Exported so a census / crash record can attribute a demoted proc to a KNOWN shim version rather
-# than inferring it from pri alone.
+# Shim-version stamp. NO CONSUMER TODAY — said plainly, because the comment this replaces claimed a
+# census attribution mechanism that was never built. VERIFIED 2026-07-30:
+# `grep -c CC_BATS scripts/qos-census.sh` → 0. The census classifies purely by pri
+# (qos-census.sh:73-78, `pri <= QOS_DEMOTED_PRI_MAX`), and that is the RIGHT design, not an
+# oversight to fix: pri is kernel ground truth, whereas this variable is a self-report by the very
+# process being judged — a shim that failed to demote would still be exporting it, so believing it
+# over pri would manufacture exactly the false coverage row 13 exists to kill.
+# KEPT anyway: it costs one env slot, survives into a crash record / `ps eww` / `sample`, and is the
+# correct channel IF an attribution consumer is ever wanted. But an unbuilt mechanism described as
+# built is the same defect class as a feature that abstains 100% of the time (R4), so this comment
+# claims only what is true.
 export CC_BATS_VERSION=1
 
 # ── resolve the REAL bats, never ourselves ────────────────────────────────────────────────────
@@ -231,12 +270,32 @@ else
 fi
 [ -n "$NICE" ] && [ ! -x "$NICE" ] && NICE=""
 
+# ── nice LEVEL ────────────────────────────────────────────────────────────────────────────────
+# Seam CC_BATS_NICE. DELIBERATE `${VAR:-}`, and the ONE documented exception to this file's `+set`
+# discipline — resolved this way (rather than by converting to `+set`) because the discipline's own
+# stated reason does not apply to a numeric LEVEL:
+#
+#   "a seam that cannot turn a thing OFF is not a seam" — but a level has no OFF to express. Empty
+#   is not a quieter nice, it is an ABSENT ARGUMENT: `nice -n ''` is an argument error, so honouring
+#   set-but-EMPTY verbatim would not disable this leg, it would make every `exec` at the bottom of
+#   this file fail. On a box where this shim is installed AS `bats`, that breaks every gate run
+#   machine-wide — a strictly worse outcome than the silent-default it would be "fixing".
+#
+# The off switches for this leg already exist and are real: CC_BATS_NICE_BIN= drops nice(1)
+# entirely, CC_BATS_QOS=off drops the whole shim. So empty here can only mean "no level supplied ⇒
+# use the default", which is exactly what `:-` expresses. Runtime behaviour is UNCHANGED from what
+# shipped; what changed is the header, which no longer claims a universal `+set` rule this line
+# breaks. Header and code now agree.
 NICE_LEVEL="${CC_BATS_NICE:-19}"
 
 # ── build the demotion prefix, and FAIL LOUD about whatever we could not get (R4) ─────────────
-# Three outcomes, all explicit — never a silent pass:
-#   FULL      nice + taskpolicy background  (scheduler AND I/O tier demoted)
-#   PARTIAL   nice only                     (notice on stderr; CPU demoted, I/O tier is not)
+# Three outcomes, all explicit — never a silent pass. TASKPOLICY IS THE LOAD-BEARING LEG: the 2x2
+# calibration at the PARTIAL warning below shows taskpolicy alone reaches the background band and
+# nice alone does not move PRI at all. Read the mode names as "how many legs were applied", never
+# as "how much demotion was achieved":
+#   FULL      nice + taskpolicy background  (background band reached — PRI 31→4, plus the I/O tier)
+#   PARTIAL   nice only                     (NOT a partial demotion — it is ZERO demotion: PRI stays
+#                                            at 31, full interactive priority. Notice on stderr)
 #   NONE      neither                       (notice on stderr ALWAYS, even under CC_BATS_QUIET —
 #                                            "QoS requested but not applied" must never be quiet)
 QOS_MODE="NONE"
@@ -247,10 +306,26 @@ elif [ -n "$NICE" ]; then
 fi
 
 if [ "$QOS_MODE" = "PARTIAL" ] && [ "${CC_BATS_QUIET:-0}" != "1" ]; then
-  # MEASURED 2026-07-29, and the reason this is a WARNING rather than a mild notice: on Darwin
-  # `nice -n 19` ALONE leaves PRI at 31 — full interactive priority. Calibration:
-  #   nice 19 + taskpolicy -c background -> NI=20 PRI=4    (real demotion)
-  #   nice 19 alone                      -> NI=20 PRI=31   (NOT demoted)
+  # MEASURED 2026-07-29 and COMPLETED 2026-07-30 with the missing fourth cell, which is the one that
+  # names the mechanism. This is a WARNING rather than a mild notice because on Darwin `nice -n 19`
+  # ALONE leaves PRI at 31 — full interactive priority. Full 2x2, all four rows re-derived in one
+  # batch on 2026-07-30 so they are comparable (`<prefix> /bin/sleep 3 &` then
+  # `ps -p <child> -o nice=,pri=`):
+  #                                          NI     PRI
+  #   nice 19 + taskpolicy -c background ->  20      4    (real demotion)
+  #   nice 19 alone                      ->  20     31    (NOT demoted)
+  #   taskpolicy -c background ALONE     ->  0/5     4    (real demotion — nice is not needed)
+  #   plain                              ->  0/5    31    (baseline)
+  # NI reads 0/5 on the two rows that do not call nice(1) because that column is simply INHERITED
+  # from the caller; re-run under `env -i /bin/bash -c …` and both read 0. That is the same 0/5 the
+  # census header records, and it is the tell: taskpolicy never touches NI.
+  #
+  # THE CONSEQUENCE the earlier three-row table hid — the two legs are ORTHOGONAL, and only one of
+  # them matters. nice(1) moves NI and NOTHING ELSE; taskpolicy(8) moves PRI (and the I/O tier) and
+  # NOTHING ELSE. PRI tracks the taskpolicy column exactly, in both directions, regardless of nice.
+  # So taskpolicy is the load-bearing mechanism and nice is near-cosmetic for PRI: it is kept
+  # because it is free, idempotent, and NI is a cheap visible marker of intent in `ps` — NOT because
+  # it contributes to the demotion, because on this box it contributes nothing to it.
   # So nice-only is NOT a working fallback for contention relief, and scripts/qos-census.sh
   # correctly refuses to count it as covered. Row 1's postland-verify.sh:168 comment
   # ("absent taskpolicy(8) => nice alone, never a hard fail") is right to not hard-fail, but the
@@ -262,8 +337,11 @@ if [ "$QOS_MODE" = "NONE" ]; then
   echo "cc-bats: WARNING — neither nice(1) nor taskpolicy(8) resolved; running bats at FULL interactive priority. QoS NOT applied." >&2
 fi
 
-# Export the applied mode so scripts/qos-census.sh can attribute a demoted proc to this shim
-# rather than inferring it, and so a PARTIAL/NONE run is auditable after the fact.
+# The applied-mode half of the CC_BATS_VERSION stamp above, and it carries the SAME status: no
+# consumer reads it today (scripts/qos-census.sh contains zero CC_BATS references — verified
+# 2026-07-30). It is an after-the-fact audit aid — a crash record or a live `ps eww` can show that a
+# given run was PARTIAL or NONE — and NOT an input to any verdict. The census decides by pri, which
+# is kernel ground truth rather than this process's own account of itself.
 export CC_BATS_QOS_MODE="$QOS_MODE"
 
 if [ "$QOS_MODE" = "FULL" ]; then

@@ -141,9 +141,21 @@ case "$VERDICT" in
   *)       RC=3 ;;
 esac
 
-# Projected ceiling: how many MORE sessions fit in the reclaimable headroom, at the row's measured
-# ~636 MB/session process RSS. Reported as an ESTIMATE and never used in the verdict — per-session
-# RSS overcounts shared pages, so this is directional guidance for the operator, not a threshold.
+# Projected ceiling: how many MORE sessions fit in the reclaimable headroom.
+#
+# THE CONSTANT IS KNOWN-BIASED, AND THE BIAS DIRECTION IS THE POINT. 636 MB is the mean of summed
+# per-process `ps rss`, and that instrument OVERCOUNTS because it bills every process for shared
+# pages it does not exclusively own (the row that produced it retracted the derived fleet total for
+# exactly this reason — see MACHINE_CAPACITY_V2 §8.5.6). A deliberately corrected constant is NOT
+# substituted here: dividing by a re-derived overcount factor would invent a precision nobody
+# measured, which is the failure this row keeps recording.
+#
+# So it is left as an UPPER BOUND on per-session cost, which makes est_room_sessions a LOWER BOUND
+# on remaining capacity — i.e. the alarm under-promises headroom. For a capacity alarm that is the
+# correct direction to be wrong in: it can only ever tell you there is less room than there is.
+# It is never used in the VERDICT (that keys on measured reclaimable headroom and swap), only in the
+# human line, and it is labelled as a floor there. Override with CC_CAP_PER_SESSION_MB if you have
+# measured your own with footprint(1).
 PER_MB="${CC_CAP_PER_SESSION_MB:-636}"
 ROOM="?"
 if [ -n "$HEAD" ]; then
@@ -204,7 +216,7 @@ if [ "$QUIET" != 1 ] && [ "$WANT_JSON" != 1 ]; then
   echo "  reclaimable headroom:   ${HEAD:-?} GB   (warn <${WARN_GB} · alarm <${ALARM_GB})"
   echo "  compressor / active:    ${COMP:-?} GB / ${ACT:-?} GB"
   echo "  swap used:              ${SWAP_MB:-0} MB   (>0 ⇒ ALARM, the lagging indicator)"
-  echo "  est. room for:          ~${ROOM} more sessions at ~${PER_MB} MB (ESTIMATE — rss overcounts)"
+  echo "  est. room for:          >=${ROOM} more sessions (FLOOR: ~${PER_MB} MB/session is an rss-derived UPPER bound, so this under-promises)"
   echo "  VERDICT:                ${VERDICT}"
   if [ "$VERDICT" = "WARN" ] || [ "$VERDICT" = "ALARM" ]; then
     echo "  This alarm never refuses a spawn. Shed by CLOSING sessions (/handoff the idle ones);"

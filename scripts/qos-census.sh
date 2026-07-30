@@ -22,13 +22,18 @@
 # classify BOTH correctly. A one-sided control (only proving we can see a demoted proc) would still
 # pass if the classifier said "demoted" about everything.
 #
-# PRI BANDS — calibrated empirically 2026-07-29, not assumed:
-#   nice 19 + taskpolicy -c background  -> NI=20  PRI=4    <- the real demotion
-#   nice 19 alone                       -> NI=20  PRI=31   <- NOT demoted (see below)
-#   plain                               -> NI=0/5 PRI=31
-# The load-bearing finding: **`nice` alone does not move PRI off 31.** Only
-# `taskpolicy -c background` reaches the background tier. So nice-only is NOT a working fallback for
-# contention relief, and this census must never count it as covered.
+# PRI BANDS — calibrated empirically, re-derived 2026-07-30 under `env -i` to isolate inherited NI:
+#   nice 19 + taskpolicy -c background  -> NI=20  PRI=4    <- demoted
+#   taskpolicy -c background ALONE      -> NI=0   PRI=4    <- ALSO demoted (the row first omitted)
+#   nice 19 alone                       -> NI=20  PRI=31   <- NOT demoted
+#   plain                               -> NI=0   PRI=31
+# THE TWO LEGS ARE STRICTLY ORTHOGONAL: nice(1) moves NI and nothing else; taskpolicy(8) moves PRI
+# (and the I/O tier) and nothing else. PRI tracks the taskpolicy column exactly, in both directions,
+# regardless of nice. So `taskpolicy` is the load-bearing mechanism and `nice` is near-cosmetic for
+# PRI — an earlier three-row version of this table omitted the taskpolicy-alone row and thereby
+# implied nice contributed something, which mislabelled the shim's "PARTIAL" mode as a partial
+# demotion when it is ZERO demotion. This census counts only the PRI band, so it was never wrong —
+# but the table a reader reasons from was.
 #
 # READ-ONLY with respect to the fleet: spawns nothing but its own two short-lived controls, kills
 # nothing, waits on nothing (R1 — no load polling, ever).
