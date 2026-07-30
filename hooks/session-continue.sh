@@ -172,6 +172,11 @@ _mbxlib="$_scd/lib/mailbox-pending.sh"
 [ -f "$_mbxlib" ] || _mbxlib="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/mailbox-pending.sh"
 [ -f "$_mbxlib" ] || _mbxlib="$HOME/.claude/hooks/lib/mailbox-pending.sh"
 _ouid="${ITERM_SESSION_ID:-}"; _ouid="${_ouid##*:}"
+# KEEP THE RAW PANE KEY. The canonicalisation below deliberately rewrites $_ouid to the SESSION-keyed
+# mailbox key — right for every mailbox read, wrong for the teardown marker, which is PANE-keyed (and
+# sid-keyed) by all three of its writers. A reader using the canonicalised value would look up a key
+# those writers never write. Captured here, at the one place the pane uuid is still the pane uuid.
+_opane="$_ouid"
 if [ -f "$_mbxlib" ] && command -v jq >/dev/null 2>&1; then
   # shellcheck source=lib/mailbox-pending.sh
   # shellcheck disable=SC1091
@@ -203,6 +208,162 @@ if [ -f "$_mbxlib" ] && command -v jq >/dev/null 2>&1; then
     case "$_ouid" in ''|*[!0-9A-Fa-f-]*) : ;; *) mailbox_promote_acked "$_ouid" ;; esac
   fi
 fi
+
+# ── THE FLOOR'S MISSING THIRD STATE: terminating / lead-owned (2026-07-29) ─────────────────────────
+# The floor below reads exactly two states — ACTIVE (a sentinel is armed) and IDLE (nothing is). It
+# had no read on a session that is ENDING, nor on one whose wake path is not the mailbox at all. Both
+# gaps were measured live: an Agent-Teams assignee that had ACCEPTED a shutdown_request could not end
+# a turn for ~4 HOURS, because every attempt to honour the shutdown re-entered this hook, which
+# blocked and demanded it arm a 4-hour cc-await-ping first.
+#
+# WHY THE EXISTING BOUND DID NOT BOUND IT — the non-obvious part. CC_WAKE_FLOOR_MAX caps attempts per
+# session, but the already-armed branch RESETS that budget (`rm -f "$sf"`, deliberate self-healing).
+# So a COMPLIANT session arms → budget cleared → its watcher dies with the teardown it is obeying →
+# unarmed again with count=0 → the floor fires again. Compliance is what defeats the cap, so for the
+# one case that matters the bound is not a bound. That is why this needed a state gate rather than a
+# smaller number.
+#
+# Both ways out that the floor left are things the surrounding design already forbids:
+#   · arm anyway — a watcher on a session under teardown is precisely the orphan that cc-await-ping's
+#     own OWNER GUARD exists to kill, and an assignee dies by FORCE close (`it2 session close -f`),
+#     which skips the EXIT trap and strands the `.watching` heartbeat.
+#   · keep looping at Stop — the blocking-hook anti-pattern CLAUDE.md § Session Close names by name.
+#
+# TWO independent abstains. Neither subsumes the other, because they become true at DIFFERENT times:
+#
+#  (A) ASSIGNEE — lead-owned wake path. An Agent-Teams assignee is reached by its LEAD over the
+#      teammate channel, which the harness wakes directly; it has no SendMessage and is not a mailbox
+#      peer. So the floor's premise ("nothing will wake it") is false at EVERY assignee idle, not just
+#      its last — TeammateIdle fires 3-4× per teammate. THIS is the abstain that breaks the deadlock,
+#      and (B) cannot do it: the lead's closer runs ON TeammateIdle, i.e. it waits for the very idle
+#      transition this hook was preventing, so its teardown marker is written AFTER an idle that never
+#      happened. A marker-only fix would have been too late by construction, not merely racy.
+#
+#  (B) TERMINATING — a fresh teardown marker naming THIS session: the durable structured signal that
+#      handoff-fire (self-close), cc-teardown (delegated close) and teammate-auto-shutdown
+#      (TeammateIdle) all already write. Covers what (A) does not — a self-closing lead, a
+#      cc-teardown'd orphan.
+#
+# FAIL-SAFE DIRECTION IS ASYMMETRIC AND DELIBERATE: no evidence ⇒ do NOT abstain ⇒ the floor applies
+# exactly as before. Abstaining on ignorance would silently disarm the entire fleet — the same
+# reasoning by which cc-await-ping's owner guard refuses to read reparenting as death.
+# Seams: CC_WAKE_FLOOR_TEARDOWN (0 disables both) · CC_WF_PSTABLE_FILE · CC_WF_MAX_HOPS ·
+#        CC_WF_TEARDOWN_FRESH_S · CC_TEARDOWN_DIR.
+
+# (A) Am I an Agent-Teams assignee? Read MY OWN process ancestry — the assignee's CC process is this
+# hook's grandparent, and CC gives a teammate three flags it gives nothing else:
+#   --agent-id <name>@session-<team>   --agent-name <n>   --team-name <t>
+# ANCESTRY, not a machine-wide scan, and a THREE-flag conjunction rather than one, because argv
+# carries whole briefs: any single flag also matches every session that merely MENTIONS it (memory
+# pgrep-f-matches-agent-briefs — read 50 where the truth was 1; a live scan run while writing this
+# very hook returned a bogus `--agent-id processes` row off an awk command line). Requiring all three
+# AND requiring the process to be an ANCESTOR of this hook means the only thing that can match is the
+# CC process actually running me.
+# WHY NOT REUSE handoff-fire.sh's agent_id_on_tty (:942): it is tty-keyed, and a hook HAS NO TTY —
+# `ps -o tty= -p $$` reads `??` here (verified). That oracle resolves its tty from the session
+# registry, and an assignee pane has no registry row at all (134/134, lead-crash-watchdog.sh:596).
+wf_assignee_argv() { # → 0 = this session IS a team assignee; echoes the matched agent-id
+  local tbl
+  if [ -n "${CC_WF_PSTABLE_FILE:-}" ] && [ -f "${CC_WF_PSTABLE_FILE}" ]; then
+    tbl="$(cat "$CC_WF_PSTABLE_FILE" 2>/dev/null)"
+  else
+    tbl="$(ps -axo pid=,ppid=,command= 2>/dev/null)"
+  fi
+  [ -n "$tbl" ] || return 1
+  # CC_WF_START_PID exists so the suite can pin where the walk begins: a hook's own $$ is a pid the
+  # test cannot know in advance, so without it the ancestry could only be tested by stubbing out the
+  # walk itself — i.e. not tested at all. $$ (not BASHPID) is right in production: it survives the
+  # command substitution this function is called inside, and names the hook process whose ancestry
+  # actually contains the CC process.
+  printf '%s\n' "$tbl" | awk -v start="${CC_WF_START_PID:-$$}" -v maxhop="${CC_WF_MAX_HOPS:-8}" '
+    { p = $1; PP[p] = $2; c = ""; for (i = 3; i <= NF; i++) c = c " " $i; CMD[p] = c " " }
+    END {
+      cur = start
+      for (h = 0; h < maxhop; h++) {
+        if (cur == "" || cur == "0" || cur == "1") exit 1
+        c = CMD[cur]
+        if (c ~ / --agent-id / && c ~ / --agent-name / && c ~ / --team-name /) {
+          n = split(c, w, " ")
+          for (i = 1; i < n; i++) if (w[i] == "--agent-id") { print w[i + 1]; exit 0 }
+        }
+        cur = PP[cur]
+      }
+      exit 1
+    }' 2>/dev/null
+}
+
+# CROSS-SOURCE CONFIRMATION for (A), and it is not belt-and-braces — it closes a false positive that
+# is CONCRETE IN THIS REPO. `ps -o command=` flattens argv into one line, which destroys the
+# difference between "separate argv words" and "words inside a single quoted argument" — and a
+# session's BRIEF is one such argument. An infra session fired with a brief that quotes assignee argv
+# (this very file does) would carry all three flags as apparent words and read as its own assignee.
+# handoff-fire.sh hit the identical trap and documents it at :949-957.
+# So the argv claim is checked against the harness's OWN record: the team config CC writes at
+# $CLAUDE_CONFIG_DIR/teams/<team>/config.json. Roots are scanned the way teammate-auto-shutdown.sh
+# does (:70-90) — the *2/*3/*4 launchers each run a DIFFERENT real config dir, so a team led from any
+# of them records its members ONLY under that dir.
+# TRICHOTOMOUS, because "no config" and "config says no" are different facts:
+#   0 = CONFIRMED (a non-lead member of that team bears this agent-name)
+#   1 = REFUTED   (that team's config exists and has no such member ⇒ the argv match was prose)
+#   2 = UNKNOWN   (no readable config for that team ⇒ the argv evidence stands alone)
+wf_team_member_confirms() { # $1="<name>@session-<team>"
+  local id="${1:-}" nm team root cfg seen=0
+  case "$id" in *@session-*) ;; *) return 2 ;; esac
+  nm="${id%%@session-*}"; team="session-${id##*@session-}"
+  case "$nm"   in ''|*[!A-Za-z0-9_.-]*) return 2 ;; esac
+  case "$team" in ''|*[!A-Za-z0-9_.-]*) return 2 ;; esac
+  # Build the root list explicitly rather than word-splitting a defaulted string: the default has to
+  # carry BOTH a quoted path and a glob, and a `${VAR:-a b*}` that must split one and expand the other
+  # is exactly the kind of seam that reads fine and silently resolves to nothing.
+  local roots=()
+  if [ -n "${CC_WF_TEAM_ROOTS:-}" ]; then
+    # shellcheck disable=SC2206  # deliberate split of a space-separated test seam
+    roots=( ${CC_WF_TEAM_ROOTS} )
+  else
+    [ -n "${CLAUDE_CONFIG_DIR:-}" ] && roots+=( "${CLAUDE_CONFIG_DIR}/teams" )
+    for root in "$HOME"/.claude*/teams; do [ -d "$root" ] && roots+=( "$root" ); done
+  fi
+  for root in "${roots[@]+"${roots[@]}"}"; do
+    [ -n "$root" ] || continue
+    cfg="$root/$team/config.json"
+    [ -f "$cfg" ] || continue
+    seen=1
+    # A member is an ASSIGNEE when it is not the lead: CC records the lead with tmuxPaneId "leader"
+    # and agentType "team-lead" (verified against live configs).
+    if jq -e --arg n "$nm" '[.members[]? | select(.name == $n and .tmuxPaneId != "leader" and .agentType != "team-lead")] | length > 0' \
+         "$cfg" >/dev/null 2>&1; then
+      return 0
+    fi
+  done
+  [ "$seen" = 1 ] && return 1
+  return 2
+}
+
+# (B) Is a fresh teardown marker naming THIS session? Marker contract and the 30-min freshness window
+# are the reader's, taken verbatim from hooks/lead-crash-watchdog.sh classify_death (:255-278) so the
+# two consumers of one marker cannot disagree about what it means.
+# The PANE-keyed lookup needs marker_owns_sid's rule (:112-118): an in-place `--recycle` leaves the
+# PREDECESSOR's marker on a pane that now hosts the SUCCESSOR, and the successor must still get the
+# floor — so a marker naming a DIFFERENT non-empty sid is not evidence here. An EMPTY sid is the
+# legitimate pane-only case and IS accepted: the real self-close path blanks SESSION_ID.
+wf_teardown_marked() { # → 0 = a fresh teardown marker names this session
+  local tdir fresh now mt got f
+  tdir="${CC_TEARDOWN_DIR:-$HOME/.claude/watchdog/teardown}"
+  [ -d "$tdir" ] || return 1
+  fresh="${CC_WF_TEARDOWN_FRESH_S:-1800}"; case "$fresh" in ''|*[!0-9]*) fresh=1800 ;; esac
+  now="$(date +%s 2>/dev/null || echo 0)"
+  for f in "${cur_sid:+$tdir/$cur_sid.json}" "${_opane:+$tdir/$_opane.json}"; do
+    { [ -n "$f" ] && [ -f "$f" ]; } || continue
+    mt="$(stat -f %m "$f" 2>/dev/null || stat -c %Y "$f" 2>/dev/null || echo 0)"
+    case "$mt" in ''|*[!0-9]*) mt=0 ;; esac
+    [ "$(( now - mt ))" -le "$fresh" ] 2>/dev/null || continue
+    # A sid-keyed hit needs no ownership check — the FILENAME is this session.
+    [ -n "$cur_sid" ] && [ "$f" = "$tdir/$cur_sid.json" ] && return 0
+    got="$(sed -n 's/.*"sid":"\([^"]*\)".*/\1/p' "$f" 2>/dev/null | head -n1)"
+    { [ -z "$got" ] || [ "$got" = "$cur_sid" ]; } && return 0
+  done
+  return 1
+}
 
 # ── WAKE FLOOR (v3 R1) — a session must not reach IDLE without a wake path ────────────────────────
 # THE DEFECT IT CLOSES: the wake mechanism works (proved end-to-end 2026-07-26 on CC 2.1.219 —
@@ -265,6 +426,37 @@ wake_floor() { # → echoes JSON on stdout when it wants to BLOCK; otherwise sil
 
   pend="$(mailbox_pending_count "$_ouid" 2>/dev/null || echo 0)"
   case "$pend" in ''|*[!0-9]*) pend=0 ;; esac
+
+  # ── THIRD STATE: terminating / lead-owned ⇒ this gate does not APPLY (see the block above) ────────
+  # PLACED HERE, before the state file is written: an abstain must not consume a budget attempt, or a
+  # session that was merely an assignee for a while would arrive at a genuine unarmed idle with its
+  # attempts already spent. Reading $sf above is free; only the write below costs.
+  # NOT SILENT WHEN IT COSTS SOMETHING: with mail actually pending, an abstain leaves that mail for the
+  # next turn, so it says so where a human can see it rather than dropping the fact (the "no silent
+  # caps" rule). Blocking would not have delivered that mail either — the block only asks the model to
+  # ARM a watcher — so the abstain forfeits nothing the floor could have won.
+  if [ "${CC_WAKE_FLOOR_TEARDOWN:-1}" = 1 ]; then
+    local _wf_aid _wf_why="" _wf_c=2
+    if _wf_aid="$(wf_assignee_argv)" && [ -n "$_wf_aid" ]; then
+      wf_team_member_confirms "$_wf_aid" && _wf_c=0 || _wf_c=$?
+      case "$_wf_c" in
+        0) _wf_why="team assignee ${_wf_aid} (confirmed by its team config) — its lead wakes it over the teammate channel, not the mailbox" ;;
+        2) _wf_why="team assignee ${_wf_aid} (argv evidence only — no readable team config) — its lead wakes it over the teammate channel, not the mailbox" ;;
+        *) : ;;   # REFUTED: the team's own config knows no such member ⇒ argv prose, not an assignee
+      esac
+    fi
+    if [ -z "$_wf_why" ] && wf_teardown_marked; then
+      _wf_why="a fresh teardown marker names this session — it is terminating, not going idle"
+    fi
+    if [ -n "$_wf_why" ]; then
+      printf 'session-continue: wake floor ABSTAINS (%s).\n' "$_wf_why" >&2
+      if [ "$pend" -gt 0 ]; then
+        jq -nc --arg m "ℹ Wake floor stood down (${_wf_why}), but ${pend} message(s) are still unread in this session's inbox — they will surface on its next turn, if it has one." \
+          '{systemMessage:$m}' 2>/dev/null || true
+      fi
+      return 0
+    fi
+  fi
 
   # Fire on the first idle of the session, or any idle where mail is actually waiting. Otherwise a
   # session that already declined once is left alone.
