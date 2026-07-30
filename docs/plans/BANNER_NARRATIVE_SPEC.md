@@ -606,7 +606,7 @@ event, only a late one.
 ## IMPLEMENTED — the recommended three (2026-07-29, pool-2). Implementer's note to the spec owner.
 
 The recommended set is built on `feat/banner-showoff`. Verification and the full findings are in
-`README_HERO_BANNER.md` § v7 (S17-S21); this section records only what the *spec* should know,
+`README_HERO_BANNER.md` § v7 (S18-S22); this section records only what the *spec* should know,
 because two of its own rulings turn out to be incomplete rather than wrong.
 
 | Beat | Window | As specified? |

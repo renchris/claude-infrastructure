@@ -715,7 +715,7 @@ variants pass `banner-verify.sh` **6/6**, the print lock re-proves at **0.000000
 boundaries under the warp**, the generator stays byte-reproducible, and the header is still untouched
 — `banner-apply-header.sh` remains unrun.
 
-### S17 · The three beats are ONE mechanism: the world clock
+### S18 · The three beats are ONE mechanism: the world clock
 
 All three speak the same sentence — the ground's scroll rate — so they are not three effects to be
 hand-animated. One clock `w(t)` drives every ground-plane layer, and significance comes from a shared
@@ -737,7 +737,7 @@ therefore ship. That pad is what took the files 78 KB → 107 KB (10.7 % of the 
 the gauge the beats speak in, and a session blocked on a human does not stop the world — it stops its
 own progress. A frozen sky would also read as the render having died.
 
-### S18 · Two constraints the loop imposes, which the spec did not have
+### S19 · Two constraints the loop imposes, which the spec did not have
 
 Both were derived, not tuned, and both bind any future edit.
 
@@ -764,7 +764,7 @@ Both were derived, not tuned, and both bind any future edit.
    OVERLAP, whose tell is a doubled print *density* at a normal ground rate rather than a fast ground
    at normal density.
 
-### S19 · A beat can be entirely ABSENT while every check reports green
+### S20 · A beat can be entirely ABSENT while every check reports green
 
 The committed v6b carried a live defect that nothing caught. Its peer keyframes placed interior stops
 at **absolute second offsets** (`+14`, `−16`) carried over from a much longer window; on the 9 s peer
@@ -784,7 +784,7 @@ Two rules out of it:
   0–100 %. Its RED-proof replays the actual committed v6b out of git rather than a hand-written
   approximation, because an approximation of a defect can pass a check vacuously.
 
-### S20 · What the acceptance gate structurally cannot see, and the two probes added for it
+### S21 · What the acceptance gate structurally cannot see, and the two probes added for it
 
 `banner-verify.sh` is necessary and not sufficient: **nothing in it can tell a working world clock
 from an inert one.** S19 is the proof that green says little about whether a beat happens. So:
@@ -815,7 +815,7 @@ Four things about those probes are worth keeping:
   and its rivals ~0.7. Prominence is now measured against the correlation surface's own median, which
   has no unit to get wrong.
 
-### S21 · A missing fill does not error, it picks a colour from outside the palette
+### S22 · A missing fill does not error, it picks a colour from outside the palette
 
 THE REFUSAL's barrier rendered **solid black** on its first pass because its class had no fill rule
 behind it. SVG's initial `fill` is black, so the shape renders confidently in a colour no theme chose
@@ -862,4 +862,9 @@ both schemes                                all three beats read in dark AND lig
   ruled co-presence semantically wrong — a session is never co-present with its peers — but that
   deletes v6b's whole identity, so it is surfaced rather than taken. One line in `RARE_EVENTS`
   reverses the demotion; removing them from `ALWAYS_EMITTED` and `art.events` completes the deletion.
-- **The harness is still Chromium-only** (unchanged from S16's note). WebKit remains unprobed.
+- **WebKit is still unprobed.** Chromium and — as of S17, landed by a sibling session while this work
+  was in flight — Firefox are both covered. S17 matters more to these beats than to anything before
+  them: the world clock is expressed **entirely in CSS `@keyframes`**, with no SMIL anywhere, so
+  "does a CSS-only VectorImage ever join Firefox's refresh driver" is the difference between three
+  beats and three static frames for every Firefox reader. It ticks. Any future beat added here
+  inherits that dependency, and `scripts/banner-firefox-probe.py` is what re-checks it.
