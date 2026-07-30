@@ -166,26 +166,44 @@ def _hop_in_stop():
     "invalid keyframe selector",
 )
 def _negative_pcts():
-    # Replayed from git rather than hand-written: an approximation of a defect can pass a check
-    # vacuously, so the input here is the stylesheet that actually shipped.
-    blob = subprocess.run(
-        ["git", "-C", str(ROOT), "show", "HEAD:assets/banner/v6b-two-sessions.svg"],
+    """Replayed from the real shipped artifact, at a DERIVED revision.
+
+    Two traps, both of which this case has already fallen into once:
+
+      · A hand-written approximation of the defect can pass the check vacuously, so the input has to
+        be the stylesheet that actually shipped.
+      · `HEAD:` was the first spelling and it broke the moment the fix was committed — HEAD's v6b no
+        longer has the defect, so the case silently began asserting against a clean artifact. A
+        pinned SHA is no better: this repo land-rebases, so the SHA moves and the proof turns into a
+        skip. A skip reads as a pass.
+
+    So the revision is DERIVED: walk the file's own history newest-first and take the first one that
+    still carries a negative keyframe percentage. Self-maintaining across rebases, and if no
+    revision has it any more the case says so loudly instead of quietly passing.
+    """
+    path = "assets/banner/v6b-two-sessions.svg"
+    revs = subprocess.run(
+        ["git", "-C", str(ROOT), "log", "--format=%H", "--", path],
         capture_output=True,
         text=True,
         check=True,
-    ).stdout
-    sheet = re.search(r"<style>(.*?)</style>", blob, re.S)
-    if not sheet:
-        raise SystemExit(
-            "redproof: no <style> in the committed v6b — cannot replay the artifact"
-        )
-    if "%,-" not in sheet.group(1):
-        raise SystemExit(
-            "redproof: the committed v6b no longer carries a negative keyframe percentage, so this "
-            "case is asserting against an artifact that no longer has the defect. Re-point it at "
-            "the last revision that did, or retire it."
-        )
-    g.assert_keyframe_pcts_sane(v("v6b"), sheet.group(1))
+    ).stdout.split()
+    for rev in revs:
+        blob = subprocess.run(
+            ["git", "-C", str(ROOT), "show", f"{rev}:{path}"],
+            capture_output=True,
+            text=True,
+        ).stdout
+        sheet = re.search(r"<style>(.*?)</style>", blob, re.S)
+        if sheet and "%,-" in sheet.group(1):
+            g.assert_keyframe_pcts_sane(v("v6b"), sheet.group(1))
+            return
+    raise SystemExit(
+        f"redproof: no revision of {path} in this history carries a negative keyframe percentage, so "
+        f"this case has nothing real to replay and is proving nothing. It was written against a "
+        f"defect that shipped; if the history no longer reaches it, retire the case explicitly "
+        f"rather than leaving it green."
+    )
 
 
 @case("layout: two strip features on canvas at once", "are on canvas")
