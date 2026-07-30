@@ -633,7 +633,96 @@ the successor inherits:
 **READ THIS BLOCK, NOT THE ONE BELOW IT.** The block that follows is the *previous* coordinator's
 state and is retained for history only — every count in it is stale.
 
-#### DELTA from coordinator #3 (pane 71B42B48), 2026-07-29T19:3xZ — read this sub-block FIRST
+#### DELTA from coordinator #4 (pane 71B42B48, in-place recycle — SAME pane), 2026-07-29T20:2xZ — read this sub-block FIRST
+
+Everything in #3 below still holds except where this overrides it.
+
+- **State re-derived from trunk, never recalled: 8 DONE (1,2,3,4,5,10,12,13) · 2 IN FLIGHT (7, 8 —
+  both map cells still read `open`, the known fresh-fire lag; ADD fired rows) · 3 OPEN: 11, 9, 6.**
+  Order **11 · 9 · 6 last**. **AT THE CAP — nothing fired this session, correctly.**
+- ✅ **ROW 9'S PAYLOAD IS NOW COMPOSED AND ON TRUNK** — `docs/ground-up-payloads/row9-memory-knowledge.md`
+  (landed **`f3a4a7f9`**, content-verified on `origin/main`, 215 lines). **Both remaining dispatchable
+  rows now have fire-ready payloads** (11 and 9); only row 6 lacks one, and it is last by design
+  because its content depends on the remainders rows 9 and 11 will hand it. Four things row 9's
+  payload carries, every one verified from disk this session:
+  1. 🚨 **ROW 9'S SUBSYSTEM SPANS THREE STORAGE DOMAINS AND ONLY ONE IS LANDABLE HERE.** (a) The memory
+     store is tracked by **NO** repo — `git ls-tree -r origin/main` matches **zero** paths under a
+     `memory/` dir (control: `commands/compact-memory.md` does match), yet `MEMORY.md` + **127 topic
+     files** live under `~/.claude-secondary/projects/<slug>/memory/`. (b) The session index/search is
+     in a **DIFFERENT REPOSITORY** — `~/.claude/bin/claude-search` symlinks to
+     `~/Development/claude-session-search/bin/claude-search`, so this campaign's `/ship` cannot land a
+     change to it (context: 56 of 60 `~/.claude/bin` entries symlink into THIS checkout; that one does
+     not). (c) Only the mechanisms are tracked here. Row 9 is scope-bound to land only in
+     claude-infrastructure and to platter the rest as named remainders.
+  2. 🚨 **ROW 9'S HEADLINE TAKE — the only live memory mechanism is a modulo counter that never reads
+     its subject.** `hooks/memory-nudge.sh` is 44 lines, wired **UserPromptSubmit only**, and its whole
+     logic is `[ $((COUNT % INTERVAL)) -eq 0 ]` (`INTERVAL=${MEMORY_NUDGE_INTERVAL:-12}`) before
+     emitting a **fixed string**. It never stats `MEMORY.md` — while the string it emits says *"If
+     MEMORY.md is past its load warning, run /compact-memory first"*, delegating the measurement to the
+     model unconditionally, every 12th prompt. **Nothing in the repo measures the index against its
+     limit** (grepped as symbol and as number across hooks/ bin/ scripts/ commands/ skills/ — prose
+     only). This is **row 10's ratified learning in a new surface**: an alarm that ALWAYS fires and an
+     alarm that CANNOT fire are the same alarm.
+  3. 🚨 **THE CONDITION IS LIVE AND THE LEDGER HAS CLOSED IT TWICE.** `MEMORY.md` measured **over** the
+     ~24.4KB read limit during composition — roughly an hour after coordinator #3's manual reclaim left
+     ~105 bytes of headroom — so the index tail is being silently truncated at every session start
+     right now, hiding learnings this campaign landed today. Two backlog items, **both `done`**:
+     `f71311d9ad79` ("23.3KB vs a 24.4KB read limit") and `b0d889846885` ("at 24.1KB read-limit"). The
+     remedy's effective half (`/compact-memory` dedupe/archive) is HUMAN-GATED, so the condition
+     regenerates faster than the loop that closes it — the whack-a-mole signature. **Row 9's own map
+     cell cites `b0d889846885` as "compaction backlogged" when that item is CLOSED**; correcting the
+     cell is in its scope. Per campaign rule the payload hands the *deriving command*, not the byte
+     count.
+  4. **Graveyard slice re-verified myself, and it corrects the campaign table.**
+     `scripts/prune-plan-history.sh` + `tests/prune-plan-history.bats` → `fix/infra-perfection` only;
+     **`tests/plan-version-sid.bats` is in BOTH `fix/infra-perfection` AND `tm/hygiene`, where the
+     table's row-9 cell shows "—"**. Verified with `git ls-tree` and BOTH controls required by the
+     campaign's two laws — positive `scripts/find-plan.sh` (shares `s` with the `scripts/` paths under
+     test), negative `tests/no-such-suite.bats` (shares `t`, the modifier letter that manufactures the
+     zsh false-absence). Use this control shape; the naive one provably does not work on this repo.
+- 🚨 **ROW 8 IS NOT DONE, AND I FOUND A DONE-BLOCKER IN ITS OWN COMPLETION CLAIM.** Row 8 pinged 5
+  lands; its ping *also* says M-3 + its map row are still in flight, so it is correctly still counted
+  in-flight. Verified GOOD from my side: all 5 shas (`44cabad7` `aee9f975` `2a337c48` `c6418f21`
+  `12a3a8ef`) are trunk ancestors and `CONTEXT_ECONOMY_V2.md` + `bin/cc-ctx-audit` are present by
+  content. **FALSIFIED:** the ping claims activation `20-ctx-audit` is "STAGED in BOTH the live queue
+  and the repo SSOT, byte-identical." The repo half is false —
+  `docs/activation/pending-activation/20-ctx-audit-activate.sh` reads `??` (untracked) in
+  `gu-context-economy`, is ABSENT from `origin/main`, and that worktree is 0 ahead of trunk so nothing
+  pending carries it; the live copy exists at 64 lines. Positive control: **25** sibling scripts ARE on
+  trunk including `19-capacity-alarm` and `20-model-config-ssot`, so the path and convention are right
+  and this is a real absence. The SessionStart parity audit independently reports the same file as
+  LIVE-ONLY. The map's binding *What DONE means* ruling requires activation staged in the **repo
+  SSOT** ⇒ **do not ratify row 8 DONE until it is committed and landed.** Told at lines 5-6 (`seen=0`,
+  `reason=no-watcher`) — **NOT acked; re-check `cc-notify --receipt 8D689C3D-… 5`.** Not hand-patched,
+  per the row-10 precedent.
+- 🚨 **THE ONE-WAY CHANNEL IS NOW CONFIRMED EMPIRICALLY, NOT JUST STRUCTURALLY — AND IT HAS EXACTLY ONE
+  AGENT-REACHABLE DELIVERY PATH.** Row 7's fleet.manifest ruling, sent by coordinator #3, is **still
+  `seen=0 acked=0` ~3.5 h later** while row 7 works normally (691 transcript rows and climbing). Two
+  facts close the question: **`cc-notify`'s own help documents that it delivers "NEVER as keystrokes on
+  its live input line"**, so there is *no* agent-side way to force a mid-turn drain; and
+  `mailbox-drain.sh` is wired to `['SessionStart','UserPromptSubmit']` in **all five** config dirs
+  (re-verified by parsing each `settings.json`). **So the delivery path that DOES exist is a row's next
+  SessionStart — i.e. its own recycle.** A ruling sent to a row that will recycle is
+  *delivered-eventually*, not dead; a ruling sent to a row that finishes without recycling is never
+  read. Operational rule for the successor: **send anyway, then treat the row's recycle as the delivery
+  event**, and never report a row as told on anything but `acked≥line`. Operator fix that restores the
+  mid-turn boundary: `CONFIRM=1 bash ~/.claude/autonomy/pending-activation/12-mailbox-posttool-activate.sh`.
+- **NEW EXPOSURE, filed not fixed — backlog `ff839f1f8f38`.** `bin/cc-mail` (109 lines) and
+  `bin/cc-thread` (96 lines) are the operator's ONLY human-readable view of cross-session mail — the
+  exact blindness this campaign keeps hitting — and both exist **only** as real files in
+  `~/.claude/bin`, untracked by claude-infrastructure, in a directory that is not a git repo, so they
+  are tracked by **nothing** and are one `rm` from unrecoverable. They also have **zero callers** in
+  the tracked tree, so nothing ever surfaces them. Control: `cc-blockers` IS tracked. Spans two CLOSED
+  rows (comms = 3, operator surface = 10) ⇒ surfaced and backlogged, never hand-patched.
+- **Correction to the two-live-rows table below: row 7's transcript root is `~/.claude-next/projects/`,
+  not `~/.claude/projects/`.** Glob `~/.claude*/projects/*/<sid>*.jsonl` rather than trusting a root.
+- **Both live rows verified alive by transcript CONTENT, twice, ~4 min apart:** row 7 `85233c18`
+  674→691 rows (writing M2 tests); row 8 `9a2d094f` 943→981 rows (re-running 196 tests after a
+  `BATS_EXIT=124` run left 11 tests NEVER RUN — its own note that a not-ok count alone reads that as
+  green is the campaign's third-state law again).
+- **Landed by coordinator #4, content-verified on trunk:** `f3a4a7f9` (row 9 payload) · this delta.
+
+#### DELTA from coordinator #3 (pane 71B42B48), 2026-07-29T19:3xZ — superseded by #4 above; still binding where #4 is silent
 
 Everything below in this section still holds except where this delta overrides it.
 
