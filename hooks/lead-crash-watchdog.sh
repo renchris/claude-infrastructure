@@ -830,18 +830,37 @@ trap '' HUP
   # Unreadable lstart at spawn ⇒ stored empty ⇒ fall back to bare pid liveness. That is today's
   # behaviour and it keeps the bias this file states everywhere — never invent a crash — while the
   # SUPERSEDED exit below still bounds that case. Same fail-open shape as lock_holder_alive.
+  # → 0 ALIVE · 1 DEAD (positive evidence) · 2 IDENTITY-LOST (ambiguous — never a crash)
+  #
+  # The third state is not fastidiousness, it is required. `ps -o lstart=` renders the start time
+  # through the CURRENT timezone, verified on this machine against one live pid: 00:53 local, 07:53
+  # under TZ=UTC, 16:53 under TZ=Asia/Tokyo. So a DST transition changes the rendered string for a
+  # process that never restarted, and a pin compared as a plain string stops matching a perfectly
+  # healthy lead. Reading that as death would call handle_crash against a LIVE team — a
+  # shutdown_request into every teammate inbox, a CRASH_REPORT.md, and pane teardown where armed —
+  # twice a year, on every daemon at once. Inventing a crash is the one thing this file says
+  # everywhere it must never do, and it is strictly worse than the wedge being fixed here: a missed
+  # exit costs an idle process, a false crash destroys working teams.
+  #
+  # So a mismatch alone is never fatal. It is corroborated first: a pid RECYCLED to some unrelated
+  # process is no longer a claude binary, which is positive evidence of death; a pid that still IS a
+  # claude binary cannot be told apart from a re-rendered clock, so it returns 2 and the caller
+  # decides without claiming anything.
   lead_alive() {
-    local p="$1" want="$2" cur
-    kill -0 "$p" 2>/dev/null || return 1
-    [[ -n "$want" ]] || return 0
+    local p="$1" want="$2" cur cmd
+    kill -0 "$p" 2>/dev/null || return 1          # gone — unambiguous
+    [[ -n "$want" ]] || return 0                  # never pinned ⇒ bare liveness is all we have
     cur=$(ps -o lstart= -p "$p" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//')
     [[ -n "$cur" ]] || return 1
-    [[ "$cur" == "$want" ]]
+    [[ "$cur" == "$want" ]] && return 0
+    cmd=$(ps -o command= -p "$p" 2>/dev/null)
+    case "$cmd" in *claude.exe*|*node_modules/.bin/claude*) return 2 ;; esac
+    return 1                                      # recycled to a stranger — the wedge, positively
   }
 
   local_watchdog() {
     local pid="$1" sid="$2" start="${3:-}"
-    local pid_file="$WATCHDOG_DIR/$sid.pid" holder
+    local pid_file="$WATCHDOG_DIR/$sid.pid" holder lrc cur repins=0
 
     while :; do
       # pid file gone = clean shutdown elsewhere
@@ -858,11 +877,33 @@ trap '' HUP
         echo "[watchdog $sid] SUPERSEDED — pidfile holds $holder, not our lead $pid — exit"
         return 0
       fi
-      # lead process gone = crash detected
-      if ! lead_alive "$pid" "$start"; then
+      # lead process gone = crash detected. `|| lrc=$?` keeps the non-zero returns out of errexit's
+      # reach — a bare `lead_alive …` here would abort the daemon on state 1 before it could handle
+      # the very death it just detected.
+      lrc=0; lead_alive "$pid" "$start" || lrc=$?
+      if (( lrc == 1 )); then
         echo "[watchdog $sid] LEAD CRASH detected pid=$pid"
         handle_crash "$pid" "$sid"
         return 0
+      elif (( lrc == 2 )); then
+        # The pin no longer matches, but the pid is still a claude process AND the SUPERSEDED check
+        # above already proved this sid's pidfile still names THIS pid — only that sid's own
+        # SessionStart rewrites it. Under those two facts the overwhelmingly likely reading is a
+        # re-rendered start time (DST/TZ), not a recycle, so the watch continues on a fresh pin
+        # rather than either claiming a crash or abandoning a live session.
+        #
+        # BOUNDED AT 2: a pid recycled into an unrelated claude session lands here too, and an
+        # unbounded re-pin would quietly restore exactly the immortality this change removes. Two
+        # re-pins covers a clock that moved; a third means the identity is genuinely gone, and we
+        # leave without claiming a death we cannot evidence.
+        repins=$((repins + 1))
+        if (( repins > 2 )); then
+          echo "[watchdog $sid] IDENTITY LOST — pid=$pid stopped matching its start-time pin after $((repins - 1)) re-pin(s); refusing to claim a crash we cannot prove — exit"
+          return 0
+        fi
+        cur=$(ps -o lstart= -p "$pid" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//')
+        echo "[watchdog $sid] re-pinning lead $pid: start-time now '$cur' (was '$start') — still a claude process, still this sid's pidfile holder"
+        start="$cur"
       fi
       sleep 30
     done
