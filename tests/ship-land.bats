@@ -209,6 +209,165 @@ on_branch_with() {  # $1=branch $2=file $3=content  → commit a change on a fre
   echo "$output" | grep -qi "PARKED"
 }
 
+# ── EFFECT/DISCLOSURE class split + the declared exemption manifest ───────────────────────────────
+# The rail's measured precision was ZERO (land.log: 506 clean / 11 hit; 9 packets, 0 of them a real
+# destructive land). These five tests pin the fix at both edges: the benign class stops parking, and
+# every path that could weaken the rail still parks. The manifest under test is the SHIPPED one,
+# copied out of the repo — an approximation written inline here would pass vacuously while the real
+# file exempted nothing.
+install_esc_manifest() {
+  mkdir -p scripts
+  cp "$REPO/scripts/esc-exempt.manifest" scripts/esc-exempt.manifest
+  git add scripts/esc-exempt.manifest
+  git commit -q -m "chore: esc exemption manifest"
+  git push -q origin main
+}
+
+@test "esc-scan: the REAL session-index retention GC on a declared cache path → NOT parked" {
+  # RED-proof, replaying the actual artifact: these are the verbatim added lines of 28ade39a
+  # `fix(session-index): staleness-aware lock + batched sweep before any unblock`, in their real
+  # file. That commit parked FOUR times (packets shipland-esc-{1ca84e4,a877ec8,3511d99b,ab66db8})
+  # and is still absent from origin/main — the rail blocked a complete, gate-green fix for days.
+  # Asserted as "not exit 3 / no packet" rather than "exit 0" so the verdict is about esc_scan alone
+  # and cannot be flipped by unrelated gate variance in the fixture.
+  install_esc_manifest
+  git checkout -q -b fix/session-index main
+  mkdir -p hooks/lib
+  cat > hooks/lib/session-index-helpers.sh <<'EOF'
+#!/usr/bin/env bash
+session_index_retention_gc() {
+  local s="$1"
+  session_index_sql "
+DELETE FROM session_chunks WHERE session_id = '$s';
+DELETE FROM chunks_fts    WHERE session_id = '$s';
+DELETE FROM sessions_fts  WHERE session_id = '$s';
+DELETE FROM sessions      WHERE session_id = '$s';
+DELETE FROM file_tracking WHERE session_id = '$s';"
+  session_index_sql "VACUUM;" >/dev/null 2>&1 || true
+}
+EOF
+  git add hooks/lib/session-index-helpers.sh
+  git commit -q -m "fix(session-index): retention GC"
+
+  run bash "$SHIPLAND" --trunk main --dry-run
+  [ "$status" -ne 3 ]
+  ! echo "$output" | grep -qi "PARKED" || false   # `|| false`: a bare `!` is errexit-EXEMPT ⇒ dead
+  [ -z "$(ls "$SHIP_LAND_DECISIONS_DIR"/*.json 2>/dev/null)" ]
+}
+
+@test "esc-scan: destructive SQL in a hooks/ path the manifest does NOT declare → still exit 3" {
+  # Narrowness control. The exemption is per-file (hooks/session-index-*.sh), never the directory:
+  # the rest of hooks/ is live actuation, which is exactly what this rail exists to stop. If this
+  # goes green the exemption has widened past its declared population.
+  install_esc_manifest
+  git checkout -q -b feat/hookdrop main
+  mkdir -p hooks
+  printf '#!/usr/bin/env bash\nsqlite3 "$LIVE_DB" "DELETE FROM sessions;"\n' > hooks/reaper.sh
+  git add hooks/reaper.sh
+  git commit -q -m "feat: reaper"
+
+  run bash "$SHIPLAND" --trunk main --dry-run
+  [ "$status" -eq 3 ]
+  echo "$output" | grep -qi "PARKED"
+  echo "$output" | grep -q "hooks/reaper.sh: effect:" || false   # hits are FILE-attributed, not diff-relative
+}
+
+@test "esc-scan DISCLOSURE: a private key in an EXEMPT path (docs/) → still exit 3" {
+  # The load-bearing half of the class split. docs/* is exempt for the EFFECT class because prose
+  # cannot execute SQL — but a key pasted into a doc is exactly as leaked as one in code, so the
+  # DISCLOSURE class must ignore the manifest entirely. If this ever goes green, the fix has
+  # converted a documentation carve-out into a credential-leak carve-out.
+  install_esc_manifest
+  git checkout -q -b docs/leak main
+  mkdir -p docs
+  # The marker is ASSEMBLED at runtime so this source line does not itself carry the literal. The
+  # DISCLOSURE class is never exemptible by design — tests/* included — so a literal here would trip
+  # the rail on every land that touches this suite. The FIXTURE still contains the real pattern, so
+  # the scanner under test sees exactly what it would see in the wild.
+  printf 'Example config:\n\n-----BEGIN %s PRIVATE KEY-----\nMIIEowIBAAKCAQEA\n' RSA > docs/setup.md
+  git add docs/setup.md
+  git commit -q -m "docs: setup"
+
+  run bash "$SHIPLAND" --trunk main --dry-run
+  [ "$status" -eq 3 ]
+  echo "$output" | grep -q "docs/setup.md: secret:" || false
+}
+
+@test "esc-scan: prose describing destructive SQL in docs/ → NOT parked" {
+  # Three of the nine parks were audit/research docs describing this very defect, and the cost was
+  # not only a blocked land: one author respelled the SQL as prose to evade the scan ("pattern
+  # spelled as prose so the ship esc-scan doesn't match quoted SQL in docs") and it matched anyway.
+  # A rail that corrupts the audit record buys nothing.
+  install_esc_manifest
+  git checkout -q -b docs/audit main
+  mkdir -p docs/research
+  printf 'Fix sketch: add a retention pass — DELETE FROM sessions WHERE file_path NOT IN (live set),\nplus a periodic VACUUM. Today grep for `DELETE FROM sessions` returns zero index-prune hits.\n' \
+    > docs/research/audit.md
+  git add docs/research/audit.md
+  git commit -q -m "docs: audit"
+
+  run bash "$SHIPLAND" --trunk main --dry-run
+  [ "$status" -ne 3 ]
+  [ -z "$(ls "$SHIP_LAND_DECISIONS_DIR"/*.json 2>/dev/null)" ]
+}
+
+@test "esc-scan: a NON-ASCII filename is still scanned → exit 3, never silently skipped" {
+  # Fail-open guard for the per-file rewrite. `git diff --name-only` QUOTES a non-ASCII path
+  # ("caf\303\251.sql"); fed back as a pathspec it matches nothing, so the file's diff reads empty
+  # and the scan skips it entirely — destructive SQL would land unseen through nothing but a filename.
+  # `-z` (raw bytes, no quoting) is what makes this green. Whole-range scanning could not miss a file,
+  # so this hole is created by per-file iteration and has to be closed with it.
+  install_esc_manifest
+  git checkout -q -b feat/unicode main
+  printf 'DROP TABLE users;\n' > 'café.sql'
+  git add 'café.sql'
+  git commit -q -m "feat: unicode migration"
+
+  run bash "$SHIPLAND" --trunk main --dry-run
+  [ "$status" -eq 3 ]
+  echo "$output" | grep -q "effect:" || false
+}
+
+@test "esc-scan TRUST ROOT: a widening added IN the range is INERT for that land → still exit 3" {
+  # The anti-self-exemption property, asserted directly. Without base-read this fix would be a
+  # self-service bypass: a land could append `*` to the manifest and exempt its own destructive SQL
+  # in the same commit. The `*` here would match wipe.sql if the manifest were read from the working
+  # tree — it parks because the manifest is read from the BASE, where that entry does not exist.
+  install_esc_manifest
+  git checkout -q -b feat/widen main
+  printf '\n*\n' >> scripts/esc-exempt.manifest
+  printf 'DELETE FROM customers;\n' > wipe.sql
+  git add scripts/esc-exempt.manifest wipe.sql
+  git commit -q -m "feat: widen"
+
+  run bash "$SHIPLAND" --trunk main --dry-run
+  [ "$status" -eq 3 ]
+  echo "$output" | grep -q "wipe.sql: effect:" || false      # the self-granted `*` did NOT apply
+  echo "$output" | grep -q "INERT for this land" || false    # and the widening was announced
+}
+
+@test "esc-scan TRUST ROOT: an exemption already on the BASE does apply → NOT parked" {
+  # The other half of base-read, and the one that proves the mechanism is a delay and not a block:
+  # the same entry that was inert while it sat inside the range works normally once it is on the base.
+  # Without this, "everything parks" would pass for correct behaviour.
+  install_esc_manifest
+  git checkout -q main
+  printf '\ncache/*\n' >> scripts/esc-exempt.manifest
+  git add scripts/esc-exempt.manifest
+  git commit -q -m "chore: declare cache/ exempt"
+  git push -q origin main
+
+  git checkout -q -b feat/usecache main
+  mkdir -p cache
+  printf 'DELETE FROM warm_rows;\n' > cache/gc.sql
+  git add cache/gc.sql
+  git commit -q -m "feat: cache gc"
+
+  run bash "$SHIPLAND" --trunk main --dry-run
+  [ "$status" -ne 3 ]
+  [ -z "$(ls "$SHIP_LAND_DECISIONS_DIR"/*.json 2>/dev/null)" ]
+}
+
 @test "dry-run: reconcile + gate, no push → exit 0, trunk unchanged" {
   on_branch_with feat/dry dry.txt content
 
