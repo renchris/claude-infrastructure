@@ -187,16 +187,48 @@ setup() {
 
   lead_alive "$$" "$MY_LSTART" || { echo "the live, correctly-pinned process read DEAD"; false; }
   run lead_alive "$$" "Wed 01 Jan 00:00:00 2000"
-  [ "$status" -ne 0 ]                       # ← THE FIX: a recycled pid must read DEAD
+  [ "$status" -eq 1 ]                       # ← THE FIX: recycled to a non-claude stranger = DEAD
   run lead_alive "$DEAD_PID" "$MY_LSTART"
-  [ "$status" -ne 0 ]
+  [ "$status" -eq 1 ]
   lead_alive "$$" "" || { echo "the documented empty-lstart fallback stopped working"; false; }
+}
+
+@test "hook: a re-rendered start time on a LIVE claude is state 2, never an invented crash" {
+  # `ps -o lstart=` renders through the CURRENT timezone — the same live pid prints 00:53 local,
+  # 07:53 under TZ=UTC, 16:53 under TZ=Asia/Tokyo — so a DST transition changes the pin string for a
+  # process that never restarted. If that read as DEAD, handle_crash would fire on a HEALTHY team
+  # (shutdown_request into every inbox, CRASH_REPORT.md, pane teardown where armed), twice a year,
+  # on every daemon at once. It must be a distinct, non-fatal state.
+  fn="$D/lead_alive2.sh"
+  awk '/^  lead_alive\(\) \{$/,/^  \}$/' "$HOOK" > "$fn"
+  [ -s "$fn" ] || { echo "lead_alive() not found — extraction empty"; false; }
+  # shellcheck disable=SC1090
+  . "$fn"
+
+  # Shadowing ps drives all three verdicts fork-free: no background job, nothing to reap, and the
+  # REAL function body is what is being exercised.
+  ps() { case "$*" in *lstart*) printf 'Wed 01 Jan 00:00:00 2000\n' ;;
+                      *command*) printf '%s\n' "$FAKE_CMD" ;; esac; }
+
+  FAKE_CMD="/Users/x/.claude/node_modules/.bin/claude"
+  run lead_alive "$$" "Thu 30 Jul 00:00:00 2026"
+  [ "$status" -eq 2 ] || { echo "a live claude with a re-rendered pin returned $status — 1 would invent a crash on a live team"; false; }
+
+  FAKE_CMD="/usr/bin/some-unrelated-daemon"
+  run lead_alive "$$" "Thu 30 Jul 00:00:00 2026"
+  [ "$status" -eq 1 ] || { echo "a pid recycled to a stranger returned $status — the wedge stays open"; false; }
+}
+
+@test "hook: state 2 re-pins but is BOUNDED, so it cannot restore immortality" {
+  grep -qE 'repins > 2' "$HOOK" || { echo "the re-pin path is unbounded — immortality returns through it"; false; }
+  grep -qF 'IDENTITY LOST' "$HOOK" || { echo "the exhausted-re-pin exit is not named"; false; }
+  grep -qE 'lrc=0; lead_alive "\$pid" "\$start" \|\| lrc=\$\?' "$HOOK" || { echo "lead_alive is called bare under errexit — state 1 would abort the daemon before handle_crash"; false; }
 }
 
 @test "hook: the poll loop uses the pinned check and the call site actually passes the lstart" {
   # An unpassed third argument would leave lead_alive permanently in its unpinned fallback — the pin
   # present, dead, and reading as fixed.
-  grep -qE 'if ! lead_alive "\$pid" "\$start"' "$HOOK" || { echo "poll loop is not using lead_alive"; false; }
+  grep -qE 'lead_alive "\$pid" "\$start"' "$HOOK" || { echo "poll loop is not using lead_alive"; false; }
   grep -qE 'local_watchdog "\$LEAD_PID" "\$SESSION_ID" "\$LEAD_START"' "$HOOK" || { echo "call site does not pass LEAD_START"; false; }
   grep -qE '^LEAD_START=\$\(ps -o lstart=' "$HOOK" || { echo "LEAD_START is never captured"; false; }
 }

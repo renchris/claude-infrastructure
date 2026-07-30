@@ -7,10 +7,11 @@
 #   cc-reaper sweep            DRY-RUN — classify + show what WOULD be reaped/paged (default; writes nothing)
 #   cc-reaper sweep --reap     ACT — checkpoint → re-verify → cc-teardown safe candidates; PAGE the desk on
 #                              never-reap-but-surface causes; run the enumerated≈live-panes self-check
-#   cc-reaper watchdog-census  CENSUS ONLY — classify the lead-crash-watchdog daemon population
-#                              {live-session | orphan | stale-file} + untracked daemons, reconcile
-#                              against the daemon's own log, PRINT the reap command per orphan.
-#                              Kills nothing, ever. `--json` for machine output. Off: CC_WATCHDOG_CENSUS=off
+#   cc-reaper watchdog-census  CENSUS ONLY — classify the lead-crash-watchdog daemon population from
+#                              the PROCESS TABLE {tracked-live | tracked-orphan | UNTRACKED-orphan |
+#                              stale-file}, reconcile against the daemon's own log, PRINT the reap
+#                              command per orphan. Kills nothing, ever. `--json` for machine output.
+#                              Two positive controls per run. Off: CC_WATCHDOG_CENSUS=off
 #   cc-reaper selftest         RED-proof the disposition + the never-reap guarantees (no real session)
 #
 # SURFACE PAGING (T-P3-3 — surfaced ≠ acted, the FM2 gap G-P3-3): a never-reap cause that needs a HUMAN
@@ -1116,16 +1117,19 @@ watchdog_census(){
     case " $seen " in *" $sid "*) continue ;; esac
     crow="$(wd_classify "$WD_CENSUS_DIR" "$sid")"
     cls="$(printf '%s' "$crow" | cut -f1)"
-    dstart="$(printf '%s' "$crow" | cut -f4)"
+    lead="$(printf '%s' "$crow" | cut -f2)"
     p="$(printf '%s' "$crow" | cut -f3)"
+    dstart="$(printf '%s' "$crow" | cut -f4)"
+    # Same field set as pass 1's rows: a consumer should not have to know WHICH pass produced a row
+    # to know whether lead_pid will be there.
     case "$cls" in
       orphan)     n_torph=$(( n_torph + 1 ))
                   rows="${rows}  ▶ kill ${p}  # watchdog for dead session ${sid}, lstart ${dstart}"$'\n'
-                  jrows="${jrows}{\"sid\":\"$sid\",\"class\":\"tracked-orphan\",\"daemon_pid\":\"$p\"}," ;;
+                  jrows="${jrows}{\"sid\":\"$sid\",\"class\":\"tracked-orphan\",\"lead_pid\":\"$lead\",\"daemon_pid\":\"$p\"}," ;;
       stale-file) n_stale=$(( n_stale + 1 ))
-                  jrows="${jrows}{\"sid\":\"$sid\",\"class\":\"stale-file\"}," ;;
+                  jrows="${jrows}{\"sid\":\"$sid\",\"class\":\"stale-file\",\"lead_pid\":\"$lead\"}," ;;
       live-session) n_tlive=$(( n_tlive + 1 ))
-                  jrows="${jrows}{\"sid\":\"$sid\",\"class\":\"tracked-live\"}," ;;
+                  jrows="${jrows}{\"sid\":\"$sid\",\"class\":\"tracked-live\",\"lead_pid\":\"$lead\"}," ;;
     esac
   done
 
@@ -1192,6 +1196,8 @@ case "${1:-}" in
   # race a sweep on, and it must stay available during exactly the long sweep that made someone ask.
   watchdog-census|--watchdog-census) watchdog_census "${2:-}" ;;
   selftest)     exec bats "$HERE/../tests/cc-reaper.bats" ;;
-  -h|--help|"") sed -n '2,20p' "$0"; exit 0 ;;
+  # 2,25 not 2,20: the watchdog-census entry above added 5 header lines, and a fixed window would
+  # have silently pushed that much of the existing help off the end.
+  -h|--help|"") sed -n '2,25p' "$0"; exit 0 ;;
   *)            echo "cc-reaper: unknown command '$1' (sweep | watchdog-census | selftest)" >&2; exit 2 ;;
 esac
