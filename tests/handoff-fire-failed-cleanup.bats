@@ -118,8 +118,21 @@ run_cleanup() { # $1=output file
   # DIFFERENT gates and the comparison would be meaningless. (The pre-fix run then sails past the lint
   # gate into a spawn failure — which strands the worktree just the same, audit row 3's own scenario:
   # "anchor pane gone → spawn returns 1 → set -e aborts → worktree + branch leak".)
-  local old="$BATS_TEST_TMPDIR/handoff-fire-prefix.sh"
-  git -C "$REPO_SRC" show d7ae70e1:scripts/handoff-fire.sh > "$old" 2>/dev/null || skip "pre-fix rev unavailable"
+  # The pre-fix rev is DERIVED, never hardcoded. A literal sha does not survive a rebase — this
+  # branch was rebased once already and every sha changed, which would have turned this RED-proof
+  # into a permanent `skip`: the one failure mode a guard must not have, because it looks like a pass.
+  # Pickaxe the commit that INTRODUCED fire_cleanup and take its parent; that is the pre-fix tree by
+  # construction, in any history that contains the fix.
+  local old="$BATS_TEST_TMPDIR/handoff-fire-prefix.sh" introduced
+  introduced="$(git -C "$REPO_SRC" log --reverse --format=%H -S'fire_cleanup() {' -- scripts/handoff-fire.sh 2>/dev/null | head -1)"
+  [ -n "$introduced" ] || { echo "could not locate the commit that introduced fire_cleanup"; false; }
+  git -C "$REPO_SRC" show "$introduced^:scripts/handoff-fire.sh" > "$old" 2>/dev/null \
+    || { echo "could not recover the pre-fix tree at $introduced^"; false; }
+  # Positive control on the control itself: the recovered tree must genuinely LACK the fix, else this
+  # test would "prove" the leak against a copy that already cleans up.
+  if grep -q 'fire_cleanup() {' "$old"; then
+    echo "the recovered pre-fix tree ALREADY has fire_cleanup — the control is not a control"; false
+  fi
   local bad="$BATS_TEST_TMPDIR/bad-payload.md"
   printf 'do the thing\n\n## BACK-CHANNEL — ping the originator\n  cc-notify  "HANDOFF-PING: x"\n' > "$bad"
   run env HOME="$HOMEDIR" HANDOFF_ACCOUNT_SWEEP=off CC_FIRE_CAPACITY_GATE=off \
