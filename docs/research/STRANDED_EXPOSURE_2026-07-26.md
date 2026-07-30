@@ -434,6 +434,25 @@ deliberately unwired and named here rather than shipped unproven. It fires only 
 incident class (our push dropped AND a sibling carrying our content), so the leak rate it accounts
 for is a rounding error against the per-land leak this section closes.
 
+**Second residual, and the one that qualifies the headline: the leak is CONVERTED, not
+eliminated.** Observed on the land that shipped the reaper itself, which is the cleanest available
+evidence because it was not constructed. Before: one permanent ref per **successful** land ⇒ growth
+monotonic in landing volume, the complaint this item was filed on. After: one per attempt that goes
+**gate-red and is then AMENDED** — an unchanged re-run writes the *same* `ship/backup-<sha>` name and
+`git branch -f` overwrites it, so a plain retry leaks nothing; only a retry that changes the sha
+mints a second ref. That residue is bounded by *failures*, not by throughput.
+
+And it is precisely the class the reaper must refuse. This land went red first (a `cd` without
+`|| return` on a line it wrote), was amended, and landed as `aa5f7c6c`; the first attempt's
+`ship/backup-63b69d49` then held a stale copy of two paths — its own pre-fix test line, plus a
+`STRANDED_EXPOSURE` that a **sibling session had advanced in the interim** (§8.5-X). So it read
+"content differs" and was correctly KEPT, exactly as designed. Disposing of it needed a human
+direction-check (trunk strictly ahead on both paths, nothing held uniquely) — which is the judgment
+§8.2a states the predicate cannot make once the trunk has drifted, now demonstrated rather than
+argued. **Do not read a nonzero `ship/backup-*` population as the reaper being broken**: after this
+change the expected steady state is a small pool of amended-retry refs awaiting exactly that human
+call, not the unbounded per-land accumulation the metric used to grow.
+
 ### 8.3 Two detectors patch-id cannot substitute for
 
 Patch-id equality answers "is this exact diff on trunk". It cannot answer the question triage
