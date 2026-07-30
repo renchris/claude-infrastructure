@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: complete
 row: 8
 subsystem: Context economy — when a session recycles
 ---
@@ -288,15 +288,24 @@ The metric producer for AC-1/AC-2/AC-3 and the acceptance reader for §7.
 The one-field structural fix. `ce_sample` currently appends `"ts used_pct input_tokens"` —
 **three fields, none of which is the window.**
 
-- Append the window as a 4th field, sourced from the telemetry's own `.window` (R6 — the
-  producer's literal emission, never an assumed 200000/1000000).
-- **Back-compatible read:** `ce_burn`'s `awk` reads `$1/$2` positionally and is untouched by a 4th
-  column; a 3-field legacy line yields window `null`, which R2 makes *unknown*, not 1M.
 - **Fix the evidence-destroying detector.** `context-econ.sh:77-80` detects a fill drop >2pt — the
   compaction signal — and responds by **truncating the history file**, which is the only trace.
-  V2 emits one IDL record *before* the truncation. The truncation is correct (the slope is
-  poisoned); discarding the event is not.
-- **Kill switch:** `CC_CE_DENOM=off` restores the 3-field write byte-for-byte.
+  V2 emits one IDL record (`ce_log_drop`) *before* the truncation, carrying `from_pct`, `to_pct`,
+  `drop_pct`, `input_tokens` **and the window**. The truncation is correct (the slope is poisoned);
+  discarding the event is not.
+- **Kill switch:** `CC_CE_DROP_LOG=off` (suppresses the record, never the sample).
+
+> **⚠ CORRECTION TO THIS SECTION AS ORIGINALLY SPECIFIED — the 4th-column plan was wrong and was
+> reverted during the build.** §4.2 first specified appending the window as a **4th `.hist`
+> column**. That was written, run against the suite, and **reverted on merit**: `.hist` lives in the
+> *same ephemeral* `/tmp/cc-telemetry/` directory as the telemetry JSON it samples, so a 4th column
+> there is exactly as unrecoverable as the value it was meant to preserve — it buys **no
+> durability at all** — while breaking two passing contract tests that pin the 3-field line
+> (`tests/context-econ.bats` went 27/29). The denominator is therefore captured **only where the
+> store is durable**: the IDL (`ce_log_drop`, here) and the recycle-outcome store (§4.3), both under
+> `$HOME`. The refutation lives in the code header too, because the next reader will reach for the
+> 4th column first. `CC_CE_DENOM` was specified as this section's kill switch and **does not exist**
+> — there is no 4-column behaviour left to switch off.
 
 ### 4.3 M-3 — recycle-outcome record in both hooks
 
@@ -313,7 +322,12 @@ durably where a reader can find it.
   row 8's own namespace and consumes row 2's contract unchanged. The reader joins on `sid` when
   row 2's record is present and **degrades to transcript-only when it is absent** — which is the
   fail-soft path, since C21 shows row 2's store carries no fill field today and may never.
-- **Kill switch:** `CC_RECYCLE_EVENTS=off`.
+- **Kill switch:** `CC_RECYCLE_LOG=off`. (Corrected from the `CC_RECYCLE_EVENTS=off` first specified
+  here — that name is the *path* override, which `bin/cc-ctx-audit` also reads as `CC_CTX_EVENTS`;
+  overloading one variable as both a path and an off-switch is how a kill switch stops working.)
+- **Bounded** (R7): pruned to `CC_RECYCLE_MAX/2` (default 5000) on overflow, the same shape
+  `ce_sample` already uses for `.hist`.
+- **An empty verdict is refused** — a record with no interpretable meaning is worse than no record.
 
 ### 4.4 M-4 — graveyard take: `cd064644` (session-continue IDL telemetry)
 
@@ -384,6 +398,29 @@ not by reading intent:
 ⇒ This is not a rejected design. It ran in production, produced 208 records, and went silent for a
 deploy reason. Taken with `cherry-pick -x`. Per the campaign ruling, taken from
 `fix/infra-perfection`, **never `tm/growth`** (0 unique patches, drags a 6-branch nested chain).
+
+**TWO THINGS THE TAKE COST, both worth recording — a stranded artifact is not drop-in.**
+
+1. **The pick conflicted, and the naive resolution would have resurrected a bug.** `session-continue.sh`
+   had diverged: trunk hoisted the kill-phrase detection into a shared `kill_switch_active()` so the
+   **wake floor consults the same predicate** and can never block a stop the operator asked for. The
+   picked commit carried its own **inline copy**. Resolution: keep trunk's structure and graft only
+   the `log_idl cleared "kill-switch"` line — taking the branch's hunk wholesale would have restored
+   a *second, drifting definition* of the one predicate that must never disagree with itself. Its
+   `SC_SID` was likewise aliased to trunk's existing `$cur_sid` rather than re-parsed from the same
+   stdin (two independent parses of one value is how they drift). Adjudicated per memory
+   `parallel-stream-convergence-protocol` — by running *their* tests against the *merged* code:
+   **30/30 green** across the picked suite and the pre-existing `session-continue.bats`.
+2. **The artifact predates a rule that landed after it, and the gate correctly refused it.**
+   `tests/session-continue-telemetry.bats` fixtures `CLAUDE_CONFIG_DIR` and both telemetry seams but
+   left **`$HOME` pointing at the operator's live `~/`** — so every seam the hook defaults to `$HOME`
+   read and wrote real state (my own first verification run appended to the live IDL before the gate
+   caught it). `ship-land` went **GATE RED: test-hermeticity, exit 6**. Fixed in the suite — `export
+   HOME="$BATS_TEST_TMPDIR/home"` plus the fixture dirs the hook reads — **never via the allowlist**,
+   which the lint explicitly forbids and memory `trunk-rule-landed-mid-gate-is-a-real-red` explains:
+   a rule that landed after your artifact makes it genuinely red, and retrying cannot clear it.
+   Landed as a **separate commit** from the faithful `-x` pick, so history shows both the artifact as
+   it was stranded *and* exactly what today's gate required of it.
 
 ---
 
@@ -473,18 +510,61 @@ mine run *through* something it also tests must `unset` that variable in `setup(
 
 Platter'd with exact commands per the silver-platter rule; both are genuine operator calls.
 
-1. **Link the new reader into the live layer** (a brand-new file is never auto-linked by a
-   per-file symlink dir — memory `deploy-lag-checkout-behind-origin`):
+1. **Link the new reader into the live layer.** STAGED + PLATTERED as one idempotent script in both
+   the live queue and the repo SSOT (verified byte-identical, so the D-v axis-2 parity check cannot
+   report drift). Why an activation exists for this one artifact when row 8's five hooks need none:
+   the hooks are live symlinks (landing == deploying), but `~/.claude/bin` is a **real directory of
+   per-file symlinks** — verified, not assumed (`[ -L ~/.claude/bin ]` is false; `cc-bats` and
+   `cc-blockers` are individual links) — and such a directory never links a file that did not exist
+   when it was populated (memory `deploy-lag-checkout-behind-origin`).
 
    ```
-   ln -sfn /Users/chrisren/Development/claude-infrastructure/bin/cc-ctx-audit /Users/chrisren/.claude/bin/cc-ctx-audit
+   bash /Users/chrisren/.claude/autonomy/pending-activation/20-ctx-audit-activate.sh
    ```
+
+   The script fail-closes if the source is missing or non-executable (a dangling symlink on `PATH`
+   is worse than an absent command), is a no-op when already linked, and then **effect-reads** the
+   deployed copy by running it — treating exit 3 as the legitimate non-verdict it is rather than a
+   failure. It prints the `touch …done` line on success.
 
 2. **◆ Decide whether to arm the BUSY exec** (C17: never armed; the only regime that rides high).
    A judgment call with fleet blast radius, deliberately *not* taken by this row (§4.5, §8). The
    data to decide it is what M-1 now produces.
 
 ---
+
+## §12 Landed shas (resolved from origin/main AFTER ship-land's rebase)
+
+Every sha below was re-resolved from `origin/main` and confirmed with
+`git merge-base --is-ancestor <sha> origin/main`. This matters concretely: my local commits were
+`f90dc779` / `a31407e0` / `d3850024`, and **none of those names a commit on trunk** — ship-land
+rebases, and rows 3 and 13 both published pre-rebase shas that named nothing. Verify by CONTENT
+(`git ls-tree origin/main -- <paths>` present **and** `git diff <sha> origin/main -- <paths>` empty),
+never by `rev-list --count`, which a sibling's rebase can zero while your files never arrived.
+
+| # | What | Landed sha | Paths |
+|---|---|---|---|
+| B0 | Design doc (this file) | **`44cabad7`** | `docs/plans/CONTEXT_ECONOMY_V2.md` |
+| B1 | M-1 outcome reader + 19 tests | **`aee9f975`** | `bin/cc-ctx-audit`, `tests/ctx-audit.bats` |
+| B2 | M-2 fill-drop record + 13 tests | **`2a337c48`** | `hooks/lib/context-econ.sh`, `tests/ctx-drop-record.bats` |
+| B4a | M-4 graveyard take (faithful `-x` pick of `cd064644`) | **`c6418f21`** | `hooks/session-continue.sh`, `tests/session-continue-telemetry.bats` |
+| B4b | M-4 hermeticity fix the gate required | **`12a3a8ef`** | `tests/session-continue-telemetry.bats` |
+| B3 | M-3 recycle-outcome record + 12 tests | **`1a21099f`** | `hooks/lib/context-econ.sh`, `hooks/waiting-recycle.sh`, `hooks/boundary-handoff.sh`, `bin/cc-ctx-audit`, `tests/ctx-recycle-record.bats` |
+| B5 | Map row + plan close-out + activation | *this commit* | `docs/plans/GROUND_UP_REBUILD_MAP.md`, this file, `docs/activation/pending-activation/20-ctx-audit-activate.sh` |
+
+**Test totals.** 44 new tests (19 M-1 · 13 M-2 · 12 M-3), each RED-proved against a pristine
+`git archive` tree at a **derived** rev: **19/19 RED · 8/13 RED** (the 5 green-on-both are named as
+contract-preservation in the suite header) **· 12/12 RED**. Three are **mutation** proofs — they
+invert exact-match→substring, null→0, and the verdict enum→one token, and each was verified to
+*misbehave at rc=0* rather than crash, so they discriminate on behaviour rather than on absence.
+Full regression across all six affected suites: **`1..196`, 196 ok / 0 not ok, exit 0**, reconciled
+against the `1..N` header (an earlier run exited **124 with 11 tests never executed**, which the
+`not ok` count alone would have read as green).
+
+**Deploy posture:** row 8's five owned hooks are all live symlinks into the shared checkout
+(C26), so for them **landing == deploying** — no activation step, and B4a's telemetry emitter goes
+live on the next checkout fast-forward. Only `bin/cc-ctx-audit` needs the one `ln` in §11, because
+`~/.claude/bin` is a per-file symlink directory.
 
 ## Learnings (accumulate; never delete)
 
@@ -511,3 +591,34 @@ Platter'd with exact commands per the silver-platter rule; both are genuine oper
 - **The strongest graveyard verdict is a store that still holds the artifact's output.** 208 live
   IDL records in the stranded commit's exact vocabulary, stopping the day the checkout left the
   branch, settled "take or reject" with no reading of intent at all.
+- **"Make it durable" is a question about the STORE, not about the record.** The obvious fix for a
+  discarded denominator was to write it next to the number — a 4th `.hist` column. Both live in
+  `/tmp`. The fix looked complete, changed the format, broke two contract tests, and preserved
+  nothing. Before adding a field to fix a durability problem, check the *directory*.
+- **My own lint pass was weaker than the gate's and hid a hard RED.** I checked
+  `shellcheck -S warning`; the gate runs at default severity, which includes INFO, where SC2329
+  ("function never invoked" — it does not recognise `trap <fn>`) is fatal. Lint at the gate's own
+  severity or the check is theatre. The same turn, I read "exit code 0" from a compound command
+  whose last element was `tail` — the DoD warned about exactly this shape for test runs, and it
+  applies verbatim to `ship-land`: **key the verdict on content (`git ls-tree`), never on a status
+  that might belong to a different command.** `ship-land` had actually exited 6.
+- **A new writer's DEFAULT PATH is a hermeticity decision, and reaching past
+  `CLAUDE_CONFIG_DIR` to `$HOME` breaks every fixtured caller.** Both new stores defaulted to
+  `$HOME/.claude/autonomy/…`, so their `mkdir -p` created directories under the *canary HOME* that
+  `waiting-recycle.bats`' fixture-isolation test plants specifically to catch this — the one genuine
+  failure in a 164-test run. A hook resolves its root from `CLAUDE_CONFIG_DIR`; anything it writes
+  must too. The same bug had a second face: because the store is per-config-root, the **reader** was
+  looking in only one of the three roots this box uses and would have missed two thirds of the
+  denominators it exists to collect.
+- **`rc=124` is a NON-VERDICT for the tests that never ran.** A 164-test run reported
+  `152 ok / 1 not ok` and exited 124 — my own `timeout` firing, with **11 tests never executed**.
+  Read as "153 of 164 passed" that is a green; read honestly it is a partial run whose remainder is
+  unknown. Keying the verdict on the `not ok` count alone is not enough — the `1..N` header must be
+  reconciled against the reported count, or a timeout silently becomes a pass
+  (memory `gate-never-ran-vs-gate-red`, `named-failure-vs-no-verdict`).
+- **A shared box makes the QoS band the dominant term in wall-clock.** With load at 73 on ~10 cores
+  (a postland corpus plus two sibling rebuilds), a `bin/cc-bats` run sat in the background band at
+  test 1 of 9 after 80 seconds — starved, not hung. Row 13's one-way ratchet working exactly as
+  designed. The right response is to stop adding load and wait, not to bypass the chokepoint; but a
+  reader of a slow suite needs to distinguish *starved* from *wedged* before reaching for a timeout,
+  and `ps -o stat=` showing `SN` is the discriminator.
