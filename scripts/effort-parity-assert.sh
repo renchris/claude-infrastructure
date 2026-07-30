@@ -24,14 +24,18 @@
 # CC_EFFORT_SSOT / CC_EFFORT_DIRS / CC_EFFORT_ZSHRC / CC_EFFORT_PS / CC_EFFORT_PS_STRICT.
 set -uo pipefail
 
-# --- SSOT: default to the deployed live model-config.yaml, else this checkout's template ---
+# --- SSOT: the deployed live model-config.yaml, else this checkout's copy ---
+# Post-consolidation (audit 02) both paths are the SAME FILE: model-config.yaml lives at the repo
+# root (the one versioned SSOT, alongside accounts.json) and ~/.claude/model-config.yaml is a
+# symlink to it, created by install.sh. The fallback matters only before that link exists — it used
+# to point at templates/model-config.yaml, a SECOND copy that also claimed SSOT and had drifted.
 SSOT="${CC_EFFORT_SSOT:-}"
 if [ -z "$SSOT" ]; then
   if [ -f "$HOME/.claude/model-config.yaml" ]; then
     SSOT="$HOME/.claude/model-config.yaml"
   else
     _self_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-    SSOT="$_self_root/templates/model-config.yaml"
+    SSOT="$_self_root/model-config.yaml"
   fi
 fi
 DIRS="${CC_EFFORT_DIRS:-$HOME/.claude $HOME/.claude-next $HOME/.claude-secondary $HOME/.claude-tertiary $HOME/.claude-quaternary}"
