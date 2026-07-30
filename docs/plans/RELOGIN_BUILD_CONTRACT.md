@@ -55,9 +55,12 @@ git cherry -v origin/main feat/relogin-executor   # corroboration ONLY — see t
 
 - §4 precondition gate refuses correctly rather than authenticating:
   `next refused exit=2 phase=gate :: no re-auth needed — healthy (auth=ok, login_expires_h=88.7)`
-- §2 honest degradation fires instead of a confident wrong "OK":
-  `WINDOW-CAPPED --window-h unsupported … this verdict does NOT cover T-7d` — since fixed
-  by `434a391e` (M2); `--window-h` is supported on trunk and in the live layer today.
+- §2 degradation is LOUD rather than a confident wrong "OK":
+  `WINDOW-CAPPED --window-h unsupported … this verdict does NOT cover T-7d`. ⚠️ **The
+  degradation machinery worked; its trigger was a lie.** The deployed `claude-accounts` DID
+  support `--window-h` — the probe that said otherwise was the `pipefail`/SIGPIPE race fixed in
+  `ec9a43a9` (see the re-verification section below). Recorded because the first reading of this
+  line blamed pre-M2 deploy lag, which was wrong and would have closed the investigation.
 - All five bins (`cc-relogin`, `cc-relogin-poll`, `cc-authbrowser`, `claude-accounts`,
   `cc-blockers`) are symlinks into the checkout and content-match trunk — no deploy lag.
 
@@ -85,6 +88,70 @@ the T−7d window being live (T−76h is inside it).
 > control it against a known-live sibling before alarming.** (Open, minor, and
 > downstream of this contract: relogin showed 1 run to cc-reaper's 7 on the same
 > `StartInterval 3600` — cadence-lag worth a look, NOT inertness.)
+
+## RE-VERIFICATION 2026-07-30 — suites green, and one real defect found
+
+Behavioural gate re-run on trunk this session (not recalled):
+
+| suite | result |
+|---|---|
+| `tests/cc-authbrowser.bats` | **35/35**, rc 0 |
+| `tests/cc-relogin.bats` | **48/48**, rc 0 |
+| `tests/cc-relogin-status.bats` | **30/30**, rc 0 |
+| `tests/cc-relogin-poll.bats` | **46/46**, rc 0 — after the fix below; three consecutive runs |
+
+Static conformance was checked clause-by-clause against §3/§4/§5/§6/§7. The safety-critical
+surface holds: `--no-heal` is on **every** `claude-accounts` read in `cc-relogin`
+(`fresh_row()`, the only `--fresh` call) and in `cc-relogin-poll` (both read sites); the poller
+**never** acquires the heal lock (the only two mentions are comments forbidding it); exit 7
+`CONSENT_GATE` is defined once and never raised ("retain, never emit"); all three probes under
+`scripts/relogin-probes/` carry real executable `CONFIRM=1` guards (e1:99, e2:65, e3:78), not
+just usage text; and `CC_AUTHBROWSER_PORT_BASE` correctly separates unset from set-but-empty
+(`raw is None` → default; `""` falls into `not raw.isdigit()` → `EXIT_REFUSED`).
+
+### 🚨 The defect: `pipefail` inverted the §2 detection probe (fixed, `ec9a43a9`)
+
+```bash
+if "$ACCOUNTS_BIN" -h 2>/dev/null | grep -q -- '--login-status'; then   # WRONG
+```
+
+`grep -q` exits the instant it matches, so the producer is SIGPIPEd on the **next** line it
+writes; `set -o pipefail` promotes that 141 to the pipeline's status; the `if` reads FALSE for a
+flag that is plainly advertised. **Measured on bash 3.2, 3-line help with the match on line 2:
+FALSE 263/400 (66%); with pipefail off, 0/400.** The real `--help` prints many more lines after
+the match, so production was worse.
+
+Both §2 probes used this form, so the poller could (a) exit 3 DETECTION-UNAVAILABLE with the
+surface right there, and (b) claim a spurious `WINDOW-CAPPED` and silently narrow the declared
+T−7d window to 72 h. **This retro-explains the `WINDOW-CAPPED` line in the live poll log** —
+earlier in this document that line is attributed to pre-M2 deploy lag; the deployed
+`claude-accounts` did support `--window-h`, so the real cause was this race.
+
+Fix: read the help **once** into a variable and match with `case` — no pipe, no SIGPIPE, one
+fewer fork. `case` on a captured string is bash-3.2 safe (the known trap is `case` inside `$( )`).
+
+**Three lessons worth carrying:**
+
+- **It presents as flake, not failure.** Exposure needs the producer *still writing* when the
+  consumer exits, so a match on the last line is safe and a match early in long output is nearly
+  always wrong — which is why this suite failed a **different subset every run** (40,43 then
+  38,40,42,43). A varying failing subset means collision or race, never logic.
+- **Instrumentation HIDES it.** `bash -x` made it pass; wrapping the producer in a logging shim
+  made it pass. Anything that slows the pipe closes the window. "Works when traced" is not
+  evidence.
+- **Reproduce under the shipping interpreter.** The first repro loop showed 0/300 — because it
+  ran under `zsh`, which does not share bash's pipefail/SIGPIPE interaction. The 66% only
+  appeared under `/bin/bash`.
+
+The new `M2c` test makes the probabilistic defect deterministic (large payload after the match)
+and was RED-proven against the **exact** artifact restored from `git show`, not a hand-written
+approximation.
+
+**Same class, repo-wide, NOT fixed here:** 358 candidate sites across 102 files use an
+early-exit pipe consumer (`grep -q` / `grep -m N` / `head -N`) inside a file that enables
+`pipefail` — backlog `791345455b58`. Candidates, not confirmed defects: each needs triage on
+whether its producer keeps writing after the match. Deliberately left alone — 102 files
+including live hooks is far outside this contract's blast radius.
 
 **Landing history — three attempts, three different causes (all diagnosed):**
 
