@@ -54,6 +54,41 @@
 # A lint (§4.4) enforces manifest <-> launchd/*.plist <-> ~/Library/LaunchAgents three-way
 # coverage, so a new plist cannot land undeclared. `bin/cc-fleet --plist-parity` is that read.
 #
+# ── THE THREE WATCHERS, and why only ONE is declared `run` (audit 2026-07-22 V6) ────────────────────
+# V6: "watcher daemons have no launchd KeepAlive — 'absence is the alarm' has no reader". The supervisor,
+# reconciler and deathwatch each write a heartbeat whose ABSENCE should page, and nothing was reading it.
+# This file IS that reader (cc-fleet's S3/S5 arms), so a watcher enters coverage by being declared here.
+# The three are NOT interchangeable, and pinning them identically would have been actively wrong:
+#
+#   lead-supervisor   PERSISTENT (`--daemon`, an internal sweep loop) ⇒ KeepAlive is exactly right, and
+#                     its plist already carried it. Declared `run` here: it is built, its e2e is green,
+#                     and the only thing ever missing was a declaration that it SHOULD be up.
+#                     Its evidence is supervisor.log, NOT `auto`: `auto` resolves to the plist's
+#                     StandardOutPath (supervisor.out.log), and the daemon redirects every line it writes
+#                     to files — stdout stays 0 bytes even when perfectly healthy (measured: 0 bytes
+#                     since Jul 14 vs a 1.2MB supervisor.log), so `auto` is a sensor that could only ever
+#                     report STALLED. supervisor.log gets a heartbeat line every sweep.
+#
+#   lead-reconciler   PERIODIC (`--once`, no loop). KeepAlive on a one-shot is a 10-second relaunch
+#                     THRASH forever, so the correct pin is StartInterval — see
+#                     launchd/staged/com.claude.lead-reconciler.plist. It stays STAGED (hence out of this
+#                     manifest, per the staged/ convention) behind ONE named gate: roster_tasks is
+#                     deliberately unwired (lead-reconciler.sh:50-56 — "the operator supplies the
+#                     task-table reader at activation. Empty by default so a mis-deploy diverges
+#                     LOUDLY"). An empty roster A makes every live pid "in registry, ABSENT from tasks",
+#                     so loading it against the ~30 live sessions on this box would emit ~30 divergence
+#                     alarms. GATE: set CC_RECON_ROSTER_TASKS in that plist, then declare it `run` here.
+#
+#   lead-deathwatch   NOT pinned, and deliberately NOT given a plist. Both its modes need a watch-file,
+#                     and NOTHING in production writes one (only bin/cc-deathwatch-kqueue's docs and the
+#                     tests reference the format). `--watch` DIES on a missing file, which under
+#                     KeepAlive is that same 10s thrash; `--once` tolerates it but then watches an empty
+#                     list forever — ~100% abstain, i.e. inert BY CONSTRUCTION, the one thing a mechanism
+#                     must never be. GATE: a production watch-file producer (the P8-registry → watch-list
+#                     path its own header describes as composition) has to exist first. Declared here in
+#                     words rather than as a row, because a row needs a plist and a plist here would
+#                     claim a coverage that does not exist.
+#
 # label | expect | interval_s | evidence | owner_row | activate
 com.claude.postland-verify        | run    | 300  | -    | 1  | 14-land-pipeline-v2-activate.sh
 com.claude.deploy-live            | run    | 600  | -    | 1  | 14-land-pipeline-v2-activate.sh | 0,1
@@ -67,7 +102,7 @@ com.claude.power-policy-verify    | staged | 3600 | auto | 12 | 05-pmset-caffein
 com.claude.team-orphan-reaper     | staged | 600  | auto | 11 | 18-fleet-activate.sh
 com.claude.desk-invariant         | staged | 300  | auto | 5  | 06-desk-bootstrap-activate.sh
 com.claude.boot-resume            | staged | 300  | auto | 2  | 18-fleet-activate.sh
-com.claude.lead-supervisor        | staged | 0    | auto | 2  | 18-fleet-activate.sh
+com.claude.lead-supervisor        | run    | 0    | ~/.claude/autonomy/supervisor.log | 2 | 18-fleet-activate.sh
 com.claude.nightly-regression     | staged | 0    | auto | 1  | 18-fleet-activate.sh
 
 # ── com.chrisren.* — the SECOND family this repo owns (added 2026-07-29 after the reconciler's

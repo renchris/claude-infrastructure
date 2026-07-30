@@ -539,6 +539,48 @@ STUB
   done
 }
 
+# ── the supervisor's own declaration (audit 2026-07-22 V6) ────────────────────────────────────────
+# Two properties that are easy to "tidy" back into breakage, so they are pinned here rather than only
+# argued in the manifest's comments.
+@test "lead-supervisor is declared run, and its evidence is NOT the dead stdout sensor (V6)" {
+  have_subject
+  M="$ROOT/launchd/fleet.manifest"
+  row="$(grep '^com\.claude\.lead-supervisor *|' "$M")"
+  [ -n "$row" ]
+  # `run`, not `staged`: this manifest IS the absence reader V6 found missing, and a `staged` label is
+  # never evaluated (one UNDECIDED row) — so leaving it staged means the supervisor can be dark forever
+  # with nothing saying so, which is the finding rather than a fix for it.
+  expect="$(printf '%s' "$row" | awk -F'|' '{gsub(/[[:space:]]/,"",$2); print $2}')"
+  [ "$expect" = run ]
+  # NOT `auto`: `auto` reads StandardOutPath, and this daemon redirects every line it writes to files,
+  # so its stdout stays 0 bytes even when healthy — an evidence sensor that can only ever say STALLED.
+  # (Measured 2026-07-29: supervisor.out.log 0 bytes since Jul 14 vs supervisor.log at 1.2MB.)
+  evidence="$(printf '%s' "$row" | awk -F'|' '{gsub(/[[:space:]]/,"",$4); print $4}')"
+  [ "$evidence" != auto ]
+  [ "$evidence" != - ]
+  case "$evidence" in *supervisor.log) ;; *) echo "evidence '$evidence' is not the per-sweep artifact"; return 1 ;; esac
+}
+
+@test "lead-deathwatch is NOT declared, and lead-reconciler is staged OUT of the manifest (named gates)" {
+  have_subject
+  M="$ROOT/launchd/fleet.manifest"
+  # Neither may carry a row: a row needs a plist, and a plist for either would claim coverage that does
+  # not exist — deathwatch has no production watch-file producer (~100% abstain, inert by construction)
+  # and the reconciler's roster A is unwired (an empty roster alarms on every live pid). Both gates are
+  # named in the manifest's comment block; this asserts nobody quietly promoted one to a row instead.
+  ! grep -q '^com\.claude\.lead-deathwatch *|' "$M"
+  ! grep -q '^com\.claude\.lead-reconciler *|' "$M"
+  # ...and the reconciler's pin really is StartInterval, never KeepAlive: it has only a `--once` mode,
+  # and KeepAlive on a one-shot relaunches it at the 10s throttle floor forever.
+  P="$ROOT/launchd/staged/com.claude.lead-reconciler.plist"
+  [ -r "$P" ]
+  # Match the KEY, never the word: that plist's comment block explains at length WHY KeepAlive is wrong
+  # here, so a bare `grep KeepAlive` matches the explanation and convicts the correct file (the
+  # detector-matches-its-own-text trap — prose is never evidence about behaviour).
+  grep -q '<key>StartInterval</key>' "$P"
+  ! grep -q '<key>KeepAlive</key>' "$P"
+}
+
 # ── ok_exits — a DESIGNED non-zero verdict is not a failure (plan §5 F20) ────────────────────────
 # Live cause: com.claude.deploy-live exits 1 to mean "no GREEN stamp, nothing safe to deploy"
 # (verified via `deploy-live.sh --dry-run`). Keying S4 on exit!=0 alone put a permanent false row
