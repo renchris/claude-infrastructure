@@ -68,6 +68,12 @@ def sandbox():
         "assert_world_rates_integral",
         "BUDGET_WAIVED",
         "css",
+        # the sky beats' shape rules, and the two derivations their gates re-check
+        "CST_SEG",
+        "CST_BBOX",
+        "SHOOT_MIN_LEN",
+        "constellation_chain",
+        "shoot_path",
     ]
     saved = {n: copy.deepcopy(getattr(g, n)) for n in names}
     try:
@@ -78,6 +84,10 @@ def sandbox():
         g._SCROLLING.clear()
         g._WARPED.clear()
         g._ENCODED_STRIP.clear()
+        # The corridor search MEMOISES by moon, so a case that sabotages it would otherwise hand
+        # its result to every later case — the same contamination the deep copy above prevents for
+        # the tables, and invisible here because the cache is keyed on something no case touches.
+        g._SHOOT_CACHE.clear()
 
 
 def v(key: str = "v6a"):
@@ -337,6 +347,49 @@ def _disjoint():
     # stack beats the variant actually declares, so the peek — v6a's own — is dropped onto THE ASK's
     # 26.0-35.0s window. The peek composites only with the cheer, so nothing exempts this pair.
     g.RARE_EVENTS["peek"] = (33.0, 39.0)
+    g.build(v())
+
+
+# ── the sky's two occurrences ──────────────────────────────────────────────────────────────────
+# Four cases for two gates, because each gate has more than one way to be wrong and a gate proved
+# on one branch is unproven on the others. The ASCENDING case is the one worth reading: no
+# clearance check can catch a meteor that flies upward — an ascending corridor is exactly as clear
+# of the wordmark as its mirror image — and the first build of `shoot_path` did in fact return one.
+
+
+@case("sky: a field with no constellation in it", "found 0 of 6 vertices")
+def _no_chain():
+    # A segment band nothing can satisfy. The real failure this models is subtler — a star_count or
+    # a keep-out pad that quietly thins the graph below what the shape rules need — and the gate
+    # must refuse rather than ship a four-vertex quadrilateral.
+    g.CST_SEG = (300.0, 301.0)
+    g.build(v())
+
+
+@case("sky: a constellation vertex that is not a star", "do not correspond to a star")
+def _off_star():
+    real = g.constellation_chain
+
+    def nudged(art, stars):
+        ch = real(art, stars)
+        return [(ch[0][0] + 1.0, ch[0][1], ch[0][2])] + ch[1:]
+
+    # One pixel. That is the whole point of checking against the emitted markup: a vertex a pixel
+    # off a star is invisible in review, indistinguishable in the point list, and renders a line
+    # ending beside a star rather than on it.
+    g.constellation_chain = nudged
+    g.build(v())
+
+
+@case("sky: a meteor that flies upward", "which ASCENDS")
+def _ascending():
+    g.shoot_path = lambda art: (420.0, 240.0, -42.0, 400.0)
+    g.build(v())
+
+
+@case("sky: a corridor too short to be a flight", "under the")
+def _short_corridor():
+    g.SHOOT_MIN_LEN = 9_999.0
     g.build(v())
 
 
