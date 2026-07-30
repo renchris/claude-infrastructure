@@ -1324,3 +1324,180 @@ layer over a working background — which is the misread the audit predicted fro
 The blink fix addressed stillness reading as deadness; this is the opposite failure sitting in the
 same beat, and it was never in evidence. Recorded as a hypothesis, not a conclusion: it has not been
 A/B'd against a corrected build, and it should be before anyone claims it was the cause.
+
+---
+
+## v8 — THE BEATS GOT A BEGINNING, A MIDDLE AND AN END, AND THE BANNER LANDED (2026-07-30)
+
+The operator's ask was micro-events that make sense against real claude-infrastructure features AND
+that tell a story — *how it enters, showcases the event, and exits.* Held against the grammar in
+`docs/research/banner-microevent-grammar-2026-07-29.md` §2b/§7/§8, the shipped set scored
+**entrance 1/3 · showcase 2/3 · exit 1/3**. Every number below is read out of the emitted stylesheet
+or off a render at 838 px, never estimated.
+
+**The banner is now in the README header** (`1c54e73c`). That closes this track's frozen scope, which
+had been open since the track opened: the header held h1 + badges + the handoff recording, and the
+only v6 asset in the README was the self-recycle loop inside §1.
+
+### S23 · Two instruments were lying, and one operator ruling was half-applied
+
+Found before any art was touched, because none of it could be judged otherwise.
+
+- **`banner-world-clock-probe.py` reported 7 of 8 intervals MISMATCH against a 6/6-green asset, and
+  both causes were in the probe.** Its `PAIRS` table was hand-written and went stale at the re-timing
+  — it probed 4.0-6.0 s for THE REFUSAL (really 17.0-22.0) and 13.0-20.0 for THE ASK (really
+  26.0-35.0), so it measured ambient world and labelled it as beats. It already imported `gen.py` and
+  never asked it. And its model ran at `STRIP_V` = 96 px/s while the band it measures is the near
+  foreground, which the parallax fix `6a38e453` moved to P/16 = **128 px/s** — so every ambient row
+  read exactly 128/96 = **4/3 of model**. Intervals now come from `world_segments()`; the band's rate
+  is read from the **asset's own** stylesheet, because the probe's RED control is an older asset out
+  of git that lives by different numbers. RED control re-proved: exit 1, 5 mismatches, ambient rows
+  exact at *its* 96 px/s, and the 6 s interval honestly reported FLAT PEAK rather than a false zero
+  it cannot resolve. **An alarm that always fires carries the same zero bits as one that cannot.**
+- **`gate()` quantised its own windows to 24 ms.** `fmt` is 2 decimals, so `pct(31.26)` and
+  `pct(31.28)` both emitted `13.03%` — THE ASK's third blink rendered **96 ms against a declared
+  120 ms**, a 20 % shortening of the only thing alive in six seconds of dead world, produced by the
+  formatter rather than by any decision. `pctx()` already existed for exactly this.
+- **The pick was still emitting `peek`.** The operator ruled the visitor HOLD ("silly") and the
+  disposition recorded was *"keep the machinery, leave it out of the shipped set"*. Only the demotion
+  ran. A demotion is not a withdrawal, and it fails in the worst direction: past t=45 s most readers
+  never reach the beat, so moving it there removes it from **review** while leaving it in the
+  **file**.
+
+### S24 · The gaze was the largest single defect, and it cost nothing to fix
+
+A directional gaze is the strongest causal device this sprite owns — the eye band is the only face
+element, and one cell moves it 100 % of its own width. It was spent on a **free-running 8 s
+oscillator**: thirty pans a loop on a clock that can correlate with a 240 s beat only by accident.
+
+Measured: `.look` panned **LEFT across 2.72-4.64 s**, which is the whole of THE SUMMONING's entry,
+while B materialises to the **RIGHT**; and LEFT again across 18.72-20.64 s, through THE REFUSAL's
+rewind, while the bar is to the **RIGHT**. *The creature was looking away at both moments it exists
+to react to.* §7a names this exactly: a creature always doing something can never be seen to REACT.
+
+Rebased onto the master period. It **aims** — right at B from 4.3 s (burst + 0.3 s, inside the
+150-400 ms reaction band) to 9.7 s (B's departure + 0.5 s follow-through), right at the barrier
+17.3-20.4 s — with both windows derived from those objects' own constants, so re-timing a beat drags
+its reaction along instead of leaving an eye aimed at empty plate, which asserts a cause that is not
+there and is worse than an eye that wanders. Ambient glances survive at a budget rather than a
+metronome: one per 20 s, de-phased inside its bucket, refused near any beat. **12 pans a loop, from
+30.** No new art, no new group, no opacity swap.
+
+### S25 · A docstring claiming coverage is not coverage
+
+`summon_bursts` asserted *"at its bright stage it covers B's arrival … nothing may be seen switching
+on"*. Measured against the geometry it emits — `_burst` is five 10×10 rects — at B's switch-off
+instant that is **605 px² over a 176×128 = 22,528 px² silhouette. 2.7 % coverage**, 8.9 % at its
+widest. **B popped into and out of existence in open plate at both ends**, so the beat's own subject
+had neither an entrance nor an exit, which is the one thing a summoned-and-self-removing creature has
+to have.
+
+The cover has to be a **separate element**: the burst group holds one animation for all four of its
+stages, and the core must be opaque for a fifth of a second and gone before the dots reach scale 2,
+where the same plate would be a 368×280 flare. Two lifetimes, two elements (S8).
+
+**It is B's own silhouette, one cell fatter — not its bounding box.** The first build used the bbox
+and rendered as a hard-edged pale RECTANGLE beside the creature: a mechanically perfect cover that
+reads as a UI panel rather than as light. A materialisation in this vocabulary is the character
+arriving as a glowing mass that resolves *into* itself, so the mass must be creature-shaped. Both
+switches sit at ~1.1× of their own burst (46 % through the spark, 40 % through the poof), so one size
+covers both — measured rather than arranged, and now **asserted**, so a swap can never happen in the
+open again.
+
+### S26 · The cake was never the finished work
+
+A cake is not something claude-infrastructure produces, and at 838 px it did not read as a cake
+either: 3u × 4u of dark body under a pale row under one amber pixel presents as a mug, a jar or a
+bin. This document had already recorded *"the cake does not read as a cake"* and it shipped anyway.
+
+The letter now **comes back green**. Same shape, new state — by then the eye knows the object, so the
+whole payload is one colour change on something familiar, which is the most legible state change
+available at this size and the only channel that survives it: the face is 1.5u = 36 canvas px =
+**15.7 CSS px**, so a tick inside it would carry **2.6 CSS px** strokes, a quarter of the scene's own
+10.5 CSS px cell floor. **A checkmark is not on the table however much it wants to be. Colour is.**
+It reuses the letter's OWN edge class, so two states of one document cannot drift into two objects.
+Green is not borrowed from outside the palette — it is this repo's own word for the thing depicted.
+
+This also closed a live defect the swap makes moot: the cake had three fills in the **dark** scheme
+and **no light override at all**, so its `#f4ead8` icing measured **1.05:1** against the day sky. The
+flagship beat's payload was invisible to every daylight reader.
+
+### S27 · A feature under its own scene's floor cannot be tuned into legibility
+
+**The scene's legibility floor is one sprite cell: `CELL × clawd_scale` = 24 canvas px = 10.5 CSS px
+at the 838 px column.** THE REFUSAL's barrier shipped at **7 px — 3.1 CSS px, a third of the floor**.
+At that width it does not read as a barrier; it reads as a scratch on the render or a distant
+flagpole, which is precisely the misread the LEGIBILITY AUDIT predicted for this beat and which this
+document still recorded as uncleared. Bar and post → 18 px; `BAR_DROP` 30 → **48** px, because 30 was
+under the ≥40 px salient-travel floor too, so the fall was as unreadable as the thing falling. 48 is
+the leg band's own height — the only value that makes "across the path" true rather than nominal.
+
+### S28 · THE ASK: the fix was ORDERING, not addition
+
+The operator's verdict was *"feels buggy being halted."* The blink (S-earlier) answered *"is this
+image alive"*. Nothing answered *"why did it stop"* — and measured, the beat had **no cause, no
+herald, and its payoff at +0.000 s** from its own onset, the one placement §7 forbids outright
+(*"NEVER put the payoff at t0"*). 22.0-26.0 s contained zero authored change. A world that halts for
+no visible reason is indistinguishable from a render that has died.
+
+**The creature now looks up FIRST and the world stops half a second later.** Cause on screen, moving
+before its effect, separated by enough for the eye to arrive. The halt stops being something that
+happens *to* the scene and becomes something the creature *does* — and a halt somebody chose does not
+read as a crash. It costs nothing: the eyes and ears already swapped at the stop, so this **moves an
+existing transient** rather than authoring a new one. No rate change, no debt, no print-lock exposure.
+
+**Deliberately NOT applied to the legs.** `legsStill` stays derived from `stopped_spans()`, because
+feet that stop before the ground does is the creature **sliding** — the defect the stride lock exists
+to kill. *The face may anticipate; the feet may not.*
+
+> **The guard for this refused its own beat on the first pass**, by demanding the anticipation sit
+> INSIDE the declared window — which is a contradiction in terms, since a herald is by definition
+> what precedes. It now checks the real invariant: that the lead does not land on another beat, which
+> `EVENT_GAP`'s 4.0 s of empty air guarantees eight times over. A herald authors no object, no strip
+> feature and no rate change, so it spends none of the duty budget it sits outside of.
+
+### The apply path was a trap, and it was the only one this track pointed at
+
+`banner-apply-header.sh` offered exactly three choices — `proto-a-vector`, `proto-b-ascii`,
+`proto-b2-ascii-coarse` — **all three REJECTED by the operator on four recorded grounds** — and its
+hard-coded alt text still described that dead concept (*"a single Claude starburst … divides into
+two"*). The one command this track named for landing could only have landed the thing the track
+exists to replace, and would have mis-described it on the way. **A symptom and its prescribed remedy
+rot independently; check both halves.**
+
+It also `git mv`d the winner to `assets/banner/hero.svg`. Safe for a hand-authored prototype, unsafe
+here: every v6 asset is EMITTED, so the rename means the next `gen.py --out assets/banner` recreates
+the old name and quietly stops maintaining the file the README points at. The README now names the
+generator's own output path, and the script **refuses to land an asset a fresh generator run does not
+reproduce byte-for-byte**. Its exact-string anchor and shape assertions are kept verbatim —
+`d6845630` once deleted 426 README lines with an open-ended regex.
+
+### Verified this session, not recalled
+
+```text
+banner-verify.sh          6/6 on the pick, after every commit
+banner-world-clock-probe  PASS 9/9, every interval exact to 0px
+  RED control             exit 1 on the pre-world-clock asset (0bfd067d^), 5 mismatches
+byte-reproducibility      the apply script re-runs gen.py and refuses a mismatch
+README shape              460 -> 464 lines, 12 headings unchanged, byte delta exact
+both schemes              t=0, the three beats, dark and light, inspected at 838px
+```
+
+### Still open — named, not hidden
+
+- **Properties 2 (parallel work cannot collide) and 5 (deploys from git) are carried by NO beat**, and
+  the honest reading is that they should not be. There is **0.00 s of placeable air before t=35** —
+  all three inter-beat gaps sit exactly on `EVENT_GAP` — and the only free slot is 39.0-45.0 s, which
+  the audit already grades as reaching almost nobody. Every drawable form of "deploys from git" is
+  either *nothing changes* (unnameable in three words) or a stop-then-repay that is THE ASK wearing a
+  hat four seconds later, which is the recorded reason `rSleep` was deleted. They belong in the
+  caption and in the construction, and the landed caption says so.
+- **The subtitle is 7.42 CSS px** at the shipping column. The audit calls a legible subtitle *"a
+  prerequisite for the beats meaning anything at all"*. Not changed here: it is a restraint-rule-4
+  decision on the operator's own page, and it is one constant (`font-size="17"`) plus a re-run of
+  `banner-collide.py`.
+- **Banner height** stays 3.2:1. The measured lever is −40 px of prose push for a sky re-layout — a
+  taste call, still the operator's, still offered.
+- **`.rTurn` is emitted on every sprite with no `@keyframes` anywhere.** Dead markup, consistent with
+  the recorded finding that the sprite is bilaterally symmetric so a turn-around is a visual no-op.
+- **WebKit is still unprobed.** Chromium and Firefox are covered.

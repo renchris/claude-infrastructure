@@ -11,6 +11,11 @@ Own track, split out of `README_MEDIA_PIPELINE.md` § Task 3. That doc holds the
 the constraints already settled by measurement; this one holds the design work, the prototypes,
 the comparison, and the recommendation.
 
+> **LANDED 2026-07-30 (`1c54e73c`).** The frozen scope below is met: `v6c-dusk-line` is in the README
+> header. What it took first — two lying instruments, a half-applied operator ruling, and three beats
+> whose entrances and exits did not exist — is recorded in `BANNER_NARRATIVE_SPEC.md` § v8. Still
+> open and named there: the subtitle's 7.42 CSS px, banner height, WebKit.
+
 **Scope (frozen):** design a 1080p60, awwwards-calibre animated Claude-mascot banner for the
 README header. Prototype **at least three mediums** (animated SVG · moving ASCII · raster),
 compare them side by side on measured evidence, recommend one with the trade-offs named. **Land
