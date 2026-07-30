@@ -379,6 +379,81 @@ sendrc 0                                                          # sweep 3 — 
 sendrc 0                                                          # sweep 4 — same state, now genuinely sent ⇒ quiet
 [ "$(ncap)" -eq 3 ] && ok "DISCRIMINATES: confirmed⇒damped vs refused⇒retried (damping intact, only the lie removed)" || no "damping broke after a confirmed send (attempts=$(ncap), expected 3)"
 
+echo "T30 BOUNDED EXTERNALS — a HUNG external fork must not end all supervision (audit root cause 4, S1)"
+# The defect: zero timeout guards anywhere. The sweep loop is STRICTLY SEQUENTIAL, so one fork that never
+# returns stops every later sweep FOREVER — and silently, because the pager is the thing that hung (the
+# observed −9 last-exit with 0-byte logs). These checks are RED-provable: run each against the pre-fix
+# tree and the outer bound below expires instead of the inner one.
+#
+# Method: PATH-inject a hanging `git` / `find` (the two hang classes the finding names) ahead of the real
+# ones, then assert the sweep still COMPLETES and still writes its S-4 heartbeat. The outer `timeout` is
+# the test's own escape hatch — WITHOUT the fix the inner call never returns, the outer bound cuts the
+# sweep, no heartbeat is written, and every assertion below fails. It is never the thing being asserted.
+HANGBIN="$SBX/hangbin"; mkdir -p "$HANGBIN"
+printf '#!/bin/bash\nexec sleep 600\n' > "$HANGBIN/git";  chmod +x "$HANGBIN/git"
+printf '#!/bin/bash\nexec sleep 600\n' > "$HANGBIN/find"; chmod +x "$HANGBIN/find"
+# resolve a real timeout(1) for the OUTER test bound the same way the subject does (launchd PATH excludes
+# Homebrew). No timeout(1) at all ⇒ SKIP rather than hang the gate or fake a pass.
+TMO=""; for _c in "$(command -v timeout 2>/dev/null || true)" "$(command -v gtimeout 2>/dev/null || true)" \
+                  /opt/homebrew/bin/timeout /usr/local/bin/timeout /opt/homebrew/bin/gtimeout /usr/local/bin/gtimeout; do
+  [ -n "$_c" ] && [ -x "$_c" ] && { TMO="$_c"; break; }
+done
+if [ -z "$TMO" ]; then
+  echo "  ⊘ SKIP T30 — no timeout(1) on this box (the subject degrades to unbounded by design; nothing to prove)"
+else
+  # ── T30a: a hung `git` (work_landed's 5 calls + the effects re-read) does not wedge the sweep ──
+  reset; rm -f "$CC_TELEMETRY_DIR"/*.json
+  mktel hunggit 40 2 999999 "$REPO"                       # pid gone ⇒ DEAD path ⇒ work_landed forks git
+  "$TMO" -k 3 25 env PATH="$HANGBIN:$PATH" CC_SUP_GIT_TIMEOUT_S=1 CC_SUP_CKPT_TIMEOUT_S=1 \
+      bash "$SUP" --once >/dev/null 2>&1; rc30a=$?
+  [ "$rc30a" -ne 124 ] && ok "sweep COMPLETES with a hung git (bounded; pre-fix this never returns)" \
+                       || no "sweep hung on a hung git (rc 124 at the outer bound — the S1 is not fixed)"
+  idl_has '"kind":"heartbeat"' && ok "S-4 heartbeat still written despite the hung git (supervision survived)" \
+                               || no "no heartbeat after a hung git — the sweep died silently"
+  # A git we could not run must never read as "landed": that would reap a live session's row as a clean
+  # completion. Unprovable ⇒ PAGE is the safe direction, and the row must survive.
+  idl_has '"kind":"reap"' && no "a CUT git read as clean+landed and REAPED the row (unprovable must never mean landed)" \
+                          || ok "cut git does NOT satisfy work_landed (no false clean-completion reap)"
+
+  # ── T30b: a hung `find` in the effects re-read yields the INDETERMINATE third state, never an escalate ──
+  # Folding a cut probe into `dark` would let a slow-but-healthy repo manufacture the escalation this
+  # protocol exists to prevent; folding it into `fresh` would exonerate a genuinely hung lead. Neither is
+  # observed, so neither is claimed. Only `find` hangs here — git must stay real so the verdict reaches
+  # the find step at all (a hung git would short-circuit to unknown before find is ever called).
+  reset; rm -f "$CC_TELEMETRY_DIR"/*.json "$CC_SUPERVISOR_PAGEDIR"/*.notified
+  mktel indet 40 100 "$ALIVE" "$REPO"                     # alive OWNER + stale ⇒ STALL? candidate
+  # Pre-stamp the page and let the deadline pass (the T7 pattern) — assess()'s SAME-SWEEP GUARD only
+  # resolves a page that ALREADY existed when the sweep started, so a two-sweep dance would need reset()
+  # to preserve the .page file it deliberately deletes. Stamp = NOW, which is newer than $REPO's only
+  # commit, so the git leg reads not-fresh and the verdict reaches the (hung) find leg.
+  printf '%s' "$(date +%s)" > "$CC_SUPERVISOR_PAGEDIR/indet.page"
+  sleep 2                                                 # the 1s deadline passes ⇒ resolve_page re-observes
+  "$TMO" -k 3 25 env PATH="$HANGBIN:$PATH" CC_SUP_FIND_TIMEOUT_S=1 \
+      bash "$SUP" --once >/dev/null 2>&1; rc30b=$?
+  [ "$rc30b" -ne 124 ] && ok "sweep COMPLETES with a hung find (the admitted ~5-min walk is now bounded)" \
+                       || no "sweep hung on a hung find (rc 124 — the -prune mitigation is not a bound)"
+  idl_has '"kind":"page_indeterminate"' && ok "a CUT effects re-read records the INDETERMINATE non-verdict" \
+                                        || no "cut re-read left no page_indeterminate record"
+  idl_has '"kind":"page_escalate"' && no "a CUT re-read ESCALATED (an unobserved state was treated as dark — silence-reap)" \
+                                   || ok "cut re-read does NOT escalate (never acts on an unobserved state)"
+  idl_has '"why":"fresh-effects-after-deadline"' && no "a CUT re-read was logged as FRESH effects (the audit trail lies)" \
+                                                 || ok "cut re-read is not laundered as fresh (honest record)"
+
+  # ── T30c: NO timeout(1) ⇒ UNBOUNDED, never BROKEN (the fail-closed-as-amplifier trap) ──
+  # If a missing timeout binary turned `git` into rc 127, work_landed could never prove a clean
+  # completion and the supervisor would page on every healthy landed session. The wrapper must degrade to
+  # running the command directly. Proven POSITIVELY: with the seam emptied, a genuinely landed worktree
+  # must still be auto-reaped — the outcome that requires all 5 git calls to actually run.
+  reset; rm -f "$CC_TELEMETRY_DIR"/*.json
+  LANDED="$SBX/repo-landed-t30"; mkrepo_landed "$LANDED"
+  mktel nobin 40 2 999999 "$LANDED"                       # dead pid + shipped+clean ⇒ clean-completion reap
+  CC_SUP_TIMEOUT_BIN='' bash "$SUP" --once >/dev/null 2>&1  # set-but-EMPTY = disable the wrap verbatim
+  tel_exists nobin && no "no-timeout-binary broke git (row not reaped — a missing bound must not fail the call)" \
+                   || ok "no timeout(1) ⇒ commands run UNBOUNDED, not broken (clean completion still reaped)"
+  idl_has '"kind":"reap"' && ok "work_landed still proves landed with the wrap disabled (5 git calls ran)" \
+                          || no "work_landed could not prove landed without timeout(1)"
+fi
+
 echo ""
 echo "supervisor-e2e: $P passed, $F failed"
 [ "$F" -eq 0 ] || exit 1

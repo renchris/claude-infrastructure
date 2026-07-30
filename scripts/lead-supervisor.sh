@@ -26,8 +26,59 @@
 # Modes:  --once  one sweep then exit (cron/test) · --daemon  loop (default) · --selftest  prove the logic.
 # Env seams: CC_TELEMETRY_DIR · CC_IDL · CC_SUPERVISOR_LOG · CC_PAGE_TO · CC_SUP_T · CC_SUP_STALL_S ·
 #            CC_SUP_PAGE_DEADLINE_S · CC_SUP_TRUNK · CC_SUP_GC_S · CC_SUP_OWNER_PAT · CC_PAGE_TO_FILE ·
-#            CC_REGISTRY_DIR · SUPERVISOR_SWEEP_MAX_S · SUPERVISOR_SWEEP
+#            CC_REGISTRY_DIR · SUPERVISOR_SWEEP_MAX_S · SUPERVISOR_SWEEP · CC_SUP_TIMEOUT_BIN ·
+#            CC_SUP_GIT_TIMEOUT_S · CC_SUP_FIND_TIMEOUT_S · CC_SUP_CKPT_TIMEOUT_S · CC_SUP_NOTIFY_TIMEOUT_S
 set -uo pipefail
+
+# ── BOUNDED EXTERNALS: one hung fork must never end all supervision (audit 2026-07-22 root cause 4, S1) ──
+# This daemon had ZERO timeout guards. Every sweep forks git (work_landed ×5, reobserve_effects), a
+# filesystem walk (reobserve_effects), teammate-checkpoint.sh, and cc-notify — and the loop is STRICTLY
+# SEQUENTIAL, so ONE fork that never returns stops every subsequent sweep forever. The failure is SILENT
+# by construction: the pager is the thing that hung, so nothing is left to report it (the observed
+# last-exit −9 with 0-byte logs). An in-code comment already admitted a ~5-min `find` hang and mitigated
+# it with `-prune` rather than a bound — a latency fix, not a liveness one.
+#
+# WHY THESE FOUR AND NOT EVERY FORK. Bounded here are the classes that can genuinely block on something
+# other than CPU: git (index.lock contention, a pathological repo), the filesystem walk (deep/slow trees,
+# stalled volumes), an external SCRIPT that itself forks git, and cc-notify (the iTerm2/AppleEvent path —
+# the PROVEN machine-wide wedge of 2026-07-26, where a bare `it2 session list` returned rc 124 with
+# blocked forks piling up across ~110 sessions). Deliberately NOT wrapped: jq/stat/date/ps scalar reads
+# of known-small local files — they have never hung here, and wrapping them would add ~6 forks per
+# telemetry row per 30s sweep for no measured risk. If that judgement is ever wrong, the seam below
+# bounds them too without a redesign.
+#
+# timeout(1) is resolved by ABSOLUTE PATH as well as PATH: launchd runs this daemon with a minimal PATH
+# that EXCLUDES Homebrew, which is exactly where coreutils installs timeout — a PATH-only lookup would
+# leave the launchd-run daemon (the only caller that matters) unbounded while an interactive test looked
+# safe. No timeout(1) anywhere ⇒ run UNBOUNDED rather than break every external call: a missing binary
+# must not turn `git`/`find` into rc 127, which would read as "cannot prove landed" and page on every
+# healthy session. Seam: CC_SUP_TIMEOUT_BIN (set-but-EMPTY disables verbatim; `${VAR:-}` cannot tell
+# unset from set-empty).
+if [ -n "${CC_SUP_TIMEOUT_BIN+set}" ]; then
+  SUP_TIMEOUT_BIN="$CC_SUP_TIMEOUT_BIN"
+else
+  SUP_TIMEOUT_BIN=""
+  for _c in "$(command -v timeout 2>/dev/null || true)" "$(command -v gtimeout 2>/dev/null || true)" \
+            /opt/homebrew/bin/timeout /usr/local/bin/timeout \
+            /opt/homebrew/bin/gtimeout /usr/local/bin/gtimeout; do
+    [ -n "$_c" ] && [ -x "$_c" ] && { SUP_TIMEOUT_BIN="$_c"; break; }
+  done
+fi
+# Per-CLASS bounds: a git scalar read is sub-second when healthy, a pruned tree walk is seconds, the
+# checkpoint script forks git itself, and cc-notify's own it2 shim self-bounds at 30s (so bound BELOW it
+# — an outer bound above an inner one never fires). Each stays well under the reaper-horizon floor.
+SUP_GIT_TIMEOUT_S="${CC_SUP_GIT_TIMEOUT_S:-15}"
+SUP_FIND_TIMEOUT_S="${CC_SUP_FIND_TIMEOUT_S:-30}"
+SUP_CKPT_TIMEOUT_S="${CC_SUP_CKPT_TIMEOUT_S:-60}"
+SUP_NOTIFY_TIMEOUT_S="${CC_SUP_NOTIFY_TIMEOUT_S:-20}"
+# `-k <n>`: SIGTERM at the bound, SIGKILL n seconds later — a fork that ignores TERM (a wedged
+# AppleEvent client does) would otherwise keep the bound from actually releasing the sweep.
+sup_bounded(){ # $1=seconds  $2..=command — rc 124 on a cut (timeout(1)'s contract)
+  local s="$1"; shift
+  if [ -z "$SUP_TIMEOUT_BIN" ] || [ ! -x "$SUP_TIMEOUT_BIN" ]; then "$@"; return $?; fi
+  "$SUP_TIMEOUT_BIN" -k 5 "$s" "$@"
+}
+sup_git(){  sup_bounded "$SUP_GIT_TIMEOUT_S"  git "$@"; }
 
 # The sweep interval SHARES reaper-horizon-lint's constant — never fork the number (invariant 7; the
 # horizon floor is 10× this, enforced there). The actual daemon loop may be faster, never slower.
@@ -104,18 +155,24 @@ send_page(){ # $1=message [$2=state-fingerprint]
   if [ -n "$fp" ] && command -v damp_should_send >/dev/null 2>&1; then
     damp_should_send "${PAGE_TO:-role:$PAGE_TO_FILE}" "$fp" || return 0   # suppressed, but still "handled"
   fi
+  # BOUNDED: cc-notify reaches the iTerm2/AppleEvent path, the proven machine-wide wedge class
+  # (2026-07-26: a bare `it2 session list --json` returned rc 124 with blocked forks piling up across
+  # ~110 sessions). An unbounded page would hang the pager INSIDE the one act it exists to perform.
+  # rc 124 needs no new branch: it is non-zero, so it takes the FAILED path below — marker withheld,
+  # incident recorded, next sweep retries. That is precisely right for a cut send (we never learned
+  # whether it was enqueued, so re-sending is the safe error).
   if [ -n "$PAGE_TO" ]; then
-    "$NOTIFY_BIN" "$PAGE_TO" "$msg" >/dev/null 2>&1; rc=$?
+    sup_bounded "$SUP_NOTIFY_TIMEOUT_S" "$NOTIFY_BIN" "$PAGE_TO" "$msg" >/dev/null 2>&1; rc=$?
   else
     rdir="$(dirname "$PAGE_TO_FILE")"; rname="$(basename "$PAGE_TO_FILE")"
-    CC_ROLES_DIR="$rdir" "$NOTIFY_BIN" --role "$rname" "$msg" >/dev/null 2>&1; rc=$?
+    CC_ROLES_DIR="$rdir" sup_bounded "$SUP_NOTIFY_TIMEOUT_S" "$NOTIFY_BIN" --role "$rname" "$msg" >/dev/null 2>&1; rc=$?
   fi
   [ "$rc" = 0 ] && return 0
   # The D7 marker was written BEFORE the attempt (an intent to send). A failed send must not burn its
   # TTL suppressing the retry — drop it, so the next sweep genuinely re-sends rather than re-damping.
   [ -n "$fp" ] && command -v damp_forget >/dev/null 2>&1 && damp_forget "${PAGE_TO:-role:$PAGE_TO_FILE}" "$fp"
   # NEVER silent: the page the operator did not get is itself an incident record (S-4).
-  idl page_send_failed "\"target\":$(json_str "${PAGE_TO:-role:$(basename "$PAGE_TO_FILE")}"),\"notify_rc\":$rc,\"why\":\"cc-notify refused the page (rc $rc: 3=unresolvable target, 5=inbox unwritable) — NOT delivered; damping marker withheld so the next sweep retries\""
+  idl page_send_failed "\"target\":$(json_str "${PAGE_TO:-role:$(basename "$PAGE_TO_FILE")}"),\"notify_rc\":$rc,\"why\":\"cc-notify refused the page (rc $rc: 3=unresolvable target, 5=inbox unwritable, 124=CUT at the ${SUP_NOTIFY_TIMEOUT_S}s bound — send never completed) — NOT delivered; damping marker withheld so the next sweep retries\""
   printf '%s  page SEND FAILED rc=%s target=%s\n' "$(utc)" "$rc" "${PAGE_TO:-role:$(basename "$PAGE_TO_FILE")}" >> "$SUPLOG" 2>/dev/null || true
   return 2
 }
@@ -192,29 +249,44 @@ page_permpend(){ # $1=sid $2=cmd $3=beacon_ts $4=age_s
 clear_permpend(){ rm -f "$PAGEDIR/$1.permpend.notified" 2>/dev/null || true; }
 
 # ── effect RE-READ (S-3b core): is a session emitting WORK-PRODUCTS, independent of whether it replied? ──
-# "fresh" = new commits OR worktree file mtimes OR a live cpu delta since the page. "dark" = none.
-reobserve_effects(){ # $1=sid $2=cwd $3=since_epoch → prints "fresh" | "dark"
-  local cwd="$2" since="$3" fresh=dark
+# "fresh" = new commits OR worktree file mtimes since the page. "dark" = none. "unknown" = WE COULD NOT
+# LOOK — a bounded probe was CUT before it could answer.
+#
+# The third state is load-bearing, not defensive dressing. `dark` is the input the escalation path acts
+# on, so folding a cut probe into `dark` would let a slow-but-healthy repo (a deep tree, a git index under
+# contention) manufacture the escalation this whole protocol exists to prevent — the same trap the
+# `-newermt` note below records, arriving through the timeout instead of through BSD find. And folding it
+# into `fresh` would silently EXONERATE a genuinely hung lead. Neither is honest, so a cut says so, and
+# resolve_page routes it: no escalation, but a durable IDL record naming which probe was cut (a
+# never-answering probe is itself an incident — it must not read as a quiet system).
+reobserve_effects(){ # $1=sid $2=cwd $3=since_epoch → prints "fresh" | "dark" | "unknown"
+  local cwd="$2" since="$3" verdict=dark rc=0
   if [ -n "$cwd" ] && [ -d "$cwd" ]; then
     # a commit after the page = unambiguous liveness
-    local last_commit; last_commit="$(git -C "$cwd" log -1 --format=%ct 2>/dev/null || echo 0)"
-    [ "${last_commit:-0}" -gt "$since" ] 2>/dev/null && fresh=fresh
+    local last_commit
+    last_commit="$(sup_git -C "$cwd" log -1 --format=%ct 2>/dev/null)"; rc=$?
+    [ "$rc" = 124 ] && { printf 'unknown'; return; }
+    [ "${last_commit:-0}" -gt "$since" ] 2>/dev/null && verdict=fresh
     # any tracked/untracked file touched after the page = work in flight. Use `-newer <ref>` (portable);
     # BSD find rejects `-newermt @epoch` ("Can't parse date/time"), which would make EVERY re-read read
     # dark and escalate a healthy lead — the exact silence-reap this protocol exists to prevent.
-    if [ "$fresh" = dark ]; then
+    if [ "$verdict" = dark ]; then
       local ref; ref="$(mktemp 2>/dev/null)"
       if [ -n "$ref" ]; then
         touch -t "$(date -r "$since" +%Y%m%d%H%M.%S 2>/dev/null || echo 197001010000)" "$ref" 2>/dev/null
         # PERF: -prune generated/scratch trees. `-not -path` still DESCENDS into them; -prune does not.
         # doc_classifier holds 1.27M files (tmp/ = 921K scale/prof fixtures). A full walk took ~5min vs
         # the 30s SWEEP, so sweeps overlapped and pinned the disk at ~1.6k tps while the box sat idle.
-        [ -n "$(find "$cwd" \( -name .git -o -name tmp -o -name node_modules -o -name .venv -o -name venv -o -name __pycache__ -o -name .next -o -name dist -o -name .worktrees \) -prune -o -type f -newer "$ref" -print -quit 2>/dev/null)" ] && fresh=fresh
+        # -prune bounds the COMMON case; the timeout bounds the pathological one it cannot predict.
+        local hit
+        hit="$(sup_bounded "$SUP_FIND_TIMEOUT_S" find "$cwd" \( -name .git -o -name tmp -o -name node_modules -o -name .venv -o -name venv -o -name __pycache__ -o -name .next -o -name dist -o -name .worktrees \) -prune -o -type f -newer "$ref" -print -quit 2>/dev/null)"; rc=$?
         rm -f "$ref"
+        [ "$rc" = 124 ] && { printf 'unknown'; return; }
+        [ -n "$hit" ] && verdict=fresh
       fi
     fi
   fi
-  printf '%s' "$fresh"
+  printf '%s' "$verdict"
 }
 
 # ── S-3b: at a page deadline, RE-OBSERVE; disposition (escalate) gates on the effects re-read ONLY. ──
@@ -227,6 +299,14 @@ resolve_page(){ # $1=sid $2=cwd
   local effects; effects="$(reobserve_effects "$sid" "$cwd" "$paged_at")"
   if [ "$effects" = dark ]; then
     escalate_page "$sid" "$cwd"                 # effects-dark ⇒ disposition (never reached from silence alone)
+  elif [ "$effects" = unknown ]; then
+    # PROBE CUT — we did not observe dark, so we must not escalate; we did not observe fresh either, so
+    # claiming "fresh-effects" would be a lie in the audit trail. Record the non-verdict under its own
+    # IDL kind and re-observe next deadline. A repeated page_indeterminate for one sid is the signal that
+    # this cwd is unprobeable within the bounds (raise CC_SUP_FIND_TIMEOUT_S / prune the tree) — visible
+    # precisely because it is NOT filed as a void.
+    idl page_indeterminate "\"sid\":\"$sid\",\"why\":\"effects re-read CUT by its timeout bound (git ${SUP_GIT_TIMEOUT_S}s / find ${SUP_FIND_TIMEOUT_S}s) — neither fresh nor dark was observed; NOT escalating on an unobserved state, re-observing at the next deadline\""
+    void_page "$sid"                            # reset the deadline clock; keep notify damping
   else
     idl page_void "\"sid\":\"$sid\",\"why\":\"fresh-effects-after-deadline\""   # alive + working ⇒ VOID
     void_page "$sid"                            # reset the deadline clock but KEEP notify damping (item 1c324d9fcc32)
@@ -239,10 +319,20 @@ escalate_page(){ # $1=sid $2=cwd — page LOUDER (still page-only; the operator 
 
 # ── safe insurance: checkpoint a confirmed-DEAD lead's worktrees before anyone removes them (D-B). ──
 checkpoint_preserve(){ # $1=sid $2=cwd
-  local cwd="$2"
+  local cwd="$2" rc=0
   [ -n "$cwd" ] && [ -d "$cwd" ] || return 0
   if command -v teammate-checkpoint.sh >/dev/null 2>&1; then
-    CC_CHECKPOINT_MEMBER="supervisor-$1" teammate-checkpoint.sh "$cwd" >/dev/null 2>&1 || true
+    # BOUNDED: this is an external script that forks git itself, so it inherits every git stall mode —
+    # and it runs on the DEAD-lead path, i.e. exactly when the sweep must keep moving to page the
+    # operator. A cut costs one checkpoint (insurance, already best-effort) and is recorded as such;
+    # an unbounded hang here would cost every later sweep.
+    CC_CHECKPOINT_MEMBER="supervisor-$1" sup_bounded "$SUP_CKPT_TIMEOUT_S" teammate-checkpoint.sh "$cwd" >/dev/null 2>&1 || rc=$?
+  fi
+  if [ "$rc" = 124 ]; then
+    # NEVER silent: a checkpoint that did not happen must not be logged as one (the insurance the DEAD
+    # page promises is now absent, and only this record says so).
+    idl checkpoint_timeout "\"sid\":\"$1\",\"cwd\":\"$cwd\",\"bound_s\":$SUP_CKPT_TIMEOUT_S,\"why\":\"teammate-checkpoint.sh exceeded its bound and was cut — the dead lead's worktree is NOT checkpoint-preserved; the DEAD page below still fires\""
+    return 0
   fi
   idl checkpoint "\"sid\":\"$1\",\"cwd\":\"$cwd\",\"why\":\"dead-lead-preserve\""
 }
@@ -254,20 +344,23 @@ checkpoint_preserve(){ # $1=sid $2=cwd
 # HEAD "N ahead" by COUNT though the work is durably on trunk, so a bare count check would strand a
 # finished session forever. A missing / non-git / unresolved-trunk worktree returns 1 — we cannot PROVE
 # it clean, so the caller PAGES (the safe direction); work is never silently reaped unless verified landed.
+# Every git call here is BOUNDED (sup_git). A cut yields rc 124, which this function treats exactly like
+# any other failure — return 1 = "cannot PROVE clean+landed" ⇒ the caller PAGES. That is the safe
+# direction and needs no new branch: a timed-out probe must never be read as "landed" and silently reaped.
 work_landed(){ # $1=cwd → 0 clean+landed, 1 otherwise
   local cwd="$1"
   [ -n "$cwd" ] && [ -d "$cwd" ] || return 1
-  git -C "$cwd" rev-parse --git-dir >/dev/null 2>&1 || return 1
-  [ -z "$(git -C "$cwd" status --porcelain 2>/dev/null)" ] || return 1
-  local ahead; ahead="$(git -C "$cwd" rev-list --count "$TRUNK"..HEAD 2>/dev/null)" || return 1
+  sup_git -C "$cwd" rev-parse --git-dir >/dev/null 2>&1 || return 1
+  [ -z "$(sup_git -C "$cwd" status --porcelain 2>/dev/null)" ] || return 1
+  local ahead; ahead="$(sup_git -C "$cwd" rev-list --count "$TRUNK"..HEAD 2>/dev/null)" || return 1
   [ "${ahead:-1}" = 0 ] && return 0                                 # fast path: 0 ahead by COUNT → landed
   # content path (squash/cherry-pick-tolerant): `git cherry` marks a HEAD commit '+' only when NO patch-id
   # equivalent is on trunk; zero '+' ⇒ every ahead commit is durably landed. tree-diff-0 = squash backstop.
   local cherry_out
-  if cherry_out="$(git -C "$cwd" cherry "$TRUNK" HEAD 2>/dev/null)"; then
+  if cherry_out="$(sup_git -C "$cwd" cherry "$TRUNK" HEAD 2>/dev/null)"; then
     printf '%s\n' "$cherry_out" | grep -q '^+' || return 0
   fi
-  git -C "$cwd" diff --quiet "$TRUNK" HEAD 2>/dev/null && return 0
+  sup_git -C "$cwd" diff --quiet "$TRUNK" HEAD 2>/dev/null && return 0
   return 1
 }
 
