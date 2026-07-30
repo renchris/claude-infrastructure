@@ -24,6 +24,8 @@ _helpers_real=$(readlink "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[
 if [[ "$_helpers_real" == /* ]]; then
     SESSION_SEARCH_REPO="$(cd "$(dirname "$(dirname "$(dirname "$_helpers_real")")")" && pwd)"
 else
+    # self_path_ok — this is the NOT-A-SYMLINK branch of the guard above, i.e. running from the
+    # checkout, where ../.. is the repo root. The symlinked case is handled by $_helpers_real.
     SESSION_SEARCH_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 fi
 SESSION_SEARCH_PYTHON_DEPS="$SESSION_SEARCH_REPO/.python-deps"

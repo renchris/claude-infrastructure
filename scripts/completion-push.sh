@@ -121,6 +121,8 @@ selftest() {
   local d SELF ANN rc rec al; d="$(mktemp -d "${TMPDIR:-/tmp}/completion-push-selftest.XXXXXX")" || die "mktemp"
   trap 'rm -rf "$d"' EXIT
   SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+  # self_path_ok — guarded on the next line, but via resolve_announce() rather than an inline
+  # $HOME/.claude rung, so the lint cannot see the fallback structurally.
   ANN="$(cd "$(dirname "$0")" && pwd)/../bin/cc-announce"   # the REAL F1 — proves F5 wires F1
   [ -x "$ANN" ] || ANN="$(resolve_announce)"
   export CC_ANNOUNCE_BIN="$ANN"

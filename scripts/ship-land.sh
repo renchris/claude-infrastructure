@@ -1004,7 +1004,7 @@ stamp_gate_green() {  # gate-green asserts "the FULL suite proved THIS tree" —
 }
 
 run_gate() {  # $1=range → 0 green / 1 red
-  local range="$1" p rc=0 HERM_LINT
+  local range="$1" p rc=0 HERM_LINT SELFPATH_LINT
   # GATE_EFFECTIVE_FULL is pinned at 0: a land makes no full-suite claim in EITHER lane, so
   # stamp_gate_green self-noops and the verifier stays the marker's only writer (§4.2).
   GATE_EFFECTIVE_FULL=0; SELECTED_N=-1; GATE_RED=0; GATE_KILLED=0
@@ -1146,8 +1146,56 @@ run_gate() {  # $1=range → 0 green / 1 red
     fi
   fi
 
+  # ── script-dir resolution ratchet (backlog ba715c49d522) ──────────────────────────────────────
+  # Same own-scope contract as the ratchets above, guarding the seam THIS SCRIPT was the victim of.
+  #
+  # ~/.claude/{scripts,hooks,bin}/ are real directories of PER-FILE SYMLINKS into the checkout, so
+  # through the live layer `dirname "$0"/..` is ~/.claude — which has no tests/, no docs/, no .git. A
+  # script deriving its repo root that way does not fail; it reads the WRONG TREE or silently no-ops.
+  # This gate ran the full ~1630-test suite on every live-path land for exactly that reason
+  # (f8e40b4c577d): GATE_SELECT resolved to ~/.claude/scripts/gate-select.sh, which had no symlink
+  # yet, so the selector went missing and the policy went unsourced ⇒ "treating as FULL (fail-closed)"
+  # on every land, unserialized across every landing worktree. That is the amplifier in the
+  # 2026-07-26 machine-wide gate runaway, and it is why the degradation looked INTERMITTENT: run from
+  # a worktree this script found its siblings and went scoped; run through the live symlink it did
+  # not. deploy-parity-assert.sh (816015ecb30b) and test-hermeticity-lint.sh had the same shape.
+  #
+  # It belongs at the gate and not only in its own suite for the reason the ratchets above document:
+  # a lint enforced solely by its own suite is post-hoc DETECTION, and gate-select will not pick that
+  # suite up when the edited file is a PRODUCER rather than the lint (memory:
+  # enforcement-must-live-at-the-chokepoint). Sub-second, scope-independent, and it names the file to
+  # the session that wrote it — while the alternative is a bug that only ever shows up in production,
+  # on the live path, to someone who did not write it.
+  #
+  # The 26 files carrying the shape today are grandfathered BY PATH and all latent; the rule binds
+  # only on new code. Own-scope keeps one author's omission from becoming every author's outage.
+  SELFPATH_LINT="${SHIP_LAND_SELFPATH_LINT:-scripts/self-path-lint.sh}"
+  if [[ -x "$SELFPATH_LINT" ]]; then
+    local spown=""
+    if [[ "${SHIP_LAND_SELFPATH_OWN_SCOPE:-on}" != "off" ]]; then
+      # This lint scans from the repo ROOT and reports repo-relative paths, so the diff needs no
+      # component strip (unlike the utc own-set above, which is layer-relative).
+      spown="$(git diff --name-only "$range" -- 'bin/*' 'hooks/*' 'scripts/*' 2>/dev/null || true)"
+      [[ -n "$spown" ]] && echo "→ gate: self-path own-scope — blocking on $(printf '%s\n' "$spown" | grep -c .) file(s) in this land's diff; others advisory." >&2
+    fi
+    echo "→ gate: script-dir resolution ratchet (a repo root derived from an unresolved \$0)" >&2
+    if ! "$SELFPATH_LINT" --selftest >/dev/null 2>&1; then
+      echo "✗ gate: self-path-lint --selftest FAILED — the detector no longer discriminates, so its" >&2
+      echo "  clean verdict would mean nothing. Fix the lint before landing." >&2
+      GATE_RED=1
+      return 1
+    fi
+    if ! CC_SELFPATH_OWN="$spown" "$SELFPATH_LINT" >&2; then
+      echo "✗ gate: self-path RED — a file THIS LAND CHANGES derives a path via '..' from an" >&2
+      echo "  unresolved \$0/\$BASH_SOURCE. Resolve the symlinks first (_resolve_self above); the" >&2
+      echo "  file and lines are named above." >&2
+      GATE_RED=1
+      return 1
+    fi
+  fi
+
   # ── .bats shellcheck ratchet (backlog 19a44d4e2e75) ───────────────────────────────────────────
-  # Fourth deterministic blocker class, same own-scope contract as the three above — with one
+  # Fifth deterministic blocker class, same own-scope contract as the four above — with one
   # difference that is the whole point: the own-set is LINE-scoped, not file-scoped.
   #
   # The hole it closes: is_shell_file() above matches `*.sh|*.bash` or a shell shebang, and a bats
