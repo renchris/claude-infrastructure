@@ -364,3 +364,87 @@ BEFORE run_gate, masking the gate state). Land is DOUBLY blocked: run_gate RED +
 - **Finishing work (named, backlogged — F4-unbounded so NOT auto-driven):** make the wave's own new
   lints pass (hermeticize 991/738, satisfy 64/992/1457 config, allow-mark 1320 docs) + `.shellcheckrc`
   policy + operator `install.sh` (738) + operator esc-approval. Then `/ship`. → backlog + board.
+
+## LANDED — 2026-07-29/30 (backlog 692eaf74b0be)
+
+**`377df8de` on origin/main.** `land.log`: `verify:"ok" · esc_scan:"clean" · sweep:"review" · exit:0`.
+Content-verified (99 paths present + content-identical), deletions confirmed applied.
+
+**The wave was NOT where the brief said it was.** The dispatched worktree was cut fresh from
+origin/main; the work survived only on `ship/backup-2a795cd`, **508 commits behind** a trunk that
+lands every ~20 min. So the job was not "fix 6 tests" — it was reconciling 4 days of divergence.
+`git cherry` found 49 stranded / 4 already-equivalent.
+
+**Rebased 49 → 43 landed.** Six commits were dropped as SUPERSEDED, adjudicated by reading main's
+code rather than trusting either side's prose (memory `parallel-stream-convergence-protocol`):
+
+| Commit | Verdict |
+|---|---|
+| `8200df2b` reaper-lint declare | main declares it already, line refs **re-derived 07-29** (branch's were stale) |
+| `4f162ebf` cc-classify fail-closed | **would have been a live regression**: main deleted `CI_LIB_MISSING`/`ci_lib_warn` for a 3-state rc 0/1/2 model, so the branch's `${CI_LIB_MISSING:-1}` would default to 1 and classify EVERY session never-reap. Code dropped, its 3 behaviour tests kept |
+| `0e1af819` teammate-auto-shutdown G2 | main has the same gate-absence-is-a-defer fix **plus** SURFACE+page after MAX_DEFERS (12 tests vs 6) |
+| `68c1a156` deploy-parity existence | main is a strict superset — it adds the `skills/` class the branch lacked (omission found live 07-28: `skills/video-understanding` landed unlinked while the assert returned 0) |
+| `3770e498` nightly per-check output | main implements it with a NEWER design (ephemeral `RUNDIR` + page quoting vs persistent `$LOG.d` + 14d GC) |
+| `4728266a` statusline perf | already on main as `df6b328f`, `statusline.sh` byte-identical, plus a hermeticity fixture |
+
+Four conflicts were resolved as genuine UNIONS (rotate: main's chain-epoch handling + the branch's
+9 extra log targets = 15; nightly: main's `postland_inertness` **and** the branch's
+`transitive_e2e_assert`, renumbered 5/6; install.sh: main's vendor block + the branch's `rules/`-leg
+removal; session-index: main's owner-verified lock + the branch's batched-sweep helpers, deleting a
+**duplicate `_session_index_lock_is_stale` definition** the naive merge left behind — bash takes the
+last, so main's canonical one won by luck, not design).
+
+**⚠ rerere replays must be verified, not trusted.** Three fired; **two were stale**. On
+`claude-bump-models` it silently discarded main's deliberate `SC2064` expand-now trap; on
+`nightly-regression.sh` it would have downgraded main's newer design and dropped a
+`postland_inertness` reference. Both re-resolved by hand. rerere is a *suggestion* across a 508-commit gap.
+
+### The 4 named blockers — 2 fixed, 2 had gone STALE
+
+1. **Branch-side lints** — FIXED (`f6460282`). The real blocker was not in the brief: `run_gate`'s
+   **test-hermeticity ratchet** failed on all **7** branch-new suites (main's tree: 0 leaks — every
+   leak was ours). Fixed as prescribed, never by allowlist. `subagent-stop.bats` fixtures under
+   `$BATS_RUN_TMPDIR`, not `$BATS_TEST_TMPDIR`, because its "four declared sinks" test enumerates
+   that dir exactly and a fixture there becomes a fifth entry — caught only by running the suites,
+   since the ratchet itself was already green.
+2. **`.shellcheckrc`** — DONE, and **positive-controlled**: rc=0 on all 37 changed files, and a
+   synthetic probe proves SC2001/SC2015 DO fire outside the repo and are suppressed inside. (A bare
+   `--include=SC2001` cannot override a `disable=` — that control returns empty and reads as a pass.)
+3. **operator `install.sh` (738)** — **STALE / MOOT.** `deploy-parity` fails identically from the
+   MAIN checkout, so the 07-25 claim "passes from the main checkout" no longer holds: 2 tracked
+   files (`bin/cc-ctx-audit`, `hooks/lib/idl-log.sh`, both already ON main) have no live symlink.
+   That is live-layer **deploy lag**, not wave debt. It also cannot block a land: the fast lane runs
+   statics + ratchets + only `--direct` smoke suites, and `gate-select --direct` answers `FULL`
+   ("cannot decide") ⇒ **no smoke at all**; the post-land verifier owns the corpus.
+4. **operator esc-approval** — **STALE / MOOT.** A sibling landed `scripts/esc-exempt.manifest`,
+   which exempts `hooks/lib/session-index-*.sh` — precisely this wave's row-deletes against the
+   rebuildable session-index cache. Its own text names this case: *"4 parks … the rail blocked a
+   complete, gate-green fix four separate times."* `esc_scan` now reads **clean**; no narrowed
+   `SHIP_LAND_ESC_RE` and no operator packet were needed.
+
+**Both operator-gated blockers had been dissolved by other work while the item sat parked** —
+memory `parked-blocker-obsoleted-by-later-fix`, and the reason this item must never be re-parked
+on a mechanism fact without re-verifying the wall.
+
+### Scope-boundary calls (named, NOT silently taken)
+
+- **`reaper-horizon-lint` is trunk-red, not wave-red.** main reds it with 5 UNDECLARED reapers. This
+  branch fixes 2 (`cc-recover-safeguard` via `7b30ed7f`; `hooks/lib/context-econ.sh` declared here —
+  its only `rm -f`s are the mv-or-rm on its own atomic-write temp). **5 → 3.** The remaining 3
+  (`cc-await-ping`, `dispatch-assert.sh`, `desk-invariant.sh`) are untouched trunk debt. The
+  branch-new `scratchpad-reaper.bats:148` asserted the WHOLE-TREE exit 0, making a new suite
+  answerable for debt it did not create — narrowed to its own verdict (memory
+  `whole-tree-lint-is-a-fleet-wide-hard-stop`).
+- **`git-worktree-guard.sh` is slow, and was left alone.** Its liveness leg loops
+  `pgrep -f claude` — **139 pids on this box** — running an `lsof` per pid: **12 s per hook
+  invocation**, so `tests/git-worktree-guard.bats` takes **263 s** (it passes 6/6; it is slow, not
+  broken). The unbounded loop is **main's own code**, and bounding a *safety* guard's liveness check
+  can only make it fail-OPEN — i.e. permit a removal it should block. That trips Follow-On Gate F3
+  (safety envelope) ⇒ **named and backlogged, not silently changed.**
+
+### Residual — operator-owned, none blocking
+
+- **Live deploy lag (2 links).** `./install.sh` from the main checkout, or the two exact `ln -sf`
+  lines `deploy-parity-assert.sh` prints. Agent-side deploy is classifier-blocked (C10).
+- **3 trunk-debt reapers** to declare or bound in `reaper-horizon-lint`.
+- **`git-worktree-guard` 12 s/invocation** — needs a bounded liveness check that cannot fail open.
