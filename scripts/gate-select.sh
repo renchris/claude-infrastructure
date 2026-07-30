@@ -99,6 +99,28 @@ LIVENESS_SUITE = "tests/bats-assert-liveness.bats"
 # Clause (e) — stems measured to match half the corpus as ordinary English/shell words.
 STOPLIST = ("run", "common", "main", "test", "commit")
 SCRIPTY = (".sh", ".bash", ".zsh", ".py")
+# Clause (c) — how far the closure walk composes, and through what. BOTH bounds exist because
+# `refs` is a MENTION graph, not a dependency graph, and clause (c) reads a chain of mentions as
+# "this suite exercises code that depends on that path". That inference is only sound while every
+# edge means USES. An index node — a doc, a manifest, a repo-wide lint or regression runner — emits
+# edges meaning COVERS, the inverse relation, so composing through one yields a non-dependency.
+# Measured on this repo before these bounds: docs/ alone carried 59% of all edges at mean
+# out-degree 9.3 (real code: 0.8-2.0), and the median changed file dragged in 48 suites via
+# clause (c) — 283 of 721 non-test files pulled >=20. Chains like
+#   suite -> ship-land.sh -> host-suites.manifest -> nightly-regression.sh -> never-stuck-gate.sh
+#           -> hooks/session-continue.sh
+# are five hops through four inventories and describe no dependency at all. Median fan-in with
+# both bounds: 4 suites (>=20: 37 of 721); the map lint stays at 0 orphans either way.
+#
+# DEPTH is 3 because 3 is exactly what this selector's contract asks for: the suite's own fixpoint
+# proof is a 3-hop chain that a depth-2 walk drops (tests/gate-select.bats). Nothing documented
+# needs hop 4, and an unbounded walk over a mention graph this dense reaches most of the repo from
+# most roots. The bound is also what keeps this fix SYSTEMIC rather than a hub blacklist: a new
+# inventory file added later can still contribute its own refs, but it can no longer cascade.
+# An out-degree cap was measured and REJECTED — the distribution is a smooth power-law tail
+# (p90=9, p95=16, max=63) with no gap to place a threshold in, so any cap would be arbitrary and
+# would silently reclassify ordinary code as the repo grows.
+CLOSURE_DEPTH = 3
 
 def git(*args):
     return subprocess.run(("git", "-C", ROOT) + args, stdout=subprocess.PIPE,
@@ -122,6 +144,17 @@ def read_text(path):
     if b"\0" in blob[:8192]:          # binary — no refs to harvest
         return ""
     return blob.decode("utf-8", "replace")
+
+def is_index(path):
+    """A node whose out-edges mean COVERS, not USES ⇒ reachable, but never a RELAY.
+
+    Markdown is the airtight case and the dominant one: a document cannot execute, so a path it
+    names can never be a runtime dependency OF it. Deliberately keyed on the extension rather
+    than on `is_prose` (which is a SELECTION rule about docs/ and answers a different question) —
+    commands/*.md and skills/**/*.md index just as hard and live outside docs/.
+    """
+    return path.endswith(".md")
+
 
 def is_prose(path):
     if path in ("README.md", "CLAUDE.md"):
@@ -220,14 +253,21 @@ def main():
 
     refs = dict((p, refs_of(p)) for p in tracked)
 
-    def reachable(root):               # to FIXPOINT — depth-2 drops real 3-hop couplings
-        seen, stack = set(), list(refs.get(root, ()))
-        while stack:
-            node = stack.pop()
-            if node in seen:
-                continue
-            seen.add(node)
-            stack.extend(refs.get(node, ()))
+    def reachable(root):               # BFS so the hop count is meaningful — see CLOSURE_DEPTH
+        seen = set()
+        frontier, hop = list(refs.get(root, ())), 1
+        while frontier:
+            nxt = []
+            for node in frontier:
+                if node in seen:
+                    continue
+                seen.add(node)         # an index node is still REACHED (a suite may cover it)…
+                if is_index(node):     # …it just does not pass the walk along.
+                    continue
+                nxt.extend(refs.get(node, ()))
+            if hop >= CLOSURE_DEPTH:
+                break
+            frontier, hop = nxt, hop + 1
         return seen
 
     closure = dict((s, reachable(s)) for s in suites)

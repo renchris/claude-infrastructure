@@ -156,7 +156,8 @@ per-lander **work** rather than rationing **concurrency**, so it is the only one
 **Key** = `sha(suite content ‖ transitive closure content)` → green.
 
 **Nothing new needs inventing — three existing pieces need wiring:**
-1. `scripts/gate-select.sh:228` already computes `closure[s]` (fixpoint transitive input set per suite)
+1. `scripts/gate-select.sh` already computes `closure[s]` (transitive input set per suite) —
+   see `reachable()`; **no longer a fixpoint**, see the amendment below
 2. `scripts/postland-verify.sh` already has `env_fingerprint()` + tree-keyed stamps at `$STAMPS/$tree.json`
 3. `ship-land.sh` already writes tree-keyed stamps
 
@@ -164,6 +165,22 @@ per-lander **work** rather than rationing **concurrency**, so it is the only one
 **median 1, mean 25.4, max 70 of 126** — a median **125 of 126 suites are provably unaffected and
 cache-reusable**. Today's 57 gate runs shared only 15 distinct bases across 43 trees:
 suite-executions **5,394 → ~986 (5.5×)**.
+
+> **AMENDMENT 2026-07-29 (cc-backlog `2844cb4b50ee`) — the closure is BOUNDED; re-measure before
+> keying a cache on it.** The payoff numbers above were taken at 126 suites with a **fixpoint**
+> closure. That closure degraded superlinearly as the corpus grew to 204: `refs` is a MENTION
+> graph, and composing it to fixpoint through *index* nodes — docs, manifests, repo-wide lint and
+> regression runners, whose edges mean COVERS rather than USES — reached most of the repo from
+> most roots. Measured before the fix: **median changed file selected 48 suites** via clause (c),
+> **283 of 721 non-test files pulled ≥20**, and real chains ran nine hops through four
+> inventories. `reachable()` is now bounded two ways — markdown is a sink (`is_index`), and
+> `CLOSURE_DEPTH = 3`, which is exactly the floor the selector's own 3-hop proof requires. Median
+> fan-in is now **4** (≥20: 37 of 721); the map lint stays at 0 orphans and `--direct` output is
+> byte-identical, so the land gate's actual input never moved. An out-degree cap was measured and
+> rejected — the distribution is a smooth power-law tail (p90=9, p95=16, max=63) with no gap to
+> place a threshold in. **Why this matters here:** `closure[s]` is this option's cache KEY, so the
+> key's content set changed; the 5.5× estimate is keyed to the old, wider set and must be
+> re-derived against the bounded closure before it is quoted as a payoff.
 
 **Three properties only this option buys:**
 1. **CUT ≠ RED becomes structural.** A killed suite writes no cache entry ⇒ UNPROVEN. It can never
