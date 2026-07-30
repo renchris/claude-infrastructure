@@ -388,15 +388,28 @@ fi
 # ── 2. RESUME (or notify) parked sessions whose reset has passed ───────────────────────
 for pf in "$PARKED"/*.json; do
   [[ -e "$pf" ]] || continue
-  eval "$(python3 -c "
+  # Read the record's fields WITHOUT an interpreter in the path. The pre-2026-07-30 form was
+  # `eval "$(python3 … json.dumps …)"`, on the assumption that JSON quoting is shell quoting.
+  # It is not: json.dumps escapes `"` and `\` but NOT `$` or a backtick, and bash expands BOTH
+  # inside the double quotes it emits. `cwd` is a directory NAME, and `proj$(...)` is a legal
+  # one on APFS — such a record is also perfectly valid JSON, so it passes the §1 writer
+  # (printf '%s' into a JSON string) unmangled and detonated here. This is a LOADED launchd
+  # job (com.reso.lr-reset-poller), so the payload ran unattended. NUL-delimited fields cannot
+  # collide with any byte a JSON string value may hold, and `read` never interprets content.
+  # Fail CLOSED: a short/over-long read (unreadable, malformed, or a value containing a literal
+  # NUL) skips the record rather than proceeding with half-assigned fields.
+  _fields=()
+  while IFS= read -r -d '' _v; do _fields+=("$_v"); done < <(python3 -c '
 import json,sys
 d=json.load(open(sys.argv[1]))
-for k in ('sid','acct','cfg','cwd','reset_at_utc'):
-    print('%s=%s'%(k,json.dumps(str(d.get(k,'')))))
-" "$pf")"
-  # sid/acct/cfg/cwd/reset_at_utc are populated by the eval'd python above — shellcheck cannot
-  # trace an eval, so it reports reset_at_utc as unassigned (SC2154). It IS assigned.
-  # shellcheck disable=SC2154
+sys.stdout.write("".join(str(d.get(k,""))+"\0" for k in ("sid","acct","cfg","cwd","reset_at_utc")))
+' "$pf" 2>/dev/null)
+  if (( ${#_fields[@]} != 5 )); then
+    log "SKIP  $(basename "$pf") — unreadable or malformed parked record"
+    continue
+  fi
+  sid="${_fields[0]}"; acct="${_fields[1]}"; cfg="${_fields[2]}"
+  cwd="${_fields[3]}"; reset_at_utc="${_fields[4]}"
   reset_epoch=$(python3 -c "import sys,calendar,time; from datetime import datetime; print(int(calendar.timegm(datetime.fromisoformat(sys.argv[1].replace('Z','+00:00')).utctimetuple())))" "$reset_at_utc" 2>/dev/null || echo 0)
   (( now < reset_epoch )) && continue                        # reset not reached yet
   { pgrep -f "resume $sid" >/dev/null 2>&1 || sid_claimed "$sid"; } && { mv "$pf" "$RESUMED/$(basename "$pf")" 2>/dev/null; rm -f "$PARKED/$sid.notified"; continue; }
@@ -428,8 +441,15 @@ for k in ('sid','acct','cfg','cwd','reset_at_utc'):
   (( fired >= MAX_PER_RUN )) && { log "CAP   per-run resume cap ($MAX_PER_RUN) reached; deferring rest"; break; }
   if [[ "$AUTOFIRE" == "1" && $DRY -eq 0 ]]; then
     launcher="${LR_POLLER_LAUNCH_DIR:-/tmp}/lr-poller-launch-${sid:0:8}.sh"   # seam: tests redirect off the shared /tmp (concurrent-suite write collision)
-    { echo '#!/bin/bash'; printf 'exec "%s/lr-fire-resume.sh" "%s" "%s" "%s" --prompt %q\n' \
-        "$LR" "$acct" "$cwd" "$sid" "/limit-recover"; } > "$launcher"; chmod +x "$launcher"
+    # %q for EVERY interpolated value — this file is bash SOURCE, so each field is code until
+    # it is quoted as data. The pre-2026-07-30 form spent its one %q on the `/limit-recover`
+    # CONSTANT and interpolated the three attacker-reachable fields with %s inside literal
+    # double quotes, which is exactly backwards: a `cwd` of `proj$(…)` re-expanded when the
+    # launcher ran. %q emits a form that re-reads as the original word, so no field can leave
+    # its argv slot. (`$LR` is script-derived, not record-derived, but takes %q too — a bare
+    # %s there would break on any space in the install path.)
+    { echo '#!/bin/bash'; printf 'exec %q %q %q %q --prompt %q\n' \
+        "$LR/lr-fire-resume.sh" "$acct" "$cwd" "$sid" "/limit-recover"; } > "$launcher"; chmod +x "$launcher"
     # Claim BEFORE spawning: the claude child does not carry `--resume <sid>` until the
     # launcher→expect→claude chain completes, and until then pgrep cannot see it.
     claim_sid "$sid"
