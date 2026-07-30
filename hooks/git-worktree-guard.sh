@@ -44,7 +44,7 @@ if printf '%s' "$ncmd" | grep -qE 'git branch([[:space:]]|.)*-(d|D|-delete)'; th
   for tok in $(printf '%s' "$ncmd" | sed -E 's/.*git branch//' | tr ' ' '\n' | grep -vE '^-'); do
     [ -n "$tok" ] || continue
     if printf '%s\n' "$wtlist" | grep -qF "[$tok]"; then
-      echo "git-worktree-guard: BLOCKED 'git branch -D $tok' — branch '$tok' has a checked-out worktree. Branches with worktrees are NEVER force-deleted (a live Claude session may depend on it; the worktree-gc janitor preserves branches by design — a vanished worktree must stay recoverable via its branch). If the worktree is genuinely idle, reap it with 'bash scripts/worktree-gc.sh --prune' (it gates on live-claude-cwd/lsof/idle>30m and KEEPS the branch)." >&2
+      echo "git-worktree-guard: BLOCKED 'git branch -D $tok' — branch '$tok' has a checked-out worktree. Branches with worktrees are NEVER force-deleted (a live Claude session may depend on it; the worktree-gc janitor preserves branches by design — a vanished worktree must stay recoverable via its branch). If the worktree is genuinely idle, reap it with 'bash scripts/worktree-gc.sh --prune' (it gates on live-claude-cwd/lsof/idle>30m and KEEPS the branch). If it is idle but UNLANDED, --prune will keep it by design; land the branch, or record the abandon decision explicitly with 'bash scripts/worktree-gc.sh --warrant <path> --reason \"<why>\"' then '--dispose-abandoned' (that removes the DIRECTORY only — the branch still preserves every commit)." >&2
       exit 2
     fi
   done

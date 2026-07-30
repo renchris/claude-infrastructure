@@ -48,6 +48,10 @@ setup() {
   # Ownership oracle 2 — the team registry. Empty by default, same as the ledger: a teammate
   # worktree disposes only when a test positively records a DEAD or ARCHIVED owning team.
   TEAMS="$BATS_TEST_TMPDIR/teams"; mkdir -p "$TEAMS/_archive"
+
+  # Ownership oracle 3 — explicit dispose warrants. ABSENT by default (not merely empty), so the
+  # no-warrant KEEP is the resting state and no test disposes on a warrant it did not write.
+  WTS="$BATS_TEST_TMPDIR/warrants.tsv"
 }
 
 # team <dir> <member> — record a team at <dir> (relative to TEAMS) whose roster names <member>.
@@ -83,8 +87,18 @@ run_gc() {
   run env CC_WTGC_REPO="$R" CC_WTGC_CC_NOTIFY="$SHIM" CC_WTGC_LSOF="$STUB" \
       CC_WTGC_PGREP="$STUB" CC_WTGC_REGISTRY_DIR="$REG" CC_WTGC_LOCK="$LOCK" \
       CC_WTGC_BACKLOG="${BACKLOG:-$BL}" CC_WTGC_DISPOSAL_LOG="$DLOG" \
-      CC_WTGC_TEAMS_DIR="${TEAMSDIR:-$TEAMS}" \
+      CC_WTGC_TEAMS_DIR="${TEAMSDIR:-$TEAMS}" CC_WTGC_WARRANTS="${WARRANTS:-$WTS}" \
       CC_WTGC_EXCLUDE="${EXCLUDE:-}" bash "$GC" "$@"
+}
+
+# warrant <path> <sha> <reason> — hand-write oracle 3's TSV record, so a test can fixture a
+# MALFORMED or STALE warrant that the --warrant writer would refuse to produce. The path is
+# canonicalised exactly as the writer does: on macOS $BATS_TEST_TMPDIR is under /var → /private/var,
+# and a raw path would silently never match, which would make every test below vacuously "KEEP".
+warrant() {
+  local p; p="$(cd "$1" 2>/dev/null && pwd -P)" || p=""
+  [ -n "$p" ] || p="$1"
+  printf '%s\t%s\t%s\n' "$p" "$2" "$3" >> "$WTS"
 }
 
 has_wt() { git -C "$R" worktree list --porcelain | grep -qF "worktree $1"; }
@@ -552,16 +566,320 @@ SH
   run_gc --dispose-abandoned
   [ -d "$a" ]
   [ -d "$b" ]
-  echo "$output" | grep -q "2 unlanded worktree(s) are past the 72h horizon but have NO provable owner"
+  echo "$output" | grep -q "2 unlanded worktree(s) are past the 72h horizon with NO ownership oracle at all"
   # Discriminator: give ONE of them a provable owner and the residue drops to 1.
   team .dead-session-x-1785016677 tm-gates
   run_gc --dispose-abandoned
   [ ! -d "$b" ]
-  echo "$output" | grep -q "1 unlanded worktree(s) are past the 72h horizon but have NO provable owner"
+  echo "$output" | grep -q "1 unlanded worktree(s) are past the 72h horizon with NO ownership oracle at all"
 }
 
 @test "the residue line stays SILENT when nothing is stuck (no false alarm)" {
   p="$(wt wt-landed feat/landed)"                  # clean · idle · landed ⇒ the normal path
   run_gc
-  ! echo "$output" | grep -q "NO provable owner" || false
+  ! echo "$output" | grep -q "NO ownership oracle at all" || false
+  ! echo "$output" | grep -q "owner is provably NOT terminal" || false
+}
+
+# ── The RESIDUE SPLIT: two stuck states, opposite remedies ───────────────────────────────────
+# Measured 2026-07-30: 6 stuck past the horizon, 4 of them owned-by-a-blocked-item. One counter
+# spanning both had to name one remedy for both, and the remedy it named — "record the owner
+# terminal (cc-backlog done <id>)" — is FALSIFYING the ledger when applied to the owned half.
+
+@test "residue split: a SILENT oracle set and a NOT-TERMINAL owner are counted and prescribed apart" {
+  a="$(abandoned_wt wt-board-commands feat/board)"     # no ledger row, no team, no warrant ⇒ silent
+  b="$(abandoned_wt wt-abc123456789 feat/blocked)"     # an oracle RULES: owned, and not terminal
+  owns abc123456789 blocked
+  run_gc --dispose-abandoned
+  [ -d "$a" ]
+  [ -d "$b" ]
+  echo "$output" | grep -q "1 unlanded worktree(s) are past the 72h horizon with NO ownership oracle at all"
+  echo "$output" | grep -q "1 unlanded worktree(s) are past the 72h horizon but their owner is provably NOT terminal"
+  # The load-bearing half: the owned line must NOT prescribe marking the item done, and the
+  # silent line must offer the warrant. Swapped remedies are the defect this test exists for.
+  echo "$output" | grep -q "do NOT mark an item done to reap a directory"
+  echo "$output" | grep -q -- "--warrant <path> --reason"
+}
+
+# ── A2 oracle 3: the EXPLICIT DISPOSE WARRANT ────────────────────────────────────────────────
+# Oracles 1 and 2 are INFERRED — they read a record kept for another purpose, so a worktree named
+# for a feature (`wt-board-commands`, `wt-reaper-desk-reg`) is invisible to both and no amount of
+# age reaches it. That residue regrows on every feature-named worktree, so the fix has to be a way
+# to RECORD the decision, not a one-time sweep. Every direction below is red-proofed with a
+# discriminator pair: an oracle that never resolves, and one that resolves too easily, are both bugs.
+
+@test "A2/warrant RED-PROOF: no warrant → KEPT; the SAME worktree disposes once one is written" {
+  p="$(abandoned_wt wt-board-commands feat/board)"
+  owns other-item "done"                              # a populated ledger that simply lacks this owner
+  run_gc --dispose-abandoned
+  [ -d "$p" ]                                       # ← neither inferred oracle can reach it
+  echo "$output" | grep -q "no owning backlog item 'board-commands'"
+  # Discriminator — the ONLY thing that changes is the warrant existing.
+  warrant "$p" "$(git -C "$R" rev-parse refs/heads/feat/board)" "superseded by trunk 652f66db"
+  run_gc --dispose-abandoned
+  [ ! -d "$p" ]
+  has_br feat/board                                 # the branch is still the durable ref
+  echo "$output" | grep -q "explicit dispose warrant — superseded by trunk 652f66db"
+}
+
+@test "A2/warrant: a STALE warrant (the tip moved after the decision) → KEPT, never disposed" {
+  # THE anti-rot property. A warrant records a decision about a specific state; if work resumed
+  # after it was written the decision no longer describes reality, and a warrant that survived
+  # that would be a standing licence — the exact failure class this whole residue is an instance of.
+  p="$(abandoned_wt wt-board-commands feat/board)"
+  warrant "$p" "$(git -C "$R" rev-parse refs/heads/feat/board)" "abandoned"
+  echo resumed > "$p/resumed"; git -C "$p" add resumed
+  GIT_AUTHOR_DATE="$ANCIENT +0000" GIT_COMMITTER_DATE="$ANCIENT +0000" \
+    git -C "$p" commit -qm "work resumed after the warrant"
+  run_gc --dispose-abandoned
+  [ -d "$p" ]
+  echo "$output" | grep -q "dispose warrant is STALE"
+}
+
+@test "A2/warrant is PATH-EXACT: a warrant for a DIFFERENT path never authorises this one" {
+  # ~/Development/.worktrees is shared across 5 repos (audit §6), so a basename or prefix match
+  # could authorise another repo's worktree entirely. Proximity is not evidence.
+  p="$(abandoned_wt wt-board-commands feat/board)"
+  warrant "${p}-other" "$(git -C "$R" rev-parse refs/heads/feat/board)" "a neighbour, not this one"
+  warrant "$(basename "$p")" "$(git -C "$R" rev-parse refs/heads/feat/board)" "bare basename"
+  run_gc --dispose-abandoned
+  [ -d "$p" ]
+  ! echo "$output" | grep -q "explicit dispose warrant" || false
+  # Discriminator — a warrant for the path ITSELF, and nothing else changed, does authorise it.
+  warrant "$p" "$(git -C "$R" rev-parse refs/heads/feat/board)" "this exact path"
+  run_gc --dispose-abandoned
+  [ ! -d "$p" ]
+  echo "$output" | grep -q "explicit dispose warrant — this exact path"
+}
+
+@test "A2/warrant fails CLOSED on a MALFORMED record: no reason, and a too-short pin" {
+  p="$(abandoned_wt wt-board-commands feat/board)"
+  warrant "$p" "$(git -C "$R" rev-parse refs/heads/feat/board)" ""     # the reason IS the record
+  run_gc --dispose-abandoned
+  [ -d "$p" ]
+  echo "$output" | grep -q "dispose warrant is MALFORMED (no reason recorded)"
+  # A pin under 7 chars matches too many commits to be a content check at all.
+  : > "$WTS"
+  warrant "$p" "abc12" "too short to pin anything"
+  run_gc --dispose-abandoned
+  [ -d "$p" ]
+  echo "$output" | grep -q "under 7 chars"
+}
+
+@test "A2/warrant: the LAST record for a path wins, so a re-warrant supersedes a stale one" {
+  p="$(abandoned_wt wt-board-commands feat/board)"
+  warrant "$p" "0000000000000000000000000000000000000000" "written against an older tip"
+  warrant "$p" "$(git -C "$R" rev-parse refs/heads/feat/board)" "re-warranted at the current tip"
+  run_gc --dispose-abandoned
+  [ ! -d "$p" ]
+  echo "$output" | grep -q "re-warranted at the current tip"
+}
+
+@test "A2/warrant: a BLOCKED item is NOT a veto — it still reaches oracle 3, and keeps ITS own reason" {
+  # The two "owner is not terminal" signals must stay attributable to the oracle that raised them.
+  # Conflated, a merely-blocked backlog item takes the LIVE-TEAM veto branch: the KEEP line then
+  # quotes the team oracle ("not a teammate worktree"), which is not even about this worktree, and
+  # oracle 3 is never consulted — so the one class an operator most needs to warrant is unreachable.
+  p="$(abandoned_wt wt-abc123456789 feat/blocked)"
+  owns abc123456789 blocked
+  run_gc --dispose-abandoned
+  [ -d "$p" ]
+  echo "$output" | grep -q "owning item abc123456789 is 'blocked', not terminal"
+  ! echo "$output" | grep -q "not a teammate worktree" || false
+  # And the warrant does reach it — a blocked item is parked work, not an active wave.
+  warrant "$p" "$(git -C "$R" rev-parse refs/heads/feat/blocked)" "operator abandoned the blocked item"
+  run_gc --dispose-abandoned
+  [ ! -d "$p" ]
+  has_br feat/blocked
+}
+
+@test "A2/warrant: a LIVE owning team VETOES it — an active wave outranks an earlier decision" {
+  p="$(abandoned_wt wt-tm-gates tm/gates)"
+  team session-current tm-gates
+  warrant "$p" "$(git -C "$R" rev-parse refs/heads/tm/gates)" "operator thought this was done"
+  run_gc --dispose-abandoned
+  [ -d "$p" ]
+  echo "$output" | grep -q "teammate of a LIVE team"
+  # Discriminator: the warrant was never the problem — tear the team down and it fires.
+  mv "$TEAMS/session-current" "$TEAMS/.dead-session-current-1785016677"
+  run_gc --dispose-abandoned
+  [ ! -d "$p" ]
+}
+
+@test "A2/warrant authorises A2 ONLY — every other gate still KEEPS" {
+  # A warrant answers "is the owner finished". It must not become a skeleton key for dirty trees,
+  # live sessions, busy teammates, or the age floor.
+  d="$(abandoned_wt wt-w-dirty feat/wdirty)"; echo scratch > "$d/dirty"
+  b="$(abandoned_wt wt-w-busy feat/wbusy)";  : > "$b/.teammate-busy"
+  y="$(wt wt-w-young feat/wyoung)"                       # unlanded with a tip of NOW ⇒ idle floor
+  echo fresh > "$y/n"; git -C "$y" add n; git -C "$y" commit -qm "fresh unlanded work"
+  for p in "$d" "$b" "$y"; do
+    warrant "$p" "$(git -C "$p" rev-parse HEAD)" "warranted, but another gate holds"
+  done
+  run_gc --dispose-abandoned
+  [ -d "$d" ]
+  [ -d "$b" ]
+  [ -d "$y" ]
+  echo "$output" | grep -q "KEEP.*wt-w-dirty.*dirty tree"
+  echo "$output" | grep -q "KEEP.*wt-w-busy.*teammate-busy"
+  echo "$output" | grep -q "KEEP.*wt-w-young.*idle floor"
+}
+
+@test "A2/warrant: A1's age floor still binds — a warrant does not shortcut the abandon horizon" {
+  # 2 h old: past the 30 min idle floor (so the ABANDON horizon is the gate under test, not the
+  # idle one) but far short of 72 h. A warrant answers "is the owner finished", never "is it old".
+  p="$(wt wt-board-commands feat/board)"
+  echo new > "$p/g"; git -C "$p" add g
+  GIT_AUTHOR_DATE="$OLD +0000" GIT_COMMITTER_DATE="$OLD +0000" \
+    git -C "$p" commit -qm "unlanded, but only 2h idle"
+  warrant "$p" "$(git -C "$R" rev-parse refs/heads/feat/board)" "warranted before the horizon"
+  run_gc --dispose-abandoned
+  [ -d "$p" ]
+  echo "$output" | grep -q "not abandoned: idle 2h < 72h abandon horizon"
+  # Discriminator: age it past the horizon and the same warrant fires.
+  GIT_AUTHOR_DATE="$ANCIENT +0000" GIT_COMMITTER_DATE="$ANCIENT +0000" \
+    git -C "$p" commit -q --amend --no-edit
+  : > "$WTS"
+  warrant "$p" "$(git -C "$R" rev-parse refs/heads/feat/board)" "warranted past the horizon"
+  run_gc --dispose-abandoned
+  [ ! -d "$p" ]
+}
+
+@test "A2/warrant: the disposal ledger records WHICH oracle authorised it" {
+  p="$(abandoned_wt wt-board-commands feat/board)"
+  warrant "$p" "$(git -C "$R" rev-parse refs/heads/feat/board)" "superseded by trunk 64886172"
+  run_gc --dispose-abandoned
+  [ ! -d "$p" ]
+  grep -q '"owner_item":"wt-board-commands"' "$DLOG"
+  grep -q '"owner_proof":"explicit dispose warrant — superseded by trunk 64886172"' "$DLOG"
+}
+
+@test "A2/warrant: a STALE or MALFORMED warrant is NAMED on the KEEP line, never silently ignored" {
+  # Silence would read as "nobody ever wrote one" — the opposite of the truth, and it would send
+  # the operator to re-write a warrant that already exists.
+  p="$(abandoned_wt wt-board-commands feat/board)"
+  owns other-item "done"                     # a populated ledger that simply lacks this owner
+  warrant "$p" "abc12" "malformed pin"
+  run_gc --dispose-abandoned
+  [ -d "$p" ]
+  echo "$output" | grep -q "no owning backlog item 'board-commands'; dispose warrant is MALFORMED"
+  # Discriminator: with NO warrant at all the line carries only the ledger's verdict — the
+  # warrant clause must appear because a record exists and was rejected, not unconditionally.
+  : > "$WTS"
+  run_gc --dispose-abandoned
+  echo "$output" | grep -q "no owning backlog item 'board-commands'"
+  ! echo "$output" | grep -q "dispose warrant" || false
+}
+
+# ── The BLAST RADIUS. `git status --porcelain` (gate 3) cannot see gitignored content and
+# `git worktree remove` deletes it anyway at exit 0 — reproduced 2026-07-30. Measured on the live
+# residue, 6 of 6 candidates carry ignored content, so a KEEP gate here would make oracle 3 inert
+# by construction (how oracle 1 failed). It is NAMED instead, at both points that matter.
+
+@test "BLAST RADIUS: the ledger records the gitignored content a disposal destroys" {
+  p="$(abandoned_wt wt-board-commands feat/board)"
+  echo 'secrets.env' > "$p/.gitignore"; git -C "$p" add .gitignore
+  GIT_AUTHOR_DATE="$ANCIENT +0000" GIT_COMMITTER_DATE="$ANCIENT +0000" \
+    git -C "$p" commit -qm "ignore secrets"
+  echo 'API_KEY=paid-asset' > "$p/secrets.env"
+  [ -z "$(git -C "$p" status --porcelain)" ]          # gate 3 is BLIND to it — the whole problem
+  warrant "$p" "$(git -C "$R" rev-parse refs/heads/feat/board)" "abandoned"
+  run_gc --dispose-abandoned
+  [ ! -d "$p" ]
+  grep -q '"destroyed_ignored":"secrets.env"' "$DLOG"
+  echo "$output" | grep -q "gitignored content destroyed with it"
+}
+
+@test "BLAST RADIUS: a disposal with no ignored content records an EMPTY field, not a fabricated one" {
+  p="$(abandoned_wt wt-board-commands feat/board)"
+  warrant "$p" "$(git -C "$R" rev-parse refs/heads/feat/board)" "abandoned"
+  run_gc --dispose-abandoned
+  [ ! -d "$p" ]
+  grep -q '"destroyed_ignored":""' "$DLOG"
+  ! echo "$output" | grep -q "gitignored content destroyed" || false
+}
+
+# ── The --warrant WRITER. A warrant nobody can write is inert, so the writer is the mechanism,
+# not a convenience — and every refusal below is a warrant that would have been silently rejected
+# at read time, which is the "no operator action required means nothing happens" failure again.
+
+@test "--warrant writes a record pinned to the CURRENT branch tip, and disposes nothing itself" {
+  p="$(abandoned_wt wt-board-commands feat/board)"
+  run_gc --warrant "$p" --reason "superseded by trunk"
+  [ "$status" -eq 0 ]
+  [ -d "$p" ]                                        # writing a warrant is not itself a disposal
+  head="$(git -C "$R" rev-parse refs/heads/feat/board)"
+  grep -qF "$(printf '%s\t%s\tsuperseded by trunk' "$p" "$head")" "$WTS"
+  # And the record it wrote is one the reader actually honours — writer and reader agree.
+  run_gc --dispose-abandoned
+  [ ! -d "$p" ]
+}
+
+@test "--warrant REFUSES a path that is not a linked worktree of this repo" {
+  # Records come only from `git worktree list` — a warrant must never be writable against a bare
+  # directory, because ~/Development/.worktrees holds 5 repos' trees and existence proves nothing.
+  mkdir -p "$BATS_TEST_TMPDIR/not-a-worktree"
+  run_gc --warrant "$BATS_TEST_TMPDIR/not-a-worktree" --reason "nope"
+  [ "$status" -eq 2 ]
+  echo "$output" | grep -q "is not a linked worktree"
+  [ ! -f "$WTS" ]
+}
+
+@test "--warrant REFUSES the primary checkout" {
+  run_gc --warrant "$R" --reason "nope"
+  [ "$status" -eq 2 ]
+  echo "$output" | grep -q "refusing to warrant the primary checkout"
+  [ ! -f "$WTS" ]
+}
+
+@test "--warrant REFUSES without a reason — an unexplained warrant is malformed at read time" {
+  p="$(abandoned_wt wt-board-commands feat/board)"
+  run_gc --warrant "$p"
+  [ "$status" -eq 2 ]
+  echo "$output" | grep -q -- "--warrant requires --reason"
+  [ ! -f "$WTS" ]
+}
+
+@test "--warrant REFUSES a detached HEAD — no branch would preserve the commits" {
+  git -C "$R" worktree add -q --detach "$BATS_TEST_TMPDIR/wt-det" HEAD
+  run_gc --warrant "$BATS_TEST_TMPDIR/wt-det" --reason "abandoned"
+  [ "$status" -eq 2 ]
+  echo "$output" | grep -q "detached HEAD"
+  [ ! -f "$WTS" ]
+}
+
+@test "--warrant REFUSES a reason containing a tab — it would corrupt its own TSV record" {
+  p="$(abandoned_wt wt-board-commands feat/board)"
+  run_gc --warrant "$p" --reason "$(printf 'a\tb')"
+  [ "$status" -eq 2 ]
+  [ ! -f "$WTS" ]
+}
+
+@test "--warrant --dry-run writes NOTHING" {
+  p="$(abandoned_wt wt-board-commands feat/board)"
+  run_gc --warrant "$p" --reason "abandoned" --dry-run
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "would warrant"
+  [ ! -f "$WTS" ]
+}
+
+@test "--warrant shows the BLAST RADIUS at decision time, where the decision is made" {
+  p="$(abandoned_wt wt-board-commands feat/board)"
+  echo 'secrets.env' > "$p/.gitignore"; git -C "$p" add .gitignore
+  GIT_AUTHOR_DATE="$ANCIENT +0000" GIT_COMMITTER_DATE="$ANCIENT +0000" \
+    git -C "$p" commit -qm "ignore secrets"
+  echo 'API_KEY=paid-asset' > "$p/secrets.env"
+  run_gc --warrant "$p" --reason "abandoned"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "BLAST RADIUS"
+  echo "$output" | grep -q "! secrets.env"
+}
+
+@test "a flag that takes a value REFUSES to be left dangling, and --reason needs --warrant" {
+  run_gc --warrant
+  [ "$status" -eq 2 ]
+  echo "$output" | grep -q -- "--warrant requires a value"
+  run_gc --reason "orphaned"
+  [ "$status" -eq 2 ]
+  echo "$output" | grep -q -- "--reason is only meaningful with --warrant"
 }

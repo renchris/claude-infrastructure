@@ -39,10 +39,11 @@
 #   A1. the branch tip is older than CC_WTGC_ABANDON_HOURS (default 72 h) — a horizon far past
 #       any inter-turn gap. The 30 min idle floor is calibrated for LANDED work and is far too
 #       short to mean "abandoned",
-#   A2. the OWNER is TERMINAL — finished, or provably gone. TWO oracles, either sufficient,
-#       both fail-closed: (i) basename `wt-<id>` folded to status `done` by cc-backlog; (ii) a
+#   A2. the OWNER is TERMINAL — finished, or provably gone. THREE oracles, any one sufficient,
+#       all fail-closed: (i) basename `wt-<id>` folded to status `done` by cc-backlog; (ii) a
 #       teammate worktree `wt-tm-<m>` whose owning TEAM registry entry is DEAD (`.dead-*`) or
-#       ARCHIVED (`_archive/`). Oracle (ii) is not a widening — it is what makes A2 reach
+#       ARCHIVED (`_archive/`); (iii) an explicit, path-exact, sha-pinned dispose WARRANT.
+#       Oracle (ii) is not a widening — it is what makes A2 reach
 #       reality: a teammate worktree has no backlog id at all, and an item only goes `done`
 #       when work LANDS, which gate 6 already reaps. Measured on the live checkout 2026-07-26:
 #       of 21 dispose-eligible worktrees, 0 had a `done` item and 7 belonged to one dead team,
@@ -57,6 +58,33 @@
 #       removal the ref still points at that sha and `git cherry` still yields the SAME unlanded
 #       patch SET. Set identity, never a rev-list count: a count is blind to shared history,
 #       same-patch shas and rebase-landed work. A verification miss is reported and exits 4.
+#
+# ORACLE 3 — THE EXPLICIT DISPOSE WARRANT (backlog d9fd066ebd28, 2026-07-30).
+# Oracles (i) and (ii) are both INFERRED: they read a record somebody kept for another purpose.
+# A worktree named for a feature rather than a backlog id — `wt-board-commands`,
+# `fix/reaper-desk-registration` — has neither a `wt-<id>` name nor a `tm/*` team entry, so BOTH
+# inferred oracles are structurally silent and no amount of age can ever reap it. That residue
+# regrows on every feature-named worktree, so reaping the current members by hand is whack-a-mole,
+# not a fix: the missing piece is a way to RECORD the abandon decision, which is exactly what the
+# inferred oracles were standing in for.
+# A warrant is one TSV line in CC_WTGC_WARRANTS:   <canonical-path>\t<head-sha>\t<reason>
+# and it is the narrowest possible authorisation — it fails closed in five separate directions:
+#   · PATH-EXACT, on the CANONICAL path, never a basename and never a prefix: basenames collide
+#     across the 5 repos sharing ~/Development/.worktrees (audit §6), so a basename warrant could
+#     authorise a DIFFERENT repo's worktree. Proximity is not evidence; the key is the identity.
+#   · SHA-PINNED to the branch tip the decision was made against (a ≥7-char prefix is accepted;
+#     anything shorter is malformed). If the tip MOVED, work resumed after the warrant was
+#     written, so the warrant is STALE ⇒ KEEP. This is what stops a warrant rotting into a
+#     standing licence — the failure mode this residue is itself an instance of.
+#   · REASON-REQUIRED: an empty third field is malformed ⇒ KEEP. The ledger has to be able to
+#     answer, months later, why this directory went; "somebody ran the command" is not an answer.
+#   · A LIVE owning team VETOES it (an active wave outranks a decision made before the wave).
+#   · It authorises A2 and NOTHING ELSE. Every KEEP gate, A1's age floor and A3's
+#     before/after preservation proof are unchanged and still binding.
+# Write one with `--warrant <path> --reason '<why>'`, which resolves the branch tip itself so the
+# sha pin cannot be mistyped; revoke by deleting the line. A spent warrant is harmless: the path
+# has to be a live worktree again AND the branch has to still be at the pinned sha.
+#
 # Disposal therefore removes a DIRECTORY, never a commit — the branch IS the durable ref and is
 # preserved exactly as in the landed path, so a disposed worktree is restored with one
 # `git worktree add <path> <branch>`. Acting requires --dispose-abandoned; WITHOUT it the class
@@ -74,6 +102,7 @@
 #   worktree-gc.sh --dry-run            # print the plan, mutate nothing
 #   worktree-gc.sh --prune-branches     # also delete landed worktree-less branches (-d only)
 #   worktree-gc.sh --dispose-abandoned  # also reap the DISPOSE class (branch always preserved)
+#   worktree-gc.sh --warrant <path> --reason '<why>'   # record oracle 3 for ONE path, then exit
 #
 # Env seams (all optional; the CC_WTGC_* bins exist so bats can fixture the oracles):
 #   CC_WTGC_EXCLUDE       colon-separated paths never touched (also covers nested worktrees)
@@ -83,6 +112,10 @@
 #   CC_WTGC_ABANDON_HOURS DISPOSE-class age floor in hours (default: 72)
 #   CC_WTGC_BACKLOG       ownership oracle 1 — backlog ledger (default: ~/.claude/bin/cc-backlog)
 #   CC_WTGC_TEAMS_DIR     ownership oracle 2 — team registry (default: ~/.claude/teams)
+#   CC_WTGC_WARRANTS      ownership oracle 3 — explicit dispose warrants, TSV
+#                         (default: ~/.claude/autonomy/worktree-warrants.tsv). Deliberately NOT
+#                         JSON: this is the oracle that has to still work when the inferred ones
+#                         cannot, so it must not inherit their `jq` dependency.
 #   CC_WTGC_DISPOSAL_LOG  append-only disposal ledger
 #                         (default: ~/.claude/autonomy/worktree-disposals.jsonl)
 #   CC_WTGC_CC_NOTIFY / CC_WTGC_LSOF / CC_WTGC_PGREP / CC_WTGC_JQ    oracle binaries
@@ -95,20 +128,48 @@ set -uo pipefail
 DRY_RUN=0
 PRUNE_BRANCHES=0
 DISPOSE_ABANDONED=0
+WARRANT_PATH=""
+WARRANT_REASON=""
+USAGE="usage: worktree-gc.sh [--prune-branches] [--dispose-abandoned] [--dry-run]
+       worktree-gc.sh --warrant <worktree-path> --reason '<why this is abandoned>'"
+# `--warrant` and `--reason` take a VALUE, so the loop carries a one-slot latch: a flag sets WANT,
+# and the next argument is consumed as that flag's value instead of being parsed as a flag. A
+# trailing flag with no value left is an ERROR, never a silently-empty warrant.
+WANT=""
 for arg in "$@"; do
+  if [ -n "$WANT" ]; then
+    case "$WANT" in
+      warrant) WARRANT_PATH="$arg" ;;
+      reason)  WARRANT_REASON="$arg" ;;
+    esac
+    WANT=""
+    continue
+  fi
   case "$arg" in
     --dry-run|-n)         DRY_RUN=1 ;;
     --prune-branches)     PRUNE_BRANCHES=1 ;;
     --dispose-abandoned)  DISPOSE_ABANDONED=1 ;;
+    --warrant)            WANT=warrant ;;
+    --reason)             WANT=reason ;;
     --prune)              : ;;   # compat alias: the guard hook's advertised invocation == default
     -h|--help)
       sed -n '2,/^# bash 3\.2-safe/p' "$0" | sed 's/^# \{0,1\}//'
       exit 0 ;;
     *) echo "worktree-gc: unknown flag '$arg'" >&2
-       echo "usage: worktree-gc.sh [--prune-branches] [--dispose-abandoned] [--dry-run]" >&2
+       echo "$USAGE" >&2
        exit 2 ;;
   esac
 done
+if [ -n "$WANT" ]; then
+  echo "worktree-gc: --$WANT requires a value" >&2
+  echo "$USAGE" >&2
+  exit 2
+fi
+if [ -z "$WARRANT_PATH" ] && [ -n "$WARRANT_REASON" ]; then
+  echo "worktree-gc: --reason is only meaningful with --warrant" >&2
+  echo "$USAGE" >&2
+  exit 2
+fi
 
 GIT_BIN="${CC_WTGC_GIT:-git}"
 JQ_BIN="${CC_WTGC_JQ:-jq}"
@@ -123,6 +184,7 @@ ABANDON_HOURS="${CC_WTGC_ABANDON_HOURS:-72}"
 BACKLOG_BIN="${CC_WTGC_BACKLOG:-$HOME/.claude/bin/cc-backlog}"
 TEAMS_DIR="${CC_WTGC_TEAMS_DIR:-$HOME/.claude/teams}"
 DISPOSAL_LOG="${CC_WTGC_DISPOSAL_LOG:-$HOME/.claude/autonomy/worktree-disposals.jsonl}"
+WARRANTS_FILE="${CC_WTGC_WARRANTS:-$HOME/.claude/autonomy/worktree-warrants.tsv}"
 
 MAIN="$("$GIT_BIN" -C "${CC_WTGC_REPO:-$PWD}" rev-parse --show-toplevel 2>/dev/null)"
 if [ -z "$MAIN" ]; then
@@ -143,6 +205,89 @@ canon() {
   case "$p" in /private/tmp/*) p="/tmp/${p#/private/tmp/}" ;; esac
   printf '%s' "$p"
 }
+
+# ── Oracle 3 WRITER: `--warrant <path> --reason '<why>'` records ONE abandon decision. ───
+# Runs before the mutex and before every oracle — it appends a text line and exits, it never
+# touches a worktree. Every validation here fails LOUD (exit 2) instead of writing a record that
+# would be silently rejected as malformed at read time: a warrant that quietly never fires is the
+# same "no operator action required means nothing happens" failure the DISPOSE class was filed for.
+if [ -n "$WARRANT_PATH" ]; then
+  WP="$(canon "$WARRANT_PATH")"; [ -n "$WP" ] || WP="$WARRANT_PATH"
+  if [ -z "$WARRANT_REASON" ]; then
+    echo "worktree-gc: --warrant requires --reason '<why this is abandoned>'." >&2
+    echo "worktree-gc: The reason IS the record — a disposal ledger that cannot say why the" >&2
+    echo "worktree-gc: directory went is exactly what git alone already fails to give us." >&2
+    exit 2
+  fi
+  TAB="$(printf '\t')"
+  case "$WARRANT_REASON" in
+    *"$TAB"*|*'
+'*) echo "worktree-gc: --reason must not contain a tab or a newline (it is one TSV field)" >&2
+       exit 2 ;;
+  esac
+  if [ "$(canon "$MAIN")" = "$WP" ]; then
+    echo "worktree-gc: refusing to warrant the primary checkout ($MAIN)" >&2
+    exit 2
+  fi
+  # Records come ONLY from `git worktree list` — never a directory test. A warrant must not be
+  # writable against a bare directory, and ~/Development/.worktrees is shared across 5 repos
+  # (audit §6), so "the path exists" proves nothing about which repo owns it.
+  W_FOUND=0; W_BRANCH=""; W_DETACHED=0; _p=""; _b=""; _d=0
+  while IFS= read -r line; do
+    case "$line" in
+      "worktree "*)          _p="${line#worktree }"; _b=""; _d=0 ;;
+      "branch refs/heads/"*) _b="${line#branch refs/heads/}" ;;
+      "detached")            _d=1 ;;
+      "")
+        if [ -n "$_p" ] && [ "$(canon "$_p")" = "$WP" ]; then
+          W_FOUND=1; W_BRANCH="$_b"; W_DETACHED="$_d"
+        fi
+        _p=""; _b=""; _d=0 ;;
+    esac
+  done < <({ "$GIT_BIN" -C "$MAIN" worktree list --porcelain 2>/dev/null; echo; })
+  if [ "$W_FOUND" = "0" ]; then
+    echo "worktree-gc: '$WARRANT_PATH' is not a linked worktree of $MAIN." >&2
+    echo "worktree-gc: Warrants are keyed on git's own worktree records, never on a directory." >&2
+    exit 2
+  fi
+  if [ "$W_DETACHED" = "1" ] || [ -z "$W_BRANCH" ]; then
+    echo "worktree-gc: '$WARRANT_PATH' is on a detached HEAD — no branch would preserve its" >&2
+    echo "worktree-gc: commits after disposal, so there is nothing to pin the warrant to." >&2
+    echo "worktree-gc: Give it a branch first: git -C '$WARRANT_PATH' switch -c <name>" >&2
+    exit 2
+  fi
+  W_HEAD="$("$GIT_BIN" -C "$MAIN" rev-parse --verify --quiet "refs/heads/$W_BRANCH" 2>/dev/null)"
+  if [ -z "$W_HEAD" ]; then
+    echo "worktree-gc: cannot resolve refs/heads/$W_BRANCH — refusing to write an unpinnable warrant" >&2
+    exit 2
+  fi
+  # The blast radius, shown HERE because here is where the decision is actually made. `git status
+  # --porcelain` cannot see gitignored content and `git worktree remove` deletes it anyway at exit
+  # 0 — so without this line the operator authorises a loss nothing would ever have told them about.
+  W_IGNORED="$("$GIT_BIN" -C "$WP" status --porcelain --ignored 2>/dev/null | sed -n 's/^!! //p' | sort)"
+  if [ "$DRY_RUN" = "1" ]; then
+    echo "would warrant  $WP [$W_BRANCH] @ $W_HEAD — $WARRANT_REASON   [DRY-RUN — nothing was written]"
+    exit 0
+  fi
+  mkdir -p "$(dirname "$WARRANTS_FILE")" 2>/dev/null
+  if ! printf '%s\t%s\t%s\n' "$WP" "$W_HEAD" "$WARRANT_REASON" >> "$WARRANTS_FILE" 2>/dev/null; then
+    echo "worktree-gc: could not append the warrant to $WARRANTS_FILE" >&2
+    exit 2
+  fi
+  echo "worktree-gc: dispose warrant recorded in $WARRANTS_FILE"
+  echo "  path    $WP"
+  echo "  pinned  $W_BRANCH @ $W_HEAD  (if that tip moves, work resumed ⇒ the warrant goes STALE and is ignored)"
+  echo "  reason  $WARRANT_REASON"
+  if [ -n "$W_IGNORED" ]; then
+    echo "worktree-gc: BLAST RADIUS — disposal also destroys this worktree's gitignored content,"
+    echo "worktree-gc: which no gate can see and git preserves nowhere:"
+    printf '%s\n' "$W_IGNORED" | sed 's/^/    ! /'
+  fi
+  echo "worktree-gc: the DIRECTORY is reaped by the next 'worktree-gc.sh --dispose-abandoned';"
+  echo "worktree-gc: refs/heads/$W_BRANCH is PRESERVED (restore: git worktree add $WP $W_BRANCH)."
+  echo "worktree-gc: revoke by deleting that line from $WARRANTS_FILE."
+  exit 0
+fi
 
 # claude_cwds — raw cwd of every live `claude` process. Factored out of the oracle block below
 # so the pre-mutation re-check can re-read the SAME truth: the classify→act window is minutes
@@ -262,7 +407,14 @@ op_in_progress() { # <path> → 0 iff a rebase/merge/cherry-pick/bisect is parke
 # TRI-STATE: an unreadable ledger must stay unreadable for the whole pass, never silently
 # re-read as "fine" on the second lookup.
 BACKLOG_STATE=0; BACKLOG_TABLE=""; BACKLOG_ERR=""; ITEM_ID=""; ITEM_WHY=""; OP_KIND=""
-TEAM_WHY=""; OWNER_KIND=""
+TEAM_WHY=""; OWNER_KIND=""; WARRANT_WHY=""
+# OWNER_ACTIVE splits the two ways A2 can fail, because they take OPPOSITE remedies and lumping
+# them together makes the residue line name the WRONG one. 1 = an oracle positively answered "not
+# terminal" (an open/claimed/blocked item, a reopened item, a live team) ⇒ the work is owned and
+# parked, so the remedy is to land it or resolve the item — NEVER `cc-backlog done`, which would
+# falsify the ledger to reap a directory. 0 = every oracle was SILENT ⇒ nothing will ever rule on
+# it, which is the residue oracle 3 exists to drain.
+OWNER_ACTIVE=0
 load_backlog() {
   case "$BACKLOG_STATE" in 1) return 0 ;; 2) return 1 ;; esac
   BACKLOG_STATE=2
@@ -289,6 +441,7 @@ item_terminal() { # <worktree-basename> → 0 iff its owning backlog item folds 
   if [ "$st" = "done" ]; then ITEM_ID="$id"; return 0; fi
   if [ "$wd" = "true" ]; then ITEM_WHY="owning item $id was REOPENED (now '$st')"
   else                        ITEM_WHY="owning item $id is '$st', not terminal"; fi
+  OWNER_ACTIVE=1     # an oracle RULED, and said the work is still owned — not the silent residue
   return 1
 }
 
@@ -329,23 +482,101 @@ team_terminal() { # <worktree-basename> → 0 iff the owning TEAM has concluded
          esac ;;
     esac
   done
-  if [ "$live_hit" = "1" ]; then TEAM_WHY="teammate of a LIVE team — an active wave"; return 1; fi
+  if [ "$live_hit" = "1" ]; then
+    TEAM_WHY="teammate of a LIVE team — an active wave"
+    OWNER_ACTIVE=1   # an oracle RULED, and said the work is still owned — not the silent residue
+    return 1
+  fi
   [ -n "$dead_hit" ] || { TEAM_WHY="no owning team names teammate '$member'"; return 1; }
   ITEM_ID="$member"; TEAM_WHY="$dead_hit"
   return 0
 }
 
-owner_terminal() { # <worktree-basename> → 0 iff ANY oracle proves the owner is finished or gone
-  # Both oracles must be consulted before a KEEP: the backlog one answers for `wt-<id>` worktrees,
-  # the team one for `wt-tm-<m>`. ITEM_WHY is left holding the verdict of the oracle that was
-  # actually APPLICABLE, so the KEEP line names a real reason instead of the wrong oracle's miss.
-  OWNER_KIND=""
+ignored_inventory() { # <path> → the gitignored entries removal would destroy, comma-joined
+  # `git status --porcelain` — gate 3, and cc-reaper's untracked guard — is BLIND to ignored
+  # content, and `git worktree remove` deletes it anyway at exit 0 with no --force and no warning
+  # (reproduced 2026-07-30: a worktree holding only `secrets.env` removes clean and the file is
+  # gone). Disposal cannot refuse on it — measured on the live residue, 6 of 6 candidates carry
+  # `.claude-plans/`/`.claude-tasks/`/`__pycache__/`, so a KEEP gate here would make oracle 3
+  # inert by construction, which is precisely how oracle 1 failed. So it is NAMED instead: shown
+  # at warrant time, where the decision is actually made, and recorded in the ledger, so a
+  # destructive act always states its blast radius.
+  "$GIT_BIN" -C "$1" status --porcelain --ignored 2>/dev/null \
+    | sed -n 's/^!! //p' | sort | tr '\n' ',' | sed 's/,$//'
+}
+
+warrant_terminal() { # <canon-path> <branch> → 0 iff an explicit, path-exact, sha-current warrant applies
+  # ORACLE 3, and the only NON-inferred one: oracles 1 and 2 read a record kept for another
+  # purpose, so a worktree named for a feature rather than a backlog id or a team member is
+  # invisible to both and no amount of age can reach it. Deliberately reads a TSV with awk and
+  # never jq — this is the oracle that has to work when the inferred ones cannot, so it must not
+  # inherit their dependency. Fails closed on absent / malformed / STALE.
+  WARRANT_WHY=""
+  local cpath="$1" branch="$2" row w_head w_reason head
+  [ -f "$WARRANTS_FILE" ] || { WARRANT_WHY="no dispose warrant recorded"; return 1; }
+  # LAST match wins, so re-warranting a path supersedes an earlier record without an edit.
+  # $1==p is an EXACT compare on the canonical path — never a basename (basenames collide across
+  # the 5 repos sharing ~/Development/.worktrees) and never a prefix.
+  # A trailing slash is the one hand-edit slip forgiven here; everything else must match exactly.
+  row="$(awk -F'\t' -v p="$cpath" '{k=$1; sub(/\/+$/,"",k)} k==p{r=$0} END{if (r != "") print r}' \
+    "$WARRANTS_FILE" 2>/dev/null)"
+  [ -n "$row" ] || { WARRANT_WHY="no dispose warrant names this path"; return 1; }
+  w_head="$(printf '%s' "$row" | cut -f2)"
+  w_reason="$(printf '%s' "$row" | cut -f3-)"
+  [ -n "$w_reason" ] || { WARRANT_WHY="dispose warrant is MALFORMED (no reason recorded)"; return 1; }
+  case "$w_head" in
+    ''|*[!0-9a-fA-F]*) WARRANT_WHY="dispose warrant is MALFORMED (pinned sha '$w_head' is not a sha)"; return 1 ;;
+  esac
+  # A short pin would match many commits — a pin that loose is not a content check at all.
+  if [ "${#w_head}" -lt 7 ]; then
+    WARRANT_WHY="dispose warrant is MALFORMED (pinned sha '$w_head' is under 7 chars)"; return 1
+  fi
+  head="$("$GIT_BIN" -C "$MAIN" rev-parse --verify --quiet "refs/heads/$branch" 2>/dev/null)"
+  [ -n "$head" ] || { WARRANT_WHY="dispose warrant unverifiable — refs/heads/$branch will not resolve"; return 1; }
+  case "$head" in
+    "$w_head"*) : ;;
+    *) WARRANT_WHY="dispose warrant is STALE — pinned at $w_head but $branch is now $head (work resumed after the decision)"
+       return 1 ;;
+  esac
+  WARRANT_WHY="explicit dispose warrant — $w_reason"
+  return 0
+}
+
+owner_terminal() { # <basename> <canon-path> <branch> → 0 iff ANY oracle proves the owner is finished or gone
+  # All three oracles are consulted before a KEEP: the backlog one answers for `wt-<id>`, the team
+  # one for `wt-tm-<m>`, and the warrant for anything an operator has explicitly ruled on.
+  # ITEM_WHY is left holding the verdict of the oracle that was actually APPLICABLE, so the KEEP
+  # line names a real reason instead of the wrong oracle's miss.
+  OWNER_KIND=""; WARRANT_WHY=""; OWNER_ACTIVE=0
   if item_terminal "$1"; then OWNER_KIND="backlog item $ITEM_ID done"; return 0; fi
-  local bl_why="$ITEM_WHY"
+  local bl_why="$ITEM_WHY" bl_active="$OWNER_ACTIVE"
+  # Reset before the team oracle so the flag it leaves is attributable to THAT oracle alone.
+  # Without this, a merely-blocked backlog item is indistinguishable from a live team, and the
+  # veto below would fire on it — naming the wrong oracle's reason and skipping oracle 3 entirely.
+  OWNER_ACTIVE=0
   if team_terminal "$1"; then OWNER_KIND="$TEAM_WHY"; return 0; fi
+  local tm_live="$OWNER_ACTIVE"
+  # A LIVE owning team VETOES the warrant: an active wave outranks a decision recorded before it,
+  # and the same precedence already governs a live team against a dead one naming the same member.
+  # A merely-blocked ITEM is NOT a veto — a warrant is a later, more specific decision than the
+  # ledger status, and disposal only ever removes the directory.
+  if [ "$tm_live" = "1" ]; then ITEM_WHY="$TEAM_WHY"; OWNER_ACTIVE=1; return 1; fi
+  if warrant_terminal "$2" "$3"; then
+    ITEM_ID="$1"
+    OWNER_KIND="$WARRANT_WHY"
+    return 0
+  fi
+  OWNER_ACTIVE="$bl_active"
   case "$1" in
     wt-tm-?*) ITEM_WHY="$TEAM_WHY" ;;
     *)        ITEM_WHY="$bl_why" ;;
+  esac
+  # Name oracle 3's verdict too whenever it had something to report. A STALE or MALFORMED warrant
+  # is a real finding: staying silent about it would read as "nobody ever wrote one", which is the
+  # opposite of the truth and would leave the operator re-writing a warrant that already exists.
+  case "$WARRANT_WHY" in
+    ''|'no dispose warrant'*) : ;;
+    *) ITEM_WHY="$ITEM_WHY; $WARRANT_WHY" ;;
   esac
   return 1
 }
@@ -378,14 +609,17 @@ verify_preserved() { # <branch> <head-sha> <unlanded-set-before> → 0 iff nothi
 
 json_esc() { printf '%s' "${1:-}" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 
-log_disposal() { # <path> <branch> <head> <n> <patch-shas> <item> <idle-h> <verified> <owner-proof>
-  # `owner_proof` records WHICH oracle authorised the disposal (a done backlog item vs a dead or
-  # archived team). Without it the ledger cannot answer, months later, why this directory went.
+log_disposal() { # <path> <branch> <head> <n> <patch-shas> <item> <idle-h> <verified> <owner-proof> <ignored>
+  # `owner_proof` records WHICH oracle authorised the disposal (a done backlog item, a dead or
+  # archived team, or an explicit warrant). Without it the ledger cannot answer, months later, why
+  # this directory went. `destroyed_ignored` is the blast radius: the gitignored paths that went
+  # with it, which git records NOWHERE and no gate can see — the only trace they ever existed.
   local dir; dir="$(dirname "$DISPOSAL_LOG")"
   mkdir -p "$dir" 2>/dev/null || return 0
-  printf '{"ts":"%s","event":"worktree-disposed","path":"%s","branch":"%s","head":"%s","unlanded_patches":%s,"patch_shas":"%s","owner_item":"%s","owner_proof":"%s","idle_hours":%s,"preserved_at":"refs/heads/%s","verified":"%s"}\n' \
+  printf '{"ts":"%s","event":"worktree-disposed","path":"%s","branch":"%s","head":"%s","unlanded_patches":%s,"patch_shas":"%s","owner_item":"%s","owner_proof":"%s","idle_hours":%s,"preserved_at":"refs/heads/%s","verified":"%s","destroyed_ignored":"%s"}\n' \
     "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(json_esc "$1")" "$(json_esc "$2")" "$3" "$4" \
     "$(json_esc "$5")" "$(json_esc "$6")" "$(json_esc "${9:-}")" "$7" "$(json_esc "$2")" "$8" \
+    "$(json_esc "${10:-}")" \
     >> "$DISPOSAL_LOG" 2>/dev/null || true
 }
 
@@ -412,14 +646,17 @@ protected_branch() { # never deleted, whatever the evidence says
 }
 
 N_REMOVED=0; N_KEPT=0; N_BR_DELETED=0; N_REFUSED=0; N_DISPOSED=0; N_DISPOSE_CAND=0; VERIFY_FAIL=0
-N_UNOWNED=0
+N_UNOWNED=0; N_OWNER_ACTIVE=0
 PREFIX=""; [ "$DRY_RUN" = "1" ] && PREFIX="would "
 
 dispose_record() { # <path> <canon> <branch> <base> <idle-hours> <n-unlanded> — the DISPOSE action
   # Reached only once A1 (age) and A2 (owning item terminal) hold and every KEEP gate has passed.
   # A3 (durable-ref preservation) is proved HERE, twice: before removal and again after it.
   local path="$1" cpath="$2" branch="$3" base="$4" idle_h="$5" n="$6"
-  local head wt_head before shas note
+  local head wt_head before shas note ignored
+  # Read the blast radius BEFORE removal — afterwards the directory is gone and the answer is
+  # unrecoverable, which is exactly why this content has never been accounted for anywhere.
+  ignored="$(ignored_inventory "$path")"
   head="$("$GIT_BIN" -C "$MAIN" rev-parse --verify --quiet "refs/heads/$branch" 2>/dev/null)"
   wt_head="$("$GIT_BIN" -C "$path" rev-parse HEAD 2>/dev/null)"
   before="$(unlanded_set "$branch")"
@@ -453,11 +690,12 @@ dispose_record() { # <path> <canon> <branch> <base> <idle-hours> <n-unlanded> �
     return 0
   fi
   if verify_preserved "$branch" "$head" "$before"; then
-    log_disposal "$path" "$branch" "$head" "$n" "$shas" "$ITEM_ID" "$idle_h" "points-at+cherry-set" "$OWNER_KIND"
+    log_disposal "$path" "$branch" "$head" "$n" "$shas" "$ITEM_ID" "$idle_h" "points-at+cherry-set" "$OWNER_KIND" "$ignored"
     echo "dispose $path [$branch] — $note · VERIFIED preserved (restore: git worktree add <path> $branch)"
+    [ -n "$ignored" ] && echo "        └ gitignored content destroyed with it (git records this nowhere else): $ignored"
     N_DISPOSED=$((N_DISPOSED + 1))
   else
-    log_disposal "$path" "$branch" "$head" "$n" "$shas" "$ITEM_ID" "$idle_h" "FAILED" "$OWNER_KIND"
+    log_disposal "$path" "$branch" "$head" "$n" "$shas" "$ITEM_ID" "$idle_h" "FAILED" "$OWNER_KIND" "$ignored"
     echo "worktree-gc: PRESERVATION UNVERIFIED after removing $path [$branch] — the unlanded patch set at" >&2
     echo "worktree-gc: refs/heads/$branch no longer matches what was there. Recover from $head." >&2
     N_DISPOSED=$((N_DISPOSED + 1)); VERIFY_FAIL=$((VERIFY_FAIL + 1))
@@ -512,9 +750,14 @@ process_record() {
         n="$(unlanded_set "$branch" | grep -c . | tr -d ' ')"
         if [ "$((age / 60))" -lt "$ABANDON_HOURS" ]; then
           why="idle $((age / 60))h < ${ABANDON_HOURS}h abandon horizon"
-        elif ! owner_terminal "$base"; then
+        elif ! owner_terminal "$base" "$cpath" "$branch"; then
           why="$ITEM_WHY"
-          N_UNOWNED=$((N_UNOWNED + 1))
+          # Two DIFFERENT stuck states with OPPOSITE remedies — see OWNER_ACTIVE. Counting them
+          # as one number makes the summary prescribe the wrong fix for whichever half it is not
+          # describing, and `cc-backlog done` on a merely-blocked item would falsify the ledger
+          # to reap a directory.
+          if [ "$OWNER_ACTIVE" = "1" ]; then N_OWNER_ACTIVE=$((N_OWNER_ACTIVE + 1))
+          else                               N_UNOWNED=$((N_UNOWNED + 1)); fi
         else
           dispose_record "$path" "$cpath" "$branch" "$base" "$((age / 60))" "$n"
           return 0
@@ -601,12 +844,19 @@ echo "worktree-gc: removed $N_REMOVED worktree(s) · disposed $N_DISPOSED abando
 if [ "$N_DISPOSE_CAND" -gt 0 ]; then
   echo "worktree-gc: $N_DISPOSE_CAND abandoned-unlanded worktree(s) are reapable — pass --dispose-abandoned to reap them (every branch is preserved; disposals are logged to $DISPOSAL_LOG)"
 fi
-# The un-ownable RESIDUE. These are past the abandon horizon and clean, and NO oracle can prove
-# their owner is finished or gone — so no automatic path will ever reap them, by design. Reporting
-# the count is what keeps that permanent-KEEP bucket from silently regrowing into the 2026-07-26
-# measurement (37 stuck, invisible because every one was just another KEEP line among dozens).
+# The un-ownable RESIDUE, reported as the TWO states it actually is. Reporting a count at all is
+# what keeps the permanent-KEEP bucket from silently regrowing into the 2026-07-26 measurement (37
+# stuck, invisible because every one was just another KEEP line among dozens) — but a single number
+# spanning both states has to name one remedy for two opposite situations, and the remedy it named
+# ("record the owner terminal") is actively WRONG for the owned half: marking a merely-blocked item
+# `done` falsifies the ledger in order to reap a directory. Measured 2026-07-30: 6 stuck, 4 of them
+# owned-and-blocked, i.e. the message was misprescribing for the majority of what it counted.
 if [ "$N_UNOWNED" -gt 0 ]; then
-  echo "worktree-gc: $N_UNOWNED unlanded worktree(s) are past the ${ABANDON_HOURS}h horizon but have NO provable owner — never auto-reaped. Land the branch, or record the owner terminal (cc-backlog done <id> / tear the team down), then re-run."
+  echo "worktree-gc: $N_UNOWNED unlanded worktree(s) are past the ${ABANDON_HOURS}h horizon with NO ownership oracle at all — nothing will ever rule on them. Land the branch, record the owner terminal (cc-backlog done <id> / tear the team down), or warrant the path explicitly:"
+  echo "worktree-gc:   bash scripts/worktree-gc.sh --warrant <path> --reason '<why it is abandoned>'"
+fi
+if [ "$N_OWNER_ACTIVE" -gt 0 ]; then
+  echo "worktree-gc: $N_OWNER_ACTIVE unlanded worktree(s) are past the ${ABANDON_HOURS}h horizon but their owner is provably NOT terminal (an open/claimed/blocked item, or a live team) — this is owned, parked work, not residue. Land it or resolve the item; do NOT mark an item done to reap a directory."
 fi
 if [ "$VERIFY_FAIL" -gt 0 ]; then
   echo "worktree-gc: $VERIFY_FAIL disposal(s) could NOT be verified as preserved — see $DISPOSAL_LOG" >&2
