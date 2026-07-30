@@ -227,6 +227,35 @@ _iso_now() { date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true; }
 # fabricated 0 — R9: a field that cannot measure must read ABSENT, not zero, or "not measured" is
 # indistinguishable from a real zero. firing_rss_kb logged a false 0 in 141 of 141 fires by
 # breaking exactly this rule).
+# V2 §6 F13 — A REFUSED FIRE MUST LEAVE A RECORD.
+# Every pre-fire gate exits BEFORE spawn and therefore before emit_handoff_telemetry, so a refusal
+# writes NOTHING anywhere: handoffs.jsonl holds only fires that actually happened. Measured
+# consequence — the capacity gate is ON BY DEFAULT at ceiling 2.0/core, is already live via the
+# ~/.claude/scripts symlink, and refuses whenever 1-min load exceeds that. On this box that has meant
+# refusing intermittently all day (load has ranged 15-41 on 10 cores). So the fleet can
+# stop firing entirely and the telemetry shows silence rather than a reason. That is the
+# absence-alarm-needs-existence-evidence shape: "no fires logged" and "no fires attempted" are
+# indistinguishable, and the operator cannot tell a quiet fleet from a blocked one.
+#
+# This records the refusal WITHOUT touching the policy. The ceiling and the admit/refuse decision are
+# row 13's surface and are not altered here — only the legibility of the outcome, which is row 2's.
+# Fully guarded: a telemetry failure must never change the refusal's own exit code.
+emit_fire_refusal() { # $1=reason $2=detail → always 0
+  local log="$HOME/.claude/logs/handoffs.jsonl" line
+  [ "${CC_FIRE_REFUSAL_LOG:-1}" != 0 ] || return 0
+  mkdir -p "$HOME/.claude/logs" 2>/dev/null || return 0
+  if command -v jq >/dev/null 2>&1; then
+    line=$(jq -cn --arg ts "$(_iso_now)" --arg fs "${FIRING_SID:-}" --arg r "${1:-unknown}" \
+                  --arg d "${2:-}" --arg ac "${CHOSEN:-}" \
+      '{ts:$ts, class:"refused", engaged:false, refuse_reason:$r}
+       + {firing_sid:(if $fs == "" then null else $fs end)}
+       + {account:   (if $ac == "" then null else $ac end)}
+       + {detail:    (if $d  == "" then null else $d  end)}' 2>/dev/null) || line=""
+    [ -n "$line" ] && { printf '%s\n' "$line" >> "$log" 2>/dev/null || true; }
+  fi
+  return 0
+}
+
 _iso_delta_s() { # $1=start $2=end → seconds, or "" when unparseable
   local s e
   [ -n "${1:-}" ] && [ -n "${2:-}" ] || return 0
@@ -1095,6 +1124,7 @@ check_slash_head() { # $1=prompt-file → 0 ok/warned, 1 (loud) if a /goal head 
   if [ "$head" = "/goal" ] && [ "$total" -gt "$limit" ]; then
     echo "!! prompt STARTS with $head and the whole payload is ${total} chars — the harness parses the ENTIRE submission as $head and HARD-CAPS it at ${limit}, so this fire would be REJECTED and the pane would idle at an empty composer (memory handoff-fire-goal-prefix-trap)." >&2
     echo "   Fix: start the brief with PLAIN TEXT (move /goal to its own short pointer line, or drop it) — e.g. 'TASK — <one line>. …', keeping any /goal condition <=${limit} chars." >&2
+    emit_fire_refusal payload-goal-cap "first line is $head and payload is ${total} > ${limit} chars"
     return 1
   fi
   echo "⚠ prompt starts with the slash command '$head' — the harness parses the whole submission as a command, not a brief. Prefer a PLAIN-TEXT first line (handoff-fire-goal-prefix-trap)." >&2
@@ -1149,6 +1179,10 @@ capacity_gate() {
     echo "   The box is saturated; another Opus-max session would make every live session slower." >&2
     echo "   Shed load first (close finished panes / let the wave drain), then re-fire." >&2
     echo "   Override for one fire: CC_FIRE_CAPACITY_GATE=off ; raise the bar: CC_FIRE_MAX_LOAD_PER_CORE=<n>" >&2
+    # F13 — leave a RECORD. This gate exits before spawn and so before emit_handoff_telemetry, which
+    # made a load-blocked fleet indistinguishable from a quiet one in handoffs.jsonl. The admit/refuse
+    # DECISION and the ceiling are row 13's surface and are untouched; only the legibility is row 2's.
+    emit_fire_refusal capacity "load ${load} on ${ncpu} cores = ${lpc}/core > ceiling ${ceiling}/core"
     return 9
   fi
   echo "-- capacity gate: ADMIT — load ${load} on ${ncpu} cores = ${lpc}/core (ceiling ${ceiling}/core)" >&2
@@ -1167,6 +1201,47 @@ capacity_gate() {
 # carry no back-channel. payload-lint accepts role-indirection (cc-roles/<role>, --role) so every /goal
 # fire — which resolves the desk via `cat ~/.claude/cc-roles/desk`, not a frozen uuid — passes.
 #   $1 = payload file   $2 = mode: 'enforce' (abort a RED-with-intent fire, return 4) | 'preview' (report only)
+# V2 §5.5 / M-11 — TRUNCATED PANE UUIDs in the payload, refused at the chokepoint (R7, R11).
+# scripts/pane-id-lint.sh exists on trunk and is invoked from NOWHERE — orphaned detection, not a
+# gate. R11: a truncated pane id is strictly WORSE than a stale one. A stale-full address fails loud
+# and still mailboxes; a truncated one hard-fails unresolvable (the measured cc-notify exit-3), and
+# the truncation enters at AUTHORING time — so the payload is exactly the right place to catch it,
+# because a payload is what the next successor copies its addresses from.
+#
+# SCOPED TO THE PAYLOAD, DELIBERATELY. The lint can also scan the whole docs corpus, and doing that
+# here would be a fleet-wide hard stop: the live corpus currently carries 28 violations across 12+
+# files owned by other rows (V2 §2 M-19), so a corpus-scoped gate would refuse every fire on the box
+# over other authors' files. Block on what this fire OWNS; report the rest labelled.
+# CC_PANE_ID_GATE=0 disables (R8).
+payload_pane_id_gate() { # $1=prompt-file → 0 ok / 3 refuse
+  local pf="${1:-}" lint out d
+  [ "${CC_PANE_ID_GATE:-1}" != 0 ] || return 0
+  [ -f "$pf" ] || return 0
+  # Resolve the lint the same 3-path way the mailbox lib is resolved: script-relative FIRST (the
+  # checkout, always present), then the config dir, then the $HOME backstop. A CLAUDE_CONFIG_DIR-only
+  # lookup is silently dead on the eval track, where ~/.claude-next/scripts is an 11-day-old COPY.
+  for d in "${HF_DIR:-}/pane-id-lint.sh" \
+           "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/pane-id-lint.sh" \
+           "$HOME/.claude/scripts/pane-id-lint.sh"; do
+    [ -x "$d" ] && { lint="$d"; break; }
+  done
+  [ -n "${lint:-}" ] || return 0            # lint unavailable → cannot gate (best-effort, like the lint gate)
+  # the lint scans a DIRECTORY, so hand it a private one holding only this payload
+  local box; box="$(mktemp -d "${TMPDIR:-/tmp}/handoff-paneid-XXXXXX")" || return 0
+  cp "$pf" "$box/payload.md" 2>/dev/null || { rm -rf "$box"; return 0; }
+  if out="$("$lint" "$box" 2>&1)"; then rm -rf "$box"; return 0; fi
+  rm -rf "$box"
+  { echo "!! handoff-fire ABORTED: the payload carries TRUNCATED pane id(s) — a landmine for the successor."
+    printf '%s\n' "$out" | sed 's/^/!!   /'
+    echo "!!   A truncated id is worse than a stale one: stale-full fails loud AND mailboxes; truncated"
+    echo "!!   hard-fails unresolvable (cc-notify exit 3). Use a ROLE token for an operational address"
+    echo "!!   (resolved at send time) and the FULL uuid for a historical fact."
+    echo "!!   Intentional counter-example? add  pane-id-lint:allow  to that line."
+    echo "!!   Override: CC_PANE_ID_GATE=0"
+  } >&2
+  return 3
+}
+
 payload_lint_gate() {
   local pf="$1" mode="$2" out rc intent=0
   [ -x "$PAYLOAD_LINT_BIN" ] || return 0     # lint tool absent → cannot gate (best-effort; upstream -f/-s guards ran)
@@ -2947,7 +3022,9 @@ else
   # RED-with-intent (cc-notify present but block malformed, or a SendMessage terminal-announce) → abort
   # LOUD (exit 4) BEFORE any side effect; a pure one-way fire passes (advisory only). Role-indirection
   # (/goal fires) passes — payload-lint accepts cc-roles/<role>.
-  payload_lint_gate "$PROMPT_FILE" enforce || exit "$?"
+  # V2 §5.5 — payload legibility gates at the chokepoint, BEFORE anything is spawned.
+  payload_pane_id_gate "$PROMPT_FILE" || { _g=$?; emit_fire_refusal payload-truncated-pane-id "payload carries a truncated pane uuid"; exit "$_g"; }
+  payload_lint_gate    "$PROMPT_FILE" enforce || { _g=$?; emit_fire_refusal payload-backchannel "malformed back-channel block"; exit "$_g"; }
   pre_trust "$LAUNCH_DIR" "$(config_dir_for_launcher "$LAUNCHER")"
   # V2 §5.3 — the fire's TRUE start, captured BEFORE the pane exists. This is the producer the
   # headline metric never had: pre-v2 the earliest timestamp anywhere was written after
