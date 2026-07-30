@@ -64,10 +64,40 @@ kimi_wired() { # 0 iff the metered Kimi hedge has a key wired (offer-gate OPEN);
 }
 
 # RT-f (abstention law): every plan / fallback / stop / refusal is recorded.
-record() { # <slot> <outcome> <detail>
+#
+# ACCOUNT_ROUTING_V2 M3b — the record now carries the decision's INPUTS, not only its output. Before
+# this it held exactly {ts, slot, outcome, detail}, so the question "did routing read LIVE quota, and
+# did it see the login cliff?" was unanswerable from disk: 252 records, none of them an input. A
+# metric with no producer is unfalsifiable, and that is the defect this campaign keeps re-finding.
+# The fields ride ADDITIVELY (existing jq consumers select .outcome / .detail and are unaffected)
+# and come from claude-accounts' `route-meta:` stderr token, so no extra invocation is needed.
+# Kill switch: CC_ROUTE_RECORD_INPUTS=off (the same switch suppresses the producer side).
+ROUTE_META=""
+record() { # <slot> <outcome> <detail>   [reads ROUTE_META]
   mkdir -p "$RECORDS_DIR" 2>/dev/null || return 0
+  local band="" ch="" cat_="" qas="" qage="" cached="" yielded="" kv k v
+  if [ "${CC_ROUTE_RECORD_INPUTS:-on}" != off ] && [ -n "$ROUTE_META" ]; then
+    for kv in $ROUTE_META; do
+      k="${kv%%=*}"; v="${kv#*=}"
+      case "$k" in
+        cliff_band) band="$v" ;; cliff_h) ch="$v" ;; cliff_at) cat_="$v" ;;
+        quota_as_of) qas="$v" ;; quota_age_s) qage="$v" ;;
+        cached) cached="$v" ;; yielded) yielded="$v" ;;
+      esac
+    done
+  fi
   jq -cn --arg slot "$1" --arg oc "$2" --arg d "$3" --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-     '{ts:$ts, slot:$slot, outcome:$oc, detail:$d}' >> "$RECORDS_DIR/route.jsonl" 2>/dev/null || true
+     --arg band "$band" --arg ch "$ch" --arg cat "$cat_" --arg qas "$qas" --arg qage "$qage" \
+     --arg cached "$cached" --arg yielded "$yielded" \
+     '{ts:$ts, slot:$slot, outcome:$oc, detail:$d}
+      + (if $band  != "" then {cliff_band:$band}                                  else {} end)
+      + (if $ch    != "" and $ch  != "-" then {cliff_h:($ch|tonumber)}            else {} end)
+      + (if $cat   != "" and $cat != "-" then {cliff_at:$cat}                     else {} end)
+      + (if $qas   != "" and $qas != "-" then {quota_as_of:$qas}                   else {} end)
+      + (if $qage  != "" and $qage!= "-" then {quota_age_s:($qage|tonumber)}      else {} end)
+      + (if $cached  != "" then {quota_cached:($cached  == "1")}                   else {} end)
+      + (if $yielded != "" then {cliff_yielded:($yielded == "1")}                  else {} end)' \
+     >> "$RECORDS_DIR/route.jsonl" 2>/dev/null || true
 }
 
 # RT-e: KEY-ANCHORED, value-bounded SSOT parse (the frontier-window-ssot-discipline recipe): the key
@@ -91,7 +121,12 @@ route_account() { # <fable|general> ; sets ROUTE_ACCT / ROUTE_REASON, returns rc
   bin="$(accounts_bin)"
   [ -n "$bin" ] || { ROUTE_REASON="claude-accounts unavailable"; return 3; }
   out="$("$bin" --route "$kind" 2>"${TMPDIR:-/tmp}/cc-route-err.$$")"; rc=$?
-  ROUTE_REASON="$(tr '\n' ' ' < "${TMPDIR:-/tmp}/cc-route-err.$$" 2>/dev/null | sed 's/  */ /g;s/ $//')"
+  # M3b: lift the machine-parseable `route-meta:` token out FIRST and EXCLUDE it from ROUTE_REASON.
+  # ROUTE_REASON is collapsed onto one line and rendered to humans / embedded in records; leaving the
+  # token in it would put the same facts in twice, once unparseably.
+  ROUTE_META="$(sed -n 's/^route-meta: //p' "${TMPDIR:-/tmp}/cc-route-err.$$" 2>/dev/null | tail -1)"
+  ROUTE_REASON="$(grep -v '^route-meta: ' "${TMPDIR:-/tmp}/cc-route-err.$$" 2>/dev/null \
+                  | tr '\n' ' ' | sed 's/  */ /g;s/ $//')"
   rm -f "${TMPDIR:-/tmp}/cc-route-err.$$"
   ROUTE_ACCT="$out"
   return "$rc"
@@ -218,7 +253,13 @@ if [ "${1:-}" = "--route" ]; then
     fable)   rc="${STUB_FABLE_RC:-0}";   name="${STUB_FABLE_ACCT:-next4}";  reason="${STUB_FABLE_REASON:-fable window closed}" ;;
     general) rc="${STUB_GENERAL_RC:-0}"; name="${STUB_GENERAL_ACCT:-next3}"; reason="${STUB_GENERAL_REASON:-all accounts capped}" ;;
   esac
-  if [ "$rc" = 0 ]; then echo "$name"; exit 0; fi
+  if [ "$rc" = 0 ]; then
+    echo "$name"
+    # M3b: a route-meta token on STDERR, only when the fixture asks for it — so the DEFAULT stub is
+    # the fail-soft control (an older claude-accounts that emits no meta at all).
+    [ -n "${STUB_ROUTE_META:-}" ] && echo "route-meta: $STUB_ROUTE_META" >&2
+    exit 0
+  fi
   echo "$reason" >&2; exit "$rc"
 fi
 exit 2
@@ -294,6 +335,37 @@ STUB
   # RT-f OUTCOME RECORDS: plans, fallbacks, cliff-stops, refusals all recorded.
   check "RT-f records carry plan+fallback+cliff-stop+refused outcomes" 0 \
     bash -c "grep -q '\"outcome\":\"plan\"' '$tmp/records/route.jsonl' && grep -q '\"outcome\":\"fallback\"' '$tmp/records/route.jsonl' && grep -q '\"outcome\":\"cliff-stop\"' '$tmp/records/route.jsonl' && grep -q '\"outcome\":\"refused\"' '$tmp/records/route.jsonl'"
+
+  # RT-h ROUTE INPUTS ARE RECORDED (ACCOUNT_ROUTING_V2 M3b). Before this the record held only
+  # {ts,slot,outcome,detail}, so "did routing read LIVE quota, and did it see the login cliff?" was
+  # unanswerable from disk — 252 records, not one of them an input. An unfalsifiable claim is the
+  # defect this campaign keeps re-finding, so the falsifier lives at the gate, not in prose.
+  META='acct=next3 cliff_band=soft cliff_h=90.3 cliff_at=2026-08-02T20:21:49Z quota_as_of=- quota_age_s=12 cached=1 yielded=0'
+  check "RT-h a plan record carries the DECISION'S INPUTS (cliff band/hours + quota freshness)" 0 \
+    bash -c "rm -f '$tmp/records/route.jsonl'; env STUB_ROUTE_META='$META' '$SELF' lead >/dev/null 2>&1;
+             jq -e 'select(.cliff_band==\"soft\" and .cliff_h==90.3 and .quota_age_s==12
+                           and .quota_cached==true and .cliff_yielded==false
+                           and .cliff_at==\"2026-08-02T20:21:49Z\")' '$tmp/records/route.jsonl' >/dev/null"
+  check "RT-h the meta token is LIFTED OUT of the human reason (never recorded twice, once unparseably)" 0 \
+    bash -c "env STUB_ROUTE_META='$META' '$SELF' lead 2>/dev/null | jq -e 'select((.reason|test(\"route-meta\"))|not)' >/dev/null"
+  # DISCRIMINATING CONTROL — an OLDER claude-accounts emits no meta at all (the live deployed state
+  # while the checkout lags trunk). The fields must be ABSENT, never fabricated or zero-filled.
+  check "RT-h fail-soft: no meta from the producer ⇒ input fields ABSENT, not invented" 0 \
+    bash -c "rm -f '$tmp/records/route.jsonl'; '$SELF' lead >/dev/null 2>&1;
+             jq -e 'select((has(\"cliff_band\")|not) and (has(\"quota_age_s\")|not) and .outcome==\"plan\")' '$tmp/records/route.jsonl' >/dev/null"
+  check "RT-h a '-' meta value records as ABSENT rather than the literal dash" 0 \
+    bash -c "rm -f '$tmp/records/route.jsonl';
+             env STUB_ROUTE_META='acct=next3 cliff_band=none cliff_h=- quota_age_s=-' '$SELF' lead >/dev/null 2>&1;
+             jq -e 'select(.cliff_band==\"none\" and (has(\"cliff_h\")|not) and (has(\"quota_age_s\")|not))' '$tmp/records/route.jsonl' >/dev/null"
+  check "RT-h R8 kill switch: CC_ROUTE_RECORD_INPUTS=off restores the 4-field record" 0 \
+    bash -c "rm -f '$tmp/records/route.jsonl';
+             env CC_ROUTE_RECORD_INPUTS=off STUB_ROUTE_META='$META' '$SELF' lead >/dev/null 2>&1;
+             jq -e 'select((keys|length)==4 and (has(\"cliff_band\")|not))' '$tmp/records/route.jsonl' >/dev/null"
+  # ...and the stdout plan contract is untouched by any of it (row 5 + row 2 parse stdout BY SHAPE).
+  check "RT-h stdout stays exactly the plan object — the meta never leaks to stdout" 0 \
+    bash -c "env STUB_ROUTE_META='$META' '$SELF' lead 2>/dev/null | jq -e 'select(.source==\"cc-route\" and .account==\"next3\")' >/dev/null"
+  check "RT-h stdout carries NO route-meta text" 1 \
+    bash -c "env STUB_ROUTE_META='$META' '$SELF' lead 2>/dev/null | grep -q route-meta"
 
   echo "cc-route selftest: $pass passed, $fail failed"
   [ "$fail" -eq 0 ] || exit 1
