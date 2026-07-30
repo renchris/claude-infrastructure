@@ -1,0 +1,497 @@
+---
+status: open
+---
+
+# ACCOUNT/QUOTA ROUTING & RELOGIN — V2 (ground-up rebuild, row 7)
+
+**Scope (frozen):** zero work stranded by a login cliff, and routing decisions read LIVE quota
+rather than a remembered one — under the standing constraint that cliffs are hard walls and the
+4 accounts are isolated from each other. Measured, landed, and verified by disk-truth acceptance
+reads.
+
+Methodology: the `ground-up` skill. Exemplars read first: `LAND_PIPELINE_V2.md` (row 1),
+`SESSION_LIFECYCLE_V2.md` (row 2 — the cell-falsification shape).
+
+**Prior row-7 docs this INTEGRATES with, never replaces:** `RELOGIN_AUTOMATION_PLAN.md`
+(the 2026-07-24..26 build + its post-mortems), `RELOGIN_BUILD_CONTRACT.md` (the frozen
+`cc-relogin` CLI contract), `docs/runbooks/RELOGIN_ACTIVATION.md`.
+
+---
+
+## Phase 0 — orchestration
+
+**Solo, not an Agent Team — deliberately.** The rebuild's whole content is a *seam* between four
+functions in ONE file (`bin/claude-accounts`: `_excluded` / `score_general` / `score_fable` /
+`ranked`) plus two small consumers. Disjoint file ownership — the precondition that makes a
+teammate wave pay — does not exist here: every mechanism below writes the same 40-line region of
+the same file. Splitting it would manufacture the same-hunk conflict the worktree rule exists to
+avoid. (The session was also instructed not to spawn subagents; Phase 1's decisions were taken
+from first-hand reads, which the skill prescribes for load-bearing calls regardless.)
+
+Build order = land order, one atomic land per mechanism, continuously:
+M1 → M2 → M3 → M4 → map row. Each land is gate-green before the next begins.
+
+---
+
+## §1 Phase 1 — the standing-constraint cell, RE-DERIVED
+
+**Cell as inherited:** *"login cliffs are hard walls; 4 isolated accounts."*
+
+**Verdict: CONFIRMED — and sharpened.** This is the campaign's first row whose cell survived
+contact with primary disk truth. It is also *insufficient as stated*, in the row-10 shape: both
+halves are true, and neither expresses the property that actually decides whether work gets
+stranded. The rename is at the end of this section.
+
+The anchor I was told to re-verify rather than inherit (memory
+`reference-claude-accounts-tooling`: `refreshTokenExpiresAt` anchors to the last INTERACTIVE
+`/login` and no token refresh extends it) is **TRUE**, proven twice from two independent primary
+sources. I did not quote the memory; both proofs are below and both are reproducible.
+
+### Proof 1 — cross-sectional, from the credential store (macOS Keychain)
+
+Read directly from each account's keychain item
+(`Claude Code-credentials-<sha256(NFC(config_dir))[:8]>`, account `chrisren`), metadata only.
+Design of the test: *if a refresh extended the refresh-token lifetime, then accounts whose
+access tokens were minted at about the same time would carry refresh-token expiries at about the
+same time.* All four accounts were holding freshly-granted access tokens:
+
+| account | access `expiresAt` | LOGIN `refreshTokenExpiresAt` | T− |
+|---|---|---|---|
+| next  | 2026-07-30T06:53:44Z | **2026-08-02T20:21:49Z** | **+90.30 h = 3.76 d** |
+| next4 | 2026-07-30T09:46:58Z | 2026-08-23T20:24:13Z | +594.34 h = 24.76 d |
+| next3 | 2026-07-30T09:14:57Z | 2026-08-24T02:22:06Z | +600.30 h = 25.01 d |
+| next2 | 2026-07-30T08:38:32Z | 2026-08-25T03:20:31Z | +625.28 h = 26.05 d |
+
+- access-expiry spread across the four: **0.120 d (2.9 h)** — every account had refreshed recently.
+- login-expiry spread across the four: **22.291 d**.
+
+A refresh that reset the refresh-token clock would collapse the second spread to approximately
+the first. It is **186× wider**. ⇒ the refresh does not reset the wall.
+
+A second, independent signal in the same payloads: the **millisecond component of `expiresAt`
+and `refreshTokenExpiresAt` is identical per account** (next `…364`/`…364`, next4 `…518`/`…518`,
+next3 `…092`/`…092`, next2 `…648`/`…648`). Both fields are therefore computed from ONE
+`Date.now()` at the grant — i.e. the server returns `refresh_token_expires_in` as a **countdown
+toward a fixed absolute wall**, re-expressed at every refresh rather than reset by it. Four of
+four matching by chance is ~1e-12.
+
+### Proof 2 — longitudinal, from the heal log (`~/.claude/logs/claude-accounts.log`)
+
+51 heal events, 2026-07-13 .. 07-28. `next3`'s history is decisive:
+
+```
+OK   2026-07-19T08:19   OK 2026-07-19T16:31   OK 2026-07-20T00:38
+OK   2026-07-22T21:46   OK 2026-07-23T06:11   OK 2026-07-23T14:27
+FAIL-BURST n=24  2026-07-24T17:29 → 07-25T01:11  (7.7 h)
+   reasons = ['Login failed: Request failed with status code …', 'timeout of 30000ms …']
+OK   2026-07-28T14:59        ← 93.5 h after the burst began
+```
+
+**Six successful refresh grants (Jul 19–23) did not move next3's wall; the refresh token died on
+Jul 24 anyway.** If each refresh had reset a ~30-day lifetime, next3 would have been good until
+~Aug 22. Recovery required an interactive login: 24 automated re-attempts inside 7.7 h all failed,
+and the account was unusable for **93.5 hours**.
+
+Caveat stated honestly: this log records only heals that `claude-accounts` itself performed — the
+`claude` binary's own in-session refreshes never appear here. That weakens nothing above (the six
+logged OKs provably happened), but it means log *gaps* are not evidence of no refresh.
+
+### What the cell gets right, and the one thing it does not say
+
+- "hard wall" — **right, and stronger than 'hard'.** Past the stamp, every refresh grant returns
+  `invalid_grant` by construction; `bin/claude-accounts:28` already documents that the heal is
+  skipped rather than burned. Nothing automated recovers it.
+- "4 isolated accounts" — **right, and it is the asset, not just the constraint.** Isolation is
+  what makes a cliff survivable: 3 accounts carry load while the 4th is quiesced.
+- **What it omits, and what actually decides the outcome: the cliff is a KNOWN ABSOLUTE
+  TIMESTAMP already sitting in the credential store, ~30 days per account, at a per-account
+  phase.** A cliff is not a random event to be defended against; it is a *scheduled maintenance
+  date the system can already read*. Every hour of the 30 days is available to prepare, and the
+  system uses none of them.
+
+**Renamed cell:** *"a login cliff is a scheduled, already-readable per-account deadline — so the
+only failure is failing to ACT on a date the system already holds; and because 4 accounts are
+isolated, acting is always affordable."*
+
+### The falsified inherited claim this exposes
+
+`docs/plans/RELOGIN_AUTOMATION_PLAN.md:266` states: *"The cliff is closed until roughly
+2026-08-23 — which is the next natural window to prove cc-relogin against, with no deadline
+pressure."* **FALSIFIED.** `next` — the operator's #1 spend-priority account
+(`accounts.json:_order`) — cliffs **2026-08-02T20:21:49Z**, three weeks earlier than the plan
+says, and it is the NEAREST cliff of the four. The prior session generalized from next3 and next4
+("both carrying refresh-token expiries ~28 days out"), and the surface it checked
+(`--login-status`, exit 0) is filtered at 72 h, so next's then-8-day-out cliff was invisible to
+it. The same filter defect described in §5/M2 produced a wrong verdict for a *human* session, not
+just for the poller. **The next natural window to prove `cc-relogin` against is not Aug 23 — it is
+`next` in under 4 days.**
+
+---
+
+## §2 Measured constants (every row re-derived from primary disk truth, 2026-07-30)
+
+| # | Constant | Value | Source |
+|---|---|---|---|
+| C1 | login-cliff period | ~30 d/account, bounded **[26.1, 30.0] d** | keychain stamps vs the login window bracketed by `claude-accounts.log` (next3 login ∈ [07-25T01:11, 07-28T14:59], cliff 08-24T02:22) |
+| C2 | access-expiry spread, 4 accounts | 0.120 d | keychain `expiresAt` |
+| C3 | login-expiry spread, 4 accounts | 22.291 d | keychain `refreshTokenExpiresAt` |
+| C4 | `next` cliff (nearest) | 2026-08-02T20:21:49Z = **T−90.30 h** | keychain |
+| C5 | next4 / next3 / next2 cliffs | T−594.34 h / T−600.30 h / T−625.28 h | keychain |
+| C6 | live sessions `k` per account | next **6** · next4 **6** · next3 **5** · next2 **6** (min 5) | `claude-accounts --no-heal --json` |
+| C7 | `cc-relogin`'s precondition | `k == 0` exactly (`k != 0` ⇒ `EXIT_REFUSED`) | `bin/cc-relogin:563-565` |
+| C8 | accounts satisfying C7 right now | **0 of 4** | C6 ∧ C7 |
+| C9 | measured cliff outage | **93.5 h** (07-24T17:29 → 07-28T14:59) | `claude-accounts.log` |
+| C10 | doomed refresh retries inside it | **24 in 7.7 h** | same |
+| C11 | successful refreshes that did NOT move next3's wall | **6** | same |
+| C12 | `login_warn_h` — the `--login-status` filter | **72.0 h** | `accounts.json:login_warn_h`; applied `bin/claude-accounts:1697,1700` |
+| C13 | poller trigger / escalation | **T−7 d (168 h)** / **T−48 h** | `bin/cc-relogin-poll:52`; `bin/claude-accounts:1515-1516` |
+| C14 | **fraction of the poller's declared window it cannot see** | **96 h of 168 h = 57.1 %** | C12 vs C13 |
+| C15 | `cc-relogin-poll` log lines, all-time | **2**, both 2026-07-26, both `nothing due` | `~/.claude/logs/cc-relogin-poll.log` |
+| C16 | `com.claude.relogin` in launchd | **not loaded**; no plist in `~/Library/LaunchAgents`; label **absent** from `launchd/fleet.manifest` (0 hits; positive control `postland` = 3) | `launchctl list`; `ls`; `grep` |
+| C17 | login-cliff references in the ROUTING path (`_excluded`/`score_general`/`score_fable`/`ranked`) | **0** (positive control: same region references `session_pct` 2×) | `bin/claude-accounts:762-832` |
+| C18 | `route.jsonl` records | 252 (232 plan · 16 cliff-stop · 2 cliff-kimi-offer · 2 refused); fields **`ts,slot,outcome,detail` only** | `~/.claude/route/route.jsonl`; `bin/cc-route:67-71` |
+| C19 | quota-percentage **denominator** | **server-side** — `limits[].percent` off `oauth/usage`; no local cap constant exists | `bin/claude-accounts:452-458` (`pick`) |
+| C20 | remembered quota in routing | **structurally barred** — every `inherit_lastgood` path leaves `row["error"]`, and `_excluded()` bails on `error` first | `bin/claude-accounts:462-470, 763-764` |
+| C21 | routing quota freshness | cache TTL **90 s**; **600 s** grace only on the lock-contention degrade path; `--fresh` never degrades | `accounts.json:cache_ttl_s,cache_grace_s` |
+| C22 | `login_expires_at` in the durable ledger | **ABSENT for 4 of 4 accounts** (ledger carries only quota) | `~/.claude/logs/claude-accounts-lastgood.json` |
+| C23 | deploy lag, shared checkout | **0** (`HEAD..origin/main`) at 2026-07-30T02:0xZ — the sawtooth was collapsed | `git rev-list --count HEAD..origin/main` |
+| C24 | my `bin/` artifacts' deploy mode | **symlinks** into the checkout ⇒ **landing == deploying** | `readlink ~/.claude/bin/{claude-accounts,cc-route,cc-relogin}` |
+| C25 | `model-config.yaml` deploy mode | live `~/.claude/model-config.yaml` is a **REAL FILE**, not a symlink; repo SSOT is `templates/model-config.yaml`; currently **byte-identical** (`cmp` clean) | `ls -l`; `cmp` |
+| C26 | `login_expires_h` staleness | **cannot go stale from cache** — re-derived from the absolute stamp after every `get_data()` | `bin/claude-accounts:1059-1082` (`refresh_login_countdown`) |
+
+**Denominator discipline (the harness trap, discharged).** Every ratio this row consumes is named
+here with its denominator: `session_pct`/`weekly_pct`/`fable_pct` are the **server's own
+percentages** off `limits[].percent` (C19) — the denominator is the plan's limit, held
+server-side, and no local constant divides anything, so the row-8 hardcoded-1M-window failure
+mode is structurally absent. `login_expires_h` is a **countdown**, and its durable form
+`login_expires_at` is an **absolute stamp** that is re-derived rather than served from cache
+(C26) — so this row's one time-ratio has a recorded denominator (the wall-clock stamp) by
+construction. `*_reset_h` are likewise derived from stored absolute `*_reset_at` stamps
+(`bin/claude-accounts:669-671` and the comment above them). **The one ratio with NO durable
+denominator is C22's absence** — see M3.
+
+---
+
+## §3 Phase 1 — branch-graveyard sweep
+
+Run for row 7's own paths, **with a positive control asserted before believing any negative**
+(the coordinator's pointer named artifacts for rows 2, 6, 8, 9, 10, 11 and explicitly *none* for
+row 7, flagged as known-incomplete rather than evidence).
+
+- **Positive control PASSED.** `git log --all --oneline --diff-filter=A -- bin/cc-route` →
+  `e2742035`; `git log --oneline --all -- launchd/staged/com.claude.relogin.plist` → `8a1e49ab`
+  + siblings. The sweep re-finds files known to exist, so its negatives are meaningful.
+- **Result: NOTHING TO TAKE.** Commits touching row-7 paths and NOT on `origin/main`:
+  `fix/infra-perfection` **0** · `tm/gates` **0** · `tm/hygiene` **0** · `preland-backup-infra`
+  **0** · `tm/growth` **1**.
+- The four 55-ahead branches are *behind* on row 7, not ahead: `origin/main..fix/infra-perfection`
+  shows `D bin/cc-relogin`, `D bin/cc-relogin-poll`, `D commands/relogin.md`,
+  `D docs/plans/RELOGIN_AUTOMATION_PLAN.md` — taking from them would **delete** the subsystem.
+  This is the inverse of row 12's find, and only running the sweep distinguishes the two.
+- `tm/growth`'s single hit is `64fd57b0 fix(docs): mark the 16 pane-id hits the live-corpus
+  assertion reaches` — **row 2's** pane-id documentation, matched only because it touches a file
+  under a shared test glob. **REJECTED on merits:** not account-routing work. (The dispatch brief
+  independently bars taking from `tm/growth`.)
+- **Verdict:** the coordinator's "none for row 7" pointer is **correct**, now verified rather
+  than inherited.
+
+---
+
+## §4 Phase 2 — INVARIANTS vs ARCHITECTURE
+
+First principles is not amnesia. Sorted from MEMORY.md + the incident docs.
+
+### INVARIANTS (properties any design here must keep — numbered requirements)
+
+| R | Invariant | Why (source) |
+|---|---|---|
+| R1 | **A cliff is a STOP, never a silent down-tier and never a blind fire.** | `bin/cc-route:30-32`; inherited unchanged. |
+| R2 | **"Cannot see" ≠ "nothing to do."** Missing detection is UNKNOWN/exit 3, never OK/exit 0. | `bin/claude-accounts:1519-1523`; memory `named-failure-vs-no-verdict`. |
+| R3 | **Missing data is not headroom.** A row without live quota is EXCLUDED, never routed on a remembered number. | `bin/claude-accounts:462-470`; already holds (C20) — must SURVIVE this rebuild. |
+| R4 | **Credentials are never retried unattended into a wall,** and no token/credential is ever printed into a plan, a fixture, a log or a commit message. | `accounts.json:_secrets`; C10 shows what a doomed retry loop costs. |
+| R5 | **Absence-is-loud requires EXISTENCE EVIDENCE.** An alarm about a producer that never ran must be gated on the producer's world existing. | memory `absence-alarm-needs-existence-evidence`. |
+| R6 | **A built mechanism must be an ENFORCED mechanism that FAILS LOUD when inert.** ~100 % abstain ⇒ inert by construction. | memory `feature-durability-mechanism-not-memory`; C15/C16 are exactly this failure. |
+| R7 | **Existence evidence comes from the DECLARATION, not from the subject's success.** | memory `daemon-fleet-v2`; `launchd/fleet.manifest` header. |
+| R8 | **Every new mechanism ships an env kill switch** — never revert-as-plan. | `ground-up` skill Phase 3. |
+| R9 | **Never widen an override to fit a category you failed to name.** A fail-closed widening must fit its population. | memory `inventory-before-building`, `third-state-skips-the-unnamed-gate`. |
+| R10 | **A metric with no producer is unfalsifiable** — record the INPUTS of a decision, not only its output. | row 2's M-2; C18 is the same shape. |
+| R11 | **Never turn a survivable condition into a fleet-wide STOP.** A gate whose refusal is permanent under normal load is an outage, not a safeguard. | memory `metric-zero-by-refusing-gate`, `load-is-not-a-function-of-session-count`; row 13's self-retracted ⛔. |
+| R12 | **Consume other rows' mechanisms FAIL-SOFT.** Landed ≠ live; check existence evidence, never a status cell. | campaign rule; row 4's inert oracle. |
+
+### ARCHITECTURE (the incumbent's mechanisms — inherited from nothing, kept only on merit)
+
+**KEPT, on merit:**
+- `cc-relogin`'s three non-negotiable guards — need-check, `k == 0`, the shared heal lock
+  (`bin/cc-relogin:555-570`). The `k == 0` gate is **CORRECT and stays**: a running `claude`
+  owns the token lifecycle and a relogin racing it has its rotation discarded. §8 rejects
+  relaxing it.
+- `cc-authbrowser`'s dedicated per-account Chrome profile, which made the CDP consent gate
+  structurally unreachable. This is what makes unattended re-auth possible at all.
+- `_excluded()` bailing on `row["error"]` first (R3, C20) — the "live quota" half of the frozen
+  scope is *already* architecturally satisfied; the rebuild must not regress it.
+- `refresh_login_countdown()` re-deriving the countdown from the absolute stamp (C26).
+- The `staged` expect value in `launchd/fleet.manifest` — "declared, decision pending: surfaced,
+  never silent" is exactly the honest state for an un-activated job.
+
+**REJECTED as architecture (kept only as a fact to route on):** the belief that surfacing the
+cliff to a human is the row's job. §5.
+
+---
+
+## §5 The design — THE INVERSION
+
+> **Row 7 PRODUCES the cliff, RENDERS the cliff, and never ROUTES on it.**
+
+Every `login_expires_*` read in `bin/claude-accounts` lives in a producer (`probe_account`), a
+re-deriver (`refresh_login_countdown`), or a renderer (`render_table`, `relogin_row`,
+`render_relogin_status`). The four functions that decide **which account works** —
+`_excluded`, `score_general`, `score_fable`, `ranked` — do not mention it once (C17,
+positive-controlled). The subsystem whose entire job is "which account works" treats the one
+fact that determines whether an account will *still* work as a display string.
+
+And the mirror: the only mechanism that ACTS on the cliff (`cc-relogin-poll` → `cc-relogin`) can
+fire only at `k == 0`, and **routing is the only thing that determines `k`.** All four accounts
+sit at k = 5–6 (C6/C8), so the autonomous path is **0-by-construction**: it has never once been
+able to act, and 168 hourly chances at a window that never opens is still zero.
+
+So the subsystem holds both halves of the answer and has never connected them: the fact it
+refuses to route on, and the lever that fact needs. **The structural change is one sentence:
+make the login cliff a first-class routing term.** That single change
+
+1. steers new work away from an account that is about to die (**nothing stranded**), and
+2. *manufactures* the `k == 0` window `cc-relogin` has never found (**the cliff becomes
+   recoverable**),
+
+because draining an account IS a routing decision. The cliff stops being a warning a human reads
+and becomes a scheduling input. If the new design were the old one with bigger constants, Phase 1
+would not be finished; it is not — it moves a fact across the producer/decider boundary.
+
+### M1 — cliff-aware routing (the inversion) · `bin/claude-accounts`
+
+Two bands, both driven by the **absolute** stamp's derived `login_expires_h`, sharing the
+poller's existing constants so no new number is invented:
+
+- **SOFT band — `login_expires_h ≤ CC_ROUTE_CLIFF_SOFT_H` (default 168 h = the poller's T−7 d,
+  C13).** Multiply the account's score by `CC_ROUTE_CLIFF_SOFT_FACTOR` (default 0.25) in both
+  `score_general` and `score_fable`. The account keeps serving and keeps its quota available; it
+  simply loses ties. Effect: new-session inflow falls for 5 days, so `k` decays on its own
+  instead of being fought at the deadline. **No capacity is discarded a week early** — that
+  distinction is the whole reason this is a multiplier and not an exclusion.
+- **DRAIN band — `login_expires_h ≤ CC_ROUTE_CLIFF_DRAIN_H` (default 48 h = the poller's
+  escalation point, C13).** `_excluded()` returns `login-cliff-drain`. No new work is routed
+  here; existing sessions finish; `k → 0`; `cc-relogin` gets its window. The drain band and the
+  operator's board row now begin at **the same instant** — the operator is told at exactly the
+  moment routing starts preparing.
+
+Three properties that are the design, not decoration:
+
+- **R11 / YIELD — never manufacture a false cliff.** `login-cliff-drain` is a *policy* reason, so
+  `reason_class()` maps it to exit 2, which `cc-route` turns into `⛔ QUOTA CLIFF` exit 4
+  (`bin/cc-route:163-183`) — a fleet-wide STOP consumed by row 5. But a cliff-drained account
+  **still works**; refusing to route to it must never be reported as "no account has headroom".
+  So `ranked()` **re-admits** the drained accounts when the cliff term is what emptied the
+  candidate set, and records that it did. A drain is a preference, and preferences yield to
+  necessity. Without this clause M1 would convert a survivable 4-account cliff schedule into a
+  dispatch outage — row 13's exact self-retracted mistake.
+- **R9 / FAIL-OPEN on absence.** `login_expires_h is None` ⇒ **no cliff term at all** for that
+  row. The field is not on every build (`bin/claude-accounts:1519`), and a fail-CLOSED reading
+  would exclude the entire fleet on an older binary. Absence of the cliff fact is not evidence
+  of a cliff.
+- **R8 / kill switch.** `CC_ROUTE_CLIFF_TERM=off` disables both bands and restores byte-identical
+  prior behaviour.
+
+### M2 — the poller's detection window must match its own policy · `bin/claude-accounts`, `bin/cc-relogin-poll`
+
+`cc-relogin-poll:14-16` states the design decision explicitly — *"WHY T−7d, not the 72h warn:
+`cc-relogin` can only act when the account has ZERO live sessions (k==0), so a login deadline is
+otherwise one fragile attempt. A 7-day window turns it into ~168 hourly chances"* — and then
+lines 102-119 wire detection to `--login-status`, which pre-filters at `login_warn_h = 72`
+(C12). **The implementation silently reverts the decision the comment defends.** 57.1 % of the
+declared window is unreachable (C14), and it is unreachable through the leg the ladder
+*prefers*: the richer `json-fields` fallback, which carries every account's raw
+`login_expires_h`, is only reached when the narrower leg is *absent*. The fallback is richer than
+the primary.
+
+Live proof, this minute, of two surfaces disagreeing about one fact:
+
+```
+$ claude-accounts --relogin-status   → exit 1   "next  DUE  2026-08-02T20:21:49  90  cc-relogin next"
+$ claude-accounts --login-status     → exit 0   (empty)
+```
+
+**Fix:** `--login-status` accepts an explicit `--window-h N`; `cc-relogin-poll` passes its own
+`TRIG_DAYS × 24`. Contract safety, all three pinned by tests:
+
+- the **default stays 72** (`login_warn_h`), so every existing caller is byte-identical;
+- exit codes **0 / 1 / 2 unchanged**;
+- the TSV stays **6 fields** — `cc-relogin-poll:80` (`norm 6`) parses it positionally and an
+  added column would slide `hours`/`launcher` into the wrong variables.
+
+This also closes the human-facing half: the `RELOGIN_AUTOMATION_PLAN.md:266` verdict falsified in
+§1 was produced by reading the 72 h-filtered surface and concluding "no cliff for a month".
+
+### M3 — make the cliff DURABLE, and the routing decision FALSIFIABLE
+
+- **(a) The cliff is only readable while the account is healthy.** `login_expires_at` exists
+  nowhere durable (C22): the last-good ledger records quota and not the cliff. So at the exact
+  moment an account breaks — keychain read fails, item missing, payload corrupt —
+  `--relogin-status` renders **UNKNOWN** and the poller has **no deadline**, i.e. the data
+  vanishes precisely when it is needed. Fix: carry `login_expires_at` (an absolute stamp, never
+  the decaying `_h`) into `claude-accounts-lastgood.json` beside the quota, and have
+  `inherit_lastgood` restore it. R3 is preserved exactly: an inherited cliff **does not** make a
+  row routable — the row still carries `error`, so `_excluded()` still bails. It only means the
+  cliff stays *visible* and the poller still has a deadline to act on.
+- **(b) `route.jsonl` records the decision but none of its inputs** (C18), so "did routing read
+  live quota, and did it see the cliff?" is **unanswerable from disk** — the frozen scope's
+  second clause is currently unfalsifiable, which is this campaign's most-repeated defect (R10).
+  Fix: `cc-route`'s `record()` gains `cliff_h`, `cliff_band` (`none|soft|drain`) and
+  `quota_as_of` alongside `detail`. Additive JSONL keys — existing `jq` consumers
+  (`bin/cc-route:277-296`, `tests/cc-route.bats`) select by `.outcome`/`.detail` and are
+  unaffected.
+
+### M4 — declare the poller so its inertness is LOUD (R6, R7)
+
+`com.claude.relogin` is absent from `launchd/fleet.manifest` (C16), so row 12's fleet state
+function never evaluates it: the poller can stay dark forever with **nothing saying so**. That is
+R6's failure verbatim, and R7 gives the fix — existence evidence comes from the declaration.
+One manifest row, using the value the manifest already defines for exactly this state:
+
+```
+com.claude.relogin | staged | 3600 | ~/.claude/logs/cc-relogin-poll.log | 7 | 20-relogin-poll-activate.sh
+```
+
+`staged` emits exactly ONE `UNDECIDED` row — "declared, decision pending: surfaced, never
+silent" — not a daemon-fault row. Plus the staged activation script + runbook pointer, plattered
+for the operator (C10 boundary: agents drive TO activation, never run it).
+
+**Seam, declared not assumed:** the manifest is row 12's SSOT and its committed-manifest test
+hard-codes the label count (`tests/cc-fleet.bats:535`, `[ "$n" = 21 ]`), so declaring a row
+requires bumping it to 22 — which that test's own comment establishes as the convention ("the
+count moves with the repair rather than the repair being hidden behind a looser count"). Row 12's
+comment block also deliberately keeps two *other* staged plists out of the manifest because they
+"would claim coverage that does not exist" (deathwatch has no producer; the reconciler's roster is
+unwired) — **that reasoning does not apply here**: `cc-relogin-poll` has a real producer
+(`cc-relogin-poll.log`) and a real declared cadence (3600 s). Row 12's LINT is untouched; only a
+row is added. **Raised with the coordinator before landing** rather than decided alone.
+
+### What this design does when a dependency is DARK (R12 — fail-soft, mandatory)
+
+| Dependency | Owner | If landed-but-inert / dark |
+|---|---|---|
+| `com.claude.relogin` LaunchAgent (C16) | 7 (mine), operator activates | **M1 still works alone.** Cliff-aware routing needs no daemon: it runs inside every `--route`/`--rank` call. The account is drained and protected even with zero automation running; recovery then needs one operator `cc-relogin <acct>`, plattered. M1 is deliberately the mechanism that does not depend on activation. |
+| row 12's fleet alarm / `bin/cc-fleet` | 12 | M4's row goes unread — no worse than today (C16 = invisible). M1/M2/M3's acceptance reads are independent of it. |
+| row 4's session-beat oracle (inert, verified) | 4 | `k` already comes from `claude-accounts`' own process attribution (`bin/claude-accounts:250`), not from the beat store. No new dependency taken. |
+| row 10's board render of the `relogin-blocked` row | 10 | The escalation is *also* written to `idl.jsonl` and to `cc-relogin-poll.log`; acceptance reads target the JSONL, not the render. |
+| row 5's `cc-wave-plan` (consumer of my contract) | 5 | Unchanged exit codes ⇒ nothing to degrade. M1's yield clause (R11) exists so row 5 never sees a manufactured exit 4. |
+| deploy (C23 = 0 today, a sawtooth) | 1 | All of M1–M3 land in **symlinked** files (C24) ⇒ landing == deploying, no activation step. The one non-symlink is `model-config.yaml` (C25), which **this rebuild does not modify** — noted so a successor does not walk into it. |
+
+---
+
+## §6 Failure-mode table — every OBSERVED mode → its structural answer
+
+Every row is a mode measured on this machine, not a hypothetical. A mode without an answer is an
+unfinished design.
+
+| # | Observed failure mode | Evidence | Structural answer |
+|---|---|---|---|
+| F1 | An account is routed work, then dies at its cliff mid-flight; the work is stranded. | C17 (routing is cliff-blind) + C9 (93.5 h outage) | **M1** — cliff enters `_excluded`/scoring. Work is steered off the account 48 h before the wall. |
+| F2 | The autonomous re-login path can never fire: it needs `k == 0`, the fleet never has it. | C6/C7/C8 — 0 of 4 accounts | **M1's DRAIN band manufactures the window.** Routing is the only `k` lever; the fix is in the same subsystem. |
+| F3 | The poller's declared T−7 d trigger is capped at 72 h by the surface it consumes. | C12/C13/C14 — 57.1 % unreachable; live `exit 1` vs `exit 0` divergence | **M2** — `--login-status --window-h N`; the poller asks for its own window. Default unchanged. |
+| F4 | The poller is not scheduled and NOTHING reports that. | C15 (2 log lines, all-time) + C16 (label undeclared) | **M4** — declare `staged` in the fleet manifest ⇒ exactly one `UNDECIDED` row. R6/R7. |
+| F5 | A human session read the 72 h surface and concluded "no cliff for a month", 3 weeks early. | §1, `RELOGIN_AUTOMATION_PLAN.md:266` vs C4 | **M2** — the same fix; the defect was never poller-specific. |
+| F6 | The cliff becomes UNKNOWABLE at the exact moment the account breaks. | C22 — ledger carries quota, not the cliff | **M3(a)** — `login_expires_at` into the last-good ledger; R3 preserved (`error` still excludes). |
+| F7 | "Did routing read live quota / see the cliff?" cannot be answered from disk. | C18 — 4 fields, none of them an input | **M3(b)** — record `cliff_h`, `cliff_band`, `quota_as_of`. R10. |
+| F8 | 24 doomed refresh grants fired into a dead wall in 7.7 h. | C10 | **Already correct, kept:** past the stamp the heal is skipped by construction (`bin/claude-accounts:28`). M2 makes the *pre*-cliff window actionable so the post-cliff loop is not the only behaviour. |
+| F9 | A cliff-drain exclusion is reported to row 5 as a fleet QUOTA CLIFF (exit 4). | `bin/cc-route:163-183` + `reason_class` mapping policy⇒2 | **M1's YIELD clause (R11)** — `ranked()` re-admits drained accounts when the cliff term emptied the set, and records it. Pinned by test. |
+| F10 | An older binary without `login_expires_*` has its whole fleet cliff-excluded. | `bin/claude-accounts:1519` (field not on every build) | **M1's FAIL-OPEN rule (R9)** — `None` ⇒ no cliff term. Pinned by test. |
+| F11 | The `staged` plist is invisible to the manifest's three-way lint because the lint globs `launchd/*.plist` only. | `tests/cc-fleet.bats:538` glob | **M4** declares it explicitly; the plist deliberately stays in `launchd/staged/` so `install.sh`'s glob cannot auto-activate it (`8a1e49ab`). |
+| F12 | Routing serves a 600 s-old quota number on the lock-contention degrade path with no record of the age. | C21 + C18 | **M3(b)** records `quota_as_of`, making the degrade path *visible* rather than silent. The 90 s TTL itself is kept (§8 R-3). |
+
+---
+
+## §7 Acceptance criteria — as DISK-TRUTH READS
+
+Each is a command whose output decides the claim. No narration.
+
+| AC | Claim | Read | Pass |
+|---|---|---|---|
+| AC1 | The cliff is a routing term, not a render string. | `grep -c 'login_expires_h' <(sed -n '/^def _excluded/,/^def ranked/p' bin/claude-accounts)` | **≥ 1** (was **0**, C17) |
+| AC2 | An account inside the DRAIN band is excluded with a NAMED policy reason. | `CC_ROUTE_CLIFF_DRAIN_H=999999 claude-accounts --rank general --json \| jq -r '.reasons\|to_entries[]\|.value' \| grep -c login-cliff-drain` | **≥ 1** |
+| AC3 | The drain NEVER manufactures a fleet cliff (R11/F9). | `CC_ROUTE_CLIFF_DRAIN_H=999999 cc-route lead >/dev/null; echo $?` — unpiped | **0**, never 4 |
+| AC4 | Absence of the cliff field disables the term, not the fleet (R9/F10). | `tests/account-cliff-routing.bats` — the `login_expires_h: null` fixture still ranks | test green |
+| AC5 | The poller can see its own declared window (F3). | `claude-accounts --login-status --window-h 168 > /tmp/ls; echo $?; grep -c next /tmp/ls` | exit **1**, count **≥ 1** while `next` is at T−90 h (C4) |
+| AC6 | The default window is unchanged for every existing caller. | `diff <(claude-accounts --login-status) <(claude-accounts --login-status --window-h 72)` | **empty** |
+| AC7 | The cliff survives a broken account (F6). | `jq -r 'to_entries[]\|"\(.key) \(.value.login_expires_at // "ABSENT")"' ~/.claude/logs/claude-accounts-lastgood.json` | **4 of 4 non-ABSENT** (was 0 of 4, C22) |
+| AC8 | A routing decision records its own inputs (F7). | `tail -1 ~/.claude/route/route.jsonl \| jq -e 'has("cliff_h") and has("cliff_band") and has("quota_as_of")'` | exit **0** |
+| AC9 | The dark poller is DECLARED, so its inertness is readable (F4). | `grep -c '^com\.claude\.relogin *|' launchd/fleet.manifest` | **1** (was 0, C16) |
+| AC10 | Nothing regressed on the frozen `cc-route` contract. | `bash scripts/route-safety-gate.sh; echo $?` — unpiped | **0** |
+| AC11 | Remembered quota is still barred from routing (R3/C20 must not regress). | `tests/account-cliff-routing.bats` control: a row with `error` set is excluded even when the ledger supplies a cliff | test green |
+| AC12 | The whole corpus is green through the shared box. | `bin/cc-bats tests/<suites> > /tmp/out 2>&1; echo $?` then `grep -c '^not ok' /tmp/out` | rc **0** and `not ok` count **0** |
+
+**ACCRUING, named honestly (not claimable this session):** the end-to-end proof that a DRAIN band
+actually reaches `k == 0` before T−0 requires `next`'s real cliff, **2026-08-02T20:21:49Z**
+(C4) — 3.76 days out. Read then: `~/.claude/logs/cc-relogin-poll.log` for an `ATTEMPT` line
+(today: 0 all-time, C15) and the keychain stamp moving past Aug 2. That is the first real window
+in which any of this can be observed, and §1 establishes it is 3 weeks earlier than the plan on
+disk claimed.
+
+---
+
+## §8 Rejected alternatives (with reasons — prevents relitigating)
+
+| # | Alternative | Rejected because |
+|---|---|---|
+| A1 | **Relax `cc-relogin`'s `k == 0` gate** (relogin while sessions run) so the poller can finally act. | The gate is CORRECT, not conservative: a running `claude` owns the token lifecycle and re-checks liveness *under the lock* precisely because "a relogin racing a running CC has its rotation discarded" (`bin/cc-relogin:563-575`). Relaxing it trades a predictable cliff for silent credential corruption across live sessions. The window must be **created**, not stolen. |
+| A2 | **Auto-fire `cc-relogin` on `--login-status` exit 2.** | Deliberately refused by the prior build (`RELOGIN_AUTOMATION_PLAN.md:301`) and by R4: credentials are the one place an unattended retry loop must not be invented — and C10 shows 24 doomed retries in 7.7 h is the observed cost of getting that wrong. M1 changes the *precondition* instead, so the existing gated path can finally succeed. Revisit after several unattended successes, as that plan says. |
+| A3 | **Hard-exclude an account for the whole T−7 d window.** | Throws away ~25 % of fleet capacity for 7 days out of every 30, per account — and with four accounts at staggered phases that is a near-permanent tax. A multiplier (SOFT) gets the same inflow reduction at no capacity cost; only the last 48 h needs a hard stop. |
+| A4 | **Just raise `login_warn_h` from 72 to 168.** | It is the *shared* human-warning constant; widening it changes the dashboard, the handoff sweep (`bin/claude-accounts:1495`) and the `/accounts` readout for everyone, to fix one consumer's window. A per-call `--window-h` fixes the consumer without moving a constant six other surfaces read. Also would not fix F1/F2 at all. |
+| A5 | **A new cliff-watcher daemon.** | The fleet already has a poller for exactly this (C13) that has never fired; a second daemon adds another thing that can be dark (C15/C16) and another label to leave undeclared. The defect is not a missing daemon, it is a precondition no daemon can satisfy. Fix the precondition. |
+| A6 | **Force `--fresh` on every routing call so quota is provably live.** | `--fresh` takes the single-flight lock and can legitimately be held for MINUTES (`bin/claude-accounts:931-935`); making the hot routing path do that turns every dispatch into a lock queue — and it is the exact fail-closed-as-amplifier shape in memory `fail-closed-degradation-as-amplifier`. The 90 s TTL is right; what was missing is the *record* of the age (M3b). |
+| A7 | **Record the quota `percent` denominator explicitly** (the row-8 fix, applied here). | Nothing to fix: the denominator is server-side and never appears locally (C19) — inventing a local one would *create* the row-8 defect. Named in §2 so the check is on the record rather than skipped. |
+| A8 | **Revert-as-plan instead of a kill switch.** | Banned by R8. All three new behaviours are env-gated. |
+| A9 | **Move `com.claude.relogin.plist` from `launchd/staged/` into `launchd/`** so the existing three-way lint sees it. | `install.sh` globs `launchd/*.plist`; the plist was moved to `staged/` *by structure, not conditional* (`8a1e49ab`) exactly so it cannot be auto-installed. Moving it back would let a routine install ACTIVATE credentials automation — an operator decision (C10). Declare it in the manifest instead (M4). |
+
+---
+
+## §9 Seams consumed (contracts, not redesigns)
+
+| Seam | Owner | This rebuild's posture |
+|---|---|---|
+| `cc-route` exit codes **0 plan · 2 usage · 3 blind/no-data · 4 cliff**, pinned by `scripts/route-safety-gate.sh:33-50` + `tests/cc-route.bats` | 7 (mine), **consumed by 5** | **NOT changed.** No code added, none altered. M3(b) adds JSONL *keys*; M1's yield clause exists specifically so row 5 never sees a manufactured 4 (F9). AC10 re-runs the gate. |
+| fire-time ranking `claude-accounts --rank` | consumed by row **2**'s `handoff-fire` | Output *ordering* may change (that is the point); the contract — one account name per line, `none` on refusal, exit 0/2/3 — is untouched. M1's yield guarantees a name is still returned whenever one exists. |
+| `bin/cc-wave-plan` | **5** | Consumer only. Unchanged surface. |
+| `launchd/fleet.manifest` semantics + the parity lint | **12** | I add ONE `staged` row (mine, `owner_row = 7`) and bump that file's own documented label count. Lint untouched. Coordinator asked before landing. |
+| `idl.jsonl` class-C row schema (`kind: relogin-blocked`) | **10** renders, **7** produces | Producer unchanged. |
+| `~/.claude/CLAUDE.md` / `model-config.yaml` non-symlink trap | **8** ruled | **Not touched by this rebuild.** Recorded as C25 so a successor does not assume symlink. |
+
+---
+
+## §10 Kill switches (R8)
+
+| Switch | Default | Effect when set |
+|---|---|---|
+| `CC_ROUTE_CLIFF_TERM=off` | `on` | M1 fully disabled — both bands; routing byte-identical to pre-rebuild. |
+| `CC_ROUTE_CLIFF_SOFT_H` | `168` | SOFT band edge (hours). `0` disables the soft band only. |
+| `CC_ROUTE_CLIFF_DRAIN_H` | `48` | DRAIN band edge (hours). `0` disables the drain band only. |
+| `CC_ROUTE_CLIFF_SOFT_FACTOR` | `0.25` | SOFT-band score multiplier. `1.0` = no deprioritization. |
+| `--window-h N` (M2) | `login_warn_h` (72) | Per-call `--login-status` window; omitted ⇒ prior behaviour exactly. |
+| `CC_ROUTE_RECORD_INPUTS=off` | `on` | M3(b) reverts `route.jsonl` to the 4-field record. |
+
+---
+
+## §11 Status
+
+- **2026-07-30 — Phase 1 complete, cell CONFIRMED-and-renamed** (§1). 26 measured constants
+  (§2). Graveyard swept with a passing positive control: **nothing to take** (§3).
+  Coordinator pinged with the findings and the M4 seam question.
+- Builds M1–M4 + map row: land order and status tracked below as they land.
+
+## §12 Remainders — named, with owner and reason
+
+| R | Remainder | Owner | Why not now |
+|---|---|---|---|
+| R-1 | **`next`'s real cliff on 2026-08-02T20:21:49Z is the first-ever live test of `cc-relogin` Phase 2** (CDP context→profile match, Authorize click, `code#state` scrape, fifo hand-back — all still unexercised per `RELOGIN_AUTOMATION_PLAN.md:293`). Treat as a supervised run. | 7 + operator | 3.76 days out; cannot be run early without deliberately breaking an account. |
+| R-2 | `com.claude.relogin` LaunchAgent activation is a **C10 operator step** (classifier-terminal for agents). | operator | Staged + plattered by M4. |
+| R-3 | The 600 s cache-grace degrade path is now *recorded* (M3b) but not *bounded* — nobody counts how often routing serves a 600 s-old number. | 7 | Needs a period of records first; the read is `jq` over `quota_as_of` in `route.jsonl`. |
+| R-4 | `bin/claude-accounts:1525` `RELOGIN_UNKNOWN_ACTION = "land feat/accounts-login-cliff (adds --login-status)"` is **stale** — the flag is on this build (`:1692`). A stale recovery string sends the operator to a landed branch. | 7 | Cosmetic; folded into M2's land if it stays clean. |
+| R-5 | Session-lifetime distribution is unmeasured, so `CC_ROUTE_CLIFF_DRAIN_H=48` is a *reasoned* default, not a measured one. If 48 h of drain does not reach `k == 0`, behaviour degrades to today's (escalation row at T−48 h) — never worse. | 7 (data lives with 2/4) | Needs row 2/4's session-lifetime data; the design fails soft without it. |
