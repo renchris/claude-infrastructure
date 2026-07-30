@@ -651,6 +651,195 @@ the demotion, and removing them from `ALWAYS_EMITTED` completes the deletion.
 
 ---
 
+## BETTER MICRO-EVENTS — O1/O2/O3 improved (2026-07-29, lead)
+
+The operator's brief: *"I think you should be able to research and come up with better ones."* So this
+section improves the sketch rather than transcribing it. **O1's reversal of the never-co-present
+principle stands** — the operator authored R1, that direction governs, and nothing below restores
+co-presence as a rule or quietly drops the summoning beat.
+
+Two things reorder all three ideas, and neither was available when they were sketched.
+
+### The measured legibility ladder — the sprite's three moves, ranked by rendered size
+
+One sprite cell is `CELL 20 × clawd_scale 1.2` = **24 art px**; at the **838 px** render (factor
+0.4365 — re-measured below, not the handed-down 830) that is **10.5 CSS px**. The creature is 11 × 8
+cells = **115 × 84 CSS px**. So the three moves the quoted pose table permits are not equally legible,
+and the difference is measurable rather than a matter of taste:
+
+| move | travel | the thing that moves | reads as |
+|---|---|---|---|
+| **body hop** (2 cells) | 21.0 CSS px | the whole 115 × 84 px silhouette — 25% of its height | **strongest** — position change, unmissable |
+| **eye shift** (1 cell) | 10.5 CSS px | a 10.5 px square displaced by 100% of its own width | **strong** — and it is the entire face, so it carries all expression |
+| **arm rise** (3 cells) | 31.4 CSS px | a 10.5 × 21 px sliver | **weakest** — most travel, least read; this is the measured horns/antennae failure |
+
+The arm rise has the *largest* travel and the *worst* legibility, which is why "arms-up" kept failing
+review while nobody could say why. **Shape change is illegible at this size; position change is not.**
+Every beat below is built from hops and eye shifts, with arms as accent only.
+
+### What each beat costs the loop — and the ranking is the inverse of complexity
+
+From § IMPLEMENTED: a stop or rewind must be **repaid inside the loop at integer rate**, and anything
+riding the scrolling strip is on canvas for `(1920 + width) / 96` ≈ **20-26 s** regardless of its
+declared window. Pricing the three ideas against that:
+
+| idea | world-rate cost | strip occupancy | new props | verdict |
+|---|---|---|---|---|
+| **O3** noticing | **zero** — a pose change, not a world change | **none** if the star is sky-only | 1 (the star) | **cheapest beat available** |
+| **O2** landing | zero **if screen-pinned**; 20-26 s if it rides the ground | none, pinned | 1 burst primitive | cheap |
+| **O1** handoff | zero **if the visitor is screen-pinned and both keep striding** | none, pinned | 2-3 | affordable, but the longest |
+
+**The single most important build direction in this section: pin every one of these in screen space,
+never on the strip.** A screen-pinned beat costs no repayment, no print-lock bookkeeping and no
+`assert_one_strip_feature` pressure. The instinct to put a celebration "along the ground" is what
+would make O2 expensive — it would occupy the canvas for 20-26 s and collide with everything.
+
+⚠️ **One exception that is not free: a hop is a `stride_in_place`.** The foot does not land, so
+`strip_length = 28.8 × (strides_taken − strides_in_place)` changes and must stay divisible by the dash
+pitch. **The number of hops is therefore constrained, not chosen** — pick hop counts that preserve
+divisibility, or the print lock breaks silently.
+
+### O3 → **THE NOTICING** (was: shooting star with clawd's eyes following)
+
+The operator's diagnosis is exactly right — *the event is not the star, it is the noticing* — and it
+survives contact with the constraints better than anything else on the table. Four improvements:
+
+1. **The gaze LEADS the star by ~0.5 s.** clawd looks up *before* anything is there. This is the
+   highest-value change available: it converts stimulus→reaction (which reads as a stray pixel
+   followed by a twitch) into prediction→confirmation (which reads as *it knew*). It is also the
+   documented fix for misread risk #1 — by the time the star appears the viewer is already looking
+   where it will be, so the star cannot read as a glitch. Eyeline directing the audience is ordinary
+   cinematic grammar and it costs one keyframe.
+2. **The star travels the LOW sky, descending toward the horizon** — never across the top. This is
+   what makes it compatible with "nothing is ever authored above y=340" and with the wordmark keep-out
+   *by construction* rather than by a check. A meteor descending to the horizon is also simply more
+   correct than one flying level.
+3. **One geometry, two paints — not two assets.** Emit a single travelling dash on a single path; at
+   night it takes a warm bright fill plus a night-only tail, by day a dark silhouette fill. The motion
+   path, the timing and the gaze choreography are then **identical in both schemes**, so the duty and
+   collision numbers hold for both automatically and there is one animation to verify instead of two.
+   This is a real improvement over "add a daytime counterpart": a second asset would need its own
+   verification and could drift.
+4. **Do not claim a mechanism for it.** The honest ground is the same as THE ASK's: stillness and
+   direct gaze are human-universal, and *tracking something* is too. THE ASK survived the legibility
+   audit because nobody reads "class C decision packet" but everybody reads "it stopped and looked at
+   me." O3 is that same class, and it should be defended on that basis rather than given a
+   mechanism-mapping it does not need.
+
+**Ship this first.** It is the cheapest, it is one-shot, it needs no world-rate modulation, and it is
+the only beat that is fully legible to a stranger in both schemes.
+
+### O2 → **THE LANDING** (was: fireworks with clawd dancing on a commit landing)
+
+Repo-real and universally legible, which is what the audited set lacked. Improvements:
+
+1. **The celebration is a body hop, with arms-up as accent** — per the ladder above, never arms-up
+   alone. "Dancing" at 11 × 8 is a hop; that is not a compromise, it is the only move that reads.
+2. **This legalises the deleted 4 s hop rather than contradicting it.** The deletion rule was
+   *"involuntary → texture; voluntary → must map to a mechanism, or cut."* A hop on a land **is**
+   mapped to a mechanism, so the hop returns exactly where it has a cause. Worth stating so a future
+   reader does not see it as a reversal.
+3. **Pixel fireworks are a dot-shower on integer steps, not a particle spray.** The craft brief's
+   dither-crawl finding binds anything that moves: whole art-pixel steps only. 6-10 one-cell dots
+   expanding then falling is the NES/SNES idiom and it is what actually reads as a burst at this size.
+4. **Animate the group, not the dots.** Prior-art's element-count rule (`low tens`, animate groups,
+   and an `<img>` SVG **can never pause off-screen** so it paints forever) makes per-dot animation the
+   wrong build. One transform on one `<g>` with static children = 1 animated node per burst.
+   **Add no filters** — v6c already carries two (`feTurbulence` grain, `feGaussianBlur` soft) and those
+   are a standing liability on both counts, banding on pixel art and painting forever.
+5. **Keep it low and screen-pinned** — above clawd, below y=340, not on the ground strip.
+
+### O1 → **THE SUMMONING** (was: magician hat, wand, letter, cake, wave, poof)
+
+The most complete beat anyone has proposed, and the improvements are mostly about **fitting it into
+the dwell window** — six sequential sub-beats cannot be read in ~10 s. What to keep, cut and change:
+
+**Keep the hat — it is load-bearing, not decoration.** A creature appearing from nothing is the
+"fade-in with no origin" this document spent pages killing. The hat is what converts an unexplained
+spawn into a *caused* one: magic is the licence to materialise. This is why the operator's version is
+better than my "walks in from behind the mound" — it buys the same causality with far less screen time.
+
+**Cut the wand.** Two independent reasons, both evidenced: the quoted pose table translates arms on
+**y only**, so a *pointing* arm is outside the vocabulary and would be invented; and a 1 × 3-cell stick
+on a 1-cell arm is precisely the sliver geometry measured to read as horns. The hat plus a sparkle
+burst carries "magic" without it — and the sparkle reuses O2's dot-burst primitive, so one primitive
+serves summon, poof and celebration.
+
+**Cut the wave.** Also two reasons: a wave needs horizontal oscillation or rotation, neither of which
+the pose table has; and waving was already deleted for breaking the fourth wall and colliding with the
+👋 that opens every profile README. **The poof is the goodbye** — a self-removal is a stronger farewell
+than a wave, and the operator's own sketch already supplies it.
+
+**Make the visitor the binary's OWN smaller clawd.** `CLAWD_SPRITE_EXTRACTION_2026-07-29.md` § "The
+idle poses" records that *"a second, smaller clawd (used in-session, not at startup) ships with a pose
+table"* — the four poses this whole track quotes belong to **that** creature, not to the 11 × 8 startup
+one. So a smaller second clawd is **derived, not invented**, and it is semantically exact: the
+in-session creature is the one that does the work. It also solves the co-presence readability failure
+measured on v6b (a peer interpenetrating clawd for 7.2 s in the same flat orange, reading as a render
+error), because the binary's own aesthetic rule — recorded in the same document as *"one saturated
+orange subject, everything else dim monochrome texture"* — is preserved when the second creature is a
+smaller mass. **Two clawds at the same size violate the source's own art direction; one big and one
+small does not.** Hard requirement either way: ≥2 cells of clear plate between them at all times, and
+the prop hands across that gap, never through a body.
+
+**The sketch blends two different real mechanisms, and picking one is what makes it fit.**
+*Succession* (`handoff-fire.sh self-close --successor`: hand over the brief, then retire yourself) is
+letter-then-poof. *Delegation* (an Agent teammate: dispatch, receive the result) is letter-then-cake.
+Both are mechanism-exact; blending them is what produces six beats. Two clean readings:
+
+| | **O1-a · SUCCESSION** | **O1-b · THE ERRAND** |
+|---|---|---|
+| moves | summon → hand letter → **A poofs** → B walks on | summon → hand letter → **B hands back cake** → B poofs |
+| props | letter | letter + cake |
+| who leaves | the **summoner** | the **summoned** |
+| mechanism | `self-close --successor` — retire once the successor is verified engaged | a subagent returns its result and ceases to exist |
+| payoff | **the walker at t=P is not the walker at t=0** — the loop closes by *substitution*, so the seam becomes the meaning instead of something to hide. "SESSIONS RUN EACH OTHER", literally. | keeps the cake, the single most charming image in the sketch, and matches the sketch's own ending |
+| length | shorter — 3 moves | 4 moves |
+
+**Recommendation: O1-b, the errand.** It is faithful to the operator's best concrete image, it is
+mechanism-exact (a subagent's final output *is* its return value, then it is gone), and it leaves the
+walker intact so it composes with the print lock without touching succession semantics. **O1-a is the
+stronger idea conceptually** and I want it on the record as the operator's alternative — a loop that
+closes by substitution is the best thesis-statement available anywhere in this track — but it is a
+story call on the operator's own idea, not mine to settle.
+
+**Risk to retire before building either: the cake.** A letter is a 2 × 2-cell pale rect (≈21 × 21 CSS
+px) against an orange body — maximum contrast, trivially legible. A cake needs tiers plus a candle,
+so ~3 × 4 cells minimum, and it is the one prop that could fail to read. **Render it before committing
+to it**; if it does not read, O1-a is the fallback that needs no cake.
+
+### Placement — the legible beats must own the early window
+
+Reach is decided by dwell, and the current order puts the *coded* beat first. Given that THE REFUSAL
+is coded (`ground = progress`, `reversal = work undone`) and additionally risks reading as a rendering
+glitch, while O3 and O2 are legible to a stranger with no code at all:
+
+| window | beat | why here |
+|---|---|---|
+| ~2.5-6 s | **O3 THE NOTICING** | cheapest, one-shot, no code, works in both schemes. Every viewer sees it. |
+| ~7-12 s | **O2 THE LANDING** | universally legible, screen-pinned, free. |
+| ~13-22 s | **THE ASK** | survives the audit intact; the only coded beat that needs no code. |
+| ~23-33 s | **O1 THE ERRAND** | the longest and richest; rewards the second look. |
+| later / cut | THE REFUSAL · THE OVERLAP | THE OVERLAP was already named the designated sacrifice, and **O1 subsumes its meaning** while being visible rather than a 6 px pitch change. |
+
+This is a proposal, not a ruling — the operator owns which beats survive.
+
+### Verification these beats specifically require
+
+**Gate-green is not evidence any of this happened.** S19 measured a beat that shipped 6/6 green and
+never occurred, because CSS drops an invalid keyframe block whole. So for each beat: render at its own
+timestamps, in **both** schemes, and confirm the frames differ from the ambient frame — a beat that
+renders identically to ambient is absent, however green the gate is. Specifically:
+`--times` bracketing every beat window · `--scheme light` for each · `--lint` (an element with two
+animations silently collapses under the freeze) · and the props checked at **830 px**, never at 1:1.
+
+### Still open for the operator
+
+1. **O1-a vs O1-b** — substitution-loop vs the cake (table above; I recommend O1-b, and O1-a is the
+   better idea).
+2. **Which beats survive** the re-ordering above, and whether THE REFUSAL is cut or de-risked.
+3. **Banner height** — recorded separately below, since it reshapes the sky these beats live in.
+
 ## RE-MEASURED: the README column is 838 px, not 830 — and that falsifies the integer-scale plan
 
 `prior-art.md` §E3 flagged its own number as provisional: *"Exact 830px figure is from a single 2025
