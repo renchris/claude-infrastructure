@@ -36,6 +36,29 @@
 # arm64, 2026-06-17. See memory: dia-agent-browser-cdp-entrypoint.md
 set -euo pipefail
 
+# ── Bounded osascript ───────────────────────────────────────────────────────
+# The one osascript here activates Dia's window. Dia is a Chromium app that this very script may have
+# just launched, may be sitting on an account/onboarding wall, or may be mid-CDP-bind — precisely the
+# states in which an AppleEvent has nothing to answer it and simply waits. The call is already
+# best-effort (`|| true`), so a cut costs an unfocused window; a hang strands the launch path that
+# owns an OPEN CDP PORT, whose teardown is the load-bearing security control here.
+#
+# Sourced through $0's PHYSICAL location: ~/bin holds per-file SYMLINKS into the checkout, and a
+# directory of per-file symlinks never gains a NEW file, so following the link chain first is what
+# makes a freshly-added lib reachable at all. Inline fallback keeps the activation working if the lib
+# is unreadable.
+_src="$0"
+while [ -L "$_src" ]; do
+  _t="$(readlink "$_src")"
+  case "$_t" in /*) _src="$_t" ;; *) _src="$(dirname "$_src")/$_t" ;; esac
+done
+_here="$(cd "$(dirname "$_src")" && pwd -P)"
+# shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+if   [ -r "$_here/../hooks/lib/osa.sh" ];      then . "$_here/../hooks/lib/osa.sh"
+elif [ -r "$HOME/.claude/hooks/lib/osa.sh" ];  then . "$HOME/.claude/hooks/lib/osa.sh"
+else osa_bounded() { timeout 10 "$@"; }
+fi
+
 # ── Config ──────────────────────────────────────────────────────────────────
 DIA_BIN="/Applications/Dia.app/Contents/MacOS/Dia"
 DIA_APP="/Applications/Dia.app"   # launch via LaunchServices ('open -n'), NOT the bare binary — see launch block
@@ -319,7 +342,7 @@ case "$CMD" in
     DIA_PID=$(lsof -nP -iTCP:"${CDP_PORT}" -sTCP:LISTEN -t 2>/dev/null | head -1 || true)
     if [[ -n "$DIA_PID" ]]; then echo "$DIA_PID" > "$PID_FILE"; echo "[dia-cdp] Dia PID $DIA_PID owns :${CDP_PORT}"; fi
     # Surface the window (it can bury behind your primary Dia) — best-effort, non-fatal.
-    osascript -e 'tell application "Dia" to activate' >/dev/null 2>&1 || true
+    osa_bounded osascript -e 'tell application "Dia" to activate' >/dev/null 2>&1 || true
     if [[ ! -d "$AUTO_USER_DATA/Default" ]]; then
       echo "[dia-cdp] WARNING: expected profile at '$AUTO_USER_DATA/Default' not found — Dia's --user-data-dir nesting may have changed; seed/onboarding state may be wrong."
     fi
