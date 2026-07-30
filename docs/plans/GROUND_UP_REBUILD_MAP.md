@@ -514,3 +514,28 @@ phantom. Status is a claim like any other (see the constraint-cell learning belo
   on a quiet box reads 100% because there is nothing to demote. Row 13's AC1 therefore accrues from
   a timestamped on-disk census row written whenever ≥2 gates run concurrently, never from a
   narrated check at close time.
+
+- 2026-07-29 (coordinator #3) **THE SHELL CAN FABRICATE AN ABSENCE, AND A POSITIVE CONTROL DOES NOT
+  CATCH IT.** The Bash tool runs **zsh**, where `"$b:tests/foo"` inside double quotes parses `:t` as
+  the history/glob **TAIL modifier**: `b=fix/infra-perfection` expands to `infra-perfection` +
+  `ests/foo`, git exits **128**, and under the `2>/dev/null` every sweep applies the result is
+  byte-identical to *"the file is absent."* The two most-used directories in this repo are the two
+  worst hit — **`tests/` (`:t`) and `hooks/` (`:h`)**. Safe forms: `"$b:$p"` (colon followed by `$`,
+  not a modifier letter), `git ls-tree "$b" -- "$p"`, or a fully hardcoded ref:path.
+  **Three things generalise, and each is worth more than the finding it destroyed:**
+  (a) *A positive control is not automatically a control.* Row 7's sweep control passed and its
+  negative was sound only by luck — its paths start with `bin/`, and `b` is not a modifier letter.
+  **A control must share the first path segment's initial letter with the paths under test**, or it
+  certifies nothing about them. This is the strongest form yet of the campaign's control discipline:
+  the control has to be able to fail the same way.
+  (b) *The tell was two instruments disagreeing, not either result looking wrong.* A `for`-loop said
+  absent-from-both; a table built with `"$b:$p"` said present-in-both. Both read as clean. Only
+  `ls-tree` + `rev-parse` broke the tie. When answers disagree, **do not re-run the same idiom
+  louder** — change the instrument's shape.
+  (c) *This is very likely the mechanism behind the earlier coordinator's "two of my three sweeps
+  returned confident garbage at exit 0"* — i.e. a known-recurring campaign symptom that had been
+  recorded as bad luck and was in fact one reproducible shell parse.
+  I published a false correction to the campaign graveyard table on the strength of the bad reading
+  and retracted it in **65153c68**; the retraction commit carries the full account. Net effect on the
+  table: row 11's `✓ ✓` is **CORRECT**; the one real error is `tests/statusline-mail-badge.bats`
+  marked present when it is on no branch at all (row 10 found this independently).
