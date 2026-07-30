@@ -1,9 +1,10 @@
-<!-- markdownlint-configure-file { "MD003": false, "MD013": false, "MD022": false, "MD031": false, "MD032": false, "MD040": false, "MD041": false, "MD060": false } -->
 ---
 name: plan-update
 description: Update plan files with compaction templates, Phase 0 scaffolding, and section organization. Use when working on plan files, compacting completed phases, generating Phase 0 orchestration, or restructuring sections. Also invokable as the slash command `/plan-update [plan-name-or-path]`.
 allowed-tools: Read,Edit,Glob,Grep,Bash
 ---
+
+<!-- markdownlint-configure-file { "MD003": false, "MD013": false, "MD022": false, "MD031": false, "MD032": false, "MD040": false, "MD041": false, "MD060": false } -->
 
 # Plan Update Skill
 
@@ -18,13 +19,16 @@ Follow the Executable Workflow below for either path.
 
 ## Before You Edit Any Plan File
 
-**CRITICAL — Follow this checklist every time:**
+**The RULES live in the `plan-conventions` skill — load it, do not rely on a copy here.** It is the
+single source of truth for: INTEGRATE-never-overwrite, completed→compact / upcoming→expand, the
+mandatory Phase 0 rule, and the never-delete list. This skill is the mechanical APPLIER; it used to
+restate those rules, and the two copies had already drifted in wording (consolidation audit 02).
 
-1. ✅ **Read the plan file first** — Use Read tool to understand current state, completed sections, and pending work
-2. ✅ **Use Edit, never Write** — Always use Edit to integrate changes. Write overwrites everything.
-3. ✅ **Phase 0 REQUIRED for all implementation plans** — Any plan with 2+ implementation tasks MUST have Phase 0 with Agent Team orchestration. Default to Agent Teams for ALL code changes. Only omit Phase 0 for pure research/exploration plans.
-4. ✅ **Preserve all history** — Never delete completed sections, "Why:" lines, known issues, or learnings
-5. ✅ **Apply templates below** — Use the exact formats for compaction and expansion
+Mechanical checklist for this workflow:
+
+1. ✅ **Read the plan file first** — understand current state, completed sections, and pending work
+2. ✅ **Use Edit, never Write** — Write overwrites everything (the rule's rationale is in plan-conventions)
+3. ✅ **Apply the templates below** — the exact formats for compaction and expansion
 
 ## Executable Workflow
 
@@ -273,12 +277,8 @@ Upcoming phases are the working blueprint. Include file paths, line ranges, deci
 
 ### Phase 0: Agent Team Orchestration (MANDATORY — Default for ALL Implementation Plans)
 
-**Agent Teams are the DEFAULT for all implementation work.** Any plan with 2+ tasks that
-write or modify code MUST include Phase 0 with full Agent Team orchestration. The user
-expects 9/10 implementation sessions to use Agent Teams. Only omit Phase 0 for plans that
-are purely research/exploration with no code changes.
-
-If the implementation has only 1 task, a single agent suffices — but 2+ tasks → Agent Teams.
+The Phase 0 RULE (when it is mandatory, and what it must contain) is defined once, in the
+`plan-conventions` skill. What follows is only the SCAFFOLD to paste and fill.
 
 **Source**: `memory/PHASE_0_TEMPLATE.md` (refer to it for complete details)
 
