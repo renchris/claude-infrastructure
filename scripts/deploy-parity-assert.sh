@@ -30,8 +30,8 @@
 # assertion could not be resolved, so nothing was compared (see the derivation guard below). Both 0
 # and 1 CLAIM a comparison happened; this state must never borrow either exit code.
 # Covered by tests/deploy-parity.bats, whose fixtures drive it via CC_PARITY_REPO /
-# CC_PARITY_BINDIR / CC_PARITY_STRICT / CC_PARITY_COPY / CC_PARITY_LIVE (fully hermetic — no
-# host deps).
+# CC_PARITY_BINDIR / CC_PARITY_STRICT / CC_PARITY_COPY / CC_PARITY_LIVE / CC_PARITY_PENDING
+# (fully hermetic — no host deps).
 set -uo pipefail
 
 if [ -n "${CC_PARITY_REPO:-}" ]; then
@@ -224,7 +224,44 @@ done
 # hooks/lib/*.sh, already covered by the `hooks` pathspec), and asserting a link install.sh would
 # never create is exactly the false demand this comment's first rule forbids.
 LIVE="${CC_PARITY_LIVE:-$HOME/.claude}"
+PENDING_DIRS="${CC_PARITY_PENDING:-$REPO/docs/activation/pending-activation:$LIVE/autonomy/pending-activation}"
 missing=0
+pending=0
+
+# STAGED-PENDING is a THIRD state between "linked" and "drift", and it is the repo's own design:
+# a settings-wired hook is deliberately left UNLINKED until its staged activation script runs, so
+# that the missing link IS the visible signal that the wiring is pending (deploy-link-parity.sh:17,
+# scripts/deploy-now.sh — "it never creates a link ... auto-linking would erase that signal").
+# This leg had no such notion and reported every unlinked tracked file as MISSING ⇒ DRIFT ⇒ exit 1,
+# which convicts the live layer for obeying the design. That made every staged activation a
+# permanent false RED: measured 2026-07-30 at 5d85e916, where this assert reported 7 MISSING while
+# deploy-link-parity — the correct reporter, same tracked set — read "259 linked · 2 staged-pending
+# · 5 actionable". The 2 (hooks/qos-rewrite.sh, scripts/iterm2-perf-parity.sh) were owned by
+# un-run activation scripts 22- and 24-; convicting them is the false half, and it recurs on every
+# future staging. The 5 genuinely-unlinked files stay MISSING here, exactly as before.
+# Semantics are ported from deploy-link-parity.sh's pending_owner() so the two agree by
+# construction — a divergence between them is how this bug existed at all.
+pending_owner() {   # $1 = repo-relative path → prints the owning activation script, else nothing
+  local rel="$1" dir f base rest="$PENDING_DIRS"
+  while [ -n "$rest" ]; do
+    dir="${rest%%:*}"
+    if [ "$rest" = "$dir" ]; then rest=""; else rest="${rest#*:}"; fi
+    [ -d "$dir" ] || continue
+    for f in "$dir"/*.sh; do
+      [ -f "$f" ] || continue
+      base="$(basename "$f")"
+      # A .done-marked activation no longer excuses an unlinked file: the operator ran the script,
+      # so a still-missing link is a real failure, not a pending step.
+      [ -e "$f.done" ] && continue
+      [ -e "$LIVE/autonomy/pending-activation/$base.done" ] && continue
+      # Matched on the REPO-RELATIVE PATH, never the bare basename: an activation script must spell
+      # the path to build "$REPO/<path>", and loose basename matching would launder a genuinely
+      # inert file into a false all-clear — the silent-failure direction.
+      if grep -qF -- "$rel" "$f" 2>/dev/null; then printf '%s\n' "$base"; return 0; fi
+    done
+  done
+  return 0
+}
 if [ -e "$REPO/.git" ]; then    # a tracked-file listing needs a real checkout; anything else skips
   # CAPTURE THE ENUMERATION AND ITS EXIT STATUS. Inlining `$(git ls-files)` directly in the heredoc
   # below discarded git's rc, so a FAILED listing was indistinguishable from an empty one: the loop
@@ -263,6 +300,13 @@ if [ -e "$REPO/.git" ]; then    # a tracked-file listing needs a real checkout; 
     [ "$want" = 1 ] || continue
     # -e follows symlinks on purpose: a link whose target is gone is as dead as no link at all.
     [ -e "$LIVE/$rel" ] && continue
+    # Unlinked BY DESIGN while its staged activation is un-run — reported, never counted as drift.
+    _act="$(pending_owner "$rel")"
+    if [ -n "$_act" ]; then
+      report "PENDING" "$rel" "unlinked BY DESIGN — staged: $_act"
+      pending=$((pending + 1))
+      continue
+    fi
     printf 'MISSING: ln -sf %s %s\n' "$REPO/$rel" "$LIVE/$rel"
     missing=$((missing + 1))
     drift=1
@@ -273,6 +317,11 @@ fi
 if [ "$missing" -ne 0 ]; then
   printf '\ndeploy-parity-assert: %s tracked runtime file(s) have NO live counterpart under %s.\n' "$missing" "$LIVE" >&2
   printf 'A bare ff-sync of the checkout can never create these links — run ./install.sh (or the ln -sf lines above).\n' >&2
+fi
+# Emitted even when nothing is missing: a silent PENDING count is how "unlinked by design" decays
+# into "nobody remembers this is un-run". It is a fact about the queue, never a verdict on parity.
+if [ "$pending" -ne 0 ]; then
+  printf '\ndeploy-parity-assert: %s file(s) staged-pending (unlinked BY DESIGN, activation un-run) — not drift.\n' "$pending" >&2
 fi
 
 # ORDER IS THE DOCTRINE: a NAMED failure outranks a non-verdict. Real drift was actually observed on

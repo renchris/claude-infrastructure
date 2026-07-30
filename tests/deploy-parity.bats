@@ -238,6 +238,75 @@ _track() { git -C "$CC_PARITY_REPO" add -A >/dev/null 2>&1; }   # ls-files reads
   [[ "$output" != *"MISSING: ln -sf"* ]]
 }
 
+# ── STAGED-PENDING (2026-07-30) — the third state between linked and drift ───────────────────────
+# A settings-wired hook is deliberately left UNLINKED until its staged activation script runs: the
+# missing link IS the signal that the wiring is pending, which is why deploy-link-parity.sh REPORTS
+# instead of repairing. This leg had no such notion and convicted the live layer for obeying that
+# design — every staging became a permanent false RED. Measured at 5d85e916: this assert said
+# 7 MISSING where deploy-link-parity, over the same tracked set, said "2 staged-pending · 5
+# actionable". The 5 stay MISSING below; only the owned 2 are reclassified.
+_pendfix() {   # a staged activation naming <path>, un-run; $1 = repo-relative path it owns
+  mkdir -p "$CC_PARITY_LIVE/autonomy/pending-activation"
+  printf '#!/bin/bash\nln -sfn "$REPO/%s" "$CFG/%s"\n' "$1" "$1" \
+    > "$CC_PARITY_LIVE/autonomy/pending-activation/22-thing-activate.sh"
+}
+
+@test "existence: unlinked BUT owned by an UN-RUN staged activation ⇒ PENDING, not drift, exit 0" {
+  _livefix
+  mkdir -p "$CC_PARITY_REPO/hooks"
+  printf 'x\n' > "$CC_PARITY_REPO/hooks/qos-rewrite.sh"
+  _pendfix hooks/qos-rewrite.sh
+  _track
+  run "$ASSERT"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PENDING"* ]] || false
+  [[ "$output" == *"22-thing-activate.sh"* ]] || false
+  [[ "$output" != *"MISSING: ln -sf"* ]]
+}
+
+# The control that must be able to FAIL the same way: once the operator has run the activation, an
+# unlinked file is a REAL gap again. Without this, the fix above could be a blanket amnesty.
+@test "existence: a .done-marked activation no longer excuses the file ⇒ MISSING, exit 1" {
+  _livefix
+  mkdir -p "$CC_PARITY_REPO/hooks"
+  printf 'x\n' > "$CC_PARITY_REPO/hooks/qos-rewrite.sh"
+  _pendfix hooks/qos-rewrite.sh
+  touch "$CC_PARITY_LIVE/autonomy/pending-activation/22-thing-activate.sh.done"
+  _track
+  run "$ASSERT"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"MISSING: ln -sf"* ]] || false
+  [[ "$output" != *"PENDING"* ]]
+}
+
+# The silent-failure direction: a loose basename match would launder a genuinely inert file into a
+# false all-clear. An activation must spell the repo-relative PATH (it needs it to build $REPO/<p>).
+@test "existence: a BARE BASENAME mention does not excuse an unlinked file (path-matched)" {
+  _livefix
+  mkdir -p "$CC_PARITY_REPO/hooks" "$CC_PARITY_LIVE/autonomy/pending-activation"
+  printf 'x\n' > "$CC_PARITY_REPO/hooks/qos-rewrite.sh"
+  printf '#!/bin/bash\n# mentions qos-rewrite.sh but never the path\n' \
+    > "$CC_PARITY_LIVE/autonomy/pending-activation/22-thing-activate.sh"
+  _track
+  run "$ASSERT"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"MISSING: ln -sf"* ]] || false
+}
+
+@test "existence: a PENDING file alongside a REAL miss ⇒ still exit 1, and only the real one is MISSING" {
+  _livefix
+  mkdir -p "$CC_PARITY_REPO/hooks" "$CC_PARITY_REPO/scripts"
+  printf 'x\n' > "$CC_PARITY_REPO/hooks/qos-rewrite.sh"
+  printf 'x\n' > "$CC_PARITY_REPO/scripts/render-census.sh"      # no owner — genuinely inert
+  _pendfix hooks/qos-rewrite.sh
+  _track
+  run "$ASSERT"
+  [ "$status" -eq 1 ]
+  [ "$(printf '%s\n' "$output" | grep -c '^MISSING: ln -sf')" -eq 1 ]
+  [[ "$output" == *"MISSING: ln -sf $CC_PARITY_REPO/scripts/render-census.sh"* ]] || false
+  [[ "$output" == *"PENDING"* ]] || false
+}
+
 # Regression, measured 2026-07-27 minutes after the existence leg landed: invoked by its DEPLOYED
 # path the assert returned RC=1 "claude-accounts must be a symlink" while the same file returned
 # RC=0 from the checkout — opposite verdicts, and the DRIFT claim was the false one. Cause: a bare
