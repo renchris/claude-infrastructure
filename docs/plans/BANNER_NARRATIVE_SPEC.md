@@ -244,8 +244,25 @@ repeat it** (`begin="2.5s" repeatCount="1"`). A repeating distinctive event is a
 repetition* — the 40-second reader watches it fire twice and the illusion dies. One-shot gives every
 reader exactly one beat while they are still looking, and nobody ever sees it recur.
 
-⚠️ **This claim is load-bearing and should be checked in a real README before the build commits to
-it.** If the timeline does not anchor at load, front-loading buys nothing.
+✅ **CONFIRMED by measurement, 2026-07-29 — front-loading is justified.** Probe committed as
+`scripts/banner-timeline-anchor.sh` (landed `83638b1f`) so it can be re-run rather than believed. A
+raw render taken immediately best-matches frozen t=0 at RMSE 0.000%; a raw render taken 25 s later
+*still* best-matches t=0 at 0.189%; and the control — frozen t=0 vs frozen t=25 — differs, so 25 s of
+motion is detectable and the null is not vacuous. Re-run independently at a 20 s gap: t=0 and t=0,
+against a 3.50% control.
+
+**The failure mode that nearly produced a false refutation, recorded because it will bite anyone
+repeating this.** The naive probe renders the unfrozen file twice, 25 s apart, observes that the two
+differ, and concludes the timeline is *not* load-anchored. That test cannot decide anything: a
+load-anchored timeline also differs between two such renders, because the screenshot fires at a
+variable delay after load and the 0.5 s stepped stride flips the legs on ~250 ms of jitter.
+**"Differs" cannot separate jitter from drift.** The decisive form asks *which phase* each render
+sits at, by matching it against frozen references — a question the naive form never asks. The first
+run of the naive probe returned REFUTED.
+
+Side result worth keeping: the immediate raw render matching frozen t=0 at **RMSE 0.000%**
+independently validates the freeze harness itself — pixel-exact against a live render of the
+unmodified file, which no prior check had established.
 
 ### The reframe that dissolves R1 at no cost
 
