@@ -23,7 +23,7 @@ rebuilds must not both redesign; the row that owns it is marked.
 | 7 | **Account/quota routing & relogin** — which account works | claude-accounts, cc-relogin*, limit-recover, model-config.yaml SSOT, launchers | fire-time ranking (2) | login cliffs are hard walls; 4 isolated accounts | open |
 | 8 | **Context economy** — when a session recycles | waiting-recycle, boundary-handoff, dod-persist, /wrap, session-continue | recycle executes via (2) | rot degrades decisions before the wall breaks them | open |
 | 9 | **Memory & knowledge** — what survives sessions | MEMORY.md + topic files, skills/, plans + find-plan, session index/search | consumed by every session start | anti-capture hygiene; index at read-size limit | open (compaction backlogged b0d889846885) |
-| 10 | **Observability & operator surface** — what the human sees | cc-blockers board, operator-readout, pages+damping, statusline, activation queue | renders facts owned by 1,4,5,7 | absence-is-loud WITH existence evidence; silver-platter commands | open |
+| 10 | **Observability & operator surface** — what the human sees | cc-blockers board, operator-readout, pages+damping, statusline, activation queue | renders facts owned by 1,4,5,7 | ~~absence-is-loud WITH existence evidence; silver-platter commands~~ **cell CONFIRMED-BUT-INSUFFICIENT (row 12's shape) — both halves are true AND already implemented (nine existence-gated alarms, a `recover_cmd` on every row), and the surface still failed, because the cell states per-ROW correctness while both live failures are whole-SURFACE properties it cannot express: predicate POLARITY and the operator's ATTENTION BUDGET. Renamed: "the operator surface must be COMPLETE, RANKED and BOUNDED — every honest verdict reachable within the render budget, and no verdict expressible only as the absence of a specific failure name." An alarm that ALWAYS fires and an alarm that CANNOT fire are the same alarm** | **DONE 2026-07-29** — [OPERATOR_SURFACE_V2.md](OPERATOR_SURFACE_V2.md) (four load-bearing sections + §9 close); 7 lands, all verified ancestors of origin/main: design **a95f4f38** · **M1 polarity f1451bcf** · **M2 class budget 7662ce58** · test determinism **a8a0f163** · **M3/M4/M5 activation 97667057** · **M7 graveyard `cherry-pick -x 78de6237` → df6b328f** · **M6 polarity lint 6937d001**. DoD integers met on disk: starved classes **2 of 5 → 0 of 5**; inverted alarm predicates **1 → 0**. 141 tests green (62 + 35 + 27 + 7 + 10, plus selftest 18/18), all RED-proofed vs a `git archive origin/main` pristine tree. **NO ACTIVATION STEP — every edit is in an already-symlinked live file**, so this row is live at the next SessionStart/Stop rather than staged. ⚠ **R-1 is a row-1 seam:** the lint deserves a blocking diff-scoped `run_gate` slot, which touches `scripts/ship-land.sh`; enforced today via its own suite in run_gate's own-scope. ⚠ **R-2 for row 6:** `operator-readout.sh` is registered in 4 of 5 config dirs and no alarm covers a hook's own wiring. Graveyard: coordinator pointer wrong in BOTH directions — mail-badge is not on `fix/infra-perfection` (REJECTED, row 3's surface), and `78de6237`, the refactor the identity suite exists to guard, was not in the list at all |
 | 11 | **Worktree & warm-pool management** — where writers work | worktree-gc, warm pool build, new-worktree, .worktreeinclude | claimed by (2); landed by (1) | 107 GB observed drift; ownership per artifact-class | open |
 | 12 | **Daemon fleet & activation** — what runs unattended | **20** launchd jobs (14 `com.claude.*` + 6 `com.chrisren.*` — a `com.claude`-only scope hid row 4's live reaper), plist SSOT parity, pending-activation queue, C10 boundary | carries 1,4,5,7,8 | disabled-bit trap **(CONFIRMED but INSUFFICIENT — 1 of 3 silent states)**; agent stages / operator activates | **DONE 2026-07-29** — [DAEMON_FLEET_V2.md](DAEMON_FLEET_V2.md); 4 lands: design 59f7eb38 · map dc052a82 · **build bda59c54** · scope+state fix 68f33d39. 97 tests green. Board went from `no safeguard-blocked sessions surfaced` (with 10 of 14 dark) to one honest verdict per declared label. Activation STAGED + PLATTERED, C10 pending: `CONFIRM=1 bash ~/.claude/autonomy/pending-activation/18-fleet-activate.sh`. **Remainders R-1..R-7 named in §10** — R-1 (`install.sh` launchd safety, coordinator-ruled row 12's, `c13dad7d5dbe`) is the one that matters |
 
@@ -118,6 +118,63 @@ evidence instead of reading a status cell. A row that trusted "DONE" would have 
 phantom. Status is a claim like any other (see the constraint-cell learning below).
 
 ## Learnings (accumulate; never delete)
+
+- 2026-07-29 (row 10, DONE) **AN ALARM THAT ALWAYS FIRES AND AN ALARM THAT CANNOT FIRE ARE THE SAME
+  ALARM — both carry zero bits, and this map's vocabulary could only see the second one.** The
+  campaign has a well-developed law for silence (absence-is-loud, existence evidence from a
+  declaration) and none at all for the cost of loudness. Row 10 found both halves live in the same
+  surface. The suppressed half was the ruled defect (`[ "$red" -eq "$seen" ]` — one hung stamp in a
+  5-wide window disabled the alarm while 0 of 33 stamps had ever been green). The *screaming* half was
+  worse and nobody had named it: `operator-readout --render` produced **55 manual steps through a
+  6-slot window in fixed source order**, so the first class-C decision sat at rendered position 14 and
+  the first blocked-backlog item past 27 — **2 of 5 classes unreachable at ANY queue depth**, with
+  `+49 more` as their only trace. The starved pair is exactly the work that needs a human. The
+  structural answer generalises to every operator surface in this repo: **allocate the render budget
+  per CLASS, not first-come — every active class gets a guaranteed slot plus one counted rollup
+  carrying its own listing command, so truncation can shorten a class but never DELETE one.** A
+  `+N more` footer promises "more of what you just saw"; it is not a completeness claim. Corollary for
+  ranking, also measured: within a class, rank by a signal you already hold — filename order kept
+  `18-fleet-activate.sh` (12 dark launchd labels) permanently below `04-page-channel-activate.sh` and
+  always in the truncated tail, while CONFIRM-gating (9 of 12 pending) separates effect-bearing
+  activations from print-only ones at zero fork cost.
+
+- 2026-07-29 (row 10) **A CHECK'S OWN FILTER IS A PLACE CLASSES GO TO DIE — and the filter is
+  usually justified.** `activation-watch`'s `>24h` gate exists for a good reason (do not nag about
+  something staged five minutes ago) and its effect was that the surface named **6 of 12** pending
+  activations, hiding the newest half — which is precisely what a just-finished rebuild stages, and
+  the window in which the operator still has context for it. The invisible six were `18-fleet`,
+  `16-session-beat`, `17-permission-beacon-wire`, `15-shared-task-board`, `10-lead-crash-orphan-close`
+  and `19-capacity-alarm`: the campaign's own top levers. The operator read "6 pending" and believed
+  that was the queue. **PARTITION, never FILTER** — one honest count with labelled ROTTING/FRESH
+  halves costs one extra line and deletes nothing. Generalise by grepping your row's surfaces for any
+  threshold that decides *whether an item is mentioned at all* rather than *how loudly*.
+
+- 2026-07-29 (row 10) **RE-DERIVE, THEN RE-DERIVE AGAIN: this campaign's deploy figure moved
+  20 → 23 → 0 → 47 inside ninety minutes.** It genuinely reached 0 (the shared checkout caught up to
+  `458a45e9`), then trunk advanced as three sibling rebuilds landed. Any row that had gated a design
+  on "deployed but not switched on" would have gated on a coin flip. The decay-proof form of the same
+  observation: **the deploy axis OSCILLATES and is self-correcting; the activation queue is MONOTONE
+  and nobody drains it.** Prefer the monotone quantity when choosing what to design against.
+
+- 2026-07-29 (row 10) **THE COORDINATOR'S GRAVEYARD POINTER WAS WRONG IN BOTH DIRECTIONS, and the
+  under-count is the less dangerous error.** It named two row-10 artifacts on `fix/infra-perfection`.
+  One (`tests/statusline-mail-badge.bats`) is not on that branch at all — it belongs to a 📬 badge
+  that is row 3's surface and that row 3 (DONE) deliberately did not land, so taking the test alone
+  would have landed a RED suite. The other (`tests/statusline-identity.bats`) is there but **useless
+  alone**: its harness self-check asserts `grep -q 'porcelain=v2' statusline.sh`, and the refactor it
+  guards — `78de6237`, which `cherry-pick -x` applies CLEAN — **was not in the list**. So a row that
+  trusted the pointer would have landed a permanently-red test and left the actual deliverable
+  stranded. **The two commands are the artifact; any hand-maintained cross-row index is a pointer that
+  decays exactly like every other handed-down count on this map.** Also: re-derive the numbers inside
+  a recovered commit's own message — `78de6237` claims 109 ms → 25-30 ms; measured here over 20
+  renders each it is **108 ms → 63 ms**. The 108 ms baseline reproduced exactly; the after-figure did
+  not, and taking the commit was still right.
+
+- 2026-07-29 (row 10) **`shellcheck -S warning` IS A WEAKER CHECK THAN THE LAND GATE, which runs at
+  default severity.** One land went RED on an `SC2016` **info** that every pre-land check had passed.
+  Cheap, universal fix: verify with bare `shellcheck` before every land, not a severity-filtered run.
+  Same shape as the `bats` corpus lesson — a locally-green weaker gate reads as clearance.
+
 
 - 2026-07-29 (row 2's close) **A GATE THAT REFUSES EVERYTHING MAKES ITS METRIC READ ZERO, AND ZERO
   READS AS SUCCESS.** Row 2's cell was "a watched pane must never vanish illegibly" and the honest
