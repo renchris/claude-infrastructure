@@ -1248,10 +1248,54 @@ def cloud_body(
     return "".join(s)
 
 
+def seal_runs(
+    cols: list[tuple[float, float, float, float]], bleed: float = 0.75
+) -> list[tuple[float, float, float, float]]:
+    """Overlap each run into its right-hand neighbour so no ANTI-ALIASED SEAM can open between them.
+
+    The defect this closes, reported by the operator against the clouds: a hairline of background
+    showing through the middle of a cloud, crawling as the layer scrolls, and flashing bright wherever
+    the moon passed behind it.
+
+    Two abutting shapes do NOT composite to full coverage. Each cloud run sits at a FRACTIONAL x (the
+    per-cloud random offset, e.g. -1633.31), so the shared edge falls inside a device pixel; the
+    renderer draws run A with partial alpha `a` there, then run B with partial alpha `b` OVER it, and
+    the result is `a + b(1-a)`, which is strictly less than 1 whenever both are. The uncovered
+    remainder is the sky — one pixel wide, exactly as reported. It crawls because the scroll transform
+    changes the sub-pixel phase every frame, and it is brightest over the moon because that is what is
+    behind it.
+
+    Widening each run into the next removes the shared edge entirely: the seam pixel is now interior
+    to a shape rather than a boundary between two. `bleed` is under one art pixel, so at every display
+    scale the overlap is smaller than a rendered pixel and cannot show as a step; the runs are the
+    SAME fill, so an overlap is invisible by construction where a gap is not.
+
+    NOT fixed by `shape-rendering="crispEdges"`. That trades anti-aliasing for rounding, and two runs
+    whose shared fractional edge rounds in opposite directions open a HARD one-pixel gap instead of a
+    soft one — the same defect with sharper edges. Geometry that cannot seam beats a rendering hint
+    that relocates the seam.
+
+    The last run is left alone: there is no neighbour to bleed into, and extending it would grow the
+    cloud's silhouette.
+    """
+    out = []
+    for i, (x, y, w, h) in enumerate(cols):
+        if i + 1 < len(cols) and abs((x + w) - cols[i + 1][0]) < 1e-9:
+            w += bleed
+        out.append((x, y, w, h))
+    return out
+
+
 def merge_runs(
     cols: list[tuple[float, float, float, float]],
 ) -> list[tuple[float, float, float, float]]:
-    """Coalesce adjacent equal-height columns into one rect — same picture, far fewer nodes."""
+    """Coalesce adjacent equal-height columns into one rect — same picture, far fewer nodes.
+
+    Then SEAL what remains. Coalescing removes the joins between equal-height columns but leaves one
+    at every change of height, and this function is the chokepoint every skyline in the file passes
+    through — clouds, their lit crowns, the near foreground band. Sealing here fixes all of them at
+    once; sealing at the call sites would fix whichever ones a future author remembered.
+    """
     out: list[list[float]] = []
     for x, y, w, h in cols:
         if (
@@ -1262,7 +1306,7 @@ def merge_runs(
             out[-1][2] += w
         else:
             out.append([x, y, w, h])
-    return [(a, b, c, d) for a, b, c, d in out]
+    return seal_runs([(a, b, c, d) for a, b, c, d in out])
 
 
 # ── emit helpers ──────────────────────────────────────────────────────────────────────────────────
