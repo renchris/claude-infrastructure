@@ -53,7 +53,6 @@ cc-await-ping.bats
 cc-backlog.bats
 cc-blockers.bats
 cc-classify.bats
-cc-close-attrib.bats
 cc-crash-report.bats
 cc-decide.bats
 cc-digest.bats

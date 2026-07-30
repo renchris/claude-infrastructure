@@ -22,6 +22,23 @@
 # also means wrapping `claude-latest` (which itself execs the versioned node binary) still
 # lands the SAME PID the watchdog sees.
 #
+# DURABLE STDERR LOG (eval-track crash forensics). The close-record's stderr_tail is a
+# 40-line, secret-filtered SUMMARY written at exit — so it is absent in exactly the case that
+# matters most: a group SIGKILL (OOM killer, force-quit) takes this wrapper down with its
+# child and write_record never runs. The eval track has only ever had that summary, because
+# claude-next / -2/-3/-4, claude-fable*, claude-desk* and every handoff-fire spawn exec the
+# versioned binary through THIS wrapper and never through bin/claude-latest (which does write
+# a durable log). Result, measured 2026-07-29: 0 of 52 rows in claude-crashes.jsonl ever
+# carried a stderr_log, and that day's three eval-track deaths landed as "abrupt-unknown"
+# with no close-record either. So the capture is ALSO hard-linked into
+# ~/.claude/logs/stderr/<ts>-<pid>.log — byte-identical to the namespace bin/claude-latest
+# writes and lead-crash-watchdog.sh:821 already globs (`*-<pid>.log`), so both tracks join
+# through one unchanged consumer. A hard link, never a rename: `tee`'s own path must stay
+# fixed or it would race the rename and re-create the old name (O_CREAT) under us.
+# The log is RAW stderr — untruncated and NOT secret-filtered (same as claude-latest's), but
+# 0600 via mktemp's inode rather than tee's umask. The record's tail stays the filtered,
+# parseable summary; the log is the local full evidence.
+#
 # HARD RULE — FAIL OPEN EVERYWHERE. Capture must never delay or break a session. There is
 # no `set -e`; every capture step is individually guarded; the worst case is a plain exec
 # with no record. Kill switch: export CC_CLOSE_ATTRIB_DISABLED=1 (⇒ plain exec, no capture).
@@ -38,6 +55,9 @@ shift
 BIN_ARGV=("$@")   # the real binary's args (for argv[first 3] in the record)
 
 RECORDS_DIR="${CC_CLOSE_RECORDS_DIR:-$HOME/.claude/logs/close-records}"
+# Same $HOME-derived path bin/claude-latest writes and lead-crash-watchdog.sh:821 globs.
+STDERR_DIR="${CC_STDERR_LOG_DIR:-$HOME/.claude/logs/stderr}"
+STDERR_KEEP="${CC_STDERR_LOG_KEEP:-200}"   # defensive bound; crashes are rare
 
 # ── best-effort setup — none of this may ever be fatal ──────────────────────────────────
 mkdir -p "$RECORDS_DIR" 2>/dev/null || true
@@ -64,6 +84,9 @@ fi
 
 START_EPOCH="$(date +%s 2>/dev/null || echo 0)"
 STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '')"
+# local-time stamp for the durable log's name — same format bin/claude-latest uses, so both
+# tracks' logs sort together in one directory listing.
+STARTED_STAMP="$(date +%Y%m%dT%H%M%S 2>/dev/null || printf '%s' "$START_EPOCH")"
 
 # ── capability gate: kill-switch, bash, and a runtime process-substitution probe. Any doubt
 #    ⇒ plain exec (fail-open). The probe confirms /dev/fd `>(...)` actually works here. ─────
@@ -114,10 +137,15 @@ write_record() {
       || true; } | _json_escape )"
   fi
 
+  # stderr_log — the durable, untruncated companion to stderr_tail. Appended LAST: every
+  # reader is name-keyed (close_record_field), so a new trailing field is additive.
+  local log_json=""
+  [[ -n "$STDERR_LOG" && -s "$STDERR_LOG" ]] && log_json="$(printf '%s' "$STDERR_LOG" | _json_escape)"
+
   local out="$RECORDS_DIR/${rpid:-0}-${START_EPOCH}.json"
   local tmp="$out.tmp.$$"
-  if printf '{"pid":%s,"ppid":%s,"argv":["%s","%s","%s"],"started_at":"%s","ended_at":"%s","exit_code":%s,"signal":"%s","stderr_tail":"%s","version":"%s"}\n' \
-    "${rpid:-0}" "$$" "$a0" "$a1" "$a2" "$STARTED_AT" "$ENDED_AT" "${rcode:-0}" "$rsig" "$tail_json" "$rver" \
+  if printf '{"pid":%s,"ppid":%s,"argv":["%s","%s","%s"],"started_at":"%s","ended_at":"%s","exit_code":%s,"signal":"%s","stderr_tail":"%s","version":"%s","stderr_log":"%s"}\n' \
+    "${rpid:-0}" "$$" "$a0" "$a1" "$a2" "$STARTED_AT" "$ENDED_AT" "${rcode:-0}" "$rsig" "$tail_json" "$rver" "$log_json" \
     > "$tmp" 2>/dev/null; then
     mv -f "$tmp" "$out" 2>/dev/null || rm -f "$tmp" 2>/dev/null
   else
@@ -141,6 +169,19 @@ trap '_forward HUP'  HUP
 { exec "$REAL_BIN" "$@" 2> >(tee -a "$CAPTURE" >&2); } <&0 &
 child=$!
 
+# ── hard-link the live capture to its durable, watchdog-joinable name. Only now is $child
+#    (== LEAD_PID) known, and `ln` leaves tee's own path untouched, so there is no race: both
+#    names are the same inode and tee keeps writing to it. Guarded end-to-end — if the link
+#    cannot be made (e.g. a cross-device $STDERR_DIR) the session is unaffected and behaviour
+#    falls back to the record's tail alone. ───────────────────────────────────────────────────
+STDERR_LOG=""
+if mkdir -p "$STDERR_DIR" 2>/dev/null; then
+  _cand="$STDERR_DIR/${STARTED_STAMP}-${child}.log"
+  if ln "$CAPTURE" "$_cand" 2>/dev/null; then
+    STDERR_LOG="$_cand"
+  fi
+fi
+
 code=0
 # a trapped signal makes `wait` return early → loop until the child is truly gone.
 while kill -0 "$child" 2>/dev/null; do
@@ -151,5 +192,20 @@ trap - INT TERM HUP
 ENDED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '')"
 
 write_record "$child" "$code" || true
-rm -f "$CAPTURE" 2>/dev/null || true   # the (secret-safe) tail now lives inside the record
+
+# ── dispose of the capture. The temp NAME always goes (the record now carries the secret-safe
+#    tail); the durable per-pid link survives only if it holds actual evidence — an empty log
+#    is clean-exit litter, exactly as bin/claude-latest treats its own. Then bound the
+#    directory. Both are best-effort and must never affect the exit path. ────────────────────
+rm -f "$CAPTURE" 2>/dev/null || true
+if [[ -n "$STDERR_LOG" ]]; then
+  [[ -s "$STDERR_LOG" ]] || rm -f "$STDERR_LOG" 2>/dev/null || true
+  # Cap to the newest $STDERR_KEEP. ls -1t is safe on this pattern: names are wrapper- and
+  # launcher-controlled (<ts>-<pid>.log, no spaces/newlines) and macOS find has no -printf
+  # for an mtime sort. This also collects logs leaked by a hard-killed wrapper, which never
+  # reaches this line — the next session's exit bounds them.
+  # shellcheck disable=SC2012
+  { ls -1t "$STDERR_DIR"/*.log 2>/dev/null | tail -n +$((STDERR_KEEP + 1)) \
+      | while IFS= read -r _old; do rm -f "$_old" 2>/dev/null || true; done; } || true
+fi
 exit "$code"
