@@ -15,8 +15,24 @@ footprints — the prints repeat every 48 px, so a print-based shift is only eve
 pitch, and "moved one pitch" and "did not move at all" are the same reading. The foreground's top
 edge is aperiodic within a tile, so its shift is unambiguous.
 
-The ambient pair at the end is the positive control. Without it a probe that returned zero for
-everything would look like proof that the world stops, which is the wrong half of the claim.
+The ambient pairs are the positive control. Without them a probe that returned zero for
+everything would look like proof that the world stops, which is the wrong half of the claim. They
+are DERIVED rather than chosen, so they cannot drift into a beat: `world_segments()` covers the
+whole loop, and every stretch nobody declared a rate for is ambient by construction.
+
+NOTHING HERE MAY KEEP ITS OWN COPY OF A NUMBER, and both halves of that rule were learned the hard
+way by this file:
+
+  · The interval table used to be hand-written, and it went stale the moment the beats were re-timed
+    — it probed 4.0-6.0s for THE REFUSAL (which now runs 17.0-22.0) and 13.0-20.0 for THE ASK (now
+    26.0-35.0), i.e. it measured ambient world and labelled it as beats. Seven of eight intervals
+    reported MISMATCH against an asset that was correct. Intervals now come from
+    `world_segments()`, the same function the warp keyframes are generated from.
+  · The model used to be computed at `STRIP_V` (96 px/s) while the band being measured is the NEAR
+    FOREGROUND, whose period the parallax fix (`6a38e453`) moved to P/16 = 128 px/s. Every ambient
+    row therefore read exactly 128/96 = 4/3 of model. The band's rate is now read out of the
+    ASSET'S OWN emitted stylesheet — not out of gen.py, because this probe is also pointed at older
+    assets recovered from git as its RED control, and those carry their own rate.
 
     scripts/banner-world-clock-probe.py assets/banner/v6a-long-night.svg
 
@@ -27,6 +43,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import re
 import subprocess
 import sys
 import tempfile
@@ -55,18 +72,65 @@ def load_gen():
 
 g = load_gen()
 
-# (t0, t1, what it is). Every interval is a whole number of strides, because that is the only place
-# the world clock is allowed to change rate.
-PAIRS = [
-    (4.0, 4.5, "REFUSAL: the creature settles, world holds"),
-    (4.5, 5.0, "REFUSAL: the world pulls BACK one print pitch"),
-    (5.0, 5.5, "REFUSAL: it re-walks the step it was sent back over"),
-    (5.5, 6.0, "REFUSAL: making up the ground it lost"),
-    (13.0, 14.0, "ASK: dead stop"),
-    (16.0, 17.0, "ASK: still dead, three seconds in"),
-    (19.0, 20.0, "ASK: resumes at treble to clear the debt"),
-    (30.0, 31.0, "CONTROL: ambient world, nothing declared"),
-]
+# The scroll class whose band `BAND_Y0..BAND_Y1` crosses. `ground_detail`'s near foreground is drawn
+# at `base = GROUND + 56` with a +/-9 stepped top edge and emitted as `tiled(..., "fgbs", P/16)`, so
+# the window at y=561..574 sits across exactly this layer and no other.
+BAND_CLASS = "fgbs"
+
+SHIFT_SPAN = (
+    400  # px — best_shift's search half-width; an interval may not out-travel it
+)
+
+
+def band_rate(asset: Path) -> float:
+    """The band's nominal px/s, read out of the ASSET'S OWN stylesheet.
+
+    Read from the artifact rather than from gen.py on purpose. This probe's RED control is an older
+    asset recovered from git, and the whole point of that control is that its clock differs from the
+    current generator's — sourcing the rate from gen.py would silently model the control at today's
+    numbers and grade it against a world it does not live in.
+    """
+    m = re.search(rf"\.{BAND_CLASS}{{animation:sc *([0-9.]+)s", asset.read_text())
+    if not m:
+        raise SystemExit(
+            f"probe: no `.{BAND_CLASS}` scroll rule in {asset.name} — this probe measures the band "
+            f"that class scrolls, so without it every displacement below would be compared against "
+            f"a rate that is a guess"
+        )
+    return g.TILE / float(m.group(1))
+
+
+def derive_pairs(band_v: float) -> list[tuple[float, float, str]]:
+    """One probe interval per world-clock segment, taken from gen.py's own `world_segments()`.
+
+    Never a hand-written table. `world_segments()` is the function the warp keyframes themselves are
+    generated from, so a re-timed beat moves the probe with it; the previous hand-written table went
+    stale on exactly that and spent its life reporting MISMATCH against correct assets.
+
+    A segment is probed WHOLE where its displacement stays inside `best_shift`'s search span — so a
+    rate-0 segment is measured across its full six seconds rather than a token half of one, which is
+    the strongest form of the claim "the world stopped". Where it would out-travel the span (every
+    ambient stretch does), one stride is probed at the segment's centre instead, kept on the stride
+    grid so it cannot straddle a rate change.
+    """
+    owner: dict[tuple[float, float], str] = {}
+    for beat, mods in g.WORLD_MOD.items():
+        base = g.RARE_EVENTS[beat][0]
+        for off, n, _r in mods:
+            owner[(base + off * g.STRIDE, base + (off + n) * g.STRIDE)] = beat
+
+    pairs = []
+    for t0, t1, r in g.world_segments():
+        who = owner.get((t0, t1))
+        if abs(band_v * (t1 - t0) * r) > SHIFT_SPAN - band_v * g.STRIDE:
+            k = int((t1 - t0) / 2 / g.STRIDE)  # stride-aligned, at the segment's centre
+            a = t0 + k * g.STRIDE
+            b = a + g.STRIDE
+        else:
+            a, b = t0, t1
+        what = "AMBIENT (control): nothing declared" if who is None else who
+        pairs.append((round(a, 4), round(b, 4), f"{what} · rate {r}"))
+    return pairs
 
 
 def row_profile(png: Path, width: int) -> list[float]:
@@ -141,7 +205,10 @@ def main() -> int:
         )
     g.build(art)
 
-    times = sorted({t for p in PAIRS for t in p[:2]})
+    band_v = band_rate(asset)
+    pairs = derive_pairs(band_v)
+
+    times = sorted({t for p in pairs for t in p[:2]})
     with tempfile.TemporaryDirectory() as td:
         out = Path(td)
         subprocess.run(
@@ -176,16 +243,21 @@ def main() -> int:
 
     print(f"banner-world-clock-probe: {asset}")
     print(
-        f"  band y={BAND_Y0}..{BAND_Y1}, {args.width}px wide, tolerance +/-{TOL:g}px\n"
+        f"  band y={BAND_Y0}..{BAND_Y1} (.{BAND_CLASS} @ {band_v:g}px/s), {args.width}px wide, "
+        f"tolerance +/-{TOL:g}px\n"
     )
     print(f"  {'interval':>13}  {'measured':>9}  {'model':>8}  {'rate':>5}  what")
     bad = []
-    for t0, t1, label in PAIRS:
+    for t0, t1, label in pairs:
         shift, s_best, s_median = best_shift(prof[t0], prof[t1])
         q0 = g._interp(g._ENCODED_STRIP, t0)
         q1 = g._interp(g._ENCODED_STRIP, t1)
-        model = g.STRIP_V * (t1 - t0) - (q1 - q0)
-        rate = model / (g.STRIP_V * (t1 - t0))
+        # `q` is carried in STRIP pixels, and `warp_css` scales each layer's offset by v/STRIP_V —
+        # so a layer's displacement is the strip's, taken in that layer's own units. Modelling the
+        # near foreground at STRIP_V is what made every ambient row read 4/3 of model.
+        strip_model = g.STRIP_V * (t1 - t0) - (q1 - q0)
+        model = strip_model * band_v / g.STRIP_V
+        rate = strip_model / (g.STRIP_V * (t1 - t0))
         ok = abs(shift - model) <= TOL
         # A flat correlation surface means the peak carries no information, whatever it says. Judged
         # against the surface's own median, so the test has no hidden unit to get wrong.
