@@ -294,6 +294,43 @@ that assumed the land gate would execute a suite is therefore not being enforced
 separately as `e38d68f0c3c2` (the `bats-assert-liveness` ratchet had not been enforcing; trunk
 carried 25 dead assertions).
 
+## The cap WAS built, and it must NOT be landed — `refs/proposals/gate-slot-semaphore`
+
+The remedy this item asked for exists as finished, tested code. **Do not land it, and do not rebuild
+it.** `refs/proposals/gate-slot-semaphore` = `3d052701` (2026-07-26, UNLANDED, reachable from no
+branch head; 602 insertions over 5 files, incl. 231 lines of tests) adds `gate_slot_acquire`: a
+machine-wide **counting semaphore** keyed on the same shared git dir as `land-lock`, capping
+concurrent gates at `SHIP_LAND_GATE_SLOTS` (default `cores/3`, floor 2 — **3 slots** on this 10-core
+box), the slot held *only* across the unlocked gate, fail-open after `SHIP_LAND_GATE_SLOT_WAIT`
+(**2700 s**) with `gate_wait_s`/`gate_slot` telemetry and a `SHIP_LAND_GATE_SLOTS=0` kill switch.
+
+It is careful work and it was the right design **for the tree it was written against** — its own
+sizing comment says so: *"5-9 gates ⇒ load 20-31, peak 96; `cores/3` keeps the …"*, i.e. calibrated
+against **full-corpus** gates. `492c5106` removed that subject two days later, and the arithmetic
+inverts:
+
+- **It would queue 45 minutes to protect 29 seconds.** The thing being admitted is no longer a
+  20-53 min corpus; it is statics + ratchets + a shed-able ≤120 s smoke — measured at **29 s** above.
+  A 3-slot gate with a 2700 s wait bound is a queue whose wait dwarfs its work by ~90×.
+- **Fail-open makes it buy latency, not protection.** After 2700 s the land "proceeds unadmitted" —
+  so under exactly the sustained contention it exists for, it *still* does the uncapped thing, having
+  first spent 45 minutes. That is verbatim the critique that killed `gate_admit`: every waiter that
+  finally timed out ran the corpus anyway.
+- **It re-introduces a WAIT into the land path**, which R7 forbids outright. Note the mechanism
+  critique does *not* transfer: a **count**-keyed semaphore has none of `gate_admit`'s self-starvation
+  feedback (slots are directly controlled; loadavg is a noisy signal the waiters' own subjects
+  produce, and is not even session-attributable). Had the corpus stayed on the land path, this would
+  have been the *correct* fix and strictly better than the load-keyed shed. It loses on **subject
+  size**, not on mechanism — record that distinction, because the reasoning is reusable if a corpus
+  ever returns to the land.
+
+Its open backlog item `6767ec9bb425` ("gate admission bounds LOAD but not CONCURRENCY — N landers can
+all observe load < ceiling and start together") is closed with this section as evidence. The
+observation was **exactly right**: the shed is a per-lander predicate and genuinely does not cap the
+herd. What removed the risk is that the herd's per-member cost collapsed to seconds — not that the
+herd got capped. Should a corpus ever return to a land, reopen that item and start from `3d052701`
+rather than from scratch.
+
 **Lesson for the ledger.** A work item's symptom and its prescribed remedy rot independently. This
 item's symptom was fixed at a different layer two days after filing, while one of its three named
 remedies (the queue) became actively forbidden in the same change. Re-derive the premise from disk
