@@ -224,3 +224,189 @@ CC_BOXKEY_PREFIX_SHA="${CC_BOXKEY_PREFIX_SHA:-c967d7cd}"
   echo "$output" | grep -q "cc-await-ping $U" || false     # RED: pane key, the defect
   ! echo "$output" | grep -q "cc-await-ping $S" || false
 }
+
+# ══ THE THIRD STATE: terminating / lead-owned ⇒ the floor ABSTAINS ════════════════════════════════
+# The floor read only ACTIVE and IDLE. An Agent-Teams assignee that had ACCEPTED a shutdown_request
+# was therefore blocked from ending its turn for ~4 HOURS live: honouring the shutdown re-entered this
+# hook, which demanded a 4-hour watcher first. CC_WAKE_FLOOR_MAX did not bound it, because the
+# already-armed branch RESETS the budget — so a COMPLIANT session armed, cleared its own budget, lost
+# the watcher to the teardown it was obeying, and met a floor with count=0 again.
+#
+# The two abstains are tested SEPARATELY and each with a control that can fail the same way: an
+# over-broad gate here silently disarms the whole fleet, which is worse than the defect it fixes.
+
+# ancestry fixture — rows are "pid ppid command…", walked from CC_WF_START_PID (a hook's own $$ is
+# not knowable to this suite, which is why that seam exists).
+CCBIN="/Users/x/.claude-219/node_modules/@anthropic-ai/claude-code/bin/claude.exe"
+pstable() {
+  local p="$BATS_TEST_TMPDIR/pstable-$BATS_TEST_NUMBER"
+  printf '%s\n' "$@" > "$p"
+  export CC_WF_PSTABLE_FILE="$p" CC_WF_START_PID=1000
+}
+# hop2 = the CC process, carrying the three flags CC gives ONLY a teammate.
+assignee_ancestry() { pstable \
+  "1000 1001 bash $HOOK" \
+  "1001 1002 /bin/zsh -c source /snap.zsh" \
+  "1002 1003 $CCBIN --agent-id ${1:-gu2-arch}@session-${2:-t1} --agent-name ${1:-gu2-arch} --team-name session-${2:-t1} --agent-color blue" \
+  "1003 1 -zsh"; }
+lead_ancestry() { pstable \
+  "1000 1001 bash $HOOK" \
+  "1001 1002 /bin/zsh -c source /snap.zsh" \
+  "1002 1003 $CCBIN --permission-mode default --model claude-opus-5" \
+  "1003 1 -zsh"; }
+# the harness's own record of the team, as CC writes it (lead = tmuxPaneId "leader"/agentType team-lead)
+team_cfg() { # $1=team-suffix  $2=assignee member name
+  local d="$BATS_TEST_TMPDIR/teamroot/session-${1}"; mkdir -p "$d"
+  jq -n --arg n "$2" '{name:"t",members:[
+      {agentId:"team-lead@t",name:"team-lead",agentType:"team-lead",tmuxPaneId:"leader"},
+      {agentId:($n+"@t"),name:$n,agentType:"general-purpose",tmuxPaneId:"7D0DE6BE-56AC-41BE-9589-195385BE055A"}]}' \
+    > "$d/config.json"
+  export CC_WF_TEAM_ROOTS="$BATS_TEST_TMPDIR/teamroot"
+}
+# a teardown marker, in the writers' exact shape. $1=filename stem (sid or pane), $2=sid in the BODY.
+mark_teardown() {
+  export CC_TEARDOWN_DIR="$BATS_TEST_TMPDIR/teardown"; mkdir -p "$CC_TEARDOWN_DIR"
+  printf '{"key_kind":"k","pane":"%s","sid":"%s","mode":"teammate-idle","ts":"t"}\n' \
+    "$U" "${2:-}" > "$CC_TEARDOWN_DIR/$1.json"
+}
+# stderr carries the abstain reason; $output alone cannot see it. The `2>&1 >/dev/null` ORDER is
+# deliberate and is the whole point: fd2 is pointed at the capture FIRST, then fd1 is discarded, so
+# $output holds stderr ONLY. Reversing it (the mistake SC2069 usually catches) would capture stdout
+# and throw stderr away, and every assertion below would then read the decision JSON instead of the
+# abstain reason — i.e. it would still "pass" on the block tests and silently stop testing anything.
+# shellcheck disable=SC2069
+actuate_err() { printf '{"cwd":"%s","session_id":"%s","transcript_path":""}' "$CWD" "${1:-sidA}" \
+  | bash "$HOOK" 2>&1 >/dev/null; }
+
+@test "(A) an ASSIGNEE going idle unarmed ⇒ the floor stands down (the ~4h deadlock)" {
+  assignee_ancestry gu2-arch t1; team_cfg t1 gu2-arch
+  run actuate sidA
+  [ "$status" -eq 0 ]
+  ! blocked "$output" || false
+}
+
+@test "(A) the abstain names WHY, and says the team config confirmed it" {
+  assignee_ancestry gu2-arch t1; team_cfg t1 gu2-arch
+  run actuate_err sidA
+  echo "$output" | grep -q "ABSTAINS" || false
+  echo "$output" | grep -q "gu2-arch@session-t1" || false
+  echo "$output" | grep -q "confirmed by its team config" || false
+}
+
+@test "(A) UNKNOWN: no readable team config ⇒ argv evidence still stands (says so)" {
+  assignee_ancestry gu2-arch t1
+  export CC_WF_TEAM_ROOTS="$BATS_TEST_TMPDIR/nonexistent-root"
+  run actuate sidA
+  ! blocked "$output" || false
+  run actuate_err sidA
+  echo "$output" | grep -q "argv evidence only" || false
+}
+
+@test "DISCRIMINATOR (A) REFUTED: the team's own config knows no such member ⇒ still BLOCKS" {
+  # ps -o command= flattens argv, so a brief that QUOTES assignee argv reads as three real flags —
+  # concrete in this repo, and the reason argv alone is not allowed to disarm a lead.
+  assignee_ancestry not-a-member t1; team_cfg t1 someone-else
+  run actuate sidA
+  blocked "$output" || false
+}
+
+@test "CONTROL (A): an ordinary LEAD ancestry still gets the floor" {
+  lead_ancestry
+  run actuate sidA
+  blocked "$output" || false
+}
+
+@test "DISCRIMINATOR (A): ONE flag is not an assignee (a brief that merely mentions --agent-id)" {
+  pstable "1000 1001 bash $HOOK" \
+          "1001 1002 /bin/zsh -c source /snap.zsh" \
+          "1002 1003 $CCBIN --model claude-opus-5 -p brief mentions --agent-id x@session-t1 verbatim" \
+          "1003 1 -zsh"
+  team_cfg t1 x
+  run actuate sidA
+  blocked "$output" || false
+}
+
+@test "DISCRIMINATOR (A): another pane's assignee is NOT my ancestry ⇒ still BLOCKS" {
+  # the flagged process is real and alive, just not above ME — a machine-wide scan would disarm
+  # every session in the fleet the moment one teammate existed.
+  pstable "1000 1001 bash $HOOK" \
+          "1001 1002 /bin/zsh -c source /snap.zsh" \
+          "1002 1003 $CCBIN --model claude-opus-5" \
+          "1003 1 -zsh" \
+          "2000 1 $CCBIN --agent-id other@session-t1 --agent-name other --team-name session-t1"
+  team_cfg t1 other
+  run actuate sidA
+  blocked "$output" || false
+}
+
+@test "(B) a fresh SID-keyed teardown marker ⇒ terminating, not idle ⇒ stands down" {
+  mark_teardown sidA sidA
+  run actuate sidA
+  ! blocked "$output" || false
+  run actuate_err sidA
+  echo "$output" | grep -q "terminating, not going idle" || false
+}
+
+@test "(B) a PANE-keyed marker with an EMPTY sid is the legitimate self-close case ⇒ stands down" {
+  # the real self-close path blanks SESSION_ID; rejecting this would regress the 2026-07-23 fix.
+  mark_teardown "$U" ""
+  run actuate sidA
+  ! blocked "$output" || false
+}
+
+@test "DISCRIMINATOR (B): a pane marker naming a DIFFERENT sid ⇒ the successor still gets the floor" {
+  # an in-place --recycle leaves the PREDECESSOR's marker on a pane that now hosts the SUCCESSOR.
+  mark_teardown "$U" "sid-PREDECESSOR"
+  run actuate sidA
+  blocked "$output" || false
+}
+
+@test "DISCRIMINATOR (B): a STALE marker is not a teardown in progress ⇒ still BLOCKS" {
+  mark_teardown sidA sidA
+  touch -t 202001010000 "$CC_TEARDOWN_DIR/sidA.json"
+  run actuate sidA
+  blocked "$output" || false
+}
+
+@test "SEAM: CC_WAKE_FLOOR_TEARDOWN=0 restores the old behaviour for an assignee" {
+  assignee_ancestry gu2-arch t1; team_cfg t1 gu2-arch
+  export CC_WAKE_FLOOR_TEARDOWN=0
+  run actuate sidA
+  blocked "$output" || false
+}
+
+@test "an abstain must NOT spend a budget attempt (it means 'does not apply', not 'declined')" {
+  assignee_ancestry gu2-arch t1; team_cfg t1 gu2-arch
+  run actuate sidA
+  ! blocked "$output" || false
+  [ ! -f "$CC_MAILBOX_DIR/$U.wakefloor" ]            # nothing written ⇒ nothing spent
+  # …so the SAME session, once it is no longer an assignee, still meets a floor with a full budget.
+  lead_ancestry
+  run actuate sidA
+  blocked "$output" || false
+}
+
+@test "NO SILENT DROP: abstaining with mail pending says so where a human can see it" {
+  assignee_ancestry gu2-arch t1; team_cfg t1 gu2-arch
+  mail 1; mail 2
+  run actuate sidA
+  ! blocked "$output" || false
+  printf '%s' "$output" | jq -r .systemMessage | grep -q '2 message(s) are still unread' || false
+}
+
+# Pinned, never a moving ref: once this lands on origin/main a floating control IS the fixed tree and
+# the proof inverts into a vacuous pass.
+CC_ASSIGNEE_ABSTAIN_SHA="${CC_ASSIGNEE_ABSTAIN_SHA:-638fba76}"
+@test "RED-PROOF: the pre-fix hook BLOCKS an assignee that has been told to shut down" {
+  local old="$BATS_TEST_TMPDIR/preabstain"; mkdir -p "$old"
+  git -C "$REPO" archive "$CC_ASSIGNEE_ABSTAIN_SHA" hooks | tar -x -C "$old" \
+    || skip "pre-fix tree $CC_ASSIGNEE_ABSTAIN_SHA unavailable"
+  [ -f "$old/hooks/session-continue.sh" ]
+  # the control must genuinely predate the fix — a skip reads as a pass, so this is asserted
+  ! grep -q 'wf_assignee_argv' "$old/hooks/session-continue.sh" || false
+  assignee_ancestry gu2-arch t1; team_cfg t1 gu2-arch
+  mark_teardown sidA sidA
+  run bash -c "printf '{\"cwd\":\"%s\",\"session_id\":\"sidA\",\"transcript_path\":\"\"}' '$CWD' | bash '$old/hooks/session-continue.sh' 2>/dev/null"
+  [ "$status" -eq 0 ]
+  blocked "$output" || false                          # RED: an assignee under teardown, blocked
+}
