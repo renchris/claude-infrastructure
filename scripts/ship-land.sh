@@ -106,7 +106,9 @@
 # Env overrides (mostly for tests): SHIP_LAND_LANE · SHIP_LAND_SMOKE_BUDGET_S ·
 # SHIP_LAND_SMOKE_NICE · SHIP_LAND_TIMEOUT_BIN (set-but-EMPTY ⇒ unbounded children) ·
 # CC_GATE_MAX_LOAD (0|off ⇒ never shed) · SHIP_LAND_SHARED_CHECKOUT · SHIP_LAND_SESSION_BRANCH_RE
-# · SHIP_LAND_ALLOW_SHARED=1 · SHIP_LAND_ESC_RE · SHIP_LAND_DECISIONS_DIR · LAND_LOG ·
+# · SHIP_LAND_ALLOW_SHARED=1 · SHIP_LAND_ESC_RE (EFFECT class — exemptible) ·
+# SHIP_LAND_ESC_RE_SECRET (DISCLOSURE class — never exemptible) · SHIP_LAND_ESC_EXEMPT_FILE
+# (default scripts/esc-exempt.manifest) · SHIP_LAND_DECISIONS_DIR · LAND_LOG ·
 # LAND_LOCK_DIR (see land-lock.sh) · SHIP_LAND_VERIFY_RETRIES (default 2; 0 = single-shot,
 # the pre-T-P9-7 kill switch) · SHIP_LAND_GATE_ROUNDS (default 3; 0 = straight to the in-lock
 # statics re-gate) · SHIP_LAND_GATE_SCOPE / SHIP_LAND_GATE_POLICY / SHIP_LAND_GATE_SELECT ·
@@ -228,11 +230,31 @@ if [[ -n "${SHIP_LAND_TIMEOUT_BIN+set}" ]]; then TIMEOUT_BIN="$SHIP_LAND_TIMEOUT
 else TIMEOUT_BIN="$(_resolve_timeout || true)"; fi
 NICE_BIN="$(command -v nice 2>/dev/null || true)"
 
-ESC_RE_DEFAULT='DROP[[:space:]]+TABLE|DROP[[:space:]]+COLUMN|DROP[[:space:]]+DATABASE|DROP[[:space:]]+SCHEMA|TRUNCATE[[:space:]]+TABLE|DELETE[[:space:]]+FROM|ALTER[[:space:]]+TABLE[[:space:]].+[[:space:]]DROP|-----BEGIN[[:space:]A-Z]*PRIVATE[[:space:]]+KEY'
+# ---- the escalation surface, as TWO classes ---------------------------------
+# The two halves of the old single regex answer different questions, so they cannot share a scope:
+#
+#   EFFECT class (destructive SQL) — "could auto-landing this DESTROY durable data?" Only meaningful
+#     where the statement can EXECUTE against a store of record, so it is EXEMPTIBLE per path by the
+#     declared manifest below (scripts/esc-exempt.manifest).
+#   DISCLOSURE class (credential material) — "does this commit LEAK a secret?" A private key is
+#     exactly as leaked in a markdown doc as in code, so this class scans EVERY changed file and is
+#     never exemptible by anything.
+#
+# Collapsing them is what made this rail useless: measured over its whole life (land.log, 506 clean
+# / 11 hit, 9 packets) its precision was ZERO — 4 parks were a rebuildable-cache retention GC, 3
+# were docs describing the defect, 1 was the classifier matching its own test corpus. An alarm that
+# only ever fires on benign input carries the same zero bits as one that cannot fire, and it trains
+# the operator to rubber-stamp the packet class meant to stop a real destructive land. The
+# exemption rationale, the measured population and the deliberate NON-entries live in the manifest.
+ESC_RE_EFFECT_DEFAULT='DROP[[:space:]]+TABLE|DROP[[:space:]]+COLUMN|DROP[[:space:]]+DATABASE|DROP[[:space:]]+SCHEMA|TRUNCATE[[:space:]]+TABLE|DELETE[[:space:]]+FROM|ALTER[[:space:]]+TABLE[[:space:]].+[[:space:]]DROP'
+ESC_RE_SECRET_DEFAULT='-----BEGIN[[:space:]A-Z]*PRIVATE[[:space:]]+KEY'
+ESC_EXEMPT_FILE_DEFAULT='scripts/esc-exempt.manifest'
 # NOTE: auth/session/navigation code lands are ALSO escalation-worthy (operator ruling),
 # but this repo's normal churn is full of those words — a substring scan would self-park
 # every land. Keep the default to high-signal destructive-SQL / credential patterns and
-# let a repo extend it via SHIP_LAND_ESC_RE. (Surfaced to the lead as a design tradeoff.)
+# let a repo extend it via SHIP_LAND_ESC_RE (which overrides the EFFECT class — the
+# exemptible one — precisely because that is the class an app repo needs to widen; the
+# DISCLOSURE class has its own SHIP_LAND_ESC_RE_SECRET and defaults to never-exempt).
 
 # ---- helpers ---------------------------------------------------------------
 
@@ -248,20 +270,94 @@ is_python_file() {  # *.py OR a python shebang (the extensionless-glob-miss fix)
   head -1 "$1" 2>/dev/null | grep -qiE '^#!.*python'
 }
 
-esc_scan() {  # $1=range → prints matched escalation lines (empty ⇒ clean). FAIL CLOSED: if grep cannot
-              # evaluate the pattern (rc≥2: invalid regex, or an option-like $re), emit a synthetic hit
-              # so the caller PARKS. The one fail-closed landing rail must NEVER read a malformed
-              # SHIP_LAND_ESC_RE as clean. `--` stops an $re beginning with `-` being parsed as an option;
-              # the explicit rc capture (not `|| true`) stops rc 2 being swallowed as rc 1 (no match).
-  local range="$1" re body out rc
-  re="${SHIP_LAND_ESC_RE:-$ESC_RE_DEFAULT}"
-  body="$(git diff "$range" 2>/dev/null | grep -E '^[-+]' | grep -Ev '^(\+\+\+|---) ' || true)"
+esc_exempt_path() {  # $1=repo-relative path $2=newline-separated patterns → 0 iff DECLARED exempt
+  local p="$1" pats="$2" pat
+  [[ -n "$pats" ]] || return 1
+  while IFS= read -r pat; do
+    [[ -n "$pat" ]] || continue
+    # shellcheck disable=SC2053  # the RHS is a PATTERN on purpose (so `*` crosses `/`), not a literal
+    if [[ "$p" == $pat ]]; then return 0; fi
+  done <<< "$pats"
+  return 1
+}
+
+esc_exempt_patterns() {  # $1=base rev → the declared EFFECT-class patterns (empty ⇒ nothing is exempt)
+  # Read from the BASE revision, never the working tree, and that is the whole anti-self-exemption
+  # mechanism: an entry added inside the landing range is INERT for the land that adds it, so a
+  # change can never widen the exemption set and rely on the widening in one move. Enforced by
+  # construction rather than by review, so a sloppily-reviewed widening cannot take effect either.
+  # It also dissolves the bootstrap circle a park-on-touch rule would create — introducing this
+  # manifest at all would be a "widening" and the rail's own first land could never happen.
+  local base="$1" f
+  f="${SHIP_LAND_ESC_EXEMPT_FILE:-$ESC_EXEMPT_FILE_DEFAULT}"
+  git show "$base:$f" </dev/null 2>/dev/null \
+    | sed -e 's/#.*$//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | grep -v '^$' || true
+}
+
+esc_match() {  # $1=file $2=diff-body $3=regex $4=class → prints `<file>: <class>: <line>` per hit.
+               # FAIL CLOSED: if grep cannot evaluate the pattern (rc≥2: invalid regex, or an
+               # option-like $re), emit a synthetic hit so the caller PARKS. The one fail-closed
+               # landing rail must NEVER read a malformed pattern as clean. `--` stops an $re
+               # beginning with `-` being parsed as an option; the explicit rc capture (not
+               # `|| true`) stops rc 2 being swallowed as rc 1 (no match).
+  local f="$1" body="$2" re="$3" cls="$4" out rc ln
   out="$(printf '%s\n' "$body" | grep -inE -- "$re")"; rc=$?
   if [[ "$rc" -ge 2 ]]; then
-    printf 'ESC-SCAN-ERROR: grep rc=%s — SHIP_LAND_ESC_RE uninterpretable (invalid regex / option-like); failing closed, PARK\n' "$rc"
+    printf '%s: %s: ESC-SCAN-ERROR: grep rc=%s — pattern uninterpretable (invalid regex / option-like); failing closed, PARK\n' \
+      "$f" "$cls" "$rc"
     return 0
   fi
-  [[ -n "$out" ]] && printf '%s\n' "$out"
+  [[ -n "$out" ]] || return 0
+  while IFS= read -r ln; do
+    [[ -n "$ln" ]] && printf '%s: %s: %s\n' "$f" "$cls" "$ln"
+  done <<< "$out"
+  return 0
+}
+
+esc_scan() {  # $1=range → prints matched escalation lines (empty ⇒ clean), each attributed to its FILE.
+              # Per-file is not cosmetic: the old whole-range pipe reported diff-relative line numbers
+              # ("3913:+<the row-delete>") that name no file at all, so the packet could not be reviewed
+              # without re-deriving the diff — and per-path exemption is impossible without knowing
+              # the path. The DISCLOSURE class runs over every file; the EFFECT class is skipped only
+              # where the declared manifest says no durable store can be reached.
+  local range="$1" re_eff re_sec pats exempt_f list f body rc base
+  re_eff="${SHIP_LAND_ESC_RE:-$ESC_RE_EFFECT_DEFAULT}"
+  re_sec="${SHIP_LAND_ESC_RE_SECRET:-$ESC_RE_SECRET_DEFAULT}"
+  base="${range%%..*}"
+  pats="$(esc_exempt_patterns "$base")"
+  exempt_f="${SHIP_LAND_ESC_EXEMPT_FILE:-$ESC_EXEMPT_FILE_DEFAULT}"
+  # NUL-delimited enumeration, and it is load-bearing rather than tidy: `--name-only` QUOTES a
+  # non-ASCII path ("docs/caf\303\251.md"), and feeding that quoted form back as a pathspec matches
+  # nothing — the file's diff would come back empty and the scan would skip it ENTIRELY, i.e. the one
+  # fail-closed landing rail would fail OPEN on any non-ASCII filename. `-z` emits raw bytes with no
+  # quoting, so no path can hide. Via a temp file, not a pipe, so git's rc stays checkable (a pipeline
+  # would hand us grep's rc) and no child can steal the loop's stdin.
+  list="$(mktemp 2>/dev/null)" || {
+    printf 'ESC-SCAN-ERROR: mktemp failed — cannot enumerate the range; failing closed, PARK\n'; return 0; }
+  git -c core.quotePath=false diff --name-only -z "$range" </dev/null >"$list" 2>/dev/null; rc=$?
+  if [[ "$rc" -ne 0 ]]; then
+    rm -f "$list"
+    printf 'ESC-SCAN-ERROR: git diff --name-only rc=%s — cannot enumerate the range; failing closed, PARK\n' "$rc"
+    return 0
+  fi
+  while IFS= read -r -d '' f; do
+    [[ -n "$f" ]] || continue
+    # </dev/null on every child: this loop is fed by a herestring, and a git that read stdin would
+    # eat the remaining file list (the silent-truncation class that makes a security scan pass).
+    body="$(git diff "$range" -- "$f" </dev/null 2>/dev/null | grep -E '^[-+]' | grep -Ev '^(\+\+\+|---) ' || true)"
+    [[ -n "$body" ]] || continue
+    esc_match "$f" "$body" "$re_sec" secret            # (1) DISCLOSURE — every file, never exemptible
+    if [[ "$f" == "$exempt_f" ]]; then                 # (2) the TRUST ROOT changed → surfaced, LOUD
+      # Deliberately NOT a hit: base-read has already made these entries inert for this land, so
+      # parking here would add no security and would make the manifest's own first land impossible.
+      # It is still announced, because a widening the operator never saw is the thing to avoid.
+      printf '⚠ ship-land: the EFFECT-class exemption set (%s) changed in this range. Entries added here are INERT for this land (read from %s); they take effect from the NEXT land.\n' \
+        "$f" "${base:0:12}" >&2
+    fi
+    if esc_exempt_path "$f" "$pats"; then continue; fi  # (3) EFFECT — declared no-durable-store paths
+    esc_match "$f" "$body" "$re_eff" effect
+  done < "$list"
+  rm -f "$list"
   return 0
 }
 
@@ -276,11 +372,18 @@ pkt = {
     "id": os.environ["ID"],
     "class": "B",
     "what_plain": ("ship-land refused to auto-land branch %r: the landing range %r contains an "
-                   "escalation-surface pattern (destructive SQL / credential). Auto-landing "
-                   "destructive or security-sensitive changes is disallowed; a human must review "
-                   "and land." % (os.environ["BRANCH"], os.environ["RANGE"])),
+                   "escalation-surface pattern. Auto-landing destructive or security-sensitive "
+                   "changes is disallowed; a human must review and land. Each matched line below is "
+                   "prefixed `<file>: <class>:` — `secret` = credential material (never exemptible, "
+                   "in any file); `effect` = destructive SQL against a path not declared as "
+                   "cache-only; `exempt-manifest` = the exemption set itself changed, so review the "
+                   "widening. A benign `effect` hit on a rebuildable local cache is a missing entry "
+                   "in scripts/esc-exempt.manifest, not a reason to land past this."
+                   % (os.environ["BRANCH"], os.environ["RANGE"])),
     "options": ["review the flagged lines and land manually via /ship",
                 "amend the commit to remove the escalation pattern, then re-run",
+                "if the hit is `effect` on a rebuildable local cache: declare the path in "
+                "scripts/esc-exempt.manifest (with its reason), land that alone, then re-run",
                 "veto — do not land"],
     "recommendation": "review the flagged lines and land manually if correct",
     "default_if_no_veto": None,
