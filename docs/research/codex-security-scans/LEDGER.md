@@ -68,15 +68,20 @@ secret). `debug/vapid` returns only a boolean for the private key.
 
 ---
 
-## Findings — all 6, none implemented
+## Findings — 6 total: 3 landed, 1 fixed-but-parked, 2 open
+
+**Status re-verified 2026-07-30 by CONTENT on each repo's `origin/main`, not from the backlog's
+`done` records** — and the two disagree. `cb9ab22e7b12` reads `done` in `backlog.jsonl`, but its fix
+sits on an unlanded branch, so the vulnerable code is still what `origin/main` serves. A `done`
+record proves a commit was made; only `git ls-tree`/`show` against the trunk proves it shipped.
 
 | Severity | Where | Backlog | Status |
 |---|---|---|---|
-| **high** | `reso` `src/app/api/replicache-push/route.ts:30,85` — both CSRF defences default to `report`-only while the prod session cookie is `SameSite=None` | `6bc76053887e` | open |
-| medium | `claude-infra` `scripts/limit-recover/lr-reset-poller.sh:391` — `json.dumps`-quoted parked-record fields `eval`'d inside a **loaded launchd job** | `bad94a1a0659` | open |
-| medium | `claude-infra` `hooks/validate-bash.sh:94` — catastrophic-command denylist bypassed by equivalent flag spellings | `c3568d7982af` | open |
-| medium | `doc_classifier` `reviewapp/api/routers/corpus.py:64` — arbitrary-directory census gated on the launcher marker but not caller origin | `cb9ab22e7b12` | open |
-| low | `claude-infra` `scripts/limit-recover/lr-reset-poller.sh:430` — launcher scripts written + `chmod +x` at predictable `/tmp` paths | `7f3b2061dd5d` | open |
+| **high** | `reso` `src/app/api/replicache-push/route.ts:30,85` — both CSRF defences default to `report`-only while the prod session cookie is `SameSite=None` | `6bc76053887e` | **landed** `cfbddc09b` |
+| medium | `claude-infra` `scripts/limit-recover/lr-reset-poller.sh:391` — `json.dumps`-quoted parked-record fields `eval`'d inside a **loaded launchd job** | `bad94a1a0659` | **landed** `29431edd` |
+| medium | `claude-infra` `hooks/validate-bash.sh:94` — catastrophic-command denylist bypassed by equivalent flag spellings | `c3568d7982af` | **landed** `27753483` |
+| medium | `doc_classifier` `reviewapp/api/routers/corpus.py:64` — arbitrary-directory census gated on the launcher marker but not caller origin | `cb9ab22e7b12` | ⚠️ **fixed but PARKED** — `0e9215b3` is on branch `wt-cb9ab22e7b12` only; `origin/main`'s `corpus.py` still has no loopback check |
+| low | `claude-infra` `scripts/limit-recover/lr-reset-poller.sh:430` — launcher scripts written + `chmod +x` at predictable `/tmp` paths | `7f3b2061dd5d` | open (claimed) |
 | low | `claude-infra` `hooks/notify.sh:35,39` — fixed predictable paths in world-writable `/tmp`, append at `:88` follows a symlink | `170ee7570b1a` | open |
 
 **Every finding carries its remediation and remediation-tests inside its bundle's `findings.json`
@@ -106,6 +111,10 @@ controls*, which is where the signal has been concentrated.
 3. **`$TMPDIR` is not storage.** Copy the bundle into this directory as the last step of any scan.
 4. Pass `realpath` output as `--scan-dir` — the finalizer rejects a non-canonical path, and
    `$TMPDIR` on macOS resolves under the `/var` symlink.
+5. **A `done` in the backlog is not a landing.** Fold this table's Status column from the trunk
+   (`git ls-tree origin/main`, or grep the fixed construct out of `git show origin/main:<file>`),
+   never from the ledger record. One of the four `done` rows above was a commit stranded on an
+   unlanded branch — read as fixed, still exploitable on `main`.
 
 ---
 
