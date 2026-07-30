@@ -144,7 +144,9 @@
 #                    CC_WR_GRACE_S · CC_WR_COORD_DIR · CC_WR_UUID · CC_WR_QUIET_S · CC_WR_FIRE_DIR ·
 #                    CC_WR_HANDOFF_FIRE · CC_WR_DESK_ROLE · CC_WR_NOTIFY · CC_WR_PUSH · CC_WR_ESCALATE_DEDUP_S ·
 #                    CC_WR_CONV_HOLD_S · CC_WR_CONV_RECENT_S · CC_WR_RECENT_GRACE_S · CC_WR_T_BUSY_MIN · CC_WR_LEAD_MIN · CC_WR_T_NUDGE · CC_WR_NUDGE_REARM ·
-#                    CC_WR_SIZE_MB · CC_WR_RSS_PAGE_MB ·
+#                    CC_WR_SIZE_MB · CC_WR_RSS_PAGE_MB · CC_WR_TAIL_BYTES (M13 bounded transcript reads;
+#                      0 / set-but-empty / non-numeric ⇒ the incumbent unbounded read) ·
+#                    WRC_OSA_TIMEOUT_S · WRC_OSA_TIMEOUT_BIN (osascript fork bound; empty ⇒ unbounded) ·
 #                    CC_CE_* (context-econ lib: WIN_S / WALL / MIN_SPAN_S / HIST_MAX / TAIL_BYTES / AUTO_RX / PS / RSS_COMM_RX)
 #
 # NOTE: deliberately NO `set -e` — a hook must fail SAFE (abstain), and a stray non-zero from a grep
@@ -609,23 +611,70 @@ _sj="$(jq -cn --argjson tx "$tx_mb" --argjson rss "$rss_mb" --argjson st "$SIZE_
 # shellcheck disable=SC2034  # consumed by indirection in hooks/lib/idl-log.sh (idl_init merge-var slot)
 if [ -n "$_sj" ] && printf '%s' "$_sj" | jq -e 'type=="object"' >/dev/null 2>&1; then SIZE_JSON="$_sj"; else SIZE_JSON='{}'; fi
 
+# ── BOUNDED TRANSCRIPT READS (M13, docs/plans/MACHINE_CAPACITY_V2.md §11) ────────────────────────
+# This hook fires on EVERY PostToolUse — ~19× the Stop chain's rate — and BOTH reads below walked the
+# whole transcript, which reaches 3-5 MB. Measured on a 5.5 MB fixture: 438ms/call for the full `jq`
+# pass vs 24ms bounded (18×), i.e. the READ dominated the hook. Both are now bounded to the LAST
+# CC_WR_TAIL_BYTES of the file. SEMANTICS CONTRACT: each pipeline needs the FINAL record(s) of a
+# JSONL transcript by construction, so the answer is identical whenever they sit inside the window —
+# and where the window could MISS them, each read falls back to the unbounded incumbent (correctness
+# over cost, the house rule). CC_WR_TAIL_BYTES=0 — or set-but-EMPTY, or non-numeric — restores the
+# incumbent unbounded reach verbatim.
+if [ -n "${CC_WR_TAIL_BYTES+set}" ]; then TAIL_B="$CC_WR_TAIL_BYTES"; else TAIL_B=262144; fi
+case "$TAIL_B" in ''|*[!0-9]*) TAIL_B=0 ;; esac   # unreadable seam ⇒ 0 ⇒ full read (fail-safe to correctness)
+
 # 4b. Behavioral ROT tell — the desk re-deriving already-known orchestration state (confusion /
 # memory-loss markers a HEALTHY polling desk does not emit; NOT generic "let me check X"). Fires
 # even below threshold. Read the LAST assistant text block (streaming tail — never slurp a big
 # transcript). Corpus-validated in tests/waiting-recycle.bats.
+#
+# `fromjson? | objects` is LOAD-BEARING, not cosmetic: the first line of a tail window is usually a
+# PARTIAL record, and plain `jq -c` ABORTS THE WHOLE STREAM on it (verified — one parse error, ZERO
+# records emitted), so a naive `tail | jq -c` would silently blank MSG and take the entire rot axis
+# dark. -R + fromjson? drops the partial line and keeps the rest; it is also the idiom the sibling
+# transcript readers in hooks/lib/context-econ.sh already use. It can only find MORE records than the
+# incumbent (a lone corrupt/scalar line no longer kills the pass), never fewer — the safe direction.
+# ONE program text, applied identically to the window and to the fallback, so the two cannot drift.
+WR_ASST='fromjson? | objects | select(.type=="assistant") | tojson'
 rot=0; MSG=""
 if [ -n "$TP" ]; then
   case "$TP" in "~"*) TP="$HOME${TP#\~}" ;; esac
   if [ -f "$TP" ]; then
-    MSG="$(jq -c 'select(.type=="assistant")' "$TP" 2>/dev/null | tail -1 \
-            | jq -r '[.message.content[]? | select(.type=="text") | .text] | join("\n")' 2>/dev/null || true)"
+    _asst=""
+    if [ "$TAIL_B" -gt 0 ]; then
+      _asst="$(tail -c "$TAIL_B" "$TP" 2>/dev/null | jq -Rr "$WR_ASST" 2>/dev/null | tail -1 || true)"
+      # NO RECORD IN THE WINDOW is the ONLY miss that warrants the full read — and only when the file
+      # is actually bigger than the window (else the window WAS the file). A record found but whose
+      # text blocks join to "" is a FACT (a tool-use-only turn, common for a polling desk); re-reading
+      # 5 MB every poll to re-learn that fact would forfeit the whole optimization. Same escalation
+      # shape as ce_last_interactive_age's own tail-miss fallback.
+      if [ -z "$_asst" ]; then
+        _fsz="$(wc -c < "$TP" 2>/dev/null | tr -d ' ')"; case "$_fsz" in ''|*[!0-9]*) _fsz=0 ;; esac
+        [ "$_fsz" -gt "$TAIL_B" ] && _asst="$(jq -Rr "$WR_ASST" "$TP" 2>/dev/null | tail -1 || true)"
+      fi
+    else
+      _asst="$(jq -Rr "$WR_ASST" "$TP" 2>/dev/null | tail -1 || true)"
+    fi
+    [ -n "$_asst" ] && MSG="$(printf '%s' "$_asst" \
+      | jq -r '[.message.content[]? | select(.type=="text") | .text] | join("\n")' 2>/dev/null || true)"
   fi
 fi
 # CONTEXT-ECON interactive recency (header §8, S6): age of the last operator/peer turn, or "" when
 # none is visible (auto-drive re-prompts and tool traffic excluded by the lib — see its taxonomy).
+# BOUNDED (M13): the lib is already tail-bounded, but at its OWN 2 MB default — 8× this window. We hand
+# it CC_WR_TAIL_BYTES through its documented CC_CE_TAIL_BYTES seam rather than touching the lib. The
+# ANSWER is window-INDEPENDENT: on a tail-miss over a bigger file the lib re-scans the WHOLE file with
+# the identical program (and ce_transcript_visible escalates the same way), so an operator turn buried
+# before the window still HOLDS — pinned by tests/waiting-recycle-bounded-read.bats. Cost: strictly
+# cheaper for the 2 MB+ transcripts this targets; worst case (a miss on a file between the two windows)
+# is ONE extra window-sized probe. An explicit CC_CE_TAIL_BYTES is the MORE SPECIFIC seam and wins.
 conv_age=""
 if command -v ce_last_interactive_age >/dev/null 2>&1 && [ -n "$TP" ] && [ -f "$TP" ]; then
-  conv_age="$(ce_last_interactive_age "$TP")"
+  if [ "$TAIL_B" -gt 0 ] && [ -z "${CC_CE_TAIL_BYTES:-}" ]; then
+    conv_age="$(CC_CE_TAIL_BYTES="$TAIL_B" ce_last_interactive_age "$TP")"
+  else
+    conv_age="$(ce_last_interactive_age "$TP")"
+  fi
   case "$conv_age" in *[!0-9]*) conv_age="" ;; esac
 fi
 # Bound grep input (a re-derivation tell is opening narration; this is a hang-safety backstop, not
