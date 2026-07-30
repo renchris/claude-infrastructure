@@ -1,0 +1,48 @@
+{
+  "completeness": "complete",
+  "deferred": [],
+  "documentType": "codex-security.coverage",
+  "excludePaths": [],
+  "explicitExclusions": [],
+  "includePaths": [
+    "reviewapp/api/auth.py"
+  ],
+  "inventoryStrategy": "scoped_path",
+  "mode": "scoped_path",
+  "openQuestions": [],
+  "scanId": "27350c18-33ef-44a8-a962-f609ff6d196a",
+  "schemaVersion": "1.0",
+  "surfaces": [
+    {
+      "disposition": "reported",
+      "id": "surface-jwt-validation",
+      "label": "Bearer JWT validation and JWKS retrieval",
+      "notes": "Signature, issuer, audience, and algorithm controls fail closed, but the per-request cache lifecycle creates a reportable resource-amplification path.",
+      "receiptRefs": [
+        "artifacts/02_discovery/candidate_ledger.jsonl",
+        "artifacts/02_discovery/validation_artifacts/candidate-204fcb4fa7b16ade/poc_output.txt"
+      ],
+      "riskArea": "Authentication availability and outbound identity-provider resource use"
+    },
+    {
+      "disposition": "reported",
+      "id": "surface-local-principal",
+      "label": "Tokenless loopback launcher principal",
+      "notes": "Marker and loopback peer checks reject direct remote clients, but no application-layer Host, Origin, or launcher capability binds browser requests.",
+      "receiptRefs": [
+        "artifacts/02_discovery/candidate_ledger.jsonl"
+      ],
+      "riskArea": "Local authorization boundary and browser-origin trust"
+    },
+    {
+      "disposition": "reported",
+      "id": "surface-reviewer-identity",
+      "label": "UPN role parsing and reviewer identity bridge",
+      "notes": "Unknown roles are dropped and route guards are enforced, but domain removal creates a collision-prone workflow key.",
+      "receiptRefs": [
+        "artifacts/02_discovery/candidate_ledger.jsonl"
+      ],
+      "riskArea": "Principal uniqueness, reviewer separation, and workflow-state attribution"
+    }
+  ]
+}

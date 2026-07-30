@@ -1,0 +1,104 @@
+{
+  "documentType": "codex-security.scan-manifest",
+  "scan": {
+    "artifacts": [
+      {
+        "mediaType": "application/json",
+        "path": "findings.json",
+        "sha256": "c06e740fd7b96c6d0815ad285a2185c46fa8ad3882121a3ea86616bb70c143f8"
+      },
+      {
+        "mediaType": "application/json",
+        "path": "coverage.json",
+        "sha256": "f94ffb7abdd4a706ecc57cb65bfc8c7385640bb366b8146274a03bb114e094d6"
+      },
+      {
+        "mediaType": "application/octet-stream",
+        "path": "artifacts/02_discovery/candidate_ledger.jsonl",
+        "sha256": "57aad2f4e8d5297eaff9afa685066c58b363023a994e0ba0fbca39fd447bf92b"
+      },
+      {
+        "mediaType": "application/octet-stream",
+        "path": "artifacts/02_discovery/validation_artifacts/candidate-204fcb4fa7b16ade/poc_output.txt",
+        "sha256": "1425ee0245f20ab0427cf4dec5366f300f7b369b713f65b533189c134539c407"
+      }
+    ],
+    "completedAt": "2026-07-30T06:01:52.706999Z",
+    "coverageRef": "coverage.json",
+    "findingsRef": "findings.json",
+    "id": "27350c18-33ef-44a8-a962-f609ff6d196a",
+    "producer": {
+      "name": "codex-security-plugin",
+      "version": "0.1.14"
+    },
+    "scope": {
+      "artifactsReviewed": [
+        "reviewapp/api/auth.py",
+        "reviewapp/api/settings.py",
+        "reviewapp/cli.py",
+        "contracts/base.py",
+        "reviewapp/api/decisions.py",
+        "reviewapp/api/db.py",
+        "tests/reviewapp/test_auth.py",
+        "tests/reviewapp/test_launcher.py",
+        "PyJWT 2.13 PyJWKClient implementation"
+      ],
+      "context": "The repository-scoped threat model was generated during Phase 1. Applicable SECURITY.md guidance was resolved and was empty.",
+      "excludePaths": [],
+      "includePaths": [
+        "reviewapp/api/auth.py"
+      ],
+      "limitations": [
+        "No live production gateway, Entra tenant account inventory, or browser DNS-rebinding environment was available.",
+        "Browser Private Network Access behavior and production request throttling remain deployment-dependent."
+      ],
+      "runtimeStatus": "Focused auth and launcher test suites passed 24 tests. A targeted PoC against the actual `_decode` implementation observed four JWKS fetches from two attacker-shaped token attempts.",
+      "summary": "Exhaustive standard scoped-path review of the configured authentication and RBAC module. Every requested file was reviewed from start to finish; nearby callers, identity/state stores, launcher composition, deployment assumptions, dependency implementation, and focused tests were used as supporting evidence.",
+      "validationMode": "Compact standard-scan validation using targeted PoC, focused tests, and static source/control/sink tracing."
+    },
+    "sealedAt": "2026-07-30T06:01:52.706999Z",
+    "startedAt": "2026-07-30T05:45:13.802922Z",
+    "status": "completed",
+    "target": {
+      "displayName": "doc_classifier",
+      "kind": "git_worktree",
+      "revision": "c1ae7ce85b65f0a0ce0cd08d4a931f98c6211798",
+      "snapshotDigest": "codex-security-snapshot/v1:sha256:75fbb470ba9a92d6c31ed0d10c0a9c5726b6f4305b405a9c9d1de9f9aa56d65c",
+      "targetId": "target_sha256_f45f2ca5c4014aa5923f5c946b3d72a913b83a084f2aa7edd6fb8f0846c749d0"
+    },
+    "threatModel": {
+      "assets": [
+        "Confidential contract evidence and review artifacts",
+        "Reviewer, adjudicator, auditor, and admin authority",
+        "Append-only decisions, blind-entry state, second-key witnesses, and queue assignments",
+        "ReviewApp and identity-provider availability"
+      ],
+      "assumptions": [
+        "The deployed ReviewApp is private but remains exposed to enclave clients and configuration drift.",
+        "The launcher binds to loopback by default and opens a local browser.",
+        "The Entra deployment is single-tenant, but local parts are not proven unique across verified UPN domains.",
+        "Production gateway throttling and browser private-network defenses were not available as repository-enforced controls."
+      ],
+      "attackerCapabilities": [
+        "Send arbitrary bearer-token bytes and JWT header values to a reachable authentication boundary",
+        "Operate a web origin and influence DNS answers viewed by a victim browser",
+        "Use a valid role-bearing Entra account provisioned in the accepted tenant",
+        "Trigger repeated requests within the limits of surrounding network controls"
+      ],
+      "securityObjectives": [
+        "Reject invalid tokens without attacker-amplified identity-provider work",
+        "Never grant the launcher principal to a remote web origin",
+        "Keep distinct Entra principals distinct in all authorization and workflow-state keys",
+        "Preserve least privilege, decision attribution, and service availability"
+      ],
+      "summary": "The ReviewApp is a privileged human-decision surface for confidential contract processing. Deployed requests cross an Entra JWT and role boundary, while the local launcher deliberately grants an all-role principal only to loopback peers. Identity attribution, reviewer separation, decision integrity, confidentiality, and bounded pre-authentication resource use are key objectives.",
+      "trustBoundaries": [
+        "Unauthenticated API caller to Entra bearer-token validation",
+        "Remote browser origin to the tokenless local launcher",
+        "Signed Entra identity to per-reviewer workflow state",
+        "ReviewApp process to the configured JWKS endpoint"
+      ]
+    }
+  },
+  "schemaVersion": "1.0"
+}

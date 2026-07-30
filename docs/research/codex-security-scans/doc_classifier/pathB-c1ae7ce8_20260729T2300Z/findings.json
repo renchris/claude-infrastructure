@@ -1,0 +1,453 @@
+{
+  "documentType": "codex-security.findings",
+  "findings": [
+    {
+      "attackPath": {
+        "dataflow": {
+          "evidenceRefs": [
+            "bearer-entry",
+            "fresh-jwks-client"
+          ],
+          "outcome": "Request capacity and identity-provider resources are consumed",
+          "sink": "Synchronous JWKS retrieval",
+          "source": "Unauthenticated bearer bytes and JWT `kid`",
+          "summary": "Bearer token -> `get_principal` -> `_decode` -> fresh `PyJWKClient` -> JWKS fetch/refresh -> rejection"
+        },
+        "evidenceRefs": [
+          "bearer-entry",
+          "fresh-jwks-client"
+        ],
+        "impact": {
+          "level": "medium",
+          "why": "The demonstrated effect consumes availability resources but does not bypass authentication."
+        },
+        "likelihood": {
+          "level": "high",
+          "why": "The trigger is pre-authentication and requires only valid-shaped token bytes."
+        },
+        "limitations": [
+          "Private ingress and external throttling may reduce practical volume."
+        ],
+        "reachability": {
+          "attacker": "Unauthenticated API caller",
+          "entrypoint": "Any route using `get_principal`",
+          "outcome": "Availability degradation and outbound JWKS pressure",
+          "preconditions": [
+            "Network reachability to the ReviewApp"
+          ],
+          "summary": "Any enclave or otherwise network-positioned caller that reaches the API auth boundary can trigger the work without credentials."
+        },
+        "summary": "A caller sends many valid-shaped bearer tokens with unknown key IDs; each request blocks on two JWKS fetches before returning 401."
+      },
+      "codeEvidence": [
+        {
+          "code": "if credentials is None:\n    ...\nsettings = getattr(request.app.state, \"settings\", None) or load_settings()\nclaims = _decode(credentials.credentials, settings)",
+          "endLine": 139,
+          "explanation": "Authentication has not succeeded when attacker-controlled bearer bytes are passed into `_decode`.",
+          "id": "bearer-entry",
+          "label": "Any supplied bearer token enters decoding",
+          "language": "python",
+          "path": "reviewapp/api/auth.py",
+          "role": "entrypoint",
+          "startLine": 133
+        },
+        {
+          "code": "def _decode(token: str, settings: Settings) -> dict[str, object]:\n    try:\n        signing_key = jwt.PyJWKClient(settings.jwks_url, cache_keys=True).get_signing_key_from_jwt(\n            token\n        )",
+          "endLine": 75,
+          "explanation": "The client that owns the JWKS-set and signing-key caches is temporary, so no cached state survives to the next request.",
+          "id": "fresh-jwks-client",
+          "label": "Client and caches are recreated for every decode",
+          "language": "python",
+          "path": "reviewapp/api/auth.py",
+          "role": "root_control",
+          "startLine": 70
+        }
+      ],
+      "confidence": {
+        "level": "high",
+        "rationale": "The actual `_decode` implementation and installed PyJWT 2.13 code were traced, and a focused PoC observed four JWKS fetches for two rejected token attempts."
+      },
+      "extensions": {
+        "candidateId": "candidate-204fcb4fa7b16ade"
+      },
+      "findingId": "csf_f1c52db3dc211f2e5128479e",
+      "fingerprints": {
+        "algorithm": "codex-security/v1",
+        "primary": "codex-security/v1:sha256:3f9bb1dc5b525cc1d96b10842406ac3792fdd8b5857f88e4630f82e796ab27be"
+      },
+      "identity": {
+        "anchor": "per-request-pyjwkclient-cache-reset"
+      },
+      "locations": [
+        {
+          "endLine": 75,
+          "path": "reviewapp/api/auth.py",
+          "role": "root_control",
+          "startLine": 73
+        },
+        {
+          "endLine": 139,
+          "path": "reviewapp/api/auth.py",
+          "role": "entrypoint",
+          "startLine": 117
+        }
+      ],
+      "occurrenceId": "occ_e734b99678915e5e44795ff8",
+      "preventiveControls": [
+        "Pre-authentication request throttling",
+        "Metrics and alerts for JWKS fetch rate, latency, and failure volume",
+        "Asynchronous or isolated outbound identity-provider I/O"
+      ],
+      "provenance": {
+        "source": "local_plugin"
+      },
+      "remediation": "Create one long-lived `PyJWKClient` per immutable JWKS configuration, reuse it across requests, set bounded fetch timeouts, and rate-limit authentication failures before repeated network retrieval.",
+      "remediationTests": [
+        "Submit many tokens with the same valid `kid` and assert only one JWKS fetch within the cache lifetime.",
+        "Submit repeated unknown `kid` values and assert fetch refreshes are globally bounded.",
+        "Verify timeout and upstream JWKS failures fail closed without exhausting request workers."
+      ],
+      "rootCause": {
+        "evidenceRefs": [
+          "bearer-entry",
+          "fresh-jwks-client"
+        ],
+        "summary": "The violated invariant is that repeated authentication failures must not cause unbounded identity-provider work. `_decode` creates the cache-owning client inside the request, so even `cache_keys=True` cannot amortize JWKS retrieval across requests."
+      },
+      "ruleId": "resource-exhaustion.jwks-fetch",
+      "severity": {
+        "changeConditions": "A persistent shared client with effective pre-authentication throttling would lower severity; demonstrated public exposure and production worker exhaustion would increase operational urgency.",
+        "level": "medium",
+        "rationale": "The path is pre-authentication and the PoC deterministically amplifies each unknown-key attempt into two synchronous outbound requests. The impact is availability and identity-provider pressure rather than confidentiality or code execution."
+      },
+      "summary": "Every supplied bearer token creates a new `PyJWKClient`, discarding both JWKS and key caches. An unauthenticated caller can make each valid-shaped token perform a synchronous JWKS request, while an unknown `kid` forces a second refresh before the request is rejected.",
+      "taxonomy": {
+        "category": "Uncontrolled resource consumption",
+        "cwe": [
+          "CWE-400"
+        ]
+      },
+      "title": "Fresh JWKS client per token enables pre-authentication fetch amplification",
+      "validation": {
+        "assertions": [
+          "The network work occurs before signature validation succeeds.",
+          "Each new client begins with empty instance-local caches.",
+          "An unknown `kid` causes a forced second fetch."
+        ],
+        "evidenceRefs": [
+          "bearer-entry",
+          "fresh-jwks-client"
+        ],
+        "limitations": [
+          "No production saturation load test was run."
+        ],
+        "method": "targeted PoC plus static source and dependency trace",
+        "summary": "Two calls with an attacker-selected unknown `kid` caused four mocked JWKS fetches against the actual `_decode` path; PyJWT source confirms a miss refreshes once."
+      }
+    },
+    {
+      "attackPath": {
+        "dataflow": {
+          "evidenceRefs": [
+            "all-role-principal",
+            "peer-only-check"
+          ],
+          "outcome": "Unauthorized local ReviewApp reads or actions",
+          "sink": "Return of the all-role `Principal`",
+          "source": "Attacker-controlled web origin and DNS",
+          "summary": "Attacker origin -> rebound DNS -> browser loopback connection -> `local_principal` -> protected route"
+        },
+        "evidenceRefs": [
+          "all-role-principal",
+          "peer-only-check"
+        ],
+        "impact": {
+          "level": "medium",
+          "why": "The all-role launcher can expose local review data and authorized local actions."
+        },
+        "likelihood": {
+          "level": "low",
+          "why": "Multiple browser and victim-state preconditions constrain exploitation."
+        },
+        "limitations": [
+          "Default loopback binding defeats direct remote TCP access."
+        ],
+        "reachability": {
+          "attacker": "Remote web attacker",
+          "entrypoint": "Tokenless local ReviewApp route",
+          "outcome": "The attacker origin acts with local reviewer roles",
+          "preconditions": [
+            "Launcher running",
+            "Victim visits attacker origin",
+            "DNS rebinding/PNA path succeeds"
+          ],
+          "summary": "Requires a running launcher, a victim browser visit, and browser behavior that permits the private-network request."
+        },
+        "summary": "While the launcher is running, a victim visits an attacker origin whose DNS answer changes to loopback; browser requests then satisfy the peer check and receive the all-role principal."
+      },
+      "codeEvidence": [
+        {
+          "code": "app.state.local_principal = Principal(\n    upn=_LOCAL_UPN,\n    reviewer_id=reviewer_id_from_upn(_LOCAL_UPN),\n    roles=frozenset(ReviewerRole),\n)",
+          "endLine": 320,
+          "explanation": "The launcher marker carries reviewer, adjudicator, auditor, and admin authority.",
+          "id": "all-role-principal",
+          "label": "Launcher installs every reviewer role",
+          "language": "python",
+          "path": "reviewapp/cli.py",
+          "role": "entrypoint",
+          "startLine": 313
+        },
+        {
+          "code": "principal = getattr(request.app.state, \"local_principal\", None)\nif not isinstance(principal, Principal):\n    return None\nclient = request.client\nif client is None or client.host not in _LOOPBACK_HOSTS:\n    return None\nreturn principal",
+          "endLine": 114,
+          "explanation": "A tokenless request receives the privileged principal whenever its socket peer is loopback; no Host, Origin, or launcher secret is checked.",
+          "id": "peer-only-check",
+          "label": "Peer address is the only request-bound control",
+          "language": "python",
+          "path": "reviewapp/api/auth.py",
+          "role": "root_control",
+          "startLine": 106
+        }
+      ],
+      "confidence": {
+        "level": "medium",
+        "rationale": "Source and tests prove the all-role grant and absence of application-layer origin binding, but no live browser DNS-rebinding/PNA reproduction was run."
+      },
+      "extensions": {
+        "candidateId": "candidate-5032c222409af6d0"
+      },
+      "findingId": "csf_cde305d98d00089d6f96dcd5",
+      "fingerprints": {
+        "algorithm": "codex-security/v1",
+        "primary": "codex-security/v1:sha256:72cba4c20c0bd1bfa71bdf6b049cb63eda6538694fc6fd63b303d8bf1e2523b3"
+      },
+      "identity": {
+        "anchor": "loopback-peer-only-local-principal"
+      },
+      "locations": [
+        {
+          "endLine": 114,
+          "path": "reviewapp/api/auth.py",
+          "role": "root_control",
+          "startLine": 106
+        },
+        {
+          "endLine": 320,
+          "path": "reviewapp/cli.py",
+          "role": "concrete_implementation",
+          "startLine": 313
+        }
+      ],
+      "occurrenceId": "occ_7ad23d253e3074207f545354",
+      "preventiveControls": [
+        "Explicit TrustedHost/Origin validation",
+        "Per-launch capability token",
+        "Browser security regression test for DNS rebinding"
+      ],
+      "provenance": {
+        "source": "local_plugin"
+      },
+      "remediation": "Generate a high-entropy per-launch secret and require it on every local API request; also reject unexpected Host and Origin values and keep loopback-only binding.",
+      "remediationTests": [
+        "Reject a loopback-peer request with an attacker Host or Origin.",
+        "Reject tokenless requests that omit or guess the per-launch secret.",
+        "Confirm the real launcher page supplies the secret and retains intended local functionality."
+      ],
+      "rootCause": {
+        "evidenceRefs": [
+          "all-role-principal",
+          "peer-only-check"
+        ],
+        "summary": "The launcher treats loopback network location as sufficient proof of browser origin. DNS rebinding preserves the attacker hostname as the browser origin while causing the browser to connect to loopback, satisfying the peer check without proving the request came from the launcher page."
+      },
+      "ruleId": "authorization-bypass.local-launcher-origin",
+      "severity": {
+        "changeConditions": "A supported-browser PoC reaching binding write routes would raise confidence and possibly impact; a strict Host/Origin/nonce check would eliminate the path.",
+        "level": "low",
+        "rationale": "Successful exploitation crosses a remote web-origin boundary into local confidential review data and roles, but requires a running launcher, a victim browser visit, DNS rebinding, and browser private-network behavior that was not dynamically proven."
+      },
+      "summary": "The tokenless launcher grants every ReviewApp role based only on an app-state marker and loopback TCP peer. It does not bind the grant to the expected Host, Origin, or an unguessable launcher credential, so a browser DNS-rebinding origin can potentially reach protected routes as the local principal.",
+      "taxonomy": {
+        "category": "Authorization bypass / DNS rebinding",
+        "cwe": [
+          "CWE-346"
+        ]
+      },
+      "title": "DNS rebinding can inherit the local launcher's all-role principal",
+      "validation": {
+        "evidenceRefs": [
+          "all-role-principal",
+          "peer-only-check"
+        ],
+        "limitations": [
+          "Live browser DNS rebinding and Private Network Access enforcement were not reproduced."
+        ],
+        "method": "static boundary trace plus focused launcher tests",
+        "summary": "Tests confirm tokenless loopback requests succeed and non-loopback peers receive 401. Source review found no application-layer origin or nonce control."
+      }
+    },
+    {
+      "attackPath": {
+        "dataflow": {
+          "evidenceRefs": [
+            "signed-upn-to-handle",
+            "local-part-transform",
+            "workflow-state-gates"
+          ],
+          "outcome": "Distinct-account reviewer separation is bypassed",
+          "sink": "Blind-entry, second-key, and queue state predicates",
+          "source": "Valid token for a distinct colliding Entra account",
+          "summary": "Signed UPN -> local-part bridge -> colliding `reviewer_id` -> per-reviewer workflow lookup"
+        },
+        "evidenceRefs": [
+          "signed-upn-to-handle",
+          "local-part-transform",
+          "workflow-state-gates"
+        ],
+        "impact": {
+          "level": "medium",
+          "why": "The flaw can defeat blind-review and decision-attribution separation for affected accounts."
+        },
+        "likelihood": {
+          "level": "low",
+          "why": "A specifically provisioned role-bearing identity collision is required."
+        },
+        "limitations": [
+          "No current tenant collision was demonstrated."
+        ],
+        "reachability": {
+          "attacker": "Authenticated reviewer with a colliding UPN local part",
+          "entrypoint": "Any role-gated workflow route",
+          "outcome": "Reuse of another account's per-reviewer workflow identity",
+          "preconditions": [
+            "Colliding tenant accounts",
+            "Relevant app role"
+          ],
+          "summary": "Requires two accepted-tenant accounts with the same local part and a relevant role on the second account."
+        },
+        "summary": "A role-bearing account whose UPN local part matches another reviewer is assigned the same workflow handle and can reuse state recorded under that handle."
+      },
+      "codeEvidence": [
+        {
+          "code": "upn = claims.get(\"preferred_username\")\n...\nreturn Principal(upn=upn, reviewer_id=reviewer_id_from_upn(upn), roles=roles)",
+          "endLine": 149,
+          "explanation": "The signed full principal name is passed to the lossy bridge before workflow authorization state is queried.",
+          "id": "signed-upn-to-handle",
+          "label": "Authenticated UPN is converted into workflow identity",
+          "language": "python",
+          "path": "reviewapp/api/auth.py",
+          "role": "entrypoint",
+          "startLine": 140
+        },
+        {
+          "code": "local_part = upn.split(\"@\", 1)[0].casefold()\nif not _REVIEWER_ID_RE.match(local_part):\n    raise ContractValidationError(...)\nreturn local_part",
+          "endLine": 137,
+          "explanation": "Two distinct full UPNs with the same local part are deliberately mapped to the same `reviewer_id`.",
+          "id": "local-part-transform",
+          "label": "Domain is discarded",
+          "language": "python",
+          "path": "contracts/base.py",
+          "role": "root_control",
+          "startLine": 131
+        },
+        {
+          "code": "if decision.lane is Lane.C:\n    ...\n    if not await blind_entries.has_blind_entry(cell_key, principal.reviewer_id):\n        ...\n    if not await second_keys.has_second_key(\n        cell_key, principal.reviewer_id, decision.second_key_ref\n    ):",
+          "endLine": 203,
+          "explanation": "Blind-entry and second-key authorization state is selected by the colliding handle rather than the full authenticated identity.",
+          "id": "workflow-state-gates",
+          "label": "Lane-C gates trust the lossy handle",
+          "language": "python",
+          "path": "reviewapp/api/decisions.py",
+          "role": "sink",
+          "startLine": 190
+        }
+      ],
+      "confidence": {
+        "level": "high",
+        "rationale": "The exact UPN transform and every relevant database predicate are visible in source, and unit tests explicitly confirm domain removal."
+      },
+      "extensions": {
+        "candidateId": "candidate-8e767fb7e027e6d6"
+      },
+      "findingId": "csf_7eccc5e8612533ecde2b85bb",
+      "fingerprints": {
+        "algorithm": "codex-security/v1",
+        "primary": "codex-security/v1:sha256:b617ffce74838e2a773a462c2bc0390fd9d9030bdff30b7440cde4bf05476012"
+      },
+      "identity": {
+        "anchor": "upn-local-part-workflow-key"
+      },
+      "locations": [
+        {
+          "endLine": 149,
+          "path": "reviewapp/api/auth.py",
+          "role": "entrypoint",
+          "startLine": 140
+        },
+        {
+          "endLine": 137,
+          "path": "contracts/base.py",
+          "role": "root_control",
+          "startLine": 114
+        },
+        {
+          "endLine": 203,
+          "path": "reviewapp/api/decisions.py",
+          "role": "sink",
+          "startLine": 190
+        }
+      ],
+      "occurrenceId": "occ_4c8ab7a720c6a8ae1b2de1fc",
+      "preventiveControls": [
+        "Repository-wide principal-key type backed by Entra `tid` and `oid`",
+        "Tenant account collision audit during deployment",
+        "Database uniqueness and foreign-key constraints on canonical principal identity"
+      ],
+      "provenance": {
+        "source": "local_plugin"
+      },
+      "remediation": "Use the immutable Entra object identifier (`oid`) plus tenant identifier (`tid`) as the canonical workflow key, or use the complete normalized UPN if immutable IDs cannot be adopted; migrate existing state with an explicit collision check.",
+      "remediationTests": [
+        "Assert `reviewer@domain-a` and `reviewer@domain-b` receive distinct workflow identifiers.",
+        "Verify blind-entry, second-key, claims, and audit records all use the same collision-resistant key.",
+        "Fail migration when existing shortened identifiers map to multiple Entra principals."
+      ],
+      "rootCause": {
+        "evidenceRefs": [
+          "signed-upn-to-handle",
+          "local-part-transform",
+          "workflow-state-gates"
+        ],
+        "summary": "The violated invariant is that every authenticated human must have a collision-resistant workflow key. The bridge removes the UPN domain and the state gates use only that shortened value, so identity distinctions established by token validation are lost."
+      },
+      "ruleId": "identity-collision.reviewer-handle",
+      "severity": {
+        "changeConditions": "Evidence of live colliding accounts or cross-role state reuse would raise likelihood; keying state by immutable Entra object ID or full normalized UPN removes the issue.",
+        "level": "low",
+        "rationale": "The collision breaks distinct-reviewer workflow integrity, but exploitation requires a specifically provisioned role-bearing account and does not itself grant a new role."
+      },
+      "summary": "The signed full UPN is reduced to its case-folded local part before per-reviewer blind-entry, second-key, and queue checks. Distinct accepted-tenant accounts sharing that local part across domains therefore operate under the same workflow identity.",
+      "taxonomy": {
+        "category": "Identity collision / improper authentication",
+        "cwe": [
+          "CWE-287"
+        ]
+      },
+      "title": "UPN local-part mapping merges distinct reviewer identities",
+      "validation": {
+        "evidenceRefs": [
+          "signed-upn-to-handle",
+          "local-part-transform",
+          "workflow-state-gates"
+        ],
+        "limitations": [
+          "The live tenant account and role inventory was unavailable."
+        ],
+        "method": "static identity/state trace plus focused unit tests",
+        "summary": "Tests prove the bridge removes domains, and source tracing shows the resulting handle is used in blind-entry, second-key, and queue predicates."
+      }
+    }
+  ],
+  "scanId": "27350c18-33ef-44a8-a962-f609ff6d196a",
+  "schemaVersion": "1.0"
+}
