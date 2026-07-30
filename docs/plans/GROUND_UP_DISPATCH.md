@@ -830,6 +830,70 @@ Everything in #3 below still holds except where this overrides it.
   a STALE READ** — you see it as of your branch-cut, not as of now. Cite the DEPLOYED copy for any
   deployed-behaviour claim, which this campaign already learned once for row 13's capacity gate and
   which I then repeated in the opposite direction.
+- 🚨 **ROW 11 DIED AT 04:39Z WITH NOTHING LANDED — RE-FIRE IS PARKED ON CAPACITY, NOT ON THE CAP.**
+  Death proven on the three axes this campaign requires before acting on silence: **pane ABSENT** from
+  `it2 session list --json | jq -r '.[].id'` under a **passing positive control** (my own pane
+  enumerated present) · **no `claude.exe` with that worktree as its `cwd`** (checked by cwd, not argv —
+  `argv-is-sampling-cwd-is-durable`) · **zero registry rows**. Only ONE transcript in its project dir ⇒
+  it did **NOT** recycle, there is no successor. 236 rows in 39 min, small context, no crash message;
+  last records were two `bridge-session` rows and a `queue-operation` enqueue for a pending background
+  task. Worktree was `ahead=0` and clean ⇒ nothing stranded. Cause UNEXPLAINED — backlog
+  `b521cb445465`; the timing rules out the orphan-close watchdog (armed ~50 min later).
+  **Its Phase-1 work was good and is preserved in its payload** (landed `451dce16`): (a) **the cell is
+  falsified by its denominator** — 7.3 TiB volume, 5.0 TiB free, 31% used, so ~114 GB of worktrees is
+  **1.5% of the volume with 45× that much free**; disk pressure was never the constraint (row 13's
+  learning, second landing); (b) **the irreplaceable resource is UNLANDED COMMITS, not bytes** — 92
+  unlanded across 12 worktrees + 36 dirty files in 12 more, `wt-692eaf74b0be [infra-perfection-land]`
+  alone at 42 + 8; (c) every destructive call site uses the `-C` form, and registration must be checked
+  before semantics; (d) graveyard sweep positive-controlled — suite absent from trunk, on all three
+  branches, fix exists as 16 rebase-duplicates, none landed.
+- 🚨 **THE FIRE IS BLOCKED BY THE BOX, NOT THE CAMPAIGN — and the blocker is the GUI.** `handoff-fire`
+  refused with **`exit 9`, load 39.41/10 cores = 3.94/core** vs the 2.0 ceiling, cleanly **before any
+  side effect** (no worktree, no pane). Do NOT override. Measured composition: **iTerm2 alone at 141%
+  CPU — more than any Claude session — plus WindowServer 51% and Chrome 38%**, i.e. ~2.3 cores before a
+  single agent, confirming `admission-control-needs-a-hardware-term` (panes cost ~1.6 cores to DRAW).
+  **59 iTerm2 panes vs 38 registered sessions**; that 21 gap is an UPPER BOUND on closable candidates,
+  not a kill list — non-Claude shells sit in it and I did not verify which are safe.
+- ⚠️ **DO NOT BUILD A LOAD PREDICTOR — MAKE THE ACTUATOR THE ARBITER. I built one and it raced.** My
+  waiter triggered at 1.74/core and load was **2.24/core** by the time I could act; the samples ran
+  37 → 32 → 35 → **58** → 30 → 17 → 22 within ten minutes (`load-is-not-a-function-of-session-count`,
+  reproduced). Any pre-check-then-fire is racing a volatile metric, and this is the **second** instance
+  of the duplicate-gate anti-pattern this campaign has hit (the first, the runnable-threads term,
+  starved it for an hour). **The correct pattern, now armed:** call the REAL fire in a loop and branch
+  on its own refusal code — the gate is atomic and refuses before side effects, so a retry costs
+  nothing:
+  ```bash
+  for i in $(seq 1 30); do
+    bash scripts/handoff-fire.sh --split-right --follow \
+      --notify-back <YOUR-PANE-UUID> --repo /Users/chrisren/Development/claude-infrastructure \
+      --worktree gu-worktree-warmpool-b --account next3 \
+      --prompt-file docs/ground-up-payloads/row11-worktree-warmpool.md > "$OUT" 2>&1
+    rc=$?; [ "$rc" != 9 ] && break; sleep 180
+  done
+  ```
+  **THIS LOOP DIES WITH THE SESSION THAT ARMED IT — a recycling coordinator MUST re-arm it.** Use
+  worktree **`gu-worktree-warmpool-b`** (the original `gu-worktree-warmpool` branch+dir still exist,
+  `ahead=0` and clean; a fresh name avoids the collision without any destructive op). Account **next3**
+  chosen on WEEKLY headroom (13% vs next4's 43%) — the cliff axis differed by 6 h in ~590, which is
+  noise; weekly is the binding term for a long rebuild.
+- ✅ **THE TWO ROW-2 ORPHANS ARE REAPED** (operator ran it): `gu2-archaeology` pane
+  `2323ADBC-…` and `gu2-seams` pane `CB29B303-…`, both processes gone, panes absent, registry rows
+  cleared. Their converged finding — **`wake_floor()` has no teardown-abstain gate; `grep -c` for
+  `shutdown_request|shutdown|teardown` in `hooks/session-continue.sh` returns ZERO while the design
+  already holds the concept via `kill_switch_active` reading `last_user_msg()`** — is backlog
+  `00c8a786f8fd`. 🚨 **AND `cc-teardown` HAS BOTH VERDICT-PATH FAILURES, one tool, opposite polarity:**
+  an unresolvable agent NAME returns **`exit 0` "already gone" while the pane is alive**
+  (`99f87bf7a6f7`), and the effect-verify races the close so a SUCCESSFUL teardown returns **`exit 5`
+  "pane survived"** (`ae48044a004d`). Both now have an autonomous caller because the orphan-close was
+  armed today. **Working form: the PANE UUID plus `--force-adopted`** (these panes had registry rows, so
+  `--assignee-of` was the wrong flag); pane uuids come from `ps eww -p <pid>` → `ITERM_SESSION_ID`.
+- ⚠️ **MY SELECTOR ERROR RATE THIS SESSION WAS SEVEN, AND IT IS THE CAMPAIGN'S OWN LAW.** Two guessed
+  test filenames, two greps for text I had not written, a stale mtime I reported as 100 min of silence,
+  a registry grep on the wrong name field, and an `it2 session list` (non-JSON) absence read where **my
+  own pane also returned 0 hits**. Every one produced a confident FALSE NEGATIVE; every one was caught
+  by enumerating or by a control. The last was caught **before** publication, which is the only reason
+  it is not a retraction. **Never report an absence from a pattern you chose without first proving the
+  pattern can hit.**
 - **Landed by coordinator #4, content-verified on trunk:** `f3a4a7f9` (row 9 payload) · `92a2fb36`
   (row 8 ratification + row 11 fire) · `53c6eee9` (row 6 payload) · this delta. **Backlog filed:**
   `ff839f1f8f38` (cc-mail/cc-thread untracked + zero callers) · `ece77ba9dfe2` (activation advertises an
