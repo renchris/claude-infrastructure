@@ -23,6 +23,13 @@
 # branch, which cannot be reached without a real iTerm2 spawn.
 
 setup() {
+  # handoff-fire.sh routes every external iTerm2 call through hf_bounded — a timeout(1) wrapper —
+  # because a wedged iTerm2 API blocks indefinitely. This suite EXTRACTS fire_cleanup rather than
+  # sourcing the script, so that helper is not in scope and the extracted function would die with
+  # "hf_bounded: command not found". A passthrough keeps the behaviour byte-identical; the helper's
+  # OWN semantics (bound applied, expiry → 124, the disable seam) are covered against the real
+  # definition by tests/handoff-fire-it2-bound.bats. Same shape as handoff-selfclose.bats.
+  hf_bounded() { "$@"; }
   REPO_SRC="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   HF="$REPO_SRC/scripts/handoff-fire.sh"
 

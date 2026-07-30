@@ -1425,7 +1425,7 @@ if [ "${1:-}" = "__selfclose" ]; then
       cc_alive || break                            # ps on a known tty is reliable — no flake class
       # One CR nudge at 60s (it2 python API — proven detached): submits a stranded /exit whose
       # Enter a redraw swallowed; a no-op on an empty composer. MUST be \r — Ink ignores \n.
-      [ "$waited" = 60 ] && "$HOME/.claude/bin/it2" session send -s "$SID" $'\r' >/dev/null 2>&1 || true
+      [ "$waited" = 60 ] && hf_bounded "$HOME/.claude/bin/it2" session send -s "$SID" $'\r' >/dev/null 2>&1 || true
     done
     cc_alive && echo "⚠ CC still alive after ${waited}s — teammate-style force-close" >&2
   fi
@@ -1468,7 +1468,7 @@ if [ "${1:-}" = "__selfclose" ]; then
   # 4 attempts, 2s apart. Exhausted ⇒ LOUD: log line + desk page, never a silent husk.
   _close_ok=0
   for _try in 1 2 3 4; do
-    if "$HOME/.claude/bin/it2" session close -f -s "$SID" 2>&1; then _close_ok=1; break; fi
+    if hf_bounded "$HOME/.claude/bin/it2" session close -f -s "$SID" 2>&1; then _close_ok=1; break; fi
     echo "⚠ it2 session close attempt $_try/4 failed for $SID — retrying in 2s" >&2
     sleep 2
   done
@@ -1482,7 +1482,7 @@ if [ "${1:-}" = "__selfclose" ]; then
     # Succession legibility: land the operator's view ON the continuation. it2 python-API CLI
     # only (AppleEvent-free — proven detached); best-effort: the announce already sits in the
     # successor's transcript/mailbox even if this focus fails.
-    if "$HOME/.claude/bin/it2" session focus "$SUCCESSOR" >/dev/null 2>&1; then
+    if hf_bounded "$HOME/.claude/bin/it2" session focus "$SUCCESSOR" >/dev/null 2>&1; then
       echo "→ focus handed to successor $SUCCESSOR"
     else
       echo "⚠ focus hand-over to $SUCCESSOR failed (pane gone or it2 error) — succession is announced in its transcript/mailbox"
@@ -2692,7 +2692,7 @@ fire_cleanup() {
     fi
     if [ "${FIRE_FAILED_CLOSE_PANE:-0}" = 1 ]; then
       echo "→ fire-cleanup: FIRE_FAILED_CLOSE_PANE=1 — closing the task-less pane $SPAWNED_PANE" >&2
-      "$HOME/.claude/bin/it2" session close -f -s "$SPAWNED_PANE" >/dev/null 2>&1 || true
+      hf_bounded "$HOME/.claude/bin/it2" session close -f -s "$SPAWNED_PANE" >/dev/null 2>&1 || true
     fi
   fi
   return 0
