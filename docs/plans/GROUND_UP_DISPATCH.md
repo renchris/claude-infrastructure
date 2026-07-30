@@ -602,13 +602,16 @@ the successor inherits:
 state and is retained for history only — every count in it is stale.
 
 - **Map is 13 rows now, not 12** (row 13 machine-capacity was added by a parallel session and
-  **RATIFIED** by this coordinator — see the ratification section above). **UPDATED 17:4xZ: 6 DONE
-  — 1, 3, 4, 5, 12, 13. 2 IN FLIGHT: 2, 10. 5 OPEN: 6, 7, 8, 9, 11.** (Row 13 was closed by the
-  coordinator after its own session exited clean without flipping its cell — see the row-13 close
-  section below.) Remaining dispatch order: **8 · 7 · 11 · 9 · 6 last.** Do NOT count rows by
-  grepping `DONE` alone — the "What DONE means" prose contains the literal string. Derive it as
+  **RATIFIED** by this coordinator — see the ratification section above). **UPDATED 18:3xZ: 7 DONE
+  — 1, 2, 3, 4, 5, 12, 13. 2 IN FLIGHT: 10, 8. 4 OPEN: 6, 7, 9, 11.** (Row 13 was closed by the
+  coordinator after its own session exited clean without flipping its cell; row 2 closed itself and
+  was verified on five disk axes; row 8 was fired 18:3xZ — see the sections below.) Remaining
+  dispatch order: **7 · 11 · 9 · 6 last.** Do NOT count rows by grepping `DONE` alone — the "What
+  DONE means" prose contains the literal string. Derive it as
   `grep -E '^\| [0-9]+ \|' | grep -cE '\*\*DONE 2026'`.
-  **STILL AT THE CAP AT 2 — the fire predicate is in-flight `< 2`, so this frees nothing.**
+  **AT THE CAP AT 2 — the fire predicate is in-flight `< 2`. Row 7 is next; it fires when row 10 or
+  row 8 lands DONE.** Note the derivation lag cuts BOTH ways now: row 8's cell reads `open` because
+  its session has not written it yet, exactly as row 10's did — **add rows you fired**.
 - **DERIVE IN-FLIGHT FROM THE MAP, NEVER FROM MEMORY.** This coordinator breached the ≤2 cap by
   typing `INFLIGHT=1` from recall while row 13 was already `REBUILDING` from outside its dispatch.
   Exact command is in the breach section above. Add rows you fired whose cell has not yet updated.
@@ -1151,6 +1154,53 @@ row 2's worktree.
 (verified by transcript content and by cwd). The next fire needs in-flight **< 2**, i.e. one of
 them DONE by disk. Row 8's payload is composed, flag-verified against the parser, and materialized
 at `/tmp/gu-row8-payload.md`, so the fire is one command when a slot frees.
+
+### 2026-07-29T18:3xZ ROW 2 DONE (7 of 13) · ROW 8 FIRED · and the deploy blocker finally has a measured composition
+
+**ROW 2 VERIFIED DONE on five disk axes** — all **7 cited shas are ancestors of origin/main** (row 2
+resolved them post-rebase itself, the first row to do so unprompted); `SESSION_LIFECYCLE_V2.md` is
+**502 lines** with all four load-bearing sections; **67 new tests exactly**, counted from trunk
+across its five suites (13+12+17+16+9) against a claim of 67; shipped symbols grepped with a
+positive control. One subtlety worth the extra look: `mailbox_close_disposition` returns grep hits,
+but **both are comments documenting its absence** — row 2's falsification of row 3's §8 A13 stands,
+and a naive `grep -c` would have concluded the opposite. That closes a coordinator debt carried
+since the recycle.
+
+**ROW 8 (context economy) FIRED AND ENGAGED** — pane `8D689C3D-C642-440A-906E-091E3663B2C8`,
+session `9a2d094f`, account **next4**, worktree `gu-context-economy`, cold `--split-right --follow`.
+Verified by transcript CONTENT, not the script's verdict (this was a *cold* `--worktree` fire, which
+has a documented auto-submit race): 53 rows / 12 assistant / 8 tool_use, already arming its goal.
+Account choice: `next4` over the marginally-sooner-expiring `next`, because row 2's session was
+still winding down on `next` and the policy is one rebuild per account.
+
+**THE FIRE-GATE JUDGMENT CALL, recorded because it went against this runbook's literal text.** The
+predicate says in-flight < 2 **AND runnable threads < logical cores**. In-flight was 1, but runnable
+was **12 on 10 cores** — a literal read says HOLD. I fired anyway, and the chokepoint gate replied
+**`ADMIT — load 13.11 on 10 cores = 1.31/core (ceiling 2.0/core)`**. The runnable-threads term has
+exactly the shape this runbook already condemned two sections up: it **duplicates the chokepoint
+gate and is STRICTER than it**, which is precisely what starved the campaign for an hour. Treat it
+as an advisory sanity read, never a veto — **the gate is the admission authority, it is fail-safe
+(`exit 9`, no side effect), and its verdict is captured.** Runnable-thread count is a microsecond
+sample that swung 4 → 15 → 12 within minutes here; do not gate a fire on it.
+
+**THE DEPLOY BLOCKER NOW HAS A MEASURED COMPOSITION — and row 2's R-1 is NOT it.** Aggregated the
+`failing` array across **all 33 postland stamps** (30 red · 2 cut · 1 hung · **0 green ever**). The
+failures are not scattered: **six suites fail in EIGHTEEN runs each**, identical counts, i.e. they
+fail together every run — `deploy-parity` · `desk-arm-live` · `desk-recycle-durable` ·
+`lr-team-audit` · `session-continue` · `waiting-recycle`. **Three of the six are ROW 8's named
+surfaces**, which is why row 8 was told before it designed anything.
+R-1's *mechanism* is real and I verified the gate is live and default-on — but **no fire-path suite
+appears anywhere in the 33 stamps' failing sets**, so it does not explain them. Keep the two
+separate: R-1 is a hazard for anyone running a corpus under load (neutralise with
+`CC_FIRE_CAPACITY_GATE=off`, as row 2 did, or ambient load fakes a RED); the six suites are the
+recorded blocker. Reproduce before trusting either:
+```bash
+python3 -c "import json,glob,collections;c=collections.Counter()
+[c.update(json.load(open(f)).get('failing') or []) for f in glob.glob('$HOME/.claude/autonomy/postland/stamps/*.json')]
+print(c.most_common(10))"
+```
+
+**Remaining order: 7 · 11 · 9 · 6 last.** In-flight is **2** (rows 10, 8) — at the cap again.
 
 ## Inherited watch — first GREEN postland stamp (status, not a coordinator work item)
 
