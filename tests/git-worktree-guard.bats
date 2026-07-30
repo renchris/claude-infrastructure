@@ -7,6 +7,10 @@
 # its idle path exits 0 pre- and post-fix, so it discriminates nothing on its own.
 
 setup() {
+  # HERMETICITY (run_gate's blocking test-hermeticity ratchet): fixture $HOME FIRST so every test
+  # inherits it. The git commands below already pass -c user.email/-c user.name explicitly, so they
+  # do not depend on the real ~/.gitconfig this hides.
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   export TDIR="$(mktemp -d)"
   export REPO="$TDIR/repo"
   git init -q "$REPO"

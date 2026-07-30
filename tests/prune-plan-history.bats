@@ -13,6 +13,9 @@
 # this script could have.
 
 setup() {
+  # HERMETICITY (run_gate's blocking test-hermeticity ratchet): fixture $HOME FIRST so every test
+  # inherits it; the CC_PLAN_* seams below cover this script's inputs, this covers the rest.
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   PRUNE="$REPO/scripts/prune-plan-history.sh"
   export CC_PLAN_MANIFEST="$BATS_TEST_TMPDIR/plan-versions/MANIFEST.jsonl"
