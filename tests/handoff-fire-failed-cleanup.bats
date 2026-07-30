@@ -100,11 +100,13 @@ run_cleanup() { # $1=output file
   [ "$status" -eq 4 ] || { echo "expected the payload-lint abort (4), got $status: $output"; false; }
   [[ "$output" == *"fire-cleanup"* ]] || { echo "no cleanup ran: $output"; false; }
   [ ! -d "$WTROOT/wt-cleanup-cold" ] || { echo "worktree STRANDED at $WTROOT/wt-cleanup-cold"; false; }
-  ! git -C "$REPO" rev-parse --verify --quiet "refs/heads/wt-cleanup-cold" \
-    || { echo "branch wt-cleanup-cold STRANDED"; false; }
+  if git -C "$REPO" rev-parse --verify --quiet "refs/heads/wt-cleanup-cold"; then
+    echo "branch wt-cleanup-cold STRANDED"; false
+  fi
   # …and git's own worktree registry has no leftover administrative entry either.
-  ! git -C "$REPO" worktree list --porcelain | grep -qF "wt-cleanup-cold" \
-    || { echo "worktree ADMIN entry stranded"; false; }
+  if git -C "$REPO" worktree list --porcelain | grep -qF "wt-cleanup-cold"; then
+    echo "worktree ADMIN entry stranded"; false
+  fi
 }
 
 @test "RED-PROOF: pre-fix the same failure stranded both (this is what the guard catches)" {
@@ -175,8 +177,9 @@ run_cleanup() { # $1=output file
   [ -d "$slot" ] || { echo "the pool slot DIRECTORY was destroyed"; false; }
   [ "$(git -C "$slot" branch --show-current)" = "pool/slot-7" ] \
     || { echo "slot identity NOT restored: $(git -C "$slot" branch --show-current)"; cat "$BATS_TEST_TMPDIR/pool.out"; false; }
-  ! git -C "$slot" rev-parse --verify --quiet refs/heads/wt-consumed-slug \
-    || { echo "the stranded claim branch survived"; false; }
+  if git -C "$slot" rev-parse --verify --quiet refs/heads/wt-consumed-slug; then
+    echo "the stranded claim branch survived"; false
+  fi
   grep -q "RETURNED" "$BATS_TEST_TMPDIR/pool.out"
 }
 
