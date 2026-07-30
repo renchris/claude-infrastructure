@@ -1501,3 +1501,114 @@ both schemes              t=0, the three beats, dark and light, inspected at 838
 - **`.rTurn` is emitted on every sprite with no `@keyframes` anywhere.** Dead markup, consistent with
   the recorded finding that the sprite is bilaterally symmetric so a turn-around is a visual no-op.
 - **WebKit is still unprobed.** Chromium and Firefox are covered.
+
+## THE SKY GETS ITS TWO OCCURRENCES — a meteor and a constellation (2026-07-30)
+
+The operator asked for a sky with "dynamic and subtle movement/changes": stars twinkling, plus two
+**rare micro-events** — a constellation being line-traced, and a shooting star. The twinkle already
+existed (four incommensurate rates on the low stars, `STAR_PERIODS`). The two occurrences did not.
+Both now ship as `rShoot` and `rTrace`, night-only, inside `.nOnly` with the starfield.
+
+### They are placed by the OPPOSITE rule to the narrative beats, deliberately
+
+S16 says the timeline anchors at LOAD, so a beat at t=200 s is unseen rather than rare, and the four
+narrative beats fight over the first 45 s accordingly. **That rule does not transfer to a sky beat**,
+and inverting it is the point rather than a loosening. A narrative beat has to be seen because it
+says something about the system; a shooting star says nothing about the system, and one you are
+guaranteed to catch on every visit is not a shooting star, it is a loading spinner.
+
+So the two take the air the narrative beats cannot use, at its extremes, and both numbers are forced:
+
+| beat | window | why exactly there |
+|---|---|---|
+| `rShoot` | **62.0-65.0 s** | the EARLIEST legal slot — `peer` ends 57.5 s, `EVENT_GAP` is 4.0 s, so 61.5 s is the floor. Earliest, because of the two it is the one worth a chance of being caught. |
+| `rTrace` | **150.2-158.2 s** | the exact MIDPOINT of the empty half. Free air runs 65.0 s to the wrap into `rSummon` at 243.4 s — 178.4 s, centred at 154.2 s — so the window stands **85.2 s clear on both sides**. |
+
+Budget after both: aggregate **14.4%** duty, air **85.6%**, every per-instance and per-type check
+live. `BUDGET_WAIVED` stays empty.
+
+**`shoot` is REINSTATED, not resurrected by amnesia.** Its deletion note ("the most tired beat
+available, AND absent in the day scheme") is kept in `gen.py` and answered in place: the day-scheme
+half was always an argument for `.nOnly` membership rather than for deletion, and "tired" was a craft
+verdict on the generic implementation — a dash that slides corner to corner and exits the frame.
+This one ablates and dies in open sky, and leaves a persistent train.
+
+### Two facts the canvas supplied, which no amount of prose would have
+
+**1. There is no long steep diagonal through this frame.** `shoot_path` searches for the longest
+descending straight corridor in open sky rather than placing one. The result is a fact about the
+composition: any line starting right of the keep-out and descending at a meteor's angle enters the
+keep-out within ~50 px, and any line clearing the keep-out from above must be shallower than ~7° —
+a scratch, not a fall. **The meteor is a corner event because the geometry leaves nowhere else**, at
+458 px and ~29° off horizontal. That is a better reason than composition-by-taste and it is
+re-derived every build.
+
+**2. A bright-stars-only constellation does not exist in this field.** Restricting vertices to the
+bright and middle tiers leaves 17-25 usable stars over the full 1920 px at an average vertex degree
+of 2.1-2.7, and **no six-chain on any variant** — the gate fired on all four. Admitting the faint
+tier takes the graph to 71-82 vertices at degree 11-15. The craft objection is answered by the node
+flare rather than the filter: a vertex brightens as the line reaches it, so a faint star at a vertex
+is legible for exactly as long as the figure is. A `CST_BRIGHT_MIN` floor keeps real anchors in it.
+
+**A wide shallow figure across the top is RULED OUT BY MEASUREMENT** — recorded so it is not
+re-proposed. The band above the wordmark (y 14-80) is the only full-width clear sky, and a
+Cassiopeia-style zigzag over the title was the obvious idea. It holds 29-33 eligible stars and admits
+**no six-chain at any segment band tried**: 62 px of vertical room cannot produce five turns clearing
+a 16° floor.
+
+### Three things the render corrected about the first build
+
+1. **The figure was a survey diagram.** 96-250 px segments in a 700x250 box produced five
+   near-maximal spans with acres of empty sky between them. 70-170 px in a 420x250 box puts the six
+   vertices in roughly a 200 px square — several joints the eye takes in as one object.
+2. **It clipped the frame.** Vertices at x=9 and x=12. `CST_MARGIN` = 90 px, y floor 42 px.
+3. **The line outweighed the stars.** At 0.40 opacity and 3 px the joins carried more ink than
+   anything they joined — a polygon that happened to have stars near its corners, exactly backwards.
+   0.28 at 2.4 px inverts it; 2.4 px is the same sub-pixel floor `STAR_TIERS` derives from.
+
+The tighter 70-150 band was tried and **builds on three variants of four** — `v6d-terminal-field`,
+sparsest at 105 stars, has no chain in it. 70-170 leaves 1,813 legal chains on that worst case and
+3k-52k on the others, which is the headroom a shape rule needs: a band that only just admits one
+chain is a band a future `star_count` tweak silently breaks.
+
+### THE BUG THIS FOUND, and the gate that now exists because of it
+
+THE SHOOTING STAR's persistent train was authored the obvious way — a stroked horizontal `<path>`
+with `stroke="url(#shTrain)"`. **It rendered nothing.** A perfectly horizontal path has a bounding
+box of zero height, and SVG declines to paint an element whose box is degenerate in either axis when
+it references an `objectBoundingBox` gradient. Measured contribution over the whole frame: **0**. As
+a filled `<rect>`: max delta 33 across 1,072 pixels.
+
+**Every existing gate stayed green**, because every one of them is structural — the markup parses,
+the animation is singular, the periods divide P, the loop seams shut, the geometry clears the type.
+None asks whether an element puts ink on the canvas. `banner-verify`'s ALIVE check is the closest and
+cannot see it: it samples 0..31 s of a 240 s loop (containing neither sky beat) and asks only that
+frames differ from each other, which the creature's own stride satisfies alone. **A banner with every
+rare event painted in invisible ink passes ALIVE 12/12.**
+
+`scripts/banner-beat-ink.py` closes the class. Each beat declares probes in `BEAT_INK` as
+`(seconds into its window, CSS selector)`; the script renders each frame twice — whole, and with that
+selector suppressed — and requires a real difference at **838 px**, the shipping width. Measured on
+`v6a`, all 8 probes pass: `rSummon` 23,771 px · `rRefuse` 801 · `rAsk` 2,646 · `peek` 1,457 ·
+`rShoot` head 545 and train 1,059 · `rTrace` lines 1,148 and nodes 273.
+
+**Two ways the instrument lied before it worked**, both worth keeping:
+
+- **Suppression must outrank an animation.** The obvious control injects `opacity:0` and reports zero
+  difference for *every* beat — a running CSS animation outranks a normal author declaration, so the
+  control changes nothing and the whole banner reads as blank. Only `display:none!important` removes
+  the element.
+- **The control needs a positive control.** A suppression that silently fails and a beat that
+  genuinely draws nothing measure identically. The first "the train is invisible" reading was the
+  broken control; the real bug was only established once `.shBurn` was probed at the same instant and
+  came back non-zero. The script now reports an all-zero run as a **BROKEN HARNESS**, not as a wall
+  of failures — convicting the art on evidence that equally convicts the instrument is how a good
+  asset gets rewritten for nothing.
+
+Red-proofs: four new cases in `banner-gate-redproof.py` (no chain in the field · a vertex a single
+pixel off a star · a meteor that flies upward · a corridor too short). The ASCENDING case is the one
+worth reading — **no clearance check can catch a meteor flying upward**, since an ascending corridor
+is exactly as clear of the wordmark as its mirror image, and the first `shoot_path` returned one
+(it swept `±angle`, which mirrors dy while leaving dx positive). The sign is now asserted on its own.
+The suite stands at **23 gates, 16 proven**; the 7 unproven are the pre-existing set documented
+before this work and are unchanged by it — verified by running the suite against the branch tip.
