@@ -18,10 +18,24 @@
 # fact-bound DISK reads, computed here every invocation.
 #   kind=="verifier-inert"  NEVER-ACTIVATED (no stamps dir has ever existed — an un-run C10 step)
 #                           or STALE (stamps stopped while land.log kept moving)
-#   kind=="trunk-red"       PERSISTENT-RED — the verifier is ALIVE (stamping fresh, OR provably
-#                           mid-run) and every one of the newest N verdicts is red with no green in
-#                           24h. Deliberately a distinct kind, not a verifier state: nothing is wrong
-#                           with the verifier, and the fix is the opposite one (partition/attribution).
+#   kind=="trunk-red"       the verifier is ALIVE (stamping fresh, OR provably mid-run) and NOT ONE
+#                           of the newest N verdicts is green, with no green in 24h. Two states, on
+#                           the SAME predicate: PERSISTENT-RED when all N are literally red;
+#                           PERSISTENT-NOT-GREEN when the window mixes red with non-verdicts (cut /
+#                           hung). Deliberately a distinct kind, not a verifier state: nothing is
+#                           wrong with the verifier, and the fix is the opposite one
+#                           (partition/attribution).
+#                           POLARITY (OPERATOR_SURFACE_V2 §4 M1, row 12's close addendum, ruled row
+#                           10's). This used to test `red == seen`, i.e. equality against ONE named
+#                           failure — so a single cut/hung stamp anywhere in the window DISABLED the
+#                           alarm that exists to catch exactly this state. Live on 2026-07-29 the
+#                           newest five were red/hung/red/red/red: seen=5, red=4, and the row was
+#                           SUPPRESSED while 0 of 33 stamps had EVER been green. The campaign is
+#                           right that a non-verdict is not a RED — that is a verdict vocabulary,
+#                           row 1's, and it is untouched here. It INVERTS inside an alarm, because a
+#                           hung run is WORSE than a red one for "is trunk persistently failing".
+#                           For a VERDICT ask "is it red?"; for an ALARM ask "is it green?".
+#                           Kill switch: CC_BLOCKERS_ALARM_POLARITY=legacy restores `red == seen`.
 #   kind=="deploy-lag"      LAGGING — a GREEN-stamped commit has sat undeployed past the budget
 #   kind=="never-green"     NEVER-CERTIFIED — the BACKSTOP. The verifier runs and returns verdicts,
 #                           but not one has EVER been green, so `last-green` was never written and
@@ -110,6 +124,9 @@ DEPLOY_REPO="${DEPLOY_REPO:-$HOME/Development/claude-infrastructure}"
 ALARM_H="${CC_POSTLAND_ALARM_H:-3}"            # stamp staleness budget (hours)
 DEPLOY_LAG_MIN="${CC_DEPLOY_LAG_MIN:-60}"      # green-cursor → deployed-HEAD lag budget (minutes)
 REDRUN_N="${CC_POSTLAND_REDRUN_N:-5}"          # how many newest verdicts an all-red run must span
+# ALARM POLARITY (§4 M1). `notgreen` = the alarm's own question ("is it green?"); `legacy` = the
+# pre-fix `red == seen` equality against one named failure. A kill switch, never a revert plan.
+ALARM_POLARITY="${CC_BLOCKERS_ALARM_POLARITY:-notgreen}"
 ACTIVATE_SH="$HOME/.claude/autonomy/pending-activation/14-land-pipeline-v2-activate.sh"
 DAY_S=86400
 # ── DISPATCH alarm sensors (§3 S8). DISPATCH_IDL defaults to the board file itself — the desk
@@ -178,7 +195,11 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --json)         JSON=1 ;;
     --plist-parity) PARITY=1 ;;
-    -h|--help) sed -n '2,69p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    # Range is DERIVED from the file, never a literal line number: the hardcoded `2,69p` silently
+    # stopped mid-header and `--help` omitted every alarm family documented past it (the fleet rows
+    # and the whole --plist-parity leg) — a documented-but-invisible surface, this row's own bug
+    # class one layer out. Same idiom as hooks/operator-readout.sh's --help.
+    -h|--help) sed -n '2,/^set -uo/p' "$0" | sed 's/^# \{0,1\}//; /^set -uo/d'; exit 0 ;;
     "")        ;;
     *)         echo "cc-blockers: unknown arg $1 (usage: cc-blockers [--json] [--plist-parity])" >&2; exit 2 ;;
   esac
@@ -217,6 +238,12 @@ verifier_running() {
 alarm_rows() { # → one JSON object per line (possibly none)
   local now newest_ts=0 f t v land_ts stamps="" gcommit="" green_ts=0 head_sha
   local seen=0 red=0 green_24h=0 lands_24h=0 emitted=0
+  # notgreen  — the ALARM's counter (§4 M1). red stays, and is still read: it is what distinguishes
+  #             the two STATES, and it is the whole predicate under CC_BLOCKERS_ALARM_POLARITY=legacy.
+  # life/life_g — LIFETIME denominators (§4 F3). `seen` is capped at REDRUN_N, so the board used to
+  #             say "5 verdicts, 0 green EVER" against a real history of 33 — understating its own
+  #             evidence 6.6x in the one cell the operator reads to size the problem.
+  local notgreen=0 life=0 life_g=0 behind="" astate fcount dtl
   now="$(date +%s 2>/dev/null || true)"
   case "${now:-}" in ''|*[!0-9]*) return 0 ;; esac                    # no clock ⇒ no alarms
 
@@ -260,10 +287,20 @@ alarm_rows() { # → one JSON object per line (possibly none)
     [ -n "${f:-}" ] || continue
     case "${t:-}" in ''|*[!0-9]*) continue ;; esac        # safe here: not inside a $( )
     v="$(jq -r '.verdict // empty' "$f" 2>/dev/null || true)"
+    # An EMPTY verdict is a SENSOR failure (unreadable/malformed stamp), not a non-verdict, and the
+    # distinction is load-bearing in BOTH directions: counted as not-green it would let one corrupt
+    # file fabricate a PERSISTENT-NOT-GREEN row (R5 fail-OPEN — a board that invents blockers is
+    # ignored exactly like one that hides them); counted as green it would silence a real alarm.
+    # Excluded from every counter INCLUDING `seen`, so it can neither raise nor dilute the window.
+    case "${v:-}" in '') continue ;; esac        # safe here: not inside a $( ) — see the note above
+    life=$((life + 1))
     if [ "$seen" -lt "$REDRUN_N" ]; then
-      seen=$((seen + 1)); [ "$v" = "red" ] && red=$((red + 1))
+      seen=$((seen + 1))
+      [ "$v" = "red" ]   && red=$((red + 1))
+      [ "$v" != "green" ] && notgreen=$((notgreen + 1))
     fi
     if [ "$v" = "green" ]; then
+      life_g=$((life_g + 1))
       [ -z "$gcommit" ] && { green_ts="$t"; gcommit="$(jq -r '.commit // empty' "$f" 2>/dev/null || true)"; }
       [ "$((now - t))" -lt "$DAY_S" ] && green_24h=1
     fi
@@ -298,13 +335,30 @@ EOF
   # Reading the mutex directly answers the real question, and keeps this mutually exclusive with
   # STALE above by construction: STALE now requires NOT running, this admits running. Four cells,
   # one alarm each — {fresh,stale} x {running,idle} — verified in tests/cc-blockers.bats.
+  # POLARITY (§4 M1): the count compared against the window is NOT-GREEN, so a cut/hung stamp
+  # STRENGTHENS the case instead of silencing it. `fcount` is the one line the kill switch moves.
+  fcount="$notgreen"
+  [ "$ALARM_POLARITY" = legacy ] && fcount="$red"
   if { [ "$((now - newest_ts))" -le "$((ALARM_H * 3600))" ] || verifier_running; } \
-     && [ "$seen" -ge 2 ] && [ "$red" -eq "$seen" ] && [ "$green_24h" -eq 0 ] && [ "$lands_24h" -eq 1 ]; then
+     && [ "$seen" -ge 2 ] && [ "$fcount" -eq "$seen" ] && [ "$green_24h" -eq 0 ] && [ "$lands_24h" -eq 1 ]; then
+    # STATE, not a second alarm: the operator's action is identical (partition the failures), but
+    # "4 red + 1 hung" and "5 red" are different facts and the board must not claim the stronger one.
+    # Under legacy the predicate only passes when red==seen, so this is always PERSISTENT-RED there —
+    # byte-identical to the pre-fix row.
+    if [ "$red" -eq "$seen" ]; then astate="PERSISTENT-RED"; else astate="PERSISTENT-NOT-GREEN"; fi
+    # DETAIL is padded to 44 BYTES and ASCII-only (printf pads by bytes; one em-dash shifts the
+    # column). Both variants carry the LIFETIME denominator, which is the number that sizes the
+    # problem — `seen` is capped at REDRUN_N and reads as the whole history to a human.
+    if [ "$astate" = "PERSISTENT-RED" ]; then
+      dtl="$(printf 'newest %s all red, %s green of %s ever' "$seen" "$life_g" "$life")"
+    else
+      dtl="$(printf 'newest %s: %s red %s nonverdict, 0 green' "$seen" "$red" "$((seen - red))")"
+    fi
     # --arg (not a "red" literal) so the emitted command carries NO double quote: one less escaping
     # layer between here, the JSON, the table cell and the operator's paste buffer.
     # shellcheck disable=SC2016  # $v is jq's --arg binding, EMITTED for the operator's jq to read.
-    printf '{"kind":"trunk-red","state":"PERSISTENT-RED","detail":"newest %s verdicts all red; 0 green in 24h","subject":"%s","recover_cmd":"jq -r --arg v red %sselect(.verdict==$v).failing[]?%s %s/*.json | sort | uniq -c | sort -rn | head","ts":%s}\n' \
-      "$seen" "$STAMPS_DIR" "'" "'" "$STAMPS_DIR" "$now"
+    printf '{"kind":"trunk-red","state":"%s","detail":"%s","subject":"%s","recover_cmd":"jq -r --arg v red %sselect(.verdict==$v).failing[]?%s %s/*.json | sort | uniq -c | sort -rn | head","ts":%s}\n' \
+      "$astate" "$dtl" "$STAMPS_DIR" "'" "'" "$STAMPS_DIR" "$now"
     emitted=1
   fi
 
@@ -327,8 +381,21 @@ EOF
   if [ -z "$gcommit" ]; then
     if [ "$emitted" -eq 0 ] && [ "$seen" -ge 2 ] && [ ! -e "$LAST_GREEN" ] \
        && { [ -e "$LANDLOG" ] || [ -d "$DEPLOY_REPO" ]; }; then
-      printf '{"kind":"never-green","state":"NEVER-CERTIFIED","detail":"%s verdicts, 0 green EVER; deploy has no cursor","subject":"%s","recover_cmd":"tail -40 %s/runner.log ; jq -r .verdict %s/*.json | sort | uniq -c","ts":%s}\n' \
-        "$seen" "$LAST_GREEN" "$POSTLAND_DIR" "$STAMPS_DIR" "$now"
+      # MAGNITUDE, not just cause (§4 F4). "deploy has no cursor" is the reason; the number of
+      # commits of landed work sitting inert behind it is what sizes the exposure, and it was
+      # nowhere on the board — row 3 spent a whole rebuild measuring a mechanism that had never
+      # executed for exactly this reason. Computed HERE, inside the emit branch, so the common
+      # (silent) path pays no fork. `@{u}` not a hardcoded origin/main: the general form, and it
+      # simply fails to resolve — empty, clause omitted — in a fixture with no upstream (R5).
+      behind="$(git -C "$DEPLOY_REPO" rev-list --count 'HEAD..@{u}' 2>/dev/null || true)"
+      case "${behind:-}" in ''|*[!0-9]*|0) behind="" ;; esac
+      if [ -n "$behind" ]; then
+        dtl="$(printf '0 green in %s EVER; live layer %s behind' "$life" "$behind")"
+      else
+        dtl="$(printf '0 green in %s EVER; deploy has no cursor' "$life")"
+      fi
+      printf '{"kind":"never-green","state":"NEVER-CERTIFIED","detail":"%s","subject":"%s","recover_cmd":"tail -40 %s/runner.log ; jq -r .verdict %s/*.json | sort | uniq -c","ts":%s}\n' \
+        "$dtl" "$LAST_GREEN" "$POSTLAND_DIR" "$STAMPS_DIR" "$now"
     fi
     return 0
   fi
