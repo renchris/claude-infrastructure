@@ -767,6 +767,89 @@ live_teammates_of() { # $1=CC session id -> "<name>\t<pid>" lines
     }' < <(ps -Ao pid=,args= 2>/dev/null)
 }
 
+# ---- V2 §5.1 — THE THIRD SESSION CATEGORY -----------------------------------------------------
+# self-close modelled exactly TWO kinds of session: a FIRED PEER (has a stamp ⇒ may retire) and an
+# ORIGIN session (no stamp ⇒ never retires). An Agent-Team ASSIGNEE whose LEAD IS DEAD is NEITHER:
+# it has an originator, but that originator no longer exists. So every sanctioned route refused it
+# and closing became an operator hand-step — 5 assignees stranded 4+ h on 2026-07-29, then 7, then
+# 11 (cc-backlog 95281da714f0, two confirmed occurrences).
+#
+# THE GAP WAS A MISSING CATEGORY, NOT A MISSING FEATURE — so the fix is to NAME the category, not to
+# widen an override. `--allow-origin-close` already exists and is documented "deliberate, loud,
+# almost never right"; the coordinator deliberately refused to use it for these, and was right:
+# forcing a gate whose whole purpose is to stop closes-with-no-continuation, for tidiness, is the
+# wrong trade. A named class with its own preconditions is a DIFFERENT thing from bypassing a gate.
+#
+# agent_id_on_tty — the assignee oracle. POSITION-MATCHED on argv, never `pgrep -f`/substring:
+# argv carries whole briefs, so a -f match counts every session that merely MENTIONS the flag (read
+# 50 where the truth was 1 — memory pgrep-f-matches-agent-briefs).
+agent_id_on_tty() { # $1=tty basename → "<name>@session-<sid>" or empty
+  local t="${1:-}"
+  [ -n "$t" ] || return 0
+  ps -t "$t" -o command= 2>/dev/null \
+    | awk '{for (i=1; i<NF; i++) if ($i == "--agent-id") { print $(i+1); exit }}' 2>/dev/null || true
+  return 0
+}
+# STRICT SHAPE VALIDATION, and it is load-bearing rather than tidiness. `ps -o command=` flattens all
+# of argv into ONE space-separated line, which destroys the difference between "separate argv words"
+# and "words inside a single quoted argv element" — and a session's brief IS one such element. Every
+# brief in this campaign quotes the flag in prose ("assignees are keyed `--agent-id
+# <name>@session-<sid>`"), so a positional awk scan happily returns the NEXT prose word. Caught by
+# this row's own test: the fixture prose parsed, which would have classified an ordinary LEAD as an
+# assignee of a nonexistent originator. So the shape is validated instead of assumed — a real
+# agent-id is `<name>@session-<sid>` with no angle brackets, no spaces, and a session-id-shaped tail.
+# Defence in depth, not a single wall: even a prose value that survived this still has to clear R1's
+# positive-death requirement below, which no fictional originator ever can.
+session_of_agent_id() { # $1="<name>@session-<sid>" → <sid>, empty unless STRICTLY well-formed
+  local id="${1:-}" name sid
+  case "$id" in
+    *@session-*) ;;
+    *) return 0 ;;
+  esac
+  name="${id%%@session-*}"; sid="${id##*@session-}"
+  # placeholder/prose rejection: a real id carries only [A-Za-z0-9_.-] on both sides.
+  case "$name" in ''|*[!A-Za-z0-9_.-]*) return 0 ;; esac
+  case "$sid"  in ''|*[!A-Za-z0-9_.-]*) return 0 ;; esac
+  # a session id is at least 8 chars (CC uses uuids / 8+ hex prefixes); shorter is prose.
+  [ "${#sid}" -ge 8 ] || return 0
+  printf '%s' "$sid"
+  return 0
+}
+
+# R1 — POSITIVE DEATH EVIDENCE, NEVER SILENCE. A stall is not a death: treating a 6-minute 529 quiet
+# spell as terminal is what put two leads in one worktree and came within a read-before-write guard
+# of clobbering 581 landed lines. So this oracle is TRICHOTOMOUS and its third state is load-bearing.
+#   0 = provably DEAD    1 = provably ALIVE    2 = UNKNOWN
+# UNKNOWN must REFUSE at the call site. Note which way each error leans: a recycled pid that makes a
+# dead lead read ALIVE causes a refusal (safe, R2); there is deliberately NO path from "no evidence"
+# to "dead". "No registry row at all" is UNKNOWN, not death — a row that VANISHED is evidence, a row
+# that never existed is not, and only the row's presence-with-a-dead-pid distinguishes them.
+# Row 4 owns the registry; this consumes it FAIL-SOFT (R5) by degrading to UNKNOWN, never by guessing.
+originator_liveness() { # $1=originator sid $2=registry dir → 0 dead / 1 alive / 2 unknown
+  local sid="${1:-}" regdir="${2:-}" f rsid rpid comm found=0
+  [ -n "$sid" ] || return 2
+  command -v jq >/dev/null 2>&1 || return 2
+  [ -d "$regdir" ] || return 2
+  for f in "$regdir"/*.json; do
+    [ -f "$f" ] || continue
+    rsid="$(jq -r '.session_id // empty' "$f" 2>/dev/null)" || continue
+    [ "$rsid" = "$sid" ] || continue
+    found=1
+    rpid="$(jq -r '.pid // empty' "$f" 2>/dev/null)"
+    case "$rpid" in ''|*[!0-9]*) return 2 ;; esac   # row carries no usable pid ⇒ cannot judge
+    if kill -0 "$rpid" 2>/dev/null; then
+      # A live pid is not yet proof the LEAD lives — pids are recycled. Require it to still be a CC
+      # process; anything else is UNKNOWN rather than dead, because the wrong call here closes a pane
+      # whose lead is working.
+      comm="$(ps -o comm= -p "$rpid" 2>/dev/null | tr -d ' ')"
+      case "$comm" in *node*|*claude*) return 1 ;; *) return 2 ;; esac
+    fi
+    return 0    # row EXISTS and its pid is gone — positive death evidence
+  done
+  [ "$found" = 1 ] && return 2
+  return 2
+}
+
 # Light pre-close inventory (best-effort, WARN-only — NEVER blocks the close). A self-closing session
 # should not SILENTLY abandon two loose-end classes; each nonzero count emits ONE WARN line to stderr
 # AND the close log. Ambiguity ⇒ count nothing and skip (per the light-touch contract):
@@ -1413,7 +1496,7 @@ fi
 # self-close — arm the detached watcher that retires this session once the calling turn ends.
 if [ "${1:-}" = "self-close" ]; then
   shift
-  SC_SID="" SC_ALLOW_DIRTY=0 SC_DRY=0 SC_SUCCESSOR="" SC_TERMINAL=0 SC_NO_NOTIFY=0 SC_DIRTY_OWNER="" SC_ASSUME_ENGAGED=0 SC_ALLOW_LIVE_TM=0 SC_ALLOW_ORIGIN_CLOSE=0
+  SC_SID="" SC_ALLOW_DIRTY=0 SC_DRY=0 SC_SUCCESSOR="" SC_TERMINAL=0 SC_NO_NOTIFY=0 SC_DIRTY_OWNER="" SC_ASSUME_ENGAGED=0 SC_ALLOW_LIVE_TM=0 SC_ALLOW_ORIGIN_CLOSE=0 SC_ORPHANED_ASSIGNEE=0
   while [ $# -gt 0 ]; do case "$1" in
     --session-id)  SC_SID="${2:?--session-id needs a value}"; shift 2 ;;
     --successor)   SC_SUCCESSOR="${2:?--successor needs a pane uuid}"; shift 2 ;;
@@ -1424,6 +1507,7 @@ if [ "${1:-}" = "self-close" ]; then
     --allow-dirty) SC_ALLOW_DIRTY=1; shift ;;
     --allow-live-teammates) SC_ALLOW_LIVE_TM=1; shift ;;
     --allow-origin-close) SC_ALLOW_ORIGIN_CLOSE=1; shift ;;
+    --orphaned-assignee) SC_ORPHANED_ASSIGNEE=1; shift ;;
     --dry-run)     SC_DRY=1; shift ;;
     *) echo "!! unknown self-close arg: $1" >&2; exit 1 ;;
   esac; done
@@ -1474,7 +1558,52 @@ USAGE
   # missing stamp refuses the close, and refusing to close never loses work while closing wrongly does.
   # The LIVE-TEAMMATE gate below already blocks a lead mid-flight; this blocks it when DONE too.
   SC_FIRED_STAMP="${CC_FIRED_DIR:-$HOME/.claude/cc-fired}/$SC_SID.json"
-  if [ "${SC_ALLOW_ORIGIN_CLOSE:-0}" != 1 ] && [ ! -s "$SC_FIRED_STAMP" ]; then
+  # ---- V2 §5.1 ORPHANED-ASSIGNEE PATH — the THIRD category's sanctioned resolution -------------
+  # Admissible ONLY with all four preconditions. Runs BEFORE the origin gate because an assignee has
+  # no fired-peer stamp and would otherwise be misclassified `origin` and refused — which is the
+  # whole defect (F1). It does NOT weaken the origin gate: an assignee that cannot satisfy all four
+  # still falls through to it. CC_ORPHAN_ASSIGNEE_CLOSE=0 disables the path entirely (R8).
+  SC_ORIGIN_CLASS="" SC_ASSIGNEE_ID="" SC_ORIGINATOR=""
+  if [ "$SC_ORPHANED_ASSIGNEE" = 1 ] && [ "${CC_ORPHAN_ASSIGNEE_CLOSE:-1}" != 0 ]; then
+    SC_SC_TTY="$(as_tty "$SC_SID")"
+    SC_ASSIGNEE_ID="$(agent_id_on_tty "$(basename "${SC_SC_TTY:-none}")")"
+    SC_ORIGINATOR="$(session_of_agent_id "$SC_ASSIGNEE_ID")"
+    # (1) it must actually BE an assignee — established from argv, not asserted by the caller.
+    if [ -z "$SC_ORIGINATOR" ]; then
+      { echo "!! self-close REFUSED: --orphaned-assignee, but pane $SC_SID is NOT an Agent-Team assignee."
+        echo "!!   no '--agent-id <name>@session-<sid>' found in the argv of any process on its tty (${SC_SC_TTY:-unresolved})."
+        echo "!!   This flag names a CATEGORY; it cannot confer one. A fired peer retires normally; an"
+        echo "!!   ORIGIN session stays up and reports."
+      } >&2
+      exit 2
+    fi
+    # (2) R1 — the originator must be PROVABLY dead. UNKNOWN refuses: a stall is not a death, and
+    #     treating silence as terminal is what created two leads in one worktree.
+    originator_liveness "$SC_ORIGINATOR" "$REG_DIR" && SC_ORIG_LIVE=0 || SC_ORIG_LIVE=$?
+    if [ "$SC_ORIG_LIVE" = 1 ]; then
+      { echo "!! self-close REFUSED: your originator (lead session ${SC_ORIGINATOR:0:8}) is ALIVE."
+        echo "!!   An assignee with a live lead is not orphaned — finish and let the lead harvest you,"
+        echo "!!   or have the lead issue a structured shutdown_request."
+      } >&2
+      exit 2
+    fi
+    if [ "$SC_ORIG_LIVE" != 0 ]; then
+      { echo "!! self-close REFUSED: cannot PROVE lead session ${SC_ORIGINATOR:0:8} is dead (verdict: UNKNOWN)."
+        echo "!!   R1 — death requires positive evidence: a registry row whose pid is GONE. Silence, an"
+        echo "!!   idle transcript and an upstream 529 all look identical to death and are not it."
+        echo "!!   confirm by hand:  ls ${REG_DIR}/ | while read -r r; do jq -r 'select(.session_id==\"$SC_ORIGINATOR\")|.pid' \"${REG_DIR}/\$r\"; done"
+        echo "!!   then, if truly dead and the registry simply has no row, the operator closes this pane."
+      } >&2
+      exit 2
+    fi
+    SC_ORIGIN_CLASS="assignee"
+    # (4) LEGIBILITY (R10) — an assignee's findings live ONLY in its transcript, and a pane that
+    #     vanishes without naming where its work went is exactly the illegible exit this row exists
+    #     to prevent. Announce BEFORE the close, to stderr AND the close log, never only in-pane.
+    echo "→ orphaned-assignee close AUTHORIZED: $SC_ASSIGNEE_ID · lead ${SC_ORIGINATOR:0:8} confirmed DEAD (registry row present, pid gone)" >&2
+    echo "→ its work survives the close: worktree $(pwd) · transcript recoverable by agentName '${SC_ASSIGNEE_ID%%@*}' (transcripts outlive pane close)" >&2
+  fi
+  if [ "$SC_ORIGIN_CLASS" != "assignee" ] && [ "${SC_ALLOW_ORIGIN_CLOSE:-0}" != 1 ] && [ ! -s "$SC_FIRED_STAMP" ]; then
     cat >&2 <<USAGE
 !! self-close REFUSED: this is an ORIGIN session, not a fired peer.
 !!   pane $SC_SID has no fired-peer stamp at:
