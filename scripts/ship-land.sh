@@ -1120,6 +1120,59 @@ run_gate() {  # $1=range → 0 green / 1 red
     fi
   fi
 
+  # ── .bats shellcheck ratchet (backlog 19a44d4e2e75) ───────────────────────────────────────────
+  # Fourth deterministic blocker class, same own-scope contract as the three above — with one
+  # difference that is the whole point: the own-set is LINE-scoped, not file-scoped.
+  #
+  # The hole it closes: is_shell_file() above matches `*.sh|*.bash` or a shell shebang, and a bats
+  # file's shebang is `#!/usr/bin/env bats`. It matches neither arm, so this gate has never linted a
+  # single one of the 189 suites — the COVERAGE mechanism behind the 226 dead assertions
+  # (docs/research/BATS_DEAD_ASSERTIONS_2026-07-25.md). The debt was not merely present, it was
+  # structurally invisible.
+  #
+  # Why not simply widen is_shell_file(), which is what the item prescribed: `bash -n` FAILS ON ALL
+  # 189 SUITES (`@test "x" { … }` is not bash — "syntax error near unexpected token `}'"), and every
+  # is_shell_file() match is handed to BOTH shellcheck and `bash -n` above. Widening the predicate
+  # turns the gate red for every land that touches a test file. The two tools do not share a domain,
+  # so bats gets its own pass rather than a wider predicate.
+  #
+  # Why LINE-scoped where the siblings are file-scoped: 143 of 189 suites carry a finding today, so
+  # blocking on the FILES in a diff would refuse roughly one land in three over inherited debt — the
+  # fleet-wide hard stop own-scope exists to prevent. A file-level grandfather would instead exempt
+  # those files forever, so a NEW finding in one would never fire. Per-line expresses the strictest
+  # rule that is still free: you may not add a finding on a line you wrote. The lint derives the
+  # own-set itself (`--own-lines <range>`) so the diff parsing lives in one tested place.
+  #
+  # --selftest runs alongside the scan, for the reason the UTC ratchet documents: a ratchet whose own
+  # discrimination is unverified is not a gate. Its abort control replays a real prose-comment line
+  # byte-for-byte and asserts that file's genuine defect goes UNSEEN.
+  SC_BATS_LINT="${SHIP_LAND_BATS_SC_LINT:-scripts/bats-shellcheck-lint.sh}"
+  if [[ -d tests ]] && ls tests/*.bats >/dev/null 2>&1 && [[ -x "$SC_BATS_LINT" ]] \
+     && command -v shellcheck >/dev/null 2>&1; then
+    local bown=""
+    if [[ "${SHIP_LAND_BATS_SC_OWN_SCOPE:-on}" != "off" ]]; then
+      # Failure to resolve the range yields an EMPTY own-set, which means "I wrote no line" ⇒
+      # nothing blocks. That is the correct degradation HERE and the opposite of the siblings':
+      # their strict fallback is free because their corpus is clean, whereas a strict whole-tree
+      # run of this lint is 164 findings, i.e. a guaranteed outage on every land.
+      bown="$("$SC_BATS_LINT" --own-lines "$range" 2>/dev/null || true)"
+      [[ -n "$bown" ]] && echo "→ gate: bats-shellcheck own-scope — blocking on $(printf '%s\n' "$bown" | grep -c .) changed line(s); pre-existing findings advisory." >&2
+    fi
+    echo "→ gate: .bats shellcheck ratchet (this gate never linted a test file before)" >&2
+    if ! "$SC_BATS_LINT" --selftest >/dev/null 2>&1; then
+      echo "✗ gate: bats-shellcheck-lint --selftest FAILED — the lint no longer discriminates, so its" >&2
+      echo "  clean verdict would mean nothing. Fix the lint before landing." >&2
+      GATE_RED=1
+      return 1
+    fi
+    if ! CC_BATS_SC_OWN="$bown" "$SC_BATS_LINT" tests >&2; then
+      echo "✗ gate: bats-shellcheck RED — a line THIS LAND WROTE carries a shellcheck finding," >&2
+      echo "  or a suite it touches aborts shellcheck entirely. Both are named above." >&2
+      GATE_RED=1
+      return 1
+    fi
+  fi
+
   # ── the test phase — SMOKE in the fast lane, the whole corpus only under the v1 kill switch ──
   # NOT gated on the statics rc above: an already-red land still runs the smoke, so the author gets
   # the lint error AND the failing test in ONE cycle. Same reasoning as run_corpus's no-fail-fast —

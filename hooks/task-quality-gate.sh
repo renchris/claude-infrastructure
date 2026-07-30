@@ -171,6 +171,27 @@ run_infra_gate() {  # runs from $WORKTREE_PATH; exits 0 (pass/skip) or 2 (fail)
     done
   fi
 
+  # .bats shellcheck — the same coverage hole as ship-land's gate, and the same fix. is_shell_file()
+  # above cannot match `#!/usr/bin/env bats`, so the shellcheck pass has never seen a test file here
+  # either. bats files deliberately do NOT join $shellfiles: `bash -n` fails on all 189 of them, and
+  # this function hands every shellfile to both tools. Own-scope is LINE-scoped and derived from the
+  # trunk range, so only lines this work actually wrote can block; pre-existing findings stay
+  # advisory (143 of 189 suites carry one). No range ⇒ empty own-set ⇒ nothing blocks, never a
+  # whole-tree strict run.
+  if [ "${#batsfiles[@]}" -gt 0 ] && command -v shellcheck >/dev/null 2>&1; then
+    # cwd is $WORKTREE_PATH (cd'd at the top of this function), so the tree being gated is judged by
+    # its OWN lint — same reasoning as ship-land resolving its ratchets repo-root-relative.
+    local scl="scripts/bats-shellcheck-lint.sh" bown="" scout=""
+    if [ -x "$scl" ]; then
+      if git rev-parse --verify -q "$trunk" >/dev/null 2>&1; then
+        bown="$("$scl" --own-lines "$trunk...HEAD" 2>/dev/null || true)"
+      fi
+      if ! scout="$(CC_BATS_SC_OWN="$bown" "$scl" tests 2>&1)"; then
+        rc=1; summary="${summary}"$'\n'"[bats-shellcheck]"$'\n'"${scout}"
+      fi
+    fi
+  fi
+
   if [ "${#batsfiles[@]}" -gt 0 ]; then
     local uniq="" runbats=()
     uniq="$(printf '%s\n' "${batsfiles[@]}" | LC_ALL=C sort -u)"

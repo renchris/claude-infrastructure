@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 # task-quality-gate.sh — TaskCompleted hook. G-P6-10 coverage: the repo-aware branch that runs
-# shellcheck + bash -n + bound bats for claude-infrastructure's OWN work (shell scripts, no
+# ShellCheck + bash -n + bound bats for claude-infrastructure's OWN work (shell scripts, no
 # node_modules), which previously fell through the TypeScript-only path and silently skipped.
 # Exit 2 rejects the task; exit 0 allows. Deletions are excluded from the shell-file set (the
 # ship-land deletion-bug class: a removed .sh must not be handed to shellcheck).

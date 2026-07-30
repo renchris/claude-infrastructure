@@ -461,3 +461,117 @@ discovery loop — each turns the suite RED.
 **The through-line:** a detector, a fixer, and a fixture each certified something they could not
 see. A green suite, a "revived 6", and a passing self-preservation assertion were all true
 statements about artifacts that were not doing the work claimed of them.
+
+---
+
+## 10. Closing the coverage hole (2026-07-29, backlog `19a44d4e2e75`)
+
+The Root cause section above named the mechanism and prescribed the fix: widen `is_shell_file()` so
+`.bats` enters the gate's shellcheck pass. That was measured before implementing, and **the
+prescribed fix is wrong in two independent ways** — an item's symptom and its prescribed remedy rot
+separately.
+
+### 10a. `bash -n` fails on 189 of 189 suites
+
+`run_gate` hands every `is_shell_file()` match to shellcheck **and** to `bash -n`:
+
+```bash
+is_shell_file "$p" && shellfiles+=("$p")
+...
+shellcheck "${shellfiles[@]}" || { rc=1; GATE_RED=1; }
+for p in "${shellfiles[@]}"; do bash -n "$p" || { rc=1; GATE_RED=1; }; done
+```
+
+`@test "x" { … }` is not bash. `bash -n tests/cc-blockers.bats` → ``syntax error near unexpected
+token `}'`` — and that holds for **all 189** suites (measured, not sampled). Widening the predicate
+therefore turns the gate RED for every land that touches a test file. The two tools do not share a
+domain, so the fix is a separate pass, not a wider predicate. `is_shell_file()` is left exactly as
+it was, and `tests/bats-shellcheck-lint.bats` now asserts it never learns to claim `.bats`.
+
+### 10b. SC2314 does not do what the item assumed — 108 flagged, 2 real
+
+The item's note reads: *"fixing is_shell_file alone only catches SC2314 (the ! class, 89/212)"*.
+It catches neither 89 nor the class. shellcheck 0.11.0 has two bats-native negation checks, and
+**neither tracks finality**:
+
+| | flagged | genuinely dead (analyzer, oracle = bats) |
+|---|---:|---:|
+| SC2314 + SC2315 | 108 | **2** |
+
+`! blocked "$output"` as a body's **last** statement is LIVE — its inverted status becomes the
+body's, and bats fails the test. Both codes flag it anyway. Worse, their prescribed remedy is
+`run ! cmd`, which is the `$output`-clobbering rewrite **§3 already measured and rejected**: these
+negations sit between a `run` and a later assertion on that run's output. Wiring SC2314 as a blocker
+would have demanded ~100 harmful edits and reported a confident green over the 131 `[[ ]]` findings
+it cannot see at all — the precise trap the Root cause section warned about, arriving from the
+direction it did not anticipate. §1's *"why shellcheck is not the detector"* is now measured, not
+argued: deadness stays with `bats-assert-liveness.py`; the new lint owns everything else.
+
+### 10c. What the lint is worth — a comment that silently deletes a file's analysis
+
+The value of linting `.bats` was never the deadness class. It is the 1,117 findings no gate had ever
+seen, and one class in particular. **A comment whose first word is `shellcheck` parses as a malformed
+directive and ABORTS analysis of the whole file.** Proven with a positive control: a fixture holding
+`foo= bar` and `ls | wc -l` reports SC1007+SC2012 normally, and reports *only* SC1072/SC1073 —
+neither real finding — once `# shellcheck + bash -n …` is prepended. Three suites were in that
+state, including `tests/bats-assert-liveness.bats` itself, whose header explains why shellcheck is
+not the detector and thereby stopped shellcheck from reading the file. The parser is case-sensitive,
+so `# ShellCheck …` is the whole fix.
+
+This is the third state the new lint reports separately: an aborted file yields *no* line-level
+findings, so line-scoping cannot protect it — a defect added at line 500 is invisible. It is a
+non-verdict wearing a clean file's clothes.
+
+### 10d. The shape of the fix
+
+`scripts/bats-shellcheck-lint.sh`, wired into `run_gate` as a fourth ratchet beside hermeticity,
+wall-clock and UTC-stamp, and into `hooks/task-quality-gate.sh`. Two departures from the siblings,
+both forced by measurement:
+
+- **Line-scoped, not file-scoped.** 143 of 189 suites carry a finding, so blocking on the *files* in
+  a diff would refuse roughly one land in three over inherited debt — the fleet-wide hard stop
+  own-scope exists to prevent. A file-level grandfather would instead exempt those files forever, so
+  a *new* finding in one would never fire; that is the permanent exemption list
+  `test-hermeticity-lint`'s own comment warns a ratchet must never become. Per-line needs no
+  committed baseline and expresses the strictest rule that is still free: **you may not add a
+  finding on a line you wrote.** The 164 pre-existing findings are advisory and can only shrink.
+- **An unresolvable range degrades to "nothing blocks", not to strict.** The siblings' strict
+  fallback is free because their corpus is clean; a strict whole-tree run here is 164 findings, i.e.
+  a guaranteed outage on every land.
+
+**The exclude set** is five structurally-false-under-bats codes plus the two above:
+SC2030/SC2031 (every `@test` body is a subshell, every `run` forks — test-local is the intent; prior
+art at `tests/cc-blockers.bats:2`), SC2016 (fixtures build shell source as literal strings),
+SC2329 (bats' harness invokes `setup`/helpers), SC1091 (a statement about shellcheck's input set,
+not the code), SC2314/SC2315 (10b).
+
+### 10e. The cost had to be made proportional to the diff
+
+The first cut scanned all 189 suites on every land. That is ~17s at full priority — and the gate's
+bats/lint subtree runs in **Darwin's background QoS band**: measured `PRI=4 / NI=19` inside bats
+against `PRI=31` outside, a one-way ratchet children inherit. At a load average of 30 on 10 cores,
+shellcheck over a *third* of the corpus exceeded 60 s there, while the same 60 files took 8 s
+outside the band at the same moment. An idle-calibrated cost becomes an off switch exactly when the
+box is busy. So the lint scans only the suites carrying an own line (typically 1–3, ~1.8 s), and the
+one whole-corpus invariant — zero unanalyzable suites — is asserted by grepping for the **cause**
+rather than scanning for the symptom, in milliseconds.
+
+### 10f. What the ratchet caught on the way in
+
+The analyzer was **not** at zero when this work started: 10 findings, four days after §8's sweep.
+Six were real inflow (`cc-fleet` ×2, `interactive-parity` ×1, `waiting-recycle` ×3 — the last three
+being §9a's `A && false || true`, which needs the `! A || false` rewrite, not an append). Each class
+was mutation-proved: one site per class mutated to a guaranteed-false predicate, all three RED.
+
+The other **four were a false positive in the analyzer itself.** `strip_quoted` blanks the contents
+of quoted spans, so `cat > "$f" <<'EOS'` became `<<'   '`, no delimiter matched, and the heredoc
+skip never started — every quoted-heredoc body was analyzed as the suite's own assertions. 60 of 189
+suites use that form. The existing heredoc test passed throughout because its fixture used `<<EOF`,
+the form that worked: a **fixture-shape parity gap, not a missing test** — the §6a class again, now
+in the detector rather than a subject. The `|| false` remedy would have edited the *fixture*,
+changing the subject a lint-under-test is asked about, which is §9b's hazard rather than §4's
+harmless mechanical edit.
+
+**So the through-line of §9 extends by one:** the detector, the fixer and the fixture each certified
+something they could not see — and so did the *gate*, which reported green over a test surface it
+had never once read.

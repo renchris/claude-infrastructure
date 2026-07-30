@@ -5,7 +5,7 @@
 # NON-LAST element of an `&&` list from errexit — so in any position but last, those
 # assertions are evaluated and then silently discarded.
 #
-# shellcheck is NOT a substitute: it does not flag `[[ ]]`/`(( ))` deadness at all. Deadness
+# ShellCheck is NOT a substitute: it does not flag `[[ ]]`/`(( ))` deadness at all. Deadness
 # is a property of BLOCK POSITION, which is why this analyzer exists.
 #
 # The oracle for every liveness claim below is bats ITSELF: each fixture asserts something
