@@ -325,6 +325,19 @@ reap_env() {
   # live dispatch worktree there must never decide a unit test's verdict) and makes "no worktree ⇒ no
   # owned wait" the default, so the dead-worker cases stay genuine NEGATIVE controls for the oracle.
   export CC_BACKLOG_WT_ROOT="$BATS_TEST_TMPDIR/wtroot"; mkdir -p "$CC_BACKLOG_WT_ROOT"
+  # HERMETIC + LOAD-IMMUNE occupancy probe (S1b). `procs_cwd_under` is THREE-valued: a probe that
+  # never ANSWERS is UNRESOLVED and reap now abstains rather than reopening. Left pointing at the real
+  # /usr/sbin/lsof, every case whose verdict depends on "the probe answered and found nobody" would
+  # silently become load-coupled — a full-system lsof exceeding CC_BACKLOG_ORACLE_TIMEOUT_S flips it
+  # from REOPEN to KEEP. That is exactly the starvation measured 2026-07-28 under the v2 verifier
+  # (load ~11.8), and a suite whose verdicts move with ambient load certifies nothing (memory:
+  # de-ambienting-needs-every-coupling). The stub emits a REAL `-F pn` stream — the producer's own
+  # format — naming paths outside every worktree: the probe RAN, and nobody is there. That is a
+  # verdict, and it is what keeps the dead-worker path genuinely reachable in these tests.
+  # `cwd_wait_fixture` restores the real binary: it is the one fixture whose point is real occupancy.
+  printf '#!/bin/bash\nprintf "p1\\nn/\\np2\\nn/usr\\n"\n' > "$BATS_TEST_TMPDIR/stublsof"
+  chmod +x "$BATS_TEST_TMPDIR/stublsof"
+  export CC_BACKLOG_LSOF_BIN="$BATS_TEST_TMPDIR/stublsof"
   HOST="$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo localhost)"
 }
 
@@ -386,6 +399,17 @@ owned_wait_fixture() {
 # (memory fixture-shape-parity-with-real-producer). Sets OWNED_PID.
 cwd_wait_fixture() {
   local wt="$CC_BACKLOG_WT_ROOT/wt-$1" sub="${2:-}" dir deadline
+  # Restore the REAL probe that reap_env stubs out: this is the one fixture whose subject is genuine
+  # occupancy, so a stub would certify nothing. Callers that want the seam OFF (or pointed at a
+  # hanging stub) must set CC_BACKLOG_LSOF_BIN *after* calling this, not before.
+  unset CC_BACKLOG_LSOF_BIN
+  # …and give the SUT's probe room. The fixture's own barrier below uses a TARGETED `lsof -t -- dir`;
+  # the SUT runs a full-system `-d cwd` scan, which is far more expensive, so the fixture can clear
+  # its barrier while the SUT's probe is still starved. Under the three-valued contract that no longer
+  # reads as "nobody home" — it reads as UNRESOLVED and the item is KEPT — which would flip the
+  # NEGATIVE controls here (sibling-worktree, land-lock) from REOPEN to KEEP purely from ambient load.
+  # 30s is well past the 2026-07-28 starvation measurement and costs nothing on a green run.
+  export CC_BACKLOG_ORACLE_TIMEOUT_S=30
   dir="$wt${sub:+/$sub}"; mkdir -p "$dir"
   ( cd "$dir" && exec sleep "$FIXTURE_LIFETIME_S" ) &   # argv is a bare `sleep` — no worktree path in it
   OWNED_PID=$!
@@ -640,18 +664,138 @@ status_of() { bash "$CB" list --all --json | jq -r --arg i "$1" '.[]|select(.id=
   echo "$output" | grep -q 'live process cwd'
 }
 
-@test "reap: CC_BACKLOG_LSOF_BIN= genuinely disables S1b (the seam turns the probe OFF, and the oracle says so)" {
-  # A seam that cannot turn a thing off is not a seam. This also pins WHICH signal did the absolving
-  # in the test above: same fixture, probe disabled ⇒ the verdict flips to REOPEN.
+@test "reap: CC_BACKLOG_LSOF_BIN= genuinely disables S1b — and a disabled probe ABSTAINS, never convicts" {
+  # A seam that cannot turn a thing off is not a seam, and this still pins WHICH signal absolved in
+  # the test above: same fixture, probe disabled ⇒ the 'live process cwd' absolve is gone.
+  #
+  # But the verdict that replaces it is KEEP, not REOPEN. This test used to assert `open`, and in
+  # doing so it documented the defect: the worker here is PROVABLY alive (cwd_wait_fixture refuses to
+  # return until lsof can see it), the claim is a dispatcher pid that is dead by construction, and
+  # reap reopened anyway — `open` being cc-dispatch's fire predicate, i.e. a duplicate peer onto live
+  # work. Turning a probe off does not make it ANSWER. Backlog 9efae9e3cfc1.
   reap_env
-  export CC_BACKLOG_LSOF_BIN=
   cwd_wait_fixture offwt000aa01
+  export CC_BACKLOG_LSOF_BIN=                          # AFTER the fixture — it restores the real bin
   rec '{"id":"offwt000aa01","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"Off"}'
   rec "{\"id\":\"offwt000aa01\",\"ts\":\"2026-01-01T00:00:00Z\",\"event\":\"claim\",\"by\":\"$HOST-2147483647\"}"
   run bash "$CB" reap
   owned_wait_cleanup
   [ "$status" -eq 0 ]
-  [ "$(status_of offwt000aa01)" = open ]
+  [ "$(status_of offwt000aa01)" = claimed ]            # pre-fix: reopened ⇒ open (RED)
+  echo "$output" | grep -q 'KEEP offwt000aa01'
+  echo "$output" | grep -q 'worktree oracle UNRESOLVED'
+  refute_match "$output" 'live process cwd'            # the seam really did turn S1b off
+  refute_match "$output" 'REOPEN offwt000aa01'
+}
+
+@test "reap: a HUNG lsof is time-capped AND abstains — the load shape, and the one that amplifies" {
+  # THE production shape behind backlog 9efae9e3cfc1. Nothing is missing or misconfigured here: lsof
+  # is present and simply does not return inside its cap. Pre-fix `timeout` yielded no pids, S1b read
+  # as "worktree empty", the dispatcher-pid claimer read as a REAL not-live verdict, and Rule A fell
+  # through to the clock and REOPENED a worker that is right there in the worktree.
+  #
+  # Why this is an amplifier and not one bad row: a full-system `lsof -d cwd` starves precisely when
+  # the box is loaded (measured 2026-07-28 at load ~11.8), and load is when the most claims are
+  # simultaneously past STALE_CLAIM_S — so one starved sweep reopens a BATCH, each reopen spawns a
+  # duplicate peer, and the peers raise the load that starves the next sweep.
+  reap_env
+  cwd_wait_fixture hunglsof0a01
+  printf '#!/bin/bash\nsleep 300\n' > "$BATS_TEST_TMPDIR/hunglsof"; chmod +x "$BATS_TEST_TMPDIR/hunglsof"
+  export CC_BACKLOG_LSOF_BIN="$BATS_TEST_TMPDIR/hunglsof"   # AFTER the fixture, as above
+  export CC_BACKLOG_ORACLE_TIMEOUT_S=2
+  rec '{"id":"hunglsof0a01","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"HungLsof"}'
+  rec "{\"id\":\"hunglsof0a01\",\"ts\":\"2026-01-01T00:00:00Z\",\"event\":\"claim\",\"by\":\"$HOST-2147483647\"}"
+  start="$(date +%s)"
+  run timeout 30 bash "$CB" reap
+  elapsed=$(( $(date +%s) - start ))
+  owned_wait_cleanup
+  [ "$status" -eq 0 ]
+  [ "$elapsed" -lt 25 ]                                # still BOUNDED — the cap is not what changed
+  [ "$(status_of hunglsof0a01)" = claimed ]            # pre-fix: reopened ⇒ open (RED)
+  echo "$output" | grep -q 'worktree oracle UNRESOLVED'
+  refute_match "$output" 'REOPEN hunglsof0a01'
+}
+
+@test "reap: an lsof that ANSWERS and finds nobody is a REAL verdict → reopen (the abstention stays honest)" {
+  # The control that keeps the fix above from degenerating into "abstain on everything", which would
+  # strand every genuinely dead worker forever and still pass both tests above. Same starved-probe
+  # SHAPE — stubbed binary, live process in the worktree's parent tree — the ONLY difference is that
+  # the stub RETURNS. A reply of "here are the cwds, none of them is yours" is evidence.
+  reap_env                                             # reap_env's stub answers with real -F pn output
+  mkdir -p "$CC_BACKLOG_WT_ROOT/wt-answered0b01"       # worktree EXISTS, and the probe says it is empty
+  rec '{"id":"answered0b01","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"AnsweredLsof"}'
+  rec "{\"id\":\"answered0b01\",\"ts\":\"2026-01-01T00:00:00Z\",\"event\":\"claim\",\"by\":\"$HOST-2147483647\"}"
+  run bash "$CB" reap
+  [ "$status" -eq 0 ]
+  [ "$(status_of answered0b01)" = open ]
+  echo "$output" | grep -q 'REOPEN answered0b01'
+  refute_match "$output" 'worktree oracle UNRESOLVED'
+}
+
+@test "reap: an ABSENT worktree ROOT abstains for EVERY item — absence of the convention is not absence of workers" {
+  # The batch shape. A missing wt-<id> under an EXISTING root is a real answer (worked in place, or
+  # torn down) and must still reopen — that is the test below this one. A missing or unmounted ROOT is
+  # not an answer about any item: the convention the oracle reads through is simply not there, so
+  # every dispatched item would report "no worktree" in the SAME sweep. Two items here, so the assert
+  # is about the population and not one row.
+  reap_env
+  export CC_BACKLOG_WT_ROOT="$BATS_TEST_TMPDIR/no-such-root"   # deliberately never created
+  rec '{"id":"noroot00a01","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"NoRootA"}'
+  rec "{\"id\":\"noroot00a01\",\"ts\":\"2026-01-01T00:00:00Z\",\"event\":\"claim\",\"by\":\"$HOST-2147483647\"}"
+  rec '{"id":"noroot00b01","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"NoRootB"}'
+  rec "{\"id\":\"noroot00b01\",\"ts\":\"2026-01-01T00:00:00Z\",\"event\":\"claim\",\"by\":\"$HOST-2147483647\"}"
+  run bash "$CB" reap
+  [ "$status" -eq 0 ]
+  [ "$(status_of noroot00a01)" = claimed ]             # pre-fix: BOTH reopened ⇒ open (RED)
+  [ "$(status_of noroot00b01)" = claimed ]
+  echo "$output" | grep -q 'worktree root'
+  refute_match "$output" 'REOPEN noroot'
+}
+
+@test "reap: a starved worktree oracle past UNRESOLVED_MAX_S is BLOCKED, never reopened (bounded abstention)" {
+  # Fail-toward-KEEP must not become fail-toward-FOREVER: a permanently broken probe would otherwise
+  # pin every dispatched claim as undecidable and quietly drain the wave (memory:
+  # universalizing-a-mechanism-promotes-its-latent-leak). Past the ceiling the item leaves the wave as
+  # `blocked` — a human decides — and NEVER as `open`, because no amount of elapsed time turns a probe
+  # that never ran into proof of death. Blocked on 1 attempt, i.e. below MAX_ATTEMPTS: the ceiling is
+  # what fires, not the attempt bound.
+  reap_env
+  export CC_BACKLOG_UNRESOLVED_MAX_S=60                # the claim is 7200s old ⇒ far past it
+  export CC_BACKLOG_LSOF_BIN=                          # probe off ⇒ permanently unresolved
+  mkdir -p "$CC_BACKLOG_WT_ROOT/wt-starvbnd0c01"
+  rec '{"id":"starvbnd0c01","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"StarveBound"}'
+  rec "{\"id\":\"starvbnd0c01\",\"ts\":\"2026-01-01T00:00:00Z\",\"event\":\"claim\",\"by\":\"$HOST-2147483647\"}"
+  run bash "$CB" reap
+  [ "$status" -eq 0 ]
+  [ "$(status_of starvbnd0c01)" = blocked ]
+  echo "$output" | grep -q 'unresolvable worktree oracle'
+  refute_match "$output" 'REOPEN starvbnd0c01'
+  bash "$CB" list --all --json | jq -e --arg i starvbnd0c01 '.[]|select(.id==$i)|.needs|test("NOT reopened")'
+  bash "$CB" list --all --json | jq -e --arg i starvbnd0c01 '.[]|select(.id==$i)|.needs|test("lsof")'
+}
+
+@test "reap: a starved S1b does NOT short-circuit S2 — the land lock still absolves as an OWNED WAIT" {
+  # Ordering, asserted. A starved occupancy probe must not swallow the AFFIRMATIVE signal that comes
+  # after it: an item actively landing is the most owned wait there is, and it must be reported as an
+  # owned wait (bounded by OWNED_WAIT_MAX_S) rather than as an abstention (bounded by
+  # UNRESOLVED_MAX_S) — different ceilings, different operator message, so folding them would be a
+  # silent behaviour change even though both happen to KEEP today.
+  reap_env
+  export CC_BACKLOG_LSOF_BIN=                          # S1b starved…
+  wt="$CC_BACKLOG_WT_ROOT/wt-starvlck0d01"; mkdir -p "$wt/scripts"
+  ln -s "$BATS_TEST_DIRNAME/../scripts/land-lock.sh" "$wt/scripts/land-lock.sh"
+  export LAND_LOCK_DIR="$BATS_TEST_TMPDIR/lockparent4"
+  mkdir -p "$LAND_LOCK_DIR/lock.d"
+  printf 'wt-starvlck0d01\n' > "$LAND_LOCK_DIR/lock.d/branch"
+  printf '%s\n' "$$" > "$LAND_LOCK_DIR/lock.d/pid"     # …S2 still answers, affirmatively
+  ps -o lstart= -p "$$" > "$LAND_LOCK_DIR/lock.d/lstart" 2>/dev/null || true
+  rec '{"id":"starvlck0d01","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"StarveLock"}'
+  rec "{\"id\":\"starvlck0d01\",\"ts\":\"2026-01-01T00:00:00Z\",\"event\":\"claim\",\"by\":\"$HOST-2147483647\"}"
+  run bash "$CB" reap
+  [ "$status" -eq 0 ]
+  [ "$(status_of starvlck0d01)" = claimed ]
+  echo "$output" | grep -q 'owned wait — land lock held for wt-starvlck0d01'
+  refute_match "$output" 'worktree oracle UNRESOLVED'
 }
 
 @test "reap: owned wait past OWNED_WAIT_MAX_S is a WEDGE — blocked (never reopened, worktree still occupied)" {
