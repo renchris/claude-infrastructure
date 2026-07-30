@@ -372,7 +372,67 @@ alone counts every landing twice — once as trunk, once as its own backup ref �
 overcount grows monotonically with landing volume. The durable fix is a ship-flow reaper
 (delete `ship/backup-<sha>` once `<sha>`'s content is content-verified on trunk), which is
 **named here and not built** — new `scripts/*.sh` is gate-coupled (§3) and the gate is still
-the broken component (§8.6).
+the broken component (§8.6). **→ NOW BUILT: see §8.2a** (backlog `08d54f54efb6`, 2026-07-30).
+
+### 8.2a The reaper — BUILT (2026-07-30, backlog `08d54f54efb6`)
+
+`scripts/ship-backup-reap.sh`, hooked into `ship-land.sh` past the `break` that only a green
+`land-verify` can reach. The §3 gate-coupling precondition is discharged, verified on trunk rather
+than assumed: load shedding is now a pure SKIP predicate (`ship-land.sh:492-516`), signal-kill is a
+third state (CUT/HUNG, `postland-verify.sh`), `pkill` is worktree-scoped (`gate-cleanup.sh`) and
+`tests/pkill-scope.bats` forbids the unscoped form.
+
+**The predicate is `land-verify.sh` itself, not a restatement of it.** The reaper calls
+`land-verify.sh "<merge-base>..<ref>" <landed-head> <ref>`, so the check that authorises a deletion
+IS the check that authorises the land, and the two cannot drift apart.
+
+**It compares the ref against the head we landed, never against `origin/main`** — the one design
+decision the measurement forced. Re-derived over the live population (739 refs at 2026-07-30, up
+from the 176/208 recorded earlier; the leak is the fastest-growing number in this document):
+
+| Class, measured against a drifted `origin/main` | Refs |
+|---|---|
+| Contained in trunk history (a fast-forward land) | 201 |
+| Every touched path content-identical | 56 |
+| Paths present but **content differs** | **437** |
+| ≥1 touched path **absent** from trunk | 45 |
+
+The 437 are why the tool has **no sweep mode**: retrospectively, "a hunk was dropped" and "the
+trunk moved on" are the same observation. The three refs INFRA_PERFECTION_2026-07-25 named as
+sole-holder re-land candidates (`ship/backup-{88255bd,524dadf,4682573}`) all fall in that class, so
+a sweep would have to either refuse them or guess. Against `$LANDED_HEAD` at land time the same
+predicate is exact — the head is the one just pushed, and no sibling can move it, whereas
+`origin/main` moved twice inside the §8.1 measurement. **So the reaper stops the population
+growing; it does not shrink the existing backlog** — bulk disposal stays the operator ruling
+already filed in INFRA_PERFECTION_2026-07-25 ("retention window, never bulk-delete").
+
+Fail-closed on every axis: unresolvable ref, absent verifier, missing merge-base, a branch checked
+out in another worktree, or any content difference all KEEP the ref and say which path. Deletion is
+confined to the `ship/backup-` namespace — the guard between a bad argument and a session branch
+holding real work — and `git branch -d` is tried before `-D` so git independently re-confirms the
+201-ref ancestor case. The call site is `|| true`: a land that has already content-verified must
+never be reddened by its own cleanup. Kill switch `SHIP_BACKUP_REAP=off`.
+
+Proofs: `tests/ship-backup-reap.bats` — a positive control (the ref is really deleted, after a real
+sibling-forced rebase so the landed sha differs), four independent negatives (content revised
+during the land, a path dropped from the land, a ref outside the namespace that is content-clean
+and must STILL be refused, and an absent verifier), and a trunk-drift regression that an
+`origin/main`-based predicate fails by construction. Plus one WIRING test in
+`tests/ship-land.bats` ("the ship/backup-* rollback ref is REAPED once the land is
+content-verified"): the ref is written in the outer preflight and discharged by the locked child,
+which cannot recompute its name, so without that test a broken `SHIP_LAND_BACKUP_REF` export would
+make the reaper silently inert and no other assertion in the repo would notice.
+
+**Known residual — the second success exit is NOT covered.** `ship-land.sh` has a rarer 0-exit
+inside the verify-retry loop: "after reconcile, origin/$TRUNK already contains HEAD — the drop
+self-healed (a sibling landed our content)". That exit also leaks its backup ref. The predicate
+would be sound there (that branch has just proven `LAND_BASE..HEAD` is empty, i.e. HEAD is an
+ancestor of the trunk — strictly stronger than the per-path check), but reproducing the path in a
+fixture needs a `post-update` hook that re-lands our content under a *different* sha, and an
+untested deletion call site is exactly the class of thing this repo has been burned by. Left
+deliberately unwired and named here rather than shipped unproven. It fires only in the 2026-07-11
+incident class (our push dropped AND a sibling carrying our content), so the leak rate it accounts
+for is a rounding error against the per-land leak this section closes.
 
 ### 8.3 Two detectors patch-id cannot substitute for
 
