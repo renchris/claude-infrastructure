@@ -240,20 +240,28 @@ _iso_now() { date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true; }
 # This records the refusal WITHOUT touching the policy. The ceiling and the admit/refuse decision are
 # row 13's surface and are not altered here — only the legibility of the outcome, which is row 2's.
 # Fully guarded: a telemetry failure must never change the refusal's own exit code.
-emit_fire_refusal() { # $1=reason $2=detail → always 0
+# VOCABULARY DISCIPLINE, and it is load-bearing: `class` is what consumers COUNT. A verdict word that
+# is correct in one context inverts in another (the campaign's own CUT/HUNG-is-not-RED lesson leaked
+# into an alarm predicate and suppressed it). So a successful-but-unverified recycle must NOT be filed
+# as "refused" — it would inflate the refusal metric with non-refusals and make a genuine fire outage
+# unreadable. One writer, an explicit class per caller.
+emit_fire_event() { # $1=class $2=reason $3=detail → always 0
   local log="$HOME/.claude/logs/handoffs.jsonl" line
   [ "${CC_FIRE_REFUSAL_LOG:-1}" != 0 ] || return 0
   mkdir -p "$HOME/.claude/logs" 2>/dev/null || return 0
   if command -v jq >/dev/null 2>&1; then
-    line=$(jq -cn --arg ts "$(_iso_now)" --arg fs "${FIRING_SID:-}" --arg r "${1:-unknown}" \
-                  --arg d "${2:-}" --arg ac "${CHOSEN:-}" \
-      '{ts:$ts, class:"refused", engaged:false, refuse_reason:$r}
+    line=$(jq -cn --arg ts "$(_iso_now)" --arg fs "${FIRING_SID:-}" --arg cl "${1:-unknown}" \
+                  --arg r "${2:-unknown}" --arg d "${3:-}" --arg ac "${CHOSEN:-}" \
+      '{ts:$ts, class:$cl, engaged:false, refuse_reason:$r}
        + {firing_sid:(if $fs == "" then null else $fs end)}
        + {account:   (if $ac == "" then null else $ac end)}
        + {detail:    (if $d  == "" then null else $d  end)}' 2>/dev/null) || line=""
     [ -n "$line" ] && { printf '%s\n' "$line" >> "$log" 2>/dev/null || true; }
   fi
   return 0
+}
+emit_fire_refusal() { # $1=reason $2=detail → always 0 — a fire that did NOT happen
+  emit_fire_event refused "${1:-unknown}" "${2:-}"
 }
 
 _iso_delta_s() { # $1=start $2=end → seconds, or "" when unparseable
@@ -1405,7 +1413,21 @@ if [ "${1:-}" = "__recycle" ]; then
     for _ in $(seq 1 15); do sleep 3; if cc_alive; then up=1; break; fi; done
   fi
   if [ "$up" = 1 ] || cc_alive; then
-    echo "→ relaunched + CONFIRMED in $RSID (claude process on tty)"
+    # V2 §6 F12 / R12 — NAME THE ORACLE. This previously printed "relaunched + CONFIRMED", and
+    # "CONFIRMED" reads as engagement while the only evidence is `ps -o comm=` matching node|claude on
+    # the tty. That is BIRTH, and birth is not engagement — the exact insufficiency the FIRE path
+    # already learned (item ff2d6609a33e): a relaunch whose prompt was rejected (a /goal head over the
+    # 4000-char cap) or never auto-submitted sits at an empty composer forever and looks identical.
+    # ENGAGE_VERIFY is hard-wired to 0 for recycles (:2326), so no marker check runs on this path at
+    # all. Until it does, the honest report is the one that says what was actually observed — an
+    # overclaimed verdict is worse than a modest one, because it stops anyone looking (memory
+    # claimed-outcome-vs-checked-outcome).
+    echo "→ relaunched in $RSID — PROCESS-ALIVE (claude on tty), NOT engagement-verified: a rejected or"
+    echo "  never-submitted prompt is indistinguishable from this. Confirm work actually started by"
+    echo "  reading the transcript's assistant turns, not this line."
+    # Disk-visible so a task-less recycle is findable without being at the pane. class distinguishes
+    # it from a fire: a recycle is net-zero panes and is never capacity-gated.
+    emit_fire_event recycle-unverified process-alive "relaunched pane $RSID; engagement NOT verified (ENGAGE_VERIFY=0 on the recycle path)"
     exit 0
   fi
   hf_bounded "$IT2" session run -s "$RSID" "# HANDOFF RELAUNCH FAILED — run manually: $(cat "$CMDFILE")" >/dev/null 2>&1 || true
