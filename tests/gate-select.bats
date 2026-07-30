@@ -7,7 +7,11 @@
 #                       (a blanket `added ⇒ FULL` widened nearly every land to 1,749 tests)
 #   * suite-comment refs → DIRECT (comments are evidence: real suites name their script only there)
 #   * 3-hop chain       → selected via CLOSURE, and provably NOT via a direct clause
-#                         (a depth-2 walk drops it — this is the fixpoint proof)
+#                         (a depth-2 walk drops it — this is the closure-depth floor)
+#   * 4-hop chain       → NOT selected: CLOSURE_DEPTH=3 is the ceiling, and 3 is the floor above
+#   * doc in the chain  → NOT a relay: an index node is reached but never composed THROUGH
+#                         (both bounds: clause (c) reads mentions as "uses", which an inventory
+#                          inverts — unbounded, the median changed file dragged in 48 suites)
 #   * stoplist stem     → the word "common" in prose does NOT drag a suite in
 # Fixture git repo per test under BATS_TEST_TMPDIR; one real-repo read-only smoke test.
 
@@ -43,9 +47,20 @@ seed() {
   for f in foo bar common supervisor-e2e deep-leaf doomed rename-me; do
     printf '#!/bin/bash\necho %s\n' "$f" > "scripts/$f.sh"
   done
-  # the 3-hop chain: suite → alpha-entry → mid-layer → deep-leaf (refs on NON-comment lines)
+  # the 3-hop chain: suite → alpha-entry → mid-layer → deep-leaf (refs on NON-comment lines),
+  # extended one hop to abyss-leaf so the SAME chain proves both the floor (hop 3 reaches) and
+  # the ceiling (hop 4 does not). Overwrites the loop's plain deep-leaf.sh — order matters.
   printf '#!/bin/bash\nsource scripts/mid-layer.sh\n' > scripts/alpha-entry.sh
   printf '#!/bin/bash\nbash scripts/deep-leaf.sh "$@"\n' > scripts/mid-layer.sh
+  printf '#!/bin/bash\nbash scripts/abyss-leaf.sh "$@"\n' > scripts/deep-leaf.sh
+  printf '#!/bin/bash\necho abyss\n' > scripts/abyss-leaf.sh
+  suite tests/abyss.bats 'run bash scripts/abyss-leaf.sh'
+  # an INDEX node: a doc that COVERS a script. The suite documenting the inventory must not be
+  # dragged in by every file the inventory happens to list.
+  printf '# inventory\ncovers scripts/inventoried.sh\n' > docs/inventory.md
+  printf '#!/bin/bash\necho inventoried\n' > scripts/inventoried.sh
+  suite tests/inventory-reader.bats 'documents docs/inventory.md'
+  suite tests/inventoried.bats 'run bash scripts/inventoried.sh'
   printf '# guide\nprose\n' > docs/guide.md
   printf '# named\nprose\n' > docs/named.md
   suite tests/foo.bats 'run bash scripts/foo.sh'
@@ -174,12 +189,41 @@ lacks() { ! printf '%s\n' "$output" | grep -qxF -- "$1"; }
   has tests/lead-supervisor.bats
 }
 
-@test "3-hop chain selected by closure to fixpoint, not by any direct clause" {
+@test "3-hop chain selected by closure, not by any direct clause" {
   bump scripts/deep-leaf.sh
   gs
   has tests/alpha.bats
   gs --direct
   lacks tests/alpha.bats
+}
+
+@test "4-hop chain is NOT selected — CLOSURE_DEPTH is the ceiling over the same chain" {
+  # The hop above the floor the test before this one pins. Unbounded, the walk composed a
+  # MENTION graph to fixpoint and reached most of the repo from most roots: real chains ran to
+  # nine hops through four inventories (host-suites.manifest → nightly-regression →
+  # never-stuck-gate → a hook), which describe no dependency at all.
+  bump scripts/abyss-leaf.sh
+  gs
+  has tests/abyss.bats
+  lacks tests/alpha.bats
+}
+
+@test "an index node (doc) is REACHED but never RELAYED through" {
+  # docs/inventory.md names scripts/inventoried.sh, and tests/inventory-reader.bats names the
+  # doc. A doc cannot execute, so a path it lists is never a dependency OF it — composing
+  # "documents" with "covers" yields a coupling that does not exist.
+  bump scripts/inventoried.sh
+  gs
+  has tests/inventoried.bats
+  lacks tests/inventory-reader.bats
+}
+
+@test "an index node is still selectable AS a target" {
+  # The sink rule must not make docs unreachable — reaching one still counts, so the suite
+  # that documents it is still picked when the DOC itself changes.
+  bump docs/inventory.md
+  gs
+  [ "$output" = "tests/inventory-reader.bats" ]
 }
 
 @test "stoplist stem does not over-select" {
