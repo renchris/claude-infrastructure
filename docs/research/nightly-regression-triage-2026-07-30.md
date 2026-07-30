@@ -104,13 +104,26 @@ lint violations — not regressions of this item, and filed separately:
   `autonomy/postland`, `autonomy/recycle-events.jsonl`)
 - `pane-id-lint.sh` — 26 truncated pane ids (all in `docs/research/**` prose; scope question, see below)
 
-### The generator fix: one declaration set, four failures
+### The generator fix: one declaration set, four failures — landed by a SIBLING, not by me
 
 `reaper-horizon-lint`'s remaining violations turned out to be the shared root of most of the RED set.
 `premortem-gate`'s S-1 (`premortem-gate.sh:63`) and `wait-safety-gate`'s L0 (`wait-safety-gate.sh:57`)
 both shell out to that lint, and those two gates were in turn **`never-stuck-gate`'s two failing
 legs**. So three `$DECLARED` entries cleared four named failures — and cleared them *properly*, to
 green, not merely reclassified:
+
+> **Attribution + a convergence I lost, correctly.** I implemented these three declarations
+> independently and my commit was **dropped at rebase**: `3f8972ce` (*"fix(reaper-lint): score -mtime
+> and marker-seconds horizons, then declare 3 reapers"*) had already landed the same three
+> declarations **and fixed the `-mtime`/epoch-delta blind spot that I only NAMED**. Their work is
+> strictly superior, so I stood down and skipped my commit rather than merge a comment block that
+> would have contradicted their `§1b`/`§1c` scorers. Adjudicated the way the convergence protocol
+> requires — by running *my* verifications against *their* code: `reaper-horizon-lint` clean,
+> `premortem-gate` 8·0, `wait-safety-gate` 13·0, identical outcomes. My filed blind-spot item was
+> closed as already-fixed by `3f8972ce`, not re-opened.
+>
+> Worth noting for anyone reading the numbers below: the table's *before* column is what **this
+> session measured**, and the *after* is trunk's — the improvement is real but the fix is theirs.
 
 | | before | after |
 |---|---|---|
