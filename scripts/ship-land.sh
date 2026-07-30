@@ -361,16 +361,39 @@ esc_scan() {  # $1=range → prints matched escalation lines (empty ⇒ clean), 
   return 0
 }
 
+# Write the park packet in cc-decide's CANONICAL schema. This writer bypasses `cc-decide open`
+# (no cc-decide dependency inside the lander's fail-closed escalation path), so it must carry the
+# schema itself — every field below has a consumer, and an omitted key is a SILENT drop, never an
+# error, because every consumer's predicate is a jq `select`:
+#   status            — `.status == "open"` gates cc-decide list --open, autonomy-sweep's paging,
+#                       cc-digest's count and operator-readout's board. Omitting it made 6 parked
+#                       land-blocks invisible to ALL FOUR (the defect this schema fixes).
+#   veto_deadline: "" — load-bearing, and NOT cosmetic: cc-decide expire-sweep fires on
+#                       `.veto_deadline != "" and .veto_deadline < now`, and in jq a MISSING key is
+#                       `null`, for which BOTH halves are true (`null != ""`, and `null` sorts before
+#                       every string). A packet with `status:"open"` but no deadline would therefore
+#                       be auto-fired to `expired-actioned` against a null default — silently closing
+#                       a land-block no human ever saw. The empty string is what makes it never fire.
+#   class: "C"        — HARD-BLOCK/human-only: waits, has NO default. `cc-decide open`'s own
+#                       fail-closed gate REFUSES class-B without both --default and --deadline, so
+#                       the previous "B" was a class this packet could not have been created with
+#                       through the front door; C is also the class operator-readout renders on the
+#                       operator board.
+#   created           — operator-readout orders the board's class-C rows oldest-first.
+# session_sid / staged_artifact_path use the canonical NAMES (not session_id / staged) so the
+# board's own jq finds them. `matched` is additive evidence — schema GROWTH is safe here.
 write_decision_packet() {  # $1=id $2=branch $3=range $4=hits
   local id="$1" branch="$2" range="$3" hits="$4" dir
   dir="${SHIP_LAND_DECISIONS_DIR:-$HOME/.claude/autonomy/decisions}"
   mkdir -p "$dir" 2>/dev/null || true
   ID="$id" BRANCH="$branch" RANGE="$range" HITS="$hits" SID="${CLAUDE_CODE_SESSION_ID:-}" \
+  CREATED="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     python3 - "$dir/$id.json" <<'PY'
 import json, os, sys
 pkt = {
     "id": os.environ["ID"],
-    "class": "B",
+    "created": os.environ.get("CREATED", ""),
+    "class": "C",
     "what_plain": ("ship-land refused to auto-land branch %r: the landing range %r contains an "
                    "escalation-surface pattern. Auto-landing destructive or security-sensitive "
                    "changes is disallowed; a human must review and land. Each matched line below is "
@@ -386,9 +409,12 @@ pkt = {
                 "scripts/esc-exempt.manifest (with its reason), land that alone, then re-run",
                 "veto — do not land"],
     "recommendation": "review the flagged lines and land manually if correct",
-    "default_if_no_veto": None,
-    "staged": True,
-    "session_id": os.environ.get("SID", ""),
+    "default_if_no_veto": "",
+    "veto_deadline": "",
+    "staged_artifact_path": "",
+    "route_around_taken": "",
+    "status": "open",
+    "session_sid": os.environ.get("SID", ""),
     "matched": [ln for ln in os.environ["HITS"].strip().splitlines() if ln][:20],
 }
 with open(sys.argv[1], "w") as f:

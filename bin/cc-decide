@@ -58,6 +58,19 @@ ensure_dir() { mkdir -p "$DECISIONS_DIR" 2>/dev/null || true; }
 CELL='def cell(ph): (if . == null then "" else . end) | tostring
       | gsub("[\\t\\r\\n]"; " ") | if . == "" then ph else . end; '
 
+# ── status FOLD — an ABSENT or empty `.status` reads as "open" ─────────────────────────────────
+# Every status predicate here is a jq `select`, so a packet with no `.status` key is DROPPED with a
+# zero exit: silently absent from the board rather than flagged. That is the wrong polarity for an
+# operator queue — a malformed packet must be LOUDER than a well-formed one, never quieter. Six live
+# `shipland-esc-*` packets written by scripts/ship-land.sh carried no `.status` at all and so were
+# invisible to `list --open` (and to autonomy-sweep, cc-digest and operator-readout, which share this
+# idiom). Folding on the READ side fixes those legacy packets in place without rewriting them —
+# inv7: a packet is EVIDENCE, so it is never overwritten to satisfy a view.
+# Deliberately NOT a bare `.status // "open"`: `//` substitutes for null/false only, never for a
+# present-but-empty string (the same trap CELL documents above), and `"status": ""` must fold too.
+# PAIRED with `(.veto_deadline // "") != ""` at every deadline site — see cmd_expire_sweep.
+SFOLD='def sopen: (.status // "" | if . == "" then "open" else . end); '
+
 # Best-effort audit line; NEVER fails the command.
 log_idl() { # <verb> <id> <class> <status>
   mkdir -p "$(dirname "$IDL")" 2>/dev/null || true
@@ -179,14 +192,14 @@ cmd_list() {
   local f
   for f in "$DECISIONS_DIR"/*.json; do
     [ -e "$f" ] || continue
-    jq -r --arg mode "$mode" --arg classf "$classf" "$CELL"'
+    jq -r --arg mode "$mode" --arg classf "$classf" "$CELL$SFOLD"'
       select($classf == "" or .class == $classf)
       | select(
           $mode == "all"
-          or ($mode == "open"     and .status == "open")
-          or ($mode == "expiring" and .status == "open" and .class == "B" and .veto_deadline != "")
+          or ($mode == "open"     and sopen == "open")
+          or ($mode == "expiring" and sopen == "open" and .class == "B" and (.veto_deadline // "") != "")
         )
-      | [ (.status | cell("?")), (.class | cell("?")), (.id | cell("?")),
+      | [ (sopen | cell("?")), (.class | cell("?")), (.id | cell("?")),
           (.veto_deadline | cell("-")), (.what_plain | cell("?")) ] | @tsv
     ' "$f" 2>/dev/null
   done | sort | while IFS=$'\t' read -r st cl id dl what; do
@@ -201,8 +214,13 @@ cmd_expire_sweep() {
   local now="${CC_NOW:-$(now_iso)}" f info id def tmp
   for f in "$DECISIONS_DIR"/*.json; do
     [ -e "$f" ] || continue
-    info="$(jq -r --arg now "$now" '
-      if (.class == "B" and .status == "open" and .veto_deadline != "" and .veto_deadline < $now)
+    # `(.veto_deadline // "") != ""` is what keeps the SFOLD safe. In jq a MISSING key is `null`, and
+    # `null != ""` is TRUE while `null < <any string>` is ALSO true — so folding an absent status to
+    # "open" without this guard would fire the default of every deadline-less legacy class-B packet,
+    # transitioning a land-block no human ever saw straight to `expired-actioned` against a null
+    # default. The fold makes such packets VISIBLE; this guard keeps them from being auto-closed.
+    info="$(jq -r --arg now "$now" "$SFOLD"'
+      if (.class == "B" and sopen == "open" and (.veto_deadline // "") != "" and .veto_deadline < $now)
       then "\(.id)\t\(.default_if_no_veto)" else empty end' "$f" 2>/dev/null || true)"
     [ -n "$info" ] || continue
     id="${info%%$'\t'*}"; def="${info#*$'\t'}"

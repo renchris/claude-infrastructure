@@ -122,7 +122,10 @@ fi
 # ── decisions still OPEN after the expire-sweep → surface once (awaiting early-veto) ──
 for f in "$DECISIONS_DIR"/*.json; do
   [ -e "$f" ] || continue
-  st="$(jq -r '.status // ""' "$f" 2>/dev/null || echo "")"
+  # status FOLD (see bin/cc-decide § SFOLD): an ABSENT or empty `.status` reads as "open". A packet
+  # written outside `cc-decide open` can omit the key entirely, and a bare `// ""` would drop it from
+  # the page — silently, since this is a `continue`. Fail OPEN: an unclassifiable packet must page.
+  st="$(jq -r '.status // "" | if . == "" then "open" else . end' "$f" 2>/dev/null || echo "open")"
   [ "$st" = "open" ] || continue
   is_new "$f" || continue
   open_decisions=$((open_decisions + 1)); add_surfaced "$f"
