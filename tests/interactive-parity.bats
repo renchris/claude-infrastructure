@@ -15,6 +15,10 @@
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
+  # HERMETICITY: both predicates are pure readers of a path argument and touch nothing under $HOME,
+  # but the ratchet is structural — an unfixtured $HOME makes every result in the run untrustworthy,
+  # so it is fixtured unconditionally rather than argued about per suite.
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   # shellcheck source=../hooks/lib/context-econ.sh
   . "$REPO/hooks/lib/context-econ.sh"
   # shellcheck source=../hooks/lib/cc-interactive.sh
