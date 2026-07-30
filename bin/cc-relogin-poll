@@ -96,12 +96,25 @@ epoch_iso() { date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@$1
 # "41.5h" / "3.7d" / "30m" / "now" / "-3" / "12" → seconds. EMPTY when unrecognised (callers must
 # never fabricate a deadline).
 #
-# UNIT-AWARE, and that is the whole point. claude-accounts' fmt_h emits SIX shapes — "30m",
-# "41.5h", "2d 6h", "4d", "now", "99d+" — and the previous parser was `${1%%.*}` + an integer test, which
-# strips the fraction AND the unit in one step: "3.7d" became "3" became 3 HOURS. 24x under.
-# It stayed latent only because detection was capped at 72h, where fmt_h emits hours; widening the
-# window to the declared T-7d walked straight into it, and a T-90h account computed T-3h, escalated
+# NO LONGER THE PRIMARY PATH — and that is the fix. As of 2026-07-30 `--login-status` emits a
+# normalised UTC ISO stamp in `when` and a BARE DECIMAL hour count in `hours`, so this function
+# now sees only numbers and iso_epoch does the real work. Before that, `when` carried the rendered
+# "Sun 13:21", which iso_epoch cannot parse (it returns 0) — so the ISO branch was dead by
+# construction and a regex over fmt_h's DISPLAY string was the sole deadline source in the whole
+# autonomous re-login path. That is why a cosmetic table change had to be matched by an awk edit
+# here. A display format must never be an API.
+#
+# The unit-aware rules are KEPT as version tolerance, not as the contract: ~/.claude is a symlink
+# layer that advances on its own deploy cycle, so a DEPLOYED older claude-accounts keeps emitting
+# "2.9d" for a while after this lands. Deleting them would break exactly the window the deploy lag
+# opens. They can go once no reachable build renders this field.
+#
+# UNIT-AWARE because the original parser was `${1%%.*}` + an integer test, which strips the
+# fraction AND the unit in one step: "3.7d" became "3" became 3 HOURS. 24x under. It stayed
+# latent only because detection was capped at 72h, where fmt_h emits hours; widening the window
+# to the declared T-7d walked straight into it, and a T-90h account computed T-3h, escalated
 # 3 days early, and poisoned the state file's deadline-keyed dedup on every tick.
+# Tolerated: "30m", "41.5h", "2d 6h", "4d", "now", "99d+", and the bare number now sent.
 # Float maths goes through awk deliberately: $(( )) is integer-only, and macOS ships bash 3.2.
 hours_secs() { # <fmt_h-or-numeric-string> -> seconds | ""
   printf '%s' "${1:-}" | awk '
