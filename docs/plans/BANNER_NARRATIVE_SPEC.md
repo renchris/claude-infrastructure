@@ -916,6 +916,62 @@ all survive any height change untouched — the cost is confined to the sky.
 The engineering note is only that changing height is cheap *now* and expensive after the moon/star
 craft work lands, so it is worth answering before that work starts.
 
+### MEASURED (2026-07-29): the height lever is far weaker than this section implied
+
+Built as a live page — `scratchpad/height/banner-height.html` — which measures the real README header
+in the browser rather than asserting numbers. **It corrects the framing above.**
+
+The first sentence of prose starts at **511.7 px** today, and the banner is only **51%** of that:
+
+| band | height | share | recoverable by a shorter hero? |
+|---|---|---|---|
+| **banner** | 261.9 px | **51%** | **yes — this is the whole decision** |
+| H1 | 80.6 px | 16% | no — the header's content |
+| H3 tagline | 49.3 px | 10% | no |
+| badge row (4 shields) | 40.0 px | 8% | no |
+| nav row (6 links) | 64.0 px | 13% | no |
+| margin before prose | 16.0 px | 3% | no |
+
+**And the floor is ~250 px even with no banner at all.** So the earlier "pushes the first prose ~400 px
+down" reads as though the banner were the whole problem; it is about half, and the *achievable* saving
+is smaller still.
+
+**Only two of the four candidate heights are real.** Cropping sky breaks the composition past a point,
+and the page labels that honestly rather than showing four equivalent mocks:
+
+| aspect | canvas | renders | first prose | vs today | status |
+|---|---|---|---|---|---|
+| 3.20:1 | 1920×600 | 838×262 | 512 px | baseline | **real — today** |
+| **3.78:1** | 1920×508 | 838×222 | 472 px | **−40 px** | **real — the clean ceiling** |
+| 4.00:1 | 1920×480 | 838×210 | 459 px | −52 px | mock is broken |
+| 5.00:1 | 1920×384 | 838×168 | 417 px | −94 px | mock is broken |
+
+**So the honest decision is: spend a sky re-layout to move prose up ~40 px (≈8%).** That is a real
+improvement and a legitimate choice, but it is not the large win the earlier framing suggested — and
+the recommendation stays withheld, because now it is even more clearly a taste call rather than an
+engineering one.
+
+### The parallax fix, now solved rather than described
+
+Also built as a live side-by-side — `scratchpad/parallax/parallax-depth-order.html` — with orange
+witness posts that start aligned so the defect is visible by eye: today the near and far posts
+**never separate by a single pixel**, and the middle one falls behind both.
+
+A corrected set that satisfies every constraint (each period divides P=240, each layer travels a
+whole number of wraps per master period, and speed comes from a **shorter period** — never a shorter
+tile):
+
+| layer | depth | period | px/s |
+|---|---|---|---|
+| `fgb` | nearest | **P/16 = 15 s** | **128** |
+| `tf1` | middle | P/10 = 24 s (unchanged) | 80 |
+| `tf0` | farthest | **P/8 = 30 s** | **64** |
+
+Monotonic, with a clean **2.00× near:far spread**. ⚠️ The page states its own limit: it is a synthetic
+demonstration of the *rate relationship*, not a render of the banner, so it is not evidence about the
+shipped SVG. Verify any real fix with `scripts/banner-world-clock-probe.py`, which measures true
+per-layer displacement out of Chromium.
+
 ## OPERATOR RULINGS ON THE BUILT BEATS (2026-07-29, from the per-beat views)
 
 Given after examining each beat in isolation via `scripts/banner-beat-views.py` — so these are
