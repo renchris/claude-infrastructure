@@ -18,7 +18,7 @@ quiet-box re-running would have cleared that majority: it was classification err
 
 | # | Check | Verdict | Evidence |
 |---|---|---|---|
-| 1 | `bats:tests` | **13/15 FALSE**, 2 real | Re-ran the 2 owning suites: 21/23 passed. The 2 survivors were `capacity_gate` refusing a `--dry-run` (exit 9, callers assert 0) |
+| 1 | `bats:tests` | **13/15 FALSE**, 2 load-dependent | Re-ran the 2 owning suites: 21/23 passed. The 2 survivors assert exit 0 on a `--dry-run` that `capacity_gate` correctly refuses (exit 9) above 2.0 load/core |
 | 2 | `never-stuck-gate(live)` | **REAL, chronic, declared** | 19 met · 2 failed — the *same* 19·2 this job's own header cites as the signal it was built for. Pre-existing, not a 07-25 event |
 | 3 | `cc-upgrade-gate.sh` | **FALSE — harness** | Bare-run; requires `<bin> <model> <account>` → usage, exit 2 |
 | 4 | `gate-manifest.sh --selftest` | **FALSE — stale** | Bare-verb `selftest`; now exits 0 (fixed since the page) |
@@ -28,13 +28,31 @@ quiet-box re-running would have cleared that majority: it was classification err
 
 ## Root causes (four distinct, all now fixed except as noted)
 
-**1. `capacity_gate` refused `--dry-run`.** `handoff-fire.sh:2273` exempted a recycle (net-zero
-panes) but not a dry-run, which creates *nothing at all* — the `DRY` branch never reaches a fire
-function. So the safe "what would this do" probe was unavailable exactly when a saturated box is
-what you need to inspect, and it returned exit 9 where every caller asserts 0. The file already
-used the `[ "$RECYCLE" = 0 ] && [ "$DRY" = 0 ]` idiom at `:2490` and `:2569`; `:2273` missed the
-`DRY` half. → **`19b46fb6`**. Same class as memory `metric-zero-by-refusing-gate` (capacity_gate
-made 16 postland tests fail by load).
+**1. Two tests depended on ambient box load.** `handoff-fire-account-sweep.bats:226,234` assert on a
+`--dry-run` *readout's content* but also asserted `[ "$status" -eq 0 ]`. The P0-17 capacity gate
+refuses a net-new fire above 2.0 load/core with exit 9, so on a busy box both failed. Measured: exit
+9 at 2.05/core. → **`b161389d`** (per-test `CC_FIRE_CAPACITY_GATE=off`, the gate's own documented
+kill switch at `handoff-fire.sh:1286`). Same class as memory `metric-zero-by-refusing-gate`
+(capacity_gate made 16 postland tests fail by load).
+
+> **I first fixed this in the wrong place, and the correction is the more useful finding.** My first
+> attempt exempted `--dry-run` from the gate (`handoff-fire.sh:2273`), reasoning that a dry-run
+> spawns nothing so it costs no capacity. The gate's own dedicated suite refuted it: **`--dry-run` is
+> the deliberate harness for observing the gate** — `handoff-fire-capacity-gate.bats`' `fire()` helper
+> puts `--dry-run` on all 13 cases and its header says so outright. Exempting it made the gate
+> unobservable and broke 6 of the 13, including the ADMIT positive control and all three fail-open
+> cases. Reverted in **`734e88e3`**.
+>
+> The suite is right on the merits too, which is why the revert is correct rather than a compromise:
+> a dry-run answers *"what WOULD happen if I fired?"*, and on a saturated box that answer is
+> **refused**. Exiting 0 with a full readout would assert a fire that would not occur. Exit 9 was
+> correct behaviour meeting a test that assumed an idle box.
+>
+> The transferable part: **when a shared flag has two callers with incompatible expectations, the one
+> with a dedicated suite and a written rationale is stating a contract; the one asserting a bare exit
+> code is usually just assuming an environment.** Weakening the mechanism to satisfy the assumption
+> would have silently deleted a gate that 13 tests exist to prove. Verified after the revert: both
+> suites together 26/26, 0 failed.
 
 **2. `telemetry-e2e` read a directory the writes had moved out of.** `statusline.sh:87` gained
 `TDIR="${CC_TELEMETRY_DIR:-/tmp/cc-telemetry}"` (`df6b328f`, 07-25). The suite has exported
@@ -78,14 +96,39 @@ after its 04:00 trigger.
 
 ## Result
 
-Validated against the real corpus (bats + live checks stubbed, page/log to temp): **RED 12 → 3**,
-and all three survivors are genuine, named, reproducible lint violations — not regressions of this
-item, and filed separately:
+Validated against the real corpus (bats + live checks stubbed, page/log to temp): **RED 12 → 3**, and
+then **3 → 2** once the generator fix below landed. Both survivors are genuine, named, reproducible
+lint violations — not regressions of this item, and filed separately:
 
 - `growth-coverage-lint.sh` — 5 unclassified growth surfaces (`security`, `vendor`,
   `autonomy/postland`, `autonomy/recycle-events.jsonl`)
 - `pane-id-lint.sh` — 26 truncated pane ids (all in `docs/research/**` prose; scope question, see below)
-- `reaper-horizon-lint.sh` — 4 undeclared reapers on evidence artifacts
+
+### The generator fix: one declaration set, four failures
+
+`reaper-horizon-lint`'s remaining violations turned out to be the shared root of most of the RED set.
+`premortem-gate`'s S-1 (`premortem-gate.sh:63`) and `wait-safety-gate`'s L0 (`wait-safety-gate.sh:57`)
+both shell out to that lint, and those two gates were in turn **`never-stuck-gate`'s two failing
+legs**. So three `$DECLARED` entries cleared four named failures — and cleared them *properly*, to
+green, not merely reclassified:
+
+| | before | after |
+|---|---|---|
+| `reaper-horizon-lint` | ⛔ 3 violations | **clean** |
+| `premortem-gate` | 7·1 (6·2 at worst) | **8 met · 0 failed** — *"un-hold is defensible"* |
+| `wait-safety-gate` | 12·1 | **13 met · 0 failed** — *"un-hold is defensible"* |
+
+Two process notes worth carrying:
+
+- **The page's violation list was 5 days stale.** It named 4 files; a live run named 3, and only 2
+  overlapped (`cc-recover-safeguard` and `lead-crash-watchdog` had since been declared;
+  `bin/cc-await-ping` had newly appeared). Re-derive from a run, never act on a page's list.
+- **Two of the three horizons had to be verified by hand, because the lint cannot see them.** §1 greps
+  `-mmin \+[0-9]+` and §2 greps `RETAIN_H`/`CC_SUP_GC_S`, so a horizon written as `-mtime +N`
+  (`dispatch-assert.sh:117`, 7d) or as an epoch subtraction against a constant
+  (`desk-invariant.sh:332-343`, 7d) is bounded by **nothing**. Both sit 100× above the 6000s floor
+  today, but a future edit lowering either passes the gate silently — and §3's own header names this
+  exact failure: *"a detector with a blind spot is the bug it exists to prevent."* Filed, not fixed here.
 
 Selftest 21 → 37 assertions, 0 failed, on `/bin/bash` 3.2 (what the plist runs). Every new branch is
 RED-proven, including the two that must stay RED (a regressed bar, an undeclared bar) and a real
