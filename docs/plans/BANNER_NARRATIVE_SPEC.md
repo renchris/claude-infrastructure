@@ -1157,3 +1157,44 @@ wraps per master period, or the loop seams. **Re-derive both, do not transcribe.
 Ordering to satisfy: `fgb > tf1 > tf0`, i.e. nearest fastest. Verify by rendering two frames one
 half-period apart and measuring per-layer displacement — `scripts/banner-world-clock-probe.py` already
 extracts real displacement out of Chromium and is the right instrument.
+
+## THE SKY A/B IS RENDERED — and it reorders the three knobs by measured impact (2026-07-30)
+
+`scripts/banner-sky-ab.py` builds each option from the generator's **own source with one constant
+changed**, executes it, and screenshots at 838 px frozen at t=60 s (past every rare-event window, so
+no beat competes with the sky). Nine panels, `v6c-dusk-line`, no crops. Every substitution asserts it
+matched exactly once, and the run fails on a byte-identical pair — two identical panels is the
+signature of a patch that silently no-opped, and it would otherwise read as *"the knob does nothing"*.
+
+**Measured at 838 px, the three knobs are not remotely equal, and the ordering is not the one the
+prose implied:**
+
+| knob | canvas changed | max Δ | mean Δ | reading |
+|---|---|---|---|---|
+| **horns** down→up | 4.0% | **193 levels** | 0.80 | by far the most visible decision of the three |
+| **grain** on→off (dark) | 66.5% | 10 levels | 2.42 | everywhere, quiet — but **not** the "±4 levels" this document recorded |
+| **grain** on→off (light) | 55.7% | **3 levels** | 0.37 | **effectively invisible.** The light scheme barely has grain to remove |
+| **stars** 0.34→0.42 | 0.1% | 18 levels | 0.00 | tiny footprint, real locally |
+| **stars** 0.34→0.50 | 0.1% | 36 levels | 0.01 | tiny footprint, real locally |
+
+**Two corrections to this document.** First, the handed-down **"±4 measured levels"** for grain is
+wrong at shipping size in both directions: dark measures **10**, light measures **3**. Second, and
+more useful — **grain is a DARK-MODE decision.** The light scheme's own grain value is already so low
+that removing it changes nothing a viewer can see, so "removing it changes every variant" is true of
+the source and false of the render.
+
+**A third fact the render supplied and no prose had: the light scheme has a SUN, not a moon.** The
+horn-direction knob therefore has no light-mode counterpart at all — it is a night-only decision, and
+any future `<picture>` day/night split does not need to carry it twice.
+
+### A ring artifact I claimed and then disproved — recorded so nobody re-raises it
+
+On first look at 838 px both the moon and the sun appeared to carry a scalloped, cog-like ring, which
+would have been a real defect in exactly what the sky rebuild changed. **Measurement refutes it.** The
+radial profile through the glow is smooth and monotonic — max step between adjacent radial samples is
+**1.8 levels** on the sun, and the moon's single 56-level step is its own limb, where a step belongs.
+The angular ripple is dominated by **1-3 lobes per turn**, which is the sky's own top-to-bottom
+gradient crossing the circle; a scalloped ring would show a tooth count in the tens. The glow bands
+are doing what they were built to do. Recorded because the eye produced a confident false positive at
+the exact size this document mandates judging at, which is worth knowing about the size rule itself:
+838 px is where defects become visible, and also where texture becomes over-readable.
