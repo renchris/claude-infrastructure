@@ -291,6 +291,40 @@ heal_role() { # <pane> — atomically repoint $ROLES_DIR/$ROLE at pane (tmp+mv);
   fi
 }
 
+# ── mailbox succession (v3 D1/D3) — the replacement must leave the dead box a POINTER ─────────────
+# heal_role above re-addresses only ROLE-addressed mail. Two classes still strand without a mailbox
+# pointer, and both are the desk's own back-channel:
+#   (a) RAW-UUID sends — every back-channel ping ever fired at the dead desk carries its pane uuid, so
+#       they keep enqueuing into a box nothing drains (the class that stranded 631/206/155 unread lines
+#       in former-desk boxes; research doc §2 — "root cause is addressing, not transport").
+#   (b) D3 REROUTES — cc-notify tees a dead target's mail to the DESK role's box. When the desk is the
+#       thing that died, that box IS the dead one; cc-notify:676-679 detects this and DEFERS to exactly
+#       here ("the '$DESK_ROLE' role still points at THIS dead pane … desk-invariant fires a
+#       replacement"). So the reroute — the mechanism built to end stranding — was itself stranding.
+# handoff-fire writes this pointer on a graceful self-close (write_forward_for) and desk-register on a
+# hand REASSIGNMENT, but a desk that CRASHES/OOMs/is hard-reaped runs neither: this daemon is the only
+# actor present on that path, so it is the only one that can write it.
+# Writing the pointer also unlocks D1's tail migration for free — mailbox-drain.sh:98-108 adopts from any
+# *.forward naming the starting session, so the successor inherits the predecessor's unconsumed lines.
+# BEST-EFFORT BY CONSTRUCTION: a missing lib or unwritable dir must NEVER cost the respawn or the heal.
+# $SCRIPT_DIR is symlink-RESOLVED (see the header) — unresolved, the live ~/.claude entry point would
+# look for ~/.claude/hooks/… and silently find no lib, the same class of dead-default that broke $BRIEF.
+# Dir seam is the lib's own CC_MAILBOX_DIR (_mbx_dir); mailbox_write_forward itself refuses a
+# non-canonical uuid and a self-forward, so a role holding a name/session-id simply gets no pointer.
+write_forward() { # <old-pane> <new-pane> → 0 iff a pointer was written
+  local old="$1" new="$2" lib
+  [ -n "$old" ] && [ -n "$new" ] && [ "$old" != "$new" ] || return 1
+  for lib in "$SCRIPT_DIR/../hooks/lib/mailbox-pending.sh" \
+             "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/mailbox-pending.sh" \
+             "$HOME/.claude/hooks/lib/mailbox-pending.sh"; do
+    # shellcheck disable=SC1090,SC1091
+    [ -f "$lib" ] && { . "$lib" 2>/dev/null || true; break; }
+  done
+  command -v mailbox_write_forward >/dev/null 2>&1 || return 1
+  mailbox_write_forward "$old" "$new" 2>/dev/null || return 1
+  return 0
+}
+
 # ── stale-marker sweep ──────────────────────────────────────────────────────────────────────────
 # The (sid,state) dedup markers (dedup_write) are never pruned; paged-*-stale.marker files pile up in
 # the state dir over time. Sweep any older than STALE_MARKER_MAX_AGE_S (mtime) on each run and log the
@@ -371,8 +405,16 @@ handle_no_desk() { # <reason>
     # NEXT sweep sees the new desk instead of re-firing against the stale pointer that put us here.
     local pane; pane="$(newest_fired_pane)"
     if [ -n "$pane" ]; then
+      # MAIL BEFORE ROLE (deliberate order): the forward is written FIRST because the two writes fail
+      # asymmetrically. A pointer without a healed role still routes mail correctly (cc-notify and the
+      # reroute both resolve the chain), whereas a healed role without a pointer is precisely the strand
+      # this fixes — so if the process dies between the two, lose the cheaper half. $PANE is the DEAD
+      # desk (evaluate() resolved it from the role file before dispatching here); it is empty only on the
+      # role-file-missing-or-empty reason, where there is no predecessor box to point anywhere.
+      local fwd=""
+      if [ -n "$PANE" ] && write_forward "$PANE" "$pane"; then fwd="; mail forwarded $PANE -> $pane"; fi
       heal_role "$pane"
-      idl no-desk fire "fired replacement desk from canned brief (--window, headless); role $ROLE healed -> $pane; ${reason}"
+      idl no-desk fire "fired replacement desk from canned brief (--window, headless); role $ROLE healed -> $pane${fwd}; ${reason}"
     else
       idl no-desk fire "fired replacement desk from canned brief (--window, headless); no cc-fired stamp yet to heal role; ${reason}"
     fi
@@ -454,6 +496,11 @@ setup_case() { # <casedir> — build stubs+dirs, export the full override surfac
     DESK_INVARIANT_NOTIFY_BIN="$c/stubs/ccnotify" \
     DESK_INVARIANT_FIRE_BIN="$c/stubs/fire" DESK_INVARIANT_CANNED_CWD="$c" DESK_INVARIANT_BRIEF="$c/brief.md" \
     DESK_INVARIANT_FIRED_DIR="$c/fired" DESK_INVARIANT_STALE_MIN=45
+  # HERMETICITY (mandatory once the no-desk path writes a mailbox pointer): the forward write goes
+  # through the mailbox lib, whose only dir seam is CC_MAILBOX_DIR (_mbx_dir, default ~/.claude/mailbox).
+  # Unset, `--selftest` would drop `.forward` pointers into the OPERATOR'S LIVE mailbox — a selftest
+  # mutating production state.
+  export CC_MAILBOX_DIR="$c/mailbox"
 }
 # shellcheck disable=SC2317
 disp_of() { tail -1 "$1/idl.jsonl" 2>/dev/null | "$JQ" -r '.disposition' 2>/dev/null; }
@@ -538,9 +585,29 @@ selftest() {
   [ "$(disp_of "$d/budget")" = budget-exhausted ] && okp "budget-exhausted: disposition=budget-exhausted" || badp "budget-exhausted: disposition=$(disp_of "$d/budget")"
   [ ! -f "$d/budget/stubs/fire.log" ] && okp "budget-exhausted: NO fire (respawn loop refused)" || badp "budget-exhausted: fired past budget"
 
+  # 7. NO-DESK SUCCESSION — a UUID-keyed dead desk + a cc-fired stamp → the dead box becomes a POINTER
+  # (v3 D1/D3). Case 5 above cannot cover this: its role holder is a NAME and its stub leaves no stamp,
+  # so there is neither a canonical predecessor nor a successor to point at.
+  ( setup_case "$d/succ"
+    printf '11111111-2222-3333-4444-555555555555\n' > "$d/succ/roles/desk"
+    # stub ALSO models handoff-fire's mark_fired_peer stamp — desk-invariant's only successor source
+    { printf '#!/bin/bash\n'
+      printf 'printf "%%s\\n" "$*" >> "%s/stubs/fire.log"\n' "$d/succ"
+      printf 'mkdir -p "%s/fired"\n' "$d/succ"
+      printf 'printf "{\\"paneUUID\\":\\"abcdef01-2345-6789-abcd-ef0123456789\\"}\\n" > "%s/fired/abcdef01-2345-6789-abcd-ef0123456789.json"\n' "$d/succ"
+      printf 'exit 0\n'; } > "$d/succ/stubs/fire"
+    chmod +x "$d/succ/stubs/fire"
+    "$SELF" )
+  [ "$(cat "$d/succ/mailbox/11111111-2222-3333-4444-555555555555.forward" 2>/dev/null)" = abcdef01-2345-6789-abcd-ef0123456789 ] \
+    && okp "no-desk: dead desk's box points at the successor (D1/D3)" \
+    || badp "no-desk: NO .forward — raw-uuid sends and D3 reroutes strand in the dead box"
+  [ "$(cat "$d/succ/roles/desk" 2>/dev/null)" = abcdef01-2345-6789-abcd-ef0123456789 ] \
+    && okp "no-desk: role healed alongside the mail pointer" \
+    || badp "no-desk: role=$(cat "$d/succ/roles/desk" 2>/dev/null) (mail write must not cost the heal)"
+
   echo "desk-invariant --selftest: $PASS passed, $FAIL failed"
   [ "$FAIL" -eq 0 ] || exit 1
-  echo "desk-invariant --selftest: GREEN — healthy/stunned/stale/owned-wait/no-desk/budget-exhausted all RED-proven."
+  echo "desk-invariant --selftest: GREEN — healthy/stunned/stale/owned-wait/no-desk/budget-exhausted/succession all RED-proven."
 }
 
 # ── companion check: the desk self-recycle ARMEDNESS invariant ────────────────────────────────────

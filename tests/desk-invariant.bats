@@ -52,6 +52,11 @@ FIRE
     DESK_INVARIANT_NOTIFY_BIN="$C/stubs/ccnotify" \
     DESK_INVARIANT_FIRE_BIN="$C/stubs/fire" DESK_INVARIANT_CANNED_CWD="$C" DESK_INVARIANT_BRIEF="$C/brief.md" \
     DESK_INVARIANT_FIRED_DIR="$C/fired" DESK_INVARIANT_STALE_MIN=45
+  # HERMETICITY (mandatory once the no-desk path writes a mailbox pointer): the forward write goes
+  # through hooks/lib/mailbox-pending.sh, whose only dir seam is CC_MAILBOX_DIR (_mbx_dir, default
+  # ~/.claude/mailbox). Unset, a green test run would drop `.forward` pointers into the OPERATOR'S LIVE
+  # mailbox — a suite mutating the state it is supposed to be isolated from.
+  export CC_MAILBOX_DIR="$C/mailbox"
   : > "$C/brief.md"
 }
 row() { # <uuid> <sid> <pid> — write a registry row
@@ -65,11 +70,11 @@ transcript() { # <sid> <iso-ts> [cap-text]
 }
 disp() { tail -1 "$C/idl.jsonl" | jq -r '.disposition'; }
 
-@test "selftest passes and runs all 20 checks (a zero-check suite must not 'pass')" {
+@test "selftest passes and runs all 22 checks (a zero-check suite must not 'pass')" {
   run "$DI" --selftest
   [ "$status" -eq 0 ]
   n_ok="$(printf '%s' "$output" | grep -c '^  ok ')"
-  [ "$n_ok" -eq 20 ]
+  [ "$n_ok" -eq 22 ]
   ! printf '%s' "$output" | grep -q '^  FAIL'
 }
 
@@ -235,4 +240,94 @@ FIRE
   [ ! -f "$C/state/paged-OLDSID-stale.marker" ]           # >7d swept
   [ -f "$C/state/paged-FRESHSID-stale.marker" ]           # <7d kept
   grep -q 'swept 1 stale damping marker' "$C/idl.jsonl"   # count logged via idl
+}
+
+# ── MAILBOX SUCCESSION on the replacement path (v3 D1/D3) ─────────────────────────────────────────
+# A fire stub that ALSO models handoff-fire's mark_fired_peer stamp (cc-fired/<newpane>.json) — the only
+# source desk-invariant has for the successor's pane. Otherwise identical to setup()'s default stub
+# (--prompt-file required + anchor required), so the producer's refusal contract is not weakened here.
+fire_stub_with_stamp() {
+  cat > "$C/stubs/fire" <<'FIRE'
+#!/bin/bash
+orig="$*"; pf=""; anchor=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --prompt-file) pf="${2:-}"; shift 2 ;;
+    --window)      anchor=window; shift ;;
+    --session-id)  anchor="${2:-}"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+[ -n "$pf" ] && [ -f "$pf" ] || exit 1
+[ -n "$anchor" ] || { echo "handoff-fire: no anchor — REFUSING" >&2; exit 1; }
+printf '%s\n' "$orig" >> "$(dirname "$0")/fire.log"
+fired="$(dirname "$0")/../fired"; mkdir -p "$fired"
+printf '{"paneUUID":"abcdef01-2345-6789-abcd-ef0123456789","selfRetire":true}\n' \
+  > "$fired/abcdef01-2345-6789-abcd-ef0123456789.json"
+exit 0
+FIRE
+  chmod +x "$C/stubs/fire"
+}
+
+@test "no-desk: a successful replacement fire writes the DEAD desk's mailbox .forward (D1/D3)" {
+  # Healing cc-roles/desk re-addresses only ROLE-addressed mail. Two classes still strand without a
+  # pointer: (a) every back-channel ping ever fired at the dead desk carries its RAW pane uuid, and
+  # (b) cc-notify's D3 reroute tees a dead target's mail to the DESK role's box — which, when the desk
+  # is the thing that died, IS the dead box. cc-notify:676-679 says exactly that and DEFERS here ("the
+  # desk-invariant replacement path exists for" it), so this is the missing half of a wired mechanism.
+  # Writing the pointer also unlocks D1's tail migration for free: mailbox-drain.sh:98-108 adopts from
+  # any *.forward naming the starting session.
+  printf '%s\n' "11111111-2222-3333-4444-555555555555" > "$C/roles/desk"
+  fire_stub_with_stamp
+  run "$DI" --once
+  [ "$status" -eq 0 ]
+  [ "$(disp)" = no-desk ]
+  [ -f "$C/stubs/fire.log" ]
+  # the dead box is now a POINTER at the successor
+  [ "$(cat "$C/mailbox/11111111-2222-3333-4444-555555555555.forward")" = "abcdef01-2345-6789-abcd-ef0123456789" ]
+  grep -q 'mail forwarded 11111111-2222-3333-4444-555555555555 -> abcdef01-2345-6789-abcd-ef0123456789' "$C/idl.jsonl"
+  ! ls "$C"/mailbox/.*.tmp >/dev/null 2>&1     # ATOMIC tmp+mv: no temp dotfile left behind
+}
+
+@test "no-desk: a NON-UUID role holder gets no .forward, and the heal still succeeds (best-effort)" {
+  # A role file legitimately holds a uuid, a session id, or a pane NAME. mailbox_write_forward refuses
+  # anything non-canonical, so a name-keyed holder simply gets no pointer — and that refusal must never
+  # cost the role heal, which is the branch that stops the re-fire loop.
+  printf 'USTALE-NAME\n' > "$C/roles/desk"
+  fire_stub_with_stamp
+  run "$DI" --once
+  [ "$status" -eq 0 ]
+  [ "$(disp)" = no-desk ]
+  [ "$(cat "$C/roles/desk")" = "abcdef01-2345-6789-abcd-ef0123456789" ]   # heal still happened
+  [ -z "$(ls -A "$C/mailbox" 2>/dev/null)" ]                             # no pointer for a name key
+  ! grep -q 'mail forwarded' "$C/idl.jsonl"
+}
+
+@test "no-desk: an unwritable mailbox dir never fails the sweep nor blocks the role heal" {
+  # The forward is best-effort BY CONSTRUCTION — a desk-existence invariant must never lose its respawn
+  # or its heal because a mailbox dir was unwritable. Blocked via a REGULAR FILE standing where the dir's
+  # parent must be, so mkdir -p fails deterministically for any uid (a chmod 000 test would pass
+  # vacuously under a root runner).
+  printf '%s\n' "11111111-2222-3333-4444-555555555555" > "$C/roles/desk"
+  fire_stub_with_stamp
+  : > "$C/blocker"
+  export CC_MAILBOX_DIR="$C/blocker/mbx"
+  run "$DI" --once
+  [ "$status" -eq 0 ]
+  [ "$(disp)" = no-desk ]
+  [ "$(cat "$C/roles/desk")" = "abcdef01-2345-6789-abcd-ef0123456789" ]   # heal UNBLOCKED by the mail failure
+  ! grep -q 'mail forwarded' "$C/idl.jsonl"
+}
+
+@test "no-desk: a SELF-forward is refused (a pointer that looks wired must not hide a stuck role)" {
+  # If the cc-fired stamp names the pane the role ALREADY held, there was no succession. A self-pointer
+  # would make mailbox_forward_of a silent no-op while reading as "mail is wired" — the lib refuses it
+  # (mailbox-pending.sh:334-337) and this pins that the replacement path inherits the refusal.
+  printf '%s\n' "abcdef01-2345-6789-abcd-ef0123456789" > "$C/roles/desk"
+  fire_stub_with_stamp
+  run "$DI" --once
+  [ "$status" -eq 0 ]
+  [ "$(disp)" = no-desk ]
+  [ ! -f "$C/mailbox/abcdef01-2345-6789-abcd-ef0123456789.forward" ]
+  ! grep -q 'mail forwarded' "$C/idl.jsonl"
 }
