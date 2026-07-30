@@ -53,30 +53,12 @@ EOF
   chmod +x "$D/bin/it2" "$D/bin/tmux" "$D/bin/cc-notify" "$D/bin/cc-sessions"
 
   # ── the shared-lib STUB (real hooks/lib/cc-interactive.sh lands separately) ──
-  cat > "$D/cc-interactive-stub.sh" <<'STUB'
-#!/usr/bin/env bash
-# TEST STUB of ci_last_interactive_epoch — mirrors cc-classify's last_interactive_epoch:
-# epoch of the last REAL operator-typed prompt (string content, no isMeta, not auto-traffic); empty if none.
-ci_last_interactive_epoch() {
-  local f="${1:-}" rx ep
-  [ -n "$f" ] && [ -f "$f" ] || return 1
-  rx="${CC_CLASSIFY_AUTO_RX:-^<task-notification>|^<local-command-stdout>|^Stop hook feedback:|^\\[Request interrupted|^⟳|^⚑|^⚠}"
-  ep="$(tail -c "${CC_CLASSIFY_INTERACTIVE_TAIL_BYTES:-2000000}" "$f" 2>/dev/null | jq -Rr --arg rx "$rx" '
-      fromjson? | objects
-      | select(.type=="user") | select(.isMeta != true)
-      | (.message.content) as $c
-      | ( if ($c|type)=="string" then $c
-          elif ($c|type)=="array" and ([$c[]? | select(.type?=="tool_result")] | length)==0
-          then ([$c[]? | select(.type?=="text") | .text] | join("\n"))
-          else empty end ) as $t
-      | select(($t|length) > 0)
-      | select($t | test($rx) | not)
-      | (.timestamp | strings | sub("\\.[0-9]+Z$"; "Z") | try fromdateiso8601 catch empty)
-    ' 2>/dev/null | tail -1)"
-  case "$ep" in ''|*[!0-9]*) return 1 ;; esac
-  printf '%s' "$ep"
-}
-STUB
+  # A SHIM onto the REAL hooks/lib/cc-interactive.sh — never a re-implementation. This was a hand-rolled
+  # COPY of the predicate until 2026-07-29, which is fixture drift by construction: the lib grew the
+  # image-only-paste leg, the whole-file fallback and then the THREE-VALUED "unreadable" answer while the
+  # copy stayed two-valued, so a test of the hold's fail-closed branch would have been green against a
+  # predicate that no longer exists (memory: fixture-vs-real needs a producer).
+  printf '#!/usr/bin/env bash\n. "%s"\n' "$REPO/hooks/lib/cc-interactive.sh" > "$D/cc-interactive-stub.sh"
 }
 
 # ── fixtures ─────────────────────────────────────────────────────────────────────────────────────
@@ -145,6 +127,25 @@ wait_for() { local i=0; while [ ! -e "$1" ] && [ "$i" -lt 60 ]; do sleep 0.05; i
   [ ! -e "$D/notify-calls.log" ]                     # no adoption page
   wait_for "$D/tmux-calls.log"                        # detached close fired (grace=0)
   grep -q "kill-pane -t %88" "$D/tmux-calls.log"
+}
+
+# (iii-b) THIRD STATE (2026-07-29, C-SC-1) — the transcript EXISTS but cannot be read. Until the
+# predicate became three-valued this answered exactly like test (iii)'s "no operator prompt", so an
+# unreadable transcript licensed the force-close: absence of evidence read as evidence of absence on
+# the actuator that kills the pane. reap-guard R-d fails closed on the same input, but the reap-guard
+# call is gated on $WORKTREE — so for a worktree-less teammate this belt is the ONLY who-gate.
+@test "third state: transcript CORRUPT (unreadable) → HELD, no close, desk paged" {
+  local sid=sidU team=teamU member=wkrUnreadable pane=%99 wt="$D/wtU"
+  mkdir -p "$wt"; worktreetsv "$team" "$member" "$wt"; teamcfg "$team" "$member" "$pane"
+  reg "$sid" PANE-U "$wt" 3600
+  printf 'not json at all\n\x00\x01binary garbage\n{"half":\n' > "$D/proj/slug/$sid.jsonl"
+  run hookrun "$member" "$team" "$sid" "$wt"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *'"continue": false'* ]] || false  # NOT closed
+  [ -e "$D/notify-calls.log" ]                        # surfaced to the desk
+  grep -q "UNREADABLE" "$LOGF"
+  sleep 0.3
+  [ ! -e "$D/tmux-calls.log" ]                        # the detached close was never spawned
 }
 
 # (vi) lib ABSENT → one WARN + adoption check skipped → close proceeds (graceful degradation)

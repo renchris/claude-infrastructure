@@ -30,14 +30,51 @@
 #   interactive hold must too — else an operator turn buried beyond the tail window (a long transcript)
 #   silently stops holding and the pane reaps mid-conversation (the tail-limited-hold residual).
 #
-# CONTRACT: pure reader, no writes; jq/bash only, no other deps. Empty + return 1 on any miss/failure
-# (never a fatal), so a sourcing hook under set -u degrades to "no interactive turn", never an error.
+# CONTRACT: pure reader, no writes; jq/bash only, no other deps. Never a fatal, so a sourcing hook
+# under set -u degrades gracefully rather than erroring.
+#
+# THREE-VALUED (2026-07-29 — the C-SC-1 close; the same split hooks/lib/context-econ.sh ce_ took on
+# 2026-07-25). The old contract answered "" + rc 1 for THREE different worlds — no operator turn, jq
+# missing, unreadable/corrupt transcript — and the DESTRUCTIVE consumers (bin/cc-teardown's adoption
+# belt, hooks/teammate-auto-shutdown.sh's TeammateIdle close) read that one "" as "no adoption" and
+# fell through to CLOSE THE PANE. Absence of evidence became evidence of absence on the two actuators
+# that actually kill a session — the same defect 51521697 fixed on the ce_ backstop legs, still live
+# on the gate side. So:
+#   "<digits>"    rc 0  the epoch of the last interactive turn
+#   ""            rc 1  GENUINELY NO OPERATOR TURN — the transcript parsed, nobody typed. A fact.
+#   "unreadable"  rc 2  we could not READ the answer: no path / not a regular file / unreadable / no
+#                 jq / not one well-formed JSON object anywhere in reach. Consumers that gate a
+#                 DESTRUCTIVE act (close, reap, archive) MUST treat this as HOLD — never as "no
+#                 adoption". The discriminator is ci_transcript_visible, which probes the SAME reach
+#                 the scan uses (tail, then whole file when the file exceeds the tail window).
+# BACK-COMPAT is by construction: every pre-existing consumer already sanitized a non-numeric answer
+# to "" and branched on rc, so rc 2 lands in exactly the path rc 1 took before this change. The split
+# only ADDS a distinction those consumers may now read; it changes no consumer's behaviour until the
+# consumer opts in.
 
-ci_last_interactive_epoch() { # <jsonl> → epoch seconds on stdout (empty + return 1 when none visible)
+ci_transcript_visible() { # <path> <tail_bytes> → 0 iff ≥1 well-formed JSON object is visible in reach
+  # The DISCRIMINATOR behind the three-valued answer: a transcript we CAN parse but that holds no
+  # operator turn is a FACT ("nobody typed"); a transcript we cannot parse at all is an ABSENCE OF
+  # EVIDENCE — and a closer must never read the second as the first. Reach is deliberately identical
+  # to the scan below (tail, then whole file past the tail window), so the two can never disagree
+  # about what "in reach" meant.
+  local p="${1:-}" tb="${2:-2000000}" hit fsz
+  hit="$(tail -c "$tb" "$p" 2>/dev/null | jq -Rr 'fromjson? | objects | "1"' 2>/dev/null | head -1)"
+  [ -n "$hit" ] && return 0
+  fsz="$(wc -c < "$p" 2>/dev/null | tr -d ' ')"; case "$fsz" in ''|*[!0-9]*) fsz=0 ;; esac
+  if [ "$fsz" -gt "$tb" ]; then
+    hit="$(jq -Rr 'fromjson? | objects | "1"' "$p" 2>/dev/null | head -1)"
+    [ -n "$hit" ] && return 0
+  fi
+  return 1
+}
+
+ci_last_interactive_epoch() { # <jsonl> → see the THREE-VALUED contract above
   local f="${1:-}" tailb rx ep fsz prog
-  [ -n "$f" ] && [ -f "$f" ] || return 1
-  command -v jq >/dev/null 2>&1 || return 1
   tailb="${CC_CLASSIFY_INTERACTIVE_TAIL_BYTES:-2000000}"
+  # NOT "no operator turn" — we cannot read the file at all. Fail-closed answer, rc 2.
+  { [ -n "$f" ] && [ -f "$f" ] && [ -r "$f" ]; } || { printf 'unreadable'; return 2; }
+  command -v jq >/dev/null 2>&1 || { printf 'unreadable'; return 2; }
   rx="${CC_CLASSIFY_AUTO_RX:-^<task-notification>|^<local-command-stdout>|^Stop hook feedback:|^\\[Request interrupted|^⟳|^⚑|^⚠}"
   # The predicate, applied IDENTICALLY to the tail and (on a tail-miss) the whole file. fromjson? drops
   # the possibly-partial first tailed line; objects/strings guard scalar lines so one odd line can never
@@ -69,6 +106,15 @@ ci_last_interactive_epoch() { # <jsonl> → epoch seconds on stdout (empty + ret
       fi
       ;;
   esac
-  case "$ep" in ''|*[!0-9]*) return 1 ;; esac
+  case "$ep" in
+    ''|*[!0-9]*)
+      # No interactive turn in the answer — but WHICH world? A parseable transcript with no operator
+      # turn is the fact "" (rc 1); a transcript that yields not one well-formed record (corrupt,
+      # truncated, binary, empty) is "unreadable" (rc 2). Splitting them here is the whole point of
+      # the three-valued contract: only the FIRST may ever license a close.
+      if ci_transcript_visible "$f" "$tailb"; then return 1; fi
+      printf 'unreadable'; return 2
+      ;;
+  esac
   printf '%s' "$ep"
 }
