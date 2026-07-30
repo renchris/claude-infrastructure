@@ -144,6 +144,121 @@ Every new mechanism ships with an env kill switch, never revert-as-plan.
 | 9 | memory-knowledge | index within read limits; zero anti-capture violations | memory rot is the failure mode |
 | 6 | guardrail-hooks | zero accidental tool blocks; every deny attributable | rebuild LAST — every row's enforcement surface |
 
+### Row 8 payload — COMPOSED AND HELD (2026-07-29T17:3xZ; fire only when in-flight < 2)
+
+Next in dispatch order (**8 · 7 · 11 · 9 · 6 last**). Composed in advance deliberately: every prior
+payload that was written *at* fire time carried a number that had already decayed. This one carries
+**deriving commands** in every slot a number would have gone. Do not paste a value into it.
+
+```
+YOUR TASK — a from-first-principles GROUND-UP rebuild of ONE subsystem: context economy (row 8).
+You were fired by the ground-up campaign coordinator.
+
+Scope (frozen): a session recycles BEFORE it rots — p95 recycle at <75% context fill, zero
+auto-compact walls hit — under the standing constraint that rot degrades decisions well before
+the wall breaks the session. Measured, landed, and verified by disk-truth acceptance reads.
+
+STEP 1 (one short command): arm your standing goal so you drive to DONE across recycles —
+  /goal row 8 context economy: p95 recycle under 75% fill, zero auto-compact walls, proven by
+  disk-truth reads. Rebuild per skills/ground-up/SKILL.md.
+
+STEP 2: run /ground-up context-economy. Before any other tool call, READ: GROUND_UP_REBUILD_MAP.md
+row 8 · skills/ground-up/SKILL.md · docs/plans/LAND_PIPELINE_V2.md (exemplar) ·
+docs/research/context-econ-2026-07-20.md (your row's own prior design — treat as HYPOTHESIS).
+
+[locate] your own worktree on branch gu-context-economy (base origin/main) of
+claude-infrastructure. Commit ONLY here — NEVER in the shared checkout.
+
+YOU OWN: hooks/waiting-recycle.sh, hooks/boundary-handoff.sh, hooks/dod-persist.sh, /wrap +
+hooks/wrap-ledger.sh, hooks/session-continue.sh, and the burn/forecast signals behind them.
+SEAMS NOT YOURS: the recycle EXECUTES via row 2 (handoff-fire --recycle, self-close, engagement
+verification) — consume that contract, do not redesign it. Row 4 owns liveness oracles; row 10
+owns the operator-facing readout surface; row 9 owns what survives into the successor.
+Any seam dispute: ping the coordinator, never decide alone.
+
+PHASE 1 IS NOT OPTIONAL — three checks BEFORE you design anything:
+  (a) RE-DERIVE YOUR ROW'S STANDING-CONSTRAINT CELL from primary disk truth. The cell is the
+      PRIOR SESSION'S HYPOTHESIS. Your row is the one where this bites hardest, because your
+      headline metric may have NO PRODUCER: before believing any fill-% number, find the code
+      that WRITES it and the store it lands in. If p95 fill is not recorded anywhere, then
+      "recycle before 75%" has been measuring nothing, and saying so IS your Phase 1 result.
+      Row 2 found exactly this shape ("no producer") and row 5's cell was falsified outright.
+  (b) CHECK ACTIVATION TRUTH for every mechanism your metric depends on. Deploy is NO LONGER
+      the blocker (the checkout fast-forwarded 07-29T15:30Z); the failure MOVED to
+      deployed-but-not-switched-on. Derive both, do not inherit either:
+        ls ~/.claude/autonomy/pending-activation/*-activate.sh | wc -l          # staged
+        for f in ~/.claude/autonomy/pending-activation/*-activate.sh; do \
+          [ -e "$f.done" ] || echo "UN-RUN $(basename "$f")"; done              # un-run
+        git -C ~/Development/claude-infrastructure rev-list --count HEAD..origin/main  # deploy lag
+      A metric measured against an un-activated mechanism reads 0% BY CONSTRUCTION and is not a
+      performance result. waiting-recycle.sh in particular has a SHADOW-vs-LIVE arming state —
+      check which one is in force before you quote any of its numbers (memory
+      desk-self-handoff-trigger, role-state-keys-on-role).
+  (c) SWEEP THE BRANCH GRAVEYARD before you build. YOUR ROW HAS A KNOWN STRANDED ARTIFACT:
+      tests/session-continue-telemetry.bats, present in BOTH fix/infra-perfection and tm/hygiene,
+      absent from origin/main and disk — see GROUND_UP_DISPATCH.md § "Campaign-level graveyard
+      sweep". That pointer is known-INCOMPLETE and is a POINTER TO RE-VERIFY, not a fact to
+      inherit; re-run both commands for YOUR paths, because the branch set moves:
+        git log --all --oneline --diff-filter=A -- '<paths your row would create>'
+        git for-each-ref --format='%(refname:short)' refs/heads | while read -r b; do \
+          printf '%s %s\n' "$b" "$(git rev-list --count origin/main..$b 2>/dev/null)"; done | awk '$2>0'
+      Take from fix/infra-perfection, NEVER from tm/growth (0 unique patches, drags a 6-branch
+      nested chain). cherry-pick -x; say in your plan what you took and what you rejected on
+      merits. Give the sweep a POSITIVE CONTROL — assert it re-finds the known .bats above before
+      believing anything else it reports. Two of the coordinator's three sweep attempts returned
+      confident garbage at exit 0.
+
+DoD (all four, or you are not done):
+1. docs/plans/CONTEXT_ECONOMY_V2.md with the four load-bearing sections — measured constants WITH
+   citations, failure-mode table (every observed mode → its structural answer), rejected
+   alternatives with reasons, acceptance criteria as disk-truth reads.
+2. Adversarially proven to the skill's Phase 4 bar: RED-proof every new test against a pristine
+   pre-change tree recovered via git archive; a positive control beside every absence assertion;
+   `|| false` on non-final `[[ ]]` in bats; re-run launchd-bound artifacts under /bin/bash (the
+   Bash tool runs zsh, so repros lie). Run the gate corpus through bin/cc-bats (row 13's QoS
+   chokepoint) — the box is shared with two other live rebuilds. TWO HARNESS TRAPS, both of which
+   produced a WRONG VERDICT for the coordinator an hour before you were fired:
+     · NEVER pipe a test run into `tail`/`head` and read the exit code — that is the PIPE's status,
+       not bats'. Redirect to a file, read `$?` unpiped, key the verdict on the `not ok` COUNT.
+     · A suite that tests a WRAPPER must not inherit that wrapper's own state. cc-bats exports
+       CC_BATS_ACTIVE=1, which makes a shim-under-test short-circuit its own re-entrancy guard.
+       If any suite of yours tests something it is also being RUN through, unset that thing's
+       environment in setup() (see tests/qos-chokepoint.bats for the fixed shape).
+3. Landed via the project-local /ship CONTINUOUSLY — never batch. Never add corpus work to the
+   land path. RESOLVE CITED SHAS AFTER LANDING from origin/main via
+   `git merge-base --is-ancestor <sha> origin/main` — ship-land rebases, and rows 3 and 13 both
+   published pre-rebase shas naming commits not on trunk.
+4. GROUND_UP_REBUILD_MAP.md row 8 updated with status + plan link + landed shas, landed too.
+
+CONSUME OTHER ROWS' MECHANISMS FAIL-SOFT. DONE on this map means designed + landed + proven +
+activation STAGED AND PLATTERED — it does NOT mean live. Assume anything you depend on may be
+landed-but-inert, degrade cleanly, and say in your plan what your design does when the dependency
+is dark. Check for existence evidence; never trust a status cell.
+
+Every new mechanism ships with an env kill switch, never revert-as-plan.
+```
+
+**Fire line** (re-read `claude-accounts` at fire time; `next2` is the coordinator's own account,
+row 2 holds `next`, row 10 holds `next3`, `next4` is free):
+
+```bash
+rm -f "$TMPDIR"handoff-deps-XXXXXX.sh   # no-op since the mktemp fix deployed; free insurance
+scripts/handoff-fire.sh --split-right --follow \
+  --notify-back 71B42B48-1331-4F60-8DA3-6849F2682CA2 \
+  --repo /Users/chrisren/Development/claude-infrastructure \
+  --prompt-file /tmp/gu-row8-payload.md
+```
+
+Verify engagement by transcript CONTENT (assistant turns + tool_use), never the script's "birth"
+verdict.
+
+**The flag is `--prompt-file`, not `--payload`.** I wrote `--payload` from recall composing this
+block, and caught it only by grepping `scripts/handoff-fire.sh:1808` before publishing. All five
+flags above are verified against the parser: `--prompt-file` 1808 · `--account` 1809 · `--repo`
+1815 · `--split-right` 1820 · `--notify-back` 1827 · `--follow` 1832. A pre-composed command is
+only a silver platter if its flags are read off the parser — otherwise it is a recalled command
+with extra confidence, and it fails at exactly the moment a slot frees and nobody re-reads it.
+
 ## Wave log (coordinator appends; map rows carry the durable status)
 
 - 2026-07-29: campaign opened; coordinator = the recycled successor of session e891e080.
@@ -465,11 +580,13 @@ the successor inherits:
 state and is retained for history only — every count in it is stale.
 
 - **Map is 13 rows now, not 12** (row 13 machine-capacity was added by a parallel session and
-  **RATIFIED** by this coordinator — see the ratification section above). **5 DONE: 1, 3, 4, 5, 12.
-  3 IN FLIGHT: 2, 10, 13. 5 OPEN: 6, 7, 8, 9, 11.** Remaining dispatch order: **8 · 7 · 11 · 9 · 6
-  last.** Do NOT count rows by grepping `DONE` alone — the "What DONE means" prose contains the
-  literal string. Derive it as
+  **RATIFIED** by this coordinator — see the ratification section above). **UPDATED 17:4xZ: 6 DONE
+  — 1, 3, 4, 5, 12, 13. 2 IN FLIGHT: 2, 10. 5 OPEN: 6, 7, 8, 9, 11.** (Row 13 was closed by the
+  coordinator after its own session exited clean without flipping its cell — see the row-13 close
+  section below.) Remaining dispatch order: **8 · 7 · 11 · 9 · 6 last.** Do NOT count rows by
+  grepping `DONE` alone — the "What DONE means" prose contains the literal string. Derive it as
   `grep -E '^\| [0-9]+ \|' | grep -cE '\*\*DONE 2026'`.
+  **STILL AT THE CAP AT 2 — the fire predicate is in-flight `< 2`, so this frees nothing.**
 - **DERIVE IN-FLIGHT FROM THE MAP, NEVER FROM MEMORY.** This coordinator breached the ≤2 cap by
   typing `INFLIGHT=1` from recall while row 13 was already `REBUILDING` from outside its dispatch.
   Exact command is in the breach section above. Add rows you fired whose cell has not yet updated.
@@ -934,6 +1051,49 @@ its four cited builds (`6a6cbed0`, `07327f7a`, `2cda5bc6`) are **not** ancestors
 though the work itself demonstrably landed (plan doc + `2e47e046` + both binaries present). Same
 trap row 3 hit and documented: `ship-land` rebases, so cited shas must be resolved AFTER landing via
 `git merge-base --is-ancestor`. Row 13 should fix its citations; the work is not in question.
+
+### 2026-07-29T17:4xZ ROW 13 CLOSED (6 of 13) — its session was gone, its cell was not, and verifying it cost two false verdicts
+
+**Row 13's session had already exited cleanly and nobody had closed the row.** Detected by a cwd
+scan across ALL 156 live `claude` processes (`lsof -a -p <pid> -d cwd`, not `pgrep -f` — memory
+`pgrep-f-matches-agent-briefs`): `gu-session-lifecycle` and `gu-operator-surface` both had live
+processes, `gu-concurrency` had **zero**. Its worktree is clean, 0 ahead of trunk, last commit
+`8160416b` at 17:00 — *"three builds landed, frozen DoD complete except the accruing metric"*.
+That is a clean self-close, not a death: **positive evidence on both sides**, which is why the
+scan's negative is trustworthy here (the two known-alive rows are its positive control).
+
+**Ruled DONE, verified by disk on five axes** — not on the row's word, and not on my predecessor's
+ratification either (which covered the row's *legitimacy*, not its *completion*):
+`git merge-base --is-ancestor` on every cited sha · the plan's four load-bearing sections present
+in a 626-line doc · `bin/cc-bats` + `scripts/capacity-alarm.sh` on trunk, positive-controlled
+against a path known absent · activation `17-qos-chokepoint` staged in BOTH the live queue and the
+repo SSOT · and the 55-test claim **re-run**. AC1 stays ACCRUING behind the operator's C10 step,
+which the binding "What DONE means" ruling makes DONE-compatible (rows 3 and 4 set that precedent).
+**Its three pre-rebase shas are now resolved on the map**: `6a6cbed0`→`b9fc76b0`,
+`07327f7a`→`5370b2ff`, `2cda5bc6`→`fa8f15a8`. That debt is now closed for rows 3 and 13 both.
+
+**The verification produced a false GREEN and then a false RED before it produced the truth**, and
+both are recorded as a map learning because neither was row 13's fault:
+
+1. **`cc-bats <suites> 2>&1 | tail -40` reported exit 0 — that was `tail`'s status.** Two of the
+   16 hidden tests were red. I nearly ratified on it. Never read `$?` through a pipe; redirect,
+   read it unpiped, and key on the `not ok` count.
+2. **Re-running unpiped gave 2/16 red — caused by my own harness.** Putting the QoS suite through
+   the QoS shim exports `CC_BATS_ACTIVE=1`, so the shim *under test* hit its own re-entrancy guard
+   (`bin/cc-bats:101`) and emitted none of the warnings the tests assert. **16/16 plain, 14/16
+   through the shim**, with nothing in the output naming the harness.
+
+**Fixed at the source rather than worked around** (row 13's session is gone; this is ownerless
+campaign debt): `tests/qos-chokepoint.bats` `setup()` now unsets the whole `CC_BATS_*` family, so
+the suite's verdict cannot depend on how it was invoked. Re-proved **16/16 through BOTH paths**;
+the pre-fix tree is the RED (14/16 via shim). One line of test hermeticity, but it is the exact
+trap the runbook was about to walk every remaining row into — the row 8 payload below originally
+said "run the gate corpus through `bin/cc-bats`" with no caveat.
+
+**Cap status: in-flight drops 3 → 2. STILL AT THE CAP — fire nothing.** Rows 2 and 10 remain live
+(verified by transcript content and by cwd). The next fire needs in-flight **< 2**, i.e. one of
+them DONE by disk. Row 8's payload is composed, flag-verified against the parser, and materialized
+at `/tmp/gu-row8-payload.md`, so the fire is one command when a slot frees.
 
 ## Inherited watch — first GREEN postland stamp (status, not a coordinator work item)
 
