@@ -556,6 +556,49 @@ disk claimed.
 - **M3(a) NOT BUILT** — deliberately, per the mid-build reprioritization above. It is visibility and
   history, not a stranding fix. Recorded as remainder **R-8** rather than left as a silent gap.
 
+### §11.1 CLOSE — 2026-07-30, against the frozen DoD
+
+**12 lands, every sha re-resolved from `origin/main` by `merge-base --is-ancestor` AFTER ship-land's
+rebases** (it rebased four times; the pre-rebase shas in earlier commit messages are dead):
+design **cb930804** · M1 **e7badb54** · learnings **7724dfa4** · M2 **434a391e** · M3b **7cb5f548** ·
+M4 **b15942c3** · status **16b3bba5** · trunk repair **8c73747e** · SSOT-guard fix **9240c071** ·
+M5 **a0392fb7** · growths **cb01df65** · map row **dd1d55a3**.
+
+**PROVEN (disk reads).** 176 tests green in ONE run across 7 suites, `not ok` count **0** —
+`account-cliff-routing` · `cc-relogin-poll` · `cc-fleet` · `cc-route` · `claude-accounts-core` ·
+`claude-accounts` · `cc-relogin-status`. Plus `cc-route selftest` 26/26, `scripts/route-safety-gate.sh`
+2 met / 0 failed, and **row 5's `cc-wave-plan selftest` 63/63** — the consumer seam verified rather
+than assumed. **24 new tests RED-proved** against pristine `git archive` trees at *derived* pre-fix
+revs (M1 12 of 17 vs `5597bd2a`; M2 10 of 43 vs `d54b8a74`; M3b 2 of 7 vs `ebf916f4` via a
+same-stub/different-subject differential). Every green-on-both case is named contract-preservation,
+never counted as a RED-proof. Content-verified on trunk by path with a positive control against a
+path known absent. AC1-AC6c, AC8-AC12 met; **AC7 NOT met** (see below).
+
+**IN FLIGHT / operator-owned.** One C10 command, plattered, staged in both the repo SSOT and the live
+queue, dry-run already executed:
+`CONFIRM=1 bash ~/.claude/autonomy/pending-activation/21-relogin-poll-activate.sh`.
+
+**ACCRUING (time-dependent, and where it will be read).**
+- The drain→`k == 0`→re-login chain end-to-end needs `next`'s real cliff, **2026-08-02T20:21:49Z**.
+  Read then: an `ATTEMPT` line in `~/.claude/logs/cc-relogin-poll.log` (today: **0** all-time) and the
+  keychain stamp moving past Aug 2. **`cc-relogin`'s Phase 2 has never driven a live OAuth flow — that
+  first run is a SUPERVISED test, not a routine one.**
+- `route.jsonl`'s new input fields accrue per routing decision; the R-3 question (how often the 600 s
+  degrade path is served) becomes answerable once records accumulate: `jq` over `quota_age_s`.
+- **Landed ≠ live.** The shared checkout was 30 behind trunk mid-session, so `~/.claude/bin/*`
+  symlinks still served the old binary. No activation step exists for any of M1/M2/M3b/M5 — they go
+  live on the checkout's fast-forward. Effect-read: `grep -c cliff_band ~/.claude/bin/claude-accounts`.
+
+**NOT DONE, stated plainly.** **AC7 / M3(a)** — `login_expires_at` is still absent from the last-good
+ledger (4 of 4 accounts), so the cliff remains unreadable for an account whose keychain read fails.
+Demoted on measured grounds, not forgotten: remainder **R-8** carries its ~10-line shape and the R3
+constraint it must preserve. The *action* path is covered (F16); the *history* is not.
+
+**The unfalsifiable-claim ceiling, named rather than papered over.** Two of this row's headline claims
+cannot be proven this session by construction, and both are recorded as ACCRUING above rather than
+asserted: that a drain actually reaches `k == 0` in time, and that unattended re-auth works at all.
+Everything else is a disk read.
+
 ### Learnings — three defects the build itself surfaced (each cost a real land or gate cycle)
 
 1. **My own suite caught a masking bug in my own first cut of M1.** `_excluded()` returns the
