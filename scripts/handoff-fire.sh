@@ -897,6 +897,122 @@ selfclose_inventory_warn() { # $1=our-session-id $2=logfile(optional)
   return 0
 }
 
+# ---- M3 — NO CLOSE LOSES MAIL (inherited seam; row 3's contract, row 2's call site) -----------
+# CROSS_SESSION_COMMS_V2.md §4 M3, verbatim: "The pre-close inventory becomes an ACTUATOR: at close,
+# undrained mail is drained, rerouted, or dead-lettered — BEFORE the close proceeds. Ordered:
+# successor named → mailbox_migrate to it (mandatory, not advisory); no successor → append to a
+# dead-letter store that is itself SURFACED on the operator board with existence evidence, never a
+# silent file."
+#
+# Row 3 deliberately did not build this: its only call site is THIS file, and landing an unreferenced
+# primitive is the quiet-inertness shape the rebuild map warns about. Coordinator ruling 2026-07-29
+# assigns the implementation here. THE CONTRACT IS ROW 3'S AND IS NOT REDESIGNED — but note that row
+# 3's §8 A13 claims its primitive `mailbox_close_disposition` is "landed and tested standalone" and
+# it does NOT exist (grep over scripts/ hooks/ bin/ finds it only in that doc); row 3's map cell
+# "SPECIFIED, NOT BUILT" is the accurate one. So the mechanics live here, built on row 3's REAL
+# primitive `mailbox_migrate` (hooks/lib/mailbox-pending.sh — LOCKED on both boxes, exactly-once by
+# cursor advance, so a re-run is a no-op).
+#
+# WHY THE SUCCESSOR'S *SESSION* ID AND NOT ITS PANE: row 3 keys inboxes by session_id with the pane
+# as an alias, and the alias is reconciled by mailbox-drain's pull-adoption — which runs at
+# SESSION-START ONLY. A live successor has already passed that boundary, so mail dropped in its PANE
+# box would sit until its next start. Resolve the session and deliver to the box it is actually
+# reading; fall back to the pane only when the session cannot be resolved, where M4's next-boundary
+# adoption is the backstop.
+#
+# F1 (live incident 2026-07-29): a lead died holding 2 unread messages — the coordinator's ACK and a
+# seam ruling it had explicitly asked for — and cc-notify had reported "delivered to inbox" for both.
+# Delivered, read and acted-on are three different events; this closes the gap between the first two.
+#
+# → 0 = disposed (or nothing to dispose); 1 = FAILED — the caller MUST block the close.
+selfclose_mail_disposition() { # $1=our-sid $2=successor-pane(may be empty) $3=logfile(optional)
+  local sid="${1:-}" succ="${2:-}" log="${3:-}" pending target moved mdir dl lib
+  _md_say() { echo "$1" >&2; [ -n "$log" ] && { printf '%s\n' "$1" >> "$log" 2>/dev/null || true; }; }
+  [ -n "$sid" ] || return 0
+  [ "${CC_CLOSE_MAIL_GUARD:-1}" != 0 ] || { _md_say "⚠ M3 mail guard DISABLED (CC_CLOSE_MAIL_GUARD=0) — undrained mail is NOT dispositioned"; return 0; }
+  # row 3's lib, lazily sourced exactly as the inventory does it.
+  if ! command -v mailbox_pending_count >/dev/null 2>&1; then
+    for lib in "${HF_DIR:-}/../hooks/lib/mailbox-pending.sh" \
+               "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/mailbox-pending.sh" \
+               "$HOME/.claude/hooks/lib/mailbox-pending.sh"; do
+      # shellcheck disable=SC1090,SC1091
+      [ -f "$lib" ] && { . "$lib" 2>/dev/null || true; break; }
+    done
+  fi
+  # R5 — row 3's lib is a SEAM. If it is unavailable we cannot disposition, and we must not pretend
+  # we did. Say so loudly and let the close proceed (a missing library is not a reason to strand a
+  # finished session forever), which is the one place this degrades below the contract — recorded
+  # rather than hidden.
+  if ! command -v mailbox_pending_count >/dev/null 2>&1; then
+    _md_say "⚠ M3 SKIPPED — row 3's mailbox-pending lib is unavailable; undrained mail (if any) is NOT dispositioned"
+    return 0
+  fi
+  pending="$(mailbox_pending_count "$sid" 2>/dev/null)"
+  case "$pending" in ''|*[!0-9]*) pending=0 ;; esac
+  [ "${pending:-0}" -gt 0 ] || return 0            # nothing owed — the common path, silent
+  if [ -n "$succ" ]; then
+    target="$(cc_sid_for_pane "$succ" 2>/dev/null || true)"
+    [ -n "$target" ] || target="$succ"             # alias fallback; M4 adopts at its next start
+    if ! command -v mailbox_migrate >/dev/null 2>&1; then
+      _md_say "!! M3 FAILED: $pending unread message(s) owed and row 3's mailbox_migrate is unavailable — refusing to close and lose them"
+      return 1
+    fi
+    moved="$(mailbox_migrate "$sid" "$target" 2>/dev/null || true)"
+    case "$moved" in ''|*[!0-9]*) moved=0 ;; esac
+    if [ "$moved" -lt 1 ]; then
+      _md_say "!! M3 FAILED: $pending unread message(s) in this session's inbox could NOT be migrated to the successor ($target). MANDATORY, not advisory — refusing the close."
+      return 1
+    fi
+    MAIL_DISPOSITION="migrated:$moved"
+    _md_say "→ M3: $moved undrained message(s) migrated to the successor's live inbox ($target) before close"
+    return 0
+  fi
+  # --terminal: nothing continues, so there is no reader to reroute to. Dead-letter WITH EXISTENCE
+  # EVIDENCE (R4) — the `.ran` stamp is what makes "no dead letters" distinguishable from "the store
+  # never ran", which is the exact defect that let cc-permission-beacon report "none pending" while
+  # never having been invoked once.
+  mdir="${CC_MAILBOX_DIR:-$HOME/.claude/mailbox}"; dl="$mdir/dead-letter"
+  mkdir -p "$dl" 2>/dev/null || { _md_say "!! M3 FAILED: cannot create the dead-letter store at $dl — refusing to close and lose $pending message(s)"; return 1; }
+  printf '%s terminal-close sid=%s pending=%s\n' "$(_iso_now)" "$sid" "$pending" >> "$dl/.ran" 2>/dev/null || true
+  if ! cat "$(mailbox_file "$sid" 2>/dev/null || printf '%s/%s.md' "$mdir" "$sid")" >> "$dl/$sid.md" 2>/dev/null; then
+    _md_say "!! M3 FAILED: could not dead-letter $pending message(s) from this session's inbox — refusing the close"
+    return 1
+  fi
+  MAIL_DISPOSITION="deadletter:$pending"
+  _md_say "→ M3: $pending undrained message(s) DEAD-LETTERED to $dl/$sid.md (terminal close, no successor to reroute to)"
+  _md_say "  ⚠ these were DELIVERED but never READ — the operator board is the surface that must show this store (row 10 owns that row); evidence: $dl/.ran"
+  return 0
+}
+
+# ---- V2 §5.1 — the CLOSE half of the lifecycle record ------------------------------------------
+# A close is operator-visible surface (R10): the 2026-07-13 23:03 "failed handoff" was a PERFECT
+# succession that nobody could see, because the handover report died with the closing pane. So the
+# succession statement is written to the DURABLE record before the pane evaporates, where a successor
+# or the operator can read it afterwards — never only to a stream that dies with the session.
+#
+# Records WHAT continued and WHERE the mail went. Additive to schema 2; a pre-v2 or absent record is
+# left alone (an origin session has no record by construction, and inventing one would license
+# cc-reaper against it). Best-effort by design — a bookkeeping failure must never block a close that
+# every other gate has already authorized.
+record_close_succession() { # $1=fired-dir $2=pane $3=kind $4=successor-pane $5=mail-disposition
+  local dir="${1:-}" pane="${2:-}" kind="${3:-}" succ="${4:-}" mail="${5:-none}" f tmp
+  [ -n "$dir" ] && [ -n "$pane" ] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  f="$dir/$pane.json"
+  [ -s "$f" ] || return 0                      # no record (origin session) — nothing to annotate
+  tmp="$dir/.$pane.close.$$"
+  if jq --arg closedAt "$(_iso_now)" --arg kind "$kind" --arg succ "$succ" --arg mail "$mail" \
+       '. + {closedAt:$closedAt,
+             succession:{kind:$kind,
+                         successorPane:(if $succ == "" then null else $succ end),
+                         mailDisposition:$mail}}' "$f" > "$tmp" 2>/dev/null && [ -s "$tmp" ]; then
+    mv -f "$tmp" "$f" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+  else
+    rm -f "$tmp" 2>/dev/null
+  fi
+  return 0
+}
+
 # ---- teardown marker (MARKER CONTRACT v1; reader = tm-watchdog) -------------------------------
 # A self-close/recycle types /exit, which INTERRUPTS the in-flight turn and kills the pane mid-Bash
 # — to the crash watchdog that death is indistinguishable from a real CC crash (false CRASHes), and
@@ -1727,6 +1843,28 @@ MSG
   # unread mail or peers it fired that have no live continuation. Runs in the REAL close path only
   # (before arming the watcher); zero counts are silent. NEVER blocks — the close proceeds regardless.
   selfclose_inventory_warn "$SC_SID" "$SC_LOG" || true
+  # M3 — the inventory above WARNS; this ACTS, and it is the last gate before any irreversible step.
+  # Row 3's F4 was precisely "close path warned about undrained mail and closed anyway", so a warn
+  # that is not followed by an actuator is the defect, not the fix. Ordered per the contract:
+  # successor → migrate (mandatory); --terminal → dead-letter with existence evidence. A disposition
+  # FAILURE blocks the close: refusing to close never loses work, closing wrongly does (R2).
+  MAIL_DISPOSITION="none"
+  if ! selfclose_mail_disposition "$SC_SID" "$SC_SUCCESSOR" "$SC_LOG"; then
+    echo "!! self-close ABORTED by M3: this session's undrained mail could not be delivered anywhere." >&2
+    echo "!!   Closing now would lose messages that cc-notify already reported as 'delivered' — the" >&2
+    echo "!!   F1 incident verbatim (a lead died holding an ACK and a seam ruling it had asked for)." >&2
+    echo "!!   Options: drain the inbox in this session first, name a live --successor to inherit it," >&2
+    echo "!!   or override with CC_CLOSE_MAIL_GUARD=0 (deliberate loss, recorded LOUD)." >&2
+    exit 6
+  fi
+  # Persist the succession statement into the durable record BEFORE the pane can evaporate (R10).
+  if [ -n "$SC_SUCCESSOR" ]; then SC_KIND="successor"
+  elif [ "$SC_ORIGIN_CLASS" = "assignee" ]; then SC_KIND="orphan-assignee"
+  else SC_KIND="terminal"; fi
+  record_close_succession "$FIRED_DIR" "$SC_SID" "$SC_KIND" "$SC_SUCCESSOR" "$MAIL_DISPOSITION"
+  { printf '%s close sid=%s kind=%s successor=%s mail=%s\n' \
+      "$(_iso_now)" "$SC_SID" "$SC_KIND" "${SC_SUCCESSOR:-none}" "$MAIL_DISPOSITION"
+  } >> "$SC_LOG" 2>/dev/null || true
   # T-P2-1 (F5 / G-P2-1): a --terminal close is a PROGRAM-TERMINAL completion — nothing continues this
   # session's work — so push it to the desk via completion-push (F5 → cc-announce F1). Until this caller
   # NOTHING fired completion-push (it was DEAD in the loop, p02 §2c): a terminal event reached the desk
