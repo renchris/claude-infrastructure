@@ -15,6 +15,7 @@
 #   add     --title T [--project P] [--dod-ref R] [--source S]   → echoes the id
 #   list    [--open | --all | --blocked | --project P] [--json]  (default: --open, table)
 #   claim   <id> --by <sid>
+#   reclaim <id> --by <worker-identity>                          → re-key a live claim to its WORKER
 #   done    <id> --evidence <ref>
 #   reopen  <id> [--by <sid>] [--force]
 #   block   <id> --needs "<operator-only step>"                  → status "blocked"
@@ -67,12 +68,41 @@
 # still-stale item is BLOCKED instead (never a slow-reopen loop). cc-reaper calls it each
 # --reap sweep. All thresholds env-tunable (see the reap body).
 #
+# WORKER-KEYED CLAIMS (`reclaim`, 2026-07-29, backlog a13fb1d41044) — the fix for the defect the
+# whole owned_wait apparatus below exists to WORK AROUND. cc-dispatch claims with `--by <host>-$$`,
+# its OWN pid, and then exits: within seconds the claim names a dead process, so past the stale gate
+# `claimer_live` is false BY CONSTRUCTION for every dispatched item and Rule A degrades to an
+# age-only heuristic (audit synthesis §V1 S2: a live 91-minute worker gets reopened → double-dispatch;
+# a worker dead at minute 5 strands 85 min). V1 could not fix it at the source — the spawned session
+# has no identity until it exists — so liveness was keyed on the worktree instead (oracle 2).
+#
+# `reclaim` closes it from the WORKER's side, where the identity does exist: the dispatched session
+# re-keys its own claim to a handle that lives exactly as long as the work. The bug was never the
+# `<host>-<pid>` FORM — it was WHOSE pid, so the fix reuses the existing `kill -0` path verbatim and
+# adds no new resolution surface. Actuated by hooks/session-register.sh at SessionStart (an
+# already-registered hook — no settings.json activation gate, hence live on land rather than staged
+# inert); deliberately a MECHANISM at process start, not a model instruction "on engagement", because
+# the pid is authoritative from the instant the process exists and a session that never engages must
+# still be reapable (memory: feature-durability-mechanism-not-memory).
+#
+# Recorded as `event:"claim"` + `reclaim:true` — the FOLD is deliberately unchanged (status stays
+# "claimed", `by` advances to the worker), so no existing consumer of the trail needs to learn a new
+# state (memory: named-failure-vs-no-verdict). The marker exists because two things must NOT count a
+# re-key as a dispatch attempt: reap's `totalClaims` bound (see MAX_ATTEMPTS) and dispatch-assert's
+# discharge predicate.
+#
 # DEAD-WORKER EVIDENCE — the rule the whole sweep turns on: a dead verdict is keyed on PROCESS
 # LIVENESS, never on elapsed claim time or attempt count. Elapsed time only GATES when to ask; it is
 # never itself the answer. Under contention a healthy worker legitimately sits 5000s+ inside one
 # full-suite gate, so a long claim is a signal of CONTENTION, not of death. Three oracles, and a
 # reopen requires that one of them actually returned the verdict "not live":
 #   1. CLAIMER  `kill -0` on a <host>-<pid> claim, else the cc-sessions registry (claimer_live).
+#      Authoritative only once the claim names the WORKER (see WORKER-KEYED CLAIMS above). A claimer
+#      that reads LIVE is KEPT — but bounded by LIVE_CLAIM_MAX_S, because worker-keying makes this
+#      the normal path for every dispatched item and an unbounded "live ⇒ keep" would let one
+#      never-engaged pane pin its item forever (memory: universalizing-a-mechanism-promotes-its-
+#      latent-leak — the lifecycle guard ships in the same change as the universalization). Past the
+#      ceiling it BLOCKS out to a human, exactly like a wedged owned wait, and never reopens.
 #   2. WORKTREE  "not live" is asked of the CLAIMER, and a dispatched claim's `by` is cc-dispatch's
 #      own spent pid — so before any dead verdict, reap re-verifies against the item's WORKTREE: a
 #      live process tree there — named in a process's argv (a running gate / ship-land / queued
@@ -355,6 +385,69 @@ cmd_transition() {
   echo "$id"
 }
 
+# cmd_reclaim <id> --by <worker-identity> — re-key an EXISTING claim to the worker that is actually
+# doing the work (see WORKER-KEYED CLAIMS in the header). Appends `event:"claim"` + `reclaim:true`.
+#
+# It is deliberately NOT `claim` with a flag: the guards are the opposite way round. `claim` may take
+# an item from any status; `reclaim` may ONLY re-key an item that is already `claimed`, because every
+# other status belongs to someone else — `open` is the dispatcher's (or reap's) to hand out, and
+# `done`/`blocked` are terminal-or-parked, where an unsolicited claim from a hook would resurrect work
+# into the wave. So a non-`claimed` status is a NO-OP, not an error.
+#
+# IDEMPOTENT: a re-key to the identity that already holds the claim writes NOTHING. Without this,
+# SessionStart firing again (resume, /compact) would append a record and RESET claimAgeS on every
+# fire, letting one session's restarts hold the stale gate open indefinitely.
+#
+# Every path prints a structured `verdict=<token>`: the caller is a fail-open hook whose exit code
+# cannot carry the outcome, and a silent no-op is indistinguishable from an inert mechanism
+# (memory: claimed-outcome-vs-checked-outcome, feature-durability-mechanism-not-memory). rc is 0 for
+# every real verdict (reclaimed / noop-*), 2 for usage, 3 for an unknown id.
+cmd_reclaim() {
+  local id="${1:-}"; [ $# -gt 0 ] && shift
+  local by=""
+  while [ $# -gt 0 ]; do
+    local key="$1"; shift
+    case "$key" in
+      --by) by="${1:-}"; [ $# -gt 0 ] && shift ;;
+      *) printf 'cc-backlog reclaim: unknown arg %s\n' "$key" >&2; return 2 ;;
+    esac
+  done
+  [ -n "$id" ] || { printf 'cc-backlog reclaim: <id> is required\n' >&2; return 2; }
+  [ -n "$by" ] || { printf 'cc-backlog reclaim: --by <worker-identity> is required\n' >&2; return 2; }
+  ensure_file
+  has_id "$id" || {
+    printf 'cc-backlog reclaim: verdict=unknown-id %s\n' "$id" >&2; return 3
+  }
+  local cur cstatus cby
+  cur="$(item_json "$id")"
+  cstatus="$(printf '%s' "$cur" | jq -r '.status // ""' 2>/dev/null)"
+  cby="$(    printf '%s' "$cur" | jq -r '.by     // ""' 2>/dev/null)"
+  if [ "$cstatus" != claimed ]; then
+    printf 'cc-backlog reclaim: verdict=noop-status %s status=%s (only a claimed item is re-keyed)\n' \
+      "$id" "${cstatus:-?}"
+    return 0
+  fi
+  if [ "$cby" = "$by" ]; then
+    printf 'cc-backlog reclaim: verdict=noop-already-ours %s by %s\n' "$id" "$by"
+    return 0
+  fi
+  # ANTI-STEAL: refuse when the incumbent claimer is PROVABLY live and is not us. The intended case
+  # is a dead incumbent — cc-dispatch's own spent pid — so this costs one `kill -0` and never blocks
+  # it. What it does block is a second session opened in the same worktree (a hand /ship, a GC pass)
+  # taking the claim away from the worker that is still running: two live claimants is precisely the
+  # double-ownership this ledger exists to prevent, and the FIRST one is the rightful owner. An
+  # UNRESOLVED incumbent (rc 2 — no registry answer) proceeds deliberately: refusing there would make
+  # worker-keying inert exactly when the registry is wedged, and occupancy of the item's own worktree
+  # is the better evidence of who is doing the work.
+  if [ -n "$cby" ] && claimer_live "$cby"; then
+    printf 'cc-backlog reclaim: verdict=noop-live-claimer %s is held by %s, which is LIVE\n' "$id" "$cby"
+    return 0
+  fi
+  jq -nc --arg id "$id" --arg ts "$(now_iso)" --arg by "$by" \
+     '{id:$id, ts:$ts, event:"claim", by:$by, reclaim:true}' >> "$BACKLOG"
+  printf 'cc-backlog reclaim: verdict=reclaimed %s by %s (was %s)\n' "$id" "$by" "${cby:-<none>}"
+}
+
 cmd_list() {
   local mode="open" projfilter="" fmt="table"
   while [ $# -gt 0 ]; do
@@ -601,8 +694,20 @@ claimer_live() {
   [ -n "$sessions_json" ] || return 2          # no output (timeout / crash) ⇒ UNRESOLVED
   # jq's own rc carries the third state for free: 0 = listed (LIVE), 1 = answered-and-absent (a real
   # NOT-LIVE verdict), anything else = jq could not parse/evaluate the registry ⇒ UNRESOLVED.
+  #
+  # `.session_id` is the REAL key — `.sessionId` never matched anything. session-register.sh writes
+  # the row as {paneUUID, name, cwd, account, pid, startedAt, session_id} (session-register.sh:88)
+  # and 0 of the live rows carry a camelCase `sessionId` (measured 2026-07-29), so a claim keyed on a
+  # session id resolved to answered-and-absent = rc 1 = PROVEN NOT-LIVE — the one verdict that lets
+  # Rule A reopen, i.e. a false dead verdict on a demonstrably live session (RED-proved against this
+  # session's own registry row: `reap` said WOULD-REOPEN "dead-worker" for its session_id and "LIVE"
+  # for its paneUUID and its pid). It survived because the only test to exercise the registry branch
+  # stubbed a fixture emitting `paneUUID`, so the camelCase predicate was never contrasted with the
+  # real producer's emission (memory: fixture-shape-parity-with-real-producer). The dead spelling is
+  # kept alongside: it costs one `or` and forgiving both spellings is strictly safer here, where a
+  # miss is a false DEATH.
   printf '%s' "$sessions_json" \
-    | jq -e --arg b "$by" 'any(.[]?; (.paneUUID==$b) or (.name==$b) or (.sessionId==$b))' >/dev/null 2>&1
+    | jq -e --arg b "$by" 'any(.[]?; (.paneUUID==$b) or (.name==$b) or (.session_id==$b) or (.sessionId==$b))' >/dev/null 2>&1
   local jrc=$?
   case "$jrc" in 0) return 0 ;; 1) return 1 ;; *) return 2 ;; esac
 }
@@ -759,6 +864,11 @@ owned_wait() {
 #                                       pin every session-shaped claim as "undecidable" forever. Past
 #                                       the ceiling the item still never REOPENS — an unanswered
 #                                       probe is not proof of death at any age.
+#   CC_BACKLOG_LIVE_CLAIM_MAX_S (=OWNED_WAIT_MAX_S) ceiling past which a PROVABLY LIVE claimer stops
+#                                       absolving and is BLOCKED out to a human (never reopened — it
+#                                       is alive). Needed only once claims are WORKER-keyed, which
+#                                       turns "claimer LIVE" from an unreachable branch into the
+#                                       normal one; see the Rule A body.
 #   CC_BACKLOG_WT_ROOT          (~/Development/.worktrees)  dispatch worktree parent (see owned_wait)
 #   CC_BACKLOG_NOW              (now)   epoch "now" seam (deterministic age/window math in tests)
 cmd_reap() {
@@ -777,6 +887,7 @@ cmd_reap() {
   local window="${CC_BACKLOG_THRASH_WINDOW_S:-90}"
   local ownedmax="${CC_BACKLOG_OWNED_WAIT_MAX_S:-21600}"
   local unresolvedmax="${CC_BACKLOG_UNRESOLVED_MAX_S:-$ownedmax}"
+  local liveclaimmax="${CC_BACKLOG_LIVE_CLAIM_MAX_S:-$ownedmax}"
   local now="${CC_BACKLOG_NOW:-$(date +%s)}"
 
   # Per non-terminal id → TSV [id, status, claimBy, claimAgeS, totalClaims, fastFailCycles].
@@ -803,7 +914,14 @@ cmd_reap() {
             status: st($last.event),
             claimBy: ([$g[] | select(.event=="claim")] | last | .by // ""),
             claimTs: ([$g[] | select(.event=="claim")] | last | .ts // ""),
-            totalClaims: ([$g[] | select(.event=="claim")] | length),
+            # totalClaims counts DISPATCH ATTEMPTS — how many times a worker was fired at this item —
+            # so a worker re-keying its own claim (reclaim:true) must not increment it. Counting them
+            # would halve the MAX_ATTEMPTS bound the moment worker-keying went live: one dispatch
+            # would post two claim records, and the "3 attempts ⇒ block" ceiling would fire after 1½
+            # real attempts (memory: exoneration-bound-must-fit-what-it-bounds). claimBy/claimTs
+            # deliberately DO take the re-key — that is the whole point: the latest claim names the
+            # live worker, and the age clock starts when the worker actually took the work.
+            totalClaims: ([$g[] | select(.event=="claim" and (.reclaim // false) != true)] | length),
             fastFail: ([ range(0; ($g|length)-1) as $i
                 | select($i > $cut
                          and $g[$i].event=="claim" and $g[$i+1].event=="reopen"
@@ -840,8 +958,34 @@ cmd_reap() {
       # rc is THREE-valued (see claimer_live): 0 LIVE, 1 proven NOT-LIVE, 2 UNRESOLVED (non-verdict).
       # Captured, not tested inline, because only rc 1 may ever reach the reopen path.
       claimer_live "$by"; clrc=$?
+      if [ "$clrc" -eq 0 ] && [ "$ageS" -le "$liveclaimmax" ]; then
+        # Printed in BOTH modes, like the owned-wait and UNRESOLVED keeps below and for the same
+        # reason — it used to be dry-run-only, which was defensible while this branch was ~unreachable
+        # for dispatched items. Worker-keying makes it the NORMAL absolve, so a silent one would make
+        # the entire mechanism invisible in operation: if the identity ever stopped resolving (a host
+        # derivation drifting apart from the writer's, say), reap would quietly fall through to the
+        # dead-worker paths and nothing would show that oracle 1 had stopped answering LIVE (memory:
+        # feature-durability-mechanism-not-memory — an inert mechanism must be loud, not silent).
+        printf 'cc-backlog reap: KEEP %s [claimer %s LIVE; claimed %ss]\n' "$id" "$by" "$ageS"
+        continue
+      fi
+      # A LIVE claimer past LIVE_CLAIM_MAX_S is a WEDGED WORKER — the mirror of the wedged owned wait
+      # below, and it BLOCKS rather than falling through to the dead-worker paths. Before worker-keyed
+      # claims this branch was unreachable in practice (a dispatched claim's `by` was the dispatcher's
+      # spent pid, so clrc was ~never 0) and "live ⇒ keep" needed no ceiling; worker-keying makes it
+      # the NORMAL path, which promotes that missing bound from a curiosity to a fleet property —
+      # e.g. a pane that came up and never engaged (the cold-worktree auto-submit race) holds a live
+      # pid and would pin its item forever, where V1's owned-wait path would at least have surfaced it
+      # at OWNED_WAIT_MAX_S. Same reasoning as the wedge below: never reopened (the worker is NOT
+      # dead), never silently kept — escalated to a human, named for what it is.
       if [ "$clrc" -eq 0 ]; then
-        [ "$dry" = 1 ] && printf 'cc-backlog reap: keep %s [claimed %ss — claimer %s LIVE]\n' "$id" "$ageS" "$by"
+        local lmsg="wedged live worker past the ${liveclaimmax}s ceiling — claimer ${by} is still LIVE after ${claims} dispatch attempt(s) (claimed ${ageS}s) but the item never completed. NOT reopened: the worker is alive, so a reopen would fire a SECOND peer onto live work. Find what it is stuck on (or close the pane), then \`cc-backlog unblock ${id}\`."
+        if [ "$dry" = 1 ]; then
+          printf 'cc-backlog reap: WOULD-BLOCK %s [wedged live worker — %s, claimed %ss]\n' "$id" "$by" "$ageS"
+        elif cmd_transition block "$id" --needs "$lmsg" --by cc-backlog-reap >/dev/null; then
+          blocked=$((blocked + 1))
+          printf 'cc-backlog reap: BLOCK %s [wedged live worker — %s, claimed %ss]\n' "$id" "$by" "$ageS"
+        fi
         continue
       fi
       # RE-VERIFY before any dead verdict: the claim's `by` is the dispatcher's spent pid, so
@@ -950,6 +1094,7 @@ case "${1:-}" in
   add)     shift; cmd_add "$@"; _add_rc=$?; [ "$_add_rc" -eq 0 ] && dispatch_kick; exit "$_add_rc" ;;
   list)    shift; cmd_list "$@" ;;
   claim)   shift; cmd_transition claim "$@" ;;
+  reclaim) shift; cmd_reclaim "$@" ;;
   done)    shift; cmd_transition "done" "$@" ;;
   reopen)  shift; cmd_transition reopen "$@" ;;
   block)   shift; cmd_transition block "$@" ;;

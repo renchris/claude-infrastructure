@@ -111,6 +111,28 @@ TELL="The cc-inbox-guard cost profile deserves its own scoped pass — 52.8s of 
   [ "$status" -eq 0 ]; [ -z "$output" ]
 }
 
+@test "a worker's own claim RE-KEY does NOT discharge (a SessionStart hook wrote it, not the model)" {
+  # `cc-backlog reclaim` (worker-keyed claims, backlog a13fb1d41044) is written by session-register.sh
+  # at SessionStart, so it is not evidence that identified work was enqueued. A /compact or resume
+  # mid-turn re-fires SessionStart, and counting its record would discharge this obligation with one
+  # the model never authored — satisfying the guard without doing the thing it guards.
+  local id; id="$("$BACKLOG" add --title "reclaim discharge" --project x)"
+  "$BACKLOG" claim "$id" --by "host-1" >/dev/null
+  : > "$CC_BACKLOG_FILE"                       # drop the add/claim: only the re-key is in the window
+  jq -nc --arg t "$T_LATER" --arg i "$id" '{id:$i,ts:$t,event:"claim",by:"host-2",reclaim:true}' \
+    > "$CC_BACKLOG_FILE"
+  run run_da "$(mktx "$TELL")"
+  [ "$status" -eq 0 ]; fired "$output"
+}
+
+@test "a NON-reclaim claim in the window still discharges (the exclusion must be narrow)" {
+  # The positive control: only `reclaim:true` is excluded. An ordinary claim is a real ledger
+  # engagement and must keep discharging, or the exclusion would have silently disabled path (1).
+  jq -nc --arg t "$T_LATER" '{id:"c1",ts:$t,event:"claim",by:"host-2"}' > "$CC_BACKLOG_FILE"
+  run run_da "$(mktx "$TELL")"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+}
+
 @test "a backlog event from BEFORE the turn does NOT discharge (stale record ≠ this naming)" {
   jq -nc '{id:"old1",ts:"2026-07-25T09:00:00Z",event:"add",project:"x",title:"old"}' \
     > "$CC_BACKLOG_FILE"

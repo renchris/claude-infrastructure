@@ -123,9 +123,14 @@ FIREDLOG="$STATE_DIR/$SKEY.fired"
 # ── discharged_since <iso-seconds-prefix> → 0 when ANY durable record exists at/after it. ──
 discharged_since() {
   local since="$1" since_ep f m
-  # (1) backlog event — any verb; the ledger was engaged.
+  # (1) backlog event — any verb; the ledger was engaged. EXCEPT a worker's own claim re-key
+  # (`reclaim:true`, cc-backlog reclaim): that record is written by a SessionStart hook, not by the
+  # model deciding anything, so it is not evidence that identified work was enqueued. A /compact or
+  # resume mid-turn re-fires SessionStart, and counting its re-key would discharge this obligation
+  # with a record the model never authored — the one way to satisfy the guard without doing the thing.
   if [ -f "$BLG_FILE" ]; then
-    jq -e --arg t "$since" 'select(((.ts // "")[0:19]) >= $t)' "$BLG_FILE" >/dev/null 2>&1 && return 0
+    jq -e --arg t "$since" 'select(((.ts // "")[0:19]) >= $t and (.reclaim // false) != true)' \
+      "$BLG_FILE" >/dev/null 2>&1 && return 0
   fi
   # (2) cc-registry row — a pane was actually fired (mtime ≥ turn-start).
   since_ep="$(iso_epoch "$since")"

@@ -888,3 +888,191 @@ status_of() { bash "$CB" list --all --json | jq -r --arg i "$1" '.[]|select(.id=
   PATH="$BATS_TEST_TMPDIR/stub:$PATH" run bash "$CB" list --open
   printf '%s' "$output" | grep -q 'record scan INCOMPLETE'
 }
+
+# ── WORKER-KEYED CLAIMS (`reclaim`) — backlog a13fb1d41044 ───────────────────────────────────────
+# cc-dispatch claims `--by <host>-$$` (its own pid) and exits, so past the stale gate `claimer_live`
+# is false BY CONSTRUCTION for every dispatched item and Rule A degrades to an age-only verdict: a
+# live 91-minute worker gets reopened → a second peer onto live work. `reclaim` re-keys the claim to
+# the worker's own durable pid, which lives exactly as long as the work.
+#
+# Every case below pins CC_BACKLOG_WT_ROOT at an EMPTY dir (reap_env), so `owned_wait` cannot absolve
+# anything — the verdict turns on the claim identity alone. The first two tests are each other's
+# controls: identical trail, identical clock, opposite verdicts, with the re-key as the only delta.
+
+@test "reclaim: a V1 dispatcher-pid claim is reopened as dead — the RED control for worker-keying" {
+  reap_env
+  rec '{"id":"v1claim0aa01","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"V1"}'
+  rec "{\"id\":\"v1claim0aa01\",\"ts\":\"2026-01-01T00:00:00Z\",\"event\":\"claim\",\"by\":\"$HOST-2147483647\"}"
+  run bash "$CB" reap
+  [ "$status" -eq 0 ]
+  [ "$(status_of v1claim0aa01)" = open ]               # dispatcher pid dead ⇒ live work reopened
+}
+
+@test "reclaim: the SAME trail re-keyed to a live worker pid is KEPT (the whole point)" {
+  reap_env
+  rec '{"id":"v2claim0aa02","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"V2"}'
+  rec "{\"id\":\"v2claim0aa02\",\"ts\":\"2026-01-01T00:00:00Z\",\"event\":\"claim\",\"by\":\"$HOST-2147483647\"}"
+  run bash "$CB" reclaim v2claim0aa02 --by "$HOST-$$"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q 'verdict=reclaimed'
+  run bash "$CB" reap
+  [ "$status" -eq 0 ]
+  [ "$(status_of v2claim0aa02)" = claimed ]            # kill -0 on the WORKER's pid succeeds
+}
+
+@test "reclaim: the record is event=claim + reclaim:true, and the fold advances \`by\` to the worker" {
+  # The fold must NOT need to learn a new state (memory: named-failure-vs-no-verdict) — status stays
+  # "claimed" and only the owner changes. The marker exists solely for the two counters below.
+  id=$(bash "$CB" add --project /r --title T --source S)
+  bash "$CB" claim "$id" --by "host-999" >/dev/null
+  bash "$CB" reclaim "$id" --by "worker-1" >/dev/null
+  run tail -1 "$CC_BACKLOG_FILE"
+  printf '%s' "$output" | jq -e '.event == "claim" and .reclaim == true and .by == "worker-1"'
+  [ "$(status_of "$id")" = claimed ]
+  bash "$CB" list --all --json | jq -e --arg i "$id" '.[]|select(.id==$i)|.by == "worker-1"'
+}
+
+@test "reclaim: IDEMPOTENT — re-keying to the identity that already holds it writes NOTHING" {
+  # SessionStart fires again on resume and /compact. Without this, each fire would append a record and
+  # RESET claimAgeS, letting one session's restarts hold the stale gate open indefinitely.
+  id=$(bash "$CB" add --project /r --title T --source S)
+  bash "$CB" claim "$id" --by "host-999" >/dev/null
+  bash "$CB" reclaim "$id" --by "worker-1" >/dev/null
+  n=$(wc -l < "$CC_BACKLOG_FILE" | tr -d ' ')
+  run bash "$CB" reclaim "$id" --by "worker-1"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q 'verdict=noop-already-ours'
+  [ "$(wc -l < "$CC_BACKLOG_FILE" | tr -d ' ')" -eq "$n" ]
+}
+
+@test "reclaim: refuses to STEAL a provably-live claim (two live claimants is the failure, not the fix)" {
+  reap_env                                             # gives us the empty-registry oracle + $HOST
+  id=$(bash "$CB" add --project /r --title T --source S)
+  bash "$CB" claim "$id" --by "$HOST-$$" >/dev/null     # incumbent: alive
+  run bash "$CB" reclaim "$id" --by "$HOST-2147483647"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q 'verdict=noop-live-claimer'
+  bash "$CB" list --all --json | jq -e --arg i "$id" --arg b "$HOST-$$" '.[]|select(.id==$i)|.by == $b'
+}
+
+@test "reclaim: only a CLAIMED item is re-keyed — open/done/blocked are no-ops, never a resurrection" {
+  id=$(bash "$CB" add --project /r --title T --source S)
+  run bash "$CB" reclaim "$id" --by "worker-1"          # status open — the dispatcher's to hand out
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q 'verdict=noop-status'
+  [ "$(status_of "$id")" = open ]
+  bash "$CB" claim "$id" --by h-1 >/dev/null
+  bash "$CB" done "$id" --evidence commit:abc >/dev/null
+  run bash "$CB" reclaim "$id" --by "worker-1"          # terminal — a hook must never re-open it
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q 'verdict=noop-status'
+  [ "$(status_of "$id")" = done ]
+}
+
+@test "reclaim: an unknown id is verdict=unknown-id at rc 3 (a wt-<hex> dir that is not an item)" {
+  run bash "$CB" reclaim ffffffffffff --by worker-1
+  [ "$status" -eq 3 ]
+  printf '%s' "$output" | grep -q 'verdict=unknown-id'
+  refute_in_file 'reclaim' "$CC_BACKLOG_FILE"
+}
+
+@test "reclaim: --by is required (an unattributed re-key is worse than none)" {
+  id=$(bash "$CB" add --project /r --title T --source S)
+  bash "$CB" claim "$id" --by h-1 >/dev/null
+  run bash "$CB" reclaim "$id"
+  [ "$status" -eq 2 ]
+  # Name the missing flag: rc 2 alone also matches "unknown verb", so asserting only the code passes
+  # vacuously against a build with no `reclaim` verb at all.
+  printf '%s' "$output" | grep -q -- '--by <worker-identity> is required'
+  [ "$(status_of "$id")" = claimed ]
+}
+
+@test "reap: a re-key does NOT count as a dispatch attempt (MAX_ATTEMPTS bound must fit what it bounds)" {
+  # Two real dispatch attempts + a re-key each = 4 claim records but only 2 attempts. Counting the
+  # re-keys would put this at MAX_ATTEMPTS(3) and BLOCK work that has two attempts left.
+  reap_env
+  rec '{"id":"attempt0bb01","ts":"2025-12-31T22:00:00Z","event":"add","project":"/r","title":"A"}'
+  rec '{"id":"attempt0bb01","ts":"2025-12-31T22:10:00Z","event":"claim","by":"h-1"}'
+  rec '{"id":"attempt0bb01","ts":"2025-12-31T22:12:00Z","event":"claim","by":"w-1","reclaim":true}'
+  rec '{"id":"attempt0bb01","ts":"2025-12-31T22:40:00Z","event":"reopen","by":"cc-backlog-reap"}'
+  rec '{"id":"attempt0bb01","ts":"2026-01-01T00:00:00Z","event":"claim","by":"h-2"}'
+  rec "{\"id\":\"attempt0bb01\",\"ts\":\"2026-01-01T00:00:00Z\",\"event\":\"claim\",\"by\":\"$HOST-2147483647\",\"reclaim\":true}"
+  run bash "$CB" reap
+  [ "$status" -eq 0 ]
+  [ "$(status_of attempt0bb01)" = open ]               # REOPENED (2 attempts), not blocked
+  printf '%s' "$output" | grep -q 'REOPEN attempt0bb01'
+}
+
+@test "reap: thrash detection survives the re-key (the fast cycle is now reclaim→reopen)" {
+  # A re-key sits between the dispatch claim and the reopen, so the adjacent pair reap counts becomes
+  # reclaim→reopen. The signature must still be seen, or worker-keying would blind the thrash blocker.
+  reap_env
+  rec '{"id":"thrashre0cc1","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"T"}'
+  rec '{"id":"thrashre0cc1","ts":"2026-01-01T00:00:10Z","event":"claim","by":"h-1"}'
+  rec '{"id":"thrashre0cc1","ts":"2026-01-01T00:00:12Z","event":"claim","by":"w-1","reclaim":true}'
+  rec '{"id":"thrashre0cc1","ts":"2026-01-01T00:00:16Z","event":"reopen"}'      # cycle 1 (4s)
+  rec '{"id":"thrashre0cc1","ts":"2026-01-01T00:00:30Z","event":"claim","by":"h-2"}'
+  rec '{"id":"thrashre0cc1","ts":"2026-01-01T00:00:32Z","event":"claim","by":"w-2","reclaim":true}'
+  rec '{"id":"thrashre0cc1","ts":"2026-01-01T00:00:36Z","event":"reopen"}'      # cycle 2 (4s)
+  run bash "$CB" reap
+  [ "$status" -eq 0 ]
+  [ "$(status_of thrashre0cc1)" = blocked ]
+  bash "$CB" list --all --json | jq -e --arg i thrashre0cc1 '.[]|select(.id==$i)|.needs|test("persistent thrash")'
+}
+
+@test "reap: a LIVE claimer past LIVE_CLAIM_MAX_S is a WEDGED WORKER — blocked, never reopened" {
+  # The lifecycle guard that ships WITH the universalization (memory: universalizing-a-mechanism-
+  # promotes-its-latent-leak). Before worker-keying, "claimer LIVE ⇒ keep" was ~unreachable for
+  # dispatched items and needed no ceiling; it is now the normal path, so a pane that came up and
+  # never engaged would pin its item forever. It must BLOCK — not reopen: the worker is alive.
+  reap_env
+  export CC_BACKLOG_LIVE_CLAIM_MAX_S=60                # the 7200s claim is far past it
+  rec '{"id":"wedgeliv0dd1","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"W"}'
+  rec "{\"id\":\"wedgeliv0dd1\",\"ts\":\"2026-01-01T00:00:00Z\",\"event\":\"claim\",\"by\":\"$HOST-$$\"}"
+  run bash "$CB" reap
+  [ "$status" -eq 0 ]
+  [ "$(status_of wedgeliv0dd1)" = blocked ]
+  bash "$CB" list --all --json | jq -e --arg i wedgeliv0dd1 '.[]|select(.id==$i)|.needs|test("wedged live worker")'
+  bash "$CB" list --all --json | jq -e --arg i wedgeliv0dd1 '.[]|select(.id==$i)|.needs|test("NOT reopened")'
+}
+
+@test "reap: a LIVE claimer BELOW the ceiling is still kept (the ceiling must not become an off switch)" {
+  reap_env                                             # LIVE_CLAIM_MAX_S defaults to OWNED_WAIT_MAX_S (21600)
+  rec '{"id":"liveok00dd2","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"L"}'
+  rec "{\"id\":\"liveok00dd2\",\"ts\":\"2026-01-01T00:00:00Z\",\"event\":\"claim\",\"by\":\"$HOST-$$\"}"
+  run bash "$CB" reap
+  [ "$status" -eq 0 ]
+  [ "$(status_of liveok00dd2)" = claimed ]
+}
+
+@test "claimer_live: a claim keyed on the registry's REAL session_id key resolves LIVE" {
+  # RED-proved 2026-07-29 against this repo's own live registry: the predicate read `.sessionId`
+  # while session-register.sh writes `session_id`, so a session-id-keyed claim resolved to
+  # answered-and-absent = rc 1 = PROVEN NOT-LIVE — a false DEATH on a live session, and rc 1 is the
+  # one verdict Rule A may reopen on. It survived because the only test of the registry branch
+  # stubbed a fixture emitting `paneUUID` (memory: fixture-shape-parity-with-real-producer), so this
+  # fixture mirrors the real producer's emission field-for-field.
+  reap_env
+  printf '#!/bin/bash\ncat <<'\''J'\''\n[{"paneUUID":"PANE-1","name":"wt-x-PANE","cwd":"/w","account":"claude","pid":1,"startedAt":1,"session_id":"4f905f43-455e-4051-b1e5-708db91c633c"}]\nJ\n' \
+    > "$BATS_TEST_TMPDIR/realsess"
+  chmod +x "$BATS_TEST_TMPDIR/realsess"; export CC_BACKLOG_SESSIONS_BIN="$BATS_TEST_TMPDIR/realsess"
+  rec '{"id":"sesskey0ee01","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"S"}'
+  rec '{"id":"sesskey0ee01","ts":"2026-01-01T00:00:00Z","event":"claim","by":"4f905f43-455e-4051-b1e5-708db91c633c"}'
+  run bash "$CB" reap
+  [ "$status" -eq 0 ]
+  [ "$(status_of sesskey0ee01)" = claimed ]            # pre-fix: reopened as a "dead worker"
+}
+
+@test "claimer_live: a session_id ABSENT from the registry is still a real NOT-LIVE verdict (control)" {
+  # The paired positive control: forgiving both spellings must not make the oracle always-alive, or
+  # every genuinely dead session-keyed worker would strand.
+  reap_env
+  printf '#!/bin/bash\ncat <<'\''J'\''\n[{"paneUUID":"PANE-1","name":"wt-x-PANE","session_id":"aaaaaaaa-0000-0000-0000-000000000000"}]\nJ\n' \
+    > "$BATS_TEST_TMPDIR/realsess"
+  chmod +x "$BATS_TEST_TMPDIR/realsess"; export CC_BACKLOG_SESSIONS_BIN="$BATS_TEST_TMPDIR/realsess"
+  rec '{"id":"sessgone0ee2","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"S"}'
+  rec '{"id":"sessgone0ee2","ts":"2026-01-01T00:00:00Z","event":"claim","by":"bbbbbbbb-0000-0000-0000-000000000000"}'
+  run bash "$CB" reap
+  [ "$status" -eq 0 ]
+  [ "$(status_of sessgone0ee2)" = open ]
+}
