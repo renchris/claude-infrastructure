@@ -600,3 +600,51 @@ An event passes only if a viewer can answer all three of *why did it appear*, *w
 colour schemes**, since a reader gets whichever one their OS is set to and never sees the other.
 **And it must be placed where a reader will actually meet it** — before t≈30 s, or it is not a rare
 event, only a late one.
+
+---
+
+## IMPLEMENTED — the recommended three (2026-07-29, pool-2). Implementer's note to the spec owner.
+
+The recommended set is built on `feat/banner-showoff`. Verification and the full findings are in
+`README_HERO_BANNER.md` § v7 (S17-S21); this section records only what the *spec* should know,
+because two of its own rulings turn out to be incomplete rather than wrong.
+
+| Beat | Window | As specified? |
+|---|---|---|
+| THE REFUSAL | 3.0-8.0 s | Yes. Post arrives with the ground, bar drops across the path, world pulls back exactly one print pitch, creature re-steps into the print it already made. |
+| THE ASK | 13.0-22.0 s | Yes, plus a forced tail. 6 s of dead world, ears up, gaze parked front — then 3 s at treble, which the loop demands (below). |
+| THE OVERLAP | 36.0-44.25 s | Yes. 12 extra prints at the half-pitch; the foot lands on every second print; exits by re-registration. |
+
+**§ Enforcement's rule "every rate modulation spanning an exact multiple of the 0.5 s stride" is
+necessary but NOT sufficient.** It does not cover *repayment*, and repayment is not optional:
+
+1. Every scrolling layer must travel a whole number of its own wrap distances per master period or
+   the loop seams, so a permanent world-time deficit would have to be a common multiple of every
+   layer's period — and the slowest layer's period **is** P. **Every stop and rewind must be repaid
+   inside the loop, above nominal rate.** THE ASK's 6 s cessation is therefore inseparable from a
+   catch-up; it cannot be specified without one.
+2. The repayment rate must be an **integer** multiple of nominal, because the print lock requires a
+   whole number of pitches per stride. So the world's entire rate vocabulary is `{−1, 0, 1, 2, 3}` and
+   **there is no gentle catch-up.** 6 s of stillness costs either 6 s at 2× or 3 s at 3×.
+
+Both are now build-time assertions, so a future re-timing cannot quietly violate them. The
+consequence for the spec: a beat that stops or reverses the world must budget its repayment as part
+of its own declared window, or the duty budget is measuring a fiction.
+
+**§ "at most one feature on canvas" needed a spatial form, not a temporal one.** A beat riding the
+scrolling strip is on canvas for `(1920 + width) / 96` ≈ 20-26 s however brief its declared window is,
+so THE REFUSAL and THE OVERLAP can be a comfortable 4 s apart in the event table and still put two
+objects on screen together for twenty seconds. Their spacing is set by geometry, and
+`assert_one_strip_feature` sweeps the real world clock to check it — the clock matters because THE
+ASK's stop compresses the wall-clock gap between two strip features without changing either's window.
+
+**One deliberate addition, for legibility rather than story:** THE REFUSAL's post is still on canvas
+through THE ASK. That is not leftover scenery. A stopped strip of *uniform* ground texture is
+ambiguous — nothing in it says whether it is moving — so one distinct object standing dead still is
+what makes the next beat's cessation readable at all. It does nothing during it; it just holds.
+
+**Open for the spec owner, unchanged by this session:** the visitor beats (`peek`/`peer`/`rCheer`) are
+**demoted to t≈48-57 s, not deleted.** The synthesis' co-presence reframe indicts them — a session is
+never co-present with its peers — but acting on it deletes v6b's entire identity, which is a spec
+ruling and not an implementation call. They keep their machinery; one line in `RARE_EVENTS` reverses
+the demotion, and removing them from `ALWAYS_EMITTED` completes the deletion.
