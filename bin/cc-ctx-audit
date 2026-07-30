@@ -1,0 +1,319 @@
+#!/usr/bin/env bash
+# cc-ctx-audit — the context-economy OUTCOME READER (row 8 / CONTEXT_ECONOMY_V2.md §4.1).
+#
+# WHY THIS EXISTS. The context-economy subsystem had 32,075 IDL records describing its own
+# EVALUATIONS and zero describing whether a session was ever saved or lost. Both real outcomes —
+# a recycle, and hitting the wall — are already written to disk by the harness itself, in the
+# session transcript, and NOTHING in this repo has ever read them (measured: 0 readers of
+# `compact_boundary`, 0 of `isCompactSummary`; positive control `used_pct` = 18 readers).
+# This is that reader. It is RETROSPECTIVE by construction, so it answers over the whole recorded
+# history the moment it lands, rather than accruing forward like a decision-time instrument.
+#
+# THE FINDING THAT SHAPED IT (V2 §1.1). Fill % = input_tokens / window. The NUMERATOR is durable
+# (every transcript carries message.usage.*). The DENOMINATOR IS DISCARDED — the context window
+# appears only in the ephemeral statusline telemetry (/tmp/cc-telemetry/<sid>.json), measured at
+# 74 files for 4,890 transcripts = 1.5% coverage — and the SAME model runs at both 1,000,000 and
+# 200,000, so it cannot be imputed from the model id either. Therefore:
+#
+#   *** A SESSION WITH NO RECOVERABLE WINDOW REPORTS null AND IS EXCLUDED FROM THE p95. ***
+#
+# It is never imputed, never defaulted to 1M, never folded in as 0. Imputing it is precisely the
+# error this row committed in its own Phase 1 (3 constants withdrawn: a hardcoded 1M denominator
+# turned an 85.3%-of-200K kill into a phantom "17.1% low-fill kill" and nearly bought a mechanism
+# with no failure to answer). Invariant R5: a record must carry its own units.
+#
+# EXIT CONTRACT (R8; and memory named-failure-vs-no-verdict — a non-verdict is a THIRD state,
+# never a red, and every consumer of this code must be taught the difference):
+#   0  a verdict was produced
+#   2  usage error
+#   3  NO DATA / no recoverable denominator in the window — explicitly NOT a failure of the fleet
+#      and NOT a red. A caller that collapses 3 into "bad" reproduces the exact defect that made
+#      postland-verify auto-revert on a check whose own grep had died.
+#
+# Kill switch: CC_CTX_AUDIT=off ⇒ exit 0, silent (R3 — every mechanism ships one, never
+# revert-as-plan).
+#
+# Env seams (tests): CC_CTX_AUDIT · CC_CTX_ROOTS · CC_CTX_TELEMETRY_DIR · CC_CTX_EVENTS
+#
+# bash 3.2 (macOS /bin/bash) — no associative arrays, no `case` inside $( ) (silent death:
+# memory bash32-case-in-substitution-zsh-repro-trap).
+
+set -u
+
+[ "${CC_CTX_AUDIT:-on}" = off ] && exit 0
+
+PROG="${0##*/}"
+TELEMETRY_DIR="${CC_CTX_TELEMETRY_DIR:-/tmp/cc-telemetry}"
+EVENTS="${CC_CTX_EVENTS:-$HOME/.claude/autonomy/recycle-events.jsonl}"
+
+# The three REAL transcript roots. ~/.claude-next/projects is a SYMLINK to ~/.claude/projects, so
+# a naive glob double-counts every session in it (memory token-usage-from-transcripts). The list is
+# deduped by realpath below regardless, but naming only real roots keeps the scan cheap.
+DEFAULT_ROOTS="$HOME/.claude/projects
+$HOME/.claude-tertiary/projects
+$HOME/.claude-quaternary/projects"
+
+usage() {
+  cat >&2 <<EOF
+$PROG — context-economy outcome reader (row 8)
+
+  $PROG --wall-hits            [--since <W>] [--json]   sessions killed by a hard context refusal
+  $PROG --compactions          [--since <W>] [--json]   compaction events BY LITERAL TRIGGER
+  $PROG --p95-recycle-fill     [--since <W>] [--json]   p95 fill, + the excluded-no-denominator count
+  $PROG --summary              [--since <W>] [--json]   all three
+  $PROG --sessions             [--since <W>]            per-session rows (peak tokens, window, fill)
+
+  <W> = all (default) | <N>d | <N>h | YYYY-MM-DD
+
+Exit: 0 verdict · 2 usage · 3 no data / no recoverable denominator (a NON-VERDICT, not a red).
+Kill switch: CC_CTX_AUDIT=off
+EOF
+}
+
+MODE=""; SINCE="all"; JSON=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --wall-hits)        MODE=wall ;;
+    --compactions)      MODE=compact ;;
+    --p95-recycle-fill) MODE=p95 ;;
+    --summary)          MODE=summary ;;
+    --sessions)         MODE=sessions ;;
+    --since)            shift; SINCE="${1:-all}" ;;
+    --json)             JSON=1 ;;
+    -h|--help)          usage; exit 2 ;;
+    *) printf '%s: unknown argument: %s\n' "$PROG" "$1" >&2; usage; exit 2 ;;
+  esac
+  shift
+done
+[ -n "$MODE" ] || { usage; exit 2; }
+
+command -v jq >/dev/null 2>&1 || { printf '%s: jq is required\n' "$PROG" >&2; exit 3; }
+
+# ── since → an ISO-8601 lower bound (string compare against .timestamp, which is ISO in every
+#    transcript record). "all" ⇒ the empty string, which every ISO timestamp sorts above.
+iso_floor() {
+  local w="$1"
+  if [ "$w" = all ]; then printf ''; return 0; fi
+  case "$w" in
+    *d) date -u -v-"${w%d}"d +%Y-%m-%dT%H:%M:%SZ 2>/dev/null && return 0 ;;
+    *h) date -u -v-"${w%h}"H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null && return 0 ;;
+    [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) printf '%sT00:00:00Z' "$w"; return 0 ;;
+  esac
+  # GNU date fallback, then give up honestly rather than silently widening to "all"
+  case "$w" in
+    *d) date -u -d "${w%d} days ago" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null && return 0 ;;
+    *h) date -u -d "${w%h} hours ago" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null && return 0 ;;
+  esac
+  printf '%s: unparseable --since: %s\n' "$PROG" "$w" >&2
+  return 1
+}
+FLOOR="$(iso_floor "$SINCE")" || exit 2
+
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/ccctx.XXXXXX")" || exit 3
+# Inline, not a named cleanup() — shellcheck SC2329 does not recognise `trap <fn>` as an invocation
+# and the repo's gate runs at INFO severity, so a named helper here is a hard RED. Single-quoted so
+# $TMP expands at trap time, not at definition time.
+trap 'rm -rf "$TMP" 2>/dev/null || true' EXIT HUP INT TERM
+
+# ── the transcript population, deduped by realpath ────────────────────────────────────────────
+ROOTS="${CC_CTX_ROOTS:-$DEFAULT_ROOTS}"
+: > "$TMP/tx.raw"
+printf '%s\n' "$ROOTS" | while IFS= read -r d; do
+  [ -n "$d" ] || continue
+  [ -d "$d" ] || continue
+  find "$d" -name '*.jsonl' -type f 2>/dev/null
+done >> "$TMP/tx.raw"
+# realpath-dedupe: a symlinked root would otherwise contribute every file twice
+while IFS= read -r f; do
+  [ -n "$f" ] || continue
+  rp="$(cd "$(dirname "$f")" 2>/dev/null && printf '%s/%s' "$(pwd -P)" "$(basename "$f")")" || rp="$f"
+  printf '%s\n' "$rp"
+done < "$TMP/tx.raw" | sort -u > "$TMP/tx"
+TX_N="$(wc -l < "$TMP/tx" | tr -d ' ')"
+
+# grep -l over a large list must go through xargs (ARG_MAX), and -l must not abort on a binary or
+# unreadable file. Emits the subset of $TMP/tx whose BYTES contain $1 — a cheap prefilter so the
+# ~99% of transcripts with no such record are never handed to jq.
+prefilter() { # $1=literal
+  [ -s "$TMP/tx" ] || { : > "$TMP/hit"; return 0; }
+  tr '\n' '\0' < "$TMP/tx" | xargs -0 grep -l -e "$1" 2>/dev/null | sort -u > "$TMP/hit" || true
+  return 0
+}
+
+# ── wall hits ─────────────────────────────────────────────────────────────────────────────────
+# A wall hit is an assistant message whose ENTIRE normalised text equals the API's refusal string.
+# NEVER a substring: a loose grep matched 18 transcripts where only 7 sessions had actually hit it
+# — the difference being prose ABOUT the error, including this row's own analysis of it (memory
+# detector-matching-its-own-skill-description: a detector must not match its own text).
+collect_wall() {
+  prefilter 'Prompt is too long'
+  : > "$TMP/wall.jsonl"
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    jq -c --arg f "$f" --arg floor "$FLOOR" '
+      select(.type=="assistant")
+      | select((.timestamp // "") >= $floor)
+      | (.message.content) as $c
+      | (if ($c|type)=="string" then $c
+         elif ($c|type)=="array" then ([$c[]?|select(.type?=="text")|.text]|join(""))
+         else "" end) as $t
+      | select(($t|ascii_downcase|gsub("^\\s+|\\s+$";"")) == "prompt is too long")
+      | {sid:.sessionId, ts:.timestamp, cwd:.cwd, file:$f}
+    ' "$f" 2>/dev/null
+  done < "$TMP/hit" >> "$TMP/wall.jsonl"
+}
+
+# ── compactions, classified by the trigger the producer LITERALLY emitted ──────────────────────
+# Never inferred from a shape and never folded: an unrecognised trigger is reported AS ITSELF, so a
+# future "auto" appears the day it first happens instead of being absorbed into "manual" (R6).
+collect_compact() {
+  prefilter 'compact_boundary'
+  : > "$TMP/compact.jsonl"
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    jq -c --arg f "$f" --arg floor "$FLOOR" '
+      select(.subtype=="compact_boundary")
+      | select((.timestamp // "") >= $floor)
+      | {sid:.sessionId, ts:.timestamp,
+         trigger:(.compactMetadata.trigger // "unrecorded"),
+         preTokens:(.compactMetadata.preTokens // null),
+         postTokens:(.compactMetadata.postTokens // null), file:$f}
+    ' "$f" 2>/dev/null
+  done < "$TMP/hit" >> "$TMP/compact.jsonl"
+}
+
+# ── the denominator index: sid → window ───────────────────────────────────────────────────────
+# TWO sources, both the producer's LITERAL emission (R6), never a constant:
+#   1. live statusline telemetry .window   (ephemeral; ~1.5% coverage)
+#   2. recycle-events.jsonl .window        (M-3; durable, grows from zero as recycles are stamped)
+# A sid absent from both has NO denominator. That is reported, not guessed.
+build_denoms() {
+  : > "$TMP/denom"
+  if [ -d "$TELEMETRY_DIR" ]; then
+    for t in "$TELEMETRY_DIR"/*.json; do
+      [ -f "$t" ] || continue
+      jq -r 'select((.session_id//"")!="" and (.window//null)!=null) | "\(.session_id) \(.window)"' \
+        "$t" 2>/dev/null
+    done >> "$TMP/denom"
+  fi
+  if [ -f "$EVENTS" ]; then
+    jq -r 'select((.sid//"")!="" and (.window//null)!=null) | "\(.sid) \(.window)"' \
+      "$EVENTS" 2>/dev/null >> "$TMP/denom"
+  fi
+  sort -u "$TMP/denom" 2>/dev/null -o "$TMP/denom" || true
+}
+
+# ── per-session peak input tokens (the NUMERATOR — always available) ──────────────────────────
+# Peak of (input + cache_read + cache_creation): the cache-read term is the bulk of a warm
+# context's occupancy, so summing only .input_tokens understates a long session by an order of
+# magnitude.
+collect_peaks() { # only for sids that HAVE a denominator — the p95's population
+  : > "$TMP/peaks"
+  [ -s "$TMP/denom" ] || return 0
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    sid="${f##*/}"; sid="${sid%.jsonl}"
+    grep -q "^$sid " "$TMP/denom" 2>/dev/null || continue
+    win="$(grep -m1 "^$sid " "$TMP/denom" 2>/dev/null | awk '{print $2}')"
+    [ -n "$win" ] || continue
+    peak="$(jq -rs --arg floor "$FLOOR" '
+        [ .[]? | select((.timestamp // "") >= $floor) | .message?.usage?
+          | select(. != null)
+          | ((.input_tokens//0)+(.cache_read_input_tokens//0)+(.cache_creation_input_tokens//0)) ]
+        | if length==0 then empty else max end' "$f" 2>/dev/null)"
+    case "$peak" in ''|*[!0-9]*) continue ;; esac
+    [ "$win" -gt 0 ] 2>/dev/null || continue
+    printf '%s %s %s\n' "$sid" "$peak" "$win" >> "$TMP/peaks"
+  done < "$TMP/tx"
+}
+
+# ── reporters ─────────────────────────────────────────────────────────────────────────────────
+rep_wall() {
+  local ev sess
+  ev="$(wc -l < "$TMP/wall.jsonl" | tr -d ' ')"
+  sess="$(jq -r .sid "$TMP/wall.jsonl" 2>/dev/null | sort -u | grep -c . || true)"
+  if [ "$JSON" = 1 ]; then
+    jq -cn --argjson e "${ev:-0}" --argjson s "${sess:-0}" --arg since "$SINCE" \
+      '{metric:"wall_hits",since:$since,events:$e,sessions:$s}'
+  else
+    printf 'wall hits (hard context refusal)   since=%s : %s event(s) in %s session(s)\n' \
+      "$SINCE" "${ev:-0}" "${sess:-0}"
+    [ "${ev:-0}" -gt 0 ] && jq -r '"    \(.sid[0:8])  \(.ts)  \(.cwd // "-")"' "$TMP/wall.jsonl" \
+      2>/dev/null | sort -u -k2 | head -20
+  fi
+}
+
+rep_compact() {
+  local tot
+  tot="$(wc -l < "$TMP/compact.jsonl" | tr -d ' ')"
+  if [ "$JSON" = 1 ]; then
+    jq -sc --arg since "$SINCE" '{metric:"compactions",since:$since,total:length,
+        by_trigger:(group_by(.trigger)|map({key:.[0].trigger,value:length})|from_entries)}' \
+      "$TMP/compact.jsonl" 2>/dev/null
+  else
+    printf 'compactions (by LITERAL trigger)   since=%s : %s event(s)\n' "$SINCE" "${tot:-0}"
+    if [ "${tot:-0}" -gt 0 ]; then
+      jq -r .trigger "$TMP/compact.jsonl" 2>/dev/null | sort | uniq -c | sort -rn \
+        | while read -r n t; do printf '    %-12s %s\n' "$t" "$n"; done
+    fi
+  fi
+}
+
+rep_p95() {
+  local n excl p95 p50
+  n="$(wc -l < "$TMP/peaks" 2>/dev/null | tr -d ' ')"; n="${n:-0}"
+  excl=$(( TX_N - n ))
+  if [ "$n" -eq 0 ]; then
+    if [ "$JSON" = 1 ]; then
+      jq -cn --arg since "$SINCE" --argjson excl "$excl" --argjson tx "$TX_N" \
+        '{metric:"p95_recycle_fill",since:$since,p95_pct:null,n:0,
+          excluded_no_denominator:$excl,transcripts:$tx,
+          verdict:"NO-DENOMINATOR (non-verdict, not a red)"}'
+    else
+      printf 'p95 fill                           since=%s : NO DENOMINATOR RECOVERABLE\n' "$SINCE"
+      printf '    n=0 of %s transcripts — %s excluded (window not recorded anywhere durable).\n' \
+        "$TX_N" "$excl"
+      printf '    This is a NON-VERDICT (exit 3), not a fleet failure. See CONTEXT_ECONOMY_V2 §1.1.\n'
+    fi
+    return 3
+  fi
+  read -r p50 p95 <<EOF
+$(awk '{printf "%.4f\n", ($2/$3)*100}' "$TMP/peaks" | sort -n | awk '
+  {a[NR]=$1} END{ i50=int(NR*0.50); if(i50<1)i50=1; i95=int(NR*0.95); if(i95<1)i95=1;
+                  printf "%.1f %.1f", a[i50], a[i95] }')
+EOF
+  if [ "$JSON" = 1 ]; then
+    jq -cn --arg since "$SINCE" --argjson p95 "${p95:-0}" --argjson p50 "${p50:-0}" \
+      --argjson n "$n" --argjson excl "$excl" --argjson tx "$TX_N" \
+      '{metric:"p95_recycle_fill",since:$since,p95_pct:$p95,p50_pct:$p50,n:$n,
+        excluded_no_denominator:$excl,transcripts:$tx}'
+  else
+    printf 'p95 fill                           since=%s : p95=%s%% (p50=%s%%) over n=%s\n' \
+      "$SINCE" "${p95:-?}" "${p50:-?}" "$n"
+    printf '    EXCLUDED for no recoverable denominator: %s of %s transcripts.\n' "$excl" "$TX_N"
+  fi
+  return 0
+}
+
+rep_sessions() {
+  [ -s "$TMP/peaks" ] || { printf 'no session has a recoverable denominator (n=0 of %s)\n' "$TX_N"; return 3; }
+  printf '%-38s %10s %10s %7s\n' SID PEAK_TOK WINDOW FILL%
+  awk '{printf "%-38s %10d %10d %6.1f\n", $1, $2, $3, ($2/$3)*100}' "$TMP/peaks" | sort -k4 -rn
+  return 0
+}
+
+# ── dispatch ──────────────────────────────────────────────────────────────────────────────────
+[ "$TX_N" -gt 0 ] || { printf '%s: no transcripts found under the configured roots\n' "$PROG" >&2; exit 3; }
+RC=0
+case "$MODE" in
+  wall)     collect_wall; rep_wall ;;
+  compact)  collect_compact; rep_compact ;;
+  p95)      build_denoms; collect_peaks; rep_p95 || RC=$? ;;
+  sessions) build_denoms; collect_peaks; rep_sessions || RC=$? ;;
+  summary)
+    collect_wall;    rep_wall
+    collect_compact; rep_compact
+    build_denoms; collect_peaks; rep_p95 || RC=$?
+    ;;
+esac
+exit "$RC"
