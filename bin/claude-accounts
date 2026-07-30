@@ -918,6 +918,28 @@ def _prev_snapshot(cfg):
         return None
 
 
+class FreshLockWedged(Exception):
+    """The --fresh single-flight lock could not be taken within its wall-clock budget.
+
+    Raised instead of returning False because the two outcomes are NOT interchangeable: False
+    means "serve a grace-TTL cache", which is precisely what --fresh may never do. A distinct
+    type makes it impossible to fall into the degrade path by accident."""
+
+
+def _fresh_lock_wait_s(cfg):
+    """Wall-clock budget for the --fresh path. Deliberately generous: a LEGITIMATE holder can own
+    this for minutes (4 accounts x keychain read + a 90s heal subprocess + two fetch_usage retry
+    ladders), and a bound shorter than a lawful hold would turn a healthy sweep into a failure —
+    the exoneration-bound lesson: a bound under what it bounds can only convict."""
+    env = os.environ.get("CC_ACCOUNTS_FRESH_LOCK_WAIT_S")
+    if env:
+        try:
+            return float(env)
+        except ValueError:
+            pass
+    return cfg.get("fresh_lock_wait_s", 240)
+
+
 def _acquire_lock(lock, cfg, allow_degrade):
     """Take the single-flight lock. -> True when held; False only when allow_degrade is set
     and the wait budget expired (caller should then serve a grace-TTL cache).
@@ -926,10 +948,29 @@ def _acquire_lock(lock, cfg, allow_degrade):
     handoff-fire runs `--fresh --json` specifically to force a live sweep WITH in-process
     auto-heal before firing a wave, and then reads the resulting rows to decide the fleet is
     healthy. Handing it a 91-second-old cache would report "all accounts healthy (or
-    auto-healed)" when no heal had run at all, and the wave would fire at a stranded account."""
+    auto-healed)" when no heal had run at all, and the wave would fire at a stranded account.
+
+    THE --fresh WAIT IS BOUNDED (a15/D7). It used to be a bare blocking `flock(LOCK_EX)` with no
+    deadline at all. fcntl releases on holder DEATH, so a crashed holder is harmless — but an
+    ALIVE-but-wedged one (hung heal, network stall) is not: every concurrent --fresh caller blocks
+    forever, and handoff-fire runs `--fresh --json` before firing a wave, so the wave stalls
+    indefinitely with no diagnostic. Bounding it does not weaken the no-stale-data contract,
+    because expiry raises rather than degrading: the caller is told the sweep could not run, and
+    never handed cache dressed as fresh."""
     if not allow_degrade:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        return True
+        deadline = time.time() + _fresh_lock_wait_s(cfg)
+        while True:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return True
+            except BlockingIOError:
+                if time.time() >= deadline:
+                    raise FreshLockWedged(
+                        f"--fresh could not take the single-flight lock within "
+                        f"{_fresh_lock_wait_s(cfg):.0f}s: a live holder is wedged "
+                        f"(hung heal or network stall). NOT serving cache — --fresh must not be "
+                        f"satisfied by stale data.")
+                time.sleep(0.15)
     deadline = time.time() + cfg.get("lock_wait_s", 5)
     while True:
         try:
@@ -958,8 +999,22 @@ def get_data(cfg, fresh=False, no_heal=False):
                            grace_s=cfg.get("cache_grace_s", 600))
             if c:
                 return c["rows"], c["window"], True, c.get("prev")
-            # Nothing servable — the wait is the only correct option.
-            fcntl.flock(lock, fcntl.LOCK_EX)
+            # Nothing servable — waiting is the only correct option, but it is still BOUNDED
+            # (a15/D7). This was the second bare blocking flock: a caller with no cache at all sat
+            # here forever behind an alive-but-wedged holder. The budget is the same generous
+            # fresh-path one, and expiry raises the same distinct type rather than inventing a
+            # second failure mode.
+            deadline = time.time() + _fresh_lock_wait_s(cfg)
+            while True:
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.time() >= deadline:
+                        raise FreshLockWedged(
+                            f"no servable cache and the single-flight lock stayed held for "
+                            f"{_fresh_lock_wait_s(cfg):.0f}s: a live holder is wedged.")
+                    time.sleep(0.15)
         if not fresh:
             c = cache_read(cfg, want_heal=not no_heal)
             if c:
@@ -1600,6 +1655,11 @@ def main():
                               creds and creds.get("refreshTokenExpiresAt"))}, indent=2))
         return
 
+    # NOTE FOR EDITORS: the next line is an ANCHOR. tests/claude-accounts-core.bats patches this
+    # file's SOURCE by exact string match on it (to stub rows without a live sweep), so changing its
+    # text or its indentation silently turns that patch into a no-op and the test then exercises a
+    # different program than it claims to. That is why FreshLockWedged is handled at the __main__
+    # entry instead of wrapped around this call. Keep it byte-identical.
     rows, wj, cached, prev = get_data(cfg, fresh=fresh, no_heal=no_heal)
     mark_self(rows, cfg)                          # per-invocation: MUST be after the cache read
     refresh_login_countdown(rows)                 # ditto — a cached countdown is a stale one
@@ -1706,4 +1766,21 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # A wedged single-flight lock is REPORTED, never silently converted into stale rows, and never a
+    # bare traceback. It must be parseable as well as visible: handoff-fire reads `--fresh --json` to
+    # decide a wave is safe to fire, so it needs a machine-readable failure rather than — far worse —
+    # a plausible-looking table it would read as "fleet healthy". Exit 5 = io/lock, the convention the
+    # rest of the toolchain uses.
+    #
+    # Handled HERE rather than around the get_data call because that call site is a source-patch
+    # anchor for tests/claude-accounts-core.bats (see the note there); wrapping it re-indented the
+    # line and silently disabled that patch.
+    try:
+        main()
+    except FreshLockWedged as e:
+        if "--json" in sys.argv[1:]:
+            print(json.dumps({"error": "fresh_lock_wedged", "detail": str(e),
+                              "rows": [], "cached": False}, indent=2))
+        else:
+            print(f"claude-accounts: {e}", file=sys.stderr)
+        sys.exit(5)
