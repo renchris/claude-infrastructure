@@ -1,0 +1,35 @@
+# qos-batch.patterns — the batch-class table read by hooks/qos-rewrite.sh (§11.3 M7).
+#
+# FORMAT (one row per line):   <band><TAB><ERE>
+#   <band>  a taskpolicy(8) QoS clamp. ONLY `utility`, `background`, `maintenance` are accepted —
+#           measured 2026-07-30: taskpolicy exits 64 on anything else and DOES NOT RUN THE PROGRAM,
+#           so the hook allowlists these three and skips any other row rather than break a command.
+#   <ERE>   an extended regex matched against the WHOLE command with `grep -E`. First match wins.
+#   `#` comments and blank lines are ignored. The separator is a literal TAB, not spaces.
+#
+# A row only ever fires on a SINGLE SIMPLE command (no `;` `&` `|` `<` `>` `(` `)` backtick,
+# newline, or leading `VAR=value`); anything with structure is left alone by the hook. Adding a row
+# here is therefore the cheapest safe way to extend coverage — and DELETING a row is the per-pattern
+# kill switch (`CC_QOS_REWRITE=off` kills the whole hook).
+#
+# WHY THESE FOUR, day one — every one is a MEASURED consumer from the live axis (§11.2, 2026-07-29),
+# not a guess. Whole-box truth at the time: only 3.1% of CPU was demoted (21.7 of 700.3 at PRI≤4).
+#   pytest      `uv run pytest -m load` measured 0.67 cores at PRI 31 — full interactive priority,
+#               competing head-on with the operator's own panes.
+#   du          a recurring `du -sh` measured at PRI 46 — BOOSTED ABOVE the 31 default, i.e. the
+#               scheduler was actively favouring a disk-walk over interactive work.
+#   npm         `npm install` measured 15.6% CPU.
+#   shellcheck  measured at 458 MB RSS, run in bursts across the corpus.
+# bats is deliberately ABSENT: the hook's transform (a) rewrites any spelling of `bats` to cc-bats,
+# which self-demotes, so a row here would only double-wrap it.
+#
+# Band choice is `background` for all four, consistent with cc-bats (the shim whose PRI 31→4
+# transition is proven live). §11.7: if the pending gu13-levers evidence shows `utility` semantics
+# warrant a split, that lands as an edit to THIS FILE — never a code change.
+#
+# Each ERE is word-anchored with `(^|[[:space:]])…([[:space:]]|$)` so a substring in a path or a
+# filename cannot match (e.g. `cat notes-about-pytest.md` must not demote).
+background	(^|[[:space:]])(uv run +)?pytest([[:space:]]|$)
+background	(^|[[:space:]])shellcheck([[:space:]]|$)
+background	(^|[[:space:]])npm (install|ci)([[:space:]]|$)
+background	(^|[[:space:]])du -s
