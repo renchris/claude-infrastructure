@@ -9,7 +9,79 @@ overwrite history. Statuses: `OPEN` → `IN-PANEL <date>` → `CONFIRMED-BY-PANE
 
 ## Open
 
-_(none)_
+_(none — H-INERT-1 CONFIRMED-BY-PANEL 2026-07-30 and moved to `## Resolved`; its capture record is
+retained verbatim under `## Resolved` so the pre-panel framing is never rewritten.)_
+
+### H-INERT-1 · What GENERATES built-but-inert mechanisms? — CONFIRMED-BY-PANEL 2026-07-30 (3 Fable panelists, baseline-blind; lead session a78e659d) — RESOLVED, see verdict below
+- **Seam/axis**: the composition of four surfaces that each individually "work" —
+  land pipeline (`commands/ship.md`, `scripts/ship-land.sh`) × activation queue
+  (`~/.claude/autonomy/pending-activation/`, `docs/activation/`) × deploy layer (`~/.claude`
+  per-file symlinks into the checkout, `deploy-live`) × the permission/settings-wiring surface
+  (5 × `settings.json`). Joint invariant — *"a landed mechanism is a LIVE mechanism"* — exists
+  only in prose and has never been derivation-audited.
+- **Wall**: unswept-seam — 5 instances observed in ONE session (2026-07-29/30), in independent
+  subsystems, each previously "fixed" individually without the pattern being named:
+  `12-mailbox-posttool` (activation landed WITHOUT its implementation → unrunnable by
+  construction, nagged the operator >24 h) · `ship-rail-push-allow` (hook landed `9d2bf16`,
+  never wired into the 5 settings.json → EVERY model-issued land push strands; blocked this
+  session's own land) · `13-mailbox-gc` (guard depends on a binary that does not exist) ·
+  `14-land-pipeline-v2` (`.done` marker present, launchd job NOT loaded) · wake floor
+  (prose-only 6 days at 0 armed watchers across 74 mailboxes).
+- **Falsifiable question**: is there a SINGLE missing invariant/primitive whose absence
+  generates all five — and would enforcing it at ONE chokepoint dissolve them? Specifically:
+  (a) can "deployed AND effective" be made a *derivable* predicate per mechanism rather than a
+  per-mechanism bespoke check, given that `.done` markers prove a script RAN and never that an
+  EFFECT LANDED; (b) is the true generator the **split between a change and its activation
+  half** (landing them as separable units), such that the fix is making them atomic rather than
+  adding more detectors; (c) REFUTE the cheap answer — that "more/better absence-alarms" fixes
+  it — given absence-alarms already exist per-axis and still produced 5 misses.
+- **Default-tier attempts**: each instance root-caused individually at file:line this session
+  (see `docs/research/mechanical-wake-asyncrewake-2026-07-29.md` §3/§5 and tasks #56, #66, #67,
+  #68). Existing partial answers already ruled out as insufficient: the 3-axis activation audit
+  (queue / SSOT-parity / effect-read) fires per-axis and still missed all five; memory
+  [[feature-durability-mechanism-not-memory]], [[deploy-lag-checkout-behind-origin]],
+  [[desk-autonomy-dormancy-staged-not-loaded]], [[classifier-enforced-activation-deploy-boundary]]
+  each name ONE facet, none the generator. Not attempted: a derivation-first audit of the
+  land→activate→deploy→exercise chain as a single lifecycle.
+- **If true, changes**: dissolves ≥4 named worklist items at once and changes what "landed"
+  is allowed to mean in the Session Close Protocol (📦 vs ✅ currently splits on
+  *committed vs landed*, and would need a third rung for *landed vs live*). Campaign-candidate
+  shape (generator-class) if confirmed.
+- **Confidence frontier-worthy**: high — pure-derivation over a never-swept 4-way seam, which
+  is Fable 5's one retained edge over the Opus 5 default per `model-config.yaml`'s own routing
+  note.
+
+#### PANEL VERDICT 2026-07-30 — CONFIRMED, and the answer is not a detector
+Three baseline-blind panelists, told nothing of each other or of the 5 instances, CONVERGED on one
+generator in three vocabularies: **the expectation — "what SHOULD be wired and live" — is never a
+durable machine-readable declaration.** It lives imperatively (`install.sh` globs, each activation
+script's `jq` edits, each detector's hand-maintained scope) and *evaporates at activation*: after
+`touch <name>.done` nothing states "event E in dir D must carry hook H."
+· p1 — "the mechanism POPULATION is defined imperatively, not as data" (reified only in
+`launchd/fleet.manifest`); `LIVE` is therefore not uniformly derivable.
+· p2 — "activation completeness is a predicate over a moving world (dir-set, script content, hook
+names), recorded as a POINT EVENT." Every silent failure routes through a marker keyed on a NAME when
+the contract is (content-hash × current target-set).
+· p3 — the class is **CLOSED under adding detectors** (every detector is itself a wiring-layer
+mechanism); **where you can generate, generating dominates detecting.**
+
+**Sharpest NEW finding:** the settings-class detection layer is *un-activated detection of
+un-activation* — `settings-drift-assert.sh` is wired in **0 of 5** dirs while the drift it names is
+live. The recursion is the finding. **Irreducible residue:** no in-substrate detector can certify its
+own delivery (every alarm chain ends in a Stop-hook render that is itself driftable, and is missing in
+`-next` right now) ⇒ exactly ONE external deadman, human-as-timeout; N add nothing.
+**Also NEW:** atomicity is partly *undesirable* — land+activate atomically means the agent activates
+whatever it lands, dissolving the C10 boundary. Correct model = eventual consistency with a
+re-evaluated convergence predicate, not a transaction. Apportionment (p2): consumer-absence-refined
+~35% · human-gate-as-queue ~25% · **~20% residual none of the four framings names** ·
+separability ~15% · ordering ~5%.
+
+Lead re-probed every prediction before filing: **7 CONFIRMED** (2 worse than predicted — 11/23 launchd
+labels loaded; 57/89 registry rows dead-pid), **1 REFUTED as stated** (p1-5 `lib/`; survives in refined
+form at `lib/cc-upgrade-gate`, which has no live counterpart). Full report, probe table and
+NEW/CONFIRMED/REFUTED tagging: `docs/research/inert-mechanism-generator-panel-2026-07-30.md`.
+Cost: 3 Fable spawns of a 6-spawn session budget; 0 panelist writes.
+→ generator-class ⇒ promoted to **C-INERT-1** under `## Campaign Candidates`.
 
 ## In-Panel
 
@@ -41,8 +113,39 @@ design: `desk-self-handoff-2026-07-19/synthesis.md`. → CORE implemented on the
 |---|---|---|---|---|
 | desk self-recycle spine | `waiting-recycle.sh` · `handoff-fire.sh --recycle` · `/tmp/cc-telemetry` · `wait-contracts` | 2026-07-19 | Fable design panel (H-DSH-1/2), 2 panelists, probes P1/P4/FM-D/FM-F confirmed | SOLVED-PATH-KNOWN → core built |
 | session-closure surface (all closers) | `cc-reaper`·`cc-classify`·`cc-teardown`·`reap-guard.sh`·`teammate-auto-shutdown.sh`·`waiting-recycle.sh`·`team-orphan-reaper.sh`·`lead-crash-watchdog.sh`·`lead-supervisor.sh`·`session-end.sh`·launchd | 2026-07-25 | Fable enumeration panel (2 panelists, baseline-blind), full closer inventory, all findings lead-verified at file:line | 3 closers FIXED (092e823 reap-guard R-d + sibling 24722de orphan-reaper + the reaper gaps); 3 residuals → C-SC-1, **all CLOSED 2026-07-29** (no campaign — see C-SC-1 § RESOLVED) |
+| land→activate→deploy→exercise lifecycle | `commands/ship.md`·`scripts/ship-land.sh`·`docs/activation/pending-activation/*`·`hooks/activation-watch.sh`·`scripts/settings-drift-assert.sh`·`scripts/settings-hooks-lint.sh`·`scripts/deploy-link-parity.sh`·`install.sh`·`launchd/fleet.manifest`·5×`settings.json` | 2026-07-30 | Fable panel (3 panelists, baseline-blind: lifecycle-derivability / separability / adversarial+negative-space), 8 panel predictions re-probed by the lead | **CONFIRMED-BY-PANEL** → C-INERT-1. Expectation is imperative, never declared ⇒ `LIVE` not derivable. Live at sweep: detection layer wired 0/5 · 4 settings drifts · 11/23 launchd loaded · 57/89 registry dead-pid · MEMORY.md 4KB over the loader cap · `lib/cc-upgrade-gate` unlinked |
 
 ## Campaign Candidates
+
+### C-INERT-1 — Declared ⇒ wired, by construction (GENERATOR · from H-INERT-1, Fable panel 2026-07-30)
+ALL THREE panelists emitted this independently. Five parts in dependency order — note only part 3 is a
+"detector", and part 2 *removes* the need for one:
+1. **DECLARE** — one in-repo manifest extending `fleet.manifest`'s proven grammar to every class:
+   `name | class | expectation-key | effect-probe+polarity | activation-script`, expectation-key
+   class-typed (launchd→label · settings-hook→`event|normalized-command|required-dirs` · symlink→repo
+   path · copy→path pair · env→var+source-file). Landing a mechanism *undeclared* must fail, exactly as
+   `cc-fleet --plist-parity` already enforces for plists.
+2. **GENERATE** the generable — the hook blocks of all 5 `settings.json` become a *build artifact* of the
+   declaration, dir-set read from an SSOT **at generate time** (the `09` incident is precisely a dir-list
+   baked at author time going stale). Drift becomes **unrepresentable rather than detected**; the
+   lifecycle-pair asymmetry (register wired without deregister) becomes unrepresentable too, because
+   pairs are declared as pairs. Largest single win, and it *removes* code rather than adding a watcher.
+3. **RE-EVALUATE, never remember**, for the human-gated remainder (`launchctl`, deploy): every activation
+   exposes a read-only `--verify` re-evaluating its full postcondition against the CURRENT world, keyed
+   to its own content hash so a fixed script auto-reopens. `.done` degrades to a cache, never truth.
+   Verification is read-only ⇒ **agent-legal**; only the remedy stays C10.
+4. **FAIL CLOSED AT THE LAND GATE**, advisory at runtime — a chokepoint whose death is noticed within
+   hours, unlike a Stop hook whose death is silent.
+5. **ONE out-of-substrate deadman** for the delivery residue; the human is the timeout.
+**Why it escapes the bootstrap circle:** `--verify` rides the already-wired `activation-watch` (live in
+5/5 dirs), needing no activation of its own — it breaks in from the already-live side
+([[deployed-layer-bootstrap-circle]]).
+**Dissolves:** the launchd-only scope limit of the effect-read axis · settings-drift as a *class* ·
+done-vs-version skew · the un-wired-detection recursion · the new-file-never-registered class · and the
+wiring half of the pending-activation queue (collapsing N bespoke steps into one idempotent reconcile,
+as `18-fleet-activate` already proved for launchd).
+**Status:** candidate, NOT launched. Promotion needs `/frontier-campaign` curation + the Sonnet red-team
+gate. Deliberately larger than a worklist item, and deliberately not started inline.
 
 ### C-SC-1 — One "who-drove-the-last-turn" session-ownership oracle for every closer (GENERATOR)
 BOTH 2026-07-25 enumeration panelists CONVERGED: extend `cc-classify`/`reap-guard` into the single
