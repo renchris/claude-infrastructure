@@ -106,7 +106,17 @@ EVIDENCE_GREP='cc-telemetry|cc-registry|CC_TELEMETRY_DIR|CC_REGISTRY_DIR'
 # CC_SUP_GC_S, so sections 1/2/2b find nothing to bound. The durable evidence of a recovery is the
 # re-fired session's transcript + its new registry row + the announce to the originator, none of which
 # this script can touch. Declared = reviewed (2026-07-25 infra-perfection pass).
-DECLARED='bin/cc-context bin/cc-board bin/cc-sessions bin/cc-notify bin/cc-reaper bin/cc-value bin/cc-reconcile bin/cc-recover-safeguard hooks/session-register.sh hooks/session-deregister.sh statusline.sh scripts/lead-supervisor.sh scripts/lead-reconciler.sh hooks/waiting-recycle.sh scripts/handoff-fire.sh hooks/lead-crash-watchdog.sh scripts/scratchpad-reaper.sh hooks/lib/context-econ.sh'
+# Declared reapers. A file here is one whose deletion sites have been READ and whose horizons the
+# scorers above can actually see — never a file listed merely to silence §3 (see 1b).
+#   hooks/dispatch-assert.sh  its state sweep is `-mtime +7` = 604800s, scored by §1b. Its other
+#                             `rm -f "$PENDING"` sites are obligation-state discharge (kill-switch /
+#                             corrupt / discharged), not age reaping — no horizon to bound.
+#   scripts/desk-invariant.sh MARKER_MAX_AGE_S 604800s, scored by §1c. Its other `rm -f "$tmp"` sites
+#                             are temp scaffold on a failed `mv -f`, not evidence.
+#   bin/cc-await-ping         NOT an age reaper: `rm -f` of its OWN watchfile in an EXIT trap and on
+#                             wake — self-owned lifecycle, no horizon (same class as the
+#                             bin/cc-recover-safeguard declaration in 8195561a).
+DECLARED='bin/cc-context bin/cc-board bin/cc-sessions bin/cc-notify bin/cc-reaper bin/cc-value bin/cc-reconcile bin/cc-recover-safeguard hooks/session-register.sh hooks/session-deregister.sh statusline.sh scripts/lead-supervisor.sh scripts/lead-reconciler.sh hooks/waiting-recycle.sh scripts/handoff-fire.sh hooks/lead-crash-watchdog.sh scripts/scratchpad-reaper.sh hooks/lib/context-econ.sh hooks/dispatch-assert.sh scripts/desk-invariant.sh bin/cc-await-ping'
 
 viol=0
 say(){ printf '  %s\n' "$1"; }
@@ -133,6 +143,43 @@ while IFS= read -r hit; do
     say "ok  $f:$ln  horizon ${secs}s"
   fi
 done < <(grep -rnE -- '-mmin \+[0-9]+' $DECLARED 2>/dev/null)
+
+# ── 1b. DAY-granularity find horizons (`-mtime +N`) ───────────────────────────────────────────────
+# §1 scores only `-mmin +N`. A reaper written with `-mtime +N` — the same `find` deletion, expressed
+# in days — was invisible to every scorer, so such a file could only ever be caught by §3 as
+# "undeclared", and DECLARING it would then silence §3 without any scorer ever reading its horizon.
+# That is a rubber stamp: an allowlist entry that makes the file pass BY BEING LISTED rather than by
+# being checked, which is functionally a deleted check (memory: miscalibrated-check-is-a-deleted-check).
+# Scoring the day form is what makes a declaration mean something.
+while IFS= read -r hit; do
+  [ -n "$hit" ] || continue
+  f="${hit%%:*}"; rest="${hit#*:}"; ln="${rest%%:*}"
+  is_comment "$hit" && continue
+  days=$(printf '%s' "$hit" | sed -nE 's/.*-mtime \+([0-9]+).*/\1/p')
+  [ -n "$days" ] || continue
+  secs=$(( days * 86400 ))
+  if [ "$secs" -lt "$MIN_HORIZON_S" ]; then
+    bad "$f:$ln  horizon ${secs}s (-mtime +$days) < floor ${MIN_HORIZON_S}s — a supervisor would MISS this evidence"
+  else
+    say "ok  $f:$ln  horizon ${secs}s (-mtime +$days)"
+  fi
+done < <(grep -rnE -- '-mtime \+[0-9]+' $DECLARED 2>/dev/null)
+
+# ── 1c. seconds-style MARKER age horizons ─────────────────────────────────────────────────────────
+# Same argument as 1b for a reaper that computes `now - mtime` in shell against a seconds constant
+# instead of delegating to find. desk-invariant.sh's stale-damping-marker sweep is this shape.
+while IFS= read -r hit; do
+  [ -n "$hit" ] || continue
+  f="${hit%%:*}"; rest="${hit#*:}"; ln="${rest%%:*}"
+  is_comment "$hit" && continue
+  secs=$(printf '%s' "$hit" | sed -nE 's/.*MARKER_MAX_AGE_S:-([0-9]+).*/\1/p')
+  [ -n "$secs" ] || continue
+  if [ "$secs" -lt "$MIN_HORIZON_S" ]; then
+    bad "$f:$ln  marker horizon ${secs}s < floor ${MIN_HORIZON_S}s — a supervisor would MISS this evidence"
+  else
+    say "ok  $f:$ln  marker horizon ${secs}s"
+  fi
+done < <(grep -rnE 'MARKER_MAX_AGE_S:-[0-9]+' $DECLARED 2>/dev/null)
 
 # ── 2. retention-hour style horizons (the registry) ───────────────────────────────────────────────
 while IFS= read -r hit; do
