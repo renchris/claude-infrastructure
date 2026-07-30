@@ -39,6 +39,17 @@
 # BEFORE we rewrite. Refusing to rewrite costs one undemoted process; a bad rewrite costs the
 # agent's command.
 #
+# KNOWN COVERAGE RESIDUAL, day one — a leading `VAR=value` assignment (lead review 2026-07-30).
+# Transform (b) declines any command whose first word is an env assignment, because the prefix is
+# PREPENDED: `taskpolicy -c background CC_X=1 pytest` hands `CC_X=1` to taskpolicy as the program to
+# exec, and it dies. The form is COMMON in this fleet's agent Bash calls (`CC_X=1 timeout 500 …`),
+# so this is a REAL residual for the table patterns, not a theoretical one. Transform (a) is
+# unaffected — token replacement finds `bats` wherever it sits, assignment or no. Declining is the
+# day-one call rather than re-ordering the caller's env into the prefix, which would make this hook
+# responsible for env semantics it cannot see. qos-census measures whatever residual this leaves;
+# that is the honest loop. `tests/qos-rewrite.bats` pins BOTH halves (the skip and the control that
+# the same command without the assignment IS prefixed) so changing this is a decision, not drift.
+#
 # Seams (set-but-EMPTY is honoured VERBATIM everywhere — the `${VAR-default}` single-dash form,
 # never `${VAR:-default}`, because a seam that cannot turn a thing OFF is not a seam; cc-bats:25):
 #   CC_QOS_REWRITE=off      → whole hook off, exit 0 before anything else (kill switch, R8).
@@ -168,6 +179,8 @@ esac
 
 # A leading `VAR=value` assignment cannot be prefixed: `taskpolicy -c background VAR=1 pytest`
 # tries to EXEC `VAR=1` and dies. The env is the caller's, so we decline rather than re-order it.
+# This is a DELIBERATE, MEASURED residual, not an oversight — see KNOWN COVERAGE RESIDUAL in the
+# header for why it is the day-one call and what pins it.
 printf '%s' "$CMD" | grep -qE '^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=' && exit 0
 
 # ── walk the table: `<band><TAB><ERE>`, first match wins ───────────────────────────────────────
