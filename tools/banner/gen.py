@@ -64,6 +64,39 @@ def assert_type_clear() -> None:
         )
 
 
+# ── the stride/scroll lock ─────────────────────────────────────────────────────────────────────
+# The creature has been SLIDING. Its legs alternate on a 0.5s stride, but the ground beneath it
+# scrolled at a rate with no relationship to that, so each step covered a fractional number of
+# cells: measured 1.51 cells against the near tufts, 0.75 against the mounds, 2.26 against the
+# foreground. It is worse than one wrong number — there were FOUR different ground-ish rates, so
+# there was no single ground speed to be locked to in the first place.
+#
+# This matters beyond the sliding: a footprint baked into the strip at one stride pitch, so the foot
+# lands in an existing print every stride, is impossible until the lock holds. Prerequisite, not
+# polish.
+#
+# The condition is (TILE / STRIP_PERIOD) * STRIDE == k * CELL * scale, with STRIP_PERIOD and STRIDE
+# both dividing P. Enumerating the solutions in the usable scale band gives T=20s at scale 1.2 with
+# k=2 — one full leg-spacing per stride — which also scales the creature UP, which is what gesture
+# legibility wanted anyway.
+STRIDE = 0.5           # seconds per step (half the two-step cycle)
+STRIP_PERIOD = 20.0    # seconds for the strip to travel one TILE
+STRIP_PX_PER_STRIDE = TILE / STRIP_PERIOD * STRIDE   # 48 px
+
+
+def assert_stride_locked(art: Art) -> None:
+    """The ground must advance an exact whole number of sprite cells per stride."""
+    cell_px = CELL * art.clawd_scale
+    cells = STRIP_PX_PER_STRIDE / cell_px
+    if abs(cells - round(cells)) > 1e-9:
+        raise SystemExit(
+            f"gen[{art.key}]: stride/scroll NOT LOCKED — the strip advances "
+            f"{STRIP_PX_PER_STRIDE:.2f}px per {STRIDE}s stride, which is {cells:.3f} sprite cells at "
+            f"scale {art.clawd_scale}. The creature slides. Pick a scale where this is a whole "
+            f"number (at STRIP_PERIOD={STRIP_PERIOD:g}s: 1.2 gives 2 cells, 1.0 gives 2.4 — not "
+            f"whole).")
+
+
 def divides_P(*periods: float) -> None:
     """A sub-period that does not divide P makes the composite loop at the LCM instead (S2)."""
     for p in periods:
@@ -217,7 +250,7 @@ class Art:
     dark: Theme
     light: Theme
     subtitle: str = "SESSIONS RUN EACH OTHER"
-    clawd_scale: float = 1.0
+    clawd_scale: float = 1.2
     clawd_x: float = 700
     cloud_layers: int = 3
     star_count: tuple[int, int, int] = (150, 62, 20)
@@ -1090,7 +1123,7 @@ def css(art: Art) -> str:
         f".cl2{{animation:sc {fmt(P / 3)}s linear infinite}}"
         f".md0s{{animation:sc {fmt(P / 2)}s linear infinite}}"
         f".md1s{{animation:sc {fmt(P / 4)}s linear infinite}}"
-        f".tf0s{{animation:sc {fmt(P / 8)}s linear infinite}}"
+        f".tf0s{{animation:sc {fmt(STRIP_PERIOD)}s linear infinite}}"
         f".tf1s{{animation:sc {fmt(P / 10)}s linear infinite}}"
         f".fgbs{{animation:sc {fmt(P / 12)}s linear infinite}}"
         # ---- twinkle: three rates so the sky has depth rather than one uniform pulse ----
@@ -1287,6 +1320,7 @@ def css(art: Art) -> str:
 def build(art: Art) -> str:
     _SCROLLING.clear()
     assert_events_disjoint(art)
+    assert_stride_locked(art)
     rng = random.Random(20260729 + sum(ord(ch) for ch in art.key))
     scale = art.clawd_scale
 
@@ -1636,7 +1670,7 @@ VARIANTS = [
         ),
         dark=NIGHT,
         light=DAY,
-        clawd_scale=1.06,
+        clawd_scale=1.2,
         clawd_x=628,
         star_count=(300, 90, 30),
         moon=(1656, 166, 62),
@@ -1653,7 +1687,7 @@ VARIANTS = [
         ),
         dark=HAZE,
         light=OVERCAST,
-        clawd_scale=1.0,
+        clawd_scale=1.2,
         clawd_x=560,
         star_count=(280, 84, 28),
         moon=(1672, 178, 56),
@@ -1671,7 +1705,7 @@ VARIANTS = [
         ),
         dark=DUSK,
         light=DAWN,
-        clawd_scale=1.12,
+        clawd_scale=1.2,
         clawd_x=1096,
         star_count=(220, 62, 20),
         moon=(250, 214, 70),
@@ -1687,7 +1721,7 @@ VARIANTS = [
         ),
         dark=TERM,
         light=TERM_L,
-        clawd_scale=0.98,
+        clawd_scale=1.2,
         clawd_x=812,
         star_count=(240, 70, 22),
         moon=(1706, 140, 50),
