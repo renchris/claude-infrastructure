@@ -1076,3 +1076,74 @@ status_of() { bash "$CB" list --all --json | jq -r --arg i "$1" '.[]|select(.id=
   [ "$status" -eq 0 ]
   [ "$(status_of sessgone0ee2)" = open ]
 }
+
+# ── project_default — the `add` project fallback (backlog f7abcbdee98c) ────────────────────────────
+# `--project` used to default to a bare `$(pwd)`, which minted labels that are not projects and that
+# therefore no dispatcher filter can ever match: a launchd caller (cwd=/) wrote project "/" and a
+# caller inside a dispatch worktree wrote the worktree's own basename. Both classes are in the live
+# ledger ("/" ×8, "wt-closeout", "/tmp/wt-autonomy-100"), and the "/" items sat undrained for 8 days.
+#
+# The control for each of these is the PRE-CHANGE binary recovered from a pinned immutable ancestor of
+# origin/main, never a hand-typed approximation (memory: control-must-replay-the-real-artifact).
+PD_BASE_SHA="67c86d89"
+
+# pd_pristine → path to the pre-change cc-backlog, or fails the test loudly if it cannot be recovered
+# (an absent control makes every "the old code did X" half pass vacuously).
+pd_pristine() {
+  local d="$BATS_TEST_TMPDIR/pristine"
+  mkdir -p "$d"
+  git -C "$REPO" archive "$PD_BASE_SHA" bin/cc-backlog 2>/dev/null | tar -x -C "$d"
+  [ -s "$d/bin/cc-backlog" ] || { echo "cannot recover pristine cc-backlog @ $PD_BASE_SHA" >&2; return 1; }
+  printf '%s' "$d/bin/cc-backlog"
+}
+
+@test "project_default: from a repo root the project is the repo NAME, not the full path" {
+  run bash -c "cd '$REPO' && CC_BACKLOG_FILE='$CC_BACKLOG_FILE' bash '$CB' add --title pd1 --source s"
+  [ "$status" -eq 0 ]
+  [ "$(jq -r 'select(.event=="add")|.project' "$CC_BACKLOG_FILE" | tail -1)" = "claude-infrastructure" ]
+
+  # RED: the pre-change default stored the absolute path, which the dispatcher's name filter misses.
+  local old; old="$(pd_pristine)"
+  : > "$CC_BACKLOG_FILE"
+  run bash -c "cd '$REPO' && CC_BACKLOG_FILE='$CC_BACKLOG_FILE' bash '$old' add --title pd1 --source s"
+  [ "$(jq -r 'select(.event=="add")|.project' "$CC_BACKLOG_FILE" | tail -1)" = "$REPO" ]
+}
+
+@test "project_default: inside a WORKTREE it resolves to the MAIN repo, not the wt-<id> basename" {
+  # a real linked worktree, so `rev-parse --git-common-dir` is exercised rather than simulated
+  local wt="$BATS_TEST_TMPDIR/wt-pdtest"
+  git -C "$REPO" worktree add --detach "$wt" HEAD >/dev/null 2>&1 || skip "cannot create a worktree here"
+  run bash -c "cd '$wt' && CC_BACKLOG_FILE='$CC_BACKLOG_FILE' bash '$CB' add --title pd2 --source s"
+  [ "$status" -eq 0 ]
+  [ "$(jq -r 'select(.event=="add")|.project' "$CC_BACKLOG_FILE" | tail -1)" = "claude-infrastructure" ]
+
+  # RED: the pre-change default stored the WORKTREE path, whose basename is wt-pdtest — a label no
+  # dispatcher covers, which is how "wt-closeout" entered the live ledger.
+  local old; old="$(pd_pristine)"
+  : > "$CC_BACKLOG_FILE"
+  run bash -c "cd '$wt' && CC_BACKLOG_FILE='$CC_BACKLOG_FILE' bash '$old' add --title pd2 --source s"
+  [ "$(jq -r 'select(.event=="add")|.project' "$CC_BACKLOG_FILE" | tail -1)" = "$wt" ]
+  git -C "$REPO" worktree remove --force "$wt" >/dev/null 2>&1 || true
+}
+
+@test "project_default: a DEGENERATE cwd (/ — the launchd case) is REFUSED, and writes NO record" {
+  run bash -c "cd / && CC_BACKLOG_FILE='$CC_BACKLOG_FILE' bash '$CB' add --title pd3 --source s"
+  [ "$status" -eq 2 ]
+  printf '%s' "$output" | grep -q 'cannot resolve a project'
+  # fail-CLOSED: refusing must not leave a half-written item behind
+  [ ! -s "$CC_BACKLOG_FILE" ] || [ "$(jq -rs '[.[]|select(.title=="pd3")]|length' "$CC_BACKLOG_FILE")" -eq 0 ]
+
+  # RED: the pre-change default stored project "/" — an item permanently invisible to every
+  # dispatcher filter. This is the exact record that appeared 8 times in the live ledger.
+  local old; old="$(pd_pristine)"
+  : > "$CC_BACKLOG_FILE"
+  run bash -c "cd / && CC_BACKLOG_FILE='$CC_BACKLOG_FILE' bash '$old' add --title pd3 --source s"
+  [ "$status" -eq 0 ]
+  [ "$(jq -r 'select(.event=="add")|.project' "$CC_BACKLOG_FILE" | tail -1)" = "/" ]
+}
+
+@test "project_default: an EXPLICIT --project is untouched by the normalization (incl. path-shaped)" {
+  run bash "$CB" add --project /repo/a --title pd4 --source s
+  [ "$status" -eq 0 ]
+  [ "$(jq -r 'select(.event=="add")|.project' "$CC_BACKLOG_FILE" | tail -1)" = "/repo/a" ]
+}

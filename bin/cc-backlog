@@ -278,6 +278,38 @@ has_id() {
   valid_records 2>/dev/null | jq -e -s --arg id "$1" 'any(.[]; .id == $id)' >/dev/null 2>&1
 }
 
+# project_default → the ledger's short project NAME for $PWD; rc 2 when none is derivable.
+#
+# The old default was a bare `$(pwd)`, which minted labels that are not projects and can therefore
+# never be dispatched (item f7abcbdee98c — cc-dispatch filters on the project NAME):
+#   · a caller under launchd has cwd=/ → project "/"          (5 live items, undrained 8 days)
+#   · a caller inside a dispatch worktree → "wt-closeout", "/tmp/wt-autonomy-100"
+# Both classes are in the live ledger. Two normalizations and one refusal:
+#   (a) the git TOPLEVEL's basename, not $PWD's — a subdirectory is not a project;
+#   (b) inside a WORKTREE the toplevel basename is the worktree's own name (wt-<id>), so resolve
+#       through the shared git dir to the MAIN checkout — a worker files under the real project;
+#   (c) a degenerate result ("/", ".", "..", empty) REFUSES instead of storing it. An id is keyed on
+#       the project, so a phantom label is not a mislabel that someone later notices — it is an item
+#       that no dispatcher can ever see. Failing the `add` loudly is strictly better than a silent
+#       write to a project that does not exist.
+project_default() {
+  local top common d
+  top="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+  if [ -n "$top" ]; then
+    common="$(git -C "$top" rev-parse --git-common-dir 2>/dev/null || true)"
+    case "$common" in
+      ""|.git|"$top/.git") d="$top" ;;
+      /*)                  d="$(dirname "$common")" ;;
+      *)                   d="$(dirname "$top/$common")" ;;
+    esac
+  else
+    d="$(pwd)"
+  fi
+  d="$(basename "$d" 2>/dev/null || true)"
+  case "$d" in ""|"/"|"."|"..") return 2 ;; esac
+  printf '%s' "$d"
+}
+
 cmd_add() {
   local project="" title="" dod="" source=""
   while [ $# -gt 0 ]; do
@@ -291,7 +323,10 @@ cmd_add() {
     esac
   done
   [ -n "$title" ] || { echo "cc-backlog add: --title is required" >&2; return 2; }
-  [ -n "$project" ] || project="$(pwd)"
+  if [ -z "$project" ]; then
+    project="$(project_default)" \
+      || { echo "cc-backlog add: cannot resolve a project from $(pwd) — pass --project <name>" >&2; return 2; }
+  fi
   ensure_file
   local id; id=$(mk_id "$project" "$title" "$source")
   if has_id "$id"; then                            # idempotent: no duplicate add

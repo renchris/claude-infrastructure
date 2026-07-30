@@ -113,7 +113,22 @@ if [ -n "$DECIDE" ]; then
     [ "$tag" = "fired" ] || continue
     fired_defaults=$((fired_defaults + 1))
     if [ -n "$BACKLOG" ]; then
+      # --project EXPLICITLY. This sweep runs from launchd with cwd=/, and omitting it left
+      # cc-backlog to default off $(pwd) → project "/", which matches no dispatcher filter: 5 of
+      # these records sat structurally undrained for 8 days (item f7abcbdee98c). cc-backlog now
+      # REFUSES a degenerate default rather than storing one, so this value must be passed.
+      #
+      # It is deliberately the SWEEP'S OWN host project, not the decision's subject. A cc-decide
+      # packet records no project at all, and the subject is knowable only from prose: of the 5 live
+      # records, 4 concern doc_classifier and 1 concerns voiceink — so grepping a path out of
+      # `what_plain` to guess a project is exactly the shape-classifier that must not be built
+      # (memory: fixture-vs-real-classifier-needs-a-producer — classify by the producer's literal
+      # emission, never by shape). The record belongs to the autonomy system that fired the default;
+      # the SUBJECT is resolved by the reader from `--dod-ref decision:<id>`, which is exact.
+      # Backlogged separately: cc-decide should record the project, and a no-change default
+      # ("hold", "disclose-only") should not become an open DISPATCH candidate at all.
       "$BACKLOG" add --title "class-B default fired: $ddef" \
+        --project "${CC_SWEEP_PROJECT:-claude-infrastructure}" \
         --source autonomy-sweep --dod-ref "decision:$did" >/dev/null 2>&1 || true
     fi
   done < <("$DECIDE" expire-sweep 2>/dev/null || true)
