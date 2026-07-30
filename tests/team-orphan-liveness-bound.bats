@@ -50,7 +50,7 @@ EOF
 
   # Fake lsof emitting the -F pn form. Steerable: LSOF_OUT holds exactly what it prints.
   LSOF="$BATS_TEST_TMPDIR/lsof-spy"
-  LSOF_OUT="$BATS_TEST_TMPDIR/lsof.out"; : > "$LSOF_OUT"
+  LSOF_OUT="$BATS_TEST_TMPDIR/lsof.out"; lsof_answers_nobody
   cat > "$LSOF" <<EOF
 #!/usr/bin/env bash
 cat "$LSOF_OUT" 2>/dev/null
@@ -60,6 +60,14 @@ EOF
   export TEAM_REAPER_LSOF_BIN="$LSOF"
 }
 
+# lsof_answers_nobody — the probe RAN and found nobody in any member worktree. That is a VERDICT,
+# and it is what the unoccupied cases below mean. It must NOT be spelled as empty output: a real
+# full-system `lsof -d cwd` always reports at least its own caller's cwd, so an empty read is a probe
+# that did not complete — which `procs_cwd_under` now reports as UNRESOLVED (rc 2) and the reaper
+# abstains on. Emitting a real `-F pn` record for an unrelated path is the shape the producer can
+# actually emit (memory: fixture-shape-parity-with-real-producer); spelled as `: > $LSOF_OUT`, these
+# cases would silently stop testing "unoccupied" and start testing "starved".
+lsof_answers_nobody() { printf 'p1\nn/\np2\nn/usr\n' > "$LSOF_OUT"; }
 mk_team() { mkdir -p "$TEAMS/$1"; printf '%s' "$2" > "$TEAMS/$1/config.json"; }
 archived() { ls -d "$TEAMS/_archive/$1-"* >/dev/null 2>&1; }
 # backdate the UNKNOWN clock so the bound is already exceeded
@@ -146,6 +154,42 @@ age_out() { echo $(( $(date +%s) - 99999 )) > "$STATE/$1.unknown-since"; }
   grep -q "UNRESOLVED" "$LOG" || false
 }
 
+@test "(v-b) THREE-STATE: a probe that HANGS is equally UNRESOLVED — a timeout is our bound, not an answer" {
+  # (v) covers a probe that cannot START; this covers one that starts and does not FINISH, which is
+  # the shape that actually occurs. Nothing is missing or misconfigured here — lsof is present and
+  # simply does not return inside the cap, which a full-system `-d cwd` scan on a loaded box does
+  # (measured 2026-07-28 at load ~11.8 in a sibling suite). `team_occupied` used to pre-check only the
+  # BINARY, so this fell through as UNOCCUPIED — a real verdict — and past the ceiling it ARCHIVED a
+  # team whose members may well be working. Our own `timeout` firing must never forge the death
+  # evidence (memory: gate-never-ran-vs-gate-red). Backlog 9efae9e3cfc1.
+  mk_team t-hang "{\"leadSessionId\":\"sid-h\",\"members\":[{\"name\":\"w1\",\"cwd\":\"$WT\"}]}"
+  printf '#!/usr/bin/env bash\nsleep 300\n' > "$LSOF"      # present, executable, never returns
+  age_out t-hang                                          # far past every ceiling
+  start="$(date +%s)"
+  TEAM_REAPER_ORACLE_TIMEOUT_S=2 run timeout 60 bash "$REAPER"
+  elapsed=$(( $(date +%s) - start ))
+  [ "$status" -eq 0 ] || false
+  [ "$elapsed" -lt 55 ] || false                          # still BOUNDED — the cap is not what changed
+  [ -d "$TEAMS/t-hang" ] || false                         # pre-fix: ARCHIVED (RED)
+  ! archived t-hang || false
+  grep -q "UNRESOLVED" "$LOG" || false
+  grep -q "never answered" "$LOG" || false                # named, not silently kept
+}
+
+@test "(v-c) CONTROL: the same hang with the cap REMOVED still resolves once the probe answers" {
+  # Keeps (v-b) from being satisfiable by an oracle that abstains on everything — which would strand
+  # every genuinely dead team forever and still pass (v), (v-b) and (vi). Same team, same age, same
+  # stub PATH; the only difference is that the stub RETURNS. A reply of "here are the cwds, none of
+  # them is yours" is evidence, and evidence must still resolve.
+  mk_team t-hang2 "{\"leadSessionId\":\"sid-h2\",\"members\":[{\"name\":\"w1\",\"cwd\":\"$WT\"}]}"
+  lsof_answers_nobody
+  age_out t-hang2
+  TEAM_REAPER_ORACLE_TIMEOUT_S=2 run bash "$REAPER"
+  [ "$status" -eq 0 ] || false
+  archived t-hang2 || false
+  grep -q "resolving" "$LOG" || false
+}
+
 @test "(vi) an UNRESOLVED probe past its ceiling pages the operator exactly ONCE" {
   mk_team t-page "{\"leadSessionId\":\"sid-p\",\"members\":[{\"name\":\"w1\",\"cwd\":\"$WT\"}]}"
   age_out t-page
@@ -157,7 +201,7 @@ age_out() { echo $(( $(date +%s) - 99999 )) > "$STATE/$1.unknown-since"; }
 
 @test "(vii) BOUNDED: unoccupied + no live session + past the ceiling RESOLVES (archives)" {
   mk_team t-res "{\"leadSessionId\":\"sid-r\",\"members\":[{\"name\":\"w1\",\"cwd\":\"$WT\"}]}"
-  : > "$LSOF_OUT"                                  # probe ANSWERS: nobody is there
+  lsof_answers_nobody                                  # probe ANSWERS: nobody is there
   age_out t-res
   run bash "$REAPER"
   [ "$status" -eq 0 ] || false
@@ -167,7 +211,7 @@ age_out() { echo $(( $(date +%s) - 99999 )) > "$STATE/$1.unknown-since"; }
 
 @test "(viii) WITHIN the ceiling it still abstains — the watchdog may not have written its pidfile" {
   mk_team t-young "{\"leadSessionId\":\"sid-g\",\"members\":[{\"name\":\"w1\",\"cwd\":\"$WT\"}]}"
-  : > "$LSOF_OUT"
+  lsof_answers_nobody
   run bash "$REAPER"                               # fresh clock ⇒ age 0
   [ -d "$TEAMS/t-young" ] || false
   ! archived t-young || false
@@ -176,7 +220,7 @@ age_out() { echo $(( $(date +%s) - 99999 )) > "$STATE/$1.unknown-since"; }
 
 @test "(ix) a live REGISTRY session still keeps an unoccupied team (successor by name)" {
   mk_team t-reg "{\"leadSessionId\":\"sid-g2\",\"members\":[{\"name\":\"w-named\",\"cwd\":\"$WT\"}]}"
-  : > "$LSOF_OUT"                                  # unoccupied …
+  lsof_answers_nobody                                  # unoccupied …
   echo '[{"name":"w-named","cwd":"/elsewhere"}]' > "$SESS_JSON"   # … but the registry knows it
   age_out t-reg
   run bash "$REAPER"
@@ -187,7 +231,7 @@ age_out() { echo $(( $(date +%s) - 99999 )) > "$STATE/$1.unknown-since"; }
 @test "(x) the UNKNOWN clock is per-team — one team's age must not resolve another" {
   mk_team t-old "{\"leadSessionId\":\"sid-1\",\"members\":[{\"name\":\"w1\",\"cwd\":\"$WT\"}]}"
   mk_team t-new "{\"leadSessionId\":\"sid-2\",\"members\":[{\"name\":\"w2\",\"cwd\":\"$WT\"}]}"
-  : > "$LSOF_OUT"
+  lsof_answers_nobody
   age_out t-old                                    # only t-old is past the bound
   run bash "$REAPER"
   archived t-old || false
