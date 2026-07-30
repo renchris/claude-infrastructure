@@ -100,18 +100,30 @@ while [ $# -gt 0 ]; do
   [ $# -gt 0 ] && shift
 done
 
-log_idl() { # $1=disposition $2=reason $3=extra JSON OBJECT (optional, jq-built; default {})
-  [ "$MODE" = "hook" ] || return 0
-  mkdir -p "$(dirname "$IDL")" 2>/dev/null || true
-  local ts extra; ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '?')"
-  extra="${3:-}"; [ -n "$extra" ] || extra='{}'
-  # jq-encode EVERY field (house rule): a raw " / \ / newline in a value must never be able to
-  # emit a malformed IDL line — one bad line aborts the cc-audit jq -rs slurp (reads as "none").
-  jq -cn --arg ts "$ts" --arg sid "$SID" --arg disp "$1" --arg reason "$2" --argjson extra "$extra" \
-    '{ts:$ts,hook:"operator-readout",sid:$sid,disposition:$disp,reason:$reason} + $extra' \
-    >> "$IDL" 2>/dev/null || true
-}
-abstain() { log_idl abstained "$1"; exit 0; }
+# B-3 writer = the SSOT lib hooks/lib/idl-log.sh (consolidation audit 02); see that file for the
+# "jq-encode EVERY field" invariant. IDL_OFF carries this hook's extra rule: the `--render` pull
+# surface (/wrap, bats, humans) must write NO telemetry — formerly `[ "$MODE" = hook ] || return 0`.
+_ilib="$SCRIPT_DIR/lib/idl-log.sh"
+# A BRAND-NEW hooks/lib file has no ~/.claude/hooks/lib symlink until install.sh runs — and when
+# this hook executes from ~/.claude/hooks/, the CFG and $HOME tiers below resolve to that SAME
+# missing path. So resolve $0's own symlink into the checkout first: the live hook IS a symlink to
+# the repo, so this finds the lib on the same fast-forward that delivers this hook. Without it,
+# landing would leave all five IDL hooks inert until someone remembered to re-run install.sh.
+[ -f "$_ilib" ] || { _itgt="$0"; [ -L "$_itgt" ] && _itgt="$(readlink "$_itgt")"
+  _ilib="$(cd "$(dirname "$_itgt")" 2>/dev/null && pwd)/lib/idl-log.sh"; }
+[ -f "$_ilib" ] || _ilib="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/idl-log.sh"
+[ -f "$_ilib" ] || _ilib="$HOME/.claude/hooks/lib/idl-log.sh"
+# shellcheck source=lib/idl-log.sh
+# shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+if ! . "$_ilib" 2>/dev/null; then
+  # Fail LOUD but SAFE — a hook that cannot log its own disposition must not proceed silently, and
+  # must never block the turn on a misconfig.
+  printf 'operator-readout: FATAL — cannot source %s (IDL writer inert).\n' "$_ilib" >&2
+  exit 0
+fi
+idl_init "$IDL" "operator-readout"
+# This hook's extra rule: the `--render` pull surface (/wrap, bats, humans) writes NO telemetry.
+[ "$MODE" = "hook" ] || idl_disable
 
 # ── tiny helpers ─────────────────────────────────────────────────────────────────────────────────
 tildify() { printf '%s' "${1/#$HOME/~}"; }   # display+paste-safe: the shell re-expands ~

@@ -124,23 +124,33 @@ tp="$(printf '%s' "$stdin_json" | jq -r '.transcript_path // empty' 2>/dev/null 
 # ── B-3: one IDL line per invocation. Never fails the hook. ──
 # SIZE_JSON — the measured size pair, merged into EVERY record once the size axis has been read. Empty
 # before that, so the pre-measurement abstains do not claim a measurement that never happened. Merged in
-# log_idl rather than at each call site so "every eval records what it measured" holds by construction:
-# a dormant threshold must never be indistinguishable from broken wiring.
+# log_idl (via idl_init's merge-var slot) rather than at each call site so "every eval records what it
+# measured" holds by construction: a dormant threshold must never be indistinguishable from broken wiring.
 SIZE_JSON='{}'
-log_idl() { # $1=disposition  $2=reason  $3=extra JSON OBJECT (optional, jq-built {…}; default {})
-  mkdir -p "$(dirname "$IDL")" 2>/dev/null || true
-  local ts extra size; ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  extra="${3:-}"; [ -n "$extra" ] || extra='{}'
-  size="${SIZE_JSON:-}"; [ -n "$size" ] || size='{}'
-  # jq-encode EVERY field: a value carrying a " / backslash / newline then can NEVER emit a
-  # malformed IDL line — one malformed line aborts the cc-audit four-zeros `jq -rs` slurp, which
-  # reads as "no records" and silently flips D9/the alarm GREEN (defeats the un-gameable detector).
-  jq -cn --arg ts "$ts" --arg sid "${sid:-?}" --arg disp "$1" --arg reason "$2" \
-    --argjson size "$size" --argjson extra "$extra" \
-    '{ts:$ts,hook:"boundary-handoff",sid:$sid,disposition:$disp,reason:$reason} + $size + $extra' \
-    >> "$IDL" 2>/dev/null || true
-}
-abstain() { log_idl abstained "$1"; exit 0; }     # abstained = evaluated but did not fire (LOGGED, not silent)
+# The writer body is the SSOT lib hooks/lib/idl-log.sh (consolidation audit 02) — it used to be
+# four byte-lockstep copies, each carrying the same load-bearing "jq-encode EVERY field" invariant
+# (one malformed line blinds the cc-audit slurp). Same resolution ladder as the libs above.
+_ilib="$_bscd/lib/idl-log.sh"
+# A BRAND-NEW hooks/lib file has no ~/.claude/hooks/lib symlink until install.sh runs — and when
+# this hook executes from ~/.claude/hooks/, the CFG and $HOME tiers below resolve to that SAME
+# missing path. So resolve $0's own symlink into the checkout first: the live hook IS a symlink to
+# the repo, so this finds the lib on the same fast-forward that delivers this hook. Without it,
+# landing would leave all five IDL hooks inert until someone remembered to re-run install.sh.
+[ -f "$_ilib" ] || { _itgt="$0"; [ -L "$_itgt" ] && _itgt="$(readlink "$_itgt")"
+  _ilib="$(cd "$(dirname "$_itgt")" 2>/dev/null && pwd)/lib/idl-log.sh"; }
+[ -f "$_ilib" ] || _ilib="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/idl-log.sh"
+[ -f "$_ilib" ] || _ilib="$HOME/.claude/hooks/lib/idl-log.sh"
+# shellcheck source=lib/idl-log.sh
+# shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+if ! . "$_ilib" 2>/dev/null; then
+  # Fail LOUD but SAFE: with no writer this hook cannot log its own disposition, so proceeding
+  # would recreate exactly the "didn't fire" ≡ "never evaluated" ambiguity the IDL removes. A Stop
+  # hook must never block on a misconfig → exit 0.
+  printf 'boundary-handoff: FATAL — cannot source %s (IDL writer inert).\n' "$_ilib" >&2
+  exit 0
+fi
+# "sid": this hook keeps its session id in lowercase `sid` (assigned just above), unlike the others.
+idl_init "$IDL" "boundary-handoff" "sid" "SIZE_JSON"
 
 command -v jq >/dev/null 2>&1 || { log_idl abstained "no-jq"; exit 0; }
 [ -n "$sid" ] || abstain "no-session-id"
@@ -187,6 +197,7 @@ over_rss=0; { [ "$RSS_MB" -gt 0 ] 2>/dev/null && [ "$rss_mb" -ge "$RSS_MB" ]; } 
 # whole record and silently drop every IDL line from here on.
 _bsj="$(jq -cn --argjson tx "$tx_mb" --argjson rss "$rss_mb" --argjson st "$SIZE_MB" --argjson rt "$RSS_MB" \
   '{tx_mb:$tx,rss_mb:$rss,size_mb_t:$st,rss_mb_t:$rt}' 2>/dev/null || true)"
+# shellcheck disable=SC2034  # consumed by indirection in hooks/lib/idl-log.sh (idl_init merge-var slot)
 if [ -n "$_bsj" ] && printf '%s' "$_bsj" | jq -e 'type=="object"' >/dev/null 2>&1; then SIZE_JSON="$_bsj"; else SIZE_JSON='{}'; fi
 
 early=0

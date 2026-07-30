@@ -36,18 +36,28 @@ SID="?"
 
 input="$(cat 2>/dev/null || printf '{}')"
 
-log_idl() { # $1=disposition $2=reason $3=extra JSON OBJECT (optional, jq-built {…}; default {})
-  mkdir -p "$(dirname "$IDL")" 2>/dev/null || true
-  local ts extra; ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '?')"
-  extra="${3:-}"; [ -n "$extra" ] || extra='{}'
-  # jq-encode EVERY field: a value carrying a " / backslash / newline then can NEVER emit a
-  # malformed IDL line — one malformed line aborts the cc-audit four-zeros `jq -rs` slurp, which
-  # reads as "no records" and silently flips D9/the alarm GREEN (defeats the un-gameable detector).
-  jq -cn --arg ts "$ts" --arg sid "$SID" --arg disp "$1" --arg reason "$2" --argjson extra "$extra" \
-    '{ts:$ts,hook:"completion-assert",sid:$sid,disposition:$disp,reason:$reason} + $extra' \
-    >> "$IDL" 2>/dev/null || true
-}
-abstain() { log_idl abstained "$1"; exit 0; }
+# B-3 writer = the SSOT lib hooks/lib/idl-log.sh (consolidation audit 02); see that file for the
+# "jq-encode EVERY field" invariant this used to duplicate in four places.
+_cascd="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
+_ilib="$_cascd/lib/idl-log.sh"
+# A BRAND-NEW hooks/lib file has no ~/.claude/hooks/lib symlink until install.sh runs — and when
+# this hook executes from ~/.claude/hooks/, the CFG and $HOME tiers below resolve to that SAME
+# missing path. So resolve $0's own symlink into the checkout first: the live hook IS a symlink to
+# the repo, so this finds the lib on the same fast-forward that delivers this hook. Without it,
+# landing would leave all five IDL hooks inert until someone remembered to re-run install.sh.
+[ -f "$_ilib" ] || { _itgt="$0"; [ -L "$_itgt" ] && _itgt="$(readlink "$_itgt")"
+  _ilib="$(cd "$(dirname "$_itgt")" 2>/dev/null && pwd)/lib/idl-log.sh"; }
+[ -f "$_ilib" ] || _ilib="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/idl-log.sh"
+[ -f "$_ilib" ] || _ilib="$HOME/.claude/hooks/lib/idl-log.sh"
+# shellcheck source=lib/idl-log.sh
+# shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+if ! . "$_ilib" 2>/dev/null; then
+  # Fail LOUD but SAFE — a hook that cannot log its own disposition must not proceed silently, and
+  # must never block the turn on a misconfig.
+  printf 'completion-assert: FATAL — cannot source %s (IDL writer inert).\n' "$_ilib" >&2
+  exit 0
+fi
+idl_init "$IDL" "completion-assert"
 
 command -v jq >/dev/null 2>&1 || abstain "no-jq"
 
