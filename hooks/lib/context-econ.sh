@@ -95,7 +95,11 @@ ce_log_drop() {
   local tel="${1:-}" from="${2:-0}" to="${3:-0}" tok="${4:-0}" win="${5:-}" idl sid ts
   [ "${CC_CE_DROP_LOG:-on}" = off ] && return 0
   command -v jq >/dev/null 2>&1 || return 0
-  idl="${CC_CE_IDL:-${CC_IDL:-$HOME/.claude/autonomy/idl.jsonl}}"
+  # CLAUDE_CONFIG_DIR before $HOME — a hook runs under a fixtured config root in tests and under the
+  # session's own root in production, and reaching past it to $HOME made this writer create
+  # directories under a suite's CANARY HOME (caught by waiting-recycle.bats' fixture-isolation test,
+  # which asserts nothing lands outside the fixture root).
+  idl="${CC_CE_IDL:-${CC_IDL:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/autonomy/idl.jsonl}}"
   mkdir -p "$(dirname "$idl")" 2>/dev/null || return 0
   sid="${tel##*/}"; sid="${sid%.json}"
   ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '?')"
@@ -107,6 +111,69 @@ ce_log_drop() {
     '{ts:$ts,hook:"context-econ",sid:$sid,disposition:"observed",reason:"fill-drop",
       from_pct:$from,to_pct:$to,drop_pct:($from-$to),input_tokens:$tok,window:$win}' \
     >> "$idl" 2>/dev/null || true
+  return 0
+}
+
+# ce_record_recycle <tel_json> <verdict> <used_pct> <trigger> <mode> — append ONE self-describing
+# record to the DURABLE recycle-outcome store ($HOME/.claude/autonomy/recycle-events.jsonl).
+#
+# WHY THIS EXISTS — the row's central defect. waiting-recycle wrote 32,075 IDL records and not one
+# of them answers "did a session recycle, and at what fill". Two reasons, both structural:
+#
+#   1. NO DENOMINATOR. Every record carried used_pct, a percentage of a window nothing durably
+#      recorded (see the ce_sample header). So even the fill it did log was uninterpretable later.
+#   2. `disposition:"fired"` MEANT FOUR DIFFERENT THINGS — the Stage-1 advisory, the Stage-2 live
+#      exec, the Stage-2 shadow would-fire, and the busy nudge all logged `fired`. Measured: of the
+#      3 `fired` records in the entire live IDL, TWO were advisory nudges and one was a Stage-1
+#      advisory. The count of actual executed recycles was ZERO, and the overloaded token made a
+#      mechanism that has never once executed look like it was working.
+#
+# So `verdict` here is a CLOSED, PARSEABLE ENUM — exactly one of:
+#   advised            Stage-1 told the model to recycle; nothing was executed
+#   shadow-would-fire  Stage-2 composed everything and deliberately did NOT exec (damp-first)
+#   executed           a recycle actually ran (the ONLY value that means the context was replaced)
+#   nudged             the busy-medium pause-point advisory
+# One token, one meaning (invariant R8). A consumer can finally count executions without inferring.
+#
+# Fail-soft at every seam, like every function here: no jq / unwritable dir / kill switch ⇒ return 0
+# and the caller is unaffected. Bounded (R7): pruned to half when it exceeds CC_RECYCLE_MAX.
+# Kill switch: CC_RECYCLE_LOG=off. Path override: CC_RECYCLE_EVENTS.
+ce_record_recycle() {
+  local tel="${1:-}" verdict="${2:-}" used="${3:-}" trigger="${4:-}" mode="${5:-}"
+  local store sid win tok ts max lines
+  [ "${CC_RECYCLE_LOG:-on}" = off ] && return 0
+  [ -n "$verdict" ] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  # CLAUDE_CONFIG_DIR before $HOME — see the same note in ce_log_drop. A default that reaches past
+  # the fixtured config root turns every hook that calls this into a writer outside its own sandbox.
+  store="${CC_RECYCLE_EVENTS:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/autonomy/recycle-events.jsonl}"
+  mkdir -p "$(dirname "$store")" 2>/dev/null || return 0
+  # the denominator + numerator, read from the producer's LITERAL emission — never imputed
+  win=''; tok=''
+  if [ -n "$tel" ] && [ -f "$tel" ]; then
+    win="$(jq -r '.window // empty' "$tel" 2>/dev/null || echo '')"; win="${win%.*}"
+    tok="$(jq -r '.input_tokens // empty' "$tel" 2>/dev/null || echo '')"; tok="${tok%.*}"
+  fi
+  case "$win" in ''|*[!0-9]*) win=null ;; esac
+  case "$tok" in ''|*[!0-9]*) tok=null ;; esac
+  case "$used" in ''|*[!0-9]*) used=null ;; esac
+  sid="${tel##*/}"; sid="${sid%.json}"
+  ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '?')"
+  jq -cn --arg ts "$ts" --arg sid "$sid" --arg v "$verdict" \
+        --arg trigger "${trigger:-unknown}" --arg mode "${mode:-unknown}" \
+        --argjson used "$used" --argjson tok "$tok" --argjson win "$win" \
+    '{ts:$ts,sid:$sid,hook:"context-econ",verdict:$v,used_pct:$used,
+      input_tokens:$tok,window:$win,trigger:$trigger,mode:$mode}' \
+    >> "$store" 2>/dev/null || return 0
+  max="${CC_RECYCLE_MAX:-5000}"
+  lines="$(wc -l < "$store" 2>/dev/null | tr -d ' ')"; case "$lines" in ''|*[!0-9]*) lines=0 ;; esac
+  if [ "$lines" -gt "$max" ]; then
+    if tail -n $(( max / 2 )) "$store" > "$store.tmp.$$" 2>/dev/null; then
+      mv -f "$store.tmp.$$" "$store" 2>/dev/null || rm -f "$store.tmp.$$" 2>/dev/null
+    else
+      rm -f "$store.tmp.$$" 2>/dev/null
+    fi
+  fi
   return 0
 }
 

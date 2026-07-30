@@ -870,6 +870,11 @@ if [ "$SAFE" = 0 ]; then
         log_idl fired "busy-nudge:${hold_reason}" \
           "$(jq -cn --argjson used "$used" --arg hold "$hold_reason" --argjson burn "$burn_x100" --argjson fc "$forecast_min" \
               '{used_pct:$used,hold:$hold,burn_x100:$burn,forecast_min:$fc}')"
+        # M-3: the DURABLE, self-describing outcome record. `nudged` — an advisory, NOT a recycle.
+        # Two of the three `fired` records in the entire live IDL were this branch; the enum makes
+        # that impossible to miscount ever again.
+        command -v ce_record_recycle >/dev/null 2>&1 && \
+          ce_record_recycle "$tel" nudged "$used" "busy-nudge" "${fire_mode:-busy}" || true
         if [ "$hold_reason" = "operator-conversing-hold" ]; then
           nmsg="⟳ CONTEXT PAUSE-POINT PLANNING — a live exchange is in flight and context is ${used}% (≥ ${T_NUDGE}%). Do NOT cut the exchange; DO plan its landing: at the natural end of this exchange, persist the decisions it produced (dod-persist / plan / memory), commit any in-hand work, then run /handoff to recycle into a fresh successor. The forced drain engages at ${T_BUSY}% (or sooner at high burn). (paced: re-advises per +${NUDGE_REARM}% fill)"
         else
@@ -963,6 +968,11 @@ if [ "$stage2_pending" = 1 ]; then
   fi
   if [ "$exec_ok" = 1 ]; then
     date +%s > "$cf" 2>/dev/null || true                      # anchor the cross-generation loop-breaker on the FIRE
+    # M-3: `executed` — the ONLY verdict that means a context was actually replaced. Measured across
+    # the whole live IDL before this landed: ZERO stage2-live records in 32,075 evaluations. This
+    # record is what makes that number readable instead of inferred from an overloaded token.
+    command -v ce_record_recycle >/dev/null 2>&1 && \
+      ce_record_recycle "$tel" executed "$used" "$tk" "$fire_mode" || true
     log_idl fired "stage2-live" \
       "$(jq -cn --argjson used "$used" --arg trigger "$tk" --arg mode "$fire_mode" --arg prompt_file "$pf" --argjson grace_s "$GRACE_S" \
           --argjson burn "$burn_x100" --argjson fc "$forecast_min" --argjson early "$early_busy" --argjson eg "$extended_grace" \
@@ -977,6 +987,11 @@ if [ "$stage2_pending" = 1 ]; then
   # SHADOW (default): everything a live fire does EXCEPT the exec — ships the mechanism DAMPED so a gate
   # bug cannot strand the fleet before the operator reviews the shadow log and arms live (damp-first). A
   # BUSY shadow is more urgent than idle (mid-work AND high), so it ALSO pages out-of-band.
+  # M-3: `shadow-would-fire` — everything a live fire does EXCEPT the exec. Distinguishing this from
+  # `executed` is the whole point of the enum: they were the same token, so the shadow soak was
+  # indistinguishable from a working recycle in every downstream count.
+  command -v ce_record_recycle >/dev/null 2>&1 && \
+    ce_record_recycle "$tel" shadow-would-fire "$used" "$tk" "$fire_mode" || true
   log_idl fired "stage2-shadow" \
     "$(jq -cn --argjson used "$used" --arg trigger "$tk" --arg mode "$fire_mode" --arg prompt_file "$pf" --argjson grace_s "$GRACE_S" \
         --argjson burn "$burn_x100" --argjson fc "$forecast_min" --argjson early "$early_busy" --argjson eg "$extended_grace" \
@@ -1020,6 +1035,10 @@ if   [ "$over_size" = 1 ];      then tk1=size
 elif [ "$over_threshold" = 1 ]; then tk1=threshold
 else                                 tk1=behavioral
 fi
+# M-3: `advised` — Stage-1 told the model to recycle; nothing executed. This branch logged the
+# reason string "waiting-recycle", which reads like the mechanism firing rather than an advisory.
+command -v ce_record_recycle >/dev/null 2>&1 && \
+  ce_record_recycle "$tel" advised "$used" "$tk1" "$fire_mode" || true
 log_idl fired "waiting-recycle" \
   "$(jq -cn --arg trigger "$tk1" --arg mode "$fire_mode" \
       --argjson used "$used" --argjson rot "$rot_valid" --argjson count "$((N+1))" --argjson max "$MAX" \

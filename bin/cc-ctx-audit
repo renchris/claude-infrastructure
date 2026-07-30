@@ -44,7 +44,14 @@ set -u
 
 PROG="${0##*/}"
 TELEMETRY_DIR="${CC_CTX_TELEMETRY_DIR:-/tmp/cc-telemetry}"
-EVENTS="${CC_CTX_EVENTS:-$HOME/.claude/autonomy/recycle-events.jsonl}"
+# The recycle store is written by a HOOK, and a hook resolves its config root from
+# CLAUDE_CONFIG_DIR — so the store exists once PER CONFIG ROOT, not once per machine. Sessions on
+# this box run under .claude / .claude-tertiary / .claude-quaternary, so reading only ~/.claude would
+# silently miss two thirds of the denominators (the same population trap as the transcript roots
+# below). Newline-separated; CC_CTX_EVENTS overrides with one path or several.
+EVENTS="${CC_CTX_EVENTS:-$HOME/.claude/autonomy/recycle-events.jsonl
+$HOME/.claude-tertiary/autonomy/recycle-events.jsonl
+$HOME/.claude-quaternary/autonomy/recycle-events.jsonl}"
 
 # The three REAL transcript roots. ~/.claude-next/projects is a SYMLINK to ~/.claude/projects, so
 # a naive glob double-counts every session in it (memory token-usage-from-transcripts). The list is
@@ -196,10 +203,12 @@ build_denoms() {
         "$t" 2>/dev/null
     done >> "$TMP/denom"
   fi
-  if [ -f "$EVENTS" ]; then
+  printf '%s\n' "$EVENTS" | while IFS= read -r ev; do
+    [ -n "$ev" ] || continue
+    [ -f "$ev" ] || continue
     jq -r 'select((.sid//"")!="" and (.window//null)!=null) | "\(.sid) \(.window)"' \
-      "$EVENTS" 2>/dev/null >> "$TMP/denom"
-  fi
+      "$ev" 2>/dev/null
+  done >> "$TMP/denom"
   sort -u "$TMP/denom" 2>/dev/null -o "$TMP/denom" || true
 }
 
