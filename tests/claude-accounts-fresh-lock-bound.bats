@@ -23,6 +23,10 @@
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
+  # $HOME is fixtured before anything else: CFG_PATH defaults to $HOME/.claude/accounts.json and
+  # claude-accounts resolves several other paths under $HOME, so an unfixtured suite reads AND writes
+  # the operator's live account state.
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME/.claude"
   export CA_BIN="$REPO/bin/claude-accounts"
   export CA_SSOT="$REPO/accounts.json"
   export CA_CFG="$BATS_TEST_TMPDIR/accounts.json"

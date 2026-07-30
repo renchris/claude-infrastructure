@@ -978,6 +978,45 @@ run_gate() {  # $1=range → 0 green / 1 red
     fi
   fi
 
+  # ── UTC timestamp-contract ratchet (a15/M4) ───────────────────────────────────────────────────
+  # Third deterministic blocker class, same own-scope contract as the two ratchets above. A stamp
+  # whose format ends in a literal `Z` ASSERTS UTC; if its `date` call has no -u it carries local
+  # time, and since every consumer here compares stamps against a `date -u` baseline (lexically in
+  # jq, numerically after epoch conversion) one such producer shifts every downstream age gate by the
+  # TZ offset. That is not hypothetical: cc-reaper's log() did exactly this and faked a "reaper
+  # DORMANT" alarm against a reaper that had just run (fixed in b4e3c355).
+  #
+  # It belongs HERE and not only in its own bats suite for the reason the hermeticity ratchet
+  # documents: a lint enforced solely by its own suite is post-hoc DETECTION, and gate-select will
+  # not pick that suite up when the edited file is a producer rather than the lint. At the gate it is
+  # scope-independent, sub-second, and names the file to the session that wrote it.
+  #
+  # --selftest runs alongside the scan: this lint's fixtures replay the real scar line byte-for-byte,
+  # so it cannot scan itself (see the self-exclusion in lint_dir) and the selftest is what proves the
+  # detector still discriminates. A ratchet whose own discrimination is unverified is not a gate.
+  UTC_LINT="${SHIP_LAND_UTC_LINT:-scripts/utc-stamp-lint.sh}"
+  if [[ -x "$UTC_LINT" ]]; then
+    local uown=""
+    if [[ "${SHIP_LAND_UTC_OWN_SCOPE:-on}" != "off" ]]; then
+      # Paths are matched relative to the scan root, which is how the lint reports them.
+      uown="$(git diff --name-only "$range" -- 'bin/*' 'hooks/*' 'scripts/*' 2>/dev/null | sed 's:^[^/]*/::' || true)"
+      [[ -n "$uown" ]] && echo "→ gate: utc-stamp own-scope — blocking on $(printf '%s\n' "$uown" | grep -c .) file(s) in this land's diff; others advisory." >&2
+    fi
+    echo "→ gate: UTC timestamp-contract ratchet (a Z suffix from a non-UTC clock)" >&2
+    if ! "$UTC_LINT" --selftest >/dev/null 2>&1; then
+      echo "✗ gate: utc-stamp-lint --selftest FAILED — the detector no longer discriminates, so its" >&2
+      echo "  clean verdict would mean nothing. Fix the lint before landing." >&2
+      GATE_RED=1
+      return 1
+    fi
+    if ! CC_UTC_OWN="$uown" "$UTC_LINT" >&2; then
+      echo "✗ gate: UTC-stamp RED — a file THIS LAND CHANGES stamps a literal Z from a local clock." >&2
+      echo "  Add -u to the date call (or emit %z instead of Z); the file and lines are named above." >&2
+      GATE_RED=1
+      return 1
+    fi
+  fi
+
   # ── the test phase — SMOKE in the fast lane, the whole corpus only under the v1 kill switch ──
   # NOT gated on the statics rc above: an already-red land still runs the smoke, so the author gets
   # the lint error AND the failing test in ONE cycle. Same reasoning as run_corpus's no-fail-fast —
