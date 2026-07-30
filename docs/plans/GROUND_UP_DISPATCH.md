@@ -1090,6 +1090,19 @@ the pre-fix tree is the RED (14/16 via shim). One line of test hermeticity, but 
 trap the runbook was about to walk every remaining row into — the row 8 payload below originally
 said "run the gate corpus through `bin/cc-bats`" with no caveat.
 
+**ROW 2'S TEAMMATE WORK LIVES IN A WARM-POOL WORKTREE, NOT A `gu2-*` ONE — write the branch name
+down.** My land's stranded-sweep flagged two commits carrying `tests/handoff-*.bats` absent from
+origin/main, which read exactly like row 2's surface being stranded. It is not: branch
+**`wt-f44a901152d9`** is **4 commits ahead** of trunk (handoff-fire fixes 16:44-17:10) with **6 live
+processes** holding its cwd — active teammate WIP, and the sweep's own instruction is to never
+cherry-pick a peer's unlanded work onto trunk. Two navigational traps worth inheriting: (a) row 2's
+lead sits in `gu-session-lifecycle` while its assignees sit in **warm-pool `wt-<hash>` worktrees**,
+so `ls .worktrees/gu2-*` finds nothing and a coordinator scanning by row-slug name concludes the
+teammates are gone; (b) if row 2's lead dies, those 4 commits are recoverable ONLY via that branch
+name — recorded here for exactly that reason (memory `team-recovery-disk-truth-over-notifications`).
+Verified live, not inferred: 0 of those three test paths exist on trunk, on row 2's branch, or in
+row 2's worktree.
+
 **Cap status: in-flight drops 3 → 2. STILL AT THE CAP — fire nothing.** Rows 2 and 10 remain live
 (verified by transcript content and by cwd). The next fire needs in-flight **< 2**, i.e. one of
 them DONE by disk. Row 8's payload is composed, flag-verified against the parser, and materialized
