@@ -42,17 +42,19 @@ command -v jq >/dev/null 2>&1 || { echo "boot-resume: jq required" >&2; exit 1; 
 
 now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
-# Resolve a helper binary: env override → beside-script → CFG bin → ~/.claude/bin → PATH. Echo or "".
-resolve_bin() { # <env-value> <basename> [<beside-name>]
-  local override="$1" name="$2" beside="${3:-$2}" cand
-  if [ -n "$override" ]; then [ -x "$override" ] && printf '%s' "$override"; return 0; fi
-  for cand in "$(dirname "$0")/$beside" "$(dirname "$0")/../bin/$name" \
-              "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/bin/$name" "$HOME/.claude/bin/$name"; do
-    [ -x "$cand" ] && { printf '%s' "$cand"; return 0; }
-  done
-  command -v "$name" >/dev/null 2>&1 && printf '%s' "$(command -v "$name")"
-  return 0
-}
+# Shared helpers (consolidation audit 02): resolve_bin lived here AND in autonomy-sweep.sh, already drifted.
+# Resolution ladder mirrors the hooks/lib house idiom: beside-script → CFG → ~/.claude.
+_ccl="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/lib/cc-common.sh"
+[ -f "$_ccl" ] || _ccl="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/lib/cc-common.sh"
+[ -f "$_ccl" ] || _ccl="$HOME/.claude/scripts/lib/cc-common.sh"
+# shellcheck source=lib/cc-common.sh
+# shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+if ! . "$_ccl" 2>/dev/null; then
+  # Fail LOUD: this is a launchd job, and silently proceeding with unresolved helper paths is the
+  # silent-degradation failure mode these scripts exist to avoid.
+  echo "boot-resume: FATAL — cannot source $_ccl (resolve_bin unavailable)" >&2
+  exit 1
+fi
 NOTIFY="$(resolve_bin "${CC_NOTIFY_BIN:-}" cc-notify)"
 LAUNCH="$(resolve_bin "${CC_RESUME_LAUNCH_BIN:-}" boot-resume-launch.sh boot-resume-launch.sh)"
 # ── the shared resume-selection decision point (session-sprawl consolidation, 2026-07-21).

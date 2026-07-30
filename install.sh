@@ -168,6 +168,25 @@ for script in "$REPO_DIR"/scripts/*.sh; do
   fi
 done
 
+# scripts/lib/ — same reason as limit-recover below: the loop above globs scripts/*.sh top-level
+# only, so a subdirectory needs its own explicit pass. cc-common.sh holds resolve_bin, sourced by
+# the boot-resume and autonomy-sweep launchd jobs (consolidation audit 02); if it is not deployed,
+# both fail LOUD at startup rather than degrading silently — so this loop is load-bearing, not
+# cosmetic.
+if [[ -d "$REPO_DIR/scripts/lib" ]]; then
+  echo ""
+  echo "Script libs → $CONFIG_DIR/scripts/lib/"
+  ensure_real_dir "$CONFIG_DIR/scripts/lib"
+  for f in "$REPO_DIR"/scripts/lib/*.sh; do
+    [[ -f "$f" ]] || continue
+    if $IS_GLOBAL; then
+      link_file "$f" "$CONFIG_DIR/scripts/lib/$(basename "$f")"
+    else
+      copy_file "$f" "$CONFIG_DIR/scripts/lib/$(basename "$f")"
+    fi
+  done
+fi
+
 # scripts/limit-recover/ — the loop above globs scripts/*.sh (top level only), so this
 # subdirectory was never deployed by the installer. It was reachable ONLY via
 # docs/activation/wiring-all.sh, which is explicitly marked run-by-hand — yet
