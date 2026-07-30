@@ -302,12 +302,30 @@ def assert_texture_not_eventised() -> None:
 
 RARE_EVENTS = {
     #  name        (start_s, end_s)   duration — all inside the 2.5-10s band
-    # The three ratified beats, ordered so all three land inside the window a reader actually sees.
-    # The timeline anchors at LOAD (S16), so placement is not taste: a beat at t=200s is not rare,
-    # it is unseen. THE REFUSAL leads because it is the strongest of the three.
-    "rRefuse": (3.0, 8.0),  # 5.0s — THE REFUSAL: the world pulls back one print pitch
+    # Ordered so the beats land inside the window a reader actually sees. The timeline anchors at
+    # LOAD (S16), so placement is not taste: a beat at t=200s is not rare, it is unseen.
+    #
+    # THE SUMMONING now LEADS, and that cost the other two their slots. A reader arrives at t=0 and
+    # stays 5-15s, once — so the prime window is a single resource and it goes to the beat that says
+    # the most. THE REFUSAL and THE ASK were re-timed, not weakened: both keep their full span, their
+    # full world-clock modulation and their order relative to each other. Nothing here is a
+    # loosened assertion — `assert_events_disjoint` and `assert_one_strip_feature` both name
+    # re-timing in RARE_EVENTS as THE fix, and this is that fix.
+    #
+    # Every number below is forced, none is preference:
+    #   · 9.6s, not the 10.0s `instance_max` — BUDGET's per_type_pct of 4.0% caps ONE beat at
+    #     4% of 240s. A 3.0-13.0 window is 10.0s and breaches it; BUDGET_WAIVED is empty by design.
+    #   · the 4.0s gaps are exactly EVENT_GAP; tightening any of them fails the disjointness gate.
+    #   · rAsk could not start later than 26.0s: its 6s stop would then reach into the hop's airborne
+    #     span (32.64-35.04s on the 12s hop clock) and `assert_hop_clear_of_stopped_world` refuses a
+    #     creature jumping while the world is frozen. It clears that by 0.64s.
+    "rSummon": (
+        3.4,
+        13.0,
+    ),  # 9.6s — THE SUMMONING: a subagent is called, works, and removes itself
+    "rRefuse": (17.0, 22.0),  # 5.0s — THE REFUSAL: the world pulls back one print pitch
     # THE ASK: 6s of dead world, then 3s at treble to clear the debt.
-    "rAsk": (13.0, 22.0),  # 9.0s
+    "rAsk": (26.0, 35.0),  # 9.0s
     # THE OVERLAP: the print pitch halves; the foot lands on every 2nd print. Placed here and not
     # earlier because it and THE REFUSAL are the only two beats that put an OBJECT on the scrolling
     # strip, and a strip object is on canvas for ~20s however brief its beat is. Their on-canvas
@@ -400,7 +418,7 @@ def _waived(kind: str, event: str | None) -> str | None:
 #              legibility audit had already named it the designated sacrifice; the artifact agreed.
 #   rCheer   — belongs to the visitor's visit, and the visitor beats are on hold. On its own it is
 #              an unprompted celebration with nothing present to celebrate.
-ALWAYS_EMITTED = ("rRefuse", "rAsk")
+ALWAYS_EMITTED = ("rSummon", "rRefuse", "rAsk")
 
 
 def active_events(art: Art) -> list[str]:
@@ -1945,7 +1963,7 @@ def ground_detail(art: Art) -> str:
 
 
 # ── clawd ─────────────────────────────────────────────────────────────────────────────────────────
-def clawd_sprite(idsuffix: str = "", cheer: bool = True) -> str:
+def clawd_sprite(idsuffix: str = "", cheer: bool = True, summon: bool = False) -> str:
     """The creature as nested single-animation groups (S8).
 
     Geometry is the 11x8 grid from the binary: rows 0-5 are the body at columns 1-9, rows 2-3 widen
@@ -1959,6 +1977,12 @@ def clawd_sprite(idsuffix: str = "", cheer: bool = True) -> str:
     `cheer=False` omits the arms-up group entirely rather than leaving it for a gate to hide. An
     ungated group is not hidden — the raised arms would simply be ON for the whole loop — so the
     element and its gate have to appear and disappear together.
+
+    `summon=True` adds THE SUMMONING's two ON-BODY props: the hat, and the cake once it is in hand.
+    Both live INSIDE this group rather than beside it, and that is forced rather than tidy — `.hop`
+    lifts the creature 30px every 12s and the beat's window contains an airborne span, so a
+    screen-pinned prop "in hand" would hang in the air for 2.4s while the hand left it behind. In here
+    they ride the bob and the hop for free, with no second animation on any element.
     """
     c = CELL
     sfx = idsuffix
@@ -2044,6 +2068,30 @@ def clawd_sprite(idsuffix: str = "", cheer: bool = True) -> str:
         f"</g>"
     )
 
+    # THE SUMMONING's hat: a solid crown one cell above the head and a brim one row WIDER sitting on
+    # the head's own top row. No mid-band — a band across a 5-cell crown at this size is one pixel row
+    # of a third colour and reads as noise, not as a hatband. The crown clears the body's top edge by
+    # exactly one cell, which `assert_summon_clear_plate` bounds: unbounded, a crown grows into the
+    # sky this beat is not allowed to author in.
+    hat = (
+        (
+            f'<g class="smHat{sfx}">'
+            f'<rect x="{3 * c}" y="{-c}" width="{5 * c}" height="{c}"/>'
+            f'<rect x="{2 * c}" y="0" width="{7 * c}" height="{c}"/>'
+            f"</g>"
+        )
+        if summon
+        else ""
+    )
+    # ...and the cake ONCE IT IS IN HAND, as a second copy that takes over from the travelling one at
+    # the same position in the same instant. Two representations of one object is the only way it can
+    # both cross open plate and then ride A's hop — and they cannot disagree, because the travelling
+    # copy is authored AT this position and animated backwards from B.
+    #
+    # Drawn BEFORE the body, which is the exit: its last four steps slide it 8 cells left, entirely
+    # inside the body rect, and it switches off there. Occluded, not popped.
+    held = f'<g class="smHeld{sfx}">{_cake(11 * c, c, c)}</g>' if summon else ""
+
     return (
         # turn-around: a rare scaleX flip so he walks against the scroll for a few seconds
         f'<g class="rTurn{sfx}">'
@@ -2057,6 +2105,7 @@ def clawd_sprite(idsuffix: str = "", cheer: bool = True) -> str:
         f'<g class="armsGate{sfx}"><g class="armsIdle{sfx}">{arms_idle}</g></g>'
         f"{cheer_group}"
         f"{arms_alert}"
+        f"{held}"
         f"{body}"
         # The look cycle needs an opacity gate for THE ASK, and it already carries the 8 s pan, so it
         # takes a wrapper: gate outside, pan inside. Same shape as armsGate/armsIdle, same reason.
@@ -2069,6 +2118,9 @@ def clawd_sprite(idsuffix: str = "", cheer: bool = True) -> str:
         # without any element carrying two animations
         f'<g class="legsWalk{sfx}">{legs("legA" + sfx, (1, 7))}{legs("legB" + sfx, (3, 9))}</g>'
         f'<g class="legsStill{sfx}">{legs("legS" + sfx, (1, 3, 7, 9))}</g>'
+        # the hat LAST: it must sit over the head, not behind it, or the brim disappears into the body
+        # and the crown alone is the two-nubs-above-the-head shape already measured to read as horns
+        f"{hat}"
         f"</g></g></g>"
     )
 
@@ -2085,7 +2137,8 @@ def clawd_placed(art: Art, x: float, scale: float, sfx: str = "") -> str:
     )
     return (
         shadow + f'<g transform="translate({fmt(x)} {fmt(ty)}) scale({fmt(scale)})" '
-        f'shape-rendering="crispEdges">{clawd_sprite(sfx, emits(art, "rCheer"))}</g>'
+        f'shape-rendering="crispEdges">'
+        f"{clawd_sprite(sfx, emits(art, 'rCheer'), emits(art, 'rSummon'))}</g>"
     )
 
 
@@ -2110,6 +2163,451 @@ def peek(art: Art) -> str:
         f'<rect class="eyeHole" x="{2 * CELL}" y="{2 * CELL}" width="{CELL}" height="{CELL}"/>'
         f'<rect class="eyeHole" x="{8 * CELL}" y="{2 * CELL}" width="{CELL}" height="{CELL}"/>'
         f"</g></g></g>"
+    )
+
+
+# ── THE SUMMONING ─────────────────────────────────────────────────────────────────────────────────
+# The resident dons a hat; a burst opens in the clear plate beside it and a SECOND, SMALLER clawd is
+# standing there; the resident hands it a letter; it hands back a cake; it removes itself in a second
+# burst and the resident walks on with the cake. `Task`/`Agent` in four moves: dispatch, work,
+# result, self-removal. The letter is the brief and the cake is the finished work.
+#
+# WHY THIS PUTS TWO CREATURES ON SCREEN when v6b's peer was rejected for exactly that. The peer WALKED
+# IN from off-frame, which claims sessions are co-present in one world — they are not, they live in
+# other panes. This one is CALLED INTO EXISTENCE and REMOVES ITSELF inside one 9.6s window, which is
+# precisely what a subagent is. The distinction is the whole beat; a peer that merely arrived would
+# be the rejected idea with new props.
+#
+# B IS DERIVED, NOT INVENTED. docs/research/CLAWD_SPRITE_EXTRACTION_2026-07-29.md § "The idle poses"
+# records a second, SMALLER clawd shipping alongside the pose table, so a smaller orange mass is the
+# binary's own vocabulary rather than this session's idea — and it preserves the source's rule of ONE
+# saturated orange subject, which two same-size clawds break by construction.
+SUMMON_B_SCALE = 0.8  # asserted SMALLER than A's; B does not walk, so the stride lock does not own it
+SUMMON_GAP_CELLS = (
+    6  # clear plate between the two bodies, measured in A's OWN grid cells
+)
+SUMMON_CLEAR_MIN = (
+    2  # the floor: below this the two flat-orange masses read as one shape
+)
+SUMMON_Y_FLOOR = (
+    340.0  # no NEW ink in the clear plate above this; the sky stays ambient
+)
+
+# The choreography, as FRACTIONS of the declared window — never absolute seconds. `atf`'s docstring is
+# the reason and it is not hypothetical: v6b's interior keyframes were seconds carried over from a
+# longer window, resolved to negative percentages, and CSS dropped the whole block SILENTLY, so the
+# beat was simply absent from the candidate built to show it off.
+#
+# THE ORDER IS FORCED BY TWO FACTS, not by taste:
+#  1. The ambient hop is airborne 8.64-11.04s on its 12s clock, i.e. inside this window, and it cannot
+#     be moved — every other period that divides P either lands a jump inside a stopped world (the
+#     assertion refuses it) or makes the hop so rare it stops reading as life. So NOTHING may be in
+#     hand across it: both hand-offs complete by 8.6s, and the hop falls in the span where A is just
+#     walking on with the cake, which is where a hop belongs anyway.
+#  2. The loop must seam, so every prop must be gone by f=1. The cake leaves by sliding BEHIND A's own
+#     body and switching off while fully occluded, and the letter the same way behind B — the exit is
+#     the entrance played backwards, which this file already requires of the barrier and the peer.
+#     The hat is the ONE plain swap: no pose in the vocabulary can lift it (arms translate on y only),
+#     and sliding it down through A's face to hide it would be worse than a swap.
+SM_HAT_ON, SM_HAT_OFF = 0.0625, 0.9375
+SM_SPARK = (
+    0.0625,
+    0.198,
+)  # the summoning burst; B switches on inside it, so nothing pops
+SM_B_ON, SM_B_OFF = 0.125, 0.604
+SM_MAIL = (
+    0.229,
+    0.375,
+)  # 4 steps across the gap, then 2 more INTO B: taken, not vanished
+SM_MAIL_OFF = 0.396
+SM_BUP = (
+    0.406,
+    0.49,
+)  # B's arms-up — the one whole-body pose in the table — as it hands the cake
+SM_CAKE = (0.4375, 0.5215)
+SM_HELD_ON = (
+    0.542  # the travelling cake switches off in the same instant, at the same position
+)
+SM_POOF = (0.5625, 0.667)
+SM_OCCLUDE = (0.8125, 0.917)  # after the hop lands at 11.04s, never during it
+SM_HELD_OFF = 0.9375
+
+
+def summon_cell(art: Art) -> float:
+    """A's grid cell in canvas px — the ONE grid every prop is drawn and moved on.
+
+    Props are sized and stepped in whole multiples of this. A prop that moves a fractional pixel per
+    frame crawls: its edges shimmer at the render scale the README actually uses, which is the
+    difference between pixel art and a scaled bitmap.
+    """
+    return CELL * art.clawd_scale
+
+
+def summon_bx(art: Art) -> float:
+    """B's left edge. ONE definition, read by every emitter AND by the clear-plate gate."""
+    return (
+        art.clawd_x + SPRITE_W * art.clawd_scale + SUMMON_GAP_CELLS * summon_cell(art)
+    )
+
+
+def sm_at(f: float) -> float:
+    """A fraction of THE SUMMONING's declared window, in absolute seconds.
+
+    The only way any part of this beat is allowed to name a time. `at()` takes seconds and `atf()`
+    returns a percentage string; the gates want seconds, so this is the seconds-valued sibling of
+    `atf` and it reads the window from RARE_EVENTS exactly as they do.
+    """
+    w0, w1 = ev("rSummon")
+    return w0 + f * (w1 - w0)
+
+
+def summon_steps(art: Art) -> dict[str, float]:
+    """Every prop offset this beat uses, in canvas px, derived from the grid rather than measured.
+
+    Returned as one dict so `assert_summon_on_grid` can check the same numbers the emitters use — a
+    second copy is how the stride lock got four different ground speeds.
+    """
+    u = summon_cell(art)
+    return {
+        "u": u,
+        "mail_dx": u,  # one cell per step across the gap
+        "mail_dy": u / 2,  # and half a cell down: A's hand band is one cell above B's
+        "mail_swallow": u * 1.5,  # the two steps that carry it inside B's silhouette
+        "cake_dx": -3 * u / 4,  # 4 steps back over 3 cells
+        "cake_dy": -14.0,  # 4 steps up over the 56px between B's hands and A's
+        "held_dx": -2 * CELL,  # LOCAL px inside A's sprite: 2 cells per step, 4 steps
+    }
+
+
+def assert_summon_on_grid(art: Art) -> None:
+    """Every prop step must be a WHOLE number of canvas pixels.
+
+    Not a style rule. These props are 3-cell rects with hard edges on a 240s loop; a step of 23.5px
+    puts every edge on a half pixel for half the beat, and at the 838px README column that is a
+    visible crawl on the one object the beat asks the reader to follow. Asserted rather than trusted
+    because the offsets are derived from `art.clawd_scale`, so a future variant with a different
+    scale would break them silently.
+    """
+    bad = [
+        (k, v)
+        for k, v in summon_steps(art).items()
+        if abs(v - round(v)) > 1e-9 and k != "u"
+    ]
+    if bad:
+        raise SystemExit(
+            f"gen[{art.key}]: THE SUMMONING's prop step(s) {bad} are not whole canvas pixels at "
+            f"clawd_scale={art.clawd_scale}. A prop moving a fractional pixel per step crawls at the "
+            f"render scale the README uses. Pick step counts that divide the travel exactly."
+        )
+
+
+def assert_summon_clear_plate(art: Art) -> None:
+    """B must never touch A, must be SMALLER than A, and must fit inside the frame.
+
+    v6b shipped a peer interpenetrating the resident for 7.2s in the same flat #D77757, and it read
+    as a render error rather than as two sessions: two same-colour bodies that meet become ONE
+    connected orange region, and the eyes of the one behind are simply erased. So the gap is asserted
+    in A's own cells — the grid the reader's eye measures against — and the size difference with it,
+    because two equal orange masses break the source's one-subject rule even when they never touch.
+    """
+    u = summon_cell(art)
+    if SUMMON_B_SCALE >= art.clawd_scale:
+        raise SystemExit(
+            f"gen[{art.key}]: B's scale {SUMMON_B_SCALE} is not smaller than A's "
+            f"{art.clawd_scale}. B is the binary's SMALLER in-session clawd; two same-size creatures "
+            f"give the frame two equal orange subjects, which the source art does not do."
+        )
+    a_right = art.clawd_x + SPRITE_W * art.clawd_scale
+    b_left = summon_bx(art)
+    clear = (b_left - a_right) / u
+    if clear < SUMMON_CLEAR_MIN:
+        raise SystemExit(
+            f"gen[{art.key}]: only {clear:.2f} cells of clear plate between A and B, under the "
+            f"{SUMMON_CLEAR_MIN}-cell floor. Props hand ACROSS the gap; a gap this narrow makes the "
+            f"two flat-orange masses read as one shape."
+        )
+    b_right = b_left + SPRITE_W * SUMMON_B_SCALE
+    if b_right > W:
+        raise SystemExit(
+            f"gen[{art.key}]: B's right edge is at x={b_right:.0f}, past the {W}px frame — it would "
+            f"be cropped, and a half-summoned creature reads as a clipping bug. Reduce "
+            f"SUMMON_GAP_CELLS or move clawd_x left."
+        )
+    b_top = GROUND - SPRITE_H * SUMMON_B_SCALE
+    if b_top < SUMMON_Y_FLOOR:
+        raise SystemExit(
+            f"gen[{art.key}]: B's head reaches y={b_top:.0f}, above the y={SUMMON_Y_FLOOR:.0f} floor "
+            f"this beat may author in. The sky is ambient; only the resident's own silhouette goes up "
+            f"there. Reduce SUMMON_B_SCALE."
+        )
+    # The hat is the one exemption, and it is BOUNDED rather than waived: it may clear the body's own
+    # top edge by exactly one cell and no more. A's silhouette already reaches y=314, above the
+    # floor, so a floor cannot apply to on-creature ink — but an unbounded exemption would let the
+    # crown grow into the sky, which is the thing the floor exists to prevent.
+    a_top = GROUND - SPRITE_H * art.clawd_scale
+    hat_top = a_top - CELL * art.clawd_scale
+    if hat_top < a_top - u - 1e-9:
+        raise SystemExit(
+            f"gen[{art.key}]: the hat's crown reaches y={hat_top:.0f}, more than one cell above the "
+            f"body's own top edge y={a_top:.0f}"
+        )
+
+
+def _cake(x: float, y: float, u: float) -> str:
+    """3 wide x 2 tall, an icing row, one candle pixel. The riskiest prop, so it is built to be
+    SELF-contrasting rather than to contrast with the plate: dark body under a pale icing row under an
+    amber candle. That way it reads on the navy ground and on the pale one without a theme override,
+    which a single-tone silhouette of this size could not do.
+    """
+    return (
+        f'<rect class="smCkC" x="{fmt(x + u)}" y="{fmt(y)}" width="{fmt(u)}" height="{fmt(u)}"/>'
+        f'<rect class="smCkI" x="{fmt(x)}" y="{fmt(y + u)}" width="{fmt(3 * u)}" '
+        f'height="{fmt(u)}"/>'
+        f'<rect class="smCkB" x="{fmt(x)}" y="{fmt(y + 2 * u)}" width="{fmt(3 * u)}" '
+        f'height="{fmt(2 * u)}"/>'
+    )
+
+
+def _burst(cx: float, cy: float, cls: str) -> str:
+    """Five dots as ONE group with STATIC children.
+
+    The dots never animate individually — one transform on the group is the entire effect. That is
+    not tidiness: an SVG loaded as an `<img>` can never pause off-screen, so every element here is
+    painting for as long as the page is open, and five dots animated singly would be five times the
+    cost of the same picture.
+    """
+    r = 5.0
+    dots = "".join(
+        f'<rect class="smSpk" x="{fmt(cx + dx - r)}" y="{fmt(cy + dy - r)}" '
+        f'width="{fmt(2 * r)}" height="{fmt(2 * r)}"/>'
+        for dx, dy in ((0, -34), (30, -13), (19, 27), (-19, 27), (-30, -13))
+    )
+    return f'<g class="{cls}">{dots}</g>'
+
+
+def summon_burst_centre(art: Art) -> tuple[float, float]:
+    """Both bursts fire at B's own centre — ONE definition, also read by the CSS transform-origin."""
+    return (
+        summon_bx(art) + SPRITE_W * SUMMON_B_SCALE / 2,
+        GROUND - SPRITE_H * SUMMON_B_SCALE / 2,
+    )
+
+
+def summon_props(art: Art) -> str:
+    """The bursts and the two travelling props, drawn UNDER both creatures.
+
+    Under, not over, and that is the whole exit mechanism: the letter's last two steps carry it inside
+    B's silhouette and the travelling cake hands off to a copy inside A's, so each prop switches off
+    while fully occluded instead of popping out of existence in open plate. A prop drawn OVER a body
+    would also be the v6b failure in miniature — an object crossing a face erases it.
+    """
+    if not emits(art, "rSummon"):
+        return ""
+    st = summon_steps(art)
+    u = st["u"]
+    cx, cy = summon_burst_centre(art)
+    a_right = art.clawd_x + SPRITE_W * art.clawd_scale
+    a_top = GROUND - SPRITE_H * art.clawd_scale
+    hand_y = (
+        a_top + 2 * u
+    )  # A's arm band: the letter leaves from the hand, not from the body
+    # The letter: a pale face inside a dark edge. The brief's pale #f4ead8 alone is invisible on the
+    # light scheme's pale plate, so the READ comes from the edge and the pale is the fill inside it —
+    # one shape that works in both schemes rather than two theme overrides of the same rect.
+    letter = (
+        f'<g class="smMail">'
+        f'<rect class="smMailE" x="{fmt(a_right)}" y="{fmt(hand_y)}" width="{fmt(2 * u)}" '
+        f'height="{fmt(2 * u)}"/>'
+        f'<rect class="smMailF" x="{fmt(a_right + u / 4)}" y="{fmt(hand_y + u / 4)}" '
+        f'width="{fmt(1.5 * u)}" height="{fmt(1.5 * u)}"/>'
+        f'<rect class="smMailE" x="{fmt(a_right + u / 2)}" y="{fmt(hand_y + 0.85 * u)}" '
+        f'width="{fmt(u)}" height="{fmt(u / 4)}"/>'
+        f"</g>"
+    )
+    # The travelling cake is drawn at its DESTINATION and animated backwards from B, so its final
+    # position is identical to the held copy's by construction rather than by two numbers agreeing.
+    cake = f'<g class="smCake">{_cake(a_right, a_top + u, u)}</g>'
+    return letter + cake
+
+
+def summon_bursts(art: Art) -> str:
+    """Both bursts, drawn OVER B — the one thing in this beat that is not under a body.
+
+    Measured, not assumed: with the burst under B its dots sit at radius 34-68px from B's own centre,
+    i.e. inside a 176x128 body, so B occluded its own summoning for all but 0.37s of a 1.3s burst. The
+    first render showed a creature simply appearing next to a hat. A burst is light rather than an
+    object, so in front is also where it belongs: at its bright stage it covers B's arrival, which is
+    exactly what a materialisation has to do — nothing may be seen switching on.
+    """
+    if not emits(art, "rSummon"):
+        return ""
+    cx, cy = summon_burst_centre(art)
+    return _burst(cx, cy, "smSpark") + _burst(cx, cy, "smPoof")
+
+
+def summon_peer(art: Art) -> str:
+    """B — the smaller in-session clawd, SCREEN-PINNED, summoned and self-removed.
+
+    Screen-pinned, never on the scrolling strip, and that is a hard constraint rather than a choice: a
+    strip-borne object is on canvas for (W + its width) / 96 ≈ 20-26s however brief its beat is, so B
+    would still be standing there through THE REFUSAL and THE ASK. Screen-pinning also costs the
+    world clock nothing — no rate change, so no debt to repay and no print-lock exposure.
+
+    B does not walk, does not bob and does not blink, and none of that is an omission. A summoned
+    subagent is not a session walking a world; it is called, it works, it is gone. Its one motion is
+    the arms-up pose from the quoted table, at the instant it hands the work back.
+    """
+    if not emits(art, "rSummon"):
+        return ""
+    s = SUMMON_B_SCALE
+    c = CELL
+    x = summon_bx(art)
+    ty = GROUND - SPRITE_H * s
+    sw = SPRITE_W * s
+    # look-left, straight out of the pose table: the eye band shifts ONE cell and nothing else moves.
+    # B stands to A's right, so look-left is B looking AT A — which is the only reason to pick a pose
+    # over the default at all.
+    eyes = "".join(
+        f'<rect class="eyeHole" x="{k * c}" y="{2 * c}" width="{c}" height="{c}"/>'
+        for k in (1, 7)
+    )
+    legs = "".join(
+        f'<rect x="{k * c}" y="{6 * c}" width="{c}" height="{2 * c}" fill="{CLAWD}"/>'
+        for k in (1, 3, 7, 9)
+    )
+    arms_idle = (
+        f'<rect x="0" y="{2 * c}" width="{c}" height="{2 * c}" fill="{CLAWD}"/>'
+        f'<rect x="{10 * c}" y="{2 * c}" width="{c}" height="{2 * c}" fill="{CLAWD}"/>'
+    )
+    # arms-up is the table's ONE whole-body pose and it translates on y only: 2c - 3c = -1c. No
+    # horizontal component exists in the vocabulary, which is also why there is no wave anywhere here.
+    arms_up = (
+        f'<rect x="0" y="{-c}" width="{c}" height="{2 * c}" fill="{CLAWD}"/>'
+        f'<rect x="{10 * c}" y="{-c}" width="{c}" height="{2 * c}" fill="{CLAWD}"/>'
+    )
+    return (
+        f'<g class="smPeer">'
+        # a contact shadow, static: without one a grounded creature reads as pasted on
+        f'<ellipse class="sh" cx="{fmt(x + sw / 2)}" cy="{fmt(GROUND + 3)}" '
+        f'rx="{fmt(sw * 0.44)}" ry="{fmt(7 * s)}"/>'
+        f'<g transform="translate({fmt(x)} {fmt(ty)}) scale({fmt(s)})" '
+        f'shape-rendering="crispEdges">'
+        # arms before the body, as on A, so the body covers the shoulder joint
+        f'<g class="smBArm">{arms_idle}</g>'
+        f'<g class="smBUp">{arms_up}</g>'
+        f'<rect x="{c}" y="0" width="{9 * c}" height="{6 * c}" fill="{CLAWD}"/>'
+        f"{eyes}{legs}"
+        f"</g></g>"
+    )
+
+
+def summon_burst_css(
+    name: str, cls: str, win: tuple[float, float], cx: float, cy: float
+) -> str:
+    """One burst: ONE animation on ONE group, opacity and transform in the SAME keyframe block.
+
+    Two declarations would be two animations on one element, which `banner-shots.sh --lint` rejects —
+    and rightly: the freeze overrides delay on `*`, so the second one starts immediately and paints
+    its value into frames it does not belong in. `steps(1,end)` because a burst on a pixel-art plate
+    is four discrete stages, not a tween; an interpolated scale puts the dots on fractional pixels for
+    the whole of it.
+    """
+    f0, f1 = win
+    span = f1 - f0
+    frames = [f"0%,{atf('rSummon', f0)}%{{opacity:0;transform:scale(.25)}}"]
+    # The first VISIBLE stage lands at 3% of the burst, not 18%: at 18% the burst began a quarter of a
+    # second after the hat appeared, so the hat popped on with nothing to cover it. A burst has to be
+    # already bright at its own window start or it is not covering anything.
+    for k, op, sc in (
+        (0.03, 1.0, 0.5),
+        (0.28, 1.0, 1.1),
+        (0.55, 1.0, 1.6),
+        (0.8, 0.5, 2.0),
+    ):
+        frames.append(
+            f"{atf('rSummon', f0 + k * span)}%"
+            f"{{opacity:{fmt(op)};transform:scale({fmt(sc)})}}"
+        )
+    frames.append(f"{atf('rSummon', f1)}%,100%{{opacity:0;transform:scale(.25)}}")
+    return (
+        f"@keyframes {name}{{{''.join(frames)}}}"
+        f".{cls}{{animation:{name} {fmt(P)}s steps(1,end) infinite;"
+        f"transform-origin:{fmt(cx)}px {fmt(cy)}px}}"
+    )
+
+
+def summon_travel_css(
+    name: str, cls: str, marks: list[tuple[float, float, float, int]]
+) -> str:
+    """A prop crossing the gap in WHOLE-PIXEL steps: (fraction, dx, dy, opacity) per authored stop.
+
+    `steps(1,end)` holds each stop and then jumps, so the prop is only ever at an authored position —
+    which is what makes "integer art-pixel steps" true of what actually renders rather than of the
+    intent. Opacity travels in the same block for the same one-animation-per-element reason as the
+    bursts, and it is what lets a prop switch off while occluded instead of fading.
+    """
+    frames = ["0%{opacity:0}"]
+    for f, dx, dy, op in marks:
+        frames.append(
+            f"{atf('rSummon', f)}%{{opacity:{op};"
+            f"transform:translate({fmt(dx)}px,{fmt(dy)}px)}}"
+        )
+    frames.append("100%{opacity:0}")
+    return (
+        f"@keyframes {name}{{{''.join(frames)}}}"
+        f".{cls}{{animation:{name} {fmt(P)}s steps(1,end) infinite}}"
+    )
+
+
+def summon_css(art: Art) -> str:
+    """Every rule THE SUMMONING needs. Nine animations, nine elements, no element with two."""
+    st = summon_steps(art)
+    cx, cy = summon_burst_centre(art)
+    dx, dy, sw = st["mail_dx"], st["mail_dy"], st["mail_swallow"]
+    m0, m1 = SM_MAIL
+    # six stops: four across the open gap, then two that carry the letter inside B's silhouette. The
+    # last two are the exit — B takes it, rather than it evaporating in mid-plate.
+    mail_marks = [
+        (
+            m0 + k * (m1 - m0) / 6,
+            k * dx if k <= 4 else 4 * dx + (k - 4) * sw,
+            min(k, 4) * dy,
+            1,
+        )
+        for k in range(7)
+    ]
+    mail_marks.append((SM_MAIL_OFF, mail_marks[-1][1], mail_marks[-1][2], 0))
+    c0, c1 = SM_CAKE
+    cake_marks = [
+        (c0 + k * (c1 - c0) / 4, (4 - k) * -st["cake_dx"], (4 - k) * -st["cake_dy"], 1)
+        for k in range(5)
+    ]
+    cake_marks.append((SM_HELD_ON, 0.0, 0.0, 0))
+    o0, o1 = SM_OCCLUDE
+    held_marks = [(SM_HELD_ON, 0.0, 0.0, 1), (o0, 0.0, 0.0, 1)]
+    held_marks += [
+        (o0 + k * (o1 - o0) / 4, k * st["held_dx"], 0.0, 1) for k in range(1, 5)
+    ]
+    held_marks.append((SM_HELD_OFF, 4 * st["held_dx"], 0.0, 0))
+    return "".join(
+        [
+            gate("smh", ".smHat", [(sm_at(SM_HAT_ON), sm_at(SM_HAT_OFF))]),
+            gate("smb", ".smPeer", [(sm_at(SM_B_ON), sm_at(SM_B_OFF))]),
+            # B's idle arms off while the raised pair is up, or B shows four arms — the same defect
+            # that made A's cheer read as horns, and it is no less wrong on a smaller body.
+            gate(
+                "smba",
+                ".smBArm",
+                [(sm_at(SM_BUP[0]), sm_at(SM_BUP[1]))],
+                on_inside=False,
+            ),
+            gate("smbu", ".smBUp", [(sm_at(SM_BUP[0]), sm_at(SM_BUP[1]))]),
+            summon_burst_css("smsf", "smSpark", SM_SPARK, cx, cy),
+            summon_burst_css("smpf", "smPoof", SM_POOF, cx, cy),
+            summon_travel_css("smmf", "smMail", mail_marks),
+            summon_travel_css("smcf", "smCake", cake_marks),
+            summon_travel_css("smhf", "smHeld", held_marks),
+        ]
     )
 
 
@@ -2142,6 +2640,21 @@ def css(art: Art) -> str:
         f".rfp{{fill:{d.rule};opacity:.9}}"
         f".ss{{fill:#f2f6ff}}.brd{{fill:{d.mound[0]}}}.bal{{fill:{CLAWD}}}.balStr{{stroke:none;fill:{CLAWD};opacity:.45}}"
         f".eyeHole{{fill:#1b1109}}.sh{{fill:#000;opacity:.46}}.zmk{{fill:{d.star}}}"
+        # THE SUMMONING's palette. Which of these need a light-scheme override is decided by WHAT
+        # THEY SIT ON, not by preference — the creature's #D77757 is a constant, so ink that lands on
+        # the body is scheme-independent, and ink that lands on the sky or the ground plate is not.
+        #   · the hat crosses the SKY, so it takes the rule colour — the one tone this file already
+        #     trusts to read against both skies. A near-black crown vanishes into the night sky.
+        #   · the envelope's EDGE lands on the ground plate and takes the foreground colour, which is
+        #     the darkest tone in each scheme. Its pale face needs no override because the edge is
+        #     what carries the read: pale-on-pale would be invisible in the light scheme alone.
+        #   · the cake is SELF-contrasting (dark body / pale icing / amber candle), so it needs no
+        #     override at all — which is the whole reason the brief specified an icing row.
+        #   · the sparkle dots land on the ground plate, so they invert with it.
+        f".smHat{{fill:{d.rule}}}"
+        f".smMailE{{fill:{d.fg}}}.smMailF{{fill:#f4ead8}}"
+        f".smCkB{{fill:#7a4a2e}}.smCkI{{fill:#f4ead8}}.smCkC{{fill:#e8b04b}}"
+        f".smSpk{{fill:{d.star}}}"
         f".vig{{fill:url(#vig);opacity:{fmt(d.vignette)}}}" + cloudrules(d) +
         # ---- parallax: one shared translate, per-layer duration, all dividing P ----
         f"@keyframes sc{{from{{transform:translateX(0)}}to{{transform:translateX(-{TILE}px)}}}}"
@@ -2293,6 +2806,11 @@ def css(art: Art) -> str:
             # with no gate is not hidden, it is permanently ON, and a gate with no element is a
             # keyframe block nothing reads. Withdrawing the beat has to drop BOTH halves.
             + ([gate("rcf", ".rCheer", [ev("rCheer")])] if cheering else [])
+            # ---- THE SUMMONING ----
+            # Same rule as the cheer: element and gate ship together or not at all. Every window in
+            # here is a FRACTION of the declared rSummon window, so re-timing the beat moves the whole
+            # choreography with it and no offset can run off the end into a negative percentage.
+            + ([summon_css(art)] if emits(art, "rSummon") else [])
         )
         # the peer's stride — the only peer motion not driven by the event table
         + (
@@ -2329,6 +2847,13 @@ def css(art: Art) -> str:
         "*{animation:none!important}"
         ".rCheer,.legsStill,.eShut,.aShut,.peer,.pCheer,.eyesAsk,.armsAlert{opacity:0}"
         ".legsWalk,.eOpen,.aOpen,.armsGate,.lookGate{opacity:1}"
+        # THE SUMMONING resolves to BEFORE it happened, not to the middle of it. `animation:none`
+        # reverts each element to its un-animated base, which for every one of these is opacity 1 —
+        # so the frozen still would otherwise show the hat on, both cakes at once, the letter in
+        # mid-air and two bursts at rest scale. The one thing a still must never be is a frame that
+        # could not occur.
+        ".smHat,.smPeer,.smBUp,.smSpark,.smPoof,.smMail,.smCake,.smHeld{opacity:0}"
+        ".smBArm{opacity:1}"
         # The barrier rests RETRACTED. `animation:none` already leaves it there (translateY(0) is its
         # un-animated base), but the still is the deliverable, so it is pinned rather than inferred —
         # the same reasoning as the moon halo below, which was blown out for exactly that assumption.
@@ -2351,6 +2876,7 @@ def css(art: Art) -> str:
         f".tf0,.tf1{{fill:{l.tuft}}}.fgb{{fill:{l.fg}}}.fpr{{fill:{l.fg};opacity:.40}}"
         f".rfp{{fill:{l.rule};opacity:.9}}"
         f".brd{{fill:{l.mound[0]}}}.sh{{opacity:.20}}"
+        f".smHat{{fill:{l.rule}}}.smMailE{{fill:{l.fg}}}.smSpk{{fill:{l.fg}}}"
         f".vig{{opacity:{fmt(l.vignette)}}}" + cloudrules(l) + "}"
     )
     # Day/night switching is done with `display` on a parent group, so no element ever needs both a
@@ -2376,6 +2902,8 @@ def build(art: Art) -> str:
     assert_world_balanced()
     assert_warp_within_tile()
     assert_hop_clear_of_stopped_world(art)
+    assert_summon_on_grid(art)
+    assert_summon_clear_plate(art)
     rng = random.Random(20260729 + sum(ord(ch) for ch in art.key))
     scale = art.clawd_scale
 
@@ -2423,6 +2951,13 @@ def build(art: Art) -> str:
         refusal_gate(art),
         f'<line x1="0" y1="{GROUND}" x2="{W}" y2="{GROUND}" class="rl" stroke-width="3" '
         f'stroke-dasharray="3 9" stroke-linecap="round" opacity=".72"/>',
+        # THE SUMMONING, in paint order: bursts and travelling props UNDER both creatures, so each
+        # prop's exit is an OCCLUSION rather than a pop — the letter's last steps carry it inside B,
+        # the cake hands off to a copy inside A. Over a body, either one would erase a face, which is
+        # v6b's rejected peer in miniature.
+        summon_props(art),
+        summon_peer(art),
+        summon_bursts(art),
         clawd_placed(art, art.clawd_x, scale),
     ]
 
