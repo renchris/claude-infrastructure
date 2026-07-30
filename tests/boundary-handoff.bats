@@ -115,3 +115,94 @@ fired() { echo "$1" | grep -q '"decision":"block"'; }
   [ "$status" -eq 0 ]; fired "$output"
   tail -1 "$CC_IDL" | jq -e 'select(.reason=="past-boundary") | has("burn_x100") and has("forecast_min") and has("early") and has("conv_age_s")' >/dev/null
 }
+
+# ── SIZE AXIS (2026-07-29, K02 — hook header) ──────────────────────────────────────────────────────
+# used_pct is the CONTEXT WINDOW's occupancy and compaction resets it; a transcript and a process
+# footprint do not reset. Measured live, the largest transcript (22.4 MB) belonged to a session at 61%
+# fill — below T=73, so this hook would never have advised it. Every case pins fill BELOW T so the
+# legacy trigger cannot be what fires.
+mk_tx_size() { # $1=MiB → a transcript file of at least $1 MiB (content irrelevant to the size axis;
+               # the pad is STREAMED, never a jq --arg — 1 MiB of argv exceeds ARG_MAX)
+  local p="$BATS_TEST_TMPDIR/txbig-${BATS_TEST_NUMBER}.jsonl"
+  head -c $(( $1 * 1048576 )) /dev/zero | tr '\0' 'p' > "$p"
+  printf '%s' "$p"; }
+mk_btel_pid() { # $1=sid $2=used_pct $3=pid
+  jq -nc --arg sid "$1" --arg cwd "$WD" --argjson used "$2" --argjson ts "$(date +%s)" --argjson pid "$3" \
+    '{ts:$ts,session_id:$sid,cwd:$cwd,config_dir:"/cfg",used_pct:$used,input_tokens:1,pid:$pid}' \
+    > "$CC_TELEMETRY_DIR/$1.json"; }
+mk_ps_rss() { # $1=rss_kb → `ps` stub (right-aligned, as real ps emits) for a claude-looking comm
+  local p="$BATS_TEST_TMPDIR/ps-${BATS_TEST_NUMBER}"
+  printf '#!/bin/bash\nprintf "  %%s %%s\\n" "%s" "/usr/local/bin/claude"\n' "$1" > "$p"
+  chmod +x "$p"; printf '%s' "$p"; }
+
+@test "size: an OVERSIZE transcript fires at 40% — below T=73, where fill alone is silent" {
+  export CC_BOUNDARY_SIZE_MB=1
+  mk_btel s1 40
+  run drive s1 "$(mk_tx_size 1)"
+  [ "$status" -eq 0 ]; fired "$output"
+  echo "$output" | grep -q "TRANSCRIPT is 1MB"
+  echo "$output" | grep -q "only 40% context"
+  echo "$output" | grep -q "only a NEW SESSION resets"
+  tail -1 "$CC_IDL" | jq -e 'select(.reason=="past-boundary") | .axis=="size" and .over_size==true' >/dev/null
+  # the control: same 40% fill, small transcript → silent
+  rm -rf "$CC_BOUNDARY_LATCH_DIR"
+  mk_btel s2 40
+  run drive s2
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+}
+@test "size: high RSS fires the advisory here (no auto-exec in this hook) and names the RSS axis" {
+  export CC_CE_PS="$(mk_ps_rss 1600000)"
+  mk_btel_pid s3 40 4242
+  run drive s3
+  [ "$status" -eq 0 ]; fired "$output"
+  echo "$output" | grep -q "PROCESS is at 1562MB RSS"
+  tail -1 "$CC_IDL" | jq -e 'select(.reason=="past-boundary") | .over_rss==true and .axis=="size"' >/dev/null
+}
+@test "size: B-2 THIRD re-arm dimension — a size fire re-arms on transcript GROWTH, not only on fill" {
+  # Without it: a size fire at flat fill on an unchanged HEAD satisfies neither the HEAD nor the
+  # used_pct re-arm, so the latch goes silent FOREVER — B-2's own failure mode on a monotonic axis
+  # where "the condition clears on its own" is never true.
+  export CC_BOUNDARY_SIZE_MB=1 CC_BOUNDARY_SIZE_REARM_MB=2
+  mk_btel s4 40
+  run drive s4 "$(mk_tx_size 1)"; fired "$output"          # fires; latch records used=40 tx=1
+  run drive s4 "$(mk_tx_size 1)"                            # same fill, same size → latched
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  grep -q 'last_tx=1MB,need=+2MB' "$CC_IDL"
+  run drive s4 "$(mk_tx_size 3)"                            # +2 MB growth → re-arms at FLAT fill
+  [ "$status" -eq 0 ]; fired "$output"
+}
+@test "size: a LEGACY one-field latch (pre-size, 'used' only) still parses — no flag day" {
+  export CC_BOUNDARY_SIZE_MB=1
+  mk_btel s5 75
+  run drive s5; fired "$output"
+  # rewrite the latch in the OLD single-value format the shipped hook wrote
+  latch="$(ls "$CC_BOUNDARY_LATCH_DIR"/* | head -1)"; printf '75' > "$latch"
+  mk_btel s5 78
+  run drive s5                                              # +3 < 10 and no size growth → latched
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  grep -q 'latched:used=78,last=75' "$CC_IDL"
+  mk_btel s5 88
+  run drive s5; fired "$output"                             # +13 ≥ 10 → fill re-arm still works
+}
+@test "size: the axis never bypasses the safety gates — dirty tree / not-green still abstain" {
+  export CC_BOUNDARY_SIZE_MB=1
+  echo dirt > "$WD/dirty.txt"
+  mk_btel s6 40
+  run drive s6 "$(mk_tx_size 1)"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  grep -q '"reason":"dirty-tree"' "$CC_IDL"
+  git -C "$WD" checkout -- . 2>/dev/null; rm -f "$WD/dirty.txt"
+  printf 'not-the-head' > "$WD/.git/gate-green"
+  run drive s6 "$(mk_tx_size 1)"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  grep -q '"reason":"gate-not-green-at-head"' "$CC_IDL"
+}
+@test "size: both bars at 0 disable the axis, and the abstain still RECORDS what it measured" {
+  export CC_BOUNDARY_SIZE_MB=0 CC_BOUNDARY_RSS_MB=0
+  mk_btel s7 40
+  run drive s7 "$(mk_tx_size 1)"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  # silence alone is also what a hook with no size axis produces — assert it was EVALUATED-and-disabled
+  tail -1 "$CC_IDL" | jq -e 'select(.disposition=="abstained")
+      | .size_mb_t==0 and .rss_mb_t==0 and .tx_mb>=1' >/dev/null
+}

@@ -32,9 +32,32 @@
 #     the exchange + persist its decisions FIRST, then /handoff at the exchange's natural end. Wording,
 #     never suppression; the model is the pause-point judge.
 #
+# ── SIZE AXIS (2026-07-29 — K02, audit raw/a12.md K02 + raw/a3.md S1) ──────────────────────────────
+# Everything above keys on used_pct — the CONTEXT WINDOW's occupancy, which compaction RESETS. A
+# session's cumulative transcript and its process footprint do not reset, so this hook was blind to a
+# session that is dangerous by SIZE while sitting below T: measured live, the largest transcript
+# (22.4 MB) belonged to a session at 61% fill — below T=73, so it would never have been advised.
+# Two axes, from hooks/lib/context-econ.sh ce_size (which owns the measurements + the refutation of the
+# `input_tokens` "size proxy" premise — col-3 is an algebraic restatement of used_pct, NOT a size signal):
+#   • transcript bytes ≥ SIZE_MB   ⇒ fire the advisory
+#   • process RSS      ≥ RSS_MB    ⇒ fire the advisory
+# BOTH axes may fire here, unlike waiting-recycle where RSS is page-only. The difference is real, not an
+# inconsistency: this hook has NO auto-exec — it advises the model at a committed+green boundary and the
+# model decides. waiting-recycle can EXEC a recycle, and auto-recycling the fleet on an RSS number whose
+# dangerous level is unproven would be a hazard. Same signal, different power, because the blast radius
+# differs.
+# DELIBERATE NON-COVERAGE: a size fire still requires FRESH telemetry, because this hook reads `.cwd`
+# and `.config_dir` from it for the committed+green gates and the latch key. So a session whose
+# telemetry writer has DIED is not covered here — waiting-recycle's size axis is (it reads bytes from
+# the file directly and needs telemetry only for the pid). Named rather than left as a silent hole.
+# The B-2 latch carries a THIRD re-arm dimension for this: size is MONOTONIC, so a size-triggered
+# advisory on an unchanged HEAD with FLAT fill would satisfy neither existing re-arm and go silent
+# forever — B-2's own failure mode, re-introduced on a new axis. See SIZE_REARM_MB.
+#
 # Env seams (tests): CC_TELEMETRY_DIR · CC_IDL · CC_BOUNDARY_T · CC_BOUNDARY_REARM_DELTA ·
 #                    CC_BOUNDARY_LATCH_DIR · CC_BOUNDARY_LOGFILE · CC_CONTINUE_SENTINEL ·
-#                    CC_BOUNDARY_T_MIN · CC_BOUNDARY_LEAD_MIN · CC_BOUNDARY_CONV_S · CC_CE_*
+#                    CC_BOUNDARY_T_MIN · CC_BOUNDARY_LEAD_MIN · CC_BOUNDARY_CONV_S ·
+#                    CC_BOUNDARY_SIZE_MB · CC_BOUNDARY_RSS_MB · CC_BOUNDARY_SIZE_REARM_MB · CC_CE_*
 #
 # ── CC_BOUNDARY_DIRS_NOTE (G-P6-5b / a19 live table) — REGISTER ON ALL FOUR CONFIG DIRS ──
 # The desk runs on .claude-secondary / -tertiary, which today carry NO boundary hook at all; it
@@ -68,6 +91,9 @@ REARM_DELTA="${CC_BOUNDARY_REARM_DELTA:-10}"       # B-2 second re-arm dimension
 T_MIN="${CC_BOUNDARY_T_MIN:-55}"                   # context-econ: forecast-early fire never below this fill
 LEAD_MIN="${CC_BOUNDARY_LEAD_MIN:-20}"             # context-econ: forecast ≤ this many min to the wall ⇒ early fire
 CONV_S="${CC_BOUNDARY_CONV_S:-900}"                # context-econ: an interactive turn fresher than this = exchange in flight
+SIZE_MB="${CC_BOUNDARY_SIZE_MB:-25}"               # size axis: transcript bytes ≥ this many MB ⇒ fire (0 disables)
+RSS_MB="${CC_BOUNDARY_RSS_MB:-1500}"               # size axis: process RSS ≥ this many MB ⇒ fire (0 disables)
+SIZE_REARM_MB="${CC_BOUNDARY_SIZE_REARM_MB:-10}"   # B-2 third re-arm dimension: transcript GROWTH since the last fire
 IDL="${CC_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
 LATCH_DIR="${CC_BOUNDARY_LATCH_DIR:-$HOME/.claude/autonomy/boundary-latch}"
 TEL_DIR="${CC_TELEMETRY_DIR:-/tmp/cc-telemetry}"
@@ -96,15 +122,22 @@ sid="$(printf '%s' "$stdin_json" | jq -r '.session_id // empty' 2>/dev/null || t
 tp="$(printf '%s' "$stdin_json" | jq -r '.transcript_path // empty' 2>/dev/null || true)"
 
 # ── B-3: one IDL line per invocation. Never fails the hook. ──
+# SIZE_JSON — the measured size pair, merged into EVERY record once the size axis has been read. Empty
+# before that, so the pre-measurement abstains do not claim a measurement that never happened. Merged in
+# log_idl rather than at each call site so "every eval records what it measured" holds by construction:
+# a dormant threshold must never be indistinguishable from broken wiring.
+SIZE_JSON='{}'
 log_idl() { # $1=disposition  $2=reason  $3=extra JSON OBJECT (optional, jq-built {…}; default {})
   mkdir -p "$(dirname "$IDL")" 2>/dev/null || true
-  local ts extra; ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  local ts extra size; ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   extra="${3:-}"; [ -n "$extra" ] || extra='{}'
+  size="${SIZE_JSON:-}"; [ -n "$size" ] || size='{}'
   # jq-encode EVERY field: a value carrying a " / backslash / newline then can NEVER emit a
   # malformed IDL line — one malformed line aborts the cc-audit four-zeros `jq -rs` slurp, which
   # reads as "no records" and silently flips D9/the alarm GREEN (defeats the un-gameable detector).
-  jq -cn --arg ts "$ts" --arg sid "${sid:-?}" --arg disp "$1" --arg reason "$2" --argjson extra "$extra" \
-    '{ts:$ts,hook:"boundary-handoff",sid:$sid,disposition:$disp,reason:$reason} + $extra' \
+  jq -cn --arg ts "$ts" --arg sid "${sid:-?}" --arg disp "$1" --arg reason "$2" \
+    --argjson size "$size" --argjson extra "$extra" \
+    '{ts:$ts,hook:"boundary-handoff",sid:$sid,disposition:$disp,reason:$reason} + $size + $extra' \
     >> "$IDL" 2>/dev/null || true
 }
 abstain() { log_idl abstained "$1"; exit 0; }     # abstained = evaluated but did not fire (LOGGED, not silent)
@@ -134,10 +167,35 @@ if command -v ce_sample >/dev/null 2>&1; then
   case "$burn_x100" in ''|*[!0-9]*) burn_x100=0 ;; esac
   case "$forecast_min" in -1) ;; ''|*[!0-9]*) forecast_min=-1 ;; esac
 fi
+# ── SIZE AXIS (see header) — read it BEFORE the threshold gate so it can be a fire reason and, on an
+#    abstain, still be RECORDED. Expand a leading ~ here (not only in the conv_age block below) or a
+#    tilde-form transcript_path would silently measure 0 bytes = "unknown" forever. ──
+case "$tp" in "~"*) tp="$HOME${tp#\~}" ;; esac
+tx_mb=0; rss_mb=0
+if command -v ce_size >/dev/null 2>&1; then
+  _sz="$(ce_size "$tp" "$tel" 2>/dev/null || printf '0 0')"
+  _txb="${_sz%% *}"; _rssk="${_sz##* }"
+  case "$_txb"  in ''|*[!0-9]*) _txb=0 ;;  esac
+  case "$_rssk" in ''|*[!0-9]*) _rssk=0 ;; esac
+  tx_mb=$(( _txb / 1048576 )); rss_mb=$(( _rssk / 1024 ))
+fi
+# A 0 measurement is UNKNOWN, never "safe and small" — it can't clear a positive threshold, so both
+# gates fail-safe to the pre-size behavior. Threshold 0 disables that axis outright.
+over_size=0; { [ "$SIZE_MB" -gt 0 ] 2>/dev/null && [ "$tx_mb" -ge "$SIZE_MB" ]; } && over_size=1
+over_rss=0; { [ "$RSS_MB" -gt 0 ] 2>/dev/null && [ "$rss_mb" -ge "$RSS_MB" ]; } && over_rss=1
+# Validate before publishing: log_idl feeds this to `jq --argjson`, so a malformed value would fail the
+# whole record and silently drop every IDL line from here on.
+_bsj="$(jq -cn --argjson tx "$tx_mb" --argjson rss "$rss_mb" --argjson st "$SIZE_MB" --argjson rt "$RSS_MB" \
+  '{tx_mb:$tx,rss_mb:$rss,size_mb_t:$st,rss_mb_t:$rt}' 2>/dev/null || true)"
+if [ -n "$_bsj" ] && printf '%s' "$_bsj" | jq -e 'type=="object"' >/dev/null 2>&1; then SIZE_JSON="$_bsj"; else SIZE_JSON='{}'; fi
+
 early=0
 if [ "$used" -lt "$T" ]; then
   if [ "$used" -ge "$T_MIN" ] && [ "$forecast_min" -ge 0 ] && [ "$forecast_min" -le "$LEAD_MIN" ]; then
     early=1
+  elif [ "$over_size" = 1 ] || [ "$over_rss" = 1 ]; then
+    :   # the SIZE axis carries the fire on its own — no fill floor applies, because fill is the metric
+        # that is blind here (a compacted giant sits at low used_pct BY CONSTRUCTION).
   else
     abstain "below-threshold:${used}<${T}"
   fi
@@ -194,10 +252,21 @@ key="$(printf '%s|%s' "$cfg" "$cwd" | shasum 2>/dev/null | cut -c1-16)"
 latch="$LATCH_DIR/${key}-${head}"
 mkdir -p "$LATCH_DIR" 2>/dev/null || true
 if [ -f "$latch" ]; then
-  last_used="$(cat "$latch" 2>/dev/null || echo 0)"; case "$last_used" in ''|*[!0-9]*) last_used=0 ;; esac
-  # re-arm ONLY if fill climbed ≥ REARM_DELTA since the last fire — so an ignored session gets the
-  # advisory again as it fills, instead of the latch going silent on an unchanged HEAD (B-2).
-  [ "$(( used - last_used ))" -ge "$REARM_DELTA" ] || abstain "latched:used=${used},last=${last_used},need=+${REARM_DELTA}"
+  # Latch payload is "used" (legacy, one field) or "used tx_mb" (with the size axis). Parse positionally
+  # so a latch written by the pre-size version still reads correctly — no flag day, no migration.
+  latch_line="$(cat "$latch" 2>/dev/null || echo 0)"
+  last_used="${latch_line%% *}"; case "$last_used" in ''|*[!0-9]*) last_used=0 ;; esac
+  last_tx="${latch_line##* }"; [ "$last_tx" = "$latch_line" ] && last_tx=0
+  case "$last_tx" in ''|*[!0-9]*) last_tx=0 ;; esac
+  # re-arm if fill climbed ≥ REARM_DELTA since the last fire — so an ignored session gets the advisory
+  # again as it fills, instead of the latch going silent on an unchanged HEAD (B-2).
+  rearm=0; [ "$(( used - last_used ))" -ge "$REARM_DELTA" ] && rearm=1
+  # THIRD dimension (size axis): the transcript GREW ≥ SIZE_REARM_MB. Without this, a size fire on an
+  # unchanged HEAD at FLAT fill satisfies neither the HEAD nor the fill re-arm and the latch goes silent
+  # forever — precisely the B-2 failure this header warns about, re-introduced on a monotonic axis where
+  # "the condition will clear on its own" is never true.
+  { [ "$rearm" = 0 ] && [ "$SIZE_REARM_MB" -gt 0 ] 2>/dev/null && [ "$(( tx_mb - last_tx ))" -ge "$SIZE_REARM_MB" ]; } && rearm=1
+  [ "$rearm" = 1 ] || abstain "latched:used=${used},last=${last_used},need=+${REARM_DELTA};tx=${tx_mb}MB,last_tx=${last_tx}MB,need=+${SIZE_REARM_MB}MB"
 fi
 
 # ── context-econ: is an exchange in flight? (wording only — never suppression; see header) ──
@@ -208,18 +277,33 @@ if command -v ce_last_interactive_age >/dev/null 2>&1 && [ -n "$tp" ]; then
   case "$conv_age" in *[!0-9]*) conv_age="" ;; esac
 fi
 
-# ── FIRE — record the fill at fire-time (the re-arm baseline), log, then advise via latched block ──
-printf '%s' "$used" > "$latch" 2>/dev/null || true
+# ── FIRE — record the fill AND the size at fire-time (both re-arm baselines), log, then advise ──
+printf '%s %s' "$used" "$tx_mb" > "$latch" 2>/dev/null || true
+# Which axis actually fired? Size first where it is the reason: fill is what K02 proved blind, so a size
+# fire narrating itself as "context N% ≥ 73%" would misattribute the cause AND look like a false positive
+# (the reader checks the fill, finds it low, and distrusts the hook).
+size_fired=0; { [ "$over_size" = 1 ] || [ "$over_rss" = 1 ]; } && [ "$used" -lt "$T" ] && [ "$early" = 0 ] && size_fired=1
 log_idl fired "past-boundary" \
   "$(jq -cn --argjson used "$used" --argjson threshold "$T" --arg head "${head:0:8}" \
       --argjson burn "$burn_x100" --argjson fc "$forecast_min" --argjson early "$early" --arg conv "${conv_age:-}" \
-      '{used_pct:$used,threshold:$threshold,head:$head,burn_x100:$burn,forecast_min:$fc,early:($early==1),conv_age_s:$conv}')"
-if [ "$early" = 1 ]; then
+      --argjson osz "$over_size" --argjson orss "$over_rss" --argjson sf "$size_fired" \
+      '{used_pct:$used,threshold:$threshold,head:$head,burn_x100:$burn,forecast_min:$fc,early:($early==1),conv_age_s:$conv,
+        over_size:($osz==1),over_rss:($orss==1),axis:(if $sf==1 then "size" elif $early==1 then "forecast" else "fill" end)}')"
+if [ "$size_fired" = 1 ]; then
+  if [ "$over_size" = 1 ] && [ "$over_rss" = 1 ]; then why="this session is OVERSIZE on both axes — transcript ${tx_mb}MB (≥ ${SIZE_MB}MB) and process RSS ${rss_mb}MB (≥ ${RSS_MB}MB) — at only ${used}% context"
+  elif [ "$over_size" = 1 ];                        then why="this session's TRANSCRIPT is ${tx_mb}MB (≥ ${SIZE_MB}MB) at only ${used}% context — a size problem your context fill cannot show you"
+  else                                                   why="this session's PROCESS is at ${rss_mb}MB RSS (≥ ${RSS_MB}MB) at only ${used}% context — a footprint problem your context fill cannot show you"
+  fi
+elif [ "$early" = 1 ]; then
   why="context ${used}% BURNING toward the ${CC_CE_WALL:-88}% auto-compact wall — forecast ≤${forecast_min}min at the observed rate"
 else
   why="context ${used}% ≥ ${T}%"
 fi
-reason="⚑ Boundary reached — ${why} at a committed + green boundary (HEAD ${head:0:8}). Run the /handoff rails now to preserve state into a successor before auto-compaction. (Advisory: if you have a genuine reason to keep working, do so — this re-arms at +${REARM_DELTA}% fill.)"
+if [ "$size_fired" = 1 ]; then
+  reason="⚑ Boundary reached — ${why} at a committed + green boundary (HEAD ${head:0:8}). Neither compaction nor waiting fixes this: only a NEW SESSION resets a transcript or a process. Run the /handoff rails now. (Advisory: if you have a genuine reason to keep working, do so — this re-arms at +${REARM_DELTA}% fill or +${SIZE_REARM_MB}MB transcript growth.)"
+else
+  reason="⚑ Boundary reached — ${why} at a committed + green boundary (HEAD ${head:0:8}). Run the /handoff rails now to preserve state into a successor before auto-compaction. (Advisory: if you have a genuine reason to keep working, do so — this re-arms at +${REARM_DELTA}% fill.)"
+fi
 if [ -n "$conv_age" ] && [ "$conv_age" -lt "$CONV_S" ] 2>/dev/null; then
   reason="${reason}
 ⚑ An operator/peer exchange is in flight (last interactive turn ${conv_age}s ago): do NOT cut it — finish the exchange, persist the decisions it produced (dod-persist / plan / memory), THEN run /handoff at its natural end."

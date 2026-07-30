@@ -52,7 +52,8 @@
 #      T_IDLE_FLOOR=25 the longer this SID sits idle below it — proactive; recycling an IDLE desk is a FREE
 #      WIN, no work in hand to lose, so we don't wait for 55%), OR a behavioral ROT tell in the last message
 #      that ALSO clears used_pct ≥ ROT_FLOOR on FRESH telemetry (an un-floored tell false-positives on
-#      healthy watch narration — probe P1 2026-07-19; a floored tell can fire below the threshold).
+#      healthy watch narration — probe P1 2026-07-19; a floored tell can fire below the threshold),
+#      OR the SIZE axis (§9) — transcript bytes ≥ SIZE_MB, which is orthogonal to used_pct.
 #   5. SAFE vs BUSY — the desk is CLASSIFIED, not just gated. SAFE (idle, just-waiting) ⇒ recycle. BUSY
 #      holds are split soft/hard (see §7): 5a clean git tree (dirty=SOFT) + no sequencer state (MERGE_HEAD/
 #      rebase/cherry-pick=HARD, S1); 5b no open decision (HARD — anti-deference's GENUINE carve-out); 5c no
@@ -92,6 +93,32 @@
 #        • PAUSE-POINT NUDGE — BUSY soft-held ≥ T_NUDGE gets a PACED advisory to plan its own boundary
 #          (commit → persist → /handoff) instead of silent Tier-2; the model is the pause-point judge.
 #          Re-arms per +NUDGE_REARM pct fill (the boundary-handoff B-2 shape); never fires a recycle.
+#   9. SIZE AXIS (2026-07-29, K02 — audit raw/a12.md K02 + raw/a3.md S1/S2) — every trigger in §4/§8 keys
+#      on used_pct, the CONTEXT WINDOW's occupancy. Compaction resets it; the cumulative transcript and the
+#      process footprint do NOT. So this hook was SIZE-BLIND: a3 measured 0 fires across its entire deployed
+#      life while sessions carried tens of MB of transcript, and — the sharper half of that finding — the
+#      ENTIRE apparatus (advisory, Stage 2, wedge page, busy page) sits DOWNSTREAM of the
+#      `below-threshold-no-tell` abstain, so a size-dangerous session at low fill exited before reaching
+#      even the out-of-band operator page. Two independent metrics (measured pearson +0.26 — neither is a
+#      proxy for the other; the falsified `input_tokens` premise is refuted in hooks/lib/context-econ.sh):
+#        • TRANSCRIPT BYTES ≥ SIZE_MB → a full trigger: it joins the §4 gate as a third disjunct AND sets
+#          high_ctx, so it routes through the EXISTING tiers by construction — SAFE ⇒ the idle Stage-1→2
+#          recycle ladder; BUSY soft ⇒ the Tier-3 drain (shadow-composes + pages, exec still needs
+#          --live --busy-force); BUSY hard ⇒ the busy-page. The roadmap's "emergency page fallback" is
+#          therefore not new machinery — it falls out of the tiers already here. Bytes may drive the exec
+#          because a recycle is the ONLY thing that resets them (fresh SID ⇒ fresh JSONL at 0; /compact
+#          does not shrink the file), and because the axis is monotonic there is nothing to re-arm on.
+#        • RSS ≥ RSS_PAGE_MB → PAGE ONLY, never an auto-recycle, and only when it is the SOLE signal (any
+#          other trigger routes to the ladder, which has an actual lever). Rationale, not squeamishness:
+#          every live session already sits ≥431 MB with the observed max at 1000 MB, and the DANGEROUS
+#          level is unknown (the 07-22 diagnosis records the per-process death mechanism as UNPROVEN and
+#          that crash class was later superseded by a CC-version regression). Auto-recycling the fleet on a
+#          guessed RSS number is a hazard with no evidence behind it — so it pages, and every eval records
+#          the measured value so the threshold gets calibrated from data instead of promoted on a guess.
+#      Both thresholds default DORMANT against the measured live fleet (0/29 sessions fire at 25 MB /
+#      1500 MB; live max 22.4 MB / 1000 MB) — they catch the next real giant without touching today's
+#      fleet. Every IDL record from here on carries tx_mb + rss_mb, fired or abstained, so a dormant
+#      threshold is never indistinguishable from broken wiring.
 #
 # Delivery: {decision:"block"} + hookSpecificOutput.additionalContext (the MODEL-facing recycle
 # advisory — confirmed delivered on PostToolUse @ 2.1.183) + systemMessage/reason (operator-facing).
@@ -117,7 +144,8 @@
 #                    CC_WR_GRACE_S · CC_WR_COORD_DIR · CC_WR_UUID · CC_WR_QUIET_S · CC_WR_FIRE_DIR ·
 #                    CC_WR_HANDOFF_FIRE · CC_WR_DESK_ROLE · CC_WR_NOTIFY · CC_WR_PUSH · CC_WR_ESCALATE_DEDUP_S ·
 #                    CC_WR_CONV_HOLD_S · CC_WR_CONV_RECENT_S · CC_WR_RECENT_GRACE_S · CC_WR_T_BUSY_MIN · CC_WR_LEAD_MIN · CC_WR_T_NUDGE · CC_WR_NUDGE_REARM ·
-#                    CC_CE_* (context-econ lib: WIN_S / WALL / MIN_SPAN_S / HIST_MAX / TAIL_BYTES / AUTO_RX)
+#                    CC_WR_SIZE_MB · CC_WR_RSS_PAGE_MB ·
+#                    CC_CE_* (context-econ lib: WIN_S / WALL / MIN_SPAN_S / HIST_MAX / TAIL_BYTES / AUTO_RX / PS / RSS_COMM_RX)
 #
 # NOTE: deliberately NO `set -e` — a hook must fail SAFE (abstain), and a stray non-zero from a grep
 # test must never become the script's exit code and suppress a legitimate abstain-log. -u/pipefail are
@@ -204,6 +232,14 @@ CONV_RECENT_S="${CC_WR_CONV_RECENT_S:-7200}"              # recent-conversation 
                                                           #   (but past CONV_HOLD_S — S6 no longer holds) extends the idle Stage-2 grace
 RECENT_GRACE_S="${CC_WR_RECENT_GRACE_S:-900}"            # …to THIS (vs GRACE_S=180) — don't discard a just-quieted exchange too fast
 
+# ── SIZE-AXIS knobs (2026-07-29, K02 — header §9) ─────────────────────────────────────────────────
+# Defaults are DORMANT against the measured live fleet (0/29 sessions fire; live max 22.4 MB / 1000 MB
+# RSS, p90 5.1 MB / 918 MB) — deliberately: a threshold that fires on today's healthy fleet is a
+# fleet-wide recycle storm, and the IDL now records tx_mb/rss_mb on every eval so these get calibrated
+# DOWN from observed data rather than guessed. SIZE_MB=0 or RSS_PAGE_MB=0 disables that axis outright.
+SIZE_MB="${CC_WR_SIZE_MB:-25}"                            # transcript bytes ≥ this many MB ⇒ full trigger (may recycle)
+RSS_PAGE_MB="${CC_WR_RSS_PAGE_MB:-1500}"                  # process RSS ≥ this many MB ⇒ PAGE ONLY, never an auto-recycle
+
 # Per-cwd key (arm + cooldown survive a recycle since cwd is stable across it); per-session key (cap
 # resets on the fresh successor). Mirrors session-continue.sh's config-dir|path hash.
 key_cwd() { printf '%s|%s' "$CFG" "$1" | shasum 2>/dev/null | cut -c1-16; }
@@ -246,6 +282,10 @@ queued_for()   { printf '%s/queued-%s'    "$STATE_DIR" "$1"; }             # SID
 busyforce_for(){ sentinel_for busyforce "$1"; } # cwd-keyed: Tier-3 forced-recycle EXEC opt-in (beyond --live; default OFF ⇒ shadow+page)
 # Context-econ state (2026-07-20):
 nudged_for()   { printf '%s/nudged-%s'    "$STATE_DIR" "$1"; }             # SID-keyed: busy pause-point-nudge pacer (fill at last nudge; re-arm per +NUDGE_REARM)
+# Size-axis state (2026-07-29, K02 — header §9). Its OWN pacer, deliberately NOT escalated_for: sharing
+# that stamp would let an RSS page suppress a wedge/busy page (or the reverse) — two distinct alarms
+# silencing each other is the suppression trap, so each keeps its own window.
+rsspaged_for() { printf '%s/rsspaged-%s'  "$STATE_DIR" "$1"; }             # SID-keyed: RSS-only page-once pacer (ESCALATE_DEDUP_S)
 
 GRACE_S="${CC_WR_GRACE_S:-180}"                            # Stage-1 advisory → Stage-2 fire grace
 # actuator (test seam): resolve next to this hook (repo hooks/../scripts + symlinked ~/.claude install)
@@ -329,6 +369,7 @@ case "${1:-}" in
     if [ -f "$(disarm_for "$PWD")" ]; then echo "DISARMED (this cwd) — 'clear' opt-out suppresses arm-by-default; run 'arm' to re-enable"; fi
     echo "thresholds: idle≥${T_IDLE}% (adaptive → floor ${T_IDLE_FLOOR}% over ${IDLE_DECAY_S}s idle) · busy-force≥${T_BUSY}% · rot-floor ${ROT_FLOOR}%"
     echo "context-econ: conv-hold ${CONV_HOLD_S}s · nudge≥${T_NUDGE}% (re-arm +${NUDGE_REARM}%) · early-busy≥${T_BUSY_MIN}% @ forecast≤${LEAD_MIN}min"
+    echo "size axis:    transcript≥${SIZE_MB}MB ⇒ full trigger (may recycle) · RSS≥${RSS_PAGE_MB}MB ⇒ PAGE ONLY (never auto-recycles; 0 disables either)"
     if [ -f "$a" ]; then
       echo "ARMED: $(cat "$a")"
       [ -f "$(live_for "$PWD")" ] && echo "  mode: LIVE (Stage-2 execs)" || echo "  mode: SHADOW (Stage-2 logs would-fire only)"
@@ -348,6 +389,10 @@ esac
 input="$(cat 2>/dev/null || printf '{}')"
 
 # ── B-3: one IDL line per invocation (fired|abstained). "didn't fire" ≠ "never evaluated". ──
+# SIZE_JSON (header §9) — the measured size pair, merged into every record below once 4a-quater has run.
+# Empty until then, so the pre-measurement abstains (no-jq / not-armed / cooldown …) stay unchanged
+# rather than claiming a measurement that never happened.
+SIZE_JSON='{}'
 log_idl() { # $1=disposition $2=reason $3=extra JSON OBJECT (optional, jq-built {…}; default {})
   mkdir -p "$(dirname "$IDL")" 2>/dev/null || true
   local ts extra; ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '?')"
@@ -355,8 +400,12 @@ log_idl() { # $1=disposition $2=reason $3=extra JSON OBJECT (optional, jq-built 
   # jq-encode EVERY field: a value carrying a " / backslash / newline then can NEVER emit a
   # malformed IDL line — one malformed line aborts the cc-audit four-zeros `jq -rs` slurp, which
   # reads as "no records" and silently flips D9/the alarm GREEN (defeats the un-gameable detector).
-  jq -cn --arg ts "$ts" --arg sid "${SID:-?}" --arg disp "$1" --arg reason "$2" --argjson extra "$extra" \
-    '{ts:$ts,hook:"waiting-recycle",sid:$sid,disposition:$disp,reason:$reason} + $extra' \
+  # $size merges BEFORE $extra so a call site can still override a field; every record carries the
+  # size pair by CONSTRUCTION rather than by remembering to pass it at ~12 call sites.
+  local size; size="${SIZE_JSON:-}"; [ -n "$size" ] || size='{}'
+  jq -cn --arg ts "$ts" --arg sid "${SID:-?}" --arg disp "$1" --arg reason "$2" \
+    --argjson size "$size" --argjson extra "$extra" \
+    '{ts:$ts,hook:"waiting-recycle",sid:$sid,disposition:$disp,reason:$reason} + $size + $extra' \
     >> "$IDL" 2>/dev/null || true
 }
 abstain() { log_idl abstained "$1"; exit 0; }
@@ -525,6 +574,33 @@ if [ "$fresh" = 1 ]; then
 fi
 over_threshold=0; { [ "$fresh" = 1 ] && [ "$used" -ge "$eff_idle" ]; } && over_threshold=1
 
+# 4a-quater. SIZE AXIS (header §9) — the one signal that does NOT reset on compaction. Deliberately NOT
+# gated on telemetry freshness like used_pct is: transcript bytes are read from the file THIS invocation,
+# so they are self-fresh, and RSS comes from a live `ps` — a stale telemetry file only costs us the pid
+# (⇒ rss_mb 0 = unknown). That is why a size trigger still works on exactly the sessions whose
+# telemetry writer has died, where every used_pct path is already blind.
+tx_mb=0; rss_mb=0
+if command -v ce_size >/dev/null 2>&1; then
+  _sz="$(ce_size "$TP" "$tel" 2>/dev/null || printf '0 0')"
+  tx_b="${_sz%% *}"; rss_kb="${_sz##* }"
+  case "$tx_b"   in ''|*[!0-9]*) tx_b=0 ;;   esac
+  case "$rss_kb" in ''|*[!0-9]*) rss_kb=0 ;; esac
+  tx_mb=$(( tx_b / 1048576 )); rss_mb=$(( rss_kb / 1024 ))
+fi
+# Threshold 0 disables the axis; an unknown (0) measurement can never clear a positive threshold, so
+# both gates fail-safe to the pre-size behavior (false-negative bias, the house rule).
+over_size=0; { [ "$SIZE_MB" -gt 0 ] 2>/dev/null && [ "$tx_mb" -ge "$SIZE_MB" ]; } && over_size=1
+rss_over=0; { [ "$RSS_PAGE_MB" -gt 0 ] 2>/dev/null && [ "$rss_mb" -ge "$RSS_PAGE_MB" ]; } && rss_over=1
+# Publish the measured pair into SIZE_JSON — log_idl merges it into EVERY record from here on, fired or
+# abstained. Structural, not per-call-site: a dormant threshold must never be indistinguishable from
+# broken wiring, and this is the data the operator calibrates the thresholds DOWN from (header §9).
+# VALIDATE before publishing: log_idl feeds this to `jq --argjson`, so a malformed value would fail the
+# WHOLE record and silently drop every IDL line from here on — the same "reads as no records ⇒ alarm
+# flips GREEN" trap log_idl's own comment guards against, one level up. Fall back to {} on any doubt.
+_sj="$(jq -cn --argjson tx "$tx_mb" --argjson rss "$rss_mb" --argjson st "$SIZE_MB" --argjson rt "$RSS_PAGE_MB" \
+  '{tx_mb:$tx,rss_mb:$rss,size_mb_t:$st,rss_page_t:$rt}' 2>/dev/null || true)"
+if [ -n "$_sj" ] && printf '%s' "$_sj" | jq -e 'type=="object"' >/dev/null 2>&1; then SIZE_JSON="$_sj"; else SIZE_JSON='{}'; fi
+
 # 4b. Behavioral ROT tell — the desk re-deriving already-known orchestration state (confusion /
 # memory-loss markers a HEALTHY polling desk does not emit; NOT generic "let me check X"). Fires
 # even below threshold. Read the LAST assistant text block (streaming tail — never slurp a big
@@ -560,7 +636,34 @@ ROT_TELLS='(lost|losing) track|(remind|reorient|reacquaint) (myself|me)|(do(n.?t
 # below the floor). fresh=0 (telemetry writer dead) ⇒ rot cannot fire — FM-G is covered by a separate
 # stale-telemetry alarm, not by firing blind on a lagging tell.
 rot_valid=0; { [ "$rot" = 1 ] && [ "$fresh" = 1 ] && [ "$used" -ge "$ROT_FLOOR" ]; } && rot_valid=1
-{ [ "$over_threshold" = 1 ] || [ "$rot_valid" = 1 ]; } || abstain "below-threshold-no-tell:used=${used},fresh=${fresh},rot=${rot},floor=${ROT_FLOOR}"
+
+# ── 4c. RSS-ONLY PAGE (header §9) — MUST sit ABOVE the trigger-gate abstain below. That abstain is the
+# barrier a3 identified: the entire apparatus (advisory, Stage 2, wedge page, busy page) lives downstream
+# of it, so a size-dangerous session at low fill exited before reaching even an operator page. RSS is
+# page-only and fires ONLY as the SOLE signal — any other trigger falls through to the ladder, which has
+# an actual lever (a recycle) where RSS alone has only a guess. Paging is fleet-safe, so this ships LIVE
+# (same rule as the wedge/busy pages); its own SID-keyed pacer bounds the repeat.
+if [ "$rss_over" = 1 ] && [ "$over_threshold" = 0 ] && [ "$rot_valid" = 0 ] && [ "$over_size" = 0 ]; then
+  rpf="$(rsspaged_for "$SID")"; rp_send=1
+  if [ -f "$rpf" ]; then
+    rp_at="$(cat "$rpf" 2>/dev/null || echo 0)"; case "$rp_at" in ''|*[!0-9]*) rp_at=0 ;; esac
+    [ "$(( $(date +%s) - rp_at ))" -lt "$ESCALATE_DEDUP_S" ] && rp_send=0
+  fi
+  if [ "$rp_send" = 1 ]; then
+    mkdir -p "$STATE_DIR" 2>/dev/null || true
+    date +%s > "$rpf" 2>/dev/null || true
+    log_idl escalated "rss-only-page" "$(jq -cn --argjson used "$used" '{used_pct:$used,rss_page:true,forceable:false}')"
+    wr_os_notify "Claude session RSS high" "desk ${UUID:-$SID} RSS ${rss_mb}MB ≥ ${RSS_PAGE_MB}MB at only ${used}% context"
+    wr_push_page "HIGH-RSS SESSION (${DESK_ROLE}) ${rss_mb}MB RSS at ${used}% ctx / ${tx_mb}MB transcript — /handoff to reset the process"
+    rmsg="⚠ HIGH PROCESS FOOTPRINT — this session's process is at ${rss_mb}MB RSS (≥ ${RSS_PAGE_MB}MB) while context is only ${used}% and its transcript ${tx_mb}MB. Context fill will NOT warn you about this: RSS is a near-independent axis (measured pearson +0.26 vs transcript bytes), and only a NEW PROCESS resets it — /compact does not. Nothing is auto-recycled on RSS alone (the dangerous level is unproven, so forcing the fleet on it would be a guess): this is a page. If you are at a clean boundary, run /handoff to recycle into a fresh process. Re-pages every ${ESCALATE_DEDUP_S}s. Kill-switch: \`waiting-recycle.sh clear\`."
+    jq -nc --arg a "$rmsg" --arg s "$rmsg" \
+      '{decision:"block",reason:$s,systemMessage:$s,hookSpecificOutput:{hookEventName:"PostToolUse",additionalContext:$a}}'
+    exit 0
+  fi
+  abstain "rss-page-paced:${rss_mb}MB"
+fi
+
+{ [ "$over_threshold" = 1 ] || [ "$rot_valid" = 1 ] || [ "$over_size" = 1 ]; } || abstain "below-threshold-no-tell:used=${used},fresh=${fresh},rot=${rot},floor=${ROT_FLOOR},tx=${tx_mb}MB,sizeT=${SIZE_MB}MB"
 
 # 5. SAFE vs BUSY — we no longer abstain at the first hold: we CLASSIFY it and fall through to the
 # decision-routing block (idle-fire vs busy-force vs busy-page vs Tier-2 hold). Every clause stays
@@ -701,6 +804,13 @@ if [ "$high_ctx" = 0 ] && [ "$fresh" = 1 ] && [ "$used" -ge "$T_BUSY_MIN" ] \
    && [ "$forecast_min" -ge 0 ] 2>/dev/null && [ "$forecast_min" -le "$LEAD_MIN" ]; then
   high_ctx=1; early_busy=1
 fi
+# SIZE AXIS ⇒ HIGH (header §9). An over-size session is dangerous regardless of fill, so it must not be
+# parked in Tier-2 ("queue a refresh and hold") where the lowered idle bar would never fire it — the size
+# axis is monotonic, so waiting cannot improve it. Marking it high routes it through the EXISTING tiers:
+# BUSY soft ⇒ Tier-3 drain (shadow-composes + pages; exec still needs --live --busy-force), BUSY hard ⇒
+# busy-page, SAFE ⇒ the idle Stage-1→2 ladder. That is where the "emergency page fallback" comes from.
+size_busy=0
+if [ "$high_ctx" = 0 ] && [ "$over_size" = 1 ]; then high_ctx=1; size_busy=1; fi
 dod_carry="$("${DOD_PERSIST:-$(dirname "$0")/dod-persist.sh}" get 2>/dev/null || true)"
 fire_mode=idle; drain_section=""
 
@@ -719,9 +829,18 @@ if [ "$SAFE" = 0 ]; then
     log_idl escalated "busy-hard-hold:${hold_reason}" \
       "$(jq -cn --argjson used "$used" --arg hold "$hold_reason" --argjson busy 1 --argjson burn "$burn_x100" --argjson fc "$forecast_min" \
           '{used_pct:$used,hold:$hold,busy:($busy==1),forceable:false,burn_x100:$burn,forecast_min:$fc}')"
-    wr_os_notify "Claude desk BUSY+HIGH" "desk ${UUID:-$SID} at ${used}% mid-work (${hold_reason}) — can't safely auto-recycle"
-    wr_push_page "BUSY+HIGH DESK (${DESK_ROLE}) ${used}% ctx, ${hold_reason} — resolve + /handoff; auto-recycle held (hard)"
-    pmsg="⚠ BUSY + HIGH CONTEXT (${used}% ≥ ${T_BUSY}%) held by ${hold_reason} — a HARD hold: an auto-recycle would lose state or bury a decision, so it will NOT fire. You are climbing toward the 90% auto-compact wall. ACT NOW: resolve the ${hold_reason} (commit / finish the merge, answer the decision, or let the teammate finish), then run /handoff to recycle. Re-pages every ${ESCALATE_DEDUP_S}s. Kill-switch: \`waiting-recycle.sh clear\`."
+    # Axis-honest wording: on a SIZE fire the fill can be low, so the legacy "climbing toward the 90%
+    # auto-compact wall" line would misdescribe the danger and invite the reader to dismiss it.
+    if [ "$size_busy" = 1 ]; then
+      pwhat="BUSY + OVERSIZE (transcript ${tx_mb}MB ≥ ${SIZE_MB}MB at only ${used}% context)"
+      pwhy="Your transcript is past the size bar. Compaction does NOT shrink it — only a fresh session does, so this will not improve by waiting."
+    else
+      pwhat="BUSY + HIGH CONTEXT (${used}% ≥ ${T_BUSY}%)"
+      pwhy="You are climbing toward the 90% auto-compact wall."
+    fi
+    wr_os_notify "Claude desk BUSY+HIGH" "desk ${UUID:-$SID} ${pwhat} mid-work (${hold_reason}) — can't safely auto-recycle"
+    wr_push_page "BUSY+HIGH DESK (${DESK_ROLE}) ${used}% ctx / ${tx_mb}MB transcript, ${hold_reason} — resolve + /handoff; auto-recycle held (hard)"
+    pmsg="⚠ ${pwhat} held by ${hold_reason} — a HARD hold: an auto-recycle would lose state or bury a decision, so it will NOT fire. ${pwhy} ACT NOW: resolve the ${hold_reason} (commit / finish the merge, answer the decision, or let the teammate finish), then run /handoff to recycle. Re-pages every ${ESCALATE_DEDUP_S}s. Kill-switch: \`waiting-recycle.sh clear\`."
     jq -nc --arg a "$pmsg" --arg s "$pmsg" \
       '{decision:"block",reason:$s,systemMessage:$s,hookSpecificOutput:{hookEventName:"PostToolUse",additionalContext:$a}}'
     exit 0
@@ -761,9 +880,15 @@ if [ "$SAFE" = 0 ]; then
 fi
 # Reaching here: fire_mode=idle (SAFE) OR fire_mode=busy (BUSY soft + high ctx). The SHARED fire machine.
 
-# trig label — honest to the actual gate (eff_idle for idle; T_BUSY or the burn forecast for busy).
-if   [ "$fire_mode" = busy ] && [ "$early_busy" = 1 ];       then trig="context ${used}% burning ~$(( burn_x100 / 100 )).$(( burn_x100 % 100 / 10 ))%/min — forecast ≤${forecast_min}min to the ${CC_CE_WALL:-88}% wall while BUSY (${hold_reason})"
+# trig label — honest to the actual gate (eff_idle for idle; T_BUSY / the burn forecast / the SIZE axis for
+# busy). The size branches come FIRST where they are the reason: a size fire that narrated itself as
+# "context N% ≥ T_BUSY%" would be a lie about which axis fired — and the whole point of K02 is that the two
+# axes disagree. Wrong narration here is how the next reader concludes the size trigger never fires.
+if   [ "$fire_mode" = busy ] && [ "$size_busy" = 1 ];        then trig="transcript ${tx_mb}MB ≥ ${SIZE_MB}MB (context only ${used}% — SIZE, not fill) while BUSY (${hold_reason})"
+elif [ "$fire_mode" = busy ] && [ "$early_busy" = 1 ];       then trig="context ${used}% burning ~$(( burn_x100 / 100 )).$(( burn_x100 % 100 / 10 ))%/min — forecast ≤${forecast_min}min to the ${CC_CE_WALL:-88}% wall while BUSY (${hold_reason})"
 elif [ "$fire_mode" = busy ];                                then trig="context ${used}% ≥ ${T_BUSY}% while BUSY (${hold_reason})"
+elif [ "$over_size" = 1 ] && [ "$over_threshold" = 1 ];     then trig="transcript ${tx_mb}MB ≥ ${SIZE_MB}MB AND context ${used}% ≥ ${eff_idle}%"
+elif [ "$over_size" = 1 ];                                  then trig="transcript ${tx_mb}MB ≥ ${SIZE_MB}MB (context only ${used}% — the SIZE axis, which compaction does not reset)"
 elif [ "$over_threshold" = 1 ] && [ "$rot_valid" = 1 ];     then trig="context ${used}% ≥ ${eff_idle}% AND a state-rot tell"
 elif [ "$over_threshold" = 1 ];                             then trig="context ${used}% ≥ ${eff_idle}%"
 else                                                             trig="a floored state-rot tell (re-deriving known state, ${used}% ≥ ${ROT_FLOOR}% floor)"
@@ -799,8 +924,10 @@ if [ "$stage2_pending" = 1 ]; then
   # Compose the successor brief ATOMICALLY (tmp+mv). NEVER empty/partial → no task-less successor (FM-D):
   #   standing --brief template (if armed) + frozen DoD + (busy) the drained ping queue + a re-derive directive.
   FIRE_DIR="${CC_WR_FIRE_DIR:-/tmp}"; pf="$FIRE_DIR/wr-fire-${SID}.txt"; tmpf="$pf.$$"
+  _szmw=""; [ "$fire_mode" = busy ] && _szmw=", and it was FORCED mid-work rather than at a clean boundary"
   {
     if [ -s "$(brief_for "$CWD")" ]; then cat "$(brief_for "$CWD")"
+    elif [ "$over_size" = 1 ]; then printf '%s\n' "You are the monitoring DESK, resumed by a deterministic self-recycle triggered by SIZE, not context fill: the predecessor's transcript had reached ${tx_mb}MB (≥ ${SIZE_MB}MB) at only ${used}% context${_szmw}. A transcript is never reset by compaction — only a fresh session resets it — which is why this fired while every context-fill trigger read the desk as healthy."
     elif [ "$fire_mode" = busy ] && [ "$early_busy" = 1 ]; then printf '%s\n' "You are the monitoring DESK, resumed by a deterministic self-recycle FORCED mid-work (predecessor context was ${used}% full and BURNING toward the auto-compact wall — forecast ≤${forecast_min}min at the observed rate — so it was discarded before rot/exhaustion)."
     elif [ "$fire_mode" = busy ]; then printf '%s\n' "You are the monitoring DESK, resumed by a deterministic self-recycle FORCED mid-work (predecessor context was ${used}% full — over the ${T_BUSY}% busy ceiling — and has been discarded to stop context rot)."
     else printf '%s\n' "You are the monitoring DESK, resumed by a deterministic self-recycle (predecessor context was ${used}% full and has been discarded to stop context rot)."; fi
@@ -813,7 +940,12 @@ if [ "$stage2_pending" = 1 ]; then
   } > "$tmpf" 2>/dev/null
   if [ -s "$tmpf" ]; then mv -f "$tmpf" "$pf" 2>/dev/null; else rm -f "$tmpf" 2>/dev/null; fi
   if [ ! -s "$pf" ]; then log_idl abstained "fire-compose-empty" "$(jq -cn --argjson used "$used" '{used_pct:$used}')"; exit 0; fi
-  tk="$( [ "$over_threshold" = 1 ] && echo threshold || echo behavioral )"
+  # 3-way, not 2-way: with the size axis a boolean threshold/behavioral label would file every size fire
+  # under "behavioral", making the new axis invisible in exactly the ledger built to prove it fires.
+  if   [ "$over_size" = 1 ];       then tk=size
+  elif [ "$over_threshold" = 1 ];  then tk=threshold
+  else                                  tk=behavioral
+  fi
   # EXEC gate: idle ⇒ armed --live. busy ⇒ armed --live AND the extra busy-force opt-in (a mid-work recycle
   # is qualitatively riskier than an idle one — it needs its own arm beyond --live). Else SHADOW.
   exec_ok=0
@@ -876,8 +1008,12 @@ fi
 date +%s > "$cf" 2>/dev/null || true                         # stamp cooldown (anti-thrash + loop-breaker)
 printf '%s' "$((N + 1))" > "$capf" 2>/dev/null || true       # bump advisory cap
 [ -f "$escf" ] || date +%s > "$escf" 2>/dev/null || true     # set the Stage-2 grace clock on the FIRST advisory
+if   [ "$over_size" = 1 ];      then tk1=size
+elif [ "$over_threshold" = 1 ]; then tk1=threshold
+else                                 tk1=behavioral
+fi
 log_idl fired "waiting-recycle" \
-  "$(jq -cn --arg trigger "$( [ "$over_threshold" = 1 ] && echo threshold || echo behavioral )" --arg mode "$fire_mode" \
+  "$(jq -cn --arg trigger "$tk1" --arg mode "$fire_mode" \
       --argjson used "$used" --argjson rot "$rot_valid" --argjson count "$((N+1))" --argjson max "$MAX" \
       --argjson burn "$burn_x100" --argjson fc "$forecast_min" --arg conv "${conv_age:-}" \
       '{trigger:$trigger,mode:$mode,used_pct:$used,rot:$rot,count:$count,max:$max,burn_x100:$burn,forecast_min:$fc,conv_age_s:$conv}')"
@@ -885,7 +1021,11 @@ log_idl fired "waiting-recycle" \
 if [ "$fire_mode" = busy ]; then
   # BUSY advisory — mid-work at high context. Urge a self-/handoff NOW (it captures the same pings); if
   # ignored, the shadow would-force (or, opted-in, the exec) escalates after grace.
-  adv="⟳ BUSY + HIGH-CONTEXT AUTO-RECYCLE — ${trig}: you are climbing toward the 90% auto-compact wall. RECYCLE NOW while you still can cleanly: run /handoff — it captures the live state INCLUDING the pending pings/requests (mailbox + inbound wait-contracts) into the payload and fires handoff-fire.sh --recycle so the SUCCESSOR PANE IS THE CONTINUATION with nothing dropped. Commit any in-hand edit first (the working tree survives the recycle, but a fresh desk shouldn't inherit an unexplained diff). If you ignore this, the deterministic drain-and-recycle escalates in ${GRACE_S}s. Kill-switch: \`waiting-recycle.sh clear\` (this desk) / \`waiting-recycle.sh kill\` (global). (busy auto-recycle advisory $((N+1))/${MAX})"
+  # "climbing toward the wall" is only true on the FILL axis; a size fire can sit at low fill (K02), and a
+  # misdescribed danger is one the reader dismisses. ${trig} already names the real axis.
+  if [ "$size_busy" = 1 ]; then advwhy="your transcript is past the size bar and compaction will not shrink it — only a fresh session will"
+  else                          advwhy="you are climbing toward the 90% auto-compact wall"; fi
+  adv="⟳ BUSY + HIGH-CONTEXT AUTO-RECYCLE — ${trig}: ${advwhy}. RECYCLE NOW while you still can cleanly: run /handoff — it captures the live state INCLUDING the pending pings/requests (mailbox + inbound wait-contracts) into the payload and fires handoff-fire.sh --recycle so the SUCCESSOR PANE IS THE CONTINUATION with nothing dropped. Commit any in-hand edit first (the working tree survives the recycle, but a fresh desk shouldn't inherit an unexplained diff). If you ignore this, the deterministic drain-and-recycle escalates in ${GRACE_S}s. Kill-switch: \`waiting-recycle.sh clear\` (this desk) / \`waiting-recycle.sh kill\` (global). (busy auto-recycle advisory $((N+1))/${MAX})"
 else
   adv="⟳ MONITORING AUTO-RECYCLE — you are at a quiet monitoring boundary (${trig}). A watching desk accrues low-value context that rots your recall of the load-bearing orchestration state. RECYCLE NOW via your existing self-recycle path: run /handoff — it captures the live state (fired sessions, pending pings, wave/merge state, decisions) into the payload and fires handoff-fire.sh --recycle so the SUCCESSOR PANE IS THE CONTINUATION and this bloated context is discarded. Do it as this turn's next action. IF instead you actually hold in-hand write-work or a genuine open decision (you should not — the tree is clean and no blocker was detected), do NOT recycle: surface it. If you ignore this, the deterministic fire escalates in ${GRACE_S}s. Kill-switch: \`waiting-recycle.sh clear\` (this desk) / \`waiting-recycle.sh kill\` (global). (auto-recycle advisory $((N+1))/${MAX})"
 fi
