@@ -109,7 +109,25 @@ SVG_CSS = """
 .fnum{fill:var(--sb-accent,#D77757)}
 .flab{fill:var(--sb-label,#7f8a9a)}
 .frate{fill:var(--sb-dim,#6e7681)}
+.ko{stroke:var(--sb-dim,#6e7681);stroke-width:1;stroke-dasharray:3 3;fill:none;opacity:.55}
+.day .frm{fill:#fbf5ea;stroke:#ddcfb6}
+.day .pl{fill:#fbf5ea}
+.day .gr{fill:#b0a08a}
+.day .st,.day .sd{fill:#4a4133}
+.day .pp{fill:#4a4133}
+.day .pf{fill:#7d7160}
+.day .sp{fill:#a06a1e}
+.day .mo,.day .flab{fill:#6d6353}
+.day .frate{fill:#7c7264}
+.day .ln{stroke:#8d8271}
+.day .ko{stroke:#7c7264}
 """
+
+# The wordmark keep-out, as a STORYBOARD ANNOTATION rather than scene content. The binding rule is
+# the operator's: lines and travelling features never touch the TYPE. It is not a ban on the sky's
+# upper band — that was a convenience invented in the synthesis, and it is what wrongly narrowed
+# the shooting star to a low streak. Drawn so the routing decision is visible instead of asserted.
+KEEPOUT = (52.0, 14.0, 90.0, 24.0)
 
 # ── primitives ──────────────────────────────────────────────────────────────────────────────────
 
@@ -307,9 +325,60 @@ def constellation(segments: int, fading: bool = False) -> str:
     return f'<polyline class="{"lf" if fading else "ln"}" points="{pts}"/>' + dots
 
 
-def sweep(x: float) -> str:
-    """The deploy sweep: one dim column, and its whole payload is that nothing it passes changes."""
-    return f'<g class="sw"><rect x="{x:g}" y="34" width="2" height="{BASE - 34}"/></g>'
+def keepout() -> str:
+    """The type keep-out, dashed — a STORYBOARD ANNOTATION, not scene content (see KEEPOUT)."""
+    x, y, w, h = KEEPOUT
+    return f'<rect class="ko" x="{x:g}" y="{y:g}" width="{w:g}" height="{h:g}" rx="2"/>'
+
+
+def bird(px: float, x: float, y: float) -> str:
+    """The DAY counterpart of the travelling dash. A meteor is night-only, so by day the same
+    travelling group carries a three-cell gull instead of a head-and-trail. The animated node and
+    its path are IDENTICAL in both schemes — only the static children inside the group differ, so
+    there is still one animation to verify and one set of duty numbers, not two."""
+    return cells([(0, 0), (1, 1), (2, 0)], px, x, y, "st")
+
+
+def hazard(x: float, px: float = 4) -> str:
+    """The spike pit: a destructive call arriving on the ground. Three pixel spikes, whole cells."""
+    spikes = [
+        (cx + i * 3, cy)
+        for i in range(3)
+        for cx, cy in ((1, 0), (0, 1), (1, 1), (2, 1))
+    ]
+    return cells(spikes, px, x, BASE - 2 * px, "gr")
+
+
+def shield(x: float, y: float, px: float = 5) -> str:
+    """The hook that refuses: a 2 x 5 cell slab dropping in front of the walker. The hazard breaks
+    on it and the walker never breaks stride, which is the entire payload."""
+    return cells([(cx, cy) for cx in range(2) for cy in range(5)], px, x, y, "hk")
+
+
+def wall(x: float, h: float = 46) -> str:
+    """The quota cliff: the one thing on the ground the walker cannot pass."""
+    return (
+        f'<g class="hk"><rect x="{x:g}" y="{BASE - h:g}" width="6" height="{h:g}"/>'
+        f'<rect x="{x - 2:g}" y="{BASE - h:g}" width="10" height="4"/></g>'
+    )
+
+
+def vrule(x: float, opened: float = 1.0) -> str:
+    """The pane split, CHEAP build: a 2 art-px vertical rule that opens and retracts. It implies a
+    second surface without authoring one."""
+    top = BASE - 74 * opened
+    return f'<g class="sw"><rect x="{x:g}" y="{top:g}" width="2" height="{BASE - top:g}"/></g>'
+
+
+def split_frame(x: float, phase: float = 0) -> str:
+    """The pane split, EXPENSIVE build: a real frame division, so TWO grounds — and the print lock
+    then has to hold across the seam. The right-hand ground is drawn at its own phase, because that
+    is exactly the thing that has to be proved and cannot be assumed."""
+    return (
+        print_row(x_to=x - 4)
+        + print_row(x_from=x + 6 + phase, w=4)
+        + f'<g class="sw"><rect x="{x:g}" y="20" width="2" height="{BASE - 14:g}"/></g>'
+    )
 
 
 # ── the frame box ───────────────────────────────────────────────────────────────────────────────
@@ -383,6 +452,7 @@ class Frame:
     back: str = ""  # behind the creatures
     front: str = ""  # in front of them
     ground: str | None = None  # None = the default print row
+    day: bool = False  # force the DAY plate regardless of the page theme
 
     def render(self, col: int, key: str) -> str:
         where = f"{key}/{col + 1}"
@@ -395,7 +465,8 @@ class Frame:
         inner = g + chevrons(self.rate) + self.back + body + self.front
         _fits(inner, where)
         return (
-            f'<g transform="translate({col * (FW + GAP)} {PAD})">'
+            f'<g class="{"day" if self.day else "night"}" '
+            f'transform="translate({col * (FW + GAP)} {PAD})">'
             f'<rect width="{FW}" height="{FH}" rx="5" class="frm"/>'
             f"{inner}"
             f'<text class="fn" x="10" y="{LBL_Y}">'
@@ -406,15 +477,26 @@ class Frame:
         )
 
 
+@dataclass(frozen=True)
+class Variant:
+    """A second, shorter strip under a beat's main strip — for a counterpart that has to be SEEN
+    rather than described: the day-scheme paint of a night-only beat, or the expensive build of a
+    move whose cheap build is what the main strip shows."""
+
+    caption: str
+    frames: tuple[Frame, ...]
+
+
 # ── the ten beats ───────────────────────────────────────────────────────────────────────────────
 
-RX = 96.0  # THE RECALL frames what is BEHIND, so its walker sits right of centre
+RX = 96.0  # a beat whose subject is BEHIND the walker frames it right of centre
 W_BIG = Creature(BIG, AX)
 W_LEFT = Creature(BIG, AX, "look-left")
 W_RIGHT = Creature(BIG, AX, "look-right")
 V_SML = Creature(SML, BX, "look-left")
 R_BIG = Creature(BIG, RX)
 R_LEFT = Creature(BIG, RX, "look-left")
+R_DROP = Creature(BIG, RX, dy=BIG)  # one cell down: the only "loss" cue the sprite has
 FOOT = 99.0  # the lattice print under the walker's leading foot
 CAKE_X = 113.0  # mid clear band: 6 px off the walker, 4 px off the visitor
 
@@ -433,6 +515,7 @@ class Beat:
     cost: str
     note: str
     frames: tuple[Frame, ...] = field(default_factory=tuple)
+    variant: Variant | None = None
 
 
 BEATS: tuple[Beat, ...] = (
@@ -551,33 +634,83 @@ BEATS: tuple[Beat, ...] = (
     Beat(
         key="noticing",
         name="THE NOTICING",
-        status="spec'd (O3) · ship first",
+        status="MANDATORY (operator) · spec'd (O3) · ship first",
         reach="no code needed",
         cause="Nothing in the repo, and that is the honest ground. Tracking a moving thing is "
         "human-universal; this beat is defended on the same basis as THE ASK rather than given a "
         "mechanism-mapping it does not need.",
-        behaviour="The gaze LEADS by ~0.5 s: the eye holes shift one cell before anything is "
-        "there. Then a single travelling dash descends through the LOW sky toward the horizon, and "
-        "the eyes track it down.",
-        exit_="The dash goes out at the horizon; the eyes return to centre. One-shot, no residue, "
+        behaviour="The gaze LEADS by ~0.5 s — the eye holes shift one cell BEFORE anything is "
+        "there — and then a single travelling dash crosses the FULL LENGTH of the sky, entering "
+        "high on one side and leaving low on the other. The eyes follow it the whole way, so the "
+        "gaze arcs right → centre → left, which is three keyframes of a move the sprite already has.",
+        exit_="It leaves at the far edge, low; the eyes return to centre. One-shot, no residue, "
         "nothing to repay.",
-        mech="None claimed. The event is the NOTICING, not the star — which is also why the star "
-        "never crosses the top of the frame: nothing is ever authored above y=340, so the wordmark "
-        "keep-out holds by construction rather than by a check.",
+        mech="None claimed. The event is the NOTICING, not the star. The routing rule is the "
+        "operator's actual one: the travelling feature never touches the TYPE — so it passes BELOW "
+        "the wordmark box (or behind the cloud bands). The keep-out is on the type, NOT on the "
+        "sky's upper band; a full-width traverse is legal, and the earlier 'nothing above y=340' "
+        "was a convenience invented in the synthesis, which is what wrongly narrowed this to a low "
+        "streak.",
         cost_tag="rate: free · sky-only",
-        cost="Zero, and it is the cheapest beat available anywhere in the set: a pose change is "
-        "not a world change, and a sky-only feature has no strip occupancy at all.",
-        note="The only beat fully legible to a stranger in BOTH schemes — one geometry, two paints "
-        "(warm head plus tail at night, dark silhouette by day), so the timing and the gaze "
-        "choreography are identical and there is one animation to verify instead of two. The "
-        "gaze-leads ordering is what stops the dash reading as a stray pixel: by the time it "
-        "appears the viewer is already looking where it will be.",
+        cost="Zero, and it is still the cheapest beat available: a pose change is not a world "
+        "change, and a sky-only feature has no strip occupancy at all. A full-width traverse costs "
+        "no more than a short one — the feature is not on the strip, so its dwell is set by its own "
+        "duration rather than by the (1920 + width)/96 transit that binds anything riding the ground.",
+        note="Fully legible to a stranger, in both schemes — which is why the DAY counterpart is "
+        "storyboarded below rather than described. A meteor is night-only, and a reader gets one "
+        "scheme and never sees the other, so by day the same travelling group carries a three-cell "
+        "gull. The path, the timing and the gaze choreography are IDENTICAL; only the static "
+        "children inside the animated group differ, so there is still one animation to verify. The "
+        "gaze-leads ordering is what stops it reading as a stray pixel: by the time it appears the "
+        "viewer is already looking where it will be.",
         frames=(
-            Frame("ambient · eyes centred", 1, (W_BIG,)),
-            Frame("gaze LEADS · sky empty", 1, (W_RIGHT,)),
-            Frame("the dash appears", 1, (W_RIGHT,), back=star(4, 176, 42)),
-            Frame("eyes track it down", 1, (W_RIGHT,), back=star(4, 148, 66)),
-            Frame("out at the horizon", 1, (W_BIG,), back=star(4, 122, 96, tail=1)),
+            Frame("ambient · eyes centred", 1, (W_BIG,), back=keepout()),
+            Frame("gaze LEADS · sky empty", 1, (W_RIGHT,), back=keepout()),
+            Frame(
+                "enters high, far right",
+                1,
+                (W_RIGHT,),
+                back=keepout() + star(4, 176, 20),
+            ),
+            Frame(
+                "crosses BELOW the type",
+                1,
+                (W_RIGHT,),
+                back=keepout() + star(4, 124, 44),
+            ),
+            Frame(
+                "exits low, far left", 1, (W_LEFT,), back=keepout() + star(4, 22, 78)
+            ),
+            Frame("gone · eyes centred", 1, (W_BIG,), back=keepout()),
+        ),
+        variant=Variant(
+            caption="DAY counterpart — same group, same path, same timing; the gull is three "
+            "static cells instead of a head and a trail, because a meteor is night-only and a "
+            "reader gets one scheme and never sees the other. Rendered on the day plate here "
+            "regardless of this page's theme, so the comparison does not need a theme switch.",
+            frames=(
+                Frame(
+                    "day · enters high right",
+                    1,
+                    (W_RIGHT,),
+                    back=keepout() + bird(4, 176, 20),
+                    day=True,
+                ),
+                Frame(
+                    "day · below the type",
+                    1,
+                    (W_RIGHT,),
+                    back=keepout() + bird(4, 124, 44),
+                    day=True,
+                ),
+                Frame(
+                    "day · exits low left",
+                    1,
+                    (W_LEFT,),
+                    back=keepout() + bird(4, 22, 78),
+                    day=True,
+                ),
+            ),
         ),
     ),
     Beat(
@@ -725,171 +858,262 @@ BEATS: tuple[Beat, ...] = (
         ),
     ),
     Beat(
-        key="lane",
-        name="THE LANE",
-        status="new · specified here (was named, never spec'd)",
-        reach="partly coded",
-        cause="A second writer starts. Two writers cannot share one git index — a bare commit in "
-        "one session sweeps the other's staged files — so isolation is the precondition, not a "
-        "convenience.",
-        behaviour="The ground FORKS. A second print row peels off below the first and runs "
-        "parallel for ~2 s at the same pitch. The walker stays on its own row and never crosses, "
-        "and NOTHING walks the other lane.",
-        exit_="The two rows converge back into one, at the same pitch and phase. That convergence "
-        "is the land, and the payload is that the record is single again.",
-        mech="A worktree per writer (`claude -w`, handed out warm in ~3 s) funnelling into exactly "
-        "one machine-wide `land-lock.sh` around the CAS push window.",
-        cost_tag="rate: free · widest strip footprint",
-        cost="No rate change, but a fork has to be authored ON the strip, so 20-26 s of canvas and "
-        "the largest footprint of anything here. The spec's cut order puts it second for exactly "
-        "this reason — most infographic-prone, widest footprint.",
-        note="A fork and a merge is legible with no code. What is NOT legible is that the other "
-        "lane is a PEER SESSION: an empty lane reads as a road, not as a colleague. That is the "
-        "honest price of refusing to put a second creature there — which the spec does refuse, "
-        "because two same-size clawds break the source's own one-saturated-subject rule and a line "
-        "joining them rebuilds the rejected handoff infographic.",
+        key="guard",
+        name="THE GUARD",
+        status="MANDATORY-adjacent · new, from an external session, kept near as-is",
+        reach="no code needed",
+        cause="A tool call arrives that would do damage — an `rm -rf`, an unsanctioned force-push, "
+        "a write in the wrong worktree. The point is not that it fails: it never runs at all.",
+        behaviour="A hazard tile rides in on the ground ahead of the walker. A shield drops in "
+        "front of it, the hazard breaks on the shield, and the walker NEVER breaks stride — same "
+        "rate, same pitch, the foot still landing in its print.",
+        exit_="The shards go out and the shield lifts. Nothing is left on the ground and nothing "
+        "about the walker changed, which IS the payload: a refused call costs the turn nothing.",
+        mech="12 `PreToolUse` hooks and 41 deny rules, plus dangerous-bash patterns, wrong-worktree "
+        "and unsanctioned-push refusals. All 69 hook entries exit 0 by default — a deliberate "
+        "PreToolUse denial is one of only two things in the system that refuse.",
+        cost_tag="rate: free · hazard rides the strip",
+        cost="No rate change at all — and here the ABSENCE of a rate change is the content, so the "
+        "cheap build is also the correct one. The hazard is authored on the ground, so 20-26 s of "
+        "canvas transit; the shield can be screen-pinned if the collision is staged at a fixed x, "
+        "which is the version to build.",
+        note="The strongest of the new ideas. Shield-stops-hazard reads instantly with no code the "
+        "viewer lacks, which is exactly what the audited set was short of, and it is all position "
+        "and mass at scene scale, so it clears the legibility ladder without leaning on the arm "
+        "rise. Staged WITHOUT the sketch's `DENIED — 41 deny rules` caption; see the page preamble "
+        "on why no beat here carries text.",
         frames=(
-            Frame("one row · one writer", 1, (W_BIG,)),
+            Frame("ambient · the control", 1, (W_BIG,), ground=print_row(mark=(FOOT,))),
             Frame(
-                "the ground FORKS",
+                "a hazard rides in",
                 1,
                 (W_BIG,),
-                ground=print_row()
-                + ramp(112)
-                + print_row(y=BASE + LANE_DY, x_from=126),
+                ground=print_row(mark=(FOOT,)),
+                back=hazard(150),
             ),
             Frame(
-                "parallel · nobody there",
+                "the shield drops",
                 1,
                 (W_BIG,),
-                ground=print_row() + print_row(y=BASE + LANE_DY),
+                ground=print_row(mark=(FOOT,)),
+                back=hazard(124),
+                front=shield(112, BASE - 48),
             ),
             Frame(
-                "they converge",
+                "it breaks on the shield",
                 1,
                 (W_BIG,),
-                ground=print_row()
-                + print_row(y=BASE + LANE_DY, x_to=92)
-                + ramp(96, down=False),
+                ground=print_row(mark=(FOOT,)),
+                front=shield(112, BASE - 25) + burst(4, 138, BASE - 22, 3, 6),
             ),
             Frame(
-                "one row again · the land", 1, (W_BIG,), ground=print_row(mark=(FOOT,))
+                "lifts · stride unbroken", 1, (W_BIG,), ground=print_row(mark=(FOOT,))
             ),
         ),
     ),
     Beat(
-        key="advance",
-        name="THE ADVANCE",
-        status="new · specified here · first in the cut order",
-        reach="needs the code",
-        cause="The background verifier stamps green on the full corpus and the deploy autopilot "
-        "advances the live layer on a launchd tick.",
-        behaviour="One dim column crosses the frame in the world's own direction. It passes "
-        "THROUGH the walker's column without touching it, and everything it passes is exactly as "
-        "it was afterwards. The payload IS that nothing changes.",
-        exit_="It leaves at the far edge. The eyes flick to it and back. Nothing is left behind at "
-        "all.",
-        mech="`postland-verify.sh` (fresh cell, host suites partitioned out) green stamp → "
-        "`deploy-live.sh` on a launchd tick → the live `~/.claude`. The live layer only ever "
-        "advances to a green stamp; fail-closed.",
-        cost_tag="rate: free · screen-pinned overlay",
-        cost="Zero — an overlay, pinned, nothing authored on the strip. The second-cheapest beat "
-        "here and also the emptiest, which is why the spec ranks it FIRST in the cut order: "
-        "weakest exit, ~1 px of payload.",
-        note="Honestly poor. 'A sweep passed and nothing changed' is a joke that needs its own "
-        "punchline explained, and a stranger reads a scanline artifact or a render bug. It is on "
-        "this page so the ruling is visible, not because it should ship. The one thing it has: it "
-        "is the only beat whose subject is the deploy axis, which is where this repo's most "
-        "expensive incidents live (landed ≠ deployed).",
+        key="wall",
+        name="THE WALL",
+        status="new · the external HANDOFF, adapted — its CAUSE is what it contributes",
+        reach="partly coded",
+        cause="The account's five-hour window is spent, and the walker hits something it cannot "
+        "pass. This is the one thing O1/THE SUMMONING does not have: there the hat is a licence to "
+        "materialise with no reason to use it, and here the summon is FORCED.",
+        behaviour="A wall rides in and the walker stops at it — rate zero, gaze locked on it. A "
+        "vertical rule opens beyond the wall (the pane split) and the binary's own SMALLER clawd is "
+        "standing on the far side. The brief hands across the rule.",
+        exit_="The predecessor poofs once the successor is verified engaged, and the wall goes out "
+        "with it, because a fresh account has a fresh window. The successor walks on — so the "
+        "walker at the end of the loop is not the walker at the start, and the loop closes by "
+        "SUBSTITUTION rather than by looping.",
+        mech="The five-hour quota cliff → `claude-accounts` routing → `handoff-fire.sh`, which "
+        "TYPES the launch into a fresh iTerm2 split through the it2 API with echo-verified "
+        "keystrokes (the launchers are zsh functions, so no script can `exec` them) → `self-close "
+        "--successor`, which refuses to retire the predecessor until the successor's transcript "
+        "proves it engaged.",
+        cost_tag="rate: 0 at the wall, repaid at 2",
+        cost="The stop is what makes 'cannot pass' legible, and a stop is the most expensive thing "
+        "the rate vocabulary can express: 0 through the handover, repaid at 2, exactly as THE ASK "
+        "pays. The alternative — the wall rides past and nobody stops — is free, but then the cause "
+        "stops being legible and the beat reverts to O1's unmotivated hat. Naming that trade is the "
+        "point of this row.",
+        note="This is the spec's O1-a, SUBSTITUTION, which it recorded as conceptually the "
+        "strongest idea available but would not settle on the operator's behalf. With a wall in "
+        "front of it, O1-a now has the thing it lacked: a reason. Two rejections carried forward. "
+        "The visitor differs in SIZE, never in palette — the binary does ship "
+        "`orange_FOR_SUBAGENTS_ONLY` = rgb(217,119,87), two 255ths from the body orange in one "
+        "channel: semantically perfect, visually invisible, so colour cannot carry 'a different "
+        "account'. And no captions: the sketch labelled these frames `/handoff` and `PING RECEIVED "
+        "FROM PEER`.",
         frames=(
-            Frame("ambient · the control", 1, (W_BIG,)),
-            Frame("the sweep enters", 1, (W_BIG,), back=sweep(178)),
-            Frame("it crosses · eyes flick", 1, (W_RIGHT,), back=sweep(72)),
-            Frame("nothing changed", 1, (W_BIG,), back=sweep(24)),
-            Frame("gone · no residue", 1, (W_BIG,)),
+            Frame("a wall rides in", 1, (W_RIGHT,), back=wall(168)),
+            Frame("it cannot pass · rate 0", 0, (W_RIGHT,), back=wall(116)),
+            Frame("the pane splits", 0, (W_RIGHT,), back=wall(116) + vrule(130, 0.55)),
+            Frame(
+                "a SMALLER clawd, far side",
+                0,
+                (W_RIGHT, V_SML),
+                back=wall(116) + vrule(130),
+            ),
+            Frame(
+                "the brief across the rule",
+                0,
+                (W_RIGHT, V_SML),
+                back=wall(116) + vrule(130),
+                front=letter(6, 126, BASE - 58),
+            ),
+            Frame(
+                "A poofs · B walks on",
+                2,
+                (Creature(SML, AX + 8),),
+                ground=print_row(mark=(FOOT - PITCH,)),
+                back=burst(5, 128, BASE - 32, 4),
+            ),
+        ),
+        variant=Variant(
+            caption="The ⌘D pane split, both builds — because the image is the most interesting "
+            "one in the set and its cost is invisible in prose. The main strip uses the CHEAP "
+            "build: a 2 art-px rule that opens and retracts, implying a second surface without "
+            "authoring one. The EXPENSIVE build is a real frame division, which means TWO grounds "
+            "— and the print lock then has to hold across the seam, `strip_length` divisible by "
+            "the pitch on each side independently. That is the only thing anywhere on this page "
+            "that would double the world.",
+            frames=(
+                Frame("cheap · a rule opens", 0, (W_RIGHT,), back=vrule(130)),
+                Frame(
+                    "expensive · TWO grounds",
+                    0,
+                    (W_RIGHT, V_SML),
+                    ground=split_frame(126, phase=5),
+                ),
+            ),
         ),
     ),
     Beat(
-        key="recall",
-        name="THE RECALL",
-        status="new · fills the one gap in the set",
+        key="nothing-lost",
+        name="NOTHING IS LOST",
+        status="new · from an external session, mechanics changed twice",
         reach="partly coded",
-        cause="Something a previous session wrote is needed again — a file version restored, a "
-        "plan revision recovered, a full-text hit in the archive of every conversation.",
-        behaviour="The gaze goes BACKWARD first, one cell, toward the prints already made. Then a "
-        "pale letter rises OUT of an old print behind the walker, drifts forward faster than the "
-        "world, and is absorbed at the body: the record handing something back.",
-        exit_="Absorbed, not faded — it reaches the walker and is gone into it. The print it came "
-        "out of stays exactly as it was, because nothing was consumed.",
-        mech="`backup-before-write.sh` + `restore-file` (every file version) · "
-        "`plan-version-commit.sh` MANIFEST.jsonl (every plan revision) · the SQLite FTS5 index "
-        "behind `claude-search` (every conversation, 5,709 of them).",
-        cost_tag="rate: free · pinned, moves faster than the world",
-        cost="Zero. The letter is pinned in screen space just behind the walker and overtakes the "
-        "world, so nothing is authored on the strip and nothing needs repaying. It is the "
-        "cheapest of the four new beats.",
-        note="Partly coded: it needs prints = the record, which the strip teaches passively over "
-        "the whole loop. But 'something came back out of the ground it had already walked' reads "
-        "as memory to most viewers, and the BACKWARD gaze is what makes it read as retrieval "
-        "rather than as litter. Why it is worth a slot: README §4 ('nothing a session did dies "
-        "with it') is currently carried only as a permanent STATE — no beat plays it.",
+        cause="A pane dies mid-turn — a crash, a reap, a context wall. Something the session was "
+        "holding drops.",
+        behaviour="The walker DROPS one cell, and that is the whole of the loss cue: legs never "
+        "animate and there is no stumble pose, so a limb action is not available to express it. A "
+        "pale token falls out and lands in the print strip.",
+        exit_="The strip gives it back. The token rides the record, then rises out of a print and "
+        "overtakes the world to the walker, which is up again by then. Nothing new is drawn — the "
+        "ground already meant 'the record'.",
+        mech="`backup-before-write.sh` stamps a backup before every Write/Edit (nanosecond+PID "
+        "names, so it is parallel-agent-safe) · `plan-version-commit.sh` MANIFEST.jsonl · the "
+        "self-maintaining FTS5 index. Panes are disposable; their output is not.",
+        cost_tag="rate: free · the token rides the strip",
+        cost="No rate change: a body drop is NOT a stride_in_place, because the feet never leave "
+        "the ground and the stride count is untouched, so the print lock is undisturbed. The token "
+        "is authored on the strip for the leg where the record carries it (the 20-26 s transit); "
+        "the return leg overtakes the world and is screen-pinned, so it costs nothing.",
+        note="Two changes from the sketch, both forced rather than chosen. 'clawd trips' is not "
+        "available — legs never move — so the loss is a body drop, which is a position change and "
+        "therefore the strongest cue on the ladder anyway. And the recovery is NOT a restore-claw "
+        "swinging in from a vault: the token falls into the print strip and the strip carries it "
+        "back, which needs zero new art and is truer to the mechanism. It supersedes an earlier "
+        "draft beat of mine (THE RECALL) that had this same return leg with no loss to motivate it.",
         frames=(
-            # This is the one beat whose subject is BEHIND the walker, so it is the one row framed
-            # with the walker right of centre. Left of AX there are only 22 px of visible ground —
-            # the letter and the marked print both landed under the body and read as nothing.
-            Frame("ambient · prints behind", 1, (R_BIG,), ground=print_row(mark=(47,))),
-            Frame("gaze goes BACK", 1, (R_LEFT,), ground=print_row(mark=(47,))),
+            Frame("ambient · rate 1", 1, (R_BIG,)),
             Frame(
-                "rises out of an old print",
+                "the body DROPS one cell",
                 1,
-                (R_LEFT,),
-                ground=print_row(mark=(47,)),
-                back=letter(6, 47, BASE - 22),
+                (R_DROP,),
+                back=letter(5, 84, BASE - 44),
             ),
             Frame(
-                "it overtakes the world",
+                "the token hits the strip",
                 1,
-                (R_LEFT,),
-                ground=print_row(mark=(47,)),
-                back=letter(6, 70, BASE - 40),
+                (R_DROP,),
+                ground=print_row(mark=(60,)),
+                back=letter(5, 60, BASE - 13),
             ),
             Frame(
-                "absorbed · print unchanged",
+                "the strip carries it back",
+                1,
+                (R_LEFT,),
+                ground=print_row(mark=(34,)),
+                back=letter(5, 34, BASE - 13),
+            ),
+            Frame(
+                "it rises and overtakes",
+                1,
+                (R_LEFT,),
+                ground=print_row(mark=(34,)),
+                back=letter(5, 56, BASE - 36),
+            ),
+            Frame(
+                "absorbed · nothing lost",
                 1,
                 (R_BIG,),
-                ground=print_row(mark=(47,)),
-                back=burst(4, 84, BASE - 32, 3, 6),
+                ground=print_row(mark=(34,)),
+                back=burst(4, 80, BASE - 30, 3, 6),
             ),
         ),
     ),
     Beat(
         key="index",
         name="THE INDEX",
-        status="new · beautiful, and night-only",
+        status="MANDATORY (operator) · night-only",
         reach="partly coded",
         cause="A session ends and is indexed. The pane is disposable; what it produced is not.",
-        behaviour="Three or four stars ALREADY scattered in the low sky are joined by one thin "
-        "line, drawn one segment at a time in the world's direction. It joins stars only, never a "
-        "creature.",
-        exit_="The line fades and the stars stay. That is the whole point: the joining was the "
-        "event, the record is what remains.",
-        mech="The append-only `MANIFEST.jsonl` plus the self-maintaining FTS5 index (a crash-safe "
-        "stub at SessionStart, rich metadata at SessionEnd, a 60 s sweep daemon catching misses).",
+        behaviour="Stars ALREADY scattered in the sky are joined, star to star, in ORDER — drawn "
+        "on by `stroke-dashoffset`, quick but not instant, so the figure assembles rather than "
+        "appears. Then it holds briefly. Separate points revealed to be one figure is 'sessions run "
+        "each other' stated in the sky, which is why this is the best event idea on the table.",
+        exit_="The LINES fade and the stars remain. That is the whole point: the joining was the "
+        "event, and what is left behind is the record.",
+        mech="The append-only `MANIFEST.jsonl` plus the self-maintaining FTS5 index over every "
+        "session (a crash-safe stub at SessionStart, rich metadata at SessionEnd, a 60 s sweep "
+        "daemon catching the misses).",
         cost_tag="rate: free · sky-only",
-        cost="Zero — sky-only, pinned, one eye shift and no creature displacement. Structurally "
-        "the cheapest of the four new beats alongside THE RECALL.",
-        note="NIGHT-ONLY, and on this page's own standard that is close to disqualifying: half the "
-        "viewers never see it, and the shooting star was deleted partly for exactly that. It also "
-        "sits one step from the rejected infographic — the rule that saves it is that lines may "
-        "join STARS and may never have a creature as an endpoint. Ranking: the most beautiful of "
-        "the four new beats and the least shippable. It re-enters if the day scheme ever gets a "
-        "counterpart geometry.",
+        cost="Zero — sky-only, screen-pinned, one eye shift and no creature displacement. "
+        "Structurally the cheapest thing on this page alongside THE NOTICING.",
+        note="Three constraints, all binding, all visible above. Lines join STARS to STARS and may "
+        "NEVER touch a creature — a line to a creature rebuilds the handoff infographic R1 "
+        "rejected, so no creature is ever an endpoint. Lines as well as stars stay outside the type "
+        "keep-out (the dashed box). And it is NIGHT-ONLY, so it cannot be the only rare event: by "
+        "day the sky's event is row 03's gull, and the day scheme's rare-event budget is otherwise "
+        "carried by the beats that are scheme-independent because they are on the ground or "
+        "screen-pinned — THE GUARD, THE LANDING, THE REFUSAL, THE ASK, THE WALL. The honest "
+        "residue: at 838 px a 1 px line between 3 px stars is the faintest thing here, and the "
+        "draw-on is what makes it read at all — a line that is simply present reads as a hairline "
+        "artifact.",
         frames=(
-            Frame("night · stars scattered", 1, (W_BIG,), back=constellation(0)),
-            Frame("gaze over · one segment", 1, (W_RIGHT,), back=constellation(1)),
-            Frame("the line completes", 1, (W_RIGHT,), back=constellation(3)),
-            Frame("the line fades", 1, (W_BIG,), back=constellation(3, fading=True)),
-            Frame("the stars remain", 1, (W_BIG,), back=constellation(0)),
+            Frame(
+                "night · stars scattered",
+                1,
+                (W_BIG,),
+                back=keepout() + constellation(0),
+            ),
+            Frame(
+                "draws on, star to star",
+                1,
+                (W_RIGHT,),
+                back=keepout() + constellation(1),
+            ),
+            Frame(
+                "…in order, not at once",
+                1,
+                (W_RIGHT,),
+                back=keepout() + constellation(2),
+            ),
+            Frame(
+                "one figure · it holds",
+                1,
+                (W_RIGHT,),
+                back=keepout() + constellation(3),
+            ),
+            Frame(
+                "the LINES fade",
+                1,
+                (W_BIG,),
+                back=keepout() + constellation(3, fading=True),
+            ),
+            Frame("the stars remain", 1, (W_BIG,), back=keepout() + constellation(0)),
         ),
     ),
 )
@@ -905,13 +1129,17 @@ def row_svg(beat: Beat) -> str:
     background, so it is invisible there, and it is what makes each `sb-*.svg` presentable when
     opened on its own (a standalone SVG gets no page background from the browser, only the UA's
     grey). The var() fallbacks carry the dark scheme when there is no host stylesheet at all."""
-    n = len(beat.frames)
+    return strip_svg(beat.frames, beat.key, beat.name)
+
+
+def strip_svg(frames: tuple[Frame, ...], key: str, label: str) -> str:
+    n = len(frames)
     w = n * FW + (n - 1) * GAP
     h = FH + 2 * PAD
-    body = "".join(f.render(i, beat.key) for i, f in enumerate(beat.frames))
+    body = "".join(f.render(i, key) for i, f in enumerate(frames))
     return (
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" width="{w}" height="{h}" '
-        f'role="img" aria-label="{html.escape(beat.name)} — {n} frames">'
+        f'role="img" aria-label="{html.escape(label)} — {n} frames">'
         f"<style>{SVG_CSS}</style>"
         f'<rect width="{w}" height="{h}" fill="var(--sb-panel,#0f131b)"/>'
         f"{body}</svg>"
@@ -1013,6 +1241,14 @@ h2 span.n{color:var(--sb-accentink);margin-right:10px}
 .pill.r2{border-color:var(--sb-rule);color:var(--sb-dim)}
 .frames{overflow-x:auto;margin:14px 0 16px;padding-bottom:4px}
 .frames svg{display:block;max-width:100%;height:auto}
+.variant{border-left:2px solid var(--sb-accent);padding:2px 0 2px 16px;margin:0 0 18px}
+.vcap{margin:0;font-size:12.5px;color:var(--sb-text2);max-width:104ch}
+.variant .frames{margin:10px 0 2px}
+.calls{margin:22px 0 4px;font-size:12.5px;color:var(--sb-text2);max-width:104ch}
+.calls p{margin:0 0 7px}
+.calls b{color:var(--sb-text);font-weight:500}
+.calls em{color:var(--sb-text);font-style:normal}
+.calls code{color:var(--sb-accentink);font-size:12px}
 dl.cbe{display:grid;grid-template-columns:14ch 1fr;gap:5px 16px;margin:0;font-size:13px}
 dl.cbe dt{color:var(--sb-dim);text-transform:lowercase;letter-spacing:.05em}
 dl.cbe dd{margin:0;color:var(--sb-text2)}
@@ -1067,6 +1303,13 @@ def _section(i: int, b: Beat) -> str:
     dl = "".join(
         f"<dt>{k}</dt><dd class='{'hi' if hi else ''}'>{v}</dd>" for k, v, hi in fields
     )
+    var = ""
+    if b.variant is not None:
+        var = (
+            f"<div class='variant'><p class='vcap'>{b.variant.caption}</p>"
+            f"<div class='frames'>"
+            f"{strip_svg(b.variant.frames, b.key + 'v', b.name + ' variant')}</div></div>"
+        )
     return (
         f"<section class='beat' id='{b.key}'><header>"
         f"<h2><span class='n'>{i + 1:02d}</span>{html.escape(b.name)}</h2>"
@@ -1074,7 +1317,7 @@ def _section(i: int, b: Beat) -> str:
         f"{_pill_reach(b.reach)}"
         f"<span class='pill'>{html.escape(b.status)}</span></header>"
         f"<div class='frames'>{row_svg(b)}</div>"
-        f"<dl class='cbe'>{dl}</dl></section>"
+        f"{var}<dl class='cbe'>{dl}</dl></section>"
     )
 
 
@@ -1096,6 +1339,26 @@ def index_html(beats: tuple[Beat, ...]) -> str:
         "<h1>Ten candidate micro-events — <b>pick by looking</b></h1>"
         f"<p class='lede'>{LEDGE}</p></div>"
         "<button id='t' type='button'>theme</button></div>"
+        "<div class='calls'>"
+        "<p><b>Three standing calls, so they can be overruled rather than discovered.</b></p>"
+        "<p><b>1 &#183; No beat carries text.</b> Every captioned frame in the incoming sketches "
+        "(<code>DENIED — 41 deny rules</code>, <code>PING RECEIVED FROM PEER</code>, "
+        "<code>5,709 sessions indexed</code>, <code>/handoff</code>) is staged here without its "
+        "caption. The spec already ruled on this class when it cut the floating Zzz — "
+        "<em>UI iconography, not observation</em> — and a beat that needs a caption has not been "
+        "staged. There is a mechanical reason too: an SVG loaded as an <code>&lt;img&gt;</code> "
+        "cannot load fonts, so any in-scene text inherits the wordmark's fallback-metrics problem. "
+        "A deliberate call, not an omission.</p>"
+        "<p><b>2 &#183; The keep-out is on the TYPE, not on the sky's upper band.</b> The dashed box "
+        "is a storyboard annotation marking the wordmark; travelling features and constellation "
+        "lines route around or below it. A full-length sky traverse is therefore legal — the "
+        "earlier &lsquo;nothing above y=340&rsquo; was a convenience invented in the synthesis, and "
+        "it is what wrongly narrowed the shooting star to a low streak.</p>"
+        "<p><b>3 &#183; idle &#8594; event &#8594; idle is not a new rule.</b> It is the spec's own "
+        "&#8805;65%-empty-air requirement, plus per-type duty &#8804;4%, aggregate &#8804;25%, and "
+        "no type recurring inside 60 s. Measured v5a fails it at 88.1% aggregate duty, so the "
+        "constraint is already the binding one — these ten are candidates to choose FROM, never a "
+        "set to ship together.</p></div>"
         "<div class='legend'>"
         "<span><b>rate N</b> top-right of every frame — the world's scroll rate. "
         "The vocabulary is {&#8722;1, 0, 1, 2, 3} and nothing between.</span>"
@@ -1103,6 +1366,7 @@ def index_html(beats: tuple[Beat, ...]) -> str:
         "a stop draws none.</span>"
         "<span><b>orange print</b> = one marked print. A uniform lattice shifted by exactly one "
         "period is identical to itself, so the mark is the only observable.</span>"
+        "<span><b>dashed box</b> = the type keep-out. Annotation, not scene content.</span>"
         "<span><b>clear plate</b> between two creatures is asserted at &#8805;2 cells on every "
         "frame, not eyeballed.</span></div>"
         f"{_glance(beats)}"
@@ -1110,8 +1374,14 @@ def index_html(beats: tuple[Beat, ...]) -> str:
         + "<footer>Generated by <code>scripts/banner-storyboard.py</code>. Geometry from "
         "<code>scripts/clawd-sprite.py</code> (asserted against the extracted grid on every run); "
         "rulings from <code>docs/plans/BANNER_NARRATIVE_SPEC.md</code> &#167; BETTER MICRO-EVENTS. "
-        "Rows 07-10 are new and are specified here for the first time. Frames are 200 px wide; the "
-        "beats themselves are judged at the 838 px README column, never at 1:1.</footer>"
+        "Rows 01-06 are the spec'd set; 03 and 10 are the operator's mandatory pair; 07-10 are "
+        "specified here for the first time, 08-10 adapted from an external session's raw sketches. "
+        "<b>Cut to make room, named so they are not lost:</b> THE LANE (a fork in the ground for "
+        "worktree isolation) and THE ADVANCE (a deploy sweep whose payload is that nothing changes) "
+        "&#8212; both were already the spec's own cut order, ADVANCE first; and THE RECALL, which "
+        "NOTHING IS LOST supersedes by giving its return leg a loss to motivate it. Frames are "
+        "200 px wide; the beats themselves are judged at the 838 px README column, never at "
+        "1:1.</footer>"
         "<script>const r=document.documentElement,b=document.getElementById('t');"
         "b.onclick=()=>{const d=r.dataset.theme||"
         "(matchMedia('(prefers-color-scheme: light)').matches?'light':'dark');"
