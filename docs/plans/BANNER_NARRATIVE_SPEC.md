@@ -972,6 +972,36 @@ demonstration of the *rate relationship*, not a render of the banner, so it is n
 shipped SVG. Verify any real fix with `scripts/banner-world-clock-probe.py`, which measures true
 per-layer displacement out of Chromium.
 
+## STORYBOARDED — ten candidates, and three things only the render could say (2026-07-29)
+
+Generator committed as `scripts/banner-storyboard.py`; page at `scratchpad/storyboards/index.html`.
+Every frame is drawn from the extracted 11 × 8 sprite via `clawd-sprite.py`, so **no frame on that
+page is a move the creature cannot actually make** — the constraint is enforced by construction rather
+than by review. Each beat carries cause / behaviour / exit / mechanism / world-rate cost / a note on
+whether a stranger needs a code.
+
+**1. The cake does not read as a cake.** At the 838 px render a ~3 × 4-cell cake resolves as a small
+pale **parcel with a candle on it**. That is not fatal — a gift is the same beat — but it is not the
+image the sketch asked for, and it **weakens O1-b's one distinguishing feature**, since O1-b exists
+precisely to keep the cake. O1-a needs no cake at all. This is a direct input to the O1-a/O1-b
+decision and it was only obtainable by rendering the prop.
+
+**2. A poof must REPLACE the body, not be drawn over it.** A burst composited on top of a creature
+that is still present reads as **damage**, not as departure. So the self-removal has to swap the
+sprite out on the same frame the burst appears. Cheap to get right, invisible in code review, and it
+inverts the meaning of the beat's most important moment if missed.
+
+**3. The constellation beat is `THE INDEX`, and the rename is an improvement.** Frames: *night, stars
+scattered → gaze over, one segment → the line completes → the line fades.* Naming it after the
+**session index** makes the drawn figure mean something specific — the record of sessions — instead of
+being a generic asterism. Recorded under both names because a search for "constellation" finds
+nothing: that false negative already cost one round-trip.
+
+Also specified here for the first time, having been named but never detailed: **THE LANE** (a fork in
+the ground = worktree isolation) and **THE ADVANCE** (a deploy sweep whose payload is that nothing
+changes), plus **THE RECALL** (restore-file). Their standings on the page are the cut order, not a
+recommendation to build all ten.
+
 ## OPERATOR RULINGS ON THE BUILT BEATS (2026-07-29, from the per-beat views)
 
 Given after examining each beat in isolation via `scripts/banner-beat-views.py` — so these are
