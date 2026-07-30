@@ -113,6 +113,11 @@ setup() {
   export TMPDIR="$BATS_TEST_TMPDIR/tmp/"; mkdir -p "$TMPDIR"
   local mint
   mint="$(sed -n '/^    WT_DEPS="\$(mktemp/,/^    chmod +x "\$WT_DEPS"/p' "$HF")"
+  # ShellCheck cannot see through `eval "$mint"` — the extracted source writes "$WT_INSTALL" into
+  # the deps file, so the variable IS consumed. (This prose line deliberately does NOT begin with
+  # the tool's name: a comment whose first word is that name parses as a malformed DIRECTIVE and
+  # aborts analysis of the whole file.)
+  # shellcheck disable=SC2034
   local WT_INSTALL='echo hermetic-stub'
   eval "$mint"
   [ "${WT_DEPS%.sh}" != "$WT_DEPS" ] || { echo "deps file lost its .sh suffix: $WT_DEPS"; false; }
@@ -130,4 +135,49 @@ setup() {
       false
     fi
   done
+}
+
+# ── item 7146aab37a9a: the LAUNCHER is the word the 2026-07-29 fix left exposed ─────────────────
+# Removing the package managers from the typed line closed the `go`→`god` wedge but not the CLASS.
+# `${LAUNCHER}` is still a bare word in command position in every typed shape, and it is the one
+# token that can NEVER be validated before typing: the launchers are zsh aliases/functions from the
+# operator's INTERACTIVE rc, so `command -v` from this script sees nothing (`zsh -c 'whence -w
+# claude-next4'` → none). They are also mutual near-misses inside CORRECT's own dictionary —
+# measured live: `claude-nex` → `correct 'claude-nex' to 'claude-next' [nyae]?`. And `--launcher`
+# is unvalidated (:2291), unlike `--account`, so a typo or a 5th account without a matching alias
+# types a word that parks the pane instead of failing cleanly.
+
+@test "EVERY typed launch shape shields the launcher with 'nocorrect'" {
+  # The invariant is per-SHAPE, not "the file mentions nocorrect somewhere": a new fire mode that
+  # composes its own CMD would otherwise inherit the wedge silently.
+  local shapes n=0 line
+  shapes="$(grep -n 'CMD="' "$HF" | grep 'LAUNCHER' || true)"
+  [ -n "$shapes" ] || { echo "found no typed CMD shapes — the grep drifted"; false; }
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    n=$((n + 1))
+    grep -q '${NC}${PREFIX}${LAUNCHER}' <<<"$line" \
+      || { echo "unshielded typed shape: $line"; false; }
+  done <<<"$shapes"
+  # All six known shapes: 2x --recycle, cold + existing --worktree, --cwd, bare.
+  [ "$n" -eq 6 ] || { echo "expected 6 typed launch shapes, found $n — a shape was added or lost"; false; }
+}
+
+@test "NC is exactly the zsh reserved word, with its separating space" {
+  # A bare `nocorrect` with no trailing space would concatenate into `nocorrectclaude-next4`.
+  grep -q '^NC="nocorrect "$' "$HF" || { echo "NC is not 'nocorrect ' — check the definition"; false; }
+}
+
+@test "POSITIVE CONTROL: the pre-fix unshielded shape WOULD fail the guard above" {
+  # Proves the guard discriminates rather than passing vacuously — the exact pre-fix construction,
+  # checked by the same predicate, must trip it.
+  local old='    CMD="cd $(printf %q "$WT") && ${PREFIX}${LAUNCHER}${ARGS} \"\$(cat $QP)\""'
+  ! grep -q '${NC}${PREFIX}${LAUNCHER}' <<<"$old" || false
+}
+
+@test "the shield is NOT applied by quoting (which would kill alias expansion)" {
+  # Quoting the launcher also suppresses correction, but suppresses ALIAS EXPANSION with it — and
+  # claude-next2/3/4 and claude-fable2/3/4 are aliases, so a quoted form simply would not resolve.
+  ! grep -qE "CMD=.*'\\\$\{LAUNCHER\}'" "$HF" || false
+  ! grep -qE 'CMD=.*\\"\$\{LAUNCHER\}\\"' "$HF" || false
 }

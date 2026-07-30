@@ -440,9 +440,16 @@ await_armed() { # $1=logfile → 0 once armed, 1 on timeout
 # the `"$(cat …)"`) spills out of its quotes, so the brief floods the shell as raw commands and the
 # launcher never starts (item e4c7e7fb41bd; worker left task-less). Two composed defenses, both from
 # stock it2 primitives (no it2-package edit):
-#   BRACKETED PASTE — wrap the command in ESC[200~ … ESC[201~ so ZLE inserts it as ONE literal block
-#     with NO per-character widget firing (autosuggest / highlight / correct all sit out a paste); the
-#     command lands intact regardless of shell-init timing or plugins.
+#   BRACKETED PASTE — wrap the command in ESC[200~ … ESC[201~ so ZLE treats it as pasted text rather
+#     than typed keys. CAVEAT, measured on THIS box (item 7146aab37a9a): the once-claimed guarantee
+#     "NO per-character widget firing" is FALSE here. oh-my-zsh rebinds the paste widget —
+#     ~/.oh-my-zsh/lib/misc.zsh:8-9 `zle -N bracketed-paste bracketed-paste-magic` (active unless
+#     DISABLE_MAGIC_FUNCTIONS=true, which is unset) — and bracketed-paste-magic deliberately pushes
+#     the paste back through ZLE as keystrokes (`zle -U - "$PASTED"`, then dispatches each through
+#     .self-insert), which is exactly the widget path autosuggest/highlight hook. Live: `zle -l`
+#     shows `bracketed-paste (bracketed-paste-magic)`. So the paste still removes the line-by-line
+#     FLOOD (the whole text lands in one buffer before any CR) but it does NOT make injection
+#     atomic w.r.t. per-character widgets — the ECHO-VERIFY below is what actually catches mangling.
 #   ECHO-VERIFY before submit — read the pane back and confirm the intact command is on the input line
 #     BEFORE the CR. A half-ready shell that dropped the paste never gets an Enter; clear the line and
 #     retry with a longer settle. The destructive keystroke (Enter — which makes the shell RUN the
@@ -589,6 +596,42 @@ it2_paste_submit() { # $1=it2-bin $2=pane-uuid $3=text → 0 pasted+submitted / 
   hf_bounded "$it2" session send -s "$id" $'\r' >/dev/null 2>&1
 }
 
+# ---- PANE-PARKED oracle: the pane is still a SHELL, and it is STUCK (item 7146aab37a9a) -------
+# The engagement oracle below is disk-only (a transcript with an assistant turn). That makes it
+# blind, BY CONSTRUCTION, to the difference between "claude booted and never ingested the brief"
+# (recover with a re-send) and "claude never started at all because the typed line parked the shell
+# on an interactive prompt no automation can answer" (a re-send makes it WORSE). Both look like
+# silence on disk. Only the PANE carries the evidence, and reading it costs one bounded call.
+#
+# The live shape (2026-07-26T13:14): `zsh: correct 'go' to 'god' [nyae]?`. zsh's spell prompt is a
+# single-key `read -k`, NOT ZLE — so it answers nothing, times out never, and the fire's own
+# 8-15min engagement window expires long after the caller's patience (the 13:14 fire left NO row in
+# handoffs.jsonl at all: it was killed mid-poll, so the fail-loud verdict never reached anyone).
+#
+# Patterns are ANCHORED to line start against the RAW screen (never the space-stripped form the
+# echo-verify uses). That anchor is load-bearing here: this repo's own briefs quote the string
+# `correct 'go' to 'god' [nyae]?` as prose, and the INC-4 re-send pastes the brief INTO the pane —
+# an unanchored grep would read our own backlog text back as proof of a wedge. Every pattern below
+# is a message only a SHELL emits, at the start of a line, after refusing to run something.
+# THE TWO SHELLS ORDER THE MESSAGE DIFFERENTLY — both shapes are needed, measured on this box:
+#   zsh:  `zsh: command not found: claude-next5`   (message first, subject last)
+#   bash: `bash: claude-next5: command not found`  (subject in the MIDDLE)
+# A single `^(zsh|bash): <message>` pattern silently covers only zsh — the bash arm needs its own
+# `[^:]*:` middle. The middle is deliberately colon-free so bash's benign startup chatter
+# (`bash: no job control in this shell`, emitted by any `bash -i` without a tty) can never match:
+# it has no second colon, and it is not a refusal.
+FIRE_PARKED_RE="${FIRE_PARKED_RE:-^((zsh|bash): (correct |no matches found|event not found|command not found|no such file or directory)|bash: [^:]*: (command not found|no such file or directory))}"
+pane_parked_reason() { # $1=it2-bin $2=session-id → echoes the reason, 0 parked / 1 not-parked/unknown
+  local it2="$1" id="$2" screen line
+  [ -n "$it2" ] && [ -n "$id" ] || return 1
+  screen="$(hf_bounded "$it2" session read -s "$id" -n "${FIRE_TYPE_READLINES:-500}" 2>/dev/null || true)"
+  [ -n "$screen" ] || return 1          # unreadable ⇒ UNKNOWN, never "parked" (fail-open: the disk
+                                        # oracle stays the authority; this one only ever short-circuits)
+  line="$(printf '%s\n' "$screen" | grep -aoiE "$FIRE_PARKED_RE.*" | head -1 || true)"
+  [ -n "$line" ] || return 1
+  printf '%s' "$line"
+}
+
 # ---- P0-11 engagement verification (FM2 / INC-4 cold-fire auto-submit race) -------------------
 # A non-recycle fire types the launch command + focuses, then historically printed "→ fired"
 # UNCONDITIONALLY. But a cold --worktree fire can race CC boot: the auto-submit keystroke is lost
@@ -656,14 +699,37 @@ EOF
 # Poll for engagement ≤timeout; on a miss re-type the prompt ONCE into the fired pane (the exact
 # INC-4 recovery), re-poll ≤retry, then return 1 (caller FAILS LOUD — never a false "→ fired").
 # All windows are env-overridable so tests run in seconds.
-verify_engagement() { # $1=projects $2=marker $3=regdir $4=pane $5=it2-bin $6=resend-text → 0/1
+#
+# THREE outcomes, not two (item 7146aab37a9a). 0 = engaged · 1 = never engaged · 2 = the pane is
+# PARKED on a shell prompt, i.e. the launcher never ran. 2 is not a slower 1: it has a different
+# cause, a different remedy, and — critically — it is knowable in SECONDS rather than after the
+# full window, which is the only reason the verdict reaches the caller at all. Every consumer of
+# this function must branch on 2 explicitly; a `!` test that folds 2 into 1 loses the diagnosis
+# (memory: a new third state must be taught to EVERY consumer of the exit code).
+# PARKED is checked FIRST in each iteration but can never mask a real engagement: it is a pure
+# short-circuit, and pane_parked_reason fails CLOSED to "not parked" whenever the screen is
+# unreadable, so the disk oracle remains the authority on success.
+verify_engagement() { # $1=projects $2=marker $3=regdir $4=pane $5=it2-bin $6=resend-text → 0/1/2
   local pdir="$1" marker="$2" regdir="$3" pane="$4" it2="$5" resend="$6"
   local timeout="${FIRE_ENGAGE_TIMEOUT:-120}" retry="${FIRE_ENGAGE_RETRY:-60}" interval="${FIRE_ENGAGE_INTERVAL:-3}"
   local t=0
+  ENGAGE_PARKED=""
   while [ "$t" -lt "$timeout" ]; do
     engagement_seen "$pdir" "$marker" "$regdir" "$pane" && return 0
+    ENGAGE_PARKED="$(pane_parked_reason "$it2" "$pane" || true)"
+    [ -n "$ENGAGE_PARKED" ] && return 2
     /bin/sleep "$interval"; t=$((t + interval))
   done
+  # ABSTAIN rather than re-send into a shell. The re-send pastes the WHOLE BRIEF and then sends CR;
+  # if the pane is still a shell that brief is executed as a script — verified hazards in real brief
+  # prose: `$(…)`/backticks RUN (`echo "the file is $(id -un)"` → `chrisren`), a bare `*` glob makes
+  # zsh refuse the line (`no matches found`), a `!` raises `event not found`, and at an existing
+  # `[nyae]` prompt the paste's own ESC[200~ bytes are consumed one-by-one as single-key ANSWERS.
+  # The old comment claimed bracketed paste made this safe: it prevents the line-by-line FLOOD, not
+  # EXECUTION — and on this box oh-my-zsh's bracketed-paste-magic re-feeds a paste through
+  # self-insert per character anyway, so even the flood guarantee does not hold.
+  ENGAGE_PARKED="$(pane_parked_reason "$it2" "$pane" || true)"
+  [ -n "$ENGAGE_PARKED" ] && return 2
   echo "⚠ fired session not engaged after ${timeout}s — re-typing the prompt once (INC-4 recovery)" >&2
   if [ -n "$pane" ] && [ -n "$it2" ] && [ -n "$resend" ]; then
     it2_paste_submit "$it2" "$pane" "$resend" || true   # bracketed-paste: no flood if pane is still a shell
@@ -671,6 +737,8 @@ verify_engagement() { # $1=projects $2=marker $3=regdir $4=pane $5=it2-bin $6=re
   t=0
   while [ "$t" -lt "$retry" ]; do
     engagement_seen "$pdir" "$marker" "$regdir" "$pane" && return 0
+    ENGAGE_PARKED="$(pane_parked_reason "$it2" "$pane" || true)"
+    [ -n "$ENGAGE_PARKED" ] && return 2
     /bin/sleep "$interval"; t=$((t + interval))
   done
   return 1
@@ -2702,6 +2770,48 @@ fi
 PREFIX=""
 [ "$IN_PLACE" = 1 ] && PREFIX="CLAUDE_ISOLATION_SKIP=1 "
 
+# THE LAUNCHER IS THE LAST CORRECTABLE WORD IN EVERY TYPED LINE — shield it (item 7146aab37a9a).
+# The 2026-07-29 fix (WT_DEPS, :2941) moved the package-manager chain out of the typed line, which
+# closed the `go`→`god` wedge. It did NOT close the class: `${LAUNCHER}` is still a bare word in
+# COMMAND POSITION in all six typed shapes, and it is the ONE token that provably cannot be
+# validated before typing — the launchers are zsh aliases/functions defined only in the operator's
+# INTERACTIVE rc (`whence -w claude-next4` → alias interactively, `none` under `zsh -c`), so no
+# `command -v` in this script can ever see them. Worse, the family members are mutual near-misses
+# inside CORRECT's own dictionary: on the live shell `claude-nex` offers `claude-next` and
+# `claude-fabl2` offers `claude-fable`. `--launcher` (:2291) is entirely unvalidated — unlike
+# `--account` (:2558) — so one typo, or a 5th account added without a matching zshrc alias, types a
+# word that does not resolve and parks the pane at `[nyae]` forever instead of failing cleanly.
+#
+# `nocorrect` is a zsh RESERVED WORD, so it is itself never a correction candidate, and it is
+# per-command — it does NOT mutate the operator's shell (an `unsetopt correct` would leave
+# correction off in a pane the operator keeps using afterwards). Measured on this box against a
+# reproducing harness (`printf '%s\n' <line> | zsh -f -i` with `setopt CORRECT`; the positive
+# control `claudenxt44` really does print `zsh: correct 'claudenxt44' to 'claudenxt4' [nyae]?`):
+#   nocorrect claudenxt44            → `command not found`, NO prompt          (shielded)
+#   CLAUDE_ISOLATION_SKIP=1 claudenxt44 → still prompts   (an assignment prefix shields NOTHING)
+#   nocorrect CLAUDE_ISOLATION_SKIP=1 claudenxt4 → alias/function still expands AND the env var
+#     still reaches the process (`env | grep ^CLAUDE_ISOLATION_SKIP=` → `1`, identical to today)
+# Quoting the launcher would also suppress correction but is WRONG here: it suppresses alias
+# expansion too, so `'claude-fable2'` would simply not resolve.
+#
+# Unconditional, no zsh-detection guard: the launcher IS a zsh alias/function, so a non-zsh target
+# shell cannot run this line at all. There is no shell where the old form works and this one does
+# not. The failure mode this converts is wedge → clean `command not found`, which the engagement
+# gate's pane-parked oracle (pane_parked_reason) then reports in seconds.
+#
+# WHY THIS EXISTS ALONGSIDE $FIRE_NOCORRECT_LINE (0e03861c) — do not delete either as redundant.
+# That change types `unsetopt correct correct_all` as a SEPARATE line, with its own CR, before the
+# launch command; measured, that genuinely defeats correction for every word on the following line
+# (an inline `unsetopt` cannot, because CORRECT resolves the whole buffer at PARSE time — it fires
+# even on branches that can never execute, which is why the `go mod download` in an untaken elif
+# wedged a Node repo). The two are complementary, not duplicative:
+#   · the disarm line covers EVERY command word, including ones this shield does not touch;
+#   · but it is a SECOND typed line that can fail on its own — its call site warns and then
+#     PROCEEDS unprotected — and it depends on the disarm having been read AND executed first.
+# `nocorrect` rides in the SAME buffer as the word it protects, so it cannot desynchronize from it:
+# whatever happens to the extra line, the launcher is still shielded. Belt and braces, one token.
+NC="nocorrect "
+
 # ---- prompt trailers: back-channel ping (--notify-back) + self-retire (default) ---------------
 # Append to a COPY of the prompt (NEVER the caller's file): (a) if --notify-back, a recipe telling
 # the fired session to ping the ORIGINATOR via cc-notify on completion / decision gate / blocker;
@@ -2924,10 +3034,10 @@ if [ "$RECYCLE" = 1 ]; then
     [ -n "$_rmain" ] && [ "$_rmain" != "$_rpwd" ] && RECYCLE_FALLBACK="$_rmain"
   fi
   if [ -n "$RECYCLE_FALLBACK" ]; then
-    CMD="{ cd $(printf %q "$PWD") 2>/dev/null || cd $(printf %q "$RECYCLE_FALLBACK") ; } && ${PREFIX}${LAUNCHER}${ARGS} \"\$(cat $QP)\""
+    CMD="{ cd $(printf %q "$PWD") 2>/dev/null || cd $(printf %q "$RECYCLE_FALLBACK") ; } && ${NC}${PREFIX}${LAUNCHER}${ARGS} \"\$(cat $QP)\""
     echo "→ recycle: \$PWD is a linked worktree — relaunch falls back to $RECYCLE_FALLBACK if it is removed during exit (harness-owned worktrees are reaped on session exit)"
   else
-    CMD="cd $(printf %q "$PWD") && ${PREFIX}${LAUNCHER}${ARGS} \"\$(cat $QP)\""
+    CMD="cd $(printf %q "$PWD") && ${NC}${PREFIX}${LAUNCHER}${ARGS} \"\$(cat $QP)\""
   fi
 elif [ -n "$WORKTREE" ]; then
   WT="$WTROOT/$WORKTREE"
@@ -3031,16 +3141,16 @@ elif [ -n "$WORKTREE" ]; then
     mv "$WT_DEPS" "$WT_DEPS.sh" && WT_DEPS="$WT_DEPS.sh"
     { printf '#!/usr/bin/env bash\n'; printf '%s\n' "$WT_INSTALL"; } > "$WT_DEPS"
     chmod +x "$WT_DEPS"
-    CMD="cd $(printf %q "$WT") && bash $(printf %q "$WT_DEPS") ; ${PREFIX}${LAUNCHER}${ARGS} \"\$(cat $QP)\""
+    CMD="cd $(printf %q "$WT") && bash $(printf %q "$WT_DEPS") ; ${NC}${PREFIX}${LAUNCHER}${ARGS} \"\$(cat $QP)\""
   else
-    CMD="cd $(printf %q "$WT") && ${PREFIX}${LAUNCHER}${ARGS} \"\$(cat $QP)\""
+    CMD="cd $(printf %q "$WT") && ${NC}${PREFIX}${LAUNCHER}${ARGS} \"\$(cat $QP)\""
   fi
 elif [ -n "$CWD" ]; then
-  CMD="cd $(printf %q "$CWD") && ${PREFIX}${LAUNCHER}${ARGS} \"\$(cat $QP)\""
+  CMD="cd $(printf %q "$CWD") && ${NC}${PREFIX}${LAUNCHER}${ARGS} \"\$(cat $QP)\""
 else
   # Land in the repo root and let the launcher self-route (_cc_route_check auto-creates a fresh
   # cc-<ts> worktree there; --in-place launches in the root itself).
-  CMD="cd $(printf %q "$REPO") && ${PREFIX}${LAUNCHER}${ARGS} \"\$(cat $QP)\""
+  CMD="cd $(printf %q "$REPO") && ${NC}${PREFIX}${LAUNCHER}${ARGS} \"\$(cat $QP)\""
 fi
 
 # The dir the fired session lands in — pre-trusted below so it never stalls at the trust dialog.
@@ -3662,7 +3772,14 @@ else
   }
   if [ "$ENGAGE_VERIFY" = 1 ]; then
     PROJ_DIR="$(config_dir_for_launcher "$LAUNCHER")/projects"
-    if verify_engagement "$PROJ_DIR" "$FIRE_MARKER" "$REG_DIR" "$SPAWNED_PANE" "$REAL_IT2" "$(cat "$PROMPT_FILE")"; then
+    # Capture the rc rather than testing it inline: verify_engagement has THREE outcomes and an
+    # `if verify_engagement` folds 2 (pane parked on a shell prompt) into the same else-branch as 1
+    # (booted but never ingested), whose printed remedy — "re-fire warm" — is right for 1 and
+    # actively wrong for 2. `|| rc=$?` is set -e-safe.
+    ENGAGE_RC=0
+    verify_engagement "$PROJ_DIR" "$FIRE_MARKER" "$REG_DIR" "$SPAWNED_PANE" "$REAL_IT2" "$(cat "$PROMPT_FILE")" \
+      || ENGAGE_RC=$?
+    if [ "$ENGAGE_RC" = 0 ]; then
       # V2 §5.2 / R12 — promote the per-attempt oracle outputs into the record BEFORE anything reads
       # them, and stamp the instant engagement was PROVEN (the other half of the latency measure).
       LR_ENGAGED_AT="$(_iso_now)"
@@ -3686,6 +3803,16 @@ else
       fi
       # P0-15: publish the fired pane under its role so role-addressed pings reach it.
       if [ -n "$AS_ROLE" ] && [ -n "$SPAWNED_PANE" ]; then write_role "$CC_ROLES_DIR" "$AS_ROLE" "$SPAWNED_PANE"; fi
+    elif [ "$ENGAGE_RC" = 2 ]; then
+      # The launcher NEVER RAN: the pane is still a shell and that shell refused or is blocking on
+      # the typed line. Distinct message because the remedy is distinct — there is no session to
+      # recover, and the re-send that recovers an INC-4 miss would execute the brief as a script
+      # here. Naming the shell's own line makes the cause auditable instead of inferred.
+      echo "!! FIRE FAILED — pane PARKED, launcher never ran: ${SPAWNED_PANE:-<pane?>} is still a shell and refused/blocked on the typed line — $ENGAGE_PARKED" >&2
+      echo "   The typed command was: $CMD" >&2
+      echo "   No session exists to recover (a re-send would run the brief as shell commands). Clear the pane, then re-fire; if the stuck word is the launcher itself, check that '$LAUNCHER' is defined in the operator's interactive zsh (the launchers are aliases/functions — 'command -v' cannot see them from a script)." >&2
+      emit_handoff_telemetry 0 || true
+      exit 1
     else
       echo "!! FIRE FAILED — never engaged: $LAUNCHER at ${SPAWNED_PANE:-<pane?>} did not ingest the brief within the engagement window (re-sent once). The pane is live but TASK-LESS — recover with a WARM re-fire (--cwd <existing-worktree>); do NOT trust this as a working session (INC-4 / cold-worktree-fire-autosubmit-race)." >&2
       # Record the FAILED engagement (symmetry with the engaged=1 path) so "did this handoff engage"
