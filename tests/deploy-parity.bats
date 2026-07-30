@@ -307,6 +307,39 @@ _pendfix() {   # a staged activation naming <path>, un-run; $1 = repo-relative p
   [[ "$output" == *"PENDING"* ]] || false
 }
 
+# THE REMEDY IS PART OF THE VERDICT. f0186bbd taught this leg to CLASSIFY staged-pending but left it
+# prescribing "run ./install.sh" — and install.sh globs hooks/*.sh + scripts/*.sh unconditionally
+# with zero pending-awareness, so following that advice links the PENDING file and erases the very
+# signal the same output just reported. A correct classification with a state-destroying remedy is
+# still a defect; these two pin both halves. RED-proof: pre-fix the bare recommendation is present.
+@test "existence: a PENDING file present ⇒ the remedy steers to ln -sf, never a bare ./install.sh" {
+  _livefix
+  mkdir -p "$CC_PARITY_REPO/hooks" "$CC_PARITY_REPO/scripts"
+  printf 'x\n' > "$CC_PARITY_REPO/hooks/qos-rewrite.sh"
+  printf 'x\n' > "$CC_PARITY_REPO/scripts/render-census.sh"      # no owner — a genuine miss
+  _pendfix hooks/qos-rewrite.sh
+  _track
+  run "$ASSERT"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"Do NOT run ./install.sh"* ]] || false
+  [[ "$output" == *"run the ln -sf lines above"* ]] || false
+  [[ "$output" != *"run ./install.sh (or the ln -sf lines above)"* ]]
+}
+
+# The control that must keep passing: with NOTHING pending, install.sh IS the right remedy and the
+# guidance must survive intact. Without this, the fix above could silently delete the advice
+# outright — detection moved, not deleted, is the same rule the PATHGAP split above follows.
+@test "existence: no PENDING file ⇒ ./install.sh remains the recommended remedy" {
+  _livefix
+  mkdir -p "$CC_PARITY_REPO/scripts"
+  printf 'x\n' > "$CC_PARITY_REPO/scripts/render-census.sh"      # a genuine miss, no pending anywhere
+  _track
+  run "$ASSERT"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"run ./install.sh (or the ln -sf lines above)"* ]] || false
+  [[ "$output" != *"Do NOT run ./install.sh"* ]]
+}
+
 # Regression, measured 2026-07-27 minutes after the existence leg landed: invoked by its DEPLOYED
 # path the assert returned RC=1 "claude-accounts must be a symlink" while the same file returned
 # RC=0 from the checkout — opposite verdicts, and the DRIFT claim was the false one. Cause: a bare
