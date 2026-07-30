@@ -197,15 +197,29 @@ def assert_texture_not_eventised() -> None:
 
 
 RARE_EVENTS = {
-    #  name        (start_s, end_s)   what it is
-    "birds": (34.0, 62.0),
-    "peer": (74.0, 122.0),
-    "peek": (74.0, 122.0),  # v6b uses peer, the others use peek — never both
-    "rCheer": (126.0, 132.0),
-    "rSleep": (152.0, 172.0),
-    "balloon": (186.0, 214.0),
-    "shoot": (228.0, 236.0),
+    #  name        (start_s, end_s)   duration — all now inside the 2.5-10s band
+    "peek": (3.0, 9.0),        # 6.0s — a GLANCE, which is what its motion always read as
+    "peer": (3.0, 12.0),       # 9.0s — v6b only, in place of peek
+    "rCheer": (6.0, 10.0),     # 4.0s — part of the peer's visit in v6b, see COMPOSITE_OF
+    "rSleep": (24.0, 32.0),    # 8.0s — posture only now; the Zzz glyph is deleted
 }
+
+# Beats that are ONE beat expressed as two, so the gate must not treat them as a collision.
+# Precedent: the Zzz was never a second event alongside the sleep. The resident's cheer is CAUSED by
+# the visitor's arrival, so it belongs inside the visit — forbidding that overlap would forbid the
+# causality the whole redesign exists for.
+# The cheer is caused by whichever VISITOR beat that variant carries — `peer` in v6b, `peek`
+# elsewhere — so it composites with either. Naming only one parent made the gate correctly
+# reject v6a, where the cheer is caused by the peek it was overlapping.
+COMPOSITE_OF = {"rCheer": {"peer", "peek"}}
+
+# DELETED, reasons recorded so they are not rediscovered as ideas:
+#   balloon — filler with no cause for entering; renders the brand asterisk as a stray object (R4).
+#   shoot   — the most tired beat available, AND absent in the day scheme, so it cannot carry
+#             anything in both. v6d already shipped without it: evidence the deletion costs nothing.
+#   birds   — never in anyone's inventory, never reviewed, 40% duty over three passes, no story.
+#   Zzz     — UI iconography. Idleness here is a reaper classification and a closed pane, not sleep.
+DELETED_EVENTS = ("balloon", "shoot", "birds")
 
 
 # ── the duty budget ────────────────────────────────────────────────────────────────────────────
@@ -233,28 +247,10 @@ BUDGET = {
 # it was keyed by name alone it also silently absorbed a beat that was too SHORT — the opposite
 # defect, suppressed by a reason that did not apply to it. `None` means the check is not per-event
 # (aggregate, air, first_beat), so it is waived whole.
-BUDGET_WAIVED = {
-    "instance": (
-        {"balloon", "birds", "peek", "peer", "rSleep"},
-        "these run long (28s / 48s / 20s) and duration IS the design question the panel is "
-        "deciding, so shortening now would prejudge it",
-    ),
-    "per_type": (
-        {"balloon", "birds", "peek", "peer", "rSleep"},
-        "the same set (v6b uses `peer` where the others use `peek`); `peek` at 20% is the largest single overage and the qualitative note "
-        "agrees — the motion says glance, the duration says visit",
-    ),
-    "aggregate": (
-        None,
-        "follows arithmetically from per_type — thinning is the panel's call",
-    ),
-    "air": (None, "the inverse of aggregate; it cannot clear until the set is thinned"),
-    "first_beat": (
-        None,
-        "front-loading is justified now that t=0 anchoring is CONFIRMED, but which "
-        "beat goes first depends on which beats survive",
-    ),
-}
+# EMPTY BY DESIGN. Every threshold is live: the over-budget beats were thinned or deleted, so there
+# is nothing left to waive. An entry here is a suppression that must carry a reason and an owner; an
+# empty dict is the state to return to.
+BUDGET_WAIVED: dict[str, tuple[set[str] | None, str]] = {}
 
 
 def _waived(kind: str, event: str | None) -> str | None:
@@ -377,6 +373,8 @@ def assert_events_disjoint(art: Art) -> None:
         for j in range(i + 1, len(active)):
             a, b = active[i], active[j]
             (a0, a1), (b0, b1) = RARE_EVENTS[a], RARE_EVENTS[b]
+            if b in COMPOSITE_OF.get(a, ()) or a in COMPOSITE_OF.get(b, ()):
+                continue   # one beat in two elements — see COMPOSITE_OF
             if a0 < b1 + EVENT_GAP and b0 < a1 + EVENT_GAP:
                 raise SystemExit(
                     f"gen[{art.key}]: rare events '{a}' ({a0:.1f}-{a1:.1f}s) and '{b}' "
@@ -437,7 +435,7 @@ class Art:
     star_count: tuple[int, int, int] = (150, 62, 20)
     moon: tuple[float, float, float] = (1648, 206, 62)  # cx, cy, r
     moon_phase: float = 0.30  # 0 = full, 1 = sliver
-    events: tuple[str, ...] = ("shoot", "balloon", "birds", "peek")
+    events: tuple[str, ...] = ("peek",)
     second_clawd: bool = False
     hairline: bool = False
 
@@ -1171,11 +1169,7 @@ def clawd_sprite(idsuffix: str = "") -> str:
         f'height="{fmt(c * 0.22)}" fill="#2b1b14"/>'
         f'<rect x="{fmt(eye_r + 1)}" y="{fmt(eye_y + c * 0.6)}" width="{fmt(c - 2)}" '
         f'height="{fmt(c * 0.22)}" fill="#2b1b14"/>'
-        f'<g class="zz1"><rect class="zmk" x="{fmt(11.4 * c)}" y="{fmt(-0.4 * c)}" '
-        f'width="{fmt(0.5 * c)}" height="{fmt(0.5 * c)}"/></g>'
-        f'<g class="zz2"><rect class="zmk" x="{fmt(12.3 * c)}" y="{fmt(-1.5 * c)}" '
-        f'width="{fmt(0.36 * c)}" height="{fmt(0.36 * c)}" opacity=".7"/></g>'
-        f"</g>"
+                f"</g>"
     )
 
     return (
@@ -1223,36 +1217,6 @@ def clawd_placed(art: Art, x: float, scale: float, sfx: str = "") -> str:
 # ── rare world events ─────────────────────────────────────────────────────────────────────────────
 def events(art: Art) -> str:
     out = []
-    if "shoot" in art.events:
-        divides_P(P)
-        trail = "".join(
-            f'<rect class="ss" x="{fmt(-i * 15)}" y="{fmt(i * 6.4)}" width="{fmt(9 - i * 0.75)}" '
-            f'height="{fmt(9 - i * 0.75)}" opacity="{fmt(max(0.06, 0.95 - i * 0.11))}"/>'
-            for i in range(9)
-        )
-        out.append(
-            f'<g class="nOnly"><g class="shoot"><g transform="translate(1500 60)">'
-            f"{trail}</g></g></g>"
-        )
-    if "birds" in art.events:
-        divides_P(P / 3)
-        # three chevrons in loose formation — two rects each, no glyphs
-        flock = "".join(
-            f'<g transform="translate({fmt(i * 46)} {fmt((i % 2) * 17)})">'
-            f'<rect class="brd" x="0" y="0" width="11" height="3"/>'
-            f'<rect class="brd" x="11" y="-4" width="11" height="3"/></g>'
-            for i in range(3)
-        )
-        out.append(f'<g class="birds"><g transform="translate(0 268)">{flock}</g></g>')
-    if "balloon" in art.events:
-        divides_P(P / 2)
-        out.append(
-            '<g class="balloon"><g transform="translate(0 330)">'
-            f'<rect class="bal" x="0" y="0" width="17" height="21"/>'
-            f'<rect class="bal" x="3" y="21" width="11" height="5"/>'
-            f'<rect class="balStr" x="8" y="26" width="2" height="34"/>'
-            f'<rect class="bal" x="4" y="60" width="10" height="7"/></g></g>'
-        )
     return "".join(out)
 
 
@@ -1374,12 +1338,6 @@ def css(art: Art) -> str:
                     f"{pct(ev('rSleep')[0] + 0.1)}%,{pct(ev('rSleep')[1])}%{{opacity:1}}"
                     f"{pct(ev('rSleep')[1] + 0.1)}%,100%{{opacity:0}}}}"
                     f".legsStill{{animation:lsf {fmt(P)}s steps(1,end) infinite}}",
-                    f"@keyframes zzf{{0%,{pct(ev('rSleep')[0])}%{{opacity:0;transform:translate(0,0)}}"
-                    f"{pct(ev('rSleep')[0] + 2)}%{{opacity:.9}}"
-                    f"{pct(ev('rSleep')[1])}%{{opacity:0;transform:translate(14px,-30px)}}"
-                    f"{pct(ev('rSleep')[1] + 0.1)}%,100%{{opacity:0}}}}"
-                    f".zz1{{animation:zzf {fmt(P)}s ease-out infinite}}"
-                    f".zz2{{animation:zzf {fmt(P)}s ease-out infinite;--d:-1.2s}}",
                     # cheer: raised arms ON and — the shipped bug — the IDLE side-arms OFF, or the sprite
                     # shows four arms at once, which is what read as horns with confetti
                     f"@keyframes rcf{{0%,{pct(ev('rCheer')[0])}%{{opacity:0}}"
@@ -1390,23 +1348,6 @@ def css(art: Art) -> str:
                     f"{pct(ev('rCheer')[0] + 0.1)}%,{pct(ev('rCheer')[1])}%{{opacity:0}}"
                     f"{pct(ev('rCheer')[1] + 0.1)}%,100%{{opacity:1}}}}"
                     f".armsGate{{animation:agf {fmt(P)}s steps(1,end) infinite}}",
-                    # shooting star
-                    f"@keyframes ssf{{0%,{pct(ev('shoot')[0])}%{{opacity:0;transform:translate(0,0)}}"
-                    f"{pct(ev('shoot')[0] + 0.4)}%{{opacity:1}}"
-                    f"{pct(ev('shoot')[1] - 0.4)}%{{opacity:.85;transform:translate(-700px,300px)}}"
-                    f"{pct(ev('shoot')[1])}%,100%{{opacity:0;transform:translate(-760px,326px)}}}}"
-                    f".shoot{{animation:ssf {fmt(P)}s linear infinite}}",
-                    # birds — one pass per loop, not three
-                    f"@keyframes brdf{{0%,{pct(ev('birds')[0])}%{{opacity:0;transform:translate({W + 180}px,0)}}"
-                    f"{pct(ev('birds')[0] + 1.5)}%{{opacity:.7}}"
-                    f"{pct(ev('birds')[1] - 1.5)}%{{opacity:.7}}"
-                    f"{pct(ev('birds')[1])}%,100%{{opacity:0;transform:translate(-260px,-54px)}}}}"
-                    f".birds{{animation:brdf {fmt(P)}s linear infinite}}",
-                    f"@keyframes balf{{0%,{pct(ev('balloon')[0])}%{{opacity:0;transform:translate({W + 120}px,0)}}"
-                    f"{pct(ev('balloon')[0] + 1.5)}%{{opacity:.8}}"
-                    f"{pct(ev('balloon')[1] - 1.5)}%{{opacity:.8}}"
-                    f"{pct(ev('balloon')[1])}%,100%{{opacity:0;transform:translate(-180px,-70px)}}}}"
-                    f".balloon{{animation:balf {fmt(P)}s linear infinite}}",
                     f"@keyframes pkf{{0%,{pct(ev('peek')[0])}%{{transform:translateY(78px)}}"
                     f"{pct(ev('peek')[0] + 3)}%,{pct(ev('peek')[1] - 3)}%{{transform:translateY(0)}}"
                     f"{pct(ev('peek')[1])}%,100%{{transform:translateY(78px)}}}}"
@@ -1469,7 +1410,7 @@ def css(art: Art) -> str:
     reduced = (
         "@media (prefers-reduced-motion:reduce){"
         "*{animation:none!important}"
-        ".shoot,.balloon,.birds,.rSleep,.rCheer,.legsStill,.zz1,.zz2,.eShut,.peer,.pCheer{opacity:0}"
+        ".rSleep,.rCheer,.legsStill,.eShut,.peer,.pCheer{opacity:0}"
         ".legsWalk,.eOpen,.armsGate{opacity:1}"
         # `animation:none` reverts an element to its UN-animated base value, which for the
         # moon halo is full strength — the frozen still showed a blown-out glow that never
@@ -1859,7 +1800,7 @@ VARIANTS = [
         star_count=(300, 90, 30),
         moon=(1656, 166, 62),
         moon_phase=0.30,
-        events=("shoot", "birds", "peek"),
+        events=("peek",),
     ),
     Art(
         key="v6b-two-sessions",
@@ -1876,7 +1817,7 @@ VARIANTS = [
         star_count=(280, 84, 28),
         moon=(1672, 178, 56),
         moon_phase=0.30,
-        events=("shoot", "birds"),
+        events=(),
         second_clawd=True,
         hairline=True,
     ),
@@ -1894,7 +1835,7 @@ VARIANTS = [
         star_count=(220, 62, 20),
         moon=(250, 214, 70),
         moon_phase=0.30,
-        events=("shoot", "balloon", "birds", "peek"),
+        events=("peek",),
     ),
     Art(
         key="v6d-terminal-field",
@@ -1910,7 +1851,7 @@ VARIANTS = [
         star_count=(240, 70, 22),
         moon=(1706, 140, 50),
         moon_phase=0.34,
-        events=("birds", "peek"),
+        events=("peek",),
         hairline=True,
     ),
 ]
