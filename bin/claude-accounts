@@ -44,8 +44,11 @@ Usage:
       cutoff / window — callers must NOT fire blind) · 3 data unavailable for every account
       (callers may degrade to a proxy). A non-zero exit is an ANSWER, not a tool failure.
   claude-accounts --login-status [--window-h N]   accounts needing an interactive /login, now or soon.
-      TSV: acct, REQUIRED|EXPIRING, reason, absolute local expiry, remaining, launcher —
-      the last three are "—" when the verdict is not driven by the deadline.
+      TSV: acct, REQUIRED|EXPIRING, reason, expiry as UTC ISO (2026-08-02T20:21:49Z),
+      remaining as a bare decimal hour count (70.8), launcher — the last three are "—"
+      when the verdict is not driven by the deadline. Fields 4 and 5 are MACHINE forms and
+      stay that way: this surface is for hooks and pollers, and a consumer that has to
+      parse a human rendering is coupled to how the table happens to look today.
       The EXIT CODE is the answer, so a hook can gate without parsing:
       0 all clear · 1 a login expires within the window · 2 action required NOW.
       --window-h N overrides login_warn_h FOR THIS CALL ONLY (default: login_warn_h, so every
@@ -1396,6 +1399,26 @@ def _fmt_when(iso):
             if (dt - datetime.now(dt.tzinfo)).days < 6 else dt.strftime("%a %b %d"))
 
 
+def _iso_utc(iso):
+    """A stamp → `2026-08-02T20:21:49Z`, the ONE form a machine consumer can parse.
+
+    The row's own `login_expires_at` carries microseconds and a `+00:00` offset
+    (`...:49.116000+00:00`), and BSD `date -j -f` — what cc-relogin-poll's iso_epoch
+    reaches for first — accepts no fractional seconds. Handing a consumer the raw field
+    gives it something that LOOKS like an ISO stamp and parses as nothing. Normalising
+    here is what makes the machine surface actually machine-readable.
+    """
+    if not iso:
+        return ""
+    try:
+        dt = datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return ""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 AUTH_GLYPH = {
     "ok": ("●", GREEN), "healed": ("●", PERI), "stale": ("◐", AMBER),
     "logged-out": ("○", RED), "token-invalid": ("✕", RED), "keychain-error": ("△", AMBER),
@@ -1919,9 +1942,18 @@ def main():
             reason = ("login-expired" if r.get("login_expired")
                       else r.get("auth") if r.get("login_fixable") else "login-expiry")
             by_deadline = lxh is not None and lxh <= warn_h
+            # 🚨 MACHINE FIELDS — normalised ISO and a bare decimal hour count, NEVER the
+            # rendered forms a human reads. Those are _fmt_when ("Sun 13:21") and fmt_h
+            # ("2d 6h"), and emitting them here made this surface unparseable in the first
+            # column and format-coupled in the second: iso_epoch("Sun 13:21") returns 0, so
+            # the poller's preferred ISO path was dead by construction and its ONLY working
+            # deadline source was a regex over fmt_h's display string — which is why a
+            # cosmetic table change had to be matched by an awk edit in another program.
+            # A display format must never be an API. Humans read the table; this is for jq,
+            # awk and date.
             print("\t".join([r["acct"], state, reason,
-                             (_fmt_when(r.get("login_expires_at")) or "?") if by_deadline else "—",
-                             fmt_h(lxh) if by_deadline else "—",
+                             (_iso_utc(r.get("login_expires_at")) or "?") if by_deadline else "—",
+                             f"{lxh:.1f}" if by_deadline else "—",
                              r.get("launcher") or "?"]))
         sys.exit(worst)
 

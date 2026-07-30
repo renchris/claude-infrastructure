@@ -933,6 +933,56 @@ print("OK")'
   [ "$status" -eq 0 ] && [[ "$output" == *OK* ]]
 }
 
+@test "--login-status: the deadline fields are MACHINE forms, and iso_epoch can read them" {
+  # The regression this pins: `when` used to carry _fmt_when's "Sun 13:21" and `hours` fmt_h's
+  # "2.9d". iso_epoch("Sun 13:21") is 0, so cc-relogin-poll's preferred ISO branch was dead by
+  # construction and its ONLY working deadline source was a regex over a DISPLAY string.
+  CLAUDE_ACCOUNTS_JSON="$CA_CFG" run python3 - "$CA_BIN" <<'PY'
+import re, subprocess, sys
+from datetime import datetime, timedelta, timezone
+# RELATIVE to now, deliberately: the countdown is re-derived from this stamp (see
+# refresh_login_countdown), and a row outside login_warn_h is skipped entirely — so a
+# hardcoded date would drift out of the window and silently stop testing anything.
+due = datetime.now(timezone.utc) + timedelta(hours=50)
+# microseconds + a +00:00 offset: the real row shape, and the one BSD date rejects
+stamp = due.isoformat()
+assert "." in stamp and stamp.endswith("+00:00"), stamp
+src = open(sys.argv[1]).read().replace(
+    'rows, wj, cached, prev = get_data(cfg, fresh=fresh, no_heal=no_heal)',
+    'rows = [{"acct": "next3", "auth": "ok", "launcher": "claude-next3",\n'
+    '         "login_expires_h": 50.0, "login_fixable": False,\n'
+    '         "login_expires_at": "' + stamp + '"}]\n'
+    '    wj, cached, prev = {}, False, None')
+p = subprocess.run([sys.executable, "-c", src, "--login-status"], capture_output=True, text=True)
+f = p.stdout.strip().split("\t")
+assert len(f) == 6, f
+# normalised: no microseconds, Z not +00:00 — the exact form BSD `date -j -f` accepts
+assert f[3] == due.strftime("%Y-%m-%dT%H:%M:%SZ"), (f[3], stamp)
+assert re.fullmatch(r"\d+\.\d", f[4]), f[4]          # bare decimal hours, no unit
+assert abs(float(f[4]) - 50.0) < 0.2, f[4]
+# no RENDERED form survives in either field: no weekday name, no unit suffix
+assert not re.search(r"[A-Za-z]", f[4]), f[4]
+assert not re.match(r"^[A-Z][a-z]{2} ", f[3]), f[3]
+print("OK")
+PY
+  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "--login-status: its ISO stamp round-trips through cc-relogin-poll's iso_epoch" {
+  # Cross-program contract: producer emits, the REAL consumer function parses. Asserting the
+  # string shape alone would still pass if BSD date happened to reject it.
+  local poll="${BATS_TEST_DIRNAME}/../bin/cc-relogin-poll"
+  [ -f "$poll" ] || skip "cc-relogin-poll not present"
+  sed -n "/^iso_epoch()/,/^}/p" "$poll" > "$BATS_TEST_TMPDIR/ie.sh"
+  run bash -c ". '$BATS_TEST_TMPDIR/ie.sh'
+    got=\"\$(iso_epoch '2026-08-02T20:21:49Z')\"
+    [ \"\$got\" = 1785702109 ] || { echo \"ISO UNPARSED: \$got\"; exit 1; }
+    # the shape it USED to be handed must still read as unparseable — that was the whole bug
+    [ \"\$(iso_epoch 'Sun 13:21')\" = 0 ] || { echo 'rendered form parsed?!'; exit 1; }
+    echo OK"
+  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
 @test "e2e --login-status: the exit code IS the answer, and 0 stays silent" {
   # the fixture account has no keychain item ⇒ logged-out ⇒ /login-fixable ⇒ action required
   run python3 "$CA_BIN" --login-status --fresh --no-heal
