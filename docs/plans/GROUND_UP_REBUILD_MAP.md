@@ -27,7 +27,7 @@ rebuilds must not both redesign; the row that owns it is marked.
 | 11 | **Worktree & warm-pool management** — where writers work | worktree-gc, warm pool build, new-worktree, .worktreeinclude | claimed by (2); landed by (1) | 107 GB observed drift; ownership per artifact-class | open |
 | 12 | **Daemon fleet & activation** — what runs unattended | **20** launchd jobs (14 `com.claude.*` + 6 `com.chrisren.*` — a `com.claude`-only scope hid row 4's live reaper), plist SSOT parity, pending-activation queue, C10 boundary | carries 1,4,5,7,8 | disabled-bit trap **(CONFIRMED but INSUFFICIENT — 1 of 3 silent states)**; agent stages / operator activates | **DONE 2026-07-29** — [DAEMON_FLEET_V2.md](DAEMON_FLEET_V2.md); 4 lands: design 59f7eb38 · map dc052a82 · **build bda59c54** · scope+state fix 68f33d39. 97 tests green. Board went from `no safeguard-blocked sessions surfaced` (with 10 of 14 dark) to one honest verdict per declared label. Activation STAGED + PLATTERED, C10 pending: `CONFIRM=1 bash ~/.claude/autonomy/pending-activation/18-fleet-activate.sh`. **Remainders R-1..R-7 named in §10** — R-1 (`install.sh` launchd safety, coordinator-ruled row 12's, `c13dad7d5dbe`) is the one that matters |
 
-| 13 | **Machine capacity & resource governance** — the box stays responsive under N concurrent sessions | QoS bands on batch work (`nice`/`taskpolicy`), per-session resource footprint, gate-burst behaviour, orphan/leak accounting, AppleEvent call-site bounds | consumes verifier QoS (1); hook cost (6); dispatch ceiling (5) | **the caller cannot be trusted** — sessions invoke `bats` by hand, so any design needing a caller to demote itself is measured to fail 70% of the time | **REBUILDING 2026-07-29** — [MACHINE_CAPACITY_V2.md](MACHINE_CAPACITY_V2.md); design 6a6cbed0 · **builds: M1 QoS chokepoint (`bin/cc-bats` + census) · M3 readout damp-before-render · M6 ceiling ALARM (`scripts/capacity-alarm.sh`)** — 55 tests green across 3 suites, each RED-proved against a pristine archive · activation 17-qos-chokepoint STAGED+PLATTERED 07327f7a · Phase-1 fan-out 2cda5bc6. ⚠ **ROW PENDING COORDINATOR RATIFICATION** (ruling request below). ⚠ **THE ROW'S COMMISSIONING FRAME WAS FALSIFIED — see MACHINE_CAPACITY_V2 §8.5.7**: memory and leaks EXONERATED (30 sessions = 44.7 GB of 64 GiB and that overcounts shared pages ~2.34x; RSS and fds both flat with age), and **load is NOT a function of session count** (13 samples 29.15→59.80 at a *constant* 31–32 sessions; 31 sessions = ~18% of process CPU at 0.036 cores each, while a SINGLE iTerm2 process exceeds the whole fleet). M1 is correct+cheap but buys ~0.5–0.7 cores, not the load delta; **M3 is the bigger win — the Stop chain went 3688ms→882ms/turn (operator-readout 2711→140ms), which is O(N) sessions × turns. FROZEN DoD COMPLETE except AC1 (≥95% QoS coverage), which is structurally ACCRUING: it cannot be proven until the operator activates the shim AND ≥2 gates run concurrently.** ⛔ **DO NOT deploy to 'activate' the landed `capacity_gate`** — at ceiling 2.0/core it scores REFUSE 10/10 against every sampled load = a permanent dispatch outage |
+| 13 | **Machine capacity & resource governance** — the box stays responsive under N concurrent sessions | QoS bands on batch work (`nice`/`taskpolicy`), per-session resource footprint, gate-burst behaviour, orphan/leak accounting, AppleEvent call-site bounds | consumes verifier QoS (1); hook cost (6); dispatch ceiling (5) | **the caller cannot be trusted** — sessions invoke `bats` by hand, so any design needing a caller to demote itself is measured to fail 70% of the time | **DONE 2026-07-29** — [MACHINE_CAPACITY_V2.md](MACHINE_CAPACITY_V2.md); design b9fc76b0 · **builds: M1 QoS chokepoint (`bin/cc-bats` + census) · M3 readout damp-before-render · M6 ceiling ALARM (`scripts/capacity-alarm.sh`)** — 55 tests green across 3 suites, each RED-proved against a pristine archive · activation 17-qos-chokepoint STAGED+PLATTERED 5370b2ff · Phase-1 fan-out fa8f15a8 · close-out 8160416b. **RATIFIED AND CLOSED BY THE COORDINATOR 2026-07-29T17:4xZ, verified by disk, not on the row's word**: all cited shas re-resolved post-rebase and confirmed ancestors of origin/main (the three above were published PRE-rebase and named commits not on trunk — `6a6cbed0`→`b9fc76b0`, `07327f7a`→`5370b2ff`, `2cda5bc6`→`fa8f15a8`); plan carries all four load-bearing sections; `bin/cc-bats` + `scripts/capacity-alarm.sh` present on trunk (positive-controlled against a path known absent); activation staged in BOTH the live queue and the repo SSOT; and the **55-test claim RE-RUN green from trunk — qos-chokepoint 16 · capacity-alarm 13 · operator-readout 26 = 55/55, `not ok` count 0**. AC1 (≥95% QoS coverage) remains structurally ACCRUING behind the operator's C10 activation, which is DONE-compatible under the ruling above (same shape as rows 3 and 4). ⚠ **THE ROW'S COMMISSIONING FRAME WAS FALSIFIED — see MACHINE_CAPACITY_V2 §8.5.7**: memory and leaks EXONERATED (30 sessions = 44.7 GB of 64 GiB and that overcounts shared pages ~2.34x; RSS and fds both flat with age), and **load is NOT a function of session count** (13 samples 29.15→59.80 at a *constant* 31–32 sessions; 31 sessions = ~18% of process CPU at 0.036 cores each, while a SINGLE iTerm2 process exceeds the whole fleet). M1 is correct+cheap but buys ~0.5–0.7 cores, not the load delta; **M3 is the bigger win — the Stop chain went 3688ms→882ms/turn (operator-readout 2711→140ms), which is O(N) sessions × turns. FROZEN DoD COMPLETE except AC1 (≥95% QoS coverage), which is structurally ACCRUING: it cannot be proven until the operator activates the shim AND ≥2 gates run concurrently.** ⛔ **DO NOT deploy to 'activate' the landed `capacity_gate`** — at ceiling 2.0/core it scores REFUSE 10/10 against every sampled load = a permanent dispatch outage |
 
 **Why this cut is MECE:** every script/hook in the repo answers to exactly one row's
 responsibility; overlaps are declared as seams with a single owner. Row 1's rebuild validated
@@ -115,6 +115,36 @@ evidence instead of reading a status cell. A row that trusted "DONE" would have 
 phantom. Status is a claim like any other (see the constraint-cell learning below).
 
 ## Learnings (accumulate; never delete)
+
+- 2026-07-29 (coordinator, verifying row 13 — **two false verdicts in a row, in opposite
+  directions, on the same 55 tests**) **A VERIFICATION HARNESS IS ITSELF AN UNVERIFIED CLAIM.**
+  The campaign's rule is "a ping is a claim, verify by disk". Verifying row 13's *"55 tests green"*
+  produced, in sequence, a false GREEN and then a false RED — neither from anything wrong with
+  row 13.
+  **(1) False green — the pipe ate the exit code.** I ran `cc-bats <suites> 2>&1 | tail -40` and
+  read `exit code 0`. That is **`tail`'s** status, not bats'. The visible tail showed `ok 21`
+  through `ok 55` and I nearly ratified on it; tests 1-20 were off-screen and two of them were
+  RED. A pipeline reports its LAST command's status, so any test run piped into `tail`/`head`/`tee`
+  without `pipefail` reports success as long as the pager succeeds. **Redirect to a file, read `$?`
+  unpiped, and key the verdict on the `not ok` COUNT** — the same rule memory
+  `named-failure-vs-no-verdict` states for exit codes, one layer earlier in the plumbing.
+  **(2) False red — the suite inherited the wrapper it was testing.** Re-running unpiped gave
+  `BATS_RC=1`, 2 of 16 red in `qos-chokepoint.bats`. Both reds were an artifact of MY harness: I
+  had put the gate work through `bin/cc-bats` (which CLAUDE.md and this runbook both tell sessions
+  to do), and the shim exports `CC_BATS_ACTIVE=1`. The shim **under test** then hit its own
+  re-entrancy guard (`bin/cc-bats:101`), exec'd straight to real bats, and emitted none of the
+  warnings the two tests assert. Nothing in the output named the harness as the cause; the failure
+  reads exactly like a broken product. Measured both ways: **16/16 under plain bats, 14/16 through
+  the shim.** Fixed at the source — `tests/qos-chokepoint.bats` `setup()` now unsets the whole
+  `CC_BATS_*` family, so the verdict no longer depends on how the suite was invoked; re-proved
+  16/16 through BOTH paths.
+  **The general rule: a suite that tests a wrapper must not inherit that wrapper's state**, and
+  more broadly, when a verification disagrees with a claim, **suspect the harness before the
+  claim** — establish which one moved by running the same subject a second, structurally different
+  way. Row 13's 55/55 was true all along; two different instruments said otherwise first. This is
+  the same family as memory `hermetic-suite-leaks-caller-identity` and
+  `two-normal-forms-of-one-path` ("a suite testing its own runner can't land its own fix"), now
+  with an env-inheritance instance and a plumbing instance.
 
 - 2026-07-29 (row 12's close addendum, **coordinator-verified and REPRODUCED**) **A VERDICT
   VOCABULARY THAT IS CORRECT FOR VERDICTS INVERTS ITS INTENT INSIDE AN ALARM PREDICATE.** The
