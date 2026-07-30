@@ -17,6 +17,14 @@
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   HOOK="$REPO/hooks/session-continue.sh"
+  # HERMETICITY — added on the 2026-07-30 graveyard take (row 8 / CONTEXT_ECONOMY_V2 §6). This suite
+  # was authored BEFORE the repo's test-hermeticity ratchet existed, so it fixtured CLAUDE_CONFIG_DIR
+  # and the two telemetry seams but left $HOME pointing at the operator's live ~/ — every seam the
+  # hook defaults to $HOME (the wake floor's mailbox, the IDL fallback) therefore read and wrote real
+  # state, and the gate correctly refused the land. Fixture $HOME FIRST: the ratchet is not
+  # satisfiable by an allowlist entry and should not be.
+  export HOME="$BATS_TEST_TMPDIR/home"
+  mkdir -p "$HOME/.claude/autonomy" "$HOME/.claude/mailbox"
   export CLAUDE_CONFIG_DIR="$BATS_TEST_TMPDIR/cfg"; mkdir -p "$CLAUDE_CONFIG_DIR"
   export CC_MAILBOX_DIR="$BATS_TEST_TMPDIR/mbox";   mkdir -p "$CC_MAILBOX_DIR"
   export CONTINUE_IDL="$BATS_TEST_TMPDIR/idl.jsonl"
