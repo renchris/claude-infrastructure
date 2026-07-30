@@ -29,9 +29,11 @@ IDL="${CC_DISPATCH_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
 BACKLOG="${CC_BACKLOG_FILE:-$HOME/.claude/autonomy/backlog.jsonl}"
 PAGES_DIR="${CC_DISPATCH_PAGES_DIR:-$HOME/.claude/autonomy/pages}"
 CEILING="${CC_DISPATCH_CEILING:-6}"
-# MUST match cc-dispatch's own filter (cc-dispatch:59-63 — basename-normalised project name), else
-# this reader and the producer disagree about which items were even eligible for a decision.
-PROJECT="${CC_DISPATCH_PROJECT:-$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")}"
+# NO project scoping here, deliberately. This reader must match cc-dispatch's eligibility rule, and
+# since multi-project coverage (item f7abcbdee98c) that rule is "every open item gets a decision" —
+# the dispatch set gets admit/defer, everything else gets skip/project-not-dispatched. A
+# CC_DISPATCH_PROJECT filter in this file would now disagree with the producer and fabricate a
+# failure out of the very items the producer newly covers (see A1).
 REPO="${CC_ACCEPT_REPO:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 LAUNCHCTL="${CC_ACCEPT_LAUNCHCTL:-launchctl}"
 JSON=0; FAILS=0
@@ -58,13 +60,23 @@ a1() {
     row A1 NOT-RUN "no v2 decision records in the journal yet" "$IDL"; return
   fi
   n_dec="$(jq -r --arg p "$pass" 'select(.actor=="cc-dispatch" and .action=="decision" and .pass==$p) | .id' "$IDL" 2>/dev/null | sort -u | wc -l | tr -d ' ')"
-  # open = folded status "open" AND in the dispatched project. Scoping matters: cc-dispatch filters
-  # `project == CC_DISPATCH_PROJECT` (cc-dispatch:153), so comparing against the WHOLE ledger would
-  # fabricate a failure out of other projects' items — a check whose own filter disagrees with the
-  # producer's reports a defect that is not there (memory: named-failure-vs-no-verdict).
+  # open = folded status "open", across the WHOLE ledger — no project scoping.
+  #
+  # This denominator changed with multi-project coverage (item f7abcbdee98c) and the change had to be
+  # made HERE too: a reader whose filter disagrees with the producer's reports a defect that is not
+  # there (memory: named-failure-vs-no-verdict — a new state must be taught to every consumer). It
+  # used to scope to CC_DISPATCH_PROJECT because the producer did. The producer now decides about
+  # EVERY open item: those in the dispatch set get admit/defer, and those outside it get
+  # {verdict:"skip", reason:"project-not-dispatched"} — which is the whole point, since an item with
+  # no record was the defect. So the correct denominator is now simply every open item, and leaving
+  # the project clause here would have turned A1 red on a CORRECT pass — measured against the same
+  # pass: unscoped 130 == 130 PASS, scoped-to-claude-infrastructure 130 != 111 FAIL. Worse, run from
+  # a WORKTREE with CC_DISPATCH_PROJECT unset, the old default read `basename $(git toplevel)` =
+  # "wt-<id>" and scoped to 0 items — the same worktree-basename defect fixed in cc-backlog's
+  # project_default, and a second reason this reader must not derive a project at all.
   # blocked is excluded from the wave by contract, so it is never decided.
   n_open="$(cc-backlog list --open --json 2>/dev/null \
-    | jq --arg p "$PROJECT" '[.[] | select(.status=="open" and .project==$p)] | length' 2>/dev/null || echo "")"
+    | jq '[.[] | select(.status=="open")] | length' 2>/dev/null || echo "")"
   if [ -z "$n_open" ]; then
     row A1 NOT-RUN "cannot fold the ledger (cc-backlog unavailable)" "$BACKLOG"; return
   fi
@@ -87,8 +99,8 @@ a2() {
   have_v2 || { row A2 NOT-RUN "no v2 decision records yet" "$IDL"; return; }
   first_pass_ts="$(jq -r 'select(.actor=="cc-dispatch" and .action=="decision") | .ts' "$IDL" 2>/dev/null | sort | head -1)"
   pairs="$(
-    jq -r --arg since "$first_pass_ts" --arg p "$PROJECT" '
-      select(.event=="add" and .ts >= $since and (.project == $p)) | [.id, .ts] | @tsv' "$BACKLOG" 2>/dev/null \
+    jq -r --arg since "$first_pass_ts" '
+      select(.event=="add" and .ts >= $since) | [.id, .ts] | @tsv' "$BACKLOG" 2>/dev/null \
     | sort -u | while IFS=$'\t' read -r id ts; do
         [ -n "$id" ] || continue
         d="$(jq -r --arg i "$id" 'select(.actor=="cc-dispatch" and .action=="decision" and .id==$i) | .ts' "$IDL" 2>/dev/null | sort | head -1)"

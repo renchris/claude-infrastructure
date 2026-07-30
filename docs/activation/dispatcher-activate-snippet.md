@@ -28,9 +28,42 @@ cc-dispatch selftest      RED-proves every branch against stubbed actuators
 ```
 
 Env knobs (the plist sets `CC_DISPATCH_PROJECT`; the rest default sanely):
-`CC_DISPATCH_PROJECT` (repo whose backlog is dispatched) · `CC_DISPATCH_MAX_SPAWN` (default 2) ·
-`CC_DISPATCH_BACKLOG_BIN` · `CC_DISPATCH_WAVEPLAN_BIN` · `CC_DISPATCH_SPAWN_BIN` ·
-`CC_DISPATCH_PAGES_DIR` · `CC_DISPATCH_IDL` · `CC_DISPATCH_SID`.
+`CC_DISPATCH_PROJECT` (the pinned project; accepts a comma/space-separated LIST) ·
+`CC_DISPATCH_PROJECTS_CONF` (default `<checkout>/scripts/dispatch-projects.conf`) ·
+`CC_DISPATCH_MAX_SPAWN` (default 2) · `CC_DISPATCH_BACKLOG_BIN` · `CC_DISPATCH_WAVEPLAN_BIN` ·
+`CC_DISPATCH_SPAWN_BIN` · `CC_DISPATCH_PAGES_DIR` · `CC_DISPATCH_IDL` · `CC_DISPATCH_SID` ·
+`CC_DISPATCH_REPO` (worktree source for the PINNED project only) · `CC_DISPATCH_WT_BASE`.
+
+### Multi-project coverage — NO plist edit, NO second launchd job (item f7abcbdee98c)
+
+The dispatch set is **`{CC_DISPATCH_PROJECT}` ∪ `{scripts/dispatch-projects.conf` rows with
+`repo=`}**. Adding a project is **one line in that conf file** — there is no activation step, because
+the plist's pinned value is unioned in rather than replaced, so `ProgramArguments` never changes.
+An **absent** conf file behaves exactly as before (the single pinned project).
+
+Why one loop and not a launchd instance per project — all four are structural, and the full argument
+lives in the `DISPATCH SET` header block of `bin/cc-dispatch`:
+
+1. the S6 singleton lock is one shared path, so N instances mutually record `pass-in-flight` and
+   coverage becomes intermittent by construction;
+2. `live_workers` is the **global** `claimed` fold, so N instances each admit up to
+   `CEILING − live` in the same window → up to N×CEILING workers against cc-wave-plan's total
+   concurrency of 8 (exceeding it is the false cliff `bef587ac` fixed);
+3. a new plist needs `launchctl bootstrap` — an operator-only C10 step, i.e. coverage would become
+   an operator action per project, which is the same silently-incomplete wiring class this fixes;
+4. cross-project fairness is free in ONE queue: the existing S7 key (thrash ASC, then oldest ts)
+   ranks the whole set, so a long-undrained foreign item outranks the incumbent's queue.
+
+A project with open items and **no** conf row is not silently dropped: every pass records
+`{verdict:"skip", reason:"project-not-dispatched"}` per item and prints the per-project counts to
+stderr. Deliberately not a blocking lint — the ledger is shared, so a foreign project would
+otherwise turn every author's gate red for work no author caused.
+
+Each item's worktree is provisioned from **its own** project's repo (conf `repo=` →
+`CC_DISPATCH_REPO` for the pinned project only → the `~/Development/<project>` convention). An
+unresolvable repo **refuses and reopens the item** rather than cutting a worktree from the wrong
+tree, and the brief's rails line is read from the resolved repo — `/ship` is promised only where
+`.claude/commands/ship.md` actually exists.
 
 ## 🚨 Hard dependency — `cc-wave-plan` (T-P7-6) must exist first
 
@@ -78,7 +111,9 @@ launchctl print gui/$(id -u)/com.claude.dispatcher | grep -E 'state|program'   #
 
 (The classic form is `launchctl load -w ~/Library/LaunchAgents/com.claude.dispatcher.plist`.)
 `RunAtLoad` is false, so nothing fires at load time — the first pass runs one `StartInterval` (900s)
-later. Edit `StartInterval` / `CC_DISPATCH_PROJECT` in the plist before loading if needed.
+later. Edit `StartInterval` in the plist before loading if needed. **Do not** edit
+`CC_DISPATCH_PROJECT` to add a project — add a `repo=` row to `scripts/dispatch-projects.conf`
+instead (see *Multi-project coverage* above); that needs no bootout/bootstrap cycle.
 
 **Page channel:** a quota-cliff writes `~/.claude/autonomy/pages/cc-dispatch-quota-cliff.page` (epoch
 + message) and abstains — it does NOT spawn. That page surfaces only if the desk **autonomy-sweep**

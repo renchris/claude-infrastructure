@@ -101,6 +101,132 @@ PROJECT="${CC_DISPATCH_PROJECT:-$(git rev-parse --show-toplevel 2>/dev/null || p
 # cron pull reads "backlog empty" forever (found live 2026-07-19)
 PROJECT="$(basename "$PROJECT")"
 
+# ── THE DISPATCH SET (multi-project coverage; backlog f7abcbdee98c) ────────────────────────────────
+# THE DEFECT. The pull filtered `.project == $PROJECT` for exactly ONE project — the one the launchd
+# plist pins. An open item in any OTHER project was not deferred, not skipped, not decided: it was
+# INVISIBLE. Not "deprioritised" — structurally undrained, with no record anywhere that it existed.
+# Measured 2026-07-29: 19 such items (doc_classifier 7, reso-management-app 7, "/" 5), oldest 8 days
+# old, and the 5 OLDEST open items in the whole ledger were among them.
+#
+# THE DECISION — one multi-project pass, NOT a second launchd instance per project. Four reasons,
+# each independently sufficient:
+#   1. THE SINGLETON LOCK IS SHARED. LOCK_DIR is `dirname($IDL)/dispatch.lock` — one path for every
+#      instance. N instances mutually record {skipped, pass-in-flight}, so coverage becomes
+#      INTERMITTENT BY CONSTRUCTION. Giving each its own IDL to dodge that fragments thrash_map (the
+#      S7 fairness key reads the IDL) and breaks dispatch-acceptance.sh's single-IDL group_by(.pass).
+#   2. THE FLEET CEILING WOULD MULTIPLY. live_workers is the GLOBAL `claimed` fold, so N instances
+#      each compute free_slots = CEILING − live independently and can each admit that many in the
+#      same window → up to N×CEILING concurrent workers against cc-wave-plan's total concurrency of
+#      8. Exceeding it is precisely the false cliff bef587ac fixed.
+#   3. COVERAGE WOULD BECOME AN OPERATOR ACTION PER PROJECT. A new plist needs `launchctl bootstrap`
+#      (C10, operator-only; 6 activations are already rotting >24 h) — the same silently-incomplete
+#      wiring class this item IS. A conf row needs no activation.
+#   4. CROSS-PROJECT FAIRNESS IS FREE IN ONE QUEUE. The existing S7 key (thrash ASC, then oldest ts)
+#      sorts the 5 long-undrained doc_classifier items to positions 1-5 of the shared queue — they
+#      drain FIRST. N independent queues cannot express "oldest across all projects".
+# Widening cannot cause a spawn storm: the ceiling is global and ALREADY binding (measured
+# free_slots=0 at live=6/ceiling=6), so this changes WHICH items are eligible, never HOW MANY fire.
+#
+# THE SET = {PROJECT} ∪ {conf rows with repo=}. One rule, no precedence puzzle, and CC_DISPATCH_PROJECT
+# is unioned in unconditionally so a bad conf edit can never silently un-cover the pinned project.
+# CC_DISPATCH_PROJECT is list-tolerant (comma/space separated); a single value with no conf file is
+# byte-identical to the pre-change behaviour.
+
+# CONF PATH — resolve $0's SYMLINK first. Production invokes this as $HOME/.claude/bin/cc-dispatch,
+# which is a symlink into the checkout; the deployed `scripts/` dir is PER-FILE symlinks and a NEW
+# file is never linked into it (memory: deploy-lag-checkout-behind-origin — and live proof:
+# ~/.claude/scripts/growth-coverage.conf does not exist). A dirname($0)-relative read would resolve
+# to ~/.claude/scripts/dispatch-projects.conf and find NOTHING, silently narrowing coverage back to
+# the single pinned project — the exact defect, reintroduced by its own fix. Resolving the symlink
+# makes ONE path correct, so there is no fallback ladder to collapse
+# (memory: shared-lib-source-ladder-collapses-when-deployed).
+_self="$0"
+while [ -L "$_self" ]; do
+  _lnk="$(readlink "$_self" 2>/dev/null)" || break
+  case "$_lnk" in /*) _self="$_lnk" ;; *) _self="$(dirname "$_self")/$_lnk" ;; esac
+done
+PROJECTS_CONF="${CC_DISPATCH_PROJECTS_CONF:-$(cd "$(dirname "$_self")/.." 2>/dev/null && pwd)/scripts/dispatch-projects.conf}"
+
+# conf_rows <verb> → the projects declared with that verb, one per line ("" when the conf is absent).
+# Deliberately tolerant: an unreadable/malformed conf yields NO rows, which degrades to the pinned
+# project alone — narrower coverage, never a wider blind fire.
+conf_rows() {
+  [ -r "$PROJECTS_CONF" ] || return 0
+  awk -v verb="$1" '
+    /^[[:space:]]*(#|$)/ { next }
+    { key=$1; rest=$0; sub(/^[[:space:]]*[^[:space:]]+[[:space:]]+/, "", rest)
+      if (rest !~ "^" verb "=") next
+      sub("^" verb "=", "", rest); sub(/[[:space:]]+#.*$/, "", rest)
+      sub(/[[:space:]]+$/, "", rest)
+      # a verb with an EMPTY value is not a declaration. Treating `repo=` as one would silently fall
+      # through to the ~/Development/<project> convention, i.e. a typo would quietly dispatch a
+      # project nobody declared; leaving it undeclared keeps it in the LOUD uncovered set instead.
+      if (rest != "") print key }
+  ' "$PROJECTS_CONF" 2>/dev/null || true
+}
+
+# conf_repo <project> → the repo path declared for it, "" when undeclared. `~` expands, and an inline
+# `# comment` after the value is stripped (a human writes those; an unstripped one would become part
+# of the path and fail the git-repo gate with a baffling message).
+conf_repo() {
+  [ -r "$PROJECTS_CONF" ] || return 0
+  local r
+  r="$(awk -v p="$1" '
+    /^[[:space:]]*(#|$)/ { next }
+    $1 == p { rest=$0; sub(/^[[:space:]]*[^[:space:]]+[[:space:]]+/, "", rest)
+              if (rest ~ /^repo=/) { sub(/^repo=/, "", rest); sub(/[[:space:]]+#.*$/, "", rest)
+                                     sub(/[[:space:]]+$/, "", rest); print rest; exit } }
+  ' "$PROJECTS_CONF" 2>/dev/null || true)"
+  case "$r" in "~"/*) r="$HOME${r#\~}" ;; esac
+  printf '%s' "$r"
+}
+
+# PROJECTS = the dispatch set, newline-separated and de-duplicated, pinned project FIRST.
+PROJECTS="$(
+  { printf '%s\n' "$PROJECT" | tr ',' '\n' | tr ' ' '\n'; conf_rows repo; } \
+    | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' | grep -v '^$' | awk '!seen[$0]++'
+)"
+# The jq-side membership test, built in pure shell: this runs at init, BEFORE the `command -v jq`
+# guard, and a jq failure here would silently yield an empty filter that matches NOTHING — a
+# total-coverage outage dressed as "backlog empty". A dispatchable project name is also VALIDATED
+# to a plain ledger label: it names a directory under ~/Development by convention, it becomes part
+# of a jq filter, and it must never be a path. This is what structurally refuses "/" and
+# "/tmp/wt-autonomy-100" — the corrupt producer labels — as dispatch targets.
+PROJECTS_JSON="["
+_pj_sep=""; _pj_valid=""
+while IFS= read -r _p; do
+  [ -n "$_p" ] || continue
+  case "$_p" in
+    *[!A-Za-z0-9._-]*)
+      echo "cc-dispatch: refusing a malformed dispatchable project label: '$_p' (expected a plain ledger name, not a path) — check $PROJECTS_CONF" >&2
+      continue ;;
+  esac
+  PROJECTS_JSON="${PROJECTS_JSON}${_pj_sep}\"${_p}\""
+  _pj_sep=","
+  _pj_valid="${_pj_valid}${_p}
+"
+done <<EOF
+$PROJECTS
+EOF
+PROJECTS_JSON="${PROJECTS_JSON}]"
+# PROJECTS and PROJECTS_JSON must describe the SAME set: a label rejected above is dropped from
+# BOTH, so no consumer can act on a project the filter will never match.
+PROJECTS="${_pj_valid%$'\n'}"
+
+# project_repo <project> → the git repo a worker for that project is provisioned FROM.
+# Resolution: conf `repo=` → CC_DISPATCH_REPO (the pinned project ONLY — a single global override
+# cannot speak for a foreign project) → the $HOME/Development/<project> convention (verified against
+# every real project in the ledger 2026-07-29). NEVER a claude-infrastructure fallback: silently
+# provisioning a foreign item's worktree from THIS repo would fire a worker into the wrong tree
+# holding this repo's standing-land authorization.
+project_repo() {
+  local p="$1" r
+  r="$(conf_repo "$p")"
+  [ -n "$r" ] && { printf '%s' "$r"; return 0; }
+  if [ "$p" = "$PROJECT" ] && [ -n "${CC_DISPATCH_REPO:-}" ]; then printf '%s' "$CC_DISPATCH_REPO"; return 0; fi
+  printf '%s/Development/%s' "$HOME" "$p"
+}
+
 # ── V2 config ─────────────────────────────────────────────────────────────────────────────────────
 CEILING="${CC_DISPATCH_CEILING:-6}"
 LANE="${CC_DISPATCH_LANE:-v2}"
@@ -152,18 +278,21 @@ idl() {
 }
 
 # ── S1: the decision journal ──────────────────────────────────────────────────────────────────────
-# idl_decision <id> <verdict admit|defer|skip> <position> <reason>
+# idl_decision <id> <verdict admit|defer|skip> <position> <reason> [project]
 # ONE record per non-blocked open item per pass. This is the whole point of the v2 split: a DECISION
 # is a pure read, so it can cover the ENTIRE backlog every pass and decision latency stops being
 # O(backlog). `defer` is a REAL, RECORDED decision — the way "backlog > concurrency" is EXPRESSED —
 # never an abstention and never a cliff. Field names are the CONSUMED contract of
 # scripts/dispatch-acceptance.sh (A1 groups by .pass and counts distinct .id; A7 reads
 # .live_workers on admit records) — renaming one silently breaks the acceptance read.
+# `project` is the ITEM's project, not the pass's: with a multi-project dispatch set (see the
+# DISPATCH SET header block) one pass decides about several projects, so a pass-level project field
+# would mislabel every foreign record. Defaults to the pinned project when the caller omits it.
 idl_decision() {
   mkdir -p "$(dirname "$IDL")" 2>/dev/null || true
   jq -cn --arg ts "$(now_iso)" --arg pass "$PASS_ID" --arg id "$1" --arg verdict "$2" \
      --argjson position "$3" --arg reason "$4" --argjson free "$FREE_SLOTS" \
-     --argjson ceiling "$CEILING" --arg live "$LIVE_RAW" --arg project "$PROJECT" \
+     --argjson ceiling "$CEILING" --arg live "$LIVE_RAW" --arg project "${5:-$PROJECT}" \
      '{ts:$ts, actor:"cc-dispatch", action:"decision", pass:$pass, project:$project, id:$id,
        verdict:$verdict, position:$position, reason:$reason, free_slots:$free, ceiling:$ceiling,
        live_workers:(if $live == "" then null else ($live|tonumber) end)}' \
@@ -290,11 +419,29 @@ lock_acquire() {
 # warm_worktree <abs-path> → 0 provisioned (branch + deps + secrets), 1 loud fail. Idempotent.
 # "Warm" is the whole point: the fired pane must only `cd` and launch. Any install left for the pane
 # to run at boot is exactly the cold path whose keystroke race this fix exists to avoid.
+# warm_worktree <worktree-path> [project]
+#
+# THE REPO IS PER-ITEM, NOT PER-PROCESS (multi-project coverage, item f7abcbdee98c). This used to
+# read a single `CC_DISPATCH_REPO:-$HOME/Development/claude-infrastructure`, which is the one thing
+# that makes naive multi-project dispatch actively WRONG rather than merely incomplete: a
+# doc_classifier item would have its worktree cut from THIS repo and a worker fired into it holding
+# this repo's standing-land authorization, working a brief about another project's code. The repo is
+# resolved from the item's own project (conf `repo=` → CC_DISPATCH_REPO for the pinned project only
+# → the ~/Development/<project> convention) and an unresolvable one REFUSES — the caller reopens the
+# item with a recorded failure, which is a visible thrash rather than a silent mis-fire.
 warm_worktree() {
-  local wt="$1" br repo="${CC_DISPATCH_REPO:-$HOME/Development/claude-infrastructure}"
-  local base="${CC_DISPATCH_WT_BASE:-origin/main}"
+  local wt="$1" wproj="${2:-$PROJECT}" br repo base
+  repo="$(project_repo "$wproj")"
   case "$wt" in /*) ;; *) echo "cc-dispatch: refusing a non-absolute worktree path: $wt" >&2; return 1 ;; esac
-  git -C "$repo" rev-parse --git-dir >/dev/null 2>&1 || { echo "cc-dispatch: not a git repo: $repo" >&2; return 1; }
+  git -C "$repo" rev-parse --git-dir >/dev/null 2>&1 || { echo "cc-dispatch: not a git repo: $repo (project '$wproj' — declare its repo= in $PROJECTS_CONF)" >&2; return 1; }
+  # BASE per repo, not a global constant: `origin/main` is right for every project in the ledger
+  # today, but it is the REPO's fact, so read the repo's own origin/HEAD and keep origin/main only as
+  # the fallback for a repo whose remote HEAD is unset. An explicit CC_DISPATCH_WT_BASE still wins.
+  base="${CC_DISPATCH_WT_BASE:-}"
+  if [ -z "$base" ]; then
+    base="$(git -C "$repo" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+    [ -n "$base" ] || base="origin/main"
+  fi
   br="$(basename "$wt")"
   git -C "$repo" fetch origin -q 2>/dev/null || echo "cc-dispatch: fetch failed — basing off last-fetched $base" >&2
   # Reuse the branch if it already exists (a re-dispatch after a failed spawn must not hard-fail).
@@ -363,9 +510,32 @@ dispatch() { # <dry|run|decide>
   [ "$rc" -eq 0 ] || die3 "'$backlog list --open --json' failed (rc=$rc)"
   printf '%s' "$items" | jq -e 'type=="array"' >/dev/null 2>&1 \
     || die3 "backlog list did not return a JSON array"
-  local open_items guarded gcount g
+  local open_items guarded gcount g uncovered ucount
   open_items="$(printf '%s' "$items" \
-    | jq -c --arg p "$PROJECT" '[ .[] | select(.status=="open" and .project==$p) ]')"
+    | jq -c --argjson ps "$PROJECTS_JSON" '[ .[] | select(.status=="open" and (.project as $x | $ps | index($x))) ]')"
+
+  # 1a. UNCOVERED — open items whose project is NOT in the dispatch set. Before this, they were the
+  # defect itself: no decision, no deferral, no record, no stderr line — invisible, and therefore
+  # indistinguishable from an empty backlog (item f7abcbdee98c). They are recorded every pass as a
+  # decision with verdict "skip" so a project that appears in the shared ledger without a conf row
+  # is LOUD instead of structurally undrained. Deliberately a record and NOT a blocking lint: the
+  # ledger is shared, so a foreign project would otherwise turn every author's gate red for work no
+  # author caused (memory: whole-tree-lint-is-a-fleet-wide-hard-stop).
+  uncovered="$(printf '%s' "$items" \
+    | jq -c --argjson ps "$PROJECTS_JSON" '[ .[] | select(.status=="open" and (.project as $x | $ps | index($x) | not)) ]')"
+  ucount="$(printf '%s' "$uncovered" | jq 'length' 2>/dev/null || echo 0)"
+  if [ "$ucount" -gt 0 ]; then
+    echo "cc-dispatch: $ucount open item(s) in project(s) OUTSIDE the dispatch set — declare them in $PROJECTS_CONF to drain:" >&2
+    printf '%s' "$uncovered" | jq -r 'group_by(.project // "") | map("  \(.[0].project // "(null)"): \(length) item(s)")[]' >&2
+    if [ "$mode" = dry ]; then
+      printf 'PLAN: %s uncovered item(s) → would record verdict=skip reason=project-not-dispatched\n' "$ucount"
+    elif [ "$v2" -eq 1 ]; then
+      while IFS="$(printf '\t')" read -r g gp; do
+        [ -n "$g" ] || continue
+        SKIPPED=$((SKIPPED + 1)); idl_decision "$g" skip 0 project-not-dispatched "$gp"
+      done < <(printf '%s' "$uncovered" | jq -r '.[] | "\(.id // "")\t\(.project // "")"')
+    fi
+  fi
 
   # 1b. DONE-GUARD — an item that has ALREADY been completed once is not auto-dispatchable, even
   # when something has put it back to "open". `wasDone` is cc-backlog's done LATCH: it sticks from
@@ -404,17 +574,17 @@ dispatch() { # <dry|run|decide>
   # item whether or not slots are free), so its free_slots/live_workers fields carry no meaning —
   # only admit/defer records testify about capacity.
   if [ "$v2" -eq 1 ] && [ "$mode" != dry ] && [ "$gcount" -gt 0 ]; then
-    while IFS= read -r g; do
+    while IFS="$(printf '\t')" read -r g gp; do
       [ -n "$g" ] || continue
-      idl_decision "$g" skip 0 already-done
-    done < <(printf '%s' "$guarded" | jq -r '.[].id // empty')
+      idl_decision "$g" skip 0 already-done "$gp"
+    done < <(printf '%s' "$guarded" | jq -r '.[] | "\(.id // "")\t\(.project // "")"')
   fi
 
   # 2. nothing dispatchable → passed.
   if [ "$count" -eq 0 ]; then
     local why="backlog empty"
     [ "$gcount" -gt 0 ] && why="backlog empty after done-guard ($gcount already-done item(s) skipped)"
-    if [ "$mode" = dry ]; then echo "PLAN: $why (project=$PROJECT) → would pass, no spawn"; return 0; fi
+    if [ "$mode" = dry ]; then echo "PLAN: $why (projects=$(printf '%s' "$PROJECTS" | tr '\n' ',')) → would pass, no spawn"; return 0; fi
     idl passed "$why"; idl_summary; return 0
   fi
 
@@ -445,8 +615,11 @@ dispatch() { # <dry|run|decide>
     fi
     admit_n="$FREE_SLOTS"; [ "$admit_n" -gt "$count" ] && admit_n="$count"
 
-    # the decision journal — one record per dispatchable item, in queue order.
-    while IFS= read -r did; do
+    # the decision journal — one record per dispatchable item, in queue order. The queue is ONE
+    # cross-project queue under the S7 key, so `position` is a fleet-wide rank and the per-record
+    # `project` is what tells a reader which project a rank belongs to.
+    local dproj
+    while IFS="$(printf '\t')" read -r did dproj; do
       [ -n "$did" ] || continue
       pos=$((di + 1)); di=$((di + 1))
       if [ "$pos" -le "$admit_n" ]; then
@@ -457,8 +630,8 @@ dispatch() { # <dry|run|decide>
         # outranks the unknown note: with zero slots the count could not have changed the outcome.
         if [ "$FREE_SLOTS" -eq 0 ]; then vreason=at-ceiling; else vreason=capacity; fi
       fi
-      [ "$mode" = dry ] || idl_decision "$did" "$vverdict" "$pos" "$vreason"
-    done < <(printf '%s' "$ordered" | jq -r '.[].id // empty')
+      [ "$mode" = dry ] || idl_decision "$did" "$vverdict" "$pos" "$vreason" "$dproj"
+    done < <(printf '%s' "$ordered" | jq -r '.[] | "\(.id // "")\t\(.project // "")"')
 
     [ "$mode" = dry ] && printf 'PLAN: %s dispatchable · ceiling=%s live=%s free_slots=%s → %s admit, %s defer\n' \
       "$count" "$CEILING" "${LIVE_RAW:-unknown}" "$FREE_SLOTS" "$admit_n" "$((count - admit_n))"
@@ -524,7 +697,7 @@ dispatch() { # <dry|run|decide>
 
   # dry-run: PRINT the plan, no writes.
   if [ "$mode" = dry ]; then
-    echo "PLAN: $n placement(s), spawn cap=$MAX_SPAWN (project=$PROJECT):"
+    echo "PLAN: $n placement(s), spawn cap=$MAX_SPAWN (projects=$(printf '%s' "$PROJECTS" | tr '\n' ',')):"
     printf '%s' "$plan" | jq -r '.[] | "  \(.id) -> \(.account // "?")  fire_line=\(.fire_line // [] | @json)"'
     return 0
   fi
@@ -570,17 +743,32 @@ dispatch() { # <dry|run|decide>
     # path; the actuator writes the content — with nothing writing it, every spawn died on the
     # absent --prompt-file (found live 2026-07-19). An existing NON-EMPTY file is honored
     # (an operator-authored brief wins); compose-fail reopens, never a blind spawn.
-    local pfile="" bj title dod
+    local pfile="" bj title dod iproj irepo rails
+    # the ITEM's project — every project-shaped field in the brief and in worktree provisioning is
+    # per-item now (the dispatch set spans projects), never the pass's pinned project.
+    iproj="$(printf '%s' "$dispatchable" | jq -r --arg i "$id" '.[]|select(.id==$i)|.project // empty' | head -1)"
+    [ -n "$iproj" ] || iproj="$PROJECT"
     for ((bj=0; bj<${#fire_args[@]}-1; bj++)); do
       [ "${fire_args[$bj]}" = "--prompt-file" ] && { pfile="${fire_args[$((bj+1))]}"; break; }
     done
     if [ -n "$pfile" ] && [ ! -s "$pfile" ]; then
       title="$(printf '%s' "$dispatchable" | jq -r --arg i "$id" '.[]|select(.id==$i)|.title // empty' | head -1)"
       dod="$(printf '%s' "$dispatchable"   | jq -r --arg i "$id" '.[]|select(.id==$i)|.dodRef // empty' | head -1)"
+      # RAILS ARE READ FROM THE PROJECT, never hardcoded. The brief used to promise "the project-local
+      # /ship" unconditionally; that rail exists in claude-infrastructure and reso-management-app but
+      # NOT in doc_classifier (no .claude/commands/ship.md, no CLAUDE.md) — and doc_classifier holds
+      # the 5 oldest open items in the ledger, so under the S7 key it is the FIRST thing this change
+      # dispatches. A brief that names a nonexistent landing command sends a worker to invent one.
+      irepo="$(project_repo "$iproj")"
+      if [ -f "$irepo/.claude/commands/ship.md" ]; then
+        rails="dedicated worktree + own branch; gate green before commit; land ONLY via the project-local /ship (never bare push); C10 — never edit settings.json/live hooks/launchd in place."
+      else
+        rails="dedicated worktree + own branch; gate green before commit. This project has NO /ship rail — commit on your own branch and SURFACE it for the operator; never bare-push, never land yourself. C10 — never edit settings.json/live hooks/launchd in place."
+      fi
       if ! printf '%s\n' \
-        "TASK — ${title:-backlog item $id} — cc-backlog item $id (project $PROJECT)." \
+        "TASK — ${title:-backlog item $id} — cc-backlog item $id (project $iproj, repo $irepo)." \
         "DoD ref: ${dod:-none}. Scope (frozen): drive this ONE item to finished-verified-landed." \
-        "Rails: dedicated worktree + own branch; gate green before commit; land ONLY via the project-local /ship (never bare push); C10 — never edit settings.json/live hooks/launchd in place." \
+        "Rails: $rails" \
         "On completion: cc-backlog done $id --evidence \"<landed sha>\"." \
         "If blocked on an OPERATOR-only step (a key, a launchctl bootout, any human action you cannot do): cc-backlog block $id --needs \"<the exact step>\" — this PARKS the item OUT of the dispatch wave (no re-dispatch loop, no burned worker slot) until the operator acts, then cc-notify the desk role (cat ~/.claude/cc-roles/desk). Do NOT reopen an operator-gated item — that re-cycles it." \
         "If blocked on info or a decision instead (not an operator step): cc-backlog reopen $id and cc-notify the desk with the blocker." \
@@ -603,7 +791,7 @@ dispatch() { # <dry|run|decide>
     for ((wj=0; wj<${#fire_args[@]}-1; wj++)); do
       [ "${fire_args[$wj]}" = "--cwd" ] && { wcwd="${fire_args[$((wj+1))]}"; break; }
     done
-    if [ -n "$wcwd" ] && [ ! -d "$wcwd" ] && ! warm_worktree "$wcwd"; then
+    if [ -n "$wcwd" ] && [ ! -d "$wcwd" ] && ! warm_worktree "$wcwd" "$iproj"; then
       "$backlog" reopen "$id" --by "$SID" >/dev/null 2>&1 || true   # self-release (see above)
       FAILED=$((FAILED + 1)); idl failed "$id: worktree provision failed (reopened)"; continue
     fi
@@ -679,7 +867,7 @@ STUB
 
   # wave.json is removed too: its ABSENCE is the observable for "made zero wave-plan calls", and a
   # leftover from the previous case would make that assertion vacuously false (or vacuously true).
-  reset() { : > "$tmp/backlog.log"; : > "$tmp/spawn.log"; : > "$tmp/idl.jsonl"; rm -rf "$tmp/pages"; rm -f /tmp/f1.txt "$tmp/wave.json"; }
+  reset() { : > "$tmp/backlog.log"; : > "$tmp/spawn.log"; : > "$tmp/idl.jsonl"; rm -rf "$tmp/pages"; rm -f "$tmp/f1.txt" "$tmp/wave.json"; }
   ok()   { printf '  ok   %s\n' "$1"; pass=$((pass+1)); }
   bad()  { printf '  FAIL %s\n' "$1"; fail=$((fail+1)); }
   t()    { local m="$1"; shift; if "$@"; then ok "$m"; else bad "$m"; fi; }   # <label> <predicate-cmd...>
@@ -712,7 +900,7 @@ STUB
   # the plan is seeded with a LIVE placement for i1 — what a planner handed [i1] would return — so
   # this RED-proves the step-1b filter: drop it and i1 reaches the planner and spawns.
   reset; seed_items '[{"id":"i1","project":"a","status":"open","wasDone":true,"title":"t1","evidence":"6488617 fix(x)"}]'
-  seed_plan '[{"id":"i1","account":"next3","fire_line":["--prompt-file","/tmp/f1.txt"]}]'
+  seed_plan '[{"id":"i1","account":"next3","fire_line":["--prompt-file","'"$tmp"'/f1.txt"]}]'
   "$SELF" --once >/dev/null 2>&1
   t "(l) done-latched item → ZERO spawn (no burned session)"  test ! -s "$tmp/spawn.log"
   t "(l) done-latched item → NOT claimed"                     test ! -s "$tmp/backlog.log"
@@ -724,7 +912,7 @@ STUB
   # (m) the guard is PER-ITEM, not a whole-wave abort: a done-latched item beside a fresh one
   # must not suppress the fresh one.
   reset; seed_items '[{"id":"i1","project":"a","status":"open","wasDone":true,"title":"t1"},{"id":"i2","project":"a","status":"open","title":"t2"}]'
-  seed_plan '[{"id":"i2","account":"next3","fire_line":["--prompt-file","/tmp/f1.txt"]}]'
+  seed_plan '[{"id":"i2","account":"next3","fire_line":["--prompt-file","'"$tmp"'/f1.txt"]}]'
   "$SELF" --once >/dev/null 2>&1
   t "(m) mixed wave → the un-done item IS claimed"     grep -qx 'claim i2' "$tmp/backlog.log"
   t "(m) mixed wave → the done-latched item is NOT claimed" not grep -qx 'claim i1' "$tmp/backlog.log"
@@ -741,22 +929,47 @@ STUB
 
   # (c) green → claim invoked + spawn invoked with the fire_line + IDL fired.
   reset; seed_items '[{"id":"i1","project":"a","status":"open","title":"t1"}]'
-  seed_plan '[{"id":"i1","account":"next3","fire_line":["--prompt-file","/tmp/f1.txt","--account","next3"]}]'
+  seed_plan '[{"id":"i1","account":"next3","fire_line":["--prompt-file","'"$tmp"'/f1.txt","--account","next3"]}]'
   "$SELF" --once >/dev/null 2>&1
   t "(c) green → item claimed (transition invoked)" grep -qx 'claim i1' "$tmp/backlog.log"
-  t "(c) green → spawn got the fire_line argv" grep -q -- '--prompt-file /tmp/f1.txt --account next3' "$tmp/spawn.log"
+  t "(c) green → spawn got the fire_line argv" grep -q -- "--prompt-file $tmp/f1.txt --account next3" "$tmp/spawn.log"
   t "(c) green → IDL fired"                 grep -q '"action":"fired"' "$tmp/idl.jsonl"
   t "(c) summary fired=1"                   test "$(last '.fired')" = 1
-  t "(c) brief composed at the fire_line path (id + title)" grep -q 'cc-backlog item i1' /tmp/f1.txt
-  t "(c) brief carries the ship rail"       grep -q 'project-local /ship' /tmp/f1.txt
+  t "(c) brief composed at the fire_line path (id + title)" grep -q 'cc-backlog item i1' "$tmp/f1.txt"
+  t "(c) brief names the ITEM's project, not the pass's" grep -q 'project a,' "$tmp/f1.txt"
+  # The rails line is READ FROM THE PROJECT since multi-project coverage, so this fixture (project
+  # "a", which resolves to a repo that does not exist and therefore has no .claude/commands/ship.md)
+  # must get the DEGRADED variant. Asserting the unconditional '/ship' here would have re-encoded the
+  # bug the rails change fixes: doc_classifier has no ship rail and holds the oldest items in the
+  # ledger, so it is the FIRST thing dispatched. Both branches are asserted — (c6) is the positive
+  # control that proves this harness can still observe a real ship rail when one exists.
+  t "(c) no ship.md in the project → brief does NOT promise /ship" \
+    bash -c "! grep -q 'project-local /ship' '$tmp/f1.txt'"
+  t "(c) no ship.md in the project → brief says so and forbids landing" \
+    grep -q 'NO /ship rail' "$tmp/f1.txt"
+
+  # (c6) POSITIVE CONTROL for the rails branch: a project whose repo DOES carry .claude/commands/ship.md
+  reset; mkdir -p "$tmp/repo-b/.claude/commands"; : > "$tmp/repo-b/.claude/commands/ship.md"
+  printf 'b  repo=%s\n' "$tmp/repo-b" > "$tmp/projects.conf"
+  seed_items '[{"id":"i9","project":"b","status":"open","title":"t9"}]'
+  seed_plan '[{"id":"i9","account":"next3","fire_line":["--prompt-file","'"$tmp"'/f9.txt","--account","next3"]}]'
+  rm -f "$tmp/f9.txt"
+  CC_DISPATCH_PROJECTS_CONF="$tmp/projects.conf" "$SELF" --once >/dev/null 2>&1
+  t "(c6) a conf-declared foreign project IS dispatched (one loop, not one project)" \
+    grep -qx 'claim i9' "$tmp/backlog.log"
+  t "(c6) its repo HAS ship.md → the brief DOES promise the project-local /ship" \
+    grep -q 'project-local /ship' "$tmp/f9.txt"
+  t "(c6) and the brief names that project + its resolved repo" \
+    grep -q "project b, repo $tmp/repo-b" "$tmp/f9.txt"
+  rm -f "$tmp/f9.txt"
 
   # (c2) STRING fire_line (the real wave-plan shape, program-prefixed) → split argv, program
   # token dropped, brief still composed.
   reset; seed_items '[{"id":"i1","project":"a","status":"open","title":"t1"}]'
-  seed_plan '[{"id":"i1","account":"next3","fire_line":"~/.claude/scripts/handoff-fire.sh --prompt-file /tmp/f1.txt --account next3"}]'
+  seed_plan "[{\"id\":\"i1\",\"account\":\"next3\",\"fire_line\":\"~/.claude/scripts/handoff-fire.sh --prompt-file $tmp/f1.txt --account next3\"}]"
   "$SELF" --once >/dev/null 2>&1
-  t "(c2) string fire_line → spawn got SPLIT argv (no program token)" grep -q -- '^--prompt-file /tmp/f1.txt --account next3$' "$tmp/spawn.log"
-  t "(c2) string fire_line → brief composed" grep -q 'cc-backlog item i1' /tmp/f1.txt
+  t "(c2) string fire_line → spawn got SPLIT argv (no program token)" grep -q -- "^--prompt-file $tmp/f1.txt --account next3$" "$tmp/spawn.log"
+  t "(c2) string fire_line → brief composed" grep -q 'cc-backlog item i1' "$tmp/f1.txt"
 
   # (c3) b87573077f11 — a fire_line carrying `--cwd <wt>` gets that worktree provisioned WARM by
   # THIS actuator before the spawn. wave-plan only emits the path (pure planner), so if nothing
@@ -766,7 +979,7 @@ STUB
   wtrepo="$tmp/wtrepo"; rm -rf "$wtrepo" "$tmp/wt-i1"
   ( mkdir -p "$wtrepo" && cd "$wtrepo" && git init -q . && git config user.email t@t && git config user.name t \
     && echo x > f && git add f && git commit -qm init && git branch -f origin/main HEAD ) >/dev/null 2>&1
-  seed_plan '[{"id":"i1","account":"next3","fire_line":["--prompt-file","/tmp/f1.txt","--cwd","'"$tmp"'/wt-i1"]}]'
+  seed_plan '[{"id":"i1","account":"next3","fire_line":["--prompt-file","'"$tmp"'/f1.txt","--cwd","'"$tmp"'/wt-i1"]}]'
   CC_DISPATCH_REPO="$wtrepo" CC_DISPATCH_WT_BASE=origin/main "$SELF" --once >/dev/null 2>&1
   t "(c3) --cwd worktree is CREATED before the fire"    test -d "$tmp/wt-i1"
   t "(c3) it is a real git worktree (own checkout)"     test -e "$tmp/wt-i1/.git"
@@ -779,7 +992,7 @@ STUB
   # (c4) provisioning FAILURE must reopen the claim and fire NOTHING — never a spawn into a dir
   # that does not exist (the shape that burns a worker slot silently).
   reset; seed_items '[{"id":"i1","project":"a","status":"open","title":"t1"}]'
-  seed_plan '[{"id":"i1","account":"next3","fire_line":["--prompt-file","/tmp/f1.txt","--cwd","'"$tmp"'/wt-nope"]}]'
+  seed_plan '[{"id":"i1","account":"next3","fire_line":["--prompt-file","'"$tmp"'/f1.txt","--cwd","'"$tmp"'/wt-nope"]}]'
   CC_DISPATCH_REPO="$tmp/not-a-repo" "$SELF" --once >/dev/null 2>&1
   t "(c4) unprovisionable worktree → ZERO spawn"  test ! -s "$tmp/spawn.log"
   t "(c4) unprovisionable worktree → reopened"    grep -q 'reopen i1' "$tmp/backlog.log"
@@ -788,21 +1001,21 @@ STUB
   # (c5) an EXISTING --cwd is reused as-is (idempotent re-dispatch, no clobber of live work).
   reset; seed_items '[{"id":"i1","project":"a","status":"open","title":"t1"}]'
   mkdir -p "$tmp/wt-live" && echo sentinel > "$tmp/wt-live/keep"
-  seed_plan '[{"id":"i1","account":"next3","fire_line":["--prompt-file","/tmp/f1.txt","--cwd","'"$tmp"'/wt-live"]}]'
+  seed_plan '[{"id":"i1","account":"next3","fire_line":["--prompt-file","'"$tmp"'/f1.txt","--cwd","'"$tmp"'/wt-live"]}]'
   CC_DISPATCH_REPO="$tmp/not-a-repo" "$SELF" --once >/dev/null 2>&1
   t "(c5) existing worktree → untouched" test -f "$tmp/wt-live/keep"
   t "(c5) existing worktree → still spawns" test -s "$tmp/spawn.log"
 
   # (d) spawn non-zero → item reopened + IDL failed.
   reset; seed_items '[{"id":"i1","project":"a","status":"open","title":"t1"}]'
-  seed_plan '[{"id":"i1","account":"next3","fire_line":["--prompt-file","/tmp/f1.txt"]}]'
+  seed_plan '[{"id":"i1","account":"next3","fire_line":["--prompt-file","'"$tmp"'/f1.txt"]}]'
   STUB_SPAWN_RC=7 "$SELF" --once >/dev/null 2>&1
   t "(d) spawn-fail → item reopened"        grep -qx 'reopen i1' "$tmp/backlog.log"
   t "(d) spawn-fail → IDL failed"           grep -q '"action":"failed"' "$tmp/idl.jsonl"
 
   # (e) --dry-run → plan printed, backlog UNCHANGED, spawn NOT called, no page.
   reset; seed_items '[{"id":"i1","project":"a","status":"open","title":"t1"}]'
-  seed_plan '[{"id":"i1","account":"next3","fire_line":["--prompt-file","/tmp/f1.txt"]}]'
+  seed_plan '[{"id":"i1","account":"next3","fire_line":["--prompt-file","'"$tmp"'/f1.txt"]}]'
   "$SELF" --dry-run > "$tmp/dry.out" 2>/dev/null
   t "(e) --dry-run prints the plan"         grep -q 'PLAN:' "$tmp/dry.out"
   t "(e) --dry-run → backlog UNCHANGED"     test ! -s "$tmp/backlog.log"

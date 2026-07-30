@@ -15,8 +15,19 @@
   timer is what GUARANTEES the 5-minute decision bound (§7 A2) even with the kick disabled
   (CC_BACKLOG_KICK=off) or failing. Was 900s, which alone could not meet that bound.
   PATH prepends ~/.claude/bin so cc-dispatch, cc-backlog, cc-wave-plan, handoff-fire.sh + jq
-  resolve (launchd's default PATH lacks it — the 36f9d64 lesson). CC_DISPATCH_PROJECT pins the
-  repo whose backlog is dispatched; edit it for another project. $HOME expands at runtime.
+  resolve (launchd's default PATH lacks it — the 36f9d64 lesson). $HOME expands at runtime.
+
+  CC_DISPATCH_PROJECT is the PINNED project, not the only one. DO NOT edit it to add a project and
+  DO NOT add a second instance of this job per project (item f7abcbdee98c): the dispatch set is
+  {this value} ∪ {scripts/dispatch-projects.conf rows with repo=}, so adding a project is ONE line
+  in that conf file with no bootout/bootstrap cycle. Per-project launchd instances were rejected
+  because they share the singleton pass lock (mutual pass-in-flight skips), multiply the fleet
+  concurrency ceiling (live_workers is a GLOBAL claimed fold), and make coverage an operator action
+  per project — full rationale in the DISPATCH SET header block of bin/cc-dispatch.
+
+  This comment is documentation only: launchd-parity-lint compares `plutil -p` output, which does
+  not include XML comments, so editing this block cannot drift the repo SSOT from the live plist
+  (verified 2026-07-29).
 -->
 <plist version="1.0">
 <dict>
