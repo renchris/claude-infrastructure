@@ -1235,3 +1235,19 @@ activation = env-prefixed non-bats commands (documented skip) + PATH-less contex
 the honest meter, ~4× tighter than the old one. AC23 is PARTIAL: the gate term of ambient
 dependence is gone; payload-lint's body-level `timeout 25` wall remains (named, owner row 2/1).
 Session count ceiling (~50, memory-bound) unchanged and alarmed.
+
+## 11.13 §9.7 integration — a sibling's mid-campaign correction lands on this program (2026-07-30)
+
+§9.7 (landed by a parallel session while this wave built) retracts the "~70% ceiling / ~30%
+absolute-path bypass" arithmetic this program's M7 was partly framed on: the census denominator was
+argv-contaminated, and with a clean instrument AC1 was ALREADY MET (92/92 = 100%). Consequences,
+stated plainly rather than papered over: **M7's bats-token rewrite half solved a phantom** — kept,
+because it is harmless-redundant where PATH covers, converges every spelling on one artifact, and
+covers PATH-less contexts; **M7's real value is the non-bats pattern table** (pytest 0.67 cores at
+full priority, du at PRI 46, npm, shellcheck — process-level evidence from §11.2's live axis, not
+argv-matched, so §9.7's contamination does not touch it) **plus M1-rev** (independent 84-89×
+band measurement). The M1-rev census rewrite (clamp-constant classifier + per-tier fields) is the
+same instrument §9.7's fix hardened, merged compatibly at land. Backlog reconciliation: the
+sibling's cb5514b9d1b4 (M4) and b72a2b8e7666 (M5) were closed with landed evidence — the wave built
+exactly what they filed; 0086d70f85c7 closed as implemented-in-the-surviving-form (rewrite, not
+DEFER); 2193948bb00e (O(N²) hook broker, row 6) stays open, its worst single term removed by M13.
