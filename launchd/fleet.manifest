@@ -117,7 +117,11 @@ com.claude.nightly-regression     | staged | 0    | auto | 1  | 18-fleet-activat
 # `staged` says (ONE UNDECIDED row, never a guessed alarm). interval 600 = its StartInterval; `auto`
 # resolves to its StandardOutPath and the script does write to stdout, so unlike lead-supervisor's the
 # sensor is real. The job's owner may flip this to `run` after activating it.
-com.claude.capacity-alarm         | staged | 600  | auto | 13 | 19-capacity-alarm-activate.sh
+# FLIPPED staged→run 2026-07-30 (row 13 completion): the activation RAN — 19-capacity-alarm-activate.sh.done
+# exists (Jul 29 19:09), `launchctl print gui/501/com.claude.capacity-alarm` shows enabled + 20 runs +
+# last exit 0, and ~/.claude/logs/capacity-alarm.jsonl accrues rows every ~600 s. The `staged` row had
+# become factually false and made the parity leg assert a state the box left a day earlier.
+com.claude.capacity-alarm         | run    | 600  | auto | 13 | 19-capacity-alarm-activate.sh
 # ── com.claude.relogin (row 7, ACCOUNT_ROUTING_V2 M4) ──────────────────────────────────────────────
 # WHY IT WAS MISSING, and why that mattered: this label was invisible to the three-way coverage loop
 # because that loop globs launchd/*.plist and this plist lives in launchd/staged/ — deliberately, so
@@ -159,6 +163,12 @@ com.claude.relogin                | staged | 3600 | ~/.claude/logs/cc-relogin-po
 # without touching anything else. activate = the generic fleet activation, as boot-resume,
 # nightly-regression and team-orphan-reaper already do — no scratchpad-specific script exists.
 com.claude.scratchpad-reaper      | staged | 21600 | auto | 11 | 18-fleet-activate.sh
+
+# com.claude.qos-census — row 13 completion (M12): the QoS coverage claim decays without a cadence
+# (every qos-census.jsonl row before 2026-07-30 was a manual run). Same shape as capacity-alarm:
+# 600 s, Background band. NO-BURST ticks (exit 3) are cheap, honest non-verdicts. Staged until the
+# operator activates via 23-qos-census-activate.sh.
+com.claude.qos-census             | staged | 600  | auto | 13 | 23-qos-census-activate.sh
 
 # ── com.chrisren.* — the SECOND family this repo owns (added 2026-07-29 after the reconciler's
 # first live run declared only com.claude.*, hiding 6 LOADED, RUNNING jobs from every leg).

@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.claude.qos-census — row 13 completion (M12). Every 10 min: is the QoS demotion actually
+  covering the live batch population?
+
+  WHY A JOB AT ALL: AC1 (>=95% coverage) is a CONTINUOUS claim, but every row in
+  ~/.claude/logs/qos-census.jsonl before 2026-07-30 was a manual run — the census existed and the
+  verification cadence did not (feature-durability-mechanism-not-memory). This is the thing that
+  fires it. A NO-BURST tick (exit 3) is a cheap, honest non-verdict, not noise: it proves the
+  census RAN and found nothing to judge (absence-alarm-needs-existence-evidence).
+
+  WHY IT IS CHEAP ENOUGH TO BE ALLOWED TO EXIST: one ps sweep + two 3-second control spawns +
+  awk, in the BACKGROUND band. Duty cycle well under 0.1% of one core at 600 s.
+
+  IT NEVER REFUSES ANYTHING — reports and exits (R1). Verdicts: PASS 0 / FAIL 1 / NO-BURST 3 /
+  SIGNAL-DEAD 4; launchd treats non-zero as "job ran, non-green verdict", which is the DESIGNED
+  outcome for a census (daemon-fleet-v2: a non-zero exit can be the designed verdict — do not
+  "fix" it to always exit 0).
+
+  C10: the OPERATOR loads it. Kill switches after load: QOS_CENSUS_NO_CONTROL=1 (tests only),
+  CC-side seams in scripts/qos-census.sh, or launchctl bootout.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.claude.qos-census</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"; exec "$HOME/.claude/scripts/qos-census.sh" --quiet</string>
+    </array>
+
+    <key>StartInterval</key>
+    <integer>600</integer>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>ProcessType</key>      <string>Background</string>
+    <key>LowPriorityIO</key>    <true/>
+    <key>Nice</key>             <integer>10</integer>
+
+    <key>StandardOutPath</key>  <string>/Users/chrisren/.claude/logs/qos-census.out.log</string>
+    <key>StandardErrorPath</key><string>/Users/chrisren/.claude/logs/qos-census.err.log</string>
+</dict>
+</plist>
