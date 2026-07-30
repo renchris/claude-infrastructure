@@ -176,6 +176,30 @@ if [ -f "$_mbxlib" ] && command -v jq >/dev/null 2>&1; then
   # shellcheck source=lib/mailbox-pending.sh
   # shellcheck disable=SC1091
   if . "$_mbxlib" 2>/dev/null; then
+    # CANONICALISE the box key before ANY use below (2026-07-29). _ouid above is the PANE uuid, but
+    # mailbox-drain.sh reads the SESSION-keyed box whenever it knows its session id (its :64-68,
+    # CC_MBX_SESSION_KEY default 1) and writes the pane→session alias on the way. So the two hooks
+    # named DIFFERENT keys for one mechanism: the WAKE FLOOR below advertised a PANE-keyed
+    # `cc-await-ping` arm while the drain read the SESSION-keyed box. Following that advice arms a
+    # watcher on a key nothing writes to, and because each side then checks its OWN key the nudge
+    # recurs forever while the operator believes they are armed. (Cost two wrong arms in one session
+    # before it was traced.) `bin/cc-await-ping` resolves NO alias — it watches the key it is handed
+    # literally — so the resolution has to happen HERE, at the single place _ouid is derived, rather
+    # than being fixed up in the watcher or duplicated per call site.
+    # mailbox_resolve_key is the lib's one implementation of that mapping; reusing it is what stops
+    # the two hooks drifting apart again. It falls back to the pane when no alias exists, so a
+    # never-drained pane still resolves to its own box.
+    case "$_ouid" in
+      ''|*[!0-9A-Fa-f-]*) : ;;
+      *) if command -v mailbox_resolve_key >/dev/null 2>&1; then
+           _rk="$(mailbox_resolve_key "$_ouid" 2>/dev/null || true)"
+           # Adopt ONLY a valid uuid: an empty or malformed resolve must never blank the key, or every
+           # guard below would skip and the wake floor would go silently inert — the exact class of
+           # failure this hook exists to prevent.
+           case "$_rk" in ''|*[!0-9A-Fa-f-]*) : ;; *) _ouid="$_rk" ;; esac
+           unset _rk
+         fi ;;
+    esac
     case "$_ouid" in ''|*[!0-9A-Fa-f-]*) : ;; *) mailbox_promote_acked "$_ouid" ;; esac
   fi
 fi
