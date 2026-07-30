@@ -139,6 +139,45 @@ def strip_quoted(s: str) -> str:
     return "".join(out)
 
 
+def heredoc_open(raw: str) -> tuple[str, bool] | None:
+    """Delimiter + tab-strip flag for a heredoc OPENED on this line, else None.
+
+    Two requirements pull in opposite directions, and satisfying only one of them is a
+    measured defect in each direction:
+
+      (a) The `<<` must be shell SYNTAX, not string data. A fixture that writes shell
+          source — `printf 'cat <<EOF\\n…'` — contains `<<EOF` only inside quotes and opens
+          nothing; treating it as an opener starts a skip that never terminates and
+          silently swallows the rest of the block (the original §4 defect 3).
+      (b) The delimiter's OWN quotes are syntax, not data. `<<'EOS'` is this repo's
+          dominant form (60 of 189 suites).
+
+    The earlier fix for (a) applied `strip_quoted` to the whole line and then looked for
+    `<<\\s*([A-Za-z_]\\w*)`. That blanks the contents of `'EOS'`, so the delimiter vanished
+    and NO heredoc was ever recognised in form (b) — every such fixture body was analyzed
+    as if it were this file's own assertions. That is a FALSE-POSITIVE generator whose
+    `|| false` remedy edits the FIXTURE, changing the subject a lint-under-test is asked
+    about (4 live findings in tests/alarm-polarity-lint.bats, all inside `<<'EOS'` bodies).
+
+    Both hold at once by splitting the two questions: POSITION is validated against the
+    masked line — `strip_quoted` blanks quoted contents, so a `<<` still visible there is
+    provably outside quotes — while the DELIMITER is parsed from `raw`, where its quoting
+    survives. `<<<` (herestring) is checked per-occurrence, not per-line, so a real
+    heredoc on a line that also carries a herestring is still seen.
+    """
+    masked = strip_quoted(raw)
+    for m in re.finditer(r"<<", masked):
+        i = m.start()
+        if masked[i : i + 3] == "<<<" or masked[i - 1 : i + 1] == "<<":
+            continue  # herestring, or the tail of one already considered
+        d = re.match(
+            r"""<<(-?)\s*(?:'([^']+)'|"([^"]+)"|\\?([A-Za-z_][A-Za-z0-9_]*))""", raw[i:]
+        )
+        if d:
+            return (d.group(2) or d.group(3) or d.group(4)), d.group(1) == "-"
+    return None
+
+
 class Stmt:
     """One meaningful (non-blank, non-comment) source line inside a @test body."""
 
@@ -178,11 +217,9 @@ def parse_block(lines: list[str], start: int, end: int) -> list[Stmt]:
         code = strip_comment(raw).strip()
 
         # Opening a heredoc: remember the delimiter, skip its body.
-        bare = strip_quoted(raw)
-        m = re.search(r"<<(-?)\s*([A-Za-z_][A-Za-z0-9_]*)", bare)
-        if m and "<<<" not in bare:
-            heredoc = m.group(2)
-            heredoc_tabs = m.group(1) == "-"
+        opened = heredoc_open(raw)
+        if opened is not None:
+            heredoc, heredoc_tabs = opened
 
         if not code:
             prev_continues = False
