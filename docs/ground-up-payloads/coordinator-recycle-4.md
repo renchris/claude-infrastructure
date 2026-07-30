@@ -115,15 +115,31 @@ HARD-WON RULES — each has cost this campaign real work:
 - Commit only in this worktree (gu-coordinator on gu/coordinator). Land continuously via
   `scripts/ship-land.sh`. The stranded-sweep reporting ~150 commits across ~880 branches is peers'
   expected WIP — never cherry-pick it; only your own dropped land matters.
-- 🚨 **RUN `ship-land.sh` WITH run_in_background=true, ALWAYS.** In the foreground it exceeds the Bash
-  tool's 2-minute default and gets **SIGTERM'd (exit 143)** during its post-push stranded-sweep over
-  ~880 branches. **That kill happens AFTER the push and looks exactly like a failed land** — I hit it
-  on `f51b2fac`, which was already on trunk and content-verified while the tool reported a timeout.
-  This is the campaign's "gate-never-ran ≠ gate-red" third state wearing a new mask: do NOT re-run and
-  do NOT panic. Diagnose it in this order — `git rev-list --count origin/main..HEAD` (0 ⇒ it landed) ·
-  content-verify the file on `origin/main` · then check for a **stranded lock** (`/tmp/land-lock-*/lock.d`
-  with a `pid` that `kill -0` says is DEAD), which is the one outcome that actually jams every other
-  writer and must be reported. In my case: no lock dir, no orphaned procs, tree clean.
+- 🚨 **NEVER PIPE `ship-land.sh`, AND ALWAYS CONTENT-VERIFY AFTERWARDS. A LAND FAILS IN BOTH
+  DIRECTIONS AND I HIT BOTH ON CONSECUTIVE COMMITS.** Run it `run_in_background=true`, unpiped,
+  redirecting to a file, and capture `rc` — `bash scripts/ship-land.sh > "$OUT" 2>&1; rc=$?`.
+  · **Direction 1 — killed but it DID land.** In the foreground it exceeds the Bash tool's 2-minute
+    default and is **SIGTERM'd (exit 143)** during its post-push stranded-sweep over ~900 branches.
+    That kill lands AFTER the push, so the tool reports a timeout over a completed land: `f51b2fac`
+    was on trunk and content-verified while the tool said it failed.
+  · **Direction 2 — reported success but it did NOT land.** The next commit, `cec21d51`, was piped
+    through `tail -4`. The task reported **exit 0**, the output file was **0 bytes**, and the commit
+    **never reached trunk**. `ship-land` had to be re-driven; it then landed cleanly as `20dfa565`.
+  · **Why direction 2 is the dangerous one, and it is a trap this repo already documented:** piping
+    makes the reported exit code **the PIPE's**, not ship-land's, and discards the verdict line. So a
+    dropped land becomes **indistinguishable from a successful one**. I cannot tell you what actually
+    failed in that run, because the pipe destroyed the evidence — which is the whole lesson. (Memory:
+    `verification-harness-vacuous-pass-traps`, "piping a test runner destroys its verdict"; I had
+    quoted that rule into row 11's payload an hour before walking into it.)
+  · **Diagnose in this order, and treat only the last as decisive:** `git rev-list --count
+    origin/main..HEAD` · **content-verify the file on `origin/main`** (`git show origin/main:<path>`)
+    · resolve the sha from `origin/main` **BY SUBJECT** (rebase changes it) · then check for a
+    **stranded lock** (`/tmp/land-lock-*/lock.d` whose `pid` fails `kill -0`), the one outcome that
+    jams every other writer and must be escalated.
+  · **A live process is not a successful land.** I read "1 ahead, tree clean, ship-land process alive"
+    as healthy queueing and said so; it had already been dropped. Arm a waiter that reports BOTH
+    outcomes — exit when `ahead=0`, and also exit saying `needs re-drive` if the process dies with
+    `ahead>0`. That waiter is the only reason the drop was caught instead of silently lost.
 - **NEVER hand-patch another row's surface.** Per the row-10 precedent, a defect in a row's territory
   gets fixed by that row with the full proof bar. Rule the seam, hand over the evidence, stand back.
 - Recycle at >=50% context, or earlier if idle, via
