@@ -43,11 +43,22 @@ Usage:
       Exit: 0 routable · 2 data was fine but nothing routable by POLICY (exhausted / 5h
       cutoff / window — callers must NOT fire blind) · 3 data unavailable for every account
       (callers may degrade to a proxy). A non-zero exit is an ANSWER, not a tool failure.
-  claude-accounts --login-status      accounts needing an interactive /login, now or soon.
+  claude-accounts --login-status [--window-h N]   accounts needing an interactive /login, now or soon.
       TSV: acct, REQUIRED|EXPIRING, reason, absolute local expiry, remaining, launcher —
       the last three are "—" when the verdict is not driven by the deadline.
       The EXIT CODE is the answer, so a hook can gate without parsing:
-      0 all clear · 1 a login expires within login_warn_h · 2 action required NOW.
+      0 all clear · 1 a login expires within the window · 2 action required NOW.
+      --window-h N overrides login_warn_h FOR THIS CALL ONLY (default: login_warn_h, so every
+      existing caller is byte-identical). It exists because this surface is a pre-FILTERED view
+      and its consumer's policy is not this constant: cc-relogin-poll attempts from T−7d
+      (168h) precisely because cc-relogin needs a k==0 moment and a 7-day window turns one
+      fragile chance into ~168 hourly ones — yet reading a 72h-filtered view capped it at 72h,
+      making 96 of its 168 declared hours structurally unreachable. It also produced a WRONG
+      HUMAN verdict: RELOGIN_AUTOMATION_PLAN.md concluded "the cliff is closed until roughly
+      2026-08-23" off this surface's exit 0 while `next` was 8 days from its cliff.
+      A malformed N exits 64 (usage), deliberately OUTSIDE the 0/1/2 verdict range — a caller
+      that asked for 168 must never silently receive a 72h answer, and must never read a usage
+      error as a verdict.
       Disambiguator: this tool's own hard failures (unreadable SSOT, bad router block) also
       exit 1, via sys.exit("message") — but they print NOTHING on stdout and a diagnostic on
       stderr, whereas exit 1 here always prints at least one TSV line. So "exit 1 with empty
@@ -1812,6 +1823,25 @@ def main():
         # hook or poller can gate on it without parsing, and it reads the shared cache like
         # every other mode — a recurring check must never force an endpoint sweep.
         warn_h = float(cfg.get("login_warn_h", 72.0))
+        # --window-h N: the value is read POSITIONALLY, never as a membership test over argv —
+        # the same lesson --route learned when `"fable" if "fable" in args` silently handed a
+        # caller asking for a frontier account a general one. A malformed value is a USAGE error
+        # (64), never a fallback to the default: this whole flag exists because a consumer whose
+        # policy is 168h was silently answered at 72h, and a quiet fallback would recreate that
+        # exact defect. 64 is outside the 0/1/2 verdict range so `rc <= 2` consumers cannot read
+        # it as an answer.
+        if "--window-h" in args:
+            i = args.index("--window-h")
+            raw = args[i + 1] if i + 1 < len(args) else None
+            try:
+                w = float(raw)
+                if w < 0:
+                    raise ValueError(raw)
+                warn_h = w
+            except (TypeError, ValueError):
+                print(f"claude-accounts: --window-h requires a non-negative number of hours "
+                      f"(got {raw!r})", file=sys.stderr)
+                sys.exit(64)
         worst = 0
         for r in rows:
             lxh = r.get("login_expires_h")
