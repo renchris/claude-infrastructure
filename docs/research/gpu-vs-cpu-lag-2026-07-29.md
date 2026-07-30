@@ -9,9 +9,16 @@ CPU only?
 1. **For the repo's own work: no, and it is not a tuning gap — it is a category mismatch.** There is
    nothing to move. 100% of this repo's compute is shell process orchestration, `git`, regex, JSON and
    text. That work has no data parallelism, so no GPU programming model applies.
-2. **The one place the GPU genuinely matters — terminal rendering — is ALREADY on the GPU.** Metal is
-   active in iTerm2 right now (verified below). The 136–152% CPU it burns is *not* recoverable by
-   "turning the GPU on"; it is already on.
+2. 🚨 **CORRECTED — there IS a real GPU win, and I initially missed it.** I first concluded "Metal is
+   already on, so no GPU CPU-saving is available." That was **wrong**, and the error is instructive.
+   Metal is *enabled and initialized* — but iTerm2 **suppresses it per-tab whenever a tab holds ≥6
+   sessions**, via a hardcoded constant. With ~42 panes across 5 windows, **the large majority of panes
+   are rendering on the legacy CPU text rasterizer.** Independently verified two ways:
+   - `otool -tvV` on the 3.6.11 binary shows `cmp x8, #0x6` inside `-[PTYTab updateUseMetal]`.
+   - A 5-second `sample` of pid 57251 shows **361 `iTermTextDrawingHelper` (legacy CPU rasterizer)
+     frames against 72 Metal frames** — a ~5:1 CPU-path dominance.
+
+   So the GPU lever is real, and it is **"fewer panes per tab (≤5)"**, not "enable Metal" (already on).
 3. **Memory pressure cannot be fixed by the GPU by construction.** On Apple Silicon the GPU allocates
    from the *same* 64 GB unified pool (measured: 6.59 GB GPU-allocated). GPU offload relocates nothing —
    there is no separate VRAM to move pages into. Memory is *tight* but not swapping (see the corrected
@@ -129,7 +136,41 @@ $TMPDIR/../C/com.googlecode.iterm2/com.apple.metal/   →  1.2 MB total
 ```
 
 A shader cache only exists once a process has compiled and executed Metal render pipelines, and these
-entries are days-recent. **Metal is on and actively rendering.**
+entries are days-recent. **Metal is on and has rendered.**
+
+### …but it is SUPPRESSED for most panes — the error in my first pass
+
+**This is where I went wrong, and the failure mode is worth naming: I proved Metal was *initialized* and
+inferred it was *rendering everything*.** A loaded AGX driver and a populated shader cache are entirely
+consistent with only a handful of panes using Metal. The evidence was real; the inference was not. The
+decisive instrument was one I hadn't reached for — an actual profile.
+
+`iTerm2` disables Metal **per tab** when the tab holds too many sessions. Verified in the shipped binary:
+
+```
+$ otool -tvV /Applications/iTerm.app/Contents/MacOS/iTerm2
+  ... -[PTYTab updateUseMetal] ...
+  000000010000c2dc    cmp    x8, #0x6        ← hardcoded: ≥6 sessions in a tab ⇒ Metal OFF
+```
+
+And confirmed behaviourally — `sample` on pid 57251 for 5 s:
+
+| Path | Frames |
+|---|---|
+| `iTermTextDrawingHelper` — **legacy CPU rasterizer** | **361** |
+| `iTermMetalDriver` — GPU path | 72 |
+
+**~5:1 in favour of the CPU path.** With ~42 panes across 5 windows, most tabs are over the threshold,
+so most drawing is CPU glyph rasterization — which is precisely why iTerm2 can sit at 94.7% CPU *while*
+Metal is "on".
+
+Two further mechanics from the same investigation, both material:
+
+- **`maximumFrameRate` is unset ⇒ compiled default 60.** iTerm2 caps itself at 60 fps *regardless of a
+  120 Hz display*. This substantially weakens the "drop to 60 Hz" lever for iTerm2 specifically (see the
+  revised ranking) — though WindowServer still composites 52.0M px at 120 Hz.
+- **Occlusion does NOT stop redraws.** A covered window keeps drawing; only **miniaturizing** drops it
+  to ~1 fps. So hiding windows behind others saves nothing — minimize them.
 
 The known Metal-disqualifying profile settings are also all absent — `Transparency = 0.0`,
 `Blur = false`, no background image, `Scrollback Lines = 1000` (not unlimited), on **AC power**
@@ -189,9 +230,15 @@ frames:      libsystem_kernel __kill ← bash re-raising, below it bash's own ev
 
 - **All 37 are `/bin/bash`** — not Homebrew bash. macOS ships **bash 3.2 (2007)**, held there for
   licensing reasons.
-- Rate: **Jul 24 → Jul 29, ~7/day, still occurring** (newest today 21:14).
-- Parent is `bash`, faulting inside bash's own execution path — a genuine interpreter segfault, not a
-  child process failing.
+- **Rate corrected — it is DECLINING, not "~7/day ongoing" as I first wrote.** Per-day counts:
+  **24 (Jul 24) · 4 · 7 · 0 · 1 · 1 (Jul 29)**. A single burst on Jul 24 dominates the average; the
+  recent rate is ~1/day. My "~7/day, still occurring" was an average masquerading as a trend — the same
+  error class as reading a high-variance sample as a level.
+- **It is a *fork* bug, not a memory bug.** The reports show `procLaunch → exit in 2.6 ms` with top frame
+  `__kill` and `responsibleProc` = **iTerm2** — i.e. bash dies almost immediately at launch, not deep
+  into a script. That points at process spawn under load rather than at the 8 MB-payload hypothesis I
+  offered earlier, which should be treated as unconfirmed.
+- Parent is `bash`, faulting inside bash's own execution path — a genuine interpreter segfault.
 
 This aligns with the recorded *bash 3.2 runtime deaths* class (silent no-ops and runtime deaths that
 `bash -n`, shellcheck, and zsh all pass). With 239 `.sh` + 204 `.bats` files and every hook running
@@ -251,17 +298,20 @@ doing everything it can do here.
 
 | # | Action | Expected effect | Risk |
 |---|---|---|---|
-| 1 | **Close Chrome and Dia** | Largest *measured* lever in the repo's history: load **88–104 → 10–16** after closing them (`RESTART-BRIEF-2026-07-27.md` §1; Dia held 10.6 GB over 41 procs). Currently 26.9% CPU + ~2.1 GB | None |
-| 2 | **Reduce visible iTerm2 panes** | iTerm2 renders *visible* sessions; at 94.7% it is the #1 consumer. Pane count is a first-class cost independent of session count | Low; costs at-a-glance monitoring |
-| 3 | Set the two 120 Hz displays to **60 Hz** | **New finding — halves frame production** across the 1.46-core render slice. Untried; no prior pass measured display config | Low; reversible in Displays. Costs pointer smoothness |
-| 4 | Consider unscaled 3840 × 2160 on the Dells | **New finding** — removes rendering 78% surplus pixels, ×3 displays | Medium — UI becomes physically smaller; a real ergonomic tradeoff, operator's call |
-| 5 | Shim `/opt/homebrew/bin/bats` → `bin/cc-bats` | Closes the ~30% absolute-path bypass that ceilings QoS coverage at ~70%; worth ~0.5–0.7 cores. **Already named as an operator call, not taken** | Medium — brew-upgrade-fragile; needs a parity check |
-| 6 | `h264_videotoolbox` for intermediate media encodes only | Faster demo/banner renders | Medium — see the seaming caveat; never for final assets unreviewed |
-| 7 | **Enabling iTerm2 Metal** | **Zero — already enabled and executing shaders** | — |
-| 8 | **GPU-offloading infrastructure compute** | **Not possible; no applicable work exists** | — |
+| 1 | **Close Chrome and Dia** | Largest *measured* lever in the repo's history: load **88–104 → 10–16** (`RESTART-BRIEF-2026-07-27.md` §1; Dia held 10.6 GB over 41 procs). Currently ~27% CPU + ~2.1 GB | None |
+| 2 | **≤5 sessions per tab** — split panes across more tabs/windows instead of stacking them | **THE GPU LEVER, and the headline correction.** Crosses the hardcoded `<6` threshold so Metal actually engages, moving glyph rasterization off the CPU. Currently ~5:1 CPU-path dominance | Medium — magnitude unbounded by measurement; **A/B one window first** |
+| 3 | `defaults write com.googlecode.iterm2 maximumFrameRate 24` | Cuts the legacy CPU draw cost by an estimated ~50–60%. Applies to the CPU path that is actually running | Low, reversible. 24 fps feels slightly less fluid |
+| 4 | **Minimize** (not just cover) unwatched windows | Occlusion does **not** stop redraws; miniaturizing drops them to ~1 fps | None |
+| 5 | Shim `/opt/homebrew/bin/bats` → `bin/cc-bats` | Closes the absolute-path bypass ceilinged at ~70% coverage; ~0.5–0.7 cores. Already an operator call, never taken | Medium — brew-upgrade-fragile; needs a parity check |
+| 6 | ~~120 Hz → 60 Hz on the two Dells~~ | **DOWNGRADED.** `maximumFrameRate` already caps iTerm2 at 60 fps, so this does ~nothing for the #1 consumer. Only WindowServer (51.7%, 52.0M px) benefits | Low, but the upside is now much smaller than I claimed |
+| 7 | ~~Unscaled 4K on the Dells~~ | **WITHDRAWN.** The 78% surplus pixels are paid by the GPU and memory bandwidth, not CPU; the GPU has headroom at 36%. Costs ~half the desktop area for a resource that isn't scarce | Not worth the ergonomic price |
+| 8 | `h264_videotoolbox` for intermediate media encodes only | Faster demo/banner renders | Medium — seaming caveat; never for final assets unreviewed |
+| 9 | **GPU-offloading infrastructure compute** | **Not possible; no applicable work exists** | — |
 
-Items 3 and 4 are the only *new* levers this investigation contributes to lag; 1, 2 and 5 were already
-known and are simply not being exercised. Items 7 and 8 are the direct answer to the question asked.
+**Revision history of this table matters more than the table.** My first pass ranked the display levers
+(6, 7) at the top and declared the GPU a dead end. Both display levers are now demoted or withdrawn, and
+the actual GPU win — item 2 — is one I had explicitly ruled out. The lesson: I proved a *capability* was
+initialized and inferred it was *being used*. Only a profile (`sample`) settled it.
 
 **Do not build a load-or-core-based spawn ceiling — because one already exists and is live.**
 
@@ -332,17 +382,34 @@ differently: `owned-wait` is a never-reap **and** never-surface terminal bucket 
 47–222 h, ~3.5 GB) and pane-less `claude.exe` trees (~3 GB) are invisible to all reapers by
 construction.
 
-## Open items
+## Leaks and orphans — resolved
 
-Two subagents are still running; their findings will be integrated:
+**There is no memory leak.** Two independent cross-sections of RSS against process age give
+r = **+0.087** (N=39) and r = **−0.2718** (N=42) — the correlation is *negative*. The oldest process
+(38.6 h) holds **316 MB**, the *minimum* of a 316–786 MB range against a 559.8 MB mean. Longitudinally,
+the same PIDs gained 404 MB over 10 min then **shed 2,223 MB in 45 s** (35 of 42 shrank). RSS
+**oscillates with context size; it never ratchets with uptime.** This confirms and strengthens the prior
+finding (30 h → 417 MB vs 33 min → 700 MB). **0 of 43 `claude` processes are orphaned.**
 
-- `iterm-gpu-axis` — iTerm2 Metal per-session disqualifying conditions, and whether Metal can ever
-  *raise* CPU. Does not change the verdict (Metal is empirically active and executing), but may sharpen
-  lever #3/#4.
-- `memory-fleet-axis` — per-process RSS-vs-age correlation, DiagnosticReports detail, and whether the
-  179 `bash` / 60 `zsh` processes are orphans. Prior art already answers the leak half in the negative.
+**But there IS a shell-process leak, and it is ours.** **101 shells are reparented to PID 1**, of which
+**43–44 are a single script: `~/.claude/hooks/lead-crash-watchdog.sh`**. 20.4% of the orphans are >12 h
+old; the oldest is 1 d 14:27. A 30-second-poll watchdog still alive 38 h after its subject is leaked by
+definition. This is a genuine defect, distinct from the (exonerated) session-memory framing, and it is
+consistent with prior art's note that `lead-crash-watchdog.sh:601` still uses a bare `kill -0` against
+the pid-reuse invariant.
 
-**Not pursued here** (named, not scoped into this investigation):
+**Instrument disagreement, flagged rather than silently resolved:** the RSS-to-`phys_footprint`
+overcount ratio measures **1.551×** on an n=12 sample (6,530 MB RSS vs 4,210 MB footprint), against the
+**2.34×** recorded in `MACHINE_CAPACITY_V2.md` §8.5.6. Both cannot be right for the same population.
+Until re-derived, treat any RSS-derived total as uncertain within that band and use
+`footprint(1)`/phys_footprint for real accounting.
+
+## Not pursued here
+
+Named, not scoped into this investigation:
+
+- **The `lead-crash-watchdog.sh` orphan leak** (43–44 shells) — needs the pid+lstart liveness fix already
+  specced as AC10, plus a reaper that can see PID-1-reparented hook shells.
 
 - The `/bin/bash` 3.2 SIGSEGV class needs its own RED-proof — reproduce the segfault, then show it gone
   under Homebrew `bash` 5 and/or a bounded hook payload. An interpreter swap on 239 `.sh` files is not a
