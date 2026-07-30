@@ -1203,3 +1203,35 @@ prelint_stub() { # <body> — installs it as the tree's walltime lint and lands 
   [ -f "$REC/lintenv.txt" ]
   [ "$(cat "$REC/lintenv.txt")" = "own= herm= scope= argv=tests" ]   # all three arrived UNSET
 }
+
+@test "C22: the prelints run in the UTILITY band — a background-clamped parent cannot drag them to PRI 4" {
+  # THE DEADLOCK THIS STANDS AGAINST (2026-07-30): the launchd job is ProcessType Background, so
+  # absent an EXPLICIT band the prelints inherit PRI 4 (E-core confined) and a ~3s whole-tree lint
+  # becomes load-proportional — measured 41s @ load 14.8, against a bound that was then 60s — until
+  # it times out and the run logs "nothing proven … no green may be claimed". The green stamp then
+  # cannot advance at all, which is the deadlock, and NO test failure ever names it.
+  # Reproduced faithfully by running the SUT under `taskpolicy -c background`, exactly as launchd does.
+  [ -x /usr/sbin/taskpolicy ] || skip "taskpolicy(8) absent — no bands to assert"
+  prelint_stub 'ps -o pri= -p $$ | tr -d " \n" > "$PLREC"; exit 0'
+  run env PLREC="$REC/lintpri.txt" /usr/sbin/taskpolicy -c background bash "$SUT" --run-if-needed
+  [ -f "$REC/lintpri.txt" ]
+  [ "$(cat "$REC/lintpri.txt")" = "20" ]        # utility. PRE-FIX this reads 4 — the inherited band.
+  # CONTROL ON THE INSTRUMENT — same reader, same background-clamped parent, WITHOUT the band fix.
+  # It must read 4. Absent this, "20" above could be a probe that simply cannot observe a demotion
+  # (a green that proves only that ps and tr ran), and the assertion would pass vacuously.
+  run /usr/sbin/taskpolicy -c background bash -c 'ps -o pri= -p $$ | tr -d " \n"'
+  [ "$output" = "4" ]
+}
+
+@test "C22: the taskpolicy-absent path still RUNS the prelint (bash 3.2 empty-array guard)" {
+  # LINT_QOS is EMPTY whenever the shared seam is set-but-empty or taskpolicy(8) is missing. This is
+  # bash 3.2 under `set -u`, where expanding an empty array unguarded is an unbound-variable DEATH —
+  # which would not read as a crash but as rc!=1, i.e. a permanent NON-VERDICT: every prelint
+  # "unproven", no green ever claimable. The same deadlock, arriving through the fallback path.
+  prelint_stub 'printf ran > "$PLREC"; exit 0'
+  run env PLREC="$REC/lintran.txt" CC_POSTLAND_TASKPOLICY_BIN= bash "$SUT" --run-if-needed
+  [ -f "$REC/lintran.txt" ]                     # it ran at all
+  [ "$(cat "$REC/lintran.txt")" = "ran" ]
+  # substring assertion as a LIVE `[ ]` — a non-final `[[ ]]` here would be errexit-exempt and dead
+  [ "${output#*unbound variable}" = "$output" ]
+}
