@@ -166,8 +166,28 @@ is what stops the next relocation from re-inheriting it.
   (Verified two ways — `json.loads` fold and a raw `grep -ho '"verdict":"[a-z]*"'` — because a
   single parse path can silently drop malformed rows.)
 - **A5** `deploy-live --auto` advances the live layer — `git rev-list --count HEAD..origin/main` on the
-  deploy checkout goes to 0. **Never** verify a deploy by symlink presence: *"0 unlinked" ≠ "content
-  current"* (a clean link sweep once read green while the checkout was 48 commits behind).
+  deploy checkout goes to 0 (currently **15 behind**). **Never** verify a deploy by symlink presence:
+  *"0 unlinked" ≠ "content current"* (a clean link sweep once read green while the checkout was 48
+  commits behind).
+
+  🚨 **The CURRENT deploy blocker is a THIRD mechanism, distinct from both of the above — read live
+  from `~/.claude/autonomy/postland/deploy.log`:**
+
+  ```
+  deploy-live: REFUSED — target 34e725d629ca is not a descendant of live HEAD dd1d55a389a5
+               — this would ROLL BACK the live layer
+  ```
+
+  The single green stamp is **orphaned**: `34e725d6` is not a descendant of the live HEAD, so
+  `deploy-live` refuses it — **correctly**, since deploying it would roll the live layer backwards.
+  `deploy-live` walks `origin/main` newest-first for a green commit; the only green it ever finds is
+  unusable, and no newer commit carries one. So the gate is not "never opened for want of a green" —
+  it is **holding on a green that cannot be applied**, which is a different failure with a different
+  fix and would not be found by counting stamps.
+
+  This makes the pin work load-bearing rather than merely hygienic: the requirement is a green stamp
+  on a **descendant of live HEAD**, and the capacity-gate reds were the reason no recent commit could
+  earn one. Do not "fix" this by forcing the orphaned stamp — refusing a rollback is the gate working.
 
 Kill switches: the change is additive env pins plus one lint rule; `CC_HERM_ALLOWLIST` already overrides
 the lint's list, and the new rule ships with its own off seam.
