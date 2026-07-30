@@ -55,8 +55,63 @@
 # same file). A fill DROP > 2 points means the window was compacted/replaced — the prior slope is
 # poisoned, so the series restarts at the new sample. Bounded: prune to HIST_MAX/2 lines when the
 # file exceeds CC_CE_HIST_MAX (default 120).
+#
+# ── THE DENOMINATOR, AND WHY IT IS *NOT* A 4th COLUMN HERE (2026-07-30, row 8 / §4.2) ───────────
+# used_pct is a PERCENTAGE OF A NUMBER NOTHING DURABLY RECORDS. Measured: the context window
+# appears only in the ephemeral statusline telemetry (74 files for 4,890 transcripts = 1.5%
+# coverage, wiped on reboot) and NEVER in the durable transcript — verified by an exhaustive jq
+# path-scan for window/max_tokens/limit keys with a positive control on message.usage.*. And it
+# cannot be imputed from the model id: live telemetry shows claude-opus-4-8 running at BOTH
+# 1,000,000 and 200,000. So every threshold in this subsystem (CC_CE_WALL=88, boundary T=73,
+# T_IDLE=35, T_BUSY=75) is a percentage of an unrecorded quantity, and "p95 recycle fill" was
+# unfalsifiable — not for want of a numerator, but because the DENOMINATOR WAS THROWN AWAY.
+#
+# The obvious fix — append the window as a 4th .hist column — WAS TRIED AND REJECTED ON MERIT
+# during this build, and the reason is worth keeping: `.hist` lives in the SAME EPHEMERAL
+# /tmp/cc-telemetry directory as the telemetry JSON it samples. A 4th column there would be exactly
+# as unrecoverable as the value it was meant to preserve, so it buys no durability at all — while
+# breaking two passing contract tests that pin the 3-field line. The 4-column version was written,
+# measured against the suite, and reverted.
+#
+# So the denominator is captured where the record is actually DURABLE, and only there:
+#   • ce_log_drop below → the IDL ($HOME/.claude/autonomy/idl.jsonl), on every fill-drop event
+#   • the recycle-outcome store ($HOME/.claude/autonomy/recycle-events.jsonl), on every recycle
+# Both are under $HOME and survive a reboot. `win` is still read here from the producer's LITERAL
+# `.window` (never a 200000/1000000 guess — imputing it is the error this row committed and withdrew
+# in Phase 1, where a hardcoded 1M turned an 85.3%-of-200K kill into a phantom "17.1% low-fill
+# kill") and is passed to ce_log_drop, where an absent value lands as JSON null, never a default.
+# ce_log_drop <tel_json> <from_pct> <to_pct> <tokens> <window> — record ONE fill-drop event to the
+# IDL before ce_sample truncates the history that is its only trace (see the call site).
+#
+# Self-describing by construction (invariant R5): the record carries the window alongside the
+# percentages, so a later reader cannot mis-scale it the way this row's own Phase 1 did. `window`
+# is null — never a default — when the producer did not emit one.
+#
+# `hook` is "context-econ" so this never collides with the waiting-recycle / boundary-handoff
+# namespaces already in the IDL, and `reason:"fill-drop"` is the parseable token consumers key on
+# (R8 — one token, one meaning; the incumbent's overloaded `fired` meant four things).
+# Fail-soft at every seam: no jq, no writable dir, or a kill switch ⇒ silent return 0.
+ce_log_drop() {
+  local tel="${1:-}" from="${2:-0}" to="${3:-0}" tok="${4:-0}" win="${5:-}" idl sid ts
+  [ "${CC_CE_DROP_LOG:-on}" = off ] && return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  idl="${CC_CE_IDL:-${CC_IDL:-$HOME/.claude/autonomy/idl.jsonl}}"
+  mkdir -p "$(dirname "$idl")" 2>/dev/null || return 0
+  sid="${tel##*/}"; sid="${sid%.json}"
+  ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '?')"
+  # a non-numeric/absent window must land as JSON null, not as the string "-" and not as 0
+  case "$win" in ''|-|*[!0-9]*) win=null ;; esac
+  jq -cn --arg ts "$ts" --arg sid "$sid" \
+        --argjson from "${from:-0}" --argjson to "${to:-0}" \
+        --argjson tok "${tok:-0}" --argjson win "$win" \
+    '{ts:$ts,hook:"context-econ",sid:$sid,disposition:"observed",reason:"fill-drop",
+      from_pct:$from,to_pct:$to,drop_pct:($from-$to),input_tokens:$tok,window:$win}' \
+    >> "$idl" 2>/dev/null || true
+  return 0
+}
+
 ce_sample() {
-  local tel="${1:-}" hist ts used tok last last_ts last_used max lines
+  local tel="${1:-}" hist ts used tok win last last_ts last_used max lines rec
   { [ -n "$tel" ] && [ -f "$tel" ]; } || return 0
   command -v jq >/dev/null 2>&1 || return 0
   hist="${tel%.json}.hist"
@@ -68,6 +123,13 @@ ce_sample() {
   case "$used" in ''|*[!0-9]*) return 0 ;; esac
   tok="$(jq -r '.input_tokens // 0' "$tel" 2>/dev/null || echo 0)"; tok="${tok%.*}"
   case "$tok" in ''|*[!0-9]*) tok=0 ;; esac
+  # THE DENOMINATOR (see the header). The producer's literal `.window`, never a guess: a missing or
+  # non-numeric value stays EMPTY so a consumer reads UNKNOWN. `-` is the on-disk placeholder,
+  # because a bare trailing space would make the 4th field indistinguishable from a legacy 3-field
+  # line, and awk's positional read would then silently yield "" for BOTH cases.
+  win="$(jq -r '.window // empty' "$tel" 2>/dev/null || echo '')"; win="${win%.*}"
+  case "$win" in ''|*[!0-9]*) win='' ;; esac
+  rec="$ts $used $tok"
   last="$(tail -1 "$hist" 2>/dev/null || true)"
   last_ts="${last%% *}"; case "$last_ts" in ''|*[!0-9]*) last_ts=0 ;; esac
   [ "$ts" -gt "$last_ts" ] || return 0
@@ -75,11 +137,20 @@ ce_sample() {
     last_used="$(printf '%s' "$last" | awk '{print $2}' 2>/dev/null)"
     case "$last_used" in ''|*[!0-9]*) last_used=0 ;; esac
     if [ "$used" -lt $(( last_used - 2 )) ]; then
-      printf '%s %s %s\n' "$ts" "$used" "$tok" > "$hist" 2>/dev/null || true
+      # ── THE FILL-DROP EVENT IS NOW RECORDED BEFORE THE EVIDENCE IS DESTROYED ──────────────────
+      # A drop > 2 points is the ONLY signal this system has that a context was compacted or
+      # replaced. The truncation below is CORRECT (the prior slope is poisoned and must not feed
+      # ce_burn) — but for its whole life this branch detected the event and then overwrote the only
+      # trace of it, leaving no counter, no log and no IDL line. The subsystem could therefore never
+      # answer "how often did a context reset out from under us", which is half its own mandate.
+      # Emit first, truncate second. Best-effort and fully guarded: a logging failure must never
+      # cost the sample (the lib's contract), and no path here changes ce_burn's answer.
+      ce_log_drop "$tel" "$last_used" "$used" "$tok" "$win" || true
+      printf '%s\n' "$rec" > "$hist" 2>/dev/null || true
       return 0
     fi
   fi
-  printf '%s %s %s\n' "$ts" "$used" "$tok" >> "$hist" 2>/dev/null || true
+  printf '%s\n' "$rec" >> "$hist" 2>/dev/null || true
   max="${CC_CE_HIST_MAX:-120}"
   lines="$(wc -l < "$hist" 2>/dev/null | tr -d ' ')"; case "$lines" in ''|*[!0-9]*) lines=0 ;; esac
   if [ "$lines" -gt "$max" ]; then
