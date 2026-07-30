@@ -342,7 +342,14 @@ mk4() { # the live shape, scaled down: N activations + N class-C decisions + N b
   [ -n "$st0" ] || false                        # 3-field latch is the new format
   # Move the stamp WITHOUT changing the block: the backlog file's mtime is in the stamp, and an
   # empty backlog renders no line either way.
-  touch "$CC_BACKLOG_FILE"
+  #
+  # `touch -t <explicit>`, never a bare `touch` — a REPRODUCIBLE 1-in-3 flake, diagnosed 2026-07-29
+  # rather than dismissed. `cheap_stamp` reads `stat -f %m`, which has ONE-SECOND granularity, so
+  # when the harness is fast enough that the first render and this touch land in the same second the
+  # stamp does NOT move, the cheap gate short-circuits, and the abstain reason is
+  # `stamp-unchanged-ttl` instead of `latched-ttl`. The test then fails for a timing reason while the
+  # behaviour under test is correct. A wall-clock-derived fixture value is not determinism.
+  touch -t 202601010000 "$CC_BACKLOG_FILE"
   out="$(CC_OPREADOUT_NOW=1000200 hookrun "$w")"
   [ -z "$out" ] || false
   grep -q '"reason":"latched-ttl:200s<900s"' "$CC_IDL" || false
