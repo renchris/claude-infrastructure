@@ -199,7 +199,11 @@ ACCOUNT_SWEEP_RELOGIN_TIMEOUT_S="${HANDOFF_RELOGIN_TIMEOUT_S:-90}"  # per-accoun
 CC_HEAL_LOCK_PREFIX="${CC_HEAL_LOCK_PREFIX:-/tmp/claude-accounts-heal-}"
 
 PROMPT_FILE="" ACCOUNT="auto" LAUNCHER="" MODEL="" EFFORT="" CWD="" WORKTREE=""
-REPO="$DEFAULT_REPO" WTROOT="$HOME/Development/.worktrees" BASE="origin/main"
+# REPO_EXPLICIT/REPO_SRC: only an explicit --repo pins the target repo. Otherwise it is RESOLVED
+# from the firing session's cwd after arg parsing (see § REPO resolution) — $DEFAULT_REPO is the
+# fallback for a fire from outside any git repo, never the default for a fire from inside one.
+REPO="$DEFAULT_REPO" REPO_EXPLICIT=0 REPO_SRC="default (cwd is not a git repo)"
+WTROOT="$HOME/Development/.worktrees" BASE="origin/main"
 SURFACE="split-right" SURFACE_EXPLICIT=0 SURFACE_REASON="" PROBE=0 DRY=0 IN_PLACE=0 EXTRA="" RECYCLE=0 SESSION_ID=""
 NOTIFY_BACK="" SELF_RETIRE=1 AS_ROLE="" FOLLOW=0
 SPAWNED_PANE="" ENGAGE_VERIFY=0 FIRE_MARKER=""
@@ -2232,7 +2236,7 @@ while [ $# -gt 0 ]; do case "$1" in
   --effort)      EFFORT="${2:?--effort needs a value}"; shift 2 ;;
   --cwd)         CWD="${2:?--cwd needs a value}"; shift 2 ;;
   --worktree)    WORKTREE="${2:?--worktree needs a value}"; shift 2 ;;
-  --repo)        REPO="${2:?--repo needs a value}"; shift 2 ;;
+  --repo)        REPO="${2:?--repo needs a value}"; REPO_EXPLICIT=1; REPO_SRC="explicit --repo"; shift 2 ;;
   --wtroot)      WTROOT="${2:?--wtroot needs a value}"; shift 2 ;;
   --base)        BASE="${2:?--base needs a value}"; shift 2 ;;
   --in-place)    IN_PLACE=1; shift ;;
@@ -2271,6 +2275,38 @@ if [ "$RECYCLE" = 0 ]; then capacity_gate || exit 9; fi
 if [ -n "$WORKTREE" ] && ! git check-ref-format --branch "$WORKTREE" >/dev/null 2>&1; then
   echo "!! invalid branch name for --worktree: $WORKTREE" >&2; exit 1
 fi
+
+# ---- REPO resolution: the FIRING session's repo, never a hardcoded default --------------------
+# Which repo a checkout BELONGS to is one question with one answer — its common git dir — and it is
+# the same question asked of $REPO, of a pool slot, and of an existing $WTROOT path. One helper so
+# the three can never disagree. "" for anything that is not a git worktree.
+hf_git_owner() { git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true; }
+
+# $REPO is the repo a fire TARGETS: the `git worktree add` for a cold --worktree, the .env.local it
+# copies in, the worktree pool it may claim a slot from, and the dir a self-routing fire lands in.
+# It was hardcoded to $DEFAULT_REPO (reso) unless --repo was passed, so EVERY --worktree fire from
+# any other repo silently targeted reso. Observed 2026-07-24: a claude-infrastructure /handoff put
+# its peer in .worktrees/wt-pool-2 — a RESO pool slot (common dir reso-management-app/.git) holding
+# none of this repo's files. The fire reported success; the peer was in the wrong codebase.
+#
+# The firing session's own repo is the right answer and is knowable: this script runs as a
+# subprocess of that session, so $PWD is its cwd (nothing above here cd's). Resolve the MAIN
+# checkout rather than --show-toplevel, because every use of $REPO is a main-checkout thing
+# (worktree add, .env.local, scripts/) and a fire from a linked worktree must reach the checkout
+# that owns it — the same --git-common-dir idiom, and the same physical normalization, the recycle
+# fallback below already uses. Outside a git repo (a launchd/headless fire, $HOME) there is nothing
+# to resolve and $DEFAULT_REPO stands: the old behaviour survives as the FALLBACK, not the default.
+if [ "$REPO_EXPLICIT" = 0 ]; then
+  _hf_gcd="$(hf_git_owner "$PWD")"
+  if [ -n "$_hf_gcd" ]; then
+    _hf_main="${_hf_gcd%/worktrees/*}"; _hf_main="${_hf_main%/.git}"
+    if [ -d "$_hf_main" ]; then
+      _hf_main="$(cd "$_hf_main" 2>/dev/null && pwd -P)"
+      if [ -n "$_hf_main" ]; then REPO="$_hf_main"; REPO_SRC="resolved from the firing session's cwd"; fi
+    fi
+  fi
+fi
+REPO_GITDIR="$(hf_git_owner "$REPO")"
 
 # ---- C1 (no-focus-steal): autonomous surface ----------------------------------------------
 # C1 (the ttys018 mis-inject, 2026-07-19) is about FOCUS, not PLACEMENT — and those are two
@@ -2748,18 +2784,65 @@ elif [ -n "$WORKTREE" ]; then
   WT_SETUP="cold"                    # cold | pool | existing — decides whether the pane installs
   POOL="$REPO/scripts/worktree-pool.sh"
   POOL_ELIGIBLE=0
-  [ -x "$POOL" ] && [ "$BASE" = "origin/main" ] && POOL_ELIGIBLE=1   # pool slots sit AT origin/main;
-                                                                     # a custom --base (frozen fork ref) needs the cold path
+  # pool slots sit AT origin/main — a custom --base (frozen fork ref) needs the cold path. And
+  # $REPO must be a real git repo, or nothing below can be checked against it.
+  if [ -x "$POOL" ] && [ "$BASE" = "origin/main" ] && [ -n "$REPO_GITDIR" ]; then POOL_ELIGIBLE=1; fi
+  # POOL OWNERSHIP GATE. An executable $REPO/scripts/worktree-pool.sh proves a pool EXISTS; it does
+  # NOT prove the slots it hands out belong to $REPO. $WTROOT is shared by every repo on this box
+  # (142 worktrees across 6 repos on 2026-07-29) and the slots carry generic wt-pool-N names, so
+  # ownership is a git-common-dir question, never a naming one. On 2026-07-24 all ten slots were
+  # reso's while the fire was claude-infrastructure's, and `claim` returned a reso path without
+  # complaint. Resolving $REPO (above) removes the CAUSE; this removes the CONSEQUENCE, so neither a
+  # future mis-resolution nor a second repo growing its own pool.sh can hand a peer a foreign
+  # checkout. Any slot that exists must be $REPO's, or the pool is refused and the cold path — which
+  # names $REPO explicitly — runs instead. No slots at all is vacuously fine.
+  if [ "$POOL_ELIGIBLE" = 1 ]; then
+    for _slot in "$WTROOT"/wt-pool-*; do
+      [ -d "$_slot" ] || continue
+      _slot_owner="$(hf_git_owner "$_slot")"
+      if [ -n "$_slot_owner" ] && [ "$_slot_owner" != "$REPO_GITDIR" ]; then
+        POOL_ELIGIBLE=0
+        echo "⚠ pool slot $_slot belongs to ${_slot_owner%/.git}, not $REPO — pool refused, using the cold path" >&2
+        break
+      fi
+    done
+  fi
   if [ -d "$WT" ]; then
+    # Reusing a pre-existing path in the SHARED $WTROOT is only safe if it is OUR repo's worktree.
+    # `chore`, `fix`, `docs` are names more than one repo picks (two of those exist there right
+    # now), and firing a peer into another repo's checkout is the same wrong-repo defect this block
+    # exists to stop — just reached by name collision instead of a bad default. Refuse loudly
+    # rather than fire into it. A path that is not a git worktree at all is left alone: there is no
+    # ownership claim to contradict, so the pre-existing behaviour stands.
+    _wt_owner="$(hf_git_owner "$WT")"
+    if [ -n "$_wt_owner" ] && [ -n "$REPO_GITDIR" ] && [ "$_wt_owner" != "$REPO_GITDIR" ]; then
+      echo "!! --worktree $WORKTREE resolves to $WT, a worktree of ${_wt_owner%/.git} — not $REPO." >&2
+      echo "   Refusing to fire into another repo's checkout. Use a different --worktree name, or pass --repo/--cwd explicitly." >&2
+      exit 1
+    fi
     WT_SETUP="existing"
   elif [ "$DRY" = 1 ]; then
     [ "$POOL_ELIGIBLE" = 1 ] && WT_SETUP="pool"
-  elif [ "$POOL_ELIGIBLE" = 1 ] && claimed="$("$POOL" claim "$WORKTREE" 2>/dev/null)" \
-       && [ -n "$claimed" ] && [ -d "$claimed" ]; then
-    WT="$claimed"; WT_SETUP="pool"   # fully provisioned — no in-pane install needed
-    # Returned to the pool by fire_cleanup if no pane is ever landed. The PATH (not the branch) is
-    # what identifies the slot; the branch is the thing to delete once its identity is restored.
-    FIRE_CLEAN_POOL="$WT"; FIRE_CLEAN_BRANCH="$WORKTREE"
+  elif [ "$POOL_ELIGIBLE" = 1 ]; then
+    # Claim with cwd PINNED to $REPO. worktree-pool.sh resolves its own MAIN from `git worktree
+    # list` in its cwd, so claiming from the firing session's dir points the pool's idea of the
+    # repo at one checkout while its slots belong to another — the incoherence behind the 07-24
+    # misfire, and the same incoherence its pool-empty `new-worktree.sh` fallback would inherit.
+    claimed="$(cd "$REPO" && "$POOL" claim "$WORKTREE" 2>/dev/null)" || claimed=""
+    if [ -n "$claimed" ] && [ -d "$claimed" ]; then
+      if [ "$(hf_git_owner "$claimed")" = "$REPO_GITDIR" ]; then
+        WT="$claimed"; WT_SETUP="pool"   # fully provisioned — no in-pane install needed
+        # Returned to the pool by fire_cleanup if no pane is ever landed. The PATH (not the branch)
+        # is what identifies the slot; the branch is the thing to delete once its identity is
+        # restored.
+        FIRE_CLEAN_POOL="$WT"; FIRE_CLEAN_BRANCH="$WORKTREE"
+      else
+        # Effect-read, not a precondition: both gates passed and claim STILL returned a foreign
+        # checkout. Never fire a peer into it — fall through to the cold path, and say so, because
+        # that slot now carries branch $WORKTREE and a human has to reconcile the pool.
+        echo "⚠ pool claim returned $claimed, which is not a $REPO worktree — refused; cold path instead (that slot now holds branch $WORKTREE and needs reconciling)" >&2
+      fi
+    fi
   fi
   if [ "$WT_SETUP" = "cold" ] && [ "$DRY" = 0 ]; then
     git -C "$REPO" fetch origin -q || echo "⚠ fetch failed — basing off last-fetched $BASE" >&2
@@ -3320,6 +3403,11 @@ if [ "$DRY" = 1 ]; then
     if [ "$ACCOUNT_SWEEP" = off ]; then echo "sweep:    account sweep OFF (HANDOFF_ACCOUNT_SWEEP=off)"
     else echo "sweep:    pre-fire claude-accounts --fresh + Phase-1 auto-heal for token-invalid; bridge-lines any stranded account into the brief (throttle ${ACCOUNT_SWEEP_THROTTLE_S}s; SKIPPED in dry-run)"; fi
   fi
+  # WHICH REPO this fire targets — the field whose silent default put a peer in the wrong codebase
+  # on 2026-07-24. Printed wherever $REPO is load-bearing (a --worktree fire, or a self-routing one);
+  # a --cwd fire never reads it. REPO_SRC names how it was decided, so "reso" from a reso session and
+  # "reso" from a stale default are distinguishable in the readout instead of looking identical.
+  if [ -n "$WORKTREE" ] || [ -z "$CWD" ]; then echo "repo:     $REPO  ($REPO_SRC)"; fi
   if [ -n "$WORKTREE" ]; then
     case "$WT_SETUP" in
       pool)     echo "worktree: POOL CLAIM at fire time (scripts/worktree-pool.sh claim $WORKTREE — path printed by claim; no in-pane install)" ;;
