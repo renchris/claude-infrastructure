@@ -1327,7 +1327,21 @@ def pct(p):
     return c(f"{p:>3.0f}%", usage_rgb(p), bold=p >= 80)
 
 
-def fmt_h(h):
+def fmt_h(h, narrow=False):
+    """Countdown → the coarsest form that still answers "when do I act?".
+
+    Past 24h a decimal-day figure ("2.3d", "54.4h") is arithmetic the reader has to
+    finish — nobody plans against 0.3 of a day (operator feedback 2026-07-30, on a
+    table showing `in 54.4h`). Days+hours is the form a human already thinks in, so
+    anything ≥24h renders `2d 6h`.
+
+    `narrow=True` is the FIXED-WIDTH contract for the mid-row 5h-reset cell, whose
+    overflow skews every column to its right: it collapses the day form to `2d` so the
+    rendering stays ≤4 chars for ANY input, including a corrupt or far-future stamp.
+    The weekly cell is the LAST on its line and prose is unconstrained, so both take
+    the full form. Whatever this emits, cc-relogin-poll's `hours_secs` must parse —
+    it reads this string back out of the --login-status TSV to derive a deadline.
+    """
     if h is None:
         return "?"
     if h < 0:
@@ -1338,14 +1352,16 @@ def fmt_h(h):
         return "now"
     if h < 1:
         return f"{int(h * 60)}m"
-    if h < 48:
+    if h < 24:
         return f"{h:.1f}h"
-    # Both reset cells are fixed-width (:>5 / :>6) and an overflow skews every column to
-    # the right of it, so the width guarantee must hold for ANY input — including a corrupt
-    # or far-future stamp — not merely for realistic ones.
     if h >= 2400:                                # ≥100d
         return "99d+"
-    return f"{h / 24:.1f}d"
+    d, rem = int(h // 24), int(h % 24)
+    # `4d` not `4d 0h` — a zero remainder is noise, and it keeps the narrow and wide
+    # forms identical in the one case where they can be.
+    if narrow or rem == 0:
+        return f"{d}d"
+    return f"{d}d {rem}h"
 
 
 def _fmt_asof(iso):
@@ -1414,6 +1430,16 @@ def render_table(rows, cfg, win, cached, prev=None):
     h5 += " " + c(f"{'↻5h':>5}", GRAY)                    # 5h-reset sub-column (matches the row width)
     print("  " + c(f"{'account':<8}   {'live':>4}  ", GRAY) + h5 + "  "
           + c(f"{'weekly all':<{cell}}  {'weekly Fable':<{cell}}  {'↻week':>6}", GRAY))
+    # Ranked ONCE, here rather than at the footer, so the table itself can mark the row the
+    # router picked. The answer to "which account do I use" was previously only in the footer,
+    # four lines below the numbers it is derived from, leaving the reader to scan back up and
+    # re-find that account by name (operator feedback 2026-07-30). Same lists feed the footer
+    # below — this is a hoist, not a second ranking pass.
+    # NOT `g`/`f`: the per-row loop below rebinds `f` as a field name ("for f, tag in ..."),
+    # which silently turned the fable list into a string when these were hoisted over it.
+    rank_g, gre = ranked(rows, cfg, win, "general")
+    rank_f, fre = ranked(rows, cfg, win, "fable")
+    pick_general = rank_g[0][1]["acct"] if rank_g else None
     alerts = []
     for r in rows:
         a = r.get("auth")
@@ -1429,7 +1455,15 @@ def render_table(rows, cfg, win, cached, prev=None):
             glyph, grgb = "↻", AMBER
         # the invoking session's own account, resolved in probe_account from config_dir
         label = r["acct"] + (" ←" if r.get("is_self") else "")
-        name = c(f"{label:<8}", bold=True) if a in ("ok", "healed") else f"{label:<8}"
+        # ➤ = the general-route pick, in the SAME glyph and colour the footer's route line
+        # uses, so the mark and its explanation are visibly one answer rather than two. Bold
+        # alone could not carry this: every healthy row is already bold, so it has no contrast
+        # left to spend. The fable pick stays footer-only — the 8-wide column holds
+        # "next3 ←➤" exactly, and a second marker would overflow and skew the row.
+        mark = "➤" if (pick_general and r["acct"] == pick_general) else ""
+        pad = " " * max(0, 8 - len(label) - len(mark))
+        name = (c(label, bold=True) if a in ("ok", "healed") else label) \
+            + c(mark, CLAY, bold=True) + pad
         k = c(f"{r.get('k', 0):>4}", GRAY, dim=(r.get("k", 0) == 0))
         if "error" in r and not r.get("poll_throttled"):
             # auth-broken (logged-out / token-invalid / keychain-error / expired-stale / no-data):
@@ -1450,7 +1484,9 @@ def render_table(rows, cfg, win, cached, prev=None):
             # the 5h reset sits WITH the 5h usage: a high 5h% + soon reset = capacity relief
             # incoming. Amber when <1h (a rollover is imminent), else a quiet gray.
             s5r_rgb = AMBER if (srh is not None and srh < 1) else GRAY
-            s5reset = c(f"{('↻' + fmt_h(srh)):>5}", s5r_rgb, dim=(srh is None or srh >= 1))
+            # narrow: this cell sits MID-ROW, so its width contract is the strict one.
+            s5reset = c(f"{('↻' + fmt_h(srh, narrow=True)):>5}", s5r_rgb,
+                        dim=(srh is None or srh >= 1))
             cells = "  ".join([
                 bar(r.get("session_pct"), cut=cfg["router"]["S_CUT"])
                 + c(cut_marker(r.get("session_pct"), cfg["router"]["S_CUT"]), RED, bold=True)
@@ -1496,13 +1532,20 @@ def render_table(rows, cfg, win, cached, prev=None):
         lxh = r.get("login_expires_h")
         if a != "login-required" and lxh is not None and lxh <= login_warn_h:
             gone = lxh <= 0
+            # The IDENTITY travels with the instruction, never a line away from it. A
+            # bare "next → /login" names an account NUMBER, and the operator authenticates
+            # a mailbox — so the row that says "log in" must also say WHICH mailbox and
+            # which browser profile, or a mis-paired credential lands silently and the
+            # account you meant is still expiring (operator directive 2026-07-30). Same
+            # email · Dia pairing the ACTIONABLE_AUTH bullet above already carries.
             alerts.append(c("⊘ " if gone else "⚠ ", RED if gone else AMBER)
                           + c(f"{r['acct']} login {'EXPIRED' if gone else 'expires'} "
                               f"{_fmt_when(r.get('login_expires_at'))}"
                               + ("" if gone else f" ({fmt_h(lxh)})"),
                               RED if gone else AMBER, bold=True)
                           + c(" — a refresh does NOT renew it", GRAY)
-                          + c(f" · {r['launcher']} → /login", GRAY, dim=True))
+                          + c(f" · {r['launcher']} → /login", GRAY, dim=True)
+                          + c(f" · {r['email']} · Dia “{r['dia_profile']}”", GRAY, dim=True))
         if r.get("stale_quota"):
             # The numbers on this row are historical AND the row is router-excluded (every
             # inheritance path leaves row["error"] set, which _excluded() bails on). Say both
@@ -1591,8 +1634,7 @@ def render_table(rows, cfg, win, cached, prev=None):
                 + c(f"Fable window open through {win['end']}", AMBER if urgent else GREEN) \
                 + (c(f" · {fmt_h(left_h)} left", GRAY) if left_h is not None else "")
     print("  " + wline)
-    g, gre = ranked(rows, cfg, win, "general")
-    f, fre = ranked(rows, cfg, win, "fable")
+    # rank_g/rank_f/gre/fre were computed before the table so the picked row carries ➤.
 
     def route_line(label, lst, reasons, why_fields):
         head = c("➤ ", CLAY) + f"{label:<7} → "
@@ -1616,16 +1658,16 @@ def render_table(rows, cfg, win, cached, prev=None):
             return f"resets in {fmt_h(frh)} — use it or lose it · Fable {r['fable_pct']:.0f}%"
         return f"Fable {r['fable_pct']:.0f}% ↻ {fmt_h(frh)} · weekly {r['weekly_pct']:.0f}%"
 
-    print("  " + route_line("general", g, gre, lambda r:
+    print("  " + route_line("general", rank_g, gre, lambda r:
           f"5h {r['session_pct']:.0f}% · weekly {r['weekly_pct']:.0f}% ↻ {fmt_h(r.get('weekly_reset_h'))}"))
-    print("  " + route_line("fable", f, fre, fable_why))
+    print("  " + route_line("fable", rank_f, fre, fable_why))
     # A winner whose LOGIN dies inside the warn window is still the correct routing answer —
     # it genuinely has the headroom, and quota is what the scorer is for. But a session fired
     # onto it now can outlive its own credentials. The alert above states the fact; this
     # states the CONSEQUENCE, at the point where the decision is actually taken. Kept off the
     # route lines themselves: those are inside the 82-col budget and already carry a clause.
     seen = set()
-    for lst in (g, f):
+    for lst in (rank_g, rank_f):
         w = lst[0][1] if lst else None
         lxh = w.get("login_expires_h") if w else None
         if w and lxh is not None and lxh <= login_warn_h and w["acct"] not in seen:
@@ -1636,7 +1678,9 @@ def render_table(rows, cfg, win, cached, prev=None):
                   + c(f"{w['acct']} is the pick, but its login "
                       + (f"EXPIRED {_fmt_when(w.get('login_expires_at'))}" if lxh <= 0 else
                          f"expires {_fmt_when(w.get('login_expires_at'))} ({fmt_h(lxh)})")
-                      + " — /login first, or a long session outlives its credentials", AMBER))
+                      + " — /login first, or a long session outlives its credentials", AMBER)
+                  # identity travels with the /login instruction — see the cliff bullet above
+                  + c(f" · {w['email']}", GRAY, dim=True))
     if cached:
         print("  " + c(f"cache ≤{cfg.get('cache_ttl_s', 90)}s old · --fresh for a live sweep",
                        GRAY, dim=True))
