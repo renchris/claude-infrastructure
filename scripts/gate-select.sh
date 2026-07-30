@@ -13,6 +13,8 @@
 #   --explain  one stderr line per decision (`tests/X.bats <- literal:scripts/foo.sh`).
 #   --direct   print only the DIRECT clauses (literal-path + naming-convention) — the land
 #              gate uses this to tell a real RED from a flake in a merely-adjacent suite.
+#              A DIRECT edge needs evidence in the suite's EXECUTABLE text; a path a suite only
+#              CITES in a comment selects it but never makes it un-exonerable (see `cited_only`).
 #
 # MULTI-RANGE: the changed-file sets of every range are UNIONED before the rules run, so a
 # CAS-stale re-gate can pass the sibling trunk delta as a second range and see the novelty
@@ -254,6 +256,49 @@ def main():
 
     refs = dict((p, refs_of(p)) for p in tracked)
 
+    # The suite's EXECUTABLE text — same line rule `ref_body` already applies to source files.
+    code_text = dict((s, "\n".join(ln for ln in text.get(s, "").splitlines()
+                                   if not ln.lstrip().startswith("#"))) for s in suites)
+
+    def stem_word(path):               # clause (e)'s token test, reused as DIRECT corroboration
+        stem = os.path.splitext(os.path.basename(path))[0]
+        if stem in STOPLIST or len(stem) <= 2:
+            return None
+        return re.compile(r'(?<![A-Za-z0-9_])%s(?![A-Za-z0-9_])' % re.escape(stem))
+
+    def cited_only(path, suite):
+        """The suite's ONLY trace of `path` is prose ⇒ a CITATION, not a dependency.
+
+        `ref_body` already draws exactly this line for source files ("a mentioned path is usually
+        prose, not a dependency"); .bats kept its comments because they ARE evidence — of coverage,
+        which is what the map lint asserts and what makes a suite worth RUNNING. That was never
+        evidence of a functional dependency, and conflating the two is what let a citation veto a
+        land: a DIRECT edge is the claim "a failure here is caused by your diff", so its evidence
+        has to live in the text that actually executes.
+
+        Measured over this corpus (2026-07-30): 90 of 542 clause-(a) edges were comment-only and
+        exactly ONE was a real dependency — tests/lead-supervisor.bats, which drives
+        scripts/supervisor-e2e.sh through `lead-supervisor.sh --selftest` and therefore never names
+        the path in code. The second disjunct is what keeps it: the comment says WHICH file, the
+        code shows the suite really exercises something by that name. The rule demotes 80 of 88 and
+        loses no functional edge; because it can only ever demote an edge whose ENTIRE evidence is
+        non-executable, and retains anything the suite's own code corroborates, it is conservative
+        by construction — the fail-closed direction is preserved.
+
+        The motivating case is self-inflicted and was GROWING: the $HOME-fixture remediation writes
+        a boilerplate comment naming scripts/test-hermeticity-lint.sh into every suite it fixes, so
+        each hermeticity fix MANUFACTURED another false DIRECT edge — 7 suites on 2026-07-26, 20
+        four days later, of which 2 have any functional dependency. The better this repo got at
+        hermeticity, the more unrelated suites could veto a land on an unrelated flake (the one
+        observed: cc-authbrowser's frozen machine-wide CDP ports 9341-9344). Same class as the
+        detector that matched its own skill description: text is never evidence.
+        """
+        body = code_text.get(suite, "")
+        if path in body:                       # the path itself is resolvable from executable text
+            return False
+        rx = stem_word(path)                   # …or the suite names a file it builds at runtime
+        return not (rx and rx.search(body))
+
     def reachable(root):               # BFS so the hop count is meaningful — see CLOSURE_DEPTH
         seen = set()
         frontier, hop = list(refs.get(root, ())), 1
@@ -364,16 +409,23 @@ def main():
             # back) hands the code end a path whose clauses were never run, which is precisely the
             # `unmapped` fail-closed case; judging it as prose would skip that rung.
             if gone and is_prose(gone) and (code == "D" or is_prose(path)):
-                hits = set()
+                hits, dhits = set(), set()
                 for suite in sorted(prose_refs(gone)):
                     note(suite, "prose-removed:%s" % gone)
                     hits.add(suite)
+                    if not cited_only(gone, suite):
+                        dhits.add(suite)
                 if code in ("R", "C"):         # the dst end is an ADD — same rung as A/M prose
                     for suite in sorted(prose_refs(path)):
                         note(suite, "prose-literal:%s" % path)
                         hits.add(suite)
+                        if not cited_only(path, suite):
+                            dhits.add(suite)
                 picked |= hits
-                direct_picked |= hits          # prose you are landing is never exonerated
+                # Prose you are landing is never exonerated — but only where a suite actually READS
+                # it. A doc cannot execute, so a suite that merely cites one in a comment cannot
+                # break when it moves; it still RUNS, it just may not veto the land on its own flake.
+                direct_picked |= dhits
                 continue
             if code == "D":
                 emit_full("deleted:%s" % path)
@@ -401,7 +453,9 @@ def main():
             if LIVENESS_SUITE in tset and path != LIVENESS_SUITE:                        # (g)
                 take(set([LIVENESS_SUITE]), "assert-liveness")
         elif is_prose(path):           # no suite builds a doc path dynamically — literal or inert
-            take(prose_refs(path), "prose-literal", direct=True)
+            pr = prose_refs(path)
+            take(set(s for s in pr if not cited_only(path, s)), "prose-literal", direct=True)
+            take(set(s for s in pr if cited_only(path, s)), "prose-cited")
         else:
             # An ADDED file gets NO special rung: it runs the same clauses as a modified one,
             # and the `unmapped` rung below still fails it closed if nothing maps it. The old
@@ -415,14 +469,16 @@ def main():
             if path not in tset:
                 emit_full("absent-at-head:%s" % path)
             stem = os.path.splitext(os.path.basename(path))[0]
-            take(set(s for s in suites if path in text.get(s, "")), "literal", direct=True)  # (a)
+            lit = set(s for s in suites if path in text.get(s, ""))                          # (a)
+            take(set(s for s in lit if not cited_only(path, s)), "literal", direct=True)
+            take(set(s for s in lit if cited_only(path, s)), "cited")                        # (a')
             take(naming(stem), "naming", direct=True)                                        # (b)
             take(set(s for s in suites if path in closure[s]), "closure")                    # (c)
             parent = os.path.dirname(path)                                                   # (d)
             if "/" in parent:
                 take(set(s for s in suites if (parent + "/") in text.get(s, "")), "pkgdir")
-            if stem not in STOPLIST and len(stem) > 2:                                       # (e)
-                word = re.compile(r'(?<![A-Za-z0-9_])%s(?![A-Za-z0-9_])' % re.escape(stem))
+            word = stem_word(path)                                                           # (e)
+            if word is not None:
                 take(set(s for s in suites if word.search(text.get(s, ""))), "stem")
             if INSTALL_SUITE in tset and INSTALL_RE.match(path) and in_base(path):            # (f)
                 take(set([INSTALL_SUITE]), "install-glob")
