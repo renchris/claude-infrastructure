@@ -328,19 +328,53 @@ reap_env() {
   HOST="$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo localhost)"
 }
 
+# FIXTURE_BARRIER_S — the wall-clock budget a readiness barrier below gets before it FAILS LOUD.
+# Sized to the SUT oracle's own default bound (CC_BACKLOG_ORACLE_TIMEOUT_S:-10) but deliberately a
+# SEPARATE seam: the hung-oracle test re-tunes that var to 2, and a fixture barrier that followed it
+# down would inherit a 2s bound from a test that never uses these fixtures. A barrier must be sized
+# by the band it runs in, not by an unrelated test's knob.
+FIXTURE_BARRIER_S="${CC_BACKLOG_FIXTURE_BARRIER_S:-10}"
+
+# FIXTURE_LIFETIME_S — how long the fake worker below stays alive. 30s, and RAISING IT IS A KNOWN
+# REGRESSION — measured here 2026-07-30, recorded so the next reader does not re-derive it.
+#
+# The tempting argument is that a barrier widened to 10s against an unchanged 30s worker could burn a
+# third of that worker's life before `reap` even probes it, leaving the oracle to report DEAD on a
+# corpse the fixture created. It does not hold: on the green path the barrier exits on the FIRST
+# observation (28ms measured foreground, 0.16s in the background band), so the real spawn→cleanup span
+# is sub-second and 30s is ~30x headroom. Only a starved box reaches the tail, and there the fix is a
+# louder barrier, not a longer worker.
+#
+# The remedy is strictly worse than the risk it addresses. `bash <wt>/tests/gate.sh` must keep the
+# worktree path in its ARGV, so the script cannot `exec sleep` — the sleep is therefore a CHILD, and
+# owned_wait_cleanup kills only the parent. The orphan inherits bats' TAP stdout and bats blocks
+# reading it until the sleep exits: at 30s that is invisible, at 300s it wedged a filtered run for the
+# full 5 minutes. The 30s lifetime is doing double duty as the leak's own bound.
+FIXTURE_LIFETIME_S="${CC_BACKLOG_FIXTURE_LIFETIME_S:-30}"
+
 # owned_wait_fixture <id> — a fake dispatch worktree holding a LIVE process whose argv NAMES it: the
 # shape the real producer emits (bats runs `bats-exec-test … <wt>/tests/x.bats`; ship-land re-execs
 # `<wt>/scripts/land-lock.sh`; a task-output wait loop polls a `<wt>`-derived path). Sets OWNED_PID.
 # (memory fixture-shape-parity-with-real-producer — a fixture is a contract claim about the producer.)
 owned_wait_fixture() {
-  local wt="$CC_BACKLOG_WT_ROOT/wt-$1" i
+  local wt="$CC_BACKLOG_WT_ROOT/wt-$1" deadline
   mkdir -p "$wt/tests"
-  printf '#!/bin/bash\nsleep 30\n' > "$wt/tests/gate.sh"; chmod +x "$wt/tests/gate.sh"
+  printf '#!/bin/bash\nsleep %s\n' "$FIXTURE_LIFETIME_S" > "$wt/tests/gate.sh"; chmod +x "$wt/tests/gate.sh"
   bash "$wt/tests/gate.sh" &                       # argv carries the worktree path ⇒ pgrep -f sees it
   OWNED_PID=$!
-  # Never return before pgrep can actually see it, or the assertion races the fork.
-  for i in 1 2 3 4 5 6 7 8 9 10; do pgrep -f "$wt" >/dev/null 2>&1 && return 0; sleep 0.2; done
-  return 0
+  # Never return before pgrep can actually see it, or the assertion races the fork — and FAIL LOUD if
+  # it never does. This is the TWIN of cwd_wait_fixture's barrier below and must share both of its
+  # properties. It shared neither: ede721a2 widened the sibling 2s→10s after the background band
+  # convicted this suite, and left this one at 10×0.2s returning 0 on exhaustion. A starved fork here
+  # therefore degraded SILENTLY into "the oracle said DEAD" — the same false RED the sibling's own
+  # comment says a fixture returning 0 on timeout can never distinguish from a real one.
+  deadline=$(( SECONDS + FIXTURE_BARRIER_S ))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    pgrep -f "$wt" >/dev/null 2>&1 && return 0
+    sleep 0.2
+  done
+  echo "fixture broken: pid $OWNED_PID never became visible to pgrep -f $wt" >&2
+  return 1
 }
 # cwd_wait_fixture <id> [subdir] — a fake dispatch worktree occupied by a LIVE process whose CWD is
 # the worktree (or <subdir> below it) and whose ARGV DOES NOT NAME IT. That is the shape the real
@@ -351,9 +385,9 @@ owned_wait_fixture() {
 # that named the path would be absolved by S1 and could never discriminate S1b
 # (memory fixture-shape-parity-with-real-producer). Sets OWNED_PID.
 cwd_wait_fixture() {
-  local wt="$CC_BACKLOG_WT_ROOT/wt-$1" sub="${2:-}" dir i
+  local wt="$CC_BACKLOG_WT_ROOT/wt-$1" sub="${2:-}" dir deadline
   dir="$wt${sub:+/$sub}"; mkdir -p "$dir"
-  ( cd "$dir" && exec sleep 30 ) &                 # argv is bare `sleep 30` — no worktree path in it
+  ( cd "$dir" && exec sleep "$FIXTURE_LIFETIME_S" ) &   # argv is a bare `sleep` — no worktree path in it
   OWNED_PID=$!
   # The fixture's own contract, asserted not assumed: argv must NOT name the worktree, or this test
   # would pass through S1 and certify nothing.
@@ -361,12 +395,19 @@ cwd_wait_fixture() {
   # Never return before the cwd is actually observable, or the assertion races the fork. FAIL LOUD if
   # it never becomes observable: a fixture that returns 0 on timeout makes every downstream failure
   # ambiguous ("did the probe break, or did the worker never start?") and can certify nothing.
-  # 50×0.2s = 10s, matching the SUT oracle's own bound (CC_BACKLOG_ORACLE_TIMEOUT_S:-10) — a fixture
+  # A wall-clock DEADLINE (FIXTURE_BARRIER_S), matching the SUT oracle's own bound — a fixture
   # barrier TIGHTER than the oracle it feeds converts CPU starvation into a false RED: measured
   # 2026-07-28, the v2 verifier (taskpolicy background band, load ~11.8) convicted this suite 2/3
   # while every un-starved probe ran green — fork/exec + lsof observability legitimately exceed 2s
-  # there. A green run still exits on the FIRST observation; only a starved box uses the tail.
-  for i in $(seq 1 50); do
+  # there. A DEADLINE, never an iteration count: the probe's own cost is INSIDE the budget, and in
+  # the band that cost IS the budget — measured 2026-07-30 at load 68, one lsof took 0.53–2.08s
+  # against 0.13s foreground, so the previous `50×0.2s = 10s` actually bought up to ~114s of wall.
+  # Advertising 10s while enforcing 114s is not a safe direction: postland bounds this FILE at
+  # POSTLAND_FILE_TIMEOUT_S=300, so a few slow fail-louds cut the run instead of naming the fault,
+  # and a fail-loud slower than its caller's patience is no gate at all.
+  # A green run still exits on the FIRST observation; only a starved box uses the tail.
+  deadline=$(( SECONDS + FIXTURE_BARRIER_S ))
+  while [ "$SECONDS" -lt "$deadline" ]; do
     /usr/sbin/lsof -a -d cwd -w -t -- "$dir" 2>/dev/null | grep -q "^$OWNED_PID$" && return 0
     sleep 0.2
   done
