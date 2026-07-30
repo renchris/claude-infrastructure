@@ -157,6 +157,45 @@ def keepout_distance(x: float, y: float) -> float:
 # the loop had something crossing the sky.
 EVENT_GAP = 4.0  # seconds of clear air required between any two rare events
 
+# WHAT IS *NOT* A RARE EVENT, and why the distinction is load-bearing.
+#
+# Only entries in RARE_EVENTS are collision partners. Two animations look like events but are
+# TEXTURE, and counting either would make the gate report overlaps that are not defects:
+#
+#   · the contact shadow (`shdw`) — it is the creature's own ground shadow, so it is present
+#     whenever the creature is; treating it as an event would collide it with everything.
+#   · the Zzz (`zz1`/`zz2`) — co-occurs with `rSleep` for its full duration BY DESIGN. Sleep and its
+#     Zzz are ONE beat expressed by two elements, not two beats that happen to overlap.
+#
+# The same holds for the constant-life animations (stride, bob, blink, look, ears): they are the
+# character being alive, not occurrences. A successor who adds any of these to RARE_EVENTS gets a
+# flood of false collisions and would plausibly "fix" it by loosening the gate — which is the
+# failure mode this exists to prevent.
+RARE_EVENT_NON_MEMBERS = (
+    "shdw",
+    "zz1",
+    "zz2",
+    "hop",
+    "blink",
+    "look",
+    "legA",
+    "legB",
+    "bob",
+)
+
+
+def assert_texture_not_eventised() -> None:
+    """Texture must never become a collision partner — see RARE_EVENT_NON_MEMBERS."""
+    leaked = [n for n in RARE_EVENT_NON_MEMBERS if n in RARE_EVENTS]
+    if leaked:
+        raise SystemExit(
+            f"gen: {leaked} promoted into RARE_EVENTS. These are texture, not occurrences — the "
+            f"shadow is present whenever the creature is, and the Zzz IS the sleep beat rather than "
+            f"a second one. Counting them makes the disjointness gate report collisions that are "
+            f"not defects."
+        )
+
+
 RARE_EVENTS = {
     #  name        (start_s, end_s)   what it is
     "birds": (34.0, 62.0),
@@ -315,7 +354,8 @@ def assert_event_names_known(art: Art) -> None:
     if unknown:
         raise SystemExit(
             f"gen[{art.key}]: declares event(s) {unknown} that are not in RARE_EVENTS "
-            f"{sorted(RARE_EVENTS)} — they would be silently skipped by every temporal check")
+            f"{sorted(RARE_EVENTS)} — they would be silently skipped by every temporal check"
+        )
 
 
 def assert_events_disjoint(art: Art) -> None:
@@ -1460,6 +1500,7 @@ def css(art: Art) -> str:
 # ── assembly ──────────────────────────────────────────────────────────────────────────────────────
 def build(art: Art) -> str:
     _SCROLLING.clear()
+    assert_texture_not_eventised()
     assert_event_names_known(art)
     assert_events_disjoint(art)
     assert_stride_locked(art)
