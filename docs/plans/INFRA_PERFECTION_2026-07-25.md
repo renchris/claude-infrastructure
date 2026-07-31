@@ -516,9 +516,69 @@ does not prove the corpus. Both defects above were invisible to the landing gate
 by running the union files' own suites. Also: two bats runs were CUT by my own `timeout` bound and a
 cut is a NON-VERDICT, never a pass (`0 not ok` at test 17 of 58 means nothing).
 
-### Residual — operator-owned, none blocking
+### Residual — operator-owned, none blocking  *(AS FILED 07-29/30 — disposition below)*
 
 - **Live deploy lag (2 links).** `./install.sh` from the main checkout, or the two exact `ln -sf`
   lines `deploy-parity-assert.sh` prints. Agent-side deploy is classifier-blocked (C10).
 - **3 trunk-debt reapers** to declare or bound in `reaper-horizon-lint`.
 - **`git-worktree-guard` 12 s/invocation** — needs a bounded liveness check that cannot fail open.
+
+### Residual — CLOSED 2026-07-31. All three re-measured BEFORE editing; two had rotted.
+
+Re-verified against the live tree first, never trusted as written (memory
+`parked-blocker-obsoleted-by-later-fix`, `scan-revision-predates-the-fix`). **Two of the three were
+stale, and the third's prescribed remedy was the wrong fix.** Original text preserved above.
+
+- **Live deploy lag — STALE, already resolved.** `deploy-parity-assert.sh` from the MAIN checkout now
+  exits **0**, all 6 rows OK/LINKED; `bin/cc-ctx-audit` and `hooks/lib/idl-log.sh` both have live
+  symlinks. Nothing left for the operator. (Consistent with the §CLOSED note above: no tracked
+  `hooks/lib/` file is live-missing any more.)
+
+- **3 trunk-debt reapers — STALE on all three names, and the 2 survivors were FALSE POSITIVES.**
+  `cc-await-ping`, `dispatch-assert.sh`, `desk-invariant.sh` are all `$DECLARED` and pass. The lint
+  was still **trunk-RED (rc=1)** — on two *different* files, `hooks/session-continue.sh` and
+  `hooks/lib/mailbox-pending.sh`, **neither of which is a reaper**: each matches `EVIDENCE_GREP` only
+  inside a **comment** (`:472`, `:526`, both prose mentioning `cc-registry`).
+  **§3 structurally could not see that.** §1/§2 strip comment hits with `is_comment()`; §3 used
+  `grep -rl`, which yields a bare filename with no line to test — so the helper was unreachable. That
+  is the exact defect this file documents *at* `is_comment()` ("a check must observe the thing it
+  guards, not prose about it"), surviving in the one section that could not call it.
+  **Fixed the detector, not the subjects.** The remedy §3 *prescribed* — declare both — would have
+  recorded two non-reapers as reviewed reapers, diluting the very list §1/§2 scan for horizons
+  (memory `work-item-remedy-can-become-forbidden`). §3 now uses `grep -rn` + `is_comment`, and the
+  delete-leg tests code rather than prose. **Positive- and negative-controlled:** a planted real
+  reaper (code refs to `CC_REGISTRY_DIR` + `-delete`/`rm -f`) still reds it (rc=1); the same file
+  with a prose-only reference does not (rc=0). `premortem-gate` **S-1 is now green.**
+
+- **`git-worktree-guard` — FIXED, and the parked premise named the wrong fix.** The residual asked
+  for "a bounded liveness check that cannot fail open", and 07-25 parked it under F3 because bounding
+  a *safety* guard can only make it fail OPEN. Both true — and both moot: the cost was never the
+  check, it was the **spawn count**. `pgrep -f claude` matches the FULL argv — measured **73-78 pids,
+  only ~13 actually claude** (the rest bash/zsh/tee/timeout wrappers and agent briefs that merely
+  contain the string; memory `pgrep-f-matches-agent-briefs`) — and the loop paid one `lsof` per pid.
+  Batched to a single `lsof -p <csv>`: **5.98 s → 0.092 s (65×)**, population and predicate
+  byte-identical, so there is no bound to give up and nothing can fail open.
+  `tests/git-worktree-guard.bats`: **263 s → 5 s.**
+  The `[ -n "$cpids" ]` guard is load-bearing — `lsof -p ""` lists **every process on the box**
+  (measured 1890 lines), which would silently widen the predicate to "anyone, anywhere".
+
+**The suite could not have caught a mistake here.** `git-worktree-guard.bats` had **no test that a
+live worktree is BLOCKED** — its 6 tests covered `branch -d` blocking and the remove leg *passing on
+idle*, and the file's own header conceded test 4 "discriminates nothing on its own". A guard whose
+only asserted behaviour is its pass path is pinned fail-open by its own suite (memory
+`present-but-inverted-guard` — the second instance in this repo). Added two tests pinning both
+directions and **red-proved** them: with the liveness leg emptied, the new BLOCK test fails while
+**all 7 others still pass** — which measures exactly how blind the suite was. 6 → 8 tests.
+
+**Found while verifying, then SUPERSEDED at land time: `tests/scratchpad-reaper.bats`.** Its "staged
+plist" test asserted on `launchd/com.claude.scratchpad-reaper.plist`, but `c16e4e2a` had deliberately
+moved that plist to `launchd/staged/` (`install.sh` globs `launchd/`, so a staged job left there
+would be bootstrapped — the move was right and only the test lagged). `plutil` exits non-zero on a
+*missing* file, so the stale path read as a plain assertion FAIL rather than as "wrong path", which
+is why it survived as red on pristine `origin/main`. Fixed and red-proved here — but the land-time
+rebase conflicted: **`5f550b70` had already landed the byte-identical path fix**, with a fuller
+write-up (it repairs `session-index-sweep.bats` too and RED-proves both). My commit was **dropped as
+SUPERSEDED** — the code was identical and only duplicate prose remained (adjudicated by reading
+main's code, per the supersede rule this plan used for its own six dropped commits; memory
+`remediation-manufactures-its-own-false-edges`). Kept in this record because the finding was reached
+independently and the red was real — but the fix is trunk's, not this item's.
