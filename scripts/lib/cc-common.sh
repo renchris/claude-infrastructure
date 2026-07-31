@@ -42,3 +42,40 @@ resolve_bin() { # <env-value> <basename> [<beside-name>]
   command -v "$name" >/dev/null 2>&1 && printf '%s' "$(command -v "$name")"
   return 0
 }
+
+# Resolve a Chromium for headless screenshotting, PREFERRING chrome-headless-shell.
+# Echoes the resolved path, or "" when nothing is found (callers guard on empty).
+#
+# WHY the preference is load-bearing, not cosmetic: the full Chromium.app bundle checks in with
+# LaunchServices on EVERY launch even under --headless, so the Dock paints a launching-app tile for
+# the ~1.3s each process lives. A screenshot LOOP therefore makes the operator's Dock flash an
+# app icon every 1-2s for the entire run — the reported symptom this helper exists to kill.
+# Measured 2026-07-30 (Chromium 141.0.7390.37, macOS 24.6), counting `launchservicesd ... CHECKIN
+# ... org.chromium.Chromium` from `log stream`, against a 0-launch idle baseline that read 0:
+#     full Chromium.app      x20 -> 22 app CHECKINs, 24s
+#     chrome-headless-shell  x20 ->  0 app CHECKINs,  5s
+# --headless=new is NOT the fix: on the same bundle it registered MORE (37 per 15 launches) and ran
+# 3.5x slower, with one launch hanging until killed.
+#
+# The swap is render-identical, so this is a pure win rather than a quality trade: 0 differing
+# pixels (ImageMagick AE) at 1800x2400 on assets/banner/clawd-reference.svg, motion-kit.svg and
+# proto-a-vector.svg. (A toy page of system-font TEXT did drift 281px/1.44M — antialiasing of
+# fonts, not of SVG art — so re-measure before reusing this for text-heavy captures.)
+#
+# Falls back to the full bundle when no headless shell is installed: a machine with only the
+# browser build keeps working, it just flashes the Dock as it did before.
+resolve_headless_chrome() { # [<env-override>]
+  local override="${1:-}" cand best=""
+  if [ -n "$override" ]; then [ -x "$override" ] && printf '%s' "$override"; return 0; fi
+  # glob rather than `ls`: highest-numbered install wins, and no filename is ever parsed.
+  for cand in "$HOME"/Library/Caches/ms-playwright/chromium_headless_shell-*/chrome-headless-shell-mac-*/chrome-headless-shell; do
+    [ -x "$cand" ] && best="$cand"
+  done
+  if [ -z "$best" ]; then
+    for cand in "$HOME"/Library/Caches/ms-playwright/chromium-*/chrome-mac/Chromium.app/Contents/MacOS/Chromium; do
+      [ -x "$cand" ] && best="$cand"
+    done
+  fi
+  [ -n "$best" ] && printf '%s' "$best"
+  return 0
+}

@@ -44,10 +44,18 @@ done
 [[ -n "$ASSET" && -f "$ASSET" ]] || { echo "banner-timeline-anchor: asset not found: ${ASSET:-<none>}" >&2; exit 2; }
 ASSET=$(cd "$(dirname "$ASSET")" && pwd)/$(basename "$ASSET")
 
-CHROME=""
-for _c in "$HOME"/Library/Caches/ms-playwright/chromium-*/chrome-mac/Chromium.app/Contents/MacOS/Chromium; do
-  [[ -x "$_c" ]] && CHROME="$_c"
-done
+# Prefers chrome-headless-shell — the full Chromium.app bundle paints a Dock tile on every
+# launch (see resolve_headless_chrome in lib/cc-common.sh for the measurements).
+_ccl="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/lib/cc-common.sh"
+[[ -f "$_ccl" ]] || _ccl="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/lib/cc-common.sh"
+[[ -f "$_ccl" ]] || _ccl="$HOME/.claude/scripts/lib/cc-common.sh"
+# shellcheck source=lib/cc-common.sh
+# shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+if ! . "$_ccl" 2>/dev/null; then
+  echo "banner-timeline-anchor: FATAL — cannot source $_ccl" >&2
+  exit 1
+fi
+CHROME="$(resolve_headless_chrome "${BANNER_CHROME:-}")"
 [[ -x "$CHROME" ]] || { echo "banner-timeline-anchor: no playwright Chromium found" >&2; exit 1; }
 
 WORK=$(mktemp -d); trap 'rm -rf "$WORK"' EXIT

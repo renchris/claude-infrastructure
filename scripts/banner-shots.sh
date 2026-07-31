@@ -29,11 +29,20 @@
 
 set -euo pipefail
 
-# glob rather than `ls`: highest-numbered install wins, and no parsing of filenames
-CHROME=""
-for _c in "$HOME"/Library/Caches/ms-playwright/chromium-*/chrome-mac/Chromium.app/Contents/MacOS/Chromium; do
-  [[ -x "$_c" ]] && CHROME="$_c"
-done
+# Prefers chrome-headless-shell over the full Chromium.app bundle: the bundle registers with
+# LaunchServices on EVERY launch, so this script's per-shot loop flashed a Dock tile every 1-2s
+# for the whole run. Render-identical on SVG art and ~5x faster — measurements and the rejected
+# --headless=new alternative are recorded on resolve_headless_chrome in lib/cc-common.sh.
+_ccl="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/lib/cc-common.sh"
+[[ -f "$_ccl" ]] || _ccl="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/lib/cc-common.sh"
+[[ -f "$_ccl" ]] || _ccl="$HOME/.claude/scripts/lib/cc-common.sh"
+# shellcheck source=lib/cc-common.sh
+# shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+if ! . "$_ccl" 2>/dev/null; then
+  echo "banner-shots: FATAL — cannot source $_ccl (resolve_headless_chrome unavailable)" >&2
+  exit 1
+fi
+CHROME="$(resolve_headless_chrome "${BANNER_CHROME:-}")"
 [[ -x "$CHROME" ]] || { echo "banner-shots: no playwright Chromium found" >&2; exit 1; }
 
 ASSET=""; TIMES="0"; BG="dark"; OUT="./shots"; WIDTH=900; SCALE=2; REDUCED=0; LINT=0; SCHEME=""

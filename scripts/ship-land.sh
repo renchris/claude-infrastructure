@@ -1195,6 +1195,44 @@ run_gate() {  # $1=range → 0 green / 1 red
     fi
   fi
 
+  # ── Chromium-bundle ratchet (operator-reported Dock strobe, 2026-07-30) ───────────────────────
+  # The full playwright Chromium.app bundle checks in with LaunchServices on EVERY launch even
+  # under --headless, so the Dock paints a launching-app tile for the ~1.3s each process lives. A
+  # per-shot screenshot loop therefore strobes the operator's Dock for the whole run — which is
+  # exactly what scripts/banner-shots.sh did. Measured against a 0-launch idle baseline of 0:
+  # full bundle x20 -> 22 app CHECKINs / 24s; chrome-headless-shell x20 -> 0 CHECKINs / 5s.
+  #
+  # It belongs at the gate rather than only in its own suite for the reason the ratchets above
+  # document: gate-select picks suites by the files a land touches, so a NEW screenshot script
+  # would never select tests/chromium-bundle-lint.bats (memory:
+  # enforcement-must-live-at-the-chokepoint). This class is invisible to every other check —
+  # nothing is slow, nothing is red, no test fails; it shows up only as an annoyance on the
+  # operator's own screen, which is how it survives.
+  #
+  # --selftest runs alongside the scan, same contract as the siblings: a ratchet whose own
+  # discrimination is unverified is not a gate.
+  CHROMIUM_LINT="${SHIP_LAND_CHROMIUM_LINT:-scripts/chromium-bundle-lint.sh}"
+  if [[ -x "$CHROMIUM_LINT" ]]; then
+    local cbown=""
+    if [[ "${SHIP_LAND_CHROMIUM_OWN_SCOPE:-on}" != "off" ]]; then
+      cbown="$(git diff --name-only "$range" -- 'bin/*' 'hooks/*' 'scripts/*' 'tools/*' 2>/dev/null || true)"
+    fi
+    echo "→ gate: chromium-bundle ratchet (a headless screenshot path launching the full app bundle)" >&2
+    if ! "$CHROMIUM_LINT" --selftest >/dev/null 2>&1; then
+      echo "✗ gate: chromium-bundle-lint --selftest FAILED — the detector no longer discriminates," >&2
+      echo "  so its clean verdict would mean nothing. Fix the lint before landing." >&2
+      GATE_RED=1
+      return 1
+    fi
+    if ! CC_CHROMIUM_OWN="$cbown" "$CHROMIUM_LINT" >&2; then
+      echo "✗ gate: chromium-bundle RED — a file THIS LAND CHANGES takes screenshots through the" >&2
+      echo "  full Chromium.app bundle, which strobes the operator's Dock once per launch. Use" >&2
+      echo "  resolve_headless_chrome from scripts/lib/cc-common.sh; the file is named above." >&2
+      GATE_RED=1
+      return 1
+    fi
+  fi
+
   # ── .bats shellcheck ratchet (backlog 19a44d4e2e75) ───────────────────────────────────────────
   # Fifth deterministic blocker class, same own-scope contract as the four above — with one
   # difference that is the whole point: the own-set is LINE-scoped, not file-scoped.
