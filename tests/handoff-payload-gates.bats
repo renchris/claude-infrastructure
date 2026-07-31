@@ -65,11 +65,40 @@ setup() {
   [[ "$output" == *"HARD-CAPS"* ]] || false
 }
 
-@test "F5: a /goal head UNDER the cap warns but is admitted — a short goal genuinely works" {
+@test "F5 (universalized, c89b9c7b1526): a /goal head UNDER the cap is REFUSED too" {
   printf '/goal fire→engaged p95 <=60s\n' > "$PF"
   run check_slash_head "$PF"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"STARTS with the slash command"* ]] || false
+}
+
+# The asymmetry this item removed: `check_slash_head` refused ONLY an over-cap /goal, and let every
+# other slash head warn-and-fire. The harness makes no such distinction — it parses the whole
+# submission as whatever command heads it — so a /research- or /ship-headed brief died the same way.
+@test "F5 (universalized): a NON-/goal slash head is REFUSED — the audit's [S2] shape" {
+  printf '/ship the branch\n\nthen report back\n' > "$PF"
+  run check_slash_head "$PF"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"STARTS with the slash command '/ship'"* ]] || false
+}
+
+# The two refusals must stay TELEMETRICALLY DISTINCT: one is a length problem with a length fix, the
+# other a parse problem with a structural fix. A single collapsed token would make handoffs.jsonl
+# unable to say which authoring mistake stalled a fire.
+@test "F5 + F13: the non-/goal refusal records its OWN reason, not payload-goal-cap" {
+  printf '/wrap it up\n' > "$PF"
+  run check_slash_head "$PF"
+  [ "$status" -eq 1 ]
+  [ -s "$LOG" ]
+  run jq -r '[.class,.refuse_reason]|@tsv' "$LOG"
+  [ "$output" = "$(printf 'refused\tpayload-slash-head')" ]
+}
+
+# The escape hatch is the ONLY way past a now-universal rule, so it is a contract, not a convenience.
+@test "F5 (universalized): FIRE_ALLOW_SLASH_HEAD=1 admits a non-/goal slash head" {
+  printf '/research the design space\n' > "$PF"
+  FIRE_ALLOW_SLASH_HEAD=1 run check_slash_head "$PF"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"starts with the slash command"* ]] || false
 }
 
 @test "F5 POSITIVE CONTROL: the shape the campaign actually uses (plain prose first) is silent" {

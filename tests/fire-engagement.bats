@@ -144,11 +144,40 @@ STUB
   printf '%s\n' "$output" | grep -q 'parses the ENTIRE submission'
 }
 
-@test "check_slash_head: a SHORT /goal head only warns (exit 0) — leading blank lines ignored" {
+# item c89b9c7b1526 — this test previously asserted `[ "$status" -eq 0 ]`: a short /goal head only
+# WARNED and fired. That was never a statement about the harness, only about what had been measured
+# — a slash head is parsed as a command whatever its length, so a short one submits `/goal <body>`
+# and the pane gets a goal, not a task. The leading-blank-line half of the property is unchanged and
+# is why it stays one test: blanks must not let a slash head slip past the scan.
+@test "check_slash_head: a SHORT /goal head is REFUSED too — leading blank lines ignored" {
   printf '\n\n/goal read the plan and satisfy the DoD\n' > "$BATS_TEST_TMPDIR/p3.txt"
   run check_slash_head "$BATS_TEST_TMPDIR/p3.txt"
+  [ "$status" -eq 1 ]
+  printf '%s\n' "$output" | grep -q "STARTS with the slash command '/goal'"
+}
+
+# The [S2] shape from the 2026-07-22 reliability audit, and the whole reason the refusal was
+# universalized: a brief that accidentally leads with a REAL command that is not /goal. Before this
+# item it warned and fired, and on --recycle it then reported CONFIRMED off pure process liveness.
+@test "check_slash_head: a NON-/goal slash head (/research) is REFUSED, not warned — audit [S2]" {
+  printf '/research the design space of X\n\nmore brief body here\n' > "$BATS_TEST_TMPDIR/p5.txt"
+  run check_slash_head "$BATS_TEST_TMPDIR/p5.txt"
+  [ "$status" -eq 1 ]
+  printf '%s\n' "$output" | grep -q "STARTS with the slash command '/research'"
+  # the override must be discoverable AT the refusal — see the guard's header comment
+  printf '%s\n' "$output" | grep -q 'FIRE_ALLOW_SLASH_HEAD=1'
+}
+
+# NEGATIVE CONTROL for the case above: the refusal must key on "the first line is a slash command",
+# never on "a slash appears at the head of a line". A path, a fraction, or an inline /command deeper
+# in the brief are all normal brief content and must stay silent — a guard that also refuses those
+# would refuse most real briefs, and the fleet-wide stop would read as this item's fault.
+@test "check_slash_head: a LATER slash-command line does not trigger the head refusal" {
+  printf 'TASK — do the thing.\n\nSTEP 2: run /research on the open axes.\n/ship when green.\n' \
+    > "$BATS_TEST_TMPDIR/p6.txt"
+  run check_slash_head "$BATS_TEST_TMPDIR/p6.txt"
   [ "$status" -eq 0 ]
-  printf '%s\n' "$output" | grep -q "starts with the slash command '/goal'"
+  [ -z "$output" ]
 }
 
 @test "check_slash_head: FIRE_ALLOW_SLASH_HEAD=1 bypasses the refusal" {
