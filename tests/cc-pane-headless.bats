@@ -57,7 +57,7 @@ live_pid() { sed -n 's/^pid=//p' "$CC_PANE_HOME/$1/meta" | head -1; }
   [ "$status" -eq 0 ]
   # The poison stubs exit 66 and shout on stderr; neither may appear.
   [ "$status" -ne 66 ]
-  printf '%s' "$output" | grep -q 'TOUCHED A TERMINAL' && false
+  ! printf '%s' "$output" | grep -q 'TOUCHED A TERMINAL' || false
   printf '%s' "$output" | grep -qE '^hdl-[0-9a-f]{16}$' || false
 }
 
@@ -76,7 +76,7 @@ live_pid() { sed -n 's/^pid=//p' "$CC_PANE_HOME/$1/meta" | head -1; }
   # id for a process that had already exited. Callers would then address a corpse forever.
   run "$CP" spawn -- /usr/bin/false
   [ "$status" -eq 1 ]
-  printf '%s' "$output" | grep -q '^hdl-' && false
+  ! printf '%s' "$output" | grep -q '^hdl-' || false
   printf '%s' "$output" | grep -q 'exited immediately' || false
 }
 

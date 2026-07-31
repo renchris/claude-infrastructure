@@ -300,13 +300,11 @@ an embedded newline that must not leak into the operator line"
   # NO id (2026-07-31). This asserted `cc-await-ping $UUID` while session-continue.sh asserted its own
   # separately-derived key — two suites each green on a DIFFERENT id for one mechanism, which is how
   # the disagreement survived. An arm command with no id cannot disagree with anything.
-  # `if`, NOT `… && false`: that form is LIVE (measured — it fails on a match and passes on a
-  # miss), but the liveness analyzer reads it as [and-absorbed] and its fixer would append
-  # `|| false`, giving `A && false || false` — which fails on the MISS branch too, i.e. always.
-  # That is the same destructive shape bats-assert-liveness.bats:269 already forbids.
-  if printf '%s' "$ctx" | grep -qE 'cc-await-ping +[0-9A-Fa-f-]{8}'; then
-    echo "the arm command carried an id, which is exactly what must not happen: $ctx"; false
-  fi
+  # `! A || false` is the repo's canonical form for "fail if A matches" — what the liveness
+  # fixer emits for `A && false`, pinned in both directions by bats-assert-liveness.bats:261-283.
+  # It is also correct in FINAL position, where the bare `A && false` returns A's own non-zero
+  # status on a MISS and fails the case that should pass.
+  ! printf '%s' "$ctx" | grep -qE 'cc-await-ping +[0-9A-Fa-f-]{8}' || false
   true
 }
 
