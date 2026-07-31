@@ -8,6 +8,12 @@
 #                       blanket rung ran ZERO suites on a docs land; both ends must be prose
 #   * new file        → the SAME clauses as a modified one; FULL only via the `unmapped` rung
 #                       (a blanket `added ⇒ FULL` widened nearly every land to 1,749 tests)
+#   * unmapped .md    → INERT, not FULL: a document cannot execute, so once the clauses have
+#                       asked every suite whether it names the path/dir/stem, "nothing mapped it"
+#                       is a proof. `is_prose` is a path-PREFIX allowlist and could not carry
+#                       this (30 of 278 tracked .md fell through it). And because emit_full
+#                       ABORTS THE WHOLE SELECTION, one such doc took a real 82-suite land to
+#                       zero smoke — so the code half of a mixed land must survive the doc half.
 #   * suite-comment refs → SELECTED, never DIRECT unless the suite's CODE corroborates them.
 #                       A DIRECT edge claims "a failure here is caused by your diff", so its
 #                       evidence must live in executable text; a citation is not a dependency.
@@ -260,6 +266,56 @@ lacks() { ! printf '%s\n' "$output" | grep -qxF -- "$1"; }
   gs
   [ "$status" -eq 0 ]
   [ -z "$output" ]
+}
+
+@test "unmapped MARKDOWN outside docs/ ⇒ inert, not FULL (the unmapped rung is extension-aware)" {
+  # `is_prose` is a path-PREFIX allowlist, so prose living outside docs/ fell through to the code
+  # clauses and hit `unmapped`. Measured on the real repo 2026-07-31: 30 of 278 tracked .md did.
+  mkdir -p vendor/pkg/references
+  printf '# vendored notice\nprose\n' > vendor/pkg/references/zz-notice.md
+  git add -A
+  git commit -q -m seed-vendored
+  bump vendor/pkg/references/zz-notice.md
+  gs
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  gse
+  has "(inert) <- document-unmapped:vendor/pkg/references/zz-notice.md"
+}
+
+@test "an unmapped doc does NOT poison a land that also touches mapped code" {
+  # The rung that matters: emit_full ABORTS THE WHOLE SELECTION, so this was never confined to
+  # docs-only lands. Measured on the real repo: a land touching commands/ship.md selects 82 suites
+  # including tests/ship-land.bats — adding one vendored NOTICE.md collapsed it to FULL, which the
+  # v2 lane reads as "no direct-suite smoke". The code half must survive the doc half.
+  mkdir -p vendor/pkg
+  printf '# vendored notice\nprose\n' > vendor/pkg/zz-notice.md
+  git add -A
+  git commit -q -m seed-vendored
+  printf 'echo touched\n' >> scripts/foo.sh
+  printf 'echo touched\n' >> vendor/pkg/zz-notice.md
+  git add -A
+  git commit -q -m mixed-land
+  gs
+  [ "$status" -eq 0 ]
+  [ "$output" != FULL ]
+  has tests/foo.bats
+}
+
+@test "a doc outside docs/ still runs the CODE clause ladder (not rerouted to the prose branch)" {
+  # The over-broad fix this rung must not become: routing every .md through `is_prose` would give
+  # commands/*.md and skills/**/*.md the literal clause ONLY, silently dropping naming, closure,
+  # stem and the install-glob edge they are decided by today. The suite here names no path, so
+  # ONLY the naming clause (b) can select it — a prose-branch file would select nothing.
+  mkdir -p commands
+  printf '# widget command\n' > commands/zz-widget.md
+  suite tests/zz-widget.bats 'run bash scripts/foo.sh'
+  git add -A
+  git commit -q -m seed-pair
+  bump commands/zz-widget.md
+  gs
+  [ "$status" -eq 0 ]
+  has tests/zz-widget.bats
 }
 
 @test "doc literally named by a suite ⇒ that suite" {

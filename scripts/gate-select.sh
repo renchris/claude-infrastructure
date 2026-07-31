@@ -148,6 +148,17 @@ def read_text(path):
         return ""
     return blob.decode("utf-8", "replace")
 
+def is_document(path):
+    """Non-executable by construction — nothing can depend on it AT RUNTIME.
+
+    The single premise two different rungs below both rest on, named once so they cannot drift
+    apart. `is_index` turns it into "never a closure RELAY"; the `unmapped` rung turns it into
+    "no clause fired ⇒ INERT, not undecidable". Keyed on the extension, never on a path prefix:
+    a prefix list only ever describes the trees that existed when it was written.
+    """
+    return path.endswith(".md")
+
+
 def is_index(path):
     """A node whose out-edges mean COVERS, not USES ⇒ reachable, but never a RELAY.
 
@@ -156,7 +167,7 @@ def is_index(path):
     than on `is_prose` (which is a SELECTION rule about docs/ and answers a different question) —
     commands/*.md and skills/**/*.md index just as hard and live outside docs/.
     """
-    return path.endswith(".md")
+    return is_document(path)
 
 
 def is_prose(path):
@@ -393,9 +404,11 @@ def main():
         #
         # WHY THIS IS NOT A WEAKENING, AND WHY IT NOW BUYS PROOF RATHER THAN SPENDING IT: FULL is
         # this selector's "I cannot decide", and in the v2 land lane its consumer INVERTED. It used
-        # to mean "run the ~1630-test corpus"; ship-land.sh:797 now reads it as "this selection is
-        # untrustworthy ⇒ NO direct-suite smoke", and the stale-gate re-round (ship-land.sh:1199)
-        # reads it as "exonerate nothing". So a docs-only land that renamed or archived one research
+        # to mean "run the ~1630-test corpus"; ship-land.sh now reads it as "this selection is
+        # untrustworthy ⇒ NO direct-suite smoke" ("no direct-suite smoke this land"), and the
+        # stale-gate re-round (`direct = FULL` ⇒ `direct=""`) reads it as "exonerate nothing" —
+        # both cited by line number until 2026-07-31, by which point both had drifted ~25 lines.
+        # So a docs-only land that renamed or archived one research
         # doc ran ZERO suites and could exonerate nothing — a fail-closed rung that fails OPEN at
         # its consumer (the class of docs/research/land-pipeline-v2-research-2026-07-28). Deciding
         # the removal narrowly runs the suites that can actually break; FULL runs none of them.
@@ -483,7 +496,33 @@ def main():
             if INSTALL_SUITE in tset and INSTALL_RE.match(path) and in_base(path):            # (f)
                 take(set([INSTALL_SUITE]), "install-glob")
             if not hits:
-                emit_full("unmapped:%s" % path)
+                # A DOCUMENT reaching here is INERT, not undecidable — the one rung where "nothing
+                # mapped it" is a PROOF. Clauses (a)/(a') just asked every suite in the corpus
+                # whether it names this path, (d) whether it names its directory, (e) whether it
+                # names its stem; a file that cannot execute has no other way to reach a suite.
+                # (Verified over this corpus 2026-07-31: no suite mentions vendor/ or
+                # evolve-fixtures/ at all; the one naming agents/ builds a fixture tree; the two
+                # that walk a tree wholesale walk $CC_PARITY_REPO and $CC_PAGES_DIR, not the repo;
+                # and nothing drives the repo-wide markdown walkers.)
+                #
+                # `is_prose` cannot carry this — it is a path-PREFIX allowlist (README/CLAUDE,
+                # docs/), which only ever describes the trees that existed when it was written, so
+                # prose living anywhere else falls through to the code clauses and lands here.
+                # Measured: 30 of 278 tracked .md did (vendor/codex-security 23,
+                # evolve-fixtures/pyramid-principle/cases 4, agents/ 3 — the last only because
+                # clause (d) skips a TOP-LEVEL parent, `"/" in "agents"` being false).
+                #
+                # This was never confined to docs-only lands, because emit_full ABORTS THE WHOLE
+                # SELECTION: a land touching commands/ship.md selects 82 suites including
+                # tests/ship-land.bats — add one vendored NOTICE.md and it collapses to FULL,
+                # which ship-land.sh reads as "no direct-suite smoke this land" and, in the
+                # stale-gate re-round, as `direct=""` ⇒ exonerate nothing. A fail-closed rung
+                # failing OPEN at its consumer — the same inversion the prose-removal rung above
+                # was written for. Deciding it restores the smoke.
+                if is_document(path):
+                    note("(inert)", "document-unmapped:%s" % path)
+                else:
+                    emit_full("unmapped:%s" % path)
 
         picked |= hits
         direct_picked |= dhits
