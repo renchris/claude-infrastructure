@@ -190,21 +190,35 @@ resolve_real_bats() {
     fi
   fi
   # 2 — walk PATH, skipping ourselves by PHYSICAL path (a symlinked shim dir must not fool us).
-  local oldifs="$IFS" d cand cand_phys
+  #
+  # `$PATH` must be split on `:` but must NOT be pathname-expanded. Unquoted, a PATH entry holding a
+  # glob metacharacter is replaced by whatever it happens to MATCH, so the resolver would walk
+  # directories PATH never named — and this is the identity walk whose last inversion produced the
+  # closed 2-cycle fork-storm (§9.6: 134 legs split 67/67, rc=137, zero output). It stays boring.
+  #
+  # The split is done ONCE into the positional parameters with globbing off, and both IFS and the
+  # glob option are restored BEFORE the loop body runs. That is what makes the early `return` below
+  # safe: there is no state left to unwind on any exit path, which the previous shape got wrong (it
+  # restored IFS at the early return but would have leaked `set -f` had one been added). The function
+  # takes no arguments (sole call site `REAL_BATS=$(resolve_real_bats)`), so `set --` clobbers nothing.
+  local oldifs="$IFS" d cand cand_phys oldglob
+  case "$-" in *f*) oldglob=on ;; *) oldglob=off ;; esac
+  set -f
   IFS=:
-  for d in $PATH; do
-    IFS="$oldifs"
+  # shellcheck disable=SC2086  # deliberate word-split on IFS=':'; pathname expansion is off above
+  set -- $PATH
+  IFS="$oldifs"
+  [ "$oldglob" = on ] || set +f
+  for d in "$@"; do
     [ -n "$d" ] || continue
     cand="$d/bats"
     if [ -x "$cand" ] && [ ! -d "$cand" ]; then
       cand_phys="$(phys_of "$cand")" || cand_phys=""
       # empty cand_phys = could not resolve ⇒ SKIP it. Treating unresolvable as
       # "different from me" is exactly how the guard inverted into an exec loop.
-      if [ -n "$cand_phys" ] && [ "$cand_phys" != "$self_phys" ]; then printf '%s' "$cand"; IFS="$oldifs"; return 0; fi
+      if [ -n "$cand_phys" ] && [ "$cand_phys" != "$self_phys" ]; then printf '%s' "$cand"; return 0; fi
     fi
-    IFS=:
   done
-  IFS="$oldifs"
   # 3 — known install locations, last resort. Order: Homebrew arm64, Homebrew x86, MacPorts.
   for cand in /opt/homebrew/bin/bats /usr/local/bin/bats /opt/local/bin/bats; do
     if [ -x "$cand" ]; then
