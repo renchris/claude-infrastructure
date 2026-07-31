@@ -343,9 +343,12 @@ reap_env() {
 
 # FIXTURE_BARRIER_S — the wall-clock budget a readiness barrier below gets before it FAILS LOUD.
 # Sized to the SUT oracle's own default bound (CC_BACKLOG_ORACLE_TIMEOUT_S:-10) but deliberately a
-# SEPARATE seam: the hung-oracle test re-tunes that var to 2, and a fixture barrier that followed it
-# down would inherit a 2s bound from a test that never uses these fixtures. A barrier must be sized
-# by the band it runs in, not by an unrelated test's knob.
+# SEPARATE seam, and it has to be tracked in BOTH directions now: the hung-oracle test re-tunes that
+# var DOWN to 2, and `cwd_wait_fixture` re-tunes it UP to 30. A barrier that followed it down would
+# inherit a 2s bound from a test that never uses these fixtures; one that followed it up would spend
+# 30s per fail-loud against postland's 300s per-FILE bound, i.e. cut the run instead of naming the
+# fault. Each bound must fit the probe IT bounds, never a neighbour's (memory:
+# exoneration-bound-must-fit-what-it-bounds) — see the barrier body for why the two probes differ.
 FIXTURE_BARRIER_S="${CC_BACKLOG_FIXTURE_BARRIER_S:-10}"
 
 # FIXTURE_LIFETIME_S — how long the fake worker below stays alive. 30s, and RAISING IT IS A KNOWN
@@ -419,8 +422,8 @@ cwd_wait_fixture() {
   # Never return before the cwd is actually observable, or the assertion races the fork. FAIL LOUD if
   # it never becomes observable: a fixture that returns 0 on timeout makes every downstream failure
   # ambiguous ("did the probe break, or did the worker never start?") and can certify nothing.
-  # A wall-clock DEADLINE (FIXTURE_BARRIER_S), matching the SUT oracle's own bound — a fixture
-  # barrier TIGHTER than the oracle it feeds converts CPU starvation into a false RED: measured
+  # A wall-clock DEADLINE (FIXTURE_BARRIER_S), sized to THIS probe rather than to the SUT's — a
+  # fixture barrier TIGHTER than the probe it runs converts CPU starvation into a false RED: measured
   # 2026-07-28, the v2 verifier (taskpolicy background band, load ~11.8) convicted this suite 2/3
   # while every un-starved probe ran green — fork/exec + lsof observability legitimately exceed 2s
   # there. A DEADLINE, never an iteration count: the probe's own cost is INSIDE the budget, and in
@@ -429,6 +432,11 @@ cwd_wait_fixture() {
   # Advertising 10s while enforcing 114s is not a safe direction: postland bounds this FILE at
   # POSTLAND_FILE_TIMEOUT_S=300, so a few slow fail-louds cut the run instead of naming the fault,
   # and a fail-loud slower than its caller's patience is no gate at all.
+  # The two bounds are deliberately UNEQUAL — this barrier 10s, the SUT cap 30s set just above —
+  # because they bound DIFFERENT probes: this one runs a TARGETED `lsof -t -- dir`, the SUT a
+  # full-system `-d cwd` scan that is far more expensive. Equalizing them would either starve the
+  # SUT (its UNRESOLVED reads as KEEP, flipping this file's negative controls) or make every
+  # fail-loud here cost 30s. Neither number is the other's ceiling.
   # A green run still exits on the FIRST observation; only a starved box uses the tail.
   deadline=$(( SECONDS + FIXTURE_BARRIER_S ))
   while [ "$SECONDS" -lt "$deadline" ]; do
