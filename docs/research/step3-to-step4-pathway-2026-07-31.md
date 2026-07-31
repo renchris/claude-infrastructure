@@ -137,6 +137,43 @@ note at the end of this section.
 **Exit trigger:** a deliberately blocked session is surfaced, with its identity, in < 60 s, twice
 running, at ≥ 20 live sessions.
 
+**Adversarial review round (2026-07-31, three independent read-only verifiers).** Stage A's code
+was reviewed after landing, and the review found **19 further defects across the three tools** —
+including one regression the implementation had introduced. Recorded here because the pattern, not
+just the list, is the reusable part:
+
+- **A side-car took down its host.** The archive's `ARCHDIR="$HOME/…"` default sits *above* the
+  mode dispatch under `set -u`, so an unset `HOME` aborted the **entire beacon** at rc=1 — `write`
+  never ran and the supervisor went blind to a real pending prompt. A convenience feature must
+  never sit on the critical path of the thing it decorates.
+- **A claim measured in the wrong unit is not a bound.** The row cap counted *characters* while the
+  atomicity argument is in *bytes*: 3,000 CJK characters measured 3,215 against a 3,500 cap while
+  occupying 9,215 bytes. The truncation fallback inherited the same bug and was never re-measured.
+- **"Small appends don't interleave" is false.** Measured: 120-way concurrency at ~1.2 KB rows tore
+  **10 of 720 lines**, merging two sessions into one unparseable row — *under* both the cap and the
+  4 KiB page, and offset-dependent, so no size cap can be trusted to avoid it. Appends are now
+  serialized through an `mkdir` mutex (macOS ships no `flock(1)`).
+- **Matching names is not proof of identity.** "Cleared by `PostToolUse` ⇒ approved" was wrong, and
+  the first fix — requiring the *tool name* to match — was wrong in the same direction, because this
+  fleet's traffic is overwhelmingly Bash: a denied `git push --force` cleared by a later
+  `git status` matches on name. Only the invocation id (`tool_use_id`) can settle it; everything
+  else is reported `unknown`. **An honestly empty split beats a confidently wrong one.**
+- **Two defects silently dropped the alert entirely** — a future-mtime lock (self-perpetuating,
+  since the healing `touch` is never reached) and an unwritable debug log killing its own alert
+  under `set -e`. Both are *worse* than the anonymous alert this work replaced, and neither had a
+  test until the review.
+
+The reviewers also *confirmed* three things worth not re-litigating: `hook_event_name` really is
+delivered (25,603 `PostToolUse` / 2,243 `Stop` observed in a sibling hook's log), the supervisor's
+`*.json` glob cannot match the archive's `.jsonl`, and the `clear` hot path is genuinely ~22%
+cheaper than the code it replaced (12.1 ms vs 15.1 ms per call over 300 invocations).
+
+**Open, deliberately not fixed here:** `scripts/lead-supervisor.sh` reaps stranded beacons with a
+bare `rm -f` (two sites: owning-pid-dead, and age ≥ 24 h) **without archiving them** — destroying
+exactly the long-wait class (133 min, 17.7 h) the archive exists to measure. The hook's own header
+cites that reaper as the anti-strand mechanism; the two were designed together and only one was
+updated. Fixing it needs a supervisor change plus its own tests, so it is named rather than rushed.
+
 **Status of that trigger: UNVERIFIED.** The code paths are unit-green (21 + 27 + 16 tests) and
 proven end to end against the real hooks, but the trigger is a *fleet-scale behavioural* claim and
 has not been run at ≥ 20 live sessions. Do not record Stage A as exited until it has. The cheapest
