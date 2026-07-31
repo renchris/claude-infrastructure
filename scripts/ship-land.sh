@@ -1147,6 +1147,60 @@ run_gate() {  # $1=range → 0 green / 1 red
     fi
   fi
 
+  # ── bats dead-assertion ratchet (2026-07-31) ──────────────────────────────────────────────────
+  # Fourth deterministic blocker class, same own-scope contract as the ratchets above. An assertion
+  # errexit cannot reach is a silent no-op — the check runs, its false result is discarded, and the
+  # test passes — because bats exempts `[[ ]]`, `(( ))` and `! cmd` from errexit in any position but
+  # the body's last.
+  #
+  # It belongs HERE, and the corpus proved why four times in five hours. The ratchet already exists,
+  # but only as tests/bats-assert-liveness.bats, which is REPO-WIDE: one non-final `[[ ]]` from any
+  # session reds the entire corpus, and a red corpus means no GREEN stamp, which means deploy-live
+  # has no cursor and the LIVE LAYER STALLS FOR EVERYONE until someone notices and sweeps. Detection
+  # is post-land and ~3.2h away while the damage is immediate and global — and with trunk at ~15
+  # commits/h, ~23-48 commits land inside a single verify window, so the sweep races the next
+  # violation. On 2026-07-31 the ratchet went red four separate times (23 assertions, then 2, 6, 2),
+  # each from a commit that landed while an earlier sweep was still in flight. That is a treadmill,
+  # and moving the check to the chokepoint is what ends it: unlandable beats detected-later.
+  #
+  # Names file and line, deterministic — so like the ratchets above it is a REAL verdict: exit 6,
+  # never a retryable 9.
+  DEAD_LINT="${SHIP_LAND_DEAD_LINT:-scripts/bats-assert-liveness.py}"
+  if [[ -d tests ]] && ls tests/*.bats >/dev/null 2>&1 && [[ -f "$DEAD_LINT" ]]; then
+    local dfind=""
+    local -a dscan=()
+    if [[ "${SHIP_LAND_DEAD_OWN_SCOPE:-on}" != "off" ]]; then
+      # SCANS THE DIFF, NOT THE CORPUS — and the distinction is not academic. Measured on this box:
+      # the whole-tree scan is 0.82s in the FOREGROUND but 20.3s in the Darwin background band this
+      # gate actually runs in (a 25x tax, a one-way ratchet children inherit); restricted to a land's
+      # own files it is 0.6s in-band. Sizing an always-run check by its idle cost is how it becomes
+      # an off switch under load, which is the failure this whole ratchet exists to stop repeating.
+      #
+      # Own scope is also the fairness rule every ratchet above carries: a land answers for the files
+      # it touches. Blocking on a pre-existing finding elsewhere would make one session's violation
+      # every session's gridlock — the exact shared-fate failure being fixed, moved to the gate.
+      while IFS= read -r f; do
+        [[ -n "$f" && -f "$f" ]] && dscan+=("$f")   # a suite this land DELETES has nothing to scan
+      done < <(git diff --name-only "$range" -- 'tests/*.bats' 2>/dev/null || true)
+    else
+      dscan=(tests/*.bats)
+    fi
+    if [[ ${#dscan[@]} -gt 0 ]]; then
+      echo "→ gate: bats dead-assertion ratchet (${#dscan[@]} changed suite(s))" >&2
+      # `|| true`: a missing python3 or an unreadable file yields NO verdict, never a fabricated one.
+      dfind="$(python3 "$DEAD_LINT" --format text "${dscan[@]}" 2>/dev/null || true)"
+      if [[ -n "$dfind" ]]; then
+        printf '%s\n' "$dfind" >&2
+        echo "✗ gate: dead-assertion RED — a test THIS LAND CHANGES asserts something errexit cannot reach." >&2
+        echo "  Revive it:  python3 scripts/bats-assert-liveness-fix.py <file>" >&2
+        echo "  Use the fixer, not a hand-edit: the right form is PER CLASS. A uniform ' || false' is" >&2
+        echo "  WRONG for 'A && false' (that fails on BOTH branches); the fixer emits '! A || false'." >&2
+        GATE_RED=1
+        return 1
+      fi
+    fi
+  fi
+
   # ── script-dir resolution ratchet (backlog ba715c49d522) ──────────────────────────────────────
   # Same own-scope contract as the ratchets above, guarding the seam THIS SCRIPT was the victim of.
   #
