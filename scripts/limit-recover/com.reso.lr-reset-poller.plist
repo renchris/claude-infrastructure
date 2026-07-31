@@ -2,13 +2,19 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!-- Install:  cp this to ~/Library/LaunchAgents/  &&  launchctl load -w ~/Library/LaunchAgents/com.reso.lr-reset-poller.plist
 
-     STATE: AUTO-RESUME IS LIVE. Unattended auto-resume was activated live 2026-07-21 and this file
-     is now reconciled to match the installed plist byte-for-behaviour — the installed file is
-     LIVE-AUTHORITATIVE. Until 2026-07-25 this SSOT still carried LR_POLLER_AUTOFIRE commented out,
-     so reinstalling from the repo would have SILENTLY KILLED unattended auto-resume (limit-parked
-     sessions would notify once and then sit forever). Do NOT re-comment the EnvironmentVariables
-     block: any edit here that disables autofire is a behaviour regression on the next reinstall.
+     STATE: AUTO-RESUME IS LIVE, since 2026-07-18T17:00:15-0700. This file is reconciled to match the
+     installed plist byte-for-behaviour — the installed file is LIVE-AUTHORITATIVE. Until 2026-07-25
+     this SSOT still carried LR_POLLER_AUTOFIRE commented out, so reinstalling from the repo would
+     have SILENTLY KILLED unattended auto-resume (limit-parked sessions would notify once and then sit
+     forever). Do NOT re-comment the EnvironmentVariables block: any edit here that disables autofire
+     is a behaviour regression on the next reinstall.
      scripts/launchd-parity-lint.sh now asserts live == this file and fails the nightly on drift.
+
+     ACTIVATION DATE, from receipts (this comment read "2026-07-21" until 2026-07-30, which no
+     evidence supports): the installed LaunchAgent's mtime is 2026-07-18T17:00:15-0700, and RunAtLoad
+     fired a real resume TEN SECONDS later — `2026-07-19T00:00:25Z RESUMED 6802c9b8 … on next4
+     (autofire) — pane opened` in ~/.reso/limit-recover/poller.log. Install and activation are the
+     same moment here, because RunAtLoad=true means loading the job IS a tick.
 
      Original default was NOTIFY-ONLY (detect limit-parked sessions + macOS-notify once, spawn
      nothing); that is no longer the shipped posture.

@@ -132,8 +132,16 @@ Land: project-local /ship (standing-land authorized in this repo). Deploy: OPERA
   rename to launchd/com.chrisren.cc-reaper.plist. restic+verify-2114 SSOTs exist in
   claude-code-archive repo but STALE (verify-2114 repo RunAtLoad=1 vs live 0 — reinstalling from
   repo would CHANGE behavior; refresh SSOT from live, do NOT reinstall).
-- lr-reset-poller: live AUTOFIRE=1 vs repo commented-out → reconcile SSOT recording intentional
-  divergence (never reinstall from repo — would kill unattended auto-resume).
+- ~~lr-reset-poller: live AUTOFIRE=1 vs repo commented-out → reconcile SSOT recording intentional
+  divergence (never reinstall from repo — would kill unattended auto-resume).~~ **CLOSED 4b0efff2
+  (2026-07-25)** — the repo plist now SETS autofire, so there is no divergence left to record, and the
+  remedy rotted SAFER: reinstalling from repo is now behaviour-preserving (launchd-parity-lint asserts
+  live == SSOT and fails the nightly on drift), so the "never reinstall from repo" warning no longer
+  applies to this job. A 2026-07-29 codex-security scan re-raised this at revision `38eec335`, which
+  forked BEFORE 4b0efff2 — the finding was already fixed on trunk when the scan observed it. The
+  RESIDUE it did surface was real and is closed by the follow-up: the plist was reconciled but its
+  SIBLING surfaces still told the pre-activation story (the daemon's own header, the safety gate's
+  output, wiring-all ①). See `docs/research/codex-security-scans/LEDGER.md`.
 - Loss-fragile (no copy anywhere): lead-supervisor plist (worst: KeepAlive daemon),
   screenshot-clipboard plist+~/bin script, watch-2118 plist, dia-cdp disabled pair, 6 reso/gl.reso
   plists (+~/.reso scripts). Reboot survival: ALL 25 return (verified incl. 2 plists that fail

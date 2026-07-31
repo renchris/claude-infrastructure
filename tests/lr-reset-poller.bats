@@ -467,3 +467,118 @@ STUB
   run wc -l < "$FIRE_ARGV"
   [ "$(echo "$output" | tr -d ' ')" = 5 ]           # not split into extra words
 }
+
+# ── LR-t: the dry-run hint must not advise setting a variable that is already set ────────────────
+# The notify branch is reached for TWO different reasons — autofire off, or autofire ON with
+# --dry-run suppressing the fire — and until 2026-07-30 it emitted one hint for both: "Set
+# LR_POLLER_AUTOFIRE=1 to auto-resume". On the production box (AUTOFIRE=1) that told the operator to
+# set a variable already set to 1, i.e. it reported auto-resume as OFF while it was ON. Same
+# understatement class as the plist/header drift LR-v guards, so it is pinned in the same commit.
+@test "LR-t: --dry-run with AUTOFIRE=1 says autofire IS on (never 'set LR_POLLER_AUTOFIRE=1')" {
+  mk_parked "rrrrrrrr-1111-2222-3333-444444444444" "$(past_iso)"
+  LR_POLLER_AUTOFIRE=1 run bash "$POLLER" --once --dry-run
+  [ "$status" -eq 0 ]
+  # nothing fired: --dry-run must still suppress the resume
+  [ "$(grep -c 'create window' "$OSA_LOG")" -eq 0 ]
+  [ ! -e "$LR_POLLER_LAUNCH_DIR/lr-poller-launch-rrrrrrrr.sh" ]
+  # and the reason given must match the actual reason
+  grep -q 'READY rrrrrrrr.*dry-run' "$STATE/poller.log"
+  grep -q 'autofire IS on' "$STATE/poller.log"
+  ! grep -q 'set LR_POLLER_AUTOFIRE=1 to auto-resume' "$STATE/poller.log"
+  # the user-facing notification carries the same corrected hint, not the stale advice
+  grep -q 'autofire IS on' "$OSA_LOG"
+  ! grep -q 'Set LR_POLLER_AUTOFIRE=1' "$OSA_LOG"
+
+  # CONTROL — the autofire-OFF path must STILL give the actionable advice (the fix must not delete
+  # the hint that is correct in the branch where it applies).
+  mk_parked "rrrr0000-1111-2222-3333-444444444444" "$(past_iso)"
+  run bash "$POLLER" --once
+  [ "$status" -eq 0 ]
+  grep -q 'READY rrrr0000.*notify-only' "$STATE/poller.log"
+  grep -q 'set LR_POLLER_AUTOFIRE=1 to auto-resume' "$STATE/poller.log"
+}
+
+# ── LR-u: --dry-run is positional-INDEPENDENT (found by LR-t, 2026-07-30) ─────────────────────────
+# The parser read only `$1`, so `--once --dry-run` silently ran FOR REAL — the resume fired while the
+# operator had asked for a preview. LR-t caught it as a side effect; LR-u pins the parser itself, in
+# BOTH orders, plus the refusal that replaced the silent ignore.
+@test "LR-u: --dry-run suppresses the fire in ANY argument position; unknown args are refused" {
+  # position 2 — the order that silently fired before the fix
+  mk_parked "ssss0002-1111-2222-3333-444444444444" "$(past_iso)"
+  LR_POLLER_AUTOFIRE=1 run bash "$POLLER" --once --dry-run
+  [ "$status" -eq 0 ]
+  [ "$(grep -c 'create window' "$OSA_LOG")" -eq 0 ]
+  [ ! -e "$LR_POLLER_LAUNCH_DIR/lr-poller-launch-ssss0002.sh" ]
+  [ -f "$STATE/parked/ssss0002-1111-2222-3333-444444444444.json" ]     # still parked: nothing resumed
+
+  # position 1 — the order that always worked, so the fix must not have broken it
+  mk_parked "ssss0001-1111-2222-3333-444444444444" "$(past_iso)"
+  LR_POLLER_AUTOFIRE=1 run bash "$POLLER" --dry-run --once
+  [ "$status" -eq 0 ]
+  [ "$(grep -c 'create window' "$OSA_LOG")" -eq 0 ]
+  [ -f "$STATE/parked/ssss0001-1111-2222-3333-444444444444.json" ]
+
+  # a real fire is still reachable — this test must not pass merely because nothing ever fires
+  mk_parked "ssss0003-1111-2222-3333-444444444444" "$(past_iso)"
+  LR_POLLER_AUTOFIRE=1 run bash "$POLLER" --once
+  [ "$status" -eq 0 ]
+  [ "$(grep -c 'create window' "$OSA_LOG")" -eq 1 ]
+  rm -f "$LR_POLLER_LAUNCH_DIR/lr-poller-launch-ssss0003.sh"
+
+  # unknown args are refused, never silently ignored (the silence is what hid the bug)
+  run bash "$POLLER" --dry-runn
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"unknown argument"* ]]
+  # and a bare run (how launchd invokes it) still parses
+  run bash "$POLLER"
+  [ "$status" -eq 0 ]
+}
+
+# ── LR-v: the SSOT PAIR — plist posture == script-header posture ─────────────────────────────────
+# This is a REPO-FACT assertion, not a behaviour one, and it exists because of a 12-day drift:
+# autofire went live 2026-07-18, the plist was reconciled 2026-07-25 (4b0efff2), and the poller's own
+# header STILL read "auto-spawn is OFF by default … set LR_POLLER_AUTOFIRE=1 ONLY after eyeballing a
+# live cycle" until 2026-07-30. A 2026-07-29 security scan read that pair and could not tell which
+# side was authoritative.
+#
+# scripts/launchd-parity-lint.sh already chains live == plist (normalized plutil compare, nightly).
+# It is structurally blind to PROSE in a sibling file, so it could never have caught this half. LR-v
+# closes the chain: live == plist (parity lint) == header marker (here). Both links are needed —
+# neither alone would have surfaced the drift.
+#
+# Read with plistlib, NOT `plutil -extract`: without `-o` that rewrites its input IN PLACE, which is
+# the exact incident launchd-parity-lint.sh was written to make unrepeatable. plistlib is a pure
+# reader and ignores XML comments, so a commented-out block correctly reads as ABSENT (verified: the
+# pre-4b0efff2 shape yields None, so re-commenting the block fails this test rather than passing it).
+@test "LR-v: committed plist and poller header declare the SAME shipped autofire posture" {
+  local plist="$REPO/scripts/limit-recover/com.reso.lr-reset-poller.plist"
+  [ -f "$plist" ]
+
+  # ACTIVE value in the plist — absent (commented out / removed) reads as the empty string.
+  local from_plist
+  from_plist=$(python3 - "$plist" <<'PY'
+import plistlib, sys
+d = plistlib.load(open(sys.argv[1], 'rb'))
+print(d.get('EnvironmentVariables', {}).get('LR_POLLER_AUTOFIRE', ''))
+PY
+)
+  # Declared value in the daemon's own header marker — absent reads as the empty string.
+  local from_header
+  from_header=$(sed -n 's/^# SHIPPED-POSTURE: LR_POLLER_AUTOFIRE=\([0-9][0-9]*\).*/\1/p' "$POLLER" | head -1)
+
+  # Render both sides BEFORE asserting: on failure the TAP output must show which side moved.
+  echo "plist LR_POLLER_AUTOFIRE  = '${from_plist}'"
+  echo "header SHIPPED-POSTURE    = '${from_header}'"
+
+  # (a) the plist must ACTIVELY set autofire — re-commenting the block is the original incident
+  #     (it would silently kill unattended auto-resume on the next reinstall).
+  [ -n "$from_plist" ]
+  # (b) the header must carry the marker at all — deleting it must not silently pass.
+  [ -n "$from_header" ]
+  # (c) and the two must agree, so neither file can drift away from the other unnoticed.
+  [ "$from_plist" = "$from_header" ]
+
+  # The header must not simultaneously assert the pre-activation posture as the SHIPPED one. The
+  # exact sentence that was false for 12 days; keyed on the claim, not on incidental wording.
+  ! grep -q '^# SAFETY — auto-spawn is OFF by default' "$POLLER"
+}

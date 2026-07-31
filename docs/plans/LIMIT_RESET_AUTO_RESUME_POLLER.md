@@ -1,6 +1,25 @@
-# Limit-reset auto-resume poller — design (build-ready, NOT yet installed)
+---
+status: complete
+---
 
-> **STATUS: BUILT + PROVEN — activation C10-queued (2026-07-15, Track-B B1-d).**
+# Limit-reset auto-resume poller — design (BUILT · PROVEN · LIVE since 2026-07-18)
+
+> **STATUS: LIVE — unattended auto-resume is ON in production (activation completed 2026-07-18).**
+> The plist is installed, the job is launchd-loaded, and the RUNNING job's environment carries
+> `LR_POLLER_AUTOFIRE => 1` (`launchctl print gui/$(id -u)/com.reso.lr-reset-poller`). Receipt:
+> installed `2026-07-18T17:00:15-0700`; `RunAtLoad` fired a real resume 10 s later —
+> `2026-07-19T00:00:25Z RESUMED 6802c9b8 … on next4 (autofire) — pane opened`. The repo plist was
+> reconciled to match live in `4b0efff2` (2026-07-25), and `scripts/launchd-parity-lint.sh` now fails
+> the nightly on any live-vs-SSOT drift. **Learning (2026-07-30):** reconciling the plist did not
+> reconcile the SUBSYSTEM — the daemon's own header, `limit-reset-safety-gate.sh`'s output, and
+> `wiring-all.sh` ① each kept telling the pre-activation "notify-only / flip it later" story for 12
+> days after the flip. An activation is not landed until every surface that DESCRIBES the posture is
+> moved with it; a one-file parity lint cannot see prose in sibling files, so `LR-v` now pins the
+> plist↔header pair structurally.
+>
+> The block below is history, dated 2026-07-15 — read it as the pre-activation record, not as status.
+>
+> **STATUS (historical, 2026-07-15): BUILT + PROVEN — activation C10-queued (Track-B B1-d).**
 > `scripts/limit-reset-safety-gate.sh` GREEN (LR-a..LR-i, registered RED-first); proofs in
 > `tests/lr-reset-poller.bats` (10/10), suite RED-proven against the as-shipped poller. The poller
 > had run ONE live notify-only cycle 2026-07-12 (PARKED 6802c9b8 → READY notified — poller.log),
