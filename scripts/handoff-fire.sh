@@ -73,7 +73,7 @@
 # surfaces resolve a live anchor themselves (resolve_headless_anchor → the desk role pane → the
 # currently-active session → any live pane), so a headless fire lands as a ⌘D split in the operator's
 # EXISTING window+tab like every other fire. A fresh window is minted only when iTerm2 has no live
-# pane at all, and a would-be sliver (anchor tab already ≥ CC_FIRE_MAX_PANES, default 6) degrades to
+# pane at all, and a would-be sliver (anchor tab already ≥ CC_FIRE_MAX_PANES, default 5 — iTerm2 kills Metal at 6/tab) degrades to
 # a background tab in that SAME window — never to a new one. Kill-switch: CC_FIRE_HEADLESS_ANCHOR=off.
 # WHY this is not a re-opening of the app-frontmost drift bug (d662845): an anchor that was NAMED and
 # is gone still FAILS LOUD. Only the never-named case resolves — there is no operator intent to
@@ -3329,13 +3329,59 @@ async def main(connection):
         # (the window they are looking at) → any live session. Prints "<session-id> <panes-in-tab>";
         # the pane count lets the caller degrade a would-be sliver split to a tab in the SAME window.
         desk = sys.argv[2] if len(sys.argv) > 2 else ""
-        cand = None
+        # ROOM-AWARE ANCHORING (2026-07-30). iTerm2 kills Metal for a WHOLE TAB at
+        # sessions.count >= 6 (shipped arm64: `cmp x8,#0x6` + `b.hs` in -[PTYTab updateUseMetal]).
+        # But the operator's binding constraint is ~30 sessions VISIBLE AT ALL TIMES across three
+        # monitors, and the old degrade target — a BACKGROUND TAB — is both invisible AND
+        # unconditionally CPU-rendered. That protected Metal by hiding work, which is the opposite
+        # of what was asked for. So prefer an anchor whose tab still has ROOM, letting fires
+        # distribute across the operator's laid-out windows (6 x 5 = 30, all Metal, all visible)
+        # instead of piling into one tab until it degrades out of sight.
+        # Only when NOTHING has room does the caller spill to a fresh WINDOW — whose single tab is
+        # by definition foreground, so it keeps Metal, and which the operator can park on the next
+        # Space. A window one swipe away beats a tab that is never seen.
+        cap = 5
+        if len(sys.argv) > 3:
+            try:
+                cap = int(sys.argv[3])
+            except ValueError:
+                cap = 5
+
+        def _has_room(sess):
+            if sess is None:
+                return False
+            _w2, t2 = app.get_window_and_tab_for_session(sess)
+            return t2 is not None and len(t2.sessions) < cap
+
+        preferred = []
         if desk:
-            cand = app.get_session_by_id(desk)
+            preferred.append(app.get_session_by_id(desk))
+        _a = active_id(app)
+        if _a:
+            preferred.append(app.get_session_by_id(_a))
+
+        cand = None
+        # 1. usual preference order (desk pane, then active pane) — but only if its tab has room
+        for _p in preferred:
+            if _has_room(_p):
+                cand = _p
+                break
+        # 2. ANY live pane whose tab still has room
         if cand is None:
-            a = active_id(app)
-            if a:
-                cand = app.get_session_by_id(a)
+            for w in app.terminal_windows:
+                for t in w.tabs:
+                    if t.sessions and len(t.sessions) < cap:
+                        cand = t.sessions[0]
+                        break
+                if cand is not None:
+                    break
+        # 3. nothing has room anywhere. Return the usual anchor WITH its true (>= cap) pane count,
+        #    so the caller sees the tab is full and spills to a window. Never silently overfill.
+        if cand is None:
+            for _p in preferred:
+                if _p is not None:
+                    cand = _p
+                    break
         if cand is None:
             for w in app.terminal_windows:
                 for t in w.tabs:
@@ -3464,7 +3510,7 @@ resolve_headless_anchor() {
   local desk=""
   desk="$(tr -d '[:space:]' < "$HOME/.claude/cc-roles/desk" 2>/dev/null || true)"
   local out rc=0
-  out="$(it2py anchor "$desk" 2>/dev/null)" || rc=$?
+  out="$(it2py anchor "$desk" "${CC_FIRE_MAX_PANES:-5}" 2>/dev/null)" || rc=$?
   [ "$rc" = 0 ] || { echo "   anchor probe FAILED (it2py anchor rc=$rc) — inconclusive, not empty." >&2; return 2; }
   case "$out" in
     NO-LIVE-SESSION) return 1 ;;
@@ -3614,9 +3660,38 @@ spawn() {
       # would turn most headless fires into tabs on this box (the active tab held exactly 4 panes when
       # this was built) and quietly re-lose "same existing tab view". 6 keeps the split through the
       # comfortable range and reserves the tab for genuinely unreadable density. Tune: CC_FIRE_MAX_PANES.
-      if [ "$npanes" -ge "${CC_FIRE_MAX_PANES:-6}" ] && { [ "$SURFACE" = split-right ] || [ "$SURFACE" = split-down ]; }; then
-        echo "   ${npanes} panes ≥ ${CC_FIRE_MAX_PANES:-6} — degrading $SURFACE to a background tab in that SAME window (sliver-avoidance, not a new window)." >&2
-        SURFACE="bg-tab"
+      #
+      # THRESHOLD CORRECTED 6 -> 5 (2026-07-30). The old default was an OFF-BY-ONE against iTerm2's
+      # Metal gate and silently defeated it. iTerm2 3.6.11 kills Metal for a WHOLE TAB at
+      # sessions.count >= 6 (verified in the shipped arm64 slice: `cmp x8,#0x6` + `b.hs`, unsigned
+      # >=, in -[PTYTab updateUseMetal]). This guard is `-ge cap`, so with cap=6 a tab holding 5
+      # panes did NOT degrade — it permitted the split, produced the 6th pane, and dropped that
+      # tab's every session onto the CPU rasterizer. Profiled consequence at ~8 panes/tab:
+      # iTermTextDrawingHelper 361 : iTermMetalDriver 72, i.e. 5:1 AGAINST the GPU; at <6 it
+      # inverts to 7:100. cap=5 refuses the 6th and holds the gate.
+      # Keep this decision AT THE CHOKEPOINT — never re-implement it in a caller (the exact defect
+      # recorded in decision-moved-out-of-the-guarded-unit).
+      # The resolver above is ROOM-AWARE: it returns a full tab ONLY when nothing anywhere has
+      # room. So reaching this branch means EVERY tab is at the cap — a genuine overflow, not a
+      # local crowding accident. The degrade target is therefore a fresh WINDOW, not a background
+      # tab: a bg-tab is invisible AND unconditionally CPU-rendered, so it would have satisfied the
+      # Metal gate by hiding the session, defeating the operator's binding "~30 visible at all
+      # times" constraint. A new window's single tab is by definition foreground, so it keeps
+      # Metal, and it can be parked on the next Space — one swipe away beats never seen.
+      if [ "$npanes" -ge "${CC_FIRE_MAX_PANES:-5}" ] && { [ "$SURFACE" = split-right ] || [ "$SURFACE" = split-down ]; }; then
+        echo "   every tab is at the cap (${npanes} ≥ ${CC_FIRE_MAX_PANES:-5}) — overflowing $SURFACE to a NEW WINDOW." >&2
+        echo "   Rationale: a background tab would be invisible AND CPU-rendered; a window keeps Metal (its tab is foreground) and stays visible/swipeable." >&2
+        SURFACE="window"
+        [ -n "$SURFACE_REASON" ] || SURFACE_REASON="overflow: all tabs at CC_FIRE_MAX_PANES (${CC_FIRE_MAX_PANES:-5}) — window keeps Metal + visibility"
+        # The SURFACE="window" dispatch lives at the TOP of spawn() and is already behind us, and
+        # the case statement below has no `window` arm — so mint it HERE, mirroring the
+        # determined-empty branch. Setting SURFACE alone would fall through to no arm at all.
+        local _ovw
+        _ovw="$(spawn_frontmost | tr -d '[:space:]')" || _ovw=""
+        [ -n "$_ovw" ] || { echo "!! overflow: could not create a fresh iTerm2 window — nothing launched." >&2; return 1; }
+        it2_land "$_ovw" || return 1
+        SPAWNED_PANE="$_ovw"
+        return 0
       fi
     elif [ "$arc" != 1 ]; then
       # INCONCLUSIVE (arc=2): the probe could not determine anything — API error, timeout,
@@ -3803,11 +3878,20 @@ if [ "$DRY" = 1 ]; then
     # dry-run describes a refusal the real run will not perform.
     dry_anchor_note() {
       if [ "${ANCHOR_INTENT:-1}" = 0 ]; then
-        local _a; _a="$(resolve_headless_anchor 2>/dev/null || true)"
-        if [ -n "$_a" ]; then
+        # Mirror spawn()'s THREE states exactly. This preview used to collapse them with
+        # `2>/dev/null || true` + an emptiness test, so it announced "would fall back to a fresh
+        # window" for an INCONCLUSIVE probe — i.e. it kept DOCUMENTING the leaking behaviour that
+        # cabf80f7 removed from the real path, and re-swallowed the stderr that fix deliberately
+        # stopped discarding. A dry run that describes a different decision than the real run is
+        # worse than no dry run.
+        local _a="" _arc=0
+        _a="$(resolve_headless_anchor)" || _arc=$?
+        if [ "$_arc" = 0 ] && [ -n "$_a" ]; then
           echo "anchor:   HEADLESS (no firing pane) — would resolve live pane ${_a%% *} (${_a##* } pane(s) in its tab) and land in ITS window; never a new one"
+        elif [ "$_arc" = 1 ]; then
+          echo "anchor:   HEADLESS (no firing pane) — iTerm2 DETERMINED to hold zero live panes; would fall back to a fresh window (the only state that may)"
         else
-          echo "anchor:   HEADLESS (no firing pane) — no live iTerm2 pane resolvable; would fall back to a fresh window"
+          echo "anchor:   HEADLESS (no firing pane) — anchor probe INCONCLUSIVE (rc=$_arc); would REFUSE and launch nothing (never mints a window on an unknown)"
         fi
       else
         echo "anchor:   (\$ITERM_SESSION_ID/--session-id named a pane that does not resolve — would REFUSE to fire)"
