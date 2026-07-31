@@ -359,6 +359,52 @@ Each row names the exact read. Narration is not acceptance.
 reads — they need production sweeps after landing to accrue. The read is specified here so a
 successor can execute it without re-deriving anything.
 
+### Acceptance status — measured 2026-07-31 (§8 step 4 close)
+
+Every row below is a live disk read taken this session, not a recollection.
+
+| # | Verdict | Read |
+|---|---|---|
+| A1 | **PASS** | 124 beat files; 6 with `.t` inside 900s |
+| A2 | **PASS** | 3 live sids with `operatorT`: beat age vs `ci_last_interactive_epoch` deltas **0s / 1s / 1s**. Two further sids read UNKNOWN — pre-v2 beats with no `operatorT` field, which is the fail-closed direction by design |
+| A3–A7 | **PASS** | `tests/reap-freshness.bats` 10/10 · `tests/session-beat.bats` 12/12 |
+| A8 | **PARTIAL — see below** | 4 `reaped` lines carry `decided_age`; all 4 exceeded 60s (105 · 126 · 152 · 187s) under the pre-fix span |
+| A9 | **accruing** | no `reaped` line since the belts landed; `belt-refuse`/`stale-decision`/`lease-missing` = 0 firings |
+| A10 | **PASS (was the open gap)** | `grep -c 'timeout ' bin/cc-reaper` **0 → 4**; all four foreign calls now route through `_rp_bounded` |
+| A11 | **FAILS ITS THRESHOLD — but not for the reason the criterion assumes** | see below |
+
+**A8 — what the number was actually measuring.** `decided_age` was computed from `sweep_t0`, which is
+stamped *before* the three foreign binaries run and therefore *before* `cc-classify` produces the
+evidence. It charged the decision→act gap for work that finished before the decision existed. It is
+now measured from `classify_t0` — the instant the evidence was taken — which is what A8's wording
+("decision→act gap") asks for. `sweep_age` is logged beside it so the wider span stays visible and the
+re-anchoring can never be mistaken for the wider number improving. The suspend guard still reads
+`sweep_t0`; re-anchoring A8 deliberately did not move that detector's span.
+
+**A11 — the threshold does not fit the retention design, and the prune is not at fault.** Corrected
+census (a first pass counted `provisional` rows as dead and was wrong — the denominator has to be the
+pid-bearing population, [[positive-control-the-denominator]]):
+
+| Registry population | Count |
+|---|---|
+| Total rows | 31 |
+| `provisional`, **no `pid` field at all** — a distinct state A11 does not measure | 6 |
+| pid **live** | 0 |
+| pid **dead** | 25 |
+| …of those, past `cc-reconcile`'s 24h retain window (i.e. actually prunable) | **0** |
+
+So the dead-pid fraction is 100% of the pid-bearing rows, and **every one of them is retained by
+design** — `cc-reconcile` is pruning correctly and has nothing it is permitted to remove. A11's "<10%"
+cannot be reached by fixing the prune; it is reachable only by shortening `CC_REG_RETAIN_H` (24h),
+which is a forensics-retention decision this rebuild did not specify and must not make silently.
+Rows additionally carry `lstart: null`, so R6's (pid, lstart) identity is present in the *reaper's*
+pin but not yet in the *registry row* — the write side never populates it.
+
+**Named, not absorbed:** shortening the retain window and populating `lstart` on the registry row are
+both real work, both outside this rebuild's frozen scope (zero live reaps · ≤60s decisions), and
+neither is blocked by anything here. They are recorded as the A11 residue rather than quietly folded
+into a criterion re-write.
+
 ---
 
 ## §8 Bootstrap & rollout
@@ -381,6 +427,28 @@ go live. This is named EARLY per Phase 5 and platters as one operator command at
 
 ## Learnings (accumulate; never delete)
 
+- 2026-07-31 (§8 step 4, R5/A10 landed): **the fail-closed belt found the operator's live `$HOME`
+  before it found a real defect.** `tests/cc-reaper.bats` never fixtured `$HOME` — harmless for its
+  whole life, because nothing under `$HOME` fed a reap decision. The v2 beat re-take changed exactly
+  that: `cc-reaper` began resolving `~/.claude/cc-beats`, the suite saw the *operator's* 124 real
+  beats, `cb_system_live` returned TRUE, and every fixture sid — which of course has no beat — took
+  the R3 cannot-prove-absence path and was REFUSED. **17 of 81 tests went red on trunk, every one of
+  them `td_called`, with no defect in the subject at all.** Two lessons, and the second is the
+  transferable one: (1) a suite that reads live `$HOME` does not test the program, it tests the box —
+  and a *grandfathered* hermeticity leak is not a dormant one, it is a live liability waiting for the
+  day some new code path starts reading the thing it leaks. (2) **Universalizing a fail-closed rule
+  promotes its blast radius**: R3 was correct in production and correct in intent, but the moment it
+  became the *normal* path rather than a rare backstop, every environment that could not supply
+  evidence — including a test rig — started refusing. Attribution required a pristine-trunk control
+  run (identical 17/17 failure set) before a single line was changed; without it the obvious reading
+  was "my bounds broke the reaper."
+- 2026-07-31: **a census is only as good as its denominator.** The first A11 read scored 77% dead
+  rows, then 100%, and both were wrong: 6 of 31 registry rows are `provisional` and carry *no `pid`
+  field at all*, which a `[ -n "$p" ] && kill -0` chain silently folds into "dead". The real
+  decomposition — 25 pid-bearing rows, all dead, **0 past the retain window** — inverts the
+  conclusion completely: the prune is not broken, it is forbidden from acting, and A11's threshold is
+  a retention-policy question rather than a bug. Had the first number been reported, the "fix" would
+  have been to tighten a window that was doing its job. ([[positive-control-the-denominator]])
 - 2026-07-29: the incumbent's every safety fix was a new *leg* on the same stale snapshot. Six
   independent legs (fired-stamp, successor-alive, suspend-guard, §4.7 hold, teardown belt, identity
   pin) all read evidence frozen at sweep start, so each new leg reduced the *rate* of the failure
