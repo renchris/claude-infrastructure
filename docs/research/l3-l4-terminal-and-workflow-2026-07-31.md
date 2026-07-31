@@ -158,11 +158,36 @@ improvement on the 361:72 measured 07-29 at higher pane counts, because fewer pa
 
 ---
 
-## 4. The cost model the reports get backwards
+## 4. The cost model the reports get wrong — and the correction this section itself needed
 
-The reports' central engineering recommendation is *"maximise GPU/Metal use."* On iTerm2 that is the
-**wrong goal**, and the repo's controlled Cocoa/IOSurface benchmark (30 panes, fixed 6×5 grid, identical
-geometry and pixels/second in every arm, 20 Hz, 5 reps) says why:
+> **Superseded in place, 2026-07-31.** This section originally answered the reports' *"maximise
+> GPU/Metal use"* with *"maximising the GPU is backwards."* That answer was **wrong as stated** — it
+> generalised a fact about **iTerm2's per-pane `CAMetalLayer`** into a claim about GPU rendering *as
+> such*. The direct falsifier is Ghostty: **Metal-native AND per-pane, measured at 24 panes in one
+> `NSWindow`, 0.0% idle CPU, 351 MB.** If the graphics API were the cost axis, that reading is
+> impossible. The iTerm2-specific findings below are unchanged and still hold; only the
+> over-generalisation is retracted. Corrected model first, evidence after.
+
+### The three-term cost model (fitted, not asserted)
+
+Fitted from the four compositor arms of the controlled Cocoa/IOSurface benchmark — 30 panes, fixed 6×5
+grid, identical geometry and pixels/second in every arm, 20 Hz, 5 reps:
+{1w×1s **9.6pp** · 1w×30s **11.2pp** · 6w×5s **17.5pp** · 30w×1s **22.6pp**}:
+
+| Axis | Coefficient | Lever at 30 panes |
+|---|---|---|
+| **Presentation cadence** | **0.480 pp/Hz** | **9.6pp — dominant, 6× the surface lever** |
+| OS-window count | 0.4483 pp/window | 13.0pp across 1→30 |
+| Surface count *within* a window | 0.0552 pp/surface | 1.60pp ceiling — 8.1× cheaper per unit than a window |
+| **Metal vs OpenGL vs CPU** | **—** | **not a term in the model** |
+
+The practical consequence is the same three moves either way, but for the right reason: **drop the
+cadence** (the 120 Hz DELL to 60 Hz is one reversible click, and a text UI gains nothing from 120 Hz),
+**stop minting windows**, and treat panes as nearly free. What changes is the terminal-selection
+criterion — a Metal renderer is not a mark against a candidate, and Ghostty and cmux (libghostty) are
+not disqualified by their API.
+
+### Why windows are the expensive unit
 
 | same 30 panes, regrouped | WindowServer cost |
 |---|---|
@@ -180,36 +205,66 @@ panes** — which pushes you into the 2.35× unit. And patching the cap out woul
 (~90 IOSurfaces) and 30 `CVDisplayLink` threads to the exact axis that froze the box, while
 `acquireScarceResources` blocks the **main thread** up to 16.7 ms per pane per frame.
 
-⇒ **Chasing the GPU on iTerm2 closes the trap from both sides. The cap is protecting you.** The win is
-not more GPU — it is a renderer that needs *one surface for all 30 panes*.
+⇒ **Chasing the GPU *on iTerm2* closes the trap from both sides. The cap is protecting you.** The win
+is not more GPU *from a per-pane-layer renderer* — it is a renderer that needs **one surface for all 30
+panes**, whatever API draws into it.
 
-*(Caveat kept honest: the all-Metal 6×5 configuration has never actually been run, here or upstream.
-This is the sharpest falsifiable claim in the file.)*
+**Read the scope of that arrow precisely.** The trap is a property of iTerm2's *architecture* — one
+`CAMetalLayer` per pane, so "more GPU" and "more compositor objects" are the same request — **not a
+property of Metal**. A renderer that draws N panes into **one** surface pays the surface term once, and
+its API is then irrelevant to the cost model above. **Ghostty is the proof**: Metal-native, per-pane
+views, 24 panes in one `NSWindow` → **0.0% idle CPU, 351 MB, 101 threads**. The rule that survives is
+*surfaces per window*, not *GPU or not*.
+
+*(Caveat kept honest: the all-Metal 6×5 iTerm2 configuration has never actually been run, here or
+upstream. It remains the sharpest falsifiable claim in the file — and note it is a claim about iTerm2's
+cap, not about Metal.)*
 
 ---
 
 ## 5. Terminal verdict — one ruler, this box
 
-| | iTerm2 (live) | **kitty** | WezTerm | Ghostty |
-|---|---|---|---|---|
-| panes measured | 15–23 | **24 / 26 / 36 / 48** | 6 / 38 | *pending* |
-| **threads** | 11–12 | **8 / 7 / 10 / 10 — FLAT** | 33 / 257 | 117–127 @ 3 windows |
-| **threads / pane** | ~1.1 | **0.33 → 0.21, flat** | **7.0, linear** | 3 (from source) |
-| OS windows for N panes | 4–6 (forced) | **1** | 1 | ? |
-| per-pane addressing | `ITERM_SESSION_ID` | `$KITTY_WINDOW_ID` + `kitten @` | `wezterm cli` | **no CLI IPC on macOS** |
-| leak behaviour | **98 windows survived `close()`**; upstream #12097 OPEN since 2025-01-01 | churn-clean: 101 panes, RSS/ports returned exactly | untested | untested |
+| | iTerm2 (live) | **kitty** | WezTerm | Ghostty | cmux |
+|---|---|---|---|---|---|
+| panes measured | 15–23 | **24 / 26 / 36 / 48** | 6 / 38 | **24 (one window)** | 2 / 8 / 13 |
+| **threads** | 11–12 | **8 / 7 / 10 / 10 — FLAT** | 33 / 257 | **101 @ 24 panes** | 21 / 53 / 78 |
+| **threads / pane** | ~1.1 | **0.33 → 0.21, flat** | **7.0, linear** | **4.00, linear** (`6 + 4.00×panes`) | **5.18, linear** (`5.18×panes + 10.6`) |
+| OS windows for N panes | 4–6 (forced) | **1** | 1 | **1** | 1 |
+| CPU at measured max | 83.4% @ ~19 sessions | 12.9–13.9% @ 36 panes, 10 Hz ᵃ | untested | **0.0% idle @ 24 panes, 351 MB** | untested (~10.5 MB/pane) |
+| per-pane addressing | `ITERM_SESSION_ID` | `$KITTY_WINDOW_ID` + `kitten @` | `wezterm cli` | **no CLI IPC on macOS** (AppleScript only) | **`CMUX_SURFACE_ID` + full socket API** |
+| leak behaviour | **98 windows survived `close()`**; upstream #12097 OPEN since 2025-01-01 | churn-clean: 101 panes, RSS/ports returned exactly | untested | untested | untested |
+
+ᵃ the only *loaded* challenger figure in the corpus — from the fleet agent's kitty run, recorded in
+`terminal-for-30-panes-2026-07-31.md` §6.6. Every other challenger cell is **idle** (Stage A), which
+isolates the structural axes (threads, surfaces, ports) but says nothing about CPU under load.
+
+*(Ghostty's row read `3 (from source)` / `pending` until 2026-07-31; it is now **measured** at 4.00
+threads/pane — `renderer`, `io`, `io-reader`, `cf_release` — confirmed to 24 panes. cmux is new to this
+table; its measurements and console-layer detail are carried in
+[`docs/plans/TERMINAL_AGNOSTIC_L3_L4.md`](../plans/TERMINAL_AGNOSTIC_L3_L4.md) §1. Both are
+**Metal/libghostty** renderers — which is precisely why the "GPU is the wrong goal" framing in §4 had to
+be retracted rather than merely narrowed.)*
 
 **kitty is the measured winner**, and the strongest single datum is the one salvaged from the crash:
 **48 panes, 12 hours uptime, 10 threads, 710 MB, 4 OS windows** — flat threads at *double* the
 previously tested pane count, while iTerm2 at the same moment read 83.4% CPU with ~19 sessions.
 
 **Both reports pick Ghostty.** Their stated grounds are (a) a benchmark table, (b) "the only terminal
-that renders via Metal", and (c) automatic E-core QoS demotion of unfocused panes. (a) iTerm2 also has
-a Metal renderer, so (b) is false on its face. (c) is the load-bearing claim and is under adversarial
-verification. The live reading — **117–127 threads for 3 windows** — is not encouraging on the exact
-discriminator that reversed WezTerm from front-runner to reject. Ghostty additionally has **no working
-CLI IPC on macOS** (`performIpc` returns false; AppleScript only), which matters because 22 load-bearing
-files here address panes programmatically.
+that renders via Metal", and (c) automatic E-core QoS demotion of unfocused panes. (b) is **false on its
+face** — iTerm2 also has a Metal renderer. (c) remains **unsubstantiated** here.
+
+But the reports' *pick* survived a measurement that their *reasoning* did not earn. The earlier reading
+here — **117–127 threads for 3 windows** — was read as "not encouraging on the exact discriminator that
+reversed WezTerm from front-runner to reject." **That inference was confounded by window count, not
+thread scaling.** Measured properly, one window at a time: Ghostty is **4.00 threads/pane, linear**
+(`6 + 4.00×panes`), and **24 panes in a single `NSWindow` idle at 0.0% CPU / 351 MB**. So it lands
+**between kitty and WezTerm** exactly as `terminal-for-30-panes` §6.7 predicted it might, and — being
+Metal-native *and* per-pane — it is also the datum that falsified this file's own §4 framing.
+
+**kitty still wins the thread axis** (flat vs Ghostty's linear: ~10 at 48 panes vs a projected ~126 at
+30), and Ghostty has **no working CLI IPC on macOS** (`performIpc` returns false; AppleScript only),
+which matters because 22 load-bearing files here address panes programmatically. **The verdict is
+unchanged. The reason one of its rivals was dismissed was wrong, and is now corrected.**
 
 **Also relevant and independently reported:** iTerm2 upstream **#12645** describes this operator's exact
 signature — hours of an agentic TUI, 5+ s input lag in *other* apps, iTerm2 itself near-idle, cured only
@@ -224,7 +279,7 @@ by quitting iTerm2, on an M3 Pro and an M3 Studio. **Not this machine.**
 | 1 | Crash = V8 heaps → 45 GB → swap thrashing | **REFUTED** — both panics on disk; neither is memory exhaustion; no swap thrashing in either |
 | 2 | Each CC instance grows to ~1.5 GB | **REFUTED** — measured 211–295 MB across 15 live sessions |
 | 3 | `NODE_OPTIONS=--max-old-space-size=1024` | **REJECTED — and it fails on its own terms**, see below |
-| 4 | Maximise Metal/GPU | **BACKWARDS on iTerm2** — the GPU path allocates the objects that saturate the compositor |
+| 4 | Maximise Metal/GPU | **WRONG AXIS** — not backwards, *irrelevant*. The graphics API is **not a term** in the fitted cost model (cadence 0.480 pp/Hz · window 0.4483 pp · surface 0.0552 pp). It is backwards **on iTerm2 specifically**, because there "more GPU" means one `CAMetalLayer` per pane. Ghostty is Metal-native *and* per-pane at 24 panes / 0.0% idle CPU, which falsifies the general form |
 | 5 | Ghostty is "the only" terminal rendering via Metal | **FALSE** — iTerm2 has a Metal renderer |
 | 6 | Ghostty auto-demotes unfocused panes to E-cores via QoS | **UNSUBSTANTIATED** — see below |
 | 7 | Table 1 benchmark numbers | **UNSOURCED** — presented as "2026 benchmarking data" with no citation; the two figures checkable here (iTerm2 memory, Ghostty per-pane cost) do not match measurement |
@@ -352,12 +407,18 @@ and ask. The defect is not that it blocks; it is that *discovering* the block co
 Considered and rejected on this box's own numbers. **WindowServer is the ceiling and it is Apple's** —
 30 panes in one window cost ~+11.2 pp of a core inside the compositor, the floor for *any*
 application, and kitty already sits on it (10 threads at 48 panes). A from-scratch emulator's best
-case is matching something already installed and free. Worse, "maximise Metal" is the premise that
-**already inverted here**: every GPU surface is a compositor object, and compositor objects are what
-saturated WindowServer, so a Metal-maximising terminal would allocate exactly the thing that froze the
-box. Add the real difficulty — VT correctness under Ink's alternate-screen / resize / wide-char usage
-— plus permanent maintenance, and it is the maximum case of the "constant re-work" the operator ruled
-out.
+case is matching something already installed and free — and **two shipping terminals already sit on
+that floor**: kitty (one GL context per window) and Ghostty (Metal, 24 panes in one `NSWindow` at 0.0%
+idle CPU). The floor is reachable with either API, so there is no renderer insight left to capture by
+building one. Add the real difficulty — VT correctness under Ink's alternate-screen / resize /
+wide-char usage — plus permanent maintenance, and it is the maximum case of the "constant re-work" the
+operator ruled out.
+
+*(Superseded reasoning, kept so the retraction is auditable: this paragraph originally argued that
+"maximise Metal" is a premise that **inverted here**, because every GPU surface is a compositor object.
+That is true of a renderer allocating **one surface per pane** — iTerm2's architecture — and **false as
+a claim about Metal**. Ghostty allocates Metal and stays on the floor. The conclusion is unchanged; its
+grounds are now the *surfaces-per-window* term, not the graphics API.)*
 
 **What is worth building is ~2% of that work: a console, not a terminal.** One row per session
 (status / blocked / last line), a queue fed by the beacon, zoom-to-full-screen on demand, and a
