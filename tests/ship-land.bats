@@ -1496,6 +1496,81 @@ add_suite() {   # $1=branch $2=suite basename $3=setup() body
   [ "$status" -eq 0 ]
   [ "$(echo "$output" | grep -c 'test-hermeticity RED')" -eq 0 ]   # -qv would pass on ANY other line
 }
+
+# ---- bats dead-assertion ratchet: enforced by the LAND, not only by its own suite --------------
+# Same argument as the hermeticity ratchet above, with a worse blast radius. The check exists as
+# tests/bats-assert-liveness.bats, which is REPO-WIDE: one non-final `[[ ]]` from any session reds
+# the whole corpus ⇒ no GREEN stamp ⇒ deploy-live has no cursor ⇒ the live layer stalls FOR EVERYONE
+# until someone sweeps, ~3.2h after the fact. On 2026-07-31 that fired four times in five hours (23
+# assertions, then 2, 6, 2), each from a commit that landed while an earlier sweep was in flight.
+# Each sibling ratchet skips when its own script is absent, and this fixture copies ONLY the
+# analyzer — so nothing else here can fire and a RED below is unambiguously this ratchet's.
+dead_fixture() {   # shim bats (argv = "did bats run at all"), install the REAL analyzer, seed trunk
+  SHIMDIR="$BATS_TEST_TMPDIR/shims-dead"; mkdir -p "$SHIMDIR"
+  export BATS_ARGV="$BATS_TEST_TMPDIR/bats-argv-dead"; : > "$BATS_ARGV"
+  cat > "$SHIMDIR/bats" <<EOF
+#!/bin/bash
+printf '%s\n' "\$*" >> "$BATS_ARGV"
+exit 0
+EOF
+  chmod +x "$SHIMDIR/bats"
+  export PATH="$SHIMDIR:$PATH"
+  export SHIP_LAND_GATE_POLICY="$BATS_TEST_TMPDIR/no-such-policy.sh"   # absent ⇒ hardcoded full
+  mkdir -p scripts tests
+  cp "$REPO/scripts/bats-assert-liveness.py" scripts/bats-assert-liveness.py
+  printf '#!/usr/bin/env bats\n@test "a" { true; }\n' > tests/a.bats
+  git add scripts tests && git commit -q -m "seed dead-assertion ratchet + a live suite" \
+    && git push -q origin HEAD:main
+  git fetch -q origin main
+}
+
+add_assert() {   # $1=branch $2=suite basename $3=the FIRST (non-final) statement of the body
+  git checkout -q -b "$1" main
+  { echo '#!/usr/bin/env bats'; echo '@test "x" {'; echo "  $3"; echo '  true'; echo '}'; } \
+    > "tests/$2"
+  git add "tests/$2" && git commit -q -m "test: $2"
+}
+
+@test "dead-assertion: a NEW suite with a non-final [[ ]] does NOT land → exit 6, file named, bats never ran" {
+  dead_fixture
+  add_assert feat/dead dead.bats '[[ 1 -eq 2 ]]'         # evaluated, discarded, test passes anyway
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 6 ]                                    # a REAL verdict, not a retryable 9
+  echo "$output" | grep -q 'dead-assertion RED'
+  echo "$output" | grep -q 'dead.bats'                   # names the offending file, not a summary
+  [ ! -s "$BATS_ARGV" ]                                  # refused BEFORE any bats ran
+  git fetch -q origin main
+  [ -z "$(git ls-tree origin/main -- tests/dead.bats)" ] # never reached trunk
+}
+
+@test "dead-assertion: the SAME suite with the assertion revived lands green (the ratchet discriminates)" {
+  dead_fixture
+  stub_selector "" "tests/dead.bats"
+  add_assert feat/live dead.bats '[[ 1 -eq 2 ]] || false'   # now errexit CAN reach it
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]                                    # positive control — without this the test
+  git fetch -q origin main                               # above would pass on a ratchet stuck at RED
+  [ -n "$(git ls-tree origin/main -- tests/dead.bats)" ]
+}
+
+@test "dead-assertion: OWN SCOPE — a pre-existing finding in a file this land does not touch still lands" {
+  # The anti-gridlock property, and the reason this ratchet is own-scoped like its siblings. Without
+  # it, one session's violation makes the trunk unlandable for EVERY other session — which is the
+  # same shared-fate failure the ratchet was added to end, just moved from the corpus to the gate.
+  dead_fixture
+  git checkout -q -b seed/dirty main                     # a dead assertion reaches trunk out-of-band
+  { echo '#!/usr/bin/env bats'; echo '@test "y" {'; echo '  [[ 1 -eq 2 ]]'; echo '  true'; echo '}'; } \
+    > tests/other.bats
+  git add tests/other.bats && git commit -q -m "test: other.bats" && git push -q origin HEAD:main
+  git fetch -q origin main
+  landable feat/untouched ut.sh                          # this land changes NO tests/*.bats
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  [ "$(echo "$output" | grep -c 'dead-assertion RED')" -eq 0 ]
+}
 # ════ LANE=v1 CORPUS — the kill switch, kept exercised so it cannot rot ════════════════════════
 # SHIP_LAND_LANE=v1 restores the pre-inversion full-corpus gate for one release. It is an ENV
 # switch rather than a revert because a revert would itself need the gate — the bootstrap deadlock
