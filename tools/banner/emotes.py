@@ -345,8 +345,40 @@ def clawd(
     )
 
 
-def base_css(e: Emote) -> str:
+def _light_rules(lt, scheme: str) -> str:
+    """The light palette, as a media override (`auto`), bare (`light`), or absent (`dark`)."""
+    if scheme == "dark":
+        return ""
+    body = (
+        f".skT{{stop-color:{lt.sky_top}}}.skM{{stop-color:{lt.sky_mid}}}"
+        f".skL{{stop-color:{lt.sky_low}}}"
+        f".gnT{{stop-color:{lt.ground_top}}}.gnB{{stop-color:{lt.ground_bot}}}"
+        f".eprint{{fill:{lt.rule}}}.esh{{opacity:.20}}"
+        f".eink{{fill:{lt.rule}}}.efg{{fill:{lt.fg}}}"
+        f".emd0{{fill:{lt.mound[0]}}}.emd1{{fill:{lt.mound[1]}}}.etuft{{fill:{lt.tuft}}}"
+        f".eglyph{{fill:#4a3d33}}"
+        # the stars are a NIGHT fact, not a dimmed one — a daylit sky with faint stars in it reads
+        # as a rendering fault rather than as daytime
+        f".estar{{display:none}}"
+    )
+    return (
+        body if scheme == "light" else f"@media(prefers-color-scheme:light){{{body}}}"
+    )
+
+
+def base_css(e: Emote, scheme: str = "auto") -> str:
     """The world's palette plus the creature's baseline life.
+
+    `scheme` selects how the two palettes are expressed:
+      auto  — dark as the base, light as a `prefers-color-scheme` override. THIS IS WHAT SHIPS.
+      dark  — dark only, media query omitted.
+      light — light as the base, media query omitted.
+
+    The two forced variants exist only for the review page, and for a reason worth stating: an asset
+    that self-themes can only be reviewed in ONE scheme at a time, because the media query answers to
+    the reader's own OS. Asking a reviewer to toggle their system appearance to check the other half
+    of the work is how the light theme goes unreviewed. Forcing each scheme into its own file lets the
+    page show both side by side — but they are review instruments, never the shipped asset.
 
     THE RESET LIST IS LOAD-BEARING. `gen.clawd_sprite` emits every optional group unconditionally —
     the alert arms, the ask-eyes, the standing legs, the shut lids. They are hidden by CSS, not by
@@ -403,25 +435,19 @@ def base_css(e: Emote) -> str:
         f"80%,100%{{transform:translateY(0)}}}}"
         f".armsIdle{{animation:earm 2s ease-in-out infinite}}"
         # ── light theme ───────────────────────────────────────────────────────────────────────────
-        f"@media(prefers-color-scheme:light){{"
-        f".skT{{stop-color:{lt.sky_top}}}.skM{{stop-color:{lt.sky_mid}}}.skL{{stop-color:{lt.sky_low}}}"
-        f".gnT{{stop-color:{lt.ground_top}}}.gnB{{stop-color:{lt.ground_bot}}}"
-        f".eprint{{fill:{lt.rule}}}.esh{{opacity:.20}}"
-        f".eink{{fill:{lt.rule}}}.efg{{fill:{lt.fg}}}"
-        f".emd0{{fill:{lt.mound[0]}}}.emd1{{fill:{lt.mound[1]}}}.etuft{{fill:{lt.tuft}}}"
-        f".eglyph{{fill:#4a3d33}}"
-        # the stars are a NIGHT fact, not a dimmed one — a daylit sky with faint stars in it reads
-        # as a rendering fault rather than as daytime
-        f".estar{{display:none}}"
-        f"}}"
+        # ONE definition of the light palette, wrapped or unwrapped depending on `scheme`. The forced
+        # variant therefore applies the SAME rules the media query would, rather than a second copy
+        # that could drift from it — a reviewer comparing a forced render against the shipped asset
+        # must be comparing the artwork, not two stylesheets that disagree.
+        + _light_rules(lt, scheme)
         # ── reduced motion freezes at 0%, which the reset list above makes a composed still ───────
-        f"@media(prefers-reduced-motion:reduce){{*{{animation:none!important}}}}"
+        + "@media(prefers-reduced-motion:reduce){*{animation:none!important}}"
     )
 
 
-def render(e: Emote) -> str:
-    """One candidate as a standalone, self-theming, self-contained SVG."""
-    css = base_css(e) + e.css()
+def render(e: Emote, scheme: str = "auto") -> str:
+    """One candidate as a standalone, self-contained SVG. `auto` is the shipping form."""
+    css = base_css(e, scheme) + e.css()
     return (
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {STAGE_W} {STAGE_H}" '
         f'width="{STAGE_W}" height="{STAGE_H}" role="img" '
@@ -581,9 +607,21 @@ def stop_world(name: str, t0: float, t1: float) -> str:
 def assert_story_shape(e: Emote) -> None:
     """A candidate without three acts is not a candidate, it is a movement."""
     for act in ("entry", "showcase", "exit"):
-        if not getattr(e, act).strip():
+        text = getattr(e, act).strip()
+        if not text:
             raise SystemExit(
                 f"emotes[{e.key}]: no {act.upper()} — a beat needs all three acts"
+            )
+        # A LENGTH FLOOR, because these strings are not decoration — the review page prints them as
+        # the candidate's story, so a placeholder becomes a shipped panel that describes nothing. The
+        # case is not hypothetical: a pack under construction registered a stub with entry="a",
+        # showcase="b", exit="c" purely to exercise the API, and every other gate passed it. Twelve
+        # characters is enough to distinguish a written act from a keystroke.
+        if len(text) < 12:
+            raise SystemExit(
+                f"emotes[{e.key}]: {act.upper()} is {text!r} — too short to be a written act. These "
+                f"strings are printed on the review page AS the story; a placeholder here ships as a "
+                f"panel that explains nothing."
             )
     if not 2.0 <= e.dur <= 9.0:
         raise SystemExit(
@@ -737,7 +775,7 @@ def _peek_burrow() -> Emote:
     e = Emote(
         key="burrow",
         title="THE NEIGHBOUR",
-        category="Visitors",
+        category="The world",
         entry="a mound of earth by the rule swells, then breaks",
         showcase="a second, smaller clawd pops up out of it and blinks at the resident",
         exit="it drops back down the SAME hole it came out of, and the mound settles flat",
@@ -930,7 +968,9 @@ def load_packs() -> None:
         __import__(mod.stem)
 
 
-def build_all(out: Path) -> list[tuple[Emote, Path]]:
+def build_all(
+    out: Path, schemes: tuple[str, ...] = ("auto",)
+) -> list[tuple[Emote, Path]]:
     out.mkdir(parents=True, exist_ok=True)
     made = []
     seen: set[str] = set()
@@ -947,6 +987,10 @@ def build_all(out: Path) -> list[tuple[Emote, Path]]:
         p = out / f"{e.key}.svg"
         p.write_text(svg, encoding="utf-8")
         made.append((e, p))
+        for sch in schemes:
+            if sch == "auto":
+                continue
+            (out / f"{e.key}.{sch}.svg").write_text(render(e, sch), encoding="utf-8")
         print(f"  {p}  {len(svg):,} B  ({e.title} — {e.dur:.1f}s story, {e.cls})")
     return made
 
@@ -954,9 +998,15 @@ def build_all(out: Path) -> list[tuple[Emote, Path]]:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--out", default="/tmp/emotes", type=Path)
+    ap.add_argument(
+        "--schemes",
+        default="auto",
+        help="comma list: auto (the shipping self-theming form), dark, light. The forced pair is "
+        "for the review page, which cannot otherwise show both halves of a self-theming asset.",
+    )
     args = ap.parse_args()
     load_packs()
-    made = build_all(args.out)
+    made = build_all(args.out, tuple(args.schemes.split(",")))
     print(
         f"\n{len(made)} candidate(s) · loop {EMOTE_P}s · panel {PANEL_PX}px (README-honest)"
     )
