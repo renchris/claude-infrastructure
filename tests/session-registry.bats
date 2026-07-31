@@ -41,7 +41,7 @@ mkentry() { # $1=uuid $2=name $3=pid
 }
 
 # helper: a definitely-dead pid
-deadpid() { sleep 1 & local p=$!; kill "$p" 2>/dev/null; wait "$p" 2>/dev/null || true; echo "$p"; }
+deadpid() { sleep 1 & local p=$!; kill "$p" 2>/dev/null || true; wait "$p" 2>/dev/null || true; echo "$p"; }
 
 @test "register: writes a well-formed entry with the expected fields" {
   printf '{"cwd":"/tmp/demo","reason":"startup"}' \

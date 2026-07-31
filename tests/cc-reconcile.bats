@@ -92,7 +92,7 @@ rows() { ls "$CC_REGISTRY_DIR"/*.json 2>/dev/null | wc -l | tr -d ' '; }
 # a definitely-dead real pid (spawn → kill → reap) — for the recycle-in-place stale-row heal tests.
 # The heal decision uses a REAL kill -0 on the row's recorded pid (aligned with cc-sessions), so a
 # "present" row needs a live pid ($$) and a "stale" row needs a dead one. Mirrors session-registry.bats.
-deadpid() { sleep 1 & local p=$!; kill "$p" 2>/dev/null; wait "$p" 2>/dev/null || true; echo "$p"; }
+deadpid() { sleep 1 & local p=$!; kill "$p" 2>/dev/null || true; wait "$p" 2>/dev/null || true; echo "$p"; }
 
 @test "backfills a live claude.exe pane (eval-track binary), not only bare claude" {
   # RED before the argv-scan fix: live_claude_pids matched only claude/*/claude/cli.js, so a live

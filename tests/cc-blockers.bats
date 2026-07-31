@@ -551,7 +551,7 @@ hold_run_lock() { # the verifier's OWN in-progress mark: run.lock.d/pid naming a
 
 teardown() {
   [ -f "$D/pids" ] || return 0
-  while read -r p; do [ -n "$p" ] && kill "$p" 2>/dev/null; done < "$D/pids"
+  while read -r p; do [ -n "$p" ] && kill "$p" 2>/dev/null || true; done < "$D/pids"
   return 0
 }
 
