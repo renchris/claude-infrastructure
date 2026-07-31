@@ -339,7 +339,7 @@ Each row names the **file or log that proves it**. Narration is not evidence.
 | A9 | Singleton holds | two concurrent `--decide` passes | second records `{action:"skipped",reason:"pass-in-flight"}`; exactly one journal pass appears |
 | A10 | Inert-alarm fires only with existence evidence | disable the label → check alarm text; enable+stop writing → check alarm text | disabled ⇒ `not-activated`; enabled+stale ⇒ `stalled`; never the reverse |
 | A11 | Activation is real | `launchctl print gui/$(id -u)/com.claude.dispatcher`; `/tmp/claude-dispatcher.stdout.log` | label loaded, **not** in `print-disabled`, log file **exists and is non-empty** |
-| A12 | Ledger invariants intact | `bin/cc-backlog` selftest + `cc-dispatch` selftest | all pre-existing assertions still pass (F12–F14 kept verbatim) |
+| A12 | Ledger invariants intact | ~~`bin/cc-backlog` selftest~~ + `cc-dispatch` selftest — **corrected 2026-07-31: `cc-backlog` has no selftest and never has** (`cc-backlog selftest` ⇒ rc 2 `unknown verb`; zero occurrences of the string in the source or `--help`). The real ledger oracle is `tests/cc-backlog.bats` (79) + `tests/cc-backlog-compact-race.bats` (5). | all pre-existing assertions still pass (F12–F14 kept verbatim) |
 | A13 | Saturation is visible (F16) | `jq 'select(.action=="decision" and .reason=="at-ceiling")'` grouped by pass — is there a pass in the last `CC_DISPATCH_SATURATED_H` (default 6) with **any** `admit`? | if every pass in the window is 100 % `at-ceiling`, an alarm row exists. Deferral is silent by design; *sustained total* deferral is not |
 | A14 | Ceiling counts the right thing | `cc-backlog list --all --json \| jq '[.[]\|select(.status=="claimed")]\|length'` vs the `live_workers` recorded on decision records | the two agree; and neither equals `claude-accounts .rows[].k` unless coincidental (guards the corrected S2 from silently regressing) |
 
@@ -482,6 +482,28 @@ splitting it needs a separate admission lock plus a double-admission RED-proof. 
 `de5e3e24be8f` rather than rushed — an un-RED-proofed change to the mechanism that prevents
 double-claiming is exactly the trade this rebuild's own F9 warns against.
 
+### What "landed green" is worth on this box — read the A12 row with this caveat
+
+Every verdict above was earned by **running the suites by hand before landing**, not by the land
+gate. `ship-land.sh:63` sheds the smoke phase at 1-min load ≥ `CC_GATE_MAX_LOAD` (default 8), and
+this box does not go below 8 by construction (13.42 measured during this session; 26 concurrently;
+62 in a prior incident). This land's own row in `~/.claude/land.log` records it plainly:
+
+```json
+{"ts":"2026-07-31T06:04:46Z","exit":0,"gate_scope":"fast","selected_n":0,"smoke":"skipped","smoke_n":0,"smoke_s":0}
+```
+
+Six commits touching `bin/cc-dispatch`, `bin/cc-blockers` and four suites, landed **behaviorally
+ungated** — statically green (lint + ratchets, one of which did block and was fixed) but zero bats
+at land time. That is also how `d6b417e9` landed a day earlier with `tests/cc-wave-plan.bats` RED
+while that suite is **direct-selected and un-exonerable** for it (`gate-select --explain` emits both
+a `literal:` and a `naming:` edge). The known `FULL_FILES` no-smoke path does **not** explain that
+one — none of the five were touched and selection was partial, 131 of 226 — so the load-shed is the
+operative mechanism, and the designed backstop cannot cover it either while `postland-verify` is in
+its known convergence deadlock. Filed as `507558782503`. Consequence for anyone reading this plan's
+acceptance table: these rows are trustworthy because they were *self-run*, and a future row that
+cites "the land gate was green" is citing a check that did not run.
+
 ### Also found live, and fixed (`8d182bc0`)
 
 The actuator discarded the evidence it was reporting on: `"$spawn" … >/dev/null 2>&1` meant every
@@ -580,6 +602,20 @@ rebase+ff-only serialized, land via project-local `/ship` continuously.
   false of the *pass*, because one lock spans decision and spawn (414–833 s). The architecture was
   never the problem; the lock's SCOPE was. Generalisable: when a design's key claim is about
   cost-of-X, check that the *unit holding the lock* is X and not X-plus-something-slow.
+- **2026-07-31 — the plan named a second tool that does not exist, and this row certified it.** A12's
+  stated read was "`bin/cc-backlog` selftest + `cc-dispatch` selftest". `cc-backlog` has **no**
+  selftest and never has (rc 2 `unknown verb`; zero occurrences in source or `--help`). Caught by a
+  peer verifier, *after* this session had already marked A12 PASS — the verdict survives on the real
+  oracle (`tests/cc-backlog.bats` 79 + compact-race 5), but the criterion's own read was fiction.
+  That is the **same class as A13 two entries up, in the same document**, which is the point: one
+  instance is an oversight, two is a habit. The cheap guard — grep the plan's own identifiers
+  against the tree — would have caught both, and neither cost more than a minute to check.
+- **2026-07-31 — "landed green" does not mean "tested" on this box.** `ship-land.sh:63` sheds the
+  smoke phase at load ≥ 8; the box never goes below 8. This plan's own land recorded
+  `smoke:"skipped", smoke_n:0`. So every acceptance verdict here is worth exactly what the *self-run*
+  suites are worth, and nothing more. It is also how a direct-selected suite stayed RED on trunk for
+  a day (`507558782503`). Corollary for every remaining row: run the full suite set your diff
+  touches — a suite you merely *edited* is not the boundary, a suite the selector *picks* is.
 - **2026-07-31 — a rotated journal silently changes a count's denominator.** `idl.jsonl` rotated at
   `20260730T193526Z`. An all-time `grep -c abstained` on the live file reads 0 — the right answer
   for the wrong reason, since §2's 12 abstentions moved into the `.gz`. Every number in §10 names
