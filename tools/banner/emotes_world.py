@@ -466,7 +466,7 @@ def _dig() -> Emote:
         # would be four decimal places of nothing.
         crumbs = "".join(
             f'<rect class="dgC{i}" x="{fmt(hole_cx - 8 - i * 5)}" y="{fmt(E_GROUND - 12)}" '
-            f'width="10" height="10"/>'
+            f'width="12" height="12"/>'
             for i in range(5)
         )
         return f'<g class="dgHole"><g class="dgW">{hole}</g></g><g class="eink">{crumbs}</g>'
@@ -474,6 +474,14 @@ def _dig() -> Emote:
     def css() -> str:
         # Five strokes on `.bob`: down-up, down-up, 0.24 s a pair. Fast enough to read as scrabbling
         # rather than as five separate crouches, which is what a 0.5 s pair looked like.
+        #
+        # The squash ALONE did not read. At the +-15 % the framework allows, five 12 % pulses on a
+        # flat-coloured body are a shimmer, and the first contact sheet showed the stroke frames as
+        # indistinguishable from rest. So the strokes are doubled onto `.rTurn` as a horizontal ROCK
+        # — a real displacement of the whole silhouette, back on the drive and forward on the
+        # recovery, which is what a digging animal actually does and what the eye actually catches.
+        # It cannot be a vertical pump: `.hop` moves the feet too, and 14 px down puts the soles
+        # through the ground plane.
         pump: list[tuple[float, float, float]] = [
             (0, 1, 1),
             (a, 1, 1),
@@ -489,6 +497,10 @@ def _dig() -> Emote:
             (b, 1, 1),
             (EMOTE_P, 1, 1),
         ]
+        rock: list[tuple[float, float, float]] = [(0, 0, 0), (a, 0, 0)]
+        for t in strokes:
+            rock += [(t, -11, 0), (t + 0.12, 4, 0)]
+        rock += [(w(e, 0.52), 0, 0), (b, 0, 0), (EMOTE_P, 0, 0)]
         return (
             stop_world("dgScr", a, back)
             + world_locked("dgW", ".dgW", a, back)
@@ -499,6 +511,7 @@ def _dig() -> Emote:
             # nothing on screen to swap.
             + egate("dgG", ".dgHole", [(dug, 11.4)])
             + squash("dgB", ".bob", pump)
+            + shift("dgRk", ".rTurn", rock)
             # Earth goes up and BACK — against travel — because that is the side the creature is not
             # working toward, and it is the only lateral direction this frame can distinguish.
             + "".join(
@@ -578,8 +591,14 @@ def _mote() -> Emote:
             + egate("moAl", ".armsAlert", [(w(e, 0.26), w(e, 0.86))])
             + egate("moAg", ".armsGate", [(w(e, 0.26), w(e, 0.86))], on_inside=False)
             # `linear`, with the acceleration authored into the SPACING of the last four keyframes —
-            # 40 px, then 78, then 130 in roughly equal time. An ease-in would have applied to the
+            # 50 px, then 80, then 130 in roughly equal time. An ease-in would have applied to the
             # drift as well and turned the entrance into a swoop.
+            #
+            # The path also CLIMBS as it comes in. Held level with the eye band — which is what 'at
+            # head height' first meant — the hover lands at y=148 inside the body's own 138..282
+            # band, and a white dot on flat orange reads as a speck ON the creature rather than as
+            # something in the air near it. It arrives over open sky to the right, rises as it
+            # crosses, and hovers 38 px clear of the crown, where the silhouette can be jumped at.
             # `.eglyph` carries `opacity:0` as its RESTING state — the framework added it so a glyph
             # whose only opacity lived in `glyph_pop`'s keyframes would not render FULLY VISIBLE in
             # the reduced-motion still. Borrowing the class for its ink alone and driving only
@@ -591,14 +610,15 @@ def _mote() -> Emote:
             # hanging unattached in the sky.
             + f"@keyframes moK{{0%{{transform:translate(0,0);opacity:0}}"
             f"{pctx(a)}%{{transform:translate(0,0);opacity:1}}"
-            f"{wp(e, 0.25)}%{{transform:translate(-232px,7px)}}"
-            f"{wp(e, 0.40)}%{{transform:translate(-356px,-2px)}}"
-            f"{wp(e, 0.48)}%{{transform:translate(-350px,11px)}}"
-            f"{wp(e, 0.54)}%{{transform:translate(-358px,-6px)}}"
-            f"{wp(e, 0.58)}%{{transform:translate(-361px,-48px)}}"
-            f"{wp(e, 0.62)}%{{transform:translate(-365px,-94px)}}"
-            f"{wp(e, 0.72)}%{{transform:translate(-371px,-134px)}}"
-            f"{wp(e, 0.84)}%{{transform:translate(-377px,-212px)}}"
+            f"{wp(e, 0.22)}%{{transform:translate(-172px,6px)}}"  # clear sky, right of the body
+            f"{wp(e, 0.34)}%{{transform:translate(-300px,-18px)}}"  # drifting left and climbing
+            f"{wp(e, 0.44)}%{{transform:translate(-356px,-48px)}}"  # hovering ABOVE the crown
+            f"{wp(e, 0.50)}%{{transform:translate(-350px,-38px)}}"
+            f"{wp(e, 0.55)}%{{transform:translate(-357px,-52px)}}"
+            f"{wp(e, 0.59)}%{{transform:translate(-360px,-78px)}}"  # it starts up on the launch
+            f"{wp(e, 0.63)}%{{transform:translate(-364px,-110px)}}"  # apex: 52 px clear of the crown
+            f"{wp(e, 0.72)}%{{transform:translate(-370px,-160px)}}"
+            f"{wp(e, 0.84)}%{{transform:translate(-377px,-240px)}}"
             f"{pctx(b)}%{{transform:translate(-383px,-342px);opacity:1}}"
             f"100%{{transform:translate(-392px,-640px);opacity:0}}}}"
             f".moDot{{animation:moK {fmt(EMOTE_P)}s linear infinite}}"
@@ -612,8 +632,8 @@ def _mote() -> Emote:
                     (w(e, 0.52), 0, 0),
                     (w(e, 0.56), -17, 0),
                     (w(e, 0.60), -30, 0),
-                    (w(e, 0.62), -34, 0),
-                    (w(e, 0.65), -29, 0),
+                    (w(e, 0.63), -34, 0),
+                    (w(e, 0.66), -29, 0),
                     (w(e, 0.70), -11, 0),
                     (w(e, 0.73), 0, 0),
                     (EMOTE_P, 0, 0),
@@ -665,12 +685,18 @@ def _greeting() -> Emote:
             window=(2.6, 8.6),
             cls="VISITOR",
             tie="two sessions passing on the same trunk",
+            # The resident stands left of centre so that BOTH creatures fit. The visitor is 220 px
+            # wide and needs a body-width of clear sky beside it; parking it at the default cx put
+            # its right half off the stage for the whole meeting, and every gate passed — a sprite
+            # half out of frame is still a legal sprite.
+            cx=120.0,
         )
     )
     a, b = e.window
     meet0, meet1 = 5.0, 7.2  # the stopped span: arrival to departure
     b_x = 800.0  # authored off the right edge
-    b_travel = -204.0  # …to 596, leaving 84 px of clear sky to the resident's 512
+    b_travel = -330.0  # …to 470, which is 86 px clear of the resident's 384 and 70 px inside
+    #                     the right edge — the whole visitor is on stage for the whole meeting
 
     def props() -> str:
         return f'<g class="grB">{clawd(e, sfx="B", scale=1.0, x=b_x)}</g>'
