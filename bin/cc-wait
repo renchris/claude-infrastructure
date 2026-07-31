@@ -27,8 +27,12 @@
 #       deadline RE-OBSERVES the effect / pages / escalates, never a disposition from silence (§3h: a
 #       busy waitee that ignores a page is still alive). Human context goes in --note; the guard ignores it.
 #
-# Exit: 0 = the expected signal landed (contract SATISFIED) · 2 = usage / fail-closed refusal ·
-#       3 = no waiter uuid · 5 = deadline reached (contract TIMED_OUT; re-observe emitted, NOT a reap).
+# Exit: 0 = the expected signal landed (contract SATISFIED — includes cc-await-ping rc 4, where the
+#           line WAS delivered and only its cursor write failed: a bounded dup, never a missed wake) ·
+#       2 = usage / fail-closed refusal · 3 = no waiter uuid ·
+#       5 = deadline reached (contract TIMED_OUT; re-observe emitted, NOT a reap) ·
+#       6 = the watcher exited before its deadline (contract ABORTED — rc 3/5/crash). Distinct from 5
+#           on purpose: only 5 is a statement about the WAITEE, and only 5 pages.
 # Env overrides (tests): CC_WAIT_CONTRACTS_DIR, CC_MAILBOX_DIR, CC_AWAIT_BIN.
 set -uo pipefail
 
@@ -139,6 +143,28 @@ cmd_wait() {
     close_contract "$cf" SATISFIED
     echo "cc-wait: contract $id SATISFIED — the expected signal landed." >&2
     exit 0
+  fi
+
+  # ── DISCRIMINATE THE NON-ZERO CODES (2026-07-31) ────────────────────────────────────────────────
+  # This used to be a bare fall-through: every non-zero rc closed TIMED_OUT and paged "past deadline".
+  # The comment below already asserted "cc-await-ping exit 2", but the code never checked, so two of
+  # the watcher's designed verdicts were reported as their own opposite:
+  #   rc 4 — the mail WAS DELIVERED; only the .seen cursor write failed (a bounded dup, never a loss).
+  #          Closing that TIMED_OUT pages "you may have missed your own wake" about a wake that HAPPENED.
+  #   rc 5 — ORPHANED: the waiter is provably gone and the watcher deliberately left the mail unacked.
+  #          There is no deadline to report and nobody alive to page.
+  # The deadline arm below is now reached only by rc 2, the code it always claimed to handle.
+  if [ "$rc" -eq 4 ]; then
+    close_contract "$cf" SATISFIED
+    echo "cc-wait: contract $id SATISFIED — the signal landed, but the shared cursor could NOT be advanced (cc-await-ping rc 4): the same line will be re-delivered once. A dup, never a loss — and NOT a missed deadline." >&2
+    exit 0
+  fi
+  if [ "$rc" -ne 2 ]; then
+    # rc 3 (no uuid/role) · rc 5 (orphaned) · any crash. The wait never reached its deadline, so
+    # TIMED_OUT would be a false statement about the waitee — and on rc 5 the page target is dead.
+    close_contract "$cf" ABORTED
+    echo "cc-wait: contract $id ABORTED — the watcher exited $rc before its deadline ($(case "$rc" in 3) echo 'no uuid/role to watch';; 5) echo 'the waiter session is provably gone; mail left unacked for the guard';; *) echo 'unexpected exit';; esac)). NOT a timeout: no deadline page issued (S-3b/L2-d still holds — nothing is reaped)." >&2
+    exit 6
   fi
 
   # ── deadline reached (cc-await-ping exit 2): dispatch the STRUCTURED action — a PAGE, never a reap.
