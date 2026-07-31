@@ -29,7 +29,7 @@ mkb() { printf '#!/usr/bin/env bats\n%s\n' "$2" > "$D/$1.bats"; }
 @test "--selftest passes: the lint discriminates in both directions" {
   run "$L" --selftest
   [ "$status" -eq 0 ]
-  echo "$output" | grep -q '14/14' || false
+  echo "$output" | grep -q '19/19' || false
 }
 
 # ── the LINE-scope rule, both directions ─────────────────────────────────────────────────────────
@@ -65,12 +65,115 @@ mkb() { printf '#!/usr/bin/env bats\n%s\n' "$2" > "$D/$1.bats"; }
   [ "$status" -eq 0 ]
 }
 
-@test "an ABSENT own-set is strict — a bare hand-run reports the whole truth" {
+@test "an ABSENT own-set is a CENSUS — everything is reported, and blamed on nobody" {
+  # Naming a target with no own-set means "lint this file", which has no change-set to scope to. The
+  # rc is unchanged from when this state was called "strict" — a census of a dirty file is honestly
+  # non-zero. What it may NOT do is call those findings the caller's, which is what it used to do:
+  # a bare hand-run printed "171 finding(s) … on lines THIS CHANGE WROTE" over the whole corpus.
   mkb bad '@test "x" {
   foo= bar
 }'
   run env -u CC_BATS_SC_OWN "$L" "$D/bad.bats"
   [ "$status" -eq 1 ]
+  echo "$output" | grep -q 'CENSUS' || false
+  ! echo "$output" | grep -q 'THIS CHANGE WROTE' || false
+}
+
+# ── THE BARE RUN — the defect this section exists for ────────────────────────────────────────────
+# `bats-shellcheck-lint.sh` with no arguments used to census the whole corpus and word it as a
+# verdict: "171 finding(s) above are on lines THIS CHANGE WROTE", naming suites the working tree had
+# never touched. Proven a misattribution — stashing the session's only edit left the output
+# BYTE-IDENTICAL. No gate was ever wrong (both callers always set CC_BATS_SC_OWN), but bare is the
+# natural manual/agent invocation, and a red that fires every single time teaches its reader to skip
+# the line that would have named a real regression.
+#
+# mkrepo builds the smallest tree that can tell the two apart: a suite carrying INHERITED debt on
+# trunk, and a second suite added after it. A correct bare run blames only the second.
+mkrepo() {  # $1=dir → git tree with the lint at scripts/, dirty trunk suite, and origin/main
+  mkdir -p "$1/scripts" "$1/tests"
+  cp "$L" "$1/scripts/lint.sh"; chmod +x "$1/scripts/lint.sh"
+  git -C "$1" init -q >/dev/null 2>&1
+  git -C "$1" config user.email t@t; git -C "$1" config user.name t
+  printf '#!/usr/bin/env bats\n@test "inherited" {\n  old= debt\n}\n' > "$1/tests/inherited.bats"
+  git -C "$1" add -A >/dev/null 2>&1; git -C "$1" commit -qm base >/dev/null 2>&1
+  # A remote-tracking ref without a remote — the trunk ladder reads refs, not network.
+  git -C "$1" update-ref refs/remotes/origin/main HEAD
+}
+
+@test "a bare run infers <trunk>...HEAD and blames ONLY what that range wrote" {
+  mkrepo "$D/r"
+  printf '#!/usr/bin/env bats\n@test "mine" {\n  foo= bar\n}\n' > "$D/r/tests/mine.bats"
+  git -C "$D/r" add -A >/dev/null 2>&1; git -C "$D/r" commit -qm mine >/dev/null 2>&1
+
+  run env -u CC_BATS_SC_OWN "$D/r/scripts/lint.sh"
+  [ "$status" -eq 1 ]
+  # The inferred frame is ANNOUNCED — a guess the reader cannot see is indistinguishable from a fact.
+  echo "$output" | grep -q 'inferred own-scope origin/main\.\.\.HEAD' || false
+  # It blocks on the line this change really wrote…
+  echo "$output" | grep -q 'mine.bats' || false
+  echo "$output" | grep -q 'THIS CHANGE WROTE' || false
+  # …and the inherited debt sitting on trunk is NOT attributed to the caller. This single assertion
+  # is the regression: before the fix, inherited.bats was listed under that same banner.
+  ! echo "$output" | grep -q 'inherited.bats' || false
+}
+
+@test "a bare run on a branch that wrote no .bats line is GREEN, not a corpus red" {
+  mkrepo "$D/r2"
+  run env -u CC_BATS_SC_OWN "$D/r2/scripts/lint.sh"
+  [ "$status" -eq 0 ]
+  # …and it says what the green does NOT cover, so it is never read as "the corpus is clean".
+  echo "$output" | grep -q 'census' || false
+  ! echo "$output" | grep -q 'THIS CHANGE WROTE' || false
+}
+
+@test "a bare run that cannot resolve a trunk REFUSES, rather than inventing a change-set" {
+  # The other half of the fix: with no range derivable, reporting the corpus as your work is the
+  # same lie in a quieter voice. A non-verdict must be LOUD (exit 2), never a confident red.
+  mkrepo "$D/r3"
+  git -C "$D/r3" update-ref -d refs/remotes/origin/main
+  run env -u CC_BATS_SC_OWN "$D/r3/scripts/lint.sh"
+  [ "$status" -eq 2 ]
+  echo "$output" | grep -q 'REFUSING TO GUESS' || false
+  ! echo "$output" | grep -q 'THIS CHANGE WROTE' || false
+}
+
+@test "--census is the whole-corpus report, and attributes its findings to nobody" {
+  mkrepo "$D/r4"
+  run env -u CC_BATS_SC_OWN "$D/r4/scripts/lint.sh" --census
+  [ "$status" -eq 1 ]                                   # a census of a dirty corpus is honestly non-zero
+  echo "$output" | grep -q 'inherited.bats' || false     # it DOES report the debt…
+  echo "$output" | grep -q 'attributed to NOBODY' || false
+  ! echo "$output" | grep -q 'THIS CHANGE WROTE' || false # …and never calls it yours
+}
+
+@test "the own-set and the scan speak one path dialect — an absolute target still matches" {
+  # own_lines emits repo-root-relative "tests/f.bats:N". When the scan held ABSOLUTE paths the
+  # own-set matched none of them and the run exited "clean — no scanned suite carries a line from
+  # this change": a false green, which is the one outcome worse than the false red fixed above.
+  # Verified reachable before the normalisation, so this is a regression test, not a hypothetical.
+  mkrepo "$D/r5"
+  printf '#!/usr/bin/env bats\n@test "mine" {\n  foo= bar\n}\n' > "$D/r5/tests/mine.bats"
+  git -C "$D/r5" add -A >/dev/null 2>&1; git -C "$D/r5" commit -qm mine >/dev/null 2>&1
+  run env -u CC_BATS_SC_OWN "$D/r5/scripts/lint.sh" --range 'origin/main...HEAD' "$D/r5/tests"
+  [ "$status" -eq 1 ]
+  echo "$output" | grep -q 'THIS CHANGE WROTE' || false
+  ! echo "$output" | grep -q 'no scanned suite carries a line' || false
+}
+
+@test "a range git cannot resolve is LOUD — never an empty own-set that reads as clean" {
+  # `git rev-parse --verify` cannot validate a RANGE (it returns 1 for every one, valid or not), so
+  # the check is `git diff --quiet <range> --`, which answers 128 for a range git cannot resolve.
+  # Without it a typo yields an empty own-set, which means "I wrote no line" ⇒ a confident green.
+  mkrepo "$D/r6"
+  run env -u CC_BATS_SC_OWN "$D/r6/scripts/lint.sh" --range 'no-such-ref...HEAD'
+  [ "$status" -eq 2 ]
+  echo "$output" | grep -q 'NOT a clean verdict' || false
+}
+
+@test "an unknown option is a usage error, not a silently-scanned path" {
+  run "$L" --no-such-flag
+  [ "$status" -eq 2 ]
+  echo "$output" | grep -q 'unknown option' || false
 }
 
 @test "a clean suite is GREEN under every scope" {
