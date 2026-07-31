@@ -202,9 +202,19 @@ more than one kitty runs. The window is now titled `DO-NOT-CLOSE`.
 
 **To finish this gap — read the TSV, no re-derivation:**
 ```bash
-tail -1 docs/research/data/kitty-drift-run2.log          # verdict=OK | ABORTED-* | PARTIAL
+git log --oneline --grep='data(kitty-drift): run 2 result'   # the verdict + the fitted rates
+tail -3 docs/research/data/kitty-drift-run2-2026-07-31.tsv   # the series itself (TRACKED)
 # fit first-vs-last on ports (col 6) / threads (col 5) / mem (col 4); ≥0.9 of 6h must have elapsed
 ```
+⚠ **The `.log` is NOT on trunk** — `.gitignore:11` is `*.log`, so `kitty-drift-run2.log` exists only
+in the worktree that ran it. The verdict token therefore reaches trunk **through the collector's
+commit message**, and the data through the `.tsv`. Do not write a resume instruction that points at
+the log: on a fresh clone it reads as an empty file, which is indistinguishable from a run that never
+happened.
+
+`scripts/kitty-drift-collect.sh` was left running detached to commit the result when the run exits,
+so the series lands whether or not a session is still watching. It **commits and stops** — landing
+stays a decision with a person behind it.
 `verdict=ABORTED-*` ⇒ the run is void, re-run it; it does **not** mean kitty leaked. Re-run:
 `scripts/kitty-drift-run.sh --hours 6 --panes 30 --pid <kitty-pid> --socket unix:/tmp/kitty-drift2`
 
