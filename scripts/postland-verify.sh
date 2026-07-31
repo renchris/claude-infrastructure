@@ -920,7 +920,26 @@ auto_revert() { # <culprit> <failing-file> — 0 = attempted (marker written), 1
   return 0
 }
 red_actions() { # <sha> <file> — bisect, page, backlog, notify, auto-revert. Side channels || true'd.
-  local sha="$1" file="$2" good culprit bisected c12 pf sid
+  local sha="$1" file="$2" good culprit bisected c12 pf sid ftest
+  # ONE rendering of the failing NAME for all three artifacts below. The page and the notify already
+  # carried it; the BACKLOG ITEM — the only DURABLE one — did not, and that asymmetry is what made an
+  # unattributed RED unactionable. When classify_failures takes branch (b) (a real `not ok` with no
+  # `# (in test file …)` diagnostic) FAILING is the sentinel "tests/", so the title read "post-land
+  # RED: tests/ @ <sha>" — a work item with nothing in it to act on, while the name that WAS captured
+  # lived only in the page. Item 7ddd2c171e43 was minted from exactly that shape (2026-07-30,
+  # retries=0, load 47.25): by the time a worker opened it the 06:42 green had deleted the page —
+  # run_target's green branch clears postland-red-*.page — so the name was unrecoverable BY
+  # CONSTRUCTION, not by accident. 78526c19 has since closed that item's OWN route in (a run our
+  # own bound cut is no longer a verdict at all), but branch (b) still stands for rc 0|1 — a real
+  # bats failure it cannot pin to a file, which C13b deliberately keeps as a RED — so the durable
+  # artifact can still be minted nameless. That surviving case is what C13d pins.
+  # Bounded in pure bash (no subshell; this path runs starved by definition): FAILTEST is TAP-derived
+  # and the title becomes a JSONL ledger FIELD, where an embedded newline would corrupt the record it
+  # is appended to — mapping it to a space keeps the token boundary readable. The 120 cap is BYTES
+  # under the C locale launchd hands this job, exactly as `cut -c` would be: not a multibyte fix,
+  # just a cheaper one, sized so no single test name dominates the backlog listing.
+  ftest="${FAILTEST:-?}"; ftest="${ftest//[$'\n\r']/ }"; ftest="${ftest:0:120}"
+  [ -n "$ftest" ] || ftest='?'
   good="$(cat "$LASTGREEN" 2>/dev/null || true)"
   bisected="$(do_bisect "$file" "$good" "$sha" 2>/dev/null || true)"
   culprit="$bisected"
@@ -933,18 +952,18 @@ red_actions() { # <sha> <file> — bisect, page, backlog, notify, auto-revert. S
   { now_epoch
     printf 'post-land RED @ %s\n' "$(now_iso)"
     printf 'culprit: %s (bisected from last-green %s)\n' "$c12" "$(sha12 "${good:-unknown}")"
-    printf 'failing: %s::%s\n' "$file" "${FAILTEST:-?}"
+    printf 'failing: %s::%s\n' "$file" "$ftest"
     [ "${#FAILING[@]}" -gt 1 ] && printf 'all failing: %s\n' "${FAILING[*]}"
     printf 're-run:  git -C %s worktree add --detach /tmp/pv-repro %s && cd /tmp/pv-repro && bats %s\n' \
       "$REPO" "$c12" "$file"
     printf 'env:     %s\n' "$ENV_FP"
   } > "$pf" 2>/dev/null || true
-  [ -x "$BACKLOG_BIN" ] && "$BACKLOG_BIN" add --title "post-land RED: $file @ $c12" \
+  [ -x "$BACKLOG_BIN" ] && "$BACKLOG_BIN" add --title "post-land RED: $file::$ftest @ $c12" \
     --project claude-infrastructure --source postland-verify >/dev/null 2>&1  # sha defeats wasDone
   notify "Claude post-land RED" "$file fails at $c12 — see $pf"
   sid="$(author_sid "$culprit")"
   [ -n "$sid" ] && [ -x "$NOTIFY_BIN" ] \
-    && "$NOTIFY_BIN" "$sid" "post-land RED: $file::${FAILTEST:-?} at $c12 (your land) — see $pf" >/dev/null 2>&1
+    && "$NOTIFY_BIN" "$sid" "post-land RED: $file::$ftest at $c12 (your land) — see $pf" >/dev/null 2>&1
   # AUTO-REVERT only a BISECTED culprit (guard 0). When the bisect was undecidable, `culprit` above
   # fell back to the target sha for PAGING purposes — reverting that would revert a tip nothing
   # convicted, so the fallback is deliberately not passed through here.

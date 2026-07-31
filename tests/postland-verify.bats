@@ -705,6 +705,28 @@ printf '1..1\nok 1 p\n'")"
   grep -q 'boom' "$CC_PAGES_DIR"/postland-red-*.page || false
 }
 
+# C13c above retires the case where OUR OWN bound cut the run (rc 124) — that is never a RED now.
+# This is the case that SURVIVES it: rc 1, so bats really did fail, with a `not ok` it cannot pin to
+# a file. C13b already guards that verdict and the PAGE it writes. But the page is TRANSIENT — the
+# green branch of run_target deletes every postland-red-*.page — while the backlog item OUTLIVES the
+# run, and the item was the one dropping the name, minting the bare sentinel "post-land RED: tests/
+# @ <sha>". Not hypothetical: item 7ddd2c171e43 carried exactly that title, and by the time a worker
+# opened it the 06:42 green had already deleted the page holding the only copy of the name — so the
+# item was unactionable BY CONSTRUCTION. A guard on the page alone cannot catch that: the page passes
+# and the durable record rots anyway. Pin the name into the DURABLE artifact.
+@test "C13d: the DURABLE backlog title carries the test NAME, not just the sentinel" {
+  fake="$BATS_TEST_TMPDIR/bats-nodiag"
+  printf '#!/bin/bash\n[ "$1" = --version ] && { echo "Bats 1.13.0"; exit 0; }\necho "1..1"\necho "not ok 1 boom"\nexit 1\n' > "$fake"
+  chmod +x "$fake"                                    # a NAMED failure, with nothing to attribute it to
+  run env CC_POSTLAND_BATS="$fake" bash "$SUT" --run-if-needed
+  [ -f "$REC/cc-backlog.argv" ]                       # the RED path did reach the backlog
+  # The bare sentinel is what shipped before and is NOT enough: the name must ride along, in the
+  # same `file::test` shape the page and the notify already use.
+  grep -q 'post-land RED: tests/::boom @' "$REC/cc-backlog.argv"
+  # ...and the durable item must AGREE with the transient page, so the two cannot drift apart.
+  grep -q 'failing: tests/::boom' "$CC_PAGES_DIR"/postland-red-*.page
+}
+
 # ── NO PATH NORMALIZATION: the corpus runs in the environment being gated (settled 2026-07-29) ──
 # The inverse of what these tests used to assert. A prepend lived in the SUT (5abe5934) and turned
 # a minimal-PATH red green — by running the corpus in an environment that never occurs. This gate's
