@@ -106,12 +106,30 @@ def archive_report():
         print("  ⇒ the archiver is wired and running; nothing has actually blocked in range.")
         return
 
-    by = collections.Counter(r.get("resolved_by") or "unknown" for r in rows)
-    # PostToolUse fires only on the grant path; Stop/SessionEnd clear a denial or an
-    # abandonment. Anything else is left UNCLASSIFIED rather than folded into either.
-    approved = by.get("PostToolUse", 0)
-    refused = by.get("Stop", 0) + by.get("SessionEnd", 0)
-    other = sum(by.values()) - approved - refused
+    # Outcome inference, and the reason it needs TWO fields rather than one.
+    #
+    # The obvious rule — "cleared by PostToolUse ⇒ approved" — is wrong. PostToolUse fires
+    # for EVERY tool, not just the prompted one, so after a DENIAL the turn can continue,
+    # run some other tool, and have that tool's PostToolUse clear the still-pending beacon.
+    # Counting those as approvals would overstate how permissive the classifier is, which
+    # is the one number this whole archive exists to inform.
+    #
+    # So a grant is only claimed when the tool that CLEARED the beacon is the same tool the
+    # prompt was raised for. A PostToolUse clear by a different tool is collateral, and its
+    # outcome is genuinely unknown — it is reported as such, never folded into either side.
+    approved = refused = collateral = other = 0
+    for r in rows:
+        ev = r.get("resolved_by") or "unknown"
+        if ev == "PostToolUse":
+            ct, tn = r.get("cleared_tool") or "", r.get("tool_name") or ""
+            if ct and tn and ct != tn:
+                collateral += 1
+            else:
+                approved += 1
+        elif ev in ("Stop", "SessionEnd"):
+            refused += 1
+        else:
+            other += 1
     span = ""
     ts = [r.get("resolved_ts") for r in rows if r.get("resolved_ts")]
     if ts:
@@ -119,6 +137,9 @@ def archive_report():
     print(f"  {len(rows)} resolved prompts across "
           f"{len({r.get('session_id') for r in rows})} sessions{span}")
     print(f"  approved {approved}  ·  denied/abandoned {refused}  ·  unclassified {other}")
+    if collateral:
+        print(f"  ({collateral} cleared by a DIFFERENT tool's PostToolUse — outcome unknown,")
+        print("   counted in neither bucket; see cc-permission-beacon.sh `archive`)")
 
     waits = sorted((r.get("waited_s") or 0) for r in rows)
     if waits:

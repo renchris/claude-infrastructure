@@ -122,10 +122,17 @@ note at the end of this section.
    it does not re-page a block that was already damped.
 4. ~~**Archive the beacon.**~~ **LANDED `bfc40579` + `40f93e05`.** Every resolution is appended to
    a durable append-only JSONL under `~/.claude/autonomy/permission-archive` before `rm -f`, and
-   `bin/cc-permission-audit` consumes it. `resolved_by` separates the grant path (`PostToolUse`,
-   which fires only on approval) from denial/abandonment (`Stop`/`SessionEnd`) — the signal the
-   classifier actually needs, recoverable from nowhere else. Deliberately **not** under
-   `CC_PERMPEND_DIR`: that is `/tmp`, wiped on reboot, and the archive must outlive uptime.
+   `bin/cc-permission-audit` consumes it. Deliberately **not** under `CC_PERMPEND_DIR`: that is
+   `/tmp`, wiped on reboot, and the archive must outlive uptime.
+
+   Outcome attribution needed a correction found during the build, and it is worth recording
+   because the wrong version is the intuitive one. "Cleared by `PostToolUse` ⇒ approved" is
+   **false**: `PostToolUse` fires for *every* tool, not just the prompted one, so after a **denial**
+   the turn can continue, run some other tool, and have that tool's `PostToolUse` clear the still-
+   pending beacon — archiving a refusal as an approval, and overstating how permissive the
+   classifier is, which is the single number this archive exists to inform. The record therefore
+   carries `cleared_tool` alongside `resolved_by`, and a grant is only claimed when the clearing
+   tool matches the prompted one; a mismatch is reported as **unknown**, in neither bucket.
 
 **Exit trigger:** a deliberately blocked session is surfaced, with its identity, in < 60 s, twice
 running, at ≥ 20 live sessions.
