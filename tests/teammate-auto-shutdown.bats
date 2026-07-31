@@ -148,18 +148,64 @@ wait_for() { local i=0; while [ ! -e "$1" ] && [ "$i" -lt 60 ]; do sleep 0.05; i
   [ ! -e "$D/tmux-calls.log" ]                        # the detached close was never spawned
 }
 
-# (vi) lib ABSENT → one WARN + adoption check skipped → close proceeds (graceful degradation)
-@test "lib absent → WARN + adoption skipped → close proceeds (partial-deploy degradation)" {
-  export CC_INTERACTIVE_LIB="$D/no-such-lib.sh"      # absent
-  local sid=sidV team=teamV member=wkrDegraded pane=%99 wt="$D/wtV"
-  mkdir -p "$wt"; worktreetsv "$team" "$member" "$wt"; teamcfg "$team" "$member" "$pane"
-  reg "$sid" PANE-V "$wt" 3600
-  tx "$sid" 700; utx "$sid" 60                        # even WITH an operator prompt, an absent lib can't check
-  run hookrun "$member" "$team" "$sid" "$wt"
+# ── (vi) lib ABSENT — R3 parity with bin/cc-teardown §1c (2026-07-31) ────────────────────────────
+# This arm used to assert the OPPOSITE: "lib absent → WARN + adoption skipped → close proceeds",
+# with a fixture carrying a REAL operator prompt 60s old. It pinned the fail-open as correct on the
+# actuator that CLOSES PANES — the identical pathology cc-teardown carried until its own R3 fix, and
+# the reason a grep for the guard was misleading: a `type -t ci_last_interactive_epoch` guard was
+# present the whole time, it just branched the wrong way. MEASURED before the fix, on the incident
+# fixture (operator prompt 950s ago, idle 900s, landed, spawn 50000s ago, reap-guard absent so this
+# belt is the only who-gate): lib present ⇒ held + paged; lib absent ⇒ `it2 session close -f -s
+# PANE-INC`, a live operator conversation killed. The three arms below replace it — two refusals and
+# a POSITIVE CONTROL, the same shape tests/cc-teardown.bats uses for the same fix.
+_lib_absent_fixture() {  # <sid> <team> <member> <pane> → adopted-looking teammate, lib unresolvable
+  export CC_INTERACTIVE_LIB="$D/no-such-lib.sh"      # absent — the deploy-lag shape
+  mkdir -p "$D/wt_$1"; worktreetsv "$2" "$3" "$D/wt_$1"; teamcfg "$2" "$3" "$4"
+  reg "$1" "PANE-$1" "$D/wt_$1" 3600
+  tx "$1" 700; utx "$1" 60                            # a REAL operator prompt 60s ago
+}
+
+@test "lib ABSENT and NO beat system → HELD, no close, desk paged (never an ungated close)" {
+  export CC_BEAT_DIR="$D/no-such-beats"
+  _lib_absent_fixture sidV teamV wkrDegraded %99
+  run hookrun wkrDegraded teamV sidV "$D/wt_sidV"
   [ "$status" -eq 0 ]
-  [[ "$output" == *'"continue": false'* ]] || false  # close proceeds (degraded)
-  grep -q "WARN" "$LOGF"
-  [ ! -e "$D/notify-calls.log" ]                     # adoption never evaluated → no page
+  [[ "$output" != *'"continue": false'* ]] || false  # the turn is NOT stopped
+  grep -q "presence UNPROVABLE" "$LOGF"
+  [ -e "$D/notify-calls.log" ]                       # surfaced to the desk
+  sleep 0.3
+  [ ! -e "$D/tmux-calls.log" ]                       # the detached close was never spawned
+}
+
+@test "lib ABSENT but the BEAT shows a RECENT operator prompt → HELD (independent oracle)" {
+  export CC_BEAT_DIR="$D/beats"; mkdir -p "$CC_BEAT_DIR"
+  export CC_BEAT_NOW="$NOW"
+  _lib_absent_fixture sidW teamW wkrBeatFresh %98
+  printf '{"sid":"sidW","t":%s,"who":"operator","operatorT":%s,"seq":1}\n' "$NOW" "$((NOW-60))" \
+    > "$CC_BEAT_DIR/sidW.json"
+  run hookrun wkrBeatFresh teamW sidW "$D/wt_sidW"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *'"continue": false'* ]] || false
+  [ -e "$D/notify-calls.log" ]
+  sleep 0.3
+  [ ! -e "$D/tmux-calls.log" ]
+}
+
+# Without this, the fix could ship as a PERMANENT teammate-close outage — every idle teammate held
+# and the desk paged on each — and both arms above would still be green. cc-teardown RED-proved that
+# exact amplifier (routing one extra world through its refusal turned 7 of 17 selftests into REFUSE).
+@test "POSITIVE CONTROL: lib ABSENT but the BEAT proves presence is OLD → closes (hold is not inert)" {
+  export CC_BEAT_DIR="$D/beats"; mkdir -p "$CC_BEAT_DIR"
+  export CC_BEAT_NOW="$NOW"
+  export CC_CLASSIFY_INTERACTIVE_HOLD_S=600
+  _lib_absent_fixture sidX teamX wkrBeatOld %97
+  # system IS live (fresh t), but the operator high-water mark is far older than the hold
+  printf '{"sid":"sidX","t":%s,"who":"auto","operatorT":%s,"seq":9}\n' "$NOW" "$((NOW-99999))" \
+    > "$CC_BEAT_DIR/sidX.json"
+  run hookrun wkrBeatOld teamX sidX "$D/wt_sidX"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"continue": false'* ]] || false  # close proceeds on the independent oracle
+  grep -q "presence proven ABSENT by beat" "$LOGF"
   wait_for "$D/tmux-calls.log"
 }
 
