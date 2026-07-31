@@ -193,7 +193,34 @@ console layer (sidebar row per pane, blue ring on attention, notifications panel
 | Q2 | **CLOSED** | `a1793357` | §5b gains a correction subsection quoting its own withdrawn sentence; §5a untouched as instructed. |
 | Q4 | **CLOSED** | `a1793357`, `4455f175`, `ffddbaa9` | 4.00 threads/pane in all four places it was wrong — §6.7, §8 falsification row, the §5 verdict table, the README table. |
 | Q5 | **CLOSED** | `ffddbaa9` | cmux in the README table; table reordered by thread cost and given a **console** column, the axis cmux actually wins. |
-| Q3 | **in flight** | — | recording + hands-on evidence; see below. |
+| Q3 | **CLOSED** | `49304944`, `24978960` | `assets/demo/terminal-bench.{tape,webp,mp4}` + a README evidence block: the instrument running against the live fleet, the readings behind the table, and a reproduce-it-yourself command per row. |
+
+**Q3 detail — five things a successor should not rediscover:**
+
+1. **The subject chose itself: `terminal-bench.sh` is READ-ONLY by construction** (creates no panes,
+   closes none, writes no preference). That is the only reason a recording could point at the
+   operator's live fleet mid-session while the box was recovering from two panics in 48 h.
+   `terminal-bakeoff.sh` **does** create panes — it was ruled out on the safety ceiling, and measuring
+   the *live* fleet turned out to be better evidence than a synthetic bake-off anyway.
+2. **`pgrep -x iTerm2` cannot see iTerm2 on macOS.** Its accounting name is the first 16 chars of its
+   FULL PATH (`/Applications/iT`), so `-x` can never match. An ad-hoc census run while preparing the
+   recording concluded *"iTerm2 is not running"* and a whole scene was scripted around it — while
+   iTerm2 was **pid 591 burning 107% CPU**. `terminal-bench.sh` was never fooled (it falls back to the
+   `ps` comm basename) and its source documents the trap. **Census by comm basename, never `pgrep -x`.**
+3. **VHS 0.11.0 ignores `Set Framerate` for its mp4 muxer** — emits 25 fps regardless. Probed
+   directly with a minimal tape at `Set Framerate 60` → `avg_frame_rate=25/1`. The operator asked for
+   1080p60; the resolution is honoured, the rate is not, and the caption says **25** rather than
+   claiming a 60 the file does not have. A true 60 needs the `screencapture` path, which films a real
+   window and carries a content-leak risk the scripted tape does not.
+4. **A 45-second drift window cannot resolve a rate finer than ~80 ports/hr**, so kitty's `+0` over
+   45 s is a real reading but **cannot exclude iTerm2's measured +76/hr**. Publish drift readings WITH
+   their resolution or they read as far stronger than they are — this is the `bound-must-fit-the-band`
+   class. The discriminating run is 1800 s (~2 ports/hr).
+5. **Two verification traps hit live.** `vhs … | tail` returned **rc=0 while the render failed**
+   (the pipe's exit, not vhs's) — run it unpiped and read the text. And the VHS parser rejects
+   escaped quotes inside `Type "…"`, which is why the tape uses none. Verify a WebP by **summed
+   duration** (76,720 ms, matching the mp4 exactly), never by frame count — `gif2webp` merges runs of
+   identical frames, so the count legitimately drops.
 
 **Three traps found while closing these — each would have cost a successor a re-derivation:**
 
