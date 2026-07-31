@@ -1,9 +1,30 @@
 # terminal-bench.tape — the terminal bake-off instrument, run against the LIVE fleet.
 #
 #   vhs assets/demo/terminal-bench.tape     → assets/demo/terminal-bench.gif  (intermediate, gitignored)
-#                                           → assets/demo/terminal-bench.mp4  (1920x1080 master, committed)
 #   gif2webp -m 6 -min_size -mt assets/demo/terminal-bench.gif \
-#            -o assets/demo/terminal-bench.webp                               (the inline artifact)
+#            -o assets/demo/terminal-bench.webp                               (the INLINE artifact)
+#
+# TWO ARTIFACTS, TWO ROUTES — and the split is forced, not stylistic.
+#   • INLINE  `terminal-bench.webp`  ← THIS TAPE (VHS → gif → gif2webp, lossless, deterministic)
+#   • LINKED  `terminal-bench.mp4`   ← `assets/demo/terminal-bench-capture.sh` under
+#                                      `screencapture -v -V88 -R<rect>`, then trim + scale to 1080p60
+# Why not one: VHS 0.11.0 **ignores `Set Framerate` for its mp4 muxer** and emits 25 fps whatever the
+# tape asks (probed directly: a minimal tape at `Set Framerate 60` still produced 25/1). The operator
+# asked for 1080p60, so the mp4 is a real `screencapture` at display refresh (60.00 Hz on all three
+# displays here) and this tape no longer emits an mp4 at all.
+#
+# 🚨 THE CAPTURE ROUTE CAN LEAK THE OPERATOR'S SCREEN. Three failures hit while producing it, each
+# caught by the mandatory contact sheet and none by any encoder error:
+#   1. `screencapture -l<window-id>` does NOT scope VIDEO to that window — it recorded the whole
+#      display, Dock, wallpaper and the operator's other windows. Use `-R x,y,w,h` and make your own
+#      window cover the rect exactly.
+#   2. A macOS notification banner (carrying live session ids) landed in the top-right of the frame.
+#      Banners are right-aligned; keep the rect's right edge left of ~x=1368 on this display.
+#      1280×720 at x=0 clears it by 88 pt and captures at 2× ⇒ 2560×1440 ⇒ a clean 1080p downscale.
+#   3. The window closed before the capture's `-V` budget expired, so the tail filmed the desktop.
+#      Trim to the last dark frame; a mean-luma scan separates them unambiguously here
+#      (terminal ≈ 6.4k, wallpaper ≈ 22.8k out of 65535). Scan EVERY second, not a sample.
+# Re-shooting is cheap; shipping a leak is not. Contact-sheet before you encode, every time.
 #
 # WHY THIS RECORDING EXISTS. The README makes quantitative claims about which terminal survives
 # 30+ concurrent Claude Code panes. Those claims are only worth anything if the instrument behind
@@ -46,7 +67,7 @@
 # claim; do not read the clip as the evidence for the drift number.
 
 Output assets/demo/terminal-bench.gif
-Output assets/demo/terminal-bench.mp4
+# NO mp4 Output here — it would overwrite the real 1080p60 screencapture with a 25 fps VHS render.
 
 Set Shell bash
 Set FontSize 22
