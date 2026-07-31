@@ -31,6 +31,13 @@
 # (7a40d5a8, "could not compare" is not parity) were first exercised only AFTER the change was live.
 # Fixed by SPLITTING, not by loosening this contract: the live pair moved to
 # tests/deploy-parity-live.bats (listed below) and the hermetic 29 went back into the gate.
+# The provenance confirms the split lands on exactly the right seam: at 9609fca1 — the land that
+# SEEDED this manifest — `@test` #8 of tests/deploy-parity.bats was "the real repo passes its own
+# assertion (guards the live host deployment)", and "deploy-parity test 8 is TRUE-red" is the
+# reason recorded for admitting the file (docs/plans/LAND_PIPELINE_V2.md, deploy amend log
+# 2026-07-28: the live layer lacked the skills/video-understanding symlink). That test is one of
+# the two now in tests/deploy-parity-live.bats. So the file's entire justification for being here
+# moved with it, and the 29 that never had one stopped paying for it.
 # So: admit a file here only when its live-layer dependence is the WHOLE file. If it is a minority
 # of the tests, split the file first — the per-file granularity is the contract, and matching the
 # file boundary to the partition boundary is how you honour it rather than amend it.
