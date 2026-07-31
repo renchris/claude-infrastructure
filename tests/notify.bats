@@ -260,3 +260,67 @@ fire() { printf '%s' "$1" | "$H" "$2"; }
   [ $(( $(date +%s) - start )) -lt 3 ]
   [[ "$(osa)" == *'…'* ]] || false        # still truncated, still rendered
 }
+
+# ── CWE-59/377: fixed names in world-writable /tmp (codex-security 2026-07-29 finding 2) ─────────
+# The artifacts were `/tmp/claude-notify.log` and `/tmp/claude-notify-<acct>-<sid>-<evt>.lock` —
+# fixed, derivable names in a mode-1777 directory. The sticky bit stops another uid REPLACING a file
+# we own; it does not stop them PRE-CREATING a name that does not exist yet. So a planted symlink
+# turned every append into a write into an attacker-chosen file AS US (on a hook that fires on every
+# Stop), and a planted lock muted one named session. S1-S4 RED-prove against a pristine git-archive
+# of the pre-fix hook; S5 is the positive control that keeps them from passing vacuously, and S6
+# pins the host property the whole finding rests on (both green either side, by design).
+
+@test "S1: a symlink planted at the log path is NOT followed (arbitrary-file append)" {
+  local victim="$BATS_TEST_TMPDIR/victim"; : > "$victim"
+  ln -s "$victim" "$CC_NOTIFY_DIR/claude-notify.log"
+  # afplay's stderr is the SECOND append at this same path — a redirect the eye skips, and it
+  # creates the target just as readily. Make the stub emit on stderr so this covers it too.
+  printf '#!/bin/bash\necho boom >&2\nexit 1\n' > "$BATS_TEST_TMPDIR/bin/afplay"
+  fire "$(payload sym1 /w/proj 'ls')" permission
+  [ ! -s "$victim" ]                                        # nothing reached the attacker's target
+  [[ "$(osa)" == *'display notification "ls"'* ]] || false  # and the alert still fired
+}
+
+@test "S2: a symlink planted at the lock path neither mutes the session nor bumps its target" {
+  # A fresh victim mtime is what makes this an attack rather than litter: pre-fix, `[[ -f ]]` FOLLOWS
+  # the symlink, reads mtime=now, and takes the `< 2` suppression branch — the alert simply vanishes.
+  local victim="$BATS_TEST_TMPDIR/lockvictim"; : > "$victim"
+  ln -s "$victim" "$CC_NOTIFY_DIR/claude-notify-.claude-test-mute-permission.lock"
+  fire "$(payload mute /w/proj 'rm -rf /')" permission
+  [[ "$(osa)" == *'display notification "rm -rf /"'* ]] || false
+}
+
+@test "S3: with no seam set, the artifact dir is private — not a fixed name in 1777 /tmp" {
+  local base="$BATS_TEST_TMPDIR/tmpbase"; mkdir -p "$base"
+  # `env` (not `env -i`) so HOME/PATH/CLAUDE_CONFIG_DIR stay fixtured; only the seam is removed.
+  run env -u CC_NOTIFY_DIR TMPDIR="$base" bash -c 'printf "%s" "$1" | "$2" permission' _ \
+      "$(payload dflt /w/proj 'ls')" "$H"
+  [ "$status" -eq 0 ]
+  [ -d "$base/cc-notify" ]
+  [ "$(stat -f %Lp "$base/cc-notify")" = "700" ]            # private by construction, not by luck
+  [ -f "$base/cc-notify/claude-notify.log" ]                # and it really landed there
+}
+
+@test "S4: an artifact dir that is a SYMLINK is refused outright, and the alert still fires" {
+  local real="$BATS_TEST_TMPDIR/realdir"; mkdir -p "$real"
+  local link="$BATS_TEST_TMPDIR/linkdir"; ln -s "$real" "$link"
+  run env CC_NOTIFY_DIR="$link" bash -c 'printf "%s" "$1" | "$2" permission' _ \
+      "$(payload lnk /w/proj 'ls')" "$H"
+  [ "$status" -eq 0 ]
+  [ ! -e "$real/claude-notify.log" ]                        # refused, never written through
+  [[ "$(osa)" == *'display notification "ls"'* ]] || false  # artifacts off, alert on
+}
+
+@test "S5: positive control — a legitimate dir IS still written (guards can be seen to pass)" {
+  # Without this, a guard that refused EVERYTHING would satisfy S1-S4 vacuously.
+  fire "$(payload ctl /w/proj 'ls')" permission
+  [ -s "$CC_NOTIFY_DIR/claude-notify.log" ]
+  [ -f "$CC_NOTIFY_DIR/claude-notify-.claude-test-ctl-permission.lock" ]
+}
+
+@test "S6: host property — /tmp really is mode 1777, which is what made the names plantable" {
+  # %Lp is the low three octal digits ONLY — it reads 777 here and would have passed a 0777 /tmp
+  # just as happily. The sticky bit lives in the high digits (%Mp), and it is the whole reason the
+  # attack is pre-create rather than replace, so the assertion has to name it.
+  [ "$(stat -f %Mp%Lp /private/tmp)" = "1777" ]
+}

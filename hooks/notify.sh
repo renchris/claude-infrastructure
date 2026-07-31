@@ -32,11 +32,64 @@ nty_osa() {
 EVENT_TYPE="${1:-complete}"
 SOUNDS_DIR="/System/Library/Sounds"
 SCREENREADER_SOUNDS="/System/Library/PrivateFrameworks/ScreenReader.framework/Versions/A/Resources/Sounds"
-# Seam: CC_NOTIFY_DIR relocates the log + debounce locks (default /tmp, unchanged in production).
-# Exists so the bats suite can assert on real artifacts without writing live fleet state — the same
-# role CC_PERMPEND_DIR plays for the beacon.
-CC_NOTIFY_DIR="${CC_NOTIFY_DIR:-/tmp}"
+# ── ARTIFACT DIR: private by construction, never a fixed name in world-writable /tmp ─────────────
+# WHY: the log and the debounce locks were fixed names directly under mode-1777 /tmp. The sticky
+# bit stops another uid REPLACING a file we own — it does NOT stop them PRE-CREATING a name that
+# does not exist yet. A symlink planted at /tmp/claude-notify.log makes every append below follow
+# it and write into an attacker-chosen file AS US, on a hook that fires on every Stop; a planted
+# lock silences one named session, and the lock filenames publish live session ids to anyone who
+# can read the directory. CWE-59/377 — codex-security 2026-07-29 finding 2, whose findings.json
+# records exactly this dataflow.
+#
+# The guarantee is the MODE OF A DIRECTORY WE MINT, not the luck of the base path — the same
+# conclusion the launcher hardening reached (09a0214a): answer the property, not the path.
+#   • base = $TMPDIR first: per-uid /var/folders/…/T, already 0700, and NO fork on the hot path.
+#   • launchd injects no TMPDIR into agent jobs (14 of 15 sampled user agents in 09a0214a), so fall
+#     back to `getconf DARWIN_USER_TEMP_DIR`, which resolves from confstr and NOT the environment
+#     (verified here under `env -i`). A bare `${TMPDIR:-/tmp}` is the measured trap: it reads as
+#     applied while landing straight back in 1777 /tmp exactly where it matters. The fork is paid
+#     only on that fallback, never when TMPDIR is present.
+#   • then a dedicated subdir minted 0700, so even the /tmp fallback leaves no pre-create primitive.
+#
+# Relocating (rather than only tightening the mode, as the telemetry dir had to) is safe here
+# because claude-notify.log has NO consumer: the only non-doc references in-tree are this writer
+# and the bats suite, which follows the seam. hooks/session-end.sh's tmp sweep reaps only
+# handoff-* at maxdepth 1, so nothing was reaping these anyway and nothing is stranded by the move.
+#
+# Seam: CC_NOTIFY_DIR relocates the log + debounce locks (bats asserts on real artifacts without
+# writing live fleet state — the same role CC_PERMPEND_DIR plays for the beacon).
+if [ -z "${CC_NOTIFY_DIR:-}" ]; then
+  _nty_base="${TMPDIR:-}"
+  if [ -z "$_nty_base" ]; then _nty_base="$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null || true)"; fi
+  if [ -z "$_nty_base" ]; then _nty_base="/tmp"; fi
+  CC_NOTIFY_DIR="${_nty_base%/}/cc-notify"
+fi
+# Mint at CREATE time only — `[ -d ]` is a builtin, so the steady state costs no fork on a hook
+# this hot. `umask 077` rather than `mkdir -m 700`: with -p, -m applies ONLY to the deepest
+# component (SC2174, and confirmed on this host — the intermediate came out 0755), so a
+# CC_NOTIFY_DIR pointing somewhere two levels deep would leave a world-writable parent behind.
+# umask covers every component, and the dir is never briefly loose between a mkdir and a chmod.
+if [ ! -d "$CC_NOTIFY_DIR" ]; then (umask 077; mkdir -p "$CC_NOTIFY_DIR") 2>/dev/null || true; fi
+# A dir that is a symlink, not ours, or unwritable is refused outright — a foreign dir at this path
+# IS the pre-create primitive. Refusal disables the ARTIFACTS ONLY; the alert below still fires.
+NTY_DIR_OK=1
+if [ -L "$CC_NOTIFY_DIR" ] || [ ! -d "$CC_NOTIFY_DIR" ] || [ ! -O "$CC_NOTIFY_DIR" ] || [ ! -w "$CC_NOTIFY_DIR" ]; then
+  NTY_DIR_OK=0
+fi
+# Per-sink guard as well as per-dir. CC_NOTIFY_DIR is an operator-settable seam that can point
+# anywhere, so the symlink refusal must be LOCAL to the sink rather than inherited from an
+# assumption about its parent. Safe iff: the dir passed, the path is not a symlink, and it is
+# either absent or a regular file we own. All builtins — no fork.
+nty_sink_ok() {
+  if [ "$NTY_DIR_OK" != 1 ]; then return 1; fi
+  if [ -L "$1" ]; then return 1; fi
+  if [ ! -e "$1" ]; then return 0; fi
+  if [ -f "$1" ] && [ -O "$1" ]; then return 0; fi
+  return 1
+}
 LOG_FILE="${CC_NOTIFY_DIR}/claude-notify.log"
+# Resolved once: every append below goes to the real log or to /dev/null, never to a planted path.
+if nty_sink_ok "$LOG_FILE"; then NTY_LOG="$LOG_FILE"; else NTY_LOG="/dev/null"; fi
 
 # ── IDENTITY: read the harness payload so an alert NAMES the session it came from ────────────────
 # WHY: EVENT_TYPE="$1" used to be this hook's ENTIRE input — it read no stdin and no payload — so
@@ -121,7 +174,10 @@ TOOL="$(nty_scrub "$TOOL")"
 # (§3 Stage A.2). No session id (fail-open payload) ⇒ fall back to the old account-wide key.
 _ACCT="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"; _ACCT="${_ACCT##*/}"
 DEBOUNCE_FILE="${CC_NOTIFY_DIR}/claude-notify-${_ACCT}-${SID_SAFE:-nosid}-${EVENT_TYPE}.lock"
-if [[ -f "$DEBOUNCE_FILE" ]]; then
+# The same sink guard runs on the lock, and `-f` alone would not have been it: `[[ -f ]]` FOLLOWS a
+# symlink to a regular file, so the planted-lock mute would have read as a legitimate fresh lock.
+# An unsafe lock path means NO debounce rather than a trusted one — fail toward notifying.
+if nty_sink_ok "$DEBOUNCE_FILE" && [[ -f "$DEBOUNCE_FILE" ]]; then
     LAST_NOTIFY=$(stat -f %m "$DEBOUNCE_FILE" 2>/dev/null || echo 0)
     NOW=$(date +%s)
     # A lock stamped in the FUTURE is treated as stale, never as fresh. `NOW - LAST_NOTIFY` goes
@@ -134,7 +190,9 @@ if [[ -f "$DEBOUNCE_FILE" ]]; then
         exit 0
     fi
 fi
-touch "$DEBOUNCE_FILE" 2>/dev/null || true   # same rule: the lock is best-effort, the alert is not
+# same rule: the lock is best-effort, the alert is not — and we never `touch` a path the guard
+# rejected, since that is precisely how a planted symlink would get its target's mtime bumped.
+if nty_sink_ok "$DEBOUNCE_FILE"; then touch "$DEBOUNCE_FILE" 2>/dev/null || true; fi
 
 case "$EVENT_TYPE" in
     permission)
@@ -202,13 +260,15 @@ fi
 # under `set -e` an unwritable log file (disk full, or a foreign-owned file at this fixed
 # world-writable path after the tmp cleaner reaps it) aborted the hook and the alert was never
 # rendered at all. A missing log line must never cost the notification it is describing.
-{ echo "$(date): Playing ${SOUND} for ${EVENT_TYPE} [${SID8:-nosid}${DIR:+ ${DIR}}]" >> "$LOG_FILE"; } 2>/dev/null || true
+{ echo "$(date): Playing ${SOUND} for ${EVENT_TYPE} [${SID8:-nosid}${DIR:+ ${DIR}}]" >> "$NTY_LOG"; } 2>/dev/null || true
 
 # Play sound async (background with disown so script can exit immediately)
+# afplay's stderr is the OTHER append at this path — a redirect the eye skips, and it CREATES the
+# file just as readily as the log line above, so it needs the resolved sink too.
 if [[ "$SOUND" == /* ]]; then
-    afplay "${SOUND}" 2>> "$LOG_FILE" &
+    afplay "${SOUND}" 2>> "$NTY_LOG" &
 else
-    afplay "${SOUNDS_DIR}/${SOUND}" 2>> "$LOG_FILE" &
+    afplay "${SOUNDS_DIR}/${SOUND}" 2>> "$NTY_LOG" &
 fi
 disown 2>/dev/null || true
 
