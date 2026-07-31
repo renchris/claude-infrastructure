@@ -81,8 +81,8 @@ WORKING_S="${CC_QUEUE_WORKING_S:-300}"     # transcript younger than this ⇒ WO
 NOW="${CC_QUEUE_NOW:-$(date +%s)}"         # frozen-clock seam: tests pin this for exact ages
 COLD=999999999                             # unresolvable transcript ⇒ sentinel ⇒ COLD (fail-safe)
 
-OPT_STATE=all OPT_GROUP=none OPT_ACCOUNT= OPT_CWD= OPT_LIMIT=20
-OPT_JSON=0 OPT_ATTACH= OPT_WATCH= OPT_CHECK=0 OPT_NOCOLOR=0 OPT_SELFTEST=0
+OPT_STATE=all OPT_GROUP=none OPT_ACCOUNT='' OPT_CWD='' OPT_LIMIT=20
+OPT_JSON=0 OPT_ATTACH='' OPT_WATCH='' OPT_CHECK=0 OPT_NOCOLOR=0 OPT_SELFTEST=0
 
 die(){ printf 'cc-queue: %s\n' "$*" >&2; exit 2; }
 
@@ -117,7 +117,7 @@ if [ -t 1 ] && [ "$OPT_NOCOLOR" = 0 ] && [ -z "${NO_COLOR:-}" ]; then
   C_RED=$'\033[38;2;255;95;95m'; C_YEL=$'\033[38;2;255;200;90m'; C_GRN=$'\033[38;2;120;220;140m'
   C_DIM=$'\033[38;2;150;150;150m'; C_BLD=$'\033[1m'; C_OFF=$'\033[0m'
 else
-  C_RED= C_YEL= C_GRN= C_DIM= C_BLD= C_OFF=
+  C_RED='' C_YEL='' C_GRN='' C_DIM='' C_BLD='' C_OFF=''
 fi
 
 # ── source readers ───────────────────────────────────────────────────────────────────────────────
@@ -333,7 +333,7 @@ render_banner(){
 }
 
 render_table(){
-  local rows="$1" bw="$2" cw="$3" total shown_b n_b n_w n_i n_d
+  local rows="$1" bw="$2" cw="$3" total n_b n_w n_i n_d
   n_b="$(printf '%s' "$rows" | jq '[.[]|select(.state=="blocked")]|length')"
   n_w="$(printf '%s' "$rows" | jq '[.[]|select(.state=="working")]|length')"
   n_i="$(printf '%s' "$rows" | jq '[.[]|select(.state=="idle")]|length')"
@@ -416,6 +416,10 @@ selftest(){
   trap 'rm -rf "${tmp:-}"' EXIT
   mkdir -p "$tmp/pend" "$tmp/tel" "$tmp/reg" "$tmp/cfg/projects/-x-proj"
   ok(){ n=$((n+1)); if [ "$1" = 0 ]; then pass=$((pass+1)); printf 'ok %d - %s\n' "$n" "$2"; else printf 'not ok %d - %s\n' "$n" "$2"; rc=1; fi; }
+  # Assertion helpers: an `if` around the real command, so no `$?` is ever read after a condition.
+  eq(){ if [ "$1" = "$2" ]; then ok 0 "$3"; else ok 1 "$3"; printf '#   got=%s want=%s\n' "$1" "$2"; fi; }
+  saw(){ if printf '%s' "$2" | grep -q "$1"; then ok 0 "$3"; else ok 1 "$3"; printf '#   missing: %s\n' "$1"; fi; }
+  nosaw(){ if printf '%s' "$2" | grep -q "$1"; then ok 1 "$3"; printf '#   unexpectedly present: %s\n' "$1"; else ok 0 "$3"; fi; }
 
   export CC_PERMPEND_DIR="$tmp/pend" CC_TELEMETRY_DIR="$tmp/tel" CC_REGISTRY_DIR="$tmp/reg"
   export CC_QUEUE_NOW=1000000 CC_QUEUE_PS="echo 4242 claude-fake" CC_QUEUE_WORKING_S=300
@@ -423,8 +427,8 @@ selftest(){
   # 1. INERT: no beacon dir at all ⇒ must NOT report a clean all-clear
   rm -rf "$tmp/pend"
   out="$("$0" --no-color 2>&1)"
-  printf '%s' "$out" | grep -q 'BEACON INERT'; ok $? "absent beacon dir renders INERT (not a false all-clear)"
-  printf '%s' "$out" | grep -q 'nothing blocked'; [ $? -ne 0 ]; ok $? "INERT never prints the trustworthy all-clear"
+  saw 'BEACON INERT' "$out" "absent beacon dir renders INERT (not a false all-clear)"
+  nosaw 'nothing blocked' "$out" "INERT never prints the trustworthy all-clear"
 
   # 1b. dir PRESENT but heartbeat ABSENT ⇒ still INERT. A separate state from 1: some other actor can
   # create the directory (a stray mkdir, an unpacked tarball, a sibling tool), and only the heartbeat
@@ -433,7 +437,7 @@ selftest(){
   # survived every other assertion.)
   mkdir -p "$tmp/pend"; rm -f "$tmp/pend/.beacon-alive"
   out="$("$0" --no-color 2>&1)"
-  printf '%s' "$out" | grep -q 'BEACON INERT'; ok $? "dir present but heartbeat MISSING is still INERT"
+  saw 'BEACON INERT' "$out" "dir present but heartbeat MISSING is still INERT"
 
   # 2. LIVE + empty ⇒ trustworthy all-clear (the OTHER side of the three-state split)
   # NB: capture to a var, never `"$0" ... | grep -q`. Under `set -o pipefail` a matching grep -q exits
@@ -441,16 +445,16 @@ selftest(){
   # FALSE exactly when it MATCHES (memory: pipefail-inverts-early-exit-probe). Caught here live.
   mkdir -p "$tmp/pend"; : > "$tmp/pend/.beacon-alive"
   out="$("$0" --no-color 2>&1)"
-  printf '%s' "$out" | grep -q 'nothing blocked'; ok $? "live+empty beacon renders the trustworthy all-clear"
+  saw 'nothing blocked' "$out" "live+empty beacon renders the trustworthy all-clear"
 
   # 3. a real blocked beacon ⇒ exact command + wait duration
   printf '{"ts":999700,"tool_name":"Bash","tool_input":{"command":"git push --force origin main"},"cwd":"/x/proj"}' > "$tmp/pend/sid-blocked.json"
   out="$("$0" --no-color 2>&1)"
-  printf '%s' "$out" | grep -q 'git push --force origin main'; ok $? "blocked row shows the EXACT blocked command"
-  printf '%s' "$out" | grep -q '5m00s'; ok $? "blocked row shows how long it has waited (300s ⇒ 5m00s)"
+  saw 'git push --force origin main' "$out" "blocked row shows the EXACT blocked command"
+  saw '5m00s' "$out" "blocked row shows how long it has waited (300s ⇒ 5m00s)"
 
   # 4. fail-safe: a beacon with NO telemetry row is still a row
-  printf '%s' "$out" | grep -q 'enrich:none'; ok $? "beacon with no telemetry row still renders (marked enrich:none)"
+  saw 'enrich:none' "$out" "beacon with no telemetry row still renders (marked enrich:none)"
 
   # 5. enrichment + classification: alive pid + warm transcript ⇒ working; cold ⇒ idle; dead ⇒ done
   printf '{"ts":999000,"session_id":"sid-work","cwd":"/x/proj","config_dir":"%s/cfg","model":"m","pid":4242,"used_pct":17}' "$tmp" > "$tmp/tel/sid-work.json"
@@ -459,12 +463,12 @@ selftest(){
   : > "$tmp/cfg/projects/-x-proj/sid-work.jsonl"; touch -t "$(date -r 999950 +%Y%m%d%H%M.%S 2>/dev/null || echo 202601010000.00)" "$tmp/cfg/projects/-x-proj/sid-work.jsonl" 2>/dev/null
   : > "$tmp/cfg/projects/-x-proj/sid-idle.jsonl"; touch -t "$(date -r 900000 +%Y%m%d%H%M.%S 2>/dev/null || echo 202001010000.00)" "$tmp/cfg/projects/-x-proj/sid-idle.jsonl" 2>/dev/null
   js="$("$0" --json 2>/dev/null)"
-  [ "$(printf '%s' "$js" | jq -r '.[]|select(.sid=="sid-work").state')" = working ]; ok $? "alive pid + warm transcript ⇒ working"
-  [ "$(printf '%s' "$js" | jq -r '.[]|select(.sid=="sid-idle").state')" = idle ];    ok $? "alive pid + cold transcript ⇒ idle"
-  [ "$(printf '%s' "$js" | jq -r '.[]|select(.sid=="sid-dead").state')" = done ];    ok $? "dead pid ⇒ done (pid not a live claude owner)"
+  eq "$(printf '%s' "$js" | jq -r '.[]|select(.sid=="sid-work").state')" 'working' "alive pid + warm transcript ⇒ working"
+  eq "$(printf '%s' "$js" | jq -r '.[]|select(.sid=="sid-idle").state')" 'idle' "alive pid + cold transcript ⇒ idle"
+  eq "$(printf '%s' "$js" | jq -r '.[]|select(.sid=="sid-dead").state')" 'done' "dead pid ⇒ done (pid not a live claude owner)"
 
   # 6. ordering: blocked is always first
-  [ "$(printf '%s' "$js" | jq -r '.[0].state')" = blocked ]; ok $? "blocked sorts first"
+  eq "$(printf '%s' "$js" | jq -r '.[0].state')" 'blocked' "blocked sorts first"
 
   # 7. no silent caps — assert POSITIVELY that every row is rendered, and that a real cap ANNOUNCES
   # itself. Asserting only "the phrase 'not shown' is absent" was vacuous: a mutation that truncated
@@ -474,17 +478,19 @@ selftest(){
   printf '{"ts":999000,"session_id":"sid-i3","cwd":"/x/proj","config_dir":"%s/cfg","model":"m","pid":4242}' "$tmp" > "$tmp/tel/sid-i3.json"
   n_idle="$("$0" --json 2>/dev/null | jq '[.[]|select(.state=="idle")]|length')"
   out="$("$0" --no-color --state idle --limit 0 2>&1)"
-  [ "$(printf '%s' "$out" | grep -c '^  *[0-9]')" = "$n_idle" ]; ok $? "--limit 0 renders EVERY row (${n_idle} idle), none dropped"
+  eq "$(printf '%s' "$out" | grep -c '^  *[0-9]')" "$n_idle" "--limit 0 renders EVERY row (${n_idle} idle), none dropped"
   out="$("$0" --no-color --state idle --limit 1 2>&1)"
-  printf '%s' "$out" | grep -q 'more not shown'; ok $? "a real cap ANNOUNCES what it withheld (never a silent truncation)"
-  [ "$(printf '%s' "$out" | grep -c '^  *[0-9]')" = 1 ]; ok $? "--limit 1 actually caps the rendered rows"
+  saw 'more not shown' "$out" "a real cap ANNOUNCES what it withheld (never a silent truncation)"
+  eq "$(printf '%s' "$out" | grep -c '^  *[0-9]')" '1' "--limit 1 actually caps the rendered rows"
 
   # 8. malformed file must not take out the run (batch-with-fallback)
   printf 'NOT JSON{{{' > "$tmp/tel/broken.json"
-  [ "$("$0" --json 2>/dev/null | jq -r '.[]|select(.sid=="sid-work").state')" = working ]; ok $? "a malformed source file degrades gracefully (good rows survive)"
+  eq "$("$0" --json 2>/dev/null | jq -r '.[]|select(.sid=="sid-work").state')" 'working' "a malformed source file degrades gracefully (good rows survive)"
 
   # 9. --check refuses to pass while the beacon is inert
-  rm -rf "$tmp/pend"; "$0" --check >/dev/null 2>&1; [ $? -ne 0 ]; ok $? "--check fails on an INERT beacon (never passes vacuously)"
+  rm -rf "$tmp/pend"
+  if "$0" --check >/dev/null 2>&1; then ok 1 "--check fails on an INERT beacon (never passes vacuously)"
+  else ok 0 "--check fails on an INERT beacon (never passes vacuously)"; fi
 
   printf '1..%d\n' "$n"
   [ "$rc" = 0 ] && printf '# all %d passed\n' "$pass" || printf '# FAILED (%d/%d passed)\n' "$pass" "$n"
