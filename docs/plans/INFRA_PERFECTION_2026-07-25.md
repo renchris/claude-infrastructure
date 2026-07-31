@@ -531,8 +531,17 @@ stale, and the third's prescribed remedy was the wrong fix.** Original text pres
 
 - **Live deploy lag — STALE, already resolved.** `deploy-parity-assert.sh` from the MAIN checkout now
   exits **0**, all 6 rows OK/LINKED; `bin/cc-ctx-audit` and `hooks/lib/idl-log.sh` both have live
-  symlinks. Nothing left for the operator. (Consistent with the §CLOSED note above: no tracked
-  `hooks/lib/` file is live-missing any more.)
+  symlinks. Nothing left for the operator *on this axis*. (Consistent with the §CLOSED note above: no
+  tracked `hooks/lib/` file is live-missing any more.)
+  **Do not read that as "deployed".** `deploy-parity` answers *do the symlinks EXIST* — a different
+  state of the same population from *do they point at CURRENT content* (memory
+  `sibling-auditors-must-share-the-state-model`). Measured at close: `~/.claude/hooks/` and
+  `~/.claude/scripts/` are per-file symlinks into the SHARED checkout, which sits **81 commits behind
+  `origin/main`** and is dirty with a peer session's WIP, and `com.claude.deploy-live` last exited
+  **1**. So both fixes below are landed and content-verified on trunk but **NOT live** — the deployed
+  `git-worktree-guard.sh` still runs the per-pid loop. That blockage is already owned by backlog
+  **`da18f179ac50`** (the 0-green-stamp deadlock: deploy waits on a postland verdict that stamps red
+  spuriously, 10 hypotheses eliminated) — not re-filed here, and not fixable from a worktree.
 
 - **3 trunk-debt reapers — STALE on all three names, and the 2 survivors were FALSE POSITIVES.**
   `cc-await-ping`, `dispatch-assert.sh`, `desk-invariant.sh` are all `$DECLARED` and pass. The lint
