@@ -217,12 +217,28 @@ done < <(grep -rnE 'CC_SUP_GC_S:-[0-9]+' $DECLARED 2>/dev/null)
 # A new file that both touches an evidence artifact AND deletes is a reaper nobody reviewed. Without
 # this, the lint has a false-negative hole — and a detector with a blind spot is the bug it exists to
 # prevent (audit §3i). Add the file to $DECLARED and justify its horizon.
+#
+# BOTH legs observe CODE, never prose. §1/§2 strip comment hits with is_comment(); §3 could not,
+# because `grep -rl` yields a bare filename with no line to test — so a file whose ONLY tie to an
+# evidence artifact was a comment MENTIONING cc-registry was convicted as an undeclared reaper. That
+# is exactly the defect this file documents at is_comment() ("a check must observe the thing it
+# guards, not prose about it"), surviving in the one section that could not reach the helper. It
+# fired on hooks/session-continue.sh:472 and hooks/lib/mailbox-pending.sh:526 — both comments — and
+# the remedy it PRESCRIBED (declare them) would have recorded two non-reapers as reviewed reapers,
+# diluting the very list §1/§2 scan for horizons. `grep -rn` makes the helper reachable. This opens
+# no false-NEGATIVE hole: a file whose only reference to an evidence artifact is a comment does not
+# touch that artifact at all, and a `rm -f` that is itself commented out deletes nothing.
+has_code_delete(){
+  grep -nE -- '-delete|rm -f' "$1" 2>/dev/null | sed -E 's/^[0-9]+://; s/^[[:space:]]*//' | grep -qvE '^#'
+}
 while IFS= read -r f; do
   [ -n "$f" ] || continue
   case " $DECLARED " in *" $f "*) continue ;; esac
-  grep -qE -- '-delete|rm -f' "$f" 2>/dev/null || continue
+  has_code_delete "$f" || continue
   bad "$f  UNDECLARED reaper on an evidence artifact — declare it in \$DECLARED and justify its horizon"
-done < <(grep -rlE "$EVIDENCE_GREP" bin hooks scripts statusline.sh 2>/dev/null | grep -vE 'e2e|lint')
+done < <(grep -rnE "$EVIDENCE_GREP" bin hooks scripts statusline.sh 2>/dev/null \
+           | grep -vE '^[^:]*(e2e|lint)' \
+           | while IFS= read -r h; do is_comment "$h" || printf '%s\n' "${h%%:*}"; done | sort -u)
 
 # ── 4. the supervisor, once it exists, must not re-declare the sweep interval ─────────────────────
 if [ -f scripts/lead-supervisor.sh ]; then
