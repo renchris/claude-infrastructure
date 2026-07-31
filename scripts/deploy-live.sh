@@ -11,7 +11,8 @@
 # Stamp contract: <stamps>/<tree-sha>.json containing "verdict":"green" (tree-keyed, so a
 # rebase/cherry-pick that preserves the tree keeps its verdict). Written by postland-verify.sh.
 #
-# Behavior: fetch origin/main → walk it newest-first → first GREEN commit = TARGET →
+# Behavior: UNCONDITIONAL link refresh (see link_refresh — monotone, so it is never nested in the
+# advance) → fetch origin/main → walk it newest-first → first GREEN commit = TARGET →
 # `merge --ff-only TARGET` (never origin/main) → run install.sh (idempotent) → POST-DEPLOY HOST
 # CHECKS (§4.3) → report the un-stamped commits still queued above the deployed tip.
 #
@@ -41,7 +42,8 @@
 # stamps present — documented escape hatch).
 # Env: DEPLOY_REPO · CC_POSTLAND_DIR · CC_POSTLAND_BIN · CC_PAGES_DIR · CC_DEPLOY_SCAN ·
 #      CC_DEPLOY_DAMP_S · CC_HOST_MANIFEST · CC_DEPLOY_HOST_TIMEOUT_S · CC_BACKLOG_BIN ·
-#      CC_DEPLOY_BATS_BIN / CC_DEPLOY_TIMEOUT_BIN (UNSET ⇒ resolved; SET-EMPTY ⇒ disabled).
+#      CC_DEPLOY_BATS_BIN / CC_DEPLOY_TIMEOUT_BIN (UNSET ⇒ resolved; SET-EMPTY ⇒ disabled) ·
+#      CC_DEPLOY_PARITY_ASSERT (UNSET ⇒ scripts/deploy-parity-assert.sh; SET-EMPTY ⇒ refresh off).
 # bash-3.2-safe, no eval, fail-closed, never rolls back.
 set -uo pipefail
 
@@ -200,7 +202,81 @@ host_checks() { # <deployed-sha> — never blocks, never rolls back, never chang
   return 0
 }
 
+# ── link refresh (MONOTONE ⇒ UNCONDITIONAL, never nested in the advance) ─────────────────────────
+# Advancing content and reconciling the namespace are UNRELATED operations that used to share one
+# branch: install.sh sat below `merge --ff-only`, so BOTH earlier exits — "already deployed" and the
+# rollback refusal — returned before a single link was created. That was survivable only while the
+# advance actually fired. It stopped firing because content advances by a SECOND path: ~/.claude is
+# per-file symlinks into this checkout, so every land moves the live layer for free, while TARGET
+# (last-green) lags by the verify duration. Live HEAD is therefore PERMANENTLY ahead of last-green,
+# the rollback guard correctly refuses forever, and everything nested under it is dead code.
+# Measured 2026-07-30 on the live host: 96 consecutive `would ROLL BACK` refusals, 174 commits of
+# lag. The content stayed fresh throughout — only files that did not exist at the last successful
+# advance rotted, which is exactly why nothing looked broken. Diagnose from the actuator's own log
+# (a wall of identical refusals is the tell), never from the freshness of the content.
+#
+# A step that is idempotent and monotone has no business being conditional, so this one runs before
+# the fetch too: it depends on neither the network nor the TARGET decision.
+#
+# WHY NOT SIMPLY HOIST install.sh — it is not link-only, and at this cadence it is destructive.
+# install.sh:452-463 runs `launchctl bootout` + `bootstrap` for every one of the 20 launchd/*.plist
+# on EVERY run, OUTSIDE copy_file's skip path, i.e. whether or not the plist changed. At 144
+# ticks/day that resets every StartInterval (the three 3600s jobs would never fire again), SIGTERMs
+# the three KeepAlive daemons, and boots out com.claude.deploy-live — the job running this script.
+# It also has ZERO notion of staged-pending (`grep -n pending-activation install.sh` → no hits), so
+# it would link deliberately-unlinked files 144×/day and erase the "activation un-run" signal
+# (tests/deploy-parity.bats:315 pins that hazard). install.sh therefore stays exactly where it is,
+# on the advance path only, at operator cadence.
+#
+# The safe partition is the assert's OWN output: `MISSING: ln -sf <src> <dest>` is emitted only at
+# deploy-parity-assert.sh:310, AFTER by-design-PENDING files have `continue`d at :308 — so MISSING
+# is by construction the set that belongs to nobody else. Consuming that verdict rather than
+# re-deriving the want-list here is deliberate: two auditors over one population that do not share a
+# state model disagree, and that divergence is how this whole class of bug survives.
+PARITY_ASSERT="${CC_DEPLOY_PARITY_ASSERT-$DEPLOY_REPO/scripts/deploy-parity-assert.sh}"
+
+link_refresh() { # never fails, never changes the exit code, never touches a PENDING file
+  local out rc miss line src dest n=0
+  # UNSET ⇒ the default path. SET (including SET-EMPTY) ⇒ honored verbatim, so
+  # CC_DEPLOY_PARITY_ASSERT= genuinely disables the refresh — same seam contract as the bin vars.
+  [ -n "$PARITY_ASSERT" ] && [ -r "$PARITY_ASSERT" ] || return 0
+  out="$( cd "$DEPLOY_REPO" && /bin/bash "$PARITY_ASSERT" 2>/dev/null )"; rc=$?
+  # rc 3 is the assert's NO-VERDICT (its own enumeration failed). An empty MISSING list produced by
+  # a failed enumeration is NOT "nothing is missing" — piping stdout straight to grep would launder
+  # one into the other, so the rc is read BEFORE the text.
+  if [ "$rc" -eq 3 ]; then
+    say "link-refresh: NO VERDICT from ${PARITY_ASSERT##*/} (rc 3) — nothing relinked"
+    return 0
+  fi
+  miss="$(printf '%s\n' "$out" | grep '^MISSING: ln -sf ' 2>/dev/null || true)"
+  [ -n "$miss" ] || return 0   # steady state emits NOTHING: --auto's silence contract holds here too
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    # "MISSING: ln -sf <src> <dest>" — tracked runtime paths are space-free by the same contract the
+    # host manifest relies on, so trailing-field splitting is safe and needs no array.
+    src="${line#MISSING: ln -sf }"; dest="${src#* }"; src="${src%% *}"
+    [ -n "$src" ] && [ -n "$dest" ] && [ "$src" != "$dest" ] || continue
+    if [ "$DRY_RUN" -eq 1 ]; then say "  would link $dest"; n=$((n + 1)); continue; fi
+    mkdir -p "${dest%/*}" 2>/dev/null || true
+    # Monotone by construction: the assert only reports a dest that fails `-e`, so this creates a
+    # link where none resolved and never overwrites a live file.
+    if ln -sf "$src" "$dest" 2>/dev/null; then n=$((n + 1)); say "  linked $dest"
+    else say "  FAILED to link $dest (→ $src)"; fi
+  done <<EOF
+$miss
+EOF
+  if [ "$n" -gt 0 ] && [ "$DRY_RUN" -eq 1 ]; then say "link-refresh: $n live link(s) WOULD BE created; nothing mutated"
+  elif [ "$n" -gt 0 ]; then say "link-refresh: $n live link(s) created — brand-new tracked file(s) had no link"
+  fi
+  return 0
+}
+
 g rev-parse --git-dir >/dev/null 2>&1 || die "DEPLOY_REPO is not a git checkout: $DEPLOY_REPO"
+
+# UNCONDITIONAL, and deliberately ahead of the fetch — a landed-but-unlinked file must be repaired
+# even when the network is down, the tip has no green stamp, or the live layer already sits above it.
+link_refresh
+
 g fetch origin main >/dev/null 2>&1 || die "git fetch origin main FAILED in $DEPLOY_REPO (network? remote?)"
 
 HEAD_SHA="$(g rev-parse HEAD 2>/dev/null || true)"
@@ -282,10 +358,19 @@ say "deployed ${HEAD_SHA:0:12} → ${TARGET:0:12}: $(g log -1 --pretty=%s "$TARG
 
 if [ -x "$DEPLOY_REPO/install.sh" ]; then
   "$DEPLOY_REPO/install.sh" >/dev/null 2>&1 || die "merged ${TARGET:0:12} but install.sh FAILED — re-run $DEPLOY_REPO/install.sh by hand"
-  # install.sh re-globs every per-file-symlink class (hooks/*.sh, hooks/lib/*.sh, commands/*.md,
-  # scripts/*.sh, scripts/limit-recover/*, bin/cc-*, skills/*/*, launchd/*.plist) on EVERY run and
-  # link_file ln -sf's whatever is missing — so a brand-new tracked file in those classes IS linked
-  # by this call. No relink pass is needed here (verified 2026-07-28, install.sh:43-52,89-105,148-155,193-200,256-259).
+  # install.sh re-globs every per-file-symlink class on EVERY run and link_file ln -sf's whatever is
+  # missing, so a brand-new tracked file IS linked by this call.
+  #
+  # > SUPERSEDED 2026-07-30 — the enumeration that stood here (8 classes, cited to
+  # > install.sh:43-52,89-105,148-155,193-200,256-259) is stale on BOTH halves: the real count is 17
+  # > classes (hooks/*.py, lib/*.zsh, agents/*.md, scripts/lib/*.sh, vendor/*/ and more were absent),
+  # > launchd/*.plist is a COPY class rather than a link class, and every one of those line ranges
+  # > has moved. It is not re-listed here: a hand-maintained mirror of another file's globs rots
+  # > silently and this one already did. install.sh is the SSOT; scripts/deploy-parity-assert.sh:284
+  # > carries the only want-table that is test-pinned against it (tests/deploy-parity.bats:191).
+  #
+  # This call is NOT what keeps the live namespace whole — it is unreachable whenever the advance
+  # does not fire, which on this host is always. link_refresh() above owns that, unconditionally.
   say "install.sh ok (links refreshed, incl. any brand-new tracked file)"
 else
   die "merged ${TARGET:0:12} but $DEPLOY_REPO/install.sh is missing/not executable — new files are NOT linked"

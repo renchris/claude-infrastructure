@@ -5,9 +5,17 @@
 # never been git-aware, so link_file points every ~/.claude/** entry at whatever checkout the
 # script happens to live in. Run from a linked worktree, the entire live layer targets a directory
 # that `git worktree remove` / scripts/worktree-gc.sh may delete — every hook, command, skill and
-# cc-* tool dangles at once, and deploy-live.sh cannot repair it (it only reaches its install.sh
-# call after a green stamp, which the dead hooks can no longer produce). Measured while authoring:
-# one --config-dir run from a worktree produced 120 worktree-pointing symlinks.
+# cc-* tool dangles at once. Measured while authoring: one --config-dir run from a worktree produced
+# 120 worktree-pointing symlinks.
+#
+# > AMENDED 2026-07-30: the clause "deploy-live.sh cannot repair it (it only reaches its install.sh
+# > call after a green stamp)" was true when written and is now only HALF true. deploy-live.sh grew
+# > an UNCONDITIONAL link_refresh() that runs before the fetch on every path, so a DANGLING live
+# > symlink is re-pointed at the primary checkout without any green stamp (deploy-parity-assert.sh
+# > uses `-e`, which follows symlinks, so a dangling link reads as MISSING). What still stands: the
+# > refresh cannot repair a dangling ~/.claude/hooks/**, because those hooks are what postland runs —
+# > and it never linked settings.json, which is install.sh's job alone. The refusal this suite pins
+# > remains the only thing that prevents the breakage in the first place.
 #
 # Red-proof (measured, not asserted): against `git show HEAD:install.sh` recovered into place, this
 # suite reads `not ok` on tests 1, 2, 3 and 5 and `ok` on 4, 6, 7, 8. Tests 4/6/7 are the
@@ -103,8 +111,10 @@ lacks() { if printf '%s' "$output" | grep -qF -- "$1"; then return 1; fi; return
 }
 
 @test "global install from the PRIMARY checkout is NOT refused (deploy-live.sh runs exactly this)" {
-  # deploy-live.sh:283-284 invokes "\$DEPLOY_REPO/install.sh" globally from the fixed primary
-  # checkout. A guard that fired here would kill the very lane it exists to protect.
+  # deploy-live.sh invokes "\$DEPLOY_REPO/install.sh" globally from the fixed primary checkout, on
+  # the advance path (grep 'install.sh ok' there — cited by behavior, not by line number, which is
+  # how the previous citation to :283-284 rotted). A guard that fired here would kill the very lane
+  # it exists to protect.
   run bash "$PRIMARY/install.sh"
   [ "$status" -eq 0 ]
   lacks "REFUSING"
