@@ -116,6 +116,19 @@ def egate(
 
     `steps(1,end)` so the swap is hard. A pixel sprite must never be caught half-faded — an
     interpolated opacity is a colour that is not in the palette.
+
+    THE REST VALUE IS EMITTED STATICALLY AS WELL AS INTO THE KEYFRAMES, and that is not
+    belt-and-braces: the static rule is the ONLY place a reduced-motion reader ever looks.
+    `base_css` ends with `*{animation:none!important}` under `prefers-reduced-motion`, so every
+    animation is switched off and each element paints its static declaration — and a gate whose
+    only `opacity` lived in its keyframes falls back to the CSS default of 1, which is the exact
+    inverse of what a hidden-at-rest gate promises. That defect was found and fixed FOUR separate
+    times before it was lifted here: once for `.eglyph`, once for `.gtN` beside its own `egate`
+    call, and twice inside `_steps`' pack. Fixing it in the vocabulary is what makes the fifth
+    time impossible; `assert_static_rest` covers everything that does not come through here.
+
+    A running animation outranks a normal declaration in the cascade, so the live loop is
+    unchanged — verified by rendering all 27 candidates before and after and comparing the frames.
     """
     a, b = ("0", "1") if on_inside else ("1", "0")
     frames = [f"0%{{opacity:{a}}}"]
@@ -134,7 +147,7 @@ def egate(
     frames.append(f"100%{{opacity:{a}}}")
     return (
         f"@keyframes {name}{{{''.join(frames)}}}"
-        f"{sel}{{animation:{name} {fmt(EMOTE_P)}s steps(1,end) infinite}}"
+        f"{sel}{{opacity:{a};animation:{name} {fmt(EMOTE_P)}s steps(1,end) infinite}}"
     )
 
 
@@ -448,11 +461,15 @@ def base_css(e: Emote, scheme: str = "auto") -> str:
         # Found by rendering the still rather than by trusting the footer that claims it composes.
         # A running animation overrides this, so the live loop is unaffected.
         f".eglyph{{fill:{d.star};opacity:0}}"
-        # each twinkle's phase lives in its own keyframe percentages, never in a delay
+        # each twinkle's phase lives in its own keyframe percentages, never in a delay. The .38
+        # trough is also declared statically, for the reason `egate` records: with animations off
+        # a keyframes-only opacity paints at the CSS default of 1, and the whole field would light
+        # to maximum magnitude at once — a starfield with no magnitudes in it, which is the one
+        # thing the twinkle vocabulary exists to avoid.
         + "".join(
             f"@keyframes etwk{i}{{0%,{max(pk - 14, 1)}%{{opacity:.38}}"
             f"{pk}%{{opacity:1}}{min(pk + 14, 99)}%,100%{{opacity:.38}}}}"
-            f".etw{i}{{animation:etwk{i} {p}s ease-in-out infinite}}"
+            f".etw{i}{{opacity:.38;animation:etwk{i} {p}s ease-in-out infinite}}"
             for i, (p, pk) in enumerate(TWINKLES)
         )
         # ── baseline life ─────────────────────────────────────────────────────────────────────────
@@ -571,6 +588,12 @@ def glyph_pop(name: str, sel: str, t0: float, t1: float, rise: float = 26.0) -> 
     A gradual opacity ramp is missed 69% of the time even with no visual disruption — a slow fade is
     not an entrance, it is a change nobody sees happen. So the appearance is a hard step with an
     overshoot in scale (the 'pop'), and the departure is motion, not dissolution.
+
+    It rests at `opacity:0` STATICALLY for `egate`'s reason. Today every caller reaches this through
+    `glyph()`, which pairs the animation class with `.eglyph` — and `.eglyph` already carries that
+    resting value, so the reduced-motion still is correct by INHERITANCE rather than by anything
+    this function does. That is a coincidence of the current callers, not a property, and a pack
+    that pops a non-glyph element through here would have found the trap again.
     """
     return (
         f"@keyframes {name}{{"
@@ -580,7 +603,7 @@ def glyph_pop(name: str, sel: str, t0: float, t1: float, rise: float = 26.0) -> 
         f"{pctx(t1 - 0.30)}%{{opacity:1;transform:translateY(0) scale(1)}}"
         f"{pctx(t1)}%{{opacity:0;transform:translateY(-{fmt(rise)}px) scale(.9)}}"
         f"100%{{opacity:0;transform:translateY(6px) scale(.4)}}}}"
-        f"{sel}{{animation:{name} {fmt(EMOTE_P)}s ease-out infinite}}"
+        f"{sel}{{opacity:0;animation:{name} {fmt(EMOTE_P)}s ease-out infinite}}"
     )
 
 
@@ -763,6 +786,156 @@ def assert_seamless(svg: str, e: Emote) -> None:
             )
 
 
+def _css_blocks(css: str) -> list[tuple[str, str]]:
+    """(prelude, body) for every brace-balanced block at the top level of `css`.
+
+    Enough of a parser for this stylesheet and no more: it is machine-written by this module, so
+    there are no comments, no strings and no escapes for a brace to hide inside. Balancing rather
+    than regex-splitting is what lets the same function read a rule, an `@keyframes` body and an
+    `@media` body — a regex that stopped at the first `}` would truncate the nested two.
+    """
+    out: list[tuple[str, str]] = []
+    depth, start, open_at = 0, 0, 0
+    for i, ch in enumerate(css):
+        if ch == "{":
+            if depth == 0:
+                open_at = i
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                out.append((css[start:open_at].strip(), css[open_at + 1 : i]))
+                start = i + 1
+    return out
+
+
+# `(?:^|;)` so this cannot match the tail of `fill-opacity` or `stop-opacity` — a bare `opacity:`
+# search reads a stop's alpha as an element's and reports a rest that no element has.
+_OPACITY = re.compile(r"(?:^|;)\s*opacity:\s*([^;}]+)")
+_ANIMATION = re.compile(r"(?:^|;)\s*animation:\s*([A-Za-z0-9_-]+)")
+
+
+def _rest_opacity(keyframes_body: str) -> str | None:
+    """The opacity a track holds at 0%, or None if it never sets one there.
+
+    None is not a defect and must not be treated as one. A track that animates only `transform`
+    has no resting opacity to check, and a track that sets opacity somewhere but NOT at 0% takes
+    its implicit 0% from the element's own static value — which makes the two agree by
+    construction, i.e. exactly the property this gate is asserting.
+    """
+    stops = _css_blocks(keyframes_body)
+    for marks, decls in stops:
+        if "0%" in [m.strip() for m in marks.split(",")] or marks.strip() == "from":
+            m = _OPACITY.search(decls)
+            return m.group(1).strip() if m else None
+    return None
+
+
+def assert_static_rest(svg: str, e: Emote) -> None:
+    """An animated opacity must ALSO exist as a static declaration, or reduced motion lights it.
+
+    THE DEFECT, found by rendering rather than by reading, and found FOUR times before it was
+    fixed at the source. `base_css` ends with `@media(prefers-reduced-motion:reduce){*{animation:
+    none!important}}`, so for that reader every animation is off and each element paints its STATIC
+    rule. An element whose only `opacity` lived inside its keyframes therefore falls back to the
+    CSS default of 1 — fully visible, when the whole point of its track was that it rests hidden.
+    Rendered as stills that meant THE DIG showed its finished hole before a single crumb had been
+    thrown, THE COPIES showed its entire ghost stack at once, THE UNSWITCHED showed the one thing
+    it promises never to show, and a `!` hung in the sky beside a creature doing nothing. Every
+    other gate passed all four times, because a gate that reads the animated timeline never looks
+    at the frame where the animation is absent.
+
+    `egate`, `glyph_pop` and `emotes_infra._steps` now emit the rest statically, so a candidate
+    built out of the vocabulary cannot reintroduce it. THIS gate is what covers the rest, and it is
+    the half that matters: three of the four instances were hand-rolled `@keyframes` blocks, which
+    no amount of fixing the helpers can reach.
+
+    READ PER ELEMENT, NOT PER SELECTOR, because that is what a browser does. A glyph is
+    `class="eglyph cuG"` and takes its resting `opacity:0` from `.eglyph` while `.cuG` carries only
+    the animation; convicting `.cuG` for a rest it legitimately inherits from a sibling class would
+    make this a gate authors work around, and a gate that is worked around is deleted next. Six
+    candidates sit in exactly that position today.
+
+    KNOWN BOUND, stated rather than hidden: `@media(prefers-color-scheme:light)` is flattened in,
+    so a resting opacity that DIFFERS between the two schemes would be judged on the light one.
+    No element has that shape today (`.esh` is the only scheme-dependent opacity and nothing
+    animates it), and the reduced-motion block itself is skipped — it turns animations off, it
+    declares no resting value.
+    """
+    css = svg.split("<style>", 1)[1].split("</style>", 1)[0]
+    rest: dict[str, str | None] = {}
+    rules: list[tuple[str, str]] = []
+    for pre, body in _css_blocks(css):
+        if pre.startswith("@keyframes"):
+            rest[pre.split(None, 1)[1].strip()] = _rest_opacity(body)
+        elif pre.startswith("@media"):
+            if "prefers-reduced-motion" not in pre:
+                rules += _css_blocks(body)
+        elif not pre.startswith("@"):
+            rules.append((pre, body))
+
+    # Position-keyed, because the cascade between two single-class rules is decided by DOCUMENT
+    # ORDER and an element carries several classes. `.legsStill` is reset to 0 by base_css and then
+    # back to 1 by the standing variant; taking "the last declaration among this element's classes"
+    # needs to know which of its classes was declared last, which a plain name→value map cannot say.
+    static: dict[str, tuple[int, str]] = {}
+    driven: dict[str, str] = {}
+    for i, (pre, body) in enumerate(rules):
+        op, anim = _OPACITY.search(body), _ANIMATION.search(body)
+        for sel in (s.strip() for s in pre.split(",")):
+            if not re.fullmatch(r"\.[A-Za-z0-9_-]+", sel):
+                continue
+            cls = sel[1:]
+            if op:
+                static[cls] = (i, op.group(1).strip())
+            if anim:
+                driven[cls] = anim.group(1)
+
+    # `[A-Za-z]` and not `[a-z]`: SVG has mixed-case element names (`clipPath`, `linearGradient`),
+    # and a lowercase-only match plus `\b` silently skips every one of them. None carries a class
+    # today. "None does today" is the sentence that precedes each of this defect's four appearances.
+    for tag in re.finditer(r"<[A-Za-z][A-Za-z0-9]*\b[^>]*>", svg):
+        toks = re.search(r'class="([^"]+)"', tag.group(0))
+        if not toks:
+            continue
+        classes = toks.group(1).split()
+        # A presentation attribute is outranked by ANY rule, so it is the painted value only when
+        # no rule matched. Handling it costs one line and closes the shape rather than the instance
+        # — no element carries both today, and "no element does that today" is how this defect got
+        # in four times.
+        attr = re.search(r'\sopacity="([^"]+)"', tag.group(0))
+        pos, val = max(
+            (static[c] for c in classes if c in static),
+            default=(-1, attr.group(1) if attr else "1"),
+        )
+        for cls in classes:
+            name = driven.get(cls)
+            if name is None or rest.get(name) is None:
+                continue
+            # A value this cannot read is a THIRD state, never a pass. Everything here is a numeric
+            # literal today, so a `var(--x)` or a `calc()` arriving later means the gate has stopped
+            # being able to judge — and a guard that answers "fine" when it means "I could not look"
+            # is worse than no guard, because it reports coverage it does not have.
+            try:
+                painted, resting = float(val), float(rest[name])
+            except ValueError:
+                raise SystemExit(
+                    f"emotes[{e.key}]: '{cls}' rests at {rest[name]!r} and paints {val!r} with "
+                    f"animations off — one of those is not a number this gate can compare, so it "
+                    f"CANNOT say whether the reduced-motion still is right. Keep resting opacities "
+                    f"as plain literals, or teach `assert_static_rest` the new form."
+                ) from None
+            if abs(painted - resting) > 1e-9:
+                raise SystemExit(
+                    f"emotes[{e.key}]: '{cls}' animates opacity ('{name}' rests at "
+                    f"{rest[name]}) but the element paints {val} with animations OFF. Under "
+                    f"prefers-reduced-motion the whole still is that frame, so this element "
+                    f"renders {'VISIBLE' if painted > resting else 'HIDDEN'} when "
+                    f"its own track says it should not — declare the rest statically too, "
+                    f"`.{cls}{{opacity:{rest[name]};animation:…}}`, the way `egate` does."
+                )
+
+
 # ── the candidates ────────────────────────────────────────────────────────────────────────────────
 EMOTES: list[Emote] = []
 
@@ -883,7 +1056,7 @@ def _peek_burrow() -> Emote:
                 f"opacity:1}}"
                 f"{pctx(a)}%{{transform:translate({fmt(dx * 1.5)}px,4px);opacity:0}}"
                 f"100%{{transform:translate(0,0);opacity:0}}}}"
-                f".bwDirt{i}{{animation:bwD{i} {fmt(EMOTE_P)}s ease-out infinite}}"
+                f".bwDirt{i}{{opacity:0;animation:bwD{i} {fmt(EMOTE_P)}s ease-out infinite}}"
                 for i, dx in enumerate((-16, -6, 7, 15))
             )
             # the resident notices, 250 ms after B clears the rule
@@ -1057,6 +1230,7 @@ def build_all(
         assert_css_targets_exist(svg, e)
         assert_reset_covers_sprite(svg, e)
         assert_seamless(svg, e)
+        assert_static_rest(svg, e)
         p = out / f"{e.key}.svg"
         p.write_text(svg, encoding="utf-8")
         made.append((e, p))

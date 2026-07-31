@@ -538,7 +538,7 @@ def _dig() -> Emote:
                 f"{fmt(-46 - (i % 3) * 15)}px);opacity:1}}"
                 f"{pctx(t + 0.40)}%{{transform:translate({fmt(-42 - i * 12)}px,8px);opacity:0}}"
                 f"100%{{transform:translate(0,0);opacity:0}}}}"
-                f".dgC{i}{{animation:dgCk{i} {fmt(EMOTE_P)}s ease-out infinite}}"
+                f".dgC{i}{{opacity:0;animation:dgCk{i} {fmt(EMOTE_P)}s ease-out infinite}}"
                 for i, t in enumerate(strokes)
             )
             # The step clear: one hop over its own hole, just before the world restarts.
