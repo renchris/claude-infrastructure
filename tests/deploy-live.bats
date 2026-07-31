@@ -386,3 +386,179 @@ tests/absent.bats'
   [[ "$output" != *"host check"* ]] || false
   [[ "$output" == *"install.sh ok"* ]] || false           # positive control: the advance itself DID happen
 }
+
+# ── the UNCONDITIONAL link refresh ───────────────────────────────────────────────────────────────
+# The defect pinned here (2026-07-30): the namespace reconcile lived BELOW `merge --ff-only`, so
+# every early exit — "already deployed", the rollback refusal, the no-green refusal — returned before
+# a single link was created. On the live host the rollback refusal is PERMANENT: ~/.claude is
+# per-file symlinks into the checkout, so every land advances the live layer for free while TARGET
+# (last-green) lags by the verify duration, leaving live HEAD forever ahead of it. Measured: 96
+# consecutive `would ROLL BACK` lines in deploy.log, 174 commits of lag, refresh unrun for days.
+# The `[[ ]] || false` rule from the --auto block above applies verbatim to every test below.
+#
+# The stub reproduces the real contract exactly: `MISSING: ln -sf <src> <dest>` is emitted only at
+# deploy-parity-assert.sh:310, and the two-space-indented `PENDING` report at :306 — which must NEVER
+# be actioned, because linking a staged-pending file erases the "activation un-run" signal
+# (tests/deploy-parity.bats:315).
+seed_parity() { # <rc> — stub assert that cats $PARITY_OUT and exits <rc>; caller fills it via miss/pending
+  PARITY_OUT="$BATS_TEST_TMPDIR/parity.out"
+  ASSERT="$BATS_TEST_TMPDIR/parity-assert.sh"
+  LIVE="$BATS_TEST_TMPDIR/live"
+  : > "$PARITY_OUT"; mkdir -p "$LIVE" "$SHARED/hooks"
+  printf '#!/bin/bash\ncat "%s"\nexit %s\n' "$PARITY_OUT" "$1" > "$ASSERT"
+  chmod +x "$ASSERT"
+}
+miss() {    # <repo-relative> — a tracked file with no live link; returns its dest via $DEST
+  echo "payload-$1" > "$SHARED/$1"
+  DEST="$LIVE/$1"
+  printf 'MISSING: ln -sf %s %s\n' "$SHARED/$1" "$DEST" >> "$PARITY_OUT"
+}
+pending() { # <repo-relative> — unlinked BY DESIGN; the assert reports it, nobody may link it
+  echo "payload-$1" > "$SHARED/$1"
+  PDEST="$LIVE/$1"
+  printf '  PENDING %s unlinked BY DESIGN — staged: 99-fixture-activate.sh\n' "$1" >> "$PARITY_OUT"
+}
+dlp() { env DEPLOY_REPO="$SHARED" CC_POSTLAND_DIR="$BATS_TEST_TMPDIR/postland" \
+            CC_PAGES_DIR="$PAGES" CC_DEPLOY_PARITY_ASSERT="$ASSERT" /bin/bash "$DL" "$@"; }
+
+@test "refresh runs on the ROLLBACK REFUSAL — the exit that made it dead code (2026-07-30)" {
+  seed_parity 1
+  miss hooks/brand-new.sh
+  stamp HEAD                                     # the newest green is the commit already live...
+  commit_push b; git -C "$SHARED" push -q origin main   # ...and both HEAD and origin move past it
+  run dlp
+  [ "$status" -eq 1 ]
+  echo "$output" | grep -q "ROLL BACK"           # the refusal is UNCHANGED — still fail-closed
+  [ -L "$DEST" ]                                 # ...yet the link now exists anyway
+  [ "$(readlink "$DEST")" = "$SHARED/hooks/brand-new.sh" ]
+}
+
+@test "refresh runs on the ALREADY-DEPLOYED exit (the second early return)" {
+  seed_parity 1
+  miss hooks/late-arrival.sh
+  stamp HEAD
+  run dlp
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "already deployed"
+  [ -L "$DEST" ]
+}
+
+@test "refresh runs on the NO-GREEN-STAMP refusal (the third early return)" {
+  seed_parity 1
+  miss hooks/unstamped-era.sh
+  advance_origin b                               # origin moves, nothing is ever stamped
+  run dlp
+  [ "$status" -eq 1 ]
+  echo "$output" | grep -q "no GREEN stamp"
+  [ -L "$DEST" ]
+}
+
+@test "refresh precedes the FETCH — a dead network must not strand a landed file" {
+  seed_parity 1
+  miss hooks/offline.sh
+  git -C "$SHARED" remote set-url origin "$BATS_TEST_TMPDIR/nope.git"
+  run dlp
+  [ "$status" -eq 1 ]
+  echo "$output" | grep -q "git fetch origin main FAILED"
+  [ -L "$DEST" ]
+}
+
+@test "a PENDING file is NEVER linked — the refresh must not erase the staged-activation signal" {
+  seed_parity 1
+  miss hooks/real-miss.sh; REAL="$DEST"
+  pending hooks/staged-pending.sh
+  stamp HEAD
+  run dlp
+  [ "$status" -eq 0 ]
+  [ -L "$REAL" ]                                 # the genuine gap IS repaired...
+  [ ! -e "$PDEST" ]                              # ...and the by-design gap is left exactly alone
+  [[ "$output" != *"staged-pending.sh"* ]] || false
+}
+
+@test "assert NO-VERDICT (rc 3) relinks NOTHING and says so — an empty list is not 'nothing missing'" {
+  seed_parity 3                                  # rc 3 = the assert's own enumeration failed
+  miss hooks/never-link-me.sh                    # text present, but the verdict is void
+  stamp HEAD
+  run dlp
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "NO VERDICT"
+  [ ! -e "$DEST" ]
+}
+
+@test "--dry-run previews the refresh and creates NO link" {
+  seed_parity 1
+  miss hooks/preview-only.sh
+  stamp HEAD
+  run dlp --dry-run
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "would link"
+  echo "$output" | grep -q "WOULD BE created"
+  [ ! -e "$DEST" ]
+  [ ! -f "$INSTALL_LOG" ]                        # and it is still not install.sh doing this
+}
+
+@test "--auto with nothing missing is SILENT (the steady state must not narrate 144×/day)" {
+  auto_setup
+  seed_parity 1                                  # a clean assert: zero MISSING lines
+  advance_origin b
+  stamp origin/main
+  run env DEPLOY_REPO="$SHARED" CC_POSTLAND_DIR="$BATS_TEST_TMPDIR/postland" CC_PAGES_DIR="$PAGES" \
+          CC_DEPLOY_BATS_BIN="$SPY" CC_BACKLOG_BIN="$BLSPY" CC_DEPLOY_TIMEOUT_BIN= \
+          CC_DEPLOY_PARITY_ASSERT="$ASSERT" /bin/bash "$DL" --auto
+  [ "$status" -eq 0 ]
+  run env DEPLOY_REPO="$SHARED" CC_POSTLAND_DIR="$BATS_TEST_TMPDIR/postland" CC_PAGES_DIR="$PAGES" \
+          CC_DEPLOY_BATS_BIN="$SPY" CC_BACKLOG_BIN="$BLSPY" CC_DEPLOY_TIMEOUT_BIN= \
+          CC_DEPLOY_PARITY_ASSERT="$ASSERT" /bin/bash "$DL" --auto
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]                               # TARGET == HEAD and nothing missing ⇒ not one line
+}
+
+@test "--auto DOES narrate a real repair (positive control for the silence above)" {
+  auto_setup
+  seed_parity 1
+  miss hooks/auto-repair.sh
+  stamp HEAD
+  run env DEPLOY_REPO="$SHARED" CC_POSTLAND_DIR="$BATS_TEST_TMPDIR/postland" CC_PAGES_DIR="$PAGES" \
+          CC_DEPLOY_BATS_BIN="$SPY" CC_BACKLOG_BIN="$BLSPY" CC_DEPLOY_TIMEOUT_BIN= \
+          CC_DEPLOY_PARITY_ASSERT="$ASSERT" /bin/bash "$DL" --auto
+  [ "$status" -eq 0 ]
+  [ -n "$output" ]                               # a state CHANGE always reaches the log
+  echo "$output" | grep -q "link-refresh: 1 live link"
+  [ -L "$DEST" ]
+}
+
+@test "CC_DEPLOY_PARITY_ASSERT SET-EMPTY disables the refresh (a seam that cannot turn off is not one)" {
+  seed_parity 1
+  miss hooks/disabled.sh
+  stamp HEAD
+  run env DEPLOY_REPO="$SHARED" CC_POSTLAND_DIR="$BATS_TEST_TMPDIR/postland" \
+          CC_PAGES_DIR="$PAGES" CC_DEPLOY_PARITY_ASSERT= /bin/bash "$DL"
+  [ "$status" -eq 0 ]
+  [ ! -e "$DEST" ]
+  [[ "$output" != *"link-refresh"* ]] || false
+}
+
+@test "the refresh is idempotent — a second tick relinks nothing and narrates nothing" {
+  seed_parity 1
+  miss hooks/once.sh
+  stamp HEAD
+  run dlp
+  [ "$status" -eq 0 ]
+  [ -L "$DEST" ]
+  # the real assert stops reporting a path once it resolves; the stub is static, so drop the line
+  # ourselves to model that — otherwise this would assert the STUB's behavior, not the script's.
+  : > "$PARITY_OUT"
+  run dlp
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"link-refresh"* ]] || false
+  [ -L "$DEST" ]
+}
+
+@test "the real assert emits the MISSING contract this refresh parses (the stub is not the spec)" {
+  # Guards the seam between the two files: if deploy-parity-assert.sh ever renames the prefix or
+  # reorders the fields, every test above keeps passing against the stub while production goes inert.
+  run grep -n "MISSING: ln -sf %s %s" "$REPO/scripts/deploy-parity-assert.sh"
+  [ "$status" -eq 0 ]
+  run grep -n "MISSING: ln -sf " "$REPO/scripts/deploy-live.sh"
+  [ "$status" -eq 0 ]
+}
