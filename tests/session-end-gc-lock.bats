@@ -60,7 +60,43 @@ wait_for_gc() { # $1=max deciseconds
 
 version_count() { find "$VD" -maxdepth 1 -mindepth 1 -type d ! -name current ! -name '.*' 2>/dev/null | wc -l | tr -d ' '; }
 
-deadpid() { sleep 1 & local p=$!; kill "$p" 2>/dev/null; wait "$p" 2>/dev/null || true; echo "$p"; }
+# The fixture's dead holder. The `kill` is GUARDED because the child may already be gone: under load
+# this shell can be descheduled past the whole 1s lifetime, and once bash has REAPED the child a
+# signal to it returns 1/ESRCH — an UNREAPED zombie still returns 0, so the window opens only after
+# the reap, not merely after the exit. Unguarded, that non-final failure aborted the helper under
+# bats' errexit and left `deadpid > "$LOCK/pid"` truncated EMPTY, so test 1 failed ~1-in-3 at
+# loadavg 13 and never once in isolation — the fast path, child still alive, returns 0. Test 0 pins
+# it. Killing a child that already died is a no-op for this helper's contract: it wants a dead pid.
+deadpid() { sleep 1 & local p=$!; kill "$p" 2>/dev/null || true; wait "$p" 2>/dev/null || true; echo "$p"; }
+
+@test "0: the deadpid fixture survives its child pre-deceasing the kill — the load flake" {
+  # Replay the REAL helper text out of this very file. A hand-copied approximation would keep
+  # passing after the line above drifted, which is the classic vacuous control.
+  local real; real="$(grep -m1 '^deadpid()' "$BATS_TEST_FILENAME")"
+  [ -n "$real" ] || { echo "could not extract the deadpid helper from $BATS_TEST_FILENAME"; false; }
+
+  # Force the descheduled ordering deterministically instead of waiting for load to supply it: hold
+  # the kill until the child is genuinely REAPED (kill -0 still succeeds on a zombie, so this spins
+  # past the exit to the reap), then perform the REAL kill and report its REAL status.
+  local shadow='kill() { local i=0; while builtin kill -0 "$1" 2>/dev/null; do sleep 0.05; i=$((i+1)); [ "$i" -lt 200 ] || { echo "harness: child never reaped" >&2; return 99; }; done; builtin kill "$@"; }'
+
+  local out rc
+  out="$(/bin/bash -c "set -e; $shadow
+$real
+deadpid" 2>&1)" && rc=0 || rc=$?
+  [ "$rc" -eq 0 ] || { echo "deadpid aborted (rc=$rc) once its child pre-deceased the kill: '$out'"; false; }
+  [[ "$out" =~ ^[0-9]+$ ]] || { echo "deadpid emitted no pid under the forced race: '$out'"; false; }
+
+  # POSITIVE CONTROL. Strip the guard back out and the SAME harness must convict — otherwise the
+  # assertions above prove only that nothing was ever forced.
+  local unguarded="${real/ || true; wait/; wait}"
+  [ "$unguarded" != "$real" ] || { echo "control derivation failed — the guard is not where expected"; false; }
+  local crc
+  /bin/bash -c "set -e; $shadow
+$unguarded
+deadpid" >/dev/null 2>&1 && crc=0 || crc=$?
+  [ "$crc" -ne 0 ] || { echo "POSITIVE CONTROL PASSED — the harness cannot see the defect it guards"; false; }
+}
 
 @test "1: a stale lock from a DEAD holder is reclaimed — the GC is not wedged forever" {
   mkdir -p "$LOCK"
