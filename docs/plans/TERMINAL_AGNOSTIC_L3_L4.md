@@ -263,3 +263,76 @@ console layer (sidebar row per pane, blue ring on attention, notifications panel
   `KITTY_WINDOW_ID` exactly as they shared one `ITERM_SESSION_ID`. Same hazard, new spelling.
 - **"Ghostty 3 threads/pane"** — measured **4.00** (`renderer`, `io`, `io-reader`, `cf_release`).
 - **Level 4 = 215 GB locally** — wrong frame; Level 4 is throughput, not concurrency.
+
+---
+
+## 6. T1/T2 build log (branch `feat/cc-pane-seam`, worktree `.worktrees/terminal-agnostic-pane`)
+
+Append-only. Each entry is a fact established on disk, written the moment it was established so a
+crash costs nothing. Started 2026-07-31 from `origin/main` @ `856ee347`.
+
+### 6.1 Census correction — the class-2 set is 25 files, not 18, and it OVERLAPS class-3
+
+`grep -rl ITERM_SESSION_ID bin scripts hooks` (tests excluded) = **25** files, not the 18 in §1.
+More importantly the two sets are **not disjoint** — 3 of the 6 class-3 files also read the env var:
+
+| class-3 file | `ITERM_SESSION_ID` refs | consequence |
+|---|---|---|
+| `scripts/handoff-fire.sh` | 18 | rename here is T3's, NOT T1's — do not touch |
+| `scripts/handoff-selfclose-e2e.sh` | 2 | same |
+| `scripts/limit-recover/lr-handoff.sh` | 2 | same |
+
+⇒ **The T1 mechanical-rename set is the 25 minus the 3 class-3 files = 22 candidates**, of which the
+harness/e2e scripts are further excluded. §1's "18" was a count of a differently-drawn population;
+it is not wrong so much as *not the set T1 may edit*. Whoever runs T3 owns the 3 overlap files.
+
+### 6.2 The rename is genuinely mechanical — because of the `##*:` idiom
+
+Every consumer reads the var and immediately strips an `it2` prefix:
+`ITERM_SESSION_ID="wNtNpN:<UUID>"` → `${x##*:}` → bare UUID. Verified at `bin/cc-notify:343`,
+`hooks/session-register.sh:73`, `bin/cc-teardown:86-87`, `hooks/waiting-recycle.sh:212`.
+
+⇒ the rename is exactly `${ITERM_SESSION_ID:-}` → `${CC_PANE_ID:-${ITERM_SESSION_ID:-}}`, leaving the
+`##*:` untouched. `CC_PANE_ID` is therefore defined to accept **either** the bare id or the prefixed
+form — a superset — so the substitution provably cannot change behaviour for any existing caller.
+That is the property that makes "keep `ITERM_SESSION_ID` as a read fallback for one release" free.
+
+### 6.3 Naming hazard — `CC_PANE_ID_GATE` already exists and is UNRELATED
+
+`scripts/handoff-fire.sh:1595-1620` and `tests/handoff-payload-gates.bats:152` already use
+`CC_PANE_ID_GATE` — a payload-validation kill switch, nothing to do with this seam. Shell env lookup
+is exact-match so there is no runtime collision, but any future *prefix* grep (`grep CC_PANE_ID`)
+will conflate them. Recorded so nobody "fixes" one while reading the other.
+
+### 6.4 Reconciling "default `iterm2`" with "headless is the DEFAULT"
+
+The two instructions look contradictory and are not; re-deriving this is a trap, so it is settled here:
+
+- **Architecture is headless-first.** Nothing in the contract may assume a surface exists. `address` /
+  `send` / `close` are keyed on an **opaque id** and never on a window/tab/pane coordinate. Anything
+  that needs a surface (focus, split direction, profile) is an **optional capability** a driver may
+  not have, and a driver lacking it must be *usable*, not broken.
+- **Runtime default is `iterm2`,** for one release, so today's behaviour is reproduced exactly —
+  the same compat logic as the `ITERM_SESSION_ID` read fallback, and what §2/P3 already says
+  ("the `iterm2` path staying default until headless is proven").
+
+Headless-first is a statement about the *contract*; `iterm2` is a statement about the *default value*.
+
+### 6.5 Driver resolution — why the `iterm2` driver lives INSIDE `bin/cc-pane`
+
+`bin/cc-pane` is front-end + dispatcher and carries the `iterm2` driver as the built-in incumbent;
+any other driver `X` resolves to a sibling executable `bin/cc-pane-X` (so `headless` → the new
+`bin/cc-pane-headless`, and D4's future kitty/cmux drivers drop in with **zero** edits to `cc-pane`).
+This keeps T1+T2 to exactly the two files the track owns instead of minting a third.
+
+Self-resolution must follow the **final symlink**, not just the directory — `~/.claude/bin` is a tree
+of per-file symlinks into this checkout, and `pwd -P` resolves the dir only (memory:
+`self-identity-guard-must-fully-resolve`). A `cc-pane` that resolved its own dir naively would look
+for its sibling driver in `~/.claude/bin` instead of the checkout.
+
+### 6.6 Liveness is PID+start-time, never registry presence
+
+The headless registry records *claims*; the OS holds *truth*. A row is live only if its pid exists
+**and** that pid's start time still matches the recorded one — the standard PID-reuse guard, and the
+direct defence of memory `liveness-proxy-cannot-be-output-age`. `list` verifies every row and reaps
+what it disproves, so a reboot (which kills every session) cannot leave rows that read as alive.
