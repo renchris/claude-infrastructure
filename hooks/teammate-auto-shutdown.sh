@@ -55,8 +55,9 @@ readonly LOG_DIR="$HOME/.claude/logs"
 readonly WATCHDOG_DIR="$HOME/.claude/watchdog"
 
 # ── operator-adoption hold config (2026-07-24; mirrors cc-classify 4.7 env family) ───────────────
-# The WHO-primitive ci_last_interactive_epoch lives in hooks/lib/cc-interactive.sh, which LANDS
-# SEPARATELY — sourced IF PRESENT, else one WARN + skip (graceful degradation for a partial deploy).
+# The WHO-primitive ci_last_interactive_epoch lives in hooks/lib/cc-interactive.sh, sourced IF
+# PRESENT. An ABSENT lib is NOT a licence to close (2026-07-31, R3 parity with bin/cc-teardown §1c):
+# it means presence is UNPROVABLE, so the close is held via the BEAT second oracle — see _beat_or_hold.
 readonly INTERACTIVE_HOLD_S="${CC_CLASSIFY_INTERACTIVE_HOLD_S:-21600}"   # a real operator prompt within this ⇒ ADOPTED pane
 readonly FIRE_PROMPT_SLACK_S="${CC_CLASSIFY_FIRE_PROMPT_SLACK_S:-300}"   # a prompt within spawn+this = the spawn brief, not adoption
 readonly INTERACTIVE_LIB="${CC_INTERACTIVE_LIB:-$HOOK_DIR/lib/cc-interactive.sh}"
@@ -335,6 +336,35 @@ _page_desk_damped() {
     damp_should_send "role:desk" "$fp" || { log "  ~ page suppressed (damped) [$fp]"; return 0; }
   fi
   _page_desk "$msg"
+}
+
+# ── SECOND presence oracle: the BEAT (mirrors bin/cc-teardown's beat_or_refuse) ──────────────────
+# Consulted whenever the transcript WHO-oracle could not answer. Returns 0 to let the close PROCEED;
+# otherwise HOLDS — pages the desk and exits 0 WITHOUT emitting {"continue": false}, so the
+# teammate's turn is left untouched and the pane stays open. The beat is a genuinely independent
+# oracle (a stamp written by the session itself, not a re-scan of the same transcript), so it cannot
+# share a bug with the WHO-oracle — which is what lets a missing lib fail CLOSED here without
+# becoming a permanent teammate-close outage. Only when BOTH oracles are unavailable do we hold,
+# and that hold is logged + paged, never silent.
+_beat_or_hold() {  # <gap-description> → 0 = proceed; else pages the desk and exits 0 (pane kept)
+  local _gap="${1:-the who-oracle could not answer}" _bage
+  if type -t cb_operator_age >/dev/null 2>&1 && cb_system_live 2>/dev/null; then
+    _bage="$(cb_operator_age "$SESSION_ID" 2>/dev/null || true)"
+    case "${_bage:-}" in
+      # No beat for this sid inside a LIVE beat world — the beat cannot vouch for it either ⇒ hold.
+      ''|*[!0-9]*) ;;
+      *) if (( _bage >= INTERACTIVE_HOLD_S )); then
+           log "  NOTE: $_gap; presence proven ABSENT by beat (${_bage}s ≥ hold ${INTERACTIVE_HOLD_S}s) — proceeding on the independent oracle"
+           return 0
+         fi ;;
+    esac
+  fi
+  log "  ⚑ presence UNPROVABLE: $_gap, and the beat could not prove operator absence — NOT closing pane [$PANEID] ($MEMBER_NAME); paging desk"
+  # Damped on (team, member, cause) like the sibling adoption pages — this re-fires on EVERY
+  # subsequent TeammateIdle for as long as the lib stays undeployed.
+  _page_desk_damped "ADOPTION-UNPROVABLE:$TEAM_NAME:$MEMBER_NAME" \
+    "teammate-auto-shutdown HELD: pane $PANEID ($MEMBER_NAME, team $TEAM_NAME) — $_gap and the presence beat could not prove operator absence; left open, confirm-close manually."
+  exit 0
 }
 
 # ── LIVENESS: is a tool RUNNING right now? (2026-07-29) ──────────────────────────────────────────
@@ -656,6 +686,14 @@ if [[ -n "$WORKTREE" && -x "$REAP_GUARD" ]]; then
     # Do NOT emit {"continue": false}; let the just-born teammate keep working.
     exit 0
   fi
+elif [[ -n "$WORKTREE" ]]; then
+  # OBSERVABILITY (2026-07-31): a non-executable / undeployed reap-guard used to be a SILENT skip —
+  # the belt simply vanished with no trace in the log. That silence is half of the measured
+  # close-a-live-conversation chain: reap-guard R-d and the operator-adoption belt below are the two
+  # who-gates on this actuator, and both degrade on the same per-file-symlink deploy layer. The belt
+  # below now fails closed, so this line is diagnosis rather than defence — but a guard that can
+  # disappear without saying so is exactly how the disappearance stays invisible until an incident.
+  log "  WARN: reap-guard not executable ($REAP_GUARD) — R-a/R-b/R-d belt SKIPPED (degraded; the operator-adoption belt below is now the only who-gate)"
 fi
 
 # ── FAIL-CLOSED on unresolved WORKTREE (2026-07-24) ──────────────────────────────────────────────
@@ -783,8 +821,29 @@ if (( _hold_on )); then
     # shellcheck source=/dev/null
     . "$INTERACTIVE_LIB" 2>/dev/null || true
   fi
+  # The BEAT — the SECOND, independent presence oracle. Same resolve order as bin/cc-teardown §1c.
+  for _b in "$HOOK_DIR/lib/cc-beat.sh" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/cc-beat.sh" \
+            "$HOME/.claude/hooks/lib/cc-beat.sh"; do
+    # shellcheck source=/dev/null
+    [[ -f "$_b" ]] && { . "$_b" 2>/dev/null || true; break; }
+  done
   if ! type -t ci_last_interactive_epoch >/dev/null 2>&1; then
-    log "  WARN: cc-interactive.sh absent ($INTERACTIVE_LIB) — skipping operator-adoption check (degraded)"
+    # ── R3 parity with bin/cc-teardown §1c (SESSION_REGISTRY_V2 §4.3.5) ──────────────────────────
+    # The WHO-oracle is missing, so this process CANNOT prove the pane is not a live operator
+    # conversation. v1 logged a WARN and fell through to close_and_log — "cannot prove present"
+    # read as "proven absent", the inverse of this repo's absence-is-loud law, on the actuator with
+    # the WORST blast radius in the family (cc-classify only mis-labels; this one KILLS the pane).
+    # Its own test pinned that fail-open as correct using a fixture carrying a REAL operator prompt
+    # — the identical pathology cc-teardown carried until R3, and the reason reading the guard was
+    # not enough: a `type -t` guard EXISTED here all along, it just guarded the wrong way.
+    # MEASURED 2026-07-31 on the incident fixture (real operator prompt 950s ago, idle 900s, landed,
+    # spawn 50000s ago), reap-guard absent so this belt is the only who-gate:
+    #     lib PRESENT ⇒ held + desk paged        lib ABSENT ⇒ `it2 session close -f -s PANE-INC`
+    # i.e. a live operator conversation closed. Held via the BEAT rather than refused outright,
+    # because an unconditional hold would make this belt a single point of INERTNESS — a lib that
+    # fails to deploy would hold EVERY idle teammate and page the desk on each, the
+    # fail-closed-as-amplifier outage cc-teardown RED-proved (7 of its 17 selftests → REFUSE).
+    _beat_or_hold "the who-oracle ($INTERACTIVE_LIB) is absent"
   else
     _adopt_tj="$(_find_transcript "$SESSION_ID" || true)"
     if [[ -z "$_adopt_tj" && -n "$PANEID" ]]; then
