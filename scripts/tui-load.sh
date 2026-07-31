@@ -79,7 +79,7 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-SPIN='|/-\'
+SPIN="|/-\\"          # spinner glyphs; double-quoted so the trailing backslash needs no SC1003 dance
 SLEEP="$(awk -v f="$FPS" 'BEGIN{ if(f<=0) f=1; printf "%.4f", 1/f }')"
 
 # ── PRECOMPUTE THE FRAMES ─────────────────────────────────────────────────────────────────────────
@@ -115,7 +115,7 @@ while [ "$k" -lt "$CYCLE" ]; do
     r=$(( r + 1 ))
   done
   f+=$'\e['"${ROWS}"$';1H\e[2K\e[38;2;150;150;150m'"synthetic TUI load · ${LABEL}"$'\e[0m'
-  FRAME[$k]="$f"
+  FRAME[k]="$f"
   k=$(( k + 1 ))
 done
 FRAME_BYTES="${#FRAME[0]}"
