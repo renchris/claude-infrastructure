@@ -136,6 +136,14 @@ done
 # tests that page without asserting on the capture must not make it fail — a stub that errors would be
 # read by send_page's rc check as "the transport refused it" and change the very behaviour under test.
 printf '%s\n' "$target" >> "${CC_NOTIFY_CAPTURE:-/dev/null}"
+# CONTRACT (2026-07-31): send_page now PARSES the `verdict=` token and treats rc alone as
+# insufficient — the real cc-notify exits 0 while reporting `verdict=mailbox-only
+# reason=target-not-live`, which is how a page sat undelivered for 15.2 h. This stub must therefore
+# speak the verdict too, or every page it fakes reads as undelivered. Verified against the real
+# binary: a live target emits `verdict=delivered`.
+# CC_NOTIFY_STUB_VERDICT lets a test script the DELIVERY outcome independently of the exit code —
+# the same attempt/outcome split the rc knob already provides for T29.
+echo "cc-notify: verdict=${CC_NOTIFY_STUB_VERDICT:-delivered} target=$target" >&2
 # The ATTEMPT is captured above, then the scripted rc decides the OUTCOME — that split is what lets
 # T29 count re-attempts of a page the transport refused. Default 0 keeps every other test unchanged.
 exit "${CC_NOTIFY_STUB_RC:-0}"

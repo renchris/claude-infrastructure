@@ -147,6 +147,26 @@ done
 # deliberately NOT re-paged here (a per-sweep re-page of an undrainable box is the 2026-07-19 storm).
 # Returns 0 = ENQUEUED (or damping-suppressed) ⇒ caller records its marker · 1 = no channel wired ·
 # 2 = send attempted and cc-notify FAILED ⇒ marker NOT recorded, so the next sweep retries.
+# page_escalate_os <verdict> <message> — last-resort delivery for a page cc-notify could not put in
+# front of a human. Notification Center needs no live pane and no role file, so it is the one
+# channel that cannot rot the way cc-roles/desk did (it addressed a dead pane for 15 h on
+# 2026-07-31). Text is passed as an AppleScript ARGV item, never interpolated into the script
+# source — the message is attacker-adjacent (it quotes a blocked session's command line, which on
+# 2026-07-31 was a shell-injection probe full of quotes and $( )). Best-effort and always rc 0: a
+# failed escalation must never break the sweep that raised it.
+page_escalate_os(){ # $1=verdict  $2=message
+  command -v osascript >/dev/null 2>&1 || return 0
+  sup_bounded 10 osascript - "$1" "$2" >/dev/null 2>&1 <<'OSA' || true
+on run argv
+  set v to item 1 of argv
+  set m to item 2 of argv
+  if (count of m) > 200 then set m to (text 1 thru 200 of m)
+  display notification m with title ("Claude fleet — page UNDELIVERED (" & v & ")") sound name "Funk"
+end run
+OSA
+  return 0
+}
+
 send_page(){ # $1=message [$2=state-fingerprint]
   local msg="$1" fp="${2:-}" target rdir rname rc=0
   [ -n "$NOTIFY_BIN" ] || return 1
@@ -162,13 +182,39 @@ send_page(){ # $1=message [$2=state-fingerprint]
   # rc 124 needs no new branch: it is non-zero, so it takes the FAILED path below — marker withheld,
   # incident recorded, next sweep retries. That is precisely right for a cut send (we never learned
   # whether it was enqueued, so re-sending is the safe error).
+  # CAPTURE cc-notify's stderr — it emits a parseable `verdict=` token, and the exit code alone is
+  # NOT the outcome. Measured 2026-07-31: paging a role whose pane is dead returns
+  #   verdict=mailbox-only enqueued=1 reason=target-not-live unacked=997   with rc=0
+  # cc-notify is entirely honest ("no drain will run", "DELIVERED IS NOT READ"); this function was
+  # the liar, because it checked `rc` and never read the token. Consequence: a session sat blocked
+  # on a permission prompt for 15.2 hours while every page was recorded as SENT into a box holding
+  # 997 unacked messages that no drain would ever run.
+  # See memory claimed-outcome-vs-checked-outcome: emit a structured verdict its consumer can PARSE
+  # — the token existed; nobody parsed it.
+  local _out=""
   if [ -n "$PAGE_TO" ]; then
-    sup_bounded "$SUP_NOTIFY_TIMEOUT_S" "$NOTIFY_BIN" "$PAGE_TO" "$msg" >/dev/null 2>&1; rc=$?
+    _out="$(sup_bounded "$SUP_NOTIFY_TIMEOUT_S" "$NOTIFY_BIN" "$PAGE_TO" "$msg" 2>&1)"; rc=$?
   else
     rdir="$(dirname "$PAGE_TO_FILE")"; rname="$(basename "$PAGE_TO_FILE")"
-    CC_ROLES_DIR="$rdir" sup_bounded "$SUP_NOTIFY_TIMEOUT_S" "$NOTIFY_BIN" --role "$rname" "$msg" >/dev/null 2>&1; rc=$?
+    _out="$(CC_ROLES_DIR="$rdir" sup_bounded "$SUP_NOTIFY_TIMEOUT_S" "$NOTIFY_BIN" --role "$rname" "$msg" 2>&1)"; rc=$?
   fi
-  [ "$rc" = 0 ] && return 0
+
+  # A verdict we cannot READ is a THIRD state — never silently promoted to success.
+  local _verdict
+  _verdict="$(printf '%s' "$_out" | grep -oE 'verdict=[a-z-]+' | head -1 | cut -d= -f2)"
+  : "${_verdict:=unreadable}"
+
+  if [ "$rc" = 0 ] && [ "$_verdict" = delivered ]; then
+    return 0
+  fi
+
+  # Reached a mailbox nobody drains, or the verdict was unreadable. The operator did NOT get this.
+  # Escalate to a channel with NO liveness dependency: an OS notification needs no live pane and no
+  # role file, so it cannot rot the way cc-roles/desk does (it pointed at a dead pane for 15h).
+  if [ "$rc" = 0 ]; then
+    page_escalate_os "$_verdict" "$msg"
+    echo "lead-supervisor: PAGE-UNDELIVERED verdict=$_verdict rc=$rc target=${PAGE_TO:-role:$PAGE_TO_FILE} — enqueued to a box with no drain; escalated to an OS notification." >&2
+  fi
   # The D7 marker was written BEFORE the attempt (an intent to send). A failed send must not burn its
   # TTL suppressing the retry — drop it, so the next sweep genuinely re-sends rather than re-damping.
   [ -n "$fp" ] && command -v damp_forget >/dev/null 2>&1 && damp_forget "${PAGE_TO:-role:$PAGE_TO_FILE}" "$fp"
