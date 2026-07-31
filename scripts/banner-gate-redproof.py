@@ -332,10 +332,18 @@ def _stride():
 @case("legacy: the duty budget (an over-long beat)", "duty budget breached")
 def _duty():
     # Proves assert_duty_budget. The cheer this used to stretch is emitted by no variant, so
-    # `active_events` never measures it; the peek is a beat v6a actually declares. 18.0s breaches
-    # BOTH the 10.0s per-instance ceiling and the 4% per-type one, and it stays 13.5s clear of THE
-    # ASK, so the disjointness gate ahead of it has nothing to say first.
-    g.RARE_EVENTS["peek"] = (48.5, 66.5)
+    # `active_events` never measures it; the peek is a beat v6a actually declares. 19.0s breaches
+    # BOTH the 10.0s per-instance ceiling and the 4% per-type one.
+    #
+    # It grows BACKWARD, into the gap before it, and that direction is the fixture's whole point.
+    # Stretching the peek FORWARD to 66.5s was correct until THE SHOOTING STAR took the 62.0s slot;
+    # after that the sabotage collided with `rShoot` and the disjointness gate convicted first, so
+    # this case silently stopped proving the budget and started re-proving its neighbour. Growing
+    # backward instead lands 39.0-58.0s: 4.0s clear of THE ASK's 35.0s end and exactly EVENT_GAP
+    # clear of `rShoot`'s 62.0s start, so the ONE thing wrong with this build is its duration.
+    # (This is the same class of rot the seven stale fixtures on this branch were: a fixture is a
+    # function of the timeline, and adding a beat re-times it.)
+    g.RARE_EVENTS["peek"] = (39.0, 58.0)
     g.build(v())
 
 
