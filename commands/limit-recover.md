@@ -294,7 +294,7 @@ conversational context; new turns land in the target account's store).
    the fire script re-sends CR until the running-turn indicator ("esc to interrupt") appears,
    because a leading-`/` prompt's autocomplete menu can eat the first CR (composer submits on
    `\r` only; observed stranded 2026-07-11). `--print-only` writes
-   `/tmp/lr-launch-<sid8>.sh` instead (manual fallback is always printed).
+   `$TMPDIR/lr-launch-<sid8>-XXXXXX.sh` instead (manual fallback is always printed).
 4. **This session is now DONE.** Emit the handoff report (target account, bundle path, gaps
    handed over). Do not dispatch further delegated work here — the target session owns recovery
    (split-brain rule). Suggest the user close/park this pane.

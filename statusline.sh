@@ -85,8 +85,24 @@ if [ -n "$INPUT" ] && command -v jq &>/dev/null; then
     # CC_TELEMETRY_DIR is the seam bin/cc-context, bin/cc-board and bin/cc-value already
     # honour; the writer was the only side still hardcoding the path.
     TDIR="${CC_TELEMETRY_DIR:-/tmp/cc-telemetry}"
-    mkdir -p "$TDIR" 2>/dev/null
+    # 0700, set at CREATE time only. These rows carry live session ids, cwds and pids, and the dir
+    # sat 0755 inside mode-1777 /tmp — any local uid could enumerate every live session, which is
+    # precisely what made the generated-launcher names predictable (codex-security 2026-07-29,
+    # finding 2). Creating it 0700 closes the enumeration; the chmod is inside the `[ -d ]` guard
+    # because this runs on EVERY TUI redraw and an unconditional chmod would add a fork per render.
+    #
+    # The PATH is deliberately NOT moved, though the finding suggested it. Three measured blockers:
+    # bin/cc-ctx-audit keys on a DIFFERENT env var (CC_CTX_TELEMETRY_DIR), so changing this default
+    # moves 7 of 8 sites and silently strands the 8th; /tmp's reboot-wipe is the ONLY bound on
+    # lead-supervisor's DEAD-page population (gc_stale refuses to reap stranded-dead rows), so a
+    # durable dir turns that into a permanent re-firing page; and this writer is a copy-deployed
+    # real file while every reader is a symlink, so a path change goes live on the readers first
+    # and blinds the spine in between. Mode, not location, is what "world-readable" asked for.
+    [ -d "$TDIR" ] || { mkdir -p "$TDIR" 2>/dev/null && chmod 700 "$TDIR" 2>/dev/null; }
     _sid="$PAY_SID"
+    # -O is a bash builtin (no fork): refuse to publish into a directory this uid does not own,
+    # so a pre-created foreign /tmp/cc-telemetry cannot harvest the rows.
+    [ -O "$TDIR" ] || _sid=""
     if [ -n "$_sid" ]; then
         _tp="$PAY_TPATH"
         _cfg="${_tp%%/projects/*}"

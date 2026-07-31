@@ -8,7 +8,7 @@
 #                      [--no-transplant] [--keep-source] [--force]
 #
 # Defaults: sid/config from the live session env; --target auto routes via
-# claude-accounts; --print-only writes /tmp/lr-launch-<sid8>.sh instead of firing.
+# claude-accounts; --print-only mints $TMPDIR/lr-launch-<sid8>-XXXXXX.sh instead of firing.
 # Output: bundle dir path on the last stdout line. Exit 0 ok, 2 error.
 set -euo pipefail
 
@@ -156,7 +156,24 @@ fi
 
 # --- launch ----------------------------------------------------------------
 FIRE_MODEL=""; [[ "$MODEL" == "fable" ]] && FIRE_MODEL="--model claude-fable-5 --effort high"
-LAUNCHER="/tmp/lr-launch-${SID:0:8}.sh"
+# Per-uid 0700 temp dir, not the mode-1777 /tmp (CWE-377/CWE-59). This file is written, chmod +x'd
+# and then executed BY PATH from another process (an iTerm2 pane types `exec /bin/bash $LAUNCHER`),
+# so a name another uid can pre-create turns the `cat >` into an arbitrary-file clobber plus a
+# chmod +x on the target. `${TMPDIR:-/tmp}` alone is not enough — launchd does not inject TMPDIR
+# into agent jobs (measured 2026-07-30), so getconf reads the per-uid dir from confstr instead.
+lrh_tmpdir() {
+  local d="${TMPDIR:-}"
+  [[ -n "$d" ]] || d="$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null || true)"
+  { [[ -n "$d" ]] && [[ -d "$d" ]] && [[ -w "$d" ]]; } || d="/tmp"
+  printf '%s' "${d%/}"
+}
+# MINT THE UNIQUE NAME FIRST, ADD `.sh` AFTER: BSD mktemp only substitutes a TRAILING `XXXXXX`, so
+# a `…-XXXXXX.sh` template yields that LITERAL constant name and every mint after the first dies
+# `File exists`. The suffix is kept because --print-only hands this path to `cursor` and to the
+# operator as the manual fallback. ${SID:0:8} is a readability prefix, never the entropy.
+LAUNCHER="$(mktemp "$(lrh_tmpdir)/lr-launch-${SID:0:8}-XXXXXX")" || {
+  echo "lr-handoff: could not mint a launch script in a secure temp dir" >&2; exit 1; }
+mv "$LAUNCHER" "$LAUNCHER.sh" && LAUNCHER="$LAUNCHER.sh"
 cat > "$LAUNCHER" <<EOF
 #!/bin/bash
 # Resume the handed-off session $SID on account '$TARGET' with the ingest prompt.

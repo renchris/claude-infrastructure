@@ -54,8 +54,9 @@ STUB
 
   export PATH="$BATS_TEST_TMPDIR/stubs:$PATH"
 
-  # launcher dir seam — production writes the resume launcher to the SHARED /tmp under a sid-prefix
-  # name, so two concurrent runs of this suite race the same path. Per-test dir ⇒ no collision.
+  # launcher dir seam — production now mints the resume launcher with mktemp under the per-uid
+  # $TMPDIR (CWE-377/CWE-59), so the shared-/tmp collision this seam was added for is gone; the
+  # seam stays because a per-test dir is what lets launchers_for() glob a known-empty directory.
   export LR_POLLER_LAUNCH_DIR="$BATS_TEST_TMPDIR/launchers"; mkdir -p "$LR_POLLER_LAUNCH_DIR"
 
   # claude-accounts stub — headroom by default; ACCTS_CAPPED=1 flips next4 to capped.
@@ -111,6 +112,22 @@ mk_resumed() {
 }
 # Future reset display time (+2h) in RESET_RE shape, e.g. "3:45pm"
 future_disp() { python3 -c "from datetime import datetime,timezone,timedelta;d=datetime.now(timezone.utc)+timedelta(hours=2);h=d.hour%12 or 12;print(f\"{h}:{d.minute:02d}{'pm' if d.hour>=12 else 'am'}\")"; }
+
+# The poller mints its launcher with mktemp now (CWE-377/CWE-59 — a predictable name under the
+# mode-1777 /tmp is pre-creatable by another uid), so the filename carries a random suffix and can
+# no longer be derived from the sid. Resolve it by its readability prefix instead of predicting it.
+# `nullglob` is load-bearing: without it a no-match glob expands to the LITERAL pattern, so a
+# `[ ! -e ]`-style assertion would pass against a path that never existed — vacuously green.
+launchers_for() {
+  local g=()
+  shopt -s nullglob
+  g=("$LR_POLLER_LAUNCH_DIR"/lr-poller-launch-"$1"-*.sh)
+  shopt -u nullglob
+  (( ${#g[@]} )) && printf '%s\n' "${g[@]}"
+  return 0
+}
+launcher_for()   { launchers_for "$1" | head -1; }
+launcher_count() { launchers_for "$1" | wc -l | tr -d ' '; }
 
 past_iso()   { python3 -c "from datetime import datetime,timezone,timedelta;print((datetime.now(timezone.utc)-timedelta(hours=1)).isoformat().replace('+00:00','Z'))"; }
 future_iso() { python3 -c "from datetime import datetime,timezone,timedelta;print((datetime.now(timezone.utc)+timedelta(hours=3)).isoformat().replace('+00:00','Z'))"; }
@@ -184,7 +201,7 @@ mk_spend_teammate_transcript() {
   [ "$status" -eq 0 ]
   [ "$(grep -c 'display notification' "$OSA_LOG")" -eq 1 ]           # notify-once, no per-tick spam
   [ "$(grep -c 'create window' "$OSA_LOG")" -eq 0 ]                  # nothing spawned
-  [ ! -e "$LR_POLLER_LAUNCH_DIR/lr-poller-launch-dddddddd.sh" ]
+  [ "$(launcher_count dddddddd)" -eq 0 ]
   grep -q "READY dddddddd" "$STATE/poller.log"
 }
 
@@ -193,14 +210,15 @@ mk_spend_teammate_transcript() {
   LR_POLLER_AUTOFIRE=1 run bash "$POLLER" --once
   [ "$status" -eq 0 ]
   [ "$(grep -c 'create window' "$OSA_LOG")" -eq 1 ]
-  [ -x "$LR_POLLER_LAUNCH_DIR/lr-poller-launch-eeeeeeee.sh" ]
-  grep -q "lr-fire-resume.sh" "$LR_POLLER_LAUNCH_DIR/lr-poller-launch-eeeeeeee.sh"
+  [ "$(launcher_count eeeeeeee)" -eq 1 ]
+  [ -x "$(launcher_for eeeeeeee)" ]
+  grep -q "lr-fire-resume.sh" "$(launcher_for eeeeeeee)"
   [ -f "$STATE/resumed/eeeeeeee-1111-2222-3333-444444444444.json" ]
   [ ! -e "$STATE/parked/eeeeeeee-1111-2222-3333-444444444444.json" ]
   grep -q "RESUMED eeeeeeee" "$STATE/poller.log"
   LR_POLLER_AUTOFIRE=1 run bash "$POLLER" --once                     # idempotency: ledger moved ⇒ no re-fire
   [ "$(grep -c 'create window' "$OSA_LOG")" -eq 1 ]
-  rm -f "$LR_POLLER_LAUNCH_DIR/lr-poller-launch-eeeeeeee.sh"
+  rm -f "$LR_POLLER_LAUNCH_DIR"/lr-poller-launch-eeeeeeee-*.sh
 }
 
 @test "LR-f: 5 ready rows, MAX_PER_RUN=4 → exactly 4 fire, CAP logged, 5th deferred" {
@@ -238,7 +256,7 @@ mk_spend_teammate_transcript() {
   LR_POLLER_AUTOFIRE=1 run bash "$POLLER" --once
   [ "$status" -eq 0 ]
   grep -qE '^[0-9T:Z-]+ RESUMED hhhhhhhh' "$STATE/poller.log"        # timestamped, greppable outcome
-  rm -f "$LR_POLLER_LAUNCH_DIR"/lr-poller-launch-hhhhhhhh.sh
+  rm -f "$LR_POLLER_LAUNCH_DIR"/lr-poller-launch-hhhhhhhh-*.sh
 }
 
 @test "LR-i: recurrence — a NEWER limit event re-parks a previously-resumed sid (marker is event-keyed, not forever)" {
@@ -272,15 +290,16 @@ mk_spend_teammate_transcript() {
   [ "$status" -eq 0 ]
   # a DETACHED tmux session ran the SAME launcher — a headless PTY, no Aqua session needed
   grep -q 'new-session' "$TMUX_LOG"
-  grep -q "lr-poller-launch-aaaa000j.sh" "$TMUX_LOG"
+  grep -q "lr-poller-launch-aaaa000j-" "$TMUX_LOG"
   # and NO iTerm2 window was opened (the GUI path was never taken)
   [ "$(grep -c 'create window' "$OSA_LOG")" -eq 0 ]
-  [ -x "$LR_POLLER_LAUNCH_DIR/lr-poller-launch-aaaa000j.sh" ]
-  grep -q "lr-fire-resume.sh" "$LR_POLLER_LAUNCH_DIR/lr-poller-launch-aaaa000j.sh"
+  [ "$(launcher_count aaaa000j)" -eq 1 ]
+  [ -x "$(launcher_for aaaa000j)" ]
+  grep -q "lr-fire-resume.sh" "$(launcher_for aaaa000j)"
   [ -f "$STATE/resumed/aaaa000j-1111-2222-3333-444444444444.json" ]
   [ ! -e "$STATE/parked/aaaa000j-1111-2222-3333-444444444444.json" ]
   grep -qE 'RESUMED aaaa000j.*tmux' "$STATE/poller.log"              # mechanism recorded in the outcome
-  rm -f "$LR_POLLER_LAUNCH_DIR/lr-poller-launch-aaaa000j.sh"
+  rm -f "$LR_POLLER_LAUNCH_DIR"/lr-poller-launch-aaaa000j-*.sh
 }
 
 @test "LR-k: monthly-spend kill (no reset) → class-B decision packet opened, NEVER silent-parked" {
@@ -315,10 +334,10 @@ mk_spend_teammate_transcript() {
   [ "$status" -eq 0 ]
   grep -q 'create window' "$OSA_LOG"                                 # GUI attempted first...
   grep -q 'new-session' "$TMUX_LOG"                                  # ...then tmux carried it headlessly
-  grep -q "lr-poller-launch-aaaa000m.sh" "$TMUX_LOG"
+  grep -q "lr-poller-launch-aaaa000m-" "$TMUX_LOG"
   [ -f "$STATE/resumed/aaaa000m-1111-2222-3333-444444444444.json" ]
   grep -qE 'RESUMED aaaa000m.*tmux' "$STATE/poller.log"
-  rm -f "$LR_POLLER_LAUNCH_DIR/lr-poller-launch-aaaa000m.sh"
+  rm -f "$LR_POLLER_LAUNCH_DIR"/lr-poller-launch-aaaa000m-*.sh
 }
 
 @test "LR-n: teammate monthly-spend session → NO packet (lead-owned recovery), teammate-skip logged" {
@@ -435,7 +454,7 @@ PAYLOAD_CWD() { printf '%s/proj$(touch %s)' "$CWD" "$1"; }
   LR_POLLER_AUTOFIRE=1 run bash "$POLLER" --once
   [ "$status" -eq 0 ]
   grep -q "SKIP  aaaa000r" "$STATE/poller.log"
-  [ ! -e "$LR_POLLER_LAUNCH_DIR/lr-poller-launch-aaaa000r.sh" ]      # nothing was fired off it
+  [ "$(launcher_count aaaa000r)" -eq 0 ]                             # nothing was fired off it
 }
 
 @test "LR-s: the generated launcher passes cwd VERBATIM as one argv element (no re-expansion)" {
@@ -455,7 +474,9 @@ STUB
   mk_parked "aaaa000s-1111-2222-3333-444444444444" "$(past_iso)" "$pay"
   LR_POLLER_AUTOFIRE=1 run bash "$lrcopy/lr-reset-poller.sh" --once
   [ "$status" -eq 0 ]
-  local launcher="$LR_POLLER_LAUNCH_DIR/lr-poller-launch-aaaa000s.sh"
+  local launcher
+  [ "$(launcher_count aaaa000s)" -eq 1 ]
+  launcher="$(launcher_for aaaa000s)"
   [ -x "$launcher" ]
   export FIRE_ARGV="$BATS_TEST_TMPDIR/fire-argv.txt"
   run bash "$launcher"                              # ← expansion happens HERE, before exec

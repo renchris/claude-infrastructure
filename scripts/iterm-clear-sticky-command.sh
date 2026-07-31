@@ -20,8 +20,9 @@
 # FUTURE split inherits.
 #
 # Usage: iterm-clear-sticky-command.sh [--dry-run] [--all]
-#   (default)  clear only overrides pointing at a generated launcher (/tmp/lr-launch-*.sh,
-#              /tmp/lr-poller-launch-*.sh, /tmp/handoff-*.sh) — never a hand-configured profile
+#   (default)  clear only overrides pointing at a generated launcher (lr-launch-*.sh,
+#              lr-poller-launch-*.sh, handoff-*.sh — matched by basename in any temp dir, since
+#              the producers now mint under the per-uid $TMPDIR) — never a hand-configured profile
 #   --all      clear EVERY session-local custom-command override
 #   --dry-run  list what would be cleared, change nothing
 set -uo pipefail
@@ -74,7 +75,13 @@ import iterm2
 DRY = os.environ.get("DRY") == "1"
 ALL = os.environ.get("ALL") == "1"
 # Generated-launcher shapes written by our own fire paths. Anything else is presumed operator-owned.
-LAUNCHER = re.compile(r"/tmp/(lr-launch-|lr-poller-launch-|handoff-)[^\s]*\.sh")
+# Matched by BASENAME, not by directory. The producers moved off the mode-1777 /tmp to the per-uid
+# $TMPDIR (/var/folders/<hash>/<hash>/T/) to close CWE-377/CWE-59, and a `/tmp/`-anchored pattern
+# would have gone on matching nothing while still exiting 0 and printing a success summary — this
+# repair tool degrades through its SKIP branch, so the failure would have been silent. The three
+# prefixes are ours alone, which is the real discriminator; requiring a leading `/` and forbidding
+# `/` in the tail keeps this a basename match rather than a substring one.
+LAUNCHER = re.compile(r"/(?:lr-launch-|lr-poller-launch-|handoff-)[^\s/]*\.sh\b")
 
 async def main(connection):
     app = await iterm2.async_get_app(connection)

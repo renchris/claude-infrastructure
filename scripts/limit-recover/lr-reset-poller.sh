@@ -179,6 +179,26 @@ for ln in open(sys.argv[1],encoding='utf-8'):
 " "$1" 2>/dev/null
 }
 
+# ── per-uid temp dir (CWE-377/CWE-59) ──────────────────────────────────────────────────
+# The launcher below is written, chmod +x'd and then executed BY PATH from another process, so it
+# must live where no other uid can pre-create its name. /tmp is mode 1777: the sticky bit stops
+# another uid replacing a file we already own, but NOT pre-creating a name that does not exist yet
+# — a planted symlink turns the `>` into an arbitrary-file clobber plus a chmod +x on the target.
+#
+# NOT `${TMPDIR:-/tmp}` on its own. MEASURED 2026-07-30: launchd does not inject TMPDIR into
+# LaunchAgent jobs (14 of 15 sampled user agents had it ABSENT; `launchctl getenv TMPDIR` is
+# empty), and this poller's whole production role IS a LaunchAgent — so that fallback would land
+# right back in the 1777 /tmp in the one context that matters, and the fix would read as applied
+# while being inert. `getconf DARWIN_USER_TEMP_DIR` reads the per-uid dir from confstr rather than
+# the environment (verified under `env -i`), so it survives an empty env. Last resort stays /tmp:
+# a launcher we cannot place securely is still better than no resume at all.
+lrp_tmpdir() {
+  local d="${TMPDIR:-}"
+  [ -n "$d" ] || d="$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null || true)"
+  { [ -n "$d" ] && [ -d "$d" ] && [ -w "$d" ]; } || d="/tmp"
+  printf '%s' "${d%/}"
+}
+
 # ── headless-capable resume spawn (P0-8) ───────────────────────────────────────────────
 SPAWN_MECH="${LR_POLLER_SPAWN:-auto}"
 # spawn_gui <launcher> — open an iTerm2 window (needs an Aqua session). 0 = opened.
@@ -465,7 +485,19 @@ sys.stdout.write("".join(str(d.get(k,""))+"\0" for k in ("sid","acct","cfg","cwd
   if ! account_has_headroom "$acct"; then log "WAIT  $sid — $acct still capped, retry next tick"; continue; fi
   (( fired >= MAX_PER_RUN )) && { log "CAP   per-run resume cap ($MAX_PER_RUN) reached; deferring rest"; break; }
   if [[ "$AUTOFIRE" == "1" && $DRY -eq 0 ]]; then
-    launcher="${LR_POLLER_LAUNCH_DIR:-/tmp}/lr-poller-launch-${sid:0:8}.sh"   # seam: tests redirect off the shared /tmp (concurrent-suite write collision)
+    # MINT THE UNIQUE NAME FIRST, ADD THE SUFFIX AFTER — the same idiom (and for the same reason)
+    # as handoff-fire.sh's WT_DEPS. BSD mktemp substitutes only a TRAILING `XXXXXX`; given
+    # `…-XXXXXX.sh` it creates the file named LITERALLY that, so the name carries ZERO entropy and
+    # the SECOND mint dies `mkstemp failed … File exists` — and nothing ever removes these, so it
+    # stays dead. The `.sh` suffix is kept deliberately: an operator reads this path off a parked
+    # pane, and scripts/iterm-clear-sticky-command.sh matches generated launchers by it.
+    # ${sid:0:8} stays a READABILITY prefix only — mktemp, not the sid, is the entropy budget.
+    launch_dir="${LR_POLLER_LAUNCH_DIR:-$(lrp_tmpdir)}"   # seam: tests redirect off the shared /tmp
+    if ! launcher="$(mktemp "$launch_dir/lr-poller-launch-${sid:0:8}-XXXXXX" 2>/dev/null)"; then
+      log "ERROR  $sid — could not mint a launcher under $launch_dir; skipping this tick"
+      continue
+    fi
+    mv "$launcher" "$launcher.sh" && launcher="$launcher.sh"
     # %q for EVERY interpolated value — this file is bash SOURCE, so each field is code until
     # it is quoted as data. The pre-2026-07-30 form spent its one %q on the `/limit-recover`
     # CONSTANT and interpolated the three attacker-reachable fields with %s inside literal
