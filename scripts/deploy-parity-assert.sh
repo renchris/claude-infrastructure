@@ -25,13 +25,23 @@
 # operator-adopted pane as reapable. The leg below makes that FAIL LOUD and hands over the exact
 # `ln -sf` per miss.
 #
+# THIRD LEG (2026-07-31) — PROVENANCE: how the shared checkout reached the commit it is on. The two
+# legs above compare LIVE against CHECKOUT, and a raw `git merge --ff-only origin/main` leaves those
+# two in perfect agreement while skipping both the green-stamp gate and install.sh — so the one
+# failure ship.md:98 names this script the catcher of was, until now, the one failure it could not
+# see. Scored as two independent facts: UNGATED (the mechanism bypassed deploy-live.sh) and
+# UNVERIFIED (the live tree never earned a green stamp). Full derivation at the leg itself.
+#
 # READ-ONLY: compares and reports. It never installs, copies, or repairs anything.
-# Exit 0 = parity · 1 = drift (actionable: re-run ./install.sh) · 3 = NO VERDICT — the repo under
-# assertion could not be resolved, so nothing was compared (see the derivation guard below). Both 0
-# and 1 CLAIM a comparison happened; this state must never borrow either exit code.
+# Exit 0 = parity · 1 = a NAMED failure · 3 = NO VERDICT — the repo under assertion could not be
+# resolved, so nothing was compared (see the derivation guard below). Both 0 and 1 CLAIM a
+# comparison happened; this state must never borrow either exit code.
+# Exit 1 covers TWO kinds, and they do NOT share a remedy: a ~/bin or existence miss is repaired by
+# ./install.sh (or the printed ln -sf lines), whereas a PROVENANCE finding cannot be repaired by
+# deploying again — the remedy block names the difference so the two never get one blanket fix.
 # Covered by tests/deploy-parity.bats, whose fixtures drive it via CC_PARITY_REPO /
-# CC_PARITY_BINDIR / CC_PARITY_STRICT / CC_PARITY_COPY / CC_PARITY_LIVE / CC_PARITY_PENDING
-# (fully hermetic — no host deps).
+# CC_PARITY_BINDIR / CC_PARITY_STRICT / CC_PARITY_COPY / CC_PARITY_LIVE / CC_PARITY_PENDING /
+# CC_PARITY_STAMPS / CC_PARITY_PROVENANCE (fully hermetic — no host deps).
 set -uo pipefail
 
 if [ -n "${CC_PARITY_REPO:-}" ]; then
@@ -101,7 +111,25 @@ COPY_TOOLS="${CC_PARITY_COPY:-claude-latest claude-update claude-versions browse
 
 drift=0
 noverdict=0
+ungated=0
+unverified=0
 report() { printf '  %-9s %-22s %s\n' "$1" "$2" "$3"; }
+
+# A stamp is green iff its JSON says so. COPIED VERBATIM from deploy-live.sh:135 on purpose: the
+# provenance leg below asserts the postcondition of deploy-live's OWN target choice, so the two must
+# agree on what "green" means or they become two auditors over one population with different state
+# models — the exact divergence this repo has already paid for elsewhere. tests/deploy-parity.bats
+# pins the two bodies as identical text, so a change to either side fails loudly rather than drifts.
+is_green() { # <stamp-file>
+  [ -f "$1" ] || return 1
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import json,sys
+try: sys.exit(0 if json.load(open(sys.argv[1])).get("verdict")=="green" else 1)
+except Exception: sys.exit(1)' "$1" 2>/dev/null && return 0
+    return 1
+  fi
+  grep -qE '"verdict"[[:space:]]*:[[:space:]]*"green"' "$1" 2>/dev/null
+}
 
 # `diff` has THREE outcomes and only two of them are verdicts: 0 = same, 1 = differ, >=2 = COULD NOT
 # RUN (unreadable input, or fork exhaustion under load). Collapsing >=2 into "differ" fabricates
@@ -225,6 +253,8 @@ done
 # never create is exactly the false demand this comment's first rule forbids.
 LIVE="${CC_PARITY_LIVE:-$HOME/.claude}"
 PENDING_DIRS="${CC_PARITY_PENDING:-$REPO/docs/activation/pending-activation:$LIVE/autonomy/pending-activation}"
+# Post-land verification stamps, keyed by TREE sha (deploy-live.sh's contract). Read-only here.
+STAMPS="${CC_PARITY_STAMPS:-$LIVE/autonomy/postland/stamps}"
 missing=0
 pending=0
 
@@ -341,12 +371,148 @@ if [ "$pending" -ne 0 ]; then
   printf '\ndeploy-parity-assert: %s file(s) staged-pending (unlinked BY DESIGN, activation un-run) — not drift.\n' "$pending" >&2
 fi
 
+# ── THIRD LEG: DEPLOY PROVENANCE — HOW the live checkout reached the commit it is on ────────────
+# Both legs above ask "does the LIVE layer match the CHECKOUT?". Neither can answer the question
+# ship.md:98 actually assigns to this file — "the check that catches a bare-ff deploy after the
+# fact" — because a raw `git merge --ff-only origin/main` in the shared checkout leaves live and
+# checkout in PERFECT agreement. It skips the green-stamp gate and skips install.sh, and is then
+# indistinguishable from a sanctioned deploy by every quantity either leg above measures.
+#
+# Measured on the shared checkout 2026-07-31: of the last 30 HEAD reflog entries, 29 were ungated
+# advances (`merge origin/main` / `pull --ff-only`) against 2 sanctioned ones. They carried live
+# HEAD to ec92e68c — 196 commits ABOVE the newest green-stamped commit 34e725d6 — so deploy-live's
+# monotonicity guard now refuses on every 600s tick ("would ROLL BACK the live layer"), 96 refusals
+# and counting. The sanctioned lane is DEADLOCKED, and the green-stamp gate is thereby MOOT: the
+# verifier can now only ever green a tree the live layer has already been running, unverified.
+#
+# WHY A NEW LEG RATHER THAN LEANING ON THE EXISTENCE LEG'S `MISSING` LINES: 70d86739 (2026-07-31)
+# made deploy-live's link_refresh UNCONDITIONAL, so it repairs exactly those links on every tick,
+# INCLUDING the refusing ones. That is correct for availability, and it erases the only residue a
+# raw ff used to leave behind — the symptom is now cleaned up on a 600s timer while the ungated
+# advance that caused it goes on undetected. Reading the CAUSE is the only thing left that can see
+# it, which is why five prior sessions each measured "drift at its historical minimum" and closed.
+#
+# TWO INDEPENDENT FACTS, separated because they have different causes and different remedies:
+#   UNGATED    — the MECHANISM bypassed deploy-live.sh (a raw ff/pull/reset moved HEAD).
+#   UNVERIFIED — the CONTENT never passed the green gate. Also true after a deliberate --force or
+#                --bootstrap deploy, which is sanctioned in mechanism but unverified in content.
+# A healthy deploy trips neither · a raw ff trips both · an operator's --force trips only the second.
+#
+# SUBJECT DISCIPLINE, the same rule the derivation guard states at the top of this file: skipping is
+# correct when a caller has DECLARED the subject. Provenance is a property of the REAL live
+# checkout, so it runs on the DERIVED path only — every hermetic fixture declares CC_PARITY_REPO and
+# is therefore exempt by construction, which is why this leg cannot false-RED the fixture cases (a
+# `git init`'d fixture with no commits would otherwise read as UNGATED on all of them).
+# CC_PARITY_PROVENANCE=1/0 forces it either way (set-but-EMPTY honoured as unset) — the same seam
+# shape as CC_PARITY_REQUIRE_PATH above, and how the hermetic cases drive this leg at all.
+# Snapshot BEFORE this leg can touch `drift`: the closing banner must not tell an operator "the code
+# running is not the code in this checkout" when the only finding is provenance — under a raw ff the
+# code running IS this checkout, byte for byte, and that sentence sends the reader hunting a content
+# difference that does not exist. Two kinds of exit 1, two accurate sentences.
+content_drift="$drift"
+if [ -n "${CC_PARITY_PROVENANCE:-}" ]; then
+  do_provenance="$CC_PARITY_PROVENANCE"
+elif [ -z "${CC_PARITY_REPO:-}" ]; then
+  do_provenance=1
+else
+  do_provenance=0
+fi
+if [ "$do_provenance" = 1 ] && [ -e "$REPO/.git" ]; then
+  # The reflog's NEWEST entry is BY DEFINITION the operation that set HEAD to its current value, so
+  # it is a record of how the live layer got here, not an inference from the commit graph.
+  # Reflogs are local and expire (gc.reflogExpire, 90d default) and a fresh clone has none, so an
+  # empty/unreadable one is a NON-VERDICT — never a pass. Same doctrine as `diff` rc>=2 above.
+  _how="$(git -C "$REPO" log -g -1 --format=%gs HEAD 2>/dev/null || true)"
+  if [ -z "$_how" ]; then
+    report "NOVERDICT" "(provenance)" "HEAD reflog empty/unreadable — cannot say how this checkout advanced"
+    noverdict=1
+  else
+    # deploy-live.sh resolves its target to an object name BEFORE merging (`merge --ff-only
+    # "$TARGET"`, TARGET from rev-parse), so a sanctioned advance always reflogs a SHA. Every
+    # ungated path either names a REF (`merge origin/main`) or is not a merge at all (`pull …`,
+    # `reset …`, `checkout …`). That is the entire discriminator, and it holds for --bootstrap and
+    # --force too: both reach the same resolved-SHA merge, which is why mechanism and content are
+    # scored separately below rather than collapsed into one verdict.
+    _sanctioned=0
+    case "$_how" in
+      "merge "*": Fast-forward")
+        _tgt="${_how#merge }"; _tgt="${_tgt%: Fast-forward}"
+        # Hex-only and >=7 chars ⇒ an object name. `origin/main` and every other ref spelling this
+        # repo uses contains a character outside [0-9a-f], so a ref can never launder into a SHA.
+        case "$_tgt" in
+          ""|*[!0-9a-f]*) ;;
+          *) [ "${#_tgt}" -ge 7 ] && _sanctioned=1 ;;
+        esac ;;
+      "clone: from "*) _sanctioned=1 ;;   # the checkout's birth — no advance has happened yet
+    esac
+    if [ "$_sanctioned" = 1 ]; then
+      report "GATED" "(provenance)" "HEAD advanced via deploy-live — $_how"
+    else
+      report "UNGATED" "(provenance)" "HEAD advanced OUTSIDE deploy-live — $_how"
+      ungated=1
+      drift=1
+    fi
+  fi
+  # CONTENT. After a sanctioned advance HEAD's TREE carries a green stamp BY CONSTRUCTION — that is
+  # how deploy-live picked it (first green tree, walking origin/main newest-first). So ONE stamp
+  # lookup asserts the gate's postcondition without re-deriving its target selection. Re-deriving it
+  # is specifically refused: never re-implement an atomic gate's predicate outside the gate, or the
+  # assert quietly becomes a second, divergent gate. (Calling deploy-live --dry-run to ask the
+  # arbiter directly is also refused — deploy-live calls THIS script for link_refresh, so that would
+  # recurse.) No stamps dir ⇒ the verification net is not active, which is deploy-live's own
+  # separate refusal state ⇒ nothing to compare and this leg makes NO claim either way.
+  if [ -d "$STAMPS" ]; then
+    _tree="$(git -C "$REPO" rev-parse 'HEAD^{tree}' 2>/dev/null || true)"
+    if [ -z "$_tree" ]; then
+      report "NOVERDICT" "(verification)" "cannot resolve HEAD tree in $REPO — no claim about verification"
+      noverdict=1
+    elif is_green "$STAMPS/$_tree.json"; then
+      report "VERIFIED" "(verification)" "HEAD tree carries a GREEN post-land stamp"
+    else
+      report "UNVERIFIED" "(verification)" "HEAD tree $_tree has NO green stamp — this tree never passed the gate"
+      unverified=1
+      drift=1
+    fi
+  fi
+fi
+# THE REMEDY IS NOT "RE-RUN THE DEPLOY". Nothing here can be repaired by advancing again, and the
+# one command that looks like it would (a raw ff to origin/main) is the cause. So this block names
+# the consequence and hands over a READ-ONLY diagnostic, per the same rule the existence leg learned
+# the hard way: a prescription that undoes the state the script just reported is worse than none.
+if [ "$ungated" -ne 0 ] || [ "$unverified" -ne 0 ]; then
+  printf '\ndeploy-parity-assert: PROVENANCE — the live layer did not get here through the deploy gate.\n' >&2
+  if [ "$ungated" -ne 0 ]; then
+    printf '  A raw ff/pull moved the shared checkout. It advances FILES but creates NO symlinks, so any\n' >&2
+    printf '  brand-new tracked file lands unlinked and silently does nothing (ship.md:98).\n' >&2
+  fi
+  if [ "$unverified" -ne 0 ]; then
+    printf '  The tree now LIVE never earned a green post-land stamp — nothing vouches for what is running.\n' >&2
+    printf '  While live HEAD sits ABOVE the newest green-stamped commit, deploy-live.sh refuses every\n' >&2
+    printf '  tick ("would ROLL BACK the live layer"): the sanctioned lane is deadlocked, not merely idle.\n' >&2
+  fi
+  printf '  Ask the gate itself (read-only, mutates nothing):  bash %s/scripts/deploy-live.sh --dry-run\n' "$REPO" >&2
+  # DO NOT SAY "it clears when a green stamp lands". It was measured on 2026-07-31 that the gate is
+  # structurally unsatisfiable at this fleet's commit rate — a verify cycle is bounded at 3 h while
+  # trunk advances every ~7 min, so the verifier's target is stale ~25x over before it can finish
+  # (docs/plans/DEPLOY_GATE_CONVERGENCE.md). Naming a cure the fleet has already proven unreachable
+  # is how an alarm becomes furniture: the reader waits for a stamp that cannot arrive, concludes
+  # the check is noise, and the next raw ff goes unremarked. Point at the real blocker instead.
+  printf '  This does NOT clear on its own: the green gate is structurally unsatisfiable at the current\n' >&2
+  printf '  commit rate (3h verify vs ~7min between commits) — see docs/plans/DEPLOY_GATE_CONVERGENCE.md.\n' >&2
+  printf '  Fixing the GATE is the open work; a raw ff is not a workaround for it, it is this finding.\n' >&2
+fi
+
 # ORDER IS THE DOCTRINE: a NAMED failure outranks a non-verdict. Real drift was actually observed on
 # some tool, so it is reported as drift even if a different tool's comparison could not run — the
 # same rule deploy-live.sh's host_checks applies (R6: a named failure is the only red; an rc that
 # names zero failures is a CUT, a fact about the machine, never a claim about the subject).
 if [ "$drift" -ne 0 ]; then
-  printf '\ndeploy-parity-assert: DRIFT — the code running is not the code in this checkout.\n' >&2
+  if [ "$content_drift" -ne 0 ]; then
+    printf '\ndeploy-parity-assert: DRIFT — the code running is not the code in this checkout.\n' >&2
+  else
+    printf '\ndeploy-parity-assert: DRIFT — the code running IS this checkout, but it never came\n' >&2
+    printf 'through the deploy gate. Nothing above is a content difference; see PROVENANCE.\n' >&2
+  fi
   exit 1
 fi
 if [ "$noverdict" -ne 0 ]; then

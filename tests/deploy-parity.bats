@@ -475,3 +475,147 @@ _pendfix() {   # a staged activation naming <path>, un-run; $1 = repo-relative p
   [ "$status" -eq 1 ]
   [[ "$output" == *"STALE"* ]]
 }
+
+# ── THIRD LEG: DEPLOY PROVENANCE (2026-07-31) — the bare-ff deploy, caught by its CAUSE ──────────
+# ship.md:98 names this script "the check that catches a bare-ff deploy after the fact", and until
+# this leg it could not: a raw `git merge --ff-only origin/main` leaves live and checkout in PERFECT
+# agreement, so every leg above reads clean by construction. What made it urgent is 70d86739, which
+# made deploy-live's link_refresh unconditional — it now repairs the unlinked-new-file residue on
+# every 600s tick INCLUDING the refusing ones, erasing the last downstream trace while the ungated
+# advance continues. Measured on the live host with this leg in place: the ~/bin and existence legs
+# reported zero findings and provenance reported UNGATED + UNVERIFIED, i.e. it was the only thing
+# left that could see the defect that five prior sessions each closed as "drift at its minimum".
+# These cases stay in THIS file (not the -live sibling) because they are fully hermetic: the
+# admission rule there is "lets the assert resolve the REAL ~/bin or ~/.claude", and every case
+# below declares its own repo, live root and stamps dir under $BATS_TEST_TMPDIR.
+
+_provfix() {   # ~/bin legs made to PASS so the exit code isolates this leg; provenance forced ON
+  ln -sfn "$CC_PARITY_REPO/bin/toolA" "$CC_PARITY_BINDIR/toolA"
+  cp "$CC_PARITY_REPO/bin/toolB" "$CC_PARITY_BINDIR/toolB"
+  export CC_PARITY_LIVE="$BATS_TEST_TMPDIR/live"; mkdir -p "$CC_PARITY_LIVE"
+  export CC_PARITY_PROVENANCE=1
+  # Absent by default, so the CONTENT fact is unclaimed unless a case opts in — that keeps the
+  # mechanism cases measuring one thing. mkdir'd only where the verification fact is the subject.
+  export CC_PARITY_STAMPS="$BATS_TEST_TMPDIR/stamps"
+  git -C "$CC_PARITY_REPO" init -q
+  git -C "$CC_PARITY_REPO" config user.email t@t
+  git -C "$CC_PARITY_REPO" config user.name t
+  git -C "$CC_PARITY_REPO" config core.logAllRefUpdates true   # the reflog IS the subject here
+  git -C "$CC_PARITY_REPO" commit -q --allow-empty -m base
+  _BASE="$(git -C "$CC_PARITY_REPO" rev-parse HEAD)"
+  git -C "$CC_PARITY_REPO" commit -q --allow-empty -m landed
+  git -C "$CC_PARITY_REPO" update-ref refs/remotes/origin/main HEAD
+  git -C "$CC_PARITY_REPO" reset -q --hard "$_BASE"            # back to the pre-deploy live tip
+}
+_ff_raw()   { git -C "$CC_PARITY_REPO" merge -q --ff-only origin/main; }                       # ungated
+_ff_gated() { git -C "$CC_PARITY_REPO" merge -q --ff-only \
+                "$(git -C "$CC_PARITY_REPO" rev-parse refs/remotes/origin/main)"; }            # deploy-live's shape
+_stamp_green() {   # stamp the CURRENT HEAD tree green, exactly as postland-verify keys them
+  mkdir -p "$CC_PARITY_STAMPS"
+  printf '{"verdict":"green"}\n' \
+    > "$CC_PARITY_STAMPS/$(git -C "$CC_PARITY_REPO" rev-parse 'HEAD^{tree}').json"
+}
+
+@test "provenance: a raw \`merge origin/main\` ff ⇒ UNGATED, exit 1 (29 of the last 30 live advances)" {
+  _provfix; _ff_raw
+  run "$ASSERT"
+  [ "$status" -eq 1 ]
+  printf '%s' "$output" | grep -q 'UNGATED'
+  printf '%s' "$output" | grep -q 'merge origin/main'          # the actual reflog subject is quoted back
+}
+
+# The leg must be able to say YES, or "UNGATED" carries no information. Same repo, same commits,
+# same resulting HEAD — only the spelling of the merge argument differs, which is precisely the
+# discriminator: deploy-live rev-parses its target, every ungated path names a ref.
+@test "provenance: deploy-live's resolved-SHA ff ⇒ GATED, exit 0 (not an always-red alarm)" {
+  _provfix; _ff_gated
+  run "$ASSERT"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q '^  GATED'
+  if printf '%s' "$output" | grep -q 'UNGATED'; then false; fi
+}
+
+# Reflogs are local and expire (gc.reflogExpire, 90d) and a fresh clone has none. "I cannot tell"
+# must never borrow the pass — the same third-state doctrine the diff and ls-files guards above pin.
+@test "provenance: an expired/absent HEAD reflog ⇒ NOVERDICT exit 3, never a silent pass" {
+  _provfix; _ff_raw
+  # The WHOLE logs dir, not just logs/HEAD: HEAD is a symref, and git falls back to the branch's
+  # own reflog when the HEAD log is absent — so deleting one file leaves the subject still readable
+  # and this case would have passed for the wrong reason (measured: it did, returning exit 1).
+  rm -rf "$CC_PARITY_REPO/.git/logs"
+  run "$ASSERT"
+  [ "$status" -eq 3 ]
+  printf '%s' "$output" | grep -q 'NOVERDICT'
+  printf '%s' "$output" | grep -q '(provenance)'
+}
+
+# THE NON-REGRESSION PIN for the other 31 cases in this file. Every one of them declares
+# CC_PARITY_REPO against a fixture whose reflog is nothing like a sanctioned deploy, so a leg that
+# ran on the declared path would have turned this entire suite red. Non-vacuous: the case above
+# proves this exact repo state DOES convict once the leg is switched on.
+@test "provenance: a DECLARED fixture subject skips the leg (why the other cases stay hermetic)" {
+  _provfix; _ff_raw
+  unset CC_PARITY_PROVENANCE
+  run "$ASSERT"
+  [ "$status" -eq 0 ]
+  if printf '%s' "$output" | grep -q 'provenance'; then false; fi
+}
+
+# MECHANISM and CONTENT are scored apart because --force/--bootstrap separate them in real life:
+# the operator's documented escape hatch reaches HEAD through deploy-live (so the mechanism is
+# sanctioned) but deploys a tree nothing has verified. Collapsing the two would either excuse a
+# --force deploy or convict deploy-live for offering the hatch at all.
+@test "provenance: --force's shape ⇒ GATED but UNVERIFIED (the two facts are independent)" {
+  _provfix; mkdir -p "$CC_PARITY_STAMPS"; _ff_gated
+  run "$ASSERT"
+  [ "$status" -eq 1 ]
+  printf '%s' "$output" | grep -q '^  GATED'
+  printf '%s' "$output" | grep -q 'UNVERIFIED'
+}
+
+@test "provenance: a green-stamped tree reached by a resolved-SHA ff ⇒ VERIFIED, exit 0" {
+  _provfix; _ff_gated; _stamp_green
+  run "$ASSERT"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q '^  VERIFIED'
+}
+
+# No stamps dir = the verification net is not active, which is deploy-live's own separate refusal
+# state. Asserting "unverified" there would convict a host for a net that was never switched on.
+@test "provenance: no stamps dir ⇒ the verification fact is not claimed in either direction" {
+  _provfix; export CC_PARITY_STAMPS="$BATS_TEST_TMPDIR/absent"; _ff_gated
+  run "$ASSERT"
+  [ "$status" -eq 0 ]
+  if printf '%s' "$output" | grep -q 'VERIFIED'; then false; fi
+}
+
+# Two kinds of exit 1 with two different remedies. Telling an operator "the code running is not the
+# code in this checkout" after a raw ff sends them hunting a content difference that does not exist
+# — under a bare ff the checkout matches live byte for byte. And the remedy must never print the
+# CAUSE as the cure: this file already carries that scar one leg up, where the prescribed
+# ./install.sh would have erased the staged-pending state the same run had just reported.
+@test "provenance: a provenance-only exit 1 names the right kind, and never prescribes another ff" {
+  _provfix; _ff_raw
+  run "$ASSERT"
+  [ "$status" -eq 1 ]
+  printf '%s' "$output" | grep -q 'IS this checkout'
+  if printf '%s' "$output" | grep -q 'the code running is not the code'; then false; fi
+  if printf '%s' "$output" | grep -q 'merge --ff-only origin/main'; then false; fi
+  # And it must not promise a cure the fleet has proven unreachable: the green gate is structurally
+  # unsatisfiable at this commit rate (3h verify vs ~7min commits), so "wait for a green stamp"
+  # would send the reader to watch for something that cannot arrive — the way an alarm becomes
+  # furniture. The remedy names the real blocker instead; pin that it keeps doing so.
+  printf '%s' "$output" | grep -q 'DEPLOY_GATE_CONVERGENCE'
+  if printf '%s' "$output" | grep -q 'It clears when'; then false; fi
+}
+
+# The seam: this script asserts the POSTCONDITION of deploy-live's own target choice, so the two
+# must agree on what "green" means. Two auditors over one population with different state models is
+# how this repo's worst bugs have survived — pin the definition itself, not just the outcome.
+@test "provenance: is_green is byte-identical to deploy-live's (one definition of green)" {
+  a="$(sed -n '/^is_green() {/,/^}/p' "$ASSERT")"
+  b="$(sed -n '/^is_green() {/,/^}/p' "$REPO_ROOT/scripts/deploy-live.sh")"
+  [ -n "$a" ]
+  [ -n "$b" ]
+  [ "$a" = "$b" ]
+}
