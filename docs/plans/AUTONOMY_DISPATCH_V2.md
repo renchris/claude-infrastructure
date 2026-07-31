@@ -10,7 +10,7 @@ within 5 minutes of a backlog-add and ZERO false cliffs, under the standing cons
 disk-truth acceptance reads.
 
 Status: **BUILT + LANDED + LIVE-VERIFIED** (2026-07-31) — S1–S8 on trunk, both labels activated by
-the operator 2026-07-30, 14/14 acceptance criteria PASS (§10). **A2 closed 2026-07-31** (`a9ea55aa`,
+the operator 2026-07-30, 14/14 acceptance criteria PASS (§10). **A2 closed 2026-07-31** (`9dfaac64`,
 item `de5e3e24be8f`): the singleton gated DECISION as well as admission, so a kick arriving during a
 414–833 s spawn tail produced no verdict at all; the lock now gates admission only, RED-proved
 against two pinned pre-change artifacts. Its live re-measurement over a fresh 10 h journal window is
@@ -453,7 +453,7 @@ labels are live (§9.1). Every row is a read taken **2026-07-31** against the jo
 | # | Verdict | Evidence |
 |---|---|---|
 | A1 | **PASS** | 154 passes each journal the whole dispatchable set (~125–140 records/pass vs the live open count); latency is not O(N) — the decision phase over a full backlog costs 7–45 s |
-| A2 | **PASS structurally — CLOSED `a9ea55aa`** (was PARTIAL, the one DoD clause not met) | The measured miss: 18 in-window adds, p50 **8 s** (the S5 kick working as designed), but **3 exceeded 300 s** (338/515/714 s) — every one of them a pass that found the singleton held and returned without deciding. Cause and fix below; the lock now gates admission only, so no pass can be silenced by a concurrent one. The live re-measurement over a fresh window is the remaining read |
+| A2 | **PASS structurally — CLOSED `9dfaac64`** (was PARTIAL, the one DoD clause not met) | The measured miss: 18 in-window adds, p50 **8 s** (the S5 kick working as designed), but **3 exceeded 300 s** (338/515/714 s) — every one of them a pass that found the singleton held and returned without deciding. Cause and fix below; the lock now gates admission only, so no pass can be silenced by a concurrent one. The live re-measurement over a fresh window is the remaining read |
 | A3 | **PASS** | 13,941 `defer` records with `position`+`reason` and **0 `abstained`** — surplus is a recorded decision, never an abstention |
 | A4 | **PASS (structurally, and now live)** | 0 `capped` verdicts because 0 wall verdicts of any kind were reached; the entire measured abstention population of §2 is gone, exactly as S2 predicted |
 | A5 | PASS | `tests/cc-wave-plan-verdict.bats` — a stubbed oracle timeout yields `unknown`, never `capped`, with no page |
@@ -467,7 +467,7 @@ labels are live (§9.1). Every row is a read taken **2026-07-31** against the jo
 | A13 | **PASS — built this session** | was specified and never implemented: `CC_DISPATCH_SATURATED_H` existed **only in this document**, zero occurrences in `bin/`, `tests/`, `scripts/`. Now a third `dispatch-inert` state (`f56041ae`), correctly silent against the live journal (220 admits in-window) |
 | A14 | PASS | ceiling reads the `claimed` fold (measured 5) and never `claude-accounts .rows[].k` — the corrected S2 has not regressed |
 
-### The one gap, stated plainly — and CLOSED 2026-07-31 (`a9ea55aa`)
+### The one gap, stated plainly — and CLOSED 2026-07-31 (`9dfaac64`)
 
 **A2 was not met, and the reason was not what the design predicted.** The decision phase is fast —
 7–45 s for ~135 items — so S1 does what it claimed. The miss came from the **singleton lock being
@@ -523,7 +523,7 @@ Each zero-effect read has a positive control. Suites: selftest 121/121 · cc-dis
 proved is that no pass can be silenced by a concurrent one; what the next 10 h journal window will
 show is the resulting max-latency figure against the 300 s bound.
 
-### Also closed in the same session (`39689331`) — the acceptance reader's own selftest was RED
+### Also closed in the same session (`988f14a8`) — the acceptance reader's own selftest was RED
 
 `dispatch-acceptance.sh selftest` had been exiting 1 (8 passed, **1 failed**), reproduced
 byte-identically on `origin/main`, so it predates this work. Not a reader defect: the A2-scoping case
@@ -655,7 +655,7 @@ rebase+ff-only serialized, land via project-local `/ship` continuously.
   false of the *pass*, because one lock spans decision and spawn (414–833 s). The architecture was
   never the problem; the lock's SCOPE was. Generalisable: when a design's key claim is about
   cost-of-X, check that the *unit holding the lock* is X and not X-plus-something-slow.
-  **Resolved `a9ea55aa`, and the resolution taught a second thing: this document's own prescription
+  **Resolved `9dfaac64`, and the resolution taught a second thing: this document's own prescription
   for the fix was wrong.** Both the §10 text and the backlog item said the split needed *"a separate
   admission lock or an atomic claim-based ceiling"*. It needed neither — moving the *acquisition
   point* was enough, because what a lock protects is a REGION, not a duration, and the region here
