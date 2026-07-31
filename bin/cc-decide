@@ -21,15 +21,43 @@
 # Verbs:
 #   open  --class A|B|C --what <plain-english, NO codenames>
 #         [--option "label::outcome" ...] [--recommendation r] [--default d] [--deadline ISO]
+#         [--project subject-project] [--default-effect change|no-change]
 #         [--session-sid s] [--session-pane u] [--staged-artifact p] [--route-around r] [--id id]
-#           → fail-closed: B needs default+deadline; C must NOT carry a default; what_plain required.
+#           → fail-closed: B needs default+deadline; C must NOT carry a default (nor a
+#             --default-effect, having no default to describe); what_plain required.
 #             Echoes the id.
 #   veto   <id> [--by who]                 open → vetoed   (operator killed the default)
 #   action <id> [--evidence ref]           open → actioned (the decision was carried out)
 #   list   [--open | --all | --class X | --expiring]     (default --open)
 #   expire-sweep    class-B past veto_deadline & open ⇒ expired-actioned, and REPORT the fired
-#                   default line ("fired\t<id>\t<default>") to stdout for the CALLER to act on.
+#                   default line to stdout for the CALLER to act on:
+#                     "fired\t<id>\t<subject_project|->\t<change|no-change>\t<default>"
 #                   The sweep itself EXECUTES nothing and DELETES nothing (inv7).
+#
+# ── TWO PRODUCER-DECLARED FIELDS the actuator needs (item f32588a73993) ───────────────────────
+# `subject_project` and `default_effect` exist because the ACTUATOR of a fired class-B default
+# (scripts/autonomy-sweep.sh) has to answer two questions the packet could not previously answer,
+# and neither is inferable from the packet after the fact:
+#
+#   subject_project — WHICH project the decision is about. The sweep runs from launchd with cwd=/,
+#     so it can only name its own host project; of the five live fired records, four concerned
+#     doc_classifier and one voiceink, and every one was filed against the sweep's host. The
+#     subject is knowable ONLY from prose (`what_plain`), and grepping a path out of prose is
+#     exactly the shape-classifier that must not be built (memory:
+#     fixture-vs-real-classifier-needs-a-producer — classify by the producer's literal emission,
+#     never by shape). So the PRODUCER, which already knows its own cwd, declares it here.
+#
+#   default_effect — whether firing the default CHANGES anything. "hold (no change without
+#     ruling)", "disclose-only (already landed; silence = no further change)" and "park this
+#     decision to the backlog and continue other work" all actuate NOTHING, yet each became an
+#     open dispatch candidate and could spawn a worker whose whole assignment was to change
+#     nothing. Same rule: the producer states it; nothing reads the default's wording to guess.
+#
+# BOTH are OPTIONAL and BOTH fail OPEN — absent reads as "unknown project" and "change", i.e. the
+# pre-existing behaviour (host-project fallback + a dispatch candidate). Making either mandatory
+# on class B would rc-2 every legacy producer at exactly the moment a session is trying to escape
+# a STOP-ASK, turning a missing annotation into a lost packet. An unnecessary work item is visible
+# waste; a dropped one is silent loss.
 #
 # Env (tests): CC_DECISIONS_DIR · CC_IDL (audit trail) · CC_NOW (ISO override for expiry compare).
 # BSD+GNU portable, no eval, fail-loud. Exit 0 ok · 2 usage/schema-refusal · 3 unknown id.
@@ -80,6 +108,7 @@ log_idl() { # <verb> <id> <class> <status>
 
 cmd_open() {
   local class="" what="" rec="" def="" deadline="" sid="" pane="" staged="" route="" id=""
+  local project="" deffect=""
   local options=()
   while [ $# -gt 0 ]; do
     local key="$1"; shift
@@ -89,6 +118,8 @@ cmd_open() {
       --option)          options+=("${1:-}"); [ $# -gt 0 ] && shift ;;
       --recommendation)  rec="${1:-}";       [ $# -gt 0 ] && shift ;;
       --default)         def="${1:-}";       [ $# -gt 0 ] && shift ;;
+      --default-effect)  deffect="${1:-}";   [ $# -gt 0 ] && shift ;;
+      --project)         project="${1:-}";   [ $# -gt 0 ] && shift ;;
       --deadline)        deadline="${1:-}";  [ $# -gt 0 ] && shift ;;
       --session-sid)     sid="${1:-}";       [ $# -gt 0 ] && shift ;;
       --session-pane)    pane="${1:-}";      [ $# -gt 0 ] && shift ;;
@@ -112,6 +143,19 @@ cmd_open() {
   if [ "$class" = "C" ] && [ -n "$def" ]; then
     echo "cc-decide open: class-C must NOT carry a --default (C waits, never defaults)" >&2; return 2
   fi
+  # --default-effect DESCRIBES a default, so class-C (which has none) must not carry one either —
+  # same polarity as the --default refusal above. The value itself is closed: an unrecognised
+  # spelling is REFUSED rather than silently folded to "change", or a typo'd "nochange" would
+  # dispatch a worker on a no-change default while reading as annotated.
+  if [ -n "$deffect" ]; then
+    if [ "$class" = "C" ]; then
+      echo "cc-decide open: class-C must NOT carry a --default-effect (C has no default to describe)" >&2; return 2
+    fi
+    case "$deffect" in
+      change|no-change) : ;;
+      *) echo "cc-decide open: --default-effect must be change|no-change (got '${deffect}')" >&2; return 2 ;;
+    esac
+  fi
 
   ensure_dir
   [ -n "$id" ] || id="$(mk_id "$class" "$sid" "$what")"
@@ -130,14 +174,17 @@ cmd_open() {
     done
   fi
 
+  # NOTE mk_id is class+sid+what ONLY — deliberately NOT the new fields. Annotating an existing
+  # decision with its project or default-effect must not mint a SECOND packet for the same fork.
   local tmp="$file.tmp.$$"
   if jq -n --arg id "$id" --arg created "$(now_iso)" --arg class "$class" \
         --arg sid "$sid" --arg pane "$pane" --arg what "$what" \
         --argjson options "$opts_json" --arg rec "$rec" --arg def "$def" \
         --arg deadline "$deadline" --arg staged "$staged" --arg route "$route" \
+        --arg project "$project" --arg deffect "$deffect" \
     '{id:$id, created:$created, class:$class, session_sid:$sid, session_pane_uuid:$pane,
-      what_plain:$what, options:$options, recommendation:$rec,
-      default_if_no_veto:$def, veto_deadline:$deadline,
+      what_plain:$what, subject_project:$project, options:$options, recommendation:$rec,
+      default_if_no_veto:$def, default_effect:$deffect, veto_deadline:$deadline,
       staged_artifact_path:$staged, route_around_taken:$route, status:"open"}' \
     > "$tmp" 2>/dev/null && mv "$tmp" "$file"; then :; else
     rm -f "$tmp" 2>/dev/null || true; echo "cc-decide open: write failed" >&2; return 2
@@ -209,9 +256,26 @@ cmd_list() {
 
 # expire-sweep: REPORT (never execute) each fired class-B default; transition it to
 # expired-actioned. Deletes nothing. A class-C packet has no deadline ⇒ never fires.
+#
+# The reported line is "fired\t<id>\t<subject_project|->\t<change|no-change>\t<default>". Two
+# properties of that shape are load-bearing, not cosmetic:
+#
+#   PADDED — every cell goes through CELL, so no cell is ever EMPTY. Tab is IFS-*whitespace*, so
+#     the caller's `IFS=$'\t' read` collapses a RUN of tabs and shifts every later field one
+#     position left, silently and at rc 0 (docs/research/TSV_FIELD_COLLAPSE_2026-07-25.md). A
+#     packet with no subject_project is the common case, so without the pad the actuator would
+#     read the EFFECT out of the project slot on exactly the packets the fix is for.
+#   STRUCTURED-BEFORE-FREE-TEXT — id/project/effect precede the operator-written default, so
+#     nothing in that free text can shift a field the actuator branches on. (@tsv also escapes any
+#     embedded tab/newline; CELL's gsub is the second belt.)
+#
+# The effect is NORMALISED HERE, never at the caller: cc-decide owns the packet schema, so it is
+# the arbiter of "is this a no-change default" (memory: make-the-actuator-the-arbiter — never
+# re-implement a gate's predicate outside it). An absent/unrecognised value reads as "change",
+# which is the pre-fix behaviour: fail toward a visible surplus item, never a silent drop.
 cmd_expire_sweep() {
   [ -d "$DECISIONS_DIR" ] || return 0
-  local now="${CC_NOW:-$(now_iso)}" f info id def tmp
+  local now="${CC_NOW:-$(now_iso)}" f info id proj effect def tmp
   for f in "$DECISIONS_DIR"/*.json; do
     [ -e "$f" ] || continue
     # `(.veto_deadline // "") != ""` is what keeps the SFOLD safe. In jq a MISSING key is `null`, and
@@ -219,18 +283,22 @@ cmd_expire_sweep() {
     # "open" without this guard would fire the default of every deadline-less legacy class-B packet,
     # transitioning a land-block no human ever saw straight to `expired-actioned` against a null
     # default. The fold makes such packets VISIBLE; this guard keeps them from being auto-closed.
-    info="$(jq -r --arg now "$now" "$SFOLD"'
+    info="$(jq -r --arg now "$now" "$CELL$SFOLD"'
       if (.class == "B" and sopen == "open" and (.veto_deadline // "") != "" and .veto_deadline < $now)
-      then "\(.id)\t\(.default_if_no_veto)" else empty end' "$f" 2>/dev/null || true)"
+      then [ (.id             | cell("?")),
+             (.subject_project| cell("-")),
+             (.default_effect // "" | if . == "no-change" then "no-change" else "change" end),
+             (.default_if_no_veto | cell("(none)")) ] | @tsv
+      else empty end' "$f" 2>/dev/null || true)"
     [ -n "$info" ] || continue
-    id="${info%%$'\t'*}"; def="${info#*$'\t'}"
+    IFS=$'\t' read -r id proj effect def <<< "$info"
     tmp="$f.tmp.$$"
     if jq --arg ts "$now" '.status="expired-actioned" | .resolved=$ts' "$f" > "$tmp" 2>/dev/null \
       && mv "$tmp" "$f"; then :; else
       rm -f "$tmp" 2>/dev/null || true; continue
     fi
     log_idl expire-sweep "$id" B expired-actioned
-    printf 'fired\t%s\t%s\n' "$id" "$def"
+    printf 'fired\t%s\t%s\t%s\t%s\n' "$id" "$proj" "$effect" "$def"
   done
 }
 

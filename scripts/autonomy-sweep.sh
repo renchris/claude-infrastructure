@@ -11,7 +11,11 @@
 #        completion-push/        terminal-completion pushes whose verdict != "verified" (stuck)
 #        decisions/*.json        OPEN class-B/C packets awaiting operator early-veto
 #   2. Run `cc-decide expire-sweep` — the sweep is the class-B default ACTUATOR: for each fired
-#      default it appends a cc-backlog item (bounded + auditable), NEVER acting inline.
+#      default it appends a cc-backlog item (bounded + auditable), NEVER acting inline. A default
+#      the PRODUCER declared `no-change` actuates nothing, so it is counted + summarised but gets
+#      NO backlog item — an open item is cc-dispatch's fire predicate, and a worker must never be
+#      spawned on "hold (no change without ruling)". The item is filed against the packet's own
+#      declared `subject_project` when it has one, else this sweep's host project.
 #   3. If anything NEW exists → ONE cc-notify to the desk ROLE (cc-roles/desk, resolved at
 #      send-time — SO-1 role indirection), then mark those records .seen.
 #   4. Write ONE {fired|abstained} IDL record (B-3: didn't-fire ≠ never-ran).
@@ -87,7 +91,7 @@ SURFACED=""
 add_surfaced() { SURFACED="${SURFACED}$1
 "; }
 
-new_pages=0 new_alarms=0 new_pushfailed=0 open_decisions=0 fired_defaults=0
+new_pages=0 new_alarms=0 new_pushfailed=0 open_decisions=0 fired_defaults=0 fired_nochange=0
 
 # ── 1. collect NEW pages / alarms ──────────────────────────────────────────────
 for f in "$PAGES_DIR"/*.page; do
@@ -109,26 +113,47 @@ done
 
 # ── 2. expire-sweep = the class-B default ACTUATOR (append to backlog, never act inline) ──
 if [ -n "$DECIDE" ]; then
-  while IFS="$(printf '\t')" read -r tag did ddef; do
+  # FIVE fields: "fired <id> <subject_project|-> <change|no-change> <default>". Every cell is
+  # PADDED by the emitter (bin/cc-decide § cmd_expire_sweep) precisely because tab is IFS-
+  # whitespace: an empty cell here would collapse the run and shift `deffect` into `dproj` on the
+  # no-project packets, i.e. on the exact population this branch exists to handle.
+  while IFS="$(printf '\t')" read -r tag did dproj deffect ddef; do
     [ "$tag" = "fired" ] || continue
     fired_defaults=$((fired_defaults + 1))
+
+    # A NO-CHANGE default actuates NOTHING — "hold (no change without ruling)", "disclose-only
+    # (already landed; silence = no further change)", "park this decision to the backlog and
+    # continue other work". Each of those became an OPEN backlog item, and `open` is exactly
+    # cc-dispatch's fire predicate, so the next tick could claim it and spawn a peer session whose
+    # entire assignment was to change nothing. The fired default is still COUNTED (so it lands in
+    # the summary + the IDL and still wakes the desk) — it is only kept out of the dispatch queue.
+    # The trail survives without a work item: the packet itself is the evidence (transitioned to
+    # `expired-actioned`, never deleted — inv7) plus cc-decide's own expire-sweep IDL line.
+    # The predicate is cc-decide's, read verbatim; nothing here inspects the default's wording.
+    if [ "$deffect" = "no-change" ]; then
+      fired_nochange=$((fired_nochange + 1))
+      continue
+    fi
+
     if [ -n "$BACKLOG" ]; then
       # --project EXPLICITLY. This sweep runs from launchd with cwd=/, and omitting it left
       # cc-backlog to default off $(pwd) → project "/", which matches no dispatcher filter: 5 of
       # these records sat structurally undrained for 8 days (item f7abcbdee98c). cc-backlog now
       # REFUSES a degenerate default rather than storing one, so this value must be passed.
       #
-      # It is deliberately the SWEEP'S OWN host project, not the decision's subject. A cc-decide
-      # packet records no project at all, and the subject is knowable only from prose: of the 5 live
-      # records, 4 concern doc_classifier and 1 concerns voiceink — so grepping a path out of
-      # `what_plain` to guess a project is exactly the shape-classifier that must not be built
-      # (memory: fixture-vs-real-classifier-needs-a-producer — classify by the producer's literal
-      # emission, never by shape). The record belongs to the autonomy system that fired the default;
-      # the SUBJECT is resolved by the reader from `--dod-ref decision:<id>`, which is exact.
-      # Backlogged separately: cc-decide should record the project, and a no-change default
-      # ("hold", "disclose-only") should not become an open DISPATCH candidate at all.
+      # PREFER the packet's own declared subject: the producer knew its cwd, so a project recorded
+      # at `cc-decide open --project` is the decision's real subject rather than the sweep's host.
+      # Absent ("-"), fall back to the host project as before — the sweep must NEVER recover the
+      # subject by grepping a path out of `what_plain`; that is the shape-classifier that must not
+      # be built (memory: fixture-vs-real-classifier-needs-a-producer — classify by the producer's
+      # literal emission, never by shape). On the fallback the SUBJECT stays resolvable by the
+      # reader from `--dod-ref decision:<id>`, which is exact.
+      dispatch_project="$dproj"
+      case "$dispatch_project" in
+        ""|"-") dispatch_project="${CC_SWEEP_PROJECT:-claude-infrastructure}" ;;
+      esac
       "$BACKLOG" add --title "class-B default fired: $ddef" \
-        --project "${CC_SWEEP_PROJECT:-claude-infrastructure}" \
+        --project "$dispatch_project" \
         --source autonomy-sweep --dod-ref "decision:$did" >/dev/null 2>&1 || true
     fi
   done < <("$DECIDE" expire-sweep 2>/dev/null || true)
@@ -184,9 +209,11 @@ log_idl() { # <disposition> <extra JSON OBJECT (optional, jq-built {…}; defaul
   # cc-audit four-zeros `jq -rs` slurp (reads as "no records" ⇒ silent D9/alarm false-GREEN).
   jq -cn --arg ts "$(now_iso)" --arg disp "$1" \
     --argjson np "$new_pages" --argjson na "$new_alarms" --argjson npf "$new_pushfailed" \
-    --argjson od "$open_decisions" --argjson fd "$fired_defaults" --argjson extra "$extra" \
+    --argjson od "$open_decisions" --argjson fd "$fired_defaults" \
+    --argjson fnc "$fired_nochange" --argjson extra "$extra" \
     '{ts:$ts,tool:"autonomy-sweep",disposition:$disp,new_pages:$np,new_alarms:$na,
-      new_pushfailed:$npf,open_decisions:$od,fired_defaults:$fd} + $extra' \
+      new_pushfailed:$npf,open_decisions:$od,fired_defaults:$fd,
+      fired_nochange:$fnc} + $extra' \
     >> "$IDL" 2>/dev/null || true
 }
 
@@ -201,7 +228,18 @@ summary="[desk-sweep] NEW:"
 [ "$new_alarms"     -gt 0 ] && summary="$summary ${new_alarms} alarm(s),"
 [ "$new_pushfailed" -gt 0 ] && summary="$summary ${new_pushfailed} push-failed,"
 [ "$open_decisions" -gt 0 ] && summary="$summary ${open_decisions} open decision(s),"
-[ "$fired_defaults" -gt 0 ] && summary="$summary ${fired_defaults} class-B default(s) fired→backlog,"
+# fired defaults split two ways: the ones that queued work, and the no-change ones that are
+# SURFACED here but deliberately never dispatched. Reporting only the total would read as "N items
+# queued" on a sweep that queued none of them.
+if [ "$fired_defaults" -gt 0 ]; then
+  summary="$summary ${fired_defaults} class-B default(s) fired"
+  # ${summary} BRACED, not $summary: `$summary→backlog` parses the multibyte arrow into the NAME,
+  # so under `set -u` the sweep died with "summary\xe2: unbound variable" — rc 1 on exactly the
+  # runs that queued something. Caught by the positive control, which is why it exists.
+  [ "$((fired_defaults - fired_nochange))" -gt 0 ] && summary="${summary}→backlog"
+  [ "$fired_nochange" -gt 0 ] && summary="${summary} (${fired_nochange} no-change: surfaced, NOT dispatched)"
+  summary="${summary},"
+fi
 summary="${summary%,}"
 
 DESK_TARGET=""
