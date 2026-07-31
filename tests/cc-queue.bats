@@ -33,6 +33,11 @@ setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   Q="$REPO/bin/cc-queue"
   TD="$BATS_TEST_TMPDIR"
+  # HERMETIC $HOME. cc-queue's CC_REGISTRY_DIR defaults to $HOME/.claude/cc-registry, so an
+  # unfixtured suite reads the operator's LIVE registry — real fleet rows would silently mix into
+  # these assertions. Every seam is also overridden explicitly below; this is the backstop for the
+  # one a future edit forgets. (Enforced by scripts/test-hermeticity-lint.)
+  export HOME="$TD/home"; mkdir -p "$HOME"
   export CC_PERMPEND_DIR="$TD/pend" CC_TELEMETRY_DIR="$TD/tel" CC_REGISTRY_DIR="$TD/reg"
   export CC_QUEUE_NOW=1000000 CC_QUEUE_WORKING_S=300
   export CC_QUEUE_PS="echo 4242 claude-session"        # C7: pid 4242 is the only live owner
