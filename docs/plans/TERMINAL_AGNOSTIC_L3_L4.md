@@ -503,6 +503,43 @@ console layer (sidebar row per pane, blue ring on attention, notifications panel
    still written as though Ghostty and cmux did not exist. Added as a marked **addendum** rather than
    folded in, so which figures came from which run stays visible.
 
+### 4b-STATUS addendum — §6.1's PRECONDITION GATE built 2026-07-31 23:20Z (same branch)
+
+§6.1's own prescription — *"gate the run on a layout-stability check that ABORTS rather than emitting
+a confounded row"* — is **built, RED-proven and green (18/18 in `tests/terminal-bench.bats`)**. The
+§6.1 **evidence** item stays 🔴 **OPEN**: a gate supplies no multi-hour run. What it buys is that the
+next attempt is either clean or *loudly void*, and that a wasted window now costs seconds instead of
+the full interval — which is what makes retrying on a shared box practical.
+
+`scripts/terminal-bench.sh` gains `--watch <secs>` (default 30) and a fourth verdict token
+`LAYOUT-DRIFT` (exit 4). **Four things a successor should not re-derive:**
+
+1. **The obvious column is the wrong one, and picking it would have been worse than no gate.** The
+   `windows` column the script already reads is the **on- AND off-screen TOTAL**, and a *rising*
+   offscreen count **is** the leak the instrument exists to convict — gating on it makes a leaking
+   terminal abort its own measurement and become structurally unable to report the leak. The gate is
+   asymmetric: **onscreen UNCHANGED · offscreen must not FALL · offscreen RISING allowed**. Onscreen
+   is census field 4, which the script did not read at all before this change.
+2. **The 22:17Z numbers were mislabelled, and the correction validates the gate.** "−17 onscreen" was
+   the TOTAL; with offscreen −18, onscreen actually rose **+1**. The real event was *18 offscreen
+   releases plus 1 new onscreen window* — each of which independently trips the rule derived in (1),
+   so it is confirmed against the real failure and not only against synthetic tests. Corrected in
+   place at both sites (research §6.1 and README §6).
+3. **Two further verdict defects sat in the same six lines.** The header's long-documented "missing
+   window census ⇒ PARTIAL" was never implemented (`OK` was set unconditionally once two readings
+   existed), and the `--out` JSONL row was appended **before** the final GPU downgrade — so the
+   machine-readable sink could record `"verdict":"OK"` for a run whose stdout read `PARTIAL`. The
+   overclaim was living on the surface consumers parse rather than the one a human reads.
+4. **Three of the six new tests first passed for the wrong reason, and that is now designed out.**
+   The script's baseline probe lands ~5 s in (two `top -l 2` samples plus the GPU sample), so a
+   stubbed layout change scheduled at t+2 had already been folded into the baseline before there was
+   anything to detect. Every test now **asserts the printed baseline**, so a mistimed run fails
+   loudly instead of certifying a layout that never moved.
+
+**RED proof:** the pre-fix script at `f8633b2c`, against a stubbed census whose onscreen count moves
+1 → 4 mid-interval, prints `DRIFT (app, constant layout …): windows +3 over 20s = +540.0/hr` — a
+confounded row under a header that literally reads *constant layout*.
+
 ---
 
 ## 5. Corrections this plan supersedes

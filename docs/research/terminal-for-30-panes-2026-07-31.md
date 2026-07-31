@@ -499,10 +499,11 @@ makes the addressing hazard go away. Both correct §5b; neither subsumes the oth
    token attests that two readings and a GPU profile were obtained, nothing about layout stability. A
    consumer trusting the token alone would file this as the clean bound it is not.
 
-   What it *does* add is a **churn** result on a live fleet rather than a synthetic one: 17 windows
-   closed and both counters fell with them (**−17 onscreen, −18 offscreen**) for +5 ports and +20 MB —
-   kitty gave the windows back, where iTerm2 had **98 survive `close()`**. Raw transcript:
-   `docs/research/data/kitty-drift-30min-2026-07-31.txt`.
+   What it *does* add is a **churn** result on a live fleet rather than a synthetic one: the window
+   population fell by 17 and offscreen fell by 18 (**−17 total, −18 offscreen ⇒ onscreen +1** — this
+   line read "−17 onscreen" until 2026-07-31; the drift row's `windows` is the on+off TOTAL, see the
+   correction below) for +5 ports and +20 MB — kitty gave the windows back, where iTerm2 had **98
+   survive `close()`**. Raw transcript: `docs/research/data/kitty-drift-30min-2026-07-31.txt`.
 
    **What would close item 1:** the same command over a window in which nothing opens or closes.
    Resolution scales with the interval — at 1800 s one mach port is 2/hr, sharp enough to discriminate
@@ -510,6 +511,57 @@ makes the addressing hazard go away. Both correct §5b; neither subsumes the oth
    it is finding a half-hour on a shared box when no session opens a pane. **Gate the run on a
    layout-stability check that ABORTS rather than emitting a confounded row** — as shipped, the
    instrument cannot tell you its own precondition broke.
+
+   → **2026-07-31 23:20Z — that gate is now BUILT. The item stays OPEN;** what changed is that the
+   next attempt can no longer fail the same way silently. `scripts/terminal-bench.sh` now measures
+   the precondition, re-checks it every `--watch` seconds (default 30), and on breach prints
+   `verdict=LAYOUT-DRIFT`, exits 4, and **emits no drift row at all**. Five things a successor should
+   not re-derive:
+
+   1. **The obvious column is the wrong one, and choosing it would have been worse than no gate.** The
+      tempting key is the `windows` column the script already reads — but per `window-census.swift`
+      that is the **on- AND off-screen total**, and a *rising* offscreen count **is** the leak this
+      instrument exists to convict. A gate keyed on it makes a leaking terminal abort its own
+      measurement and become structurally incapable of reporting the leak. The gate is therefore
+      asymmetric: **onscreen must be UNCHANGED · offscreen must not FALL · offscreen RISING is
+      allowed**. Onscreen is census field 4, which the script did not read at all before this change.
+   2. **The 22:17Z numbers were mislabelled, and the corrected reading strengthens the gate rather
+      than weakening it.** The drift row's `windows` is the total, so "−17 onscreen, −18 offscreen"
+      above was never onscreen: total −17 with offscreen −18 means **onscreen actually rose by +1**.
+      What really happened is *18 offscreen windows released plus 1 new onscreen window* — a release
+      event and a layout change together. Both trip the asymmetric gate independently, so the rule
+      derived above is validated against the real failure, not only against the synthetic tests.
+   3. **Endpoint comparison alone is insufficient**, which is why it polls. A window that opens and
+      closes *inside* the interval leaves both endpoints equal while having allocated and freed its
+      ports underneath the measurement. Pinned by a test driving onscreen 1 → 3 → 1 that asserts the
+      abort is attributed to a poll (`t+Ns`) and not to the endpoint check.
+   4. **The hold is deadline-corrected and the drift now divides by ACTUAL elapsed**, not by the
+      requested interval. Sleeping in poll-sized slices would otherwise make the true window
+      `INTERVAL + N×poll` while the per-hour arithmetic still divided by `INTERVAL` — the
+      `poll-loop-bound-excludes-its-own-check` shape. A census call costs **0.080 s** measured, so at
+      `--interval 1800 --watch 30` the polling overhead is 60 calls ≈ 4.8 s: **0.27 %** of the window.
+   5. **Two further verdict defects were found beside it, both inside the same six lines.** (a) The
+      header has always documented "window census missing ⇒ PARTIAL", but the code set `OK`
+      unconditionally once two readings existed — so a run with **no census at all**, where layout
+      stability is pure assumption, was filed as a full comparable row. (b) The `--out` JSONL row was
+      appended **before** the final GPU downgrade, so a run whose stdout read `PARTIAL` could leave
+      `"verdict":"OK"` in the machine-readable sink — the overclaim landing on the surface a consumer
+      parses rather than the one a human reads. Both fixed; `LAYOUT-DRIFT` is sticky and cannot be
+      softened by the downgrade.
+
+   **RED proof, not an assertion.** The pre-fix script at `f8633b2c`, driven against a stubbed census
+   whose onscreen count moves 1 → 4 mid-interval, prints
+   `DRIFT (app, constant layout — this is the leak instrument): windows +3 over 20s = +540.0/hr` —
+   a confounded row under a header that literally reads *constant layout*. That is the 22:17Z failure
+   reproduced on demand. Six tests in `tests/terminal-bench.bats` pin the new behaviour, and each
+   asserts the printed **baseline**, so a mistimed run fails loudly instead of certifying a layout
+   that never moved — three of them did exactly that in their first form, because the script's
+   baseline probe lands ~5 s in (two `top -l 2` samples plus the GPU sample) and a change scheduled
+   at t+2 had already been folded into the baseline before there was anything to detect.
+
+   **Still required to close item 1: a real multi-hour run.** The gate supplies no evidence; it only
+   guarantees the next attempt is either clean or loudly void, and makes a wasted window cost seconds
+   instead of the full interval — which is what makes retrying on a shared box practical at all.
 2. ✅ **CLOSED 2026-07-31 PM — it renders correctly.** **No real Claude Code in a kitty pane.** Every
    challenger measurement used a synthetic alternate-screen repainter. kitty is a strict VT
    implementation and should render Ink correctly — but "should" is the word the evidence rules ban.

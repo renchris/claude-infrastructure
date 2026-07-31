@@ -37,6 +37,10 @@
 #   scripts/terminal-bench.sh --app iTerm2 --panes 30 --interval 300
 #   scripts/terminal-bench.sh --app ghostty --panes 30 --interval 300 --out /tmp/bakeoff.jsonl
 #   scripts/terminal-bench.sh --app iTerm2 --interval 0      # single reading, no drift verdict
+#   scripts/terminal-bench.sh --app kitty --interval 1800 --watch 30
+#                                # THE LEAK RUN. Aborts the moment the layout moves, so a wasted
+#                                # window costs seconds instead of the full 30 minutes. --watch 0
+#                                # polls nothing; the two endpoints are still compared.
 #
 # VERDICT TOKENS (last line, machine-parsable — a consumer must be able to tell "measured zero"
 # from "the instrument did not run", the failure recorded in memory claimed-outcome-vs-checked-outcome)
@@ -45,17 +49,41 @@
 #                     missing. `--interval 0` always yields PARTIAL by construction: a single
 #                     reading cannot support a leak verdict, and must not be filed as if it could.
 #   verdict=NO-DATA   the app is not running, or top returned nothing  (exit 3)
+#   verdict=LAYOUT-DRIFT  the CONSTANT-LAYOUT precondition broke while the interval was held. The
+#                     drift row is confounded, so it is NOT emitted at all  (exit 4)
+#
+# THE CONSTANT-LAYOUT PRECONDITION IS ENFORCED, BECAUSE verdict=OK DID NOT CERTIFY IT.
+# The 2026-07-31 22:17Z 30-minute kitty run returned verdict=OK and its +10 ports/hr is unusable:
+# the window census fell 36 → 19 while the interval held — 17 windows closed underneath it — and
+# ports move WITH windows, so the delta cannot be separated into leaked-versus-released. The token
+# attested that two readings and a GPU profile were obtained and nothing whatever about layout
+# stability, so a consumer trusting it alone would file a confounded row as the clean bound it is
+# not. The precondition is now measured, and a breach ABORTS rather than printing a row.
+#
+# WHAT THE GATE KEYS ON — and the trap in the obvious choice. It does NOT key on the `windows`
+# column. That column is the ON- AND OFF-SCREEN total, and a rising offscreen count IS the leak this
+# instrument exists to detect: gating on it would make a leaking terminal abort its own measurement
+# and become structurally incapable of convicting. The gate is therefore asymmetric:
+#     onscreen  must be UNCHANGED   — anything else means a pane opened or closed underneath the run
+#     offscreen must not DECREASE   — a release event churns the population and moves ports with it
+#     offscreen RISING is allowed   — that is the signal being measured, not a violation
+# It is checked at both endpoints AND polled every --watch seconds, because a window that opens and
+# closes inside the interval leaves the two endpoints equal while still having moved the ports.
+#
+# A run whose layout could not be certified at all (no window census) is PARTIAL, never OK — the
+# header above has always promised that and, until 2026-07-31, the code did not implement it.
 set -uo pipefail
 
 TIMEOUT="$(command -v timeout || command -v gtimeout || true)"
 run() { if [ -n "$TIMEOUT" ]; then "$TIMEOUT" "$@"; else shift; "$@"; fi; }
 
-APP=""; PANES=0; INTERVAL=180; SAMPLE_SECS=5; OUT=""
+APP=""; PANES=0; INTERVAL=180; SAMPLE_SECS=5; OUT=""; WATCH=30
 while [ $# -gt 0 ]; do
   case "$1" in
     --app)         APP="${2:-}"; shift 2 ;;
     --panes)       PANES="${2:-0}"; shift 2 ;;
     --interval)    INTERVAL="${2:-180}"; shift 2 ;;
+    --watch)       WATCH="${2:-30}"; shift 2 ;;
     --sample-secs) SAMPLE_SECS="${2:-5}"; shift 2 ;;
     --out)         OUT="${2:-}"; shift 2 ;;
     -h|--help)     sed -n '1,45p' "$0"; exit 0 ;;
@@ -210,25 +238,100 @@ else
 fi
 rm -f "$SAMPLE_F"
 
-# ── drift ─────────────────────────────────────────────────────────────────────────────────────────
-VERDICT="PARTIAL"
-if [ "$INTERVAL" -gt 0 ]; then
-  echo "  … holding ${INTERVAL}s at constant layout (do not create or close panes) …"
-  sleep "$INTERVAL"
-  T1_APP="$(reading "$PID" "$CENSUS_OWNER")"; T1_WS="$(reading "${WS_PID:-0}" 'Window Server')"
-  show "T1  app " "$T1_APP"
-  show "T1  WS  " "$T1_WS"
+# ── the constant-layout precondition ──────────────────────────────────────────────────────────────
+# Its OWN probe rather than a re-read of reading()'s row, for two reasons: the gate must be legible
+# and separately testable, and reading() captures `windows` (the on+off TOTAL) which is the wrong
+# column to gate on — see the header. Emits "onscreen<TAB>offscreen", or NA/NA when it cannot answer.
+layout_probe() {
+  local c
+  [ "$CENSUS_OK" = 1 ] || { printf 'NA\tNA\n'; return; }
+  c="$(run 30 "$CENSUS_BIN" --owner "$CENSUS_OWNER" --tsv 2>/dev/null \
+       | grep -v '^owner' | grep -v '^verdict' | head -1)"
+  [ -n "$c" ] || { printf 'NA\tNA\n'; return; }
+  printf '%s\t%s\n' "$(cut -f4 <<<"$c")" "$(cut -f5 <<<"$c")"
+}
 
-  drift() { # field, label, unit
-    local f="$1" label="$2" a b
-    a="$(cut -f"$f" <<<"$T0_APP")"; b="$(cut -f"$f" <<<"$T1_APP")"
-    [ "$a" = NA ] || [ "$b" = NA ] && { printf '    %-14s NA\n' "$label"; return; }
-    awk -v a="$a" -v b="$b" -v s="$INTERVAL" -v l="$label" \
-      'BEGIN{ d=b-a; printf "    %-14s %+.0f over %ds  = %+.1f/hr\n", l, d, s, d*3600/s }'
-  }
-  echo "  DRIFT (app, constant layout — this is the leak instrument):"
-  drift 2 "mem MB"; drift 4 "mach ports"; drift 5 "windows"; drift 6 "offscreen win"
-  VERDICT="OK"
+# The violation test lives in ONE place so the mid-hold poll and the endpoint check cannot drift
+# apart and start disagreeing about what the precondition even is.
+#   rc 0 = precondition holds · rc 1 = BROKEN · rc 2 = cannot certify (the census stayed silent)
+# rc 2 is a third state on purpose: "I could not look" must never be spelled the same way as
+# "I looked and it was fine" (memory claimed-outcome-vs-checked-outcome).
+layout_ok() { # base_on base_off now_on now_off
+  local b_on="$1" b_off="$2" n_on="$3" n_off="$4"
+  case "${b_on}|${b_off}|${n_on}|${n_off}" in *NA*) return 2 ;; esac
+  [ "$n_on"  -eq "$b_on"  ] || return 1
+  [ "$n_off" -ge "$b_off" ] || return 1
+  return 0
+}
+
+# ── drift ─────────────────────────────────────────────────────────────────────────────────────────
+VERDICT="PARTIAL"; LAYOUT_STATE="n/a"
+if [ "$INTERVAL" -gt 0 ]; then
+  L0="$(layout_probe)"; L0_ON="$(cut -f1 <<<"$L0")"; L0_OFF="$(cut -f2 <<<"$L0")"
+  echo "  … holding ${INTERVAL}s at constant layout (do not create or close panes) …"
+  echo "    precondition baseline: onscreen=$L0_ON offscreen=$L0_OFF  (polling every ${WATCH}s)"
+
+  # DEADLINE-CORRECTED hold. Counting sleeps alone would make the true elapsed INTERVAL + N×poll,
+  # while the per-hour arithmetic below divides by the REQUESTED interval — the exact shape of
+  # memory poll-loop-bound-excludes-its-own-check. So: sleep toward a wall-clock deadline, then
+  # divide by what actually elapsed.
+  HOLD_T0="$(date +%s)"; DEADLINE=$((HOLD_T0 + INTERVAL))
+  LAYOUT_BROKE=""; BLIND_POLLS=0
+  while :; do
+    _now="$(date +%s)"; [ "$_now" -ge "$DEADLINE" ] && break
+    _remain=$((DEADLINE - _now))
+    if [ "$WATCH" -gt 0 ] && [ "$_remain" -gt "$WATCH" ]; then _step="$WATCH"; else _step="$_remain"; fi
+    sleep "$_step"
+    [ "$WATCH" -gt 0 ] || continue
+    _L="$(layout_probe)"; _on="$(cut -f1 <<<"$_L")"; _off="$(cut -f2 <<<"$_L")"
+    layout_ok "$L0_ON" "$L0_OFF" "$_on" "$_off"; _rc=$?
+    if [ "$_rc" = 1 ]; then
+      LAYOUT_BROKE="t+$(( $(date +%s) - HOLD_T0 ))s: onscreen ${L0_ON}→${_on}, offscreen ${L0_OFF}→${_off}"
+      break
+    elif [ "$_rc" = 2 ]; then
+      BLIND_POLLS=$((BLIND_POLLS + 1))
+    fi
+  done
+  ELAPSED=$(( $(date +%s) - HOLD_T0 )); [ "$ELAPSED" -gt 0 ] || ELAPSED=1
+
+  # Endpoint check, closing the window the polls bracketed.
+  if [ -z "$LAYOUT_BROKE" ]; then
+    _L="$(layout_probe)"; _on="$(cut -f1 <<<"$_L")"; _off="$(cut -f2 <<<"$_L")"
+    layout_ok "$L0_ON" "$L0_OFF" "$_on" "$_off"; _rc=$?
+    [ "$_rc" = 1 ] && LAYOUT_BROKE="endpoint: onscreen ${L0_ON}→${_on}, offscreen ${L0_OFF}→${_off}"
+    [ "$_rc" = 2 ] && BLIND_POLLS=$((BLIND_POLLS + 1))
+  fi
+
+  if [ -n "$LAYOUT_BROKE" ]; then
+    # ABORT. Emitting the row and appending a caveat is what produced the unusable 22:17Z result:
+    # the number gets quoted and the caveat does not travel with it.
+    echo "  ⛔ CONSTANT-LAYOUT PRECONDITION BROKE — $LAYOUT_BROKE"
+    echo "     Ports move WITH windows, so this window's mem/ports delta cannot be split into"
+    echo "     leaked-versus-released. No drift row is emitted. Re-run when nothing opens or closes."
+    LAYOUT_STATE="broken"; VERDICT="LAYOUT-DRIFT"
+  else
+    T1_APP="$(reading "$PID" "$CENSUS_OWNER")"; T1_WS="$(reading "${WS_PID:-0}" 'Window Server')"
+    show "T1  app " "$T1_APP"
+    show "T1  WS  " "$T1_WS"
+
+    drift() { # field, label, unit
+      local f="$1" label="$2" a b
+      a="$(cut -f"$f" <<<"$T0_APP")"; b="$(cut -f"$f" <<<"$T1_APP")"
+      [ "$a" = NA ] || [ "$b" = NA ] && { printf '    %-14s NA\n' "$label"; return; }
+      awk -v a="$a" -v b="$b" -v s="$ELAPSED" -v l="$label" \
+        'BEGIN{ d=b-a; printf "    %-14s %+.0f over %ds  = %+.1f/hr\n", l, d, s, d*3600/s }'
+    }
+    echo "  DRIFT (app, ${ELAPSED}s at CERTIFIED-constant layout — this is the leak instrument):"
+    drift 2 "mem MB"; drift 4 "mach ports"; drift 5 "windows"; drift 6 "offscreen win"
+    if [ "$BLIND_POLLS" -gt 0 ]; then
+      # Not OK: the layout was unobserved for part or all of the hold, so "constant" is an
+      # assumption here, not a measurement. The header has always promised PARTIAL for this.
+      echo "    ⚠ layout UNCERTIFIED — the census stayed silent on $BLIND_POLLS check(s)"
+      LAYOUT_STATE="uncertified"
+    else
+      LAYOUT_STATE="certified"; VERDICT="OK"
+    fi
+  fi
 fi
 
 # ── per-pane normalisation ────────────────────────────────────────────────────────────────────────
@@ -241,12 +344,20 @@ if [ "${PANES:-0}" -gt 0 ]; then
     printf "    cpu%%/pane      %.2f\n", f[1]/p }'
 fi
 
+# FINALISE THE VERDICT BEFORE IT IS WRITTEN ANYWHERE. Until 2026-07-31 the JSONL row was appended
+# ABOVE this downgrade, so a run whose stdout read PARTIAL could leave "OK" in the machine-readable
+# sink — the overclaim landing in the surface a consumer parses rather than the one a human reads.
+# LAYOUT-DRIFT is STICKY: a confounded window is not rescued by a resolved GPU profile, and must
+# never be softened into the same token as an ordinary missing-column run.
+if [ "$VERDICT" != "LAYOUT-DRIFT" ] && [ "$GPU_VERDICT" != OK ]; then VERDICT="PARTIAL"; fi
+
 if [ -n "$OUT" ]; then
-  printf '{"ts":"%s","app":"%s","pid":%s,"panes":%s,"interval":%s,"t0":"%s","gpu_frames":"%s","cpu_frames":"%s","verdict":"%s"}\n' \
-    "$(date -u +%FT%TZ)" "$APP" "$PID" "${PANES:-0}" "$INTERVAL" \
+  printf '{"ts":"%s","app":"%s","pid":%s,"panes":%s,"interval":%s,"elapsed":%s,"layout":"%s","t0":"%s","gpu_frames":"%s","cpu_frames":"%s","verdict":"%s"}\n' \
+    "$(date -u +%FT%TZ)" "$APP" "$PID" "${PANES:-0}" "$INTERVAL" "${ELAPSED:-0}" "$LAYOUT_STATE" \
     "$(tr '\t' ',' <<<"$T0_APP")" "$GPU_N" "$CPU_N" "$VERDICT" >> "$OUT"
   echo "  appended → $OUT"
 fi
 
-[ "$GPU_VERDICT" = OK ] || VERDICT="PARTIAL"
 echo "verdict=$VERDICT"
+[ "$VERDICT" = "LAYOUT-DRIFT" ] && exit 4
+exit 0
