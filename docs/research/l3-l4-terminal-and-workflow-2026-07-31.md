@@ -202,8 +202,16 @@ Now the trap: iTerm2 hard-disables Metal for any tab holding ≥6 sessions (`cmp
 `-[PTYTab updateUseMetal]`, a compile-time `const NSInteger`, no preference, no defaults key) **and**
 only for the *foreground* tab. So the only all-GPU layout for 30 sessions is **6 windows × 1 tab × 5
 panes** — which pushes you into the 2.35× unit. And patching the cap out would add ~30 `CAMetalLayer`s
-(~90 IOSurfaces) and 30 `CVDisplayLink` threads to the exact axis that froze the box, while
+(~90 IOSurfaces) ~~and 30 `CVDisplayLink` threads~~ to the exact axis that froze the box, while
 `acquireScarceResources` blocks the **main thread** up to 16.7 ms per pane per frame.
+
+> **Half-refuted 2026-07-31 PM, and the half that died is the arithmetic.** The per-pane
+> `CAMetalLayer` is **confirmed by direct measurement** (and the ≤5-per-tab cap is now measured rather
+> than read out of the disassembly). But the per-pane **`CVDisplayLink` thread does not exist** on
+> 3.6.11: enabling Metal on **20** panes added **+1.5 threads, not +20**. So *"raising the cap adds
+> ~30 display-link threads"* is **void** — struck above rather than deleted, so the retraction is
+> legible. The paragraph's **direction** survives (Metal is not cheaper here, and the surface count
+> still rises); its **magnitude** does not. Cite the `CAMetalLayer` count, never the thread count.
 
 ⇒ **Chasing the GPU *on iTerm2* closes the trap from both sides. The cap is protecting you.** The win
 is not more GPU *from a per-pane-layer renderer* — it is a renderer that needs **one surface for all 30
@@ -228,15 +236,22 @@ cap, not about Metal.)*
 |---|---|---|---|---|---|
 | panes measured | 15–23 | **24 / 26 / 36 / 48** | 6 / 38 | **24 (one window)** | 2 / 8 / 13 |
 | **threads** | 11–12 | **8 / 7 / 10 / 10 — FLAT** | 33 / 257 | **101 @ 24 panes** | 21 / 53 / 78 |
-| **threads / pane** | ~1.1 | **0.33 → 0.21, flat** | **7.0, linear** | **4.00, linear** (`6 + 4.00×panes`) | **5.18, linear** (`5.18×panes + 10.6`) |
+| **threads / pane** | ~1.1 | **0.33 → 0.21, flat** | **4.00, linear** ᵇ | **4.00, linear** (`6 + 4.00×panes`) | **5.18, linear** (`5.18×panes + 10.6`) |
 | OS windows for N panes | 4–6 (forced) | **1** | 1 | **1** | 1 |
 | CPU at measured max | 83.4% @ ~19 sessions | 12.9–13.9% @ 36 panes, 10 Hz ᵃ | untested | **0.0% idle @ 24 panes, 351 MB** | untested (~10.5 MB/pane) |
 | per-pane addressing | `ITERM_SESSION_ID` | `$KITTY_WINDOW_ID` + `kitten @` | `wezterm cli` | **no CLI IPC on macOS** (AppleScript only) | **`CMUX_SURFACE_ID` + full socket API** |
 | leak behaviour | **98 windows survived `close()`**; upstream #12097 OPEN since 2025-01-01 | churn-clean: 101 panes, RSS/ports returned exactly | untested | untested | untested |
 
-ᵃ the only *loaded* challenger figure in the corpus — from the fleet agent's kitty run, recorded in
-`terminal-for-30-panes-2026-07-31.md` §6.6. Every other challenger cell is **idle** (Stage A), which
-isolates the structural axes (threads, surfaces, ports) but says nothing about CPU under load.
+ᵃ the only *loaded* challenger figure in the corpus **at the time this table was written**. Superseded
+2026-07-31 PM by a matched-load Stage-B run (18 panes, byte-identical stream, every pane at 10.00
+achieved fps): **kitty 9.5% · WezTerm 24.4% · Ghostty 27.3%**, with kitty carrying 22% *more* bytes —
+`terminal-for-30-panes-2026-07-31.md` §6.6/§9.
+
+ᵇ **was published as 7.0 and that is retired.** Two independent same-session measurements put WezTerm
+at **4.00** threads/pane. Worse for this table's premise: §8's own kill condition for the thread
+finding **fired** — 87 WezTerm threads produced *fewer* context switches than kitty's 10 (4,917 vs
+5,280/s). **Threads are a proxy that failed its own falsification test**; the axis that survived is
+loaded app CPU. This row is kept because it is still true, not because it is still decisive.
 
 *(Ghostty's row read `3 (from source)` / `pending` until 2026-07-31; it is now **measured** at 4.00
 threads/pane — `renderer`, `io`, `io-reader`, `cf_release` — confirmed to 24 panes. cmux is new to this
