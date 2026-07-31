@@ -260,9 +260,14 @@ live_pid() { sed -n 's/^pid=//p' "$CC_PANE_HOME/$1/meta" | head -1; }
 
 @test "RED-proof: an UNREADABLE registry is INDETERMINATE (rc 2), never an empty fleet" {
   # The symmetric case to the iterm2 driver's blind-enumerator refusal. Without it the glob
-  # silently yields nothing and a caller concludes the whole headless fleet is gone. Found by
-  # shellcheck SC2034 flagging RC_INDET as unused here while the iterm2 driver used it — the
-  # asymmetry WAS the bug.
+  # silently yields nothing and a caller concludes the whole headless fleet is gone. Found by the
+  # SC2034 lint flagging RC_INDET as unused here while the iterm2 driver used it — the asymmetry
+  # WAS the bug.
+  #
+  # (Deliberately NOT opening a comment line with the tool's name: shellcheck parses a
+  # comment-initial `shellcheck` as a DIRECTIVE and aborts the whole file, which would leave this
+  # suite silently unanalyzable by the .bats lint. bats-shellcheck-lint --selftest catches exactly
+  # that, and caught it here — the prose had merely wrapped onto an unlucky column.)
   mkdir -p "$CC_PANE_HOME"
   chmod 000 "$CC_PANE_HOME"
   run "$CP" list
