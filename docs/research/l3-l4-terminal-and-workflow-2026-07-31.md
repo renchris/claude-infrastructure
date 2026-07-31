@@ -209,9 +209,53 @@ by quitting iTerm2, on an M3 Pro and an M3 Studio. **Not this machine.**
 | 3 | `NODE_OPTIONS=--max-old-space-size=1024` | **REJECTED** — treats a non-cause; risks OOM-killing agents mid-task |
 | 4 | Maximise Metal/GPU | **BACKWARDS on iTerm2** — the GPU path allocates the objects that saturate the compositor |
 | 5 | Ghostty is "the only" terminal rendering via Metal | **FALSE** — iTerm2 has a Metal renderer |
-| 6 | Ghostty auto-demotes unfocused panes to E-cores via QoS | *under verification* — the decisive claim |
-| 7 | Table 1 benchmark numbers | *provenance under verification*; presented as "2026 benchmarking data" without a source |
-| 8 | Avoid fractional display scaling | *under verification against the actual monitor config* — plausible in mechanism, but the prescribed fix ("set to 1080p") would destroy the 30-pane visibility requirement |
+| 6 | Ghostty auto-demotes unfocused panes to E-cores via QoS | **UNSUBSTANTIATED** — see below |
+| 7 | Table 1 benchmark numbers | **UNSOURCED** — presented as "2026 benchmarking data" with no citation; the two figures checkable here (iTerm2 memory, Ghostty per-pane cost) do not match measurement |
+| 8 | Avoid fractional display scaling | **MECHANISM CONFIRMED, REMEDY REJECTED** — see below |
+
+### Claim 6 resolved — the symbol exists, the behaviour does not follow
+
+The shipped binary **does** import `_pthread_set_qos_class_self_np` (5 QoS-related undefined symbols,
+12 `qos` strings), and the live process shows threads in three priority bands — **PRI 46 / 31 / 20** —
+so some work genuinely runs below the default band.
+
+**That establishes nothing about the claim.** This repo's most expensive recorded error is exactly
+this inference ([[capability-initialized-is-not-capability-used]]: a loaded GPU driver and a warm
+shader cache "proved" Metal was rendering everything, while the profile read 5:1 *against* the GPU).
+Existence of a QoS call can only refute "absent" — it cannot establish *"demotes **unfocused panes**
+based on **focus**"*. Every app with background I/O threads sets per-thread QoS; that is what a
+libxev-style event loop looks like.
+
+And the arithmetic points the other way: Ghostty was holding **117–127 threads across 3 windows**
+while kitty holds **10 threads across 48 panes**. Whatever QoS Ghostty applies, it is not buying
+thread economy on the axis that decides this question. ⇒ **UNSUBSTANTIATED**, and it was the report's
+single load-bearing argument for Ghostty.
+
+### Claim 8 resolved — the mechanism is real and active here; the prescribed fix is not
+
+Measured config (`system_profiler SPDisplaysDataType`), **2 externals attached at the time of
+reading, not 3**:
+
+| Display | Framebuffer | UI logical | Refresh |
+|---|---|---|---|
+| Built-in Liquid Retina XDR | 3456 × 2234 | — | — |
+| DELL S2725QC | **5120 × 2880** | 2560 × 1440 | **120 Hz** |
+| DELL S2725QC | **5120 × 2880** | 2560 × 1440 | 60 Hz |
+
+So the report's *mechanism* is *CONFIRMED and live*: both externals are rendering a **5120 × 2880**
+intermediate buffer for a "looks like 1440p" setting, exactly as described.
+
+**Its remedy is still rejected, for two reasons.** (1) *It targets the smaller term.* WindowServer
+measured 47–49% against iTerm2's 87–122% — the compositor is real but it is not the dominant
+consumer, so eliminating the downscale cannot recover the larger half. (2) *It destroys the
+requirement it was invoked to protect.* "Set to 1080p" (integer 2×) roughly quadruples effective text
+area and would cut visible panes to a fraction; native 3840 × 2160 unscaled goes the other way and is
+unreadable at this size. Neither is compatible with seeing 30 panes.
+
+**The cheap lever the report never names: the 120 Hz panel.** One display is compositing at double
+the other's rate for zero pane-visibility gain. Dropping it to 60 Hz halves that display's composite
+work and costs nothing observable in a text UI — strictly better than either scaling change, and
+reversible in one click.
 | 9 | Use allow/ask/deny lists + auto mode to cut prompt fatigue | **DIRECTIONALLY RIGHT, mis-sized** — measured here, 88.3% of prompting Bash calls are *compound*, so a `Bash(prefix:*)` allow-list caps at ~2.4% coverage; the `ask` gates fired 22/41,829 = 0.05% |
 
 ---
