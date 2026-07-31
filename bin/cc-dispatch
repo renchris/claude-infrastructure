@@ -18,6 +18,11 @@
 #   1b. DONE-GUARD: an item carrying the ledger's done latch (`wasDone`) is dropped from the wave
 #               and recorded as IDL {action:"skipped"} — completed work is never re-dispatched by
 #               a reopen. Cleared only by `cc-backlog reopen <id> --force`. (2026-07-20 incident.)
+#   1d. STALE-PREMISE GUARD: an auto-generated `source=="plan-open"` item whose dodRef plan has
+#               since gone `complete`/`superseded` is dropped AND retracted (`cc-backlog done`,
+#               evidence `premise-retracted:`) — the item's only claim was "this plan is open".
+#               Scoped to plan-open alone: a terminal dodRef says nothing about a human-filed item.
+#               Fail-OPEN (the premise is a FILE, not the ledger fold). CC_DISPATCH_PREMISE_GATE=off.
 #   2. no items                    → IDL {action:"passed", detail:"backlog empty"}, exit 0.
 #   3. wave   = [{id, slot}]  (slot from an optional item hint; MVP default "lead")
 #      plan   = `<wave-plan> --items <wave-json> --json`
@@ -657,10 +662,86 @@ dispatch() { # <dry|run|decide>
     done < <(printf '%s' "$guarded" | jq -r '.[] | "\(.id // "")\t\(.project // "")"')
   fi
 
+  # 1d. STALE-PREMISE GUARD — an auto-generated `plan-open` item whose PREMISE has since gone false.
+  # cc-discover's C2 critic mints one item per plan that `find-plan.sh --list-open` reports, so the
+  # item's entire claim is "this plan is still open". That claim is a SNAPSHOT and nothing re-reads
+  # it: the plan lands, its frontmatter flips to `complete`, and the item sits `open` forever. The
+  # next wave then claims it and burns a full worker session re-deriving finished work.
+  #
+  # Measured live 2026-07-31 on item 4d5f09d7716c (row 10 / OPERATOR_SURFACE_V2): emitted 00:57:02Z
+  # while the plan read `in-progress`, plan flipped `complete` at 02:29:32Z — 92 minutes later — and
+  # a worker was still dispatched onto it a day after all twelve of its increments were on trunk.
+  # Two more items were queued behind it in the same state.
+  #
+  # SCOPED TO source=="plan-open" ON PURPOSE, and this is the load-bearing part of the design. A
+  # terminal dodRef is NOT evidence about a HUMAN-filed item: it only falsifies an item whose whole
+  # reason for existing was the plan being open. The same live scan found `791345455b58` — a real
+  # 358-site pipefail defect (source `relogin-verify-…`) that merely CITES a complete plan as its
+  # DoD. Keying this guard on "the dodRef plan is complete" alone would have silently closed it.
+  #
+  # Fail-OPEN, unlike the fail-CLOSED done-guard above, and for exactly the reason that block's
+  # comment gives: this premise lives in a FILE, not in the ledger fold, so every way of failing to
+  # read it (unresolvable helper, dodRef that is a code ref rather than a path, deleted plan,
+  # unparseable frontmatter) must dispatch anyway. Starving the queue on a sensor failure is the
+  # worse error — an unread premise is "I could not tell", never "it is finished" (I6).
+  # Kill switch: CC_DISPATCH_PREMISE_GATE=off restores the incumbent wave exactly.
+  # The CO-VERSIONED sibling is tried FIRST — `$(dirname "$_self")/../scripts/find-plan.sh`, the same
+  # `_self`-anchored repo-root hop this file already uses for PROJECTS_CONF. cc-dispatch and
+  # find-plan.sh live in one repo and deploy together (per-file symlinks that track the checkout), so
+  # the sibling is GUARANTEED to match the running cc-dispatch's version. Resolving via $HOME first
+  # instead skews them whenever cc-dispatch runs from a tree the deployed find-plan.sh has not caught
+  # up to (a worktree under test, or a land not yet fast-forwarded into the shared checkout) — the
+  # `--status` verb would read as an unknown NAME on the stale copy and the guard would silently
+  # fail-open forever. `_self` resolves the symlink chain, so this holds for the deployed layer too.
+  local stale='[]' scount=0 findplan staleids
+  if [ "${CC_DISPATCH_PREMISE_GATE:-on}" != off ] && [ "$count" -gt 0 ]; then
+    findplan="$(resolve_bin "${CC_DISPATCH_FINDPLAN_BIN:-}" find-plan.sh \
+                  "$(cd "$(dirname "$_self")/.." 2>/dev/null && pwd)/scripts/find-plan.sh" \
+                  "$HOME/.claude/scripts/find-plan.sh")" || findplan=""
+    if [ -n "$findplan" ]; then
+      local sid sdod sst slist=""
+      while IFS="$(printf '\t')" read -r sid sdod; do
+        [ -n "$sid" ] && [ -n "$sdod" ] || continue
+        [ -f "$sdod" ] || continue                                  # not a plan path ⇒ fail OPEN
+        sst="$("$findplan" --status "$sdod" 2>/dev/null)" || continue   # exit 2 / unreadable ⇒ OPEN
+        case "$sst" in complete|superseded) slist="$slist$sid	$sst	$(basename "$sdod")
+" ;; esac
+      done < <(printf '%s' "$dispatchable" \
+                 | jq -r '.[] | select((.source // "") == "plan-open")
+                              | "\(.id // "")\t\(.dodRef // "")"')
+      if [ -n "$slist" ]; then
+        staleids="$(printf '%s' "$slist" | cut -f1 | jq -R -s -c 'split("\n")|map(select(length>0))')"
+        stale="$(       printf '%s' "$dispatchable" | jq -c --argjson s "$staleids" '[ .[] | select((.id // "") as $i | $s | index($i))       ]')"
+        dispatchable="$(printf '%s' "$dispatchable" | jq -c --argjson s "$staleids" '[ .[] | select((.id // "") as $i | $s | index($i) | not) ]')"
+        scount="$(printf '%s' "$stale"        | jq 'length' 2>/dev/null || echo 0)"
+        count="$( printf '%s' "$dispatchable" | jq 'length' 2>/dev/null || echo 0)"
+        # never a SILENT fence: print it, record it, and RETRACT it so the next pass need not
+        # re-derive the same thing. The retraction is a ledger write, so it happens only in a real
+        # run that holds the singleton — dry and decide stay pure reads, and an inflight pass leaves
+        # the write to the lock holder rather than racing it.
+        while IFS="$(printf '\t')" read -r sid sst sdod; do
+          [ -n "$sid" ] || continue
+          echo "cc-dispatch: retracted $sid — its plan $sdod is $sst (source=plan-open premise no longer holds)" >&2
+          if [ "$mode" = dry ]; then echo "PLAN: RETRACT $sid ($sdod → $sst)"; continue; fi
+          SKIPPED=$((SKIPPED + 1)); idl skipped "$sid: plan-open premise stale — $sdod is $sst — re-open needs \`cc-backlog reopen $sid --force\`"
+          [ "$v2" -eq 1 ] && idl_decision "$sid" skip 0 plan-premise-stale \
+            "$(printf '%s' "$stale" | jq -r --arg i "$sid" '.[]|select(.id==$i)|.project // ""' | head -1)"
+          if [ "$mode" = run ] && [ "$inflight" -eq 0 ]; then
+            # evidence says PREMISE, never "verified": no code was read by this retraction.
+            # `done` is QUOTED: unquoted, shellcheck parses the verb as the loop keyword (SC1010)
+            # and the land gate runs bare shellcheck, which is stricter than -S warning.
+            "$backlog" "done" "$sid" --evidence "premise-retracted: $sdod is $sst (source=plan-open; no code verified by this retraction)" >/dev/null 2>&1 || true
+          fi
+        done <<< "$(printf '%s' "$slist")"
+      fi
+    fi
+  fi
+
   # 2. nothing dispatchable → passed.
   if [ "$count" -eq 0 ]; then
     local why="backlog empty"
     [ "$gcount" -gt 0 ] && why="backlog empty after done-guard ($gcount already-done item(s) skipped)"
+    [ "$scount" -gt 0 ] && why="$why; $scount stale plan-open premise(s) retracted"
     if [ "$mode" = dry ]; then echo "PLAN: $why (projects=$(printf '%s' "$PROJECTS" | tr '\n' ',')) → would pass, no spawn"; return 0; fi
     idl passed "$why"; idl_summary; return 0
   fi
@@ -950,6 +1031,7 @@ case "\$1" in
     esac ;;
   claim) printf 'claim %s\n' "\$2" >> "$tmp/backlog.log"; echo "\$2" ;;
   reopen)printf 'reopen %s\n' "\$2" >> "$tmp/backlog.log"; echo "\$2" ;;
+  done)  printf 'done %s %s\n' "\$2" "\$4" >> "$tmp/backlog.log"; echo "\$2" ;;
 esac
 exit 0
 STUB
@@ -980,6 +1062,14 @@ STUB
          CC_DISPATCH_IDL="$tmp/idl.jsonl" CC_DISPATCH_PROJECT="/repo/a" CC_DISPATCH_MAX_SPAWN=2 \
          CC_DISPATCH_SID="selftest"         CC_DISPATCH_LOCK_DIR="$tmp/dispatch.lock" CC_DISPATCH_CEILING=6 CC_DISPATCH_LANE=v2 \
          CC_DISPATCH_DECIDE_ONLY=off
+  # the premise gate's helper is pinned to THIS checkout's copy, never resolved. Unpinned it would
+  # fall through resolve_bin to ~/.claude/scripts/find-plan.sh — a symlink into the SHARED checkout —
+  # so the suite would grade a different tree than the one it is testing, and would go green on a
+  # predicate this branch never changed. Deliberately the REAL script, not a stub: the thing under
+  # test is whether cc-dispatch and find-plan.sh agree about a status word.
+  CC_DISPATCH_FINDPLAN_BIN="$(cd "$(dirname "$SELF")/../scripts" 2>/dev/null && pwd)/find-plan.sh"
+  export CC_DISPATCH_PREMISE_GATE=on CC_DISPATCH_FINDPLAN_BIN
+  seed_plandoc() { printf -- '---\nstatus: %s\nrow: 99\n---\n# fixture\n' "$2" > "$tmp/$1"; }
   unset STUB_WP_RC STUB_SPAWN_RC STUB_LIVE STUB_LIST_ALL_RC
 
   # wave.json is removed too: its ABSENCE is the observable for "made zero wave-plan calls", and a
@@ -1031,9 +1121,88 @@ STUB
   reset; seed_items '[{"id":"i1","project":"a","status":"open","wasDone":true,"title":"t1"},{"id":"i2","project":"a","status":"open","title":"t2"}]'
   seed_plan '[{"id":"i2","account":"next3","fire_line":["--prompt-file","'"$tmp"'/f1.txt"]}]'
   "$SELF" --once >/dev/null 2>&1
+  # wave.json — what reached the PLANNER — is the discriminating observable, and the reason is worth
+  # recording: claims and spawns are driven by the seeded plan, and the stub returns that plan
+  # whatever wave it is handed. So the three assertions below that read backlog.log/spawn.log ALL
+  # pass with the wasDone predicate stripped out (measured 2026-07-31 by rewriting it to
+  # `select(true)`: (l) went 6-RED as it should, (m) stayed fully green). They were vacuous — the
+  # fixture never placed i1, so "i1 was not claimed" was true before the guard existed. (l) proves
+  # the guard fires for a LONE item; only this pair proves the PER-ITEM claim (m) is actually about.
+  t "(m) mixed wave → the un-done item reaches the planner"  grep -q '"i2"' "$tmp/wave.json"
+  t "(m) mixed wave → the done-latched item does NOT"        not grep -q '"i1"' "$tmp/wave.json"
   t "(m) mixed wave → the un-done item IS claimed"     grep -qx 'claim i2' "$tmp/backlog.log"
   t "(m) mixed wave → the done-latched item is NOT claimed" not grep -qx 'claim i1' "$tmp/backlog.log"
   t "(m) mixed wave → exactly 1 spawn"                 test "$(grep -c . "$tmp/spawn.log")" -eq 1
+
+  # (v) STALE-PREMISE GUARD. A `plan-open` item is a SNAPSHOT of "this plan was open at discovery";
+  # when the plan lands, nothing re-reads it and the wave burns a worker re-deriving finished work
+  # (live 2026-07-31: item 4d5f09d7716c, emitted 92 min before its plan flipped `complete`).
+  # RED-proves the 1d filter: drop the guard and v1's item reaches the planner and spawns.
+  reset; seed_plandoc p_done.md complete
+  seed_items '[{"id":"i1","project":"a","status":"open","title":"t1","source":"plan-open","dodRef":"'"$tmp"'/p_done.md"}]'
+  seed_plan  '[{"id":"i1","account":"next3","fire_line":["--prompt-file","'"$tmp"'/f1.txt"]}]'
+  "$SELF" --once >/dev/null 2>&1
+  t "(v1) plan-open item, plan complete → ZERO spawn"      test ! -s "$tmp/spawn.log"
+  t "(v1) …→ NOT claimed"                                  not grep -qx 'claim i1' "$tmp/backlog.log"
+  t "(v1) …→ RETRACTED via cc-backlog done"                grep -q '^done i1 ' "$tmp/backlog.log"
+  t "(v1) …→ evidence says PREMISE, not 'verified'"        grep -q 'premise-retracted' "$tmp/backlog.log"
+  t "(v1) …→ IDL skipped (never a silent fence)"           grep -q '"action":"skipped"' "$tmp/idl.jsonl"
+  t "(v1) …→ decision reason is plan-premise-stale"        grep -q 'plan-premise-stale' "$tmp/idl.jsonl"
+
+  # (p2) THE POSITIVE CONTROL for every absence assertion in (v1): the SAME fixture, the SAME
+  # source, only the plan's status word differs. Without this pair a gate that fired on EVERY
+  # plan-open item — or a broken stub that spawned nothing at all — would satisfy v1 vacuously.
+  reset; seed_plandoc p_open.md in-progress
+  seed_items '[{"id":"i1","project":"a","status":"open","title":"t1","source":"plan-open","dodRef":"'"$tmp"'/p_open.md"}]'
+  seed_plan  '[{"id":"i1","account":"next3","fire_line":["--prompt-file","'"$tmp"'/f1.txt"]}]'
+  "$SELF" --once >/dev/null 2>&1
+  t "(v2) plan still in-progress → IS claimed"             grep -qx 'claim i1' "$tmp/backlog.log"
+  t "(v2) …→ DOES spawn"                                   test -s "$tmp/spawn.log"
+  t "(v2) …→ NOT retracted"                                not grep -q '^done i1 ' "$tmp/backlog.log"
+
+  # (p3) SCOPE control — the one that matters most. A terminal dodRef falsifies ONLY an item whose
+  # premise WAS "the plan is open". A human/verify-filed item may legitimately cite a finished plan
+  # as its DoD: live scan found 791345455b58, a real 358-site pipefail defect, doing exactly that.
+  # Keying the guard on the plan status alone would silently close it.
+  reset; seed_plandoc p_done.md complete
+  seed_items '[{"id":"i1","project":"a","status":"open","title":"t1","source":"relogin-verify-e67b8e6278f2","dodRef":"'"$tmp"'/p_done.md"}]'
+  seed_plan  '[{"id":"i1","account":"next3","fire_line":["--prompt-file","'"$tmp"'/f1.txt"]}]'
+  "$SELF" --once >/dev/null 2>&1
+  t "(v3) NON-plan-open item citing a complete plan → IS claimed" grep -qx 'claim i1' "$tmp/backlog.log"
+  t "(v3) …→ NEVER retracted"                                     not grep -q '^done i1 ' "$tmp/backlog.log"
+
+  # (p4) FAIL-OPEN. The premise lives in a FILE, so every way of failing to read it must dispatch
+  # anyway — starving the queue on a sensor failure is the worse error (I6). Most live dodRefs are
+  # code refs ("hooks/notify.sh#L35"), not plan paths, and must not be read as "finished".
+  reset
+  seed_items '[{"id":"i1","project":"a","status":"open","title":"t1","source":"plan-open","dodRef":"hooks/notify.sh#L35"},{"id":"i2","project":"a","status":"open","title":"t2","source":"plan-open","dodRef":"'"$tmp"'/absent.md"}]'
+  seed_plan  '[{"id":"i1","account":"next3","fire_line":["--prompt-file","'"$tmp"'/f1.txt"]}]'
+  "$SELF" --once >/dev/null 2>&1
+  t "(v4) dodRef is a code ref, not a path → fail OPEN, claimed" grep -qx 'claim i1' "$tmp/backlog.log"
+  t "(v4) dodRef file absent → fail OPEN, never retracted"       not grep -q '^done i2 ' "$tmp/backlog.log"
+
+  # (p5) KILL SWITCH (I8 — every mechanism ships one; never revert-as-plan).
+  reset; seed_plandoc p_done.md complete
+  seed_items '[{"id":"i1","project":"a","status":"open","title":"t1","source":"plan-open","dodRef":"'"$tmp"'/p_done.md"}]'
+  seed_plan  '[{"id":"i1","account":"next3","fire_line":["--prompt-file","'"$tmp"'/f1.txt"]}]'
+  CC_DISPATCH_PREMISE_GATE=off "$SELF" --once >/dev/null 2>&1
+  t "(v5) gate=off → incumbent wave restored (claimed)"    grep -qx 'claim i1' "$tmp/backlog.log"
+  t "(v5) gate=off → no retraction"                        not grep -q '^done i1 ' "$tmp/backlog.log"
+
+  # (p6) PER-ITEM, not a whole-wave abort — the same property (m) asserts for the done-guard.
+  reset; seed_plandoc p_done.md complete
+  seed_items '[{"id":"i1","project":"a","status":"open","title":"t1","source":"plan-open","dodRef":"'"$tmp"'/p_done.md"},{"id":"i2","project":"a","status":"open","title":"t2"}]'
+  seed_plan  '[{"id":"i2","account":"next3","fire_line":["--prompt-file","'"$tmp"'/f1.txt"]}]'
+  "$SELF" --once >/dev/null 2>&1
+  # asserted on wave.json — WHAT REACHED THE PLANNER — not on claim/spawn. Claims and spawns are
+  # driven by the seeded plan, and the stub returns that plan whatever wave it is handed, so a
+  # "the stale item was not claimed" assertion passes with the guard REMOVED (verified: it did) —
+  # vacuous, because the fixture never placed i1 in the first place. wave.json is the only
+  # observable here that a guardless build actually changes.
+  t "(v6) mixed wave → the fresh item reaches the planner"  grep -q '"i2"' "$tmp/wave.json"
+  t "(v6) mixed wave → the stale-premise item does NOT"     not grep -q '"i1"' "$tmp/wave.json"
+  t "(v6) mixed wave → the fresh item IS claimed"           grep -qx 'claim i2' "$tmp/backlog.log"
+  t "(v6) mixed wave → exactly 1 spawn"                     test "$(grep -c . "$tmp/spawn.log")" -eq 1
 
   # (b) quota-cliff (wave-plan exit 4) → abstained + page + ZERO spawn.
   reset; seed_items '[{"id":"i1","project":"a","status":"open","title":"t1"}]'

@@ -9,6 +9,17 @@
 #                                    Missing/unparseable status ⇒ UNKNOWN (never hidden);
 #                                    complete/superseded are excluded. This is the desk's
 #                                    "what is ALL open work?" verb (G-P14-4).
+#   find-plan.sh --status <path>     print ONE plan's status word and exit. Pure read, no
+#                                    side effects. Exists so a CONSUMER (cc-dispatch's
+#                                    stale-premise guard) can ask "is this plan still open?"
+#                                    without minting a fourth copy of plan_status() — there
+#                                    are already three (here, setup-plan-symlinks.sh,
+#                                    validate-plan-structure.sh) and the third one already
+#                                    disagrees with the other two on trailing tokens.
+#                                    exit 0 = status read (word on stdout);
+#                                    exit 2 = could not read the file at all (prints
+#                                    `unknown`), so a caller can tell "it is open" apart
+#                                    from "I could not tell" and fail OPEN on the latter.
 #
 # Resolution order (first match wins):
 #   1. Literal path (absolute or relative to cwd)
@@ -103,6 +114,15 @@ list_open() {
 
 if [[ "${1:-}" == "--list-open" ]]; then
   list_open
+  exit 0
+fi
+
+# --status <path>: the single-file query. Deliberately does NOT search the plan dirs — a consumer
+# holding a recorded absolute path (a backlog item's dodRef) must never be silently answered about a
+# DIFFERENT file that happens to share a basename. Unreadable ⇒ `unknown` + exit 2, never a guess.
+if [[ "${1:-}" == "--status" ]]; then
+  if [[ -z "${2:-}" || ! -f "$2" ]]; then printf 'unknown\n'; exit 2; fi
+  plan_status "$2"
   exit 0
 fi
 
