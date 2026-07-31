@@ -34,13 +34,19 @@
 # any parse/IO error exits 0 with no decision and no partial file.
 #
 # Kill switch: CC_PERMISSION_BEACON_DISABLED=1  (no-op, both modes).
-# Seam: CC_PERMPEND_DIR (default /tmp/cc-permission-pending) — MUST match lead-supervisor.sh; E2E isolation.
+# Seams: CC_PERMPEND_DIR (default /tmp/cc-permission-pending) — MUST match lead-supervisor.sh; E2E
+#        isolation. CC_PERMARCHIVE_DIR / CC_PERMARCHIVE_MAXLEN — the durable archive (see `archive`).
 
 [[ "${CC_PERMISSION_BEACON_DISABLED:-0}" == "1" ]] && exit 0
 set -uo pipefail
 
 MODE="${1:-}"
 DIR="${CC_PERMPEND_DIR:-/tmp/cc-permission-pending}"
+# Durable ARCHIVE (see the `archive` function below). Deliberately NOT under CC_PERMPEND_DIR:
+# that lives in /tmp and is wiped on reboot, and the whole point of the archive is a record that
+# outlives the box's uptime so the classifier can be tuned on weeks of real data.
+ARCHDIR="${CC_PERMARCHIVE_DIR:-$HOME/.claude/autonomy/permission-archive}"
+ARCH_MAXLEN="${CC_PERMARCHIVE_MAXLEN:-3500}"
 
 # Read the harness payload once (fail-open on empty/malformed — never block the prompt).
 INPUT="$(cat 2>/dev/null || true)"
@@ -79,9 +85,57 @@ beat() {
   : > "$HEARTBEAT" 2>/dev/null || true
 }
 
+# ── DURABLE ARCHIVE (§3 Stage A.4) ───────────────────────────────────────────────────────────────
+# WHY: `clear` used to `rm -f` each record the moment it was answered, so NO history of actual
+# permission prompts existed anywhere on this box. Two consequences, both measured:
+#   • bin/cc-permission-audit can only ever report an UPPER bound — it infers candidates from
+#     transcripts against the static rules, and cannot see what auto mode's classifier silently
+#     approved or additionally raised. Its own docstring says so.
+#   • The classifier therefore can never be tuned on real data, which is Step 3's named guardrail.
+# So the record is appended to a durable append-only JSONL before it is removed.
+#
+# `resolved_by` is the load-bearing field for that tuning: PostToolUse only fires on the GRANT
+# path, so a record cleared by PostToolUse was approved, while one cleared by Stop/SessionEnd was
+# denied or abandoned. That distinction cannot be recovered from anywhere else.
+#
+# ATOMICITY: many sessions append to one file concurrently. A single small write(2) under O_APPEND
+# does not interleave, so the record is length-BOUNDED (ARCH_MAXLEN, default 3500 B — comfortably
+# inside the 4 KiB atomic-append regime) and over-long payloads degrade to a truncated summary
+# rather than risking a torn line. Truncation is RECORDED (`tool_input_truncated`), never silent.
+archive() {
+  local rts mon line
+  mkdir -p "$ARCHDIR" 2>/dev/null || return 0
+  # One date(1) fork for both the timestamp and the month bucket.
+  local d; d="$(date +'%s %Y-%m' 2>/dev/null)" || return 0
+  rts="${d%% *}"; mon="${d##* }"
+  local by; by="$(printf '%s' "$INPUT" | jq -r '.hook_event_name // empty' 2>/dev/null || true)"
+
+  line="$(jq -c --arg sid "$SID" --arg by "${by:-unknown}" --argjson rts "$rts" \
+      '{session_id:$sid, ts:(.ts//$rts), resolved_ts:$rts, waited_s:($rts - (.ts//$rts)),
+        resolved_by:$by, tool_name:(.tool_name//""), tool_input:(.tool_input//{}),
+        cwd:(.cwd//"")}' "$BEACON" 2>/dev/null)" || return 0
+  [[ -z "$line" ]] && return 0
+
+  if (( ${#line} > ARCH_MAXLEN )); then
+    line="$(jq -c --arg sid "$SID" --arg by "${by:-unknown}" --argjson rts "$rts" \
+        --argjson cap "$((ARCH_MAXLEN / 2))" \
+        '{session_id:$sid, ts:(.ts//$rts), resolved_ts:$rts, waited_s:($rts - (.ts//$rts)),
+          resolved_by:$by, tool_name:(.tool_name//""), cwd:(.cwd//""),
+          tool_input_truncated:true,
+          tool_input_summary:((.tool_input//{}|tostring)[0:$cap])}' "$BEACON" 2>/dev/null)" || return 0
+    [[ -z "$line" ]] && return 0
+  fi
+  printf '%s\n' "$line" >> "$ARCHDIR/$mon.jsonl" 2>/dev/null || true
+}
+
 case "$MODE" in
   clear)
     beat
+    # FAST PATH: with no beacon there is nothing to archive or remove. This builtin test makes the
+    # overwhelmingly common PostToolUse call CHEAPER than the unconditional `rm -f` it replaces —
+    # the archive costs forks only when a real prompt actually resolved.
+    [[ -f "$BEACON" ]] || exit 0
+    archive
     rm -f "$BEACON" 2>/dev/null || true
     exit 0
     ;;
