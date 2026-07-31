@@ -57,8 +57,10 @@
 # shapes as verifier-inert above — same idiom, deliberately not a new one:
 #   kind=="dispatch-inert"  NOT-ACTIVATED (the label is unloaded, or loaded but sitting in launchd's
 #                           disabled DB — an un-run C10 hand-step, an OPERATOR QUEUE ITEM and not a
-#                           stall) or STALE (the label IS loaded+enabled yet the newest cc-dispatch
-#                           decision is older than CC_DISPATCH_STALE_H).
+#                           stall), STALE (the label IS loaded+enabled yet the newest cc-dispatch
+#                           decision is older than CC_DISPATCH_STALE_H), or SATURATED (it is deciding
+#                           on time, but has admitted NOTHING for CC_DISPATCH_SATURATED_H while
+#                           deferring at the ceiling — §5 F16 / §7 A13).
 # NOT-ACTIVATED is terminal for STALE: a job that is not running cannot be late. Both are gated on
 # EXISTENCE EVIDENCE — >=1 actor=="cc-dispatch" record in the journal, i.e. the dispatcher has
 # demonstrably run on this host — because "it stopped" is only an alarm where it was SUPPOSED to be
@@ -135,6 +137,11 @@ DAY_S=86400
 DISPATCH_IDL="${CC_DISPATCH_IDL:-$IDL_FILE}"
 DISPATCH_LABEL="${CC_DISPATCH_LABEL:-com.claude.dispatcher}"
 DISPATCH_STALE_H="${CC_DISPATCH_STALE_H:-2}"
+# §5 F16 / §7 A13. Deferral is silent BY DESIGN (R2: backlog > concurrency is normal and must never
+# page) — but *sustained total* deferral is a different claim, and only the second is an alarm. The
+# window is hours of wall clock, not passes, so it cannot be gamed by a burst of cheap kick passes.
+# 0 ⇒ off (the kill switch); the alarm is silent whenever the spine admitted anything at all.
+DISPATCH_SATURATED_H="${CC_DISPATCH_SATURATED_H:-6}"
 DISPATCH_LOG="${CC_DISPATCH_LOG:-/tmp/claude-dispatcher.stderr.log}"
 # The REPO copy, not the ~/.claude mirror: nothing syncs docs/activation/pending-activation/ to
 # ~/.claude/autonomy/pending-activation/ (checked: deploy-live.sh does not), and the mirror is the
@@ -470,11 +477,47 @@ dispatch_alarm_rows() { # → one JSON object per line (possibly none)
     return 0    # terminal: a job that is not running cannot be late
   fi
 
-  [ "$((now - newest))" -gt "$((stale_h * 3600))" ] || return 0
-  # shellcheck disable=SC2016  # $(id -u) is EMITTED, not evaluated: it must expand in the operator's
-  # shell when they paste it, which is also what keeps the command uid-portable.
-  printf '{"kind":"dispatch-inert","state":"STALE","detail":"loaded+enabled but no decision in %sh","subject":"%s","recover_cmd":"tail -20 %s ; launchctl print gui/$(id -u)/%s","ts":%s}\n' \
-    "$(hrs "$((now - newest))")" "$DISPATCH_LABEL" "$DISPATCH_LOG" "$DISPATCH_LABEL" "$now"
+  if [ "$((now - newest))" -gt "$((stale_h * 3600))" ]; then
+    # shellcheck disable=SC2016  # $(id -u) is EMITTED, not evaluated: it must expand in the operator's
+    # shell when they paste it, which is also what keeps the command uid-portable.
+    printf '{"kind":"dispatch-inert","state":"STALE","detail":"loaded+enabled but no decision in %sh","subject":"%s","recover_cmd":"tail -20 %s ; launchctl print gui/$(id -u)/%s","ts":%s}\n' \
+      "$(hrs "$((now - newest))")" "$DISPATCH_LABEL" "$DISPATCH_LOG" "$DISPATCH_LABEL" "$now"
+    return 0    # terminal for SATURATED: a spine that is not deciding cannot be judged on its admits
+  fi
+
+  # ── SATURATED (§5 F16 / §7 A13) ────────────────────────────────────────────────────────────────
+  # The failure mode S2's own mid-build correction revealed, and the ONLY one of this family that a
+  # correct-and-quiet dispatcher can reach. R2 makes deferral silent on purpose; a `live_workers`
+  # that never decreases therefore yields a spine that fires nothing and SAYS nothing — strictly
+  # worse than the false cliff this rebuild removed, because a false cliff at least pages.
+  #
+  # POLARITY (memory alarm-polarity-and-attention-budget): the alarm asks "is it GREEN?" — did it
+  # admit ANYTHING in the window — and counts NOT-success. It never asks "is some named failure
+  # present?", so no single unusual record can silence it.
+  # PREMISE GATE: at-ceiling deferrals must actually appear in the window. Without that, a spine
+  # that is merely idle (empty backlog ⇒ nothing to admit) or one whose window holds only cheap
+  # single-item kick passes would read as saturated — an alarm that fires on health gets ignored.
+  local sat_h counts atceil admits
+  sat_h="$DISPATCH_SATURATED_H"
+  case "${sat_h:-}" in ''|*[!0-9]*) sat_h=6 ;; esac
+  [ "$sat_h" -gt 0 ] || return 0                                      # 0 ⇒ kill switch, alarm off
+  # One jq pass emits "<at-ceiling> <admits>"; `fromjson?` keeps a malformed line from taking the
+  # whole read down, exactly as the newest-record read above does.
+  # -r is load-bearing: the program emits a STRING, and without raw output jq wraps it in literal
+  # double quotes, so both fields fail the is-a-number guard below and the alarm silently fails open.
+  counts="$(jq -Rrn --arg a cc-dispatch --argjson cut "$((now - sat_h * 3600))" '
+      [ inputs | fromjson? | select(type=="object")
+        | select(.actor == $a) | select(.action == "decision")
+        | select( ((.ts // empty) | tostring | (try fromdateiso8601 catch empty)) > $cut ) ] as $w
+      | "\([ $w[] | select(.reason == "at-ceiling") ] | length) \([ $w[] | select(.verdict == "admit") ] | length)"
+    ' "$DISPATCH_IDL" 2>/dev/null || true)"
+  atceil="${counts%% *}"; admits="${counts##* }"
+  case "${atceil:-}" in ''|*[!0-9]*) return 0 ;; esac                 # unreadable ⇒ no verdict
+  case "${admits:-}" in ''|*[!0-9]*) return 0 ;; esac                 # (fail OPEN, never invent)
+  [ "$atceil" -gt 0 ] || return 0                                     # no ceiling pressure ⇒ silent
+  [ "$admits" -eq 0 ] || return 0                                     # it admitted ⇒ healthy
+  printf '{"kind":"dispatch-inert","state":"SATURATED","detail":"deciding but 0 admits in %sh (at ceiling)","subject":"%s","recover_cmd":"cc-backlog reap --dry-run","ts":%s}\n' \
+    "$sat_h" "$DISPATCH_LABEL" "$now"
 }
 
 # ── APPROVAL-REACHABILITY alarms (cc-backlog 1e16815bac51) ───────────────────────────────────────
