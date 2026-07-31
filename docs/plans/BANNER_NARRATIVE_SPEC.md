@@ -1610,5 +1610,40 @@ pixel off a star · a meteor that flies upward · a corridor too short). The ASC
 worth reading — **no clearance check can catch a meteor flying upward**, since an ascending corridor
 is exactly as clear of the wordmark as its mirror image, and the first `shoot_path` returned one
 (it swept `±angle`, which mirrors dy while leaving dx positive). The sign is now asserted on its own.
-The suite stands at **23 gates, 16 proven**; the 7 unproven are the pre-existing set documented
-before this work and are unchanged by it — verified by running the suite against the branch tip.
+The suite stands at **24 gates, 24 proven** — the first fully-green red-proof run this file has had.
+Seven were fixed on trunk by `39064173` while this work sat on a branch; the twenty-fourth was
+**broken by this work and re-derived**: the duty-budget fixture stretched `peek` forward to 66.5s,
+which was clear air until THE SHOOTING STAR took the 62.0s slot, after which the sabotage collided
+with `rShoot` and the disjointness gate convicted first — so the case silently stopped proving the
+budget and started re-proving its neighbour. It now grows the peek BACKWARD into 39.0-58.0s instead.
+**A fixture is a function of the timeline, and adding a beat re-times it**; that is the same class
+of rot the seven were, and it is why this suite is re-run after any change to `RARE_EVENTS` rather
+than only after a change to a gate.
+
+### THE MOON REBUILD IS NOT IN THIS LAND — the split, taken
+
+Trunk carries a standing verdict — *"do not land the moon rebuild"* — and it is **re-measured and
+confirmed here** rather than taken on trust, on a raw centre scanline at 838 px through
+`v6c-dusk-line`:
+
+| | peak on the moon's centre row | across the disc |
+|---|---|---|
+| **trunk** | 195 | crescent 173-194, then a smooth glow 111→110→…→43 |
+| **branch, as rebased** | 158 (elsewhere in the row) | a **flat plateau at 46-54** — no crescent |
+| **after the revert here** | **200** | crescent 178-199, smooth glow 125→…→45 |
+
+So the branch is split exactly as trunk prescribed. **Landed:** the starfield's magnitude tiers, its
+blue-noise/void/collinearity construction, the star keep-out inside the lunar disc, the named knobs,
+and both new sky occurrences. **Reverted to trunk's construction:** `moon()`, `moon_body()`, the day
+sun, and the `halo`/`bloom`/`soft` defs — with `glow_stack`, `band_opacity`, `crescent_d`,
+`moon_frame`, `GLOW_BANDS`, `MOON_AMBIENT`, `MOON_RIM`, `MOON_LIT_DEG`, `MOON_GLOW_*` and
+`MOON_EARTHSHINE` deleted as the dead weight of that construction.
+
+**The day sun went with it, and that was not optional.** The sun and the moon shared `glow_stack`,
+so reverting one and keeping the other would have left the sun lit by a function nothing else used
+and no render had ever judged on its own. The horn-direction knob went too: it parameterised a
+constant that no longer exists, and `banner-sky-ab.py` asserts every substitution matches exactly
+once, so a stale knob is a hard failure on every run rather than a quiet no-op.
+
+**Still open, and now the only sky question left:** re-deriving a crescent from trunk's *smooth*
+glow rather than from the banded rebuild. Trunk names that the honest path and it remains untaken.
