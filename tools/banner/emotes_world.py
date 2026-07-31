@@ -234,22 +234,25 @@ def _pebble() -> Emote:
             window=(3.2, 7.6),
             cls="BEAT",
             tie="",
-            # Off-centre on purpose. The stone must be off-frame at 100 % or the loop pops, and the
-            # roll eats directly into that margin: at the default cx the arithmetic left only 62 px
-            # of legal travel, which renders as a twitch rather than as a roll. Standing the
-            # creature 98 px left buys the runway back, and puts the empty half of the frame on the
-            # side the stone rolls into.
-            cx=150.0,
+            # Off-centre on purpose, and the offset is solved rather than chosen. A world-locked
+            # prop has to be off-frame at BOTH ends of the loop or it pops at the wrap, and those
+            # are two inequalities pulling opposite ways: the stone's authored x must clear the
+            # right edge at 0 %, and that same x plus the roll minus a loop's worth of travel must
+            # clear the left edge at 100 %. The first draft satisfied only the second, and the stone
+            # blinked into existence at the right edge once every twelve seconds — invisible in any
+            # single frame, which is why the arithmetic caught it and the contact sheet did not.
+            # Solved together they fix cx, the rest position and the 2.0 s stop simultaneously.
+            cx=210.0,
         )
     )
     a, b = e.window
     back = (
-        b - 1.7
+        b - 2.4
     )  # the world restarts well before the story ends — the amble IS the third act
     # Authored so the stone is at the toe at `a`. The world track has already carried it
     # -PRINT_TILE*a by then, so the markup x is that displacement added back on.
-    rest_x = 402.0  # 12 px clear of the front foot, which ends at 390
-    roll = 130.0  # …to 532, and 32 px past the left edge by 100 %
+    rest_x = 462.0  # 12 px clear of the front foot, which ends at 450
+    roll = 130.0  # …to 592; authored at 769, so off BOTH edges at 0 % and at 100 %
     art_x = rest_x + PRINT_TILE * a
 
     def props() -> str:
@@ -332,11 +335,17 @@ def _sniff() -> Emote:
             window=(3.0, 7.2),
             cls="BEAT",
             tie="",
+            # Right of centre so the scuff can be authored off the right edge and still sit under
+            # the body when the creature reaches it — the same both-ends-off-frame constraint THE
+            # PEBBLE solves, with the same consequence for where the creature has to stand.
+            cx=300.0,
         )
     )
     a, b = e.window
-    back = b - 0.4
-    mark_x = 396.0 + PRINT_TILE * a  # under the body, not out in front of it
+    back = b - 1.2
+    mark_x = (
+        474.0 + PRINT_TILE * a
+    )  # 762 — off the right edge at 0 %, under the body at `a`
 
     def props() -> str:
         marks = "".join(
@@ -795,7 +804,12 @@ def _follower() -> Emote:
         )
     )
     b_x = -170.0  # authored off the left edge
-    b_travel = 275.0  # …to 105, which leaves 33 px of sky to the resident's 248
+    b_travel = (
+        250.0  # …to 80, which leaves 58 px of sky to the resident's 248. Measured, not
+    )
+    #                   eyeballed: two same-coloured sprites that touch merge into one orange
+    #                   region and read as a rendering fault, so the loop was swept at 0.6 s
+    #                   and the tightest gap in the sample is the number quoted here.
     sync0, sync1 = 3.6, 7.4
 
     def props() -> str:
