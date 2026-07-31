@@ -138,9 +138,21 @@ com.claude.capacity-alarm         | run    | 600  | ~/.claude/logs/capacity-alar
 # Declared here so the inertness is READABLE (existence evidence comes from the DECLARATION, not from
 # the subject's success).
 #
-# `staged`, from disk truth: not in ~/Library/LaunchAgents, not loaded. Exactly ONE UNDECIDED row —
-# "declared, decision pending" — never a daemon-fault row, because nothing is broken; an operator
-# decision is outstanding. Row 7's owner flips this to `run` after activating.
+# `run` since 2026-07-31, from disk truth: the operator RAN 21-relogin-poll-activate.sh on 2026-07-30
+# (pending-activation/21-relogin-poll-activate.sh.done), and the job is installed in
+# ~/Library/LaunchAgents, enabled, bootstrapped (`launchctl print gui/501/com.claude.relogin` →
+# runs=17, last exit code 0) and appending to its evidence log every 3600s.
+#
+# It was declared `staged` — "declared, decision pending", exactly ONE UNDECIDED row — for the four
+# days before that activation, which was correct THEN and became a lie the moment the operator acted.
+# `staged` is the one expect that never resolves on its own: cc-fleet ran the state function and got
+# HEALTHY, then printed `staged: HEALTHY; decision pending` and a recover_cmd telling the operator to
+# run an activation script that had ALREADY completed. So the row survived its own premise while
+# looking maximally healthy — the unreadable-inertness this file exists to end, inverted. A `staged`
+# row is a CLAIM ABOUT AN OPERATOR DECISION, and nothing on this box re-checks it; whoever activates
+# is the only one who can retire it, and this is that flip. (Left as-is it also masks the reverse: an
+# `expect=run` relogin that stops running IS a daemon fault and must row — under `staged` it could
+# never say so, because UNDECIDED outranks every state the sensor computes.)
 #
 # evidence is the PER-TICK artifact, NOT `auto`: the plist's StandardOutPath is cc-relogin-poll.out.log,
 # but the poller writes every line through its own log() to cc-relogin-poll.log and the launchd args
@@ -153,7 +165,7 @@ com.claude.capacity-alarm         | run    | 600  | ~/.claude/logs/capacity-alar
 # relogin-blocked row. Keying S4 on exit != 0 would put a permanent, unfixable FAILING row on a job
 # doing precisely its job (plan §5 F20, deploy-live's exit 1 is the same shape). Exit 3
 # (DETECTION-UNAVAILABLE) is deliberately NOT ok — "cannot tell whether a re-login is due" must row.
-com.claude.relogin                | staged | 3600 | ~/.claude/logs/cc-relogin-poll.log | 7 | 21-relogin-poll-activate.sh | 0,5
+com.claude.relogin                | run    | 3600 | ~/.claude/logs/cc-relogin-poll.log | 7 | 21-relogin-poll-activate.sh | 0,5
 # ── com.claude.scratchpad-reaper — a TRUNK REPAIR, not row 7's artifact ────────────────────────────
 # `97d4984b feat(growth): scratchpad-reaper for the /private/tmp per-session tree` landed
 # launchd/com.claude.scratchpad-reaper.plist with NO manifest row, which puts BOTH the three-way
