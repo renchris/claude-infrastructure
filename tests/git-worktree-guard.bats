@@ -20,8 +20,20 @@ setup() {
 }
 
 teardown() {
+  # Kill the liveness probe FIRST. A backgrounded grandchild that outlives the test holds bats' TAP
+  # fd open and wedges the whole run (memory: fixture-lifetime-is-an-orphan-leak-bound) — which is
+  # why the probe below is spawned with all three fds detached and is killed unconditionally here.
+  [ -n "${PROBE_PID:-}" ] && kill "$PROBE_PID" 2>/dev/null && wait "$PROBE_PID" 2>/dev/null
   git -C "$REPO" worktree remove --force "$TDIR/wt-held" 2>/dev/null || true
   rm -rf "$TDIR"
+}
+
+# Spawn a process that (a) matches `pgrep -f claude` and (b) is cwd'd in $1 — i.e. exactly what the
+# liveness leg exists to find. `exec -a` sets argv[0], which is what pgrep -f reads.
+spawn_live_probe() {
+  ( cd "$1" && exec -a "claude-guard-liveprobe" sleep 120 ) >/dev/null 2>&1 </dev/null &
+  PROBE_PID=$!
+  sleep 0.4   # let the exec land so lsof can see the cwd
 }
 
 run_guard() {  # $1 = the bash command string
@@ -49,6 +61,27 @@ run_guard() {  # $1 = the bash command string
 @test "-C form reaches the worktree-remove leg (idle path still passes)" {
   cd "$TDIR"
   run run_guard "git -C $REPO worktree remove $TDIR/nonexistent-wt"
+  [ "$status" -eq 0 ]
+}
+
+# ── the liveness leg's own verdict — the guard's WHOLE PURPOSE, previously untested ──────────────
+# Tests 3/4 only assert the remove leg PASSES on idle, so the suite went green whether the guard
+# blocked a live worktree or fell wide open (this file's own header: test 4 "discriminates nothing").
+# That is the fail-open-pinned-by-its-own-suite shape (memory: present-but-inverted-guard). These two
+# pin both directions, and together they discriminate the batched lsof: a batch that lost the exact
+# cwd match would block test B, and one that lost the population would miss test A.
+@test "A: worktree remove of a LIVE worktree (process cwd'd in it) is BLOCKED" {
+  cd "$REPO"
+  spawn_live_probe "$TDIR/wt-held"
+  run run_guard "git worktree remove $TDIR/wt-held"
+  [ "$status" -eq 2 ]
+}
+
+@test "B: worktree remove of a real IDLE worktree passes despite claude processes elsewhere" {
+  cd "$REPO"
+  git -C "$REPO" worktree add -q "$TDIR/wt-idle" -b idle-branch
+  spawn_live_probe "$TDIR"           # live, matches pgrep — but cwd'd OUTSIDE the target worktree
+  run run_guard "git worktree remove $TDIR/wt-idle"
   [ "$status" -eq 0 ]
 }
 

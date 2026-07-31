@@ -62,9 +62,18 @@ if printf '%s' "$ncmd" | grep -qE 'git worktree remove([[:space:]]|$)'; then
   [ -n "${wt:-}" ] || exit 0
   wtabs="$(cd "$wt" 2>/dev/null && pwd -P || echo "$wt")"
   live=0
-  for cpid in $(pgrep -f claude 2>/dev/null | sort -u); do
-    if lsof -a -p "$cpid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | grep -qxF "$wtabs"; then live=1; break; fi
-  done
+  # ONE lsof over the whole candidate set — never one per pid. `pgrep -f claude` matches the FULL
+  # argv, so it returns every process whose command line merely CONTAINS the string: measured 73-78
+  # pids here, of which only ~13 are actually claude (the rest are bash/zsh/tee/timeout wrappers and
+  # agent briefs that mention it). The old per-pid loop paid one lsof for each — 5.98 s per hook
+  # invocation, vs 0.092 s batched (65x; tests/git-worktree-guard.bats took 263 s because of it).
+  # Deliberately NOT fixed by narrowing the matcher or adding a timeout: this is a SAFETY refusal, so
+  # a smaller population or a bound that gives up can only make it fail OPEN — permitting a removal
+  # it should block. Batching keeps the population and the predicate byte-identical; it is the same
+  # check, spawned once. The -n guard is load-bearing: `lsof -p ""` lists EVERY process on the box
+  # (measured 1890 lines), which would silently widen the predicate to "anyone, anywhere".
+  cpids="$(pgrep -f claude 2>/dev/null | sort -u | paste -sd, -)"
+  if [ -n "$cpids" ] && lsof -a -p "$cpids" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | grep -qxF "$wtabs"; then live=1; fi
   if [ "$live" = "0" ] && command -v lsof >/dev/null 2>&1 && lsof -- "$wtabs" 2>/dev/null | grep -q .; then live=1; fi
   if [ "$live" = "1" ]; then
     echo "git-worktree-guard: BLOCKED 'git worktree remove $wt' — a live process (likely a Claude session) is cwd'd in / has files open under it. Removing it now yanks the worktree out from under active work (clean tree != idle session). Let 'bash scripts/worktree-gc.sh --prune' handle reaping — it KEEPS anything live and only removes clean+merged+idle>30m worktrees, preserving the branch. Or wait for that session to finish." >&2
