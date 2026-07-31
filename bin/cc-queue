@@ -273,6 +273,8 @@ build_rows(){
 
 # ── the exact blocked command (never a paraphrase — Silver-Platter) ──────────────────────────────
 # tool_input shape is per-tool; render the field that IS the blocked action.
+# shellcheck disable=SC2016  # jq PROGRAM TEXT: $i and .tool are jq variables/filters and must
+# reach jq unexpanded. Double quotes here would let the shell eat them.
 describe_filter='
   def desc:
     (.tool_input // {}) as $i
