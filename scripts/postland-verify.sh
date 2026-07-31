@@ -265,6 +265,9 @@ CUT_MAX="${CC_POSTLAND_CUT_MAX:-3}"                    # consecutive cuts on one
 CUT_COOLOFF="${CC_POSTLAND_CUT_COOLOFF:-1800}"         # ...and before the box is fed another suite
 
 FAILING=(); SYNTAX_BAD=(); RETRIES=0; NFLAKE=0; FAILTEST=""; RUN_TMP=""; IDL_DONE=0; ENV_FP='{}'; CUT=0
+# WHY the cut fired, in the CUT log line. Default names case (a); case (c) overwrites it. A fixed
+# string here would have the log assert "zero not-ok" about a run that carried one — see C13c.
+CUT_WHY='zero not-ok in a non-zero run - truncated'
 CORPUS_LIST=""       # the ONE ordered TREE-corpus list (see build_corpus) — bats runs exactly this
 HOST_SKIPPED=0       # how many suites the host manifest partitioned OUT of the tree verdict
 # ── hang evidence (reset per run_target) ─────────────────────────────────────────────────────────
@@ -625,8 +628,12 @@ retry_once() { # <file> <testname> <tmpdir> → rc of ONE re-run (124 = OUR boun
   ( cd "$WORKTREE" && TMPDIR="$td" bounded "$RETRY_TO" "${QOS[@]}" "$BATS_BIN" "$f" ) >/dev/null 2>&1 || rc=$?
   return "$rc"
 }
-classify_failures() { # <tapfile> — retry ladder: >=2/3 = REPRODUCIBLE, 1/3 = flake, 124 = no verdict
-  local pairs f t rc i tdir fails notok abstain ABSTAIN_RC arc why
+classify_failures() { # <tapfile> <rc> — retry ladder: >=2/3 = REPRODUCIBLE, 1/3 = flake, 124 = no verdict
+  # <rc> is the CORPUS run's exit code, and it is load-bearing for case (c) below: without it this
+  # function cannot tell a failure of the tree from a run we killed ourselves. Defaults to 1 (bats'
+  # "something failed") so an omitted argument can only ever preserve the old convicting behaviour,
+  # never invent a cut.
+  local pairs f t rc i tdir fails notok abstain ABSTAIN_RC arc why tap_rc="${2:-1}"
   # TAP: `not ok N <name>` followed by a `# (in test file tests/X.bats, line N)` diagnostic.
   pairs="$(awk '/^not ok /{p=1; n=$0; sub(/^not ok [0-9]+ /,"",n); next}
                 /^#/ && p { if (match($0, /[A-Za-z0-9_.\/-]+\.bats/)) { print substr($0,RSTART,RLENGTH) "\t" n; p=0 } }' "$1" \
@@ -641,9 +648,36 @@ classify_failures() { # <tapfile> — retry ladder: >=2/3 = REPRODUCIBLE, 1/3 = 
     #       "net not adopted ⇒ trust". Verified 2026-07-26: 4 of the last 5 runner.log
     #       verdicts were `failing=tests/ retries=0` — i.e. all four were cuts, not reds.
     #   (b) `not ok` lines exist but carry no `# (in test file …)` diagnostic ⇒ a GENUINE red
-    #       we merely cannot attribute to a file. It stays RED — see C13b.
+    #       we merely cannot attribute to a file. It stays RED — see C13b — but ONLY when the rc
+    #       is bats speaking about the tree; see (c).
+    #   (c) the SAME shape as (b) in a run that never returned a verdict at all (C13c). bats
+    #       answers with exactly TWO codes about the tree: 0 = all passed, 1 = something failed.
+    #       Every other code says the run could not be MADE — 124 is OUR bound, >128 is a machine
+    #       signal, 126/127 could not execute — so an unattributable `not ok` inside one is not
+    #       evidence about the tree, and (b) must not convict on it. This was the LAST rc-blind
+    #       site in the file; C23 already applies this identical predicate one function below, and
+    #       C22/confirm_hang/classify_hang/the stall unify all apply it too. MEASURED: runner.log
+    #       2026-07-30T06:04:21Z stamped `RED 4399852f21c2 failing=tests/ retries=0` 41s after its
+    #       own `STALL … at test 0 — cutting the run`, minting a backlog item that pointed at a
+    #       DIRECTORY. `retries=0` is the tell — (b) returns before the ladder can run.
     notok="$(grep -c '^not ok' "$1" 2>/dev/null || true)"; notok="${notok:-0}"
     if [ "$notok" -eq 0 ]; then CUT=1; return 0; fi
+    case "$tap_rc" in
+      0|1) ;;                                   # the only two codes that speak about the tree
+      *)   CUT=1                                # 124 / >128 signal / 126 / 127 ⇒ nothing proven
+           FAILTEST="$(sed -n 's/^not ok [0-9]* //p' "$1" 2>/dev/null | head -1 | cut -c1-120)"
+           [ -n "$FAILTEST" ] || FAILTEST="(unattributed)"
+           # Name WHICH non-verdict fired, for the same reason C23 does: a fixed message would
+           # misattribute a SIGKILL to our timeout and send the next reader hunting a slow test.
+           if   [ "$tap_rc" -eq 124 ]; then why="our own bound cut the run"
+           elif [ "$tap_rc" -gt 128 ]; then why="the run was KILLED by signal $(( tap_rc - 128 )) (machine pressure, not the tree)"
+           elif [ "$tap_rc" -eq 126 ] || [ "$tap_rc" -eq 127 ]; then why="the run could not execute (rc $tap_rc)"
+           else why="the run exited $tap_rc — not a tree verdict (bats says 0=pass, 1=fail)"
+           fi
+           CUT_WHY="unattributable not-ok (${FAILTEST}) in a run that reached no verdict — $why"
+           log "corpus UNPROVEN — $why; the one unattributable not-ok proves nothing (cut, not red)"
+           return 0 ;;
+    esac
     # NAME-CARRY (b): TAP names the TEST on the `not ok` line even when it never names the
     # FILE. Recording the opaque "(unattributed)" threw that name away, leaving a page that
     # reads exactly like the signal-death case (a) it was just separated from — the operator
@@ -954,6 +988,7 @@ run_target() { # <sha> — the whole check-set + verdict for ONE sha
   t0="$(now_epoch)"; env_fingerprint            # captured at run START — a green is env-relative
   RUN_TMP="$(mktemp -d "$TMPBASE/postland-run.XXXXXX")" || return 1
   FAILING=(); FAILTEST=""; RETRIES=0; NFLAKE=0; CUT=0; LADDER_UNPROVEN=0   # reset per requeue pass
+  CUT_WHY='zero not-ok in a non-zero run - truncated'
   DEATH_SIG=""; WEDGE_AT=""; SUSPECT=""; REPRODUCED=false
   syntax_check
   tap="$RUN_TMP/bats.tap"; : > "$tap"; rc=0
@@ -1019,7 +1054,7 @@ EOF
     fi
   fi
   adv="$(sc_count)"
-  [ "$rc" -eq 0 ] || classify_failures "$tap"
+  [ "$rc" -eq 0 ] || classify_failures "$tap" "$rc"
   [ "${#SYNTAX_BAD[@]}" -eq 0 ] || FAILING+=("${SYNTAX_BAD[@]}")
   # A meta-lint whose own bound fired proves nothing — so an otherwise-clean run may NOT be stamped
   # green off the back of a check that never returned. Downgrade to the cut path: honest, retried
@@ -1047,7 +1082,7 @@ EOF
     write_stamp "$tree" "$sha" cut "$run_s" "$RETRIES" "$adv"
     n="$(cut_bump "$tree")"
     [ "$n" -ge "$CUT_MAX" ] && cut_page "$sha" "$tree" "$n"
-    log "CUT $(sha12 "$sha") tree=$(sha12 "$tree") run_s=$run_s retries=$RETRIES sc_adv=$adv consecutive=$n (zero not-ok in a non-zero run - truncated; will retry)"
+    log "CUT $(sha12 "$sha") tree=$(sha12 "$tree") run_s=$run_s retries=$RETRIES sc_adv=$adv consecutive=$n ($CUT_WHY; will retry)"
     echo "postland-verify: CUT $(sha12 "$sha") (${run_s}s) - run truncated, not red; retrying next sweep"
   elif [ "${#FAILING[@]}" -eq 0 ]; then
     write_stamp "$tree" "$sha" green "$run_s" "$RETRIES" "$adv"

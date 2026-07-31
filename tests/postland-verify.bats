@@ -548,6 +548,50 @@ add_stateful_test() {   # $1 = basename, $2 = body of the helper script
   run jq -r '.verdict' "$s"; [ "$output" = "red" ]
 }
 
+# ── C13c the NAME-CARRY branch must ask WHOSE bound fired ────────────────────────────────────────
+# The LAST 124-blind site in the SUT, and the twin of C23 one function away. C13's cut guard keys on
+# `notok == 0`; the name-carry branch beneath it (C13b — `not ok` present, no `# (in test file …)`)
+# then files RED without ever reading rc — so a run OUR OWN bound cut, which happens to carry one
+# unattributable `not ok`, is convicted as a reproducible failure of the tree. bats answers with
+# exactly TWO codes about the tree (0 = all passed, 1 = something failed); every other code says the
+# run could not be MADE, which is the predicate C23 already applies at the retry site (`case $rc in
+# 0|1`). MEASURED — this is not hypothetical: runner.log 2026-07-30T06:04:21Z stamped
+# `RED 4399852f21c2 failing=tests/ run_s=999 retries=0 flakes=0`, 41 s after its own
+# `STALL: no TAP progress for 900s at test 0 — cutting the run`. `retries=0` is the tell that this
+# branch returned before the ladder ever ran, and `failing=tests/` is reachable from nowhere else.
+# That verdict minted the backlog item "post-land RED: tests/ @ 4399852f21c2" — an item pointing at a
+# DIRECTORY, unactionable by construction — and on a run where the bisect DOES decide, red_actions
+# passes that culprit to auto_revert, so a loaded box can revert a commit off a run in which nothing
+# failed. Same event at 05:47:21Z (9586f1ac51f5); a third stall at 06:25:03Z landed GREEN on its
+# requeue — the tree was fine throughout.
+# THE DISCRIMINATING CONTROL IS ALREADY IN THIS SUITE and must stay green: "C13b: a not-ok with NO
+# file diagnostic stays RED and carries the test NAME" drives the byte-identical TAP at rc 1, where
+# bats IS speaking about the tree. rc is the only axis between the two, which is exactly the fix.
+@test "C13c: an unattributable not-ok in a run OUR OWN bound cut is never a RED" {
+  fake="$BATS_TEST_TMPDIR/bats-stallcut"
+  # One unattributable `not ok` (no file diagnostic ⇒ the name-carry branch), then WEDGES — so the
+  # stall watcher is the only thing that can end the run and rc is OURS (124), never bats' verdict.
+  # sleep 30, not 600: the stall bound below cuts at ~4s, so anything past that is pure headroom —
+  # and this fixture's lifetime is also the BOUND on a leak. If the corpus shape ever lets
+  # classify_hang map a suspect, confirm_hang re-runs this same fake under FILE_TO (300s); an
+  # orphaned grandchild would hold the outer bats TAP fd for exactly as long as the sleep.
+  printf '#!/bin/bash\n[ "$1" = --version ] && { echo "Bats 1.13.0"; exit 0; }\necho "1..1"\necho "not ok 1 boom"\nsleep 30\n' > "$fake"
+  chmod +x "$fake"
+  tree="$(origin_tree)"
+  run env CC_POSTLAND_BATS="$fake" POSTLAND_STALL_S=3 POSTLAND_STALL_POLL_S=1 \
+      bash "$SUT" --run-if-needed
+  s="$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ -f "$s" ]
+  # cut and hung are BOTH legitimate landings for "our bound fired" (classify_hang decides between
+  # them on whether the suspect maps and re-wedges alone). The invariant this test pins is the one
+  # the defect broke: it is not a RED, and it never files the `tests/` sentinel.
+  run jq -r '.verdict' "$s"; [ "$output" != "red" ]
+  [ "$(pages_n)" = "0" ]                                   # C10: pages are RED-only
+  run grep -c 'failing=tests/' "$CC_POSTLAND_DIR/runner.log"
+  [ "$output" = "0" ]
+  [ ! -f "$CC_POSTLAND_DIR/last-green" ]                   # a non-verdict earns nothing either
+}
+
 # ── C13 a CUT stamp is a DIAGNOSTIC, never a verdict ────────────────────────────
 # c605a2e correctly reclassified signal-death as CUT rather than RED, and stamps
 # `cut` for diagnosability. But C5's abstain keyed on stamp EXISTENCE, so the very
