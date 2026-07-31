@@ -24,7 +24,10 @@
 # (lib → mailbox_keyset). Hence the no-arg form is the one to advertise — it derives the same key
 # cc-notify resolves, then covers the rest.
 #
-# Exit: 0 = new line(s) arrived (printed to stdout); 2 = timed out; 3 = no uuid/role;
+# Exit: 0 = new line(s) arrived (printed to stdout); 2 = timed out — the DESIGNED end of a watch that
+#           ran its term, echoed as `verdict=timeout` on stderr because the harness labels every
+#           non-zero background exit "failed" (see the exit path at the foot of this file);
+#       3 = no uuid/role;
 #       4 = line(s) DELIVERED but the shared cursor could not be advanced (F9 — you WILL see this mail
 #           again; that is a dup, not a loss). Loud on purpose: a cursor-write failure that exits 0 is
 #           indistinguishable from a clean take.
@@ -231,5 +234,19 @@ while [ "$elapsed" -lt "$TIMEOUT" ]; do
   elapsed=$((elapsed + INTERVAL))
 done
 
-echo "cc-await-ping: timed out after ${TIMEOUT}s — no new ping for $CUR_UUID" >&2
+# ── THE TIMEOUT IS A VERDICT, NOT A FAULT — SAY SO IN THE STREAM THAT SURVIVES ──────────────────
+# rc 2 here means "the full watch elapsed with no ping", which is the NORMAL end of a healthy 14400 s
+# arm. Its READER cannot tell: the Claude Code background-task classifier is `isError: exitCode !== 0`
+# with a hardcoded per-basename exemption table compiled into the binary (grep's rc 1 is in it; there
+# is no user-extensible entry), so the harness renders this as `failed with exit code 2` / status
+# `failed` / telemetry `task_local_shell_failed`. A model re-invoked by that notification has triaged
+# a clean timeout as a fault. We cannot change the classifier — but the notification carries STDERR
+# (stdout is dropped; docs/research/mechanical-wake-asyncrewake-2026-07-29.md), so the discrimination
+# can ride the stream the reader actually gets. Same `verdict=<token>` convention cc-notify (:294) and
+# cc-announce use for exactly this reason: the exit code is for shells, the token is for readers.
+#
+# NOT remapped to exit 0. rc 2 is load-bearing for cc-wait (:138 branches on it) and is already
+# overloaded with the usage errors at :46-52 — collapsing it would invert a contract and lose a
+# distinction, to satisfy a classifier that would still be wrong about rc 3/4/5.
+echo "cc-await-ping: verdict=timeout elapsed=${TIMEOUT}s uuid=${CUR_UUID} — no ping arrived. This is the DESIGNED outcome of a watch that ran its full term, not a failure: exit 2 here means 'nothing came', and the harness labels every non-zero exit 'failed'. Nothing is wrong and nothing needs debugging — if you are still going idle, RE-ARM (the watcher clears its own heartbeat on exit, so you are deaf until you do)." >&2
 exit 2

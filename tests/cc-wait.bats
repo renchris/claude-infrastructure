@@ -81,3 +81,51 @@ setup() {
   cf="$(ls "$CC_WAIT_CONTRACTS_DIR"/*.json | head -1)"
   [ "$(jq -r '.status' "$cf")" = "SATISFIED" ]
 }
+
+# ══ THE WATCHER'S NON-ZERO CODES ARE VERDICTS, NOT ONE UNDIFFERENTIATED FAILURE (2026-07-31) ═════
+# The deadline arm used to be a bare fall-through from `rc -eq 0`, while its comment asserted
+# "cc-await-ping exit 2". So two designed verdicts were reported as their own opposite: rc 4 (the mail
+# WAS delivered, only the cursor write failed) closed TIMED_OUT and paged "you may have missed your own
+# wake" about a wake that happened, and rc 5 (orphaned — the waiter is provably gone) paged a corpse.
+# Glob expansion, not `ls` (SC2012): the contracts dir holds exactly one file per test here.
+contract_file() { local f; for f in "$CC_WAIT_CONTRACTS_DIR"/*.json; do [ -f "$f" ] && { printf '%s' "$f"; return 0; }; done; return 1; }
+awaiter_rc() { local p="$BATS_TEST_TMPDIR/await-rc$1"; printf '#!/bin/bash\nexit %s\n' "$1" > "$p"; chmod +x "$p"; printf '%s' "$p"; }
+
+@test "rc 4: the signal LANDED (cursor write failed) ⇒ SATISFIED, never a deadline page" {
+  run env CC_AWAIT_BIN="$(awaiter_rc 4)" "$WAIT" --waiter "$UUID" --waitee peer --signal ping --deadline 60 --on-timeout reobserve
+  [ "$status" -eq 0 ]
+  cf="$(contract_file)"
+  [ "$(jq -r '.status' "$cf")" = "SATISFIED" ]
+  [[ "$output" != *"past deadline"* ]] || false
+}
+
+@test "rc 5: ORPHANED waiter ⇒ ABORTED (exit 6), no deadline claim, nobody paged" {
+  run env CC_AWAIT_BIN="$(awaiter_rc 5)" "$WAIT" --waiter "$UUID" --waitee peer --signal ping --deadline 60 --on-timeout reobserve
+  [ "$status" -eq 6 ]
+  cf="$(contract_file)"
+  [ "$(jq -r '.status' "$cf")" = "ABORTED" ]
+  [[ "$output" != *"past deadline"* ]] || false
+  [[ "$output" == *"provably gone"* ]] || false
+}
+
+@test "rc 3: nothing to watch ⇒ ABORTED, distinct from a timeout" {
+  run env CC_AWAIT_BIN="$(awaiter_rc 3)" "$WAIT" --waiter "$UUID" --waitee peer --signal ping --deadline 60 --on-timeout reobserve
+  [ "$status" -eq 6 ]
+  [ "$(jq -r '.status' "$(contract_file)")" = "ABORTED" ]
+}
+
+@test "DISCRIMINATOR: rc 2 still means the deadline, and still pages (the arm did not widen)" {
+  run env CC_AWAIT_BIN="$(awaiter_rc 2)" "$WAIT" --waiter "$UUID" --waitee peer --signal ping --deadline 60 --on-timeout reobserve
+  [ "$status" -eq 5 ]
+  [ "$(jq -r '.status' "$(contract_file)")" = "TIMED_OUT" ]
+}
+
+@test "the timeout verdict names itself as designed, so its reader does not triage it as a fault" {
+  # The harness renders any non-zero background exit as `failed with exit code N`, so the only place a
+  # clean timeout can declare itself is the stderr the notification carries.
+  run "$REPO/bin/cc-await-ping" "$UUID" --timeout 1 --interval 1
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"verdict=timeout"* ]] || false
+  [[ "$output" == *"DESIGNED outcome"* ]] || false
+  [[ "$output" == *"RE-ARM"* ]] || false
+}
