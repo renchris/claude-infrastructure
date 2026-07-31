@@ -57,6 +57,32 @@ REAL_IT2="${IT2_WRAPPER_REAL:-$REAL_IT2}"
 PYTHON_BIN="${IT2_WRAPPER_PYTHON:-$PYTHON_BIN}"
 TIMEOUT_S="${IT2_WRAPPER_TIMEOUT_S:-30}"
 
+# ── TERMINAL DISPATCH (2026-07-31) ───────────────────────────────────────────────────────────────
+# Claude Code's ITermBackend spawns a PATH-resolved `it2`; it never links against iTerm2 and never
+# handshakes with it. So when this process is running inside KITTY, the honest thing to do is answer
+# the same five subcommands against kitty instead of forwarding to an iTerm2 CLI that has no iTerm2
+# to talk to. That is what bin/it2-kitty does, and it yields NATIVE kitty split panes for Agent Teams
+# assignee sessions — visible in the operator's window, no tmux, no fork of either application.
+#
+# Deliberately placed BELOW the seam assignments: handoff-fire.sh scrapes this file with an anchored
+# `sed -n 's/^REAL_IT2="\(.*\)"$/\1/p'`, and tests/it2-wrapper.bats pins that contract. Nothing here
+# matches that pattern.
+#
+# FAIL-SAFE BY CONSTRUCTION — the divert requires BOTH a kitty pane id AND the translator to exist
+# on disk. On iTerm2, KITTY_WINDOW_ID is unset and this block is inert, so every iTerm2 behaviour
+# below (never-prompt profile injection, the force=True close, the process bound) is untouched.
+# IT2_WRAPPER_NO_KITTY=1 forces the old path for A/B testing.
+if [[ -n "${KITTY_WINDOW_ID:-}" && -z "${IT2_WRAPPER_NO_KITTY:-}" ]]; then
+  _it2_kitty="$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || printf '%s' "${BASH_SOURCE[0]}")")/it2-kitty"
+  if [[ -x "$_it2_kitty" ]]; then exec "$_it2_kitty" "$@"; fi
+  # Present-but-not-executable is a THIRD state, not "use iTerm2": forwarding to a real it2 from
+  # inside kitty would fail confusingly several frames deeper (or worse, drive a background iTerm2).
+  if [[ -e "$_it2_kitty" ]]; then
+    printf 'it2-wrapper: %s exists but is not executable — refusing to fall through to iTerm2 from inside kitty\n' "$_it2_kitty" >&2
+    exit 4
+  fi
+fi
+
 # Resolve a timeout(1). PATH alone is NOT enough: the hooks and launchd jobs that
 # fork this wrapper run with a minimal PATH that excludes Homebrew — exactly where
 # coreutils installs it — so a PATH-only lookup would leave the AUTOMATED callers
