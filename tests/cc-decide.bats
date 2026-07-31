@@ -270,3 +270,102 @@ _raw_pkt() {  # $1=id $2=class [$3=extra jq object merged in]
   echo "$output" | grep -q "b-item"
   ! echo "$output" | grep -q "a-item"
 }
+
+# ══ subject_project + default_effect — the two PRODUCER-DECLARED fields (item f32588a73993) ═════
+# The actuator (scripts/autonomy-sweep.sh) files a fired class-B default as a backlog item and can
+# recover NEITHER fact after the fact: it runs from launchd with cwd=/, and the only trace of the
+# subject is prose. Both are therefore declared at `open` and REPORTED on the fired line. Both fail
+# OPEN — absent reads as "-"/"change", the pre-fix behaviour — because rc-2'ing a legacy producer
+# mid-STOP-ASK would turn a missing annotation into a lost packet.
+
+@test "open records subject_project and default_effect verbatim" {
+  id=$(bash "$CD" open --class B --what "annotated one" --default "hold" \
+        --deadline "2099-01-01T00:00:00Z" --project doc_classifier --default-effect no-change)
+  run jq -r '.subject_project' "$CC_DECISIONS_DIR/$id.json"; [ "$output" = "doc_classifier" ]
+  run jq -r '.default_effect'  "$CC_DECISIONS_DIR/$id.json"; [ "$output" = "no-change" ]
+}
+
+@test "open WITHOUT the new flags still writes both keys, empty (fail-open, not absent)" {
+  # Present-but-empty, never missing: a reader distinguishing "" from a real value needs the key to
+  # exist. `has()` is the assertion — `// ""` would pass on a packet that omitted the key entirely.
+  id=$(bash "$CD" open --class B --what "unannotated one" --default d --deadline "2099-01-01T00:00:00Z")
+  run jq -e 'has("subject_project") and has("default_effect")' "$CC_DECISIONS_DIR/$id.json"
+  [ "$status" -eq 0 ]
+  run jq -r '.subject_project + "|" + .default_effect' "$CC_DECISIONS_DIR/$id.json"; [ "$output" = "|" ]
+}
+
+@test "the new fields do NOT change the packet id (annotating must not mint a second packet)" {
+  # mk_id is class+sid+what ONLY. If either field entered the content key, re-opening the same fork
+  # with an added annotation would fork the ledger into two packets for one decision.
+  a=$(bash "$CD" open --class B --what "same fork" --default d --deadline "2099-01-01T00:00:00Z")
+  rm -f "$CC_DECISIONS_DIR/$a.json"
+  b=$(bash "$CD" open --class B --what "same fork" --default d --deadline "2099-01-01T00:00:00Z" \
+        --project proj-x --default-effect change)
+  [ "$a" = "$b" ]
+}
+
+@test "open REFUSES an unrecognised --default-effect (closed value set)" {
+  # Folding a typo silently to "change" would dispatch a worker on a no-change default while the
+  # packet READ as annotated — the worst of both states.
+  run bash "$CD" open --class B --what "typo" --default d --deadline "2099-01-01T00:00:00Z" \
+    --default-effect nochange
+  [ "$status" -eq 2 ]
+  echo "$output" | grep -q "change|no-change"
+}
+
+@test "open REFUSES --default-effect on class-C (it has no default to describe)" {
+  run bash "$CD" open --class C --what "waits" --default-effect no-change
+  [ "$status" -eq 2 ]
+  run bash "$CD" open --class C --what "waits"          # the same packet without it is fine
+  [ "$status" -eq 0 ]
+}
+
+# ── expire-sweep REPORTS both fields, normalised, in a collapse-proof line ─────
+@test "expire-sweep reports project + effect: fired<TAB>id<TAB>project<TAB>effect<TAB>default" {
+  id=$(bash "$CD" open --class B --what "fires annotated" --default "park it" \
+        --deadline "2000-01-01T00:00:00Z" --project voiceink --default-effect no-change)
+  run bash "$CD" expire-sweep
+  [ "$status" -eq 0 ]
+  line="$(echo "$output" | grep "$id")"
+  IFS=$'\t' read -r f1 f2 f3 f4 f5 <<< "$line"
+  [ "$f1" = "fired" ];    [ "$f2" = "$id" ];   [ "$f3" = "voiceink" ]
+  [ "$f4" = "no-change" ]; [ "$f5" = "park it" ]
+}
+
+@test "COLLAPSE CONTROL: with NO project the default still lands in field 5, not field 4" {
+  # Tab is IFS-*whitespace*, so an EMPTY project cell collapses the run and shifts every later
+  # field one position LEFT — silently, at rc 0 (docs/research/TSV_FIELD_COLLAPSE_2026-07-25.md).
+  # That would put the EFFECT where the actuator reads the project, and the DEFAULT where it reads
+  # the effect, on exactly the un-annotated packets this feature exists to keep working. The pad is
+  # the fix and this is its RED-provable control: drop `cell("-")` and f5 goes empty.
+  id=$(bash "$CD" open --class B --what "fires bare" --default "carry this out" \
+        --deadline "2000-01-01T00:00:00Z")
+  run bash "$CD" expire-sweep
+  line="$(echo "$output" | grep "$id")"
+  IFS=$'\t' read -r f1 f2 f3 f4 f5 <<< "$line"
+  [ "$f3" = "-" ]                       # padded placeholder, never an empty cell
+  [ "$f4" = "change" ]                  # absent effect NORMALISES to change (fail-open)
+  [ "$f5" = "carry this out" ]          # ...so the default is still the LAST field
+}
+
+@test "expire-sweep normalises an UNRECOGNISED on-disk default_effect to change (fail-open)" {
+  # A hand-written packet bypasses `open`'s validation, so the sweep must still land somewhere
+  # safe. "change" is that place: a surplus work item is visible, a dropped one is silent.
+  _raw_pkt legacy-junk-effect B \
+    '{veto_deadline:"2000-01-01T00:00:00Z", default_if_no_veto:"do the thing", default_effect:"maybe"}'
+  run bash "$CD" expire-sweep
+  line="$(echo "$output" | grep "legacy-junk-effect")"
+  IFS=$'\t' read -r f1 f2 f3 f4 f5 <<< "$line"
+  [ "$f4" = "change" ]; [ "$f5" = "do the thing" ]
+}
+
+@test "a TAB inside the default text cannot shift the structured fields" {
+  # The structured cells precede the operator-written free text precisely so that nothing typed
+  # into a default can move a field the actuator branches on.
+  id=$(bash "$CD" open --class B --what "tabby" --default "$(printf 'left\tright')" \
+        --deadline "2000-01-01T00:00:00Z" --project pj --default-effect no-change)
+  run bash "$CD" expire-sweep
+  line="$(echo "$output" | grep "$id")"
+  IFS=$'\t' read -r f1 f2 f3 f4 f5 <<< "$line"
+  [ "$f3" = "pj" ]; [ "$f4" = "no-change" ]
+}

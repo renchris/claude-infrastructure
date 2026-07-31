@@ -28,12 +28,21 @@ The desk calls these directly; there is nothing to schedule. Backing store:
 gate-classify.sh "monthly spend cap reached on next2 — no reset time"      # → B …
 cc-decide open --class B --what "which account to continue on" \
   --option "next2::continue on next2 quota" --recommendation "next2 — most quota" \
-  --default "continue cross-account on next2" --deadline "$(date -u -v+1H +%Y-%m-%dT%H:%M:%SZ)"
+  --default "continue cross-account on next2" --deadline "$(date -u -v+1H +%Y-%m-%dT%H:%M:%SZ)" \
+  --project doc_classifier --default-effect change
 cc-decide list --open           # what is awaiting early-veto
 cc-decide veto   <id>           # operator kills the default
 cc-decide action <id> --evidence commit:<sha>
 cc-decide expire-sweep          # REPORT fired class-B defaults (autonomy-sweep calls this)
 ```
+
+`--project` and `--default-effect` are OPTIONAL but should always be passed by a producer that
+knows them, because the ACTUATOR cannot recover either after the fact. `--project` names the
+decision's SUBJECT — autonomy-sweep runs from launchd with `cwd=/`, so without it every fired
+default is filed against the sweep's own host project. `--default-effect no-change` marks a
+default that alters nothing ("hold (no change without ruling)", "disclose-only", "park and
+continue"); such a default is still surfaced on expiry but is NOT queued as a dispatchable work
+item, so no worker is ever spawned to carry out a decision to do nothing.
 
 > **Delivery dependency (operator, P0-7 / G-P15-1):** a class-B/C packet is only an *early-veto*
 > channel if the push reaches an away phone. That needs `PUSHOVER_TOKEN`/`PUSHOVER_USER` in

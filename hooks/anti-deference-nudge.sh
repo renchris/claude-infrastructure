@@ -86,7 +86,7 @@ idl_init "$IDL" "anti-deference-nudge"
 #    cc-decide absent OR failing ⇒ silent skip so the hook stays exit-0 (safe degrade). Echoes the
 #    packet id on success. Uses MSG/SID/CFG at CALL time (all set by the genuine branch below). ──
 open_packet_B() {
-  local decide="${ANTIDEF_DECIDE_BIN:-}" cand vh deadline what
+  local decide="${ANTIDEF_DECIDE_BIN:-}" cand vh deadline what proj
   if [ -z "$decide" ]; then
     for cand in "$(dirname "$0")/../bin/cc-decide" "$CFG/bin/cc-decide" "$HOME/.claude/bin/cc-decide"; do
       [ -x "$cand" ] && { decide="$cand"; break; }
@@ -99,8 +99,18 @@ open_packet_B() {
             || date -u -d "+${vh} hours" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true)"
   [ -n "$deadline" ] || return 0
   what="$(printf '%s' "$MSG" | tr '\n' ' ' | cut -c1-240)"
+  # The two producer-declared fields the class-B ACTUATOR needs (bin/cc-decide § TWO PRODUCER-
+  # DECLARED FIELDS). Both are stated HERE because only this hook knows them:
+  #   --project — the stopped session's own cwd basename. Guarded: `basename ""` is ".", and a
+  #     packet claiming project "." is worse than one claiming none.
+  #   --default-effect no-change — this default PARKS the fork and continues; it changes nothing.
+  #     Without the declaration the sweep filed it as an open backlog item, which is cc-dispatch's
+  #     fire predicate, so a peer session could be spawned whose whole assignment was to park a
+  #     decision that was already parked. Three such items are in the live ledger.
+  proj=""; [ -n "${CWD:-}" ] && proj="$(basename "$CWD" 2>/dev/null || true)"
   "$decide" open --class B --what "$what" \
     --default "park this decision to the backlog and continue other work" \
+    --default-effect no-change --project "$proj" \
     --deadline "$deadline" --session-sid "${SID:-}" \
     --recommendation "route around it; surface ONLY this fork for the operator's early-veto (anti-deference genuine-3)" \
     --route-around "anti-deference genuine-3: durable class-B packet opened instead of a bare idle" \

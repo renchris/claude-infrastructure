@@ -193,3 +193,86 @@ mk_young() { mkdir -p "$(dirname "$1")"; printf 'x\n' > "$1"; }
   run bash "$REPO/scripts/reaper-horizon-lint.sh"
   [ "$status" -eq 0 ]
 }
+
+# ══ fired-default triage: subject project + the no-change carve-out (item f32588a73993) ═════════
+# The sweep is the class-B default ACTUATOR. Two things it could not previously know, both now
+# declared by the PRODUCER on the packet and reported on the fired line:
+#   (a) WHICH project the decision is about — this sweep runs from launchd with cwd=/;
+#   (b) whether firing the default CHANGES anything — a no-change default ("hold (no change
+#       without ruling)", "disclose-only", "park and continue") actuates NOTHING, yet an OPEN
+#       backlog item is exactly cc-dispatch's fire predicate, so one could spawn a peer session
+#       whose entire assignment was to change nothing. Three such rows are in the live ledger.
+# Neither is ever recovered by reading the default's WORDING — that shape-classifier is the thing
+# that must not be built (memory: fixture-vs-real-classifier-needs-a-producer).
+
+@test "a fired NO-CHANGE default is surfaced but NEVER queued as a dispatch candidate" {
+  id=$(bash "$CC_DECIDE_BIN" open --class B --what "rearchitect the program?" \
+        --default "hold (no change without ruling)" --deadline "2000-01-01T00:00:00Z" \
+        --default-effect no-change)
+  run bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  # the packet DID fire (the trail is intact — this is not a no-op path)
+  [ "$(jq -r '.status' "$CC_DECISIONS_DIR/$id.json")" = "expired-actioned" ]
+  # ...and the desk was still woken: surfaced, not swallowed
+  [ "$(notify_count)" -eq 1 ]
+  grep -q '"fired_nochange":1' "$CC_IDL"
+  # ...but NOTHING dispatchable was queued. `list --open` is cc-dispatch's own predicate.
+  run bash "$CC_BACKLOG_BIN" list --open
+  ! echo "$output" | grep -q "hold (no change without ruling)" || false
+  # belt: not merely absent from the OPEN view — never written to the ledger at all
+  ! grep -q "hold (no change without ruling)" "$CC_BACKLOG_FILE" 2>/dev/null || false
+}
+
+@test "POSITIVE CONTROL: a fired CHANGE default in the same run IS still queued" {
+  # Without this, a carve-out that suppressed EVERY fired default would pass the test above.
+  bash "$CC_DECIDE_BIN" open --class B --what "no-change one" --default "hold it" \
+    --deadline "2000-01-01T00:00:00Z" --default-effect no-change >/dev/null
+  bash "$CC_DECIDE_BIN" open --class B --what "change one" --default "land the lossless fix" \
+    --deadline "2000-01-01T00:00:00Z" --default-effect change >/dev/null
+  run bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  run bash "$CC_BACKLOG_BIN" list --open
+  echo "$output" | grep -q "land the lossless fix"
+  ! echo "$output" | grep -q "hold it" || false
+}
+
+@test "an UNANNOTATED fired default is still queued (fail-open: no silent drop)" {
+  # Every legacy producer omits --default-effect. Absent must mean "change", or landing this fix
+  # would silently stop draining the class-B queue.
+  bash "$CC_DECIDE_BIN" open --class B --what "legacy shape" --default "carry this out" \
+    --deadline "2000-01-01T00:00:00Z" >/dev/null
+  run bash "$SWEEP"
+  run bash "$CC_BACKLOG_BIN" list --open
+  echo "$output" | grep -q "carry this out"
+}
+
+@test "the item is filed against the packet's DECLARED subject project" {
+  bash "$CC_DECIDE_BIN" open --class B --what "whose project?" --default "do the thing" \
+    --deadline "2000-01-01T00:00:00Z" --project doc_classifier --default-effect change >/dev/null
+  run bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  run jq -r 'select(.source=="autonomy-sweep") | .project' "$CC_BACKLOG_FILE"
+  [ "$output" = "doc_classifier" ]
+}
+
+@test "no declared project → the host-project fallback, and the default still lands in the title" {
+  # The consumer-side half of the TSV collapse control: an unpadded emitter would put the EFFECT in
+  # the project slot (filing the item against project "change") and the DEFAULT in the effect slot
+  # (so `no-change` would never match and the title would go empty).
+  bash "$CC_DECIDE_BIN" open --class B --what "no project" --default "carry this out" \
+    --deadline "2000-01-01T00:00:00Z" >/dev/null
+  CC_SWEEP_PROJECT=host-proj run bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  run jq -r 'select(.source=="autonomy-sweep") | .project + "|" + .title' "$CC_BACKLOG_FILE"
+  [ "$output" = "host-proj|class-B default fired: carry this out" ]
+}
+
+@test "the summary distinguishes queued fires from no-change fires" {
+  bash "$CC_DECIDE_BIN" open --class B --what "nc" --default "hold it" \
+    --deadline "2000-01-01T00:00:00Z" --default-effect no-change >/dev/null
+  run bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  # reporting only the total would read as "1 item queued" on a sweep that queued none
+  grep -q "no-change: surfaced, NOT dispatched" "$CC_NOTIFY_BIN.log"
+  ! grep -q "fired→backlog" "$CC_NOTIFY_BIN.log" || false
+}

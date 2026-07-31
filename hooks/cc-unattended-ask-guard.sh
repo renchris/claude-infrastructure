@@ -63,7 +63,12 @@ durable decision packet + standing-value default instead, then keep moving:
   1. scripts/gate-classify.sh "<the fork text>"   (wait-vs-switch AND monthly-spend both → B)
   2. cc-decide open --class B --what "<the fork>" \\
        --recommendation "<the standing-value pick>" \\
-       --default "<default-if-no-veto>" --deadline "<now + ${veto}h>"
+       --default "<default-if-no-veto>" --deadline "<now + ${veto}h>" \\
+       --project "<subject project basename>" --default-effect <change|no-change>
+     --default-effect says whether firing that default CHANGES anything: a "hold"/"park"/
+     "disclose-only" default is no-change, and declaring it keeps the expiry from queuing a
+     dispatchable work item nobody can carry out. --project is the decision's SUBJECT, which
+     only you know — the sweep that files the item runs with cwd=/.
   3. PROCEED on that default NOW — the deadline is the operator's async early-veto window,
      not a synchronous approval gate.
 Blocked question: "${q}"

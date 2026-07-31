@@ -248,6 +248,12 @@ fi
 # packet (never silent-park). Idempotent: a marker prevents re-opening every tick.
 open_spend_packet() {
   local sid="$1" acct="$2" cwd="${3:-}"
+  local proj=""
+  # The killed session's OWN cwd basename — the packet's subject project, declared by the producer
+  # that actually knows it (bin/cc-decide § TWO PRODUCER-DECLARED FIELDS). Without it the fired
+  # default was filed against the sweep's launchd host project instead of the work's real home.
+  # Guarded: `basename ""` yields ".", and a packet claiming project "." is worse than none.
+  [[ -n "$cwd" ]] && proj="$(basename "$cwd" 2>/dev/null || true)"
   local marker="$STATE/spend-packet/$sid"
   mkdir -p "$STATE/spend-packet"
   [[ -f "$marker" ]] && return 0                       # already surfaced — no per-tick spam
@@ -266,6 +272,8 @@ open_spend_packet() {
         --option "kimi-hedge::engage the Kimi hedge key (operator key required)" \
         --recommendation "cross-account continuation (quota-plane isolation)" \
         --default "cross-account continuation on another Max account with quota headroom" \
+        --default-effect change \
+        --project "$proj" \
         --deadline "$deadline" \
         --session-sid "$sid" 2>>"$LOG")" \
     || { log "ERROR $sid ($acct) — cc-decide open failed (retrying next tick)"; return 0; }
