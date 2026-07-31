@@ -212,6 +212,20 @@ calls() { wc -l < "$TD_LOG" | tr -d ' '; }
   [[ "$output" == *"0 torn down"* ]] || false              # must NOT be counted as reaped
 }
 
+@test "(vii-b) cc-teardown INDETERMINATE (rc 6) is a THIRD state, never counted as a survivor" {
+  # rc 5 says "the pane SURVIVED" — a DEFINITE claim. rc 6 says "the process is gone but I could not
+  # READ the pane's fate". Collapsing 6 into 5 (or into the catch-all, which lands in n_fail) makes an
+  # ARMED autonomous caller log failures on successful reaps and escalate on "I could not see".
+  row "w-indet" "PANE-I" "HARVESTED" 100 "/tmp/t.jsonl"
+  echo 6 > "$TD_RC"
+  LCW_ORPHAN_CLOSE=1 run_wd --close-panes "$TEAM" sid-1
+  [[ "$output" == *"INDETERMINATE"* ]] || false
+  [[ "$output" == *"1 INDETERMINATE"* ]] || false
+  [[ "$output" != *"FAIL LOUD"* ]] || false                 # never the survivor claim
+  [[ "$output" == *"0 torn down"* ]] || false               # and never counted as reaped
+  [[ "$output" == *"0 FAIL"* ]] || false                    # not swept into the failure bucket
+}
+
 @test "(viii) cc-teardown REFUSE (rc 2) is trusted and counted separately from a failure" {
   row "w-ref" "PANE-R" "HARVESTED" 100 "/tmp/t.jsonl"
   echo 2 > "$TD_RC"

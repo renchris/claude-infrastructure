@@ -879,6 +879,13 @@ sweep() {
       reaped=$((reaped+1)); say "    torn down + effect-verified (cc-teardown exit 0)"; log "reaped $name [$cause] pane=$pane decided_age=${decided_age}s sweep_age=${sweep_age}s"
       clear_fired_marker "$pane"        # the pane is gone — retire its fired-peer marker (T-P3-4)
       worktree_cleanup "$cwd"
+    elif [ "$trc" = 6 ]; then
+      # INDETERMINATE (cc-teardown exit 6): the process is gone but the pane's fate was UNREADABLE.
+      # NOT "its gate refused" — nothing refused, and NOT a survival claim (that is rc 5). Reported in
+      # its own words so a reader is never told a verdict the actuator explicitly declined to make;
+      # not counted as reaped, so the next sweep re-observes rather than this one guessing.
+      say "    cc-teardown returned 6 (INDETERMINATE) — process gone, pane fate UNREADABLE; NOT a refusal and NOT a survivor claim; left for the next sweep to re-observe"
+      log "teardown-indeterminate $name rc=6 pane=$pane"
     else
       say "    cc-teardown returned $trc (10=DEFER 2=REFUSE 5=FAIL) — its gate refused; NOT reaped (trusted)"; log "teardown-refused $name rc=$trc"
     fi

@@ -9,15 +9,19 @@ setup() {
   export CC_TEARDOWN_SELF_UUID="none"   # deterministic self-guard in a headless test
 }
 
-@test "selftest passes and runs all 21 checks (a zero-check suite must not 'pass')" {
+@test "selftest passes and runs all 25 checks (a zero-check suite must not 'pass')" {
   # A RATCHET, not a tally: `--selftest` exits 0 when every check it happened to run passed, so a
   # suite that silently stopped running checks would report GREEN. Raise this ONLY together with the
   # scenarios that justify it. 17 → 21 on 2026-07-31 (backlog 99f87bf7a6f7): the false-success class
   # added non-pane-uuid target, absence-contradicted, corroborated-absence and the verdict token.
+  # 21 → 25 on 2026-07-31 (backlog ae48044a004d, the OPPOSITE polarity — the false-FAIL class): the
+  # close-settle race added lagging-enumerator→TEARDOWN, settle-really-retried, survivor-convicted-
+  # only-after-the-settle-is-spent, and the INDETERMINATE verdict token advertising exit=6.
+  # Both halves of the verdict path are now pinned by count as well as by name.
   run "$T" --selftest
   [ "$status" -eq 0 ]
   n_ok="$(printf '%s' "$output" | grep -c '^  ok ')"
-  [ "$n_ok" -eq 21 ]
+  [ "$n_ok" -eq 25 ]
 }
 
 @test "identity-pin: --expect-pid mismatch (pane recycled) → REFUSE (exit 2), records identity-pin (a17 S-4)" {

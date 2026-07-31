@@ -942,6 +942,21 @@ Everything in #3 below still holds except where this overrides it.
   "pane survived"** (`ae48044a004d`). Both now have an autonomous caller because the orphan-close was
   armed today. **Working form: the PANE UUID plus `--force-adopted`** (these panes had registry rows, so
   `--assignee-of` was the wrong flag); pane uuids come from `ps eww -p <pid>` → `ITERM_SESSION_ID`.
+- ✅ **`ae48044a004d` FIXED — the exit-5 false FAIL (the second of the two verdict-path failures above).**
+  Root cause was not the close but the *look*: `it2 session close` returns when iTerm2 ACCEPTS the close,
+  the pane leaves `app.windows` later, and the verify re-listed on the very next statement — so a
+  successful teardown was convicted on a single premature look. The process leg had polled since day one;
+  the pane leg now gets the same discipline: a **wall-clock-bounded settle** (`CC_TEARDOWN_PANE_SETTLE_S`,
+  default 5s) that re-observes until the pane reads ABSENT, with the deadline checked BEFORE each attempt
+  so a slow `it2` call spends the budget instead of escaping it (memory:
+  `poll-loop-bound-excludes-its-own-check`). **A real survivor is still exit 5** — the settle buys
+  re-observation, never the benefit of the doubt. Second half of the fix: **indeterminate got its own exit
+  code, `6`.** Exit 5 documents "the pane SURVIVED", a DEFINITE claim; a blind or cut enumerator was being
+  folded into it, so an armed autonomous caller could not tell "it really survived" from "I could not
+  see". Consumers updated in the same change (`hooks/lead-crash-watchdog.sh` counts `n_indet` separately —
+  its catch-all would have swept 6 into `n_fail`; `bin/cc-reaper` no longer reports it as "its gate
+  refused"). RED-proofs: the lagging-enumerator fixture returns exit 5 against a single-look mutant and
+  exit 0 with the settle; the watchdog's new `(vii-b)` is the ONLY failure when run against pre-fix `HEAD`.
 - ⚠️ **MY SELECTOR ERROR RATE THIS SESSION WAS SEVEN, AND IT IS THE CAMPAIGN'S OWN LAW.** Two guessed
   test filenames, two greps for text I had not written, a stale mtime I reported as 100 min of silence,
   a registry grep on the wrong name field, and an `it2 session list` (non-JSON) absence read where **my
