@@ -64,7 +64,11 @@ backups_for() { # <file>
   local i
   for ((i = 0; i < 12; i++)); do
     write_n "$SRC_A" 1
-    [ "$i" -lt 3 ] && write_n "$SRC_B" 1 || false
+    # GUARD, not an assertion: SRC_B is written only on the first 3 iterations, so the
+    # condition being FALSE is the intended path for i>=3. Written as an `if` rather than
+    # `[ … ] && … || true` so a future dead-assertion sweep cannot "revive" it back into
+    # `|| false` — which is exactly how it broke (47a53504). errexit still covers write_n.
+    if [ "$i" -lt 3 ]; then write_n "$SRC_B" 1; fi
   done
   [ "$(backups_for "$SRC_A")" -eq 10 ]
   [ "$(backups_for "$SRC_B")" -eq 3 ]
