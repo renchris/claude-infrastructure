@@ -36,7 +36,11 @@ dir_empty() { [ -z "$(ls -A "$CC_PERMPEND_DIR" 2>/dev/null)" ]; }
   [ "$(jq -r '.tool_input.command' "$b")" = 'git reset --hard origin/main' ]
   [ "$(jq -r '.cwd' "$b")" = /w/repo ]
   jq -e '.ts | type == "number"' "$b"                      # ts is epoch seconds, a NUMBER
-  [ "$(jq -rS 'keys|join(",")' "$b")" = "cwd,tool_input,tool_name,ts" ]   # exactly these keys
+  # The key set gained tool_use_id when the archive learned to PROVE a grant rather than infer
+  # one from tool names (adversarial review, 2026-07-31): the id of the prompted invocation has
+  # to be captured HERE, at prompt time, or it is unrecoverable later. Reshaped deliberately —
+  # this assertion is a contract claim about the producer, and the contract changed.
+  [ "$(jq -rS 'keys|join(",")' "$b")" = "cwd,tool_input,tool_name,tool_use_id,ts" ]
 }
 
 @test "tool_input is preserved as a structured object (not stringified)" {
@@ -273,4 +277,45 @@ arch_rows() { cat "$CC_PERMARCHIVE_DIR"/*.jsonl 2>/dev/null; }
   [ -n "$CC_PERMARCHIVE_DIR" ]
   [[ "$CC_PERMARCHIVE_DIR" == "$BATS_TEST_TMPDIR"/* ]]
   [ "$CC_PERMARCHIVE_DIR" != "$HOME/.claude/autonomy/permission-archive" ]
+}
+
+# ── Adversarial-review fixes (verify-beacon/verify-audit, 2026-07-31) ────────────────────────────
+@test "D2: two concurrent clears archive the prompt EXACTLY ONCE" {
+  # `[[ -f ]]` → archive → rm had no mutual exclusion, so a trailing PostToolUse racing the turn's
+  # Stop had both clears pass the test and both append: ONE prompt, TWO rows, landing in BOTH
+  # buckets at once. Measured 40/40 before the atomic `mv` claim, 0/40 after.
+  for i in 1 2 3 4 5 6 7 8; do
+    printf '%s' "$(payload "race-$i" 'git push --force')" | "$H" write
+    printf '%s' "$(jq -nc --arg s "race-$i" '{session_id:$s,hook_event_name:"PostToolUse",tool_name:"Bash"}')" | "$H" clear &
+    printf '%s' "$(jq -nc --arg s "race-$i" '{session_id:$s,hook_event_name:"Stop"}')" | "$H" clear &
+    wait
+  done
+  [ "$(arch_rows | wc -l | tr -d ' ')" -eq 8 ]
+  [ "$(arch_rows | jq -r '.session_id' | sort -u | wc -l | tr -d ' ')" -eq 8 ]
+}
+
+@test "D2: the atomic claim file is invisible to the supervisor's *.json glob" {
+  # A claim left visible would be paged as a phantom pending prompt.
+  printf '%s' "$(payload s-claim x)" | "$H" write
+  printf '%s' "$(payload s-claim x)" | "$H" clear
+  found=0
+  for f in "$CC_PERMPEND_DIR"/*.json; do [ -e "$f" ] && found=$((found + 1)); done
+  [ "$found" -eq 0 ]
+}
+
+@test "D1: tool_use_id is captured from BOTH the prompt and the clear" {
+  # The only evidence that distinguishes a real grant from a same-named collateral clear.
+  jq -nc '{session_id:"s-id",tool_name:"Bash",tool_input:{command:"ls"},cwd:"/w",tool_use_id:"toolu_P"}' | "$H" write
+  jq -nc '{session_id:"s-id",hook_event_name:"PostToolUse",tool_name:"Bash",tool_use_id:"toolu_C"}' | "$H" clear
+  row="$(arch_rows | jq -r 'select(.session_id=="s-id")')"
+  [ "$(printf '%s' "$row" | jq -r '.tool_use_id')"         = toolu_P ]
+  [ "$(printf '%s' "$row" | jq -r '.cleared_tool_use_id')" = toolu_C ]
+}
+
+@test "D5: the archive gets its own heartbeat, so dir-exists means the archiver RAN" {
+  # Without this, ARCHDIR was created only by an append, so a running archiver with nothing to
+  # record left no evidence and the consumer's three-state split was mapped the wrong way round.
+  printf '%s' "$(payload s-hbA x)" | "$H" clear          # nothing pending
+  [ -f "$CC_PERMARCHIVE_DIR/.archive-alive" ]
+  [ -z "$(arch_rows)" ]                                   # ...and still no phantom row
 }

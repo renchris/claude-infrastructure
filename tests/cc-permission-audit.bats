@@ -106,13 +106,26 @@ print(json.dumps({'session_id':sys.argv[1],'ts':int(time.time())-int(sys.argv[4]
   [[ "$output" != *"nothing has actually blocked"* ]]
 }
 
-@test "archive PRESENT but empty is reported as a trustworthy all-clear (the other state)" {
+@test "archive present WITH the archiver's heartbeat is a trustworthy all-clear" {
+  # RESHAPED, not weakened (D5). The original asserted that a bare empty directory meant
+  # "wired and running, nothing blocked" — but nothing in the archiver created that directory
+  # except an append, so a bare empty dir was evidence of NOTHING and the states were mapped
+  # the wrong way round. The archiver now stamps .archive-alive on every clear, so the
+  # all-clear is claimed only when that evidence is actually present.
+  export CC_PERMARCHIVE_DIR="$BATS_TEST_TMPDIR/arch"; mkdir -p "$CC_PERMARCHIVE_DIR"
+  : > "$CC_PERMARCHIVE_DIR/.archive-alive"
+  mk "ls -l"
+  run python3 "$AUDIT"
+  [[ "$output" == *"nothing has actually blocked"* ]] || false
+  [[ "$output" != *"BLIND"* ]] || false
+}
+
+@test "archive dir present but with NO archiver evidence is BLIND, not an all-clear" {
   export CC_PERMARCHIVE_DIR="$BATS_TEST_TMPDIR/arch"; mkdir -p "$CC_PERMARCHIVE_DIR"
   mk "ls -l"
   run python3 "$AUDIT"
-  [[ "$output" == *"EMPTY"* ]]
-  [[ "$output" == *"nothing has actually blocked"* ]]
-  [[ "$output" != *"BLIND"* ]]
+  [[ "$output" == *"BLIND"* ]] || false
+  [[ "$output" != *"nothing has actually blocked"* ]] || false
 }
 
 @test "observed prompts are counted and split by approved vs denied/abandoned" {
@@ -122,10 +135,8 @@ print(json.dumps({'session_id':sys.argv[1],'ts':int(time.time())-int(sys.argv[4]
   arow s3 "rm -rf /tmp/x"        SessionEnd  5
   mk "ls -l"
   run python3 "$AUDIT"
-  [[ "$output" == *"3 resolved prompts across 3 sessions"* ]]
-  [[ "$output" == *"approved 1"* ]]
+  [[ "$output" == *"3 resolved prompt(s) across 3 session(s)"* ]]
   [[ "$output" == *"denied/abandoned 2"* ]]
-  [[ "$output" == *"unclassified 0"* ]]
 }
 
 @test "a PostToolUse clear by a DIFFERENT tool is NOT counted as an approval" {
@@ -137,9 +148,8 @@ print(json.dumps({'session_id':sys.argv[1],'ts':int(time.time())-int(sys.argv[4]
     >> "$CC_PERMARCHIVE_DIR/2026-07.jsonl"
   mk "ls -l"
   run python3 "$AUDIT"
+  [[ "$output" == *"cleared-by-other 1"* ]]
   [[ "$output" == *"approved 0"* ]]
-  [[ "$output" == *"denied/abandoned 0"* ]]
-  [[ "$output" == *"cleared by a DIFFERENT tool"* ]]
 }
 
 @test "a PostToolUse clear by the SAME tool IS counted as an approval" {
@@ -148,8 +158,8 @@ print(json.dumps({'session_id':sys.argv[1],'ts':int(time.time())-int(sys.argv[4]
     >> "$CC_PERMARCHIVE_DIR/2026-07.jsonl"
   mk "ls -l"
   run python3 "$AUDIT"
-  [[ "$output" == *"approved 1"* ]]
-  [[ "$output" != *"cleared by a DIFFERENT tool"* ]]
+  [[ "$output" == *"unknown 1"* ]]     # same NAME is not proof — see _classify()
+  [[ "$output" == *"approved 0"* ]]
 }
 
 @test "a legacy row with no cleared_tool still counts as approved, not silently dropped" {
@@ -159,7 +169,7 @@ print(json.dumps({'session_id':sys.argv[1],'ts':int(time.time())-int(sys.argv[4]
     >> "$CC_PERMARCHIVE_DIR/2026-07.jsonl"
   mk "ls -l"
   run python3 "$AUDIT"
-  [[ "$output" == *"approved 1"* ]]
+  [[ "$output" == *"unknown 1"* ]]     # a legacy row has no ids ⇒ unknown, never approved
 }
 
 @test "an unrecognised resolved_by is left UNCLASSIFIED, never folded into either bucket" {
@@ -170,9 +180,7 @@ print(json.dumps({'session_id':sys.argv[1],'ts':int(time.time())-int(sys.argv[4]
   arow s2 "cmd-b" unknown     1
   mk "ls -l"
   run python3 "$AUDIT"
-  [[ "$output" == *"approved 1"* ]]
-  [[ "$output" == *"denied/abandoned 0"* ]]
-  [[ "$output" == *"unclassified 1"* ]]
+  [[ "$output" == *"unknown 2"* ]]
 }
 
 @test "commands that ACTUALLY blocked are ranked, and outrank the inferred candidates" {
@@ -202,7 +210,7 @@ print(json.dumps({'session_id':sys.argv[1],'ts':int(time.time())-int(sys.argv[4]
   mk "ls -l"
   run python3 "$AUDIT"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"1 resolved prompts"* ]]
+  [[ "$output" == *"1 resolved prompt(s)"* ]]
 }
 
 @test "a truncated row still contributes via its summary rather than vanishing" {
@@ -211,7 +219,7 @@ print(json.dumps({'session_id':sys.argv[1],'ts':int(time.time())-int(sys.argv[4]
     >> "$CC_PERMARCHIVE_DIR/2026-07.jsonl"
   mk "ls -l"
   run python3 "$AUDIT"
-  [[ "$output" == *"1 resolved prompts"* ]]
+  [[ "$output" == *"1 resolved prompt(s)"* ]]
   [[ "$output" == *"psql -c"* ]]
 }
 
@@ -222,11 +230,87 @@ print(json.dumps({'session_id':sys.argv[1],'ts':int(time.time())-int(sys.argv[4]
     >> "$CC_PERMARCHIVE_DIR/2026-07.jsonl"
   mk "ls -l"
   run python3 "$AUDIT" 1
-  [[ "$output" == *"1 resolved prompts"* ]]
+  [[ "$output" == *"1 resolved prompt(s)"* ]]
   [[ "$output" != *ancient-cmd* ]]
 }
 
 @test "the docstring no longer claims no history exists — it is now produced" {
   run grep -c 'so no history exists' "$AUDIT"
   [ "$output" = "0" ]
+}
+
+# ── Adversarial-review fixes (verify-audit, 2026-07-31) ─────────────────────────────────────────
+# Each of these reproduces a defect an independent reviewer demonstrated against the landed code.
+@test "D1: a grant is PROVEN by tool_use_id — matching tool NAMES is not evidence" {
+  export CC_PERMARCHIVE_DIR="$BATS_TEST_TMPDIR/arch"; mkdir -p "$CC_PERMARCHIVE_DIR"
+  # A DENIED Bash prompt cleared by a LATER Bash command: same name, different invocation.
+  # Name-matching called this an approval — in the Bash-on-Bash case that is ~all the traffic.
+  printf '%s\n' '{"session_id":"d1","ts":1,"resolved_ts":2000000000,"waited_s":9,"resolved_by":"PostToolUse","cleared_tool":"Bash","tool_name":"Bash","tool_use_id":"toolu_A","cleared_tool_use_id":"toolu_B","tool_input":{"command":"git push --force"}}' > "$CC_PERMARCHIVE_DIR/2026-07.jsonl"
+  mk "ls -l"; run python3 "$AUDIT"
+  [[ "$output" == *"approved 0"* ]] || false
+  [[ "$output" == *"cleared-by-other 1"* ]] || false
+}
+
+@test "D1 POSITIVE CONTROL: matching tool_use_ids DO prove a grant" {
+  export CC_PERMARCHIVE_DIR="$BATS_TEST_TMPDIR/arch"; mkdir -p "$CC_PERMARCHIVE_DIR"
+  printf '%s\n' '{"session_id":"d1b","ts":1,"resolved_ts":2000000000,"waited_s":9,"resolved_by":"PostToolUse","cleared_tool":"Bash","tool_name":"Bash","tool_use_id":"toolu_X","cleared_tool_use_id":"toolu_X","tool_input":{"command":"ls"}}' > "$CC_PERMARCHIVE_DIR/2026-07.jsonl"
+  mk "ls -l"; run python3 "$AUDIT"
+  [[ "$output" == *"approved 1"* ]] || false
+}
+
+@test "D3: an UNREADABLE archive dir is BLIND, never an all-clear" {
+  export CC_PERMARCHIVE_DIR="$BATS_TEST_TMPDIR/arch"; mkdir -p "$CC_PERMARCHIVE_DIR"
+  printf '%s\n' '{"session_id":"z","resolved_ts":2000000000,"resolved_by":"Stop","tool_name":"Bash","tool_input":{"command":"rm -rf /"}}' > "$CC_PERMARCHIVE_DIR/2026-07.jsonl"
+  chmod 000 "$CC_PERMARCHIVE_DIR"
+  run python3 "$AUDIT"
+  chmod 755 "$CC_PERMARCHIVE_DIR"
+  [[ "$output" == *"UNREADABLE"* ]] || false
+  [[ "$output" != *"nothing has actually blocked"* ]] || false
+}
+
+@test "D4: one type-corrupt row costs itself, not the rest of its file" {
+  export CC_PERMARCHIVE_DIR="$BATS_TEST_TMPDIR/arch"; mkdir -p "$CC_PERMARCHIVE_DIR"
+  printf '%s\n' '{"session_id":"bad","resolved_ts":"soon","resolved_by":"Stop","tool_name":"Bash","tool_input":{"command":"x"}}' > "$CC_PERMARCHIVE_DIR/2026-07.jsonl"
+  for i in 1 2 3 4 5; do arow "real$i" "real-cmd-$i" Stop 600; done
+  mk "ls -l"; run python3 "$AUDIT" 1
+  [[ "$output" == *"5 resolved prompt(s)"* ]] || false
+  [[ "$output" != *"nothing has actually blocked"* ]] || false
+}
+
+@test "D6: the four buckets SUM to the reported total" {
+  export CC_PERMARCHIVE_DIR="$BATS_TEST_TMPDIR/arch"; mkdir -p "$CC_PERMARCHIVE_DIR"
+  printf '%s\n' '{"session_id":"c","ts":1,"resolved_ts":2000000000,"waited_s":1,"resolved_by":"PostToolUse","cleared_tool":"Read","tool_name":"Bash","tool_input":{"command":"x"}}' > "$CC_PERMARCHIVE_DIR/2026-07.jsonl"
+  mk "ls -l"; run python3 "$AUDIT"
+  [[ "$output" == *"(= 1)"* ]] || false
+}
+
+@test "D8: a non-Bash prompt never heads the Bash allow-list ranking" {
+  export CC_PERMARCHIVE_DIR="$BATS_TEST_TMPDIR/arch"; mkdir -p "$CC_PERMARCHIVE_DIR"
+  printf '%s\n' '{"session_id":"w","resolved_ts":2000000000,"waited_s":1,"resolved_by":"Stop","tool_name":"Write","tool_input":{"file_path":"/etc/sudoers.d/x"}}' > "$CC_PERMARCHIVE_DIR/2026-07.jsonl"
+  mk "ls -l"; run python3 "$AUDIT"
+  [[ "$output" == *"non-Bash prompts"* ]] || false
+  echo "$output" | sed -n '/ACTUALLY blocked/,$p' > "$BATS_TEST_TMPDIR/o.txt"
+  run grep -q 'sudoers' "$BATS_TEST_TMPDIR/o.txt"
+  [ "$status" -ne 0 ]
+}
+
+@test "D9: the median averages the two middle values on an even count" {
+  export CC_PERMARCHIVE_DIR="$BATS_TEST_TMPDIR/arch"; mkdir -p "$CC_PERMARCHIVE_DIR"
+  arow m1 a Stop 0; arow m2 b Stop 100
+  mk "ls -l"; run python3 "$AUDIT"
+  [[ "$output" == *"median block 50s"* ]] || false
+}
+
+@test "D10: a '7d'-style day argument does not traceback" {
+  export CC_PERMARCHIVE_DIR="$BATS_TEST_TMPDIR/arch"; mkdir -p "$CC_PERMARCHIVE_DIR"
+  mk "ls -l"; run python3 "$AUDIT" 7d
+  [ "$status" -eq 0 ]
+}
+
+@test "D11: a BOM does not silently swallow the first row" {
+  export CC_PERMARCHIVE_DIR="$BATS_TEST_TMPDIR/arch"; mkdir -p "$CC_PERMARCHIVE_DIR"
+  printf '\xef\xbb\xbf%s\n' '{"session_id":"b1","resolved_ts":2000000000,"waited_s":1,"resolved_by":"Stop","tool_name":"Bash","tool_input":{"command":"first"}}' > "$CC_PERMARCHIVE_DIR/2026-07.jsonl"
+  arow b2 second Stop 1
+  mk "ls -l"; run python3 "$AUDIT"
+  [[ "$output" == *"2 resolved prompt(s)"* ]] || false
 }

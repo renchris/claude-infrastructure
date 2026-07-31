@@ -23,7 +23,25 @@ SETTINGS = os.path.expanduser("~/.claude/settings.json")
 ARCHDIR = os.environ.get(
     "CC_PERMARCHIVE_DIR", os.path.expanduser("~/.claude/autonomy/permission-archive")
 )
-DAYS = int(sys.argv[1]) if len(sys.argv) > 1 else 0  # 0 = all history
+
+
+def _days_arg(v):
+    """`7`, `7d`, `7 days` → 7. A ValueError traceback on `7d` — the natural spelling of this
+    argument — is a worse answer than reading the intent, and exiting 1 before any output at
+    all looks like a crash rather than a usage error."""
+    m = re.match(r"^\s*(\d+)\s*(?:d|day|days)?\s*$", str(v), re.I)
+    if not m:
+        sys.stderr.write(f"cc-permission-audit: ignoring unparseable day count {v!r}\n")
+        return 0
+    return int(m.group(1))
+
+
+DAYS = _days_arg(sys.argv[1]) if len(sys.argv) > 1 else 0  # 0 = all history
+# AXIS MISMATCH, deliberate and disclosed: with DAYS set the ARCHIVE is filtered per-ROW on
+# resolved_ts, while the transcript corpus is filtered per-FILE on mtime — so an actively
+# appended transcript contributes its entire history. The two halves of this report answer
+# "last N days" at different precision; the corpus half is the loose one. Tightening it means
+# parsing every line's timestamp across ~1,000 transcripts, which is why it was not done here.
 
 
 def load_rules():
@@ -67,14 +85,93 @@ def matches(cmd, rules):
     return None
 
 
+def cmd_of(row):
+    """The command text of an archived row, including the truncated-payload fallback so an
+    over-long prompt still contributes its identity instead of vanishing from the ranking."""
+    ti = row.get("tool_input")
+    if isinstance(ti, dict):
+        return (ti.get("command") or ti.get("file_path")
+                or ti.get("description") or row.get("tool_input_summary") or "")
+    return row.get("tool_input_summary") or ""
+
+
+def _read_rows(cutoff):
+    """Every archive row in range, plus an explicit READ-ERROR count.
+
+    Two failure modes are handled per-ROW rather than per-file. The first cut wrapped the
+    whole file loop in `except Exception: continue`, so a single type-corrupt field (a
+    string `resolved_ts` meeting a numeric comparison) aborted every REMAINING row in that
+    file — five ten-minute blocks reported as "nothing has actually blocked". A row is a
+    row; one bad one may cost itself and nothing else.
+    """
+    rows, bad, unreadable = [], 0, 0
+    files = sorted(glob.glob(os.path.join(ARCHDIR, "*.jsonl")))
+    for f in files:
+        try:
+            fh = open(f, encoding="utf-8-sig", errors="ignore")   # utf-8-sig strips a BOM
+        except OSError:
+            unreadable += 1                                       # never silently an all-clear
+            continue
+        with fh:
+            while True:
+                try:
+                    ln = fh.readline()
+                except OSError:
+                    unreadable += 1
+                    break
+                if not ln:
+                    break
+                ln = ln.strip()
+                if not ln:
+                    continue
+                try:
+                    o = json.loads(ln)
+                    if not isinstance(o, dict):
+                        raise ValueError("not an object")
+                    rts = o.get("resolved_ts")
+                    if cutoff:
+                        if not isinstance(rts, (int, float)) or rts < cutoff:
+                            continue
+                    rows.append(o)
+                except Exception:
+                    bad += 1                                      # counted, never guessed at
+    return rows, bad, unreadable, files
+
+
+def _classify(r):
+    """approved | refused | collateral | unknown — and a grant is PROVEN, never inferred.
+
+    The only evidence that a prompt was GRANTED is that the very invocation it gated is the
+    one whose PostToolUse cleared it: tool_use_id must match. Matching tool NAMES was the
+    previous rule and it is a guess that fails in the unsafe direction — this tool's traffic
+    is overwhelmingly Bash, so a DENIED `git push --force` followed by any other Bash command
+    in the same turn gave cleared_tool == tool_name == "Bash" and the refusal was counted as
+    an approval. Without the ids, the honest answer is `unknown`.
+    """
+    ev = r.get("resolved_by") or "unknown"
+    if ev in ("Stop", "SessionEnd"):
+        return "refused"
+    if ev != "PostToolUse":
+        return "unknown"
+    tid, cid = r.get("tool_use_id") or "", r.get("cleared_tool_use_id") or ""
+    if tid and cid:
+        return "approved" if tid == cid else "collateral"
+    ct, tn = r.get("cleared_tool") or "", r.get("tool_name") or ""
+    if ct and tn and ct != tn:
+        return "collateral"          # provably a different tool ⇒ provably not this grant
+    return "unknown"                 # same name, or no ids: not evidence of anything
+
+
 def archive_report():
     """The OBSERVED prompt set, from cc-permission-beacon.sh's durable archive.
 
-    Absence is read as THREE states, not two — the same existence-evidence split the
-    beacon's own heartbeat makes. A missing directory and an empty one are the same
-    observation (no rows) but opposite news: one means the archiver has never run and
-    this report is blind, the other means nothing has actually blocked. Collapsing them
-    is how "no pending approvals" once meant "the hook has never fired once".
+    Absence is read as FOUR states, not two. A missing directory means the archiver has never
+    run; an empty one means it ran and nothing blocked — that split only works because the
+    hook stamps `.archive-alive` on every clear. An UNREADABLE directory is the third, and it
+    used to be indistinguishable from the all-clear: isdir() succeeded, glob() returned []
+    silently, and the report said "nothing has actually blocked" over a directory it could not
+    open. That is precisely the false all-clear this logic exists to prevent, so it is now its
+    own state, as is a readable directory holding unreadable files.
     """
     print("\n── OBSERVED PROMPTS (measured, from the beacon archive) ──")
     if not os.path.isdir(ARCHDIR):
@@ -82,83 +179,74 @@ def archive_report():
         print("  ⇒ the beacon has never archived a resolution. This report is BLIND to")
         print("    actual prompts; the ranking above remains an upper bound only.")
         return
-
-    cutoff = time.time() - DAYS * 86400 if DAYS else 0
-    rows = []
-    for f in sorted(glob.glob(os.path.join(ARCHDIR, "*.jsonl"))):
-        try:
-            for ln in open(f, errors="ignore"):
-                ln = ln.strip()
-                if not ln:
-                    continue
-                try:
-                    o = json.loads(ln)
-                except Exception:
-                    continue  # a torn line is dropped, never guessed at
-                if cutoff and (o.get("resolved_ts") or 0) < cutoff:
-                    continue
-                rows.append(o)
-        except Exception:
-            continue
-
-    if not rows:
-        print(f"  archive present but EMPTY ({ARCHDIR})")
-        print("  ⇒ the archiver is wired and running; nothing has actually blocked in range.")
+    if not os.access(ARCHDIR, os.R_OK | os.X_OK):
+        print(f"  archive UNREADABLE ({ARCHDIR}) — permission denied")
+        print("  ⇒ BLIND. This is NOT an all-clear: rows may exist and cannot be counted.")
         return
 
-    # Outcome inference, and the reason it needs TWO fields rather than one.
-    #
-    # The obvious rule — "cleared by PostToolUse ⇒ approved" — is wrong. PostToolUse fires
-    # for EVERY tool, not just the prompted one, so after a DENIAL the turn can continue,
-    # run some other tool, and have that tool's PostToolUse clear the still-pending beacon.
-    # Counting those as approvals would overstate how permissive the classifier is, which
-    # is the one number this whole archive exists to inform.
-    #
-    # So a grant is only claimed when the tool that CLEARED the beacon is the same tool the
-    # prompt was raised for. A PostToolUse clear by a different tool is collateral, and its
-    # outcome is genuinely unknown — it is reported as such, never folded into either side.
-    approved = refused = collateral = other = 0
-    for r in rows:
-        ev = r.get("resolved_by") or "unknown"
-        if ev == "PostToolUse":
-            ct, tn = r.get("cleared_tool") or "", r.get("tool_name") or ""
-            if ct and tn and ct != tn:
-                collateral += 1
-            else:
-                approved += 1
-        elif ev in ("Stop", "SessionEnd"):
-            refused += 1
-        else:
-            other += 1
-    span = ""
-    ts = [r.get("resolved_ts") for r in rows if r.get("resolved_ts")]
-    if ts:
-        span = f"  {time.strftime('%Y-%m-%d', time.localtime(min(ts)))} → {time.strftime('%Y-%m-%d', time.localtime(max(ts)))}"
-    print(f"  {len(rows)} resolved prompts across "
-          f"{len({r.get('session_id') for r in rows})} sessions{span}")
-    print(f"  approved {approved}  ·  denied/abandoned {refused}  ·  unclassified {other}")
-    if collateral:
-        print(f"  ({collateral} cleared by a DIFFERENT tool's PostToolUse — outcome unknown,")
-        print("   counted in neither bucket; see cc-permission-beacon.sh `archive`)")
+    alive = os.path.exists(os.path.join(ARCHDIR, ".archive-alive"))
+    cutoff = time.time() - DAYS * 86400 if DAYS else 0
+    rows, bad, unreadable, files = _read_rows(cutoff)
 
-    waits = sorted((r.get("waited_s") or 0) for r in rows)
+    if unreadable:
+        print(f"  ⚠ {unreadable} archive file(s) could not be read — counts below are a FLOOR.")
+    if bad:
+        print(f"  ⚠ {bad} unparseable row(s) skipped.")
+
+    if not rows:
+        if not files and not alive:
+            # No .jsonl AND no heartbeat: the archiver has not demonstrably run here.
+            print(f"  archive dir present but the archiver has left NO evidence ({ARCHDIR})")
+            print("  ⇒ treat as BLIND, not as an all-clear.")
+        else:
+            print(f"  archive present, {len(files)} file(s), no rows in range ({ARCHDIR})")
+            print("  ⇒ the archiver is wired and running; nothing has actually blocked in range.")
+        return
+
+    buckets = collections.Counter(_classify(r) for r in rows)
+    approved = buckets["approved"]
+    refused = buckets["refused"]
+    collateral = buckets["collateral"]
+    unknown = buckets["unknown"]
+    span = ""
+    ts = [r.get("resolved_ts") for r in rows if isinstance(r.get("resolved_ts"), (int, float))]
+    if ts:
+        span = (f"  {time.strftime('%Y-%m-%d', time.localtime(min(ts)))}"
+                f" → {time.strftime('%Y-%m-%d', time.localtime(max(ts)))}")
+    print(f"  {len(rows)} resolved prompt(s) across "
+          f"{len({r.get('session_id') for r in rows})} session(s){span}")
+    # The four buckets SUM to the total — a headline whose parts do not add up is the kind of
+    # number people quote without checking.
+    print(f"  approved {approved}  ·  denied/abandoned {refused}  ·  "
+          f"cleared-by-other {collateral}  ·  unknown {unknown}   (= {len(rows)})")
+    if approved == 0 and unknown:
+        print("  NOTE: no grant could be PROVEN (a grant needs the clearing tool_use_id to match")
+        print("        the prompted one). 'unknown' is not 'denied' — see _classify().")
+
+    waits = sorted(r.get("waited_s") for r in rows
+                   if isinstance(r.get("waited_s"), (int, float)))
     if waits:
-        worst = max(rows, key=lambda r: r.get("waited_s") or 0)
-        print(f"  median block {waits[len(waits) // 2]:.0f}s  ·  longest "
+        n = len(waits)
+        med = waits[n // 2] if n % 2 else (waits[n // 2 - 1] + waits[n // 2]) / 2
+        worst = max(rows, key=lambda r: r.get("waited_s")
+                    if isinstance(r.get("waited_s"), (int, float)) else 0)
+        print(f"  median block {med:.0f}s  ·  longest "
               f"{(worst.get('waited_s') or 0) / 3600:.1f}h  "
               f"({cmd_of(worst)[:60]})")
 
-    seen = collections.Counter(head(cmd_of(r)) for r in rows if cmd_of(r))
-    print("\n  ── commands that ACTUALLY blocked (rank these first) ──")
-    for h, n in seen.most_common(15):
-        print(f"  {n:5d}  {h}")
-
-
-def cmd_of(row):
-    ti = row.get("tool_input")
-    if isinstance(ti, dict):
-        return ti.get("command") or ti.get("file_path") or ti.get("description") or ""
-    return row.get("tool_input_summary") or ""
+    # Bash only: this section feeds hooks/smart-bash-allowlist.sh, and a Write or Edit prompt
+    # ranked into a Bash allow-list is an action item that cannot be actioned.
+    seen = collections.Counter(head(cmd_of(r)) for r in rows
+                               if (r.get("tool_name") or "") == "Bash" and cmd_of(r))
+    if seen:
+        print("\n  ── Bash commands that ACTUALLY blocked (rank these first) ──")
+        for h, n in seen.most_common(15):
+            print(f"  {n:5d}  {h}")
+    other = collections.Counter((r.get("tool_name") or "?") for r in rows
+                                if (r.get("tool_name") or "") != "Bash")
+    if other:
+        print("  non-Bash prompts (not allow-listable here): "
+              + ", ".join(f"{k}×{v}" for k, v in other.most_common(6)))
 
 
 def main():
