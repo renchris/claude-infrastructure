@@ -163,9 +163,9 @@ exists() { [ -d "$CC_SCRATCHPAD_ROOT/-Users-x-proj/$1" ]; }
 
 # ── the staged plist parses and is NOT wired to RunAtLoad (activation is C10/operator) ─────────
 @test "the staged plist parses and does not self-activate" {
-  run plutil -lint "$REPO/launchd/com.claude.scratchpad-reaper.plist"
+  run plutil -lint "$REPO/launchd/staged/com.claude.scratchpad-reaper.plist"
   [ "$status" -eq 0 ]
-  run plutil -extract RunAtLoad raw -o - "$REPO/launchd/com.claude.scratchpad-reaper.plist"
+  run plutil -extract RunAtLoad raw -o - "$REPO/launchd/staged/com.claude.scratchpad-reaper.plist"
   [ "$status" -eq 0 ]
   [ "$output" = "false" ]
 }
