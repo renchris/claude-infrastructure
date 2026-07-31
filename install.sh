@@ -108,6 +108,10 @@ fi
 
 installed=0
 skipped=0
+# Hoisted from the settings-hooks section (was initialised just above it) so the LaunchAgents block
+# further down can COUNT a refused activation instead of swallowing it. Nothing between here and
+# there read it before.
+warnings=0
 
 run() {
   if $DRY_RUN; then
@@ -445,20 +449,120 @@ if $IS_GLOBAL; then
 fi
 
 # --- LaunchAgents (global only) ---
+#
+# ACTIVATION IS MANIFEST-GATED (DAEMON_FLEET_V2 §4.1, remainder R-1). Until 2026-07-31 this loop ran
+# `launchctl bootout` + `launchctl bootstrap` over EVERY launchd/*.plist unconditionally and
+# swallowed every error (`2>/dev/null || true`). Three measured defects:
+#
+#  (a) IT COULD AUTO-ACTIVATE A STAGED JOB. 7 of the 8 labels the manifest declares `staged` sit in
+#      this very glob — including com.claude.desk-invariant and com.claude.boot-resume, the two
+#      timer-driven session GENERATORS whose runaway spawning forced the operator's fleet shutdown
+#      of 2026-07-26 (31 live processes, load 17). The ONLY thing holding them off was the disabled
+#      bit in the root-owned /var/db/com.apple.xpc.launchd/disabled.501.plist — outside the repo,
+#      outside every repo check, and clearable by anything holding `launchctl enable`. The staging
+#      DECISION lived nowhere this installer could see, so it could not honour it.
+#  (b) A DISABLED `run` JOB COULD NEVER BE RECOVERED HERE. `bootstrap` on a label disabled in that
+#      override db returns EIO, and the `2>/dev/null || true` ate the verdict — R-1's symptom.
+#  (c) A LOADED JOB WAS BOUNCED MID-WORK on every routine install, and deploy-live.sh runs this
+#      script on every 600s autonomous advance while postland-verify's measured runs are
+#      3399-10112s. It could never finish. (Its run-lock was held while this fix was written.)
+#
+# THE TRAP IN THE OBVIOUS FIX, recorded because the prescribed remedy was the dangerous one: R-1's
+# own prescription for (b) — "add `launchctl enable` before bootstrap" — applied to this glob would
+# have enabled all 7 staged labels including BOTH generators, i.e. re-created the 2026-07-26
+# incident. `enable` is right only for a label the manifest declares `expect = run`. The manifest is
+# what makes that difference expressible, so activation now reads it and fails CLOSED without it.
+#
+# Seam: CC_INSTALL_LAUNCHCTL_BIN — tests stub it, so no suite ever touches real launchd.
+FLEET_MANIFEST="${CC_FLEET_MANIFEST:-$REPO_DIR/launchd/fleet.manifest}"
+LAUNCHCTL_BIN="${CC_INSTALL_LAUNCHCTL_BIN:-launchctl}"
+
+# The `expect` field for a label. Prints run|staged|retired, or NOTHING when the label is undeclared
+# or the manifest is absent — and the caller treats "nothing" as "never activate", so a missing or
+# unreadable manifest fails CLOSED rather than back to the old blanket bootstrap.
+fleet_expect() {
+  local want="$1" mlabel mexpect
+  if [[ ! -f "$FLEET_MANIFEST" ]]; then return 0; fi
+  while IFS='|' read -r mlabel mexpect _ || [[ -n "$mlabel" ]]; do
+    mlabel="$(printf '%s' "$mlabel" | tr -d '[:space:]')"
+    if [[ -z "$mlabel" || "$mlabel" == \#* ]]; then continue; fi
+    if [[ "$mlabel" != "$want" ]]; then continue; fi
+    printf '%s' "$mexpect" | tr -d '[:space:]'
+    return 0
+  done < "$FLEET_MANIFEST"
+}
+
 if $IS_GLOBAL; then
   echo ""
   echo "LaunchAgents → ~/Library/LaunchAgents/"
   mkdir -p "$HOME/Library/LaunchAgents"
+  uid="$(id -u)"
+  # Read the override db ONCE. Absence of a label means ENABLED — it records overrides, not
+  # memberships (the rule bin/cc-fleet and cc-blockers already state; reused, not re-derived).
+  DISABLED_DB="$("$LAUNCHCTL_BIN" print-disabled "gui/$uid" 2>/dev/null || true)"
   for plist in "$REPO_DIR"/launchd/*.plist; do
     [[ -f "$plist" ]] || continue
     name=$(basename "$plist")
+    label="${name%.plist}"
+    installed_before=$installed
     copy_file "$plist" "$HOME/Library/LaunchAgents/$name"
-    if ! $DRY_RUN; then
-      label="${name%.plist}"
-      # Unload if already loaded (ignore errors)
-      launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
-      launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/$name" 2>/dev/null || \
-        launchctl load "$HOME/Library/LaunchAgents/$name" 2>/dev/null || true
+    if $DRY_RUN; then continue; fi
+
+    expect="$(fleet_expect "$label")"
+    if [[ "$expect" != run ]]; then
+      if [[ "$expect" == staged || "$expect" == retired ]]; then
+        echo "  · $label — declared '$expect': SSOT deployed, NOT activated (the operator's C10 call)"
+      else
+        echo "  ⚠ $label — UNDECLARED in launchd/fleet.manifest: NOT activated (declare it first)"
+        warnings=$((warnings + 1))
+      fi
+      continue
+    fi
+
+    # expect = run. Touch launchd ONLY when there is something to do — a changed plist, or a job
+    # that is not loaded. An unchanged, already-loaded job is left strictly alone; that is what
+    # makes this safe to call on every 600s deploy advance.
+    plist_changed=false
+    if [[ $installed -ne $installed_before ]]; then plist_changed=true; fi
+    loaded=false
+    if "$LAUNCHCTL_BIN" list "$label" >/dev/null 2>&1; then loaded=true; fi
+    if $loaded && ! $plist_changed; then continue; fi
+
+    # Never bounce a job that is EXECUTING RIGHT NOW (defect (c)). Its new plist applies at the
+    # next natural load; a reload here would restart a run that is already hours deep.
+    if $loaded && "$LAUNCHCTL_BIN" list "$label" 2>/dev/null | grep -q '"PID"'; then
+      echo "  · $label — executing right now, not reloaded (new plist applies at its next load)"
+      continue
+    fi
+
+    # `enable` FIRST, and ONLY when the override db actually carries a disabled bit for this label.
+    # Bootstrap alone returns EIO on a disabled label — precisely how a declared-`run` job stayed
+    # dark and unrecoverable from here (R-1's symptom).
+    #
+    # CONDITIONAL, not unconditional, because this puts a launchd MUTATION verb on an autonomous
+    # path: deploy-live.sh runs this script after every advance. No bit to clear ⇒ no verb issued at
+    # all; a clear that does happen prints a line, so an unattended activation can never be silent.
+    # It converges only to what the LANDED manifest already declares `run` — the reviewed intent —
+    # and the C10 platter remains the operator's route for everything else. Measured 2026-07-31:
+    # the run-declared ∩ currently-disabled set is EMPTY, so this is a no-op on today's box.
+    #
+    # Matched WHOLE and QUOTED with grep -F: `com.claude.dispatcher-foo` would otherwise satisfy
+    # `com.claude.dispatcher`, and an unanchored `.` in a label is a wildcard.
+    if printf '%s\n' "$DISABLED_DB" | grep -qF "\"$label\" => disabled"; then
+      echo "  → $label — declared 'run' but DISABLED at the domain level: clearing the bit"
+      if ! "$LAUNCHCTL_BIN" enable "gui/$uid/$label" 2>/dev/null; then
+        echo "  ⚠ $label — launchctl enable failed"
+        warnings=$((warnings + 1))
+      fi
+    fi
+    if $loaded; then
+      "$LAUNCHCTL_BIN" bootout "gui/$uid/$label" 2>/dev/null || true
+    fi
+    if ! "$LAUNCHCTL_BIN" bootstrap "gui/$uid" "$HOME/Library/LaunchAgents/$name" 2>/dev/null; then
+      if ! "$LAUNCHCTL_BIN" load "$HOME/Library/LaunchAgents/$name" 2>/dev/null; then
+        echo "  ⚠ $label — launchctl bootstrap FAILED; the job is NOT running"
+        warnings=$((warnings + 1))
+      fi
     fi
   done
 
@@ -476,7 +580,6 @@ fi
 # --wire-hooks opts in; a config with NO .hooks is auto-wired (fresh install). A read-only ASSERT always
 # reports template hooks not present in the target. (Merging settings.json is the OPERATOR's hand via
 # this installer — never an agent Write; the C10 ceiling holds.)
-warnings=0
 echo ""
 echo "Settings hooks → $CONFIG_DIR/settings.json"
 TEMPLATE="$REPO_DIR/settings-templates/settings.example.json"
