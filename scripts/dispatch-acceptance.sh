@@ -338,11 +338,30 @@ if [ "${1:-}" = selftest ]; then
   got="$(CC_DISPATCH_PROJECT=proj CC_DISPATCH_IDL="$tmp/idl-a2.jsonl" CC_BACKLOG_FILE="$tmp/bl-a2ok.jsonl" "$0" --json 2>/dev/null | jq -r 'select(.criterion=="A2")|.verdict')"
   t "A2 passes when every in-window add was decided inside the bound" "$got" "PASS"
 
-  # A2 scoping: an add for ANOTHER project must not be counted undecided — cc-dispatch never had it.
+  # A2 scoping — the parity property, re-aimed 2026-07-31. This case used to assert "an add for
+  # ANOTHER project must not be counted undecided — cc-dispatch never had it", and it had been RED
+  # ever since that premise expired. Multi-project coverage (f7abcbdee98c) made the producer decide
+  # about EVERY open item: those in the dispatch set get admit/defer, those outside it get
+  # {verdict:"skip", reason:"project-not-dispatched"} — which is the whole point, since an item with
+  # no record WAS the defect. A1's denominator was taught that (see its note, with the measured
+  # 130==130 vs 130!=111 reads); this fixture was not, so the reader was correct and the expectation
+  # was stale (memory: named-failure-vs-no-verdict — a new state must be taught to every consumer).
+  #
+  # So the property is no longer "the reader ignores a foreign add" but "the reader counts it, and
+  # accepts the producer's REAL record for it". Both halves, because a PASS alone cannot tell a
+  # reader that counts the add from one that still drops it.
   printf '%s\n' '{"event":"add","id":"decided","project":"proj","ts":"2026-07-29T00:00:00Z"}' \
                 '{"event":"add","id":"other","project":"elsewhere","ts":"2026-07-29T00:00:05Z"}' > "$tmp/bl-a2scope.jsonl"
+  printf '%s\n' '{"actor":"cc-dispatch","action":"decision","pass":"p0","id":"seed","verdict":"admit","ts":"2026-07-29T00:00:00Z"}' \
+                '{"actor":"cc-dispatch","action":"decision","pass":"p1","id":"decided","verdict":"admit","ts":"2026-07-29T00:00:10Z"}' \
+                '{"actor":"cc-dispatch","action":"decision","pass":"p1","id":"other","project":"elsewhere","verdict":"skip","reason":"project-not-dispatched","ts":"2026-07-29T00:00:10Z"}' > "$tmp/idl-a2scope.jsonl"
+  got="$(CC_DISPATCH_PROJECT=proj CC_DISPATCH_IDL="$tmp/idl-a2scope.jsonl" CC_BACKLOG_FILE="$tmp/bl-a2scope.jsonl" "$0" --json 2>/dev/null | jq -r 'select(.criterion=="A2")|.verdict')"
+  t "A2 counts a foreign-project add, and its project-not-dispatched skip IS its decision" "$got" "PASS"
+
+  # RED half — the same foreign add with NO record anywhere. Dropping it as out-of-scope is how an
+  # undrained foreign project reads as healthy, which is the f7abcbdee98c defect itself.
   got="$(CC_DISPATCH_PROJECT=proj CC_DISPATCH_IDL="$tmp/idl-a2.jsonl" CC_BACKLOG_FILE="$tmp/bl-a2scope.jsonl" "$0" --json 2>/dev/null | jq -r 'select(.criterion=="A2")|.verdict')"
-  t "A2 ignores another project's adds (matches the producer's filter)" "$got" "PASS"
+  t "A2 FAILs a foreign-project add that got no decision at all (never silently dropped)" "$got" "FAIL"
 
   # exit code: a FAIL row must make the reader exit non-zero (it gates, it does not merely print).
   CC_DISPATCH_IDL="$tmp/idl-false.jsonl" CC_BACKLOG_FILE="$tmp/none.jsonl" "$0" >/dev/null 2>&1
