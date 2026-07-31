@@ -443,6 +443,23 @@ The recommendation is **wrong** if any of these come back negative, and each is 
 
 ---
 
+## Provenance, and one phase that did not complete
+
+Evidence came from a 13-agent workflow (3 recon · 7 candidate deep-dives · a compositor cost model ·
+an adversarial phase) plus direct measurement by the lead. **The adversarial phase did not return** —
+its three refutation agents started and the run stalled with no further journal writes. That is
+stated rather than papered over, because "the top 3 were adversarially verified" would otherwise be
+implied and it is not true.
+
+**What substitutes for it is stronger than a desk refutation on the one claim that mattered:** the
+lead *ran* the candidates. WezTerm entered as the front-runner on the best source review of any
+candidate and **the measurement reversed it** (~7 threads/pane, §2). kitty's central claim was
+likewise checked twice, on two instruments, by two parties — a fleet agent's CGWindow census and the
+lead's independent `terminal-bench.sh` — agreeing that thread count is flat in pane count.
+
+**What remains unrefuted by anyone**, and is therefore where a reader should push first: kitty's
+multi-hour behaviour, kitty under real Claude Code, and the all-Metal iTerm2 counterfactual (§6, §8).
+
 ## Instruments added by this investigation
 
 - `tools/terminal-bench/window-census.swift` — root-free `CGWindowList` census, app-agnostic, sends
