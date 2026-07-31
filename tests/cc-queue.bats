@@ -3,7 +3,7 @@
 #
 # RED-PROOF suite written against the FROZEN CONTRACT, never against the script: every expected value
 # below is derived from a contract clause quoted beside the assertion. Reproduce the proof that these
-# assertions can FAIL with:  tests/cc-queue-redproof.sh bin/cc-queue
+# assertions can FAIL with:  tests/cc-queue-redproof.py
 #
 # CONTRACT (the clause each test binds to):
 #   C1  verbs     (none)=table · --json · --check · --attach ROW|SID · --state S · --group-by K
@@ -40,6 +40,15 @@ setup() {
   : > "$CC_PERMPEND_DIR/.beacon-alive"                 # C3: hook has run
 }
 
+# ── assertion helpers ────────────────────────────────────────────────────────────────────────────
+# NOT `[[ ... ]]`. MEASURED on bats 1.13.0 with this bash: a NON-FINAL failing `[[ ]]` does NOT fail
+# the test (a non-final `[ ]` does). Every multi-assertion test written with `[[ ]]` was therefore
+# checking only its LAST line — a silent vacuous pass, and this repo's recorded failure mode. Found
+# by tests/cc-queue-redproof.py: a mutation deleting the cap notice left the suite fully green.
+# A helper FUNCTION is a simple command, so errexit fails the test at the failing line.
+has()   { case "$2" in *"$1"*) return 0 ;; *) printf 'expected to find: %s\n' "$1" >&2; return 1 ;; esac; }
+hasnt() { case "$2" in *"$1"*) printf 'expected NOT to find: %s\n' "$1" >&2; return 1 ;; *) return 0 ;; esac; }
+
 # helpers — build the exact on-disk shapes C2 freezes
 beacon() { # $1=sid $2=since $3=tool $4=json tool_input
   printf '{"ts":%s,"tool_name":"%s","tool_input":%s,"cwd":"/x/proj"}' "$2" "$3" "$4" > "$CC_PERMPEND_DIR/$1.json"
@@ -58,8 +67,8 @@ touch_transcript() { # $1=sid $2=epoch mtime
 @test "C3: an ABSENT beacon dir renders INERT, never a false all-clear" {
   rm -rf "$CC_PERMPEND_DIR"
   run "$Q" --no-color
-  [[ "$output" == *"BEACON INERT"* ]]
-  [[ "$output" != *"nothing blocked"* ]]
+  has "BEACON INERT" "$output"
+  hasnt "nothing blocked" "$output"
 }
 
 @test "C3: dir present but heartbeat MISSING is still INERT" {
@@ -67,13 +76,13 @@ touch_transcript() { # $1=sid $2=epoch mtime
   # existence evidence degrades to "does a directory exist", which an accident satisfies.
   rm -f "$CC_PERMPEND_DIR/.beacon-alive"
   run "$Q" --no-color
-  [[ "$output" == *"BEACON INERT"* ]]
+  has "BEACON INERT" "$output"
 }
 
 @test "C3: heartbeat present + no beacons ⇒ the all-clear that CAN be trusted" {
   run "$Q" --no-color
-  [[ "$output" == *"nothing blocked"* ]]
-  [[ "$output" != *"BEACON INERT"* ]]
+  has "nothing blocked" "$output"
+  hasnt "BEACON INERT" "$output"
 }
 
 # ── C2/C4 — the blocked row is the product ───────────────────────────────────────────────────────
@@ -81,26 +90,26 @@ touch_transcript() { # $1=sid $2=epoch mtime
 @test "C2: a blocked row shows the EXACT blocked command, not a paraphrase" {
   beacon sid-b 999700 Bash '{"command":"git push --force origin main"}'
   run "$Q" --no-color
-  [[ "$output" == *"git push --force origin main"* ]]
+  has "git push --force origin main" "$output"
 }
 
 @test "C2: wait duration is rendered from the beacon ts against the frozen clock" {
   beacon sid-b 999700 Bash '{"command":"rm -rf /x"}'   # 1000000-999700 = 300s ⇒ 5m00s
   run "$Q" --no-color
-  [[ "$output" == *"5m00s"* ]]
+  has "5m00s" "$output"
 }
 
 @test "C2: a Write beacon renders its file_path (per-tool detail, not a blob)" {
   beacon sid-w 999900 Write '{"file_path":"/etc/hosts","content":"x"}'
   run "$Q" --no-color
-  [[ "$output" == *"/etc/hosts"* ]]
+  has "/etc/hosts" "$output"
 }
 
 @test "C4: a beacon with NO telemetry row still renders, marked enrich:none" {
   beacon sid-orphan 999900 Bash '{"command":"whoami"}'
   run "$Q" --no-color
-  [[ "$output" == *"whoami"* ]]
-  [[ "$output" == *"enrich:none"* ]]
+  has "whoami" "$output"
+  has "enrich:none" "$output"
 }
 
 # ── C5/C6/C7 — classification ────────────────────────────────────────────────────────────────────
@@ -165,7 +174,7 @@ touch_transcript() { # $1=sid $2=epoch mtime
 @test "C9: --limit caps non-blocked rows and ANNOUNCES the withheld count" {
   for i in 1 2 3; do telem "sid-i$i" 4242; done        # 3 idle
   run "$Q" --no-color --state idle --limit 1
-  [[ "$output" == *"more not shown"* ]]
+  has "more not shown" "$output"
   [ "$(echo "$output" | grep -c '^  *[0-9]')" -eq 1 ]
 }
 
@@ -180,7 +189,7 @@ touch_transcript() { # $1=sid $2=epoch mtime
   beacon sid-b2 999800 Bash '{"command":"two"}'
   beacon sid-b3 999700 Bash '{"command":"three"}'
   run "$Q" --no-color --limit 1
-  [[ "$output" == *"one"* ]] && [[ "$output" == *"two"* ]] && [[ "$output" == *"three"* ]]
+  has "one" "$output" && has "two" "$output" && has "three" "$output"
 }
 
 # ── C10 — cross-account: the coverage gap this tool exists to close ──────────────────────────────
@@ -249,7 +258,7 @@ touch_transcript() { # $1=sid $2=epoch mtime
   telem sid-1 4242; telem sid-2 4242
   beacon sid-1 999700 Bash '{"command":"x"}'
   run "$Q" --no-color --group-by account
-  [[ "$output" == *"GROUPED BY account"* ]]
+  has "GROUPED BY account" "$output"
 }
 
 @test "C1: an unknown option fails loudly rather than rendering a partial list" {
@@ -260,7 +269,7 @@ touch_transcript() { # $1=sid $2=epoch mtime
 @test "C1: --selftest is self-contained and green" {
   run "$Q" --selftest
   [ "$status" -eq 0 ]
-  [[ "$output" == *"# all"* ]]
+  has "# all" "$output"
 }
 
 # ── malformed input must degrade, never blind the surface ────────────────────────────────────────
@@ -276,5 +285,5 @@ touch_transcript() { # $1=sid $2=epoch mtime
   beacon sid-ok 999700 Bash '{"command":"visible"}'
   printf '{{{garbage' > "$CC_PERMPEND_DIR/sid-bad.json"
   run "$Q" --no-color
-  [[ "$output" == *"visible"* ]]
+  has "visible" "$output"
 }
