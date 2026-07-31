@@ -75,6 +75,43 @@ live_pid() { sed -n 's/^pid=//p' "$CC_PANE_HOME/$1/meta" | head -1; }
   printf '%s' "$output" | grep -q 'exited immediately' || false
 }
 
+@test "RED-proof: a ZOMBIE pid is NOT live — kill -0 is fooled by one, so state must be read" {
+  # The dead-on-arrival test above CANNOT prove this on its own: whether an exited child is still
+  # a zombie or has already been reaped is a RACE, and when it loses the race a naive `kill -0`
+  # fails "correctly" and the guard looks proven when it is not. The red-proof harness caught
+  # exactly that — the kill -0 mutant SURVIVED (memory:
+  # kill-on-reaped-child-fails-fast-path-hides-it, "a no-delay repro proves nothing").
+  #
+  # So the zombie is constructed DETERMINISTICALLY instead of raced for: a perl parent forks a
+  # child that exits immediately and never waits on it, so the child is pinned in state Z for as
+  # long as the parent lives. Measured on this box: `ps -o stat=` reads Z while `kill -0` reports
+  # ALIVE. The control asserts the Z PREFIX, not an exact flag string — a niced zombie reads `ZN`,
+  # and the trailing scheduling flags are incidental to the zombie property under test.
+  local zp
+  perl -e '$|=1; my $p=fork(); if($p==0){exit 0} print "$p\n"; sleep 20;' > "$BATS_TEST_TMPDIR/zpid" &
+  local perlpid=$!
+  local waited=0
+  while [ ! -s "$BATS_TEST_TMPDIR/zpid" ] && [ "$waited" -lt 50 ]; do sleep 0.1; waited=$((waited+1)); done
+  zp="$(cat "$BATS_TEST_TMPDIR/zpid")"
+  [ -n "$zp" ]
+  # positive control: the fixture really is a zombie, and kill -0 really is fooled by it.
+  # Without this the test could pass because the pid was simply GONE — a different, easier case
+  # that would leave the actual claim unproven.
+  case "$(ps -o stat= -p "$zp" | tr -d ' ')" in Z*) ;; *) false ;; esac
+  run kill -0 "$zp"
+  [ "$status" -eq 0 ]
+
+  # Point a registry row at the zombie and require the driver to call it DEAD.
+  mkdir -p "$CC_PANE_HOME/hdl-0000000000000001"
+  printf 'id=hdl-0000000000000001\npid=%s\npstart=\n' "$zp" > "$CC_PANE_HOME/hdl-0000000000000001/meta"
+  run "$CP" address hdl-0000000000000001
+  [ "$status" -eq 1 ]
+  run "$CP" send hdl-0000000000000001 hello
+  [ "$status" -eq 1 ]
+  kill -9 "$perlpid" 2>/dev/null
+  return 0
+}
+
 @test "a dead-on-arrival spawn PRESERVES its log where list's reap cannot race-delete it" {
   run "$CP" spawn -- /usr/bin/false
   [ "$status" -eq 1 ]

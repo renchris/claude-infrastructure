@@ -336,3 +336,65 @@ The headless registry records *claims*; the OS holds *truth*. A row is live only
 **and** that pid's start time still matches the recorded one — the standard PID-reuse guard, and the
 direct defence of memory `liveness-proxy-cannot-be-output-age`. `list` verifies every row and reaps
 what it disproves, so a reboot (which kills every session) cannot leave rows that read as alive.
+
+### 6.7 Two defects the smoke test caught before any test was written
+
+Both were in the first cut of `bin/cc-pane-headless` and both are now pinned by tests:
+
+1. **BSD `hexdump -e` PADS to the field width.** `hexdump -n 8 -e '4/4 "%08x"'` minted
+   `hdl-<16hex><16 spaces>` — an id with trailing whitespace, which becomes a *directory name*
+   with trailing whitespace and compares unequal to its own echoed form. `od -An -N8 -tx1` is
+   used instead, plus a shape-gate that fails loud on a malformed mint.
+2. **`kill -0` SUCCEEDS on a ZOMBIE.** `spawn -- /usr/bin/false` returned **rc 0 and a fresh id**
+   for a process that had already exited. Liveness now reads `ps -o stat=` and treats `Z*` (and
+   empty) as dead. Same class as memory `kill-on-reaped-child-fails-fast-path-hides-it`.
+
+### 6.8 The red-proof harness caught a WEAK TEST — the zombie guard was unproven
+
+`tests/cc-pane-redproof.sh` mutates the **real** artifacts and requires the **named** test to go
+red. First run: **11 caught · 1 SURVIVED**. The survivor was the zombie mutant — reverting the
+state check to `kill -0` left the suite GREEN.
+
+**Why**, and it is the load-bearing lesson: whether an exited child is still a zombie or has
+*already been reaped* is a **RACE**. Under /Users/chrisren/.claude/bin/cc-bats the child lost that race, so the naive `kill -0`
+failed "correctly" and the test passed — the guard looked proven while the actual claim was
+untested. A green suite was not evidence.
+
+Fix: stop racing for a zombie and **construct one deterministically** — a `perl` parent that forks
+a child which exits and is never waited on pins it in state `Z` for as long as the parent lives.
+The test carries a **positive control** (assert the fixture really is `Z*` *and* that `kill -0` is
+really fooled by it) so it cannot pass merely because the pid was gone — a different, easier case
+that would leave the claim unproven. Note the control asserts the `Z` **prefix**: a niced zombie
+reads `ZN`, and pinning the exact flag string made the test fail on its first run for a reason
+that had nothing to do with the property under test.
+
+### 6.9 The class-2 rename is TWO classes, not one — and only class A is mechanical
+
+Applying the rename revealed the population splits by *what is being read*:
+
+| Class | Shape | Sites | Verdict |
+|---|---|---|---|
+| **A — own-env read** | the literal `${ITERM_SESSION_ID:-}` | **17 sites / 15 files** | genuinely mechanical: ONE literal substitution → `${CC_PANE_ID:-${ITERM_SESSION_ID:-}}` |
+| **B — scrapes ANOTHER process's env** | `ps eww … grep '^ITERM_SESSION_ID='`, `env_val <blob> ITERM_SESSION_ID` | **4 sites** | **NOT a rename** — see below |
+
+Class A is done (commit below). The one substitution also handles the nested precedence chains
+correctly without special-casing, because the inner literal is identical:
+`${CC_TEARDOWN_SELF_UUID:-${ITERM_SESSION_ID:-}}` → `${CC_TEARDOWN_SELF_UUID:-${CC_PANE_ID:-${ITERM_SESSION_ID:-}}}`,
+and the same for `CC_WR_UUID` in `waiting-recycle.sh`. Explicit test seams keep winning; `CC_PANE_ID`
+slots in ahead of `ITERM_SESSION_ID` and behind everything else.
+
+**Class B is left UNCHANGED and is named here as a distinct follow-on**, because it is a different
+problem wearing the same variable name. These sites answer *"which pane is process X in?"* by
+reading **X's** environment:
+
+- `scripts/desk-arm-live.sh:103` · `scripts/desk-recycle-invariant.sh:146` — match a uuid to a pid
+- `hooks/teammate-auto-shutdown.sh:247` — resolve a teammate's pane in order to close it
+- `bin/cc-reconcile:169` — `env_val "$env_blob" ITERM_SESSION_ID`
+
+Today they work because **iTerm2 itself** sets `ITERM_SESSION_ID` in the target's environment. They
+keep working untouched. But a **headless** agent has `CC_PANE_ID` and no `ITERM_SESSION_ID`, so
+every one of these scrapers silently finds nothing and *skips the session* — a false negative, not
+an error. Making them accept either key is correct and small, but it is fleet-wide
+headless-awareness (T3 territory), not the mechanical rename T1 was scoped to, and
+`teammate-auto-shutdown.sh` is high-traffic machinery with its own extensive suite. Filed rather
+than smuggled in.
