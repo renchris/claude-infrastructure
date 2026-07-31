@@ -59,7 +59,7 @@ setup() {
 # expression the tree is actually judged by.
 ac22_scan() { # <path>… → hazardous "file:line:text" rows
   "$G" -rnE '^[^#]*(^|[[:space:];&|(`])osascript[[:space:]]+-' "$@" 2>/dev/null \
-    | "$G" -vE '[a-z0-9_]+_(osa|bounded)[[:space:]]+osascript' \
+    | "$G" -vE '[a-z0-9_]+_(osa|bounded)[[:space:]]+([0-9]+[[:space:]]+)?osascript' \
     | "$G" -vE 'timeout[[:space:]]+[0-9]' \
     | "$G" -vE 'command -v' \
     | "$G" -vE 'additionalContext' \
@@ -109,6 +109,40 @@ delay_launder(){ # <path>… → delay-exempt rows carrying another call (empty 
   } > "$D/neg/bounded.sh"
   n="$(ac22_scan "$D/neg" | "$G" -c . || true)"
   [ "$n" -eq 0 ] || { echo "the scan flagged a BOUNDED call — a check that fires on healthy lines gets ignored:"; ac22_scan "$D/neg"; false; }
+}
+
+@test "AC22 control (-): a wrapper taking its bound as an ARGUMENT is NOT flagged" {
+  # THE SHAPE THAT BROKE THIS SCAN (2026-07-31). The exemption above used to require the wrapper to
+  # sit IMMEDIATELY before `osascript`, which is true of hf_bounded/osa_bounded/lcw_osa but false of
+  # `sup_bounded 10 osascript` — scripts/lead-supervisor.sh:159, landed the same day by e6d789a8 —
+  # because the bound is passed as an argument. `sup_bounded` is a real timeout(1) wrapper
+  # (lead-supervisor.sh:77-81, `-k 5`, rc 124 on a cut), so the scan was convicting a healthy line.
+  #
+  # This is the repo's `denylist-enumerates-spellings-not-the-class` defect, and the SECOND time this
+  # particular grep has been miscalibrated (§11.2 records the first). The widening is deliberately
+  # narrow — an optional NUMERIC argument only, never `.*` — because the exclusion is line-scoped, so
+  # anything lazier would let a real bare call ride along on the same line.
+  mkdir -p "$D/neg3"
+  {
+    printf '#!/bin/bash\n'
+    printf 'sup_bounded 10 osascript - %s %s\n' '"$1"' '"$2"'
+    printf 'hf_bounded 5 osascript -e %s\n' "'tell application \"iTerm2\" to activate'"
+  } > "$D/neg3/argbound.sh"
+  n="$(ac22_scan "$D/neg3" | "$G" -c . || true)"
+  [ "$n" -eq 0 ] || { echo "the scan flagged a wrapper-with-bound-argument call:"; ac22_scan "$D/neg3"; false; }
+}
+
+@test "AC22 control (+): the widened exemption does NOT launder a bare call on the same line" {
+  # The counterpart to the widening above, and the reason it is safe to widen at all. The exclusion
+  # is line-scoped, so a tolerance that is too lazy exempts the worst case: a genuinely unbounded
+  # call sharing a line with a bounded one. Only a NUMERIC argument is tolerated, so the separator
+  # here keeps the second call visible.
+  mkdir -p "$D/pos2"
+  printf '#!/bin/bash\nsup_bounded 10 osascript -e %s\nosascript -e %s\n' \
+    "'tell application \"Dia\" to activate'" \
+    "'tell application \"Finder\" to activate'" > "$D/pos2/mixed.sh"
+  n="$(ac22_scan "$D/pos2" | "$G" -c . || true)"
+  [ "$n" -eq 1 ] || { echo "expected exactly the ONE bare call to survive the exemption (n=$n):"; ac22_scan "$D/pos2"; false; }
 }
 
 @test "AC22 control (-): prose, assignments and comments are NOT flagged" {
