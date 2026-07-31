@@ -9,6 +9,10 @@ setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   H="$REPO/hooks/cc-permission-beacon.sh"
   export CC_PERMPEND_DIR="$BATS_TEST_TMPDIR/permpend"
+  # MUST be pinned: `clear` now archives the record it removes, and without this every write→clear
+  # test would append synthetic rows to the operator's REAL permission archive — poisoning the very
+  # dataset the archive exists to provide. (It did, once, before this line existed.)
+  export CC_PERMARCHIVE_DIR="$BATS_TEST_TMPDIR/permarchive"
   unset CC_PERMISSION_BEACON_DISABLED
 }
 
@@ -160,4 +164,95 @@ heartbeat() { printf '%s/.beacon-alive' "$CC_PERMPEND_DIR"; }
 @test "heartbeat is NOT stamped when the kill switch is set (disabled means disabled)" {
   printf '%s' "$(payload s-hb5 x)" | CC_PERMISSION_BEACON_DISABLED=1 "$H" clear
   [ ! -f "$(heartbeat)" ]
+}
+
+# ── DURABLE ARCHIVE (§3 Stage A.4) ───────────────────────────────────────────────────────────────
+# WHY THESE EXIST: `clear` used to rm -f the record outright, so no history of ACTUAL permission
+# prompts existed anywhere on the box. bin/cc-permission-audit could therefore only ever report an
+# UPPER bound, and the auto-mode classifier could never be tuned on real data — Step 3's own named
+# guardrail. These pin that the record survives its own resolution, intact and attributable.
+arch() { printf '%s/%s.jsonl' "$CC_PERMARCHIVE_DIR" "$(date +%Y-%m)"; }
+arch_rows() { cat "$CC_PERMARCHIVE_DIR"/*.jsonl 2>/dev/null; }
+
+@test "a resolved prompt is APPENDED to the durable archive before it is removed" {
+  printf '%s' "$(payload s-arc 'git reset --hard origin/main')" | "$H" write
+  printf '%s' "$(payload s-arc 'git reset --hard origin/main')" | "$H" clear
+  [ ! -f "$(beacon s-arc)" ]                                   # still removed from the pending dir
+  [ -f "$(arch)" ]
+  run arch_rows
+  [ "$(printf '%s' "$output" | jq -r '.session_id')" = s-arc ]
+  [ "$(printf '%s' "$output" | jq -r '.tool_input.command')" = 'git reset --hard origin/main' ]
+  [ "$(printf '%s' "$output" | jq -r '.cwd')" = /w/repo ]
+  printf '%s' "$output" | jq -e '.ts and .resolved_ts and (.waited_s >= 0)'
+}
+
+@test "the archive is APPEND-ONLY — a second resolution never overwrites the first" {
+  for s in s-a1 s-a2 s-a3; do
+    printf '%s' "$(payload "$s" "cmd-$s")" | "$H" write
+    printf '%s' "$(payload "$s" "cmd-$s")" | "$H" clear
+  done
+  [ "$(arch_rows | wc -l | tr -d ' ')" -eq 3 ]
+  [ "$(arch_rows | jq -r '.session_id' | sort | tr '\n' ' ')" = "s-a1 s-a2 s-a3 " ]
+}
+
+@test "resolved_by distinguishes the GRANT path from the deny/abandon path" {
+  # PostToolUse fires ONLY on grant; Stop fires on either. Without this field the archive cannot
+  # tell an approval from a refusal, which is exactly what the classifier needs to learn from.
+  jq -nc '{session_id:"s-grant",tool_name:"Bash",tool_input:{command:"x"},cwd:"/w",hook_event_name:"PostToolUse"}' | "$H" write
+  jq -nc '{session_id:"s-grant",tool_name:"Bash",tool_input:{command:"x"},cwd:"/w",hook_event_name:"PostToolUse"}' | "$H" clear
+  jq -nc '{session_id:"s-deny",tool_name:"Bash",tool_input:{command:"y"},cwd:"/w",hook_event_name:"Stop"}' | "$H" write
+  jq -nc '{session_id:"s-deny",tool_name:"Bash",tool_input:{command:"y"},cwd:"/w",hook_event_name:"Stop"}' | "$H" clear
+  [ "$(arch_rows | jq -r 'select(.session_id=="s-grant") | .resolved_by')" = PostToolUse ]
+  [ "$(arch_rows | jq -r 'select(.session_id=="s-deny")  | .resolved_by')" = Stop ]
+}
+
+@test "waited_s carries the real block duration, not zero" {
+  # The 17.7-hour block this work exists to surface must be measurable from the archive alone.
+  printf '%s' "$(payload s-wait 'blocked')" | "$H" write
+  b="$(beacon s-wait)"
+  jq -c '.ts = (.ts - 3600)' "$b" > "$b.tmp" && mv "$b.tmp" "$b"    # backdate one hour
+  printf '%s' "$(payload s-wait 'blocked')" | "$H" clear
+  [ "$(arch_rows | jq -r 'select(.session_id=="s-wait") | .waited_s >= 3600')" = true ]
+}
+
+@test "a clear with NOTHING pending writes no archive row (no phantom prompts)" {
+  printf '%s' "$(payload s-none x)" | "$H" clear
+  [ -f "$(heartbeat)" ]                                        # the heartbeat still stamped...
+  [ -z "$(arch_rows)" ]                                        # ...but the archive stays empty
+}
+
+@test "an over-long payload degrades to a bounded, EXPLICITLY-truncated row" {
+  # Concurrent sessions append to one file; a multi-KB line risks a torn write. The row must stay
+  # inside the atomic-append regime, and the truncation must be recorded rather than silent.
+  big="$(printf 'y%.0s' $(seq 1 8000))"
+  printf '%s' "$(payload s-big "$big")" | "$H" write
+  printf '%s' "$(payload s-big "$big")" | "$H" clear
+  row="$(arch_rows)"
+  [ "${#row}" -lt 4096 ]
+  [ "$(printf '%s' "$row" | jq -r '.tool_input_truncated')" = true ]
+  printf '%s' "$row" | jq -e .                                 # still valid JSON, not a torn line
+  [ "$(printf '%s' "$row" | jq -r '.session_id')" = s-big ]    # attribution survives truncation
+}
+
+@test "every archived row is valid JSON on its own line (jsonl contract)" {
+  for s in j1 j2; do
+    printf '%s' "$(payload "$s" 'a "quoted" \ backslash	tab')" | "$H" write
+    printf '%s' "$(payload "$s" 'a "quoted" \ backslash	tab')" | "$H" clear
+  done
+  while read -r ln; do printf '%s' "$ln" | jq -e . >/dev/null; done < "$(arch)"
+}
+
+@test "the archive is NOT under CC_PERMPEND_DIR (which /tmp reboots away)" {
+  # The record has to outlive the box's uptime or it can never accumulate the weeks of data the
+  # classifier needs. Pinning this stops a future refactor from folding it back into /tmp.
+  run bash -c 'grep -n "CC_PERMARCHIVE_DIR:-" "$1"' _ "$H"
+  [ "$status" -eq 0 ]
+  [[ "$output" != */tmp/* ]]
+}
+
+@test "ISOLATION CONTROL: the suite never writes the operator's real archive" {
+  # This suite DID poison the live archive once, before CC_PERMARCHIVE_DIR was pinned in setup().
+  [ -n "$CC_PERMARCHIVE_DIR" ]
+  [[ "$CC_PERMARCHIVE_DIR" == "$BATS_TEST_TMPDIR"/* ]]
+  [ "$CC_PERMARCHIVE_DIR" != "$HOME/.claude/autonomy/permission-archive" ]
 }
