@@ -227,7 +227,7 @@ alias_to() { mkdir -p "$CC_MAILBOX_DIR/.alias"; printf '2026-07-29T00:00:00+0000
   run bash -c "echo '{}' | bash '$REPO/hooks/mailbox-drain.sh' prompt 2>/dev/null"
   local drain; drain="$(printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext' \
     | grep -o '/cc-await-ping [^)]*' | head -n1)"
-  [ -n "$floor" ] && [ -n "$drain" ]                       # neither side may be silently empty
+  [ -n "$floor" ] && [ -n "$drain" ] || false              # neither side may be silently empty
   [ "$floor" = "$drain" ] || { echo "floor=[$floor] drain=[$drain]" >&2; false; }
 }
 
