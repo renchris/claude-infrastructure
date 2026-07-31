@@ -412,7 +412,7 @@ _pendfix() {   # a staged activation naming <path>, un-run; $1 = repo-relative p
   printf '#!/bin/sh\nexit 2\n' > "$fake/diff"; chmod +x "$fake/diff"
   PATH="$fake:$PATH" run "$ASSERT"
   [ "$status" -eq 3 ]
-  [[ "$output" == *"NOVERDICT"* ]]
+  [[ "$output" == *"NOVERDICT"* ]] || false
   [[ "$output" != *"STALE"* ]]
 }
 
@@ -439,7 +439,7 @@ _pendfix() {   # a staged activation naming <path>, un-run; $1 = repo-relative p
   printf 'gitdir: /nonexistent\n' > "$CC_PARITY_REPO/.git"
   run "$ASSERT"
   [ "$status" -eq 3 ]
-  [[ "$output" == *"NOVERDICT"* ]]
+  [[ "$output" == *"NOVERDICT"* ]] || false
   [[ "$output" == *"(existence)"* ]]
 }
 

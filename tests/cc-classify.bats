@@ -601,8 +601,8 @@ nolib_run() { HOME="$D/live" CLAUDE_CONFIG_DIR="$D/live/.claude" "$(nolib_bin)" 
   b="$(nolib_bin)"
   run bash -c "HOME='$D/live' CLAUDE_CONFIG_DIR='$D/live/.claude' '$b' --all --json 2>&1 >/dev/null"
   [ "$(printf '%s\n' "$output" | grep -c 'cc-interactive.sh unresolvable')" -eq 1 ]   # damped: 1, not 2
-  [[ "$output" == *"fail-closed"* ]]
-  [[ "$output" == *"./install.sh"* ]]                                    # the remediation is handed over
+  [[ "$output" == *"fail-closed"* ]] || false
+  [[ "$output" == *"./install.sh"* ]] || false                           # the remediation is handed over
   # stdout alone is still parseable JSON, and BOTH panes fell closed to owned-wait
   run bash -c "HOME='$D/live' CLAUDE_CONFIG_DIR='$D/live/.claude' '$b' --all --json 2>/dev/null"
   [ "$(printf '%s' "$output" | jq -r '[.[].cause] | unique | join(",")')" = owned-wait ]
@@ -628,8 +628,8 @@ nolib_run() { HOME="$D/live" CLAUDE_CONFIG_DIR="$D/live/.claude" "$(nolib_bin)" 
   export CC_IDL="$D/idl.jsonl"
   # BATS_TEST_FILENAME emptied = "not running under bats" as the script sees it
   run bash -c "BATS_TEST_FILENAME= CC_CLASSIFY_INTERACTIVE_HOLD_DISABLE=1 CC_IDL='$D/idl.jsonl' '$C' '$UP' --json 2>&1 >/dev/null"
-  [[ "$output" == *"INTERACTIVE_HOLD_DISABLE=1 outside tests"* ]]
-  [[ "$output" == *"REAPABLE"* ]]
+  [[ "$output" == *"INTERACTIVE_HOLD_DISABLE=1 outside tests"* ]] || false
+  [[ "$output" == *"REAPABLE"* ]] || false
   [ "$(grep -c . "$D/idl.jsonl")" -eq 1 ]                       # exactly ONE record per invocation
   run jq -e '.hook=="cc-classify" and .disposition=="warned" and .reason=="interactive-hold-disabled" and .target==$t' --arg t "$UP" "$D/idl.jsonl"
   [ "$status" -eq 0 ]

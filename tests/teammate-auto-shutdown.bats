@@ -396,7 +396,7 @@ wait_gone() { local i=0; while [ -e "$1" ] && [ "$i" -lt 60 ]; do sleep 0.05; i=
   txtool "$sid" 9000 tu-done; txtoolresult "$sid" 8900 tu-done
   run hookrun "$member" "$team" "$sid" "$wt"
   [ "$status" -eq 0 ]
-  ! grep -q "tool in flight" "$LOGF"
+  ! grep -q "tool in flight" "$LOGF" || false
   grep -q "Auto-shutdown idle teammate: $member" "$LOGF"
 }
 

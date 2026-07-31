@@ -505,10 +505,10 @@ STUB
   # and the reason given must match the actual reason
   grep -q 'READY rrrrrrrr.*dry-run' "$STATE/poller.log"
   grep -q 'autofire IS on' "$STATE/poller.log"
-  ! grep -q 'set LR_POLLER_AUTOFIRE=1 to auto-resume' "$STATE/poller.log"
+  ! grep -q 'set LR_POLLER_AUTOFIRE=1 to auto-resume' "$STATE/poller.log" || false
   # the user-facing notification carries the same corrected hint, not the stale advice
   grep -q 'autofire IS on' "$OSA_LOG"
-  ! grep -q 'Set LR_POLLER_AUTOFIRE=1' "$OSA_LOG"
+  ! grep -q 'Set LR_POLLER_AUTOFIRE=1' "$OSA_LOG" || false
 
   # CONTROL — the autofire-OFF path must STILL give the actionable advice (the fix must not delete
   # the hint that is correct in the branch where it applies).
@@ -549,7 +549,7 @@ STUB
   # unknown args are refused, never silently ignored (the silence is what hid the bug)
   run bash "$POLLER" --dry-runn
   [ "$status" -eq 2 ]
-  [[ "$output" == *"unknown argument"* ]]
+  [[ "$output" == *"unknown argument"* ]] || false
   # and a bare run (how launchd invokes it) still parses
   run bash "$POLLER"
   [ "$status" -eq 0 ]

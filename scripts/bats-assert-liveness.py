@@ -133,6 +133,18 @@ def strip_quoted(s: str) -> str:
                 quote = None
             else:
                 out[i] = " "
+        elif c == "\\":
+            # OUTSIDE quotes a backslash escapes the next character, so `\"` is a LITERAL quote and
+            # must not open a span. Without this the scanner opened a phantom quote at the `\"` in
+            # `[[ "$o" =~ foo\":\? ]] || false`, blanked everything after it — including the
+            # `|| false` that revives the assertion — and then reported the line as a dead negation.
+            # A false RED, and an expensive one: it is what held the postland verifier at red, which
+            # is what froze the live layer, because deploy-live is fail-closed on a green stamp.
+            out[i] = " "
+            if i + 1 < len(s):
+                out[i + 1] = " "
+            i += 2
+            continue
         elif c in "'\"":
             quote = c
         i += 1
@@ -259,10 +271,31 @@ def split_and_or(code: str) -> list[tuple[str, str]]:
     while i < len(code):
         c = code[i]
         if quote:
+            # ...and INSIDE a double-quoted span too. `"\"sid\":\"$sid\""` closed its quote at the
+            # first `\"` without this, so the rest of the line scanned as unquoted and the element
+            # boundaries were wrong. Single quotes take no escapes in shell, so this is `"` only.
+            if c == "\\" and quote == '"':
+                buf.append(c)
+                if i + 1 < len(code):
+                    buf.append(code[i + 1])
+                i += 2
+                continue
             buf.append(c)
             if c == quote:
                 quote = None
             i += 1
+            continue
+        if c == "\\":
+            # A backslash OUTSIDE quotes escapes the next character, so `\"` is a LITERAL quote and
+            # must not open a span. Without this, `! [[ "$o" =~ foo\":\? ]] || false` scanned as one
+            # unterminated quoted element: the `||` was swallowed, the list came back as a SINGLE
+            # element, and the `false` that revives the negation was invisible. The line was then
+            # reported as a dead assertion — a false RED on an assertion that does fire, verified
+            # under bats both ways.
+            buf.append(c)
+            if i + 1 < len(code):
+                buf.append(code[i + 1])
+            i += 2
             continue
         if c in "'\"":
             quote = c

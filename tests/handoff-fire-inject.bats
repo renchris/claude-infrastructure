@@ -135,7 +135,7 @@ set_mode() { printf '%s' "$1" > "$MODE_FILE"; }
   # The wire is the nonce anchor + the command, and the COMMAND SUFFIX IS BYTE-EXACT — the anchor
   # prefixes, it never rewrites (a prefix that mangled the command would be worse than no anchor).
   [ "${inner%"$CMD"}" != "$inner" ]
-  [[ "$inner" =~ ^:\ hfv-[0-9]+-1-[0-9]+\;\  ]]
+  [[ "$inner" =~ ^:\ hfv-[0-9]+-1-[0-9]+\;\  ]] || false
   # And what the terminal "echoed" (mock SCREEN) still carries the command intact.
   case "$(cat "$SCREEN")" in *"$CMD") : ;; *) false ;; esac
 }
