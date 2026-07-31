@@ -234,7 +234,19 @@ parity_axis() { # → the live-vs-repo SSOT finding (axis 2), empty when the two
     "$( [ -n "$lag" ] && [ "$lag" != 0 ] && printf ' (this checkout is %s commit(s) BEHIND its trunk — every finding below is live-vs-checkout, so read it with that in mind)' "$lag" )")"
   if [ "${#undep[@]}" -gt 0 ]; then
     out="$out"$'\n'"  UNDEPLOYED-MIRROR — committed ON TRUNK but absent from this checkout, i.e. DEPLOY LAG, not a missing commit: $(join_names "${undep[@]}")"
-    out="$out"$'\n'"    ▶ git -C $root fetch origin main && git -C $root merge --ff-only origin/main   # do NOT cp live->repo: it would recreate a committed file as a local diff the next ff must conflict on"
+    # THE SANCTIONED ADVANCE, never a raw ff (ship.md:98). This line used to render
+    # `git -C $root merge --ff-only origin/main` as a ▶ runnable step on EVERY SessionStart, which
+    # is the one command the deploy doctrine forbids: a bare ff advances the FILES but creates no
+    # symlinks, so a brand-new tracked file lands unlinked and silently does nothing, and it skips
+    # the green-stamp gate entirely. Rendering it here did not merely permit that — it INSTRUCTED
+    # it, to every agent and operator, at session start. Measured on the shared checkout
+    # 2026-07-31: 29 of the last 30 HEAD advances were raw ffs, which carried live HEAD 196 commits
+    # above the newest green-stamped tree and deadlocked deploy-live's monotonicity guard (96
+    # consecutive refusals). deploy-live.sh is green-gated AND runs install.sh, which is what
+    # actually creates the missing links; if it refuses, that refusal is the finding, not a reason
+    # to reach for the ff. Same command operator-readout.sh:169 already platters, so the two
+    # operator surfaces cannot disagree about what "deploy" means.
+    out="$out"$'\n'"    ▶ bash $root/scripts/deploy-live.sh   # the ONLY sanctioned advance (green-gated + runs install.sh, which creates the symlinks a bare ff never makes). do NOT cp live->repo: it would recreate a committed file as a local diff the next ff must conflict on"
   fi
   if [ "${#lonly[@]}" -gt 0 ]; then
     out="$out"$'\n'"  LIVE-ONLY — never committed, one \`rm\` from unrecoverable: $(join_names "${lonly[@]}")"
