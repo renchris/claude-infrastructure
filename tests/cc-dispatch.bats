@@ -11,6 +11,12 @@ setup() {
   BACKLOG="$REPO/bin/cc-backlog"
   C="$BATS_TEST_TMPDIR/case"
   mkdir -p "$C/pages" "$C/stubs"
+  # NOT cosmetic: handoff-fire's capacity_gate() refuses a net-new fire above 2.0/core, and this box
+  # lives well above that — unpinned, the fire assertions below go red BY LOAD rather than by their
+  # subject. Same idiom as tests/fire-engagement.bats:20 and handoff-fire-pane-parked.bats:32.
+  # (The spawn bin is stubbed here anyway, so this pins a coupling rather than changing a verdict —
+  # which is exactly why it went unnoticed until the hermeticity ratchet scoped this suite.)
+  export CC_FIRE_CAPACITY_GATE=off
 
   # wave-plan stub: echoes placements keyed by the input --items ids (as a real planner would),
   # with a fixed account + fire_line argv; rc read from $WP_RC_FILE ("4" ⇒ quota-cliff).
