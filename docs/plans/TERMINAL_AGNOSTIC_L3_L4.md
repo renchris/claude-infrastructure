@@ -218,6 +218,13 @@ teammate spawn that recorded **zero** calls.
 - `sendCommandToPane` makes **two** calls: `send` (Ctrl-U, clears the input line) then `run` (appends
   `\r`). Implementing one verb either leaves stale input or never submits.
 
+**Both deployed tracks are live and they disagree on exactly this verb.** `claude-latest` pins
+**2.1.114**, while **15 running processes are 2.1.219**. 2.1.114 issues `session run` alone — the
+string `"session","send"` is **absent from that binary entirely**; the Ctrl-U prelude landed between
+2.1.114 and 2.1.183. Split shapes, `killPane` and the `session list` liveness path (truncation
+included) are **identical across all three**. ⇒ a facade validated only against the pinned stable
+would never observe `send`, then silently drop the line-clear for every 2.1.219 session.
+
 **`session list` is structurally broken as a liveness test.** CC's dead-session check is
 `!stdout.includes(fullSessionId)`, but `rich` truncates the Session ID column to the 80 columns it
 assumes when stdout is a pipe: `A5B61882-E2AD-438D-…`. Measured — full id absent, 18-char prefix
