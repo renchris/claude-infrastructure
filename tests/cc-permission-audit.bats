@@ -81,3 +81,118 @@ print(json.dumps({'type':'assistant','message':{'content':[
   [ "$status" -eq 0 ]
   [[ "$output" == *"no data"* ]]
 }
+
+# ── OBSERVED section — the archive turns the upper bound into a measured set ─────────────────────
+# cc-permission-beacon.sh appends every resolved prompt to a durable JSONL before removing it.
+# Absence must read as THREE states, not two: a MISSING archive means the archiver has never run
+# and this report is blind, while an EMPTY one means nothing actually blocked. Collapsing them is
+# the failure that once let "no pending approvals" mean "the hook has never fired once".
+arow() { # $1=sid $2=cmd $3=resolved_by $4=waited_s
+  mkdir -p "$CC_PERMARCHIVE_DIR"
+  python3 -c "
+import json,sys,time
+print(json.dumps({'session_id':sys.argv[1],'ts':int(time.time())-int(sys.argv[4]),
+ 'resolved_ts':int(time.time()),'waited_s':int(sys.argv[4]),'resolved_by':sys.argv[3],
+ 'tool_name':'Bash','tool_input':{'command':sys.argv[2]},'cwd':'/w'}))" "$1" "$2" "$3" "$4" \
+    >> "$CC_PERMARCHIVE_DIR/2026-07.jsonl"
+}
+
+@test "archive ABSENT is reported as blindness, not as an all-clear" {
+  export CC_PERMARCHIVE_DIR="$BATS_TEST_TMPDIR/nope"
+  mk "ls -l"
+  run python3 "$AUDIT"
+  [[ "$output" == *"archive ABSENT"* ]]
+  [[ "$output" == *"BLIND"* ]]
+  [[ "$output" != *"nothing has actually blocked"* ]]
+}
+
+@test "archive PRESENT but empty is reported as a trustworthy all-clear (the other state)" {
+  export CC_PERMARCHIVE_DIR="$BATS_TEST_TMPDIR/arch"; mkdir -p "$CC_PERMARCHIVE_DIR"
+  mk "ls -l"
+  run python3 "$AUDIT"
+  [[ "$output" == *"EMPTY"* ]]
+  [[ "$output" == *"nothing has actually blocked"* ]]
+  [[ "$output" != *"BLIND"* ]]
+}
+
+@test "observed prompts are counted and split by approved vs denied/abandoned" {
+  export CC_PERMARCHIVE_DIR="$BATS_TEST_TMPDIR/arch"
+  arow s1 "git push origin main" PostToolUse 12
+  arow s2 "git push --force"     Stop        60
+  arow s3 "rm -rf /tmp/x"        SessionEnd  5
+  mk "ls -l"
+  run python3 "$AUDIT"
+  [[ "$output" == *"3 resolved prompts across 3 sessions"* ]]
+  [[ "$output" == *"approved 1"* ]]
+  [[ "$output" == *"denied/abandoned 2"* ]]
+  [[ "$output" == *"unclassified 0"* ]]
+}
+
+@test "an unrecognised resolved_by is left UNCLASSIFIED, never folded into either bucket" {
+  # Silently counting an unknown clearer as an approval would overstate how permissive the
+  # classifier is — the exact number this archive exists to inform.
+  export CC_PERMARCHIVE_DIR="$BATS_TEST_TMPDIR/arch"
+  arow s1 "cmd-a" PostToolUse 1
+  arow s2 "cmd-b" unknown     1
+  mk "ls -l"
+  run python3 "$AUDIT"
+  [[ "$output" == *"approved 1"* ]]
+  [[ "$output" == *"denied/abandoned 0"* ]]
+  [[ "$output" == *"unclassified 1"* ]]
+}
+
+@test "commands that ACTUALLY blocked are ranked, and outrank the inferred candidates" {
+  export CC_PERMARCHIVE_DIR="$BATS_TEST_TMPDIR/arch"
+  for _ in 1 2 3; do arow sx "git push origin main" Stop 30; done
+  arow sy "dd if=/dev/zero" Stop 1
+  mk "ls -l"
+  run python3 "$AUDIT"
+  [[ "$output" == *"commands that ACTUALLY blocked"* ]]
+  echo "$output" | sed -n '/ACTUALLY blocked/,$p' > "$BATS_TEST_TMPDIR/obs.txt"
+  run grep -qE '^\s+3\s+git push' "$BATS_TEST_TMPDIR/obs.txt"
+  [ "$status" -eq 0 ]
+}
+
+@test "the longest block is surfaced in hours — a 17.7h hang must be one glance away" {
+  export CC_PERMARCHIVE_DIR="$BATS_TEST_TMPDIR/arch"
+  arow s1 "git push --force" Stop 63720
+  mk "ls -l"
+  run python3 "$AUDIT"
+  [[ "$output" == *"longest 17.7h"* ]]
+}
+
+@test "a torn/invalid archive line is dropped, never guessed at or fatal" {
+  export CC_PERMARCHIVE_DIR="$BATS_TEST_TMPDIR/arch"
+  arow s1 "good-cmd" PostToolUse 1
+  printf '{"session_id":"torn","tool_inp\n' >> "$CC_PERMARCHIVE_DIR/2026-07.jsonl"
+  mk "ls -l"
+  run python3 "$AUDIT"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"1 resolved prompts"* ]]
+}
+
+@test "a truncated row still contributes via its summary rather than vanishing" {
+  export CC_PERMARCHIVE_DIR="$BATS_TEST_TMPDIR/arch"; mkdir -p "$CC_PERMARCHIVE_DIR"
+  printf '%s\n' '{"session_id":"sbig","ts":1,"resolved_ts":2,"waited_s":1,"resolved_by":"Stop","tool_name":"Bash","cwd":"/w","tool_input_truncated":true,"tool_input_summary":"psql -c DROP TABLE"}' \
+    >> "$CC_PERMARCHIVE_DIR/2026-07.jsonl"
+  mk "ls -l"
+  run python3 "$AUDIT"
+  [[ "$output" == *"1 resolved prompts"* ]]
+  [[ "$output" == *"psql -c"* ]]
+}
+
+@test "the DAYS argument filters the archive as well as the corpus" {
+  export CC_PERMARCHIVE_DIR="$BATS_TEST_TMPDIR/arch"; mkdir -p "$CC_PERMARCHIVE_DIR"
+  arow s-new "recent-cmd" Stop 1
+  printf '%s\n' '{"session_id":"s-old","ts":100,"resolved_ts":100,"waited_s":0,"resolved_by":"Stop","tool_name":"Bash","tool_input":{"command":"ancient-cmd"},"cwd":"/w"}' \
+    >> "$CC_PERMARCHIVE_DIR/2026-07.jsonl"
+  mk "ls -l"
+  run python3 "$AUDIT" 1
+  [[ "$output" == *"1 resolved prompts"* ]]
+  [[ "$output" != *ancient-cmd* ]]
+}
+
+@test "the docstring no longer claims no history exists — it is now produced" {
+  run grep -c 'so no history exists' "$AUDIT"
+  [ "$output" = "0" ]
+}
