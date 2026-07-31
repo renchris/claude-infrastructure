@@ -492,17 +492,21 @@ But the axis is not the graphics API — it is **cadence, then windows, then sur
 
 ### Therefore: stop rendering what you do not read
 
-Every row measured on this box with one ruler — [`scripts/terminal-bench.sh`](scripts/terminal-bench.sh), per-pid threads/RSS/ports from the **second** sample of `top -l 2` (never `ps %cpu`, a lifetime average that misread this box 2.3×):
+Measured on this box with one ruler — [`scripts/terminal-bench.sh`](scripts/terminal-bench.sh), per-pid threads/RSS/ports from the **second** sample of `top -l 2` (never `ps %cpu`, a lifetime average that misread this box 2.3×). The decisive column is **loaded app CPU**: 18 panes repainting a byte-identical stream, every pane confirmed at 10.00 achieved fps.
 
-| Terminal | threads / pane | windows for 30 panes | per-pane scripting | console layer |
-|---|---|---|---|---|
-| **kitty** | **flat** — 10 threads at 48 panes | **1** | `kitten @` · `$KITTY_WINDOW_ID` | — |
-| iTerm2 | ~0.87–1.1 | 6 (forced by the Metal gate) | `ITERM_SESSION_ID` | — |
-| Ghostty | **4.00, linear** (`6 + 4.00×panes` → ~126 at 30) | **1** | **none on macOS** (`performIpc` false; AppleScript only) | — |
-| cmux | **5.18, linear** (`5.18×panes + 10.6` → ~166 at 30) | 1 | **`CMUX_SURFACE_ID` + full socket API** | **built in** — sidebar row per pane, blue ring on attention, notifications panel, `notify` CLI |
-| WezTerm | **7.0, linear** (~210 at 30 panes) | 1 | `wezterm cli` | — |
+| Terminal | **loaded app CPU** (18 panes @ 10 fps) | threads / pane | windows for 30 panes | per-pane scripting | console layer |
+|---|---|---|---|---|---|
+| **kitty** | **9.5%** — while carrying **22 % more bytes** | flat — 10 at 48 panes | **1** | `kitten @` · `$KITTY_WINDOW_ID` | — |
+| iTerm2 | **10.5%** *in the cheap layout* (1 window × 20 panes, CPU renderer) | ~0.87–1.1 | 6 (forced by the Metal gate) | `ITERM_SESSION_ID` | — |
+| WezTerm | 24.4% | **4.00, linear** | 1 | `wezterm cli` | — |
+| Ghostty | 27.3% — highest, and 3 processes per loaded pane | **4.00, linear** | **1** | **none on macOS** (`performIpc` false; AppleScript only) | — |
+| cmux | *not run under load* | **5.18, linear** (`5.18×panes + 10.6`) | 1 | **`CMUX_SURFACE_ID` + full socket API** | **built in** — sidebar row per pane, blue ring on attention, notifications panel, `notify` CLI |
 
-kitty wins on one structural property: **all N panes in one OS window at a thread count that does not grow**, without giving up the per-pane addressing that 22 load-bearing files here depend on. Ghostty and cmux are both **libghostty/Metal** and both scale *linearly* — they lose the thread axis, not the API argument. **cmux does not dominate kitty**: it wins the console axis — it ships, natively, the *shape* of the exception surface described below — and loses on threads.
+**kitty wins among the challengers by 2.6–2.9× on loaded CPU — not on threads.** The thread-count rationale this section used to lead with is **retired**: WezTerm measured **4.00** threads/pane, not the ~7.0 previously published, and the falsification test written to kill the thread finding **fired** — 87 WezTerm threads produced *fewer* context switches than kitty's 10. Threads were a proxy; loaded CPU is the thing being proxied.
+
+**And the migration is on HOLD, because the incumbent has not been beaten.** The one iTerm2 datapoint taken in the *cheap* layout — one window, 20 panes, CPU renderer — read **10.5% against kitty's 9.5%**: within ~10% on CPU and within one thread. Every other iTerm2 figure above comes from the *expensive* layout it is normally run in, which is a statement about how it is configured, not about what it can do. Two cheaper rungs are live and unmeasured: the eight render knobs have never been benchmarked since passing their own gate, and the dismissal of plain `tmux` rested on a premise since verified **false**. Switching terminals is the expensive move and it is **not yet justified** — see [`terminal-for-30-panes-2026-07-31.md`](docs/research/terminal-for-30-panes-2026-07-31.md) §9.
+
+**cmux does not dominate kitty either**: it wins the console axis — it ships, natively, the *shape* of the exception surface described below — and has not been run under load at all.
 
 #### The instrument, running — not a table read off somebody's source tree
 
@@ -531,7 +535,7 @@ That `0.53 : 1` is the finding the whole section rests on, and it is **measured 
 
 A 30-minute run was taken to get a sharp one (at 1800 s, one port is 2/hr) and **it did not deliver a clean bound either** — the window census fell 36 → 19 while it held, so the layout was not constant and its `+5 ports` cannot be separated into leaked-versus-released. Recorded as still-open in [`terminal-for-30-panes-2026-07-31.md`](docs/research/terminal-for-30-panes-2026-07-31.md) §6.1 rather than quoted as a bound it is not. What that run *does* show is churn: **17 windows closed and both window counters fell with them** (−17 onscreen, −18 offscreen) for +5 ports and +20 MB — kitty gave the windows back, where iTerm2 had **98 windows survive `close()`** ([upstream #12097](https://gitlab.com/gnachman/iterm2/-/issues/12097), open since 2025-01-01).
 
-**So the sustained-runtime question is open, and it is the largest gap in the terminal case.** It is stated here rather than papered over, because the recommendation below does not depend on it: kitty is chosen on *thread scaling* and *surfaces per window*, both of which are settled.
+**So the sustained-runtime question is open, and it is the largest gap in the terminal case** — stated here rather than papered over. It compounds with the HOLD above rather than being offset by it: the challenger is ahead of its rivals on loaded CPU, level with the incumbent in the incumbent's cheap layout, and unproven over hours. **That is exactly why the move below is a seam and not a migration** — a `CC_PANE_ID` abstraction costs the same whichever terminal eventually wins, and stops the question from having to be answered before anything else can proceed.
 
 **Reproduce any row yourself** — it is one read-only command per terminal, and it will refuse to invent a number:
 
