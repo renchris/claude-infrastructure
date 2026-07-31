@@ -8,7 +8,8 @@
 # ~30 min later as a generic STALL?/MODAL page with no detail; resolution took 2h13m.
 #
 # THIS beacon makes the block VISIBLE, ATTRIBUTED, and FAST: on a permission prompt the HARNESS (not a
-# worker) writes an unspoofable record {ts, tool_name, tool_input, cwd} to CC_PERMPEND_DIR/<sid>.json.
+# worker) writes an unspoofable record {ts, tool_name, tool_input, cwd, tool_use_id} to
+# CC_PERMPEND_DIR/<sid>.json.
 # lead-supervisor.sh's sweep reads the dir and pages "PERMISSION-PENDING: <cmd> since <ts>" within
 # minutes, with the exact blocked command attached — a precise escalation instead of a silent hang.
 #
@@ -85,6 +86,19 @@ beat() {
   : > "$HEARTBEAT" 2>/dev/null || true
 }
 
+# The ARCHIVE needs the same control, and shipped without it — which INVERTED the three states the
+# consumer reports. ARCHDIR was created only inside archive(), immediately before an append, so:
+# a wired, running archiver that has simply had no prompts to record leaves NO directory and was
+# reported "BLIND — has never archived", while "present but empty" — the branch asserting "wired and
+# running" — was unreachable by the archiver's own path and could arise only from deletion or a read
+# error. The strongest claim rested on the weakest evidence, exactly the failure the split exists to
+# prevent. Stamping on EVERY clear makes dir-exists mean "the archiver ran", for real.
+ARCH_HEARTBEAT="$ARCHDIR/.archive-alive"
+arch_beat() {
+  [[ -d "$ARCHDIR" ]] || mkdir -p "$ARCHDIR" 2>/dev/null || return 0
+  : > "$ARCH_HEARTBEAT" 2>/dev/null || true
+}
+
 # ── DURABLE ARCHIVE (§3 Stage A.4) ───────────────────────────────────────────────────────────────
 # WHY: `clear` used to `rm -f` each record the moment it was answered, so NO history of actual
 # permission prompts existed anywhere on this box. Two consequences, both measured:
@@ -94,20 +108,29 @@ beat() {
 #   • The classifier therefore can never be tuned on real data, which is Step 3's named guardrail.
 # So the record is appended to a durable append-only JSONL before it is removed.
 #
-# `resolved_by` + `cleared_tool` are the load-bearing fields for that tuning, and the PAIR is
-# required. The tempting shortcut — "PostToolUse only fires on the grant path, so PostToolUse means
-# approved" — is FALSE: PostToolUse fires for every tool, not only the prompted one, so after a
-# DENIAL the turn can continue, run some other tool, and have THAT tool's PostToolUse clear this
-# still-pending beacon. The denial would then be archived as an approval. Recording which tool did
-# the clearing lets the consumer demand a match before calling it a grant, and report a mismatch as
-# UNKNOWN rather than guessing. Neither field is recoverable from anywhere else after the fact.
+# `resolved_by` + `tool_use_id`/`cleared_tool_use_id` are the load-bearing fields for that tuning.
+# The tempting shortcut — "PostToolUse only fires on the grant path, so PostToolUse means approved"
+# — is FALSE: PostToolUse fires for every tool, not only the prompted one, so after a DENIAL the
+# turn can continue, run some other tool, and have THAT tool's PostToolUse clear this still-pending
+# beacon, archiving the refusal as an approval. Comparing tool NAMES does not rescue it either:
+# this fleet's traffic is overwhelmingly Bash, so a denied `git push --force` cleared by a later
+# `git status` matches on name and is still wrong. Only the INVOCATION id can prove a grant; see
+# `archive`. None of these fields is recoverable from anywhere else after the fact.
 #
 # ATOMICITY: many sessions append to one file concurrently. A single small write(2) under O_APPEND
 # does not interleave, so the record is length-BOUNDED (ARCH_MAXLEN, default 3500 B — comfortably
 # inside the 4 KiB atomic-append regime) and over-long payloads degrade to a truncated summary
 # rather than risking a torn line. Truncation is RECORDED (`tool_input_truncated`), never silent.
-archive() {
-  local rts mon line
+#
+# TOOL_USE_ID, not the tool NAME, is what can prove a grant. Name-matching was the first cut and it
+# is a guess that fails in the unsafe direction: the dominant traffic here is Bash→Bash, so a DENIED
+# `git push --force` followed by any other Bash command in the same turn yields
+# cleared_tool == tool_name == "Bash", and the refusal is recorded as an approval. tool_use_id names
+# the specific INVOCATION (hooks/curl-gate.py:403 reads it from a live payload), so an exact match is
+# evidence and nothing else is. Absence is reported as UNKNOWN, never approved — a split that is
+# honestly empty beats one that is confidently wrong.
+archive() { # $1 = the CLAIMED beacon, already moved aside so no second clear can archive it too
+  local claimed="$1" rts mon line
   mkdir -p "$ARCHDIR" 2>/dev/null || return 0
   # One date(1) fork for both the timestamp and the month bucket.
   local d; d="$(date +'%s %Y-%m' 2>/dev/null)" || return 0
@@ -118,14 +141,16 @@ archive() {
   # so `resolved_by == PostToolUse` alone would silently record that denial as an approval.
   # Comparing cleared_tool against the beacon's own tool_name separates a real grant from such a
   # collateral clear; the consumer treats a mismatch as UNKNOWN rather than guessing either way.
-  local by ct _bi
-  _bi="$(printf '%s' "$INPUT" | jq -r '[(.hook_event_name // ""), (.tool_name // "")] | join("\u001f")' 2>/dev/null || true)"
-  IFS=$'\x1f' read -r by ct <<<"$_bi" || true
+  local by ct cid _bi
+  _bi="$(printf '%s' "$INPUT" | jq -r '[(.hook_event_name // ""), (.tool_name // ""), (.tool_use_id // "")] | join("\u001f")' 2>/dev/null || true)"
+  IFS=$'\x1f' read -r by ct cid <<<"$_bi" || true
 
-  line="$(jq -c --arg sid "$SID" --arg by "${by:-unknown}" --arg ct "$ct" --argjson rts "$rts" \
+  line="$(jq -c --arg sid "$SID" --arg by "${by:-unknown}" --arg ct "$ct" --arg cid "$cid" \
+      --argjson rts "$rts" \
       '{session_id:$sid, ts:(.ts//$rts), resolved_ts:$rts, waited_s:($rts - (.ts//$rts)),
-        resolved_by:$by, cleared_tool:$ct, tool_name:(.tool_name//""),
-        tool_input:(.tool_input//{}), cwd:(.cwd//"")}' "$BEACON" 2>/dev/null)" || return 0
+        resolved_by:$by, cleared_tool:$ct, cleared_tool_use_id:$cid,
+        tool_use_id:(.tool_use_id//""), tool_name:(.tool_name//""),
+        tool_input:(.tool_input//{}), cwd:(.cwd//"")}' "$claimed" 2>/dev/null)" || return 0
   [[ -z "$line" ]] && return 0
 
   if (( ${#line} > ARCH_MAXLEN )); then
@@ -134,7 +159,7 @@ archive() {
         '{session_id:$sid, ts:(.ts//$rts), resolved_ts:$rts, waited_s:($rts - (.ts//$rts)),
           resolved_by:$by, tool_name:(.tool_name//""), cwd:(.cwd//""),
           tool_input_truncated:true,
-          tool_input_summary:((.tool_input//{}|tostring)[0:$cap])}' "$BEACON" 2>/dev/null)" || return 0
+          tool_input_summary:((.tool_input//{}|tostring)[0:$cap])}' "$claimed" 2>/dev/null)" || return 0
     [[ -z "$line" ]] && return 0
   fi
   printf '%s\n' "$line" >> "$ARCHDIR/$mon.jsonl" 2>/dev/null || true
@@ -143,12 +168,18 @@ archive() {
 case "$MODE" in
   clear)
     beat
-    # FAST PATH: with no beacon there is nothing to archive or remove. This builtin test makes the
-    # overwhelmingly common PostToolUse call CHEAPER than the unconditional `rm -f` it replaces —
-    # the archive costs forks only when a real prompt actually resolved.
-    [[ -f "$BEACON" ]] || exit 0
-    archive
-    rm -f "$BEACON" 2>/dev/null || true
+    arch_beat
+    # ATOMIC CLAIM. `[[ -f ]]` then archive then rm has NO mutual exclusion: two overlapping clears
+    # (a trailing PostToolUse racing the turn's Stop) both passed the test and both appended, so ONE
+    # prompt produced TWO rows — measured 40/40 — landing in BOTH buckets at once and inflating the
+    # ranking from a single event. `mv` is atomic within a filesystem and can succeed exactly once,
+    # so the winner archives and the loser silently finds nothing, which is the correct outcome for
+    # a beacon that is already resolved. The claim file is dot-prefixed and suffix-less so the
+    # supervisor's "$dir"/*.json glob can never read it as a pending prompt.
+    CLAIM="$DIR/.claimed-$SID.$$"
+    mv "$BEACON" "$CLAIM" 2>/dev/null || exit 0
+    archive "$CLAIM"
+    rm -f "$CLAIM" 2>/dev/null || true
     exit 0
     ;;
   write)
@@ -159,7 +190,8 @@ case "$MODE" in
     TMP="$(mktemp "$DIR/.$SID.XXXXXX" 2>/dev/null)" || exit 0
     if printf '%s' "$INPUT" | jq -c \
          --argjson ts "$TS" \
-         '{ts:$ts, tool_name:(.tool_name // ""), tool_input:(.tool_input // {}), cwd:(.cwd // "")}' \
+         '{ts:$ts, tool_name:(.tool_name // ""), tool_input:(.tool_input // {}), cwd:(.cwd // ""),
+           tool_use_id:(.tool_use_id // "")}' \
          > "$TMP" 2>/dev/null; then
       mv -f "$TMP" "$BEACON" 2>/dev/null || rm -f "$TMP" 2>/dev/null || true
     else
