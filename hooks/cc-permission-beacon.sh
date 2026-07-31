@@ -46,7 +46,11 @@ DIR="${CC_PERMPEND_DIR:-/tmp/cc-permission-pending}"
 # Durable ARCHIVE (see the `archive` function below). Deliberately NOT under CC_PERMPEND_DIR:
 # that lives in /tmp and is wiped on reboot, and the whole point of the archive is a record that
 # outlives the box's uptime so the classifier can be tuned on weeks of real data.
-ARCHDIR="${CC_PERMARCHIVE_DIR:-$HOME/.claude/autonomy/permission-archive}"
+# ${HOME:-} — NOT bare $HOME. `set -u` is on, and this line sits ABOVE the mode dispatch, so an
+# unset HOME aborted the ENTIRE hook at rc=1: `write` never ran, no beacon was created, and the
+# supervisor went blind to a real pending prompt. An archive convenience must never be able to
+# take down the beacon it is a side-car to (regression caught in adversarial review, 2026-07-31).
+ARCHDIR="${CC_PERMARCHIVE_DIR:-${HOME:-/tmp}/.claude/autonomy/permission-archive}"
 ARCH_MAXLEN="${CC_PERMARCHIVE_MAXLEN:-3500}"
 
 # Read the harness payload once (fail-open on empty/malformed — never block the prompt).
@@ -153,7 +157,11 @@ archive() { # $1 = the CLAIMED beacon, already moved aside so no second clear ca
         tool_input:(.tool_input//{}), cwd:(.cwd//"")}' "$claimed" 2>/dev/null)" || return 0
   [[ -z "$line" ]] && return 0
 
-  if (( ${#line} > ARCH_MAXLEN )); then
+  # BYTES, not characters. ${#line} counts CHARACTERS, so 3,000 CJK characters measured 3,215
+  # against the cap while occupying 9,215 bytes — 2.25x the regime the atomicity argument relies
+  # on, with truncation never firing. LC_ALL=C makes the bound the same unit as the guarantee.
+  local nbytes; nbytes="$(LC_ALL=C; printf %s "$line" | wc -c)"; nbytes="${nbytes// /}"
+  if (( nbytes > ARCH_MAXLEN )); then
     line="$(jq -c --arg sid "$SID" --arg by "${by:-unknown}" --argjson rts "$rts" \
         --argjson cap "$((ARCH_MAXLEN / 2))" \
         '{session_id:$sid, ts:(.ts//$rts), resolved_ts:$rts, waited_s:($rts - (.ts//$rts)),
@@ -161,8 +169,48 @@ archive() { # $1 = the CLAIMED beacon, already moved aside so no second clear ca
           tool_input_truncated:true,
           tool_input_summary:((.tool_input//{}|tostring)[0:$cap])}' "$claimed" 2>/dev/null)" || return 0
     [[ -z "$line" ]] && return 0
+    # RE-MEASURE. The truncated form is bounded in CHARACTERS too, so a multibyte payload could
+    # still land over the byte cap after "truncation" — the fallback inheriting the exact bug it
+    # was meant to fix. If it is still over, drop tool_input entirely: identity, timing and
+    # attribution are what the archive is FOR, and they always fit.
+    nbytes="$(LC_ALL=C; printf %s "$line" | wc -c)"; nbytes="${nbytes// /}"
+    if (( nbytes > ARCH_MAXLEN )); then
+      line="$(jq -c --arg sid "$SID" --arg by "${by:-unknown}" --arg ct "$ct" --arg cid "$cid" \
+          --argjson rts "$rts" \
+          '{session_id:$sid, ts:(.ts//$rts), resolved_ts:$rts, waited_s:($rts - (.ts//$rts)),
+            resolved_by:$by, cleared_tool:$ct, cleared_tool_use_id:$cid,
+            tool_use_id:(.tool_use_id//""), tool_name:(.tool_name//""), cwd:(.cwd//""),
+            tool_input_truncated:true, tool_input_summary:"<omitted: over byte cap>"}' \
+          "$claimed" 2>/dev/null)" || return 1
+      [[ -z "$line" ]] && return 1
+    fi
   fi
-  printf '%s\n' "$line" >> "$ARCHDIR/$mon.jsonl" 2>/dev/null || true
+  # SERIALIZED APPEND. "a single small write(2) under O_APPEND does not interleave" was measured
+  # FALSE for this workload: 120-way concurrency at ~1.2 KB rows tore 10 of 720 lines, merging two
+  # sessions' records into one unparseable line — under BOTH the 3500 B cap and the 4 KiB page. The
+  # corrupt counts were always EVEN (A-chunk, B-whole, A-chunk), i.e. split-write interleaving, and
+  # the threshold is offset-dependent rather than a flat size rule, so no cap can be trusted to
+  # avoid it. mkdir is atomic on every POSIX filesystem and macOS ships no flock(1), so it is the
+  # mutex. This costs forks ONLY on a real resolution, never on the PostToolUse hot path.
+  local lock="$ARCHDIR/.append.lock" got=0 i=0
+  while (( i < 50 )); do
+    if mkdir "$lock" 2>/dev/null; then got=1; break; fi
+    sleep 0.02; i=$(( i + 1 ))
+  done
+  if (( got )); then
+    printf '%s\n' "$line" >> "$ARCHDIR/$mon.jsonl" 2>/dev/null || got=2
+    rmdir "$lock" 2>/dev/null || true
+  fi
+  # NEVER LOSE THE RECORD. The caller rm's the claim unconditionally, so a failed append used to
+  # destroy the very evidence this archive exists to keep (measured: unwritable ARCHDIR ⇒ rc=0,
+  # beacon deleted, zero rows). A contended lock or a failed write now falls back to a per-process
+  # sidecar — same *.jsonl glob the consumer already reads, so the row is still counted, just in its
+  # own file. stderr is swallowed: bash reports a redirect failure before 2>/dev/null can apply, and
+  # a hook that chatters on stderr is not fail-QUIET.
+  if (( got != 1 )); then
+    { printf '%s\n' "$line" >> "$ARCHDIR/$mon.$SID.$$.jsonl"; } 2>/dev/null || return 1
+  fi
+  return 0
 }
 
 case "$MODE" in
@@ -178,8 +226,9 @@ case "$MODE" in
     # supervisor's "$dir"/*.json glob can never read it as a pending prompt.
     CLAIM="$DIR/.claimed-$SID.$$"
     mv "$BEACON" "$CLAIM" 2>/dev/null || exit 0
-    archive "$CLAIM"
-    rm -f "$CLAIM" 2>/dev/null || true
+    # Keep the claim when archiving FAILED — deleting it would destroy the record. It is
+    # dot-prefixed, so it is invisible to the supervisor's *.json glob and cannot re-page.
+    if archive "$CLAIM"; then rm -f "$CLAIM" 2>/dev/null || true; fi
     exit 0
     ;;
   write)

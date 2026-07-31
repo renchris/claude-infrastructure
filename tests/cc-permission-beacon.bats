@@ -319,3 +319,50 @@ arch_rows() { cat "$CC_PERMARCHIVE_DIR"/*.jsonl 2>/dev/null; }
   [ -f "$CC_PERMARCHIVE_DIR/.archive-alive" ]
   [ -z "$(arch_rows)" ]                                   # ...and still no phantom row
 }
+
+@test "D1 REGRESSION: an unset HOME must not take down the whole beacon" {
+  # ARCHDIR's $HOME default sits ABOVE the mode dispatch under `set -u`, so an unset HOME aborted
+  # the ENTIRE hook at rc=1 — `write` never ran and the supervisor went blind to a real prompt.
+  # An archive convenience may never break the beacon it is a side-car to.
+  run env -u HOME CC_PERMPEND_DIR="$CC_PERMPEND_DIR" CC_PERMARCHIVE_DIR="$CC_PERMARCHIVE_DIR" \
+      bash -c 'printf "%s" "$1" | "$2" write' _ "$(payload s-nohome 'git push --force')" "$H"
+  [ "$status" -eq 0 ]
+  [ -f "$(beacon s-nohome)" ]
+}
+
+@test "D2a: the size bound is in BYTES, so multibyte payloads are truncated too" {
+  # ${#line} counts CHARACTERS: 3,000 CJK characters measured 3,215 against the 3500 cap while
+  # occupying 9,215 bytes, so truncation never fired and the row was 2.25x the atomicity regime.
+  cjk="$(python3 -c "print('中'*3000)")"
+  printf '%s' "$(payload s-cjk "$cjk")" | "$H" write
+  printf '%s' "$(payload s-cjk "$cjk")" | "$H" clear
+  row="$(arch_rows)"
+  [ "$(printf '%s' "$row" | jq -r '.tool_input_truncated')" = true ]
+  [ "$(printf '%s' "$row" | LC_ALL=C wc -c | tr -d ' ')" -lt 4096 ]
+}
+
+@test "D2b: concurrent clears at 1.2 KB rows produce no torn lines" {
+  # "a single small write under O_APPEND does not interleave" measured FALSE: 10 of 720 lines tore
+  # at this size, merging two sessions into one unparseable row. Appends are serialized now.
+  big="$(python3 -c "print('y'*1200)")"
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    printf '%s' "$(payload "tear-$i" "$big")" | "$H" write
+  done
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    printf '%s' "$(jq -nc --arg s "tear-$i" '{session_id:$s,hook_event_name:"Stop"}')" | "$H" clear &
+  done
+  wait
+  [ "$(arch_rows | wc -l | tr -d ' ')" -eq 12 ]
+  while read -r ln; do printf '%s' "$ln" | jq -e . >/dev/null; done < <(arch_rows)
+}
+
+@test "D3: a failed archive PRESERVES the record instead of deleting it" {
+  # rm ran unconditionally, so an unwritable archive destroyed the very evidence it exists to keep.
+  printf '%s' "$(payload s-lost 'git reset --hard')" | "$H" write
+  chmod 500 "$CC_PERMARCHIVE_DIR" 2>/dev/null || mkdir -p "$CC_PERMARCHIVE_DIR"
+  chmod 500 "$CC_PERMARCHIVE_DIR"
+  printf '%s' "$(jq -nc '{session_id:"s-lost",hook_event_name:"Stop"}')" | "$H" clear
+  chmod 755 "$CC_PERMARCHIVE_DIR"
+  # the claim is retained (dot-prefixed, so it cannot re-page) — the record still exists on disk
+  [ "$(ls -A "$CC_PERMPEND_DIR" | grep -c 'claimed-s-lost')" -ge 1 ]
+}

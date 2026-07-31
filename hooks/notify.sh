@@ -94,7 +94,12 @@ case "$SID" in ''|*[!A-Za-z0-9._-]*) SID_SAFE="" ;; *) SID_SAFE="$SID" ;; esac
 # unknown token"). That would have silently dropped every alert whose command contains a quote —
 # `git commit -m "…"`, the common case — i.e. reproduced the exact drop this change removes.
 nty_scrub() {
-  local s="$1" sq="'"
+  # Cut to 400 BEFORE the three global substitutions. They are O(n) each over the whole payload,
+  # and this runs on the PermissionRequest path where the hook is blocking the operator's prompt:
+  # measured 1 MB→1.5 s, 2 MB→5.4 s, 5 MB→30 s, i.e. straight through the 5 s hook budget on a
+  # large tool_input. 400 is comfortably above the 140-char cap below, so the visible result is
+  # byte-identical — only the work disappears.
+  local s="${1:0:400}" sq="'"
   s="${s//\\/ }"
   s="${s//\"/$sq}"
   s="${s//[[:cntrl:]]/ }"
@@ -102,6 +107,10 @@ nty_scrub() {
   printf '%s' "$s"
 }
 DETAIL="$(nty_scrub "$DETAIL")"
+# SID8 reaches the AppleScript literal too. Line 83 already treats SID as untrusted for the
+# FILENAME sink; leaving the same value raw for the script sink is an inconsistency, and a quote
+# in it is a -2740 syntax error, i.e. the alert renders NOTHING.
+SID8="$(nty_scrub "$SID8")"
 DIR="$(nty_scrub "$DIR")"
 TOOL="$(nty_scrub "$TOOL")"
 
@@ -115,11 +124,17 @@ DEBOUNCE_FILE="${CC_NOTIFY_DIR}/claude-notify-${_ACCT}-${SID_SAFE:-nosid}-${EVEN
 if [[ -f "$DEBOUNCE_FILE" ]]; then
     LAST_NOTIFY=$(stat -f %m "$DEBOUNCE_FILE" 2>/dev/null || echo 0)
     NOW=$(date +%s)
-    if (( NOW - LAST_NOTIFY < 2 )); then
+    # A lock stamped in the FUTURE is treated as stale, never as fresh. `NOW - LAST_NOTIFY` goes
+    # NEGATIVE there, which satisfies `< 2` forever, and the `touch` below is never reached — so the
+    # suppression is self-perpetuating rather than a 2 s window. Two real triggers: any backward
+    # clock step (NTP correction, lid or VM resume) blackholes a session's alerts until wall-clock
+    # catches up; and /tmp is world-writable with these filenames publishing live session ids, so a
+    # local user can pre-create one and silence a specific session. Fail toward NOTIFYING.
+    if (( LAST_NOTIFY <= NOW && NOW - LAST_NOTIFY < 2 )); then
         exit 0
     fi
 fi
-touch "$DEBOUNCE_FILE"
+touch "$DEBOUNCE_FILE" 2>/dev/null || true   # same rule: the lock is best-effort, the alert is not
 
 case "$EVENT_TYPE" in
     permission)
@@ -183,7 +198,11 @@ if [[ -n "$DIR" || -n "$SID8" ]]; then
 fi
 
 # Log for debugging — carries the identity too, so the log is itself triageable after the fact.
-echo "$(date): Playing ${SOUND} for ${EVENT_TYPE} [${SID8:-nosid}${DIR:+ ${DIR}}]" >> "$LOG_FILE"
+# `|| true`: this is a DIAGNOSTIC, and it was the only side-effecting line here without one — so
+# under `set -e` an unwritable log file (disk full, or a foreign-owned file at this fixed
+# world-writable path after the tmp cleaner reaps it) aborted the hook and the alert was never
+# rendered at all. A missing log line must never cost the notification it is describing.
+{ echo "$(date): Playing ${SOUND} for ${EVENT_TYPE} [${SID8:-nosid}${DIR:+ ${DIR}}]" >> "$LOG_FILE"; } 2>/dev/null || true
 
 # Play sound async (background with disown so script can exit immediately)
 if [[ "$SOUND" == /* ]]; then

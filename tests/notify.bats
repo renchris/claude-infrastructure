@@ -211,3 +211,52 @@ fire() { printf '%s' "$1" | "$H" "$2"; }
   run cat "$CC_NOTIFY_DIR/claude-notify.log"
   [[ "$output" == *"[4f9c21ab claude-infrastructure]"* ]]
 }
+
+# ── Adversarial-review fixes (verify-notify, 2026-07-31) ─────────────────────────────────────────
+# Two of these produced a SILENT TOTAL DROP of the alert — strictly worse than the anonymous alert
+# this hook replaced, and the exact outcome this suite exists to prevent. None had a test.
+@test "D1: a lock stamped in the FUTURE does not suppress the alert" {
+  # NOW - LAST_NOTIFY goes negative, which satisfies `< 2` forever, and the touch that would heal
+  # it is never reached. Triggered by any backward clock step, or by a local user pre-creating the
+  # lock — the filenames are world-readable in /tmp and publish live session ids.
+  touch -t 203001010000 "$CC_NOTIFY_DIR/claude-notify-.claude-test-skew-permission.lock"
+  fire "$(payload skew /w/proj 'x')" permission
+  [[ "$(osa)" == *'display notification "x"'* ]] || false
+}
+
+@test "D2: an unwritable debug log does not kill the alert" {
+  : > "$CC_NOTIFY_DIR/claude-notify.log"; chmod 000 "$CC_NOTIFY_DIR/claude-notify.log"
+  run bash -c 'printf "%s" "$1" | "$2" permission' _ "$(payload log000 /w/proj 'git push --force')" "$H"
+  chmod 644 "$CC_NOTIFY_DIR/claude-notify.log"
+  [ "$status" -eq 0 ]
+  [[ "$(osa)" == *'display notification "git push --force"'* ]] || false
+}
+
+@test "D2b: an unwritable lock directory does not kill the alert either" {
+  chmod 500 "$CC_NOTIFY_DIR"
+  run bash -c 'printf "%s" "$1" | "$2" permission' _ "$(payload lk /w/proj 'ls')" "$H"
+  chmod 755 "$CC_NOTIFY_DIR"
+  [ "$status" -eq 0 ]
+}
+
+@test "D3: a metacharacter in session_id cannot break the emitted AppleScript" {
+  # SID8 reaches the script literal. It was sanitized for the FILENAME sink and left raw here —
+  # inconsistent sinks on one untrusted value; a quote is a -2740 error, i.e. nothing renders.
+  printf '%s' '{"session_id":"a\"b-1111","cwd":"/w/proj","tool_name":"Bash","tool_input":{"command":"ls"}}' | "$H" permission
+  script="$(osa)"
+  [ -n "$script" ]
+  run /usr/bin/osascript -e "if false then $script"
+  [ "$status" -eq 0 ]
+}
+
+@test "D4: a multi-megabyte payload stays far inside the 5 s hook budget" {
+  # The scrub's three global substitutions ran over the WHOLE tool_input before the 140-char cut:
+  # 2 MB measured 5.4 s, straight through the budget, on the path that blocks the operator's prompt.
+  # The payload goes via a FILE: a 2 MB jq --arg overflows the argv limit, which fails the test
+  # harness rather than the subject (observed: "jq: Argument list too long").
+  python3 -c "import json;json.dump({'session_id':'sz','cwd':'/w/proj','tool_name':'Bash','tool_input':{'command':'a'*2000000}},open('$BATS_TEST_TMPDIR/big.json','w'))"
+  start=$(date +%s)
+  "$H" permission < "$BATS_TEST_TMPDIR/big.json"
+  [ $(( $(date +%s) - start )) -lt 3 ]
+  [[ "$(osa)" == *'…'* ]] || false        # still truncated, still rendered
+}
