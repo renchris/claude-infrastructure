@@ -54,7 +54,22 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LA_DIR="${LAUNCHD_LINT_LA_DIR:-$HOME/Library/LaunchAgents}"
 # Colon-separated search path. The archive repo is a SIBLING git repo that legitimately owns two
 # com.chrisren.* labels; a label is "findable" if it is tracked in ANY of these, not just this repo.
-LAUNCHD_LINT_REPO_DIR_DEFAULT="$REPO_ROOT/launchd:$REPO_ROOT/scripts/limit-recover:$HOME/Development/claude-code-archive/launchd"
+#
+# launchd/staged/ is in this path, and that is NOT a declaration that its plists should be installed.
+# This path is a RECOVERY INDEX and nothing else: the only loop that consumes it walks $LA_DIR (the
+# LIVE files) and asks "if I lost this file, could I get it back?". It never enumerates the index to
+# decide what ought to be running, so adding a directory here cannot invent a row — it can only turn
+# a false "unrecoverable" into a true "recoverable", plus enable the (c) content-parity compare that
+# a missing SSOT skips entirely. Contrast bin/cc-blockers' REPO-side glob, which DOES enumerate the
+# repo to emit REPO-ONLY and therefore must stay non-recursive (tests/cc-blockers-fleet.bats).
+#
+# Concretely: com.claude.relogin is live, and its SSOT is committed at launchd/staged/ ON PURPOSE —
+# install.sh:452 globs launchd/*.plist and bootstraps each one, so promoting that plist would let a
+# routine install auto-activate credentials automation (8a1e49ab: "structure, not a conditional").
+# Before this entry the lint called a committed, recoverable plist unrecoverable, and the only fixes
+# its own message suggested were to copy it into the very directory that guard exists to keep it out
+# of. A staged SSOT is a real SSOT; only its INSTALLATION is deliberately withheld.
+LAUNCHD_LINT_REPO_DIR_DEFAULT="$REPO_ROOT/launchd:$REPO_ROOT/launchd/staged:$REPO_ROOT/scripts/limit-recover:$HOME/Development/claude-code-archive/launchd"
 REPO_DIRS="${LAUNCHD_LINT_REPO_DIR:-$LAUNCHD_LINT_REPO_DIR_DEFAULT}"
 
 case "${1:-}" in
