@@ -65,6 +65,12 @@ def sandbox():
         "HOP_RISE",
         "HOP_FALL",
         "print_ink",
+        # A case that swaps a FUNCTION leaks exactly like one that swaps a constant, and this list is
+        # hand-maintained — `hop_pulses` was patched by the hop case and, being absent here, stayed
+        # patched for every case after it, which then failed on the WRONG check. The failure is loud
+        # (the harness compares the message, not just the exit) but the cause reads as "two unrelated
+        # gates broke".
+        "hop_pulses",
         "assert_world_rates_integral",
         "BUDGET_WAIVED",
         "css",
@@ -168,16 +174,25 @@ def _print_lock():
     g.build(v())
 
 
-@case("world: a hop inside a dead-stopped world", "inside a stopped/reversed")
-def _hop_in_stop():
-    # Proves assert_hop_clear_of_stopped_world. ONLY the hop clock moves: THE ASK keeps its real
-    # 26.0-35.0s window (so disjointness and the duty budget have nothing to say first, which is how
-    # the old 13.0-22.0s sabotage was convicting), and on an 8s clock the fourth hop is airborne
-    # 29.76-31.36s — inside THE ASK's 26.0-32.0s dead world. The real 12s clock clears that same
-    # stop by 0.64s, so this case is the margin's guard.
-    g.HOP_PERIOD = 8.0
-    g.HOP_RISE = g.HOP_PERIOD * g.HOP_FROM_PCT / 100  # 5.76
-    g.HOP_FALL = g.HOP_PERIOD * g.HOP_TO_PCT / 100  # 7.36
+@case("world: a hop landing on a beat", "inside beat")
+def _hop_on_beat():
+    """Proves assert_hop_clear_of_stopped_world against the invariant it now actually defends.
+
+    RETIRED AND REPLACED, deliberately. The old sabotage moved HOP_PERIOD to 8 s so the fourth hop
+    landed inside THE ASK's dead world. That failure mode no longer exists: `hop_pulses` SLIDES a
+    colliding hop onto the next free stride instead of firing it, so the sabotage now produces a
+    perfectly good build and the gate correctly has nothing to say. A red-proof case whose input is
+    no longer a defect proves nothing — it just reports the gate as broken.
+
+    What must still be provable is that the guard convicts if the SLIDE is ever bypassed, because
+    that is the mechanism the property now rests on. So the sabotage removes the slide — `hop_pulses`
+    returns the raw 12 s grid, which is exactly what shipped before this fix — and the guard has to
+    catch the hop that then lands in THE REFUSAL (airborne 20.64-23.04 s against a 17.0-22.0 s
+    window). That is the hurdle-jump the operator reported, reproduced on purpose.
+    """
+    g.hop_pulses = lambda art: [
+        k * g.HOP_PERIOD for k in range(int(g.P / g.HOP_PERIOD))
+    ]
     g.build(v())
 
 

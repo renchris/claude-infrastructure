@@ -1199,26 +1199,126 @@ def assert_overlap_ink_is_ambient(art: Art) -> None:
             )
 
 
-def assert_hop_clear_of_stopped_world(art: Art) -> None:
-    """Texture must not contradict the beat it lands in.
+HOP_CALM = 2.5  # s — nothing jumps before this; t=0 is the still AND the frame readers land on
+SEEN_WINDOW = 45.0  # s — past this the timeline anchor says most readers have gone (S16)
 
-    The hop is involuntary life on a 12 s clock and is deliberately NOT a rare event. But a hop
-    inside a dead-stopped world is a creature jumping while the world is frozen — the exact
-    non-sequitur this redesign exists to remove, and it would arrive purely from re-timing a beat,
-    with every existing gate still green.
+
+def hop_pulses(art: Art) -> list[float]:
+    """The absolute start of every hop this loop actually contains.
+
+    THE HOP USED TO FIRE INSIDE ALL THREE BEATS, and one of those collisions was doing real damage.
+    On its free 12 s clock the creature is airborne 8.64-11.04 s, 20.64-23.04 s and 32.64-35.04 s —
+    which lands inside THE SUMMONING, THE REFUSAL and THE ASK respectively. The REFUSAL one is the
+    expensive one: its barrier is a post with a bar across its foot, so a creature airborne beside it
+    reads as **clearing a hurdle**. Operator, unprompted and exactly right: "I don't understand clawd
+    jumping over a little L shaped object."
+
+    That reading is not merely unclear, it is the OPPOSITE of the beat. A hurdle cleared says the
+    obstacle was beaten; THE REFUSAL is a turn being sent BACK. The one frame a reader is most likely
+    to catch was arguing against the thing it illustrates.
+
+    So the hop stops being a free oscillator and is emitted only where nothing is happening — the same
+    move the gaze already made, and for the same reason: texture that lands on a beat is not texture,
+    it is a second event competing with the first. Ambient life is unaffected between beats, which is
+    where all of it now is.
+
+    `assert_hop_clear_of_stopped_world` used to be the only guard here and it was too narrow twice
+    over: it checked only rate<=0 spans, so the hurdle-jump in THE REFUSAL's rate-1 tail was legal by
+    construction, and it modelled the schedule from HOP_PERIOD rather than reading what is emitted.
+    Both now come from this one list.
     """
-    stops = [(t0, t1) for t0, t1, r in world_segments() if r <= 0]
+    busy = [(ev(n)[0] - GATE_EDGE, ev(n)[1] + GATE_EDGE) for n in active_events(art)]
+    busy += [(t0, t1) for t0, t1, r in world_segments() if r <= 0]
+
+    def free(t: float) -> bool:
+        h0, h1 = t + HOP_RISE, t + HOP_FALL
+        # t=0..CALM must stay still: the reduced-motion still and the frame every reader lands on are
+        # the same frame, and a creature caught mid-jump is not the composition to hold.
+        if h0 < HOP_CALM or h1 + GATE_EDGE > P:
+            return False
+        return all(h1 <= b0 or h0 >= b1 for b0, b1 in busy)
+
+    # SLIDE a colliding hop, never DROP it. Dropping was the first fix and it was wrong in a way only
+    # the schedule showed: slots 0, 1 and 2 (airborne 8.64, 20.64, 32.64 s) all collide, so the first
+    # surviving hop was at t=44.6 s — past the point the timeline anchor says most readers have gone.
+    # The creature would not have jumped once in the window anybody watches. A texture fix that
+    # silently empties the seen window of its largest piece of ambient life is worse than the defect.
+    #
+    # Slides are on the STRIDE grid so a hop still takes off on a footfall rather than between two.
+    out: list[float] = []
     k = 0
     while k * HOP_PERIOD < P:
-        h0, h1 = k * HOP_PERIOD + HOP_RISE, k * HOP_PERIOD + HOP_FALL
-        for s0, s1 in stops:
-            if h0 < s1 and s0 < h1:
-                raise SystemExit(
-                    f"gen[{art.key}]: the hop fires {h0:.2f}-{h1:.2f}s, inside a stopped/reversed "
-                    f"world ({s0:.2f}-{s1:.2f}s) — a creature jumping while the world is frozen. "
-                    f"Move the beat off the {HOP_PERIOD:g}s hop clock."
-                )
+        t = k * HOP_PERIOD
+        limit = t + HOP_PERIOD  # never let one hop slide into the next slot's territory
+        while t < limit and not free(t):
+            t += STRIDE
+        if t < limit:
+            out.append(t)
         k += 1
+    if not out:
+        raise SystemExit(
+            f"gen[{art.key}]: every hop collides with a beat even after sliding, so the creature "
+            f"never jumps at all. The hop is the loop's largest piece of ambient life; losing all of "
+            f"it is not a legitimate outcome of re-timing."
+        )
+    first = out[0] + HOP_RISE
+    if first > SEEN_WINDOW:
+        raise SystemExit(
+            f"gen[{art.key}]: the first hop is airborne at {first:.2f}s, past the {SEEN_WINDOW:g}s "
+            f"the timeline anchor says a reader is still watching. Ambient life that only happens "
+            f"after everyone has left is not ambient life."
+        )
+    return out
+
+
+def assert_hop_clear_of_stopped_world(art: Art) -> None:
+    """Texture must not contradict the beat it lands in — checked against what is EMITTED.
+
+    Reads `hop_pulses` rather than re-deriving from HOP_PERIOD, so the assertion and the animation
+    cannot disagree. A second copy of the schedule is how the old version went on passing while a
+    creature hurdled the barrier every loop.
+    """
+    for t in hop_pulses(art):
+        h0, h1 = t + HOP_RISE, t + HOP_FALL
+        for n in active_events(art):
+            w0, w1 = ev(n)
+            if h0 < w1 and w0 < h1:
+                raise SystemExit(
+                    f"gen[{art.key}]: the hop fires {h0:.2f}-{h1:.2f}s, inside beat '{n}' "
+                    f"({w0:.2f}-{w1:.2f}s). Involuntary texture landing on a beat competes with it, "
+                    f"and beside THE REFUSAL's barrier it reads as clearing a hurdle."
+                )
+
+
+def hop_css(art: Art) -> str:
+    """The hop and its shadow, on the MASTER period, from one pulse list so they cannot desync.
+
+    Both were separate 12 s animations before. They stay two elements (S8) but are generated together
+    here, because a shadow that squashes on a jump the body no longer makes is worse than no shadow.
+    """
+    pulses = hop_pulses(art)
+    body, shad = ["0%{transform:translateY(0)}"], ["0%{transform:scale(1,1);opacity:.46}"]
+    for t in pulses:
+        for dp, y, sc, op in (
+            (0.0, 0, "1,1", ".46"),
+            (6.0, -30, ".66,.5", ".14"),
+            (12.0, 0, "1,1", ".46"),
+            (16.0, -9, ".88,.8", ".24"),
+            (HOP_TO_PCT - HOP_FROM_PCT, 0, "1,1", ".46"),
+        ):
+            at = t + HOP_PERIOD * (HOP_FROM_PCT + dp) / 100
+            body.append(f"{pctx(at)}%{{transform:translateY({y}px)}}")
+            shad.append(f"{pctx(at)}%{{transform:scale({sc});opacity:{op}}}")
+    body.append("100%{transform:translateY(0)}")
+    shad.append("100%{transform:scale(1,1);opacity:.46}")
+    ease = "cubic-bezier(.3,.05,.4,1)"
+    return (
+        f"@keyframes hpf{{{''.join(body)}}}"
+        f".hop{{animation:hpf {fmt(P)}s {ease} infinite}}"
+        f"@keyframes shf{{{''.join(shad)}}}"
+        f".shdw{{animation:shf {fmt(P)}s {ease} infinite;transform-origin:"
+        f"{fmt(art.clawd_x + SPRITE_W * art.clawd_scale / 2)}px {fmt(GROUND + 3)}px}}"
+    )
 
 
 # ── palette ───────────────────────────────────────────────────────────────────────────────────────
@@ -2959,7 +3059,13 @@ OVERLAP_PRINTS = 12  # the successor's own record: "two walkers' worth", ~12 pri
 # or as a distant flagpole. That is precisely the misread the legibility audit predicted for this beat
 # ("it can read as a rendering glitch rather than as a reversal") and it was never a tuning miss; a
 # feature under the floor of its own scene cannot be tuned into legibility.
-BAR_LEN, BAR_W, POST_W, POST_H = 116.0, 18.0, 18.0, 72.0
+# POST_H 72 -> 120, so the arm comes down ACROSS THE PATH instead of onto the floor. At 72 the bar's
+# dropped position was y=486 against a GROUND of 506 — eighteen pixels off the deck, at the creature's
+# feet, which is not a barrier, it is a KERB. Together with the ambient hop landing in this same beat
+# it produced the read the operator reported: "I don't understand clawd jumping over a little L shaped
+# object." Both halves are fixed — the hop no longer fires here (hop_pulses), and the arm now stops at
+# y=438-456, mid-body on a creature spanning 314-506, where a thing that blocks passage belongs.
+BAR_LEN, BAR_W, POST_W, POST_H = 116.0, 18.0, 18.0, 120.0
 BAR_CLEAR = 36.0  # how far ahead of the leading foot the bar comes down
 # ...and how far it falls. 30 px was under the >=40 px salient-travel floor as well, so the DROP was
 # as unreadable as the bar. 48 px is the leg band's own height: the bar now crosses the whole of what
@@ -3257,16 +3363,33 @@ def clawd_sprite(idsuffix: str = "", cheer: bool = True, summon: bool = False) -
         f"</g>"
     )
 
-    # THE SUMMONING's hat: a solid crown one cell above the head and a brim one row WIDER sitting on
-    # the head's own top row. No mid-band — a band across a 5-cell crown at this size is one pixel row
-    # of a third colour and reads as noise, not as a hatband. The crown clears the body's top edge by
-    # exactly one cell, which `assert_summon_clear_plate` bounds: unbounded, a crown grows into the
-    # sky this beat is not allowed to author in.
+    # THE SUMMONING's hat and wand — the two things that say MAGICIAN, and neither did.
+    #
+    # THE HAT WAS A SLAB. Crown 5c x 1c over a brim 7c x 1c is 2 cells tall against 7 wide — a 1:3.5
+    # wide flat block, which is a CAP, not a top hat. Operator: "the magician hat and wand casting the
+    # spell doesn't look like a magician hat and a magician wand." A top hat is a TALL crown on a thin
+    # brim, so the crown doubles to 2c and the hat becomes 3 cells tall at a 2:1 crown:brim.
+    #
+    # Two cells is the CEILING, measured, not chosen: A's top edge is canvas y=314, a cell is 24 canvas
+    # px, and the wordmark keep-out ends at y=262. A 2c crown reaches y=266 and clears it by 4 px; a 3c
+    # crown reaches 242 and sits inside the type. The hat cannot be made taller without moving the
+    # creature or the title.
+    #
+    # THE WAND DID NOT EXIST AT ALL. The operator was describing something they expected to see and
+    # could not find — nothing in this generator ever emitted one, so the "spell" was cast by a hat
+    # alone. It is held out from the right arm toward the plate where B will appear, and it must live
+    # in the ARM BAND: SUMMON_Y_FLOOR forbids new ink in the clear plate above y=340, which puts the
+    # floor at local y=1.08 cells, so a raised-overhead wand is not available. Held-out is also the
+    # better read — it points AT the thing it summons.
     hat = (
         (
             f'<g class="smHat{sfx}">'
-            f'<rect x="{3 * c}" y="{-c}" width="{5 * c}" height="{c}"/>'
+            f'<rect x="{3 * c}" y="{-2 * c}" width="{5 * c}" height="{2 * c}"/>'
             f'<rect x="{2 * c}" y="0" width="{7 * c}" height="{c}"/>'
+            f"</g>"
+            f'<g class="smWand{sfx}">'
+            f'<rect class="smWandS{sfx}" x="{11 * c}" y="{2 * c}" width="{2 * c}" height="{c}"/>'
+            f'<rect class="smWandT{sfx}" x="{13 * c}" y="{2 * c}" width="{c}" height="{c}"/>'
             f"</g>"
         )
         if summon
@@ -3398,7 +3521,16 @@ SUMMON_Y_FLOOR = (
 #     the entrance played backwards, which this file already requires of the barrier and the peer.
 #     The hat is the ONE plain swap: no pose in the vocabulary can lift it (arms translate on y only),
 #     and sliding it down through A's face to hide it would be worse than a swap.
-SM_HAT_ON, SM_HAT_OFF = 0.0625, 0.9375
+# The hat now goes on at the window's OWN START rather than 0.0625 in. That 0.632 s was measured dead
+# head — the beat declared 9.6 s and authored nothing for the first two thirds of a second — and
+# spending it here buys the one thing the beat had no room for: the CAUSE arriving before its EFFECT.
+# The hat and wand are up at 3.4 s, the burst fires at 4.0 s. Previously the hat was emitted 72 ms
+# AFTER the burst it was supposed to be causing, which is Michotte's priority condition inverted.
+SM_HAT_ON, SM_HAT_OFF = 0.0, 0.9375
+# The wand: up with the hat, FLICKED at the instant of the burst, gone before the letter travels so
+# the same hand is never holding two things.
+SM_WAND_ON, SM_WAND_OFF = 0.0, 0.229
+SM_WAND_FLICK = 0.0625
 SM_SPARK = (
     0.0625,
     0.198,
@@ -3640,6 +3772,27 @@ SM_FLASH_LEAD, SM_FLASH_TAIL = (
 )  # s — total 0.22s, inside §2b's 0.3s opacity concession
 
 
+def wand_css() -> str:
+    """The wand's whole life in one keyframe block: raised, flicked at the cast, put away.
+
+    Opacity and transform ride the SAME block because they are one element's one animation (S8) — the
+    flick IS the gate, not a second declaration layered on it.
+
+    The flick is a single cell up. That is the whole cast: at 10.5 CSS px per cell it is 100 % of the
+    wand's own thickness, and the vocabulary has no rotation — a rotated pixel-art rect resamples to
+    mush at the fractional render scale the README actually uses.
+    """
+    on, flick, off = sm_at(SM_WAND_ON), sm_at(SM_WAND_FLICK), sm_at(SM_WAND_OFF)
+    return (
+        f"@keyframes smwf{{"
+        f"0%,{pctx(on)}%{{opacity:0;transform:translateY({fmt(CELL * 0.5)}px)}}"
+        f"{pctx(on + GATE_EDGE)}%{{opacity:1;transform:translateY({fmt(CELL * 0.5)}px)}}"
+        f"{pctx(flick)}%{{opacity:1;transform:translateY(-{fmt(CELL * 0.5)}px)}}"
+        f"{pctx(off)}%,100%{{opacity:0;transform:translateY({fmt(CELL * 0.5)}px)}}}}"
+        f".smWand{{animation:smwf {fmt(P)}s steps(1,end) infinite}}"
+    )
+
+
 def summon_flash(art: Art) -> str:
     """A plate the size of B, over B, bright for 0.22s around each of its two switches.
 
@@ -3878,6 +4031,7 @@ def summon_css(art: Art) -> str:
     return "".join(
         [
             gate("smh", ".smHat", [(sm_at(SM_HAT_ON), sm_at(SM_HAT_OFF))]),
+            wand_css(),
             gate("smb", ".smPeer", [(sm_at(SM_B_ON), sm_at(SM_B_OFF))]),
             # B's idle arms off while the raised pair is up, or B shows four arms — the same defect
             # that made A's cheer read as horns, and it is no less wrong on a smaller body.
@@ -4035,7 +4189,7 @@ def css(art: Art) -> str:
         #   · the returned work reuses the letter's OWN edge class, so it needs no
         #     override at all — which is the whole reason the brief specified an icing row.
         #   · the sparkle dots land on the ground plate, so they invert with it.
-        f".smHat{{fill:{d.rule}}}"
+        f".smHat{{fill:{d.rule}}}.smWandS{{fill:{d.rule}}}.smWandT{{fill:{d.star}}}"
         f".smMailE{{fill:{d.fg}}}.smMailF{{fill:#f4ead8}}"
         f".smResF{{fill:#5fa860}}"
         f".smSpk{{fill:{d.star}}}.smFlash{{fill:{d.star}}}"
@@ -4125,25 +4279,10 @@ def css(art: Art) -> str:
         f"82%,100%{{transform:translateY(0)}}}}"
         f".armsIdle{{animation:arf 2s ease-in-out infinite}}"
         # A hop every 12 s, not every 4 — an occasional hop is life, a constant one is a bob. The
-        # period and the airborne window come from the HOP_* constants because
-        # assert_hop_clear_of_stopped_world reads them: a hardcoded 12s here and a 12.0 there are two
-        # copies of one fact, and the assertion would go on passing against a file it no longer
-        # describes the moment either moved.
-        f"@keyframes hpf{{0%,{fmt(HOP_FROM_PCT)}%{{transform:translateY(0)}}"
-        f"{fmt(HOP_FROM_PCT + 6)}%{{transform:translateY(-30px)}}"
-        f"{fmt(HOP_FROM_PCT + 12)}%{{transform:translateY(0)}}"
-        f"{fmt(HOP_FROM_PCT + 16)}%{{transform:translateY(-9px)}}"
-        f"{fmt(HOP_TO_PCT)}%,100%{{transform:translateY(0)}}}}"
-        f".hop{{animation:hpf {fmt(HOP_PERIOD)}s cubic-bezier(.3,.05,.4,1) infinite}}"
-        # the shadow squashes on the same clock — the cue that sells the hop as a jump
-        f"@keyframes shf{{0%,{fmt(HOP_FROM_PCT)}%{{transform:scale(1,1);opacity:.46}}"
-        f"{fmt(HOP_FROM_PCT + 6)}%{{transform:scale(.66,.5);opacity:.14}}"
-        f"{fmt(HOP_FROM_PCT + 12)}%{{transform:scale(1,1);opacity:.46}}"
-        f"{fmt(HOP_FROM_PCT + 16)}%{{transform:scale(.88,.8);opacity:.24}}"
-        f"{fmt(HOP_TO_PCT)}%,100%{{transform:scale(1,1);opacity:.46}}}}"
-        f".shdw{{animation:shf {fmt(HOP_PERIOD)}s cubic-bezier(.3,.05,.4,1) infinite;"
-        f"transform-origin:"
-        f"{fmt(art.clawd_x + SPRITE_W * art.clawd_scale / 2)}px {fmt(GROUND + 3)}px}}"
+        # period and the airborne window come from the HOP_* constants, and the SCHEDULE comes from
+        # hop_pulses() — which the assertion also reads, so a hardcoded 12s here and a 12.0 there can
+        # never become two copies of one fact that drift apart.
+        + hop_css(art)
         # ---- rare emotes and world events ----
         # Every window below is DERIVED from RARE_EVENTS, which the build-time gate also reads, so a
         # stacked pair cannot be emitted. Hand-written percentages are what let the cheer land inside
@@ -4268,7 +4407,7 @@ def css(art: Art) -> str:
         # so the frozen still would otherwise show the hat on, both copies of the result at once, the letter in
         # mid-air and two bursts at rest scale. The one thing a still must never be is a frame that
         # could not occur.
-        ".smHat,.smPeer,.smBUp,.smSpark,.smPoof,.smMail,.smWork,.smHeld,.smFlash{opacity:0}"
+        ".smHat,.smWand,.smPeer,.smBUp,.smSpark,.smPoof,.smMail,.smWork,.smHeld,.smFlash{opacity:0}"
         ".smBArm{opacity:1}"
         # The barrier rests RETRACTED. `animation:none` already leaves it there (translateY(0) is its
         # un-animated base), but the still is the deliverable, so it is pinned rather than inferred —
@@ -4305,6 +4444,7 @@ def css(art: Art) -> str:
         f".tf0,.tf1{{fill:{l.tuft}}}.fgb{{fill:{l.fg}}}.fpr{{fill:{l.fg};opacity:.40}}"
         f".rfp{{fill:{l.rule};opacity:.9}}"
         f".brd{{fill:{l.mound[0]}}}.sh{{opacity:.20}}"
+        f".smWandS{{fill:{l.rule}}}.smWandT{{fill:{l.fg}}}"
         f".smHat{{fill:{l.rule}}}.smMailE{{fill:{l.fg}}}.smSpk{{fill:{l.fg}}}.smFlash{{fill:{l.fg}}}"
         # The cake had NO light override at all: its #f4ead8 icing measured 1.05:1 against the day
         # sky. A prop that vanishes for every daylight reader is not a prop.
