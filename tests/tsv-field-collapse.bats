@@ -429,10 +429,14 @@ JSON
 tsv_exemptions() {
   cat <<'EOF'
 bin/cc-blockers|already padded on feat/relogin-observability (0dac237) — that stream owns the file; a second fix here would only conflict
+bin/cc-reaper|all three reads take pid<TAB>lstart[<TAB>etime] rows whose cell 1 is structurally non-empty: the .daemon writer (hooks/lead-crash-watchdog.sh:1155) prints "$!", and wd_daemon_table's awk builds cell 2 from a format string with LITERAL spaces between lstart's five components, so that cell holds at least four spaces even when every component is empty — and space is not in IFS here, so it does not collapse. lstart/etime are last
 hooks/session-index-sweep.sh|consumer only; its producer (session_index_extract_enriched) pads at the emitter. The file is being rewritten on fix/infra-perfection, which deletes both reads
+hooks/validate-bash.sh|both non-final cells come from rm_argv_scan's python emitter (hooks/lib/is-true-flag.sh, `"%d\t%d\t%s" % (1 if recursive else 0, 1 if force else 0, safe)`), so they are always exactly "0" or "1" — a %d of a bool cannot be empty. The only variable-content cell is the rm target, which is LAST. Both call sites share that one producer
 scripts/lead-deathwatch.sh|reads a watch-file and the kqueue helper's output — neither is a jq producer, and both emit fixed-arity rows
 scripts/desk-recycle-invariant.sh|resolve_desk guarantees all three cells non-empty before printing (cfg falls back to the CC default root; an empty cwd returns 1)
 scripts/relogin-probes/e1-concurrent-logins.sh|producer REFUSES on an empty identity field rather than emitting one (all four are required), so non-empty is guaranteed at the source instead of padded — the same discharge as desk-recycle-invariant above
+scripts/scratchpad-reaper.sh|the jq producer CAN emit an empty cell ([(.pid // ""), (.session_id // "")]), but both cells are existence-TESTED on the line after the read ([ -n "$rpid" ] && [ -n "$rsid" ] || continue) — so an empty cell discards the row identically with or without the shift, and the reaper's live-set cannot change. Keyed on that test, not on proximity
+scripts/store-bounds-census.sh|parse_manifest REFUSES to emit an OK row when any of its four fields is empty — it prints a BAD row instead ([ -z "${g:-}" ] || [ -z "${cap:-}" ] || … → BAD), so no OK row can carry an empty cell. The BAD rows are 2-field and only counted, never destructured. Same discharge as e1-concurrent-logins above
 EOF
 }
 
