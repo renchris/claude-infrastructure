@@ -171,7 +171,12 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"'
   printf '#!/bin/bash\nexit 2\n' > "$stub/awk"; chmod +x "$stub/awk"
   PATH="$stub:$PATH" CC_SELFPATH_ALLOWLIST="" run bash "$LINT" "$FIX/killed"
   [ "$status" -eq 2 ] || { echo "expected the non-verdict rc 2, got $status: $output"; false; }
-  printf '%s' "$output" | grep -q 'SELF-PATH' && { echo "an unrunnable detector fabricated a finding: $output"; false; } || false
+  # GUARD, not an assertion: finding NO 'SELF-PATH' is the PASS case. As `A && {…; false; } || false`
+  # this returned 1 on BOTH branches (grep miss short-circuits straight into `|| false`), so it failed
+  # exactly when the detector behaved correctly. `if` form, so a dead-assertion sweep cannot re-break it.
+  if printf '%s' "$output" | grep -q 'SELF-PATH'; then
+    echo "an unrunnable detector fabricated a finding: $output"; false
+  fi
   printf '%s' "$output" | grep -q 'UNUSABLE' || { echo "the non-verdict was not announced: $output"; false; }
 }
 
