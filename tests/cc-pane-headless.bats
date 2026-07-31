@@ -16,6 +16,11 @@
 # would be silently DEAD in any but the body's last line.
 
 setup() {
+  # Same hermeticity contract as the sibling suite: fixture $HOME first, because the headless
+  # registry's own default is $HOME/.claude/autonomy/panes — an unfixtured run would spawn and
+  # REAP processes in the operator's live registry.
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  export CC_FIRE_CAPACITY_GATE=off
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   CP="$REPO/bin/cc-pane"
   export CC_PANE_DRIVER=headless

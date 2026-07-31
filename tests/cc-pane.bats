@@ -21,6 +21,15 @@
 # bats-dead-assertions-errexit-exemptions).
 
 setup() {
+  # Fixture $HOME before anything else. cc-pane's it2_bin() defaults to $HOME/.claude/bin/it2, so
+  # an unfixtured suite would resolve the OPERATOR'S REAL shim the moment a test forgot to set
+  # $CC_PANE_IT2 — running the fleet's live it2 from a test run. Caught by the land gate's
+  # test-hermeticity ratchet, which is right: an unfixtured suite mutates live state and makes the
+  # whole run's results untrustworthy, not just its own.
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  # Pin the fire capacity gate off: it refuses above 2.0/core and this box lives well above that,
+  # so leaving it ambient makes a suite go red-by-LOAD rather than by its subject.
+  export CC_FIRE_CAPACITY_GATE=off
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   CP="$REPO/bin/cc-pane"
   SHIM="$BATS_TEST_TMPDIR/fake-it2"
