@@ -16,14 +16,23 @@ windows than gathered into 1**, while the number of surfaces *inside* a window b
 30 panes repainting at 20 Hz in one window cost ~+10 pp of a single core — so the ceiling is the
 application's window architecture, not the platform.
 
-**And one premise has to be corrected, because it changes what to optimise.** "Maximally utilise the
-GPU" is the **wrong goal on iTerm2** — the GPU path is what *creates* the compositor objects that
-saturated WindowServer. iTerm2's CPU renderer allocates **no per-pane surface at all**; its Metal
-renderer allocates **one CAMetalLayer (≈3 IOSurfaces) + one CVDisplayLink thread + one NSTimer per
-pane**, and `acquireScarceResources` blocks the **main thread** up to 16.7 ms per pane per frame.
-Raising the hardcoded 5-pane Metal cap would add ~30 layers and up to ~90 IOSurfaces to exactly the
-axis that froze the machine. **The cap is protecting you.** The win is not more GPU — it is a
-renderer that needs only one surface for all 30 panes, which is what kitty is.
+**And one premise has to be corrected, because it changes what to optimise.** The intuitive model —
+more panes → more CPU work → the CPU saturates → shift the work onto the machine's idle 32-core GPU —
+is **backwards**. The freeze was never a CPU/GPU balance problem inside one app; it was compositor
+*objects* (windows, layers, Mach ports) piling up, and GPU rendering **adds** objects instead of
+removing them. "Maximally utilise the GPU" is the **wrong goal on iTerm2** for exactly this reason —
+the GPU path is what *creates* the compositor objects that saturated WindowServer. iTerm2's CPU
+renderer allocates **no per-pane surface at all**; its Metal renderer allocates **one CAMetalLayer
+(≈3 IOSurfaces) + several dispatch queues per pane** (confirmed by direct measurement), and is capped
+at 5 panes per tab, foreground tab only — so lighting up 30 sessions on Metal forces **six windows**,
+multiplying the exact axis that froze the machine. Ghostty is the clean refutation of the GPU-transfer
+instinct, because it has **no CPU renderer to fall back to** — every pane is Metal, unconditionally —
+and under matched load it is the *most* CPU-expensive candidate measured (27.3% app CPU vs kitty's
+9.5%), with its thread count scaling **linearly, 4.00/pane, uncapped**: submitting frames to a GPU is
+itself CPU work, paid per pane, with nothing shared across panes. Raising iTerm2's hardcoded 5-pane
+Metal cap would add ~30 `CAMetalLayer`s and their dispatch queues to exactly the axis that froze the
+machine. **The cap is protecting you.** The win is not more GPU — it is a renderer that needs only
+one surface for all 30 panes, which is what kitty is.
 
 Machine: MacBookPro18,2 · M1 Max (8P+2E, 32-core GPU) · 64 GiB · Darwin 24.6.0 · iTerm2 3.6.11.
 
