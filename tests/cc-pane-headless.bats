@@ -113,8 +113,11 @@ live_pid() { sed -n 's/^pid=//p' "$CC_PANE_HOME/$1/meta" | head -1; }
   [ "$status" -eq 1 ]
   run "$CP" send hdl-0000000000000001 hello
   [ "$status" -eq 1 ]
-  kill -9 "$perlpid" 2>/dev/null
-  return 0
+  # `|| true` rather than a trailing `return 0`: a .bats file is linted as plain bash, where
+  # `@test "…" { … }` is not valid function syntax, so shellcheck reads a bare top-level `return`
+  # as ending control flow and marks EVERY subsequent test body unreachable (SC2317 ×15 here).
+  # The reaper still must not fail the test when the fixture already exited, hence `|| true`.
+  kill -9 "$perlpid" 2>/dev/null || true
 }
 
 @test "a dead-on-arrival spawn PRESERVES its log where list's reap cannot race-delete it" {
