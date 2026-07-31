@@ -261,16 +261,46 @@ launch_probe() {
   local app="$1" exe
   exe="$app/Contents/MacOS/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' \
                              "$app/Contents/Info.plist" 2>/dev/null)"
+  # $HOME is fixtured so the probe writes its scratch state here rather than into the operator's
+  # home. NOTE THE LIMIT, measured 2026-07-31: this does NOT isolate PREFERENCES. cfprefsd is a
+  # per-uid daemon and resolves a domain by bundle id, not by the caller's $HOME, so the probe
+  # still deposits ~/Library/Preferences/<bundle-id>.plist in the REAL home. The isolation that
+  # matters is intact — the clone has its own bundle id, so it can never write the operator's
+  # com.googlecode.iterm2 prefs — but the file it does create is litter, so we remove it below.
   local home="$OUT_DIR/probe-home"; rm -rf "$home"; mkdir -p "$home"
   local log="$OUT_DIR/probe.log"
+  local had_domain=0
+  defaults read "$BUNDLE_ID" >/dev/null 2>&1 && had_domain=1
   HOME="$home" "$exe" >"$log" 2>&1 &
   local pid=$!
   sleep 6
-  if kill -0 "$pid" 2>/dev/null; then
+  local alive=0
+  kill -0 "$pid" 2>/dev/null && alive=1
+  if [ "$alive" = 1 ]; then
     note "✓ launch probe: process survived dyld (pid $pid) — killing it"
     kill -TERM "$pid" 2>/dev/null; sleep 2; kill -KILL "$pid" 2>/dev/null
-    return 0
   fi
+  # Only remove a domain the probe itself brought into existence; never clobber prefs that were
+  # already there (a real bench run may have configured the clone deliberately).
+  #
+  # TWO STEPS, and the second is not redundant. `defaults delete` removes the domain from cfprefsd,
+  # but cfprefsd flushes the app's now-empty domain to disk as the app exits, so a 42-byte husk
+  # plist survives the delete (measured — the delete reported success while the file was still
+  # there, which is exactly the claim-without-check this repo keeps paying for). So: wait for the
+  # process to actually be gone, delete the domain, remove the husk, then ASSERT the file is
+  # absent and report what is true rather than what was attempted.
+  if [ "$had_domain" = 0 ]; then
+    local w=0
+    while kill -0 "$pid" 2>/dev/null && [ "$w" -lt 10 ]; do sleep 0.5; w=$((w+1)); done
+    defaults delete "$BUNDLE_ID" >/dev/null 2>&1
+    rm -f "$HOME/Library/Preferences/$BUNDLE_ID.plist" 2>/dev/null
+    if [ -e "$HOME/Library/Preferences/$BUNDLE_ID.plist" ]; then
+      note "  (note: probe-created prefs file survived cleanup — remove it by hand if it matters)"
+    else
+      note "  (probe-created prefs domain removed — verified absent)"
+    fi
+  fi
+  [ "$alive" = 1 ] && return 0
   echo "  ✗ launch probe: died at launch — $(head -3 "$log" 2>/dev/null | tr '\n' ' ' | cut -c1-200)"
   return 1
 }
