@@ -148,7 +148,7 @@ It has no face. 100 rows fits one screen; 1000 needs grouping (a list problem, n
 
 **Shipped:** `bin/cc-queue` — blocked-first list across ALL 4 config dirs, exact blocked command + wait
 duration, `--attach` to jump, `--group-by`/filters for scale, `--check` as a gate. 1000 rows in 0.39 s.
-Full design, measurements, and learnings in **§6**.
+Full design, measurements, and learnings in **§7**.
 
 ### P5 — `it2` facade (after P1)
 Widen `bin/it2-wrapper` to serve the same 4 verbs so Agent-Team panes work under any driver without
@@ -629,14 +629,14 @@ of per-file symlinks into this checkout, and `pwd -P` resolves the dir only (mem
 `self-identity-guard-must-fully-resolve`). A `cc-pane` that resolved its own dir naively would look
 for its sibling driver in `~/.claude/bin` instead of the checkout.
 
-### 6.6 Liveness is PID+start-time, never registry presence
+### 7.6 Liveness is PID+start-time, never registry presence
 
 The headless registry records *claims*; the OS holds *truth*. A row is live only if its pid exists
 **and** that pid's start time still matches the recorded one — the standard PID-reuse guard, and the
 direct defence of memory `liveness-proxy-cannot-be-output-age`. `list` verifies every row and reaps
 what it disproves, so a reboot (which kills every session) cannot leave rows that read as alive.
 
-### 6.7 Two defects the smoke test caught before any test was written
+### 7.7 Two defects the smoke test caught before any test was written
 
 Both were in the first cut of `bin/cc-pane-headless` and both are now pinned by tests:
 
@@ -648,7 +648,7 @@ Both were in the first cut of `bin/cc-pane-headless` and both are now pinned by 
    for a process that had already exited. Liveness now reads `ps -o stat=` and treats `Z*` (and
    empty) as dead. Same class as memory `kill-on-reaped-child-fails-fast-path-hides-it`.
 
-### 6.8 The red-proof harness caught a WEAK TEST — the zombie guard was unproven
+### 7.8 The red-proof harness caught a WEAK TEST — the zombie guard was unproven
 
 `tests/cc-pane-redproof.sh` mutates the **real** artifacts and requires the **named** test to go
 red. First run: **11 caught · 1 SURVIVED**. The survivor was the zombie mutant — reverting the
@@ -667,7 +667,7 @@ that would leave the claim unproven. Note the control asserts the `Z` **prefix**
 reads `ZN`, and pinning the exact flag string made the test fail on its first run for a reason
 that had nothing to do with the property under test.
 
-### 6.9 The class-2 rename is TWO classes, not one — and only class A is mechanical
+### 7.9 The class-2 rename is TWO classes, not one — and only class A is mechanical
 
 Applying the rename revealed the population splits by *what is being read*:
 
@@ -792,7 +792,7 @@ the durable archive (`CC_PERMARCHIVE_DIR`, default `~/.claude/autonomy/permissio
 still does a bare `rm -f` on clear. So the archive that task #89 landed is **committed but not deployed**.
 `cc-queue` therefore does **not** depend on the archive existing.
 
-### 6.6 The surface, as shipped
+### 7.6 The surface, as shipped
 
 ```
 ⛔ BLOCKED (1) — waiting on a permission answer; nothing in-session can self-approve
@@ -809,7 +809,7 @@ still does a bare `rm -f` on clear. So the archive that task #89 landed is **com
 blocked 3m12s on a Bash heredoc, that nothing else was surfacing. That is the 6.6-minute case the plan
 was written around, caught by a list instead of by eyeballing panes.
 
-### 6.7 Scale — MEASURED, not asserted
+### 7.7 Scale — MEASURED, not asserted
 
 Synthetic fleet of **1000** telemetry rows (4 config dirs, 7 cwds) + 12 blocked beacons: **0.39 s wall**,
 all 1000 rows rendered (2026-07-31, this box). Every syscall class is batched — ONE `ps`, ONE `stat`,
@@ -820,7 +820,7 @@ Readability at 1000 is a **grouping** problem, not a rendering one: `--group-by 
 fleet to one line per group with per-state counts, blocked-bearing groups first. Blocked rows are
 **never** capped; other states cap at `--limit` and always print what they withheld.
 
-### 6.8 Learnings (the durable ones)
+### 7.8 Learnings (the durable ones)
 
 1. **A non-final `[[ ]]` never fails a bats test.** MEASURED on bats 1.13.0 + this bash: a non-final
    failing `[[ ]]` does **not** fail the test, while a non-final `[ ]` does. Every multi-assertion test
@@ -838,7 +838,7 @@ fleet to one line per group with per-state counts, blocked-bearing groups first.
    heartbeat check subsumes it), which reads as "the test is vacuous" when the truth is "the mutation
    is unsound".
 
-### 6.9 Not done (named, not silently dropped)
+### 7.9 Not done (named, not silently dropped)
 
 - **`cc-queue` is not wired into any hook, statusline, or launchd job** — it is a command the operator
   runs. Wiring it (e.g. a blocked-count segment in the statusline, or `--check` in a sweep) touches
