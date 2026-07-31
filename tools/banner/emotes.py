@@ -416,7 +416,13 @@ def base_css(e: Emote, scheme: str = "auto") -> str:
         # legibility floor (~17 CSS px) where contrast is the only remaining margin: rendered in the
         # ground rule's muted violet the first pass produced a mark that was technically large enough
         # and still hard to find against the sky. A glyph nobody locates is a glyph nobody decodes.
-        f".eglyph{{fill:{d.star}}}"
+        # `opacity:0` is the RESTING state, not a decoration. Under `prefers-reduced-motion` every
+        # animation is switched off, so an element's painted value falls back to its static rule —
+        # and a glyph whose only opacity lived in `glyph_pop`'s keyframes therefore rendered FULLY
+        # VISIBLE in the reduced-motion still, floating unattached beside a creature doing nothing.
+        # Found by rendering the still rather than by trusting the footer that claims it composes.
+        # A running animation overrides this, so the live loop is unaffected.
+        f".eglyph{{fill:{d.star};opacity:0}}"
         # each twinkle's phase lives in its own keyframe percentages, never in a delay
         + "".join(
             f"@keyframes etwk{i}{{0%,{max(pk - 14, 1)}%{{opacity:.38}}"
