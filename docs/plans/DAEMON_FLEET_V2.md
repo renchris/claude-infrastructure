@@ -699,6 +699,50 @@ exists precisely for this and I did not run it. What was taken vs rejected, on t
   the measurement either way.
 - **R-7** axis 1 emits `additionalContext` (model-only), never `systemMessage` (the human lever).
 
+### Remainder re-verification (2026-07-31) — every row re-derived from disk, none inherited
+
+The list above is preserved verbatim as written on 2026-07-29. Two days of sibling landings moved
+several rows underneath it, so each was re-measured rather than re-read. **Where a row's *symptom*
+and its *prescribed remedy* rotted in opposite directions, both halves are recorded** — the remedy
+is the half that silently becomes wrong (memory `work-item-remedy-can-become-forbidden`).
+
+| Row | Verdict 2026-07-31 | Evidence |
+|---|---|---|
+| **R-1** | **CLOSED** — `38da09ee`. Its *remedy as written was dangerous*; see below. | `install.sh` LaunchAgents block; `tests/install-fleet-activation.bats` (8 tests, 2 controls) |
+| **R-2** | **CLOSED** — 0 live-only plists remain; landed by `45034362`/`9481b3c6`/`b369676f`/`a1d4da2f` rather than by the prescribed cherry-picks | every `~/Library/LaunchAgents/com.claude.*.plist` has a `launchd/` or `launchd/staged/` SSOT |
+| **R-3** | **OPEN**, unchanged | S5 is gated solely on evidence mtime (`bin/cc-fleet:367`); `EV_PATH=""` returns at `:235`. No cursor is persisted anywhere — `P_RUNS` (`:225`) is never diffed or written. The 4 labels are `postland-verify`, `deploy-live`, `dispatcher`, `discovery` (`launchd/fleet.manifest:98-101`). `3448401e` *widened* the no-sensor population |
+| **R-4** | **OPEN**, and now worse than "one dodged instance" | 5 colliding prefixes live in `docs/activation/pending-activation/`: `05`, `09`, `10` (×3), `17`, `20` |
+| **R-5** | **OPEN as a class; its NAMED EXAMPLE is REFUTED** | Still only 3 axes — `age_axis:89`, `inert_axis:127`, `parity_axis:199`; axis 1 trusts marker existence at `:102` and never stats it. But `09-operator-readout-activate.sh`'s `.done` is now **96.9h *newer*** than the script, not 9.8h older — it was re-touched Jul 30. The class holds with two *different* members: `02-load-dispatcher` and `03-load-discovery`, each +21.1h |
+| **R-6** | **OPEN**, partially mitigated | `MAX_AGE_H="${CC_ACTIVATION_MAX_AGE_H:-24}"` (`hooks/activation-watch.sh:43`) unchanged. The M3 change at `:90-97` made 24h a *partition* (a `ROTTING` sub-heading, `:119`) rather than a filter, which blunts the alarm-fatigue harm — but the calibration measurement R-6 said to keep either way is recorded nowhere in the hook |
+| **R-7** | **OPEN, and wider than filed** | Single emission path `emit():81-87` → `additionalContext` only; `watch():254-272` concatenates **all three** axes through it. Zero `systemMessage` in the file, while five sibling hooks in this repo do use that lever |
+
+**R-1's remedy had become the more dangerous half of the row.** The filed fix — "`enable` before
+`bootstrap`" — is correct about the EIO symptom and, applied to that glob, would have **enabled all
+7 `staged` labels including `desk-invariant` and `boot-resume`**, the two session generators §2.1
+already names as the ones whose re-enable *reopens the 2026-07-26 incident*. This was not reasoned
+to; it was **measured** — the pristine file was mutated with the prescription verbatim and run
+against one DISABLED `staged` plist carrying the real generator's label:
+
+```
+pre-fix   bootout gui/501/com.claude.desk-invariant ; bootstrap …   (survives only on EIO)
+NAIVE     enable gui/501/com.claude.desk-invariant                  ← clears the ONLY guard
+          bootout … ; bootstrap …                                   ← generator starts
+fixed     (no verb issued)
+```
+
+The disabled bit was the sole thing standing between a routine `install.sh` and that generator, and
+R-1's prescription removes it. §2.1 predicted exactly this trap for a *mass re-enable* and answered it
+structurally in the **platter**; nobody checked whether `install.sh` was a second, unguarded door to
+the same room. It was, and it is the door that runs unattended every 600s.
+
+Two side-findings, both now closed by the same commit: an unchanged, already-loaded job is no longer
+touched at all (so a routine install is a launchd no-op), and a job **executing right now** is never
+booted out — `postland-verify`'s run-lock was held while the fix was being written, i.e. the
+mid-corpus bounce was live, not hypothetical. The gate also fails **closed** on a missing manifest,
+never back to blanket bootstrap.
+
+*Not attempted this session, and not blocked — R-3 through R-7 stay open with the evidence above.*
+
 ## Learnings (accumulate; never delete)
 
 - 2026-07-29 **An alarm keyed on the subject's own success history cannot fire for a subject that
@@ -718,3 +762,22 @@ exists precisely for this and I did not run it. What was taken vs rejected, on t
   repo.** It maps six real states onto one boolean, and four of the broken ones land on the healthy
   side. Every existing check uses it. `launchctl print` (plus the override db) is the read that
   distinguishes them.
+- 2026-07-31 **A design can answer a trap at one door and leave a second door unguarded — and the
+  unguarded one is usually the door that runs unattended.** §2.1 identified the mass-re-enable trap
+  and answered it structurally in the *platter* (which touches only `expect = run`). But
+  `install.sh` bootstraps the same glob, is invoked by `deploy-live.sh` every 600s, and had never
+  heard of the manifest. The guarded and unguarded paths were written in the same session by the
+  same reasoning. **When a design defends an invariant at one call site, enumerate every writer of
+  that state before calling it structural** — "the platter refuses this by construction" was true
+  and irrelevant to the actual risk.
+- 2026-07-31 **A work item's prescribed remedy rots independently of its symptom, and the remedy is
+  the half that rots dangerously.** R-1's symptom (a disabled `run` job is unrecoverable, EIO
+  swallowed) stayed true for two days. Its remedy — "`enable` before `bootstrap`" — became the
+  instruction that would have re-enabled both runaway session generators, because the manifest that
+  made `run` and `staged` distinguishable landed *after* the remedy was written. A remedy written
+  against a smaller state space silently mis-generalises when the state space grows. **Re-derive the
+  remedy from current disk truth, never execute a filed one on faith** — and *run* the naive version
+  rather than arguing about it: mutating the pristine file with the prescription verbatim and
+  diffing the launchctl verb log showed it emitting `enable gui/501/com.claude.desk-invariant`, the
+  one verb that clears the only guard the generator had. A verb log settles in one line what a
+  paragraph of reasoning leaves arguable.
