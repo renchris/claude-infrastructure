@@ -45,29 +45,29 @@ fire() { printf '%s' "$1" | "$H" "$2"; }
 @test "permission alert renders session + cwd + the real command" {
   fire "$(payload 1a5cf368-aaaa-bbbb-cccc-dddd /Users/x/proj 'git push --force origin main')" permission
   run osa
-  [[ "$output" == *'display notification "git push --force origin main"'* ]]
-  [[ "$output" == *'with title "Permission · proj"'* ]]
+  [[ "$output" == *'display notification "git push --force origin main"'* ]] || false
+  [[ "$output" == *'with title "Permission · proj"'* ]] || false
   [[ "$output" == *'subtitle "1a5cf368 · Bash"'* ]]
 }
 
 @test "RED CONTROL: the identity assertions fail against the pre-fix anonymous alert" {
   # Guards against the suite passing on a hook that reverted to naming nothing.
   run bash -c 'printf "" | "$1" permission' _ "$H"
-  [[ "$(osa)" != *'subtitle'* ]]
+  [[ "$(osa)" != *'subtitle'* ]] || false
   [[ "$(osa)" != *'git push'* ]]
 }
 
 @test "the cwd BASENAME is the title, and the session id is shortened to its first uuid group" {
   fire "$(payload 873ec4e0-7f29-46ff-9443-6fc717bc1777 /Users/x/claude-infrastructure 'ls')" permission
   run osa
-  [[ "$output" == *'with title "Permission · claude-infrastructure"'* ]]
-  [[ "$output" == *'subtitle "873ec4e0 · Bash"'* ]]
+  [[ "$output" == *'with title "Permission · claude-infrastructure"'* ]] || false
+  [[ "$output" == *'subtitle "873ec4e0 · Bash"'* ]] || false
   [[ "$output" != *6fc717bc1777* ]]                # the full uuid would crowd out the command
 }
 
 @test "a non-Bash tool falls back to file_path, then description, then .message" {
   printf '%s' '{"session_id":"s-w","cwd":"/w","tool_name":"Write","tool_input":{"file_path":"/x/y.ts"}}' | "$H" permission
-  [[ "$(osa)" == *'display notification "/x/y.ts"'* ]]
+  [[ "$(osa)" == *'display notification "/x/y.ts"'* ]] || false
   : > "$CC_NOTIFY_DIR/osa.argv"
   printf '%s' '{"session_id":"s-n","cwd":"/w","message":"Claude is waiting for your input"}' | "$H" question
   [[ "$(osa)" == *'display notification "Claude is waiting for your input"'* ]]
@@ -75,7 +75,7 @@ fire() { printf '%s' "$1" | "$H" "$2"; }
 
 @test "each event type keeps its own title and sound" {
   fire "$(payload s-q /w/proj hi)" question
-  [[ "$(osa)" == *'with title "Question · proj"'*'sound name "Blow"'* ]]
+  [[ "$(osa)" == *'with title "Question · proj"'*'sound name "Blow"'* ]] || false
   : > "$CC_NOTIFY_DIR/osa.argv"
   fire "$(payload s-p /w/proj hi)" plan
   [[ "$(osa)" == *'with title "Plan ready · proj"'*'sound name "Glass"'* ]]
@@ -90,9 +90,9 @@ fire() { printf '%s' "$1" | "$H" "$2"; }
 @test "a command containing quotes and backslashes still produces a script osascript can parse" {
   fire "$(payload s-inj /w/proj 'git commit -m "fix: \ the thing" && echo "done"')" permission
   script="$(osa)"
-  [[ -n "$script" ]]
+  [[ -n "$script" ]] || false
   bs=$'\\'                                          # a lone backslash, ANSI-C quoted
-  [[ "$script" != *"$bs"* ]]                        # no backslash survives into the literal
+  [[ "$script" != *"$bs"* ]] || false               # no backslash survives into the literal
   # Compile the REAL artifact, unmodified — `if false then <stmt>` parses the whole statement
   # without displaying anything. Rewriting the script into some other shape would test an
   # approximation and pass vacuously (memory control-must-replay-the-real-artifact).
@@ -113,15 +113,15 @@ fire() { printf '%s' "$1" | "$H" "$2"; }
 @test "an injected 'with title' cannot hijack the real title or sound" {
   fire "$(payload s-hij /w/proj 'x" with title "EVIL" sound name "Sosumi')" permission
   script="$(osa)"
-  [[ "$script" == *'with title "Permission · proj"'* ]]
-  [[ "$script" == *'sound name "Funk"'* ]]
+  [[ "$script" == *'with title "Permission · proj"'* ]] || false
+  [[ "$script" == *'sound name "Funk"'* ]] || false
   [[ "$script" != *'"EVIL"'* ]]                     # the injected literal never becomes a token
 }
 
 @test "control characters and over-long commands are bounded, not passed through" {
   long="$(printf 'x%.0s' $(seq 1 400))"
   fire "$(payload s-long /w/proj "$(printf 'a\tb\nc')")" permission
-  [[ "$(osa)" == *'display notification "a b c"'* ]]
+  [[ "$(osa)" == *'display notification "a b c"'* ]] || false
   : > "$CC_NOTIFY_DIR/osa.argv"
   fire "$(payload s-long2 /w/proj "$long")" permission
   msg="$(osa)"
@@ -163,7 +163,7 @@ fire() { printf '%s' "$1" | "$H" "$2"; }
   fire "$(payload sess-one /w/proj 'cmd-one')" permission
   fire "$(payload sess-two /w/proj 'cmd-two')" permission
   [ "$(osa | grep -c 'display notification')" -eq 2 ]
-  [[ "$(osa)" == *cmd-one* ]]
+  [[ "$(osa)" == *cmd-one* ]] || false
   [[ "$(osa)" == *cmd-two* ]]
 }
 

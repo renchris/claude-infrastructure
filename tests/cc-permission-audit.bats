@@ -101,8 +101,8 @@ print(json.dumps({'session_id':sys.argv[1],'ts':int(time.time())-int(sys.argv[4]
   export CC_PERMARCHIVE_DIR="$BATS_TEST_TMPDIR/nope"
   mk "ls -l"
   run python3 "$AUDIT"
-  [[ "$output" == *"archive ABSENT"* ]]
-  [[ "$output" == *"BLIND"* ]]
+  [[ "$output" == *"archive ABSENT"* ]] || false
+  [[ "$output" == *"BLIND"* ]] || false
   [[ "$output" != *"nothing has actually blocked"* ]]
 }
 
@@ -135,7 +135,7 @@ print(json.dumps({'session_id':sys.argv[1],'ts':int(time.time())-int(sys.argv[4]
   arow s3 "rm -rf /tmp/x"        SessionEnd  5
   mk "ls -l"
   run python3 "$AUDIT"
-  [[ "$output" == *"3 resolved prompt(s) across 3 session(s)"* ]]
+  [[ "$output" == *"3 resolved prompt(s) across 3 session(s)"* ]] || false
   [[ "$output" == *"denied/abandoned 2"* ]]
 }
 
@@ -148,7 +148,7 @@ print(json.dumps({'session_id':sys.argv[1],'ts':int(time.time())-int(sys.argv[4]
     >> "$CC_PERMARCHIVE_DIR/2026-07.jsonl"
   mk "ls -l"
   run python3 "$AUDIT"
-  [[ "$output" == *"cleared-by-other 1"* ]]
+  [[ "$output" == *"cleared-by-other 1"* ]] || false
   [[ "$output" == *"approved 0"* ]]
 }
 
@@ -158,7 +158,7 @@ print(json.dumps({'session_id':sys.argv[1],'ts':int(time.time())-int(sys.argv[4]
     >> "$CC_PERMARCHIVE_DIR/2026-07.jsonl"
   mk "ls -l"
   run python3 "$AUDIT"
-  [[ "$output" == *"unknown 1"* ]]     # same NAME is not proof — see _classify()
+  [[ "$output" == *"unknown 1"* ]] || false # same NAME is not proof — see _classify()
   [[ "$output" == *"approved 0"* ]]
 }
 
@@ -189,7 +189,7 @@ print(json.dumps({'session_id':sys.argv[1],'ts':int(time.time())-int(sys.argv[4]
   arow sy "dd if=/dev/zero" Stop 1
   mk "ls -l"
   run python3 "$AUDIT"
-  [[ "$output" == *"commands that ACTUALLY blocked"* ]]
+  [[ "$output" == *"commands that ACTUALLY blocked"* ]] || false
   echo "$output" | sed -n '/ACTUALLY blocked/,$p' > "$BATS_TEST_TMPDIR/obs.txt"
   run grep -qE '^\s+3\s+git push' "$BATS_TEST_TMPDIR/obs.txt"
   [ "$status" -eq 0 ]
@@ -219,7 +219,7 @@ print(json.dumps({'session_id':sys.argv[1],'ts':int(time.time())-int(sys.argv[4]
     >> "$CC_PERMARCHIVE_DIR/2026-07.jsonl"
   mk "ls -l"
   run python3 "$AUDIT"
-  [[ "$output" == *"1 resolved prompt(s)"* ]]
+  [[ "$output" == *"1 resolved prompt(s)"* ]] || false
   [[ "$output" == *"psql -c"* ]]
 }
 
@@ -230,7 +230,7 @@ print(json.dumps({'session_id':sys.argv[1],'ts':int(time.time())-int(sys.argv[4]
     >> "$CC_PERMARCHIVE_DIR/2026-07.jsonl"
   mk "ls -l"
   run python3 "$AUDIT" 1
-  [[ "$output" == *"1 resolved prompt(s)"* ]]
+  [[ "$output" == *"1 resolved prompt(s)"* ]] || false
   [[ "$output" != *ancient-cmd* ]]
 }
 

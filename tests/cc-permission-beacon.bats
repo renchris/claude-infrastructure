@@ -275,7 +275,7 @@ arch_rows() { cat "$CC_PERMARCHIVE_DIR"/*.jsonl 2>/dev/null; }
 @test "ISOLATION CONTROL: the suite never writes the operator's real archive" {
   # This suite DID poison the live archive once, before CC_PERMARCHIVE_DIR was pinned in setup().
   [ -n "$CC_PERMARCHIVE_DIR" ]
-  [[ "$CC_PERMARCHIVE_DIR" == "$BATS_TEST_TMPDIR"/* ]]
+  [[ "$CC_PERMARCHIVE_DIR" == "$BATS_TEST_TMPDIR"/* ]] || false
   [ "$CC_PERMARCHIVE_DIR" != "$HOME/.claude/autonomy/permission-archive" ]
 }
 

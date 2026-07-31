@@ -168,7 +168,7 @@ didnt() { if grep -qE "^$1 .*$2" "$LOG"; then return 1; fi; return 0; }
   did bootstrap fx-run
   n_enable="$(grep -nE '^enable .*fx-run' "$LOG" | head -1 | cut -d: -f1)"
   n_boot="$(grep -nE '^bootstrap .*fx-run' "$LOG" | head -1 | cut -d: -f1)"
-  [ -n "$n_enable" ] && [ -n "$n_boot" ]
+  [ -n "$n_enable" ] && [ -n "$n_boot" ] || false
   [ "$n_enable" -lt "$n_boot" ]
   printf '%s' "$output" | grep -qF "DISABLED at the domain level: clearing the bit"
 }
