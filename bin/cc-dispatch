@@ -80,6 +80,15 @@
 # record is still written (A9's observable) — now alongside the decisions rather than instead of
 # them.
 #
+# THE COST, STATED (this is a real trade, not a free win). A skipped pass used to append ONE record;
+# it now appends one per dispatchable item (~135 live), so a spawn tail long enough to skip 2-3
+# passes multiplies the IDL's growth over that span. That matters because the IDL is not write-only:
+# `thrash_map` slurps the whole file (`jq -s`) every pass to build the S7 fairness key, so its size
+# is inside the decision phase's own cost. It is bounded by scripts/rotate-autonomy-logs.sh (the
+# live file was already 26 MB and has rotated four times, most recently 20260730T193526Z), and the
+# extra records are exactly the product this change exists to produce — but if the decision phase's
+# 7-45 s ever creeps, the IDL's size is the first place to look, not the item count.
+#
 # WHY NOT the two obvious alternatives, both of which look smaller and are wrong:
 #   (a) "release the lock before the spawn tail, keep the pull inside." UNSAFE TWICE OVER.
 #       `cc-backlog claim` has NO already-claimed guard (cmd_transition appends the event from any
