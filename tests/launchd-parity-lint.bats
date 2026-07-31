@@ -209,3 +209,35 @@ EOF
   run "$LINT" --bogus
   [ "$status" -eq 2 ]
 }
+
+# The DEFAULT search path — the one leg every other test in this file overrides, and therefore the
+# one that regressed. com.claude.relogin was live and its SSOT committed at launchd/staged/, and the
+# lint reported "NO repo SSOT for this Label": a committed, recoverable plist called unrecoverable,
+# whose own suggested remedy was to copy it into launchd/ — the directory install.sh:452 globs and
+# bootstraps, which is exactly what staging it was protecting against. Asserting the DEFAULT by
+# BEHAVIOUR, not by grepping the string, because a search path that is spelled right and consumed
+# wrong is the same outage.
+@test "default search path finds a staged SSOT (real launchd/staged, no REPO_DIR override)" {
+  unset LAUNCHD_LINT_REPO_DIR          # let the script compute LAUNCHD_LINT_REPO_DIR_DEFAULT
+  local n=0 f
+  for f in "$REPO"/launchd/staged/*.plist; do
+    [ -f "$f" ] || continue
+    cp "$f" "$LAUNCHD_LINT_LA_DIR/$(basename "$f")"   # byte-identical ⇒ (c) parity must also pass
+    n=$((n + 1))
+  done
+  # Not a skip: launchd/staged/ being empty would silently vacate this test, and an empty staged/
+  # dir is itself the premise of this assertion disappearing.
+  [ "$n" -gt 0 ]
+
+  run "$LINT"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"clean"* ]]
+  [[ "$output" == *"launchd/staged/"* ]] || false   # found THERE, not merely found
+
+  # NEGATIVE CONTROL: a live plist whose label is in no SSOT dir still goes RED. Without this, the
+  # green above would also be produced by a default path that matches everything.
+  write_plist "$LAUNCHD_LINT_LA_DIR/com.claude.no-such-ssot.plist" com.claude.no-such-ssot
+  run "$LINT"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"NO repo SSOT for this Label"* ]] || false
+}
