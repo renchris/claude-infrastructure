@@ -449,7 +449,10 @@ def _dig() -> Emote:
     dug = w(e, 0.41)  # the hole exists from the third stroke on
     # Centred between the two leg pairs, so it is digging UNDER itself rather than at something out
     # in front. The authored x carries the frozen world displacement, as ever.
-    hole_cx = 380.0 + PRINT_TILE * a
+    dig_cx = 380.0  # where the digging APPEARS to happen, on the frozen stage
+    hole_cx = (
+        dig_cx + PRINT_TILE * a
+    )  # …and where the hole is AUTHORED, inside the world group
     strokes = [w(e, 0.14 + i * 0.055) for i in range(5)]
 
     def props() -> str:
@@ -462,14 +465,27 @@ def _dig() -> Emote:
             f'<g class="eink">{rim}</g>'
             f'<ellipse class="efg" cx="{fmt(hole_cx)}" cy="{fmt(E_GROUND + 1)}" rx="40" ry="8"/>'
         )
-        # The crumbs are NOT world-locked: each lives 0.4 s inside a frozen world, so a travel track
-        # would be four decimal places of nothing.
+        return f'<g class="dgHole"><g class="dgW">{hole}</g></g>'
+
+    def front() -> str:
+        # The crumbs are NOT world-locked — each lives 0.4 s inside a frozen world, so a travel
+        # track would be four decimal places of nothing — and they are therefore authored at
+        # `dig_cx`, the SCREEN position, while the hole is authored at `hole_cx`, which carries the
+        # world group's -PRINT_TILE*a displacement. Using one number for both put the spray 269 px
+        # to the right of its own hole. The arithmetic is correct only for whichever of the two
+        # groups the value was computed for, and the render is the only thing that says which.
+        #
+        # They are also drawn in FRONT rather than with the rest of the props, which is the second
+        # thing the render corrected. Behind, the entire arc lands inside the body's own 272..488 by
+        # 138..282 rectangle and is occluded by the creature doing the throwing — the spray survived
+        # as two specks in the gap between the legs. Earth passing in front of an animal digging
+        # under itself is what actually happens, and this is the only plane where it survives.
         crumbs = "".join(
-            f'<rect class="dgC{i}" x="{fmt(hole_cx - 8 - i * 5)}" y="{fmt(E_GROUND - 12)}" '
+            f'<rect class="dgC{i}" x="{fmt(dig_cx - 8 - i * 5)}" y="{fmt(E_GROUND - 12)}" '
             f'width="12" height="12"/>'
             for i in range(5)
         )
-        return f'<g class="dgHole"><g class="dgW">{hole}</g></g><g class="eink">{crumbs}</g>'
+        return f'<g class="eink">{crumbs}</g>'
 
     def css() -> str:
         # Five strokes on `.bob`: down-up, down-up, 0.24 s a pair. Fast enough to read as scrabbling
@@ -539,7 +555,7 @@ def _dig() -> Emote:
             )
         )
 
-    e.props, e.css = props, css
+    e.props, e.front, e.css = props, front, css
     return e
 
 
@@ -695,7 +711,9 @@ def _greeting() -> Emote:
     a, b = e.window
     meet0, meet1 = 5.0, 7.2  # the stopped span: arrival to departure
     b_x = 800.0  # authored off the right edge
-    b_travel = -330.0  # …to 470, which is 86 px clear of the resident's 384 and 70 px inside
+    b_travel = (
+        -330.0
+    )  # …to 470, which is 86 px clear of the resident's 384 and 70 px inside
     #                     the right edge — the whole visitor is on stage for the whole meeting
 
     def props() -> str:

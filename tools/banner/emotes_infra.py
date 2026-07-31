@@ -20,6 +20,7 @@ prior operator ruling already rejected.
 
 from __future__ import annotations
 
+import math
 import sys
 from pathlib import Path
 
@@ -140,9 +141,11 @@ def _extra(sfx: str, bob: bool = True) -> str:
       * the ANIMATED classes are unstyled, so the visitor stands perfectly inert beside a creature
         that is walking.
 
-    Both existing gates pass: `assert_reset_covers_sprite` matches on the class PREFIX, so
-    `class="legsStillPT"` is satisfied by the unsuffixed `.legsStill` rule that does not apply to
-    it. Only a picture disagrees. This function is the fix, applied per visitor.
+    Both gates USED to pass this silently: `assert_reset_covers_sprite` matched on the class PREFIX,
+    so `class="legsStillPT"` was satisfied by the unsuffixed `.legsStill` rule that does not apply
+    to it, and only a picture disagreed. The framework has since tightened that gate to exact class
+    tokens, so a visitor without this helper now FAILS the build instead of rendering wrong — but
+    the helper is still what makes a visitor correct, and the animated half was never gated at all.
 
     It deliberately does NOT name the unsuffixed groups: `.legsStillPT,` does not contain
     `.legsStill,`, so `assert_css_targets_exist` cannot mistake a visitor's reset for this
@@ -729,21 +732,30 @@ def _patience() -> Emote:
     # Narrower and darker than the first pass, which spread a .46 peak over 460 px and rendered a
     # gradient nobody would call a shadow. The surprise this beat depends on — "surely THAT took
     # it" — cannot land if the sweep is not unmistakably an event.
-    band = 340.0
+    slices, slice_w = 14, 26.0
+    band = slices * slice_w
     sweeps = ((3.0, 5.2), (5.7, 7.9))
 
     def props() -> str:
         return f'<g class="ptG"><g class="ptI">{clawd(e, sfx="PT", scale=psc, x=px)}</g></g>'
 
     def front() -> str:
-        return (
-            f'<defs><linearGradient id="ptsh" x1="0" y1="0" x2="1" y2="0">'
-            f'<stop offset="0" stop-color="{NIGHT}" stop-opacity="0"/>'
-            f'<stop offset=".5" stop-color="{NIGHT}" stop-opacity=".68"/>'
-            f'<stop offset="1" stop-color="{NIGHT}" stop-opacity="0"/></linearGradient></defs>'
-            f'<rect class="ptS" x="{fmt(-band)}" y="0" width="{fmt(band)}" height="{SH}" '
-            f'fill="url(#ptsh)"/>'
+        # STEPPED SLICES, NOT A GRADIENT. A 3-stop symmetric `linearGradient` is the obvious way to
+        # build a soft-edged shadow and this Chromium renders a HARD SEAM at the middle stop when
+        # the SVG is loaded as an image — a black hairline straight down the band, plainly visible
+        # on the light theme. Reproduced in isolation, and a 5-stop version seams identically; two
+        # abutting 2-stop halves seam at their junction. Hard steps have no such failure, need no
+        # `defs`, and are the right idiom anyway: every other soft edge in this scene is quantised.
+        prof = [
+            0.5 - 0.5 * math.cos(2 * math.pi * (i + 0.5) / slices)
+            for i in range(slices)
+        ]
+        cells = "".join(
+            f'<rect x="{fmt(-band + i * slice_w)}" y="0" width="{fmt(slice_w)}" '
+            f'height="{SH}" opacity="{fmt(round(p, 3))}"/>'
+            for i, p in enumerate(prof)
         )
+        return f'<g class="ptS"><g fill="{NIGHT}" opacity=".72">{cells}</g></g>'
 
     def css() -> str:
         run = SW + band
