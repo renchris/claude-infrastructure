@@ -38,6 +38,13 @@ setup() {
   export HOME="$D/home"; mkdir -p "$HOME/.claude/autonomy"
   export CC_BACKLOG_FILE="$D/backlog.jsonl"
   export CC_BACKLOG_KICK_MARKER="$HOME/.claude/autonomy/.dispatch-kick"
+  # The permission-pending sensor reads /tmp/cc-permission-pending — an absolute path OUTSIDE
+  # $HOME, so fixturing HOME cannot reach it (every other cc-blockers sensor here is HOME-rooted,
+  # which is why this one alone leaked). Unfixtured, the two whole-board assertions below pick up
+  # whatever real pending requests the box happens to hold: measured
+  # [dispatch-inert,permission-pending,permission-pending,verifier-inert] against an expected
+  # [dispatch-inert,verifier-inert], i.e. RED as a function of live operator state, at any load.
+  export CC_PERMPEND_DIR="$D/permpend"; mkdir -p "$CC_PERMPEND_DIR"
   KICKLOG="$D/kick.log"
 
   # cc-blockers' land-pipeline sensors, fixtured to the deterministically SILENT baseline
