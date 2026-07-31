@@ -1,0 +1,14 @@
+terminal-bench — app=kitty pid=26094 panes=0 interval=1800s  2026-07-31T21:46:59Z
+  T0  app   cpu=0.1 mem=317MB th=6 ports=356 win=36 off=36 mpx=0.00
+  T0  WS    cpu=37.5 mem=1280MB th=30 ports=5096 win=13 off=9 mpx=9.37
+  GPU path taken: gpu_frames=13 cpu_frames=1  ratio=13.00:1
+  … holding 1800s at constant layout (do not create or close panes) …
+  T1  app   cpu=0.0 mem=337MB th=7 ports=361 win=19 off=18 mpx=1.54
+  T1  WS    cpu=44.7 mem=1400MB th=30 ports=4998 win=14 off=10 mpx=9.37
+  DRIFT (app, constant layout — this is the leak instrument):
+    mem MB         +20 over 1800s  = +40.0/hr
+    mach ports     +5 over 1800s  = +10.0/hr
+    windows        -17 over 1800s  = -34.0/hr
+    offscreen win  -18 over 1800s  = -36.0/hr
+  appended → /private/tmp/claude-501/-Users-chrisren-Development-claude-infrastructure/c0033a12-e236-4b3b-89ce-fccf8a005afc/scratchpad/kitty-drift-30min.jsonl
+verdict=OK
