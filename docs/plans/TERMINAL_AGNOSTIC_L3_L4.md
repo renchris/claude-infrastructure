@@ -167,6 +167,52 @@ Claude Code knowing. Contract to reverse: `session split` · `session send` · `
 
 1. **kitty multi-hour drift at constant layout** — the 12 h/48-pane run was destroyed by the 11:46 panic
    before its second reading. §6.1 of `terminal-for-30-panes-2026-07-31.md` remains OPEN.
+   → **STILL OPEN, but no longer from zero** — §4.1 below has the partial evidence, the harness, and
+   the exact resume command. Nothing here needs re-deriving.
+
+### 4.1 PARTIAL — kitty drift: nothing leaking yet, but the 6 h reading is not in hand
+
+**Status: the falsification test has not yet been passed or failed.** What exists:
+
+| Reading | Window | Result |
+|---|---|---|
+| `terminal-bench.sh --app kitty --panes 30 --interval 1800` | 30 min | **`verdict=OK`** — mach ports **−16.0/hr**, mem −8.0/hr, **0.27 threads/pane**, GPU path 62:1 |
+| `kitty-drift-run.sh` run 1 | 90 min, 7 samples | ports **+4.0/hr**, threads 6→9, mem +53/hr |
+
+**Do not publish either as the verdict.** The two windows disagree in *sign*, so the series is
+oscillating in a ±16 band around ~360 ports with no monotone trend — which is exactly the state a
+short window cannot distinguish from a slow leak. The iTerm2 figure this must be compared against is
+**+76 mach ports/hr at frozen layout while RSS falls**; nothing measured so far resembles that, but
+"resembles" is not a leak verdict. Window count is noisier still (36→19 in 30 min) and is not a usable
+instrument at this timescale.
+
+**Run 1 died at t+90m and the harness called it OK.** The kitty instance vanished — almost certainly a
+human closing an unexplained 30-pane grid, which is a reasonable thing to do to a window that does not
+say why it exists. The script kept looping, wrote no further rows, and would have printed `verdict=OK`
+on seven stale samples after 4.5 h of measuring nothing, because the verdict was earned by a *sample
+count* and an empty `top` row was a silent skip. **Silence was the success path.** Fixed and
+positive-controlled (`589d541c`): subject death is separated from a transient miss by `kill -0`, the
+layout is re-checked against what was built, the verdict now requires 90 % of the window to have
+*elapsed*, and `--pid` pins the subject because `pgrep -x kitty | head -1` chooses arbitrarily whenever
+more than one kitty runs. The window is now titled `DO-NOT-CLOSE`.
+
+**Run 2 is live** — pid-pinned, socket `unix:/tmp/kitty-drift2`, 30/30 panes, started 2026-07-31
+23:20 UTC, due ~05:21 UTC. Data lands at
+`docs/research/data/kitty-drift-run2-2026-07-31.tsv` (durable, not `/tmp`).
+
+**To finish this gap — read the TSV, no re-derivation:**
+```bash
+tail -1 docs/research/data/kitty-drift-run2.log          # verdict=OK | ABORTED-* | PARTIAL
+# fit first-vs-last on ports (col 6) / threads (col 5) / mem (col 4); ≥0.9 of 6h must have elapsed
+```
+`verdict=ABORTED-*` ⇒ the run is void, re-run it; it does **not** mean kitty leaked. Re-run:
+`scripts/kitty-drift-run.sh --hours 6 --panes 30 --pid <kitty-pid> --socket unix:/tmp/kitty-drift2`
+
+**Two confounds to state with whatever number comes out**, not to discover later: the box was at
+**load ~27** with a sibling session actively benching kitty on the same host, and this is **30 panes,
+not the 48** of the destroyed run — 48 shells plus the sampler's children lands at ~86-90 % of the
+64-process safety ceiling held for six hours, and drift is a rate, so 30 measures the same leak with
+headroom. Scale accordingly rather than comparing pane-counts directly.
 2. ~~**cmux socket auth from outside** — `socketControlMode: "passwordOrCmux"` is NOT a valid enum; the
    correct value is unknown, and without it external automation cannot drive cmux.~~
    → **CLOSED 2026-07-31**, §4.2 below · `docs/research/cmux-external-control-2026-07-31.md`.
