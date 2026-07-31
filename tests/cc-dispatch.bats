@@ -70,11 +70,14 @@ add_item()   { "$BACKLOG" add --title "$1" --project proj --source bats; }   # e
 status_of()  { "$BACKLOG" list --all --json | jq -r --arg i "$1" '.[]|select(.id==$i)|.status'; }
 idl_action() { tail -1 "$C/idl.jsonl" | jq -r '.action'; }
 
-@test "selftest passes and runs all 111 checks (a zero-check suite must not 'pass')" {
+@test "selftest passes and runs all 121 checks (a zero-check suite must not 'pass')" {
   run "$DISP" selftest
   [ "$status" -eq 0 ]
   n_ok="$(printf '%s' "$output" | grep -c '^  ok ')"
-  [ "$n_ok" -eq 113 ]   # 49 pre-v2 + the decision/admission split (S1,S2,S6,S7 + kill switches).
+  [ "$n_ok" -eq 121 ]   # 49 pre-v2 + the decision/admission split (S1,S2,S6,S7 + kill switches).
+                        # 113 → 121: the singleton gates ADMISSION, not DECISION (de5e3e24be8f) —
+                        # case (t) asserts the lock-loser's full decision set plus four zero-effect
+                        # reads, each mirrored by a (t2) positive control.
                         # 111 → 113: the spawn-failure record now names its rc AND carries the
                         # fire's own stderr, so (d) asserts the cause is present, not just the verdict.
                         # 108 → 106 when the ceiling moved off the accounts oracle onto the ledger's

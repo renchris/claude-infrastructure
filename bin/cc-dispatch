@@ -53,10 +53,53 @@
 #     oracle must not stall the queue) and never the full ceiling (never a blind fire).   S4 / R4
 #   ORDER — thrash-count ASCENDING (this id's `failed` records in the IDL), then oldest ts, so an
 #     item that repeatedly fails to spawn SINKS instead of starving the queue head.       S7 / F10
-#   SINGLETON — one pass at a time behind a `mkdir` lock pinned by pid|lstart (`kill -0` alone
-#     wedges forever on a recycled pid). A pass that finds a LIVE holder records
-#     {action:"skipped", reason:"pass-in-flight"} and exits 0 — skip, never queue: a queueing lock
-#     is how a pass that outruns its interval becomes five concurrent passes.           S6 / F8,F9
+#   SINGLETON — one ADMISSION at a time behind a `mkdir` lock pinned by pid|lstart (`kill -0` alone
+#     wedges forever on a recycled pid). A pass that finds a LIVE holder still DECIDES (the journal
+#     is a pure read), records {action:"skipped", reason:"pass-in-flight"} alongside its decisions,
+#     and exits 0 having taken ZERO claims and fired ZERO spawns — skip-the-ADMISSION, never queue:
+#     a queueing lock is how a pass that outruns its interval becomes five concurrent passes.
+#     The lock gates ADMISSION ONLY — see THE LOCK COVERS ADMISSION, NOT DECISION below.  S6 / F8,F9
+#
+# ── THE LOCK COVERS ADMISSION, NOT DECISION (item de5e3e24be8f, AUTONOMY_DISPATCH_V2 §10 A2) ──────
+# THE DEFECT. The singleton was acquired at step 0 and held to process exit, so ONE lock covered
+# both phases — and the two have wildly different costs. Measured over the journal window
+# 2026-07-30T19:35Z→2026-07-31T05:32Z: the DECISION phase over a full ~135-item backlog takes
+# 7–45 s, but the ADMISSION tail (wave-plan → claim → warm worktree → handoff-fire) takes
+# 414–833 s. A kick arriving during a tail therefore found a live holder, wrote a bare
+# {skipped, pass-in-flight} and returned WITHOUT DECIDING ANYTHING. Pass gaps reached 1073 s
+# (58 of 170 over 300 s, 21 skipped passes), so the 300 s launchd backstop could not hold the
+# 5-minute bound: 3 of 18 in-window adds missed it (338/515/714 s) against a p50 of 8 s.
+# That directly contradicts S1's own premise — "a decision is a pure read: it costs no quota, no
+# session, no lock" — which the implementation violated by holding the decision lock through
+# admission.
+#
+# THE FIX — narrow what the lock GATES, never what it PROTECTS. A pass that loses the lock no
+# longer returns at step 0: it runs the whole decision phase, journals a verdict for every
+# dispatchable item, and returns before the first capacity-consuming act. Decision latency is
+# back to the pass cadence for EVERY pass, contended or not, and the {skipped, pass-in-flight}
+# record is still written (A9's observable) — now alongside the decisions rather than instead of
+# them.
+#
+# WHY NOT the two obvious alternatives, both of which look smaller and are wrong:
+#   (a) "release the lock before the spawn tail, keep the pull inside." UNSAFE TWICE OVER.
+#       `cc-backlog claim` has NO already-claimed guard (cmd_transition appends the event from any
+#       status — deliberately, see its own header), so two passes whose pulls straddle a claim BOTH
+#       claim the same id: the 2026-07-20 double-worker incident exactly. And `warm_worktree` runs
+#       `git -C <repo> worktree add`, which races on .git/config.lock when two tails run
+#       concurrently (GH #34645/#48927). The tail genuinely needs serialising.
+#   (b) "a second, separate admission lock." Buys nothing here: the loser of an admission lock would
+#       still have to decide lock-free to fix A2, and once it does, the FIRST lock has no remaining
+#       job. One lock, acquired at the same instant as before, is strictly less mechanism.
+# So the holder's path is BYTE-IDENTICAL to before — pull, order, count, admit and spawn all still
+# happen under the one lock it always held. Only the LOSER's path changed, and only by adding reads.
+#
+# WHY THE CEILING CANNOT DOUBLE-ADMIT (the invariant this lock exists for; header note 2 below).
+# It is not weakened, because it is not enforced by the lock's DURATION but by the lock's presence
+# over [read live_workers … take claims]. A pass without the lock reaches neither: `admit_n` is
+# forced to 0 before the journal is written, and the pass returns before wave-plan, before claim and
+# before spawn. The claiming code is UNREACHABLE without the lock, so N concurrent passes still
+# admit at most CEILING between them — RED-proved against the pristine pre-S6 tree, which double-
+# claims the same id under the same fixture (tests/cc-dispatch-v2.bats).
 #
 # MAX_SPAWN vs CEILING — both survive, with distinct jobs: MAX_SPAWN is the PER-PASS spawn cap (an
 # existing guard, kept verbatim at step 5); CEILING is the FLEET cap admission is computed from.
@@ -499,17 +542,23 @@ clear_page() { rm -f "$PAGE_FILE" 2>/dev/null || true; }
 dispatch() { # <dry|run|decide>
   local mode="$1" backlog waveplan spawn items dispatchable count wave plan rc n
   local v2=1; [ "$LANE" = v1 ] && v2=0
+  local inflight=0        # 1 = another pass holds the singleton ⇒ DECIDE but never admit
   # the v1 lane has no decision journal, so a decide-only pass there has no product at all; degrade
   # it to the incumbent dry pass (still zero claims/spawns/pages) rather than invent a lane-v1 mode.
   [ "$v2" -eq 0 ] && [ "$mode" = decide ] && mode=dry
 
   # 0. S6 SINGLETON — writing modes only. A dry pass writes nothing, so it must neither block a live
-  # pass nor be blocked by one. skip-not-queue: a LIVE holder means a pass is already in flight, so
-  # THIS pass records why it did nothing and exits 0 (never queues ⇒ never double-claims).
+  # pass nor be blocked by one. skip-not-queue: a LIVE holder means an ADMISSION is already in
+  # flight, so this pass may never claim or spawn (never queues ⇒ never double-claims).
+  #
+  # It does NOT return here. Losing the lock costs this pass its admission budget, not its voice:
+  # the decision journal is a pure read (S1) and is what the 5-minute bound is measured on, so it
+  # runs either way and `inflight` carries the verdict downstream. Returning at this line is the
+  # A2 defect itself — see THE LOCK COVERS ADMISSION, NOT DECISION in the header.
   if [ "$v2" -eq 1 ] && [ "$mode" != dry ] && ! lock_acquire; then
+    inflight=1
     idl_inflight
-    echo "cc-dispatch: a pass is already in flight — skipped (skip, never queue)." >&2
-    return 0
+    echo "cc-dispatch: an admission is already in flight — DECIDING ONLY (zero claims, zero spawns)." >&2
   fi
 
   backlog="$(resolve_bin "${CC_DISPATCH_BACKLOG_BIN:-}" cc-backlog)" \
@@ -613,15 +662,25 @@ dispatch() { # <dry|run|decide>
     # than dropping the pass — a pass that decides nothing is the outage this rebuild is fixing.
     printf '%s' "$ordered" | jq -e 'type=="array"' >/dev/null 2>&1 || ordered="$dispatchable"
 
-    LIVE_RAW="$(live_workers "$backlog")"
-    if [ -z "$LIVE_RAW" ]; then
-      # UNKNOWN: admit AT MOST ONE. Not 0 (a permanently unreadable ledger would stall the queue
-      # forever — fail-closed must not amplify into an outage) and not CEILING (that is a blind fire
-      # into an unknown fleet). CEILING=0 still admits nothing: the kill switch outranks the guess.
-      FREE_SLOTS=1; [ "$CEILING" -lt 1 ] && FREE_SLOTS=0
-      reason_admit="live-count-unknown"
+    if [ "$inflight" -eq 1 ]; then
+      # NO LOCK ⇒ NO ADMISSION BUDGET, and deliberately no capacity MEASUREMENT either. free_slots
+      # is 0 because another pass holds the singleton, not because the fleet is full, and a live
+      # count on these records would read as though this pass had evaluated capacity and found none
+      # — conflating "I was not allowed to admit" with "there was nothing to admit", which is the
+      # named-failure-vs-no-verdict conflation this rebuild exists to remove. live_workers:null +
+      # reason:"pass-in-flight" says exactly what happened. It also saves the `list --all` read.
+      LIVE_RAW=""; FREE_SLOTS=0
     else
-      FREE_SLOTS=$((CEILING - LIVE_RAW)); [ "$FREE_SLOTS" -lt 0 ] && FREE_SLOTS=0
+      LIVE_RAW="$(live_workers "$backlog")"
+      if [ -z "$LIVE_RAW" ]; then
+        # UNKNOWN: admit AT MOST ONE. Not 0 (a permanently unreadable ledger would stall the queue
+        # forever — fail-closed must not amplify into an outage) and not CEILING (that is a blind
+        # fire into an unknown fleet). CEILING=0 still admits nothing: the switch outranks the guess.
+        FREE_SLOTS=1; [ "$CEILING" -lt 1 ] && FREE_SLOTS=0
+        reason_admit="live-count-unknown"
+      else
+        FREE_SLOTS=$((CEILING - LIVE_RAW)); [ "$FREE_SLOTS" -lt 0 ] && FREE_SLOTS=0
+      fi
     fi
     admit_n="$FREE_SLOTS"; [ "$admit_n" -gt "$count" ] && admit_n="$count"
 
@@ -636,15 +695,31 @@ dispatch() { # <dry|run|decide>
         vverdict=admit; vreason="$reason_admit"; ADMITTED=$((ADMITTED + 1))
       else
         vverdict=defer; DEFERRED=$((DEFERRED + 1))
-        # at-ceiling (no slots at all) outranks capacity (slots existed, this item is past them) and
-        # outranks the unknown note: with zero slots the count could not have changed the outcome.
-        if [ "$FREE_SLOTS" -eq 0 ]; then vreason=at-ceiling; else vreason=capacity; fi
+        # pass-in-flight outranks at-ceiling, which outranks capacity (slots existed, this item is
+        # past them) and outranks the unknown note: with zero slots the count could not have changed
+        # the outcome. The order is by how much of the outcome each explains — "another pass held
+        # the singleton" fully determines free_slots:0, so reporting it as at-ceiling would blame
+        # the fleet for a lock and would feed cc-blockers' SATURATED premise gate (which counts
+        # reason=="at-ceiling") deferrals that carry no evidence about capacity at all.
+        # quoted, all three: an unquoted `x=a-b` reads as arithmetic to shellcheck (SC2100) — the
+        # value survives, but the warning is real noise on a repo whose gate lints this file.
+        if   [ "$inflight" -eq 1 ];   then vreason="pass-in-flight"
+        elif [ "$FREE_SLOTS" -eq 0 ]; then vreason="at-ceiling"
+        else                               vreason="capacity"; fi
       fi
       [ "$mode" = dry ] || idl_decision "$did" "$vverdict" "$pos" "$vreason" "$dproj"
     done < <(printf '%s' "$ordered" | jq -r '.[] | "\(.id // "")\t\(.project // "")"')
 
     [ "$mode" = dry ] && printf 'PLAN: %s dispatchable · ceiling=%s live=%s free_slots=%s → %s admit, %s defer\n' \
       "$count" "$CEILING" "${LIVE_RAW:-unknown}" "$FREE_SLOTS" "$admit_n" "$((count - admit_n))"
+
+    # 3a0. S6 — NO LOCK, so the journal above IS the whole product of this pass. Returning HERE, and
+    # not at step 0, is the A2 fix: every dispatchable item now has a verdict from this pass, which
+    # is what the 5-minute bound is measured on, while the capacity-consuming steps below (wave-plan,
+    # claim, worktree, spawn) stay unreachable without the singleton. Before 3b deliberately: this
+    # pass has zero free slots because a lock is held, NOT because the fleet is at its ceiling, and
+    # 3b's stderr line would assert the wrong one of those.
+    if [ "$inflight" -eq 1 ]; then idl_summary; return 0; fi
 
     # 3a. DECIDE-ONLY (`--decide` / CC_DISPATCH_DECIDE_ONLY) — the journal IS the product: zero
     # claims, zero spawns, zero pages, no oracle beyond the live count. The safe activation lane.
@@ -1201,12 +1276,34 @@ STUB
   printf '%s|%s\n' "$holder" "$(ps -o lstart= -p "$holder" 2>/dev/null)" > "$tmp/dispatch.lock/owner"
   CC_DISPATCH_CEILING=6 "$SELF" --once >/dev/null 2>&1
   t "(t) a live holder → the pass records pass-in-flight" grep -q '"reason":"pass-in-flight"' "$tmp/idl.jsonl"
-  t "(t) a live holder → ZERO decisions (never a second pass)" not grep -q '"action":"decision"' "$tmp/idl.jsonl"
+  # item de5e3e24be8f — the lock gates ADMISSION, not DECISION. This assertion was the INVERSE
+  # ("ZERO decisions") until the A2 miss was measured: holding the singleton across the 414-833 s
+  # spawn tail meant a kick arriving during one produced no verdict at all, so 3 of 18 in-window
+  # adds blew the 300 s bound. Deciding costs no quota, no session and no lock (S1).
+  t "(t) a live holder → the pass STILL DECIDES every item (the A2 bound)" \
+    test "$(jq -rs '[.[]|select(.action=="decision")]|length' "$tmp/idl.jsonl")" = 3
+  t "(t) …and every one of those verdicts is defer/pass-in-flight" \
+    test "$(jq -rs '[.[]|select(.action=="decision" and .verdict=="defer" and .reason=="pass-in-flight")]|length' "$tmp/idl.jsonl")" = 3
+  # free_slots:0 with live_workers:null — "not allowed to admit", never "measured no capacity".
+  t "(t) …carrying free_slots 0 and live_workers null (no capacity claim)" \
+    test "$(jq -rs '[.[]|select(.action=="decision")|select(.free_slots==0 and .live_workers==null)]|length' "$tmp/idl.jsonl")" = 3
+  # THE INVARIANT THE LOCK EXISTS FOR — the claiming path is unreachable without it, so N concurrent
+  # passes still admit at most CEILING between them. ZERO admits, claims, wave-plan calls, spawns.
+  t "(t) a live holder → ZERO admits (no double-admission)"  test "$(jq -rs '[.[]|select(.action=="decision" and .verdict=="admit")]|length' "$tmp/idl.jsonl")" = 0
+  t "(t) a live holder → ZERO claims"                    not grep -q '^claim ' "$tmp/backlog.log"
+  t "(t) a live holder → ZERO wave-plan calls"           test ! -f "$tmp/wave.json"
   t "(t) a live holder → ZERO spawns"                    test ! -s "$tmp/spawn.log"
   # a RECYCLED pid is the case `kill -0` alone cannot see: same live pid, different start time.
+  # This case is ALSO (t)'s positive control: same fixture, same harness, lock free instead of held,
+  # and every effect (t) asserts ABSENT is asserted PRESENT here. Without that pairing a broken stub
+  # would satisfy all four of (t)'s zero-assertions vacuously.
   reset; printf '%s|%s\n' "$holder" 'Mon Jan  1 00:00:00 2001' > "$tmp/dispatch.lock/owner"
   CC_DISPATCH_CEILING=6 "$SELF" --once >/dev/null 2>&1
   t "(t2) lstart mismatch (recycled pid) → stale, lock TAKEN, pass runs" grep -q '"action":"decision"' "$tmp/idl.jsonl"
+  t "(t2) recycled-pid holder → it ADMITS (control for (t)'s zero-admits)" \
+    test "$(jq -rs '[.[]|select(.action=="decision" and .verdict=="admit")]|length' "$tmp/idl.jsonl")" -ge 1
+  t "(t2) recycled-pid holder → it CLAIMS (control for (t)'s zero-claims)"      grep -q '^claim ' "$tmp/backlog.log"
+  t "(t2) recycled-pid holder → it calls wave-plan (control for (t))"           test -f "$tmp/wave.json"
   t "(t2) recycled-pid holder → it fires (never wedged forever)"         test -s "$tmp/spawn.log"
   kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null
   # a DEAD holder is stale too — and the lock dir is released, not leaked, when the pass ends.
