@@ -1,0 +1,216 @@
+#!/bin/bash
+# cc-pane-headless — the SCALING driver (T2 of docs/plans/TERMINAL_AGNOSTIC_L3_L4.md).
+#
+# Same four verbs as bin/cc-pane, addressed the same way, with NO SURFACE ANYWHERE:
+#
+#   spawn  [--cwd D] [--name N] [--] <cmd…>  → mints an id, starts the agent with no pane, prints id
+#   address <id>                             → the id, iff it is live
+#   send    <id> <text…>                     → durable delivery into that id's inbox
+#   close   <id>                             → reap (TERM → KILL), ps-verified
+#   list                                     → live ids, one per line
+#
+# Selected by CC_PANE_DRIVER=headless; bin/cc-pane execs this as a sibling (plan §6.5). Never
+# invoked directly by callers — they always go through the seam, which is the whole point.
+#
+# WHY THIS IS THE DEFAULT SHAPE (plan §0 D3, §6.4 — do not re-argue). The readable-pane ceiling is
+# 38 panes across all three displays, PHYSICAL and identical for every terminal. Level 3 is 100
+# agents and Level 4 is 1000, so ~95% then ~99.9% of agents must run with no surface at all. A
+# pane is the EXCEPTION. Everything here is therefore id-keyed and file-backed: no window, no tab,
+# no coordinate, no terminal.
+#
+# ⚠ WHAT `send` DOES AND DOES NOT PROMISE. It guarantees DURABLE DELIVERY into the id's inbox and
+# returns rc 1 if the id is not live. It does NOT claim the agent consumed the text — there is no
+# tty to type into and pretending otherwise would be exactly the claimed-vs-checked-outcome defect
+# this repo keeps paying for. Consumption is the queue front-end's job (plan P4, over
+# cc-permission-beacon.sh). An honest "delivered, not necessarily read" beats a fake "sent".
+#
+# Seams: CC_PANE_HOME · CC_PANE_KILL_WAIT_S
+# bash 3.2-safe (macOS system bash).
+
+set -uo pipefail
+
+RC_OK=0; RC_NO=1; RC_INDET=2; RC_USAGE=3
+
+HOME_DIR="${CC_PANE_HOME:-$HOME/.claude/autonomy/panes}"
+KILL_WAIT_S="${CC_PANE_KILL_WAIT_S:-5}"
+
+die_usage() { printf 'cc-pane-headless: %s\n' "$1" >&2; exit "$RC_USAGE"; }
+
+# ── liveness: the registry holds CLAIMS, the OS holds TRUTH ────────────────────────────────────
+# A row is live iff its pid exists AND that pid's start time still matches the one recorded at
+# spawn. The start-time half is the PID-REUSE guard: a bare `kill -0` would call an unrelated
+# recycled pid "our agent", and after a reboot every recorded pid is fair game for reuse. This is
+# the direct defence of memory liveness-proxy-cannot-be-output-age — never infer aliveness from a
+# file's existence or an output's age; ask the subject's own kernel record.
+pstart_of() { ps -o lstart= -p "$1" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//'; }
+
+meta_get() { # $1=dir $2=key
+  [ -f "$1/meta" ] || return 1
+  sed -n "s/^$2=//p" "$1/meta" 2>/dev/null | head -1
+}
+
+is_live() { # $1=dir  → 0 live · 1 dead
+  local pid rec now st
+  pid="$(meta_get "$1" pid)" || return 1
+  [ -n "$pid" ] || return 1
+  # PROCESS STATE FIRST, and deliberately NOT `kill -0`. `kill -0` SUCCEEDS on a ZOMBIE — an
+  # already-exited child still occupying its pid slot until the parent reaps it — so a bare
+  # kill -0 reports a dead-on-arrival agent as LIVE. Measured here: `spawn -- /usr/bin/false`
+  # returned rc 0 and a fresh id (memory: kill-on-reaped-child-fails-fast-path-hides-it, the same
+  # zombie-vs-reaped distinction). `ps -o stat=` is the discriminator: empty ⇒ gone, Z* ⇒ zombie.
+  st="$(ps -o stat= -p "$pid" 2>/dev/null | tr -d ' ')"
+  [ -n "$st" ] || return 1
+  case "$st" in Z*) return 1 ;; esac
+  rec="$(meta_get "$1" pstart)"
+  now="$(pstart_of "$pid")"
+  # A recorded-but-unreadable start time is NOT proof of death, but it is also not proof of life;
+  # with the pid confirmed present we accept it rather than reap a live agent on a ps hiccup.
+  [ -n "$rec" ] || return 0
+  [ -n "$now" ] || return 0
+  [ "$rec" = "$now" ]
+}
+
+pane_dir() { printf '%s/%s' "$HOME_DIR" "$1"; }
+
+# ── verbs ──────────────────────────────────────────────────────────────────────────────────────
+v_spawn() {
+  local cwd="" name="" id dir pid pstart
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --cwd)  cwd="${2:-}"; shift 2 ;;
+      --name) name="${2:-}"; shift 2 ;;
+      --)     shift; break ;;
+      -*)     die_usage "spawn: unknown option '$1'" ;;
+      *)      break ;;
+    esac
+  done
+  [ $# -ge 1 ] || die_usage "spawn: need a command (a headless pane IS a process — see below)"
+  # A registration with no process is REFUSED on purpose: `list` could then only report registry
+  # presence, which is the very "claims as truth" failure is_live() exists to prevent.
+  cwd="${cwd:-$PWD}"
+  [ -d "$cwd" ] || { printf 'cc-pane-headless: --cwd %s is not a directory\n' "$cwd" >&2; return "$RC_NO"; }
+
+  # Lowercase-prefixed id: deliberately NOT an 8-hex-uppercase token, so scripts/pane-id-lint.sh
+  # (which flags exactly that shape as a truncated iTerm2 uuid) can never false-positive on us.
+  #
+  # `od`, NOT `hexdump -e`: BSD hexdump PADS its format output to the field width, so the obvious
+  # `hexdump -n 8 -e '4/4 "%08x"'` mints `hdl-dceadd3bb9073df0<16 spaces>` — an id with trailing
+  # whitespace, which becomes a directory name with trailing whitespace and an id that compares
+  # unequal to its own echoed form. Caught by the first smoke test; tests/cc-pane-headless.bats
+  # pins the shape so it cannot come back.
+  id="hdl-$(od -An -N8 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')"
+  # Shape-gate the mint. A malformed id must fail LOUD here rather than become a junk directory
+  # that every later verb then half-works against.
+  case "$id" in
+    hdl-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
+    *) printf 'cc-pane-headless: could not mint a well-formed id (got %s)\n' "$id" >&2; return "$RC_NO" ;;
+  esac
+  dir="$(pane_dir "$id")"
+  mkdir -p "$dir" || return "$RC_NO"
+  # 700: the registry carries an agent's inbox and its whole output log. World-readable would make
+  # every headless agent's traffic public on a shared box (memory: prescribed-remedy-worse — answer
+  # the PROPERTY, world-readable ⇒ chmod, not a path guess).
+  chmod 700 "$dir" 2>/dev/null
+  : > "$dir/inbox"; : > "$dir/out.log"
+
+  # NO generated shell anywhere: argv is exec'd directly as "$@" and is only ever SERIALISED for
+  # the human-readable record, never re-parsed or re-executed. That removes the whole
+  # json-quoting-is-not-shell-quoting injection class by construction.
+  ( cd "$cwd" && exec "$@" ) >"$dir/out.log" 2>&1 </dev/null &
+  pid=$!
+  pstart="$(pstart_of "$pid")"
+
+  { printf 'id=%s\n' "$id"
+    printf 'pid=%s\n' "$pid"
+    printf 'pstart=%s\n' "$pstart"
+    printf 'cwd=%s\n' "$cwd"
+    printf 'name=%s\n' "$name"
+    printf 'created=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  } > "$dir/meta"
+  printf '%s\n' "$@" > "$dir/argv"
+
+  # An agent already gone the instant it was spawned is a FAILURE, reported as one — and reported
+  # through the SAME is_live() every other verb uses, so the zombie case cannot be right in one
+  # place and wrong in another.
+  if ! is_live "$dir"; then
+    # Preserve the evidence under a name the `hdl-*` live glob cannot see, so `list`'s reap-on-read
+    # cannot race-delete the one log that explains the failure.
+    mv "$dir" "$HOME_DIR/dead-${id#hdl-}" 2>/dev/null
+    printf 'cc-pane-headless: spawned process exited immediately (log: %s/dead-%s/out.log)\n' \
+      "$HOME_DIR" "${id#hdl-}" >&2
+    return "$RC_NO"
+  fi
+  printf '%s\n' "$id"
+}
+
+v_address() {
+  local dir; dir="$(pane_dir "$1")"
+  [ -d "$dir" ] || return "$RC_NO"
+  is_live "$dir" || return "$RC_NO"
+  printf '%s\n' "$1"
+}
+
+v_send() {
+  local id="$1"; shift
+  local dir; dir="$(pane_dir "$id")"
+  [ -d "$dir" ] || { printf 'cc-pane-headless: no such id: %s\n' "$id" >&2; return "$RC_NO"; }
+  is_live "$dir" || { printf 'cc-pane-headless: id not live: %s\n' "$id" >&2; return "$RC_NO"; }
+  printf '%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >> "$dir/inbox" || return "$RC_NO"
+}
+
+v_close() {
+  local dir pid waited
+  dir="$(pane_dir "$1")"
+  [ -d "$dir" ] || return "$RC_NO"
+  pid="$(meta_get "$dir" pid)"
+  if [ -n "$pid" ] && is_live "$dir"; then
+    kill -TERM "$pid" 2>/dev/null
+    waited=0
+    while [ "$waited" -lt "$KILL_WAIT_S" ] && is_live "$dir"; do sleep 1; waited=$((waited + 1)); done
+    is_live "$dir" && kill -KILL "$pid" 2>/dev/null
+    sleep 1
+    # ps-VERIFY the reap. A close that returns 0 without checking is the exact defect recorded in
+    # memory shutdown-request-is-not-an-actuator: TaskStop de-registered a subagent and left it
+    # alive 25 minutes later. Refusing to claim a kill we did not observe is the whole point.
+    if is_live "$dir"; then
+      printf 'cc-pane-headless: %s survived TERM+KILL (pid %s)\n' "$1" "$pid" >&2
+      return "$RC_NO"
+    fi
+  fi
+  rm -rf "$dir" || return "$RC_NO"
+}
+
+v_list() {
+  [ -d "$HOME_DIR" ] || return "$RC_OK"   # nothing spawned yet is a true empty, not indeterminate
+  # An existing-but-UNREADABLE registry is INDETERMINATE, never "no agents". Without this the glob
+  # below silently yields nothing and a blind enumerator reads as an empty fleet — the same false
+  # verdict drv_iterm2_list() refuses for `it2 session list`, and the one that lets a caller reap
+  # live agents. (Found by shellcheck SC2034: RC_INDET was unused here while the iterm2 driver
+  # used it — the asymmetry WAS the bug, not the lint.)
+  { [ -r "$HOME_DIR" ] && [ -x "$HOME_DIR" ]; } || return "$RC_INDET"
+  local dir id
+  for dir in "$HOME_DIR"/hdl-*; do
+    [ -d "$dir" ] || continue
+    id="$(basename "$dir")"
+    if is_live "$dir"; then
+      printf '%s\n' "$id"
+    else
+      # Reap on read: a dead row is disproved by the OS, so it must not linger to be mistaken for
+      # a live agent by the next reader. This is what makes a reboot (which kills every process)
+      # self-healing instead of leaving a registry full of confident corpses.
+      rm -rf "$dir" 2>/dev/null
+    fi
+  done
+}
+
+VERB="${1:-}"; [ $# -gt 0 ] && shift
+case "$VERB" in
+  spawn)   v_spawn "$@" ;;
+  address) [ $# -ge 1 ] || die_usage "address: need an id"; v_address "$1" ;;
+  send)    [ $# -ge 2 ] || die_usage "send: need <id> <text…>"; id="$1"; shift; v_send "$id" "$@" ;;
+  close)   [ $# -ge 1 ] || die_usage "close: need an id"; v_close "$1" ;;
+  list)    v_list ;;
+  driver)  printf 'headless\n' ;;
+  *)       die_usage "unknown verb '$VERB'" ;;
+esac
+exit $?

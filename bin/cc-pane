@@ -1,0 +1,212 @@
+#!/bin/bash
+# cc-pane — THE terminal-agnostic pane seam (T1 of docs/plans/TERMINAL_AGNOSTIC_L3_L4.md).
+#
+# One interface, four verbs plus an enumerator:
+#
+#   cc-pane spawn  [opts]        → mint a new agent surface; prints its ID on stdout
+#   cc-pane address [id]         → resolve an ID to canonical form (no arg = MY OWN id)
+#   cc-pane send   <id> <text…>  → deliver text to that id
+#   cc-pane close  <id>          → reap that id
+#   cc-pane list                 → enumerate live ids, one per line
+#
+# WHY A SEAM AT ALL (plan §0 D3/D5, do not re-litigate). The readable-pane ceiling on this
+# operator's three displays is 38 panes — PHYSICAL, and identical for every terminal — while the
+# target is 100 (Level 3) then 1000 (Level 4). At Level 3 ~95 of 100 agents need no pane at all.
+# So the scaling driver is `headless`, and a terminal pane is the EXCEPTION, not the rule.
+#
+# ⚠ HEADLESS-FIRST IS A STATEMENT ABOUT THE CONTRACT, NOT ABOUT THE DEFAULT VALUE (plan §6.4).
+# The two instructions "default iterm2" and "headless is the default" look contradictory and are
+# not, so the reconciliation is pinned here as well as in the plan:
+#   * CONTRACT: nothing below may assume a surface exists. Every verb is keyed on an OPAQUE ID,
+#     never on a window/tab/pane coordinate. Anything needing a surface (focus, split direction,
+#     profile) is an OPTIONAL CAPABILITY a driver may not have, and a driver lacking it must be
+#     USABLE, not broken. That is what stops this being rebuilt at Level 3.
+#   * DEFAULT VALUE: `iterm2`, for one release, so today's behaviour is reproduced exactly. Same
+#     compat logic as the $ITERM_SESSION_ID read-fallback in pane_self() below.
+#
+# DRIVER RESOLUTION (plan §6.5). This file is front-end + dispatcher AND carries the `iterm2`
+# driver as the built-in incumbent. Any other driver X resolves to a sibling executable
+# `cc-pane-X` — so `headless` → bin/cc-pane-headless, and D4's future kitty/cmux drivers drop in
+# with ZERO edits here.
+#
+# EXIT CODES — the repo's existing convention (cc-teardown rc 2, cc-notify rc 3), because callers
+# already branch on it: 0 ok · 1 the driver said NO · 2 INDETERMINATE (could not tell — an
+# unreadable enumeration is never a "gone" verdict) · 3 usage/unknown driver.
+#
+# Seams: CC_PANE_DRIVER · CC_PANE_ID · CC_PANE_IT2 · CC_PANE_DRIVER_DIR
+# bash 3.2-safe (macOS system bash), matching hooks/session-register.sh.
+
+set -uo pipefail
+
+RC_OK=0; RC_NO=1; RC_INDET=2; RC_USAGE=3
+
+die_usage() { printf 'cc-pane: %s\n' "$1" >&2; return "$RC_USAGE"; }
+
+# ── self-resolution ────────────────────────────────────────────────────────────────────────────
+# Resolve THIS file through the FINAL symlink, not merely its directory. ~/.claude/bin is a tree
+# of per-file symlinks into the checkout, so `cd "$(dirname "$0")" && pwd -P` resolves the *dir*
+# and would hunt for the sibling driver in ~/.claude/bin instead of alongside the real file
+# (memory: self-identity-guard-must-fully-resolve — pwd -P resolves the dir, not the final link).
+_resolve_self() {
+  local p="$1" d n=0
+  while [ -L "$p" ] && [ "$n" -lt 40 ]; do
+    d="$(cd "$(dirname "$p")" 2>/dev/null && pwd -P)" || return 1
+    p="$(readlink "$p")" || return 1
+    case "$p" in /*) ;; *) p="$d/$p" ;; esac
+    n=$((n + 1))
+  done
+  d="$(cd "$(dirname "$p")" 2>/dev/null && pwd -P)" || return 1
+  printf '%s/%s\n' "$d" "$(basename "$p")"
+}
+SELF="$(_resolve_self "$0")" || SELF="$0"
+DRIVER_DIR="${CC_PANE_DRIVER_DIR:-$(dirname "$SELF")}"
+
+DRIVER="${CC_PANE_DRIVER:-iterm2}"
+
+# ── id normalisation ───────────────────────────────────────────────────────────────────────────
+# CC_PANE_ID is defined as a SUPERSET of $ITERM_SESSION_ID: it accepts either the bare id or
+# iTerm2's "wNtNpN:<UUID>" prefixed form. That is precisely what makes the 18-site class-2 rename
+# mechanical and provably behaviour-preserving — every existing consumer already strips the prefix
+# with ${x##*:}, so substituting ${CC_PANE_ID:-${ITERM_SESSION_ID:-}} in front of an untouched
+# ${x##*:} cannot change any caller's result (plan §6.2).
+pane_norm() { local v="${1:-}"; printf '%s' "${v##*:}"; }
+
+# MY OWN id. Resolution order is the compat contract: CC_PANE_ID wins, ITERM_SESSION_ID is the
+# read fallback kept for ONE RELEASE so nothing breaks mid-flight, and neither present is rc 1 —
+# "I am not in an addressable surface", which is a legitimate state for a headless agent, not an
+# error to paper over.
+pane_self() {
+  local v="${CC_PANE_ID:-}"
+  [ -n "$v" ] || v="${ITERM_SESSION_ID:-}"
+  v="$(pane_norm "$v")"
+  [ -n "$v" ] || return "$RC_NO"
+  printf '%s\n' "$v"
+}
+
+# ── iterm2 driver (built-in incumbent) ─────────────────────────────────────────────────────────
+# Reproduces today's behaviour EXACTLY by shelling out to the same `it2` CLI the 12 class-1 files
+# already call — they stay untouched and keep working (plan §1, class 1 = zero work).
+#
+# ⚠ TWO it2 BINARIES, DELIBERATELY. $HOME/.claude/bin/it2 is the SHIM, which injects
+# `-p Claude-Teammate` (the never-prompt profile) on every `session split` so teammate panes close
+# cleanly from the UI. handoff-fire.sh:3232-3240 deliberately bypasses it for a *handoff* split,
+# which must inherit the FIRING pane's own profile (the ⌘D "same profile" experience that
+# async_split_pane gives for profile=None). Both are today's behaviour, so both are reachable:
+# the shim by default, the real binary via `spawn --inherit-profile`. The real path is read from
+# the shim's own REAL_IT2= line — the same single-source-of-truth parse handoff-fire.sh uses, so a
+# Python-version bump stays a one-file edit there.
+it2_bin() { printf '%s' "${CC_PANE_IT2:-$HOME/.claude/bin/it2}"; }
+
+it2_real_bin() {
+  local shim real
+  shim="$(it2_bin)"
+  real="$(sed -n 's/^REAL_IT2="\(.*\)"$/\1/p' "$shim" 2>/dev/null | head -1)"
+  # Degrade to the shim when unreadable: still the correct pane, only the profile differs.
+  if [ -n "$real" ] && [ -x "$real" ]; then printf '%s' "$real"; else printf '%s' "$shim"; fi
+}
+
+drv_iterm2_spawn() {
+  local anchor="" vflag="" profile="" inherit=0 bin out
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --anchor)          anchor="$(pane_norm "${2:-}")"; shift 2 ;;
+      --vertical)        vflag="-v"; shift ;;
+      --profile)         profile="${2:-}"; shift 2 ;;
+      --inherit-profile) inherit=1; shift ;;
+      *)                 die_usage "spawn: unknown option '$1'"; return "$RC_USAGE" ;;
+    esac
+  done
+  # No anchor ⇒ split from MY pane, which is what every caller means by "give me a sibling".
+  [ -n "$anchor" ] || anchor="$(pane_self)" || {
+    # shellcheck disable=SC2016  # $CC_PANE_ID is named literally in the message, not expanded
+    printf 'cc-pane: spawn needs --anchor (no $CC_PANE_ID — not in a surface)\n' >&2
+    return "$RC_NO"
+  }
+  if [ "$inherit" = 1 ]; then bin="$(it2_real_bin)"; else bin="$(it2_bin)"; fi
+  # shellcheck disable=SC2086  # $vflag is a controlled empty-or-"-v" token, never user text
+  if [ -n "$profile" ]; then
+    out="$("$bin" session split -s "$anchor" $vflag -p "$profile" 2>&1)" || return "$RC_NO"
+  else
+    out="$("$bin" session split -s "$anchor" $vflag 2>&1)" || return "$RC_NO"
+  fi
+  # it2 0.2.3 prints exactly "Created new pane: <UUID>" and offers no --json for split, so this
+  # prefix IS the contract. Anything else is a failure, never a silently-empty success.
+  case "$out" in
+    "Created new pane: "*) printf '%s\n' "${out#Created new pane: }"; return "$RC_OK" ;;
+    *) printf 'cc-pane: iterm2 split did not return a pane id: %s\n' "$out" >&2; return "$RC_NO" ;;
+  esac
+}
+
+drv_iterm2_send() {
+  local id="$1"; shift
+  "$(it2_bin)" session send -s "$id" "$*" >/dev/null 2>&1 || return "$RC_NO"
+}
+
+drv_iterm2_close() {
+  # -f: the shim rewrites this to the python API with force=True, the only reliable suppressor of
+  # iTerm2's "running job" modal (see bin/it2-wrapper interception 2).
+  "$(it2_bin)" session close -f -s "$1" >/dev/null 2>&1 || return "$RC_NO"
+}
+
+drv_iterm2_list() {
+  local lst n
+  lst="$("$(it2_bin)" session list --json 2>/dev/null)" || return "$RC_INDET"
+  [ -n "$lst" ] || return "$RC_INDET"
+  n="$(printf '%s' "$lst" | jq -r 'if type=="array" then length else -1 end' 2>/dev/null)" || return "$RC_INDET"
+  { [ -z "$n" ] || [ "$n" = -1 ]; } && return "$RC_INDET"
+  # Zero enumerated ⇒ a blind enumerator, NOT an empty terminal. cc-teardown:198 reaches the same
+  # verdict for the same reason: iTerm2 always has at least the calling pane, so 0 rows means the
+  # probe failed. Reporting "no panes" here would let a caller reap a live fleet.
+  [ "$n" -eq 0 ] && return "$RC_INDET"
+  printf '%s' "$lst" | jq -r '.[].id // empty' 2>/dev/null || return "$RC_INDET"
+}
+
+drv_iterm2_address() {
+  # Live-verify by enumeration. An INDETERMINATE enumeration stays indeterminate — it must never
+  # collapse into "that pane is gone", which is the verdict that gets fleets reaped.
+  local id="$1" ids rc
+  ids="$(drv_iterm2_list)"; rc=$?
+  [ "$rc" = "$RC_OK" ] || return "$rc"
+  printf '%s\n' "$ids" | grep -qxF "$id" || return "$RC_NO"
+  printf '%s\n' "$id"
+}
+
+# ── dispatch ───────────────────────────────────────────────────────────────────────────────────
+# Non-builtin drivers are sibling executables implementing these same verbs. exec, so the driver's
+# exit code IS ours and no rc is laundered through a wrapper.
+dispatch_external() {
+  local exe="$DRIVER_DIR/cc-pane-$DRIVER"
+  [ -x "$exe" ] || { printf 'cc-pane: no driver %s (looked for %s)\n' "$DRIVER" "$exe" >&2; exit "$RC_USAGE"; }
+  exec "$exe" "$@"
+}
+
+VERB="${1:-}"; [ $# -gt 0 ] && shift
+
+case "$VERB" in
+  ''|-h|--help|help)
+    sed -n '2,12p' "$SELF" | sed 's/^# \{0,1\}//'
+    exit "$RC_OK" ;;
+  driver) printf '%s\n' "$DRIVER"; exit "$RC_OK" ;;
+esac
+
+# `address` with no argument answers from the ENVIRONMENT and is therefore driver-independent:
+# a headless agent and a pane agent both answer "who am I" the same way, which is exactly the
+# property that lets the 18 class-2 sites stop caring which terminal they are in.
+if [ "$VERB" = address ] && [ $# -eq 0 ]; then pane_self; exit $?; fi
+
+case "$DRIVER" in
+  iterm2)
+    case "$VERB" in
+      spawn)   drv_iterm2_spawn "$@" ;;
+      address) [ $# -ge 1 ] || { die_usage "address: need an id"; exit $?; }
+               drv_iterm2_address "$(pane_norm "$1")" ;;
+      send)    [ $# -ge 2 ] || { die_usage "send: need <id> <text…>"; exit $?; }
+               id="$(pane_norm "$1")"; shift; drv_iterm2_send "$id" "$@" ;;
+      close)   [ $# -ge 1 ] || { die_usage "close: need an id"; exit $?; }
+               drv_iterm2_close "$(pane_norm "$1")" ;;
+      list)    drv_iterm2_list ;;
+      *)       die_usage "unknown verb '$VERB'" ;;
+    esac
+    exit $? ;;
+  *) dispatch_external "$VERB" "$@" ;;
+esac
