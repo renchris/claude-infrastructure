@@ -831,71 +831,56 @@ reg() { # <paneUUID> <session_id>
   pend sess-block 64800 'git push --force origin main'
   run "$C"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"permission-pend"* ]]
-  [[ "$output" == *"git push --force origin main"* ]]
+  [[ "$output" == *"permission-pend"* ]] || false
+  [[ "$output" == *"git push --force origin main"* ]] || false
+  [[ "$output" == *"BLOCKED-18h"* ]] || false      # age is visible, not buried in --json
 }
 
 @test "RED CONTROL: with no beacon the board says nothing about a pending permission" {
   mkdir -p "$CC_PERMPEND_DIR"          # dir exists (wired) but empty — the trustworthy all-clear
   run "$C"
-  [[ "$output" != *"permission-pend"* ]]
+  [[ "$output" != *"permission-pend"* ]] || false
 }
 
-@test "the age is rendered, so an 18-hour block cannot read like a 1-minute one" {
-  pend sess-old 64800 'x'              # 18h
-  pend sess-new 120   'y'              # 2m
+# The remaining permission-pending assertions share ONE fixture and ONE invocation each. cc-blockers
+# runs every sensor on every call (launchctl, ps, jq over the fleet manifest), so a test-per-assertion
+# shape cost ~14s and pushed this already-~92s suite past the land gate's smoke budget. Grouping is
+# the economy; no assertion was dropped to get it.
+@test "addressing: age, pane resolution, unresolved fallback, and the session_id join key" {
+  pend sess-old   64800 'x'                                    # 18h
+  pend sess-new   120   'y'                                    # 2m
+  pend sess-p     60    'rm -rf /tmp/x'
+  pend sess-ghost 60    'dd if=/dev/zero'
+  reg 706DA5A2-A877-464D-831F-7CD448E364AD sess-p
+  reg AAAA1111-0000-0000-0000-000000000000 some-other-session  # matches no beacon
   run "$C" --json
+  [ "$status" -eq 0 ]
+
+  # An 18-hour block must not read like a 1-minute one.
   [ "$(echo "$output" | jq -r '.[]|select(.subject=="sess-old").state')" = "BLOCKED-18h" ]
   [ "$(echo "$output" | jq -r '.[]|select(.subject=="sess-new").state')" = "BLOCKED-2m" ]
-}
 
-@test "a resolvable session hands over ONE command that focuses its actual pane" {
-  pend sess-p 60 'rm -rf /tmp/x'
-  reg 706DA5A2-A877-464D-831F-7CD448E364AD sess-p
-  run "$C" --json
+  # A resolvable session hands over ONE command that focuses its actual pane. The join keys on
+  # session_id, NOT on the registry's paneUUID filename — the two identifiers are different, and
+  # keying on the filename would silently never match.
   [ "$(echo "$output" | jq -r '.[]|select(.subject=="sess-p").recover_cmd')" \
     = "it2 session focus 706DA5A2-A877-464D-831F-7CD448E364AD" ]
-}
 
-@test "an UNRESOLVABLE session is still listed — dropping it rebuilds the silence" {
-  pend sess-ghost 60 'dd if=/dev/zero'
-  reg AAAA1111-0000-0000-0000-000000000000 some-other-session
-  run "$C" --json
+  # An UNRESOLVABLE session is still listed — dropping it rebuilds the silence this row breaks.
   [ "$(echo "$output" | jq -r '[.[]|select(.subject=="sess-ghost")]|length')" = 1 ]
-  [[ "$(echo "$output" | jq -r '.[]|select(.subject=="sess-ghost").recover_cmd')" == "jq . "* ]]
+  [[ "$(echo "$output" | jq -r '.[]|select(.subject=="sess-ghost").recover_cmd')" == "jq . "* ]] || false
 }
 
-@test "the registry join keys on session_id, NOT on the paneUUID filename" {
-  # The two identifiers are different. Keying on the filename would silently never match.
-  pend 11111111-2222-3333-4444-555555555555 60 'x'
-  reg 99999999-8888-7777-6666-555555555555 11111111-2222-3333-4444-555555555555
-  run "$C" --json
-  [[ "$(echo "$output" | jq -r '.[]|select(.kind=="permission-pending").recover_cmd')" \
-     == *"99999999-8888-7777-6666-555555555555"* ]]
-}
-
-@test "a malformed or unreadable beacon degrades to a row, never a traceback or a lost block" {
-  mkdir -p "$CC_PERMPEND_DIR"; printf 'not json {{{' > "$CC_PERMPEND_DIR/sess-bad.json"
-  run "$C" --json
-  [ "$status" -eq 0 ]
-  [ "$(echo "$output" | jq -r '[.[]|select(.subject=="sess-bad")]|length')" = 1 ]
-}
-
-@test "the heartbeat dotfile is never mistaken for a pending prompt" {
-  mkdir -p "$CC_PERMPEND_DIR"; : > "$CC_PERMPEND_DIR/.beacon-alive"
-  run "$C" --json
-  [ "$(echo "$output" | jq -r '[.[]|select(.kind=="permission-pending")]|length')" = 0 ]
-}
-
-@test "a command containing quotes/newlines cannot break the JSON the board emits" {
+@test "robustness: malformed beacon, the heartbeat dotfile, quoting, and no silent cap" {
+  mkdir -p "$CC_PERMPEND_DIR"
+  printf 'not json {{{' > "$CC_PERMPEND_DIR/sess-bad.json"     # unreadable ⇒ a row, never a traceback
+  : > "$CC_PERMPEND_DIR/.beacon-alive"                         # must never read as a pending prompt
   pend sess-q 60 "$(printf 'git commit -m "a\nb" && echo \x27x\x27')"
-  run "$C" --json
-  [ "$status" -eq 0 ]
-  echo "$output" | jq -e . >/dev/null
-}
-
-@test "many pending beacons all render — none is dropped by a cap" {
   for i in 1 2 3 4 5 6 7; do pend "sess-$i" $((i * 60)) "cmd-$i"; done
   run "$C" --json
-  [ "$(echo "$output" | jq -r '[.[]|select(.kind=="permission-pending")]|length')" = 7 ]
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e . >/dev/null                          # quoting cannot break the JSON
+  [ "$(echo "$output" | jq -r '[.[]|select(.subject=="sess-bad")]|length')" = 1 ]
+  [ "$(echo "$output" | jq -r '[.[]|select(.kind=="permission-pending")]|length')" = 9 ]
+  [ "$(echo "$output" | jq -r '[.[]|select(.subject==".beacon-alive")]|length')" = 0 ]
 }
