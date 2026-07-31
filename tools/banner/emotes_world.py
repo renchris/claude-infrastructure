@@ -242,6 +242,12 @@ def _pebble() -> Emote:
             window=(3.2, 7.6),
             cls="BEAT",
             tie="",
+            # Off-centre on purpose. The stone must be off-frame at 100 % or the loop pops, and the
+            # roll eats directly into that margin: at the default cx the arithmetic left only 62 px
+            # of legal travel, which renders as a twitch rather than as a roll. Standing the
+            # creature 98 px left buys the runway back, and puts the empty half of the frame on the
+            # side the stone rolls into.
+            cx=150.0,
         )
     )
     a, b = e.window
@@ -250,16 +256,17 @@ def _pebble() -> Emote:
     )  # the world restarts well before the story ends — the amble IS the third act
     # Authored so the stone is at the toe at `a`. The world track has already carried it
     # -PRINT_TILE*a by then, so the markup x is that displacement added back on.
-    rest_x = 500.0  # 12 px clear of the front foot, which ends at 488
+    rest_x = 402.0  # 12 px clear of the front foot, which ends at 390
+    roll = 130.0  # …to 532, and 32 px past the left edge by 100 %
     art_x = rest_x + PRINT_TILE * a
 
     def props() -> str:
         # Three rects rather than one: a lone square at this size is a dropped pixel, and the stepped
         # corner is the only thing that says 'stone' rather than 'block'.
         stone = (
-            f'<rect x="{fmt(art_x + 3)}" y="{fmt(E_GROUND - 13)}" width="10" height="4"/>'
-            f'<rect x="{fmt(art_x)}" y="{fmt(E_GROUND - 9)}" width="16" height="5"/>'
-            f'<rect x="{fmt(art_x + 2)}" y="{fmt(E_GROUND - 4)}" width="12" height="4"/>'
+            f'<rect x="{fmt(art_x + 5)}" y="{fmt(E_GROUND - 16)}" width="12" height="5"/>'
+            f'<rect x="{fmt(art_x)}" y="{fmt(E_GROUND - 11)}" width="22" height="6"/>'
+            f'<rect x="{fmt(art_x + 3)}" y="{fmt(E_GROUND - 5)}" width="16" height="5"/>'
         )
         return f'<g class="pbW"><g class="pbRoll"><g class="efg">{stone}</g></g></g>'
 
@@ -273,8 +280,8 @@ def _pebble() -> Emote:
             # keyframes IS the deceleration. Something that coasts at one speed and then stops is a
             # slide; a thing that is struck once decelerates.
             + f"@keyframes pbR{{0%,{wp(e, 0.16)}%{{transform:translateX(0)}}"
-            f"{wp(e, 0.43)}%{{transform:translateX(62px)}}"
-            f"100%{{transform:translateX(62px)}}}}"
+            f"{wp(e, 0.43)}%{{transform:translateX({fmt(roll)}px)}}"
+            f"100%{{transform:translateX({fmt(roll)}px)}}}}"
             f".pbRoll{{animation:pbR {fmt(EMOTE_P)}s ease-out infinite}}"
             # The nudge has to be whole-body: the legs are drawn as two interleaved PAIRS that cannot
             # be split without redrawing the sprite, so there is no single foot to swing. A forward
@@ -286,9 +293,9 @@ def _pebble() -> Emote:
                 [
                     (0, 0, 0),
                     (a, 0, 0),
-                    (w(e, 0.10), -4, 0),  # loads back a fifth of a cell first
-                    (w(e, 0.16), 9, 0),  # …and drives forward on the contact frame
-                    (w(e, 0.30), 5, 0),
+                    (w(e, 0.10), -7, 0),  # loads back a third of a cell first
+                    (w(e, 0.16), 16, 0),  # …and drives forward on the contact frame
+                    (w(e, 0.30), 9, 0),
                     (w(e, 0.55), 0, 0),
                     (b, 0, 0),
                     (EMOTE_P, 0, 0),
@@ -337,18 +344,18 @@ def _sniff() -> Emote:
     )
     a, b = e.window
     back = b - 0.4
-    mark_x = 404.0 + PRINT_TILE * a  # under the body, not out in front of it
+    mark_x = 396.0 + PRINT_TILE * a  # under the body, not out in front of it
 
     def props() -> str:
         marks = "".join(
             f'<rect x="{fmt(mark_x + dx)}" y="{fmt(E_GROUND - dh)}" '
             f'width="{fmt(wd)}" height="{fmt(dh + 3)}"/>'
             for dx, wd, dh in (
-                (0, 9, 3),
-                (13, 6, 5),
-                (23, 11, 3),
-                (39, 7, 5),
-                (50, 9, 3),
+                (0, 14, 4),
+                (18, 9, 8),
+                (31, 17, 5),
+                (52, 11, 8),
+                (67, 14, 4),
             )
         )
         return f'<g class="snW"><g class="efg">{marks}</g></g>'
@@ -453,13 +460,13 @@ def _dig() -> Emote:
         )
         hole = (
             f'<g class="eink">{rim}</g>'
-            f'<ellipse class="efg" cx="{fmt(hole_cx)}" cy="{fmt(E_GROUND + 1)}" rx="34" ry="7"/>'
+            f'<ellipse class="efg" cx="{fmt(hole_cx)}" cy="{fmt(E_GROUND + 1)}" rx="40" ry="8"/>'
         )
         # The crumbs are NOT world-locked: each lives 0.4 s inside a frozen world, so a travel track
         # would be four decimal places of nothing.
         crumbs = "".join(
             f'<rect class="dgC{i}" x="{fmt(hole_cx - 8 - i * 5)}" y="{fmt(E_GROUND - 12)}" '
-            f'width="6" height="6"/>'
+            f'width="10" height="10"/>'
             for i in range(5)
         )
         return f'<g class="dgHole"><g class="dgW">{hole}</g></g><g class="eink">{crumbs}</g>'
@@ -497,9 +504,9 @@ def _dig() -> Emote:
             + "".join(
                 f"@keyframes dgCk{i}{{0%,{pctx(t)}%{{transform:translate(0,0);opacity:0}}"
                 f"{pctx(t + 0.03)}%{{opacity:1}}"
-                f"{pctx(t + 0.17)}%{{transform:translate({fmt(-16 - i * 6)}px,"
-                f"{fmt(-30 - (i % 3) * 11)}px);opacity:1}}"
-                f"{pctx(t + 0.36)}%{{transform:translate({fmt(-30 - i * 9)}px,6px);opacity:0}}"
+                f"{pctx(t + 0.17)}%{{transform:translate({fmt(-22 - i * 8)}px,"
+                f"{fmt(-46 - (i % 3) * 15)}px);opacity:1}}"
+                f"{pctx(t + 0.40)}%{{transform:translate({fmt(-42 - i * 12)}px,8px);opacity:0}}"
                 f"100%{{transform:translate(0,0);opacity:0}}}}"
                 f".dgC{i}{{animation:dgCk{i} {fmt(EMOTE_P)}s ease-out infinite}}"
                 for i, t in enumerate(strokes)
@@ -573,7 +580,17 @@ def _mote() -> Emote:
             # `linear`, with the acceleration authored into the SPACING of the last four keyframes —
             # 40 px, then 78, then 130 in roughly equal time. An ease-in would have applied to the
             # drift as well and turned the entrance into a swoop.
-            + f"@keyframes moK{{0%,{pctx(a)}%{{transform:translate(0,0)}}"
+            # `.eglyph` carries `opacity:0` as its RESTING state — the framework added it so a glyph
+            # whose only opacity lived in `glyph_pop`'s keyframes would not render FULLY VISIBLE in
+            # the reduced-motion still. Borrowing the class for its ink alone and driving only
+            # `transform` therefore paints nothing at all, in every frame, which is precisely what
+            # the first render of this candidate showed. So opacity belongs in THESE keyframes and
+            # not in a static override: the 0→1 ramp runs entirely off the right edge and the 1→0
+            # ramp entirely above the top edge, so the live loop never sees an edge of either — and
+            # the reduced-motion still falls back to a plain walking creature, with no mote left
+            # hanging unattached in the sky.
+            + f"@keyframes moK{{0%{{transform:translate(0,0);opacity:0}}"
+            f"{pctx(a)}%{{transform:translate(0,0);opacity:1}}"
             f"{wp(e, 0.25)}%{{transform:translate(-232px,7px)}}"
             f"{wp(e, 0.40)}%{{transform:translate(-356px,-2px)}}"
             f"{wp(e, 0.48)}%{{transform:translate(-350px,11px)}}"
@@ -582,8 +599,8 @@ def _mote() -> Emote:
             f"{wp(e, 0.62)}%{{transform:translate(-365px,-94px)}}"
             f"{wp(e, 0.72)}%{{transform:translate(-371px,-134px)}}"
             f"{wp(e, 0.84)}%{{transform:translate(-377px,-212px)}}"
-            f"{pctx(b)}%{{transform:translate(-383px,-342px)}}"
-            f"100%{{transform:translate(-392px,-640px)}}}}"
+            f"{pctx(b)}%{{transform:translate(-383px,-342px);opacity:1}}"
+            f"100%{{transform:translate(-392px,-640px);opacity:0}}}}"
             f".moDot{{animation:moK {fmt(EMOTE_P)}s linear infinite}}"
             # The jump. Apex at w=.62, where the mote is at y=54 — the crown reaches 97, so the gap
             # is 43 px and the miss is unmistakable rather than arguable.
