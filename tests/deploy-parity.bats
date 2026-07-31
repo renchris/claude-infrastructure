@@ -6,14 +6,35 @@
 # every consumer ran the old code, and sync.sh (which copies ~/bin BACK into the repo with no
 # direction guard) would have clobbered the newer repo file with the stale copy.
 #
-# FULLY HERMETIC: every case builds a fake repo + fake bindir in BATS_TEST_TMPDIR and drives the
-# script via CC_PARITY_REPO / CC_PARITY_BINDIR / CC_PARITY_STRICT / CC_PARITY_COPY. Nothing here
-# reads the real ~/bin or the real checkout, so it passes on a fresh clone, a worktree and CI.
-# (The live host is asserted by running the script itself, not by this suite.)
+# FULLY HERMETIC, and now literally so (2026-07-31): every case builds a fake repo + fake bindir in
+# BATS_TEST_TMPDIR and drives the script via CC_PARITY_REPO / CC_PARITY_BINDIR / CC_PARITY_STRICT /
+# CC_PARITY_COPY / CC_PARITY_LIVE. Nothing here reads the real ~/bin, the real ~/.claude or the real
+# checkout, so it passes on a fresh clone, a worktree and CI.
+#
+# THAT CLAIM WAS ONCE A HALF-TRUTH, and it cost this suite its place in the gate. Two tests DID read
+# the operator's live layer, and because scripts/host-suites.manifest partitions the corpus per
+# FILE, listing this one file to accommodate those two excluded ALL of it: postland-verify.sh runs
+# tests/*.bats MINUS the manifest, and ship-land.sh's filter_host_suites drops manifest suites from
+# the land smoke. Measured on the tree at 09a0214a: a land touching scripts/deploy-parity-assert.sh
+# selected exactly one direct suite — this one — which the filter then removed, so the land ran ZERO
+# tests, and the exit-3 third-state guards below (7a40d5a8) were first exercised only post-deploy,
+# after the change was already live. The two live tests moved to tests/deploy-parity-live.bats,
+# which is what the manifest lists now; the split is pinned in both directions by the two tests
+# under THE PARTITION ITSELF below, so this file cannot drift back out of the gate unnamed.
+#
+# The fixture $HOME is part of that: it is what lets scripts/test-hermeticity-lint.sh's rule 1 see
+# the hermeticity structurally, so this suite's grandfather line in that ratchet was DELETED rather
+# than carried. A suite that runs in the tree verdict has to earn it the same way every other one does.
 
 setup() {
   REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   export ASSERT="$REPO_ROOT/scripts/deploy-parity-assert.sh"
+  export MANIFEST="$REPO_ROOT/scripts/host-suites.manifest"
+  # Fixture HOME: BINDIR defaults to $HOME/bin and LIVE to $HOME/.claude in the script under test,
+  # so an unfixtured HOME leaves any case that forgets a CC_PARITY_* export pointed at the operator's
+  # real deployment. Every case below already declares its subject explicitly; this makes forgetting
+  # one a fixture miss instead of a live read.
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   export CC_PARITY_REPO="$BATS_TEST_TMPDIR/repo"
   export CC_PARITY_BINDIR="$BATS_TEST_TMPDIR/bin"
   export CC_PARITY_STRICT="toolA"
@@ -122,19 +143,33 @@ setup() {
   [[ "$output" != *"toolZZ"* ]]
 }
 
-@test "the real repo passes its own assertion (guards the live host deployment)" {
-  run env -u CC_PARITY_REPO -u CC_PARITY_BINDIR -u CC_PARITY_STRICT -u CC_PARITY_COPY "$ASSERT"
-  # Exit 3 is the assert's NO-VERDICT state: a `diff` or the tracked-file listing could not RUN. That
-  # is a fact about the machine, not about the live layer — and it is reachable here, because
-  # deploy-live.sh runs this suite post-deploy at `nice -n 19` next to a corpus (fork exhaustion at
-  # loadavg 15-48 is measured in scripts/host-suites.manifest). Letting it fall through to the
-  # `-eq 0` below would turn a non-verdict into a live-layer RED that PAGES and files a backlog
-  # packet — the same fabricated-verdict class this suite pins one level down, re-created in its own
-  # consumer. A new third state has to be taught to everything that reads the exit code.
-  # Exit 1 is NOT covered by this: real drift still fails here, loudly, as it must.
-  [ "$status" -ne 3 ] || skip "assert returned NO VERDICT (exit 3), no claim about the host: $output"
+# ── THE PARTITION ITSELF (2026-07-31) — this file's own admission ticket to the gate ─────────────
+# The two assertions below are why the 29 hermetic tests in this file are allowed to run in the
+# tree verdict and the land smoke at all. They pin BOTH directions of the file split, because a
+# one-directional pin cannot see the drift that matters: asserting only that the live suite is
+# listed would stay green if this file were re-listed beside it, which is the exact state the split
+# undid. Cheap tree reads (the manifest and the sibling path), so they cost the gate nothing.
+@test "the partition: this HERMETIC suite is NOT a host suite (it must run in the tree verdict)" {
+  # RED before the split, green after — not a vacuous absence assertion. tests/deploy-parity.bats
+  # WAS on this list, which is what rode all 31 tests out of the land gate and the tree verdict and
+  # left the exit-3 third-state guards below running only post-deploy, after the change was live.
+  [ -f "$MANIFEST" ]                                    # the absence claim needs a subject to be about
+  run grep -qxF 'tests/deploy-parity.bats' "$MANIFEST"
+  # EXACTLY 1, never a bare `!`. grep has three outcomes and this repo has already paid for
+  # collapsing two of them (afaf40de: rc=2 under fork exhaustion read as "no match" and fabricated
+  # hermeticity LEAKs). 0 = listed, the regression this pins · 1 = ran and found nothing, the only
+  # honest green · >=2 = could not run, which is a fact about the machine and must not read as pass.
+  [ "$status" -eq 1 ]
+}
+
+@test "the partition: the LIVE half exists and IS a host suite (detection moved, never deleted)" {
+  # The other direction, and the control for the test above: the split must not have simply DELETED
+  # the live-layer coverage. Without this, the test above is satisfiable by dropping the live tests
+  # on the floor. tests/deploy-parity-live.bats holds the two that resolve the real ~/bin and
+  # ~/.claude, and deploy-live.sh runs exactly the manifest lines post-deploy against that layer.
+  [ -f "$REPO_ROOT/tests/deploy-parity-live.bats" ]
+  run grep -qxF 'tests/deploy-parity-live.bats' "$MANIFEST"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"claude-accounts"* ]]
 }
 
 # ── EXISTENCE PARITY (2026-07-25) — the bare-ff deploy hole ──────────────────────────────────────
@@ -346,26 +381,11 @@ _pendfix() {   # a staged activation naming <path>, un-run; $1 = repo-relative p
 # dirname "$0" yields ~/.claude (not a git repo), so REPO became ~/.claude and every correctly
 # linked tool was compared against ~/.claude/bin/<tool>. A guard that false-REDs through its own
 # deployed path trains readers to ignore it — which is how the drift it exists to catch survived.
-@test "the assert agrees with itself through a DEPLOYED symlink (\$0 resolved, not dirname'd)" {
-  # CC_PARITY_REPO must be UNSET here: it short-circuits the very derivation under test.
-  # The bin/ link is what makes the two verdicts DIVERGE under the bug: without it the strict-tool
-  # comparison is skipped and both invocations agree trivially, so the assertion could not fail.
-  d="$BATS_TEST_TMPDIR/dep"; mkdir -p "$d/scripts" "$d/bin"
-  ln -s "$REPO_ROOT/bin/claude-accounts" "$d/bin/claude-accounts"
-  ln -s "$ASSERT" "$d/scripts/deploy-parity-assert.sh"
-  run env -u ITERM_SESSION_ID -u CC_PARITY_REPO -u CC_PARITY_BINDIR -u CC_PARITY_STRICT -u CC_PARITY_COPY -u CC_PARITY_LIVE bash "$d/scripts/deploy-parity-assert.sh"
-  via_symlink="$status"; via_out="$output"
-  run env -u ITERM_SESSION_ID -u CC_PARITY_REPO -u CC_PARITY_BINDIR -u CC_PARITY_STRICT -u CC_PARITY_COPY -u CC_PARITY_LIVE bash "$ASSERT"
-  [ "$via_symlink" -eq "$status" ] || false
-  # NON-VACUITY (2026-07-29). Two agreeing exit codes prove nothing if NEITHER invocation compared
-  # anything — and a vacuous agreement is precisely the fail-open the next test pins. So require
-  # evidence that a comparison actually happened: a named verdict, and not the no-verdict state.
-  # Deliberately NOT pinned to 0 — the real host legitimately reads 1 while a landed file awaits its
-  # live symlink, and this test is about AGREEMENT, not about the host being clean (test above owns that).
-  [ "$via_symlink" -ne 3 ] || false
-  [[ "$via_out" == *"claude-accounts"* ]] || false
-}
-
+#
+# The OUTCOME half of that pair — the two invocations actually agreeing — needs the real ~/bin to
+# make the verdicts diverge under the bug, so it lives in tests/deploy-parity-live.bats and runs
+# post-deploy. What stays here is the MECHANISM: a text grep, hermetic, and therefore able to catch
+# a removal of the resolution loop in the land gate rather than after the change is already live.
 @test "resolving \$0 through symlinks is present (the mechanism, not just the outcome)" {
   grep -q 'while \[ -L "\$_self" \]' "$ASSERT" || false
 }

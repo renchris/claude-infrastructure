@@ -19,6 +19,24 @@
 # host suite. Normal attribution already names the file, so it moves here by a one-line land, and
 # the next tree carries the new partition with it.
 #
+# BEFORE YOU ADD ONE — THE UNIT IS THE FILE, SO CHECK THE WHOLE FILE (2026-07-31). Listing a suite
+# does not exempt the live-layer TESTS in it; it exempts every test in it, from the tree verdict AND
+# from the land smoke (ship-land.sh filter_host_suites) alike. So a file that mixes hermetic tests
+# with live-layer ones rides ALL of them out of the gate the moment one of them needs to be here,
+# and nothing names the loss — the entry looks exactly like a correct one.
+# That was live in tests/deploy-parity.bats: 31 tests, 29 fully hermetic (fixture repo + bindir +
+# live root under $BATS_TEST_TMPDIR), 2 reading the real ~/bin and ~/.claude. Measured at 09a0214a,
+# a land touching scripts/deploy-parity-assert.sh selected exactly one direct suite — that file —
+# and the filter removed it, so the land ran ZERO tests; the exit-3 third-state regression guards
+# (7a40d5a8, "could not compare" is not parity) were first exercised only AFTER the change was live.
+# Fixed by SPLITTING, not by loosening this contract: the live pair moved to
+# tests/deploy-parity-live.bats (listed below) and the hermetic 29 went back into the gate.
+# So: admit a file here only when its live-layer dependence is the WHOLE file. If it is a minority
+# of the tests, split the file first — the per-file granularity is the contract, and matching the
+# file boundary to the partition boundary is how you honour it rather than amend it.
+# tests/deploy-parity.bats now asserts BOTH directions of that split against this manifest, so
+# re-listing it (or deleting the live half) is a named RED rather than a silent regression.
+#
 # SECOND admission criterion — WHOLE-TREE META-LINT WRAPPERS (tests/test-hermeticity-lint.bats and
 # tests/test-walltime-lint.bats). These two are here for a different reason than the six above: not
 # because they assert the live layer, but because their whole-tree scans are LOAD-SENSITIVE, and a
@@ -70,7 +88,7 @@
 # The distinction matters when reading a red: a violation reported by the pre-corpus lint is about
 # THE TREE; the same violation reported by one of these wrappers mid-corpus was about the LOAD.
 
-tests/deploy-parity.bats
+tests/deploy-parity-live.bats
 tests/desk-arm-live.bats
 tests/desk-recycle-durable.bats
 tests/lr-team-audit.bats
