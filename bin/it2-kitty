@@ -1,0 +1,160 @@
+#!/usr/bin/env bash
+# it2-kitty — speak `it2` on the outside, drive kitty on the inside.
+#
+# PURPOSE. Claude Code's Agent Teams pane backend (`ITermBackend`) shells out to a PATH-resolved
+# `it2` binary. It is NOT linked against iTerm2 and performs NO handshake with it — so a program
+# that answers the same five subcommands gets Claude Code to build teammate panes in ANY terminal.
+# This file is that program for kitty. The result is NATIVE KITTY SPLIT PANES for assignee sessions,
+# visible in the operator's window — not a detached tmux session, and with no fork of either app.
+#
+# ── THE CONTRACT, READ OUT OF THE LIVE 2.1.219 BINARY (do not "improve" it) ──────────────────────
+# Decompiled from claude.exe; every element below is load-bearing:
+#
+#   isAvailable() = wpe() && Uor()
+#     wpe(): TERM_PROGRAM==="iTerm.app" || !!ITERM_SESSION_ID || terminal==="iTerm.app"
+#            — a pure ENV CHECK. Setting ITERM_SESSION_ID satisfies it. There is no deeper probe.
+#     Uor(): $SHELL -lc "command -v it2"  — only that `it2` RESOLVES ON PATH (2s timeout).
+#
+#   leader id  = ITERM_SESSION_ID.slice(indexOf(":")+1)     ← returns null if there is NO colon,
+#                which downgrades the first split to "from active pane". So the session shim MUST
+#                export ITERM_SESSION_ID="w0t0p0:<KITTY_WINDOW_ID>" — colon REQUIRED.
+#
+#   first teammate    : it2 session split -v -s <leader>    (-v ⇒ iTerm2 "Split Vertically" ⇒ RIGHT)
+#   later teammates   : it2 session split    -s <prevPane>  (no flag ⇒ iTerm2 default ⇒ BELOW)
+#                       ⇒ teammates stack DOWN a column on the RIGHT of the leader. Preserve this
+#                         orientation mapping or the swarm layout inverts.
+#   parse new pane id : /Created new pane:\s*(.+)/ against our STDOUT, .trim()
+#                       ⇒ we MUST print exactly `Created new pane: <id>`; the id is then passed back
+#                         verbatim as `-s <id>`, so any opaque token works — we use the kitty id.
+#   liveness prune    : on split failure it runs `it2 session list` and tests
+#                       stdout.includes(<paneId>) ⇒ list MUST emit raw ids, one per line.
+#   send to pane      : it2 session send -s <id> $'\x15'   (Ctrl-U, clears the line) then
+#                       it2 session run  -s <id> <text>    (text + Enter)
+#   kill pane         : it2 session close -f -s <id>
+#
+# ── WHY A SHIM AND NOT A FORK ────────────────────────────────────────────────────────────────────
+# Forking iTerm2 to get a better renderer means rewriting the per-pane CAMetalLayer/CVDisplayLink
+# architecture that measurably saturated WindowServer on this box — i.e. writing a new terminal.
+# Forking `it2` gains nothing either: it is a thin client for iTerm2's proprietary Python websocket
+# API, so the vendor lock IS the protocol, not the CLI. The cheap seam is the PROCESS BOUNDARY that
+# Claude Code already crosses, which is what this file occupies.
+#
+# ── FAIL-LOUD ────────────────────────────────────────────────────────────────────────────────────
+# Claude Code treats a non-zero exit as a real pane failure and falls back (in-process teammates),
+# which is the correct, visible degradation. A silent success with no pane created would strand the
+# operator watching an empty window, so every path here either creates the pane or exits non-zero.
+#
+# Seams: CC_TERM_KITTY (kitty binary) · CC_TERM_KITTY_TO (socket) · IT2_KITTY_TIMEOUT_S
+
+set -uo pipefail
+
+KITTY_BIN="${CC_TERM_KITTY:-kitty}"
+TIMEOUT_S="${IT2_KITTY_TIMEOUT_S:-15}"
+
+err(){ printf 'it2-kitty: %s\n' "$*" >&2; }
+
+# Bound every call. kitty's unix socket has no serializing queue (unlike iTerm2's Python API, whose
+# unbounded probes deadlocked this fleet on 2026-07-25), but an unbounded call in a spawn path that
+# Claude Code awaits would hang teammate creation with no diagnostic.
+kt() {
+  if command -v timeout >/dev/null 2>&1; then timeout "$TIMEOUT_S" "$KITTY_BIN" @ ${CC_TERM_KITTY_TO:+--to "$CC_TERM_KITTY_TO"} "$@"
+  else "$KITTY_BIN" @ ${CC_TERM_KITTY_TO:+--to "$CC_TERM_KITTY_TO"} "$@"
+  fi
+}
+
+[ -n "${KITTY_LISTEN_ON:-}${CC_TERM_KITTY_TO:-}" ] || {
+  err "no kitty control socket (KITTY_LISTEN_ON unset). kitty.conf needs 'allow_remote_control socket-only' + 'listen_on', and kitty must be RESTARTED — neither option is reloadable."
+  exit 4
+}
+
+# ── argument shape: it2 session <verb> [flags] [args] ────────────────────────────────────────────
+[ "${1:-}" = "session" ] || { err "unsupported command: ${*:-<none>} (this shim implements 'session' only)"; exit 64; }
+shift
+verb="${1:-}"; shift 2>/dev/null || true
+
+SESSION=""; VERTICAL=0
+ARGS=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -s|--session) SESSION="${2:-}"; shift 2 ;;
+    -v|--vertical) VERTICAL=1; shift ;;
+    # -f is ACCEPTED AND DISCARDED, deliberately — not stored, because nothing downstream can use
+    # it: kitty has no running-job confirmation modal, which is the entire reason the iTerm2 wrapper
+    # needed a force=True interception. Claude Code always passes it on close, so it must parse
+    # without error; binding it to a variable would only invite a reader to "wire it up" later.
+    -f|--force)   shift ;;
+    --) shift; ARGS+=("$@"); break ;;
+    *)  ARGS+=("$1"); shift ;;
+  esac
+done
+
+# A kitty window id is always an integer. Claude Code hands back whatever token we printed, so a
+# non-integer here means the caller is passing an iTerm2 UUID from a previous (real-iTerm2) run —
+# refuse rather than silently target the active pane, which would hijack the operator's own window.
+valid_id(){ case "$1" in ''|*[!0-9]*) return 1 ;; *) return 0 ;; esac; }
+
+case "$verb" in
+
+  split)
+    # -v ⇒ RIGHT (iTerm2 "Split Vertically"), default ⇒ BELOW. See contract above.
+    if [ "$VERTICAL" = 1 ]; then loc=vsplit; else loc=hsplit; fi
+    if [ -n "$SESSION" ]; then
+      valid_id "$SESSION" || { err "not a kitty window id: '$SESSION'"; exit 65; }
+      # --match window_id: is NOT redundant with --next-to. kitty's launch.py drops --next-to when
+      # the target tab does not contain it, and the target tab defaults to the ACTIVE tab — so
+      # without --match the anchor is silently discarded and the pane lands somewhere else.
+      new=$(kt launch --type=window --location="$loc" \
+                --match "window_id:$SESSION" --next-to "id:$SESSION" --cwd=current 2>&1)
+    else
+      new=$(kt launch --type=window --location="$loc" --cwd=current 2>&1)
+    fi
+    rc=$?
+    if [ $rc -ne 0 ] || ! valid_id "$new"; then
+      err "kitty launch failed (rc=$rc): $new"; exit 1
+    fi
+    # EXACT format the backend regexes: /Created new pane:\s*(.+)/
+    printf 'Created new pane: %s\n' "$new"
+    ;;
+
+  list)
+    # Raw ids, one per line. The backend only does stdout.includes(<id>) for dead-pane pruning.
+    kt ls 2>/dev/null | python3 -c '
+import json,sys
+try: d=json.load(sys.stdin)
+except Exception: sys.exit(1)
+for ow in d:
+    for t in ow["tabs"]:
+        for w in t["windows"]:
+            print(w["id"])' || { err "kitty ls failed"; exit 1; }
+    ;;
+
+  send)
+    # Raw text, NO newline. Claude Code sends \x15 (Ctrl-U) here to clear the prompt line.
+    text="${ARGS[*]:-}"
+    if [ -n "$SESSION" ]; then valid_id "$SESSION" || { err "bad id '$SESSION'"; exit 65; }
+      kt send-text --match "id:$SESSION" -- "$text" || exit 1
+    else kt send-text -- "$text" || exit 1; fi
+    ;;
+
+  run)
+    # Text + Enter. This is how the teammate's launch command is actually executed.
+    text="${ARGS[*]:-}"
+    if [ -n "$SESSION" ]; then valid_id "$SESSION" || { err "bad id '$SESSION'"; exit 65; }
+      kt send-text --match "id:$SESSION" -- "$text"$'\r' || exit 1
+    else kt send-text -- "$text"$'\r' || exit 1; fi
+    ;;
+
+  close)
+    # -f is accepted and ignored: kitty has no running-job confirmation modal, which is the entire
+    # reason the iTerm2 wrapper needed a force=True interception. That workaround does not port —
+    # it disappears.
+    [ -n "$SESSION" ] || { err "close requires -s <id>"; exit 65; }
+    valid_id "$SESSION" || { err "bad id '$SESSION'"; exit 65; }
+    kt close-window --match "id:$SESSION" || exit 1
+    ;;
+
+  focus)  [ -n "$SESSION" ] && kt focus-window --match "id:$SESSION" || exit 1 ;;
+  read)   [ -n "$SESSION" ] && kt get-text    --match "id:$SESSION" || exit 1 ;;
+
+  *) err "unsupported subcommand: session $verb"; exit 64 ;;
+esac

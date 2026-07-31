@@ -21,6 +21,14 @@ setup() {
   W="$REPO/bin/it2-wrapper"
   FAKE="$BATS_TEST_TMPDIR/fake-it2"
   export IT2_WRAPPER_REAL="$FAKE"
+  # PIN THE TERMINAL. Every test below exercises the iTerm2 path, and the wrapper now diverts to
+  # bin/it2-kitty when KITTY_WINDOW_ID is set — so without this the suite's verdict depends on which
+  # terminal the developer happens to be sitting in. Measured 2026-07-31: run from kitty, 5 of 14
+  # failed; from the same shell with the divert pinned off, 14/14 green; baseline HEAD also green.
+  # The dependency predates the divert (KITTY_WINDOW_ID was simply never read); the divert only made
+  # it observable. Unsetting the real var AND pinning the kill switch covers both spellings.
+  unset KITTY_WINDOW_ID
+  export IT2_WRAPPER_NO_KITTY=1
 }
 
 # a stand-in for the real it2 CLI; $1 is the body
@@ -166,4 +174,63 @@ fake_hang() { fake 'sleep 300'; }
   export IT2_WRAPPER_TIMEOUT_S=2
   run "$W" session close -f -s ABC-123
   [ "$status" -eq 124 ]
+}
+
+# ── terminal dispatch: inside kitty this shim must speak kitty, not iTerm2 ────────────────────────
+# Claude Code's ITermBackend spawns a PATH-resolved `it2` and never handshakes with iTerm2, so the
+# divert is what turns Agent Teams assignee panes into NATIVE KITTY SPLITS. These tests own the
+# divert's three states; the wrapper's own `setup` pins it OFF, so each one opts back in explicitly.
+
+# A stand-in translator, so the divert is proven WITHOUT needing a live kitty.
+fake_kitty_translator() {
+  KDIR="$BATS_TEST_TMPDIR/bin"; mkdir -p "$KDIR"
+  cp "$W" "$KDIR/it2-wrapper"
+  { printf '#!/bin/bash\n'; printf 'printf "KITTYPATH:%%s\\n" "$*"; exit 0\n'; } > "$KDIR/it2-kitty"
+  chmod +x "$KDIR/it2-kitty"
+}
+
+@test "inside kitty, the wrapper diverts to it2-kitty instead of the iTerm2 CLI" {
+  fake_kitty_translator
+  fake 'printf "ITERM2PATH:%s\n" "$*"; exit 0'
+  unset IT2_WRAPPER_NO_KITTY
+  export KITTY_WINDOW_ID=7
+  run "$KDIR/it2-wrapper" session split -v -s 7
+  [ "$status" -eq 0 ]
+  # Positive control: it reached the translator...
+  [ "$(printf '%s' "$output" | grep -c 'KITTYPATH:session split -v -s 7')" -eq 1 ]
+  # ...and NEGATIVE control: it must not ALSO have run the iTerm2 CLI. Without this a wrapper that
+  # ran both would pass the assertion above while still driving a background iTerm2.
+  [ "$(printf '%s' "$output" | grep -c 'ITERM2PATH')" -eq 0 ]
+}
+
+@test "IT2_WRAPPER_NO_KITTY=1 forces the iTerm2 path even inside kitty (A/B seam)" {
+  fake_kitty_translator
+  fake 'printf "ITERM2PATH:%s\n" "$*"; exit 0'
+  export KITTY_WINDOW_ID=7 IT2_WRAPPER_NO_KITTY=1
+  run "$KDIR/it2-wrapper" session list
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | grep -c 'ITERM2PATH')" -eq 1 ]
+  [ "$(printf '%s' "$output" | grep -c 'KITTYPATH')" -eq 0 ]
+}
+
+@test "outside kitty the divert is inert — the iTerm2 path is untouched" {
+  fake_kitty_translator
+  fake 'printf "ITERM2PATH:%s\n" "$*"; exit 0'
+  unset IT2_WRAPPER_NO_KITTY KITTY_WINDOW_ID
+  run "$KDIR/it2-wrapper" session list
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | grep -c 'ITERM2PATH')" -eq 1 ]
+}
+
+@test "translator present but NOT executable REFUSES (rc 4) rather than driving iTerm2 from kitty" {
+  fake_kitty_translator
+  chmod -x "$KDIR/it2-kitty"
+  fake 'printf "ITERM2PATH:%s\n" "$*"; exit 0'
+  unset IT2_WRAPPER_NO_KITTY
+  export KITTY_WINDOW_ID=7
+  run "$KDIR/it2-wrapper" session list
+  # "present but unusable" is a THIRD state. Falling through would silently drive whatever iTerm2
+  # happens to be running — a pane in a window the operator is not even looking at.
+  [ "$status" -eq 4 ]
+  [ "$(printf '%s' "$output" | grep -c 'ITERM2PATH')" -eq 0 ]
 }

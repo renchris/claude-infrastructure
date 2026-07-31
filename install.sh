@@ -731,6 +731,39 @@ if [[ "$(uname)" == "Darwin" ]] && command -v defaults >/dev/null 2>&1; then
   fi
 fi
 
+# --- kitty: split panes + native Agent Teams panes ---
+# Zero-click by default: if kitty is installed, wire it. The whole point is that a new user never has
+# to discover that cmd+D is dead, that the pane backend needs an env var, or that teammateMode
+# decides whether assignee sessions are visible at all — every one of which is a silent failure.
+#
+# Runs only when kitty is present (never installs a terminal for you), is idempotent, and CANNOT
+# leave the tree in a half-state: kitty-setup.sh exits non-zero purely to report "restart kitty",
+# which is not an install failure, so its status is reported and deliberately not propagated.
+if command -v kitty >/dev/null 2>&1 || [[ -x /Applications/kitty.app/Contents/MacOS/kitty ]]; then
+  echo ""
+  echo "kitty → split panes + native Agent Teams panes"
+  if ! [[ -x "$REPO_DIR/scripts/kitty-setup.sh" ]]; then
+    echo "  ⚠ scripts/kitty-setup.sh missing or not executable"
+    warnings=$((warnings + 1))
+  elif $DRY_RUN; then
+    # A preview MUST NOT wire anything. kitty-setup.sh writes symlinks, appends a dotfile block and
+    # rewrites teammateMode — all real side effects — so --dry-run runs its READ-ONLY --check
+    # instead. (`run` is not usable here: it echoes the command but would still execute nothing,
+    # losing the preview's actual value, which is reporting what is currently unwired.)
+    echo "  [dry-run] would run scripts/kitty-setup.sh — current state:"
+    "$REPO_DIR/scripts/kitty-setup.sh" --check 2>&1 | sed 's/^/    /' || true
+  else
+    if "$REPO_DIR/scripts/kitty-setup.sh" >/dev/null 2>&1; then
+      echo "  ✓ kitty wired and live (cmd+D splits right, cmd+shift+D splits down)"
+    else
+      # The overwhelmingly common cause is the one nothing can automate away.
+      echo "  ⚠ kitty wired, but NOT yet live — quit kitty (Cmd+Q) and reopen it."
+      echo "    allow_remote_control/listen_on are the only options kitty cannot reload."
+      echo "    Verify with: scripts/kitty-setup.sh --check"
+    fi
+  fi
+fi
+
 # --- Summary ---
 echo ""
 echo "Done: $installed installed, $skipped already up-to-date"
