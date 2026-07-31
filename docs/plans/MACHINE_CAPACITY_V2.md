@@ -1429,3 +1429,142 @@ collapse the 5 PreToolUse/Bash hooks into one and the 11 Stop hooks into one).
   fabricated all-clear. Filed as trap #6 in memory `verification-harness-vacuous-pass-traps`.
 - A resumed TUI showing restored scrollback proves the transcript LOADED, not that the session is
   RUNNING — only post-boot transcript rows distinguish the two.
+
+## §12.7 — the fork storm, MEASURED: the collapse §12.5 prescribes does NOT pay, and its cost model was 4× too big
+
+2026-07-31, later the same day. §12.5 named the fork storm "the highest-value remaining capacity
+fix" and prescribed §8.5.4's bounded fallback — collapse the chain into one process. That was built
+test-first, measured, and **the prescription is falsified**. Two smaller wins in the same area are
+real; one is landed. Read this before acting on §12.5's figures.
+
+### 12.7.1 ⛔ The cost model in §8.5.4 / §12.5 is inflated ~4× by a measurement artifact
+
+§8.5.4's per-fork constants (`bash fork+exec 15.5 ms`, `jq startup 15.1 ms`, `python3 68.7 ms`) were
+obtained by timing a child from a wrapper. **That bills the wrapper's own fork as well as the
+child's.** The marginal cost of one more exec of a page-cached binary inside an already-running
+shell is **~2-4 ms**, not 11-15.
+
+Measured directly (`scripts/hook-chain-bench.sh`, which demonstrates the artifact inline so it
+cannot be re-made):
+
+| probe | ms |
+|---|---|
+| wrapper-timed `bash -c 'exit 0'` — **THE ARTIFACT** | 11 |
+| a guard's whole preamble `INPUT=$(cat)` + `printf｜jq` | 22 |
+| …same, builtin read instead of `$(cat)` | 16 |
+| …same, pre-parsed (no `cat`, no `jq`) | 13 |
+
+So a guard's entire redundant preamble is **~9 ms**, of which ~6 ms is the `cat` fork and ~3 ms the
+`jq`. The derived claim in the build's own header — *"~93 ms is interpreter startup and ~78 ms is
+six redundant jq"* — does not survive; the true figure is ~45 ms across five guards.
+
+**Consequence for §8.5.4's O(N²) argument: the DIRECTION survives, the MAGNITUDE does not.**
+Cost-per-fork really is O(load) — which is precisely why the collapse's benefit is small at normal
+load and only grows in the high-load regime it exists to prevent. That makes it **unvalidatable by
+wall-clock measurement at normal load**, which is a design constraint on any future attempt, not a
+detail.
+
+### 12.7.2 What was built, and why it lands INERT
+
+`hooks/hook-chain.sh` + `tests/hook-chain.bats` + `tests/hook-chain-live-parity.bats` +
+`config/hook-chains.d/` (commit `a30b5df2`). Correct, 25 bats + 14 selftest checks green,
+shellcheck clean — and **deliberately not wired into settings.json**, default mode `exec` (process
+model unchanged):
+
+| | ms |
+|---|---|
+| REAL 6-guard PreToolUse/Bash chain, serial (today) | **169** |
+| dispatcher, exec mode | 187 |
+| dispatcher, source mode | 169 |
+| 6 *no-op* members, serial | 60 |
+| 6 *no-op* members, dispatcher source mode | **41** |
+
+It wins on trivial members and not on real ones, because **sourcing is not uniformly cheaper**:
+`git-worktree-guard` −3 ms and `keychain-guard` −8 ms, but `validate-bash.sh` **+48 ms**
+(94 → 142) — sourcing a large member costs bash the same parse an exec would, minus only process
+creation, so the chain's biggest member is its worst case.
+
+It is landed rather than discarded because it is the vehicle any future collapse needs, and because
+landing it *with the negative result attached* is what stops the next session rebuilding it. Its
+three safety laws are reusable for anything fronting a guard chain: **no skip spelling** (no env
+value runs fewer members than the registry — "disable" degrades to fork+exec), **loud inertness**
+(absent/empty registry or missing member refuses, never admits — §12.2's rule for `capacity_gate`),
+**every member always runs**.
+
+### 12.7.3 ✅ LANDED — six hooks forked `/bin/cat` to read stdin, on every Bash tool call
+
+Commit `c957df9e`. `INPUT=$(cat)` is a fork *and* an exec. Six hooks on the Bash boundary did it —
+five PreToolUse plus `log-bash.sh` on PostToolUse — so every Bash tool call paid six of them before
+any guard decided anything. Replaced with a builtin read.
+
+Interleaved A/B (both sides in ONE run, pipe stdin, load stable 11.00 → 10.68):
+
+> **6 hooks `$(cat)` = 171 ms → builtin read = 153 ms — 18 ms (10.5%) saved per Bash tool call.**
+
+No new machinery, no dispatcher, interfaces unchanged. This is the fork-storm reduction §12.5 asks
+for, delivered by the boring route rather than the architectural one.
+
+### 12.7.4 ⚠ OPEN, operator decision — `curl-gate.py` is project-scoped but registered GLOBALLY
+
+The single largest item in the chain, and it is pure waste almost everywhere:
+
+- `hooks/curl-gate.py:409` — `if not cwd.startswith(PROJECT_ROOT): sys.exit(0)`, where
+  `PROJECT_ROOT = "/Users/chrisren/Development/reso-management-app"` (`:36`).
+- It is registered in the **global** `settings.json` PreToolUse/Bash chain.
+- Measured **48 ms of a 169 ms chain (28%)**; the same chain without it is 130 ms.
+
+So in every session outside that one project — which is nearly all of them, including all of
+claude-infrastructure — each Bash tool call spawns a 48 ms python3 process that is *structurally
+incapable of deciding anything*. It is also the one member that can never be collapsed (python
+cannot be sourced into bash), so no dispatcher work reduces it.
+
+**Not fixed here, because the remedy is a policy choice with two defensible answers** and neither is
+mine to pick: (a) move its registration into a project-level `.claude/settings.json` under
+reso-management-app — cheapest, but the repo's 5-config-dir parity machinery
+(`scripts/settings-drift-assert.sh`) governs global settings, not project ones; or (b) make the hook
+project-agnostic so it guards curl everywhere — strictly more security, more cost, and a behaviour
+change for every other repo. **(a) is the recommendation**; it is worth ~28% of the hot path.
+
+### 12.7.5 Method notes — four ways this measurement lied before it told the truth
+
+Each was caught by a control, and each is a re-usable trap:
+
+1. **Wrapper-billed fork** (§12.7.1) — the artifact that inflated the whole model 4×.
+2. **Cross-run comparison.** The *same* chain read 163 ms and 216 ms twenty minutes apart purely
+   because load moved 16.4 → 20.4. A benchmark verdict certifies stability *within* one run only;
+   a baseline must be **interleaved into the same run**. `hook-chain-bench.sh` now refuses to print
+   a comparison when start/end load diverge >1.25×.
+3. **zsh does not word-split.** `for m in $MEMBERS` under zsh iterates **once** over the whole
+   string, every hook path is invalid, and the loop reports ~0 ms — a vacuous result that reads as a
+   spectacular win. Cost two false readings before it was spotted. (Already trap #1 in memory
+   `verification-harness-vacuous-pass-traps`; it recurred anyway.)
+4. **Controls that cannot fire.** The first live-parity corpus used `curl --insecure` as
+   curl-gate's trigger — which never fires outside `PROJECT_ROOT`, so the mutation control was
+   vacuous. The first before/after verdict snapshot produced **0** non-abstain rows because
+   `$'\x01'` does not expand inside a heredoc. Both were caught only because each control counts
+   its own non-trivial rows and fails when the count is too low. **A parity suite must assert that
+   its corpus actually triggers something**, or it is comparing silence to silence.
+
+Also: the aggregation bug this found in its own subject — `rank_of` matched two literal JSON
+spellings while the live guards emit **both** compact (`jq -nc`) and pretty (heredoc, space after
+the colon) forms, so three guards' verdicts silently ranked 0. Normalize, then match; never
+enumerate spellings (memory `denylist-enumerates-spellings-not-the-class`).
+
+And a working note: `keychain-guard.sh` blocks its own trigger string when that string appears in
+an *agent's* Bash argv, so test corpora containing it must assemble it at runtime
+(memory `guard-refusal-fires-on-its-own-harness`).
+
+### 12.7.6 Ranked remainder for the next session
+
+1. **`curl-gate.py` scoping (§12.7.4)** — ~28% of the PreToolUse/Bash chain, config-only, needs an
+   operator decision between (a) and (b) above.
+2. **`waiting-recycle.sh` on PostToolUse/Bash** — 101 ms, the single most expensive hook measured,
+   fires on every Bash call, and §8.5.4 notes it full-`jq`-parses the transcript per invocation
+   (O(transcript), grows monotonically within a session). Not touched here. Measure it the same way
+   — interleaved, pipe stdin — before assuming the parse is the cost.
+3. **The Stop chain (11 hooks, 287 `$(` sites)** — untouched. It fires once per turn versus the
+   Bash boundary's many, so it is second priority despite the bigger site count; and §12.7.1 says
+   to expect ~9 ms/hook of removable preamble, not the ~24 ms §12.5's constants imply.
+4. **The long-lived broker** (§8.5.4's actual structural answer, of which the collapse was only the
+   bounded fallback) — still unbuilt. §12.7.1's constraint applies: it cannot be validated by
+   wall-clock at normal load, so it needs a fork-COUNT acceptance criterion, not a millisecond one.
