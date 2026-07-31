@@ -1927,11 +1927,17 @@ def starfield(
     voids.append((art.clawd_x + SPRITE_W * art.clawd_scale / 2, 336.0, 190.0))
 
     # The lunar disc is an OCCLUDER, not a void — a hard rejection with no probability ramp, because
-    # "mostly no stars behind the moon" is not a thing. This is not decoration: earthshine composites
-    # translucently (see MOON_EARTHSHINE), so a star inside the disc now shows straight THROUGH the
-    # moon at ~97% of its brightness. It did not before, when an opaque fill hid it — which is the
-    # trap, since the star keep-out and the earthshine's opacity look like unrelated decisions right
-    # up until one of them changes. The same disc serves the light scheme's sun for free.
+    # "mostly no stars behind the moon" is not a thing.
+    #
+    # It is kept even though the moon that made it URGENT is gone. The translucent-earthshine build
+    # composited the unlit disc at ~0.97, so a star behind it showed straight through; trunk's moon
+    # is a masked opaque disc that hides one anyway, which makes this look like a rejection that no
+    # longer earns its place. It does. The keep-out is what makes the disc's opacity a FREE choice
+    # rather than a load-bearing one — without it, anyone who later lightens the unlit face, or
+    # re-derives the crescent from a smooth glow as this file's own open question proposes, silently
+    # gets stars inside the moon and no gate says a word. The star keep-out and the disc's opacity
+    # read as unrelated decisions right up until one of them changes; this is the pairing that keeps
+    # them from having to. The same disc serves the light scheme's sun for free.
     mcx, mcy, mr_ = art.moon
 
     def void_mask(x: float, y: float) -> bool:
