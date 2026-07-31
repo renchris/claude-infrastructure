@@ -101,6 +101,16 @@ STUB
       '{ts:$ts,actor:"cc-dispatch",action:"summary",fired:1,abstained:0,failed:0,skipped:0}' \
       >> "$CC_REAPER_IDL"
   }
+  # <hours-ago> <verdict> [reason] — one dispatch DECISION record, the A13 sensor's actual input.
+  # Deliberately NOT folded into seed_dispatch_idl above: that one writes `summary` rows, which carry
+  # no verdict/reason and are invisible to the saturation read — so a saturation test built on it
+  # would pass vacuously. Same relative-timestamp rule (a literal date is a wall-clock time bomb).
+  seed_dispatch_decision() {
+    local ts; ts="$(date -u -v-"$1"H +%Y-%m-%dT%H:%M:%SZ)"
+    jq -nc --arg ts "$ts" --arg v "$2" --arg r "${3:-}" \
+      '{ts:$ts, actor:"cc-dispatch", action:"decision", verdict:$v,
+        reason:(if $r == "" then null else $r end), id:"seed"}' >> "$CC_REAPER_IDL"
+  }
   # the dispatch alarm's states, sorted and joined — "" proves NO dispatch row at all
   dkinds() { "$BLOCKERS_BIN" --json | jq -r '[.[] | select(.kind=="dispatch-inert") | .state] | sort | join(",")'; }
 
@@ -327,6 +337,68 @@ STUB
   # POSITIVE CONTROL: the same healthy fixture, one sensor flipped, is NOT silent
   mk_launchctl 0 1
   [ "$(dkinds)" = "NOT-ACTIVATED" ]
+}
+
+# ── §5 F16 · saturation is visible (§7 A13) ──────────────────────────────────────────────────────
+# The one failure this family can reach while the spine is CORRECT and QUIET: deferral is silent by
+# design (R2), so a ceiling that never frees produces a dispatcher that fires nothing and says
+# nothing. R2 says surplus must not page; it does NOT say saturation may be invisible.
+
+@test "A13 SATURATED: deciding on time but 0 admits while at the ceiling is LOUD (F16)" {
+  mk_launchctl 1 0
+  seed_dispatch_decision 1 defer at-ceiling
+  seed_dispatch_decision 0 defer at-ceiling
+  [ "$(dkinds)" = "SATURATED" ]
+  # POLARITY POSITIVE CONTROL: the alarm asks "did it admit ANYTHING?", so ONE admit clears it
+  seed_dispatch_decision 0 admit
+  [ "$(dkinds)" = "" ]
+}
+
+@test "A13: an idle spine is NOT saturated — capacity deferrals and kick passes alone stay silent" {
+  # The premise gate. Without it, an empty backlog (nothing to admit) and the single-item kick
+  # passes that dominate a quiet window both read as saturation — an alarm that fires on health is
+  # an alarm that gets ignored (memory alarm-polarity-and-attention-budget).
+  mk_launchctl 1 0
+  seed_dispatch_decision 0 defer capacity
+  seed_dispatch_decision 0 skip project-not-dispatched
+  [ "$(dkinds)" = "" ]
+  seed_dispatch_decision 0 defer at-ceiling              # POSITIVE CONTROL: add the premise, it fires
+  [ "$(dkinds)" = "SATURATED" ]
+}
+
+@test "A13: the window is the knob, not a hardcoded 6h, and 0 is the kill switch (R12)" {
+  mk_launchctl 1 0
+  seed_dispatch_decision 5 defer at-ceiling
+  # The fresh row is REQUIRED, not padding: STALE is terminal for SATURATED, so with only the 5h
+  # record the newest decision is 5h old, CC_DISPATCH_STALE_H (2) trips first, and this test would
+  # be measuring the stale horizon while claiming to measure the saturation window. `defer capacity`
+  # keeps the spine CURRENT while adding neither the at-ceiling premise nor an admit.
+  seed_dispatch_decision 0 defer capacity
+  [ "$(dkinds)" = "SATURATED" ]
+  export CC_DISPATCH_SATURATED_H=2                       # the deferral now sits OUTSIDE the window
+  [ "$(dkinds)" = "" ]
+  export CC_DISPATCH_SATURATED_H=24                      # …and back inside it
+  [ "$(dkinds)" = "SATURATED" ]
+  export CC_DISPATCH_SATURATED_H=0
+  [ "$(dkinds)" = "" ]
+}
+
+@test "A13: NOT-ACTIVATED and STALE are each terminal for SATURATED — one spine, never two rows" {
+  # An unloaded label with saturating input is an operator hand-step, not a saturation report.
+  mk_launchctl 0 1
+  seed_dispatch_decision 0 defer at-ceiling
+  [ "$(dkinds)" = "NOT-ACTIVATED" ]
+  # POSITIVE CONTROL, and this one is what stops the test being vacuous: the IDENTICAL journal with
+  # the label loaded+enabled DOES saturate. Without it both assertions below hold trivially on any
+  # tree that has no saturation alarm at all — i.e. it would pass hardest against the very absence
+  # it exists to detect.
+  mk_launchctl 1 0
+  [ "$(dkinds)" = "SATURATED" ]
+  # And a loaded-but-ancient one is STALE ALONE. The window is widened past the record deliberately:
+  # with the default 6h the record falls outside it and STALE-only would pass for the WRONG reason.
+  : > "$CC_REAPER_IDL"; seed_dispatch_decision 72 defer at-ceiling
+  export CC_DISPATCH_SATURATED_H=96
+  [ "$(dkinds)" = "STALE" ]
 }
 
 # ── §9 · activation SSOT (static reads only — the scripts are NEVER executed here) ───────────────
