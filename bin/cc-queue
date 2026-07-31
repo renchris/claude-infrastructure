@@ -1,0 +1,512 @@
+#!/usr/bin/env bash
+# cc-queue — the operator's PRIMARY surface: ONE ROW PER AGENT, blocked first.
+#
+#   cc-queue [--state S] [--group-by K] [--account PAT] [--cwd PAT] [--limit N]
+#            [--json] [--attach ROW|SID] [--watch [S]] [--selftest]
+#
+# WHY THIS EXISTS. `hooks/cc-permission-beacon.sh` has fired on `PermissionRequest` for weeks and
+# writes {ts, tool_name, tool_input, cwd} per blocked session to CC_PERMPEND_DIR/<sid>.json. The
+# NOTIFIER was built; nothing ever gave it a FACE. So the operator's only way to find a blocked agent
+# was to EYEBALL PANES — which is the entire reason ~30 panes are rendered continuously, and why the
+# readable-pane ceiling (38, physical, identical on every terminal) caps the fleet. Caught live while
+# TERMINAL_AGNOSTIC_L3_L4.md was written: two sessions blocked at once under full three-monitor
+# visibility, one unattended for 6.6 MINUTES.
+#
+# This is a LIST, not a grid — that is the whole point. 100 rows fits one screen; 1000 needs grouping
+# and filtering, not more monitors. A list is the only surface that reaches Level 3/4.
+#
+# READ-ONLY over disk. It never polls a terminal, never attaches to a session to ask how it is, and
+# never answers a permission prompt. `--attach` is the ONE action, and it only moves the operator's
+# focus.
+#
+# ── the four disk sources (TERMINAL_AGNOSTIC_L3_L4.md §6.1) ──────────────────────────────────────
+#   beacon      $CC_PERMPEND_DIR/<sid>.json    BLOCKED + the exact command + since-when   [the spine]
+#   telemetry   $CC_TELEMETRY_DIR/<sid>.json   census: cwd, config_dir, model, pid, ctx%
+#   registry    $CC_REGISTRY_DIR/<pane>.json   sid -> paneUUID (attach) + account label
+#   transcript  <config_dir>/projects/<slug>/<sid>.jsonl   mtime = real activity
+#
+# CROSS-ACCOUNT BY CONSTRUCTION. This operator shards across 4 config dirs (.claude / -next /
+# -secondary / -tertiary / -quaternary). `claude agents --json` is scoped to ONE CLAUDE_CONFIG_DIR and
+# reported 3 of 25 live sessions. Both spine sources here live in the SHARED /tmp and the telemetry
+# row CARRIES `config_dir` as a field, so there is no sharding blindness to defeat — the census is
+# whole-fleet by construction, not by remembering to loop over four directories. (`claude agents
+# --json` is additionally unavailable on this box: the pinned stable is 2.1.114 and the flag errors.
+# It is optional enrichment here, never a dependency — §6.2.)
+#
+# ── the THREE-STATE world (the load-bearing correctness property — §6.4) ─────────────────────────
+# An EMPTY beacon dir and a beacon that has NEVER RUN are the same observation — absence — and only
+# one is good news. The hook stamps a `.beacon-alive` heartbeat on EVERY invocation precisely so a
+# consumer can tell them apart:
+#     dir ABSENT                  ⇒ the hook has never run (INERT) — "0 blocked" is NOT trustworthy
+#     dir present, no <sid>.json  ⇒ genuinely nothing pending — the all-clear that CAN be trusted
+#     dir present, <sid>.json     ⇒ a real pending prompt
+# A queue that renders a bare "0 blocked" for an ABSENT dir reproduces the exact 2026-07-29 failure: a
+# teammate sat blocked on an approval while the board read all-clear. So the INERT state is rendered
+# LOUDLY, and `--check` refuses to pass on it — a check that cannot see must never pass vacuously.
+#
+# FAIL-SAFE: a beacon whose sid has NO telemetry row is STILL rendered as a blocked row (marked
+# `enrich:none`). The exception queue must never drop an exception for lack of enrichment.
+#
+# ── classification (mirrored from scripts/lead-supervisor.sh — measured, do NOT re-derive) ───────
+#   activity = TRANSCRIPT mtime, NEVER telemetry `ts` (lead-supervisor.sh:426-442). The telemetry
+#     writer is the statusline, which stops emitting when a pane is not actively rendering: a healthy
+#     backgrounded/long-turn session goes telemetry-stale for HOURS while its transcript stays warm
+#     (measured 2026-07-19: a live session 3.5 DAYS telemetry-stale, 5-min-warm transcript). An
+#     unresolvable transcript is treated COLD — never exempt a stall we cannot disprove.
+#   liveness = kill -0 AND the process command marks it a claude session (lead-supervisor.sh:468-479).
+#     Bare kill -0 reads a RECYCLED pid as the original session (the STALL? zombie: 266841ba 14h-stale,
+#     5277b63a 3d-stale).
+#
+# ── scale: designed for 1000 from the start ──────────────────────────────────────────────────────
+# Every syscall CLASS is batched into ONE fork, so cost is ~6 forks whether the fleet is 3 or 1000
+# (never one fork per row): one `ps` for all pids, one `stat` for all transcripts, one `jq` slurp per
+# source dir. And NO CAP IS EVER SILENT — `--limit` always prints what it withheld and the exact
+# command to see it. Blocked rows are NEVER capped: truncating the exception queue would defeat the
+# tool.
+#
+# Seams (all overridable — hermetic tests depend on it):
+#   CC_PERMPEND_DIR  CC_TELEMETRY_DIR  CC_REGISTRY_DIR  CC_QUEUE_OWNER_PAT  CC_QUEUE_WORKING_S
+#   CC_QUEUE_NOW (frozen clock — deterministic age assertions)  CC_QUEUE_PS (ps override)
+
+set -uo pipefail
+
+PERMPEND_DIR="${CC_PERMPEND_DIR:-/tmp/cc-permission-pending}"
+TEL_DIR="${CC_TELEMETRY_DIR:-/tmp/cc-telemetry}"
+REGISTRY_DIR="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"
+OWNER_PAT="${CC_QUEUE_OWNER_PAT:-claude}"
+WORKING_S="${CC_QUEUE_WORKING_S:-300}"     # transcript younger than this ⇒ WORKING, else IDLE
+NOW="${CC_QUEUE_NOW:-$(date +%s)}"         # frozen-clock seam: tests pin this for exact ages
+COLD=999999999                             # unresolvable transcript ⇒ sentinel ⇒ COLD (fail-safe)
+
+OPT_STATE=all OPT_GROUP=none OPT_ACCOUNT= OPT_CWD= OPT_LIMIT=20
+OPT_JSON=0 OPT_ATTACH= OPT_WATCH= OPT_CHECK=0 OPT_NOCOLOR=0 OPT_SELFTEST=0
+
+die(){ printf 'cc-queue: %s\n' "$*" >&2; exit 2; }
+
+usage(){ sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0; }
+
+# ── argument parsing ─────────────────────────────────────────────────────────────────────────────
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --state)     OPT_STATE="${2:-}"; shift 2 || die "--state needs a value" ;;
+    --group-by)  OPT_GROUP="${2:-}"; shift 2 || die "--group-by needs a value" ;;
+    --account)   OPT_ACCOUNT="${2:-}"; shift 2 || die "--account needs a value" ;;
+    --cwd)       OPT_CWD="${2:-}"; shift 2 || die "--cwd needs a value" ;;
+    --limit)     OPT_LIMIT="${2:-}"; shift 2 || die "--limit needs a value" ;;
+    --attach)    OPT_ATTACH="${2:-}"; shift 2 || die "--attach needs a row number or sid" ;;
+    --watch)     if [ "${2:-}" ] && [ -z "${2##[0-9]*}" ]; then OPT_WATCH="$2"; shift 2; else OPT_WATCH=3; shift; fi ;;
+    --json)      OPT_JSON=1; shift ;;
+    --check)     OPT_CHECK=1; shift ;;
+    --no-color)  OPT_NOCOLOR=1; shift ;;
+    --selftest|__selftest) OPT_SELFTEST=1; shift ;;
+    -h|--help)   usage ;;
+    *)           die "unknown option: $1 (try --help)" ;;
+  esac
+done
+
+case "$OPT_STATE" in all|blocked|working|idle|done) : ;; *) die "--state must be all|blocked|working|idle|done" ;; esac
+case "$OPT_GROUP" in none|cwd|account|model|state) : ;; *) die "--group-by must be none|cwd|account|model|state" ;; esac
+[ -z "${OPT_LIMIT##*[!0-9]*}" ] && die "--limit must be a non-negative integer"
+
+command -v jq >/dev/null 2>&1 || die "jq is required"
+
+if [ -t 1 ] && [ "$OPT_NOCOLOR" = 0 ] && [ -z "${NO_COLOR:-}" ]; then
+  C_RED=$'\033[38;2;255;95;95m'; C_YEL=$'\033[38;2;255;200;90m'; C_GRN=$'\033[38;2;120;220;140m'
+  C_DIM=$'\033[38;2;150;150;150m'; C_BLD=$'\033[1m'; C_OFF=$'\033[0m'
+else
+  C_RED= C_YEL= C_GRN= C_DIM= C_BLD= C_OFF=
+fi
+
+# ── source readers ───────────────────────────────────────────────────────────────────────────────
+# Each returns a JSON ARRAY on stdout, and NEVER fails the run: an unreadable/malformed source
+# degrades to fewer rows, never to a crash or a silent all-clear.
+#
+# Batch-with-fallback: the fast path hands EVERY file to ONE jq (the 1000-row path). A single
+# malformed file would abort that slurp, so on failure we retry per-file and skip only the bad ones.
+# Both paths are exercised by --selftest.
+slurp_dir(){ # $1=dir  $2=jq filter applied to each object  → JSON array
+  local dir="$1" filt="$2" out f
+  [ -d "$dir" ] || { printf '[]'; return; }
+  set -- "$dir"/*.json
+  [ -e "$1" ] || { printf '[]'; return; }
+  if out="$(jq -c -n --slurpfile _ /dev/null "[inputs | $filt]" "$@" 2>/dev/null)" && [ -n "$out" ]; then
+    printf '%s' "$out"; return
+  fi
+  { printf '['; local first=1
+    for f in "$@"; do
+      [ -e "$f" ] || continue
+      out="$(jq -c "$filt" "$f" 2>/dev/null)" || continue
+      [ -n "$out" ] || continue
+      [ "$first" = 1 ] || printf ','; first=0
+      printf '%s' "$out"
+    done
+    printf ']'; }
+}
+
+# Beacons are keyed by FILENAME (the payload has no session_id), so they are read per-file. This is
+# the exception queue — it is small by nature, and correctness beats a fork here.
+read_beacons(){
+  local f sid out first=1
+  [ -d "$PERMPEND_DIR" ] || { printf '[]'; return; }
+  printf '['
+  for f in "$PERMPEND_DIR"/*.json; do
+    [ -e "$f" ] || continue
+    sid="${f##*/}"; sid="${sid%.json}"
+    out="$(jq -c --arg sid "$sid" \
+      '{sid:$sid, since:(.ts//0), tool:(.tool_name//""), tool_input:(.tool_input//{}), cwd:(.cwd//"")}' \
+      "$f" 2>/dev/null)" || continue
+    [ -n "$out" ] || continue
+    [ "$first" = 1 ] || printf ','; first=0
+    printf '%s' "$out"
+  done
+  printf ']'
+}
+
+read_telemetry(){
+  slurp_dir "$TEL_DIR" \
+    'select(type=="object" and (.session_id//"")!="") | {sid:.session_id, cwd:(.cwd//""), config_dir:(.config_dir//""), model:(.model//""), effort:(.effort//""), pid:(.pid//0), ctx_pct:(.used_pct//null), tel_ts:(.ts//0)}'
+}
+
+read_registry(){
+  slurp_dir "$REGISTRY_DIR" \
+    'select(type=="object" and (.session_id//"")!="") | {sid:.session_id, pane:(.paneUUID//""), account:(.account//""), name:(.name//"")}'
+}
+
+# ── existence evidence (§6.4) — the three-state read, computed BEFORE any row is rendered ────────
+beacon_world(){   # inert | live
+  [ -d "$PERMPEND_DIR" ] || { printf 'inert'; return; }
+  [ -e "$PERMPEND_DIR/.beacon-alive" ] || { printf 'inert'; return; }
+  printf 'live'
+}
+census_world(){ [ -d "$TEL_DIR" ] && printf 'live' || printf 'inert'; }
+
+# ── batched liveness: ONE ps for the whole fleet (never one per row) ─────────────────────────────
+# A pid is a live OWNER only if it is alive AND its command marks it a claude session — bare kill -0
+# reads a recycled pid as the original session (lead-supervisor.sh:468-479).
+#
+# The `|| printf` fallback MUST NOT be attached to the pipeline directly. Under `set -o pipefail` a
+# grep that matches NOTHING (no claude process at all — every session exited) fails the whole
+# pipeline *after* jq has already printed a valid `[]`, so both fire and the caller receives `[][]`
+# — invalid JSON that takes out the entire render. Capture first, then decide.
+live_owner_pids(){
+  local out
+  out="$( ${CC_QUEUE_PS:-ps -eo pid=,command=} 2>/dev/null \
+          | grep -iF "$OWNER_PAT" \
+          | awk '{print $1}' \
+          | jq -R -s -c 'split("\n") | map(select(length>0))' 2>/dev/null )"
+  case "$out" in '['*']') printf '%s' "$out" ;; *) printf '[]' ;; esac
+}
+
+# ── batched activity: ONE stat for every resolvable transcript ───────────────────────────────────
+# CC projects/ dir mangling: every '/' and '.' in the cwd becomes '-' (lead-supervisor.sh:437).
+transcript_mtimes(){ # stdin: JSON array of {sid,cwd,config_dir} → JSON object {sid: mtime}
+  local paths
+  paths="$(jq -r '.[] | select((.cwd//"")!="" and (.config_dir//"")!="") | "\(.config_dir)/projects/\(.cwd|gsub("[/.]";"-"))/\(.sid).jsonl"')"
+  [ -n "$paths" ] || { printf '{}'; return; }
+  # One stat call for all of them; missing files are simply absent from the output.
+  # BSD stat first, then GNU — the repo runs on darwin but the tests must be portable.
+  # Same capture-then-decide discipline as live_owner_pids: a stat that resolves NOTHING must yield
+  # exactly one `{}`, never a valid `{}` concatenated with a fallback `{}`.
+  local out
+  out="$( printf '%s\n' "$paths" | tr '\n' '\0' \
+          | { xargs -0 stat -f '%m %N' 2>/dev/null || xargs -0 stat -c '%Y %n' 2>/dev/null; } \
+          | awk '{ n=$2; sub(/.*\//,"",n); sub(/\.jsonl$/,"",n); printf "%s %s\n", n, $1 }' \
+          | jq -R -s -c 'split("\n") | map(select(length>0) | split(" ")) | map({(.[0]): (.[1]|tonumber)}) | add // {}' 2>/dev/null )"
+  case "$out" in '{'*'}') printf '%s' "$out" ;; *) printf '{}' ;; esac
+}
+
+# ── build the row set ────────────────────────────────────────────────────────────────────────────
+# One row per agent. The UNION of beacons and telemetry is the population: a blocked session with no
+# telemetry row still gets a row (fail-safe), and a telemetry row with no beacon is a normal working/
+# idle agent.
+build_rows(){
+  local beacons telemetry registry pids mtimes base
+  beacons="$(read_beacons)"; telemetry="$(read_telemetry)"; registry="$(read_registry)"
+  pids="$(live_owner_pids)"
+
+  base="$(jq -c -n --argjson b "$beacons" --argjson t "$telemetry" --argjson r "$registry" '
+    ($t | map({key:.sid, value:.}) | from_entries) as $tel
+    | ($r | map({key:.sid, value:.}) | from_entries) as $reg
+    | (($b | map(.sid)) + ($t | map(.sid)) | unique) as $sids
+    | [ $sids[] | . as $sid
+        | ($tel[$sid] // {}) as $T
+        | ($reg[$sid] // {}) as $R
+        | ($b | map(select(.sid==$sid)) | first) as $B
+        | { sid: $sid,
+            blocked: ($B != null),
+            since: ($B.since // 0),
+            tool: ($B.tool // ""),
+            tool_input: ($B.tool_input // {}),
+            cwd: ($T.cwd // $B.cwd // ""),
+            config_dir: ($T.config_dir // ""),
+            model: ($T.model // ""),
+            pid: ($T.pid // 0),
+            ctx_pct: ($T.ctx_pct // null),
+            pane: ($R.pane // ""),
+            # One canonical account label from either source: the registry says "claude-tertiary",
+            # a config_dir basename says ".claude-tertiary". Both must render as "tertiary" or the
+            # same account reads as two different accounts in one list.
+            account: ( ($R.account // ($T.config_dir // "")) | sub("^.*/";"") | sub("^\\.";"")
+                       | sub("^claude-";"") | if . == "claude" or . == "" then "primary" else . end ),
+            enriched: (($tel[$sid] // null) != null) } ]' 2>/dev/null)" || base='[]'
+  [ -n "$base" ] || base='[]'
+
+  mtimes="$(printf '%s' "$base" | transcript_mtimes)"
+
+  jq -c -n --argjson rows "$base" --argjson pids "$pids" --argjson mt "$mtimes" \
+           --argjson now "$NOW" --argjson working "$WORKING_S" --argjson cold "$COLD" '
+    ($pids | map({key:., value:true}) | from_entries) as $alive
+    | [ $rows[]
+        | . + { alive: (.pid > 0 and ($alive[(.pid|tostring)] // false)),
+                activity_s: ((($mt[.sid]) as $m | if $m == null then $cold else ($now - $m) end)) }
+        | . + { wait_s: (if .blocked and .since > 0 then ($now - .since) else 0 end) }
+        | . + { state: ( if .blocked then "blocked"
+                         elif (.alive | not) then "done"
+                         elif .activity_s <= $working then "working"
+                         else "idle" end ) } ]
+    | sort_by( (if .state=="blocked" then 0 elif .state=="working" then 1 elif .state=="idle" then 2 else 3 end),
+               (-.wait_s), .activity_s, .sid )'
+}
+
+# ── the exact blocked command (never a paraphrase — Silver-Platter) ──────────────────────────────
+# tool_input shape is per-tool; render the field that IS the blocked action.
+describe_filter='
+  def desc:
+    (.tool_input // {}) as $i
+    | if   .tool == "Bash"    then ($i.command // "")
+      elif (.tool|test("^(Write|Edit|MultiEdit|Read|NotebookEdit)$")) then ($i.file_path // "")
+      elif .tool == "WebFetch" then ($i.url // "")
+      elif .tool == "Task"     then ($i.description // "")
+      else ($i | to_entries | map("\(.key)=\(.value|tostring)") | join(" ")) end
+    | gsub("\\s+";" ") | if length > 0 then . else "(no detail)" end;'
+
+fmt_dur(){ # seconds → compact human duration
+  local s="${1:-0}"
+  # The COLD sentinel means "could not be resolved", NOT "11574 days ago". Rendering it as a duration
+  # would be a confident lie about an UNKNOWN — say unknown (memory: negative-slice / render-never-reason).
+  [ "$s" -ge "$COLD" ] 2>/dev/null && { printf '%s' '  —'; return; }
+  if   [ "$s" -lt 60 ]    ; then printf '%ds' "$s"
+  elif [ "$s" -lt 3600 ]  ; then printf '%dm%02ds' $((s/60)) $((s%60))
+  elif [ "$s" -lt 86400 ] ; then printf '%dh%02dm' $((s/3600)) $((s%3600/60))
+  else printf '%dd%02dh' $((s/86400)) $((s%86400/3600)); fi
+}
+
+apply_filters(){ # stdin rows → filtered rows
+  jq -c --arg state "$OPT_STATE" --arg acct "$OPT_ACCOUNT" --arg cwd "$OPT_CWD" '
+    map( select($state=="all" or .state==$state)
+       | select($acct=="" or ((.account//"") | ascii_downcase | contains($acct|ascii_downcase))
+                          or ((.config_dir//"") | ascii_downcase | contains($acct|ascii_downcase)))
+       | select($cwd=="" or ((.cwd//"") | ascii_downcase | contains($cwd|ascii_downcase))) )'
+}
+
+# ── attach: sid or row number → the pane, then it2 focus ─────────────────────────────────────────
+do_attach(){
+  local want="$1" rows sid pane name
+  rows="$(build_rows | apply_filters)"
+  if [ -z "${want##*[!0-9]*}" ]; then sid="$want"
+  else sid="$(printf '%s' "$rows" | jq -r --argjson n "$want" '.[$n-1].sid // empty')"; fi
+  [ -n "$sid" ] || die "no row $want (list with: cc-queue)"
+  pane="$(printf '%s' "$rows" | jq -r --arg s "$sid" '.[] | select(.sid|startswith($s)) | .pane' | head -1)"
+  name="$(printf '%s' "$rows" | jq -r --arg s "$sid" '.[] | select(.sid|startswith($s)) | .account' | head -1)"
+  if [ -z "$pane" ]; then
+    printf '%s\n' "cc-queue: session $sid has no registered pane (headless, or registry row absent)." >&2
+    printf '%s\n' "  It is still addressable by sid: $sid ${name:+(account $name)}" >&2
+    exit 1
+  fi
+  command -v it2 >/dev/null 2>&1 || { printf 'it2 session focus %s\n' "$pane"; exit 0; }
+  it2 session focus "$pane" || { printf 'cc-queue: focus failed; run: it2 session focus %s\n' "$pane" >&2; exit 1; }
+}
+
+# ── render ───────────────────────────────────────────────────────────────────────────────────────
+render_banner(){
+  local bw="$1" cw="$2"
+  if [ "$bw" = inert ]; then
+    printf '%s\n' "${C_RED}${C_BLD}⚠ BEACON INERT${C_OFF} — ${PERMPEND_DIR} has no heartbeat: the PermissionRequest hook has NEVER run here."
+    printf '%s\n' "  ${C_RED}A '0 blocked' below would be MEANINGLESS — this surface cannot see a blocked agent.${C_OFF}"
+    printf '%s\n' "  ${C_DIM}Fix the wiring, then re-run:  grep -n cc-permission-beacon ~/.claude/settings.json${C_OFF}"
+  fi
+  [ "$cw" = inert ] && printf '%s\n' "${C_YEL}⚠ CENSUS BLIND${C_OFF} — ${TEL_DIR} absent: working/idle rows cannot be enumerated (blocked rows are unaffected)."
+  return 0
+}
+
+render_table(){
+  local rows="$1" bw="$2" cw="$3" total shown_b n_b n_w n_i n_d
+  n_b="$(printf '%s' "$rows" | jq '[.[]|select(.state=="blocked")]|length')"
+  n_w="$(printf '%s' "$rows" | jq '[.[]|select(.state=="working")]|length')"
+  n_i="$(printf '%s' "$rows" | jq '[.[]|select(.state=="idle")]|length')"
+  n_d="$(printf '%s' "$rows" | jq '[.[]|select(.state=="done")]|length')"
+  total="$(printf '%s' "$rows" | jq 'length')"
+
+  render_banner "$bw" "$cw"
+
+  if [ "$OPT_GROUP" != none ]; then
+    printf '%s\n' "${C_BLD}GROUPED BY ${OPT_GROUP}${C_OFF}  ${C_DIM}(${total} agents)${C_OFF}"
+    printf '%s' "$rows" | jq -r --arg k "$OPT_GROUP" '
+      group_by(.[$k] // "(none)")
+      | map({ key: (.[0][$k] // "(none)"),
+              n: length,
+              blocked: ([.[]|select(.state=="blocked")]|length),
+              working: ([.[]|select(.state=="working")]|length),
+              idle:    ([.[]|select(.state=="idle")]|length),
+              done:    ([.[]|select(.state=="done")]|length) })
+      | sort_by(-.blocked, -.n)
+      | .[] | "\(if .blocked>0 then "⛔" else "  " end) \(.n|tostring|(" "*(4-length))+.)  ⛔\(.blocked)  ●\(.working)  ○\(.idle)  ·\(.done)   \(.key)"'
+    printf '%s\n' "${C_DIM}→ drill in:  cc-queue --${OPT_GROUP} <name>   ·   list blocked only:  cc-queue --state blocked${C_OFF}"
+    return 0
+  fi
+
+  # ── the exception queue: ALWAYS first, ALWAYS complete (never capped) ──
+  if [ "$n_b" -gt 0 ]; then
+    printf '%s\n' "${C_RED}${C_BLD}⛔ BLOCKED (${n_b})${C_OFF} ${C_DIM}— waiting on a permission answer; nothing in-session can self-approve${C_OFF}"
+    printf '%s' "$rows" | jq -r "$describe_filter"'
+      to_entries | map(select(.value.state=="blocked"))
+      | .[] | "\(.key+1)\t\(.value.wait_s)\t\(.value.account // "?")\t\((.value.cwd//"")|sub("^.*/";""))\t\(.value.tool)\t\(.value | desc)\t\(if .value.enriched then "" else " [enrich:none]" end)"' \
+    | while IFS=$'\t' read -r idx wait acct proj tool cmd note; do
+        printf '  %s%2s%s  %s%7s%s  %-10s %-22s %s%s%s%s\n' \
+          "$C_BLD" "$idx" "$C_OFF" "$C_RED" "$(fmt_dur "$wait")" "$C_OFF" \
+          "${acct:0:10}" "${proj:0:22}" "$C_BLD" "${tool}: ${cmd:0:70}" "$C_OFF" "$note"
+      done
+    printf '%s\n' "${C_DIM}  → answer one:  cc-queue --attach <#>   (jumps to that pane)${C_OFF}"
+    printf '\n'
+  else
+    if [ "$bw" = live ]; then
+      printf '%s\n' "${C_GRN}✓ nothing blocked${C_OFF} ${C_DIM}— beacon is live and the queue is empty (trustworthy all-clear)${C_OFF}"
+    fi
+  fi
+
+  # ── the rest: capped, but NEVER silently ──
+  local rest_states="working idle done" st n label colr
+  for st in $rest_states; do
+    case "$st" in
+      working) n="$n_w"; label="● WORKING"; colr="$C_GRN" ;;
+      idle)    n="$n_i"; label="○ IDLE";    colr="$C_YEL" ;;
+      done)    n="$n_d"; label="· DONE";    colr="$C_DIM" ;;
+    esac
+    [ "$n" -gt 0 ] || continue
+    [ "$OPT_STATE" = all ] || [ "$OPT_STATE" = "$st" ] || continue
+    printf '%s\n' "${colr}${label} (${n})${C_OFF}"
+    printf '%s' "$rows" | jq -r --arg st "$st" --argjson lim "$OPT_LIMIT" '
+      to_entries | map(select(.value.state==$st)) | (if $lim>0 then .[0:$lim] else . end)
+      | .[] | "\(.key+1)\t\(.value.activity_s)\t\(.value.account // "?")\t\((.value.cwd//"")|sub("^.*/";""))\t\(.value.model // "")\t\(.value.ctx_pct // "")"' \
+    | while IFS=$'\t' read -r idx act acct proj model ctx; do
+        printf '  %s%2s%s  %s%7s%s  %-10s %-22s %-18s %s\n' \
+          "$C_DIM" "$idx" "$C_OFF" "$C_DIM" "$(fmt_dur "$act")" "$C_OFF" \
+          "${acct:0:10}" "${proj:0:22}" "${model:0:18}" "${ctx:+ctx ${ctx}%}"
+      done
+    if [ "$OPT_LIMIT" -gt 0 ] && [ "$n" -gt "$OPT_LIMIT" ]; then
+      printf '%s\n' "  ${C_DIM}… $(( n - OPT_LIMIT )) more not shown — see all:  cc-queue --state ${st} --limit 0${C_OFF}"
+    fi
+  done
+
+  printf '\n%s\n' "${C_DIM}${total} agents across all config dirs · ⛔${n_b} ●${n_w} ○${n_i} ·${n_d}${C_OFF}"
+}
+
+# ── selftest — hermetic, RED-provable, side-effect-free (never touches the real dirs) ────────────
+selftest(){
+  local rc=0 n=0 pass=0 out js n_idle
+  # NOT `local tmp` — the EXIT trap fires after this function's locals are gone, which would abort on
+  # an unbound variable under `set -u` and leak the temp dir.
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/cc-queue-selftest.XXXXXX")" || { echo "1..0 # mktemp failed"; return 1; }
+  trap 'rm -rf "${tmp:-}"' EXIT
+  mkdir -p "$tmp/pend" "$tmp/tel" "$tmp/reg" "$tmp/cfg/projects/-x-proj"
+  ok(){ n=$((n+1)); if [ "$1" = 0 ]; then pass=$((pass+1)); printf 'ok %d - %s\n' "$n" "$2"; else printf 'not ok %d - %s\n' "$n" "$2"; rc=1; fi; }
+
+  export CC_PERMPEND_DIR="$tmp/pend" CC_TELEMETRY_DIR="$tmp/tel" CC_REGISTRY_DIR="$tmp/reg"
+  export CC_QUEUE_NOW=1000000 CC_QUEUE_PS="echo 4242 claude-fake" CC_QUEUE_WORKING_S=300
+
+  # 1. INERT: no beacon dir at all ⇒ must NOT report a clean all-clear
+  rm -rf "$tmp/pend"
+  out="$("$0" --no-color 2>&1)"
+  printf '%s' "$out" | grep -q 'BEACON INERT'; ok $? "absent beacon dir renders INERT (not a false all-clear)"
+  printf '%s' "$out" | grep -q 'nothing blocked'; [ $? -ne 0 ]; ok $? "INERT never prints the trustworthy all-clear"
+
+  # 1b. dir PRESENT but heartbeat ABSENT ⇒ still INERT. A separate state from 1: some other actor can
+  # create the directory (a stray mkdir, an unpacked tarball, a sibling tool), and only the heartbeat
+  # proves the HOOK itself has run. Without this the existence evidence degrades to "does a directory
+  # exist", which any accident satisfies. (Found by RED-proof: a mutation disabling the heartbeat check
+  # survived every other assertion.)
+  mkdir -p "$tmp/pend"; rm -f "$tmp/pend/.beacon-alive"
+  out="$("$0" --no-color 2>&1)"
+  printf '%s' "$out" | grep -q 'BEACON INERT'; ok $? "dir present but heartbeat MISSING is still INERT"
+
+  # 2. LIVE + empty ⇒ trustworthy all-clear (the OTHER side of the three-state split)
+  # NB: capture to a var, never `"$0" ... | grep -q`. Under `set -o pipefail` a matching grep -q exits
+  # first, SIGPIPEs the producer, and 141 is promoted to the pipeline status — so the probe reads
+  # FALSE exactly when it MATCHES (memory: pipefail-inverts-early-exit-probe). Caught here live.
+  mkdir -p "$tmp/pend"; : > "$tmp/pend/.beacon-alive"
+  out="$("$0" --no-color 2>&1)"
+  printf '%s' "$out" | grep -q 'nothing blocked'; ok $? "live+empty beacon renders the trustworthy all-clear"
+
+  # 3. a real blocked beacon ⇒ exact command + wait duration
+  printf '{"ts":999700,"tool_name":"Bash","tool_input":{"command":"git push --force origin main"},"cwd":"/x/proj"}' > "$tmp/pend/sid-blocked.json"
+  out="$("$0" --no-color 2>&1)"
+  printf '%s' "$out" | grep -q 'git push --force origin main'; ok $? "blocked row shows the EXACT blocked command"
+  printf '%s' "$out" | grep -q '5m00s'; ok $? "blocked row shows how long it has waited (300s ⇒ 5m00s)"
+
+  # 4. fail-safe: a beacon with NO telemetry row is still a row
+  printf '%s' "$out" | grep -q 'enrich:none'; ok $? "beacon with no telemetry row still renders (marked enrich:none)"
+
+  # 5. enrichment + classification: alive pid + warm transcript ⇒ working; cold ⇒ idle; dead ⇒ done
+  printf '{"ts":999000,"session_id":"sid-work","cwd":"/x/proj","config_dir":"%s/cfg","model":"m","pid":4242,"used_pct":17}' "$tmp" > "$tmp/tel/sid-work.json"
+  printf '{"ts":999000,"session_id":"sid-idle","cwd":"/x/proj","config_dir":"%s/cfg","model":"m","pid":4242,"used_pct":5}'  "$tmp" > "$tmp/tel/sid-idle.json"
+  printf '{"ts":999000,"session_id":"sid-dead","cwd":"/x/proj","config_dir":"%s/cfg","model":"m","pid":999999,"used_pct":5}' "$tmp" > "$tmp/tel/sid-dead.json"
+  : > "$tmp/cfg/projects/-x-proj/sid-work.jsonl"; touch -t "$(date -r 999950 +%Y%m%d%H%M.%S 2>/dev/null || echo 202601010000.00)" "$tmp/cfg/projects/-x-proj/sid-work.jsonl" 2>/dev/null
+  : > "$tmp/cfg/projects/-x-proj/sid-idle.jsonl"; touch -t "$(date -r 900000 +%Y%m%d%H%M.%S 2>/dev/null || echo 202001010000.00)" "$tmp/cfg/projects/-x-proj/sid-idle.jsonl" 2>/dev/null
+  js="$("$0" --json 2>/dev/null)"
+  [ "$(printf '%s' "$js" | jq -r '.[]|select(.sid=="sid-work").state')" = working ]; ok $? "alive pid + warm transcript ⇒ working"
+  [ "$(printf '%s' "$js" | jq -r '.[]|select(.sid=="sid-idle").state')" = idle ];    ok $? "alive pid + cold transcript ⇒ idle"
+  [ "$(printf '%s' "$js" | jq -r '.[]|select(.sid=="sid-dead").state')" = done ];    ok $? "dead pid ⇒ done (pid not a live claude owner)"
+
+  # 6. ordering: blocked is always first
+  [ "$(printf '%s' "$js" | jq -r '.[0].state')" = blocked ]; ok $? "blocked sorts first"
+
+  # 7. no silent caps — assert POSITIVELY that every row is rendered, and that a real cap ANNOUNCES
+  # itself. Asserting only "the phrase 'not shown' is absent" was vacuous: a mutation that truncated
+  # the rows while leaving the notice suppressed survived it (memory: an absence assertion is vacuous
+  # when absence is the pre-change state). Count the rows instead.
+  printf '{"ts":999000,"session_id":"sid-i2","cwd":"/x/proj","config_dir":"%s/cfg","model":"m","pid":4242}' "$tmp" > "$tmp/tel/sid-i2.json"
+  printf '{"ts":999000,"session_id":"sid-i3","cwd":"/x/proj","config_dir":"%s/cfg","model":"m","pid":4242}' "$tmp" > "$tmp/tel/sid-i3.json"
+  n_idle="$("$0" --json 2>/dev/null | jq '[.[]|select(.state=="idle")]|length')"
+  out="$("$0" --no-color --state idle --limit 0 2>&1)"
+  [ "$(printf '%s' "$out" | grep -c '^  *[0-9]')" = "$n_idle" ]; ok $? "--limit 0 renders EVERY row (${n_idle} idle), none dropped"
+  out="$("$0" --no-color --state idle --limit 1 2>&1)"
+  printf '%s' "$out" | grep -q 'more not shown'; ok $? "a real cap ANNOUNCES what it withheld (never a silent truncation)"
+  [ "$(printf '%s' "$out" | grep -c '^  *[0-9]')" = 1 ]; ok $? "--limit 1 actually caps the rendered rows"
+
+  # 8. malformed file must not take out the run (batch-with-fallback)
+  printf 'NOT JSON{{{' > "$tmp/tel/broken.json"
+  [ "$("$0" --json 2>/dev/null | jq -r '.[]|select(.sid=="sid-work").state')" = working ]; ok $? "a malformed source file degrades gracefully (good rows survive)"
+
+  # 9. --check refuses to pass while the beacon is inert
+  rm -rf "$tmp/pend"; "$0" --check >/dev/null 2>&1; [ $? -ne 0 ]; ok $? "--check fails on an INERT beacon (never passes vacuously)"
+
+  printf '1..%d\n' "$n"
+  [ "$rc" = 0 ] && printf '# all %d passed\n' "$pass" || printf '# FAILED (%d/%d passed)\n' "$pass" "$n"
+  return "$rc"
+}
+
+[ "$OPT_SELFTEST" = 1 ] && { selftest; exit $?; }
+
+# ── main ─────────────────────────────────────────────────────────────────────────────────────────
+[ -n "$OPT_ATTACH" ] && do_attach "$OPT_ATTACH"
+
+emit_once(){
+  local bw cw rows
+  bw="$(beacon_world)"; cw="$(census_world)"
+  rows="$(build_rows | apply_filters)"
+  if [ "$OPT_CHECK" = 1 ]; then
+    # A gate entry point: 0 iff the surface can SEE and nothing is blocked. An inert beacon fails —
+    # a check that cannot see must never pass vacuously.
+    [ "$bw" = live ] || { printf 'cc-queue: BEACON INERT — cannot certify (hook has never run)\n' >&2; return 2; }
+    local nb; nb="$(printf '%s' "$rows" | jq '[.[]|select(.state=="blocked")]|length')"
+    [ "$nb" = 0 ] || { printf 'cc-queue: %s blocked agent(s)\n' "$nb" >&2; return 1; }
+    return 0
+  fi
+  if [ "$OPT_JSON" = 1 ]; then printf '%s\n' "$rows" | jq -c '.'; else render_table "$rows" "$bw" "$cw"; fi
+}
+
+if [ -n "$OPT_WATCH" ]; then
+  while :; do printf '\033[H\033[2J'; printf '%s\n' "$(date '+%H:%M:%S')  cc-queue --watch ${OPT_WATCH}s  (^C to exit)"; emit_once; sleep "$OPT_WATCH"; done
+else
+  emit_once
+fi
