@@ -102,7 +102,7 @@ fi
 # --- mailbox_pending: own uuid has unread mail ----------------------------
 uuid="$SESSION"
 if [ -z "$uuid" ]; then
-  _it="${ITERM_SESSION_ID:-}"; uuid="${_it##*:}"
+  _it="${CC_PANE_ID:-${ITERM_SESSION_ID:-}}"; uuid="${_it##*:}"
 fi
 
 mailbox_json='[]'

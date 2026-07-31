@@ -52,7 +52,7 @@ beat() {
 
   cwd=$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null)
   [ -z "$cwd" ] && cwd="$PWD"
-  pane="${ITERM_SESSION_ID:-}"; pane="${pane##*:}"
+  pane="${CC_PANE_ID:-${ITERM_SESSION_ID:-}}"; pane="${pane##*:}"
 
   # kind: explicit arg wins (Stop passes `stop`); default is a prompt beat.
   kind="${1:-prompt}"

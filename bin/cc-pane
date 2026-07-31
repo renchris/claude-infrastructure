@@ -77,7 +77,7 @@ pane_norm() { local v="${1:-}"; printf '%s' "${v##*:}"; }
 # error to paper over.
 pane_self() {
   local v="${CC_PANE_ID:-}"
-  [ -n "$v" ] || v="${ITERM_SESSION_ID:-}"
+  [ -n "$v" ] || v="${ITERM_SESSION_ID:-}"   # cc-pane-id-lint:allow — this line IS the fallback
   v="$(pane_norm "$v")"
   [ -n "$v" ] || return "$RC_NO"
   printf '%s\n' "$v"

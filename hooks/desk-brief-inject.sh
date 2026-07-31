@@ -43,7 +43,7 @@ BRIEF="${DESK_BRIEF_FILE:-$SCRIPT_DIR/../docs/templates/desk-boot-brief.md}"
 # --- is THIS pane the desk? --------------------------------------------------------------------
 pane="${DESK_BRIEF_PANE:-}"
 if [ -z "$pane" ]; then
-  _itsid="${ITERM_SESSION_ID:-}"
+  _itsid="${CC_PANE_ID:-${ITERM_SESSION_ID:-}}"
   [ -n "$_itsid" ] || exit 0                      # not an iTerm pane → cannot hold the role
   pane="${_itsid##*:}"
 fi

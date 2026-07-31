@@ -66,7 +66,7 @@ command -v jq >/dev/null 2>&1 || exit 0
 # Still fully consumed, so the writer never SIGPIPEs.
 _stdin_json="$(cat 2>/dev/null || true)"
 
-own_pane="${ITERM_SESSION_ID:-}"; own_pane="${own_pane##*:}"
+own_pane="${CC_PANE_ID:-${ITERM_SESSION_ID:-}}"; own_pane="${own_pane##*:}"
 own_sid="$(printf '%s' "$_stdin_json" | jq -r '.session_id // empty' 2>/dev/null || true)"
 case "$own_sid" in *[!0-9A-Fa-f-]*) own_sid="" ;; esac
 

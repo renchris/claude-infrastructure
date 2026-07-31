@@ -72,7 +72,7 @@ resolve_uuid() {
 }
 
 if [ -z "$ROLE" ] && [ -z "$UUID" ]; then
-  _it="${ITERM_SESSION_ID:-}"; UUID="${_it##*:}"
+  _it="${CC_PANE_ID:-${ITERM_SESSION_ID:-}}"; UUID="${_it##*:}"
 fi
 CUR_UUID="$(resolve_uuid)"
 [ -n "$CUR_UUID" ] || { echo "cc-await-ping: no uuid given and no \$ITERM_SESSION_ID (or role file '$ROLES_DIR/$ROLE' missing)" >&2; exit 3; }

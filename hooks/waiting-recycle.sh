@@ -209,13 +209,13 @@ DESK_ROLE="${CC_WR_DESK_ROLE:-desk}"                       # G-P11-7: role a mon
 # sentinel — the exact fragility this change removes. COORD is a FIXED path (cc-roles lives at
 # $HOME/.claude, NOT $CLAUDE_CONFIG_DIR) so identity survives a config-dir migration.
 COORD="${CC_WR_COORD_DIR:-$HOME/.claude}"                    # root of wait-contracts/ mailbox/ cc-roles/
-UUID="${CC_WR_UUID:-${ITERM_SESSION_ID:-}}"; UUID="${UUID##*:}"   # this desk's iTerm pane uuid (survives recycle)
+UUID="${CC_WR_UUID:-${CC_PANE_ID:-${ITERM_SESSION_ID:-}}}"; UUID="${UUID##*:}"   # this desk's iTerm pane uuid (survives recycle)
 SID="${SID:-}"                                               # set by the hook path; empty on the CLI path
 # G-P11-7: is THIS session the monitoring desk? (cc-roles/<DESK_ROLE> resolves to its uuid or sid).
 # UUID is resolved lazily too, so this answers correctly on BOTH the CLI and hook paths.
 is_monitoring_desk() {
   local rf="$COORD/cc-roles/$DESK_ROLE" rv u="$UUID"
-  [ -n "$u" ] || { u="${CC_WR_UUID:-${ITERM_SESSION_ID:-}}"; u="${u##*:}"; }
+  [ -n "$u" ] || { u="${CC_WR_UUID:-${CC_PANE_ID:-${ITERM_SESSION_ID:-}}}"; u="${u##*:}"; }
   [ -f "$rf" ] || return 1
   rv="$(head -1 "$rf" 2>/dev/null | tr -d '[:space:]')"; [ -n "$rv" ] || return 1
   { [ -n "$SID" ] && [ "$rv" = "$SID" ]; } || { [ -n "$u" ] && [ "$rv" = "$u" ]; }

@@ -92,7 +92,7 @@ GATE="${CC_TEARDOWN_GATE_BIN:-$HERE/cc-teardown-safety-gate.sh}"
 PS_BIN="${CC_TEARDOWN_PS_BIN:-ps}"
 RECORDS_DIR="${CC_TEARDOWN_RECORDS_DIR:-$HOME/.claude/cc-teardown}"
 TERM_GRACE_S="${CC_TEARDOWN_TERM_GRACE_S:-5}"
-_sid="${CC_TEARDOWN_SELF_UUID:-${ITERM_SESSION_ID:-}}"
+_sid="${CC_TEARDOWN_SELF_UUID:-${CC_PANE_ID:-${ITERM_SESSION_ID:-}}}"
 SELF_UUID="${_sid##*:}"   # ITERM_SESSION_ID = "wNtMpK:<UUID>" → <UUID>; an injected bare UUID passes through
 
 # ── operator-adoption belt config (2026-07-24; mirrors cc-classify 4.7 env family) ─────────────────

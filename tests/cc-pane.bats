@@ -207,6 +207,49 @@ fake() {
   [ "$status" -eq 1 ]
 }
 
+# ── the class-2 rename is LIVE, not merely green ──────────────────────────────────────────
+# The 31 suites over the 15 renamed files stayed 636/636 green, but green-because-untested is
+# exactly this repo's recorded failure mode: nothing in those suites sets CC_PANE_ID, so they
+# would have passed identically had the rename done nothing at all. These two assert the new
+# capability itself.
+
+@test "the rename is LIVE at a real consumer: session-register.sh honours CC_PANE_ID alone" {
+  command -v jq >/dev/null 2>&1 || false   # a skip here would be a NON-VERDICT, not a pass
+  local reg="$BATS_TEST_TMPDIR/reg" u="FEEDFACE-0001-0002-0003-000000000004"
+  run env -u ITERM_SESSION_ID CC_PANE_ID="w0t0p0:$u" CC_REGISTRY_DIR="$reg" \
+      /bin/bash -c 'printf "{\"cwd\":\"/tmp\",\"session_id\":\"s-1\"}" | "$0"' \
+      "$REPO/hooks/session-register.sh"
+  [ -f "$reg/$u.json" ]
+  grep -q "$u" "$reg/$u.json" || false
+}
+
+@test "negative control: with NEITHER var set that same consumer registers NOTHING" {
+  # Without this the test above could pass for a reason unrelated to CC_PANE_ID — a row written
+  # from some other resolution path would look identical.
+  command -v jq >/dev/null 2>&1 || false
+  local reg="$BATS_TEST_TMPDIR/reg2"
+  run env -u ITERM_SESSION_ID -u CC_PANE_ID CC_REGISTRY_DIR="$reg" \
+      /bin/bash -c 'printf "{\"cwd\":\"/tmp\",\"session_id\":\"s-1\"}" | "$0"' \
+      "$REPO/hooks/session-register.sh"
+  [ -z "$(ls -A "$reg" 2>/dev/null)" ]
+}
+
+@test "ratchet: no production file reads a BARE \$ITERM_SESSION_ID without the CC_PANE_ID fallback" {
+  # Stops the rename silently un-doing itself as new code is written. Exemptions are the class-3
+  # files (T3 owns them; this track must not touch them — plan §6.1) and any line carrying an
+  # explicit `cc-pane-id-lint:allow` marker, which is how bin/cc-pane's own fallback DEFINITION
+  # opts out. Deliberately a per-LINE marker and not a per-FILE path exemption: exempting the
+  # whole seam file would blind the ratchet to a genuine bare read added to it later (memory:
+  # blanket-remedy-inverts-guards). This fired on its first run and caught exactly that line,
+  # which is also the proof it can go red.
+  local hits
+  hits="$(grep -rn -F '${ITERM_SESSION_ID:-}' "$REPO/bin" "$REPO/scripts" "$REPO/hooks" 2>/dev/null \
+          | grep -v 'CC_PANE_ID' \
+          | grep -v 'cc-pane-id-lint:allow' \
+          | grep -vE 'handoff-fire\.sh|handoff-selfclose-e2e\.sh|lr-handoff\.sh' || true)"
+  [ -z "$hits" ] || { printf 'bare reads still present:\n%s\n' "$hits"; false; }
+}
+
 @test "address <id> does NOT downgrade an indeterminate enumeration into 'gone'" {
   # The bug this forbids: a blind probe answering "that pane is dead", which a caller then acts
   # on by reaping a live agent. Indeterminate must propagate as indeterminate.

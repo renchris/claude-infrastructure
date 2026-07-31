@@ -65,7 +65,7 @@ if [ -n "$it2_bin" ] && command -v jq >/dev/null 2>&1; then
     ORACLE="readable"
     # POSITIVE CONTROL: if we are in a pane, that pane MUST be in the list we just read. If it is
     # not, the list is not describing this machine's reality and every "dead" verdict below is void.
-    own="${ITERM_SESSION_ID:-}"; own="${own##*:}"; own="$(printf '%s' "$own" | tr '[:lower:]' '[:upper:]')"
+    own="${CC_PANE_ID:-${ITERM_SESSION_ID:-}}"; own="${own##*:}"; own="$(printf '%s' "$own" | tr '[:lower:]' '[:upper:]')"
     if [ -n "$own" ]; then
       if grep -qxF "$own" "$LIVE_LIST"; then
         ORACLE="controlled"
