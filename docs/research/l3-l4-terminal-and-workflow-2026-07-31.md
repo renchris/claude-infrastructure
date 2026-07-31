@@ -206,12 +206,37 @@ by quitting iTerm2, on an M3 Pro and an M3 Studio. **Not this machine.**
 |---|---|---|
 | 1 | Crash = V8 heaps → 45 GB → swap thrashing | **REFUTED** — both panics on disk; neither is memory exhaustion; no swap thrashing in either |
 | 2 | Each CC instance grows to ~1.5 GB | **REFUTED** — measured 211–295 MB across 15 live sessions |
-| 3 | `NODE_OPTIONS=--max-old-space-size=1024` | **REJECTED** — treats a non-cause; risks OOM-killing agents mid-task |
+| 3 | `NODE_OPTIONS=--max-old-space-size=1024` | **REJECTED — and it fails on its own terms**, see below |
 | 4 | Maximise Metal/GPU | **BACKWARDS on iTerm2** — the GPU path allocates the objects that saturate the compositor |
 | 5 | Ghostty is "the only" terminal rendering via Metal | **FALSE** — iTerm2 has a Metal renderer |
 | 6 | Ghostty auto-demotes unfocused panes to E-cores via QoS | **UNSUBSTANTIATED** — see below |
 | 7 | Table 1 benchmark numbers | **UNSOURCED** — presented as "2026 benchmarking data" with no citation; the two figures checkable here (iTerm2 memory, Ghostty per-pane cost) do not match measurement |
 | 8 | Avoid fractional display scaling | **MECHANISM CONFIRMED, REMEDY REJECTED** — see below |
+
+### Claim 3 resolved — the remedy is inert or harmful, and there is no third branch
+
+Two facts about the artifact the remedy targets, read from the shipped file:
+
+```
+~/.claude-219/node_modules/.bin/claude
+  -> ../@anthropic-ai/claude-code/bin/claude.exe
+     Mach-O 64-bit executable arm64          # a COMPILED BINARY, not `node script.js`
+     strings: max-old-space-size=8192        # it already sets its OWN 8 GB ceiling
+```
+
+**Claude Code is not a plain Node script, and it already carries
+`--max-old-space-size=8192`.** So the prescription resolves to exactly two branches, and both
+condemn it:
+
+| If the env var is… | Consequence |
+|---|---|
+| **ignored** (binary's own flag wins) | the remedy is **inert** — it changes nothing while appearing to be a fix, the worst class of advice |
+| **honoured** | it cuts the vendor's own shipped ceiling **8× (8192 → 1024 MB)** — overriding the headroom Anthropic ships as intended |
+
+There is no branch in which it helps. And the cap could only ever *bind* during an unusual
+allocation spike — measured steady-state RSS is ~215 MB, a fifth of the proposed ceiling — which
+means the only moment it takes effect is the moment it kills a session mid-task. **A remedy whose
+sole possible effect is to convert a survivable spike into a lost session.**
 
 ### Claim 6 resolved — the symbol exists, the behaviour does not follow
 
