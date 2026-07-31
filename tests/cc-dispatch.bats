@@ -70,11 +70,17 @@ add_item()   { "$BACKLOG" add --title "$1" --project proj --source bats; }   # e
 status_of()  { "$BACKLOG" list --all --json | jq -r --arg i "$1" '.[]|select(.id==$i)|.status'; }
 idl_action() { tail -1 "$C/idl.jsonl" | jq -r '.action'; }
 
-@test "selftest passes and runs all 121 checks (a zero-check suite must not 'pass')" {
+@test "selftest passes and runs all 142 checks (a zero-check suite must not 'pass')" {
   run "$DISP" selftest
   [ "$status" -eq 0 ]
   n_ok="$(printf '%s' "$output" | grep -c '^  ok ')"
-  [ "$n_ok" -eq 121 ]   # 49 pre-v2 + the decision/admission split (S1,S2,S6,S7 + kill switches).
+  [ "$n_ok" -eq 142 ]   # 49 pre-v2 + the decision/admission split (S1,S2,S6,S7 + kill switches).
+                        # 121 → 142: the STALE-PREMISE guard (1d) — 18 cases (v1-v6) covering the
+                        # retraction, its positive control, the source-scope control that keeps a
+                        # human-filed item citing a finished plan dispatchable, both fail-OPEN paths
+                        # and the kill switch — plus 2 assertions that de-vacuum case (m). (m)'s
+                        # claim/spawn assertions passed with the wasDone predicate stripped, so the
+                        # PER-ITEM property was unproven; wave.json is the observable that fails.
                         # 113 → 121: the singleton gates ADMISSION, not DECISION (de5e3e24be8f) —
                         # case (t) asserts the lock-loser's full decision set plus four zero-effect
                         # reads, each mirrored by a (t2) positive control.
