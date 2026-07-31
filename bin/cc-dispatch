@@ -344,6 +344,16 @@ live_workers() { # <backlog-bin> → count of workers dispatch has OUT, or "" fo
   echo "$n"
 }
 
+# fire_excerpt <file> → a bounded, single-line tail of the fire's own output, or "" when there is
+# none. ASCII-only and newline-free BY CONSTRUCTION: this is interpolated into a jq --arg, and a
+# `tail -c` that split a multi-byte UTF-8 sequence would make jq fail — dropping the entire record,
+# i.e. losing the evidence at precisely the moment it finally exists. The TAIL, not the head: a
+# fire's diagnostic is on its exit path, never in its banner.
+fire_excerpt() {
+  { [ -n "${1:-}" ] && [ -s "$1" ]; } || return 0
+  tr '\n\t' '  ' < "$1" 2>/dev/null | tr -cd '\40-\176' | tail -c 200
+}
+
 # ── S7: fair ordering ─────────────────────────────────────────────────────────────────────────────
 # thrash_map → {"<id>": <count of this id's `failed` records>} over the IDL, {} when unreadable.
 # An item that keeps failing to spawn must SINK: at the head of a FIFO slice it re-burns the same
@@ -797,12 +807,24 @@ dispatch() { # <dry|run|decide>
     fi
 
     # b. spawn → on non-zero, reopen the claim (leave it for the next run).
-    if "$spawn" "${fire_args[@]}" >/dev/null 2>&1; then
+    # The fire's own output is CAPTURED, not discarded. `>/dev/null 2>&1` here made every failure
+    # verdict un-evidenced — the defect class §1(c) names and R3 forbids, reproduced inside our own
+    # actuator: 112 `spawn non-zero` records in one 10 h window, each naming only that something
+    # failed. The rc and a bounded excerpt make the same record diagnosable, and the id-colon prefix
+    # is preserved verbatim because thrash_map splits the detail on the FIRST colon to recover the id.
+    local ferrf frc fexc
+    ferrf="$(mktemp "${TMPDIR:-/tmp}/cc-dispatch-fire.XXXXXX" 2>/dev/null || true)"
+    if [ -n "$ferrf" ]; then "$spawn" "${fire_args[@]}" >"$ferrf" 2>&1; frc=$?
+    else                     "$spawn" "${fire_args[@]}" >/dev/null 2>&1; frc=$?
+    fi
+    if [ "$frc" -eq 0 ]; then
       FIRED=$((FIRED + 1)); spawned=$((spawned + 1)); idl fired "$id -> $acct"
     else
       "$backlog" reopen "$id" --by "$SID" >/dev/null 2>&1 || true   # self-release (see above)
-      FAILED=$((FAILED + 1)); idl failed "$id: spawn non-zero (reopened)"
+      fexc="$(fire_excerpt "$ferrf")"
+      FAILED=$((FAILED + 1)); idl failed "$id: spawn rc=$frc (reopened)${fexc:+ — $fexc}"
     fi
+    [ -n "$ferrf" ] && rm -f "$ferrf" 2>/dev/null || true
   done
 
   idl_summary
@@ -847,10 +869,12 @@ rc="\${STUB_WP_RC:-0}"
 [ "\$rc" = 0 ] && cat "$tmp/plan.json"
 exit "\$rc"
 STUB
-  # spawn stub: rc from \$STUB_SPAWN_RC; logs argv to \$tmp/spawn.log.
+  # spawn stub: rc from \$STUB_SPAWN_RC; logs argv to \$tmp/spawn.log; diagnoses itself on stderr
+  # (the fixture for case (d)'s failure-evidence assertion — a real handoff-fire does the same).
   cat > "$tmp/spawn" <<STUB
 #!/bin/bash
 printf '%s\n' "\$*" >> "$tmp/spawn.log"
+echo "handoff-fire: no pane anchor resolved" >&2
 exit "\${STUB_SPAWN_RC:-0}"
 STUB
   chmod +x "$tmp/backlog" "$tmp/waveplan" "$tmp/spawn"
@@ -1012,6 +1036,10 @@ STUB
   STUB_SPAWN_RC=7 "$SELF" --once >/dev/null 2>&1
   t "(d) spawn-fail → item reopened"        grep -qx 'reopen i1' "$tmp/backlog.log"
   t "(d) spawn-fail → IDL failed"           grep -q '"action":"failed"' "$tmp/idl.jsonl"
+  # The verdict must NAME ITS CAUSE (§1(c)/R3): rc + the fire's own stderr, with the id-colon
+  # prefix intact so thrash_map's split(":") still recovers the id for S7 ordering.
+  t "(d) spawn-fail → the record names the rc"        grep -q '"detail":"i1: spawn rc=7 (reopened)' "$tmp/idl.jsonl"
+  t "(d) spawn-fail → and carries the fire's own why" grep -q 'no pane anchor resolved' "$tmp/idl.jsonl"
 
   # (e) --dry-run → plan printed, backlog UNCHANGED, spawn NOT called, no page.
   reset; seed_items '[{"id":"i1","project":"a","status":"open","title":"t1"}]'

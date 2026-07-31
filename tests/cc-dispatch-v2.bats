@@ -373,11 +373,12 @@ spawns()     { local n; n="$(grep -c . "$C/spawn.log" 2>/dev/null || true)"; ech
   [ "$(dec)" -eq 1 ]
 }
 
-@test "A12: the in-script selftest still RED-proves every branch (111 checks, zero FAIL)" {
+@test "A12: the in-script selftest still RED-proves every branch (113 checks, zero FAIL)" {
   run "$DISP" selftest
   [ "$status" -eq 0 ] || false
   # 106 → 111 with multi-project coverage (f7abcbdee98c): the brief's rails line is read from the
   # project, so both branches are asserted, plus the (c6) foreign-project positive control.
-  [ "$(printf '%s' "$output" | grep -c '^  ok ')" -eq 111 ] || false
+  # 111 → 113: a spawn failure now records its rc and the fire's own stderr excerpt (§1(c)/R3).
+  [ "$(printf '%s' "$output" | grep -c '^  ok ')" -eq 113 ] || false
   ! printf '%s' "$output" | grep -q '^  FAIL'
 }

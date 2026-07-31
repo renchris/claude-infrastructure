@@ -25,9 +25,12 @@ printf '%s' "$items" \
 EOF
 
   # spawn stub: append argv to $SPAWN_LOG; rc from $SPAWN_RC_FILE.
+  # The stderr line is the FIXTURE for the failure-evidence assertion in (d): a real handoff-fire
+  # diagnoses itself on stderr, and until that stream was captured the dispatcher threw it away.
   cat > "$C/stubs/spawn" <<'EOF'
 #!/bin/bash
 printf '%s\n' "$*" >> "$SPAWN_LOG"
+echo "handoff-fire: no pane anchor resolved" >&2
 exit "$(cat "$SPAWN_RC_FILE" 2>/dev/null || echo 0)"
 EOF
   # live-worker oracle stub (v2 admission reads it every pass). MUST be stubbed: unstubbed,
@@ -65,7 +68,9 @@ idl_action() { tail -1 "$C/idl.jsonl" | jq -r '.action'; }
   run "$DISP" selftest
   [ "$status" -eq 0 ]
   n_ok="$(printf '%s' "$output" | grep -c '^  ok ')"
-  [ "$n_ok" -eq 111 ]   # 49 pre-v2 + the decision/admission split (S1,S2,S6,S7 + kill switches).
+  [ "$n_ok" -eq 113 ]   # 49 pre-v2 + the decision/admission split (S1,S2,S6,S7 + kill switches).
+                        # 111 → 113: the spawn-failure record now names its rc AND carries the
+                        # fire's own stderr, so (d) asserts the cause is present, not just the verdict.
                         # 108 → 106 when the ceiling moved off the accounts oracle onto the ledger's
                         # `claimed` fold (§3 S2): the oracle-hang bound and the zero-timeout config
                         # case had nothing left to bound. Fewer checks here is a DELETION of dead
@@ -135,6 +140,14 @@ idl_action() { tail -1 "$C/idl.jsonl" | jq -r '.action'; }
   [ "$(status_of "$id")" = open ]
   grep -q -- '--prompt-file /tmp/fire.txt' "$C/spawn.log"
   grep -q '"action":"failed"' "$C/idl.jsonl"
+  # …and the verdict NAMES ITS CAUSE (§1(c)/R3). The rc and the fire's own diagnostic both ride on
+  # the record; without them "spawn non-zero" is exactly the un-evidenced verdict this rebuild
+  # exists to remove, and 112 of them accrued in a single 10 h window saying nothing.
+  grep -q '"detail":"'"$id"': spawn rc=7 (reopened)' "$C/idl.jsonl"
+  grep -q 'no pane anchor resolved' "$C/idl.jsonl"
+  # the id prefix survives verbatim — thrash_map recovers the id by splitting detail on the FIRST
+  # colon, so an excerpt appended after it must not disturb S7 ordering
+  [ "$(jq -rs '[.[]|select(.action=="failed")]|last|.detail|split(":")|.[0]' "$C/idl.jsonl")" = "$id" ]
 }
 
 @test "(e) --dry-run → plan printed, backlog UNCHANGED, spawn NOT called" {
