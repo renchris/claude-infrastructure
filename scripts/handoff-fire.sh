@@ -1404,14 +1404,32 @@ check_goal_length() { # $1=prompt-file → 0 ok, 1 (loud) if a /goal line body e
   return 0
 }
 
-# ---- P0-16b slash-command HEAD guard (item ff2d6609a33e) --------------------------------------
+# ---- P0-16b slash-command HEAD guard (item ff2d6609a33e; universalized by item c89b9c7b1526) ---
 # check_goal_length above measures a /goal LINE's own body — but the live failure is one level up:
 # when the payload's FIRST line is a slash command, the harness parses the WHOLE submission as that
-# command, so a short `/goal do the thing.` followed by a 6000-char brief blows the 4000-char cap on
-# text the line-scan never counted. The prompt is rejected, nothing submits, and the pane idles at an
-# empty composer looking fired (memory handoff-fire-goal-prefix-trap). Briefs must start with PLAIN
-# TEXT; a /goal head over the cap is REFUSED (never a silent dead fire), any other slash head warns.
-check_slash_head() { # $1=prompt-file → 0 ok/warned, 1 (loud) if a /goal head would exceed the cap
+# command. Two deaths follow from that one fact, and BOTH end at a task-less pane:
+#
+#   · /goal OVER the cap — a short `/goal do the thing.` followed by a 6000-char brief blows the
+#     4000-char command cap on text the line-scan never counted. The submission is REJECTED, nothing
+#     submits, and the pane idles at an empty composer looking fired (handoff-fire-goal-prefix-trap).
+#   · ANY OTHER slash head (/research, /ship, /wrap, /handoff, a custom command) — the harness runs
+#     THAT COMMAND, with the rest of the brief as its argument. The brief is consumed as an argument
+#     or rejected for length; either way the successor is never handed it AS WORK, and the pane idles
+#     task-less. `/research`-headed is the shape the 2026-07-22 audit filed as [S2].
+#
+# Until item c89b9c7b1526 only the FIRST class refused; the second merely WARNED and fired. The
+# asymmetry was never a property of the harness — it was a property of what had been measured. The
+# plain-text-first-line rule is UNIVERSAL, so the refusal is too.
+#
+# Both classes keep their own refuse_reason: `payload-goal-cap` names a length problem with a length
+# fix, `payload-slash-head` names a parse problem with a structural fix. Collapsing them into one
+# token would make the ledger unable to tell "your brief was too long" from "your brief was a
+# command", which are different authoring mistakes.
+#
+# Escape: FIRE_ALLOW_SLASH_HEAD=1, for the caller that genuinely means to submit a command (a short
+# `/goal …` recycle nudge with no brief body). It is NAMED IN THE REFUSAL — a universal fail-closed
+# rule whose only override is undiscoverable just relocates the stall to whoever hits it.
+check_slash_head() { # $1=prompt-file → 0 ok, 1 (loud) if the first non-blank line is a slash command
   local pf="$1" limit="${GOAL_MAX_CHARS:-4000}" line head total
   [ -f "$pf" ] || return 0
   [ "${FIRE_ALLOW_SLASH_HEAD:-0}" = 1 ] && return 0
@@ -1429,8 +1447,11 @@ check_slash_head() { # $1=prompt-file → 0 ok/warned, 1 (loud) if a /goal head 
     emit_fire_refusal payload-goal-cap "first line is $head and payload is ${total} > ${limit} chars"
     return 1
   fi
-  echo "⚠ prompt starts with the slash command '$head' — the harness parses the whole submission as a command, not a brief. Prefer a PLAIN-TEXT first line (handoff-fire-goal-prefix-trap)." >&2
-  return 0
+  echo "!! prompt STARTS with the slash command '$head' — the harness parses the WHOLE submission as that command, not as a brief, so the ${total}-char body is consumed as its argument (or rejected for length) and the fired pane would idle TASK-LESS (memory handoff-fire-goal-prefix-trap)." >&2
+  echo "   Fix: start the brief with PLAIN TEXT — e.g. 'TASK — <one line>. …' — and move '$head' onto its own line further down, where it is instruction rather than the parsed head." >&2
+  echo "   Override (only if submitting a COMMAND is genuinely the intent): FIRE_ALLOW_SLASH_HEAD=1." >&2
+  emit_fire_refusal payload-slash-head "first line is the slash command $head (payload ${total} chars)"
+  return 1
 }
 
 # ---- P0-17 machine-capacity admission gate (lag incident 2026-07-29) --------------------------

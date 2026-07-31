@@ -201,6 +201,14 @@ shell (verified) — metacharacters and newlines arrive literally; only trailing
   the TUI parses):** recognition is POSITIONAL — it must be the payload's very FIRST line
   (`/goal <one-line goal>`, pointer/constraint lines after). A `/x` buried mid-payload reads as
   ordinary prose and is NOT invoked (useful when you want to *mention* a command without running it).
+  > **🚨 THE FIRE PATH NOW REFUSES A SLASH-COMMAND-HEADED PAYLOAD BY DEFAULT.** `handoff-fire.sh`'s
+  > `check_slash_head` was universalized (item `c89b9c7b1526`, 2026-07-31) from "only an over-cap
+  > `/goal`" to "ANY leading slash command (`/goal`, `/research`, `/ship`, `/wrap`, a custom `/x`)",
+  > because the harness parses the whole submission as that command — the brief is consumed as its
+  > argument or rejected for length, and either way the pane idles TASK-LESS. So the positional
+  > feature above is **opt-in through a fire:** pass `FIRE_ALLOW_SLASH_HEAD=1` (and, for `/goal`, keep
+  > the whole payload ≤4000 chars) when you genuinely mean to submit a command; otherwise lead with
+  > PLAIN TEXT and move the `/x` onto a later STEP line. The manual-paste fallback is unaffected.
   The CLI does not parse slash commands out of the initial prompt — the receiving model dispatches a
   LEADING user-typed `/x` via its Skill tool (current harness behavior, system-prompt-driven;
   re-verify on CC bumps), equivalent in effect for command-file skills. When `/goal` leads a fired

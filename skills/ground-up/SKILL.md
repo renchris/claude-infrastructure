@@ -93,7 +93,20 @@ ceiling and the accrual read, then stop.
 ## Dispatch (the fan-out the map uses)
 
 One subsystem per session, ONE or TWO concurrent across the fleet at most (each rebuild
-lands aggressively; the box and the operator are shared). Fire via /handoff with:
-`/ground-up <topic-slug> — scope row from docs/plans/GROUND_UP_REBUILD_MAP.md; read the
-map row + this skill + the exemplar plan FIRST.` Update the map row (status, plan link,
-landed shas) as part of the rebuild's own DoD.
+lands aggressively; the box and the operator are shared). Fire via /handoff with a
+PLAIN-TEXT-headed payload — **never a leading slash command.** `handoff-fire`'s
+`check_slash_head` refuses any slash head (the harness parses the whole submission as that
+command, so the brief is consumed or rejected and the pane idles task-less — the exact
+silent-dead-fire this campaign already hit and documented in
+`docs/plans/GROUND_UP_DISPATCH.md`). Lead with the task; put the skill invocation on its own
+STEP line, where it reads as an instruction rather than the parsed head:
+
+```
+YOUR TASK — a from-first-principles GROUND-UP rebuild of ONE subsystem: <subsystem>
+(<topic-slug>, row from docs/plans/GROUND_UP_REBUILD_MAP.md).
+
+STEP 1: run /ground-up <topic-slug>. Before any other tool call, READ the map row +
+this skill + the exemplar plan.
+```
+
+Update the map row (status, plan link, landed shas) as part of the rebuild's own DoD.

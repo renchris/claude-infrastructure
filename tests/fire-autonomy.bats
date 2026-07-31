@@ -216,9 +216,28 @@ STUB
   ! printf '%s\n' "$output" | grep -q 'command:'
 }
 
-@test "E2E: an under-cap /goal passes the guard (--dry-run exit 0)" {
+# This E2E isolates THIS section's subject — check_goal_length (the /goal LENGTH guard) — proving it
+# ADMITS an under-cap /goal. Since item c89b9c7b1526 the sibling check_slash_head runs immediately
+# after and REFUSES any leading slash command regardless of length, so a bare under-cap /goal now
+# exits 1 at that second guard. FIRE_ALLOW_SLASH_HEAD=1 bypasses ONLY check_slash_head (it is the
+# first line of that function), leaving check_goal_length fully active — which is exactly what this
+# test must exercise. The universalized slash-head refusal has its own coverage in
+# fire-engagement.bats and handoff-payload-gates.bats.
+@test "E2E: an under-cap /goal passes the LENGTH guard (--dry-run exit 0, slash-head escape on)" {
   printf '/goal do the thing\n\nbrief body\n' > "$BATS_TEST_TMPDIR/g.md"
-  run env GOAL_MAX_CHARS=4000 bash "$HF" --prompt-file "$BATS_TEST_TMPDIR/g.md" \
+  run env GOAL_MAX_CHARS=4000 FIRE_ALLOW_SLASH_HEAD=1 bash "$HF" --prompt-file "$BATS_TEST_TMPDIR/g.md" \
     --launcher claude-test --cwd "$BATS_TEST_TMPDIR" --dry-run
   [ "$status" -eq 0 ]
+}
+
+# NEW (c89b9c7b1526): the same under-cap /goal, WITHOUT the escape, is now refused at the pre-fire
+# chokepoint — the E2E proof that the universalized guard fires through the whole script, not just as
+# an extracted unit. This is the [S2] hole closed: a slash-headed payload no longer reaches spawn.
+@test "E2E: an under-cap /goal is REFUSED pre-fire by the universalized slash-head guard" {
+  printf '/goal do the thing\n\nbrief body\n' > "$BATS_TEST_TMPDIR/g2.md"
+  run env GOAL_MAX_CHARS=4000 bash "$HF" --prompt-file "$BATS_TEST_TMPDIR/g2.md" \
+    --launcher claude-test --cwd "$BATS_TEST_TMPDIR" --dry-run
+  [ "$status" -ne 0 ]
+  printf '%s\n' "$output" | grep -q "STARTS with the slash command '/goal'"
+  ! printf '%s\n' "$output" | grep -q 'command:'
 }
