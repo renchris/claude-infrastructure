@@ -1319,3 +1319,113 @@ regression test — `50bac438`.
   tree before fixing where it points. `32be90485a45` named the wrong file AND understated the
   severity; taking it at its word would have produced a no-op edit to `qos-census.sh` and left real
   arbitrary-binary-selection in the shim.
+
+---
+
+## §12 — 2026-07-31 post-panic pass: the chokepoint gap is real, but universalising the EXISTING gate would deadlock the fleet
+
+Added after the 2026-07-31 11:46:47 spinlock panic (`a123c35d`). Read §8.5.2's retraction and
+§8.5.7 FIRST — this section depends on both and does not repeat them.
+
+### 12.1 Confirmed: the hardware term guards 2 of 7+ spawn paths (extends §8.5.2)
+
+`capacity_gate()` is still the only hardware term in the tree. Measured coverage of session-spawn
+paths this session:
+
+| path | routes through `handoff-fire.sh`? |
+|---|---|
+| `lr-reset-poller.sh`, `lr-handoff.sh` | GATED |
+| `scripts/boot-resume.sh`, `boot-resume-launch.sh` | **BYPASS** |
+| `limit-recover/lr-fire-resume.sh`, `lr-transplant.sh` | **BYPASS** |
+| `~/.reso/bin/reso-resume-one` | **BYPASS** |
+| **`Agent` tool** (subagents / teammates) | **BYPASS** |
+
+The `Agent` path matters most — it is the highest-volume spawn surface. Its two PreToolUse hooks
+bind policy (`agent-teams-enforce.sh`) and **frontier budget** (`frontier-spawn-gate.sh`,
+`max_fable_spawns_per_session`), never hardware. So the spawn-cap PATTERN is proven here; it is
+keyed on the wrong resource. This extends §8.5.7's closing note ("the organic paths … were never
+given a fleet term") with the resume/Agent paths enumerated.
+
+The gate's own header asserts *"EVERY fire mode funnels through this script … this is the ONE place
+where a HARDWARE term can bind"*. **That sentence is false in the tree** and should be corrected to
+name the paths it actually covers — an in-source claim of chokepoint status that is untrue is worse
+than no claim, because it stops the next reader from checking.
+
+### 12.2 ⛔ DO NOT "just bind `capacity_gate()` everywhere" — §8.5.2 already discarded that architecture
+
+This was the obvious fix and it is wrong. §8.5.2's retraction says to discard *"1-min `loadavg/ncpu`
+as the saturation proxy with a fixed 2.0 ceiling and no sustained-saturation escape"* and to key a
+redesign on a **sheddable, session-attributable** quantity.
+
+**Live proof, 2026-07-31 12:13:** load **21.55** on 10 cores = **2.16/core**, i.e. already over the
+2.0 ceiling, with 13 sessions and 24 GB RAM free and `0 B` compressor — a perfectly healthy box.
+Binding the existing gate to all seven paths would have refused **every** spawn at that moment,
+including every recovery path, and §8.5.7 shows why it would not recover on its own: iTerm2 +
+WindowServer + XProtect are ~2.4 unsheddable cores, so refusing spawns cannot lower the number the
+gate reads. That is `fail-closed-degradation-as-amplifier` and memory
+`universalizing-a-mechanism-promotes-its-latent-leak` — arming a narrow mechanism fleet-wide
+promotes its latent defect to the default path.
+
+**What to build instead** (unchanged from §8.5.2, restated as an instruction): the term must be
+sheddable and session-attributable — per-session memory footprint and/or a session count with a
+sustained-saturation escape — read from harness config that **cannot lag** the landed tree, and
+inertness must be LOUD (`capacity_gate: ABSENT`) rather than a silent admit.
+
+### 12.3 The 2026-07-31 panic is a DIFFERENT cause class; no spawn gate can see it
+
+`threadprice` (§ commit `a123c35d`) never spawned a session — it was one Bash call inside a live
+session that walked `pthread_create` 2000 → 8000 → 16000 against `kern.num_taskthreads`=16384.
+Verified arithmetic: 8444 pages × 16384 B = **131.9 MB** RSS against a 4096 MB headroom floor, and
+threads parked on a condvar are **not runnable** so they add ~0 to loadavg. **Both gate terms are
+structurally blind; the gate would have ADMITTED.**
+
+| class | example | control point | resource term |
+|---|---|---|---|
+| A — aggregate fleet sprawl | 2026-07-29 lag; ~30-pane freeze | spawn admission | sheddable/attributable (per §12.2) — NOT raw loadavg |
+| B — single runaway action in one session | 2026-07-31 `threadprice` | **Bash tool boundary** | thread count, proc count, alloc size |
+
+Class B's chokepoint already exists: **M7 moved QoS enforcement to the Bash PreToolUse boundary**
+(`config/qos-batch.patterns`, 22/22 green). A resource-ladder term belongs there, as a *resource*
+guard — never a denylist of binary names (`denylist-enumerates-spellings-not-the-class`).
+
+### 12.4 `boot-resume.sh` is a LATENT bomb — do not activate before §12.2 lands
+
+It resumes at GUI login, i.e. into the boot storm — **measured loadavg 346 at boot+2 min today**,
+decaying to 89 within 90 s — and it has no capacity term. It is currently INERT
+(`~/Library/LaunchAgents/com.claude.boot-resume.plist` exists; `launchctl list` shows nothing; its
+own header says "RunAtLoad, shipped UNLOADED"). That inertness is why nothing auto-resumed after
+the panic. It IS bounded to 4 by `CC_BOOT_RESUME_MAX_TOTAL`, so this is bad-not-runaway.
+
+**Operator consequence: activating boot-resume as-is converts "the box crashed" into "the box
+crashes, reboots, and fires 4 Opus-max sessions into a load-346 storm, ungated."**
+
+### 12.5 §8.5.4's fork storm is the dominant term we actually own — and it has GROWN
+
+Re-measured 2026-07-31 against the plan's own figures:
+
+| hook | `$(` fork sites | plan's figure |
+|---|---|---|
+| `waiting-recycle.sh` | **144** | 131 |
+| `operator-readout.sh` | **75** | (75 pipeline stages noted) |
+| `teammate-checkpoint.sh` | 22 | 17 |
+| `validate-bash.sh` | 18 | 13 |
+
+Hook counts per event from live `settings.json`: **Stop = 11 hooks**, PreToolUse = 13 (6 on Bash),
+SessionStart = 14, PostToolUse = 10, UserPromptSubmit = 6.
+
+So a single session's Stop can cost ~200+ forks, at 15 ms/fork under load, ×N sessions — and
+§8.5.4's O(N²) argument (forks/s is O(N); cost-per-fork is O(load); load is O(forks/s)) means this
+is the term that makes every other term worse. Unlike iTerm2/WindowServer/XProtect it is **entirely
+ours**. Ranked by measured impact this is the highest-value remaining capacity fix, and §8.5.4
+already names the structural answer (a long-lived per-session hook broker; bounded fallback =
+collapse the 5 PreToolUse/Bash hooks into one and the 11 Stop hooks into one).
+
+### 12.6 Method notes from this pass
+- The shared checkout was **39 behind** origin/main; cutting a branch there would have been stale.
+- `scripts/handoff-fire.sh` was contested three ways (dirty in the shared checkout from a
+  panic-killed session, dirty in `wt-c89b9c7b1526` from a live session, plus this pass) ⇒ the
+  extraction must be a NEW file + a parity test, never an edit to the contested file.
+- `pgrep -c` does not exist on macOS; `cmd 2>/dev/null || echo 0` turns its usage error into a
+  fabricated all-clear. Filed as trap #6 in memory `verification-harness-vacuous-pass-traps`.
+- A resumed TUI showing restored scrollback proves the transcript LOADED, not that the session is
+  RUNNING — only post-boot transcript rows distinguish the two.
