@@ -195,6 +195,24 @@ arch_rows() { cat "$CC_PERMARCHIVE_DIR"/*.jsonl 2>/dev/null; }
   [ "$(arch_rows | jq -r '.session_id' | sort | tr '\n' ' ')" = "s-a1 s-a2 s-a3 " ]
 }
 
+@test "cleared_tool records WHICH tool cleared it, so a collateral clear is detectable" {
+  # PostToolUse fires for every tool, not only the prompted one. After a DENIAL the turn can
+  # continue and run some other tool whose PostToolUse clears this beacon — without cleared_tool
+  # that denial is indistinguishable from an approval, and would be archived as one.
+  jq -nc '{session_id:"s-coll",tool_name:"Bash",tool_input:{command:"rm -rf /"},cwd:"/w"}' | "$H" write
+  jq -nc '{session_id:"s-coll",tool_name:"Read",hook_event_name:"PostToolUse"}' | "$H" clear
+  row="$(arch_rows | jq -r 'select(.session_id=="s-coll")')"
+  [ "$(printf '%s' "$row" | jq -r '.tool_name')"    = Bash ]        # what was PROMPTED for
+  [ "$(printf '%s' "$row" | jq -r '.cleared_tool')" = Read ]        # what CLEARED it
+}
+
+@test "a genuine grant records the SAME tool in both fields" {
+  jq -nc '{session_id:"s-gr",tool_name:"Bash",tool_input:{command:"ls"},cwd:"/w"}' | "$H" write
+  jq -nc '{session_id:"s-gr",tool_name:"Bash",hook_event_name:"PostToolUse"}' | "$H" clear
+  row="$(arch_rows | jq -r 'select(.session_id=="s-gr")')"
+  [ "$(printf '%s' "$row" | jq -r '.tool_name')" = "$(printf '%s' "$row" | jq -r '.cleared_tool')" ]
+}
+
 @test "resolved_by distinguishes the GRANT path from the deny/abandon path" {
   # PostToolUse fires ONLY on grant; Stop fires on either. Without this field the archive cannot
   # tell an approval from a refusal, which is exactly what the classifier needs to learn from.

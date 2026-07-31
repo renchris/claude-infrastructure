@@ -94,9 +94,13 @@ beat() {
 #   • The classifier therefore can never be tuned on real data, which is Step 3's named guardrail.
 # So the record is appended to a durable append-only JSONL before it is removed.
 #
-# `resolved_by` is the load-bearing field for that tuning: PostToolUse only fires on the GRANT
-# path, so a record cleared by PostToolUse was approved, while one cleared by Stop/SessionEnd was
-# denied or abandoned. That distinction cannot be recovered from anywhere else.
+# `resolved_by` + `cleared_tool` are the load-bearing fields for that tuning, and the PAIR is
+# required. The tempting shortcut — "PostToolUse only fires on the grant path, so PostToolUse means
+# approved" — is FALSE: PostToolUse fires for every tool, not only the prompted one, so after a
+# DENIAL the turn can continue, run some other tool, and have THAT tool's PostToolUse clear this
+# still-pending beacon. The denial would then be archived as an approval. Recording which tool did
+# the clearing lets the consumer demand a match before calling it a grant, and report a mismatch as
+# UNKNOWN rather than guessing. Neither field is recoverable from anywhere else after the fact.
 #
 # ATOMICITY: many sessions append to one file concurrently. A single small write(2) under O_APPEND
 # does not interleave, so the record is length-BOUNDED (ARCH_MAXLEN, default 3500 B — comfortably
@@ -108,12 +112,20 @@ archive() {
   # One date(1) fork for both the timestamp and the month bucket.
   local d; d="$(date +'%s %Y-%m' 2>/dev/null)" || return 0
   rts="${d%% *}"; mon="${d##* }"
-  local by; by="$(printf '%s' "$INPUT" | jq -r '.hook_event_name // empty' 2>/dev/null || true)"
+  # BOTH fields in one jq fork. `cleared_tool` is what makes the outcome inferable at all:
+  # PostToolUse fires for EVERY tool, not only the prompted one. After a DENIAL the turn can
+  # continue and run some other tool, whose PostToolUse then clears this still-pending beacon —
+  # so `resolved_by == PostToolUse` alone would silently record that denial as an approval.
+  # Comparing cleared_tool against the beacon's own tool_name separates a real grant from such a
+  # collateral clear; the consumer treats a mismatch as UNKNOWN rather than guessing either way.
+  local by ct _bi
+  _bi="$(printf '%s' "$INPUT" | jq -r '[(.hook_event_name // ""), (.tool_name // "")] | join("\u001f")' 2>/dev/null || true)"
+  IFS=$'\x1f' read -r by ct <<<"$_bi" || true
 
-  line="$(jq -c --arg sid "$SID" --arg by "${by:-unknown}" --argjson rts "$rts" \
+  line="$(jq -c --arg sid "$SID" --arg by "${by:-unknown}" --arg ct "$ct" --argjson rts "$rts" \
       '{session_id:$sid, ts:(.ts//$rts), resolved_ts:$rts, waited_s:($rts - (.ts//$rts)),
-        resolved_by:$by, tool_name:(.tool_name//""), tool_input:(.tool_input//{}),
-        cwd:(.cwd//"")}' "$BEACON" 2>/dev/null)" || return 0
+        resolved_by:$by, cleared_tool:$ct, tool_name:(.tool_name//""),
+        tool_input:(.tool_input//{}), cwd:(.cwd//"")}' "$BEACON" 2>/dev/null)" || return 0
   [[ -z "$line" ]] && return 0
 
   if (( ${#line} > ARCH_MAXLEN )); then

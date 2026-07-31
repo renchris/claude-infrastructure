@@ -128,6 +128,40 @@ print(json.dumps({'session_id':sys.argv[1],'ts':int(time.time())-int(sys.argv[4]
   [[ "$output" == *"unclassified 0"* ]]
 }
 
+@test "a PostToolUse clear by a DIFFERENT tool is NOT counted as an approval" {
+  # The load-bearing correction: PostToolUse fires for every tool, so after a denial some later
+  # tool's PostToolUse can clear the pending beacon. Counting that as an approval would overstate
+  # how permissive the classifier is — the one number this archive exists to inform.
+  export CC_PERMARCHIVE_DIR="$BATS_TEST_TMPDIR/arch"; mkdir -p "$CC_PERMARCHIVE_DIR"
+  printf '%s\n' '{"session_id":"s-coll","ts":1,"resolved_ts":2,"waited_s":1,"resolved_by":"PostToolUse","cleared_tool":"Read","tool_name":"Bash","tool_input":{"command":"rm -rf /"},"cwd":"/w"}' \
+    >> "$CC_PERMARCHIVE_DIR/2026-07.jsonl"
+  mk "ls -l"
+  run python3 "$AUDIT"
+  [[ "$output" == *"approved 0"* ]]
+  [[ "$output" == *"denied/abandoned 0"* ]]
+  [[ "$output" == *"cleared by a DIFFERENT tool"* ]]
+}
+
+@test "a PostToolUse clear by the SAME tool IS counted as an approval" {
+  export CC_PERMARCHIVE_DIR="$BATS_TEST_TMPDIR/arch"; mkdir -p "$CC_PERMARCHIVE_DIR"
+  printf '%s\n' '{"session_id":"s-gr","ts":1,"resolved_ts":2,"waited_s":1,"resolved_by":"PostToolUse","cleared_tool":"Bash","tool_name":"Bash","tool_input":{"command":"ls"},"cwd":"/w"}' \
+    >> "$CC_PERMARCHIVE_DIR/2026-07.jsonl"
+  mk "ls -l"
+  run python3 "$AUDIT"
+  [[ "$output" == *"approved 1"* ]]
+  [[ "$output" != *"cleared by a DIFFERENT tool"* ]]
+}
+
+@test "a legacy row with no cleared_tool still counts as approved, not silently dropped" {
+  # Rows written before cleared_tool existed must not vanish from the totals.
+  export CC_PERMARCHIVE_DIR="$BATS_TEST_TMPDIR/arch"; mkdir -p "$CC_PERMARCHIVE_DIR"
+  printf '%s\n' '{"session_id":"s-old","ts":1,"resolved_ts":2,"waited_s":1,"resolved_by":"PostToolUse","tool_name":"Bash","tool_input":{"command":"ls"},"cwd":"/w"}' \
+    >> "$CC_PERMARCHIVE_DIR/2026-07.jsonl"
+  mk "ls -l"
+  run python3 "$AUDIT"
+  [[ "$output" == *"approved 1"* ]]
+}
+
 @test "an unrecognised resolved_by is left UNCLASSIFIED, never folded into either bucket" {
   # Silently counting an unknown clearer as an approval would overstate how permissive the
   # classifier is — the exact number this archive exists to inform.
