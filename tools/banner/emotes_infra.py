@@ -490,7 +490,7 @@ def _standaside() -> Emote:
     # A tile's worth of travel, spent unevenly: normal drift, a hard acceleration, a long crawl,
     # then normal drift again. The segment distances are made to sum to EXACTLY one tile, which is
     # the only way a variable-rate scroll can loop without a visible jump at the wrap.
-    plan = [(0.0, 34.0), (2.6, 110.0), (3.6, 4.0), (8.6, 34.0), (EMOTE_P, 0.0)]
+    plan = [(0.0, 34.0), (2.6, 190.0), (3.6, 4.0), (8.6, 34.0), (EMOTE_P, 0.0)]
     marks: list[tuple[float, float]] = []
     d = 0.0
     for (t0, v), (t1, _) in zip(plan, plan[1:]):
@@ -521,7 +521,7 @@ def _standaside() -> Emote:
         lumps = "".join(
             _mound(k * TILE + x, wd, ht)
             for k in range(-1, 4)
-            for x, wd, ht in ((10, 152, 58), (196, 106, 30))
+            for x, wd, ht in ((16, 168, 58), (244, 118, 32))
         )
         return f'<g class="saH"><g class="emd0">{lumps}</g></g>'
 
@@ -576,9 +576,14 @@ def _letter() -> Emote:
             + _rect(lx + lw - 11 - 5 * k, y + 6 + 4 * k, 5, 4)
             for k in range(3)
         )
+        # `.eink`, NOT `.eglyph`. `.eglyph` rests at `opacity:0` — that is the GLYPH channel's
+        # resting state, there so a reduced-motion still (every animation switched off) does not
+        # paint a floating punctuation mark beside a creature doing nothing. Borrowing it for a
+        # piece of ordinary furniture inherits the hiding and nothing else: the envelope rendered
+        # as its six dark flap specks alone on bare ground, and every gate passed.
         return (
             f'<g class="ltG"><g class="ltF">'
-            f'<g class="eglyph">{_rect(lx, y, lw, lh)}</g>'
+            f'<g class="eink">{_rect(lx, y, lw, lh)}</g>'
             f'<g class="efg">{chev}</g>'
             f"</g></g>" + glyph("spark", gx, gy, "ltS")
         )
