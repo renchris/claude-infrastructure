@@ -1,7 +1,8 @@
 ---
-status: open
+status: complete
 owner: unassigned
 created: 2026-07-28
+completed: 2026-07-31
 supersedes: none
 ---
 
@@ -14,15 +15,29 @@ needed is **landed** (`84b14daf`); this doc covers the two follow-ons the operat
 
 | Artifact | Current | Notes |
 |---|---|---|
-| `assets/demo/handoff-live.webp` | 1200×716, 20 fps, **2,892,390 B** | the INLINE hero (was a 3,483,666 B GIF — Task 1) |
+| `assets/demo/handoff-live.webp` | 1200×716, 20 fps, **4,226,254 B** | the INLINE hero (was a 3,483,666 B GIF — Task 1) |
 | `assets/demo/handoff-live.mp4` | 1920×1144, 60 fps, **2,528,078 B** | linked from the caption, not embedded; also the encode SOURCE |
 | `assets/demo/handoff-real.webp` | 1200×640, 25 fps, **633,570 B** | the VHS clip (was a 708,919 B GIF — Task 1) |
 | `assets/demo/handoff-real.tape` | — | `vhs` → GIF intermediate (gitignored) → `gif2webp` |
 | `assets/diagrams/*.mmd` + SVGs | — | `npm run diagrams`, CI-guarded by `diagrams:check` |
 
-Inline payload **4,192,585 → 3,525,960 B (−666,625 B, −15.9 %)**, with measured quality
-equal or better on both assets. Task 1 and Task 2 are **RESOLVED** — see below. Task 3 is
-a separate track and is untouched.
+Inline payload **4,192,585 → 4,859,824 B (+667,239 B, +15.9 %)** — bytes deliberately *spent*
+on quality, not saved. § Task 1 carries the measurements and why nothing in the range is both
+clean and smaller.
+
+> **This summary asserted the opposite until 2026-07-31.** It carried `2,892,390 B` and
+> `−15.9 %` — the lossy-q65 encode that was **shipped and then reverted** the same day. The
+> Task 1 section below was revised twice; this table was not, so the doc's first screen
+> contradicted its own body for two days. Kept as a note because the failure mode generalises:
+> **a revision that edits the argument and not the abstract leaves the summary asserting the
+> retracted result**, and the summary is what a reader trusts first.
+
+**Status: closed.** Tasks 1 and 2 are **RESOLVED** and re-verified against disk 2026-07-31 (see
+§ Verification). Task 3 has **split out** to `README_HERO_BANNER.md` (landed `1c54e73c`), with
+`BANNER_NARRATIVE_SPEC.md` and `BANNER_V2_SUBJECT_OPTIONS.md` beside it — each separately
+tracked, so nothing here is orphaned. § Task 3 is retained below as the **reference section
+the banner track cites** for the operator ask and the settled constraints; it is not open work.
+This doc has no remaining work of its own.
 
 ## Task 1 — compression — **RESOLVED 2026-07-29, revised twice the same day**
 
@@ -263,6 +278,44 @@ The process is genuinely repeatable and belongs in a skill (`/harvest-skill` is 
 
 </details>
 
+## Verification — 2026-07-31, re-measured against disk before closing
+
+This doc's claims were re-derived from the committed artifacts rather than re-read, because a
+plan that has already retracted one measured claim has no standing to close on self-report.
+
+**The recipe reproduces the shipped artifact byte-for-byte.** The § Task 1 regeneration recipe
+was replayed verbatim into a scratch path: `ffmpeg` extracted **610** frames, `img2webp` emitted
+**4,226,254 B**, and the result is **SHA256-identical** to the committed
+`assets/demo/handoff-live.webp` (`622c8e51…fadf9e`, 87 s at load ~10-22). That is the check that
+matters — a recipe that cannot re-emit the artifact is documentation, not a build step.
+
+| Claim | Measured | |
+|---|---|---|
+| `handoff-live.webp` 4,226,254 B · 1200×716 · 610 frames · 30,500 ms | exact, `webpinfo` | ✓ |
+| `handoff-real.webp` 633,570 B · 1200×640 · 534 frames · 63,960 ms | exact, `webpinfo` | ✓ |
+| `handoff-live.mp4` 2,528,078 B · 1920×1144 · 60 fps · 1,830 frames | exact, `ffprobe` | ✓ |
+| this `ffmpeg` has no `drawtext` / no freetype | 0 filters, 0 in `-version` | ✓ |
+| `pgrep -c` invalid on macOS | rc 2 + usage | ✓ |
+| `gif2webp` is lossless by default, no `-lossless` flag | `Error! Unknown option '-lossless'` | ✓ |
+| `gifski` / `gifsicle` / `avifenc` still absent; `vhs` present | re-ran `command -v` | ✓ |
+
+**What was actually wrong** — two defects, both in the *pointers*, none in the measurements:
+
+1. **The summary table asserted the reverted encode** (fixed above, § Where things stand).
+2. **All four `file:line` references in `skills/demo-recording/SKILL.md` had rotted in two days**
+   — written 2026-07-29, all four wrong by 2026-07-31. Three were pure line drift (the fact still
+   held, elsewhere in the file); one was a **rotted fact**: `hooks/mailbox-drain.sh` no longer does
+   `cat >/dev/null`, so the skill's `echo '{}' |` remedy now silently exercises the *pane-keyed
+   fallback* rather than the real session-keyed path. Fixed by replacing every line number with
+   **the `grep` that finds the line**, which cannot drift. **A line number is a cache of a
+   position, and nothing in the repo invalidates it** — in a file that moves, cite a string.
+
+<sub>Not built, and named rather than left implied: a lint that re-checks doc→code anchors. This
+repo holds every gate to a red-proof (`banner-gate-redproof.py`, 24 cases each required to fire on
+its own message), so a properly-gated one is its own piece of work, not a tail on this. Making the
+anchors greppable removes the *line-drift* half of the failure mode outright; the *fact*-rot half
+(the `mailbox-drain.sh` case) is what a lint would still catch.</sub>
+
 ## Guardrail earned the hard way
 
 `d6845630` deleted 426 lines of README. Cause: a greedy regex (`(?:<[^>]+>[^<]*)*</sub>`) used to
@@ -271,7 +324,16 @@ delimit a replacement span matched to the LAST `</sub>` in the file. Restored in
 and assert the SHAPE of the result (line count, heading count), not merely that the addition is
 present.** The post-edit check that passed on a gutted file only confirmed what had been added.
 
-## Task 3 — an animated hero banner for the README header (own track)
+## Task 3 — an animated hero banner for the README header (own track — **SPLIT OUT**)
+
+> **Moved 2026-07-29 → `README_HERO_BANNER.md`** (winner `v6c-dusk-line` landed `1c54e73c`), with
+> `BANNER_NARRATIVE_SPEC.md` and `BANNER_V2_SUBJECT_OPTIONS.md` beside it. Each has its own
+> backlog item; none of this is open work *here*.
+>
+> **Retained, not archived.** `README_HERO_BANNER.md` says in its own words that *"that doc holds
+> the operator ask and the constraints already settled by measurement"* — i.e. it cites this
+> section rather than copying it. Deleting it would break the successor. Everything below is the
+> live reference for that track.
 
 Operator ask (2026-07-28): a **1080p60, awwwards-calibre animated banner** for the top of the
 README, featuring the Claude mascot, with **moving ASCII art as one candidate medium among
