@@ -1568,3 +1568,35 @@ an *agent's* Bash argv, so test corpora containing it must assemble it at runtim
 4. **The long-lived broker** (§8.5.4's actual structural answer, of which the collapse was only the
    bounded fallback) — still unbuilt. §12.7.1's constraint applies: it cannot be validated by
    wall-clock at normal load, so it needs a fork-COUNT acceptance criterion, not a millisecond one.
+
+### 12.7.7 ⚠ LANDED ≠ LIVE — the 18 ms/call win is inert, and so is everything else landed today
+
+Checked immediately after landing §12.7's commits, because "landed" in §12.7.3 would otherwise read
+as "in effect". It is not:
+
+- `~/Development/claude-infrastructure` (the shared checkout that **all** `~/.claude/{hooks,bin,
+  scripts}` per-file symlinks point into) is **75 commits behind origin/main**.
+- `com.claude.deploy-live` IS loaded, and IS running — with **last exit 1**. Its log gives two
+  distinct refusals:
+  - `REFUSED — target 34e725d629ca is not a descendant of live HEAD ec92e68ce0fd — this would ROLL
+    BACK the live layer`
+  - `REFUSED — no GREEN stamp among the newest 200 commits of origin/main — nothing is safe to
+    deploy`
+
+So the fleet is still running the OLD hooks: the six `$(cat)` forks are still being paid on every
+Bash tool call in every live session, and will be until the live layer advances.
+
+The second refusal is memory `verify-throughput-below-trunk-velocity` recurring — *"0 green stamps
+all day was a CONVERGENCE deadlock (105 commits/3h vs a 0.8-3.1h verify), not a failing test"*. The
+first is the divergence shape from `idempotent-repair-gated-behind-conditional-advance`: live HEAD
+is not an ancestor of the deploy target, so every tick refuses rather than advancing.
+
+**Not fixed here, deliberately.** It is a different subsystem from this row, it was already filed as
+§8.5.2's row-1 operator item (*"the deployer is broken"*, not *"deploy to get your ceiling"*), and
+the repair would have to touch the shared checkout — which this session is barred from (it holds two
+dirty files belonging to other sessions, and is the symlink source for the live layer). Recorded
+here so no one reads a landed millisecond figure as a live one.
+
+**Consequence worth stating plainly:** every capacity fix this plan lands is inert until the
+deployer converges. That makes the deploy stall a higher-priority capacity item than anything
+remaining in §12.7.6 — a fix that cannot reach the fleet has an effect size of zero.
