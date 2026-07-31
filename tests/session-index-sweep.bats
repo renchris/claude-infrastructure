@@ -62,7 +62,11 @@ JSONL
 @test "a lock whose owner is ALIVE is never stolen, however old it looks" {
   # A backfill legitimately holds this for hours and mkdir's mtime never refreshes.
   mkdir -p "$LOCKD"
-  printf '%s %s' "$$" "$(ps -o lstart= -p $$ | tr -s ' ')" > "$LOCKD/owner"
+  # The lock records ownership as TWO files, `pid` + `lstart` (see _session_index_lock_own) —
+  # not a single `owner` line. These fixtures wrote `owner`, which the reclaim path never reads,
+  # so every case below fell through to the dir-age branch and the suite tested nothing real.
+  printf '%s\n' "$$" > "$LOCKD/pid"
+  ps -o lstart= -p $$ > "$LOCKD/lstart"          # byte-identical to what the holder writes
   touch -t "$(date -v-200d +%Y%m%d%H%M)" "$LOCKD"
   run bash -c "HOME='$HOME' bash -c 'source \"$HELPERS\"; session_index_trylock && echo ACQUIRED'"
   [ "$status" -ne 0 ]
@@ -71,7 +75,8 @@ JSONL
 
 @test "a lock whose owner pid is DEAD is taken over immediately" {
   mkdir -p "$LOCKD"
-  printf '99999999 Wed Jan  1 00:00:00 2020' > "$LOCKD/owner"
+  printf '%s\n' 99999999 > "$LOCKD/pid"          # `kill -0` fails ⇒ holder gone ⇒ reclaim
+  printf 'Wed Jan  1 00:00:00 2020\n' > "$LOCKD/lstart"
   run bash -c "HOME='$HOME' bash -c 'source \"$HELPERS\"; session_index_trylock && echo ACQUIRED'"
   [ "$status" -eq 0 ]
   echo "$output" | grep -q ACQUIRED
@@ -80,16 +85,17 @@ JSONL
 @test "a lock whose pid was RECYCLED into a different process is taken over" {
   # Same pid, different start time — `kill -0` alone would call this alive forever.
   mkdir -p "$LOCKD"
-  printf '%s Wed Jan  1 00:00:00 2020' "$$" > "$LOCKD/owner"
+  printf '%s\n' "$$" > "$LOCKD/pid"              # pid is LIVE, but the recorded start time differs
+  printf 'Wed Jan  1 00:00:00 2020\n' > "$LOCKD/lstart"
   run bash -c "HOME='$HOME' bash -c 'source \"$HELPERS\"; session_index_trylock && echo ACQUIRED'"
   [ "$status" -eq 0 ]
   echo "$output" | grep -q ACQUIRED
 }
 
 @test "acquiring stamps an owner, and unlock removes the whole lock dir" {
-  run bash -c "HOME='$HOME' bash -c 'source \"$HELPERS\"; session_index_trylock; cat \"$LOCKD/owner\"'"
+  run bash -c "HOME='$HOME' bash -c 'source \"$HELPERS\"; session_index_trylock; cat \"$LOCKD/pid\"'"
   [ "$status" -eq 0 ]
-  echo "$output" | grep -qE '^[0-9]+ '
+  echo "$output" | grep -qE '^[0-9]+$'
   [ ! -d "$LOCKD" ]          # the EXIT trap released it
 }
 
