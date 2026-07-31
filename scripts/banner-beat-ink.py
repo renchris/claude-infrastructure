@@ -31,7 +31,7 @@ Frames are frozen deterministically by `banner-shots.sh`, so a probe screenshots
 run and a failure is reproducible rather than a race.
 
     scripts/banner-beat-ink.py assets/banner/v6a-long-night.svg
-    scripts/banner-beat-ink.py assets/banner/*.svg --min-px 40
+    scripts/banner-beat-ink.py assets/banner/v6*.svg --min-px 40
 """
 
 from __future__ import annotations
