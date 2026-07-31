@@ -474,7 +474,7 @@ def _dig() -> Emote:
         # under itself is what actually happens, and this is the only plane where it survives.
         crumbs = "".join(
             f'<rect class="dgC{i}" x="{fmt(dig_cx - 8 - i * 5)}" y="{fmt(E_GROUND - 12)}" '
-            f'width="12" height="12"/>'
+            f'width="16" height="16"/>'
             for i in range(5)
         )
         return f'<g class="eink">{crumbs}</g>'
@@ -507,7 +507,7 @@ def _dig() -> Emote:
         ]
         rock: list[tuple[float, float, float]] = [(0, 0, 0), (a, 0, 0)]
         for t in strokes:
-            rock += [(t, -11, 0), (t + 0.12, 4, 0)]
+            rock += [(t, -21, 0), (t + 0.12, 7, 0)]
         rock += [(w(e, 0.52), 0, 0), (b, 0, 0), (EMOTE_P, 0, 0)]
         return (
             stop_world("dgScr", a, back)
@@ -582,9 +582,10 @@ def _mote() -> Emote:
         # the light scheme — correct for a night sky, fatal for the object a beat is about.
         return (
             f'<g class="eglyph moDot">'
-            f'<rect x="{fmt(mx)}" y="{fmt(my)}" width="7" height="7"/>'
-            f'<rect x="{fmt(mx - 4)}" y="{fmt(my + 2)}" width="3" height="3"/>'
-            f'<rect x="{fmt(mx + 8)}" y="{fmt(my + 2)}" width="3" height="3"/>'
+            f'<rect x="{fmt(mx)}" y="{fmt(my)}" width="10" height="10"/>'
+            f'<rect x="{fmt(mx - 6)}" y="{fmt(my + 3)}" width="4" height="4"/>'
+            f'<rect x="{fmt(mx + 12)}" y="{fmt(my + 3)}" width="4" height="4"/>'
+            f'<rect x="{fmt(mx + 3)}" y="{fmt(my - 6)}" width="4" height="4"/>'
             f"</g>"
         )
 
