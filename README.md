@@ -180,6 +180,16 @@ Three traps make naive automation fail. Each is defeated by a mechanism, not by 
 
 > **Portable vs project-specific.** `handoff-fire.sh`, the isolation policy, [`docs/WORKTREE_WORKFLOW.md`](docs/WORKTREE_WORKFLOW.md), and this repo's fail-closed landing rail are the **portable** half and live here. App repos keep their own warm pool and migration-aware `/ship` variants. Account, model and effort routing reads `~/.claude/model-config.yaml`, which is per-machine and deliberately not synced.
 
+### Why 30+ panes freezes iTerm2 — and why the GPU can't fix it
+
+**It isn't a memory leak — it's windows that don't die.** iTerm2 has an open, unfixed upstream bug (#12097, #12645, #12905): closing a tab to zero panes should destroy its `NSWindow`; on iTerm2 it doesn't. One session left 98 "closed" windows alive, and each still costs the compositor real objects: a **window** costs ~28–34 MB of backing store + ~4.9 Mach ports to WindowServer; a **pane** inside an existing window costs almost nothing (~3 IOSurfaces, ~0 net bytes). Spreading 30 sessions across 30 windows costs WindowServer **2.35× more CPU than the same 30 panes gathered into one window** — while iTerm2 itself measured **0.0% CPU** and WindowServer sat at 92–99.9%. The window is the expensive unit; the app's own memory was never the culprit.
+
+**The instinct to fix it by pushing rendering onto the idle GPU makes it worse.** That reasoning assumes more panes → more CPU work → the CPU maxes out → move the work to the underused silicon. But the bottleneck was never a CPU/GPU balance inside one app — it's compositor *objects* — and GPU rendering **adds** objects, it doesn't remove them. iTerm2's Metal path allocates a `CAMetalLayer` plus several dispatch queues *per pane*, on top of the window cost above, and it's capped at 5 GPU panes per tab (foreground tab only) — so lighting up 30 sessions on Metal forces **six separate windows**, multiplying the exact axis that already froze the machine. Every iTerm2 layout pays one of the two costs; none escapes both.
+
+Ghostty proves the same point the other way: it has **no CPU renderer at all** — every pane is Metal, unconditionally. If "more GPU" were the fix, Ghostty should be the cheapest terminal under load. Measured instead, byte-matched at 18 panes / 10 fps: Ghostty burns **27.3% app CPU against kitty's 9.5%** (2.9×), and its thread count **scales linearly, 4.00 threads/pane, with no ceiling** — because submitting frames to a GPU is itself CPU work (encoding commands, servicing a dispatch queue), paid on *every* pane. kitty wins not by avoiding the GPU but by putting **all** panes in **one** window and sharing one small thread pool no matter how many panes it holds — the one thing that actually is free (macOS itself has headroom: 30 panes repainting in one window cost only ~10 percentage-points of a single core).
+
+Full evidence, the hypotheses that got killed along the way, and the migration plan: [`docs/research/terminal-for-30-panes-2026-07-31.md`](docs/research/terminal-for-30-panes-2026-07-31.md).
+
 ---
 
 ## 3. Autonomy is bounded
