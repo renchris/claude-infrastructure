@@ -541,6 +541,8 @@ scripts/terminal-bench.sh --app iTerm2 --interval 0      # single reading    →
 scripts/terminal-bench.sh --app wezterm --interval 0     # not running       → verdict=NO-DATA, exit 3
 ```
 
+**The raw transcripts are committed**, so every number above is auditable against the run that produced it rather than against this table: [`bench-live-3way-2026-07-31.txt`](docs/research/data/bench-live-3way-2026-07-31.txt) (the kitty/Ghostty/cmux readings) and [`kitty-drift-30min-2026-07-31.txt`](docs/research/data/kitty-drift-30min-2026-07-31.txt) (the 30-minute run, including the window census that invalidates it as a drift bound).
+
 Full method, per-candidate rows and the falsification plan: [`terminal-for-30-panes-2026-07-31.md`](docs/research/terminal-for-30-panes-2026-07-31.md) · adjudication of the two outside reports: [`l3-l4-terminal-and-workflow-2026-07-31.md`](docs/research/l3-l4-terminal-and-workflow-2026-07-31.md) · the plan this feeds: [`TERMINAL_AGNOSTIC_L3_L4.md`](docs/plans/TERMINAL_AGNOSTIC_L3_L4.md).
 
 But the renderer is the *second*-order fix. A 30-pane grid is a **polling** interface — its cost scales with agent count, which is precisely the cost saturating the compositor. Exception routing does not scale with agent count at all. And the notifier that replaces it **already exists**: [`cc-permission-beacon.sh`](hooks/cc-permission-beacon.sh) is wired on `PermissionRequest` and writes every blocked session to `/tmp/cc-permission-pending/`. **It simply has no face** — nothing renders that queue as the operator's primary surface, so the grid stands in for it. Caught live while this section was written: two sessions blocked at once under full three-monitor visibility, one unattended for **6.6 minutes**.
