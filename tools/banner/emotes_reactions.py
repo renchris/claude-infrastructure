@@ -294,16 +294,39 @@ def _itch() -> Emote:
     # And the BRACE is now deep (1.10 x 0.90) and held for most of the window, so that the thing a
     # sample lands on between cycles is still an obviously different posture from the walk. That is
     # the property the first two drafts lacked: they were only legible AT the extremes.
+    # NEITHER END OF THE PUMP MAY BE THE RESTING SHAPE, and that is the fourth draft's one idea.
+    # Draft three swung 1.15 -> 1.00, a 15% excursion, and still failed at honest size for a reason
+    # amplitude does not capture: 1.00 IS the walk's silhouette, so half of every cycle put the
+    # creature back into the pose it holds for the other ten seconds of the loop. Sampled at even
+    # 0.8 s intervals — how a reviewer actually scans a grid — about half the frames therefore showed
+    # a creature standing normally, and a beat legible on alternate frames is not legible.
+    #
+    # So the cycle now runs between two poses that are both far from rest AND far from each other:
+    # squashed wide-and-low, then stretched tall-and-narrow. Each stays inside the +-15% band on its
+    # own, but the swing BETWEEN them is 23% of width and 26% of height — the largest outline change
+    # in this pack — and no phase of it can be mistaken for the walk.
     pump: list[tuple[float, float, float]] = []
     slide: list[tuple[float, float, float]] = []
     for i in range(4):
         f0 = (
             0.24 + i * 0.10
         )  # 0.44 s a cycle — faster blurs at 332 px, slower reads as rocking
-        pump.append((w(e, f0), 1.15, 0.87))
-        pump.append((w(e, f0 + 0.05), 1.00, 0.96))
+        # EACH EXTREME IS HELD, and that is what makes the beat survive a coarse glance. A pump
+        # authored as two instants per cycle spends most of its time in TRANSIT between them, and
+        # the midpoint of that transit is approximately the resting shape — so a contact sheet
+        # sampled at 0.8 s against a 0.44 s cycle aliases straight onto the crossings and reports a
+        # creature standing still. Measured: dense sampling at the extremes showed the shudder
+        # plainly while the even-interval strip of the same asset showed almost nothing. Holding
+        # each pose for 0.13 s of the 0.44 s cycle puts ~60% of the window on an extreme, and turns
+        # a sine into a series of distinct jerks, which is what a shudder is anyway.
+        pump.append((w(e, f0), 1.15, 0.86))
+        pump.append((w(e, f0 + 0.03), 1.15, 0.86))
+        pump.append((w(e, f0 + 0.05), 0.92, 1.12))
+        pump.append((w(e, f0 + 0.08), 0.92, 1.12))
         slide.append((w(e, f0), 9, -4))
+        slide.append((w(e, f0 + 0.03), 9, -4))
         slide.append((w(e, f0 + 0.05), -7, 3))
+        slide.append((w(e, f0 + 0.08), -7, 3))
 
     def css() -> str:
         return (

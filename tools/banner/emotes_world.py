@@ -257,7 +257,7 @@ def _pebble() -> Emote:
             f'<rect x="{fmt(art_x)}" y="{fmt(E_GROUND - 9)}" width="16" height="5"/>'
             f'<rect x="{fmt(art_x + 2)}" y="{fmt(E_GROUND - 4)}" width="12" height="4"/>'
         )
-        return f'<g class="pbW"><g class="pbRoll"><g class="emd0">{stone}</g></g></g>'
+        return f'<g class="pbW"><g class="pbRoll"><g class="efg">{stone}</g></g></g>'
 
     def css() -> str:
         return (
@@ -347,7 +347,7 @@ def _sniff() -> Emote:
                 (50, 9, 3),
             )
         )
-        return f'<g class="snW"><g class="emd0">{marks}</g></g>'
+        return f'<g class="snW"><g class="efg">{marks}</g></g>'
 
     def css() -> str:
         return (
@@ -448,7 +448,7 @@ def _dig() -> Emote:
             for dx, wd, dh in ((-48, 13, 5), (-35, 11, 9), (24, 11, 9), (36, 13, 5))
         )
         hole = (
-            f'<g class="emd0">{rim}</g>'
+            f'<g class="eink">{rim}</g>'
             f'<ellipse class="efg" cx="{fmt(hole_cx)}" cy="{fmt(E_GROUND + 1)}" rx="34" ry="7"/>'
         )
         # The crumbs are NOT world-locked: each lives 0.4 s inside a frozen world, so a travel track
@@ -458,7 +458,7 @@ def _dig() -> Emote:
             f'width="6" height="6"/>'
             for i in range(5)
         )
-        return f'<g class="dgHole"><g class="dgW">{hole}</g></g><g class="emd0">{crumbs}</g>'
+        return f'<g class="dgHole"><g class="dgW">{hole}</g></g><g class="eink">{crumbs}</g>'
 
     def css() -> str:
         # Five strokes on `.bob`: down-up, down-up, 0.24 s a pair. Fast enough to read as scrabbling
@@ -835,7 +835,7 @@ def _handover() -> Emote:
 
     def props() -> str:
         block = (
-            f'<g class="hoBlk"><g class="emd0">'
+            f'<g class="hoBlk"><g class="efg">'
             f'<rect x="{fmt(blk_x)}" y="{fmt(blk_y)}" width="22" height="22"/>'
             f'<rect x="{fmt(blk_x + 3)}" y="{fmt(blk_y - 3)}" width="16" height="3"/>'
             f"</g></g>"
