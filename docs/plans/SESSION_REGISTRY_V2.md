@@ -428,6 +428,29 @@ Verified during measurement that the in-band `cc-classify` run was not a fast *f
 as a fast success: it returned the same 6 rows / ~2,767 bytes as the foreground control. A 300×
 speed-up is a reason to check the output, not to record the number.
 
+### The accruing reads cannot start until deploy advances — verified 2026-07-31
+
+A8/A9/A11 are production population reads, and **production is still running the pre-R5 reaper**, so
+the clock on them has not started. This is a dependency, not a caveat:
+
+- `~/.claude/bin/cc-reaper` is a symlink into the **shared checkout**, which sits at `ec92e68c` —
+  **31 commits behind `origin/main`**. The A10 read on the *deployed* layer is therefore still
+  **0**, while on trunk it is 4. Landed ≠ live, exactly as §8's deploy note anticipated.
+- `scripts/deploy-live.sh` will **not** close this on its own: it advances only to a commit carrying
+  a GREEN post-land stamp, and of 45 stamps exactly **1** is green — for `34e725d6`, which is already
+  an *ancestor* of the live HEAD. The script therefore finds nothing newer and exits 0 silently.
+- Deploy is an **operator verb by construction** (`deploy-live.sh` header: *"Agents are
+  classifier-blocked from deploying, so the operator is the only one who can pull the trigger"*).
+
+Nothing in this rebuild needs `install.sh`: `bin/cc-reaper` is an existing symlinked path and goes
+live the instant the checkout advances; the only file this land adds is `tests/reap-sweep-bounds.bats`,
+which is never deployed. **The single remaining dependency is the checkout advance.**
+
+Already tracked, so not re-filed: `4e0038a19faf` (deploy N commits behind, alarm silent),
+`da18f179ac50` (0-green-stamp deadlock), `e3229172d3a0` (the second fault under the repaired ladder).
+A successor reading A8/A9/A11 as "still unproven" should check those three first rather than
+re-deriving the deploy state.
+
 ---
 
 ## §8 Bootstrap & rollout
