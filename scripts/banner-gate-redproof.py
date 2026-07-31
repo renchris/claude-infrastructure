@@ -80,6 +80,9 @@ def sandbox():
         "SHOOT_MIN_LEN",
         "constellation_chain",
         "shoot_path",
+        # the story table and the ratified set, both mutated by the story cases below
+        "BEAT_STORY",
+        "ALWAYS_EMITTED",
     ]
     saved = {n: copy.deepcopy(getattr(g, n)) for n in names}
     try:
@@ -413,6 +416,66 @@ def _ascending():
 @case("sky: a corridor too short to be a flight", "under the")
 def _short_corridor():
     g.SHOOT_MIN_LEN = 9_999.0
+    g.build(v())
+
+
+# ── the story gate: one case per branch ────────────────────────────────────────────────────────
+# `assert_every_beat_tells_a_story` is the first gate here that checks something other than
+# geometry, so each of its branches gets its own sabotage. Sharing one case across them would prove
+# only that SOME branch fires, which is how a gate comes to have a dead arm nobody notices.
+
+
+@case("story: a beat with no cause, behaviour or exit", "no story in BEAT_STORY")
+def _story_missing():
+    del g.BEAT_STORY["rRefuse"]
+    g.build(v())
+
+
+@case("story: an act filled in with a keystroke", "too short to be a written act")
+def _story_stub():
+    # The exact defect `emotes.assert_story_shape` was written for, transplanted: a beat registered
+    # with a placeholder act passes every other gate and ships as a review panel explaining nothing.
+    g.BEAT_STORY["rRefuse"] = dict(g.BEAT_STORY["rRefuse"], exit="a")
+    g.build(v())
+
+
+@case("story: a story that outlived its beat", "no longer exist in RARE_EVENTS")
+def _story_orphan():
+    # The half that rots in SILENCE. Deleting a beat and leaving its story behind breaks nothing
+    # visible — the review page simply goes on describing a composition that no longer contains it.
+    g.BEAT_STORY["rGhost"] = dict(g.BEAT_STORY["rRefuse"], label="THE GHOST")
+    g.build(v())
+
+
+@case(
+    "story: a beat depicting a script this repo no longer has",
+    "does not exist in this checkout",
+)
+def _story_dead_mechanism():
+    # Every other gate in gen.py is geometric, so this build stays green while the banner tells a
+    # reader about a mechanism that has been renamed away. That is the whole reason the check
+    # resolves the path instead of trusting the string.
+    g.BEAT_STORY["rRefuse"] = dict(
+        g.BEAT_STORY["rRefuse"], mechanism="hooks/completion-assert-RENAMED.sh"
+    )
+    g.build(v())
+
+
+@case("story: a withdrawn beat put back in the ratified set", "it is in ALWAYS_EMITTED")
+def _story_withdrawn_restored():
+    # The operator withdrew the visitor and THE OVERLAP by removing the name from ALWAYS_EMITTED,
+    # and every comment in gen.py promises "one line restores it". This is that line, and the point
+    # of the gate is that it now costs an argument rather than a silent revert.
+    g.ALWAYS_EMITTED = g.ALWAYS_EMITTED + ("rOverlap",)
+    g.build(v())
+
+
+@case("story: a sky beat that claims to mean something", "yet it claims to depict")
+def _story_sky_with_mechanism():
+    # The inverse of the missing-mechanism case, and the one a reader is likeliest to add "helpfully".
+    # The sky beats' entire placement rule — late and rare, inverted from every narrative beat — is
+    # justified by them saying nothing about the system, so a mechanism here is a kind error.
+    g.BEAT_STORY["rShoot"] = dict(g.BEAT_STORY["rShoot"], mechanism="bin/cc-backlog")
     g.build(v())
 
 

@@ -376,6 +376,272 @@ RARE_EVENTS = {
 # reject v6a, where the cheer is caused by the peek it was overlapping.
 COMPOSITE_OF = {"rCheer": {"peer", "peek"}}
 
+# ── WHY each beat is on the canvas: cause, behaviour, exit ────────────────────────────────────────
+#
+# RARE_EVENTS above says WHEN a beat runs. Until now nothing said WHY, and the answer lived in
+# comments — which is prose, and this repo's own chokepoint rule is that a ruling living only in
+# prose is not enforced. The spec's Acceptance test (docs/plans/BANNER_NARRATIVE_SPEC.md) is
+# verbatim:
+#
+#     "An event passes only if a viewer can answer all three of *why did it appear*, *what did it
+#      do*, and *how did it leave* — from the animation alone, without reading this file."
+#
+# The sibling emote family already learned this the expensive way: `emotes.assert_story_shape` exists
+# because a stub registered with entry="a", showcase="b", exit="c" passed every other gate and would
+# have shipped as a review panel describing nothing. The banner — the asset that actually ships in
+# the README — had no such gate at all.
+#
+# THIS TABLE IS THE ONE COPY. `scripts/banner-beat-views.py` used to carry its own hand-maintained
+# `NOTES` dict of exactly these strings, in the review tool rather than the generator. That is the
+# same second-source-of-truth trap its own docstring records for the WINDOWS — it kept a private copy
+# of those too, they went stale at a re-timing, and the panels rendered plain ambient, which "looks
+# exactly like a *broken beat* rather than a stale reviewer". The windows were de-duplicated then and
+# the notes were not, so the rot simply moved: `rShoot` and `rTrace` shipped on 2026-07-30 and the
+# review page still describes both as "no editorial note yet".
+#
+# THREE KINDS, because one rule would convict a beat for obeying the design:
+#
+#   NARRATIVE — it says something about claude-infrastructure. Its cause is a real mechanism and the
+#               gate RESOLVES that mechanism on disk. A beat citing a script that has since been
+#               renamed away is the banner telling a lie about the system, and no other check in this
+#               build could notice; every one of them is geometric.
+#   SKY       — it says nothing about the system, by deliberate design (see the placement note inside
+#               RARE_EVENTS: a sky beat's whole value is that you might look up and catch one). For
+#               these, and only these, `mechanism: None` is the asserted correct state, not a gap —
+#               and it is asserted, so a sky beat cannot quietly start claiming one.
+#   WITHDRAWN — ruled off the ratified set and kept only as machinery. This is a REAL state, not an
+#               escape hatch, and it carries the one obligation that makes the ruling stick: a
+#               withdrawn beat may not appear in ALWAYS_EMITTED. That is precisely how rOverlap and
+#               rCheer were withdrawn, so re-adding the name — the "one line restores it" promised
+#               below — is now a build failure that has to be argued rather than a silent revert.
+#               An exploratory variant may still opt in through its own `art.events`; the pick's
+#               composition is the thing being protected, not the sketchbook.
+#
+# The two withdrawals are withdrawn for OPPOSITE reasons, and the field keeps that distinction: the
+# visitor's CAUSE was indicted (a session is never co-present with its peers, so it names no
+# mechanism at all), while THE OVERLAP's cause is sound and real — `handoff-fire.sh` is still right
+# there — and what failed was its VISIBILITY. A future reader restoring one of them needs to know
+# which argument they are re-opening.
+#
+# Plain dicts, not a dataclass, on purpose: `banner-beat-views.py` reads this table with
+# `ast.literal_eval` rather than importing gen.py (a review tool must not depend on the build
+# running). A `Story(...)` call is not a literal and would silently take that tool back to a private
+# copy.
+BEAT_STORY = {
+    "rSummon": {
+        "label": "THE SUMMONING",
+        "kind": "NARRATIVE",
+        "mechanism": "scripts/handoff-fire.sh",
+        "cause": "the session dispatches a subagent — a second creature is called into being "
+        "rather than met, which is the only way a peer is ever present here",
+        "behaviour": "A dons a hat and summons a SMALLER second clawd — the binary's own in-session "
+        "creature, so it is derived rather than invented. A hands over the brief; B hands back the "
+        "finished work, the same letter returned green",
+        "exit": "B removes ITSELF in a poof. The successor self-closes, so the beat ends with one "
+        "creature again and nothing left for anyone to clean up",
+    },
+    "rRefuse": {
+        "label": "THE REFUSAL",
+        "kind": "NARRATIVE",
+        "mechanism": "hooks/completion-assert.sh",
+        "cause": "completion-assert.sh refuses a false 'done' — the turn is handed back instead of "
+        "accepted, and the README's own diagram draws that as an arrow BACK",
+        "behaviour": "a post arrives riding the ground, the bar drops across the path, and the world "
+        "pulls BACK exactly one print pitch, so the creature re-steps into a print it already made",
+        "exit": "the barrier clears and the lost ground is made up above nominal — a returned turn "
+        "is redoing a step, and the step gets redone",
+    },
+    "rAsk": {
+        "label": "THE ASK",
+        "kind": "NARRATIVE",
+        "mechanism": "bin/cc-decide",
+        "cause": "a class-C decision waits with no default, so the system pages a human and can do "
+        "nothing at all until one answers",
+        "behaviour": "the creature looks up FIRST and the world stops half a second later — ears up, "
+        "gaze parked straight out, rate zero, and a blink through the stop so that stillness cannot "
+        "read as a stalled image",
+        "exit": "the answer arrives and the debt is repaid above nominal, because a looping world "
+        "cannot hold for free",
+    },
+    "rOverlap": {
+        "label": "THE OVERLAP",
+        "kind": "WITHDRAWN",
+        "mechanism": "scripts/handoff-fire.sh",
+        "cause": "self-close --successor refuses to retire a predecessor until the successor is "
+        "verified engaged, so succession overlaps rather than touches",
+        "behaviour": "the print pitch HALVES for 12 prints — two walkers' worth of record — so the "
+        "foot lands on every second print, and the mismatch is the tell",
+        "exit": "succession resolves: the pitch halves back and the foot re-registers with the grid",
+    },
+    "peek": {
+        "label": "THE VISITOR",
+        "kind": "WITHDRAWN",
+        "mechanism": None,
+        "cause": "curiosity — something arrived. Recorded as it was built, and it does NOT survive "
+        "the panel's co-presence reframe: a session is never co-present with its peers, they live "
+        "in other panes. Naming no mechanism is the honest state, and it is why this beat is "
+        "withdrawn rather than re-timed",
+        "behaviour": "it emerges from behind the mound nearest it, glances at the scene, and is a "
+        "GLANCE rather than a visit — which is what its motion always read as",
+        "exit": "it retreats behind the same mound it came from; a symmetric exit reads as intent, "
+        "where a fade reads as a despawn",
+    },
+    "peer": {
+        "label": "THE VISITOR (v6b)",
+        "kind": "WITHDRAWN",
+        "mechanism": None,
+        "cause": "v6b's second session, in place of peek. Indicted by the same reframe and more "
+        "sharply: as shipped it interpenetrated clawd for ~7.2s in the same flat orange, reading as "
+        "a render error or as one session absorbing another",
+        "behaviour": "a second creature walks in and shares the frame — the co-presence the whole "
+        "reframe says is the wrong picture of the system",
+        "exit": "it walks back out the way it came, which is the one part of the beat the reframe "
+        "never had a quarrel with",
+    },
+    "rCheer": {
+        "label": "THE CHEER",
+        "kind": "WITHDRAWN",
+        "mechanism": None,
+        "cause": "the resident saw the visitor arrive — so its cause is whichever visitor beat the "
+        "variant carries (COMPOSITE_OF), and it inherits that beat's withdrawal. On its own it is an "
+        "unprompted celebration with nothing present to celebrate",
+        "behaviour": "a whole-body gesture — a hop with a body tilt — never two pixels above the "
+        "head, which measured as horns rather than as arms",
+        "exit": "it settles back into the stride",
+    },
+    "rShoot": {
+        "label": "THE SHOOTING STAR",
+        "kind": "SKY",
+        "mechanism": None,
+        "cause": "uncaused, and deliberately so. A sky beat says nothing about the system; its whole "
+        "value is that you might look up and catch one, and a meteor you are guaranteed to see on "
+        "every visit is not a meteor, it is a loading spinner",
+        "behaviour": "one meteor ablates and dies in open sky, along the longest descending corridor "
+        "the composition actually has rather than one placed by taste",
+        "exit": "it burns out rather than leaving frame, and the train it leaves fades where it died",
+    },
+    "rTrace": {
+        "label": "THE CONSTELLATION",
+        "kind": "SKY",
+        "mechanism": None,
+        "cause": "uncaused, and placed at the exact midpoint of the empty half so it stands 85.2s "
+        "clear on both sides — the furthest any beat can get from every other beat on this loop",
+        "behaviour": "six REAL stars of the field are joined in order by lines that draw on, each "
+        "vertex flaring as the line reaches it, so a faint star is legible for exactly as long as "
+        "the figure is",
+        "exit": "the lines fade and the stars remain — the figure is let go rather than switched off",
+    },
+}
+
+# The floor is the sibling gate's, deliberately: `emotes.assert_story_shape` uses 12 on the reasoning
+# that "twelve characters is enough to distinguish a written act from a keystroke", and these strings
+# do the same job for the same reader. One number with one reason beats a second number to keep in
+# sync. It catches a keystroke, not laziness — the guard against a lazy act is that the review page
+# prints it where a human reads it, and the guards with real teeth below are structural.
+STORY_ACT_MIN = 12
+STORY_ACTS = ("cause", "behaviour", "exit")
+STORY_KINDS = ("NARRATIVE", "SKY", "WITHDRAWN")
+
+
+def _repo_root() -> Path:
+    """The checkout this generator lives in — resolved, and loud when it cannot be.
+
+    "Cannot resolve" is a THIRD state and must never collapse into "the mechanism is missing": a
+    generator copied somewhere odd would otherwise convict every beat of citing a dead script.
+    """
+    root = Path(__file__).resolve().parents[2]
+    if not (root / "tools" / "banner" / "gen.py").exists():
+        raise SystemExit(
+            f"gen: cannot resolve the repo root from {__file__} (tried {root}). The story gate "
+            f"resolves each beat's mechanism against the checkout, and an unresolvable root would "
+            f"make every beat look like it cites a deleted script."
+        )
+    return root
+
+
+def assert_every_beat_tells_a_story(art: Art) -> None:
+    """Every beat owes a first-time viewer a CAUSE, a BEHAVIOUR and an EXIT — see BEAT_STORY.
+
+    Three checks, in the order a defect actually arrives:
+
+      1. 1:1 with RARE_EVENTS, BOTH ways. A beat with no story is the thing this gate exists for. A
+         story with no beat is the other half and is the one that rots silently: it is what is left
+         behind when a beat is deleted, and it goes on describing the composition to the review page
+         long after the composition stopped containing it.
+      2. Three acts, each above STORY_ACT_MIN, and a known kind.
+      3. The per-kind obligations. A NARRATIVE beat must name a mechanism; a SKY beat must NOT (its
+         silence about the system is the design, and left unasserted it could quietly acquire a
+         claim); a WITHDRAWN beat must stay out of ALWAYS_EMITTED, which is the ruling itself
+         expressed as a check rather than as a comment.
+      4. Any mechanism named, by any beat the variant EMITS, must RESOLVE ON DISK. This is the check
+         no other gate in this file can make: every one of them is geometric, so a beat whose cited
+         script was renamed away keeps passing while the banner quietly misdescribes the system it
+         depicts.
+    """
+    missing = [n for n in RARE_EVENTS if n not in BEAT_STORY]
+    if missing:
+        raise SystemExit(
+            f"gen: {missing} declared in RARE_EVENTS with no story in BEAT_STORY. A beat is a "
+            f"window plus a reason; a window alone is the timer-driven composition this whole "
+            f"redesign exists to replace."
+        )
+    orphans = [n for n in BEAT_STORY if n not in RARE_EVENTS]
+    if orphans:
+        raise SystemExit(
+            f"gen: BEAT_STORY describes {orphans}, which no longer exist in RARE_EVENTS. A story "
+            f"outliving its beat is not harmless — it is printed on the review page as though the "
+            f"composition still contained it."
+        )
+
+    for name, story in BEAT_STORY.items():
+        if story.get("kind") not in STORY_KINDS:
+            raise SystemExit(
+                f"gen[{name}]: kind {story.get('kind')!r} is not one of {STORY_KINDS}. The kind is "
+                f"what decides whether an absent mechanism is a defect or the design."
+            )
+        for act in STORY_ACTS:
+            text = str(story.get(act, "")).strip()
+            if len(text) < STORY_ACT_MIN:
+                raise SystemExit(
+                    f"gen[{name}]: {act.upper()} is {text!r} — too short to be a written act. The "
+                    f"review page prints these AS the beat's story, so a placeholder here ships as "
+                    f"a panel that explains nothing."
+                )
+
+    for name, story in BEAT_STORY.items():
+        kind, mech = story["kind"], story["mechanism"]
+        if kind == "NARRATIVE" and not mech:
+            raise SystemExit(
+                f"gen[{name}]: NARRATIVE and names no mechanism. A beat claiming to say something "
+                f"about claude-infrastructure must name the feature it depicts — or be SKY, which "
+                f"asserts that it says nothing by design, or WITHDRAWN, which is what happened to "
+                f"the visitor when the co-presence reframe indicted its cause."
+            )
+        if kind == "SKY" and mech:
+            raise SystemExit(
+                f"gen[{name}]: SKY, yet it claims to depict {mech!r}. A sky beat's entire placement "
+                f"rule — late, rare, and inverted from every narrative beat — rests on it saying "
+                f"NOTHING about the system. A mechanism here means it is the wrong kind."
+            )
+        if kind == "WITHDRAWN" and name in ALWAYS_EMITTED:
+            raise SystemExit(
+                f"gen[{name}]: WITHDRAWN, yet it is in ALWAYS_EMITTED — the ratified set. Removing "
+                f"the name from that tuple IS how this beat was withdrawn, so putting it back is the "
+                f"revert, not a re-timing. Re-open the ruling in "
+                f"docs/plans/BANNER_NARRATIVE_SPEC.md and change the kind deliberately."
+            )
+
+    root = _repo_root()
+    for name in active_events(art):
+        mech = BEAT_STORY[name]["mechanism"]
+        if mech and not (root / mech).exists():
+            raise SystemExit(
+                f"gen[{art.key}]: {name} depicts {mech!r}, which does not exist in this checkout. "
+                f"Every other gate here is geometric and would stay green while the banner tells a "
+                f"reader about a mechanism this repo no longer has."
+            )
+
+
 # ── does the beat actually put INK on the canvas? ──────────────────────────────────────────────
 # Every gate in this file is STRUCTURAL: the markup parses, the animation is singular, the periods
 # divide P, the loop seams shut, the geometry clears the type. Not one of them asks the only
@@ -1199,8 +1465,12 @@ def assert_overlap_ink_is_ambient(art: Art) -> None:
             )
 
 
-HOP_CALM = 2.5  # s — nothing jumps before this; t=0 is the still AND the frame readers land on
-SEEN_WINDOW = 45.0  # s — past this the timeline anchor says most readers have gone (S16)
+HOP_CALM = (
+    2.5  # s — nothing jumps before this; t=0 is the still AND the frame readers land on
+)
+SEEN_WINDOW = (
+    45.0  # s — past this the timeline anchor says most readers have gone (S16)
+)
 
 
 def hop_pulses(art: Art) -> list[float]:
@@ -1297,7 +1567,10 @@ def hop_css(art: Art) -> str:
     here, because a shadow that squashes on a jump the body no longer makes is worse than no shadow.
     """
     pulses = hop_pulses(art)
-    body, shad = ["0%{transform:translateY(0)}"], ["0%{transform:scale(1,1);opacity:.46}"]
+    body, shad = (
+        ["0%{transform:translateY(0)}"],
+        ["0%{transform:scale(1,1);opacity:.46}"],
+    )
     for t in pulses:
         for dp, y, sc, op in (
             (0.0, 0, "1,1", ".46"),
@@ -4467,6 +4740,7 @@ def build(art: Art) -> str:
     assert_all_gates_wired()
     assert_texture_not_eventised()
     assert_event_names_known(art)
+    assert_every_beat_tells_a_story(art)
     assert_events_disjoint(art)
     assert_stride_locked(art)
     assert_duty_budget(art)
