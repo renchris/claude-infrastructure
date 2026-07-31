@@ -237,13 +237,15 @@ ffprobe -v error -select_streams v:0 -show_entries stream=width,height,avg_frame
 
 ## Firing a two-way agent demo
 
-- **`--notify-back` takes an *optional* bare pane UUID** (`handoff-fire.sh:1550`:
-  an empty or `--`-prefixed next token selects `__self__`). Passing
+- **`--notify-back` takes an *optional* bare pane UUID** — an empty or `--`-prefixed
+  next token selects `__self__`:
+  `grep -n 'notify-back)' scripts/handoff-fire.sh`. Passing
   `$ITERM_SESSION_ID` is the trap — that variable holds the `w2t0p0:UUID` form, it
   is accepted as a *literal* target, and `cc-notify` then answers
-  `verdict=unresolvable reason=no-such-target` (`bin/cc-notify:399`). `cc-notify`
-  strips the `wNtNpN:` prefix only for `--self` (`:312`). **Pass nothing, or pass
-  the bare UUID.**
+  `verdict=unresolvable reason=no-such-target`
+  (`grep -n 'no-such-target' bin/cc-notify`). `cc-notify` strips the `wNtNpN:`
+  prefix only on its `--self` path — `own_uuid="${own_uuid##*:}"`,
+  `grep -n '##\*:' bin/cc-notify`. **Pass nothing, or pass the bare UUID.**
   When the ping is never delivered the peer correctly **refuses to self-retire** —
   so the take has no close to film, and the failure looks like a directing problem
   rather than a flag problem.
@@ -356,12 +358,26 @@ written out in the `<sub>` line next to the image.
 
 ## Traps that cost real time
 
+- **Never cite `file.sh:1234` from a skill — cite the `grep` that finds it.** Every
+  one of this skill's four `file:line` references was wrong within **two days** of
+  being written (2026-07-29 → 2026-07-31). Three were harmless drift; the fourth
+  had gone *false* — the code it pointed at had been rewritten, so the skill taught
+  a behaviour that no longer existed. A line number is a cache of a position and
+  **nothing in the repo invalidates it**, so it rots silently and reads as
+  authoritative the whole time. A `grep` re-derives the position on every read.
 - **`plutil -extract <key> json <file>` without `-o` rewrites the plist in place.**
   It destroyed two LaunchAgents. Use `-o -`, or `grep`.
 - **`hooks/mailbox-drain.sh` is a hook and consumes stdin unconditionally**
-  (`:36`, `cat >/dev/null` — deliberate, so the writer never SIGPIPEs). A bare call
-  on a TTY blocks forever and swallows everything typed after it. Feed it
-  `echo '{}' |`.
+  (`_stdin_json="$(cat 2>/dev/null || true)"` — deliberate, so the writer never
+  SIGPIPEs). A bare call on a TTY blocks forever and swallows everything typed
+  after it.
+  **`echo '{}' |` unblocks it but films the wrong path.** It no longer discards
+  the payload — it parses `.session_id` out of it and keys the inbox on the
+  *session*, falling back to the *pane* only when that field is missing
+  (`grep -n 'session_id' hooks/mailbox-drain.sh`). An empty `{}` takes the
+  fallback, so a demo shot that way shows the degraded pane-keyed box while
+  claiming to show the drain. Feed it
+  `echo '{"session_id":"<uuid>"}' |` to exercise the real path.
 - **zsh does not word-split unquoted `$VAR`.** `opts="-m 6"; gif2webp $opts …`
   passes `"-m 6"` as one argument and the tool prints usage. Use explicit
   arguments or an array.
