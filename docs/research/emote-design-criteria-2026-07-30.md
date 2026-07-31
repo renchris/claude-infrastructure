@@ -195,6 +195,18 @@ Three findings came out of actually rendering 27 candidates, and each corrects s
    each element's static rule — rendered every `!`, `?` and spark floating unattached in the sky.
    The rule generalises: **anything whose only opacity lives in keyframes is visible in the still.**
 
+   **RESOLVED 2026-07-31 — it stopped being a rule people have to remember.** Stated as knowledge
+   this re-emitted three more times: `.gtN`, two tracks in `_steps`' pack, and then `THE DIG`,
+   whose still showed the finished hole before a single crumb had been thrown. The rest value is
+   now emitted by the vocabulary itself (`egate`, `glyph_pop`, `_steps`), and `assert_static_rest`
+   in `emotes.py` refuses any element whose painted opacity with animations OFF disagrees with its
+   own track's 0% — read per ELEMENT, so a glyph inheriting `opacity:0` from `.eglyph` is correctly
+   accepted. That gate is the half that matters: three of the four instances were hand-rolled
+   `@keyframes` blocks that fixing the helpers could never have reached. Red-proofed in
+   `tests/emote-static-rest.bats` (10 cases, three of them sabotages required to fire by message).
+   The build was pixel-identical across all 27 candidates at five timestamps afterwards — a
+   resting value the animation already overrides costs the live loop nothing.
+
 4. **The contact sheet is an instrument, and it has two failure modes that both produce a wrong
    verdict.** Both were hit during this build, in opposite directions:
 

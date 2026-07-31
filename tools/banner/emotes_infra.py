@@ -340,10 +340,11 @@ def _gate() -> Emote:
             _extra("GL")
             + _extra("GR")
             + stop_world("gtScr", *hold)
-            # `.gtN{opacity:0}` as a STATIC rule as well as a gated one: with animations off the
-            # gate does not run and the notch would paint permanently lit, which is the one thing
-            # this beat says never happens except for a moment.
-            + ".gtN{opacity:0}"
+            # This beat used to carry `.gtN{opacity:0}` by hand beside the gate below, because with
+            # animations off the gate does not run and the notch painted permanently lit — the one
+            # thing this beat says never happens except for a moment. `egate` now emits that
+            # resting value itself, so the hand-written copy is gone rather than kept as a second
+            # source that could disagree with the gate it duplicates.
             + egate("gtNo", ".gtN", [hold])
             # the two that WAIT — this is the whole beat. Planted legs alone were not enough to
             # read at this size (walking already shows four legs, just at two heights), so the
