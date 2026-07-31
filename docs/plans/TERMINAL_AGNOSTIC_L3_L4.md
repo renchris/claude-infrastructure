@@ -239,10 +239,21 @@ console layer (sidebar row per pane, blue ring on attention, notifications panel
    iTerm2 was **pid 591 burning 107% CPU**. `terminal-bench.sh` was never fooled (it falls back to the
    `ps` comm basename) and its source documents the trap. **Census by comm basename, never `pgrep -x`.**
 3. **VHS 0.11.0 ignores `Set Framerate` for its mp4 muxer** — emits 25 fps regardless. Probed
-   directly with a minimal tape at `Set Framerate 60` → `avg_frame_rate=25/1`. The operator asked for
-   1080p60; the resolution is honoured, the rate is not, and the caption says **25** rather than
-   claiming a 60 the file does not have. A true 60 needs the `screencapture` path, which films a real
-   window and carries a content-leak risk the scripted tape does not.
+   directly with a minimal tape at `Set Framerate 60` → `avg_frame_rate=25/1`. **Resolved by splitting
+   the artifact** (`4d31f7ae`): the tape keeps the inline WebP and emits **no mp4**, and the linked
+   master is a real `screencapture` at display refresh — **1920×1080, `avg_frame_rate=60/1`, 4260
+   frames, 71 s**, from `assets/demo/terminal-bench-capture.sh`. Two artifacts, two routes; forced,
+   not stylistic.
+
+   **The capture route can film the operator's screen — three leaks, all caught by the contact
+   sheet, none by any encoder error:** (a) `screencapture -l<window-id>` does **not** scope *video*
+   to that window — the first take recorded the whole display, Dock and the operator's other windows,
+   and was deleted unused; use `-R` with your own window covering the rect. (b) A macOS notification
+   banner carrying **live session ids** landed in frame — banners are right-aligned, so the rect's
+   right edge must clear them (1280×720 at x=0 does, and captures at 2× for a clean 2560×1440 →
+   1080p downscale). (c) The window closed before the `-V` budget expired and the tail filmed the
+   desktop — **scan every second, not a sample**; mean luma separates the states cleanly here
+   (terminal ≈6.4k vs wallpaper ≈22.8k of 65535). Final scan: **0 bright frames**.
 4. **A 45-second drift window cannot resolve a rate finer than ~80 ports/hr**, so kitty's `+0` over
    45 s is a real reading but **cannot exclude iTerm2's measured +76/hr**. Publish drift readings WITH
    their resolution or they read as far stronger than they are — this is the `bound-must-fit-the-band`
