@@ -3673,8 +3673,20 @@ spawn() {
 recycle_fire() {
   local tty cmdfile log ts wrote
   ts="$(date +%s)"
-  cmdfile="/tmp/handoff-recycle-cmd-$SID-$ts.sh"
-  log="/tmp/handoff-recycle-$SID-$ts.log"
+  # Per-uid 0700 temp dir, not the mode-1777 /tmp (CWE-377/CWE-59). $cmdfile is never executed as a
+  # program, but the detached watcher `cat`s it and TYPES the contents into a live shell for up to
+  # ~13 min after THIS process has been SIGKILLed by its own /exit — so a name another uid can
+  # pre-create is a command-injection surface, and the `>` below would follow a planted symlink.
+  # `${TMPDIR:-/tmp}` is deliberately the SAME expression hooks/session-end.sh:65 sweeps, so the
+  # two cannot drift apart and leak; the `handoff-recycle-` prefix and depth-1 placement are what
+  # that sweep's -name globs match. mktemp takes a TRAILING XXXXXX only — a `-XXXXXX.sh` template
+  # is a literal constant name on BSD mktemp — so mint first and add the suffix after.
+  cmdfile="$(mktemp "${TMPDIR:-/tmp}/handoff-recycle-cmd-$SID-$ts-XXXXXX")" \
+    || { echo "!! recycle: could not mint a command file in a secure temp dir" >&2; exit 1; }
+  mv "$cmdfile" "$cmdfile.sh" && cmdfile="$cmdfile.sh"
+  log="$(mktemp "${TMPDIR:-/tmp}/handoff-recycle-$SID-$ts-XXXXXX")" \
+    || { echo "!! recycle: could not mint a watcher log in a secure temp dir" >&2; exit 1; }
+  mv "$log" "$log.log" && log="$log.log"
   printf '%s\n' "$CMD" > "$cmdfile"
   tty="$(as_tty "$SID")"
   [ -n "$tty" ] || { echo "!! recycle: session $SID not found in iTerm2" >&2; exit 1; }
