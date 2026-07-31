@@ -243,6 +243,19 @@ resolve_evidence() { # $1=label $2=evidence field
   fi
   plist="$LIVE_AGENTS/$1.plist"
   [ -f "$plist" ] || return 0
+  # REFUSE `auto` when the job's OWN argv suppresses stdout. `auto` means "watch the plist's
+  # StandardOutPath", so a job invoked `--quiet` / `--silent` / `>/dev/null` is being measured by the
+  # one stream it was deliberately told not to write: the file is size 0 by construction, its mtime
+  # never advances, and the label reads STALLED forever. Measured 2026-07-30 — capacity-alarm showed
+  # "evidence 29h old; bound 30m" while appending a row to its real artifact every 600 s, and
+  # qos-census had the same shape. Four of the seventeen fleet rows were this.
+  #
+  # EV_PATH="" is the honest answer, not a guess at the real artifact: it means NO SENSOR, so S5 is
+  # never claimed and the row cannot be convicted on evidence nobody produces. Naming the artifact is
+  # the manifest's job, and the row is where a human states it.
+  if [ -n "$("$PLUTIL_BIN" -p "$plist" 2>/dev/null | grep -oE -- '--quiet|--silent|>[[:space:]]*/dev/null' | head -1)" ]; then
+    return 0
+  fi
   # `-o -` is MANDATORY (discipline 1): without it plutil -extract REWRITES the plist in place.
   raw="$("$PLUTIL_BIN" -extract StandardOutPath raw -o - "$plist" 2>/dev/null)"; rc=$?
   # plutil prints its errors on STDOUT and they START with the plist path, so an absolute-path test
