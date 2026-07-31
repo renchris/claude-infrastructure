@@ -42,28 +42,14 @@ second creature calls both. This was found by rendering, not by reading.
 
 from __future__ import annotations
 
-import importlib
-import sys
-from pathlib import Path
-
-_HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(_HERE))
-
-# SUPERSEDED, kept only because it is a harmless no-op: `emotes.py` now aliases itself into
-# `sys.modules['emotes']` before importing any pack, so a plain `import emotes` binds to the
-# RUNNING framework and needs no shim. The resolution below still returns that same object.
-# Do not copy this block into a new pack — write `import emotes`.
-# BIND TO THE FRAMEWORK THAT IS ALREADY RUNNING, never to a fresh copy of it — the same resolution
-# `emotes_reactions.py` documents at length. `emotes.py` is the entrypoint as well as the framework,
-# so at `load_packs()` time it is already loaded as `__main__`; a plain `import emotes` builds a
-# SECOND module object with its own empty `EMOTES` list and every candidate below registers into a
-# list nobody renders. Confirmed here before a line of art was written: a one-candidate probe pack
-# using the plain import built cleanly and printed eleven candidates, none of them the probe.
-_main = sys.modules.get("__main__")
-if getattr(_main, "__file__", "") == str(_HERE / "emotes.py"):
-    fw = _main
-else:  # imported as an ordinary library (a test, a REPL) — the plain path
-    fw = importlib.import_module("emotes")
+# The framework aliases itself into `sys.modules['emotes']` before importing any pack, so this binds
+# to the RUNNING module object and its live `EMOTES` registry. That guarantee is load-bearing rather
+# than incidental: `emotes.py` is the entrypoint as well as the framework, so before the alias
+# existed a plain `import emotes` built a SECOND module object with its own empty registry and every
+# candidate below registered into a list nobody rendered. Measured here before a line of art was
+# written — a one-candidate probe pack built cleanly and printed eleven candidates, none of them the
+# probe — and `emotes.load_packs` now asserts the two objects are identical.
+import emotes as fw
 
 gen = fw.gen
 Emote = fw.Emote
@@ -91,6 +77,12 @@ HEAD_Y = (
 
 
 # ── shared machinery ──────────────────────────────────────────────────────────────────────────────
+# A NOTE ON `shift`, paid for once already. Its frames are `(time, dx, dy)` — X BEFORE Y — and every
+# vertical move in this pack was first authored as `(t, -26, 0)`, which is a sideways slide. Five
+# candidates shipped a horizontal hop, a horizontal spring, a horizontal step-over, a horizontal
+# set-down dip and a horizontal "synchronised bounce" that moved neither creature up by a pixel. The
+# tell was not in the code, which reads perfectly: it was a measured 2 px of crown travel across the
+# bounce frames, and that 2 px turned out to be the ambient `.bob`. Measure the axis you meant.
 def world_locked(name: str, sel: str, t0: float, t1: float) -> str:
     """Give any prop the ground plane's own travel: left at STRIP_V, frozen between t0 and t1.
 
@@ -410,8 +402,8 @@ def _sniff() -> Emote:
                 [
                     (0, 0, 0),
                     (w(e, 0.80), 0, 0),
-                    (w(e, 0.86), -26, 0),
-                    (w(e, 0.91), -20, 0),
+                    (w(e, 0.86), 0, -26),
+                    (w(e, 0.91), 0, -20),
                     (w(e, 0.96), 0, 0),
                     (EMOTE_P, 0, 0),
                 ],
@@ -547,8 +539,8 @@ def _dig() -> Emote:
                 [
                     (0, 0, 0),
                     (w(e, 0.62), 0, 0),
-                    (w(e, 0.70), -22, 0),
-                    (w(e, 0.78), -14, 0),
+                    (w(e, 0.70), 0, -22),
+                    (w(e, 0.78), 0, -14),
                     (w(e, 0.86), 0, 0),
                     (EMOTE_P, 0, 0),
                 ],
@@ -646,11 +638,11 @@ def _mote() -> Emote:
                 [
                     (0, 0, 0),
                     (w(e, 0.52), 0, 0),
-                    (w(e, 0.56), -17, 0),
-                    (w(e, 0.60), -30, 0),
-                    (w(e, 0.63), -34, 0),
-                    (w(e, 0.66), -29, 0),
-                    (w(e, 0.70), -11, 0),
+                    (w(e, 0.56), 0, -17),
+                    (w(e, 0.60), 0, -30),
+                    (w(e, 0.63), 0, -34),
+                    (w(e, 0.66), 0, -29),
+                    (w(e, 0.70), 0, -11),
                     (w(e, 0.73), 0, 0),
                     (EMOTE_P, 0, 0),
                 ],
@@ -730,9 +722,9 @@ def _greeting() -> Emote:
                 [
                     (0, 0, 0),
                     (5.25, 0, 0),
-                    (5.45, -amp, 0),
+                    (5.45, 0, -amp),
                     (5.70, 0, 0),
-                    (5.95, -amp, 0),
+                    (5.95, 0, -amp),
                     (6.20, 0, 0),
                     (EMOTE_P, 0, 0),
                 ],
@@ -934,8 +926,8 @@ def _handover() -> Emote:
                 [
                     (0, 0, 0),
                     (2.6, 0, 0),
-                    (3.0, 13, 0),
-                    (3.5, 13, 0),
+                    (3.0, 0, 13),
+                    (3.5, 0, 13),
                     (3.9, 0, 0),
                     (EMOTE_P, 0, 0),
                 ],
@@ -961,8 +953,8 @@ def _handover() -> Emote:
                 [
                     (0, 0, 0),
                     (7.5, 0, 0),
-                    (7.8, 13, 0),
-                    (8.1, 13, 0),
+                    (7.8, 0, 13),
+                    (8.1, 0, 13),
                     (8.4, 0, 0),
                     (EMOTE_P, 0, 0),
                 ],
