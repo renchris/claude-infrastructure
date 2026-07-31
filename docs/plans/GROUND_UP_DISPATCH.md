@@ -926,7 +926,17 @@ Everything in #3 below still holds except where this overrides it.
   cleared. Their converged finding — **`wake_floor()` has no teardown-abstain gate; `grep -c` for
   `shutdown_request|shutdown|teardown` in `hooks/session-continue.sh` returns ZERO while the design
   already holds the concept via `kill_switch_active` reading `last_user_msg()`** — is backlog
-  `00c8a786f8fd`. 🚨 **AND `cc-teardown` HAS BOTH VERDICT-PATH FAILURES, one tool, opposite polarity:**
+  `00c8a786f8fd`. ✅ **CLOSED 2026-07-31 AS ALREADY-FIXED — NOT REBUILT. The claim was TRUE at filing
+  and rotted in ~24 h:** verified 2026-07-29, then `873c869c` (2026-07-30 00:09, row 8's own close)
+  landed exactly the third state they specified — `wf_teardown_marked()` reading the sid/pane-keyed
+  marker under `$CC_TEARDOWN_DIR`, **plus** an assignee-argv leg they did not ask for, so the abstain
+  now covers *assignee* ∪ *terminating* rather than only an accepted `shutdown_request`. The same
+  `grep -c` now returns **19**; `tests/wake-floor.bats` is **34/34** at trunk with RED-PROOFs pinning
+  the pre-fix block (#33 = the ~4 h deadlock itself). **The transferable lesson is the DATE, not the
+  defect:** a two-assignee *converged* finding is not therefore a *current* one — date every item
+  against landed shas before working it, or you rebuild a live, tested gate. Verified against the
+  worktree at `origin/main`, **not** the shared checkout, which sat 63 commits behind
+  (`scan-revision-predates-the-fix`). 🚨 **AND `cc-teardown` HAS BOTH VERDICT-PATH FAILURES, one tool, opposite polarity:**
   an unresolvable agent NAME returns **`exit 0` "already gone" while the pane is alive**
   (`99f87bf7a6f7`), and the effect-verify races the close so a SUCCESSFUL teardown returns **`exit 5`
   "pane survived"** (`ae48044a004d`). Both now have an autonomous caller because the orphan-close was
