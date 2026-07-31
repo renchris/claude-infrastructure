@@ -20,105 +20,52 @@ One entrypoint over the 4-account fleet. The mechanism is `~/bin/claude-accounts
    claude-accounts --json     # when you need fields (auth, k, percents, resets, scores, reasons)
    ```
 
-2. **Render the canonical readout — EXACTLY this structure, every invocation.** The CLI table
-   is the DATA SOURCE, not the chat format; never improvise columns (user directive 2026-07-11:
-   the readout must always answer "when does the 5h limit expire" and "when does the weekly
-   limit expire" at a glance). Compute from `claude-accounts --json` → `.rows[]`; absolutes in
-   LOCAL time as `EEE HH:MM` + coarse relative in parens. Every reset has an ISO `*_reset_at`
-   field — `session_reset_at`, `weekly_reset_at`, `fable_reset_at`. Convert those; never do
-   `now + *_reset_h` arithmetic (the `_h` countdowns decay from the moment the sweep was
-   cached, and go NEGATIVE on an inherited stamp):
+2. **Render the canonical readout — run the renderer, do not rebuild it.**
 
-   | account | live | 5h used | 5h resets | weekly used | Fable used | weekly resets | login expires |
-   |---|---|---|---|---|---|---|---|
-   | **next4** ➤ ← you | 6 | 8% | Sat 07:21 (in 4.7h) | 25% | 22% | Sat 02:00 (in 23.4h) | Sat 12:39 (in 18.8h) |
-   | next2 | 0 | 2% | Sat 11:49 (in 4.3h) | 74% | 12% | Sat 03:59 (in 1d 12h) | ⚠ **Mon Aug 24 20:20 (in 2d 21h)** |
+   ```bash
+   claude-accounts --readout   # the finished markdown table + flag bullets + router footer
+   ```
 
-   - Column set is FIXED — both reset columns AND `login expires` present in EVERY row,
-     absolute first.
-   - **Relatives past 24h are `Xd Yh`, never decimal days and never 25+ hours** (operator
-     directive 2026-07-30, on a table reading `in 54.4h`). Nobody plans against 0.4 of a day
-     or counts 54 hours onto a Thursday: `in 2d 6h` is the form the reader already thinks in.
-     Sub-24h stays hours (`in 4.7h`), sub-1h stays minutes. Drop a zero remainder — `in 4d`,
-     not `in 4d 0h`. This matches the CLI's own `fmt_h`, so the two surfaces cannot diverge.
-   - **Mark the routed account: bold its name and append `➤`** — the same glyph the CLI table
-     and the router footer use, so the mark and its explanation read as one answer. `➤` is the
-     GENERAL pick; if the Fable pick differs, mark it `➤ᶠ` and say so on the footer line. The
-     marker composes with `← you` (`**next4** ➤ ← you`). Take the pick from
-     `claude-accounts --route <kind>`, NEVER by re-ranking `score_*` yourself.
-   - **A `login expires` cell inside `login_warn_h` is bold and `⚠`-prefixed** — the whole
-     cell, absolute and relative together. It is the one column whose deadline no reset will
-     clear, so it must be findable without reading the bullets. A row already showing
-     `⊘ REQUIRED` is not additionally marked — that state is louder than the warning.
-   - **`login expires` is a COLUMN, not a flag** (operator directive 2026-07-24: "we don't
-     show the next login required in the table?"). Source `login_expires_at` — the refresh
-     token's OWN expiry, which a refresh does NOT extend, so it is a hard per-account deadline
-     that only an interactive `/login` clears. A column rather than a flag because the
-     bullets-not-columns rule below is for CONDITIONAL flags and this is not conditional:
-     every account always has one, exactly like the two reset columns. Never render it as a
-     quota or a reset — it is neither. A row whose `auth` is `login-required` shows
-     **`⊘ REQUIRED`** instead of a stamp: the deadline is not what drives that row (the grant
-     was rejected, or it already lapsed), so a future date would read as "fine until then".
-   - Absolutes beyond ~6 days carry the DATE (`EEE MMM D HH:MM`, e.g. `Sat Jul 18 03:59`) —
-     a bare weekday a week out is ambiguous with today.
-   - ONE weekly-resets column: the weekly and weekly-Fable buckets reset at the same instant —
-     compare `weekly_reset_at`/`fable_reset_at` at MINUTE precision (the CLI stamps them
-     microseconds apart; exact string compare false-diverges). Genuinely different minutes →
-     footnote it — never add a column.
-   - Mark the row whose **`is_self: true`** with `← you`; if no row has it, omit the marker.
-     NEVER derive this from `$CLAUDE_CONFIG_DIR` yourself — that is the reader's env, not the
-     row's, and hand-derivation marked the wrong account on 2026-07-21. The CLI resolves it
-     per invocation.
+   Paste that output. It IS the canonical structure (user directive 2026-07-11: the readout
+   must always answer "when does the 5h limit expire" and "when does the weekly limit expire"
+   at a glance). **Never hand-assemble this table from `--json`, and never improvise columns.**
 
-   **🚨 Staleness — the numbers are not always live.** A row is showing INHERITED history,
-   not a fresh reading, whenever **`error` is present** or **`stale_quota: true`** (the
-   `error` field is the by-construction test: the CLI only assigns live percentages on a
-   clean 200, so every percent on an error row came from the last-good ledger). Such a row is
-   also **excluded from routing**. For each one you MUST:
-   - suffix every percent cell with `*`, and
-   - add a bullet naming the age and the exclusion, using `quota_as_of` (ISO) — e.g.
-     `↻ next4 — last-known, as of Sun 19 Jul; not polled this sweep, excluded from routing`.
-   - `poll_throttled: true` is the TRANSIENT case (a 90s endpoint throttle, never a usage
-     cap): say so, and note `--fresh` retries. Do not report it as a limit.
-   - `rolled_since: [...]` names buckets whose reset has ELAPSED since that reading. Those
-     percents are withheld (null) because the window has rolled — render `—`, and say the
-     account is likely fresh again. Never present a withheld bucket as 0% or as last-known.
-   - Never state or imply a stale number is current, and never rank or recommend on one.
-   - A `*_reset_at` that is null or in the PAST renders `—`, never a past absolute and never
-     a negative relative. Cause depends on the row: on a stale/error row it is
-     `resets unknown (row not live)`; on a clean live row it means no reset stamp was
-     returned for that limit (bucket unused / at 0%).
-   - Flags are bullets BELOW the table, never extra columns. Enumerate by SOURCE, not by
-     literal: ▲ 5h at/over the routing cutoff (the cutoff is `s_cut` in `--json` — never
-     assume 85) · weekly at 100% **LIMITED** · Fable exhausted
-     (`route_reasons.fable == "fable-exhausted"`) · `¢` extra-usage spend · `auth` ≠ ok ·
-     stale/throttled rows per the rule above. Row order = the CLI's own order.
-   - **`¢` keys on SPEND (`credits_used > 0`), never on the `credits_on` toggle alone**, and
-     always renders **`credits_used_usd`** (dollars) — never the raw `credits_used`, which is
-     in **CENTS**. Both rules are earned: on 2026-07-26 an account reported `credits_on: false`
-     with `credits_used: 17691` while its claude.ai Usage panel read **"$176.91 spent"** — so
-     a toggle-keyed flag hid real metered money, and a raw-number flag would have misreported
-     it 100x. Money already spent stays true after the toggle is switched back off; say the
-     dollar figure and the toggle state, in that order.
-   - **Login-cliff bullet** (in ADDITION to the column above): any row inside `login_warn_h`
-     (SSOT, default 72h) gets one, naming `<launcher>` → `/login`; and when the ROUTED winner
-     is one, say it on the routing line too — still the correct pick on headroom, but a long
-     session fired onto it outlives its credentials. `login_expired: true` with `auth: ok` is
-     the case to never drop: the stamp lapsed inside the cache TTL, so no other field on that
-     row says so. Skip the bullet on a `login-required` row — it already carries its own.
-   - 🚨 **Every re-login instruction names the MAILBOX it authenticates** — `email` and
-     `dia_profile` from that same row, on the SAME line as the command, never a lookup away
-     (operator directive 2026-07-30: *"so we don't accidentally authenticate a different
-     account to a wrong profile"*). `next` / `next3` are slot numbers, not identities; the
-     operator authenticates a mailbox in a browser profile, and a mis-paired one lands
-     silently — the credential works, so nothing errors, while the account you meant is still
-     expiring. Shape: `▶ claude-next → /login · ichris96+claude@hotmail.com · Dia "Personaly"`.
-     Binds to EVERY surface that suggests a login — the cliff bullet, an `auth_actionable`
-     row, the routed-winner warning, and any `/relogin` you propose. The CLI enforces the same
-     rule in its own bullets, so never restate one of those WITHOUT its identity.
-   - Close with the router footer (`➤ general → X` · `➤ fable → Y`) + the Fable window line.
-     When the window is **permanent**, there is no countdown to report — say "permanent",
-     never a date-derived time remaining.
+   **Why it moved into code (2026-07-30).** Every formatting rule below used to live here as
+   prose that the model re-executed each invocation — which meant two renderers for one table,
+   kept in sync by discipline alone. Changing the relative format (`2.3d` → `2d 6h`) had to be
+   made in both places on the same turn, and nothing but care stopped them drifting. Prose
+   cannot be tested; `render_readout` can, and its rules are pinned by `tests/claude-accounts-core.bats`.
+   The renderer now owns, with the directive that produced each preserved at the code:
+
+   | Rule | Directive it encodes |
+   |---|---|
+   | Fixed column set, both reset columns + `login expires` in every row | 2026-07-11, 2026-07-24 |
+   | Absolutes in LOCAL `EEE HH:MM`, dated past ~6 days; derived from `*_reset_at`, never `now + *_reset_h` | 2026-07-11 |
+   | Relatives past 24h as `Xd Yh` (never decimal days, never 25+ hours) | 2026-07-30 |
+   | `➤` + bold on the routed account; `➤ᶠ` when the Fable pick differs; `← you` from `is_self` | 2026-07-30 |
+   | `⚠` + bold on a `login expires` inside `login_warn_h`; `⊘ REQUIRED` on a `login-required` row | 2026-07-24, 2026-07-30 |
+   | `*` on every percent of an inherited row, + the age/exclusion bullet | 2026-07-19 |
+   | ONE weekly-resets column (tolerance compare, footnote a genuine split) | 2026-07-11 |
+   | Flags as bullets never columns; `¢` keyed on SPEND and rendered in DOLLARS | 2026-07-26 |
+   | `—` for a null or elapsed stamp; `permanent` Fable window gets no countdown | 2026-07-20 |
+   | Every `/login` line carries its mailbox + Dia profile | 2026-07-30 |
+
+   **What is still yours** — the renderer prints facts; these bind how you may USE them:
+   - 🚨 **Never state or imply a starred number is current, and never rank or recommend on
+     one.** A `*` row is inherited history AND router-excluded. `poll_throttled` is a 90s
+     endpoint throttle — ALWAYS transient, NEVER a usage cap (a real cap is HTTP 200 with
+     percent ≈ 100). Never report a throttle as a limit.
+   - 🚨 **Never re-derive the routed account yourself from `score_*`.** The footer is the
+     adversarially-verified router; report its answer. For wave spread use
+     `claude-accounts --rank general|fable` and assign round-robin.
+   - 🚨 **Every re-login instruction you write names the MAILBOX it authenticates** — email
+     and Dia profile, on the SAME line as the command (operator directive 2026-07-30: *"so we
+     don't accidentally authenticate a different account to a wrong profile"*). `next` /
+     `next3` are slot numbers, not identities; a mis-paired credential works, so nothing
+     errors, while the account you meant keeps expiring. The renderer already emits this —
+     so if you paraphrase a cliff bullet, carry the identity with it.
+   - A row's `←`/`➤` markers and the footer are ONE answer from ONE ranking pass. If you
+     summarise, do not restate the pick in a way that could disagree with the footer.
 
 3. **Interpret** — report to the user, answer-first:
    - **Routing**: the footer's `➤ general → X` / `➤ fable → Y` is the

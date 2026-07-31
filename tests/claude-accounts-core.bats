@@ -933,6 +933,165 @@ print("OK")'
   [ "$status" -eq 0 ] && [[ "$output" == *OK* ]]
 }
 
+# ---- --readout: the chat surface, as CODE rather than as prose in commands/accounts.md ------
+
+READOUT='
+import io, contextlib, re
+from datetime import datetime, timedelta, timezone
+def at(h):
+    return (datetime.now(timezone.utc) + timedelta(hours=h)).isoformat()
+def rd(rows, win=None, cached=False):
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        ca.render_readout(rows, cfg, win or WIN_OPEN, cached)
+    return buf.getvalue()
+def acctrow(out, name):
+    for ln in out.splitlines():
+        if ln.startswith("| ") and re.match(r"^\| \**" + name + r"\b", ln):
+            return ln
+    raise AssertionError((name, out))
+'
+
+@test "--readout: marks the routed accounts and the self row, without a second ranking pass" {
+  run python3 -c "$LOAD$READOUT"'
+rows = [row(acct="poor", weekly_pct=95, fable_pct=95),
+        row(acct="rich", weekly_pct=5,  fable_pct=90, is_self=True),
+        row(acct="fab",  weekly_pct=40, fable_pct=1)]
+out = rd(rows)
+g, _ = ca.ranked(rows, cfg, WIN_OPEN, "general")
+f, _ = ca.ranked(rows, cfg, WIN_OPEN, "fable")
+gp, fp = g[0][1]["acct"], f[0][1]["acct"]
+assert gp != fp, (gp, fp)                       # the case a single marker would collapse
+assert "➤" in acctrow(out, gp) and f"**{gp}**" in acctrow(out, gp), out
+assert "➤ᶠ" in acctrow(out, fp), out
+assert "➤ᶠ" not in acctrow(out, gp), out        # general pick is not also flagged as fable
+assert "← you" in acctrow(out, "rich"), out
+# the footer states the SAME answer as the marks — one router, not two opinions
+assert f"➤ general → **{gp}**" in out and f"➤ fable → **{fp}**" in out, out
+print("OK")'
+  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "--readout: an inherited row is starred and declared, never presented as a reading" {
+  run python3 -c "$LOAD$READOUT"'
+rows = [row(acct="stale", stale_quota=True, error="poll throttled ↻ (cached usage)",
+            poll_throttled=True, quota_as_of="2026-07-19T09:40:00+00:00")]
+out = rd(rows)
+r = acctrow(out, "stale")
+# EVERY percent on the row carries the provenance mark — one unmarked number reads as live
+assert len(re.findall(r"\d+%\*", r)) >= 3, r
+assert re.search(r"\d+%(?!\*)", r) is None, r
+assert "throttle" in out and "NOT a usage cap" in out, out   # transient, never a limit
+assert "--fresh" in out, out
+# a non-throttled inherited row says the OTHER thing: excluded from routing
+out2 = rd([row(acct="old", stale_quota=True, error="no data",
+               quota_as_of="2026-07-19T09:40:00+00:00")])
+assert "excluded from routing" in out2, out2
+print("OK")'
+  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "--readout: a login inside the warn band is loud; login-required shows state, not a date" {
+  run python3 -c "$LOAD"'
+import io, contextlib, re
+from datetime import datetime, timedelta, timezone
+def at(h): return (datetime.now(timezone.utc) + timedelta(hours=h)).isoformat()
+def rd(rows):
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf): ca.render_readout(rows, cfg, WIN_OPEN, False)
+    return buf.getvalue()
+# a routed row renders as "| **name** ➤" — match past the markers, never startswith
+def arow(out, name):
+    return [l for l in out.splitlines() if re.match(r"^\| \**" + name + r"\b", l)][0]
+warn = float(cfg["login_warn_h"])
+out = rd([row(acct="soon", auth="ok", launcher="claude-soon", email="s@x.com",
+              dia_profile="S", login_expires_h=warn - 2, login_expires_at=at(warn - 2)),
+          row(acct="far", auth="ok", login_expires_h=warn + 500,
+              login_expires_at=at(warn + 500)),
+          row(acct="dead", auth="login-required", launcher="claude-dead", email="d@x.com",
+              dia_profile="D", login_expires_h=400.0, login_expires_at=at(400))])
+soon = arow(out, "soon")
+assert "⚠" in soon and "**" in soon, soon
+far = arow(out, "far")
+assert "⚠" not in far, far                     # only the band is marked, not every row
+dead = arow(out, "dead")
+# a future date beside a REJECTED grant reads as "fine until then" — state instead
+assert "⊘ REQUIRED" in dead and "20" not in dead.split("|")[-2], dead
+# the cliff bullet carries the identity that makes it safe to act on
+cliff = [l for l in out.splitlines() if l.startswith("- ") and "login expires" in l][0]
+assert "claude-soon" in cliff and "s@x.com" in cliff and "Dia" in cliff, cliff
+# ...and login-required is NOT double-warned: its own auth bullet already says it
+assert not [l for l in out.splitlines() if "`dead` login expires" in l], out
+print("OK")'
+  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "--readout: the two weekly buckets stay ONE column across a sub-second boundary straddle" {
+  run python3 -c "$LOAD"'
+import io, contextlib
+def rd(rows):
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf): ca.render_readout(rows, cfg, WIN_OPEN, False)
+    return buf.getvalue()
+# the real shape: stamped a fraction of a second apart, straddling a minute boundary.
+# Truncating to the minute makes these two DIFFERENT — it printed a bogus divergence
+# footnote on 2 of 4 live accounts the first time this ran for real.
+straddle = row(acct="s", weekly_reset_at="2026-08-02T03:59:59.800747+00:00",
+               fable_reset_at="2026-08-02T04:00:00.010000+00:00")
+assert "different minutes" not in rd([straddle]), rd([straddle])
+assert ca._same_instant("2026-08-02T03:59:59.800747+00:00", "2026-08-02T04:00:00.010000+00:00")
+# a GENUINE split is still footnoted rather than silently merged into one column
+real = row(acct="r", weekly_reset_at="2026-08-02T03:59:59+00:00",
+           fable_reset_at="2026-08-04T12:00:00+00:00")
+assert "different minutes" in rd([real]), rd([real])
+assert not ca._same_instant("2026-08-02T03:59:59+00:00", "2026-08-04T12:00:00+00:00")
+# unparseable on either side is NOT silently "same" — footnote what you cannot rule out
+assert ca._same_instant("garbage", "2026-08-02T03:59:59+00:00") is False
+print("OK")'
+  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "--readout: spend is flagged in DOLLARS on spend, not on the toggle, and never in cents" {
+  run python3 -c "$LOAD"'
+import io, contextlib
+def rd(rows):
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf): ca.render_readout(rows, cfg, WIN_OPEN, False)
+    return buf.getvalue()
+# the 2026-07-26 shape: toggle OFF, 17691 CENTS already spent = $176.91 on the Usage panel.
+# A toggle-keyed flag hides it; a raw-number flag misreports it 100x.
+out = rd([row(acct="spent", credits_on=False, credits_used=17691.0, credits_used_usd=176.91)])
+assert "$176.91" in out, out
+assert "17691" not in out, out
+assert "off" in out.lower(), out                       # toggle state said AFTER the amount
+assert not rd([row(acct="none", credits_on=True, credits_used=0.0)]).count("¢"), "flagged on 0 spend"
+print("OK")'
+  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "--readout: a permanent Fable window is never given a countdown, and nulls read as —" {
+  run python3 -c "$LOAD"'
+import io, contextlib
+import re
+def rd(rows, win):
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf): ca.render_readout(rows, cfg, win, False)
+    return buf.getvalue()
+def arow(out, name):
+    return [l for l in out.splitlines() if re.match(r"^\| \**" + name + r"\b", l)][0]
+out = rd([row(acct="a")], WIN_OPEN)
+assert "permanent" in out and "2099" not in out, out    # no sentinel-derived time remaining
+# a null stamp and an ELAPSED one both read as an em dash: a past absolute reads as a live
+# deadline, and a negative relative reads as nonsense
+gone = rd([row(acct="b", weekly_reset_at=None, weekly_reset_h=None,
+               session_reset_at="2020-01-01T00:00:00+00:00", session_reset_h=-5.0)], WIN_OPEN)
+r = arow(gone, "b")
+assert r.count("—") >= 2, r
+assert "2020" not in r and "-5" not in r, r
+print("OK")'
+  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
 @test "--login-status: the deadline fields are MACHINE forms, and iso_epoch can read them" {
   # The regression this pins: `when` used to carry _fmt_when's "Sun 13:21" and `hours` fmt_h's
   # "2.9d". iso_epoch("Sun 13:21") is 0, so cc-relogin-poll's preferred ISO branch was dead by
