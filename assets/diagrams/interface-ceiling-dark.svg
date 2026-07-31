@@ -1,0 +1,96 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 656.8774999999999 891.1709999999999" width="656.8774999999999" height="891.1709999999999" style="--bg:#0d1117;--fg:#e6edf3;--line:#3d444d;--accent:#4493f8;--muted:#9198a1">
+<style>
+  text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          var(--fg);
+    --_text-sec:      var(--muted, color-mix(in srgb, var(--fg) 60%, var(--bg)));
+    --_text-muted:    var(--muted, color-mix(in srgb, var(--fg) 40%, var(--bg)));
+    --_text-faint:    color-mix(in srgb, var(--fg) 25%, var(--bg));
+    --_line:          var(--line, color-mix(in srgb, var(--fg) 50%, var(--bg)));
+    --_arrow:         var(--accent, color-mix(in srgb, var(--fg) 85%, var(--bg)));
+    --_node-fill:     var(--surface, color-mix(in srgb, var(--fg) 3%, var(--bg)));
+    --_node-stroke:   var(--border, color-mix(in srgb, var(--fg) 20%, var(--bg)));
+    --_group-fill:    var(--bg);
+    --_group-hdr:     color-mix(in srgb, var(--fg) 5%, var(--bg));
+    --_inner-stroke:  color-mix(in srgb, var(--fg) 12%, var(--bg));
+    --_key-badge:     color-mix(in srgb, var(--fg) 10%, var(--bg));
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<polyline class="edge" data-from="Fleet" data-to="Block" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="317.8795,110.7 317.8795,158.7" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Block" data-to="Poll" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="TODAY — found by EYE" points="284.53433333333334,325.4258333333333 284.53433333333334,394.77099999999996 167.30849999999998,394.77099999999996 167.3085,475.07099999999997" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Block" data-to="Beacon" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="ALREADY BUILT" points="351.2246666666666,325.42583333333334 351.2246666666666,394.77099999999996 468.4504999999999,394.77099999999996 468.4505,475.07099999999997" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Poll" data-to="Cost" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="167.3085,528.871 167.30849999999998,585.3209999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Cost" data-to="Leak" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="167.30849999999998,639.1209999999999 167.3085,687.1209999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Leak" data-to="ScaleN" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="167.3085,740.9209999999998 167.30849999999998,780.4709999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Beacon" data-to="Face" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="468.4505,545.771 468.4504999999999,585.3209999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Face" data-to="Console" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="468.4504999999999,639.1209999999999 468.4504999999999,687.1209999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Console" data-to="ScaleB" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="468.4504999999999,757.8209999999999 468.4504999999999,814.271" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="Block" data-to="Poll" data-label="TODAY — found by EYE">
+  <rect x="104.3085" y="401.77099999999996" width="125.75800000000001" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="167.1875" y="416.92099999999994" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">TODAY — found by EYE</text>
+</g>
+<g class="edge-label" data-from="Block" data-to="Beacon" data-label="ALREADY BUILT">
+  <rect x="417.9504999999999" y="401.77099999999996" width="100.216" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="468.0584999999999" y="416.92099999999994" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">ALREADY BUILT</text>
+</g>
+<g class="node" data-id="Fleet" data-label="30 sessions RUNNING
+≈0.75 cores · ~215 MB each
+93% memory free · Pageouts 0" data-shape="rectangle">
+  <rect x="209.096" y="40" width="217.56699999999998" height="70.7" rx="0" ry="0" fill="#2b2410" stroke="#d4af37" stroke-width="0.75" />
+  <text x="317.8795" y="75.35" text-anchor="middle" font-size="13" font-weight="500" fill="#e6edf3"><tspan x="317.8795" dy="-12.350000000000001">30 sessions RUNNING</tspan><tspan x="317.8795" dy="16.900000000000002">≈0.75 cores · ~215 MB each</tspan><tspan x="317.8795" dy="16.900000000000002">93% memory free · Pageouts 0</tspan></text>
+</g>
+<g class="node" data-id="Block" data-label="a session BLOCKS
+on a permission prompt" data-shape="diamond">
+  <polygon points="317.8795,158.70000000000002 417.91499999999996,258.7355 317.8795,358.77099999999996 217.84400000000002,258.7355" fill="#2b2410" stroke="#d4af37" stroke-width="0.75" />
+  <text x="317.8795" y="258.7355" text-anchor="middle" font-size="13" font-weight="500" fill="#e6edf3"><tspan x="317.8795" dy="-3.9000000000000012">a session BLOCKS</tspan><tspan x="317.8795" dy="16.900000000000002">on a permission prompt</tspan></text>
+</g>
+<g class="node" data-id="Poll" data-label="30 panes kept VISIBLE
+a POLLING interface" data-shape="rectangle">
+  <rect x="79.27300000000002" y="475.07099999999997" width="176.07099999999997" height="53.800000000000004" rx="0" ry="0" fill="#0d1d2e" stroke="#58a6ff" stroke-width="0.75" />
+  <text x="167.3085" y="501.97099999999995" text-anchor="middle" font-size="13" font-weight="500" fill="#e6edf3"><tspan x="167.3085" dy="-3.9000000000000012">30 panes kept VISIBLE</tspan><tspan x="167.3085" dy="16.900000000000002">a POLLING interface</tspan></text>
+</g>
+<g class="node" data-id="Beacon" data-label="cc-permission-beacon.sh
+PermissionRequest →
+/tmp/cc-permission-pending/" data-shape="rectangle">
+  <rect x="364.854" y="475.07099999999997" width="207.19299999999996" height="70.7" rx="0" ry="0" fill="#12261a" stroke="#3fb950" stroke-width="0.75" />
+  <text x="468.4505" y="510.421" text-anchor="middle" font-size="13" font-weight="500" fill="#e6edf3"><tspan x="468.4505" dy="-12.350000000000001">cc-permission-beacon.sh</tspan><tspan x="468.4505" dy="16.900000000000002">PermissionRequest →</tspan><tspan x="468.4505" dy="16.900000000000002">/tmp/cc-permission-pending/</tspan></text>
+</g>
+<g class="node" data-id="Cost" data-label="iTerm2 122.1% + WindowServer 49.0%
+≈1.7 cores = 2.3× the fleet it displays" data-shape="rectangle">
+  <rect x="40" y="585.3209999999999" width="254.617" height="53.800000000000004" rx="0" ry="0" fill="#0d1d2e" stroke="#58a6ff" stroke-width="0.75" />
+  <text x="167.30849999999998" y="612.2209999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#e6edf3"><tspan x="167.30849999999998" dy="-3.9000000000000012">iTerm2 122.1% + WindowServer 49.0%</tspan><tspan x="167.30849999999998" dy="16.900000000000002">≈1.7 cores = 2.3× the fleet it displays</tspan></text>
+</g>
+<g class="node" data-id="Leak" data-label="+76 mach ports/hr at FROZEN layout
+tuning exhausted — match=9 drift=0" data-shape="rectangle">
+  <rect x="40.370500000000035" y="687.1209999999999" width="253.87599999999995" height="53.800000000000004" rx="0" ry="0" fill="#0d1d2e" stroke="#58a6ff" stroke-width="0.75" />
+  <text x="167.3085" y="714.0209999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#e6edf3"><tspan x="167.3085" dy="-3.9000000000000012">+76 mach ports/hr at FROZEN layout</tspan><tspan x="167.3085" dy="16.900000000000002">tuning exhausted — match=9 drift=0</tspan></text>
+</g>
+<g class="node" data-id="ScaleN" data-label="cost scales with sessions RUNNING" data-shape="rectangle">
+  <rect x="42.59350000000001" y="780.4709999999999" width="249.42999999999995" height="36.900000000000006" rx="0" ry="0" fill="#0d1d2e" stroke="#58a6ff" stroke-width="0.75" />
+  <text x="167.30849999999998" y="798.9209999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#e6edf3" dy="4.55">cost scales with sessions RUNNING</text>
+</g>
+<g class="node" data-id="Face" data-label="MISSING: nothing RENDERS the queue
+so the grid stands in for it" data-shape="rectangle">
+  <rect x="335.21399999999994" y="585.3209999999999" width="266.47299999999996" height="53.800000000000004" rx="0" ry="0" fill="#12261a" stroke="#3fb950" stroke-width="0.75" />
+  <text x="468.4504999999999" y="612.2209999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#e6edf3"><tspan x="468.4504999999999" dy="-3.9000000000000012">MISSING: nothing RENDERS the queue</tspan><tspan x="468.4504999999999" dy="16.900000000000002">so the grid stands in for it</tspan></text>
+</g>
+<g class="node" data-id="Console" data-label="a CONSOLE, not a terminal
+1 row per session · zoom on demand
+no VT — drives kitty underneath" data-shape="rectangle">
+  <rect x="343.36499999999995" y="687.1209999999999" width="250.17099999999996" height="70.7" rx="0" ry="0" fill="#12261a" stroke="#3fb950" stroke-width="0.75" />
+  <text x="468.4504999999999" y="722.4709999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#e6edf3"><tspan x="468.4504999999999" dy="-12.350000000000001">a CONSOLE, not a terminal</tspan><tspan x="468.4504999999999" dy="16.900000000000002">1 row per session · zoom on demand</tspan><tspan x="468.4504999999999" dy="16.900000000000002">no VT — drives kitty underneath</tspan></text>
+</g>
+<g class="node" data-id="ScaleB" data-label="cost scales with sessions BLOCKED — 0 to 3" data-shape="rectangle">
+  <rect x="320.02349999999996" y="814.271" width="296.854" height="36.900000000000006" rx="0" ry="0" fill="#12261a" stroke="#3fb950" stroke-width="0.75" />
+  <text x="468.4504999999999" y="832.721" text-anchor="middle" font-size="13" font-weight="500" fill="#e6edf3" dy="4.55">cost scales with sessions BLOCKED — 0 to 3</text>
+</g>
+</svg>

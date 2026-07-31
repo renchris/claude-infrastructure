@@ -1,0 +1,22 @@
+flowchart TB
+    Fleet["30 sessions RUNNING<br/>≈0.75 cores · ~215 MB each<br/>93% memory free · Pageouts 0"]
+    Block{"a session BLOCKS<br/>on a permission prompt"}
+    Fleet --> Block
+
+    Block -->|"TODAY — found by EYE"| Poll["30 panes kept VISIBLE<br/>a POLLING interface"]
+    Block -->|"ALREADY BUILT"| Beacon["cc-permission-beacon.sh<br/>PermissionRequest →<br/>/tmp/cc-permission-pending/"]
+
+    Poll --> Cost["iTerm2 122.1% + WindowServer 49.0%<br/>≈1.7 cores = 2.3× the fleet it displays"]
+    Cost --> Leak["+76 mach ports/hr at FROZEN layout<br/>tuning exhausted — match=9 drift=0"]
+    Leak --> ScaleN["cost scales with sessions RUNNING"]
+
+    Beacon --> Face["MISSING: nothing RENDERS the queue<br/>so the grid stands in for it"]
+    Face --> Console["a CONSOLE, not a terminal<br/>1 row per session · zoom on demand<br/>no VT — drives kitty underneath"]
+    Console --> ScaleB["cost scales with sessions BLOCKED — 0 to 3"]
+
+    classDef k fill:@gold-bg,stroke:@gold-fg,color:@text
+    classDef b fill:@blue-bg,stroke:@blue-fg,color:@text
+    classDef g fill:@green-bg,stroke:@green-fg,color:@text
+    class Block,Fleet k
+    class Poll,Cost,Leak,ScaleN b
+    class Beacon,Face,Console,ScaleB g

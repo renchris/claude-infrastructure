@@ -9,7 +9,7 @@
 [![tests](https://img.shields.io/badge/bats%20tests-2%2C358-d4af37?style=flat-square&labelColor=161b22)](#5-the-whole-system-deploys-from-git)
 [![accounts](https://img.shields.io/badge/accounts-4%20isolated-d4af37?style=flat-square&labelColor=161b22)](#2-parallel-work-cannot-collide)
 
-[**1 · Sessions run each other**](#1-sessions-run-each-other) · [**2 · No collisions**](#2-parallel-work-cannot-collide) · [**3 · Bounded autonomy**](#3-autonomy-is-bounded) · [**4 · Nothing is lost**](#4-nothing-a-session-did-dies-with-it) · [**5 · Deploys from git**](#5-the-whole-system-deploys-from-git) · [**Install**](#install)
+[**1 · Sessions run each other**](#1-sessions-run-each-other) · [**2 · No collisions**](#2-parallel-work-cannot-collide) · [**3 · Bounded autonomy**](#3-autonomy-is-bounded) · [**4 · Nothing is lost**](#4-nothing-a-session-did-dies-with-it) · [**5 · Deploys from git**](#5-the-whole-system-deploys-from-git) · [**6 · The next ceiling**](#6-the-ceiling-is-the-interface-not-the-machine) · [**Install**](#install)
 
 </div>
 
@@ -37,6 +37,8 @@ and exercised across **5,709 sessions**.
 | **3** | [**Autonomy is bounded**](#3-autonomy-is-bounded) | 69 hooks on 12 lifecycle events refuse the calls that lose work — including a false "done". |
 | **4** | [**Nothing a session did dies with it**](#4-nothing-a-session-did-dies-with-it) | Every Write, plan, task and transcript outlives the pane that made it. |
 | **5** | [**The whole system deploys from git**](#5-the-whole-system-deploys-from-git) | No drift, no un-reviewable machine state, and an update that can't break a running session. |
+
+Those five are what the system *has*. [**§6 is what it is still blocked by**](#6-the-ceiling-is-the-interface-not-the-machine) — measured, and it is not the machine.
 
 ---
 
@@ -408,6 +410,102 @@ Running processes survive `rm -rf` of their own version via POSIX vnode semantic
 
 ---
 
+## 6. The ceiling is the interface, not the machine
+
+Everything above runs ~30 sessions unattended. At that concurrency this box lags and freezes — and every pane must stay visible, because a blocked permission prompt is found *by eye*. On [Boris Cherny's adoption ladder](https://claude.ai/code/artifact/bfdfaef9-bc62-4dfe-ba9e-c58a26c9accf) that puts this system at **Step 3 in mechanism and Step 2 in human loop**: worktrees, subagents, dynamic workflows, `/loop`, `/batch`, `/goal`, Skills and launchd routines are all here, but the operator is still a *poller*.
+
+**Running 30 sessions is not what lags this box — displaying them is.** Measured 2026-07-31; full evidence in [`docs/research/l3-l4-terminal-and-workflow-2026-07-31.md`](docs/research/l3-l4-terminal-and-workflow-2026-07-31.md).
+
+<!-- Diagram source: assets/diagrams/interface-ceiling.mmd — edit it, run `npm run diagrams`, commit the regenerated SVGs. -->
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/diagrams/interface-ceiling-dark.svg">
+  <img src="assets/diagrams/interface-ceiling-light.svg" alt="Thirty sessions running cost about 0.75 cores at roughly 215 MB each, with 93 percent of memory free and zero pageouts — so the fleet is not the expensive part. When a session blocks on a permission prompt the path forks. Today it is found by eye, which requires thirty panes kept visible: a polling interface. That costs iTerm2 122.1 percent plus WindowServer 49.0 percent, about 1.7 cores, which is 2.3 times the fleet it displays, and it leaks 76 mach ports per hour at frozen layout with tuning already exhausted at match 9 drift 0 — so cost scales with sessions running. The other fork already exists: cc-permission-beacon.sh fires on PermissionRequest and writes each blocked session to /tmp/cc-permission-pending/. What is missing is that nothing renders that queue, so the grid stands in for it. The fix is a console rather than a terminal — one row per session, zoom on demand, no VT implementation, driving kitty underneath — after which cost scales with sessions blocked, zero to three.">
+</picture>
+
+<details>
+<summary>Interactive Diagram</summary>
+
+<!-- mermaid-fence: assets/diagrams/interface-ceiling.mmd (auto-synced by `npm run diagrams`) -->
+```mermaid
+flowchart TB
+    Fleet["30 sessions RUNNING<br/>≈0.75 cores · ~215 MB each<br/>93% memory free · Pageouts 0"]
+    Block{"a session BLOCKS<br/>on a permission prompt"}
+    Fleet --> Block
+
+    Block -->|"TODAY — found by EYE"| Poll["30 panes kept VISIBLE<br/>a POLLING interface"]
+    Block -->|"ALREADY BUILT"| Beacon["cc-permission-beacon.sh<br/>PermissionRequest →<br/>/tmp/cc-permission-pending/"]
+
+    Poll --> Cost["iTerm2 122.1% + WindowServer 49.0%<br/>≈1.7 cores = 2.3× the fleet it displays"]
+    Cost --> Leak["+76 mach ports/hr at FROZEN layout<br/>tuning exhausted — match=9 drift=0"]
+    Leak --> ScaleN["cost scales with sessions RUNNING"]
+
+    Beacon --> Face["MISSING: nothing RENDERS the queue<br/>so the grid stands in for it"]
+    Face --> Console["a CONSOLE, not a terminal<br/>1 row per session · zoom on demand<br/>no VT — drives kitty underneath"]
+    Console --> ScaleB["cost scales with sessions BLOCKED — 0 to 3"]
+
+    classDef k fill:#2b2410,stroke:#d4af37,color:#e6edf3
+    classDef b fill:#0d1d2e,stroke:#58a6ff,color:#e6edf3
+    classDef g fill:#12261a,stroke:#3fb950,color:#e6edf3
+    class Block,Fleet k
+    class Poll,Cost,Leak,ScaleN b
+    class Beacon,Face,Console,ScaleB g
+```
+
+<sup><a href="assets/diagrams/interface-ceiling-dark.svg?raw=true">full-screen dark</a> · <a href="assets/diagrams/interface-ceiling-light.svg?raw=true">light</a> · <a href="assets/diagrams/interface-ceiling.mmd">source</a></sup>
+
+</details>
+
+### The machine is not the constraint
+
+The intuitive diagnosis — heaps grow, memory exhausts, the box swaps — is refuted three separate ways on this hardware:
+
+| Evidence | Reading |
+|---|---|
+| **31 concurrent sessions, live** | **93% memory free · `Pageouts: 0`** — no swapping at the exact scale modelled as fatal |
+| **Per-session footprint** | **~215 MB** (211–295 MB across the live fleet), so 30 sessions project to ~6.5 GB — not the ~45 GB the memory theory requires |
+| **Panic 2026-07-30** | VM-compressor **segment** exhaustion with **~20 GB free**, `swap_low:0` — structural, not a load threshold |
+| **Panic 2026-07-31** | kernel **spinlock timeout** from a research probe's own **8,368-thread** ladder; compressor 0% pages / 7% segments, **OK** — self-inflicted by the instrument, not by the workload |
+
+The whole 15-session fleet costs **≈0.75 cores**. Agent count is not the expensive axis.
+
+### The interface is
+
+| Measurement | Reading |
+|---|---|
+| **Renderer vs fleet** | iTerm2 **122.1%** + WindowServer **49.0%** ≈ **1.7 cores** — **2.3× the entire agent fleet it displays** |
+| **Leak, at frozen layout** | **+76 mach ports/hour** while RSS *falls* (−28 MB/hr) — the axis whose unbounded growth characterised the freeze |
+| **Tuning headroom** | [`iterm2-perf-parity.sh`](scripts/iterm2-perf-parity.sh) → `match=9 drift=0`, and it still burns 1.2 cores at *half* load ⇒ **configuration is exhausted** |
+| **The unit that costs** | the same 30 panes cost **+22.6 pp** of a core across 30 windows vs **+11.2 pp** in one — **windows are 2.35×; panes are nearly free** |
+
+This inverts the obvious remedy. iTerm2 disables Metal for any tab holding ≥6 sessions *and* for every background tab, so its only all-GPU layout for 30 sessions is **6 windows** — which forces you into the expensive unit. Maximising the GPU allocates the very compositor objects that saturate WindowServer. **The cap is protecting you.**
+
+### Therefore: stop rendering what you do not read
+
+| Terminal | threads / pane | windows for 30 panes | per-pane scripting |
+|---|---|---|---|
+| **kitty** | **flat** — 10 threads at 48 panes | **1** | `kitten @` · `$KITTY_WINDOW_ID` |
+| iTerm2 | ~0.87–1.1 | 6 (forced by the Metal gate) | `ITERM_SESSION_ID` |
+| WezTerm | **7.0, linear** (~210 at 30 panes) | 1 | `wezterm cli` |
+| Ghostty | 3 *(from source; not yet run at pane scale)* | ? | **no CLI IPC on macOS** |
+
+kitty wins on one structural property: **all N panes in one OS window at a thread count that does not grow**, without giving up the per-pane addressing that 22 load-bearing files here depend on.
+
+But the renderer is the *second*-order fix. A 30-pane grid is a **polling** interface — its cost scales with agent count, which is precisely the cost saturating the compositor. Exception routing does not scale with agent count at all. And the notifier that replaces it **already exists**: [`cc-permission-beacon.sh`](hooks/cc-permission-beacon.sh) is wired on `PermissionRequest` and writes every blocked session to `/tmp/cc-permission-pending/`. **It simply has no face** — nothing renders that queue as the operator's primary surface, so the grid stands in for it. Caught live while this section was written: two sessions blocked at once under full three-monitor visibility, one unattended for **6.6 minutes**.
+
+Nor can the allow-list close the gap: **88.3% of prompting Bash calls are compound**, so a `Bash(prefix:*)` list caps at ~2.4% coverage regardless of rule count — already at `defaultMode: auto` with **350 allow / 6 ask / 41 deny**. The residue is the guardrail working. The defect is not that it blocks; it is that *discovering* the block costs a full-screen poll.
+
+### Roadmap
+
+| When | Move | Why it is sized this way |
+|---|---|---|
+| **Now** | Do **not** cap V8 heaps; stop the automation minting **windows**; add a window-count rung to `capacity-alarm.sh` (warn 25 / page 60, measured as *drift*) | free, reversible, and windows are the 2.35× unit |
+| **Next** | Migrate the renderer to **kitty** | 22 load-bearing files over 3 primitives; chokepoint is [`bin/it2-wrapper`](bin/it2-wrapper) (175 lines), *not* `handoff-fire.sh` (4,024) |
+| **Then** | Give the beacon a face — **a console, not a terminal**: one row per session, a queue fed by the beacon, zoom-to-full-screen on demand, a dispatch composer | implements no VT at all; rendering then scales with sessions *blocked* (0–3), not sessions *running* (30+) |
+
+**Writing a terminal from scratch was considered and rejected.** WindowServer is the ceiling and it is Apple's — 30 panes in one window cost ~+11.2 pp of a core inside the compositor, the floor for *any* application, and kitty already sits on it. A from-scratch emulator's best case is matching something already installed, while owning VT correctness under Ink's alternate-screen/resize/wide-char usage forever.
+
+---
+
 <details>
 <summary><b>Reference</b> — daemons, browser automation, shell aliases, agents and commands</summary>
 
@@ -454,5 +552,5 @@ Workflow: `navigate → snapshot → click/type` by element ref. `agent-browser`
 </details>
 
 <div align="center">
-<sub>Structure of this README derived with the full Minto Pyramid Principle — audit trail in <a href="docs/research/README-rewrite-2026-07-28.pyramid-worklog.md"><code>docs/research/README-rewrite-2026-07-28.pyramid-worklog.md</code></a></sub>
+<sub>Structure of this README derived with the full Minto Pyramid Principle — audit trail in <a href="docs/research/README-rewrite-2026-07-28.pyramid-worklog.md"><code>docs/research/README-rewrite-2026-07-28.pyramid-worklog.md</code></a>, and <a href="docs/research/README-section6.pyramid-worklog.md"><code>README-section6.pyramid-worklog.md</code></a> for §6</sub>
 </div>
