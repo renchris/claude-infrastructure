@@ -714,6 +714,51 @@ Everything in #3 below still holds except where this overrides it.
   are tracked by **nothing** and are one `rm` from unrecoverable. They also have **zero callers** in
   the tracked tree, so nothing ever surfaces them. Control: `cc-blockers` IS tracked. Spans two CLOSED
   rows (comms = 3, operator surface = 10) ⇒ surfaced and backlogged, never hand-patched.
+  - **RESOLVED 2026-07-31 — and TWO of the four claims above were already false when filed.** Only
+    ONE half of the exposure was real, and the fix was a *recovery*, not a build:
+    1. **`bin/cc-mail` — REAL, now landed.** It was absent from `origin/main`, but it was never
+       unwritten: `57579877` (2026-07-26) had already committed it **with a 146-line
+       `tests/cc-mail.bats`** on the stranded, never-landed branch `feat/cc-mail` (694 behind main).
+       The live real file was **byte-identical** to that blob, so the fix is `cherry-pick -x
+       57579877`, not a rewrite. 19/19 bats green; `shellcheck` clean; hermeticity ratchet clean.
+       Landing it also auto-repairs the deploy topology: `install.sh:441` globs `bin/cc-*` and
+       `link_file` (`install.sh:120-129`) `ln -sf`s over a real file, so the next `deploy-live.sh`
+       (which reaches `install.sh` at `:359-376`, "links refreshed, incl. any brand-new tracked
+       file") converts `~/.claude/bin/cc-mail` from hand-placed real file to repo symlink — **no
+       `install.sh` edit and no staged activation needed.**
+    2. **`bin/cc-thread` — ALREADY FIXED before this item was dispatched.** It is tracked at trunk
+       (`bin/cc-thread`, landed in `b369676f` "version 5 live-only executables") and
+       `~/.claude/bin/cc-thread` has been a **symlink into the checkout since Jul 30 01:22**. The
+       claim rotted one day after filing; re-verify a parked blocker before acting on it.
+    3. **"zero callers … nothing ever surfaces them" — FALSE AT FILING, not rotted.**
+       `hooks/mailbox-drain.sh:222,224` emits `— full text: cc-mail` / `— cc-mail --all` as the
+       operator-facing `systemMessage`, and that hook is wired live at **two** events
+       (`settings.json:689` SessionStart, `:855` UserPromptSubmit). It landed in `27b3d4b8`
+       (2026-07-26 15:43) — **three days BEFORE this exposure was filed.** It is also already
+       regression-pinned by `tests/mailbox-drain.bats:261`. The original grep searched the path
+       `bin/cc-mail`; the caller invokes the bare command name, so a path-shaped grep could not see
+       it. **Search for the invoked NAME, not the file path, before declaring a tool callerless.**
+    So fix-half (2) ("wire one into an operator surface") required **no new wiring** — the surface
+    already existed, fired on every prompt, and was guarded by a test. The true defect was the
+    inverse and strictly worse than "inert": **a live, always-firing operator surface was
+    advertising a command that existed in no version control** — one `rm` from turning its own
+    instruction into a dangling reference. Verified end-to-end post-land: `which cc-mail` →
+    `~/.claude/bin/cc-mail`, `cc-mail --count` → `541 message(s) in the last 2h · 27 noise · 514
+    signal`. Inverse-orphan census of `~/.claude/bin` after this land: **0** (the only other
+    non-symlink, `it2`, is `copy_file`-deployed from tracked `bin/it2-wrapper` by design,
+    `install.sh:418-423`, and is byte-identical to it).
+  - **Residue, NOT fixed here (named, not silently dropped).** Nothing detects this class. The
+    `~/.claude` link auditor `scripts/deploy-link-parity.sh` reported **"271 linked · 0 actionable ·
+    ✓ every landed file is live"** while `cc-mail` sat untracked — green and correct, because it
+    walks the *checkout* asking "is this linked live?" and a live file in **no** checkout is the
+    opposite direction, outside its stated scope. Its sibling `deploy-parity-assert.sh` owns COPY
+    surfaces by content, so neither audits live→checkout. Both known ad-hoc live tools (`cc-thread`,
+    `cc-mail`) arrived the same way — hand-placed by a peer session in another repo
+    (`docs/research/cross-session-mail-2026-07-20.md:98`) — so the mechanism has recurred twice. A
+    third direction is deliberately **not** added in this pass: the live population is now 0, and a
+    naive live→checkout check mis-fires on copy-by-design surfaces (it would have convicted `it2`),
+    which is precisely the sibling-auditors-disagreeing failure this repo has already paid for. It
+    needs the copy-deploy state modeled first ⇒ backlogged, not bolted on.
 - **Correction to the two-live-rows table below: row 7's transcript root is `~/.claude-next/projects/`,
   not `~/.claude/projects/`.** Glob `~/.claude*/projects/*/<sid>*.jsonl` rather than trusting a root.
 - **Both live rows verified alive by transcript CONTENT, twice, ~4 min apart:** row 7 `85233c18`

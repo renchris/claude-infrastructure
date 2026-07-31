@@ -30,7 +30,7 @@ only (standing-land authorization, `.claude/CLAUDE.md`).
 |---|---|---|---|
 | 1 | `lib/idl-inert-check.sh` — 4 lockstep copies | **CONFIRMED.** `log_idl()`+`abstain()` byte-lockstep in 4 hooks; a 5th `MODE`-guarded variant in `operator-readout.sh` | **DO** (relocated — see below) |
 | 2 | `lib/cc-common.sh` — jq-guard ×23, `resolve_bin` ×5, selftest scaffold ×16 | jq-guard = **29** top-level guards with **4 different semantics**; `resolve_bin` = **2** definitions (×5 counted *call sites*); selftest scaffold = 16 files but **7 divergent variants** | **PARTIAL** — `resolve_bin` only; other two rejected |
-| 3 | comms collapse `cc-mail{send,await,contract,announce,thread,guard}` | Named 6 do not exist. Family is `cc-notify`/`cc-announce`/`cc-await-ping`/`cc-inbox-guard`. **`bin/cc-mail` is ABSENT from `origin/main`** — live-deployed at `~/.claude/bin/cc-mail` (Jul 26) and committed only on unlanded `feat/cc-mail` + `wt-02ba4e52389a` | **STAND DOWN** |
+| 3 | comms collapse `cc-mail{send,await,contract,announce,thread,guard}` | Named 6 do not exist. Family is `cc-notify`/`cc-announce`/`cc-await-ping`/`cc-inbox-guard`. ~~**`bin/cc-mail` is ABSENT from `origin/main`**~~ — *stale as of 2026-07-31: landed via `ff839f1f8f38` (cherry-pick of `57579877`); see §3 update. The `mail-v3` restructure is still unlanded on `feat/cc-mail` + `wt-02ba4e52389a`, which is what keeps the verdict.* | **STAND DOWN** (unchanged) |
 | 4 | merge `plan-update` into `plan-conventions` (stale split-brain) | **CONFIRMED.** 479-line `plan-update/SKILL.md` vs 45-line `plan-conventions/SKILL.md`, cross-referencing each other | **DO** |
 | 5 | unify `model-config.yaml` SSOT | **CONFIRMED, with teeth.** Template line 1 claims SSOT but **no consumer reads it**; all 8 consumers read `$HOME/.claude/model-config.yaml`, an **unversioned 36 KB real file** | **DO** |
 
@@ -102,6 +102,16 @@ blocker is decisive: **`bin/cc-mail` is absent from `origin/main`** while `~/.cl
 runs live (4713 B, Jul 26). Its restructure — the `mail-v3` line, `bc313459` and siblings — is
 committed only on `feat/cc-mail` and `wt-02ba4e52389a` (another worktree's branch), matching memory
 `cross-session-mail-v3`: *"P2-P4 BUILT, LAND-BLOCKED"*.
+
+> **UPDATE 2026-07-31 — this section's FIRST cited blocker is cleared; the STAND DOWN verdict still
+> stands on its remaining two.** `bin/cc-mail` is **no longer absent from `origin/main`**: backlog
+> `ff839f1f8f38` landed it by cherry-picking `57579877` off the stranded `feat/cc-mail` (byte-identical
+> to the live file, plus its 146-line `tests/cc-mail.bats`; 19/19 green). So "absent from main" must
+> **not** be re-cited as a blocker after this date. What is unchanged, and still decisive on its own:
+> (a) the six `cc-mail{send,await,contract,announce,thread,guard}` binaries the audit named still do
+> not exist, and (b) the `mail-v3` restructure (`bc313459` and siblings) is **still** unlanded on
+> `feat/cc-mail` / `wt-02ba4e52389a` — only the single `bin/cc-mail` + test commit was recovered, not
+> that stream. Collapsing the family would still collide with it. **STAND DOWN is unchanged.**
 
 Collapsing this family from `main` would refactor a shape that **is not main's shape**, and would
 collide head-on with an unlanded parallel stream that already restructures it (memory
