@@ -364,7 +364,7 @@ mkrepo() {
 }
 
 # ── the pass lock is shared, which is WHY this is one loop and not N launchd instances ────────────
-@test "one pass: the singleton lock is shared across the whole set — a second concurrent pass skips, it does not run per-project" {
+@test "one pass: the singleton lock is shared across the whole set — a second concurrent pass admits for NO project, it does not run per-project" {
   seed_items proj-a:1 proj-b:1
   conf "proj-b  repo=$C/repos/proj-b"
   fresh
@@ -372,7 +372,15 @@ mkrepo() {
   printf '%s|%s\n' "$$" "$(ps -o lstart= -p $$)" > "$C/dispatch.lock/owner"
   CC_DISPATCH_CEILING=6 "$DISP" --once >/dev/null 2>&1
   [ "$(jq -rs '[.[]|select(.action=="skipped" and .reason=="pass-in-flight")]|length' "$C/idl.jsonl")" -eq 1 ] || false
-  [ "$(dec)" -eq 0 ] || false
+  # What the shared lock buys is that ADMISSION happens once for the whole set, never once per
+  # project — so the read that matters is zero admits and zero spawns, ACROSS both projects.
+  # It is deliberately not "zero decisions": since de5e3e24be8f the lock gates admission only, and
+  # the loser journals a verdict for every item in the set (that is the A2 5-minute bound). This
+  # read was `dec == 0` while the singleton was held across the 414-833 s spawn tail.
+  [ "$(dec)" -eq 2 ] || false
+  [ "$(dec ' and .verdict=="defer" and .reason=="pass-in-flight"')" -eq 2 ] || false
+  [ "$(jq -rs '[.[]|select(.action=="decision")|.project]|sort|unique|join(",")' "$C/idl.jsonl")" = "proj-a,proj-b" ] || false
+  [ "$(dec ' and .verdict=="admit"')" -eq 0 ] || false
   [ "$(spawns)" -eq 0 ] || false
 }
 

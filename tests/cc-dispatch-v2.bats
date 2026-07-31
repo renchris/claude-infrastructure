@@ -24,6 +24,12 @@
 # flaky, and with a real live count >= CEILING every fire assertion here would silently invert.
 
 BASE_SHA="bf796c57"   # immutable ancestor of origin/main; carries the pre-change bin/cc-dispatch
+# A SECOND control, for a second change to the same file. The v2 rebuild's control (BASE_SHA) has no
+# singleton at all, so it cannot testify about a defect INSIDE the singleton: item de5e3e24be8f
+# narrowed the lock from "the whole pass" to "admission only", and the artifact that exhibits the old
+# behaviour is the S6-era tree, not the pre-S6 one. Pinned for the same reason BASE_SHA is —
+# `origin/main` becomes the NEW code the moment this lands, and the control would invert.
+A2_BASE_SHA="ec92e68c"   # immutable ancestor of origin/main; carries S6 holding the lock across the tail
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
@@ -42,6 +48,16 @@ setup() {
   # of this suite run from outside the repo resolved $REPO to a non-repo and recovered nothing).
   if [ ! -x "$PRISTINE" ]; then
     echo "cc-dispatch-v2.bats: cannot recover the pristine control — 'git -C $REPO archive $BASE_SHA bin/cc-dispatch' produced nothing. The RED-proof cannot run." >&2
+    return 1
+  fi
+
+  # the pre-A2-fix control: S6 present, but held across the spawn tail (item de5e3e24be8f)
+  mkdir -p "$C/prea2"
+  git -C "$REPO" archive "$A2_BASE_SHA" bin/cc-dispatch 2>/dev/null | tar -x -C "$C/prea2"
+  PRE_A2="$C/prea2/bin/cc-dispatch"
+  chmod +x "$PRE_A2" 2>/dev/null || true
+  if [ ! -x "$PRE_A2" ]; then
+    echo "cc-dispatch-v2.bats: cannot recover the pre-A2 control — 'git -C $REPO archive $A2_BASE_SHA bin/cc-dispatch' produced nothing. The RED-proof cannot run." >&2
     return 1
   fi
 
@@ -237,7 +253,7 @@ spawns()     { local n; n="$(grep -c . "$C/spawn.log" 2>/dev/null || true)"; ech
 }
 
 # ── S6 — singleton, skip-not-queue ────────────────────────────────────────────────────────────────
-@test "S6/A9: two concurrent passes → exactly ONE journal pass; the loser records pass-in-flight and exits 0" {
+@test "S6/A9: two concurrent passes → BOTH decide, exactly ONE admits; the loser records pass-in-flight and exits 0" {
   fresh
   STUB_LIST_SLEEP=3 CC_DISPATCH_CEILING=6 "$DISP" --once >/dev/null 2>&1 &
   local first=$!
@@ -246,11 +262,23 @@ spawns()     { local n; n="$(grep -c . "$C/spawn.log" 2>/dev/null || true)"; ech
   [ "$status" -eq 0 ] || false               # a skip is a normal outcome, never an error
   grep -q '"reason":"pass-in-flight"' "$C/idl.jsonl" || false
   wait "$first"
-  [ "$(jq -rs '[.[]|select(.action=="decision")|.pass]|unique|length' "$C/idl.jsonl")" -eq 1 ] || false
-  [ "$(dec)" -eq 3 ] || false                # exactly one pass's worth of decisions
+  # BOTH passes journal (item de5e3e24be8f): the lock gates ADMISSION, and deciding is a pure read.
+  # This assertion counted 1 pass / 3 decisions until the A2 miss was measured — the loser used to
+  # return at step 0, so a kick landing during a 414-833 s spawn tail produced no verdict at all.
+  [ "$(jq -rs '[.[]|select(.action=="decision")|.pass]|unique|length' "$C/idl.jsonl")" -eq 2 ] || false
+  [ "$(dec)" -eq 6 ] || false                            # both passes cover the whole backlog
+  [ "$(dec ' and .reason=="pass-in-flight"')" -eq 3 ] || false   # …the loser's three are all defers
+  # …and the ceiling is untouched: exactly ONE pass admitted, claimed and spawned. 3 admits, not 6 —
+  # ceiling 6 over a 3-item backlog admits all three; MAX_SPAWN=2 then caps CLAIMS and SPAWNS, which
+  # is why those two reads are 1 and 2 rather than 3 (header: "a pass admits more than it fires").
+  [ "$(dec ' and .verdict=="admit"')" -eq 3 ] || false    # one pass's admit set, never two
+  [ "$(grep -c '^claim i1$' "$C/backlog.log")" -eq 1 ] || false
+  [ "$(spawns)" -eq 2 ] || false
   [ ! -d "$C/dispatch.lock" ] || false       # released on exit, never leaked
 
-  # RED: the pre-change tree has no lock, so both passes run and BOTH claim the same items.
+  # RED 1 — the DOUBLE-ADMISSION proof. The pre-S6 tree has no lock, so both passes run to the end
+  # and BOTH claim the same id. This is the invariant narrowing the lock must not cost us, and it is
+  # proved against the real artifact, never a hand-typed approximation.
   fresh
   STUB_LIST_SLEEP=3 "$PRISTINE" --once >/dev/null 2>&1 &
   first=$!
@@ -259,6 +287,54 @@ spawns()     { local n; n="$(grep -c . "$C/spawn.log" 2>/dev/null || true)"; ech
   wait "$first"
   ! grep -q '"reason":"pass-in-flight"' "$C/idl.jsonl" || false
   [ "$(grep -c '^claim i1$' "$C/backlog.log")" -eq 2 ]   # the double-claim S6 exists to prevent
+}
+
+# ── A2 — the lock gates ADMISSION, not DECISION (item de5e3e24be8f) ──────────────────────────────
+@test "A2: a pass that loses the singleton STILL decides every item — and the PRE-FIX tree decides none" {
+  fresh
+  local holder
+  sleep 30 & holder=$!
+  mkdir -p "$C/dispatch.lock"
+  printf '%s|%s\n' "$holder" "$(ps -o lstart= -p "$holder" 2>/dev/null)" > "$C/dispatch.lock/owner"
+
+  run env CC_DISPATCH_CEILING=6 "$DISP" --once
+  [ "$status" -eq 0 ] || false
+  [ "$(dec)" -eq 3 ] || false                                       # every dispatchable item decided
+  [ "$(dec ' and .verdict=="defer" and .reason=="pass-in-flight"')" -eq 3 ] || false
+  [ "$(verdicts)" = "defer" ] || false                              # nothing but defers
+  # free_slots:0 with live_workers:null — "not allowed to admit", never "measured no capacity".
+  # at-ceiling would be the wrong word AND would feed cc-blockers' SATURATED premise gate, which
+  # counts reason=="at-ceiling" deferrals as evidence of real ceiling pressure.
+  [ "$(dec ' and .free_slots==0 and .live_workers==null')" -eq 3 ] || false
+  [ "$(dec ' and .reason=="at-ceiling"')" -eq 0 ] || false
+  grep -q '"reason":"pass-in-flight"' "$C/idl.jsonl" || false       # A9's record still written
+  # the ceiling invariant: the capacity-consuming path is unreachable without the lock
+  [ "$(dec ' and .verdict=="admit"')" -eq 0 ] || false
+  [ ! -f "$C/wave.json" ] || false
+  [ "$(grep -c '^claim ' "$C/backlog.log" || true)" -eq 0 ] || false
+  [ "$(spawns)" -eq 0 ] || false
+  [ -d "$C/dispatch.lock" ] || false          # the holder's lock is NOT stolen, broken or released
+
+  # RED — the real pre-fix artifact under the identical fixture: it returns at step 0, so the whole
+  # backlog goes undecided. That is the A2 miss (3 of 18 in-window adds over the 300 s bound).
+  fresh
+  mkdir -p "$C/dispatch.lock"
+  printf '%s|%s\n' "$holder" "$(ps -o lstart= -p "$holder" 2>/dev/null)" > "$C/dispatch.lock/owner"
+  run env CC_DISPATCH_CEILING=6 "$PRE_A2" --once
+  [ "$status" -eq 0 ] || false                # it exits 0 too — the defect is silent, not an error
+  grep -q '"reason":"pass-in-flight"' "$C/idl.jsonl" || false   # it records the skip…
+  [ "$(dec)" -eq 0 ] || false                                  # …and decides NOTHING
+
+  # POSITIVE CONTROL for both halves: same fixture, lock RELEASED, and the shipped tree admits.
+  # Without it "0 admits / 0 claims / 0 spawns" above could be a broken stub reading as a guard.
+  kill "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+  fresh
+  CC_DISPATCH_CEILING=6 "$DISP" --once >/dev/null 2>&1
+  [ "$(dec ' and .verdict=="admit"')" -eq 3 ] || false   # all 3 admitted (ceiling 6)…
+  [ -f "$C/wave.json" ] || false
+  [ "$(grep -c '^claim ' "$C/backlog.log")" -eq 2 ] || false   # …2 claimed + fired (MAX_SPAWN=2)
+  [ "$(spawns)" -eq 2 ] || false
 }
 
 @test "S6: a holder whose pid matches but whose lstart does not (a RECYCLED pid) is STALE — the lock is broken, not honoured forever" {
@@ -281,7 +357,10 @@ spawns()     { local n; n="$(grep -c . "$C/spawn.log" 2>/dev/null || true)"; ech
   [ "$(spawns)" -eq 0 ] || false
   kill "$holder" 2>/dev/null || true
   wait "$holder" 2>/dev/null || true
-  [ "$(dec)" -eq 0 ]
+  # it decides all 3 but admits NONE — the lock costs a pass its admission budget, not its voice
+  # (item de5e3e24be8f; this read was `-eq 0` while the singleton was held across the spawn tail).
+  [ "$(dec)" -eq 3 ] || false
+  [ "$(dec ' and .verdict=="admit"')" -eq 0 ]
 }
 
 # ── S7 — fair ordering, no head-of-line block ─────────────────────────────────────────────────────
@@ -373,12 +452,14 @@ spawns()     { local n; n="$(grep -c . "$C/spawn.log" 2>/dev/null || true)"; ech
   [ "$(dec)" -eq 1 ]
 }
 
-@test "A12: the in-script selftest still RED-proves every branch (113 checks, zero FAIL)" {
+@test "A12: the in-script selftest still RED-proves every branch (121 checks, zero FAIL)" {
   run "$DISP" selftest
   [ "$status" -eq 0 ] || false
   # 106 → 111 with multi-project coverage (f7abcbdee98c): the brief's rails line is read from the
   # project, so both branches are asserted, plus the (c6) foreign-project positive control.
   # 111 → 113: a spawn failure now records its rc and the fire's own stderr excerpt (§1(c)/R3).
-  [ "$(printf '%s' "$output" | grep -c '^  ok ')" -eq 113 ] || false
+  # 113 → 121: the lock gates ADMISSION, not DECISION (de5e3e24be8f) — case (t) now asserts the
+  # loser's full decision set + four zero-effect reads, each mirrored by a (t2) positive control.
+  [ "$(printf '%s' "$output" | grep -c '^  ok ')" -eq 121 ] || false
   ! printf '%s' "$output" | grep -q '^  FAIL'
 }
